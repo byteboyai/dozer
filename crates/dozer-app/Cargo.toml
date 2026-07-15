@@ -1,0 +1,12 @@
+[package]
+name = "dozer-app"
+version = "0.1.0"
+edition.workspace = true
+
+[[bin]]
+name = "dozer"
+path = "src/main.rs"
+
+[dependencies]
+dozer-core = { path = "../dozer-core" }
+iced = { version = "0.14", features = ["tokio"] }

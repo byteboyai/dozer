@@ -1,0 +1,11 @@
+[package]
+name = "dozerd"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+dozer-core = { path = "../dozer-core" }
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
