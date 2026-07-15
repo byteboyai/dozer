@@ -47,7 +47,10 @@
 - **重新定位**：Flyfish File Viewer（flyfish.dev，206 格式/24 管线，纯前端、离线自托管）是 JS 组件 → 预览引擎 = wry(WKWebView) + 自托管 Flyfish；配合 Preview Engine 抽象（Flyfish 为第一个实现）。
 - **补充**：wry（三平台 WebView 抽象）；daemon↔客户端 IPC = UDS + 帧化 serde；`dozer-hook` 零依赖小二进制（学 KookyHook）作为对话结构化数据源；每 agent 一个 transcript 适配器（Claude Code JSONL/stream-json 先行）。
 - **dbx 集成（[t8y2/dbx](https://github.com/t8y2/dbx)，Apache-2.0，Tauri 2，60+ 数据库）**：数据库资产的预览引擎，与 Flyfish（文件）构成 Preview Engine 抽象的两个实现。姿势：一期组件视图经 `@dbx-app/cli`（JSON 输出）拿连接/表/状态做原生摘要渲染，深度操作"在 DBX 中打开"（哲学同"编辑器是外部工具"）；二期经 `@dbx-app/mcp-server` 让 agent 直接读写数据库、Dozer MCP 客户端消费同一入口。不 fork 其 Rust 核心（Tauri command 后端非独立 crate）、不内嵌其 Web UI；npm 依赖归入 agent 级可选集成，不进 Dozer 核心依赖。
-- **头号技术风险**：iced(wgpu) × 原生 WebView 的视图合成（焦点/滚动/z-order），第一周 spike 验证；降级方案（预览独立窗口）仅作最后手段。
+- **GUI 框架（已定）**：iced 0.14（2025-12 发布，1.0 前最后实验版；响应式渲染/无头测试/热重载/**IME 中文输入**；COSMIC 桌面与 Kraken Desktop 生产背书）。放弃 gpui 备选：pre-1.0、文档薄、API 随 Zed 漂移，且 WebView 嵌入在其自有平台层属无人区，而 winit+wry 路径有官方示例。
+- **WebView 合成（风险已降级）**：默认走**原生子视图叠加**（WKWebView 子 NSView 叠于 wgpu 表面，wry 直接支持）。约束：webview 恒在 GPU 内容之上 → 左二必须是规则矩形 pane（成立）；**⌘K 命令面板打开时临时隐藏预览 webview**（已定，kooky 同款做法）。备选：纹理导入（wgpu-scry 系，二期跨平台再评估）；独立预览窗（最后手段）。spike 内容=验证叠加方案的焦点/滚动/缩放细节。
+- **终端数据面（设计点）**：dozerd 持裸 PTY + 字节环形缓冲（滚屏）；客户端 attach 时以 alacritty_terminal 状态机回放。网格入 daemon（tmux 式）留二期。
+- **IPC 帧格式**：一期 JSON Lines（可调试性优先），二期视需要换二进制帧。iced 侧启用 tokio executor feature 与 daemon 生态统一。
 
 ## 5. 运行时架构
 
