@@ -2,62 +2,39 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Current State
+## 项目现实（2026-07-15 起）
 
-This project is at the very beginning. `src/main.rs` is still the default `Hello, world!` skeleton, and `Cargo.toml` declares a single binary crate `byteboy` with no dependencies. The substance of the project lives in the design doc `docs/my/ByteBoy v0 开发文档.md` (Chinese), which is the source of truth for what to build. When implementing, build toward the architecture below rather than the current skeleton.
+本仓库是 **Dozer** —— 站在用户（甲方）一侧的、agent 中立的 AI 治理与验收层（macOS 先发，Rust workspace）。
+权威文档：
 
-## What ByteBoy Is
+- 规格（唯一需求真相源）：`docs/superpowers/specs/2026-07-14-dozer-phase1-design.md`
+- 实现计划系列：`docs/superpowers/plans/2026-07-15-dozer-p1a-*.md` 起
+- UI 设计：Figma "Dozer Phase 1 UI"（12 帧）；参考截图 `design/参考/`
 
-ByteBoy (`boy` is the CLI binary name) is an **AI development environment manager** for macOS (Apple Silicon first). v0 deliberately does NOT implement agents, workflows, or AI logic. It only manages a local AI dev environment:
+## Workspace 布局
 
-- **Agent management** — list/launch external AI CLIs (claude, codex, hermes, aider). Launching an agent is just exec'ing its CLI.
-- **MLX model management** — start/stop/restart/status/logs for local `mlx_lm.server` processes, run in the background.
-- **Doctor** — check that required tools (Rust, Python, Git, uv, the agent CLIs, MLX, ComfyUI) are installed.
-- **Config** — read/show/edit a TOML config.
+| crate | 职责 |
+|-------|------|
+| `crates/dozer-core` | 共享类型、路径、UDS 协议 |
+| `crates/dozerd` | session daemon：PTY 池、会话存活、验收闭环存储（bin: `dozerd`） |
+| `crates/dozer-app` | iced 0.14 GUI（bin: `dozer`） |
+| `crates/dozer-hook` | 被 agent hooks 调用的零依赖小二进制（bin: `dozer-hook`） |
+| `crates/legacy-boy` | **已废弃**的 byteboy v0（bin: `boy`）；仅作 dozerd 种子，禁止扩展 |
+| `spike/*` | 一次性技术验证，随时可删 |
 
-Explicitly out of scope for v0 (deferred to v1+): Skill, Workflow, Prompt, MCP, Memory, Provider, RAG, any LLM API calls, multi-model routing. Don't introduce these unless the work is explicitly v1+.
-
-## Build & Run
+## 构建与测试
 
 ```bash
-cargo build                 # build
-cargo run -- <args>         # run (e.g. cargo run -- agent list)
-cargo test                  # run all tests
-cargo test <name>           # run a single test by name substring
-cargo test -p <crate>       # run tests for one workspace crate (once split into crates)
-cargo clippy --all-targets  # lint
-cargo fmt                   # format
+cargo build                    # 全 workspace
+cargo test -p dozerd           # 单 crate 测试
+cargo run -p dozer-app         # 跑 GUI
+cargo clippy --all-targets && cargo fmt
 ```
 
-The shipped binary is invoked as `boy` (set via `[[bin]]` name in Cargo.toml). Uses Rust 2024 edition.
+## 关键裁决（违反即错）
 
-## Planned Architecture (target for implementation)
-
-The design doc specifies a **Cargo workspace** split into small, single-responsibility crates under `crates/`:
-
-| Crate | Responsibility |
-|-------|----------------|
-| `byteboy-cli` | clap command parsing; the `boy` binary entrypoint |
-| `byteboy-core` | shared `Context`, `Error`, logging |
-| `byteboy-agent` | agent listing and launching |
-| `byteboy-model` | MLX model lifecycle (start/stop/status/logs) |
-| `byteboy-config` | TOML config loading |
-| `byteboy-doctor` | environment checks |
-
-Intended dependency stack: `clap`, `tokio`, `serde`, `toml`, `anyhow`, `tracing`, `directories`, `sysinfo` (process queries), `duct` (running external commands).
-
-### CLI surface
-
-```
-boy run <agent>          boy agent list | doctor
-boy model list | start <id> | stop <id> | restart <id> | status | logs <id>
-boy doctor               boy config show | edit            boy version
-```
-
-### Config
-
-Lives at `~/.config/byteboy/config.toml` (resolve via the `directories` crate, not a hardcoded path). Sections: `[agents]` maps a name to a CLI command; `[models.<id>]` defines `name`, `command`, `model` path, `host`, `port`. `boy model start <id>` translates a `[models.<id>]` entry into a backgrounded `mlx_lm.server --model … --host … --port …` invocation; `stop`/`status` find that process (via `sysinfo`).
-
-## Design Principles (from the doc)
-
-CLI-first; configuration over code; small modules; one command = one responsibility; every command independently testable; no Web UI; macOS/Apple Silicon first (Linux later); trait-first design; keep it simple, avoid over-engineering. The v1 Skill abstraction is intended to be a single `trait Skill { async fn execute(ctx: Context) -> Result<()>; }` — keep core types compatible with that direction.
+- boy CLI 已废弃，永不回归；agent 启动/模型托管/doctor 全归 dozerd。
+- GUI 只用 iced 0.14 生态；预览 WebView 走 wry 子视图叠加，⌘K 打开时隐藏预览。
+- mac 先发但架构留门：不引入 Swift/AppKit 专属能力；核心不依赖 Node/Python。
+- 一期范围以规格 §3"一期范围裁剪"为准；显式未决项（规格 §8）不得擅自定死。
+- 主题 ByteBoy2077：bg `#0a0e16`、金 `#F2D94E`（甲方动作专属）、奶油文字 `#FFE5B4`、青 `#47DEF0`、绿 `#1AD585`。
