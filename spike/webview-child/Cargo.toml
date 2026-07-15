@@ -1,0 +1,9 @@
+[package]
+name = "spike-webview-child"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+winit = "0.30.13"
+wry = "0.55.1"
