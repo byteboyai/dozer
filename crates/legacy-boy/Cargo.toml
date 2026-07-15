@@ -3,12 +3,12 @@
 # 禁止添加任何新功能。
 
 [package]
-name = "dozer"
+name = "legacy-boy"
 version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "dozer"
+name = "boy"
 path = "src/main.rs"
 
 [dependencies]
