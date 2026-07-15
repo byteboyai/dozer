@@ -33,12 +33,17 @@
 
 ## 3. 一期需求（冻结）
 
-1. **原生 agent 终端**：多会话、标签/分屏、shell 集成（OSC 7 cwd / OSC 133 命令退出）、agent 状态感知；流畅度对标 kooky。
+1. **原生 agent 终端**：多会话、标签（分屏二期）、shell 集成（OSC 7 cwd / OSC 133 命令退出）、agent 状态感知；流畅度对标 kooky——一期验收口径为"正确 + 不卡顿"，像素级打磨持续进行、不设一期关口。
 2. **内建产物预览**（体验支柱，与终端并列）：Markdown、图片、PDF、代码/diff、Office 等在应用内直接看；**网页亦可预览**（预览 pane 本身即 WKWebView）——localhost 产物预览是 Web 类项目的验收现场（刚需），外部 URL（文档/GitHub）给带极简地址栏的最小网页 tab，不做标签/书签/历史等浏览器化功能；"不能让用户总跳出 Dozer，这是混乱的来源"；从对话、文件树、组件视图、验收视图处处一键可达。
 3. **验收闭环雏形**（软件项目模板）：目标/验收标准 → agent 交付 → 验收（通过/打回）→ 演进史。关口松紧由 dogfooding 调；治理结构是可配置领域模板，非硬编码姿态。
 4. **会话存活**：PTY 由常驻 daemon 持有，关窗/崩溃不掉会话（竞品分析结论：后补等于重写）。
 5. **mac 先发、架构留门**：全 Rust 跨平台生态；无 Swift/AppKit/libghostty 专属绑定。
 6. **对话可审阅性**：以人类发言为导航锚；AI 回合过程性输出默认折叠；提问/待决策/交付声明置顶；产物优先于叙述（看 diff/预览而非自述）。与验收闭环同构：作品级 vs 回合级。
+
+**一期范围裁剪（2026-07-15 与用户逐项确认）**：
+- **boy CLI 废弃，永不回归**：agent 启动归 dozerd、doctor 归项目栏状态、MLX 模型托管归 dozerd 进程管理（二期随组件视图呈现）；现有 `src/` 代码仅作 dozerd 种子迁移后删除。
+- 砍掉：浅色主题与 W2 主题选择页（单主题 **ByteBoy2077**，设计稿保留）；组件视图+dbx 集成（二期）；⌘K 全局搜索/命令面板（菜单+快捷键替代，资源搜索二期）；终端分屏；H0 日历与社区板块（右栏仅"最近的文件/对话"两卡，余占位）。
+- 降级：W1 首启页降级为"agent 检测 + 一键注册 hooks"，不做会话/配置导入；agent 适配器一期仅 Claude Code（codex 为 1.5 期首件，适配器接口保留）；设置 UI 仅 Agents+关于两节，其余走 config.toml；预览格式一期口径＝Markdown/图片/PDF/代码/diff/localhost 网页，Office 等长尾随 Flyfish 自带、不逐格式 QA。
 
 ## 4. 技术选型（手册 §14 核查后）
 
@@ -55,18 +60,19 @@
 ## 5. 运行时架构
 
 ```
-dozer-app (iced GUI)        boy CLI           dozer-hook (被 agent hooks 调用)
-     │ UDS                     │ UDS                │ UDS（单向写事件）
-     └───────────┬─────────────┴────────────────────┘
+dozer-app (iced GUI)              dozer-hook (被 agent hooks 调用)
+     │ UDS                              │ UDS（单向写事件）
+     └───────────┬──────────────────────┘
                  ▼
         dozerd —— session daemon（tokio 常驻）
         ├── PTY 池（portable-pty）+ 滚屏缓存      ← 会话存活
         ├── 项目/目标/验收/演进史（SQLite + git）  ← 验收闭环
         ├── 事件总线（tokio::broadcast）           ← timeline / 对话结构化
-        └── agent 适配器（claude/codex/…）
+        ├── 进程托管（mlx_lm.server 等，二期组件视图呈现）
+        └── agent 适配器（一期仅 claude；接口预留 codex/…）
 ```
 
-仓库结构：本仓 workspace 化；新增 `dozer-core` / `dozerd` / `dozer-app` / `dozer-hook`；现有 `boy` 保留为 daemon 的 CLI 客户端（其 config/process/doctor 为 daemon 种子）。
+仓库结构：本仓 workspace 化；新增 `dozer-core` / `dozerd` / `dozer-app` / `dozer-hook`。**boy CLI 废弃**（见 §3 裁剪）：现有 `src/` 的 config/process/doctor 代码作为 dozerd 种子迁移后删除，仓库重心全面转向 Dozer。
 
 ## 6. 领域模型与数据流
 
@@ -102,9 +108,9 @@ dozer-app (iced GUI)        boy CLI           dozer-hook (被 agent hooks 调用
 
 | # | 环节 | 页面 |
 |---|------|------|
-| ⓪a | 首启·导入设置（检测已有 AI 环境并接管：Claude Code 会话/hooks/CLAUDE.md、Codex 配置、boy 的 agents/MLX 模型；可跳过） | W1 |
-| ⓪b | 首启·选择主题（BR2049 默认选中，深空灰/浅色备选，深浅色切换；卡片带终端预览） | W2 |
-| ⓪c | 启动主界面·项目中心（左栏 248px：Dozer logo、项目搜索、最近活跃 5 项目——名称/活跃时间/路径/git 分支、更多项目+新增项目；右栏：最近板块——最近的文件/最近的对话/日历，社区板块——教程文章与视频卡片） | H0 |
+| ⓪a | 首启·环境检测（一期降级版：检测 agent CLI + 一键注册 hooks；不做会话/配置导入） | W1 |
+| ⓪b | 首启·选择主题（ByteBoy2077 默认选中，深空灰/浅色备选；**一期不实现**——单主题，设计稿保留） | W2 |
+| ⓪c | 启动主界面·项目中心（左栏 248px：Dozer logo、项目搜索、最近活跃 5 项目——名称/活跃时间/路径/git 分支、更多项目+新增项目；右栏一期仅"最近的文件/最近的对话"两卡，日历（简单控件）与社区（easyeasyai.com）板块随后补） | H0 |
 | ① | 新建项目（目录 + git 检测 + 领域模板） | S0 |
 | ② | 定义目标与验收标准（关口一：无标准不派活；可执行/人工两类标准；AI 草拟入口，用户终审） | S0b |
 | ③ | 派活（S0b 的 CTA"保存目标，派活给 claude"） | — |
@@ -113,9 +119,9 @@ dozer-app (iced GUI)        boy CLI           dozer-hook (被 agent hooks 调用
 | ⑥ | 验收（diff + 标准清单 + 通过/打回） | S2 |
 | ⑦ | 沉淀（目标锚变绿✓；左一 git 视图演进史 v13；左二预览"v13 验收记录"——验收记录也是资产，含 4/4 判定、查看 diff、回放会话审阅） | S3 |
 | ⑧ | 下一个目标 → 回② | — |
-| 辅 | 组件视图（dbx 集成） | S1c |
+| 辅 | 组件视图（dbx 集成）——**二期后移** | S1c |
 | 辅 | 设置·Agents（各 agent CLI：路径/版本检测、启用开关、hooks 与 transcript 适配器注册状态、resume 能力；派活默认 agent） | SET1 |
-| 辅 | 设置·集成（外部编辑器默认打开方式与检测；DBX：cli 检测/测试连接/MCP 二期提示；Flyfish：内置离线资产与沙箱说明；boy CLI）。设置导航共 8 节：通用/外观/Agents/模型(MLX)/领域模板/集成/快捷键/关于 | SET2 |
+| 辅 | 设置·集成（外部编辑器默认打开方式与检测；DBX：二期；Flyfish：内置离线资产与沙箱说明）。设置导航规划 8 节：通用/外观/Agents/模型(MLX)/领域模板/集成/快捷键/关于——**一期仅实现 Agents + 关于** | SET2 |
 
 打回支线：S2 打回 → 意见注回会话 → 回 ④。
 
@@ -123,7 +129,7 @@ dozer-app (iced GUI)        boy CLI           dozer-hook (被 agent hooks 调用
 
 **S1c 组件视图**（左一切换态）：组件卡片（Postgres/Redis/mlx 等：状态点、端口、规模、动作——"在 DBX 中打开↗"/"▶ 启动"/"日志"）+ 来源配置文件（点击跳左二预览）。
 
-**默认配色**：以 [Blade Runner 2049 Zed 主题](https://github.com/takk8is/blade-runner-2049-theme-for-zed)为基准，按 byteboy.ai 官网微调。核心 token：窗口底 `#0a0e16`（官网）、面板 `#0e1620`、终端底 `#08141d`、卡片 `#12202a`、边框 `#1c3440`（官网 `#24444f` 系）；主文字 `#FFE5B4`（BR2049 奶油色）、正文 `#9AB4C4`、弱文字 `#6B7F8F`；**主强调金黄 `#F2D94E`**（官网金，用于目标/交付/验收等甲方动作）、次强调青 `#47DEF0`、运行绿 `#1AD585`（BR 终端绿系）、等待紫蓝 `#9580FF`（BR ansi blue）、品红 `#FF3DCC` 保留给通知类点缀（未用）。
+**默认主题「ByteBoy2077」**：以 [Blade Runner 2049 Zed 主题](https://github.com/takk8is/blade-runner-2049-theme-for-zed)为基准、按 byteboy.ai 官网配色微调而成，命名归品牌所有。核心 token：窗口底 `#0a0e16`（官网）、面板 `#0e1620`、终端底 `#08141d`、卡片 `#12202a`、边框 `#1c3440`（官网 `#24444f` 系）；主文字 `#FFE5B4`（BR2049 奶油色）、正文 `#9AB4C4`、弱文字 `#6B7F8F`；**主强调金黄 `#F2D94E`**（官网金，用于目标/交付/验收等甲方动作）、次强调青 `#47DEF0`、运行绿 `#1AD585`（BR 终端绿系）、等待紫蓝 `#9580FF`（BR ansi blue）、品红 `#FF3DCC` 保留给通知类点缀（未用）。
 
 ## 8. 显式未决（勿擅自定死）
 
