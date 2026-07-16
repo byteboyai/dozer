@@ -1,5 +1,5 @@
 use iced_wgpu::Renderer;
-use iced_widget::{bottom, column, row, slider, text, text_input};
+use iced_widget::{bottom, button, column, row, slider, text, text_input};
 use iced_winit::core::{Color, Element, Theme};
 
 pub struct Controls {
@@ -11,6 +11,7 @@ pub struct Controls {
 pub enum Message {
     BackgroundColorChanged(Color),
     InputChanged(String),
+    ToggleGate, // 模拟 ⌘K：隐藏/显示预览 webview
 }
 
 impl Controls {
@@ -34,6 +35,12 @@ impl Controls {
             }
             Message::InputChanged(input) => {
                 self.input = input;
+            }
+            Message::ToggleGate => {
+                // 实际的 wry WebView::set_visible 由 main.rs 的 Runner::Ready
+                // 执行（webview 与 wgpu surface 同生命周期，不归属这个纯视图
+                // 状态的 Controls）；这里留空分支以保持穷尽匹配，参见
+                // main.rs 中消息派发处的拦截逻辑。
             }
         }
     }
@@ -74,6 +81,7 @@ impl Controls {
                 sliders,
                 text_input("Type something...", &self.input)
                     .on_input(Message::InputChanged),
+                button(text("Toggle Preview (⌘K)")).on_press(Message::ToggleGate),
             ]
             .spacing(10),
         )

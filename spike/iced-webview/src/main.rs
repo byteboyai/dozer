@@ -23,7 +23,21 @@ use winit::{
     keyboard::ModifiersState,
 };
 
+use wry::dpi::{LogicalPosition, LogicalSize};
+use wry::{Rect, WebView, WebViewBuilder};
+
 use std::sync::Arc;
+
+/// 预览区占窗口右侧 40%（模拟左二 pane 的矩形区域），顶部留 40 逻辑像素
+/// 给 iced 控件条让位。
+fn preview_bounds(size: winit::dpi::PhysicalSize<u32>, scale: f64) -> Rect {
+    let w = size.width as f64 / scale;
+    let h = size.height as f64 / scale;
+    Rect {
+        position: LogicalPosition::new(w * 0.35, 40.0).into(),
+        size: LogicalSize::new(w * 0.40, h - 40.0).into(),
+    }
+}
 
 pub fn main() -> Result<(), winit::error::EventLoopError> {
     tracing_subscriber::fmt::init();
@@ -50,6 +64,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             viewport: Viewport,
             modifiers: ModifiersState,
             resized: bool,
+            webview: WebView,
+            preview_visible: bool,
         },
     }
 
@@ -63,6 +79,19 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         )
                         .expect("Create window"),
                 );
+
+                // 1) 窗口创建后，拿到 Arc<winit::window::Window> 处：叠加
+                // wry 子视图（生产路径：webview 直接挂在 iced 自持的
+                // winit 窗口上，而非 iced 独立管理一个 dummy 窗口）。
+                let webview = WebViewBuilder::new()
+                    .with_url("https://byteboy.ai")
+                    .with_bounds(preview_bounds(
+                        window.inner_size(),
+                        window.scale_factor(),
+                    ))
+                    .build_as_child(window.as_ref())
+                    .expect("child webview over iced window");
+                let preview_visible = true;
 
                 let physical_size = window.inner_size();
                 let viewport = Viewport::with_physical_size(
@@ -177,6 +206,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     clipboard,
                     viewport,
                     resized: false,
+                    webview,
+                    preview_visible,
                 };
             }
         }
@@ -203,6 +234,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 clipboard,
                 cache,
                 resized,
+                webview,
+                preview_visible,
             } = self
             else {
                 return;
@@ -342,8 +375,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 WindowEvent::ModifiersChanged(new_modifiers) => {
                     *modifiers = new_modifiers.state();
                 }
-                WindowEvent::Resized(_) => {
+                WindowEvent::Resized(new_size) => {
                     *resized = true;
+                    // 4) webview 布局跟随窗口尺寸重算，不与 iced 的
+                    // viewport/surface 重配置打架（各自独立触发）。
+                    let _ = webview.set_bounds(preview_bounds(
+                        new_size,
+                        window.scale_factor(),
+                    ));
                 }
                 WindowEvent::CloseRequested => {
                     event_loop.exit();
@@ -385,6 +424,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
                 // update our UI with any messages
                 for message in messages {
+                    // 3) ToggleGate 的实际副作用（webview 显隐）在这里执行：
+                    // webview 归 Runner::Ready 所有，与纯视图状态的
+                    // Controls 分离，故不在 controls::update 内直接操作。
+                    if let controls::Message::ToggleGate = message {
+                        *preview_visible = !*preview_visible;
+                        let _ = webview.set_visible(*preview_visible);
+                    }
                     controls.update(message);
                 }
 
