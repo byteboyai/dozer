@@ -139,6 +139,12 @@ impl Session {
         self.buffer.lock().expect("ring lock").read_from(offset)
     }
 
+    /// 单次加锁同时取数据与 next_offset，避免双锁间隙丢字节
+    pub fn read_from_with_next(&self, offset: u64) -> Option<(Vec<u8>, u64)> {
+        let buf = self.buffer.lock().expect("ring lock");
+        buf.read_from(offset).map(|d| (d, buf.total_written()))
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<SessionEvent> {
         self.tx.subscribe()
     }

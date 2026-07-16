@@ -20,7 +20,13 @@ pub async fn serve(socket: &Path, registry: Arc<SessionRegistry>) -> Result<()> 
     let listener = UnixListener::bind(socket)?;
     tracing::info!(socket = %socket.display(), "dozerd 监听中");
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, _) = match listener.accept().await {
+            Ok(pair) => pair,
+            Err(e) => {
+                tracing::warn!(error = %e, "accept 失败，跳过本次连接");
+                continue;
+            }
+        };
         let registry = registry.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_conn(stream, registry).await {
@@ -35,6 +41,8 @@ async fn handle_conn(stream: UnixStream, registry: Arc<SessionRegistry>) -> Resu
     let mut lines = BufReader::new(r).lines();
     // attach 状态：订阅 + 会话 id
     let mut sub: Option<(String, broadcast::Receiver<SessionEvent>)> = None;
+    // 已向本连接投递到的 offset 水位：过滤 snapshot 与 broadcast 之间重叠的字节
+    let mut sent_until: u64 = 0;
 
     loop {
         tokio::select! {
@@ -53,12 +61,19 @@ async fn handle_conn(stream: UnixStream, registry: Arc<SessionRegistry>) -> Resu
                         Request::Attach { session_id, from_offset } => match registry.get(&session_id) {
                             None => Reply::Error { message: format!("会话不存在: {session_id}") },
                             Some(s) => {
+                                // 先 subscribe 后取快照：保证快照与订阅之间不漏事件；
+                                // 二者之间可能重叠投递的字节由 sent_until 水位在转发时过滤。
                                 let rx = s.subscribe();
-                                let (snap, next) = match s.read_from(from_offset) {
-                                    Some(tail) if from_offset > 0 => (tail, s.snapshot().1),
-                                    _ => s.snapshot(),
+                                let (snap, next) = if from_offset > 0 {
+                                    match s.read_from_with_next(from_offset) {
+                                        Some((tail, next)) => (tail, next),
+                                        None => s.snapshot(),
+                                    }
+                                } else {
+                                    s.snapshot()
                                 };
                                 sub = Some((session_id.clone(), rx));
+                                sent_until = next;
                                 Reply::Attached {
                                     session_id,
                                     snapshot_b64: B64.encode(&snap),
@@ -101,8 +116,26 @@ async fn handle_conn(stream: UnixStream, registry: Arc<SessionRegistry>) -> Resu
                 let sid = sid.clone();
                 match ev {
                     Ok(SessionEvent::Output { data, offset }) => {
-                        let reply = Reply::Output { session_id: sid, data_b64: B64.encode(&data), offset };
-                        w.write_all(encode_line(&reply).as_bytes()).await?;
+                        // 水位过滤：data 覆盖字节范围 [offset-data.len(), offset)。
+                        if offset <= sent_until {
+                            // 整个事件已被快照覆盖，跳过
+                        } else if offset - data.len() as u64 >= sent_until {
+                            // 与已投递区间无重叠，全量转发
+                            let reply =
+                                Reply::Output { session_id: sid, data_b64: B64.encode(&data), offset };
+                            w.write_all(encode_line(&reply).as_bytes()).await?;
+                            sent_until = offset;
+                        } else {
+                            // 部分重叠，只发未投递过的尾部
+                            let skip = data.len() - (offset - sent_until) as usize;
+                            let reply = Reply::Output {
+                                session_id: sid,
+                                data_b64: B64.encode(&data[skip..]),
+                                offset,
+                            };
+                            w.write_all(encode_line(&reply).as_bytes()).await?;
+                            sent_until = offset;
+                        }
                     }
                     Ok(SessionEvent::Exited { code }) => {
                         let reply = Reply::Exited { session_id: sid, code };
