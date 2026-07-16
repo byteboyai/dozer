@@ -4056,6 +4056,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "spike-iced-webview"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "iced_wgpu",
+ "iced_widget",
+ "iced_winit",
+ "tracing-subscriber",
+ "winit",
+ "wry",
+]
+
+[[package]]
 name = "spike-webview-child"
 version = "0.1.0"
 dependencies = [
