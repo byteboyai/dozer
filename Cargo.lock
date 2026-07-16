@@ -1063,6 +1063,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dozer-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "dozer-core",
+ "dozerd",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "dozer-core"
 version = "0.1.0"
 dependencies = [
