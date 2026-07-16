@@ -1,4 +1,7 @@
 use anyhow::Result;
+use dozerd::registry::SessionRegistry;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -8,8 +11,34 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|_| "info".into()),
         )
         .init();
-    let state = dozer_core::paths::state_dir();
-    std::fs::create_dir_all(&state)?;
-    tracing::info!(state_dir = %state.display(), "dozerd 骨架启动（P1b 实现会话内核）");
+
+    // 极简参数解析：仅 --socket <path>（daemon 不引 clap，保持轻）
+    let mut args = std::env::args().skip(1);
+    let mut socket: PathBuf = dozer_core::paths::socket_path();
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--socket" => {
+                socket = args.next().map(PathBuf::from).unwrap_or(socket);
+            }
+            "--version" => {
+                println!("dozerd {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            other => {
+                eprintln!("未知参数: {other}（支持 --socket <path> / --version）");
+                std::process::exit(2);
+            }
+        }
+    }
+
+    let registry = Arc::new(SessionRegistry::new());
+    let serve = dozerd::server::serve(&socket, registry);
+    tokio::select! {
+        r = serve => r?,
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("收到 Ctrl-C，退出");
+            let _ = std::fs::remove_file(&socket);
+        }
+    }
     Ok(())
 }
