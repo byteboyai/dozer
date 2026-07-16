@@ -1069,6 +1069,7 @@ dependencies = [
  "anyhow",
  "directories",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
