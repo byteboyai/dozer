@@ -3,18 +3,15 @@ use dozerd::registry::SessionRegistry;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// macOS SUN_LEN 上限 104 字节，用 /tmp 短路径
-fn short_temp_sock() -> std::path::PathBuf {
-    let nonce: String = (0..6).map(|_| (b'a' + rand() % 26) as char).collect();
-    std::path::PathBuf::from(format!("/tmp/dz-{nonce}.sock"))
-}
-fn rand() -> u8 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    (SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_nanos() & 0xFF) as u8
+fn temp_sock() -> (std::path::PathBuf, uuid::Uuid) {
+    let id = uuid::Uuid::new_v4();
+    let short = &id.to_string()[..8];
+    let path = std::path::PathBuf::from(format!("/tmp/dz-{short}.sock"));
+    (path, id)
 }
 
-async fn start_daemon() -> std::path::PathBuf {
-    let sock = short_temp_sock();
+async fn start_daemon() -> (std::path::PathBuf, CleanupGuard) {
+    let (sock, id) = temp_sock();
     let registry = Arc::new(SessionRegistry::new());
     let s = sock.clone();
     tokio::spawn(async move { dozerd::server::serve(&s, registry).await });
@@ -22,12 +19,21 @@ async fn start_daemon() -> std::path::PathBuf {
         if sock.exists() { break; }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    sock
+    (sock, CleanupGuard(id))
+}
+
+struct CleanupGuard(uuid::Uuid);
+impl Drop for CleanupGuard {
+    fn drop(&mut self) {
+        let short = &self.0.to_string()[..8];
+        let path = std::path::PathBuf::from(format!("/tmp/dz-{short}.sock"));
+        let _ = std::fs::remove_file(&path);
+    }
 }
 
 #[tokio::test]
 async fn full_client_lifecycle() {
-    let sock = start_daemon().await;
+    let (sock, _guard) = start_daemon().await;
     let c = Client::new(sock);
     assert!(c.list().await.unwrap().is_empty());
 
