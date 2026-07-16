@@ -1085,6 +1085,7 @@ name = "dozerd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "dozer-core",
  "portable-pty",
  "serde_json",
