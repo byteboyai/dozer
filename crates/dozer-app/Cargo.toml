@@ -17,3 +17,4 @@ winit = "0.30"
 futures = { version = "0.3", features = ["thread-pool"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+alacritty_terminal.workspace = true

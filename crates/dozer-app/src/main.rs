@@ -1,3 +1,4 @@
+mod term_model;
 mod theme;
 mod workspace;
 
