@@ -282,3 +282,99 @@ async fn attach_from_offset_resumes_within_window() {
     server.abort();
     let _ = std::fs::remove_file(&sock);
 }
+
+/// M3 护栏（P1b 终审承接）：持续输出会话上多轮中途 attach，
+/// 逐事件断言字节流连续性不变量 offset - data.len() == 本连接水位。
+#[tokio::test]
+async fn attach_stream_offset_invariant_under_load() {
+    let sock = std::env::temp_dir().join(format!("dozerd-test-{}.sock", uuid::Uuid::new_v4()));
+    let registry = Arc::new(SessionRegistry::new());
+    let server = tokio::spawn({
+        let sock = sock.clone();
+        let registry = registry.clone();
+        async move { dozerd::server::serve(&sock, registry).await }
+    });
+    for _ in 0..100 {
+        if sock.exists() { break; }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // 持续输出源：每 10ms 一行递增序号
+    let mut c0 = Client::connect(&sock).await;
+    c0.send(&Request::CreateSession {
+        name: "泵".into(),
+        command: "/bin/sh".into(),
+        args: vec!["-c".into(), "i=0; while [ $i -lt 400 ]; do echo line_$i; i=$((i+1)); sleep 0.01; done".into()],
+        cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+        cols: 80, rows: 24,
+    }).await;
+    let Reply::Created { session } = c0.recv().await else { panic!("expect Created") };
+    let sid = session.id;
+    drop(c0);
+
+    let mut checked_events = 0u32;
+    for round in 0..12 {
+        let mut c = Client::connect(&sock).await;
+        c.send(&Request::Attach { session_id: sid.clone(), from_offset: 0 }).await;
+        let Reply::Attached { next_offset, .. } = c.recv().await else { panic!("expect Attached") };
+        let mut watermark = next_offset;
+        // 每轮消费 ~15 个事件校验不变量后断连
+        for _ in 0..15 {
+            match tokio::time::timeout(Duration::from_secs(3), c.recv()).await {
+                Ok(Reply::Output { data_b64, offset, .. }) => {
+                    let len = from_b64(&data_b64).len() as u64;
+                    assert_eq!(
+                        offset - len, watermark,
+                        "字节流断裂：round={round} offset={offset} len={len} watermark={watermark}"
+                    );
+                    watermark = offset;
+                    checked_events += 1;
+                }
+                Ok(Reply::Exited { .. }) | Err(_) => break, // 输出源跑完即止
+                Ok(other) => panic!("unexpected: {other:?}"),
+            }
+        }
+        drop(c);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    assert!(checked_events >= 60, "压力不足：仅校验 {checked_events} 个事件");
+    server.abort();
+    let _ = std::fs::remove_file(&sock);
+}
+
+/// M4（P1b 终审承接）：from_offset 已被环形缓冲逐出 → 回退全量快照。
+/// 用小于缓冲窗口起点的 offset 无法直接构造（1MiB 逐出成本高），
+/// 改用协议语义等价路径：from_offset 大于 total（越界）同样走"否则全量"分支。
+#[tokio::test]
+async fn attach_from_offset_out_of_window_falls_back_to_full_snapshot() {
+    let sock = std::env::temp_dir().join(format!("dozerd-test-{}.sock", uuid::Uuid::new_v4()));
+    let registry = Arc::new(SessionRegistry::new());
+    let server = tokio::spawn({
+        let sock = sock.clone();
+        let registry = registry.clone();
+        async move { dozerd::server::serve(&sock, registry).await }
+    });
+    for _ in 0..100 {
+        if sock.exists() { break; }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let mut c = Client::connect(&sock).await;
+    c.send(&Request::CreateSession {
+        name: "t".into(), command: "/bin/sh".into(),
+        args: vec!["-c".into(), "printf fallback_marker; cat".into()],
+        cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+        cols: 80, rows: 24,
+    }).await;
+    let Reply::Created { session } = c.recv().await else { panic!() };
+    // 等输出落缓冲
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    // 越界 offset → 应回退全量（snapshot 含 marker），且 next_offset 一致可用
+    c.send(&Request::Attach { session_id: session.id.clone(), from_offset: u64::MAX }).await;
+    let Reply::Attached { snapshot_b64, next_offset, .. } = c.recv().await else { panic!() };
+    let snap = from_b64(&snapshot_b64);
+    assert!(snap.windows(15).any(|w| w == b"fallback_marker"), "越界必须回退全量快照");
+    assert_eq!(next_offset, snap.len() as u64, "全量回退时 next_offset == 快照长度（窗口未逐出场景）");
+    c.send(&Request::Kill { session_id: session.id }).await;
+    server.abort();
+    let _ = std::fs::remove_file(&sock);
+}
