@@ -95,25 +95,45 @@ impl Client {
             other => bail!("意外应答: {other:?}"),
         };
         let (tx, rx) = mpsc::unbounded_channel();
+        let id = id.to_string();
         tokio::spawn(async move {
             let _keep_writer = w;
             loop {
-                match lines.next_line().await {
-                    Ok(Some(line)) => {
-                        let ev = match decode_line::<Reply>(&line) {
-                            Ok(Reply::Output { data_b64, .. }) => B64
-                                .decode(data_b64.as_bytes())
-                                .map(TermEvent::Output)
-                                .unwrap_or(TermEvent::Disconnected),
-                            Ok(Reply::Exited { code, .. }) => TermEvent::Exited(code),
-                            Ok(Reply::Error { message }) if message.contains("lagged") =>
-                                TermEvent::Lagged,
-                            _ => continue,
-                        };
-                        let stop = matches!(ev, TermEvent::Exited(_) | TermEvent::Disconnected);
-                        if tx.send(ev).is_err() || stop { break; }
+                tokio::select! {
+                    // consumer（rx）被 drop（例如 tab 被关闭）：没有人再消费事件，
+                    // 停止读循环，随后 lines/_keep_writer 一并 drop，UnixStream
+                    // 两端都关闭，daemon 侧 handle_conn 才能在下一次
+                    // lines.next_line() 上收到 EOF 并退出，避免任务+FD 滞留。
+                    _ = tx.closed() => {
+                        tracing::debug!(session_id = %id, "attach receiver 已关闭，读任务退出");
+                        break;
                     }
-                    _ => { let _ = tx.send(TermEvent::Disconnected); break; }
+                    line = lines.next_line() => {
+                        match line {
+                            Ok(Some(line)) => {
+                                let ev = match decode_line::<Reply>(&line) {
+                                    Ok(Reply::Output { data_b64, .. }) => B64
+                                        .decode(data_b64.as_bytes())
+                                        .map(TermEvent::Output)
+                                        .unwrap_or(TermEvent::Disconnected),
+                                    Ok(Reply::Exited { code, .. }) => TermEvent::Exited(code),
+                                    Ok(Reply::Error { message }) if message.contains("lagged") =>
+                                        TermEvent::Lagged,
+                                    _ => continue,
+                                };
+                                let stop = matches!(ev, TermEvent::Exited(_) | TermEvent::Disconnected);
+                                if tx.send(ev).is_err() || stop {
+                                    tracing::debug!(session_id = %id, "attach 读任务退出（发送失败或会话结束）");
+                                    break;
+                                }
+                            }
+                            _ => {
+                                tracing::debug!(session_id = %id, "attach 读任务退出（daemon 断开）");
+                                let _ = tx.send(TermEvent::Disconnected);
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         });

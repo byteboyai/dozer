@@ -15,11 +15,8 @@
 //! 任何一行，因此“光标只在可视行内绘制”这条防御是结构性自动满足的，无需
 //! 额外 `if row_idx < len` 判断（该判断已经隐含在 for 循环边界里）。
 //!
-//! `grid_size` 目前只在单测里被调用——真正按 pane 像素动态换算并驱动
-//! `TerminalModel::resize` 是窗口 resize 事件的接线工作（T6+），本任务的
-//! `Workspace` 先用固定 80x24 网格把渲染管线跑通。`#![allow(dead_code)]`
-//! 是过渡期占位，等接上 resize 后可去掉（对齐 `term_model.rs` 的先例）。
-#![allow(dead_code)]
+//! `grid_size` 已在 T6 接线：`main.rs` 用 pane 像素尺寸算出的 `(cols,
+//! rows)` 驱动 `TerminalModel::resize`，不再是固定 80x24。
 use crate::term_model::{Cell, TerminalModel};
 use crate::theme;
 use crate::workspace::Message;

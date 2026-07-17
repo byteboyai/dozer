@@ -148,6 +148,13 @@ impl Session {
     pub fn subscribe(&self) -> broadcast::Receiver<SessionEvent> {
         self.tx.subscribe()
     }
+
+    /// 当前存活的 broadcast 订阅数——每个连接的 `handle_conn` 在 attach
+    /// 期间持有一个订阅，连接退出（EOF/关闭）时随 `sub` 一起被 drop。
+    /// 主要用于测试：观察连接释放是否真的传导到了订阅计数归零。
+    pub fn subscriber_count(&self) -> usize {
+        self.tx.receiver_count()
+    }
 }
 
 #[cfg(test)]
