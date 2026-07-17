@@ -931,6 +931,7 @@ dependencies = [
  "iced_wgpu",
  "iced_widget",
  "iced_winit",
+ "tokio",
  "tracing",
  "tracing-subscriber",
  "winit",

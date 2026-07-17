@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 dozer-core = { path = "../dozer-core" }
 dozer-client = { path = "../dozer-client" }
+tokio.workspace = true
 iced_winit = "0.14"
 iced_wgpu = { version = "0.14", default-features = true }
 iced_widget = { version = "0.14", features = ["wgpu"] }
