@@ -51,6 +51,11 @@ impl Session {
         let mut cmd = CommandBuilder::new(&spec.command);
         cmd.args(&spec.args);
         cmd.cwd(&spec.cwd);
+        // 没有 TERM 时很多 shell 行编辑器（readline/zle）退化成极简模式，
+        // 方向键历史、颜色等一律不可用；COLORTERM=truecolor 让识别它的
+        // 程序知道可以用 24-bit 真彩色而不是退化到 256 色。
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
         let child = pair.slave.spawn_command(cmd).context("spawn_command")?;
         drop(pair.slave);
 
@@ -212,6 +217,16 @@ mod tests {
         s.write(b"pingpong\n").unwrap();
         // cat 回显（经 PTY，含回显本身）
         assert!(wait_contains(&s, b"pingpong").await);
+        s.kill().unwrap();
+    }
+
+    #[tokio::test]
+    async fn spawned_child_has_term_and_colorterm_env() {
+        let s = Session::spawn(spec("printf '%s|%s' \"$TERM\" \"$COLORTERM\"")).unwrap();
+        assert!(
+            wait_contains(&s, b"xterm-256color|truecolor").await,
+            "buffer should contain TERM/COLORTERM values set by Session::spawn"
+        );
         s.kill().unwrap();
     }
 

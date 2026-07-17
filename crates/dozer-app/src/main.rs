@@ -201,7 +201,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     is_synthetic: false,
                     ..
                 } if event.state == ElementState::Pressed => {
-                    keymap::key_to_bytes(&event.logical_key, modifiers)
+                    keymap::key_to_bytes(
+                        &event.logical_key,
+                        modifiers,
+                        workspace.active_app_cursor_mode(),
+                    )
                 }
                 WindowEvent::Ime(Ime::Commit(text)) => Some(keymap::ime_commit_to_bytes(text)),
                 _ => None,

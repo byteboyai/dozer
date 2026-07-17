@@ -13,7 +13,7 @@ use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::term::{Config, Term};
+use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Processor};
 
 /// ANSI 16 色的主题 RGB 表，下标与 `NamedColor` 的判别值（0..=15）一致：
@@ -196,6 +196,14 @@ impl TerminalModel {
         let point = self.term.grid().cursor.point;
         (point.column.0, point.line.0 as usize)
     }
+
+    /// 是否处于 application cursor mode（DECCKM，`CSI ?1h` 开启 /
+    /// `CSI ?1l` 关闭）。shell 行编辑器（readline/zle 等）常用它来把方向
+    /// 键从 CSI 序列（`\x1b[A`）切换成 SS3 序列（`\x1bOA`），
+    /// `keymap::key_to_bytes` 据此决定发哪一种转义序列。
+    pub fn app_cursor_mode(&self) -> bool {
+        self.term.mode().contains(TermMode::APP_CURSOR)
+    }
 }
 
 #[cfg(test)]
@@ -255,5 +263,15 @@ mod tests {
         assert_eq!(l[0].ch, '你');
         assert_eq!(l[2].ch, '好'); // 宽字符占两格，第 1 格为 spacer
         assert_eq!(t.cursor(), (4, 0));
+    }
+
+    #[test]
+    fn decckm_toggles_app_cursor_mode() {
+        let mut t = TerminalModel::new(40, 10);
+        assert!(!t.app_cursor_mode());
+        t.feed(b"\x1b[?1h");
+        assert!(t.app_cursor_mode());
+        t.feed(b"\x1b[?1l");
+        assert!(!t.app_cursor_mode());
     }
 }

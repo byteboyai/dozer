@@ -12,8 +12,11 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 /// - 字符键：无 Ctrl 时原样 UTF-8；按住 Ctrl 时按字母映射到控制码
 ///   （Ctrl+A..Z → 0x01..0x1a，例如 Ctrl+C → 0x03 ETX）。
 /// - Enter → `\r`；Backspace → `0x7f`（DEL）；Tab → `\t`；Esc → `0x1b`。
-/// - 方向键 → CSI 序列 `\x1b[A/B/C/D`（上/下/右/左）。
-pub fn key_to_bytes(key: &Key, modifiers: &ModifiersState) -> Option<Vec<u8>> {
+/// - 方向键：`app_cursor` 为 `false`（正常模式）时发 CSI 序列
+///   `\x1b[A/B/C/D`；为 `true`（DECCKM/application cursor mode，
+///   shell 行编辑器常用）时发 SS3 序列 `\x1bOA/B/C/D`——由调用方传入
+///   当前活跃 tab 的 `TerminalModel::app_cursor_mode()`。
+pub fn key_to_bytes(key: &Key, modifiers: &ModifiersState, app_cursor: bool) -> Option<Vec<u8>> {
     match key {
         Key::Character(s) => {
             if modifiers.control_key() {
@@ -22,7 +25,18 @@ pub fn key_to_bytes(key: &Key, modifiers: &ModifiersState) -> Option<Vec<u8>> {
                 Some(s.as_bytes().to_vec())
             }
         }
-        Key::Named(named) => named_key_to_bytes(*named),
+        Key::Named(NamedKey::Space) => {
+            // 空格是具名键（不是 `Key::Character(" ")`），winit 0.30 下
+            // 之前完全没有映射分支——空格键因此被静默丢弃。Ctrl+Space
+            // 按经典终端惯例映射到 NUL（0x00），与 Ctrl+A..Z 的控制码
+            // 序列是同一套约定的延伸。
+            if modifiers.control_key() {
+                Some(vec![0x00])
+            } else {
+                Some(vec![b' '])
+            }
+        }
+        Key::Named(named) => named_key_to_bytes(*named, app_cursor),
         _ => None,
     }
 }
@@ -38,16 +52,32 @@ fn ctrl_char_to_bytes(s: &str) -> Option<Vec<u8>> {
     Some(vec![(upper as u8) - b'A' + 1])
 }
 
-fn named_key_to_bytes(named: NamedKey) -> Option<Vec<u8>> {
+fn named_key_to_bytes(named: NamedKey, app_cursor: bool) -> Option<Vec<u8>> {
     match named {
         NamedKey::Enter => Some(vec![b'\r']),
         NamedKey::Backspace => Some(vec![0x7f]),
         NamedKey::Tab => Some(vec![b'\t']),
         NamedKey::Escape => Some(vec![0x1b]),
-        NamedKey::ArrowUp => Some(b"\x1b[A".to_vec()),
-        NamedKey::ArrowDown => Some(b"\x1b[B".to_vec()),
-        NamedKey::ArrowRight => Some(b"\x1b[C".to_vec()),
-        NamedKey::ArrowLeft => Some(b"\x1b[D".to_vec()),
+        NamedKey::ArrowUp => Some(if app_cursor {
+            b"\x1bOA".to_vec()
+        } else {
+            b"\x1b[A".to_vec()
+        }),
+        NamedKey::ArrowDown => Some(if app_cursor {
+            b"\x1bOB".to_vec()
+        } else {
+            b"\x1b[B".to_vec()
+        }),
+        NamedKey::ArrowRight => Some(if app_cursor {
+            b"\x1bOC".to_vec()
+        } else {
+            b"\x1b[C".to_vec()
+        }),
+        NamedKey::ArrowLeft => Some(if app_cursor {
+            b"\x1bOD".to_vec()
+        } else {
+            b"\x1b[D".to_vec()
+        }),
         _ => None,
     }
 }
@@ -66,7 +96,7 @@ mod tests {
     #[test]
     fn printable_char_passes_utf8() {
         assert_eq!(
-            key_to_bytes(&Key::Character("a".into()), &ModifiersState::empty()),
+            key_to_bytes(&Key::Character("a".into()), &ModifiersState::empty(), false),
             Some(b"a".to_vec())
         );
     }
@@ -74,11 +104,19 @@ mod tests {
     #[test]
     fn enter_is_cr_backspace_is_del() {
         assert_eq!(
-            key_to_bytes(&Key::Named(NamedKey::Enter), &ModifiersState::empty()),
+            key_to_bytes(
+                &Key::Named(NamedKey::Enter),
+                &ModifiersState::empty(),
+                false
+            ),
             Some(vec![b'\r'])
         );
         assert_eq!(
-            key_to_bytes(&Key::Named(NamedKey::Backspace), &ModifiersState::empty()),
+            key_to_bytes(
+                &Key::Named(NamedKey::Backspace),
+                &ModifiersState::empty(),
+                false
+            ),
             Some(vec![0x7f])
         );
     }
@@ -86,11 +124,19 @@ mod tests {
     #[test]
     fn arrows_are_csi() {
         assert_eq!(
-            key_to_bytes(&Key::Named(NamedKey::ArrowUp), &ModifiersState::empty()),
+            key_to_bytes(
+                &Key::Named(NamedKey::ArrowUp),
+                &ModifiersState::empty(),
+                false
+            ),
             Some(b"\x1b[A".to_vec())
         );
         assert_eq!(
-            key_to_bytes(&Key::Named(NamedKey::ArrowLeft), &ModifiersState::empty()),
+            key_to_bytes(
+                &Key::Named(NamedKey::ArrowLeft),
+                &ModifiersState::empty(),
+                false
+            ),
             Some(b"\x1b[D".to_vec())
         );
     }
@@ -98,7 +144,7 @@ mod tests {
     #[test]
     fn ctrl_c_is_etx() {
         assert_eq!(
-            key_to_bytes(&Key::Character("c".into()), &ModifiersState::CONTROL),
+            key_to_bytes(&Key::Character("c".into()), &ModifiersState::CONTROL, false),
             Some(vec![0x03])
         );
     }
@@ -106,5 +152,65 @@ mod tests {
     #[test]
     fn ime_commit_is_raw_utf8() {
         assert_eq!(ime_commit_to_bytes("你好"), "你好".as_bytes().to_vec());
+    }
+
+    #[test]
+    fn space_maps_to_byte() {
+        assert_eq!(
+            key_to_bytes(
+                &Key::Named(NamedKey::Space),
+                &ModifiersState::empty(),
+                false
+            ),
+            Some(vec![b' '])
+        );
+    }
+
+    #[test]
+    fn ctrl_space_is_nul() {
+        assert_eq!(
+            key_to_bytes(
+                &Key::Named(NamedKey::Space),
+                &ModifiersState::CONTROL,
+                false
+            ),
+            Some(vec![0x00])
+        );
+    }
+
+    #[test]
+    fn arrows_are_ss3_when_app_cursor_mode() {
+        assert_eq!(
+            key_to_bytes(
+                &Key::Named(NamedKey::ArrowUp),
+                &ModifiersState::empty(),
+                true
+            ),
+            Some(b"\x1bOA".to_vec())
+        );
+        assert_eq!(
+            key_to_bytes(
+                &Key::Named(NamedKey::ArrowDown),
+                &ModifiersState::empty(),
+                true
+            ),
+            Some(b"\x1bOB".to_vec())
+        );
+        assert_eq!(
+            key_to_bytes(
+                &Key::Named(NamedKey::ArrowRight),
+                &ModifiersState::empty(),
+                true
+            ),
+            Some(b"\x1bOC".to_vec())
+        );
+        assert_eq!(
+            key_to_bytes(
+                &Key::Named(NamedKey::ArrowLeft),
+                &ModifiersState::empty(),
+                true
+            ),
+            Some(b"\x1bOD".to_vec())
+        );
     }
 }

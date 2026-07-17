@@ -349,6 +349,17 @@ impl Workspace {
         }
     }
 
+    /// 当前激活 tab 是否处于 application cursor mode（DECCKM）。
+    /// `main.rs` 的 `on_window_event` 用它决定方向键发 CSI 还是 SS3 序列
+    /// （见 `keymap::key_to_bytes` 的 `app_cursor` 参数）。没有任何 tab
+    /// 时（例如 daemon 连接失败的降级态）保守返回 `false`。
+    pub fn active_app_cursor_mode(&self) -> bool {
+        self.tabs
+            .get(self.active)
+            .map(|t| t.model.app_cursor_mode())
+            .unwrap_or(false)
+    }
+
     pub fn view(
         &self,
     ) -> iced_widget::core::Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
