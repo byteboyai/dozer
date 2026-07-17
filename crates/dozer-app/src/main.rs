@@ -1,4 +1,6 @@
+mod keymap;
 mod term_model;
+mod term_view;
 mod theme;
 mod workspace;
 
@@ -19,7 +21,7 @@ use iced_winit::winit;
 
 use winit::{
     dpi::LogicalSize,
-    event::WindowEvent,
+    event::{ElementState, Ime, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     keyboard::ModifiersState,
 };
@@ -87,10 +89,47 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
     }
 
     impl Runner {
-        /// Task 5/6 键盘与 resize 接线处：当前是穿透式 no-op，未来在此
-        /// 拦截原始 `WindowEvent`（键盘快捷键、resize 副作用等），
-        /// 而不必改动 `winit::application::ApplicationHandler` 的实现。
-        fn on_window_event(&mut self, _event: &WindowEvent) {}
+        /// 键盘/IME 输入拦截处：终端聚焦时把原始 `WindowEvent` 经
+        /// `keymap` 翻译成字节，直接回灌 `Workspace`（`Message::TermInput`），
+        /// 不必改动 `winit::application::ApplicationHandler` 的实现本身。
+        ///
+        /// 本任务先本地 echo（`TerminalModel::feed`）验证渲染管线，daemon
+        /// 接线在 T6——那时这里会改成把 bytes 发给 PTY 而不是直接喂给
+        /// 本地终端模型。
+        fn on_window_event(&mut self, event: &WindowEvent) {
+            // 把 `modifiers` 和 `workspace`/`window` 放进同一次解构里取，
+            // 避免先借一次 `self` 再调用 `&self` 方法造成的重复借用。
+            let Self::Ready {
+                workspace,
+                window,
+                modifiers,
+                ..
+            } = self
+            else {
+                return;
+            };
+
+            let bytes = match event {
+                // 只处理真实按键（忽略窗口获得焦点时 winit 补发的
+                // synthetic 事件）与按下沿；`modifiers` 由外层
+                // `window_event` 在 `ModifiersChanged` 时更新，这里读到的
+                // 始终是按键发生时刻的最新状态。
+                WindowEvent::KeyboardInput {
+                    event,
+                    is_synthetic: false,
+                    ..
+                } if event.state == ElementState::Pressed => {
+                    keymap::key_to_bytes(&event.logical_key, modifiers)
+                }
+                WindowEvent::Ime(Ime::Commit(text)) => Some(keymap::ime_commit_to_bytes(text)),
+                _ => None,
+            };
+
+            if let Some(bytes) = bytes {
+                workspace.update(Message::TermInput(bytes));
+                window.request_redraw();
+            }
+        }
     }
 
     impl winit::application::ApplicationHandler for Runner {
@@ -105,6 +144,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         )
                         .expect("Create window"),
                 );
+                // 打开 IME：CJK 等组合输入法要靠 `WindowEvent::Ime(Commit)`
+                // 才能拿到最终提交文本（默认关闭，见 winit 文档）。
+                window.set_ime_allowed(true);
 
                 let physical_size = window.inner_size();
                 let viewport = Viewport::with_physical_size(
