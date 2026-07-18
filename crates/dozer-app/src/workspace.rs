@@ -792,12 +792,10 @@ fn terminal_pane(
     }
 
     // OSC 133;D 的最近命令非零退出码提示（下一条命令开始时消失）。
-    if let Some(tab) = ws.tabs.get(ws.active) {
-        if let Some(code) = tab.last_exit {
-            if code != 0 {
-                content = content.push(text(format!("exit {code}")).size(11).color(theme::RED));
-            }
-        }
+    if let Some(code) = ws.tabs.get(ws.active).and_then(|t| t.last_exit)
+        && code != 0
+    {
+        content = content.push(text(format!("exit {code}")).size(11).color(theme::RED));
     }
 
     content = content.push(active_tab_view(ws));

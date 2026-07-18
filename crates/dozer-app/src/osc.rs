@@ -90,13 +90,12 @@ impl OscScanner {
         let s = String::from_utf8_lossy(&self.buf).into_owned();
         self.buf.clear();
         if let Some(rest) = s.strip_prefix("7;") {
-            if let Some(url) = rest.strip_prefix("file://") {
-                // host 段到第一个 '/' 为止；余下是路径
-                if let Some(slash) = url.find('/') {
-                    if let Some(path) = crate::assets::percent_decode(&url[slash..]) {
-                        out.push(OscEvent::Cwd(PathBuf::from(path)));
-                    }
-                }
+            // host 段到第一个 '/' 为止；余下是路径
+            if let Some(url) = rest.strip_prefix("file://")
+                && let Some(slash) = url.find('/')
+                && let Some(path) = crate::assets::percent_decode(&url[slash..])
+            {
+                out.push(OscEvent::Cwd(PathBuf::from(path)));
             }
         } else if let Some(rest) = s.strip_prefix("133;") {
             match rest.as_bytes().first() {
