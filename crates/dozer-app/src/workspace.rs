@@ -23,7 +23,7 @@ use crate::term_model::TerminalModel;
 use crate::term_view;
 use crate::theme;
 use dozer_client::{Client, TermEvent};
-use dozer_core::protocol::SessionInfo;
+use dozer_core::protocol::{AgentState, SessionInfo};
 use iced_widget::core::{Border, Color, Element, Length};
 use iced_widget::{button, column, container, row, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
@@ -89,6 +89,8 @@ pub enum Message {
     TermOutput(usize, Vec<u8>),
     /// 对应 tab 的会话已退出（PTY 子进程退出或 daemon 断连）。
     SessionExited(usize),
+    /// attach 流转发来的 agent 状态变更（`usize` 是 tab 稳定 id）。
+    AgentStateChanged(usize, AgentState),
     /// 切换当前显示的 tab（这里的 `usize` 是 vec 位置——用户点击的是
     /// "屏幕上第几个 tab"，跟稳定 id 是两回事）。
     SelectTab(usize),
@@ -150,6 +152,9 @@ pub struct SessionTab {
     pub info: SessionInfo,
     pub model: TerminalModel,
     pub alive: bool,
+    /// 会话内 agent 的最新状态（hook 事件驱动；初值来自
+    /// `SessionInfo.agent_state`，晚 attach 也能恢复现状）。
+    pub agent_state: AgentState,
     /// 稳定 id，`Message::TermOutput`/`SessionExited` 用它路由，不受
     /// tab 增删导致的 vec 位置变化影响。
     tab_id: usize,
@@ -209,6 +214,7 @@ impl Workspace {
                             let _ = model.feed(&snapshot); // 快照回放：陈旧查询应答不可补发，丢弃
                             let forwarder = handle.spawn(forward_events(tab_id, rx, proxy.clone()));
                             tabs.push(SessionTab {
+                                agent_state: info.agent_state,
                                 info,
                                 model,
                                 alive: true,
@@ -303,6 +309,11 @@ impl Workspace {
                     tab.alive = false;
                     // 本地标记行，非会话真实输出；应答无处可写，丢弃。
                     let _ = tab.model.feed(&exited_marker());
+                }
+            }
+            Message::AgentStateChanged(tab_id, state) => {
+                if let Some(tab) = self.tab_by_id_mut(tab_id) {
+                    tab.agent_state = state;
                 }
             }
             Message::SelectTab(idx) => {
@@ -475,6 +486,7 @@ impl Workspace {
         let mut model = TerminalModel::new(self.cols, self.rows);
         let _ = model.feed(&snapshot); // 快照回放：陈旧查询应答不可补发，丢弃
         self.tabs.push(SessionTab {
+            agent_state: info.agent_state,
             info,
             model,
             alive: true,
@@ -570,6 +582,7 @@ async fn forward_events(
                 tracing::warn!(tab_id, "终端事件滞后（lagged），可能丢失部分历史输出");
                 continue;
             }
+            TermEvent::Agent(state) => Message::AgentStateChanged(tab_id, state),
         };
         if proxy.send_event(message).is_err() {
             // UI 线程（EventLoop）已经关闭，没有必要继续转发。
@@ -789,6 +802,20 @@ fn tab_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
     row(items).spacing(4).into()
 }
 
+/// tab 上的 agent 状态胶囊：Idle/死会话不出胶囊；配色语义——绿=运行、
+/// 紫蓝=待输入、金=回合结束（金是甲方动作专属色：该出手了）。
+fn agent_badge(state: AgentState, alive: bool) -> Option<(&'static str, Color)> {
+    if !alive {
+        return None;
+    }
+    match state {
+        AgentState::Idle => None,
+        AgentState::Running => Some(("运行中", theme::GREEN)),
+        AgentState::AwaitingInput => Some(("待输入", theme::PURPLE)),
+        AgentState::TurnEnded => Some(("回合毕", theme::GOLD)),
+    }
+}
+
 /// 单个 tab：alive ? GREEN : DIM 状态点 + 名称的选中按钮，紧跟一个关闭
 /// 按钮（点击 = detach，见 `Message::CloseTab` 的文档）。
 fn tab_item(
@@ -797,11 +824,14 @@ fn tab_item(
     active: bool,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let dot_color = if tab.alive { theme::GREEN } else { theme::DIM };
-    let label = row![
+    let mut label = row![
         text("●").size(10).color(dot_color),
         text(tab.info.name.clone()).size(12).color(theme::CREAM),
     ]
     .spacing(4);
+    if let Some((badge, color)) = agent_badge(tab.agent_state, tab.alive) {
+        label = label.push(text(badge).size(10).color(color));
+    }
 
     let select = button(label)
         .on_press(Message::SelectTab(idx))
@@ -859,6 +889,22 @@ mod tests {
     fn preview_content_bounds_never_negative() {
         let (_, _, w, h) = preview_content_bounds(100.0, 50.0);
         assert!(w >= 0.0 && h >= 0.0);
+    }
+
+    #[test]
+    fn agent_badge_states() {
+        use dozer_core::protocol::AgentState::*;
+        assert_eq!(agent_badge(Idle, true), None, "Idle 不出胶囊");
+        assert_eq!(agent_badge(Running, false), None, "死会话不出胶囊");
+        let (label, color) = agent_badge(Running, true).unwrap();
+        assert_eq!(label, "运行中");
+        assert_eq!(color, theme::GREEN);
+        let (label, color) = agent_badge(AwaitingInput, true).unwrap();
+        assert_eq!(label, "待输入");
+        assert_eq!(color, theme::PURPLE);
+        let (label, color) = agent_badge(TurnEnded, true).unwrap();
+        assert_eq!(label, "回合毕");
+        assert_eq!(color, theme::GOLD);
     }
 
     #[test]

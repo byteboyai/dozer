@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
-use dozer_core::protocol::{Reply, Request, SessionInfo, decode_line, encode_line};
+use dozer_core::protocol::{AgentState, Reply, Request, SessionInfo, decode_line, encode_line};
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
@@ -13,6 +13,8 @@ pub enum TermEvent {
     Exited(Option<i32>),
     Lagged,
     Disconnected,
+    /// 本会话 agent 状态变更（hook 事件驱动，dozerd 广播）。
+    Agent(AgentState),
 }
 
 #[derive(Clone)]
@@ -163,6 +165,7 @@ impl Client {
                                         .decode(data_b64.as_bytes())
                                         .map(TermEvent::Output)
                                         .unwrap_or(TermEvent::Disconnected),
+                                    Ok(Reply::AgentEvent { state, .. }) => TermEvent::Agent(state),
                                     Ok(Reply::Exited { code, .. }) => TermEvent::Exited(code),
                                     Ok(Reply::Error { message }) if message.contains("lagged") =>
                                         TermEvent::Lagged,
