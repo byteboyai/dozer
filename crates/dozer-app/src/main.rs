@@ -1,5 +1,6 @@
 mod assets;
 mod fonts;
+mod goal;
 mod keymap;
 mod osc;
 mod preview;
