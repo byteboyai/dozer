@@ -1174,7 +1174,7 @@ cargo test && cargo clippy --all-targets && cargo fmt --check
 
 Expected: workspace 全绿零警告。
 
-- [ ] **Step 2: 用户人工验收(逐项 ✓/✗;验收权在用户,实施方不代签)**
+- [x] **Step 2: 用户人工验收(逐项 ✓/✗;验收权在用户,实施方不代签)**
 
 ```markdown
 # P1d 人工验收清单(用户实机执行)
@@ -1189,7 +1189,7 @@ Expected: workspace 全绿零警告。
 9. 断网(关 Wi-Fi)重复 2/3 → 文件预览完全离线可用
 ```
 
-- [ ] **Step 3: 结果落档 + Commit**
+- [x] **Step 3: 结果落档 + Commit**
 
 验收记录写入 `docs/superpowers/specs/2026-07-18-p1d-acceptance.md`(格式沿用 P1c:逐项结果表 + 反馈修复流水;含 ✗ 项与处置);全部通过后规格 §3 需求 2 追加"P1d 达成(<日期>),验收记录见 specs/2026-07-18-p1d-acceptance.md"。
 
