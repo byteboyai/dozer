@@ -19,3 +19,5 @@ futures = { version = "0.3", features = ["thread-pool"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 alacritty_terminal.workspace = true
+wry = "0.55.1"
+rfd = "0.15"

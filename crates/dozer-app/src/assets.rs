@@ -8,9 +8,6 @@
 //!   macOS 的 Origin 是 `dozer://flyfish`,跨命名空间 fetch 被 CORS 拦;
 //!   URL 保留原始扩展名,Flyfish 靠它选择渲染管线。
 
-// 过渡期占位:本模块要到 Task 5 才被 wry 协议闭包消费(P1c/T2 惯例)。
-#![allow(dead_code)]
-
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 

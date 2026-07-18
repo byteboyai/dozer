@@ -173,6 +173,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             viewport: Viewport,
             modifiers: ModifiersState,
             resized: bool,
+            /// 预览 webview 池:tab id → (句柄, 当前已加载 URL)。句柄只在
+            /// 本事件环存取(spike 约束 2);URL 缓存用于导航去重。
+            webviews: std::collections::HashMap<usize, (wry::WebView, String)>,
         },
     }
 
@@ -229,6 +232,40 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
+            // 地址栏编辑态:键盘直达地址栏(不经 keymap、不进 PTY)。
+            if workspace.preview_addr_editing() {
+                let addr_event = match event {
+                    WindowEvent::KeyboardInput {
+                        event,
+                        is_synthetic: false,
+                        ..
+                    } if event.state == ElementState::Pressed => {
+                        use winit::keyboard::{Key, NamedKey};
+                        match &event.logical_key {
+                            Key::Character(s) => Some(workspace::AddrEvent::Text(s.to_string())),
+                            Key::Named(NamedKey::Space) => {
+                                Some(workspace::AddrEvent::Text(" ".into()))
+                            }
+                            Key::Named(NamedKey::Backspace) => {
+                                Some(workspace::AddrEvent::Backspace)
+                            }
+                            Key::Named(NamedKey::Enter) => Some(workspace::AddrEvent::Submit),
+                            Key::Named(NamedKey::Escape) => Some(workspace::AddrEvent::Cancel),
+                            _ => None,
+                        }
+                    }
+                    WindowEvent::Ime(Ime::Commit(text)) => {
+                        Some(workspace::AddrEvent::Text(text.clone()))
+                    }
+                    _ => None,
+                };
+                if let Some(ev) = addr_event {
+                    workspace.update(Message::PreviewAddrEvent(ev));
+                    window.request_redraw();
+                }
+                return;
+            }
+
             let bytes = match event {
                 // 只处理真实按键（忽略窗口获得焦点时 winit 补发的
                 // synthetic 事件）与按下沿；`modifiers` 由外层
@@ -256,6 +293,97 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 workspace.update(Message::TermInput(bytes));
                 window.request_redraw();
             }
+        }
+
+        /// 把 workspace 的 webview 期望清单同步到真实 wry 子视图:
+        /// 建缺失、毁多余、对齐可见性与 bounds、URL 变更时导航。
+        fn sync_previews(&mut self) {
+            let Self::Ready {
+                window,
+                workspace,
+                webviews,
+                ..
+            } = self
+            else {
+                return;
+            };
+            let specs = workspace.preview_desired();
+            let desired_ids: std::collections::HashSet<usize> =
+                specs.iter().map(|s| s.id).collect();
+            webviews.retain(|id, _| desired_ids.contains(id));
+
+            let size = window.inner_size();
+            let scale = window.scale_factor();
+            let logical_w = size.width as f32 / scale as f32;
+            let logical_h = size.height as f32 / scale as f32;
+            let (x, y, w, h) = workspace::preview_content_bounds(logical_w, logical_h);
+            let bounds = wry::Rect {
+                position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
+                size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
+            };
+
+            for spec in specs {
+                match webviews.get_mut(&spec.id) {
+                    Some((view, loaded_url)) => {
+                        if *loaded_url != spec.url {
+                            if let Err(e) = view.load_url(&spec.url) {
+                                tracing::warn!("预览导航失败: {e}");
+                            }
+                            *loaded_url = spec.url.clone();
+                        }
+                        let _ = view.set_bounds(bounds);
+                        let _ = view.set_visible(spec.visible);
+                    }
+                    None => {
+                        let allowed = workspace.allowed_files();
+                        let root = assets::assets_root();
+                        let built = wry::WebViewBuilder::new()
+                            .with_url(&spec.url)
+                            .with_bounds(bounds)
+                            .with_visible(spec.visible)
+                            .with_custom_protocol("dozer".into(), move |_id, request| {
+                                let allowed = allowed.lock().expect("allowed_files 锁");
+                                let reply = assets::handle_protocol(
+                                    &root,
+                                    &allowed,
+                                    &request.uri().to_string(),
+                                );
+                                wry::http::Response::builder()
+                                    .status(reply.status)
+                                    .header("Content-Type", reply.mime)
+                                    .body(std::borrow::Cow::Owned(reply.body))
+                                    .expect("构造协议应答")
+                            })
+                            .build_as_child(window.as_ref());
+                        match built {
+                            Ok(view) => {
+                                webviews.insert(spec.id, (view, spec.url.clone()));
+                            }
+                            Err(e) => tracing::error!("创建预览 webview 失败: {e}"),
+                        }
+                    }
+                }
+            }
+        }
+
+        /// `PreviewPickFile` 的副作用:原生文件选择器(模态,UI 线程短暂
+        /// 阻塞可接受)。选中 → 直接转成 `PreviewOpenPath` 送 workspace。
+        fn dispatch(&mut self, message: Message) {
+            let Self::Ready {
+                workspace, window, ..
+            } = self
+            else {
+                return;
+            };
+            match message {
+                Message::PreviewPickFile => {
+                    if let Some(path) = rfd::FileDialog::new().pick_file() {
+                        workspace.update(Message::PreviewOpenPath(path));
+                    }
+                }
+                other => workspace.update(other),
+            }
+            window.request_redraw();
         }
     }
 
@@ -399,6 +527,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     clipboard,
                     viewport,
                     resized: false,
+                    webviews: std::collections::HashMap::new(),
                 };
             }
         }
@@ -408,14 +537,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         /// 落地：直接喂给 `Workspace::update`，跟 `window_event` 里处理
         /// iced 消息走的是同一条 `update` 逻辑，只是消息来源不同。
         fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: Message) {
-            let Self::Ready {
-                workspace, window, ..
-            } = self
-            else {
+            if !matches!(self, Self::Ready { .. }) {
                 return;
-            };
-            workspace.update(event);
-            window.request_redraw();
+            }
+            // `dispatch` 是 `&mut self` 方法，必须先确认 `Ready` 态、再
+            // 结束上面那次只读匹配的借用，才能在这里调用（避免与
+            // `Self::Ready { .. }` 解构借用冲突）。
+            self.dispatch(event);
+            self.sync_previews();
         }
 
         fn window_event(
@@ -426,197 +555,211 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         ) {
             self.on_window_event(&event);
 
-            let Self::Ready {
-                window,
-                device,
-                queue,
-                surface,
-                format,
-                renderer,
-                workspace,
-                events,
-                viewport,
-                cursor,
-                modifiers,
-                clipboard,
-                cache,
-                resized,
-            } = self
-            else {
-                return;
+            // 解构借用限定在这个块内：块尾产出待派发的 `messages`，块结束后
+            // 那些字段借用随之释放，才能在块外调用 `self.dispatch`/
+            // `self.sync_previews`（它们要 `&mut self` 整体）。
+            let pending_messages: Vec<Message> = {
+                let Self::Ready {
+                    window,
+                    device,
+                    queue,
+                    surface,
+                    format,
+                    renderer,
+                    workspace,
+                    events,
+                    viewport,
+                    cursor,
+                    modifiers,
+                    clipboard,
+                    cache,
+                    resized,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+
+                match event {
+                    WindowEvent::RedrawRequested => {
+                        if *resized {
+                            let size = window.inner_size();
+
+                            *viewport = Viewport::with_physical_size(
+                                Size::new(size.width, size.height),
+                                window.scale_factor() as f32,
+                            );
+
+                            surface.configure(
+                                device,
+                                &wgpu::SurfaceConfiguration {
+                                    format: *format,
+                                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                                    width: size.width,
+                                    height: size.height,
+                                    present_mode: wgpu::PresentMode::AutoVsync,
+                                    alpha_mode: wgpu::CompositeAlphaMode::Auto,
+                                    view_formats: vec![],
+                                    desired_maximum_frame_latency: 2,
+                                },
+                            );
+
+                            *resized = false;
+                        }
+
+                        match surface.get_current_texture() {
+                            Ok(frame) => {
+                                let view = frame
+                                    .texture
+                                    .create_view(&wgpu::TextureViewDescriptor::default());
+
+                                let mut encoder = device.create_command_encoder(
+                                    &wgpu::CommandEncoderDescriptor { label: None },
+                                );
+
+                                {
+                                    // Clear the frame to the ByteBoy2077 background
+                                    let _render_pass = clear(&view, &mut encoder, theme::BG);
+                                }
+
+                                // Submit the clear pass
+                                queue.submit([encoder.finish()]);
+
+                                // Draw iced on top
+                                let mut interface = UserInterface::build(
+                                    workspace.view(),
+                                    viewport.logical_size(),
+                                    std::mem::take(cache),
+                                    renderer,
+                                );
+
+                                let (state, _) = interface.update(
+                                    &[Event::Window(
+                                        window::Event::RedrawRequested(Instant::now()),
+                                    )],
+                                    *cursor,
+                                    renderer,
+                                    clipboard,
+                                    &mut Vec::new(),
+                                );
+
+                                // Update the mouse cursor
+                                if let user_interface::State::Updated {
+                                    mouse_interaction, ..
+                                } = state
+                                {
+                                    // Update the mouse cursor
+                                    if let Some(icon) =
+                                        conversion::mouse_interaction(mouse_interaction)
+                                    {
+                                        window.set_cursor(icon);
+                                        window.set_cursor_visible(true);
+                                    } else {
+                                        window.set_cursor_visible(false);
+                                    }
+                                }
+
+                                // Draw the interface
+                                interface.draw(
+                                    renderer,
+                                    &Theme::Dark,
+                                    &renderer::Style::default(),
+                                    *cursor,
+                                );
+                                *cache = interface.into_cache();
+
+                                renderer.present(None, frame.texture.format(), &view, viewport);
+
+                                // Present the frame
+                                frame.present();
+                            }
+                            Err(error) => match error {
+                                wgpu::SurfaceError::OutOfMemory => {
+                                    panic!(
+                                        "Swapchain error: {error}. \
+                                        Rendering cannot continue."
+                                    )
+                                }
+                                _ => {
+                                    // Try rendering again next frame.
+                                    window.request_redraw();
+                                }
+                            },
+                        }
+                    }
+                    WindowEvent::CursorMoved { position, .. } => {
+                        *cursor = mouse::Cursor::Available(conversion::cursor_position(
+                            position,
+                            viewport.scale_factor(),
+                        ));
+                    }
+                    WindowEvent::ModifiersChanged(new_modifiers) => {
+                        *modifiers = new_modifiers.state();
+                    }
+                    WindowEvent::Resized(new_size) => {
+                        *resized = true;
+
+                        // 窗口尺寸变了：换算终端 pane 的新网格尺寸，套用到
+                        // 所有 tab 的 `TerminalModel` 并同步给 daemon
+                        // （`Workspace::update` 内部处理，这里只负责换算）。
+                        let logical: LogicalSize<f32> = new_size.to_logical(window.scale_factor());
+                        let (pane_w, pane_h) =
+                            workspace::terminal_pane_pixel_size(logical.width, logical.height);
+                        let (cols, rows) = term_view::grid_size(pane_w, pane_h);
+                        if cols > 0 && rows > 0 {
+                            workspace.update(Message::PaneResized {
+                                cols: cols as u16,
+                                rows: rows as u16,
+                            });
+                        }
+                        // bounds 同步由本函数末尾的 sync_previews 统一执行
+                    }
+                    WindowEvent::CloseRequested => {
+                        event_loop.exit();
+                    }
+                    _ => {}
+                }
+
+                // Map window event to iced event
+                if let Some(event) =
+                    conversion::window_event(event, window.scale_factor() as f32, *modifiers)
+                {
+                    events.push(event);
+                }
+
+                // If there are events pending
+                if !events.is_empty() {
+                    // We process them
+                    let mut interface = UserInterface::build(
+                        workspace.view(),
+                        viewport.logical_size(),
+                        std::mem::take(cache),
+                        renderer,
+                    );
+
+                    let mut messages: Vec<Message> = Vec::new();
+
+                    let _ = interface.update(events, *cursor, renderer, clipboard, &mut messages);
+
+                    events.clear();
+                    *cache = interface.into_cache();
+
+                    messages
+                } else {
+                    Vec::new()
+                }
             };
 
-            match event {
-                WindowEvent::RedrawRequested => {
-                    if *resized {
-                        let size = window.inner_size();
-
-                        *viewport = Viewport::with_physical_size(
-                            Size::new(size.width, size.height),
-                            window.scale_factor() as f32,
-                        );
-
-                        surface.configure(
-                            device,
-                            &wgpu::SurfaceConfiguration {
-                                format: *format,
-                                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                                width: size.width,
-                                height: size.height,
-                                present_mode: wgpu::PresentMode::AutoVsync,
-                                alpha_mode: wgpu::CompositeAlphaMode::Auto,
-                                view_formats: vec![],
-                                desired_maximum_frame_latency: 2,
-                            },
-                        );
-
-                        *resized = false;
-                    }
-
-                    match surface.get_current_texture() {
-                        Ok(frame) => {
-                            let view = frame
-                                .texture
-                                .create_view(&wgpu::TextureViewDescriptor::default());
-
-                            let mut encoder =
-                                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                                    label: None,
-                                });
-
-                            {
-                                // Clear the frame to the ByteBoy2077 background
-                                let _render_pass = clear(&view, &mut encoder, theme::BG);
-                            }
-
-                            // Submit the clear pass
-                            queue.submit([encoder.finish()]);
-
-                            // Draw iced on top
-                            let mut interface = UserInterface::build(
-                                workspace.view(),
-                                viewport.logical_size(),
-                                std::mem::take(cache),
-                                renderer,
-                            );
-
-                            let (state, _) = interface.update(
-                                &[Event::Window(
-                                    window::Event::RedrawRequested(Instant::now()),
-                                )],
-                                *cursor,
-                                renderer,
-                                clipboard,
-                                &mut Vec::new(),
-                            );
-
-                            // Update the mouse cursor
-                            if let user_interface::State::Updated {
-                                mouse_interaction, ..
-                            } = state
-                            {
-                                // Update the mouse cursor
-                                if let Some(icon) = conversion::mouse_interaction(mouse_interaction)
-                                {
-                                    window.set_cursor(icon);
-                                    window.set_cursor_visible(true);
-                                } else {
-                                    window.set_cursor_visible(false);
-                                }
-                            }
-
-                            // Draw the interface
-                            interface.draw(
-                                renderer,
-                                &Theme::Dark,
-                                &renderer::Style::default(),
-                                *cursor,
-                            );
-                            *cache = interface.into_cache();
-
-                            renderer.present(None, frame.texture.format(), &view, viewport);
-
-                            // Present the frame
-                            frame.present();
-                        }
-                        Err(error) => match error {
-                            wgpu::SurfaceError::OutOfMemory => {
-                                panic!(
-                                    "Swapchain error: {error}. \
-                                        Rendering cannot continue."
-                                )
-                            }
-                            _ => {
-                                // Try rendering again next frame.
-                                window.request_redraw();
-                            }
-                        },
-                    }
-                }
-                WindowEvent::CursorMoved { position, .. } => {
-                    *cursor = mouse::Cursor::Available(conversion::cursor_position(
-                        position,
-                        viewport.scale_factor(),
-                    ));
-                }
-                WindowEvent::ModifiersChanged(new_modifiers) => {
-                    *modifiers = new_modifiers.state();
-                }
-                WindowEvent::Resized(new_size) => {
-                    *resized = true;
-
-                    // 窗口尺寸变了：换算终端 pane 的新网格尺寸，套用到
-                    // 所有 tab 的 `TerminalModel` 并同步给 daemon
-                    // （`Workspace::update` 内部处理，这里只负责换算）。
-                    let logical: LogicalSize<f32> = new_size.to_logical(window.scale_factor());
-                    let (pane_w, pane_h) =
-                        workspace::terminal_pane_pixel_size(logical.width, logical.height);
-                    let (cols, rows) = term_view::grid_size(pane_w, pane_h);
-                    if cols > 0 && rows > 0 {
-                        workspace.update(Message::PaneResized {
-                            cols: cols as u16,
-                            rows: rows as u16,
-                        });
-                    }
-                }
-                WindowEvent::CloseRequested => {
-                    event_loop.exit();
-                }
-                _ => {}
+            // 借用已随上面的块结束释放；这里逐条经 `dispatch`
+            // 派发（`PreviewPickFile` 在其中被拦截成 rfd 模态 +
+            // `PreviewOpenPath`，其余原样转给 `workspace.update`）。
+            for message in pending_messages {
+                self.dispatch(message);
             }
 
-            // Map window event to iced event
-            if let Some(event) =
-                conversion::window_event(event, window.scale_factor() as f32, *modifiers)
-            {
-                events.push(event);
-            }
-
-            // If there are events pending
-            if !events.is_empty() {
-                // We process them
-                let mut interface = UserInterface::build(
-                    workspace.view(),
-                    viewport.logical_size(),
-                    std::mem::take(cache),
-                    renderer,
-                );
-
-                let mut messages: Vec<Message> = Vec::new();
-
-                let _ = interface.update(events, *cursor, renderer, clipboard, &mut messages);
-
-                events.clear();
-                *cache = interface.into_cache();
-
-                // update our UI with any messages
-                for message in messages {
-                    workspace.update(message);
-                }
-
-                // and request a redraw
-                window.request_redraw();
-            }
+            // webview 池与期望清单对齐：tab 增删、resize、地址栏导航都可能
+            // 改变期望清单，统一在这里收口，不必在每个改变点各调一次。
+            self.sync_previews();
         }
     }
 

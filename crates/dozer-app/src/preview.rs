@@ -1,9 +1,6 @@
 //! 预览域状态机(P1d):左二 tabs、地址栏编辑态、webview 期望清单。
 //! 纯数据,不碰 wry/iced——webview 副作用由 main.rs 对照
 //! `desired_webviews()` 差集执行(spike 约束:句柄只活在事件分发环)。
-//!
-//! T4/T5 消费:本模块类型与方法当前尚无调用方,下方 #![allow(dead_code)] 是过渡期占位,等 workspace/main 接线后可去掉。
-#![allow(dead_code)]
 use std::path::PathBuf;
 
 /// 一个预览 tab。`TabKind::Diff` 变体留给 P1f(验收闭环)补。
