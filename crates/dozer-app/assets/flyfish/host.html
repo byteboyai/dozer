@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Dozer Preview</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0a0e16; }
+  flyfish-file-viewer { display: block; height: 100%; }
+</style>
+<script src="./flyfish-file-viewer-web-full.iife.js"></script>
+</head>
+<body>
+<script>
+  // ?p= 携带百分号编码的绝对路径;viewer src 用相对 URL 指向同源
+  // __file__ 端点,encodeURI 保留 '/' 与扩展名(Flyfish 靠扩展名选管线)。
+  const p = decodeURIComponent(new URLSearchParams(location.search).get('p') || '');
+  const el = document.createElement('flyfish-file-viewer');
+  el.setAttribute('src', '__file__' + encodeURI(p));
+  el.setAttribute('theme', 'dark');
+  document.body.appendChild(el);
+</script>
+</body>
+</html>
