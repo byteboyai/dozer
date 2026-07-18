@@ -95,8 +95,9 @@ pub enum Message {
     /// 切换当前显示的 tab（这里的 `usize` 是 vec 位置——用户点击的是
     /// "屏幕上第几个 tab"，跟稳定 id 是两回事）。
     SelectTab(usize),
-    /// 关闭 tab = detach，绝不 kill：中断对应的转发任务（drop 掉
-    /// `mpsc::UnboundedReceiver`），daemon 侧会话继续存活。
+    /// 关闭 tab = 结束会话：中断转发任务并 kill daemon 侧会话（P1e 验收
+    /// 反馈裁决：重开 app 只恢复"关 app 时还开着"的 tab，已关的不还魂）。
+    /// "会话存活"保的是关 app/崩溃不掉会话——退 app 才是 detach。
     CloseTab(usize),
     /// 点击 "＋"：以 `$SHELL`（缺省 `/bin/zsh`）在 `$HOME` 新建一个会话。
     NewTab,
@@ -168,7 +169,8 @@ pub struct SessionTab {
     tab_id: usize,
     /// attach 数据流的转发任务句柄。`CloseTab` 时 `abort()` 掉它——
     /// 这个任务是 `mpsc::UnboundedReceiver<TermEvent>` 的唯一持有者，
-    /// 任务被中断即意味着 receiver 被 drop，也就是规格里说的"detach"。
+    /// 任务被中断即意味着 receiver 被 drop（detach）。app 整体退出时
+    /// 只发生 detach（会话存活）；显式关 tab 则再补一次 kill。
     forwarder: tokio::task::JoinHandle<()>,
 }
 
@@ -451,14 +453,24 @@ impl Workspace {
         });
     }
 
-    /// tab 关闭 = detach：中断转发任务即可让 `rx` 随任务栈析构，绝不
-    /// 调用 `client.kill`——daemon 侧会话继续存活，重开 GUI 还能恢复。
+    /// tab 关闭 = 结束会话：中断转发任务（`rx` 随任务栈析构）并 kill
+    /// daemon 侧会话——否则 bootstrap 会把它当存活会话再恢复出来
+    /// （P1e 验收反馈）。死会话（已 exited）无需再 kill。
     fn close_tab(&mut self, idx: usize) {
         if idx >= self.tabs.len() {
             return;
         }
         let tab = self.tabs.remove(idx);
         tab.forwarder.abort();
+        if tab.alive {
+            let client = self.client.clone();
+            let id = tab.info.id.clone();
+            self.handle.spawn(async move {
+                if let Err(e) = client.kill(&id).await {
+                    tracing::warn!("关闭 tab 时结束会话失败: {e}");
+                }
+            });
+        }
         if self.active >= self.tabs.len() {
             self.active = self.tabs.len().saturating_sub(1);
         } else if idx < self.active {
