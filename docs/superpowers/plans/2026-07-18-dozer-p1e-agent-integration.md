@@ -1406,7 +1406,7 @@ cargo test && cargo clippy --all-targets && cargo fmt --check
 
 Expected: workspace 全绿零警告。
 
-- [ ] **Step 2: 用户人工验收（逐项 ✓/✗；验收权在用户，实施方不代签）**
+- [x] **Step 2: 用户人工验收（逐项 ✓/✗；验收权在用户，实施方不代签）**
 
 ```markdown
 # P1e 人工验收清单（用户实机执行）
@@ -1419,7 +1419,7 @@ Expected: workspace 全绿零警告。
 7. `dozer-hook uninstall` → settings.json 里 dozer 条目干净移除，他人配置无损
 ```
 
-- [ ] **Step 3: 结果落档 + Commit**
+- [x] **Step 3: 结果落档 + Commit**
 
 验收记录写入 `docs/superpowers/specs/2026-07-18-p1e-acceptance.md`（格式沿用 P1c/P1d：逐项结果表 + 反馈修复流水）；全部通过后规格 §3 需求 1 的 P1c 达成标注后追加"P1e 达成（<日期>，shell 集成 OSC 7/133 + hook 事件通路 + agent 状态胶囊；交付横幅/验收闭环随 P1f），验收记录见 specs/2026-07-18-p1e-acceptance.md"。
 

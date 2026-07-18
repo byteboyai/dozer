@@ -33,7 +33,7 @@
 
 ## 3. 一期需求（冻结）
 
-1. **原生 agent 终端**：多会话、标签（分屏二期）、shell 集成（OSC 7 cwd / OSC 133 命令退出）、agent 状态感知；流畅度对标 kooky——一期验收口径为"正确 + 不卡顿"，像素级打磨持续进行、不设一期关口。**P1c 达成（2026-07-18，终端基座：tabs/中文渲染/滚动回看/选区复制/设备查询应答；OSC 7/133 与 agent 状态感知留待 P1e agent 集成），验收记录见 specs/2026-07-16-p1c-acceptance.md。**
+1. **原生 agent 终端**：多会话、标签（分屏二期）、shell 集成（OSC 7 cwd / OSC 133 命令退出）、agent 状态感知；流畅度对标 kooky——一期验收口径为"正确 + 不卡顿"，像素级打磨持续进行、不设一期关口。**P1c 达成（2026-07-18，终端基座：tabs/中文渲染/滚动回看/选区复制/设备查询应答；OSC 7/133 与 agent 状态感知留待 P1e agent 集成），验收记录见 specs/2026-07-16-p1c-acceptance.md。P1e 达成（2026-07-18，agent 集成基础层：OSC 7/133 shell 集成 zsh 注入 + hook 事件通路 dozer-hook→dozerd→GUI + 四态状态胶囊 + install/uninstall 注册；Context % 与交付横幅随 P1f），验收记录见 specs/2026-07-18-p1e-acceptance.md。**
 2. **内建产物预览**（体验支柱，与终端并列）：Markdown、图片、PDF、代码/diff、Office 等在应用内直接看；**网页亦可预览**（预览 pane 本身即 WKWebView）——localhost 产物预览是 Web 类项目的验收现场（刚需），外部 URL（文档/GitHub）给带极简地址栏的最小网页 tab，不做标签/书签/历史等浏览器化功能；"不能让用户总跳出 Dozer，这是混乱的来源"；从对话、文件树、组件视图、验收视图处处一键可达。**P1d 达成（2026-07-18，预览 pane 基座：Flyfish 离线文件预览 md/图片/PDF/代码 + 网页 tab 极简地址栏 + tab 管理 + bounds 跟随；对话/文件树/组件视图等入口一键可达随各视图后续阶段接入），验收记录见 specs/2026-07-18-p1d-acceptance.md。**
 3. **验收闭环雏形**（软件项目模板）：目标/验收标准 → agent 交付 → 验收（通过/打回）→ 演进史。关口松紧由 dogfooding 调；治理结构是可配置领域模板，非硬编码姿态。
 4. **会话存活**：PTY 由常驻 daemon 持有，关窗/崩溃不掉会话（竞品分析结论：后补等于重写）。**P1c 达成（2026-07-18，GUI 级恢复：关 app 重开 tab 自动恢复、滚屏完整、可继续输入），验收记录见 specs/2026-07-16-p1c-acceptance.md。**
