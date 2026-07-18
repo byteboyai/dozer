@@ -147,7 +147,7 @@ impl Workspace {
                     match client.attach(&info.id, 0).await {
                         Ok((snapshot, _next_offset, rx)) => {
                             let mut model = TerminalModel::new(DEFAULT_COLS, DEFAULT_ROWS);
-                            model.feed(&snapshot);
+                            let _ = model.feed(&snapshot); // 快照回放：陈旧查询应答不可补发，丢弃
                             let forwarder = handle.spawn(forward_events(tab_id, rx, proxy.clone()));
                             tabs.push(SessionTab {
                                 info,
@@ -215,14 +215,28 @@ impl Workspace {
                 self.send_input(bytes);
             }
             Message::TermOutput(tab_id, bytes) => {
-                if let Some(tab) = self.tab_by_id_mut(tab_id) {
-                    tab.model.feed(&bytes);
+                let Some(tab) = self.tab_by_id_mut(tab_id) else {
+                    return;
+                };
+                // 实时输出可能含设备查询（DSR/DA 等），应答必须写回 PTY
+                // ——atuin/claude 等 TUI 依赖它（此前丢弃导致探测超时）。
+                let responses = tab.model.feed(&bytes);
+                let alive = tab.alive;
+                let id = tab.info.id.clone();
+                if !responses.is_empty() && alive {
+                    let client = self.client.clone();
+                    self.handle.spawn(async move {
+                        if let Err(e) = client.write(&id, &responses).await {
+                            tracing::warn!("回写终端查询应答失败: {e}");
+                        }
+                    });
                 }
             }
             Message::SessionExited(tab_id) => {
                 if let Some(tab) = self.tab_by_id_mut(tab_id) {
                     tab.alive = false;
-                    tab.model.feed(&exited_marker());
+                    // 本地标记行，非会话真实输出；应答无处可写，丢弃。
+                    let _ = tab.model.feed(&exited_marker());
                 }
             }
             Message::SelectTab(idx) => {
@@ -328,7 +342,7 @@ impl Workspace {
             return;
         };
         let mut model = TerminalModel::new(self.cols, self.rows);
-        model.feed(&snapshot);
+        let _ = model.feed(&snapshot); // 快照回放：陈旧查询应答不可补发，丢弃
         self.tabs.push(SessionTab {
             info,
             model,

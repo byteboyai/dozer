@@ -9,12 +9,14 @@
 //! 接线），下方 `#![allow(dead_code)]` 是过渡期占位，等 T5 接上渲染后可去掉。
 #![allow(dead_code)]
 
-use alacritty_terminal::event::VoidListener;
+use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Processor};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// ANSI 16 色的主题 RGB 表，下标与 `NamedColor` 的判别值（0..=15）一致：
 /// Black/Red/Green/Yellow/Blue/Magenta/Cyan/White，随后是对应的 Bright 变体。
@@ -128,33 +130,58 @@ fn bg_to_rgb(color: AnsiColor) -> Option<(u8, u8, u8)> {
     }
 }
 
+/// 收集 `Term` 解析过程中生成的 PTY 回写应答（`Event::PtyWrite`）：
+/// DSR 光标位置（CSI 6n）、DA 设备属性（CSI c）、DECRPM 模式查询等。
+/// atuin/ink（claude）等 TUI 依赖这些应答；此前用 `VoidListener` 全部
+/// 丢弃，导致这类程序探测超时/行为异常。
+#[derive(Default, Clone)]
+struct PtyResponses(Rc<RefCell<Vec<u8>>>);
+
+impl EventListener for PtyResponses {
+    fn send_event(&self, event: Event) {
+        if let Event::PtyWrite(text) = event {
+            self.0.borrow_mut().extend_from_slice(text.as_bytes());
+        }
+    }
+}
+
 /// headless 终端状态机：字节流喂给 VTE 解析器，驱动 `alacritty_terminal`
 /// 的 `Term` 网格状态；对外只暴露只读快照（`visible_lines`/`cursor`）。
 pub struct TerminalModel {
-    term: Term<VoidListener>,
+    term: Term<PtyResponses>,
     parser: Processor,
+    /// 与 `term` 内 listener 共享同一块缓冲，`feed` 后取走。
+    responses: PtyResponses,
 }
 
 impl TerminalModel {
-    /// 新建一个 `cols` x `rows` 的终端，无 scrollback。
+    /// 新建一个 `cols` x `rows` 的终端。
     pub fn new(cols: u16, rows: u16) -> Self {
         let size = TermSize {
             columns: cols as usize,
             screen_lines: rows as usize,
         };
-        let term = Term::new(Config::default(), &size, VoidListener);
+        let responses = PtyResponses::default();
+        let term = Term::new(Config::default(), &size, responses.clone());
         Self {
             term,
             parser: Processor::new(),
+            responses,
         }
     }
 
     /// 把字节流喂给 VTE 解析器，解析结果直接落到 `Term` 的网格状态上。
-    pub fn feed(&mut self, bytes: &[u8]) {
+    ///
+    /// 返回本次解析生成的 PTY 回写应答（设备查询的响应字节）。调用方
+    /// 决定去向：实时输出 → 写回 daemon；快照回放 → 丢弃（重放历史里的
+    /// 查询不能补发陈旧应答）。
+    #[must_use = "PTY 应答字节需要显式处理：实时输出写回 daemon，快照回放丢弃"]
+    pub fn feed(&mut self, bytes: &[u8]) -> Vec<u8> {
         // `Processor::advance` 需要同时可变借用 parser 与 term；先解构再
         // 分别取字段引用，避免对 `self` 的双重可变借用。
-        let Self { term, parser } = self;
+        let Self { term, parser, .. } = self;
         parser.advance(term, bytes);
+        std::mem::take(&mut *self.responses.0.borrow_mut())
     }
 
     /// 调整终端尺寸，尽量保留既有内容（委托给 `Term::resize` 的重排逻辑）。
@@ -292,6 +319,34 @@ mod tests {
         assert_eq!(l[0].ch, '你');
         assert_eq!(l[2].ch, '好'); // 宽字符占两格，第 1 格为 spacer
         assert_eq!(t.cursor(), (4, 0));
+    }
+
+    #[test]
+    fn dsr_cursor_position_query_is_answered() {
+        let mut t = TerminalModel::new(40, 10);
+        t.feed(b"ab");
+        // CSI 6n（DSR）：应用查询光标位置，终端必须应答 CSI row;col R
+        // （1-based）。atuin/ink 等 TUI 靠它工作，无应答即超时报错。
+        let resp = t.feed(b"\x1b[6n");
+        assert_eq!(resp, b"\x1b[1;3R".to_vec());
+    }
+
+    #[test]
+    fn plain_output_produces_no_pty_response() {
+        let mut t = TerminalModel::new(40, 10);
+        assert!(t.feed(b"hello").is_empty());
+        assert!(t.feed("你好\r\n".as_bytes()).is_empty());
+    }
+
+    #[test]
+    fn primary_device_attributes_query_is_answered() {
+        let mut t = TerminalModel::new(40, 10);
+        // CSI c（DA1）：很多 TUI 启动时探测终端型号，应答不能为空。
+        let resp = t.feed(b"\x1b[c");
+        assert!(
+            resp.starts_with(b"\x1b[?"),
+            "DA1 应答应为 CSI ? ... c，实际: {resp:?}"
+        );
     }
 
     /// 造一个 10x5 终端并打印 l0..l19 共 20 行：屏幕剩 [l16..l19, 空]，

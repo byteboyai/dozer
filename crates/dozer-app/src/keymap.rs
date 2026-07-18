@@ -41,15 +41,30 @@ pub fn key_to_bytes(key: &Key, modifiers: &ModifiersState, app_cursor: bool) -> 
     }
 }
 
-/// Ctrl+字母 → 控制码：`(A..Z 的序号 + 1)`，即经典终端 Ctrl 键映射
-/// （Ctrl+A=0x01 ... Ctrl+Z=0x1a）。非字母字符暂不支持，返回 `None`。
+/// Ctrl+字符 → 控制码，经典终端 Ctrl 键映射：
+/// - 字母：`(A..Z 的序号 + 1)`（Ctrl+A=0x01 ... Ctrl+Z=0x1a）；
+/// - 标点：`[`→ESC(0x1b)、`\`→FS(0x1c)、`]`→GS(0x1d)、`^`→RS(0x1e)、
+///   `_`/`/`→US(0x1f)、`@`→NUL；
+/// - 已是控制字符：原样透传（平台层可能已把 Ctrl 组合翻译成控制字符本身，
+///   此时再按字母映射会把它当"非字母"丢弃）。
 fn ctrl_char_to_bytes(s: &str) -> Option<Vec<u8>> {
     let c = s.chars().next()?;
-    if !c.is_ascii_alphabetic() {
-        return None;
+    if c.is_ascii_control() {
+        return Some(vec![c as u8]);
     }
-    let upper = c.to_ascii_uppercase();
-    Some(vec![(upper as u8) - b'A' + 1])
+    if c.is_ascii_alphabetic() {
+        let upper = c.to_ascii_uppercase();
+        return Some(vec![(upper as u8) - b'A' + 1]);
+    }
+    match c {
+        '@' => Some(vec![0x00]),
+        '[' => Some(vec![0x1b]),
+        '\\' => Some(vec![0x1c]),
+        ']' => Some(vec![0x1d]),
+        '^' => Some(vec![0x1e]),
+        '_' | '/' => Some(vec![0x1f]),
+        _ => None,
+    }
 }
 
 fn named_key_to_bytes(named: NamedKey, app_cursor: bool) -> Option<Vec<u8>> {
@@ -147,6 +162,31 @@ mod tests {
             key_to_bytes(&Key::Character("c".into()), &ModifiersState::CONTROL, false),
             Some(vec![0x03])
         );
+    }
+
+    #[test]
+    fn ctrl_char_already_control_passes_through() {
+        // 平台层若已把 Ctrl+C 翻译成控制字符本身（logical_key = "\u{3}"），
+        // 不能再走字母映射（非字母会被丢弃），必须原样透传。
+        assert_eq!(
+            key_to_bytes(
+                &Key::Character("\u{3}".into()),
+                &ModifiersState::CONTROL,
+                false
+            ),
+            Some(vec![0x03])
+        );
+    }
+
+    #[test]
+    fn ctrl_punctuation_maps_to_control_codes() {
+        for (ch, code) in [("[", 0x1b_u8), ("\\", 0x1c), ("]", 0x1d), ("_", 0x1f)] {
+            assert_eq!(
+                key_to_bytes(&Key::Character(ch.into()), &ModifiersState::CONTROL, false),
+                Some(vec![code]),
+                "Ctrl+{ch}"
+            );
+        }
     }
 
     #[test]
