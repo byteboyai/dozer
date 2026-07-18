@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 dozer-core = { path = "../dozer-core" }
 dozer-client = { path = "../dozer-client" }
+anyhow.workspace = true
 tokio.workspace = true
 iced_winit = "0.14"
 iced_wgpu = { version = "0.14", default-features = true }
@@ -21,3 +22,6 @@ tracing-subscriber.workspace = true
 alacritty_terminal.workspace = true
 wry = "0.55.1"
 rfd = "0.15"
+
+[dev-dependencies]
+tempfile = "3"

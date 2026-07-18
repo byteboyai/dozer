@@ -1115,6 +1115,7 @@ name = "dozer-app"
 version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
+ "anyhow",
  "dozer-client",
  "dozer-core",
  "futures",
@@ -1122,6 +1123,7 @@ dependencies = [
  "iced_widget",
  "iced_winit",
  "rfd",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -1,4 +1,5 @@
 mod assets;
+mod delivery;
 mod fonts;
 mod goal;
 mod keymap;
