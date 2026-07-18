@@ -11,7 +11,8 @@
 
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Processor};
@@ -54,6 +55,8 @@ pub struct Cell {
     pub wide: bool,
     /// 宽字符的第二格（占位符）：渲染层应跳过，不产生任何字形。
     pub spacer: bool,
+    /// 处于鼠标选区内：渲染层画选区底色。
+    pub selected: bool,
 }
 
 /// `Term::new`/`Term::resize` 需要的最小尺寸描述。滚屏历史（scrollback）
@@ -209,10 +212,49 @@ impl TerminalModel {
         self.term.grid().display_offset()
     }
 
+    /// 当前网格尺寸 `(cols, rows)`（渲染层做像素 → 格坐标换算用）。
+    pub fn grid_dims(&self) -> (usize, usize) {
+        let grid = self.term.grid();
+        (grid.columns(), grid.screen_lines())
+    }
+
     /// 滚屏历史当前实际行数（随输出增长，上限 `scrolling_history`）。
     pub fn history_len(&self) -> usize {
         let grid = self.term.grid();
         grid.total_lines() - grid.screen_lines()
+    }
+
+    /// 视口坐标 `(col, row)` + display offset → 网格坐标。
+    fn viewport_to_point(&self, col: usize, row: usize) -> Point {
+        let offset = self.term.grid().display_offset() as i32;
+        Point::new(Line(row as i32 - offset), Column(col))
+    }
+
+    /// 鼠标按下：在 `(col, row)`（视口坐标）起一个新的简单选区。
+    /// `right_half` 表示按点落在格子的右半（决定选区端点贴哪一侧）。
+    pub fn selection_start(&mut self, col: usize, row: usize, right_half: bool) {
+        let point = self.viewport_to_point(col, row);
+        let side = if right_half { Side::Right } else { Side::Left };
+        self.term.selection = Some(Selection::new(SelectionType::Simple, point, side));
+    }
+
+    /// 鼠标拖拽：把选区末端拖到 `(col, row)`（视口坐标）。
+    pub fn selection_update(&mut self, col: usize, row: usize, right_half: bool) {
+        let point = self.viewport_to_point(col, row);
+        let side = if right_half { Side::Right } else { Side::Left };
+        if let Some(selection) = &mut self.term.selection {
+            selection.update(point, side);
+        }
+    }
+
+    /// 当前选区文本（跨行以 `\n` 连接）；无选区/空选区返回 `None`。
+    pub fn selection_text(&self) -> Option<String> {
+        self.term.selection_to_string().filter(|s| !s.is_empty())
+    }
+
+    /// 清除选区。
+    pub fn selection_clear(&mut self) {
+        self.term.selection = None;
     }
 
     /// 可视网格快照，逐行逐格返回（已计入 `display_offset`——回看历史时
@@ -222,12 +264,18 @@ impl TerminalModel {
         let cols = grid.columns();
         let rows = grid.screen_lines();
         let offset = grid.display_offset() as i32;
+        let selection = self
+            .term
+            .selection
+            .as_ref()
+            .and_then(|s| s.to_range(&self.term));
 
         (0..rows)
             .map(|row| {
                 // 视口第 `row` 行对应网格 `Line(row - offset)`：负值索引
                 // 进入滚屏历史（alacritty 的 `Index<Line>` 原生支持）。
-                let line = &grid[Line(row as i32 - offset)];
+                let grid_line = Line(row as i32 - offset);
+                let line = &grid[grid_line];
                 (0..cols)
                     .map(|col| {
                         let cell = &line[Column(col)];
@@ -239,6 +287,8 @@ impl TerminalModel {
                             bold: cell.flags.contains(Flags::BOLD),
                             wide: cell.flags.contains(Flags::WIDE_CHAR),
                             spacer,
+                            selected: selection
+                                .is_some_and(|r| r.contains(Point::new(grid_line, Column(col)))),
                         }
                     })
                     .collect()
@@ -260,6 +310,13 @@ impl TerminalModel {
     pub fn app_cursor_mode(&self) -> bool {
         self.term.mode().contains(TermMode::APP_CURSOR)
     }
+
+    /// 是否处于 bracketed paste mode（`CSI ?2004h/l`）。开启时粘贴文本
+    /// 需用 `ESC[200~`/`ESC[201~` 包裹，vim/claude 等据此区分"粘贴"与
+    /// "逐键输入"（避免自动缩进错乱、按键误触发）。
+    pub fn bracketed_paste(&self) -> bool {
+        self.term.mode().contains(TermMode::BRACKETED_PASTE)
+    }
 }
 
 #[cfg(test)]
@@ -278,7 +335,7 @@ mod tests {
     #[test]
     fn plain_text_lands_on_first_row() {
         let mut t = TerminalModel::new(40, 10);
-        t.feed(b"hello dozer");
+        let _ = t.feed(b"hello dozer");
         assert_eq!(line_text(&t.visible_lines()[0]), "hello dozer");
         assert_eq!(t.cursor(), (11, 0));
     }
@@ -286,7 +343,7 @@ mod tests {
     #[test]
     fn newline_and_cr_move_cursor() {
         let mut t = TerminalModel::new(40, 10);
-        t.feed(b"one\r\ntwo");
+        let _ = t.feed(b"one\r\ntwo");
         let lines = t.visible_lines();
         assert_eq!(line_text(&lines[0]), "one");
         assert_eq!(line_text(&lines[1]), "two");
@@ -296,7 +353,7 @@ mod tests {
     #[test]
     fn sgr_red_foreground_is_mapped() {
         let mut t = TerminalModel::new(40, 10);
-        t.feed(b"\x1b[31mred\x1b[0m");
+        let _ = t.feed(b"\x1b[31mred\x1b[0m");
         let cell = &t.visible_lines()[0][0];
         assert_eq!(cell.ch, 'r');
         assert_eq!(cell.fg, (0xFF, 0x6E, 0x6E)); // ANSI 红 → 主题 RED
@@ -305,7 +362,7 @@ mod tests {
     #[test]
     fn resize_keeps_content() {
         let mut t = TerminalModel::new(40, 10);
-        t.feed(b"keepme");
+        let _ = t.feed(b"keepme");
         t.resize(60, 20);
         assert_eq!(line_text(&t.visible_lines()[0]), "keepme");
         assert_eq!(t.visible_lines().len(), 20);
@@ -314,7 +371,7 @@ mod tests {
     #[test]
     fn utf8_cjk_occupies_two_columns() {
         let mut t = TerminalModel::new(40, 10);
-        t.feed("你好".as_bytes());
+        let _ = t.feed("你好".as_bytes());
         let l = &t.visible_lines()[0];
         assert_eq!(l[0].ch, '你');
         assert_eq!(l[2].ch, '好'); // 宽字符占两格，第 1 格为 spacer
@@ -322,9 +379,54 @@ mod tests {
     }
 
     #[test]
+    fn drag_selection_extracts_text_and_marks_cells() {
+        let mut t = TerminalModel::new(20, 5);
+        let _ = t.feed(b"hello world");
+        t.selection_start(0, 0, false);
+        t.selection_update(4, 0, true); // 拖到第 5 格右半 → 含 'o'
+        assert_eq!(t.selection_text().as_deref(), Some("hello"));
+
+        let lines = t.visible_lines();
+        assert!(lines[0][0].selected && lines[0][4].selected);
+        assert!(!lines[0][5].selected, "空格在选区外");
+
+        t.selection_clear();
+        assert!(t.selection_text().is_none());
+        assert!(!t.visible_lines()[0][0].selected);
+    }
+
+    #[test]
+    fn click_without_drag_selects_nothing() {
+        let mut t = TerminalModel::new(20, 5);
+        let _ = t.feed(b"hello");
+        t.selection_start(2, 0, false);
+        assert!(t.selection_text().is_none(), "单击未拖拽不构成选区");
+        assert!(!t.visible_lines()[0][2].selected);
+    }
+
+    #[test]
+    fn selection_spans_multiple_rows() {
+        let mut t = TerminalModel::new(10, 5);
+        let _ = t.feed(b"aaa\r\nbbb");
+        t.selection_start(0, 0, false);
+        t.selection_update(2, 1, true);
+        assert_eq!(t.selection_text().as_deref(), Some("aaa\nbbb"));
+    }
+
+    #[test]
+    fn bracketed_paste_mode_toggles() {
+        let mut t = TerminalModel::new(10, 5);
+        assert!(!t.bracketed_paste());
+        let _ = t.feed(b"\x1b[?2004h");
+        assert!(t.bracketed_paste());
+        let _ = t.feed(b"\x1b[?2004l");
+        assert!(!t.bracketed_paste());
+    }
+
+    #[test]
     fn dsr_cursor_position_query_is_answered() {
         let mut t = TerminalModel::new(40, 10);
-        t.feed(b"ab");
+        let _ = t.feed(b"ab");
         // CSI 6n（DSR）：应用查询光标位置，终端必须应答 CSI row;col R
         // （1-based）。atuin/ink 等 TUI 靠它工作，无应答即超时报错。
         let resp = t.feed(b"\x1b[6n");
@@ -354,7 +456,7 @@ mod tests {
     fn scrolled_term() -> TerminalModel {
         let mut t = TerminalModel::new(10, 5);
         for i in 0..20 {
-            t.feed(format!("l{i}\r\n").as_bytes());
+            let _ = t.feed(format!("l{i}\r\n").as_bytes());
         }
         t
     }
@@ -393,7 +495,7 @@ mod tests {
     fn new_output_keeps_scrolled_view_pinned() {
         let mut t = scrolled_term();
         t.scroll_display(3);
-        t.feed(b"x\r\n");
+        let _ = t.feed(b"x\r\n");
         // alacritty 语义：回看时新输出把 offset 顶上去，视口内容不动。
         assert_eq!(t.display_offset(), 4);
         assert_eq!(line_text(&t.visible_lines()[0]), "l13");
@@ -402,7 +504,7 @@ mod tests {
     #[test]
     fn cjk_cells_carry_wide_and_spacer_flags() {
         let mut t = TerminalModel::new(40, 10);
-        t.feed("你a".as_bytes());
+        let _ = t.feed("你a".as_bytes());
         let l = &t.visible_lines()[0];
         assert!(l[0].wide && !l[0].spacer, "宽字符本体格应标 wide");
         assert!(l[1].spacer, "宽字符第二格应标 spacer");
@@ -414,9 +516,9 @@ mod tests {
     fn decckm_toggles_app_cursor_mode() {
         let mut t = TerminalModel::new(40, 10);
         assert!(!t.app_cursor_mode());
-        t.feed(b"\x1b[?1h");
+        let _ = t.feed(b"\x1b[?1h");
         assert!(t.app_cursor_mode());
-        t.feed(b"\x1b[?1l");
+        let _ = t.feed(b"\x1b[?1l");
         assert!(!t.app_cursor_mode());
     }
 }

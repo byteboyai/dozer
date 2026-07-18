@@ -103,6 +103,23 @@ pub fn ime_commit_to_bytes(text: &str) -> Vec<u8> {
     text.as_bytes().to_vec()
 }
 
+/// 拖入终端的文件路径 → shell 转义后的输入字节（尾随一个空格，便于
+/// 连续拖入多个路径，Terminal.app 同款行为）。只含 shell 安全字符的
+/// 路径原样输出；其余单引号包裹，内部单引号按 `'\''` 转义。
+pub fn dropped_path_to_bytes(path: &str) -> Vec<u8> {
+    let shell_safe = !path.is_empty()
+        && path
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-~+".contains(c));
+    let mut s = if shell_safe {
+        path.to_string()
+    } else {
+        format!("'{}'", path.replace('\'', "'\\''"))
+    };
+    s.push(' ');
+    s.into_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +204,26 @@ mod tests {
                 "Ctrl+{ch}"
             );
         }
+    }
+
+    #[test]
+    fn dropped_path_is_shell_escaped() {
+        // 纯净路径原样 + 尾随空格（Terminal.app 同款，便于连续拖多个）
+        assert_eq!(dropped_path_to_bytes("/tmp/plain"), b"/tmp/plain ".to_vec());
+        // 含空格/中文 → 单引号包裹
+        assert_eq!(
+            dropped_path_to_bytes("/tmp/a b.txt"),
+            b"'/tmp/a b.txt' ".to_vec()
+        );
+        assert_eq!(
+            dropped_path_to_bytes("/tmp/设计 稿.png"),
+            "'/tmp/设计 稿.png' ".as_bytes().to_vec()
+        );
+        // 路径里的单引号 → '\'' 转义
+        assert_eq!(
+            dropped_path_to_bytes("/tmp/it's.txt"),
+            b"'/tmp/it'\\''s.txt' ".to_vec()
+        );
     }
 
     #[test]

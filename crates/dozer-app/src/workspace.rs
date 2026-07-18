@@ -91,6 +91,14 @@ pub enum Message {
     /// 终端滚轮：视口向历史方向（正数）/活动区方向（负数）滚动的行数。
     /// 只作用于当前激活 tab（滚轮事件来自它的 canvas）。
     TermScroll(i32),
+    /// 终端左键按下：在视口格 `(col, row)` 起新选区（`right` = 按点在
+    /// 格子右半）。
+    TermSelStart { col: usize, row: usize, right: bool },
+    /// 终端拖拽：选区末端更新到视口格 `(col, row)`。
+    TermSelUpdate { col: usize, row: usize, right: bool },
+    /// ⌘V 粘贴剪贴板文本：按会话的 bracketed paste 模式决定是否包裹
+    /// `ESC[200~`/`ESC[201~` 后写入 daemon。
+    TermPaste(String),
 }
 
 /// 一个 tab 对应一个 daemon 会话。
@@ -207,10 +215,11 @@ impl Workspace {
     pub fn update(&mut self, message: Message) {
         match message {
             Message::TermInput(bytes) => {
-                // 键入即回底：正在回看历史时一敲键盘，视口跳回实时输出
-                // （常规终端语义），再把字节写给 daemon。
+                // 键入即回底 + 清选区：正在回看历史时一敲键盘，视口跳回
+                // 实时输出（常规终端语义），再把字节写给 daemon。
                 if let Some(tab) = self.tabs.get_mut(self.active) {
                     tab.model.scroll_to_bottom();
+                    tab.model.selection_clear();
                 }
                 self.send_input(bytes);
             }
@@ -256,7 +265,39 @@ impl Workspace {
                     tab.model.scroll_display(delta);
                 }
             }
+            Message::TermSelStart { col, row, right } => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.model.selection_start(col, row, right);
+                }
+            }
+            Message::TermSelUpdate { col, row, right } => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.model.selection_update(col, row, right);
+                }
+            }
+            Message::TermPaste(text) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return;
+                };
+                tab.model.scroll_to_bottom();
+                let bytes = if tab.model.bracketed_paste() {
+                    let mut b = b"\x1b[200~".to_vec();
+                    b.extend_from_slice(text.as_bytes());
+                    b.extend_from_slice(b"\x1b[201~");
+                    b
+                } else {
+                    text.into_bytes()
+                };
+                self.send_input(bytes);
+            }
         }
+    }
+
+    /// 当前激活 tab 的选区文本（⌘C 复制用）。
+    pub fn active_selection_text(&self) -> Option<String> {
+        self.tabs
+            .get(self.active)
+            .and_then(|t| t.model.selection_text())
     }
 
     fn tab_by_id_mut(&mut self, tab_id: usize) -> Option<&mut SessionTab> {

@@ -70,17 +70,19 @@ struct Run {
     fg: (u8, u8, u8),
     bg: Option<(u8, u8, u8)>,
     bold: bool,
+    selected: bool,
 }
 
-/// 单行 cell 序列 → 绘制 run 序列。切分规则见模块注释。
+/// 单行 cell 序列 → 绘制 run 序列。切分规则见模块注释；选区内的空白格
+/// 不跳过（要画选区底色），`selected` 变化处切断 run。
 fn layout_runs(row: &[Cell]) -> Vec<Run> {
     let mut runs: Vec<Run> = Vec::new();
     let mut col = 0;
     while col < row.len() {
         let cell = &row[col];
-        // spacer 由宽字符本体的 2 格绘制盒覆盖；无背景空白格画不出任何
-        // 东西——两者都跳过（后者顺带切断了 run 的连续性）。
-        if cell.spacer || (cell.ch == ' ' && cell.bg.is_none()) {
+        // spacer 由宽字符本体的 2 格绘制盒覆盖；选区外的无背景空白格画
+        // 不出任何东西——两者都跳过（后者顺带切断了 run 的连续性）。
+        if cell.spacer || (cell.ch == ' ' && cell.bg.is_none() && !cell.selected) {
             col += 1;
             continue;
         }
@@ -92,17 +94,18 @@ fn layout_runs(row: &[Cell]) -> Vec<Run> {
                 fg: cell.fg,
                 bg: cell.bg,
                 bold: cell.bold,
+                selected: cell.selected,
             });
             col += 2; // 本体 + spacer
             continue;
         }
-        let style = (cell.fg, cell.bg, cell.bold);
+        let style = (cell.fg, cell.bg, cell.bold, cell.selected);
         let start = col;
         let mut text = String::new();
         while col < row.len() {
             let c = &row[col];
-            let blank = c.ch == ' ' && c.bg.is_none();
-            if c.wide || c.spacer || blank || (c.fg, c.bg, c.bold) != style {
+            let blank = c.ch == ' ' && c.bg.is_none() && !c.selected;
+            if c.wide || c.spacer || blank || (c.fg, c.bg, c.bold, c.selected) != style {
                 break;
             }
             text.push(c.ch);
@@ -115,6 +118,7 @@ fn layout_runs(row: &[Cell]) -> Vec<Run> {
             fg: style.0,
             bg: style.1,
             bold: style.2,
+            selected: style.3,
         });
     }
     runs
@@ -141,14 +145,27 @@ struct TermCanvas<'a> {
     focused: bool,
 }
 
-/// 跨滚轮事件累积的不足一行余量（触控板像素滚动）。
+/// canvas 内部交互状态：滚轮余量累积 + 拖选进行中标记。
 #[derive(Default)]
-struct ScrollState {
+struct InteractionState {
+    /// 跨滚轮事件累积的不足一行余量（触控板像素滚动）。
     residual: f32,
+    /// 左键按下且未松开（拖选进行中）。
+    dragging: bool,
+}
+
+/// 画布内像素坐标 → 网格格坐标 `(col, row, right_half)`，钳制在
+/// `(cols, rows)` 网格内（拖出边界时选区停在边缘格）。
+fn cell_at(pos: Point, cols: usize, rows: usize) -> (usize, usize, bool) {
+    let col_f = (pos.x / CELL_WIDTH).max(0.0);
+    let col = (col_f as usize).min(cols.saturating_sub(1));
+    let row = ((pos.y / LINE_HEIGHT_PX).max(0.0) as usize).min(rows.saturating_sub(1));
+    let right_half = col_f.fract() > 0.5;
+    (col, row, right_half)
 }
 
 impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for TermCanvas<'_> {
-    type State = ScrollState;
+    type State = InteractionState;
 
     fn update(
         &self,
@@ -157,18 +174,50 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
-        let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event else {
+        let Event::Mouse(mouse_event) = event else {
             return None;
         };
-        if !cursor.is_over(bounds) {
-            return None;
+        match mouse_event {
+            mouse::Event::WheelScrolled { delta } => {
+                if !cursor.is_over(bounds) {
+                    return None;
+                }
+                let (lines, residual) = wheel_to_lines(*delta, state.residual);
+                state.residual = residual;
+                if lines == 0 {
+                    return None;
+                }
+                Some(canvas::Action::publish(Message::TermScroll(lines)).and_capture())
+            }
+            mouse::Event::ButtonPressed(mouse::Button::Left) => {
+                let pos = cursor.position_in(bounds)?;
+                state.dragging = true;
+                let (cols, rows) = self.model.grid_dims();
+                let (col, row, right) = cell_at(pos, cols, rows);
+                Some(
+                    canvas::Action::publish(Message::TermSelStart { col, row, right })
+                        .and_capture(),
+                )
+            }
+            mouse::Event::CursorMoved { .. } if state.dragging => {
+                // 拖拽中允许移出画布：用全局位置减 bounds 原点，交给
+                // `cell_at` 钳到边缘格。
+                let pos = cursor.position()?;
+                let rel = Point::new(pos.x - bounds.x, pos.y - bounds.y);
+                let (cols, rows) = self.model.grid_dims();
+                let (col, row, right) = cell_at(rel, cols, rows);
+                Some(canvas::Action::publish(Message::TermSelUpdate {
+                    col,
+                    row,
+                    right,
+                }))
+            }
+            mouse::Event::ButtonReleased(mouse::Button::Left) if state.dragging => {
+                state.dragging = false;
+                None
+            }
+            _ => None,
         }
-        let (lines, residual) = wheel_to_lines(*delta, state.residual);
-        state.residual = residual;
-        if lines == 0 {
-            return None;
-        }
-        Some(canvas::Action::publish(Message::TermScroll(lines)).and_capture())
     }
 
     fn draw(
@@ -187,11 +236,19 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
             let y = row_idx as f32 * LINE_HEIGHT_PX;
             for run in layout_runs(row) {
                 let x = run.col as f32 * CELL_WIDTH;
+                let run_size = Size::new(run.cells as f32 * CELL_WIDTH, LINE_HEIGHT_PX);
                 if let Some(bg) = run.bg {
+                    frame.fill_rectangle(Point::new(x, y), run_size, rgb(bg));
+                }
+                if run.selected {
+                    // 选区底色：CYAN 25% 叠加（不动锁定的主题色表）。
                     frame.fill_rectangle(
                         Point::new(x, y),
-                        Size::new(run.cells as f32 * CELL_WIDTH, LINE_HEIGHT_PX),
-                        rgb(bg),
+                        run_size,
+                        Color {
+                            a: 0.25,
+                            ..theme::CYAN
+                        },
                     );
                 }
                 frame.fill_text(canvas::Text {
@@ -282,8 +339,41 @@ mod tests {
 
     fn row_of(input: &[u8], cols: u16) -> Vec<Cell> {
         let mut t = TerminalModel::new(cols, 4);
-        t.feed(input);
+        let _ = t.feed(input);
         t.visible_lines().remove(0)
+    }
+
+    #[test]
+    fn selection_splits_runs_and_flags_them() {
+        let mut t = TerminalModel::new(20, 4);
+        let _ = t.feed(b"abcdef");
+        t.selection_start(1, 0, false);
+        t.selection_update(3, 0, true); // 选中 bcd
+        let row = t.visible_lines().remove(0);
+        let runs = layout_runs(&row);
+        let shape: Vec<_> = runs
+            .iter()
+            .map(|r| (r.col, r.text.as_str(), r.selected))
+            .collect();
+        assert_eq!(
+            shape,
+            vec![(0, "a", false), (1, "bcd", true), (4, "ef", false)]
+        );
+    }
+
+    #[test]
+    fn selected_blank_cells_are_kept_for_highlight() {
+        let mut t = TerminalModel::new(20, 4);
+        let _ = t.feed(b"a b");
+        t.selection_start(0, 0, false);
+        t.selection_update(2, 0, true); // 选中 "a b"，中间空格也要高亮
+        let row = t.visible_lines().remove(0);
+        let runs = layout_runs(&row);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(
+            (runs[0].col, runs[0].text.as_str(), runs[0].selected),
+            (0, "a b", true)
+        );
     }
 
     #[test]

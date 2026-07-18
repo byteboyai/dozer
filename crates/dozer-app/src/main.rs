@@ -189,11 +189,43 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 workspace,
                 window,
                 modifiers,
+                clipboard,
                 ..
             } = self
             else {
                 return;
             };
+
+            // ⌘ 组合键是应用级快捷键，一律不进 PTY（此前 ⌘C 会把裸 "c"
+            // 漏写进终端）。⌘C 复制当前选区；⌘V 粘贴剪贴板。
+            if modifiers.super_key() {
+                if let WindowEvent::KeyboardInput {
+                    event,
+                    is_synthetic: false,
+                    ..
+                } = event
+                    && event.state == ElementState::Pressed
+                    && let winit::keyboard::Key::Character(s) = &event.logical_key
+                {
+                    match s.as_str() {
+                        "c" => {
+                            if let Some(text) = workspace.active_selection_text() {
+                                clipboard.write(iced_winit::core::clipboard::Kind::Standard, text);
+                            }
+                        }
+                        "v" => {
+                            if let Some(text) =
+                                clipboard.read(iced_winit::core::clipboard::Kind::Standard)
+                            {
+                                workspace.update(Message::TermPaste(text));
+                                window.request_redraw();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                return;
+            }
 
             let bytes = match event {
                 // 只处理真实按键（忽略窗口获得焦点时 winit 补发的
@@ -210,6 +242,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     workspace.active_app_cursor_mode(),
                 ),
                 WindowEvent::Ime(Ime::Commit(text)) => Some(keymap::ime_commit_to_bytes(text)),
+                // 拖文件进终端：转成 shell 转义的完整路径写入会话
+                // （Terminal.app 同款行为）。
+                WindowEvent::DroppedFile(path) => {
+                    Some(keymap::dropped_path_to_bytes(&path.to_string_lossy()))
+                }
                 _ => None,
             };
 
