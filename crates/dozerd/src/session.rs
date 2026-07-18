@@ -56,6 +56,16 @@ impl Session {
         // 程序知道可以用 24-bit 真彩色而不是退化到 256 色。
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+        // daemon 由 launchd/GUI 拉起时往往没有 LANG，子进程会落到 C locale，
+        // 多字节输入（中文/emoji）在 readline/zle 里直接乱码。已有 UTF-8
+        // locale 就沿用用户的语言偏好，否则兜底 en_US.UTF-8。
+        let lang_is_utf8 = |v: &str| {
+            let v = v.to_ascii_uppercase();
+            v.contains("UTF-8") || v.contains("UTF8")
+        };
+        if !std::env::var("LANG").is_ok_and(|v| lang_is_utf8(&v)) {
+            cmd.env("LANG", "en_US.UTF-8");
+        }
         let child = pair.slave.spawn_command(cmd).context("spawn_command")?;
         drop(pair.slave);
 
@@ -217,6 +227,16 @@ mod tests {
         s.write(b"pingpong\n").unwrap();
         // cat 回显（经 PTY，含回显本身）
         assert!(wait_contains(&s, b"pingpong").await);
+        s.kill().unwrap();
+    }
+
+    #[tokio::test]
+    async fn spawned_child_has_utf8_locale_env() {
+        let s = Session::spawn(spec("printf '%s' \"$LANG\"")).unwrap();
+        assert!(
+            wait_contains(&s, b"UTF-8").await,
+            "buffer should contain a UTF-8 LANG value set by Session::spawn"
+        );
         s.kill().unwrap();
     }
 
