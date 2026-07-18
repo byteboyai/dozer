@@ -33,7 +33,7 @@
 - Consumes: 无(纯资产任务)。
 - Produces: `assets/flyfish/` 目录契约——`host.html?p=<百分号编码的绝对路径>` 打开即渲染该文件;相对资产 `file-viewer/` 与 IIFE bundle 同目录(Flyfish 的部署约定:资产默认在 `<部署根>/file-viewer/`)。Task 3 的协议应答、Task 2 的 URL 拼装都依赖此布局。
 
-- [ ] **Step 1: 下载并解包 @file-viewer/web-full**
+- [x] **Step 1: 下载并解包 @file-viewer/web-full**
 
 ```bash
 cd /tmp && VER=$(curl -s https://registry.npmjs.org/@file-viewer%2Fweb-full | python3 -c "import json,sys;print(json.load(sys.stdin)['dist-tags']['latest'])")
@@ -44,11 +44,11 @@ tar xzf web-full.tgz && ls package/dist/ | head -20 && du -sh package/dist/
 
 Expected: 列出 dist 内容,含 `flyfish-file-viewer-web-full.iife.js` 与 `file-viewer/` 目录(名称若有出入,以实际为准并在后续步骤同步修正引用);打印体积。
 
-- [ ] **Step 2: 体积裁决(设计 D5)**
+- [x] **Step 2: 体积裁决(设计 D5)**
 
 若 `du -sh` > 80MB:检查 `package/dist/file-viewer/` 子目录(Flyfish 按管线分目录),删除不在口径内的管线目录(保留 markdown/图片/PDF/代码文本相关;CAD/EDA/3D/geo/email/archive 等删除),记录删除清单到 commit message。若 ≤ 80MB:全量保留。
 
-- [ ] **Step 3: 落位到仓库**
+- [x] **Step 3: 落位到仓库**
 
 ```bash
 mkdir -p /Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-app/assets/flyfish
@@ -56,7 +56,7 @@ cp -R /tmp/package/dist/* /Users/chrischiang/Projects/CoralProjects/byteboy/doze
 echo "$VER" > /Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-app/assets/flyfish/VENDORED_VERSION
 ```
 
-- [ ] **Step 4: 写 host 页**
+- [x] **Step 4: 写 host 页**
 
 `crates/dozer-app/assets/flyfish/host.html`(仓库自写,Dozer↔Flyfish 唯一耦合点):
 
@@ -86,7 +86,7 @@ echo "$VER" > /Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/doz
 </html>
 ```
 
-- [ ] **Step 5: 验证与提交**
+- [x] **Step 5: 验证与提交**
 
 ```bash
 ls crates/dozer-app/assets/flyfish/host.html crates/dozer-app/assets/flyfish/flyfish-file-viewer-web-full.iife.js
@@ -114,7 +114,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `pub struct WebviewSpec { pub id: usize, pub url: String, pub visible: bool }`
   - `pub fn encode_component(s: &str) -> String`(RFC3986:unreserved 之外全部 `%XX`)
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `preview.rs` 尾部:
 
@@ -207,12 +207,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app preview::`
 Expected: 编译错误(类型/方法不存在)。
 
-- [ ] **Step 3: 最小实现**
+- [x] **Step 3: 最小实现**
 
 ```rust
 // crates/dozer-app/src/preview.rs
@@ -401,12 +401,12 @@ impl PreviewPane {
 
 并在 `main.rs` 模块声明区加 `mod preview;`(紧邻 `mod keymap;`)。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app preview::`
 Expected: 4 passed。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cargo clippy -p dozer-app --all-targets && cargo fmt -p dozer-app
@@ -431,7 +431,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `pub fn assets_root() -> PathBuf`(= `CARGO_MANIFEST_DIR/assets/flyfish`;一期 dev 形态,打包分发后移)
   - `pub fn percent_decode(s: &str) -> Option<String>`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```rust
 #[cfg(test)]
@@ -505,12 +505,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app assets::`
 Expected: 编译错误。
 
-- [ ] **Step 3: 最小实现**
+- [x] **Step 3: 最小实现**
 
 ```rust
 // crates/dozer-app/src/assets.rs
@@ -649,12 +649,12 @@ pub fn handle_protocol(
 
 并在 `main.rs` 加 `mod assets;`。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app assets::`
 Expected: 4 passed。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cargo clippy -p dozer-app --all-targets && cargo fmt -p dozer-app
@@ -680,7 +680,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `Workspace::allowed_files(&self) -> Arc<Mutex<HashSet<PathBuf>>>`(clone 给协议闭包)
   - `pub fn preview_content_bounds(window_width: f32, window_height: f32) -> (f32, f32, f32, f32)`(逻辑像素 x/y/w/h)
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `workspace.rs` 尾部新增测试模块(该文件此前无测试):
 
@@ -707,12 +707,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app workspace::`
 Expected: 编译错误(`preview_content_bounds` 不存在)。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 workspace.rs 变更点(完整代码):
 
@@ -950,12 +950,12 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
 
 `view()` 中 `let col2 = pane("预览 · P1d", 0.0, theme::PANEL);` 改为 `let col2 = preview_pane(self);`。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app`
 Expected: 全绿(既有 42 + 新增 2)。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cargo clippy -p dozer-app --all-targets && cargo fmt -p dozer-app
@@ -976,7 +976,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: Task 2 `WebviewSpec`;Task 3 `assets::{handle_protocol, assets_root}`;Task 4 全部消息与 `preview_content_bounds`/`preview_addr_editing`/`allowed_files`。
 - Produces: 运行态行为契约(Task 6 人工验收依据)——tab 状态变更后 webview 集合与之同步;resize 后 bounds 跟随;地址栏编辑态键盘不进 PTY。
 
-- [ ] **Step 1: 加依赖**
+- [x] **Step 1: 加依赖**
 
 ```bash
 cd /Users/chrischiang/Projects/CoralProjects/byteboy/dozer
@@ -986,7 +986,7 @@ cargo build -p dozer-app
 
 Expected: 编译通过(rfd 若 0.15 不存在则用 `cargo add rfd -p dozer-app` 取最新,记录实际版本)。
 
-- [ ] **Step 2: 实现接线**(集成层,无新 headless 测试;正确性由 Task 2-4 测试 + Task 6 人工验收覆盖)
+- [x] **Step 2: 实现接线**(集成层,无新 headless 测试;正确性由 Task 2-4 测试 + Task 6 人工验收覆盖)
 
 main.rs 变更点:
 
@@ -1136,7 +1136,7 @@ main.rs 变更点:
 
 5. `Resized` 分支尾部追加 `// bounds 同步由本函数末尾的 sync_previews 统一执行`(实际调用在 window_event 末尾统一加)。
 
-- [ ] **Step 3: 编译 + 冒烟**
+- [x] **Step 3: 编译 + 冒烟**
 
 ```bash
 cargo clippy -p dozer-app --all-targets && cargo fmt -p dozer-app && cargo test -p dozer-app
@@ -1145,7 +1145,7 @@ cargo build -p dozer-app && ./target/aarch64-apple-darwin/debug/dozer & sleep 8 
 
 Expected: 测试全绿、零警告;app 存活 8 秒无 panic。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/dozer-app Cargo.lock
@@ -1166,7 +1166,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: 全部前序任务。
 - Produces: 用户签字的验收记录;P1e 起点状态。
 
-- [ ] **Step 1: 全量回归**
+- [x] **Step 1: 全量回归**
 
 ```bash
 cargo test && cargo clippy --all-targets && cargo fmt --check
