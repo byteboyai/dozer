@@ -812,7 +812,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: 全部前序任务。
 - Produces: 用户签字的验收记录；P1d 的起点状态。
 
-- [ ] **Step 1: 用户人工验收（协调者陪同，逐项 ✓/✗）**
+- [x] **Step 1: 用户人工验收（协调者陪同，逐项 ✓/✗）**
 
 ```markdown
 # P1c 人工验收清单（用户实机执行）
@@ -826,7 +826,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 8. 体感：滚动输出（`cat` 大文件）不卡顿
 ```
 
-- [ ] **Step 2: 结果落档 + 规格回填 + Commit**
+- [x] **Step 2: 结果落档 + 规格回填 + Commit**
 
 验收记录写入 `docs/superpowers/specs/2026-07-16-p1c-acceptance.md`（含 ✗ 项与处置）；规格 §3 需求 1、4 条目末尾追加"P1c 达成（<日期>），验收记录见 specs/2026-07-16-p1c-acceptance.md"。
 
