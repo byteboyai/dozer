@@ -445,7 +445,9 @@ fn pane(
 }
 
 /// 终端栏：表头 + tab 栏 + （可能的错误文案）+ 当前激活 tab 的终端网格。
-fn terminal_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn terminal_pane(
+    ws: &Workspace,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let header = text("终端 · 本计划").size(13).color(theme::CREAM);
 
     let mut content = column![header, tab_bar(ws)].spacing(4);
@@ -538,7 +540,9 @@ fn tab_item(
 }
 
 /// 当前激活 tab 的终端网格；一个 tab 都没有时给个提示文案。
-fn active_tab_view(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn active_tab_view(
+    ws: &Workspace,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     match ws.tabs.get(ws.active) {
         Some(tab) => term_view::view(&tab.model, ws.term_focused),
         None => container(text("暂无会话——点击 ＋ 新建").size(13).color(theme::DIM))

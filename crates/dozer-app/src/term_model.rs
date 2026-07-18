@@ -48,6 +48,10 @@ pub struct Cell {
     pub fg: (u8, u8, u8),
     pub bg: Option<(u8, u8, u8)>,
     pub bold: bool,
+    /// 宽字符（CJK 等）本体格：占两列，渲染层应给它 2 格宽的绘制盒。
+    pub wide: bool,
+    /// 宽字符的第二格（占位符）：渲染层应跳过，不产生任何字形。
+    pub spacer: bool,
 }
 
 /// `Term::new`/`Term::resize` 需要的最小尺寸描述。本模块不做历史回滚
@@ -173,16 +177,14 @@ impl TerminalModel {
                 (0..cols)
                     .map(|col| {
                         let cell = &line[Column(col)];
-                        let ch = if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
-                            ' '
-                        } else {
-                            cell.c
-                        };
+                        let spacer = cell.flags.contains(Flags::WIDE_CHAR_SPACER);
                         Cell {
-                            ch,
+                            ch: if spacer { ' ' } else { cell.c },
                             fg: fg_to_rgb(cell.fg),
                             bg: bg_to_rgb(cell.bg),
                             bold: cell.flags.contains(Flags::BOLD),
+                            wide: cell.flags.contains(Flags::WIDE_CHAR),
+                            spacer,
                         }
                     })
                     .collect()
@@ -263,6 +265,17 @@ mod tests {
         assert_eq!(l[0].ch, '你');
         assert_eq!(l[2].ch, '好'); // 宽字符占两格，第 1 格为 spacer
         assert_eq!(t.cursor(), (4, 0));
+    }
+
+    #[test]
+    fn cjk_cells_carry_wide_and_spacer_flags() {
+        let mut t = TerminalModel::new(40, 10);
+        t.feed("你a".as_bytes());
+        let l = &t.visible_lines()[0];
+        assert!(l[0].wide && !l[0].spacer, "宽字符本体格应标 wide");
+        assert!(l[1].spacer, "宽字符第二格应标 spacer");
+        assert_eq!(l[2].ch, 'a');
+        assert!(!l[2].wide && !l[2].spacer, "普通格不应带宽字符标记");
     }
 
     #[test]

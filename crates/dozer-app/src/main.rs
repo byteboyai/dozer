@@ -1,3 +1,4 @@
+mod fonts;
 mod keymap;
 mod term_model;
 mod term_view;
@@ -127,6 +128,9 @@ async fn build_workspace(
 pub fn main() -> Result<(), winit::error::EventLoopError> {
     tracing_subscriber::fmt::init();
 
+    // 第一次文本排版之前剔除毒化 CJK 回退的位图字体（见 fonts.rs 模块注释）。
+    fonts::sanitize_font_db();
+
     // Initialize winit：用户事件类型直接是 `Message`——tokio 任务经
     // `EventLoopProxy<Message>::send_event` 把事件流/daemon 状态送回 UI
     // 线程，`ApplicationHandler::user_event` 收到后转发给
@@ -200,13 +204,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     event,
                     is_synthetic: false,
                     ..
-                } if event.state == ElementState::Pressed => {
-                    keymap::key_to_bytes(
-                        &event.logical_key,
-                        modifiers,
-                        workspace.active_app_cursor_mode(),
-                    )
-                }
+                } if event.state == ElementState::Pressed => keymap::key_to_bytes(
+                    &event.logical_key,
+                    modifiers,
+                    workspace.active_app_cursor_mode(),
+                ),
                 WindowEvent::Ime(Ime::Commit(text)) => Some(keymap::ime_commit_to_bytes(text)),
                 _ => None,
             };
@@ -258,13 +260,12 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
                 let (format, adapter, device, queue) =
                     futures::futures::executor::block_on(async {
-                        let adapter =
-                            wgpu::util::initialize_adapter_from_env_or_default(
-                                &instance,
-                                Some(&surface),
-                            )
-                            .await
-                            .expect("Create adapter");
+                        let adapter = wgpu::util::initialize_adapter_from_env_or_default(
+                            &instance,
+                            Some(&surface),
+                        )
+                        .await
+                        .expect("Create adapter");
 
                         let adapter_features = adapter.features();
 
@@ -273,13 +274,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         let (device, queue) = adapter
                             .request_device(&wgpu::DeviceDescriptor {
                                 label: None,
-                                required_features: adapter_features
-                                    & wgpu::Features::default(),
+                                required_features: adapter_features & wgpu::Features::default(),
                                 required_limits: wgpu::Limits::default(),
                                 memory_hints: wgpu::MemoryHints::MemoryUsage,
                                 trace: wgpu::Trace::Off,
-                                experimental_features:
-                                    wgpu::ExperimentalFeatures::disabled(),
+                                experimental_features: wgpu::ExperimentalFeatures::disabled(),
                             })
                             .await
                             .expect("Request device");
@@ -290,9 +289,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 .iter()
                                 .copied()
                                 .find(wgpu::TextureFormat::is_srgb)
-                                .or_else(|| {
-                                    capabilities.formats.first().copied()
-                                })
+                                .or_else(|| capabilities.formats.first().copied())
                                 .expect("Get preferred format"),
                             adapter,
                             device,
@@ -320,7 +317,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 // 建好就立刻纠正成实际网格（也会顺带把 resize 同步给
                 // daemon）。
                 let logical: LogicalSize<f32> = physical_size.to_logical(window.scale_factor());
-                let (pane_w, pane_h) = workspace::terminal_pane_pixel_size(logical.width, logical.height);
+                let (pane_w, pane_h) =
+                    workspace::terminal_pane_pixel_size(logical.width, logical.height);
                 let (cols, rows) = term_view::grid_size(pane_w, pane_h);
                 if cols > 0 && rows > 0 {
                     workspace.update(Message::PaneResized {
@@ -370,11 +368,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         /// （attach 数据流的输出/退出、daemon 错误、新建会话完成……）在这里
         /// 落地：直接喂给 `Workspace::update`，跟 `window_event` 里处理
         /// iced 消息走的是同一条 `update` 逻辑，只是消息来源不同。
-        fn user_event(
-            &mut self,
-            _event_loop: &winit::event_loop::ActiveEventLoop,
-            event: Message,
-        ) {
+        fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: Message) {
             let Self::Ready {
                 workspace, window, ..
             } = self
@@ -442,18 +436,18 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
                     match surface.get_current_texture() {
                         Ok(frame) => {
-                            let view = frame.texture.create_view(
-                                &wgpu::TextureViewDescriptor::default(),
-                            );
+                            let view = frame
+                                .texture
+                                .create_view(&wgpu::TextureViewDescriptor::default());
 
-                            let mut encoder = device.create_command_encoder(
-                                &wgpu::CommandEncoderDescriptor { label: None },
-                            );
+                            let mut encoder =
+                                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    label: None,
+                                });
 
                             {
                                 // Clear the frame to the ByteBoy2077 background
-                                let _render_pass =
-                                    clear(&view, &mut encoder, theme::BG);
+                                let _render_pass = clear(&view, &mut encoder, theme::BG);
                             }
 
                             // Submit the clear pass
@@ -469,9 +463,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
                             let (state, _) = interface.update(
                                 &[Event::Window(
-                                    window::Event::RedrawRequested(
-                                        Instant::now(),
-                                    ),
+                                    window::Event::RedrawRequested(Instant::now()),
                                 )],
                                 *cursor,
                                 renderer,
@@ -481,14 +473,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
                             // Update the mouse cursor
                             if let user_interface::State::Updated {
-                                mouse_interaction,
-                                ..
+                                mouse_interaction, ..
                             } = state
                             {
                                 // Update the mouse cursor
-                                if let Some(icon) = conversion::mouse_interaction(
-                                    mouse_interaction,
-                                )
+                                if let Some(icon) = conversion::mouse_interaction(mouse_interaction)
                                 {
                                     window.set_cursor(icon);
                                     window.set_cursor_visible(true);
@@ -506,12 +495,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             );
                             *cache = interface.into_cache();
 
-                            renderer.present(
-                                None,
-                                frame.texture.format(),
-                                &view,
-                                viewport,
-                            );
+                            renderer.present(None, frame.texture.format(), &view, viewport);
 
                             // Present the frame
                             frame.present();
@@ -531,11 +515,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     }
                 }
                 WindowEvent::CursorMoved { position, .. } => {
-                    *cursor =
-                        mouse::Cursor::Available(conversion::cursor_position(
-                            position,
-                            viewport.scale_factor(),
-                        ));
+                    *cursor = mouse::Cursor::Available(conversion::cursor_position(
+                        position,
+                        viewport.scale_factor(),
+                    ));
                 }
                 WindowEvent::ModifiersChanged(new_modifiers) => {
                     *modifiers = new_modifiers.state();
@@ -546,8 +529,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     // 窗口尺寸变了：换算终端 pane 的新网格尺寸，套用到
                     // 所有 tab 的 `TerminalModel` 并同步给 daemon
                     // （`Workspace::update` 内部处理，这里只负责换算）。
-                    let logical: LogicalSize<f32> =
-                        new_size.to_logical(window.scale_factor());
+                    let logical: LogicalSize<f32> = new_size.to_logical(window.scale_factor());
                     let (pane_w, pane_h) =
                         workspace::terminal_pane_pixel_size(logical.width, logical.height);
                     let (cols, rows) = term_view::grid_size(pane_w, pane_h);
@@ -565,11 +547,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             }
 
             // Map window event to iced event
-            if let Some(event) = conversion::window_event(
-                event,
-                window.scale_factor() as f32,
-                *modifiers,
-            ) {
+            if let Some(event) =
+                conversion::window_event(event, window.scale_factor() as f32, *modifiers)
+            {
                 events.push(event);
             }
 
@@ -585,13 +565,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
                 let mut messages: Vec<Message> = Vec::new();
 
-                let _ = interface.update(
-                    events,
-                    *cursor,
-                    renderer,
-                    clipboard,
-                    &mut messages,
-                );
+                let _ = interface.update(events, *cursor, renderer, clipboard, &mut messages);
 
                 events.clear();
                 *cache = interface.into_cache();

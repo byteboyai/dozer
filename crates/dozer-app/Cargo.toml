@@ -13,7 +13,7 @@ dozer-client = { path = "../dozer-client" }
 tokio.workspace = true
 iced_winit = "0.14"
 iced_wgpu = { version = "0.14", default-features = true }
-iced_widget = { version = "0.14", features = ["wgpu"] }
+iced_widget = { version = "0.14", features = ["wgpu", "canvas"] }
 winit = "0.30"
 futures = { version = "0.3", features = ["thread-pool"] }
 tracing.workspace = true
