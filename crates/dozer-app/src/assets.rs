@@ -108,15 +108,16 @@ pub fn handle_protocol(assets_root: &Path, allowed: &HashSet<PathBuf>, uri: &str
         };
     }
 
-    // vendored 资产:拒绝路径穿越,逐段拼接。
+    // vendored 资产:先逐段解码,再拒绝路径穿越——编码形态也拦得住:
+    // %2e%2e 解码成 '..' 后才比较;%2F 解码出的 '/' 直接判拒。
     let mut full = assets_root.to_path_buf();
     for seg in path.split('/') {
-        if seg.is_empty() || seg == ".." || seg == "." {
-            return not_found();
-        }
         let Some(seg) = percent_decode(seg) else {
             return not_found();
         };
+        if seg.is_empty() || seg == ".." || seg == "." || seg.contains('/') || seg.contains('\0') {
+            return not_found();
+        }
         full.push(seg);
     }
     match std::fs::read(&full) {
@@ -192,6 +193,23 @@ mod tests {
         let r = handle_protocol(&root, &allowed, &uri);
         assert_eq!((r.status, r.mime), (200, "text/markdown"));
         assert_eq!(r.body, b"# hi");
+    }
+
+    #[test]
+    fn rejects_percent_encoded_traversal() {
+        let root = scratch();
+        for uri in [
+            "dozer://flyfish/%2e%2e/etc/passwd",
+            "dozer://flyfish/%2e%2e/%2e%2e/etc/passwd",
+            "dozer://flyfish/a%2F..%2Fb.js",
+            "dozer://flyfish/sub%2F..%2F..%2Fx",
+        ] {
+            assert_eq!(
+                handle_protocol(&root, &HashSet::new(), uri).status,
+                404,
+                "{uri}"
+            );
+        }
     }
 
     #[test]
