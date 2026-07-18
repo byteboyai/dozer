@@ -35,7 +35,7 @@
   - `Request::HookEvent { session_id: String, event: String, ts_ms: u64, data: serde_json::Value }`
   - `Reply::AgentEvent { session_id: String, state: AgentState, event: String, ts_ms: u64 }`
 
-- [ ] **Step 1: 写失败测试**（`protocol.rs` 的 `mod tests` 追加）
+- [x] **Step 1: 写失败测试**（`protocol.rs` 的 `mod tests` 追加）
 
 ```rust
     #[test]
@@ -72,12 +72,12 @@
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-core`
 Expected: 编译错误（`AgentState` 未定义、`HookEvent`/`AgentEvent` 变体不存在）。
 
-- [ ] **Step 3: 最小实现**
+- [x] **Step 3: 最小实现**
 
 `protocol.rs`：`SessionInfo` 上方加：
 
@@ -134,12 +134,12 @@ pub enum AgentState {
 
 （顶部 `use dozer_core::protocol::SessionInfo;` 改为 `use dozer_core::protocol::{AgentState, SessionInfo};`。Task 2 会把这里换成真实状态。）
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-core && cargo build --workspace`
 Expected: 新增 3 测试通过，全 workspace 编译通过（server.rs 的 match 若报 non-exhaustive，在 `Request` 的 match 里临时加 `Request::HookEvent { .. } => Reply::Ok,` 占位分支——Task 2 替换为真实实现）。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-core crates/dozerd
@@ -165,7 +165,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - 会话进程环境变量 `DOZER_SESSION_ID=<session id>`
   - `Request::HookEvent` → 记状态 + 广播 + `Reply::Ok`（未知会话也 `Ok`，仅日志）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `session.rs` 的 `mod tests` 追加：
 
@@ -334,12 +334,12 @@ async fn hook_event_reaches_attached_client_and_list() {
 
 （若 `dozerd` 的 `registry`/`server` 模块未 `pub` 导出到 lib，本任务顺手在 `crates/dozerd/src/lib.rs`—若无则新建—`pub mod` 暴露 `server`/`registry`/`session`/`ring`，`main.rs` 改 `use dozerd::…`；dev-dependencies 需要 `tempfile`。）
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozerd`
 Expected: 编译错误（`set_agent_state`/`SessionEvent::Agent`/`agent_state_for` 不存在）。
 
-- [ ] **Step 3: 最小实现**
+- [x] **Step 3: 最小实现**
 
 `session.rs`：
 
@@ -428,12 +428,12 @@ attach 转发 select 臂（`Ok(SessionEvent::Exited …)` 之前）追加：
 
 （注意：`Agent` 事件不参与 `sent_until` 水位——水位只治 `Output` 字节流。）
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozerd`
 Expected: 全绿，含新增 4 个测试。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozerd
@@ -458,7 +458,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `SessionTab.agent_state: AgentState` 字段
   - `workspace::agent_badge(state: AgentState, alive: bool) -> Option<(&'static str, iced_widget::core::Color)>`（纯函数，Task 7 验收的胶囊形态）
 
-- [ ] **Step 1: 写失败测试**（`workspace.rs` 的 `mod tests` 追加）
+- [x] **Step 1: 写失败测试**（`workspace.rs` 的 `mod tests` 追加）
 
 ```rust
     #[test]
@@ -478,12 +478,12 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app agent_badge`
 Expected: 编译错误（`agent_badge` 未定义）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `dozer-client/src/lib.rs`：
 
@@ -561,12 +561,12 @@ fn agent_badge(state: AgentState, alive: bool) -> Option<(&'static str, Color)> 
 
 （测试可见性：`agent_badge` 放在 `impl Workspace` 外的文件级私有函数即可，`mod tests` 同文件可达。）
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-client && cargo test -p dozer-app`
 Expected: 全绿。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-client crates/dozer-app
@@ -594,7 +594,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 **设计注记（对 spec §3 的偏差）**：扫描器观察字节流但**不剥离** OSC 序列——alacritty_terminal 的 vte 解析器静默消费未知 OSC，不会渲染成可见字符；观察式实现免去流改写，行为与 spec 意图等价。
 
-- [ ] **Step 1: 写失败测试**（`osc.rs` 尾部）
+- [x] **Step 1: 写失败测试**（`osc.rs` 尾部）
 
 ```rust
 #[cfg(test)]
@@ -658,12 +658,12 @@ mod tests {
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app`
 Expected: 编译错误（`osc` 模块不存在、`tab_title` 未定义）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `crates/dozer-app/src/osc.rs`：
 
@@ -870,12 +870,12 @@ fn tab_title(cwd: Option<&Path>, fallback: &str) -> String {
     }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app`
 Expected: 全绿（osc 5 测 + tab_title 1 测 + 既有）。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app
@@ -901,7 +901,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `shell_integration::ensure_zdotdir() -> anyhow::Result<PathBuf>`（daemon 启动时调用，落盘包装文件，幂等）
   - spawn 注入：`ZDOTDIR=<wrapper>`、`DOZER_ORIG_ZDOTDIR=<用户原 ZDOTDIR，可空>`、`DOZER_ZDOTDIR_WRAPPER=<wrapper>`（仅当 command basename 为 `zsh` 且 daemon 环境 `DOZER_SHELL_INTEGRATION != "0"`）
 
-- [ ] **Step 1: 写资产文件**
+- [x] **Step 1: 写资产文件**
 
 `crates/dozerd/assets/zdotdir/.zshenv`：
 
@@ -941,7 +941,7 @@ add-zsh-hook precmd __dozer_precmd
 __dozer_osc7
 ```
 
-- [ ] **Step 2: 写失败测试**（`shell_integration.rs` 尾部；session 注入测试加在 `session.rs` 的 `mod tests`）
+- [x] **Step 2: 写失败测试**（`shell_integration.rs` 尾部；session 注入测试加在 `session.rs` 的 `mod tests`）
 
 ```rust
 #[cfg(test)]
@@ -1018,12 +1018,12 @@ mod tests {
     }
 ```
 
-- [ ] **Step 3: 跑测试确认失败**
+- [x] **Step 3: 跑测试确认失败**
 
 Run: `cargo test -p dozerd`
 Expected: 编译错误（`shell_integration` 模块不存在）；zsh 注入测试失败。
 
-- [ ] **Step 4: 实现**
+- [x] **Step 4: 实现**
 
 `crates/dozerd/src/shell_integration.rs`：
 
@@ -1079,12 +1079,12 @@ pub fn should_inject(command: &str) -> bool {
         }
 ```
 
-- [ ] **Step 5: 跑测试确认通过**
+- [x] **Step 5: 跑测试确认通过**
 
 Run: `cargo test -p dozerd`
 Expected: 全绿。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/dozerd
@@ -1111,7 +1111,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `install::run_at(path: &std::path::Path, install: bool) -> i32`（测试入口）
   - 注册的 hook 事件集：`SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Notification, Stop, SessionEnd`
 
-- [ ] **Step 1: 写失败测试**（`install.rs` 尾部）
+- [x] **Step 1: 写失败测试**（`install.rs` 尾部）
 
 ```rust
 #[cfg(test)]
@@ -1186,12 +1186,12 @@ mod tests {
 
 （`Cargo.toml` dev-dependencies 加 `tempfile = "3"`。）
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-hook`
 Expected: 编译错误（`install` 模块不存在）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `crates/dozer-hook/src/install.rs`：
 
@@ -1361,7 +1361,7 @@ fn forward(event_arg: &str) {
 
 删除 `crates/dozer-hook/src/payload.rs`；`Cargo.toml` 依赖：`dozer-core = { path = "../dozer-core" }`、`serde_json`（已有则保留），dev 加 `tempfile = "3"`。
 
-- [ ] **Step 4: 跑测试确认通过 + 手工冒烟**
+- [x] **Step 4: 跑测试确认通过 + 手工冒烟**
 
 Run: `cargo test -p dozer-hook`
 Expected: 4 测试全绿。
@@ -1376,7 +1376,7 @@ echo '{}' | ./target/aarch64-apple-darwin/debug/dozer-hook Stop; echo "exit=$?"
 
 Expected: 两次均 `exit=0`，无输出。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-hook Cargo.lock
@@ -1398,7 +1398,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: 全部前序任务。
 - Produces: 用户签字的验收记录；P1f（验收闭环）起点状态。
 
-- [ ] **Step 1: 全量回归**
+- [x] **Step 1: 全量回归**
 
 ```bash
 cargo test && cargo clippy --all-targets && cargo fmt --check
