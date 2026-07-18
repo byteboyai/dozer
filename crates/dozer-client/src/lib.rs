@@ -30,7 +30,10 @@ impl Client {
         let (r, mut w) = stream.into_split();
         w.write_all(encode_line(req).as_bytes()).await?;
         let mut lines = BufReader::new(r).lines();
-        let line = lines.next_line().await?.ok_or_else(|| anyhow!("daemon 断开"))?;
+        let line = lines
+            .next_line()
+            .await?
+            .ok_or_else(|| anyhow!("daemon 断开"))?;
         let reply: Reply = decode_line(&line)?;
         if let Reply::Error { message } = &reply {
             bail!("daemon 错误: {message}");
@@ -45,52 +48,96 @@ impl Client {
         }
     }
 
-    pub async fn create(&self, name: &str, command: &str, args: &[String],
-                        cwd: &str, cols: u16, rows: u16) -> Result<SessionInfo> {
-        match self.roundtrip(&Request::CreateSession {
-            name: name.into(), command: command.into(), args: args.to_vec(),
-            cwd: cwd.into(), cols, rows,
-        }).await? {
+    pub async fn create(
+        &self,
+        name: &str,
+        command: &str,
+        args: &[String],
+        cwd: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Result<SessionInfo> {
+        match self
+            .roundtrip(&Request::CreateSession {
+                name: name.into(),
+                command: command.into(),
+                args: args.to_vec(),
+                cwd: cwd.into(),
+                cols,
+                rows,
+            })
+            .await?
+        {
             Reply::Created { session } => Ok(session),
             other => bail!("意外应答: {other:?}"),
         }
     }
 
     pub async fn write(&self, id: &str, data: &[u8]) -> Result<()> {
-        match self.roundtrip(&Request::Write {
-            session_id: id.into(), data_b64: B64.encode(data),
-        }).await? {
+        match self
+            .roundtrip(&Request::Write {
+                session_id: id.into(),
+                data_b64: B64.encode(data),
+            })
+            .await?
+        {
             Reply::Ok => Ok(()),
             other => bail!("意外应答: {other:?}"),
         }
     }
 
     pub async fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<()> {
-        match self.roundtrip(&Request::Resize { session_id: id.into(), cols, rows }).await? {
+        match self
+            .roundtrip(&Request::Resize {
+                session_id: id.into(),
+                cols,
+                rows,
+            })
+            .await?
+        {
             Reply::Ok => Ok(()),
             other => bail!("意外应答: {other:?}"),
         }
     }
 
     pub async fn kill(&self, id: &str) -> Result<()> {
-        match self.roundtrip(&Request::Kill { session_id: id.into() }).await? {
+        match self
+            .roundtrip(&Request::Kill {
+                session_id: id.into(),
+            })
+            .await?
+        {
             Reply::Ok => Ok(()),
             other => bail!("意外应答: {other:?}"),
         }
     }
 
-    pub async fn attach(&self, id: &str, from_offset: u64)
-        -> Result<(Vec<u8>, u64, mpsc::UnboundedReceiver<TermEvent>)> {
+    pub async fn attach(
+        &self,
+        id: &str,
+        from_offset: u64,
+    ) -> Result<(Vec<u8>, u64, mpsc::UnboundedReceiver<TermEvent>)> {
         let stream = UnixStream::connect(&self.socket).await?;
         let (r, mut w) = stream.into_split();
-        w.write_all(encode_line(&Request::Attach {
-            session_id: id.into(), from_offset,
-        }).as_bytes()).await?;
+        w.write_all(
+            encode_line(&Request::Attach {
+                session_id: id.into(),
+                from_offset,
+            })
+            .as_bytes(),
+        )
+        .await?;
         let mut lines = BufReader::new(r).lines();
-        let first = lines.next_line().await?.ok_or_else(|| anyhow!("daemon 断开"))?;
+        let first = lines
+            .next_line()
+            .await?
+            .ok_or_else(|| anyhow!("daemon 断开"))?;
         let (snapshot, next) = match decode_line::<Reply>(&first)? {
-            Reply::Attached { snapshot_b64, next_offset, .. } =>
-                (B64.decode(snapshot_b64.as_bytes())?, next_offset),
+            Reply::Attached {
+                snapshot_b64,
+                next_offset,
+                ..
+            } => (B64.decode(snapshot_b64.as_bytes())?, next_offset),
             Reply::Error { message } => bail!("attach 失败: {message}"),
             other => bail!("意外应答: {other:?}"),
         };

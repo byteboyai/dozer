@@ -25,8 +25,9 @@ use crate::theme;
 use crate::workspace::Message;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::font::Weight;
+use iced_widget::core::mouse::{self, ScrollDelta};
 use iced_widget::core::text::LineHeight;
-use iced_widget::core::{Color, Element, Font, Length, Pixels, Point, Rectangle, Size};
+use iced_widget::core::{Color, Element, Event, Font, Length, Pixels, Point, Rectangle, Size};
 
 /// 字号（逻辑像素）。
 const FONT_SIZE: f32 = 13.0;
@@ -119,6 +120,19 @@ fn layout_runs(row: &[Cell]) -> Vec<Run> {
     runs
 }
 
+/// 滚轮事件 → 滚动行数。行式滚轮直接取整；像素式（触控板）除以行高，
+/// 不足一行的余量经 `residual` 跨事件累积，避免细腻滑动永远凑不满一行。
+/// 返回 `(整行数, 新的 residual)`；正数 = 向历史方向（上翻）。
+fn wheel_to_lines(delta: ScrollDelta, residual: f32) -> (i32, f32) {
+    let lines = match delta {
+        ScrollDelta::Lines { y, .. } => y,
+        ScrollDelta::Pixels { y, .. } => y / LINE_HEIGHT_PX,
+    };
+    let total = residual + lines;
+    let whole = total.trunc();
+    (whole as i32, total - whole)
+}
+
 /// canvas 绘制程序：持有当前 tab 的 `TerminalModel` 快照引用逐帧重画。
 /// 网格规模（百列 × 数十行）下 run 数量有限，不做 `canvas::Cache`——
 /// 终端输出本来就是高频失效场景，缓存收益低。
@@ -127,8 +141,35 @@ struct TermCanvas<'a> {
     focused: bool,
 }
 
+/// 跨滚轮事件累积的不足一行余量（触控板像素滚动）。
+#[derive(Default)]
+struct ScrollState {
+    residual: f32,
+}
+
 impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for TermCanvas<'_> {
-    type State = ();
+    type State = ScrollState;
+
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event else {
+            return None;
+        };
+        if !cursor.is_over(bounds) {
+            return None;
+        }
+        let (lines, residual) = wheel_to_lines(*delta, state.residual);
+        state.residual = residual;
+        if lines == 0 {
+            return None;
+        }
+        Some(canvas::Action::publish(Message::TermScroll(lines)).and_capture())
+    }
 
     fn draw(
         &self,
@@ -165,9 +206,13 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
             }
         }
 
-        // 光标覆盖层（画在文本之上）。`cursor()` 直接取自 `Term` 网格，
-        // 永远在可视范围内；防御性判界只为杜绝 cast 环绕的极端值。
-        if let Some(cell) = lines.get(cursor_row).and_then(|r| r.get(cursor_col)) {
+        // 光标覆盖层（画在文本之上）。回看历史（display_offset > 0）时
+        // 光标在视口之外，不画。`cursor()` 直接取自 `Term` 网格，坐标是
+        // 活动区视口坐标；防御性判界只为杜绝 cast 环绕的极端值。
+        let offset = self.model.display_offset();
+        if offset == 0
+            && let Some(cell) = lines.get(cursor_row).and_then(|r| r.get(cursor_col))
+        {
             let x = cursor_col as f32 * CELL_WIDTH;
             let y = cursor_row as f32 * LINE_HEIGHT_PX;
             let box_w = if cell.wide { 2.0 } else { 1.0 } * CELL_WIDTH;
@@ -198,6 +243,24 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
             }
         }
 
+        // 滚动指示条：仅回看历史时出现在右缘（实时跟随输出时不占视觉）。
+        // 内容总量 = 历史 + 视口；thumb 位置/高度按视口在总量中的窗口映射。
+        if offset > 0 {
+            let history = self.model.history_len() as f32;
+            let rows = lines.len() as f32;
+            let total = history + rows;
+            let h = bounds.height;
+            let track_x = bounds.width - 4.0;
+            let thumb_h = (rows / total * h).max(12.0);
+            let thumb_top = ((history - offset as f32) / total * h).min(h - thumb_h);
+            frame.fill_rectangle(Point::new(track_x, 0.0), Size::new(3.0, h), theme::BORDER);
+            frame.fill_rectangle(
+                Point::new(track_x, thumb_top),
+                Size::new(3.0, thumb_h),
+                theme::CREAM,
+            );
+        }
+
         vec![frame.into_geometry()]
     }
 }
@@ -221,6 +284,23 @@ mod tests {
         let mut t = TerminalModel::new(cols, 4);
         t.feed(input);
         t.visible_lines().remove(0)
+    }
+
+    #[test]
+    fn wheel_lines_accumulate_with_residual() {
+        use iced_widget::core::mouse::ScrollDelta;
+        // 行式滚轮：整行直接进位
+        let (n, r) = wheel_to_lines(ScrollDelta::Lines { x: 0.0, y: 2.0 }, 0.0);
+        assert_eq!((n, r), (2, 0.0));
+        // 像素式（触控板）：不足一行的余量留在 residual 里跨事件累积
+        let (n, r) = wheel_to_lines(ScrollDelta::Pixels { x: 0.0, y: 10.0 }, 0.0);
+        assert_eq!(n, 0);
+        assert!(r > 0.0);
+        let (n2, _) = wheel_to_lines(ScrollDelta::Pixels { x: 0.0, y: 10.0 }, r);
+        assert_eq!(n2, 1, "两次 10px（> 一行 18.2px 的一半×2）应累积出 1 行");
+        // 反方向
+        let (n, _) = wheel_to_lines(ScrollDelta::Pixels { x: 0.0, y: -40.0 }, 0.0);
+        assert_eq!(n, -2);
     }
 
     #[test]

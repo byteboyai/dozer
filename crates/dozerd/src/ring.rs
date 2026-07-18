@@ -12,7 +12,11 @@ pub struct RingBuffer {
 
 impl RingBuffer {
     pub fn new(cap: usize) -> Self {
-        Self { cap, buf: VecDeque::with_capacity(cap.min(64 * 1024)), total: 0 }
+        Self {
+            cap,
+            buf: VecDeque::with_capacity(cap.min(64 * 1024)),
+            total: 0,
+        }
     }
 
     pub fn push(&mut self, data: &[u8]) -> u64 {

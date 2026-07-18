@@ -88,6 +88,9 @@ pub enum Message {
     /// daemon 不可用（启动连接失败，或某次会话操作失败）的错误文案，
     /// 终端区以 RED 文案展示。
     DaemonError(String),
+    /// 终端滚轮：视口向历史方向（正数）/活动区方向（负数）滚动的行数。
+    /// 只作用于当前激活 tab（滚轮事件来自它的 canvas）。
+    TermScroll(i32),
 }
 
 /// 一个 tab 对应一个 daemon 会话。
@@ -203,7 +206,14 @@ impl Workspace {
 
     pub fn update(&mut self, message: Message) {
         match message {
-            Message::TermInput(bytes) => self.send_input(bytes),
+            Message::TermInput(bytes) => {
+                // 键入即回底：正在回看历史时一敲键盘，视口跳回实时输出
+                // （常规终端语义），再把字节写给 daemon。
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.model.scroll_to_bottom();
+                }
+                self.send_input(bytes);
+            }
             Message::TermOutput(tab_id, bytes) => {
                 if let Some(tab) = self.tab_by_id_mut(tab_id) {
                     tab.model.feed(&bytes);
@@ -227,6 +237,11 @@ impl Workspace {
             }
             Message::PaneResized { cols, rows } => self.resize_all(cols, rows),
             Message::DaemonError(message) => self.daemon_error = Some(message),
+            Message::TermScroll(delta) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.model.scroll_display(delta);
+                }
+            }
         }
     }
 

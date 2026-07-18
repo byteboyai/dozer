@@ -10,7 +10,7 @@
 #![allow(dead_code)]
 
 use alacritty_terminal::event::VoidListener;
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
@@ -54,8 +54,9 @@ pub struct Cell {
     pub spacer: bool,
 }
 
-/// `Term::new`/`Term::resize` 需要的最小尺寸描述。本模块不做历史回滚
-/// （scrollback），因此 `total_lines` 等于可视行数。
+/// `Term::new`/`Term::resize` 需要的最小尺寸描述。滚屏历史（scrollback）
+/// 不走这里——由 `Config::default()` 的 `scrolling_history`（10000 行）
+/// 决定；`total_lines` 与 alacritty 自身的 `SizeInfo` 一致，等于可视行数。
 #[derive(Clone, Copy)]
 struct TermSize {
     columns: usize,
@@ -165,15 +166,41 @@ impl TerminalModel {
         self.term.resize(size);
     }
 
-    /// 可视网格快照，逐行逐格返回。宽字符的 spacer 格 `ch` 置为空格。
+    /// 向历史方向（正数）或活动区方向（负数）滚动视口 `delta` 行；
+    /// 越界由 alacritty 自动钳制在 `[0, history_len]`。
+    pub fn scroll_display(&mut self, delta: i32) {
+        self.term.scroll_display(Scroll::Delta(delta));
+    }
+
+    /// 回到活动区底部（`display_offset` 归零）。
+    pub fn scroll_to_bottom(&mut self) {
+        self.term.scroll_display(Scroll::Bottom);
+    }
+
+    /// 当前视口相对活动区底部上移的行数；0 = 正在看实时输出。
+    pub fn display_offset(&self) -> usize {
+        self.term.grid().display_offset()
+    }
+
+    /// 滚屏历史当前实际行数（随输出增长，上限 `scrolling_history`）。
+    pub fn history_len(&self) -> usize {
+        let grid = self.term.grid();
+        grid.total_lines() - grid.screen_lines()
+    }
+
+    /// 可视网格快照，逐行逐格返回（已计入 `display_offset`——回看历史时
+    /// 返回的就是屏幕上应显示的行）。宽字符的 spacer 格 `ch` 置为空格。
     pub fn visible_lines(&self) -> Vec<Vec<Cell>> {
         let grid = self.term.grid();
         let cols = grid.columns();
         let rows = grid.screen_lines();
+        let offset = grid.display_offset() as i32;
 
         (0..rows)
             .map(|row| {
-                let line = &grid[Line(row as i32)];
+                // 视口第 `row` 行对应网格 `Line(row - offset)`：负值索引
+                // 进入滚屏历史（alacritty 的 `Index<Line>` 原生支持）。
+                let line = &grid[Line(row as i32 - offset)];
                 (0..cols)
                     .map(|col| {
                         let cell = &line[Column(col)];
@@ -265,6 +292,56 @@ mod tests {
         assert_eq!(l[0].ch, '你');
         assert_eq!(l[2].ch, '好'); // 宽字符占两格，第 1 格为 spacer
         assert_eq!(t.cursor(), (4, 0));
+    }
+
+    /// 造一个 10x5 终端并打印 l0..l19 共 20 行：屏幕剩 [l16..l19, 空]，
+    /// 历史里应存下 l0..l15（16 行）。
+    fn scrolled_term() -> TerminalModel {
+        let mut t = TerminalModel::new(10, 5);
+        for i in 0..20 {
+            t.feed(format!("l{i}\r\n").as_bytes());
+        }
+        t
+    }
+
+    #[test]
+    fn scroll_display_moves_viewport_into_history() {
+        let mut t = scrolled_term();
+        assert_eq!(t.display_offset(), 0);
+        assert_eq!(line_text(&t.visible_lines()[0]), "l16");
+
+        t.scroll_display(3);
+        assert_eq!(t.display_offset(), 3);
+        assert_eq!(line_text(&t.visible_lines()[0]), "l13");
+        assert_eq!(t.visible_lines().len(), 5, "视口行数不因滚动改变");
+    }
+
+    #[test]
+    fn scroll_display_clamps_to_history_len() {
+        let mut t = scrolled_term();
+        t.scroll_display(1000);
+        assert_eq!(t.display_offset(), 16, "最多滚到历史顶部");
+        assert_eq!(line_text(&t.visible_lines()[0]), "l0");
+        assert_eq!(t.history_len(), 16);
+    }
+
+    #[test]
+    fn scroll_to_bottom_resets_offset() {
+        let mut t = scrolled_term();
+        t.scroll_display(5);
+        t.scroll_to_bottom();
+        assert_eq!(t.display_offset(), 0);
+        assert_eq!(line_text(&t.visible_lines()[0]), "l16");
+    }
+
+    #[test]
+    fn new_output_keeps_scrolled_view_pinned() {
+        let mut t = scrolled_term();
+        t.scroll_display(3);
+        t.feed(b"x\r\n");
+        // alacritty 语义：回看时新输出把 offset 顶上去，视口内容不动。
+        assert_eq!(t.display_offset(), 4);
+        assert_eq!(line_text(&t.visible_lines()[0]), "l13");
     }
 
     #[test]

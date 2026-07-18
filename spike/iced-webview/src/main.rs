@@ -74,9 +74,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             if let Self::Loading = self {
                 let window = Arc::new(
                     event_loop
-                        .create_window(
-                            winit::window::WindowAttributes::default(),
-                        )
+                        .create_window(winit::window::WindowAttributes::default())
                         .expect("Create window"),
                 );
 
@@ -85,10 +83,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 // winit 窗口上，而非 iced 独立管理一个 dummy 窗口）。
                 let webview = WebViewBuilder::new()
                     .with_url("https://byteboy.ai")
-                    .with_bounds(preview_bounds(
-                        window.inner_size(),
-                        window.scale_factor(),
-                    ))
+                    .with_bounds(preview_bounds(window.inner_size(), window.scale_factor()))
                     .build_as_child(window.as_ref())
                     .expect("child webview over iced window");
                 let preview_visible = true;
@@ -112,13 +107,12 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
                 let (format, adapter, device, queue) =
                     futures::futures::executor::block_on(async {
-                        let adapter =
-                            wgpu::util::initialize_adapter_from_env_or_default(
-                                &instance,
-                                Some(&surface),
-                            )
-                            .await
-                            .expect("Create adapter");
+                        let adapter = wgpu::util::initialize_adapter_from_env_or_default(
+                            &instance,
+                            Some(&surface),
+                        )
+                        .await
+                        .expect("Create adapter");
 
                         let adapter_features = adapter.features();
 
@@ -127,13 +121,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         let (device, queue) = adapter
                             .request_device(&wgpu::DeviceDescriptor {
                                 label: None,
-                                required_features: adapter_features
-                                    & wgpu::Features::default(),
+                                required_features: adapter_features & wgpu::Features::default(),
                                 required_limits: wgpu::Limits::default(),
                                 memory_hints: wgpu::MemoryHints::MemoryUsage,
                                 trace: wgpu::Trace::Off,
-                                experimental_features:
-                                    wgpu::ExperimentalFeatures::disabled(),
+                                experimental_features: wgpu::ExperimentalFeatures::disabled(),
                             })
                             .await
                             .expect("Request device");
@@ -144,9 +136,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 .iter()
                                 .copied()
                                 .find(wgpu::TextureFormat::is_srgb)
-                                .or_else(|| {
-                                    capabilities.formats.first().copied()
-                                })
+                                .or_else(|| capabilities.formats.first().copied())
                                 .expect("Get preferred format"),
                             adapter,
                             device,
@@ -270,21 +260,19 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
                     match surface.get_current_texture() {
                         Ok(frame) => {
-                            let view = frame.texture.create_view(
-                                &wgpu::TextureViewDescriptor::default(),
-                            );
+                            let view = frame
+                                .texture
+                                .create_view(&wgpu::TextureViewDescriptor::default());
 
-                            let mut encoder = device.create_command_encoder(
-                                &wgpu::CommandEncoderDescriptor { label: None },
-                            );
+                            let mut encoder =
+                                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    label: None,
+                                });
 
                             {
                                 // Clear the frame
-                                let mut render_pass = Scene::clear(
-                                    &view,
-                                    &mut encoder,
-                                    controls.background_color(),
-                                );
+                                let mut render_pass =
+                                    Scene::clear(&view, &mut encoder, controls.background_color());
 
                                 // Draw the scene
                                 scene.draw(&mut render_pass);
@@ -303,9 +291,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
                             let (state, _) = interface.update(
                                 &[Event::Window(
-                                    window::Event::RedrawRequested(
-                                        Instant::now(),
-                                    ),
+                                    window::Event::RedrawRequested(Instant::now()),
                                 )],
                                 *cursor,
                                 renderer,
@@ -315,15 +301,12 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
                             // Update the mouse cursor
                             if let user_interface::State::Updated {
-                                mouse_interaction,
-                                ..
+                                mouse_interaction, ..
                             } = state
                             {
                                 // Update the mouse cursor
                                 if let Some(icon) =
-                                    iced_winit::conversion::mouse_interaction(
-                                        mouse_interaction,
-                                    )
+                                    iced_winit::conversion::mouse_interaction(mouse_interaction)
                                 {
                                     window.set_cursor(icon);
                                     window.set_cursor_visible(true);
@@ -341,12 +324,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             );
                             *cache = interface.into_cache();
 
-                            renderer.present(
-                                None,
-                                frame.texture.format(),
-                                &view,
-                                viewport,
-                            );
+                            renderer.present(None, frame.texture.format(), &view, viewport);
 
                             // Present the frame
                             frame.present();
@@ -366,11 +344,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     }
                 }
                 WindowEvent::CursorMoved { position, .. } => {
-                    *cursor =
-                        mouse::Cursor::Available(conversion::cursor_position(
-                            position,
-                            viewport.scale_factor(),
-                        ));
+                    *cursor = mouse::Cursor::Available(conversion::cursor_position(
+                        position,
+                        viewport.scale_factor(),
+                    ));
                 }
                 WindowEvent::ModifiersChanged(new_modifiers) => {
                     *modifiers = new_modifiers.state();
@@ -379,10 +356,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     *resized = true;
                     // 4) webview 布局跟随窗口尺寸重算，不与 iced 的
                     // viewport/surface 重配置打架（各自独立触发）。
-                    let _ = webview.set_bounds(preview_bounds(
-                        new_size,
-                        window.scale_factor(),
-                    ));
+                    let _ = webview.set_bounds(preview_bounds(new_size, window.scale_factor()));
                 }
                 WindowEvent::CloseRequested => {
                     event_loop.exit();
@@ -391,11 +365,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             }
 
             // Map window event to iced event
-            if let Some(event) = conversion::window_event(
-                event,
-                window.scale_factor() as f32,
-                *modifiers,
-            ) {
+            if let Some(event) =
+                conversion::window_event(event, window.scale_factor() as f32, *modifiers)
+            {
                 events.push(event);
             }
 
@@ -411,13 +383,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
                 let mut messages = Vec::new();
 
-                let _ = interface.update(
-                    events,
-                    *cursor,
-                    renderer,
-                    clipboard,
-                    &mut messages,
-                );
+                let _ = interface.update(events, *cursor, renderer, clipboard, &mut messages);
 
                 events.clear();
                 *cache = interface.into_cache();

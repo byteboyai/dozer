@@ -46,7 +46,12 @@ impl Session {
     pub fn spawn(spec: SessionSpec) -> Result<Self> {
         let pty = native_pty_system();
         let pair = pty
-            .openpty(PtySize { rows: spec.rows, cols: spec.cols, pixel_width: 0, pixel_height: 0 })
+            .openpty(PtySize {
+                rows: spec.rows,
+                cols: spec.cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
             .context("openpty")?;
         let mut cmd = CommandBuilder::new(&spec.command);
         cmd.args(&spec.args);
@@ -134,10 +139,12 @@ impl Session {
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
-        self.master
-            .lock()
-            .expect("master lock")
-            .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })?;
+        self.master.lock().expect("master lock").resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
         Ok(())
     }
 
@@ -204,12 +211,13 @@ mod tests {
     async fn output_lands_in_buffer_and_broadcast() {
         let s = Session::spawn(spec("printf marker123; sleep 5")).unwrap();
         let mut rx = s.subscribe();
-        assert!(wait_contains(&s, b"marker123").await, "buffer should contain output");
+        assert!(
+            wait_contains(&s, b"marker123").await,
+            "buffer should contain output"
+        );
         // broadcast 也应收到含 marker 的事件（可能分片，收多次拼接）
         let mut got = Vec::new();
-        while let Ok(Ok(ev)) =
-            tokio::time::timeout(Duration::from_millis(500), rx.recv()).await
-        {
+        while let Ok(Ok(ev)) = tokio::time::timeout(Duration::from_millis(500), rx.recv()).await {
             if let SessionEvent::Output { data, .. } = ev {
                 got.extend(data);
                 if got.windows(9).any(|w| w == b"marker123") {

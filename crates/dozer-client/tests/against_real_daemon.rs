@@ -17,7 +17,9 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
     let r = registry.clone();
     tokio::spawn(async move { dozerd::server::serve(&s, r).await });
     for _ in 0..100 {
-        if sock.exists() { break; }
+        if sock.exists() {
+            break;
+        }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     (sock, registry, CleanupGuard(id))
@@ -38,8 +40,17 @@ async fn full_client_lifecycle() {
     let c = Client::new(sock);
     assert!(c.list().await.unwrap().is_empty());
 
-    let info = c.create("测试", "/bin/sh", &["-c".into(), "echo ready; cat".into()],
-                        "/tmp", 80, 24).await.unwrap();
+    let info = c
+        .create(
+            "测试",
+            "/bin/sh",
+            &["-c".into(), "echo ready; cat".into()],
+            "/tmp",
+            80,
+            24,
+        )
+        .await
+        .unwrap();
     assert!(info.alive);
 
     let (snap, _next, mut rx) = c.attach(&info.id, 0).await.unwrap();
@@ -66,7 +77,10 @@ async fn full_client_lifecycle() {
     let mut exited = false;
     for _ in 0..50 {
         match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
-            Ok(Some(TermEvent::Exited(_))) => { exited = true; break; }
+            Ok(Some(TermEvent::Exited(_))) => {
+                exited = true;
+                break;
+            }
             Ok(Some(_)) => continue,
             _ => continue,
         }
@@ -93,7 +107,14 @@ async fn reader_task_exits_when_receiver_dropped() {
     // 空闲会话：sleep 30 不产生任何输出，确保读循环唯一的退出信号
     // 只能来自 receiver 被 drop（不会被 stop 事件误触发退出）。
     let info = c
-        .create("idle", "/bin/sh", &["-c".into(), "sleep 30".into()], "/tmp", 80, 24)
+        .create(
+            "idle",
+            "/bin/sh",
+            &["-c".into(), "sleep 30".into()],
+            "/tmp",
+            80,
+            24,
+        )
         .await
         .unwrap();
     let session = registry.get(&info.id).expect("session just created");
@@ -101,7 +122,11 @@ async fn reader_task_exits_when_receiver_dropped() {
 
     for round in 0..20 {
         let (_snap, _next, rx) = c.attach(&info.id, 0).await.unwrap();
-        assert_eq!(session.subscriber_count(), 1, "round {round}: attach 应产生一个订阅");
+        assert_eq!(
+            session.subscriber_count(),
+            1,
+            "round {round}: attach 应产生一个订阅"
+        );
         drop(rx); // 模拟关闭 tab：不再有人消费 TermEvent
 
         // 给读任务一点时间在 tokio::select! 里观察到 tx.closed() 并退出，
