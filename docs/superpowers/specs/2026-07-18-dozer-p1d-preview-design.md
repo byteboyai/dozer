@@ -6,7 +6,7 @@
 
 | # | 裁决 | 备选(被放弃) |
 |---|------|--------------|
-| D1 | 文件入口 = **拖文件入预览区 + 地址栏输路径/URL**;文件树留 P1e | 连带最小文件树(侵入 P1e);只做网页基座(验不到预览主体) |
+| D1 | 文件入口 = **地址栏输路径/URL + "打开文件…"原生选择器(rfd)**;文件树留 P1e。~~拖拽入预览区~~已放弃:winit 的 `DroppedFile` 不带落点坐标,无法与 P1c 已交付的"拖文件入终端转路径"行为按区域区分 | 连带最小文件树(侵入 P1e);只做网页基座(验不到预览主体);拖拽分区(winit 无落点,不可靠) |
 | D2 | **每 tab 一个 webview**,非激活 `set_visible(false)`;一期不设上限、不持久化 tabs | 单 webview 导航切换(丢 tab 状态:PDF 滚动位、网页表单) |
 | D3 | Flyfish 资产 **vendor 进仓库**(从 npm tarball 提取 dist,锁版本),运行时自定义协议 serve,不起 HTTP 端口 | 首次运行联网下载(违背离线自托管);build.rs 下载(构建不可离线) |
 | D4 | diff 预览 **只留 tab 类型接口,不实现**(渲染与数据流归验收闭环 P1f) | P1d 顺带做 diff(无交付数据流可接,空转) |
@@ -16,7 +16,7 @@
 
 左二从占位变成真实的资产预览 pane:
 
-1. **文件预览**:拖 `.md`/`.png`/`.pdf`/`.rs` 等文件进左二 → 开 tab,Flyfish 离线渲染;
+1. **文件预览**:经"打开文件…"选择器或地址栏输入路径打开 `.md`/`.png`/`.pdf`/`.rs` 等文件 → 开 tab,Flyfish 离线渲染;
 2. **网页预览**:地址栏输入 `localhost:3000` 或任意 URL → 网页 tab(极简地址栏:URL 输入 + 刷新,无书签/历史/前进后退);
 3. **tab 管理**:多 tab、切换、关闭;无 tab 时 iced 占位提示;
 4. **布局契约**:webview 内容区恒为左二内容矩形,窗口 resize/pane 变化实时跟随;
@@ -32,8 +32,11 @@ dozer-app
 │     TabKind::File(PathBuf) | TabKind::Web { url: String, addr_input: String }
 │     (TabKind::Diff 预留变体,P1f 实现)
 ├── assets.rs         Flyfish 静态资产表 + 自定义协议应答(纯函数,headless 全测)
-│     dozer://flyfish/<path>  → vendored dist 字节
-│     dozer://file/<abs-path> → 本地文件字节(仅白名单根:用户主动拖入/输入的路径)
+│     dozer://flyfish/<path>            → vendored dist 字节
+│     dozer://flyfish/__file__/<path>   → 本地文件字节(仅白名单:用户显式打开过的路径)
+│     (文件端点必须与 host 页同命名空间——wry 自定义协议在 macOS 的
+│      Origin 是 `dozer://flyfish`,跨命名空间 fetch 会被 CORS 拦截;
+│      路径保留原始扩展名,Flyfish 靠 URL 扩展名选择渲染管线)
 ├── workspace.rs      preview_pane():tab 栏 + 地址栏 + 占位(iced 绘制)
 │     preview_content_bounds():左二内容矩形解析式换算(同终端 pane 手法)
 └── main.rs           Runner::Ready 持 webviews: HashMap<usize, wry::WebView>
@@ -54,7 +57,7 @@ dozer-app
 
 ## 4. 错误处理
 
-- 拖入不存在/不可读文件:tab 不建,RED 文案条(复用 daemon_error 展示手法);
+- 打开不存在/不可读文件:tab 不建,RED 文案条(复用 daemon_error 展示手法);
 - Flyfish 不支持的格式:Flyfish 自身兜底页呈现,Dozer 不逐格式 QA(规格裁剪原文);
 - 网页加载失败:WKWebView 原生错误页,地址栏保留输入可改;
 - 资产协议未命中(路径穿越/白名单外):返回 404 字节,拒绝 serve(`dozer://file` 仅允许用户显式打开过的路径集合)。
@@ -62,7 +65,7 @@ dozer-app
 ## 5. 测试策略
 
 - headless:`PreviewPane` 状态机(开/关/切 tab、地址栏输入解析——路径 vs URL 判别)、协议应答纯函数(命中/404/路径穿越拒绝)、bounds 换算公式;
-- 人工验收(T 末章清单):拖入 md/png/pdf/rs 四类文件、localhost 网页、外部 URL、tab 切换关闭、resize 跟随、终端与预览焦点互切、中文 IME 在网页表单内可用。
+- 人工验收(T 末章清单):打开 md/png/pdf/rs 四类文件、localhost 网页、外部 URL、tab 切换关闭、resize 跟随、终端与预览焦点互切、中文 IME 在网页表单内可用。
 
 ## 6. 显式不做(P1d 边界)
 
