@@ -30,7 +30,7 @@ async fn hook_event_reaches_attached_client_and_list() {
     tokio::spawn({
         let sock = sock.clone();
         let registry = registry.clone();
-        async move { dozerd::server::serve(&sock, registry).await }
+        async move { dozerd::server::serve(&sock, registry, test_store()).await }
     });
     for _ in 0..100 {
         if sock.exists() {
@@ -123,4 +123,46 @@ async fn hook_event_reaches_attached_client_and_list() {
         Reply::Ok => {}
         other => panic!("{other:?}"),
     }
+}
+
+/// 每次调用建一个独立临时库的验收存储（测试用；P1f serve 需要）。
+fn test_store() -> std::sync::Arc<dozerd::acceptance::AcceptanceStore> {
+    let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
+    std::sync::Arc::new(dozerd::acceptance::AcceptanceStore::open(&db).unwrap())
+}
+
+#[tokio::test]
+async fn record_acceptance_persists() {
+    let sock = std::env::temp_dir().join(format!("dozerd-acc-{}.sock", uuid::Uuid::new_v4()));
+    let db = std::env::temp_dir().join(format!("dozerd-acc-{}.db", uuid::Uuid::new_v4()));
+    let registry = Arc::new(SessionRegistry::new());
+    let store = Arc::new(dozerd::acceptance::AcceptanceStore::open(&db).unwrap());
+    tokio::spawn({
+        let (sock, registry, store) = (sock.clone(), registry.clone(), store.clone());
+        async move { dozerd::server::serve(&sock, registry, store).await }
+    });
+    for _ in 0..100 {
+        if sock.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    match send_req(
+        &sock,
+        &Request::RecordAcceptance {
+            repo: "/r".into(),
+            goal: "g".into(),
+            criteria_checked: vec![],
+            verdict: "accepted".into(),
+            comment: "".into(),
+            ref_name: "refs/dozer/accepted/1".into(),
+            ts_ms: 1,
+        },
+    )
+    .await
+    {
+        Reply::Ok => {}
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(store.count().unwrap(), 1);
 }

@@ -59,6 +59,16 @@ pub enum Request {
         ts_ms: u64,
         data: serde_json::Value,
     },
+    /// 验收通过的结构性记录（spec P1f D5）；acceptor 由 daemon 侧补 "user"。
+    RecordAcceptance {
+        repo: String,
+        goal: String,
+        criteria_checked: Vec<String>,
+        verdict: String,
+        comment: String,
+        ref_name: String,
+        ts_ms: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -166,6 +176,21 @@ mod tests {
         });
         assert!(line.contains(r#""type":"agent_event""#));
         assert!(line.contains(r#""state":"awaiting_input""#));
+    }
+
+    #[test]
+    fn record_acceptance_roundtrips() {
+        let req = Request::RecordAcceptance {
+            repo: "/r".into(),
+            goal: "目标".into(),
+            criteria_checked: vec!["测试全绿".into()],
+            verdict: "accepted".into(),
+            comment: "".into(),
+            ref_name: "refs/dozer/accepted/1".into(),
+            ts_ms: 9,
+        };
+        let back: Request = decode_line(encode_line(&req).trim()).unwrap();
+        assert_eq!(back, req);
     }
 
     #[test]

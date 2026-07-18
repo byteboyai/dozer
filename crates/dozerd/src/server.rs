@@ -10,7 +10,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast;
 
-pub async fn serve(socket: &Path, registry: Arc<SessionRegistry>) -> Result<()> {
+pub async fn serve(
+    socket: &Path,
+    registry: Arc<SessionRegistry>,
+    store: Arc<crate::acceptance::AcceptanceStore>,
+) -> Result<()> {
     if socket.exists() {
         std::fs::remove_file(socket)?;
     }
@@ -28,8 +32,9 @@ pub async fn serve(socket: &Path, registry: Arc<SessionRegistry>) -> Result<()> 
             }
         };
         let registry = registry.clone();
+        let store = store.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_conn(stream, registry).await {
+            if let Err(e) = handle_conn(stream, registry, store).await {
                 tracing::debug!(error = %e, "连接结束");
             }
         });
@@ -48,7 +53,11 @@ pub fn agent_state_for(event: &str) -> Option<dozer_core::protocol::AgentState> 
     }
 }
 
-async fn handle_conn(stream: UnixStream, registry: Arc<SessionRegistry>) -> Result<()> {
+async fn handle_conn(
+    stream: UnixStream,
+    registry: Arc<SessionRegistry>,
+    store: Arc<crate::acceptance::AcceptanceStore>,
+) -> Result<()> {
     let (r, mut w) = stream.into_split();
     let mut lines = BufReader::new(r).lines();
     // attach 状态：订阅 + 会话 id
@@ -125,6 +134,32 @@ async fn handle_conn(stream: UnixStream, registry: Arc<SessionRegistry>) -> Resu
                                 },
                             }
                             Reply::Ok
+                        }
+                        Request::RecordAcceptance {
+                            repo,
+                            goal,
+                            criteria_checked,
+                            verdict,
+                            comment,
+                            ref_name,
+                            ts_ms,
+                        } => {
+                            let rec = crate::acceptance::AcceptanceRecord {
+                                repo,
+                                goal,
+                                criteria_checked,
+                                verdict,
+                                comment,
+                                ref_name,
+                                acceptor: "user".into(), // 一期单人;四期多成员在此扩展
+                                ts_ms,
+                            };
+                            match store.record(&rec) {
+                                Ok(()) => Reply::Ok,
+                                Err(e) => Reply::Error {
+                                    message: format!("验收记录落库失败: {e}"),
+                                },
+                            }
                         }
                     },
                 };
