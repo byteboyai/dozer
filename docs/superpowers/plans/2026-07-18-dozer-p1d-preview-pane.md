@@ -623,15 +623,17 @@ pub fn handle_protocol(
         };
     }
 
-    // vendored 资产:拒绝路径穿越,逐段拼接。
+    // vendored 资产:先逐段解码,再拒绝路径穿越——编码形态也拦得住:
+    // %2e%2e 解码成 '..' 后才比较;%2F 解码出的 '/' 直接判拒。
+    // (审阅修正:初版先比较后解码,%2e%2e 可绕过,PoC 已实证。)
     let mut full = assets_root.to_path_buf();
     for seg in path.split('/') {
-        if seg.is_empty() || seg == ".." || seg == "." {
-            return not_found();
-        }
         let Some(seg) = percent_decode(seg) else {
             return not_found();
         };
+        if seg.is_empty() || seg == ".." || seg == "." || seg.contains('/') || seg.contains('\0') {
+            return not_found();
+        }
         full.push(seg);
     }
     match std::fs::read(&full) {
