@@ -10,7 +10,7 @@
 | 1 | `cargo run -p dozer-app`:窗口标题 Dozer、四栏可辨、ByteBoy2077 配色 | ✓ | 多轮反馈会话中反复启动确认 |
 | 2 | dozerd 未运行时启动 app → 自动拉起,无错误 | 未验 | 需在 dozerd 未运行状态下单独验证 |
 | 3 | 新建 tab:`ls -G` 颜色、`echo 你好`(中文 IME)回显正确 | ✓ 2026-07-18 | 经三轮修复后复验通过(见下方修复记录) |
-| 4 | `top`/`vim` 全屏程序渲染不花屏 | 未验 | canvas 逐格渲染重写后需复验 |
+| 4 | `top`/`vim` 全屏程序渲染不花屏 | ✓ 2026-07-18 | top 通过；vim 启动报错经查为用户环境问题（`~/.vim/bundle` 不存在而 vimrc 引用 Vundle，任何终端下同样报错），非 Dozer 缺陷 |
 | 5 | **灵魂项**:关 app → 重开 → tab 恢复、滚屏完整、可继续输入 | 未验 | 恢复路径此前轮次跑过(launchd 乱码即在此发现),修复后未整项复验 |
 | 6 | 新 tab 跑 `claude`:交互正常 | 未验 | |
 | 7 | 窗口拖拽缩放:reflow 不崩、cols/rows 跟随 | 未验 | canvas 重写后需复验 |
@@ -31,7 +31,13 @@
   2. CJK 回退字形 advance=1.661 格 ≠ 网格假设 2 格,rich_text 流式排版结构上保不住列对齐——term_view 重写为 canvas 逐格定位绘制。
 → `a03a37b` feat(终端):scrollback 回看——滚轮 + 指示条 + 键入回底(历史一直在 alacritty 网格里,此前未接 UI)。
 
+**第四轮反馈**:无法复制、atuin ↑ 报"读不到光标位置"、Ctrl+C 杀不掉 claude、拖文件不转路径、vim 启动报错(top 通过)。
+→ `c7b1703` 修复(终端):设备查询应答回路——TerminalModel 此前用 VoidListener 丢弃 alacritty 生成的 DSR/DA 应答,atuin/ink 类 TUI 探测超时;另 keymap 补 Ctrl+标点控制码与控制字符透传。
+→ `a01ccef` feat(终端):alacritty 内建 Selection 拖选 + ⌘C 复制/⌘V 粘贴(bracketed paste 感知)+ 拖文件转 shell 转义路径;顺带修复 ⌘ 组合键裸字符漏进 PTY。
+→ vim 报错定性:用户环境 `~/.vim/bundle` 不存在而 vimrc 引用 Vundle,任何终端同样报错,非 Dozer 缺陷。
+
 ## 结论(暂)
 
-- 中文渲染与滚动回看两大阻塞项已修复并复验通过;
-- 剩余 6 项(2/4/5/6/7/8)待用户实机逐项验证,全部通过后:本文件各项置 ✓、标注日期,规格 §3 需求 1、4 追加"P1c 达成"标注,分支再走收尾。
+- 中文渲染、滚动回看、设备查询应答、选区复制粘贴、拖拽路径均已修复/补齐;
+- 待复验:2(自动拉起)、5(灵魂项)、6(claude,重点 Ctrl+C 与 atuin ↑)、7(缩放 reflow)、8(大输出体感)、追加(复制/粘贴/拖拽实机手感);
+- 全部通过后:本文件各项置 ✓、标注日期,规格 §3 需求 1、4 追加"P1c 达成"标注,分支再走收尾。
