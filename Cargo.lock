@@ -1156,8 +1156,10 @@ dependencies = [
 name = "dozer-hook"
 version = "0.1.0"
 dependencies = [
+ "dozer-core",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
