@@ -7,8 +7,7 @@ use std::sync::Arc;
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -17,9 +16,13 @@ async fn main() -> Result<()> {
     let mut socket: PathBuf = dozer_core::paths::socket_path();
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--socket" => {
-                socket = args.next().map(PathBuf::from).unwrap_or(socket);
-            }
+            "--socket" => match args.next() {
+                Some(p) => socket = PathBuf::from(p),
+                None => {
+                    eprintln!("--socket 需要一个路径参数");
+                    std::process::exit(2);
+                }
+            },
             "--version" => {
                 println!("dozerd {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());

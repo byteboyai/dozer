@@ -1,29 +1,627 @@
-use iced::widget::{container, text};
-use iced::{Color, Element, Theme};
+mod fonts;
+mod keymap;
+mod term_model;
+mod term_view;
+mod theme;
+mod workspace;
 
-// ByteBoy2077 tokens（P1c 提炼进 theme 模块）
-const BG: Color = Color::from_rgb(0.039, 0.055, 0.086); // #0a0e16
-const CREAM: Color = Color::from_rgb(1.0, 0.898, 0.706); // #FFE5B4
+use workspace::{Message, Workspace};
 
-#[derive(Default)]
-struct App;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
-#[derive(Debug, Clone)]
-enum Message {}
+use iced_wgpu::graphics::{Shell, Viewport};
+use iced_wgpu::{Engine, Renderer, wgpu};
+use iced_winit::Clipboard;
+use iced_winit::conversion;
+use iced_winit::core::mouse;
+use iced_winit::core::renderer;
+use iced_winit::core::time::Instant;
+use iced_winit::core::window;
+use iced_winit::core::{Event, Font, Pixels, Size, Theme};
+use iced_winit::futures;
+use iced_winit::runtime::user_interface::{self, UserInterface};
+use iced_winit::winit;
 
-fn update(_state: &mut App, _message: Message) {}
+use winit::{
+    dpi::LogicalSize,
+    event::{ElementState, Ime, WindowEvent},
+    event_loop::{ControlFlow, EventLoop},
+    keyboard::ModifiersState,
+};
 
-fn view(_state: &App) -> Element<'_, Message> {
-    container(text("Dozer — P1a 骨架").size(24).color(CREAM))
-        .center_x(iced::Fill)
-        .center_y(iced::Fill)
-        .style(|_theme: &Theme| container::Style {
-            background: Some(BG.into()),
-            ..container::Style::default()
-        })
-        .into()
+use std::sync::Arc;
+
+/// 清空一帧到给定背景色，不再绘制 spike 阶段的示例三角形
+/// （spike B 的 `scene.rs`/wgsl shader 已随本任务删除）。
+fn clear<'a>(
+    target: &'a wgpu::TextureView,
+    encoder: &'a mut wgpu::CommandEncoder,
+    background_color: iced_winit::core::Color,
+) -> wgpu::RenderPass<'a> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: None,
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: target,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear({
+                    let [r, g, b, a] = background_color.into_linear();
+
+                    wgpu::Color {
+                        r: r as f64,
+                        g: g as f64,
+                        b: b as f64,
+                        a: a as f64,
+                    }
+                }),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+    })
 }
 
-fn main() -> iced::Result {
-    iced::application(|| App, update, view).run()
+/// daemon 连不上时的自动拉起：优先用 `current_exe` 同目录下的 `dozerd`
+/// 二进制（cargo workspace 构建后与 `dozer` 落在同一个 target 目录），
+/// 找不到就退化到 PATH 查找（`Command::new("dozerd")` 交给 shell/PATH 解析）。
+fn spawn_dozerd() {
+    let same_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("dozerd")));
+
+    let mut command = match same_dir {
+        Some(path) if path.exists() => Command::new(path),
+        _ => Command::new("dozerd"),
+    };
+
+    match command.stdin(Stdio::null()).spawn() {
+        Ok(_child) => tracing::info!("已自动拉起 dozerd"),
+        Err(e) => tracing::error!("自动拉起 dozerd 失败: {e}"),
+    }
+}
+
+/// 启动序列第一步：探测 daemon 是否可用（一次 `list()` 往返）。连不上
+/// 就自动 spawn `dozerd`，隔 1 秒重试，最多 3 次；全部失败则返回错误
+/// 文案，交给调用方决定如何展示（不阻塞窗口创建本身）。
+async fn ensure_daemon(client: &dozer_client::Client) -> Result<(), String> {
+    if client.list().await.is_ok() {
+        return Ok(());
+    }
+
+    tracing::warn!("daemon 未响应，尝试自动拉起 dozerd");
+    spawn_dozerd();
+
+    let mut last_err = String::from("daemon 未响应");
+    for attempt in 1..=3 {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        match client.list().await {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                last_err = e.to_string();
+                tracing::warn!(attempt, "重试连接 dozerd 仍失败: {last_err}");
+            }
+        }
+    }
+    Err(format!("无法连接 dozerd（已重试 3 次）：{last_err}"))
+}
+
+/// 启动序列：连 daemon（失败则 spawn dozerd 重试）→ 成功则做 GUI 级
+/// 会话恢复（`Workspace::bootstrap`），失败则降级为错误态
+/// （`Workspace::with_daemon_error`）。整段在 `main()` 用
+/// `runtime.block_on` 驱动，此时窗口尚未创建，不占用任何"正在跑的"
+/// UI 线程。
+async fn build_workspace(
+    client: dozer_client::Client,
+    handle: tokio::runtime::Handle,
+    proxy: winit::event_loop::EventLoopProxy<Message>,
+) -> Workspace {
+    match ensure_daemon(&client).await {
+        Ok(()) => Workspace::bootstrap(client, handle, proxy).await,
+        Err(message) => Workspace::with_daemon_error(client, handle, proxy, message),
+    }
+}
+
+pub fn main() -> Result<(), winit::error::EventLoopError> {
+    tracing_subscriber::fmt::init();
+
+    // 第一次文本排版之前剔除毒化 CJK 回退的位图字体（见 fonts.rs 模块注释）。
+    fonts::sanitize_font_db();
+
+    // Initialize winit：用户事件类型直接是 `Message`——tokio 任务经
+    // `EventLoopProxy<Message>::send_event` 把事件流/daemon 状态送回 UI
+    // 线程，`ApplicationHandler::user_event` 收到后转发给
+    // `workspace.update`。
+    let event_loop = EventLoop::<Message>::with_user_event().build()?;
+    let proxy = event_loop.create_proxy();
+
+    // tokio Runtime 由 main 持有，跟 winit 事件循环共存一整个进程生命
+    // 周期（`event_loop.run_app` 之后才会 drop）。UI 线程只允许用
+    // `handle.spawn` 派发任务，绝不 `block_on` 网络 IO——启动序列的
+    // 一次性 `block_on` 是唯一例外（窗口还没创建，谈不上"占用 UI 线程"）。
+    let runtime = tokio::runtime::Runtime::new().expect("创建 tokio runtime");
+    let handle = runtime.handle().clone();
+    let client = dozer_client::Client::new(dozer_core::paths::socket_path());
+
+    let workspace = runtime.block_on(build_workspace(client, handle, proxy.clone()));
+
+    #[allow(clippy::large_enum_variant)]
+    enum Runner {
+        /// 持有启动序列已经构建好的 `Workspace`（daemon 已连上/已降级为
+        /// 错误态，视情况可能已经装好若干恢复出来的 tab）；`resumed()`
+        /// 建好窗口/wgpu 后把它 `take()` 出来转入 `Ready`。用
+        /// `Option` 包一层只是为了能在 `&mut self` 上 `take`，正常情况下
+        /// `resumed()` 只会被调用一次。
+        Loading(Option<Workspace>),
+        Ready {
+            window: Arc<winit::window::Window>,
+            queue: wgpu::Queue,
+            device: wgpu::Device,
+            surface: wgpu::Surface<'static>,
+            format: wgpu::TextureFormat,
+            renderer: Renderer,
+            workspace: Workspace,
+            events: Vec<Event>,
+            cursor: mouse::Cursor,
+            cache: user_interface::Cache,
+            clipboard: Clipboard,
+            viewport: Viewport,
+            modifiers: ModifiersState,
+            resized: bool,
+        },
+    }
+
+    impl Runner {
+        /// 键盘/IME 输入拦截处：终端聚焦时把原始 `WindowEvent` 经
+        /// `keymap` 翻译成字节，直接回灌 `Workspace`（`Message::TermInput`），
+        /// 不必改动 `winit::application::ApplicationHandler` 的实现本身。
+        ///
+        /// `Workspace::update` 收到 `TermInput` 后写给 daemon（`client.write`），
+        /// 不再本地 echo——回显完全走 PTY 真实回路（daemon → attach 流 →
+        /// `Message::TermOutput` → `TerminalModel::feed`）。
+        fn on_window_event(&mut self, event: &WindowEvent) {
+            // 把 `modifiers` 和 `workspace`/`window` 放进同一次解构里取，
+            // 避免先借一次 `self` 再调用 `&self` 方法造成的重复借用。
+            let Self::Ready {
+                workspace,
+                window,
+                modifiers,
+                clipboard,
+                ..
+            } = self
+            else {
+                return;
+            };
+
+            // ⌘ 组合键是应用级快捷键，一律不进 PTY（此前 ⌘C 会把裸 "c"
+            // 漏写进终端）。⌘C 复制当前选区；⌘V 粘贴剪贴板。
+            if modifiers.super_key() {
+                if let WindowEvent::KeyboardInput {
+                    event,
+                    is_synthetic: false,
+                    ..
+                } = event
+                    && event.state == ElementState::Pressed
+                    && let winit::keyboard::Key::Character(s) = &event.logical_key
+                {
+                    match s.as_str() {
+                        "c" => {
+                            if let Some(text) = workspace.active_selection_text() {
+                                clipboard.write(iced_winit::core::clipboard::Kind::Standard, text);
+                            }
+                        }
+                        "v" => {
+                            if let Some(text) =
+                                clipboard.read(iced_winit::core::clipboard::Kind::Standard)
+                            {
+                                workspace.update(Message::TermPaste(text));
+                                window.request_redraw();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                return;
+            }
+
+            let bytes = match event {
+                // 只处理真实按键（忽略窗口获得焦点时 winit 补发的
+                // synthetic 事件）与按下沿；`modifiers` 由外层
+                // `window_event` 在 `ModifiersChanged` 时更新，这里读到的
+                // 始终是按键发生时刻的最新状态。
+                WindowEvent::KeyboardInput {
+                    event,
+                    is_synthetic: false,
+                    ..
+                } if event.state == ElementState::Pressed => keymap::key_to_bytes(
+                    &event.logical_key,
+                    modifiers,
+                    workspace.active_app_cursor_mode(),
+                ),
+                WindowEvent::Ime(Ime::Commit(text)) => Some(keymap::ime_commit_to_bytes(text)),
+                // 拖文件进终端：转成 shell 转义的完整路径写入会话
+                // （Terminal.app 同款行为）。
+                WindowEvent::DroppedFile(path) => {
+                    Some(keymap::dropped_path_to_bytes(&path.to_string_lossy()))
+                }
+                _ => None,
+            };
+
+            if let Some(bytes) = bytes {
+                workspace.update(Message::TermInput(bytes));
+                window.request_redraw();
+            }
+        }
+    }
+
+    impl winit::application::ApplicationHandler<Message> for Runner {
+        fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+            if let Self::Loading(pending_workspace) = self {
+                let Some(mut workspace) = pending_workspace.take() else {
+                    // `resumed()` 理论上只会真正建窗口这一次；后续（若平台
+                    // 又调用一次 `resumed`）直接跳过，避免重复建窗口。
+                    return;
+                };
+                let window = Arc::new(
+                    event_loop
+                        .create_window(
+                            winit::window::WindowAttributes::default()
+                                .with_title("Dozer")
+                                .with_inner_size(LogicalSize::new(1440.0, 900.0)),
+                        )
+                        .expect("Create window"),
+                );
+                // 打开 IME：CJK 等组合输入法要靠 `WindowEvent::Ime(Commit)`
+                // 才能拿到最终提交文本（默认关闭，见 winit 文档）。
+                window.set_ime_allowed(true);
+
+                let physical_size = window.inner_size();
+                let viewport = Viewport::with_physical_size(
+                    Size::new(physical_size.width, physical_size.height),
+                    window.scale_factor() as f32,
+                );
+                let clipboard = Clipboard::connect(window.clone());
+
+                let backend = wgpu::Backends::from_env().unwrap_or_default();
+
+                let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+                    backends: backend,
+                    ..Default::default()
+                });
+                let surface = instance
+                    .create_surface(window.clone())
+                    .expect("Create window surface");
+
+                let (format, adapter, device, queue) =
+                    futures::futures::executor::block_on(async {
+                        let adapter = wgpu::util::initialize_adapter_from_env_or_default(
+                            &instance,
+                            Some(&surface),
+                        )
+                        .await
+                        .expect("Create adapter");
+
+                        let adapter_features = adapter.features();
+
+                        let capabilities = surface.get_capabilities(&adapter);
+
+                        let (device, queue) = adapter
+                            .request_device(&wgpu::DeviceDescriptor {
+                                label: None,
+                                required_features: adapter_features & wgpu::Features::default(),
+                                required_limits: wgpu::Limits::default(),
+                                memory_hints: wgpu::MemoryHints::MemoryUsage,
+                                trace: wgpu::Trace::Off,
+                                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                            })
+                            .await
+                            .expect("Request device");
+
+                        (
+                            capabilities
+                                .formats
+                                .iter()
+                                .copied()
+                                .find(wgpu::TextureFormat::is_srgb)
+                                .or_else(|| capabilities.formats.first().copied())
+                                .expect("Get preferred format"),
+                            adapter,
+                            device,
+                            queue,
+                        )
+                    });
+
+                surface.configure(
+                    &device,
+                    &wgpu::SurfaceConfiguration {
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                        format,
+                        width: physical_size.width,
+                        height: physical_size.height,
+                        present_mode: wgpu::PresentMode::AutoVsync,
+                        alpha_mode: wgpu::CompositeAlphaMode::Auto,
+                        view_formats: vec![],
+                        desired_maximum_frame_latency: 2,
+                    },
+                );
+
+                // `workspace` 是启动序列（daemon 连接 + 会话恢复）已经建好
+                // 的状态，这里只补一次真实窗口尺寸——恢复出来的 tab 之前
+                // 用的是 `DEFAULT_COLS`/`DEFAULT_ROWS` 兜底默认值，窗口一旦
+                // 建好就立刻纠正成实际网格（也会顺带把 resize 同步给
+                // daemon）。
+                let logical: LogicalSize<f32> = physical_size.to_logical(window.scale_factor());
+                let (pane_w, pane_h) =
+                    workspace::terminal_pane_pixel_size(logical.width, logical.height);
+                let (cols, rows) = term_view::grid_size(pane_w, pane_h);
+                if cols > 0 && rows > 0 {
+                    workspace.update(Message::PaneResized {
+                        cols: cols as u16,
+                        rows: rows as u16,
+                    });
+                }
+
+                // Initialize iced
+
+                let renderer = {
+                    let engine = Engine::new(
+                        &adapter,
+                        device.clone(),
+                        queue.clone(),
+                        format,
+                        None,
+                        Shell::headless(),
+                    );
+
+                    Renderer::new(engine, Font::default(), Pixels::from(16))
+                };
+
+                // You should change this if you want to render continuously
+                event_loop.set_control_flow(ControlFlow::Wait);
+
+                *self = Self::Ready {
+                    window,
+                    device,
+                    queue,
+                    renderer,
+                    surface,
+                    format,
+                    workspace,
+                    events: Vec::new(),
+                    cursor: mouse::Cursor::Unavailable,
+                    modifiers: ModifiersState::default(),
+                    cache: user_interface::Cache::new(),
+                    clipboard,
+                    viewport,
+                    resized: false,
+                };
+            }
+        }
+
+        /// tokio 任务经 `EventLoopProxy<Message>::send_event` 送回来的事件
+        /// （attach 数据流的输出/退出、daemon 错误、新建会话完成……）在这里
+        /// 落地：直接喂给 `Workspace::update`，跟 `window_event` 里处理
+        /// iced 消息走的是同一条 `update` 逻辑，只是消息来源不同。
+        fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: Message) {
+            let Self::Ready {
+                workspace, window, ..
+            } = self
+            else {
+                return;
+            };
+            workspace.update(event);
+            window.request_redraw();
+        }
+
+        fn window_event(
+            &mut self,
+            event_loop: &winit::event_loop::ActiveEventLoop,
+            _window_id: winit::window::WindowId,
+            event: WindowEvent,
+        ) {
+            self.on_window_event(&event);
+
+            let Self::Ready {
+                window,
+                device,
+                queue,
+                surface,
+                format,
+                renderer,
+                workspace,
+                events,
+                viewport,
+                cursor,
+                modifiers,
+                clipboard,
+                cache,
+                resized,
+            } = self
+            else {
+                return;
+            };
+
+            match event {
+                WindowEvent::RedrawRequested => {
+                    if *resized {
+                        let size = window.inner_size();
+
+                        *viewport = Viewport::with_physical_size(
+                            Size::new(size.width, size.height),
+                            window.scale_factor() as f32,
+                        );
+
+                        surface.configure(
+                            device,
+                            &wgpu::SurfaceConfiguration {
+                                format: *format,
+                                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                                width: size.width,
+                                height: size.height,
+                                present_mode: wgpu::PresentMode::AutoVsync,
+                                alpha_mode: wgpu::CompositeAlphaMode::Auto,
+                                view_formats: vec![],
+                                desired_maximum_frame_latency: 2,
+                            },
+                        );
+
+                        *resized = false;
+                    }
+
+                    match surface.get_current_texture() {
+                        Ok(frame) => {
+                            let view = frame
+                                .texture
+                                .create_view(&wgpu::TextureViewDescriptor::default());
+
+                            let mut encoder =
+                                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    label: None,
+                                });
+
+                            {
+                                // Clear the frame to the ByteBoy2077 background
+                                let _render_pass = clear(&view, &mut encoder, theme::BG);
+                            }
+
+                            // Submit the clear pass
+                            queue.submit([encoder.finish()]);
+
+                            // Draw iced on top
+                            let mut interface = UserInterface::build(
+                                workspace.view(),
+                                viewport.logical_size(),
+                                std::mem::take(cache),
+                                renderer,
+                            );
+
+                            let (state, _) = interface.update(
+                                &[Event::Window(
+                                    window::Event::RedrawRequested(Instant::now()),
+                                )],
+                                *cursor,
+                                renderer,
+                                clipboard,
+                                &mut Vec::new(),
+                            );
+
+                            // Update the mouse cursor
+                            if let user_interface::State::Updated {
+                                mouse_interaction, ..
+                            } = state
+                            {
+                                // Update the mouse cursor
+                                if let Some(icon) = conversion::mouse_interaction(mouse_interaction)
+                                {
+                                    window.set_cursor(icon);
+                                    window.set_cursor_visible(true);
+                                } else {
+                                    window.set_cursor_visible(false);
+                                }
+                            }
+
+                            // Draw the interface
+                            interface.draw(
+                                renderer,
+                                &Theme::Dark,
+                                &renderer::Style::default(),
+                                *cursor,
+                            );
+                            *cache = interface.into_cache();
+
+                            renderer.present(None, frame.texture.format(), &view, viewport);
+
+                            // Present the frame
+                            frame.present();
+                        }
+                        Err(error) => match error {
+                            wgpu::SurfaceError::OutOfMemory => {
+                                panic!(
+                                    "Swapchain error: {error}. \
+                                        Rendering cannot continue."
+                                )
+                            }
+                            _ => {
+                                // Try rendering again next frame.
+                                window.request_redraw();
+                            }
+                        },
+                    }
+                }
+                WindowEvent::CursorMoved { position, .. } => {
+                    *cursor = mouse::Cursor::Available(conversion::cursor_position(
+                        position,
+                        viewport.scale_factor(),
+                    ));
+                }
+                WindowEvent::ModifiersChanged(new_modifiers) => {
+                    *modifiers = new_modifiers.state();
+                }
+                WindowEvent::Resized(new_size) => {
+                    *resized = true;
+
+                    // 窗口尺寸变了：换算终端 pane 的新网格尺寸，套用到
+                    // 所有 tab 的 `TerminalModel` 并同步给 daemon
+                    // （`Workspace::update` 内部处理，这里只负责换算）。
+                    let logical: LogicalSize<f32> = new_size.to_logical(window.scale_factor());
+                    let (pane_w, pane_h) =
+                        workspace::terminal_pane_pixel_size(logical.width, logical.height);
+                    let (cols, rows) = term_view::grid_size(pane_w, pane_h);
+                    if cols > 0 && rows > 0 {
+                        workspace.update(Message::PaneResized {
+                            cols: cols as u16,
+                            rows: rows as u16,
+                        });
+                    }
+                }
+                WindowEvent::CloseRequested => {
+                    event_loop.exit();
+                }
+                _ => {}
+            }
+
+            // Map window event to iced event
+            if let Some(event) =
+                conversion::window_event(event, window.scale_factor() as f32, *modifiers)
+            {
+                events.push(event);
+            }
+
+            // If there are events pending
+            if !events.is_empty() {
+                // We process them
+                let mut interface = UserInterface::build(
+                    workspace.view(),
+                    viewport.logical_size(),
+                    std::mem::take(cache),
+                    renderer,
+                );
+
+                let mut messages: Vec<Message> = Vec::new();
+
+                let _ = interface.update(events, *cursor, renderer, clipboard, &mut messages);
+
+                events.clear();
+                *cache = interface.into_cache();
+
+                // update our UI with any messages
+                for message in messages {
+                    workspace.update(message);
+                }
+
+                // and request a redraw
+                window.request_redraw();
+            }
+        }
+    }
+
+    let mut runner = Runner::Loading(Some(workspace));
+    event_loop.run_app(&mut runner)
+
+    // `runtime` 在这里才真正 drop（`main` 持有到最后一刻）：`run_app`
+    // 阻塞到窗口关闭为止，期间所有 `handle.spawn` 派生的任务都能正常跑；
+    // 应用退出后随 `runtime` 一起清理，不需要手动等待/取消。
 }

@@ -1,0 +1,524 @@
+// crates/dozer-app/src/term_model.rs
+//! TerminalModel：headless 终端状态机（P1c T4）。
+//!
+//! 包装 `alacritty_terminal` 的 VTE 解析器与 `Term` 网格状态，向渲染层
+//! （T5）暴露一份纯数据快照（`Cell` 网格 + 光标位置），不依赖 iced，避免
+//! 渲染 crate 反向渗入本模块。
+//!
+//! T5 消费：`Cell`、`TerminalModel` 及其全部方法目前尚无调用方（渲染层未
+//! 接线），下方 `#![allow(dead_code)]` 是过渡期占位，等 T5 接上渲染后可去掉。
+#![allow(dead_code)]
+
+use alacritty_terminal::event::{Event, EventListener};
+use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
+use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::{Config, Term, TermMode};
+use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Processor};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+/// ANSI 16 色的主题 RGB 表，下标与 `NamedColor` 的判别值（0..=15）一致：
+/// Black/Red/Green/Yellow/Blue/Magenta/Cyan/White，随后是对应的 Bright 变体。
+const ANSI16: [(u8, u8, u8); 16] = [
+    (0x08, 0x14, 0x1d), // Black
+    (0xFF, 0x6E, 0x6E), // Red
+    (0x1A, 0xD5, 0x85), // Green
+    (0xF2, 0xD9, 0x4E), // Yellow
+    (0x95, 0x80, 0xFF), // Blue
+    (0xFF, 0x3D, 0xCC), // Magenta
+    (0x47, 0xDE, 0xF0), // Cyan
+    (0xFF, 0xE5, 0xB4), // White
+    (0x6B, 0x7F, 0x8F), // BrightBlack
+    (0xFF, 0x8E, 0x8E), // BrightRed
+    (0x4A, 0xE5, 0xA5), // BrightGreen
+    (0xFF, 0xF3, 0xB0), // BrightYellow
+    (0xB5, 0xA5, 0xFF), // BrightBlue
+    (0xFF, 0x6D, 0xDC), // BrightMagenta
+    (0x87, 0xEE, 0xF8), // BrightCyan
+    (0xFF, 0xF5, 0xD4), // BrightWhite
+];
+
+/// 默认前景色（无显式 SGR 时的字符颜色）。
+const DEFAULT_FG: (u8, u8, u8) = (0x9A, 0xB4, 0xC4);
+
+/// 渲染层唯一数据源：一个终端网格格子。刻意只含原始值（`char`/`(u8,u8,u8)`），
+/// 不引入 `iced::Color`，保持本模块可在无渲染依赖下单测。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cell {
+    pub ch: char,
+    pub fg: (u8, u8, u8),
+    pub bg: Option<(u8, u8, u8)>,
+    pub bold: bool,
+    /// 宽字符（CJK 等）本体格：占两列，渲染层应给它 2 格宽的绘制盒。
+    pub wide: bool,
+    /// 宽字符的第二格（占位符）：渲染层应跳过，不产生任何字形。
+    pub spacer: bool,
+    /// 处于鼠标选区内：渲染层画选区底色。
+    pub selected: bool,
+}
+
+/// `Term::new`/`Term::resize` 需要的最小尺寸描述。滚屏历史（scrollback）
+/// 不走这里——由 `Config::default()` 的 `scrolling_history`（10000 行）
+/// 决定；`total_lines` 与 alacritty 自身的 `SizeInfo` 一致，等于可视行数。
+#[derive(Clone, Copy)]
+struct TermSize {
+    columns: usize,
+    screen_lines: usize,
+}
+
+impl Dimensions for TermSize {
+    fn total_lines(&self) -> usize {
+        self.screen_lines
+    }
+
+    fn screen_lines(&self) -> usize {
+        self.screen_lines
+    }
+
+    fn columns(&self) -> usize {
+        self.columns
+    }
+}
+
+/// ANSI 16 色（`NamedColor`）→ 主题 RGB。`Background` 按规格无主题色，
+/// 返回 `None`（由背景色分支处理成"透明/继承面板底色"）；其余具名色
+/// （Cursor/Dim*/BrightForeground 等）主题未定义，退回默认前景色。
+fn named_color_rgb(name: NamedColor) -> Option<(u8, u8, u8)> {
+    let idx = name as usize;
+    if idx < ANSI16.len() {
+        return Some(ANSI16[idx]);
+    }
+    match name {
+        NamedColor::Background => None,
+        _ => Some(DEFAULT_FG),
+    }
+}
+
+/// ANSI-256 索引色 → RGB：0..16 复用 16 色主题表；16..232 是标准 xterm
+/// 6x6x6 色立方；232..256 是灰阶渐变。P1c 范围内的 ANSI 转义序列不会
+/// 触发这一段，仅为完整性保留标准 xterm 映射。
+fn indexed_to_rgb(idx: u8) -> (u8, u8, u8) {
+    match idx {
+        0..=15 => ANSI16[idx as usize],
+        16..=231 => {
+            let i = idx - 16;
+            let r = i / 36;
+            let g = (i % 36) / 6;
+            let b = i % 6;
+            let scale = |c: u8| if c == 0 { 0 } else { 55 + c * 40 };
+            (scale(r), scale(g), scale(b))
+        }
+        232..=255 => {
+            let level = 8 + (idx - 232) * 10;
+            (level, level, level)
+        }
+    }
+}
+
+fn fg_to_rgb(color: AnsiColor) -> (u8, u8, u8) {
+    match color {
+        AnsiColor::Named(name) => named_color_rgb(name).unwrap_or(DEFAULT_FG),
+        AnsiColor::Spec(rgb) => (rgb.r, rgb.g, rgb.b),
+        AnsiColor::Indexed(idx) => indexed_to_rgb(idx),
+    }
+}
+
+fn bg_to_rgb(color: AnsiColor) -> Option<(u8, u8, u8)> {
+    match color {
+        AnsiColor::Named(name) => named_color_rgb(name),
+        AnsiColor::Spec(rgb) => Some((rgb.r, rgb.g, rgb.b)),
+        AnsiColor::Indexed(idx) => Some(indexed_to_rgb(idx)),
+    }
+}
+
+/// 收集 `Term` 解析过程中生成的 PTY 回写应答（`Event::PtyWrite`）：
+/// DSR 光标位置（CSI 6n）、DA 设备属性（CSI c）、DECRPM 模式查询等。
+/// atuin/ink（claude）等 TUI 依赖这些应答；此前用 `VoidListener` 全部
+/// 丢弃，导致这类程序探测超时/行为异常。
+#[derive(Default, Clone)]
+struct PtyResponses(Rc<RefCell<Vec<u8>>>);
+
+impl EventListener for PtyResponses {
+    fn send_event(&self, event: Event) {
+        if let Event::PtyWrite(text) = event {
+            self.0.borrow_mut().extend_from_slice(text.as_bytes());
+        }
+    }
+}
+
+/// headless 终端状态机：字节流喂给 VTE 解析器，驱动 `alacritty_terminal`
+/// 的 `Term` 网格状态；对外只暴露只读快照（`visible_lines`/`cursor`）。
+pub struct TerminalModel {
+    term: Term<PtyResponses>,
+    parser: Processor,
+    /// 与 `term` 内 listener 共享同一块缓冲，`feed` 后取走。
+    responses: PtyResponses,
+}
+
+impl TerminalModel {
+    /// 新建一个 `cols` x `rows` 的终端。
+    pub fn new(cols: u16, rows: u16) -> Self {
+        let size = TermSize {
+            columns: cols as usize,
+            screen_lines: rows as usize,
+        };
+        let responses = PtyResponses::default();
+        let term = Term::new(Config::default(), &size, responses.clone());
+        Self {
+            term,
+            parser: Processor::new(),
+            responses,
+        }
+    }
+
+    /// 把字节流喂给 VTE 解析器，解析结果直接落到 `Term` 的网格状态上。
+    ///
+    /// 返回本次解析生成的 PTY 回写应答（设备查询的响应字节）。调用方
+    /// 决定去向：实时输出 → 写回 daemon；快照回放 → 丢弃（重放历史里的
+    /// 查询不能补发陈旧应答）。
+    #[must_use = "PTY 应答字节需要显式处理：实时输出写回 daemon，快照回放丢弃"]
+    pub fn feed(&mut self, bytes: &[u8]) -> Vec<u8> {
+        // `Processor::advance` 需要同时可变借用 parser 与 term；先解构再
+        // 分别取字段引用，避免对 `self` 的双重可变借用。
+        let Self { term, parser, .. } = self;
+        parser.advance(term, bytes);
+        std::mem::take(&mut *self.responses.0.borrow_mut())
+    }
+
+    /// 调整终端尺寸，尽量保留既有内容（委托给 `Term::resize` 的重排逻辑）。
+    pub fn resize(&mut self, cols: u16, rows: u16) {
+        let size = TermSize {
+            columns: cols as usize,
+            screen_lines: rows as usize,
+        };
+        self.term.resize(size);
+    }
+
+    /// 向历史方向（正数）或活动区方向（负数）滚动视口 `delta` 行；
+    /// 越界由 alacritty 自动钳制在 `[0, history_len]`。
+    pub fn scroll_display(&mut self, delta: i32) {
+        self.term.scroll_display(Scroll::Delta(delta));
+    }
+
+    /// 回到活动区底部（`display_offset` 归零）。
+    pub fn scroll_to_bottom(&mut self) {
+        self.term.scroll_display(Scroll::Bottom);
+    }
+
+    /// 当前视口相对活动区底部上移的行数；0 = 正在看实时输出。
+    pub fn display_offset(&self) -> usize {
+        self.term.grid().display_offset()
+    }
+
+    /// 当前网格尺寸 `(cols, rows)`（渲染层做像素 → 格坐标换算用）。
+    pub fn grid_dims(&self) -> (usize, usize) {
+        let grid = self.term.grid();
+        (grid.columns(), grid.screen_lines())
+    }
+
+    /// 滚屏历史当前实际行数（随输出增长，上限 `scrolling_history`）。
+    pub fn history_len(&self) -> usize {
+        let grid = self.term.grid();
+        grid.total_lines() - grid.screen_lines()
+    }
+
+    /// 视口坐标 `(col, row)` + display offset → 网格坐标。
+    fn viewport_to_point(&self, col: usize, row: usize) -> Point {
+        let offset = self.term.grid().display_offset() as i32;
+        Point::new(Line(row as i32 - offset), Column(col))
+    }
+
+    /// 鼠标按下：在 `(col, row)`（视口坐标）起一个新的简单选区。
+    /// `right_half` 表示按点落在格子的右半（决定选区端点贴哪一侧）。
+    pub fn selection_start(&mut self, col: usize, row: usize, right_half: bool) {
+        let point = self.viewport_to_point(col, row);
+        let side = if right_half { Side::Right } else { Side::Left };
+        self.term.selection = Some(Selection::new(SelectionType::Simple, point, side));
+    }
+
+    /// 鼠标拖拽：把选区末端拖到 `(col, row)`（视口坐标）。
+    pub fn selection_update(&mut self, col: usize, row: usize, right_half: bool) {
+        let point = self.viewport_to_point(col, row);
+        let side = if right_half { Side::Right } else { Side::Left };
+        if let Some(selection) = &mut self.term.selection {
+            selection.update(point, side);
+        }
+    }
+
+    /// 当前选区文本（跨行以 `\n` 连接）；无选区/空选区返回 `None`。
+    pub fn selection_text(&self) -> Option<String> {
+        self.term.selection_to_string().filter(|s| !s.is_empty())
+    }
+
+    /// 清除选区。
+    pub fn selection_clear(&mut self) {
+        self.term.selection = None;
+    }
+
+    /// 可视网格快照，逐行逐格返回（已计入 `display_offset`——回看历史时
+    /// 返回的就是屏幕上应显示的行）。宽字符的 spacer 格 `ch` 置为空格。
+    pub fn visible_lines(&self) -> Vec<Vec<Cell>> {
+        let grid = self.term.grid();
+        let cols = grid.columns();
+        let rows = grid.screen_lines();
+        let offset = grid.display_offset() as i32;
+        let selection = self
+            .term
+            .selection
+            .as_ref()
+            .and_then(|s| s.to_range(&self.term));
+
+        (0..rows)
+            .map(|row| {
+                // 视口第 `row` 行对应网格 `Line(row - offset)`：负值索引
+                // 进入滚屏历史（alacritty 的 `Index<Line>` 原生支持）。
+                let grid_line = Line(row as i32 - offset);
+                let line = &grid[grid_line];
+                (0..cols)
+                    .map(|col| {
+                        let cell = &line[Column(col)];
+                        let spacer = cell.flags.contains(Flags::WIDE_CHAR_SPACER);
+                        Cell {
+                            ch: if spacer { ' ' } else { cell.c },
+                            fg: fg_to_rgb(cell.fg),
+                            bg: bg_to_rgb(cell.bg),
+                            bold: cell.flags.contains(Flags::BOLD),
+                            wide: cell.flags.contains(Flags::WIDE_CHAR),
+                            spacer,
+                            selected: selection
+                                .is_some_and(|r| r.contains(Point::new(grid_line, Column(col)))),
+                        }
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// 光标位置 `(col, row)`，row 为可视行号（无 scrollback，因此等于
+    /// `Term` 内部 `Line` 的原始值）。
+    pub fn cursor(&self) -> (usize, usize) {
+        let point = self.term.grid().cursor.point;
+        (point.column.0, point.line.0 as usize)
+    }
+
+    /// 是否处于 application cursor mode（DECCKM，`CSI ?1h` 开启 /
+    /// `CSI ?1l` 关闭）。shell 行编辑器（readline/zle 等）常用它来把方向
+    /// 键从 CSI 序列（`\x1b[A`）切换成 SS3 序列（`\x1bOA`），
+    /// `keymap::key_to_bytes` 据此决定发哪一种转义序列。
+    pub fn app_cursor_mode(&self) -> bool {
+        self.term.mode().contains(TermMode::APP_CURSOR)
+    }
+
+    /// 是否处于 bracketed paste mode（`CSI ?2004h/l`）。开启时粘贴文本
+    /// 需用 `ESC[200~`/`ESC[201~` 包裹，vim/claude 等据此区分"粘贴"与
+    /// "逐键输入"（避免自动缩进错乱、按键误触发）。
+    pub fn bracketed_paste(&self) -> bool {
+        self.term.mode().contains(TermMode::BRACKETED_PASTE)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line_text(cells: &[Cell]) -> String {
+        cells
+            .iter()
+            .map(|c| c.ch)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    #[test]
+    fn plain_text_lands_on_first_row() {
+        let mut t = TerminalModel::new(40, 10);
+        let _ = t.feed(b"hello dozer");
+        assert_eq!(line_text(&t.visible_lines()[0]), "hello dozer");
+        assert_eq!(t.cursor(), (11, 0));
+    }
+
+    #[test]
+    fn newline_and_cr_move_cursor() {
+        let mut t = TerminalModel::new(40, 10);
+        let _ = t.feed(b"one\r\ntwo");
+        let lines = t.visible_lines();
+        assert_eq!(line_text(&lines[0]), "one");
+        assert_eq!(line_text(&lines[1]), "two");
+        assert_eq!(t.cursor(), (3, 1));
+    }
+
+    #[test]
+    fn sgr_red_foreground_is_mapped() {
+        let mut t = TerminalModel::new(40, 10);
+        let _ = t.feed(b"\x1b[31mred\x1b[0m");
+        let cell = &t.visible_lines()[0][0];
+        assert_eq!(cell.ch, 'r');
+        assert_eq!(cell.fg, (0xFF, 0x6E, 0x6E)); // ANSI 红 → 主题 RED
+    }
+
+    #[test]
+    fn resize_keeps_content() {
+        let mut t = TerminalModel::new(40, 10);
+        let _ = t.feed(b"keepme");
+        t.resize(60, 20);
+        assert_eq!(line_text(&t.visible_lines()[0]), "keepme");
+        assert_eq!(t.visible_lines().len(), 20);
+    }
+
+    #[test]
+    fn utf8_cjk_occupies_two_columns() {
+        let mut t = TerminalModel::new(40, 10);
+        let _ = t.feed("你好".as_bytes());
+        let l = &t.visible_lines()[0];
+        assert_eq!(l[0].ch, '你');
+        assert_eq!(l[2].ch, '好'); // 宽字符占两格，第 1 格为 spacer
+        assert_eq!(t.cursor(), (4, 0));
+    }
+
+    #[test]
+    fn drag_selection_extracts_text_and_marks_cells() {
+        let mut t = TerminalModel::new(20, 5);
+        let _ = t.feed(b"hello world");
+        t.selection_start(0, 0, false);
+        t.selection_update(4, 0, true); // 拖到第 5 格右半 → 含 'o'
+        assert_eq!(t.selection_text().as_deref(), Some("hello"));
+
+        let lines = t.visible_lines();
+        assert!(lines[0][0].selected && lines[0][4].selected);
+        assert!(!lines[0][5].selected, "空格在选区外");
+
+        t.selection_clear();
+        assert!(t.selection_text().is_none());
+        assert!(!t.visible_lines()[0][0].selected);
+    }
+
+    #[test]
+    fn click_without_drag_selects_nothing() {
+        let mut t = TerminalModel::new(20, 5);
+        let _ = t.feed(b"hello");
+        t.selection_start(2, 0, false);
+        assert!(t.selection_text().is_none(), "单击未拖拽不构成选区");
+        assert!(!t.visible_lines()[0][2].selected);
+    }
+
+    #[test]
+    fn selection_spans_multiple_rows() {
+        let mut t = TerminalModel::new(10, 5);
+        let _ = t.feed(b"aaa\r\nbbb");
+        t.selection_start(0, 0, false);
+        t.selection_update(2, 1, true);
+        assert_eq!(t.selection_text().as_deref(), Some("aaa\nbbb"));
+    }
+
+    #[test]
+    fn bracketed_paste_mode_toggles() {
+        let mut t = TerminalModel::new(10, 5);
+        assert!(!t.bracketed_paste());
+        let _ = t.feed(b"\x1b[?2004h");
+        assert!(t.bracketed_paste());
+        let _ = t.feed(b"\x1b[?2004l");
+        assert!(!t.bracketed_paste());
+    }
+
+    #[test]
+    fn dsr_cursor_position_query_is_answered() {
+        let mut t = TerminalModel::new(40, 10);
+        let _ = t.feed(b"ab");
+        // CSI 6n（DSR）：应用查询光标位置，终端必须应答 CSI row;col R
+        // （1-based）。atuin/ink 等 TUI 靠它工作，无应答即超时报错。
+        let resp = t.feed(b"\x1b[6n");
+        assert_eq!(resp, b"\x1b[1;3R".to_vec());
+    }
+
+    #[test]
+    fn plain_output_produces_no_pty_response() {
+        let mut t = TerminalModel::new(40, 10);
+        assert!(t.feed(b"hello").is_empty());
+        assert!(t.feed("你好\r\n".as_bytes()).is_empty());
+    }
+
+    #[test]
+    fn primary_device_attributes_query_is_answered() {
+        let mut t = TerminalModel::new(40, 10);
+        // CSI c（DA1）：很多 TUI 启动时探测终端型号，应答不能为空。
+        let resp = t.feed(b"\x1b[c");
+        assert!(
+            resp.starts_with(b"\x1b[?"),
+            "DA1 应答应为 CSI ? ... c，实际: {resp:?}"
+        );
+    }
+
+    /// 造一个 10x5 终端并打印 l0..l19 共 20 行：屏幕剩 [l16..l19, 空]，
+    /// 历史里应存下 l0..l15（16 行）。
+    fn scrolled_term() -> TerminalModel {
+        let mut t = TerminalModel::new(10, 5);
+        for i in 0..20 {
+            let _ = t.feed(format!("l{i}\r\n").as_bytes());
+        }
+        t
+    }
+
+    #[test]
+    fn scroll_display_moves_viewport_into_history() {
+        let mut t = scrolled_term();
+        assert_eq!(t.display_offset(), 0);
+        assert_eq!(line_text(&t.visible_lines()[0]), "l16");
+
+        t.scroll_display(3);
+        assert_eq!(t.display_offset(), 3);
+        assert_eq!(line_text(&t.visible_lines()[0]), "l13");
+        assert_eq!(t.visible_lines().len(), 5, "视口行数不因滚动改变");
+    }
+
+    #[test]
+    fn scroll_display_clamps_to_history_len() {
+        let mut t = scrolled_term();
+        t.scroll_display(1000);
+        assert_eq!(t.display_offset(), 16, "最多滚到历史顶部");
+        assert_eq!(line_text(&t.visible_lines()[0]), "l0");
+        assert_eq!(t.history_len(), 16);
+    }
+
+    #[test]
+    fn scroll_to_bottom_resets_offset() {
+        let mut t = scrolled_term();
+        t.scroll_display(5);
+        t.scroll_to_bottom();
+        assert_eq!(t.display_offset(), 0);
+        assert_eq!(line_text(&t.visible_lines()[0]), "l16");
+    }
+
+    #[test]
+    fn new_output_keeps_scrolled_view_pinned() {
+        let mut t = scrolled_term();
+        t.scroll_display(3);
+        let _ = t.feed(b"x\r\n");
+        // alacritty 语义：回看时新输出把 offset 顶上去，视口内容不动。
+        assert_eq!(t.display_offset(), 4);
+        assert_eq!(line_text(&t.visible_lines()[0]), "l13");
+    }
+
+    #[test]
+    fn cjk_cells_carry_wide_and_spacer_flags() {
+        let mut t = TerminalModel::new(40, 10);
+        let _ = t.feed("你a".as_bytes());
+        let l = &t.visible_lines()[0];
+        assert!(l[0].wide && !l[0].spacer, "宽字符本体格应标 wide");
+        assert!(l[1].spacer, "宽字符第二格应标 spacer");
+        assert_eq!(l[2].ch, 'a');
+        assert!(!l[2].wide && !l[2].spacer, "普通格不应带宽字符标记");
+    }
+
+    #[test]
+    fn decckm_toggles_app_cursor_mode() {
+        let mut t = TerminalModel::new(40, 10);
+        assert!(!t.app_cursor_mode());
+        let _ = t.feed(b"\x1b[?1h");
+        assert!(t.app_cursor_mode());
+        let _ = t.feed(b"\x1b[?1l");
+        assert!(!t.app_cursor_mode());
+    }
+}

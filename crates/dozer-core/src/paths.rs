@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use directories::ProjectDirs;
+use std::path::PathBuf;
 
 fn dirs() -> ProjectDirs {
     ProjectDirs::from("ai", "byteboy", "dozer").expect("home directory must exist")

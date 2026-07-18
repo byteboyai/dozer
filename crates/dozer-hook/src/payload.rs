@@ -14,7 +14,11 @@ impl HookPayload {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock before epoch")
             .as_millis() as u64;
-        Self { event: event.to_string(), ts_ms, data }
+        Self {
+            event: event.to_string(),
+            ts_ms,
+            data,
+        }
     }
 
     /// 单行 JSON（JSON Lines 协议帧）

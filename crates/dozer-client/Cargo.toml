@@ -1,0 +1,15 @@
+[package]
+name = "dozer-client"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+dozer-core = { path = "../dozer-core" }
+anyhow.workspace = true
+tokio.workspace = true
+base64.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+dozerd = { path = "../dozerd" }
+uuid.workspace = true

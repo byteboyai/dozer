@@ -16,7 +16,10 @@ impl SessionRegistry {
 
     pub fn create(&self, spec: SessionSpec) -> Result<Arc<Session>> {
         let s = Arc::new(Session::spawn(spec)?);
-        self.map.lock().expect("registry lock").insert(s.id().to_string(), s.clone());
+        self.map
+            .lock()
+            .expect("registry lock")
+            .insert(s.id().to_string(), s.clone());
         Ok(s)
     }
 
@@ -25,14 +28,21 @@ impl SessionRegistry {
     }
 
     pub fn list(&self) -> Vec<SessionInfo> {
-        let mut v: Vec<SessionInfo> =
-            self.map.lock().expect("registry lock").values().map(|s| s.info()).collect();
+        let mut v: Vec<SessionInfo> = self
+            .map
+            .lock()
+            .expect("registry lock")
+            .values()
+            .map(|s| s.info())
+            .collect();
         v.sort_by_key(|i| i.created_ms);
         v
     }
 
     pub fn kill(&self, id: &str) -> Result<()> {
-        self.get(id).ok_or_else(|| anyhow!("会话不存在: {id}"))?.kill()
+        self.get(id)
+            .ok_or_else(|| anyhow!("会话不存在: {id}"))?
+            .kill()
     }
 }
 
@@ -82,7 +92,10 @@ mod tests {
         assert_eq!(listed.len(), 1, "dead session remains listed");
         assert!(!listed[0].alive);
         let (data, _) = reg.get(&id).unwrap().snapshot();
-        assert!(data.windows(4).any(|w| w == b"tomb"), "scrollback survives kill");
+        assert!(
+            data.windows(4).any(|w| w == b"tomb"),
+            "scrollback survives kill"
+        );
     }
 
     #[tokio::test]

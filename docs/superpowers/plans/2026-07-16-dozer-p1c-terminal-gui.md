@@ -34,7 +34,7 @@
 - Consumes: P1b 全部既有接口。
 - Produces: 无新接口；产出两道常驻回归护栏，P1c 客户端依赖的"每字节恰好投递一次"不变量从此有测试守护。
 
-- [ ] **Step 1: 写失败/护栏测试（M3 不变量压力护栏）**
+- [x] **Step 1: 写失败/护栏测试（M3 不变量压力护栏）**
 
 ```rust
 // 追加到 crates/dozerd/tests/session_survival.rs
@@ -98,7 +98,7 @@ async fn attach_stream_offset_invariant_under_load() {
 }
 ```
 
-- [ ] **Step 2: 写 M4 越界回退测试**
+- [x] **Step 2: 写 M4 越界回退测试**
 
 ```rust
 /// M4（P1b 终审承接）：from_offset 已被环形缓冲逐出 → 回退全量快照。
@@ -142,7 +142,7 @@ async fn attach_from_offset_out_of_window_falls_back_to_full_snapshot() {
 Run: `cargo test -p dozerd --test session_survival`
 Expected: 新测试要么直接 PASS（护栏性质，实现已正确），要么暴露真 bug——**任一失败都不许放宽断言**，修 server 到绿为止。红灯/绿灯输出均贴报告。
 
-- [ ] **Step 3: --socket 缺值改报错（P1b M6 顺手清偿）**
+- [x] **Step 3: --socket 缺值改报错（P1b M6 顺手清偿）**
 
 `crates/dozerd/src/main.rs` 中 `"--socket"` 分支改为：
 
@@ -159,7 +159,7 @@ Expected: 新测试要么直接 PASS（护栏性质，实现已正确），要�
 Run: `./target/aarch64-apple-darwin/debug/dozerd --socket; echo exit=$?`（先 `cargo build -p dozerd`）
 Expected: stderr 提示 + `exit=2`。
 
-- [ ] **Step 4: 全量回归 + Commit**
+- [x] **Step 4: 全量回归 + Commit**
 
 Run: `cargo test --workspace 2>&1 | tail -1 && cargo clippy --all-targets 2>&1 | tail -1`
 Expected: 42 passed（40+2）、clippy 无警告。
@@ -193,7 +193,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `enum TermEvent { Output(Vec<u8>), Exited(Option<i32>), Lagged, Disconnected }`（offset 已由 daemon 水位过滤保证连续，客户端不再暴露）
   - 控制类方法每次开短连接（本地 UDS，开销可忽略），无共享状态。
 
-- [ ] **Step 1: 建 crate 与失败测试**
+- [x] **Step 1: 建 crate 与失败测试**
 
 ```toml
 # crates/dozer-client/Cargo.toml
@@ -280,7 +280,7 @@ async fn full_client_lifecycle() {
 Run: `cargo test -p dozer-client`
 Expected: FAIL（Client 未定义）——红灯输出贴报告。
 
-- [ ] **Step 2: 实现**
+- [x] **Step 2: 实现**
 
 ```rust
 // crates/dozer-client/src/lib.rs
@@ -411,7 +411,7 @@ impl Client {
 
 根 `Cargo.toml` 无需改（`crates/*` 通配）。
 
-- [ ] **Step 3: 跑测试 + Commit**
+- [x] **Step 3: 跑测试 + Commit**
 
 Run: `cargo test -p dozer-client`
 Expected: PASS。
@@ -440,7 +440,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `workspace::Workspace`（iced 程序状态）+ `workspace::Message` 枚举；`Workspace::view()` 输出四栏：左一项目栏 stub（240px，PANEL 底）/ 左二预览 stub（规则矩形，预留 P1d，显示"预览 · P1d"占位）/ 左三终端区（TERM_BG 底，本计划主战场）/ 左四 AI 栏 stub（280px）
   - main.rs 事件循环暴露挂钩点：`fn on_window_event(&mut self, event: &WindowEvent)`（Task 5/6 键盘与 resize 接线处）
 
-- [ ] **Step 1: 迁移壳**
+- [x] **Step 1: 迁移壳**
 
 以 `spike/iced-webview/src/main.rs` 为底本复制到 `dozer-app/src/main.rs`，删除全部 wry/webview/scene(wgsl shader) 相关代码，保留 Runner 状态机 + iced_wgpu 渲染管线；窗口属性改 `.with_title("Dozer").with_inner_size(LogicalSize::new(1440.0, 900.0))`；`controls.rs` 的角色由新建的 `workspace.rs` 承担。
 
@@ -502,12 +502,12 @@ impl Workspace {
 // 具体 helper 按 iced_widget 0.14 API 实现，验收标准见 Step 2。
 ```
 
-- [ ] **Step 2: 冒烟验收（实施者口径）**
+- [x] **Step 2: 冒烟验收（实施者口径）**
 
 Run: `cargo build -p dozer-app && (cargo run -p dozer-app &) && sleep 6 && pkill -f "debug/dozer$" ; true`
 Expected: 编译零警告；运行 6 秒无 panic。窗口视觉（四栏可辨、标题 Dozer、配色正确）留待 Task 7 用户人工验收。
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add crates/dozer-app
@@ -536,7 +536,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `cursor(&self) -> (usize /*col*/, usize /*row*/)`
   - ANSI 16 色映射到 ByteBoy2077 系（黑→TERM_BG、白→CREAM、绿→GREEN、红→RED、蓝→PURPLE、青→CYAN、黄→GOLD，亮色同映射；默认前景 BODY）——映射表放本模块，返回 RGB 三元组避免 iced 依赖渗入。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```rust
 // crates/dozer-app/src/term_model.rs 尾部
@@ -599,7 +599,7 @@ mod tests {
 Run: `cargo test -p dozer-app term_model`
 Expected: FAIL（类型未定义）——红灯留证。
 
-- [ ] **Step 2: 实现（对齐 alacritty_terminal 实际 API）**
+- [x] **Step 2: 实现（对齐 alacritty_terminal 实际 API）**
 
 实现语义锚点（以本地 registry 源码为准对齐，测试语义不变）：
 
@@ -641,7 +641,7 @@ ANSI 16 色映射表（完整值，禁止漂移）：
 | White | (0xFF,0xE5,0xB4) | | BrightWhite | (0xFF,0xF5,0xD4) |
 | 默认前景 | (0x9A,0xB4,0xC4) | | 默认背景 | None |
 
-- [ ] **Step 3: 跑测试 + Commit**
+- [x] **Step 3: 跑测试 + Commit**
 
 Run: `cargo test -p dozer-app`
 Expected: 5 个 PASS（含 CJK 宽字符）。
@@ -670,7 +670,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `keymap::ime_commit_to_bytes(text: &str) -> Vec<u8>`（UTF-8 原样）
   - `term_view::view(model: &TerminalModel, focused: bool) -> Element<Message>`——逐行 rich_text/span 渲染（等宽字体 iced Font::MONOSPACE），bold 加粗，光标格反色（focused 时实心 CREAM 底 TERM_BG 字，否则描边）；行数×列数由 pane 像素尺寸与字号（13px，行高 1.4）换算，换算函数 `term_view::grid_size(width_px, height_px) -> (cols, rows)` 公开且有单测
 
-- [ ] **Step 1: keymap 失败测试**
+- [x] **Step 1: keymap 失败测试**
 
 ```rust
 // crates/dozer-app/src/keymap.rs 尾部
@@ -723,11 +723,11 @@ fn grid_size_from_pixels() {
 Run: `cargo test -p dozer-app keymap term_view`
 Expected: FAIL——红灯留证。
 
-- [ ] **Step 2: 实现 keymap + term_view + 接线**
+- [x] **Step 2: 实现 keymap + term_view + 接线**
 
 keymap 按测试实现（纯函数，无外部状态）。term_view：每行一个 `rich_text`（或按 0.14 实际 API 用 `text` span 序列），行容器 `column`，等宽 `Font::MONOSPACE` 13px；光标绘制：把光标格的 span 换成反色。workspace 的终端 pane 调 `term_view::view`；main.rs 的 `WindowEvent::KeyboardInput`/`Ime::Commit` 在终端聚焦时经 keymap 转 bytes 发 `Message::TermInput(Vec<u8>)`（本任务先把 bytes 回灌 `TerminalModel::feed` 做本地 echo 验证渲染管线，daemon 接线在 Task 6）。
 
-- [ ] **Step 3: 跑测试 + 冒烟 + Commit**
+- [x] **Step 3: 跑测试 + 冒烟 + Commit**
 
 Run: `cargo test -p dozer-app && cargo clippy --all-targets 2>&1 | tail -1`
 Expected: 全绿（term_model 5 + keymap 5 + grid_size 1）。
@@ -758,7 +758,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - TermEvent::Exited → tab 状态点变 DIM + 尾行打印 `[会话已结束]`（CREAM on CARD）
   - tokio runtime 与 winit 循环共存：main 持 `tokio::runtime::Runtime`，事件流经 `runtime.spawn` + `std::sync::mpsc`（或 winit EventLoopProxy 自定义事件）送回 UI 线程——**禁止在 UI 线程 block_on 网络 IO**（attach 快照除外，容忍一次性 block_on）
 
-- [ ] **Step 1: 实现接线**（本任务为集成层，无新 headless 测试；正确性由 Task 1-5 的测试 + Task 7 人工验收覆盖）
+- [x] **Step 1: 实现接线**（本任务为集成层，无新 headless 测试；正确性由 Task 1-5 的测试 + Task 7 人工验收覆盖）
 
 实现要点（结构锚点）：
 
@@ -782,7 +782,7 @@ pub enum Message {
 
 main.rs：启动序列 = 连 daemon（失败则 spawn dozerd 重试）→ list → 逐会话 attach → 快照 feed → 事件流经 EventLoopProxy 送 `Message::TermOutput`。
 
-- [ ] **Step 2: 编译冒烟 + 手动脚本验证**
+- [x] **Step 2: 编译冒烟 + 手动脚本验证**
 
 Run: `cargo build -p dozer-app 2>&1 | tail -1 && cargo clippy --all-targets 2>&1 | tail -1`
 Expected: 零警告。
@@ -791,7 +791,7 @@ Run（有头环境下实施者可做的最强验证；无头则记录跳过，�
 `pkill -f dozerd; (cargo run -p dozer-app &); sleep 8; pgrep -f "debug/dozerd" && echo "✓ GUI 自动拉起了 dozerd"; pkill -f "debug/dozer"`
 Expected: dozerd 被 GUI 自动拉起。
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add crates/dozer-app
@@ -812,7 +812,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: 全部前序任务。
 - Produces: 用户签字的验收记录；P1d 的起点状态。
 
-- [ ] **Step 1: 用户人工验收（协调者陪同，逐项 ✓/✗）**
+- [x] **Step 1: 用户人工验收（协调者陪同，逐项 ✓/✗）**
 
 ```markdown
 # P1c 人工验收清单（用户实机执行）
@@ -826,7 +826,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 8. 体感：滚动输出（`cat` 大文件）不卡顿
 ```
 
-- [ ] **Step 2: 结果落档 + 规格回填 + Commit**
+- [x] **Step 2: 结果落档 + 规格回填 + Commit**
 
 验收记录写入 `docs/superpowers/specs/2026-07-16-p1c-acceptance.md`（含 ✗ 项与处置）；规格 §3 需求 1、4 条目末尾追加"P1c 达成（<日期>），验收记录见 specs/2026-07-16-p1c-acceptance.md"。
 

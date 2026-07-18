@@ -9,4 +9,13 @@ path = "src/main.rs"
 
 [dependencies]
 dozer-core = { path = "../dozer-core" }
-iced = { version = "0.14", features = ["tokio"] }
+dozer-client = { path = "../dozer-client" }
+tokio.workspace = true
+iced_winit = "0.14"
+iced_wgpu = { version = "0.14", default-features = true }
+iced_widget = { version = "0.14", features = ["wgpu", "canvas"] }
+winit = "0.30"
+futures = { version = "0.3", features = ["thread-pool"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+alacritty_terminal.workspace = true

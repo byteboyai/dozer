@@ -14,23 +14,59 @@ pub struct SessionInfo {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
     ListSessions,
-    CreateSession { name: String, command: String, args: Vec<String>, cwd: String, cols: u16, rows: u16 },
-    Attach { session_id: String, from_offset: u64 },
-    Write { session_id: String, data_b64: String },
-    Resize { session_id: String, cols: u16, rows: u16 },
-    Kill { session_id: String },
+    CreateSession {
+        name: String,
+        command: String,
+        args: Vec<String>,
+        cwd: String,
+        cols: u16,
+        rows: u16,
+    },
+    Attach {
+        session_id: String,
+        from_offset: u64,
+    },
+    Write {
+        session_id: String,
+        data_b64: String,
+    },
+    Resize {
+        session_id: String,
+        cols: u16,
+        rows: u16,
+    },
+    Kill {
+        session_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Reply {
-    Sessions { sessions: Vec<SessionInfo> },
-    Created { session: SessionInfo },
-    Attached { session_id: String, snapshot_b64: String, next_offset: u64 },
-    Output { session_id: String, data_b64: String, offset: u64 },
-    Exited { session_id: String, code: Option<i32> },
+    Sessions {
+        sessions: Vec<SessionInfo>,
+    },
+    Created {
+        session: SessionInfo,
+    },
+    Attached {
+        session_id: String,
+        snapshot_b64: String,
+        next_offset: u64,
+    },
+    Output {
+        session_id: String,
+        data_b64: String,
+        offset: u64,
+    },
+    Exited {
+        session_id: String,
+        code: Option<i32>,
+    },
     Ok,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 pub fn encode_line<T: Serialize>(value: &T) -> String {
