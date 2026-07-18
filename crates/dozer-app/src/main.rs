@@ -1,3 +1,4 @@
+mod assets;
 mod fonts;
 mod keymap;
 mod preview;
