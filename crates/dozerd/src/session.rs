@@ -72,6 +72,19 @@ impl Session {
         cmd.args(&spec.args);
         cmd.cwd(&spec.cwd);
         cmd.env("DOZER_SESSION_ID", &id);
+        // zsh 会话注入 OSC 7/133 发射端（spec P1e D2；失败仅降级不阻断 spawn）
+        if crate::shell_integration::should_inject(&spec.command) {
+            match crate::shell_integration::ensure_zdotdir() {
+                Ok(wrapper) => {
+                    if let Ok(orig) = std::env::var("ZDOTDIR") {
+                        cmd.env("DOZER_ORIG_ZDOTDIR", orig);
+                    }
+                    cmd.env("DOZER_ZDOTDIR_WRAPPER", &wrapper);
+                    cmd.env("ZDOTDIR", &wrapper);
+                }
+                Err(e) => tracing::warn!("shell 集成落盘失败，跳过注入: {e}"),
+            }
+        }
         // 没有 TERM 时很多 shell 行编辑器（readline/zle）退化成极简模式，
         // 方向键历史、颜色等一律不可用；COLORTERM=truecolor 让识别它的
         // 程序知道可以用 24-bit 真彩色而不是退化到 256 色。
@@ -284,6 +297,33 @@ mod tests {
             "buffer should contain TERM/COLORTERM values set by Session::spawn"
         );
         s.kill().unwrap();
+    }
+
+    #[tokio::test]
+    async fn zsh_session_gets_zdotdir_injected() {
+        let s = Session::spawn(SessionSpec {
+            name: "t".into(),
+            command: "/bin/zsh".into(),
+            args: vec!["-c".into(), "echo zd=$ZDOTDIR; sleep 5".into()],
+            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+            cols: 80,
+            rows: 24,
+        })
+        .unwrap();
+        assert!(
+            wait_contains(&s, b"zd=").await,
+            "zsh 会话应有输出（zd= 行）"
+        );
+        let text = String::from_utf8_lossy(&s.snapshot().0).into_owned();
+        assert!(text.contains("zdotdir"), "ZDOTDIR 应指向包装目录: {text}");
+        let _ = s.kill();
+    }
+
+    #[tokio::test]
+    async fn non_zsh_session_has_no_zdotdir() {
+        let s = Session::spawn(spec("echo zd=[$ZDOTDIR]; sleep 5")).unwrap();
+        assert!(wait_contains(&s, b"zd=[]").await, "非 zsh 不注入 ZDOTDIR");
+        let _ = s.kill();
     }
 
     #[tokio::test]
