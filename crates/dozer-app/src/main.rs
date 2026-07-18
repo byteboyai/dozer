@@ -1,6 +1,7 @@
 mod assets;
 mod fonts;
 mod keymap;
+mod osc;
 mod preview;
 mod term_model;
 mod term_view;

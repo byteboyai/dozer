@@ -18,6 +18,7 @@
 //!   把 `Message` 送回 UI 线程；`main.rs` 的 `ApplicationHandler::user_event`
 //!   收到后调用 `workspace.update(..)` 并请求重绘。反方向（UI → tokio）
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
+use crate::osc::{OscEvent, OscScanner};
 use crate::preview::{AddrTarget, PreviewPane, WebviewSpec};
 use crate::term_model::TerminalModel;
 use crate::term_view;
@@ -28,7 +29,7 @@ use iced_widget::core::{Border, Color, Element, Length};
 use iced_widget::{button, column, container, row, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
@@ -155,6 +156,13 @@ pub struct SessionTab {
     /// 会话内 agent 的最新状态（hook 事件驱动；初值来自
     /// `SessionInfo.agent_state`，晚 attach 也能恢复现状）。
     pub agent_state: AgentState,
+    /// OSC 扫描器（每 tab 独立，序列可跨 chunk）。
+    osc: OscScanner,
+    /// OSC 7 上报的当前目录；tab 标题优先显示其 basename。
+    pub cwd: Option<PathBuf>,
+    /// OSC 133;D 上报的最近命令退出码；非零时终端栏红字提示；
+    /// 下一条命令开始（133;C）时清除。
+    pub last_exit: Option<i32>,
     /// 稳定 id，`Message::TermOutput`/`SessionExited` 用它路由，不受
     /// tab 增删导致的 vec 位置变化影响。
     tab_id: usize,
@@ -162,6 +170,19 @@ pub struct SessionTab {
     /// 这个任务是 `mpsc::UnboundedReceiver<TermEvent>` 的唯一持有者，
     /// 任务被中断即意味着 receiver 被 drop，也就是规格里说的"detach"。
     forwarder: tokio::task::JoinHandle<()>,
+}
+
+impl SessionTab {
+    /// 把一段会话输出送进 OSC 扫描器并落地状态（观察式，不改写字节）。
+    fn ingest_osc(&mut self, bytes: &[u8]) {
+        for ev in self.osc.feed(bytes) {
+            match ev {
+                OscEvent::Cwd(p) => self.cwd = Some(p),
+                OscEvent::CmdStart => self.last_exit = None,
+                OscEvent::CmdExit(code) => self.last_exit = Some(code),
+            }
+        }
+    }
 }
 
 pub struct Workspace {
@@ -220,7 +241,13 @@ impl Workspace {
                                 alive: true,
                                 tab_id,
                                 forwarder,
+                                osc: OscScanner::new(),
+                                cwd: None,
+                                last_exit: None,
                             });
+                            if let Some(t) = tabs.last_mut() {
+                                t.ingest_osc(&snapshot);
+                            }
                         }
                         Err(e) => {
                             tracing::warn!(session = %info.id, "attach 失败，跳过该会话恢复: {e}");
@@ -292,6 +319,7 @@ impl Workspace {
                 };
                 // 实时输出可能含设备查询（DSR/DA 等），应答必须写回 PTY
                 // ——atuin/claude 等 TUI 依赖它（此前丢弃导致探测超时）。
+                tab.ingest_osc(&bytes);
                 let responses = tab.model.feed(&bytes);
                 let alive = tab.alive;
                 let id = tab.info.id.clone();
@@ -492,7 +520,13 @@ impl Workspace {
             alive: true,
             tab_id,
             forwarder,
+            osc: OscScanner::new(),
+            cwd: None,
+            last_exit: None,
         });
+        if let Some(t) = self.tabs.last_mut() {
+            t.ingest_osc(&snapshot);
+        }
         self.active = self.tabs.len() - 1;
     }
 
@@ -757,6 +791,15 @@ fn terminal_pane(
         content = content.push(text(format!("⚠ {err}")).size(12).color(theme::RED));
     }
 
+    // OSC 133;D 的最近命令非零退出码提示（下一条命令开始时消失）。
+    if let Some(tab) = ws.tabs.get(ws.active) {
+        if let Some(code) = tab.last_exit {
+            if code != 0 {
+                content = content.push(text(format!("exit {code}")).size(11).color(theme::RED));
+            }
+        }
+    }
+
     content = content.push(active_tab_view(ws));
 
     container(content.spacing(4).padding(8))
@@ -802,6 +845,17 @@ fn tab_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
     row(items).spacing(4).into()
 }
 
+/// tab 标题：OSC 7 的 cwd basename 优先，无 cwd 回落会话名。
+fn tab_title(cwd: Option<&Path>, fallback: &str) -> String {
+    match cwd {
+        Some(p) => p
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| p.to_string_lossy().into_owned()),
+        None => fallback.to_string(),
+    }
+}
+
 /// tab 上的 agent 状态胶囊：Idle/死会话不出胶囊；配色语义——绿=运行、
 /// 紫蓝=待输入、金=回合结束（金是甲方动作专属色：该出手了）。
 fn agent_badge(state: AgentState, alive: bool) -> Option<(&'static str, Color)> {
@@ -826,7 +880,9 @@ fn tab_item(
     let dot_color = if tab.alive { theme::GREEN } else { theme::DIM };
     let mut label = row![
         text("●").size(10).color(dot_color),
-        text(tab.info.name.clone()).size(12).color(theme::CREAM),
+        text(tab_title(tab.cwd.as_deref(), &tab.info.name))
+            .size(12)
+            .color(theme::CREAM),
     ]
     .spacing(4);
     if let Some((badge, color)) = agent_badge(tab.agent_state, tab.alive) {
@@ -889,6 +945,14 @@ mod tests {
     fn preview_content_bounds_never_negative() {
         let (_, _, w, h) = preview_content_bounds(100.0, 50.0);
         assert!(w >= 0.0 && h >= 0.0);
+    }
+
+    #[test]
+    fn tab_title_prefers_cwd_basename() {
+        use std::path::Path;
+        assert_eq!(tab_title(Some(Path::new("/Users/c/proj")), "shell"), "proj");
+        assert_eq!(tab_title(Some(Path::new("/")), "shell"), "/");
+        assert_eq!(tab_title(None, "shell"), "shell");
     }
 
     #[test]
