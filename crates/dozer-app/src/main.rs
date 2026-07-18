@@ -1,5 +1,6 @@
 mod fonts;
 mod keymap;
+mod preview;
 mod term_model;
 mod term_view;
 mod theme;
