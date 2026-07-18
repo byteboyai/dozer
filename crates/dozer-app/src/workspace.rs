@@ -18,6 +18,7 @@
 //!   把 `Message` 送回 UI 线程；`main.rs` 的 `ApplicationHandler::user_event`
 //!   收到后调用 `workspace.update(..)` 并请求重绘。反方向（UI → tokio）
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
+use crate::preview::{AddrTarget, PreviewPane, WebviewSpec};
 use crate::term_model::TerminalModel;
 use crate::term_view;
 use crate::theme;
@@ -26,7 +27,9 @@ use dozer_core::protocol::SessionInfo;
 use iced_widget::core::{Border, Color, Element, Length};
 use iced_widget::{button, column, container, row, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
@@ -47,6 +50,22 @@ pub const AI_COL_WIDTH: f32 = 280.0;
 /// 取整，差几像素不影响可用性，差太多也只是终端网格偏保守/偏宽松）。
 const CHROME_WIDTH_PX: f32 = 16.0; // 左右 padding(8*2)
 const CHROME_HEIGHT_PX: f32 = 16.0 + 8.0 + 22.0 + 30.0; // 上下 padding + 2 处 spacing + 表头行 + tab 栏行
+
+/// 左二内容区上方的 chrome 高度:pane 上内边距 8 + 表头行 22 + tab 栏 30
+/// + 地址栏 30 + 三处 spacing 4*3。与终端 pane 的 CHROME 同为估算值,
+///   差几像素只影响 webview 与边框的贴合度,不影响可用性。
+const PREVIEW_CHROME_TOP_PX: f32 = 8.0 + 22.0 + 30.0 + 30.0 + 12.0;
+
+/// 窗口逻辑尺寸 → 左二内容区矩形(逻辑像素 x/y/w/h)。列宽公式与
+/// `terminal_pane_pixel_size` 同源:左一/左四固定宽,预览与终端均分 Fill。
+pub fn preview_content_bounds(window_width: f32, window_height: f32) -> (f32, f32, f32, f32) {
+    let fill_width = (window_width - PROJECT_COL_WIDTH - AI_COL_WIDTH).max(0.0);
+    let x = PROJECT_COL_WIDTH + 8.0;
+    let y = PREVIEW_CHROME_TOP_PX;
+    let w = (fill_width / 2.0 - 16.0).max(0.0);
+    let h = (window_height - y - 8.0).max(0.0);
+    (x, y, w, h)
+}
 
 /// 窗口整体逻辑像素尺寸 → 终端 pane 的可用像素尺寸。项目栏/AI 栏固定宽度，
 /// 预览栏与终端栏都是 `Length::Fill`，iced 的 `Row` 默认按等权
@@ -99,6 +118,31 @@ pub enum Message {
     /// ⌘V 粘贴剪贴板文本：按会话的 bracketed paste 模式决定是否包裹
     /// `ESC[200~`/`ESC[201~` 后写入 daemon。
     TermPaste(String),
+    /// 预览:打开本地文件为新 tab(路径已由入口侧确认存在).
+    PreviewOpenPath(PathBuf),
+    /// 预览:打开 URL 为新网页 tab.
+    PreviewOpenUrl(String),
+    /// 预览:切换 tab(vec 位置).
+    PreviewSelectTab(usize),
+    /// 预览:关闭 tab(vec 位置).
+    PreviewCloseTab(usize),
+    /// 预览:点击地址栏,进入编辑态(此后键盘输入路由到地址栏).
+    PreviewAddrClick,
+    /// 预览:地址栏编辑事件(main.rs 键盘拦截层翻译后送入).
+    PreviewAddrEvent(AddrEvent),
+    /// 预览:"打开文件…"按钮 → rfd 原生选择器(main.rs 侧执行,选中后
+    /// 回送 PreviewOpenPath).
+    PreviewPickFile,
+}
+
+/// 地址栏编辑事件:由 main.rs 的键盘拦截层在 `preview_addr_editing()`
+/// 为真时翻译产生(字符/退格/回车/Esc),不经过 keymap 的 PTY 字节翻译.
+#[derive(Debug, Clone)]
+pub enum AddrEvent {
+    Text(String),
+    Backspace,
+    Submit,
+    Cancel,
 }
 
 /// 一个 tab 对应一个 daemon 会话。
@@ -135,6 +179,11 @@ pub struct Workspace {
     term_focused: bool,
     /// daemon 连接失败，或某次会话操作失败时的错误文案。
     daemon_error: Option<String>,
+    /// 预览域状态机(P1d).
+    preview: PreviewPane,
+    /// `dozer://flyfish/__file__` 端点的文件白名单;与 main.rs 的协议
+    /// 闭包共享(Arc),打开文件时插入.
+    allowed_files: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
 impl Workspace {
@@ -186,6 +235,8 @@ impl Workspace {
             rows: DEFAULT_ROWS,
             term_focused: true,
             daemon_error: None,
+            preview: PreviewPane::default(),
+            allowed_files: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -209,6 +260,8 @@ impl Workspace {
             rows: DEFAULT_ROWS,
             term_focused: true,
             daemon_error: Some(message),
+            preview: PreviewPane::default(),
+            allowed_files: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -290,6 +343,34 @@ impl Workspace {
                 };
                 self.send_input(bytes);
             }
+            Message::PreviewOpenPath(path) => {
+                if !path.is_file() {
+                    self.daemon_error = Some(format!("文件不存在或不可读: {}", path.display()));
+                    return;
+                }
+                self.allowed_files
+                    .lock()
+                    .expect("allowed_files 锁")
+                    .insert(path.clone());
+                self.preview.open_path(path);
+            }
+            Message::PreviewOpenUrl(url) => {
+                self.preview.open_url(url);
+            }
+            Message::PreviewSelectTab(idx) => self.preview.select(idx),
+            Message::PreviewCloseTab(idx) => self.preview.close(idx),
+            Message::PreviewAddrClick => self.preview.addr_begin(),
+            Message::PreviewAddrEvent(ev) => match ev {
+                AddrEvent::Text(s) => self.preview.addr_text(&s),
+                AddrEvent::Backspace => self.preview.addr_backspace(),
+                AddrEvent::Cancel => self.preview.addr_cancel(),
+                AddrEvent::Submit => match self.preview.addr_submit() {
+                    Some(AddrTarget::File(path)) => self.update(Message::PreviewOpenPath(path)),
+                    Some(AddrTarget::Url(url)) => self.update(Message::PreviewOpenUrl(url)),
+                    None => {}
+                },
+            },
+            Message::PreviewPickFile => {} // 副作用在 main.rs(rfd 模态需窗口句柄侧执行)
         }
     }
 
@@ -419,6 +500,22 @@ impl Workspace {
         }
     }
 
+    /// 地址栏是否在编辑态(main.rs 据此路由键盘:真 → AddrEvent,
+    /// 假 → keymap → PTY).
+    pub fn preview_addr_editing(&self) -> bool {
+        self.preview.addr_editing()
+    }
+
+    /// 当前应存在的 webview 清单(main.rs 差集同步).
+    pub fn preview_desired(&self) -> Vec<WebviewSpec> {
+        self.preview.desired_webviews()
+    }
+
+    /// 协议闭包共享的文件白名单句柄.
+    pub fn allowed_files(&self) -> Arc<Mutex<HashSet<PathBuf>>> {
+        Arc::clone(&self.allowed_files)
+    }
+
     /// 当前激活 tab 是否处于 application cursor mode（DECCKM）。
     /// `main.rs` 的 `on_window_event` 用它决定方向键发 CSI 还是 SS3 序列
     /// （见 `keymap::key_to_bytes` 的 `app_cursor` 参数）。没有任何 tab
@@ -434,7 +531,7 @@ impl Workspace {
         &self,
     ) -> iced_widget::core::Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
         let col1 = pane("项目 · P1e", PROJECT_COL_WIDTH, theme::PANEL);
-        let col2 = pane("预览 · P1d", 0.0, theme::PANEL); // 0=FILL
+        let col2 = preview_pane(self);
         let col3 = terminal_pane(self);
         let col4 = pane("AI · P1e", AI_COL_WIDTH, theme::PANEL);
         row![col1, col2, col3, col4].into()
@@ -504,6 +601,113 @@ fn pane(
         .height(Length::Fill)
         .style(move |_theme: &iced_widget::Theme| container::Style {
             background: Some(background.into()),
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// 左二预览 pane:表头 + tab 栏 + 地址栏;内容区本体是 wry webview
+/// 子视图(不在 iced 树里),这里只留占位背景——无 tab 时显示提示文案。
+fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let header = text("预览 · P1d").size(13).color(theme::CREAM);
+
+    // tab 栏:每 tab 选择按钮 + 关闭 ×,尾接"打开文件…".
+    let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = ws
+        .preview
+        .tabs()
+        .iter()
+        .enumerate()
+        .map(|(idx, tab)| {
+            let active = idx == ws.preview.active_idx();
+            let select = button(text(tab.title.clone()).size(12).color(theme::CREAM))
+                .on_press(Message::PreviewSelectTab(idx))
+                .style(move |_t, _s| button::Style {
+                    background: Some(if active { theme::CARD } else { theme::PANEL }.into()),
+                    text_color: theme::CREAM,
+                    border: Border {
+                        color: if active { theme::CREAM } else { theme::BORDER },
+                        width: 1.0,
+                        radius: 2.0.into(),
+                    },
+                    ..button::Style::default()
+                });
+            let close = button(text("×").size(12).color(theme::DIM))
+                .on_press(Message::PreviewCloseTab(idx))
+                .style(|_t, _s| button::Style {
+                    background: None,
+                    text_color: theme::DIM,
+                    ..button::Style::default()
+                });
+            row![select, close].spacing(2).into()
+        })
+        .collect();
+    items.push(
+        button(text("打开文件…").size(12).color(theme::CREAM))
+            .on_press(Message::PreviewPickFile)
+            .style(|_t, _s| button::Style {
+                background: Some(theme::CARD.into()),
+                text_color: theme::CREAM,
+                border: Border {
+                    color: theme::BORDER,
+                    width: 1.0,
+                    radius: 2.0.into(),
+                },
+                ..button::Style::default()
+            })
+            .into(),
+    );
+    let tab_bar = row(items).spacing(4);
+
+    // 地址栏:自绘(非 text_input——键盘路由走 main.rs 拦截层,与终端
+    // 的键盘模型保持同一套显式焦点语义).编辑态 GOLD 描边 + 光标条.
+    let editing = ws.preview.addr_editing();
+    let addr_text = if editing {
+        format!("{}▏", ws.preview.addr_buffer())
+    } else {
+        "输入 localhost 端口、URL 或文件路径…".to_string()
+    };
+    let addr =
+        button(
+            text(addr_text)
+                .size(12)
+                .color(if editing { theme::CREAM } else { theme::DIM }),
+        )
+        .on_press(Message::PreviewAddrClick)
+        .width(Length::Fill)
+        .style(move |_t, _s| button::Style {
+            background: Some(theme::TERM_BG.into()),
+            text_color: theme::CREAM,
+            border: Border {
+                color: if editing { theme::GOLD } else { theme::BORDER },
+                width: 1.0,
+                radius: 2.0.into(),
+            },
+            ..button::Style::default()
+        });
+
+    let mut content = column![header, tab_bar, addr].spacing(4);
+    if ws.preview.tabs().is_empty() {
+        content = content.push(
+            container(
+                text("暂无预览——打开文件或输入地址")
+                    .size(13)
+                    .color(theme::DIM),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill),
+        );
+    }
+
+    container(content.padding(8))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(move |_theme: &iced_widget::Theme| container::Style {
+            background: Some(theme::PANEL.into()),
             border: Border {
                 color: theme::BORDER,
                 width: 1.0,
@@ -609,7 +813,6 @@ fn tab_item(
     row![select, close].spacing(2).into()
 }
 
-/// 当前激活 tab 的终端网格；一个 tab 都没有时给个提示文案。
 fn active_tab_view(
     ws: &Workspace,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
@@ -619,5 +822,28 @@ fn active_tab_view(
             .width(Length::Fill)
             .height(Length::Fill)
             .into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_content_bounds_is_inside_col2() {
+        let (x, y, w, h) = preview_content_bounds(1440.0, 900.0);
+        assert!(
+            x > PROJECT_COL_WIDTH && x < PROJECT_COL_WIDTH + 20.0,
+            "x={x}"
+        );
+        assert!((420.0..=470.0).contains(&w), "w={w}");
+        assert!(y > 60.0 && y < 130.0, "y={y}(表头+tab 栏+地址栏之下)");
+        assert!(h > 700.0 && h < 900.0 - y, "h={h}");
+    }
+
+    #[test]
+    fn preview_content_bounds_never_negative() {
+        let (_, _, w, h) = preview_content_bounds(100.0, 50.0);
+        assert!(w >= 0.0 && h >= 0.0);
     }
 }
