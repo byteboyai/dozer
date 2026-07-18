@@ -18,6 +18,7 @@
 //!   把 `Message` 送回 UI 线程；`main.rs` 的 `ApplicationHandler::user_event`
 //!   收到后调用 `workspace.update(..)` 并请求重绘。反方向（UI → tokio）
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
+use crate::delivery;
 use crate::osc::{OscEvent, OscScanner};
 use crate::preview::{AddrTarget, PreviewPane, WebviewSpec};
 use crate::term_model::TerminalModel;
@@ -92,6 +93,10 @@ pub enum Message {
     SessionExited(usize),
     /// attach 流转发来的 agent 状态变更（`usize` 是 tab 稳定 id）。
     AgentStateChanged(usize, AgentState),
+    /// TurnEnded 触发的交付检测结果（tab_id, 是否有待验收交付）。
+    DeliveryChecked(usize, bool),
+    /// 点击横幅"进入验收"（tab_id 为来源会话）。
+    AcceptanceOpen(usize),
     /// 切换当前显示的 tab（这里的 `usize` 是 vec 位置——用户点击的是
     /// "屏幕上第几个 tab"，跟稳定 id 是两回事）。
     SelectTab(usize),
@@ -164,6 +169,10 @@ pub struct SessionTab {
     /// OSC 133;D 上报的最近命令退出码；非零时终端栏红字提示；
     /// 下一条命令开始（133;C）时清除。
     pub last_exit: Option<i32>,
+    /// TurnEnded 检测出的"交付待验收"标记（spec P1f D3）。
+    pub delivery_pending: bool,
+    /// 上一次 TurnEnded 时的 HEAD（无沉淀 ref 时的比对基线）。
+    pub last_turn_head: Option<String>,
     /// 稳定 id，`Message::TermOutput`/`SessionExited` 用它路由，不受
     /// tab 增删导致的 vec 位置变化影响。
     tab_id: usize,
@@ -246,6 +255,8 @@ impl Workspace {
                                 osc: OscScanner::new(),
                                 cwd: None,
                                 last_exit: None,
+                                delivery_pending: false,
+                                last_turn_head: None,
                             });
                             if let Some(t) = tabs.last_mut() {
                                 t.ingest_osc(&snapshot);
@@ -344,6 +355,48 @@ impl Workspace {
             Message::AgentStateChanged(tab_id, state) => {
                 if let Some(tab) = self.tab_by_id_mut(tab_id) {
                     tab.agent_state = state;
+                    if state == AgentState::TurnEnded {
+                        // git 检测不许在 UI 线程跑：丢 tokio,结果经 proxy 回来
+                        let cwd = PathBuf::from(tab.info.cwd.clone());
+                        let last_turn = tab.last_turn_head.clone();
+                        let proxy = self.proxy.clone();
+                        self.handle.spawn(async move {
+                            let pending = tokio::task::spawn_blocking(move || {
+                                let repo = delivery::repo_root(&cwd)?; // 非 git 仓库:不参与闭环
+                                let dirty = delivery::is_dirty(&repo);
+                                let head = delivery::head_commit(&repo);
+                                let accepted = delivery::last_accepted(&repo).map(|(_, c)| c);
+                                Some(delivery::delivery_pending(
+                                    dirty,
+                                    head.as_deref(),
+                                    accepted.as_deref(),
+                                    last_turn.as_deref(),
+                                ))
+                            })
+                            .await
+                            .ok()
+                            .flatten();
+                            if let Some(pending) = pending {
+                                let _ = proxy.send_event(Message::DeliveryChecked(tab_id, pending));
+                            }
+                        });
+                    }
+                }
+            }
+            Message::DeliveryChecked(tab_id, pending) => {
+                if let Some(tab) = self.tab_by_id_mut(tab_id) {
+                    tab.delivery_pending = pending;
+                    // 记录本回合 HEAD 供下回合比对（同步读一次可容忍:仅 rev-parse）
+                    let cwd = PathBuf::from(tab.info.cwd.clone());
+                    if let Some(repo) = delivery::repo_root(&cwd) {
+                        tab.last_turn_head = delivery::head_commit(&repo);
+                    }
+                }
+            }
+            Message::AcceptanceOpen(tab_id) => {
+                // Task 5 接真实打开;本任务先灭横幅占位,保证按钮可点不 panic
+                if let Some(tab) = self.tab_by_id_mut(tab_id) {
+                    tab.delivery_pending = false;
                 }
             }
             Message::SelectTab(idx) => {
@@ -535,6 +588,8 @@ impl Workspace {
             osc: OscScanner::new(),
             cwd: None,
             last_exit: None,
+            delivery_pending: false,
+            last_turn_head: None,
         });
         if let Some(t) = self.tabs.last_mut() {
             t.ingest_osc(&snapshot);
@@ -810,6 +865,29 @@ fn terminal_pane(
         content = content.push(text(format!("exit {code}")).size(11).color(theme::RED));
     }
 
+    // 交付横幅（spec P1f D3）:金字金框,CTA 进入验收
+    if let Some(tab) = ws.tabs.get(ws.active)
+        && let Some(text_str) = banner_text(tab.delivery_pending)
+    {
+        let banner = row![
+            text(text_str).size(12).color(theme::GOLD),
+            button(text("进入验收").size(12).color(theme::GOLD))
+                .on_press(Message::AcceptanceOpen(tab.tab_id))
+                .style(|_t, _s| button::Style {
+                    background: Some(theme::CARD.into()),
+                    text_color: theme::GOLD,
+                    border: Border {
+                        color: theme::GOLD,
+                        width: 1.0,
+                        radius: 2.0.into()
+                    },
+                    ..button::Style::default()
+                }),
+        ]
+        .spacing(8);
+        content = content.push(banner);
+    }
+
     content = content.push(active_tab_view(ws));
 
     container(content.spacing(4).padding(8))
@@ -853,6 +931,11 @@ fn tab_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
     );
 
     row(items).spacing(4).into()
+}
+
+/// 交付横幅文案：pending 才有（金色,甲方动作）。
+fn banner_text(pending: bool) -> Option<&'static str> {
+    pending.then_some("交付待验收")
 }
 
 /// tab 标题：OSC 7 的 cwd basename 优先，无 cwd 回落会话名。
@@ -955,6 +1038,12 @@ mod tests {
     fn preview_content_bounds_never_negative() {
         let (_, _, w, h) = preview_content_bounds(100.0, 50.0);
         assert!(w >= 0.0 && h >= 0.0);
+    }
+
+    #[test]
+    fn banner_text_for_pending() {
+        assert_eq!(banner_text(true), Some("交付待验收"));
+        assert_eq!(banner_text(false), None);
     }
 
     #[test]

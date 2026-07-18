@@ -114,6 +114,34 @@ impl Client {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_acceptance(
+        &self,
+        repo: &str,
+        goal: &str,
+        criteria_checked: &[String],
+        verdict: &str,
+        comment: &str,
+        ref_name: &str,
+        ts_ms: u64,
+    ) -> Result<()> {
+        match self
+            .roundtrip(&Request::RecordAcceptance {
+                repo: repo.into(),
+                goal: goal.into(),
+                criteria_checked: criteria_checked.to_vec(),
+                verdict: verdict.into(),
+                comment: comment.into(),
+                ref_name: ref_name.into(),
+                ts_ms,
+            })
+            .await?
+        {
+            Reply::Ok => Ok(()),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
     pub async fn attach(
         &self,
         id: &str,
