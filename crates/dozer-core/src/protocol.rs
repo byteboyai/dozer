@@ -1,5 +1,16 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+/// agent 会话状态（hook 事件驱动的四态机；spec P1e D6）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentState {
+    #[default]
+    Idle,
+    Running,
+    AwaitingInput,
+    TurnEnded,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: String,
@@ -8,6 +19,9 @@ pub struct SessionInfo {
     pub cwd: String,
     pub alive: bool,
     pub created_ms: u64,
+    /// 会话内 agent 的最新状态；旧协议帧无此字段时回落 Idle。
+    #[serde(default)]
+    pub agent_state: AgentState,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -38,6 +52,13 @@ pub enum Request {
     Kill {
         session_id: String,
     },
+    /// dozer-hook 单向上报的 agent hook 事件；data 原样透传（P1f 消费）。
+    HookEvent {
+        session_id: String,
+        event: String,
+        ts_ms: u64,
+        data: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -66,6 +87,13 @@ pub enum Reply {
     Ok,
     Error {
         message: String,
+    },
+    /// hook 事件引起的状态变更，随 attach 流广播给该会话的订阅者。
+    AgentEvent {
+        session_id: String,
+        state: AgentState,
+        event: String,
+        ts_ms: u64,
     },
 }
 
@@ -113,5 +141,39 @@ mod tests {
     #[test]
     fn decode_rejects_garbage() {
         assert!(decode_line::<Request>("not json").is_err());
+    }
+
+    #[test]
+    fn hook_event_roundtrips() {
+        let req = Request::HookEvent {
+            session_id: "s1".into(),
+            event: "Stop".into(),
+            ts_ms: 123,
+            data: serde_json::json!({"transcript_path": "/tmp/t.jsonl"}),
+        };
+        let line = encode_line(&req);
+        let back: Request = decode_line(line.trim()).unwrap();
+        assert_eq!(back, req);
+    }
+
+    #[test]
+    fn agent_event_reply_tags_snake_case() {
+        let line = encode_line(&Reply::AgentEvent {
+            session_id: "s1".into(),
+            state: AgentState::AwaitingInput,
+            event: "Notification".into(),
+            ts_ms: 5,
+        });
+        assert!(line.contains(r#""type":"agent_event""#));
+        assert!(line.contains(r#""state":"awaiting_input""#));
+    }
+
+    #[test]
+    fn old_session_info_without_agent_state_decodes_as_idle() {
+        // P1b-d 时代的 SessionInfo JSON（无 agent_state 字段）必须可解
+        let old =
+            r#"{"id":"a","name":"n","command":"/bin/sh","cwd":"/tmp","alive":true,"created_ms":1}"#;
+        let info: SessionInfo = decode_line(old).unwrap();
+        assert_eq!(info.agent_state, AgentState::Idle);
     }
 }

@@ -102,6 +102,8 @@ async fn handle_conn(stream: UnixStream, registry: Arc<SessionRegistry>) -> Resu
                             Ok(()) => Reply::Ok,
                             Err(e) => Reply::Error { message: e.to_string() },
                         },
+                        // T2 替换为真实实现（状态映射 + 广播）
+                        Request::HookEvent { .. } => Reply::Ok,
                     },
                 };
                 w.write_all(encode_line(&reply).as_bytes()).await?;

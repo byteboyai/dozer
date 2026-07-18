@@ -1,6 +1,6 @@
 use crate::ring::{RingBuffer, SCROLLBACK_CAP};
 use anyhow::{Context, Result};
-use dozer_core::protocol::SessionInfo;
+use dozer_core::protocol::{AgentState, SessionInfo};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -124,6 +124,7 @@ impl Session {
             cwd: self.spec.cwd.clone(),
             alive: self.alive.load(Ordering::SeqCst),
             created_ms: self.created_ms,
+            agent_state: AgentState::default(),
         }
     }
 
