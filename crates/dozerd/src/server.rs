@@ -36,6 +36,18 @@ pub async fn serve(socket: &Path, registry: Arc<SessionRegistry>) -> Result<()> 
     }
 }
 
+/// spec P1e D6：hook 事件名 → 四态映射；未知事件不改状态。
+pub fn agent_state_for(event: &str) -> Option<dozer_core::protocol::AgentState> {
+    use dozer_core::protocol::AgentState::*;
+    match event {
+        "UserPromptSubmit" | "PreToolUse" | "PostToolUse" => Some(Running),
+        "Notification" => Some(AwaitingInput),
+        "Stop" => Some(TurnEnded),
+        "SessionStart" | "SessionEnd" => Some(Idle),
+        _ => None,
+    }
+}
+
 async fn handle_conn(stream: UnixStream, registry: Arc<SessionRegistry>) -> Result<()> {
     let (r, mut w) = stream.into_split();
     let mut lines = BufReader::new(r).lines();
@@ -102,8 +114,18 @@ async fn handle_conn(stream: UnixStream, registry: Arc<SessionRegistry>) -> Resu
                             Ok(()) => Reply::Ok,
                             Err(e) => Reply::Error { message: e.to_string() },
                         },
-                        // T2 替换为真实实现（状态映射 + 广播）
-                        Request::HookEvent { .. } => Reply::Ok,
+                        Request::HookEvent { session_id, event, ts_ms, data: _ } => {
+                            match registry.get(&session_id) {
+                                None => {
+                                    tracing::debug!(%session_id, %event, "hook 事件的会话不存在，丢弃");
+                                }
+                                Some(s) => match agent_state_for(&event) {
+                                    Some(state) => s.set_agent_state(state, &event, ts_ms),
+                                    None => tracing::debug!(%event, "未知 hook 事件，不改状态"),
+                                },
+                            }
+                            Reply::Ok
+                        }
                     },
                 };
                 w.write_all(encode_line(&reply).as_bytes()).await?;
@@ -114,6 +136,7 @@ async fn handle_conn(stream: UnixStream, registry: Arc<SessionRegistry>) -> Resu
                     None => std::future::pending().await,
                 }
             }, if sub.is_some() => {
+                // 注：Agent 事件不参与 sent_until 水位——水位只治 Output 字节流。
                 let (sid, _) = sub.as_ref().expect("sub checked");
                 let sid = sid.clone();
                 match ev {
@@ -139,6 +162,10 @@ async fn handle_conn(stream: UnixStream, registry: Arc<SessionRegistry>) -> Resu
                             sent_until = offset;
                         }
                     }
+                    Ok(SessionEvent::Agent { state, event, ts_ms }) => {
+                        let reply = Reply::AgentEvent { session_id: sid, state, event, ts_ms };
+                        w.write_all(encode_line(&reply).as_bytes()).await?;
+                    }
                     Ok(SessionEvent::Exited { code }) => {
                         let reply = Reply::Exited { session_id: sid, code };
                         w.write_all(encode_line(&reply).as_bytes()).await?;
@@ -155,4 +182,22 @@ async fn handle_conn(stream: UnixStream, registry: Arc<SessionRegistry>) -> Resu
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_state_mapping_matches_spec_d6() {
+        use dozer_core::protocol::AgentState::*;
+        assert_eq!(agent_state_for("UserPromptSubmit"), Some(Running));
+        assert_eq!(agent_state_for("PreToolUse"), Some(Running));
+        assert_eq!(agent_state_for("PostToolUse"), Some(Running));
+        assert_eq!(agent_state_for("Notification"), Some(AwaitingInput));
+        assert_eq!(agent_state_for("Stop"), Some(TurnEnded));
+        assert_eq!(agent_state_for("SessionStart"), Some(Idle));
+        assert_eq!(agent_state_for("SessionEnd"), Some(Idle));
+        assert_eq!(agent_state_for("SomethingNew"), None);
+    }
 }

@@ -9,8 +9,19 @@ use tokio::sync::broadcast;
 
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
-    Output { data: Vec<u8>, offset: u64 },
-    Exited { code: Option<i32> },
+    Output {
+        data: Vec<u8>,
+        offset: u64,
+    },
+    Exited {
+        code: Option<i32>,
+    },
+    /// hook 事件驱动的 agent 状态变更（P1e）。
+    Agent {
+        state: AgentState,
+        event: String,
+        ts_ms: u64,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -28,6 +39,7 @@ pub struct Session {
     spec: SessionSpec,
     created_ms: u64,
     alive: Arc<AtomicBool>,
+    agent_state: Mutex<AgentState>,
     buffer: Arc<Mutex<RingBuffer>>,
     tx: broadcast::Sender<SessionEvent>,
     writer: Mutex<Box<dyn Write + Send>>,
@@ -53,9 +65,13 @@ impl Session {
                 pixel_height: 0,
             })
             .context("openpty")?;
+        // id 提前生成：spawn 前注入 DOZER_SESSION_ID，hook 进程（claude
+        // 在会话 shell 里手动跑也一样）经环境继承拿到归属（spec P1e D4）。
+        let id = uuid::Uuid::new_v4().to_string();
         let mut cmd = CommandBuilder::new(&spec.command);
         cmd.args(&spec.args);
         cmd.cwd(&spec.cwd);
+        cmd.env("DOZER_SESSION_ID", &id);
         // 没有 TERM 时很多 shell 行编辑器（readline/zle）退化成极简模式，
         // 方向键历史、颜色等一律不可用；COLORTERM=truecolor 让识别它的
         // 程序知道可以用 24-bit 真彩色而不是退化到 256 色。
@@ -104,9 +120,10 @@ impl Session {
         }
 
         Ok(Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            id,
             created_ms: now_ms(),
             alive,
+            agent_state: Mutex::new(AgentState::default()),
             buffer,
             tx,
             writer: Mutex::new(writer),
@@ -124,8 +141,18 @@ impl Session {
             cwd: self.spec.cwd.clone(),
             alive: self.alive.load(Ordering::SeqCst),
             created_ms: self.created_ms,
-            agent_state: AgentState::default(),
+            agent_state: *self.agent_state.lock().expect("agent_state lock"),
         }
+    }
+
+    /// hook 事件驱动的状态更新：记最新态 + 广播给本会话订阅者。
+    pub fn set_agent_state(&self, state: AgentState, event: &str, ts_ms: u64) {
+        *self.agent_state.lock().expect("agent_state lock") = state;
+        let _ = self.tx.send(SessionEvent::Agent {
+            state,
+            event: event.to_string(),
+            ts_ms,
+        });
     }
 
     pub fn id(&self) -> &str {
@@ -257,6 +284,45 @@ mod tests {
             "buffer should contain TERM/COLORTERM values set by Session::spawn"
         );
         s.kill().unwrap();
+    }
+
+    #[tokio::test]
+    async fn spawn_injects_dozer_session_id_env() {
+        let s = Session::spawn(spec("echo id=$DOZER_SESSION_ID; sleep 5")).unwrap();
+        let needle = format!("id={}", s.id());
+        assert!(
+            wait_contains(&s, needle.as_bytes()).await,
+            "PTY 输出应含注入的会话 id"
+        );
+        let _ = s.kill();
+    }
+
+    #[tokio::test]
+    async fn set_agent_state_updates_info_and_broadcasts() {
+        let s = Session::spawn(spec("sleep 5")).unwrap();
+        let mut rx = s.subscribe();
+        s.set_agent_state(AgentState::Running, "UserPromptSubmit", 42);
+        assert_eq!(s.info().agent_state, AgentState::Running);
+        loop {
+            match tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                .await
+                .expect("agent 事件应在 5s 内到达")
+                .unwrap()
+            {
+                SessionEvent::Agent {
+                    state,
+                    event,
+                    ts_ms,
+                } => {
+                    assert_eq!(state, AgentState::Running);
+                    assert_eq!(event, "UserPromptSubmit");
+                    assert_eq!(ts_ms, 42);
+                    break;
+                }
+                _ => continue, // PTY 启动输出等无关事件
+            }
+        }
+        let _ = s.kill();
     }
 
     #[tokio::test]
