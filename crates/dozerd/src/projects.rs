@@ -26,6 +26,20 @@ fn basename(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
+/// 严格单调的"活跃时间戳"：至少比现有最大值大 1。毫秒时钟分辨率下同一
+/// 毫秒内的多次激活也能有确定的先后（否则 `ORDER BY last_active_ms` 平局）。
+fn next_active_stamp(conn: &Connection) -> u64 {
+    let max_existing: u64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(last_active_ms), 0) FROM projects",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|v| v as u64)
+        .unwrap_or(0);
+    now_ms().max(max_existing + 1)
+}
+
 impl ProjectStore {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
@@ -53,7 +67,7 @@ impl ProjectStore {
     /// upsert（按 path）+ 刷新活跃时间 + 置为当前项目，返回该项目。
     pub fn open_and_activate(&self, path: &str) -> Result<ProjectInfo> {
         let conn = self.conn.lock().expect("db lock");
-        let ts = now_ms();
+        let ts = next_active_stamp(&conn);
         conn.execute(
             "INSERT INTO projects (path, name, last_active_ms) VALUES (?1, ?2, ?3)
              ON CONFLICT(path) DO UPDATE SET last_active_ms = ?3",
@@ -88,9 +102,10 @@ impl ProjectStore {
              ON CONFLICT(key) DO UPDATE SET value = ?1",
             [id.to_string()],
         )?;
+        let ts = next_active_stamp(&conn);
         conn.execute(
             "UPDATE projects SET last_active_ms = ?1 WHERE id = ?2",
-            rusqlite::params![now_ms(), id],
+            rusqlite::params![ts, id],
         )?;
         Ok(())
     }
