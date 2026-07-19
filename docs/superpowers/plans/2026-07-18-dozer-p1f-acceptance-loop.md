@@ -1373,7 +1373,7 @@ cargo build -p dozer-app && ./target/aarch64-apple-darwin/debug/dozer & sleep 8 
 
 Expected: 全绿零警告；app 存活 8 秒。**注意：验收前 `pkill dozerd` 重启新 daemon**（P1e 教训：旧 daemon 版本偏斜）。
 
-- [ ] **Step 2: 用户人工验收（dogfooding 本仓；逐项 ✓/✗，验收权在用户）**
+- [x] **Step 2: 用户人工验收（dogfooding 本仓；逐项 ✓/✗，验收权在用户）**
 
 ```markdown
 # P1f 人工验收清单（用户实机执行）
@@ -1387,7 +1387,7 @@ Expected: 全绿零警告；app 存活 8 秒。**注意：验收前 `pkill dozer
 8. `sqlite3 ~/Library/Application\ Support/ai.byteboy.dozer/dozer.db 'select verdict,ref_name,acceptor from acceptances'` → 见 accepted 记录,acceptor=user
 ```
 
-- [ ] **Step 3: 结果落档 + Commit**
+- [x] **Step 3: 结果落档 + Commit**
 
 验收记录写入 `docs/superpowers/specs/2026-07-18-p1f-acceptance.md`（沿用 P1c/d/e 格式：逐项结果表 + 反馈修复流水）；全部通过后规格 §3 需求 3 追加"P1f 达成（<日期>，验收闭环薄片：goal.md 定标 + 交付横幅 + 验收 tab + git ref 沉淀 + SQLite 记录；S0/S0b/S2 全屏态/S3 演进史视图/diff 渲染/机器预判随后续阶段），验收记录见 specs/2026-07-18-p1f-acceptance.md"。
 
