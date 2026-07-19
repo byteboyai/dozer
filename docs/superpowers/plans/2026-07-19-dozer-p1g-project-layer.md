@@ -1091,7 +1091,7 @@ cargo build -p dozer-app && ./target/aarch64-apple-darwin/debug/dozer & sleep 8 
 
 Expected: 全绿零警告；app 存活 8 秒。**验收前 `pkill dozerd` 重启新 daemon**（版本偏斜教训）。
 
-- [ ] **Step 2: 用户人工验收（逐项 ✓/✗，验收权在用户）**
+- [x] **Step 2: 用户人工验收（逐项 ✓/✗，验收权在用户）**
 
 ```markdown
 # P1g 人工验收清单（用户实机执行）
@@ -1105,7 +1105,7 @@ Expected: 全绿零警告；app 存活 8 秒。**验收前 `pkill dozerd` 重启
 8. 打开一个非 git 目录 → 文件树可用，分支区显示 `—`，不崩
 ```
 
-- [ ] **Step 3: 结果落档 + Commit**
+- [x] **Step 3: 结果落档 + Commit**
 
 验收记录写入 `docs/superpowers/specs/2026-07-19-p1g-acceptance.md`（沿用格式：逐项结果表 + 反馈修复流水）；全部通过后规格 §7 项目栏段落追加"P1g 达成（<日期>，最小可用项目层：项目对象/文件树/git 状态/点文件进预览/重锚终端与验收到项目；H0 独立页/组件视图/doctor 随后续），验收记录见 specs/2026-07-19-p1g-acceptance.md"。
 
