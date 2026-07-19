@@ -2,6 +2,7 @@
 //! 全部同步阻塞——调用方负责放进 tokio 任务，不许在 UI 线程直呼。
 
 use anyhow::{Context, Result, bail};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -120,6 +121,52 @@ pub fn accept(repo: &Path) -> Result<u32> {
     Ok(n)
 }
 
+/// 文件树装饰用的 git 状态（P1h）。粗粒度三态,不分暂存/工作区。
+// 过渡期:T2 workspace 接线前无调用方。
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileStatus {
+    Modified,
+    New,
+    Deleted,
+}
+
+/// `git status --porcelain` → 绝对路径 → 状态。非 git / 失败返回空。
+/// 码映射:`??`/含 `A`→New;含 `D`→Deleted;其余→Modified。重命名取箭头后的新名。
+#[allow(dead_code)]
+pub fn file_statuses(repo: &Path) -> HashMap<PathBuf, FileStatus> {
+    let mut map = HashMap::new();
+    let Some(out) = git(repo, &["status", "--porcelain"]) else {
+        return map;
+    };
+    for line in out.lines() {
+        if line.len() < 4 {
+            continue;
+        }
+        let code = &line[..2];
+        let rest = &line[3..];
+        let path = rest.rsplit(" -> ").next().unwrap_or(rest).trim();
+        if path.is_empty() {
+            continue;
+        }
+        let status = if code == "??" || code.contains('A') {
+            FileStatus::New
+        } else if code.contains('D') {
+            FileStatus::Deleted
+        } else {
+            FileStatus::Modified
+        };
+        map.insert(repo.join(path), status);
+    }
+    map
+}
+
+/// 目录（含深层）下是否有任一变更路径（rollup 判定）。
+#[allow(dead_code)]
+pub fn dir_has_change(dir: &Path, changed: &[PathBuf]) -> bool {
+    changed.iter().any(|c| c.starts_with(dir))
+}
+
 /// 当前分支名（`git rev-parse --abbrev-ref HEAD`）；非 git / 无提交返回 None。
 pub fn branch(repo: &Path) -> Option<String> {
     let out = git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
@@ -228,6 +275,50 @@ mod tests {
         assert_eq!(a.removed, Some(0));
         let n = ch.iter().find(|c| c.path == "new.txt").expect("new.txt");
         assert_eq!(n.added, None, "未跟踪无行数");
+    }
+
+    #[test]
+    fn file_statuses_maps_modified_new_deleted() {
+        let (_d, repo) = mkrepo(); // 含 a.txt 一次提交
+        std::fs::write(repo.join("a.txt"), "changed\n").unwrap(); // 改
+        std::fs::write(repo.join("new.txt"), "n\n").unwrap(); // 未跟踪
+        // 造一个已跟踪再删的:先加提交 c,再删
+        std::fs::write(repo.join("c.txt"), "c\n").unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .unwrap();
+        };
+        git(&["add", "c.txt"]);
+        git(&["commit", "-qm", "c"]);
+        std::fs::remove_file(repo.join("c.txt")).unwrap(); // 删已跟踪
+
+        let m = file_statuses(&repo);
+        assert_eq!(m.get(&repo.join("a.txt")), Some(&FileStatus::Modified));
+        assert_eq!(m.get(&repo.join("new.txt")), Some(&FileStatus::New));
+        assert_eq!(m.get(&repo.join("c.txt")), Some(&FileStatus::Deleted));
+        assert!(
+            file_statuses(std::path::Path::new("/")).is_empty(),
+            "非 git 空"
+        );
+    }
+
+    #[test]
+    fn dir_has_change_prefix_match() {
+        use std::path::PathBuf;
+        let changed = vec![PathBuf::from("/r/src/a.rs"), PathBuf::from("/r/README.md")];
+        assert!(dir_has_change(std::path::Path::new("/r/src"), &changed));
+        assert!(
+            dir_has_change(std::path::Path::new("/r"), &changed),
+            "深层也命中"
+        );
+        assert!(!dir_has_change(std::path::Path::new("/r/docs"), &changed));
     }
 
     #[test]
