@@ -34,7 +34,7 @@
   - `parse_goal(md: &str) -> Option<Goal>`（全空白 → None）
   - `goal_path(repo: &std::path::Path) -> std::path::PathBuf`（`repo/.dozer/goal.md`）
 
-- [ ] **Step 1: 写失败测试**（`goal.rs` 尾部）
+- [x] **Step 1: 写失败测试**（`goal.rs` 尾部）
 
 ```rust
 #[cfg(test)]
@@ -72,12 +72,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app goal`
 Expected: 编译错误（模块/函数不存在）。
 
-- [ ] **Step 3: 最小实现**
+- [x] **Step 3: 最小实现**
 
 ```rust
 //! `.dozer/goal.md` 定标文件解析（spec P1f D2）：
@@ -120,12 +120,12 @@ pub fn parse_goal(md: &str) -> Option<Goal> {
 
 （main.rs 的 `mod osc;` 后加一行 `mod goal;`。）
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app goal`
 Expected: 4 测试通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app
@@ -154,7 +154,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `accept(repo: &Path) -> anyhow::Result<u32>`（脏→Err；写 `refs/dozer/accepted/<n>`）
   - `delivery_pending(dirty: bool, head: Option<&str>, accepted: Option<&str>, last_turn_head: Option<&str>) -> bool`（纯函数，spec D3 精确定义）
 
-- [ ] **Step 1: 写失败测试**（`delivery.rs` 尾部；用真 git 仓库）
+- [x] **Step 1: 写失败测试**（`delivery.rs` 尾部；用真 git 仓库）
 
 ```rust
 #[cfg(test)]
@@ -250,12 +250,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app delivery`
 Expected: 编译错误（模块不存在）。
 
-- [ ] **Step 3: 最小实现**
+- [x] **Step 3: 最小实现**
 
 ```rust
 //! 交付检测与沉淀：git CLI 薄封装（spec P1f D3/D4/D6）。
@@ -391,12 +391,12 @@ pub fn delivery_pending(
 
 （main.rs 加 `mod delivery;`；`Cargo.toml` dev-dependencies 加 `tempfile = "3"`。）
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app delivery`
 Expected: 4 测试通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app
@@ -427,7 +427,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `AcceptanceRecord { repo, goal, criteria_checked: Vec<String>, verdict, comment, ref_name, acceptor, ts_ms }`（String/u64 字段）
   - `dozerd::server::serve(socket, registry, store: Arc<AcceptanceStore>)`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `protocol.rs` tests 追加：
 
@@ -512,12 +512,12 @@ async fn record_acceptance_persists() {
 
 （dozerd `[dev-dependencies]` 加 `tempfile = "3"`。）
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-core && cargo test -p dozerd`
 Expected: 编译错误（消息变体、acceptance 模块、serve 签名）。
 
-- [ ] **Step 3: 最小实现**
+- [x] **Step 3: 最小实现**
 
 `protocol.rs` `Request` 追加：
 
@@ -644,12 +644,12 @@ pub async fn serve(
 
 （`serve(&socket, registry)` 改 `serve(&socket, registry, store)`；`session_survival.rs` 与 `hook_events.rs` 原有 serve 调用点补 store 参数——各测试用 tempdir 库文件。）
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-core && cargo test -p dozerd`
 Expected: 全绿（含新增 3 测试）。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-core crates/dozerd Cargo.lock
@@ -675,7 +675,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `SessionTab.delivery_pending: bool`、`SessionTab.last_turn_head: Option<String>`
   - 终端栏金横幅（active tab pending 时显示）
 
-- [ ] **Step 1: 写失败测试**（`workspace.rs` tests 追加；横幅判定逻辑已在 delivery_pending 覆盖，这里测 update 分支的状态落地——Workspace 无法 headless 构造，退而测纯函数 `banner_text`）
+- [x] **Step 1: 写失败测试**（`workspace.rs` tests 追加；横幅判定逻辑已在 delivery_pending 覆盖，这里测 update 分支的状态落地——Workspace 无法 headless 构造，退而测纯函数 `banner_text`）
 
 ```rust
     #[test]
@@ -685,12 +685,12 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app banner`
 Expected: 编译错误（`banner_text` 未定义）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `dozer-client/src/lib.rs` `impl Client` 追加：
 
@@ -836,12 +836,12 @@ fn banner_text(pending: bool) -> Option<&'static str> {
 
 **注**：`DeliveryChecked` 里的同步 `repo_root`/`head_commit` 是两次本地 `git rev-parse`（毫秒级），在 UI 线程可容忍；若实测卡顿改为把 head 一并随消息带回。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app && cargo test -p dozer-client`
 Expected: 全绿。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app crates/dozer-client
@@ -866,7 +866,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `Workspace::acceptance_comment_editing(&self) -> bool`（main.rs 键盘路由用）
   - `Message::{AcceptanceLoaded(...), AcceptanceToggle(usize), AcceptanceCommentClick, AcceptanceCommentEvent(AddrEvent), AcceptanceAccept, AcceptanceReject, AcceptanceDone(Result<u32, String>)}`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `preview.rs` tests 追加：
 
@@ -907,12 +907,12 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app acceptance criteria file_change`
 Expected: 编译错误（`open_acceptance`/`criteria_line`/`file_change_line` 未定义）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `preview.rs`：
 
@@ -1337,12 +1337,12 @@ fn file_change_line(fc: &FileChange) -> String {
             }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app`
 Expected: 全绿（preview 1 新测 + workspace 2 新测 + 既有）。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app
@@ -1364,7 +1364,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: 全部前序任务。
 - Produces: 用户签字的验收记录；P1g 起点状态。
 
-- [ ] **Step 1: 全量回归 + 冒烟**
+- [x] **Step 1: 全量回归 + 冒烟**
 
 ```bash
 cargo test && cargo clippy --all-targets && cargo fmt --check
