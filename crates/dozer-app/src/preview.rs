@@ -129,6 +129,14 @@ impl PreviewPane {
             .is_some_and(|t| t.kind == TabKind::Acceptance)
     }
 
+    /// 当前激活 tab 若是 webview(文件/网页)则返回其 id(=webview 池的 key)。
+    pub fn active_webview_id(&self) -> Option<usize> {
+        self.tabs.get(self.active).and_then(|t| match t.kind {
+            TabKind::File(_) | TabKind::Web { .. } => Some(t.id),
+            TabKind::Acceptance => None,
+        })
+    }
+
     pub fn select(&mut self, idx: usize) {
         if idx < self.tabs.len() {
             self.active = idx;

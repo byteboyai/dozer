@@ -70,6 +70,14 @@ pub fn preview_content_bounds(window_width: f32, window_height: f32) -> (f32, f3
     (x, y, w, h)
 }
 
+/// 逻辑 x 是否落在左二预览列内（含 chrome 与内容区）。焦点路由用:
+/// 点击落在预览列 → 键盘交给 webview;落在别处 → 交回窗口(终端)。
+pub fn is_in_preview_column(x: f32, window_width: f32) -> bool {
+    let fill_width = (window_width - PROJECT_COL_WIDTH - AI_COL_WIDTH).max(0.0);
+    let preview_end = PROJECT_COL_WIDTH + fill_width / 2.0;
+    x >= PROJECT_COL_WIDTH && x < preview_end
+}
+
 /// 窗口整体逻辑像素尺寸 → 终端 pane 的可用像素尺寸。项目栏/AI 栏固定宽度，
 /// 预览栏与终端栏都是 `Length::Fill`，iced 的 `Row` 默认按等权
 /// `FillPortion(1)` 均分剩余空间，因此终端栏宽度是剩余空间的一半。
@@ -789,6 +797,23 @@ impl Workspace {
         self.acceptance.as_ref().is_some_and(|a| a.comment_editing)
     }
 
+    /// 当前激活预览 tab 若是 webview(文件/网页)则返回其 id,供 main.rs
+    /// 焦点路由取句柄;验收 tab/无 tab 返回 None。
+    pub fn active_preview_webview_id(&self) -> Option<usize> {
+        self.preview.active_webview_id()
+    }
+
+    /// 点击输入框外时退出所有自绘输入的编辑态(验收反馈:失焦回正常态)。
+    /// 地址栏取消(清空半输入),意见框仅退出编辑(保留已输入文字)。
+    pub fn blur_inputs(&mut self) {
+        if self.preview.addr_editing() {
+            self.preview.addr_cancel();
+        }
+        if let Some(acc) = &mut self.acceptance {
+            acc.comment_editing = false;
+        }
+    }
+
     /// 通过·沉淀：git update-ref + 落库（脏工作区在 delivery::accept 内被拒）。
     fn acceptance_accept(&mut self) {
         let Some(acc) = &mut self.acceptance else {
@@ -1453,6 +1478,16 @@ mod tests {
             removed: None,
         };
         assert_eq!(file_change_line(&un), "new.txt  (新)");
+    }
+
+    #[test]
+    fn preview_column_hit_test() {
+        // 窗口宽 1440:项目栏 240 + AI 栏 280,剩 920 均分,预览列 [240,700)
+        assert!(!is_in_preview_column(100.0, 1440.0), "落在项目栏");
+        assert!(is_in_preview_column(240.0, 1440.0), "预览列左边界");
+        assert!(is_in_preview_column(699.0, 1440.0), "预览列内");
+        assert!(!is_in_preview_column(700.0, 1440.0), "已进终端列");
+        assert!(!is_in_preview_column(1200.0, 1440.0), "终端列");
     }
 
     #[test]

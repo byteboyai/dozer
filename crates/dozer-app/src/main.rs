@@ -183,7 +183,19 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             /// 预览 webview 池:tab id → (句柄, 当前已加载 URL)。句柄只在
             /// 本事件环存取(spike 约束 2);URL 缓存用于导航去重。
             webviews: std::collections::HashMap<usize, (wry::WebView, String)>,
+            /// 最近一次光标物理位置(CursorMoved 更新),鼠标点击时用于命中测试。
+            cursor_phys: winit::dpi::PhysicalPosition<f64>,
+            /// 待应用的焦点意图(点击/消息设置,sync_previews 之后统一 apply,
+            /// 确保新建 webview 已入池)。
+            pending_focus: Option<FocusIntent>,
         },
+    }
+
+    /// 点击/消息后决定键盘焦点归谁:预览 webview(⌘C 走原生复制)或窗口(终端)。
+    #[derive(Clone, Copy)]
+    enum FocusIntent {
+        Preview,
+        Terminal,
     }
 
     impl Runner {
@@ -202,11 +214,39 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 window,
                 modifiers,
                 clipboard,
+                cursor_phys,
+                pending_focus,
                 ..
             } = self
             else {
                 return;
             };
+
+            // 光标位置跟踪 + 点击焦点路由（验收反馈 2/失焦回正常态）:
+            // 任一左键点击先退出所有自绘输入编辑态(点回输入框会被 iced
+            // 随后的 AddrClick/CommentClick 重新进入);再按落点决定键盘归谁。
+            match event {
+                WindowEvent::CursorMoved { position, .. } => {
+                    *cursor_phys = *position;
+                }
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: winit::event::MouseButton::Left,
+                    ..
+                } => {
+                    workspace.blur_inputs();
+                    let scale = window.scale_factor();
+                    let logical_x = (cursor_phys.x / scale) as f32;
+                    let logical_w = (window.inner_size().width as f64 / scale) as f32;
+                    *pending_focus = Some(if workspace::is_in_preview_column(logical_x, logical_w) {
+                        FocusIntent::Preview
+                    } else {
+                        FocusIntent::Terminal
+                    });
+                    window.request_redraw();
+                }
+                _ => {}
+            }
 
             // ⌘ 组合键是应用级快捷键，一律不进 PTY（此前 ⌘C 会把裸 "c"
             // 漏写进终端）。⌘C 复制当前选区；⌘V 粘贴剪贴板。
@@ -385,11 +425,25 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         /// 阻塞可接受)。选中 → 直接转成 `PreviewOpenPath` 送 workspace。
         fn dispatch(&mut self, message: Message) {
             let Self::Ready {
-                workspace, window, ..
+                workspace,
+                window,
+                pending_focus,
+                ..
             } = self
             else {
                 return;
             };
+            // 打开/切到预览 tab → 键盘焦点跟去预览(否则 ⌘C 复制的是终端选区)。
+            // PickFile 选中后也走 PreviewOpenPath,一并归预览。
+            if matches!(
+                message,
+                Message::PreviewOpenPath(_)
+                    | Message::PreviewOpenUrl(_)
+                    | Message::PreviewSelectTab(_)
+                    | Message::PreviewPickFile
+            ) {
+                *pending_focus = Some(FocusIntent::Preview);
+            }
             match message {
                 Message::PreviewPickFile => {
                     if let Some(path) = rfd::FileDialog::new().pick_file() {
@@ -399,6 +453,36 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 other => workspace.update(other),
             }
             window.request_redraw();
+        }
+
+        /// sync_previews 之后统一应用焦点意图(此时新建 webview 已入池)。
+        /// Preview → 当前预览 webview 拿键盘(⌘C 原生复制);Terminal/无 webview
+        /// → 交回窗口(终端键盘)。
+        fn apply_pending_focus(&mut self) {
+            let Self::Ready {
+                workspace,
+                window,
+                webviews,
+                pending_focus,
+                ..
+            } = self
+            else {
+                return;
+            };
+            match pending_focus.take() {
+                Some(FocusIntent::Preview) => match workspace.active_preview_webview_id() {
+                    Some(id) => {
+                        if let Some((view, _)) = webviews.get(&id) {
+                            let _ = view.focus(); // 返回 Result,忽略
+                        } else {
+                            window.focus_window();
+                        }
+                    }
+                    None => window.focus_window(),
+                },
+                Some(FocusIntent::Terminal) => window.focus_window(),
+                None => {}
+            }
         }
     }
 
@@ -575,6 +659,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     viewport,
                     resized: false,
                     webviews: std::collections::HashMap::new(),
+                    cursor_phys: winit::dpi::PhysicalPosition::new(0.0, 0.0),
+                    pending_focus: None,
                 };
             }
         }
@@ -592,6 +678,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             // `Self::Ready { .. }` 解构借用冲突）。
             self.dispatch(event);
             self.sync_previews();
+            self.apply_pending_focus();
         }
 
         fn window_event(
@@ -807,6 +894,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             // webview 池与期望清单对齐：tab 增删、resize、地址栏导航都可能
             // 改变期望清单，统一在这里收口，不必在每个改变点各调一次。
             self.sync_previews();
+            self.apply_pending_focus();
         }
     }
 
