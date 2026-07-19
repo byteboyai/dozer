@@ -803,6 +803,31 @@ impl Workspace {
         self.preview.active_webview_id()
     }
 
+    /// 当前文本光标的窗口逻辑坐标 `(x, y_底, 行高)`,给 main.rs 设 IME
+    /// 候选窗位置(让选词窗落在光标右下,而非窗口左上)。地址栏/意见框编辑
+    /// 态用预览列上部近似(iced 立即模式拿不到精确控件屏坐标);否则用终端
+    /// 光标——单元格尺寸由 pane 像素 ÷ 网格推出,不依赖字号常量。
+    pub fn ime_cursor_area(&self, window_w: f32, window_h: f32) -> (f32, f32, f32) {
+        if self.preview.addr_editing() || self.acceptance_comment_editing() {
+            return (PROJECT_COL_WIDTH + 12.0, PREVIEW_CHROME_TOP_PX, 20.0);
+        }
+        let (pane_w, pane_h) = terminal_pane_pixel_size(window_w, window_h);
+        let cell_w = pane_w / self.cols.max(1) as f32;
+        let line_h = pane_h / self.rows.max(1) as f32;
+        let fill_width = (window_w - PROJECT_COL_WIDTH - AI_COL_WIDTH).max(0.0);
+        let x0 = PROJECT_COL_WIDTH + fill_width / 2.0 + 8.0;
+        // 终端网格上方 chrome:上 padding 8 + 表头 22 + spacing 4 + tab 栏 30 + spacing 4
+        let y0 = 8.0 + 22.0 + 4.0 + 30.0 + 4.0;
+        let (col, row) = self
+            .tabs
+            .get(self.active)
+            .map(|t| t.model.cursor())
+            .unwrap_or((0, 0));
+        let x = x0 + col as f32 * cell_w;
+        let y = y0 + (row as f32 + 1.0) * line_h; // 光标格底部,候选窗落其下方
+        (x, y, line_h)
+    }
+
     /// 点击输入框外时退出所有自绘输入的编辑态(验收反馈:失焦回正常态)。
     /// 地址栏取消(清空半输入),意见框仅退出编辑(保留已输入文字)。
     pub fn blur_inputs(&mut self) {

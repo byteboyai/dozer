@@ -716,6 +716,19 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
                 match event {
                     WindowEvent::RedrawRequested => {
+                        // IME 候选窗跟随文本光标(否则默认落窗口左上角)。每帧
+                        // 更新,始终反映当前输入上下文(终端/地址栏/意见框)。
+                        {
+                            let scale = window.scale_factor();
+                            let size = window.inner_size();
+                            let (lw, lh) =
+                                (size.width as f32 / scale as f32, size.height as f32 / scale as f32);
+                            let (ix, iy, ih) = workspace.ime_cursor_area(lw, lh);
+                            window.set_ime_cursor_area(
+                                winit::dpi::LogicalPosition::new(ix, iy),
+                                winit::dpi::LogicalSize::new(1.0, ih),
+                            );
+                        }
                         if *resized {
                             let size = window.inner_size();
 
