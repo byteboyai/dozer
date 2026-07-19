@@ -18,7 +18,8 @@
 //!   把 `Message` 送回 UI 线程；`main.rs` 的 `ApplicationHandler::user_event`
 //!   收到后调用 `workspace.update(..)` 并请求重绘。反方向（UI → tokio）
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
-use crate::delivery;
+use crate::delivery::{self, FileChange};
+use crate::goal::{self, Goal};
 use crate::osc::{OscEvent, OscScanner};
 use crate::preview::{AddrTarget, PreviewPane, WebviewSpec};
 use crate::term_model::TerminalModel;
@@ -97,6 +98,20 @@ pub enum Message {
     DeliveryChecked(usize, bool),
     /// 点击横幅"进入验收"（tab_id 为来源会话）。
     AcceptanceOpen(usize),
+    /// 验收数据装载完成（repo, 来源 tab_id, goal, 变更清单）。
+    AcceptanceLoaded(PathBuf, usize, Option<Goal>, Vec<FileChange>),
+    /// 勾选/取消第 n 条标准。
+    AcceptanceToggle(usize),
+    /// 点击意见输入框进入编辑态。
+    AcceptanceCommentClick,
+    /// 意见输入事件（main.rs 键盘路由送入,复用 AddrEvent）。
+    AcceptanceCommentEvent(AddrEvent),
+    /// 点"通过·沉淀"。
+    AcceptanceAccept,
+    /// 点"打回并注回"。
+    AcceptanceReject,
+    /// 通过动作结果（Ok(版本号)/Err(红字文案)）。
+    AcceptanceDone(Result<u32, String>),
     /// 切换当前显示的 tab（这里的 `usize` 是 vec 位置——用户点击的是
     /// "屏幕上第几个 tab"，跟稳定 id 是两回事）。
     SelectTab(usize),
@@ -152,6 +167,21 @@ pub enum AddrEvent {
     Backspace,
     Submit,
     Cancel,
+}
+
+/// 验收 tab 的一次进行中验收（spec P1f D8）。
+pub struct AcceptanceView {
+    pub repo: PathBuf,
+    /// 来源会话 tab（打回意见注回目标）。
+    pub source_tab_id: usize,
+    pub goal: Option<Goal>,
+    pub changes: Vec<FileChange>,
+    pub checked: Vec<bool>,
+    pub comment: String,
+    pub comment_editing: bool,
+    pub error: Option<String>,
+    /// 通过后记录版本号（显示"已沉淀 v<n>"）。
+    pub accepted_version: Option<u32>,
 }
 
 /// 一个 tab 对应一个 daemon 会话。
@@ -223,6 +253,8 @@ pub struct Workspace {
     /// `dozer://flyfish/__file__` 端点的文件白名单;与 main.rs 的协议
     /// 闭包共享(Arc),打开文件时插入.
     allowed_files: Arc<Mutex<HashSet<PathBuf>>>,
+    /// 进行中的验收（验收 tab 内容;None=未打开）。
+    acceptance: Option<AcceptanceView>,
 }
 
 impl Workspace {
@@ -286,6 +318,7 @@ impl Workspace {
             preview: PreviewPane::default(),
             preview_error: None,
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
+            acceptance: None,
         }
     }
 
@@ -312,6 +345,7 @@ impl Workspace {
             preview: PreviewPane::default(),
             preview_error: None,
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
+            acceptance: None,
         }
     }
 
@@ -394,9 +428,76 @@ impl Workspace {
                 }
             }
             Message::AcceptanceOpen(tab_id) => {
-                // Task 5 接真实打开;本任务先灭横幅占位,保证按钮可点不 panic
-                if let Some(tab) = self.tab_by_id_mut(tab_id) {
-                    tab.delivery_pending = false;
+                let Some(tab) = self.tab_by_id_mut(tab_id) else {
+                    return;
+                };
+                tab.delivery_pending = false;
+                let cwd = PathBuf::from(tab.info.cwd.clone());
+                let proxy = self.proxy.clone();
+                self.handle.spawn(async move {
+                    let loaded = tokio::task::spawn_blocking(move || {
+                        let repo = delivery::repo_root(&cwd)?;
+                        let goal = std::fs::read_to_string(goal::goal_path(&repo))
+                            .ok()
+                            .and_then(|md| goal::parse_goal(&md));
+                        let changes = delivery::changes(&repo);
+                        Some((repo, goal, changes))
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+                    if let Some((repo, goal, changes)) = loaded {
+                        let _ = proxy
+                            .send_event(Message::AcceptanceLoaded(repo, tab_id, goal, changes));
+                    }
+                });
+            }
+            Message::AcceptanceLoaded(repo, source_tab_id, goal, changes) => {
+                let n = goal.as_ref().map(|g| g.criteria.len()).unwrap_or(0);
+                self.acceptance = Some(AcceptanceView {
+                    repo,
+                    source_tab_id,
+                    goal,
+                    changes,
+                    checked: vec![false; n],
+                    comment: String::new(),
+                    comment_editing: false,
+                    error: None,
+                    accepted_version: None,
+                });
+                self.preview.open_acceptance();
+            }
+            Message::AcceptanceToggle(i) => {
+                if let Some(acc) = &mut self.acceptance
+                    && let Some(c) = acc.checked.get_mut(i)
+                {
+                    *c = !*c;
+                }
+            }
+            Message::AcceptanceCommentClick => {
+                if let Some(acc) = &mut self.acceptance {
+                    acc.comment_editing = true;
+                }
+            }
+            Message::AcceptanceCommentEvent(ev) => {
+                if let Some(acc) = &mut self.acceptance {
+                    match ev {
+                        AddrEvent::Text(s) => acc.comment.push_str(&s),
+                        AddrEvent::Backspace => {
+                            acc.comment.pop();
+                        }
+                        AddrEvent::Submit | AddrEvent::Cancel => acc.comment_editing = false,
+                    }
+                }
+            }
+            Message::AcceptanceAccept => self.acceptance_accept(),
+            Message::AcceptanceReject => self.acceptance_reject(),
+            Message::AcceptanceDone(result) => {
+                if let Some(acc) = &mut self.acceptance {
+                    match result {
+                        Ok(n) => acc.accepted_version = Some(n),
+                        Err(e) => acc.error = Some(e),
+                    }
                 }
             }
             Message::SelectTab(idx) => {
@@ -628,6 +729,107 @@ impl Workspace {
         self.preview.addr_editing()
     }
 
+    /// 验收意见输入是否在编辑态（main.rs 键盘路由用）。
+    pub fn acceptance_comment_editing(&self) -> bool {
+        self.acceptance.as_ref().is_some_and(|a| a.comment_editing)
+    }
+
+    /// 通过·沉淀：git update-ref + 落库（脏工作区在 delivery::accept 内被拒）。
+    fn acceptance_accept(&mut self) {
+        let Some(acc) = &mut self.acceptance else {
+            return;
+        };
+        acc.error = None;
+        let repo = acc.repo.clone();
+        let goal_title = acc
+            .goal
+            .as_ref()
+            .map(|g| g.title.clone())
+            .unwrap_or_default();
+        let checked: Vec<String> = acc
+            .goal
+            .as_ref()
+            .map(|g| {
+                g.criteria
+                    .iter()
+                    .zip(&acc.checked)
+                    .filter(|(_, c)| **c)
+                    .map(|(s, _)| s.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let comment = acc.comment.clone();
+        let client = self.client.clone();
+        let proxy = self.proxy.clone();
+        self.handle.spawn(async move {
+            let repo2 = repo.clone();
+            let accepted = tokio::task::spawn_blocking(move || delivery::accept(&repo2)).await;
+            let result = match accepted {
+                Ok(Ok(n)) => {
+                    let ref_name = format!("{}{n}", delivery::ACCEPTED_REF_PREFIX);
+                    let ts_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    if let Err(e) = client
+                        .record_acceptance(
+                            &repo.to_string_lossy(),
+                            &goal_title,
+                            &checked,
+                            "accepted",
+                            &comment,
+                            &ref_name,
+                            ts_ms,
+                        )
+                        .await
+                    {
+                        // ref 已写成立（真相源）,库失败只提示（spec §3）
+                        Err(format!("已沉淀 v{n},但记录落库失败: {e}"))
+                    } else {
+                        Ok(n)
+                    }
+                }
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(e) => Err(format!("任务失败: {e}")),
+            };
+            let _ = proxy.send_event(Message::AcceptanceDone(result));
+        });
+    }
+
+    /// 打回并注回：意见 write 回来源会话 PTY，关验收 tab 回执行现场。
+    fn acceptance_reject(&mut self) {
+        let Some(acc) = &self.acceptance else {
+            return;
+        };
+        let comment = acc.comment.trim().to_string();
+        let source = acc.source_tab_id;
+        let target = self.tabs.iter().find(|t| t.tab_id == source);
+        let Some(tab) = target.filter(|t| t.alive) else {
+            if let Some(acc) = &mut self.acceptance {
+                acc.error = Some("会话已结束,意见无处可注".into());
+            }
+            return;
+        };
+        let id = tab.info.id.clone();
+        let client = self.client.clone();
+        let text_out = format!("[Dozer 验收打回] {comment}\n");
+        self.handle.spawn(async move {
+            if let Err(e) = client.write(&id, text_out.as_bytes()).await {
+                tracing::warn!("打回注回失败: {e}");
+            }
+        });
+        // 关验收 tab（打回后回执行现场）
+        if let Some(idx) = self
+            .preview
+            .tabs()
+            .iter()
+            .position(|t| t.kind == crate::preview::TabKind::Acceptance)
+        {
+            self.preview.close(idx);
+        }
+        self.acceptance = None;
+    }
+
     /// 当前应存在的 webview 清单(main.rs 差集同步).
     pub fn preview_desired(&self) -> Vec<WebviewSpec> {
         self.preview.desired_webviews()
@@ -734,6 +936,120 @@ fn pane(
         .into()
 }
 
+/// 验收 tab 内容（spec P1f D8）:目标 + 标准勾选 + 变更文件 + 意见 + 双动作。
+/// iced 直绘（验收 tab 激活时 webview 全隐藏，不抢层）。
+fn acceptance_content<'a>(
+    mut content: iced_widget::Column<'a, Message, iced_widget::Theme, iced_widget::Renderer>,
+    ws: &'a Workspace,
+) -> iced_widget::Column<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let Some(acc) = &ws.acceptance else {
+        return content;
+    };
+    if let Some(n) = acc.accepted_version {
+        return content.push(text(format!("✓ 已沉淀 v{n}")).size(14).color(theme::GOLD));
+    }
+    match &acc.goal {
+        Some(g) => {
+            content = content.push(text(g.title.clone()).size(14).color(theme::CREAM));
+            for (i, c) in g.criteria.iter().enumerate() {
+                let checked = acc.checked.get(i).copied().unwrap_or(false);
+                content = content.push(
+                    button(text(criteria_line(checked, c)).size(12).color(if checked {
+                        theme::GOLD
+                    } else {
+                        theme::BODY
+                    }))
+                    .on_press(Message::AcceptanceToggle(i))
+                    .style(|_t, _s| button::Style {
+                        background: None,
+                        text_color: theme::BODY,
+                        ..button::Style::default()
+                    }),
+                );
+            }
+        }
+        None => {
+            content = content.push(
+                text("未定标——先在仓库写 .dozer/goal.md（首行目标,\n- [ ] 列表为标准）")
+                    .size(12)
+                    .color(theme::DIM),
+            );
+        }
+    }
+    content = content.push(text("变更文件").size(12).color(theme::DIM));
+    for fc in &acc.changes {
+        let path = acc.repo.join(&fc.path);
+        content = content.push(
+            button(text(file_change_line(fc)).size(12).color(theme::CYAN))
+                .on_press(Message::PreviewOpenPath(path))
+                .style(|_t, _s| button::Style {
+                    background: None,
+                    text_color: theme::CYAN,
+                    ..button::Style::default()
+                }),
+        );
+    }
+    let editing = acc.comment_editing;
+    let comment_text = if editing {
+        format!("{}▏", acc.comment)
+    } else if acc.comment.is_empty() {
+        "验收意见…（打回时注回会话）".to_string()
+    } else {
+        acc.comment.clone()
+    };
+    content = content.push(
+        button(
+            text(comment_text)
+                .size(12)
+                .color(if editing { theme::CREAM } else { theme::DIM }),
+        )
+        .on_press(Message::AcceptanceCommentClick)
+        .width(Length::Fill)
+        .style(move |_t, _s| button::Style {
+            background: Some(theme::TERM_BG.into()),
+            text_color: theme::CREAM,
+            border: Border {
+                color: if editing { theme::GOLD } else { theme::BORDER },
+                width: 1.0,
+                radius: 2.0.into(),
+            },
+            ..button::Style::default()
+        }),
+    );
+    let actions = row![
+        button(text("通过·沉淀").size(12).color(theme::BG))
+            .on_press(Message::AcceptanceAccept)
+            .style(|_t, _s| button::Style {
+                background: Some(theme::GOLD.into()),
+                text_color: theme::BG,
+                border: Border {
+                    color: theme::GOLD,
+                    width: 1.0,
+                    radius: 2.0.into()
+                },
+                ..button::Style::default()
+            }),
+        button(text("打回并注回").size(12).color(theme::RED))
+            .on_press(Message::AcceptanceReject)
+            .style(|_t, _s| button::Style {
+                background: None,
+                text_color: theme::RED,
+                border: Border {
+                    color: theme::RED,
+                    width: 1.0,
+                    radius: 2.0.into()
+                },
+                ..button::Style::default()
+            }),
+    ]
+    .spacing(8);
+    content = content.push(actions);
+    if let Some(err) = &acc.error {
+        content = content.push(text(format!("⚠ {err}")).size(12).color(theme::RED));
+    }
+    content
+}
+
 /// 左二预览 pane:表头 + tab 栏 + 地址栏;内容区本体是 wry webview
 /// 子视图(不在 iced 树里),这里只留占位背景——无 tab 时显示提示文案。
 fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
@@ -819,7 +1135,9 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
         content = content.push(text(format!("⚠ {err}")).size(12).color(theme::RED));
     }
 
-    if ws.preview.tabs().is_empty() {
+    if ws.preview.acceptance_active() {
+        content = acceptance_content(content, ws);
+    } else if ws.preview.tabs().is_empty() {
         content = content.push(
             container(
                 text("暂无预览——打开文件或输入地址")
@@ -938,6 +1256,19 @@ fn banner_text(pending: bool) -> Option<&'static str> {
     pending.then_some("交付待验收")
 }
 
+/// 标准行文案:金勾 ✓ / 空圈 ○。
+fn criteria_line(checked: bool, text: &str) -> String {
+    format!("{} {}", if checked { "✓" } else { "○" }, text)
+}
+
+/// 变更文件行:path  +a −r;未跟踪标 (新)。
+fn file_change_line(fc: &FileChange) -> String {
+    match (fc.added, fc.removed) {
+        (Some(a), Some(r)) => format!("{}  +{a} −{r}", fc.path),
+        _ => format!("{}  (新)", fc.path),
+    }
+}
+
 /// tab 标题：OSC 7 的 cwd basename 优先，无 cwd 回落会话名。
 fn tab_title(cwd: Option<&Path>, fallback: &str) -> String {
     match cwd {
@@ -1038,6 +1369,29 @@ mod tests {
     fn preview_content_bounds_never_negative() {
         let (_, _, w, h) = preview_content_bounds(100.0, 50.0);
         assert!(w >= 0.0 && h >= 0.0);
+    }
+
+    #[test]
+    fn criteria_check_line_renders_gold_check() {
+        assert_eq!(criteria_line(true, "测试全绿"), "✓ 测试全绿");
+        assert_eq!(criteria_line(false, "测试全绿"), "○ 测试全绿");
+    }
+
+    #[test]
+    fn file_change_line_formats_counts() {
+        use crate::delivery::FileChange;
+        let fc = FileChange {
+            path: "src/a.rs".into(),
+            added: Some(3),
+            removed: Some(1),
+        };
+        assert_eq!(file_change_line(&fc), "src/a.rs  +3 −1");
+        let un = FileChange {
+            path: "new.txt".into(),
+            added: None,
+            removed: None,
+        };
+        assert_eq!(file_change_line(&un), "new.txt  (新)");
     }
 
     #[test]

@@ -1,7 +1,5 @@
 //! `.dozer/goal.md` 定标文件解析（spec P1f D2）：
 //! 第一个非空行=目标（去掉行首 `#` 与空白）；`- [ ]`/`- [x]` 列表项=验收标准。
-// 过渡期:T5 验收 tab 接线前无调用方（沿用 P1d preview.rs 先例）。
-#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 

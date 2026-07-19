@@ -235,8 +235,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
-            // 地址栏编辑态:键盘直达地址栏(不经 keymap、不进 PTY)。
-            if workspace.preview_addr_editing() {
+            // 地址栏 / 验收意见编辑态:键盘直达自绘输入(不经 keymap、不进 PTY)。
+            let to_preview = workspace.preview_addr_editing();
+            let to_comment = workspace.acceptance_comment_editing();
+            if to_preview || to_comment {
                 let addr_event = match event {
                     WindowEvent::KeyboardInput {
                         event,
@@ -263,7 +265,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     _ => None,
                 };
                 if let Some(ev) = addr_event {
-                    workspace.update(Message::PreviewAddrEvent(ev));
+                    // 地址栏优先（二者同真时罕见,以地址栏为准）。
+                    let message = if to_preview {
+                        Message::PreviewAddrEvent(ev)
+                    } else {
+                        Message::AcceptanceCommentEvent(ev)
+                    };
+                    workspace.update(message);
                     window.request_redraw();
                 }
                 return;

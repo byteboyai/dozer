@@ -3,7 +3,7 @@
 //! `desired_webviews()` 差集执行(spike 约束:句柄只活在事件分发环)。
 use std::path::PathBuf;
 
-/// 一个预览 tab。`TabKind::Diff` 变体留给 P1f(验收闭环)补。
+/// 一个预览 tab。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreviewTab {
     pub id: usize,
@@ -14,7 +14,11 @@ pub struct PreviewTab {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TabKind {
     File(PathBuf),
-    Web { url: String },
+    Web {
+        url: String,
+    },
+    /// 验收 tab（P1f）:不产 webview,内容由 iced 直绘。
+    Acceptance,
 }
 
 /// 地址栏提交的解析结果:绝对路径 → 文件预览;其余按 URL 处理
@@ -92,6 +96,28 @@ impl PreviewPane {
         id
     }
 
+    /// 打开验收 tab:已存在则激活复用（全局至多一个）。
+    pub fn open_acceptance(&mut self) -> usize {
+        if let Some((idx, tab)) = self
+            .tabs
+            .iter()
+            .enumerate()
+            .find(|(_, t)| t.kind == TabKind::Acceptance)
+        {
+            let id = tab.id;
+            self.active = idx;
+            return id;
+        }
+        self.push_tab(TabKind::Acceptance, "验收".to_string())
+    }
+
+    /// 当前激活 tab 是否验收 tab。
+    pub fn acceptance_active(&self) -> bool {
+        self.tabs
+            .get(self.active)
+            .is_some_and(|t| t.kind == TabKind::Acceptance)
+    }
+
     pub fn select(&mut self, idx: usize) {
         if idx < self.tabs.len() {
             self.active = idx;
@@ -160,21 +186,27 @@ impl PreviewPane {
         Some(AddrTarget::Url(format!("http://{input}")))
     }
 
-    /// webview 期望清单:每 tab 一个,仅激活者可见(设计 D2)。
+    /// webview 期望清单:每文件/网页 tab 一个,仅激活者可见(设计 D2)；
+    /// 验收 tab 不产 webview,且它激活时其余 webview 全隐藏（iced 直绘 pane）。
     pub fn desired_webviews(&self) -> Vec<WebviewSpec> {
+        let acceptance_active = self.acceptance_active();
         self.tabs
             .iter()
             .enumerate()
-            .map(|(idx, tab)| WebviewSpec {
-                id: tab.id,
-                url: match &tab.kind {
+            .filter_map(|(idx, tab)| {
+                let url = match &tab.kind {
                     TabKind::File(path) => format!(
                         "dozer://flyfish/host.html?p={}",
                         encode_component(&path.to_string_lossy())
                     ),
                     TabKind::Web { url } => url.clone(),
-                },
-                visible: idx == self.active,
+                    TabKind::Acceptance => return None,
+                };
+                Some(WebviewSpec {
+                    id: tab.id,
+                    url,
+                    visible: idx == self.active && !acceptance_active,
+                })
             })
             .collect()
     }
@@ -257,6 +289,22 @@ mod tests {
         assert!(!specs[0].visible, "非激活 tab 不可见");
         assert_eq!(specs[1].url, "http://localhost:3000");
         assert!(specs[1].visible);
+    }
+
+    #[test]
+    fn acceptance_tab_produces_no_webview_and_hides_others() {
+        let mut p = PreviewPane::default();
+        p.open_url("http://localhost:3000".into());
+        let acc_id = p.open_acceptance();
+        let specs = p.desired_webviews();
+        assert_eq!(specs.len(), 1, "验收 tab 不产 webview");
+        assert!(!specs[0].visible, "验收 tab 激活时其余全隐藏");
+        // 重复打开复用同一 tab
+        assert_eq!(p.open_acceptance(), acc_id);
+        assert_eq!(p.tabs().len(), 2);
+        // 切回网页 tab → webview 复显
+        p.select(0);
+        assert!(p.desired_webviews()[0].visible);
     }
 
     #[test]

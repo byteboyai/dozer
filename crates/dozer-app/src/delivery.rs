@@ -1,7 +1,5 @@
 //! 交付检测与沉淀：git CLI 薄封装（spec P1f D3/D4/D6）。
 //! 全部同步阻塞——调用方负责放进 tokio 任务，不许在 UI 线程直呼。
-// 过渡期:T4 交付横幅接线前部分函数无调用方（沿用 P1d preview.rs 先例）。
-#![allow(dead_code)]
 
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
