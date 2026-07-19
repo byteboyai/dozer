@@ -32,7 +32,7 @@
   - `file_statuses(repo: &Path) -> std::collections::HashMap<PathBuf, FileStatus>`（绝对路径→状态；非 git 返回空）
   - `dir_has_change(dir: &Path, changed: &[PathBuf]) -> bool`
 
-- [ ] **Step 1: 写失败测试**（`delivery.rs` 的 `mod tests` 追加）
+- [x] **Step 1: 写失败测试**（`delivery.rs` 的 `mod tests` 追加）
 
 ```rust
     #[test]
@@ -75,12 +75,12 @@
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app file_statuses dir_has_change`
 Expected: 编译错误（`FileStatus`/函数未定义）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `delivery.rs` 头部 `use` 增 `HashMap`（若无）：`use std::collections::HashMap;`（放到现有 `use` 区）。加类型与函数（放在 `branch` 附近）：
 
@@ -128,12 +128,12 @@ pub fn dir_has_change(dir: &Path, changed: &[PathBuf]) -> bool {
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app file_statuses dir_has_change`
 Expected: 2 测试通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/delivery.rs
@@ -157,7 +157,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `Workspace::spawn_project_git_refresh(&self)`
   - `decoration_for(status: FileStatus) -> (Color, &'static str)`（纯函数）
 
-- [ ] **Step 1: 写失败测试**（`workspace.rs` 的 `mod tests` 追加）
+- [x] **Step 1: 写失败测试**（`workspace.rs` 的 `mod tests` 追加）
 
 ```rust
     #[test]
@@ -169,12 +169,12 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app decoration_maps`
 Expected: 编译错误（`decoration_for` 未定义）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `workspace.rs`：
 
@@ -337,7 +337,7 @@ fn decoration_for(status: FileStatus) -> (Color, &'static str) {
 
 （原 `let color = ...` 行删除；下方 `button(text(label)...color(color))` 不变。）
 
-- [ ] **Step 4: 跑测试确认通过 + 冒烟**
+- [x] **Step 4: 跑测试确认通过 + 冒烟**
 
 ```bash
 cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets && cargo fmt
@@ -346,7 +346,7 @@ cargo build -p dozer-app && ./target/aarch64-apple-darwin/debug/dozer & sleep 8 
 
 Expected: 测试全绿、零警告；app 存活 8 秒无 panic。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/workspace.rs
@@ -368,7 +368,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: 全部前序任务。
 - Produces: 用户签字的验收记录；下一阶段起点。
 
-- [ ] **Step 1: 全量回归 + 冒烟**
+- [x] **Step 1: 全量回归 + 冒烟**
 
 ```bash
 cargo test && cargo clippy --all-targets && cargo fmt --check
