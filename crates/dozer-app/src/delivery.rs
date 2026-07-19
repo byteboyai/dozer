@@ -158,9 +158,19 @@ pub fn file_statuses(repo: &Path) -> HashMap<PathBuf, FileStatus> {
     map
 }
 
-/// 目录（含深层）下是否有任一变更路径（rollup 判定）。
-pub fn dir_has_change(dir: &Path, changed: &[PathBuf]) -> bool {
-    changed.iter().any(|c| c.starts_with(dir))
+/// 目录（含深层）的聚合 git 状态（rollup）：底下有"改/删"→Modified(金)、
+/// 只有"新"→New(绿)、无变更→None。让新建目录显绿而非误标金。
+pub fn dir_status(dir: &Path, statuses: &HashMap<PathBuf, FileStatus>) -> Option<FileStatus> {
+    let mut found_new = false;
+    for (path, st) in statuses {
+        if path.starts_with(dir) {
+            match st {
+                FileStatus::Modified | FileStatus::Deleted => return Some(FileStatus::Modified),
+                FileStatus::New => found_new = true,
+            }
+        }
+    }
+    found_new.then_some(FileStatus::New)
 }
 
 /// 当前分支名（`git rev-parse --abbrev-ref HEAD`）；非 git / 无提交返回 None。
@@ -306,15 +316,19 @@ mod tests {
     }
 
     #[test]
-    fn dir_has_change_prefix_match() {
-        use std::path::PathBuf;
-        let changed = vec![PathBuf::from("/r/src/a.rs"), PathBuf::from("/r/README.md")];
-        assert!(dir_has_change(std::path::Path::new("/r/src"), &changed));
-        assert!(
-            dir_has_change(std::path::Path::new("/r"), &changed),
-            "深层也命中"
+    fn dir_status_aggregates_new_vs_modified() {
+        use std::path::{Path, PathBuf};
+        let mut s = HashMap::new();
+        s.insert(PathBuf::from("/r/logo/a.png"), FileStatus::New);
+        s.insert(PathBuf::from("/r/logo/b.png"), FileStatus::New);
+        s.insert(PathBuf::from("/r/src/main.rs"), FileStatus::Modified);
+        assert_eq!(dir_status(Path::new("/r/logo"), &s), Some(FileStatus::New));
+        assert_eq!(
+            dir_status(Path::new("/r/src"), &s),
+            Some(FileStatus::Modified)
         );
-        assert!(!dir_has_change(std::path::Path::new("/r/docs"), &changed));
+        assert_eq!(dir_status(Path::new("/r"), &s), Some(FileStatus::Modified));
+        assert_eq!(dir_status(Path::new("/r/docs"), &s), None);
     }
 
     #[test]

@@ -1324,7 +1324,6 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
             content = content.push(text(p.path.clone()).size(10).color(theme::DIM));
             content = content.push(open_btn);
             if let Some(tree) = &ws.file_tree {
-                let changed: Vec<PathBuf> = ws.git_statuses.keys().cloned().collect();
                 for row in tree.visible_rows() {
                     let indent = "  ".repeat(row.depth);
                     let glyph = if row.is_dir {
@@ -1332,11 +1331,11 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
                     } else {
                         "  "
                     };
-                    // 装饰:文件查自身状态;目录 rollup(含深层变更即金)。
+                    // 装饰:文件查自身状态;目录 rollup 反映聚合(改/删→金,只新→绿)。
                     let deco: Option<(Color, &'static str)> = if row.is_dir {
-                        delivery::dir_has_change(&row.path, &changed).then_some((theme::GOLD, "•"))
+                        delivery::dir_status(&row.path, &ws.git_statuses).map(decoration_for)
                     } else {
-                        ws.git_statuses.get(&row.path).map(|s| decoration_for(*s))
+                        ws.git_statuses.get(&row.path).copied().map(decoration_for)
                     };
                     let (color, suffix) = match deco {
                         Some((c, mark)) => (c, format!(" {mark}")),
