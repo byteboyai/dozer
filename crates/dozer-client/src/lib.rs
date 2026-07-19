@@ -1,7 +1,9 @@
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
-use dozer_core::protocol::{AgentState, Reply, Request, SessionInfo, decode_line, encode_line};
+use dozer_core::protocol::{
+    AgentState, ProjectInfo, Reply, Request, SessionInfo, decode_line, encode_line,
+};
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
@@ -138,6 +140,37 @@ impl Client {
             .await?
         {
             Reply::Ok => Ok(()),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn open_project(&self, path: &str) -> Result<Option<ProjectInfo>> {
+        match self
+            .roundtrip(&Request::OpenProject { path: path.into() })
+            .await?
+        {
+            Reply::Project { project } => Ok(project),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn list_projects(&self) -> Result<Vec<ProjectInfo>> {
+        match self.roundtrip(&Request::ListProjects).await? {
+            Reply::Projects { projects } => Ok(projects),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn set_active_project(&self, id: i64) -> Result<Option<ProjectInfo>> {
+        match self.roundtrip(&Request::SetActiveProject { id }).await? {
+            Reply::Project { project } => Ok(project),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn active_project(&self) -> Result<Option<ProjectInfo>> {
+        match self.roundtrip(&Request::GetActiveProject).await? {
+            Reply::Project { project } => Ok(project),
             other => bail!("意外应答: {other:?}"),
         }
     }

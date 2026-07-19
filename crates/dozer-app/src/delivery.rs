@@ -120,6 +120,15 @@ pub fn accept(repo: &Path) -> Result<u32> {
     Ok(n)
 }
 
+/// 当前分支名（`git rev-parse --abbrev-ref HEAD`）；非 git / 无提交返回 None。
+// 过渡期:T6 项目卡接线前无调用方。
+#[allow(dead_code)]
+pub fn branch(repo: &Path) -> Option<String> {
+    let out = git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let line = out.lines().next()?.trim();
+    (!line.is_empty() && line != "HEAD").then(|| line.to_string())
+}
+
 /// spec D3 的"有变更"精确定义（纯函数，方便矩阵测试）。
 pub fn delivery_pending(
     dirty: bool,
@@ -221,6 +230,14 @@ mod tests {
         assert_eq!(a.removed, Some(0));
         let n = ch.iter().find(|c| c.path == "new.txt").expect("new.txt");
         assert_eq!(n.added, None, "未跟踪无行数");
+    }
+
+    #[test]
+    fn branch_of_repo() {
+        let (_d, repo) = mkrepo();
+        let b = branch(&repo).expect("有分支");
+        assert!(b == "main" || b == "master", "分支名: {b}");
+        assert!(branch(std::path::Path::new("/")).is_none(), "非 git 无分支");
     }
 
     #[test]
