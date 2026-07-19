@@ -705,6 +705,15 @@ impl Workspace {
             }
             Message::ProjectOpened(project, recent) => {
                 self.recent_projects = recent;
+                // 切到不同项目:关掉上一个项目遗留的终端 tab 与预览 tab,给
+                // 新项目干净起点（验收反馈）。首次打开(无前项目)不强关。
+                let switching = matches!(
+                    (&self.project, &project),
+                    (Some(old), Some(new)) if old.id != new.id
+                );
+                if switching {
+                    self.close_all_tabs_for_switch();
+                }
                 self.file_tree = project
                     .as_ref()
                     .map(|p| FileTree::new(PathBuf::from(&p.path)));
@@ -763,6 +772,20 @@ impl Workspace {
                 tracing::warn!("写入终端失败: {e}");
             }
         });
+    }
+
+    /// 项目切换清理：关掉所有终端 tab（=结束会话，同 CloseTab 语义）与
+    /// 所有预览 tab，给新项目一个干净起点（P1g 验收反馈）。webview 池由
+    /// main.rs 的 sync_previews 依据空的期望清单自动销毁。
+    fn close_all_tabs_for_switch(&mut self) {
+        while !self.tabs.is_empty() {
+            self.close_tab(0);
+        }
+        while !self.preview.tabs().is_empty() {
+            self.preview.close(0);
+        }
+        self.acceptance = None;
+        self.preview_error = None;
     }
 
     /// tab 关闭 = 结束会话：中断转发任务（`rx` 随任务栈析构）并 kill
