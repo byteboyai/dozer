@@ -33,7 +33,7 @@
   - `Request::{ListProjects, OpenProject{path:String}, SetActiveProject{id:i64}, GetActiveProject}`
   - `Reply::{Projects{projects:Vec<ProjectInfo>}, Project{project:Option<ProjectInfo>}}`
 
-- [ ] **Step 1: 写失败测试**（`protocol.rs` 的 `mod tests` 追加）
+- [x] **Step 1: 写失败测试**（`protocol.rs` 的 `mod tests` 追加）
 
 ```rust
     #[test]
@@ -60,12 +60,12 @@
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-core project_messages`
 Expected: 编译错误（`ProjectInfo`/变体未定义）。
 
-- [ ] **Step 3: 最小实现**
+- [x] **Step 3: 最小实现**
 
 `protocol.rs`：`AgentState` 附近加类型：
 
@@ -102,12 +102,12 @@ pub struct ProjectInfo {
     Project { project: Option<ProjectInfo> },
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-core`
 Expected: 全绿（含新测）。dozerd 若因 `Request` match non-exhaustive 报错，在 `server.rs` 的 `Request` match 里临时加 4 个占位分支 `Request::ListProjects | Request::OpenProject{..} | Request::SetActiveProject{..} | Request::GetActiveProject => Reply::Error{message:"P1g 未实现".into()},`（Task 3 替换）。先只保证 dozer-core 绿。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-core
@@ -133,7 +133,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `ProjectStore::set_active(&self, id: i64) -> anyhow::Result<()>`
   - `ProjectStore::active(&self) -> anyhow::Result<Option<ProjectInfo>>`
 
-- [ ] **Step 1: 写失败测试**（`projects.rs` 尾部）
+- [x] **Step 1: 写失败测试**（`projects.rs` 尾部）
 
 ```rust
 #[cfg(test)]
@@ -185,12 +185,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozerd projects`
 Expected: 编译错误（模块不存在）。
 
-- [ ] **Step 3: 最小实现**
+- [x] **Step 3: 最小实现**
 
 `crates/dozerd/src/projects.rs`：
 
@@ -323,12 +323,12 @@ fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<ProjectInfo> {
 
 `lib.rs` 加 `pub mod projects;`（在 `pub mod acceptance;` 后）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozerd projects`
 Expected: 2 测试通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozerd
@@ -351,7 +351,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: Task 2 `ProjectStore`。
 - Produces: `serve(socket, registry, store, projects: Arc<ProjectStore>)`；4 个项目请求 → 对应 Reply。
 
-- [ ] **Step 1: 写失败测试**（`hook_events.rs` 追加端到端）
+- [x] **Step 1: 写失败测试**（`hook_events.rs` 追加端到端）
 
 ```rust
 #[tokio::test]
@@ -389,12 +389,12 @@ async fn project_open_list_active_roundtrip() {
 
 （`hook_events.rs` / `session_survival.rs` 的 `test_store()` 旁加 `test_projects()`；同库文件即可。）
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozerd`
 Expected: 编译错误（serve 签名 4 参、项目分支未实现）。
 
-- [ ] **Step 3: 最小实现**
+- [x] **Step 3: 最小实现**
 
 `server.rs`：`serve` 与 `handle_conn` 各加 `projects: Arc<crate::projects::ProjectStore>` 参数，accept 循环 clone 传入。请求分支（`RecordAcceptance` 之后）：
 
@@ -443,12 +443,12 @@ fn test_projects() -> std::sync::Arc<dozerd::projects::ProjectStore> {
 
 `against_real_daemon.rs`：`serve(&s, r, store)` 改 `serve(&s, r, store, projects)`，其中 `let projects = Arc::new(dozerd::projects::ProjectStore::open(&db).unwrap());`（复用同一 `db` 临时路径）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozerd && cargo test -p dozer-client`
 Expected: 全绿（含新端到端测试）。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozerd crates/dozer-client/tests
@@ -474,7 +474,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `Client::active_project(&self) -> Result<Option<ProjectInfo>>`
   - `delivery::branch(repo: &Path) -> Option<String>`
 
-- [ ] **Step 1: 写失败测试**（`delivery.rs` tests 追加）
+- [x] **Step 1: 写失败测试**（`delivery.rs` tests 追加）
 
 ```rust
     #[test]
@@ -486,12 +486,12 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app branch_of_repo`
 Expected: 编译错误（`branch` 未定义）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `delivery.rs` 加：
 
@@ -544,12 +544,12 @@ use dozer_core::protocol::{
     }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app branch_of_repo && cargo build -p dozer-client`
 Expected: 全绿。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-client crates/dozer-app/src/delivery.rs
@@ -577,7 +577,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 **设计注记**：`toggle` 展开时同步 `read_dir`（单目录快）。spec D2 提的 spawn_blocking 对超大目录更稳，本切片先同步，留作后续；行为等价、可测。
 
-- [ ] **Step 1: 写失败测试**（`project.rs` 尾部）
+- [x] **Step 1: 写失败测试**（`project.rs` 尾部）
 
 ```rust
 #[cfg(test)]
@@ -632,12 +632,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app project`
 Expected: 编译错误（模块不存在）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `crates/dozer-app/src/project.rs`：
 
@@ -752,12 +752,12 @@ impl FileTree {
 
 `main.rs` 的 `mod delivery;` 后加 `mod project;`。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app project`
 Expected: 3 测试通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/project.rs crates/dozer-app/src/main.rs
@@ -781,7 +781,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `Message::{ProjectPickFolder, ProjectOpen(PathBuf), ProjectOpened(Option<ProjectInfo>, Vec<ProjectInfo>), ProjectSelect(i64), ProjectTreeToggle(PathBuf), ProjectGitRefreshed(Option<String>, bool)}`
   - `effective_project_repo(active: Option<&Path>, session_cwd: &Path) -> PathBuf`（纯函数）
 
-- [ ] **Step 1: 写失败测试**（`workspace.rs` tests 追加）
+- [x] **Step 1: 写失败测试**（`workspace.rs` tests 追加）
 
 ```rust
     #[test]
@@ -805,12 +805,12 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app effective_project_repo project_card`
 Expected: 编译错误（函数未定义）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `workspace.rs`：
 
@@ -1051,7 +1051,7 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
 
 （`dispatch` 的 `pending_focus` 段：`ProjectOpen`/`ProjectSelect` 不改焦点意图，保持终端焦点，无需加。）
 
-- [ ] **Step 4: 跑测试确认通过 + 冒烟**
+- [x] **Step 4: 跑测试确认通过 + 冒烟**
 
 ```bash
 cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets && cargo fmt
@@ -1060,7 +1060,7 @@ cargo build -p dozer-app && ./target/aarch64-apple-darwin/debug/dozer & sleep 8 
 
 Expected: 测试全绿、零警告；app 存活 8 秒无 panic。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app
@@ -1082,7 +1082,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: 全部前序任务。
 - Produces: 用户签字的验收记录；下一阶段起点状态。
 
-- [ ] **Step 1: 全量回归 + 冒烟**
+- [x] **Step 1: 全量回归 + 冒烟**
 
 ```bash
 cargo test && cargo clippy --all-targets && cargo fmt --check
