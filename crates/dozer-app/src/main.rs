@@ -452,6 +452,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         workspace.update(Message::PreviewOpenPath(path));
                     }
                 }
+                Message::ProjectPickFolder => {
+                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                        workspace.update(Message::ProjectOpen(dir));
+                    }
+                }
                 other => workspace.update(other),
             }
             window.request_redraw();

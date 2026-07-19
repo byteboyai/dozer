@@ -121,8 +121,6 @@ pub fn accept(repo: &Path) -> Result<u32> {
 }
 
 /// 当前分支名（`git rev-parse --abbrev-ref HEAD`）；非 git / 无提交返回 None。
-// 过渡期:T6 项目卡接线前无调用方。
-#[allow(dead_code)]
 pub fn branch(repo: &Path) -> Option<String> {
     let out = git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     let line = out.lines().next()?.trim();

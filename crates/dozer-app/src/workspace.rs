@@ -22,11 +22,12 @@ use crate::delivery::{self, FileChange};
 use crate::goal::{self, Goal};
 use crate::osc::{OscEvent, OscScanner};
 use crate::preview::{AddrTarget, PreviewPane, WebviewSpec};
+use crate::project::FileTree;
 use crate::term_model::TerminalModel;
 use crate::term_view;
 use crate::theme;
 use dozer_client::{Client, TermEvent};
-use dozer_core::protocol::{AgentState, SessionInfo};
+use dozer_core::protocol::{AgentState, ProjectInfo, SessionInfo};
 use iced_widget::core::{Border, Color, Element, Length};
 use iced_widget::{button, column, container, row, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
@@ -165,6 +166,18 @@ pub enum Message {
     /// 预览:"打开文件…"按钮 → rfd 原生选择器(main.rs 侧执行,选中后
     /// 回送 PreviewOpenPath).
     PreviewPickFile,
+    /// 项目:点"打开项目…"→ rfd 文件夹选择(main.rs 执行)。
+    ProjectPickFolder,
+    /// 项目:打开某路径为项目(rfd 选中/最近点击回送)。
+    ProjectOpen(PathBuf),
+    /// 项目:打开完成(当前项目 + 最近列表)。
+    ProjectOpened(Option<ProjectInfo>, Vec<ProjectInfo>),
+    /// 项目:切换到最近项目。
+    ProjectSelect(i64),
+    /// 项目:文件树展开/收起某目录。
+    ProjectTreeToggle(PathBuf),
+    /// 项目:git 分支/脏刷新结果。
+    ProjectGitRefreshed(Option<String>, bool),
 }
 
 /// 地址栏编辑事件:由 main.rs 的键盘拦截层在 `preview_addr_editing()`
@@ -282,6 +295,16 @@ pub struct Workspace {
     /// Running) 的 tab 会随它闪；由 main.rs 的定时唤醒每拍翻转
     /// （见 `toggle_blink`/`any_blinking`）。
     blink_on: bool,
+    /// 当前项目（None=未打开；P1g）。
+    project: Option<ProjectInfo>,
+    /// 当前项目的文件树（随 project 建立）。
+    file_tree: Option<FileTree>,
+    /// 当前项目 git 分支（非 git 为 None）。
+    branch: Option<String>,
+    /// 当前项目工作树是否脏。
+    dirty: bool,
+    /// 最近项目（切换用）。
+    recent_projects: Vec<ProjectInfo>,
 }
 
 impl Workspace {
@@ -330,6 +353,13 @@ impl Workspace {
             Err(e) => tracing::warn!("list 失败，跳过启动恢复: {e}"),
         }
 
+        // 启动恢复当前项目 + 最近列表（git 分支/脏在窗口起来后异步补）。
+        let project = client.active_project().await.ok().flatten();
+        let recent_projects = client.list_projects().await.unwrap_or_default();
+        let file_tree = project
+            .as_ref()
+            .map(|p| FileTree::new(PathBuf::from(&p.path)));
+
         Self {
             tabs,
             active: 0,
@@ -347,6 +377,11 @@ impl Workspace {
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
             acceptance: None,
             blink_on: true,
+            project,
+            file_tree,
+            branch: None,
+            dirty: false,
+            recent_projects,
         }
     }
 
@@ -375,6 +410,11 @@ impl Workspace {
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
             acceptance: None,
             blink_on: true,
+            project: None,
+            file_tree: None,
+            branch: None,
+            dirty: false,
+            recent_projects: Vec::new(),
         }
     }
 
@@ -429,12 +469,15 @@ impl Workspace {
                 }
             }
             Message::AgentStateChanged(tab_id, state) => {
+                // 当前项目路径先取出（下面要 &mut 借 tab，冲突）；重锚:项目优先。
+                let active_repo = self.project.as_ref().map(|p| PathBuf::from(&p.path));
                 if let Some(tab) = self.tab_by_id_mut(tab_id) {
                     tab.agent_state = state;
                     tracing::info!(tab_id, ?state, "agent 状态变更");
                     if state == AgentState::TurnEnded {
                         // git 检测不许在 UI 线程跑：丢 tokio,结果经 proxy 回来
-                        let cwd = tab.effective_cwd();
+                        let cwd =
+                            effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
                         let last_turn = tab.last_turn_head.clone();
                         let proxy = self.proxy.clone();
                         tracing::info!(tab_id, cwd = %cwd.display(), "回合结束,开始交付检测");
@@ -475,6 +518,7 @@ impl Workspace {
             Message::DeliveryChecked(tab_id, pending) => {
                 let active_id = self.tabs.get(self.active).map(|t| t.tab_id);
                 let is_active = active_id == Some(tab_id);
+                let active_repo = self.project.as_ref().map(|p| PathBuf::from(&p.path));
                 tracing::info!(
                     tab_id,
                     pending,
@@ -484,18 +528,19 @@ impl Workspace {
                 if let Some(tab) = self.tab_by_id_mut(tab_id) {
                     tab.delivery_pending = pending;
                     // 记录本回合 HEAD 供下回合比对（同步读一次可容忍:仅 rev-parse）
-                    let cwd = tab.effective_cwd();
+                    let cwd = effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
                     if let Some(repo) = delivery::repo_root(&cwd) {
                         tab.last_turn_head = delivery::head_commit(&repo);
                     }
                 }
             }
             Message::AcceptanceOpen(tab_id) => {
+                let active_repo = self.project.as_ref().map(|p| PathBuf::from(&p.path));
                 let Some(tab) = self.tab_by_id_mut(tab_id) else {
                     return;
                 };
                 tab.delivery_pending = false;
-                let cwd = tab.effective_cwd();
+                let cwd = effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
                 let proxy = self.proxy.clone();
                 self.handle.spawn(async move {
                     let loaded = tokio::task::spawn_blocking(move || {
@@ -638,6 +683,56 @@ impl Workspace {
                 },
             },
             Message::PreviewPickFile => {} // 副作用在 main.rs(rfd 模态需窗口句柄侧执行)
+            Message::ProjectPickFolder => {} // 副作用在 main.rs(rfd 文件夹选择)
+            Message::ProjectOpen(path) => {
+                let client = self.client.clone();
+                let proxy = self.proxy.clone();
+                let path_s = path.to_string_lossy().into_owned();
+                self.handle.spawn(async move {
+                    let opened = client.open_project(&path_s).await.ok().flatten();
+                    let recent = client.list_projects().await.unwrap_or_default();
+                    let _ = proxy.send_event(Message::ProjectOpened(opened, recent));
+                });
+            }
+            Message::ProjectSelect(id) => {
+                let client = self.client.clone();
+                let proxy = self.proxy.clone();
+                self.handle.spawn(async move {
+                    let opened = client.set_active_project(id).await.ok().flatten();
+                    let recent = client.list_projects().await.unwrap_or_default();
+                    let _ = proxy.send_event(Message::ProjectOpened(opened, recent));
+                });
+            }
+            Message::ProjectOpened(project, recent) => {
+                self.recent_projects = recent;
+                self.file_tree = project
+                    .as_ref()
+                    .map(|p| FileTree::new(PathBuf::from(&p.path)));
+                self.branch = None;
+                self.dirty = false;
+                if let Some(p) = &project {
+                    let repo = PathBuf::from(&p.path);
+                    let proxy = self.proxy.clone();
+                    self.handle.spawn(async move {
+                        let (b, d) = tokio::task::spawn_blocking(move || {
+                            (delivery::branch(&repo), delivery::is_dirty(&repo))
+                        })
+                        .await
+                        .unwrap_or((None, false));
+                        let _ = proxy.send_event(Message::ProjectGitRefreshed(b, d));
+                    });
+                }
+                self.project = project;
+            }
+            Message::ProjectTreeToggle(dir) => {
+                if let Some(t) = &mut self.file_tree {
+                    t.toggle(&dir);
+                }
+            }
+            Message::ProjectGitRefreshed(branch, dirty) => {
+                self.branch = branch;
+                self.dirty = dirty;
+            }
         }
     }
 
@@ -697,7 +792,12 @@ impl Workspace {
 
     fn spawn_new_tab(&mut self) {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+        // 重锚:新终端 tab 开在当前项目根,无项目回落 $HOME（P1g D4）。
+        let cwd = self
+            .project
+            .as_ref()
+            .map(|p| p.path.clone())
+            .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
         let (cols, rows) = (self.cols, self.rows);
         let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
@@ -706,7 +806,7 @@ impl Workspace {
         let proxy = self.proxy.clone();
 
         let jh = self.handle.spawn(async move {
-            let info = match client.create("shell", &shell, &[], &home, cols, rows).await {
+            let info = match client.create("shell", &shell, &[], &cwd, cols, rows).await {
                 Ok(info) => info,
                 Err(e) => {
                     let _ = proxy.send_event(Message::DaemonError(format!("新建会话失败: {e}")));
@@ -959,7 +1059,7 @@ impl Workspace {
     pub fn view(
         &self,
     ) -> iced_widget::core::Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-        let col1 = pane("项目 · P1e", PROJECT_COL_WIDTH, theme::PANEL);
+        let col1 = project_pane(self);
         let col2 = preview_pane(self);
         let col3 = terminal_pane(self);
         let col4 = pane("AI · P1e", AI_COL_WIDTH, theme::PANEL);
@@ -1157,6 +1257,91 @@ fn acceptance_content<'a>(
 
 /// 左二预览 pane:表头 + tab 栏 + 地址栏;内容区本体是 wry webview
 /// 子视图(不在 iced 树里),这里只留占位背景——无 tab 时显示提示文案。
+/// 左一项目栏：项目卡（名称 + git 分支/脏 + 路径）+ 文件树；无项目时"打开项目…" + 最近。
+fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let mut content = column![text("项目").size(13).color(theme::CREAM)].spacing(4);
+
+    let open_btn = button(text("打开项目…").size(12).color(theme::CREAM))
+        .on_press(Message::ProjectPickFolder)
+        .style(|_t, _s| button::Style {
+            background: Some(theme::CARD.into()),
+            text_color: theme::CREAM,
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 2.0.into(),
+            },
+            ..button::Style::default()
+        });
+
+    match &ws.project {
+        Some(p) => {
+            content = content.push(text(p.name.clone()).size(14).color(theme::CREAM));
+            let label = project_branch_label(ws.branch.as_deref(), ws.dirty);
+            let bcolor = if ws.dirty { theme::GOLD } else { theme::BODY };
+            content = content.push(text(label).size(11).color(bcolor));
+            content = content.push(text(p.path.clone()).size(10).color(theme::DIM));
+            content = content.push(open_btn);
+            if let Some(tree) = &ws.file_tree {
+                for row in tree.visible_rows() {
+                    let indent = "  ".repeat(row.depth);
+                    let glyph = if row.is_dir {
+                        if row.expanded { "▾ " } else { "▸ " }
+                    } else {
+                        "  "
+                    };
+                    let label = format!("{indent}{glyph}{}", row.name);
+                    let msg = if row.is_dir {
+                        Message::ProjectTreeToggle(row.path.clone())
+                    } else {
+                        Message::PreviewOpenPath(row.path.clone())
+                    };
+                    let color = if row.is_dir { theme::BODY } else { theme::CYAN };
+                    content = content.push(
+                        button(text(label).size(12).color(color))
+                            .on_press(msg)
+                            .width(Length::Fill)
+                            .style(|_t, _s| button::Style {
+                                background: None,
+                                text_color: theme::BODY,
+                                ..button::Style::default()
+                            }),
+                    );
+                }
+            }
+        }
+        None => {
+            content = content.push(text("未打开项目").size(12).color(theme::DIM));
+            content = content.push(open_btn);
+            for p in &ws.recent_projects {
+                content = content.push(
+                    button(text(p.name.clone()).size(12).color(theme::CREAM))
+                        .on_press(Message::ProjectSelect(p.id))
+                        .style(|_t, _s| button::Style {
+                            background: None,
+                            text_color: theme::CREAM,
+                            ..button::Style::default()
+                        }),
+                );
+            }
+        }
+    }
+
+    container(content.padding(8))
+        .width(Length::Fixed(PROJECT_COL_WIDTH))
+        .height(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::PANEL.into()),
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
 fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let header = text("预览 · P1d").size(13).color(theme::CREAM);
 
@@ -1361,6 +1546,22 @@ fn banner_text(pending: bool) -> Option<&'static str> {
     pending.then_some("交付待验收")
 }
 
+/// 交付/验收使用的仓库：当前项目优先，无则回落会话 cwd（P1f 现状；P1g D4）。
+fn effective_project_repo(active: Option<&Path>, session_cwd: &Path) -> PathBuf {
+    active
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| session_cwd.to_path_buf())
+}
+
+/// 项目卡分支标签：`分支` / `分支*`（脏）/ `—`（非 git）。
+fn project_branch_label(branch: Option<&str>, dirty: bool) -> String {
+    match branch {
+        Some(b) if dirty => format!("{b}*"),
+        Some(b) => b.to_string(),
+        None => "—".to_string(),
+    }
+}
+
 /// 标准行文案:金勾 ✓ / 空圈 ○。
 fn criteria_line(checked: bool, text: &str) -> String {
     format!("{} {}", if checked { "✓" } else { "○" }, text)
@@ -1503,6 +1704,26 @@ mod tests {
             removed: None,
         };
         assert_eq!(file_change_line(&un), "new.txt  (新)");
+    }
+
+    #[test]
+    fn effective_project_repo_prefers_active() {
+        use std::path::Path;
+        assert_eq!(
+            effective_project_repo(Some(Path::new("/proj")), Path::new("/home/me")),
+            PathBuf::from("/proj")
+        );
+        assert_eq!(
+            effective_project_repo(None, Path::new("/home/me")),
+            PathBuf::from("/home/me")
+        );
+    }
+
+    #[test]
+    fn project_card_branch_label() {
+        assert_eq!(project_branch_label(Some("main"), false), "main");
+        assert_eq!(project_branch_label(Some("main"), true), "main*");
+        assert_eq!(project_branch_label(None, false), "—");
     }
 
     #[test]

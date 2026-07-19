@@ -1,7 +1,5 @@
 //! 文件树状态机（P1g）：懒加载单目录、展开集、可见行摊平。纯数据，不碰
 //! iced；展开时同步 read_dir（单目录快）。固定隐藏名单过滤。
-// 过渡期:T6 项目栏 UI 接线前无调用方（沿用 P1d/P1f 先例）。
-#![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -64,10 +62,6 @@ impl FileTree {
             expanded: HashSet::new(),
             children,
         }
-    }
-
-    pub fn root(&self) -> &Path {
-        &self.root
     }
 
     /// 展开/收起一个目录。展开时若未缓存则同步读一次。
