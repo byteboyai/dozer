@@ -1351,7 +1351,7 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
                         Message::PreviewOpenPath(row.path.clone())
                     };
                     content = content.push(
-                        button(text(label).size(13).color(color))
+                        button(text(label).size(15).color(color))
                             .on_press(msg)
                             .width(Length::Fill)
                             .style(|_t, _s| button::Style {
