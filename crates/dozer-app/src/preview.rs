@@ -70,6 +70,17 @@ impl PreviewPane {
     }
 
     pub fn open_path(&mut self, path: PathBuf) -> usize {
+        // 同一文件已开则切过去,不重复开 tab（验收反馈）。
+        if let Some((idx, tab)) = self
+            .tabs
+            .iter()
+            .enumerate()
+            .find(|(_, t)| t.kind == TabKind::File(path.clone()))
+        {
+            let id = tab.id;
+            self.active = idx;
+            return id;
+        }
         let title = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -289,6 +300,18 @@ mod tests {
         assert!(!specs[0].visible, "非激活 tab 不可见");
         assert_eq!(specs[1].url, "http://localhost:3000");
         assert!(specs[1].visible);
+    }
+
+    #[test]
+    fn reopening_same_file_reuses_tab() {
+        let mut p = PreviewPane::default();
+        let id0 = p.open_path(PathBuf::from("/tmp/a.md"));
+        p.open_url("http://localhost:3000".into()); // 中间插一个,把激活挪走
+        assert_eq!(p.active_idx(), 1);
+        let id_again = p.open_path(PathBuf::from("/tmp/a.md"));
+        assert_eq!(id_again, id0, "同文件复用同一 tab");
+        assert_eq!(p.tabs().len(), 2, "不新增 tab");
+        assert_eq!(p.active_idx(), 0, "切回已开的那个 tab");
     }
 
     #[test]
