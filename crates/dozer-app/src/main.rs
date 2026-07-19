@@ -5,6 +5,7 @@ mod goal;
 mod keymap;
 mod osc;
 mod preview;
+mod project;
 mod term_model;
 mod term_view;
 mod theme;
