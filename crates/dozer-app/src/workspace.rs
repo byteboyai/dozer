@@ -465,6 +465,14 @@ impl Workspace {
                 }
             }
             Message::DeliveryChecked(tab_id, pending) => {
+                let active_id = self.tabs.get(self.active).map(|t| t.tab_id);
+                let is_active = active_id == Some(tab_id);
+                tracing::info!(
+                    tab_id,
+                    pending,
+                    is_active,
+                    "交付检测结果落地(pending 写入该 tab;仅当前激活 tab 显示横幅)"
+                );
                 if let Some(tab) = self.tab_by_id_mut(tab_id) {
                     tab.delivery_pending = pending;
                     // 记录本回合 HEAD 供下回合比对（同步读一次可容忍:仅 rev-parse）
