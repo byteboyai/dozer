@@ -377,7 +377,7 @@ cargo build -p dozer-app && ./target/aarch64-apple-darwin/debug/dozer & sleep 8 
 
 Expected: 全绿零警告；app 存活 8 秒。**验收前 `pkill dozerd` 重启新 daemon。**
 
-- [ ] **Step 2: 用户人工验收（逐项 ✓/✗，验收权在用户）**
+- [x] **Step 2: 用户人工验收（逐项 ✓/✗，验收权在用户）**
 
 ```markdown
 # P1h 人工验收清单（用户实机执行）
@@ -389,7 +389,7 @@ Expected: 全绿零警告；app 存活 8 秒。**验收前 `pkill dozerd` 重启
 6. 打开非 git 目录为项目 → 文件树无装饰、不崩
 ```
 
-- [ ] **Step 3: 结果落档 + Commit**
+- [x] **Step 3: 结果落档 + Commit**
 
 验收记录写入 `docs/superpowers/specs/2026-07-19-p1h-acceptance.md`（沿用格式：逐项结果表 + 反馈修复流水）；全部通过后规格 §7 项目栏段落追加"P1h 达成（<日期>，文件树 git 装饰：金/绿/红上色 + 尾缀字符 + 目录 rollup + 打开/回合结束刷新），验收记录见 specs/2026-07-19-p1h-acceptance.md"。
 
