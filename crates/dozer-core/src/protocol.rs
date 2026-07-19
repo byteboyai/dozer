@@ -11,6 +11,15 @@ pub enum AgentState {
     TurnEnded,
 }
 
+/// 项目（甲方资产域的根；P1g）。id 为 dozerd SQLite 主键。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectInfo {
+    pub id: i64,
+    pub path: String,
+    pub name: String,
+    pub last_active_ms: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: String,
@@ -69,6 +78,18 @@ pub enum Request {
         ref_name: String,
         ts_ms: u64,
     },
+    /// 打开一个目录为项目（已存在则更新活跃时间），并置为当前项目。
+    OpenProject {
+        path: String,
+    },
+    /// 列出所有项目（按活跃时间倒序）。
+    ListProjects,
+    /// 置当前项目。
+    SetActiveProject {
+        id: i64,
+    },
+    /// 取当前项目（无则 None）。
+    GetActiveProject,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -104,6 +125,14 @@ pub enum Reply {
         state: AgentState,
         event: String,
         ts_ms: u64,
+    },
+    /// 项目列表。
+    Projects {
+        projects: Vec<ProjectInfo>,
+    },
+    /// 单个/当前项目（无则 None）。
+    Project {
+        project: Option<ProjectInfo>,
     },
 }
 
@@ -176,6 +205,40 @@ mod tests {
         });
         assert!(line.contains(r#""type":"agent_event""#));
         assert!(line.contains(r#""state":"awaiting_input""#));
+    }
+
+    #[test]
+    fn project_messages_roundtrip() {
+        let req = Request::OpenProject {
+            path: "/repo/x".into(),
+        };
+        assert_eq!(
+            decode_line::<Request>(encode_line(&req).trim()).unwrap(),
+            req
+        );
+        let req = Request::SetActiveProject { id: 7 };
+        assert_eq!(
+            decode_line::<Request>(encode_line(&req).trim()).unwrap(),
+            req
+        );
+
+        let reply = Reply::Projects {
+            projects: vec![ProjectInfo {
+                id: 1,
+                path: "/repo/x".into(),
+                name: "x".into(),
+                last_active_ms: 5,
+            }],
+        };
+        let line = encode_line(&reply);
+        assert!(line.contains(r#""type":"projects""#));
+        assert_eq!(decode_line::<Reply>(line.trim()).unwrap(), reply);
+
+        let reply = Reply::Project { project: None };
+        assert_eq!(
+            decode_line::<Reply>(encode_line(&reply).trim()).unwrap(),
+            reply
+        );
     }
 
     #[test]

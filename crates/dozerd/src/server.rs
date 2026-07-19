@@ -161,6 +161,13 @@ async fn handle_conn(
                                 },
                             }
                         }
+                        // T3 替换为真实实现（ProjectStore 接线）
+                        Request::OpenProject { .. }
+                        | Request::ListProjects
+                        | Request::SetActiveProject { .. }
+                        | Request::GetActiveProject => {
+                            Reply::Error { message: "P1g 未实现".into() }
+                        }
                     },
                 };
                 w.write_all(encode_line(&reply).as_bytes()).await?;
