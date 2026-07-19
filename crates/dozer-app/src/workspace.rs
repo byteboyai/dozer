@@ -1213,7 +1213,7 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
     let addr_text = if editing {
         format!("{}▏", ws.preview.addr_buffer())
     } else {
-        "输入 localhost 端口、URL 或文件路径…".to_string()
+        "输入文件路径或URL".to_string()
     };
     let addr =
         button(

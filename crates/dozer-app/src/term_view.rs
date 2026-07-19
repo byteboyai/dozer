@@ -30,7 +30,7 @@ use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Color, Element, Event, Font, Length, Pixels, Point, Rectangle, Size};
 
 /// 字号（逻辑像素）。
-const FONT_SIZE: f32 = 13.0;
+const FONT_SIZE: f32 = 14.0;
 /// 等宽字体单元格宽度 ≈ 0.6em。
 const CELL_WIDTH: f32 = FONT_SIZE * 0.6;
 /// 行高倍数（相对字号）。
@@ -395,10 +395,10 @@ mod tests {
 
     #[test]
     fn grid_size_from_pixels() {
-        // 字号 13px 等宽：单元格宽 ≈ 7.8px（0.6em），行高 ≈ 18.2px（1.4）
+        // 字号 14px 等宽：单元格宽 ≈ 8.4px（0.6em），行高 ≈ 19.6px（1.4）
         let (cols, rows) = grid_size(780.0, 546.0);
-        assert!((95..=105).contains(&cols), "cols={cols}");
-        assert!((28..=32).contains(&rows), "rows={rows}");
+        assert!((88..=96).contains(&cols), "cols={cols}");
+        assert!((25..=30).contains(&rows), "rows={rows}");
     }
 
     #[test]
