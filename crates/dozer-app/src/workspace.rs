@@ -18,7 +18,7 @@
 //!   把 `Message` 送回 UI 线程；`main.rs` 的 `ApplicationHandler::user_event`
 //!   收到后调用 `workspace.update(..)` 并请求重绘。反方向（UI → tokio）
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
-use crate::delivery::{self, FileChange};
+use crate::delivery::{self, FileChange, FileStatus};
 use crate::goal::{self, Goal};
 use crate::osc::{OscEvent, OscScanner};
 use crate::preview::{AddrTarget, PreviewPane, WebviewSpec};
@@ -176,8 +176,8 @@ pub enum Message {
     ProjectSelect(i64),
     /// 项目:文件树展开/收起某目录。
     ProjectTreeToggle(PathBuf),
-    /// 项目:git 分支/脏刷新结果。
-    ProjectGitRefreshed(Option<String>, bool),
+    /// 项目:git 分支/脏/文件状态刷新结果。
+    ProjectGitRefreshed(Option<String>, bool, HashMap<PathBuf, FileStatus>),
 }
 
 /// 地址栏编辑事件:由 main.rs 的键盘拦截层在 `preview_addr_editing()`
@@ -305,6 +305,8 @@ pub struct Workspace {
     dirty: bool,
     /// 最近项目（切换用）。
     recent_projects: Vec<ProjectInfo>,
+    /// 当前项目的 git 文件状态（路径→状态；文件树装饰用；P1h）。
+    git_statuses: HashMap<PathBuf, FileStatus>,
 }
 
 impl Workspace {
@@ -382,6 +384,7 @@ impl Workspace {
             branch: None,
             dirty: false,
             recent_projects,
+            git_statuses: HashMap::new(),
         }
     }
 
@@ -415,6 +418,7 @@ impl Workspace {
             branch: None,
             dirty: false,
             recent_projects: Vec::new(),
+            git_statuses: HashMap::new(),
         }
     }
 
@@ -533,6 +537,8 @@ impl Workspace {
                         tab.last_turn_head = delivery::head_commit(&repo);
                     }
                 }
+                // 回合结束后刷新项目 git 状态,文件树装饰随之更新（P1h）。
+                self.spawn_project_git_refresh();
             }
             Message::AcceptanceOpen(tab_id) => {
                 let active_repo = self.project.as_ref().map(|p| PathBuf::from(&p.path));
@@ -719,28 +725,19 @@ impl Workspace {
                     .map(|p| FileTree::new(PathBuf::from(&p.path)));
                 self.branch = None;
                 self.dirty = false;
-                if let Some(p) = &project {
-                    let repo = PathBuf::from(&p.path);
-                    let proxy = self.proxy.clone();
-                    self.handle.spawn(async move {
-                        let (b, d) = tokio::task::spawn_blocking(move || {
-                            (delivery::branch(&repo), delivery::is_dirty(&repo))
-                        })
-                        .await
-                        .unwrap_or((None, false));
-                        let _ = proxy.send_event(Message::ProjectGitRefreshed(b, d));
-                    });
-                }
+                self.git_statuses = HashMap::new();
                 self.project = project;
+                self.spawn_project_git_refresh();
             }
             Message::ProjectTreeToggle(dir) => {
                 if let Some(t) = &mut self.file_tree {
                     t.toggle(&dir);
                 }
             }
-            Message::ProjectGitRefreshed(branch, dirty) => {
+            Message::ProjectGitRefreshed(branch, dirty, statuses) => {
                 self.branch = branch;
                 self.dirty = dirty;
+                self.git_statuses = statuses;
             }
         }
     }
@@ -771,6 +768,27 @@ impl Workspace {
             if let Err(e) = client.write(&id, &bytes).await {
                 tracing::warn!("写入终端失败: {e}");
             }
+        });
+    }
+
+    /// 异步刷新当前项目的 git 分支/脏/文件状态（打开项目 + 回合结束触发）。
+    fn spawn_project_git_refresh(&self) {
+        let Some(p) = &self.project else {
+            return;
+        };
+        let repo = PathBuf::from(&p.path);
+        let proxy = self.proxy.clone();
+        self.handle.spawn(async move {
+            let (b, d, s) = tokio::task::spawn_blocking(move || {
+                (
+                    delivery::branch(&repo),
+                    delivery::is_dirty(&repo),
+                    delivery::file_statuses(&repo),
+                )
+            })
+            .await
+            .unwrap_or((None, false, HashMap::new()));
+            let _ = proxy.send_event(Message::ProjectGitRefreshed(b, d, s));
         });
     }
 
@@ -1306,6 +1324,7 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
             content = content.push(text(p.path.clone()).size(10).color(theme::DIM));
             content = content.push(open_btn);
             if let Some(tree) = &ws.file_tree {
+                let changed: Vec<PathBuf> = ws.git_statuses.keys().cloned().collect();
                 for row in tree.visible_rows() {
                     let indent = "  ".repeat(row.depth);
                     let glyph = if row.is_dir {
@@ -1313,13 +1332,25 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
                     } else {
                         "  "
                     };
-                    let label = format!("{indent}{glyph}{}", row.name);
+                    // 装饰:文件查自身状态;目录 rollup(含深层变更即金)。
+                    let deco: Option<(Color, &'static str)> = if row.is_dir {
+                        delivery::dir_has_change(&row.path, &changed).then_some((theme::GOLD, "•"))
+                    } else {
+                        ws.git_statuses.get(&row.path).map(|s| decoration_for(*s))
+                    };
+                    let (color, suffix) = match deco {
+                        Some((c, mark)) => (c, format!(" {mark}")),
+                        None => (
+                            if row.is_dir { theme::BODY } else { theme::CYAN },
+                            String::new(),
+                        ),
+                    };
+                    let label = format!("{indent}{glyph}{}{suffix}", row.name);
                     let msg = if row.is_dir {
                         Message::ProjectTreeToggle(row.path.clone())
                     } else {
                         Message::PreviewOpenPath(row.path.clone())
                     };
-                    let color = if row.is_dir { theme::BODY } else { theme::CYAN };
                     content = content.push(
                         button(text(label).size(12).color(color))
                             .on_press(msg)
@@ -1576,6 +1607,15 @@ fn effective_project_repo(active: Option<&Path>, session_cwd: &Path) -> PathBuf 
         .unwrap_or_else(|| session_cwd.to_path_buf())
 }
 
+/// 文件 git 状态 → (颜色, 尾缀字符)。金=改/绿=新/红=删（沿用 P1g 金脏约定）。
+fn decoration_for(status: FileStatus) -> (Color, &'static str) {
+    match status {
+        FileStatus::Modified => (theme::GOLD, "•"),
+        FileStatus::New => (theme::GREEN, "+"),
+        FileStatus::Deleted => (theme::RED, "−"),
+    }
+}
+
 /// 项目卡分支标签：`分支` / `分支*`（脏）/ `—`（非 git）。
 fn project_branch_label(branch: Option<&str>, dirty: bool) -> String {
     match branch {
@@ -1740,6 +1780,14 @@ mod tests {
             effective_project_repo(None, Path::new("/home/me")),
             PathBuf::from("/home/me")
         );
+    }
+
+    #[test]
+    fn decoration_maps_status_to_color_and_marker() {
+        use crate::delivery::FileStatus;
+        assert_eq!(decoration_for(FileStatus::Modified), (theme::GOLD, "•"));
+        assert_eq!(decoration_for(FileStatus::New), (theme::GREEN, "+"));
+        assert_eq!(decoration_for(FileStatus::Deleted), (theme::RED, "−"));
     }
 
     #[test]

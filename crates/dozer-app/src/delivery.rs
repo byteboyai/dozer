@@ -122,8 +122,6 @@ pub fn accept(repo: &Path) -> Result<u32> {
 }
 
 /// 文件树装饰用的 git 状态（P1h）。粗粒度三态,不分暂存/工作区。
-// 过渡期:T2 workspace 接线前无调用方。
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileStatus {
     Modified,
@@ -133,7 +131,6 @@ pub enum FileStatus {
 
 /// `git status --porcelain` → 绝对路径 → 状态。非 git / 失败返回空。
 /// 码映射:`??`/含 `A`→New;含 `D`→Deleted;其余→Modified。重命名取箭头后的新名。
-#[allow(dead_code)]
 pub fn file_statuses(repo: &Path) -> HashMap<PathBuf, FileStatus> {
     let mut map = HashMap::new();
     let Some(out) = git(repo, &["status", "--porcelain"]) else {
@@ -162,7 +159,6 @@ pub fn file_statuses(repo: &Path) -> HashMap<PathBuf, FileStatus> {
 }
 
 /// 目录（含深层）下是否有任一变更路径（rollup 判定）。
-#[allow(dead_code)]
 pub fn dir_has_change(dir: &Path, changed: &[PathBuf]) -> bool {
     changed.iter().any(|c| c.starts_with(dir))
 }
