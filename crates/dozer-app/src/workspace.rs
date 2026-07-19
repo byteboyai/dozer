@@ -270,6 +270,10 @@ pub struct Workspace {
     allowed_files: Arc<Mutex<HashSet<PathBuf>>>,
     /// 进行中的验收（验收 tab 内容;None=未打开）。
     acceptance: Option<AcceptanceView>,
+    /// tab 前状态点的闪烁相位（true=亮/false=暗）。仅"工作中"(agent
+    /// Running) 的 tab 会随它闪；由 main.rs 的定时唤醒每拍翻转
+    /// （见 `toggle_blink`/`any_blinking`）。
+    blink_on: bool,
 }
 
 impl Workspace {
@@ -334,6 +338,7 @@ impl Workspace {
             preview_error: None,
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
             acceptance: None,
+            blink_on: true,
         }
     }
 
@@ -361,7 +366,21 @@ impl Workspace {
             preview_error: None,
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
             acceptance: None,
+            blink_on: true,
         }
+    }
+
+    /// 是否有 tab 处于"工作中"(agent Running 且存活)——决定 main.rs 是否
+    /// 需要定时唤醒来驱动状态点闪烁；无则回到 `ControlFlow::Wait` 省电。
+    pub fn any_blinking(&self) -> bool {
+        self.tabs
+            .iter()
+            .any(|t| t.alive && t.agent_state == AgentState::Running)
+    }
+
+    /// 翻转闪烁相位；由 main.rs 的定时唤醒每拍调用一次。
+    pub fn toggle_blink(&mut self) {
+        self.blink_on = !self.blink_on;
     }
 
     pub fn update(&mut self, message: Message) {
@@ -404,23 +423,36 @@ impl Workspace {
             Message::AgentStateChanged(tab_id, state) => {
                 if let Some(tab) = self.tab_by_id_mut(tab_id) {
                     tab.agent_state = state;
+                    tracing::info!(tab_id, ?state, "agent 状态变更");
                     if state == AgentState::TurnEnded {
                         // git 检测不许在 UI 线程跑：丢 tokio,结果经 proxy 回来
                         let cwd = tab.effective_cwd();
                         let last_turn = tab.last_turn_head.clone();
                         let proxy = self.proxy.clone();
+                        tracing::info!(tab_id, cwd = %cwd.display(), "回合结束,开始交付检测");
                         self.handle.spawn(async move {
                             let pending = tokio::task::spawn_blocking(move || {
-                                let repo = delivery::repo_root(&cwd)?; // 非 git 仓库:不参与闭环
+                                let Some(repo) = delivery::repo_root(&cwd) else {
+                                    tracing::info!(cwd = %cwd.display(), "非 git 仓库,不参与闭环");
+                                    return None;
+                                };
                                 let dirty = delivery::is_dirty(&repo);
                                 let head = delivery::head_commit(&repo);
                                 let accepted = delivery::last_accepted(&repo).map(|(_, c)| c);
-                                Some(delivery::delivery_pending(
+                                let pending = delivery::delivery_pending(
                                     dirty,
                                     head.as_deref(),
                                     accepted.as_deref(),
                                     last_turn.as_deref(),
-                                ))
+                                );
+                                tracing::info!(
+                                    repo = %repo.display(),
+                                    dirty,
+                                    has_accepted = accepted.is_some(),
+                                    pending,
+                                    "交付检测完成"
+                                );
+                                Some(pending)
                             })
                             .await
                             .ok()
@@ -1244,7 +1276,7 @@ fn tab_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
         .tabs
         .iter()
         .enumerate()
-        .map(|(idx, tab)| tab_item(idx, tab, idx == ws.active))
+        .map(|(idx, tab)| tab_item(idx, tab, idx == ws.active, ws.blink_on))
         .collect();
 
     items.push(
@@ -1295,38 +1327,44 @@ fn tab_title(cwd: Option<&Path>, fallback: &str) -> String {
     }
 }
 
-/// tab 上的 agent 状态胶囊：Idle/死会话不出胶囊；配色语义——绿=运行、
-/// 紫蓝=待输入、金=回合结束（金是甲方动作专属色：该出手了）。
-fn agent_badge(state: AgentState, alive: bool) -> Option<(&'static str, Color)> {
+/// tab 前状态点配色：死会话灰；存活按 agent 状态——绿=空闲/运行、
+/// 紫蓝=待输入、金=回合结束（金是甲方动作专属色：该出手了）。运行态
+/// 与空闲态同为绿，靠 `tab_item` 里的闪烁区分（工作中才闪）。
+fn dot_color(state: AgentState, alive: bool) -> Color {
     if !alive {
-        return None;
+        return theme::DIM;
     }
     match state {
-        AgentState::Idle => None,
-        AgentState::Running => Some(("运行中", theme::GREEN)),
-        AgentState::AwaitingInput => Some(("待输入", theme::PURPLE)),
-        AgentState::TurnEnded => Some(("回合毕", theme::GOLD)),
+        AgentState::Idle | AgentState::Running => theme::GREEN,
+        AgentState::AwaitingInput => theme::PURPLE,
+        AgentState::TurnEnded => theme::GOLD,
     }
 }
 
-/// 单个 tab：alive ? GREEN : DIM 状态点 + 名称的选中按钮，紧跟一个关闭
-/// 按钮（点击 = detach，见 `Message::CloseTab` 的文档）。
+/// 单个 tab：状态点（颜色见 `dot_color`）+ 名称的选中按钮，紧跟一个关闭
+/// 按钮（点击 = detach，见 `Message::CloseTab` 的文档）。状态不再用文字
+/// 胶囊表达，全部收敛到点点的颜色与闪烁（goal.md）：工作中(Running)的
+/// 点点随 `blink_on` 一明一暗地闪，其余状态常亮。
 fn tab_item(
     idx: usize,
     tab: &SessionTab,
     active: bool,
+    blink_on: bool,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let dot_color = if tab.alive { theme::GREEN } else { theme::DIM };
-    let mut label = row![
-        text("●").size(10).color(dot_color),
+    let working = tab.alive && tab.agent_state == AgentState::Running;
+    let mut color = dot_color(tab.agent_state, tab.alive);
+    // 工作中且处于暗相位：把点点压到近乎透明，形成"呼吸"般的闪烁。
+    // 闪烁相位是全局的（main.rs 定时翻转），因此失焦的工作 tab 也照闪。
+    if working && !blink_on {
+        color = Color { a: 0.15, ..color };
+    }
+    let label = row![
+        text("●").size(10).color(color),
         text(tab_title(tab.cwd.as_deref(), &tab.info.name))
             .size(12)
             .color(theme::CREAM),
     ]
     .spacing(4);
-    if let Some((badge, color)) = agent_badge(tab.agent_state, tab.alive) {
-        label = label.push(text(badge).size(10).color(color));
-    }
 
     let select = button(label)
         .on_press(Message::SelectTab(idx))
@@ -1436,19 +1474,15 @@ mod tests {
     }
 
     #[test]
-    fn agent_badge_states() {
+    fn dot_color_states() {
         use dozer_core::protocol::AgentState::*;
-        assert_eq!(agent_badge(Idle, true), None, "Idle 不出胶囊");
-        assert_eq!(agent_badge(Running, false), None, "死会话不出胶囊");
-        let (label, color) = agent_badge(Running, true).unwrap();
-        assert_eq!(label, "运行中");
-        assert_eq!(color, theme::GREEN);
-        let (label, color) = agent_badge(AwaitingInput, true).unwrap();
-        assert_eq!(label, "待输入");
-        assert_eq!(color, theme::PURPLE);
-        let (label, color) = agent_badge(TurnEnded, true).unwrap();
-        assert_eq!(label, "回合毕");
-        assert_eq!(color, theme::GOLD);
+        // 死会话恒为灰，不论 agent 状态。
+        assert_eq!(dot_color(Running, false), theme::DIM, "死会话灰点");
+        // 存活：空闲/运行同绿（运行靠闪烁区分），待输入紫、回合毕金。
+        assert_eq!(dot_color(Idle, true), theme::GREEN);
+        assert_eq!(dot_color(Running, true), theme::GREEN);
+        assert_eq!(dot_color(AwaitingInput, true), theme::PURPLE);
+        assert_eq!(dot_color(TurnEnded, true), theme::GOLD);
     }
 
     #[test]

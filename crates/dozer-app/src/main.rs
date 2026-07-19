@@ -37,6 +37,10 @@ use winit::{
 
 use std::sync::Arc;
 
+/// tab 状态点闪烁的半周期：每 450ms 翻一次相位（≈1.1Hz 一明一暗）。
+/// 仅当有 tab 处于工作态时才据此定时唤醒，空闲仍是 `ControlFlow::Wait`。
+const BLINK_INTERVAL: Duration = Duration::from_millis(450);
+
 /// 清空一帧到给定背景色，不再绘制 spike 阶段的示例三角形
 /// （spike B 的 `scene.rs`/wgsl shader 已随本任务删除）。
 fn clear<'a>(
@@ -399,6 +403,38 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
     }
 
     impl winit::application::ApplicationHandler<Message> for Runner {
+        /// 闪烁定时器到点（`ControlFlow::WaitUntil` 触发的
+        /// `ResumeTimeReached`）：翻转全局闪烁相位并请求重绘。相位是全局
+        /// 的，所有工作态 tab（含失焦的）在同一帧一起明灭。
+        fn new_events(
+            &mut self,
+            _event_loop: &winit::event_loop::ActiveEventLoop,
+            cause: winit::event::StartCause,
+        ) {
+            if let winit::event::StartCause::ResumeTimeReached { .. } = cause
+                && let Self::Ready {
+                    workspace, window, ..
+                } = self
+            {
+                workspace.toggle_blink();
+                window.request_redraw();
+            }
+        }
+
+        /// 每轮事件处理完后决定下次唤醒时机：有 tab 在工作就排下一拍闪烁
+        /// 唤醒，否则回到 `Wait` 省电（不再空转重绘）。
+        fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+            if let Self::Ready { workspace, .. } = self {
+                if workspace.any_blinking() {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(
+                        std::time::Instant::now() + BLINK_INTERVAL,
+                    ));
+                } else {
+                    event_loop.set_control_flow(ControlFlow::Wait);
+                }
+            }
+        }
+
         fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
             if let Self::Loading(pending_workspace) = self {
                 let Some(mut workspace) = pending_workspace.take() else {
