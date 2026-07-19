@@ -1161,7 +1161,7 @@ fn pane(
     width: f32,
     background: Color,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let header = text(label).size(13).color(theme::CREAM);
+    let header = text(label).size(14).color(theme::CREAM);
 
     container(column![header].spacing(4).padding(8))
         .width(if width > 0.0 {
@@ -1192,15 +1192,15 @@ fn acceptance_content<'a>(
         return content;
     };
     if let Some(n) = acc.accepted_version {
-        return content.push(text(format!("✓ 已沉淀 v{n}")).size(14).color(theme::GOLD));
+        return content.push(text(format!("✓ 已沉淀 v{n}")).size(15).color(theme::GOLD));
     }
     match &acc.goal {
         Some(g) => {
-            content = content.push(text(g.title.clone()).size(14).color(theme::CREAM));
+            content = content.push(text(g.title.clone()).size(15).color(theme::CREAM));
             for (i, c) in g.criteria.iter().enumerate() {
                 let checked = acc.checked.get(i).copied().unwrap_or(false);
                 content = content.push(
-                    button(text(criteria_line(checked, c)).size(12).color(if checked {
+                    button(text(criteria_line(checked, c)).size(13).color(if checked {
                         theme::GOLD
                     } else {
                         theme::BODY
@@ -1217,16 +1217,16 @@ fn acceptance_content<'a>(
         None => {
             content = content.push(
                 text("未定标——先在仓库写 .dozer/goal.md（首行目标,\n- [ ] 列表为标准）")
-                    .size(12)
+                    .size(13)
                     .color(theme::DIM),
             );
         }
     }
-    content = content.push(text("变更文件").size(12).color(theme::DIM));
+    content = content.push(text("变更文件").size(13).color(theme::DIM));
     for fc in &acc.changes {
         let path = acc.repo.join(&fc.path);
         content = content.push(
-            button(text(file_change_line(fc)).size(12).color(theme::CYAN))
+            button(text(file_change_line(fc)).size(13).color(theme::CYAN))
                 .on_press(Message::PreviewOpenPath(path))
                 .style(|_t, _s| button::Style {
                     background: None,
@@ -1246,7 +1246,7 @@ fn acceptance_content<'a>(
     content = content.push(
         button(
             text(comment_text)
-                .size(12)
+                .size(13)
                 .color(if editing { theme::CREAM } else { theme::DIM }),
         )
         .on_press(Message::AcceptanceCommentClick)
@@ -1263,7 +1263,7 @@ fn acceptance_content<'a>(
         }),
     );
     let actions = row![
-        button(text("通过·沉淀").size(12).color(theme::BG))
+        button(text("通过·沉淀").size(13).color(theme::BG))
             .on_press(Message::AcceptanceAccept)
             .style(|_t, _s| button::Style {
                 background: Some(theme::GOLD.into()),
@@ -1275,7 +1275,7 @@ fn acceptance_content<'a>(
                 },
                 ..button::Style::default()
             }),
-        button(text("打回并注回").size(12).color(theme::RED))
+        button(text("打回并注回").size(13).color(theme::RED))
             .on_press(Message::AcceptanceReject)
             .style(|_t, _s| button::Style {
                 background: None,
@@ -1291,7 +1291,7 @@ fn acceptance_content<'a>(
     .spacing(8);
     content = content.push(actions);
     if let Some(err) = &acc.error {
-        content = content.push(text(format!("⚠ {err}")).size(12).color(theme::RED));
+        content = content.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
     }
     content
 }
@@ -1300,9 +1300,9 @@ fn acceptance_content<'a>(
 /// 子视图(不在 iced 树里),这里只留占位背景——无 tab 时显示提示文案。
 /// 左一项目栏：项目卡（名称 + git 分支/脏 + 路径）+ 文件树；无项目时"打开项目…" + 最近。
 fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let mut content = column![text("项目").size(13).color(theme::CREAM)].spacing(4);
+    let mut content = column![text("项目").size(14).color(theme::CREAM)].spacing(4);
 
-    let open_btn = button(text("打开项目…").size(12).color(theme::CREAM))
+    let open_btn = button(text("打开项目…").size(13).color(theme::CREAM))
         .on_press(Message::ProjectPickFolder)
         .style(|_t, _s| button::Style {
             background: Some(theme::CARD.into()),
@@ -1317,11 +1317,11 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
 
     match &ws.project {
         Some(p) => {
-            content = content.push(text(p.name.clone()).size(14).color(theme::CREAM));
+            content = content.push(text(p.name.clone()).size(15).color(theme::CREAM));
             let label = project_branch_label(ws.branch.as_deref(), ws.dirty);
             let bcolor = if ws.dirty { theme::GOLD } else { theme::BODY };
-            content = content.push(text(label).size(11).color(bcolor));
-            content = content.push(text(p.path.clone()).size(10).color(theme::DIM));
+            content = content.push(text(label).size(12).color(bcolor));
+            content = content.push(text(p.path.clone()).size(11).color(theme::DIM));
             content = content.push(open_btn);
             if let Some(tree) = &ws.file_tree {
                 for row in tree.visible_rows() {
@@ -1351,7 +1351,7 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
                         Message::PreviewOpenPath(row.path.clone())
                     };
                     content = content.push(
-                        button(text(label).size(12).color(color))
+                        button(text(label).size(13).color(color))
                             .on_press(msg)
                             .width(Length::Fill)
                             .style(|_t, _s| button::Style {
@@ -1364,11 +1364,11 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
             }
         }
         None => {
-            content = content.push(text("未打开项目").size(12).color(theme::DIM));
+            content = content.push(text("未打开项目").size(13).color(theme::DIM));
             content = content.push(open_btn);
             for p in &ws.recent_projects {
                 content = content.push(
-                    button(text(p.name.clone()).size(12).color(theme::CREAM))
+                    button(text(p.name.clone()).size(13).color(theme::CREAM))
                         .on_press(Message::ProjectSelect(p.id))
                         .style(|_t, _s| button::Style {
                             background: None,
@@ -1396,7 +1396,7 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
 }
 
 fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let header = text("预览 · P1d").size(13).color(theme::CREAM);
+    let header = text("预览 · P1d").size(14).color(theme::CREAM);
 
     // tab 栏:每 tab 选择按钮 + 关闭 ×,尾接"打开文件…".
     let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = ws
@@ -1406,7 +1406,7 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
         .enumerate()
         .map(|(idx, tab)| {
             let active = idx == ws.preview.active_idx();
-            let select = button(text(tab.title.clone()).size(12).color(theme::CREAM))
+            let select = button(text(tab.title.clone()).size(13).color(theme::CREAM))
                 .on_press(Message::PreviewSelectTab(idx))
                 .style(move |_t, _s| button::Style {
                     background: Some(if active { theme::CARD } else { theme::PANEL }.into()),
@@ -1418,7 +1418,7 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
                     },
                     ..button::Style::default()
                 });
-            let close = button(text("×").size(12).color(theme::DIM))
+            let close = button(text("×").size(13).color(theme::DIM))
                 .on_press(Message::PreviewCloseTab(idx))
                 .style(|_t, _s| button::Style {
                     background: None,
@@ -1429,7 +1429,7 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
         })
         .collect();
     items.push(
-        button(text("打开文件…").size(12).color(theme::CREAM))
+        button(text("打开文件…").size(13).color(theme::CREAM))
             .on_press(Message::PreviewPickFile)
             .style(|_t, _s| button::Style {
                 background: Some(theme::CARD.into()),
@@ -1456,7 +1456,7 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
     let addr =
         button(
             text(addr_text)
-                .size(12)
+                .size(13)
                 .color(if editing { theme::CREAM } else { theme::DIM }),
         )
         .on_press(Message::PreviewAddrClick)
@@ -1475,7 +1475,7 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
     let mut content = column![header, tab_bar, addr].spacing(4);
 
     if let Some(err) = &ws.preview_error {
-        content = content.push(text(format!("⚠ {err}")).size(12).color(theme::RED));
+        content = content.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
     }
 
     if ws.preview.acceptance_active() {
@@ -1484,7 +1484,7 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
         content = content.push(
             container(
                 text("暂无预览——打开文件或输入地址")
-                    .size(13)
+                    .size(14)
                     .color(theme::DIM),
             )
             .width(Length::Fill)
@@ -1511,19 +1511,19 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
 fn terminal_pane(
     ws: &Workspace,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let header = text("终端 · 本计划").size(13).color(theme::CREAM);
+    let header = text("终端 · 本计划").size(14).color(theme::CREAM);
 
     let mut content = column![header, tab_bar(ws)].spacing(4);
 
     if let Some(err) = &ws.daemon_error {
-        content = content.push(text(format!("⚠ {err}")).size(12).color(theme::RED));
+        content = content.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
     }
 
     // OSC 133;D 的最近命令非零退出码提示（下一条命令开始时消失）。
     if let Some(code) = ws.tabs.get(ws.active).and_then(|t| t.last_exit)
         && code != 0
     {
-        content = content.push(text(format!("exit {code}")).size(11).color(theme::RED));
+        content = content.push(text(format!("exit {code}")).size(12).color(theme::RED));
     }
 
     // 交付横幅（spec P1f D3）:金字金框,CTA 进入验收
@@ -1531,8 +1531,8 @@ fn terminal_pane(
         && let Some(text_str) = banner_text(tab.delivery_pending)
     {
         let banner = row![
-            text(text_str).size(12).color(theme::GOLD),
-            button(text("进入验收").size(12).color(theme::GOLD))
+            text(text_str).size(13).color(theme::GOLD),
+            button(text("进入验收").size(13).color(theme::GOLD))
                 .on_press(Message::AcceptanceOpen(tab.tab_id))
                 .style(|_t, _s| button::Style {
                     background: Some(theme::CARD.into()),
@@ -1576,7 +1576,7 @@ fn tab_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
         .collect();
 
     items.push(
-        button(text("＋").size(14).color(theme::CREAM))
+        button(text("＋").size(15).color(theme::CREAM))
             .on_press(Message::NewTab)
             .style(|_theme, _status| button::Style {
                 background: Some(theme::CARD.into()),
@@ -1680,9 +1680,9 @@ fn tab_item(
         color = Color { a: 0.15, ..color };
     }
     let label = row![
-        text("●").size(10).color(color),
+        text("●").size(11).color(color),
         text(tab_title(tab.cwd.as_deref(), &tab.info.name))
-            .size(12)
+            .size(13)
             .color(theme::CREAM),
     ]
     .spacing(4);
@@ -1700,7 +1700,7 @@ fn tab_item(
             ..button::Style::default()
         });
 
-    let close = button(text("×").size(12).color(theme::DIM))
+    let close = button(text("×").size(13).color(theme::DIM))
         .on_press(Message::CloseTab(idx))
         .style(|_theme, _status| button::Style {
             background: None,
@@ -1716,7 +1716,7 @@ fn active_tab_view(
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     match ws.tabs.get(ws.active) {
         Some(tab) => term_view::view(&tab.model, ws.term_focused),
-        None => container(text("暂无会话——点击 ＋ 新建").size(13).color(theme::DIM))
+        None => container(text("暂无会话——点击 ＋ 新建").size(14).color(theme::DIM))
             .width(Length::Fill)
             .height(Length::Fill)
             .into(),

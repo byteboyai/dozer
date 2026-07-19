@@ -30,7 +30,7 @@ use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Color, Element, Event, Font, Length, Pixels, Point, Rectangle, Size};
 
 /// 字号（逻辑像素）。
-const FONT_SIZE: f32 = 14.0;
+const FONT_SIZE: f32 = 15.0;
 /// 等宽字体单元格宽度 ≈ 0.6em。
 const CELL_WIDTH: f32 = FONT_SIZE * 0.6;
 /// 行高倍数（相对字号）。
@@ -382,23 +382,31 @@ mod tests {
         // 行式滚轮：整行直接进位
         let (n, r) = wheel_to_lines(ScrollDelta::Lines { x: 0.0, y: 2.0 }, 0.0);
         assert_eq!((n, r), (2, 0.0));
-        // 像素式（触控板）：不足一行的余量留在 residual 里跨事件累积
-        let (n, r) = wheel_to_lines(ScrollDelta::Pixels { x: 0.0, y: 10.0 }, 0.0);
+        // 像素式（触控板）：不足一行的余量留在 residual 里跨事件累积。
+        // 用行高的比例表达,与字号无关（0.6 行:单次不足 1 行,两次 > 1 行）。
+        let half = LINE_HEIGHT_PX * 0.6;
+        let (n, r) = wheel_to_lines(ScrollDelta::Pixels { x: 0.0, y: half }, 0.0);
         assert_eq!(n, 0);
         assert!(r > 0.0);
-        let (n2, _) = wheel_to_lines(ScrollDelta::Pixels { x: 0.0, y: 10.0 }, r);
-        assert_eq!(n2, 1, "两次 10px（> 一行 18.2px 的一半×2）应累积出 1 行");
-        // 反方向
-        let (n, _) = wheel_to_lines(ScrollDelta::Pixels { x: 0.0, y: -40.0 }, 0.0);
+        let (n2, _) = wheel_to_lines(ScrollDelta::Pixels { x: 0.0, y: half }, r);
+        assert_eq!(n2, 1, "两次 0.6 行的像素量应累积出 1 行");
+        // 反方向：整整两行的像素量
+        let (n, _) = wheel_to_lines(
+            ScrollDelta::Pixels {
+                x: 0.0,
+                y: -LINE_HEIGHT_PX * 2.0,
+            },
+            0.0,
+        );
         assert_eq!(n, -2);
     }
 
     #[test]
     fn grid_size_from_pixels() {
-        // 字号 14px 等宽：单元格宽 ≈ 8.4px（0.6em），行高 ≈ 19.6px（1.4）
+        // 字号 15px 等宽：单元格宽 ≈ 9.0px（0.6em），行高 ≈ 21.0px（1.4）
         let (cols, rows) = grid_size(780.0, 546.0);
-        assert!((88..=96).contains(&cols), "cols={cols}");
-        assert!((25..=30).contains(&rows), "rows={rows}");
+        assert!((82..=92).contains(&cols), "cols={cols}");
+        assert!((24..=28).contains(&rows), "rows={rows}");
     }
 
     #[test]
