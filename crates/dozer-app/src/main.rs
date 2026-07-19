@@ -238,11 +238,12 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     let scale = window.scale_factor();
                     let logical_x = (cursor_phys.x / scale) as f32;
                     let logical_w = (window.inner_size().width as f64 / scale) as f32;
-                    *pending_focus = Some(if workspace::is_in_preview_column(logical_x, logical_w) {
-                        FocusIntent::Preview
-                    } else {
-                        FocusIntent::Terminal
-                    });
+                    *pending_focus =
+                        Some(if workspace::is_in_preview_column(logical_x, logical_w) {
+                            FocusIntent::Preview
+                        } else {
+                            FocusIntent::Terminal
+                        });
                     window.request_redraw();
                 }
                 _ => {}
@@ -721,8 +722,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         {
                             let scale = window.scale_factor();
                             let size = window.inner_size();
-                            let (lw, lh) =
-                                (size.width as f32 / scale as f32, size.height as f32 / scale as f32);
+                            let (lw, lh) = (
+                                size.width as f32 / scale as f32,
+                                size.height as f32 / scale as f32,
+                            );
                             let (ix, iy, ih) = workspace.ime_cursor_area(lw, lh);
                             window.set_ime_cursor_area(
                                 winit::dpi::LogicalPosition::new(ix, iy),
