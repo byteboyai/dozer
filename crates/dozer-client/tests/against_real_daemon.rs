@@ -17,7 +17,8 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
     let r = registry.clone();
     let db = std::path::PathBuf::from(format!("/tmp/dz-{}.db", uuid::Uuid::new_v4()));
     let store = Arc::new(dozerd::acceptance::AcceptanceStore::open(&db).unwrap());
-    tokio::spawn(async move { dozerd::server::serve(&s, r, store).await });
+    let projects = Arc::new(dozerd::projects::ProjectStore::open(&db).unwrap());
+    tokio::spawn(async move { dozerd::server::serve(&s, r, store, projects).await });
     for _ in 0..100 {
         if sock.exists() {
             break;

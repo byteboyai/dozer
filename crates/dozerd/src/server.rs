@@ -14,6 +14,7 @@ pub async fn serve(
     socket: &Path,
     registry: Arc<SessionRegistry>,
     store: Arc<crate::acceptance::AcceptanceStore>,
+    projects: Arc<crate::projects::ProjectStore>,
 ) -> Result<()> {
     if socket.exists() {
         std::fs::remove_file(socket)?;
@@ -33,8 +34,9 @@ pub async fn serve(
         };
         let registry = registry.clone();
         let store = store.clone();
+        let projects = projects.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_conn(stream, registry, store).await {
+            if let Err(e) = handle_conn(stream, registry, store, projects).await {
                 tracing::debug!(error = %e, "连接结束");
             }
         });
@@ -57,6 +59,7 @@ async fn handle_conn(
     stream: UnixStream,
     registry: Arc<SessionRegistry>,
     store: Arc<crate::acceptance::AcceptanceStore>,
+    projects: Arc<crate::projects::ProjectStore>,
 ) -> Result<()> {
     let (r, mut w) = stream.into_split();
     let mut lines = BufReader::new(r).lines();
@@ -161,13 +164,25 @@ async fn handle_conn(
                                 },
                             }
                         }
-                        // T3 替换为真实实现（ProjectStore 接线）
-                        Request::OpenProject { .. }
-                        | Request::ListProjects
-                        | Request::SetActiveProject { .. }
-                        | Request::GetActiveProject => {
-                            Reply::Error { message: "P1g 未实现".into() }
-                        }
+                        Request::OpenProject { path } => match projects.open_and_activate(&path) {
+                            Ok(p) => Reply::Project { project: Some(p) },
+                            Err(e) => Reply::Error { message: format!("打开项目失败: {e}") },
+                        },
+                        Request::ListProjects => match projects.list() {
+                            Ok(projects) => Reply::Projects { projects },
+                            Err(e) => Reply::Error { message: format!("列项目失败: {e}") },
+                        },
+                        Request::SetActiveProject { id } => match projects.set_active(id) {
+                            Ok(()) => match projects.active() {
+                                Ok(p) => Reply::Project { project: p },
+                                Err(e) => Reply::Error { message: format!("取当前项目失败: {e}") },
+                            },
+                            Err(e) => Reply::Error { message: format!("置当前项目失败: {e}") },
+                        },
+                        Request::GetActiveProject => match projects.active() {
+                            Ok(p) => Reply::Project { project: p },
+                            Err(e) => Reply::Error { message: format!("取当前项目失败: {e}") },
+                        },
                     },
                 };
                 w.write_all(encode_line(&reply).as_bytes()).await?;

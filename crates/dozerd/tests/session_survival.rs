@@ -57,7 +57,7 @@ async fn session_survives_client_disconnect() {
     let server = tokio::spawn({
         let sock = sock.clone();
         let registry = registry.clone();
-        async move { dozerd::server::serve(&sock, registry, test_store()).await }
+        async move { dozerd::server::serve(&sock, registry, test_store(), test_projects()).await }
     });
     // 等 socket 就绪
     for _ in 0..100 {
@@ -176,7 +176,7 @@ async fn unknown_session_returns_error_reply() {
     let registry = Arc::new(SessionRegistry::new());
     let server = tokio::spawn({
         let sock = sock.clone();
-        async move { dozerd::server::serve(&sock, registry, test_store()).await }
+        async move { dozerd::server::serve(&sock, registry, test_store(), test_projects()).await }
     });
     for _ in 0..100 {
         if sock.exists() {
@@ -206,7 +206,7 @@ async fn attach_delivers_marker_exactly_once() {
     let registry = Arc::new(SessionRegistry::new());
     let server = tokio::spawn({
         let sock = sock.clone();
-        async move { dozerd::server::serve(&sock, registry, test_store()).await }
+        async move { dozerd::server::serve(&sock, registry, test_store(), test_projects()).await }
     });
     for _ in 0..100 {
         if sock.exists() {
@@ -271,7 +271,7 @@ async fn attach_from_offset_resumes_within_window() {
     let registry = Arc::new(SessionRegistry::new());
     let server = tokio::spawn({
         let sock = sock.clone();
-        async move { dozerd::server::serve(&sock, registry, test_store()).await }
+        async move { dozerd::server::serve(&sock, registry, test_store(), test_projects()).await }
     });
     for _ in 0..100 {
         if sock.exists() {
@@ -365,7 +365,7 @@ async fn attach_stream_offset_invariant_under_load() {
     let server = tokio::spawn({
         let sock = sock.clone();
         let registry = registry.clone();
-        async move { dozerd::server::serve(&sock, registry, test_store()).await }
+        async move { dozerd::server::serve(&sock, registry, test_store(), test_projects()).await }
     });
     for _ in 0..100 {
         if sock.exists() {
@@ -446,7 +446,7 @@ async fn attach_from_offset_out_of_window_falls_back_to_full_snapshot() {
     let server = tokio::spawn({
         let sock = sock.clone();
         let registry = registry.clone();
-        async move { dozerd::server::serve(&sock, registry, test_store()).await }
+        async move { dozerd::server::serve(&sock, registry, test_store(), test_projects()).await }
     });
     for _ in 0..100 {
         if sock.exists() {
@@ -505,4 +505,10 @@ async fn attach_from_offset_out_of_window_falls_back_to_full_snapshot() {
 fn test_store() -> std::sync::Arc<dozerd::acceptance::AcceptanceStore> {
     let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
     std::sync::Arc::new(dozerd::acceptance::AcceptanceStore::open(&db).unwrap())
+}
+
+/// 每次调用建独立临时库的项目存储（测试用；P1g serve 需要）。
+fn test_projects() -> std::sync::Arc<dozerd::projects::ProjectStore> {
+    let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
+    std::sync::Arc::new(dozerd::projects::ProjectStore::open(&db).unwrap())
 }
