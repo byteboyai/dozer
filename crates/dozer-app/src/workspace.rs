@@ -213,7 +213,22 @@ pub struct SessionTab {
     forwarder: tokio::task::JoinHandle<()>,
 }
 
+/// 会话当前有效工作目录：OSC 7 跟踪的实时 cwd 优先，回落到会话
+/// 启动目录。交付检测必须认实时 cwd——用户 `cd` 进项目仓库后，
+/// 启动目录（多为 `$HOME`）不是那个仓库（spec P1f D1）。
+fn effective_cwd(osc_cwd: Option<&Path>, spawn_cwd: &str) -> PathBuf {
+    match osc_cwd {
+        Some(p) => p.to_path_buf(),
+        None => PathBuf::from(spawn_cwd),
+    }
+}
+
 impl SessionTab {
+    /// 交付检测/验收装载用的当前工作目录（OSC 7 优先）。
+    fn effective_cwd(&self) -> PathBuf {
+        effective_cwd(self.cwd.as_deref(), &self.info.cwd)
+    }
+
     /// 把一段会话输出送进 OSC 扫描器并落地状态（观察式，不改写字节）。
     fn ingest_osc(&mut self, bytes: &[u8]) {
         for ev in self.osc.feed(bytes) {
@@ -391,7 +406,7 @@ impl Workspace {
                     tab.agent_state = state;
                     if state == AgentState::TurnEnded {
                         // git 检测不许在 UI 线程跑：丢 tokio,结果经 proxy 回来
-                        let cwd = PathBuf::from(tab.info.cwd.clone());
+                        let cwd = tab.effective_cwd();
                         let last_turn = tab.last_turn_head.clone();
                         let proxy = self.proxy.clone();
                         self.handle.spawn(async move {
@@ -421,7 +436,7 @@ impl Workspace {
                 if let Some(tab) = self.tab_by_id_mut(tab_id) {
                     tab.delivery_pending = pending;
                     // 记录本回合 HEAD 供下回合比对（同步读一次可容忍:仅 rev-parse）
-                    let cwd = PathBuf::from(tab.info.cwd.clone());
+                    let cwd = tab.effective_cwd();
                     if let Some(repo) = delivery::repo_root(&cwd) {
                         tab.last_turn_head = delivery::head_commit(&repo);
                     }
@@ -432,7 +447,7 @@ impl Workspace {
                     return;
                 };
                 tab.delivery_pending = false;
-                let cwd = PathBuf::from(tab.info.cwd.clone());
+                let cwd = tab.effective_cwd();
                 let proxy = self.proxy.clone();
                 self.handle.spawn(async move {
                     let loaded = tokio::task::spawn_blocking(move || {
@@ -1398,6 +1413,18 @@ mod tests {
     fn banner_text_for_pending() {
         assert_eq!(banner_text(true), Some("交付待验收"));
         assert_eq!(banner_text(false), None);
+    }
+
+    #[test]
+    fn effective_cwd_prefers_osc_over_spawn() {
+        use std::path::Path;
+        // 用户 cd 进仓库:OSC 7 跟踪的实时目录优先于启动目录($HOME)
+        assert_eq!(
+            effective_cwd(Some(Path::new("/repo/proj")), "/Users/me"),
+            PathBuf::from("/repo/proj")
+        );
+        // 尚无 OSC 7 上报:回落启动目录
+        assert_eq!(effective_cwd(None, "/Users/me"), PathBuf::from("/Users/me"));
     }
 
     #[test]
