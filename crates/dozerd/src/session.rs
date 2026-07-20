@@ -21,6 +21,7 @@ pub enum SessionEvent {
         state: AgentState,
         event: String,
         ts_ms: u64,
+        transcript_path: Option<String>,
     },
 }
 
@@ -40,6 +41,7 @@ pub struct Session {
     created_ms: u64,
     alive: Arc<AtomicBool>,
     agent_state: Mutex<AgentState>,
+    transcript_path: Mutex<Option<String>>,
     buffer: Arc<Mutex<RingBuffer>>,
     tx: broadcast::Sender<SessionEvent>,
     writer: Mutex<Box<dyn Write + Send>>,
@@ -137,6 +139,7 @@ impl Session {
             created_ms: now_ms(),
             alive,
             agent_state: Mutex::new(AgentState::default()),
+            transcript_path: Mutex::new(None),
             buffer,
             tx,
             writer: Mutex::new(writer),
@@ -155,16 +158,24 @@ impl Session {
             alive: self.alive.load(Ordering::SeqCst),
             created_ms: self.created_ms,
             agent_state: *self.agent_state.lock().expect("agent_state lock"),
+            transcript_path: self.transcript_path.lock().expect("tp lock").clone(),
         }
+    }
+
+    /// 记下会话的 transcript 路径（hook data 携带；覆盖旧值）。
+    pub fn set_transcript_path(&self, path: &str) {
+        *self.transcript_path.lock().expect("tp lock") = Some(path.to_string());
     }
 
     /// hook 事件驱动的状态更新：记最新态 + 广播给本会话订阅者。
     pub fn set_agent_state(&self, state: AgentState, event: &str, ts_ms: u64) {
         *self.agent_state.lock().expect("agent_state lock") = state;
+        let transcript_path = self.transcript_path.lock().expect("tp lock").clone();
         let _ = self.tx.send(SessionEvent::Agent {
             state,
             event: event.to_string(),
             ts_ms,
+            transcript_path,
         });
     }
 
@@ -353,6 +364,7 @@ mod tests {
                     state,
                     event,
                     ts_ms,
+                    ..
                 } => {
                     assert_eq!(state, AgentState::Running);
                     assert_eq!(event, "UserPromptSubmit");
@@ -360,6 +372,32 @@ mod tests {
                     break;
                 }
                 _ => continue, // PTY 启动输出等无关事件
+            }
+        }
+        let _ = s.kill();
+    }
+
+    #[tokio::test]
+    async fn transcript_path_stored_and_in_info_and_broadcast() {
+        let s = Session::spawn(spec("sleep 5")).unwrap();
+        assert_eq!(s.info().transcript_path, None);
+        let mut rx = s.subscribe();
+        s.set_transcript_path("/t/conv.jsonl");
+        s.set_agent_state(AgentState::Running, "UserPromptSubmit", 1);
+        assert_eq!(s.info().transcript_path.as_deref(), Some("/t/conv.jsonl"));
+        loop {
+            match tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                SessionEvent::Agent {
+                    transcript_path, ..
+                } => {
+                    assert_eq!(transcript_path.as_deref(), Some("/t/conv.jsonl"));
+                    break;
+                }
+                _ => continue,
             }
         }
         let _ = s.kill();
