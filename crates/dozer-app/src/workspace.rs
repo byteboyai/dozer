@@ -412,7 +412,7 @@ impl Workspace {
             .as_ref()
             .map(|p| FileTree::new(PathBuf::from(&p.path)));
 
-        Self {
+        let ws = Self {
             tabs,
             active: 0,
             next_tab_id,
@@ -438,7 +438,15 @@ impl Workspace {
             dirty: false,
             recent_projects,
             git_statuses: HashMap::new(),
+        };
+        // 启动恢复了当前项目时,与 ProjectOpened 同样异步补 git 分支/脏与
+        // 对话列表（line 408 承诺"窗口起来后异步补"——此前只在用户主动
+        // 打开项目时接线,启动恢复路径漏了,导致重开 app 后对话列表空白）。
+        if ws.project.is_some() {
+            ws.spawn_project_git_refresh();
+            ws.spawn_conversations_refresh();
         }
+        ws
     }
 
     /// daemon 连接失败（自动拉起 + 重试后仍不可用）时的降级构造：不做
@@ -898,11 +906,11 @@ impl Workspace {
         let cwd = PathBuf::from(&p.path);
         let proxy = self.proxy.clone();
         self.handle.spawn(async move {
-            let list = tokio::task::spawn_blocking(move || {
-                conversation::list_conversations(&conversation::claude_project_dir(&cwd))
-            })
-            .await
-            .unwrap_or_default();
+            let dir = conversation::claude_project_dir(&cwd);
+            let list = tokio::task::spawn_blocking(move || conversation::list_conversations(&dir))
+                .await
+                .unwrap_or_default();
+            tracing::debug!(cwd = %cwd.display(), n = list.len(), "对话列表扫描完成");
             let _ = proxy.send_event(Message::ConversationsRefreshed(list));
         });
     }
