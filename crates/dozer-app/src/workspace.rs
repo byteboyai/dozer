@@ -26,6 +26,7 @@ use crate::project::FileTree;
 use crate::term_model::TerminalModel;
 use crate::term_view;
 use crate::theme;
+use crate::transcript::{self, ReviewEntry};
 use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentState, ProjectInfo, SessionInfo};
 use iced_widget::core::{Border, Color, Element, Length};
@@ -121,6 +122,12 @@ pub enum Message {
     AcceptanceReject,
     /// 通过动作结果（Ok(版本号)/Err(红字文案)）。
     AcceptanceDone(Result<u32, String>),
+    /// 会话审阅:点终端 tab"审阅"（tab_id 为来源会话）。
+    ReviewOpen(usize),
+    /// 会话审阅:解析完成（来源 tab_id, 条目 / 错误文案）。
+    ReviewLoaded(usize, Result<Vec<ReviewEntry>, String>),
+    /// 会话审阅:展开/收起第 n 个 AI 回合的过程区。
+    ReviewToggle(usize),
     /// 切换当前显示的 tab（这里的 `usize` 是 vec 位置——用户点击的是
     /// "屏幕上第几个 tab"，跟稳定 id 是两回事）。
     SelectTab(usize),
@@ -188,6 +195,15 @@ pub enum AddrEvent {
     Backspace,
     Submit,
     Cancel,
+}
+
+/// 会话审阅 tab 的内容（P1i）。
+pub struct ReviewView {
+    pub source_tab_id: usize,
+    pub entries: Vec<ReviewEntry>,
+    pub error: Option<String>,
+    /// 展开了过程区的 AI 回合下标（entries 中的位置）。
+    pub expanded: std::collections::HashSet<usize>,
 }
 
 /// 验收 tab 的一次进行中验收（spec P1f D8）。
@@ -293,6 +309,8 @@ pub struct Workspace {
     allowed_files: Arc<Mutex<HashSet<PathBuf>>>,
     /// 进行中的验收（验收 tab 内容;None=未打开）。
     acceptance: Option<AcceptanceView>,
+    /// 进行中的会话审阅（审阅 tab 内容;None=未打开;P1i）。
+    review: Option<ReviewView>,
     /// tab 前状态点的闪烁相位（true=亮/false=暗）。仅"工作中"(agent
     /// Running) 的 tab 会随它闪；由 main.rs 的定时唤醒每拍翻转
     /// （见 `toggle_blink`/`any_blinking`）。
@@ -381,6 +399,7 @@ impl Workspace {
             preview_error: None,
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
             acceptance: None,
+            review: None,
             blink_on: true,
             project,
             file_tree,
@@ -415,6 +434,7 @@ impl Workspace {
             preview_error: None,
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
             acceptance: None,
+            review: None,
             blink_on: true,
             project: None,
             file_tree: None,
@@ -524,6 +544,18 @@ impl Workspace {
                         });
                     }
                 }
+                // 审阅 tab 若开着且属本会话,回合结束重解析 transcript（P1i）。
+                if state == AgentState::TurnEnded
+                    && let Some(rv) = &self.review
+                    && rv.source_tab_id == tab_id
+                    && let Some(path) = self
+                        .tabs
+                        .iter()
+                        .find(|t| t.tab_id == tab_id)
+                        .and_then(|t| t.transcript_path.clone())
+                {
+                    self.spawn_review_load(tab_id, path);
+                }
             }
             Message::DeliveryChecked(tab_id, pending) => {
                 let active_id = self.tabs.get(self.active).map(|t| t.tab_id);
@@ -618,6 +650,42 @@ impl Workspace {
                         Ok(n) => acc.accepted_version = Some(n),
                         Err(e) => acc.error = Some(e),
                     }
+                }
+            }
+            Message::ReviewOpen(tab_id) => {
+                let path = self
+                    .tabs
+                    .iter()
+                    .find(|t| t.tab_id == tab_id)
+                    .and_then(|t| t.transcript_path.clone());
+                let Some(path) = path else { return };
+                self.review = Some(ReviewView {
+                    source_tab_id: tab_id,
+                    entries: Vec::new(),
+                    error: None,
+                    expanded: std::collections::HashSet::new(),
+                });
+                self.preview.open_review();
+                self.spawn_review_load(tab_id, path);
+            }
+            Message::ReviewLoaded(tab_id, result) => {
+                if let Some(rv) = &mut self.review
+                    && rv.source_tab_id == tab_id
+                {
+                    match result {
+                        Ok(entries) => {
+                            rv.entries = entries;
+                            rv.error = None;
+                        }
+                        Err(e) => rv.error = Some(e),
+                    }
+                }
+            }
+            Message::ReviewToggle(i) => {
+                if let Some(rv) = &mut self.review
+                    && !rv.expanded.remove(&i)
+                {
+                    rv.expanded.insert(i);
                 }
             }
             Message::SelectTab(idx) => {
@@ -774,6 +842,21 @@ impl Workspace {
             if let Err(e) = client.write(&id, &bytes).await {
                 tracing::warn!("写入终端失败: {e}");
             }
+        });
+    }
+
+    /// 异步读 transcript + 解析 → ReviewLoaded（GUI 侧 spawn_blocking；P1i）。
+    fn spawn_review_load(&self, tab_id: usize, path: String) {
+        let proxy = self.proxy.clone();
+        self.handle.spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                std::fs::read_to_string(&path)
+                    .map(|s| transcript::parse_transcript(&s))
+                    .map_err(|e| format!("无法读取会话记录: {e}"))
+            })
+            .await
+            .unwrap_or_else(|e| Err(format!("解析任务失败: {e}")));
+            let _ = proxy.send_event(Message::ReviewLoaded(tab_id, result));
         });
     }
 
@@ -1194,6 +1277,66 @@ fn pane(
 
 /// 验收 tab 内容（spec P1f D8）:目标 + 标准勾选 + 变更文件 + 意见 + 双动作。
 /// iced 直绘（验收 tab 激活时 webview 全隐藏，不抢层）。
+/// 会话审阅 tab 内容（P1i）：人类锚点 + AI 回合折叠（正文/过程）。
+fn review_content<'a>(
+    mut content: iced_widget::Column<'a, Message, iced_widget::Theme, iced_widget::Renderer>,
+    ws: &'a Workspace,
+) -> iced_widget::Column<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let Some(rv) = &ws.review else {
+        return content;
+    };
+    if let Some(err) = &rv.error {
+        return content.push(text(format!("⚠ {err}")).size(14).color(theme::RED));
+    }
+    if rv.entries.is_empty() {
+        return content.push(text("暂无对话").size(14).color(theme::DIM));
+    }
+    for (i, e) in rv.entries.iter().enumerate() {
+        match e {
+            ReviewEntry::Human { text: t } => {
+                content = content.push(text(format!("▎{t}")).size(15).color(theme::CREAM));
+            }
+            ReviewEntry::AiTurn {
+                text: body,
+                tools,
+                thinking,
+            } => {
+                if !body.is_empty() {
+                    content = content.push(text(body.clone()).size(14).color(theme::BODY));
+                }
+                let expanded = rv.expanded.contains(&i);
+                let glyph = if expanded { "▾ " } else { "▸ " };
+                content = content.push(
+                    button(
+                        text(format!(
+                            "{glyph}{}",
+                            ai_turn_summary(tools.len(), *thinking)
+                        ))
+                        .size(13)
+                        .color(theme::DIM),
+                    )
+                    .on_press(Message::ReviewToggle(i))
+                    .style(|_t, _s| button::Style {
+                        background: None,
+                        text_color: theme::DIM,
+                        ..button::Style::default()
+                    }),
+                );
+                if expanded {
+                    if *thinking {
+                        content = content.push(text("  · 思考(略)").size(12).color(theme::DIM));
+                    }
+                    for tool in tools {
+                        content =
+                            content.push(text(format!("  · {tool}")).size(13).color(theme::CYAN));
+                    }
+                }
+            }
+        }
+    }
+    content
+}
+
 fn acceptance_content<'a>(
     mut content: iced_widget::Column<'a, Message, iced_widget::Theme, iced_widget::Renderer>,
     ws: &'a Workspace,
@@ -1488,7 +1631,9 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
         content = content.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
     }
 
-    if ws.preview.acceptance_active() {
+    if ws.preview.review_active() {
+        content = review_content(content, ws);
+    } else if ws.preview.acceptance_active() {
         content = acceptance_content(content, ws);
     } else if ws.preview.tabs().is_empty() {
         content = content.push(
@@ -1559,6 +1704,26 @@ fn terminal_pane(
         content = content.push(banner);
     }
 
+    // 会话审阅入口（P1i）:当前 tab 有 transcript 时显示。
+    if let Some(tab) = ws.tabs.get(ws.active)
+        && review_available(tab.transcript_path.as_deref())
+    {
+        content = content.push(
+            button(text("审阅").size(13).color(theme::CYAN))
+                .on_press(Message::ReviewOpen(tab.tab_id))
+                .style(|_t, _s| button::Style {
+                    background: None,
+                    text_color: theme::CYAN,
+                    border: Border {
+                        color: theme::BORDER,
+                        width: 1.0,
+                        radius: 2.0.into(),
+                    },
+                    ..button::Style::default()
+                }),
+        );
+    }
+
     content = content.push(active_tab_view(ws));
 
     container(content.spacing(4).padding(8))
@@ -1610,10 +1775,18 @@ fn banner_text(pending: bool) -> Option<&'static str> {
 }
 
 /// 会话是否可审阅（有 transcript）——决定终端 tab 是否显示"审阅"入口。
-// 过渡期:T5 审阅按钮接线前无调用方。
-#[allow(dead_code)]
 fn review_available(transcript_path: Option<&str>) -> bool {
     transcript_path.is_some()
+}
+
+/// AI 回合折叠行文案（P1i）：过程 = thinking + N 工具。
+fn ai_turn_summary(tools_len: usize, thinking: bool) -> String {
+    match (thinking, tools_len) {
+        (false, 0) => "过程:无".into(),
+        (true, 0) => "过程:思考".into(),
+        (false, n) => format!("过程:{n} 工具"),
+        (true, n) => format!("过程:思考 + {n} 工具"),
+    }
 }
 
 /// 交付/验收使用的仓库：当前项目优先，无则回落会话 cwd（P1f 现状；P1g D4）。
@@ -1802,6 +1975,14 @@ mod tests {
     fn review_available_needs_transcript() {
         assert!(review_available(Some("/t/x.jsonl")));
         assert!(!review_available(None));
+    }
+
+    #[test]
+    fn ai_turn_summary_text() {
+        assert_eq!(ai_turn_summary(0, false), "过程:无");
+        assert_eq!(ai_turn_summary(2, false), "过程:2 工具");
+        assert_eq!(ai_turn_summary(2, true), "过程:思考 + 2 工具");
+        assert_eq!(ai_turn_summary(0, true), "过程:思考");
     }
 
     #[test]

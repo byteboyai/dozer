@@ -1,7 +1,5 @@
 //! Claude Code transcript(JSONL)适配器（P1i）：逐行解析成结构化审阅条目。
 //! 纯函数,不碰 iced/IO。规则见 spec P1i D2。
-// 过渡期:T5 审阅 tab 接线前无调用方（沿用先例）。
-#![allow(dead_code)]
 
 use serde_json::Value;
 

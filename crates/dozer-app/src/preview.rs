@@ -19,6 +19,8 @@ pub enum TabKind {
     },
     /// 验收 tab（P1f）:不产 webview,内容由 iced 直绘。
     Acceptance,
+    /// 会话审阅 tab（P1i）:不产 webview,内容由 iced 直绘。
+    Review,
 }
 
 /// 地址栏提交的解析结果:绝对路径 → 文件预览;其余按 URL 处理
@@ -129,11 +131,32 @@ impl PreviewPane {
             .is_some_and(|t| t.kind == TabKind::Acceptance)
     }
 
+    /// 打开会话审阅 tab:已存在则激活复用（全局至多一个）。
+    pub fn open_review(&mut self) -> usize {
+        if let Some((idx, tab)) = self
+            .tabs
+            .iter()
+            .enumerate()
+            .find(|(_, t)| t.kind == TabKind::Review)
+        {
+            let id = tab.id;
+            self.active = idx;
+            return id;
+        }
+        self.push_tab(TabKind::Review, "审阅".to_string())
+    }
+
+    pub fn review_active(&self) -> bool {
+        self.tabs
+            .get(self.active)
+            .is_some_and(|t| t.kind == TabKind::Review)
+    }
+
     /// 当前激活 tab 若是 webview(文件/网页)则返回其 id(=webview 池的 key)。
     pub fn active_webview_id(&self) -> Option<usize> {
         self.tabs.get(self.active).and_then(|t| match t.kind {
             TabKind::File(_) | TabKind::Web { .. } => Some(t.id),
-            TabKind::Acceptance => None,
+            TabKind::Acceptance | TabKind::Review => None,
         })
     }
 
@@ -208,7 +231,8 @@ impl PreviewPane {
     /// webview 期望清单:每文件/网页 tab 一个,仅激活者可见(设计 D2)；
     /// 验收 tab 不产 webview,且它激活时其余 webview 全隐藏（iced 直绘 pane）。
     pub fn desired_webviews(&self) -> Vec<WebviewSpec> {
-        let acceptance_active = self.acceptance_active();
+        // 验收/审阅 tab 是 iced 直绘的覆盖层,任一激活时其余 webview 全隐藏。
+        let overlay_active = self.acceptance_active() || self.review_active();
         self.tabs
             .iter()
             .enumerate()
@@ -219,12 +243,12 @@ impl PreviewPane {
                         encode_component(&path.to_string_lossy())
                     ),
                     TabKind::Web { url } => url.clone(),
-                    TabKind::Acceptance => return None,
+                    TabKind::Acceptance | TabKind::Review => return None,
                 };
                 Some(WebviewSpec {
                     id: tab.id,
                     url,
-                    visible: idx == self.active && !acceptance_active,
+                    visible: idx == self.active && !overlay_active,
                 })
             })
             .collect()
@@ -320,6 +344,18 @@ mod tests {
         assert_eq!(id_again, id0, "同文件复用同一 tab");
         assert_eq!(p.tabs().len(), 2, "不新增 tab");
         assert_eq!(p.active_idx(), 0, "切回已开的那个 tab");
+    }
+
+    #[test]
+    fn review_tab_no_webview_and_reuse() {
+        let mut p = PreviewPane::default();
+        p.open_url("http://localhost:3000".into());
+        let id = p.open_review();
+        let specs = p.desired_webviews();
+        assert_eq!(specs.len(), 1, "审阅 tab 不产 webview");
+        assert!(!specs[0].visible, "审阅 tab 激活时其余隐藏");
+        assert_eq!(p.open_review(), id, "复用同一 tab");
+        assert_eq!(p.tabs().len(), 2);
     }
 
     #[test]
