@@ -1,68 +1,74 @@
-# Dozer P1j 设计：项目对话列表（让 P1i 审阅引擎产生用途）
+# Dozer P1j 设计：项目对话列表（右一 AI 栏，让 P1i 审阅引擎产生用途）
 
-> 状态：设计稿,范围/裁决因用户暂离由实施方按"最小可逆 + 已表意图"代拟,**逐条可推翻**。
-> 上游:承接 P1i（transcript 适配器 + 审阅 tab 引擎，同分支 `feat/p1i-conversation-review`）;规格 §3 需求 6、§7 左二"会话审阅"、§8 过程性资产存放未决点、H0"最近的对话"卡。
-> 动因(用户 2026-07-20):"P1i 只看当前会话、无实质用途"——审阅引擎缺的是一个"翻阅非当前对话"的入口。对话列表就是那个入口。
+> 状态：设计稿,要点经用户逐问确认(见下),待写完复审。
+> 上游:承接 P1i（transcript 适配器 + 审阅 tab 引擎，同分支 `feat/p1i-conversation-review`）;规格 §3 需求 6、§7 左四 AI 栏、§8 过程性资产存放未决点、H0"最近的对话"卡。
+> 动因(用户 2026-07-20):"P1i 只看当前会话、无实质用途"——审阅引擎缺一个"翻阅项目所有对话"的入口。对话列表就是那个入口。
 
-## 0. 范围裁决(代拟,可推翻)
+## 0. 用户确认的关键决定
 
-**数据源=扫描 Claude 目录为主 + 预留列举接口**(用户暂离,取最小可逆)。实测本仓 `~/.claude/projects/-Users-...-dozer/` 已有 9 个 jsonl,目录名=cwd 把 `/` 换 `-`(确定规则,非哈希),首句人类发言天然成标题。扫描零存储零同步、映射确定;§8 的"自建索引"仅在多 agent/不依赖 Claude 格式时才值得,一期"仅 Claude Code 适配器"前提下不上。用一层 trait/函数抽象"列举项目对话",二期改索引只换实现。
+**目标数据模型(愿景) = `agent ▸ session ▸ conversation` 三层**:agent(Claude Code/codex/…)之下有 session(dozerd PTY/终端 tab),session 之下有 conversation(一次 transcript)。本切片只落**其中一层的扁平视图**,三层分组随后续增量补。
 
-**做**:左一项目栏"对话"区列出当前项目历史对话(标题=首句人类发言、副行=时间+规模)｜点某条 → 左二审阅 tab 渲染该对话(复用 P1i `parse_transcript`+审阅渲染)｜打开项目/回合结束时刷新列表｜**取代 P1i 冗余的"审阅当前会话"入口**——终端"审阅"按钮改为"在对话列表里高亮当前会话"或直接移除,当前会话经列表进入。
-**不做(后续)**:跨 agent(仅 Claude JSONL)｜自建索引落库｜对话搜索/过滤｜删除/重命名对话｜H0 独立页的"最近对话"卡(跨项目,二期)｜对话与验收记录联动跳转(c/d)。
+1. **内容 = 扁平一层的项目对话列表(扫 Claude 目录)**,活着的对话置顶标"● 当前"。不做 `session ▸ 多 conversation` 两层树——那需要 Dozer 自建并持久化 session→transcripts 索引(§8"自建索引"),推二期。**理由**:磁盘上对话按项目(cwd)分组而非 session,dozerd 只知每个 session 的"当前"对话不知其历史,且 session 易失/对话持久;扁平一层数据现成零存储,绝大多数时候一个 session 就一个当前对话,够用。
+   **多 agent 前瞻(用户补充 2026-07-20)**:扫描是 **Claude Code 专属**(扫 `~/.claude/projects`、认 JSONL)。多 agent 的历史对话需**每 agent 一套"对话来源"**(与规格 §4"每 agent 一个 transcript 适配器"平行)。本切片留两处门:①扫描逻辑圈成"ClaudeCode 对话来源",核心列表不依赖 Claude 细节;②`ConversationMeta` 带 `agent` 字段(现恒 `"claude"`)——UI/模型现在就有 agent 维度,二期按 agent 分组(agent ▸ 对话)是加法。
+2. **位置 = 右一 AI 栏**,与 agent 列表可切换,对话列表在前(默认视图)。**理由(用户)**:"哪个 agent 在干活"是长期关注,"会话/对话"是每时每刻关注,后者更该显眼。
+3. **取代 P1i 冗余入口**:移除终端 tab 的"审阅当前会话"按钮;当前会话经这个列表进入(它在列表里标"● 当前")。
+4. **修订规格 §7 冻结项**:§7 左四原写"Agents 简卡(**不含会话列表**,避免与终端 tabs 重复)"。本设计有意在 AI 栏加对话列表并置于 agent 前——用户裁决:高频关注点优先,重复由"● 当前"标记与终端 tab 呼应而非割裂。
 
 ## 1. 目标
 
-在左一项目栏给出**当前项目的历史对话列表**(扫 Claude 目录),点击任一条进左二审阅 tab 结构化查看。让 P1i 的审阅引擎从"看当前终端复读机"变成"翻阅项目所有对话史"——兑现规格"对话史是项目的过程性资产"。
+右一 AI 栏给出**当前项目的对话列表**(扫 Claude 目录,扁平),活对话置顶标"● 当前";点任一条 → 左二审阅 tab 结构化查看(复用 P1i)。让 P1i 审阅引擎从"看当前终端复读机"变成"翻阅项目所有对话史"——兑现"对话史是项目的过程性资产"。
 
-## 2. 关键裁决(代拟,可推翻)
+## 2. 关键裁决
 
-- **D1 会话目录映射=确定规则**:`claude_project_dir(cwd) = ~/.claude/projects/<cwd 中 '/' 换 '-'>`。放 `crates/dozer-app/src/conversation.rs`(新)。非 Claude 存储不管(一期)。
-- **D2 列举=纯 IO 函数 + 纯解析函数分离**:`list_conversations(dir) -> Vec<ConversationMeta>`(读目录 + 每个 jsonl 取首句人类发言当标题、mtime、size;IO,GUI 侧 spawn_blocking);`conversation_title(jsonl_head) -> Option<String>`(纯函数,便于测——只解析拿标题,不全解析)。`ConversationMeta{path, title, modified_ms, size_bytes}`。为省 IO,标题只读文件**前若干行**直到遇到首个字符串型 user content。
-- **D3 列表在左一,复用 project 刷新节奏**:`Workspace` 加 `conversations: Vec<ConversationMeta>`;`ProjectOpened` + `TurnEnded` 时(已有 `spawn_project_git_refresh`)顺带 `spawn_conversations_refresh`。渲染在 `project_pane` 文件树下方加"对话"折叠区。
-- **D4 点击进审阅=复用 P1i,泛化入口**:P1i 的 `ReviewOpen(tab_id)` 靠 tab 的 transcript_path。新增 `Message::ConversationOpen(PathBuf)` 直接给路径 → `spawn_review_load` 需泛化为"按路径解析"(现已是 `spawn_review_load(tab_id, path)`,把 source_tab_id 语义放宽:列表来的用哨兵 id 或 Option)。`ReviewView.source_tab_id` 改 `source: ReviewSource{ Session(usize) | File(PathBuf) }`——回合结束刷新只对 `Session` 源生效(File 源是历史快照,不追加)。
-- **D5 取代 P1i 冗余入口**:移除终端 tab 的"审阅当前会话"按钮;当前会话若在列表中(其 transcript_path 匹配某条),列表里高亮/标"● 当前"。用户经列表进入任何对话(含当前)。**这是对 P1i 的收敛,不是新增。**
-- **D6 dozerd 不参与**:目录扫描/解析全 GUI 侧(延续哑管道);dozerd 仍只在会话活着时传当前 transcript_path(P1i 已有,用于 D5 高亮匹配)。
+- **D1 会话目录映射=确定规则**:`claude_project_dir(cwd) = ~/.claude/projects/<cwd 中 '/' 换 '-'>`(实测本仓即此规则,非哈希)。放 `crates/dozer-app/src/conversation.rs`(新)。仅 Claude Code(一期)。
+- **D2 列举=纯 IO + 纯解析分离,圈成"ClaudeCode 对话来源"**:`list_conversations(dir) -> Vec<ConversationMeta>`(读目录 + 每 jsonl 取首句人类发言当标题、mtime、size;GUI 侧 spawn_blocking);`conversation_title(jsonl_head: &str) -> Option<String>`(纯,只解析拿标题,遇首个字符串型 user content 即返回,省 IO)。`ConversationMeta{path, title, modified_ms, size_bytes, agent: String}`(`agent` 现恒 `"claude"`,为多 agent 留维度)。这些是 ClaudeCode 来源的实现;核心列表/渲染只吃 `ConversationMeta`,不碰 Claude 细节——二期加 agent 只是加一个产出 `ConversationMeta` 的来源。
+- **D3 "两者合一"= 扫描列表 + 活标记**:活着的 claude 会话其 transcript 本就在 Claude 目录被实时写,所以扫描已含活对话;dozerd 额外给的只是"哪条现在活在 Dozer 终端 tab + 其 agent 状态",而 workspace 已有(每个 `SessionTab.transcript_path`/`agent_state`,P1i 已接)。渲染时把每个 `ConversationMeta.path` 与打开着的 `SessionTab.transcript_path` 交叉:匹配 → "● 当前" + agent 状态点 + 置顶;其余按 mtime 倒序。纯函数 `is_current_conversation(meta_path, &open_transcript_paths) -> bool`。
+- **D4 右一 AI 栏视图切换器**:AI 栏(现 `pane("AI · P1e")` 占位)改真 pane:顶部一排小 tab `[对话 | Agents]`(默认"对话"),`ai_view: AiView{Conversations|Agents}` 状态;"对话"视图=对话列表,"Agents"视图=现占位(后续填)。切换 `Message::AiViewSwitch(AiView)`。
+- **D5 刷新节奏复用 project**:`Workspace` 加 `conversations: Vec<ConversationMeta>`;`ProjectOpened` + `TurnEnded`(已有 `spawn_project_git_refresh` 处)顺带 `spawn_conversations_refresh`(spawn_blocking 扫目录)。
+- **D6 点击进审阅=复用 P1i,泛化源**:新增 `Message::ConversationOpen(PathBuf)`。P1i 的 `ReviewView.source_tab_id: usize` 泛化为 `source: ReviewSource{ Session(usize) | File(PathBuf) }`——回合结束刷新只对 `Session` 源生效(File 源是历史快照不追加);`spawn_review_load` 已是按路径解析,只需按源取路径。`ConversationOpen` → `review = ReviewView{source: File(path)}` + `open_review` + 解析。
+- **D7 取代终端入口 + dozerd 不参与**:移除 `terminal_pane` 的"审阅"按钮(D3/P1i 冗余);目录扫描/解析全 GUI 侧 spawn_blocking(哑管道),dozerd 仍只在会话活着时传当前 transcript_path(P1i 已有)。
 
 ## 3. 组件与数据流
 
 ```
 ProjectOpened / TurnEnded
-   │ spawn_blocking: conversation::list_conversations(claude_project_dir(cwd))
+   │ spawn_blocking: conversation::list_conversations(claude_project_dir(项目cwd))
    ▼
-Message::ConversationsRefreshed(Vec<ConversationMeta>)
-   ▼ workspace.conversations 存
-project_pane 左一"对话"区:每条 title + 时间/规模,当前会话高亮
+Message::ConversationsRefreshed(Vec<ConversationMeta>) → workspace.conversations
+   ▼
+右一 AI 栏(ai_view=Conversations):每条 title + 时间/规模;
+   与打开着的 SessionTab.transcript_path 交叉 → 活的标"● 当前"+agent 点+置顶
    │ 点击某条
-   ▼ Message::ConversationOpen(path) → review = ReviewView{source: File(path)} + open_review + spawn_review_load(File 源)
+   ▼ Message::ConversationOpen(path) → review=ReviewView{source:File(path)} + open_review + spawn_review_load
    ▼ 左二审阅 tab 渲染(复用 P1i review_content)
 ```
 
-- `crates/dozer-app/src/conversation.rs`(新):`ConversationMeta`、`claude_project_dir(cwd)->PathBuf`、`conversation_title(&str)->Option<String>`(纯)、`list_conversations(&Path)->Vec<ConversationMeta>`(IO)。
-- `crates/dozer-app/src/workspace.rs`:`conversations` 字段、`ConversationsRefreshed`/`ConversationOpen` 消息、`spawn_conversations_refresh`、`ReviewSource` 枚举(改 `ReviewView.source`)、`spawn_review_load` 按源、左一"对话"区渲染、移除终端"审阅"按钮。
-- P1i 的 `review_content`/`parse_transcript`/审阅 tab 全复用,不改。
+- `crates/dozer-app/src/conversation.rs`(新):`ConversationMeta`、`claude_project_dir(&Path)->PathBuf`、`conversation_title(&str)->Option<String>`(纯)、`list_conversations(&Path)->Vec<ConversationMeta>`(IO)、`is_current_conversation(&Path,&[String])->bool`(纯)。
+- `crates/dozer-app/src/workspace.rs`:`conversations` 字段、`ai_view: AiView`、`AiView` 枚举、`Message::{ConversationsRefreshed, ConversationOpen, AiViewSwitch}`、`spawn_conversations_refresh`、`ReviewSource` 枚举(改 `ReviewView.source` + 相关分支)、`ai_pane` 渲染(替换占位)、移除终端"审阅"按钮。
+- P1i 的 `review_content`/`parse_transcript`/审阅 tab 复用;`ReviewView`/`spawn_review_load`/`ReviewOpen(Session 源)`小改以容 `ReviewSource`。
 
 ## 4. 错误处理
 
-- 项目非 git 也无妨(对话列表按 cwd 目录,与 git 无关)；cwd 无对应 Claude 目录 → 列表空,显"暂无对话记录"。
-- 某 jsonl 读标题失败/无人类发言 → 标题回落文件名(短 uuid)或"(无标题对话)"，不跳过(仍可点开)。
-- 目录 read_dir 失败(权限)→ 列表空 + 灰字提示,不崩。
-- 点开的对话文件读失败 → 审阅 tab 域内红字(P1i 已有 ReviewLoaded Err 分支)。
-- 当前会话无 transcript_path(hook 没装)→ 列表仍能扫出历史对话,只是不高亮"当前"。
+- cwd 无对应 Claude 目录 / read_dir 失败 → 列表空,显"暂无对话记录"(灰字),不崩。
+- 某 jsonl 无人类发言/读标题失败 → 标题回落文件名短 uuid 或"(无标题对话)",仍可点开。
+- 点开的对话文件读失败 → 审阅 tab 域内红字(P1i `ReviewLoaded` Err 已有)。
+- 无当前项目 → AI 栏对话视图显"先打开项目"。
+- 当前会话无 transcript_path(hook 没装)→ 列表仍扫出历史对话,只是无"● 当前"标记。
 
 ## 5. 测试策略
 
 Headless:
-- `conversation_title`:喂 jsonl 头几行(首条 user 字符串 content)→ 返回标题;首条是工具结果 list → 跳过继续找;全无 → None。纯函数。
-- `claude_project_dir`:`/a/b/c` → `<home>/.claude/projects/-a-b-c`。纯函数(HOME 注入或对比后缀)。
-- `list_conversations`:tempdir 造两个 jsonl(不同 mtime/首句)→ 断言按 mtime 倒序、title/size 正确、空目录返空。
-- workspace:`ReviewSource` 分派——File 源回合结束不刷新、Session 源刷新(纯逻辑函数 `review_should_refresh_on_turn(&ReviewSource, tab_id)->bool`)。
-- 当前会话高亮:`is_current_conversation(meta_path, current_transcript_path)->bool` 纯函数。
+- `claude_project_dir`:`/a/b/c` → 后缀为 `-a-b-c` 的 projects 子目录(HOME 前缀对比)。
+- `conversation_title`:首条 user 字符串 content → 标题;首条工具结果 list → 跳过续找;全无 → None。
+- `list_conversations`:tempdir 造两 jsonl(不同 mtime/首句)→ 按 mtime 倒序、title/size 正确;空目录返空。
+- `is_current_conversation`:路径命中打开集 → true,否则 false。
+- `ReviewSource` 分派:`review_should_refresh_on_turn(&ReviewSource)->bool`——Session→true、File→false。
 
-人工验收(草案):打开本仓 → 左一"对话"区列出历史对话(标题=首句、时间倒序),当前会话标"● 当前" → 点一条历史对话 → 左二审阅 tab 结构化呈现那次对话(人类锚点+折叠) → 回合结束:当前会话那条刷新、历史对话不动 → 终端不再有"审阅"按钮(改由列表进入) → 非本项目 cwd/无记录 → "暂无对话记录"。
+人工验收(草案):打开本仓 → 右一 AI 栏默认"对话"视图,列出历史对话(标题=首句、时间倒序),当前 claude 会话那条标"● 当前"置顶 → 点一条历史对话 → 左二审阅 tab 结构化呈现(人类锚点+折叠) → 切到"Agents"视图/切回 → 正常 → 回合结束:当前那条刷新、历史不动 → 终端不再有"审阅"按钮 → 非本项目/无记录 → "暂无对话记录"。
 
-## 6. 备选方案(已否/已并入)
+## 6. 备选方案(已否/推后)
 
-- **纯自建索引**:见 D0,一期成本不值;抽象层保留改造门。
-- **保留 P1i 的"审阅当前会话"按钮 + 新增列表**:两个入口冗余,用户已点出当前会话入口无价值;D5 收敛为单一入口(列表)。
-- **对话列表放左二(与预览 tab 并列)**:对话列表是"项目资产的导航",属左一项目域(与文件树同域);选中某对话的"内容"才进左二审阅 tab。放左一符合规格四栏分域。
+- **三层 agent ▸ session ▸ conversations**:目标模型(§0),需自建索引(session 层,§8)+ 每 agent 对话来源(agent 层);推二期,本切片留 `agent` 字段与来源抽象两处门,分组增量补。
+- **放左一(项目域)**:对话列表本可归左一(与文件树同域),但用户裁决放右一 AI 栏、与 agent 并列且在前(高频关注点优先)。
+- **放左二(与预览 tab 并列)**:列表是导航不是内容,内容才进左二审阅 tab;分域不符。
+- **保留 P1i"审阅当前会话"按钮**:与列表入口冗余,D7 收敛为单一入口。
