@@ -874,7 +874,7 @@ cargo build -p dozer-app && ./target/aarch64-apple-darwin/debug/dozer & sleep 8 
 
 Expected: 全绿零警告；app 存活 8 秒。**验收前 `pkill dozerd` 重启新 daemon;需 `dozer-hook install` 且新起 claude 会话(transcript_path 靠 hook 携带)。**
 
-- [ ] **Step 2: 用户人工验收（逐项 ✓/✗，验收权在用户）**
+- [x] **Step 2: 用户人工验收（逐项 ✓/✗，验收权在用户）**
 
 ```markdown
 # P1i 人工验收清单（用户实机执行）
@@ -887,7 +887,7 @@ Expected: 全绿零警告；app 存活 8 秒。**验收前 `pkill dozerd` 重启
 7. 关 app 重开 → 恢复的会话若 transcript 仍在,"审阅"入口仍在(SessionInfo 携带)
 ```
 
-- [ ] **Step 3: 结果落档 + Commit**
+- [x] **Step 3: 结果落档 + Commit**
 
 验收记录写入 `docs/superpowers/specs/2026-07-19-p1i-acceptance.md`（沿用格式：逐项结果表 + 反馈修复流水）；全部通过后规格 §3 需求 6 追加"P1i 达成（<日期>，对话可审阅性首片：transcript 适配器 + 左二会话审阅 tab 人类锚点 + AI 回合折叠；提问置顶/产物联动/多 agent 随后续），验收记录见 specs/2026-07-19-p1i-acceptance.md"。
 

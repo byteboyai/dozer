@@ -689,7 +689,7 @@ cargo build -p dozer-app && ./target/aarch64-apple-darwin/debug/dozer & sleep 8 
 
 Expected: 全绿零警告；app 存活 8 秒。**验收前 `pkill dozerd` 重启新 daemon;需 `dozer-hook install` 且新起 claude 会话(transcript_path 靠 hook)。**
 
-- [ ] **Step 2: 用户人工验收（逐项 ✓/✗，验收权在用户）**
+- [x] **Step 2: 用户人工验收（逐项 ✓/✗，验收权在用户）**
 
 ```markdown
 # P1i+P1j 人工验收清单（用户实机执行）
@@ -703,7 +703,7 @@ Expected: 全绿零警告；app 存活 8 秒。**验收前 `pkill dozerd` 重启
 8. 关 app 重开 → 打开项目后对话列表恢复
 ```
 
-- [ ] **Step 3: 结果落档 + Commit**
+- [x] **Step 3: 结果落档 + Commit**
 
 验收记录写 `docs/superpowers/specs/2026-07-20-p1ij-acceptance.md`（P1i 引擎 + P1j 入口，合一验收；沿用格式）；勾选 P1i 计划残留 checkbox；规格 §3 需求 6 追加"P1i+P1j 达成（<日期>，对话可审阅性：transcript 适配器 + 审阅 tab（人类锚点/折叠）+ 右一对话列表（扫 Claude 目录、活对话置顶、点击进审阅）；提问置顶/产物联动/多 agent/两层分组随后续），验收记录见 specs/2026-07-20-p1ij-acceptance.md"；§7 左四 AI 栏追加"P1j 修订：AI 栏加对话列表并置于 agent 前（高频关注点优先）"。
 
