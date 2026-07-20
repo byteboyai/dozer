@@ -122,10 +122,8 @@ pub enum Message {
     AcceptanceReject,
     /// 通过动作结果（Ok(版本号)/Err(红字文案)）。
     AcceptanceDone(Result<u32, String>),
-    /// 会话审阅:点终端 tab"审阅"（tab_id 为来源会话）。
-    ReviewOpen(usize),
-    /// 会话审阅:解析完成（来源 tab_id, 条目 / 错误文案）。
-    ReviewLoaded(usize, Result<Vec<ReviewEntry>, String>),
+    /// 会话审阅:解析完成（来源, 条目 / 错误文案）。
+    ReviewLoaded(ReviewSource, Result<Vec<ReviewEntry>, String>),
     /// 会话审阅:展开/收起第 n 个 AI 回合的过程区。
     ReviewToggle(usize),
     /// 切换当前显示的 tab（这里的 `usize` 是 vec 位置——用户点击的是
@@ -197,9 +195,23 @@ pub enum AddrEvent {
     Cancel,
 }
 
+/// 审阅内容的来源（P1j）：活会话 tab（回合结束刷新）或历史对话文件（快照不刷新）。
+// 过渡期:T3 ConversationOpen 接线前变体无构造方。
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReviewSource {
+    Session(usize),
+    File(PathBuf),
+}
+
+/// 回合结束时该审阅视图是否应重解析：仅当它是该会话的活审阅。
+fn review_should_refresh_on_turn(source: &ReviewSource, tab_id: usize) -> bool {
+    matches!(source, ReviewSource::Session(id) if *id == tab_id)
+}
+
 /// 会话审阅 tab 的内容（P1i）。
 pub struct ReviewView {
-    pub source_tab_id: usize,
+    pub source: ReviewSource,
     pub entries: Vec<ReviewEntry>,
     pub error: Option<String>,
     /// 展开了过程区的 AI 回合下标（entries 中的位置）。
@@ -547,14 +559,14 @@ impl Workspace {
                 // 审阅 tab 若开着且属本会话,回合结束重解析 transcript（P1i）。
                 if state == AgentState::TurnEnded
                     && let Some(rv) = &self.review
-                    && rv.source_tab_id == tab_id
+                    && review_should_refresh_on_turn(&rv.source, tab_id)
                     && let Some(path) = self
                         .tabs
                         .iter()
                         .find(|t| t.tab_id == tab_id)
                         .and_then(|t| t.transcript_path.clone())
                 {
-                    self.spawn_review_load(tab_id, path);
+                    self.spawn_review_load(ReviewSource::Session(tab_id), path);
                 }
             }
             Message::DeliveryChecked(tab_id, pending) => {
@@ -652,25 +664,9 @@ impl Workspace {
                     }
                 }
             }
-            Message::ReviewOpen(tab_id) => {
-                let path = self
-                    .tabs
-                    .iter()
-                    .find(|t| t.tab_id == tab_id)
-                    .and_then(|t| t.transcript_path.clone());
-                let Some(path) = path else { return };
-                self.review = Some(ReviewView {
-                    source_tab_id: tab_id,
-                    entries: Vec::new(),
-                    error: None,
-                    expanded: std::collections::HashSet::new(),
-                });
-                self.preview.open_review();
-                self.spawn_review_load(tab_id, path);
-            }
-            Message::ReviewLoaded(tab_id, result) => {
+            Message::ReviewLoaded(source, result) => {
                 if let Some(rv) = &mut self.review
-                    && rv.source_tab_id == tab_id
+                    && rv.source == source
                 {
                     match result {
                         Ok(entries) => {
@@ -845,8 +841,8 @@ impl Workspace {
         });
     }
 
-    /// 异步读 transcript + 解析 → ReviewLoaded（GUI 侧 spawn_blocking；P1i）。
-    fn spawn_review_load(&self, tab_id: usize, path: String) {
+    /// 异步读 transcript + 解析 → ReviewLoaded（GUI 侧 spawn_blocking；P1i/P1j 按源）。
+    fn spawn_review_load(&self, source: ReviewSource, path: String) {
         let proxy = self.proxy.clone();
         self.handle.spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
@@ -856,7 +852,7 @@ impl Workspace {
             })
             .await
             .unwrap_or_else(|e| Err(format!("解析任务失败: {e}")));
-            let _ = proxy.send_event(Message::ReviewLoaded(tab_id, result));
+            let _ = proxy.send_event(Message::ReviewLoaded(source, result));
         });
     }
 
@@ -1704,25 +1700,7 @@ fn terminal_pane(
         content = content.push(banner);
     }
 
-    // 会话审阅入口（P1i）:当前 tab 有 transcript 时显示。
-    if let Some(tab) = ws.tabs.get(ws.active)
-        && review_available(tab.transcript_path.as_deref())
-    {
-        content = content.push(
-            button(text("审阅").size(13).color(theme::CYAN))
-                .on_press(Message::ReviewOpen(tab.tab_id))
-                .style(|_t, _s| button::Style {
-                    background: None,
-                    text_color: theme::CYAN,
-                    border: Border {
-                        color: theme::BORDER,
-                        width: 1.0,
-                        radius: 2.0.into(),
-                    },
-                    ..button::Style::default()
-                }),
-        );
-    }
+    // P1j 收敛：终端"审阅"按钮移除，会话审阅入口统一到右一对话列表。
 
     content = content.push(active_tab_view(ws));
 
@@ -1774,7 +1752,9 @@ fn banner_text(pending: bool) -> Option<&'static str> {
     pending.then_some("交付待验收")
 }
 
-/// 会话是否可审阅（有 transcript）——决定终端 tab 是否显示"审阅"入口。
+/// 会话是否可审阅（有 transcript）——"● 当前"判定复用。
+// 过渡期:T4 AI 栏接线前无调用方（终端按钮已移除）。
+#[allow(dead_code)]
 fn review_available(transcript_path: Option<&str>) -> bool {
     transcript_path.is_some()
 }
@@ -1969,6 +1949,17 @@ mod tests {
             effective_project_repo(None, Path::new("/home/me")),
             PathBuf::from("/home/me")
         );
+    }
+
+    #[test]
+    fn review_refresh_only_for_matching_session() {
+        use std::path::PathBuf;
+        assert!(review_should_refresh_on_turn(&ReviewSource::Session(3), 3));
+        assert!(!review_should_refresh_on_turn(&ReviewSource::Session(3), 4));
+        assert!(!review_should_refresh_on_turn(
+            &ReviewSource::File(PathBuf::from("/t/x.jsonl")),
+            3
+        ));
     }
 
     #[test]

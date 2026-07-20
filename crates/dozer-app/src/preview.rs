@@ -132,6 +132,8 @@ impl PreviewPane {
     }
 
     /// 打开会话审阅 tab:已存在则激活复用（全局至多一个）。
+    // 过渡期:T3 ConversationOpen 接线前无调用方（终端审阅按钮已移除）。
+    #[allow(dead_code)]
     pub fn open_review(&mut self) -> usize {
         if let Some((idx, tab)) = self
             .tabs
