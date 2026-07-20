@@ -31,6 +31,9 @@ pub struct SessionInfo {
     /// 会话内 agent 的最新状态；旧协议帧无此字段时回落 Idle。
     #[serde(default)]
     pub agent_state: AgentState,
+    /// 当前会话 agent 的 transcript 文件路径（Claude Code JSONL；hook 携带）。
+    #[serde(default)]
+    pub transcript_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -125,6 +128,8 @@ pub enum Reply {
         state: AgentState,
         event: String,
         ts_ms: u64,
+        /// 该会话最新已知的 transcript 路径（hook data 携带；无则 None）。
+        transcript_path: Option<String>,
     },
     /// 项目列表。
     Projects {
@@ -202,6 +207,7 @@ mod tests {
             state: AgentState::AwaitingInput,
             event: "Notification".into(),
             ts_ms: 5,
+            transcript_path: None,
         });
         assert!(line.contains(r#""type":"agent_event""#));
         assert!(line.contains(r#""state":"awaiting_input""#));
@@ -254,6 +260,31 @@ mod tests {
         };
         let back: Request = decode_line(encode_line(&req).trim()).unwrap();
         assert_eq!(back, req);
+    }
+
+    #[test]
+    fn agent_event_carries_transcript_path() {
+        let line = encode_line(&Reply::AgentEvent {
+            session_id: "s".into(),
+            state: AgentState::Running,
+            event: "UserPromptSubmit".into(),
+            ts_ms: 1,
+            transcript_path: Some("/t/x.jsonl".into()),
+        });
+        assert!(line.contains("/t/x.jsonl"));
+        match decode_line::<Reply>(line.trim()).unwrap() {
+            Reply::AgentEvent {
+                transcript_path, ..
+            } => assert_eq!(transcript_path.as_deref(), Some("/t/x.jsonl")),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn old_session_info_without_transcript_path_decodes_none() {
+        let old = r#"{"id":"a","name":"n","command":"/bin/sh","cwd":"/tmp","alive":true,"created_ms":1}"#;
+        let info: SessionInfo = decode_line(old).unwrap();
+        assert_eq!(info.transcript_path, None);
     }
 
     #[test]
