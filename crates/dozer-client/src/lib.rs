@@ -16,7 +16,10 @@ pub enum TermEvent {
     Lagged,
     Disconnected,
     /// 本会话 agent 状态变更（hook 事件驱动，dozerd 广播）。
-    Agent(AgentState),
+    Agent {
+        state: AgentState,
+        transcript_path: Option<String>,
+    },
 }
 
 #[derive(Clone)]
@@ -226,7 +229,9 @@ impl Client {
                                         .decode(data_b64.as_bytes())
                                         .map(TermEvent::Output)
                                         .unwrap_or(TermEvent::Disconnected),
-                                    Ok(Reply::AgentEvent { state, .. }) => TermEvent::Agent(state),
+                                    Ok(Reply::AgentEvent { state, transcript_path, .. }) => {
+                                        TermEvent::Agent { state, transcript_path }
+                                    }
                                     Ok(Reply::Exited { code, .. }) => TermEvent::Exited(code),
                                     Ok(Reply::Error { message }) if message.contains("lagged") =>
                                         TermEvent::Lagged,

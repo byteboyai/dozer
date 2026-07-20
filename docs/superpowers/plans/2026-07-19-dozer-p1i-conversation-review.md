@@ -32,7 +32,7 @@
   - `SessionInfo.transcript_path: Option<String>`（`#[serde(default)]`）
   - `Reply::AgentEvent.transcript_path: Option<String>`
 
-- [ ] **Step 1: 写失败测试**（`protocol.rs` 的 `mod tests` 追加）
+- [x] **Step 1: 写失败测试**（`protocol.rs` 的 `mod tests` 追加）
 
 ```rust
     #[test]
@@ -61,12 +61,12 @@
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-core transcript`
 Expected: 编译错误（字段不存在）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `SessionInfo` 末尾加：
 
@@ -89,12 +89,12 @@ Expected: 编译错误（字段不存在）。
     },
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-core && cargo build --workspace`
 Expected: dozer-core 全绿。dozerd/dozer-client 若因构造 `SessionInfo`/`AgentEvent` 缺字段报错，是预期——Task 2/4 补齐；本步只需 dozer-core 绿（`cargo test -p dozer-core`）。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-core
@@ -118,7 +118,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `Session` 的 `SessionInfo`/`SessionEvent::Agent` 带 transcript_path
   - HookEvent 处理：从 `data["transcript_path"]` 提取并存
 
-- [ ] **Step 1: 写失败测试**（`session.rs` 的 `mod tests` 追加）
+- [x] **Step 1: 写失败测试**（`session.rs` 的 `mod tests` 追加）
 
 ```rust
     #[tokio::test]
@@ -154,12 +154,12 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozerd transcript_path_stored`
 Expected: 编译错误（`set_transcript_path`/字段不存在）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `session.rs`：`SessionEvent::Agent` 加字段：
 
@@ -237,12 +237,12 @@ HookEvent 处理：`data: _` 改 `data`，提取路径（`set_agent_state` 调�
 
 （`session.rs` 里既有测试构造 `SessionEvent::Agent {...}` 的地方补 `transcript_path: None,`——`set_agent_state_updates_info_and_broadcasts` 的 match 臂已解构 `..` 则无需改；若显式列字段则补。）
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozerd`
 Expected: 全绿（含新测）。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozerd
@@ -264,7 +264,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `ReviewEntry`（`Human{text:String}` / `AiTurn{text:String, tools:Vec<String>, thinking:bool}`；Debug/Clone/PartialEq）
   - `parse_transcript(jsonl: &str) -> Vec<ReviewEntry>`
 
-- [ ] **Step 1: 写失败测试**（`transcript.rs` 尾部）
+- [x] **Step 1: 写失败测试**（`transcript.rs` 尾部）
 
 ```rust
 #[cfg(test)]
@@ -302,12 +302,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app parses_human`
 Expected: 编译错误（模块不存在）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `crates/dozer-app/src/transcript.rs`：
 
@@ -427,12 +427,12 @@ pub fn parse_transcript(jsonl: &str) -> Vec<ReviewEntry> {
 
 `main.rs` 的 `mod project;` 后加 `mod transcript;`。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app parses_human empty_and_all`
 Expected: 2 测试通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/transcript.rs crates/dozer-app/src/main.rs
@@ -456,7 +456,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `Message::AgentStateChanged(usize, AgentState, Option<String>)`
   - `SessionTab.transcript_path: Option<String>`（bootstrap 从 SessionInfo，AgentEvent 更新）
 
-- [ ] **Step 1: 写失败测试**（`workspace.rs` 的 `mod tests` 追加——纯函数级：审阅入口可见性）
+- [x] **Step 1: 写失败测试**（`workspace.rs` 的 `mod tests` 追加——纯函数级：审阅入口可见性）
 
 ```rust
     #[test]
@@ -466,12 +466,12 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app review_available`
 Expected: 编译错误（`review_available` 未定义）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `dozer-client/src/lib.rs`：
 
@@ -524,12 +524,12 @@ fn review_available(transcript_path: Option<&str>) -> bool {
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-client && cargo test -p dozer-app review_available`
 Expected: 全绿。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-client crates/dozer-app/src/workspace.rs
@@ -553,7 +553,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `Message::{ReviewOpen(usize), ReviewLoaded(usize, Result<Vec<ReviewEntry>, String>), ReviewToggle(usize)}`
   - `ai_turn_summary(tools_len: usize, thinking: bool) -> String`（纯函数）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `preview.rs` tests 追加：
 
@@ -583,12 +583,12 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app review_tab_no_webview ai_turn_summary`
 Expected: 编译错误（未定义）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `preview.rs`：`TabKind` 加 `Review`（同 Acceptance 处理）：
 
@@ -834,7 +834,7 @@ fn review_content<'a>(
 
 （放在 `terminal_pane` 里 `content` 已建、`active_tab_view` 之前。）
 
-- [ ] **Step 4: 跑测试确认通过 + 冒烟**
+- [x] **Step 4: 跑测试确认通过 + 冒烟**
 
 ```bash
 cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets && cargo fmt
@@ -843,7 +843,7 @@ cargo build -p dozer-app && ./target/aarch64-apple-darwin/debug/dozer & sleep 8 
 
 Expected: 测试全绿、零警告；app 存活 8 秒无 panic。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app
@@ -865,7 +865,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: 全部前序任务。
 - Produces: 用户签字的验收记录；下一阶段起点。
 
-- [ ] **Step 1: 全量回归 + 冒烟**
+- [x] **Step 1: 全量回归 + 冒烟**
 
 ```bash
 cargo test && cargo clippy --all-targets && cargo fmt --check
@@ -874,7 +874,7 @@ cargo build -p dozer-app && ./target/aarch64-apple-darwin/debug/dozer & sleep 8 
 
 Expected: 全绿零警告；app 存活 8 秒。**验收前 `pkill dozerd` 重启新 daemon;需 `dozer-hook install` 且新起 claude 会话(transcript_path 靠 hook 携带)。**
 
-- [ ] **Step 2: 用户人工验收（逐项 ✓/✗，验收权在用户）**
+- [x] **Step 2: 用户人工验收（逐项 ✓/✗，验收权在用户）**
 
 ```markdown
 # P1i 人工验收清单（用户实机执行）
@@ -887,7 +887,7 @@ Expected: 全绿零警告；app 存活 8 秒。**验收前 `pkill dozerd` 重启
 7. 关 app 重开 → 恢复的会话若 transcript 仍在,"审阅"入口仍在(SessionInfo 携带)
 ```
 
-- [ ] **Step 3: 结果落档 + Commit**
+- [x] **Step 3: 结果落档 + Commit**
 
 验收记录写入 `docs/superpowers/specs/2026-07-19-p1i-acceptance.md`（沿用格式：逐项结果表 + 反馈修复流水）；全部通过后规格 §3 需求 6 追加"P1i 达成（<日期>，对话可审阅性首片：transcript 适配器 + 左二会话审阅 tab 人类锚点 + AI 回合折叠；提问置顶/产物联动/多 agent 随后续），验收记录见 specs/2026-07-19-p1i-acceptance.md"。
 

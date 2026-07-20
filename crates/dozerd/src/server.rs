@@ -126,15 +126,22 @@ async fn handle_conn(
                             Ok(()) => Reply::Ok,
                             Err(e) => Reply::Error { message: e.to_string() },
                         },
-                        Request::HookEvent { session_id, event, ts_ms, data: _ } => {
+                        Request::HookEvent { session_id, event, ts_ms, data } => {
                             match registry.get(&session_id) {
                                 None => {
                                     tracing::debug!(%session_id, %event, "hook 事件的会话不存在，丢弃");
                                 }
-                                Some(s) => match agent_state_for(&event) {
-                                    Some(state) => s.set_agent_state(state, &event, ts_ms),
-                                    None => tracing::debug!(%event, "未知 hook 事件，不改状态"),
-                                },
+                                Some(s) => {
+                                    if let Some(tp) =
+                                        data.get("transcript_path").and_then(|v| v.as_str())
+                                    {
+                                        s.set_transcript_path(tp);
+                                    }
+                                    match agent_state_for(&event) {
+                                        Some(state) => s.set_agent_state(state, &event, ts_ms),
+                                        None => tracing::debug!(%event, "未知 hook 事件，不改状态"),
+                                    }
+                                }
                             }
                             Reply::Ok
                         }
@@ -219,8 +226,8 @@ async fn handle_conn(
                             sent_until = offset;
                         }
                     }
-                    Ok(SessionEvent::Agent { state, event, ts_ms }) => {
-                        let reply = Reply::AgentEvent { session_id: sid, state, event, ts_ms };
+                    Ok(SessionEvent::Agent { state, event, ts_ms, transcript_path }) => {
+                        let reply = Reply::AgentEvent { session_id: sid, state, event, ts_ms, transcript_path };
                         w.write_all(encode_line(&reply).as_bytes()).await?;
                     }
                     Ok(SessionEvent::Exited { code }) => {
