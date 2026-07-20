@@ -1123,6 +1123,7 @@ dependencies = [
  "iced_widget",
  "iced_winit",
  "rfd",
+ "serde_json",
  "tempfile",
  "tokio",
  "tracing",

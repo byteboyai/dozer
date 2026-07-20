@@ -9,6 +9,7 @@ mod project;
 mod term_model;
 mod term_view;
 mod theme;
+mod transcript;
 mod workspace;
 
 use workspace::{Message, Workspace};
