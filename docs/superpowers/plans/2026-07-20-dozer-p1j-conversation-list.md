@@ -35,7 +35,7 @@
   - `Message::ReviewLoaded(ReviewSource, Result<Vec<ReviewEntry>, String>)`（首参 usize→ReviewSource）
   - `review_should_refresh_on_turn(source: &ReviewSource, tab_id: usize) -> bool`（纯函数）
 
-- [ ] **Step 1: 写失败测试**（`workspace.rs` 的 `mod tests` 追加）
+- [x] **Step 1: 写失败测试**（`workspace.rs` 的 `mod tests` 追加）
 
 ```rust
     #[test]
@@ -50,12 +50,12 @@
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app review_refresh_only`
 Expected: 编译错误（`ReviewSource`/`review_should_refresh_on_turn` 未定义）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `workspace.rs`：
 
@@ -121,12 +121,12 @@ fn review_should_refresh_on_turn(source: &ReviewSource, tab_id: usize) -> bool {
 
 8. **移除终端审阅按钮**（D7）：删除 `terminal_pane` 里"会话审阅入口（P1i）"整段（`if let Some(tab) = ws.tabs.get(ws.active) && review_available(...) { ... ReviewOpen(tab.tab_id) ... }`）。`review_available` 函数保留（Task 4 AI 栏"● 当前"判定复用；若 clippy 报 dead_code，本任务末尾对其加 `#[allow(dead_code)]`，Task 4 移除）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app review_refresh_only && cargo test -p dozer-app`
 Expected: 全绿。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/workspace.rs
@@ -151,7 +151,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `list_conversations(dir: &Path) -> Vec<ConversationMeta>`（IO，mtime 倒序）
   - `is_current_conversation(meta_path: &Path, open_transcripts: &[String]) -> bool`（纯）
 
-- [ ] **Step 1: 写失败测试**（`conversation.rs` 尾部）
+- [x] **Step 1: 写失败测试**（`conversation.rs` 尾部）
 
 ```rust
 #[cfg(test)]
@@ -203,12 +203,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app conversation`
 Expected: 编译错误（模块不存在）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `crates/dozer-app/src/conversation.rs`：
 
@@ -318,12 +318,12 @@ fn read_head(path: &Path, n: usize) -> String {
 
 `main.rs` 的 `mod transcript;` 后加 `mod conversation;`。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app conversation`
 Expected: 4 测试通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/conversation.rs crates/dozer-app/src/main.rs
@@ -348,7 +348,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `Workspace::spawn_conversations_refresh(&self)`
   - `open_transcript_paths(&self) -> Vec<String>`（供 UI 判"● 当前"）
 
-- [ ] **Step 1: 写失败测试**（`workspace.rs` tests 追加——纯逻辑）
+- [x] **Step 1: 写失败测试**（`workspace.rs` tests 追加——纯逻辑）
 
 ```rust
     #[test]
@@ -357,12 +357,12 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app ai_view_default`
 Expected: 编译错误（`AiView` 未定义）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `workspace.rs`：
 
@@ -452,12 +452,12 @@ pub enum AiView {
 
 7. 刷新接线：`Message::ProjectOpened` handler 尾部（`self.spawn_project_git_refresh();` 之后）加 `self.spawn_conversations_refresh();`；`Message::DeliveryChecked` handler 里（回合结束刷新 git 处，`self.spawn_project_git_refresh();` 之后）加 `self.spawn_conversations_refresh();`。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app ai_view_default && cargo build -p dozer-app`
 Expected: 测试过；编译通过（UI 未接，`conversations`/`ai_view`/`open_transcript_paths` 可能 dead_code——Task 4 消费；本任务末尾对未用项加 `#[allow(dead_code)]`，Task 4 移除）。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/workspace.rs
@@ -477,7 +477,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: Task 2/3 全部；Task 1 `review_available`（"● 当前"复用）；`conversation::is_current_conversation`。
 - Produces: `ai_pane(ws) -> Element`（替换 `view()` 的 `col4`）；纯函数 `conversation_sub(agent, modified_ms, size_bytes, now_ms) -> String`（副行文案，便于测）。
 
-- [ ] **Step 1: 写失败测试**（`workspace.rs` tests 追加）
+- [x] **Step 1: 写失败测试**（`workspace.rs` tests 追加）
 
 ```rust
     #[test]
@@ -492,12 +492,12 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app conversation_sub_line`
 Expected: 编译错误（`conversation_sub` 未定义）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `workspace.rs`：
 
@@ -649,7 +649,7 @@ fn ai_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
 
 4. 移除 Task 1/3 里临时加的 `#[allow(dead_code)]`（`review_available`/`conversations`/`ai_view`/`open_transcript_paths` 现均被消费）。
 
-- [ ] **Step 4: 跑测试确认通过 + 冒烟**
+- [x] **Step 4: 跑测试确认通过 + 冒烟**
 
 ```bash
 cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets && cargo fmt
@@ -658,7 +658,7 @@ cargo build -p dozer-app && ./target/aarch64-apple-darwin/debug/dozer & sleep 8 
 
 Expected: 测试全绿、零警告；app 存活 8 秒无 panic。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/workspace.rs
@@ -680,7 +680,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: 全部前序任务 + P1i。
 - Produces: 用户签字的验收记录（P1i 引擎 + P1j 入口合一）；下一阶段起点。
 
-- [ ] **Step 1: 全量回归 + 冒烟**
+- [x] **Step 1: 全量回归 + 冒烟**
 
 ```bash
 cargo test && cargo clippy --all-targets && cargo fmt --check
