@@ -101,8 +101,8 @@ pub enum Message {
     TermOutput(usize, Vec<u8>),
     /// 对应 tab 的会话已退出（PTY 子进程退出或 daemon 断连）。
     SessionExited(usize),
-    /// attach 流转发来的 agent 状态变更（`usize` 是 tab 稳定 id）。
-    AgentStateChanged(usize, AgentState),
+    /// attach 流转发来的 agent 状态变更（tab_id, 状态, 该会话最新 transcript 路径）。
+    AgentStateChanged(usize, AgentState, Option<String>),
     /// TurnEnded 触发的交付检测结果（tab_id, 是否有待验收交付）。
     DeliveryChecked(usize, bool),
     /// 点击横幅"进入验收"（tab_id 为来源会话）。
@@ -213,6 +213,8 @@ pub struct SessionTab {
     /// 会话内 agent 的最新状态（hook 事件驱动；初值来自
     /// `SessionInfo.agent_state`，晚 attach 也能恢复现状）。
     pub agent_state: AgentState,
+    /// 该会话的 transcript 路径（有则终端 tab 显"审阅"入口；P1i）。
+    pub transcript_path: Option<String>,
     /// OSC 扫描器（每 tab 独立，序列可跨 chunk）。
     osc: OscScanner,
     /// OSC 7 上报的当前目录；tab 标题优先显示其 basename。
@@ -331,6 +333,7 @@ impl Workspace {
                             let forwarder = handle.spawn(forward_events(tab_id, rx, proxy.clone()));
                             tabs.push(SessionTab {
                                 agent_state: info.agent_state,
+                                transcript_path: info.transcript_path.clone(),
                                 info,
                                 model,
                                 alive: true,
@@ -472,11 +475,14 @@ impl Workspace {
                     let _ = tab.model.feed(&exited_marker());
                 }
             }
-            Message::AgentStateChanged(tab_id, state) => {
+            Message::AgentStateChanged(tab_id, state, transcript_path) => {
                 // 当前项目路径先取出（下面要 &mut 借 tab，冲突）；重锚:项目优先。
                 let active_repo = self.project.as_ref().map(|p| PathBuf::from(&p.path));
                 if let Some(tab) = self.tab_by_id_mut(tab_id) {
                     tab.agent_state = state;
+                    if let Some(tp) = transcript_path {
+                        tab.transcript_path = Some(tp);
+                    }
                     tracing::info!(tab_id, ?state, "agent 状态变更");
                     if state == AgentState::TurnEnded {
                         // git 检测不许在 UI 线程跑：丢 tokio,结果经 proxy 回来
@@ -885,6 +891,7 @@ impl Workspace {
         let _ = model.feed(&snapshot); // 快照回放：陈旧查询应答不可补发，丢弃
         self.tabs.push(SessionTab {
             agent_state: info.agent_state,
+            transcript_path: info.transcript_path.clone(),
             info,
             model,
             alive: true,
@@ -1131,7 +1138,10 @@ async fn forward_events(
                 tracing::warn!(tab_id, "终端事件滞后（lagged），可能丢失部分历史输出");
                 continue;
             }
-            TermEvent::Agent(state) => Message::AgentStateChanged(tab_id, state),
+            TermEvent::Agent {
+                state,
+                transcript_path,
+            } => Message::AgentStateChanged(tab_id, state, transcript_path),
         };
         if proxy.send_event(message).is_err() {
             // UI 线程（EventLoop）已经关闭，没有必要继续转发。
@@ -1599,6 +1609,13 @@ fn banner_text(pending: bool) -> Option<&'static str> {
     pending.then_some("交付待验收")
 }
 
+/// 会话是否可审阅（有 transcript）——决定终端 tab 是否显示"审阅"入口。
+// 过渡期:T5 审阅按钮接线前无调用方。
+#[allow(dead_code)]
+fn review_available(transcript_path: Option<&str>) -> bool {
+    transcript_path.is_some()
+}
+
 /// 交付/验收使用的仓库：当前项目优先，无则回落会话 cwd（P1f 现状；P1g D4）。
 fn effective_project_repo(active: Option<&Path>, session_cwd: &Path) -> PathBuf {
     active
@@ -1779,6 +1796,12 @@ mod tests {
             effective_project_repo(None, Path::new("/home/me")),
             PathBuf::from("/home/me")
         );
+    }
+
+    #[test]
+    fn review_available_needs_transcript() {
+        assert!(review_available(Some("/t/x.jsonl")));
+        assert!(!review_available(None));
     }
 
     #[test]
