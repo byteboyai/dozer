@@ -1,8 +1,6 @@
 //! ClaudeCode 对话来源（P1j）：扫描 `~/.claude/projects/<cwd换->` 列出该项目
 //! 的历史对话(JSONL),取首句人类发言当标题。纯 IO + 纯解析;dozerd 不参与。
 //! `agent` 字段为多 agent 留维度(现恒 "claude");核心列表只吃 ConversationMeta。
-// 过渡期:T3/T4 接线前无调用方（沿用先例）。
-#![allow(dead_code)]
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};

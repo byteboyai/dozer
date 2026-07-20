@@ -18,6 +18,7 @@
 //!   把 `Message` 送回 UI 线程；`main.rs` 的 `ApplicationHandler::user_event`
 //!   收到后调用 `workspace.update(..)` 并请求重绘。反方向（UI → tokio）
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
+use crate::conversation::{self, ConversationMeta};
 use crate::delivery::{self, FileChange, FileStatus};
 use crate::goal::{self, Goal};
 use crate::osc::{OscEvent, OscScanner};
@@ -126,6 +127,12 @@ pub enum Message {
     ReviewLoaded(ReviewSource, Result<Vec<ReviewEntry>, String>),
     /// 会话审阅:展开/收起第 n 个 AI 回合的过程区。
     ReviewToggle(usize),
+    /// 对话列表刷新结果（扫描完成）。
+    ConversationsRefreshed(Vec<ConversationMeta>),
+    /// 点对话列表某条 → 审阅该对话（当前会话用 Session 源以便回合刷新,历史用 File）。
+    ConversationOpen(PathBuf),
+    /// 右一 AI 栏视图切换。
+    AiViewSwitch(AiView),
     /// 切换当前显示的 tab（这里的 `usize` 是 vec 位置——用户点击的是
     /// "屏幕上第几个 tab"，跟稳定 id 是两回事）。
     SelectTab(usize),
@@ -196,12 +203,18 @@ pub enum AddrEvent {
 }
 
 /// 审阅内容的来源（P1j）：活会话 tab（回合结束刷新）或历史对话文件（快照不刷新）。
-// 过渡期:T3 ConversationOpen 接线前变体无构造方。
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReviewSource {
     Session(usize),
     File(PathBuf),
+}
+
+/// 右一 AI 栏当前视图（P1j）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AiView {
+    #[default]
+    Conversations,
+    Agents,
 }
 
 /// 回合结束时该审阅视图是否应重解析：仅当它是该会话的活审阅。
@@ -323,6 +336,10 @@ pub struct Workspace {
     acceptance: Option<AcceptanceView>,
     /// 进行中的会话审阅（审阅 tab 内容;None=未打开;P1i）。
     review: Option<ReviewView>,
+    /// 当前项目的对话列表（扫 Claude 目录；P1j）。
+    conversations: Vec<ConversationMeta>,
+    /// 右一 AI 栏当前视图。
+    ai_view: AiView,
     /// tab 前状态点的闪烁相位（true=亮/false=暗）。仅"工作中"(agent
     /// Running) 的 tab 会随它闪；由 main.rs 的定时唤醒每拍翻转
     /// （见 `toggle_blink`/`any_blinking`）。
@@ -412,6 +429,8 @@ impl Workspace {
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
             acceptance: None,
             review: None,
+            conversations: Vec::new(),
+            ai_view: AiView::default(),
             blink_on: true,
             project,
             file_tree,
@@ -447,6 +466,8 @@ impl Workspace {
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
             acceptance: None,
             review: None,
+            conversations: Vec::new(),
+            ai_view: AiView::default(),
             blink_on: true,
             project: None,
             file_tree: None,
@@ -589,6 +610,8 @@ impl Workspace {
                 }
                 // 回合结束后刷新项目 git 状态,文件树装饰随之更新（P1h）。
                 self.spawn_project_git_refresh();
+                // 回合结束后刷新对话列表(transcript 增长/新增；P1j)。
+                self.spawn_conversations_refresh();
             }
             Message::AcceptanceOpen(tab_id) => {
                 let active_repo = self.project.as_ref().map(|p| PathBuf::from(&p.path));
@@ -683,6 +706,30 @@ impl Workspace {
                 {
                     rv.expanded.insert(i);
                 }
+            }
+            Message::ConversationsRefreshed(list) => {
+                self.conversations = list;
+            }
+            Message::ConversationOpen(path) => {
+                // 若点开的是某活会话的当前对话 → Session 源(回合结束刷新);否则 File 快照。
+                let path_s = path.to_string_lossy().into_owned();
+                let source = self
+                    .tabs
+                    .iter()
+                    .find(|t| t.transcript_path.as_deref() == Some(path_s.as_str()))
+                    .map(|t| ReviewSource::Session(t.tab_id))
+                    .unwrap_or_else(|| ReviewSource::File(path.clone()));
+                self.review = Some(ReviewView {
+                    source: source.clone(),
+                    entries: Vec::new(),
+                    error: None,
+                    expanded: std::collections::HashSet::new(),
+                });
+                self.preview.open_review();
+                self.spawn_review_load(source, path_s);
+            }
+            Message::AiViewSwitch(v) => {
+                self.ai_view = v;
             }
             Message::SelectTab(idx) => {
                 if idx < self.tabs.len() {
@@ -796,8 +843,10 @@ impl Workspace {
                 self.branch = None;
                 self.dirty = false;
                 self.git_statuses = HashMap::new();
+                self.conversations = Vec::new();
                 self.project = project;
                 self.spawn_project_git_refresh();
+                self.spawn_conversations_refresh();
             }
             Message::ProjectTreeToggle(dir) => {
                 if let Some(t) = &mut self.file_tree {
@@ -839,6 +888,31 @@ impl Workspace {
                 tracing::warn!("写入终端失败: {e}");
             }
         });
+    }
+
+    /// 异步扫当前项目的对话目录 → ConversationsRefreshed（GUI 侧 spawn_blocking；P1j）。
+    fn spawn_conversations_refresh(&self) {
+        let Some(p) = &self.project else {
+            return;
+        };
+        let cwd = PathBuf::from(&p.path);
+        let proxy = self.proxy.clone();
+        self.handle.spawn(async move {
+            let list = tokio::task::spawn_blocking(move || {
+                conversation::list_conversations(&conversation::claude_project_dir(&cwd))
+            })
+            .await
+            .unwrap_or_default();
+            let _ = proxy.send_event(Message::ConversationsRefreshed(list));
+        });
+    }
+
+    /// 打开着的会话 transcript 路径集合（UI 判"● 当前"用）。
+    pub fn open_transcript_paths(&self) -> Vec<String> {
+        self.tabs
+            .iter()
+            .filter_map(|t| t.transcript_path.clone())
+            .collect()
     }
 
     /// 异步读 transcript + 解析 → ReviewLoaded（GUI 侧 spawn_blocking；P1i/P1j 按源）。
@@ -1189,7 +1263,7 @@ impl Workspace {
         let col1 = project_pane(self);
         let col2 = preview_pane(self);
         let col3 = terminal_pane(self);
-        let col4 = pane("AI · P1e", AI_COL_WIDTH, theme::PANEL);
+        let col4 = ai_pane(self);
         row![col1, col2, col3, col4].into()
     }
 }
@@ -1241,34 +1315,6 @@ fn exited_marker() -> Vec<u8> {
         FG.0, FG.1, FG.2, BG.0, BG.1, BG.2
     )
     .into_bytes()
-}
-
-/// 四栏骨架里的单栏。`width <= 0.0` 表示 Fill，否则是固定逻辑像素宽度。
-/// 顶部一行 CREAM 13px 标签文字；用 1px BORDER 描边充当栏间分隔线。
-fn pane(
-    label: &str,
-    width: f32,
-    background: Color,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let header = text(label).size(14).color(theme::CREAM);
-
-    container(column![header].spacing(4).padding(8))
-        .width(if width > 0.0 {
-            Length::Fixed(width)
-        } else {
-            Length::Fill
-        })
-        .height(Length::Fill)
-        .style(move |_theme: &iced_widget::Theme| container::Style {
-            background: Some(background.into()),
-            border: Border {
-                color: theme::BORDER,
-                width: 1.0,
-                radius: 0.0.into(),
-            },
-            ..container::Style::default()
-        })
-        .into()
 }
 
 /// 验收 tab 内容（spec P1f D8）:目标 + 标准勾选 + 变更文件 + 意见 + 双动作。
@@ -1448,6 +1494,136 @@ fn acceptance_content<'a>(
 /// 左二预览 pane:表头 + tab 栏 + 地址栏;内容区本体是 wry webview
 /// 子视图(不在 iced 树里),这里只留占位背景——无 tab 时显示提示文案。
 /// 左一项目栏：项目卡（名称 + git 分支/脏 + 路径）+ 文件树；无项目时"打开项目…" + 最近。
+/// 右一 AI 栏（P1j）：视图切换 [对话|Agents] + 对话列表（当前行金框高亮）。
+fn ai_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let mut content = column![
+        row![
+            text("AI").size(14).color(theme::CREAM),
+            text(
+                ws.project
+                    .as_ref()
+                    .map(|p| p.name.clone())
+                    .unwrap_or_else(|| "未打开项目".into())
+            )
+            .size(12)
+            .color(theme::DIM),
+        ]
+        .spacing(8)
+    ]
+    .spacing(8);
+
+    let mk_pill = |label: &'static str, v: AiView| {
+        let active = ws.ai_view == v;
+        button(
+            text(label)
+                .size(13)
+                .color(if active { theme::CREAM } else { theme::DIM }),
+        )
+        .on_press(Message::AiViewSwitch(v))
+        .style(move |_t, _s| button::Style {
+            background: if active {
+                Some(theme::CARD.into())
+            } else {
+                None
+            },
+            text_color: if active { theme::CREAM } else { theme::DIM },
+            border: Border {
+                color: theme::BORDER,
+                width: 0.0,
+                radius: 6.0.into(),
+            },
+            ..button::Style::default()
+        })
+    };
+    content = content.push(
+        row![
+            mk_pill("对话", AiView::Conversations),
+            mk_pill("Agents", AiView::Agents)
+        ]
+        .spacing(6),
+    );
+
+    match ws.ai_view {
+        AiView::Conversations => {
+            let opens = ws.open_transcript_paths();
+            let active_n = ws
+                .conversations
+                .iter()
+                .filter(|c| conversation::is_current_conversation(&c.path, &opens))
+                .count();
+            content = content.push(
+                row![
+                    text("对话").size(11).color(theme::DIM),
+                    text(format!("{} 条 · {} 活跃", ws.conversations.len(), active_n))
+                        .size(11)
+                        .color(theme::DIM),
+                ]
+                .spacing(6),
+            );
+            if ws.conversations.is_empty() {
+                content = content.push(text("暂无对话记录").size(13).color(theme::DIM));
+            }
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            // 当前活跃置顶：先活后历史（列表本身 mtime 倒序）。
+            let mut ordered: Vec<&ConversationMeta> = ws.conversations.iter().collect();
+            ordered.sort_by_key(|c| conversation::is_current_conversation(&c.path, &opens) as u8);
+            ordered.reverse();
+            for c in ordered {
+                let current = conversation::is_current_conversation(&c.path, &opens);
+                let sub = if current {
+                    format!(
+                        "● 当前 · {}",
+                        conversation_sub(&c.agent, c.modified_ms, c.size_bytes, now_ms)
+                    )
+                } else {
+                    conversation_sub(&c.agent, c.modified_ms, c.size_bytes, now_ms)
+                };
+                let sub_color = if current { theme::GREEN } else { theme::DIM };
+                let card = button(
+                    column![
+                        text(c.title.clone()).size(13).color(theme::CREAM),
+                        text(sub).size(10).color(sub_color),
+                    ]
+                    .spacing(4),
+                )
+                .on_press(Message::ConversationOpen(c.path.clone()))
+                .width(Length::Fill)
+                .style(move |_t, _s| button::Style {
+                    background: Some(theme::CARD.into()),
+                    text_color: theme::CREAM,
+                    border: Border {
+                        color: if current { theme::GOLD } else { theme::BORDER },
+                        width: 1.0,
+                        radius: 10.0.into(),
+                    },
+                    ..button::Style::default()
+                });
+                content = content.push(card);
+            }
+        }
+        AiView::Agents => {
+            content = content.push(text("Agents（后续）").size(13).color(theme::DIM));
+        }
+    }
+
+    container(content.padding(12))
+        .width(Length::Fixed(AI_COL_WIDTH))
+        .height(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::PANEL.into()),
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
 fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let mut content = column![text("项目").size(14).color(theme::CREAM)].spacing(4);
 
@@ -1752,11 +1928,24 @@ fn banner_text(pending: bool) -> Option<&'static str> {
     pending.then_some("交付待验收")
 }
 
-/// 会话是否可审阅（有 transcript）——"● 当前"判定复用。
-// 过渡期:T4 AI 栏接线前无调用方（终端按钮已移除）。
-#[allow(dead_code)]
-fn review_available(transcript_path: Option<&str>) -> bool {
-    transcript_path.is_some()
+/// 对话副行文案：`<agent> · <相对时间> · <规模>`（P1j）。
+fn conversation_sub(agent: &str, modified_ms: u64, size_bytes: u64, now_ms: u64) -> String {
+    let ago = now_ms.saturating_sub(modified_ms) / 1000; // 秒
+    let when = if ago < 60 {
+        "刚刚".to_string()
+    } else if ago < 3600 {
+        format!("{} 分钟前", ago / 60)
+    } else if ago < 86400 {
+        format!("{} 小时前", ago / 3600)
+    } else {
+        format!("{} 天前", ago / 86400)
+    };
+    let size = if size_bytes >= 1024 * 1024 {
+        format!("{:.1}MB", size_bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{}KB", (size_bytes / 1024).max(1))
+    };
+    format!("{agent} · {when} · {size}")
 }
 
 /// AI 回合折叠行文案（P1i）：过程 = thinking + N 工具。
@@ -1952,6 +2141,20 @@ mod tests {
     }
 
     #[test]
+    fn ai_view_default_is_conversations() {
+        assert_eq!(AiView::default(), AiView::Conversations);
+    }
+
+    #[test]
+    fn conversation_sub_line_format() {
+        let s = conversation_sub("claude", 1000, 78 * 1024, 1000);
+        assert!(s.starts_with("claude · "), "含 agent 前缀: {s}");
+        assert!(s.ends_with("· 78KB"), "含规模: {s}");
+        let s2 = conversation_sub("claude", 1000, 8 * 1024 * 1024, 1000);
+        assert!(s2.ends_with("· 8.0MB"), "MB 规模: {s2}");
+    }
+
+    #[test]
     fn review_refresh_only_for_matching_session() {
         use std::path::PathBuf;
         assert!(review_should_refresh_on_turn(&ReviewSource::Session(3), 3));
@@ -1960,12 +2163,6 @@ mod tests {
             &ReviewSource::File(PathBuf::from("/t/x.jsonl")),
             3
         ));
-    }
-
-    #[test]
-    fn review_available_needs_transcript() {
-        assert!(review_available(Some("/t/x.jsonl")));
-        assert!(!review_available(None));
     }
 
     #[test]
