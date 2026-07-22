@@ -1783,10 +1783,88 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
         }
     }
 
-    container(content.padding(8))
-        .width(Length::Fixed(PROJECT_COL_WIDTH))
+    let body = container(content.padding(8))
+        .width(Length::Fill)
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::PANEL.into()),
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
+            ..container::Style::default()
+        });
+
+    container(column![body, project_status_bar(ws)])
+        .width(Length::Fixed(PROJECT_COL_WIDTH))
+        .height(Length::Fill)
+        .into()
+}
+
+/// 项目栏底状态条：左 环境/dozerd 点，右 [文件|git {分支}|组件]（文件高亮,组件占位）。
+fn project_status_bar(
+    ws: &Workspace,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let (env, dot) = env_status_text(ws.daemon_error.is_none());
+    let left = row![
+        text("●").size(9).color(dot),
+        text(env).size(11).color(theme::BODY)
+    ]
+    .spacing(6);
+    let git = format!(
+        "git {}",
+        project_branch_label(ws.branch.as_deref(), ws.dirty)
+    );
+    let tabs = row![
+        text("文件").size(11).color(theme::CREAM),
+        text("·").size(11).color(theme::DIM),
+        text(git).size(11).color(theme::BODY),
+        text("·").size(11).color(theme::DIM),
+        text("组件").size(11).color(theme::DIM),
+    ]
+    .spacing(6);
+    status_bar_container(
+        row![left, iced_widget::space::horizontal(), tabs]
+            .align_y(iced_widget::core::Alignment::Center),
+    )
+}
+
+/// 终端栏底状态条：当前激活 tab 的 agent 态 · resume · dozerd 持有。
+fn terminal_status_bar(
+    ws: &Workspace,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let (label, dot) = match ws.tabs.get(ws.active) {
+        Some(t) => (
+            agent_state_label(t.agent_state),
+            dot_color(t.agent_state, t.alive),
+        ),
+        None => ("空闲", theme::DIM),
+    };
+    let resume = ws.tabs.get(ws.active).map(|t| t.alive).unwrap_or(false);
+    let line = row![
+        text("●").size(9).color(dot),
+        text(label).size(11).color(theme::BODY),
+        text("·").size(11).color(theme::DIM),
+        text(format!("resume {}", if resume { "✓" } else { "—" }))
+            .size(11)
+            .color(theme::BODY),
+        text("·").size(11).color(theme::DIM),
+        text("dozerd 持有 · 断连可恢复").size(11).color(theme::DIM),
+    ]
+    .spacing(6);
+    status_bar_container(line)
+}
+
+/// 状态条通用外框：略深底 + 上边线 + 固定高。
+fn status_bar_container<'a>(
+    inner: impl Into<Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>>,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    container(inner)
+        .width(Length::Fill)
+        .height(Length::Fixed(26.0))
+        .padding([0, 8])
+        .style(|_t: &iced_widget::Theme| container::Style {
             background: Some(theme::PANEL.into()),
             border: Border {
                 color: theme::BORDER,
@@ -1958,7 +2036,7 @@ fn terminal_pane(
 
     content = content.push(active_tab_view(ws));
 
-    container(content.spacing(4).padding(8))
+    let body = container(content.spacing(4).padding(8))
         .width(Length::Fill)
         .height(Length::Fill)
         .style(move |_theme: &iced_widget::Theme| container::Style {
@@ -1969,7 +2047,11 @@ fn terminal_pane(
                 radius: 0.0.into(),
             },
             ..container::Style::default()
-        })
+        });
+
+    container(column![body, terminal_status_bar(ws)])
+        .width(Length::Fill)
+        .height(Length::Fill)
         .into()
 }
 
@@ -2105,6 +2187,25 @@ fn tab_title(cwd: Option<&Path>, fallback: &str) -> String {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| p.to_string_lossy().into_owned()),
         None => fallback.to_string(),
+    }
+}
+
+/// agent 四态中文（终端状态栏用）。
+fn agent_state_label(state: AgentState) -> &'static str {
+    match state {
+        AgentState::Running => "运行中",
+        AgentState::AwaitingInput => "待输入",
+        AgentState::TurnEnded => "回合毕",
+        AgentState::Idle => "空闲",
+    }
+}
+
+/// 环境状态栏文案 + 点色：daemon 连通=绿"环境正常", 断=红"未连接"。
+fn env_status_text(daemon_ok: bool) -> (&'static str, Color) {
+    if daemon_ok {
+        ("环境正常 · dozerd 运行中", theme::GREEN)
+    } else {
+        ("dozerd 未连接", theme::RED)
     }
 }
 
@@ -2344,6 +2445,23 @@ mod tests {
         // 若 Workspace 无法在测试中直接构造,则改为验证 preview_content_bounds
         // 之外新增一个纯函数不现实——此时降级为:仅确认编译期字段存在,
         // 测试留待 Task 6 人工验收覆盖,并在报告中写明。
+    }
+
+    #[test]
+    fn agent_state_label_covers_all() {
+        assert_eq!(agent_state_label(AgentState::Running), "运行中");
+        assert_eq!(agent_state_label(AgentState::AwaitingInput), "待输入");
+        assert_eq!(agent_state_label(AgentState::TurnEnded), "回合毕");
+        assert_eq!(agent_state_label(AgentState::Idle), "空闲");
+    }
+
+    #[test]
+    fn env_status_text_ok_and_down() {
+        assert_eq!(
+            env_status_text(true),
+            ("环境正常 · dozerd 运行中", theme::GREEN)
+        );
+        assert_eq!(env_status_text(false), ("dozerd 未连接", theme::RED));
     }
 
     #[test]
