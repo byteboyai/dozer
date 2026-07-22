@@ -1669,13 +1669,14 @@ fn ai_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
                 )
                 .on_press(Message::ConversationOpen(c.path.clone()))
                 .width(Length::Fill)
+                .padding(10)
                 .style(move |_t, _s| button::Style {
                     background: Some(theme::CARD.into()),
                     text_color: theme::CREAM,
                     border: Border {
                         color: if current { theme::GOLD } else { theme::BORDER },
                         width: 1.0,
-                        radius: 10.0.into(),
+                        radius: 8.0.into(),
                     },
                     ..button::Style::default()
                 });
@@ -1720,11 +1721,28 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
 
     match &ws.project {
         Some(p) => {
-            content = content.push(text(p.name.clone()).size(15).color(theme::CREAM));
             let label = project_branch_label(ws.branch.as_deref(), ws.dirty);
             let bcolor = if ws.dirty { theme::GOLD } else { theme::BODY };
-            content = content.push(text(label).size(12).color(bcolor));
-            content = content.push(text(p.path.clone()).size(11).color(theme::DIM));
+            // `mut`：Task 5 会在此追加「N 次验收」副行,故保留可追加形态。
+            #[allow(unused_mut)]
+            let mut card_col = column![
+                text(p.name.clone()).size(15).color(theme::CREAM),
+                text(label).size(12).color(bcolor),
+                text(p.path.clone()).size(11).color(theme::DIM),
+            ]
+            .spacing(2);
+            let card = container(card_col).width(Length::Fill).padding(10).style(
+                |_t: &iced_widget::Theme| container::Style {
+                    background: Some(theme::CARD.into()),
+                    border: Border {
+                        color: theme::BORDER,
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    },
+                    ..container::Style::default()
+                },
+            );
+            content = content.push(card);
             content = content.push(open_btn);
             if let Some(tree) = &ws.file_tree {
                 for row in tree.visible_rows() {
@@ -2012,22 +2030,33 @@ fn terminal_pane(
     if let Some(tab) = ws.tabs.get(ws.active)
         && let Some(text_str) = banner_text(tab.delivery_pending)
     {
-        let banner = row![
-            text(text_str).size(13).color(theme::GOLD),
-            button(text("进入验收").size(13).color(theme::GOLD))
-                .on_press(Message::AcceptanceOpen(tab.tab_id))
-                .style(|_t, _s| button::Style {
-                    background: Some(theme::CARD.into()),
-                    text_color: theme::GOLD,
-                    border: Border {
-                        color: theme::GOLD,
-                        width: 1.0,
-                        radius: 2.0.into()
-                    },
-                    ..button::Style::default()
-                }),
-        ]
-        .spacing(8);
+        let banner = container(
+            row![
+                text(text_str).size(13).color(theme::GOLD),
+                button(text("进入验收").size(13).color(theme::GOLD))
+                    .on_press(Message::AcceptanceOpen(tab.tab_id))
+                    .style(|_t, _s| button::Style {
+                        background: Some(theme::CARD.into()),
+                        text_color: theme::GOLD,
+                        border: Border {
+                            color: theme::GOLD,
+                            width: 1.0,
+                            radius: 2.0.into()
+                        },
+                        ..button::Style::default()
+                    }),
+            ]
+            .spacing(8),
+        )
+        .padding([6, 10])
+        .style(|_t: &iced_widget::Theme| container::Style {
+            border: Border {
+                color: theme::GOLD,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        });
         content = content.push(banner);
     }
 
@@ -2258,15 +2287,30 @@ fn tab_item(
 
     let select = button(label)
         .on_press(Message::SelectTab(idx))
-        .style(move |_theme, _status| button::Style {
-            background: Some(if active { theme::CARD } else { theme::PANEL }.into()),
-            text_color: theme::CREAM,
-            border: Border {
-                color: if active { theme::CREAM } else { theme::BORDER },
-                width: 1.0,
-                radius: 2.0.into(),
-            },
-            ..button::Style::default()
+        .style(move |_theme, _status| {
+            if active {
+                button::Style {
+                    background: Some(theme::CARD.into()),
+                    text_color: theme::CREAM,
+                    border: Border {
+                        color: theme::BORDER,
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..button::Style::default()
+                }
+            } else {
+                button::Style {
+                    background: None,
+                    text_color: theme::BODY,
+                    border: Border {
+                        color: Color::TRANSPARENT,
+                        width: 0.0,
+                        radius: 6.0.into(),
+                    },
+                    ..button::Style::default()
+                }
+            }
         });
 
     let close = button(text("×").size(13).color(theme::DIM))
