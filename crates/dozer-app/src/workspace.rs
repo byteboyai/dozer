@@ -1723,9 +1723,7 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
         Some(p) => {
             let label = project_branch_label(ws.branch.as_deref(), ws.dirty);
             let bcolor = if ws.dirty { theme::GOLD } else { theme::BODY };
-            // `mut`：Task 5 会在此追加「N 次验收」副行,故保留可追加形态。
-            #[allow(unused_mut)]
-            let mut card_col = column![
+            let card_col = column![
                 text(p.name.clone()).size(15).color(theme::CREAM),
                 text(label).size(12).color(bcolor),
                 text(p.path.clone()).size(11).color(theme::DIM),
@@ -2303,11 +2301,6 @@ fn tab_item(
                 button::Style {
                     background: None,
                     text_color: theme::BODY,
-                    border: Border {
-                        color: Color::TRANSPARENT,
-                        width: 0.0,
-                        radius: 6.0.into(),
-                    },
                     ..button::Style::default()
                 }
             }
