@@ -1729,40 +1729,39 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
             if let Some(tree) = &ws.file_tree {
                 for row in tree.visible_rows() {
                     let indent = "  ".repeat(row.depth);
-                    let glyph = if row.is_dir {
-                        if row.expanded { "▾ " } else { "▸ " }
+                    let glyph = tree_row_glyph(row.is_dir, row.expanded);
+                    let status = if row.is_dir {
+                        delivery::dir_status(&row.path, &ws.git_statuses)
                     } else {
-                        "  "
+                        ws.git_statuses.get(&row.path).copied()
                     };
-                    // 装饰:文件查自身状态;目录 rollup 反映聚合(改/删→金,只新→绿)。
-                    let deco: Option<(Color, &'static str)> = if row.is_dir {
-                        delivery::dir_status(&row.path, &ws.git_statuses).map(decoration_for)
+                    let name_color = if row.is_dir {
+                        theme::BODY
                     } else {
-                        ws.git_statuses.get(&row.path).copied().map(decoration_for)
+                        theme::CREAM
                     };
-                    let (color, suffix) = match deco {
-                        Some((c, mark)) => (c, format!(" {mark}")),
-                        None => (
-                            if row.is_dir { theme::BODY } else { theme::CYAN },
-                            String::new(),
-                        ),
-                    };
-                    let label = format!("{indent}{glyph}{}{suffix}", row.name);
+                    let mut line = row![
+                        text(format!("{indent}{glyph}{}", row.name))
+                            .size(15)
+                            .color(name_color)
+                    ]
+                    .spacing(6);
+                    if let Some(st) = status {
+                        line = line.push(iced_widget::space::horizontal());
+                        line = line.push(text("●").size(8).color(tree_row_dot(st)));
+                    }
                     let msg = if row.is_dir {
                         Message::ProjectTreeToggle(row.path.clone())
                     } else {
                         Message::PreviewOpenPath(row.path.clone())
                     };
-                    content = content.push(
-                        button(text(label).size(15).color(color))
-                            .on_press(msg)
-                            .width(Length::Fill)
-                            .style(|_t, _s| button::Style {
-                                background: None,
-                                text_color: theme::BODY,
-                                ..button::Style::default()
-                            }),
-                    );
+                    content = content.push(button(line).on_press(msg).width(Length::Fill).style(
+                        |_t, _s| button::Style {
+                            background: None,
+                            text_color: theme::BODY,
+                            ..button::Style::default()
+                        },
+                    ));
                 }
             }
         }
@@ -2125,12 +2124,21 @@ fn effective_project_repo(active: Option<&Path>, session_cwd: &Path) -> PathBuf 
         .unwrap_or_else(|| session_cwd.to_path_buf())
 }
 
-/// 文件 git 状态 → (颜色, 尾缀字符)。金=改/绿=新/红=删（沿用 P1g 金脏约定）。
-fn decoration_for(status: FileStatus) -> (Color, &'static str) {
+/// 文件树行前导字形：目录展开/收拢三角，文件用中点。不用 emoji（字体毒化，见 fonts.rs）。
+fn tree_row_glyph(is_dir: bool, expanded: bool) -> &'static str {
+    match (is_dir, expanded) {
+        (true, true) => "▾ ",
+        (true, false) => "▸ ",
+        (false, _) => "· ",
+    }
+}
+
+/// 文件/目录 git 状态 → 行尾彩色圆点色。金=改/绿=新/红=删。
+fn tree_row_dot(status: FileStatus) -> Color {
     match status {
-        FileStatus::Modified => (theme::GOLD, "•"),
-        FileStatus::New => (theme::GREEN, "+"),
-        FileStatus::Deleted => (theme::RED, "−"),
+        FileStatus::Modified => theme::GOLD,
+        FileStatus::New => theme::GREEN,
+        FileStatus::Deleted => theme::RED,
     }
 }
 
@@ -2376,11 +2384,17 @@ mod tests {
     }
 
     #[test]
-    fn decoration_maps_status_to_color_and_marker() {
-        use crate::delivery::FileStatus;
-        assert_eq!(decoration_for(FileStatus::Modified), (theme::GOLD, "•"));
-        assert_eq!(decoration_for(FileStatus::New), (theme::GREEN, "+"));
-        assert_eq!(decoration_for(FileStatus::Deleted), (theme::RED, "−"));
+    fn tree_glyph_dir_toggles_file_is_dot() {
+        assert_eq!(tree_row_glyph(true, true), "▾ ");
+        assert_eq!(tree_row_glyph(true, false), "▸ ");
+        assert_eq!(tree_row_glyph(false, false), "· ");
+    }
+
+    #[test]
+    fn tree_dot_maps_status_colors() {
+        assert_eq!(tree_row_dot(FileStatus::Modified), theme::GOLD);
+        assert_eq!(tree_row_dot(FileStatus::New), theme::GREEN);
+        assert_eq!(tree_row_dot(FileStatus::Deleted), theme::RED);
     }
 
     #[test]
