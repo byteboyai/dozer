@@ -356,6 +356,8 @@ pub struct Workspace {
     recent_projects: Vec<ProjectInfo>,
     /// 当前项目的 git 文件状态（路径→状态；文件树装饰用；P1h）。
     git_statuses: HashMap<PathBuf, FileStatus>,
+    /// 顶栏胶囊用的项目级目标（打开项目时同步读 .dozer/goal.md）。
+    project_goal: Option<Goal>,
 }
 
 impl Workspace {
@@ -411,6 +413,7 @@ impl Workspace {
         let file_tree = project
             .as_ref()
             .map(|p| FileTree::new(PathBuf::from(&p.path)));
+        let project_goal = project.as_ref().and_then(|p| load_project_goal(&p.path));
 
         let ws = Self {
             tabs,
@@ -434,6 +437,7 @@ impl Workspace {
             blink_on: true,
             project,
             file_tree,
+            project_goal,
             branch: None,
             dirty: false,
             recent_projects,
@@ -479,6 +483,7 @@ impl Workspace {
             blink_on: true,
             project: None,
             file_tree: None,
+            project_goal: None,
             branch: None,
             dirty: false,
             recent_projects: Vec::new(),
@@ -853,6 +858,10 @@ impl Workspace {
                 self.git_statuses = HashMap::new();
                 self.conversations = Vec::new();
                 self.project = project;
+                self.project_goal = self
+                    .project
+                    .as_ref()
+                    .and_then(|p| load_project_goal(&p.path));
                 self.spawn_project_git_refresh();
                 self.spawn_conversations_refresh();
             }
@@ -1268,11 +1277,12 @@ impl Workspace {
     pub fn view(
         &self,
     ) -> iced_widget::core::Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+        let top = top_bar(self);
         let col1 = project_pane(self);
         let col2 = preview_pane(self);
         let col3 = terminal_pane(self);
         let col4 = ai_pane(self);
-        row![col1, col2, col3, col4].into()
+        column![top, row![col1, col2, col3, col4]].into()
     }
 }
 
@@ -1503,6 +1513,66 @@ fn acceptance_content<'a>(
 /// 子视图(不在 iced 树里),这里只留占位背景——无 tab 时显示提示文案。
 /// 左一项目栏：项目卡（名称 + git 分支/脏 + 路径）+ 文件树；无项目时"打开项目…" + 最近。
 /// 右一 AI 栏（P1j）：视图切换 [对话|Agents] + 对话列表（当前行金框高亮）。
+/// 顶栏：左 Dozer 标题、中 ⌘K 搜索框（视觉占位）、右 金色目标胶囊 + 设置齿轮（占位）。
+fn top_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let title = text("Dozer").size(15).color(theme::CREAM);
+
+    let search = container(text("搜索作品、会话、产物…  ⌘K").size(13).color(theme::DIM))
+        .padding([6, 12])
+        .width(Length::Fixed(360.0))
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::CARD.into()),
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        });
+
+    let mut right = row![].spacing(10);
+    if let Some(cap) = goal_capsule_text(ws.project_goal.as_ref(), 28) {
+        let capsule = container(
+            row![
+                text("●").size(9).color(theme::GOLD),
+                text(cap).size(13).color(theme::CREAM)
+            ]
+            .spacing(6),
+        )
+        .padding([5, 10])
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::CARD.into()),
+            border: Border {
+                color: theme::GOLD,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        });
+        right = right.push(capsule);
+    }
+    right = right.push(text("⚙").size(15).color(theme::DIM));
+
+    let bar = row![title, search, iced_widget::space::horizontal(), right]
+        .spacing(16)
+        .padding([0, 12])
+        .align_y(iced_widget::core::Alignment::Center);
+
+    container(bar)
+        .width(Length::Fill)
+        .height(Length::Fixed(44.0))
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::BG.into()),
+            border: Border {
+                color: theme::BORDER,
+                width: 0.0,
+                radius: 0.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
 fn ai_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let mut content = column![
         row![
@@ -1991,6 +2061,29 @@ fn project_branch_label(branch: Option<&str>, dirty: bool) -> String {
     }
 }
 
+/// 顶栏目标胶囊文案：`目标：{标题}`；标题过长按字符截断加省略号。
+/// 无 goal 或空标题 → None（胶囊隐藏）。`max_chars` 含省略号占位。
+fn goal_capsule_text(goal: Option<&Goal>, max_chars: usize) -> Option<String> {
+    let title = goal?.title.trim();
+    if title.is_empty() {
+        return None;
+    }
+    let shown = if title.chars().count() > max_chars {
+        let mut s: String = title.chars().take(max_chars.saturating_sub(1)).collect();
+        s.push('…');
+        s
+    } else {
+        title.to_string()
+    };
+    Some(format!("目标：{shown}"))
+}
+
+/// 同步读 `.dozer/goal.md` 并解析（顶栏胶囊用；文件极小，可容忍同步读）。
+fn load_project_goal(repo_path: &str) -> Option<Goal> {
+    let md = std::fs::read_to_string(goal::goal_path(Path::new(repo_path))).ok()?;
+    goal::parse_goal(&md)
+}
+
 /// 标准行文案:金勾 ✓ / 空圈 ○。
 fn criteria_line(checked: bool, text: &str) -> String {
     format!("{} {}", if checked { "✓" } else { "○" }, text)
@@ -2251,5 +2344,34 @@ mod tests {
         // 若 Workspace 无法在测试中直接构造,则改为验证 preview_content_bounds
         // 之外新增一个纯函数不现实——此时降级为:仅确认编译期字段存在,
         // 测试留待 Task 6 人工验收覆盖,并在报告中写明。
+    }
+
+    #[test]
+    fn goal_capsule_prefixes_and_truncates() {
+        use crate::goal::Goal;
+        let g = Goal {
+            title: "会话存活 daemon 雏形".into(),
+            criteria: vec![],
+        };
+        assert_eq!(
+            goal_capsule_text(Some(&g), 100).as_deref(),
+            Some("目标：会话存活 daemon 雏形")
+        );
+        // 过长按字符截断并加省略号（max_chars 含省略号位）
+        let long = Goal {
+            title: "一二三四五六七八九十".into(),
+            criteria: vec![],
+        };
+        assert_eq!(
+            goal_capsule_text(Some(&long), 5).as_deref(),
+            Some("目标：一二三四…")
+        );
+        // 无 goal / 空标题 → None（胶囊隐藏）
+        assert_eq!(goal_capsule_text(None, 10), None);
+        let empty = Goal {
+            title: "   ".into(),
+            criteria: vec![],
+        };
+        assert_eq!(goal_capsule_text(Some(&empty), 10), None);
     }
 }
