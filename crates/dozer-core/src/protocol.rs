@@ -93,6 +93,10 @@ pub enum Request {
     },
     /// 取当前项目（无则 None）。
     GetActiveProject,
+    /// 取某仓库的验收次数（项目卡"N 次验收"用）。
+    GetAcceptanceCount {
+        repo: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -138,6 +142,10 @@ pub enum Reply {
     /// 单个/当前项目（无则 None）。
     Project {
         project: Option<ProjectInfo>,
+    },
+    /// 验收次数。
+    AcceptanceCount {
+        count: u64,
     },
 }
 
@@ -282,9 +290,20 @@ mod tests {
 
     #[test]
     fn old_session_info_without_transcript_path_decodes_none() {
-        let old = r#"{"id":"a","name":"n","command":"/bin/sh","cwd":"/tmp","alive":true,"created_ms":1}"#;
+        let old =
+            r#"{"id":"a","name":"n","command":"/bin/sh","cwd":"/tmp","alive":true,"created_ms":1}"#;
         let info: SessionInfo = decode_line(old).unwrap();
         assert_eq!(info.transcript_path, None);
+    }
+
+    #[test]
+    fn acceptance_count_request_roundtrips() {
+        let req = Request::GetAcceptanceCount { repo: "/r".into() };
+        let back: Request = decode_line(&encode_line(&req)).unwrap();
+        assert_eq!(back, req);
+        let rep = Reply::AcceptanceCount { count: 12 };
+        let back: Reply = decode_line(&encode_line(&rep)).unwrap();
+        assert_eq!(back, rep);
     }
 
     #[test]

@@ -190,6 +190,8 @@ pub enum Message {
     ProjectTreeToggle(PathBuf),
     /// 项目:git 分支/脏/文件状态刷新结果。
     ProjectGitRefreshed(Option<String>, bool, HashMap<PathBuf, FileStatus>),
+    /// 项目:当前项目验收次数刷新结果(项目卡"N 次验收"副行用)。
+    AcceptanceCountLoaded(Option<u64>),
 }
 
 /// 地址栏编辑事件:由 main.rs 的键盘拦截层在 `preview_addr_editing()`
@@ -358,6 +360,8 @@ pub struct Workspace {
     git_statuses: HashMap<PathBuf, FileStatus>,
     /// 顶栏胶囊用的项目级目标（打开项目时同步读 .dozer/goal.md）。
     project_goal: Option<Goal>,
+    /// 当前项目的验收次数（项目卡"N 次验收"副行；None=未载入/取不到）。
+    project_acceptance_count: Option<u64>,
 }
 
 impl Workspace {
@@ -438,6 +442,7 @@ impl Workspace {
             project,
             file_tree,
             project_goal,
+            project_acceptance_count: None,
             branch: None,
             dirty: false,
             recent_projects,
@@ -484,6 +489,7 @@ impl Workspace {
             project: None,
             file_tree: None,
             project_goal: None,
+            project_acceptance_count: None,
             branch: None,
             dirty: false,
             recent_projects: Vec::new(),
@@ -693,11 +699,15 @@ impl Workspace {
             Message::AcceptanceAccept => self.acceptance_accept(),
             Message::AcceptanceReject => self.acceptance_reject(),
             Message::AcceptanceDone(result) => {
+                let landed = result.is_ok();
                 if let Some(acc) = &mut self.acceptance {
                     match result {
                         Ok(n) => acc.accepted_version = Some(n),
                         Err(e) => acc.error = Some(e),
                     }
+                }
+                if landed {
+                    self.spawn_acceptance_count_refresh();
                 }
             }
             Message::ReviewLoaded(source, result) => {
@@ -862,8 +872,10 @@ impl Workspace {
                     .project
                     .as_ref()
                     .and_then(|p| load_project_goal(&p.path));
+                self.project_acceptance_count = None;
                 self.spawn_project_git_refresh();
                 self.spawn_conversations_refresh();
+                self.spawn_acceptance_count_refresh();
             }
             Message::ProjectTreeToggle(dir) => {
                 if let Some(t) = &mut self.file_tree {
@@ -874,6 +886,9 @@ impl Workspace {
                 self.branch = branch;
                 self.dirty = dirty;
                 self.git_statuses = statuses;
+            }
+            Message::AcceptanceCountLoaded(n) => {
+                self.project_acceptance_count = n;
             }
         }
     }
@@ -921,6 +936,18 @@ impl Workspace {
                 .unwrap_or_default();
             tracing::debug!(cwd = %cwd.display(), n = list.len(), "对话列表扫描完成");
             let _ = proxy.send_event(Message::ConversationsRefreshed(list));
+        });
+    }
+
+    /// 异步取当前项目验收次数 → AcceptanceCountLoaded（项目卡副行）。
+    fn spawn_acceptance_count_refresh(&self) {
+        let Some(p) = &self.project else { return };
+        let repo = p.path.clone();
+        let client = self.client.clone();
+        let proxy = self.proxy.clone();
+        self.handle.spawn(async move {
+            let n = client.acceptance_count(&repo).await.ok();
+            let _ = proxy.send_event(Message::AcceptanceCountLoaded(n));
         });
     }
 
@@ -1723,12 +1750,15 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
         Some(p) => {
             let label = project_branch_label(ws.branch.as_deref(), ws.dirty);
             let bcolor = if ws.dirty { theme::GOLD } else { theme::BODY };
-            let card_col = column![
+            let mut card_col = column![
                 text(p.name.clone()).size(15).color(theme::CREAM),
                 text(label).size(12).color(bcolor),
                 text(p.path.clone()).size(11).color(theme::DIM),
             ]
             .spacing(2);
+            if let Some(n) = ws.project_acceptance_count.filter(|n| *n > 0) {
+                card_col = card_col.push(text(format!("{n} 次验收")).size(11).color(theme::GOLD));
+            }
             let card = container(card_col).width(Length::Fill).padding(10).style(
                 |_t: &iced_widget::Theme| container::Style {
                     background: Some(theme::CARD.into()),

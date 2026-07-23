@@ -190,6 +190,10 @@ async fn handle_conn(
                             Ok(p) => Reply::Project { project: p },
                             Err(e) => Reply::Error { message: format!("取当前项目失败: {e}") },
                         },
+                        Request::GetAcceptanceCount { repo } => match store.count_for_repo(&repo) {
+                            Ok(count) => Reply::AcceptanceCount { count },
+                            Err(e) => Reply::Error { message: format!("验收计数失败: {e}") },
+                        },
                     },
                 };
                 w.write_all(encode_line(&reply).as_bytes()).await?;

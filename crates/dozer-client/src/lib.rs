@@ -178,6 +178,17 @@ impl Client {
         }
     }
 
+    pub async fn acceptance_count(&self, repo: &str) -> Result<u64> {
+        match self
+            .roundtrip(&Request::GetAcceptanceCount { repo: repo.into() })
+            .await?
+        {
+            Reply::AcceptanceCount { count } => Ok(count),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => Err(anyhow::anyhow!("非预期应答: {other:?}")),
+        }
+    }
+
     pub async fn attach(
         &self,
         id: &str,
