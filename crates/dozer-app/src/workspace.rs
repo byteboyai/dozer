@@ -50,6 +50,11 @@ pub const PROJECT_COL_WIDTH: f32 = 240.0;
 /// AI 栏固定宽度（逻辑像素）。
 pub const AI_COL_WIDTH: f32 = 280.0;
 
+/// 顶栏固定高（逻辑像素）。与 `top_bar` 容器高度同源，勿各写各的。
+pub const TOP_BAR_HEIGHT: f32 = 44.0;
+/// 单条状态栏固定高（逻辑像素）。与 `status_bar_container` 同源。
+pub const STATUS_BAR_HEIGHT: f32 = 26.0;
+
 /// 终端栏内"非网格"开销的近似值：左右 padding、表头行、tab 栏行、
 /// 行间 spacing。用于把窗口像素尺寸换算成终端 pane 的可用像素尺寸——
 /// 这是估算值，不追求像素级精确（`term_view::grid_size` 本身就向下
@@ -67,7 +72,7 @@ const PREVIEW_CHROME_TOP_PX: f32 = 8.0 + 22.0 + 30.0 + 30.0 + 12.0;
 pub fn preview_content_bounds(window_width: f32, window_height: f32) -> (f32, f32, f32, f32) {
     let fill_width = (window_width - PROJECT_COL_WIDTH - AI_COL_WIDTH).max(0.0);
     let x = PROJECT_COL_WIDTH + 8.0;
-    let y = PREVIEW_CHROME_TOP_PX;
+    let y = TOP_BAR_HEIGHT + PREVIEW_CHROME_TOP_PX;
     let w = (fill_width / 2.0 - 16.0).max(0.0);
     let h = (window_height - y - 8.0).max(0.0);
     (x, y, w, h)
@@ -87,7 +92,8 @@ pub fn is_in_preview_column(x: f32, window_width: f32) -> bool {
 pub fn terminal_pane_pixel_size(window_width: f32, window_height: f32) -> (f32, f32) {
     let fill_width = (window_width - PROJECT_COL_WIDTH - AI_COL_WIDTH).max(0.0);
     let pane_width = (fill_width / 2.0 - CHROME_WIDTH_PX).max(0.0);
-    let pane_height = (window_height - CHROME_HEIGHT_PX).max(0.0);
+    let pane_height =
+        (window_height - TOP_BAR_HEIGHT - STATUS_BAR_HEIGHT - CHROME_HEIGHT_PX).max(0.0);
     (pane_width, pane_height)
 }
 
@@ -1165,15 +1171,19 @@ impl Workspace {
     /// 光标——单元格尺寸由 pane 像素 ÷ 网格推出,不依赖字号常量。
     pub fn ime_cursor_area(&self, window_w: f32, window_h: f32) -> (f32, f32, f32) {
         if self.preview.addr_editing() || self.acceptance_comment_editing() {
-            return (PROJECT_COL_WIDTH + 12.0, PREVIEW_CHROME_TOP_PX, 20.0);
+            return (
+                PROJECT_COL_WIDTH + 12.0,
+                TOP_BAR_HEIGHT + PREVIEW_CHROME_TOP_PX,
+                20.0,
+            );
         }
         let (pane_w, pane_h) = terminal_pane_pixel_size(window_w, window_h);
         let cell_w = pane_w / self.cols.max(1) as f32;
         let line_h = pane_h / self.rows.max(1) as f32;
         let fill_width = (window_w - PROJECT_COL_WIDTH - AI_COL_WIDTH).max(0.0);
         let x0 = PROJECT_COL_WIDTH + fill_width / 2.0 + 8.0;
-        // 终端网格上方 chrome:上 padding 8 + 表头 22 + spacing 4 + tab 栏 30 + spacing 4
-        let y0 = 8.0 + 22.0 + 4.0 + 30.0 + 4.0;
+        // 终端网格上方 chrome:顶栏 44 + 上 padding 8 + 表头 22 + spacing 4 + tab 栏 30 + spacing 4
+        let y0 = TOP_BAR_HEIGHT + 8.0 + 22.0 + 4.0 + 30.0 + 4.0;
         let (col, row) = self
             .tabs
             .get(self.active)
@@ -1598,7 +1608,7 @@ fn top_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
 
     container(bar)
         .width(Length::Fill)
-        .height(Length::Fixed(44.0))
+        .height(Length::Fixed(TOP_BAR_HEIGHT))
         .style(|_t: &iced_widget::Theme| container::Style {
             background: Some(theme::BG.into()),
             border: Border {
@@ -1918,7 +1928,7 @@ fn status_bar_container<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     container(inner)
         .width(Length::Fill)
-        .height(Length::Fixed(26.0))
+        .height(Length::Fixed(STATUS_BAR_HEIGHT))
         .padding([0, 8])
         .style(|_t: &iced_widget::Theme| container::Style {
             background: Some(theme::PANEL.into()),
@@ -2390,8 +2400,23 @@ mod tests {
             "x={x}"
         );
         assert!((420.0..=470.0).contains(&w), "w={w}");
-        assert!(y > 60.0 && y < 130.0, "y={y}(表头+tab 栏+地址栏之下)");
+        // y 现含顶栏 44 + 预览 chrome(表头+tab 栏+地址栏),故下界随之上移。
+        assert!(
+            y > 130.0 && y < 160.0,
+            "y={y}(顶栏 44 + 表头+tab 栏+地址栏之下)"
+        );
         assert!(h > 700.0 && h < 900.0 - y, "h={h}");
+    }
+
+    #[test]
+    fn terminal_pane_height_excludes_top_and_status_bars() {
+        let (_, h_with) = terminal_pane_pixel_size(1440.0, 900.0);
+        // 顶栏+状态栏必须被扣除:高度应比"只扣 CHROME"少正好 TOP_BAR+STATUS_BAR。
+        let only_chrome = 900.0 - CHROME_HEIGHT_PX;
+        assert!(
+            (only_chrome - h_with - (TOP_BAR_HEIGHT + STATUS_BAR_HEIGHT)).abs() < 0.01,
+            "终端 pane 高度必须再扣顶栏+状态栏"
+        );
     }
 
     #[test]
