@@ -454,6 +454,7 @@ impl Workspace {
         if ws.project.is_some() {
             ws.spawn_project_git_refresh();
             ws.spawn_conversations_refresh();
+            ws.spawn_acceptance_count_refresh();
         }
         ws
     }
@@ -940,13 +941,23 @@ impl Workspace {
     }
 
     /// 异步取当前项目验收次数 → AcceptanceCountLoaded（项目卡副行）。
+    /// 查询键走 `acceptance_query_repo`（= 落库侧 `delivery::repo_root`），
+    /// 而非原始 `p.path`，否则子目录/符号链接路径撞不到库、副行静默空白。
     fn spawn_acceptance_count_refresh(&self) {
         let Some(p) = &self.project else { return };
-        let repo = p.path.clone();
+        let project_path = p.path.clone();
         let client = self.client.clone();
         let proxy = self.proxy.clone();
         self.handle.spawn(async move {
-            let n = client.acceptance_count(&repo).await.ok();
+            // repo_root 是阻塞 git 调用，隔离到 spawn_blocking。
+            let repo = tokio::task::spawn_blocking(move || acceptance_query_repo(&project_path))
+                .await
+                .ok()
+                .flatten();
+            let n = match repo {
+                Some(repo) => client.acceptance_count(&repo).await.ok(),
+                None => None,
+            };
             let _ = proxy.send_event(Message::AcceptanceCountLoaded(n));
         });
     }
@@ -2231,6 +2242,14 @@ fn load_project_goal(repo_path: &str) -> Option<Goal> {
     goal::parse_goal(&md)
 }
 
+/// 从项目路径求"验收查询键"：与落库侧同款 `delivery::repo_root`（git
+/// toplevel，解析符号链接/子目录），保证 `count_for_repo` 精确匹配命中。
+/// 非 git 路径返回 `None`——验收依赖 git ref 沉淀，非 git 仓库不可能有记录，
+/// 直接不查，别拿未规范化的原始路径去撞库（会静默查不到→副行空白）。
+fn acceptance_query_repo(project_path: &str) -> Option<String> {
+    delivery::repo_root(Path::new(project_path)).map(|p| p.to_string_lossy().into_owned())
+}
+
 /// 标准行文案:金勾 ✓ / 空圈 ○。
 fn criteria_line(checked: bool, text: &str) -> String {
     format!("{} {}", if checked { "✓" } else { "○" }, text)
@@ -2402,6 +2421,19 @@ mod tests {
             removed: None,
         };
         assert_eq!(file_change_line(&un), "new.txt  (新)");
+    }
+
+    #[test]
+    fn acceptance_query_repo_none_for_non_git_path() {
+        // 非 git 目录必须回 None(不能退化成原始路径去撞库——Important #2)。
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            acceptance_query_repo(&dir.path().to_string_lossy()),
+            None,
+            "非 git 临时目录应回 None"
+        );
+        // 不存在的路径同样 None(repo_root 先做 is_dir 检查)。
+        assert_eq!(acceptance_query_repo("/no/such/path/xyz"), None);
     }
 
     #[test]
