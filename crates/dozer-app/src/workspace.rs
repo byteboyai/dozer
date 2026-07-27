@@ -60,12 +60,11 @@ pub const STATUS_BAR_HEIGHT: f32 = 26.0;
 /// 这是估算值，不追求像素级精确（`term_view::grid_size` 本身就向下
 /// 取整，差几像素不影响可用性，差太多也只是终端网格偏保守/偏宽松）。
 const CHROME_WIDTH_PX: f32 = 16.0; // 左右 padding(8*2)
-const CHROME_HEIGHT_PX: f32 = 16.0 + 8.0 + 22.0 + 30.0; // 上下 padding + 2 处 spacing + 表头行 + tab 栏行
+const CHROME_HEIGHT_PX: f32 = 16.0 + 4.0 + 30.0; // 上下 padding + 1 处 spacing + tab 栏行(header 已去,P1L #4)
 
-/// 左二内容区上方的 chrome 高度:pane 上内边距 8 + 表头行 22 + tab 栏 30
-/// + 地址栏 30 + 三处 spacing 4*3。与终端 pane 的 CHROME 同为估算值,
-///   差几像素只影响 webview 与边框的贴合度,不影响可用性。
-const PREVIEW_CHROME_TOP_PX: f32 = 8.0 + 22.0 + 30.0 + 30.0 + 12.0;
+/// 左二内容区上方的 chrome 高度:pane 上内边距 8 + tab 栏 30 + 地址栏 30
+///   + 两处 spacing 4*2。header 行已去(P1L #4),故不含表头项。
+const PREVIEW_CHROME_TOP_PX: f32 = 8.0 + 30.0 + 30.0 + 8.0;
 
 /// 窗口逻辑尺寸 → 左二内容区矩形(逻辑像素 x/y/w/h)。列宽公式与
 /// `terminal_pane_pixel_size` 同源:左一/左四固定宽,预览与终端均分 Fill。
@@ -1182,8 +1181,8 @@ impl Workspace {
         let line_h = pane_h / self.rows.max(1) as f32;
         let fill_width = (window_w - PROJECT_COL_WIDTH - AI_COL_WIDTH).max(0.0);
         let x0 = PROJECT_COL_WIDTH + fill_width / 2.0 + 8.0;
-        // 终端网格上方 chrome:顶栏 44 + 上 padding 8 + 表头 22 + spacing 4 + tab 栏 30 + spacing 4
-        let y0 = TOP_BAR_HEIGHT + 8.0 + 22.0 + 4.0 + 30.0 + 4.0;
+        // 终端网格上方 chrome:顶栏 44 + 上 padding 8 + tab 栏 30 + spacing 4(header 已去,P1L #4)
+        let y0 = TOP_BAR_HEIGHT + 8.0 + 30.0 + 4.0;
         let (col, row) = self
             .tabs
             .get(self.active)
@@ -1943,8 +1942,6 @@ fn status_bar_container<'a>(
 }
 
 fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let header = text("预览 · P1d").size(14).color(theme::CREAM);
-
     // tab 栏:每 tab 选择按钮 + 关闭 ×,尾接"打开文件…".
     let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = ws
         .preview
@@ -2019,7 +2016,7 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
             ..button::Style::default()
         });
 
-    let mut content = column![header, tab_bar, addr].spacing(4);
+    let mut content = column![tab_bar, addr].spacing(4);
 
     if let Some(err) = &ws.preview_error {
         content = content.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
@@ -2060,9 +2057,7 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
 fn terminal_pane(
     ws: &Workspace,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let header = text("终端 · 本计划").size(14).color(theme::CREAM);
-
-    let mut content = column![header, tab_bar(ws)].spacing(4);
+    let mut content = column![tab_bar(ws)].spacing(4);
 
     if let Some(err) = &ws.daemon_error {
         content = content.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
@@ -2393,6 +2388,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn chrome_constants_exclude_removed_header() {
+        // #4 去掉 header 行(22px + 一处 spacing 4 = 26)后的期望值,锁死防漂移遮挡。
+        assert_eq!(
+            PREVIEW_CHROME_TOP_PX, 76.0,
+            "预览 chrome 顶应为去 header 后的 76"
+        );
+        assert_eq!(
+            CHROME_HEIGHT_PX, 50.0,
+            "终端 chrome 高应为去 header 后的 50"
+        );
+    }
+
+    #[test]
     fn preview_content_bounds_is_inside_col2() {
         let (x, y, w, h) = preview_content_bounds(1440.0, 900.0);
         assert!(
@@ -2400,10 +2408,10 @@ mod tests {
             "x={x}"
         );
         assert!((420.0..=470.0).contains(&w), "w={w}");
-        // y 现含顶栏 44 + 预览 chrome(表头+tab 栏+地址栏),故下界随之上移。
+        // y 现含顶栏 44 + 预览 chrome(tab 栏+地址栏,表头已去 P1L #4),故区间随之下移 26px。
         assert!(
-            y > 130.0 && y < 160.0,
-            "y={y}(顶栏 44 + 表头+tab 栏+地址栏之下)"
+            y > 104.0 && y < 134.0,
+            "y={y}(顶栏 44 + tab 栏+地址栏之下,表头已去)"
         );
         assert!(h > 700.0 && h < 900.0 - y, "h={h}");
     }
