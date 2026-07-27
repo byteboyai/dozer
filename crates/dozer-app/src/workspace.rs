@@ -50,6 +50,11 @@ pub const PROJECT_COL_WIDTH: f32 = 240.0;
 /// AI 栏固定宽度（逻辑像素）。
 pub const AI_COL_WIDTH: f32 = 280.0;
 
+/// 顶栏固定高（逻辑像素）。与 `top_bar` 容器高度同源，勿各写各的。
+pub const TOP_BAR_HEIGHT: f32 = 44.0;
+/// 单条状态栏固定高（逻辑像素）。与 `status_bar_container` 同源。
+pub const STATUS_BAR_HEIGHT: f32 = 26.0;
+
 /// 终端栏内"非网格"开销的近似值：左右 padding、表头行、tab 栏行、
 /// 行间 spacing。用于把窗口像素尺寸换算成终端 pane 的可用像素尺寸——
 /// 这是估算值，不追求像素级精确（`term_view::grid_size` 本身就向下
@@ -67,7 +72,7 @@ const PREVIEW_CHROME_TOP_PX: f32 = 8.0 + 22.0 + 30.0 + 30.0 + 12.0;
 pub fn preview_content_bounds(window_width: f32, window_height: f32) -> (f32, f32, f32, f32) {
     let fill_width = (window_width - PROJECT_COL_WIDTH - AI_COL_WIDTH).max(0.0);
     let x = PROJECT_COL_WIDTH + 8.0;
-    let y = PREVIEW_CHROME_TOP_PX;
+    let y = TOP_BAR_HEIGHT + PREVIEW_CHROME_TOP_PX;
     let w = (fill_width / 2.0 - 16.0).max(0.0);
     let h = (window_height - y - 8.0).max(0.0);
     (x, y, w, h)
@@ -87,7 +92,8 @@ pub fn is_in_preview_column(x: f32, window_width: f32) -> bool {
 pub fn terminal_pane_pixel_size(window_width: f32, window_height: f32) -> (f32, f32) {
     let fill_width = (window_width - PROJECT_COL_WIDTH - AI_COL_WIDTH).max(0.0);
     let pane_width = (fill_width / 2.0 - CHROME_WIDTH_PX).max(0.0);
-    let pane_height = (window_height - CHROME_HEIGHT_PX).max(0.0);
+    let pane_height =
+        (window_height - TOP_BAR_HEIGHT - STATUS_BAR_HEIGHT - CHROME_HEIGHT_PX).max(0.0);
     (pane_width, pane_height)
 }
 
@@ -190,6 +196,8 @@ pub enum Message {
     ProjectTreeToggle(PathBuf),
     /// 项目:git 分支/脏/文件状态刷新结果。
     ProjectGitRefreshed(Option<String>, bool, HashMap<PathBuf, FileStatus>),
+    /// 项目:当前项目验收次数刷新结果(项目卡"N 次验收"副行用)。
+    AcceptanceCountLoaded(Option<u64>),
 }
 
 /// 地址栏编辑事件:由 main.rs 的键盘拦截层在 `preview_addr_editing()`
@@ -356,6 +364,10 @@ pub struct Workspace {
     recent_projects: Vec<ProjectInfo>,
     /// 当前项目的 git 文件状态（路径→状态；文件树装饰用；P1h）。
     git_statuses: HashMap<PathBuf, FileStatus>,
+    /// 顶栏胶囊用的项目级目标（打开项目时同步读 .dozer/goal.md）。
+    project_goal: Option<Goal>,
+    /// 当前项目的验收次数（项目卡"N 次验收"副行；None=未载入/取不到）。
+    project_acceptance_count: Option<u64>,
 }
 
 impl Workspace {
@@ -411,6 +423,7 @@ impl Workspace {
         let file_tree = project
             .as_ref()
             .map(|p| FileTree::new(PathBuf::from(&p.path)));
+        let project_goal = project.as_ref().and_then(|p| load_project_goal(&p.path));
 
         let ws = Self {
             tabs,
@@ -434,6 +447,8 @@ impl Workspace {
             blink_on: true,
             project,
             file_tree,
+            project_goal,
+            project_acceptance_count: None,
             branch: None,
             dirty: false,
             recent_projects,
@@ -445,6 +460,7 @@ impl Workspace {
         if ws.project.is_some() {
             ws.spawn_project_git_refresh();
             ws.spawn_conversations_refresh();
+            ws.spawn_acceptance_count_refresh();
         }
         ws
     }
@@ -479,6 +495,8 @@ impl Workspace {
             blink_on: true,
             project: None,
             file_tree: None,
+            project_goal: None,
+            project_acceptance_count: None,
             branch: None,
             dirty: false,
             recent_projects: Vec::new(),
@@ -688,11 +706,15 @@ impl Workspace {
             Message::AcceptanceAccept => self.acceptance_accept(),
             Message::AcceptanceReject => self.acceptance_reject(),
             Message::AcceptanceDone(result) => {
+                let landed = result.is_ok();
                 if let Some(acc) = &mut self.acceptance {
                     match result {
                         Ok(n) => acc.accepted_version = Some(n),
                         Err(e) => acc.error = Some(e),
                     }
+                }
+                if landed {
+                    self.spawn_acceptance_count_refresh();
                 }
             }
             Message::ReviewLoaded(source, result) => {
@@ -853,8 +875,14 @@ impl Workspace {
                 self.git_statuses = HashMap::new();
                 self.conversations = Vec::new();
                 self.project = project;
+                self.project_goal = self
+                    .project
+                    .as_ref()
+                    .and_then(|p| load_project_goal(&p.path));
+                self.project_acceptance_count = None;
                 self.spawn_project_git_refresh();
                 self.spawn_conversations_refresh();
+                self.spawn_acceptance_count_refresh();
             }
             Message::ProjectTreeToggle(dir) => {
                 if let Some(t) = &mut self.file_tree {
@@ -865,6 +893,9 @@ impl Workspace {
                 self.branch = branch;
                 self.dirty = dirty;
                 self.git_statuses = statuses;
+            }
+            Message::AcceptanceCountLoaded(n) => {
+                self.project_acceptance_count = n;
             }
         }
     }
@@ -912,6 +943,28 @@ impl Workspace {
                 .unwrap_or_default();
             tracing::debug!(cwd = %cwd.display(), n = list.len(), "对话列表扫描完成");
             let _ = proxy.send_event(Message::ConversationsRefreshed(list));
+        });
+    }
+
+    /// 异步取当前项目验收次数 → AcceptanceCountLoaded（项目卡副行）。
+    /// 查询键走 `acceptance_query_repo`（= 落库侧 `delivery::repo_root`），
+    /// 而非原始 `p.path`，否则子目录/符号链接路径撞不到库、副行静默空白。
+    fn spawn_acceptance_count_refresh(&self) {
+        let Some(p) = &self.project else { return };
+        let project_path = p.path.clone();
+        let client = self.client.clone();
+        let proxy = self.proxy.clone();
+        self.handle.spawn(async move {
+            // repo_root 是阻塞 git 调用，隔离到 spawn_blocking。
+            let repo = tokio::task::spawn_blocking(move || acceptance_query_repo(&project_path))
+                .await
+                .ok()
+                .flatten();
+            let n = match repo {
+                Some(repo) => client.acceptance_count(&repo).await.ok(),
+                None => None,
+            };
+            let _ = proxy.send_event(Message::AcceptanceCountLoaded(n));
         });
     }
 
@@ -1118,15 +1171,19 @@ impl Workspace {
     /// 光标——单元格尺寸由 pane 像素 ÷ 网格推出,不依赖字号常量。
     pub fn ime_cursor_area(&self, window_w: f32, window_h: f32) -> (f32, f32, f32) {
         if self.preview.addr_editing() || self.acceptance_comment_editing() {
-            return (PROJECT_COL_WIDTH + 12.0, PREVIEW_CHROME_TOP_PX, 20.0);
+            return (
+                PROJECT_COL_WIDTH + 12.0,
+                TOP_BAR_HEIGHT + PREVIEW_CHROME_TOP_PX,
+                20.0,
+            );
         }
         let (pane_w, pane_h) = terminal_pane_pixel_size(window_w, window_h);
         let cell_w = pane_w / self.cols.max(1) as f32;
         let line_h = pane_h / self.rows.max(1) as f32;
         let fill_width = (window_w - PROJECT_COL_WIDTH - AI_COL_WIDTH).max(0.0);
         let x0 = PROJECT_COL_WIDTH + fill_width / 2.0 + 8.0;
-        // 终端网格上方 chrome:上 padding 8 + 表头 22 + spacing 4 + tab 栏 30 + spacing 4
-        let y0 = 8.0 + 22.0 + 4.0 + 30.0 + 4.0;
+        // 终端网格上方 chrome:顶栏 44 + 上 padding 8 + 表头 22 + spacing 4 + tab 栏 30 + spacing 4
+        let y0 = TOP_BAR_HEIGHT + 8.0 + 22.0 + 4.0 + 30.0 + 4.0;
         let (col, row) = self
             .tabs
             .get(self.active)
@@ -1268,11 +1325,12 @@ impl Workspace {
     pub fn view(
         &self,
     ) -> iced_widget::core::Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+        let top = top_bar(self);
         let col1 = project_pane(self);
         let col2 = preview_pane(self);
         let col3 = terminal_pane(self);
         let col4 = ai_pane(self);
-        row![col1, col2, col3, col4].into()
+        column![top, row![col1, col2, col3, col4]].into()
     }
 }
 
@@ -1503,6 +1561,66 @@ fn acceptance_content<'a>(
 /// 子视图(不在 iced 树里),这里只留占位背景——无 tab 时显示提示文案。
 /// 左一项目栏：项目卡（名称 + git 分支/脏 + 路径）+ 文件树；无项目时"打开项目…" + 最近。
 /// 右一 AI 栏（P1j）：视图切换 [对话|Agents] + 对话列表（当前行金框高亮）。
+/// 顶栏：左 Dozer 标题、中 ⌘K 搜索框（视觉占位）、右 金色目标胶囊 + 设置齿轮（占位）。
+fn top_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let title = text("Dozer").size(15).color(theme::CREAM);
+
+    let search = container(text("搜索作品、会话、产物…  ⌘K").size(13).color(theme::DIM))
+        .padding([6, 12])
+        .width(Length::Fixed(360.0))
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::CARD.into()),
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        });
+
+    let mut right = row![].spacing(10);
+    if let Some(cap) = goal_capsule_text(ws.project_goal.as_ref(), 28) {
+        let capsule = container(
+            row![
+                text("●").size(9).color(theme::GOLD),
+                text(cap).size(13).color(theme::CREAM)
+            ]
+            .spacing(6),
+        )
+        .padding([5, 10])
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::CARD.into()),
+            border: Border {
+                color: theme::GOLD,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        });
+        right = right.push(capsule);
+    }
+    right = right.push(text("⚙").size(15).color(theme::DIM));
+
+    let bar = row![title, search, iced_widget::space::horizontal(), right]
+        .spacing(16)
+        .padding([0, 12])
+        .align_y(iced_widget::core::Alignment::Center);
+
+    container(bar)
+        .width(Length::Fill)
+        .height(Length::Fixed(TOP_BAR_HEIGHT))
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::BG.into()),
+            border: Border {
+                color: theme::BORDER,
+                width: 0.0,
+                radius: 0.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
 fn ai_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let mut content = column![
         row![
@@ -1599,13 +1717,14 @@ fn ai_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
                 )
                 .on_press(Message::ConversationOpen(c.path.clone()))
                 .width(Length::Fill)
+                .padding(10)
                 .style(move |_t, _s| button::Style {
                     background: Some(theme::CARD.into()),
                     text_color: theme::CREAM,
                     border: Border {
                         color: if current { theme::GOLD } else { theme::BORDER },
                         width: 1.0,
-                        radius: 10.0.into(),
+                        radius: 8.0.into(),
                     },
                     ..button::Style::default()
                 });
@@ -1650,49 +1769,66 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
 
     match &ws.project {
         Some(p) => {
-            content = content.push(text(p.name.clone()).size(15).color(theme::CREAM));
             let label = project_branch_label(ws.branch.as_deref(), ws.dirty);
             let bcolor = if ws.dirty { theme::GOLD } else { theme::BODY };
-            content = content.push(text(label).size(12).color(bcolor));
-            content = content.push(text(p.path.clone()).size(11).color(theme::DIM));
+            let mut card_col = column![
+                text(p.name.clone()).size(15).color(theme::CREAM),
+                text(label).size(12).color(bcolor),
+                text(p.path.clone()).size(11).color(theme::DIM),
+            ]
+            .spacing(2);
+            if let Some(n) = ws.project_acceptance_count.filter(|n| *n > 0) {
+                card_col = card_col.push(text(format!("{n} 次验收")).size(11).color(theme::GOLD));
+            }
+            let card = container(card_col).width(Length::Fill).padding(10).style(
+                |_t: &iced_widget::Theme| container::Style {
+                    background: Some(theme::CARD.into()),
+                    border: Border {
+                        color: theme::BORDER,
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    },
+                    ..container::Style::default()
+                },
+            );
+            content = content.push(card);
             content = content.push(open_btn);
             if let Some(tree) = &ws.file_tree {
                 for row in tree.visible_rows() {
                     let indent = "  ".repeat(row.depth);
-                    let glyph = if row.is_dir {
-                        if row.expanded { "▾ " } else { "▸ " }
+                    let glyph = tree_row_glyph(row.is_dir, row.expanded);
+                    let status = if row.is_dir {
+                        delivery::dir_status(&row.path, &ws.git_statuses)
                     } else {
-                        "  "
+                        ws.git_statuses.get(&row.path).copied()
                     };
-                    // 装饰:文件查自身状态;目录 rollup 反映聚合(改/删→金,只新→绿)。
-                    let deco: Option<(Color, &'static str)> = if row.is_dir {
-                        delivery::dir_status(&row.path, &ws.git_statuses).map(decoration_for)
+                    let name_color = if row.is_dir {
+                        theme::BODY
                     } else {
-                        ws.git_statuses.get(&row.path).copied().map(decoration_for)
+                        theme::CREAM
                     };
-                    let (color, suffix) = match deco {
-                        Some((c, mark)) => (c, format!(" {mark}")),
-                        None => (
-                            if row.is_dir { theme::BODY } else { theme::CYAN },
-                            String::new(),
-                        ),
-                    };
-                    let label = format!("{indent}{glyph}{}{suffix}", row.name);
+                    let mut line = row![
+                        text(format!("{indent}{glyph}{}", row.name))
+                            .size(15)
+                            .color(name_color)
+                    ]
+                    .spacing(6);
+                    if let Some(st) = status {
+                        line = line.push(iced_widget::space::horizontal());
+                        line = line.push(text("●").size(8).color(tree_row_dot(st)));
+                    }
                     let msg = if row.is_dir {
                         Message::ProjectTreeToggle(row.path.clone())
                     } else {
                         Message::PreviewOpenPath(row.path.clone())
                     };
-                    content = content.push(
-                        button(text(label).size(15).color(color))
-                            .on_press(msg)
-                            .width(Length::Fill)
-                            .style(|_t, _s| button::Style {
-                                background: None,
-                                text_color: theme::BODY,
-                                ..button::Style::default()
-                            }),
-                    );
+                    content = content.push(button(line).on_press(msg).width(Length::Fill).style(
+                        |_t, _s| button::Style {
+                            background: None,
+                            text_color: theme::BODY,
+                            ..button::Style::default()
+                        },
+                    ));
                 }
             }
         }
@@ -1713,10 +1849,88 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
         }
     }
 
-    container(content.padding(8))
-        .width(Length::Fixed(PROJECT_COL_WIDTH))
+    let body = container(content.padding(8))
+        .width(Length::Fill)
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::PANEL.into()),
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
+            ..container::Style::default()
+        });
+
+    container(column![body, project_status_bar(ws)])
+        .width(Length::Fixed(PROJECT_COL_WIDTH))
+        .height(Length::Fill)
+        .into()
+}
+
+/// 项目栏底状态条：左 环境/dozerd 点，右 [文件|git {分支}|组件]（文件高亮,组件占位）。
+fn project_status_bar(
+    ws: &Workspace,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let (env, dot) = env_status_text(ws.daemon_error.is_none());
+    let left = row![
+        text("●").size(9).color(dot),
+        text(env).size(11).color(theme::BODY)
+    ]
+    .spacing(6);
+    let git = format!(
+        "git {}",
+        project_branch_label(ws.branch.as_deref(), ws.dirty)
+    );
+    let tabs = row![
+        text("文件").size(11).color(theme::CREAM),
+        text("·").size(11).color(theme::DIM),
+        text(git).size(11).color(theme::BODY),
+        text("·").size(11).color(theme::DIM),
+        text("组件").size(11).color(theme::DIM),
+    ]
+    .spacing(6);
+    status_bar_container(
+        row![left, iced_widget::space::horizontal(), tabs]
+            .align_y(iced_widget::core::Alignment::Center),
+    )
+}
+
+/// 终端栏底状态条：当前激活 tab 的 agent 态 · resume · dozerd 持有。
+fn terminal_status_bar(
+    ws: &Workspace,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let (label, dot) = match ws.tabs.get(ws.active) {
+        Some(t) => (
+            agent_state_label(t.agent_state),
+            dot_color(t.agent_state, t.alive),
+        ),
+        None => ("空闲", theme::DIM),
+    };
+    let resume = ws.tabs.get(ws.active).map(|t| t.alive).unwrap_or(false);
+    let line = row![
+        text("●").size(9).color(dot),
+        text(label).size(11).color(theme::BODY),
+        text("·").size(11).color(theme::DIM),
+        text(format!("resume {}", if resume { "✓" } else { "—" }))
+            .size(11)
+            .color(theme::BODY),
+        text("·").size(11).color(theme::DIM),
+        text("dozerd 持有 · 断连可恢复").size(11).color(theme::DIM),
+    ]
+    .spacing(6);
+    status_bar_container(line)
+}
+
+/// 状态条通用外框：略深底 + 上边线 + 固定高。
+fn status_bar_container<'a>(
+    inner: impl Into<Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>>,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    container(inner)
+        .width(Length::Fill)
+        .height(Length::Fixed(STATUS_BAR_HEIGHT))
+        .padding([0, 8])
+        .style(|_t: &iced_widget::Theme| container::Style {
             background: Some(theme::PANEL.into()),
             border: Border {
                 color: theme::BORDER,
@@ -1865,22 +2079,33 @@ fn terminal_pane(
     if let Some(tab) = ws.tabs.get(ws.active)
         && let Some(text_str) = banner_text(tab.delivery_pending)
     {
-        let banner = row![
-            text(text_str).size(13).color(theme::GOLD),
-            button(text("进入验收").size(13).color(theme::GOLD))
-                .on_press(Message::AcceptanceOpen(tab.tab_id))
-                .style(|_t, _s| button::Style {
-                    background: Some(theme::CARD.into()),
-                    text_color: theme::GOLD,
-                    border: Border {
-                        color: theme::GOLD,
-                        width: 1.0,
-                        radius: 2.0.into()
-                    },
-                    ..button::Style::default()
-                }),
-        ]
-        .spacing(8);
+        let banner = container(
+            row![
+                text(text_str).size(13).color(theme::GOLD),
+                button(text("进入验收").size(13).color(theme::GOLD))
+                    .on_press(Message::AcceptanceOpen(tab.tab_id))
+                    .style(|_t, _s| button::Style {
+                        background: Some(theme::CARD.into()),
+                        text_color: theme::GOLD,
+                        border: Border {
+                            color: theme::GOLD,
+                            width: 1.0,
+                            radius: 2.0.into()
+                        },
+                        ..button::Style::default()
+                    }),
+            ]
+            .spacing(8),
+        )
+        .padding([6, 10])
+        .style(|_t: &iced_widget::Theme| container::Style {
+            border: Border {
+                color: theme::GOLD,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        });
         content = content.push(banner);
     }
 
@@ -1888,7 +2113,7 @@ fn terminal_pane(
 
     content = content.push(active_tab_view(ws));
 
-    container(content.spacing(4).padding(8))
+    let body = container(content.spacing(4).padding(8))
         .width(Length::Fill)
         .height(Length::Fill)
         .style(move |_theme: &iced_widget::Theme| container::Style {
@@ -1899,7 +2124,11 @@ fn terminal_pane(
                 radius: 0.0.into(),
             },
             ..container::Style::default()
-        })
+        });
+
+    container(column![body, terminal_status_bar(ws)])
+        .width(Length::Fill)
+        .height(Length::Fill)
         .into()
 }
 
@@ -1973,12 +2202,21 @@ fn effective_project_repo(active: Option<&Path>, session_cwd: &Path) -> PathBuf 
         .unwrap_or_else(|| session_cwd.to_path_buf())
 }
 
-/// 文件 git 状态 → (颜色, 尾缀字符)。金=改/绿=新/红=删（沿用 P1g 金脏约定）。
-fn decoration_for(status: FileStatus) -> (Color, &'static str) {
+/// 文件树行前导字形：目录展开/收拢三角，文件用中点。不用 emoji（字体毒化，见 fonts.rs）。
+fn tree_row_glyph(is_dir: bool, expanded: bool) -> &'static str {
+    match (is_dir, expanded) {
+        (true, true) => "▾ ",
+        (true, false) => "▸ ",
+        (false, _) => "· ",
+    }
+}
+
+/// 文件/目录 git 状态 → 行尾彩色圆点色。金=改/绿=新/红=删。
+fn tree_row_dot(status: FileStatus) -> Color {
     match status {
-        FileStatus::Modified => (theme::GOLD, "•"),
-        FileStatus::New => (theme::GREEN, "+"),
-        FileStatus::Deleted => (theme::RED, "−"),
+        FileStatus::Modified => theme::GOLD,
+        FileStatus::New => theme::GREEN,
+        FileStatus::Deleted => theme::RED,
     }
 }
 
@@ -1989,6 +2227,37 @@ fn project_branch_label(branch: Option<&str>, dirty: bool) -> String {
         Some(b) => b.to_string(),
         None => "—".to_string(),
     }
+}
+
+/// 顶栏目标胶囊文案：`目标：{标题}`；标题过长按字符截断加省略号。
+/// 无 goal 或空标题 → None（胶囊隐藏）。`max_chars` 含省略号占位。
+fn goal_capsule_text(goal: Option<&Goal>, max_chars: usize) -> Option<String> {
+    let title = goal?.title.trim();
+    if title.is_empty() {
+        return None;
+    }
+    let shown = if title.chars().count() > max_chars {
+        let mut s: String = title.chars().take(max_chars.saturating_sub(1)).collect();
+        s.push('…');
+        s
+    } else {
+        title.to_string()
+    };
+    Some(format!("目标：{shown}"))
+}
+
+/// 同步读 `.dozer/goal.md` 并解析（顶栏胶囊用；文件极小，可容忍同步读）。
+fn load_project_goal(repo_path: &str) -> Option<Goal> {
+    let md = std::fs::read_to_string(goal::goal_path(Path::new(repo_path))).ok()?;
+    goal::parse_goal(&md)
+}
+
+/// 从项目路径求"验收查询键"：与落库侧同款 `delivery::repo_root`（git
+/// toplevel，解析符号链接/子目录），保证 `count_for_repo` 精确匹配命中。
+/// 非 git 路径返回 `None`——验收依赖 git ref 沉淀，非 git 仓库不可能有记录，
+/// 直接不查，别拿未规范化的原始路径去撞库（会静默查不到→副行空白）。
+fn acceptance_query_repo(project_path: &str) -> Option<String> {
+    delivery::repo_root(Path::new(project_path)).map(|p| p.to_string_lossy().into_owned())
 }
 
 /// 标准行文案:金勾 ✓ / 空圈 ○。
@@ -2012,6 +2281,25 @@ fn tab_title(cwd: Option<&Path>, fallback: &str) -> String {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| p.to_string_lossy().into_owned()),
         None => fallback.to_string(),
+    }
+}
+
+/// agent 四态中文（终端状态栏用）。
+fn agent_state_label(state: AgentState) -> &'static str {
+    match state {
+        AgentState::Running => "运行中",
+        AgentState::AwaitingInput => "待输入",
+        AgentState::TurnEnded => "回合毕",
+        AgentState::Idle => "空闲",
+    }
+}
+
+/// 环境状态栏文案 + 点色：daemon 连通=绿"环境正常", 断=红"未连接"。
+fn env_status_text(daemon_ok: bool) -> (&'static str, Color) {
+    if daemon_ok {
+        ("环境正常 · dozerd 运行中", theme::GREEN)
+    } else {
+        ("dozerd 未连接", theme::RED)
     }
 }
 
@@ -2056,15 +2344,25 @@ fn tab_item(
 
     let select = button(label)
         .on_press(Message::SelectTab(idx))
-        .style(move |_theme, _status| button::Style {
-            background: Some(if active { theme::CARD } else { theme::PANEL }.into()),
-            text_color: theme::CREAM,
-            border: Border {
-                color: if active { theme::CREAM } else { theme::BORDER },
-                width: 1.0,
-                radius: 2.0.into(),
-            },
-            ..button::Style::default()
+        .style(move |_theme, _status| {
+            if active {
+                button::Style {
+                    background: Some(theme::CARD.into()),
+                    text_color: theme::CREAM,
+                    border: Border {
+                        color: theme::BORDER,
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..button::Style::default()
+                }
+            } else {
+                button::Style {
+                    background: None,
+                    text_color: theme::BODY,
+                    ..button::Style::default()
+                }
+            }
         });
 
     let close = button(text("×").size(13).color(theme::DIM))
@@ -2102,8 +2400,23 @@ mod tests {
             "x={x}"
         );
         assert!((420.0..=470.0).contains(&w), "w={w}");
-        assert!(y > 60.0 && y < 130.0, "y={y}(表头+tab 栏+地址栏之下)");
+        // y 现含顶栏 44 + 预览 chrome(表头+tab 栏+地址栏),故下界随之上移。
+        assert!(
+            y > 130.0 && y < 160.0,
+            "y={y}(顶栏 44 + 表头+tab 栏+地址栏之下)"
+        );
         assert!(h > 700.0 && h < 900.0 - y, "h={h}");
+    }
+
+    #[test]
+    fn terminal_pane_height_excludes_top_and_status_bars() {
+        let (_, h_with) = terminal_pane_pixel_size(1440.0, 900.0);
+        // 顶栏+状态栏必须被扣除:高度应比"只扣 CHROME"少正好 TOP_BAR+STATUS_BAR。
+        let only_chrome = 900.0 - CHROME_HEIGHT_PX;
+        assert!(
+            (only_chrome - h_with - (TOP_BAR_HEIGHT + STATUS_BAR_HEIGHT)).abs() < 0.01,
+            "终端 pane 高度必须再扣顶栏+状态栏"
+        );
     }
 
     #[test]
@@ -2133,6 +2446,19 @@ mod tests {
             removed: None,
         };
         assert_eq!(file_change_line(&un), "new.txt  (新)");
+    }
+
+    #[test]
+    fn acceptance_query_repo_none_for_non_git_path() {
+        // 非 git 目录必须回 None(不能退化成原始路径去撞库——Important #2)。
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            acceptance_query_repo(&dir.path().to_string_lossy()),
+            None,
+            "非 git 临时目录应回 None"
+        );
+        // 不存在的路径同样 None(repo_root 先做 is_dir 检查)。
+        assert_eq!(acceptance_query_repo("/no/such/path/xyz"), None);
     }
 
     #[test]
@@ -2182,11 +2508,17 @@ mod tests {
     }
 
     #[test]
-    fn decoration_maps_status_to_color_and_marker() {
-        use crate::delivery::FileStatus;
-        assert_eq!(decoration_for(FileStatus::Modified), (theme::GOLD, "•"));
-        assert_eq!(decoration_for(FileStatus::New), (theme::GREEN, "+"));
-        assert_eq!(decoration_for(FileStatus::Deleted), (theme::RED, "−"));
+    fn tree_glyph_dir_toggles_file_is_dot() {
+        assert_eq!(tree_row_glyph(true, true), "▾ ");
+        assert_eq!(tree_row_glyph(true, false), "▸ ");
+        assert_eq!(tree_row_glyph(false, false), "· ");
+    }
+
+    #[test]
+    fn tree_dot_maps_status_colors() {
+        assert_eq!(tree_row_dot(FileStatus::Modified), theme::GOLD);
+        assert_eq!(tree_row_dot(FileStatus::New), theme::GREEN);
+        assert_eq!(tree_row_dot(FileStatus::Deleted), theme::RED);
     }
 
     #[test]
@@ -2251,5 +2583,51 @@ mod tests {
         // 若 Workspace 无法在测试中直接构造,则改为验证 preview_content_bounds
         // 之外新增一个纯函数不现实——此时降级为:仅确认编译期字段存在,
         // 测试留待 Task 6 人工验收覆盖,并在报告中写明。
+    }
+
+    #[test]
+    fn agent_state_label_covers_all() {
+        assert_eq!(agent_state_label(AgentState::Running), "运行中");
+        assert_eq!(agent_state_label(AgentState::AwaitingInput), "待输入");
+        assert_eq!(agent_state_label(AgentState::TurnEnded), "回合毕");
+        assert_eq!(agent_state_label(AgentState::Idle), "空闲");
+    }
+
+    #[test]
+    fn env_status_text_ok_and_down() {
+        assert_eq!(
+            env_status_text(true),
+            ("环境正常 · dozerd 运行中", theme::GREEN)
+        );
+        assert_eq!(env_status_text(false), ("dozerd 未连接", theme::RED));
+    }
+
+    #[test]
+    fn goal_capsule_prefixes_and_truncates() {
+        use crate::goal::Goal;
+        let g = Goal {
+            title: "会话存活 daemon 雏形".into(),
+            criteria: vec![],
+        };
+        assert_eq!(
+            goal_capsule_text(Some(&g), 100).as_deref(),
+            Some("目标：会话存活 daemon 雏形")
+        );
+        // 过长按字符截断并加省略号（max_chars 含省略号位）
+        let long = Goal {
+            title: "一二三四五六七八九十".into(),
+            criteria: vec![],
+        };
+        assert_eq!(
+            goal_capsule_text(Some(&long), 5).as_deref(),
+            Some("目标：一二三四…")
+        );
+        // 无 goal / 空标题 → None（胶囊隐藏）
+        assert_eq!(goal_capsule_text(None, 10), None);
+        let empty = Goal {
+            title: "   ".into(),
+            criteria: vec![],
+        };
+        assert_eq!(goal_capsule_text(Some(&empty), 10), None);
     }
 }

@@ -68,6 +68,15 @@ impl AcceptanceStore {
         )?;
         Ok(n)
     }
+
+    pub fn count_for_repo(&self, repo: &str) -> Result<u64> {
+        let n: u64 = self.conn.lock().expect("db lock").query_row(
+            "SELECT COUNT(*) FROM acceptances WHERE repo = ?1",
+            [repo],
+            |row| row.get(0),
+        )?;
+        Ok(n)
+    }
 }
 
 #[cfg(test)]
@@ -96,5 +105,27 @@ mod tests {
         drop(store);
         let store = AcceptanceStore::open(&dir.path().join("t.db")).unwrap();
         assert_eq!(store.count().unwrap(), 1);
+    }
+
+    #[test]
+    fn count_for_repo_filters_by_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AcceptanceStore::open(&dir.path().join("t.db")).unwrap();
+        let mk = |repo: &str, n: u64| AcceptanceRecord {
+            repo: repo.into(),
+            goal: "g".into(),
+            criteria_checked: vec![],
+            verdict: "accepted".into(),
+            comment: "".into(),
+            ref_name: format!("refs/dozer/accepted/{n}"),
+            acceptor: "user".into(),
+            ts_ms: n,
+        };
+        store.record(&mk("/a", 1)).unwrap();
+        store.record(&mk("/a", 2)).unwrap();
+        store.record(&mk("/b", 3)).unwrap();
+        assert_eq!(store.count_for_repo("/a").unwrap(), 2);
+        assert_eq!(store.count_for_repo("/b").unwrap(), 1);
+        assert_eq!(store.count_for_repo("/none").unwrap(), 0);
     }
 }

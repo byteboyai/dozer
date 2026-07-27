@@ -1,6 +1,6 @@
 # Dozer Shell Chrome 还原度实现计划（P1k）
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 把 `dozer-app` 外观从"功能可用但粗糙"提到"整体气质接近 Figma S1、协调可用"——补齐顶栏、状态栏、文件树图标、卡片/pill 打磨。
 
@@ -29,7 +29,7 @@
 **Interfaces:**
 - Produces: `fn goal_capsule_text(goal: Option<&Goal>, max_chars: usize) -> Option<String>`；`fn top_bar(ws: &Workspace) -> Element<...>`；`Workspace.project_goal: Option<Goal>`。
 
-- [ ] **Step 1: 写失败测试**（追加到 `workspace.rs` 的 `#[cfg(test)] mod tests`）
+- [x] **Step 1: 写失败测试**（追加到 `workspace.rs` 的 `#[cfg(test)] mod tests`）
 
 ```rust
 #[test]
@@ -47,12 +47,12 @@ fn goal_capsule_prefixes_and_truncates() {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app goal_capsule_prefixes_and_truncates`
 Expected: FAIL —— `cannot find function goal_capsule_text`。
 
-- [ ] **Step 3: 实现纯函数**（加在 `workspace.rs` 其它纯函数附近，如 `project_branch_label` 后）
+- [x] **Step 3: 实现纯函数**（加在 `workspace.rs` 其它纯函数附近，如 `project_branch_label` 后）
 
 ```rust
 /// 顶栏目标胶囊文案：`目标：{标题}`；标题过长按字符截断加省略号。
@@ -73,12 +73,12 @@ fn goal_capsule_text(goal: Option<&Goal>, max_chars: usize) -> Option<String> {
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app goal_capsule_prefixes_and_truncates`
 Expected: PASS。
 
-- [ ] **Step 5: 加 `project_goal` 字段并在打开项目时载入**
+- [x] **Step 5: 加 `project_goal` 字段并在打开项目时载入**
 
 在 `Workspace` 结构体字段区加（`goal` 已 `use crate::goal::{self, Goal};`）：
 ```rust
@@ -108,7 +108,7 @@ fn load_project_goal(repo_path: &str) -> Option<Goal> {
 }
 ```
 
-- [ ] **Step 6: 实现 `top_bar` 并重构 `view()`**
+- [x] **Step 6: 实现 `top_bar` 并重构 `view()`**
 
 在 pane 函数区加：
 ```rust
@@ -174,18 +174,18 @@ fn top_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
     }
 ```
 
-- [ ] **Step 7: 编译 + 全量测试 + clippy + fmt**
+- [x] **Step 7: 编译 + 全量测试 + clippy + fmt**
 
 Run: `cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets 2>&1 | grep -E "warning|error" || echo clean && cargo fmt -p dozer-app -- --check`
 Expected: 测试全绿；clippy `clean`；fmt 无输出。
 （`horizontal_space`/`Alignment`/`column!` 若报未导入，按编译器提示补 `use`：`iced_widget::{column, horizontal_space}`、`iced_widget::core::Alignment`。）
 
-- [ ] **Step 8: 真机目测**
+- [x] **Step 8: 真机目测**
 
 Run: `target/aarch64-apple-darwin/debug/dozer`（打开本仓）
 Expected: 顶栏出现——`Dozer` 标题、⌘K 搜索框、金框目标胶囊"目标：{goal 首行}"、齿轮；四栏在顶栏下方。无项目时胶囊隐、搜索框在。
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add crates/dozer-app/src/workspace.rs
@@ -203,7 +203,7 @@ git commit -m "feat(P1k顶栏): Dozer 标题 + ⌘K 搜索框(占位) + 金色�
 - Consumes: `AgentState`（`Idle|Running|AwaitingInput|TurnEnded`）、`dot_color`、`project_branch_label`、`Workspace.daemon_error: Option<String>`、`Workspace.active`/`tabs`。
 - Produces: `fn agent_state_label(AgentState) -> &'static str`；`fn env_status_text(bool) -> (&'static str, Color)`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```rust
 #[test]
@@ -221,12 +221,12 @@ fn env_status_text_ok_and_down() {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app -- agent_state_label_covers_all env_status_text_ok_and_down`
 Expected: FAIL —— 函数未定义。
 
-- [ ] **Step 3: 实现两个纯函数**
+- [x] **Step 3: 实现两个纯函数**
 
 ```rust
 /// agent 四态中文（终端状态栏用）。
@@ -249,12 +249,12 @@ fn env_status_text(daemon_ok: bool) -> (&'static str, Color) {
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app -- agent_state_label_covers_all env_status_text_ok_and_down`
 Expected: PASS。
 
-- [ ] **Step 5: 渲染两条状态栏并挂到 pane 末尾**
+- [x] **Step 5: 渲染两条状态栏并挂到 pane 末尾**
 
 加渲染函数：
 ```rust
@@ -322,17 +322,17 @@ fn status_bar_container<'a>(
 ```
 `terminal_pane` 同理：原 `container(content.spacing(4).padding(8))` 作为 `body`（`height(Fill)`），外层 `column![body, terminal_status_bar(ws)]`，整栏 `Length::Fill` 宽。
 
-- [ ] **Step 6: 编译 + 测试 + clippy + fmt**
+- [x] **Step 6: 编译 + 测试 + clippy + fmt**
 
 Run: `cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets 2>&1 | grep -E "warning|error" || echo clean && cargo fmt -p dozer-app -- --check`
 Expected: 全绿 / clean / 无输出。（`vertical_space`/`horizontal_space` 按提示补 `use`。）
 
-- [ ] **Step 7: 真机目测**
+- [x] **Step 7: 真机目测**
 
 Run: `target/aarch64-apple-darwin/debug/dozer`
 Expected: 项目栏底出现绿点"环境正常 · dozerd 运行中"+右侧 [文件·git main·组件]；终端栏底出现 agent 态行。杀掉 dozerd 重连失败态时项目栏底显红"dozerd 未连接"。
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add crates/dozer-app/src/workspace.rs
@@ -350,7 +350,7 @@ git commit -m "feat(P1k状态栏): 项目栏底 环境/dozerd+文件/git/组件;
 - Consumes: `FileTree::visible_rows()`（`row.is_dir`/`row.expanded`/`row.depth`/`row.name`/`row.path`）、`FileStatus`、`delivery::dir_status`、`ws.git_statuses`。
 - Produces: `fn tree_row_glyph(is_dir: bool, expanded: bool) -> &'static str`；`fn tree_row_dot(status: FileStatus) -> Color`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```rust
 #[test]
@@ -368,12 +368,12 @@ fn tree_dot_maps_status_colors() {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app -- tree_glyph_dir_toggles_file_is_dot tree_dot_maps_status_colors`
 Expected: FAIL —— 函数未定义。
 
-- [ ] **Step 3: 实现两个纯函数**
+- [x] **Step 3: 实现两个纯函数**
 
 ```rust
 /// 文件树行前导字形：目录展开/收拢三角,文件用中点。不用 emoji（字体毒化,见 fonts.rs）。
@@ -395,12 +395,12 @@ fn tree_row_dot(status: FileStatus) -> Color {
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app -- tree_glyph_dir_toggles_file_is_dot tree_dot_maps_status_colors`
 Expected: PASS。
 
-- [ ] **Step 5: 重写文件树行渲染**（`project_pane` 内 `for row in tree.visible_rows()` 循环体，替换现有 `glyph`/`deco`/`label` 逻辑）
+- [x] **Step 5: 重写文件树行渲染**（`project_pane` 内 `for row in tree.visible_rows()` 循环体，替换现有 `glyph`/`deco`/`label` 逻辑）
 
 ```rust
                 for row in tree.visible_rows() {
@@ -439,17 +439,17 @@ Expected: PASS。
 ```
 删除现已无用的 `decoration_for` 里"后缀字符"用途？——`decoration_for` 仍被终端/其它处引用则**保留**；仅本循环不再用它。若编译器报 `decoration_for` 未使用（unused）再删，否则留。
 
-- [ ] **Step 6: 编译 + 测试 + clippy + fmt**
+- [x] **Step 6: 编译 + 测试 + clippy + fmt**
 
 Run: `cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets 2>&1 | grep -E "warning|error" || echo clean && cargo fmt -p dozer-app -- --check`
 Expected: 全绿 / clean / 无输出。若 clippy 报 `decoration_for` dead_code，确认无他处引用后删除该函数及其测试。
 
-- [ ] **Step 7: 真机目测**
+- [x] **Step 7: 真机目测**
 
 Run: 改本仓某文件（不 commit）→ `target/aarch64-apple-darwin/debug/dozer` 打开本仓
 Expected: 目录带 ▾/▸ 三角、文件带 · 前导；改过的文件/目录行尾出现金色 ● 点，新文件绿点，删除红点。
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add crates/dozer-app/src/workspace.rs
@@ -467,7 +467,7 @@ git commit -m "feat(P1k树): 文件树字形 + 行尾彩色状态点(金改/绿�
 - Consumes: 现有 `tab_item`（`workspace.rs` 内，`idx == ws.active` 已知）、`project_pane` 项目信息区、`ai_pane` agent 卡、交付横幅渲染。
 - Produces: 无新纯函数（纯样式）；改动 `tab_item` 的激活分支样式。
 
-- [ ] **Step 1: 项目信息包圆角卡**（`project_pane` 的 `Some(p)` 分支，把项目名/分支/路径三行包进一个 CARD 容器再 push）
+- [x] **Step 1: 项目信息包圆角卡**（`project_pane` 的 `Some(p)` 分支，把项目名/分支/路径三行包进一个 CARD 容器再 push）
 
 将现有：
 ```rust
@@ -501,7 +501,7 @@ git commit -m "feat(P1k树): 文件树字形 + 行尾彩色状态点(金改/绿�
             content = content.push(open_btn);
 ```
 
-- [ ] **Step 2: 激活 tab pill 态**（找到 `tab_item` 函数中区分激活/非激活的 `button::Style`；给激活态加 CARD 底 + 圆角，非激活透明）
+- [x] **Step 2: 激活 tab pill 态**（找到 `tab_item` 函数中区分激活/非激活的 `button::Style`；给激活态加 CARD 底 + 圆角，非激活透明）
 
 在 `tab_item` 里，激活分支的 `button::Style` 改为：
 ```rust
@@ -515,21 +515,21 @@ git commit -m "feat(P1k树): 文件树字形 + 行尾彩色状态点(金改/绿�
 非激活分支：`background: None`、`text_color: theme::BODY`、`border` 透明（width 0）。
 （若 `tab_item` 现用闭包按 `active` 分流样式，则在闭包内按 `active` 返回上述两套。保持 `blink_on` 逻辑不变。）
 
-- [ ] **Step 3: 交付横幅 / agent 卡圆角**
+- [x] **Step 3: 交付横幅 / agent 卡圆角**
 
 交付横幅容器（terminal_pane 内 banner）加 `padding([6,10])` + `radius: 6`；`ai_pane` 的 agent 卡容器加 `radius: 8` + `padding(10)`（若已是 container，仅调 `border.radius`/`padding`；无则包一层 CARD 容器）。颜色不变。
 
-- [ ] **Step 4: 编译 + 测试 + clippy + fmt**
+- [x] **Step 4: 编译 + 测试 + clippy + fmt**
 
 Run: `cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets 2>&1 | grep -E "warning|error" || echo clean && cargo fmt -p dozer-app -- --check`
 Expected: 全绿 / clean / 无输出。
 
-- [ ] **Step 5: 真机目测**
+- [x] **Step 5: 真机目测**
 
 Run: `target/aarch64-apple-darwin/debug/dozer`
 Expected: 项目信息成圆角卡；激活 tab 有 CARD 底 pill 高亮、其余透明；交付横幅/agent 卡圆角柔和。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/dozer-app/src/workspace.rs
@@ -551,7 +551,7 @@ git commit -m "feat(P1k打磨): 项目卡圆角 + 激活 tab pill 态 + 横幅/a
 - Consumes: `AcceptanceStore`、`ProjectInfo.path`、Task 4 的项目卡 `column!`。
 - Produces: `AcceptanceStore::count_for_repo(&self, repo: &str) -> Result<u64>`；`Request::GetAcceptanceCount { repo: String }`；`Reply::AcceptanceCount { count: u64 }`；`Client::acceptance_count(&self, repo: &str) -> Result<u64>`；`Workspace.project_acceptance_count: Option<u64>`。
 
-- [ ] **Step 1: 写 `count_for_repo` 失败测试**（`acceptance.rs` 的 `mod tests`，扩展 `open_record_count_roundtrip` 之后新增）
+- [x] **Step 1: 写 `count_for_repo` 失败测试**（`acceptance.rs` 的 `mod tests`，扩展 `open_record_count_roundtrip` 之后新增）
 
 ```rust
     #[test]
@@ -572,12 +572,12 @@ git commit -m "feat(P1k打磨): 项目卡圆角 + 激活 tab pill 态 + 横幅/a
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozerd count_for_repo_filters_by_repo`
 Expected: FAIL —— `no method named count_for_repo`。
 
-- [ ] **Step 3: 实现 `count_for_repo`**（`acceptance.rs`，`count` 之后）
+- [x] **Step 3: 实现 `count_for_repo`**（`acceptance.rs`，`count` 之后）
 
 ```rust
     pub fn count_for_repo(&self, repo: &str) -> Result<u64> {
@@ -590,12 +590,12 @@ Expected: FAIL —— `no method named count_for_repo`。
     }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozerd count_for_repo_filters_by_repo`
 Expected: PASS。
 
-- [ ] **Step 5: 加协议请求/应答 + roundtrip 测试**
+- [x] **Step 5: 加协议请求/应答 + roundtrip 测试**
 
 `protocol.rs` `enum Request` 末尾（`GetActiveProject,` 后）加：
 ```rust
@@ -624,12 +624,12 @@ Expected: PASS。
     }
 ```
 
-- [ ] **Step 6: 跑协议测试**
+- [x] **Step 6: 跑协议测试**
 
 Run: `cargo test -p dozer-core acceptance_count_request_roundtrips`
 Expected: PASS。
 
-- [ ] **Step 7: dozerd handler**（`server.rs` 的 `match req { ... }`，参照 `Request::ListProjects` 分支加一支）
+- [x] **Step 7: dozerd handler**（`server.rs` 的 `match req { ... }`，参照 `Request::ListProjects` 分支加一支）
 
 ```rust
                         Request::GetAcceptanceCount { repo } => {
@@ -642,7 +642,7 @@ Expected: PASS。
 ```
 （`store` 是 handler 作用域内的 `AcceptanceStore` 句柄；命名对齐该文件里 `RecordAcceptance` 分支所用的同一变量。若分支体是"求值出 `Reply` 再统一写回"，按邻近分支写法收敛；若是"就地 `write` 应答"，照邻近分支就地写。）
 
-- [ ] **Step 8: client 方法**（`dozer-client/src/lib.rs`，参照 `active_project` 加）
+- [x] **Step 8: client 方法**（`dozer-client/src/lib.rs`，参照 `active_project` 加）
 
 ```rust
     pub async fn acceptance_count(&self, repo: &str) -> Result<u64> {
@@ -657,7 +657,7 @@ Expected: PASS。
     }
 ```
 
-- [ ] **Step 9: workspace 载入 + 渲染副行**
+- [x] **Step 9: workspace 载入 + 渲染副行**
 
 `Workspace` 加字段 `project_acceptance_count: Option<u64>,`；两构造处初始化 `None`。
 加异步载入（仿 `spawn_conversations_refresh`）：
@@ -703,17 +703,17 @@ Expected: PASS。
             content = content.push(card);
 ```
 
-- [ ] **Step 10: 全量测试 + clippy + fmt（四 crate）**
+- [x] **Step 10: 全量测试 + clippy + fmt（四 crate）**
 
 Run: `cargo test --workspace && cargo clippy --all-targets 2>&1 | grep -E "warning|error" || echo clean && cargo fmt --all -- --check`
 Expected: 全绿 / clean / 无输出。
 
-- [ ] **Step 11: 真机目测**
+- [x] **Step 11: 真机目测**
 
 Run: `target/aarch64-apple-darwin/debug/dozer`（打开有验收记录的项目，如本仓 dozer）
 Expected: 项目卡出现金色"N 次验收"副行（N 为该仓真实验收数）；无验收记录的项目不显该行。
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 git add crates/dozerd/src/acceptance.rs crates/dozer-core/src/protocol.rs crates/dozerd/src/server.rs crates/dozer-client/src/lib.rs crates/dozer-app/src/workspace.rs
@@ -724,9 +724,9 @@ git commit -m "feat(P1k验收数): count_for_repo + GetAcceptanceCount RPC + 项
 
 ## 收尾（全 task 完成后）
 
-- [ ] **回归 + 人工验收**：全量 `cargo test --workspace` 绿、clippy/fmt 干净；真机对 Figma S1 逐区域目测比对（顶栏/状态栏/树/卡片），逐项 ✓/✗ 记录到 `docs/superpowers/specs/2026-07-20-p1k-acceptance.md`。验收权归用户,实施方不代签。
-- [ ] **落档**：验收通过后回填规格 §7（顶栏/状态栏落地标注），勾选本计划全部 box。
-- [ ] **分支收尾**：`superpowers:finishing-a-development-branch` 合入 main。
+- [x] **回归 + 人工验收**：全量 `cargo test --workspace` 绿、clippy/fmt 干净；真机对 Figma S1 逐区域目测比对（顶栏/状态栏/树/卡片），逐项 ✓/✗ 记录到 `docs/superpowers/specs/2026-07-20-p1k-acceptance.md`。验收权归用户,实施方不代签。
+- [x] **落档**：验收通过后回填规格 §7（顶栏/状态栏落地标注），勾选本计划全部 box。
+- [x] **分支收尾**：`superpowers:finishing-a-development-branch` 合入 main。
 
 ## 自检记录（写计划时）
 
