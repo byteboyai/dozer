@@ -1952,14 +1952,9 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
             let active = idx == ws.preview.active_idx();
             let select = button(text(tab.title.clone()).size(13).color(theme::CREAM))
                 .on_press(Message::PreviewSelectTab(idx))
-                .style(move |_t, _s| button::Style {
-                    background: Some(if active { theme::CARD } else { theme::PANEL }.into()),
+                .style(|_t, _s| button::Style {
+                    background: None,
                     text_color: theme::CREAM,
-                    border: Border {
-                        color: if active { theme::CREAM } else { theme::BORDER },
-                        width: 1.0,
-                        radius: 2.0.into(),
-                    },
                     ..button::Style::default()
                 });
             let close = button(text("×").size(13).color(theme::DIM))
@@ -1969,7 +1964,28 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
                     text_color: theme::DIM,
                     ..button::Style::default()
                 });
-            row![select, close].spacing(2).into()
+            container(
+                row![select, close]
+                    .spacing(2)
+                    .align_y(iced_widget::core::Alignment::Center),
+            )
+            .padding([2, 4])
+            .style(move |_t: &iced_widget::Theme| {
+                if active {
+                    container::Style {
+                        background: Some(theme::CARD.into()),
+                        border: Border {
+                            color: theme::BORDER,
+                            width: 1.0,
+                            radius: 6.0.into(),
+                        },
+                        ..container::Style::default()
+                    }
+                } else {
+                    container::Style::default()
+                }
+            })
+            .into()
         })
         .collect();
     items.push(
@@ -2339,25 +2355,10 @@ fn tab_item(
 
     let select = button(label)
         .on_press(Message::SelectTab(idx))
-        .style(move |_theme, _status| {
-            if active {
-                button::Style {
-                    background: Some(theme::CARD.into()),
-                    text_color: theme::CREAM,
-                    border: Border {
-                        color: theme::BORDER,
-                        width: 1.0,
-                        radius: 6.0.into(),
-                    },
-                    ..button::Style::default()
-                }
-            } else {
-                button::Style {
-                    background: None,
-                    text_color: theme::BODY,
-                    ..button::Style::default()
-                }
-            }
+        .style(|_theme, _status| button::Style {
+            background: None,
+            text_color: theme::CREAM,
+            ..button::Style::default()
         });
 
     let close = button(text("×").size(13).color(theme::DIM))
@@ -2368,7 +2369,28 @@ fn tab_item(
             ..button::Style::default()
         });
 
-    row![select, close].spacing(2).into()
+    container(
+        row![select, close]
+            .spacing(2)
+            .align_y(iced_widget::core::Alignment::Center),
+    )
+    .padding([2, 4])
+    .style(move |_t: &iced_widget::Theme| {
+        if active {
+            container::Style {
+                background: Some(theme::CARD.into()),
+                border: Border {
+                    color: theme::BORDER,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..container::Style::default()
+            }
+        } else {
+            container::Style::default()
+        }
+    })
+    .into()
 }
 
 fn active_tab_view(
