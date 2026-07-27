@@ -1943,7 +1943,7 @@ fn status_bar_container<'a>(
 
 fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     // tab 栏:每 tab 选择按钮 + 关闭 ×,尾接"打开文件…".
-    let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = ws
+    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = ws
         .preview
         .tabs()
         .iter()
@@ -1988,22 +1988,30 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
             .into()
         })
         .collect();
-    items.push(
-        button(text("打开文件…").size(13).color(theme::CREAM))
-            .on_press(Message::PreviewPickFile)
-            .style(|_t, _s| button::Style {
-                background: Some(theme::CARD.into()),
-                text_color: theme::CREAM,
-                border: Border {
-                    color: theme::BORDER,
-                    width: 1.0,
-                    radius: 2.0.into(),
-                },
-                ..button::Style::default()
-            })
-            .into(),
-    );
-    let tab_bar = row(items).spacing(4);
+    // "打开文件…"从 tab items 拆出,钉在横向 scrollable 外右侧常驻,不随 tab 滚走.
+    let tabs_row = row(items).spacing(4);
+    let open_btn = button(text("打开文件…").size(13).color(theme::CREAM))
+        .on_press(Message::PreviewPickFile)
+        .style(|_t, _s| button::Style {
+            background: Some(theme::CARD.into()),
+            text_color: theme::CREAM,
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 2.0.into(),
+            },
+            ..button::Style::default()
+        });
+    let tab_bar = row![
+        iced_widget::scrollable(tabs_row)
+            .direction(iced_widget::scrollable::Direction::Horizontal(
+                iced_widget::scrollable::Scrollbar::new(),
+            ))
+            .width(Length::Fill),
+        open_btn
+    ]
+    .spacing(4)
+    .align_y(iced_widget::core::Alignment::Center);
 
     // 地址栏:自绘(非 text_input——键盘路由走 main.rs 拦截层,与终端
     // 的键盘模型保持同一套显式焦点语义).编辑态 GOLD 描边 + 光标条.
@@ -2145,30 +2153,37 @@ fn terminal_pane(
 
 /// tab 栏：每会话一个按钮（状态点 + 名称 + 关闭 ×），末尾一个 "＋" 新建。
 fn tab_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = ws
+    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = ws
         .tabs
         .iter()
         .enumerate()
         .map(|(idx, tab)| tab_item(idx, tab, idx == ws.active, ws.blink_on))
         .collect();
 
-    items.push(
-        button(text("＋").size(15).color(theme::CREAM))
-            .on_press(Message::NewTab)
-            .style(|_theme, _status| button::Style {
-                background: Some(theme::CARD.into()),
-                text_color: theme::CREAM,
-                border: Border {
-                    color: theme::BORDER,
-                    width: 1.0,
-                    radius: 2.0.into(),
-                },
-                ..button::Style::default()
-            })
-            .into(),
-    );
+    // tab 列表进横向 scrollable 占 Fill;＋常驻钉在滚动区外右侧,不随 tab 滚走.
+    let tabs_row = row(items).spacing(4);
+    let scroller = iced_widget::scrollable(tabs_row)
+        .direction(iced_widget::scrollable::Direction::Horizontal(
+            iced_widget::scrollable::Scrollbar::new(),
+        ))
+        .width(Length::Fill);
+    let plus = button(text("＋").size(15).color(theme::CREAM))
+        .on_press(Message::NewTab)
+        .style(|_theme, _status| button::Style {
+            background: Some(theme::CARD.into()),
+            text_color: theme::CREAM,
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 2.0.into(),
+            },
+            ..button::Style::default()
+        });
 
-    row(items).spacing(4).into()
+    row![scroller, plus]
+        .spacing(4)
+        .align_y(iced_widget::core::Alignment::Center)
+        .into()
 }
 
 /// 交付横幅文案：pending 才有（金色,甲方动作）。
