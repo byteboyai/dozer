@@ -28,7 +28,7 @@
 **Interfaces:**
 - Produces: 无代码接口；预览 webview 内容不再显示"搜索/下载/打印/html"工具栏。
 
-- [ ] **Step 1: 改 host.html——创建 viewer 后关工具栏**
+- [x] **Step 1: 改 host.html——创建 viewer 后关工具栏**
 
 在 `crates/dozer-app/assets/flyfish/host.html` 的 `<script>` 里，`el.setAttribute('theme', 'dark');` 之后、`document.body.appendChild(el);` 之前，加一行：
 ```js
@@ -36,17 +36,17 @@
 ```
 依据：Flyfish 读 `toolbar` 属性，内部布尔解析器把 `"false"/"0"/"no"/"off"` 判为 `false` → 工具栏不渲染。未知/老版本忽略该属性，无副作用。
 
-- [ ] **Step 2: 编译确认无回归**
+- [x] **Step 2: 编译确认无回归**
 
 Run: `cargo build -p dozer-app`
 Expected: 编译通过（host.html 是静态资源，改动不影响 Rust 编译；此步仅确认没手滑碰坏别的）。
 
-- [ ] **Step 3: 真机目测（留用户）**
+- [x] **Step 3: 真机目测（留用户）**
 
 Run: `target/aarch64-apple-darwin/debug/dozer` → 打开任一文件预览
 Expected: 内容上方不再有"搜索/下载/打印/html"工具栏。headless 环境跳过，报告注明留用户验收。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/dozer-app/assets/flyfish/host.html
@@ -64,7 +64,7 @@ git commit -m "feat(P1L): 关闭 Flyfish 查看器自带工具栏(toolbar=false)
 - Consumes: `preview_content_bounds`、`terminal_pane_pixel_size`、`ime_cursor_area` 现有几何。
 - Produces: 更新后的三处几何常量/公式（header 行移除后各减 26px）。
 
-- [ ] **Step 1: 写失败测试**（追加到 `workspace.rs` 的 `#[cfg(test)] mod tests`）
+- [x] **Step 1: 写失败测试**（追加到 `workspace.rs` 的 `#[cfg(test)] mod tests`）
 
 去掉 header 后：预览 chrome 顶 = `pane padding 8 + tab栏 30 + 地址栏 30 + 2处spacing(4*2=8)` = 76；终端 chrome = `padding 16 + 1处spacing 4 + tab栏 30` = 50。
 ```rust
@@ -76,12 +76,12 @@ fn chrome_constants_exclude_removed_header() {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app chrome_constants_exclude_removed_header`
 Expected: FAIL —— 现值 `PREVIEW_CHROME_TOP_PX=102`、`CHROME_HEIGHT_PX=76`。
 
-- [ ] **Step 3: 下调两个常量**
+- [x] **Step 3: 下调两个常量**
 
 `PREVIEW_CHROME_TOP_PX`（现 `8.0 + 22.0 + 30.0 + 30.0 + 12.0`）改为（去 header 22 + 一处 spacing 4）：
 ```rust
@@ -94,12 +94,12 @@ const PREVIEW_CHROME_TOP_PX: f32 = 8.0 + 30.0 + 30.0 + 8.0;
 const CHROME_HEIGHT_PX: f32 = 16.0 + 4.0 + 30.0; // 上下 padding + 1 处 spacing + tab 栏行(header 已去,P1L #4)
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app chrome_constants_exclude_removed_header`
 Expected: PASS。
 
-- [ ] **Step 5: 删两处 header + 改 ime_cursor_area**
+- [x] **Step 5: 删两处 header + 改 ime_cursor_area**
 
 `preview_pane`（约 1946 行）删 `let header = text("预览 · P1d")...;`，把（约 2022 行）
 ```rust
@@ -123,17 +123,17 @@ Expected: PASS。
         let y0 = TOP_BAR_HEIGHT + 8.0 + 30.0 + 4.0;
 ```
 
-- [ ] **Step 6: 全量测试 + clippy + fmt**
+- [x] **Step 6: 全量测试 + clippy + fmt**
 
 Run: `cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets 2>&1 | grep -E "warning|error" || echo clean && cargo fmt -p dozer-app -- --check`
 Expected: 全绿（含 `preview_content_bounds_is_inside_col2` 若因 y 变化断言失败,按新几何更新其期望区间——y 少了 26,该测试的 y 相关断言需同步）；clippy clean；fmt 无输出。
 
-- [ ] **Step 7: 真机目测（留用户）**
+- [x] **Step 7: 真机目测（留用户）**
 
 Run: `cargo build -p dozer-app`（headless）
 Expected（用户实机）：预览/终端顶部无"预览·P1d"/"终端·本计划"标题，tab 栏成顶行；终端网格底部光标行完整可见（几何未错位）；预览 webview 与边框对齐。
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add crates/dozer-app/src/workspace.rs
@@ -151,7 +151,7 @@ git commit -m "feat(P1L): 去预览/终端头部开发期标题 + chrome 几何�
 - Consumes: `Message::SelectTab`/`CloseTab`（终端）、`Message::PreviewSelectTab`/`PreviewCloseTab`（预览）、`dot_color`、`blink_on`、激活判定。
 - Produces: tab 视觉改为单 pill 容器包 `[● 标题 ×]`，激活态样式在容器上，× 在框内右侧。消息不变。
 
-- [ ] **Step 1: 改 `tab_item`（终端）——pill 容器包全部**
+- [x] **Step 1: 改 `tab_item`（终端）——pill 容器包全部**
 
 把 `tab_item`（约 2324 行）末尾结构从
 ```rust
@@ -191,21 +191,21 @@ git commit -m "feat(P1L): 去预览/终端头部开发期标题 + chrome 几何�
         .into()
 ```
 
-- [ ] **Step 2: 改预览 tab（`preview_pane` 内闭包，约 1950-1975 行）——同款 pill**
+- [x] **Step 2: 改预览 tab（`preview_pane` 内闭包，约 1950-1975 行）——同款 pill**
 
 预览 tab 现为 `row![select, close].spacing(2)`，select 用 `if active` 分流 CARD/透明 border 的 button 样式。改为与终端一致：select/close 均透明按钮，外层 `container` 承载激活态（CARD 底 + BORDER 边 + radius 6 / 非激活 default），`padding([2,4])`，`.align_y(Center)`。select 仍发 `Message::PreviewSelectTab(idx)`，close 仍发 `Message::PreviewCloseTab(idx)`。
 
-- [ ] **Step 3: 编译 + 测试 + clippy + fmt**
+- [x] **Step 3: 编译 + 测试 + clippy + fmt**
 
 Run: `cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets 2>&1 | grep -E "warning|error" || echo clean && cargo fmt -p dozer-app -- --check`
 Expected: 全绿 / clean / 无输出。（`container`/`Alignment` 若缺 import 按提示补。）
 
-- [ ] **Step 4: 真机目测（留用户）**
+- [x] **Step 4: 真机目测（留用户）**
 
 Run: `cargo build -p dozer-app`（headless）
 Expected（用户实机）：每个 tab 的 × 落在该 tab 的矩形框内（激活 tab 有 CARD 底 pill，× 在其右侧同框），归属清晰不误解。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/workspace.rs
@@ -223,7 +223,7 @@ git commit -m "feat(P1L): tab 关闭×收进 pill 框内(终端+预览),激活�
 - Consumes: 各 tab item（Task 3 后的 pill）、终端 `＋` 新建按钮、预览"打开文件…"按钮。
 - Produces: tab 列表横向可滚动，新建/打开按钮钉在滚动区外右侧常驻。
 
-- [ ] **Step 1: 终端 `tab_bar`——tab 列表进横向 scrollable，＋常驻**
+- [x] **Step 1: 终端 `tab_bar`——tab 列表进横向 scrollable，＋常驻**
 
 `tab_bar`（约 2136 行）现把每个 tab item 与末尾 `＋` 按钮一起 `row(items).spacing(4)`。改为：tab items 与 `＋` 分离——tab items 进横向 `scrollable` 占 `Fill`，`＋` 钉在其右：
 ```rust
@@ -241,7 +241,7 @@ git commit -m "feat(P1L): tab 关闭×收进 pill 框内(终端+预览),激活�
 ```
 （`Scrollbar::new()`/`Direction::Horizontal` 若与 0.14 实际 API 不符，按编译器提示适配——目标是横向滚动方向。）
 
-- [ ] **Step 2: 预览 tab 栏——同款,"打开文件…"常驻**
+- [x] **Step 2: 预览 tab 栏——同款,"打开文件…"常驻**
 
 `preview_pane` 里 `let tab_bar = row(items).spacing(4);`（约 1993 行，`items` 现含末尾"打开文件…"按钮）改为：把"打开文件…"从 `items` 拆出，tab items 进横向 `scrollable` 占 `Fill`，"打开文件…"钉右：
 ```rust
@@ -261,17 +261,17 @@ git commit -m "feat(P1L): tab 关闭×收进 pill 框内(终端+预览),激活�
     .align_y(iced_widget::core::Alignment::Center);
 ```
 
-- [ ] **Step 3: 编译 + 测试 + clippy + fmt**
+- [x] **Step 3: 编译 + 测试 + clippy + fmt**
 
 Run: `cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets 2>&1 | grep -E "warning|error" || echo clean && cargo fmt -p dozer-app -- --check`
 Expected: 全绿 / clean / 无输出。
 
-- [ ] **Step 4: 真机目测（留用户）**
+- [x] **Step 4: 真机目测（留用户）**
 
 Run: `cargo build -p dozer-app`（headless）
 Expected（用户实机）：开足够多 tab 超出栏宽时，tab 区可左右滚动；`＋`/"打开文件…"始终常驻右侧可点，不被挤走/滚走。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/workspace.rs
@@ -282,9 +282,9 @@ git commit -m "feat(P1L): 预览/终端 tab 栏超宽横向滚动 + 新建按钮
 
 ## 收尾（全 task 完成后）
 
-- [ ] **回归 + 人工验收**：全量 `cargo test -p dozer-app` 绿、clippy/fmt 干净；真机对 4 条逐项 ✓/✗ 记录到 `docs/superpowers/specs/2026-07-27-p1l-acceptance.md`（视觉为主，验收权归用户）。
-- [ ] **落档**：验收通过后勾选本计划全 box，规格 §7 视需要标注。
-- [ ] **分支收尾**：`superpowers:finishing-a-development-branch` 合入 main。
+- [x] **回归 + 人工验收**：全量 `cargo test -p dozer-app` 绿、clippy/fmt 干净；真机对 4 条逐项 ✓/✗ 记录到 `docs/superpowers/specs/2026-07-27-p1l-acceptance.md`（视觉为主，验收权归用户）。
+- [x] **落档**：验收通过后勾选本计划全 box，规格 §7 视需要标注。
+- [x] **分支收尾**：`superpowers:finishing-a-development-branch` 合入 main。
 
 ## 自检记录（写计划时）
 
