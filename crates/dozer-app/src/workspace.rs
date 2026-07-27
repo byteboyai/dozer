@@ -160,6 +160,11 @@ pub enum Message {
     /// 终端滚轮：视口向历史方向（正数）/活动区方向（负数）滚动的行数。
     /// 只作用于当前激活 tab（滚轮事件来自它的 canvas）。
     TermScroll(i32),
+    /// 终端 tab 栏箭头翻页（`true`=右/`false`=左）。一次翻 2 个 tab；
+    /// 上界不在此钳，渲染时 `tab_window` 钳制显示（P1L T5 验收返工）。
+    TermTabScroll(bool),
+    /// 预览 tab 栏箭头翻页，语义同 `TermTabScroll`。
+    PreviewTabScroll(bool),
     /// 终端左键按下：在视口格 `(col, row)` 起新选区（`right` = 按点在
     /// 格子右半）。
     TermSelStart { col: usize, row: usize, right: bool },
@@ -367,6 +372,10 @@ pub struct Workspace {
     project_goal: Option<Goal>,
     /// 当前项目的验收次数（项目卡"N 次验收"副行；None=未载入/取不到）。
     project_acceptance_count: Option<u64>,
+    /// 终端 tab 栏当前最左可见 tab 序号（箭头翻页用；P1L T5）。
+    term_tab_first: usize,
+    /// 预览 tab 栏当前最左可见 tab 序号，语义同 `term_tab_first`。
+    preview_tab_first: usize,
 }
 
 impl Workspace {
@@ -452,6 +461,8 @@ impl Workspace {
             dirty: false,
             recent_projects,
             git_statuses: HashMap::new(),
+            term_tab_first: 0,
+            preview_tab_first: 0,
         };
         // 启动恢复了当前项目时,与 ProjectOpened 同样异步补 git 分支/脏与
         // 对话列表（line 408 承诺"窗口起来后异步补"——此前只在用户主动
@@ -500,6 +511,8 @@ impl Workspace {
             dirty: false,
             recent_projects: Vec::new(),
             git_statuses: HashMap::new(),
+            term_tab_first: 0,
+            preview_tab_first: 0,
         }
     }
 
@@ -777,6 +790,20 @@ impl Workspace {
                     tab.model.scroll_display(delta);
                 }
             }
+            Message::TermTabScroll(right) => {
+                if right {
+                    self.term_tab_first = self.term_tab_first.saturating_add(2);
+                } else {
+                    self.term_tab_first = self.term_tab_first.saturating_sub(2);
+                }
+            }
+            Message::PreviewTabScroll(right) => {
+                if right {
+                    self.preview_tab_first = self.preview_tab_first.saturating_add(2);
+                } else {
+                    self.preview_tab_first = self.preview_tab_first.saturating_sub(2);
+                }
+            }
             Message::TermSelStart { col, row, right } => {
                 if let Some(tab) = self.tabs.get_mut(self.active) {
                     tab.model.selection_start(col, row, right);
@@ -813,13 +840,20 @@ impl Workspace {
                     .expect("allowed_files 锁")
                     .insert(path.clone());
                 self.preview.open_path(path);
+                // 新 tab 落在末尾，滚回最左让它可见（P1L T5）。
+                self.preview_tab_first = 0;
             }
             Message::PreviewOpenUrl(url) => {
                 self.preview_error = None;
                 self.preview.open_url(url);
+                self.preview_tab_first = 0;
             }
             Message::PreviewSelectTab(idx) => self.preview.select(idx),
-            Message::PreviewCloseTab(idx) => self.preview.close(idx),
+            Message::PreviewCloseTab(idx) => {
+                self.preview.close(idx);
+                // 关 tab 后位置全变，旧 first 可能越界——归零防御（P1L T5）。
+                self.preview_tab_first = 0;
+            }
             Message::PreviewAddrClick => {
                 self.preview_error = None;
                 self.preview.addr_begin();
@@ -1023,6 +1057,8 @@ impl Workspace {
         }
         self.acceptance = None;
         self.preview_error = None;
+        self.term_tab_first = 0;
+        self.preview_tab_first = 0;
     }
 
     /// tab 关闭 = 结束会话：中断转发任务（`rx` 随任务栈析构）并 kill
@@ -1048,6 +1084,8 @@ impl Workspace {
         } else if idx < self.active {
             self.active -= 1;
         }
+        // 关 tab 后位置全变，旧 first 可能越界——归零防御（P1L T5）。
+        self.term_tab_first = 0;
     }
 
     fn spawn_new_tab(&mut self) {
@@ -1120,6 +1158,8 @@ impl Workspace {
             t.ingest_osc(&snapshot);
         }
         self.active = self.tabs.len() - 1;
+        // 新 tab 落在末尾，滚回最左让它可见（P1L T5）。
+        self.term_tab_first = 0;
     }
 
     /// 终端 pane 尺寸变化：换算出的新网格套用到所有 tab（含当前不可见
@@ -1942,12 +1982,23 @@ fn status_bar_container<'a>(
 }
 
 fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    // tab 栏:每 tab 选择按钮 + 关闭 ×,尾接"打开文件…".
+    // tab 栏:箭头翻页(到头变灰) + 每 tab 选择按钮 + 关闭 ×,尾接"打开文件…"常驻.
+    // P1L T5 验收返工:同 term `tab_bar`,横向 scrollable 换成索引窗口化 + clip.
+    let widths: Vec<f32> = ws
+        .preview
+        .tabs()
+        .iter()
+        .map(|t| preview_tab_display_width(&t.title))
+        .collect();
+    let (first, can_left, can_right) =
+        tab_window(&widths, 4.0, TAB_BAR_AVAIL_PX, ws.preview_tab_first);
+
     let items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = ws
         .preview
         .tabs()
         .iter()
         .enumerate()
+        .filter(|(idx, _)| *idx >= first)
         .map(|(idx, tab)| {
             let active = idx == ws.preview.active_idx();
             let select = button(text(tab.title.clone()).size(13).color(theme::CREAM))
@@ -1988,8 +2039,12 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
             .into()
         })
         .collect();
-    // "打开文件…"从 tab items 拆出,钉在横向 scrollable 外右侧常驻,不随 tab 滚走.
+    // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;左右箭头钉在裁剪区外,
+    // "打开文件…"钉在最右常驻,不随 tab 滚走.
     let tabs_row = row(items).spacing(4);
+    let clipped = container(tabs_row).width(Length::Fill).clip(true);
+    let left_arrow = tab_arrow_button("◂", can_left, Message::PreviewTabScroll(false));
+    let right_arrow = tab_arrow_button("▸", can_right, Message::PreviewTabScroll(true));
     let open_btn = button(text("打开文件…").size(13).color(theme::CREAM))
         .on_press(Message::PreviewPickFile)
         .style(|_t, _s| button::Style {
@@ -2002,16 +2057,9 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
             },
             ..button::Style::default()
         });
-    let tab_bar = row![
-        iced_widget::scrollable(tabs_row)
-            .direction(iced_widget::scrollable::Direction::Horizontal(
-                iced_widget::scrollable::Scrollbar::new(),
-            ))
-            .width(Length::Fill),
-        open_btn
-    ]
-    .spacing(4)
-    .align_y(iced_widget::core::Alignment::Center);
+    let tab_bar = row![left_arrow, clipped, right_arrow, open_btn]
+        .spacing(4)
+        .align_y(iced_widget::core::Alignment::Center);
 
     // 地址栏:自绘(非 text_input——键盘路由走 main.rs 拦截层,与终端
     // 的键盘模型保持同一套显式焦点语义).编辑态 GOLD 描边 + 光标条.
@@ -2151,22 +2199,58 @@ fn terminal_pane(
         .into()
 }
 
-/// tab 栏：每会话一个按钮（状态点 + 名称 + 关闭 ×），末尾一个 "＋" 新建。
+/// tab 栏箭头翻页/tab 内容区可视宽的保守估值（逻辑像素）。`tab_bar`/
+/// 预览 tab 栏都拿不到窗口尺寸（故意不引入这层依赖——见 P1L T5 brief），
+/// 估偏只影响翻页边界（早一两个 tab 触发/到头），不影响正确性或崩溃。
+const TAB_BAR_AVAIL_PX: f32 = 360.0;
+
+/// 箭头翻页按钮：可点击(`enabled`)时 CREAM 且挂 `on_press`；到头时 DIM
+/// 且**不设** `on_press`（真正不可点，不是视觉变灰但仍能点）。
+fn tab_arrow_button<'a>(
+    glyph: &'static str,
+    enabled: bool,
+    msg: Message,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let color = if enabled { theme::CREAM } else { theme::DIM };
+    let mut btn =
+        button(text(glyph).size(14).color(color)).style(move |_theme, _status| button::Style {
+            background: None,
+            text_color: color,
+            ..button::Style::default()
+        });
+    if enabled {
+        btn = btn.on_press(msg);
+    }
+    btn.into()
+}
+
+/// tab 栏：两侧箭头翻页(到头变灰) + 每会话一个按钮(状态点 + 名称 + 关闭
+/// ×) + 末尾一个 "＋" 新建。P1L T5 验收返工：横向 scrollable(底部滚动条)
+/// 换成索引窗口化 + `clip`——`on_scroll` 只认滚轮/拖拽，程序化滚动在本
+/// app 自建循环里够不到，箭头翻页必须走状态驱动的窗口渲染。
 fn tab_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let widths: Vec<f32> = ws
+        .tabs
+        .iter()
+        .map(|t| tab_display_width(&tab_title(t.cwd.as_deref(), &t.info.name)))
+        .collect();
+    let (first, can_left, can_right) =
+        tab_window(&widths, 4.0, TAB_BAR_AVAIL_PX, ws.term_tab_first);
+
     let items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = ws
         .tabs
         .iter()
         .enumerate()
+        .filter(|(idx, _)| *idx >= first)
         .map(|(idx, tab)| tab_item(idx, tab, idx == ws.active, ws.blink_on))
         .collect();
 
-    // tab 列表进横向 scrollable 占 Fill;＋常驻钉在滚动区外右侧,不随 tab 滚走.
+    // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;左右箭头钉在裁剪区外.
     let tabs_row = row(items).spacing(4);
-    let scroller = iced_widget::scrollable(tabs_row)
-        .direction(iced_widget::scrollable::Direction::Horizontal(
-            iced_widget::scrollable::Scrollbar::new(),
-        ))
-        .width(Length::Fill);
+    let clipped = container(tabs_row).width(Length::Fill).clip(true);
+    let left_arrow = tab_arrow_button("◂", can_left, Message::TermTabScroll(false));
+    let right_arrow = tab_arrow_button("▸", can_right, Message::TermTabScroll(true));
+
     let plus = button(text("＋").size(15).color(theme::CREAM))
         .on_press(Message::NewTab)
         .style(|_theme, _status| button::Style {
@@ -2180,7 +2264,7 @@ fn tab_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
             ..button::Style::default()
         });
 
-    row![scroller, plus]
+    row![left_arrow, clipped, right_arrow, plus]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center)
         .into()
@@ -2308,6 +2392,57 @@ fn tab_title(cwd: Option<&Path>, fallback: &str) -> String {
             .unwrap_or_else(|| p.to_string_lossy().into_owned()),
         None => fallback.to_string(),
     }
+}
+
+/// 文本显示宽度的基础单元和：CJK 字符按全宽计 2，其余按半宽计 1。
+/// `tab_display_width`/`preview_tab_display_width` 共用。
+fn text_width_units(s: &str) -> f32 {
+    s.chars()
+        .map(|c| if (c as u32) > 0x2E80 { 2.0 } else { 1.0 })
+        .sum()
+}
+
+/// 终端 tab 估算显示宽（逻辑像素）：状态点+名称+关闭×+pill padding 的粗估。
+/// 不追求精确——估偏几像素只会让翻页边界差一个 tab。
+fn tab_display_width(title: &str) -> f32 {
+    // 状态点●+spacing ≈ 18, 名称 ≈ units * 半宽 7.5, 关闭× ≈ 18, pill padding ≈ 12
+    18.0 + text_width_units(title) * 7.5 + 18.0 + 12.0
+}
+
+/// 预览 tab 估算显示宽：同 `tab_display_width` 但无状态点。
+fn preview_tab_display_width(title: &str) -> f32 {
+    // 名称 ≈ units * 半宽 7.5, 关闭× ≈ 18, pill padding ≈ 12
+    text_width_units(title) * 7.5 + 18.0 + 12.0
+}
+
+/// 给定各 tab 宽、tab 间距、可视宽、当前 first，算出：
+/// (钳制后的 first, 左可滚, 右可滚)。
+/// - 全部 tab 能放下(总宽<=avail) → first=0, 两端皆不可滚(箭头都变灰)。
+/// - 溢出 → max_first = 最小的 i 使 tabs[i..] 总宽 <= avail(即从 i 起剩余恰好放得下);
+///   钳制 first 到 [0, max_first]; 左可滚 = first>0; 右可滚 = first<max_first。
+fn tab_window(widths: &[f32], gap: f32, avail: f32, first: usize) -> (usize, bool, bool) {
+    let n = widths.len();
+    if n == 0 {
+        return (0, false, false);
+    }
+    let total: f32 = widths.iter().sum::<f32>() + gap * (n.saturating_sub(1)) as f32;
+    if total <= avail {
+        return (0, false, false);
+    }
+    // 求 max_first：从右往左累加，找最大的窗口起点使 tails 放得下。
+    let mut max_first = n - 1;
+    let mut acc = 0.0;
+    for i in (0..n).rev() {
+        let w = widths[i] + if i < n - 1 { gap } else { 0.0 };
+        if acc + w <= avail {
+            acc += w;
+            max_first = i;
+        } else {
+            break;
+        }
+    }
+    let clamped = first.min(max_first);
+    (clamped, clamped > 0, clamped < max_first)
 }
 
 /// agent 四态中文（终端状态栏用）。
@@ -2607,6 +2742,32 @@ mod tests {
         assert_eq!(tab_title(Some(Path::new("/Users/c/proj")), "shell"), "proj");
         assert_eq!(tab_title(Some(Path::new("/")), "shell"), "/");
         assert_eq!(tab_title(None, "shell"), "shell");
+    }
+
+    #[test]
+    fn tab_window_no_overflow_both_disabled() {
+        let (first, left, right) = tab_window(&[50.0, 50.0, 50.0], 4.0, 500.0, 0);
+        assert_eq!((first, left, right), (0, false, false));
+    }
+
+    #[test]
+    fn tab_window_overflow_clamps_and_flags() {
+        let w = [100.0; 5];
+        assert_eq!(tab_window(&w, 0.0, 250.0, 0), (0, false, true));
+        // 末2个(200)放得下、末3个(300)放不下 → max_first=3;过大 first 钳到 3、右到头
+        assert_eq!(tab_window(&w, 0.0, 250.0, 99), (3, true, false));
+        assert_eq!(tab_window(&w, 0.0, 250.0, 1), (1, true, true));
+    }
+
+    #[test]
+    fn tab_display_width_cjk_wider_than_ascii() {
+        assert!(tab_display_width("中文会话") > tab_display_width("sh"));
+    }
+
+    #[test]
+    fn preview_tab_display_width_narrower_than_term_no_dot() {
+        // 同标题下预览版无状态点,应恒窄于终端版。
+        assert!(preview_tab_display_width("a.rs") < tab_display_width("a.rs"));
     }
 
     #[test]
