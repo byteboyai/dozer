@@ -2447,16 +2447,26 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
                                 icons::view(folder, 14.0, theme::DIM),
                             ]
                             .spacing(2)
+                            .align_y(iced_widget::core::Alignment::Center)
                             .into()
                         } else {
-                            icons::view(icons::icon_for_file(&row.name), 14.0, theme::DIM)
+                            row![
+                                iced_widget::space::Space::new()
+                                    .width(Length::Fixed(14.0))
+                                    .height(Length::Shrink),
+                                icons::view(icons::icon_for_file(&row.name), 14.0, theme::DIM),
+                            ]
+                            .spacing(0)
+                            .align_y(iced_widget::core::Alignment::Center)
+                            .into()
                         };
                     let mut line = row![
                         text(indent).size(15).color(name_color),
                         row_icon,
                         text(row.name.clone()).size(15).color(name_color),
                     ]
-                    .spacing(6);
+                    .spacing(6)
+                    .align_y(iced_widget::core::Alignment::Center);
                     if let Some(st) = status {
                         line = line.push(iced_widget::space::horizontal());
                         line = line.push(text("●").size(8).color(tree_row_dot(st)));
@@ -2847,7 +2857,7 @@ fn divider_bar<'a>(
         .into()
 }
 
-/// 右键菜单一项:纯文字按钮,CARD 底+BORDER 描边悬停态由 iced 默认
+/// 右键菜单一项:图标+文字按钮,CARD 底+BORDER 描边悬停态由 iced 默认
 /// button 交互色处理(本仓其余按钮同款,不额外定制)。
 fn menu_item<'a>(
     icon: icons::IconKind,
