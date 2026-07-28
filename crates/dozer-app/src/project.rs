@@ -2,7 +2,7 @@
 //! iced；展开时同步 read_dir（单目录快）。固定隐藏名单过滤。
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// 复制路径展示形式：绝对路径 vs 相对项目根目录。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -99,11 +99,16 @@ impl FileTree {
     }
 
     /// 确保目录处于展开态（新建文件/文件夹前调用，让新项有可见位置）。
-    #[allow(dead_code)] // 留给 Task 6(新建文件/文件夹)
+    /// 与 `toggle` 不同：无条件标记 expanded，哪怕目录当前是空的——
+    /// 新建文件/文件夹的落点必须可见，即便"可见"只是一个空的展开态
+    /// 目录（渲染零子行，不 crash、不视觉异常）。若走 `toggle` 的
+    /// "空目录不标 expanded" 逻辑，右键空目录→新建，编辑框永远不会
+    /// 出现在屏幕上，但键盘输入已经在悄悄写进不可见的编辑缓冲区。
     pub fn ensure_expanded(&mut self, dir: &Path) {
-        if !self.expanded.contains(dir) {
-            self.toggle(dir); // toggle 内部已处理"空目录不标 expanded"
-        }
+        self.children
+            .entry(dir.to_path_buf())
+            .or_insert_with(|| read_children(dir));
+        self.expanded.insert(dir.to_path_buf());
     }
 
     /// 从 root 的子项起 DFS 摊平成可见行（展开的目录才递归其子项）。
@@ -166,6 +171,13 @@ pub fn paste_item(
     target_dir: &Path,
 ) -> Result<PathBuf, String> {
     let dest = target_dir.join(source.file_name().unwrap_or_default());
+    // 目录粘贴进自己或自己的子目录 → dest 落在 source 树内,
+    // copy_dir_recursive 会边建目录边把刚建出来的目标又递归进去复制,
+    // 无界自增长直至 ENAMETOOLONG/磁盘写满。文件不可能出现这种情况
+    // (文件没有"子目录"可落入自身)。
+    if source_is_dir && (dest.starts_with(source) || dest == source) {
+        return Err("不能把目录粘贴到它自己或其子目录里".to_string());
+    }
     if dest.exists() {
         return Err(format!("{} 已存在同名项", dest.display()));
     }
@@ -175,6 +187,15 @@ pub fn paste_item(
         std::fs::copy(source, &dest).map(|_| ())
     };
     result.map(|_| dest).map_err(|e| e.to_string())
+}
+
+/// 校验新建/重命名输入框里键入的名字是不是"单一正常路径分量"——不含
+/// `/`、不是 `.`/`..`、非空。名字最终会被 `parent_dir.join(name)`
+/// 直接拼成路径,若允许 `../x`/`foo/bar` 这类多段输入,拼出来的路径会
+/// 跳出目标目录(重命名=把文件移出项目树,新建=建到意料之外的位置)。
+pub fn is_single_path_component(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
 /// 路径的展示字符串：绝对路径原样；相对路径去掉 `project_root` 前缀，
@@ -228,17 +249,19 @@ mod tests {
     }
 
     #[test]
-    fn ensure_expanded_on_empty_dir_stays_collapsed() {
+    fn ensure_expanded_on_empty_dir_expands_anyway() {
+        // 与 toggle 不同:ensure_expanded 无条件展开,哪怕目录是空的——
+        // 这样"新建文件/文件夹"落点所在的目录才有渲染位置(Critical #2)。
         let d = tempfile::tempdir().unwrap();
         std::fs::create_dir(d.path().join("empty")).unwrap();
         let mut t = FileTree::new(d.path().to_path_buf());
-        t.ensure_expanded(&d.path().join("empty")); // 空目录,toggle 内部不标 expanded
+        t.ensure_expanded(&d.path().join("empty"));
         let row = t
             .visible_rows()
             .into_iter()
             .find(|r| r.name == "empty")
             .unwrap();
-        assert!(!row.expanded);
+        assert!(row.expanded);
     }
 
     #[test]
@@ -300,6 +323,47 @@ mod tests {
             std::fs::read_to_string(target_dir.join("a.txt")).unwrap(),
             "existing"
         );
+    }
+
+    #[test]
+    fn paste_item_rejects_pasting_dir_into_itself() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("a");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("f.txt"), "hi").unwrap();
+
+        let result = paste_item(&dir, true, &dir);
+        assert!(result.is_err());
+        // 没有递归出 a/a 这样的产物
+        assert!(!dir.join("a").exists());
+    }
+
+    #[test]
+    fn paste_item_rejects_pasting_dir_into_own_descendant() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("a");
+        let nested = dir.join("nested");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::create_dir(&nested).unwrap();
+
+        let result = paste_item(&dir, true, &nested);
+        assert!(result.is_err());
+        assert!(!nested.join("a").exists());
+    }
+
+    #[test]
+    fn is_single_path_component_accepts_plain_name() {
+        assert!(is_single_path_component("foo.txt"));
+        assert!(is_single_path_component("新文件.rs"));
+    }
+
+    #[test]
+    fn is_single_path_component_rejects_parent_traversal_and_separators() {
+        assert!(!is_single_path_component("../x"));
+        assert!(!is_single_path_component("foo/bar"));
+        assert!(!is_single_path_component(".."));
+        assert!(!is_single_path_component("."));
+        assert!(!is_single_path_component(""));
     }
 
     #[test]

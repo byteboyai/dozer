@@ -287,6 +287,15 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     let scale = window.scale_factor();
                     let x = (cursor_phys.x / scale) as f32;
                     let y = (cursor_phys.y / scale) as f32;
+                    // 菜单是手算像素定位、不自带边界检测的浮层——右键点在
+                    // 窗口下/右 250px 内时,原样使用点击坐标会把菜单下沿/
+                    // 右沿画出窗口外,底部几项(删除/重命名等)点不到。钳制
+                    // 到"窗口尺寸 - 菜单最坏尺寸"内(Important #7)。
+                    let logical_size = window.inner_size();
+                    let window_w = (logical_size.width as f64 / scale) as f32;
+                    let window_h = (logical_size.height as f64 / scale) as f32;
+                    let x = x.min((window_w - workspace::CONTEXT_MENU_WIDTH).max(0.0));
+                    let y = y.min((window_h - workspace::CONTEXT_MENU_HEIGHT).max(0.0));
                     workspace.update(Message::RightClickAt { x, y });
                     // 不在这里 request_redraw——右键若真的命中某行,该行的
                     // `MouseArea::on_right_press` 随本轮事件走 iced 正常分发,

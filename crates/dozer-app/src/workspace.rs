@@ -165,6 +165,16 @@ pub const TOP_BAR_HEIGHT: f32 = 44.0;
 /// 单条状态栏固定高（逻辑像素）。与 `status_bar_container` 同源。
 pub const STATUS_BAR_HEIGHT: f32 = 26.0;
 
+/// 右键菜单浮层的最坏情形(目录:8 项)外接宽/高（逻辑像素）,main.rs 在
+/// `RightClickAt` 落点处用它把坐标钳制在窗口内,避免菜单下沿/右沿超出
+/// 窗口导致底部几项点不到（Important #7）。宽度取 `menu_item` 固定宽
+/// 180 加列表容器左右 padding；高度按目录菜单最多 8 项估算,每项文字
+/// 13 号加上下 padding 约 28px,项间 spacing 2,列表容器上下 padding 6,
+/// 不必像素级精确,留够余量保证任何一项都可点即可。文件菜单项更少,用
+/// 目录的最坏值同时覆盖两种情况更简单。
+pub const CONTEXT_MENU_WIDTH: f32 = 200.0;
+pub const CONTEXT_MENU_HEIGHT: f32 = 280.0;
+
 /// 终端栏内"非网格"开销的近似值：左右 padding、表头行、tab 栏行、
 /// 行间 spacing。用于把窗口像素尺寸换算成终端 pane 的可用像素尺寸——
 /// 这是估算值，不追求像素级精确（`term_view::grid_size` 本身就向下
@@ -359,8 +369,17 @@ pub enum Message {
     ProjectTreeDeleteConfirm,
     /// 项目树:确认框点"取消"。
     ProjectTreeDeleteCancel,
-    /// 项目树:删除异步结果(Ok=已删除项的父目录,Err=错误文案)。
-    ProjectTreeDeleteDone(Result<PathBuf, String>),
+    /// 项目树:删除/重命名/新建文件/新建文件夹 异步操作统一完成回传。
+    /// `parent`:Ok=需要刷新的父目录,Err=错误文案。`expand`:成功时是否
+    /// 需要顺带把 `parent` 标为展开态——新建文件/文件夹传 true(让刚建出
+    /// 的项立刻可见,哪怕父目录之前是空的/收起的);删除/重命名传 false
+    /// (删除后没有理由展开父目录,重命名不改变展开态)。四个操作共用一个
+    /// 变量曾叫 `ProjectTreeDeleteDone`,重命名/新建完成后也发它,读起来
+    /// 会以为出了删除——改名 + 加 `expand` 字段一并解决。
+    ProjectTreeOpDone {
+        parent: Result<PathBuf, String>,
+        expand: bool,
+    },
     /// 项目树:菜单选"新建文件"→ 进入行内编辑(参数=目标父目录)。
     ProjectTreeNewFile(PathBuf),
     /// 项目树:菜单选"新建文件夹"→ 进入行内编辑(参数=目标父目录)。
@@ -1219,13 +1238,20 @@ impl Workspace {
                         (Ok(()), None) => Err("删除的是项目根,无父目录可刷新".to_string()),
                         (Err(e), _) => Err(e),
                     };
-                    let _ = proxy.send_event(Message::ProjectTreeDeleteDone(outcome));
+                    let _ = proxy.send_event(Message::ProjectTreeOpDone {
+                        parent: outcome,
+                        expand: false, // 删除不展开父目录
+                    });
                 });
             }
-            Message::ProjectTreeDeleteDone(result) => match result {
+            Message::ProjectTreeOpDone { parent, expand } => match parent {
                 Ok(parent) => {
+                    self.tree_error = None; // 成功后清掉上一次失败重试留下的红字(Important #4)
                     if let Some(tree) = &mut self.file_tree {
                         tree.refresh(&parent);
+                        if expand {
+                            tree.ensure_expanded(&parent);
+                        }
                     }
                 }
                 Err(e) => self.tree_error = Some(e),
@@ -1418,8 +1444,24 @@ impl Workspace {
         let Some(edit) = self.tree_edit.take() else {
             return;
         };
+        // 清掉可能残留的上一次失败(哪怕是另一次操作,比如粘贴冲突)留下的
+        // 红字——用户这次成功了就不该再看见旧错误(Important #4)。若这次
+        // 也失败,下面各分支会立刻重新设置,不会丢失新错误。
+        self.tree_error = None;
         let name = edit.buffer.trim();
         if name.is_empty() {
+            return;
+        }
+        // 名字必须是单一正常路径分量,不能含 `/` 或是 `..`——否则
+        // parent_dir.join(name) 会把项目挪出/建到目标目录之外
+        // (Important #6)。三种模式共用同一检查,放在分派前。
+        if !project::is_single_path_component(name) {
+            self.tree_error = Some("名字不能包含路径分隔符".to_string());
+            self.tree_edit = Some(TreeEdit {
+                parent_dir: edit.parent_dir,
+                mode: edit.mode,
+                buffer: name.to_string(),
+            });
             return;
         }
         let new_path = edit.parent_dir.join(name);
@@ -1446,7 +1488,10 @@ impl Workspace {
                     .await
                     .unwrap_or_else(|e| Err(e.to_string()));
                     let outcome = result.map(|()| parent);
-                    let _ = proxy.send_event(Message::ProjectTreeDeleteDone(outcome));
+                    let _ = proxy.send_event(Message::ProjectTreeOpDone {
+                        parent: outcome,
+                        expand: false, // 重命名不改变展开态
+                    });
                 });
             }
             TreeEditMode::NewFile => {
@@ -1470,7 +1515,10 @@ impl Workspace {
                     .await
                     .unwrap_or_else(|e| Err(e.to_string()));
                     let outcome = result.map(|()| parent);
-                    let _ = proxy.send_event(Message::ProjectTreeDeleteDone(outcome));
+                    let _ = proxy.send_event(Message::ProjectTreeOpDone {
+                        parent: outcome,
+                        expand: true, // 新建的项要立刻可见,哪怕父目录之前是空的
+                    });
                 });
             }
             TreeEditMode::NewFolder => {
@@ -1492,7 +1540,10 @@ impl Workspace {
                     .await
                     .unwrap_or_else(|e| Err(e.to_string()));
                     let outcome = result.map(|()| parent);
-                    let _ = proxy.send_event(Message::ProjectTreeDeleteDone(outcome));
+                    let _ = proxy.send_event(Message::ProjectTreeOpDone {
+                        parent: outcome,
+                        expand: true, // 新建的项要立刻可见,哪怕父目录之前是空的
+                    });
                 });
             }
         }
@@ -1705,7 +1756,11 @@ impl Workspace {
     }
 
     /// 点击输入框外时退出所有自绘输入的编辑态(验收反馈:失焦回正常态)。
-    /// 地址栏取消(清空半输入),意见框仅退出编辑(保留已输入文字)。
+    /// 地址栏取消(清空半输入),意见框仅退出编辑(保留已输入文字),树内编辑
+    /// (重命名/新建)直接取消(Important #5——不清会导致点到别处后键盘还在
+    /// 悄悄写进树编辑缓冲区,"打不出字"的假象)。`context_menu` 不在这里
+    /// 清:它已经有专门的外点 dismiss 遮罩(`ProjectTreeContextMenuClose`,
+    /// 见 view() 里的 stack dismiss 层),这里重复清是死代码。
     pub fn blur_inputs(&mut self) {
         if self.preview.addr_editing() {
             self.preview.addr_cancel();
@@ -1713,6 +1768,7 @@ impl Workspace {
         if let Some(acc) = &mut self.acceptance {
             acc.comment_editing = false;
         }
+        self.tree_edit = None;
     }
 
     /// 通过·沉淀：git update-ref + 落库（脏工作区在 delivery::accept 内被拒）。
