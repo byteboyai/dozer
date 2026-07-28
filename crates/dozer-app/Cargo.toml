@@ -16,7 +16,7 @@ serde_json.workspace = true
 tokio.workspace = true
 iced_winit = "0.14"
 iced_wgpu = { version = "0.14", default-features = true }
-iced_widget = { version = "0.14", features = ["wgpu", "canvas"] }
+iced_widget = { version = "0.14", features = ["wgpu", "canvas", "svg"] }
 winit = "0.30"
 futures = { version = "0.3", features = ["thread-pool"] }
 tracing.workspace = true
