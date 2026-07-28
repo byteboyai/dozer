@@ -2169,18 +2169,25 @@ fn acceptance_content<'a>(
 fn top_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let title = text("Dozer").size(15).color(theme::CREAM);
 
-    let search = container(text("搜索作品、会话、产物…  ⌘K").size(13).color(theme::DIM))
-        .padding([6, 12])
-        .width(Length::Fixed(360.0))
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::CARD.into()),
-            border: Border {
-                color: theme::BORDER,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..container::Style::default()
-        });
+    let search = container(
+        row![
+            icons::view(icons::IconKind::Search, 14.0, theme::DIM),
+            text("搜索作品、会话、产物…  ⌘K").size(13).color(theme::DIM),
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center),
+    )
+    .padding([6, 12])
+    .width(Length::Fixed(360.0))
+    .style(|_t: &iced_widget::Theme| container::Style {
+        background: Some(theme::CARD.into()),
+        border: Border {
+            color: theme::BORDER,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..container::Style::default()
+    });
 
     let mut right = row![].spacing(10);
     if let Some(cap) = goal_capsule_text(ws.project_goal.as_ref(), 28) {
@@ -2203,7 +2210,7 @@ fn top_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
         });
         right = right.push(capsule);
     }
-    right = right.push(text("⚙").size(15).color(theme::DIM));
+    right = right.push(icons::view(icons::IconKind::Settings, 16.0, theme::DIM));
 
     let bar = row![title, search, iced_widget::space::horizontal(), right]
         .spacing(16)
