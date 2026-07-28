@@ -102,8 +102,8 @@ fn apply_column_drag(
 ) -> PanelLayout {
     match divider {
         Divider::ProjectPreview => {
-            let upper =
-                (window_width - layout.ai_col_width - MIN_FILL_WIDTH).max(MIN_PROJECT_COL_WIDTH);
+            let upper = (window_width - layout.ai_col_width - MIN_FILL_WIDTH - 3.0 * DIVIDER_WIDTH)
+                .max(MIN_PROJECT_COL_WIDTH);
             PanelLayout {
                 project_col_width: logical_x.clamp(MIN_PROJECT_COL_WIDTH, upper),
                 ..layout
@@ -111,7 +111,8 @@ fn apply_column_drag(
         }
         Divider::TerminalAi => {
             let upper =
-                (window_width - layout.project_col_width - MIN_FILL_WIDTH).max(MIN_AI_COL_WIDTH);
+                (window_width - layout.project_col_width - MIN_FILL_WIDTH - 3.0 * DIVIDER_WIDTH)
+                    .max(MIN_AI_COL_WIDTH);
             PanelLayout {
                 ai_col_width: (window_width - logical_x).clamp(MIN_AI_COL_WIDTH, upper),
                 ..layout
@@ -191,21 +192,6 @@ pub fn terminal_pane_pixel_size(
     let pane_height =
         (window_height - TOP_BAR_HEIGHT - STATUS_BAR_HEIGHT - CHROME_HEIGHT_PX).max(0.0);
     (pane_width, pane_height)
-}
-
-/// 三条分隔线的窗口逻辑 x 坐标(项目|预览、预览|终端、终端|AI)。与上面三个
-/// 函数同一份公式推出,数学上必须与 `view()` 的 `row!` 实际渲染位置一致
-/// (`divider_positions_account_for_divider_width` 测试锁定)。main.rs 消费方
-/// 留给 Task 2/4(连续鼠标追踪);本任务仅测试覆盖,故非测试构建下允许未引用。
-#[allow(dead_code)]
-pub fn divider_positions(window_width: f32, layout: &PanelLayout) -> [f32; 3] {
-    let fill_width =
-        (window_width - layout.project_col_width - layout.ai_col_width - 3.0 * DIVIDER_WIDTH)
-            .max(0.0);
-    let d1 = layout.project_col_width;
-    let d2 = layout.project_col_width + DIVIDER_WIDTH + fill_width * layout.preview_ratio;
-    let d3 = window_width - layout.ai_col_width - DIVIDER_WIDTH;
-    [d1, d2, d3]
 }
 
 #[derive(Debug, Clone)]
@@ -2940,21 +2926,6 @@ mod tests {
         assert_eq!(l.project_col_width, 240.0);
         assert_eq!(l.ai_col_width, 280.0);
         assert_eq!(l.preview_ratio, 0.5);
-    }
-
-    #[test]
-    fn divider_positions_account_for_divider_width() {
-        // 窗口宽 1440,默认布局:项目栏 240 + AI 栏 280,三条分隔线各 8px。
-        let layout = PanelLayout::default();
-        let [d1, d2, d3] = divider_positions(1440.0, &layout);
-        assert_eq!(d1, 240.0, "分隔线1紧贴项目栏右边");
-        let fill = 1440.0 - 240.0 - 280.0 - 3.0 * DIVIDER_WIDTH;
-        assert_eq!(
-            d2,
-            240.0 + DIVIDER_WIDTH + fill * 0.5,
-            "分隔线2在预览栏右边"
-        );
-        assert_eq!(d3, 1440.0 - 280.0 - DIVIDER_WIDTH, "分隔线3紧贴AI栏左边");
     }
 
     #[test]
