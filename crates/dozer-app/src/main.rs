@@ -232,6 +232,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             match event {
                 WindowEvent::CursorMoved { position, .. } => {
                     *cursor_phys = *position;
+                    if workspace.dragging_divider().is_some() {
+                        let scale = window.scale_factor();
+                        let logical_x = (cursor_phys.x / scale) as f32;
+                        let window_width = (window.inner_size().width as f64 / scale) as f32;
+                        workspace.update(Message::ColumnDrag {
+                            window_width,
+                            logical_x,
+                        });
+                        window.request_redraw();
+                    }
                 }
                 WindowEvent::MouseInput {
                     state: ElementState::Pressed,
@@ -253,6 +263,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             FocusIntent::Terminal
                         },
                     );
+                    window.request_redraw();
+                }
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: winit::event::MouseButton::Left,
+                    ..
+                } if workspace.dragging_divider().is_some() => {
+                    workspace.update(Message::ColumnDragEnd);
                     window.request_redraw();
                 }
                 _ => {}

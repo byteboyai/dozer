@@ -270,12 +270,11 @@ pub enum Message {
     /// 状态决定要不要继续转发拖拽;Task 4 接线)。
     ColumnDragStart(Divider),
     /// 拖拽中:当前窗口逻辑宽 + 光标逻辑 x(main.rs 换算好传入,`update()`
-    /// 统一算+夹取,不与 main.rs 分摊裁剪逻辑)。本任务只接 `update()` 分支,
-    /// 构造方(main.rs 连续鼠标追踪)留给 Task 4,故暂允许未被构造。
-    #[allow(dead_code)]
+    /// 统一算+夹取,不与 main.rs 分摊裁剪逻辑)。构造方为 main.rs 的
+    /// `CursorMoved` 续传(Task 4 接线)。
     ColumnDrag { window_width: f32, logical_x: f32 },
-    /// 松开左键,结束拖拽并触发写盘(Task 3 接线持久化)。构造方同上留 Task 4。
-    #[allow(dead_code)]
+    /// 松开左键,结束拖拽并触发写盘(Task 3 接线持久化)。构造方为 main.rs 的
+    /// `MouseInput{Released}` 分支(Task 4 接线)。
     ColumnDragEnd,
     /// daemon 不可用（启动连接失败，或某次会话操作失败）的错误文案，
     /// 终端区以 RED 文案展示。
@@ -1397,9 +1396,8 @@ impl Workspace {
         self.layout
     }
 
-    /// 当前正在拖拽的分隔线(main.rs 拖拽追踪用;调用方留 Task 4 接线,
-    /// 故暂允许未被调用)。
-    #[allow(dead_code)]
+    /// 当前正在拖拽的分隔线(main.rs 拖拽追踪用,调用方为
+    /// `on_window_event` 的 `CursorMoved`/`MouseInput{Released}` 分支)。
     pub fn dragging_divider(&self) -> Option<Divider> {
         self.dragging
     }
