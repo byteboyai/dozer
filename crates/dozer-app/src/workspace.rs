@@ -21,6 +21,7 @@
 use crate::conversation::{self, ConversationMeta};
 use crate::delivery::{self, FileChange, FileStatus};
 use crate::goal::{self, Goal};
+use crate::layout;
 use crate::osc::{OscEvent, OscScanner};
 use crate::preview::{AddrTarget, PreviewPane, WebviewSpec};
 use crate::project::FileTree;
@@ -498,8 +499,8 @@ pub struct Workspace {
     term_tab_first: usize,
     /// 预览 tab 栏当前最左可见 tab 序号，语义同 `term_tab_first`。
     preview_tab_first: usize,
-    /// 四栏宽度/预览终端分配比例;拖拽写入,`layout::load()` 起始值(Task 3
-    /// 接线,本步先用 `PanelLayout::default()`)。
+    /// 四栏宽度/预览终端分配比例;拖拽写入,启动时 `layout::load()` 读盘
+    /// 作起始值(`ColumnDragEnd` 触发异步写盘)。
     layout: PanelLayout,
     /// 正在拖拽的分隔线;`None` 表示未在拖拽。
     dragging: Option<Divider>,
@@ -590,7 +591,7 @@ impl Workspace {
             git_statuses: HashMap::new(),
             term_tab_first: 0,
             preview_tab_first: 0,
-            layout: PanelLayout::default(),
+            layout: layout::load(),
             dragging: None,
         };
         // 启动恢复了当前项目时,与 ProjectOpened 同样异步补 git 分支/脏与
@@ -642,7 +643,7 @@ impl Workspace {
             git_statuses: HashMap::new(),
             term_tab_first: 0,
             preview_tab_first: 0,
-            layout: PanelLayout::default(),
+            layout: layout::load(),
             dragging: None,
         }
     }
@@ -928,6 +929,12 @@ impl Workspace {
             }
             Message::ColumnDragEnd => {
                 self.dragging = None;
+                let layout = self.layout;
+                self.handle.spawn(async move {
+                    if let Err(e) = layout::save(&layout) {
+                        tracing::warn!("四栏布局写盘失败: {e}");
+                    }
+                });
             }
             Message::DaemonError(message) => self.daemon_error = Some(message),
             Message::TermScroll(delta) => {

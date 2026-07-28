@@ -4,6 +4,7 @@ mod delivery;
 mod fonts;
 mod goal;
 mod keymap;
+mod layout;
 mod osc;
 mod preview;
 mod project;
