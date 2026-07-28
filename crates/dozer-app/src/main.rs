@@ -3,6 +3,7 @@ mod conversation;
 mod delivery;
 mod fonts;
 mod goal;
+mod icons;
 mod keymap;
 mod layout;
 mod osc;
