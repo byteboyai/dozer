@@ -2850,19 +2850,27 @@ fn divider_bar<'a>(
 /// 右键菜单一项:纯文字按钮,CARD 底+BORDER 描边悬停态由 iced 默认
 /// button 交互色处理(本仓其余按钮同款,不额外定制)。
 fn menu_item<'a>(
+    icon: icons::IconKind,
     label: &'static str,
     msg: Message,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    button(text(label).size(13).color(theme::CREAM))
-        .on_press(msg)
-        .width(Length::Fixed(180.0))
-        .padding([6, 10])
-        .style(|_t, _s| button::Style {
-            background: Some(theme::CARD.into()),
-            text_color: theme::CREAM,
-            ..button::Style::default()
-        })
-        .into()
+    button(
+        row![
+            icons::view(icon, 14.0, theme::CREAM),
+            text(label).size(13).color(theme::CREAM),
+        ]
+        .spacing(8)
+        .align_y(iced_widget::core::Alignment::Center),
+    )
+    .on_press(msg)
+    .width(Length::Fixed(180.0))
+    .padding([6, 10])
+    .style(|_t, _s| button::Style {
+        background: Some(theme::CARD.into()),
+        text_color: theme::CREAM,
+        ..button::Style::default()
+    })
+    .into()
 }
 
 /// 行内编辑框(新建/重命名共用):自绘输入,尾缀 "▏" 模拟光标,与地址栏/
@@ -2905,15 +2913,18 @@ fn context_menu_popup(
         Vec::new();
     if menu.is_dir {
         items.push(menu_item(
+            icons::IconKind::FilePlus,
             "新建文件",
             Message::ProjectTreeNewFile(menu.target.clone()),
         ));
         items.push(menu_item(
+            icons::IconKind::FolderPlus,
             "新建文件夹",
             Message::ProjectTreeNewFolder(menu.target.clone()),
         ));
     }
     items.push(menu_item(
+        icons::IconKind::Copy,
         "复制",
         Message::ProjectTreeCopy(menu.target.clone(), menu.is_dir),
     ));
@@ -2921,34 +2932,45 @@ fn context_menu_popup(
         let has_clipboard = ws.tree_clipboard.is_some();
         let paste_msg = Message::ProjectTreePaste(menu.target.clone());
         items.push(if has_clipboard {
-            menu_item("粘贴", paste_msg)
+            menu_item(icons::IconKind::ClipboardPaste, "粘贴", paste_msg)
         } else {
             // 剪贴槽为空:置灰且不挂 on_press,真正不可点(同 P1L tab 箭头
             // "到头变灰"的既有处理口径,不是视觉变灰但仍能点)。
-            button(text("粘贴").size(13).color(theme::DIM))
-                .width(Length::Fixed(180.0))
-                .padding([6, 10])
-                .style(|_t, _s| button::Style {
-                    background: Some(theme::CARD.into()),
-                    text_color: theme::DIM,
-                    ..button::Style::default()
-                })
-                .into()
+            button(
+                row![
+                    icons::view(icons::IconKind::ClipboardPaste, 14.0, theme::DIM),
+                    text("粘贴").size(13).color(theme::DIM),
+                ]
+                .spacing(8)
+                .align_y(iced_widget::core::Alignment::Center),
+            )
+            .width(Length::Fixed(180.0))
+            .padding([6, 10])
+            .style(|_t, _s| button::Style {
+                background: Some(theme::CARD.into()),
+                text_color: theme::DIM,
+                ..button::Style::default()
+            })
+            .into()
         });
     }
     items.push(menu_item(
+        icons::IconKind::Trash,
         "删除",
         Message::ProjectTreeDeleteRequest(menu.target.clone(), menu.is_dir),
     ));
     items.push(menu_item(
+        icons::IconKind::Rename,
         "重命名",
         Message::ProjectTreeRenameStart(menu.target.clone()),
     ));
     items.push(menu_item(
+        icons::IconKind::Copy,
         "复制绝对路径",
         Message::ProjectTreeCopyPath(menu.target.clone(), project::PathKind::Absolute),
     ));
     items.push(menu_item(
+        icons::IconKind::Copy,
         "复制相对路径",
         Message::ProjectTreeCopyPath(menu.target.clone(), project::PathKind::Relative),
     ));
