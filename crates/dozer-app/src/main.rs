@@ -241,12 +241,17 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     let scale = window.scale_factor();
                     let logical_x = (cursor_phys.x / scale) as f32;
                     let logical_w = (window.inner_size().width as f64 / scale) as f32;
-                    *pending_focus =
-                        Some(if workspace::is_in_preview_column(logical_x, logical_w) {
+                    *pending_focus = Some(
+                        if workspace::is_in_preview_column(
+                            logical_x,
+                            logical_w,
+                            &workspace.layout(),
+                        ) {
                             FocusIntent::Preview
                         } else {
                             FocusIntent::Terminal
-                        });
+                        },
+                    );
                     window.request_redraw();
                 }
                 _ => {}
@@ -375,7 +380,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             let scale = window.scale_factor();
             let logical_w = size.width as f32 / scale as f32;
             let logical_h = size.height as f32 / scale as f32;
-            let (x, y, w, h) = workspace::preview_content_bounds(logical_w, logical_h);
+            let (x, y, w, h) =
+                workspace::preview_content_bounds(logical_w, logical_h, &workspace.layout());
             let bounds = wry::Rect {
                 position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
                 size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
@@ -624,8 +630,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 // 建好就立刻纠正成实际网格（也会顺带把 resize 同步给
                 // daemon）。
                 let logical: LogicalSize<f32> = physical_size.to_logical(window.scale_factor());
-                let (pane_w, pane_h) =
-                    workspace::terminal_pane_pixel_size(logical.width, logical.height);
+                let (pane_w, pane_h) = workspace::terminal_pane_pixel_size(
+                    logical.width,
+                    logical.height,
+                    &workspace.layout(),
+                );
                 let (cols, rows) = term_view::grid_size(pane_w, pane_h);
                 if cols > 0 && rows > 0 {
                     workspace.update(Message::PaneResized {
@@ -861,8 +870,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         // 所有 tab 的 `TerminalModel` 并同步给 daemon
                         // （`Workspace::update` 内部处理，这里只负责换算）。
                         let logical: LogicalSize<f32> = new_size.to_logical(window.scale_factor());
-                        let (pane_w, pane_h) =
-                            workspace::terminal_pane_pixel_size(logical.width, logical.height);
+                        let (pane_w, pane_h) = workspace::terminal_pane_pixel_size(
+                            logical.width,
+                            logical.height,
+                            &workspace.layout(),
+                        );
                         let (cols, rows) = term_view::grid_size(pane_w, pane_h);
                         if cols > 0 && rows > 0 {
                             workspace.update(Message::PaneResized {

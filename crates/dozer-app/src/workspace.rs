@@ -30,9 +30,13 @@ use crate::theme;
 use crate::transcript::{self, ReviewEntry};
 use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentState, ProjectInfo, SessionInfo};
+#[allow(unused_imports)] // Task 2 用于分隔线悬停光标（mouse::Interaction::ResizeColumn）
+use iced_widget::core::mouse;
 use iced_widget::core::{Border, Color, Element, Length};
-use iced_widget::{button, column, container, row, text};
+#[allow(unused_imports)] // Task 2 用于把 divider_bar() 包成可拖拽命中区
+use iced_widget::{MouseArea, button, column, container, row, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -45,10 +49,43 @@ use tokio::sync::mpsc;
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 
-/// 项目栏固定宽度（逻辑像素）。
-pub const PROJECT_COL_WIDTH: f32 = 240.0;
-/// AI 栏固定宽度（逻辑像素）。
-pub const AI_COL_WIDTH: f32 = 280.0;
+/// 四栏宽度状态:项目栏/AI栏固定像素宽 + 预览:终端剩余空间分配比例。是
+/// `view()` 渲染、离屏几何计算(webview bounds/IME/命中测试)、磁盘持久化
+/// 三方共享的唯一数据源(见 specs/2026-07-28-resizable-panel-layout-design.md)。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PanelLayout {
+    pub project_col_width: f32,
+    pub ai_col_width: f32,
+    /// 预览栏占 (窗口宽 - 项目栏 - AI栏 - 3*分隔线) 剩余空间的比例;
+    /// 终端栏拿 (1.0 - 此值)。
+    pub preview_ratio: f32,
+}
+
+impl Default for PanelLayout {
+    fn default() -> Self {
+        Self {
+            project_col_width: 240.0,
+            ai_col_width: 280.0,
+            preview_ratio: 0.5,
+        }
+    }
+}
+
+/// 三条可拖拽分隔线的标识:项目|预览、预览|终端、终端|AI。
+/// Task 2 把它接进 `Message::ColumnDragStart`/`ColumnDrag`；本任务只定义
+/// 类型（`divider_positions` 尚不需要它），故允许暂时未被引用。
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Divider {
+    ProjectPreview,
+    PreviewTerminal,
+    TerminalAi,
+}
+
+/// 每条分隔线的命中区/渲染宽度(逻辑像素)。视觉线本身 2px,居中于此区间内。
+/// 四栏几何公式必须把 `3 * DIVIDER_WIDTH` 从剩余空间里扣掉,否则 webview
+/// bounds/IME 光标/命中测试会和 `view()` 里 `row!` 实际渲染的像素错位。
+const DIVIDER_WIDTH: f32 = 8.0;
 
 /// 顶栏固定高（逻辑像素）。与 `top_bar` 容器高度同源，勿各写各的。
 pub const TOP_BAR_HEIGHT: f32 = 44.0;
@@ -68,32 +105,62 @@ const PREVIEW_CHROME_TOP_PX: f32 = 8.0 + 30.0 + 30.0 + 8.0;
 
 /// 窗口逻辑尺寸 → 左二内容区矩形(逻辑像素 x/y/w/h)。列宽公式与
 /// `terminal_pane_pixel_size` 同源:左一/左四固定宽,预览与终端均分 Fill。
-pub fn preview_content_bounds(window_width: f32, window_height: f32) -> (f32, f32, f32, f32) {
-    let fill_width = (window_width - PROJECT_COL_WIDTH - AI_COL_WIDTH).max(0.0);
-    let x = PROJECT_COL_WIDTH + 8.0;
+pub fn preview_content_bounds(
+    window_width: f32,
+    window_height: f32,
+    layout: &PanelLayout,
+) -> (f32, f32, f32, f32) {
+    let fill_width =
+        (window_width - layout.project_col_width - layout.ai_col_width - 3.0 * DIVIDER_WIDTH)
+            .max(0.0);
+    let x = layout.project_col_width + DIVIDER_WIDTH + 8.0;
     let y = TOP_BAR_HEIGHT + PREVIEW_CHROME_TOP_PX;
-    let w = (fill_width / 2.0 - 16.0).max(0.0);
+    let w = (fill_width * layout.preview_ratio - 16.0).max(0.0);
     let h = (window_height - y - 8.0).max(0.0);
     (x, y, w, h)
 }
 
 /// 逻辑 x 是否落在左二预览列内（含 chrome 与内容区）。焦点路由用:
 /// 点击落在预览列 → 键盘交给 webview;落在别处 → 交回窗口(终端)。
-pub fn is_in_preview_column(x: f32, window_width: f32) -> bool {
-    let fill_width = (window_width - PROJECT_COL_WIDTH - AI_COL_WIDTH).max(0.0);
-    let preview_end = PROJECT_COL_WIDTH + fill_width / 2.0;
-    x >= PROJECT_COL_WIDTH && x < preview_end
+pub fn is_in_preview_column(x: f32, window_width: f32, layout: &PanelLayout) -> bool {
+    let fill_width =
+        (window_width - layout.project_col_width - layout.ai_col_width - 3.0 * DIVIDER_WIDTH)
+            .max(0.0);
+    let preview_start = layout.project_col_width + DIVIDER_WIDTH;
+    let preview_end = preview_start + fill_width * layout.preview_ratio;
+    x >= preview_start && x < preview_end
 }
 
 /// 窗口整体逻辑像素尺寸 → 终端 pane 的可用像素尺寸。项目栏/AI 栏固定宽度，
-/// 预览栏与终端栏都是 `Length::Fill`，iced 的 `Row` 默认按等权
-/// `FillPortion(1)` 均分剩余空间，因此终端栏宽度是剩余空间的一半。
-pub fn terminal_pane_pixel_size(window_width: f32, window_height: f32) -> (f32, f32) {
-    let fill_width = (window_width - PROJECT_COL_WIDTH - AI_COL_WIDTH).max(0.0);
-    let pane_width = (fill_width / 2.0 - CHROME_WIDTH_PX).max(0.0);
+/// 预览栏与终端栏按 `layout.preview_ratio` 分配剩余空间(三条分隔线各占
+/// `DIVIDER_WIDTH` 已从剩余空间中扣除)。
+pub fn terminal_pane_pixel_size(
+    window_width: f32,
+    window_height: f32,
+    layout: &PanelLayout,
+) -> (f32, f32) {
+    let fill_width =
+        (window_width - layout.project_col_width - layout.ai_col_width - 3.0 * DIVIDER_WIDTH)
+            .max(0.0);
+    let pane_width = (fill_width * (1.0 - layout.preview_ratio) - CHROME_WIDTH_PX).max(0.0);
     let pane_height =
         (window_height - TOP_BAR_HEIGHT - STATUS_BAR_HEIGHT - CHROME_HEIGHT_PX).max(0.0);
     (pane_width, pane_height)
+}
+
+/// 三条分隔线的窗口逻辑 x 坐标(项目|预览、预览|终端、终端|AI)。与上面三个
+/// 函数同一份公式推出,数学上必须与 `view()` 的 `row!` 实际渲染位置一致
+/// (`divider_positions_account_for_divider_width` 测试锁定)。main.rs 消费方
+/// 留给 Task 2/4(连续鼠标追踪);本任务仅测试覆盖,故非测试构建下允许未引用。
+#[allow(dead_code)]
+pub fn divider_positions(window_width: f32, layout: &PanelLayout) -> [f32; 3] {
+    let fill_width =
+        (window_width - layout.project_col_width - layout.ai_col_width - 3.0 * DIVIDER_WIDTH)
+            .max(0.0);
+    let d1 = layout.project_col_width;
+    let d2 = layout.project_col_width + DIVIDER_WIDTH + fill_width * layout.preview_ratio;
+    let d3 = window_width - layout.ai_col_width - DIVIDER_WIDTH;
+    [d1, d2, d3]
 }
 
 #[derive(Debug, Clone)]
@@ -376,6 +443,9 @@ pub struct Workspace {
     term_tab_first: usize,
     /// 预览 tab 栏当前最左可见 tab 序号，语义同 `term_tab_first`。
     preview_tab_first: usize,
+    /// 四栏宽度/预览终端分配比例;拖拽写入,`layout::load()` 起始值(Task 3
+    /// 接线,本步先用 `PanelLayout::default()`)。
+    layout: PanelLayout,
 }
 
 impl Workspace {
@@ -463,6 +533,7 @@ impl Workspace {
             git_statuses: HashMap::new(),
             term_tab_first: 0,
             preview_tab_first: 0,
+            layout: PanelLayout::default(),
         };
         // 启动恢复了当前项目时,与 ProjectOpened 同样异步补 git 分支/脏与
         // 对话列表（line 408 承诺"窗口起来后异步补"——此前只在用户主动
@@ -513,6 +584,7 @@ impl Workspace {
             git_statuses: HashMap::new(),
             term_tab_first: 0,
             preview_tab_first: 0,
+            layout: PanelLayout::default(),
         }
     }
 
@@ -1211,16 +1283,23 @@ impl Workspace {
     pub fn ime_cursor_area(&self, window_w: f32, window_h: f32) -> (f32, f32, f32) {
         if self.preview.addr_editing() || self.acceptance_comment_editing() {
             return (
-                PROJECT_COL_WIDTH + 12.0,
+                self.layout.project_col_width + 12.0,
                 TOP_BAR_HEIGHT + PREVIEW_CHROME_TOP_PX,
                 20.0,
             );
         }
-        let (pane_w, pane_h) = terminal_pane_pixel_size(window_w, window_h);
+        let (pane_w, pane_h) = terminal_pane_pixel_size(window_w, window_h, &self.layout);
         let cell_w = pane_w / self.cols.max(1) as f32;
         let line_h = pane_h / self.rows.max(1) as f32;
-        let fill_width = (window_w - PROJECT_COL_WIDTH - AI_COL_WIDTH).max(0.0);
-        let x0 = PROJECT_COL_WIDTH + fill_width / 2.0 + 8.0;
+        let fill_width = (window_w
+            - self.layout.project_col_width
+            - self.layout.ai_col_width
+            - 3.0 * DIVIDER_WIDTH)
+            .max(0.0);
+        let x0 = self.layout.project_col_width
+            + 2.0 * DIVIDER_WIDTH
+            + fill_width * self.layout.preview_ratio
+            + 8.0;
         // 终端网格上方 chrome:顶栏 44 + 上 padding 8 + tab 栏 30 + spacing 4(header 已去,P1L #4)
         let y0 = TOP_BAR_HEIGHT + 8.0 + 30.0 + 4.0;
         let (col, row) = self
@@ -1231,6 +1310,11 @@ impl Workspace {
         let x = x0 + col as f32 * cell_w;
         let y = y0 + (row as f32 + 1.0) * line_h; // 光标格底部,候选窗落其下方
         (x, y, line_h)
+    }
+
+    /// 当前四栏宽度状态(main.rs 拖拽追踪/持久化用;`Copy` 类型直接按值返回)。
+    pub fn layout(&self) -> PanelLayout {
+        self.layout
     }
 
     /// 点击输入框外时退出所有自绘输入的编辑态(验收反馈:失焦回正常态)。
@@ -1369,7 +1453,19 @@ impl Workspace {
         let col2 = preview_pane(self);
         let col3 = terminal_pane(self);
         let col4 = ai_pane(self);
-        column![top, row![col1, col2, col3, col4]].into()
+        column![
+            top,
+            row![
+                col1,
+                divider_bar(),
+                col2,
+                divider_bar(),
+                col3,
+                divider_bar(),
+                col4
+            ]
+        ]
+        .into()
     }
 }
 
@@ -1776,7 +1872,7 @@ fn ai_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
     }
 
     container(content.padding(12))
-        .width(Length::Fixed(AI_COL_WIDTH))
+        .width(Length::Fixed(ws.layout.ai_col_width))
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: Some(theme::PANEL.into()),
@@ -1902,7 +1998,7 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
         });
 
     container(column![body, project_status_bar(ws)])
-        .width(Length::Fixed(PROJECT_COL_WIDTH))
+        .width(Length::Fixed(ws.layout.project_col_width))
         .height(Length::Fill)
         .into()
 }
@@ -2110,8 +2206,9 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
         );
     }
 
+    let preview_portion = (ws.layout.preview_ratio * 10_000.0).round() as u16;
     container(content.padding(8))
-        .width(Length::Fill)
+        .width(Length::FillPortion(preview_portion))
         .height(Length::Fill)
         .style(move |_theme: &iced_widget::Theme| container::Style {
             background: Some(theme::PANEL.into()),
@@ -2193,8 +2290,25 @@ fn terminal_pane(
             ..container::Style::default()
         });
 
+    let terminal_portion = ((1.0 - ws.layout.preview_ratio) * 10_000.0).round() as u16;
     container(column![body, terminal_status_bar(ws)])
-        .width(Length::Fill)
+        .width(Length::FillPortion(terminal_portion))
+        .height(Length::Fill)
+        .into()
+}
+
+/// 分隔线:命中区 `DIVIDER_WIDTH` 宽、`Length::Fill` 高,内部一条 2px BORDER
+/// 竖线居中。本步只做视觉,交互(悬停光标+`on_press`)留 Task 2。
+fn divider_bar<'a>() -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let line = container(iced_widget::Space::new())
+        .width(Length::Fixed(2.0))
+        .height(Length::Fill)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::BORDER.into()),
+            ..container::Style::default()
+        });
+    container(line)
+        .center_x(Length::Fixed(DIVIDER_WIDTH))
         .height(Length::Fill)
         .into()
 }
@@ -2574,13 +2688,13 @@ mod tests {
 
     #[test]
     fn preview_content_bounds_is_inside_col2() {
-        let (x, y, w, h) = preview_content_bounds(1440.0, 900.0);
+        let layout = PanelLayout::default();
+        let (x, y, w, h) = preview_content_bounds(1440.0, 900.0, &layout);
         assert!(
-            x > PROJECT_COL_WIDTH && x < PROJECT_COL_WIDTH + 20.0,
+            x > layout.project_col_width && x < layout.project_col_width + 30.0,
             "x={x}"
         );
-        assert!((420.0..=470.0).contains(&w), "w={w}");
-        // y 现含顶栏 44 + 预览 chrome(tab 栏+地址栏,表头已去 P1L #4),故区间随之下移 26px。
+        assert!((410.0..=460.0).contains(&w), "w={w}");
         assert!(
             y > 104.0 && y < 134.0,
             "y={y}(顶栏 44 + tab 栏+地址栏之下,表头已去)"
@@ -2590,8 +2704,8 @@ mod tests {
 
     #[test]
     fn terminal_pane_height_excludes_top_and_status_bars() {
-        let (_, h_with) = terminal_pane_pixel_size(1440.0, 900.0);
-        // 顶栏+状态栏必须被扣除:高度应比"只扣 CHROME"少正好 TOP_BAR+STATUS_BAR。
+        let layout = PanelLayout::default();
+        let (_, h_with) = terminal_pane_pixel_size(1440.0, 900.0, &layout);
         let only_chrome = 900.0 - CHROME_HEIGHT_PX;
         assert!(
             (only_chrome - h_with - (TOP_BAR_HEIGHT + STATUS_BAR_HEIGHT)).abs() < 0.01,
@@ -2601,7 +2715,8 @@ mod tests {
 
     #[test]
     fn preview_content_bounds_never_negative() {
-        let (_, _, w, h) = preview_content_bounds(100.0, 50.0);
+        let layout = PanelLayout::default();
+        let (_, _, w, h) = preview_content_bounds(100.0, 50.0, &layout);
         assert!(w >= 0.0 && h >= 0.0);
     }
 
@@ -2710,12 +2825,42 @@ mod tests {
 
     #[test]
     fn preview_column_hit_test() {
-        // 窗口宽 1440:项目栏 240 + AI 栏 280,剩 920 均分,预览列 [240,700)
-        assert!(!is_in_preview_column(100.0, 1440.0), "落在项目栏");
-        assert!(is_in_preview_column(240.0, 1440.0), "预览列左边界");
-        assert!(is_in_preview_column(699.0, 1440.0), "预览列内");
-        assert!(!is_in_preview_column(700.0, 1440.0), "已进终端列");
-        assert!(!is_in_preview_column(1200.0, 1440.0), "终端列");
+        // 窗口宽 1440:项目栏 240 + AI 栏 280 + 三条分隔线各 8px,剩余按 0.5 对半分。
+        let layout = PanelLayout::default();
+        assert!(!is_in_preview_column(100.0, 1440.0, &layout), "落在项目栏");
+        assert!(
+            is_in_preview_column(248.0, 1440.0, &layout),
+            "预览列左边界(过divider1)"
+        );
+        assert!(is_in_preview_column(690.0, 1440.0, &layout), "预览列内");
+        assert!(
+            !is_in_preview_column(708.0, 1440.0, &layout),
+            "已进divider2/终端列"
+        );
+        assert!(!is_in_preview_column(1200.0, 1440.0, &layout), "终端列");
+    }
+
+    #[test]
+    fn panel_layout_default_matches_legacy_consts() {
+        let l = PanelLayout::default();
+        assert_eq!(l.project_col_width, 240.0);
+        assert_eq!(l.ai_col_width, 280.0);
+        assert_eq!(l.preview_ratio, 0.5);
+    }
+
+    #[test]
+    fn divider_positions_account_for_divider_width() {
+        // 窗口宽 1440,默认布局:项目栏 240 + AI 栏 280,三条分隔线各 8px。
+        let layout = PanelLayout::default();
+        let [d1, d2, d3] = divider_positions(1440.0, &layout);
+        assert_eq!(d1, 240.0, "分隔线1紧贴项目栏右边");
+        let fill = 1440.0 - 240.0 - 280.0 - 3.0 * DIVIDER_WIDTH;
+        assert_eq!(
+            d2,
+            240.0 + DIVIDER_WIDTH + fill * 0.5,
+            "分隔线2在预览栏右边"
+        );
+        assert_eq!(d3, 1440.0 - 280.0 - DIVIDER_WIDTH, "分隔线3紧贴AI栏左边");
     }
 
     #[test]

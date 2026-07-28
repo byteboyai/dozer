@@ -11,6 +11,7 @@ path = "src/main.rs"
 dozer-core = { path = "../dozer-core" }
 dozer-client = { path = "../dozer-client" }
 anyhow.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 iced_winit = "0.14"
