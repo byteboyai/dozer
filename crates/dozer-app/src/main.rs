@@ -240,8 +240,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             window_width,
                             logical_x,
                         });
-                        window.request_redraw();
                     }
+                    // 悬停(未拖拽)也要请求重绘:分隔线的 resize 光标走
+                    // MouseArea::interaction → mouse_interaction() → RedrawRequested
+                    // 里的 window.set_cursor(icon) 这条既有管线(main.rs:808-816
+                    // 一带),只在真的重绘发生时才会重算光标——不主动重绘的话,
+                    // 悬停不会变光标,得等下一次因别的原因触发的重绘(比如点击)
+                    // 才会"追上",观感上就是"划过没反应、点一下才变"。
+                    window.request_redraw();
                 }
                 WindowEvent::MouseInput {
                     state: ElementState::Pressed,
