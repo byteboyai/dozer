@@ -21,6 +21,7 @@
 use crate::conversation::{self, ConversationMeta};
 use crate::delivery::{self, FileChange, FileStatus};
 use crate::goal::{self, Goal};
+use crate::icons;
 use crate::layout;
 use crate::osc::{OscEvent, OscScanner};
 use crate::preview::{AddrTarget, PreviewPane, WebviewSpec};
@@ -2412,7 +2413,6 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
                         continue;
                     }
                     let indent = "  ".repeat(row.depth);
-                    let glyph = tree_row_glyph(row.is_dir, row.expanded);
                     let status = if row.is_dir {
                         delivery::dir_status(&row.path, &ws.git_statuses)
                     } else {
@@ -2423,10 +2423,31 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
                     } else {
                         theme::CREAM
                     };
+                    let row_icon: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> =
+                        if row.is_dir {
+                            let chevron = if row.expanded {
+                                icons::IconKind::ChevronDown
+                            } else {
+                                icons::IconKind::ChevronRight
+                            };
+                            let folder = if row.expanded {
+                                icons::IconKind::FolderOpen
+                            } else {
+                                icons::IconKind::Folder
+                            };
+                            row![
+                                icons::view(chevron, 12.0, theme::DIM),
+                                icons::view(folder, 14.0, theme::DIM),
+                            ]
+                            .spacing(2)
+                            .into()
+                        } else {
+                            icons::view(icons::icon_for_file(&row.name), 14.0, theme::DIM)
+                        };
                     let mut line = row![
-                        text(format!("{indent}{glyph}{}", row.name))
-                            .size(15)
-                            .color(name_color)
+                        text(indent).size(15).color(name_color),
+                        row_icon,
+                        text(row.name.clone()).size(15).color(name_color),
                     ]
                     .spacing(6);
                     if let Some(st) = status {
@@ -3133,15 +3154,6 @@ fn effective_project_repo(active: Option<&Path>, session_cwd: &Path) -> PathBuf 
         .unwrap_or_else(|| session_cwd.to_path_buf())
 }
 
-/// 文件树行前导字形：目录展开/收拢三角，文件用中点。不用 emoji（字体毒化，见 fonts.rs）。
-fn tree_row_glyph(is_dir: bool, expanded: bool) -> &'static str {
-    match (is_dir, expanded) {
-        (true, true) => "▾ ",
-        (true, false) => "▸ ",
-        (false, _) => "· ",
-    }
-}
-
 /// 文件/目录 git 状态 → 行尾彩色圆点色。金=改/绿=新/红=删。
 fn tree_row_dot(status: FileStatus) -> Color {
     match status {
@@ -3507,13 +3519,6 @@ mod tests {
         assert_eq!(ai_turn_summary(2, false), "过程:2 工具");
         assert_eq!(ai_turn_summary(2, true), "过程:思考 + 2 工具");
         assert_eq!(ai_turn_summary(0, true), "过程:思考");
-    }
-
-    #[test]
-    fn tree_glyph_dir_toggles_file_is_dot() {
-        assert_eq!(tree_row_glyph(true, true), "▾ ");
-        assert_eq!(tree_row_glyph(true, false), "▸ ");
-        assert_eq!(tree_row_glyph(false, false), "· ");
     }
 
     #[test]
