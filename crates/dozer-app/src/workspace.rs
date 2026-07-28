@@ -90,9 +90,7 @@ struct ContextMenu {
 /// 项目树行内编辑的模式：新建文件/新建文件夹/重命名(携带原路径)。
 #[derive(Debug, Clone, PartialEq)]
 enum TreeEditMode {
-    #[allow(dead_code)] // 留给 Task 6(新建文件)
     NewFile,
-    #[allow(dead_code)] // 留给 Task 6(新建文件夹)
     NewFolder,
     Rename(PathBuf),
 }
@@ -363,6 +361,10 @@ pub enum Message {
     ProjectTreeDeleteCancel,
     /// 项目树:删除异步结果(Ok=已删除项的父目录,Err=错误文案)。
     ProjectTreeDeleteDone(Result<PathBuf, String>),
+    /// 项目树:菜单选"新建文件"→ 进入行内编辑(参数=目标父目录)。
+    ProjectTreeNewFile(PathBuf),
+    /// 项目树:菜单选"新建文件夹"→ 进入行内编辑(参数=目标父目录)。
+    ProjectTreeNewFolder(PathBuf),
     /// 项目树:菜单选"重命名"→ 进入行内编辑(参数=被改名项路径)。
     ProjectTreeRenameStart(PathBuf),
     /// 项目树:行内编辑框的键盘事件(main.rs 键盘拦截层送入,复用 AddrEvent)。
@@ -1228,6 +1230,12 @@ impl Workspace {
                 }
                 Err(e) => self.tree_error = Some(e),
             },
+            Message::ProjectTreeNewFile(parent) => {
+                self.start_tree_new(parent, TreeEditMode::NewFile);
+            }
+            Message::ProjectTreeNewFolder(parent) => {
+                self.start_tree_new(parent, TreeEditMode::NewFolder);
+            }
             Message::ProjectTreeRenameStart(path) => {
                 self.context_menu = None;
                 self.tree_error = None;
@@ -1388,6 +1396,21 @@ impl Workspace {
         self.preview_tab_first = 0;
     }
 
+    /// "新建文件"/"新建文件夹"的公共起点:关菜单、确保目标目录展开(让
+    /// 待插入的空白编辑行有可见位置)、进入空白行内编辑。
+    fn start_tree_new(&mut self, parent: PathBuf, mode: TreeEditMode) {
+        self.context_menu = None;
+        self.tree_error = None;
+        if let Some(tree) = &mut self.file_tree {
+            tree.ensure_expanded(&parent);
+        }
+        self.tree_edit = Some(TreeEdit {
+            parent_dir: parent,
+            mode,
+            buffer: String::new(),
+        });
+    }
+
     /// 行内编辑框回车提交：按 `TreeEditMode` 分派成重命名/新建文件/新建
     /// 文件夹的实际文件系统操作(异步,`handle.spawn`)。名字为空或就是原名
     /// (仅 Rename 场景)直接静默取消编辑，不发起任何 IO。
@@ -1426,8 +1449,51 @@ impl Workspace {
                     let _ = proxy.send_event(Message::ProjectTreeDeleteDone(outcome));
                 });
             }
-            TreeEditMode::NewFile | TreeEditMode::NewFolder => {
-                // Task 6 补完这两个分支的实现。
+            TreeEditMode::NewFile => {
+                if new_path.exists() {
+                    self.tree_error = Some(format!("{} 已存在同名项", new_path.display()));
+                    self.tree_edit = Some(TreeEdit {
+                        parent_dir: edit.parent_dir,
+                        mode: TreeEditMode::NewFile,
+                        buffer: name.to_string(),
+                    });
+                    return;
+                }
+                let parent = edit.parent_dir.clone();
+                let proxy = self.proxy.clone();
+                self.handle.spawn(async move {
+                    let result = tokio::task::spawn_blocking(move || {
+                        std::fs::File::create(&new_path)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string())
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+                    let outcome = result.map(|()| parent);
+                    let _ = proxy.send_event(Message::ProjectTreeDeleteDone(outcome));
+                });
+            }
+            TreeEditMode::NewFolder => {
+                if new_path.exists() {
+                    self.tree_error = Some(format!("{} 已存在同名项", new_path.display()));
+                    self.tree_edit = Some(TreeEdit {
+                        parent_dir: edit.parent_dir,
+                        mode: TreeEditMode::NewFolder,
+                        buffer: name.to_string(),
+                    });
+                    return;
+                }
+                let parent = edit.parent_dir.clone();
+                let proxy = self.proxy.clone();
+                self.handle.spawn(async move {
+                    let result = tokio::task::spawn_blocking(move || {
+                        std::fs::create_dir(&new_path).map_err(|e| e.to_string())
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+                    let outcome = result.map(|()| parent);
+                    let _ = proxy.send_event(Message::ProjectTreeDeleteDone(outcome));
+                });
             }
         }
     }
@@ -2335,6 +2401,22 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
                             is_dir: row.is_dir,
                         },
                     ));
+                    let is_new_target = matches!(
+                        &ws.tree_edit,
+                        Some(TreeEdit {
+                            mode: TreeEditMode::NewFile | TreeEditMode::NewFolder,
+                            parent_dir,
+                            ..
+                        }) if *parent_dir == row.path
+                    );
+                    if is_new_target && row.expanded {
+                        let buffer = ws
+                            .tree_edit
+                            .as_ref()
+                            .map(|e| e.buffer.as_str())
+                            .unwrap_or("");
+                        content = content.push(tree_edit_row(row.depth + 1, buffer));
+                    }
                 }
             }
         }
@@ -2735,13 +2817,18 @@ fn context_menu_popup(
     let Some(menu) = &ws.context_menu else {
         return column![].into();
     };
-    let project_root = ws
-        .project
-        .as_ref()
-        .map(|p| PathBuf::from(&p.path))
-        .unwrap_or_default();
     let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> =
         Vec::new();
+    if menu.is_dir {
+        items.push(menu_item(
+            "新建文件",
+            Message::ProjectTreeNewFile(menu.target.clone()),
+        ));
+        items.push(menu_item(
+            "新建文件夹",
+            Message::ProjectTreeNewFolder(menu.target.clone()),
+        ));
+    }
     items.push(menu_item(
         "复制",
         Message::ProjectTreeCopy(menu.target.clone(), menu.is_dir),
@@ -2781,7 +2868,6 @@ fn context_menu_popup(
         "复制相对路径",
         Message::ProjectTreeCopyPath(menu.target.clone(), project::PathKind::Relative),
     ));
-    let _ = project_root; // Task 6(新建)会用到
 
     let list = container(column(items).spacing(2))
         .padding(6)
