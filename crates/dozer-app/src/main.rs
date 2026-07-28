@@ -279,7 +279,47 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     workspace.update(Message::ColumnDragEnd);
                     window.request_redraw();
                 }
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: winit::event::MouseButton::Right,
+                    ..
+                } => {
+                    let scale = window.scale_factor();
+                    let x = (cursor_phys.x / scale) as f32;
+                    let y = (cursor_phys.y / scale) as f32;
+                    // 菜单是手算像素定位、不自带边界检测的浮层——右键点在
+                    // 窗口下/右 250px 内时,原样使用点击坐标会把菜单下沿/
+                    // 右沿画出窗口外,底部几项(删除/重命名等)点不到。钳制
+                    // 到"窗口尺寸 - 菜单最坏尺寸"内(Important #7)。
+                    let logical_size = window.inner_size();
+                    let window_w = (logical_size.width as f64 / scale) as f32;
+                    let window_h = (logical_size.height as f64 / scale) as f32;
+                    let x = x.min((window_w - workspace::CONTEXT_MENU_WIDTH).max(0.0));
+                    let y = y.min((window_h - workspace::CONTEXT_MENU_HEIGHT).max(0.0));
+                    workspace.update(Message::RightClickAt { x, y });
+                    // 不在这里 request_redraw——右键若真的命中某行,该行的
+                    // `MouseArea::on_right_press` 随本轮事件走 iced 正常分发,
+                    // 那条路径自会触发重绘;若点在空白处,菜单本就不该开,不必
+                    // 额外重绘。
+                }
                 _ => {}
+            }
+
+            // 右键菜单打开时,Esc 优先关菜单,不进正常键盘分发(不然会被当作
+            // 普通按键继续往下走,可能被地址栏/终端等其它分支消费掉)。
+            if workspace.context_menu_open()
+                && let WindowEvent::KeyboardInput {
+                    event,
+                    is_synthetic: false,
+                    ..
+                } = event
+                && event.state == ElementState::Pressed
+                && event.logical_key
+                    == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+            {
+                workspace.update(Message::ProjectTreeContextMenuClose);
+                window.request_redraw();
+                return;
             }
 
             // ⌘ 组合键是应用级快捷键，一律不进 PTY（此前 ⌘C 会把裸 "c"
@@ -313,10 +353,12 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
-            // 地址栏 / 验收意见编辑态:键盘直达自绘输入(不经 keymap、不进 PTY)。
+            // 地址栏 / 验收意见 / 项目树行内编辑态:键盘直达自绘输入(不经
+            // keymap、不进 PTY)。
             let to_preview = workspace.preview_addr_editing();
             let to_comment = workspace.acceptance_comment_editing();
-            if to_preview || to_comment {
+            let to_tree_edit = workspace.tree_editing();
+            if to_preview || to_comment || to_tree_edit {
                 let addr_event = match event {
                     WindowEvent::KeyboardInput {
                         event,
@@ -343,11 +385,15 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     _ => None,
                 };
                 if let Some(ev) = addr_event {
-                    // 地址栏优先（二者同真时罕见,以地址栏为准）。
+                    // 优先级:地址栏 > 验收意见 > 项目树编辑(三者同真时罕见,
+                    // 谁先建的编辑态谁优先没有实际冲突场景,这个顺序只是
+                    // 一个确定性兜底)。
                     let message = if to_preview {
                         Message::PreviewAddrEvent(ev)
-                    } else {
+                    } else if to_comment {
                         Message::AcceptanceCommentEvent(ev)
+                    } else {
+                        Message::ProjectTreeEditEvent(ev)
                     };
                     workspace.update(message);
                     window.request_redraw();
@@ -463,6 +509,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 workspace,
                 window,
                 pending_focus,
+                clipboard,
                 ..
             } = self
             else {
@@ -489,6 +536,15 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                         workspace.update(Message::ProjectOpen(dir));
                     }
+                }
+                Message::ProjectTreeCopyPath(path, kind) => {
+                    let root = workspace
+                        .active_project_path()
+                        .unwrap_or_else(|| path.clone());
+                    let s = crate::project::path_string(kind, &path, &root);
+                    clipboard.write(iced_winit::core::clipboard::Kind::Standard, s);
+                    workspace.update(Message::ProjectTreeContextMenuClose);
+                    window.request_redraw();
                 }
                 other => workspace.update(other),
             }
