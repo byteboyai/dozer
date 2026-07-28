@@ -87,6 +87,26 @@ struct ContextMenu {
     is_dir: bool,
 }
 
+/// 项目树行内编辑的模式：新建文件/新建文件夹/重命名(携带原路径)。
+#[derive(Debug, Clone, PartialEq)]
+enum TreeEditMode {
+    #[allow(dead_code)] // 留给 Task 6(新建文件)
+    NewFile,
+    #[allow(dead_code)] // 留给 Task 6(新建文件夹)
+    NewFolder,
+    Rename(PathBuf),
+}
+
+/// 项目树行内编辑态：新建/重命名共用。`parent_dir` 对 `Rename` 而言是
+/// 被改名项的父目录(新路径=parent_dir.join(新名字));对 `NewFile`/
+/// `NewFolder` 就是目标创建位置。
+#[derive(Debug, Clone, PartialEq)]
+struct TreeEdit {
+    parent_dir: PathBuf,
+    mode: TreeEditMode,
+    buffer: String,
+}
+
 /// 每条分隔线的命中区/渲染宽度(逻辑像素)。视觉线本身 2px,居中于此区间内。
 /// 四栏几何公式必须把 `3 * DIVIDER_WIDTH` 从剩余空间里扣掉,否则 webview
 /// bounds/IME 光标/命中测试会和 `view()` 里 `row!` 实际渲染的像素错位。
@@ -343,6 +363,10 @@ pub enum Message {
     ProjectTreeDeleteCancel,
     /// 项目树:删除异步结果(Ok=已删除项的父目录,Err=错误文案)。
     ProjectTreeDeleteDone(Result<PathBuf, String>),
+    /// 项目树:菜单选"重命名"→ 进入行内编辑(参数=被改名项路径)。
+    ProjectTreeRenameStart(PathBuf),
+    /// 项目树:行内编辑框的键盘事件(main.rs 键盘拦截层送入,复用 AddrEvent)。
+    ProjectTreeEditEvent(AddrEvent),
 }
 
 /// 地址栏编辑事件:由 main.rs 的键盘拦截层在 `preview_addr_editing()`
@@ -532,6 +556,8 @@ pub struct Workspace {
     tree_error: Option<String>,
     /// 项目树删除确认框目标(路径,是否目录;None=未打开确认框)。
     tree_delete_confirm: Option<(PathBuf, bool)>,
+    /// 项目树行内编辑态(新建/重命名共用;None=未在编辑)。
+    tree_edit: Option<TreeEdit>,
 }
 
 impl Workspace {
@@ -626,6 +652,7 @@ impl Workspace {
             tree_clipboard: None,
             tree_error: None,
             tree_delete_confirm: None,
+            tree_edit: None,
         };
         // 启动恢复了当前项目时,与 ProjectOpened 同样异步补 git 分支/脏与
         // 对话列表（line 408 承诺"窗口起来后异步补"——此前只在用户主动
@@ -683,6 +710,7 @@ impl Workspace {
             tree_clipboard: None,
             tree_error: None,
             tree_delete_confirm: None,
+            tree_edit: None,
         }
     }
 
@@ -1200,6 +1228,35 @@ impl Workspace {
                 }
                 Err(e) => self.tree_error = Some(e),
             },
+            Message::ProjectTreeRenameStart(path) => {
+                self.context_menu = None;
+                self.tree_error = None;
+                let Some(parent) = path.parent().map(|p| p.to_path_buf()) else {
+                    return;
+                };
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                self.tree_edit = Some(TreeEdit {
+                    parent_dir: parent,
+                    mode: TreeEditMode::Rename(path),
+                    buffer: name,
+                });
+            }
+            Message::ProjectTreeEditEvent(ev) => {
+                let Some(edit) = &mut self.tree_edit else {
+                    return;
+                };
+                match ev {
+                    AddrEvent::Text(s) => edit.buffer.push_str(&s),
+                    AddrEvent::Backspace => {
+                        edit.buffer.pop();
+                    }
+                    AddrEvent::Cancel => self.tree_edit = None,
+                    AddrEvent::Submit => self.submit_tree_edit(),
+                }
+            }
         }
     }
 
@@ -1329,6 +1386,50 @@ impl Workspace {
         self.preview_error = None;
         self.term_tab_first = 0;
         self.preview_tab_first = 0;
+    }
+
+    /// 行内编辑框回车提交：按 `TreeEditMode` 分派成重命名/新建文件/新建
+    /// 文件夹的实际文件系统操作(异步,`handle.spawn`)。名字为空或就是原名
+    /// (仅 Rename 场景)直接静默取消编辑，不发起任何 IO。
+    fn submit_tree_edit(&mut self) {
+        let Some(edit) = self.tree_edit.take() else {
+            return;
+        };
+        let name = edit.buffer.trim();
+        if name.is_empty() {
+            return;
+        }
+        let new_path = edit.parent_dir.join(name);
+        match edit.mode {
+            TreeEditMode::Rename(old_path) => {
+                if new_path == old_path {
+                    return; // 没改名,直接结束编辑
+                }
+                if new_path.exists() {
+                    self.tree_error = Some(format!("{} 已存在同名项", new_path.display()));
+                    self.tree_edit = Some(TreeEdit {
+                        parent_dir: edit.parent_dir,
+                        mode: TreeEditMode::Rename(old_path),
+                        buffer: name.to_string(),
+                    });
+                    return;
+                }
+                let parent = edit.parent_dir.clone();
+                let proxy = self.proxy.clone();
+                self.handle.spawn(async move {
+                    let result = tokio::task::spawn_blocking(move || {
+                        std::fs::rename(&old_path, &new_path).map_err(|e| e.to_string())
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+                    let outcome = result.map(|()| parent);
+                    let _ = proxy.send_event(Message::ProjectTreeDeleteDone(outcome));
+                });
+            }
+            TreeEditMode::NewFile | TreeEditMode::NewFolder => {
+                // Task 6 补完这两个分支的实现。
+            }
+        }
     }
 
     /// tab 关闭 = 结束会话：中断转发任务（`rx` 随任务栈析构）并 kill
@@ -1524,6 +1625,12 @@ impl Workspace {
     /// 项目树右键菜单是否打开(main.rs Esc 键路由用)。
     pub fn context_menu_open(&self) -> bool {
         self.context_menu.is_some()
+    }
+
+    /// 项目树是否处于行内编辑态(main.rs 键盘路由用,同款
+    /// `preview_addr_editing()`/`acceptance_comment_editing()`)。
+    pub fn tree_editing(&self) -> bool {
+        self.tree_edit.is_some()
     }
 
     /// 当前项目根路径(供 main.rs 算相对路径用;未打开项目时 None)。
@@ -2169,6 +2276,19 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
             }
             if let Some(tree) = &ws.file_tree {
                 for row in tree.visible_rows() {
+                    let is_renaming = matches!(
+                        &ws.tree_edit,
+                        Some(TreeEdit { mode: TreeEditMode::Rename(p), .. }) if *p == row.path
+                    );
+                    if is_renaming {
+                        let buffer = ws
+                            .tree_edit
+                            .as_ref()
+                            .map(|e| e.buffer.as_str())
+                            .unwrap_or("");
+                        content = content.push(tree_edit_row(row.depth, buffer));
+                        continue;
+                    }
                     let indent = "  ".repeat(row.depth);
                     let glyph = tree_row_glyph(row.is_dir, row.expanded);
                     let status = if row.is_dir {
@@ -2579,6 +2699,32 @@ fn menu_item<'a>(
         .into()
 }
 
+/// 行内编辑框(新建/重命名共用):自绘输入,尾缀 "▏" 模拟光标,与地址栏/
+/// 验收意见框同款风格(键盘走 main.rs 拦截层,不用 iced 原生 text_input)。
+fn tree_edit_row(
+    depth: usize,
+    buffer: &str,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let indent = "  ".repeat(depth);
+    container(
+        text(format!("{indent}{buffer}▏"))
+            .size(15)
+            .color(theme::CREAM),
+    )
+    .width(Length::Fill)
+    .padding([2, 4])
+    .style(|_t: &iced_widget::Theme| container::Style {
+        background: Some(theme::CARD.into()),
+        border: Border {
+            color: theme::CREAM,
+            width: 1.0,
+            radius: 2.0.into(),
+        },
+        ..container::Style::default()
+    })
+    .into()
+}
+
 /// 右键菜单浮层本体:纵向按钮列表,`container` 用 `Padding{top,left,..}`
 /// 手算定位到点击坐标——`Stack` 各层共享同一份 bounds,不像原生系统菜单
 /// 那样自带绝对定位,这是本仓一贯的手算像素定位风格(`ime_cursor_area`/
@@ -2624,6 +2770,10 @@ fn context_menu_popup(
         Message::ProjectTreeDeleteRequest(menu.target.clone(), menu.is_dir),
     ));
     items.push(menu_item(
+        "重命名",
+        Message::ProjectTreeRenameStart(menu.target.clone()),
+    ));
+    items.push(menu_item(
         "复制绝对路径",
         Message::ProjectTreeCopyPath(menu.target.clone(), project::PathKind::Absolute),
     ));
@@ -2631,7 +2781,7 @@ fn context_menu_popup(
         "复制相对路径",
         Message::ProjectTreeCopyPath(menu.target.clone(), project::PathKind::Relative),
     ));
-    let _ = project_root; // Task 5(重命名)/Task 6(新建)会用到
+    let _ = project_root; // Task 6(新建)会用到
 
     let list = container(column(items).spacing(2))
         .padding(6)

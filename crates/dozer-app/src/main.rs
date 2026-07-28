@@ -344,10 +344,12 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
-            // 地址栏 / 验收意见编辑态:键盘直达自绘输入(不经 keymap、不进 PTY)。
+            // 地址栏 / 验收意见 / 项目树行内编辑态:键盘直达自绘输入(不经
+            // keymap、不进 PTY)。
             let to_preview = workspace.preview_addr_editing();
             let to_comment = workspace.acceptance_comment_editing();
-            if to_preview || to_comment {
+            let to_tree_edit = workspace.tree_editing();
+            if to_preview || to_comment || to_tree_edit {
                 let addr_event = match event {
                     WindowEvent::KeyboardInput {
                         event,
@@ -374,11 +376,15 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     _ => None,
                 };
                 if let Some(ev) = addr_event {
-                    // 地址栏优先（二者同真时罕见,以地址栏为准）。
+                    // 优先级:地址栏 > 验收意见 > 项目树编辑(三者同真时罕见,
+                    // 谁先建的编辑态谁优先没有实际冲突场景,这个顺序只是
+                    // 一个确定性兜底)。
                     let message = if to_preview {
                         Message::PreviewAddrEvent(ev)
-                    } else {
+                    } else if to_comment {
                         Message::AcceptanceCommentEvent(ev)
+                    } else {
+                        Message::ProjectTreeEditEvent(ev)
                     };
                     workspace.update(message);
                     window.request_redraw();
