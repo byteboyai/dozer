@@ -572,6 +572,8 @@ pub struct Workspace {
     context_menu: Option<ContextMenu>,
     /// 最近一次右键点击的窗口逻辑坐标,给 `ProjectTreeContextMenu` 定位菜单用。
     last_right_click: (f32, f32),
+    /// 项目树当前"选中"行(左键点击或右键命中都会更新),渲染时给该行背景色。
+    tree_selected: Option<PathBuf>,
     /// 项目树"文件管理器式"剪贴槽:最近一次"复制"的项(路径,是否目录)。
     tree_clipboard: Option<(PathBuf, bool)>,
     /// 项目树操作的行内报错文案(冲突/失败时显示;下次树操作发起时清空)。
@@ -671,6 +673,7 @@ impl Workspace {
             dragging: None,
             context_menu: None,
             last_right_click: (0.0, 0.0),
+            tree_selected: None,
             tree_clipboard: None,
             tree_error: None,
             tree_delete_confirm: None,
@@ -729,6 +732,7 @@ impl Workspace {
             dragging: None,
             context_menu: None,
             last_right_click: (0.0, 0.0),
+            tree_selected: None,
             tree_clipboard: None,
             tree_error: None,
             tree_delete_confirm: None,
@@ -1075,6 +1079,7 @@ impl Workspace {
                     return;
                 }
                 self.preview_error = None;
+                self.tree_selected = Some(path.clone());
                 self.allowed_files
                     .lock()
                     .expect("allowed_files 锁")
@@ -1143,6 +1148,7 @@ impl Workspace {
                 self.file_tree = project
                     .as_ref()
                     .map(|p| FileTree::new(PathBuf::from(&p.path)));
+                self.tree_selected = None;
                 self.branch = None;
                 self.dirty = false;
                 self.git_statuses = HashMap::new();
@@ -1158,6 +1164,7 @@ impl Workspace {
                 self.spawn_acceptance_count_refresh();
             }
             Message::ProjectTreeToggle(dir) => {
+                self.tree_selected = Some(dir.clone());
                 if let Some(t) = &mut self.file_tree {
                     t.toggle(&dir);
                 }
@@ -1175,6 +1182,7 @@ impl Workspace {
             }
             Message::ProjectTreeContextMenu { path, is_dir } => {
                 let (x, y) = self.last_right_click;
+                self.tree_selected = Some(path.clone());
                 self.context_menu = Some(ContextMenu {
                     x,
                     y,
@@ -2476,6 +2484,7 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
                     } else {
                         Message::PreviewOpenPath(row.path.clone())
                     };
+                    let is_selected = ws.tree_selected.as_deref() == Some(row.path.as_path());
                     let row_btn: iced_widget::Button<
                         '_,
                         Message,
@@ -2484,8 +2493,12 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
                     > = button(line)
                         .on_press(msg)
                         .width(Length::Fill)
-                        .style(|_t, _s| button::Style {
-                            background: None,
+                        .style(move |_t, _s| button::Style {
+                            background: if is_selected {
+                                Some(theme::CARD.into())
+                            } else {
+                                None
+                            },
                             text_color: theme::BODY,
                             ..button::Style::default()
                         });

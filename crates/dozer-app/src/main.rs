@@ -252,6 +252,36 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 }
                 WindowEvent::MouseInput {
                     state: ElementState::Pressed,
+                    button,
+                    ..
+                } if *button == winit::event::MouseButton::Right
+                    || (*button == winit::event::MouseButton::Left && modifiers.control_key()) =>
+                {
+                    // 右键、或 Control+左键——macOS 系统级"次级点击"约定
+                    // (RustRover 等原生 app 都认这个),但 winit 的 macOS 后端
+                    // 不会自动做这个转换(已核实其 mouseDown:/rightMouseDown:
+                    // 直接按 AppKit 实际调用的 responder 方法映射按钮,不看
+                    // 修饰键),这里手动补上,两者统一走同一支。
+                    let scale = window.scale_factor();
+                    let x = (cursor_phys.x / scale) as f32;
+                    let y = (cursor_phys.y / scale) as f32;
+                    // 菜单是手算像素定位、不自带边界检测的浮层——右键点在
+                    // 窗口下/右 250px 内时,原样使用点击坐标会把菜单下沿/
+                    // 右沿画出窗口外,底部几项(删除/重命名等)点不到。钳制
+                    // 到"窗口尺寸 - 菜单最坏尺寸"内(Important #7)。
+                    let logical_size = window.inner_size();
+                    let window_w = (logical_size.width as f64 / scale) as f32;
+                    let window_h = (logical_size.height as f64 / scale) as f32;
+                    let x = x.min((window_w - workspace::CONTEXT_MENU_WIDTH).max(0.0));
+                    let y = y.min((window_h - workspace::CONTEXT_MENU_HEIGHT).max(0.0));
+                    workspace.update(Message::RightClickAt { x, y });
+                    // 不在这里 request_redraw——右键若真的命中某行,该行的
+                    // `MouseArea::on_right_press` 随本轮事件走 iced 正常分发,
+                    // 那条路径自会触发重绘;若点在空白处,菜单本就不该开,不必
+                    // 额外重绘。
+                }
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
                     button: winit::event::MouseButton::Left,
                     ..
                 } => {
@@ -279,29 +309,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 } if workspace.dragging_divider().is_some() => {
                     workspace.update(Message::ColumnDragEnd);
                     window.request_redraw();
-                }
-                WindowEvent::MouseInput {
-                    state: ElementState::Pressed,
-                    button: winit::event::MouseButton::Right,
-                    ..
-                } => {
-                    let scale = window.scale_factor();
-                    let x = (cursor_phys.x / scale) as f32;
-                    let y = (cursor_phys.y / scale) as f32;
-                    // 菜单是手算像素定位、不自带边界检测的浮层——右键点在
-                    // 窗口下/右 250px 内时,原样使用点击坐标会把菜单下沿/
-                    // 右沿画出窗口外,底部几项(删除/重命名等)点不到。钳制
-                    // 到"窗口尺寸 - 菜单最坏尺寸"内(Important #7)。
-                    let logical_size = window.inner_size();
-                    let window_w = (logical_size.width as f64 / scale) as f32;
-                    let window_h = (logical_size.height as f64 / scale) as f32;
-                    let x = x.min((window_w - workspace::CONTEXT_MENU_WIDTH).max(0.0));
-                    let y = y.min((window_h - workspace::CONTEXT_MENU_HEIGHT).max(0.0));
-                    workspace.update(Message::RightClickAt { x, y });
-                    // 不在这里 request_redraw——右键若真的命中某行,该行的
-                    // `MouseArea::on_right_press` 随本轮事件走 iced 正常分发,
-                    // 那条路径自会触发重绘;若点在空白处,菜单本就不该开,不必
-                    // 额外重绘。
                 }
                 _ => {}
             }
@@ -972,10 +979,34 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     _ => {}
                 }
 
+                // Control+左键在上面已经当右键处理(RightClickAt/坐标钳制),
+                // 但那只是 main.rs 原始事件层的记账——iced 自己的 MouseArea::
+                // on_right_press 是靠这里转换出的 iced 事件类型来触发的,不
+                // 单独拦一次的话 iced 只会看到一次普通左键按下,行会被当成
+                // 正常单击处理(打开文件/展开目录)而不是弹菜单。判定要在
+                // `conversion::window_event` 消费掉 `event` 之前借用完。
+                let is_control_left_press = matches!(
+                    &event,
+                    WindowEvent::MouseInput {
+                        state: ElementState::Pressed,
+                        button: winit::event::MouseButton::Left,
+                        ..
+                    }
+                ) && modifiers.control_key();
+
                 // Map window event to iced event
                 if let Some(event) =
                     conversion::window_event(event, window.scale_factor() as f32, *modifiers)
                 {
+                    let event = if is_control_left_press
+                        && matches!(
+                            event,
+                            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+                        ) {
+                        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right))
+                    } else {
+                        event
+                    };
                     events.push(event);
                 }
 
