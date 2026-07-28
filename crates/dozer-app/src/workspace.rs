@@ -1947,11 +1947,8 @@ fn ai_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: Some(theme::PANEL.into()),
-            border: Border {
-                color: theme::BORDER,
-                width: 1.0,
-                radius: 0.0.into(),
-            },
+            // 面板不再自带边框(去重复线,与三条 divider_bar 合并为单线,见
+            // divider_bar 上方注释)。左右边界靠 PANEL 与相邻元素的背景色差分。
             ..container::Style::default()
         })
         .into()
@@ -2060,11 +2057,7 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: Some(theme::PANEL.into()),
-            border: Border {
-                color: theme::BORDER,
-                width: 1.0,
-                radius: 0.0.into(),
-            },
+            // 面板不再自带边框,原因同 ai_pane。
             ..container::Style::default()
         });
 
@@ -2283,11 +2276,7 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
         .height(Length::Fill)
         .style(move |_theme: &iced_widget::Theme| container::Style {
             background: Some(theme::PANEL.into()),
-            border: Border {
-                color: theme::BORDER,
-                width: 1.0,
-                radius: 0.0.into(),
-            },
+            // 面板不再自带边框,原因同 ai_pane。
             ..container::Style::default()
         })
         .into()
@@ -2353,11 +2342,7 @@ fn terminal_pane(
         .height(Length::Fill)
         .style(move |_theme: &iced_widget::Theme| container::Style {
             background: Some(theme::TERM_BG.into()),
-            border: Border {
-                color: theme::BORDER,
-                width: 1.0,
-                radius: 0.0.into(),
-            },
+            // 面板不再自带边框,原因同 ai_pane。
             ..container::Style::default()
         });
 
