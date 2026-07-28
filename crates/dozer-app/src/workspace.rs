@@ -335,6 +335,14 @@ pub enum Message {
     ProjectTreePaste(PathBuf),
     /// 项目树:粘贴异步结果(Ok=新建出的路径,Err=错误文案)。
     ProjectTreePasteDone(Result<PathBuf, String>),
+    /// 项目树:菜单选"删除"→ 打开确认框(参数=路径,是否目录)。
+    ProjectTreeDeleteRequest(PathBuf, bool),
+    /// 项目树:确认框点"删除"。
+    ProjectTreeDeleteConfirm,
+    /// 项目树:确认框点"取消"。
+    ProjectTreeDeleteCancel,
+    /// 项目树:删除异步结果(Ok=已删除项的父目录,Err=错误文案)。
+    ProjectTreeDeleteDone(Result<PathBuf, String>),
 }
 
 /// 地址栏编辑事件:由 main.rs 的键盘拦截层在 `preview_addr_editing()`
@@ -522,6 +530,8 @@ pub struct Workspace {
     tree_clipboard: Option<(PathBuf, bool)>,
     /// 项目树操作的行内报错文案(冲突/失败时显示;下次树操作发起时清空)。
     tree_error: Option<String>,
+    /// 项目树删除确认框目标(路径,是否目录;None=未打开确认框)。
+    tree_delete_confirm: Option<(PathBuf, bool)>,
 }
 
 impl Workspace {
@@ -615,6 +625,7 @@ impl Workspace {
             last_right_click: (0.0, 0.0),
             tree_clipboard: None,
             tree_error: None,
+            tree_delete_confirm: None,
         };
         // 启动恢复了当前项目时,与 ProjectOpened 同样异步补 git 分支/脏与
         // 对话列表（line 408 承诺"窗口起来后异步补"——此前只在用户主动
@@ -671,6 +682,7 @@ impl Workspace {
             last_right_click: (0.0, 0.0),
             tree_clipboard: None,
             tree_error: None,
+            tree_delete_confirm: None,
         }
     }
 
@@ -1148,6 +1160,42 @@ impl Workspace {
                 Ok(new_path) => {
                     if let (Some(tree), Some(parent)) = (&mut self.file_tree, new_path.parent()) {
                         tree.refresh(parent);
+                    }
+                }
+                Err(e) => self.tree_error = Some(e),
+            },
+            Message::ProjectTreeDeleteRequest(path, is_dir) => {
+                self.context_menu = None;
+                self.tree_delete_confirm = Some((path, is_dir));
+            }
+            Message::ProjectTreeDeleteCancel => {
+                self.tree_delete_confirm = None;
+            }
+            Message::ProjectTreeDeleteConfirm => {
+                let Some((path, _)) = self.tree_delete_confirm.take() else {
+                    return;
+                };
+                self.tree_error = None;
+                let proxy = self.proxy.clone();
+                self.handle.spawn(async move {
+                    let parent = path.parent().map(|p| p.to_path_buf());
+                    let result = tokio::task::spawn_blocking(move || {
+                        trash::delete(&path).map_err(|e| e.to_string())
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+                    let outcome = match (result, parent) {
+                        (Ok(()), Some(p)) => Ok(p),
+                        (Ok(()), None) => Err("删除的是项目根,无父目录可刷新".to_string()),
+                        (Err(e), _) => Err(e),
+                    };
+                    let _ = proxy.send_event(Message::ProjectTreeDeleteDone(outcome));
+                });
+            }
+            Message::ProjectTreeDeleteDone(result) => match result {
+                Ok(parent) => {
+                    if let Some(tree) = &mut self.file_tree {
+                        tree.refresh(&parent);
                     }
                 }
                 Err(e) => self.tree_error = Some(e),
@@ -1632,7 +1680,18 @@ impl Workspace {
             ]
         ];
 
-        if self.context_menu.is_some() {
+        if self.tree_delete_confirm.is_some() {
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::ProjectTreeDeleteCancel);
+            stack![base, dismiss, delete_confirm_popup(self)]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else if self.context_menu.is_some() {
             let dismiss = MouseArea::new(
                 container(column![])
                     .width(Length::Fill)
@@ -2561,6 +2620,10 @@ fn context_menu_popup(
         });
     }
     items.push(menu_item(
+        "删除",
+        Message::ProjectTreeDeleteRequest(menu.target.clone(), menu.is_dir),
+    ));
+    items.push(menu_item(
         "复制绝对路径",
         Message::ProjectTreeCopyPath(menu.target.clone(), project::PathKind::Absolute),
     ));
@@ -2591,6 +2654,77 @@ fn context_menu_popup(
             right: 0.0,
             bottom: 0.0,
         })
+        .into()
+}
+
+/// 删除确认框:居中浮层,显示目标文件名 + 确认/取消两个按钮。
+fn delete_confirm_popup(
+    ws: &Workspace,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let Some((path, is_dir)) = &ws.tree_delete_confirm else {
+        return column![].into();
+    };
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    let kind = if *is_dir { "文件夹" } else { "文件" };
+    let dialog = container(
+        column![
+            text(format!("删除{kind} \"{name}\"?"))
+                .size(14)
+                .color(theme::CREAM),
+            text("会移入系统回收站,可从回收站找回。")
+                .size(12)
+                .color(theme::DIM),
+            row![
+                button(text("取消").size(13).color(theme::CREAM))
+                    .on_press(Message::ProjectTreeDeleteCancel)
+                    .padding([6, 12])
+                    .style(|_t, _s| button::Style {
+                        background: Some(theme::CARD.into()),
+                        text_color: theme::CREAM,
+                        border: Border {
+                            color: theme::BORDER,
+                            width: 1.0,
+                            radius: 4.0.into()
+                        },
+                        ..button::Style::default()
+                    }),
+                button(text("删除").size(13).color(theme::RED))
+                    .on_press(Message::ProjectTreeDeleteConfirm)
+                    .padding([6, 12])
+                    .style(|_t, _s| button::Style {
+                        background: Some(theme::CARD.into()),
+                        text_color: theme::RED,
+                        border: Border {
+                            color: theme::RED,
+                            width: 1.0,
+                            radius: 4.0.into()
+                        },
+                        ..button::Style::default()
+                    }),
+            ]
+            .spacing(8),
+        ]
+        .spacing(8),
+    )
+    .padding(16)
+    .style(|_t: &iced_widget::Theme| container::Style {
+        background: Some(theme::CARD.into()),
+        border: Border {
+            color: theme::BORDER,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..container::Style::default()
+    });
+
+    container(dialog)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
         .into()
 }
 
