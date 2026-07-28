@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 /// 复制路径展示形式：绝对路径 vs 相对项目根目录。
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)] // 留给 Task 2(右键菜单"复制绝对/相对路径")
 pub enum PathKind {
     Absolute,
     Relative,
@@ -183,7 +182,6 @@ pub fn paste_item(
 /// 路径的展示字符串：绝对路径原样；相对路径去掉 `project_root` 前缀，
 /// 若不在 `project_root` 之下（理论上树里的项恒在其下，此分支是防御性
 /// 兜底）就退化成绝对路径。
-#[allow(dead_code)] // 留给 Task 2(右键菜单"复制绝对/相对路径")
 pub fn path_string(kind: PathKind, path: &Path, project_root: &Path) -> String {
     match kind {
         PathKind::Absolute => path.display().to_string(),

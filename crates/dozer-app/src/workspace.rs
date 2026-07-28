@@ -24,7 +24,7 @@ use crate::goal::{self, Goal};
 use crate::layout;
 use crate::osc::{OscEvent, OscScanner};
 use crate::preview::{AddrTarget, PreviewPane, WebviewSpec};
-use crate::project::FileTree;
+use crate::project::{self, FileTree};
 use crate::term_model::TerminalModel;
 use crate::term_view;
 use crate::theme;
@@ -32,8 +32,8 @@ use crate::transcript::{self, ReviewEntry};
 use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentState, ProjectInfo, SessionInfo};
 use iced_widget::core::mouse;
-use iced_widget::core::{Border, Color, Element, Length};
-use iced_widget::{MouseArea, button, column, container, row, text};
+use iced_widget::core::{Border, Color, Element, Length, Padding};
+use iced_widget::{MouseArea, button, column, container, row, stack, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -76,6 +76,15 @@ pub enum Divider {
     ProjectPreview,
     PreviewTerminal,
     TerminalAi,
+}
+
+/// 项目树右键菜单当前打开状态：定位坐标 + 目标（路径/是否目录）。
+#[derive(Debug, Clone, PartialEq)]
+struct ContextMenu {
+    x: f32,
+    y: f32,
+    target: PathBuf,
+    is_dir: bool,
 }
 
 /// 每条分隔线的命中区/渲染宽度(逻辑像素)。视觉线本身 2px,居中于此区间内。
@@ -310,6 +319,16 @@ pub enum Message {
     ProjectGitRefreshed(Option<String>, bool, HashMap<PathBuf, FileStatus>),
     /// 项目:当前项目验收次数刷新结果(项目卡"N 次验收"副行用)。
     AcceptanceCountLoaded(Option<u64>),
+    /// 项目树:右键按下的窗口逻辑坐标(main.rs 原始事件层发,供随后可能
+    /// 触发的 `ProjectTreeContextMenu` 定位弹出菜单)。
+    RightClickAt { x: f32, y: f32 },
+    /// 项目树:某行右键命中,打开菜单(位置取 `last_right_click`)。
+    ProjectTreeContextMenu { path: PathBuf, is_dir: bool },
+    /// 项目树:关闭菜单(点击外部/Esc/动作完成后)。
+    ProjectTreeContextMenuClose,
+    /// 项目树:菜单选"复制绝对/相对路径"→ main.rs 拦截写系统剪贴板,
+    /// 不落 `Workspace::update`(同 `PreviewPickFile` 模式)。
+    ProjectTreeCopyPath(PathBuf, project::PathKind),
 }
 
 /// 地址栏编辑事件:由 main.rs 的键盘拦截层在 `preview_addr_editing()`
@@ -489,6 +508,10 @@ pub struct Workspace {
     layout: PanelLayout,
     /// 正在拖拽的分隔线;`None` 表示未在拖拽。
     dragging: Option<Divider>,
+    /// 项目树右键菜单当前打开状态(None=未打开)。
+    context_menu: Option<ContextMenu>,
+    /// 最近一次右键点击的窗口逻辑坐标,给 `ProjectTreeContextMenu` 定位菜单用。
+    last_right_click: (f32, f32),
 }
 
 impl Workspace {
@@ -578,6 +601,8 @@ impl Workspace {
             preview_tab_first: 0,
             layout: layout::load(),
             dragging: None,
+            context_menu: None,
+            last_right_click: (0.0, 0.0),
         };
         // 启动恢复了当前项目时,与 ProjectOpened 同样异步补 git 分支/脏与
         // 对话列表（line 408 承诺"窗口起来后异步补"——此前只在用户主动
@@ -630,6 +655,8 @@ impl Workspace {
             preview_tab_first: 0,
             layout: layout::load(),
             dragging: None,
+            context_menu: None,
+            last_right_click: (0.0, 0.0),
         }
     }
 
@@ -1067,6 +1094,22 @@ impl Workspace {
             Message::AcceptanceCountLoaded(n) => {
                 self.project_acceptance_count = n;
             }
+            Message::RightClickAt { x, y } => {
+                self.last_right_click = (x, y);
+            }
+            Message::ProjectTreeContextMenu { path, is_dir } => {
+                let (x, y) = self.last_right_click;
+                self.context_menu = Some(ContextMenu {
+                    x,
+                    y,
+                    target: path,
+                    is_dir,
+                });
+            }
+            Message::ProjectTreeContextMenuClose => {
+                self.context_menu = None;
+            }
+            Message::ProjectTreeCopyPath(_, _) => {} // 副作用在 main.rs(写系统剪贴板需 Clipboard 句柄)
         }
     }
 
@@ -1388,6 +1431,16 @@ impl Workspace {
         self.dragging
     }
 
+    /// 项目树右键菜单是否打开(main.rs Esc 键路由用)。
+    pub fn context_menu_open(&self) -> bool {
+        self.context_menu.is_some()
+    }
+
+    /// 当前项目根路径(供 main.rs 算相对路径用;未打开项目时 None)。
+    pub fn active_project_path(&self) -> Option<PathBuf> {
+        self.project.as_ref().map(|p| PathBuf::from(&p.path))
+    }
+
     /// 点击输入框外时退出所有自绘输入的编辑态(验收反馈:失焦回正常态)。
     /// 地址栏取消(清空半输入),意见框仅退出编辑(保留已输入文字)。
     pub fn blur_inputs(&mut self) {
@@ -1524,7 +1577,7 @@ impl Workspace {
         let col2 = preview_pane(self);
         let col3 = terminal_pane(self);
         let col4 = ai_pane(self);
-        column![
+        let base = column![
             top,
             row![
                 col1,
@@ -1535,8 +1588,22 @@ impl Workspace {
                 divider_bar(Divider::TerminalAi),
                 col4
             ]
-        ]
-        .into()
+        ];
+
+        if self.context_menu.is_some() {
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::ProjectTreeContextMenuClose);
+            stack![base, dismiss, context_menu_popup(self)]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else {
+            base.into()
+        }
     }
 }
 
@@ -2025,11 +2092,23 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
                     } else {
                         Message::PreviewOpenPath(row.path.clone())
                     };
-                    content = content.push(button(line).on_press(msg).width(Length::Fill).style(
-                        |_t, _s| button::Style {
+                    let row_btn: iced_widget::Button<
+                        '_,
+                        Message,
+                        iced_widget::Theme,
+                        iced_widget::Renderer,
+                    > = button(line)
+                        .on_press(msg)
+                        .width(Length::Fill)
+                        .style(|_t, _s| button::Style {
                             background: None,
                             text_color: theme::BODY,
                             ..button::Style::default()
+                        });
+                    content = content.push(MouseArea::new(row_btn).on_right_press(
+                        Message::ProjectTreeContextMenu {
+                            path: row.path.clone(),
+                            is_dir: row.is_dir,
                         },
                     ));
                 }
@@ -2375,6 +2454,75 @@ fn divider_bar<'a>(
     MouseArea::new(hit_area)
         .interaction(mouse::Interaction::ResizingColumn)
         .on_press(Message::ColumnDragStart(divider))
+        .into()
+}
+
+/// 右键菜单一项:纯文字按钮,CARD 底+BORDER 描边悬停态由 iced 默认
+/// button 交互色处理(本仓其余按钮同款,不额外定制)。
+fn menu_item<'a>(
+    label: &'static str,
+    msg: Message,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    button(text(label).size(13).color(theme::CREAM))
+        .on_press(msg)
+        .width(Length::Fixed(180.0))
+        .padding([6, 10])
+        .style(|_t, _s| button::Style {
+            background: Some(theme::CARD.into()),
+            text_color: theme::CREAM,
+            ..button::Style::default()
+        })
+        .into()
+}
+
+/// 右键菜单浮层本体:纵向按钮列表,`container` 用 `Padding{top,left,..}`
+/// 手算定位到点击坐标——`Stack` 各层共享同一份 bounds,不像原生系统菜单
+/// 那样自带绝对定位,这是本仓一贯的手算像素定位风格(`ime_cursor_area`/
+/// `preview_content_bounds` 同款)。
+fn context_menu_popup(
+    ws: &Workspace,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let Some(menu) = &ws.context_menu else {
+        return column![].into();
+    };
+    let project_root = ws
+        .project
+        .as_ref()
+        .map(|p| PathBuf::from(&p.path))
+        .unwrap_or_default();
+    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = vec![
+        menu_item(
+            "复制绝对路径",
+            Message::ProjectTreeCopyPath(menu.target.clone(), project::PathKind::Absolute),
+        ),
+        menu_item(
+            "复制相对路径",
+            Message::ProjectTreeCopyPath(menu.target.clone(), project::PathKind::Relative),
+        ),
+    ];
+    let _ = project_root; // Task 3-6 会用到;本任务先只有这两项路径复制不需要它
+
+    let list = container(column(items).spacing(2))
+        .padding(6)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::CARD.into()),
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        });
+
+    container(list)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(Padding {
+            top: menu.y,
+            left: menu.x,
+            right: 0.0,
+            bottom: 0.0,
+        })
         .into()
 }
 

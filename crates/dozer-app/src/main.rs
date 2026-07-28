@@ -279,7 +279,38 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     workspace.update(Message::ColumnDragEnd);
                     window.request_redraw();
                 }
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: winit::event::MouseButton::Right,
+                    ..
+                } => {
+                    let scale = window.scale_factor();
+                    let x = (cursor_phys.x / scale) as f32;
+                    let y = (cursor_phys.y / scale) as f32;
+                    workspace.update(Message::RightClickAt { x, y });
+                    // 不在这里 request_redraw——右键若真的命中某行,该行的
+                    // `MouseArea::on_right_press` 随本轮事件走 iced 正常分发,
+                    // 那条路径自会触发重绘;若点在空白处,菜单本就不该开,不必
+                    // 额外重绘。
+                }
                 _ => {}
+            }
+
+            // 右键菜单打开时,Esc 优先关菜单,不进正常键盘分发(不然会被当作
+            // 普通按键继续往下走,可能被地址栏/终端等其它分支消费掉)。
+            if workspace.context_menu_open()
+                && let WindowEvent::KeyboardInput {
+                    event,
+                    is_synthetic: false,
+                    ..
+                } = event
+                && event.state == ElementState::Pressed
+                && event.logical_key
+                    == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+            {
+                workspace.update(Message::ProjectTreeContextMenuClose);
+                window.request_redraw();
+                return;
             }
 
             // ⌘ 组合键是应用级快捷键，一律不进 PTY（此前 ⌘C 会把裸 "c"
@@ -463,6 +494,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 workspace,
                 window,
                 pending_focus,
+                clipboard,
                 ..
             } = self
             else {
@@ -489,6 +521,15 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                         workspace.update(Message::ProjectOpen(dir));
                     }
+                }
+                Message::ProjectTreeCopyPath(path, kind) => {
+                    let root = workspace
+                        .active_project_path()
+                        .unwrap_or_else(|| path.clone());
+                    let s = crate::project::path_string(kind, &path, &root);
+                    clipboard.write(iced_winit::core::clipboard::Kind::Standard, s);
+                    workspace.update(Message::ProjectTreeContextMenuClose);
+                    window.request_redraw();
                 }
                 other => workspace.update(other),
             }
