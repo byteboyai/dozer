@@ -30,10 +30,8 @@ use crate::theme;
 use crate::transcript::{self, ReviewEntry};
 use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentState, ProjectInfo, SessionInfo};
-#[allow(unused_imports)] // Task 2 用于分隔线悬停光标（mouse::Interaction::ResizeColumn）
 use iced_widget::core::mouse;
 use iced_widget::core::{Border, Color, Element, Length};
-#[allow(unused_imports)] // Task 2 用于把 divider_bar() 包成可拖拽命中区
 use iced_widget::{MouseArea, button, column, container, row, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
 use serde::{Deserialize, Serialize};
@@ -72,9 +70,6 @@ impl Default for PanelLayout {
 }
 
 /// 三条可拖拽分隔线的标识:项目|预览、预览|终端、终端|AI。
-/// Task 2 把它接进 `Message::ColumnDragStart`/`ColumnDrag`；本任务只定义
-/// 类型（`divider_positions` 尚不需要它），故允许暂时未被引用。
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Divider {
     ProjectPreview,
@@ -86,6 +81,55 @@ pub enum Divider {
 /// 四栏几何公式必须把 `3 * DIVIDER_WIDTH` 从剩余空间里扣掉,否则 webview
 /// bounds/IME 光标/命中测试会和 `view()` 里 `row!` 实际渲染的像素错位。
 const DIVIDER_WIDTH: f32 = 8.0;
+
+const MIN_PROJECT_COL_WIDTH: f32 = 180.0;
+const MIN_AI_COL_WIDTH: f32 = 200.0;
+/// 预览+终端剩余空间下限,防止项目/AI 栏被拖得太宽把中间两栏挤没。
+const MIN_FILL_WIDTH: f32 = 480.0;
+const MIN_PREVIEW_RATIO: f32 = 0.15;
+const MAX_PREVIEW_RATIO: f32 = 0.85;
+
+/// 拖拽某条分隔线到窗口逻辑 x 坐标 `logical_x` 后的新 `PanelLayout`——纯函数,
+/// 不依赖 `Workspace`,`update()` 与单测都调它。`f32::clamp(min,max)` 在
+/// `min>max` 时会 panic,窗口太窄时用 `.max(下限)` 把上界垫到不低于下限,
+/// 确保恒不 panic(细节见 specs/2026-07-28-resizable-panel-layout-design.md §5)。
+fn apply_column_drag(
+    layout: PanelLayout,
+    divider: Divider,
+    window_width: f32,
+    logical_x: f32,
+) -> PanelLayout {
+    match divider {
+        Divider::ProjectPreview => {
+            let upper =
+                (window_width - layout.ai_col_width - MIN_FILL_WIDTH).max(MIN_PROJECT_COL_WIDTH);
+            PanelLayout {
+                project_col_width: logical_x.clamp(MIN_PROJECT_COL_WIDTH, upper),
+                ..layout
+            }
+        }
+        Divider::TerminalAi => {
+            let upper =
+                (window_width - layout.project_col_width - MIN_FILL_WIDTH).max(MIN_AI_COL_WIDTH);
+            PanelLayout {
+                ai_col_width: (window_width - logical_x).clamp(MIN_AI_COL_WIDTH, upper),
+                ..layout
+            }
+        }
+        Divider::PreviewTerminal => {
+            let fill_width = window_width - layout.project_col_width - layout.ai_col_width;
+            if fill_width <= 0.0 {
+                return layout;
+            }
+            let ratio = ((logical_x - layout.project_col_width) / fill_width)
+                .clamp(MIN_PREVIEW_RATIO, MAX_PREVIEW_RATIO);
+            PanelLayout {
+                preview_ratio: ratio,
+                ..layout
+            }
+        }
+    }
+}
 
 /// 顶栏固定高（逻辑像素）。与 `top_bar` 容器高度同源，勿各写各的。
 pub const TOP_BAR_HEIGHT: f32 = 44.0;
@@ -221,6 +265,17 @@ pub enum Message {
     /// 终端 pane 像素尺寸变化换算出的新网格尺寸；对所有 tab 生效
     /// （包括当前不可见的），保证切换 tab 时尺寸已经是最新的。
     PaneResized { cols: u16, rows: u16 },
+    /// 按下某条分隔线,记录"正在拖哪条"(main.rs 后续 CursorMoved 靠这个
+    /// 状态决定要不要继续转发拖拽;Task 4 接线)。
+    ColumnDragStart(Divider),
+    /// 拖拽中:当前窗口逻辑宽 + 光标逻辑 x(main.rs 换算好传入,`update()`
+    /// 统一算+夹取,不与 main.rs 分摊裁剪逻辑)。本任务只接 `update()` 分支,
+    /// 构造方(main.rs 连续鼠标追踪)留给 Task 4,故暂允许未被构造。
+    #[allow(dead_code)]
+    ColumnDrag { window_width: f32, logical_x: f32 },
+    /// 松开左键,结束拖拽并触发写盘(Task 3 接线持久化)。构造方同上留 Task 4。
+    #[allow(dead_code)]
+    ColumnDragEnd,
     /// daemon 不可用（启动连接失败，或某次会话操作失败）的错误文案，
     /// 终端区以 RED 文案展示。
     DaemonError(String),
@@ -446,6 +501,8 @@ pub struct Workspace {
     /// 四栏宽度/预览终端分配比例;拖拽写入,`layout::load()` 起始值(Task 3
     /// 接线,本步先用 `PanelLayout::default()`)。
     layout: PanelLayout,
+    /// 正在拖拽的分隔线;`None` 表示未在拖拽。
+    dragging: Option<Divider>,
 }
 
 impl Workspace {
@@ -534,6 +591,7 @@ impl Workspace {
             term_tab_first: 0,
             preview_tab_first: 0,
             layout: PanelLayout::default(),
+            dragging: None,
         };
         // 启动恢复了当前项目时,与 ProjectOpened 同样异步补 git 分支/脏与
         // 对话列表（line 408 承诺"窗口起来后异步补"——此前只在用户主动
@@ -585,6 +643,7 @@ impl Workspace {
             term_tab_first: 0,
             preview_tab_first: 0,
             layout: PanelLayout::default(),
+            dragging: None,
         }
     }
 
@@ -856,6 +915,20 @@ impl Workspace {
                 self.on_tab_attached(tab_id, info, snapshot)
             }
             Message::PaneResized { cols, rows } => self.resize_all(cols, rows),
+            Message::ColumnDragStart(divider) => {
+                self.dragging = Some(divider);
+            }
+            Message::ColumnDrag {
+                window_width,
+                logical_x,
+            } => {
+                if let Some(divider) = self.dragging {
+                    self.layout = apply_column_drag(self.layout, divider, window_width, logical_x);
+                }
+            }
+            Message::ColumnDragEnd => {
+                self.dragging = None;
+            }
             Message::DaemonError(message) => self.daemon_error = Some(message),
             Message::TermScroll(delta) => {
                 if let Some(tab) = self.tabs.get_mut(self.active) {
@@ -1317,6 +1390,13 @@ impl Workspace {
         self.layout
     }
 
+    /// 当前正在拖拽的分隔线(main.rs 拖拽追踪用;调用方留 Task 4 接线,
+    /// 故暂允许未被调用)。
+    #[allow(dead_code)]
+    pub fn dragging_divider(&self) -> Option<Divider> {
+        self.dragging
+    }
+
     /// 点击输入框外时退出所有自绘输入的编辑态(验收反馈:失焦回正常态)。
     /// 地址栏取消(清空半输入),意见框仅退出编辑(保留已输入文字)。
     pub fn blur_inputs(&mut self) {
@@ -1457,11 +1537,11 @@ impl Workspace {
             top,
             row![
                 col1,
-                divider_bar(),
+                divider_bar(Divider::ProjectPreview),
                 col2,
-                divider_bar(),
+                divider_bar(Divider::PreviewTerminal),
                 col3,
-                divider_bar(),
+                divider_bar(Divider::TerminalAi),
                 col4
             ]
         ]
@@ -2298,8 +2378,14 @@ fn terminal_pane(
 }
 
 /// 分隔线:命中区 `DIVIDER_WIDTH` 宽、`Length::Fill` 高,内部一条 2px BORDER
-/// 竖线居中。本步只做视觉,交互(悬停光标+`on_press`)留 Task 2。
-fn divider_bar<'a>() -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+/// 竖线居中。悬停变 resize 光标走 `MouseArea::interaction` → iced 既有的
+/// `mouse_interaction` → `window.set_cursor` 管线(main.rs:808-816 已有),
+/// 不必另起一套光标代码。`on_press` 只发起拖拽状态,不指望 `MouseArea` 的
+/// `on_move`/`on_release`——它们要求光标不离开这条 8px 窄带才触发,快速拖
+/// 拽会在光标移出后"断掉";持续追踪交给 Task 4 的 `main.rs` 原始事件层。
+fn divider_bar<'a>(
+    divider: Divider,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let line = container(iced_widget::Space::new())
         .width(Length::Fixed(2.0))
         .height(Length::Fill)
@@ -2307,9 +2393,12 @@ fn divider_bar<'a>() -> Element<'a, Message, iced_widget::Theme, iced_widget::Re
             background: Some(theme::BORDER.into()),
             ..container::Style::default()
         });
-    container(line)
+    let hit_area = container(line)
         .center_x(Length::Fixed(DIVIDER_WIDTH))
-        .height(Length::Fill)
+        .height(Length::Fill);
+    MouseArea::new(hit_area)
+        .interaction(mouse::Interaction::ResizingColumn)
+        .on_press(Message::ColumnDragStart(divider))
         .into()
 }
 
@@ -2861,6 +2950,60 @@ mod tests {
             "分隔线2在预览栏右边"
         );
         assert_eq!(d3, 1440.0 - 280.0 - DIVIDER_WIDTH, "分隔线3紧贴AI栏左边");
+    }
+
+    #[test]
+    fn clamp_project_width_within_bounds() {
+        let layout = PanelLayout::default();
+        let new_layout = apply_column_drag(layout, Divider::ProjectPreview, 1440.0, 300.0);
+        assert_eq!(new_layout.project_col_width, 300.0);
+    }
+
+    #[test]
+    fn clamp_project_width_to_minimum() {
+        let layout = PanelLayout::default();
+        let new_layout = apply_column_drag(layout, Divider::ProjectPreview, 1440.0, 10.0);
+        assert_eq!(new_layout.project_col_width, MIN_PROJECT_COL_WIDTH);
+    }
+
+    #[test]
+    fn clamp_project_width_when_window_too_narrow_does_not_panic() {
+        let layout = PanelLayout::default();
+        let new_layout = apply_column_drag(layout, Divider::ProjectPreview, 700.0, 650.0);
+        assert_eq!(new_layout.project_col_width, MIN_PROJECT_COL_WIDTH);
+    }
+
+    #[test]
+    fn clamp_ai_width_within_bounds() {
+        let layout = PanelLayout::default();
+        let new_layout = apply_column_drag(layout, Divider::TerminalAi, 1440.0, 1140.0);
+        assert_eq!(new_layout.ai_col_width, 300.0);
+    }
+
+    #[test]
+    fn clamp_preview_ratio_within_bounds() {
+        let layout = PanelLayout::default();
+        let new_layout = apply_column_drag(layout, Divider::PreviewTerminal, 1440.0, 875.2);
+        assert!((new_layout.preview_ratio - 0.7).abs() < 0.01);
+    }
+
+    #[test]
+    fn clamp_preview_ratio_to_range() {
+        let layout = PanelLayout::default();
+        let new_layout = apply_column_drag(layout, Divider::PreviewTerminal, 1440.0, 10.0);
+        assert_eq!(new_layout.preview_ratio, MIN_PREVIEW_RATIO);
+    }
+
+    #[test]
+    fn clamp_preview_ratio_skips_update_on_zero_fill_width() {
+        // project+ai 已经吃满窗口宽度,fill_width<=0,应原样返回不 panic(除零防御)。
+        let layout = PanelLayout {
+            project_col_width: 1000.0,
+            ai_col_width: 1000.0,
+            preview_ratio: 0.5,
+        };
+        let new_layout = apply_column_drag(layout, Divider::PreviewTerminal, 1440.0, 500.0);
+        assert_eq!(new_layout, layout);
     }
 
     #[test]
