@@ -137,7 +137,6 @@ impl FileTree {
 /// 不做部分复制后中止的脏状态清理（失败时目标目录可能已建但不完整——
 /// 调用方(`paste_item`)已在动手前检查过存在性，这里的检查是防御递归过程中
 /// 子目录层面的二次冲突）。
-#[allow(dead_code)] // 留给 Task 3(粘贴)
 pub fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     if dst.exists() {
         return Err(std::io::Error::new(
@@ -161,7 +160,6 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
 
 /// 把 `source`（文件或目录）复制进 `target_dir` 下，用源的文件名。目标已
 /// 存在同名项 → `Err`（冲突文案）。成功返回新建出的完整路径。
-#[allow(dead_code)] // 留给 Task 3(粘贴)
 pub fn paste_item(
     source: &Path,
     source_is_dir: bool,

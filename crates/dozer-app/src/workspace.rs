@@ -329,6 +329,12 @@ pub enum Message {
     /// 项目树:菜单选"复制绝对/相对路径"→ main.rs 拦截写系统剪贴板,
     /// 不落 `Workspace::update`(同 `PreviewPickFile` 模式)。
     ProjectTreeCopyPath(PathBuf, project::PathKind),
+    /// 项目树:菜单选"复制"→ 标记应用内剪贴槽(参数=路径,是否目录)。
+    ProjectTreeCopy(PathBuf, bool),
+    /// 项目树:菜单选"粘贴"→ 异步复制剪贴槽项到目标目录(参数=目标目录)。
+    ProjectTreePaste(PathBuf),
+    /// 项目树:粘贴异步结果(Ok=新建出的路径,Err=错误文案)。
+    ProjectTreePasteDone(Result<PathBuf, String>),
 }
 
 /// 地址栏编辑事件:由 main.rs 的键盘拦截层在 `preview_addr_editing()`
@@ -512,6 +518,10 @@ pub struct Workspace {
     context_menu: Option<ContextMenu>,
     /// 最近一次右键点击的窗口逻辑坐标,给 `ProjectTreeContextMenu` 定位菜单用。
     last_right_click: (f32, f32),
+    /// 项目树"文件管理器式"剪贴槽:最近一次"复制"的项(路径,是否目录)。
+    tree_clipboard: Option<(PathBuf, bool)>,
+    /// 项目树操作的行内报错文案(冲突/失败时显示;下次树操作发起时清空)。
+    tree_error: Option<String>,
 }
 
 impl Workspace {
@@ -603,6 +613,8 @@ impl Workspace {
             dragging: None,
             context_menu: None,
             last_right_click: (0.0, 0.0),
+            tree_clipboard: None,
+            tree_error: None,
         };
         // 启动恢复了当前项目时,与 ProjectOpened 同样异步补 git 分支/脏与
         // 对话列表（line 408 承诺"窗口起来后异步补"——此前只在用户主动
@@ -657,6 +669,8 @@ impl Workspace {
             dragging: None,
             context_menu: None,
             last_right_click: (0.0, 0.0),
+            tree_clipboard: None,
+            tree_error: None,
         }
     }
 
@@ -1110,6 +1124,34 @@ impl Workspace {
                 self.context_menu = None;
             }
             Message::ProjectTreeCopyPath(_, _) => {} // 副作用在 main.rs(写系统剪贴板需 Clipboard 句柄)
+            Message::ProjectTreeCopy(path, is_dir) => {
+                self.tree_clipboard = Some((path, is_dir));
+                self.context_menu = None;
+            }
+            Message::ProjectTreePaste(target_dir) => {
+                self.context_menu = None;
+                self.tree_error = None;
+                let Some((source, source_is_dir)) = self.tree_clipboard.clone() else {
+                    return;
+                };
+                let proxy = self.proxy.clone();
+                self.handle.spawn(async move {
+                    let result = tokio::task::spawn_blocking(move || {
+                        project::paste_item(&source, source_is_dir, &target_dir)
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+                    let _ = proxy.send_event(Message::ProjectTreePasteDone(result));
+                });
+            }
+            Message::ProjectTreePasteDone(result) => match result {
+                Ok(new_path) => {
+                    if let (Some(tree), Some(parent)) = (&mut self.file_tree, new_path.parent()) {
+                        tree.refresh(parent);
+                    }
+                }
+                Err(e) => self.tree_error = Some(e),
+            },
         }
     }
 
@@ -2063,6 +2105,9 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
             );
             content = content.push(card);
             content = content.push(open_btn);
+            if let Some(err) = &ws.tree_error {
+                content = content.push(text(format!("⚠ {err}")).size(12).color(theme::RED));
+            }
             if let Some(tree) = &ws.file_tree {
                 for row in tree.visible_rows() {
                     let indent = "  ".repeat(row.depth);
@@ -2490,17 +2535,40 @@ fn context_menu_popup(
         .as_ref()
         .map(|p| PathBuf::from(&p.path))
         .unwrap_or_default();
-    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = vec![
-        menu_item(
-            "复制绝对路径",
-            Message::ProjectTreeCopyPath(menu.target.clone(), project::PathKind::Absolute),
-        ),
-        menu_item(
-            "复制相对路径",
-            Message::ProjectTreeCopyPath(menu.target.clone(), project::PathKind::Relative),
-        ),
-    ];
-    let _ = project_root; // Task 3-6 会用到;本任务先只有这两项路径复制不需要它
+    let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> =
+        Vec::new();
+    items.push(menu_item(
+        "复制",
+        Message::ProjectTreeCopy(menu.target.clone(), menu.is_dir),
+    ));
+    if menu.is_dir {
+        let has_clipboard = ws.tree_clipboard.is_some();
+        let paste_msg = Message::ProjectTreePaste(menu.target.clone());
+        items.push(if has_clipboard {
+            menu_item("粘贴", paste_msg)
+        } else {
+            // 剪贴槽为空:置灰且不挂 on_press,真正不可点(同 P1L tab 箭头
+            // "到头变灰"的既有处理口径,不是视觉变灰但仍能点)。
+            button(text("粘贴").size(13).color(theme::DIM))
+                .width(Length::Fixed(180.0))
+                .padding([6, 10])
+                .style(|_t, _s| button::Style {
+                    background: Some(theme::CARD.into()),
+                    text_color: theme::DIM,
+                    ..button::Style::default()
+                })
+                .into()
+        });
+    }
+    items.push(menu_item(
+        "复制绝对路径",
+        Message::ProjectTreeCopyPath(menu.target.clone(), project::PathKind::Absolute),
+    ));
+    items.push(menu_item(
+        "复制相对路径",
+        Message::ProjectTreeCopyPath(menu.target.clone(), project::PathKind::Relative),
+    ));
+    let _ = project_root; // Task 5(重命名)/Task 6(新建)会用到
 
     let list = container(column(items).spacing(2))
         .padding(6)
