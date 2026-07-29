@@ -66,7 +66,6 @@ pub enum RightView {
 
 /// 当前放大态：放大的是左面板区的内容子面板，还是右面板区的。`None` = 未放大。
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)]
 pub enum MaximizedPane {
     Left,
     Right,
@@ -773,7 +772,6 @@ pub struct Workspace {
     /// 右面板区是否折叠,语义同 `left_collapsed`。
     right_collapsed: bool,
     /// 当前放大的内容子面板(`None`=未放大)。Task 5 起接入放大交互。
-    #[allow(dead_code)] // Task 5 接入 pane 放大后消费
     maximized: Option<MaximizedPane>,
     /// 正在拖拽的分隔线;`None` 表示未在拖拽。
     dragging: Option<Divider>,
@@ -2091,24 +2089,6 @@ impl Workspace {
     /// `on_window_event` 的 `CursorMoved`/`MouseInput{Released}` 分支)。
     pub fn dragging_divider(&self) -> Option<Divider> {
         self.dragging
-    }
-
-    /// 左面板区当前视图(Task 4 持久化消费)。
-    #[allow(dead_code)] // Task 4 接入视图选择持久化后消费
-    pub fn left_view(&self) -> LeftView {
-        self.left_view
-    }
-
-    /// 右面板区当前视图(Task 4 持久化消费)。
-    #[allow(dead_code)] // Task 4 接入视图选择持久化后消费
-    pub fn right_view(&self) -> RightView {
-        self.right_view
-    }
-
-    /// 当前放大的内容子面板(Task 5 消费)。
-    #[allow(dead_code)] // Task 5 接入 pane 放大后消费
-    pub fn maximized(&self) -> Option<MaximizedPane> {
-        self.maximized
     }
 
     /// 项目树右键菜单是否打开(main.rs Esc 键路由用)。
