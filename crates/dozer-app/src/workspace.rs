@@ -50,31 +50,8 @@ use tokio::sync::mpsc;
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 
-/// 四栏宽度状态:项目栏/AI栏固定像素宽 + 预览:终端剩余空间分配比例。是
-/// `view()` 渲染、离屏几何计算(webview bounds/IME/命中测试)、磁盘持久化
-/// 三方共享的唯一数据源(见 specs/2026-07-28-resizable-panel-layout-design.md)。
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct PanelLayout {
-    pub project_col_width: f32,
-    pub ai_col_width: f32,
-    /// 预览栏占 (窗口宽 - 项目栏 - AI栏 - 3*分隔线) 剩余空间的比例;
-    /// 终端栏拿 (1.0 - 此值)。
-    pub preview_ratio: f32,
-}
-
-impl Default for PanelLayout {
-    fn default() -> Self {
-        Self {
-            project_col_width: 240.0,
-            ai_col_width: 280.0,
-            preview_ratio: 0.5,
-        }
-    }
-}
-
 /// 左侧面板区当前显示哪个视图：文件列表(项目树+文件预览配对) / Web(单面板)。
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)] // 本任务先建好类型，Task 3 起接入图标栏/面板渲染
 pub enum LeftView {
     Files,
     Web,
@@ -82,7 +59,6 @@ pub enum LeftView {
 
 /// 右侧面板区当前显示哪个视图：Agent(Agent列表+终端配对) / 对话(对话列表+对话审阅配对)。
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)]
 pub enum RightView {
     Agent,
     Conversations,
@@ -102,7 +78,6 @@ pub enum MaximizedPane {
 /// 恒为剩余空间(`Length::Fill`)——只有一条 LeftRight 分隔线，不需要像旧
 /// 模型那样两个固定宽度各自夹一条。
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct ShellLayout {
     pub left_width: f32,
     /// 文件列表配对:项目树占左面板区宽度的比例，文件预览拿剩下的。
@@ -124,26 +99,16 @@ impl Default for ShellLayout {
     }
 }
 
-/// 三条可拖拽分隔线的标识:项目|预览、预览|终端、终端|AI。
+/// 新外壳的三条可拖拽分隔线：左右面板区之间、左侧配对视图内部、右侧配对
+/// 视图内部。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Divider {
-    ProjectPreview,
-    PreviewTerminal,
-    TerminalAi,
-}
-
-/// 新外壳的三条可拖拽分隔线：左右面板区之间、左侧配对视图内部、右侧配对
-/// 视图内部。取代 `Divider` 原三个变体(见 Task 3 的整体切换)。
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)]
-pub enum ShellDivider {
     LeftRight,
     LeftPairSplit,
     RightPairSplit,
 }
 
 /// 图标栏固定宽度(逻辑像素)，左右各一条。
-#[allow(dead_code)] // Task 3 起接入图标栏渲染
 pub const ICON_RAIL_WIDTH: f32 = 48.0;
 
 /// 项目树右键菜单当前打开状态：定位坐标 + 目标（路径/是否目录）。
@@ -178,51 +143,95 @@ struct TreeEdit {
 /// bounds/IME 光标/命中测试会和 `view()` 里 `row!` 实际渲染的像素错位。
 const DIVIDER_WIDTH: f32 = 8.0;
 
-const MIN_PROJECT_COL_WIDTH: f32 = 180.0;
-const MIN_AI_COL_WIDTH: f32 = 200.0;
-/// 预览+终端剩余空间下限,防止项目/AI 栏被拖得太宽把中间两栏挤没。
-const MIN_FILL_WIDTH: f32 = 480.0;
-const MIN_PREVIEW_RATIO: f32 = 0.15;
-const MAX_PREVIEW_RATIO: f32 = 0.85;
+const MIN_ZONE_WIDTH: f32 = 320.0;
+const MIN_SPLIT_RATIO: f32 = 0.2;
+const MAX_SPLIT_RATIO: f32 = 0.8;
 
-/// 拖拽某条分隔线到窗口逻辑 x 坐标 `logical_x` 后的新 `PanelLayout`——纯函数,
-/// 不依赖 `Workspace`,`update()` 与单测都调它。`f32::clamp(min,max)` 在
-/// `min>max` 时会 panic,窗口太窄时用 `.max(下限)` 把上界垫到不低于下限,
-/// 确保恒不 panic(细节见 specs/2026-07-28-resizable-panel-layout-design.md §5)。
+/// 主界面当前几何状态的只读快照(main.rs 拖拽追踪/离屏几何计算用途,
+/// `Copy` 类型直接按值传递)。取代旧 `PanelLayout` 单独传递的做法——
+/// 新几何公式(webview bounds/焦点路由/IME 光标)都依赖"当前是哪个视图、
+/// 是否收起"，不能只靠宽高数字算，所以把这些也打包进来。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShellState {
+    pub layout: ShellLayout,
+    pub left_view: LeftView,
+    pub left_collapsed: bool,
+    pub right_view: RightView,
+    pub right_collapsed: bool,
+}
+
+/// 左面板区当前实际宽度(逻辑像素)；收起时为 0。
+fn left_zone_width(state: &ShellState) -> f32 {
+    if state.left_collapsed {
+        0.0
+    } else {
+        state.layout.left_width
+    }
+}
+
+/// 右面板区当前实际宽度(逻辑像素)；收起时为 0；否则是"总宽减两条图标栏、
+/// 减左面板区、减(两侧都可见时的)一条分隔线"的剩余空间——右面板区不像
+/// 左面板区那样有独立持久化宽度，恒为 Fill。
+fn right_zone_width(window_width: f32, state: &ShellState) -> f32 {
+    if state.right_collapsed {
+        return 0.0;
+    }
+    let left_w = left_zone_width(state);
+    let both_visible = !state.left_collapsed && !state.right_collapsed;
+    let divider_w = if both_visible { DIVIDER_WIDTH } else { 0.0 };
+    (window_width - 2.0 * ICON_RAIL_WIDTH - left_w - divider_w).max(0.0)
+}
+
+/// 拖拽某条分隔线到窗口逻辑 x 坐标 `logical_x` 后的新 `ShellLayout`。
+/// `LeftPairSplit`/`RightPairSplit` 写哪个 split 字段取决于当前那一侧的
+/// 视图选择(比如右侧当前是"对话"就写 `conversations_split`，不是
+/// `agent_split`)——这条信息 `ShellLayout` 自己没有，靠 `ShellState` 带过来。
 fn apply_column_drag(
-    layout: PanelLayout,
+    state: ShellState,
     divider: Divider,
     window_width: f32,
     logical_x: f32,
-) -> PanelLayout {
+) -> ShellLayout {
     match divider {
-        Divider::ProjectPreview => {
-            let upper = (window_width - layout.ai_col_width - MIN_FILL_WIDTH - 3.0 * DIVIDER_WIDTH)
-                .max(MIN_PROJECT_COL_WIDTH);
-            PanelLayout {
-                project_col_width: logical_x.clamp(MIN_PROJECT_COL_WIDTH, upper),
-                ..layout
+        Divider::LeftRight => {
+            let both_visible = !state.left_collapsed && !state.right_collapsed;
+            let divider_w = if both_visible { DIVIDER_WIDTH } else { 0.0 };
+            let upper = (window_width - 2.0 * ICON_RAIL_WIDTH - divider_w - MIN_ZONE_WIDTH)
+                .max(MIN_ZONE_WIDTH);
+            let new_left = (logical_x - ICON_RAIL_WIDTH).clamp(MIN_ZONE_WIDTH, upper);
+            ShellLayout {
+                left_width: new_left,
+                ..state.layout
             }
         }
-        Divider::TerminalAi => {
-            let upper =
-                (window_width - layout.project_col_width - MIN_FILL_WIDTH - 3.0 * DIVIDER_WIDTH)
-                    .max(MIN_AI_COL_WIDTH);
-            PanelLayout {
-                ai_col_width: (window_width - logical_x).clamp(MIN_AI_COL_WIDTH, upper),
-                ..layout
+        Divider::LeftPairSplit => {
+            let left_w = left_zone_width(&state);
+            if left_w <= 0.0 {
+                return state.layout;
+            }
+            let ratio =
+                ((logical_x - ICON_RAIL_WIDTH) / left_w).clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO);
+            ShellLayout {
+                files_split: ratio,
+                ..state.layout
             }
         }
-        Divider::PreviewTerminal => {
-            let fill_width = window_width - layout.project_col_width - layout.ai_col_width;
-            if fill_width <= 0.0 {
-                return layout;
+        Divider::RightPairSplit => {
+            let right_w = right_zone_width(window_width, &state);
+            if right_w <= 0.0 {
+                return state.layout;
             }
-            let ratio = ((logical_x - layout.project_col_width) / fill_width)
-                .clamp(MIN_PREVIEW_RATIO, MAX_PREVIEW_RATIO);
-            PanelLayout {
-                preview_ratio: ratio,
-                ..layout
+            let right_x0 = window_width - ICON_RAIL_WIDTH - right_w;
+            let ratio = ((logical_x - right_x0) / right_w).clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO);
+            match state.right_view {
+                RightView::Agent => ShellLayout {
+                    agent_split: ratio,
+                    ..state.layout
+                },
+                RightView::Conversations => ShellLayout {
+                    conversations_split: ratio,
+                    ..state.layout
+                },
             }
         }
     }
@@ -254,46 +263,71 @@ const CHROME_HEIGHT_PX: f32 = 16.0 + 4.0 + 30.0; // 上下 padding + 1 处 spaci
 ///   + 两处 spacing 4*2。header 行已去(P1L #4),故不含表头项。
 const PREVIEW_CHROME_TOP_PX: f32 = 8.0 + 30.0 + 30.0 + 8.0;
 
-/// 窗口逻辑尺寸 → 左二内容区矩形(逻辑像素 x/y/w/h)。列宽公式与
-/// `terminal_pane_pixel_size` 同源:左一/左四固定宽,预览与终端均分 Fill。
+/// 窗口逻辑尺寸 → 左侧文件/Web 预览内容区矩形(逻辑像素 x/y/w/h)，供
+/// main.rs 摆放 wry webview 用。左侧收起时返回零尺寸矩形。
 pub fn preview_content_bounds(
-    window_width: f32,
+    _window_width: f32,
     window_height: f32,
-    layout: &PanelLayout,
+    state: &ShellState,
 ) -> (f32, f32, f32, f32) {
-    let fill_width =
-        (window_width - layout.project_col_width - layout.ai_col_width - 3.0 * DIVIDER_WIDTH)
-            .max(0.0);
-    let x = layout.project_col_width + DIVIDER_WIDTH + 8.0;
+    if state.left_collapsed {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    let left_w = left_zone_width(state);
     let y = TOP_BAR_HEIGHT + PREVIEW_CHROME_TOP_PX;
-    let w = (fill_width * layout.preview_ratio - 16.0).max(0.0);
     let h = (window_height - y - 8.0).max(0.0);
-    (x, y, w, h)
+    match state.left_view {
+        LeftView::Web => {
+            let x = ICON_RAIL_WIDTH + 8.0;
+            let w = (left_w - 16.0).max(0.0);
+            (x, y, w, h)
+        }
+        LeftView::Files => {
+            let list_w = left_w * state.layout.files_split;
+            let x = ICON_RAIL_WIDTH + list_w + DIVIDER_WIDTH + 8.0;
+            let content_w = left_w - list_w - DIVIDER_WIDTH;
+            let w = (content_w - 16.0).max(0.0);
+            (x, y, w, h)
+        }
+    }
 }
 
-/// 逻辑 x 是否落在左二预览列内（含 chrome 与内容区）。焦点路由用:
-/// 点击落在预览列 → 键盘交给 webview;落在别处 → 交回窗口(终端)。
-pub fn is_in_preview_column(x: f32, window_width: f32, layout: &PanelLayout) -> bool {
-    let fill_width =
-        (window_width - layout.project_col_width - layout.ai_col_width - 3.0 * DIVIDER_WIDTH)
-            .max(0.0);
-    let preview_start = layout.project_col_width + DIVIDER_WIDTH;
-    let preview_end = preview_start + fill_width * layout.preview_ratio;
-    x >= preview_start && x < preview_end
+/// 逻辑 x 是否落在左侧文件/Web 预览内容区列内。焦点路由用:点击落在
+/// 该列 → 键盘交给 webview;落在别处 → 交回窗口(终端)。
+pub fn is_in_preview_column(x: f32, _window_width: f32, state: &ShellState) -> bool {
+    if state.left_collapsed {
+        return false;
+    }
+    let left_w = left_zone_width(state);
+    match state.left_view {
+        LeftView::Web => {
+            let start = ICON_RAIL_WIDTH;
+            let end = start + left_w;
+            x >= start && x < end
+        }
+        LeftView::Files => {
+            let list_w = left_w * state.layout.files_split;
+            let start = ICON_RAIL_WIDTH + list_w + DIVIDER_WIDTH;
+            let end = ICON_RAIL_WIDTH + left_w;
+            x >= start && x < end
+        }
+    }
 }
 
-/// 窗口整体逻辑像素尺寸 → 终端 pane 的可用像素尺寸。项目栏/AI 栏固定宽度，
-/// 预览栏与终端栏按 `layout.preview_ratio` 分配剩余空间(三条分隔线各占
-/// `DIVIDER_WIDTH` 已从剩余空间中扣除)。
+/// 窗口整体逻辑像素尺寸 → 终端 pane 的可用像素尺寸。终端只在右侧视图是
+/// `Agent` 且未收起时可见；否则返回零尺寸(main.rs 的调用方在这种情况下
+/// 本就不会真的用这个尺寸去 resize 一个不可见的终端，返回零是安全兜底)。
 pub fn terminal_pane_pixel_size(
     window_width: f32,
     window_height: f32,
-    layout: &PanelLayout,
+    state: &ShellState,
 ) -> (f32, f32) {
-    let fill_width =
-        (window_width - layout.project_col_width - layout.ai_col_width - 3.0 * DIVIDER_WIDTH)
-            .max(0.0);
-    let pane_width = (fill_width * (1.0 - layout.preview_ratio) - CHROME_WIDTH_PX).max(0.0);
+    if state.right_collapsed || state.right_view != RightView::Agent {
+        return (0.0, 0.0);
+    }
+    let right_w = right_zone_width(window_width, state);
+    let content_w = right_w * (1.0 - state.layout.agent_split);
+    let pane_width = (content_w - CHROME_WIDTH_PX).max(0.0);
     let pane_height =
         (window_height - TOP_BAR_HEIGHT - STATUS_BAR_HEIGHT - CHROME_HEIGHT_PX).max(0.0);
     (pane_width, pane_height)
@@ -339,8 +373,6 @@ pub enum Message {
     ConversationsRefreshed(Vec<ConversationMeta>),
     /// 点对话列表某条 → 审阅该对话（当前会话用 Session 源以便回合刷新,历史用 File）。
     ConversationOpen(PathBuf),
-    /// 右一 AI 栏视图切换。
-    AiViewSwitch(AiView),
     /// 切换当前显示的 tab（这里的 `usize` 是 vec 位置——用户点击的是
     /// "屏幕上第几个 tab"，跟稳定 id 是两回事）。
     SelectTab(usize),
@@ -364,9 +396,13 @@ pub enum Message {
     /// 统一算+夹取,不与 main.rs 分摊裁剪逻辑)。构造方为 main.rs 的
     /// `CursorMoved` 续传(Task 4 接线)。
     ColumnDrag { window_width: f32, logical_x: f32 },
-    /// 松开左键,结束拖拽并触发写盘(Task 3 接线持久化)。构造方为 main.rs 的
-    /// `MouseInput{Released}` 分支(Task 4 接线)。
+    /// 松开左键,结束拖拽并触发写盘。构造方为 main.rs 的
+    /// `MouseInput{Released}` 分支。
     ColumnDragEnd,
+    /// 点击左图标栏某图标:已是当前视图则切换收起态,否则切到该视图并展开。
+    LeftIconSelect(LeftView),
+    /// 同上,右图标栏。
+    RightIconSelect(RightView),
     /// daemon 不可用（启动连接失败，或某次会话操作失败）的错误文案，
     /// 终端区以 RED 文案展示。
     DaemonError(String),
@@ -473,14 +509,6 @@ pub enum AddrEvent {
 pub enum ReviewSource {
     Session(usize),
     File(PathBuf),
-}
-
-/// 右一 AI 栏当前视图（P1j）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum AiView {
-    #[default]
-    Conversations,
-    Agents,
 }
 
 /// 回合结束时该审阅视图是否应重解析：仅当它是该会话的活审阅。
@@ -604,8 +632,6 @@ pub struct Workspace {
     review: Option<ReviewView>,
     /// 当前项目的对话列表（扫 Claude 目录；P1j）。
     conversations: Vec<ConversationMeta>,
-    /// 右一 AI 栏当前视图。
-    ai_view: AiView,
     /// tab 前状态点的闪烁相位（true=亮/false=暗）。仅"工作中"(agent
     /// Running) 的 tab 会随它闪；由 main.rs 的定时唤醒每拍翻转
     /// （见 `toggle_blink`/`any_blinking`）。
@@ -630,30 +656,19 @@ pub struct Workspace {
     term_tab_first: usize,
     /// 预览 tab 栏当前最左可见 tab 序号，语义同 `term_tab_first`。
     preview_tab_first: usize,
-    /// 旧四栏宽度/预览终端分配比例;仍喂给旧 `view()`/几何函数,但本任务起
-    /// 不再读盘/写盘(`layout::load`/`save` 已换型吃 `ShellLayout`)——纯
-    /// 编译占位,启动时固定 `PanelLayout::default()`。Task 3 整体切换后
-    /// 连同旧 `view()`/`apply_column_drag` 一起删除。
-    #[allow(dead_code)] // Task 3 整体切换后删除，本任务先建好新字段
-    old_layout: PanelLayout,
     /// 图标栏+左右面板区宽度/分割状态;启动时 `layout::load()` 读盘作
-    /// 起始值。Task 3 起接入新外壳拖拽/渲染。
-    #[allow(dead_code)] // Task 3 起接入新外壳
+    /// 起始值,拖拽结束(`ColumnDragEnd`)写盘。
     shell_layout: ShellLayout,
-    /// 左面板区当前显示的配对视图。Task 3 起接入图标栏切换。
-    #[allow(dead_code)]
+    /// 左面板区当前显示的配对视图(左图标栏点击切换)。
     left_view: LeftView,
-    /// 右面板区当前显示的配对视图。Task 3 起接入图标栏切换。
-    #[allow(dead_code)]
+    /// 右面板区当前显示的配对视图(右图标栏点击切换)。
     right_view: RightView,
-    /// 左面板区是否折叠(图标栏点击切换)。Task 3 起接入。
-    #[allow(dead_code)]
+    /// 左面板区是否折叠(再点一次当前已激活的图标即收起)。
     left_collapsed: bool,
     /// 右面板区是否折叠,语义同 `left_collapsed`。
-    #[allow(dead_code)]
     right_collapsed: bool,
-    /// 当前放大的内容子面板(`None`=未放大)。Task 3 起接入。
-    #[allow(dead_code)]
+    /// 当前放大的内容子面板(`None`=未放大)。Task 5 起接入放大交互。
+    #[allow(dead_code)] // Task 5 接入 pane 放大后消费
     maximized: Option<MaximizedPane>,
     /// 正在拖拽的分隔线;`None` 表示未在拖拽。
     dragging: Option<Divider>,
@@ -746,7 +761,6 @@ impl Workspace {
             acceptance: None,
             review: None,
             conversations: Vec::new(),
-            ai_view: AiView::default(),
             blink_on: true,
             project,
             file_tree,
@@ -758,7 +772,6 @@ impl Workspace {
             git_statuses: HashMap::new(),
             term_tab_first: 0,
             preview_tab_first: 0,
-            old_layout: PanelLayout::default(),
             shell_layout: layout::load(),
             left_view: LeftView::Files,
             right_view: RightView::Agent,
@@ -816,7 +829,6 @@ impl Workspace {
             acceptance: None,
             review: None,
             conversations: Vec::new(),
-            ai_view: AiView::default(),
             blink_on: true,
             project: None,
             file_tree: None,
@@ -828,7 +840,6 @@ impl Workspace {
             git_statuses: HashMap::new(),
             term_tab_first: 0,
             preview_tab_first: 0,
-            old_layout: PanelLayout::default(),
             shell_layout: layout::load(),
             left_view: LeftView::Files,
             right_view: RightView::Agent,
@@ -1097,11 +1108,7 @@ impl Workspace {
                     error: None,
                     expanded: std::collections::HashSet::new(),
                 });
-                self.preview.open_review();
                 self.spawn_review_load(source, path_s);
-            }
-            Message::AiViewSwitch(v) => {
-                self.ai_view = v;
             }
             Message::SelectTab(idx) => {
                 if idx < self.tabs.len() {
@@ -1125,15 +1132,34 @@ impl Workspace {
                 logical_x,
             } => {
                 if let Some(divider) = self.dragging {
-                    self.old_layout =
-                        apply_column_drag(self.old_layout, divider, window_width, logical_x);
+                    let state = self.shell_state();
+                    self.shell_layout = apply_column_drag(state, divider, window_width, logical_x);
                 }
             }
             Message::ColumnDragEnd => {
                 self.dragging = None;
-                // `old_layout` 不再走 `layout::load`/`save`(现在吃 `ShellLayout`)——
-                // 旧四栏拖拽结束后的写盘本任务先停掉,Task 3 整体切换后这条
-                // 分支连同 `old_layout`/`apply_column_drag` 一起删除。
+                let layout = self.shell_layout;
+                self.handle.spawn(async move {
+                    if let Err(e) = layout::save(&layout) {
+                        tracing::warn!("外壳布局写盘失败: {e}");
+                    }
+                });
+            }
+            Message::LeftIconSelect(v) => {
+                if self.left_view == v {
+                    self.left_collapsed = !self.left_collapsed;
+                } else {
+                    self.left_view = v;
+                    self.left_collapsed = false;
+                }
+            }
+            Message::RightIconSelect(v) => {
+                if self.right_view == v {
+                    self.right_collapsed = !self.right_collapsed;
+                } else {
+                    self.right_view = v;
+                    self.right_collapsed = false;
+                }
             }
             Message::DaemonError(message) => self.daemon_error = Some(message),
             Message::TermScroll(delta) => {
@@ -1886,25 +1912,17 @@ impl Workspace {
     /// 态用预览列上部近似(iced 立即模式拿不到精确控件屏坐标);否则用终端
     /// 光标——单元格尺寸由 pane 像素 ÷ 网格推出,不依赖字号常量。
     pub fn ime_cursor_area(&self, window_w: f32, window_h: f32) -> (f32, f32, f32) {
+        let state = self.shell_state();
         if self.preview.addr_editing() || self.acceptance_comment_editing() {
-            return (
-                self.old_layout.project_col_width + 12.0,
-                TOP_BAR_HEIGHT + PREVIEW_CHROME_TOP_PX,
-                20.0,
-            );
+            let (bx, by, _bw, _bh) = preview_content_bounds(window_w, window_h, &state);
+            return (bx + 4.0, by, 20.0);
         }
-        let (pane_w, pane_h) = terminal_pane_pixel_size(window_w, window_h, &self.old_layout);
+        let (pane_w, pane_h) = terminal_pane_pixel_size(window_w, window_h, &state);
         let cell_w = pane_w / self.cols.max(1) as f32;
         let line_h = pane_h / self.rows.max(1) as f32;
-        let fill_width = (window_w
-            - self.old_layout.project_col_width
-            - self.old_layout.ai_col_width
-            - 3.0 * DIVIDER_WIDTH)
-            .max(0.0);
-        let x0 = self.old_layout.project_col_width
-            + 2.0 * DIVIDER_WIDTH
-            + fill_width * self.old_layout.preview_ratio
-            + 8.0;
+        let right_w = right_zone_width(window_w, &state);
+        let list_w = right_w * state.layout.agent_split;
+        let x0 = window_w - ICON_RAIL_WIDTH - right_w + list_w + DIVIDER_WIDTH + 8.0;
         // 终端网格上方 chrome:顶栏 44 + 上 padding 8 + tab 栏 30 + spacing 4(header 已去,P1L #4)
         let y0 = TOP_BAR_HEIGHT + 8.0 + 30.0 + 4.0;
         let (col, row) = self
@@ -1917,15 +1935,40 @@ impl Workspace {
         (x, y, line_h)
     }
 
-    /// 当前四栏宽度状态(main.rs 拖拽追踪/持久化用;`Copy` 类型直接按值返回)。
-    pub fn layout(&self) -> PanelLayout {
-        self.old_layout
+    /// 当前外壳几何状态快照(main.rs 拖拽追踪/离屏几何计算用;`Copy`
+    /// 类型直接按值返回)。
+    pub fn shell_state(&self) -> ShellState {
+        ShellState {
+            layout: self.shell_layout,
+            left_view: self.left_view,
+            left_collapsed: self.left_collapsed,
+            right_view: self.right_view,
+            right_collapsed: self.right_collapsed,
+        }
     }
 
     /// 当前正在拖拽的分隔线(main.rs 拖拽追踪用,调用方为
     /// `on_window_event` 的 `CursorMoved`/`MouseInput{Released}` 分支)。
     pub fn dragging_divider(&self) -> Option<Divider> {
         self.dragging
+    }
+
+    /// 左面板区当前视图(Task 4 持久化消费)。
+    #[allow(dead_code)] // Task 4 接入视图选择持久化后消费
+    pub fn left_view(&self) -> LeftView {
+        self.left_view
+    }
+
+    /// 右面板区当前视图(Task 4 持久化消费)。
+    #[allow(dead_code)] // Task 4 接入视图选择持久化后消费
+    pub fn right_view(&self) -> RightView {
+        self.right_view
+    }
+
+    /// 当前放大的内容子面板(Task 5 消费)。
+    #[allow(dead_code)] // Task 5 接入 pane 放大后消费
+    pub fn maximized(&self) -> Option<MaximizedPane> {
+        self.maximized
     }
 
     /// 项目树右键菜单是否打开(main.rs Esc 键路由用)。
@@ -2081,22 +2124,14 @@ impl Workspace {
         &self,
     ) -> iced_widget::core::Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
         let top = top_bar(self);
-        let col1 = project_pane(self);
-        let col2 = preview_pane(self);
-        let col3 = terminal_pane(self);
-        let col4 = ai_pane(self);
-        let base = column![
-            top,
-            row![
-                col1,
-                divider_bar(Divider::ProjectPreview),
-                col2,
-                divider_bar(Divider::PreviewTerminal),
-                col3,
-                divider_bar(Divider::TerminalAi),
-                col4
-            ]
+        let body = row![
+            left_icon_rail(self),
+            left_panel_area(self),
+            divider_bar(Divider::LeftRight),
+            right_panel_area(self),
+            right_icon_rail(self),
         ];
+        let base = column![top, body];
 
         if self.tree_delete_confirm.is_some() {
             let dismiss = MouseArea::new(
@@ -2420,10 +2455,15 @@ fn top_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
         .into()
 }
 
-fn ai_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+/// 对话列表面板(右面板区"对话"视图的列表侧):当前项目的对话记录卡片,
+/// 活跃对话置顶+金框标记。点某条 → `ConversationOpen` 驱动右侧审阅内容。
+fn conversation_list_pane(
+    ws: &Workspace,
+    width: f32,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let mut content = column![
         row![
-            text("AI").size(14).color(theme::CREAM),
+            text("对话").size(14).color(theme::CREAM),
             text(
                 ws.project
                     .as_ref()
@@ -2437,117 +2477,316 @@ fn ai_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
     ]
     .spacing(8);
 
-    let mk_pill = |label: &'static str, v: AiView| {
-        let active = ws.ai_view == v;
-        button(
-            text(label)
-                .size(13)
-                .color(if active { theme::CREAM } else { theme::DIM }),
-        )
-        .on_press(Message::AiViewSwitch(v))
-        .style(move |_t, _s| button::Style {
-            background: if active {
-                Some(theme::CARD.into())
-            } else {
-                None
-            },
-            text_color: if active { theme::CREAM } else { theme::DIM },
-            border: Border {
-                color: theme::BORDER,
-                width: 0.0,
-                radius: 6.0.into(),
-            },
-            ..button::Style::default()
-        })
-    };
+    let opens = ws.open_transcript_paths();
+    let active_n = ws
+        .conversations
+        .iter()
+        .filter(|c| conversation::is_current_conversation(&c.path, &opens))
+        .count();
     content = content.push(
         row![
-            mk_pill("对话", AiView::Conversations),
-            mk_pill("Agents", AiView::Agents)
+            text("对话").size(11).color(theme::DIM),
+            text(format!("{} 条 · {} 活跃", ws.conversations.len(), active_n))
+                .size(11)
+                .color(theme::DIM),
         ]
         .spacing(6),
     );
-
-    match ws.ai_view {
-        AiView::Conversations => {
-            let opens = ws.open_transcript_paths();
-            let active_n = ws
-                .conversations
-                .iter()
-                .filter(|c| conversation::is_current_conversation(&c.path, &opens))
-                .count();
-            content = content.push(
-                row![
-                    text("对话").size(11).color(theme::DIM),
-                    text(format!("{} 条 · {} 活跃", ws.conversations.len(), active_n))
-                        .size(11)
-                        .color(theme::DIM),
-                ]
-                .spacing(6),
-            );
-            if ws.conversations.is_empty() {
-                content = content.push(text("暂无对话记录").size(13).color(theme::DIM));
-            }
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0);
-            // 当前活跃置顶：先活后历史（列表本身 mtime 倒序）。
-            let mut ordered: Vec<&ConversationMeta> = ws.conversations.iter().collect();
-            ordered.sort_by_key(|c| conversation::is_current_conversation(&c.path, &opens) as u8);
-            ordered.reverse();
-            for c in ordered {
-                let current = conversation::is_current_conversation(&c.path, &opens);
-                let sub = if current {
-                    format!(
-                        "● 当前 · {}",
-                        conversation_sub(&c.agent, c.modified_ms, c.size_bytes, now_ms)
-                    )
-                } else {
-                    conversation_sub(&c.agent, c.modified_ms, c.size_bytes, now_ms)
-                };
-                let sub_color = if current { theme::GREEN } else { theme::DIM };
-                let card = button(
-                    column![
-                        text(c.title.clone()).size(13).color(theme::CREAM),
-                        text(sub).size(10).color(sub_color),
-                    ]
-                    .spacing(4),
-                )
-                .on_press(Message::ConversationOpen(c.path.clone()))
-                .width(Length::Fill)
-                .padding(10)
-                .style(move |_t, _s| button::Style {
-                    background: Some(theme::CARD.into()),
-                    text_color: theme::CREAM,
-                    border: Border {
-                        color: if current { theme::GOLD } else { theme::BORDER },
-                        width: 1.0,
-                        radius: 8.0.into(),
-                    },
-                    ..button::Style::default()
-                });
-                content = content.push(card);
-            }
-        }
-        AiView::Agents => {
-            content = content.push(text("Agents（后续）").size(13).color(theme::DIM));
-        }
+    if ws.conversations.is_empty() {
+        content = content.push(text("暂无对话记录").size(13).color(theme::DIM));
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    // 当前活跃置顶：先活后历史（列表本身 mtime 倒序）。
+    let mut ordered: Vec<&ConversationMeta> = ws.conversations.iter().collect();
+    ordered.sort_by_key(|c| conversation::is_current_conversation(&c.path, &opens) as u8);
+    ordered.reverse();
+    for c in ordered {
+        let current = conversation::is_current_conversation(&c.path, &opens);
+        let sub = if current {
+            format!(
+                "● 当前 · {}",
+                conversation_sub(&c.agent, c.modified_ms, c.size_bytes, now_ms)
+            )
+        } else {
+            conversation_sub(&c.agent, c.modified_ms, c.size_bytes, now_ms)
+        };
+        let sub_color = if current { theme::GREEN } else { theme::DIM };
+        let card = button(
+            column![
+                text(c.title.clone()).size(13).color(theme::CREAM),
+                text(sub).size(10).color(sub_color),
+            ]
+            .spacing(4),
+        )
+        .on_press(Message::ConversationOpen(c.path.clone()))
+        .width(Length::Fill)
+        .padding(10)
+        .style(move |_t, _s| button::Style {
+            background: Some(theme::CARD.into()),
+            text_color: theme::CREAM,
+            border: Border {
+                color: if current { theme::GOLD } else { theme::BORDER },
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..button::Style::default()
+        });
+        content = content.push(card);
     }
 
     container(content.padding(12))
-        .width(Length::Fixed(ws.old_layout.ai_col_width))
+        .width(Length::Fixed(width))
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: Some(theme::PANEL.into()),
-            // 面板不再自带边框(去重复线,与三条 divider_bar 合并为单线,见
+            // 面板不再自带边框(去重复线,与 divider_bar 合并为单线,见
             // divider_bar 上方注释)。左右边界靠 PANEL 与相邻元素的背景色差分。
             ..container::Style::default()
         })
         .into()
 }
 
-fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+/// Agent 列表面板(右面板区"Agent"视图的列表侧):当前只有占位文案,
+/// 真实 agent 托管留后续任务。
+fn agent_list_pane(
+    ws: &Workspace,
+    width: f32,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let content = column![
+        row![
+            text("Agent").size(14).color(theme::CREAM),
+            text(
+                ws.project
+                    .as_ref()
+                    .map(|p| p.name.clone())
+                    .unwrap_or_else(|| "未打开项目".into())
+            )
+            .size(12)
+            .color(theme::DIM),
+        ]
+        .spacing(8),
+        text("Agents（后续）").size(13).color(theme::DIM),
+    ]
+    .spacing(8);
+
+    container(content.padding(12))
+        .width(Length::Fixed(width))
+        .height(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::PANEL.into()),
+            // 面板不再自带边框,原因同 conversation_list_pane。
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// 会话审阅内容面板(右面板区"对话"视图的内容侧):直接读 `ws.review`,
+/// 不经过 `ws.preview` 的 tab 系统——新外壳下审阅是独立面板,不再是
+/// 预览 tab 条里的一个 tab。
+fn review_content_pane(
+    ws: &Workspace,
+    width: f32,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let header = row![text("会话审阅").size(13).color(theme::CREAM)].spacing(4);
+    let mut content = column![header].spacing(4);
+
+    if ws.review.is_some() {
+        content = review_content(content, ws);
+    } else {
+        content = content.push(
+            container(
+                text("暂无审阅内容——点击左侧对话列表中的对话开始审阅")
+                    .size(14)
+                    .color(theme::DIM),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill),
+        );
+    }
+
+    container(content.padding(8))
+        .width(Length::Fixed(width))
+        .height(Length::Fill)
+        .style(move |_theme: &iced_widget::Theme| container::Style {
+            background: Some(theme::PANEL.into()),
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// 单个图标栏按钮:激活态金色描边+底色，未激活态纯图标。
+fn rail_icon_button<'a>(
+    icon: icons::IconKind,
+    active: bool,
+    msg: Message,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let color = if active { theme::GOLD } else { theme::DIM };
+    let inner = container(icons::view(icon, 18.0, color))
+        .width(Length::Fixed(36.0))
+        .height(Length::Fixed(36.0))
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: if active {
+                Some(theme::CARD.into())
+            } else {
+                None
+            },
+            border: if active {
+                Border {
+                    color: theme::GOLD,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                }
+            } else {
+                Border::default()
+            },
+            ..container::Style::default()
+        });
+    button(inner)
+        .on_press(msg)
+        .style(|_t, _s| button::Style {
+            background: None,
+            ..button::Style::default()
+        })
+        .into()
+}
+
+/// 左图标栏:文件列表 / Web 两个图标,点已激活的那个即收起左面板区。
+fn left_icon_rail(
+    ws: &Workspace,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let content = column![
+        rail_icon_button(
+            icons::IconKind::Folder,
+            ws.left_view == LeftView::Files,
+            Message::LeftIconSelect(LeftView::Files),
+        ),
+        rail_icon_button(
+            icons::IconKind::Globe,
+            ws.left_view == LeftView::Web,
+            Message::LeftIconSelect(LeftView::Web),
+        ),
+    ]
+    .spacing(12)
+    .padding(Padding {
+        top: 16.0,
+        ..Padding::ZERO
+    })
+    .align_x(iced_widget::core::Alignment::Center);
+
+    container(content)
+        .width(Length::Fixed(ICON_RAIL_WIDTH))
+        .height(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::PANEL.into()),
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// 右图标栏:Agent / 对话两个图标,语义同 `left_icon_rail`。
+fn right_icon_rail(
+    ws: &Workspace,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let content = column![
+        rail_icon_button(
+            icons::IconKind::Bot,
+            ws.right_view == RightView::Agent,
+            Message::RightIconSelect(RightView::Agent),
+        ),
+        rail_icon_button(
+            icons::IconKind::MessageSquare,
+            ws.right_view == RightView::Conversations,
+            Message::RightIconSelect(RightView::Conversations),
+        ),
+    ]
+    .spacing(12)
+    .padding(Padding {
+        top: 16.0,
+        ..Padding::ZERO
+    })
+    .align_x(iced_widget::core::Alignment::Center);
+
+    container(content)
+        .width(Length::Fixed(ICON_RAIL_WIDTH))
+        .height(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::PANEL.into()),
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// 左面板区:按当前左视图组合"项目树+文件预览"配对或单个 Web 预览面板;
+/// 收起时渲染成空元素(不占宽度)。
+fn left_panel_area(
+    ws: &Workspace,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    if ws.left_collapsed {
+        return column![].into();
+    }
+    let total = ws.shell_layout.left_width;
+    match ws.left_view {
+        LeftView::Files => {
+            let list_w = total * ws.shell_layout.files_split;
+            let content_w = total - list_w - DIVIDER_WIDTH;
+            row![
+                project_pane(ws, list_w),
+                divider_bar(Divider::LeftPairSplit),
+                preview_pane(ws, content_w),
+            ]
+            .into()
+        }
+        LeftView::Web => preview_pane(ws, total),
+    }
+}
+
+/// 右面板区:按当前右视图组合"Agent 列表+终端"或"对话列表+对话审阅"配对;
+/// 收起时渲染成空元素。总宽恒为剩余空间(`FillPortion`),不像左面板区那样
+/// 有持久化的固定像素宽。
+fn right_panel_area(
+    ws: &Workspace,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    if ws.right_collapsed {
+        return column![].into();
+    }
+    match ws.right_view {
+        RightView::Agent => {
+            // 右面板区总宽是剩余空间(Fill)，这里没有一个现成的 f32 总宽——
+            // 用 Length::FillPortion 让 list/content 两块按 agent_split 分配
+            // 剩余空间，不需要预先知道总像素数(与左侧不同，左侧总宽是持久化
+            // 的固定值，右侧从来都是"拿剩下的")。
+            let list_portion = (ws.shell_layout.agent_split * 10_000.0).round() as u16;
+            let content_portion = ((1.0 - ws.shell_layout.agent_split) * 10_000.0).round() as u16;
+            row![
+                container(agent_list_pane(ws, 0.0)).width(Length::FillPortion(list_portion)),
+                divider_bar(Divider::RightPairSplit),
+                container(terminal_pane(ws, 0.0)).width(Length::FillPortion(content_portion)),
+            ]
+            .into()
+        }
+        RightView::Conversations => {
+            let list_portion = (ws.shell_layout.conversations_split * 10_000.0).round() as u16;
+            let content_portion =
+                ((1.0 - ws.shell_layout.conversations_split) * 10_000.0).round() as u16;
+            row![
+                container(conversation_list_pane(ws, 0.0)).width(Length::FillPortion(list_portion)),
+                divider_bar(Divider::RightPairSplit),
+                container(review_content_pane(ws, 0.0)).width(Length::FillPortion(content_portion)),
+            ]
+            .into()
+        }
+    }
+}
+
+fn project_pane(
+    ws: &Workspace,
+    width: f32,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let mut content = column![text("项目").size(14).color(theme::CREAM)].spacing(4);
 
     let open_btn = button(text("打开项目…").size(13).color(theme::CREAM))
@@ -2729,12 +2968,12 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: Some(theme::PANEL.into()),
-            // 面板不再自带边框,原因同 ai_pane。
+            // 面板不再自带边框,原因同 conversation_list_pane。
             ..container::Style::default()
         });
 
     container(column![body, project_status_bar(ws)])
-        .width(Length::Fixed(ws.old_layout.project_col_width))
+        .width(Length::Fixed(width))
         .height(Length::Fill)
         .into()
 }
@@ -2813,7 +3052,10 @@ fn status_bar_container<'a>(
         .into()
 }
 
-fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn preview_pane(
+    ws: &Workspace,
+    width: f32,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     // tab 栏:箭头翻页(到头变灰) + 每 tab 选择按钮 + 关闭 ×,尾接"打开文件…"常驻.
     // P1L T5 验收返工:同 term `tab_bar`,横向 scrollable 换成索引窗口化 + clip.
     let widths: Vec<f32> = ws
@@ -2926,9 +3168,7 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
         content = content.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
     }
 
-    if ws.preview.review_active() {
-        content = review_content(content, ws);
-    } else if ws.preview.acceptance_active() {
+    if ws.preview.acceptance_active() {
         content = acceptance_content(content, ws);
     } else if ws.preview.tabs().is_empty() {
         content = content.push(
@@ -2942,13 +3182,12 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
         );
     }
 
-    let preview_portion = (ws.old_layout.preview_ratio * 10_000.0).round() as u16;
     container(content.padding(8))
-        .width(Length::FillPortion(preview_portion))
+        .width(Length::Fixed(width))
         .height(Length::Fill)
         .style(move |_theme: &iced_widget::Theme| container::Style {
             background: Some(theme::PANEL.into()),
-            // 面板不再自带边框,原因同 ai_pane。
+            // 面板不再自带边框,原因同 conversation_list_pane。
             ..container::Style::default()
         })
         .into()
@@ -2957,6 +3196,7 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
 /// 终端栏：表头 + tab 栏 + （可能的错误文案）+ 当前激活 tab 的终端网格。
 fn terminal_pane(
     ws: &Workspace,
+    width: f32,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let mut content = column![tab_bar(ws)].spacing(4);
 
@@ -3014,13 +3254,12 @@ fn terminal_pane(
         .height(Length::Fill)
         .style(move |_theme: &iced_widget::Theme| container::Style {
             background: Some(theme::TERM_BG.into()),
-            // 面板不再自带边框,原因同 ai_pane。
+            // 面板不再自带边框,原因同 conversation_list_pane。
             ..container::Style::default()
         });
 
-    let terminal_portion = ((1.0 - ws.old_layout.preview_ratio) * 10_000.0).round() as u16;
     container(column![body, terminal_status_bar(ws)])
-        .width(Length::FillPortion(terminal_portion))
+        .width(Length::Fixed(width))
         .height(Length::Fill)
         .into()
 }
@@ -3637,15 +3876,26 @@ mod tests {
         );
     }
 
+    /// 测试基准态:默认布局、左=文件列表、右=Agent、两侧都展开。
+    fn test_state() -> ShellState {
+        ShellState {
+            layout: ShellLayout::default(),
+            left_view: LeftView::Files,
+            left_collapsed: false,
+            right_view: RightView::Agent,
+            right_collapsed: false,
+        }
+    }
+
     #[test]
-    fn preview_content_bounds_is_inside_col2() {
-        let layout = PanelLayout::default();
-        let (x, y, w, h) = preview_content_bounds(1440.0, 900.0, &layout);
-        assert!(
-            x > layout.project_col_width && x < layout.project_col_width + 30.0,
-            "x={x}"
-        );
-        assert!((410.0..=460.0).contains(&w), "w={w}");
+    fn preview_content_bounds_is_inside_left_content_column() {
+        // 左面板区 640 宽,项目树占 0.35(=224),预览内容区在其右侧(过分隔线)。
+        let state = test_state();
+        let (x, y, w, h) = preview_content_bounds(1440.0, 900.0, &state);
+        let list_w = state.layout.left_width * state.layout.files_split;
+        let col_start = ICON_RAIL_WIDTH + list_w + DIVIDER_WIDTH;
+        assert!(x >= col_start && x < col_start + 16.0, "x={x}");
+        assert!((380.0..=420.0).contains(&w), "w={w}");
         assert!(
             y > 104.0 && y < 134.0,
             "y={y}(顶栏 44 + tab 栏+地址栏之下,表头已去)"
@@ -3654,9 +3904,33 @@ mod tests {
     }
 
     #[test]
+    fn preview_content_bounds_web_view_spans_whole_left_zone() {
+        // Web 视图没有项目树配对,预览内容区从图标栏右侧起占满左面板区。
+        let state = ShellState {
+            left_view: LeftView::Web,
+            ..test_state()
+        };
+        let (x, _, w, _) = preview_content_bounds(1440.0, 900.0, &state);
+        assert_eq!(x, ICON_RAIL_WIDTH + 8.0);
+        assert_eq!(w, state.layout.left_width - 16.0);
+    }
+
+    #[test]
+    fn preview_content_bounds_zero_when_left_collapsed() {
+        let state = ShellState {
+            left_collapsed: true,
+            ..test_state()
+        };
+        assert_eq!(
+            preview_content_bounds(1440.0, 900.0, &state),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+    }
+
+    #[test]
     fn terminal_pane_height_excludes_top_and_status_bars() {
-        let layout = PanelLayout::default();
-        let (_, h_with) = terminal_pane_pixel_size(1440.0, 900.0, &layout);
+        let state = test_state();
+        let (_, h_with) = terminal_pane_pixel_size(1440.0, 900.0, &state);
         let only_chrome = 900.0 - CHROME_HEIGHT_PX;
         assert!(
             (only_chrome - h_with - (TOP_BAR_HEIGHT + STATUS_BAR_HEIGHT)).abs() < 0.01,
@@ -3665,9 +3939,30 @@ mod tests {
     }
 
     #[test]
+    fn terminal_pane_zero_when_terminal_not_visible() {
+        // 终端只在右侧=Agent 且未收起时可见,否则零尺寸(不 resize 不可见终端)。
+        let collapsed = ShellState {
+            right_collapsed: true,
+            ..test_state()
+        };
+        assert_eq!(
+            terminal_pane_pixel_size(1440.0, 900.0, &collapsed),
+            (0.0, 0.0)
+        );
+        let conversations = ShellState {
+            right_view: RightView::Conversations,
+            ..test_state()
+        };
+        assert_eq!(
+            terminal_pane_pixel_size(1440.0, 900.0, &conversations),
+            (0.0, 0.0)
+        );
+    }
+
+    #[test]
     fn preview_content_bounds_never_negative() {
-        let layout = PanelLayout::default();
-        let (_, _, w, h) = preview_content_bounds(100.0, 50.0, &layout);
+        let state = test_state();
+        let (_, _, w, h) = preview_content_bounds(100.0, 50.0, &state);
         assert!(w >= 0.0 && h >= 0.0);
     }
 
@@ -3721,11 +4016,6 @@ mod tests {
     }
 
     #[test]
-    fn ai_view_default_is_conversations() {
-        assert_eq!(AiView::default(), AiView::Conversations);
-    }
-
-    #[test]
     fn conversation_sub_line_format() {
         let s = conversation_sub("claude", 1000, 78 * 1024, 1000);
         assert!(s.starts_with("claude · "), "含 agent 前缀: {s}");
@@ -3769,81 +4059,129 @@ mod tests {
 
     #[test]
     fn preview_column_hit_test() {
-        // 窗口宽 1440:项目栏 240 + AI 栏 280 + 三条分隔线各 8px,剩余按 0.5 对半分。
-        let layout = PanelLayout::default();
-        assert!(!is_in_preview_column(100.0, 1440.0, &layout), "落在项目栏");
+        // 窗口宽 1440:左图标栏 48 + 左面板区 640(项目树 0.35=224 + 分隔线 8)。
+        // 预览内容列 = [280, 688)。
+        let state = test_state();
+        assert!(!is_in_preview_column(100.0, 1440.0, &state), "落在项目树列");
         assert!(
-            is_in_preview_column(248.0, 1440.0, &layout),
-            "预览列左边界(过divider1)"
+            is_in_preview_column(280.0, 1440.0, &state),
+            "预览列左边界(过配对分隔线)"
         );
-        assert!(is_in_preview_column(690.0, 1440.0, &layout), "预览列内");
-        assert!(
-            !is_in_preview_column(708.0, 1440.0, &layout),
-            "已进divider2/终端列"
-        );
-        assert!(!is_in_preview_column(1200.0, 1440.0, &layout), "终端列");
+        assert!(is_in_preview_column(500.0, 1440.0, &state), "预览列内");
+        assert!(!is_in_preview_column(700.0, 1440.0, &state), "已进右面板区");
+        assert!(!is_in_preview_column(1200.0, 1440.0, &state), "右面板区内");
     }
 
     #[test]
-    fn panel_layout_default_matches_legacy_consts() {
-        let l = PanelLayout::default();
-        assert_eq!(l.project_col_width, 240.0);
-        assert_eq!(l.ai_col_width, 280.0);
-        assert_eq!(l.preview_ratio, 0.5);
-    }
-
-    #[test]
-    fn clamp_project_width_within_bounds() {
-        let layout = PanelLayout::default();
-        let new_layout = apply_column_drag(layout, Divider::ProjectPreview, 1440.0, 300.0);
-        assert_eq!(new_layout.project_col_width, 300.0);
-    }
-
-    #[test]
-    fn clamp_project_width_to_minimum() {
-        let layout = PanelLayout::default();
-        let new_layout = apply_column_drag(layout, Divider::ProjectPreview, 1440.0, 10.0);
-        assert_eq!(new_layout.project_col_width, MIN_PROJECT_COL_WIDTH);
-    }
-
-    #[test]
-    fn clamp_project_width_when_window_too_narrow_does_not_panic() {
-        let layout = PanelLayout::default();
-        let new_layout = apply_column_drag(layout, Divider::ProjectPreview, 700.0, 650.0);
-        assert_eq!(new_layout.project_col_width, MIN_PROJECT_COL_WIDTH);
-    }
-
-    #[test]
-    fn clamp_ai_width_within_bounds() {
-        let layout = PanelLayout::default();
-        let new_layout = apply_column_drag(layout, Divider::TerminalAi, 1440.0, 1140.0);
-        assert_eq!(new_layout.ai_col_width, 300.0);
-    }
-
-    #[test]
-    fn clamp_preview_ratio_within_bounds() {
-        let layout = PanelLayout::default();
-        let new_layout = apply_column_drag(layout, Divider::PreviewTerminal, 1440.0, 875.2);
-        assert!((new_layout.preview_ratio - 0.7).abs() < 0.01);
-    }
-
-    #[test]
-    fn clamp_preview_ratio_to_range() {
-        let layout = PanelLayout::default();
-        let new_layout = apply_column_drag(layout, Divider::PreviewTerminal, 1440.0, 10.0);
-        assert_eq!(new_layout.preview_ratio, MIN_PREVIEW_RATIO);
-    }
-
-    #[test]
-    fn clamp_preview_ratio_skips_update_on_zero_fill_width() {
-        // project+ai 已经吃满窗口宽度,fill_width<=0,应原样返回不 panic(除零防御)。
-        let layout = PanelLayout {
-            project_col_width: 1000.0,
-            ai_col_width: 1000.0,
-            preview_ratio: 0.5,
+    fn preview_column_hit_test_left_collapsed_is_never_hit() {
+        let state = ShellState {
+            left_collapsed: true,
+            ..test_state()
         };
-        let new_layout = apply_column_drag(layout, Divider::PreviewTerminal, 1440.0, 500.0);
-        assert_eq!(new_layout, layout);
+        assert!(!is_in_preview_column(300.0, 1440.0, &state));
+    }
+
+    #[test]
+    fn clamp_left_width_within_bounds() {
+        let state = test_state();
+        let l = apply_column_drag(state, Divider::LeftRight, 1440.0, 500.0);
+        assert_eq!(l.left_width, 500.0 - ICON_RAIL_WIDTH);
+    }
+
+    #[test]
+    fn clamp_left_width_to_minimum() {
+        let state = test_state();
+        let l = apply_column_drag(state, Divider::LeftRight, 1440.0, 10.0);
+        assert_eq!(l.left_width, MIN_ZONE_WIDTH);
+    }
+
+    #[test]
+    fn clamp_left_width_to_maximum_keeps_right_zone_alive() {
+        // 拖到最右也要给右面板区留 MIN_ZONE_WIDTH。
+        let state = test_state();
+        let l = apply_column_drag(state, Divider::LeftRight, 1440.0, 1430.0);
+        let expected = 1440.0 - 2.0 * ICON_RAIL_WIDTH - DIVIDER_WIDTH - MIN_ZONE_WIDTH;
+        assert_eq!(l.left_width, expected);
+    }
+
+    #[test]
+    fn clamp_left_width_when_window_too_narrow_does_not_panic() {
+        // 窗口窄到上界低于下界时,`.max(下限)` 把上界垫平,恒不 panic。
+        let state = test_state();
+        let l = apply_column_drag(state, Divider::LeftRight, 700.0, 650.0);
+        assert_eq!(l.left_width, MIN_ZONE_WIDTH);
+    }
+
+    #[test]
+    fn clamp_files_split_within_bounds() {
+        let state = test_state();
+        // 左面板区 640 宽,拖到其中点 → 0.5。
+        let l = apply_column_drag(
+            state,
+            Divider::LeftPairSplit,
+            1440.0,
+            ICON_RAIL_WIDTH + 320.0,
+        );
+        assert!((l.files_split - 0.5).abs() < 0.001, "{}", l.files_split);
+    }
+
+    #[test]
+    fn clamp_files_split_to_range() {
+        let state = test_state();
+        let l = apply_column_drag(state, Divider::LeftPairSplit, 1440.0, 10.0);
+        assert_eq!(l.files_split, MIN_SPLIT_RATIO);
+        let l = apply_column_drag(state, Divider::LeftPairSplit, 1440.0, 5000.0);
+        assert_eq!(l.files_split, MAX_SPLIT_RATIO);
+    }
+
+    #[test]
+    fn split_drag_skips_update_on_zero_zone_width() {
+        // 该侧已收起 → 区宽 0,除零防御:原样返回不 panic。
+        let left_gone = ShellState {
+            left_collapsed: true,
+            ..test_state()
+        };
+        assert_eq!(
+            apply_column_drag(left_gone, Divider::LeftPairSplit, 1440.0, 500.0),
+            left_gone.layout
+        );
+        let right_gone = ShellState {
+            right_collapsed: true,
+            ..test_state()
+        };
+        assert_eq!(
+            apply_column_drag(right_gone, Divider::RightPairSplit, 1440.0, 1000.0),
+            right_gone.layout
+        );
+    }
+
+    #[test]
+    fn right_pair_split_writes_field_of_current_right_view() {
+        // 右面板区宽 = 1440 - 2*48 - 640 - 8 = 696,左边缘 x = 1440-48-696 = 696。
+        let agent = test_state();
+        let l = apply_column_drag(agent, Divider::RightPairSplit, 1440.0, 696.0 + 348.0);
+        assert!((l.agent_split - 0.5).abs() < 0.001, "{}", l.agent_split);
+        assert_eq!(
+            l.conversations_split, agent.layout.conversations_split,
+            "不该串写另一配对的比例"
+        );
+
+        let conversations = ShellState {
+            right_view: RightView::Conversations,
+            ..test_state()
+        };
+        let l = apply_column_drag(
+            conversations,
+            Divider::RightPairSplit,
+            1440.0,
+            696.0 + 348.0,
+        );
+        assert!(
+            (l.conversations_split - 0.5).abs() < 0.001,
+            "{}",
+            l.conversations_split
+        );
+        assert_eq!(l.agent_split, conversations.layout.agent_split);
     }
 
     #[test]

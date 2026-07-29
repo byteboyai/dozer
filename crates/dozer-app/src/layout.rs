@@ -14,7 +14,6 @@ pub fn load() -> ShellLayout {
     load_from(&default_path())
 }
 
-#[allow(dead_code)] // Task 3 起接入新外壳的 ColumnDragEnd 写盘
 pub fn save(layout: &ShellLayout) -> std::io::Result<()> {
     save_to(&default_path(), layout)
 }
