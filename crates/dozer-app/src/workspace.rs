@@ -139,8 +139,9 @@ struct TreeEdit {
 }
 
 /// 每条分隔线的命中区/渲染宽度(逻辑像素)。视觉线本身 2px,居中于此区间内。
-/// 四栏几何公式必须把 `3 * DIVIDER_WIDTH` 从剩余空间里扣掉,否则 webview
-/// bounds/IME 光标/命中测试会和 `view()` 里 `row!` 实际渲染的像素错位。
+/// 几何公式必须把每一条实际渲染出来的分隔线从可分配空间里扣掉(LeftRight
+/// 一条恒在 + 当前配对视图内部一条),否则 webview bounds/IME 光标/命中
+/// 测试会和 `view()` 里 `row!` 实际渲染的像素错位。
 const DIVIDER_WIDTH: f32 = 8.0;
 
 const MIN_ZONE_WIDTH: f32 = 320.0;
@@ -160,26 +161,42 @@ pub struct ShellState {
     pub right_collapsed: bool,
 }
 
-/// 左面板区当前实际宽度(逻辑像素)；收起时为 0。
-fn left_zone_width(state: &ShellState) -> f32 {
+/// 两条图标栏与那条恒在的 `LeftRight` 分隔线之外，留给左右两个面板区的
+/// 总宽。`view()` 无条件渲染 `divider_bar(Divider::LeftRight)`(收起某侧也
+/// 保留拖拽手柄)，所以这 8px 恒扣，不看收起态——早先版本只在两侧都可见时
+/// 扣，导致收起一侧后几何比实际渲染宽 8px 且原点左偏 8px。
+fn zones_width(window_width: f32) -> f32 {
+    (window_width - 2.0 * ICON_RAIL_WIDTH - DIVIDER_WIDTH).max(0.0)
+}
+
+/// 左面板区当前实际宽度(逻辑像素)：收起时 0；对侧收起时独占 `zones_width`
+/// (与 `left_panel_area` 此时渲染成 `Length::Fill` 对应)；否则用持久化宽。
+fn left_zone_width(window_width: f32, state: &ShellState) -> f32 {
     if state.left_collapsed {
         0.0
+    } else if state.right_collapsed {
+        zones_width(window_width)
     } else {
         state.layout.left_width
     }
 }
 
-/// 右面板区当前实际宽度(逻辑像素)；收起时为 0；否则是"总宽减两条图标栏、
-/// 减左面板区、减(两侧都可见时的)一条分隔线"的剩余空间——右面板区不像
-/// 左面板区那样有独立持久化宽度，恒为 Fill。
+/// 右面板区当前实际宽度(逻辑像素)；收起时为 0；否则是 `zones_width` 里
+/// 左面板区没占走的剩余空间——右面板区不像左面板区那样有独立持久化宽度，
+/// 恒为 Fill。
 fn right_zone_width(window_width: f32, state: &ShellState) -> f32 {
     if state.right_collapsed {
         return 0.0;
     }
-    let left_w = left_zone_width(state);
-    let both_visible = !state.left_collapsed && !state.right_collapsed;
-    let divider_w = if both_visible { DIVIDER_WIDTH } else { 0.0 };
-    (window_width - 2.0 * ICON_RAIL_WIDTH - left_w - divider_w).max(0.0)
+    (zones_width(window_width) - left_zone_width(window_width, state)).max(0.0)
+}
+
+/// 配对视图内部可按 split 比例分配的宽度 = 区宽减去中间那条分隔线。
+/// 两侧配对都用 `FillPortion` 渲染内部分割，而 `FillPortion` 是在扣掉固定
+/// 宽的分隔线之后才按比例分剩余空间的，所以比例的分母必须是这个值，不是
+/// 区宽本身。
+fn pair_content_width(zone_width: f32) -> f32 {
+    (zone_width - DIVIDER_WIDTH).max(0.0)
 }
 
 /// 拖拽某条分隔线到窗口逻辑 x 坐标 `logical_x` 后的新 `ShellLayout`。
@@ -194,10 +211,7 @@ fn apply_column_drag(
 ) -> ShellLayout {
     match divider {
         Divider::LeftRight => {
-            let both_visible = !state.left_collapsed && !state.right_collapsed;
-            let divider_w = if both_visible { DIVIDER_WIDTH } else { 0.0 };
-            let upper = (window_width - 2.0 * ICON_RAIL_WIDTH - divider_w - MIN_ZONE_WIDTH)
-                .max(MIN_ZONE_WIDTH);
+            let upper = (zones_width(window_width) - MIN_ZONE_WIDTH).max(MIN_ZONE_WIDTH);
             let new_left = (logical_x - ICON_RAIL_WIDTH).clamp(MIN_ZONE_WIDTH, upper);
             ShellLayout {
                 left_width: new_left,
@@ -205,12 +219,12 @@ fn apply_column_drag(
             }
         }
         Divider::LeftPairSplit => {
-            let left_w = left_zone_width(&state);
-            if left_w <= 0.0 {
+            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            if pair_w <= 0.0 {
                 return state.layout;
             }
             let ratio =
-                ((logical_x - ICON_RAIL_WIDTH) / left_w).clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO);
+                ((logical_x - ICON_RAIL_WIDTH) / pair_w).clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO);
             ShellLayout {
                 files_split: ratio,
                 ..state.layout
@@ -218,11 +232,12 @@ fn apply_column_drag(
         }
         Divider::RightPairSplit => {
             let right_w = right_zone_width(window_width, &state);
-            if right_w <= 0.0 {
+            let pair_w = pair_content_width(right_w);
+            if pair_w <= 0.0 {
                 return state.layout;
             }
             let right_x0 = window_width - ICON_RAIL_WIDTH - right_w;
-            let ratio = ((logical_x - right_x0) / right_w).clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO);
+            let ratio = ((logical_x - right_x0) / pair_w).clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO);
             match state.right_view {
                 RightView::Agent => ShellLayout {
                     agent_split: ratio,
@@ -266,14 +281,14 @@ const PREVIEW_CHROME_TOP_PX: f32 = 8.0 + 30.0 + 30.0 + 8.0;
 /// 窗口逻辑尺寸 → 左侧文件/Web 预览内容区矩形(逻辑像素 x/y/w/h)，供
 /// main.rs 摆放 wry webview 用。左侧收起时返回零尺寸矩形。
 pub fn preview_content_bounds(
-    _window_width: f32,
+    window_width: f32,
     window_height: f32,
     state: &ShellState,
 ) -> (f32, f32, f32, f32) {
     if state.left_collapsed {
         return (0.0, 0.0, 0.0, 0.0);
     }
-    let left_w = left_zone_width(state);
+    let left_w = left_zone_width(window_width, state);
     let y = TOP_BAR_HEIGHT + PREVIEW_CHROME_TOP_PX;
     let h = (window_height - y - 8.0).max(0.0);
     match state.left_view {
@@ -283,9 +298,10 @@ pub fn preview_content_bounds(
             (x, y, w, h)
         }
         LeftView::Files => {
-            let list_w = left_w * state.layout.files_split;
+            let pair_w = pair_content_width(left_w);
+            let list_w = pair_w * state.layout.files_split;
+            let content_w = pair_w * (1.0 - state.layout.files_split);
             let x = ICON_RAIL_WIDTH + list_w + DIVIDER_WIDTH + 8.0;
-            let content_w = left_w - list_w - DIVIDER_WIDTH;
             let w = (content_w - 16.0).max(0.0);
             (x, y, w, h)
         }
@@ -294,11 +310,11 @@ pub fn preview_content_bounds(
 
 /// 逻辑 x 是否落在左侧文件/Web 预览内容区列内。焦点路由用:点击落在
 /// 该列 → 键盘交给 webview;落在别处 → 交回窗口(终端)。
-pub fn is_in_preview_column(x: f32, _window_width: f32, state: &ShellState) -> bool {
+pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bool {
     if state.left_collapsed {
         return false;
     }
-    let left_w = left_zone_width(state);
+    let left_w = left_zone_width(window_width, state);
     match state.left_view {
         LeftView::Web => {
             let start = ICON_RAIL_WIDTH;
@@ -306,7 +322,7 @@ pub fn is_in_preview_column(x: f32, _window_width: f32, state: &ShellState) -> b
             x >= start && x < end
         }
         LeftView::Files => {
-            let list_w = left_w * state.layout.files_split;
+            let list_w = pair_content_width(left_w) * state.layout.files_split;
             let start = ICON_RAIL_WIDTH + list_w + DIVIDER_WIDTH;
             let end = ICON_RAIL_WIDTH + left_w;
             x >= start && x < end
@@ -326,7 +342,7 @@ pub fn terminal_pane_pixel_size(
         return (0.0, 0.0);
     }
     let right_w = right_zone_width(window_width, state);
-    let content_w = right_w * (1.0 - state.layout.agent_split);
+    let content_w = pair_content_width(right_w) * (1.0 - state.layout.agent_split);
     let pane_width = (content_w - CHROME_WIDTH_PX).max(0.0);
     let pane_height =
         (window_height - TOP_BAR_HEIGHT - STATUS_BAR_HEIGHT - CHROME_HEIGHT_PX).max(0.0);
@@ -2459,7 +2475,7 @@ fn top_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
 /// 活跃对话置顶+金框标记。点某条 → `ConversationOpen` 驱动右侧审阅内容。
 fn conversation_list_pane(
     ws: &Workspace,
-    width: f32,
+    width: Length,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let mut content = column![
         row![
@@ -2538,7 +2554,7 @@ fn conversation_list_pane(
     }
 
     container(content.padding(12))
-        .width(Length::Fixed(width))
+        .width(width)
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: Some(theme::PANEL.into()),
@@ -2553,7 +2569,7 @@ fn conversation_list_pane(
 /// 真实 agent 托管留后续任务。
 fn agent_list_pane(
     ws: &Workspace,
-    width: f32,
+    width: Length,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let content = column![
         row![
@@ -2573,7 +2589,7 @@ fn agent_list_pane(
     .spacing(8);
 
     container(content.padding(12))
-        .width(Length::Fixed(width))
+        .width(width)
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: Some(theme::PANEL.into()),
@@ -2588,7 +2604,7 @@ fn agent_list_pane(
 /// 预览 tab 条里的一个 tab。
 fn review_content_pane(
     ws: &Workspace,
-    width: f32,
+    width: Length,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let header = row![text("会话审阅").size(13).color(theme::CREAM)].spacing(4);
     let mut content = column![header].spacing(4);
@@ -2608,7 +2624,7 @@ fn review_content_pane(
     }
 
     container(content.padding(8))
-        .width(Length::Fixed(width))
+        .width(width)
         .height(Length::Fill)
         .style(move |_theme: &iced_widget::Theme| container::Style {
             background: Some(theme::PANEL.into()),
@@ -2721,24 +2737,44 @@ fn right_icon_rail(
         .into()
 }
 
+/// 配对视图内部"列表:内容"的 `FillPortion` 权重对。`FillPortion` 在扣掉
+/// 中间固定宽的分隔线之后按权重分剩余空间,与 `pair_content_width` 同源。
+fn split_portions(split: f32) -> (u16, u16) {
+    let list = (split * 10_000.0).round() as u16;
+    let content = ((1.0 - split) * 10_000.0).round() as u16;
+    (list, content)
+}
+
 /// 左面板区:按当前左视图组合"项目树+文件预览"配对或单个 Web 预览面板;
 /// 收起时渲染成空元素(不占宽度)。
+///
+/// 宽度语义与 `left_zone_width` 严格对应:对侧收起时本区 `Fill` 独占
+/// `zones_width`(否则整行会缩到"两条图标栏+一条分隔线"那么宽,右图标栏
+/// 跑到窗口中间去);两侧都收起时由本区出一个 `Fill` 空白把窗口撑满。
 fn left_panel_area(
     ws: &Workspace,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     if ws.left_collapsed {
-        return column![].into();
+        return if ws.right_collapsed {
+            iced_widget::space::horizontal().into()
+        } else {
+            column![].into()
+        };
     }
-    let total = ws.shell_layout.left_width;
+    let total = if ws.right_collapsed {
+        Length::Fill
+    } else {
+        Length::Fixed(ws.shell_layout.left_width)
+    };
     match ws.left_view {
         LeftView::Files => {
-            let list_w = total * ws.shell_layout.files_split;
-            let content_w = total - list_w - DIVIDER_WIDTH;
+            let (list_portion, content_portion) = split_portions(ws.shell_layout.files_split);
             row![
-                project_pane(ws, list_w),
+                project_pane(ws, Length::FillPortion(list_portion)),
                 divider_bar(Divider::LeftPairSplit),
-                preview_pane(ws, content_w),
+                preview_pane(ws, Length::FillPortion(content_portion)),
             ]
+            .width(total)
             .into()
         }
         LeftView::Web => preview_pane(ws, total),
@@ -2746,8 +2782,13 @@ fn left_panel_area(
 }
 
 /// 右面板区:按当前右视图组合"Agent 列表+终端"或"对话列表+对话审阅"配对;
-/// 收起时渲染成空元素。总宽恒为剩余空间(`FillPortion`),不像左面板区那样
-/// 有持久化的固定像素宽。
+/// 收起时渲染成空元素。总宽恒为剩余空间(`Fill`),不像左面板区那样有持久化
+/// 的固定像素宽——所以内部分割只能用 `FillPortion` 表达,不能预先算像素。
+///
+/// 两块 pane 的宽度直接由它们自己的外层容器声明成 `FillPortion`,不再套一层
+/// 包装容器:`Limits::width(Fixed(w))` 会把子元素的 min/max 都钉成 `w`,父级
+/// 的 `FillPortion` 只约束包装容器本身、传不进子元素,曾导致这四块 pane 全部
+/// 以 0 宽布局(右半边整片空白)。
 fn right_panel_area(
     ws: &Workspace,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
@@ -2756,28 +2797,24 @@ fn right_panel_area(
     }
     match ws.right_view {
         RightView::Agent => {
-            // 右面板区总宽是剩余空间(Fill)，这里没有一个现成的 f32 总宽——
-            // 用 Length::FillPortion 让 list/content 两块按 agent_split 分配
-            // 剩余空间，不需要预先知道总像素数(与左侧不同，左侧总宽是持久化
-            // 的固定值，右侧从来都是"拿剩下的")。
-            let list_portion = (ws.shell_layout.agent_split * 10_000.0).round() as u16;
-            let content_portion = ((1.0 - ws.shell_layout.agent_split) * 10_000.0).round() as u16;
+            let (list_portion, content_portion) = split_portions(ws.shell_layout.agent_split);
             row![
-                container(agent_list_pane(ws, 0.0)).width(Length::FillPortion(list_portion)),
+                agent_list_pane(ws, Length::FillPortion(list_portion)),
                 divider_bar(Divider::RightPairSplit),
-                container(terminal_pane(ws, 0.0)).width(Length::FillPortion(content_portion)),
+                terminal_pane(ws, Length::FillPortion(content_portion)),
             ]
+            .width(Length::Fill)
             .into()
         }
         RightView::Conversations => {
-            let list_portion = (ws.shell_layout.conversations_split * 10_000.0).round() as u16;
-            let content_portion =
-                ((1.0 - ws.shell_layout.conversations_split) * 10_000.0).round() as u16;
+            let (list_portion, content_portion) =
+                split_portions(ws.shell_layout.conversations_split);
             row![
-                container(conversation_list_pane(ws, 0.0)).width(Length::FillPortion(list_portion)),
+                conversation_list_pane(ws, Length::FillPortion(list_portion)),
                 divider_bar(Divider::RightPairSplit),
-                container(review_content_pane(ws, 0.0)).width(Length::FillPortion(content_portion)),
+                review_content_pane(ws, Length::FillPortion(content_portion)),
             ]
+            .width(Length::Fill)
             .into()
         }
     }
@@ -2785,7 +2822,7 @@ fn right_panel_area(
 
 fn project_pane(
     ws: &Workspace,
-    width: f32,
+    width: Length,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let mut content = column![text("项目").size(14).color(theme::CREAM)].spacing(4);
 
@@ -2973,7 +3010,7 @@ fn project_pane(
         });
 
     container(column![body, project_status_bar(ws)])
-        .width(Length::Fixed(width))
+        .width(width)
         .height(Length::Fill)
         .into()
 }
@@ -3054,7 +3091,7 @@ fn status_bar_container<'a>(
 
 fn preview_pane(
     ws: &Workspace,
-    width: f32,
+    width: Length,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     // tab 栏:箭头翻页(到头变灰) + 每 tab 选择按钮 + 关闭 ×,尾接"打开文件…"常驻.
     // P1L T5 验收返工:同 term `tab_bar`,横向 scrollable 换成索引窗口化 + clip.
@@ -3183,7 +3220,7 @@ fn preview_pane(
     }
 
     container(content.padding(8))
-        .width(Length::Fixed(width))
+        .width(width)
         .height(Length::Fill)
         .style(move |_theme: &iced_widget::Theme| container::Style {
             background: Some(theme::PANEL.into()),
@@ -3196,7 +3233,7 @@ fn preview_pane(
 /// 终端栏：表头 + tab 栏 + （可能的错误文案）+ 当前激活 tab 的终端网格。
 fn terminal_pane(
     ws: &Workspace,
-    width: f32,
+    width: Length,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let mut content = column![tab_bar(ws)].spacing(4);
 
@@ -3259,7 +3296,7 @@ fn terminal_pane(
         });
 
     container(column![body, terminal_status_bar(ws)])
-        .width(Length::Fixed(width))
+        .width(width)
         .height(Length::Fill)
         .into()
 }
@@ -4115,12 +4152,12 @@ mod tests {
     #[test]
     fn clamp_files_split_within_bounds() {
         let state = test_state();
-        // 左面板区 640 宽,拖到其中点 → 0.5。
+        // 左面板区 640 宽,配对内容宽 = 640-8=632,拖到其中点(316)→ 0.5。
         let l = apply_column_drag(
             state,
             Divider::LeftPairSplit,
             1440.0,
-            ICON_RAIL_WIDTH + 320.0,
+            ICON_RAIL_WIDTH + 316.0,
         );
         assert!((l.files_split - 0.5).abs() < 0.001, "{}", l.files_split);
     }
@@ -4157,9 +4194,10 @@ mod tests {
 
     #[test]
     fn right_pair_split_writes_field_of_current_right_view() {
-        // 右面板区宽 = 1440 - 2*48 - 640 - 8 = 696,左边缘 x = 1440-48-696 = 696。
+        // 右面板区宽 = 1440 - 2*48 - 640 - 8 = 696,左边缘 x = 1440-48-696 = 696;
+        // 配对内容宽 = 696-8=688,其中点 344 处拖动 → 0.5。
         let agent = test_state();
-        let l = apply_column_drag(agent, Divider::RightPairSplit, 1440.0, 696.0 + 348.0);
+        let l = apply_column_drag(agent, Divider::RightPairSplit, 1440.0, 696.0 + 344.0);
         assert!((l.agent_split - 0.5).abs() < 0.001, "{}", l.agent_split);
         assert_eq!(
             l.conversations_split, agent.layout.conversations_split,
@@ -4174,7 +4212,7 @@ mod tests {
             conversations,
             Divider::RightPairSplit,
             1440.0,
-            696.0 + 348.0,
+            696.0 + 344.0,
         );
         assert!(
             (l.conversations_split - 0.5).abs() < 0.001,
