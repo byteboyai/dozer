@@ -51,14 +51,14 @@ const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 
 /// 左侧面板区当前显示哪个视图：文件列表(项目树+文件预览配对) / Web(单面板)。
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum LeftView {
     Files,
     Web,
 }
 
 /// 右侧面板区当前显示哪个视图：Agent(Agent列表+终端配对) / 对话(对话列表+对话审阅配对)。
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum RightView {
     Agent,
     Conversations,
@@ -86,6 +86,10 @@ pub struct ShellLayout {
     pub agent_split: f32,
     /// 对话配对:对话列表占右面板区宽度的比例，对话审阅拿剩下的。
     pub conversations_split: f32,
+    pub left_view: LeftView,
+    pub right_view: RightView,
+    pub left_collapsed: bool,
+    pub right_collapsed: bool,
 }
 
 impl Default for ShellLayout {
@@ -95,6 +99,10 @@ impl Default for ShellLayout {
             files_split: 0.35,
             agent_split: 0.4,
             conversations_split: 0.4,
+            left_view: LeftView::Files,
+            right_view: RightView::Agent,
+            left_collapsed: false,
+            right_collapsed: false,
         }
     }
 }
@@ -758,6 +766,7 @@ impl Workspace {
             .as_ref()
             .map(|p| FileTree::new(PathBuf::from(&p.path)));
         let project_goal = project.as_ref().and_then(|p| load_project_goal(&p.path));
+        let shell_layout = layout::load();
 
         let mut ws = Self {
             tabs,
@@ -788,11 +797,11 @@ impl Workspace {
             git_statuses: HashMap::new(),
             term_tab_first: 0,
             preview_tab_first: 0,
-            shell_layout: layout::load(),
-            left_view: LeftView::Files,
-            right_view: RightView::Agent,
-            left_collapsed: false,
-            right_collapsed: false,
+            left_view: shell_layout.left_view,
+            right_view: shell_layout.right_view,
+            left_collapsed: shell_layout.left_collapsed,
+            right_collapsed: shell_layout.right_collapsed,
+            shell_layout,
             maximized: None,
             dragging: None,
             context_menu: None,
@@ -827,6 +836,7 @@ impl Workspace {
         proxy: EventLoopProxy<Message>,
         message: String,
     ) -> Self {
+        let shell_layout = layout::load();
         Self {
             tabs: Vec::new(),
             active: 0,
@@ -856,11 +866,11 @@ impl Workspace {
             git_statuses: HashMap::new(),
             term_tab_first: 0,
             preview_tab_first: 0,
-            shell_layout: layout::load(),
-            left_view: LeftView::Files,
-            right_view: RightView::Agent,
-            left_collapsed: false,
-            right_collapsed: false,
+            left_view: shell_layout.left_view,
+            right_view: shell_layout.right_view,
+            left_collapsed: shell_layout.left_collapsed,
+            right_collapsed: shell_layout.right_collapsed,
+            shell_layout,
             maximized: None,
             dragging: None,
             context_menu: None,
@@ -1154,6 +1164,10 @@ impl Workspace {
             }
             Message::ColumnDragEnd => {
                 self.dragging = None;
+                self.shell_layout.left_view = self.left_view;
+                self.shell_layout.right_view = self.right_view;
+                self.shell_layout.left_collapsed = self.left_collapsed;
+                self.shell_layout.right_collapsed = self.right_collapsed;
                 let layout = self.shell_layout;
                 self.handle.spawn(async move {
                     if let Err(e) = layout::save(&layout) {
@@ -1168,6 +1182,7 @@ impl Workspace {
                     self.left_view = v;
                     self.left_collapsed = false;
                 }
+                self.spawn_shell_layout_save();
             }
             Message::RightIconSelect(v) => {
                 if self.right_view == v {
@@ -1176,6 +1191,7 @@ impl Workspace {
                     self.right_view = v;
                     self.right_collapsed = false;
                 }
+                self.spawn_shell_layout_save();
             }
             Message::DaemonError(message) => self.daemon_error = Some(message),
             Message::TermScroll(delta) => {
@@ -1805,6 +1821,22 @@ impl Workspace {
         if self.project.is_some() && self.tabs.is_empty() {
             self.spawn_new_tab();
         }
+    }
+
+    /// 把 `left_view`/`right_view`/`left_collapsed`/`right_collapsed` 同步进
+    /// `shell_layout` 再异步写盘。图标切换/收起要立即持久化，不能只靠
+    /// `ColumnDragEnd` 顺带存(用户可能从没拖过分隔线)。
+    fn spawn_shell_layout_save(&mut self) {
+        self.shell_layout.left_view = self.left_view;
+        self.shell_layout.right_view = self.right_view;
+        self.shell_layout.left_collapsed = self.left_collapsed;
+        self.shell_layout.right_collapsed = self.right_collapsed;
+        let layout = self.shell_layout;
+        self.handle.spawn(async move {
+            if let Err(e) = layout::save(&layout) {
+                tracing::warn!("外壳布局写盘失败: {e}");
+            }
+        });
     }
 
     fn spawn_new_tab(&mut self) {

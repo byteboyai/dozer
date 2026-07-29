@@ -36,6 +36,7 @@ fn save_to(path: &Path, layout: &ShellLayout) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspace::{LeftView, RightView};
 
     #[test]
     fn load_from_missing_file_returns_default() {
@@ -70,6 +71,25 @@ mod tests {
             files_split: 0.4,
             agent_split: 0.35,
             conversations_split: 0.45,
+            ..ShellLayout::default()
+        };
+        save_to(&path, &layout).unwrap();
+        assert_eq!(load_from(&path), layout);
+    }
+
+    #[test]
+    fn shell_layout_persists_view_selection_and_collapse() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shell_layout.json");
+        let layout = ShellLayout {
+            left_width: 500.0,
+            files_split: 0.4,
+            agent_split: 0.35,
+            conversations_split: 0.45,
+            left_view: LeftView::Web,
+            right_view: RightView::Conversations,
+            left_collapsed: true,
+            right_collapsed: false,
         };
         save_to(&path, &layout).unwrap();
         assert_eq!(load_from(&path), layout);
