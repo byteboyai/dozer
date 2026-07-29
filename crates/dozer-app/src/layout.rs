@@ -3,29 +3,30 @@
 //! `dozer_core::paths::config_dir()/layout.json`）；`load_from`/`save_to`
 //! 接收显式路径，供单测指向临时文件，不碰用户真实配置目录。
 
-use crate::workspace::PanelLayout;
+use crate::workspace::ShellLayout;
 use std::path::{Path, PathBuf};
 
 pub fn default_path() -> PathBuf {
     dozer_core::paths::config_dir().join("layout.json")
 }
 
-pub fn load() -> PanelLayout {
+pub fn load() -> ShellLayout {
     load_from(&default_path())
 }
 
-pub fn save(layout: &PanelLayout) -> std::io::Result<()> {
+#[allow(dead_code)] // Task 3 起接入新外壳的 ColumnDragEnd 写盘
+pub fn save(layout: &ShellLayout) -> std::io::Result<()> {
     save_to(&default_path(), layout)
 }
 
-fn load_from(path: &Path) -> PanelLayout {
+fn load_from(path: &Path) -> ShellLayout {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
 }
 
-fn save_to(path: &Path, layout: &PanelLayout) -> std::io::Result<()> {
+fn save_to(path: &Path, layout: &ShellLayout) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -41,7 +42,7 @@ mod tests {
     fn load_from_missing_file_returns_default() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("does-not-exist.json");
-        assert_eq!(load_from(&path), PanelLayout::default());
+        assert_eq!(load_from(&path), ShellLayout::default());
     }
 
     #[test]
@@ -49,17 +50,27 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("layout.json");
         std::fs::write(&path, "not valid json").unwrap();
-        assert_eq!(load_from(&path), PanelLayout::default());
+        assert_eq!(load_from(&path), ShellLayout::default());
     }
 
     #[test]
-    fn save_then_load_round_trips() {
+    fn shell_layout_default_has_sane_values() {
+        let l = ShellLayout::default();
+        assert!(l.left_width > 0.0);
+        assert!((0.0..=1.0).contains(&l.files_split));
+        assert!((0.0..=1.0).contains(&l.agent_split));
+        assert!((0.0..=1.0).contains(&l.conversations_split));
+    }
+
+    #[test]
+    fn shell_layout_save_then_load_round_trips() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nested").join("layout.json");
-        let layout = PanelLayout {
-            project_col_width: 300.0,
-            ai_col_width: 260.0,
-            preview_ratio: 0.42,
+        let path = dir.path().join("nested").join("shell_layout.json");
+        let layout = ShellLayout {
+            left_width: 500.0,
+            files_split: 0.4,
+            agent_split: 0.35,
+            conversations_split: 0.45,
         };
         save_to(&path, &layout).unwrap();
         assert_eq!(load_from(&path), layout);

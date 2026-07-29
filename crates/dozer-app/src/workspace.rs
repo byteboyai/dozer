@@ -72,6 +72,58 @@ impl Default for PanelLayout {
     }
 }
 
+/// 左侧面板区当前显示哪个视图：文件列表(项目树+文件预览配对) / Web(单面板)。
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)] // 本任务先建好类型，Task 3 起接入图标栏/面板渲染
+pub enum LeftView {
+    Files,
+    Web,
+}
+
+/// 右侧面板区当前显示哪个视图：Agent(Agent列表+终端配对) / 对话(对话列表+对话审阅配对)。
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
+pub enum RightView {
+    Agent,
+    Conversations,
+}
+
+/// 当前放大态：放大的是左面板区的内容子面板，还是右面板区的。`None` = 未放大。
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
+pub enum MaximizedPane {
+    Left,
+    Right,
+}
+
+/// 图标栏+左右面板区的宽度/分割状态。取代 `PanelLayout`——不再有"项目栏/AI栏
+/// 固定宽+预览终端共享比例"这套四栏几何，改成"左面板区总宽(可拖) + 三个
+/// 配对视图各自独立记住的内部列表:内容分割比例"。右面板区总宽不持久化，
+/// 恒为剩余空间(`Length::Fill`)——只有一条 LeftRight 分隔线，不需要像旧
+/// 模型那样两个固定宽度各自夹一条。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct ShellLayout {
+    pub left_width: f32,
+    /// 文件列表配对:项目树占左面板区宽度的比例，文件预览拿剩下的。
+    pub files_split: f32,
+    /// Agent配对:Agent列表占右面板区宽度的比例，终端拿剩下的。
+    pub agent_split: f32,
+    /// 对话配对:对话列表占右面板区宽度的比例，对话审阅拿剩下的。
+    pub conversations_split: f32,
+}
+
+impl Default for ShellLayout {
+    fn default() -> Self {
+        Self {
+            left_width: 640.0,
+            files_split: 0.35,
+            agent_split: 0.4,
+            conversations_split: 0.4,
+        }
+    }
+}
+
 /// 三条可拖拽分隔线的标识:项目|预览、预览|终端、终端|AI。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Divider {
@@ -79,6 +131,20 @@ pub enum Divider {
     PreviewTerminal,
     TerminalAi,
 }
+
+/// 新外壳的三条可拖拽分隔线：左右面板区之间、左侧配对视图内部、右侧配对
+/// 视图内部。取代 `Divider` 原三个变体(见 Task 3 的整体切换)。
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
+pub enum ShellDivider {
+    LeftRight,
+    LeftPairSplit,
+    RightPairSplit,
+}
+
+/// 图标栏固定宽度(逻辑像素)，左右各一条。
+#[allow(dead_code)] // Task 3 起接入图标栏渲染
+pub const ICON_RAIL_WIDTH: f32 = 48.0;
 
 /// 项目树右键菜单当前打开状态：定位坐标 + 目标（路径/是否目录）。
 #[derive(Debug, Clone, PartialEq)]
@@ -564,9 +630,31 @@ pub struct Workspace {
     term_tab_first: usize,
     /// 预览 tab 栏当前最左可见 tab 序号，语义同 `term_tab_first`。
     preview_tab_first: usize,
-    /// 四栏宽度/预览终端分配比例;拖拽写入,启动时 `layout::load()` 读盘
-    /// 作起始值(`ColumnDragEnd` 触发异步写盘)。
-    layout: PanelLayout,
+    /// 旧四栏宽度/预览终端分配比例;仍喂给旧 `view()`/几何函数,但本任务起
+    /// 不再读盘/写盘(`layout::load`/`save` 已换型吃 `ShellLayout`)——纯
+    /// 编译占位,启动时固定 `PanelLayout::default()`。Task 3 整体切换后
+    /// 连同旧 `view()`/`apply_column_drag` 一起删除。
+    #[allow(dead_code)] // Task 3 整体切换后删除，本任务先建好新字段
+    old_layout: PanelLayout,
+    /// 图标栏+左右面板区宽度/分割状态;启动时 `layout::load()` 读盘作
+    /// 起始值。Task 3 起接入新外壳拖拽/渲染。
+    #[allow(dead_code)] // Task 3 起接入新外壳
+    shell_layout: ShellLayout,
+    /// 左面板区当前显示的配对视图。Task 3 起接入图标栏切换。
+    #[allow(dead_code)]
+    left_view: LeftView,
+    /// 右面板区当前显示的配对视图。Task 3 起接入图标栏切换。
+    #[allow(dead_code)]
+    right_view: RightView,
+    /// 左面板区是否折叠(图标栏点击切换)。Task 3 起接入。
+    #[allow(dead_code)]
+    left_collapsed: bool,
+    /// 右面板区是否折叠,语义同 `left_collapsed`。
+    #[allow(dead_code)]
+    right_collapsed: bool,
+    /// 当前放大的内容子面板(`None`=未放大)。Task 3 起接入。
+    #[allow(dead_code)]
+    maximized: Option<MaximizedPane>,
     /// 正在拖拽的分隔线;`None` 表示未在拖拽。
     dragging: Option<Divider>,
     /// 项目树右键菜单当前打开状态(None=未打开)。
@@ -670,7 +758,13 @@ impl Workspace {
             git_statuses: HashMap::new(),
             term_tab_first: 0,
             preview_tab_first: 0,
-            layout: layout::load(),
+            old_layout: PanelLayout::default(),
+            shell_layout: layout::load(),
+            left_view: LeftView::Files,
+            right_view: RightView::Agent,
+            left_collapsed: false,
+            right_collapsed: false,
+            maximized: None,
             dragging: None,
             context_menu: None,
             last_right_click: (0.0, 0.0),
@@ -734,7 +828,13 @@ impl Workspace {
             git_statuses: HashMap::new(),
             term_tab_first: 0,
             preview_tab_first: 0,
-            layout: layout::load(),
+            old_layout: PanelLayout::default(),
+            shell_layout: layout::load(),
+            left_view: LeftView::Files,
+            right_view: RightView::Agent,
+            left_collapsed: false,
+            right_collapsed: false,
+            maximized: None,
             dragging: None,
             context_menu: None,
             last_right_click: (0.0, 0.0),
@@ -1025,17 +1125,15 @@ impl Workspace {
                 logical_x,
             } => {
                 if let Some(divider) = self.dragging {
-                    self.layout = apply_column_drag(self.layout, divider, window_width, logical_x);
+                    self.old_layout =
+                        apply_column_drag(self.old_layout, divider, window_width, logical_x);
                 }
             }
             Message::ColumnDragEnd => {
                 self.dragging = None;
-                let layout = self.layout;
-                self.handle.spawn(async move {
-                    if let Err(e) = layout::save(&layout) {
-                        tracing::warn!("四栏布局写盘失败: {e}");
-                    }
-                });
+                // `old_layout` 不再走 `layout::load`/`save`(现在吃 `ShellLayout`)——
+                // 旧四栏拖拽结束后的写盘本任务先停掉,Task 3 整体切换后这条
+                // 分支连同 `old_layout`/`apply_column_drag` 一起删除。
             }
             Message::DaemonError(message) => self.daemon_error = Some(message),
             Message::TermScroll(delta) => {
@@ -1790,22 +1888,22 @@ impl Workspace {
     pub fn ime_cursor_area(&self, window_w: f32, window_h: f32) -> (f32, f32, f32) {
         if self.preview.addr_editing() || self.acceptance_comment_editing() {
             return (
-                self.layout.project_col_width + 12.0,
+                self.old_layout.project_col_width + 12.0,
                 TOP_BAR_HEIGHT + PREVIEW_CHROME_TOP_PX,
                 20.0,
             );
         }
-        let (pane_w, pane_h) = terminal_pane_pixel_size(window_w, window_h, &self.layout);
+        let (pane_w, pane_h) = terminal_pane_pixel_size(window_w, window_h, &self.old_layout);
         let cell_w = pane_w / self.cols.max(1) as f32;
         let line_h = pane_h / self.rows.max(1) as f32;
         let fill_width = (window_w
-            - self.layout.project_col_width
-            - self.layout.ai_col_width
+            - self.old_layout.project_col_width
+            - self.old_layout.ai_col_width
             - 3.0 * DIVIDER_WIDTH)
             .max(0.0);
-        let x0 = self.layout.project_col_width
+        let x0 = self.old_layout.project_col_width
             + 2.0 * DIVIDER_WIDTH
-            + fill_width * self.layout.preview_ratio
+            + fill_width * self.old_layout.preview_ratio
             + 8.0;
         // 终端网格上方 chrome:顶栏 44 + 上 padding 8 + tab 栏 30 + spacing 4(header 已去,P1L #4)
         let y0 = TOP_BAR_HEIGHT + 8.0 + 30.0 + 4.0;
@@ -1821,7 +1919,7 @@ impl Workspace {
 
     /// 当前四栏宽度状态(main.rs 拖拽追踪/持久化用;`Copy` 类型直接按值返回)。
     pub fn layout(&self) -> PanelLayout {
-        self.layout
+        self.old_layout
     }
 
     /// 当前正在拖拽的分隔线(main.rs 拖拽追踪用,调用方为
@@ -2438,7 +2536,7 @@ fn ai_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
     }
 
     container(content.padding(12))
-        .width(Length::Fixed(ws.layout.ai_col_width))
+        .width(Length::Fixed(ws.old_layout.ai_col_width))
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: Some(theme::PANEL.into()),
@@ -2636,7 +2734,7 @@ fn project_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
         });
 
     container(column![body, project_status_bar(ws)])
-        .width(Length::Fixed(ws.layout.project_col_width))
+        .width(Length::Fixed(ws.old_layout.project_col_width))
         .height(Length::Fill)
         .into()
 }
@@ -2844,7 +2942,7 @@ fn preview_pane(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced
         );
     }
 
-    let preview_portion = (ws.layout.preview_ratio * 10_000.0).round() as u16;
+    let preview_portion = (ws.old_layout.preview_ratio * 10_000.0).round() as u16;
     container(content.padding(8))
         .width(Length::FillPortion(preview_portion))
         .height(Length::Fill)
@@ -2920,7 +3018,7 @@ fn terminal_pane(
             ..container::Style::default()
         });
 
-    let terminal_portion = ((1.0 - ws.layout.preview_ratio) * 10_000.0).round() as u16;
+    let terminal_portion = ((1.0 - ws.old_layout.preview_ratio) * 10_000.0).round() as u16;
     container(column![body, terminal_status_bar(ws)])
         .width(Length::FillPortion(terminal_portion))
         .height(Length::Fill)
