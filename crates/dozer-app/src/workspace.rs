@@ -1937,7 +1937,7 @@ impl Workspace {
         let cell_w = pane_w / self.cols.max(1) as f32;
         let line_h = pane_h / self.rows.max(1) as f32;
         let right_w = right_zone_width(window_w, &state);
-        let list_w = right_w * state.layout.agent_split;
+        let list_w = pair_content_width(right_w) * state.layout.agent_split;
         let x0 = window_w - ICON_RAIL_WIDTH - right_w + list_w + DIVIDER_WIDTH + 8.0;
         // 终端网格上方 chrome:顶栏 44 + 上 padding 8 + tab 栏 30 + spacing 4(header 已去,P1L #4)
         let y0 = TOP_BAR_HEIGHT + 8.0 + 30.0 + 4.0;
@@ -2140,6 +2140,12 @@ impl Workspace {
         &self,
     ) -> iced_widget::core::Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
         let top = top_bar(self);
+        // 用 `row!`(经 `Row::push`/`enclose`)构造:只要子元素里有一个声明了
+        // `Length::Fill`/`FillPortion`(如某侧收起时的 `left_panel_area`),
+        // 这条 row 自身的宽度就会被自动升级成 `Fill`,从而在 flex 布局里正确
+        // 撑满窗口。换成 `Row::from_vec`(其文档明确说明不会检视子元素)或
+        // 手动 `.width(Length::Shrink)` 会让 flex 第三阶段(fill 分配)不再
+        // 执行,右图标栏就会缩到窗口中间——不要在不理解这个前提的情况下改写。
         let body = row![
             left_icon_rail(self),
             left_panel_area(self),
