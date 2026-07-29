@@ -8,6 +8,7 @@ mod keymap;
 mod layout;
 mod osc;
 mod preview;
+mod preview_state;
 mod project;
 mod term_model;
 mod term_view;

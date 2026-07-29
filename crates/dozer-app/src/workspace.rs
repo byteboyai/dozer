@@ -24,7 +24,8 @@ use crate::goal::{self, Goal};
 use crate::icons;
 use crate::layout;
 use crate::osc::{OscEvent, OscScanner};
-use crate::preview::{AddrTarget, PreviewPane, WebviewSpec};
+use crate::preview::{AddrTarget, PreviewPane, TabKind, WebviewSpec};
+use crate::preview_state;
 use crate::project::{self, FileTree};
 use crate::term_model::TerminalModel;
 use crate::term_view;
@@ -639,7 +640,7 @@ impl Workspace {
             .map(|p| FileTree::new(PathBuf::from(&p.path)));
         let project_goal = project.as_ref().and_then(|p| load_project_goal(&p.path));
 
-        let ws = Self {
+        let mut ws = Self {
             tabs,
             active: 0,
             next_tab_id,
@@ -683,6 +684,11 @@ impl Workspace {
         // 对话列表（line 408 承诺"窗口起来后异步补"——此前只在用户主动
         // 打开项目时接线,启动恢复路径漏了,导致重开 app 后对话列表空白）。
         if ws.project.is_some() {
+            // 有项目但没恢复出任何存活会话(比如上次退出前刚好关光了终端)
+            // 时,默认新开一个根在项目目录的终端,不用用户手动点"+"。
+            ws.ensure_project_terminal();
+            // 认回上次退出前打开的预览文件 tab（重启后自动重开）。
+            ws.restore_preview_state();
             ws.spawn_project_git_refresh();
             ws.spawn_conversations_refresh();
             ws.spawn_acceptance_count_refresh();
@@ -1002,7 +1008,10 @@ impl Workspace {
                     self.active = idx;
                 }
             }
-            Message::CloseTab(idx) => self.close_tab(idx),
+            Message::CloseTab(idx) => {
+                self.close_tab(idx);
+                self.ensure_project_terminal();
+            }
             Message::NewTab => self.spawn_new_tab(),
             Message::TabAttached(tab_id, info, snapshot) => {
                 self.on_tab_attached(tab_id, info, snapshot)
@@ -1087,17 +1096,22 @@ impl Workspace {
                 self.preview.open_path(path);
                 // 新 tab 落在末尾，滚回最左让它可见（P1L T5）。
                 self.preview_tab_first = 0;
+                self.spawn_preview_state_save();
             }
             Message::PreviewOpenUrl(url) => {
                 self.preview_error = None;
                 self.preview.open_url(url);
                 self.preview_tab_first = 0;
             }
-            Message::PreviewSelectTab(idx) => self.preview.select(idx),
+            Message::PreviewSelectTab(idx) => {
+                self.preview.select(idx);
+                self.spawn_preview_state_save();
+            }
             Message::PreviewCloseTab(idx) => {
                 self.preview.close(idx);
                 // 关 tab 后位置全变，旧 first 可能越界——归零防御（P1L T5）。
                 self.preview_tab_first = 0;
+                self.spawn_preview_state_save();
             }
             Message::PreviewAddrClick => {
                 self.preview_error = None;
@@ -1159,6 +1173,8 @@ impl Workspace {
                     .as_ref()
                     .and_then(|p| load_project_goal(&p.path));
                 self.project_acceptance_count = None;
+                self.ensure_project_terminal();
+                self.restore_preview_state();
                 self.spawn_project_git_refresh();
                 self.spawn_conversations_refresh();
                 self.spawn_acceptance_count_refresh();
@@ -1583,6 +1599,72 @@ impl Workspace {
         }
         // 关 tab 后位置全变，旧 first 可能越界——归零防御（P1L T5）。
         self.term_tab_first = 0;
+    }
+
+    /// 把当前预览 tab(仅文件类)异步写盘,同 `layout::save` 走
+    /// `handle.spawn` 的既有模式,不阻塞 UI 线程。没有打开项目时不存
+    /// (状态按项目 id 分文件,没有项目就没有归属)。
+    fn spawn_preview_state_save(&self) {
+        let Some(project) = &self.project else {
+            return;
+        };
+        let project_id = project.id;
+        let active_idx = self.preview.active_idx();
+        let mut paths = Vec::new();
+        let mut active_path = None;
+        for (idx, tab) in self.preview.tabs().iter().enumerate() {
+            if let TabKind::File(p) = &tab.kind {
+                paths.push(p.clone());
+                if idx == active_idx {
+                    active_path = Some(p.clone());
+                }
+            }
+        }
+        let state = preview_state::PreviewState { paths, active_path };
+        self.handle.spawn(async move {
+            if let Err(e) = preview_state::save(project_id, &state) {
+                tracing::warn!("预览 tab 状态写盘失败: {e}");
+            }
+        });
+    }
+
+    /// 项目打开/启动恢复时,认回上次持久化的预览 tab(仅文件类;已被删除/
+    /// 移动的文件静默跳过,不报错占位)。
+    fn restore_preview_state(&mut self) {
+        let Some(project) = &self.project else {
+            return;
+        };
+        let state = preview_state::load(project.id);
+        let mut active_id = None;
+        for path in state.paths {
+            if !path.is_file() {
+                continue;
+            }
+            let is_active = state.active_path.as_deref() == Some(path.as_path());
+            self.allowed_files
+                .lock()
+                .expect("allowed_files 锁")
+                .insert(path.clone());
+            let id = self.preview.open_path(path);
+            if is_active {
+                active_id = Some(id);
+            }
+        }
+        if let Some(id) = active_id
+            && let Some(idx) = self.preview.tabs().iter().position(|t| t.id == id)
+        {
+            self.preview.select(idx);
+        }
+    }
+
+    /// 保证"项目打开时至少有一个终端 tab"这条不变式:启动恢复、关闭最后
+    /// 一个 tab、切换/打开项目后都要检查一次。没有项目时不强开——`spawn_new_tab`
+    /// 本身在无项目时会落回 $HOME,那是用户主动点"+"的行为,不该在无项目
+    /// 时被这里自动触发。
+    fn ensure_project_terminal(&mut self) {
+        if self.project.is_some() && self.tabs.is_empty() {
+            self.spawn_new_tab();
+        }
     }
 
     fn spawn_new_tab(&mut self) {
