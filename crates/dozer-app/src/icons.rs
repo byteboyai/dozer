@@ -27,6 +27,10 @@ pub enum IconKind {
     ClipboardPaste,
     Trash,
     Rename,
+    Globe,
+    Bot,
+    MessageSquare,
+    Maximize,
 }
 
 impl IconKind {
@@ -50,6 +54,10 @@ impl IconKind {
             IconKind::ClipboardPaste => include_bytes!("../assets/icons/clipboard-paste.svg"),
             IconKind::Trash => include_bytes!("../assets/icons/trash-2.svg"),
             IconKind::Rename => include_bytes!("../assets/icons/pen-line.svg"),
+            IconKind::Globe => include_bytes!("../assets/icons/globe.svg"),
+            IconKind::Bot => include_bytes!("../assets/icons/bot.svg"),
+            IconKind::MessageSquare => include_bytes!("../assets/icons/message-square.svg"),
+            IconKind::Maximize => include_bytes!("../assets/icons/maximize-2.svg"),
         }
     }
 }
