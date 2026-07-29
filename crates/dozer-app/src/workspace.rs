@@ -427,6 +427,10 @@ pub enum Message {
     LeftIconSelect(LeftView),
     /// 同上,右图标栏。
     RightIconSelect(RightView),
+    /// 点击某内容 pane 的放大按钮:已放大同一侧则还原,否则放大该侧。
+    MaximizeToggle(MaximizedPane),
+    /// 点击放大态背后的变暗遮罩:退出放大。
+    MaximizeClose,
     /// daemon 不可用（启动连接失败，或某次会话操作失败）的错误文案，
     /// 终端区以 RED 文案展示。
     DaemonError(String),
@@ -1192,6 +1196,16 @@ impl Workspace {
                     self.right_collapsed = false;
                 }
                 self.spawn_shell_layout_save();
+            }
+            Message::MaximizeToggle(which) => {
+                self.maximized = if self.maximized == Some(which) {
+                    None
+                } else {
+                    Some(which)
+                };
+            }
+            Message::MaximizeClose => {
+                self.maximized = None;
             }
             Message::DaemonError(message) => self.daemon_error = Some(message),
             Message::TermScroll(delta) => {
@@ -2187,7 +2201,7 @@ impl Workspace {
         ];
         let base = column![top, body];
 
-        if self.tree_delete_confirm.is_some() {
+        let popped = if self.tree_delete_confirm.is_some() {
             let dismiss = MouseArea::new(
                 container(column![])
                     .width(Length::Fill)
@@ -2211,6 +2225,15 @@ impl Workspace {
                 .into()
         } else {
             base.into()
+        };
+
+        if let Some(which) = self.maximized {
+            stack![popped, maximize_overlay(self, which)]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else {
+            popped
         }
     }
 }
@@ -2644,7 +2667,18 @@ fn review_content_pane(
     ws: &Workspace,
     width: Length,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let header = row![text("会话审阅").size(13).color(theme::CREAM)].spacing(4);
+    let maximize_btn = button(icons::view(icons::IconKind::Maximize, 14.0, theme::DIM))
+        .on_press(Message::MaximizeToggle(MaximizedPane::Right))
+        .style(|_t, _s| button::Style {
+            background: None,
+            ..button::Style::default()
+        });
+    let header = row![
+        text("会话审阅").size(13).color(theme::CREAM),
+        iced_widget::space::horizontal(),
+        maximize_btn,
+    ]
+    .spacing(4);
     let mut content = column![header].spacing(4);
 
     if ws.review.is_some() {
@@ -2856,6 +2890,53 @@ fn right_panel_area(
             .into()
         }
     }
+}
+
+/// 放大态浮层:两条图标栏之间的整个内容区变暗+背景虚化，放大的那一侧
+/// 内容(左/右面板区，含其内部列表:内容子分隔线，原样渲染，只是占满整个
+/// 中间区域)金色描边突出。点变暗区域(放大内容之外的部分)退出放大。
+fn maximize_overlay(
+    ws: &Workspace,
+    which: MaximizedPane,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let inner = match which {
+        MaximizedPane::Left => left_panel_area(ws),
+        MaximizedPane::Right => right_panel_area(ws),
+    };
+    let bordered = container(inner).style(move |_t: &iced_widget::Theme| container::Style {
+        border: Border {
+            color: theme::GOLD,
+            width: 1.5,
+            radius: 10.0.into(),
+        },
+        ..container::Style::default()
+    });
+    let dim_bg = MouseArea::new(
+        container(bordered)
+            .padding(40)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_t: &iced_widget::Theme| container::Style {
+                background: Some(
+                    Color {
+                        r: 0.0,
+                        g: 0.0,
+                        b: 0.0,
+                        a: 0.55,
+                    }
+                    .into(),
+                ),
+                ..container::Style::default()
+            }),
+    )
+    .on_press(Message::MaximizeClose);
+
+    row![
+        iced_widget::space::Space::new().width(Length::Fixed(ICON_RAIL_WIDTH)),
+        dim_bg,
+        iced_widget::space::Space::new().width(Length::Fixed(ICON_RAIL_WIDTH)),
+    ]
+    .into()
 }
 
 fn project_pane(
@@ -3206,7 +3287,13 @@ fn preview_pane(
             },
             ..button::Style::default()
         });
-    let tab_bar = row![left_arrow, clipped, right_arrow, open_btn]
+    let maximize_btn = button(icons::view(icons::IconKind::Maximize, 14.0, theme::DIM))
+        .on_press(Message::MaximizeToggle(MaximizedPane::Left))
+        .style(|_t, _s| button::Style {
+            background: None,
+            ..button::Style::default()
+        });
+    let tab_bar = row![left_arrow, clipped, right_arrow, open_btn, maximize_btn]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
 
@@ -3652,7 +3739,14 @@ fn tab_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
             ..button::Style::default()
         });
 
-    row![left_arrow, clipped, right_arrow, plus]
+    let maximize_btn = button(icons::view(icons::IconKind::Maximize, 14.0, theme::DIM))
+        .on_press(Message::MaximizeToggle(MaximizedPane::Right))
+        .style(|_t, _s| button::Style {
+            background: None,
+            ..button::Style::default()
+        });
+
+    row![left_arrow, clipped, right_arrow, plus, maximize_btn]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center)
         .into()
