@@ -167,6 +167,11 @@ pub struct ShellState {
     pub left_collapsed: bool,
     pub right_view: RightView,
     pub right_collapsed: bool,
+    /// 当前放大态(Task 5)。`preview_content_bounds`/`is_in_preview_column`
+    /// 靠这个字段才能感知"左侧内容其实被放大遮罩盖住了/放大到了整个
+    /// maximize 区域"——没有它,离屏 webview 摆位和焦点路由会对着放大前的
+    /// 旧几何算,和 `maximize_overlay` 实际渲染的画面对不上。
+    pub maximized: Option<MaximizedPane>,
 }
 
 /// 两条图标栏与那条恒在的 `LeftRight` 分隔线之外，留给左右两个面板区的
@@ -286,8 +291,33 @@ const CHROME_HEIGHT_PX: f32 = 16.0 + 4.0 + 30.0; // 上下 padding + 1 处 spaci
 ///   + 两处 spacing 4*2。header 行已去(P1L #4),故不含表头项。
 const PREVIEW_CHROME_TOP_PX: f32 = 8.0 + 30.0 + 30.0 + 8.0;
 
+/// `maximize_overlay` 里 dim 背景到金色描边盒子的内边距(逻辑像素)。
+/// `preview_content_bounds`/`is_in_preview_column` 换算放大态几何时必须
+/// 复用这个常量,不能各写各的字面量 40.0——否则两处一旦有一处改了内边距,
+/// webview 摆位就会和实际渲染出的金色描边盒子错位(与本文件其它几何
+/// 常量共享同一原则:渲染侧和几何公式侧不能有第二份真相)。
+const MAXIMIZE_OVERLAY_PADDING: f32 = 40.0;
+
+/// 放大态下(`MaximizedPane::Left`)金色描边盒子在窗口坐标系里的横向范围
+/// (x0, 可用宽度)。三层留白累加:图标栏宽 + `maximize_overlay` 里 dim_bg
+/// 的内边距——`bordered` 容器本身无内边距、宽度铺满,所以到这里为止。
+/// `preview_content_bounds`/`is_in_preview_column` 都靠它换算放大态几何,
+/// 不能各写各的字面量,否则和 `maximize_overlay` 实际渲染的画面对不上。
+fn maximized_left_x_range(window_width: f32) -> (f32, f32) {
+    let x0 = ICON_RAIL_WIDTH + MAXIMIZE_OVERLAY_PADDING;
+    let avail_w = (window_width - 2.0 * ICON_RAIL_WIDTH - 2.0 * MAXIMIZE_OVERLAY_PADDING).max(0.0);
+    (x0, avail_w)
+}
+
 /// 窗口逻辑尺寸 → 左侧文件/Web 预览内容区矩形(逻辑像素 x/y/w/h)，供
 /// main.rs 摆放 wry webview 用。左侧收起时返回零尺寸矩形。
+///
+/// 放大态(Task 5):右侧被放大时左侧内容被 `maximize_overlay` 的变暗遮罩
+/// 整片盖住——但 wry webview 是原生子视图,不听 iced 的绘制顺序摆布,会
+/// 无视遮罩径直叠在最上面,必须用零尺寸矩形把它真正藏起来(与
+/// `left_collapsed` 分支同一手法)。左侧被放大时,矩形要按
+/// `maximize_overlay` 实际渲染的更大盒子重新换算,不能再用平时的
+/// `left_zone_width`。
 pub fn preview_content_bounds(
     window_width: f32,
     window_height: f32,
@@ -295,6 +325,31 @@ pub fn preview_content_bounds(
 ) -> (f32, f32, f32, f32) {
     if state.left_collapsed {
         return (0.0, 0.0, 0.0, 0.0);
+    }
+    if state.maximized == Some(MaximizedPane::Right) {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    if state.maximized == Some(MaximizedPane::Left) {
+        let (x0, avail_w) = maximized_left_x_range(window_width);
+        let y0 = TOP_BAR_HEIGHT + MAXIMIZE_OVERLAY_PADDING;
+        let avail_h = (window_height - TOP_BAR_HEIGHT - 2.0 * MAXIMIZE_OVERLAY_PADDING).max(0.0);
+        let y = y0 + PREVIEW_CHROME_TOP_PX;
+        let h = (avail_h - PREVIEW_CHROME_TOP_PX - 8.0).max(0.0);
+        return match state.left_view {
+            LeftView::Web => {
+                let x = x0 + 8.0;
+                let w = (avail_w - 16.0).max(0.0);
+                (x, y, w, h)
+            }
+            LeftView::Files => {
+                let pair_w = pair_content_width(avail_w);
+                let list_w = pair_w * state.layout.files_split;
+                let content_w = pair_w * (1.0 - state.layout.files_split);
+                let x = x0 + list_w + DIVIDER_WIDTH + 8.0;
+                let w = (content_w - 16.0).max(0.0);
+                (x, y, w, h)
+            }
+        };
     }
     let left_w = left_zone_width(window_width, state);
     let y = TOP_BAR_HEIGHT + PREVIEW_CHROME_TOP_PX;
@@ -318,9 +373,31 @@ pub fn preview_content_bounds(
 
 /// 逻辑 x 是否落在左侧文件/Web 预览内容区列内。焦点路由用:点击落在
 /// 该列 → 键盘交给 webview;落在别处 → 交回窗口(终端)。
+///
+/// 放大态(Task 5):右侧被放大时左侧内容不可见,恒不落在预览列;左侧被
+/// 放大时按 `maximize_overlay` 实际渲染的更大盒子重新换算横向范围。
 pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bool {
     if state.left_collapsed {
         return false;
+    }
+    if state.maximized == Some(MaximizedPane::Right) {
+        return false;
+    }
+    if state.maximized == Some(MaximizedPane::Left) {
+        let (x0, avail_w) = maximized_left_x_range(window_width);
+        return match state.left_view {
+            LeftView::Web => {
+                let start = x0;
+                let end = start + avail_w;
+                x >= start && x < end
+            }
+            LeftView::Files => {
+                let list_w = pair_content_width(avail_w) * state.layout.files_split;
+                let start = x0 + list_w + DIVIDER_WIDTH;
+                let end = x0 + avail_w;
+                x >= start && x < end
+            }
+        };
     }
     let left_w = left_zone_width(window_width, state);
     match state.left_view {
@@ -2006,6 +2083,7 @@ impl Workspace {
             left_collapsed: self.left_collapsed,
             right_view: self.right_view,
             right_collapsed: self.right_collapsed,
+            maximized: self.maximized,
         }
     }
 
@@ -2194,7 +2272,7 @@ impl Workspace {
         // 执行,右图标栏就会缩到窗口中间——不要在不理解这个前提的情况下改写。
         let body = row![
             left_icon_rail(self),
-            left_panel_area(self),
+            left_panel_area(self, false),
             divider_bar(Divider::LeftRight),
             right_panel_area(self),
             right_icon_rail(self),
@@ -2823,8 +2901,15 @@ fn split_portions(split: f32) -> (u16, u16) {
 /// 宽度语义与 `left_zone_width` 严格对应:对侧收起时本区 `Fill` 独占
 /// `zones_width`(否则整行会缩到"两条图标栏+一条分隔线"那么宽,右图标栏
 /// 跑到窗口中间去);两侧都收起时由本区出一个 `Fill` 空白把窗口撑满。
+///
+/// `maximized`(Task 5 放大态用):为 `true` 时强制 `Length::Fill`,不看
+/// 持久化宽/对侧收起态——`maximize_overlay` 需要这块区域真正撑满整个放大
+/// 盒子,而不是停在平时拖拽出来的 `left_width` 那么宽。放大态下调用方
+/// (只有 `maximize_overlay`)已保证 `ws.left_collapsed` 恒为 false(收起
+/// 时压根没有放大按钮可点),不需要额外校验。
 fn left_panel_area(
     ws: &Workspace,
+    maximized: bool,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     if ws.left_collapsed {
         return if ws.right_collapsed {
@@ -2833,7 +2918,7 @@ fn left_panel_area(
             column![].into()
         };
     }
-    let total = if ws.right_collapsed {
+    let total = if maximized || ws.right_collapsed {
         Length::Fill
     } else {
         Length::Fixed(ws.shell_layout.left_width)
@@ -2900,20 +2985,32 @@ fn maximize_overlay(
     which: MaximizedPane,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let inner = match which {
-        MaximizedPane::Left => left_panel_area(ws),
+        MaximizedPane::Left => left_panel_area(ws, true),
         MaximizedPane::Right => right_panel_area(ws),
     };
-    let bordered = container(inner).style(move |_t: &iced_widget::Theme| container::Style {
-        border: Border {
-            color: theme::GOLD,
-            width: 1.5,
-            radius: 10.0.into(),
-        },
-        ..container::Style::default()
-    });
+    // `bordered` 显式给 `Length::Fill`(不留给默认 `Length::Shrink`)——
+    // iced 0.14 的 `Limits` 有个"compression"传染机制:一个 `Shrink` 容器
+    // 包一个 `Fill`/`FillPortion` 子元素时,子元素的 Fill 不会展开到可用
+    // 空间,而是退化成"贴着内容收缩"(`Limits::resolve` 对 Fill 的展开分支
+    // 要求 `!compression`,`Shrink` 会把 compression 设 true 并一路往下传,
+    // 直到遇到一个显式 `Length::Fixed` 才重置)。这里如果不显式给 Fill,
+    // `inner`(`left_panel_area`/`right_panel_area` 内部大量 FillPortion
+    // 组成)会整体收缩成远小于放大盒子的intrinsic 尺寸,金色描边就会贴着
+    // 一小块内容而不是撑满两条图标栏之间的放大区域。
+    let bordered = container(inner)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            border: Border {
+                color: theme::GOLD,
+                width: 1.5,
+                radius: 10.0.into(),
+            },
+            ..container::Style::default()
+        });
     let dim_bg = MouseArea::new(
         container(bordered)
-            .padding(40)
+            .padding(MAXIMIZE_OVERLAY_PADDING)
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_t: &iced_widget::Theme| container::Style {
@@ -2931,11 +3028,21 @@ fn maximize_overlay(
     )
     .on_press(Message::MaximizeClose);
 
-    row![
-        iced_widget::space::Space::new().width(Length::Fixed(ICON_RAIL_WIDTH)),
-        dim_bg,
-        iced_widget::space::Space::new().width(Length::Fixed(ICON_RAIL_WIDTH)),
+    // 顶部垫一条透明的 `TOP_BAR_HEIGHT` 高 Space,把变暗遮罩钉在顶栏
+    // 之下——`base = column![top, body]` 里顶栏和内容区就是这么分的,
+    // 这里镜像同一结构,让变暗区域精确对齐 `body` 的渲染范围,不覆盖顶栏
+    // (Important:此前没有这条 Space,遮罩会盖住整个窗口高度,连顶栏的
+    // 项目 tab 等控件都会被染黑)。
+    column![
+        iced_widget::space::Space::new().height(Length::Fixed(TOP_BAR_HEIGHT)),
+        row![
+            iced_widget::space::Space::new().width(Length::Fixed(ICON_RAIL_WIDTH)),
+            dim_bg,
+            iced_widget::space::Space::new().width(Length::Fixed(ICON_RAIL_WIDTH)),
+        ],
     ]
+    .width(Length::Fill)
+    .height(Length::Fill)
     .into()
 }
 
@@ -4053,6 +4160,7 @@ mod tests {
             left_collapsed: false,
             right_view: RightView::Agent,
             right_collapsed: false,
+            maximized: None,
         }
     }
 
@@ -4094,6 +4202,83 @@ mod tests {
             preview_content_bounds(1440.0, 900.0, &state),
             (0.0, 0.0, 0.0, 0.0)
         );
+    }
+
+    /// Fix round 1 Critical:右侧被放大时,左侧 webview 必须归零——它是原生
+    /// wry 子视图,不听 iced 的绘制顺序摆布,不归零会无视变暗遮罩径直叠在
+    /// 最上面。
+    #[test]
+    fn preview_content_bounds_zero_when_right_maximized() {
+        let state = ShellState {
+            maximized: Some(MaximizedPane::Right),
+            ..test_state()
+        };
+        assert_eq!(
+            preview_content_bounds(1440.0, 900.0, &state),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+    }
+
+    /// Fix round 1 Critical:左侧被放大(Files 配对)时,webview 矩形必须
+    /// 按 `maximize_overlay` 实际渲染的更大盒子换算,不能再用平时的
+    /// `left_zone_width`(640)。用具体数字核对,不只看"落在范围内"：
+    /// x0=ICON_RAIL_WIDTH(48)+MAXIMIZE_OVERLAY_PADDING(40)=88,
+    /// avail_w=1440-2*48-2*40=1264,pair_w=1264-8=1256,
+    /// list_w=1256*0.35=439.6,x=88+439.6+8+8=543.6,w=1256*0.65-16=800.4;
+    /// y0=TOP_BAR_HEIGHT(44)+40=84,y=84+76(PREVIEW_CHROME_TOP_PX)=160,
+    /// avail_h=900-44-80=776,h=776-76-8=692。
+    #[test]
+    fn preview_content_bounds_left_maximized_files_matches_overlay_geometry() {
+        let state = ShellState {
+            maximized: Some(MaximizedPane::Left),
+            ..test_state()
+        };
+        let (x, y, w, h) = preview_content_bounds(1440.0, 900.0, &state);
+        assert!((x - 543.6).abs() < 0.1, "x={x}");
+        assert!((y - 160.0).abs() < 0.1, "y={y}");
+        assert!((w - 800.4).abs() < 0.1, "w={w}");
+        assert!((h - 692.0).abs() < 0.1, "h={h}");
+        // 明显区别于平时(非放大)的几何——不能巧合碰上同一个值。
+        let normal = preview_content_bounds(1440.0, 900.0, &test_state());
+        assert_ne!((x, y, w, h), normal, "放大态几何必须和平时不同");
+    }
+
+    /// Fix round 1 Critical:左侧被放大(Web 视图,无项目树配对)时同样要
+    /// 按放大盒子换算。x=x0+8=96,w=avail_w-16=1248。
+    #[test]
+    fn preview_content_bounds_left_maximized_web_spans_whole_overlay_box() {
+        let state = ShellState {
+            left_view: LeftView::Web,
+            maximized: Some(MaximizedPane::Left),
+            ..test_state()
+        };
+        let (x, _, w, _) = preview_content_bounds(1440.0, 900.0, &state);
+        assert!((x - 96.0).abs() < 0.1, "x={x}");
+        assert!((w - 1248.0).abs() < 0.1, "w={w}");
+    }
+
+    /// Fix round 1 Critical:焦点路由与 webview 摆位必须用同一份放大态
+    /// 几何——右侧放大时左侧列恒不可点中;左侧放大时命中范围要按放大盒子
+    /// 的横向范围([535.6, 1352))判定,不是平时的 [280, 688)。
+    #[test]
+    fn preview_column_hit_test_respects_maximized_state() {
+        let right_max = ShellState {
+            maximized: Some(MaximizedPane::Right),
+            ..test_state()
+        };
+        assert!(!is_in_preview_column(500.0, 1440.0, &right_max));
+
+        let left_max = ShellState {
+            maximized: Some(MaximizedPane::Left),
+            ..test_state()
+        };
+        assert!(
+            !is_in_preview_column(500.0, 1440.0, &left_max),
+            "500 在平时的预览列内,但放大盒子的列起点在 535.6 之后"
+        );
+        assert!(is_in_preview_column(600.0, 1440.0, &left_max));
+        assert!(is_in_preview_column(1300.0, 1440.0, &left_max));
+        assert!(!is_in_preview_column(1400.0, 1440.0, &left_max));
     }
 
     #[test]
