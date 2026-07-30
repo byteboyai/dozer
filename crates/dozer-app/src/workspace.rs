@@ -351,9 +351,14 @@ pub const CONTEXT_MENU_HEIGHT: f32 = 280.0;
 const CHROME_WIDTH_PX: f32 = 16.0; // 左右 padding(8*2)
 const CHROME_HEIGHT_PX: f32 = 16.0 + 4.0 + 30.0; // 上下 padding + 1 处 spacing + tab 栏行(header 已去,P1L #4)
 
-/// 左二内容区上方的 chrome 高度:pane 上内边距 8 + tab 栏 30 + 地址栏 30
-///   + 两处 spacing 4*2。header 行已去(P1L #4),故不含表头项。
-const PREVIEW_CHROME_TOP_PX: f32 = 8.0 + 30.0 + 30.0 + 8.0;
+/// 文件预览分支(`LeftView::Files`)内容区上方的 chrome 高度:pane 上内
+/// 边距 8 + tab 栏 30。地址栏已去(文件只走项目树打开),`column` 里只剩
+/// tab 栏一个子项,不再有子项间 spacing。
+const PREVIEW_CHROME_TOP_PX: f32 = 8.0 + 30.0;
+
+/// 浏览器分支(`LeftView::Web`)内容区上方的 chrome 高度:pane 上内边距 8
+/// + tab 栏 30 + 两子项间 spacing 4 + 地址栏 30(浏览器仍保留地址栏)。
+const BROWSER_CHROME_TOP_PX: f32 = 8.0 + 30.0 + 4.0 + 30.0;
 
 /// `maximize_overlay` 里 dim 背景到金色描边盒子的内边距(逻辑像素)。
 /// `preview_content_bounds`/`is_in_preview_column` 换算放大态几何时必须
@@ -404,19 +409,24 @@ pub fn preview_content_bounds(
     if state.maximized == Some(MaximizedPane::Right) {
         return (0.0, 0.0, 0.0, 0.0);
     }
+    // 两分支 chrome 高度不同(浏览器仍有地址栏,文件预览已去掉),必须各用
+    // 各的常量——共用一个会在文件预览顶上留出一截再也画不出东西的空白
+    // (webview 摆位比实际渲染的 tab 栏低了一整个地址栏的高度)。
     if state.maximized == Some(MaximizedPane::Left) {
         let (x0, avail_w) = maximized_box_x_range(window_width);
         let y0 = TOP_BAR_HEIGHT + MAXIMIZE_OVERLAY_PADDING;
         let avail_h = maximized_box_height(window_height);
-        let y = y0 + PREVIEW_CHROME_TOP_PX;
-        let h = (avail_h - PREVIEW_CHROME_TOP_PX - 8.0).max(0.0);
         return match state.left_view {
             LeftView::Web => {
+                let y = y0 + BROWSER_CHROME_TOP_PX;
+                let h = (avail_h - BROWSER_CHROME_TOP_PX - 8.0).max(0.0);
                 let x = x0 + 8.0;
                 let w = (avail_w - 16.0).max(0.0);
                 (x, y, w, h)
             }
             LeftView::Files => {
+                let y = y0 + PREVIEW_CHROME_TOP_PX;
+                let h = (avail_h - PREVIEW_CHROME_TOP_PX - 8.0).max(0.0);
                 let pair_w = pair_content_width(avail_w);
                 let list_w = pair_w * state.layout.files_split;
                 let content_w = pair_w * (1.0 - state.layout.files_split);
@@ -427,15 +437,17 @@ pub fn preview_content_bounds(
         };
     }
     let left_w = left_zone_width(window_width, state);
-    let y = TOP_BAR_HEIGHT + PREVIEW_CHROME_TOP_PX;
-    let h = (window_height - y - 8.0).max(0.0);
     match state.left_view {
         LeftView::Web => {
+            let y = TOP_BAR_HEIGHT + BROWSER_CHROME_TOP_PX;
+            let h = (window_height - y - 8.0).max(0.0);
             let x = ICON_RAIL_WIDTH + 8.0;
             let w = (left_w - 16.0).max(0.0);
             (x, y, w, h)
         }
         LeftView::Files => {
+            let y = TOP_BAR_HEIGHT + PREVIEW_CHROME_TOP_PX;
+            let h = (window_height - y - 8.0).max(0.0);
             let pair_w = pair_content_width(left_w);
             let list_w = pair_w * state.layout.files_split;
             let content_w = pair_w * (1.0 - state.layout.files_split);
@@ -4512,9 +4524,16 @@ mod tests {
     #[test]
     fn chrome_constants_exclude_removed_header() {
         // #4 去掉 header 行(22px + 一处 spacing 4 = 26)后的期望值,锁死防漂移遮挡。
+        // 文件预览又去掉了地址栏(只剩 tab 栏),浏览器仍保留地址栏,两分支
+        // chrome 高度分道,不能再共用同一个值——否则文件预览顶上会露一截
+        // 再也画不出东西的空白。
         assert_eq!(
-            PREVIEW_CHROME_TOP_PX, 76.0,
-            "预览 chrome 顶应为去 header 后的 76"
+            PREVIEW_CHROME_TOP_PX, 38.0,
+            "文件预览 chrome 顶应为去地址栏后的 38(8 内边距 + 30 tab 栏)"
+        );
+        assert_eq!(
+            BROWSER_CHROME_TOP_PX, 72.0,
+            "浏览器 chrome 顶应为 72(8 内边距 + 30 tab 栏 + 4 spacing + 30 地址栏)"
         );
         assert_eq!(
             CHROME_HEIGHT_PX, 50.0,
@@ -4544,8 +4563,8 @@ mod tests {
         assert!(x >= col_start && x < col_start + 16.0, "x={x}");
         assert!((380.0..=420.0).contains(&w), "w={w}");
         assert!(
-            y > 104.0 && y < 134.0,
-            "y={y}(顶栏 44 + tab 栏+地址栏之下,表头已去)"
+            (y - 82.0).abs() < 0.1,
+            "y={y}(顶栏 44 + tab 栏 38 之下,地址栏已去)"
         );
         assert!(h > 700.0 && h < 900.0 - y, "h={h}");
     }
@@ -4595,8 +4614,8 @@ mod tests {
     /// x0=ICON_RAIL_WIDTH(48)+MAXIMIZE_OVERLAY_PADDING(40)=88,
     /// avail_w=1440-2*48-2*40=1264,pair_w=1264-8=1256,
     /// list_w=1256*0.35=439.6,x=88+439.6+8+8=543.6,w=1256*0.65-16=800.4;
-    /// y0=TOP_BAR_HEIGHT(44)+40=84,y=84+76(PREVIEW_CHROME_TOP_PX)=160,
-    /// avail_h=900-44-80=776,h=776-76-8=692。
+    /// y0=TOP_BAR_HEIGHT(44)+40=84,y=84+38(PREVIEW_CHROME_TOP_PX,地址栏已去)=122,
+    /// avail_h=900-44-80=776,h=776-38-8=730。
     #[test]
     fn preview_content_bounds_left_maximized_files_matches_overlay_geometry() {
         let state = ShellState {
@@ -4605,9 +4624,9 @@ mod tests {
         };
         let (x, y, w, h) = preview_content_bounds(1440.0, 900.0, &state);
         assert!((x - 543.6).abs() < 0.1, "x={x}");
-        assert!((y - 160.0).abs() < 0.1, "y={y}");
+        assert!((y - 122.0).abs() < 0.1, "y={y}");
         assert!((w - 800.4).abs() < 0.1, "w={w}");
-        assert!((h - 692.0).abs() < 0.1, "h={h}");
+        assert!((h - 730.0).abs() < 0.1, "h={h}");
         // 明显区别于平时(非放大)的几何——不能巧合碰上同一个值。
         let normal = preview_content_bounds(1440.0, 900.0, &test_state());
         assert_ne!((x, y, w, h), normal, "放大态几何必须和平时不同");
