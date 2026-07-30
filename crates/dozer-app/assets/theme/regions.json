@@ -1,0 +1,77 @@
+{
+  "top_bar": {
+    "background": "BG",
+    "border": { "color": "BORDER", "width": 0.0, "radius": 0.0 },
+    "padding": [0, 12],
+    "gap": 16
+  },
+  "left_icon_rail": {
+    "background": "PANEL",
+    "border": null,
+    "padding": [16, 6, 0, 6],
+    "gap": 12
+  },
+  "right_icon_rail": {
+    "background": "PANEL",
+    "border": null,
+    "padding": [16, 6, 0, 6],
+    "gap": 12
+  },
+  "project_pane": {
+    "background": "PANEL",
+    "border": null,
+    "padding": 8,
+    "gap": 4
+  },
+  "preview_pane": {
+    "background": "PANEL",
+    "border": null,
+    "padding": 8,
+    "gap": 4
+  },
+  "browser_pane": {
+    "background": "PANEL",
+    "border": null,
+    "padding": 8,
+    "gap": 4
+  },
+  "agent_list_pane": {
+    "background": "PANEL",
+    "border": null,
+    "padding": 12,
+    "gap": 8
+  },
+  "terminal_pane": {
+    "background": "TERM_BG",
+    "border": null,
+    "padding": 8,
+    "gap": 4
+  },
+  "conversation_list_pane": {
+    "background": "PANEL",
+    "border": null,
+    "padding": 12,
+    "gap": 8
+  },
+  "review_content_pane": {
+    "background": "PANEL",
+    "border": null,
+    "padding": 8,
+    "gap": 4
+  },
+  "status_bar": {
+    "background": "PANEL",
+    "border": { "color": "BORDER", "width": 1.0, "radius": 0.0 },
+    "padding": [0, 8]
+  },
+  "maximize_overlay": {
+    "scrim": { "background": "SCRIM", "padding": 40.0 },
+    "border": { "color": "GOLD", "width": 1.5, "radius": 10.0 }
+  },
+  "context_menu": {
+    "background": "CARD",
+    "border": { "color": "BORDER", "width": 1.0, "radius": 6.0 },
+    "padding": 6,
+    "gap": 2
+  }
+}

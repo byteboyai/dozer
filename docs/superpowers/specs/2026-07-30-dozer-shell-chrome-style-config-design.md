@@ -41,6 +41,7 @@
 | `right_icon_rail` | `right_icon_rail` | 同 `left_icon_rail` |
 | `maximize_overlay` | `maximize_overlay` | 见 §4(复合结构,scrim + 描边盒子两部分) |
 | `context_menu_popup` | `context_menu_popup` | 见 §4(复合结构) |
+| `status_bar` | `status_bar_container`(项目栏底/终端栏底共用) | 背景 `PANEL`;边框 `{BORDER, width 1, radius 0}`;padding `[0,8]`(实现阶段核对代码后补充,原表遗漏此项——见 `docs/superpowers/plans/2026-07-30-dozer-shell-chrome-style-config.md` 开头说明) |
 
 **面板内容(7)**:
 | 区域 key | 对应函数 | 现状 |
