@@ -3734,6 +3734,7 @@ fn browser_pane(
     ws: &Workspace,
     width: Length,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let region = chrome_style::browser_pane();
     let widths: Vec<f32> = ws
         .browser
         .tabs()
@@ -3831,7 +3832,7 @@ fn browser_pane(
             ..button::Style::default()
         });
 
-    let mut content = column![tab_bar, tab_divider(), addr].spacing(4);
+    let mut content = column![tab_bar, tab_divider(), addr].spacing(region.gap);
 
     if let Some(err) = &ws.browser_error {
         content = content.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
@@ -3849,11 +3850,12 @@ fn browser_pane(
         );
     }
 
-    container(content.padding(8))
+    container(content.padding(region.padding))
         .width(width)
         .height(Length::Fill)
         .style(move |_theme: &iced_widget::Theme| container::Style {
-            background: Some(theme::PANEL.into()),
+            background: region.background.map(Into::into),
+            border: region.border.unwrap_or_default(),
             ..container::Style::default()
         })
         .into()
