@@ -2982,6 +2982,7 @@ fn agent_list_pane(
     ws: &Workspace,
     width: Length,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let region = chrome_style::agent_list_pane();
     let content = column![
         row![
             text("Agent").size(14).color(theme::CREAM),
@@ -2997,14 +2998,14 @@ fn agent_list_pane(
         .spacing(8),
         text("Agents（后续）").size(13).color(theme::DIM),
     ]
-    .spacing(8);
+    .spacing(region.gap);
 
-    container(content.padding(12))
+    container(content.padding(region.padding))
         .width(width)
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::PANEL.into()),
-            // 面板不再自带边框,原因同 conversation_list_pane。
+            background: region.background.map(Into::into),
+            border: region.border.unwrap_or_default(),
             ..container::Style::default()
         })
         .into()
