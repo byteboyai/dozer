@@ -22,6 +22,7 @@
 use crate::conversation::{self, ConversationMeta};
 use crate::delivery::{self, FileChange, FileStatus};
 use crate::goal::{self, Goal};
+use crate::chrome_style;
 use crate::icons;
 use crate::layout;
 use crate::osc::{OscEvent, OscScanner};
