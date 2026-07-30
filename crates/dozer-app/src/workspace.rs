@@ -654,6 +654,8 @@ pub enum Message {
     TermTabScroll(bool),
     /// 预览 tab 栏箭头翻页，语义同 `TermTabScroll`。
     PreviewTabScroll(bool),
+    /// 浏览器 tab 栏箭头翻页，语义同 `TermTabScroll`。
+    BrowserTabScroll(bool),
     /// 终端左键按下：在视口格 `(col, row)` 起新选区（`right` = 按点在
     /// 格子右半）。
     TermSelStart { col: usize, row: usize, right: bool },
@@ -677,6 +679,18 @@ pub enum Message {
     /// 预览:"打开文件…"按钮 → rfd 原生选择器(main.rs 侧执行,选中后
     /// 回送 PreviewOpenPath).
     PreviewPickFile,
+    /// 浏览器:打开 URL 为新网页 tab——与 `PreviewOpenUrl` 语义相同,但落在
+    /// 独立的 `Workspace::browser` 上,不产生任何文件预览 tab(该功能只服务
+    /// 左图标栏"地球"进入的独立浏览器视图)。
+    BrowserOpenUrl(String),
+    /// 浏览器:切换 tab(vec 位置)。
+    BrowserSelectTab(usize),
+    /// 浏览器:关闭 tab(vec 位置)。
+    BrowserCloseTab(usize),
+    /// 浏览器:点击地址栏,进入编辑态。
+    BrowserAddrClick,
+    /// 浏览器:地址栏编辑事件。
+    BrowserAddrEvent(AddrEvent),
     /// 项目:点"打开项目…"→ rfd 文件夹选择(main.rs 执行)。
     ProjectPickFolder,
     /// 项目:打开某路径为项目(rfd 选中/最近点击回送)。
@@ -863,6 +877,11 @@ pub struct Workspace {
     preview: PreviewPane,
     /// 预览域错误文案(打开文件失败等), RED 显示在预览栏地址栏下方。
     preview_error: Option<String>,
+    /// 浏览器域状态机:与 `preview` 完全独立的一份 tab/地址栏/webview
+    /// 状态,只承载网页(点左图标栏"地球"进入,不受文件预览影响,反之亦然)。
+    browser: PreviewPane,
+    /// 浏览器域错误文案,语义同 `preview_error`。
+    browser_error: Option<String>,
     /// `dozer://flyfish/__file__` 端点的文件白名单;与 main.rs 的协议
     /// 闭包共享(Arc),打开文件时插入.
     allowed_files: Arc<Mutex<HashSet<PathBuf>>>,
@@ -896,6 +915,8 @@ pub struct Workspace {
     term_tab_first: usize,
     /// 预览 tab 栏当前最左可见 tab 序号，语义同 `term_tab_first`。
     preview_tab_first: usize,
+    /// 浏览器 tab 栏当前最左可见 tab 序号，语义同 `term_tab_first`。
+    browser_tab_first: usize,
     /// 图标栏+左右面板区宽度/分割状态;启动时 `layout::load()` 读盘作
     /// 起始值,拖拽结束(`ColumnDragEnd`)写盘。
     shell_layout: ShellLayout,
@@ -1003,6 +1024,8 @@ impl Workspace {
             daemon_error: None,
             preview: PreviewPane::default(),
             preview_error: None,
+            browser: PreviewPane::default(),
+            browser_error: None,
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
             acceptance: None,
             review: None,
@@ -1018,6 +1041,7 @@ impl Workspace {
             git_statuses: HashMap::new(),
             term_tab_first: 0,
             preview_tab_first: 0,
+            browser_tab_first: 0,
             left_view: shell_layout.left_view,
             right_view: shell_layout.right_view,
             left_collapsed: shell_layout.left_collapsed,
@@ -1073,6 +1097,8 @@ impl Workspace {
             daemon_error: Some(message),
             preview: PreviewPane::default(),
             preview_error: None,
+            browser: PreviewPane::default(),
+            browser_error: None,
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
             acceptance: None,
             review: None,
@@ -1088,6 +1114,7 @@ impl Workspace {
             git_statuses: HashMap::new(),
             term_tab_first: 0,
             preview_tab_first: 0,
+            browser_tab_first: 0,
             left_view: shell_layout.left_view,
             right_view: shell_layout.right_view,
             left_collapsed: shell_layout.left_collapsed,
@@ -1466,6 +1493,13 @@ impl Workspace {
                     self.preview_tab_first = self.preview_tab_first.saturating_sub(2);
                 }
             }
+            Message::BrowserTabScroll(right) => {
+                if right {
+                    self.browser_tab_first = self.browser_tab_first.saturating_add(2);
+                } else {
+                    self.browser_tab_first = self.browser_tab_first.saturating_sub(2);
+                }
+            }
             Message::TermSelStart { col, row, right } => {
                 if let Some(tab) = self.tabs.get_mut(self.active) {
                     tab.model.selection_start(col, row, right);
@@ -1543,6 +1577,36 @@ impl Workspace {
                 },
             },
             Message::PreviewPickFile => {} // 副作用在 main.rs(rfd 模态需窗口句柄侧执行)
+            Message::BrowserOpenUrl(url) => {
+                self.browser_error = None;
+                self.browser.open_url(url);
+                self.browser_tab_first = 0;
+            }
+            Message::BrowserSelectTab(idx) => {
+                self.browser.select(idx);
+            }
+            Message::BrowserCloseTab(idx) => {
+                self.browser.close(idx);
+                self.browser_tab_first = 0;
+            }
+            Message::BrowserAddrClick => {
+                self.browser_error = None;
+                self.browser.addr_begin();
+            }
+            Message::BrowserAddrEvent(ev) => match ev {
+                AddrEvent::Text(s) => self.browser.addr_text(&s),
+                AddrEvent::Backspace => self.browser.addr_backspace(),
+                AddrEvent::Cancel => self.browser.addr_cancel(),
+                AddrEvent::Submit => match self.browser.addr_submit() {
+                    // 浏览器只承载网页 tab,地址栏解析出的本地路径不受支持
+                    // (与文件预览彻底独立,不借它的文件打开能力)。
+                    Some(AddrTarget::File(_)) => {
+                        self.browser_error = Some("浏览器不支持打开本地文件".to_string());
+                    }
+                    Some(AddrTarget::Url(url)) => self.update(Message::BrowserOpenUrl(url)),
+                    None => {}
+                },
+            },
             Message::ProjectPickFolder => {} // 副作用在 main.rs(rfd 文件夹选择)
             Message::ProjectOpen(path) => {
                 let client = self.client.clone();
@@ -2258,6 +2322,12 @@ impl Workspace {
         self.preview.addr_editing()
     }
 
+    /// 浏览器地址栏是否在编辑态,语义同 `preview_addr_editing`,但查独立的
+    /// `self.browser`。
+    pub fn browser_addr_editing(&self) -> bool {
+        self.browser.addr_editing()
+    }
+
     /// 验收意见输入是否在编辑态（main.rs 键盘路由用）。
     pub fn acceptance_comment_editing(&self) -> bool {
         self.acceptance.as_ref().is_some_and(|a| a.comment_editing)
@@ -2267,6 +2337,12 @@ impl Workspace {
     /// 焦点路由取句柄;验收 tab/无 tab 返回 None。
     pub fn active_preview_webview_id(&self) -> Option<usize> {
         self.preview.active_webview_id()
+    }
+
+    /// 当前激活浏览器 tab 的 webview id,语义同 `active_preview_webview_id`,
+    /// 查独立的 `self.browser`。
+    pub fn active_browser_webview_id(&self) -> Option<usize> {
+        self.browser.active_webview_id()
     }
 
     /// 当前文本光标的窗口逻辑坐标 `(x, y_底, 行高)`,给 main.rs 设 IME
@@ -2444,9 +2520,24 @@ impl Workspace {
         self.acceptance = None;
     }
 
-    /// 当前应存在的 webview 清单(main.rs 差集同步).
+    /// 当前应存在的 webview 清单(main.rs 差集同步)。不在文件视图时整体
+    /// 清空:`preview_pane` 此刻根本不在屏上,若不清空,其原生 wry 子视图会
+    /// 无视 iced 绘制顺序,径直叠在浏览器视图之上(与 `browser_desired` 互斥
+    /// 同理)。
     pub fn preview_desired(&self) -> Vec<WebviewSpec> {
+        if self.left_view != LeftView::Files {
+            return Vec::new();
+        }
         self.preview.desired_webviews()
+    }
+
+    /// 浏览器域的 webview 清单,语义同 `preview_desired`,查独立的
+    /// `self.browser`,且只在左视图为 Web 时非空。
+    pub fn browser_desired(&self) -> Vec<WebviewSpec> {
+        if self.left_view != LeftView::Web {
+            return Vec::new();
+        }
+        self.browser.desired_webviews()
     }
 
     /// 协议闭包共享的文件白名单句柄.
@@ -3145,7 +3236,7 @@ fn left_panel_area(
             .width(total)
             .into()
         }
-        LeftView::Web => preview_pane(ws, total),
+        LeftView::Web => browser_pane(ws, total),
     }
 }
 
@@ -3622,7 +3713,7 @@ fn preview_pane(
             background: None,
             ..button::Style::default()
         });
-    let tab_bar = row![left_arrow, clipped, right_arrow, open_btn, maximize_btn]
+    let tab_bar = row![left_arrow, right_arrow, clipped, open_btn, maximize_btn]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
 
@@ -3679,6 +3770,135 @@ fn preview_pane(
         .style(move |_theme: &iced_widget::Theme| container::Style {
             background: Some(theme::PANEL.into()),
             // 面板不再自带边框,原因同 conversation_list_pane。
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// 浏览器栏:左图标栏"地球"进入的独立浏览器,与 `preview_pane` 结构同款
+/// (tab 栏 + 地址栏 + 内容),但读写的是完全独立的 `ws.browser`——不含
+/// "打开文件…"按钮,也不受文件预览的 tab/地址栏状态影响。
+fn browser_pane(
+    ws: &Workspace,
+    width: Length,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let widths: Vec<f32> = ws
+        .browser
+        .tabs()
+        .iter()
+        .map(|t| preview_tab_display_width(&t.title))
+        .collect();
+    let (first, can_left, can_right) =
+        tab_window(&widths, 4.0, TAB_BAR_AVAIL_PX, ws.browser_tab_first);
+
+    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = ws
+        .browser
+        .tabs()
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| *idx >= first)
+        .map(|(idx, tab)| {
+            let active = idx == ws.browser.active_idx();
+            let select = button(text(tab.title.clone()).size(13).color(theme::CREAM))
+                .on_press(Message::BrowserSelectTab(idx))
+                .style(|_t, _s| button::Style {
+                    background: None,
+                    text_color: theme::CREAM,
+                    ..button::Style::default()
+                });
+            let close = button(text("×").size(13).color(theme::DIM))
+                .on_press(Message::BrowserCloseTab(idx))
+                .style(|_t, _s| button::Style {
+                    background: None,
+                    text_color: theme::DIM,
+                    ..button::Style::default()
+                });
+            container(
+                row![select, close]
+                    .spacing(2)
+                    .align_y(iced_widget::core::Alignment::Center),
+            )
+            .padding([2, 4])
+            .style(move |_t: &iced_widget::Theme| {
+                if active {
+                    container::Style {
+                        background: Some(theme::CARD.into()),
+                        border: Border {
+                            color: theme::BORDER,
+                            width: 1.0,
+                            radius: 6.0.into(),
+                        },
+                        ..container::Style::default()
+                    }
+                } else {
+                    container::Style::default()
+                }
+            })
+            .into()
+        })
+        .collect();
+    let tabs_row = row(items).spacing(4);
+    let clipped = container(tabs_row).width(Length::Fill).clip(true);
+    let left_arrow = tab_arrow_button("◂", can_left, Message::BrowserTabScroll(false));
+    let right_arrow = tab_arrow_button("▸", can_right, Message::BrowserTabScroll(true));
+    let maximize_btn = button(icons::view(icons::IconKind::Maximize, 14.0, theme::DIM))
+        .on_press(Message::MaximizeToggle(MaximizedPane::Left))
+        .style(|_t, _s| button::Style {
+            background: None,
+            ..button::Style::default()
+        });
+    let tab_bar = row![left_arrow, right_arrow, clipped, maximize_btn]
+        .spacing(4)
+        .align_y(iced_widget::core::Alignment::Center);
+
+    let editing = ws.browser.addr_editing();
+    let addr_text = if editing {
+        format!("{}▏", ws.browser.addr_buffer())
+    } else {
+        "输入网址".to_string()
+    };
+    let addr =
+        button(
+            text(addr_text)
+                .size(13)
+                .color(if editing { theme::CREAM } else { theme::DIM }),
+        )
+        .on_press(Message::BrowserAddrClick)
+        .width(Length::Fill)
+        .style(move |_t, _s| button::Style {
+            background: Some(theme::TERM_BG.into()),
+            text_color: theme::CREAM,
+            border: Border {
+                color: if editing { theme::GOLD } else { theme::BORDER },
+                width: 1.0,
+                radius: 2.0.into(),
+            },
+            ..button::Style::default()
+        });
+
+    let mut content = column![tab_bar, addr].spacing(4);
+
+    if let Some(err) = &ws.browser_error {
+        content = content.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
+    }
+
+    if ws.browser.tabs().is_empty() {
+        content = content.push(
+            container(
+                text("暂无网页——在地址栏输入网址")
+                    .size(14)
+                    .color(theme::DIM),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill),
+        );
+    }
+
+    container(content.padding(8))
+        .width(width)
+        .height(Length::Fill)
+        .style(move |_theme: &iced_widget::Theme| container::Style {
+            background: Some(theme::PANEL.into()),
             ..container::Style::default()
         })
         .into()
@@ -4075,7 +4295,7 @@ fn tab_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
             ..button::Style::default()
         });
 
-    row![left_arrow, clipped, right_arrow, plus, maximize_btn]
+    row![left_arrow, right_arrow, clipped, plus, maximize_btn]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center)
         .into()

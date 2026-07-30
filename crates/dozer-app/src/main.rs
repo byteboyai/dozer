@@ -189,6 +189,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             /// 预览 webview 池:tab id → (句柄, 当前已加载 URL)。句柄只在
             /// 本事件环存取(spike 约束 2);URL 缓存用于导航去重。
             webviews: std::collections::HashMap<usize, (wry::WebView, String)>,
+            /// 浏览器 webview 池,语义/生命周期同 `webviews`,但服务独立的
+            /// "地球图标"浏览器视图——两个池各自独立增删,tab id 空间即使
+            /// 撞了也不会互相覆盖(不同 HashMap)。
+            browser_webviews: std::collections::HashMap<usize, (wry::WebView, String)>,
             /// 最近一次光标物理位置(CursorMoved 更新),鼠标点击时用于命中测试。
             cursor_phys: winit::dpi::PhysicalPosition<f64>,
             /// 待应用的焦点意图(点击/消息设置,sync_previews 之后统一 apply,
@@ -197,11 +201,71 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         },
     }
 
-    /// 点击/消息后决定键盘焦点归谁:预览 webview(⌘C 走原生复制)或窗口(终端)。
+    /// 点击/消息后决定键盘焦点归谁:预览 webview、浏览器 webview(各自
+    /// ⌘C 走原生复制)或窗口(终端)。
     #[derive(Clone, Copy)]
     enum FocusIntent {
         Preview,
+        Browser,
         Terminal,
+    }
+
+    /// `sync_previews` 的差集同步逻辑,预览池/浏览器池共用同一套算法,
+    /// 各自传各自的 `pool`/`specs`,互不干扰。
+    fn sync_webview_pool(
+        window: &winit::window::Window,
+        pool: &mut std::collections::HashMap<usize, (wry::WebView, String)>,
+        specs: Vec<preview::WebviewSpec>,
+        bounds: wry::Rect,
+        allowed_files: std::sync::Arc<
+            std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
+        >,
+    ) {
+        let desired_ids: std::collections::HashSet<usize> = specs.iter().map(|s| s.id).collect();
+        pool.retain(|id, _| desired_ids.contains(id));
+
+        for spec in specs {
+            match pool.get_mut(&spec.id) {
+                Some((view, loaded_url)) => {
+                    if *loaded_url != spec.url {
+                        if let Err(e) = view.load_url(&spec.url) {
+                            tracing::warn!("预览导航失败: {e}");
+                        }
+                        *loaded_url = spec.url.clone();
+                    }
+                    let _ = view.set_bounds(bounds);
+                    let _ = view.set_visible(spec.visible);
+                }
+                None => {
+                    let allowed = std::sync::Arc::clone(&allowed_files);
+                    let root = assets::assets_root();
+                    let built = wry::WebViewBuilder::new()
+                        .with_url(&spec.url)
+                        .with_bounds(bounds)
+                        .with_visible(spec.visible)
+                        .with_custom_protocol("dozer".into(), move |_id, request| {
+                            let allowed = allowed.lock().expect("allowed_files 锁");
+                            let reply = assets::handle_protocol(
+                                &root,
+                                &allowed,
+                                &request.uri().to_string(),
+                            );
+                            wry::http::Response::builder()
+                                .status(reply.status)
+                                .header("Content-Type", reply.mime)
+                                .body(std::borrow::Cow::Owned(reply.body))
+                                .expect("构造协议应答")
+                        })
+                        .build_as_child(window);
+                    match built {
+                        Ok(view) => {
+                            pool.insert(spec.id, (view, spec.url.clone()));
+                        }
+                        Err(e) => tracing::error!("创建预览 webview 失败: {e}"),
+                    }
+                }
+            }
+        }
     }
 
     impl Runner {
@@ -290,13 +354,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     let scale = window.scale_factor();
                     let logical_x = (cursor_phys.x / scale) as f32;
                     let logical_w = (window.inner_size().width as f64 / scale) as f32;
+                    let state = workspace.shell_state();
                     *pending_focus = Some(
-                        if workspace::is_in_preview_column(
-                            logical_x,
-                            logical_w,
-                            &workspace.shell_state(),
-                        ) {
-                            FocusIntent::Preview
+                        if workspace::is_in_preview_column(logical_x, logical_w, &state) {
+                            if state.left_view == workspace::LeftView::Web {
+                                FocusIntent::Browser
+                            } else {
+                                FocusIntent::Preview
+                            }
                         } else {
                             FocusIntent::Terminal
                         },
@@ -365,9 +430,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             // 地址栏 / 验收意见 / 项目树行内编辑态:键盘直达自绘输入(不经
             // keymap、不进 PTY)。
             let to_preview = workspace.preview_addr_editing();
+            let to_browser = workspace.browser_addr_editing();
             let to_comment = workspace.acceptance_comment_editing();
             let to_tree_edit = workspace.tree_editing();
-            if to_preview || to_comment || to_tree_edit {
+            if to_preview || to_browser || to_comment || to_tree_edit {
                 let addr_event = match event {
                     WindowEvent::KeyboardInput {
                         event,
@@ -394,11 +460,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     _ => None,
                 };
                 if let Some(ev) = addr_event {
-                    // 优先级:地址栏 > 验收意见 > 项目树编辑(三者同真时罕见,
-                    // 谁先建的编辑态谁优先没有实际冲突场景,这个顺序只是
-                    // 一个确定性兜底)。
+                    // 优先级:预览地址栏 > 浏览器地址栏 > 验收意见 > 项目树编辑
+                    // (四者同真时罕见,谁先建的编辑态谁优先没有实际冲突场景,
+                    // 这个顺序只是一个确定性兜底)。
                     let message = if to_preview {
                         Message::PreviewAddrEvent(ev)
+                    } else if to_browser {
+                        Message::BrowserAddrEvent(ev)
                     } else if to_comment {
                         Message::AcceptanceCommentEvent(ev)
                     } else {
@@ -440,21 +508,20 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         }
 
         /// 把 workspace 的 webview 期望清单同步到真实 wry 子视图:
-        /// 建缺失、毁多余、对齐可见性与 bounds、URL 变更时导航。
+        /// 建缺失、毁多余、对齐可见性与 bounds、URL 变更时导航。文件预览池
+        /// 和浏览器池各自独立同步(`preview_desired`/`browser_desired` 已按
+        /// `left_view` 互斥,同一时刻至多一个非空)。
         fn sync_previews(&mut self) {
             let Self::Ready {
                 window,
                 workspace,
                 webviews,
+                browser_webviews,
                 ..
             } = self
             else {
                 return;
             };
-            let specs = workspace.preview_desired();
-            let desired_ids: std::collections::HashSet<usize> =
-                specs.iter().map(|s| s.id).collect();
-            webviews.retain(|id, _| desired_ids.contains(id));
 
             let size = window.inner_size();
             let scale = window.scale_factor();
@@ -467,48 +534,20 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
             };
 
-            for spec in specs {
-                match webviews.get_mut(&spec.id) {
-                    Some((view, loaded_url)) => {
-                        if *loaded_url != spec.url {
-                            if let Err(e) = view.load_url(&spec.url) {
-                                tracing::warn!("预览导航失败: {e}");
-                            }
-                            *loaded_url = spec.url.clone();
-                        }
-                        let _ = view.set_bounds(bounds);
-                        let _ = view.set_visible(spec.visible);
-                    }
-                    None => {
-                        let allowed = workspace.allowed_files();
-                        let root = assets::assets_root();
-                        let built = wry::WebViewBuilder::new()
-                            .with_url(&spec.url)
-                            .with_bounds(bounds)
-                            .with_visible(spec.visible)
-                            .with_custom_protocol("dozer".into(), move |_id, request| {
-                                let allowed = allowed.lock().expect("allowed_files 锁");
-                                let reply = assets::handle_protocol(
-                                    &root,
-                                    &allowed,
-                                    &request.uri().to_string(),
-                                );
-                                wry::http::Response::builder()
-                                    .status(reply.status)
-                                    .header("Content-Type", reply.mime)
-                                    .body(std::borrow::Cow::Owned(reply.body))
-                                    .expect("构造协议应答")
-                            })
-                            .build_as_child(window.as_ref());
-                        match built {
-                            Ok(view) => {
-                                webviews.insert(spec.id, (view, spec.url.clone()));
-                            }
-                            Err(e) => tracing::error!("创建预览 webview 失败: {e}"),
-                        }
-                    }
-                }
-            }
+            sync_webview_pool(
+                window.as_ref(),
+                webviews,
+                workspace.preview_desired(),
+                bounds,
+                workspace.allowed_files(),
+            );
+            sync_webview_pool(
+                window.as_ref(),
+                browser_webviews,
+                workspace.browser_desired(),
+                bounds,
+                workspace.allowed_files(),
+            );
         }
 
         /// `PreviewPickFile` 的副作用:原生文件选择器(模态,UI 线程短暂
@@ -525,7 +564,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             };
             // 打开/切到预览 tab → 键盘焦点跟去预览(否则 ⌘C 复制的是终端选区)。
-            // PickFile 选中后也走 PreviewOpenPath,一并归预览。
+            // PickFile 选中后也走 PreviewOpenPath,一并归预览。浏览器 tab
+            // 同理归浏览器(各自独立的 webview 池,焦点不能混)。
             if matches!(
                 message,
                 Message::PreviewOpenPath(_)
@@ -534,6 +574,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     | Message::PreviewPickFile
             ) {
                 *pending_focus = Some(FocusIntent::Preview);
+            } else if matches!(
+                message,
+                Message::BrowserOpenUrl(_) | Message::BrowserSelectTab(_)
+            ) {
+                *pending_focus = Some(FocusIntent::Browser);
             }
             match message {
                 Message::PreviewPickFile => {
@@ -561,13 +606,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         }
 
         /// sync_previews 之后统一应用焦点意图(此时新建 webview 已入池)。
-        /// Preview → 当前预览 webview 拿键盘(⌘C 原生复制);Terminal/无 webview
-        /// → 交回窗口(终端键盘)。
+        /// Preview/Browser → 各自当前激活 webview 拿键盘(⌘C 原生复制);
+        /// Terminal/无 webview → 交回窗口(终端键盘)。
         fn apply_pending_focus(&mut self) {
             let Self::Ready {
                 workspace,
                 window,
                 webviews,
+                browser_webviews,
                 pending_focus,
                 ..
             } = self
@@ -579,6 +625,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     Some(id) => {
                         if let Some((view, _)) = webviews.get(&id) {
                             let _ = view.focus(); // 返回 Result,忽略
+                        } else {
+                            window.focus_window();
+                        }
+                    }
+                    None => window.focus_window(),
+                },
+                Some(FocusIntent::Browser) => match workspace.active_browser_webview_id() {
+                    Some(id) => {
+                        if let Some((view, _)) = browser_webviews.get(&id) {
+                            let _ = view.focus();
                         } else {
                             window.focus_window();
                         }
@@ -770,6 +826,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     viewport,
                     resized: false,
                     webviews: std::collections::HashMap::new(),
+                    browser_webviews: std::collections::HashMap::new(),
                     cursor_phys: winit::dpi::PhysicalPosition::new(0.0, 0.0),
                     pending_focus: None,
                 };
