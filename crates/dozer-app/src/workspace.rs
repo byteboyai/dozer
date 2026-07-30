@@ -3110,6 +3110,7 @@ fn rail_icon_button<'a>(
 fn left_icon_rail(
     ws: &Workspace,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let region = chrome_style::left_icon_rail();
     let content = column![
         rail_icon_button(
             icons::IconKind::Folder,
@@ -3122,19 +3123,15 @@ fn left_icon_rail(
             Message::LeftIconSelect(LeftView::Web),
         ),
     ]
-    .spacing(12)
-    .padding(Padding {
-        top: 16.0,
-        left: 6.0,
-        right: 6.0,
-        ..Padding::ZERO
-    });
+    .spacing(region.gap)
+    .padding(region.padding);
 
     container(content)
         .width(Length::Fixed(ICON_RAIL_WIDTH))
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::PANEL.into()),
+            background: region.background.map(Into::into),
+            border: region.border.unwrap_or_default(),
             ..container::Style::default()
         })
         .into()
@@ -3144,6 +3141,7 @@ fn left_icon_rail(
 fn right_icon_rail(
     ws: &Workspace,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let region = chrome_style::right_icon_rail();
     let content = column![
         rail_icon_button(
             icons::IconKind::Bot,
@@ -3156,19 +3154,15 @@ fn right_icon_rail(
             Message::RightIconSelect(RightView::Conversations),
         ),
     ]
-    .spacing(12)
-    .padding(Padding {
-        top: 16.0,
-        left: 6.0,
-        right: 6.0,
-        ..Padding::ZERO
-    });
+    .spacing(region.gap)
+    .padding(region.padding);
 
     container(content)
         .width(Length::Fixed(ICON_RAIL_WIDTH))
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::PANEL.into()),
+            background: region.background.map(Into::into),
+            border: region.border.unwrap_or_default(),
             ..container::Style::default()
         })
         .into()
