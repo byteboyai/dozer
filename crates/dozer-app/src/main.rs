@@ -427,13 +427,12 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
-            // 地址栏 / 验收意见 / 项目树行内编辑态:键盘直达自绘输入(不经
-            // keymap、不进 PTY)。
-            let to_preview = workspace.preview_addr_editing();
+            // 浏览器地址栏 / 验收意见 / 项目树行内编辑态:键盘直达自绘输入
+            // (不经 keymap、不进 PTY)。文件预览面板已不再有地址栏。
             let to_browser = workspace.browser_addr_editing();
             let to_comment = workspace.acceptance_comment_editing();
             let to_tree_edit = workspace.tree_editing();
-            if to_preview || to_browser || to_comment || to_tree_edit {
+            if to_browser || to_comment || to_tree_edit {
                 let addr_event = match event {
                     WindowEvent::KeyboardInput {
                         event,
@@ -460,12 +459,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     _ => None,
                 };
                 if let Some(ev) = addr_event {
-                    // 优先级:预览地址栏 > 浏览器地址栏 > 验收意见 > 项目树编辑
-                    // (四者同真时罕见,谁先建的编辑态谁优先没有实际冲突场景,
-                    // 这个顺序只是一个确定性兜底)。
-                    let message = if to_preview {
-                        Message::PreviewAddrEvent(ev)
-                    } else if to_browser {
+                    // 优先级:浏览器地址栏 > 验收意见 > 项目树编辑(三者同真时
+                    // 罕见,谁先建的编辑态谁优先没有实际冲突场景,这个顺序只是
+                    // 一个确定性兜底)。
+                    let message = if to_browser {
                         Message::BrowserAddrEvent(ev)
                     } else if to_comment {
                         Message::AcceptanceCommentEvent(ev)
@@ -550,8 +547,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             );
         }
 
-        /// `PreviewPickFile` 的副作用:原生文件选择器(模态,UI 线程短暂
-        /// 阻塞可接受)。选中 → 直接转成 `PreviewOpenPath` 送 workspace。
+        /// `ProjectPickFolder`/`ProjectTreeCopyPath` 等需要窗口句柄侧原生
+        /// 能力(rfd 模态、系统剪贴板)的消息在此拦截,其余原样转给
+        /// `workspace.update`。
         fn dispatch(&mut self, message: Message) {
             let Self::Ready {
                 workspace,
@@ -564,14 +562,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             };
             // 打开/切到预览 tab → 键盘焦点跟去预览(否则 ⌘C 复制的是终端选区)。
-            // PickFile 选中后也走 PreviewOpenPath,一并归预览。浏览器 tab
-            // 同理归浏览器(各自独立的 webview 池,焦点不能混)。
+            // 浏览器 tab 同理归浏览器(各自独立的 webview 池,焦点不能混)。
             if matches!(
                 message,
-                Message::PreviewOpenPath(_)
-                    | Message::PreviewOpenUrl(_)
-                    | Message::PreviewSelectTab(_)
-                    | Message::PreviewPickFile
+                Message::PreviewOpenPath(_) | Message::PreviewSelectTab(_)
             ) {
                 *pending_focus = Some(FocusIntent::Preview);
             } else if matches!(
@@ -581,11 +575,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 *pending_focus = Some(FocusIntent::Browser);
             }
             match message {
-                Message::PreviewPickFile => {
-                    if let Some(path) = rfd::FileDialog::new().pick_file() {
-                        workspace.update(Message::PreviewOpenPath(path));
-                    }
-                }
                 Message::ProjectPickFolder => {
                     if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                         workspace.update(Message::ProjectOpen(dir));
@@ -1086,8 +1075,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             };
 
             // 借用已随上面的块结束释放；这里逐条经 `dispatch`
-            // 派发（`PreviewPickFile` 在其中被拦截成 rfd 模态 +
-            // `PreviewOpenPath`，其余原样转给 `workspace.update`）。
+            // 派发（`ProjectPickFolder` 等在其中被拦截成 rfd 模态,
+            // 其余原样转给 `workspace.update`）。
             for message in pending_messages {
                 self.dispatch(message);
             }

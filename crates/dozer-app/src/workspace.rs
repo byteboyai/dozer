@@ -664,24 +664,16 @@ pub enum Message {
     /// ⌘V 粘贴剪贴板文本：按会话的 bracketed paste 模式决定是否包裹
     /// `ESC[200~`/`ESC[201~` 后写入 daemon。
     TermPaste(String),
-    /// 预览:打开本地文件为新 tab(路径已由入口侧确认存在).
+    /// 预览:打开本地文件为新 tab(路径已由入口侧确认存在,来自项目树点击/
+    /// 会话恢复;预览面板本身已不再有"打开文件…"按钮或地址栏)。
     PreviewOpenPath(PathBuf),
-    /// 预览:打开 URL 为新网页 tab.
-    PreviewOpenUrl(String),
     /// 预览:切换 tab(vec 位置).
     PreviewSelectTab(usize),
     /// 预览:关闭 tab(vec 位置).
     PreviewCloseTab(usize),
-    /// 预览:点击地址栏,进入编辑态(此后键盘输入路由到地址栏).
-    PreviewAddrClick,
-    /// 预览:地址栏编辑事件(main.rs 键盘拦截层翻译后送入).
-    PreviewAddrEvent(AddrEvent),
-    /// 预览:"打开文件…"按钮 → rfd 原生选择器(main.rs 侧执行,选中后
-    /// 回送 PreviewOpenPath).
-    PreviewPickFile,
-    /// 浏览器:打开 URL 为新网页 tab——与 `PreviewOpenUrl` 语义相同,但落在
-    /// 独立的 `Workspace::browser` 上,不产生任何文件预览 tab(该功能只服务
-    /// 左图标栏"地球"进入的独立浏览器视图)。
+    /// 浏览器:打开 URL 为新网页 tab——落在独立的 `Workspace::browser` 上,
+    /// 不产生任何文件预览 tab(该功能只服务左图标栏"地球"进入的独立浏览器
+    /// 视图)。
     BrowserOpenUrl(String),
     /// 浏览器:切换 tab(vec 位置)。
     BrowserSelectTab(usize),
@@ -713,7 +705,7 @@ pub enum Message {
     /// 项目树:关闭菜单(点击外部/Esc/动作完成后)。
     ProjectTreeContextMenuClose,
     /// 项目树:菜单选"复制绝对/相对路径"→ main.rs 拦截写系统剪贴板,
-    /// 不落 `Workspace::update`(同 `PreviewPickFile` 模式)。
+    /// 不落 `Workspace::update`。
     ProjectTreeCopyPath(PathBuf, project::PathKind),
     /// 项目树:菜单选"复制"→ 标记应用内剪贴槽(参数=路径,是否目录)。
     ProjectTreeCopy(PathBuf, bool),
@@ -748,7 +740,7 @@ pub enum Message {
     ProjectTreeEditEvent(AddrEvent),
 }
 
-/// 地址栏编辑事件:由 main.rs 的键盘拦截层在 `preview_addr_editing()`
+/// 地址栏编辑事件:由 main.rs 的键盘拦截层在 `browser_addr_editing()`
 /// 为真时翻译产生(字符/退格/回车/Esc),不经过 keymap 的 PTY 字节翻译.
 #[derive(Debug, Clone)]
 pub enum AddrEvent {
@@ -1547,11 +1539,6 @@ impl Workspace {
                 self.preview_tab_first = 0;
                 self.spawn_preview_state_save();
             }
-            Message::PreviewOpenUrl(url) => {
-                self.preview_error = None;
-                self.preview.open_url(url);
-                self.preview_tab_first = 0;
-            }
             Message::PreviewSelectTab(idx) => {
                 self.preview.select(idx);
                 self.spawn_preview_state_save();
@@ -1562,21 +1549,6 @@ impl Workspace {
                 self.preview_tab_first = 0;
                 self.spawn_preview_state_save();
             }
-            Message::PreviewAddrClick => {
-                self.preview_error = None;
-                self.preview.addr_begin();
-            }
-            Message::PreviewAddrEvent(ev) => match ev {
-                AddrEvent::Text(s) => self.preview.addr_text(&s),
-                AddrEvent::Backspace => self.preview.addr_backspace(),
-                AddrEvent::Cancel => self.preview.addr_cancel(),
-                AddrEvent::Submit => match self.preview.addr_submit() {
-                    Some(AddrTarget::File(path)) => self.update(Message::PreviewOpenPath(path)),
-                    Some(AddrTarget::Url(url)) => self.update(Message::PreviewOpenUrl(url)),
-                    None => {}
-                },
-            },
-            Message::PreviewPickFile => {} // 副作用在 main.rs(rfd 模态需窗口句柄侧执行)
             Message::BrowserOpenUrl(url) => {
                 self.browser_error = None;
                 self.browser.open_url(url);
@@ -2316,14 +2288,8 @@ impl Workspace {
         }
     }
 
-    /// 地址栏是否在编辑态(main.rs 据此路由键盘:真 → AddrEvent,
-    /// 假 → keymap → PTY).
-    pub fn preview_addr_editing(&self) -> bool {
-        self.preview.addr_editing()
-    }
-
-    /// 浏览器地址栏是否在编辑态,语义同 `preview_addr_editing`,但查独立的
-    /// `self.browser`。
+    /// 浏览器地址栏是否在编辑态(main.rs 据此路由键盘:真 → AddrEvent,
+    /// 假 → keymap → PTY)。预览面板已不再有地址栏,只需查 `self.browser`。
     pub fn browser_addr_editing(&self) -> bool {
         self.browser.addr_editing()
     }
@@ -2351,7 +2317,7 @@ impl Workspace {
     /// 光标——单元格尺寸由 pane 像素 ÷ 网格推出,不依赖字号常量。
     pub fn ime_cursor_area(&self, window_w: f32, window_h: f32) -> (f32, f32, f32) {
         let state = self.shell_state();
-        if self.preview.addr_editing() || self.acceptance_comment_editing() {
+        if self.browser.addr_editing() || self.acceptance_comment_editing() {
             let (bx, by, _bw, _bh) = preview_content_bounds(window_w, window_h, &state);
             return (bx + 4.0, by, 20.0);
         }
@@ -2398,7 +2364,7 @@ impl Workspace {
     }
 
     /// 项目树是否处于行内编辑态(main.rs 键盘路由用,同款
-    /// `preview_addr_editing()`/`acceptance_comment_editing()`)。
+    /// `browser_addr_editing()`/`acceptance_comment_editing()`)。
     pub fn tree_editing(&self) -> bool {
         self.tree_edit.is_some()
     }
@@ -2409,14 +2375,14 @@ impl Workspace {
     }
 
     /// 点击输入框外时退出所有自绘输入的编辑态(验收反馈:失焦回正常态)。
-    /// 地址栏取消(清空半输入),意见框仅退出编辑(保留已输入文字),树内编辑
-    /// (重命名/新建)直接取消(Important #5——不清会导致点到别处后键盘还在
-    /// 悄悄写进树编辑缓冲区,"打不出字"的假象)。`context_menu` 不在这里
+    /// 浏览器地址栏取消(清空半输入),意见框仅退出编辑(保留已输入文字),树内
+    /// 编辑(重命名/新建)直接取消(Important #5——不清会导致点到别处后键盘还
+    /// 在悄悄写进树编辑缓冲区,"打不出字"的假象)。`context_menu` 不在这里
     /// 清:它已经有专门的外点 dismiss 遮罩(`ProjectTreeContextMenuClose`,
     /// 见 view() 里的 stack dismiss 层),这里重复清是死代码。
     pub fn blur_inputs(&mut self) {
-        if self.preview.addr_editing() {
-            self.preview.addr_cancel();
+        if self.browser.addr_editing() {
+            self.browser.addr_cancel();
         }
         if let Some(acc) = &mut self.acceptance {
             acc.comment_editing = false;
@@ -3632,7 +3598,9 @@ fn preview_pane(
     ws: &Workspace,
     width: Length,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    // tab 栏:箭头翻页(到头变灰) + 每 tab 选择按钮 + 关闭 ×,尾接"打开文件…"常驻.
+    // tab 栏:箭头翻页(到头变灰) + 每 tab 选择按钮 + 关闭 ×。tab 只能由项目树
+    // 点击/会话恢复产生——面板本身已不再有"打开文件…"按钮或地址栏(P1 后续
+    // 反馈:文件预览与浏览器彻底分离,文件只走项目树入口)。
     // P1L T5 验收返工:同 term `tab_bar`,横向 scrollable 换成索引窗口化 + clip.
     let widths: Vec<f32> = ws
         .preview
@@ -3689,62 +3657,22 @@ fn preview_pane(
             .into()
         })
         .collect();
-    // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;左右箭头钉在裁剪区外,
-    // "打开文件…"钉在最右常驻,不随 tab 滚走.
+    // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;左右箭头钉在裁剪区外。
     let tabs_row = row(items).spacing(4);
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
     let left_arrow = tab_arrow_button("◂", can_left, Message::PreviewTabScroll(false));
     let right_arrow = tab_arrow_button("▸", can_right, Message::PreviewTabScroll(true));
-    let open_btn = button(text("打开文件…").size(13).color(theme::CREAM))
-        .on_press(Message::PreviewPickFile)
-        .style(|_t, _s| button::Style {
-            background: Some(theme::CARD.into()),
-            text_color: theme::CREAM,
-            border: Border {
-                color: theme::BORDER,
-                width: 1.0,
-                radius: 2.0.into(),
-            },
-            ..button::Style::default()
-        });
     let maximize_btn = button(icons::view(icons::IconKind::Maximize, 14.0, theme::DIM))
         .on_press(Message::MaximizeToggle(MaximizedPane::Left))
         .style(|_t, _s| button::Style {
             background: None,
             ..button::Style::default()
         });
-    let tab_bar = row![left_arrow, right_arrow, clipped, open_btn, maximize_btn]
+    let tab_bar = row![left_arrow, right_arrow, clipped, maximize_btn]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
 
-    // 地址栏:自绘(非 text_input——键盘路由走 main.rs 拦截层,与终端
-    // 的键盘模型保持同一套显式焦点语义).编辑态 GOLD 描边 + 光标条.
-    let editing = ws.preview.addr_editing();
-    let addr_text = if editing {
-        format!("{}▏", ws.preview.addr_buffer())
-    } else {
-        "输入文件路径或URL".to_string()
-    };
-    let addr =
-        button(
-            text(addr_text)
-                .size(13)
-                .color(if editing { theme::CREAM } else { theme::DIM }),
-        )
-        .on_press(Message::PreviewAddrClick)
-        .width(Length::Fill)
-        .style(move |_t, _s| button::Style {
-            background: Some(theme::TERM_BG.into()),
-            text_color: theme::CREAM,
-            border: Border {
-                color: if editing { theme::GOLD } else { theme::BORDER },
-                width: 1.0,
-                radius: 2.0.into(),
-            },
-            ..button::Style::default()
-        });
-
-    let mut content = column![tab_bar, addr].spacing(4);
+    let mut content = column![tab_bar].spacing(4);
 
     if let Some(err) = &ws.preview_error {
         content = content.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
@@ -3755,7 +3683,7 @@ fn preview_pane(
     } else if ws.preview.tabs().is_empty() {
         content = content.push(
             container(
-                text("暂无预览——打开文件或输入地址")
+                text("暂无预览——在左侧文件树选择文件")
                     .size(14)
                     .color(theme::DIM),
             )
@@ -3775,9 +3703,9 @@ fn preview_pane(
         .into()
 }
 
-/// 浏览器栏:左图标栏"地球"进入的独立浏览器,与 `preview_pane` 结构同款
-/// (tab 栏 + 地址栏 + 内容),但读写的是完全独立的 `ws.browser`——不含
-/// "打开文件…"按钮,也不受文件预览的 tab/地址栏状态影响。
+/// 浏览器栏:左图标栏"地球"进入的独立浏览器,tab 栏 + 地址栏 + 内容,
+/// 读写完全独立的 `ws.browser`——文件预览面板已不再有地址栏,浏览器是
+/// 唯一还能输入网址打开网页的入口,也不受文件预览的 tab 状态影响。
 fn browser_pane(
     ws: &Workspace,
     width: Length,
