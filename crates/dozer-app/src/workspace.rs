@@ -2888,6 +2888,7 @@ fn conversation_list_pane(
     ws: &Workspace,
     width: Length,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let region = chrome_style::conversation_list_pane();
     let mut content = column![
         row![
             text("对话").size(14).color(theme::CREAM),
@@ -2902,7 +2903,7 @@ fn conversation_list_pane(
         ]
         .spacing(8)
     ]
-    .spacing(8);
+    .spacing(region.gap);
 
     let opens = ws.open_transcript_paths();
     let active_n = ws
@@ -2964,13 +2965,12 @@ fn conversation_list_pane(
         content = content.push(card);
     }
 
-    container(content.padding(12))
+    container(content.padding(region.padding))
         .width(width)
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::PANEL.into()),
-            // 面板不再自带边框(去重复线,与 divider_bar 合并为单线,见
-            // divider_bar 上方注释)。左右边界靠 PANEL 与相邻元素的背景色差分。
+            background: region.background.map(Into::into),
+            border: region.border.unwrap_or_default(),
             ..container::Style::default()
         })
         .into()
