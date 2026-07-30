@@ -3867,7 +3867,8 @@ fn terminal_pane(
     ws: &Workspace,
     width: Length,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let mut content = column![tab_bar(ws)].spacing(4);
+    let region = chrome_style::terminal_pane();
+    let mut content = column![tab_bar(ws)].spacing(region.gap);
 
     if let Some(err) = &ws.daemon_error {
         content = content.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
@@ -3918,12 +3919,12 @@ fn terminal_pane(
 
     content = content.push(active_tab_view(ws));
 
-    let body = container(content.spacing(4).padding(8))
+    let body = container(content.spacing(region.gap).padding(region.padding))
         .width(Length::Fill)
         .height(Length::Fill)
         .style(move |_theme: &iced_widget::Theme| container::Style {
-            background: Some(theme::TERM_BG.into()),
-            // 面板不再自带边框,原因同 conversation_list_pane。
+            background: region.background.map(Into::into),
+            border: region.border.unwrap_or_default(),
             ..container::Style::default()
         });
 
