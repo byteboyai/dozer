@@ -3601,17 +3601,14 @@ fn terminal_status_bar(
 fn status_bar_container<'a>(
     inner: impl Into<Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let region = chrome_style::status_bar();
     container(inner)
         .width(Length::Fill)
         .height(Length::Fixed(STATUS_BAR_HEIGHT))
-        .padding([0, 8])
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::PANEL.into()),
-            border: Border {
-                color: theme::BORDER,
-                width: 1.0,
-                radius: 0.0.into(),
-            },
+        .padding(region.padding)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: region.background.map(Into::into),
+            border: region.border.unwrap_or_default(),
             ..container::Style::default()
         })
         .into()
