@@ -3287,15 +3287,12 @@ fn maximize_overlay(
     // `inner`(`left_panel_area`/`right_panel_area` 内部大量 FillPortion
     // 组成)会整体收缩成远小于放大盒子的intrinsic 尺寸,金色描边就会贴着
     // 一小块内容而不是撑满两条图标栏之间的放大区域。
+    let overlay_style = chrome_style::maximize_overlay();
     let bordered = container(inner)
         .width(Length::Fill)
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
-            border: Border {
-                color: theme::GOLD,
-                width: 1.5,
-                radius: 10.0.into(),
-            },
+            border: overlay_style.border,
             ..container::Style::default()
         });
     // 放大内容自己再罩一层"吃掉点击/滚轮"的 MouseArea,拦住它们冒泡到外层
@@ -3311,19 +3308,11 @@ fn maximize_overlay(
         .on_scroll(|_delta| Message::Noop);
     let dim_bg = MouseArea::new(
         container(content_guard)
-            .padding(MAXIMIZE_OVERLAY_PADDING)
+            .padding(overlay_style.scrim_padding)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(|_t: &iced_widget::Theme| container::Style {
-                background: Some(
-                    Color {
-                        r: 0.0,
-                        g: 0.0,
-                        b: 0.0,
-                        a: 0.55,
-                    }
-                    .into(),
-                ),
+            .style(move |_t: &iced_widget::Theme| container::Style {
+                background: Some(overlay_style.scrim_background.into()),
                 ..container::Style::default()
             }),
     )
