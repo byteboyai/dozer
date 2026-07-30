@@ -4075,15 +4075,12 @@ fn context_menu_popup(
         Message::ProjectTreeCopyPath(menu.target.clone(), project::PathKind::Relative),
     ));
 
-    let list = container(column(items).spacing(2))
-        .padding(6)
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::CARD.into()),
-            border: Border {
-                color: theme::BORDER,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
+    let region = chrome_style::context_menu();
+    let list = container(column(items).spacing(region.gap))
+        .padding(region.padding)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: region.background.map(Into::into),
+            border: region.border.unwrap_or_default(),
             ..container::Style::default()
         });
 
