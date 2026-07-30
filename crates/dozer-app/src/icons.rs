@@ -9,6 +9,7 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IconKind {
+    ChevronLeft,
     ChevronRight,
     ChevronDown,
     Folder,
@@ -36,6 +37,7 @@ pub enum IconKind {
 impl IconKind {
     fn bytes(self) -> &'static [u8] {
         match self {
+            IconKind::ChevronLeft => include_bytes!("../assets/icons/chevron-left.svg"),
             IconKind::ChevronRight => include_bytes!("../assets/icons/chevron-right.svg"),
             IconKind::ChevronDown => include_bytes!("../assets/icons/chevron-down.svg"),
             IconKind::Folder => include_bytes!("../assets/icons/folder.svg"),

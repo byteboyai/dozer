@@ -148,7 +148,7 @@ pub enum Divider {
 }
 
 /// 图标栏固定宽度(逻辑像素)，左右各一条。
-pub const ICON_RAIL_WIDTH: f32 = 48.0;
+pub const ICON_RAIL_WIDTH: f32 = 44.0;
 
 /// 项目树右键菜单当前打开状态：定位坐标 + 目标（路径/是否目录）。
 #[derive(Debug, Clone, PartialEq)]
@@ -3019,12 +3019,7 @@ fn review_content_pane(
     ws: &Workspace,
     width: Length,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let maximize_btn = button(icons::view(icons::IconKind::Maximize, 14.0, theme::DIM))
-        .on_press(Message::MaximizeToggle(MaximizedPane::Right))
-        .style(|_t, _s| button::Style {
-            background: None,
-            ..button::Style::default()
-        });
+    let maximize_btn = maximize_button(MaximizedPane::Right);
     let header = row![
         text("会话审阅").size(13).color(theme::CREAM),
         iced_widget::space::horizontal(),
@@ -3057,14 +3052,14 @@ fn review_content_pane(
         .into()
 }
 
-/// 单个图标栏按钮：36x36 圆角正方形，hover 显亮色背景，选中态金色图标+外框。
+/// 单个图标栏按钮：32x32 圆角正方形，hover 显亮色背景，选中态金色图标+外框。
 fn rail_icon_button<'a>(
     icon: icons::IconKind,
     active: bool,
     msg: Message,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let color = if active { theme::GOLD } else { theme::DIM };
-    let inner = container(icons::view(icon, 18.0, color))
+    let inner = container(icons::view(icon, 16.0, color))
         .width(Length::Fill)
         .height(Length::Fill)
         .align_x(iced_widget::core::alignment::Horizontal::Center)
@@ -3079,20 +3074,26 @@ fn rail_icon_button<'a>(
 
     button(inner)
         .on_press(msg)
-        .width(Length::Fixed(36.0))
-        .height(Length::Fixed(36.0))
+        .width(Length::Fixed(32.0))
+        .height(Length::Fixed(32.0))
         .padding(0)
-        .style(
-            move |_t: &iced_widget::Theme, status: button::Status| match status {
-                button::Status::Active if active => button::Style {
+        .style(move |_t: &iced_widget::Theme, status: button::Status| {
+            // `active` 先判:选中态不管 status 是 Active/Hovered/Pressed 都要
+            // 保住金色边框,不能让 iced 的交互态(悬停/按下)盖过咱们的选中态
+            // ——否则悬停在当前选中的图标上时,金色边框会被 Hovered 分支
+            // 短暂顶掉(先前的 bug:guard 只挂在 Status::Active 这一支上)。
+            if active {
+                return button::Style {
                     background: Some(theme::CARD.into()),
                     border: Border {
                         color: theme::GOLD,
                         ..base_border
                     },
                     ..button::Style::default()
-                },
-                button::Status::Hovered => button::Style {
+                };
+            }
+            match status {
+                button::Status::Hovered | button::Status::Pressed => button::Style {
                     background: Some(theme::CARD.into()),
                     border: base_border,
                     ..button::Style::default()
@@ -3102,8 +3103,8 @@ fn rail_icon_button<'a>(
                     border: base_border,
                     ..button::Style::default()
                 },
-            },
-        )
+            }
+        })
         .into()
 }
 
@@ -3126,9 +3127,10 @@ fn left_icon_rail(
     .spacing(12)
     .padding(Padding {
         top: 16.0,
+        left: 6.0,
+        right: 6.0,
         ..Padding::ZERO
-    })
-    .align_x(iced_widget::core::Alignment::Center);
+    });
 
     container(content)
         .width(Length::Fixed(ICON_RAIL_WIDTH))
@@ -3159,9 +3161,10 @@ fn right_icon_rail(
     .spacing(12)
     .padding(Padding {
         top: 16.0,
+        left: 6.0,
+        right: 6.0,
         ..Padding::ZERO
-    })
-    .align_x(iced_widget::core::Alignment::Center);
+    });
 
     container(content)
         .width(Length::Fixed(ICON_RAIL_WIDTH))
@@ -3353,7 +3356,7 @@ fn project_pane(
     ws: &Workspace,
     width: Length,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let mut content = column![text("项目").size(14).color(theme::CREAM)].spacing(4);
+    let mut content = column![].spacing(4);
 
     let open_btn = button(text("打开项目…").size(13).color(theme::CREAM))
         .on_press(Message::ProjectPickFolder)
@@ -3643,7 +3646,7 @@ fn preview_pane(
         .filter(|(idx, _)| *idx >= first)
         .map(|(idx, tab)| {
             let active = idx == ws.preview.active_idx();
-            let select = button(text(tab.title.clone()).size(13).color(theme::CREAM))
+            let select = button(text(tab.title.clone()).size(14).color(theme::CREAM))
                 .on_press(Message::PreviewSelectTab(idx))
                 .style(|_t, _s| button::Style {
                     background: None,
@@ -3684,19 +3687,22 @@ fn preview_pane(
     // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;左右箭头钉在裁剪区外。
     let tabs_row = row(items).spacing(4);
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
-    let left_arrow = tab_arrow_button("◂", can_left, Message::PreviewTabScroll(false));
-    let right_arrow = tab_arrow_button("▸", can_right, Message::PreviewTabScroll(true));
-    let maximize_btn = button(icons::view(icons::IconKind::Maximize, 14.0, theme::DIM))
-        .on_press(Message::MaximizeToggle(MaximizedPane::Left))
-        .style(|_t, _s| button::Style {
-            background: None,
-            ..button::Style::default()
-        });
+    let left_arrow = tab_arrow_button(
+        icons::IconKind::ChevronLeft,
+        can_left,
+        Message::PreviewTabScroll(false),
+    );
+    let right_arrow = tab_arrow_button(
+        icons::IconKind::ChevronRight,
+        can_right,
+        Message::PreviewTabScroll(true),
+    );
+    let maximize_btn = maximize_button(MaximizedPane::Left);
     let tab_bar = row![left_arrow, right_arrow, clipped, maximize_btn]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
 
-    let mut content = column![tab_bar].spacing(4);
+    let mut content = column![tab_bar, tab_divider()].spacing(4);
 
     if let Some(err) = &ws.preview_error {
         content = content.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
@@ -3751,7 +3757,7 @@ fn browser_pane(
         .filter(|(idx, _)| *idx >= first)
         .map(|(idx, tab)| {
             let active = idx == ws.browser.active_idx();
-            let select = button(text(tab.title.clone()).size(13).color(theme::CREAM))
+            let select = button(text(tab.title.clone()).size(14).color(theme::CREAM))
                 .on_press(Message::BrowserSelectTab(idx))
                 .style(|_t, _s| button::Style {
                     background: None,
@@ -3791,14 +3797,17 @@ fn browser_pane(
         .collect();
     let tabs_row = row(items).spacing(4);
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
-    let left_arrow = tab_arrow_button("◂", can_left, Message::BrowserTabScroll(false));
-    let right_arrow = tab_arrow_button("▸", can_right, Message::BrowserTabScroll(true));
-    let maximize_btn = button(icons::view(icons::IconKind::Maximize, 14.0, theme::DIM))
-        .on_press(Message::MaximizeToggle(MaximizedPane::Left))
-        .style(|_t, _s| button::Style {
-            background: None,
-            ..button::Style::default()
-        });
+    let left_arrow = tab_arrow_button(
+        icons::IconKind::ChevronLeft,
+        can_left,
+        Message::BrowserTabScroll(false),
+    );
+    let right_arrow = tab_arrow_button(
+        icons::IconKind::ChevronRight,
+        can_right,
+        Message::BrowserTabScroll(true),
+    );
+    let maximize_btn = maximize_button(MaximizedPane::Left);
     let tab_bar = row![left_arrow, right_arrow, clipped, maximize_btn]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
@@ -3828,7 +3837,7 @@ fn browser_pane(
             ..button::Style::default()
         });
 
-    let mut content = column![tab_bar, addr].spacing(4);
+    let mut content = column![tab_bar, tab_divider(), addr].spacing(4);
 
     if let Some(err) = &ws.browser_error {
         content = content.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
@@ -4180,24 +4189,82 @@ fn delete_confirm_popup(
 /// 估偏只影响翻页边界（早一两个 tab 触发/到头），不影响正确性或崩溃。
 const TAB_BAR_AVAIL_PX: f32 = 360.0;
 
-/// 箭头翻页按钮：可点击(`enabled`)时 CREAM 且挂 `on_press`；到头时 DIM
-/// 且**不设** `on_press`（真正不可点，不是视觉变灰但仍能点）。
+/// 箭头翻页按钮：ChevronLeft / ChevronRight，可用时 GOLD，hover 显 CARD 圆角底，到头时 DIM 且不可点。
 fn tab_arrow_button<'a>(
-    glyph: &'static str,
+    icon: icons::IconKind,
     enabled: bool,
     msg: Message,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let color = if enabled { theme::CREAM } else { theme::DIM };
-    let mut btn =
-        button(text(glyph).size(14).color(color)).style(move |_theme, _status| button::Style {
-            background: None,
-            text_color: color,
-            ..button::Style::default()
+    let color = if enabled { theme::GOLD } else { theme::DIM };
+    let mut btn = button(icons::view(icon, 14.0, color))
+        .width(Length::Fixed(24.0))
+        .height(Length::Fixed(24.0))
+        .padding(0)
+        .style(move |_theme, status| {
+            let base = button::Style {
+                background: None,
+                text_color: color,
+                ..button::Style::default()
+            };
+            if !enabled {
+                return base;
+            }
+            match status {
+                button::Status::Hovered | button::Status::Pressed => button::Style {
+                    background: Some(theme::CARD.into()),
+                    border: Border {
+                        color: Color::TRANSPARENT,
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    ..base
+                },
+                _ => base,
+            }
         });
     if enabled {
         btn = btn.on_press(msg);
     }
     btn.into()
+}
+
+/// tab 栏下方的 1px 分割线。
+fn tab_divider<'a>() -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    container(iced_widget::Space::new())
+        .width(Length::Fill)
+        .height(Length::Fixed(1.0))
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::BORDER.into()),
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// 内容 pane 的放大/还原按钮：hover 显 CARD 圆角底。
+fn maximize_button<'a>(
+    pane: MaximizedPane,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    button(icons::view(icons::IconKind::Maximize, 14.0, theme::DIM))
+        .on_press(Message::MaximizeToggle(pane))
+        .width(Length::Fixed(24.0))
+        .height(Length::Fixed(24.0))
+        .padding(0)
+        .style(|_t, status| match status {
+            button::Status::Hovered | button::Status::Pressed => button::Style {
+                background: Some(theme::CARD.into()),
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..button::Style::default()
+            },
+            _ => button::Style {
+                background: None,
+                ..button::Style::default()
+            },
+        })
+        .into()
 }
 
 /// tab 栏：两侧箭头翻页(到头变灰) + 每会话一个按钮(状态点 + 名称 + 关闭
@@ -4224,8 +4291,16 @@ fn tab_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
     // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;左右箭头钉在裁剪区外.
     let tabs_row = row(items).spacing(4);
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
-    let left_arrow = tab_arrow_button("◂", can_left, Message::TermTabScroll(false));
-    let right_arrow = tab_arrow_button("▸", can_right, Message::TermTabScroll(true));
+    let left_arrow = tab_arrow_button(
+        icons::IconKind::ChevronLeft,
+        can_left,
+        Message::TermTabScroll(false),
+    );
+    let right_arrow = tab_arrow_button(
+        icons::IconKind::ChevronRight,
+        can_right,
+        Message::TermTabScroll(true),
+    );
 
     let plus = button(text("＋").size(15).color(theme::CREAM))
         .on_press(Message::NewTab)
@@ -4240,17 +4315,13 @@ fn tab_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
             ..button::Style::default()
         });
 
-    let maximize_btn = button(icons::view(icons::IconKind::Maximize, 14.0, theme::DIM))
-        .on_press(Message::MaximizeToggle(MaximizedPane::Right))
-        .style(|_t, _s| button::Style {
-            background: None,
-            ..button::Style::default()
-        });
+    let maximize_btn = maximize_button(MaximizedPane::Right);
 
-    row![left_arrow, right_arrow, clipped, plus, maximize_btn]
+    let tab_row = row![left_arrow, right_arrow, clipped, plus, maximize_btn]
         .spacing(4)
-        .align_y(iced_widget::core::Alignment::Center)
-        .into()
+        .align_y(iced_widget::core::Alignment::Center);
+
+    column![tab_row, tab_divider()].spacing(4).into()
 }
 
 /// 交付横幅文案：pending 才有（金色,甲方动作）。
@@ -4379,14 +4450,14 @@ fn text_width_units(s: &str) -> f32 {
 /// 终端 tab 估算显示宽（逻辑像素）：状态点+名称+关闭×+pill padding 的粗估。
 /// 不追求精确——估偏几像素只会让翻页边界差一个 tab。
 fn tab_display_width(title: &str) -> f32 {
-    // 状态点●+spacing ≈ 18, 名称 ≈ units * 半宽 7.5, 关闭× ≈ 18, pill padding ≈ 12
-    18.0 + text_width_units(title) * 7.5 + 18.0 + 12.0
+    // 状态点●+spacing ≈ 18, 名称 ≈ units * 半宽 8.0(14px), 关闭× ≈ 18, pill padding ≈ 12
+    18.0 + text_width_units(title) * 8.0 + 18.0 + 12.0
 }
 
 /// 预览 tab 估算显示宽：同 `tab_display_width` 但无状态点。
 fn preview_tab_display_width(title: &str) -> f32 {
-    // 名称 ≈ units * 半宽 7.5, 关闭× ≈ 18, pill padding ≈ 12
-    text_width_units(title) * 7.5 + 18.0 + 12.0
+    // 名称 ≈ units * 半宽 8.0(14px), 关闭× ≈ 18, pill padding ≈ 12
+    text_width_units(title) * 8.0 + 18.0 + 12.0
 }
 
 /// 给定各 tab 宽、tab 间距、可视宽、当前 first，算出：
@@ -4472,7 +4543,7 @@ fn tab_item(
     let label = row![
         text("●").size(11).color(color),
         text(tab_title(tab.cwd.as_deref(), &tab.info.name))
-            .size(13)
+            .size(14)
             .color(theme::CREAM),
     ]
     .spacing(4);
