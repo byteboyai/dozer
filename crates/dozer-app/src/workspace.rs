@@ -509,9 +509,19 @@ fn terminal_visible(state: &ShellState) -> bool {
 /// 才纠正(Fix round 2 #6)。用字段覆盖表达这个假想,复用同一套宽度公式,
 /// 不另写一份几何。
 fn terminal_grid_state(state: ShellState) -> ShellState {
+    // `maximized == Some(Right)` 只有在真实 `right_view` 本来就是 `Agent`
+    // 时才代表"终端被放大"——对话视图下点"放大"是放大审阅 pane
+    // (`review_content_pane` 自己的放大按钮),不是终端。不做这个过滤会让
+    // "对话视图下放大审阅"被这里误判成"终端被放大",按放大格算出一个终端
+    // 实际不可见、也不是那个尺寸的网格,给所有存活 PTY 发一次错的 SIGWINCH
+    // (Fix round 3,scoped re-review 发现)。
+    let maximized = state
+        .maximized
+        .filter(|m| *m != MaximizedPane::Right || state.right_view == RightView::Agent);
     ShellState {
         right_collapsed: false,
         right_view: RightView::Agent,
+        maximized,
         ..state
     }
 }
@@ -1467,6 +1477,12 @@ impl Workspace {
                 }
             }
             Message::TermPaste(text) => {
+                // 同 TermInput 的可见性闸门(Fix round 3):⌘V 粘贴走同一条
+                // PTY 写入路径,粘贴内容若含换行还会在看不见的会话里直接
+                // 执行,比单个按键更危险,必须同样拦截。
+                if !self.terminal_visible() {
+                    return;
+                }
                 let Some(tab) = self.tabs.get_mut(self.active) else {
                     return;
                 };
@@ -4610,6 +4626,36 @@ mod tests {
                 ..test_state()
             }),
             "放大的正是终端那一侧:终端更大更可见,算可见"
+        );
+    }
+
+    /// Fix round 3(scoped re-review 发现):对话视图下放大的是审阅 pane
+    /// 自己的放大按钮(同样发 `MaximizedPane::Right`),不是终端——
+    /// `terminal_grid_state` 如果不过滤这种情况,会把"审阅被放大"误判成
+    /// "终端被放大",按放大格给一个实际不可见、也不是那个尺寸的终端算网格,
+    /// 给存活 PTY 发一次错的 SIGWINCH。
+    #[test]
+    fn terminal_grid_state_ignores_maximized_review_not_terminal() {
+        let review_maximized = ShellState {
+            right_view: RightView::Conversations,
+            maximized: Some(MaximizedPane::Right),
+            ..test_state()
+        };
+        let grid_state = terminal_grid_state(review_maximized);
+        assert_eq!(
+            grid_state.maximized, None,
+            "对话视图下的 MaximizedPane::Right 指的是审阅 pane,换算终端网格时不该当成终端被放大"
+        );
+
+        let terminal_maximized = ShellState {
+            right_view: RightView::Agent,
+            maximized: Some(MaximizedPane::Right),
+            ..test_state()
+        };
+        assert_eq!(
+            terminal_grid_state(terminal_maximized).maximized,
+            Some(MaximizedPane::Right),
+            "右视图本来就是 Agent 时,MaximizedPane::Right 才真的是终端被放大,要保留"
         );
     }
 
