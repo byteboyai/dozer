@@ -157,8 +157,7 @@ struct ResolvedRegions {
 }
 
 fn load(raw: &str) -> ResolvedRegions {
-    let parsed: RawRegions =
-        serde_json::from_str(raw).expect("regions.json 格式错误(解析失败)");
+    let parsed: RawRegions = serde_json::from_str(raw).expect("regions.json 格式错误(解析失败)");
     ResolvedRegions {
         top_bar: resolve_region(parsed.top_bar),
         left_icon_rail: resolve_region(parsed.left_icon_rail),

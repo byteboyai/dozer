@@ -19,10 +19,10 @@
 //!   把 `Message` 送回 UI 线程；`main.rs` 的 `ApplicationHandler::user_event`
 //!   收到后调用 `workspace.update(..)` 并请求重绘。反方向（UI → tokio）
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
+use crate::chrome_style;
 use crate::conversation::{self, ConversationMeta};
 use crate::delivery::{self, FileChange, FileStatus};
 use crate::goal::{self, Goal};
-use crate::chrome_style;
 use crate::icons;
 use crate::layout;
 use crate::osc::{OscEvent, OscScanner};
