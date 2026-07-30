@@ -3622,6 +3622,7 @@ fn preview_pane(
     // 点击/会话恢复产生——面板本身已不再有"打开文件…"按钮或地址栏(P1 后续
     // 反馈:文件预览与浏览器彻底分离,文件只走项目树入口)。
     // P1L T5 验收返工:同 term `tab_bar`,横向 scrollable 换成索引窗口化 + clip.
+    let region = chrome_style::preview_pane();
     let widths: Vec<f32> = ws
         .preview
         .tabs()
@@ -3695,7 +3696,7 @@ fn preview_pane(
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
 
-    let mut content = column![tab_bar, tab_divider()].spacing(4);
+    let mut content = column![tab_bar, tab_divider()].spacing(region.gap);
 
     if let Some(err) = &ws.preview_error {
         content = content.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
@@ -3715,12 +3716,12 @@ fn preview_pane(
         );
     }
 
-    container(content.padding(8))
+    container(content.padding(region.padding))
         .width(width)
         .height(Length::Fill)
         .style(move |_theme: &iced_widget::Theme| container::Style {
-            background: Some(theme::PANEL.into()),
-            // 面板不再自带边框,原因同 conversation_list_pane。
+            background: region.background.map(Into::into),
+            border: region.border.unwrap_or_default(),
             ..container::Style::default()
         })
         .into()
