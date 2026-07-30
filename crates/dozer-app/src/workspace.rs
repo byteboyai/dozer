@@ -4694,9 +4694,9 @@ mod tests {
     /// Fix round 1 Critical:左侧被放大(Files 配对)时,webview 矩形必须
     /// 按 `maximize_overlay` 实际渲染的更大盒子换算,不能再用平时的
     /// `left_zone_width`(640)。用具体数字核对,不只看"落在范围内"：
-    /// x0=ICON_RAIL_WIDTH(48)+MAXIMIZE_OVERLAY_PADDING(40)=88,
-    /// avail_w=1440-2*48-2*40=1264,pair_w=1264-8=1256,
-    /// list_w=1256*0.35=439.6,x=88+439.6+8+8=543.6,w=1256*0.65-16=800.4;
+    /// x0=ICON_RAIL_WIDTH(44)+MAXIMIZE_OVERLAY_PADDING(40)=84,
+    /// avail_w=1440-2*44-2*40=1272,pair_w=1272-8=1264,
+    /// list_w=1264*0.35=442.4,x=84+442.4+8+8=542.4,w=1264*0.65-16=805.6;
     /// y0=TOP_BAR_HEIGHT(44)+40=84,y=84+38(PREVIEW_CHROME_TOP_PX,地址栏已去)=122,
     /// avail_h=900-44-80=776,h=776-38-8=730。
     #[test]
@@ -4706,9 +4706,9 @@ mod tests {
             ..test_state()
         };
         let (x, y, w, h) = preview_content_bounds(1440.0, 900.0, &state);
-        assert!((x - 543.6).abs() < 0.1, "x={x}");
+        assert!((x - 542.4).abs() < 0.1, "x={x}");
         assert!((y - 122.0).abs() < 0.1, "y={y}");
-        assert!((w - 800.4).abs() < 0.1, "w={w}");
+        assert!((w - 805.6).abs() < 0.1, "w={w}");
         assert!((h - 730.0).abs() < 0.1, "h={h}");
         // 明显区别于平时(非放大)的几何——不能巧合碰上同一个值。
         let normal = preview_content_bounds(1440.0, 900.0, &test_state());
@@ -4716,7 +4716,7 @@ mod tests {
     }
 
     /// Fix round 1 Critical:左侧被放大(Web 视图,无项目树配对)时同样要
-    /// 按放大盒子换算。x=x0+8=96,w=avail_w-16=1248。
+    /// 按放大盒子换算。x=x0+8=92,w=avail_w-16=1256。
     #[test]
     fn preview_content_bounds_left_maximized_web_spans_whole_overlay_box() {
         let state = ShellState {
@@ -4725,8 +4725,8 @@ mod tests {
             ..test_state()
         };
         let (x, _, w, _) = preview_content_bounds(1440.0, 900.0, &state);
-        assert!((x - 96.0).abs() < 0.1, "x={x}");
-        assert!((w - 1248.0).abs() < 0.1, "w={w}");
+        assert!((x - 92.0).abs() < 0.1, "x={x}");
+        assert!((w - 1256.0).abs() < 0.1, "w={w}");
     }
 
     /// Fix round 1 Critical:焦点路由与 webview 摆位必须用同一份放大态
@@ -4808,7 +4808,7 @@ mod tests {
         assert_eq!(left_zone_width(720.0, &state), 320.0);
         let right = right_zone_width(720.0, &state);
         assert!(
-            (right - 296.0).abs() < 0.01,
+            (right - 304.0).abs() < 0.01,
             "右面板区必须仍有宽度: {right}"
         );
         assert!(right >= 1.0, "右半边不能塌成 0 宽");
@@ -4927,16 +4927,16 @@ mod tests {
             ..test_state()
         };
         let (w, h) = terminal_pane_pixel_size(1440.0, 900.0, &maxed);
-        assert!((w - 737.6).abs() < 0.1, "w={w}");
+        assert!((w - 742.4).abs() < 0.1, "w={w}");
         assert!((h - 700.0).abs() < 0.1, "h={h}");
 
         let normal = terminal_pane_pixel_size(1440.0, 900.0, &test_state());
-        assert!((normal.0 - 396.8).abs() < 0.1, "平时 w={}", normal.0);
+        assert!((normal.0 - 401.6).abs() < 0.1, "平时 w={}", normal.0);
         assert!((normal.1 - 780.0).abs() < 0.1, "平时 h={}", normal.1);
         assert_ne!((w, h), normal, "放大态几何必须和平时不同");
         assert!(w > normal.0, "放大后终端必须真的更宽(网格跟着变宽)");
 
-        assert_eq!(crate::term_view::grid_size(w, h), (81, 33));
+        assert_eq!(crate::term_view::grid_size(w, h), (82, 33));
         assert_eq!(crate::term_view::grid_size(normal.0, normal.1), (44, 37));
 
         // 左侧放大不改变右面板区几何(右半只是被遮罩盖住)。
