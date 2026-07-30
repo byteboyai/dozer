@@ -34,6 +34,11 @@ pub struct SessionInfo {
     /// 当前会话 agent 的 transcript 文件路径（Claude Code JSONL；hook 携带）。
     #[serde(default)]
     pub transcript_path: Option<String>,
+    /// 会话归属的项目 id（多项目并行；P2a）。`None` 表示迁移期孤儿会话——
+    /// daemon 重启前已存活、早于本字段引入时创建的会话，首次读出时没有
+    /// 归属信息，不强行捏造一个。
+    #[serde(default)]
+    pub project_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -47,6 +52,9 @@ pub enum Request {
         cwd: String,
         cols: u16,
         rows: u16,
+        /// 这个会话属于哪个项目——GUI 侧发起 CreateSession 时必须显式指定，
+        /// 不再像单项目时代那样只靠一个隐式全局"当前项目"（P2a）。
+        project_id: i64,
     },
     Attach {
         session_id: String,
@@ -81,18 +89,14 @@ pub enum Request {
         ref_name: String,
         ts_ms: u64,
     },
-    /// 打开一个目录为项目（已存在则更新活跃时间），并置为当前项目。
+    /// 打开一个目录为项目（已存在则更新活跃时间，返回该项目信息）。
+    /// P2a 起不再有"顺带置为当前项目"的副作用——daemon 不维护活跃项目
+    /// 概念，"当前显示哪个项目"完全是 GUI 侧的本地状态。
     OpenProject {
         path: String,
     },
     /// 列出所有项目（按活跃时间倒序）。
     ListProjects,
-    /// 置当前项目。
-    SetActiveProject {
-        id: i64,
-    },
-    /// 取当前项目（无则 None）。
-    GetActiveProject,
     /// 取某仓库的验收次数（项目卡"N 次验收"用）。
     GetAcceptanceCount {
         repo: String,
@@ -172,6 +176,7 @@ mod tests {
             cwd: "/tmp".into(),
             cols: 80,
             rows: 24,
+            project_id: 1,
         };
         let line = encode_line(&req);
         assert!(line.ends_with('\n'));
@@ -226,11 +231,6 @@ mod tests {
         let req = Request::OpenProject {
             path: "/repo/x".into(),
         };
-        assert_eq!(
-            decode_line::<Request>(encode_line(&req).trim()).unwrap(),
-            req
-        );
-        let req = Request::SetActiveProject { id: 7 };
         assert_eq!(
             decode_line::<Request>(encode_line(&req).trim()).unwrap(),
             req
@@ -313,5 +313,48 @@ mod tests {
             r#"{"id":"a","name":"n","command":"/bin/sh","cwd":"/tmp","alive":true,"created_ms":1}"#;
         let info: SessionInfo = decode_line(old).unwrap();
         assert_eq!(info.agent_state, AgentState::Idle);
+    }
+
+    #[test]
+    fn session_info_carries_project_id() {
+        let info = SessionInfo {
+            id: "a".into(),
+            name: "n".into(),
+            command: "/bin/sh".into(),
+            cwd: "/tmp".into(),
+            alive: true,
+            created_ms: 1,
+            agent_state: AgentState::Idle,
+            transcript_path: None,
+            project_id: Some(7),
+        };
+        let line = encode_line(&info);
+        let back: SessionInfo = decode_line(line.trim()).unwrap();
+        assert_eq!(back.project_id, Some(7));
+    }
+
+    #[test]
+    fn old_session_info_without_project_id_decodes_none() {
+        // 迁移期：daemon 重启前已存活的会话首次读出时没有 project_id 字段。
+        let old =
+            r#"{"id":"a","name":"n","command":"/bin/sh","cwd":"/tmp","alive":true,"created_ms":1}"#;
+        let info: SessionInfo = decode_line(old).unwrap();
+        assert_eq!(info.project_id, None);
+    }
+
+    #[test]
+    fn create_session_request_carries_project_id() {
+        let req = Request::CreateSession {
+            name: "主线".into(),
+            command: "/bin/sh".into(),
+            args: vec!["-c".into(), "cat".into()],
+            cwd: "/tmp".into(),
+            cols: 80,
+            rows: 24,
+            project_id: 3,
+        };
+        let line = encode_line(&req);
+        let back: Request = decode_line(line.trim()).unwrap();
+        assert_eq!(back, req);
     }
 }
