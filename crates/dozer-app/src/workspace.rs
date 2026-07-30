@@ -3348,7 +3348,8 @@ fn project_pane(
     ws: &Workspace,
     width: Length,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let mut content = column![].spacing(4);
+    let region = chrome_style::project_pane();
+    let mut content = column![].spacing(region.gap);
 
     let open_btn = button(text("打开项目…").size(13).color(theme::CREAM))
         .on_press(Message::ProjectPickFolder)
@@ -3524,12 +3525,12 @@ fn project_pane(
         }
     }
 
-    let body = container(content.padding(8))
+    let body = container(content.padding(region.padding))
         .width(Length::Fill)
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::PANEL.into()),
-            // 面板不再自带边框,原因同 conversation_list_pane。
+            background: region.background.map(Into::into),
+            border: region.border.unwrap_or_default(),
             ..container::Style::default()
         });
 
