@@ -294,7 +294,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         if workspace::is_in_preview_column(
                             logical_x,
                             logical_w,
-                            &workspace.layout(),
+                            &workspace.shell_state(),
                         ) {
                             FocusIntent::Preview
                         } else {
@@ -461,7 +461,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             let logical_w = size.width as f32 / scale as f32;
             let logical_h = size.height as f32 / scale as f32;
             let (x, y, w, h) =
-                workspace::preview_content_bounds(logical_w, logical_h, &workspace.layout());
+                workspace::preview_content_bounds(logical_w, logical_h, &workspace.shell_state());
             let bounds = wry::Rect {
                 position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
                 size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
@@ -723,7 +723,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 let (pane_w, pane_h) = workspace::terminal_pane_pixel_size(
                     logical.width,
                     logical.height,
-                    &workspace.layout(),
+                    &workspace.shell_state(),
                 );
                 let (cols, rows) = term_view::grid_size(pane_w, pane_h);
                 if cols > 0 && rows > 0 {
@@ -963,7 +963,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         let (pane_w, pane_h) = workspace::terminal_pane_pixel_size(
                             logical.width,
                             logical.height,
-                            &workspace.layout(),
+                            &workspace.shell_state(),
                         );
                         let (cols, rows) = term_view::grid_size(pane_w, pane_h);
                         if cols > 0 && rows > 0 {

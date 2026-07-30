@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 900" width="1000" height="900">
+  <rect x="0" y="0" width="1000" height="900" fill="#ffffff"/>
+
+  <g fill="none" stroke="#0A0E16" stroke-width="26" stroke-linejoin="miter" stroke-linecap="butt">
+    <!-- outer silhouette: cab, body, mound -->
+    <path d="
+      M 55 760
+      L 55 650
+      L 140 430
+      L 215 330
+      L 250 255
+      L 330 195
+      L 560 205
+      L 615 228
+      L 785 460
+      L 855 460
+      L 900 690
+      L 940 530
+      L 990 760
+      L 55 760
+      Z
+    "/>
+
+    <!-- diagonal accent slicing the body -->
+    <path d="M 230 300 L 900 660" stroke-linecap="round"/>
+
+    <!-- cab window mullions -->
+    <path d="M 260 300 L 300 240 L 330 245 L 295 305 Z" stroke-width="18"/>
+    <path d="M 340 290 L 380 220 L 415 225 L 380 295 Z" stroke-width="18"/>
+
+    <!-- wheels -->
+    <circle cx="275" cy="590" r="95"/>
+    <circle cx="115" cy="705" r="50"/>
+
+    <!-- panel accent line -->
+    <path d="M 230 700 L 520 700" stroke-width="26" stroke-linecap="round"/>
+
+    <!-- small window/hinge -->
+    <rect x="855" y="695" width="55" height="60" rx="8" stroke-width="18"/>
+  </g>
+</svg>
