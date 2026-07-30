@@ -14,7 +14,7 @@
 [6,12]/8/12/...)`、圆角 `6.0/8.0` 等全是散落的字面量,各写各的,没有统一量级(scale),也没有
 "这个区域为什么是这个值"的可追溯性。
 
-本设计的目标:把外壳里 12 个"区域"(主导航、左右图标栏、放大态浮层、右键菜单,以及 7 个面板
+本设计的目标:把外壳里 13 个"区域"(主导航、左右图标栏、放大态浮层、右键菜单,以及 7 个面板
 内容区)各自外层容器的**背景色、边框、内边距、子元素间距**,从散落在 `workspace.rs` 各处的字面量,
 搬进一份编译期内嵌的 JSON 配置文件,做到"改一处、查得到、有名字"。
 
@@ -27,13 +27,13 @@
 - 不借机统一目前确实不一致的数值(比如 `project_pane` 内边距 8 和 `agent_list_pane` 内边距 12)——
   如实照搬,配置化之后想统一是后续的"改一个数字"级别的小改动,不在本轮做。
 
-## 2. 区域清单(12 个,不是最初设想的 13 个)
+## 2. 区域清单(13 个)
 
 排查下来"验收视图"不是独立容器——它复用 `preview_pane` 的外层 chrome,只是把内容换成验收专属的
 列(`acceptance_content` 把内容 push 进 `preview_pane` 已经建好的 `content` 列,不自建容器)。因此
-真正各自拥有一份容器样式的是 12 个:
+真正各自拥有一份容器样式的是 13 个:
 
-**外壳骨架(5)**:
+**外壳骨架(6)**:
 | 区域 key | 对应函数 | 现状(背景/边框/内边距/gap) |
 |---|---|---|
 | `top_bar` | `top_bar` | 背景 `BG`;边框 `{BORDER, width 0, radius 0}`(实际不可见);padding `[0,12]`;gap `16` |
@@ -60,7 +60,7 @@
 
 ## 3. Schema:每区域一份直给,不搭"预设复用"层
 
-12 个区域里数值本来就大多独立(§2 表格里同背景色的区域内边距还不一样),说明它们并非共享一套
+13 个区域里数值本来就大多独立(§2 表格里同背景色的区域内边距还不一样),说明它们并非共享一套
 基准值再局部覆盖——套一层"预设 + 覆盖"的间接性对当前情况没有实际去重收益,还会让"这个区域到底
 用的什么值"变得要跳两次才能看到。采用**每区域一份直给**:
 
@@ -114,7 +114,7 @@
   外部定位用的 `Padding`(用于把菜单摆到右键点击坐标),后者是纯几何定位逻辑而非视觉样式,不纳入
   这份配置——只有菜单外框本身的背景/边框/padding 进 JSON。
 
-其余 10 个区域都是单层容器,严格套用 §3 的通用形状。
+其余 11 个区域都是单层容器,严格套用 §3 的通用形状。
 
 ## 5. 加载与消费机制
 
@@ -129,7 +129,7 @@
   - 每个区域一个访问函数,如 `pub fn top_bar() -> &'static RegionStyle`、
     `pub fn preview_pane() -> &'static RegionStyle`,`maximize_overlay()`/`context_menu_popup()`
     返回各自的复合结构体。
-- 调用侧改动:12 个区域函数里现有的
+- 调用侧改动:13 个区域函数里现有的
   ```rust
   .style(move |_t: &iced_widget::Theme| container::Style {
       background: Some(theme::PANEL.into()),
@@ -151,6 +151,6 @@
 
 - 新增:`crates/dozer-app/assets/theme/regions.json`、`crates/dozer-app/src/chrome_style.rs`。
 - 修改:`crates/dozer-app/src/theme.rs`(新增 `SCRIM` 常量,不改动现有 14 色)、
-  `crates/dozer-app/src/workspace.rs`(12 处区域函数改为读 `chrome_style::` 而非内联字面量)、
+  `crates/dozer-app/src/workspace.rs`(13 处区域函数改为读 `chrome_style::` 而非内联字面量)、
   `Cargo.toml`(如 `serde_json` 尚未是 `dozer-app` 的直接依赖,需要添加)。
 - 不涉及 `dozerd`/`dozer-core`/`dozer-hook`/`legacy-boy`,纯 `dozer-app` GUI 内部改动。

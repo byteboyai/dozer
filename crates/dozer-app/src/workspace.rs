@@ -4714,7 +4714,7 @@ mod tests {
 
     /// Fix round 1 Critical:焦点路由与 webview 摆位必须用同一份放大态
     /// 几何——右侧放大时左侧列恒不可点中;左侧放大时命中范围要按放大盒子
-    /// 的横向范围([535.6, 1352))判定,不是平时的 [280, 688)。
+    /// 的横向范围([534.4, 1356))判定,不是平时的 [280, 688)。
     #[test]
     fn preview_column_hit_test_respects_maximized_state() {
         let right_max = ShellState {
@@ -4729,7 +4729,7 @@ mod tests {
         };
         assert!(
             !is_in_preview_column(500.0, 1440.0, &left_max),
-            "500 在平时的预览列内,但放大盒子的列起点在 535.6 之后"
+            "500 在平时的预览列内,但放大盒子的列起点在 534.4 之后"
         );
         assert!(is_in_preview_column(600.0, 1440.0, &left_max));
         assert!(is_in_preview_column(1300.0, 1440.0, &left_max));
@@ -4772,14 +4772,14 @@ mod tests {
     /// 左面板区的**有效**宽必须重新夹取,否则右面板区一寸不剩。
     ///
     /// 具体数字(窗口逻辑宽 720——1440pt 屏上把窗口贴半屏就是这个宽度):
-    /// `zones_width(720)` = 720 - 2*48(图标栏) - 8(LeftRight 分隔线) = 616;
-    /// 上界 = max(616 - 320(MIN_ZONE_WIDTH), 320) = 320;
-    /// 默认 `left_width`=640 夹取后 = 320,右面板区 = 616 - 320 = 296(>0)。
+    /// `zones_width(720)` = 720 - 2*44(图标栏) - 8(LeftRight 分隔线) = 624;
+    /// 上界 = max(624 - 320(MIN_ZONE_WIDTH), 320) = 320;
+    /// 默认 `left_width`=640 夹取后 = 320,右面板区 = 624 - 320 = 304(>0)。
     ///
     /// 修复前的 flex 追账(iced_core flex.rs `resolve` 第一趟按顺序给
-    /// 非流体子元素分配、`available` 递减):available=720 →左图标栏 Fixed(48)
-    /// →672 →左面板区 `Length::Fixed(640)` 全额吃下 →32 →分隔线 Fixed(8)
-    /// →24 →右图标栏 Fixed(48) 被 `Limits::resolve` 夹到 24 →0,
+    /// 非流体子元素分配、`available` 递减):available=720 →左图标栏 Fixed(44)
+    /// →676 →左面板区 `Length::Fixed(640)` 全额吃下 →36 →分隔线 Fixed(8)
+    /// →28 →右图标栏 Fixed(44) 被 `Limits::resolve` 夹到 28 →0,
     /// `remaining`=0,唯一 `Fill` 的右面板区第三趟拿到 0 宽:终端/Agent 列表/
     /// 对话/审阅整片消失,右图标栏还被压成半宽。
     #[test]
@@ -4896,13 +4896,13 @@ mod tests {
     /// 渲染的金色描边盒子重算,不能停在放大前的尺寸(否则只放大了外框)。
     ///
     /// 具体数字(1440x900,`agent_split`=0.4):
-    /// avail_w = 1440 - 2*48 - 2*40 = 1264,pair_w = 1264 - 8 = 1256,
-    /// 终端占 1-0.4 → 1256*0.6 = 753.6,减 `CHROME_WIDTH_PX`(16) = 737.6;
+    /// avail_w = 1440 - 2*44 - 2*40 = 1272,pair_w = 1272 - 8 = 1264,
+    /// 终端占 1-0.4 → 1264*0.6 = 758.4,减 `CHROME_WIDTH_PX`(16) = 742.4;
     /// 盒子高 = 900 - 44(顶栏) - 2*40 = 776,再减 pane 自带底栏 26
     /// (`STATUS_BAR_HEIGHT`)与 `CHROME_HEIGHT_PX`(50) = 700。
-    /// 对照平时:right_w = 1336 - 640 = 696,pair = 688,688*0.6 = 412.8,
-    /// 减 16 = 396.8;高 = 900 - 44 - 26 - 50 = 780。
-    /// 换成网格(CELL_WIDTH=9,LINE_HEIGHT_PX=21):放大后 81x33,平时 44x37。
+    /// 对照平时:zones_width = 1440-2*44-8=1344,right_w = 1344 - 640 = 704,pair = 696,
+    /// 696*0.6 = 417.6,减 16 = 401.6;高 = 900 - 44 - 26 - 50 = 780。
+    /// 换成网格(CELL_WIDTH=9,LINE_HEIGHT_PX=21):放大后 82x33,平时 44x37。
     #[test]
     fn terminal_pane_pixel_size_right_maximized_matches_overlay_box() {
         let maxed = ShellState {
@@ -5108,12 +5108,12 @@ mod tests {
 
     #[test]
     fn preview_column_hit_test() {
-        // 窗口宽 1440:左图标栏 48 + 左面板区 640(项目树 0.35=224 + 分隔线 8)。
-        // 预览内容列 = [280, 688)。
+        // 窗口宽 1440:左图标栏 44 + 左面板区 640(项目树 0.35=224 + 分隔线 8)。
+        // 预览内容列 = [273.2, 684)。
         let state = test_state();
         assert!(!is_in_preview_column(100.0, 1440.0, &state), "落在项目树列");
         assert!(
-            is_in_preview_column(280.0, 1440.0, &state),
+            is_in_preview_column(273.2, 1440.0, &state),
             "预览列左边界(过配对分隔线)"
         );
         assert!(is_in_preview_column(500.0, 1440.0, &state), "预览列内");
@@ -5206,8 +5206,8 @@ mod tests {
 
     #[test]
     fn right_pair_split_writes_field_of_current_right_view() {
-        // 右面板区宽 = 1440 - 2*48 - 640 - 8 = 696,左边缘 x = 1440-48-696 = 696;
-        // 配对内容宽 = 696-8=688,其中点 344 处拖动 → 0.5。
+        // 右面板区宽 = 1440 - 2*44 - 640 - 8 = 704,左边缘 x = 1440-44-704 = 692;
+        // 配对内容宽 = 704-8=696,其中点 348 处拖动(692+348=1040)→ 0.5。
         let agent = test_state();
         let l = apply_column_drag(agent, Divider::RightPairSplit, 1440.0, 696.0 + 344.0);
         assert!((l.agent_split - 0.5).abs() < 0.001, "{}", l.agent_split);

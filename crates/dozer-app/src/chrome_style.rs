@@ -53,7 +53,6 @@ struct RawRegion {
     background: Option<String>,
     border: Option<RawBorder>,
     padding: RawPadding,
-    #[serde(default)]
     gap: f32,
 }
 
@@ -281,6 +280,7 @@ mod tests {
         assert_eq!(s.scrim_padding, 40.0);
         assert_eq!(s.border.color, theme::GOLD);
         assert_eq!(s.border.width, 1.5);
+        assert_eq!(s.border.radius, 10.0.into());
     }
 
     #[test]
@@ -290,6 +290,7 @@ mod tests {
         let border = s.border.expect("context_menu 应有边框");
         assert_eq!(border.color, theme::BORDER);
         assert_eq!(border.width, 1.0);
+        assert_eq!(border.radius, 6.0.into());
         assert_eq!(s.padding, Padding::from(6.0));
         assert_eq!(s.gap, 2.0);
     }

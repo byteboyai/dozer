@@ -62,7 +62,8 @@
   "status_bar": {
     "background": "PANEL",
     "border": { "color": "BORDER", "width": 1.0, "radius": 0.0 },
-    "padding": [0, 8]
+    "padding": [0, 8],
+    "gap": 0
   },
   "maximize_overlay": {
     "scrim": { "background": "SCRIM", "padding": 40.0 },
