@@ -2865,21 +2865,18 @@ fn top_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
     }
     right = right.push(icons::view(icons::IconKind::Settings, 16.0, theme::DIM));
 
+    let region = chrome_style::top_bar();
     let bar = row![title, search, iced_widget::space::horizontal(), right]
-        .spacing(16)
-        .padding([0, 12])
+        .spacing(region.gap)
+        .padding(region.padding)
         .align_y(iced_widget::core::Alignment::Center);
 
     container(bar)
         .width(Length::Fill)
         .height(Length::Fixed(TOP_BAR_HEIGHT))
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::BG.into()),
-            border: Border {
-                color: theme::BORDER,
-                width: 0.0,
-                radius: 0.0.into(),
-            },
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: region.background.map(Into::into),
+            border: region.border.unwrap_or_default(),
             ..container::Style::default()
         })
         .into()
