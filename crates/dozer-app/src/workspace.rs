@@ -3057,7 +3057,7 @@ fn review_content_pane(
         .into()
 }
 
-/// 单个图标栏按钮:激活态金色描边+底色，未激活态纯图标。
+/// 单个图标栏按钮：36x36 圆角正方形，hover 显亮色背景，选中态金色图标+外框。
 fn rail_icon_button<'a>(
     icon: icons::IconKind,
     active: bool,
@@ -3065,33 +3065,45 @@ fn rail_icon_button<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let color = if active { theme::GOLD } else { theme::DIM };
     let inner = container(icons::view(icon, 18.0, color))
-        .width(Length::Fixed(36.0))
-        .height(Length::Fixed(36.0))
+        .width(Length::Fill)
+        .height(Length::Fill)
         .align_x(iced_widget::core::alignment::Horizontal::Center)
-        .align_y(iced_widget::core::alignment::Vertical::Center)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: if active {
-                Some(theme::CARD.into())
-            } else {
-                None
-            },
-            border: if active {
-                Border {
-                    color: theme::GOLD,
-                    width: 1.0,
-                    radius: 8.0.into(),
-                }
-            } else {
-                Border::default()
-            },
-            ..container::Style::default()
-        });
+        .align_y(iced_widget::core::alignment::Vertical::Center);
+
+    let radius = 8.0;
+    let base_border = Border {
+        color: Color::TRANSPARENT,
+        width: 1.0,
+        radius: radius.into(),
+    };
+
     button(inner)
         .on_press(msg)
-        .style(|_t, _s| button::Style {
-            background: None,
-            ..button::Style::default()
-        })
+        .width(Length::Fixed(36.0))
+        .height(Length::Fixed(36.0))
+        .padding(0)
+        .style(
+            move |_t: &iced_widget::Theme, status: button::Status| match status {
+                button::Status::Active if active => button::Style {
+                    background: Some(theme::CARD.into()),
+                    border: Border {
+                        color: theme::GOLD,
+                        ..base_border
+                    },
+                    ..button::Style::default()
+                },
+                button::Status::Hovered => button::Style {
+                    background: Some(theme::CARD.into()),
+                    border: base_border,
+                    ..button::Style::default()
+                },
+                _ => button::Style {
+                    background: None,
+                    border: base_border,
+                    ..button::Style::default()
+                },
+            },
+        )
         .into()
 }
 
