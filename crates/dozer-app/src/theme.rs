@@ -26,6 +26,16 @@ pub const GREEN: Color = c(0x1A, 0xD5, 0x85);
 pub const PURPLE: Color = c(0x95, 0x80, 0xFF);
 pub const RED: Color = c(0xFF, 0x6E, 0x6E);
 
+/// 放大态浮层的变暗遮罩色(半透明黑)。不在设计规格锁死的 14 色之内——
+/// 之前是 `maximize_overlay` 函数里的游离字面量,这里给它转正成具名令牌,
+/// 值不变,纯增量,不改动上面 14 个锁定颜色。
+pub const SCRIM: Color = Color {
+    r: 0.0,
+    g: 0.0,
+    b: 0.0,
+    a: 0.55,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -46,5 +56,13 @@ mod tests {
         assert_eq!(CREAM.g, 0xE5 as f32 / 255.0);
         assert_eq!(CREAM.b, 0xB4 as f32 / 255.0);
         assert_eq!(CREAM.a, 1.0);
+    }
+
+    #[test]
+    fn scrim_is_half_transparent_black() {
+        assert_eq!(SCRIM.r, 0.0);
+        assert_eq!(SCRIM.g, 0.0);
+        assert_eq!(SCRIM.b, 0.0);
+        assert_eq!(SCRIM.a, 0.55);
     }
 }
