@@ -3018,6 +3018,7 @@ fn review_content_pane(
     ws: &Workspace,
     width: Length,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let region = chrome_style::review_content_pane();
     let maximize_btn = maximize_button(MaximizedPane::Right);
     let header = row![
         text("会话审阅").size(13).color(theme::CREAM),
@@ -3025,7 +3026,7 @@ fn review_content_pane(
         maximize_btn,
     ]
     .spacing(4);
-    let mut content = column![header].spacing(4);
+    let mut content = column![header].spacing(region.gap);
 
     if ws.review.is_some() {
         content = review_content(content, ws);
@@ -3041,11 +3042,12 @@ fn review_content_pane(
         );
     }
 
-    container(content.padding(8))
+    container(content.padding(region.padding))
         .width(width)
         .height(Length::Fill)
         .style(move |_theme: &iced_widget::Theme| container::Style {
-            background: Some(theme::PANEL.into()),
+            background: region.background.map(Into::into),
+            border: region.border.unwrap_or_default(),
             ..container::Style::default()
         })
         .into()
