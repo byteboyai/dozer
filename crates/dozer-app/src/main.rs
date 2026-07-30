@@ -636,7 +636,18 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         .create_window(
                             winit::window::WindowAttributes::default()
                                 .with_title("Dozer")
-                                .with_inner_size(LogicalSize::new(1440.0, 900.0)),
+                                .with_inner_size(LogicalSize::new(
+                                    workspace::INITIAL_WINDOW_SIZE.0,
+                                    workspace::INITIAL_WINDOW_SIZE.1,
+                                ))
+                                // 双保险:窗口不许缩到"两个面板区都放不下最小宽"
+                                // 以下。真正保证右半边不消失的是 workspace 侧的
+                                // `clamp_left_width`(持久化宽可能远大于这个最小
+                                // 宽),这里只是把最坏情形挡在外面。
+                                .with_min_inner_size(LogicalSize::new(
+                                    workspace::MIN_WINDOW_WIDTH,
+                                    workspace::MIN_WINDOW_HEIGHT,
+                                )),
                         )
                         .expect("Create window"),
                 );
@@ -715,23 +726,15 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 );
 
                 // `workspace` 是启动序列（daemon 连接 + 会话恢复）已经建好
-                // 的状态，这里只补一次真实窗口尺寸——恢复出来的 tab 之前
-                // 用的是 `DEFAULT_COLS`/`DEFAULT_ROWS` 兜底默认值，窗口一旦
-                // 建好就立刻纠正成实际网格（也会顺带把 resize 同步给
-                // daemon）。
+                // 的状态，这里只补一次真实窗口尺寸——`set_window_size` 既把
+                // 尺寸记进 `Workspace`（`view()` 的左面板区有效宽要用），也
+                // 立刻按它重算终端网格：恢复出来的 tab 之前用的是
+                // `DEFAULT_COLS`/`DEFAULT_ROWS` 兜底默认值，这里纠正成实际
+                // 网格（也会顺带把 resize 同步给 daemon）。网格换算细节
+                // （含"上次退出时右侧停在对话视图"的情形）归 workspace 侧
+                // 一家管，main.rs 不再自己算一份。
                 let logical: LogicalSize<f32> = physical_size.to_logical(window.scale_factor());
-                let (pane_w, pane_h) = workspace::terminal_pane_pixel_size(
-                    logical.width,
-                    logical.height,
-                    &workspace.shell_state(),
-                );
-                let (cols, rows) = term_view::grid_size(pane_w, pane_h);
-                if cols > 0 && rows > 0 {
-                    workspace.update(Message::PaneResized {
-                        cols: cols as u16,
-                        rows: rows as u16,
-                    });
-                }
+                workspace.set_window_size(logical.width, logical.height);
 
                 // Initialize iced
 
@@ -956,22 +959,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     WindowEvent::Resized(new_size) => {
                         *resized = true;
 
-                        // 窗口尺寸变了：换算终端 pane 的新网格尺寸，套用到
-                        // 所有 tab 的 `TerminalModel` 并同步给 daemon
-                        // （`Workspace::update` 内部处理，这里只负责换算）。
+                        // 窗口尺寸变了：把新的逻辑尺寸交给 `Workspace`——它
+                        // 既要用这个宽度把持久化的 `left_width` 夹进当前窗口
+                        // 容得下的范围（否则窄窗下右半边整片消失），也会顺手
+                        // 换算终端 pane 的新网格尺寸、套用到所有 tab 的
+                        // `TerminalModel` 并同步给 daemon。
                         let logical: LogicalSize<f32> = new_size.to_logical(window.scale_factor());
-                        let (pane_w, pane_h) = workspace::terminal_pane_pixel_size(
-                            logical.width,
-                            logical.height,
-                            &workspace.shell_state(),
-                        );
-                        let (cols, rows) = term_view::grid_size(pane_w, pane_h);
-                        if cols > 0 && rows > 0 {
-                            workspace.update(Message::PaneResized {
-                                cols: cols as u16,
-                                rows: rows as u16,
-                            });
-                        }
+                        workspace.set_window_size(logical.width, logical.height);
                         // bounds 同步由本函数末尾的 sync_previews 统一执行
                     }
                     WindowEvent::CloseRequested => {
