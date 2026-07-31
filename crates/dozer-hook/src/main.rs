@@ -1,5 +1,6 @@
 mod codebuddy;
 mod install;
+mod opencode;
 
 use dozer_core::protocol::{AgentKind, Request, encode_line};
 use std::io::{Read, Write};
@@ -67,6 +68,17 @@ fn forward(agent: AgentKind, event_arg: Option<&str>) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
+    if agent == AgentKind::Opencode
+        && let Some(line) = data.get("transcript_line").filter(|v| !v.is_null())
+    {
+        let cwd = data
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .unwrap_or(".");
+        if let Err(e) = opencode::append_transcript_line(cwd, &session_id, line) {
+            eprintln!("opencode transcript 落盘失败（已忽略，不影响转发）: {e}");
+        }
+    }
     let req = Request::HookEvent {
         session_id,
         agent,
