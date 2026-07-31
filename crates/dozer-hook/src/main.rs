@@ -8,8 +8,14 @@ use std::time::Duration;
 fn main() {
     let arg1 = std::env::args().nth(1);
     match arg1.as_deref() {
-        Some("install") => std::process::exit(install::run_at(&install::settings_path(), true)),
-        Some("uninstall") => std::process::exit(install::run_at(&install::settings_path(), false)),
+        Some("install") => {
+            let agent = std::env::args().nth(2).unwrap_or_else(|| "claude".into());
+            std::process::exit(install::run_at(&install::settings_path_for(&agent), &agent, true))
+        }
+        Some("uninstall") => {
+            let agent = std::env::args().nth(2).unwrap_or_else(|| "claude".into());
+            std::process::exit(install::run_at(&install::settings_path_for(&agent), &agent, false))
+        }
         Some(agent_arg) => {
             let agent = parse_agent(agent_arg);
             let event_arg = std::env::args().nth(2);

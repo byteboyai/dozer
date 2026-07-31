@@ -15,12 +15,26 @@ pub const EVENTS: [&str; 7] = [
     "SessionEnd",
 ];
 
-pub fn settings_path() -> PathBuf {
-    if let Ok(p) = std::env::var("DOZER_CLAUDE_SETTINGS") {
-        return PathBuf::from(p);
+/// agent 名 → 该 agent 的 hook 配置文件路径。CodeBuddy 走
+/// `~/.codebuddy/settings.json`（Task 1 spike 确认的机制），环境变量
+/// 覆盖用于测试，跟既有 Claude 路径同一套手法。
+pub fn settings_path_for(agent: &str) -> PathBuf {
+    match agent {
+        "codebuddy" => {
+            if let Ok(p) = std::env::var("DOZER_CODEBUDDY_SETTINGS") {
+                return PathBuf::from(p);
+            }
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+            PathBuf::from(home).join(".codebuddy").join("settings.json")
+        }
+        _ => {
+            if let Ok(p) = std::env::var("DOZER_CLAUDE_SETTINGS") {
+                return PathBuf::from(p);
+            }
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+            PathBuf::from(home).join(".claude").join("settings.json")
+        }
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
-    PathBuf::from(home).join(".claude").join("settings.json")
 }
 
 fn entry_is_dozer(entry: &Value) -> bool {
@@ -38,7 +52,7 @@ fn entry_is_dozer(entry: &Value) -> bool {
         .unwrap_or(false)
 }
 
-pub fn run_at(path: &Path, install: bool) -> i32 {
+pub fn run_at(path: &Path, agent: &str, install: bool) -> i32 {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".into(),
@@ -76,7 +90,7 @@ pub fn run_at(path: &Path, install: bool) -> i32 {
         arr.retain(|e| !entry_is_dozer(e));
         if install {
             arr.push(json!({
-                "hooks": [{ "type": "command", "command": format!("{exe} claude {ev}") }]
+                "hooks": [{ "type": "command", "command": format!("{exe} {agent} {ev}") }]
             }));
         }
     }
@@ -121,7 +135,7 @@ mod tests {
     fn install_creates_settings_and_registers_all_events() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        assert_eq!(run_at(&path, true), 0);
+        assert_eq!(run_at(&path, "claude", true), 0);
         let root = read(&path);
         for ev in EVENTS {
             let arr = root["hooks"][ev].as_array().expect(ev);
@@ -137,6 +151,29 @@ mod tests {
     }
 
     #[test]
+    fn install_writes_agent_specific_command_for_codebuddy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        assert_eq!(run_at(&path, "codebuddy", true), 0);
+        let root = read(&path);
+        let cmd = root["hooks"]["Stop"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(cmd.contains(" codebuddy "), "{cmd}");
+    }
+
+    #[test]
+    fn settings_path_for_codebuddy_points_at_codebuddy_dir() {
+        // DOZER_CODEBUDDY_SETTINGS 覆盖，跟既有 DOZER_CLAUDE_SETTINGS 同一套测试手法。
+        unsafe { std::env::set_var("DOZER_CODEBUDDY_SETTINGS", "/tmp/probe-codebuddy.json") };
+        assert_eq!(
+            settings_path_for("codebuddy"),
+            std::path::PathBuf::from("/tmp/probe-codebuddy.json")
+        );
+        unsafe { std::env::remove_var("DOZER_CODEBUDDY_SETTINGS") };
+    }
+
+    #[test]
     fn install_is_idempotent_and_preserves_foreign_hooks() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
@@ -145,8 +182,8 @@ mod tests {
             r#"{"model":"opus","hooks":{"Stop":[{"hooks":[{"type":"command","command":"other-tool"}]}]}}"#,
         )
         .unwrap();
-        assert_eq!(run_at(&path, true), 0);
-        assert_eq!(run_at(&path, true), 0);
+        assert_eq!(run_at(&path, "claude", true), 0);
+        assert_eq!(run_at(&path, "claude", true), 0);
         let root = read(&path);
         assert_eq!(root["model"], "opus", "无关配置保留");
         let stop = root["hooks"]["Stop"].as_array().unwrap();
@@ -166,8 +203,8 @@ mod tests {
             r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"other-tool"}]}]}}"#,
         )
         .unwrap();
-        assert_eq!(run_at(&path, true), 0);
-        assert_eq!(run_at(&path, false), 0);
+        assert_eq!(run_at(&path, "claude", true), 0);
+        assert_eq!(run_at(&path, "claude", false), 0);
         let root = read(&path);
         let stop = root["hooks"]["Stop"].as_array().unwrap();
         assert_eq!(stop.len(), 1);
@@ -180,7 +217,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         std::fs::write(&path, "{broken").unwrap();
-        assert_eq!(run_at(&path, true), 1);
+        assert_eq!(run_at(&path, "claude", true), 1);
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             "{broken",
