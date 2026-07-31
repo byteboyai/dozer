@@ -582,6 +582,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         app.update(Message::ProjectOpen(dir));
                     }
                 }
+                // 顶栏"＋"专用:同一个 rfd 模态,落地走"新增页签"而不是
+                // "把当前页签换成另一个项目"(见 `Message::ProjectTabPickFolder`)。
+                Message::ProjectTabPickFolder => {
+                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                        app.update(Message::ProjectTabOpen(dir));
+                    }
+                }
                 Message::ProjectTreeCopyPath(path, kind) => {
                     let root = app.active_project_path().unwrap_or_else(|| path.clone());
                     let s = crate::project::path_string(kind, &path, &root);
