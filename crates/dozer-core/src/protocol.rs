@@ -64,6 +64,9 @@ pub struct SessionInfo {
     /// 归属信息，不强行捏造一个。
     #[serde(default)]
     pub project_id: Option<i64>,
+    /// 会话归属的 agent；首个 hook 事件到达前恒 `Unknown`（P2b）。
+    #[serde(default)]
+    pub agent: AgentKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -352,6 +355,7 @@ mod tests {
             agent_state: AgentState::Idle,
             transcript_path: None,
             project_id: Some(7),
+            agent: AgentKind::Unknown,
         };
         let line = encode_line(&info);
         let back: SessionInfo = decode_line(line.trim()).unwrap();
@@ -404,5 +408,32 @@ mod tests {
         assert_eq!(AgentKind::Claude.label(), "claude");
         assert_eq!(AgentKind::Codebuddy.label(), "codebuddy");
         assert_eq!(AgentKind::Opencode.label(), "opencode");
+    }
+
+    #[test]
+    fn session_info_carries_agent() {
+        let info = SessionInfo {
+            id: "a".into(),
+            name: "n".into(),
+            command: "/bin/sh".into(),
+            cwd: "/tmp".into(),
+            alive: true,
+            created_ms: 1,
+            agent_state: AgentState::Idle,
+            transcript_path: None,
+            project_id: Some(7),
+            agent: AgentKind::Claude,
+        };
+        let line = encode_line(&info);
+        let back: SessionInfo = decode_line(line.trim()).unwrap();
+        assert_eq!(back.agent, AgentKind::Claude);
+    }
+
+    #[test]
+    fn old_session_info_without_agent_decodes_unknown() {
+        let old =
+            r#"{"id":"a","name":"n","command":"/bin/sh","cwd":"/tmp","alive":true,"created_ms":1}"#;
+        let info: SessionInfo = decode_line(old).unwrap();
+        assert_eq!(info.agent, AgentKind::Unknown);
     }
 }
