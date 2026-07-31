@@ -737,7 +737,7 @@ pub enum Message {
     /// 对应 tab 的会话已退出（PTY 子进程退出或 daemon 断连）。
     SessionExited(ProjectId, usize),
     /// attach 流转发来的 agent 状态变更（tab_id, 状态, 该会话最新 transcript 路径）。
-    AgentStateChanged(ProjectId, usize, AgentState, Option<String>),
+    AgentStateChanged(ProjectId, usize, AgentKind, AgentState, Option<String>),
     /// TurnEnded 触发的交付检测结果（tab_id, 是否有待验收交付）。
     DeliveryChecked(ProjectId, usize, bool),
     /// 点击横幅"进入验收"（tab_id 为来源会话）。用户点的是当前界面上的
@@ -985,6 +985,9 @@ pub struct SessionTab {
     /// 会话内 agent 的最新状态（hook 事件驱动；初值来自
     /// `SessionInfo.agent_state`，晚 attach 也能恢复现状）。
     pub agent_state: AgentState,
+    /// 会话归属的 agent（P2b；初值来自 `SessionInfo.agent`，随
+    /// `AgentStateChanged` 更新）。
+    pub agent: AgentKind,
     /// 该会话的 transcript 路径（有则终端 tab 显"审阅"入口；P1i）。
     pub transcript_path: Option<String>,
     /// OSC 扫描器（每 tab 独立，序列可跨 chunk）。
@@ -1336,6 +1339,7 @@ impl Workspace {
                     .spawn(forward_events(project_id, tab_id, rx, io.proxy.clone()));
             tabs.push(SessionTab {
                 agent_state: info.agent_state,
+                agent: info.agent,
                 transcript_path: info.transcript_path.clone(),
                 info,
                 model,
@@ -1544,8 +1548,8 @@ impl Workspace {
             .collect()
     }
 
-    /// 异步读 transcript + 解析 → ReviewLoaded（GUI 侧 spawn_blocking；P1i/P1j 按源）。
-    fn spawn_review_load(&self, io: &ShellIo, source: ReviewSource, path: String) {
+    /// 异步读 transcript + 解析 → ReviewLoaded（GUI 侧 spawn_blocking；P1i/P1j/P2b 按源）。
+    fn spawn_review_load(&self, io: &ShellIo, source: ReviewSource, path: String, agent: AgentKind) {
         let Some(project_id) = self.project_id() else {
             return;
         };
@@ -1553,7 +1557,7 @@ impl Workspace {
         io.handle.spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
                 std::fs::read_to_string(&path)
-                    .map(|s| transcript::parse_transcript(AgentKind::Claude, &s))
+                    .map(|s| transcript::parse_transcript(agent, &s))
                     .map_err(|e| format!("无法读取会话记录: {e}"))
             })
             .await
@@ -1937,6 +1941,7 @@ impl Workspace {
         let _ = model.feed(&snapshot); // 快照回放：陈旧查询应答不可补发，丢弃
         self.tabs.push(SessionTab {
             agent_state: info.agent_state,
+            agent: info.agent,
             transcript_path: info.transcript_path.clone(),
             info,
             model,
@@ -2653,12 +2658,13 @@ impl App {
                     }
                 });
             }
-            Message::AgentStateChanged(project_id, tab_id, state, transcript_path) => {
+            Message::AgentStateChanged(project_id, tab_id, agent, state, transcript_path) => {
                 self.with_project(project_id, |ws, io| {
                     // 当前项目路径先取出（下面要 &mut 借 tab，冲突）；重锚:项目优先。
                     let active_repo = ws.project.as_ref().map(|p| PathBuf::from(&p.path));
                     if let Some(tab) = ws.tab_by_id_mut(tab_id) {
                         tab.agent_state = state;
+                        tab.agent = agent;
                         if let Some(tp) = transcript_path {
                             tab.transcript_path = Some(tp);
                         }
@@ -2710,13 +2716,13 @@ impl App {
                     if state == AgentState::TurnEnded
                         && let Some(rv) = &ws.review
                         && review_should_refresh_on_turn(&rv.source, tab_id)
-                        && let Some(path) = ws
+                        && let Some((path, tab_agent)) = ws
                             .tabs
                             .iter()
                             .find(|t| t.tab_id == tab_id)
-                            .and_then(|t| t.transcript_path.clone())
+                            .and_then(|t| t.transcript_path.clone().map(|p| (p, t.agent)))
                     {
-                        ws.spawn_review_load(io, ReviewSource::Session(tab_id), path);
+                        ws.spawn_review_load(io, ReviewSource::Session(tab_id), path, tab_agent);
                     }
                 });
             }
@@ -2893,10 +2899,20 @@ impl App {
                 self.with_focused_project(move |ws, io| {
                     // 若点开的是某活会话的当前对话 → Session 源(回合结束刷新);否则 File 快照。
                     let path_s = path.to_string_lossy().into_owned();
-                    let source = ws
+                    let session_tab = ws
                         .tabs
                         .iter()
-                        .find(|t| t.transcript_path.as_deref() == Some(path_s.as_str()))
+                        .find(|t| t.transcript_path.as_deref() == Some(path_s.as_str()));
+                    let agent = session_tab
+                        .map(|t| t.agent)
+                        .or_else(|| {
+                            ws.conversations
+                                .iter()
+                                .find(|c| c.path == path)
+                                .map(|c| c.agent)
+                        })
+                        .unwrap_or_default();
+                    let source = session_tab
                         .map(|t| ReviewSource::Session(t.tab_id))
                         .unwrap_or_else(|| ReviewSource::File(path.clone()));
                     ws.review = Some(ReviewView {
@@ -2905,7 +2921,7 @@ impl App {
                         error: None,
                         expanded: std::collections::HashSet::new(),
                     });
-                    ws.spawn_review_load(io, source, path_s);
+                    ws.spawn_review_load(io, source, path_s, agent);
                 });
             }
             Message::SelectTab(idx) => {
@@ -3646,10 +3662,10 @@ async fn forward_events(
                 continue;
             }
             TermEvent::Agent {
+                agent,
                 state,
                 transcript_path,
-                ..
-            } => Message::AgentStateChanged(project_id, tab_id, state, transcript_path),
+            } => Message::AgentStateChanged(project_id, tab_id, agent, state, transcript_path),
         };
         if proxy.send_event(message).is_err() {
             // UI 线程（EventLoop）已经关闭，没有必要继续转发。
