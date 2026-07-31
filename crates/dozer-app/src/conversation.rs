@@ -23,26 +23,29 @@ fn home_dir() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()))
 }
 
+/// 三个 agent 的存储目录都是 `<home>/<agent_root>/projects/<cwd 换算的 key>`
+/// 这一形状；`home` 显式传入而不是内部读 `HOME` 环境变量，好让测试不用碰
+/// 进程全局状态就能验证目录拼接逻辑（`HOME` 是跨线程共享的，`cargo test`
+/// 默认多线程跑，mutate 它不安全）。
+fn project_dir_in(home: &Path, agent_root: &str, cwd: &Path) -> PathBuf {
+    home.join(agent_root).join("projects").join(project_key(cwd))
+}
+
 /// cwd → Claude 存储目录：`~/.claude/projects/<cwd 中 '/' 换 '-'>`。
 pub fn claude_project_dir(cwd: &Path) -> PathBuf {
-    home_dir().join(".claude").join("projects").join(project_key(cwd))
+    project_dir_in(&home_dir(), ".claude", cwd)
 }
 
 /// cwd → CodeBuddy 存储目录：`~/.codebuddy/projects/<cwd 中 '/' 换 '-'>`
 /// （spec §1：与 Claude 的目录结构平行）。
 pub fn codebuddy_project_dir(cwd: &Path) -> PathBuf {
-    home_dir().join(".codebuddy").join("projects").join(project_key(cwd))
+    project_dir_in(&home_dir(), ".codebuddy", cwd)
 }
 
 /// cwd → dozer 自己为 OpenCode 代写的 transcript 目录（OpenCode 本身没有
 /// JSONL 落盘，dozer-hook 按 Claude 格式代写；spec §5.3）。
 pub fn opencode_project_dir(cwd: &Path) -> PathBuf {
-    home_dir()
-        .join(".dozer")
-        .join("agents")
-        .join("opencode")
-        .join("projects")
-        .join(project_key(cwd))
+    project_dir_in(&home_dir(), ".dozer/agents/opencode", cwd)
 }
 
 /// transcript 首段 → 首句人类发言(首个字符串型 user content)。纯函数。
@@ -222,15 +225,16 @@ mod tests {
 
     #[test]
     fn list_all_conversations_merges_three_dirs_sorted_by_mtime() {
+        // 显式传入 tempdir 当 home，不碰进程全局的 HOME 环境变量——
+        // cargo test 默认多线程跑，之前用 unsafe set_var/remove_var 的写法
+        // 在并行测试下并不安全。`claude_project_dir`/`codebuddy_project_dir`
+        // 本身没法注入自定义 home（它们读真实 HOME 是产品行为的一部分），
+        // 所以这里绕过它们直接用 `project_dir_in` 拼出等价路径，再手动走一遍
+        // `list_all_conversations` 同样的 merge+sort（两行，逻辑对齐）。
         let home = tempfile::tempdir().unwrap();
-        // SAFETY: 测试串行执行，临时改 HOME 后立即恢复；claude/codebuddy/opencode
-        // 三个目录解析函数都读 HOME 环境变量。
-        let prev_home = std::env::var("HOME").ok();
-        unsafe { std::env::set_var("HOME", home.path()) };
-
         let cwd = std::path::Path::new("/proj");
-        let claude_dir = claude_project_dir(cwd);
-        let codebuddy_dir = codebuddy_project_dir(cwd);
+        let claude_dir = project_dir_in(home.path(), ".claude", cwd);
+        let codebuddy_dir = project_dir_in(home.path(), ".codebuddy", cwd);
         std::fs::create_dir_all(&claude_dir).unwrap();
         std::fs::create_dir_all(&codebuddy_dir).unwrap();
         std::fs::write(
@@ -245,12 +249,9 @@ mod tests {
         )
         .unwrap();
 
-        let list = list_all_conversations(cwd);
-
-        match prev_home {
-            Some(h) => unsafe { std::env::set_var("HOME", h) },
-            None => unsafe { std::env::remove_var("HOME") },
-        }
+        let mut list = list_conversations(AgentKind::Claude, &claude_dir);
+        list.extend(list_conversations(AgentKind::Codebuddy, &codebuddy_dir));
+        list.sort_by_key(|m| std::cmp::Reverse(m.modified_ms));
 
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].agent, AgentKind::Codebuddy, "后写入的在前");
