@@ -174,8 +174,16 @@ impl Session {
     }
 
     /// 记下会话归属的 agent（首个 hook 事件到达时坐实；覆盖旧值）。
+    ///
+    /// 但拒绝“降级”：一个已经坐实为具体 agent（非 Unknown）的会话，不会被
+    /// 后到的 `Unknown` 事件（外来 hook 误触发/竞态）冲回 Unknown——只有当
+    /// 当前值本身就是 Unknown（首次坐实），或新值是另一个已知 agent（同一
+    /// tab 里先跑 Claude 后来改跑 CodeBuddy 这种真实换 agent），才会覆盖。
     pub fn set_agent(&self, agent: AgentKind) {
-        *self.agent.lock().expect("agent lock") = agent;
+        let mut current = self.agent.lock().expect("agent lock");
+        if agent != AgentKind::Unknown || *current == AgentKind::Unknown {
+            *current = agent;
+        }
     }
 
     /// hook 事件驱动的状态更新：记最新态 + 广播给本会话订阅者。
@@ -458,6 +466,33 @@ mod tests {
                 _ => continue,
             }
         }
+        let _ = s.kill();
+    }
+
+    #[tokio::test]
+    async fn set_agent_refuses_to_downgrade_known_agent_to_unknown() {
+        let s = Session::spawn(spec("sleep 5")).unwrap();
+        // 首次坐实：默认 Unknown → 真实 agent 应该生效。
+        assert_eq!(s.info().agent, AgentKind::Unknown);
+        s.set_agent(AgentKind::Codebuddy);
+        assert_eq!(s.info().agent, AgentKind::Codebuddy);
+
+        // 一个已坐实的 agent 不该被后到的 Unknown（外来 hook 误触发/竞态）冲回去。
+        s.set_agent(AgentKind::Unknown);
+        assert_eq!(
+            s.info().agent,
+            AgentKind::Codebuddy,
+            "已知 agent 不该被 Unknown 降级"
+        );
+
+        // 换成另一个已知 agent（真的换 agent 跑）仍然允许覆盖。
+        s.set_agent(AgentKind::Claude);
+        assert_eq!(
+            s.info().agent,
+            AgentKind::Claude,
+            "已知 agent 之间的切换应该仍然允许覆盖"
+        );
+
         let _ = s.kill();
     }
 

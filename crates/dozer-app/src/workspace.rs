@@ -1499,12 +1499,13 @@ impl Workspace {
         };
         let project_id = p.id;
         let cwd = PathBuf::from(&p.path);
+        let cwd_for_log = cwd.clone();
         let proxy = io.proxy.clone();
         io.handle.spawn(async move {
             let list = tokio::task::spawn_blocking(move || conversation::list_all_conversations(&cwd))
                 .await
                 .unwrap_or_default();
-            tracing::debug!(n = list.len(), "对话列表扫描完成");
+            tracing::debug!(n = list.len(), cwd = %cwd_for_log.display(), "对话列表扫描完成");
             let _ = proxy.send_event(Message::ConversationsRefreshed(project_id, list));
         });
     }
@@ -2903,8 +2904,12 @@ impl App {
                         .tabs
                         .iter()
                         .find(|t| t.transcript_path.as_deref() == Some(path_s.as_str()));
+                    // 活会话 tab 的 agent 若还是 Unknown（hook 事件还没到，或
+                    // 老装的 hook 一直上报 Unknown）不该盖掉从对话历史扫描
+                    // 位置推断出的已知 agent——优先取“已知”的那个。
                     let agent = session_tab
                         .map(|t| t.agent)
+                        .filter(|a| *a != AgentKind::Unknown)
                         .or_else(|| {
                             ws.conversations
                                 .iter()
