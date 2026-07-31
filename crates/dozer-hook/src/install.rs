@@ -76,7 +76,7 @@ pub fn run_at(path: &Path, install: bool) -> i32 {
         arr.retain(|e| !entry_is_dozer(e));
         if install {
             arr.push(json!({
-                "hooks": [{ "type": "command", "command": format!("{exe} {ev}") }]
+                "hooks": [{ "type": "command", "command": format!("{exe} claude {ev}") }]
             }));
         }
     }
@@ -131,6 +131,7 @@ mod tests {
                 cmd.contains("dozer-hook") || cmd.contains("dozer_hook"),
                 "{cmd}"
             );
+            assert!(cmd.contains(" claude "), "{cmd}: 应携带 agent 标识");
             assert!(cmd.ends_with(ev), "{cmd}");
         }
     }
