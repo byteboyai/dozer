@@ -7,6 +7,7 @@ mod goal;
 mod icons;
 mod keymap;
 mod layout;
+mod open_projects;
 mod osc;
 mod preview;
 mod preview_state;

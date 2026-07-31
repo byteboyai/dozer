@@ -73,6 +73,15 @@ pub enum MaximizedPane {
     Right,
 }
 
+/// 单个项目页签的加载状态：懒加载用。`Stub` 只有页签渲染需要的最小信息
+/// （启动恢复时,还没被聚焦过的页签停在这一态）,`Loaded` 是完整的
+/// `Workspace`（P2a 多项目并行）。
+#[allow(dead_code)] // Task 5 接入 App 后消费
+pub enum WorkspaceSlot {
+    Stub(dozer_core::protocol::ProjectInfo),
+    Loaded(Box<Workspace>),
+}
+
 /// 图标栏+左右面板区的宽度/分割状态。取代 `PanelLayout`——不再有"项目栏/AI栏
 /// 固定宽+预览终端共享比例"这套四栏几何，改成"左面板区总宽(可拖) + 三个
 /// 配对视图各自独立记住的内部列表:内容分割比例"。右面板区总宽不持久化，
