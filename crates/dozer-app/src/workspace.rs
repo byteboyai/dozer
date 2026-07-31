@@ -1009,6 +1009,75 @@ pub struct Workspace {
     tree_edit: Option<TreeEdit>,
 }
 
+/// `ProjectOpened` 落地前,把槽位表重新对准新项目 id。
+///
+/// 为什么需要这一步:`ProjectOpened` 的主体是"把当前 `Workspace` 的内容整体
+/// 改写成新项目"(单项目时代留下的就地改写语义)。改写之后
+/// `Workspace.project.id` 就变了,而它在 `projects` 里挂着的 key、在
+/// `project_order` 里的位置、`active_project_id`——三者仍指着旧 id,与实际内容
+/// 脱节。Task 6 的页签栏按 `project_order` 渲染、Task 7 把
+/// `project_order`/`active_project_id` 写进 `open_projects.json`,两边都会继承
+/// 这个错位,所以必须在改写之前就对齐。
+///
+/// 拆成自由函数是为了能单测:`App` 本身要有 daemon 连接 + winit
+/// `EventLoopProxy` 才构造得出来,headless 测试里造不了(与本文件其余"纯逻辑
+/// 抽出来单测、整机行为留给真机验证"的既有约定一致)。
+fn retarget_active_slot(
+    projects: &mut HashMap<i64, WorkspaceSlot>,
+    project_order: &mut Vec<i64>,
+    active_project_id: &mut Option<i64>,
+    new_id: i64,
+) {
+    // 一个槽位都没有(冷启动时 daemon 上还没有任何项目):先落一个空槽位承接,
+    // 否则 `App::with_ws` 会因为拿不到 active workspace 把整条消息丢掉,
+    // "打开项目"点了没反应。
+    //
+    // 判据是 `projects.is_empty()`,**不是**"取不到 active workspace":后者在
+    // 当前槽位是还没促成的 `Stub` 时也成立(Task 7 引入 `Stub` 之后),那时该做
+    // 的是促成那个页签,而不是凭空插一个新槽位把它顶掉。
+    if projects.is_empty() {
+        projects.insert(
+            new_id,
+            WorkspaceSlot::Loaded(Box::new(Workspace::empty_for_project_placeholder())),
+        );
+        project_order.push(new_id);
+        *active_project_id = Some(new_id);
+        return;
+    }
+
+    let Some(old_id) = *active_project_id else {
+        return;
+    };
+    if old_id == new_id {
+        return; // 已经对准了,槽位表不用动
+    }
+
+    // 目标项目已经有自己的槽位(Task 6/7 的多页签场景)时什么都不搬,只切
+    // `active_project_id`——就地改写会把那个页签的内容整个覆盖掉。
+    if !projects.contains_key(&new_id) {
+        if matches!(projects.get(&old_id), Some(WorkspaceSlot::Loaded(_))) {
+            // 当前槽位马上要被就地改写成新项目 → 连 key 一起搬到新 id 上。
+            if let Some(slot) = projects.remove(&old_id) {
+                projects.insert(new_id, slot);
+            }
+            match project_order.iter().position(|&i| i == old_id) {
+                Some(pos) => project_order[pos] = new_id, // 原位替换,保持页签顺序
+                None => project_order.push(new_id),
+            }
+        } else {
+            // 当前槽位是还没促成的 `Stub`:它的内容不属于任何已加载状态,就地
+            // 改写等于把那个页签偷偷换成别的项目。给新项目单开一个槽位,
+            // `Stub` 原样留在自己的 key 上。
+            projects.insert(
+                new_id,
+                WorkspaceSlot::Loaded(Box::new(Workspace::empty_for_project_placeholder())),
+            );
+            project_order.push(new_id);
+        }
+    }
+    *active_project_id = Some(new_id);
+}
+
 impl Workspace {
     /// 启动恢复：把 daemon 上现存的存活会话逐一 `attach`，快照直接喂给
     /// 新建的 `TerminalModel`（GUI 级会话恢复）。这是本函数里唯一的
@@ -1024,6 +1093,14 @@ impl Workspace {
                 // 只认归属本项目的会话:daemon 现在按 `project_id` 给会话分家
                 // (P2a Task 1-3),并行打开的别的项目的终端不该跑到这一份
                 // `Workspace` 的 tab 栏里来。
+                //
+                // 迁移期孤儿会话——Task 1-3 落地**之前**建的、`project_id`
+                // 为 `None` 的存活会话——会被这条 filter 一并排除,从此不出现
+                // 在任何项目的 tab 栏里,直到 dozerd 重启把它们清掉为止(在此
+                // 期间它们仍占着 PTY)。这是**有意为之**,不是漏判:规格把
+                // "迁移期孤儿会话怎么处理"显式挂起、留给实现计划阶段决定,
+                // 本期不做孤儿会话的找回入口。日后有人发现"重启 daemon 前
+                // 有几个会话凭空消失了",答案就在这一行。
                 for info in sessions
                     .into_iter()
                     .filter(|s| s.alive && s.project_id == Some(project.id))
@@ -1486,9 +1563,15 @@ impl Workspace {
     }
 
     /// 保证"项目打开时至少有一个终端 tab"这条不变式:启动恢复、关闭最后
-    /// 一个 tab、切换/打开项目后都要检查一次。没有项目时不强开——`spawn_new_tab`
-    /// 本身在无项目时会落回 $HOME,那是用户主动点"+"的行为,不该在无项目
-    /// 时被这里自动触发。
+    /// 一个 tab、切换/打开项目后都要检查一次。
+    ///
+    /// `self.project.is_some()` 这道闸门现在纯属**防御**:P2a 之后
+    /// `Workspace` 恒有归属项目(会话必须归属项目,见 `spawn_new_tab` 的
+    /// `expect` 与 `Client::create` 的 `project_id`),`None` 只可能出现在
+    /// `Stub` 促成之前的占位 `Workspace` 上——那种状态下不该替用户建会话,
+    /// 占位里建出来的 tab 在真正促成时会被整体丢弃。旧注释说的"无项目时
+    /// `spawn_new_tab` 落回 $HOME"已随会话必须归属项目一起删除,不再是
+    /// 当前行为。
     fn ensure_project_terminal(&mut self, io: &ShellIo) {
         if self.project.is_some() && self.tabs.is_empty() {
             self.spawn_new_tab(io);
@@ -2675,48 +2758,63 @@ impl App {
                 });
             }
             Message::ProjectOpened(project, recent) => {
+                // `project` 为 `None` = 这次打开/切换**失败了**:`ProjectOpen`
+                // 的异步任务是 `client.open_project(..).await.ok().flatten()`,
+                // daemon 不通、或 dozerd 回 `Reply::Error`(比如它那边 SQLite
+                // 写失败)都会塌成 `None`;`ProjectSelect` 在目标项目已从库里
+                // 消失时同样如此。
+                //
+                // 这个 `None` **绝不能**写进一个已经存在的 `Workspace`:那会
+                // 留下"有 tab、有界面、却没有归属项目"的破状态,而
+                // `spawn_new_tab` 正是靠"`Workspace` 存在即已知归属项目"这条
+                // 不变式才敢 `expect` ——用户随后点一下 tab 栏的"＋"就会 panic
+                // 掉整个 GUI 进程。所以这里原地退出,当前项目原封不动。
+                let Some(project) = project else {
+                    tracing::warn!("打开/切换项目失败,保持当前项目不变");
+                    // 失败文案挂到 App 级的 `daemon_error` 上:它本来就是
+                    // "daemon 连接失败,或某次会话操作失败"的载体,而且不依赖
+                    // 任何 `Workspace` 存在(一个项目都没打开时也画得出来)。
+                    self.daemon_error = Some("打开项目失败,请确认 dozerd 正常后重试".to_string());
+                    // 最近列表照旧刷新:它跟"这次打开成功没有"无关,拿到了就该用。
+                    self.with_ws(move |ws, _io| {
+                        ws.recent_projects = recent;
+                    });
+                    return;
+                };
+                // 反过来:一次成功的 `open_project` 往返是 daemon 可达且能正常
+                // 服务的实证,把上面那条(或上一次遗留的)失败文案清掉,免得横幅
+                // 一直挂着不走。
+                self.daemon_error = None;
                 // 换项目时放大态不该跟着过去:被放大的那块内容(项目树/预览/
                 // 终端/审阅)整体换了主人,留着放大浮层只会挡住新项目的界面
                 // (与图标栏点击清放大同一类理由,Fix round 2 #2)。放大态是
                 // 外壳态,搬家后留在 `App` 上处理。
                 self.maximized = None;
-                // 一个项目页签都还没有时(冷启动 daemon 上还没有任何项目),
-                // 先落一个空槽位承接,否则 `with_ws` 会因为没有 active
-                // workspace 把整条消息丢掉——"打开项目"点了没反应。真正的
-                // "每打开一个项目就多一个页签"语义由 Task 6/7 的页签消息流
-                // 定义,这里只保证单项目路径不退化。
-                if self.active_workspace().is_none()
-                    && let Some(p) = &project
-                {
-                    let id = p.id;
-                    self.projects.insert(
-                        id,
-                        WorkspaceSlot::Loaded(Box::new(Workspace::empty_for_project_placeholder())),
-                    );
-                    self.project_order.push(id);
-                    self.active_project_id = Some(id);
-                }
+                // 槽位表(key/顺序/当前页签)先对准新项目 id,再让下面的
+                // `with_ws` 去改写槽位内容——顺序反了就会出现"key=旧 id、
+                // 内容=新项目"的错位。判据与理由见 `retarget_active_slot`。
+                retarget_active_slot(
+                    &mut self.projects,
+                    &mut self.project_order,
+                    &mut self.active_project_id,
+                    project.id,
+                );
                 self.with_ws(move |ws, io| {
                     ws.recent_projects = recent;
                     // 切到不同项目:关掉上一个项目遗留的终端 tab 与预览 tab,给
                     // 新项目干净起点（验收反馈）。首次打开(无前项目)不强关。
-                    let switching = matches!(
-                        (&ws.project, &project),
-                        (Some(old), Some(new)) if old.id != new.id
-                    );
+                    let switching = ws.project.as_ref().is_some_and(|old| old.id != project.id);
                     if switching {
                         ws.close_all_tabs_for_switch(io);
                     }
-                    ws.file_tree = project
-                        .as_ref()
-                        .map(|p| FileTree::new(PathBuf::from(&p.path)));
+                    ws.file_tree = Some(FileTree::new(PathBuf::from(&project.path)));
                     ws.tree_selected = None;
                     ws.branch = None;
                     ws.dirty = false;
                     ws.git_statuses = HashMap::new();
                     ws.conversations = Vec::new();
-                    ws.project = project;
-                    ws.project_goal = ws.project.as_ref().and_then(|p| load_project_goal(&p.path));
+                    ws.project_goal = load_project_goal(&project.path);
+                    ws.project = Some(project);
                     ws.project_acceptance_count = None;
                     ws.ensure_project_terminal(io);
                     ws.restore_preview_state();
@@ -4965,6 +5063,118 @@ fn active_tab_view<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 造一个带记号的 `Loaded` 槽位,用 `tree_error` 当身份标记——这样
+    /// 重挂之后能断言"搬过去的确实是同一个槽位",而不只是"新 id 上有东西"。
+    fn loaded_slot(marker: &str) -> WorkspaceSlot {
+        let mut ws = Workspace::empty_for_project_placeholder();
+        ws.tree_error = Some(marker.to_string());
+        WorkspaceSlot::Loaded(Box::new(ws))
+    }
+
+    fn slot_marker(slot: Option<&WorkspaceSlot>) -> Option<String> {
+        match slot {
+            Some(WorkspaceSlot::Loaded(ws)) => ws.tree_error.clone(),
+            _ => None,
+        }
+    }
+
+    fn stub_slot(id: i64) -> WorkspaceSlot {
+        WorkspaceSlot::Stub(ProjectInfo {
+            id,
+            path: format!("/tmp/p{id}"),
+            name: format!("p{id}"),
+            last_active_ms: 0,
+        })
+    }
+
+    /// 冷启动:daemon 上一个项目都没有,打开第一个项目要凭空落一个槽位,
+    /// 否则 `with_ws` 拿不到 active workspace,"打开项目"点了没反应。
+    #[test]
+    fn retarget_creates_first_slot_when_projects_empty() {
+        let mut projects = HashMap::new();
+        let mut order = Vec::new();
+        let mut active = None;
+        retarget_active_slot(&mut projects, &mut order, &mut active, 7);
+        assert_eq!(order, vec![7]);
+        assert_eq!(active, Some(7));
+        assert!(projects.contains_key(&7));
+    }
+
+    /// 就地换项目:槽位连 key 一起搬到新 id,`project_order` 原位替换(页签
+    /// 顺序不能因为换个项目就重排),`active_project_id` 跟上。三者和
+    /// `Workspace.project.id` 保持一致是 Task 6 页签栏 / Task 7 持久化的前提。
+    #[test]
+    fn retarget_rekeys_loaded_slot_and_keeps_order_position() {
+        let mut projects = HashMap::new();
+        projects.insert(1, loaded_slot("A"));
+        projects.insert(9, stub_slot(9));
+        let mut order = vec![9, 1];
+        let mut active = Some(1);
+
+        retarget_active_slot(&mut projects, &mut order, &mut active, 2);
+
+        assert!(!projects.contains_key(&1), "旧 key 必须摘掉,不能留错位条目");
+        // 搬过去的是同一个槽位,不是新造的空槽位。
+        assert_eq!(slot_marker(projects.get(&2)).as_deref(), Some("A"));
+        assert_eq!(order, vec![9, 2], "原位替换,不是删掉再 push 到队尾");
+        assert_eq!(active, Some(2));
+        assert!(projects.contains_key(&9), "别人的槽位不受影响");
+    }
+
+    /// 目标项目已经有自己的槽位时只切 `active_project_id`,一个字节都不搬
+    /// ——就地改写会把那个页签的内容整个覆盖掉。
+    #[test]
+    fn retarget_switches_to_existing_slot_without_clobbering_it() {
+        let mut projects = HashMap::new();
+        projects.insert(1, loaded_slot("A"));
+        projects.insert(2, loaded_slot("B"));
+        let mut order = vec![1, 2];
+        let mut active = Some(1);
+
+        retarget_active_slot(&mut projects, &mut order, &mut active, 2);
+
+        assert_eq!(slot_marker(projects.get(&1)).as_deref(), Some("A"));
+        assert_eq!(slot_marker(projects.get(&2)).as_deref(), Some("B"));
+        assert_eq!(order, vec![1, 2]);
+        assert_eq!(active, Some(2));
+    }
+
+    /// 当前页签是还没促成的 `Stub` 时不许就地改写(那等于把这个页签偷偷换成
+    /// 别的项目):给新项目单开一个槽位,`Stub` 原样留在自己的 key 上。
+    #[test]
+    fn retarget_keeps_unpromoted_stub_and_opens_beside_it() {
+        let mut projects = HashMap::new();
+        projects.insert(1, stub_slot(1));
+        let mut order = vec![1];
+        let mut active = Some(1);
+
+        retarget_active_slot(&mut projects, &mut order, &mut active, 2);
+
+        assert!(
+            matches!(projects.get(&1), Some(WorkspaceSlot::Stub(_))),
+            "Stub 页签不该被顶掉"
+        );
+        assert!(projects.contains_key(&2));
+        assert_eq!(order, vec![1, 2]);
+        assert_eq!(active, Some(2));
+    }
+
+    /// 重复打开当前项目(常见:用户点了两下同一张最近项目卡片)不该动槽位表。
+    #[test]
+    fn retarget_is_noop_when_already_aligned() {
+        let mut projects = HashMap::new();
+        projects.insert(1, loaded_slot("A"));
+        let mut order = vec![1];
+        let mut active = Some(1);
+
+        retarget_active_slot(&mut projects, &mut order, &mut active, 1);
+
+        assert_eq!(slot_marker(projects.get(&1)).as_deref(), Some("A"));
+        assert_eq!(order, vec![1]);
+        assert_eq!(active, Some(1));
+        assert_eq!(projects.len(), 1);
+    }
 
     #[test]
     fn chrome_constants_exclude_removed_header() {
