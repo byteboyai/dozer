@@ -2,6 +2,7 @@
 //! 纯函数,不碰 iced/IO。规则见 spec P1i D2。
 
 use serde_json::Value;
+use dozer_core::protocol::AgentKind;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReviewEntry {
@@ -45,7 +46,7 @@ fn tool_summary(name: &str, input: &Value) -> String {
     }
 }
 
-pub fn parse_transcript(jsonl: &str) -> Vec<ReviewEntry> {
+fn parse_claude_shaped_jsonl(jsonl: &str) -> Vec<ReviewEntry> {
     let mut out = Vec::new();
     for line in jsonl.lines() {
         let line = line.trim();
@@ -110,6 +111,18 @@ pub fn parse_transcript(jsonl: &str) -> Vec<ReviewEntry> {
     out
 }
 
+/// 按 agent 分派 transcript 解析。`Opencode` 复用 Claude 分支——
+/// dozer-hook 代写 OpenCode 的 transcript 时就是按 Claude 字段形状写的
+/// （spec §5.3），不是巧合。`Codebuddy`/`Unknown` 暂时返回空：CodeBuddy
+/// 真实 transcript schema 待独立的适配计划验证后再接（spec §6），在那之前
+/// "不产出数据"是唯一诚实的行为，不是占位符。
+pub fn parse_transcript(agent: AgentKind, jsonl: &str) -> Vec<ReviewEntry> {
+    match agent {
+        AgentKind::Claude | AgentKind::Opencode => parse_claude_shaped_jsonl(jsonl),
+        AgentKind::Codebuddy | AgentKind::Unknown => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,7 +137,7 @@ mod tests {
 不是 json 的坏行
 {"type":"attachment","attachment":{}}
 "#;
-        let entries = parse_transcript(jsonl);
+        let entries = parse_transcript(AgentKind::Claude, jsonl);
         assert_eq!(
             entries.len(),
             2,
@@ -158,7 +171,26 @@ mod tests {
 
     #[test]
     fn empty_and_all_noise_yield_nothing() {
-        assert!(parse_transcript("").is_empty());
-        assert!(parse_transcript("{\"type\":\"mode\"}\nbad\n").is_empty());
+        assert!(parse_transcript(AgentKind::Claude, "").is_empty());
+        assert!(parse_transcript(AgentKind::Claude, "{\"type\":\"mode\"}\nbad\n").is_empty());
+    }
+
+    #[test]
+    fn opencode_reuses_claude_shaped_parser() {
+        let jsonl = r#"{"type":"user","message":{"role":"user","content":"opencode 里也这么解析"}}"#;
+        let entries = parse_transcript(AgentKind::Opencode, jsonl);
+        assert_eq!(
+            entries,
+            vec![ReviewEntry::Human {
+                text: "opencode 里也这么解析".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn codebuddy_and_unknown_yield_empty_until_schema_confirmed() {
+        let jsonl = r#"{"type":"user","message":{"role":"user","content":"应该被忽略"}}"#;
+        assert!(parse_transcript(AgentKind::Codebuddy, jsonl).is_empty());
+        assert!(parse_transcript(AgentKind::Unknown, jsonl).is_empty());
     }
 }

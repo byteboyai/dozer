@@ -45,7 +45,7 @@ use crate::term_view;
 use crate::theme;
 use crate::transcript::{self, ReviewEntry};
 use dozer_client::{Client, TermEvent};
-use dozer_core::protocol::{AgentState, ProjectInfo, SessionInfo};
+use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 use iced_widget::core::mouse;
 use iced_widget::core::{Border, Color, Element, Length, Padding};
 use iced_widget::{MouseArea, button, column, container, row, stack, text};
@@ -1553,7 +1553,7 @@ impl Workspace {
         io.handle.spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
                 std::fs::read_to_string(&path)
-                    .map(|s| transcript::parse_transcript(&s))
+                    .map(|s| transcript::parse_transcript(AgentKind::Claude, &s))
                     .map_err(|e| format!("无法读取会话记录: {e}"))
             })
             .await
