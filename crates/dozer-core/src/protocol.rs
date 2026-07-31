@@ -11,6 +11,31 @@ pub enum AgentState {
     TurnEnded,
 }
 
+/// 会话当前归属的 agent（协议层从 P1e-P1j 时代的"隐式恒 Claude"升级为
+/// 显式字段；P2b 多 agent 支持第一步）。`Unknown` 是首个 hook 事件到达前
+/// 的默认值，也是老协议帧缺该字段时的回落值。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentKind {
+    #[default]
+    Unknown,
+    Claude,
+    Codebuddy,
+    Opencode,
+}
+
+impl AgentKind {
+    /// 展示用短标签（对话历史副行、GUI 角标）。
+    pub fn label(&self) -> &'static str {
+        match self {
+            AgentKind::Unknown => "未知",
+            AgentKind::Claude => "claude",
+            AgentKind::Codebuddy => "codebuddy",
+            AgentKind::Opencode => "opencode",
+        }
+    }
+}
+
 /// 项目（甲方资产域的根；P1g）。id 为 dozerd SQLite 主键。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectInfo {
@@ -356,5 +381,28 @@ mod tests {
         let line = encode_line(&req);
         let back: Request = decode_line(line.trim()).unwrap();
         assert_eq!(back, req);
+    }
+
+    #[test]
+    fn agent_kind_defaults_to_unknown() {
+        assert_eq!(AgentKind::default(), AgentKind::Unknown);
+    }
+
+    #[test]
+    fn agent_kind_serializes_snake_case() {
+        assert_eq!(serde_json::to_string(&AgentKind::Codebuddy).unwrap(), "\"codebuddy\"");
+        assert_eq!(serde_json::to_string(&AgentKind::Opencode).unwrap(), "\"opencode\"");
+        assert_eq!(
+            serde_json::from_str::<AgentKind>("\"claude\"").unwrap(),
+            AgentKind::Claude
+        );
+    }
+
+    #[test]
+    fn agent_kind_label_matches_variant() {
+        assert_eq!(AgentKind::Unknown.label(), "未知");
+        assert_eq!(AgentKind::Claude.label(), "claude");
+        assert_eq!(AgentKind::Codebuddy.label(), "codebuddy");
+        assert_eq!(AgentKind::Opencode.label(), "opencode");
     }
 }
