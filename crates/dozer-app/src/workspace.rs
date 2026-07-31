@@ -3649,6 +3649,7 @@ async fn forward_events(
             TermEvent::Agent {
                 state,
                 transcript_path,
+                ..
             } => Message::AgentStateChanged(project_id, tab_id, state, transcript_path),
         };
         if proxy.send_event(message).is_err() {
