@@ -77,6 +77,7 @@ async fn hook_event_reaches_attached_client_and_list() {
         &sock,
         &Request::HookEvent {
             session_id: created.id.clone(),
+            agent: dozer_core::protocol::AgentKind::Claude,
             event: "Stop".into(),
             ts_ms: 7,
             data: serde_json::Value::Null,
@@ -114,6 +115,7 @@ async fn hook_event_reaches_attached_client_and_list() {
         &sock,
         &Request::HookEvent {
             session_id: "ghost".into(),
+            agent: dozer_core::protocol::AgentKind::Claude,
             event: "Stop".into(),
             ts_ms: 8,
             data: serde_json::Value::Null,

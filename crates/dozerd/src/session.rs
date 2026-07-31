@@ -1,6 +1,6 @@
 use crate::ring::{RingBuffer, SCROLLBACK_CAP};
 use anyhow::{Context, Result};
-use dozer_core::protocol::{AgentState, SessionInfo};
+use dozer_core::protocol::{AgentKind, AgentState, SessionInfo};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,6 +18,7 @@ pub enum SessionEvent {
     },
     /// hook 事件驱动的 agent 状态变更（P1e）。
     Agent {
+        agent: AgentKind,
         state: AgentState,
         event: String,
         ts_ms: u64,
@@ -42,6 +43,7 @@ pub struct Session {
     created_ms: u64,
     alive: Arc<AtomicBool>,
     agent_state: Mutex<AgentState>,
+    agent: Mutex<AgentKind>,
     transcript_path: Mutex<Option<String>>,
     buffer: Arc<Mutex<RingBuffer>>,
     tx: broadcast::Sender<SessionEvent>,
@@ -140,6 +142,7 @@ impl Session {
             created_ms: now_ms(),
             alive,
             agent_state: Mutex::new(AgentState::default()),
+            agent: Mutex::new(AgentKind::default()),
             transcript_path: Mutex::new(None),
             buffer,
             tx,
@@ -158,6 +161,7 @@ impl Session {
             cwd: self.spec.cwd.clone(),
             alive: self.alive.load(Ordering::SeqCst),
             created_ms: self.created_ms,
+            agent: *self.agent.lock().expect("agent lock"),
             agent_state: *self.agent_state.lock().expect("agent_state lock"),
             transcript_path: self.transcript_path.lock().expect("tp lock").clone(),
             project_id: Some(self.spec.project_id),
@@ -169,11 +173,18 @@ impl Session {
         *self.transcript_path.lock().expect("tp lock") = Some(path.to_string());
     }
 
+    /// 记下会话归属的 agent（首个 hook 事件到达时坐实；覆盖旧值）。
+    pub fn set_agent(&self, agent: AgentKind) {
+        *self.agent.lock().expect("agent lock") = agent;
+    }
+
     /// hook 事件驱动的状态更新：记最新态 + 广播给本会话订阅者。
     pub fn set_agent_state(&self, state: AgentState, event: &str, ts_ms: u64) {
         *self.agent_state.lock().expect("agent_state lock") = state;
         let transcript_path = self.transcript_path.lock().expect("tp lock").clone();
+        let agent = *self.agent.lock().expect("agent lock");
         let _ = self.tx.send(SessionEvent::Agent {
+            agent,
             state,
             event: event.to_string(),
             ts_ms,
@@ -424,6 +435,30 @@ mod tests {
         }
         assert!(exited, "should broadcast Exited");
         assert!(!s.info().alive);
+    }
+
+    #[tokio::test]
+    async fn set_agent_updates_info_and_is_included_in_broadcast() {
+        let s = Session::spawn(spec("sleep 5")).unwrap();
+        assert_eq!(s.info().agent, AgentKind::Unknown);
+        let mut rx = s.subscribe();
+        s.set_agent(AgentKind::Codebuddy);
+        assert_eq!(s.info().agent, AgentKind::Codebuddy);
+        s.set_agent_state(AgentState::Running, "PreToolUse", 1);
+        loop {
+            match tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                SessionEvent::Agent { agent, .. } => {
+                    assert_eq!(agent, AgentKind::Codebuddy);
+                    break;
+                }
+                _ => continue,
+            }
+        }
+        let _ = s.kill();
     }
 
     #[tokio::test]

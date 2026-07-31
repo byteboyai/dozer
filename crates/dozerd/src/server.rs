@@ -126,7 +126,7 @@ async fn handle_conn(
                             Ok(()) => Reply::Ok,
                             Err(e) => Reply::Error { message: e.to_string() },
                         },
-                        Request::HookEvent { session_id, event, ts_ms, data } => {
+                        Request::HookEvent { session_id, event, ts_ms, data, agent: _ } => {
                             match registry.get(&session_id) {
                                 None => {
                                     tracing::debug!(%session_id, %event, "hook 事件的会话不存在，丢弃");
@@ -219,8 +219,8 @@ async fn handle_conn(
                             sent_until = offset;
                         }
                     }
-                    Ok(SessionEvent::Agent { state, event, ts_ms, transcript_path }) => {
-                        let reply = Reply::AgentEvent { session_id: sid, state, event, ts_ms, transcript_path };
+                    Ok(SessionEvent::Agent { agent, state, event, ts_ms, transcript_path }) => {
+                        let reply = Reply::AgentEvent { session_id: sid, agent, state, event, ts_ms, transcript_path };
                         w.write_all(encode_line(&reply).as_bytes()).await?;
                     }
                     Ok(SessionEvent::Exited { code }) => {
