@@ -165,6 +165,7 @@ pub enum Reply {
     /// hook 事件引起的状态变更，随 attach 流广播给该会话的订阅者。
     AgentEvent {
         session_id: String,
+        agent: AgentKind,
         state: AgentState,
         event: String,
         ts_ms: u64,
@@ -259,6 +260,7 @@ mod tests {
     fn agent_event_reply_tags_snake_case() {
         let line = encode_line(&Reply::AgentEvent {
             session_id: "s1".into(),
+            agent: AgentKind::Claude,
             state: AgentState::AwaitingInput,
             event: "Notification".into(),
             ts_ms: 5,
@@ -266,6 +268,7 @@ mod tests {
         });
         assert!(line.contains(r#""type":"agent_event""#));
         assert!(line.contains(r#""state":"awaiting_input""#));
+        assert!(line.contains(r#""agent":"claude""#));
     }
 
     #[test]
@@ -316,6 +319,7 @@ mod tests {
     fn agent_event_carries_transcript_path() {
         let line = encode_line(&Reply::AgentEvent {
             session_id: "s".into(),
+            agent: AgentKind::Codebuddy,
             state: AgentState::Running,
             event: "UserPromptSubmit".into(),
             ts_ms: 1,
@@ -324,8 +328,13 @@ mod tests {
         assert!(line.contains("/t/x.jsonl"));
         match decode_line::<Reply>(line.trim()).unwrap() {
             Reply::AgentEvent {
-                transcript_path, ..
-            } => assert_eq!(transcript_path.as_deref(), Some("/t/x.jsonl")),
+                agent,
+                transcript_path,
+                ..
+            } => {
+                assert_eq!(agent, AgentKind::Codebuddy);
+                assert_eq!(transcript_path.as_deref(), Some("/t/x.jsonl"));
+            }
             other => panic!("{other:?}"),
         }
     }
