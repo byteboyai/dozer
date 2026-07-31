@@ -48,6 +48,7 @@ async fn hook_event_reaches_attached_client_and_list() {
             cwd: std::env::temp_dir().to_string_lossy().into_owned(),
             cols: 80,
             rows: 24,
+            project_id: 1,
         },
     )
     .await
@@ -137,7 +138,7 @@ async fn record_acceptance_persists() {
     let db = std::env::temp_dir().join(format!("dozerd-acc-{}.db", uuid::Uuid::new_v4()));
     let registry = Arc::new(SessionRegistry::new());
     let store = Arc::new(dozerd::acceptance::AcceptanceStore::open(&db).unwrap());
-    let projects = Arc::new(dozerd::projects::ProjectStore::open(&db).unwrap());
+    let projects = Arc::new(dozerd::projects::ProjectStore::new(&db).unwrap());
     tokio::spawn({
         let (sock, registry, store, projects) = (
             sock.clone(),
@@ -176,16 +177,16 @@ async fn record_acceptance_persists() {
 /// 每次调用建独立临时库的项目存储（测试用；P1g serve 需要）。
 fn test_projects() -> std::sync::Arc<dozerd::projects::ProjectStore> {
     let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
-    std::sync::Arc::new(dozerd::projects::ProjectStore::open(&db).unwrap())
+    std::sync::Arc::new(dozerd::projects::ProjectStore::new(&db).unwrap())
 }
 
 #[tokio::test]
-async fn project_open_list_active_roundtrip() {
+async fn project_open_and_list_roundtrip() {
     let sock = std::env::temp_dir().join(format!("dozerd-proj-{}.sock", uuid::Uuid::new_v4()));
     let db = std::env::temp_dir().join(format!("dozerd-proj-{}.db", uuid::Uuid::new_v4()));
     let registry = Arc::new(SessionRegistry::new());
     let store = Arc::new(dozerd::acceptance::AcceptanceStore::open(&db).unwrap());
-    let projects = Arc::new(dozerd::projects::ProjectStore::open(&db).unwrap());
+    let projects = Arc::new(dozerd::projects::ProjectStore::new(&db).unwrap());
     tokio::spawn({
         let (sock, registry, store, projects) = (
             sock.clone(),
@@ -214,10 +215,6 @@ async fn project_open_list_active_roundtrip() {
         other => panic!("{other:?}"),
     };
     assert_eq!(opened.name, "z");
-    match send_req(&sock, &Request::GetActiveProject).await {
-        Reply::Project { project: Some(p) } => assert_eq!(p.id, opened.id),
-        other => panic!("{other:?}"),
-    }
     match send_req(&sock, &Request::ListProjects).await {
         Reply::Projects { projects } => assert_eq!(projects.len(), 1),
         other => panic!("{other:?}"),

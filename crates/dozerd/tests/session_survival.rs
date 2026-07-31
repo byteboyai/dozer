@@ -76,6 +76,7 @@ async fn session_survives_client_disconnect() {
         cwd: std::env::temp_dir().to_string_lossy().into_owned(),
         cols: 80,
         rows: 24,
+        project_id: 1,
     })
     .await;
     let Reply::Created { session } = c1.recv().await else {
@@ -223,6 +224,7 @@ async fn attach_delivers_marker_exactly_once() {
         cwd: std::env::temp_dir().to_string_lossy().into_owned(),
         cols: 80,
         rows: 24,
+        project_id: 1,
     })
     .await;
     let Reply::Created { session } = c.recv().await else {
@@ -288,6 +290,7 @@ async fn attach_from_offset_resumes_within_window() {
         cwd: std::env::temp_dir().to_string_lossy().into_owned(),
         cols: 80,
         rows: 24,
+        project_id: 1,
     })
     .await;
     let Reply::Created { session } = c1.recv().await else {
@@ -386,6 +389,7 @@ async fn attach_stream_offset_invariant_under_load() {
         cwd: std::env::temp_dir().to_string_lossy().into_owned(),
         cols: 80,
         rows: 24,
+        project_id: 1,
     })
     .await;
     let Reply::Created { session } = c0.recv().await else {
@@ -462,6 +466,7 @@ async fn attach_from_offset_out_of_window_falls_back_to_full_snapshot() {
         cwd: std::env::temp_dir().to_string_lossy().into_owned(),
         cols: 80,
         rows: 24,
+        project_id: 1,
     })
     .await;
     let Reply::Created { session } = c.recv().await else {
@@ -510,5 +515,5 @@ fn test_store() -> std::sync::Arc<dozerd::acceptance::AcceptanceStore> {
 /// 每次调用建独立临时库的项目存储（测试用；P1g serve 需要）。
 fn test_projects() -> std::sync::Arc<dozerd::projects::ProjectStore> {
     let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
-    std::sync::Arc::new(dozerd::projects::ProjectStore::open(&db).unwrap())
+    std::sync::Arc::new(dozerd::projects::ProjectStore::new(&db).unwrap())
 }

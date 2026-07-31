@@ -1,10 +1,11 @@
-//! 项目存储：rusqlite（spec P1g D1）。projects 表 + meta 表（当前项目指针）。
+//! 项目存储：rusqlite（spec P1g D1）。projects 表（不再有活跃项目指针，
+//! P2a 起 daemon 变成纯会话仓库）。
 //! 与 AcceptanceStore 各持一个到 dozer.db 的连接；项目/验收写频度极低，
 //! 多连接足够（无需连接池）。
 
 use anyhow::{Context, Result};
 use dozer_core::protocol::ProjectInfo;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -41,7 +42,7 @@ fn next_active_stamp(conn: &Connection) -> u64 {
 }
 
 impl ProjectStore {
-    pub fn open(path: &Path) -> Result<Self> {
+    pub fn new(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).context("建库目录")?;
         }
@@ -52,10 +53,6 @@ impl ProjectStore {
                 path TEXT NOT NULL UNIQUE,
                 name TEXT NOT NULL,
                 last_active_ms INTEGER NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS meta (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
              );",
         )
         .context("建表")?;
@@ -64,8 +61,9 @@ impl ProjectStore {
         })
     }
 
-    /// upsert（按 path）+ 刷新活跃时间 + 置为当前项目，返回该项目。
-    pub fn open_and_activate(&self, path: &str) -> Result<ProjectInfo> {
+    /// upsert（按 path）+ 刷新活跃时间，返回该项目。P2a 起不再"置为当前
+    /// 项目"——daemon 没有这个概念了，"当前显示哪个"是 GUI 侧本地状态。
+    pub fn open(&self, path: &str) -> Result<ProjectInfo> {
         let conn = self.conn.lock().expect("db lock");
         let ts = next_active_stamp(&conn);
         conn.execute(
@@ -73,17 +71,12 @@ impl ProjectStore {
              ON CONFLICT(path) DO UPDATE SET last_active_ms = ?3",
             rusqlite::params![path, basename(path), ts],
         )?;
-        let info = conn.query_row(
+        conn.query_row(
             "SELECT id, path, name, last_active_ms FROM projects WHERE path = ?1",
             [path],
             row_to_project,
-        )?;
-        conn.execute(
-            "INSERT INTO meta (key, value) VALUES ('active_project_id', ?1)
-             ON CONFLICT(key) DO UPDATE SET value = ?1",
-            [info.id.to_string()],
-        )?;
-        Ok(info)
+        )
+        .map_err(Into::into)
     }
 
     pub fn list(&self) -> Result<Vec<ProjectInfo>> {
@@ -93,41 +86,6 @@ impl ProjectStore {
         )?;
         let rows = stmt.query_map([], row_to_project)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-    }
-
-    pub fn set_active(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().expect("db lock");
-        conn.execute(
-            "INSERT INTO meta (key, value) VALUES ('active_project_id', ?1)
-             ON CONFLICT(key) DO UPDATE SET value = ?1",
-            [id.to_string()],
-        )?;
-        let ts = next_active_stamp(&conn);
-        conn.execute(
-            "UPDATE projects SET last_active_ms = ?1 WHERE id = ?2",
-            rusqlite::params![ts, id],
-        )?;
-        Ok(())
-    }
-
-    pub fn active(&self) -> Result<Option<ProjectInfo>> {
-        let conn = self.conn.lock().expect("db lock");
-        let id: Option<i64> = conn
-            .query_row(
-                "SELECT value FROM meta WHERE key = 'active_project_id'",
-                [],
-                |r| r.get::<_, String>(0),
-            )
-            .optional()?
-            .and_then(|s| s.parse().ok());
-        let Some(id) = id else { return Ok(None) };
-        conn.query_row(
-            "SELECT id, path, name, last_active_ms FROM projects WHERE id = ?1",
-            [id],
-            row_to_project,
-        )
-        .optional()
-        .map_err(Into::into)
     }
 }
 
@@ -145,45 +103,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn open_activate_list_and_persist() {
+    fn open_list_and_persist() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("t.db");
-        let store = ProjectStore::open(&db).unwrap();
-        assert!(store.active().unwrap().is_none());
+        let store = ProjectStore::new(&db).unwrap();
         assert!(store.list().unwrap().is_empty());
 
-        let a = store.open_and_activate("/repo/a").unwrap();
+        let a = store.open("/repo/a").unwrap();
         assert_eq!(a.name, "a");
-        assert_eq!(store.active().unwrap().unwrap().id, a.id);
 
         // 同 path 再开:不新增,复用同 id,活跃时间刷新
-        let a2 = store.open_and_activate("/repo/a").unwrap();
+        let a2 = store.open("/repo/a").unwrap();
         assert_eq!(a2.id, a.id);
         assert_eq!(store.list().unwrap().len(), 1);
 
-        // 开第二个 → 成为当前;list 倒序 b 在前
-        let b = store.open_and_activate("/repo/b").unwrap();
-        assert_eq!(store.active().unwrap().unwrap().id, b.id);
+        // 开第二个:两条都在,最近活跃的在前
+        let b = store.open("/repo/b").unwrap();
         let list = store.list().unwrap();
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].id, b.id, "最近活跃在前");
 
-        // 切回 a
-        store.set_active(a.id).unwrap();
-        assert_eq!(store.active().unwrap().unwrap().id, a.id);
-
-        // 重开库:当前项目与列表持久化
+        // 重开库:列表持久化
         drop(store);
-        let store = ProjectStore::open(&db).unwrap();
-        assert_eq!(store.active().unwrap().unwrap().id, a.id);
+        let store = ProjectStore::new(&db).unwrap();
         assert_eq!(store.list().unwrap().len(), 2);
     }
 
     #[test]
     fn name_is_basename() {
         let dir = tempfile::tempdir().unwrap();
-        let store = ProjectStore::open(&dir.path().join("t.db")).unwrap();
-        assert_eq!(store.open_and_activate("/a/b/proj").unwrap().name, "proj");
-        assert_eq!(store.open_and_activate("/").unwrap().name, "/");
+        let store = ProjectStore::new(&dir.path().join("t.db")).unwrap();
+        assert_eq!(store.open("/a/b/proj").unwrap().name, "proj");
+        assert_eq!(store.open("/").unwrap().name, "/");
     }
 }

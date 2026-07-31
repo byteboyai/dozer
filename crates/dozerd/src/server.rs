@@ -76,8 +76,8 @@ async fn handle_conn(
                     Err(e) => Reply::Error { message: format!("协议错误: {e}") },
                     Ok(req) => match req {
                         Request::ListSessions => Reply::Sessions { sessions: registry.list() },
-                        Request::CreateSession { name, command, args, cwd, cols, rows } => {
-                            match registry.create(SessionSpec { name, command, args, cwd, cols, rows }) {
+                        Request::CreateSession { name, command, args, cwd, cols, rows, project_id } => {
+                            match registry.create(SessionSpec { name, command, args, cwd, cols, rows, project_id }) {
                                 Ok(s) => Reply::Created { session: s.info() },
                                 Err(e) => Reply::Error { message: e.to_string() },
                             }
@@ -171,24 +171,13 @@ async fn handle_conn(
                                 },
                             }
                         }
-                        Request::OpenProject { path } => match projects.open_and_activate(&path) {
+                        Request::OpenProject { path } => match projects.open(&path) {
                             Ok(p) => Reply::Project { project: Some(p) },
                             Err(e) => Reply::Error { message: format!("打开项目失败: {e}") },
                         },
                         Request::ListProjects => match projects.list() {
                             Ok(projects) => Reply::Projects { projects },
                             Err(e) => Reply::Error { message: format!("列项目失败: {e}") },
-                        },
-                        Request::SetActiveProject { id } => match projects.set_active(id) {
-                            Ok(()) => match projects.active() {
-                                Ok(p) => Reply::Project { project: p },
-                                Err(e) => Reply::Error { message: format!("取当前项目失败: {e}") },
-                            },
-                            Err(e) => Reply::Error { message: format!("置当前项目失败: {e}") },
-                        },
-                        Request::GetActiveProject => match projects.active() {
-                            Ok(p) => Reply::Project { project: p },
-                            Err(e) => Reply::Error { message: format!("取当前项目失败: {e}") },
                         },
                         Request::GetAcceptanceCount { repo } => match store.count_for_repo(&repo) {
                             Ok(count) => Reply::AcceptanceCount { count },

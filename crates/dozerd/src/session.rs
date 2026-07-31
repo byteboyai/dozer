@@ -33,6 +33,7 @@ pub struct SessionSpec {
     pub cwd: String,
     pub cols: u16,
     pub rows: u16,
+    pub project_id: i64,
 }
 
 pub struct Session {
@@ -159,6 +160,7 @@ impl Session {
             created_ms: self.created_ms,
             agent_state: *self.agent_state.lock().expect("agent_state lock"),
             transcript_path: self.transcript_path.lock().expect("tp lock").clone(),
+            project_id: Some(self.spec.project_id),
         }
     }
 
@@ -244,6 +246,7 @@ mod tests {
             cwd: std::env::temp_dir().to_string_lossy().into_owned(),
             cols: 80,
             rows: 24,
+            project_id: 1,
         }
     }
 
@@ -319,6 +322,7 @@ mod tests {
             cwd: std::env::temp_dir().to_string_lossy().into_owned(),
             cols: 80,
             rows: 24,
+            project_id: 1,
         })
         .unwrap();
         assert!(
@@ -420,5 +424,16 @@ mod tests {
         }
         assert!(exited, "should broadcast Exited");
         assert!(!s.info().alive);
+    }
+
+    #[tokio::test]
+    async fn info_carries_project_id_from_spec() {
+        let s = Session::spawn(SessionSpec {
+            project_id: 42,
+            ..spec("sleep 5")
+        })
+        .unwrap();
+        assert_eq!(s.info().project_id, Some(42));
+        let _ = s.kill();
     }
 }

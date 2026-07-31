@@ -60,6 +60,7 @@ mod tests {
             cwd: std::env::temp_dir().to_string_lossy().into_owned(),
             cols: 80,
             rows: 24,
+            project_id: 1,
         }
     }
 

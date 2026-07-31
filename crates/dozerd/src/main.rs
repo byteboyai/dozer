@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
     }
 
     let registry = Arc::new(SessionRegistry::new());
-    let projects = Arc::new(dozerd::projects::ProjectStore::open(
+    let projects = Arc::new(dozerd::projects::ProjectStore::new(
         &dozer_core::paths::state_dir().join("dozer.db"),
     )?);
     let store = Arc::new(dozerd::acceptance::AcceptanceStore::open(
