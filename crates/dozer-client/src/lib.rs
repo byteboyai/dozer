@@ -55,6 +55,7 @@ impl Client {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         &self,
         name: &str,
@@ -63,6 +64,7 @@ impl Client {
         cwd: &str,
         cols: u16,
         rows: u16,
+        project_id: i64,
     ) -> Result<SessionInfo> {
         match self
             .roundtrip(&Request::CreateSession {
@@ -72,6 +74,7 @@ impl Client {
                 cwd: cwd.into(),
                 cols,
                 rows,
+                project_id,
             })
             .await?
         {
@@ -160,20 +163,6 @@ impl Client {
     pub async fn list_projects(&self) -> Result<Vec<ProjectInfo>> {
         match self.roundtrip(&Request::ListProjects).await? {
             Reply::Projects { projects } => Ok(projects),
-            other => bail!("意外应答: {other:?}"),
-        }
-    }
-
-    pub async fn set_active_project(&self, id: i64) -> Result<Option<ProjectInfo>> {
-        match self.roundtrip(&Request::SetActiveProject { id }).await? {
-            Reply::Project { project } => Ok(project),
-            other => bail!("意外应答: {other:?}"),
-        }
-    }
-
-    pub async fn active_project(&self) -> Result<Option<ProjectInfo>> {
-        match self.roundtrip(&Request::GetActiveProject).await? {
-            Reply::Project { project } => Ok(project),
             other => bail!("意外应答: {other:?}"),
         }
     }

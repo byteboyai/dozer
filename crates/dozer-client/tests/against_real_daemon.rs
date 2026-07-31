@@ -17,7 +17,7 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
     let r = registry.clone();
     let db = std::path::PathBuf::from(format!("/tmp/dz-{}.db", uuid::Uuid::new_v4()));
     let store = Arc::new(dozerd::acceptance::AcceptanceStore::open(&db).unwrap());
-    let projects = Arc::new(dozerd::projects::ProjectStore::open(&db).unwrap());
+    let projects = Arc::new(dozerd::projects::ProjectStore::new(&db).unwrap());
     tokio::spawn(async move { dozerd::server::serve(&s, r, store, projects).await });
     for _ in 0..100 {
         if sock.exists() {
@@ -51,6 +51,7 @@ async fn full_client_lifecycle() {
             "/tmp",
             80,
             24,
+            1,
         )
         .await
         .unwrap();
@@ -92,14 +93,14 @@ async fn full_client_lifecycle() {
     assert!(!c.list().await.unwrap()[0].alive);
 }
 
-/// 审阅 Important：attach() 内部读任务过去只在“收到新行后 tx.send 失败”
+/// 审阅 Important：attach() 内部读任务过去只在"收到新行后 tx.send 失败"
 /// 才退出。空闲会话（无输出）的 tab 被关闭、receiver 被 drop 后，读任务
 /// 会永远卡在 `lines.next_line().await` 上——UnixStream 不关，daemon 侧
 /// `handle_conn` 也不退出，两端各滞留一个任务 + 一个 FD。
 ///
 /// 用 `Session::subscriber_count()`（daemon 侧 broadcast 订阅数，
 /// `handle_conn` 在 attach 期间持有、连接关闭时随之 drop）直接观察修复
-/// 是否把资源释放传导了回去——这是比“反复 attach 不阻塞”更强的断言，
+/// 是否把资源释放传导了回去——这是比"反复 attach 不阻塞"更强的断言，
 /// 不需要改 `attach()` 的公开签名。同时保留任务描述里要求的行为断言
 /// （20 轮 attach→drop 后第 21 次 attach 仍需在 1s 内即时成功）作为兜底。
 #[tokio::test]
@@ -117,6 +118,7 @@ async fn reader_task_exits_when_receiver_dropped() {
             "/tmp",
             80,
             24,
+            1,
         )
         .await
         .unwrap();
