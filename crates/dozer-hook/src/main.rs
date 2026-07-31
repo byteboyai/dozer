@@ -1,3 +1,4 @@
+mod codebuddy;
 mod install;
 
 use dozer_core::protocol::{AgentKind, Request, encode_line};
