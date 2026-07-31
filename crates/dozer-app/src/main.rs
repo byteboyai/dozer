@@ -572,7 +572,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             );
         }
 
-        /// `ProjectPickFolder`/`ProjectTreeCopyPath` 等需要窗口句柄侧原生
+        /// `ProjectTabPickFolder`/`ProjectTreeCopyPath` 等需要窗口句柄侧原生
         /// 能力(rfd 模态、系统剪贴板)的消息在此拦截,其余原样转给
         /// `app.update`。
         fn dispatch(&mut self, message: Message) {
@@ -600,13 +600,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 *pending_focus = Some(FocusIntent::Browser);
             }
             match message {
-                Message::ProjectPickFolder => {
-                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                        app.update(Message::ProjectOpen(dir));
-                    }
-                }
-                // 顶栏"＋"专用:同一个 rfd 模态,落地走"新增页签"而不是
-                // "把当前页签换成另一个项目"(见 `Message::ProjectTabPickFolder`)。
+                // 顶栏"＋"与项目栏"打开项目…"共用的唯一打开入口:rfd 模态选中
+                // 后一律落成**新增页签**(`ProjectTabOpen`)。此前项目栏那颗按钮
+                // 另有一条 `ProjectPickFolder`→`ProjectOpen` 的就地改写路径,
+                // 会杀掉当前项目的全部会话,已删除。
                 Message::ProjectTabPickFolder => {
                     if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                         app.update(Message::ProjectTabOpen(dir));
@@ -1106,7 +1103,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             };
 
             // 借用已随上面的块结束释放；这里逐条经 `dispatch`
-            // 派发（`ProjectPickFolder` 等在其中被拦截成 rfd 模态,
+            // 派发（`ProjectTabPickFolder` 等在其中被拦截成 rfd 模态,
             // 其余原样转给 `app.update`）。
             for message in pending_messages {
                 self.dispatch(message);

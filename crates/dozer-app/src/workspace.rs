@@ -87,9 +87,18 @@ pub enum MaximizedPane {
 /// 单个项目页签的加载状态：懒加载用。`Stub` 只有页签渲染需要的最小信息
 /// （启动恢复时,还没被聚焦过的页签停在这一态）,`Loaded` 是完整的
 /// `Workspace`（P2a 多项目并行）。
-#[allow(dead_code)] // Task 5 接入 App 后消费
 pub enum WorkspaceSlot {
-    Stub(dozer_core::protocol::ProjectInfo),
+    Stub {
+        info: ProjectInfo,
+        /// 该项目在**启动恢复那一刻**的后台活动状态(见 [`stub_activity`])。
+        /// `None` = 那时没有存活会话,不画指示点。
+        ///
+        /// 这份快照之后不会再更新——`Stub` 没有任何会话事件流,真正的实时
+        /// 指示点要等它被促成成 `Loaded`。写成"restart 时已知"而不是空白,
+        /// 是因为重启后**所有**后台页签都是 `Stub`,指示点全空等于整个功能
+        /// 在最常见的场景下不工作(最终审查 Required Fix #5)。
+        activity: Option<AgentState>,
+    },
     Loaded(Box<Workspace>),
 }
 
@@ -702,7 +711,7 @@ pub fn terminal_pane_pixel_size(
 /// 的 Critical):`SessionTab::tab_id` 来自每个 `Workspace` 自己的
 /// `next_tab_id`,**每个项目都从 0 起编**。多项目并行之后"项目 A 和项目 B
 /// 各有活着的会话"是常态而不是边角情况,两边的第一个 tab 都是 id 0。若按
-/// `App::with_ws`(投给当前聚焦项目)路由,后台项目 A 的 agent 每吐一次输出,
+/// `App::with_focused_project`(投给当前聚焦项目)路由,后台项目 A 的 agent 每吐一次输出,
 /// `TermOutput(0, ..)` 就会被喂进前台项目 B 的 tab 0 里——这不是竞态窗口,
 /// 是只要两个项目都有会话就持续发生。`SessionExited` 会把错误的 tab 标成
 /// 已死,`TabAttached` 会让 B 认领本属于 A 的会话。
@@ -711,7 +720,7 @@ pub fn terminal_pane_pixel_size(
 /// `project_id`,由 [`App::with_project`] 直接投递到对应槽位;投递不到
 /// (项目已被关掉/还没促成)就静默丢弃。反过来,由用户点击当前界面直接
 /// 触发的消息(`TermInput`/`AcceptanceOpen`/`PreviewSelectTab` …)仍然走
-/// `with_ws`——它们的语义本来就是"作用于用户此刻看着的那个项目"。
+/// `with_focused_project`——它们的语义本来就是"作用于用户此刻看着的那个项目"。
 pub type ProjectId = i64;
 
 #[derive(Debug, Clone)]
@@ -838,29 +847,31 @@ pub enum Message {
     BrowserAddrClick,
     /// 浏览器:地址栏编辑事件。
     BrowserAddrEvent(AddrEvent),
-    /// 项目:点"打开项目…"→ rfd 文件夹选择(main.rs 执行)。
-    ProjectPickFolder,
-    /// 项目:打开某路径为项目(rfd 选中/最近点击回送)。
-    ProjectOpen(PathBuf),
-    /// 项目:打开完成(当前项目 + 最近列表)。
-    ProjectOpened(Option<ProjectInfo>, Vec<ProjectInfo>),
     /// 项目:切换到最近项目。
     ProjectSelect(i64),
-    /// 项目页签:顶栏"＋"→ rfd 文件夹选择(main.rs 执行),选中后回送
-    /// `ProjectTabOpen`。与 `ProjectPickFolder` 的区别只在落地方式:那条
-    /// 走 `ProjectOpened` 的**就地改写**(把当前页签换成另一个项目),这条
-    /// 走 `ProjectTabOpened` 的**新增页签**。两个入口语义不同,不能合并。
+    /// 项目:"打开项目…"→ rfd 文件夹选择(main.rs 执行),选中后回送
+    /// `ProjectTabOpen`。顶栏"＋"与项目栏那颗"打开项目…"按钮**共用**这
+    /// 一条入口——两者都是"我要打开一个项目",都必须落成**新增页签**。
+    ///
+    /// 此前项目栏那颗按钮走的是另一条 `ProjectPickFolder`→`ProjectOpened`
+    /// 的**就地改写**路径(`close_all_tabs_for_switch` + `adopt_project`),
+    /// 会把当前聚焦项目的终端会话全杀掉——直接违反设计文档 §2"只有用户
+    /// 显式关闭一个页签,才结束该项目下的会话"。整条就地改写路径连同
+    /// `retarget_active_slot` 已随之删除,不留第二条会杀会话的打开入口。
     ProjectTabPickFolder,
     /// 项目页签:把某路径作为**新页签**打开(不动任何已存在页签的内容)。
     ProjectTabOpen(PathBuf),
     /// 项目页签:`ProjectTabOpen` 异步完成(daemon upsert 结果 + 最近列表)。
-    /// `None` = 这次打开失败,与 `ProjectOpened` 同样只报错、不改状态。
+    /// `None` = 这次打开失败,只报错、不改任何页签状态。
     ProjectTabOpened(Option<ProjectInfo>, Vec<ProjectInfo>),
     /// 项目页签:点已存在的页签 → 前台化该项目。只改"当前是哪个页签",
     /// 不结束任何会话、不改写任何 `Workspace` 的内容。
     ProjectTabSwitch(i64),
     /// 项目页签:点页签的 × → 关闭该页签,并结束该项目下所有会话。
     ProjectTabClose(i64),
+    /// 项目页签栏箭头翻页(`true`=右/`false`=左),语义同 `TermTabScroll`。
+    /// 上界不在此钳,渲染时 `tab_window` 钳制(见 `project_tabs_row`)。
+    ProjectTabScroll(bool),
     /// 项目页签:`App::ensure_loaded` 的异步促成完成——素材已取回,由
     /// `update` 在 UI 线程上装配成 `Workspace`,替换掉那份"加载中"占位
     /// (载荷是一次性信封,见 [`RestorePayload`])。
@@ -1094,6 +1105,9 @@ pub struct App {
     project_order: Vec<i64>,
     /// 当前聚焦的项目页签(`None`=一个项目都没打开)。
     active_project_id: Option<i64>,
+    /// 顶栏项目页签行当前最左可见页签序号(箭头翻页用),语义同
+    /// `Workspace::term_tab_first`。外壳态:页签行本身不属于任何项目。
+    project_tab_first: usize,
 }
 
 pub struct Workspace {
@@ -1163,84 +1177,15 @@ pub struct Workspace {
     loading: bool,
 }
 
-/// `ProjectOpened` 落地前,把槽位表重新对准新项目 id。
-///
-/// 为什么需要这一步:`ProjectOpened` 的主体是"把当前 `Workspace` 的内容整体
-/// 改写成新项目"(单项目时代留下的就地改写语义)。改写之后
-/// `Workspace.project.id` 就变了,而它在 `projects` 里挂着的 key、在
-/// `project_order` 里的位置、`active_project_id`——三者仍指着旧 id,与实际内容
-/// 脱节。Task 6 的页签栏按 `project_order` 渲染、Task 7 把
-/// `project_order`/`active_project_id` 写进 `open_projects.json`,两边都会继承
-/// 这个错位,所以必须在改写之前就对齐。
-///
-/// 拆成自由函数是为了能单测:`App` 本身要有 daemon 连接 + winit
-/// `EventLoopProxy` 才构造得出来,headless 测试里造不了(与本文件其余"纯逻辑
-/// 抽出来单测、整机行为留给真机验证"的既有约定一致)。
-fn retarget_active_slot(
-    projects: &mut HashMap<i64, WorkspaceSlot>,
-    project_order: &mut Vec<i64>,
-    active_project_id: &mut Option<i64>,
-    new_id: i64,
-) {
-    // 一个槽位都没有(冷启动时 daemon 上还没有任何项目):先落一个空槽位承接,
-    // 否则 `App::with_ws` 会因为拿不到 active workspace 把整条消息丢掉,
-    // "打开项目"点了没反应。
-    //
-    // 判据是 `projects.is_empty()`,**不是**"取不到 active workspace":后者在
-    // 当前槽位是还没促成的 `Stub` 时也成立(Task 7 引入 `Stub` 之后),那时该做
-    // 的是促成那个页签,而不是凭空插一个新槽位把它顶掉。
-    if projects.is_empty() {
-        projects.insert(
-            new_id,
-            WorkspaceSlot::Loaded(Box::new(Workspace::empty_for_project_placeholder())),
-        );
-        project_order.push(new_id);
-        *active_project_id = Some(new_id);
-        return;
-    }
-
-    let Some(old_id) = *active_project_id else {
-        return;
-    };
-    if old_id == new_id {
-        return; // 已经对准了,槽位表不用动
-    }
-
-    // 目标项目已经有自己的槽位(Task 6/7 的多页签场景)时什么都不搬,只切
-    // `active_project_id`——就地改写会把那个页签的内容整个覆盖掉。
-    if !projects.contains_key(&new_id) {
-        if matches!(projects.get(&old_id), Some(WorkspaceSlot::Loaded(_))) {
-            // 当前槽位马上要被就地改写成新项目 → 连 key 一起搬到新 id 上。
-            if let Some(slot) = projects.remove(&old_id) {
-                projects.insert(new_id, slot);
-            }
-            match project_order.iter().position(|&i| i == old_id) {
-                Some(pos) => project_order[pos] = new_id, // 原位替换,保持页签顺序
-                None => project_order.push(new_id),
-            }
-        } else {
-            // 当前槽位是还没促成的 `Stub`:它的内容不属于任何已加载状态,就地
-            // 改写等于把那个页签偷偷换成别的项目。给新项目单开一个槽位,
-            // `Stub` 原样留在自己的 key 上。
-            projects.insert(
-                new_id,
-                WorkspaceSlot::Loaded(Box::new(Workspace::empty_for_project_placeholder())),
-            );
-            project_order.push(new_id);
-        }
-    }
-    *active_project_id = Some(new_id);
-}
-
 /// 前台化一个**已经存在**的项目页签:只改"当前是哪个页签",一个槽位的内容
 /// 都不碰。返回 false = 没有这个页签(调用方原地放弃)。
 ///
-/// 为什么它必须是独立于 [`retarget_active_slot`] 的一条路:那个函数服务的是
-/// `ProjectOpened` 的**就地改写**语义——"当前这个槽位马上要被改写成另一个
-/// 项目",所以它会搬 key、会为新项目凭空插槽位,而紧随其后的
-/// `App::with_ws` 会把落到前台的那个槽位的内容整个重写(关光终端 tab、换
-/// 文件树、清对话列表)。切页签绝不能借那条路:用户点第二个页签只是想看
-/// 一眼,不是想把它的终端全关掉重来。
+/// 这是**唯一**一条"换到另一个项目"的路。此前还有一条
+/// `retarget_active_slot` 的**就地改写**路(`ProjectOpened`:把当前槽位的内容
+/// 整体改写成另一个项目,先 `close_all_tabs_for_switch` 关光终端、再
+/// `adopt_project`),它与设计文档 §2"只有用户显式关闭一个页签,才结束该项目
+/// 下的会话"直接冲突,已随最终审查一并删除。**不要**把它请回来:打开项目一律
+/// 是"新增/前台化一个页签",绝不是"把手上这个换掉"。
 fn focus_project_tab(
     projects: &HashMap<i64, WorkspaceSlot>,
     active_project_id: &mut Option<i64>,
@@ -1297,7 +1242,7 @@ fn loaded_workspace_mut(
         WorkspaceSlot::Loaded(ws) => Some(ws),
         // `Stub` 从没促成过,不可能有指向它的在飞会话结果(促成期的"加载中"
         // 占位是 `Loaded`)。
-        WorkspaceSlot::Stub(_) => None,
+        WorkspaceSlot::Stub { .. } => None,
     }
 }
 
@@ -2215,26 +2160,46 @@ impl App {
     /// 聚焦的那个这里**直接 `await`**、不走 `ensure_loaded` 的异步路径:窗口
     /// 还没建出来,此刻多等一个 UDS 往返不占用任何 UI 线程,换来的是第一帧
     /// 就是完整界面,而不是先闪一下空的"加载中"再补内容。
+    ///
+    /// 除了 `list_projects()`,这里还多做一次 `list()`(全量会话快照):`Stub`
+    /// 页签靠它算出各自的后台活动指示点(见 [`stub_activity`])。一次协议往返
+    /// 换"重启后后台页签的状态点不是空白",而且**不促成**任何 `Workspace`,
+    /// 懒加载策略原样保留。
     pub async fn bootstrap(client: Client, handle: Handle, proxy: EventLoopProxy<Message>) -> Self {
         let mut app = Self::new_shell(client, handle, proxy, None);
         let io = app.shell_io();
         // daemon 不再记"活跃项目"(P2a Task 1-3 删掉了这个概念),开着哪些
         // 项目改由 GUI 侧的 open_projects.json 记(Task 4/6 写,这里读回)。
         let known = io.client.list_projects().await.unwrap_or_default();
-        let (order, active) = restore_open_tabs(&known, &open_projects::load());
+        let sessions = io.client.list().await.unwrap_or_default();
+        let saved = open_projects::load();
+        let (order, active) = restore_open_tabs(&known, &saved);
         for id in &order {
             let Some(info) = known.iter().find(|p| p.id == *id) else {
                 continue; // restore_open_tabs 已过滤,这里只是让类型收敛
             };
-            app.projects.insert(*id, WorkspaceSlot::Stub(info.clone()));
+            app.projects.insert(
+                *id,
+                WorkspaceSlot::Stub {
+                    info: info.clone(),
+                    activity: stub_activity(&sessions, *id),
+                },
+            );
         }
+        let pruned = order != saved.project_ids || active != saved.active_project_id;
         app.project_order = order;
         app.active_project_id = active;
         if let Some(id) = active
-            && let Some(WorkspaceSlot::Stub(info)) = app.projects.get(&id)
+            && let Some(WorkspaceSlot::Stub { info, .. }) = app.projects.get(&id)
         {
             let ws = Workspace::bootstrap(&io, info.clone()).await;
             app.projects.insert(id, WorkspaceSlot::Loaded(Box::new(ws)));
+        }
+        // `restore_open_tabs` 会剔掉 daemon 已经不认识的 id、去重、必要时回落
+        // 到最近项目——这些都是对盘上那份记录的修正,不写回去的话每次启动都要
+        // 重算一遍,而且下次崩在写盘之前时盘上还是那份脏数据。
+        if pruned {
+            app.persist_open_projects();
         }
         app
     }
@@ -2284,6 +2249,7 @@ impl App {
             projects: HashMap::new(),
             project_order: Vec::new(),
             active_project_id: None,
+            project_tab_first: 0,
         }
     }
 
@@ -2304,7 +2270,7 @@ impl App {
         let id = self.active_project_id?;
         match self.projects.get(&id)? {
             WorkspaceSlot::Loaded(ws) => Some(ws),
-            WorkspaceSlot::Stub(_) => None,
+            WorkspaceSlot::Stub { .. } => None,
         }
     }
 
@@ -2315,7 +2281,7 @@ impl App {
         self.ensure_loaded(id);
         match self.projects.get_mut(&id)? {
             WorkspaceSlot::Loaded(ws) => Some(ws),
-            WorkspaceSlot::Stub(_) => None,
+            WorkspaceSlot::Stub { .. } => None,
         }
     }
 
@@ -2336,7 +2302,7 @@ impl App {
     /// 已经是 `Loaded`(含正在促成的占位)或 id 根本不在槽位表里时都是 no-op
     /// ——尤其"占位已在"这条保证了同一个页签连点几下不会重复发起促成。
     fn ensure_loaded(&mut self, id: i64) {
-        let Some(WorkspaceSlot::Stub(info)) = self.projects.get(&id) else {
+        let Some(WorkspaceSlot::Stub { info, .. }) = self.projects.get(&id) else {
             return;
         };
         let info = info.clone();
@@ -2388,7 +2354,12 @@ impl App {
     /// 项目"正是它们的语义。异步结果消息一律**不能**走这里,必须用
     /// [`App::with_project`] 按消息自带的 `project_id` 投递,理由见
     /// [`ProjectId`]。
-    fn with_ws(&mut self, f: impl FnOnce(&mut Workspace, &ShellIo)) {
+    ///
+    /// 名字从早先的 `with_ws` 改成现在这个,是因为它与 [`App::with_project`]
+    /// 的安全性质**相反**(一个投给"此刻聚焦的",一个投给"指定 id 的"),而
+    /// 更短、看起来更像默认选项的那个偏偏是用错了会串项目的那个。名字必须
+    /// 一眼看出差别,不能靠读文档才知道选哪个。
+    fn with_focused_project(&mut self, f: impl FnOnce(&mut Workspace, &ShellIo)) {
         let io = self.shell_io();
         let Some(ws) = self.active_workspace_mut() else {
             return;
@@ -2419,7 +2390,7 @@ impl App {
     pub fn any_blinking(&self) -> bool {
         self.projects.values().any(|slot| match slot {
             WorkspaceSlot::Loaded(ws) => ws.any_blinking(),
-            WorkspaceSlot::Stub(_) => false,
+            WorkspaceSlot::Stub { .. } => false,
         })
     }
 
@@ -2643,7 +2614,7 @@ impl App {
                 if !self.terminal_visible() {
                     return;
                 }
-                self.with_ws(|ws, io| {
+                self.with_focused_project(|ws, io| {
                     // 键入即回底 + 清选区：正在回看历史时一敲键盘，视口跳回
                     // 实时输出（常规终端语义），再把字节写给 daemon。
                     if let Some(tab) = ws.tabs.get_mut(ws.active) {
@@ -2777,9 +2748,9 @@ impl App {
                 });
             }
             Message::AcceptanceOpen(tab_id) => {
-                self.with_ws(|ws, io| {
+                self.with_focused_project(|ws, io| {
                     let active_repo = ws.project.as_ref().map(|p| PathBuf::from(&p.path));
-                    // 用户点的是当前界面上的横幅,所以入口走 `with_ws`;但异步
+                    // 用户点的是当前界面上的横幅,所以入口走 `with_focused_project`;但异步
                     // 装载结果要投回**这个**项目,不能投给"结果回来时恰好在
                     // 前台的那个"(见 `ProjectId`)。
                     let Some(project_id) = ws.project_id() else {
@@ -2812,6 +2783,10 @@ impl App {
                 });
             }
             Message::AcceptanceLoaded(project_id, repo, source_tab_id, goal, changes) => {
+                // 这条异步结果可能属于**后台**项目(用户在加载期间切了页签)。
+                // 那种情况下只把验收内容装进那个项目的 `Workspace`,绝不动外壳:
+                // 展开左面板是"让你现在就看见"的动作,而现在你看的是别的项目。
+                let landed_on_focused = self.active_project_id == Some(project_id);
                 self.with_project(project_id, move |ws, _io| {
                     let n = goal.as_ref().map(|g| g.criteria.len()).unwrap_or(0);
                     ws.acceptance = Some(AcceptanceView {
@@ -2832,13 +2807,13 @@ impl App {
                 // 没被渲染的面板)。新外壳鼓励收起左侧给终端腾空间,所以这里
                 // 必须主动展开(Fix round 2 #5)。左侧收起态是外壳态,搬家后
                 // 留在 `App` 上处理。
-                if self.left_collapsed {
+                if landed_on_focused && self.left_collapsed {
                     self.left_collapsed = false;
                     self.on_shell_layout_changed();
                 }
             }
             Message::AcceptanceToggle(i) => {
-                self.with_ws(|ws, _io| {
+                self.with_focused_project(|ws, _io| {
                     if let Some(acc) = &mut ws.acceptance
                         && let Some(c) = acc.checked.get_mut(i)
                     {
@@ -2847,14 +2822,14 @@ impl App {
                 });
             }
             Message::AcceptanceCommentClick => {
-                self.with_ws(|ws, _io| {
+                self.with_focused_project(|ws, _io| {
                     if let Some(acc) = &mut ws.acceptance {
                         acc.comment_editing = true;
                     }
                 });
             }
             Message::AcceptanceCommentEvent(ev) => {
-                self.with_ws(|ws, _io| {
+                self.with_focused_project(|ws, _io| {
                     if let Some(acc) = &mut ws.acceptance {
                         match ev {
                             AddrEvent::Text(s) => acc.comment.push_str(&s),
@@ -2866,8 +2841,12 @@ impl App {
                     }
                 });
             }
-            Message::AcceptanceAccept => self.with_ws(|ws, io| ws.acceptance_accept(io)),
-            Message::AcceptanceReject => self.with_ws(|ws, io| ws.acceptance_reject(io)),
+            Message::AcceptanceAccept => {
+                self.with_focused_project(|ws, io| ws.acceptance_accept(io))
+            }
+            Message::AcceptanceReject => {
+                self.with_focused_project(|ws, io| ws.acceptance_reject(io))
+            }
             Message::AcceptanceDone(project_id, result) => {
                 self.with_project(project_id, |ws, io| {
                     let landed = result.is_ok();
@@ -2898,7 +2877,7 @@ impl App {
                 });
             }
             Message::ReviewToggle(i) => {
-                self.with_ws(|ws, _io| {
+                self.with_focused_project(|ws, _io| {
                     if let Some(rv) = &mut ws.review
                         && !rv.expanded.remove(&i)
                     {
@@ -2912,7 +2891,7 @@ impl App {
                 });
             }
             Message::ConversationOpen(path) => {
-                self.with_ws(move |ws, io| {
+                self.with_focused_project(move |ws, io| {
                     // 若点开的是某活会话的当前对话 → Session 源(回合结束刷新);否则 File 快照。
                     let path_s = path.to_string_lossy().into_owned();
                     let source = ws
@@ -2931,19 +2910,19 @@ impl App {
                 });
             }
             Message::SelectTab(idx) => {
-                self.with_ws(|ws, _io| {
+                self.with_focused_project(|ws, _io| {
                     if idx < ws.tabs.len() {
                         ws.active = idx;
                     }
                 });
             }
             Message::CloseTab(idx) => {
-                self.with_ws(|ws, io| {
+                self.with_focused_project(|ws, io| {
                     ws.close_tab(io, idx);
                     ws.ensure_project_terminal(io);
                 });
             }
-            Message::NewTab => self.with_ws(|ws, io| ws.spawn_new_tab(io)),
+            Message::NewTab => self.with_focused_project(|ws, io| ws.spawn_new_tab(io)),
             Message::TabAttached(project_id, tab_id, info, snapshot) => {
                 self.with_project(project_id, move |ws, io| {
                     ws.on_tab_attached(io, tab_id, info, snapshot)
@@ -3028,14 +3007,14 @@ impl App {
             Message::Noop => {}
             Message::DaemonError(message) => self.daemon_error = Some(message),
             Message::TermScroll(delta) => {
-                self.with_ws(|ws, _io| {
+                self.with_focused_project(|ws, _io| {
                     if let Some(tab) = ws.tabs.get_mut(ws.active) {
                         tab.model.scroll_display(delta);
                     }
                 });
             }
             Message::TermTabScroll(right) => {
-                self.with_ws(|ws, _io| {
+                self.with_focused_project(|ws, _io| {
                     if right {
                         ws.term_tab_first = ws.term_tab_first.saturating_add(2);
                     } else {
@@ -3044,7 +3023,7 @@ impl App {
                 });
             }
             Message::PreviewTabScroll(right) => {
-                self.with_ws(|ws, _io| {
+                self.with_focused_project(|ws, _io| {
                     if right {
                         ws.preview_tab_first = ws.preview_tab_first.saturating_add(2);
                     } else {
@@ -3052,8 +3031,17 @@ impl App {
                     }
                 });
             }
+            Message::ProjectTabScroll(right) => {
+                // 外壳态,不经 `with_focused_project`:页签行在"一个项目都没
+                // 打开"时也画得出来,翻页也该照样能用。
+                self.project_tab_first = if right {
+                    self.project_tab_first.saturating_add(2)
+                } else {
+                    self.project_tab_first.saturating_sub(2)
+                };
+            }
             Message::BrowserTabScroll(right) => {
-                self.with_ws(|ws, _io| {
+                self.with_focused_project(|ws, _io| {
                     if right {
                         ws.browser_tab_first = ws.browser_tab_first.saturating_add(2);
                     } else {
@@ -3062,14 +3050,14 @@ impl App {
                 });
             }
             Message::TermSelStart { col, row, right } => {
-                self.with_ws(|ws, _io| {
+                self.with_focused_project(|ws, _io| {
                     if let Some(tab) = ws.tabs.get_mut(ws.active) {
                         tab.model.selection_start(col, row, right);
                     }
                 });
             }
             Message::TermSelUpdate { col, row, right } => {
-                self.with_ws(|ws, _io| {
+                self.with_focused_project(|ws, _io| {
                     if let Some(tab) = ws.tabs.get_mut(ws.active) {
                         tab.model.selection_update(col, row, right);
                     }
@@ -3082,7 +3070,7 @@ impl App {
                 if !self.terminal_visible() {
                     return;
                 }
-                self.with_ws(move |ws, io| {
+                self.with_focused_project(move |ws, io| {
                     let Some(tab) = ws.tabs.get_mut(ws.active) else {
                         return;
                     };
@@ -3099,7 +3087,7 @@ impl App {
                 });
             }
             Message::PreviewOpenPath(path) => {
-                self.with_ws(move |ws, io| {
+                self.with_focused_project(move |ws, io| {
                     if !path.is_file() {
                         ws.preview_error = Some(format!("文件不存在或不可读: {}", path.display()));
                         return;
@@ -3117,13 +3105,13 @@ impl App {
                 });
             }
             Message::PreviewSelectTab(idx) => {
-                self.with_ws(|ws, io| {
+                self.with_focused_project(|ws, io| {
                     ws.preview.select(idx);
                     ws.spawn_preview_state_save(io);
                 });
             }
             Message::PreviewCloseTab(idx) => {
-                self.with_ws(|ws, io| {
+                self.with_focused_project(|ws, io| {
                     ws.preview.close(idx);
                     // 关 tab 后位置全变，旧 first 可能越界——归零防御（P1L T5）。
                     ws.preview_tab_first = 0;
@@ -3131,34 +3119,34 @@ impl App {
                 });
             }
             Message::BrowserOpenUrl(url) => {
-                self.with_ws(move |ws, _io| {
+                self.with_focused_project(move |ws, _io| {
                     ws.browser_error = None;
                     ws.browser.open_url(url);
                     ws.browser_tab_first = 0;
                 });
             }
             Message::BrowserSelectTab(idx) => {
-                self.with_ws(|ws, _io| ws.browser.select(idx));
+                self.with_focused_project(|ws, _io| ws.browser.select(idx));
             }
             Message::BrowserCloseTab(idx) => {
-                self.with_ws(|ws, _io| {
+                self.with_focused_project(|ws, _io| {
                     ws.browser.close(idx);
                     ws.browser_tab_first = 0;
                 });
             }
             Message::BrowserAddrClick => {
-                self.with_ws(|ws, _io| {
+                self.with_focused_project(|ws, _io| {
                     ws.browser_error = None;
                     ws.browser.addr_begin();
                 });
             }
             Message::BrowserAddrEvent(ev) => {
                 // 地址栏回车解析出网址时要走一遍完整的 `BrowserOpenUrl` 处理,
-                // 而 `self.update(..)` 不能在 `with_ws` 的闭包里调(闭包正握着
+                // 而 `self.update(..)` 不能在 `with_focused_project` 的闭包里调(闭包正握着
                 // 从 `self` 借出去的 `&mut Workspace`),所以先把结果攒出来,
                 // 出了闭包再派发。
                 let mut open_url = None;
-                self.with_ws(|ws, _io| match ev {
+                self.with_focused_project(|ws, _io| match ev {
                     AddrEvent::Text(s) => ws.browser.addr_text(&s),
                     AddrEvent::Backspace => ws.browser.addr_backspace(),
                     AddrEvent::Cancel => ws.browser.addr_cancel(),
@@ -3176,33 +3164,21 @@ impl App {
                     self.update(Message::BrowserOpenUrl(url));
                 }
             }
-            Message::ProjectPickFolder => {} // 副作用在 main.rs(rfd 文件夹选择)
-            Message::ProjectOpen(path) => {
-                let client = self.client.clone();
-                let proxy = self.proxy.clone();
-                let path_s = path.to_string_lossy().into_owned();
-                self.handle.spawn(async move {
-                    let opened = client.open_project(&path_s).await.ok().flatten();
-                    let recent = client.list_projects().await.unwrap_or_default();
-                    let _ = proxy.send_event(Message::ProjectOpened(opened, recent));
-                });
-            }
             Message::ProjectSelect(id) => {
                 // 切项目不再通知 daemon:"活跃项目"是 GUI 侧的概念了(P2a
                 // Task 1-3 删掉了 SetActiveProject)。
                 //
                 // 这个项目已经开着页签(`Loaded` 或还没促成的 `Stub`)时,点最近
                 // 项目卡片就只是"切到那个页签",走与点页签完全相同的非破坏性
-                // 路径。**绝不能**再走 `ProjectOpened`:那条是单项目时代留下的
-                // **就地改写**语义(`close_all_tabs_for_switch` + `adopt_project`
-                // 会把目标页签的终端全关掉、文件树/选中项/git/对话全部重置);
-                // 在 P2a 之前它恰好从不越界,是因为那时只有一个页签、且从没有
-                // `Stub` 存在,`retarget_active_slot` 判定"不用搬"之后的改写正好
-                // 落在同一个页签自己身上。有了懒加载 `Stub` 之后这条假设不再
-                // 成立,继续走老路会把一个刚点开的 `Stub` 页签改写掉。
+                // 路径——绝不能杀掉任何已有页签的会话(设计文档 §2)。
                 if focus_project_tab(&self.projects, &mut self.active_project_id, id) {
                     self.maximized = None;
                     self.ensure_loaded(id);
+                    // 清放大态改变了终端 pane 的像素尺寸,网格必须跟着重算:
+                    // `terminal_grid_state` 把 `maximized` 算进去,不重算的话
+                    // PTY 会一直停在放大时的 cols/rows,直到某个无关的几何事件
+                    // 偶然触发一次重算(最终审查 Required Fix #2)。
+                    self.sync_terminal_grid();
                     self.persist_open_projects();
                     return;
                 }
@@ -3217,79 +3193,6 @@ impl App {
                     let _ = proxy.send_event(Message::ProjectTabOpened(opened, recent));
                 });
             }
-            Message::ProjectOpened(project, recent) => {
-                // `project` 为 `None` = 这次打开/切换**失败了**:`ProjectOpen`
-                // 的异步任务是 `client.open_project(..).await.ok().flatten()`,
-                // daemon 不通、或 dozerd 回 `Reply::Error`(比如它那边 SQLite
-                // 写失败)都会塌成 `None`;`ProjectSelect` 在目标项目已从库里
-                // 消失时同样如此。
-                //
-                // 这个 `None` **绝不能**写进一个已经存在的 `Workspace`:那会
-                // 留下"有 tab、有界面、却没有归属项目"的破状态,而
-                // `spawn_new_tab` 正是靠"`Workspace` 存在即已知归属项目"这条
-                // 不变式才敢 `expect` ——用户随后点一下 tab 栏的"＋"就会 panic
-                // 掉整个 GUI 进程。所以这里原地退出,当前项目原封不动。
-                let Some(project) = project else {
-                    tracing::warn!("打开/切换项目失败,保持当前项目不变");
-                    // 失败文案挂到 App 级的 `daemon_error` 上:它本来就是
-                    // "daemon 连接失败,或某次会话操作失败"的载体,而且不依赖
-                    // 任何 `Workspace` 存在(一个项目都没打开时也画得出来)。
-                    self.daemon_error = Some("打开项目失败,请确认 dozerd 正常后重试".to_string());
-                    // 最近列表照旧刷新:它跟"这次打开成功没有"无关,拿到了就该用。
-                    self.with_ws(move |ws, _io| {
-                        ws.recent_projects = recent;
-                    });
-                    return;
-                };
-                // 反过来:一次成功的 `open_project` 往返是 daemon 可达且能正常
-                // 服务的实证,把上面那条(或上一次遗留的)失败文案清掉,免得横幅
-                // 一直挂着不走。
-                self.daemon_error = None;
-                // 换项目时放大态不该跟着过去:被放大的那块内容(项目树/预览/
-                // 终端/审阅)整体换了主人,留着放大浮层只会挡住新项目的界面
-                // (与图标栏点击清放大同一类理由,Fix round 2 #2)。放大态是
-                // 外壳态,搬家后留在 `App` 上处理。
-                self.maximized = None;
-                // 目标项目已经开着页签(`Loaded` 或还没促成的 `Stub`)时,
-                // **绝不**走下面的就地改写:那会把那个页签的终端全关掉、文件
-                // 树/选中项/git/对话全部重置。走与点页签相同的非破坏性路径,
-                // 顺带满足"打开一个已经开着的项目 → 切到已有页签,不产生重复
-                // 页签"这条验收项。
-                //
-                // 这条判定在 P2a 之前不存在也没出事,是因为那时只有一个页签、
-                // 且从没有 `Stub`——`retarget_active_slot` 判定"不用搬"之后的
-                // 改写恰好落在同一个页签自己身上。懒加载 `Stub` 让这条假设
-                // 失效(Task 6 review 的遗留隐患)。
-                if focus_project_tab(&self.projects, &mut self.active_project_id, project.id) {
-                    let id = project.id;
-                    self.ensure_loaded(id);
-                    self.with_ws(move |ws, _io| {
-                        ws.recent_projects = recent;
-                    });
-                    self.persist_open_projects();
-                    return;
-                }
-                // 槽位表(key/顺序/当前页签)先对准新项目 id,再让下面的
-                // `with_ws` 去改写槽位内容——顺序反了就会出现"key=旧 id、
-                // 内容=新项目"的错位。判据与理由见 `retarget_active_slot`。
-                retarget_active_slot(
-                    &mut self.projects,
-                    &mut self.project_order,
-                    &mut self.active_project_id,
-                    project.id,
-                );
-                self.with_ws(move |ws, io| {
-                    ws.recent_projects = recent;
-                    // 切到不同项目:关掉上一个项目遗留的终端 tab 与预览 tab,给
-                    // 新项目干净起点（验收反馈）。首次打开(无前项目)不强关。
-                    let switching = ws.project.as_ref().is_some_and(|old| old.id != project.id);
-                    if switching {
-                        ws.close_all_tabs_for_switch(io);
-                    }
-                    ws.adopt_project(io, project);
-                });
-                self.persist_open_projects();
-            }
             Message::ProjectTabPickFolder => {} // 副作用在 main.rs(rfd 文件夹选择)
             Message::ProjectTabOpen(path) => {
                 let client = self.client.clone();
@@ -3302,31 +3205,32 @@ impl App {
                 });
             }
             Message::ProjectTabOpened(project, recent) => {
-                // `None` = 这次打开失败(daemon 不通/回 `Reply::Error`)。与
-                // `ProjectOpened` 同样的硬性要求:失败绝不能落进任何
-                // `Workspace`,否则会留下"有界面、没归属项目"的破状态,用户
-                // 一点 tab 栏的"＋"就 panic(`spawn_new_tab` 的 expect)。
+                // `None` = 这次打开失败(daemon 不通/回 `Reply::Error`)。硬性
+                // 要求:失败绝不能落进任何 `Workspace`,否则会留下"有界面、没
+                // 归属项目"的破状态,用户一点 tab 栏的"＋"就 panic
+                // (`spawn_new_tab` 的 expect)。失败文案挂到 App 级的
+                // `daemon_error` 上——它不依赖任何 `Workspace` 存在,一个项目
+                // 都没打开时空态视图也画得出来(Required Fix #1)。
                 let Some(project) = project else {
                     tracing::warn!("打开项目页签失败,页签集合保持不变");
                     self.daemon_error = Some("打开项目失败,请确认 dozerd 正常后重试".to_string());
-                    self.with_ws(move |ws, _io| {
+                    self.with_focused_project(move |ws, _io| {
                         ws.recent_projects = recent;
                     });
                     return;
                 };
                 self.daemon_error = None;
-                // 放大态是外壳态,换页签后留着只会挡住新页签的界面(同
-                // `ProjectOpened` 的理由)。
+                // 放大态是外壳态,换页签后留着只会挡住新页签的界面。
                 self.maximized = None;
                 let id = project.id;
                 if focus_project_tab(&self.projects, &mut self.active_project_id, id) {
-                    // 这个项目已经开着页签了:只前台化。**绝不**走
-                    // `ProjectOpened` 那条就地改写路径——那会把这个页签既有的
-                    // 终端全关掉、文件树对话列表全清空重来。
+                    // 这个项目已经开着页签了:只前台化,绝不改写它的内容——
+                    // 那会把这个页签既有的终端全关掉、文件树对话列表全清空重来。
                     self.ensure_loaded(id);
-                    self.with_ws(move |ws, _io| {
+                    self.with_focused_project(move |ws, _io| {
                         ws.recent_projects = recent;
                     });
+                    self.sync_terminal_grid(); // 清放大态后重算网格,理由见 `ProjectSelect`
                     self.persist_open_projects();
                     return;
                 }
@@ -3338,18 +3242,25 @@ impl App {
                     .insert(id, WorkspaceSlot::Loaded(Box::new(ws)));
                 self.project_order.push(id);
                 self.active_project_id = Some(id);
+                self.sync_terminal_grid(); // 同上
                 self.persist_open_projects();
             }
             Message::ProjectTabSwitch(id) => {
                 // 切页签只有两件事:改 `active_project_id`、必要时促成 `Stub`。
                 // 没有任何内容改写,因此后台项目的终端/预览/审阅原样留着,切
-                // 回来还是刚才那副样子。终端网格不用在这里重算:`PaneResized`
-                // 已经对所有已加载项目一起改(见那条分支)。
+                // 回来还是刚才那副样子。
                 if !focus_project_tab(&self.projects, &mut self.active_project_id, id) {
                     return;
                 }
                 self.maximized = None;
                 self.ensure_loaded(id);
+                // 清放大态后必须重算终端网格。`PaneResized` 那条分支只在**窗口
+                // 几何变化**时触发,清 `maximized` 不会自己走到那里;而
+                // `terminal_grid_state` 把 `maximized` 算进公式,不重算的话
+                // "在项目 A 放大终端 → 切到 B"会让 A 的 PTY 停在放大时的
+                // cols/rows(最终审查 Required Fix #2)。重算是幂等的:算出来
+                // 与当前 `cols/rows` 相同时 `PaneResized` 的去重会原地返回。
+                self.sync_terminal_grid();
                 self.persist_open_projects();
             }
             Message::ProjectTabClose(id) => {
@@ -3363,12 +3274,21 @@ impl App {
                     return;
                 };
                 if let WorkspaceSlot::Loaded(mut ws) = slot {
-                    // 关页签 = 结束该项目下所有会话(与切项目清场同一条路径:
-                    // abort 转发任务 + kill daemon 侧会话)。不 kill 的话会话
-                    // 会继续在 daemon 上跑,还会被下次 bootstrap 恢复出来。
+                    // 关页签 = 结束该项目下所有会话(abort 转发任务 + kill
+                    // daemon 侧会话)。不 kill 的话会话会继续在 daemon 上跑,
+                    // 还会被下次 bootstrap 恢复出来。
                     ws.close_all_tabs_for_switch(&io);
                 }
                 self.maximized = None;
+                // 焦点被 `take_project_tab` 挪到了邻居页签上,而那个邻居可能还
+                // 是个懒加载 `Stub`——`view()` 走的是只读的 `active_workspace()`,
+                // 它**不促成** `Stub`,于是界面会画成"未打开任何项目",尽管顶栏
+                // 那个页签明明高亮着。必须在这里显式促成(最终审查 Required
+                // Fix #3)。
+                if let Some(next) = self.active_project_id {
+                    self.ensure_loaded(next);
+                }
+                self.sync_terminal_grid(); // 清放大态后重算网格,理由同 `ProjectTabSwitch`
                 self.persist_open_projects();
             }
             Message::ProjectSlotLoaded(id, payload) => {
@@ -3427,7 +3347,7 @@ impl App {
                     .insert(id, WorkspaceSlot::Loaded(Box::new(ws)));
             }
             Message::ProjectTreeToggle(dir) => {
-                self.with_ws(move |ws, _io| {
+                self.with_focused_project(move |ws, _io| {
                     ws.tree_selected = Some(dir.clone());
                     if let Some(t) = &mut ws.file_tree {
                         t.toggle(&dir);
@@ -3452,7 +3372,7 @@ impl App {
             Message::ProjectTreeContextMenu { path, is_dir } => {
                 let (x, y) = self.last_right_click;
                 let target = path.clone();
-                self.with_ws(move |ws, _io| {
+                self.with_focused_project(move |ws, _io| {
                     ws.tree_selected = Some(path);
                 });
                 self.context_menu = Some(ContextMenu {
@@ -3468,13 +3388,13 @@ impl App {
             Message::ProjectTreeCopyPath(_, _) => {} // 副作用在 main.rs(写系统剪贴板需 Clipboard 句柄)
             Message::ProjectTreeCopy(path, is_dir) => {
                 self.context_menu = None;
-                self.with_ws(move |ws, _io| {
+                self.with_focused_project(move |ws, _io| {
                     ws.tree_clipboard = Some((path, is_dir));
                 });
             }
             Message::ProjectTreePaste(target_dir) => {
                 self.context_menu = None;
-                self.with_ws(move |ws, io| {
+                self.with_focused_project(move |ws, io| {
                     ws.tree_error = None;
                     let Some((source, source_is_dir)) = ws.tree_clipboard.clone() else {
                         return;
@@ -3506,17 +3426,17 @@ impl App {
             }
             Message::ProjectTreeDeleteRequest(path, is_dir) => {
                 self.context_menu = None;
-                self.with_ws(move |ws, _io| {
+                self.with_focused_project(move |ws, _io| {
                     ws.tree_delete_confirm = Some((path, is_dir));
                 });
             }
             Message::ProjectTreeDeleteCancel => {
-                self.with_ws(|ws, _io| {
+                self.with_focused_project(|ws, _io| {
                     ws.tree_delete_confirm = None;
                 });
             }
             Message::ProjectTreeDeleteConfirm => {
-                self.with_ws(|ws, io| {
+                self.with_focused_project(|ws, io| {
                     let Some((path, _)) = ws.tree_delete_confirm.take() else {
                         return;
                     };
@@ -3566,15 +3486,19 @@ impl App {
             }
             Message::ProjectTreeNewFile(parent) => {
                 self.context_menu = None;
-                self.with_ws(move |ws, _io| ws.start_tree_new(parent, TreeEditMode::NewFile));
+                self.with_focused_project(move |ws, _io| {
+                    ws.start_tree_new(parent, TreeEditMode::NewFile)
+                });
             }
             Message::ProjectTreeNewFolder(parent) => {
                 self.context_menu = None;
-                self.with_ws(move |ws, _io| ws.start_tree_new(parent, TreeEditMode::NewFolder));
+                self.with_focused_project(move |ws, _io| {
+                    ws.start_tree_new(parent, TreeEditMode::NewFolder)
+                });
             }
             Message::ProjectTreeRenameStart(path) => {
                 self.context_menu = None;
-                self.with_ws(move |ws, _io| {
+                self.with_focused_project(move |ws, _io| {
                     ws.tree_error = None;
                     let Some(parent) = path.parent().map(|p| p.to_path_buf()) else {
                         return;
@@ -3591,7 +3515,7 @@ impl App {
                 });
             }
             Message::ProjectTreeEditEvent(ev) => {
-                self.with_ws(|ws, io| {
+                self.with_focused_project(|ws, io| {
                     let Some(edit) = &mut ws.tree_edit else {
                         return;
                     };
@@ -3616,17 +3540,30 @@ impl App {
         let top = top_bar(self);
         // 一个项目页签都没有(或当前页签还停在 `Stub` 没促成)时的占位正文。
         let Some(ws) = self.active_workspace() else {
-            let hint = container(
+            // `daemon_error` 必须在这里也画:它平时挂在 `terminal_pane`/
+            // `project_status_bar` 上,而那两处都在"有 `Workspace` 才走到"的
+            // 分支里。偏偏 daemon 连不上时(`App::with_daemon_error`)一个项目
+            // 都恢复不出来,恰恰只会走到这条空态分支——错误文案于是在最需要它
+            // 的时候恰好隐身,用户只看到"点 ＋ 打开一个",点了又静默失败
+            // (`ProjectTabOpened(None, ..)` 只是再写一遍 `daemon_error`)。
+            // 配色沿用 `terminal_pane` 那条同源文案的 RED(最终审查
+            // Required Fix #1)。
+            let mut hint_col = column![
                 text("未打开任何项目——点顶栏的 ＋ 打开一个")
                     .size(14)
-                    .color(theme::DIM),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(|_t: &iced_widget::Theme| container::Style {
-                background: Some(theme::BG.into()),
-                ..container::Style::default()
-            });
+                    .color(theme::DIM)
+            ]
+            .spacing(8);
+            if let Some(err) = &self.daemon_error {
+                hint_col = hint_col.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
+            }
+            let hint = container(hint_col.padding(16))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(|_t: &iced_widget::Theme| container::Style {
+                    background: Some(theme::BG.into()),
+                    ..container::Style::default()
+                });
             return column![top, hint].into();
         };
         // 用 `row!`(经 `Row::push`/`enclose`)构造:只要子元素里有一个声明了
@@ -3925,12 +3862,10 @@ fn acceptance_content<'a>(
 fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let title = text("Dozer").size(15).color(theme::CREAM);
 
-    // 页签行占满标题与右侧之间的全部空间并 `clip`:页签多到装不下时,溢出的
-    // 部分被裁掉,而不是把目标胶囊/设置齿轮顶出窗口(同 `tab_bar` 的裁剪
-    // 思路;左右翻页箭头那套窗口化本 task 不做,见 `project_tabs_row`)。
-    let tabs = container(project_tabs_row(app))
-        .width(Length::Fill)
-        .clip(true);
+    // 页签行占满标题与右侧之间的全部空间。裁剪与翻页在 `project_tabs_row`
+    // 内部做(只裁页签本身,箭头与"＋"钉在裁剪区外),这里**不能**再套一层
+    // `clip`——那会把"＋"和箭头一起裁掉,正是要修的问题。
+    let tabs = container(project_tabs_row(app)).width(Length::Fill);
 
     let mut right = row![].spacing(10);
     if let Some(cap) = app
@@ -3975,40 +3910,89 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
         .into()
 }
 
-/// 顶栏项目页签行:按 `project_order` 逐个渲染,末尾一个"＋"开新项目。
-///
-/// 页签数量溢出顶栏时**不做**索引窗口化(终端/预览 tab 栏那套左右箭头):
-/// 并行项目数量比文件/终端 tab 少一个量级,先用最简单的实现让功能可用。
-/// 真要做窗口化是一个独立的小任务,不在本 task 范围(brief Step 3 明确裁剪)。
-fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let mut tabs = row![]
-        .spacing(4)
-        .align_y(iced_widget::core::Alignment::Center);
-    for id in &app.project_order {
+/// 一个项目页签渲染需要的三样东西:名字、状态点、id。抽出来是为了让宽度
+/// 估算(`tab_window` 要各页签宽)与渲染读同一份数据,不各遍历一次
+/// `project_order` 走岔。
+fn project_tab_entries(app: &App) -> Vec<ProjectTabEntry> {
+    app.project_order
+        .iter()
         // `project_order` 与 `projects` 理论上恒一致;真出现孤儿 id 时跳过
         // 渲染而不是 panic——顺序表是要写盘的,不值得为一条脏数据崩掉 GUI。
-        let Some(slot) = app.projects.get(id) else {
-            continue;
-        };
-        let (name, dot) = match slot {
-            // `Stub` 还没促成,没有会话可言 → 只有名字,不画状态点。
-            WorkspaceSlot::Stub(info) => (info.name.clone(), None),
-            WorkspaceSlot::Loaded(ws) => (
-                ws.project
+        .filter_map(|id| app.projects.get(id).map(|slot| (*id, slot)))
+        .map(|(id, slot)| match slot {
+            // `Stub` 没有会话列表,但启动恢复时按 daemon 的会话快照算过一次
+            // 状态点(见 [`stub_activity`]),用那份"重启时已知"的结果。
+            WorkspaceSlot::Stub { info, activity } => ProjectTabEntry {
+                id,
+                name: info.name.clone(),
+                dot: activity.map(agent_state_dot),
+            },
+            WorkspaceSlot::Loaded(ws) => ProjectTabEntry {
+                id,
+                name: ws
+                    .project
                     .as_ref()
                     .map(|p| p.name.clone())
                     .unwrap_or_else(|| "加载中…".to_string()),
-                project_tab_dot(ws),
-            ),
-        };
+                dot: project_tab_dot(ws),
+            },
+        })
+        .collect()
+}
+
+/// 见 [`project_tab_entries`]。
+struct ProjectTabEntry {
+    id: i64,
+    name: String,
+    /// `(颜色, 是否闪烁)`;`None` = 不画状态点。
+    dot: Option<(Color, bool)>,
+}
+
+/// 顶栏项目页签行:左右翻页箭头 + 裁剪窗口内的页签 + 恒在最右的"＋"。
+///
+/// 溢出处理与终端/预览 tab 栏用**同一套**(`tab_window` 索引窗口化、`clip`、
+/// 左右箭头),不另发明一种交互语言(设计文档 §6)。此前这里只 `clip` 不翻
+/// 页,而设计文档 §2 明确"并行项目数不设硬上限"——两者合在一起就是"开够多
+/// 的项目后,最右边的页签连同"＋"本身永久够不着,没有任何办法翻回去"
+/// (最终审查 Required Fix #6)。"＋"因此必须钉在裁剪区**外面**。
+fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let entries = project_tab_entries(app);
+    let widths: Vec<f32> = entries
+        .iter()
+        .map(|e| project_tab_display_width(&e.name, e.dot.is_some()))
+        .collect();
+    let (first, can_left, can_right) = tab_window(
+        &widths,
+        PROJECT_TAB_GAP,
+        PROJECT_TAB_AVAIL_PX,
+        app.project_tab_first,
+    );
+
+    let mut tabs = row![]
+        .spacing(PROJECT_TAB_GAP)
+        .align_y(iced_widget::core::Alignment::Center);
+    for entry in entries.into_iter().skip(first) {
+        let active = app.active_project_id == Some(entry.id);
         tabs = tabs.push(project_tab_item(
-            *id,
-            name,
-            dot,
-            app.active_project_id == Some(*id),
+            entry.id,
+            entry.name,
+            entry.dot,
+            active,
             app.blink_on,
         ));
     }
+    let clipped = container(tabs).width(Length::Fill).clip(true);
+
+    let left_arrow = tab_arrow_button(
+        icons::IconKind::ChevronLeft,
+        can_left,
+        Message::ProjectTabScroll(false),
+    );
+    let right_arrow = tab_arrow_button(
+        icons::IconKind::ChevronRight,
+        can_right,
+        Message::ProjectTabScroll(true),
+    );
 
     let add = button(text("＋").size(14).color(theme::CREAM))
         .on_press(Message::ProjectTabPickFolder)
@@ -4019,7 +4003,29 @@ fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_
             ..button::Style::default()
         });
 
-    tabs.push(add).into()
+    row![left_arrow, right_arrow, clipped, add]
+        .spacing(PROJECT_TAB_GAP)
+        .align_y(iced_widget::core::Alignment::Center)
+        .into()
+}
+
+/// 项目页签之间的间距;`tab_window` 的宽度估算与实际渲染必须用同一个值,
+/// 否则翻页边界会与眼睛看到的差一个页签。
+const PROJECT_TAB_GAP: f32 = 4.0;
+
+/// 顶栏留给项目页签(裁剪窗口内)的估算可视宽,逻辑像素。与
+/// `TAB_BAR_AVAIL_PX` 同性质的粗估常量:顶栏中段实际宽度随窗口宽/目标胶囊
+/// 长短浮动,iced 立即模式在构造阶段拿不到真实分配宽,估偏只会让翻页边界差
+/// 一个页签(与终端 tab 栏同一套取舍)。
+const PROJECT_TAB_AVAIL_PX: f32 = 420.0;
+
+/// 项目页签估算显示宽:结构同 `tab_display_width`,但状态点是可选的
+/// (`Stub` 无存活会话时不画),所以按有无分开算。
+fn project_tab_display_width(name: &str, has_dot: bool) -> f32 {
+    // 状态点●+spacing ≈ 18(可选), 名称 ≈ units * 半宽 8.0(13px 近似),
+    // 关闭× ≈ 18, pill padding ≈ 12
+    let dot = if has_dot { 18.0 } else { 0.0 };
+    dot + text_width_units(name) * 8.0 + 18.0 + 12.0
 }
 
 /// 单个项目页签:状态点(可选)+ 项目名的切换按钮 + 关闭按钮。结构与终端
@@ -4101,24 +4107,53 @@ fn project_tab_dot(ws: &Workspace) -> Option<(Color, bool)> {
 
 /// 上面那个的纯逻辑内核(可单测:构造 `Workspace` 需要 daemon + EventLoop,
 /// headless 测试里造不出来,与本文件既有约定一致)。
-///
-/// 优先级(设计文档 §6):TurnEnded(金,该甲方出手了)> AwaitingInput(紫,
-/// agent 在等人)> Running(绿,闪)> Idle(绿,常亮)> 无存活会话(不画点)。
-/// 颜色不另造一套表,直接问既有 `dot_color`——页签点与 tab 点讲的是同一种
-/// 语言,两份颜色表迟早会漂。
 fn project_dot(alive_states: &[AgentState]) -> Option<(Color, bool)> {
-    let winner = [
+    winning_agent_state(alive_states).map(agent_state_dot)
+}
+
+/// 一组存活会话状态里"最值得关注"的那个(设计文档 §6 的优先级):
+/// TurnEnded(该甲方出手了)> AwaitingInput(agent 在等人)> Running(还在跑)
+/// > Idle > 无存活会话(`None`,不画点)。
+///
+/// 与 [`agent_state_dot`] 分家是为了让 `Stub` 页签也能用:启动恢复时那些还没
+/// 促成的页签手上只有 daemon 的 `SessionInfo` 列表,没有 `Workspace`,但"哪个
+/// 状态优先"这条规则必须与 `Loaded` 页签**完全一致**,不能各写一份
+/// (最终审查 Required Fix #5)。
+fn winning_agent_state(alive_states: &[AgentState]) -> Option<AgentState> {
+    [
         AgentState::TurnEnded,
         AgentState::AwaitingInput,
         AgentState::Running,
         AgentState::Idle,
     ]
     .into_iter()
-    .find(|candidate| alive_states.contains(candidate))?;
-    Some((
-        dot_color(winner, true),
-        winner == AgentState::Running, // 只有"在跑"才闪
-    ))
+    .find(|candidate| alive_states.contains(candidate))
+}
+
+/// 胜出状态 → `(颜色, 是否闪烁)`。颜色不另造一套表,直接问既有 `dot_color`
+/// ——页签点与 tab 点讲的是同一种语言,两份颜色表迟早会漂。
+fn agent_state_dot(state: AgentState) -> (Color, bool) {
+    (
+        dot_color(state, true),
+        state == AgentState::Running, // 只有"在跑"才闪
+    )
+}
+
+/// 启动恢复时给每个 `Stub` 页签算后台活动状态:从 daemon 一次性吐出的全量
+/// 会话列表里,挑出属于该项目的**存活**会话,套用与 `Loaded` 页签相同的优先级。
+///
+/// 为什么非要有这一步:重启后除了上次聚焦的那一个,**所有**页签都是 `Stub`,
+/// 而 `Stub` 手上没有会话列表 → 指示点恒为空。也就是说"切走了还想知道另一个
+/// 项目有没有在动"这个整套功能存在的核心理由(设计文档 §6),在最常见的
+/// "刚打开 app"场景下完全不工作。这里只额外花一次 `list()` 往返、不促成任何
+/// `Workspace`,懒加载照旧(最终审查 Required Fix #5)。
+fn stub_activity(sessions: &[SessionInfo], project_id: i64) -> Option<AgentState> {
+    let alive: Vec<AgentState> = sessions
+        .iter()
+        .filter(|s| s.alive && s.project_id == Some(project_id))
+        .map(|s| s.agent_state)
+        .collect();
+    winning_agent_state(&alive)
 }
 
 /// 对话列表面板(右面板区"对话"视图的列表侧):当前项目的对话记录卡片,
@@ -4582,8 +4617,13 @@ fn project_pane<'a>(
     let region = chrome_style::project_pane();
     let mut content = column![].spacing(region.gap);
 
+    // 与顶栏"＋"完全同一条入口:选中的文件夹一律作为**新页签**打开。
+    // 此前这里走的是 `ProjectPickFolder`→`ProjectOpen`→`ProjectOpened` 的
+    // 就地改写路径,而这颗按钮在**已经打开着项目**时也照画不误——点它挑一个
+    // 新文件夹,会把当前聚焦项目的终端会话连同正在跑的 agent 一起 kill 掉。
+    // 设计文档 §2 只允许"显式关闭页签"才结束会话,这条路径已整体删除。
     let open_btn = button(text("打开项目…").size(13).color(theme::CREAM))
-        .on_press(Message::ProjectPickFolder)
+        .on_press(Message::ProjectTabPickFolder)
         .style(|_t, _s| button::Style {
             background: Some(theme::CARD.into()),
             text_color: theme::CREAM,
@@ -5848,107 +5888,25 @@ mod tests {
         }
     }
 
-    fn stub_slot(id: i64) -> WorkspaceSlot {
-        WorkspaceSlot::Stub(ProjectInfo {
+    fn project_info(id: i64) -> ProjectInfo {
+        ProjectInfo {
             id,
             path: format!("/tmp/p{id}"),
             name: format!("p{id}"),
             last_active_ms: 0,
-        })
+        }
     }
 
-    /// 冷启动:daemon 上一个项目都没有,打开第一个项目要凭空落一个槽位,
-    /// 否则 `with_ws` 拿不到 active workspace,"打开项目"点了没反应。
-    #[test]
-    fn retarget_creates_first_slot_when_projects_empty() {
-        let mut projects = HashMap::new();
-        let mut order = Vec::new();
-        let mut active = None;
-        retarget_active_slot(&mut projects, &mut order, &mut active, 7);
-        assert_eq!(order, vec![7]);
-        assert_eq!(active, Some(7));
-        assert!(projects.contains_key(&7));
-    }
-
-    /// 就地换项目:槽位连 key 一起搬到新 id,`project_order` 原位替换(页签
-    /// 顺序不能因为换个项目就重排),`active_project_id` 跟上。三者和
-    /// `Workspace.project.id` 保持一致是 Task 6 页签栏 / Task 7 持久化的前提。
-    #[test]
-    fn retarget_rekeys_loaded_slot_and_keeps_order_position() {
-        let mut projects = HashMap::new();
-        projects.insert(1, loaded_slot("A"));
-        projects.insert(9, stub_slot(9));
-        let mut order = vec![9, 1];
-        let mut active = Some(1);
-
-        retarget_active_slot(&mut projects, &mut order, &mut active, 2);
-
-        assert!(!projects.contains_key(&1), "旧 key 必须摘掉,不能留错位条目");
-        // 搬过去的是同一个槽位,不是新造的空槽位。
-        assert_eq!(slot_marker(projects.get(&2)).as_deref(), Some("A"));
-        assert_eq!(order, vec![9, 2], "原位替换,不是删掉再 push 到队尾");
-        assert_eq!(active, Some(2));
-        assert!(projects.contains_key(&9), "别人的槽位不受影响");
-    }
-
-    /// 目标项目已经有自己的槽位时只切 `active_project_id`,一个字节都不搬
-    /// ——就地改写会把那个页签的内容整个覆盖掉。
-    #[test]
-    fn retarget_switches_to_existing_slot_without_clobbering_it() {
-        let mut projects = HashMap::new();
-        projects.insert(1, loaded_slot("A"));
-        projects.insert(2, loaded_slot("B"));
-        let mut order = vec![1, 2];
-        let mut active = Some(1);
-
-        retarget_active_slot(&mut projects, &mut order, &mut active, 2);
-
-        assert_eq!(slot_marker(projects.get(&1)).as_deref(), Some("A"));
-        assert_eq!(slot_marker(projects.get(&2)).as_deref(), Some("B"));
-        assert_eq!(order, vec![1, 2]);
-        assert_eq!(active, Some(2));
-    }
-
-    /// 当前页签是还没促成的 `Stub` 时不许就地改写(那等于把这个页签偷偷换成
-    /// 别的项目):给新项目单开一个槽位,`Stub` 原样留在自己的 key 上。
-    #[test]
-    fn retarget_keeps_unpromoted_stub_and_opens_beside_it() {
-        let mut projects = HashMap::new();
-        projects.insert(1, stub_slot(1));
-        let mut order = vec![1];
-        let mut active = Some(1);
-
-        retarget_active_slot(&mut projects, &mut order, &mut active, 2);
-
-        assert!(
-            matches!(projects.get(&1), Some(WorkspaceSlot::Stub(_))),
-            "Stub 页签不该被顶掉"
-        );
-        assert!(projects.contains_key(&2));
-        assert_eq!(order, vec![1, 2]);
-        assert_eq!(active, Some(2));
-    }
-
-    /// 重复打开当前项目(常见:用户点了两下同一张最近项目卡片)不该动槽位表。
-    #[test]
-    fn retarget_is_noop_when_already_aligned() {
-        let mut projects = HashMap::new();
-        projects.insert(1, loaded_slot("A"));
-        let mut order = vec![1];
-        let mut active = Some(1);
-
-        retarget_active_slot(&mut projects, &mut order, &mut active, 1);
-
-        assert_eq!(slot_marker(projects.get(&1)).as_deref(), Some("A"));
-        assert_eq!(order, vec![1]);
-        assert_eq!(active, Some(1));
-        assert_eq!(projects.len(), 1);
+    fn stub_slot(id: i64) -> WorkspaceSlot {
+        WorkspaceSlot::Stub {
+            info: project_info(id),
+            activity: None,
+        }
     }
 
     /// 切页签的核心不变式:只改"当前是哪个页签",两个槽位的内容一个字节都
-    /// 不动。这条与 `retarget_active_slot` 的就地改写语义是**两条不同的路**
-    /// ——切页签若借那条路走,`App::with_ws` 随后会把落到前台的页签内容整个
-    /// 重写(关光终端、清空文件树/对话),用户点一下别的页签就丢了工作现场。
+    /// 不动。设计文档 §2 的"切换永不销毁状态,只有关闭才销毁"整条就落在这
+    /// 一个函数上——它若开始改写槽位内容,用户点一下别的页签就丢了工作现场。
     #[test]
     fn focus_project_tab_never_touches_slot_contents() {
         let mut projects = HashMap::new();
