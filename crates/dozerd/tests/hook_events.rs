@@ -77,7 +77,7 @@ async fn hook_event_reaches_attached_client_and_list() {
         &sock,
         &Request::HookEvent {
             session_id: created.id.clone(),
-            agent: dozer_core::protocol::AgentKind::Claude,
+            agent: dozer_core::protocol::AgentKind::Codebuddy,
             event: "Stop".into(),
             ts_ms: 7,
             data: serde_json::Value::Null,
@@ -96,7 +96,8 @@ async fn hook_event_reaches_attached_client_and_list() {
             .expect("AgentEvent within 5s")
             .expect("io ok")
             .expect("stream open");
-        if let Ok(Reply::AgentEvent { state, event, .. }) = decode_line::<Reply>(&line) {
+        if let Ok(Reply::AgentEvent { agent, state, event, .. }) = decode_line::<Reply>(&line) {
+            assert_eq!(agent, dozer_core::protocol::AgentKind::Codebuddy);
             assert_eq!(state, AgentState::TurnEnded);
             assert_eq!(event, "Stop");
             break;
@@ -105,7 +106,8 @@ async fn hook_event_reaches_attached_client_and_list() {
 
     match send_req(&sock, &Request::ListSessions).await {
         Reply::Sessions { sessions } => {
-            assert_eq!(sessions[0].agent_state, AgentState::TurnEnded)
+            assert_eq!(sessions[0].agent_state, AgentState::TurnEnded);
+            assert_eq!(sessions[0].agent, dozer_core::protocol::AgentKind::Codebuddy);
         }
         other => panic!("{other:?}"),
     }

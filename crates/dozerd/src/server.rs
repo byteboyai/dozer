@@ -126,12 +126,13 @@ async fn handle_conn(
                             Ok(()) => Reply::Ok,
                             Err(e) => Reply::Error { message: e.to_string() },
                         },
-                        Request::HookEvent { session_id, event, ts_ms, data, agent: _ } => {
+                        Request::HookEvent { session_id, agent, event, ts_ms, data } => {
                             match registry.get(&session_id) {
                                 None => {
                                     tracing::debug!(%session_id, %event, "hook 事件的会话不存在，丢弃");
                                 }
                                 Some(s) => {
+                                    s.set_agent(agent);
                                     if let Some(tp) =
                                         data.get("transcript_path").and_then(|v| v.as_str())
                                     {
