@@ -165,6 +165,8 @@ pub enum Reply {
     /// hook 事件引起的状态变更，随 attach 流广播给该会话的订阅者。
     AgentEvent {
         session_id: String,
+        /// 该事件所属 agent；旧协议帧无此字段时回落 Unknown。
+        #[serde(default)]
         agent: AgentKind,
         state: AgentState,
         event: String,
@@ -458,5 +460,14 @@ mod tests {
             r#"{"id":"a","name":"n","command":"/bin/sh","cwd":"/tmp","alive":true,"created_ms":1}"#;
         let info: SessionInfo = decode_line(old).unwrap();
         assert_eq!(info.agent, AgentKind::Unknown);
+    }
+
+    #[test]
+    fn old_agent_event_without_agent_decodes_unknown() {
+        let old = r#"{"type":"agent_event","session_id":"s","state":"running","event":"test","ts_ms":1}"#;
+        match decode_line::<Reply>(old).unwrap() {
+            Reply::AgentEvent { agent, .. } => assert_eq!(agent, AgentKind::Unknown),
+            other => panic!("{other:?}"),
+        }
     }
 }
