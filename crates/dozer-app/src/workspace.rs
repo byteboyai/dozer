@@ -1497,11 +1497,10 @@ impl Workspace {
         let cwd = PathBuf::from(&p.path);
         let proxy = io.proxy.clone();
         io.handle.spawn(async move {
-            let dir = conversation::claude_project_dir(&cwd);
-            let list = tokio::task::spawn_blocking(move || conversation::list_conversations(&dir))
+            let list = tokio::task::spawn_blocking(move || conversation::list_all_conversations(&cwd))
                 .await
                 .unwrap_or_default();
-            tracing::debug!(cwd = %cwd.display(), n = list.len(), "对话列表扫描完成");
+            tracing::debug!(n = list.len(), "对话列表扫描完成");
             let _ = proxy.send_event(Message::ConversationsRefreshed(project_id, list));
         });
     }
@@ -4211,10 +4210,10 @@ fn conversation_list_pane(
         let sub = if current {
             format!(
                 "● 当前 · {}",
-                conversation_sub(&c.agent, c.modified_ms, c.size_bytes, now_ms)
+                conversation_sub(c.agent.label(), c.modified_ms, c.size_bytes, now_ms)
             )
         } else {
-            conversation_sub(&c.agent, c.modified_ms, c.size_bytes, now_ms)
+            conversation_sub(c.agent.label(), c.modified_ms, c.size_bytes, now_ms)
         };
         let sub_color = if current { theme::GREEN } else { theme::DIM };
         let card = button(

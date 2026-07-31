@@ -1,7 +1,8 @@
-//! ClaudeCode 对话来源（P1j）：扫描 `~/.claude/projects/<cwd换->` 列出该项目
-//! 的历史对话(JSONL),取首句人类发言当标题。纯 IO + 纯解析;dozerd 不参与。
-//! `agent` 字段为多 agent 留维度(现恒 "claude");核心列表只吃 ConversationMeta。
+//! 多 agent 对话来源（P1j 起步，P2b 扩展到 CodeBuddy/OpenCode）：扫描每个
+//! agent 各自的落盘目录，列出该项目的历史对话（JSONL），取首句人类发言
+//! 当标题。纯 IO + 纯解析；dozerd 不参与。
 
+use dozer_core::protocol::AgentKind;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -11,17 +12,37 @@ pub struct ConversationMeta {
     pub title: String,
     pub modified_ms: u64,
     pub size_bytes: u64,
-    pub agent: String,
+    pub agent: AgentKind,
+}
+
+fn project_key(cwd: &Path) -> String {
+    cwd.to_string_lossy().replace('/', "-")
+}
+
+fn home_dir() -> PathBuf {
+    PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()))
 }
 
 /// cwd → Claude 存储目录：`~/.claude/projects/<cwd 中 '/' 换 '-'>`。
 pub fn claude_project_dir(cwd: &Path) -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
-    let key = cwd.to_string_lossy().replace('/', "-");
-    PathBuf::from(home)
-        .join(".claude")
+    home_dir().join(".claude").join("projects").join(project_key(cwd))
+}
+
+/// cwd → CodeBuddy 存储目录：`~/.codebuddy/projects/<cwd 中 '/' 换 '-'>`
+/// （spec §1：与 Claude 的目录结构平行）。
+pub fn codebuddy_project_dir(cwd: &Path) -> PathBuf {
+    home_dir().join(".codebuddy").join("projects").join(project_key(cwd))
+}
+
+/// cwd → dozer 自己为 OpenCode 代写的 transcript 目录（OpenCode 本身没有
+/// JSONL 落盘，dozer-hook 按 Claude 格式代写；spec §5.3）。
+pub fn opencode_project_dir(cwd: &Path) -> PathBuf {
+    home_dir()
+        .join(".dozer")
+        .join("agents")
+        .join("opencode")
         .join("projects")
-        .join(key)
+        .join(project_key(cwd))
 }
 
 /// transcript 首段 → 首句人类发言(首个字符串型 user content)。纯函数。
@@ -49,8 +70,9 @@ pub fn is_current_conversation(meta_path: &Path, open_transcripts: &[String]) ->
 }
 
 /// 列出目录下所有 .jsonl 为对话(mtime 倒序)。读失败/非目录返回空。
-/// 标题只读文件前若干字节以省 IO。
-pub fn list_conversations(dir: &Path) -> Vec<ConversationMeta> {
+/// 标题只读文件前若干字节以省 IO。`agent` 用于给每条记录打标签，不影响
+/// 扫描逻辑本身。
+pub fn list_conversations(agent: AgentKind, dir: &Path) -> Vec<ConversationMeta> {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -80,10 +102,27 @@ pub fn list_conversations(dir: &Path) -> Vec<ConversationMeta> {
                 title,
                 modified_ms,
                 size_bytes,
-                agent: "claude".into(),
+                agent,
             })
         })
         .collect();
+    out.sort_by_key(|m| std::cmp::Reverse(m.modified_ms));
+    out
+}
+
+/// 合并 Claude/CodeBuddy/OpenCode 三个目录下同一个 cwd 的历史对话，按
+/// mtime 统一倒序（spec §7：历史侧栏展示"这个项目下所有对话"，不管当年
+/// 用哪个 agent 跑的）。
+pub fn list_all_conversations(cwd: &Path) -> Vec<ConversationMeta> {
+    let mut out = list_conversations(AgentKind::Claude, &claude_project_dir(cwd));
+    out.extend(list_conversations(
+        AgentKind::Codebuddy,
+        &codebuddy_project_dir(cwd),
+    ));
+    out.extend(list_conversations(
+        AgentKind::Opencode,
+        &opencode_project_dir(cwd),
+    ));
     out.sort_by_key(|m| std::cmp::Reverse(m.modified_ms));
     out
 }
@@ -102,12 +141,6 @@ fn read_head(path: &Path, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn project_dir_maps_slashes_to_dashes() {
-        let d = claude_project_dir(std::path::Path::new("/a/b/c"));
-        assert!(d.to_string_lossy().ends_with("/.claude/projects/-a-b-c"));
-    }
 
     #[test]
     fn title_from_first_string_user_turn() {
@@ -129,6 +162,27 @@ mod tests {
     }
 
     #[test]
+    fn project_dir_maps_slashes_to_dashes() {
+        let d = claude_project_dir(std::path::Path::new("/a/b/c"));
+        assert!(d.to_string_lossy().ends_with("/.claude/projects/-a-b-c"));
+    }
+
+    #[test]
+    fn codebuddy_dir_uses_codebuddy_root() {
+        let d = codebuddy_project_dir(std::path::Path::new("/a/b/c"));
+        assert!(d.to_string_lossy().ends_with("/.codebuddy/projects/-a-b-c"));
+    }
+
+    #[test]
+    fn opencode_dir_lives_under_dozer_data_dir() {
+        let d = opencode_project_dir(std::path::Path::new("/a/b/c"));
+        assert!(
+            d.to_string_lossy()
+                .ends_with("/.dozer/agents/opencode/projects/-a-b-c")
+        );
+    }
+
+    #[test]
     fn list_sorts_by_mtime_desc_and_titles() {
         let dir = tempfile::tempdir().unwrap();
         let p1 = dir.path().join("one.jsonl");
@@ -144,11 +198,62 @@ mod tests {
             "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"第二个\"}}\n",
         )
         .unwrap();
-        let list = list_conversations(dir.path());
+        let list = list_conversations(AgentKind::Claude, dir.path());
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].title, "第二个", "mtime 倒序:后写的在前");
-        assert_eq!(list[0].agent, "claude");
+        assert_eq!(list[0].agent, AgentKind::Claude);
         assert!(list[0].size_bytes > 0);
-        assert!(list_conversations(std::path::Path::new("/no/such/dir")).is_empty());
+        assert!(
+            list_conversations(AgentKind::Claude, std::path::Path::new("/no/such/dir")).is_empty()
+        );
+    }
+
+    #[test]
+    fn list_conversations_tags_requested_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("a.jsonl"),
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n",
+        )
+        .unwrap();
+        let list = list_conversations(AgentKind::Codebuddy, dir.path());
+        assert_eq!(list[0].agent, AgentKind::Codebuddy);
+    }
+
+    #[test]
+    fn list_all_conversations_merges_three_dirs_sorted_by_mtime() {
+        let home = tempfile::tempdir().unwrap();
+        // SAFETY: 测试串行执行，临时改 HOME 后立即恢复；claude/codebuddy/opencode
+        // 三个目录解析函数都读 HOME 环境变量。
+        let prev_home = std::env::var("HOME").ok();
+        unsafe { std::env::set_var("HOME", home.path()) };
+
+        let cwd = std::path::Path::new("/proj");
+        let claude_dir = claude_project_dir(cwd);
+        let codebuddy_dir = codebuddy_project_dir(cwd);
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::create_dir_all(&codebuddy_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("a.jsonl"),
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"claude 对话\"}}\n",
+        )
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(
+            codebuddy_dir.join("b.jsonl"),
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"codebuddy 对话\"}}\n",
+        )
+        .unwrap();
+
+        let list = list_all_conversations(cwd);
+
+        match prev_home {
+            Some(h) => unsafe { std::env::set_var("HOME", h) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].agent, AgentKind::Codebuddy, "后写入的在前");
+        assert_eq!(list[1].agent, AgentKind::Claude);
     }
 }
