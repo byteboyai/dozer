@@ -195,6 +195,20 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             /// "地球图标"浏览器视图——两个池各自独立增删,tab id 空间即使
             /// 撞了也不会互相覆盖(不同 HashMap)。
             browser_webviews: std::collections::HashMap<usize, (wry::WebView, String)>,
+            /// 上一次同步 webview 池时聚焦的项目 id。两个池都是**窗口级**的,
+            /// key 是 `PreviewPane` 的 tab id,而那个 id 在每个项目的
+            /// `Workspace` 里都从 0 独立起编——项目 A 的预览 tab 0 和项目 B 的
+            /// 预览 tab 0 会撞成同一个 key。撞上时 `sync_webview_pool` 会认为
+            /// "这个 id 已经有 webview 了",只对**旧** webview 调 `load_url`;
+            /// 而旧 webview 的 `dozer://` 协议闭包捕获的是**项目 A** 的
+            /// `allowed_files` 白名单,于是项目 B 的文件请求被那份白名单挡下,
+            /// 预览一片空白(切回 A 又正常,表现成"切到 B 就坏了")。
+            ///
+            /// 所以聚焦项目一变就整池清空,强制每个 webview 重新创建、重新
+            /// 捕获当前项目的白名单。这不损失缓存:`sync_webview_pool` 的
+            /// `retain` 本来就只保留"当前项目期望清单里的 id",切走的项目的
+            /// webview 无论如何都会被销毁。
+            webview_project: Option<i64>,
             /// 最近一次光标物理位置(CursorMoved 更新),鼠标点击时用于命中测试。
             cursor_phys: winit::dpi::PhysicalPosition<f64>,
             /// 待应用的焦点意图(点击/消息设置,sync_previews 之后统一 apply,
@@ -516,11 +530,20 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 app,
                 webviews,
                 browser_webviews,
+                webview_project,
                 ..
             } = self
             else {
                 return;
             };
+
+            // 换了聚焦项目 → 整池清空,理由见 `webview_project` 字段文档
+            // (跨项目 tab id 撞 key 会复用捕获了别的项目白名单的 webview)。
+            if *webview_project != app.active_project_id() {
+                webviews.clear();
+                browser_webviews.clear();
+                *webview_project = app.active_project_id();
+            }
 
             let size = window.inner_size();
             let scale = window.scale_factor();
@@ -821,6 +844,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     resized: false,
                     webviews: std::collections::HashMap::new(),
                     browser_webviews: std::collections::HashMap::new(),
+                    // 池是空的,记 `None` 让第一次 sync_previews 自然对齐到
+                    // 当前项目(清空空池是 no-op)。
+                    webview_project: None,
                     cursor_phys: winit::dpi::PhysicalPosition::new(0.0, 0.0),
                     pending_focus: None,
                 };

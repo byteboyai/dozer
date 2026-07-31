@@ -93,6 +93,108 @@ pub enum WorkspaceSlot {
     Loaded(Box<Workspace>),
 }
 
+/// `Stub` → `Loaded` 促成的中间产物:一个项目的完整恢复素材,且**可以跨线程
+/// 搬运**。
+///
+/// 为什么需要这一层、而不是让异步任务直接产出 `Workspace`:`Workspace` 不是
+/// `Send`(`TerminalModel` 内部用 `Rc<RefCell<..>>` 收 PTY 应答),所以它既不能
+/// 在 `handle.spawn` 的任务里被构造出来带回,也不能塞进 `Message`——`Message`
+/// 一旦不 `Send`,`EventLoopProxy<Message>` 跟着不 `Send`,全文件所有
+/// `handle.spawn(async { .. proxy.send_event(..) })` 会一起编译不过。
+///
+/// 于是促成拆成两段:**IO 段**(本结构体,`Client` 往返,可以在 tokio 线程池
+/// 上跑)与**装配段**(`Workspace::from_restore`,建终端模型/派生转发任务,
+/// 只能在 UI 线程跑)。本结构体的每个字段都是 `Send` 的纯数据/通道端点。
+pub struct ProjectRestore {
+    project: ProjectInfo,
+    /// 最近项目列表(顺带取回,省一次往返)。
+    recent_projects: Vec<ProjectInfo>,
+    /// 已 attach 上的存活会话:(会话信息, 起始快照, 事件流)。
+    #[allow(clippy::type_complexity)]
+    sessions: Vec<(
+        SessionInfo,
+        Vec<u8>,
+        tokio::sync::mpsc::UnboundedReceiver<TermEvent>,
+    )>,
+}
+
+/// `Message::ProjectSlotLoaded` 的载荷:一份**一次性**的 [`ProjectRestore`]
+/// 信封。
+///
+/// `Message` 必须 `Clone + Debug`(iced 的控件回调按值要一份消息),而
+/// `ProjectRestore` 里的 `UnboundedReceiver` 复制不了——通道的接收端只能有
+/// 一个。所以用 `Arc<Mutex<Option<..>>>` 包一层:`Clone` 只复制句柄,真正的
+/// 素材由第一个 [`RestorePayload::take`] 的人拿走,之后再取得到 `None`(消息
+/// 在 winit 事件环里只会被处理一次,不会真的出现第二个取用者)。
+pub struct RestorePayload(Arc<Mutex<Option<Box<ProjectRestore>>>>);
+
+impl RestorePayload {
+    fn new(restore: ProjectRestore) -> Self {
+        Self(Arc::new(Mutex::new(Some(Box::new(restore)))))
+    }
+
+    /// 取走信封里的素材;已被取走(或锁中毒)时返回 `None`,调用方当作
+    /// "这次促成结果没人要了"处理即可。
+    fn take(&self) -> Option<Box<ProjectRestore>> {
+        self.0.lock().ok().and_then(|mut slot| slot.take())
+    }
+}
+
+impl Clone for RestorePayload {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl std::fmt::Debug for RestorePayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RestorePayload(..)")
+    }
+}
+
+/// 促成的 **IO 段**:把一个项目在 daemon 上的存活会话逐一 attach 下来,连同
+/// 最近项目列表打包成 [`ProjectRestore`]。整段只碰 `Client`,不碰任何 GUI
+/// 类型,所以可以在 tokio 线程池上跑(`App::ensure_loaded` 正是这么用的)。
+async fn fetch_project_restore(client: &Client, project: ProjectInfo) -> ProjectRestore {
+    let mut sessions = Vec::new();
+    match client.list().await {
+        Ok(list) => {
+            // 只认归属本项目的会话:daemon 现在按 `project_id` 给会话分家
+            // (P2a Task 1-3),并行打开的别的项目的终端不该跑到这一份
+            // `Workspace` 的 tab 栏里来。
+            //
+            // 迁移期孤儿会话——Task 1-3 落地**之前**建的、`project_id`
+            // 为 `None` 的存活会话——会被这条 filter 一并排除,从此不出现
+            // 在任何项目的 tab 栏里,直到 dozerd 重启把它们清掉为止(在此
+            // 期间它们仍占着 PTY)。这是**有意为之**,不是漏判:规格把
+            // "迁移期孤儿会话怎么处理"显式挂起、留给实现计划阶段决定,
+            // 本期不做孤儿会话的找回入口。日后有人发现"重启 daemon 前
+            // 有几个会话凭空消失了",答案就在这一行。
+            for info in list
+                .into_iter()
+                .filter(|s| s.alive && s.project_id == Some(project.id))
+            {
+                match client.attach(&info.id, 0).await {
+                    Ok((snapshot, _next_offset, rx)) => sessions.push((info, snapshot, rx)),
+                    Err(e) => {
+                        tracing::warn!(session = %info.id, "attach 失败，跳过该会话恢复: {e}")
+                    }
+                }
+            }
+        }
+        Err(e) => tracing::warn!("list 失败，跳过启动恢复: {e}"),
+    }
+    // 最近项目列表（git 分支/脏在窗口起来后异步补）。"当前项目"不再
+    // 向 daemon 打听——daemon 侧的"活跃项目"概念已随 P2a Task 1-3 删除
+    // （多项目并行下没有唯一活跃项目），改由调用方(`App`)指定。
+    let recent_projects = client.list_projects().await.unwrap_or_default();
+    ProjectRestore {
+        project,
+        recent_projects,
+        sessions,
+    }
+}
+
 /// 图标栏+左右面板区的宽度/分割状态。取代 `PanelLayout`——不再有"项目栏/AI栏
 /// 固定宽+预览终端共享比例"这套四栏几何，改成"左面板区总宽(可拖) + 三个
 /// 配对视图各自独立记住的内部列表:内容分割比例"。右面板区总宽不持久化，
@@ -739,6 +841,10 @@ pub enum Message {
     ProjectTabSwitch(i64),
     /// 项目页签:点页签的 × → 关闭该页签,并结束该项目下所有会话。
     ProjectTabClose(i64),
+    /// 项目页签:`App::ensure_loaded` 的异步促成完成——素材已取回,由
+    /// `update` 在 UI 线程上装配成 `Workspace`,替换掉那份"加载中"占位
+    /// (载荷是一次性信封,见 [`RestorePayload`])。
+    ProjectSlotLoaded(i64, RestorePayload),
     /// 项目:文件树展开/收起某目录。
     ProjectTreeToggle(PathBuf),
     /// 项目:git 分支/脏/文件状态刷新结果。
@@ -1022,6 +1128,13 @@ pub struct Workspace {
     tree_delete_confirm: Option<(PathBuf, bool)>,
     /// 项目树行内编辑态(新建/重命名共用;None=未在编辑)。
     tree_edit: Option<TreeEdit>,
+    /// 这份 `Workspace` 是否只是 `Stub` → `Loaded` 促成期间的"加载中"占位
+    /// (见 [`Workspace::loading_for_project`])。占位有正确的 `project`/文件树,
+    /// 但会话/git/对话都还没拉,并且整份对象会在
+    /// `Message::ProjectSlotLoaded` 到达时被真正的结果替换掉——所以此刻
+    /// **不该**替用户在它上面新建终端会话(建出来的会话会随占位一起被丢弃,
+    /// 却仍在 daemon 上活着),`spawn_new_tab` 据此原地放弃。
+    loading: bool,
 }
 
 /// `ProjectOpened` 落地前,把槽位表重新对准新项目 id。
@@ -1144,73 +1257,104 @@ fn take_project_tab(
     Some(slot)
 }
 
+/// 启动恢复的纯逻辑:把盘上记的"上次开着哪些页签"(`open_projects.json`)与
+/// daemon 现在还认识的项目列表对一遍,给出该恢复成页签的项目顺序表 + 该聚焦
+/// 哪一个。
+///
+/// 规则(设计文档 §5):
+/// - daemon 已经不认识的 id 直接跳过——项目可能在上次退出后被删了,给它开个
+///   点不动的空页签只会碍事;
+/// - 盘上出现重复 id(理论上不该有,但文件是用户可编辑的普通 JSON)去重,
+///   否则 `project_order` 会带出两个指向同一个槽位的页签;
+/// - 一个都没恢复出来(首次启动/文件缺失/项目全被删)回落到 `known` 的第一个
+///   ——`list_projects()` 按 `last_active_ms` 倒序,第一个就是最近用过的那个,
+///   保持"打开 app 就能干活"的既有行为;
+/// - 聚焦项:记着的那个若已不在恢复出的页签集合里,回落到第一个页签。
+///
+/// 抽成自由函数是为了能 headless 单测(`App` 要有 daemon 连接 + winit
+/// `EventLoopProxy` 才构造得出来),与本文件其余纯逻辑的处理一致。
+fn restore_open_tabs(
+    known: &[ProjectInfo],
+    state: &open_projects::OpenProjectsState,
+) -> (Vec<i64>, Option<i64>) {
+    let mut order: Vec<i64> = Vec::new();
+    for id in &state.project_ids {
+        if !known.iter().any(|p| p.id == *id) {
+            continue;
+        }
+        if order.contains(id) {
+            continue;
+        }
+        order.push(*id);
+    }
+    if order.is_empty()
+        && let Some(p) = known.first()
+    {
+        order.push(p.id);
+    }
+    let active = state
+        .active_project_id
+        .filter(|id| order.contains(id))
+        .or_else(|| order.first().copied());
+    (order, active)
+}
+
 impl Workspace {
-    /// 启动恢复：把 daemon 上现存的存活会话逐一 `attach`，快照直接喂给
-    /// 新建的 `TerminalModel`（GUI 级会话恢复）。这是本函数里唯一的
-    /// `.await` 链——调用方用 `runtime.block_on` 驱动，此时窗口还没
-    /// 创建，不占用任何"正在跑的" UI 线程；恢复完成后的持续输出全部走
-    /// `forward_events` 派生任务 + `EventLoopProxy`，不再阻塞任何线程。
+    /// 启动/促成恢复:把 daemon 上现存的存活会话逐一 `attach`，快照直接喂给
+    /// 新建的 `TerminalModel`（GUI 级会话恢复）。
+    ///
+    /// 实现分成两段——`fetch_project_restore`(纯 IO,可跨线程)+
+    /// `from_restore`(纯装配,必须在 UI 线程)——原因见
+    /// [`ProjectRestore`] 的文档。启动路径两段连着跑:调用方用
+    /// `runtime.block_on` 驱动,此时窗口还没创建,不占用任何"正在跑的"
+    /// UI 线程;恢复完成后的持续输出全部走 `forward_events` 派生任务 +
+    /// `EventLoopProxy`,不再阻塞任何线程。
     pub async fn bootstrap(io: &ShellIo, project: ProjectInfo) -> Self {
+        let restore = fetch_project_restore(&io.client, project).await;
+        Self::from_restore(io, restore)
+    }
+
+    /// [`ProjectRestore`] → 完整 `Workspace` 的**同步**装配:给每个 attach
+    /// 好的会话建终端模型、喂快照、派生转发任务,再把"要等 IO 才有结果"的
+    /// 部分(新终端/git/对话/验收次数)照 `adopt_project` 的老样子异步补上。
+    ///
+    /// 必须在 UI 线程上跑(`TerminalModel` 内部有 `Rc`,整个 `Workspace` 不
+    /// `Send`)。
+    fn from_restore(io: &ShellIo, restore: ProjectRestore) -> Self {
+        let ProjectRestore {
+            project,
+            recent_projects,
+            sessions,
+        } = restore;
         let mut tabs = Vec::new();
         let mut next_tab_id = 0usize;
-
-        match io.client.list().await {
-            Ok(sessions) => {
-                // 只认归属本项目的会话:daemon 现在按 `project_id` 给会话分家
-                // (P2a Task 1-3),并行打开的别的项目的终端不该跑到这一份
-                // `Workspace` 的 tab 栏里来。
-                //
-                // 迁移期孤儿会话——Task 1-3 落地**之前**建的、`project_id`
-                // 为 `None` 的存活会话——会被这条 filter 一并排除,从此不出现
-                // 在任何项目的 tab 栏里,直到 dozerd 重启把它们清掉为止(在此
-                // 期间它们仍占着 PTY)。这是**有意为之**,不是漏判:规格把
-                // "迁移期孤儿会话怎么处理"显式挂起、留给实现计划阶段决定,
-                // 本期不做孤儿会话的找回入口。日后有人发现"重启 daemon 前
-                // 有几个会话凭空消失了",答案就在这一行。
-                for info in sessions
-                    .into_iter()
-                    .filter(|s| s.alive && s.project_id == Some(project.id))
-                {
-                    let tab_id = next_tab_id;
-                    next_tab_id += 1;
-                    match io.client.attach(&info.id, 0).await {
-                        Ok((snapshot, _next_offset, rx)) => {
-                            let mut model = TerminalModel::new(DEFAULT_COLS, DEFAULT_ROWS);
-                            let _ = model.feed(&snapshot); // 快照回放：陈旧查询应答不可补发，丢弃
-                            let forwarder =
-                                io.handle
-                                    .spawn(forward_events(tab_id, rx, io.proxy.clone()));
-                            tabs.push(SessionTab {
-                                agent_state: info.agent_state,
-                                transcript_path: info.transcript_path.clone(),
-                                info,
-                                model,
-                                alive: true,
-                                tab_id,
-                                forwarder,
-                                osc: OscScanner::new(),
-                                cwd: None,
-                                last_exit: None,
-                                delivery_pending: false,
-                                last_turn_head: None,
-                            });
-                            if let Some(t) = tabs.last_mut() {
-                                t.ingest_osc(&snapshot);
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(session = %info.id, "attach 失败，跳过该会话恢复: {e}");
-                        }
-                    }
-                }
+        for (info, snapshot, rx) in sessions {
+            let tab_id = next_tab_id;
+            next_tab_id += 1;
+            let mut model = TerminalModel::new(DEFAULT_COLS, DEFAULT_ROWS);
+            let _ = model.feed(&snapshot); // 快照回放：陈旧查询应答不可补发，丢弃
+            let forwarder = io
+                .handle
+                .spawn(forward_events(tab_id, rx, io.proxy.clone()));
+            tabs.push(SessionTab {
+                agent_state: info.agent_state,
+                transcript_path: info.transcript_path.clone(),
+                info,
+                model,
+                alive: true,
+                tab_id,
+                forwarder,
+                osc: OscScanner::new(),
+                cwd: None,
+                last_exit: None,
+                delivery_pending: false,
+                last_turn_head: None,
+            });
+            if let Some(t) = tabs.last_mut() {
+                t.ingest_osc(&snapshot);
             }
-            Err(e) => tracing::warn!("list 失败，跳过启动恢复: {e}"),
         }
 
-        // 最近项目列表（git 分支/脏在窗口起来后异步补）。"当前项目"不再
-        // 向 daemon 打听——daemon 侧的"活跃项目"概念已随 P2a Task 1-3 删除
-        // （多项目并行下没有唯一活跃项目），改由调用方(`App`)指定。
-        let recent_projects = io.client.list_projects().await.unwrap_or_default();
         let file_tree = Some(FileTree::new(PathBuf::from(&project.path)));
         let project_goal = load_project_goal(&project.path);
 
@@ -1225,19 +1369,18 @@ impl Workspace {
             recent_projects,
             ..Self::empty_for_project_placeholder()
         };
-        // 启动恢复了当前项目时,与 ProjectOpened 同样异步补 git 分支/脏与
-        // 对话列表（承诺"窗口起来后异步补"——此前只在用户主动打开项目时
-        // 接线,启动恢复路径漏了,导致重开 app 后对话列表空白）。
-        if ws.project.is_some() {
-            // 有项目但没恢复出任何存活会话(比如上次退出前刚好关光了终端)
-            // 时,默认新开一个根在项目目录的终端,不用用户手动点"+"。
-            ws.ensure_project_terminal(io);
-            // 认回上次退出前打开的预览文件 tab（重启后自动重开）。
-            ws.restore_preview_state();
-            ws.spawn_project_git_refresh(io);
-            ws.spawn_conversations_refresh(io);
-            ws.spawn_acceptance_count_refresh(io);
-        }
+        // 与 ProjectOpened 同样异步补 git 分支/脏与对话列表（承诺"窗口起来
+        // 后异步补"——此前只在用户主动打开项目时接线,启动恢复路径漏了,
+        // 导致重开 app 后对话列表空白）。
+        //
+        // 没恢复出任何存活会话(比如上次退出前刚好关光了终端)时,默认新开一
+        // 个根在项目目录的终端,不用用户手动点"+"。
+        ws.ensure_project_terminal(io);
+        // 认回上次退出前打开的预览文件 tab（重启后自动重开）。
+        ws.restore_preview_state();
+        ws.spawn_project_git_refresh(io);
+        ws.spawn_conversations_refresh(io);
+        ws.spawn_acceptance_count_refresh(io);
         ws
     }
 
@@ -1280,6 +1423,30 @@ impl Workspace {
             tree_error: None,
             tree_delete_confirm: None,
             tree_edit: None,
+            loading: false,
+        }
+    }
+
+    /// `Stub` → `Loaded` 促成的**同步**第一步:一份已经知道自己归属哪个项目
+    /// 的"加载中"占位。会话/git/对话/验收计数都还没拉(那些要 IO,由随后的
+    /// `Workspace::bootstrap` 异步补),但项目、文件树根、项目目标这些不需要
+    /// 网络的部分立刻就位,界面在同一帧内就有东西可画。
+    ///
+    /// **这里必须填 `project: Some(_)`,不能图省事用
+    /// `empty_for_project_placeholder()`**:促成是异步的,占位会在消息环里
+    /// 存活若干毫秒并且可以是当前聚焦的 workspace;只要它 `project` 为 `None`,
+    /// `spawn_new_tab` 的 `expect("Workspace 存在即已知归属项目")` 就重新变成
+    /// 可达路径,用户在这段窗口里点一下终端 tab 栏的"＋"就会 panic 掉整个
+    /// GUI。同步构造 + 恒有 `project` 是这条不变式的落地方式。
+    fn loading_for_project(project: ProjectInfo) -> Self {
+        let file_tree = Some(FileTree::new(PathBuf::from(&project.path)));
+        let project_goal = load_project_goal(&project.path);
+        Self {
+            project: Some(project),
+            file_tree,
+            project_goal,
+            loading: true,
+            ..Self::empty_for_project_placeholder()
         }
     }
 
@@ -1431,6 +1598,10 @@ impl Workspace {
     /// 逻辑;本函数与既有 `ProjectOpened` 落地路径行为完全一致(直接开一个
     /// 新终端)。
     fn adopt_project(&mut self, io: &ShellIo, project: ProjectInfo) {
+        // 认领 = 这份 `Workspace` 从此有真正的内容,不再是促成期占位:必须
+        // 清掉 `loading`,否则(1)`spawn_new_tab` 会继续拒绝建会话,(2)一个
+        // 迟到的 `ProjectSlotLoaded` 会把刚认领好的内容当成占位覆盖掉。
+        self.loading = false;
         self.file_tree = Some(FileTree::new(PathBuf::from(&project.path)));
         self.tree_selected = None;
         self.branch = None;
@@ -1673,6 +1844,12 @@ impl Workspace {
     }
 
     fn spawn_new_tab(&mut self, io: &ShellIo) {
+        // 促成中的"加载中"占位不建会话:这份 `Workspace` 马上会被
+        // `Message::ProjectSlotLoaded` 整份换掉,此刻建出来的会话会连同占位
+        // 一起被丢弃,却仍在 daemon 上占着 PTY(见 `loading` 字段)。
+        if self.loading {
+            return;
+        }
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
         // 重锚:新终端 tab 开在当前项目根。会话必须归属一个项目(daemon 侧
         // `create` 要 project_id,P2a Task 3),而一个活着的 `Workspace` 之所以
@@ -1944,29 +2121,39 @@ impl Workspace {
 }
 
 impl App {
-    /// 启动序列成功路径:建好外壳态,再用 `Workspace::bootstrap` 恢复出
-    /// daemon 上"当前项目"那一份完整项目态,装进 `projects` 作为初始页签。
+    /// 启动序列成功路径:建好外壳态,再把上次退出时开着的**整份**项目页签
+    /// 集合恢复出来。
     ///
-    /// 本 task 只保证"单项目照旧可用 + 多项目容器就位";把 daemon 上所有
-    /// 打开着的项目一并恢复成页签(含 `Stub` 懒加载)是 Task 7 的范围。
+    /// 恢复策略是"页签全恢复、内容懒加载"(设计文档 §2/§5):
+    /// `open_projects.json` 里记着的每个项目都落一个 `Stub` 槽位——这一步不发
+    /// 起任何网络请求,只是把页签栏画全,所以开着十个项目也不会拖慢启动;
+    /// 只有上次聚焦的那一个立刻 `Workspace::bootstrap` 出完整状态(会话重挂/
+    /// 文件树/git/对话),其余留在 `Stub`,用户点开时才由
+    /// [`App::ensure_loaded`] 促成。
+    ///
+    /// 聚焦的那个这里**直接 `await`**、不走 `ensure_loaded` 的异步路径:窗口
+    /// 还没建出来,此刻多等一个 UDS 往返不占用任何 UI 线程,换来的是第一帧
+    /// 就是完整界面,而不是先闪一下空的"加载中"再补内容。
     pub async fn bootstrap(client: Client, handle: Handle, proxy: EventLoopProxy<Message>) -> Self {
         let mut app = Self::new_shell(client, handle, proxy, None);
         let io = app.shell_io();
-        // 打开哪个项目:daemon 不再记"活跃项目"(P2a Task 1-3 删掉了这个
-        // 概念),改由 GUI 侧的 open_projects.json 记(Task 4)。冷启动/文件
-        // 缺失时回落到"最近活跃的那个项目"——`list_projects()` 按
-        // last_active_ms DESC 排序,第一个就是。
-        let recent = io.client.list_projects().await.unwrap_or_default();
-        let remembered = open_projects::load().active_project_id;
-        let initial = remembered
-            .and_then(|id| recent.iter().find(|p| p.id == id).cloned())
-            .or_else(|| recent.first().cloned());
-        if let Some(project) = initial {
-            let id = project.id;
-            let ws = Workspace::bootstrap(&io, project).await;
+        // daemon 不再记"活跃项目"(P2a Task 1-3 删掉了这个概念),开着哪些
+        // 项目改由 GUI 侧的 open_projects.json 记(Task 4/6 写,这里读回)。
+        let known = io.client.list_projects().await.unwrap_or_default();
+        let (order, active) = restore_open_tabs(&known, &open_projects::load());
+        for id in &order {
+            let Some(info) = known.iter().find(|p| p.id == *id) else {
+                continue; // restore_open_tabs 已过滤,这里只是让类型收敛
+            };
+            app.projects.insert(*id, WorkspaceSlot::Stub(info.clone()));
+        }
+        app.project_order = order;
+        app.active_project_id = active;
+        if let Some(id) = active
+            && let Some(WorkspaceSlot::Stub(info)) = app.projects.get(&id)
+        {
+            let ws = Workspace::bootstrap(&io, info.clone()).await;
             app.projects.insert(id, WorkspaceSlot::Loaded(Box::new(ws)));
-            app.project_order.push(id);
-            app.active_project_id = Some(id);
         }
         app
     }
@@ -2051,16 +2238,43 @@ impl App {
         }
     }
 
-    /// `Stub` → `Loaded` 的促成。本 task 只把槽位换成一个空占位
-    /// `Workspace`：真正拉文件树/会话列表/对话的促成逻辑属于 Task 7
-    /// （此时还没有"打开/切换项目页签"的消息流，无从测试起）。
+    /// `Stub` → `Loaded` 的促成:两步走。
+    ///
+    /// 1. **同步**把槽位换成 [`Workspace::loading_for_project`] 的"加载中"占位
+    ///    ——用户点开一个 `Stub` 页签的那一刻画面就该有反应(项目名/文件树根
+    ///    立刻出来),不能等异步任务跑完才有任何视觉变化。这一步之所以必须
+    ///    是**带 `project` 的**占位而不是空壳,见 `loading_for_project` 的
+    ///    文档:异步窗口期里这个 `Workspace` 是可达的当前项目,`project` 为
+    ///    `None` 会让 `spawn_new_tab` 的 `expect` 重新变成可达路径。
+    /// 2. `handle.spawn` 一个任务跑促成的 IO 段
+    ///    [`fetch_project_restore`](重挂该项目的存活会话 + 最近项目列表),
+    ///    完成后经 `EventLoopProxy` 回送 `Message::ProjectSlotLoaded`;装配段
+    ///    (`Workspace::from_restore`)在 `update` 里、UI 线程上跑,把占位换成
+    ///    真正的结果。两段之所以不能合成一段,见 [`ProjectRestore`]。
+    ///
+    /// 已经是 `Loaded`(含正在促成的占位)或 id 根本不在槽位表里时都是 no-op
+    /// ——尤其"占位已在"这条保证了同一个页签连点几下不会重复发起促成。
     fn ensure_loaded(&mut self, id: i64) {
-        if let Some(WorkspaceSlot::Stub(_)) = self.projects.get(&id) {
-            self.projects.insert(
-                id,
-                WorkspaceSlot::Loaded(Box::new(Workspace::empty_for_project_placeholder())),
-            );
-        }
+        let Some(WorkspaceSlot::Stub(info)) = self.projects.get(&id) else {
+            return;
+        };
+        let info = info.clone();
+        let client = self.client.clone();
+        let proxy = self.proxy.clone();
+        self.projects.insert(
+            id,
+            WorkspaceSlot::Loaded(Box::new(Workspace::loading_for_project(info.clone()))),
+        );
+        self.handle.spawn(async move {
+            let restore = fetch_project_restore(&client, info).await;
+            let _ = proxy.send_event(Message::ProjectSlotLoaded(id, RestorePayload::new(restore)));
+        });
+    }
+
+    /// 当前聚焦的项目 id(main.rs 的 webview 池按它分家,见
+    /// `sync_previews`)。`None` = 一个项目页签都没开。
+    pub fn active_project_id(&self) -> Option<i64> {
+        self.active_project_id
     }
 
     /// 把"现在开着哪些项目页签、什么顺序、哪个在前台"写盘(Task 4 的
@@ -2861,14 +3075,32 @@ impl App {
             }
             Message::ProjectSelect(id) => {
                 // 切项目不再通知 daemon:"活跃项目"是 GUI 侧的概念了(P2a
-                // Task 1-3 删掉了 SetActiveProject),这里只把目标项目从最近
-                // 列表里查出来,走与"打开项目"同一条 `ProjectOpened` 落地路径。
+                // Task 1-3 删掉了 SetActiveProject)。
+                //
+                // 这个项目已经开着页签(`Loaded` 或还没促成的 `Stub`)时,点最近
+                // 项目卡片就只是"切到那个页签",走与点页签完全相同的非破坏性
+                // 路径。**绝不能**再走 `ProjectOpened`:那条是单项目时代留下的
+                // **就地改写**语义(`close_all_tabs_for_switch` + `adopt_project`
+                // 会把目标页签的终端全关掉、文件树/选中项/git/对话全部重置);
+                // 在 P2a 之前它恰好从不越界,是因为那时只有一个页签、且从没有
+                // `Stub` 存在,`retarget_active_slot` 判定"不用搬"之后的改写正好
+                // 落在同一个页签自己身上。有了懒加载 `Stub` 之后这条假设不再
+                // 成立,继续走老路会把一个刚点开的 `Stub` 页签改写掉。
+                if focus_project_tab(&self.projects, &mut self.active_project_id, id) {
+                    self.maximized = None;
+                    self.ensure_loaded(id);
+                    self.persist_open_projects();
+                    return;
+                }
+                // 还没开着:作为**新页签**打开(与顶栏"＋"同一条 `ProjectTabOpened`
+                // 落地路径),而不是把当前页签的内容换掉——多页签下"点一张最近
+                // 项目卡片"的直觉是"再开一个",不是"把手上这个换掉"。
                 let client = self.client.clone();
                 let proxy = self.proxy.clone();
                 self.handle.spawn(async move {
                     let recent = client.list_projects().await.unwrap_or_default();
                     let opened = recent.iter().find(|p| p.id == id).cloned();
-                    let _ = proxy.send_event(Message::ProjectOpened(opened, recent));
+                    let _ = proxy.send_event(Message::ProjectTabOpened(opened, recent));
                 });
             }
             Message::ProjectOpened(project, recent) => {
@@ -2904,6 +3136,25 @@ impl App {
                 // (与图标栏点击清放大同一类理由,Fix round 2 #2)。放大态是
                 // 外壳态,搬家后留在 `App` 上处理。
                 self.maximized = None;
+                // 目标项目已经开着页签(`Loaded` 或还没促成的 `Stub`)时,
+                // **绝不**走下面的就地改写:那会把那个页签的终端全关掉、文件
+                // 树/选中项/git/对话全部重置。走与点页签相同的非破坏性路径,
+                // 顺带满足"打开一个已经开着的项目 → 切到已有页签,不产生重复
+                // 页签"这条验收项。
+                //
+                // 这条判定在 P2a 之前不存在也没出事,是因为那时只有一个页签、
+                // 且从没有 `Stub`——`retarget_active_slot` 判定"不用搬"之后的
+                // 改写恰好落在同一个页签自己身上。懒加载 `Stub` 让这条假设
+                // 失效(Task 6 review 的遗留隐患)。
+                if focus_project_tab(&self.projects, &mut self.active_project_id, project.id) {
+                    let id = project.id;
+                    self.ensure_loaded(id);
+                    self.with_ws(move |ws, _io| {
+                        ws.recent_projects = recent;
+                    });
+                    self.persist_open_projects();
+                    return;
+                }
                 // 槽位表(key/顺序/当前页签)先对准新项目 id,再让下面的
                 // `with_ws` 去改写槽位内容——顺序反了就会出现"key=旧 id、
                 // 内容=新项目"的错位。判据与理由见 `retarget_active_slot`。
@@ -3005,6 +3256,49 @@ impl App {
                 }
                 self.maximized = None;
                 self.persist_open_projects();
+            }
+            Message::ProjectSlotLoaded(id, payload) => {
+                let Some(restore) = payload.take() else {
+                    return; // 信封已被取走(理论上不会发生),没有素材可落地
+                };
+                // 只在槽位仍是那份"加载中"占位时落地。两种落空情形:
+                // - 页签在促成完成前被用户关掉了(槽位已不存在);
+                // - 槽位已经被别的路径换成了真正的内容(比如
+                //   `ProjectTabOpened` 的 `adopt_project`)。
+                // 两种情形下这份素材都没人要了,但它已经 attach 上了该项目在
+                // daemon 上的存活会话——直接 drop 只是断开事件流,daemon 侧
+                // 会话仍在跑,会变成"没有任何页签持有、却还占着 PTY"的野会话。
+                // 所以按关页签的语义结束掉它们(`ProjectTabClose` 同款处理)。
+                let landed = matches!(
+                    self.projects.get(&id),
+                    Some(WorkspaceSlot::Loaded(cur)) if cur.loading
+                );
+                if !landed {
+                    let client = self.client.clone();
+                    let ids: Vec<String> = restore
+                        .sessions
+                        .iter()
+                        .map(|(info, _, _)| info.id.clone())
+                        .collect();
+                    self.handle.spawn(async move {
+                        for sid in ids {
+                            if let Err(e) = client.kill(&sid).await {
+                                tracing::warn!("丢弃过期促成结果时结束会话失败: {e}");
+                            }
+                        }
+                    });
+                    return;
+                }
+                let io = self.shell_io();
+                let mut ws = Workspace::from_restore(&io, *restore);
+                // 重挂出来的会话,终端模型是按 `DEFAULT_COLS`×`DEFAULT_ROWS`
+                // 建的,得按当前窗口几何纠正一次。这里**不能**指望
+                // `sync_terminal_grid`:它算出来的网格与 `self.cols/rows` 相同
+                // 时 `PaneResized` 会原地返回(去重),于是这份新装配的
+                // `Workspace` 会一直停在 80×24。直接对它自己 resize 一次。
+                ws.resize_all(&io, io.cols, io.rows);
+                self.projects
+                    .insert(id, WorkspaceSlot::Loaded(Box::new(ws)));
             }
             Message::ProjectTreeToggle(dir) => {
                 self.with_ws(move |ws, _io| {
@@ -5552,6 +5846,128 @@ mod tests {
         assert_eq!(next_active_after_close(&[1, 2, 3], 1), Some(2));
         assert_eq!(next_active_after_close(&[1], 1), None, "关光了没有下一个");
         assert_eq!(next_active_after_close(&[1, 2], 9), None, "不在表里");
+    }
+
+    fn known(ids: &[i64]) -> Vec<ProjectInfo> {
+        ids.iter()
+            .map(|id| ProjectInfo {
+                id: *id,
+                path: format!("/tmp/p{id}"),
+                name: format!("p{id}"),
+                last_active_ms: 0,
+            })
+            .collect()
+    }
+
+    fn state(ids: &[i64], active: Option<i64>) -> open_projects::OpenProjectsState {
+        open_projects::OpenProjectsState {
+            project_ids: ids.to_vec(),
+            active_project_id: active,
+        }
+    }
+
+    /// 启动恢复的主干:盘上记着的**整份**页签集合都恢复出来(不是只恢复
+    /// 聚焦的那一个),顺序按盘上的顺序,聚焦项就是上次退出前聚焦的那个。
+    #[test]
+    fn restore_open_tabs_restores_whole_tab_set_in_order() {
+        let (order, active) = restore_open_tabs(&known(&[1, 2, 3]), &state(&[3, 1, 2], Some(1)));
+        assert_eq!(
+            order,
+            vec![3, 1, 2],
+            "页签顺序按盘上记的,不按 daemon 的排序"
+        );
+        assert_eq!(active, Some(1));
+    }
+
+    /// daemon 已经不认识的 id(项目在上次退出后被删了)直接跳过:给它开一个
+    /// 点不动的空页签只会碍事。
+    #[test]
+    fn restore_open_tabs_skips_ids_daemon_no_longer_knows() {
+        let (order, active) = restore_open_tabs(&known(&[1, 3]), &state(&[1, 2, 3], Some(3)));
+        assert_eq!(order, vec![1, 3]);
+        assert_eq!(active, Some(3));
+    }
+
+    /// 记着的聚焦项自己就是被删掉的那个 → 回落到第一个页签,而不是留一个
+    /// 指向空槽位的 `active_project_id`(那会让界面恒空白)。
+    #[test]
+    fn restore_open_tabs_falls_back_when_active_is_stale() {
+        let (order, active) = restore_open_tabs(&known(&[1, 3]), &state(&[1, 3], Some(2)));
+        assert_eq!(order, vec![1, 3]);
+        assert_eq!(active, Some(1));
+    }
+
+    /// 首次启动(没有 open_projects.json)/上次开着的项目全被删:回落到
+    /// `list_projects()` 的第一个——它按 last_active_ms 倒序,就是最近用过的
+    /// 那个,保持"打开 app 就能干活"的既有行为。
+    #[test]
+    fn restore_open_tabs_falls_back_to_most_recent_project() {
+        let (order, active) = restore_open_tabs(&known(&[7, 8]), &state(&[], None));
+        assert_eq!(order, vec![7]);
+        assert_eq!(active, Some(7));
+
+        let (order, active) = restore_open_tabs(&known(&[7, 8]), &state(&[99], Some(99)));
+        assert_eq!(order, vec![7], "记着的项目全没了也要回落,不能留空页签栏");
+        assert_eq!(active, Some(7));
+    }
+
+    /// daemon 上一个项目都没有(全新机器):什么都恢复不出来,`App` 停在
+    /// "未打开任何项目"的空外壳,而不是造一个指向不存在项目的页签。
+    #[test]
+    fn restore_open_tabs_yields_nothing_when_daemon_has_no_projects() {
+        let (order, active) = restore_open_tabs(&[], &state(&[1, 2], Some(1)));
+        assert!(order.is_empty());
+        assert_eq!(active, None);
+    }
+
+    /// `open_projects.json` 是用户可编辑的普通 JSON,重复 id 要去重——否则
+    /// `project_order` 会带出两个指向同一个槽位的页签(点其中一个,两个一起
+    /// 高亮)。
+    #[test]
+    fn restore_open_tabs_dedups_repeated_ids() {
+        let (order, active) = restore_open_tabs(&known(&[1, 2]), &state(&[1, 2, 1], Some(2)));
+        assert_eq!(order, vec![1, 2]);
+        assert_eq!(active, Some(2));
+    }
+
+    /// 促成期占位的**核心不变式**:同步换上的那一刻就必须已知归属项目。
+    ///
+    /// 促成是异步的,这份占位会在消息环里存活若干毫秒,而且它就是当前聚焦
+    /// 的 workspace(用户正是点了这个页签才触发促成)。只要它 `project` 为
+    /// `None`,`spawn_new_tab` 的 `expect("Workspace 存在即已知归属项目")` 就
+    /// 重新变成可达路径——用户在这段窗口里点一下终端 tab 栏的"＋"就会
+    /// panic 掉整个 GUI 进程(Task 5/6 review 反复强调的那条)。
+    #[test]
+    fn loading_placeholder_always_knows_its_project() {
+        let info = ProjectInfo {
+            id: 42,
+            path: "/tmp/p42".to_string(),
+            name: "p42".to_string(),
+            last_active_ms: 0,
+        };
+        let ws = Workspace::loading_for_project(info.clone());
+        assert_eq!(
+            ws.project.as_ref().map(|p| p.id),
+            Some(42),
+            "占位必须携带项目,否则 spawn_new_tab 的 expect 变成可达路径"
+        );
+        assert_eq!(
+            ws.project.as_ref().map(|p| p.path.as_str()),
+            Some("/tmp/p42")
+        );
+        assert!(ws.file_tree.is_some(), "文件树根不需要 IO,应当立刻可画");
+        assert!(ws.loading, "必须打上占位标记,促成结果才认得出该替换谁");
+        assert!(ws.tabs.is_empty(), "会话要等 IO,占位阶段不该有 tab");
+    }
+
+    /// 反过来:空壳占位(`retarget_active_slot` 在同一条消息内用完即改写的
+    /// 那种)不带项目也不带 `loading` 标记——它的安全性靠"同步内改写完",
+    /// 与促成占位是两码事,不能互相顶替。
+    #[test]
+    fn empty_placeholder_is_not_a_loading_placeholder() {
+        let ws = Workspace::empty_for_project_placeholder();
+        assert!(ws.project.is_none());
+        assert!(!ws.loading);
     }
 
     /// 关**后台**页签不打扰前台:被关的槽位摘掉、顺序表去掉它,
