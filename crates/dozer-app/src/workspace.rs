@@ -696,6 +696,24 @@ pub fn terminal_pane_pixel_size(
     (pane_width, pane_height)
 }
 
+/// 一批**异步结果**消息共同的首个字段:它们归属哪个项目。
+///
+/// 为什么必须显式带上、不能"投给当时聚焦的那个项目"(P2a Task 7 fix round 1
+/// 的 Critical):`SessionTab::tab_id` 来自每个 `Workspace` 自己的
+/// `next_tab_id`,**每个项目都从 0 起编**。多项目并行之后"项目 A 和项目 B
+/// 各有活着的会话"是常态而不是边角情况,两边的第一个 tab 都是 id 0。若按
+/// `App::with_ws`(投给当前聚焦项目)路由,后台项目 A 的 agent 每吐一次输出,
+/// `TermOutput(0, ..)` 就会被喂进前台项目 B 的 tab 0 里——这不是竞态窗口,
+/// 是只要两个项目都有会话就持续发生。`SessionExited` 会把错误的 tab 标成
+/// 已死,`TabAttached` 会让 B 认领本属于 A 的会话。
+///
+/// 所以凡是"发起时就已知归属项目、结果晚些才回来"的消息,一律带上
+/// `project_id`,由 [`App::with_project`] 直接投递到对应槽位;投递不到
+/// (项目已被关掉/还没促成)就静默丢弃。反过来,由用户点击当前界面直接
+/// 触发的消息(`TermInput`/`AcceptanceOpen`/`PreviewSelectTab` …)仍然走
+/// `with_ws`——它们的语义本来就是"作用于用户此刻看着的那个项目"。
+pub type ProjectId = i64;
+
 #[derive(Debug, Clone)]
 pub enum Message {
     /// 终端聚焦时的键盘/IME 输入字节（已经过 `keymap` 翻译）。直接写给
@@ -704,18 +722,20 @@ pub enum Message {
     TermInput(Vec<u8>),
     /// attach 事件流转发来的输出字节，`usize` 是 tab 的稳定 id
     /// （`SessionTab::tab_id`，不是 vec 位置——关闭 tab 会移动位置，
-    /// 但 id 不变，事件流路由必须认 id）。
-    TermOutput(usize, Vec<u8>),
+    /// 但 id 不变，事件流路由必须认 id）。首字段的项目归属见 [`ProjectId`]
+    /// ——`tab_id` 只在单个项目内唯一,跨项目会撞。
+    TermOutput(ProjectId, usize, Vec<u8>),
     /// 对应 tab 的会话已退出（PTY 子进程退出或 daemon 断连）。
-    SessionExited(usize),
+    SessionExited(ProjectId, usize),
     /// attach 流转发来的 agent 状态变更（tab_id, 状态, 该会话最新 transcript 路径）。
-    AgentStateChanged(usize, AgentState, Option<String>),
+    AgentStateChanged(ProjectId, usize, AgentState, Option<String>),
     /// TurnEnded 触发的交付检测结果（tab_id, 是否有待验收交付）。
-    DeliveryChecked(usize, bool),
-    /// 点击横幅"进入验收"（tab_id 为来源会话）。
+    DeliveryChecked(ProjectId, usize, bool),
+    /// 点击横幅"进入验收"（tab_id 为来源会话）。用户点的是当前界面上的
+    /// 横幅,归属天然是聚焦项目,不需要 `ProjectId`。
     AcceptanceOpen(usize),
     /// 验收数据装载完成（repo, 来源 tab_id, goal, 变更清单）。
-    AcceptanceLoaded(PathBuf, usize, Option<Goal>, Vec<FileChange>),
+    AcceptanceLoaded(ProjectId, PathBuf, usize, Option<Goal>, Vec<FileChange>),
     /// 勾选/取消第 n 条标准。
     AcceptanceToggle(usize),
     /// 点击意见输入框进入编辑态。
@@ -727,13 +747,13 @@ pub enum Message {
     /// 点"打回并注回"。
     AcceptanceReject,
     /// 通过动作结果（Ok(版本号)/Err(红字文案)）。
-    AcceptanceDone(Result<u32, String>),
+    AcceptanceDone(ProjectId, Result<u32, String>),
     /// 会话审阅:解析完成（来源, 条目 / 错误文案）。
-    ReviewLoaded(ReviewSource, Result<Vec<ReviewEntry>, String>),
+    ReviewLoaded(ProjectId, ReviewSource, Result<Vec<ReviewEntry>, String>),
     /// 会话审阅:展开/收起第 n 个 AI 回合的过程区。
     ReviewToggle(usize),
     /// 对话列表刷新结果（扫描完成）。
-    ConversationsRefreshed(Vec<ConversationMeta>),
+    ConversationsRefreshed(ProjectId, Vec<ConversationMeta>),
     /// 点对话列表某条 → 审阅该对话（当前会话用 Session 源以便回合刷新,历史用 File）。
     ConversationOpen(PathBuf),
     /// 切换当前显示的 tab（这里的 `usize` 是 vec 位置——用户点击的是
@@ -748,7 +768,7 @@ pub enum Message {
     /// 新建会话完成 attach（tab_id、`SessionInfo`、初始快照）。
     /// 只有 `NewTab` 走这条路径——启动时的恢复走同步的 `bootstrap`，
     /// 不需要过一次消息循环。
-    TabAttached(usize, SessionInfo, Vec<u8>),
+    TabAttached(ProjectId, usize, SessionInfo, Vec<u8>),
     /// 终端 pane 像素尺寸变化换算出的新网格尺寸；对所有 tab 生效
     /// （包括当前不可见的），保证切换 tab 时尺寸已经是最新的。
     PaneResized { cols: u16, rows: u16 },
@@ -848,9 +868,14 @@ pub enum Message {
     /// 项目:文件树展开/收起某目录。
     ProjectTreeToggle(PathBuf),
     /// 项目:git 分支/脏/文件状态刷新结果。
-    ProjectGitRefreshed(Option<String>, bool, HashMap<PathBuf, FileStatus>),
+    ProjectGitRefreshed(
+        ProjectId,
+        Option<String>,
+        bool,
+        HashMap<PathBuf, FileStatus>,
+    ),
     /// 项目:当前项目验收次数刷新结果(项目卡"N 次验收"副行用)。
-    AcceptanceCountLoaded(Option<u64>),
+    AcceptanceCountLoaded(ProjectId, Option<u64>),
     /// 项目树:右键按下的窗口逻辑坐标(main.rs 原始事件层发,供随后可能
     /// 触发的 `ProjectTreeContextMenu` 定位弹出菜单)。
     RightClickAt { x: f32, y: f32 },
@@ -866,7 +891,7 @@ pub enum Message {
     /// 项目树:菜单选"粘贴"→ 异步复制剪贴槽项到目标目录(参数=目标目录)。
     ProjectTreePaste(PathBuf),
     /// 项目树:粘贴异步结果(Ok=新建出的路径,Err=错误文案)。
-    ProjectTreePasteDone(Result<PathBuf, String>),
+    ProjectTreePasteDone(ProjectId, Result<PathBuf, String>),
     /// 项目树:菜单选"删除"→ 打开确认框(参数=路径,是否目录)。
     ProjectTreeDeleteRequest(PathBuf, bool),
     /// 项目树:确认框点"删除"。
@@ -881,6 +906,7 @@ pub enum Message {
     /// 变量曾叫 `ProjectTreeDeleteDone`,重命名/新建完成后也发它,读起来
     /// 会以为出了删除——改名 + 加 `expand` 字段一并解决。
     ProjectTreeOpDone {
+        project_id: ProjectId,
         parent: Result<PathBuf, String>,
         expand: bool,
     },
@@ -1257,6 +1283,24 @@ fn take_project_tab(
     Some(slot)
 }
 
+/// 按 `project_id` 取一份**已加载**的 `Workspace`,与"此刻聚焦的是哪个项目"
+/// 完全无关——这就是 [`App::with_project`] 的全部路由逻辑。
+///
+/// 拆成自由函数是为了能 headless 单测(`App` 要 daemon 连接 + winit
+/// `EventLoopProxy` 才构造得出来),与本文件其余纯逻辑一致。这条路由是多项目
+/// 并行下最要紧的一条不变式,理由见 [`ProjectId`]。
+fn loaded_workspace_mut(
+    projects: &mut HashMap<i64, WorkspaceSlot>,
+    project_id: ProjectId,
+) -> Option<&mut Workspace> {
+    match projects.get_mut(&project_id)? {
+        WorkspaceSlot::Loaded(ws) => Some(ws),
+        // `Stub` 从没促成过,不可能有指向它的在飞会话结果(促成期的"加载中"
+        // 占位是 `Loaded`)。
+        WorkspaceSlot::Stub(_) => None,
+    }
+}
+
 /// 启动恢复的纯逻辑:把盘上记的"上次开着哪些页签"(`open_projects.json`)与
 /// daemon 现在还认识的项目列表对一遍,给出该恢复成页签的项目顺序表 + 该聚焦
 /// 哪一个。
@@ -1311,7 +1355,8 @@ impl Workspace {
     /// `EventLoopProxy`,不再阻塞任何线程。
     pub async fn bootstrap(io: &ShellIo, project: ProjectInfo) -> Self {
         let restore = fetch_project_restore(&io.client, project).await;
-        Self::from_restore(io, restore)
+        // 启动路径没有前身可继承,白名单从空开始。
+        Self::from_restore(io, restore, None)
     }
 
     /// [`ProjectRestore`] → 完整 `Workspace` 的**同步**装配:给每个 attach
@@ -1320,12 +1365,20 @@ impl Workspace {
     ///
     /// 必须在 UI 线程上跑(`TerminalModel` 内部有 `Rc`,整个 `Workspace` 不
     /// `Send`)。
-    fn from_restore(io: &ShellIo, restore: ProjectRestore) -> Self {
+    /// `allowed_files`:若这份 `Workspace` 是在**替换**同一个项目的另一份
+    /// `Workspace`(促成落地),必须把前身那个 `Arc` 原样接过来,理由见
+    /// `Message::ProjectSlotLoaded` 分支里的注释。`None` = 没有前身,新开一份。
+    fn from_restore(
+        io: &ShellIo,
+        restore: ProjectRestore,
+        allowed_files: Option<Arc<Mutex<HashSet<PathBuf>>>>,
+    ) -> Self {
         let ProjectRestore {
             project,
             recent_projects,
             sessions,
         } = restore;
+        let project_id = project.id;
         let mut tabs = Vec::new();
         let mut next_tab_id = 0usize;
         for (info, snapshot, rx) in sessions {
@@ -1333,9 +1386,9 @@ impl Workspace {
             next_tab_id += 1;
             let mut model = TerminalModel::new(DEFAULT_COLS, DEFAULT_ROWS);
             let _ = model.feed(&snapshot); // 快照回放：陈旧查询应答不可补发，丢弃
-            let forwarder = io
-                .handle
-                .spawn(forward_events(tab_id, rx, io.proxy.clone()));
+            let forwarder =
+                io.handle
+                    .spawn(forward_events(project_id, tab_id, rx, io.proxy.clone()));
             tabs.push(SessionTab {
                 agent_state: info.agent_state,
                 transcript_path: info.transcript_path.clone(),
@@ -1367,6 +1420,9 @@ impl Workspace {
             file_tree,
             project_goal,
             recent_projects,
+            // 必须在 `restore_preview_state()` **之前**就位:那一步会把重开的
+            // 预览文件写进白名单,写晚了就写到了一个没人看的 Arc 上。
+            allowed_files: allowed_files.unwrap_or_else(|| Arc::new(Mutex::new(HashSet::new()))),
             ..Self::empty_for_project_placeholder()
         };
         // 与 ProjectOpened 同样异步补 git 分支/脏与对话列表（承诺"窗口起来
@@ -1492,6 +1548,7 @@ impl Workspace {
         let Some(p) = &self.project else {
             return;
         };
+        let project_id = p.id;
         let cwd = PathBuf::from(&p.path);
         let proxy = io.proxy.clone();
         io.handle.spawn(async move {
@@ -1500,7 +1557,7 @@ impl Workspace {
                 .await
                 .unwrap_or_default();
             tracing::debug!(cwd = %cwd.display(), n = list.len(), "对话列表扫描完成");
-            let _ = proxy.send_event(Message::ConversationsRefreshed(list));
+            let _ = proxy.send_event(Message::ConversationsRefreshed(project_id, list));
         });
     }
 
@@ -1509,6 +1566,7 @@ impl Workspace {
     /// 而非原始 `p.path`，否则子目录/符号链接路径撞不到库、副行静默空白。
     fn spawn_acceptance_count_refresh(&self, io: &ShellIo) {
         let Some(p) = &self.project else { return };
+        let project_id = p.id;
         let project_path = p.path.clone();
         let client = io.client.clone();
         let proxy = io.proxy.clone();
@@ -1522,8 +1580,16 @@ impl Workspace {
                 Some(repo) => client.acceptance_count(&repo).await.ok(),
                 None => None,
             };
-            let _ = proxy.send_event(Message::AcceptanceCountLoaded(n));
+            let _ = proxy.send_event(Message::AcceptanceCountLoaded(project_id, n));
         });
+    }
+
+    /// 本 `Workspace` 归属的项目 id。所有"发起时已知项目、结果晚些才回来"的
+    /// 异步任务都要带上它,让 [`App::with_project`] 能投回原主(见
+    /// [`ProjectId`])。`None` 只可能出现在 `ProjectOpened` 单条消息内部那个
+    /// 用完即改写的空壳上,那里不发起任何异步任务。
+    fn project_id(&self) -> Option<ProjectId> {
+        self.project.as_ref().map(|p| p.id)
     }
 
     /// 打开着的会话 transcript 路径集合（UI 判"● 当前"用）。
@@ -1536,6 +1602,9 @@ impl Workspace {
 
     /// 异步读 transcript + 解析 → ReviewLoaded（GUI 侧 spawn_blocking；P1i/P1j 按源）。
     fn spawn_review_load(&self, io: &ShellIo, source: ReviewSource, path: String) {
+        let Some(project_id) = self.project_id() else {
+            return;
+        };
         let proxy = io.proxy.clone();
         io.handle.spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
@@ -1545,7 +1614,7 @@ impl Workspace {
             })
             .await
             .unwrap_or_else(|e| Err(format!("解析任务失败: {e}")));
-            let _ = proxy.send_event(Message::ReviewLoaded(source, result));
+            let _ = proxy.send_event(Message::ReviewLoaded(project_id, source, result));
         });
     }
 
@@ -1554,6 +1623,7 @@ impl Workspace {
         let Some(p) = &self.project else {
             return;
         };
+        let project_id = p.id;
         let repo = PathBuf::from(&p.path);
         let proxy = io.proxy.clone();
         io.handle.spawn(async move {
@@ -1566,7 +1636,7 @@ impl Workspace {
             })
             .await
             .unwrap_or((None, false, HashMap::new()));
-            let _ = proxy.send_event(Message::ProjectGitRefreshed(b, d, s));
+            let _ = proxy.send_event(Message::ProjectGitRefreshed(project_id, b, d, s));
         });
     }
 
@@ -1639,6 +1709,11 @@ impl Workspace {
         let Some(edit) = self.tree_edit.take() else {
             return;
         };
+        // 树操作的异步结果要投回**发起它的**项目,不能投给"结果回来时恰好
+        // 在前台的那个"(见 `ProjectId`)。
+        let Some(project_id) = self.project_id() else {
+            return;
+        };
         // 清掉可能残留的上一次失败(哪怕是另一次操作,比如粘贴冲突)留下的
         // 红字——用户这次成功了就不该再看见旧错误(Important #4)。若这次
         // 也失败,下面各分支会立刻重新设置,不会丢失新错误。
@@ -1684,6 +1759,7 @@ impl Workspace {
                     .unwrap_or_else(|e| Err(e.to_string()));
                     let outcome = result.map(|()| parent);
                     let _ = proxy.send_event(Message::ProjectTreeOpDone {
+                        project_id,
                         parent: outcome,
                         expand: false, // 重命名不改变展开态
                     });
@@ -1711,6 +1787,7 @@ impl Workspace {
                     .unwrap_or_else(|e| Err(e.to_string()));
                     let outcome = result.map(|()| parent);
                     let _ = proxy.send_event(Message::ProjectTreeOpDone {
+                        project_id,
                         parent: outcome,
                         expand: true, // 新建的项要立刻可见,哪怕父目录之前是空的
                     });
@@ -1736,6 +1813,7 @@ impl Workspace {
                     .unwrap_or_else(|e| Err(e.to_string()));
                     let outcome = result.map(|()| parent);
                     let _ = proxy.send_event(Message::ProjectTreeOpDone {
+                        project_id,
                         parent: outcome,
                         expand: true, // 新建的项要立刻可见,哪怕父目录之前是空的
                     });
@@ -1881,12 +1959,12 @@ impl Workspace {
             match client.attach(&info.id, 0).await {
                 Ok((snapshot, _next_offset, rx)) => {
                     if proxy
-                        .send_event(Message::TabAttached(tab_id, info, snapshot))
+                        .send_event(Message::TabAttached(project_id, tab_id, info, snapshot))
                         .is_err()
                     {
                         return;
                     }
-                    forward_events(tab_id, rx, proxy).await;
+                    forward_events(project_id, tab_id, rx, proxy).await;
                 }
                 Err(e) => {
                     let _ =
@@ -2009,6 +2087,9 @@ impl Workspace {
 
     /// 通过·沉淀：git update-ref + 落库（脏工作区在 delivery::accept 内被拒）。
     fn acceptance_accept(&mut self, io: &ShellIo) {
+        let Some(project_id) = self.project_id() else {
+            return;
+        };
         let Some(acc) = &mut self.acceptance else {
             return;
         };
@@ -2065,7 +2146,7 @@ impl Workspace {
                 Ok(Err(e)) => Err(e.to_string()),
                 Err(e) => Err(format!("任务失败: {e}")),
             };
-            let _ = proxy.send_event(Message::AcceptanceDone(result));
+            let _ = proxy.send_event(Message::AcceptanceDone(project_id, result));
         });
     }
 
@@ -2303,9 +2384,31 @@ impl App {
     ///
     /// 闭包里的 `return` 就是"提前结束这条消息的处理"，与搬家前写在
     /// `match` 分支里的 `return` 语义一致。
+    /// **只用于用户点击当前界面直接触发的消息**——"作用于我此刻看着的那个
+    /// 项目"正是它们的语义。异步结果消息一律**不能**走这里,必须用
+    /// [`App::with_project`] 按消息自带的 `project_id` 投递,理由见
+    /// [`ProjectId`]。
     fn with_ws(&mut self, f: impl FnOnce(&mut Workspace, &ShellIo)) {
         let io = self.shell_io();
         let Some(ws) = self.active_workspace_mut() else {
+            return;
+        };
+        f(ws, &io);
+    }
+
+    /// `update()` 里"这条异步结果属于**某个指定项目**"的统一入口:按
+    /// `project_id` 直接投递到对应槽位,与"此刻聚焦的是谁"完全无关。
+    ///
+    /// 这是多项目并行的核心路由不变式(见 [`ProjectId`]):后台项目的会话
+    /// 输出/退出/交付检测结果绝不能落到前台项目身上。
+    ///
+    /// 投不到时静默丢弃,不报错:
+    /// - 槽位不存在 = 用户在结果回来之前把这个页签关掉了,他已经不关心了;
+    /// - 槽位是 `Stub` = 这个项目还没促成过,不可能有任何在飞的会话结果指向
+    ///   它(促成期的"加载中"占位是 `Loaded`,不落进这一支)。
+    fn with_project(&mut self, project_id: ProjectId, f: impl FnOnce(&mut Workspace, &ShellIo)) {
+        let io = self.shell_io();
+        let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
             return;
         };
         f(ws, &io);
@@ -2550,8 +2653,8 @@ impl App {
                     ws.send_input(io, bytes);
                 });
             }
-            Message::TermOutput(tab_id, bytes) => {
-                self.with_ws(|ws, io| {
+            Message::TermOutput(project_id, tab_id, bytes) => {
+                self.with_project(project_id, |ws, io| {
                     let Some(tab) = ws.tab_by_id_mut(tab_id) else {
                         return;
                     };
@@ -2571,8 +2674,8 @@ impl App {
                     }
                 });
             }
-            Message::SessionExited(tab_id) => {
-                self.with_ws(|ws, _io| {
+            Message::SessionExited(project_id, tab_id) => {
+                self.with_project(project_id, |ws, _io| {
                     if let Some(tab) = ws.tab_by_id_mut(tab_id) {
                         tab.alive = false;
                         // 本地标记行，非会话真实输出；应答无处可写，丢弃。
@@ -2580,8 +2683,8 @@ impl App {
                     }
                 });
             }
-            Message::AgentStateChanged(tab_id, state, transcript_path) => {
-                self.with_ws(|ws, io| {
+            Message::AgentStateChanged(project_id, tab_id, state, transcript_path) => {
+                self.with_project(project_id, |ws, io| {
                     // 当前项目路径先取出（下面要 &mut 借 tab，冲突）；重锚:项目优先。
                     let active_repo = ws.project.as_ref().map(|p| PathBuf::from(&p.path));
                     if let Some(tab) = ws.tab_by_id_mut(tab_id) {
@@ -2626,7 +2729,9 @@ impl App {
                                 .flatten();
                                 if let Some(pending) = pending {
                                     let _ =
-                                        proxy.send_event(Message::DeliveryChecked(tab_id, pending));
+                                        proxy.send_event(Message::DeliveryChecked(
+                                            project_id, tab_id, pending,
+                                        ));
                                 }
                             });
                         }
@@ -2645,8 +2750,8 @@ impl App {
                     }
                 });
             }
-            Message::DeliveryChecked(tab_id, pending) => {
-                self.with_ws(|ws, io| {
+            Message::DeliveryChecked(project_id, tab_id, pending) => {
+                self.with_project(project_id, |ws, io| {
                     let active_id = ws.tabs.get(ws.active).map(|t| t.tab_id);
                     let is_active = active_id == Some(tab_id);
                     let active_repo = ws.project.as_ref().map(|p| PathBuf::from(&p.path));
@@ -2674,6 +2779,12 @@ impl App {
             Message::AcceptanceOpen(tab_id) => {
                 self.with_ws(|ws, io| {
                     let active_repo = ws.project.as_ref().map(|p| PathBuf::from(&p.path));
+                    // 用户点的是当前界面上的横幅,所以入口走 `with_ws`;但异步
+                    // 装载结果要投回**这个**项目,不能投给"结果回来时恰好在
+                    // 前台的那个"(见 `ProjectId`)。
+                    let Some(project_id) = ws.project_id() else {
+                        return;
+                    };
                     let Some(tab) = ws.tab_by_id_mut(tab_id) else {
                         return;
                     };
@@ -2693,14 +2804,15 @@ impl App {
                         .ok()
                         .flatten();
                         if let Some((repo, goal, changes)) = loaded {
-                            let _ = proxy
-                                .send_event(Message::AcceptanceLoaded(repo, tab_id, goal, changes));
+                            let _ = proxy.send_event(Message::AcceptanceLoaded(
+                                project_id, repo, tab_id, goal, changes,
+                            ));
                         }
                     });
                 });
             }
-            Message::AcceptanceLoaded(repo, source_tab_id, goal, changes) => {
-                self.with_ws(move |ws, _io| {
+            Message::AcceptanceLoaded(project_id, repo, source_tab_id, goal, changes) => {
+                self.with_project(project_id, move |ws, _io| {
                     let n = goal.as_ref().map(|g| g.criteria.len()).unwrap_or(0);
                     ws.acceptance = Some(AcceptanceView {
                         repo,
@@ -2756,8 +2868,8 @@ impl App {
             }
             Message::AcceptanceAccept => self.with_ws(|ws, io| ws.acceptance_accept(io)),
             Message::AcceptanceReject => self.with_ws(|ws, io| ws.acceptance_reject(io)),
-            Message::AcceptanceDone(result) => {
-                self.with_ws(|ws, io| {
+            Message::AcceptanceDone(project_id, result) => {
+                self.with_project(project_id, |ws, io| {
                     let landed = result.is_ok();
                     if let Some(acc) = &mut ws.acceptance {
                         match result {
@@ -2770,8 +2882,8 @@ impl App {
                     }
                 });
             }
-            Message::ReviewLoaded(source, result) => {
-                self.with_ws(|ws, _io| {
+            Message::ReviewLoaded(project_id, source, result) => {
+                self.with_project(project_id, |ws, _io| {
                     if let Some(rv) = &mut ws.review
                         && rv.source == source
                     {
@@ -2794,8 +2906,8 @@ impl App {
                     }
                 });
             }
-            Message::ConversationsRefreshed(list) => {
-                self.with_ws(move |ws, _io| {
+            Message::ConversationsRefreshed(project_id, list) => {
+                self.with_project(project_id, move |ws, _io| {
                     ws.conversations = list;
                 });
             }
@@ -2832,8 +2944,10 @@ impl App {
                 });
             }
             Message::NewTab => self.with_ws(|ws, io| ws.spawn_new_tab(io)),
-            Message::TabAttached(tab_id, info, snapshot) => {
-                self.with_ws(move |ws, io| ws.on_tab_attached(io, tab_id, info, snapshot));
+            Message::TabAttached(project_id, tab_id, info, snapshot) => {
+                self.with_project(project_id, move |ws, io| {
+                    ws.on_tab_attached(io, tab_id, info, snapshot)
+                });
             }
             Message::PaneResized { cols, rows } => {
                 if cols == 0 || rows == 0 || (cols, rows) == (self.cols, self.rows) {
@@ -3269,10 +3383,22 @@ impl App {
                 // daemon 上的存活会话——直接 drop 只是断开事件流,daemon 侧
                 // 会话仍在跑,会变成"没有任何页签持有、却还占着 PTY"的野会话。
                 // 所以按关页签的语义结束掉它们(`ProjectTabClose` 同款处理)。
-                let landed = matches!(
-                    self.projects.get(&id),
-                    Some(WorkspaceSlot::Loaded(cur)) if cur.loading
-                );
+                // 落地的同时把占位那份 `allowed_files` 句柄接过来:main.rs 的
+                // webview 池只在 `active_project_id` **变化**时才清空,它看不见
+                // "同一个项目换了一份 `Workspace` 对象"。促成窗口期里用户点开
+                // 的文件预览已经建出一个 id 0 的 webview,其 `dozer://` 协议
+                // 闭包捕获的是**占位那一个** `Arc`;新 `Workspace` 若另起一个
+                // `Arc`,`restore_preview_state` 重开的 id 0 会被
+                // `sync_webview_pool` 认成"这个 id 已经有 webview 了"而只调
+                // `load_url`,于是文件请求走的还是旧 `Arc` 的白名单 → 对不上
+                // → 空白预览。这与 Required Fix #3 是同一个失效模式,只是触发
+                // 点从"切项目"变成"促成换对象"。共用同一个 `Arc` 即可,而且
+                // 不损失已经建好的 webview(比清空池更省一次导航)。
+                let inherited = match self.projects.get(&id) {
+                    Some(WorkspaceSlot::Loaded(cur)) if cur.loading => Some(cur.allowed_files()),
+                    _ => None,
+                };
+                let landed = inherited.is_some();
                 if !landed {
                     let client = self.client.clone();
                     let ids: Vec<String> = restore
@@ -3290,7 +3416,7 @@ impl App {
                     return;
                 }
                 let io = self.shell_io();
-                let mut ws = Workspace::from_restore(&io, *restore);
+                let mut ws = Workspace::from_restore(&io, *restore, inherited);
                 // 重挂出来的会话,终端模型是按 `DEFAULT_COLS`×`DEFAULT_ROWS`
                 // 建的,得按当前窗口几何纠正一次。这里**不能**指望
                 // `sync_terminal_grid`:它算出来的网格与 `self.cols/rows` 相同
@@ -3308,15 +3434,15 @@ impl App {
                     }
                 });
             }
-            Message::ProjectGitRefreshed(branch, dirty, statuses) => {
-                self.with_ws(move |ws, _io| {
+            Message::ProjectGitRefreshed(project_id, branch, dirty, statuses) => {
+                self.with_project(project_id, move |ws, _io| {
                     ws.branch = branch;
                     ws.dirty = dirty;
                     ws.git_statuses = statuses;
                 });
             }
-            Message::AcceptanceCountLoaded(n) => {
-                self.with_ws(move |ws, _io| {
+            Message::AcceptanceCountLoaded(project_id, n) => {
+                self.with_project(project_id, move |ws, _io| {
                     ws.project_acceptance_count = n;
                 });
             }
@@ -3353,6 +3479,10 @@ impl App {
                     let Some((source, source_is_dir)) = ws.tree_clipboard.clone() else {
                         return;
                     };
+                    // 结果要投回**发起它的**项目(见 `ProjectId`)。
+                    let Some(project_id) = ws.project_id() else {
+                        return;
+                    };
                     let proxy = io.proxy.clone();
                     io.handle.spawn(async move {
                         let result = tokio::task::spawn_blocking(move || {
@@ -3360,12 +3490,12 @@ impl App {
                         })
                         .await
                         .unwrap_or_else(|e| Err(e.to_string()));
-                        let _ = proxy.send_event(Message::ProjectTreePasteDone(result));
+                        let _ = proxy.send_event(Message::ProjectTreePasteDone(project_id, result));
                     });
                 });
             }
-            Message::ProjectTreePasteDone(result) => {
-                self.with_ws(move |ws, _io| match result {
+            Message::ProjectTreePasteDone(project_id, result) => {
+                self.with_project(project_id, move |ws, _io| match result {
                     Ok(new_path) => {
                         if let (Some(tree), Some(parent)) = (&mut ws.file_tree, new_path.parent()) {
                             tree.refresh(parent);
@@ -3391,6 +3521,10 @@ impl App {
                         return;
                     };
                     ws.tree_error = None;
+                    // 结果要投回**发起它的**项目(见 `ProjectId`)。
+                    let Some(project_id) = ws.project_id() else {
+                        return;
+                    };
                     let proxy = io.proxy.clone();
                     io.handle.spawn(async move {
                         let parent = path.parent().map(|p| p.to_path_buf());
@@ -3405,14 +3539,19 @@ impl App {
                             (Err(e), _) => Err(e),
                         };
                         let _ = proxy.send_event(Message::ProjectTreeOpDone {
+                            project_id,
                             parent: outcome,
                             expand: false, // 删除不展开父目录
                         });
                     });
                 });
             }
-            Message::ProjectTreeOpDone { parent, expand } => {
-                self.with_ws(move |ws, _io| match parent {
+            Message::ProjectTreeOpDone {
+                project_id,
+                parent,
+                expand,
+            } => {
+                self.with_project(project_id, move |ws, _io| match parent {
                     Ok(parent) => {
                         ws.tree_error = None; // 成功后清掉上一次失败重试留下的红字(Important #4)
                         if let Some(tree) = &mut ws.file_tree {
@@ -3545,20 +3684,25 @@ impl App {
 /// 单个 attach 数据流的转发循环：持有 `rx`（唯一持有者），逐条转发到
 /// UI 线程（经 `EventLoopProxy`）。tab 关闭时 `JoinHandle::abort` 打断
 /// 这个循环，`rx` 随任务栈一起析构——这就是 detach 的物理落点。
+///
+/// `project_id` 是这条流归属的项目:`tab_id` 只在单个 `Workspace` 内唯一,
+/// 每个项目都从 0 起编,所以转发出去的消息必须自带项目归属,否则后台项目的
+/// 输出会被喂进前台项目同号的 tab(见 [`ProjectId`])。
 async fn forward_events(
+    project_id: ProjectId,
     tab_id: usize,
     mut rx: mpsc::UnboundedReceiver<TermEvent>,
     proxy: EventLoopProxy<Message>,
 ) {
     while let Some(event) = rx.recv().await {
         let message = match event {
-            TermEvent::Output(bytes) => Message::TermOutput(tab_id, bytes),
+            TermEvent::Output(bytes) => Message::TermOutput(project_id, tab_id, bytes),
             TermEvent::Exited(_code) => {
-                let _ = proxy.send_event(Message::SessionExited(tab_id));
+                let _ = proxy.send_event(Message::SessionExited(project_id, tab_id));
                 return;
             }
             TermEvent::Disconnected => {
-                let _ = proxy.send_event(Message::SessionExited(tab_id));
+                let _ = proxy.send_event(Message::SessionExited(project_id, tab_id));
                 return;
             }
             TermEvent::Lagged => {
@@ -3568,7 +3712,7 @@ async fn forward_events(
             TermEvent::Agent {
                 state,
                 transcript_path,
-            } => Message::AgentStateChanged(tab_id, state, transcript_path),
+            } => Message::AgentStateChanged(project_id, tab_id, state, transcript_path),
         };
         if proxy.send_event(message).is_err() {
             // UI 线程（EventLoop）已经关闭，没有必要继续转发。
@@ -5846,6 +5990,58 @@ mod tests {
         assert_eq!(next_active_after_close(&[1, 2, 3], 1), Some(2));
         assert_eq!(next_active_after_close(&[1], 1), None, "关光了没有下一个");
         assert_eq!(next_active_after_close(&[1, 2], 9), None, "不在表里");
+    }
+
+    /// 多项目并行最要紧的一条路由不变式:异步结果按**消息自带的**
+    /// `project_id` 落地,与"此刻聚焦的是谁"完全无关。
+    ///
+    /// 场景就是 review 指出的那个持续性 bug:项目 A 的 agent 在后台跑,用户
+    /// 正看着项目 B。A 的 `TermOutput(A, 0, ..)` 到达时,若按"投给当前聚焦的
+    /// 项目"路由,`tab_by_id_mut(0)` 会命中 **B 的 tab 0**(每个项目的
+    /// `next_tab_id` 都从 0 起编,两边的第一个 tab 必然同号),A 的输出就被
+    /// 喂进了 B 的终端。这里断言两个方向都投对了人。
+    #[test]
+    fn async_results_route_by_project_id_not_by_focus() {
+        let mut projects = HashMap::new();
+        projects.insert(1, loaded_slot("A"));
+        projects.insert(2, loaded_slot("B"));
+        // "当前聚焦 B"——路由不该看这个值,这里只是把场景写全。
+        let active = Some(2);
+
+        // A 的异步结果(A 在后台)必须落到 A 身上。
+        let ws = loaded_workspace_mut(&mut projects, 1).expect("A 已加载");
+        assert_eq!(
+            ws.tree_error.as_deref(),
+            Some("A"),
+            "后台项目的结果不能落到前台项目"
+        );
+        // 反向同理:B 的结果落到 B。
+        let ws = loaded_workspace_mut(&mut projects, 2).expect("B 已加载");
+        assert_eq!(ws.tree_error.as_deref(), Some("B"));
+        assert_eq!(active, Some(2), "路由全程没有读过 active_project_id");
+    }
+
+    /// 投不到时静默丢弃,不 panic、不误投给别人:页签在结果回来前被关掉
+    /// (槽位不存在),或目标还是没促成过的 `Stub`(不可能有在飞的会话结果)。
+    #[test]
+    fn async_results_are_dropped_when_target_is_gone_or_unpromoted() {
+        let mut projects = HashMap::new();
+        projects.insert(1, loaded_slot("A"));
+        projects.insert(9, stub_slot(9));
+
+        assert!(
+            loaded_workspace_mut(&mut projects, 42).is_none(),
+            "页签已关 → 丢弃"
+        );
+        assert!(
+            loaded_workspace_mut(&mut projects, 9).is_none(),
+            "Stub 没促成过,不可能有指向它的会话结果"
+        );
+        // 丢弃的那两条没有波及仍在的槽位。
+        assert_eq!(
+            loaded_workspace_mut(&mut projects, 1).and_then(|w| w.tree_error.clone()),
+            Some("A".to_string())
+        );
     }
 
     fn known(ids: &[i64]) -> Vec<ProjectInfo> {
