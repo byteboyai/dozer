@@ -103,6 +103,10 @@ pub enum Request {
     /// dozer-hook 单向上报的 agent hook 事件；data 原样透传（P1f 消费）。
     HookEvent {
         session_id: String,
+        /// 触发这次事件的 agent；由 dozer-hook/opencode 插件在装的时候
+        /// 写死，不是猜出来的（spec §3）。
+        #[serde(default)]
+        agent: AgentKind,
         event: String,
         ts_ms: u64,
         data: serde_json::Value,
@@ -232,6 +236,7 @@ mod tests {
     fn hook_event_roundtrips() {
         let req = Request::HookEvent {
             session_id: "s1".into(),
+            agent: AgentKind::Claude,
             event: "Stop".into(),
             ts_ms: 123,
             data: serde_json::json!({"transcript_path": "/tmp/t.jsonl"}),
@@ -239,6 +244,15 @@ mod tests {
         let line = encode_line(&req);
         let back: Request = decode_line(line.trim()).unwrap();
         assert_eq!(back, req);
+    }
+
+    #[test]
+    fn old_hook_event_without_agent_decodes_unknown() {
+        let old = r#"{"type":"hook_event","session_id":"s1","event":"Stop","ts_ms":1,"data":null}"#;
+        match decode_line::<Request>(old).unwrap() {
+            Request::HookEvent { agent, .. } => assert_eq!(agent, AgentKind::Unknown),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
