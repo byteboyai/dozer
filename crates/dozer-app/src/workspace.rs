@@ -1,23 +1,33 @@
 // crates/dozer-app/src/workspace.rs
-//! `Workspace` 是 iced 程序状态，承担 spike B 里 `controls.rs` 的角色：
-//! 持有 UI 状态、暴露 `view()`/`update()`。它渲染 ByteBoy2077 的图标栏
-//! 外壳：左右各一条固定宽图标栏，中间是左面板区（文件列表配对 / Web）
-//! 与右面板区（Agent 配对 / 对话配对），两侧各自可收起、可拖宽，
-//! 每个配对视图各自记住内部"列表:内容"分割比例；任一内容子面板可
-//! 放大成覆盖整个中间区域的浮层（`maximize_overlay`）。终端接
+//! iced 程序状态，承担 spike B 里 `controls.rs` 的角色。分两层（P2a 多项目
+//! 并行）：
+//!
+//! - [`App`]：main.rs 真正持有的顶层容器，暴露 `view()`/`update()`。它持有
+//!   整个程序只有一份的**外壳态**（daemon 客户端/窗口尺寸/图标栏与面板区
+//!   的收起-拖宽-放大状态/右键菜单），以及 `projects`——并行打开的 N 个项目
+//!   页签。
+//! - [`Workspace`]：**单个项目**的全部状态（终端 tab 集合、文件树、预览/
+//!   浏览器域、验收与审阅、对话列表）。N 份同时存活、互不干扰；当前聚焦的
+//!   那一份经 `App::active_workspace()`/`active_workspace_mut()` 取用。
+//!
+//! 渲染的是 ByteBoy2077 的图标栏外壳：左右各一条固定宽图标栏，中间是左面板
+//! 区（文件列表配对 / Web）与右面板区（Agent 配对 / 对话配对），两侧各自可
+//! 收起、可拖宽，每个配对视图各自记住内部"列表:内容"分割比例；任一内容子
+//! 面板可放大成覆盖整个中间区域的浮层（`maximize_overlay`）。终端接
 //! `TerminalModel` + `term_view::view`，键盘输入直达 `dozerd`。
 //!
 //! ## 线程模型（配合 `main.rs` 一起看）
-//! - UI 线程：winit 事件循环所在线程，`Workspace::update`/`view` 只在这
+//! - UI 线程：winit 事件循环所在线程，`App::update`/`view` 只在这
 //!   里跑。`update` 里凡是要碰网络 IO 的地方（写输入、建会话、resize），
-//!   一律 `self.handle.spawn(...)` 丢给 tokio，绝不在这里 `block_on`。
+//!   一律 `handle.spawn(...)` 丢给 tokio，绝不在这里 `block_on`。项目态方法
+//!   要用到的那几个句柄按值打包成 [`ShellIo`] 传进去（见其文档）。
 //! - tokio worker 线程：`main` 持有的 `tokio::runtime::Runtime` 驱动。
 //!   每个 tab 的 attach 数据流有且只有一个消费者任务
 //!   （[`forward_events`]），持有 `mpsc::UnboundedReceiver<TermEvent>`
 //!   ——这是"事件流"的唯一物理落点。
 //! - 桥接：tokio 任务里通过 `winit::event_loop::EventLoopProxy::send_event`
 //!   把 `Message` 送回 UI 线程；`main.rs` 的 `ApplicationHandler::user_event`
-//!   收到后调用 `workspace.update(..)` 并请求重绘。反方向（UI → tokio）
+//!   收到后调用 `app.update(..)` 并请求重绘。反方向（UI → tokio）
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
 use crate::chrome_style;
 use crate::conversation::{self, ConversationMeta};
@@ -25,6 +35,7 @@ use crate::delivery::{self, FileChange, FileStatus};
 use crate::goal::{self, Goal};
 use crate::icons;
 use crate::layout;
+use crate::open_projects;
 use crate::osc::{OscEvent, OscScanner};
 use crate::preview::{AddrTarget, PreviewPane, TabKind, WebviewSpec};
 use crate::preview_state;
@@ -867,6 +878,77 @@ impl SessionTab {
     }
 }
 
+/// 外壳侧共享句柄的一次性快照。项目态(`Workspace`)的方法要发起异步 IO
+/// 时需要 daemon 客户端 / tokio 句柄 / 事件回灌通道,但这三样东西整个程序
+/// 只有一份、长在 `App` 上(P2a 多项目并行:N 个 `Workspace` 共用同一份)。
+///
+/// 为什么按值克隆传进来,而不是让 `Workspace` 反过来借 `App`:
+/// `App::active_workspace_mut()` 交出的 `&mut Workspace` 本身就是从
+/// `&mut self` 里借出去的,此时再取 `&self.client` 就是同时可变+不可变借
+/// `self`,借用检查器不放行。三个句柄的 `clone` 都只是 `Arc` 级别的浅拷贝,
+/// 每次 `update` 克隆一份的代价可以忽略。
+#[derive(Clone)]
+pub struct ShellIo {
+    client: Client,
+    handle: Handle,
+    proxy: EventLoopProxy<Message>,
+    /// 终端网格尺寸快照(新建会话时让新 PTY 一开始就匹配 pane 实际大小)。
+    cols: u16,
+    rows: u16,
+}
+
+/// 顶层容器:main.rs 持有的就是这个(取代此前直接持有单个 `Workspace`)。
+/// 外壳字段是整个程序只有一份的窗口态,`projects` 承载并行打开的项目
+/// 页签——每个 `Workspace` 是完全独立、同时存活的一套项目态(P2a)。
+pub struct App {
+    client: Client,
+    handle: Handle,
+    proxy: EventLoopProxy<Message>,
+    /// 当前终端网格尺寸,随 `PaneResized` 更新;新建 tab 时也用这份
+    /// 尺寸,保证新会话从一开始就跟 pane 实际大小匹配。
+    cols: u16,
+    rows: u16,
+    /// 终端是否聚焦(决定光标反色画法)。当前是单窗口应用且没有其它可
+    /// 聚焦的输入控件,因此终端默认常驻聚焦。
+    term_focused: bool,
+    /// daemon 连接失败,或某次会话操作失败时的错误文案。整个程序共享
+    /// 一份:daemon 连不连得上不是某个项目自己的状态。
+    daemon_error: Option<String>,
+    /// tab 前状态点的闪烁相位(true=亮/false=暗)。由 main.rs 的定时唤醒
+    /// 每拍翻转(见 `toggle_blink`/`any_blinking`)。
+    blink_on: bool,
+    /// 图标栏+左右面板区宽度/分割状态;启动时 `layout::load()` 读盘作
+    /// 起始值,拖拽结束(`ColumnDragEnd`)写盘。
+    shell_layout: ShellLayout,
+    /// 左面板区当前显示的配对视图(左图标栏点击切换)。
+    left_view: LeftView,
+    /// 右面板区当前显示的配对视图(右图标栏点击切换)。
+    right_view: RightView,
+    /// 左面板区是否折叠(再点一次当前已激活的图标即收起)。
+    left_collapsed: bool,
+    /// 右面板区是否折叠,语义同 `left_collapsed`。
+    right_collapsed: bool,
+    /// 当前放大的内容子面板(`None`=未放大)。
+    maximized: Option<MaximizedPane>,
+    /// 当前窗口逻辑尺寸(宽,高)。由 main.rs 建窗口/`WindowEvent::Resized`
+    /// 时经 `set_window_size` 写入。
+    window_size: (f32, f32),
+    /// 正在拖拽的分隔线;`None` 表示未在拖拽。
+    dragging: Option<Divider>,
+    /// 项目树右键菜单当前打开状态(None=未打开)。窗口级浮层,同一时刻
+    /// 只可能有一个,因此是外壳态而非项目态。
+    context_menu: Option<ContextMenu>,
+    /// 最近一次右键点击的窗口逻辑坐标,给 `ProjectTreeContextMenu` 定位菜单用。
+    last_right_click: (f32, f32),
+
+    /// 并行打开的项目页签:project id → 该项目的完整/占位状态。
+    projects: HashMap<i64, WorkspaceSlot>,
+    /// 页签顺序(`projects` 是 HashMap,顺序另存;Task 6 的页签栏按它渲染)。
+    project_order: Vec<i64>,
+    /// 当前聚焦的项目页签(`None`=一个项目都没打开)。
+    active_project_id: Option<i64>,
+}
+
 pub struct Workspace {
     tabs: Vec<SessionTab>,
     /// 当前显示的 tab 在 `tabs` 中的位置（不是 `tab_id`）。
@@ -875,18 +957,6 @@ pub struct Workspace {
     /// `NewTab` 发起 create+attach 期间的转发任务句柄暂存区，
     /// `Message::TabAttached` 到达时取出、装进新建的 `SessionTab`。
     pending: HashMap<usize, tokio::task::JoinHandle<()>>,
-    client: Client,
-    handle: Handle,
-    proxy: EventLoopProxy<Message>,
-    /// 当前终端网格尺寸，随 `PaneResized` 更新；新建 tab 时也用这份
-    /// 尺寸，保证新会话从一开始就跟 pane 实际大小匹配。
-    cols: u16,
-    rows: u16,
-    /// 终端是否聚焦（决定光标反色画法）。当前是单窗口应用且没有其它可
-    /// 聚焦的输入控件，因此终端默认常驻聚焦。
-    term_focused: bool,
-    /// daemon 连接失败，或某次会话操作失败时的错误文案。
-    daemon_error: Option<String>,
     /// 预览域状态机(P1d).
     preview: PreviewPane,
     /// 预览域错误文案(打开文件失败等), RED 显示在预览栏地址栏下方。
@@ -905,10 +975,6 @@ pub struct Workspace {
     review: Option<ReviewView>,
     /// 当前项目的对话列表（扫 Claude 目录；P1j）。
     conversations: Vec<ConversationMeta>,
-    /// tab 前状态点的闪烁相位（true=亮/false=暗）。仅"工作中"(agent
-    /// Running) 的 tab 会随它闪；由 main.rs 的定时唤醒每拍翻转
-    /// （见 `toggle_blink`/`any_blinking`）。
-    blink_on: bool,
     /// 当前项目（None=未打开；P1g）。
     project: Option<ProjectInfo>,
     /// 当前项目的文件树（随 project 建立）。
@@ -931,31 +997,6 @@ pub struct Workspace {
     preview_tab_first: usize,
     /// 浏览器 tab 栏当前最左可见 tab 序号，语义同 `term_tab_first`。
     browser_tab_first: usize,
-    /// 图标栏+左右面板区宽度/分割状态;启动时 `layout::load()` 读盘作
-    /// 起始值,拖拽结束(`ColumnDragEnd`)写盘。
-    shell_layout: ShellLayout,
-    /// 左面板区当前显示的配对视图(左图标栏点击切换)。
-    left_view: LeftView,
-    /// 右面板区当前显示的配对视图(右图标栏点击切换)。
-    right_view: RightView,
-    /// 左面板区是否折叠(再点一次当前已激活的图标即收起)。
-    left_collapsed: bool,
-    /// 右面板区是否折叠,语义同 `left_collapsed`。
-    right_collapsed: bool,
-    /// 当前放大的内容子面板(`None`=未放大)。
-    maximized: Option<MaximizedPane>,
-    /// 当前窗口逻辑尺寸(宽,高)。由 main.rs 建窗口/`WindowEvent::Resized`
-    /// 时经 `set_window_size` 写入。`view()` 侧要靠它把持久化的
-    /// `left_width` 夹进当前窗口能容下的范围(`effective_left_width`,
-    /// Fix round 2 Critical #1),`sync_terminal_grid` 也靠它算终端网格。
-    /// 初值与 main.rs `resumed()` 里的建窗尺寸一致,只在第一帧之前有效。
-    window_size: (f32, f32),
-    /// 正在拖拽的分隔线;`None` 表示未在拖拽。
-    dragging: Option<Divider>,
-    /// 项目树右键菜单当前打开状态(None=未打开)。
-    context_menu: Option<ContextMenu>,
-    /// 最近一次右键点击的窗口逻辑坐标,给 `ProjectTreeContextMenu` 定位菜单用。
-    last_right_click: (f32, f32),
     /// 项目树当前"选中"行(左键点击或右键命中都会更新),渲染时给该行背景色。
     tree_selected: Option<PathBuf>,
     /// 项目树"文件管理器式"剪贴槽:最近一次"复制"的项(路径,是否目录)。
@@ -974,20 +1015,28 @@ impl Workspace {
     /// `.await` 链——调用方用 `runtime.block_on` 驱动，此时窗口还没
     /// 创建，不占用任何"正在跑的" UI 线程；恢复完成后的持续输出全部走
     /// `forward_events` 派生任务 + `EventLoopProxy`，不再阻塞任何线程。
-    pub async fn bootstrap(client: Client, handle: Handle, proxy: EventLoopProxy<Message>) -> Self {
+    pub async fn bootstrap(io: &ShellIo, project: ProjectInfo) -> Self {
         let mut tabs = Vec::new();
         let mut next_tab_id = 0usize;
 
-        match client.list().await {
+        match io.client.list().await {
             Ok(sessions) => {
-                for info in sessions.into_iter().filter(|s| s.alive) {
+                // 只认归属本项目的会话:daemon 现在按 `project_id` 给会话分家
+                // (P2a Task 1-3),并行打开的别的项目的终端不该跑到这一份
+                // `Workspace` 的 tab 栏里来。
+                for info in sessions
+                    .into_iter()
+                    .filter(|s| s.alive && s.project_id == Some(project.id))
+                {
                     let tab_id = next_tab_id;
                     next_tab_id += 1;
-                    match client.attach(&info.id, 0).await {
+                    match io.client.attach(&info.id, 0).await {
                         Ok((snapshot, _next_offset, rx)) => {
                             let mut model = TerminalModel::new(DEFAULT_COLS, DEFAULT_ROWS);
                             let _ = model.feed(&snapshot); // 快照回放：陈旧查询应答不可补发，丢弃
-                            let forwarder = handle.spawn(forward_events(tab_id, rx, proxy.clone()));
+                            let forwarder =
+                                io.handle
+                                    .spawn(forward_events(tab_id, rx, io.proxy.clone()));
                             tabs.push(SessionTab {
                                 agent_state: info.agent_state,
                                 transcript_path: info.transcript_path.clone(),
@@ -1015,100 +1064,55 @@ impl Workspace {
             Err(e) => tracing::warn!("list 失败，跳过启动恢复: {e}"),
         }
 
-        // 启动恢复当前项目 + 最近列表（git 分支/脏在窗口起来后异步补）。
-        let project = client.active_project().await.ok().flatten();
-        let recent_projects = client.list_projects().await.unwrap_or_default();
-        let file_tree = project
-            .as_ref()
-            .map(|p| FileTree::new(PathBuf::from(&p.path)));
-        let project_goal = project.as_ref().and_then(|p| load_project_goal(&p.path));
-        let shell_layout = layout::load();
+        // 最近项目列表（git 分支/脏在窗口起来后异步补）。"当前项目"不再
+        // 向 daemon 打听——daemon 侧的"活跃项目"概念已随 P2a Task 1-3 删除
+        // （多项目并行下没有唯一活跃项目），改由调用方(`App`)指定。
+        let recent_projects = io.client.list_projects().await.unwrap_or_default();
+        let file_tree = Some(FileTree::new(PathBuf::from(&project.path)));
+        let project_goal = load_project_goal(&project.path);
 
         let mut ws = Self {
             tabs,
             active: 0,
             next_tab_id,
             pending: HashMap::new(),
-            client,
-            handle,
-            proxy,
-            cols: DEFAULT_COLS,
-            rows: DEFAULT_ROWS,
-            term_focused: true,
-            daemon_error: None,
-            preview: PreviewPane::default(),
-            preview_error: None,
-            browser: PreviewPane::default(),
-            browser_error: None,
-            allowed_files: Arc::new(Mutex::new(HashSet::new())),
-            acceptance: None,
-            review: None,
-            conversations: Vec::new(),
-            blink_on: true,
-            project,
+            project: Some(project),
             file_tree,
             project_goal,
-            project_acceptance_count: None,
-            branch: None,
-            dirty: false,
             recent_projects,
-            git_statuses: HashMap::new(),
-            term_tab_first: 0,
-            preview_tab_first: 0,
-            browser_tab_first: 0,
-            left_view: shell_layout.left_view,
-            right_view: shell_layout.right_view,
-            left_collapsed: shell_layout.left_collapsed,
-            right_collapsed: shell_layout.right_collapsed,
-            shell_layout,
-            maximized: None,
-            window_size: INITIAL_WINDOW_SIZE,
-            dragging: None,
-            context_menu: None,
-            last_right_click: (0.0, 0.0),
-            tree_selected: None,
-            tree_clipboard: None,
-            tree_error: None,
-            tree_delete_confirm: None,
-            tree_edit: None,
+            ..Self::empty_for_project_placeholder()
         };
         // 启动恢复了当前项目时,与 ProjectOpened 同样异步补 git 分支/脏与
-        // 对话列表（line 408 承诺"窗口起来后异步补"——此前只在用户主动
-        // 打开项目时接线,启动恢复路径漏了,导致重开 app 后对话列表空白）。
+        // 对话列表（承诺"窗口起来后异步补"——此前只在用户主动打开项目时
+        // 接线,启动恢复路径漏了,导致重开 app 后对话列表空白）。
         if ws.project.is_some() {
             // 有项目但没恢复出任何存活会话(比如上次退出前刚好关光了终端)
             // 时,默认新开一个根在项目目录的终端,不用用户手动点"+"。
-            ws.ensure_project_terminal();
+            ws.ensure_project_terminal(io);
             // 认回上次退出前打开的预览文件 tab（重启后自动重开）。
             ws.restore_preview_state();
-            ws.spawn_project_git_refresh();
-            ws.spawn_conversations_refresh();
-            ws.spawn_acceptance_count_refresh();
+            ws.spawn_project_git_refresh(io);
+            ws.spawn_conversations_refresh(io);
+            ws.spawn_acceptance_count_refresh(io);
         }
         ws
     }
 
-    /// daemon 连接失败（自动拉起 + 重试后仍不可用）时的降级构造：不做
-    /// 任何会话恢复，只记下错误文案，交给 `view()` 画 RED 文案。
-    pub fn with_daemon_error(
-        client: Client,
-        handle: Handle,
-        proxy: EventLoopProxy<Message>,
-        message: String,
-    ) -> Self {
-        let shell_layout = layout::load();
+    /// `WorkspaceSlot::Stub` 促成 `Loaded` 之前的占位内容:一个"什么都没有"
+    /// 的空 `Workspace`(`project: None`,无 tab)。`App::view()` 按
+    /// `ws.project.is_none()` 识别"这是占位,不是真的空项目"——正常促成过的
+    /// `Workspace` 恒有 `project: Some(_)`,不会和这个占位混淆。
+    ///
+    /// 注意这**不是**旧的 `Workspace::with_daemon_error`:"daemon 连不上"是
+    /// 整个程序共享的状态(`daemon_error` 已随外壳字段搬到 `App`),对应
+    /// `App::with_daemon_error`;这里表达的是完全不同的"这个项目的真实状态
+    /// 还没加载完"。
+    fn empty_for_project_placeholder() -> Self {
         Self {
             tabs: Vec::new(),
             active: 0,
             next_tab_id: 0,
             pending: HashMap::new(),
-            client,
-            handle,
-            proxy,
-            cols: DEFAULT_COLS,
-            rows: DEFAULT_ROWS,
-            term_focused: true,
-            daemon_error: Some(message),
             preview: PreviewPane::default(),
             preview_error: None,
             browser: PreviewPane::default(),
@@ -1117,7 +1121,6 @@ impl Workspace {
             acceptance: None,
             review: None,
             conversations: Vec::new(),
-            blink_on: true,
             project: None,
             file_tree: None,
             project_goal: None,
@@ -1129,16 +1132,6 @@ impl Workspace {
             term_tab_first: 0,
             preview_tab_first: 0,
             browser_tab_first: 0,
-            left_view: shell_layout.left_view,
-            right_view: shell_layout.right_view,
-            left_collapsed: shell_layout.left_collapsed,
-            right_collapsed: shell_layout.right_collapsed,
-            shell_layout,
-            maximized: None,
-            window_size: INITIAL_WINDOW_SIZE,
-            dragging: None,
-            context_menu: None,
-            last_right_click: (0.0, 0.0),
             tree_selected: None,
             tree_clipboard: None,
             tree_error: None,
@@ -1155,647 +1148,6 @@ impl Workspace {
             .any(|t| t.alive && t.agent_state == AgentState::Running)
     }
 
-    /// 翻转闪烁相位；由 main.rs 的定时唤醒每拍调用一次。
-    pub fn toggle_blink(&mut self) {
-        self.blink_on = !self.blink_on;
-    }
-
-    pub fn update(&mut self, message: Message) {
-        match message {
-            Message::TermInput(bytes) => {
-                // 终端不在屏上时丢弃按键(不报错、不写 PTY):否则用户在读
-                // 对话审阅时敲的回车/方向键会静默提交给隐藏在后面的 agent
-                // 会话(Fix round 2 #3)。
-                if !self.terminal_visible() {
-                    return;
-                }
-                // 键入即回底 + 清选区：正在回看历史时一敲键盘，视口跳回
-                // 实时输出（常规终端语义），再把字节写给 daemon。
-                if let Some(tab) = self.tabs.get_mut(self.active) {
-                    tab.model.scroll_to_bottom();
-                    tab.model.selection_clear();
-                }
-                self.send_input(bytes);
-            }
-            Message::TermOutput(tab_id, bytes) => {
-                let Some(tab) = self.tab_by_id_mut(tab_id) else {
-                    return;
-                };
-                // 实时输出可能含设备查询（DSR/DA 等），应答必须写回 PTY
-                // ——atuin/claude 等 TUI 依赖它（此前丢弃导致探测超时）。
-                tab.ingest_osc(&bytes);
-                let responses = tab.model.feed(&bytes);
-                let alive = tab.alive;
-                let id = tab.info.id.clone();
-                if !responses.is_empty() && alive {
-                    let client = self.client.clone();
-                    self.handle.spawn(async move {
-                        if let Err(e) = client.write(&id, &responses).await {
-                            tracing::warn!("回写终端查询应答失败: {e}");
-                        }
-                    });
-                }
-            }
-            Message::SessionExited(tab_id) => {
-                if let Some(tab) = self.tab_by_id_mut(tab_id) {
-                    tab.alive = false;
-                    // 本地标记行，非会话真实输出；应答无处可写，丢弃。
-                    let _ = tab.model.feed(&exited_marker());
-                }
-            }
-            Message::AgentStateChanged(tab_id, state, transcript_path) => {
-                // 当前项目路径先取出（下面要 &mut 借 tab，冲突）；重锚:项目优先。
-                let active_repo = self.project.as_ref().map(|p| PathBuf::from(&p.path));
-                if let Some(tab) = self.tab_by_id_mut(tab_id) {
-                    tab.agent_state = state;
-                    if let Some(tp) = transcript_path {
-                        tab.transcript_path = Some(tp);
-                    }
-                    tracing::info!(tab_id, ?state, "agent 状态变更");
-                    if state == AgentState::TurnEnded {
-                        // git 检测不许在 UI 线程跑：丢 tokio,结果经 proxy 回来
-                        let cwd =
-                            effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
-                        let last_turn = tab.last_turn_head.clone();
-                        let proxy = self.proxy.clone();
-                        tracing::info!(tab_id, cwd = %cwd.display(), "回合结束,开始交付检测");
-                        self.handle.spawn(async move {
-                            let pending = tokio::task::spawn_blocking(move || {
-                                let Some(repo) = delivery::repo_root(&cwd) else {
-                                    tracing::info!(cwd = %cwd.display(), "非 git 仓库,不参与闭环");
-                                    return None;
-                                };
-                                let dirty = delivery::is_dirty(&repo);
-                                let head = delivery::head_commit(&repo);
-                                let accepted = delivery::last_accepted(&repo).map(|(_, c)| c);
-                                let pending = delivery::delivery_pending(
-                                    dirty,
-                                    head.as_deref(),
-                                    accepted.as_deref(),
-                                    last_turn.as_deref(),
-                                );
-                                tracing::info!(
-                                    repo = %repo.display(),
-                                    dirty,
-                                    has_accepted = accepted.is_some(),
-                                    pending,
-                                    "交付检测完成"
-                                );
-                                Some(pending)
-                            })
-                            .await
-                            .ok()
-                            .flatten();
-                            if let Some(pending) = pending {
-                                let _ = proxy.send_event(Message::DeliveryChecked(tab_id, pending));
-                            }
-                        });
-                    }
-                }
-                // 审阅 tab 若开着且属本会话,回合结束重解析 transcript（P1i）。
-                if state == AgentState::TurnEnded
-                    && let Some(rv) = &self.review
-                    && review_should_refresh_on_turn(&rv.source, tab_id)
-                    && let Some(path) = self
-                        .tabs
-                        .iter()
-                        .find(|t| t.tab_id == tab_id)
-                        .and_then(|t| t.transcript_path.clone())
-                {
-                    self.spawn_review_load(ReviewSource::Session(tab_id), path);
-                }
-            }
-            Message::DeliveryChecked(tab_id, pending) => {
-                let active_id = self.tabs.get(self.active).map(|t| t.tab_id);
-                let is_active = active_id == Some(tab_id);
-                let active_repo = self.project.as_ref().map(|p| PathBuf::from(&p.path));
-                tracing::info!(
-                    tab_id,
-                    pending,
-                    is_active,
-                    "交付检测结果落地(pending 写入该 tab;仅当前激活 tab 显示横幅)"
-                );
-                if let Some(tab) = self.tab_by_id_mut(tab_id) {
-                    tab.delivery_pending = pending;
-                    // 记录本回合 HEAD 供下回合比对（同步读一次可容忍:仅 rev-parse）
-                    let cwd = effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
-                    if let Some(repo) = delivery::repo_root(&cwd) {
-                        tab.last_turn_head = delivery::head_commit(&repo);
-                    }
-                }
-                // 回合结束后刷新项目 git 状态,文件树装饰随之更新（P1h）。
-                self.spawn_project_git_refresh();
-                // 回合结束后刷新对话列表(transcript 增长/新增；P1j)。
-                self.spawn_conversations_refresh();
-            }
-            Message::AcceptanceOpen(tab_id) => {
-                let active_repo = self.project.as_ref().map(|p| PathBuf::from(&p.path));
-                let Some(tab) = self.tab_by_id_mut(tab_id) else {
-                    return;
-                };
-                tab.delivery_pending = false;
-                let cwd = effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
-                let proxy = self.proxy.clone();
-                self.handle.spawn(async move {
-                    let loaded = tokio::task::spawn_blocking(move || {
-                        let repo = delivery::repo_root(&cwd)?;
-                        let goal = std::fs::read_to_string(goal::goal_path(&repo))
-                            .ok()
-                            .and_then(|md| goal::parse_goal(&md));
-                        let changes = delivery::changes(&repo);
-                        Some((repo, goal, changes))
-                    })
-                    .await
-                    .ok()
-                    .flatten();
-                    if let Some((repo, goal, changes)) = loaded {
-                        let _ = proxy
-                            .send_event(Message::AcceptanceLoaded(repo, tab_id, goal, changes));
-                    }
-                });
-            }
-            Message::AcceptanceLoaded(repo, source_tab_id, goal, changes) => {
-                let n = goal.as_ref().map(|g| g.criteria.len()).unwrap_or(0);
-                self.acceptance = Some(AcceptanceView {
-                    repo,
-                    source_tab_id,
-                    goal,
-                    changes,
-                    checked: vec![false; n],
-                    comment: String::new(),
-                    comment_editing: false,
-                    error: None,
-                    accepted_version: None,
-                });
-                self.preview.open_acceptance();
-                // 验收内容画在 `preview_pane` 里,而 `preview_pane` 属于左
-                // 面板区:左侧收起时点"进入验收"会毫无反应(内容装进了一个
-                // 没被渲染的面板)。新外壳鼓励收起左侧给终端腾空间,所以这里
-                // 必须主动展开(Fix round 2 #5)。
-                if self.left_collapsed {
-                    self.left_collapsed = false;
-                    self.on_shell_layout_changed();
-                }
-            }
-            Message::AcceptanceToggle(i) => {
-                if let Some(acc) = &mut self.acceptance
-                    && let Some(c) = acc.checked.get_mut(i)
-                {
-                    *c = !*c;
-                }
-            }
-            Message::AcceptanceCommentClick => {
-                if let Some(acc) = &mut self.acceptance {
-                    acc.comment_editing = true;
-                }
-            }
-            Message::AcceptanceCommentEvent(ev) => {
-                if let Some(acc) = &mut self.acceptance {
-                    match ev {
-                        AddrEvent::Text(s) => acc.comment.push_str(&s),
-                        AddrEvent::Backspace => {
-                            acc.comment.pop();
-                        }
-                        AddrEvent::Submit | AddrEvent::Cancel => acc.comment_editing = false,
-                    }
-                }
-            }
-            Message::AcceptanceAccept => self.acceptance_accept(),
-            Message::AcceptanceReject => self.acceptance_reject(),
-            Message::AcceptanceDone(result) => {
-                let landed = result.is_ok();
-                if let Some(acc) = &mut self.acceptance {
-                    match result {
-                        Ok(n) => acc.accepted_version = Some(n),
-                        Err(e) => acc.error = Some(e),
-                    }
-                }
-                if landed {
-                    self.spawn_acceptance_count_refresh();
-                }
-            }
-            Message::ReviewLoaded(source, result) => {
-                if let Some(rv) = &mut self.review
-                    && rv.source == source
-                {
-                    match result {
-                        Ok(entries) => {
-                            rv.entries = entries;
-                            rv.error = None;
-                        }
-                        Err(e) => rv.error = Some(e),
-                    }
-                }
-            }
-            Message::ReviewToggle(i) => {
-                if let Some(rv) = &mut self.review
-                    && !rv.expanded.remove(&i)
-                {
-                    rv.expanded.insert(i);
-                }
-            }
-            Message::ConversationsRefreshed(list) => {
-                self.conversations = list;
-            }
-            Message::ConversationOpen(path) => {
-                // 若点开的是某活会话的当前对话 → Session 源(回合结束刷新);否则 File 快照。
-                let path_s = path.to_string_lossy().into_owned();
-                let source = self
-                    .tabs
-                    .iter()
-                    .find(|t| t.transcript_path.as_deref() == Some(path_s.as_str()))
-                    .map(|t| ReviewSource::Session(t.tab_id))
-                    .unwrap_or_else(|| ReviewSource::File(path.clone()));
-                self.review = Some(ReviewView {
-                    source: source.clone(),
-                    entries: Vec::new(),
-                    error: None,
-                    expanded: std::collections::HashSet::new(),
-                });
-                self.spawn_review_load(source, path_s);
-            }
-            Message::SelectTab(idx) => {
-                if idx < self.tabs.len() {
-                    self.active = idx;
-                }
-            }
-            Message::CloseTab(idx) => {
-                self.close_tab(idx);
-                self.ensure_project_terminal();
-            }
-            Message::NewTab => self.spawn_new_tab(),
-            Message::TabAttached(tab_id, info, snapshot) => {
-                self.on_tab_attached(tab_id, info, snapshot)
-            }
-            Message::PaneResized { cols, rows } => self.resize_all(cols, rows),
-            Message::ColumnDragStart(divider) => {
-                self.dragging = Some(divider);
-            }
-            Message::ColumnDrag {
-                window_width,
-                logical_x,
-            } => {
-                if let Some(divider) = self.dragging {
-                    let state = self.shell_state();
-                    self.shell_layout = apply_column_drag(state, divider, window_width, logical_x);
-                }
-            }
-            Message::ColumnDragEnd => {
-                self.dragging = None;
-                self.on_shell_layout_changed();
-            }
-            Message::LeftIconSelect(v) => {
-                if self.left_view == v {
-                    self.left_collapsed = !self.left_collapsed;
-                } else {
-                    self.left_view = v;
-                    self.left_collapsed = false;
-                }
-                // 图标栏点击一律退出放大态。放大态浮层不拦图标栏上的点击
-                // (遮罩两侧垫的是无交互 Space,点击穿到下层图标按钮),所以
-                // "放大左侧 → 点文件夹图标收起左侧"是可达的:不清 `maximized`
-                // 就会留下一个空的金色描边浮层,只能点变暗区才能脱身
-                // (Fix round 2 #2)。切换本侧显示什么内容时,放大态本也不该
-                // 存活,无条件清最简单也最不容易出意外。
-                self.maximized = None;
-                self.on_shell_layout_changed();
-            }
-            Message::RightIconSelect(v) => {
-                if self.right_view == v {
-                    self.right_collapsed = !self.right_collapsed;
-                } else {
-                    self.right_view = v;
-                    self.right_collapsed = false;
-                }
-                // 同 LeftIconSelect(Fix round 2 #2)。
-                self.maximized = None;
-                self.on_shell_layout_changed();
-            }
-            Message::MaximizeToggle(which) => {
-                self.maximized = if self.maximized == Some(which) {
-                    None
-                } else {
-                    Some(which)
-                };
-                // 放大/还原改变了终端 pane 的像素尺寸,网格要跟着重算,否则
-                // "放大终端"只放大外框、字符网格不变(Fix round 2 #6)。放大态
-                // 本身不持久化,所以只重算、不写盘。
-                self.sync_terminal_grid();
-            }
-            Message::MaximizeClose => {
-                self.maximized = None;
-                self.sync_terminal_grid();
-            }
-            Message::Noop => {}
-            Message::DaemonError(message) => self.daemon_error = Some(message),
-            Message::TermScroll(delta) => {
-                if let Some(tab) = self.tabs.get_mut(self.active) {
-                    tab.model.scroll_display(delta);
-                }
-            }
-            Message::TermTabScroll(right) => {
-                if right {
-                    self.term_tab_first = self.term_tab_first.saturating_add(2);
-                } else {
-                    self.term_tab_first = self.term_tab_first.saturating_sub(2);
-                }
-            }
-            Message::PreviewTabScroll(right) => {
-                if right {
-                    self.preview_tab_first = self.preview_tab_first.saturating_add(2);
-                } else {
-                    self.preview_tab_first = self.preview_tab_first.saturating_sub(2);
-                }
-            }
-            Message::BrowserTabScroll(right) => {
-                if right {
-                    self.browser_tab_first = self.browser_tab_first.saturating_add(2);
-                } else {
-                    self.browser_tab_first = self.browser_tab_first.saturating_sub(2);
-                }
-            }
-            Message::TermSelStart { col, row, right } => {
-                if let Some(tab) = self.tabs.get_mut(self.active) {
-                    tab.model.selection_start(col, row, right);
-                }
-            }
-            Message::TermSelUpdate { col, row, right } => {
-                if let Some(tab) = self.tabs.get_mut(self.active) {
-                    tab.model.selection_update(col, row, right);
-                }
-            }
-            Message::TermPaste(text) => {
-                // 同 TermInput 的可见性闸门(Fix round 3):⌘V 粘贴走同一条
-                // PTY 写入路径,粘贴内容若含换行还会在看不见的会话里直接
-                // 执行,比单个按键更危险,必须同样拦截。
-                if !self.terminal_visible() {
-                    return;
-                }
-                let Some(tab) = self.tabs.get_mut(self.active) else {
-                    return;
-                };
-                tab.model.scroll_to_bottom();
-                let bytes = if tab.model.bracketed_paste() {
-                    let mut b = b"\x1b[200~".to_vec();
-                    b.extend_from_slice(text.as_bytes());
-                    b.extend_from_slice(b"\x1b[201~");
-                    b
-                } else {
-                    text.into_bytes()
-                };
-                self.send_input(bytes);
-            }
-            Message::PreviewOpenPath(path) => {
-                if !path.is_file() {
-                    self.preview_error = Some(format!("文件不存在或不可读: {}", path.display()));
-                    return;
-                }
-                self.preview_error = None;
-                self.tree_selected = Some(path.clone());
-                self.allowed_files
-                    .lock()
-                    .expect("allowed_files 锁")
-                    .insert(path.clone());
-                self.preview.open_path(path);
-                // 新 tab 落在末尾，滚回最左让它可见（P1L T5）。
-                self.preview_tab_first = 0;
-                self.spawn_preview_state_save();
-            }
-            Message::PreviewSelectTab(idx) => {
-                self.preview.select(idx);
-                self.spawn_preview_state_save();
-            }
-            Message::PreviewCloseTab(idx) => {
-                self.preview.close(idx);
-                // 关 tab 后位置全变，旧 first 可能越界——归零防御（P1L T5）。
-                self.preview_tab_first = 0;
-                self.spawn_preview_state_save();
-            }
-            Message::BrowserOpenUrl(url) => {
-                self.browser_error = None;
-                self.browser.open_url(url);
-                self.browser_tab_first = 0;
-            }
-            Message::BrowserSelectTab(idx) => {
-                self.browser.select(idx);
-            }
-            Message::BrowserCloseTab(idx) => {
-                self.browser.close(idx);
-                self.browser_tab_first = 0;
-            }
-            Message::BrowserAddrClick => {
-                self.browser_error = None;
-                self.browser.addr_begin();
-            }
-            Message::BrowserAddrEvent(ev) => match ev {
-                AddrEvent::Text(s) => self.browser.addr_text(&s),
-                AddrEvent::Backspace => self.browser.addr_backspace(),
-                AddrEvent::Cancel => self.browser.addr_cancel(),
-                AddrEvent::Submit => match self.browser.addr_submit() {
-                    // 浏览器只承载网页 tab,地址栏解析出的本地路径不受支持
-                    // (与文件预览彻底独立,不借它的文件打开能力)。
-                    Some(AddrTarget::File(_)) => {
-                        self.browser_error = Some("浏览器不支持打开本地文件".to_string());
-                    }
-                    Some(AddrTarget::Url(url)) => self.update(Message::BrowserOpenUrl(url)),
-                    None => {}
-                },
-            },
-            Message::ProjectPickFolder => {} // 副作用在 main.rs(rfd 文件夹选择)
-            Message::ProjectOpen(path) => {
-                let client = self.client.clone();
-                let proxy = self.proxy.clone();
-                let path_s = path.to_string_lossy().into_owned();
-                self.handle.spawn(async move {
-                    let opened = client.open_project(&path_s).await.ok().flatten();
-                    let recent = client.list_projects().await.unwrap_or_default();
-                    let _ = proxy.send_event(Message::ProjectOpened(opened, recent));
-                });
-            }
-            Message::ProjectSelect(id) => {
-                let client = self.client.clone();
-                let proxy = self.proxy.clone();
-                self.handle.spawn(async move {
-                    let opened = client.set_active_project(id).await.ok().flatten();
-                    let recent = client.list_projects().await.unwrap_or_default();
-                    let _ = proxy.send_event(Message::ProjectOpened(opened, recent));
-                });
-            }
-            Message::ProjectOpened(project, recent) => {
-                self.recent_projects = recent;
-                // 切到不同项目:关掉上一个项目遗留的终端 tab 与预览 tab,给
-                // 新项目干净起点（验收反馈）。首次打开(无前项目)不强关。
-                let switching = matches!(
-                    (&self.project, &project),
-                    (Some(old), Some(new)) if old.id != new.id
-                );
-                if switching {
-                    self.close_all_tabs_for_switch();
-                }
-                // 换项目时放大态不该跟着过去:被放大的那块内容(项目树/预览/
-                // 终端/审阅)整体换了主人,留着放大浮层只会挡住新项目的界面
-                // (与图标栏点击清放大同一类理由,Fix round 2 #2)。
-                self.maximized = None;
-                self.file_tree = project
-                    .as_ref()
-                    .map(|p| FileTree::new(PathBuf::from(&p.path)));
-                self.tree_selected = None;
-                self.branch = None;
-                self.dirty = false;
-                self.git_statuses = HashMap::new();
-                self.conversations = Vec::new();
-                self.project = project;
-                self.project_goal = self
-                    .project
-                    .as_ref()
-                    .and_then(|p| load_project_goal(&p.path));
-                self.project_acceptance_count = None;
-                self.ensure_project_terminal();
-                self.restore_preview_state();
-                self.spawn_project_git_refresh();
-                self.spawn_conversations_refresh();
-                self.spawn_acceptance_count_refresh();
-            }
-            Message::ProjectTreeToggle(dir) => {
-                self.tree_selected = Some(dir.clone());
-                if let Some(t) = &mut self.file_tree {
-                    t.toggle(&dir);
-                }
-            }
-            Message::ProjectGitRefreshed(branch, dirty, statuses) => {
-                self.branch = branch;
-                self.dirty = dirty;
-                self.git_statuses = statuses;
-            }
-            Message::AcceptanceCountLoaded(n) => {
-                self.project_acceptance_count = n;
-            }
-            Message::RightClickAt { x, y } => {
-                self.last_right_click = (x, y);
-            }
-            Message::ProjectTreeContextMenu { path, is_dir } => {
-                let (x, y) = self.last_right_click;
-                self.tree_selected = Some(path.clone());
-                self.context_menu = Some(ContextMenu {
-                    x,
-                    y,
-                    target: path,
-                    is_dir,
-                });
-            }
-            Message::ProjectTreeContextMenuClose => {
-                self.context_menu = None;
-            }
-            Message::ProjectTreeCopyPath(_, _) => {} // 副作用在 main.rs(写系统剪贴板需 Clipboard 句柄)
-            Message::ProjectTreeCopy(path, is_dir) => {
-                self.tree_clipboard = Some((path, is_dir));
-                self.context_menu = None;
-            }
-            Message::ProjectTreePaste(target_dir) => {
-                self.context_menu = None;
-                self.tree_error = None;
-                let Some((source, source_is_dir)) = self.tree_clipboard.clone() else {
-                    return;
-                };
-                let proxy = self.proxy.clone();
-                self.handle.spawn(async move {
-                    let result = tokio::task::spawn_blocking(move || {
-                        project::paste_item(&source, source_is_dir, &target_dir)
-                    })
-                    .await
-                    .unwrap_or_else(|e| Err(e.to_string()));
-                    let _ = proxy.send_event(Message::ProjectTreePasteDone(result));
-                });
-            }
-            Message::ProjectTreePasteDone(result) => match result {
-                Ok(new_path) => {
-                    if let (Some(tree), Some(parent)) = (&mut self.file_tree, new_path.parent()) {
-                        tree.refresh(parent);
-                    }
-                }
-                Err(e) => self.tree_error = Some(e),
-            },
-            Message::ProjectTreeDeleteRequest(path, is_dir) => {
-                self.context_menu = None;
-                self.tree_delete_confirm = Some((path, is_dir));
-            }
-            Message::ProjectTreeDeleteCancel => {
-                self.tree_delete_confirm = None;
-            }
-            Message::ProjectTreeDeleteConfirm => {
-                let Some((path, _)) = self.tree_delete_confirm.take() else {
-                    return;
-                };
-                self.tree_error = None;
-                let proxy = self.proxy.clone();
-                self.handle.spawn(async move {
-                    let parent = path.parent().map(|p| p.to_path_buf());
-                    let result = tokio::task::spawn_blocking(move || {
-                        trash::delete(&path).map_err(|e| e.to_string())
-                    })
-                    .await
-                    .unwrap_or_else(|e| Err(e.to_string()));
-                    let outcome = match (result, parent) {
-                        (Ok(()), Some(p)) => Ok(p),
-                        (Ok(()), None) => Err("删除的是项目根,无父目录可刷新".to_string()),
-                        (Err(e), _) => Err(e),
-                    };
-                    let _ = proxy.send_event(Message::ProjectTreeOpDone {
-                        parent: outcome,
-                        expand: false, // 删除不展开父目录
-                    });
-                });
-            }
-            Message::ProjectTreeOpDone { parent, expand } => match parent {
-                Ok(parent) => {
-                    self.tree_error = None; // 成功后清掉上一次失败重试留下的红字(Important #4)
-                    if let Some(tree) = &mut self.file_tree {
-                        tree.refresh(&parent);
-                        if expand {
-                            tree.ensure_expanded(&parent);
-                        }
-                    }
-                }
-                Err(e) => self.tree_error = Some(e),
-            },
-            Message::ProjectTreeNewFile(parent) => {
-                self.start_tree_new(parent, TreeEditMode::NewFile);
-            }
-            Message::ProjectTreeNewFolder(parent) => {
-                self.start_tree_new(parent, TreeEditMode::NewFolder);
-            }
-            Message::ProjectTreeRenameStart(path) => {
-                self.context_menu = None;
-                self.tree_error = None;
-                let Some(parent) = path.parent().map(|p| p.to_path_buf()) else {
-                    return;
-                };
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                self.tree_edit = Some(TreeEdit {
-                    parent_dir: parent,
-                    mode: TreeEditMode::Rename(path),
-                    buffer: name,
-                });
-            }
-            Message::ProjectTreeEditEvent(ev) => {
-                let Some(edit) = &mut self.tree_edit else {
-                    return;
-                };
-                match ev {
-                    AddrEvent::Text(s) => edit.buffer.push_str(&s),
-                    AddrEvent::Backspace => {
-                        edit.buffer.pop();
-                    }
-                    AddrEvent::Cancel => self.tree_edit = None,
-                    AddrEvent::Submit => self.submit_tree_edit(),
-                }
-            }
-        }
-    }
-
     /// 当前激活 tab 的选区文本（⌘C 复制用）。
     pub fn active_selection_text(&self) -> Option<String> {
         self.tabs
@@ -1809,16 +1161,16 @@ impl Workspace {
 
     /// 把键盘/IME 字节直接写给当前激活 tab 对应的 daemon 会话。异步写
     /// 交给 tokio（`self.handle.spawn`），绝不在 UI 线程 `block_on`。
-    fn send_input(&self, bytes: Vec<u8>) {
+    fn send_input(&self, io: &ShellIo, bytes: Vec<u8>) {
         let Some(tab) = self.tabs.get(self.active) else {
             return;
         };
         if !tab.alive {
             return;
         }
-        let client = self.client.clone();
+        let client = io.client.clone();
         let id = tab.info.id.clone();
-        self.handle.spawn(async move {
+        io.handle.spawn(async move {
             if let Err(e) = client.write(&id, &bytes).await {
                 tracing::warn!("写入终端失败: {e}");
             }
@@ -1826,13 +1178,13 @@ impl Workspace {
     }
 
     /// 异步扫当前项目的对话目录 → ConversationsRefreshed（GUI 侧 spawn_blocking；P1j）。
-    fn spawn_conversations_refresh(&self) {
+    fn spawn_conversations_refresh(&self, io: &ShellIo) {
         let Some(p) = &self.project else {
             return;
         };
         let cwd = PathBuf::from(&p.path);
-        let proxy = self.proxy.clone();
-        self.handle.spawn(async move {
+        let proxy = io.proxy.clone();
+        io.handle.spawn(async move {
             let dir = conversation::claude_project_dir(&cwd);
             let list = tokio::task::spawn_blocking(move || conversation::list_conversations(&dir))
                 .await
@@ -1845,12 +1197,12 @@ impl Workspace {
     /// 异步取当前项目验收次数 → AcceptanceCountLoaded（项目卡副行）。
     /// 查询键走 `acceptance_query_repo`（= 落库侧 `delivery::repo_root`），
     /// 而非原始 `p.path`，否则子目录/符号链接路径撞不到库、副行静默空白。
-    fn spawn_acceptance_count_refresh(&self) {
+    fn spawn_acceptance_count_refresh(&self, io: &ShellIo) {
         let Some(p) = &self.project else { return };
         let project_path = p.path.clone();
-        let client = self.client.clone();
-        let proxy = self.proxy.clone();
-        self.handle.spawn(async move {
+        let client = io.client.clone();
+        let proxy = io.proxy.clone();
+        io.handle.spawn(async move {
             // repo_root 是阻塞 git 调用，隔离到 spawn_blocking。
             let repo = tokio::task::spawn_blocking(move || acceptance_query_repo(&project_path))
                 .await
@@ -1873,9 +1225,9 @@ impl Workspace {
     }
 
     /// 异步读 transcript + 解析 → ReviewLoaded（GUI 侧 spawn_blocking；P1i/P1j 按源）。
-    fn spawn_review_load(&self, source: ReviewSource, path: String) {
-        let proxy = self.proxy.clone();
-        self.handle.spawn(async move {
+    fn spawn_review_load(&self, io: &ShellIo, source: ReviewSource, path: String) {
+        let proxy = io.proxy.clone();
+        io.handle.spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
                 std::fs::read_to_string(&path)
                     .map(|s| transcript::parse_transcript(&s))
@@ -1888,13 +1240,13 @@ impl Workspace {
     }
 
     /// 异步刷新当前项目的 git 分支/脏/文件状态（打开项目 + 回合结束触发）。
-    fn spawn_project_git_refresh(&self) {
+    fn spawn_project_git_refresh(&self, io: &ShellIo) {
         let Some(p) = &self.project else {
             return;
         };
         let repo = PathBuf::from(&p.path);
-        let proxy = self.proxy.clone();
-        self.handle.spawn(async move {
+        let proxy = io.proxy.clone();
+        io.handle.spawn(async move {
             let (b, d, s) = tokio::task::spawn_blocking(move || {
                 (
                     delivery::branch(&repo),
@@ -1911,9 +1263,9 @@ impl Workspace {
     /// 项目切换清理：关掉所有终端 tab（=结束会话，同 CloseTab 语义）与
     /// 所有预览 tab，给新项目一个干净起点（P1g 验收反馈）。webview 池由
     /// main.rs 的 sync_previews 依据空的期望清单自动销毁。
-    fn close_all_tabs_for_switch(&mut self) {
+    fn close_all_tabs_for_switch(&mut self, io: &ShellIo) {
         while !self.tabs.is_empty() {
-            self.close_tab(0);
+            self.close_tab(io, 0);
         }
         while !self.preview.tabs().is_empty() {
             self.preview.close(0);
@@ -1927,7 +1279,6 @@ impl Workspace {
     /// "新建文件"/"新建文件夹"的公共起点:关菜单、确保目标目录展开(让
     /// 待插入的空白编辑行有可见位置)、进入空白行内编辑。
     fn start_tree_new(&mut self, parent: PathBuf, mode: TreeEditMode) {
-        self.context_menu = None;
         self.tree_error = None;
         if let Some(tree) = &mut self.file_tree {
             tree.ensure_expanded(&parent);
@@ -1942,7 +1293,7 @@ impl Workspace {
     /// 行内编辑框回车提交：按 `TreeEditMode` 分派成重命名/新建文件/新建
     /// 文件夹的实际文件系统操作(异步,`handle.spawn`)。名字为空或就是原名
     /// (仅 Rename 场景)直接静默取消编辑，不发起任何 IO。
-    fn submit_tree_edit(&mut self) {
+    fn submit_tree_edit(&mut self, io: &ShellIo) {
         let Some(edit) = self.tree_edit.take() else {
             return;
         };
@@ -1982,8 +1333,8 @@ impl Workspace {
                     return;
                 }
                 let parent = edit.parent_dir.clone();
-                let proxy = self.proxy.clone();
-                self.handle.spawn(async move {
+                let proxy = io.proxy.clone();
+                io.handle.spawn(async move {
                     let result = tokio::task::spawn_blocking(move || {
                         std::fs::rename(&old_path, &new_path).map_err(|e| e.to_string())
                     })
@@ -2007,8 +1358,8 @@ impl Workspace {
                     return;
                 }
                 let parent = edit.parent_dir.clone();
-                let proxy = self.proxy.clone();
-                self.handle.spawn(async move {
+                let proxy = io.proxy.clone();
+                io.handle.spawn(async move {
                     let result = tokio::task::spawn_blocking(move || {
                         std::fs::File::create(&new_path)
                             .map(|_| ())
@@ -2034,8 +1385,8 @@ impl Workspace {
                     return;
                 }
                 let parent = edit.parent_dir.clone();
-                let proxy = self.proxy.clone();
-                self.handle.spawn(async move {
+                let proxy = io.proxy.clone();
+                io.handle.spawn(async move {
                     let result = tokio::task::spawn_blocking(move || {
                         std::fs::create_dir(&new_path).map_err(|e| e.to_string())
                     })
@@ -2054,16 +1405,16 @@ impl Workspace {
     /// tab 关闭 = 结束会话：中断转发任务（`rx` 随任务栈析构）并 kill
     /// daemon 侧会话——否则 bootstrap 会把它当存活会话再恢复出来
     /// （P1e 验收反馈）。死会话（已 exited）无需再 kill。
-    fn close_tab(&mut self, idx: usize) {
+    fn close_tab(&mut self, io: &ShellIo, idx: usize) {
         if idx >= self.tabs.len() {
             return;
         }
         let tab = self.tabs.remove(idx);
         tab.forwarder.abort();
         if tab.alive {
-            let client = self.client.clone();
+            let client = io.client.clone();
             let id = tab.info.id.clone();
-            self.handle.spawn(async move {
+            io.handle.spawn(async move {
                 if let Err(e) = client.kill(&id).await {
                     tracing::warn!("关闭 tab 时结束会话失败: {e}");
                 }
@@ -2081,7 +1432,7 @@ impl Workspace {
     /// 把当前预览 tab(仅文件类)异步写盘,同 `layout::save` 走
     /// `handle.spawn` 的既有模式,不阻塞 UI 线程。没有打开项目时不存
     /// (状态按项目 id 分文件,没有项目就没有归属)。
-    fn spawn_preview_state_save(&self) {
+    fn spawn_preview_state_save(&self, io: &ShellIo) {
         let Some(project) = &self.project else {
             return;
         };
@@ -2098,7 +1449,7 @@ impl Workspace {
             }
         }
         let state = preview_state::PreviewState { paths, active_path };
-        self.handle.spawn(async move {
+        io.handle.spawn(async move {
             if let Err(e) = preview_state::save(project_id, &state) {
                 tracing::warn!("预览 tab 状态写盘失败: {e}");
             }
@@ -2138,9 +1489,488 @@ impl Workspace {
     /// 一个 tab、切换/打开项目后都要检查一次。没有项目时不强开——`spawn_new_tab`
     /// 本身在无项目时会落回 $HOME,那是用户主动点"+"的行为,不该在无项目
     /// 时被这里自动触发。
-    fn ensure_project_terminal(&mut self) {
+    fn ensure_project_terminal(&mut self, io: &ShellIo) {
         if self.project.is_some() && self.tabs.is_empty() {
-            self.spawn_new_tab();
+            self.spawn_new_tab(io);
+        }
+    }
+
+    fn spawn_new_tab(&mut self, io: &ShellIo) {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+        // 重锚:新终端 tab 开在当前项目根。会话必须归属一个项目(daemon 侧
+        // `create` 要 project_id,P2a Task 3),而一个活着的 `Workspace` 之所以
+        // 存在于 `App.projects` 里,前提就是它已知自己归属哪个项目——这里
+        // 的 expect 失败只可能是上游逻辑错了(比如给还没促成的占位
+        // `Workspace` 发了 `NewTab`),该让它响亮地 panic,而不是静默落到
+        // $HOME 建一个无归属的野会话。
+        let project = self.project.as_ref().expect("Workspace 存在即已知归属项目");
+        let cwd = project.path.clone();
+        let project_id = project.id;
+        let (cols, rows) = (io.cols, io.rows);
+        let tab_id = self.next_tab_id;
+        self.next_tab_id += 1;
+
+        let client = io.client.clone();
+        let proxy = io.proxy.clone();
+
+        let jh = io.handle.spawn(async move {
+            let info = match client
+                .create("shell", &shell, &[], &cwd, cols, rows, project_id)
+                .await
+            {
+                Ok(info) => info,
+                Err(e) => {
+                    let _ = proxy.send_event(Message::DaemonError(format!("新建会话失败: {e}")));
+                    return;
+                }
+            };
+            match client.attach(&info.id, 0).await {
+                Ok((snapshot, _next_offset, rx)) => {
+                    if proxy
+                        .send_event(Message::TabAttached(tab_id, info, snapshot))
+                        .is_err()
+                    {
+                        return;
+                    }
+                    forward_events(tab_id, rx, proxy).await;
+                }
+                Err(e) => {
+                    let _ =
+                        proxy.send_event(Message::DaemonError(format!("attach 新会话失败: {e}")));
+                }
+            }
+        });
+
+        self.pending.insert(tab_id, jh);
+    }
+
+    fn on_tab_attached(
+        &mut self,
+        io: &ShellIo,
+        tab_id: usize,
+        info: SessionInfo,
+        snapshot: Vec<u8>,
+    ) {
+        // `pending` 条目总是在对应的 create+attach 任务 spawn 时就插入
+        // （见 `spawn_new_tab`），理论上不会缺失；防御性丢弃而不是
+        // panic，避免一次偶然的竞态打垮整个 GUI。
+        let Some(forwarder) = self.pending.remove(&tab_id) else {
+            return;
+        };
+        let mut model = TerminalModel::new(io.cols, io.rows);
+        let _ = model.feed(&snapshot); // 快照回放：陈旧查询应答不可补发，丢弃
+        self.tabs.push(SessionTab {
+            agent_state: info.agent_state,
+            transcript_path: info.transcript_path.clone(),
+            info,
+            model,
+            alive: true,
+            tab_id,
+            forwarder,
+            osc: OscScanner::new(),
+            cwd: None,
+            last_exit: None,
+            delivery_pending: false,
+            last_turn_head: None,
+        });
+        if let Some(t) = self.tabs.last_mut() {
+            t.ingest_osc(&snapshot);
+        }
+        self.active = self.tabs.len() - 1;
+        // 新 tab 落在末尾，滚回最左让它可见（P1L T5）。
+        self.term_tab_first = 0;
+    }
+
+    /// 终端 pane 尺寸变化：换算出的新网格套用到本项目的所有 tab（含当前
+    /// 不可见的），并把新尺寸同步给 daemon 侧存活的会话。
+    ///
+    /// "网格真的变了吗"这道闸门在调用方 `App::update` 的 `PaneResized`
+    /// 分支上——`cols`/`rows` 是外壳态（整个窗口一份），比对基准不在这里。
+    fn resize_all(&mut self, io: &ShellIo, cols: u16, rows: u16) {
+        let client = io.client.clone();
+        let handle = io.handle.clone();
+        for tab in &mut self.tabs {
+            tab.model.resize(cols, rows);
+            if tab.alive {
+                let client = client.clone();
+                let id = tab.info.id.clone();
+                handle.spawn(async move {
+                    if let Err(e) = client.resize(&id, cols, rows).await {
+                        tracing::warn!("同步终端尺寸到 daemon 失败: {e}");
+                    }
+                });
+            }
+        }
+    }
+
+    /// 浏览器地址栏是否在编辑态(main.rs 据此路由键盘:真 → AddrEvent,
+    /// 假 → keymap → PTY)。预览面板已不再有地址栏,只需查 `self.browser`。
+    pub fn browser_addr_editing(&self) -> bool {
+        self.browser.addr_editing()
+    }
+
+    /// 验收意见输入是否在编辑态（main.rs 键盘路由用）。
+    pub fn acceptance_comment_editing(&self) -> bool {
+        self.acceptance.as_ref().is_some_and(|a| a.comment_editing)
+    }
+
+    /// 当前激活预览 tab 若是 webview(文件/网页)则返回其 id,供 main.rs
+    /// 焦点路由取句柄;验收 tab/无 tab 返回 None。
+    pub fn active_preview_webview_id(&self) -> Option<usize> {
+        self.preview.active_webview_id()
+    }
+
+    /// 当前激活浏览器 tab 的 webview id,语义同 `active_preview_webview_id`,
+    /// 查独立的 `self.browser`。
+    pub fn active_browser_webview_id(&self) -> Option<usize> {
+        self.browser.active_webview_id()
+    }
+
+    /// 项目树是否处于行内编辑态(main.rs 键盘路由用,同款
+    /// `browser_addr_editing()`/`acceptance_comment_editing()`)。
+    pub fn tree_editing(&self) -> bool {
+        self.tree_edit.is_some()
+    }
+
+    /// 当前项目根路径(供 main.rs 算相对路径用;未打开项目时 None)。
+    pub fn active_project_path(&self) -> Option<PathBuf> {
+        self.project.as_ref().map(|p| PathBuf::from(&p.path))
+    }
+
+    /// 点击输入框外时退出所有自绘输入的编辑态(验收反馈:失焦回正常态)。
+    /// 浏览器地址栏取消(清空半输入),意见框仅退出编辑(保留已输入文字),树内
+    /// 编辑(重命名/新建)直接取消(Important #5——不清会导致点到别处后键盘还
+    /// 在悄悄写进树编辑缓冲区,"打不出字"的假象)。`context_menu` 不在这里
+    /// 清:它已经有专门的外点 dismiss 遮罩(`ProjectTreeContextMenuClose`,
+    /// 见 view() 里的 stack dismiss 层),这里重复清是死代码。
+    pub fn blur_inputs(&mut self) {
+        if self.browser.addr_editing() {
+            self.browser.addr_cancel();
+        }
+        if let Some(acc) = &mut self.acceptance {
+            acc.comment_editing = false;
+        }
+        self.tree_edit = None;
+    }
+
+    /// 通过·沉淀：git update-ref + 落库（脏工作区在 delivery::accept 内被拒）。
+    fn acceptance_accept(&mut self, io: &ShellIo) {
+        let Some(acc) = &mut self.acceptance else {
+            return;
+        };
+        acc.error = None;
+        let repo = acc.repo.clone();
+        let goal_title = acc
+            .goal
+            .as_ref()
+            .map(|g| g.title.clone())
+            .unwrap_or_default();
+        let checked: Vec<String> = acc
+            .goal
+            .as_ref()
+            .map(|g| {
+                g.criteria
+                    .iter()
+                    .zip(&acc.checked)
+                    .filter(|(_, c)| **c)
+                    .map(|(s, _)| s.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let comment = acc.comment.clone();
+        let client = io.client.clone();
+        let proxy = io.proxy.clone();
+        io.handle.spawn(async move {
+            let repo2 = repo.clone();
+            let accepted = tokio::task::spawn_blocking(move || delivery::accept(&repo2)).await;
+            let result = match accepted {
+                Ok(Ok(n)) => {
+                    let ref_name = format!("{}{n}", delivery::ACCEPTED_REF_PREFIX);
+                    let ts_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    if let Err(e) = client
+                        .record_acceptance(
+                            &repo.to_string_lossy(),
+                            &goal_title,
+                            &checked,
+                            "accepted",
+                            &comment,
+                            &ref_name,
+                            ts_ms,
+                        )
+                        .await
+                    {
+                        // ref 已写成立（真相源）,库失败只提示（spec §3）
+                        Err(format!("已沉淀 v{n},但记录落库失败: {e}"))
+                    } else {
+                        Ok(n)
+                    }
+                }
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(e) => Err(format!("任务失败: {e}")),
+            };
+            let _ = proxy.send_event(Message::AcceptanceDone(result));
+        });
+    }
+
+    /// 打回并注回：意见 write 回来源会话 PTY，关验收 tab 回执行现场。
+    fn acceptance_reject(&mut self, io: &ShellIo) {
+        let Some(acc) = &self.acceptance else {
+            return;
+        };
+        let comment = acc.comment.trim().to_string();
+        let source = acc.source_tab_id;
+        let target = self.tabs.iter().find(|t| t.tab_id == source);
+        let Some(tab) = target.filter(|t| t.alive) else {
+            if let Some(acc) = &mut self.acceptance {
+                acc.error = Some("会话已结束,意见无处可注".into());
+            }
+            return;
+        };
+        let id = tab.info.id.clone();
+        let client = io.client.clone();
+        let text_out = format!("[Dozer 验收打回] {comment}\n");
+        io.handle.spawn(async move {
+            if let Err(e) = client.write(&id, text_out.as_bytes()).await {
+                tracing::warn!("打回注回失败: {e}");
+            }
+        });
+        // 关验收 tab（打回后回执行现场）
+        if let Some(idx) = self
+            .preview
+            .tabs()
+            .iter()
+            .position(|t| t.kind == crate::preview::TabKind::Acceptance)
+        {
+            self.preview.close(idx);
+        }
+        self.acceptance = None;
+    }
+
+    /// 协议闭包共享的文件白名单句柄.
+    pub fn allowed_files(&self) -> Arc<Mutex<HashSet<PathBuf>>> {
+        Arc::clone(&self.allowed_files)
+    }
+
+    /// 当前激活 tab 是否处于 application cursor mode（DECCKM）。
+    /// `main.rs` 的 `on_window_event` 用它决定方向键发 CSI 还是 SS3 序列
+    /// （见 `keymap::key_to_bytes` 的 `app_cursor` 参数）。没有任何 tab
+    /// 时（例如 daemon 连接失败的降级态）保守返回 `false`。
+    pub fn active_app_cursor_mode(&self) -> bool {
+        self.tabs
+            .get(self.active)
+            .map(|t| t.model.app_cursor_mode())
+            .unwrap_or(false)
+    }
+}
+
+impl App {
+    /// 启动序列成功路径:建好外壳态,再用 `Workspace::bootstrap` 恢复出
+    /// daemon 上"当前项目"那一份完整项目态,装进 `projects` 作为初始页签。
+    ///
+    /// 本 task 只保证"单项目照旧可用 + 多项目容器就位";把 daemon 上所有
+    /// 打开着的项目一并恢复成页签(含 `Stub` 懒加载)是 Task 7 的范围。
+    pub async fn bootstrap(client: Client, handle: Handle, proxy: EventLoopProxy<Message>) -> Self {
+        let mut app = Self::new_shell(client, handle, proxy, None);
+        let io = app.shell_io();
+        // 打开哪个项目:daemon 不再记"活跃项目"(P2a Task 1-3 删掉了这个
+        // 概念),改由 GUI 侧的 open_projects.json 记(Task 4)。冷启动/文件
+        // 缺失时回落到"最近活跃的那个项目"——`list_projects()` 按
+        // last_active_ms DESC 排序,第一个就是。
+        let recent = io.client.list_projects().await.unwrap_or_default();
+        let remembered = open_projects::load().active_project_id;
+        let initial = remembered
+            .and_then(|id| recent.iter().find(|p| p.id == id).cloned())
+            .or_else(|| recent.first().cloned());
+        if let Some(project) = initial {
+            let id = project.id;
+            let ws = Workspace::bootstrap(&io, project).await;
+            app.projects.insert(id, WorkspaceSlot::Loaded(Box::new(ws)));
+            app.project_order.push(id);
+            app.active_project_id = Some(id);
+        }
+        app
+    }
+
+    /// daemon 连接失败（自动拉起 + 重试后仍不可用）时的降级构造：不做任何
+    /// 会话/项目恢复，只记下错误文案，交给 `view()` 画 RED 文案。
+    ///
+    /// 这是旧 `Workspace::with_daemon_error` 的正确归宿——"daemon 连不上"
+    /// 是整个程序共享的状态（`daemon_error` 现在长在 `App` 上），从来就不是
+    /// 某一个项目自己的状态。
+    pub fn with_daemon_error(
+        client: Client,
+        handle: Handle,
+        proxy: EventLoopProxy<Message>,
+        message: String,
+    ) -> Self {
+        Self::new_shell(client, handle, proxy, Some(message))
+    }
+
+    /// 两个构造函数共用的"只有外壳、一个项目都没打开"的起点。
+    fn new_shell(
+        client: Client,
+        handle: Handle,
+        proxy: EventLoopProxy<Message>,
+        daemon_error: Option<String>,
+    ) -> Self {
+        let shell_layout = layout::load();
+        Self {
+            client,
+            handle,
+            proxy,
+            cols: DEFAULT_COLS,
+            rows: DEFAULT_ROWS,
+            term_focused: true,
+            daemon_error,
+            blink_on: true,
+            left_view: shell_layout.left_view,
+            right_view: shell_layout.right_view,
+            left_collapsed: shell_layout.left_collapsed,
+            right_collapsed: shell_layout.right_collapsed,
+            shell_layout,
+            maximized: None,
+            window_size: INITIAL_WINDOW_SIZE,
+            dragging: None,
+            context_menu: None,
+            last_right_click: (0.0, 0.0),
+            projects: HashMap::new(),
+            project_order: Vec::new(),
+            active_project_id: None,
+        }
+    }
+
+    /// 外壳侧共享句柄的快照,交给项目态方法发起异步 IO(见 [`ShellIo`])。
+    fn shell_io(&self) -> ShellIo {
+        ShellIo {
+            client: self.client.clone(),
+            handle: self.handle.clone(),
+            proxy: self.proxy.clone(),
+            cols: self.cols,
+            rows: self.rows,
+        }
+    }
+
+    /// 按 `active_project_id` 取当前项目的 `Workspace` 只读引用；`Stub`
+    /// 态和"没有任何页签"都返回 `None`（只读场景不促成加载）。
+    pub fn active_workspace(&self) -> Option<&Workspace> {
+        let id = self.active_project_id?;
+        match self.projects.get(&id)? {
+            WorkspaceSlot::Loaded(ws) => Some(ws),
+            WorkspaceSlot::Stub(_) => None,
+        }
+    }
+
+    /// 同上，可变引用版本；如果对应槽位是 `Stub`，就地促成 `Loaded`
+    /// （拉取该项目的完整状态）后再返回引用。
+    pub fn active_workspace_mut(&mut self) -> Option<&mut Workspace> {
+        let id = self.active_project_id?;
+        self.ensure_loaded(id);
+        match self.projects.get_mut(&id)? {
+            WorkspaceSlot::Loaded(ws) => Some(ws),
+            WorkspaceSlot::Stub(_) => None,
+        }
+    }
+
+    /// `Stub` → `Loaded` 的促成。本 task 只把槽位换成一个空占位
+    /// `Workspace`：真正拉文件树/会话列表/对话的促成逻辑属于 Task 7
+    /// （此时还没有"打开/切换项目页签"的消息流，无从测试起）。
+    fn ensure_loaded(&mut self, id: i64) {
+        if let Some(WorkspaceSlot::Stub(_)) = self.projects.get(&id) {
+            self.projects.insert(
+                id,
+                WorkspaceSlot::Loaded(Box::new(Workspace::empty_for_project_placeholder())),
+            );
+        }
+    }
+
+    /// `update()` 里"这条消息只动项目态"的统一入口:先取一份外壳句柄快照
+    /// （[`ShellIo`]），再拿当前项目的 `Workspace`，一并交给闭包。没有任何
+    /// 项目打开时整条消息丢弃——项目态消息没有归属就无处可落。
+    ///
+    /// 闭包里的 `return` 就是"提前结束这条消息的处理"，与搬家前写在
+    /// `match` 分支里的 `return` 语义一致。
+    fn with_ws(&mut self, f: impl FnOnce(&mut Workspace, &ShellIo)) {
+        let io = self.shell_io();
+        let Some(ws) = self.active_workspace_mut() else {
+            return;
+        };
+        f(ws, &io);
+    }
+
+    /// 是否有 tab 处于"工作中"——决定 main.rs 是否需要定时唤醒来驱动状态点
+    /// 闪烁。任一并行项目里有在跑的会话就得继续闪(页签上也要显示状态点)。
+    pub fn any_blinking(&self) -> bool {
+        self.projects.values().any(|slot| match slot {
+            WorkspaceSlot::Loaded(ws) => ws.any_blinking(),
+            WorkspaceSlot::Stub(_) => false,
+        })
+    }
+
+    /// 翻转闪烁相位；由 main.rs 的定时唤醒每拍调用一次。
+    pub fn toggle_blink(&mut self) {
+        self.blink_on = !self.blink_on;
+    }
+
+    /// 当前激活 tab 的选区文本（⌘C 复制用）。
+    pub fn active_selection_text(&self) -> Option<String> {
+        self.active_workspace()?.active_selection_text()
+    }
+
+    /// 浏览器地址栏是否在编辑态(main.rs 据此路由键盘)。
+    pub fn browser_addr_editing(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.browser_addr_editing())
+    }
+
+    /// 验收意见输入是否在编辑态（main.rs 键盘路由用）。
+    pub fn acceptance_comment_editing(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.acceptance_comment_editing())
+    }
+
+    /// 项目树是否处于行内编辑态(main.rs 键盘路由用)。
+    pub fn tree_editing(&self) -> bool {
+        self.active_workspace().is_some_and(|ws| ws.tree_editing())
+    }
+
+    /// 当前项目根路径(供 main.rs 算相对路径用;未打开项目时 None)。
+    pub fn active_project_path(&self) -> Option<PathBuf> {
+        self.active_workspace()?.active_project_path()
+    }
+
+    /// 当前激活 tab 是否处于 application cursor mode（DECCKM）。
+    pub fn active_app_cursor_mode(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.active_app_cursor_mode())
+    }
+
+    /// 当前激活预览 tab 的 webview id(main.rs 焦点路由用)。
+    pub fn active_preview_webview_id(&self) -> Option<usize> {
+        self.active_workspace()?.active_preview_webview_id()
+    }
+
+    /// 当前激活浏览器 tab 的 webview id,语义同 `active_preview_webview_id`。
+    pub fn active_browser_webview_id(&self) -> Option<usize> {
+        self.active_workspace()?.active_browser_webview_id()
+    }
+
+    /// 协议闭包共享的文件白名单句柄(当前项目的那一份)。没有项目打开时
+    /// `preview_desired`/`browser_desired` 也必然为空、不会有 webview 去查
+    /// 这个白名单,给一个空的即可。
+    pub fn allowed_files(&self) -> Arc<Mutex<HashSet<PathBuf>>> {
+        match self.active_workspace() {
+            Some(ws) => ws.allowed_files(),
+            None => Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+
+    /// 点击输入框外时退出所有自绘输入的编辑态(验收反馈:失焦回正常态)。
+    pub fn blur_inputs(&mut self) {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.blur_inputs();
         }
     }
 
@@ -2211,156 +2041,6 @@ impl Workspace {
         terminal_visible(&self.shell_state())
     }
 
-    fn spawn_new_tab(&mut self) {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-        // 重锚:新终端 tab 开在当前项目根,无项目回落 $HOME（P1g D4）。
-        let cwd = self
-            .project
-            .as_ref()
-            .map(|p| p.path.clone())
-            .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
-        let (cols, rows) = (self.cols, self.rows);
-        let tab_id = self.next_tab_id;
-        self.next_tab_id += 1;
-
-        let client = self.client.clone();
-        let proxy = self.proxy.clone();
-
-        let jh = self.handle.spawn(async move {
-            let info = match client.create("shell", &shell, &[], &cwd, cols, rows).await {
-                Ok(info) => info,
-                Err(e) => {
-                    let _ = proxy.send_event(Message::DaemonError(format!("新建会话失败: {e}")));
-                    return;
-                }
-            };
-            match client.attach(&info.id, 0).await {
-                Ok((snapshot, _next_offset, rx)) => {
-                    if proxy
-                        .send_event(Message::TabAttached(tab_id, info, snapshot))
-                        .is_err()
-                    {
-                        return;
-                    }
-                    forward_events(tab_id, rx, proxy).await;
-                }
-                Err(e) => {
-                    let _ =
-                        proxy.send_event(Message::DaemonError(format!("attach 新会话失败: {e}")));
-                }
-            }
-        });
-
-        self.pending.insert(tab_id, jh);
-    }
-
-    fn on_tab_attached(&mut self, tab_id: usize, info: SessionInfo, snapshot: Vec<u8>) {
-        // `pending` 条目总是在对应的 create+attach 任务 spawn 时就插入
-        // （见 `spawn_new_tab`），理论上不会缺失；防御性丢弃而不是
-        // panic，避免一次偶然的竞态打垮整个 GUI。
-        let Some(forwarder) = self.pending.remove(&tab_id) else {
-            return;
-        };
-        let mut model = TerminalModel::new(self.cols, self.rows);
-        let _ = model.feed(&snapshot); // 快照回放：陈旧查询应答不可补发，丢弃
-        self.tabs.push(SessionTab {
-            agent_state: info.agent_state,
-            transcript_path: info.transcript_path.clone(),
-            info,
-            model,
-            alive: true,
-            tab_id,
-            forwarder,
-            osc: OscScanner::new(),
-            cwd: None,
-            last_exit: None,
-            delivery_pending: false,
-            last_turn_head: None,
-        });
-        if let Some(t) = self.tabs.last_mut() {
-            t.ingest_osc(&snapshot);
-        }
-        self.active = self.tabs.len() - 1;
-        // 新 tab 落在末尾，滚回最左让它可见（P1L T5）。
-        self.term_tab_first = 0;
-    }
-
-    /// 终端 pane 尺寸变化：换算出的新网格套用到所有 tab（含当前不可见
-    /// 的），并把新尺寸同步给 daemon 侧存活的会话。
-    fn resize_all(&mut self, cols: u16, rows: u16) {
-        if cols == 0 || rows == 0 || (cols, rows) == (self.cols, self.rows) {
-            return;
-        }
-        self.cols = cols;
-        self.rows = rows;
-
-        let client = self.client.clone();
-        let handle = self.handle.clone();
-        for tab in &mut self.tabs {
-            tab.model.resize(cols, rows);
-            if tab.alive {
-                let client = client.clone();
-                let id = tab.info.id.clone();
-                handle.spawn(async move {
-                    if let Err(e) = client.resize(&id, cols, rows).await {
-                        tracing::warn!("同步终端尺寸到 daemon 失败: {e}");
-                    }
-                });
-            }
-        }
-    }
-
-    /// 浏览器地址栏是否在编辑态(main.rs 据此路由键盘:真 → AddrEvent,
-    /// 假 → keymap → PTY)。预览面板已不再有地址栏,只需查 `self.browser`。
-    pub fn browser_addr_editing(&self) -> bool {
-        self.browser.addr_editing()
-    }
-
-    /// 验收意见输入是否在编辑态（main.rs 键盘路由用）。
-    pub fn acceptance_comment_editing(&self) -> bool {
-        self.acceptance.as_ref().is_some_and(|a| a.comment_editing)
-    }
-
-    /// 当前激活预览 tab 若是 webview(文件/网页)则返回其 id,供 main.rs
-    /// 焦点路由取句柄;验收 tab/无 tab 返回 None。
-    pub fn active_preview_webview_id(&self) -> Option<usize> {
-        self.preview.active_webview_id()
-    }
-
-    /// 当前激活浏览器 tab 的 webview id,语义同 `active_preview_webview_id`,
-    /// 查独立的 `self.browser`。
-    pub fn active_browser_webview_id(&self) -> Option<usize> {
-        self.browser.active_webview_id()
-    }
-
-    /// 当前文本光标的窗口逻辑坐标 `(x, y_底, 行高)`,给 main.rs 设 IME
-    /// 候选窗位置(让选词窗落在光标右下,而非窗口左上)。地址栏/意见框编辑
-    /// 态用预览列上部近似(iced 立即模式拿不到精确控件屏坐标);否则用终端
-    /// 光标——单元格尺寸由 pane 像素 ÷ 网格推出,不依赖字号常量。
-    pub fn ime_cursor_area(&self, window_w: f32, window_h: f32) -> (f32, f32, f32) {
-        let state = self.shell_state();
-        if self.browser.addr_editing() || self.acceptance_comment_editing() {
-            let (bx, by, _bw, _bh) = preview_content_bounds(window_w, window_h, &state);
-            return (bx + 4.0, by, 20.0);
-        }
-        let (pane_w, pane_h) = terminal_pane_pixel_size(window_w, window_h, &state);
-        let cell_w = pane_w / self.cols.max(1) as f32;
-        let line_h = pane_h / self.rows.max(1) as f32;
-        let right_w = right_zone_width(window_w, &state);
-        let list_w = pair_content_width(right_w) * state.layout.agent_split;
-        let x0 = window_w - ICON_RAIL_WIDTH - right_w + list_w + DIVIDER_WIDTH + 8.0;
-        // 终端网格上方 chrome:顶栏 44 + 上 padding 8 + tab 栏 30 + spacing 4(header 已去,P1L #4)
-        let y0 = TOP_BAR_HEIGHT + 8.0 + 30.0 + 4.0;
-        let (col, row) = self
-            .tabs
-            .get(self.active)
-            .map(|t| t.model.cursor())
-            .unwrap_or((0, 0));
-        let x = x0 + col as f32 * cell_w;
-        let y = y0 + (row as f32 + 1.0) * line_h; // 光标格底部,候选窗落其下方
-        (x, y, line_h)
-    }
-
     /// 当前外壳几何状态快照(main.rs 拖拽追踪/离屏几何计算用;`Copy`
     /// 类型直接按值返回)。
     pub fn shell_state(&self) -> ShellState {
@@ -2385,169 +2065,852 @@ impl Workspace {
         self.context_menu.is_some()
     }
 
-    /// 项目树是否处于行内编辑态(main.rs 键盘路由用,同款
-    /// `browser_addr_editing()`/`acceptance_comment_editing()`)。
-    pub fn tree_editing(&self) -> bool {
-        self.tree_edit.is_some()
-    }
-
-    /// 当前项目根路径(供 main.rs 算相对路径用;未打开项目时 None)。
-    pub fn active_project_path(&self) -> Option<PathBuf> {
-        self.project.as_ref().map(|p| PathBuf::from(&p.path))
-    }
-
-    /// 点击输入框外时退出所有自绘输入的编辑态(验收反馈:失焦回正常态)。
-    /// 浏览器地址栏取消(清空半输入),意见框仅退出编辑(保留已输入文字),树内
-    /// 编辑(重命名/新建)直接取消(Important #5——不清会导致点到别处后键盘还
-    /// 在悄悄写进树编辑缓冲区,"打不出字"的假象)。`context_menu` 不在这里
-    /// 清:它已经有专门的外点 dismiss 遮罩(`ProjectTreeContextMenuClose`,
-    /// 见 view() 里的 stack dismiss 层),这里重复清是死代码。
-    pub fn blur_inputs(&mut self) {
-        if self.browser.addr_editing() {
-            self.browser.addr_cancel();
+    /// 当前文本光标的窗口逻辑坐标 `(x, y_底, 行高)`,给 main.rs 设 IME
+    /// 候选窗位置(让选词窗落在光标右下,而非窗口左上)。地址栏/意见框编辑
+    /// 态用预览列上部近似(iced 立即模式拿不到精确控件屏坐标);否则用终端
+    /// 光标——单元格尺寸由 pane 像素 ÷ 网格推出,不依赖字号常量。
+    pub fn ime_cursor_area(&self, window_w: f32, window_h: f32) -> (f32, f32, f32) {
+        let state = self.shell_state();
+        if self.browser_addr_editing() || self.acceptance_comment_editing() {
+            let (bx, by, _bw, _bh) = preview_content_bounds(window_w, window_h, &state);
+            return (bx + 4.0, by, 20.0);
         }
-        if let Some(acc) = &mut self.acceptance {
-            acc.comment_editing = false;
-        }
-        self.tree_edit = None;
-    }
-
-    /// 通过·沉淀：git update-ref + 落库（脏工作区在 delivery::accept 内被拒）。
-    fn acceptance_accept(&mut self) {
-        let Some(acc) = &mut self.acceptance else {
-            return;
-        };
-        acc.error = None;
-        let repo = acc.repo.clone();
-        let goal_title = acc
-            .goal
-            .as_ref()
-            .map(|g| g.title.clone())
-            .unwrap_or_default();
-        let checked: Vec<String> = acc
-            .goal
-            .as_ref()
-            .map(|g| {
-                g.criteria
-                    .iter()
-                    .zip(&acc.checked)
-                    .filter(|(_, c)| **c)
-                    .map(|(s, _)| s.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let comment = acc.comment.clone();
-        let client = self.client.clone();
-        let proxy = self.proxy.clone();
-        self.handle.spawn(async move {
-            let repo2 = repo.clone();
-            let accepted = tokio::task::spawn_blocking(move || delivery::accept(&repo2)).await;
-            let result = match accepted {
-                Ok(Ok(n)) => {
-                    let ref_name = format!("{}{n}", delivery::ACCEPTED_REF_PREFIX);
-                    let ts_ms = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0);
-                    if let Err(e) = client
-                        .record_acceptance(
-                            &repo.to_string_lossy(),
-                            &goal_title,
-                            &checked,
-                            "accepted",
-                            &comment,
-                            &ref_name,
-                            ts_ms,
-                        )
-                        .await
-                    {
-                        // ref 已写成立（真相源）,库失败只提示（spec §3）
-                        Err(format!("已沉淀 v{n},但记录落库失败: {e}"))
-                    } else {
-                        Ok(n)
-                    }
-                }
-                Ok(Err(e)) => Err(e.to_string()),
-                Err(e) => Err(format!("任务失败: {e}")),
-            };
-            let _ = proxy.send_event(Message::AcceptanceDone(result));
-        });
-    }
-
-    /// 打回并注回：意见 write 回来源会话 PTY，关验收 tab 回执行现场。
-    fn acceptance_reject(&mut self) {
-        let Some(acc) = &self.acceptance else {
-            return;
-        };
-        let comment = acc.comment.trim().to_string();
-        let source = acc.source_tab_id;
-        let target = self.tabs.iter().find(|t| t.tab_id == source);
-        let Some(tab) = target.filter(|t| t.alive) else {
-            if let Some(acc) = &mut self.acceptance {
-                acc.error = Some("会话已结束,意见无处可注".into());
-            }
-            return;
-        };
-        let id = tab.info.id.clone();
-        let client = self.client.clone();
-        let text_out = format!("[Dozer 验收打回] {comment}\n");
-        self.handle.spawn(async move {
-            if let Err(e) = client.write(&id, text_out.as_bytes()).await {
-                tracing::warn!("打回注回失败: {e}");
-            }
-        });
-        // 关验收 tab（打回后回执行现场）
-        if let Some(idx) = self
-            .preview
-            .tabs()
-            .iter()
-            .position(|t| t.kind == crate::preview::TabKind::Acceptance)
-        {
-            self.preview.close(idx);
-        }
-        self.acceptance = None;
+        let (pane_w, pane_h) = terminal_pane_pixel_size(window_w, window_h, &state);
+        let cell_w = pane_w / self.cols.max(1) as f32;
+        let line_h = pane_h / self.rows.max(1) as f32;
+        let right_w = right_zone_width(window_w, &state);
+        let list_w = pair_content_width(right_w) * state.layout.agent_split;
+        let x0 = window_w - ICON_RAIL_WIDTH - right_w + list_w + DIVIDER_WIDTH + 8.0;
+        // 终端网格上方 chrome:顶栏 44 + 上 padding 8 + tab 栏 30 + spacing 4(header 已去,P1L #4)
+        let y0 = TOP_BAR_HEIGHT + 8.0 + 30.0 + 4.0;
+        let (col, row) = self
+            .active_workspace()
+            .and_then(|ws| ws.tabs.get(ws.active))
+            .map(|t| t.model.cursor())
+            .unwrap_or((0, 0));
+        let x = x0 + col as f32 * cell_w;
+        let y = y0 + (row as f32 + 1.0) * line_h; // 光标格底部,候选窗落其下方
+        (x, y, line_h)
     }
 
     /// 当前应存在的 webview 清单(main.rs 差集同步)。不在文件视图时整体
     /// 清空:`preview_pane` 此刻根本不在屏上,若不清空,其原生 wry 子视图会
     /// 无视 iced 绘制顺序,径直叠在浏览器视图之上(与 `browser_desired` 互斥
-    /// 同理)。
+    /// 同理)。webview 池是窗口级的,所以只认当前聚焦项目的清单——后台项目
+    /// 的预览 tab 不该把自己的原生子视图画到别人的界面上。
     pub fn preview_desired(&self) -> Vec<WebviewSpec> {
         if self.left_view != LeftView::Files {
             return Vec::new();
         }
-        self.preview.desired_webviews()
+        match self.active_workspace() {
+            Some(ws) => ws.preview.desired_webviews(),
+            None => Vec::new(),
+        }
     }
 
     /// 浏览器域的 webview 清单,语义同 `preview_desired`,查独立的
-    /// `self.browser`,且只在左视图为 Web 时非空。
+    /// `Workspace::browser`,且只在左视图为 Web 时非空。
     pub fn browser_desired(&self) -> Vec<WebviewSpec> {
         if self.left_view != LeftView::Web {
             return Vec::new();
         }
-        self.browser.desired_webviews()
+        match self.active_workspace() {
+            Some(ws) => ws.browser.desired_webviews(),
+            None => Vec::new(),
+        }
     }
 
-    /// 协议闭包共享的文件白名单句柄.
-    pub fn allowed_files(&self) -> Arc<Mutex<HashSet<PathBuf>>> {
-        Arc::clone(&self.allowed_files)
-    }
-
-    /// 当前激活 tab 是否处于 application cursor mode（DECCKM）。
-    /// `main.rs` 的 `on_window_event` 用它决定方向键发 CSI 还是 SS3 序列
-    /// （见 `keymap::key_to_bytes` 的 `app_cursor` 参数）。没有任何 tab
-    /// 时（例如 daemon 连接失败的降级态）保守返回 `false`。
-    pub fn active_app_cursor_mode(&self) -> bool {
-        self.tabs
-            .get(self.active)
-            .map(|t| t.model.app_cursor_mode())
-            .unwrap_or(false)
+    pub fn update(&mut self, message: Message) {
+        match message {
+            Message::TermInput(bytes) => {
+                // 终端不在屏上时丢弃按键(不报错、不写 PTY):否则用户在读
+                // 对话审阅时敲的回车/方向键会静默提交给隐藏在后面的 agent
+                // 会话(Fix round 2 #3)。
+                if !self.terminal_visible() {
+                    return;
+                }
+                self.with_ws(|ws, io| {
+                    // 键入即回底 + 清选区：正在回看历史时一敲键盘，视口跳回
+                    // 实时输出（常规终端语义），再把字节写给 daemon。
+                    if let Some(tab) = ws.tabs.get_mut(ws.active) {
+                        tab.model.scroll_to_bottom();
+                        tab.model.selection_clear();
+                    }
+                    ws.send_input(io, bytes);
+                });
+            }
+            Message::TermOutput(tab_id, bytes) => {
+                self.with_ws(|ws, io| {
+                    let Some(tab) = ws.tab_by_id_mut(tab_id) else {
+                        return;
+                    };
+                    // 实时输出可能含设备查询（DSR/DA 等），应答必须写回 PTY
+                    // ——atuin/claude 等 TUI 依赖它（此前丢弃导致探测超时）。
+                    tab.ingest_osc(&bytes);
+                    let responses = tab.model.feed(&bytes);
+                    let alive = tab.alive;
+                    let id = tab.info.id.clone();
+                    if !responses.is_empty() && alive {
+                        let client = io.client.clone();
+                        io.handle.spawn(async move {
+                            if let Err(e) = client.write(&id, &responses).await {
+                                tracing::warn!("回写终端查询应答失败: {e}");
+                            }
+                        });
+                    }
+                });
+            }
+            Message::SessionExited(tab_id) => {
+                self.with_ws(|ws, _io| {
+                    if let Some(tab) = ws.tab_by_id_mut(tab_id) {
+                        tab.alive = false;
+                        // 本地标记行，非会话真实输出；应答无处可写，丢弃。
+                        let _ = tab.model.feed(&exited_marker());
+                    }
+                });
+            }
+            Message::AgentStateChanged(tab_id, state, transcript_path) => {
+                self.with_ws(|ws, io| {
+                    // 当前项目路径先取出（下面要 &mut 借 tab，冲突）；重锚:项目优先。
+                    let active_repo = ws.project.as_ref().map(|p| PathBuf::from(&p.path));
+                    if let Some(tab) = ws.tab_by_id_mut(tab_id) {
+                        tab.agent_state = state;
+                        if let Some(tp) = transcript_path {
+                            tab.transcript_path = Some(tp);
+                        }
+                        tracing::info!(tab_id, ?state, "agent 状态变更");
+                        if state == AgentState::TurnEnded {
+                            // git 检测不许在 UI 线程跑：丢 tokio,结果经 proxy 回来
+                            let cwd =
+                                effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
+                            let last_turn = tab.last_turn_head.clone();
+                            let proxy = io.proxy.clone();
+                            tracing::info!(tab_id, cwd = %cwd.display(), "回合结束,开始交付检测");
+                            io.handle.spawn(async move {
+                                let pending = tokio::task::spawn_blocking(move || {
+                                    let Some(repo) = delivery::repo_root(&cwd) else {
+                                        tracing::info!(cwd = %cwd.display(), "非 git 仓库,不参与闭环");
+                                        return None;
+                                    };
+                                    let dirty = delivery::is_dirty(&repo);
+                                    let head = delivery::head_commit(&repo);
+                                    let accepted = delivery::last_accepted(&repo).map(|(_, c)| c);
+                                    let pending = delivery::delivery_pending(
+                                        dirty,
+                                        head.as_deref(),
+                                        accepted.as_deref(),
+                                        last_turn.as_deref(),
+                                    );
+                                    tracing::info!(
+                                        repo = %repo.display(),
+                                        dirty,
+                                        has_accepted = accepted.is_some(),
+                                        pending,
+                                        "交付检测完成"
+                                    );
+                                    Some(pending)
+                                })
+                                .await
+                                .ok()
+                                .flatten();
+                                if let Some(pending) = pending {
+                                    let _ =
+                                        proxy.send_event(Message::DeliveryChecked(tab_id, pending));
+                                }
+                            });
+                        }
+                    }
+                    // 审阅 tab 若开着且属本会话,回合结束重解析 transcript（P1i）。
+                    if state == AgentState::TurnEnded
+                        && let Some(rv) = &ws.review
+                        && review_should_refresh_on_turn(&rv.source, tab_id)
+                        && let Some(path) = ws
+                            .tabs
+                            .iter()
+                            .find(|t| t.tab_id == tab_id)
+                            .and_then(|t| t.transcript_path.clone())
+                    {
+                        ws.spawn_review_load(io, ReviewSource::Session(tab_id), path);
+                    }
+                });
+            }
+            Message::DeliveryChecked(tab_id, pending) => {
+                self.with_ws(|ws, io| {
+                    let active_id = ws.tabs.get(ws.active).map(|t| t.tab_id);
+                    let is_active = active_id == Some(tab_id);
+                    let active_repo = ws.project.as_ref().map(|p| PathBuf::from(&p.path));
+                    tracing::info!(
+                        tab_id,
+                        pending,
+                        is_active,
+                        "交付检测结果落地(pending 写入该 tab;仅当前激活 tab 显示横幅)"
+                    );
+                    if let Some(tab) = ws.tab_by_id_mut(tab_id) {
+                        tab.delivery_pending = pending;
+                        // 记录本回合 HEAD 供下回合比对（同步读一次可容忍:仅 rev-parse）
+                        let cwd =
+                            effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
+                        if let Some(repo) = delivery::repo_root(&cwd) {
+                            tab.last_turn_head = delivery::head_commit(&repo);
+                        }
+                    }
+                    // 回合结束后刷新项目 git 状态,文件树装饰随之更新（P1h）。
+                    ws.spawn_project_git_refresh(io);
+                    // 回合结束后刷新对话列表(transcript 增长/新增；P1j)。
+                    ws.spawn_conversations_refresh(io);
+                });
+            }
+            Message::AcceptanceOpen(tab_id) => {
+                self.with_ws(|ws, io| {
+                    let active_repo = ws.project.as_ref().map(|p| PathBuf::from(&p.path));
+                    let Some(tab) = ws.tab_by_id_mut(tab_id) else {
+                        return;
+                    };
+                    tab.delivery_pending = false;
+                    let cwd = effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
+                    let proxy = io.proxy.clone();
+                    io.handle.spawn(async move {
+                        let loaded = tokio::task::spawn_blocking(move || {
+                            let repo = delivery::repo_root(&cwd)?;
+                            let goal = std::fs::read_to_string(goal::goal_path(&repo))
+                                .ok()
+                                .and_then(|md| goal::parse_goal(&md));
+                            let changes = delivery::changes(&repo);
+                            Some((repo, goal, changes))
+                        })
+                        .await
+                        .ok()
+                        .flatten();
+                        if let Some((repo, goal, changes)) = loaded {
+                            let _ = proxy
+                                .send_event(Message::AcceptanceLoaded(repo, tab_id, goal, changes));
+                        }
+                    });
+                });
+            }
+            Message::AcceptanceLoaded(repo, source_tab_id, goal, changes) => {
+                self.with_ws(move |ws, _io| {
+                    let n = goal.as_ref().map(|g| g.criteria.len()).unwrap_or(0);
+                    ws.acceptance = Some(AcceptanceView {
+                        repo,
+                        source_tab_id,
+                        goal,
+                        changes,
+                        checked: vec![false; n],
+                        comment: String::new(),
+                        comment_editing: false,
+                        error: None,
+                        accepted_version: None,
+                    });
+                    ws.preview.open_acceptance();
+                });
+                // 验收内容画在 `preview_pane` 里,而 `preview_pane` 属于左
+                // 面板区:左侧收起时点"进入验收"会毫无反应(内容装进了一个
+                // 没被渲染的面板)。新外壳鼓励收起左侧给终端腾空间,所以这里
+                // 必须主动展开(Fix round 2 #5)。左侧收起态是外壳态,搬家后
+                // 留在 `App` 上处理。
+                if self.left_collapsed {
+                    self.left_collapsed = false;
+                    self.on_shell_layout_changed();
+                }
+            }
+            Message::AcceptanceToggle(i) => {
+                self.with_ws(|ws, _io| {
+                    if let Some(acc) = &mut ws.acceptance
+                        && let Some(c) = acc.checked.get_mut(i)
+                    {
+                        *c = !*c;
+                    }
+                });
+            }
+            Message::AcceptanceCommentClick => {
+                self.with_ws(|ws, _io| {
+                    if let Some(acc) = &mut ws.acceptance {
+                        acc.comment_editing = true;
+                    }
+                });
+            }
+            Message::AcceptanceCommentEvent(ev) => {
+                self.with_ws(|ws, _io| {
+                    if let Some(acc) = &mut ws.acceptance {
+                        match ev {
+                            AddrEvent::Text(s) => acc.comment.push_str(&s),
+                            AddrEvent::Backspace => {
+                                acc.comment.pop();
+                            }
+                            AddrEvent::Submit | AddrEvent::Cancel => acc.comment_editing = false,
+                        }
+                    }
+                });
+            }
+            Message::AcceptanceAccept => self.with_ws(|ws, io| ws.acceptance_accept(io)),
+            Message::AcceptanceReject => self.with_ws(|ws, io| ws.acceptance_reject(io)),
+            Message::AcceptanceDone(result) => {
+                self.with_ws(|ws, io| {
+                    let landed = result.is_ok();
+                    if let Some(acc) = &mut ws.acceptance {
+                        match result {
+                            Ok(n) => acc.accepted_version = Some(n),
+                            Err(e) => acc.error = Some(e),
+                        }
+                    }
+                    if landed {
+                        ws.spawn_acceptance_count_refresh(io);
+                    }
+                });
+            }
+            Message::ReviewLoaded(source, result) => {
+                self.with_ws(|ws, _io| {
+                    if let Some(rv) = &mut ws.review
+                        && rv.source == source
+                    {
+                        match result {
+                            Ok(entries) => {
+                                rv.entries = entries;
+                                rv.error = None;
+                            }
+                            Err(e) => rv.error = Some(e),
+                        }
+                    }
+                });
+            }
+            Message::ReviewToggle(i) => {
+                self.with_ws(|ws, _io| {
+                    if let Some(rv) = &mut ws.review
+                        && !rv.expanded.remove(&i)
+                    {
+                        rv.expanded.insert(i);
+                    }
+                });
+            }
+            Message::ConversationsRefreshed(list) => {
+                self.with_ws(move |ws, _io| {
+                    ws.conversations = list;
+                });
+            }
+            Message::ConversationOpen(path) => {
+                self.with_ws(move |ws, io| {
+                    // 若点开的是某活会话的当前对话 → Session 源(回合结束刷新);否则 File 快照。
+                    let path_s = path.to_string_lossy().into_owned();
+                    let source = ws
+                        .tabs
+                        .iter()
+                        .find(|t| t.transcript_path.as_deref() == Some(path_s.as_str()))
+                        .map(|t| ReviewSource::Session(t.tab_id))
+                        .unwrap_or_else(|| ReviewSource::File(path.clone()));
+                    ws.review = Some(ReviewView {
+                        source: source.clone(),
+                        entries: Vec::new(),
+                        error: None,
+                        expanded: std::collections::HashSet::new(),
+                    });
+                    ws.spawn_review_load(io, source, path_s);
+                });
+            }
+            Message::SelectTab(idx) => {
+                self.with_ws(|ws, _io| {
+                    if idx < ws.tabs.len() {
+                        ws.active = idx;
+                    }
+                });
+            }
+            Message::CloseTab(idx) => {
+                self.with_ws(|ws, io| {
+                    ws.close_tab(io, idx);
+                    ws.ensure_project_terminal(io);
+                });
+            }
+            Message::NewTab => self.with_ws(|ws, io| ws.spawn_new_tab(io)),
+            Message::TabAttached(tab_id, info, snapshot) => {
+                self.with_ws(move |ws, io| ws.on_tab_attached(io, tab_id, info, snapshot));
+            }
+            Message::PaneResized { cols, rows } => {
+                if cols == 0 || rows == 0 || (cols, rows) == (self.cols, self.rows) {
+                    return;
+                }
+                self.cols = cols;
+                self.rows = rows;
+                let io = self.shell_io();
+                // 终端网格是窗口级的:并行打开的每个项目各有一套终端 tab,
+                // 但它们共用同一块终端 pane。只改当前项目的话,切回后台项目
+                // 会看到一个停在旧网格、和 pane 对不上的画面,直到用户偶然
+                // 再拖一次窗口才纠正——所以这里对所有已加载项目一起改
+                // (`Stub` 还没有任何 tab,促成时自然按当时的 `io.cols/rows`)。
+                for slot in self.projects.values_mut() {
+                    if let WorkspaceSlot::Loaded(ws) = slot {
+                        ws.resize_all(&io, cols, rows);
+                    }
+                }
+            }
+            Message::ColumnDragStart(divider) => {
+                self.dragging = Some(divider);
+            }
+            Message::ColumnDrag {
+                window_width,
+                logical_x,
+            } => {
+                if let Some(divider) = self.dragging {
+                    let state = self.shell_state();
+                    self.shell_layout = apply_column_drag(state, divider, window_width, logical_x);
+                }
+            }
+            Message::ColumnDragEnd => {
+                self.dragging = None;
+                self.on_shell_layout_changed();
+            }
+            Message::LeftIconSelect(v) => {
+                if self.left_view == v {
+                    self.left_collapsed = !self.left_collapsed;
+                } else {
+                    self.left_view = v;
+                    self.left_collapsed = false;
+                }
+                // 图标栏点击一律退出放大态。放大态浮层不拦图标栏上的点击
+                // (遮罩两侧垫的是无交互 Space,点击穿到下层图标按钮),所以
+                // "放大左侧 → 点文件夹图标收起左侧"是可达的:不清 `maximized`
+                // 就会留下一个空的金色描边浮层,只能点变暗区才能脱身
+                // (Fix round 2 #2)。切换本侧显示什么内容时,放大态本也不该
+                // 存活,无条件清最简单也最不容易出意外。
+                self.maximized = None;
+                self.on_shell_layout_changed();
+            }
+            Message::RightIconSelect(v) => {
+                if self.right_view == v {
+                    self.right_collapsed = !self.right_collapsed;
+                } else {
+                    self.right_view = v;
+                    self.right_collapsed = false;
+                }
+                // 同 LeftIconSelect(Fix round 2 #2)。
+                self.maximized = None;
+                self.on_shell_layout_changed();
+            }
+            Message::MaximizeToggle(which) => {
+                self.maximized = if self.maximized == Some(which) {
+                    None
+                } else {
+                    Some(which)
+                };
+                // 放大/还原改变了终端 pane 的像素尺寸,网格要跟着重算,否则
+                // "放大终端"只放大外框、字符网格不变(Fix round 2 #6)。放大态
+                // 本身不持久化,所以只重算、不写盘。
+                self.sync_terminal_grid();
+            }
+            Message::MaximizeClose => {
+                self.maximized = None;
+                self.sync_terminal_grid();
+            }
+            Message::Noop => {}
+            Message::DaemonError(message) => self.daemon_error = Some(message),
+            Message::TermScroll(delta) => {
+                self.with_ws(|ws, _io| {
+                    if let Some(tab) = ws.tabs.get_mut(ws.active) {
+                        tab.model.scroll_display(delta);
+                    }
+                });
+            }
+            Message::TermTabScroll(right) => {
+                self.with_ws(|ws, _io| {
+                    if right {
+                        ws.term_tab_first = ws.term_tab_first.saturating_add(2);
+                    } else {
+                        ws.term_tab_first = ws.term_tab_first.saturating_sub(2);
+                    }
+                });
+            }
+            Message::PreviewTabScroll(right) => {
+                self.with_ws(|ws, _io| {
+                    if right {
+                        ws.preview_tab_first = ws.preview_tab_first.saturating_add(2);
+                    } else {
+                        ws.preview_tab_first = ws.preview_tab_first.saturating_sub(2);
+                    }
+                });
+            }
+            Message::BrowserTabScroll(right) => {
+                self.with_ws(|ws, _io| {
+                    if right {
+                        ws.browser_tab_first = ws.browser_tab_first.saturating_add(2);
+                    } else {
+                        ws.browser_tab_first = ws.browser_tab_first.saturating_sub(2);
+                    }
+                });
+            }
+            Message::TermSelStart { col, row, right } => {
+                self.with_ws(|ws, _io| {
+                    if let Some(tab) = ws.tabs.get_mut(ws.active) {
+                        tab.model.selection_start(col, row, right);
+                    }
+                });
+            }
+            Message::TermSelUpdate { col, row, right } => {
+                self.with_ws(|ws, _io| {
+                    if let Some(tab) = ws.tabs.get_mut(ws.active) {
+                        tab.model.selection_update(col, row, right);
+                    }
+                });
+            }
+            Message::TermPaste(text) => {
+                // 同 TermInput 的可见性闸门(Fix round 3):⌘V 粘贴走同一条
+                // PTY 写入路径,粘贴内容若含换行还会在看不见的会话里直接
+                // 执行,比单个按键更危险,必须同样拦截。
+                if !self.terminal_visible() {
+                    return;
+                }
+                self.with_ws(move |ws, io| {
+                    let Some(tab) = ws.tabs.get_mut(ws.active) else {
+                        return;
+                    };
+                    tab.model.scroll_to_bottom();
+                    let bytes = if tab.model.bracketed_paste() {
+                        let mut b = b"\x1b[200~".to_vec();
+                        b.extend_from_slice(text.as_bytes());
+                        b.extend_from_slice(b"\x1b[201~");
+                        b
+                    } else {
+                        text.into_bytes()
+                    };
+                    ws.send_input(io, bytes);
+                });
+            }
+            Message::PreviewOpenPath(path) => {
+                self.with_ws(move |ws, io| {
+                    if !path.is_file() {
+                        ws.preview_error = Some(format!("文件不存在或不可读: {}", path.display()));
+                        return;
+                    }
+                    ws.preview_error = None;
+                    ws.tree_selected = Some(path.clone());
+                    ws.allowed_files
+                        .lock()
+                        .expect("allowed_files 锁")
+                        .insert(path.clone());
+                    ws.preview.open_path(path);
+                    // 新 tab 落在末尾，滚回最左让它可见（P1L T5）。
+                    ws.preview_tab_first = 0;
+                    ws.spawn_preview_state_save(io);
+                });
+            }
+            Message::PreviewSelectTab(idx) => {
+                self.with_ws(|ws, io| {
+                    ws.preview.select(idx);
+                    ws.spawn_preview_state_save(io);
+                });
+            }
+            Message::PreviewCloseTab(idx) => {
+                self.with_ws(|ws, io| {
+                    ws.preview.close(idx);
+                    // 关 tab 后位置全变，旧 first 可能越界——归零防御（P1L T5）。
+                    ws.preview_tab_first = 0;
+                    ws.spawn_preview_state_save(io);
+                });
+            }
+            Message::BrowserOpenUrl(url) => {
+                self.with_ws(move |ws, _io| {
+                    ws.browser_error = None;
+                    ws.browser.open_url(url);
+                    ws.browser_tab_first = 0;
+                });
+            }
+            Message::BrowserSelectTab(idx) => {
+                self.with_ws(|ws, _io| ws.browser.select(idx));
+            }
+            Message::BrowserCloseTab(idx) => {
+                self.with_ws(|ws, _io| {
+                    ws.browser.close(idx);
+                    ws.browser_tab_first = 0;
+                });
+            }
+            Message::BrowserAddrClick => {
+                self.with_ws(|ws, _io| {
+                    ws.browser_error = None;
+                    ws.browser.addr_begin();
+                });
+            }
+            Message::BrowserAddrEvent(ev) => {
+                // 地址栏回车解析出网址时要走一遍完整的 `BrowserOpenUrl` 处理,
+                // 而 `self.update(..)` 不能在 `with_ws` 的闭包里调(闭包正握着
+                // 从 `self` 借出去的 `&mut Workspace`),所以先把结果攒出来,
+                // 出了闭包再派发。
+                let mut open_url = None;
+                self.with_ws(|ws, _io| match ev {
+                    AddrEvent::Text(s) => ws.browser.addr_text(&s),
+                    AddrEvent::Backspace => ws.browser.addr_backspace(),
+                    AddrEvent::Cancel => ws.browser.addr_cancel(),
+                    AddrEvent::Submit => match ws.browser.addr_submit() {
+                        // 浏览器只承载网页 tab,地址栏解析出的本地路径不受支持
+                        // (与文件预览彻底独立,不借它的文件打开能力)。
+                        Some(AddrTarget::File(_)) => {
+                            ws.browser_error = Some("浏览器不支持打开本地文件".to_string());
+                        }
+                        Some(AddrTarget::Url(url)) => open_url = Some(url),
+                        None => {}
+                    },
+                });
+                if let Some(url) = open_url {
+                    self.update(Message::BrowserOpenUrl(url));
+                }
+            }
+            Message::ProjectPickFolder => {} // 副作用在 main.rs(rfd 文件夹选择)
+            Message::ProjectOpen(path) => {
+                let client = self.client.clone();
+                let proxy = self.proxy.clone();
+                let path_s = path.to_string_lossy().into_owned();
+                self.handle.spawn(async move {
+                    let opened = client.open_project(&path_s).await.ok().flatten();
+                    let recent = client.list_projects().await.unwrap_or_default();
+                    let _ = proxy.send_event(Message::ProjectOpened(opened, recent));
+                });
+            }
+            Message::ProjectSelect(id) => {
+                // 切项目不再通知 daemon:"活跃项目"是 GUI 侧的概念了(P2a
+                // Task 1-3 删掉了 SetActiveProject),这里只把目标项目从最近
+                // 列表里查出来,走与"打开项目"同一条 `ProjectOpened` 落地路径。
+                let client = self.client.clone();
+                let proxy = self.proxy.clone();
+                self.handle.spawn(async move {
+                    let recent = client.list_projects().await.unwrap_or_default();
+                    let opened = recent.iter().find(|p| p.id == id).cloned();
+                    let _ = proxy.send_event(Message::ProjectOpened(opened, recent));
+                });
+            }
+            Message::ProjectOpened(project, recent) => {
+                // 换项目时放大态不该跟着过去:被放大的那块内容(项目树/预览/
+                // 终端/审阅)整体换了主人,留着放大浮层只会挡住新项目的界面
+                // (与图标栏点击清放大同一类理由,Fix round 2 #2)。放大态是
+                // 外壳态,搬家后留在 `App` 上处理。
+                self.maximized = None;
+                // 一个项目页签都还没有时(冷启动 daemon 上还没有任何项目),
+                // 先落一个空槽位承接,否则 `with_ws` 会因为没有 active
+                // workspace 把整条消息丢掉——"打开项目"点了没反应。真正的
+                // "每打开一个项目就多一个页签"语义由 Task 6/7 的页签消息流
+                // 定义,这里只保证单项目路径不退化。
+                if self.active_workspace().is_none()
+                    && let Some(p) = &project
+                {
+                    let id = p.id;
+                    self.projects.insert(
+                        id,
+                        WorkspaceSlot::Loaded(Box::new(Workspace::empty_for_project_placeholder())),
+                    );
+                    self.project_order.push(id);
+                    self.active_project_id = Some(id);
+                }
+                self.with_ws(move |ws, io| {
+                    ws.recent_projects = recent;
+                    // 切到不同项目:关掉上一个项目遗留的终端 tab 与预览 tab,给
+                    // 新项目干净起点（验收反馈）。首次打开(无前项目)不强关。
+                    let switching = matches!(
+                        (&ws.project, &project),
+                        (Some(old), Some(new)) if old.id != new.id
+                    );
+                    if switching {
+                        ws.close_all_tabs_for_switch(io);
+                    }
+                    ws.file_tree = project
+                        .as_ref()
+                        .map(|p| FileTree::new(PathBuf::from(&p.path)));
+                    ws.tree_selected = None;
+                    ws.branch = None;
+                    ws.dirty = false;
+                    ws.git_statuses = HashMap::new();
+                    ws.conversations = Vec::new();
+                    ws.project = project;
+                    ws.project_goal = ws.project.as_ref().and_then(|p| load_project_goal(&p.path));
+                    ws.project_acceptance_count = None;
+                    ws.ensure_project_terminal(io);
+                    ws.restore_preview_state();
+                    ws.spawn_project_git_refresh(io);
+                    ws.spawn_conversations_refresh(io);
+                    ws.spawn_acceptance_count_refresh(io);
+                });
+            }
+            Message::ProjectTreeToggle(dir) => {
+                self.with_ws(move |ws, _io| {
+                    ws.tree_selected = Some(dir.clone());
+                    if let Some(t) = &mut ws.file_tree {
+                        t.toggle(&dir);
+                    }
+                });
+            }
+            Message::ProjectGitRefreshed(branch, dirty, statuses) => {
+                self.with_ws(move |ws, _io| {
+                    ws.branch = branch;
+                    ws.dirty = dirty;
+                    ws.git_statuses = statuses;
+                });
+            }
+            Message::AcceptanceCountLoaded(n) => {
+                self.with_ws(move |ws, _io| {
+                    ws.project_acceptance_count = n;
+                });
+            }
+            Message::RightClickAt { x, y } => {
+                self.last_right_click = (x, y);
+            }
+            Message::ProjectTreeContextMenu { path, is_dir } => {
+                let (x, y) = self.last_right_click;
+                let target = path.clone();
+                self.with_ws(move |ws, _io| {
+                    ws.tree_selected = Some(path);
+                });
+                self.context_menu = Some(ContextMenu {
+                    x,
+                    y,
+                    target,
+                    is_dir,
+                });
+            }
+            Message::ProjectTreeContextMenuClose => {
+                self.context_menu = None;
+            }
+            Message::ProjectTreeCopyPath(_, _) => {} // 副作用在 main.rs(写系统剪贴板需 Clipboard 句柄)
+            Message::ProjectTreeCopy(path, is_dir) => {
+                self.context_menu = None;
+                self.with_ws(move |ws, _io| {
+                    ws.tree_clipboard = Some((path, is_dir));
+                });
+            }
+            Message::ProjectTreePaste(target_dir) => {
+                self.context_menu = None;
+                self.with_ws(move |ws, io| {
+                    ws.tree_error = None;
+                    let Some((source, source_is_dir)) = ws.tree_clipboard.clone() else {
+                        return;
+                    };
+                    let proxy = io.proxy.clone();
+                    io.handle.spawn(async move {
+                        let result = tokio::task::spawn_blocking(move || {
+                            project::paste_item(&source, source_is_dir, &target_dir)
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(e.to_string()));
+                        let _ = proxy.send_event(Message::ProjectTreePasteDone(result));
+                    });
+                });
+            }
+            Message::ProjectTreePasteDone(result) => {
+                self.with_ws(move |ws, _io| match result {
+                    Ok(new_path) => {
+                        if let (Some(tree), Some(parent)) = (&mut ws.file_tree, new_path.parent()) {
+                            tree.refresh(parent);
+                        }
+                    }
+                    Err(e) => ws.tree_error = Some(e),
+                });
+            }
+            Message::ProjectTreeDeleteRequest(path, is_dir) => {
+                self.context_menu = None;
+                self.with_ws(move |ws, _io| {
+                    ws.tree_delete_confirm = Some((path, is_dir));
+                });
+            }
+            Message::ProjectTreeDeleteCancel => {
+                self.with_ws(|ws, _io| {
+                    ws.tree_delete_confirm = None;
+                });
+            }
+            Message::ProjectTreeDeleteConfirm => {
+                self.with_ws(|ws, io| {
+                    let Some((path, _)) = ws.tree_delete_confirm.take() else {
+                        return;
+                    };
+                    ws.tree_error = None;
+                    let proxy = io.proxy.clone();
+                    io.handle.spawn(async move {
+                        let parent = path.parent().map(|p| p.to_path_buf());
+                        let result = tokio::task::spawn_blocking(move || {
+                            trash::delete(&path).map_err(|e| e.to_string())
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(e.to_string()));
+                        let outcome = match (result, parent) {
+                            (Ok(()), Some(p)) => Ok(p),
+                            (Ok(()), None) => Err("删除的是项目根,无父目录可刷新".to_string()),
+                            (Err(e), _) => Err(e),
+                        };
+                        let _ = proxy.send_event(Message::ProjectTreeOpDone {
+                            parent: outcome,
+                            expand: false, // 删除不展开父目录
+                        });
+                    });
+                });
+            }
+            Message::ProjectTreeOpDone { parent, expand } => {
+                self.with_ws(move |ws, _io| match parent {
+                    Ok(parent) => {
+                        ws.tree_error = None; // 成功后清掉上一次失败重试留下的红字(Important #4)
+                        if let Some(tree) = &mut ws.file_tree {
+                            tree.refresh(&parent);
+                            if expand {
+                                tree.ensure_expanded(&parent);
+                            }
+                        }
+                    }
+                    Err(e) => ws.tree_error = Some(e),
+                });
+            }
+            Message::ProjectTreeNewFile(parent) => {
+                self.context_menu = None;
+                self.with_ws(move |ws, _io| ws.start_tree_new(parent, TreeEditMode::NewFile));
+            }
+            Message::ProjectTreeNewFolder(parent) => {
+                self.context_menu = None;
+                self.with_ws(move |ws, _io| ws.start_tree_new(parent, TreeEditMode::NewFolder));
+            }
+            Message::ProjectTreeRenameStart(path) => {
+                self.context_menu = None;
+                self.with_ws(move |ws, _io| {
+                    ws.tree_error = None;
+                    let Some(parent) = path.parent().map(|p| p.to_path_buf()) else {
+                        return;
+                    };
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    ws.tree_edit = Some(TreeEdit {
+                        parent_dir: parent,
+                        mode: TreeEditMode::Rename(path),
+                        buffer: name,
+                    });
+                });
+            }
+            Message::ProjectTreeEditEvent(ev) => {
+                self.with_ws(|ws, io| {
+                    let Some(edit) = &mut ws.tree_edit else {
+                        return;
+                    };
+                    match ev {
+                        AddrEvent::Text(s) => edit.buffer.push_str(&s),
+                        AddrEvent::Backspace => {
+                            edit.buffer.pop();
+                        }
+                        AddrEvent::Cancel => ws.tree_edit = None,
+                        AddrEvent::Submit => ws.submit_tree_edit(io),
+                    }
+                });
+            }
+        }
     }
 
     pub fn view(
         &self,
     ) -> iced_widget::core::Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-        let top = top_bar(self);
+        // 一个项目页签都没有(或当前页签还停在 `Stub` 没促成)时的占位。真正
+        // 的"未打开项目"引导界面 + 项目页签栏由 Task 6 定,这里先给一条最简
+        // 文案,保证 `App` 在没有活项目时也画得出东西。
+        let Some(ws) = self.active_workspace() else {
+            return container(text("未打开任何项目").size(14).color(theme::DIM))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(|_t: &iced_widget::Theme| container::Style {
+                    background: Some(theme::BG.into()),
+                    ..container::Style::default()
+                })
+                .into();
+        };
+        let top = top_bar(ws);
         // 用 `row!`(经 `Row::push`/`enclose`)构造:只要子元素里有一个声明了
         // `Length::Fill`/`FillPortion`(如某侧收起时的 `left_panel_area`),
         // 这条 row 自身的宽度就会被自动升级成 `Fill`,从而在 flex 布局里正确
@@ -2556,21 +2919,21 @@ impl Workspace {
         // 执行,右图标栏就会缩到窗口中间——不要在不理解这个前提的情况下改写。
         let body = row![
             left_icon_rail(self),
-            left_panel_area(self, false),
+            left_panel_area(self, ws, false),
             divider_bar(Divider::LeftRight),
-            right_panel_area(self),
+            right_panel_area(self, ws),
             right_icon_rail(self),
         ];
         let base = column![top, body];
 
-        let popped = if self.tree_delete_confirm.is_some() {
+        let popped = if ws.tree_delete_confirm.is_some() {
             let dismiss = MouseArea::new(
                 container(column![])
                     .width(Length::Fill)
                     .height(Length::Fill),
             )
             .on_press(Message::ProjectTreeDeleteCancel);
-            stack![base, dismiss, delete_confirm_popup(self)]
+            stack![base, dismiss, delete_confirm_popup(ws)]
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
@@ -2581,7 +2944,7 @@ impl Workspace {
                     .height(Length::Fill),
             )
             .on_press(Message::ProjectTreeContextMenuClose);
-            stack![base, dismiss, context_menu_popup(self)]
+            stack![base, dismiss, context_menu_popup(self, ws)]
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
@@ -2590,7 +2953,7 @@ impl Workspace {
         };
 
         if let Some(which) = self.maximized {
-            stack![popped, maximize_overlay(self, which)]
+            stack![popped, maximize_overlay(self, ws, which)]
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
@@ -3119,19 +3482,17 @@ fn rail_icon_button<'a>(
 }
 
 /// 左图标栏:文件列表 / Web 两个图标,点已激活的那个即收起左面板区。
-fn left_icon_rail(
-    ws: &Workspace,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = chrome_style::left_icon_rail();
     let content = column![
         rail_icon_button(
             icons::IconKind::Folder,
-            ws.left_view == LeftView::Files,
+            app.left_view == LeftView::Files,
             Message::LeftIconSelect(LeftView::Files),
         ),
         rail_icon_button(
             icons::IconKind::Globe,
-            ws.left_view == LeftView::Web,
+            app.left_view == LeftView::Web,
             Message::LeftIconSelect(LeftView::Web),
         ),
     ]
@@ -3150,19 +3511,17 @@ fn left_icon_rail(
 }
 
 /// 右图标栏:Agent / 对话两个图标,语义同 `left_icon_rail`。
-fn right_icon_rail(
-    ws: &Workspace,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = chrome_style::right_icon_rail();
     let content = column![
         rail_icon_button(
             icons::IconKind::Bot,
-            ws.right_view == RightView::Agent,
+            app.right_view == RightView::Agent,
             Message::RightIconSelect(RightView::Agent),
         ),
         rail_icon_button(
             icons::IconKind::MessageSquare,
-            ws.right_view == RightView::Conversations,
+            app.right_view == RightView::Conversations,
             Message::RightIconSelect(RightView::Conversations),
         ),
     ]
@@ -3206,27 +3565,28 @@ fn split_portions(split: f32) -> (u16, u16) {
 /// 图标收起本侧是可达路径),此时上面那条收起分支返回空元素;`maximized`
 /// 会被 `LeftIconSelect`/`RightIconSelect` 无条件清掉,所以这个组合不会
 /// 停留超过一帧(Fix round 2 #2)。
-fn left_panel_area(
-    ws: &Workspace,
+fn left_panel_area<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
     maximized: bool,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    if ws.left_collapsed {
-        return if ws.right_collapsed {
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    if app.left_collapsed {
+        return if app.right_collapsed {
             iced_widget::space::horizontal().into()
         } else {
             column![].into()
         };
     }
-    let total = if maximized || ws.right_collapsed {
+    let total = if maximized || app.right_collapsed {
         Length::Fill
     } else {
-        Length::Fixed(ws.effective_left_width())
+        Length::Fixed(app.effective_left_width())
     };
-    match ws.left_view {
+    match app.left_view {
         LeftView::Files => {
-            let (list_portion, content_portion) = split_portions(ws.shell_layout.files_split);
+            let (list_portion, content_portion) = split_portions(app.shell_layout.files_split);
             row![
-                project_pane(ws, Length::FillPortion(list_portion)),
+                project_pane(app, ws, Length::FillPortion(list_portion)),
                 divider_bar(Divider::LeftPairSplit),
                 preview_pane(ws, Length::FillPortion(content_portion)),
             ]
@@ -3245,26 +3605,27 @@ fn left_panel_area(
 /// 包装容器:`Limits::width(Fixed(w))` 会把子元素的 min/max 都钉成 `w`,父级
 /// 的 `FillPortion` 只约束包装容器本身、传不进子元素,曾导致这四块 pane 全部
 /// 以 0 宽布局(右半边整片空白)。
-fn right_panel_area(
-    ws: &Workspace,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    if ws.right_collapsed {
+fn right_panel_area<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    if app.right_collapsed {
         return column![].into();
     }
-    match ws.right_view {
+    match app.right_view {
         RightView::Agent => {
-            let (list_portion, content_portion) = split_portions(ws.shell_layout.agent_split);
+            let (list_portion, content_portion) = split_portions(app.shell_layout.agent_split);
             row![
                 agent_list_pane(ws, Length::FillPortion(list_portion)),
                 divider_bar(Divider::RightPairSplit),
-                terminal_pane(ws, Length::FillPortion(content_portion)),
+                terminal_pane(app, ws, Length::FillPortion(content_portion)),
             ]
             .width(Length::Fill)
             .into()
         }
         RightView::Conversations => {
             let (list_portion, content_portion) =
-                split_portions(ws.shell_layout.conversations_split);
+                split_portions(app.shell_layout.conversations_split);
             row![
                 conversation_list_pane(ws, Length::FillPortion(list_portion)),
                 divider_bar(Divider::RightPairSplit),
@@ -3279,13 +3640,14 @@ fn right_panel_area(
 /// 放大态浮层:两条图标栏之间的整个内容区变暗+背景虚化，放大的那一侧
 /// 内容(左/右面板区，含其内部列表:内容子分隔线，原样渲染，只是占满整个
 /// 中间区域)金色描边突出。点变暗区域(放大内容之外的部分)退出放大。
-fn maximize_overlay(
-    ws: &Workspace,
+fn maximize_overlay<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
     which: MaximizedPane,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let inner = match which {
-        MaximizedPane::Left => left_panel_area(ws, true),
-        MaximizedPane::Right => right_panel_area(ws),
+        MaximizedPane::Left => left_panel_area(app, ws, true),
+        MaximizedPane::Right => right_panel_area(app, ws),
     };
     // `bordered` 显式给 `Length::Fill`(不留给默认 `Length::Shrink`)——
     // iced 0.14 的 `Limits` 有个"compression"传染机制:一个 `Shrink` 容器
@@ -3345,10 +3707,11 @@ fn maximize_overlay(
     .into()
 }
 
-fn project_pane(
-    ws: &Workspace,
+fn project_pane<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
     width: Length,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = chrome_style::project_pane();
     let mut content = column![].spacing(region.gap);
 
@@ -3535,17 +3898,18 @@ fn project_pane(
             ..container::Style::default()
         });
 
-    container(column![body, project_status_bar(ws)])
+    container(column![body, project_status_bar(app, ws)])
         .width(width)
         .height(Length::Fill)
         .into()
 }
 
 /// 项目栏底状态条：左 环境/dozerd 点，右 [文件|git {分支}|组件]（文件高亮,组件占位）。
-fn project_status_bar(
-    ws: &Workspace,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let (env, dot) = env_status_text(ws.daemon_error.is_none());
+fn project_status_bar<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let (env, dot) = env_status_text(app.daemon_error.is_none());
     let left = row![
         text("●").size(9).color(dot),
         text(env).size(11).color(theme::BODY)
@@ -3860,14 +4224,15 @@ fn browser_pane(
 }
 
 /// 终端栏：表头 + tab 栏 + （可能的错误文案）+ 当前激活 tab 的终端网格。
-fn terminal_pane(
-    ws: &Workspace,
+fn terminal_pane<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
     width: Length,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = chrome_style::terminal_pane();
-    let mut content = column![tab_bar(ws)].spacing(region.gap);
+    let mut content = column![tab_bar(app, ws)].spacing(region.gap);
 
-    if let Some(err) = &ws.daemon_error {
+    if let Some(err) = &app.daemon_error {
         content = content.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
     }
 
@@ -3914,7 +4279,7 @@ fn terminal_pane(
 
     // P1j 收敛：终端"审阅"按钮移除，会话审阅入口统一到右一对话列表。
 
-    content = content.push(active_tab_view(ws));
+    content = content.push(active_tab_view(app, ws));
 
     let body = container(content.spacing(region.gap).padding(region.padding))
         .width(Length::Fill)
@@ -4012,10 +4377,11 @@ fn tree_edit_row(
 /// 手算定位到点击坐标——`Stack` 各层共享同一份 bounds,不像原生系统菜单
 /// 那样自带绝对定位,这是本仓一贯的手算像素定位风格(`ime_cursor_area`/
 /// `preview_content_bounds` 同款)。
-fn context_menu_popup(
-    ws: &Workspace,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let Some(menu) = &ws.context_menu else {
+fn context_menu_popup<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let Some(menu) = &app.context_menu else {
         return column![].into();
     };
     let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> =
@@ -4263,7 +4629,10 @@ fn maximize_button<'a>(
 /// ×) + 末尾一个 "＋" 新建。P1L T5 验收返工：横向 scrollable(底部滚动条)
 /// 换成索引窗口化 + `clip`——`on_scroll` 只认滚轮/拖拽，程序化滚动在本
 /// app 自建循环里够不到，箭头翻页必须走状态驱动的窗口渲染。
-fn tab_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn tab_bar<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let widths: Vec<f32> = ws
         .tabs
         .iter()
@@ -4277,7 +4646,7 @@ fn tab_bar(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widg
         .iter()
         .enumerate()
         .filter(|(idx, _)| *idx >= first)
-        .map(|(idx, tab)| tab_item(idx, tab, idx == ws.active, ws.blink_on))
+        .map(|(idx, tab)| tab_item(idx, tab, idx == ws.active, app.blink_on))
         .collect();
 
     // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;左右箭头钉在裁剪区外.
@@ -4580,11 +4949,12 @@ fn tab_item(
     .into()
 }
 
-fn active_tab_view(
-    ws: &Workspace,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn active_tab_view<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     match ws.tabs.get(ws.active) {
-        Some(tab) => term_view::view(&tab.model, ws.term_focused),
+        Some(tab) => term_view::view(&tab.model, app.term_focused),
         None => container(text("暂无会话——点击 ＋ 新建").size(14).color(theme::DIM))
             .width(Length::Fill)
             .height(Length::Fill)

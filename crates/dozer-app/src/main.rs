@@ -18,7 +18,7 @@ mod theme;
 mod transcript;
 mod workspace;
 
-use workspace::{Message, Workspace};
+use workspace::{App, Message};
 
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -127,18 +127,18 @@ async fn ensure_daemon(client: &dozer_client::Client) -> Result<(), String> {
 }
 
 /// 启动序列：连 daemon（失败则 spawn dozerd 重试）→ 成功则做 GUI 级
-/// 会话恢复（`Workspace::bootstrap`），失败则降级为错误态
-/// （`Workspace::with_daemon_error`）。整段在 `main()` 用
+/// 会话恢复（`App::bootstrap`），失败则降级为错误态
+/// （`App::with_daemon_error`）。整段在 `main()` 用
 /// `runtime.block_on` 驱动，此时窗口尚未创建，不占用任何"正在跑的"
 /// UI 线程。
-async fn build_workspace(
+async fn build_app(
     client: dozer_client::Client,
     handle: tokio::runtime::Handle,
     proxy: winit::event_loop::EventLoopProxy<Message>,
-) -> Workspace {
+) -> App {
     match ensure_daemon(&client).await {
-        Ok(()) => Workspace::bootstrap(client, handle, proxy).await,
-        Err(message) => Workspace::with_daemon_error(client, handle, proxy, message),
+        Ok(()) => App::bootstrap(client, handle, proxy).await,
+        Err(message) => App::with_daemon_error(client, handle, proxy, message),
     }
 }
 
@@ -151,7 +151,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
     // Initialize winit：用户事件类型直接是 `Message`——tokio 任务经
     // `EventLoopProxy<Message>::send_event` 把事件流/daemon 状态送回 UI
     // 线程，`ApplicationHandler::user_event` 收到后转发给
-    // `workspace.update`。
+    // `app.update`。
     let event_loop = EventLoop::<Message>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
 
@@ -163,16 +163,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
     let handle = runtime.handle().clone();
     let client = dozer_client::Client::new(dozer_core::paths::socket_path());
 
-    let workspace = runtime.block_on(build_workspace(client, handle, proxy.clone()));
+    let app = runtime.block_on(build_app(client, handle, proxy.clone()));
 
     #[allow(clippy::large_enum_variant)]
     enum Runner {
-        /// 持有启动序列已经构建好的 `Workspace`（daemon 已连上/已降级为
-        /// 错误态，视情况可能已经装好若干恢复出来的 tab）；`resumed()`
-        /// 建好窗口/wgpu 后把它 `take()` 出来转入 `Ready`。用
+        /// 持有启动序列已经构建好的 `App`（daemon 已连上/已降级为
+        /// 错误态，视情况可能已经装好若干恢复出来的项目页签与 tab）；
+        /// `resumed()` 建好窗口/wgpu 后把它 `take()` 出来转入 `Ready`。用
         /// `Option` 包一层只是为了能在 `&mut self` 上 `take`，正常情况下
         /// `resumed()` 只会被调用一次。
-        Loading(Option<Workspace>),
+        Loading(Option<App>),
         Ready {
             window: Arc<winit::window::Window>,
             queue: wgpu::Queue,
@@ -180,7 +180,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             surface: wgpu::Surface<'static>,
             format: wgpu::TextureFormat,
             renderer: Renderer,
-            workspace: Workspace,
+            app: App,
             events: Vec<Event>,
             cursor: mouse::Cursor,
             cache: user_interface::Cache,
@@ -272,17 +272,17 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
     impl Runner {
         /// 键盘/IME 输入拦截处：终端聚焦时把原始 `WindowEvent` 经
-        /// `keymap` 翻译成字节，直接回灌 `Workspace`（`Message::TermInput`），
+        /// `keymap` 翻译成字节，直接回灌 `App`（`Message::TermInput`），
         /// 不必改动 `winit::application::ApplicationHandler` 的实现本身。
         ///
-        /// `Workspace::update` 收到 `TermInput` 后写给 daemon（`client.write`），
+        /// `App::update` 收到 `TermInput` 后写给 daemon（`client.write`），
         /// 不再本地 echo——回显完全走 PTY 真实回路（daemon → attach 流 →
         /// `Message::TermOutput` → `TerminalModel::feed`）。
         fn on_window_event(&mut self, event: &WindowEvent) {
-            // 把 `modifiers` 和 `workspace`/`window` 放进同一次解构里取，
+            // 把 `modifiers` 和 `app`/`window` 放进同一次解构里取，
             // 避免先借一次 `self` 再调用 `&self` 方法造成的重复借用。
             let Self::Ready {
-                workspace,
+                app,
                 window,
                 modifiers,
                 clipboard,
@@ -300,11 +300,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             match event {
                 WindowEvent::CursorMoved { position, .. } => {
                     *cursor_phys = *position;
-                    if workspace.dragging_divider().is_some() {
+                    if app.dragging_divider().is_some() {
                         let scale = window.scale_factor();
                         let logical_x = (cursor_phys.x / scale) as f32;
                         let window_width = (window.inner_size().width as f64 / scale) as f32;
-                        workspace.update(Message::ColumnDrag {
+                        app.update(Message::ColumnDrag {
                             window_width,
                             logical_x,
                         });
@@ -341,7 +341,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     let window_h = (logical_size.height as f64 / scale) as f32;
                     let x = x.min((window_w - workspace::CONTEXT_MENU_WIDTH).max(0.0));
                     let y = y.min((window_h - workspace::CONTEXT_MENU_HEIGHT).max(0.0));
-                    workspace.update(Message::RightClickAt { x, y });
+                    app.update(Message::RightClickAt { x, y });
                     // 不在这里 request_redraw——右键若真的命中某行,该行的
                     // `MouseArea::on_right_press` 随本轮事件走 iced 正常分发,
                     // 那条路径自会触发重绘;若点在空白处,菜单本就不该开,不必
@@ -352,11 +352,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     button: winit::event::MouseButton::Left,
                     ..
                 } => {
-                    workspace.blur_inputs();
+                    app.blur_inputs();
                     let scale = window.scale_factor();
                     let logical_x = (cursor_phys.x / scale) as f32;
                     let logical_w = (window.inner_size().width as f64 / scale) as f32;
-                    let state = workspace.shell_state();
+                    let state = app.shell_state();
                     *pending_focus = Some(
                         if workspace::is_in_preview_column(logical_x, logical_w, &state) {
                             if state.left_view == workspace::LeftView::Web {
@@ -374,8 +374,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     state: ElementState::Released,
                     button: winit::event::MouseButton::Left,
                     ..
-                } if workspace.dragging_divider().is_some() => {
-                    workspace.update(Message::ColumnDragEnd);
+                } if app.dragging_divider().is_some() => {
+                    app.update(Message::ColumnDragEnd);
                     window.request_redraw();
                 }
                 _ => {}
@@ -383,7 +383,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
             // 右键菜单打开时,Esc 优先关菜单,不进正常键盘分发(不然会被当作
             // 普通按键继续往下走,可能被地址栏/终端等其它分支消费掉)。
-            if workspace.context_menu_open()
+            if app.context_menu_open()
                 && let WindowEvent::KeyboardInput {
                     event,
                     is_synthetic: false,
@@ -393,7 +393,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 && event.logical_key
                     == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
             {
-                workspace.update(Message::ProjectTreeContextMenuClose);
+                app.update(Message::ProjectTreeContextMenuClose);
                 window.request_redraw();
                 return;
             }
@@ -411,7 +411,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 {
                     match s.as_str() {
                         "c" => {
-                            if let Some(text) = workspace.active_selection_text() {
+                            if let Some(text) = app.active_selection_text() {
                                 clipboard.write(iced_winit::core::clipboard::Kind::Standard, text);
                             }
                         }
@@ -419,7 +419,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             if let Some(text) =
                                 clipboard.read(iced_winit::core::clipboard::Kind::Standard)
                             {
-                                workspace.update(Message::TermPaste(text));
+                                app.update(Message::TermPaste(text));
                                 window.request_redraw();
                             }
                         }
@@ -431,9 +431,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
             // 浏览器地址栏 / 验收意见 / 项目树行内编辑态:键盘直达自绘输入
             // (不经 keymap、不进 PTY)。文件预览面板已不再有地址栏。
-            let to_browser = workspace.browser_addr_editing();
-            let to_comment = workspace.acceptance_comment_editing();
-            let to_tree_edit = workspace.tree_editing();
+            let to_browser = app.browser_addr_editing();
+            let to_comment = app.acceptance_comment_editing();
+            let to_tree_edit = app.tree_editing();
             if to_browser || to_comment || to_tree_edit {
                 let addr_event = match event {
                     WindowEvent::KeyboardInput {
@@ -471,7 +471,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     } else {
                         Message::ProjectTreeEditEvent(ev)
                     };
-                    workspace.update(message);
+                    app.update(message);
                     window.request_redraw();
                 }
                 return;
@@ -489,7 +489,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 } if event.state == ElementState::Pressed => keymap::key_to_bytes(
                     &event.logical_key,
                     modifiers,
-                    workspace.active_app_cursor_mode(),
+                    app.active_app_cursor_mode(),
                 ),
                 WindowEvent::Ime(Ime::Commit(text)) => Some(keymap::ime_commit_to_bytes(text)),
                 // 拖文件进终端：转成 shell 转义的完整路径写入会话
@@ -501,19 +501,19 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             };
 
             if let Some(bytes) = bytes {
-                workspace.update(Message::TermInput(bytes));
+                app.update(Message::TermInput(bytes));
                 window.request_redraw();
             }
         }
 
-        /// 把 workspace 的 webview 期望清单同步到真实 wry 子视图:
+        /// 把 app 的 webview 期望清单同步到真实 wry 子视图:
         /// 建缺失、毁多余、对齐可见性与 bounds、URL 变更时导航。文件预览池
         /// 和浏览器池各自独立同步(`preview_desired`/`browser_desired` 已按
         /// `left_view` 互斥,同一时刻至多一个非空)。
         fn sync_previews(&mut self) {
             let Self::Ready {
                 window,
-                workspace,
+                app,
                 webviews,
                 browser_webviews,
                 ..
@@ -527,7 +527,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             let logical_w = size.width as f32 / scale as f32;
             let logical_h = size.height as f32 / scale as f32;
             let (x, y, w, h) =
-                workspace::preview_content_bounds(logical_w, logical_h, &workspace.shell_state());
+                workspace::preview_content_bounds(logical_w, logical_h, &app.shell_state());
             let bounds = wry::Rect {
                 position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
                 size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
@@ -536,25 +536,25 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             sync_webview_pool(
                 window.as_ref(),
                 webviews,
-                workspace.preview_desired(),
+                app.preview_desired(),
                 bounds,
-                workspace.allowed_files(),
+                app.allowed_files(),
             );
             sync_webview_pool(
                 window.as_ref(),
                 browser_webviews,
-                workspace.browser_desired(),
+                app.browser_desired(),
                 bounds,
-                workspace.allowed_files(),
+                app.allowed_files(),
             );
         }
 
         /// `ProjectPickFolder`/`ProjectTreeCopyPath` 等需要窗口句柄侧原生
         /// 能力(rfd 模态、系统剪贴板)的消息在此拦截,其余原样转给
-        /// `workspace.update`。
+        /// `app.update`。
         fn dispatch(&mut self, message: Message) {
             let Self::Ready {
-                workspace,
+                app,
                 window,
                 pending_focus,
                 clipboard,
@@ -579,19 +579,17 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             match message {
                 Message::ProjectPickFolder => {
                     if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                        workspace.update(Message::ProjectOpen(dir));
+                        app.update(Message::ProjectOpen(dir));
                     }
                 }
                 Message::ProjectTreeCopyPath(path, kind) => {
-                    let root = workspace
-                        .active_project_path()
-                        .unwrap_or_else(|| path.clone());
+                    let root = app.active_project_path().unwrap_or_else(|| path.clone());
                     let s = crate::project::path_string(kind, &path, &root);
                     clipboard.write(iced_winit::core::clipboard::Kind::Standard, s);
-                    workspace.update(Message::ProjectTreeContextMenuClose);
+                    app.update(Message::ProjectTreeContextMenuClose);
                     window.request_redraw();
                 }
-                other => workspace.update(other),
+                other => app.update(other),
             }
             window.request_redraw();
         }
@@ -601,7 +599,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         /// Terminal/无 webview → 交回窗口(终端键盘)。
         fn apply_pending_focus(&mut self) {
             let Self::Ready {
-                workspace,
+                app,
                 window,
                 webviews,
                 browser_webviews,
@@ -612,7 +610,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             };
             match pending_focus.take() {
-                Some(FocusIntent::Preview) => match workspace.active_preview_webview_id() {
+                Some(FocusIntent::Preview) => match app.active_preview_webview_id() {
                     Some(id) => {
                         if let Some((view, _)) = webviews.get(&id) {
                             let _ = view.focus(); // 返回 Result,忽略
@@ -622,7 +620,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     }
                     None => window.focus_window(),
                 },
-                Some(FocusIntent::Browser) => match workspace.active_browser_webview_id() {
+                Some(FocusIntent::Browser) => match app.active_browser_webview_id() {
                     Some(id) => {
                         if let Some((view, _)) = browser_webviews.get(&id) {
                             let _ = view.focus();
@@ -648,11 +646,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             cause: winit::event::StartCause,
         ) {
             if let winit::event::StartCause::ResumeTimeReached { .. } = cause
-                && let Self::Ready {
-                    workspace, window, ..
-                } = self
+                && let Self::Ready { app, window, .. } = self
             {
-                workspace.toggle_blink();
+                app.toggle_blink();
                 window.request_redraw();
             }
         }
@@ -660,8 +656,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         /// 每轮事件处理完后决定下次唤醒时机：有 tab 在工作就排下一拍闪烁
         /// 唤醒，否则回到 `Wait` 省电（不再空转重绘）。
         fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-            if let Self::Ready { workspace, .. } = self {
-                if workspace.any_blinking() {
+            if let Self::Ready { app, .. } = self {
+                if app.any_blinking() {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(
                         std::time::Instant::now() + BLINK_INTERVAL,
                     ));
@@ -672,8 +668,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         }
 
         fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-            if let Self::Loading(pending_workspace) = self {
-                let Some(mut workspace) = pending_workspace.take() else {
+            if let Self::Loading(pending_app) = self {
+                let Some(mut app) = pending_app.take() else {
                     // `resumed()` 理论上只会真正建窗口这一次；后续（若平台
                     // 又调用一次 `resumed`）直接跳过，避免重复建窗口。
                     return;
@@ -688,7 +684,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     workspace::INITIAL_WINDOW_SIZE.1,
                                 ))
                                 // 双保险:窗口不许缩到"两个面板区都放不下最小宽"
-                                // 以下。真正保证右半边不消失的是 workspace 侧的
+                                // 以下。真正保证右半边不消失的是 app 侧的
                                 // `clamp_left_width`(持久化宽可能远大于这个最小
                                 // 宽),这里只是把最坏情形挡在外面。
                                 .with_min_inner_size(LogicalSize::new(
@@ -772,16 +768,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     },
                 );
 
-                // `workspace` 是启动序列（daemon 连接 + 会话恢复）已经建好
+                // `app` 是启动序列（daemon 连接 + 会话恢复）已经建好
                 // 的状态，这里只补一次真实窗口尺寸——`set_window_size` 既把
-                // 尺寸记进 `Workspace`（`view()` 的左面板区有效宽要用），也
+                // 尺寸记进 `App`（`view()` 的左面板区有效宽要用），也
                 // 立刻按它重算终端网格：恢复出来的 tab 之前用的是
                 // `DEFAULT_COLS`/`DEFAULT_ROWS` 兜底默认值，这里纠正成实际
                 // 网格（也会顺带把 resize 同步给 daemon）。网格换算细节
-                // （含"上次退出时右侧停在对话视图"的情形）归 workspace 侧
+                // （含"上次退出时右侧停在对话视图"的情形）归 app 侧
                 // 一家管，main.rs 不再自己算一份。
                 let logical: LogicalSize<f32> = physical_size.to_logical(window.scale_factor());
-                workspace.set_window_size(logical.width, logical.height);
+                app.set_window_size(logical.width, logical.height);
 
                 // Initialize iced
 
@@ -808,7 +804,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     renderer,
                     surface,
                     format,
-                    workspace,
+                    app,
                     events: Vec::new(),
                     cursor: mouse::Cursor::Unavailable,
                     modifiers: ModifiersState::default(),
@@ -826,7 +822,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
         /// tokio 任务经 `EventLoopProxy<Message>::send_event` 送回来的事件
         /// （attach 数据流的输出/退出、daemon 错误、新建会话完成……）在这里
-        /// 落地：直接喂给 `Workspace::update`，跟 `window_event` 里处理
+        /// 落地：直接喂给 `App::update`，跟 `window_event` 里处理
         /// iced 消息走的是同一条 `update` 逻辑，只是消息来源不同。
         fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: Message) {
             if !matches!(self, Self::Ready { .. }) {
@@ -859,7 +855,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     surface,
                     format,
                     renderer,
-                    workspace,
+                    app,
                     events,
                     viewport,
                     cursor,
@@ -884,7 +880,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 size.width as f32 / scale as f32,
                                 size.height as f32 / scale as f32,
                             );
-                            let (ix, iy, ih) = workspace.ime_cursor_area(lw, lh);
+                            let (ix, iy, ih) = app.ime_cursor_area(lw, lh);
                             window.set_ime_cursor_area(
                                 winit::dpi::LogicalPosition::new(ix, iy),
                                 winit::dpi::LogicalSize::new(1.0, ih),
@@ -935,7 +931,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
                                 // Draw iced on top
                                 let mut interface = UserInterface::build(
-                                    workspace.view(),
+                                    app.view(),
                                     viewport.logical_size(),
                                     std::mem::take(cache),
                                     renderer,
@@ -1007,13 +1003,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     WindowEvent::Resized(new_size) => {
                         *resized = true;
 
-                        // 窗口尺寸变了：把新的逻辑尺寸交给 `Workspace`——它
+                        // 窗口尺寸变了：把新的逻辑尺寸交给 `App`——它
                         // 既要用这个宽度把持久化的 `left_width` 夹进当前窗口
                         // 容得下的范围（否则窄窗下右半边整片消失），也会顺手
                         // 换算终端 pane 的新网格尺寸、套用到所有 tab 的
                         // `TerminalModel` 并同步给 daemon。
                         let logical: LogicalSize<f32> = new_size.to_logical(window.scale_factor());
-                        workspace.set_window_size(logical.width, logical.height);
+                        app.set_window_size(logical.width, logical.height);
                         // bounds 同步由本函数末尾的 sync_previews 统一执行
                     }
                     WindowEvent::CloseRequested => {
@@ -1057,7 +1053,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 if !events.is_empty() {
                     // We process them
                     let mut interface = UserInterface::build(
-                        workspace.view(),
+                        app.view(),
                         viewport.logical_size(),
                         std::mem::take(cache),
                         renderer,
@@ -1078,7 +1074,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
             // 借用已随上面的块结束释放；这里逐条经 `dispatch`
             // 派发（`ProjectPickFolder` 等在其中被拦截成 rfd 模态,
-            // 其余原样转给 `workspace.update`）。
+            // 其余原样转给 `app.update`）。
             for message in pending_messages {
                 self.dispatch(message);
             }
@@ -1090,7 +1086,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         }
     }
 
-    let mut runner = Runner::Loading(Some(workspace));
+    let mut runner = Runner::Loading(Some(app));
     event_loop.run_app(&mut runner)
 
     // `runtime` 在这里才真正 drop（`main` 持有到最后一刻）：`run_app`
