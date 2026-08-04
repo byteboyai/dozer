@@ -85,6 +85,16 @@ pub enum MaximizedPane {
     Right,
 }
 
+/// 当前"聚焦"在哪一侧面板区:左键点击落点决定(见 [`zone_at_x`]),用于
+/// `left_zone`/`right_zone` 外边框的高亮态——点哪侧,哪侧的边框就变亮
+/// (GOLD),不区分具体点中区内哪个 pane(项目树/预览/终端/Agent 列表等）。
+/// 点在图标栏/分隔线上不改变当前态(`zone_at_x` 返回 `None`)。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ZoneSide {
+    Left,
+    Right,
+}
+
 /// 单个项目页签的加载状态：懒加载用。`Stub` 只有页签渲染需要的最小信息
 /// （启动恢复时,还没被聚焦过的页签停在这一态）,`Loaded` 是完整的
 /// `Workspace`（P2a 多项目并行）。
@@ -657,6 +667,43 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
     }
 }
 
+/// 逻辑 x 落在哪一侧面板区(整区,不分区内具体是哪个 pane)。左键点击
+/// 落点决定当前"聚焦"哪一侧,驱动 `left_zone`/`right_zone` 外边框的高亮态
+/// (见 [`ZoneSide`])。落在图标栏本身(两侧各 `ICON_RAIL_WIDTH` 宽)或
+/// 某侧收起而点在了"不存在的那一侧"时不算数,返回 `None`(调用方应保持
+/// 点击前的聚焦态不变,而不是清空)。
+///
+/// 放大态:整个内容区就是放大的那一侧,不用再按横坐标细分——
+/// `maximize_overlay` 渲染时两条图标栏原样露在外面,和非放大态同一
+/// 横向范围,所以图标栏判定不用跟着改。
+pub fn zone_at_x(x: f32, window_width: f32, state: &ShellState) -> Option<ZoneSide> {
+    if x < ICON_RAIL_WIDTH || x > window_width - ICON_RAIL_WIDTH {
+        return None;
+    }
+    if let Some(which) = state.maximized {
+        return Some(match which {
+            MaximizedPane::Left => ZoneSide::Left,
+            MaximizedPane::Right => ZoneSide::Right,
+        });
+    }
+    if state.left_collapsed {
+        return if state.right_collapsed {
+            None
+        } else {
+            Some(ZoneSide::Right)
+        };
+    }
+    if state.right_collapsed {
+        return Some(ZoneSide::Left);
+    }
+    let boundary = ICON_RAIL_WIDTH + left_zone_width(window_width, state);
+    Some(if x < boundary {
+        ZoneSide::Left
+    } else {
+        ZoneSide::Right
+    })
+}
+
 /// 终端 pane 此刻是否真的呈现在用户眼前。键盘输入(`Message::TermInput`)
 /// 必须以此为闸门:右侧收起、右视图切到对话、或左侧被放大(右半被变暗遮罩
 /// 整片盖住)时,敲下的回车/方向键会静默提交给一个看不见的 agent 会话——这条
@@ -1114,6 +1161,10 @@ pub struct App {
     right_collapsed: bool,
     /// 当前放大的内容子面板(`None`=未放大)。
     maximized: Option<MaximizedPane>,
+    /// 左键点击落点决定的当前"聚焦"面板区,驱动 `left_zone`/`right_zone`
+    /// 外边框的高亮态(见 `set_active_zone`/`zone_at_x`)。启动默认
+    /// `Some(Right)`——终端默认聚焦(`term_focused: true`),终端在右面板区。
+    active_zone: Option<ZoneSide>,
     /// 当前窗口逻辑尺寸(宽,高)。由 main.rs 建窗口/`WindowEvent::Resized`
     /// 时经 `set_window_size` 写入。
     window_size: (f32, f32),
@@ -2277,6 +2328,7 @@ impl App {
             right_collapsed: shell_layout.right_collapsed,
             shell_layout,
             maximized: None,
+            active_zone: Some(ZoneSide::Right),
             window_size: INITIAL_WINDOW_SIZE,
             dragging: None,
             context_menu: None,
@@ -2524,6 +2576,16 @@ impl App {
     pub fn set_window_size(&mut self, width: f32, height: f32) {
         self.window_size = (width, height);
         self.sync_terminal_grid();
+    }
+
+    /// main.rs 左键按下时告知点击落点(逻辑坐标):按 `zone_at_x` 换算落在
+    /// 哪一侧面板区,命中就更新 `active_zone`(驱动 `left_zone`/
+    /// `right_zone` 外边框高亮)。落在图标栏/两侧都收起等 `None` 场景保持
+    /// 原有聚焦态不变——点导航图标不该清空"上一次在哪侧干活"的高亮。
+    pub fn set_active_zone(&mut self, x: f32, window_width: f32) {
+        if let Some(zone) = zone_at_x(x, window_width, &self.shell_state()) {
+            self.active_zone = Some(zone);
+        }
     }
 
     /// 建窗时用的初始窗口尺寸偏好:优先用上次退出前持久化的
@@ -4661,13 +4723,14 @@ fn left_panel_area<'a>(
         return inner;
     }
     let region = chrome_style::left_zone();
+    let is_active = app.active_zone == Some(ZoneSide::Left);
     container(inner)
         .width(total)
         .height(Length::Fill)
         .padding(region.padding)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
-            border: region.border.unwrap_or_default(),
+            border: zone_border(region.border, is_active),
             ..container::Style::default()
         })
         .into()
@@ -4721,16 +4784,32 @@ fn right_panel_area<'a>(
         return inner;
     }
     let region = chrome_style::right_zone();
+    let is_active = app.active_zone == Some(ZoneSide::Right);
     container(inner)
         .width(Length::Fill)
         .height(Length::Fill)
         .padding(region.padding)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
-            border: region.border.unwrap_or_default(),
+            border: zone_border(region.border, is_active),
             ..container::Style::default()
         })
         .into()
+}
+
+/// `left_zone`/`right_zone` 的边框颜色随 `active_zone` 切换:聚焦时描边
+/// 换成 GOLD(仓库既有"当前态用金色描边"惯例,如对话卡片/文件树高亮同款),
+/// 宽度/圆角原样取自 JSON 配置,不聚焦时颜色也原样取自配置(BORDER)。
+fn zone_border(region_border: Option<Border>, is_active: bool) -> Border {
+    let border = region_border.unwrap_or_default();
+    if is_active {
+        Border {
+            color: theme::GOLD,
+            ..border
+        }
+    } else {
+        border
+    }
 }
 
 /// 放大态浮层:两条图标栏之间的整个内容区变暗+背景虚化，放大的那一侧
@@ -7065,6 +7144,90 @@ mod tests {
             ..test_state()
         };
         assert!(!is_in_preview_column(300.0, 1440.0, &state));
+    }
+
+    #[test]
+    fn zone_at_x_splits_left_and_right_at_zone_boundary() {
+        // 窗口宽 1440:左图标栏 44 + 左面板区 640 → 边界在 x=684。
+        let state = test_state();
+        assert_eq!(
+            zone_at_x(100.0, 1440.0, &state),
+            Some(ZoneSide::Left),
+            "左面板区内"
+        );
+        assert_eq!(
+            zone_at_x(683.9, 1440.0, &state),
+            Some(ZoneSide::Left),
+            "边界前一发"
+        );
+        assert_eq!(
+            zone_at_x(684.0, 1440.0, &state),
+            Some(ZoneSide::Right),
+            "边界本身归右面板区"
+        );
+        assert_eq!(
+            zone_at_x(1200.0, 1440.0, &state),
+            Some(ZoneSide::Right),
+            "右面板区内"
+        );
+    }
+
+    #[test]
+    fn zone_at_x_icon_rail_returns_none() {
+        let state = test_state();
+        assert_eq!(zone_at_x(20.0, 1440.0, &state), None, "左图标栏本身");
+        assert_eq!(zone_at_x(1400.0, 1440.0, &state), None, "右图标栏本身");
+    }
+
+    #[test]
+    fn zone_at_x_collapsed_side_routes_to_the_other() {
+        let left_collapsed = ShellState {
+            left_collapsed: true,
+            ..test_state()
+        };
+        assert_eq!(
+            zone_at_x(300.0, 1440.0, &left_collapsed),
+            Some(ZoneSide::Right),
+            "左侧收起,内容区恒归右侧"
+        );
+
+        let right_collapsed = ShellState {
+            right_collapsed: true,
+            ..test_state()
+        };
+        assert_eq!(
+            zone_at_x(1200.0, 1440.0, &right_collapsed),
+            Some(ZoneSide::Left),
+            "右侧收起,内容区恒归左侧"
+        );
+
+        let both_collapsed = ShellState {
+            left_collapsed: true,
+            right_collapsed: true,
+            ..test_state()
+        };
+        assert_eq!(
+            zone_at_x(700.0, 1440.0, &both_collapsed),
+            None,
+            "两侧都收起,没有哪一侧可点"
+        );
+    }
+
+    #[test]
+    fn zone_at_x_maximized_ignores_x_within_content_range() {
+        let left_max = ShellState {
+            maximized: Some(MaximizedPane::Left),
+            ..test_state()
+        };
+        // 放大态下整个内容区都算放大的那一侧,不再按横坐标细分。
+        assert_eq!(zone_at_x(100.0, 1440.0, &left_max), Some(ZoneSide::Left));
+        assert_eq!(zone_at_x(1200.0, 1440.0, &left_max), Some(ZoneSide::Left));
+
+        let right_max = ShellState {
+            maximized: Some(MaximizedPane::Right),
+            ..test_state()
+        };
+        assert_eq!(zone_at_x(100.0, 1440.0, &right_max), Some(ZoneSide::Right));
     }
 
     #[test]

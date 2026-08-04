@@ -78,13 +78,13 @@
     },
     "left_zone": {
       "background": null,
-      "border": { "color": "BORDER", "width": 1.0, "radius": 0.0 },
+      "border": { "color": "BORDER", "width": 1.0, "radius": 8.0 },
       "padding": 1,
       "gap": 0
     },
     "right_zone": {
       "background": null,
-      "border": { "color": "BORDER", "width": 1.0, "radius": 0.0 },
+      "border": { "color": "BORDER", "width": 1.0, "radius": 8.0 },
       "padding": 1,
       "gap": 0
     }

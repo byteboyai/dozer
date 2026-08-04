@@ -378,6 +378,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     let scale = window.scale_factor();
                     let logical_x = (cursor_phys.x / scale) as f32;
                     let logical_w = (window.inner_size().width as f64 / scale) as f32;
+                    // 点哪侧面板区,哪侧的 left_zone/right_zone 外边框就亮
+                    // 起来(与下面窄一些的 webview 焦点路由是两回事:这个
+                    // 覆盖整个面板区,不区分区内具体哪个 pane)。
+                    app.set_active_zone(logical_x, logical_w);
                     let state = app.shell_state();
                     *pending_focus = Some(
                         if workspace::is_in_preview_column(logical_x, logical_w, &state) {
