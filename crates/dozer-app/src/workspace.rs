@@ -841,6 +841,12 @@ pub enum Message {
     MaximizeToggle(MaximizedPane),
     /// 点击放大态背后的变暗遮罩:退出放大。
     MaximizeClose,
+    /// 双击顶栏空白处(去掉原生标题栏后,原生"双击标题栏缩放窗口"手势
+    /// 只在系统认为仍是"标题栏"的那一小条区域生效;顶栏其余空白靠这条
+    /// 消息手动补上同样的行为)。真正调用 `window.set_maximized(...)`
+    /// 的是 main.rs——`App` 不持有 `winit::window::Window` 句柄,这里只
+    /// 记一个待处理标记,由 `take_pending_zoom_toggle` 供 main.rs 轮询。
+    TopBarDoubleClick,
     /// 什么也不做。专门给"就地吃掉事件、不让它冒泡到父级"的 `MouseArea`
     /// 用(`MouseArea::on_press`/`on_scroll` 一旦有消息就会
     /// `shell.capture_event()`)。目前唯一用处:放大态浮层里罩在放大内容
@@ -1137,6 +1143,10 @@ pub struct App {
     /// 外边框的高亮态(见 `set_active_zone`/`zone_at_x`)。启动默认
     /// `Some(Right)`——终端默认聚焦(`term_focused: true`),终端在右面板区。
     active_zone: Option<ZoneSide>,
+    /// 双击顶栏空白处待处理标记,见 `Message::TopBarDoubleClick`/
+    /// `take_pending_zoom_toggle`。`App` 不持有 `winit::window::Window`
+    /// 句柄,真正切换最大化态由 main.rs 轮询这个标记后调用。
+    pending_zoom_toggle: bool,
     /// 当前窗口逻辑尺寸(宽,高)。由 main.rs 建窗口/`WindowEvent::Resized`
     /// 时经 `set_window_size` 写入。
     window_size: (f32, f32),
@@ -2301,6 +2311,7 @@ impl App {
             shell_layout,
             maximized: None,
             active_zone: Some(ZoneSide::Right),
+            pending_zoom_toggle: false,
             window_size: workspace_geometry::initial_window_size(),
             dragging: None,
             context_menu: None,
@@ -2642,6 +2653,13 @@ impl App {
     /// 项目树右键菜单是否打开(main.rs Esc 键路由用)。
     pub fn context_menu_open(&self) -> bool {
         self.context_menu.is_some()
+    }
+
+    /// 取走"双击顶栏空白处"待处理标记(取走即清零)。main.rs 在派发完
+    /// 消息后轮询这个方法,命中就调用 `window.set_maximized(!window.
+    /// is_maximized())`——`App` 自己不持有 `Window` 句柄,做不到这一步。
+    pub fn take_pending_zoom_toggle(&mut self) -> bool {
+        std::mem::take(&mut self.pending_zoom_toggle)
     }
 
     /// 当前文本光标的窗口逻辑坐标 `(x, y_底, 行高)`,给 main.rs 设 IME
@@ -3115,6 +3133,9 @@ impl App {
             Message::MaximizeClose => {
                 self.maximized = None;
                 self.sync_terminal_grid();
+            }
+            Message::TopBarDoubleClick => {
+                self.pending_zoom_toggle = true;
             }
             Message::Noop => {}
             Message::DaemonError(message) => self.daemon_error = Some(message),
@@ -4027,6 +4048,14 @@ fn acceptance_content<'a>(
 ///
 /// 原先中间的 ⌘K 搜索框是视觉占位（没有任何交互接线），让位给页签行；
 /// 搜索入口日后回来时应另找位置，不要再把页签挤掉。
+/// macOS 原生红黄绿交通灯的纵向居中基准:`fullSizeContentView` 打开后,
+/// 系统仍按"标准标题栏高 28pt"给交通灯定位——它不知道、也不关心 app 自己
+/// 的顶栏画多高。`top_bar()` 的内容行故意只取 28 高、贴顶栏容器顶边
+/// (容器默认纵向 Top 对齐),让内容的纵向居中基准和交通灯保持一致;多出的
+/// `workspace_geometry::top_bar_height() - 28` 留在内容行下方当空白,不参与
+/// 居中计算。这不是设计稿数值,是 macOS 平台约定,因此不走 workspace.json。
+const MACOS_TRAFFIC_LIGHT_BAND_HEIGHT: f32 = 28.0;
+
 /// Figma 设计稿(Dozer Phase 1 UI,node-id=87:31)里顶栏标题/页签/加号
 /// 文字标的都是 Inter Medium——应用没绑定 Inter,用系统默认字体的
 /// Medium 档位贴近这个字重意图,不引入新字体文件。
@@ -4088,9 +4117,23 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
     let bar = row![title, tabs, right]
         .spacing(region.gap)
         .padding(region.padding)
+        .height(Length::Fixed(MACOS_TRAFFIC_LIGHT_BAND_HEIGHT))
         .align_y(iced_widget::core::Alignment::Center);
 
-    container(bar)
+    // 双击顶栏空白处缩放窗口(原生标题栏没了之后,系统"双击标题栏缩放"
+    // 手势只在它认为仍是标题栏的那一条区域生效,顶栏其余空白靠这层背景
+    // MouseArea 手动补上)。放在 `bar` 下面这一层——iced 的点击命中是
+    // 子先父后/上先下后,`bar` 里真正的按钮(页签/加号/箭头)会先吃掉
+    // 落在它们身上的点击,双击事件只有落在没有任何控件的空白处才会穿透
+    // 到这层背景,不会误吞正常的页签交互。
+    let background = MouseArea::new(
+        container(iced_widget::Space::new())
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .on_double_click(Message::TopBarDoubleClick);
+
+    container(stack![background, bar])
         .width(Length::Fill)
         .height(Length::Fixed(workspace_geometry::top_bar_height()))
         .style(move |_t: &iced_widget::Theme| container::Style {

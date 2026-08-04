@@ -679,6 +679,19 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 None => {}
             }
         }
+
+        /// 双击顶栏空白处缩放窗口(`Message::TopBarDoubleClick` →
+        /// `App::pending_zoom_toggle`)。`App` 不持有 `Window` 句柄,真正
+        /// 调用 `set_maximized` 只能在这里做——与 `apply_pending_focus`
+        /// 同一套"派发完消息后轮询待处理标记"节奏。
+        fn apply_pending_zoom_toggle(&mut self) {
+            let Self::Ready { app, window, .. } = self else {
+                return;
+            };
+            if app.take_pending_zoom_toggle() {
+                window.set_maximized(!window.is_maximized());
+            }
+        }
     }
 
     impl winit::application::ApplicationHandler<Message> for Runner {
@@ -890,6 +903,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             self.dispatch(event);
             self.sync_previews();
             self.apply_pending_focus();
+            self.apply_pending_zoom_toggle();
         }
 
         fn window_event(
@@ -1142,6 +1156,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             // 改变期望清单，统一在这里收口，不必在每个改变点各调一次。
             self.sync_previews();
             self.apply_pending_focus();
+            self.apply_pending_zoom_toggle();
         }
     }
 
