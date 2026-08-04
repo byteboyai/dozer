@@ -2,6 +2,7 @@ mod assets;
 mod chrome_style;
 mod conversation;
 mod delivery;
+mod font_style;
 mod fonts;
 mod goal;
 mod icons;
