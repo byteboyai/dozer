@@ -32,6 +32,7 @@
 use crate::chrome_style;
 use crate::conversation::{self, ConversationMeta};
 use crate::delivery::{self, FileChange, FileStatus};
+use crate::font_style;
 use crate::goal::{self, Goal};
 use crate::icons;
 use crate::layout;
@@ -1502,9 +1503,10 @@ impl Workspace {
         let cwd_for_log = cwd.clone();
         let proxy = io.proxy.clone();
         io.handle.spawn(async move {
-            let list = tokio::task::spawn_blocking(move || conversation::list_all_conversations(&cwd))
-                .await
-                .unwrap_or_default();
+            let list =
+                tokio::task::spawn_blocking(move || conversation::list_all_conversations(&cwd))
+                    .await
+                    .unwrap_or_default();
             tracing::debug!(n = list.len(), cwd = %cwd_for_log.display(), "对话列表扫描完成");
             let _ = proxy.send_event(Message::ConversationsRefreshed(project_id, list));
         });
@@ -1550,7 +1552,13 @@ impl Workspace {
     }
 
     /// 异步读 transcript + 解析 → ReviewLoaded（GUI 侧 spawn_blocking；P1i/P1j/P2b 按源）。
-    fn spawn_review_load(&self, io: &ShellIo, source: ReviewSource, path: String, agent: AgentKind) {
+    fn spawn_review_load(
+        &self,
+        io: &ShellIo,
+        source: ReviewSource,
+        path: String,
+        agent: AgentKind,
+    ) {
         let Some(project_id) = self.project_id() else {
             return;
         };
@@ -3570,12 +3578,16 @@ impl App {
             // Required Fix #1)。
             let mut hint_col = column![
                 text("未打开任何项目——点顶栏的 ＋ 打开一个")
-                    .size(14)
+                    .size(font_style::subtitle())
                     .color(theme::DIM)
             ]
             .spacing(8);
             if let Some(err) = &self.daemon_error {
-                hint_col = hint_col.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
+                hint_col = hint_col.push(
+                    text(format!("⚠ {err}"))
+                        .size(font_style::body())
+                        .color(theme::RED),
+                );
             }
             let hint = container(hint_col.padding(16))
                 .width(Length::Fill)
@@ -3704,15 +3716,27 @@ fn review_content<'a>(
         return content;
     };
     if let Some(err) = &rv.error {
-        return content.push(text(format!("⚠ {err}")).size(14).color(theme::RED));
+        return content.push(
+            text(format!("⚠ {err}"))
+                .size(font_style::subtitle())
+                .color(theme::RED),
+        );
     }
     if rv.entries.is_empty() {
-        return content.push(text("暂无对话").size(14).color(theme::DIM));
+        return content.push(
+            text("暂无对话")
+                .size(font_style::subtitle())
+                .color(theme::DIM),
+        );
     }
     for (i, e) in rv.entries.iter().enumerate() {
         match e {
             ReviewEntry::Human { text: t } => {
-                content = content.push(text(format!("▎{t}")).size(15).color(theme::CREAM));
+                content = content.push(
+                    text(format!("▎{t}"))
+                        .size(font_style::title())
+                        .color(theme::CREAM),
+                );
             }
             ReviewEntry::AiTurn {
                 text: body,
@@ -3720,7 +3744,11 @@ fn review_content<'a>(
                 thinking,
             } => {
                 if !body.is_empty() {
-                    content = content.push(text(body.clone()).size(14).color(theme::BODY));
+                    content = content.push(
+                        text(body.clone())
+                            .size(font_style::subtitle())
+                            .color(theme::BODY),
+                    );
                 }
                 let expanded = rv.expanded.contains(&i);
                 let glyph = if expanded { "▾ " } else { "▸ " };
@@ -3730,7 +3758,7 @@ fn review_content<'a>(
                             "{glyph}{}",
                             ai_turn_summary(tools.len(), *thinking)
                         ))
-                        .size(13)
+                        .size(font_style::body())
                         .color(theme::DIM),
                     )
                     .on_press(Message::ReviewToggle(i))
@@ -3742,11 +3770,18 @@ fn review_content<'a>(
                 );
                 if expanded {
                     if *thinking {
-                        content = content.push(text("  · 思考(略)").size(12).color(theme::DIM));
+                        content = content.push(
+                            text("  · 思考(略)")
+                                .size(font_style::label())
+                                .color(theme::DIM),
+                        );
                     }
                     for tool in tools {
-                        content =
-                            content.push(text(format!("  · {tool}")).size(13).color(theme::CYAN));
+                        content = content.push(
+                            text(format!("  · {tool}"))
+                                .size(font_style::body())
+                                .color(theme::CYAN),
+                        );
                     }
                 }
             }
@@ -3763,19 +3798,27 @@ fn acceptance_content<'a>(
         return content;
     };
     if let Some(n) = acc.accepted_version {
-        return content.push(text(format!("✓ 已沉淀 v{n}")).size(15).color(theme::GOLD));
+        return content.push(
+            text(format!("✓ 已沉淀 v{n}"))
+                .size(font_style::title())
+                .color(theme::GOLD),
+        );
     }
     match &acc.goal {
         Some(g) => {
-            content = content.push(text(g.title.clone()).size(15).color(theme::CREAM));
+            content = content.push(
+                text(g.title.clone())
+                    .size(font_style::title())
+                    .color(theme::CREAM),
+            );
             for (i, c) in g.criteria.iter().enumerate() {
                 let checked = acc.checked.get(i).copied().unwrap_or(false);
                 content = content.push(
-                    button(text(criteria_line(checked, c)).size(13).color(if checked {
-                        theme::GOLD
-                    } else {
-                        theme::BODY
-                    }))
+                    button(
+                        text(criteria_line(checked, c))
+                            .size(font_style::body())
+                            .color(if checked { theme::GOLD } else { theme::BODY }),
+                    )
                     .on_press(Message::AcceptanceToggle(i))
                     .style(|_t, _s| button::Style {
                         background: None,
@@ -3788,22 +3831,26 @@ fn acceptance_content<'a>(
         None => {
             content = content.push(
                 text("未定标——先在仓库写 .dozer/goal.md（首行目标,\n- [ ] 列表为标准）")
-                    .size(13)
+                    .size(font_style::body())
                     .color(theme::DIM),
             );
         }
     }
-    content = content.push(text("变更文件").size(13).color(theme::DIM));
+    content = content.push(text("变更文件").size(font_style::body()).color(theme::DIM));
     for fc in &acc.changes {
         let path = acc.repo.join(&fc.path);
         content = content.push(
-            button(text(file_change_line(fc)).size(13).color(theme::CYAN))
-                .on_press(Message::PreviewOpenPath(path))
-                .style(|_t, _s| button::Style {
-                    background: None,
-                    text_color: theme::CYAN,
-                    ..button::Style::default()
-                }),
+            button(
+                text(file_change_line(fc))
+                    .size(font_style::body())
+                    .color(theme::CYAN),
+            )
+            .on_press(Message::PreviewOpenPath(path))
+            .style(|_t, _s| button::Style {
+                background: None,
+                text_color: theme::CYAN,
+                ..button::Style::default()
+            }),
         );
     }
     let editing = acc.comment_editing;
@@ -3817,7 +3864,7 @@ fn acceptance_content<'a>(
     content = content.push(
         button(
             text(comment_text)
-                .size(13)
+                .size(font_style::body())
                 .color(if editing { theme::CREAM } else { theme::DIM }),
         )
         .on_press(Message::AcceptanceCommentClick)
@@ -3834,7 +3881,7 @@ fn acceptance_content<'a>(
         }),
     );
     let actions = row![
-        button(text("通过·沉淀").size(13).color(theme::BG))
+        button(text("通过·沉淀").size(font_style::body()).color(theme::BG))
             .on_press(Message::AcceptanceAccept)
             .style(|_t, _s| button::Style {
                 background: Some(theme::GOLD.into()),
@@ -3846,23 +3893,31 @@ fn acceptance_content<'a>(
                 },
                 ..button::Style::default()
             }),
-        button(text("打回并注回").size(13).color(theme::RED))
-            .on_press(Message::AcceptanceReject)
-            .style(|_t, _s| button::Style {
-                background: None,
-                text_color: theme::RED,
-                border: Border {
-                    color: theme::RED,
-                    width: 1.0,
-                    radius: 2.0.into()
-                },
-                ..button::Style::default()
-            }),
+        button(
+            text("打回并注回")
+                .size(font_style::body())
+                .color(theme::RED)
+        )
+        .on_press(Message::AcceptanceReject)
+        .style(|_t, _s| button::Style {
+            background: None,
+            text_color: theme::RED,
+            border: Border {
+                color: theme::RED,
+                width: 1.0,
+                radius: 2.0.into()
+            },
+            ..button::Style::default()
+        }),
     ]
     .spacing(8);
     content = content.push(actions);
     if let Some(err) = &acc.error {
-        content = content.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
+        content = content.push(
+            text(format!("⚠ {err}"))
+                .size(font_style::body())
+                .color(theme::RED),
+        );
     }
     content
 }
@@ -3881,7 +3936,7 @@ fn acceptance_content<'a>(
 /// 原先中间的 ⌘K 搜索框是视觉占位（没有任何交互接线），让位给页签行；
 /// 搜索入口日后回来时应另找位置，不要再把页签挤掉。
 fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let title = text("Dozer").size(15).color(theme::CREAM);
+    let title = text("Dozer").size(font_style::title()).color(theme::CREAM);
 
     // 页签行占满标题与右侧之间的全部空间。裁剪与翻页在 `project_tabs_row`
     // 内部做(只裁页签本身,箭头与"＋"钉在裁剪区外),这里**不能**再套一层
@@ -3895,8 +3950,8 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
     {
         let capsule = container(
             row![
-                text("●").size(9).color(theme::GOLD),
-                text(cap).size(13).color(theme::CREAM)
+                text("●").size(font_style::dot_sm()).color(theme::GOLD),
+                text(cap).size(font_style::body()).color(theme::CREAM)
             ]
             .spacing(6),
         )
@@ -4015,7 +4070,7 @@ fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_
         Message::ProjectTabScroll(true),
     );
 
-    let add = button(text("＋").size(14).color(theme::CREAM))
+    let add = button(text("＋").size(font_style::subtitle()).color(theme::CREAM))
         .on_press(Message::ProjectTabPickFolder)
         .padding([2, 6])
         .style(|_t: &iced_widget::Theme, _s| button::Style {
@@ -4066,13 +4121,13 @@ fn project_tab_item<'a>(
         } else {
             color
         };
-        label = label.push(text("●").size(10).color(color));
+        label = label.push(text("●").size(font_style::caption_sm()).color(color));
     }
-    label = label.push(
-        text(name)
-            .size(13)
-            .color(if active { theme::CREAM } else { theme::BODY }),
-    );
+    label = label.push(text(name).size(font_style::body()).color(if active {
+        theme::CREAM
+    } else {
+        theme::BODY
+    }));
 
     let select = button(label.align_y(iced_widget::core::Alignment::Center))
         .on_press(Message::ProjectTabSwitch(id))
@@ -4082,7 +4137,7 @@ fn project_tab_item<'a>(
             ..button::Style::default()
         });
 
-    let close = button(text("×").size(13).color(theme::DIM))
+    let close = button(text("×").size(font_style::body()).color(theme::DIM))
         .on_press(Message::ProjectTabClose(id))
         .style(|_t: &iced_widget::Theme, _s| button::Style {
             background: None,
@@ -4186,14 +4241,16 @@ fn conversation_list_pane(
     let region = chrome_style::conversation_list_pane();
     let mut content = column![
         row![
-            text("对话").size(14).color(theme::CREAM),
+            text("对话")
+                .size(font_style::subtitle())
+                .color(theme::CREAM),
             text(
                 ws.project
                     .as_ref()
                     .map(|p| p.name.clone())
                     .unwrap_or_else(|| "未打开项目".into())
             )
-            .size(12)
+            .size(font_style::label())
             .color(theme::DIM),
         ]
         .spacing(8)
@@ -4208,15 +4265,19 @@ fn conversation_list_pane(
         .count();
     content = content.push(
         row![
-            text("对话").size(11).color(theme::DIM),
+            text("对话").size(font_style::caption()).color(theme::DIM),
             text(format!("{} 条 · {} 活跃", ws.conversations.len(), active_n))
-                .size(11)
+                .size(font_style::caption())
                 .color(theme::DIM),
         ]
         .spacing(6),
     );
     if ws.conversations.is_empty() {
-        content = content.push(text("暂无对话记录").size(13).color(theme::DIM));
+        content = content.push(
+            text("暂无对话记录")
+                .size(font_style::body())
+                .color(theme::DIM),
+        );
     }
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -4239,8 +4300,10 @@ fn conversation_list_pane(
         let sub_color = if current { theme::GREEN } else { theme::DIM };
         let card = button(
             column![
-                text(c.title.clone()).size(13).color(theme::CREAM),
-                text(sub).size(10).color(sub_color),
+                text(c.title.clone())
+                    .size(font_style::body())
+                    .color(theme::CREAM),
+                text(sub).size(font_style::caption_sm()).color(sub_color),
             ]
             .spacing(4),
         )
@@ -4280,18 +4343,22 @@ fn agent_list_pane(
     let region = chrome_style::agent_list_pane();
     let content = column![
         row![
-            text("Agent").size(14).color(theme::CREAM),
+            text("Agent")
+                .size(font_style::subtitle())
+                .color(theme::CREAM),
             text(
                 ws.project
                     .as_ref()
                     .map(|p| p.name.clone())
                     .unwrap_or_else(|| "未打开项目".into())
             )
-            .size(12)
+            .size(font_style::label())
             .color(theme::DIM),
         ]
         .spacing(8),
-        text("Agents（后续）").size(13).color(theme::DIM),
+        text("Agents（后续）")
+            .size(font_style::body())
+            .color(theme::DIM),
     ]
     .spacing(region.gap);
 
@@ -4316,7 +4383,9 @@ fn review_content_pane(
     let region = chrome_style::review_content_pane();
     let maximize_btn = maximize_button(MaximizedPane::Right);
     let header = row![
-        text("会话审阅").size(13).color(theme::CREAM),
+        text("会话审阅")
+            .size(font_style::body())
+            .color(theme::CREAM),
         iced_widget::space::horizontal(),
         maximize_btn,
     ]
@@ -4329,7 +4398,7 @@ fn review_content_pane(
         content = content.push(
             container(
                 text("暂无审阅内容——点击左侧对话列表中的对话开始审阅")
-                    .size(14)
+                    .size(font_style::subtitle())
                     .color(theme::DIM),
             )
             .width(Length::Fill)
@@ -4643,31 +4712,43 @@ fn project_pane<'a>(
     // 就地改写路径,而这颗按钮在**已经打开着项目**时也照画不误——点它挑一个
     // 新文件夹,会把当前聚焦项目的终端会话连同正在跑的 agent 一起 kill 掉。
     // 设计文档 §2 只允许"显式关闭页签"才结束会话,这条路径已整体删除。
-    let open_btn = button(text("打开项目…").size(13).color(theme::CREAM))
-        .on_press(Message::ProjectTabPickFolder)
-        .style(|_t, _s| button::Style {
-            background: Some(theme::CARD.into()),
-            text_color: theme::CREAM,
-            border: Border {
-                color: theme::BORDER,
-                width: 1.0,
-                radius: 2.0.into(),
-            },
-            ..button::Style::default()
-        });
+    let open_btn = button(
+        text("打开项目…")
+            .size(font_style::body())
+            .color(theme::CREAM),
+    )
+    .on_press(Message::ProjectTabPickFolder)
+    .style(|_t, _s| button::Style {
+        background: Some(theme::CARD.into()),
+        text_color: theme::CREAM,
+        border: Border {
+            color: theme::BORDER,
+            width: 1.0,
+            radius: 2.0.into(),
+        },
+        ..button::Style::default()
+    });
 
     match &ws.project {
         Some(p) => {
             let label = project_branch_label(ws.branch.as_deref(), ws.dirty);
             let bcolor = if ws.dirty { theme::GOLD } else { theme::BODY };
             let mut card_col = column![
-                text(p.name.clone()).size(15).color(theme::CREAM),
-                text(label).size(12).color(bcolor),
-                text(p.path.clone()).size(11).color(theme::DIM),
+                text(p.name.clone())
+                    .size(font_style::title())
+                    .color(theme::CREAM),
+                text(label).size(font_style::label()).color(bcolor),
+                text(p.path.clone())
+                    .size(font_style::caption())
+                    .color(theme::DIM),
             ]
             .spacing(2);
             if let Some(n) = ws.project_acceptance_count.filter(|n| *n > 0) {
-                card_col = card_col.push(text(format!("{n} 次验收")).size(11).color(theme::GOLD));
+                card_col = card_col.push(
+                    text(format!("{n} 次验收"))
+                        .size(font_style::caption())
+                        .color(theme::GOLD),
+                );
             }
             let card = container(card_col).width(Length::Fill).padding(10).style(
                 |_t: &iced_widget::Theme| container::Style {
@@ -4683,7 +4764,11 @@ fn project_pane<'a>(
             content = content.push(card);
             content = content.push(open_btn);
             if let Some(err) = &ws.tree_error {
-                content = content.push(text(format!("⚠ {err}")).size(12).color(theme::RED));
+                content = content.push(
+                    text(format!("⚠ {err}"))
+                        .size(font_style::label())
+                        .color(theme::RED),
+                );
             }
             if let Some(tree) = &ws.file_tree {
                 for row in tree.visible_rows() {
@@ -4742,15 +4827,18 @@ fn project_pane<'a>(
                             .into()
                         };
                     let mut line = row![
-                        text(indent).size(15).color(name_color),
+                        text(indent).size(font_style::title()).color(name_color),
                         row_icon,
-                        text(row.name.clone()).size(15).color(name_color),
+                        text(row.name.clone())
+                            .size(font_style::title())
+                            .color(name_color),
                     ]
                     .spacing(6)
                     .align_y(iced_widget::core::Alignment::Center);
                     if let Some(st) = status {
                         line = line.push(iced_widget::space::horizontal());
-                        line = line.push(text("●").size(8).color(tree_row_dot(st)));
+                        line =
+                            line.push(text("●").size(font_style::dot_xs()).color(tree_row_dot(st)));
                     }
                     let msg = if row.is_dir {
                         Message::ProjectTreeToggle(row.path.clone())
@@ -4801,17 +4889,25 @@ fn project_pane<'a>(
             }
         }
         None => {
-            content = content.push(text("未打开项目").size(13).color(theme::DIM));
+            content = content.push(
+                text("未打开项目")
+                    .size(font_style::body())
+                    .color(theme::DIM),
+            );
             content = content.push(open_btn);
             for p in &ws.recent_projects {
                 content = content.push(
-                    button(text(p.name.clone()).size(13).color(theme::CREAM))
-                        .on_press(Message::ProjectSelect(p.id))
-                        .style(|_t, _s| button::Style {
-                            background: None,
-                            text_color: theme::CREAM,
-                            ..button::Style::default()
-                        }),
+                    button(
+                        text(p.name.clone())
+                            .size(font_style::body())
+                            .color(theme::CREAM),
+                    )
+                    .on_press(Message::ProjectSelect(p.id))
+                    .style(|_t, _s| button::Style {
+                        background: None,
+                        text_color: theme::CREAM,
+                        ..button::Style::default()
+                    }),
                 );
             }
         }
@@ -4839,8 +4935,8 @@ fn project_status_bar<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let (env, dot) = env_status_text(app.daemon_error.is_none());
     let left = row![
-        text("●").size(9).color(dot),
-        text(env).size(11).color(theme::BODY)
+        text("●").size(font_style::dot_sm()).color(dot),
+        text(env).size(font_style::caption()).color(theme::BODY)
     ]
     .spacing(6);
     let git = format!(
@@ -4848,11 +4944,11 @@ fn project_status_bar<'a>(
         project_branch_label(ws.branch.as_deref(), ws.dirty)
     );
     let tabs = row![
-        text("文件").size(11).color(theme::CREAM),
-        text("·").size(11).color(theme::DIM),
-        text(git).size(11).color(theme::BODY),
-        text("·").size(11).color(theme::DIM),
-        text("组件").size(11).color(theme::DIM),
+        text("文件").size(font_style::caption()).color(theme::CREAM),
+        text("·").size(font_style::caption()).color(theme::DIM),
+        text(git).size(font_style::caption()).color(theme::BODY),
+        text("·").size(font_style::caption()).color(theme::DIM),
+        text("组件").size(font_style::caption()).color(theme::DIM),
     ]
     .spacing(6);
     status_bar_container(
@@ -4874,14 +4970,16 @@ fn terminal_status_bar(
     };
     let resume = ws.tabs.get(ws.active).map(|t| t.alive).unwrap_or(false);
     let line = row![
-        text("●").size(9).color(dot),
-        text(label).size(11).color(theme::BODY),
-        text("·").size(11).color(theme::DIM),
+        text("●").size(font_style::dot_sm()).color(dot),
+        text(label).size(font_style::caption()).color(theme::BODY),
+        text("·").size(font_style::caption()).color(theme::DIM),
         text(format!("resume {}", if resume { "✓" } else { "—" }))
-            .size(11)
+            .size(font_style::caption())
             .color(theme::BODY),
-        text("·").size(11).color(theme::DIM),
-        text("dozerd 持有 · 断连可恢复").size(11).color(theme::DIM),
+        text("·").size(font_style::caption()).color(theme::DIM),
+        text("dozerd 持有 · 断连可恢复")
+            .size(font_style::caption())
+            .color(theme::DIM),
     ]
     .spacing(6);
     status_bar_container(line)
@@ -4930,14 +5028,18 @@ fn preview_pane(
         .filter(|(idx, _)| *idx >= first)
         .map(|(idx, tab)| {
             let active = idx == ws.preview.active_idx();
-            let select = button(text(tab.title.clone()).size(14).color(theme::CREAM))
-                .on_press(Message::PreviewSelectTab(idx))
-                .style(|_t, _s| button::Style {
-                    background: None,
-                    text_color: theme::CREAM,
-                    ..button::Style::default()
-                });
-            let close = button(text("×").size(13).color(theme::DIM))
+            let select = button(
+                text(tab.title.clone())
+                    .size(font_style::subtitle())
+                    .color(theme::CREAM),
+            )
+            .on_press(Message::PreviewSelectTab(idx))
+            .style(|_t, _s| button::Style {
+                background: None,
+                text_color: theme::CREAM,
+                ..button::Style::default()
+            });
+            let close = button(text("×").size(font_style::body()).color(theme::DIM))
                 .on_press(Message::PreviewCloseTab(idx))
                 .style(|_t, _s| button::Style {
                     background: None,
@@ -4989,7 +5091,11 @@ fn preview_pane(
     let mut content = column![tab_bar, tab_divider()].spacing(region.gap);
 
     if let Some(err) = &ws.preview_error {
-        content = content.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
+        content = content.push(
+            text(format!("⚠ {err}"))
+                .size(font_style::body())
+                .color(theme::RED),
+        );
     }
 
     if ws.preview.acceptance_active() {
@@ -4998,7 +5104,7 @@ fn preview_pane(
         content = content.push(
             container(
                 text("暂无预览——在左侧文件树选择文件")
-                    .size(14)
+                    .size(font_style::subtitle())
                     .color(theme::DIM),
             )
             .width(Length::Fill)
@@ -5042,14 +5148,18 @@ fn browser_pane(
         .filter(|(idx, _)| *idx >= first)
         .map(|(idx, tab)| {
             let active = idx == ws.browser.active_idx();
-            let select = button(text(tab.title.clone()).size(14).color(theme::CREAM))
-                .on_press(Message::BrowserSelectTab(idx))
-                .style(|_t, _s| button::Style {
-                    background: None,
-                    text_color: theme::CREAM,
-                    ..button::Style::default()
-                });
-            let close = button(text("×").size(13).color(theme::DIM))
+            let select = button(
+                text(tab.title.clone())
+                    .size(font_style::subtitle())
+                    .color(theme::CREAM),
+            )
+            .on_press(Message::BrowserSelectTab(idx))
+            .style(|_t, _s| button::Style {
+                background: None,
+                text_color: theme::CREAM,
+                ..button::Style::default()
+            });
+            let close = button(text("×").size(font_style::body()).color(theme::DIM))
                 .on_press(Message::BrowserCloseTab(idx))
                 .style(|_t, _s| button::Style {
                     background: None,
@@ -5103,36 +5213,39 @@ fn browser_pane(
     } else {
         "输入网址".to_string()
     };
-    let addr =
-        button(
-            text(addr_text)
-                .size(13)
-                .color(if editing { theme::CREAM } else { theme::DIM }),
-        )
-        .on_press(Message::BrowserAddrClick)
-        .width(Length::Fill)
-        .style(move |_t, _s| button::Style {
-            background: Some(theme::TERM_BG.into()),
-            text_color: theme::CREAM,
-            border: Border {
-                color: if editing { theme::GOLD } else { theme::BORDER },
-                width: 1.0,
-                radius: 2.0.into(),
-            },
-            ..button::Style::default()
-        });
+    let addr = button(text(addr_text).size(font_style::body()).color(if editing {
+        theme::CREAM
+    } else {
+        theme::DIM
+    }))
+    .on_press(Message::BrowserAddrClick)
+    .width(Length::Fill)
+    .style(move |_t, _s| button::Style {
+        background: Some(theme::TERM_BG.into()),
+        text_color: theme::CREAM,
+        border: Border {
+            color: if editing { theme::GOLD } else { theme::BORDER },
+            width: 1.0,
+            radius: 2.0.into(),
+        },
+        ..button::Style::default()
+    });
 
     let mut content = column![tab_bar, tab_divider(), addr].spacing(region.gap);
 
     if let Some(err) = &ws.browser_error {
-        content = content.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
+        content = content.push(
+            text(format!("⚠ {err}"))
+                .size(font_style::body())
+                .color(theme::RED),
+        );
     }
 
     if ws.browser.tabs().is_empty() {
         content = content.push(
             container(
                 text("暂无网页——在地址栏输入网址")
-                    .size(14)
+                    .size(font_style::subtitle())
                     .color(theme::DIM),
             )
             .width(Length::Fill)
@@ -5161,14 +5274,22 @@ fn terminal_pane<'a>(
     let mut content = column![tab_bar(app, ws)].spacing(region.gap);
 
     if let Some(err) = &app.daemon_error {
-        content = content.push(text(format!("⚠ {err}")).size(13).color(theme::RED));
+        content = content.push(
+            text(format!("⚠ {err}"))
+                .size(font_style::body())
+                .color(theme::RED),
+        );
     }
 
     // OSC 133;D 的最近命令非零退出码提示（下一条命令开始时消失）。
     if let Some(code) = ws.tabs.get(ws.active).and_then(|t| t.last_exit)
         && code != 0
     {
-        content = content.push(text(format!("exit {code}")).size(12).color(theme::RED));
+        content = content.push(
+            text(format!("exit {code}"))
+                .size(font_style::label())
+                .color(theme::RED),
+        );
     }
 
     // 交付横幅（spec P1f D3）:金字金框,CTA 进入验收
@@ -5177,8 +5298,8 @@ fn terminal_pane<'a>(
     {
         let banner = container(
             row![
-                text(text_str).size(13).color(theme::GOLD),
-                button(text("进入验收").size(13).color(theme::GOLD))
+                text(text_str).size(font_style::body()).color(theme::GOLD),
+                button(text("进入验收").size(font_style::body()).color(theme::GOLD))
                     .on_press(Message::AcceptanceOpen(tab.tab_id))
                     .style(|_t, _s| button::Style {
                         background: Some(theme::CARD.into()),
@@ -5259,7 +5380,7 @@ fn menu_item<'a>(
     button(
         row![
             icons::view(icon, 14.0, theme::CREAM),
-            text(label).size(13).color(theme::CREAM),
+            text(label).size(font_style::body()).color(theme::CREAM),
         ]
         .spacing(8)
         .align_y(iced_widget::core::Alignment::Center),
@@ -5284,7 +5405,7 @@ fn tree_edit_row(
     let indent = "  ".repeat(depth);
     container(
         text(format!("{indent}{buffer}▏"))
-            .size(15)
+            .size(font_style::title())
             .color(theme::CREAM),
     )
     .width(Length::Fill)
@@ -5342,7 +5463,7 @@ fn context_menu_popup<'a>(
             button(
                 row![
                     icons::view(icons::IconKind::ClipboardPaste, 14.0, theme::DIM),
-                    text("粘贴").size(13).color(theme::DIM),
+                    text("粘贴").size(font_style::body()).color(theme::DIM),
                 ]
                 .spacing(8)
                 .align_y(iced_widget::core::Alignment::Center),
@@ -5414,13 +5535,13 @@ fn delete_confirm_popup(
     let dialog = container(
         column![
             text(format!("删除{kind} \"{name}\"?"))
-                .size(14)
+                .size(font_style::subtitle())
                 .color(theme::CREAM),
             text("会移入系统回收站,可从回收站找回。")
-                .size(12)
+                .size(font_style::label())
                 .color(theme::DIM),
             row![
-                button(text("取消").size(13).color(theme::CREAM))
+                button(text("取消").size(font_style::body()).color(theme::CREAM))
                     .on_press(Message::ProjectTreeDeleteCancel)
                     .padding([6, 12])
                     .style(|_t, _s| button::Style {
@@ -5433,7 +5554,7 @@ fn delete_confirm_popup(
                         },
                         ..button::Style::default()
                     }),
-                button(text("删除").size(13).color(theme::RED))
+                button(text("删除").size(font_style::body()).color(theme::RED))
                     .on_press(Message::ProjectTreeDeleteConfirm)
                     .padding([6, 12])
                     .style(|_t, _s| button::Style {
@@ -5591,7 +5712,7 @@ fn tab_bar<'a>(
         Message::TermTabScroll(true),
     );
 
-    let plus = button(text("＋").size(15).color(theme::CREAM))
+    let plus = button(text("＋").size(font_style::title()).color(theme::CREAM))
         .on_press(Message::NewTab)
         .style(|_theme, _status| button::Style {
             background: Some(theme::CARD.into()),
@@ -5830,9 +5951,9 @@ fn tab_item(
         color = Color { a: 0.15, ..color };
     }
     let label = row![
-        text("●").size(11).color(color),
+        text("●").size(font_style::caption()).color(color),
         text(tab_title(tab.cwd.as_deref(), &tab.info.name))
-            .size(14)
+            .size(font_style::subtitle())
             .color(theme::CREAM),
     ]
     .spacing(4);
@@ -5845,7 +5966,7 @@ fn tab_item(
             ..button::Style::default()
         });
 
-    let close = button(text("×").size(13).color(theme::DIM))
+    let close = button(text("×").size(font_style::body()).color(theme::DIM))
         .on_press(Message::CloseTab(idx))
         .style(|_theme, _status| button::Style {
             background: None,
@@ -5883,10 +6004,14 @@ fn active_tab_view<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     match ws.tabs.get(ws.active) {
         Some(tab) => term_view::view(&tab.model, app.term_focused),
-        None => container(text("暂无会话——点击 ＋ 新建").size(14).color(theme::DIM))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
+        None => container(
+            text("暂无会话——点击 ＋ 新建")
+                .size(font_style::subtitle())
+                .color(theme::DIM),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into(),
     }
 }
 
