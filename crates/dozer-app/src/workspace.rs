@@ -48,8 +48,9 @@ use crate::workspace_font;
 use crate::workspace_geometry;
 use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
+use iced_widget::core::font::Weight;
 use iced_widget::core::mouse;
-use iced_widget::core::{Border, Color, Element, Length, Padding};
+use iced_widget::core::{Border, Color, Element, Font, Length, Padding};
 use iced_widget::{MouseArea, button, column, container, row, stack, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
 use serde::{Deserialize, Serialize};
@@ -4026,9 +4027,20 @@ fn acceptance_content<'a>(
 ///
 /// 原先中间的 ⌘K 搜索框是视觉占位（没有任何交互接线），让位给页签行；
 /// 搜索入口日后回来时应另找位置，不要再把页签挤掉。
+/// Figma 设计稿(Dozer Phase 1 UI,node-id=87:31)里顶栏标题/页签/加号
+/// 文字标的都是 Inter Medium——应用没绑定 Inter,用系统默认字体的
+/// Medium 档位贴近这个字重意图,不引入新字体文件。
+fn top_bar_font() -> Font {
+    Font {
+        weight: Weight::Medium,
+        ..Font::default()
+    }
+}
+
 fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let title = text("Dozer")
-        .size(workspace_font::title())
+        .font(top_bar_font())
+        .size(workspace_font::body())
         .color(theme::CREAM);
 
     // 页签行占满标题与右侧之间的全部空间。裁剪与翻页在 `project_tabs_row`
@@ -4060,7 +4072,17 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
         });
         right = right.push(capsule);
     }
-    right = right.push(icons::view(icons::IconKind::Settings, 16.0, theme::DIM));
+    // 设计稿"btn settings"外框 padding-left 6 / padding-y 4(hit-box 留白,
+    // 图标本身仍是 16x16)。目前尚未接入设置面板,先只还原视觉,不加
+    // on_press——没有对应 Message 变体可派发。
+    right = right.push(
+        container(icons::view(icons::IconKind::Settings, 16.0, theme::DIM)).padding(Padding {
+            top: 4.0,
+            right: 0.0,
+            bottom: 4.0,
+            left: 6.0,
+        }),
+    );
 
     let region = chrome_style::top_bar();
     let bar = row![title, tabs, right]
@@ -4165,14 +4187,15 @@ fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_
 
     let add = button(
         text("＋")
-            .size(workspace_font::subtitle())
-            .color(theme::CREAM),
+            .font(top_bar_font())
+            .size(workspace_font::title())
+            .color(theme::DIM),
     )
     .on_press(Message::ProjectTabPickFolder)
-    .padding([2, 6])
+    .padding([6, 8])
     .style(|_t: &iced_widget::Theme, _s| button::Style {
         background: None,
-        text_color: theme::CREAM,
+        text_color: theme::DIM,
         ..button::Style::default()
     });
 
@@ -4186,9 +4209,11 @@ fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_
 /// (`Stub` 无存活会话时不画),所以按有无分开算。
 fn project_tab_display_width(name: &str, has_dot: bool) -> f32 {
     // 状态点●+spacing ≈ 18(可选), 名称 ≈ units * 半宽 8.0(13px 近似),
-    // 关闭× ≈ 18, pill padding ≈ 12
+    // 关闭× ≈ 18, pill padding ≈ 32(容器左右各 14,Figma 还原后比旧值
+    // 大不少——`project_tab_item` 的 container padding 从 [2,4] 改成
+    // [6,14] 时这个估算常量必须跟着改,否则翻页窗口化会低估实际渲染宽)。
     let dot = if has_dot { 18.0 } else { 0.0 };
-    dot + text_width_units(name) * 8.0 + 18.0 + 12.0
+    dot + text_width_units(name) * 8.0 + 18.0 + 32.0
 }
 
 /// 单个项目页签:状态点(可选)+ 项目名的切换按钮 + 关闭按钮。结构与终端
@@ -4210,11 +4235,12 @@ fn project_tab_item<'a>(
         };
         label = label.push(text("●").size(workspace_font::caption_sm()).color(color));
     }
-    label = label.push(text(name).size(workspace_font::body()).color(if active {
-        theme::CREAM
-    } else {
-        theme::BODY
-    }));
+    label = label.push(
+        text(name)
+            .font(top_bar_font())
+            .size(workspace_font::body())
+            .color(if active { theme::CREAM } else { theme::DIM }),
+    );
 
     let select = button(label.align_y(iced_widget::core::Alignment::Center))
         .on_press(Message::ProjectTabSwitch(id))
@@ -4237,13 +4263,13 @@ fn project_tab_item<'a>(
             .spacing(2)
             .align_y(iced_widget::core::Alignment::Center),
     )
-    .padding([2, 4])
+    .padding([6, 14])
     .style(move |_t: &iced_widget::Theme| {
         if active {
             container::Style {
                 background: Some(theme::CARD.into()),
                 border: Border {
-                    color: theme::GOLD,
+                    color: theme::BORDER,
                     width: 1.0,
                     radius: 6.0.into(),
                 },

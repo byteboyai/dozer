@@ -1,10 +1,10 @@
 {
   "regions": {
     "top_bar": {
-      "background": "#0a0e16",
-      "border": { "color": "BORDER", "width": 0.0, "radius": 0.0 },
-      "padding": [0, 12],
-      "gap": 16
+      "background": "#0e1620",
+      "border": { "color": "BORDER", "width": 1.0, "radius": 0.0 },
+      "padding": [0, 16],
+      "gap": 8
     },
     "left_icon_rail": {
       "background": "#0a0e16",

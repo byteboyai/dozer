@@ -294,15 +294,18 @@ mod tests {
         assert_eq!(s.gap, 4.0);
     }
 
+    /// 严格还原 Figma"Dozer Phase 1 UI"node-id=87:31 的 Titlebar:与其余
+    /// 区域"防漂移锚=迁移前字面量"不同,这里的锚点是设计稿数值——2026-08-05
+    /// 按设计稿改过背景色/边框/内边距/间距,不再是纯代码搬家。
     #[test]
-    fn top_bar_matches_pre_migration_literals() {
+    fn top_bar_matches_figma_design() {
         let s = top_bar();
-        assert_eq!(s.background, Some(theme::BG));
-        let border = s.border.expect("top_bar 应有边框条目(width=0,视觉不可见)");
+        assert_eq!(s.background, Some(Color::from_rgb8(0x0e, 0x16, 0x20)));
+        let border = s.border.expect("top_bar 应有底部分隔线(设计稿 border-b)");
         assert_eq!(border.color, theme::BORDER);
-        assert_eq!(border.width, 0.0);
-        assert_eq!(s.padding, Padding::from([0.0, 12.0]));
-        assert_eq!(s.gap, 16.0);
+        assert_eq!(border.width, 1.0);
+        assert_eq!(s.padding, Padding::from([0.0, 16.0]));
+        assert_eq!(s.gap, 8.0);
     }
 
     #[test]
