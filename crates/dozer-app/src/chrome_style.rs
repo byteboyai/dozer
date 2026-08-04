@@ -2,10 +2,12 @@
 //! 状态条 + 7 个面板内容区)各自外层容器的背景色/边框/内边距/子元素
 //! 间距,编译期内嵌 `assets/theme/regions.json`,启动时解析一次。
 //!
-//! 颜色字段是字符串,引用 `theme.rs` 现成的令牌名——`theme.rs` 仍是
-//! 颜色数值唯一真相源,这里只负责"这个区域用哪个令牌"。解析失败(格式
-//! 错误、未知颜色令牌名)直接 panic:这是编译期就该发现的开发期配置
-//! 错误,不是需要优雅降级的运行时数据(同 `theme.rs` 14 色的定位)。
+//! 颜色字段是字符串,支持两种写法:`theme.rs` 现成的令牌名(如
+//! `"BORDER"`),或 `#RRGGBB` / `#RRGGBBAA` 字面量十六进制值——后者让
+//! `background` 这类用户最常自定义的字段脱离令牌表,直接改 JSON 就能
+//! 调色,不必碰 Rust 代码。解析失败(格式错误、非法十六进制、未知颜色
+//! 令牌名)直接 panic:这是编译期就该发现的开发期配置错误,不是需要
+//! 优雅降级的运行时数据(同 `theme.rs` 14 色的定位)。
 //!
 //! 只覆盖区域**外层容器**的样式;区域内部控件的 active/hover/pressed
 //! 等交互态样式(如 `rail_icon_button`)不在这里,留在 Rust 代码里。
@@ -85,9 +87,39 @@ struct RawRegions {
     context_menu: RawRegion,
 }
 
-/// 颜色令牌名 → `theme.rs` 常量。未知名字直接 panic——配置写错在启动时
-/// 就能发现,不会带着错误的透明色静默跑起来。
+/// `#RRGGBB` / `#RRGGBBAA` 十六进制字面量 → `Color`。
+fn parse_hex_color(hex: &str) -> Color {
+    let digits = hex.strip_prefix('#').unwrap_or(hex);
+    let component = |i: usize| -> f32 {
+        u8::from_str_radix(&digits[i..i + 2], 16)
+            .unwrap_or_else(|e| panic!("regions.json: 非法十六进制颜色 \"{hex}\": {e}"))
+            as f32
+            / 255.0
+    };
+    match digits.len() {
+        6 => Color {
+            r: component(0),
+            g: component(2),
+            b: component(4),
+            a: 1.0,
+        },
+        8 => Color {
+            r: component(0),
+            g: component(2),
+            b: component(4),
+            a: component(6),
+        },
+        _ => panic!("regions.json: 非法十六进制颜色 \"{hex}\"(需 6 或 8 位)"),
+    }
+}
+
+/// 颜色字符串 → `Color`:`#` 开头按十六进制字面量解析,否则按 `theme.rs`
+/// 令牌名查表。未知名字/非法格式直接 panic——配置写错在启动时就能发现,
+/// 不会带着错误的透明色静默跑起来。
 fn resolve_color(name: &str) -> Color {
+    if name.starts_with('#') {
+        return parse_hex_color(name);
+    }
     match name {
         "BG" => theme::BG,
         "PANEL" => theme::PANEL,
@@ -299,5 +331,26 @@ mod tests {
     #[should_panic(expected = "未知颜色令牌")]
     fn unknown_color_token_panics() {
         resolve_color("NOT_A_REAL_TOKEN");
+    }
+
+    #[test]
+    fn hex_color_matches_equivalent_token() {
+        assert_eq!(resolve_color("#0a0e16"), theme::BG);
+        assert_eq!(resolve_color("#12202a"), theme::CARD);
+    }
+
+    #[test]
+    fn hex_color_with_alpha_parses() {
+        let c = resolve_color("#00000080");
+        assert_eq!(c.r, 0.0);
+        assert_eq!(c.g, 0.0);
+        assert_eq!(c.b, 0.0);
+        assert_eq!(c.a, 0x80 as f32 / 255.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "非法十六进制颜色")]
+    fn malformed_hex_color_panics() {
+        resolve_color("#12345");
     }
 }
