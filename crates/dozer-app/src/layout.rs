@@ -115,8 +115,36 @@ mod tests {
             right_view: RightView::Conversations,
             left_collapsed: true,
             right_collapsed: false,
+            window_width: 1600.0,
+            window_height: 1000.0,
         };
         save_to(&path, &layout).unwrap();
         assert_eq!(load_from(&path), layout);
+    }
+
+    #[test]
+    fn shell_layout_persists_window_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shell_layout.json");
+        let layout = ShellLayout {
+            window_width: 1800.0,
+            window_height: 1100.0,
+            ..ShellLayout::default()
+        };
+        save_to(&path, &layout).unwrap();
+        assert_eq!(load_from(&path), layout);
+    }
+
+    /// 老 `layout.json` 缺 `window_width`/`window_height`(改动前写的文件):
+    /// `#[serde(default)]` 补 0.0,`sanitize_shell_layout` 的 `> 0.0` 判断
+    /// 把它退化成 `INITIAL_WINDOW_SIZE`,而不是任由一个 0×0 的窗口建出来。
+    #[test]
+    fn load_from_json_missing_window_size_falls_back_to_initial() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layout.json");
+        std::fs::write(&path, r#"{"left_width": 500.0}"#).unwrap();
+        let l = load_from(&path);
+        assert_eq!(l.window_width, crate::workspace::INITIAL_WINDOW_SIZE.0);
+        assert_eq!(l.window_height, crate::workspace::INITIAL_WINDOW_SIZE.1);
     }
 }

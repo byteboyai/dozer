@@ -228,6 +228,13 @@ pub struct ShellLayout {
     pub right_view: RightView,
     pub left_collapsed: bool,
     pub right_collapsed: bool,
+    /// 上次退出时的窗口逻辑尺寸(宽,高)。`main.rs` 建窗时读它决定初始
+    /// `with_inner_size`,取代写死的 `INITIAL_WINDOW_SIZE`；`App::
+    /// persist_window_size_on_exit` 在 `WindowEvent::CloseRequested` 时
+    /// 写回。跟其余字段一样走 `#[serde(default)]`,老 `layout.json` 缺这
+    /// 两个字段时退化成 `INITIAL_WINDOW_SIZE`,不影响其余已存的偏好。
+    pub window_width: f32,
+    pub window_height: f32,
 }
 
 impl Default for ShellLayout {
@@ -241,6 +248,8 @@ impl Default for ShellLayout {
             right_view: RightView::Agent,
             left_collapsed: false,
             right_collapsed: false,
+            window_width: INITIAL_WINDOW_SIZE.0,
+            window_height: INITIAL_WINDOW_SIZE.1,
         }
     }
 }
@@ -249,7 +258,10 @@ impl Default for ShellLayout {
 /// 三个 split 用与拖拽同一对上下界:比例恰为 0.0/1.0 时 `split_portions`
 /// 会给出 `FillPortion(0)`,那一块在 flex 里拿不到任何宽度、整块消失;
 /// `left_width` 只保下限(上限依赖窗口宽,由渲染/几何时刻的
-/// `clamp_left_width` 负责,不在这里写死)。
+/// `clamp_left_width` 负责,不在这里写死)。`window_width`/`window_height`
+/// 同样只夹下限(`MIN_WINDOW_WIDTH`/`MIN_WINDOW_HEIGHT`,建窗时还有
+/// `with_min_inner_size` 兜底),非法值(非有限数、缺字段的 0.0)退化成
+/// `INITIAL_WINDOW_SIZE`。
 pub fn sanitize_shell_layout(l: ShellLayout) -> ShellLayout {
     let clamp_split = |v: f32| {
         if v.is_finite() {
@@ -267,6 +279,16 @@ pub fn sanitize_shell_layout(l: ShellLayout) -> ShellLayout {
         files_split: clamp_split(l.files_split),
         agent_split: clamp_split(l.agent_split),
         conversations_split: clamp_split(l.conversations_split),
+        window_width: if l.window_width.is_finite() && l.window_width > 0.0 {
+            l.window_width.max(MIN_WINDOW_WIDTH)
+        } else {
+            INITIAL_WINDOW_SIZE.0
+        },
+        window_height: if l.window_height.is_finite() && l.window_height > 0.0 {
+            l.window_height.max(MIN_WINDOW_HEIGHT)
+        } else {
+            INITIAL_WINDOW_SIZE.1
+        },
         ..l
     }
 }
@@ -2502,6 +2524,31 @@ impl App {
     pub fn set_window_size(&mut self, width: f32, height: f32) {
         self.window_size = (width, height);
         self.sync_terminal_grid();
+    }
+
+    /// 建窗时用的初始窗口尺寸偏好:优先用上次退出前持久化的
+    /// `shell_layout.window_width/height`(已经过 `sanitize_shell_layout`
+    /// 夹取),`layout.json` 不存在/读不到时 `layout::load()` 本身已经退化
+    /// 成 `ShellLayout::default()`,即 `INITIAL_WINDOW_SIZE`,这里不用再
+    /// 单独处理"没存过"的分支。
+    pub fn window_size_pref(&self) -> (f32, f32) {
+        (
+            self.shell_layout.window_width,
+            self.shell_layout.window_height,
+        )
+    }
+
+    /// 退出前把当前窗口尺寸并入 `shell_layout` 落盘(main.rs 在
+    /// `WindowEvent::CloseRequested` 时调用,`event_loop.exit()` 之前)。
+    /// 不走 `spawn_shell_layout_save` 的异步落盘——进程马上退出,spawn 的
+    /// tokio 任务不保证能在进程终止前跑完;这里退化成同步写,反正只在
+    /// 退出这一刻触发一次,不占渲染帧预算。
+    pub fn persist_window_size_on_exit(&mut self) {
+        self.shell_layout.window_width = self.window_size.0;
+        self.shell_layout.window_height = self.window_size.1;
+        if let Err(e) = layout::save(&self.shell_layout) {
+            tracing::warn!("退出前窗口尺寸写盘失败: {e}");
+        }
     }
 
     /// 按当前窗口尺寸+外壳状态重算终端网格并同步给所有 tab / daemon。
@@ -6855,6 +6902,47 @@ mod tests {
             ..ShellLayout::default()
         };
         assert_eq!(sanitize_shell_layout(sane), sane);
+    }
+
+    /// `window_width`/`window_height` 的夹取单独测:老 `layout.json` 缺这两
+    /// 个字段时 serde 补 0.0(不是 `f32::NAN`,判断要用 `> 0.0` 而不能只查
+    /// `is_finite`),负数/NAN 同样要落回 `INITIAL_WINDOW_SIZE`;合法但过小
+    /// 的值只夹下限,不整个重置。
+    #[test]
+    fn sanitize_shell_layout_clamps_window_size() {
+        let missing_fields = ShellLayout {
+            window_width: 0.0,
+            window_height: 0.0,
+            ..ShellLayout::default()
+        };
+        let s = sanitize_shell_layout(missing_fields);
+        assert_eq!(s.window_width, INITIAL_WINDOW_SIZE.0);
+        assert_eq!(s.window_height, INITIAL_WINDOW_SIZE.1);
+
+        let poisoned = ShellLayout {
+            window_width: -100.0,
+            window_height: f32::NAN,
+            ..ShellLayout::default()
+        };
+        let s = sanitize_shell_layout(poisoned);
+        assert_eq!(s.window_width, INITIAL_WINDOW_SIZE.0);
+        assert_eq!(s.window_height, INITIAL_WINDOW_SIZE.1);
+
+        let too_small = ShellLayout {
+            window_width: 10.0,
+            window_height: 10.0,
+            ..ShellLayout::default()
+        };
+        let s = sanitize_shell_layout(too_small);
+        assert_eq!(s.window_width, MIN_WINDOW_WIDTH);
+        assert_eq!(s.window_height, MIN_WINDOW_HEIGHT);
+
+        let legit = ShellLayout {
+            window_width: 1800.0,
+            window_height: 1100.0,
+            ..ShellLayout::default()
+        };
+        assert_eq!(sanitize_shell_layout(legit), legit);
     }
 
     #[test]

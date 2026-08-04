@@ -709,15 +709,15 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     // 又调用一次 `resumed`）直接跳过，避免重复建窗口。
                     return;
                 };
+                // 建窗尺寸优先用上次退出前存的偏好(`layout.json` 没有就是
+                // `INITIAL_WINDOW_SIZE`),下次启动记得住用户调整过的窗口大小。
+                let (init_w, init_h) = app.window_size_pref();
                 let window = Arc::new(
                     event_loop
                         .create_window(
                             winit::window::WindowAttributes::default()
                                 .with_title("Dozer")
-                                .with_inner_size(LogicalSize::new(
-                                    workspace::INITIAL_WINDOW_SIZE.0,
-                                    workspace::INITIAL_WINDOW_SIZE.1,
-                                ))
+                                .with_inner_size(LogicalSize::new(init_w, init_h))
                                 // 双保险:窗口不许缩到"两个面板区都放不下最小宽"
                                 // 以下。真正保证右半边不消失的是 app 侧的
                                 // `clamp_left_width`(持久化宽可能远大于这个最小
@@ -1051,6 +1051,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         // bounds 同步由本函数末尾的 sync_previews 统一执行
                     }
                     WindowEvent::CloseRequested => {
+                        // 同步写盘,不用 `spawn_shell_layout_save` 的异步路径——
+                        // 进程马上退出,spawn 的 tokio 任务不保证跑得完。
+                        app.persist_window_size_on_exit();
                         event_loop.exit();
                     }
                     _ => {}
