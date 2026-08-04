@@ -24,5 +24,14 @@
   <string>12.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <!-- 浏览器(wry/WKWebView 子视图)需要能打开任意网页,含不加密的
+       http:// 与 http://localhost 开发服务器。macOS 默认 ATS 会拦截
+       非 TLS 连接,导致"输入网址后页面空白打不开"。作为甲方自用的内嵌
+       浏览器直接放开任意加载(非 App Store 分发,无上架合规约束)。 -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoads</key>
+    <true/>
+  </dict>
 </dict>
 </plist>

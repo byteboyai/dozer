@@ -21,6 +21,8 @@ mod workspace;
 mod workspace_font;
 
 use workspace::{App, Message};
+// `with_allow_link_preview` 是 macOS 专有扩展 trait,需显式引入作用域。
+use wry::WebViewBuilderExtDarwin;
 
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -261,6 +263,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         .with_url(&spec.url)
                         .with_bounds(bounds)
                         .with_visible(spec.visible)
+                        // 关掉 macOS 的链接预览(force-click 弹出 peek 浮层),
+                        // 否则点网页里的超链接会变成"预览"而非跳转,表现就是
+                        // "能打开网页但点不了超链接"。wry 默认 allow_link_preview=true。
+                        .with_allow_link_preview(false)
                         .with_custom_protocol("dozer".into(), move |_id, request| {
                             let allowed = allowed.lock().expect("allowed_files 锁");
                             let reply = assets::handle_protocol(
