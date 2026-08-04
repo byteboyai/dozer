@@ -11,7 +11,7 @@
 //! ## 绘制模型
 //! `TerminalModel::visible_lines()` 快照 → 每行切成 [`Run`]（见
 //! [`layout_runs`]，headless 全测）→ 每个 run 一次 `fill_text`，定位在
-//! `(col * CELL_WIDTH, row * LINE_HEIGHT_PX)`：
+//! `(col * cell_width(), row * line_height_px())`：
 //! - ASCII 连续同风格格子合并成一个 run——等宽字体保证 run 内部对齐；
 //! - 宽字符（CJK）独立成 run、占 2 格绘制盒——字形 advance 与网格假设的
 //!   偏差被"每个宽字符重新定位"吞掉，不会累积；
@@ -20,6 +20,7 @@
 //!
 //! 光标最后画：先补一块实心格（focused：CREAM 底 + TERM_BG 字；未聚焦：
 //! CREAM 描边），覆盖在 run 字形之上，天然处理"光标落在任意 run 中间"。
+use crate::font_style;
 use crate::term_model::{Cell, TerminalModel};
 use crate::theme;
 use crate::workspace::Message;
@@ -29,20 +30,20 @@ use iced_widget::core::mouse::{self, ScrollDelta};
 use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Color, Element, Event, Font, Length, Pixels, Point, Rectangle, Size};
 
-/// 字号（逻辑像素）。
-const FONT_SIZE: f32 = 15.0;
-/// 等宽字体单元格宽度 ≈ 0.6em。
-const CELL_WIDTH: f32 = FONT_SIZE * 0.6;
-/// 行高倍数（相对字号）。
-const LINE_HEIGHT_FACTOR: f32 = 1.4;
-/// 行高（逻辑像素），供 `grid_size` 换算用。
-const LINE_HEIGHT_PX: f32 = FONT_SIZE * LINE_HEIGHT_FACTOR;
+/// 等宽字体单元格宽度 ≈ 0.6em（`font_style::terminal_size()` 驱动）。
+fn cell_width() -> f32 {
+    font_style::terminal_size() * 0.6
+}
+/// 行高（逻辑像素），供 `grid_size` 换算用（`font_style::terminal_*` 驱动）。
+fn line_height_px() -> f32 {
+    font_style::terminal_size() * font_style::terminal_line_height_factor()
+}
 
 /// 终端 pane 的像素尺寸 → 网格尺寸 `(cols, rows)`，向下取整（不足一格的
 /// 余量丢弃，避免半个字符溢出边界）。
 pub fn grid_size(width_px: f32, height_px: f32) -> (usize, usize) {
-    let cols = (width_px / CELL_WIDTH).floor().max(0.0) as usize;
-    let rows = (height_px / LINE_HEIGHT_PX).floor().max(0.0) as usize;
+    let cols = (width_px / cell_width()).floor().max(0.0) as usize;
+    let rows = (height_px / line_height_px()).floor().max(0.0) as usize;
     (cols, rows)
 }
 
@@ -130,7 +131,7 @@ fn layout_runs(row: &[Cell]) -> Vec<Run> {
 fn wheel_to_lines(delta: ScrollDelta, residual: f32) -> (i32, f32) {
     let lines = match delta {
         ScrollDelta::Lines { y, .. } => y,
-        ScrollDelta::Pixels { y, .. } => y / LINE_HEIGHT_PX,
+        ScrollDelta::Pixels { y, .. } => y / line_height_px(),
     };
     let total = residual + lines;
     let whole = total.trunc();
@@ -157,9 +158,9 @@ struct InteractionState {
 /// 画布内像素坐标 → 网格格坐标 `(col, row, right_half)`，钳制在
 /// `(cols, rows)` 网格内（拖出边界时选区停在边缘格）。
 fn cell_at(pos: Point, cols: usize, rows: usize) -> (usize, usize, bool) {
-    let col_f = (pos.x / CELL_WIDTH).max(0.0);
+    let col_f = (pos.x / cell_width()).max(0.0);
     let col = (col_f as usize).min(cols.saturating_sub(1));
-    let row = ((pos.y / LINE_HEIGHT_PX).max(0.0) as usize).min(rows.saturating_sub(1));
+    let row = ((pos.y / line_height_px()).max(0.0) as usize).min(rows.saturating_sub(1));
     let right_half = col_f.fract() > 0.5;
     (col, row, right_half)
 }
@@ -233,10 +234,10 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
         let (cursor_col, cursor_row) = self.model.cursor();
 
         for (row_idx, row) in lines.iter().enumerate() {
-            let y = row_idx as f32 * LINE_HEIGHT_PX;
+            let y = row_idx as f32 * line_height_px();
             for run in layout_runs(row) {
-                let x = run.col as f32 * CELL_WIDTH;
-                let run_size = Size::new(run.cells as f32 * CELL_WIDTH, LINE_HEIGHT_PX);
+                let x = run.col as f32 * cell_width();
+                let run_size = Size::new(run.cells as f32 * cell_width(), line_height_px());
                 if let Some(bg) = run.bg {
                     frame.fill_rectangle(Point::new(x, y), run_size, rgb(bg));
                 }
@@ -255,8 +256,8 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
                     content: run.text,
                     position: Point::new(x, y),
                     color: rgb(run.fg),
-                    size: Pixels(FONT_SIZE),
-                    line_height: LineHeight::Absolute(Pixels(LINE_HEIGHT_PX)),
+                    size: Pixels(font_style::terminal_size()),
+                    line_height: LineHeight::Absolute(Pixels(line_height_px())),
                     font: cell_font(run.bold),
                     ..canvas::Text::default()
                 });
@@ -270,13 +271,13 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
         if offset == 0
             && let Some(cell) = lines.get(cursor_row).and_then(|r| r.get(cursor_col))
         {
-            let x = cursor_col as f32 * CELL_WIDTH;
-            let y = cursor_row as f32 * LINE_HEIGHT_PX;
-            let box_w = if cell.wide { 2.0 } else { 1.0 } * CELL_WIDTH;
+            let x = cursor_col as f32 * cell_width();
+            let y = cursor_row as f32 * line_height_px();
+            let box_w = if cell.wide { 2.0 } else { 1.0 } * cell_width();
             if self.focused {
                 frame.fill_rectangle(
                     Point::new(x, y),
-                    Size::new(box_w, LINE_HEIGHT_PX),
+                    Size::new(box_w, line_height_px()),
                     theme::CREAM,
                 );
                 if cell.ch != ' ' {
@@ -284,15 +285,15 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
                         content: cell.ch.to_string(),
                         position: Point::new(x, y),
                         color: theme::TERM_BG,
-                        size: Pixels(FONT_SIZE),
-                        line_height: LineHeight::Absolute(Pixels(LINE_HEIGHT_PX)),
+                        size: Pixels(font_style::terminal_size()),
+                        line_height: LineHeight::Absolute(Pixels(line_height_px())),
                         font: cell_font(cell.bold),
                         ..canvas::Text::default()
                     });
                 }
             } else {
                 frame.stroke(
-                    &canvas::Path::rectangle(Point::new(x, y), Size::new(box_w, LINE_HEIGHT_PX)),
+                    &canvas::Path::rectangle(Point::new(x, y), Size::new(box_w, line_height_px())),
                     canvas::Stroke::default()
                         .with_color(theme::CREAM)
                         .with_width(1.0),
@@ -384,7 +385,7 @@ mod tests {
         assert_eq!((n, r), (2, 0.0));
         // 像素式（触控板）：不足一行的余量留在 residual 里跨事件累积。
         // 用行高的比例表达,与字号无关（0.6 行:单次不足 1 行,两次 > 1 行）。
-        let half = LINE_HEIGHT_PX * 0.6;
+        let half = line_height_px() * 0.6;
         let (n, r) = wheel_to_lines(ScrollDelta::Pixels { x: 0.0, y: half }, 0.0);
         assert_eq!(n, 0);
         assert!(r > 0.0);
@@ -394,7 +395,7 @@ mod tests {
         let (n, _) = wheel_to_lines(
             ScrollDelta::Pixels {
                 x: 0.0,
-                y: -LINE_HEIGHT_PX * 2.0,
+                y: -line_height_px() * 2.0,
             },
             0.0,
         );
@@ -403,10 +404,10 @@ mod tests {
 
     #[test]
     fn grid_size_from_pixels() {
-        // 字号 15px 等宽：单元格宽 ≈ 9.0px（0.6em），行高 ≈ 21.0px（1.4）
+        // 字号 14px 等宽：单元格宽 ≈ 8.4px（0.6em），行高 ≈ 14.0px（1.0）
         let (cols, rows) = grid_size(780.0, 546.0);
-        assert!((82..=92).contains(&cols), "cols={cols}");
-        assert!((24..=28).contains(&rows), "rows={rows}");
+        assert!((88..=96).contains(&cols), "cols={cols}");
+        assert!((36..=42).contains(&rows), "rows={rows}");
     }
 
     #[test]

@@ -1,10 +1,16 @@
 {
-  "dot_xs": 8,
-  "dot_sm": 9,
-  "caption_sm": 10,
-  "caption": 11,
-  "label": 12,
-  "body": 13,
-  "subtitle": 14,
-  "title": 15
+  "workspace": {
+    "dot_xs": 8,
+    "dot_sm": 9,
+    "caption_sm": 10,
+    "caption": 11,
+    "label": 12,
+    "body": 13,
+    "subtitle": 14,
+    "title": 15
+  },
+  "terminal": {
+    "size": 14.0,
+    "line_height_factor": 1.0
+  }
 }

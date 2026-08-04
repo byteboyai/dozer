@@ -6669,7 +6669,7 @@ mod tests {
     /// (`STATUS_BAR_HEIGHT`)与 `CHROME_HEIGHT_PX`(50) = 700。
     /// 对照平时:zones_width = 1440-2*44-8=1344,right_w = 1344 - 640 = 704,pair = 696,
     /// 696*0.6 = 417.6,减 16 = 401.6;高 = 900 - 44 - 26 - 50 = 780。
-    /// 换成网格(CELL_WIDTH=9,LINE_HEIGHT_PX=21):放大后 82x33,平时 44x37。
+    /// 换成网格(CELL_WIDTH=8.4,LINE_HEIGHT_PX=14):放大后 88x50,平时 47x55。
     #[test]
     fn terminal_pane_pixel_size_right_maximized_matches_overlay_box() {
         let maxed = ShellState {
@@ -6686,8 +6686,8 @@ mod tests {
         assert_ne!((w, h), normal, "放大态几何必须和平时不同");
         assert!(w > normal.0, "放大后终端必须真的更宽(网格跟着变宽)");
 
-        assert_eq!(crate::term_view::grid_size(w, h), (82, 33));
-        assert_eq!(crate::term_view::grid_size(normal.0, normal.1), (44, 37));
+        assert_eq!(crate::term_view::grid_size(w, h), (88, 50));
+        assert_eq!(crate::term_view::grid_size(normal.0, normal.1), (47, 55));
 
         // 左侧放大不改变右面板区几何(右半只是被遮罩盖住)。
         let left_maxed = ShellState {
@@ -6722,9 +6722,9 @@ mod tests {
             assert_eq!(terminal_pane_pixel_size(1440.0, 900.0, &for_grid), shown);
         }
 
-        // 具体网格:1440x900 下应是 44x37,而不是兜底的 80x24。
+        // 具体网格:1440x900 下应是 47x55,而不是兜底的 80x24。
         let (cols, rows) = crate::term_view::grid_size(shown.0, shown.1);
-        assert_eq!((cols, rows), (44, 37));
+        assert_eq!((cols, rows), (47, 55));
         assert_ne!(
             (cols as u16, rows as u16),
             (DEFAULT_COLS, DEFAULT_ROWS),
