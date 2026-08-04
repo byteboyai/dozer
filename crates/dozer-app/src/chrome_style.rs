@@ -362,6 +362,10 @@ mod tests {
         assert_eq!(border.color, theme::BORDER);
         assert_eq!(border.width, 1.0);
         assert_eq!(border.radius, 0.0.into());
+        // padding=1(等于边框宽度):防止内部两栏的不透明背景在零边距下
+        // 整片盖住边框描边(容器边框画在 bounds 边缘,子元素零 padding 时
+        // 会以同样的 bounds 铺满,视觉上把边框吃掉)。
+        assert_eq!(s.padding, Padding::from(1.0));
     }
 
     #[test]
@@ -372,6 +376,7 @@ mod tests {
         assert_eq!(border.color, theme::BORDER);
         assert_eq!(border.width, 1.0);
         assert_eq!(border.radius, 0.0.into());
+        assert_eq!(s.padding, Padding::from(1.0));
     }
 
     #[test]

@@ -4617,6 +4617,7 @@ fn left_panel_area<'a>(
     container(inner)
         .width(total)
         .height(Length::Fill)
+        .padding(region.padding)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
             border: region.border.unwrap_or_default(),
@@ -4676,6 +4677,7 @@ fn right_panel_area<'a>(
     container(inner)
         .width(Length::Fill)
         .height(Length::Fill)
+        .padding(region.padding)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
             border: region.border.unwrap_or_default(),
