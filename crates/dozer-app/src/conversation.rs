@@ -28,7 +28,9 @@ fn home_dir() -> PathBuf {
 /// 进程全局状态就能验证目录拼接逻辑（`HOME` 是跨线程共享的，`cargo test`
 /// 默认多线程跑，mutate 它不安全）。
 fn project_dir_in(home: &Path, agent_root: &str, cwd: &Path) -> PathBuf {
-    home.join(agent_root).join("projects").join(project_key(cwd))
+    home.join(agent_root)
+        .join("projects")
+        .join(project_key(cwd))
 }
 
 /// cwd → Claude 存储目录：`~/.claude/projects/<cwd 中 '/' 换 '-'>`。

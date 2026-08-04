@@ -183,7 +183,8 @@ mod tests {
 
     #[test]
     fn opencode_reuses_claude_shaped_parser() {
-        let jsonl = r#"{"type":"user","message":{"role":"user","content":"opencode 里也这么解析"}}"#;
+        let jsonl =
+            r#"{"type":"user","message":{"role":"user","content":"opencode 里也这么解析"}}"#;
         let entries = parse_transcript(AgentKind::Opencode, jsonl);
         assert_eq!(
             entries,
