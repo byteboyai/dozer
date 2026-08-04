@@ -5423,14 +5423,20 @@ fn terminal_pane<'a>(
 /// 不必另起一套光标代码。`on_press` 只发起拖拽状态,不指望 `MouseArea` 的
 /// `on_move`/`on_release`——它们要求光标不离开这条 8px 窄带才触发,快速拖
 /// 拽会在光标移出后"断掉";持续追踪交给 Task 4 的 `main.rs` 原始事件层。
+///
+/// `Divider::LeftRight` 不画那条 2px 竖线——它两侧现在各自套了
+/// `chrome_style::left_zone()`/`right_zone()` 的整体外边框,这条线再画出来
+/// 会和两侧边框挤成三条紧贴的线。拖拽命中区照常保留,只是视觉上空出
+/// `DIVIDER_WIDTH` 那道缝,交给两侧的 zone 边框各自收边。
 fn divider_bar<'a>(
     divider: Divider,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let show_line = !matches!(divider, Divider::LeftRight);
     let line = container(iced_widget::Space::new())
         .width(Length::Fixed(2.0))
         .height(Length::Fill)
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::BORDER.into()),
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: show_line.then_some(theme::BORDER.into()),
             ..container::Style::default()
         });
     let hit_area = container(line)
