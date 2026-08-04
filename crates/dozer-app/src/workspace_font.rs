@@ -1,9 +1,11 @@
 //! 工作区（UI 控件）字号 token 化：`workspace.rs` 里散落的
 //! `text(...).size(N)` 字面量收敛成 8 个具名 token，编译期内嵌
-//! `assets/theme/workspace.json`，启动时解析一次。
+//! `assets/theme/workspace.json` 的 `font_sizes` 节点，启动时解析一次。
+//! `workspace.json` 同时也是 `chrome_style.rs` 的数据源（`regions` 节点）
+//! ——两个模块各自只解析自己关心的顶层字段，互不干扰。
 //!
-//! 与 `terminal_font.rs`（管终端 pane 的等宽字体）和 `chrome_style.rs`
-//! （管区域外层容器的背景/边框/间距，`regions.json`）职责严格分离——
+//! 与 `terminal_font.rs`（管终端 pane 的等宽字体，`terminal.json`）和
+//! `chrome_style.rs`（管区域外层容器的背景/边框/间距）职责严格分离——
 //! 这里只管控件内部文字字号，不越界。解析失败（格式错误、缺字段）直接
 //! panic：开发期配置错误，不是需要优雅降级的运行时数据（同
 //! `chrome_style.rs` 的定位）。
@@ -24,8 +26,17 @@ struct WorkspaceFonts {
     title: u32,
 }
 
+/// `workspace.json` 顶层结构里本模块只关心的部分——`regions` 节点是
+/// `chrome_style.rs` 的地盘，这里不声明，serde 默认忽略未知字段。
+#[derive(Deserialize)]
+struct RawWorkspaceFile {
+    font_sizes: WorkspaceFonts,
+}
+
 fn load(raw: &str) -> WorkspaceFonts {
-    serde_json::from_str(raw).expect("workspace.json 格式错误(解析失败)")
+    let file: RawWorkspaceFile =
+        serde_json::from_str(raw).expect("workspace.json 格式错误(解析失败,font_sizes 节点)");
+    file.font_sizes
 }
 
 static SIZES: LazyLock<WorkspaceFonts> = LazyLock::new(|| load(RAW));
@@ -76,6 +87,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "workspace.json 格式错误")]
     fn malformed_json_panics() {
-        load(r#"{"dot_xs": 8}"#);
+        load(r#"{"font_sizes": {"dot_xs": 8}}"#);
     }
 }

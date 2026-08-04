@@ -1,6 +1,9 @@
 //! 外壳区域样式配置:13 个区域(主导航/左右图标栏/放大态浮层/右键菜单/
 //! 状态条 + 7 个面板内容区)各自外层容器的背景色/边框/内边距/子元素
-//! 间距,编译期内嵌 `assets/theme/regions.json`,启动时解析一次。
+//! 间距,编译期内嵌 `assets/theme/workspace.json` 的 `regions` 节点,
+//! 启动时解析一次。`workspace.json` 同时也是 `workspace_font.rs` 的
+//! 数据源(`font_sizes` 节点)——两个模块各自只解析自己关心的顶层字段,
+//! 互不干扰,合并成一个文件是为了"workspace 相关配置都在一处"。
 //!
 //! 颜色字段是字符串,支持两种写法:`theme.rs` 现成的令牌名(如
 //! `"BORDER"`),或 `#RRGGBB` / `#RRGGBBAA` 字面量十六进制值——后者让
@@ -16,7 +19,7 @@ use iced_widget::core::{Border, Color, Padding};
 use serde::Deserialize;
 use std::sync::LazyLock;
 
-const RAW: &str = include_str!("../assets/theme/regions.json");
+const RAW: &str = include_str!("../assets/theme/workspace.json");
 
 /// JSON 里 `padding` 字段的三种形状:单值(四边相同)/ `[v,h]` / `[top,right,bottom,left]`。
 /// 数组顺序与 iced `core::Padding` 字段顺序一致(已用 iced 源码核对)。
@@ -87,12 +90,19 @@ struct RawRegions {
     context_menu: RawRegion,
 }
 
+/// `workspace.json` 顶层结构里本模块只关心的部分——`font_sizes` 节点是
+/// `workspace_font.rs` 的地盘,这里不声明,serde 默认忽略未知字段。
+#[derive(Deserialize)]
+struct RawWorkspaceFile {
+    regions: RawRegions,
+}
+
 /// `#RRGGBB` / `#RRGGBBAA` 十六进制字面量 → `Color`。
 fn parse_hex_color(hex: &str) -> Color {
     let digits = hex.strip_prefix('#').unwrap_or(hex);
     let component = |i: usize| -> f32 {
         u8::from_str_radix(&digits[i..i + 2], 16)
-            .unwrap_or_else(|e| panic!("regions.json: 非法十六进制颜色 \"{hex}\": {e}"))
+            .unwrap_or_else(|e| panic!("workspace.json: 非法十六进制颜色 \"{hex}\": {e}"))
             as f32
             / 255.0
     };
@@ -109,7 +119,7 @@ fn parse_hex_color(hex: &str) -> Color {
             b: component(4),
             a: component(6),
         },
-        _ => panic!("regions.json: 非法十六进制颜色 \"{hex}\"(需 6 或 8 位)"),
+        _ => panic!("workspace.json: 非法十六进制颜色 \"{hex}\"(需 6 或 8 位)"),
     }
 }
 
@@ -135,7 +145,7 @@ fn resolve_color(name: &str) -> Color {
         "PURPLE" => theme::PURPLE,
         "RED" => theme::RED,
         "SCRIM" => theme::SCRIM,
-        other => panic!("regions.json: 未知颜色令牌 \"{other}\""),
+        other => panic!("workspace.json: 未知颜色令牌 \"{other}\""),
     }
 }
 
@@ -188,7 +198,9 @@ struct ResolvedRegions {
 }
 
 fn load(raw: &str) -> ResolvedRegions {
-    let parsed: RawRegions = serde_json::from_str(raw).expect("regions.json 格式错误(解析失败)");
+    let file: RawWorkspaceFile =
+        serde_json::from_str(raw).expect("workspace.json 格式错误(解析失败,regions 节点)");
+    let parsed = file.regions;
     ResolvedRegions {
         top_bar: resolve_region(parsed.top_bar),
         left_icon_rail: resolve_region(parsed.left_icon_rail),
