@@ -304,7 +304,18 @@ mod tests {
         let border = s.border.expect("top_bar 应有底部分隔线(设计稿 border-b)");
         assert_eq!(border.color, theme::BORDER);
         assert_eq!(border.width, 1.0);
-        assert_eq!(s.padding, Padding::from([0.0, 16.0]));
+        // left=78:统一工具栏改造后,原生红黄绿交通灯叠在 top_bar 左侧,
+        // 这段留白给交通灯让位,不是设计稿本身的数值(设计稿假设交通灯是
+        // 画在 flex 行里的图片,现在改成系统原生绘制、不占 flex 布局位置)。
+        assert_eq!(
+            s.padding,
+            Padding {
+                top: 0.0,
+                right: 16.0,
+                bottom: 0.0,
+                left: 78.0,
+            }
+        );
         assert_eq!(s.gap, 8.0);
     }
 

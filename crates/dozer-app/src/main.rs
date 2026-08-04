@@ -24,6 +24,11 @@ mod workspace_geometry;
 use workspace::{App, Message};
 // `with_allow_link_preview` 是 macOS 专有扩展 trait,需显式引入作用域。
 use wry::WebViewBuilderExtDarwin;
+// `with_titlebar_transparent`/`with_title_hidden`/`with_fullsize_content_view`
+// 同样是 macOS 专有扩展 trait——去掉原生标题栏那条独立的深色条,让红黄绿
+// 交通灯直接叠在 app 自己画的 top_bar 上面(统一工具栏样式,VS Code/Chrome
+// 同款),project tabs 才能紧跟在交通灯右侧,不再有两条纵向堆叠的"标题栏"。
+use winit::platform::macos::WindowAttributesExtMacOS;
 
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -730,7 +735,15 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 .with_min_inner_size(LogicalSize::new(
                                     workspace_geometry::min_window_width(),
                                     workspace_geometry::min_window_height(),
-                                )),
+                                ))
+                                // 统一工具栏:标题栏背景透明 + 不画标题文字 + 内容
+                                // 视图延伸到标题栏区域下面,三者必须同时打开——少
+                                // 任何一个,要么标题栏留一条实色条,要么内容顶部
+                                // 被裁掉一截空白。交通灯本身仍是系统原生绘制,不
+                                // 受这三个开关影响,继续可点/可用。
+                                .with_titlebar_transparent(true)
+                                .with_title_hidden(true)
+                                .with_fullsize_content_view(true),
                         )
                         .expect("Create window"),
                 );
