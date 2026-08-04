@@ -144,7 +144,8 @@ mod tests {
         let path = dir.path().join("layout.json");
         std::fs::write(&path, r#"{"left_width": 500.0}"#).unwrap();
         let l = load_from(&path);
-        assert_eq!(l.window_width, crate::workspace::INITIAL_WINDOW_SIZE.0);
-        assert_eq!(l.window_height, crate::workspace::INITIAL_WINDOW_SIZE.1);
+        let (init_w, init_h) = crate::workspace_geometry::initial_window_size();
+        assert_eq!(l.window_width, init_w);
+        assert_eq!(l.window_height, init_h);
     }
 }

@@ -45,6 +45,7 @@ use crate::term_view;
 use crate::theme;
 use crate::transcript::{self, ReviewEntry};
 use crate::workspace_font;
+use crate::workspace_geometry;
 use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 use iced_widget::core::mouse;
@@ -239,10 +240,10 @@ pub struct ShellLayout {
     pub left_collapsed: bool,
     pub right_collapsed: bool,
     /// 上次退出时的窗口逻辑尺寸(宽,高)。`main.rs` 建窗时读它决定初始
-    /// `with_inner_size`,取代写死的 `INITIAL_WINDOW_SIZE`；`App::
+    /// `with_inner_size`,取代写死的 `workspace_geometry::initial_window_size()`；`App::
     /// persist_window_size_on_exit` 在 `WindowEvent::CloseRequested` 时
     /// 写回。跟其余字段一样走 `#[serde(default)]`,老 `layout.json` 缺这
-    /// 两个字段时退化成 `INITIAL_WINDOW_SIZE`,不影响其余已存的偏好。
+    /// 两个字段时退化成 `workspace_geometry::initial_window_size()`,不影响其余已存的偏好。
     pub window_width: f32,
     pub window_height: f32,
 }
@@ -258,8 +259,8 @@ impl Default for ShellLayout {
             right_view: RightView::Agent,
             left_collapsed: false,
             right_collapsed: false,
-            window_width: INITIAL_WINDOW_SIZE.0,
-            window_height: INITIAL_WINDOW_SIZE.1,
+            window_width: workspace_geometry::initial_window_size().0,
+            window_height: workspace_geometry::initial_window_size().1,
         }
     }
 }
@@ -269,20 +270,23 @@ impl Default for ShellLayout {
 /// 会给出 `FillPortion(0)`,那一块在 flex 里拿不到任何宽度、整块消失;
 /// `left_width` 只保下限(上限依赖窗口宽,由渲染/几何时刻的
 /// `clamp_left_width` 负责,不在这里写死)。`window_width`/`window_height`
-/// 同样只夹下限(`MIN_WINDOW_WIDTH`/`MIN_WINDOW_HEIGHT`,建窗时还有
+/// 同样只夹下限(`workspace_geometry::min_window_width()`/`workspace_geometry::min_window_height()`,建窗时还有
 /// `with_min_inner_size` 兜底),非法值(非有限数、缺字段的 0.0)退化成
-/// `INITIAL_WINDOW_SIZE`。
+/// `workspace_geometry::initial_window_size()`。
 pub fn sanitize_shell_layout(l: ShellLayout) -> ShellLayout {
     let clamp_split = |v: f32| {
         if v.is_finite() {
-            v.clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO)
+            v.clamp(
+                workspace_geometry::min_split_ratio(),
+                workspace_geometry::max_split_ratio(),
+            )
         } else {
             ShellLayout::default().files_split
         }
     };
     ShellLayout {
         left_width: if l.left_width.is_finite() {
-            l.left_width.max(MIN_ZONE_WIDTH)
+            l.left_width.max(workspace_geometry::min_zone_width())
         } else {
             ShellLayout::default().left_width
         },
@@ -290,14 +294,14 @@ pub fn sanitize_shell_layout(l: ShellLayout) -> ShellLayout {
         agent_split: clamp_split(l.agent_split),
         conversations_split: clamp_split(l.conversations_split),
         window_width: if l.window_width.is_finite() && l.window_width > 0.0 {
-            l.window_width.max(MIN_WINDOW_WIDTH)
+            l.window_width.max(workspace_geometry::min_window_width())
         } else {
-            INITIAL_WINDOW_SIZE.0
+            workspace_geometry::initial_window_size().0
         },
         window_height: if l.window_height.is_finite() && l.window_height > 0.0 {
-            l.window_height.max(MIN_WINDOW_HEIGHT)
+            l.window_height.max(workspace_geometry::min_window_height())
         } else {
-            INITIAL_WINDOW_SIZE.1
+            workspace_geometry::initial_window_size().1
         },
         ..l
     }
@@ -311,9 +315,6 @@ pub enum Divider {
     LeftPairSplit,
     RightPairSplit,
 }
-
-/// 图标栏固定宽度(逻辑像素)，左右各一条。
-pub const ICON_RAIL_WIDTH: f32 = 44.0;
 
 /// 项目树右键菜单当前打开状态：定位坐标 + 目标（路径/是否目录）。
 #[derive(Debug, Clone, PartialEq)]
@@ -342,31 +343,6 @@ struct TreeEdit {
     buffer: String,
 }
 
-/// 每条分隔线的命中区/渲染宽度(逻辑像素)。视觉线本身 2px,居中于此区间内。
-/// 几何公式必须把每一条实际渲染出来的分隔线从可分配空间里扣掉(LeftRight
-/// 一条恒在 + 当前配对视图内部一条),否则 webview bounds/IME 光标/命中
-/// 测试会和 `view()` 里 `row!` 实际渲染的像素错位。
-const DIVIDER_WIDTH: f32 = 8.0;
-
-const MIN_ZONE_WIDTH: f32 = 320.0;
-const MIN_SPLIT_RATIO: f32 = 0.2;
-const MAX_SPLIT_RATIO: f32 = 0.8;
-
-/// 建窗时的初始窗口逻辑尺寸。main.rs 建窗用它,`Workspace::window_size`
-/// 也用它作初值——两处必须同源,否则第一帧的几何(左面板区有效宽/终端
-/// 网格)会按一个和真实窗口不同的宽度算。
-pub const INITIAL_WINDOW_SIZE: (f32, f32) = (1440.0, 900.0);
-
-/// 窗口最小内尺寸(逻辑像素)。宽度按"两条图标栏 + 那条恒在的 LeftRight
-/// 分隔线 + 左右面板区各 `MIN_ZONE_WIDTH`"推出:窗口再窄下去,两个面板区
-/// 就不可能同时满足最小宽,渲染只能靠 `clamp_left_width` 兜底压缩。这是
-/// 双保险的外层——不能取代 `clamp_left_width`(用户持久化的 left_width
-/// 可能远大于这个最小宽)。
-pub const MIN_WINDOW_WIDTH: f32 = 2.0 * ICON_RAIL_WIDTH + DIVIDER_WIDTH + 2.0 * MIN_ZONE_WIDTH;
-/// 高度最小值只求"顶栏 + 面板 chrome + 若干行终端"能放下,不像宽度那样
-/// 有严格几何推导。
-pub const MIN_WINDOW_HEIGHT: f32 = 480.0;
-
 /// 主界面当前几何状态的只读快照(main.rs 拖拽追踪/离屏几何计算用途,
 /// `Copy` 类型直接按值传递)。取代旧 `PanelLayout` 单独传递的做法——
 /// 新几何公式(webview bounds/焦点路由/IME 光标)都依赖"当前是哪个视图、
@@ -391,12 +367,15 @@ pub struct ShellState {
 /// 保留拖拽手柄)，所以这 8px 恒扣，不看收起态——早先版本只在两侧都可见时
 /// 扣，导致收起一侧后几何比实际渲染宽 8px 且原点左偏 8px。
 fn zones_width(window_width: f32) -> f32 {
-    (window_width - 2.0 * ICON_RAIL_WIDTH - DIVIDER_WIDTH).max(0.0)
+    (window_width
+        - 2.0 * workspace_geometry::icon_rail_width()
+        - workspace_geometry::divider_width())
+    .max(0.0)
 }
 
 /// 把持久化的 `left_width` 夹进"当前窗口宽度下合法"的区间:下限
-/// `MIN_ZONE_WIDTH`,上限"给右面板区也留够 `MIN_ZONE_WIDTH`"。窗口窄到
-/// 上界低于下界时用 `.max(MIN_ZONE_WIDTH)` 把上界垫平,`clamp` 恒不 panic。
+/// `workspace_geometry::min_zone_width()`,上限"给右面板区也留够 `workspace_geometry::min_zone_width()`"。窗口窄到
+/// 上界低于下界时用 `.max(workspace_geometry::min_zone_width())` 把上界垫平,`clamp` 恒不 panic。
 ///
 /// 这是**唯一**一处 left_width 的夹取:渲染侧(`left_panel_area` 经
 /// `Workspace::effective_left_width`)、几何侧(`left_zone_width` → webview
@@ -407,8 +386,9 @@ fn zones_width(window_width: f32) -> f32 {
 /// 凭空消失(Fix round 2 Critical #1)。夹取只发生在渲染/几何时刻,不回写
 /// `ShellLayout`,窗口再拉宽时用户原来偏好的宽度自动复原。
 fn clamp_left_width(window_width: f32, left_width: f32) -> f32 {
-    let upper = (zones_width(window_width) - MIN_ZONE_WIDTH).max(MIN_ZONE_WIDTH);
-    left_width.clamp(MIN_ZONE_WIDTH, upper)
+    let upper = (zones_width(window_width) - workspace_geometry::min_zone_width())
+        .max(workspace_geometry::min_zone_width());
+    left_width.clamp(workspace_geometry::min_zone_width(), upper)
 }
 
 /// 左面板区当前实际宽度(逻辑像素)：收起时 0；对侧收起时独占 `zones_width`
@@ -439,7 +419,7 @@ fn right_zone_width(window_width: f32, state: &ShellState) -> f32 {
 /// 宽的分隔线之后才按比例分剩余空间的，所以比例的分母必须是这个值，不是
 /// 区宽本身。
 fn pair_content_width(zone_width: f32) -> f32 {
-    (zone_width - DIVIDER_WIDTH).max(0.0)
+    (zone_width - workspace_geometry::divider_width()).max(0.0)
 }
 
 /// 拖拽某条分隔线到窗口逻辑 x 坐标 `logical_x` 后的新 `ShellLayout`。
@@ -454,7 +434,10 @@ fn apply_column_drag(
 ) -> ShellLayout {
     match divider {
         Divider::LeftRight => {
-            let new_left = clamp_left_width(window_width, logical_x - ICON_RAIL_WIDTH);
+            let new_left = clamp_left_width(
+                window_width,
+                logical_x - workspace_geometry::icon_rail_width(),
+            );
             ShellLayout {
                 left_width: new_left,
                 ..state.layout
@@ -465,8 +448,10 @@ fn apply_column_drag(
             if pair_w <= 0.0 {
                 return state.layout;
             }
-            let ratio =
-                ((logical_x - ICON_RAIL_WIDTH) / pair_w).clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO);
+            let ratio = ((logical_x - workspace_geometry::icon_rail_width()) / pair_w).clamp(
+                workspace_geometry::min_split_ratio(),
+                workspace_geometry::max_split_ratio(),
+            );
             ShellLayout {
                 files_split: ratio,
                 ..state.layout
@@ -478,8 +463,11 @@ fn apply_column_drag(
             if pair_w <= 0.0 {
                 return state.layout;
             }
-            let right_x0 = window_width - ICON_RAIL_WIDTH - right_w;
-            let ratio = ((logical_x - right_x0) / pair_w).clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO);
+            let right_x0 = window_width - workspace_geometry::icon_rail_width() - right_w;
+            let ratio = ((logical_x - right_x0) / pair_w).clamp(
+                workspace_geometry::min_split_ratio(),
+                workspace_geometry::max_split_ratio(),
+            );
             match state.right_view {
                 RightView::Agent => ShellLayout {
                     agent_split: ratio,
@@ -494,44 +482,6 @@ fn apply_column_drag(
     }
 }
 
-/// 顶栏固定高（逻辑像素）。与 `top_bar` 容器高度同源，勿各写各的。
-pub const TOP_BAR_HEIGHT: f32 = 44.0;
-/// 单条状态栏固定高（逻辑像素）。与 `status_bar_container` 同源。
-pub const STATUS_BAR_HEIGHT: f32 = 26.0;
-
-/// 右键菜单浮层的最坏情形(目录:8 项)外接宽/高（逻辑像素）,main.rs 在
-/// `RightClickAt` 落点处用它把坐标钳制在窗口内,避免菜单下沿/右沿超出
-/// 窗口导致底部几项点不到（Important #7）。宽度取 `menu_item` 固定宽
-/// 180 加列表容器左右 padding；高度按目录菜单最多 8 项估算,每项文字
-/// 13 号加上下 padding 约 28px,项间 spacing 2,列表容器上下 padding 6,
-/// 不必像素级精确,留够余量保证任何一项都可点即可。文件菜单项更少,用
-/// 目录的最坏值同时覆盖两种情况更简单。
-pub const CONTEXT_MENU_WIDTH: f32 = 200.0;
-pub const CONTEXT_MENU_HEIGHT: f32 = 280.0;
-
-/// 终端栏内"非网格"开销的近似值：左右 padding、表头行、tab 栏行、
-/// 行间 spacing。用于把窗口像素尺寸换算成终端 pane 的可用像素尺寸——
-/// 这是估算值，不追求像素级精确（`term_view::grid_size` 本身就向下
-/// 取整，差几像素不影响可用性，差太多也只是终端网格偏保守/偏宽松）。
-const CHROME_WIDTH_PX: f32 = 16.0; // 左右 padding(8*2)
-const CHROME_HEIGHT_PX: f32 = 16.0 + 4.0 + 30.0; // 上下 padding + 1 处 spacing + tab 栏行(header 已去,P1L #4)
-
-/// 文件预览分支(`LeftView::Files`)内容区上方的 chrome 高度:pane 上内
-/// 边距 8 + tab 栏 30。地址栏已去(文件只走项目树打开),`column` 里只剩
-/// tab 栏一个子项,不再有子项间 spacing。
-const PREVIEW_CHROME_TOP_PX: f32 = 8.0 + 30.0;
-
-/// 浏览器分支(`LeftView::Web`)内容区上方的 chrome 高度:pane 上内边距 8
-/// + tab 栏 30 + 两子项间 spacing 4 + 地址栏 30(浏览器仍保留地址栏)。
-const BROWSER_CHROME_TOP_PX: f32 = 8.0 + 30.0 + 4.0 + 30.0;
-
-/// `maximize_overlay` 里 dim 背景到金色描边盒子的内边距(逻辑像素)。
-/// `preview_content_bounds`/`is_in_preview_column` 换算放大态几何时必须
-/// 复用这个常量,不能各写各的字面量 40.0——否则两处一旦有一处改了内边距,
-/// webview 摆位就会和实际渲染出的金色描边盒子错位(与本文件其它几何
-/// 常量共享同一原则:渲染侧和几何公式侧不能有第二份真相)。
-const MAXIMIZE_OVERLAY_PADDING: f32 = 40.0;
-
 /// 放大态金色描边盒子在窗口坐标系里的横向范围 (x0, 可用宽度)。放大左侧
 /// 还是右侧都是同一个盒子(`maximize_overlay` 的 dim_bg 铺满两条图标栏
 /// 之间,`bordered` 再铺满其内边距之内),所以这一份公式两侧共用:三层留白
@@ -541,17 +491,23 @@ const MAXIMIZE_OVERLAY_PADDING: f32 = 40.0;
 /// 都靠它换算放大态几何,不能各写各的字面量,否则和 `maximize_overlay`
 /// 实际渲染的画面对不上。
 fn maximized_box_x_range(window_width: f32) -> (f32, f32) {
-    let x0 = ICON_RAIL_WIDTH + MAXIMIZE_OVERLAY_PADDING;
-    let avail_w = (window_width - 2.0 * ICON_RAIL_WIDTH - 2.0 * MAXIMIZE_OVERLAY_PADDING).max(0.0);
+    let x0 = workspace_geometry::icon_rail_width() + workspace_geometry::maximize_overlay_padding();
+    let avail_w = (window_width
+        - 2.0 * workspace_geometry::icon_rail_width()
+        - 2.0 * workspace_geometry::maximize_overlay_padding())
+    .max(0.0);
     (x0, avail_w)
 }
 
 /// 放大态金色描边盒子的纵向可用高度(逻辑像素)。`maximize_overlay` 顶部
-/// 垫了一条 `TOP_BAR_HEIGHT` 高的 Space 把遮罩钉在顶栏之下,盒子上下各留
-/// `MAXIMIZE_OVERLAY_PADDING`;遮罩铺到窗口底边(状态栏也被盖住),所以这里
-/// **不**扣 `STATUS_BAR_HEIGHT`——与 `preview_content_bounds` 放大分支同源。
+/// 垫了一条 `workspace_geometry::top_bar_height()` 高的 Space 把遮罩钉在顶栏之下,盒子上下各留
+/// `workspace_geometry::maximize_overlay_padding()`;遮罩铺到窗口底边(状态栏也被盖住),所以这里
+/// **不**扣 `workspace_geometry::status_bar_height()`——与 `preview_content_bounds` 放大分支同源。
 fn maximized_box_height(window_height: f32) -> f32 {
-    (window_height - TOP_BAR_HEIGHT - 2.0 * MAXIMIZE_OVERLAY_PADDING).max(0.0)
+    (window_height
+        - workspace_geometry::top_bar_height()
+        - 2.0 * workspace_geometry::maximize_overlay_padding())
+    .max(0.0)
 }
 
 /// 窗口逻辑尺寸 → 左侧文件/Web 预览内容区矩形(逻辑像素 x/y/w/h)，供
@@ -579,23 +535,24 @@ pub fn preview_content_bounds(
     // (webview 摆位比实际渲染的 tab 栏低了一整个地址栏的高度)。
     if state.maximized == Some(MaximizedPane::Left) {
         let (x0, avail_w) = maximized_box_x_range(window_width);
-        let y0 = TOP_BAR_HEIGHT + MAXIMIZE_OVERLAY_PADDING;
+        let y0 =
+            workspace_geometry::top_bar_height() + workspace_geometry::maximize_overlay_padding();
         let avail_h = maximized_box_height(window_height);
         return match state.left_view {
             LeftView::Web => {
-                let y = y0 + BROWSER_CHROME_TOP_PX;
-                let h = (avail_h - BROWSER_CHROME_TOP_PX - 8.0).max(0.0);
+                let y = y0 + workspace_geometry::browser_chrome_top_px();
+                let h = (avail_h - workspace_geometry::browser_chrome_top_px() - 8.0).max(0.0);
                 let x = x0 + 8.0;
                 let w = (avail_w - 16.0).max(0.0);
                 (x, y, w, h)
             }
             LeftView::Files => {
-                let y = y0 + PREVIEW_CHROME_TOP_PX;
-                let h = (avail_h - PREVIEW_CHROME_TOP_PX - 8.0).max(0.0);
+                let y = y0 + workspace_geometry::preview_chrome_top_px();
+                let h = (avail_h - workspace_geometry::preview_chrome_top_px() - 8.0).max(0.0);
                 let pair_w = pair_content_width(avail_w);
                 let list_w = pair_w * state.layout.files_split;
                 let content_w = pair_w * (1.0 - state.layout.files_split);
-                let x = x0 + list_w + DIVIDER_WIDTH + 8.0;
+                let x = x0 + list_w + workspace_geometry::divider_width() + 8.0;
                 let w = (content_w - 16.0).max(0.0);
                 (x, y, w, h)
             }
@@ -604,19 +561,24 @@ pub fn preview_content_bounds(
     let left_w = left_zone_width(window_width, state);
     match state.left_view {
         LeftView::Web => {
-            let y = TOP_BAR_HEIGHT + BROWSER_CHROME_TOP_PX;
+            let y =
+                workspace_geometry::top_bar_height() + workspace_geometry::browser_chrome_top_px();
             let h = (window_height - y - 8.0).max(0.0);
-            let x = ICON_RAIL_WIDTH + 8.0;
+            let x = workspace_geometry::icon_rail_width() + 8.0;
             let w = (left_w - 16.0).max(0.0);
             (x, y, w, h)
         }
         LeftView::Files => {
-            let y = TOP_BAR_HEIGHT + PREVIEW_CHROME_TOP_PX;
+            let y =
+                workspace_geometry::top_bar_height() + workspace_geometry::preview_chrome_top_px();
             let h = (window_height - y - 8.0).max(0.0);
             let pair_w = pair_content_width(left_w);
             let list_w = pair_w * state.layout.files_split;
             let content_w = pair_w * (1.0 - state.layout.files_split);
-            let x = ICON_RAIL_WIDTH + list_w + DIVIDER_WIDTH + 8.0;
+            let x = workspace_geometry::icon_rail_width()
+                + list_w
+                + workspace_geometry::divider_width()
+                + 8.0;
             let w = (content_w - 16.0).max(0.0);
             (x, y, w, h)
         }
@@ -645,7 +607,7 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
             }
             LeftView::Files => {
                 let list_w = pair_content_width(avail_w) * state.layout.files_split;
-                let start = x0 + list_w + DIVIDER_WIDTH;
+                let start = x0 + list_w + workspace_geometry::divider_width();
                 let end = x0 + avail_w;
                 x >= start && x < end
             }
@@ -654,14 +616,16 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
     let left_w = left_zone_width(window_width, state);
     match state.left_view {
         LeftView::Web => {
-            let start = ICON_RAIL_WIDTH;
+            let start = workspace_geometry::icon_rail_width();
             let end = start + left_w;
             x >= start && x < end
         }
         LeftView::Files => {
             let list_w = pair_content_width(left_w) * state.layout.files_split;
-            let start = ICON_RAIL_WIDTH + list_w + DIVIDER_WIDTH;
-            let end = ICON_RAIL_WIDTH + left_w;
+            let start = workspace_geometry::icon_rail_width()
+                + list_w
+                + workspace_geometry::divider_width();
+            let end = workspace_geometry::icon_rail_width() + left_w;
             x >= start && x < end
         }
     }
@@ -669,7 +633,7 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
 
 /// 逻辑 x 落在哪一侧面板区(整区,不分区内具体是哪个 pane)。左键点击
 /// 落点决定当前"聚焦"哪一侧,驱动 `left_zone`/`right_zone` 外边框的高亮态
-/// (见 [`ZoneSide`])。落在图标栏本身(两侧各 `ICON_RAIL_WIDTH` 宽)或
+/// (见 [`ZoneSide`])。落在图标栏本身(两侧各 `workspace_geometry::icon_rail_width()` 宽)或
 /// 某侧收起而点在了"不存在的那一侧"时不算数,返回 `None`(调用方应保持
 /// 点击前的聚焦态不变,而不是清空)。
 ///
@@ -677,7 +641,9 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
 /// `maximize_overlay` 渲染时两条图标栏原样露在外面,和非放大态同一
 /// 横向范围,所以图标栏判定不用跟着改。
 pub fn zone_at_x(x: f32, window_width: f32, state: &ShellState) -> Option<ZoneSide> {
-    if x < ICON_RAIL_WIDTH || x > window_width - ICON_RAIL_WIDTH {
+    if x < workspace_geometry::icon_rail_width()
+        || x > window_width - workspace_geometry::icon_rail_width()
+    {
         return None;
     }
     if let Some(which) = state.maximized {
@@ -696,7 +662,7 @@ pub fn zone_at_x(x: f32, window_width: f32, state: &ShellState) -> Option<ZoneSi
     if state.right_collapsed {
         return Some(ZoneSide::Left);
     }
-    let boundary = ICON_RAIL_WIDTH + left_zone_width(window_width, state);
+    let boundary = workspace_geometry::icon_rail_width() + left_zone_width(window_width, state);
     Some(if x < boundary {
         ZoneSide::Left
     } else {
@@ -760,18 +726,23 @@ pub fn terminal_pane_pixel_size(
     if state.maximized == Some(MaximizedPane::Right) {
         let (_x0, avail_w) = maximized_box_x_range(window_width);
         let content_w = pair_content_width(avail_w) * (1.0 - state.layout.agent_split);
-        let pane_width = (content_w - CHROME_WIDTH_PX).max(0.0);
-        // `STATUS_BAR_HEIGHT` 是终端 pane 自带的底栏(`terminal_status_bar`,
+        let pane_width = (content_w - workspace_geometry::chrome_width_px()).max(0.0);
+        // `workspace_geometry::status_bar_height()` 是终端 pane 自带的底栏(`terminal_status_bar`,
         // 不是窗口级状态栏),放大态一样在盒子里,照扣。
-        let pane_height =
-            (maximized_box_height(window_height) - STATUS_BAR_HEIGHT - CHROME_HEIGHT_PX).max(0.0);
+        let pane_height = (maximized_box_height(window_height)
+            - workspace_geometry::status_bar_height()
+            - workspace_geometry::chrome_height_px())
+        .max(0.0);
         return (pane_width, pane_height);
     }
     let right_w = right_zone_width(window_width, state);
     let content_w = pair_content_width(right_w) * (1.0 - state.layout.agent_split);
-    let pane_width = (content_w - CHROME_WIDTH_PX).max(0.0);
-    let pane_height =
-        (window_height - TOP_BAR_HEIGHT - STATUS_BAR_HEIGHT - CHROME_HEIGHT_PX).max(0.0);
+    let pane_width = (content_w - workspace_geometry::chrome_width_px()).max(0.0);
+    let pane_height = (window_height
+        - workspace_geometry::top_bar_height()
+        - workspace_geometry::status_bar_height()
+        - workspace_geometry::chrome_height_px())
+    .max(0.0);
     (pane_width, pane_height)
 }
 
@@ -2329,7 +2300,7 @@ impl App {
             shell_layout,
             maximized: None,
             active_zone: Some(ZoneSide::Right),
-            window_size: INITIAL_WINDOW_SIZE,
+            window_size: workspace_geometry::initial_window_size(),
             dragging: None,
             context_menu: None,
             last_right_click: (0.0, 0.0),
@@ -2591,7 +2562,7 @@ impl App {
     /// 建窗时用的初始窗口尺寸偏好:优先用上次退出前持久化的
     /// `shell_layout.window_width/height`(已经过 `sanitize_shell_layout`
     /// 夹取),`layout.json` 不存在/读不到时 `layout::load()` 本身已经退化
-    /// 成 `ShellLayout::default()`,即 `INITIAL_WINDOW_SIZE`,这里不用再
+    /// 成 `ShellLayout::default()`,即 `workspace_geometry::initial_window_size()`,这里不用再
     /// 单独处理"没存过"的分支。
     pub fn window_size_pref(&self) -> (f32, f32) {
         (
@@ -2687,9 +2658,12 @@ impl App {
         let line_h = pane_h / self.rows.max(1) as f32;
         let right_w = right_zone_width(window_w, &state);
         let list_w = pair_content_width(right_w) * state.layout.agent_split;
-        let x0 = window_w - ICON_RAIL_WIDTH - right_w + list_w + DIVIDER_WIDTH + 8.0;
+        let x0 = window_w - workspace_geometry::icon_rail_width() - right_w
+            + list_w
+            + workspace_geometry::divider_width()
+            + 8.0;
         // 终端网格上方 chrome:顶栏 44 + 上 padding 8 + tab 栏 30 + spacing 4(header 已去,P1L #4)
-        let y0 = TOP_BAR_HEIGHT + 8.0 + 30.0 + 4.0;
+        let y0 = workspace_geometry::top_bar_height() + 8.0 + 30.0 + 4.0;
         let (col, row) = self
             .active_workspace()
             .and_then(|ws| ws.tabs.get(ws.active))
@@ -4096,7 +4070,7 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
 
     container(bar)
         .width(Length::Fill)
-        .height(Length::Fixed(TOP_BAR_HEIGHT))
+        .height(Length::Fixed(workspace_geometry::top_bar_height()))
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
             border: region.border.unwrap_or_default(),
@@ -4158,13 +4132,13 @@ fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_
         .collect();
     let (first, can_left, can_right) = tab_window(
         &widths,
-        PROJECT_TAB_GAP,
-        PROJECT_TAB_AVAIL_PX,
+        workspace_geometry::project_tab_gap(),
+        workspace_geometry::project_tab_avail_px(),
         app.project_tab_first,
     );
 
     let mut tabs = row![]
-        .spacing(PROJECT_TAB_GAP)
+        .spacing(workspace_geometry::project_tab_gap())
         .align_y(iced_widget::core::Alignment::Center);
     for entry in entries.into_iter().skip(first) {
         let active = app.active_project_id == Some(entry.id);
@@ -4203,20 +4177,10 @@ fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_
     });
 
     row![left_arrow, right_arrow, clipped, add]
-        .spacing(PROJECT_TAB_GAP)
+        .spacing(workspace_geometry::project_tab_gap())
         .align_y(iced_widget::core::Alignment::Center)
         .into()
 }
-
-/// 项目页签之间的间距;`tab_window` 的宽度估算与实际渲染必须用同一个值,
-/// 否则翻页边界会与眼睛看到的差一个页签。
-const PROJECT_TAB_GAP: f32 = 4.0;
-
-/// 顶栏留给项目页签(裁剪窗口内)的估算可视宽,逻辑像素。与
-/// `TAB_BAR_AVAIL_PX` 同性质的粗估常量:顶栏中段实际宽度随窗口宽/目标胶囊
-/// 长短浮动,iced 立即模式在构造阶段拿不到真实分配宽,估偏只会让翻页边界差
-/// 一个页签(与终端 tab 栏同一套取舍)。
-const PROJECT_TAB_AVAIL_PX: f32 = 420.0;
 
 /// 项目页签估算显示宽:结构同 `tab_display_width`,但状态点是可选的
 /// (`Stub` 无存活会话时不画),所以按有无分开算。
@@ -4619,7 +4583,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_wi
     .padding(region.padding);
 
     container(content)
-        .width(Length::Fixed(ICON_RAIL_WIDTH))
+        .width(Length::Fixed(workspace_geometry::icon_rail_width()))
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
@@ -4648,7 +4612,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_w
     .padding(region.padding);
 
     container(content)
-        .width(Length::Fixed(ICON_RAIL_WIDTH))
+        .width(Length::Fixed(workspace_geometry::icon_rail_width()))
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
@@ -4864,17 +4828,20 @@ fn maximize_overlay<'a>(
     )
     .on_press(Message::MaximizeClose);
 
-    // 顶部垫一条透明的 `TOP_BAR_HEIGHT` 高 Space,把变暗遮罩钉在顶栏
+    // 顶部垫一条透明的 `workspace_geometry::top_bar_height()` 高 Space,把变暗遮罩钉在顶栏
     // 之下——`base = column![top, body]` 里顶栏和内容区就是这么分的,
     // 这里镜像同一结构,让变暗区域精确对齐 `body` 的渲染范围,不覆盖顶栏
     // (Important:此前没有这条 Space,遮罩会盖住整个窗口高度,连顶栏的
     // 项目 tab 等控件都会被染黑)。
     column![
-        iced_widget::space::Space::new().height(Length::Fixed(TOP_BAR_HEIGHT)),
+        iced_widget::space::Space::new()
+            .height(Length::Fixed(workspace_geometry::top_bar_height())),
         row![
-            iced_widget::space::Space::new().width(Length::Fixed(ICON_RAIL_WIDTH)),
+            iced_widget::space::Space::new()
+                .width(Length::Fixed(workspace_geometry::icon_rail_width())),
             dim_bg,
-            iced_widget::space::Space::new().width(Length::Fixed(ICON_RAIL_WIDTH)),
+            iced_widget::space::Space::new()
+                .width(Length::Fixed(workspace_geometry::icon_rail_width())),
         ],
     ]
     .width(Length::Fill)
@@ -5184,7 +5151,7 @@ fn status_bar_container<'a>(
     let region = chrome_style::status_bar();
     container(inner)
         .width(Length::Fill)
-        .height(Length::Fixed(STATUS_BAR_HEIGHT))
+        .height(Length::Fixed(workspace_geometry::status_bar_height()))
         .padding(region.padding)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
@@ -5209,8 +5176,12 @@ fn preview_pane(
         .iter()
         .map(|t| preview_tab_display_width(&t.title))
         .collect();
-    let (first, can_left, can_right) =
-        tab_window(&widths, 4.0, TAB_BAR_AVAIL_PX, ws.preview_tab_first);
+    let (first, can_left, can_right) = tab_window(
+        &widths,
+        4.0,
+        workspace_geometry::tab_bar_avail_px(),
+        ws.preview_tab_first,
+    );
 
     let items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = ws
         .preview
@@ -5329,8 +5300,12 @@ fn browser_pane(
         .iter()
         .map(|t| preview_tab_display_width(&t.title))
         .collect();
-    let (first, can_left, can_right) =
-        tab_window(&widths, 4.0, TAB_BAR_AVAIL_PX, ws.browser_tab_first);
+    let (first, can_left, can_right) = tab_window(
+        &widths,
+        4.0,
+        workspace_geometry::tab_bar_avail_px(),
+        ws.browser_tab_first,
+    );
 
     let items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = ws
         .browser
@@ -5543,7 +5518,7 @@ fn terminal_pane<'a>(
         .into()
 }
 
-/// 分隔线:命中区 `DIVIDER_WIDTH` 宽、`Length::Fill` 高,内部一条 2px BORDER
+/// 分隔线:命中区 `workspace_geometry::divider_width()` 宽、`Length::Fill` 高,内部一条 2px BORDER
 /// 竖线居中。悬停变 resize 光标走 `MouseArea::interaction` → iced 既有的
 /// `mouse_interaction` → `window.set_cursor` 管线(main.rs:808-816 已有),
 /// 不必另起一套光标代码。`on_press` 只发起拖拽状态,不指望 `MouseArea` 的
@@ -5553,7 +5528,7 @@ fn terminal_pane<'a>(
 /// `Divider::LeftRight` 不画那条 2px 竖线——它两侧现在各自套了
 /// `chrome_style::left_zone()`/`right_zone()` 的整体外边框,这条线再画出来
 /// 会和两侧边框挤成三条紧贴的线。拖拽命中区照常保留,只是视觉上空出
-/// `DIVIDER_WIDTH` 那道缝,交给两侧的 zone 边框各自收边。
+/// `workspace_geometry::divider_width()` 那道缝,交给两侧的 zone 边框各自收边。
 fn divider_bar<'a>(
     divider: Divider,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
@@ -5566,7 +5541,7 @@ fn divider_bar<'a>(
             ..container::Style::default()
         });
     let hit_area = container(line)
-        .center_x(Length::Fixed(DIVIDER_WIDTH))
+        .center_x(Length::Fixed(workspace_geometry::divider_width()))
         .height(Length::Fill);
     MouseArea::new(hit_area)
         .interaction(mouse::Interaction::ResizingColumn)
@@ -5799,11 +5774,6 @@ fn delete_confirm_popup(
         .into()
 }
 
-/// tab 栏箭头翻页/tab 内容区可视宽的保守估值（逻辑像素）。`tab_bar`/
-/// 预览 tab 栏都拿不到窗口尺寸（故意不引入这层依赖——见 P1L T5 brief），
-/// 估偏只影响翻页边界（早一两个 tab 触发/到头），不影响正确性或崩溃。
-const TAB_BAR_AVAIL_PX: f32 = 360.0;
-
 /// 箭头翻页按钮：ChevronLeft / ChevronRight，可用时 GOLD，hover 显 CARD 圆角底，到头时 DIM 且不可点。
 fn tab_arrow_button<'a>(
     icon: icons::IconKind,
@@ -5895,8 +5865,12 @@ fn tab_bar<'a>(
         .iter()
         .map(|t| tab_display_width(&tab_title(t.cwd.as_deref(), &t.info.name)))
         .collect();
-    let (first, can_left, can_right) =
-        tab_window(&widths, 4.0, TAB_BAR_AVAIL_PX, ws.term_tab_first);
+    let (first, can_left, can_right) = tab_window(
+        &widths,
+        4.0,
+        workspace_geometry::tab_bar_avail_px(),
+        ws.term_tab_first,
+    );
 
     let items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = ws
         .tabs
@@ -6569,15 +6543,18 @@ mod tests {
         // chrome 高度分道,不能再共用同一个值——否则文件预览顶上会露一截
         // 再也画不出东西的空白。
         assert_eq!(
-            PREVIEW_CHROME_TOP_PX, 38.0,
+            workspace_geometry::preview_chrome_top_px(),
+            38.0,
             "文件预览 chrome 顶应为去地址栏后的 38(8 内边距 + 30 tab 栏)"
         );
         assert_eq!(
-            BROWSER_CHROME_TOP_PX, 72.0,
+            workspace_geometry::browser_chrome_top_px(),
+            72.0,
             "浏览器 chrome 顶应为 72(8 内边距 + 30 tab 栏 + 4 spacing + 30 地址栏)"
         );
         assert_eq!(
-            CHROME_HEIGHT_PX, 50.0,
+            workspace_geometry::chrome_height_px(),
+            50.0,
             "终端 chrome 高应为去 header 后的 50"
         );
     }
@@ -6600,7 +6577,8 @@ mod tests {
         let state = test_state();
         let (x, y, w, h) = preview_content_bounds(1440.0, 900.0, &state);
         let list_w = state.layout.left_width * state.layout.files_split;
-        let col_start = ICON_RAIL_WIDTH + list_w + DIVIDER_WIDTH;
+        let col_start =
+            workspace_geometry::icon_rail_width() + list_w + workspace_geometry::divider_width();
         assert!(x >= col_start && x < col_start + 16.0, "x={x}");
         assert!((380.0..=420.0).contains(&w), "w={w}");
         assert!(
@@ -6618,7 +6596,7 @@ mod tests {
             ..test_state()
         };
         let (x, _, w, _) = preview_content_bounds(1440.0, 900.0, &state);
-        assert_eq!(x, ICON_RAIL_WIDTH + 8.0);
+        assert_eq!(x, workspace_geometry::icon_rail_width() + 8.0);
         assert_eq!(w, state.layout.left_width - 16.0);
     }
 
@@ -6652,10 +6630,10 @@ mod tests {
     /// Fix round 1 Critical:左侧被放大(Files 配对)时,webview 矩形必须
     /// 按 `maximize_overlay` 实际渲染的更大盒子换算,不能再用平时的
     /// `left_zone_width`(640)。用具体数字核对,不只看"落在范围内"：
-    /// x0=ICON_RAIL_WIDTH(44)+MAXIMIZE_OVERLAY_PADDING(40)=84,
+    /// x0=workspace_geometry::icon_rail_width()(44)+workspace_geometry::maximize_overlay_padding()(40)=84,
     /// avail_w=1440-2*44-2*40=1272,pair_w=1272-8=1264,
     /// list_w=1264*0.35=442.4,x=84+442.4+8+8=542.4,w=1264*0.65-16=805.6;
-    /// y0=TOP_BAR_HEIGHT(44)+40=84,y=84+38(PREVIEW_CHROME_TOP_PX,地址栏已去)=122,
+    /// y0=workspace_geometry::top_bar_height()(44)+40=84,y=84+38(workspace_geometry::preview_chrome_top_px(),地址栏已去)=122,
     /// avail_h=900-44-80=776,h=776-38-8=730。
     #[test]
     fn preview_content_bounds_left_maximized_files_matches_overlay_geometry() {
@@ -6715,9 +6693,13 @@ mod tests {
     fn terminal_pane_height_excludes_top_and_status_bars() {
         let state = test_state();
         let (_, h_with) = terminal_pane_pixel_size(1440.0, 900.0, &state);
-        let only_chrome = 900.0 - CHROME_HEIGHT_PX;
+        let only_chrome = 900.0 - workspace_geometry::chrome_height_px();
         assert!(
-            (only_chrome - h_with - (TOP_BAR_HEIGHT + STATUS_BAR_HEIGHT)).abs() < 0.01,
+            (only_chrome
+                - h_with
+                - (workspace_geometry::top_bar_height() + workspace_geometry::status_bar_height()))
+            .abs()
+                < 0.01,
             "终端 pane 高度必须再扣顶栏+状态栏"
         );
     }
@@ -6748,7 +6730,7 @@ mod tests {
     ///
     /// 具体数字(窗口逻辑宽 720——1440pt 屏上把窗口贴半屏就是这个宽度):
     /// `zones_width(720)` = 720 - 2*44(图标栏) - 8(LeftRight 分隔线) = 624;
-    /// 上界 = max(624 - 320(MIN_ZONE_WIDTH), 320) = 320;
+    /// 上界 = max(624 - 320(workspace_geometry::min_zone_width()), 320) = 320;
     /// 默认 `left_width`=640 夹取后 = 320,右面板区 = 624 - 320 = 304(>0)。
     ///
     /// 修复前的 flex 追账(iced_core flex.rs `resolve` 第一趟按顺序给
@@ -6788,15 +6770,29 @@ mod tests {
         );
     }
 
-    /// 极窄窗口(比 `MIN_WINDOW_WIDTH` 还窄,例如外部强制 resize)下也不 panic,
+    /// 极窄窗口(比 `workspace_geometry::min_window_width()` 还窄,例如外部强制 resize)下也不 panic,
     /// 且左区宽不会超过 `zones_width` 本身。
     #[test]
     fn clamp_left_width_survives_absurdly_narrow_window() {
-        assert_eq!(clamp_left_width(200.0, 640.0), MIN_ZONE_WIDTH);
-        assert_eq!(clamp_left_width(0.0, 640.0), MIN_ZONE_WIDTH);
-        // 最小窗口宽恰好能让两侧都拿到 MIN_ZONE_WIDTH。
-        assert_eq!(clamp_left_width(MIN_WINDOW_WIDTH, 640.0), MIN_ZONE_WIDTH);
-        assert!((zones_width(MIN_WINDOW_WIDTH) - 2.0 * MIN_ZONE_WIDTH).abs() < 0.01);
+        assert_eq!(
+            clamp_left_width(200.0, 640.0),
+            workspace_geometry::min_zone_width()
+        );
+        assert_eq!(
+            clamp_left_width(0.0, 640.0),
+            workspace_geometry::min_zone_width()
+        );
+        // 最小窗口宽恰好能让两侧都拿到 workspace_geometry::min_zone_width()。
+        assert_eq!(
+            clamp_left_width(workspace_geometry::min_window_width(), 640.0),
+            workspace_geometry::min_zone_width()
+        );
+        assert!(
+            (zones_width(workspace_geometry::min_window_width())
+                - 2.0 * workspace_geometry::min_zone_width())
+            .abs()
+                < 0.01
+        );
     }
 
     /// Fix round 2 #3:终端可见性判定。旧四栏布局里终端恒在屏上,新外壳有三
@@ -6872,9 +6868,9 @@ mod tests {
     ///
     /// 具体数字(1440x900,`agent_split`=0.4):
     /// avail_w = 1440 - 2*44 - 2*40 = 1272,pair_w = 1272 - 8 = 1264,
-    /// 终端占 1-0.4 → 1264*0.6 = 758.4,减 `CHROME_WIDTH_PX`(16) = 742.4;
+    /// 终端占 1-0.4 → 1264*0.6 = 758.4,减 `workspace_geometry::chrome_width_px()`(16) = 742.4;
     /// 盒子高 = 900 - 44(顶栏) - 2*40 = 776,再减 pane 自带底栏 26
-    /// (`STATUS_BAR_HEIGHT`)与 `CHROME_HEIGHT_PX`(50) = 700。
+    /// (`workspace_geometry::status_bar_height()`)与 `workspace_geometry::chrome_height_px()`(50) = 700。
     /// 对照平时:zones_width = 1440-2*44-8=1344,right_w = 1344 - 640 = 704,pair = 696,
     /// 696*0.6 = 417.6,减 16 = 401.6;高 = 900 - 44 - 26 - 50 = 780。
     /// 换成网格(CELL_WIDTH=8.4,LINE_HEIGHT_PX=14):放大后 88x50,平时 47x55。
@@ -6965,9 +6961,9 @@ mod tests {
             ..ShellLayout::default()
         };
         let s = sanitize_shell_layout(poisoned);
-        assert_eq!(s.left_width, MIN_ZONE_WIDTH);
-        assert_eq!(s.files_split, MIN_SPLIT_RATIO);
-        assert_eq!(s.agent_split, MAX_SPLIT_RATIO);
+        assert_eq!(s.left_width, workspace_geometry::min_zone_width());
+        assert_eq!(s.files_split, workspace_geometry::min_split_ratio());
+        assert_eq!(s.agent_split, workspace_geometry::max_split_ratio());
         assert_eq!(s.conversations_split, ShellLayout::default().files_split);
         // 夹过之后 FillPortion 两侧都非 0(那一块不会凭空消失)。
         for split in [s.files_split, s.agent_split, s.conversations_split] {
@@ -6985,7 +6981,7 @@ mod tests {
 
     /// `window_width`/`window_height` 的夹取单独测:老 `layout.json` 缺这两
     /// 个字段时 serde 补 0.0(不是 `f32::NAN`,判断要用 `> 0.0` 而不能只查
-    /// `is_finite`),负数/NAN 同样要落回 `INITIAL_WINDOW_SIZE`;合法但过小
+    /// `is_finite`),负数/NAN 同样要落回 `workspace_geometry::initial_window_size()`;合法但过小
     /// 的值只夹下限,不整个重置。
     #[test]
     fn sanitize_shell_layout_clamps_window_size() {
@@ -6995,8 +6991,8 @@ mod tests {
             ..ShellLayout::default()
         };
         let s = sanitize_shell_layout(missing_fields);
-        assert_eq!(s.window_width, INITIAL_WINDOW_SIZE.0);
-        assert_eq!(s.window_height, INITIAL_WINDOW_SIZE.1);
+        assert_eq!(s.window_width, workspace_geometry::initial_window_size().0);
+        assert_eq!(s.window_height, workspace_geometry::initial_window_size().1);
 
         let poisoned = ShellLayout {
             window_width: -100.0,
@@ -7004,8 +7000,8 @@ mod tests {
             ..ShellLayout::default()
         };
         let s = sanitize_shell_layout(poisoned);
-        assert_eq!(s.window_width, INITIAL_WINDOW_SIZE.0);
-        assert_eq!(s.window_height, INITIAL_WINDOW_SIZE.1);
+        assert_eq!(s.window_width, workspace_geometry::initial_window_size().0);
+        assert_eq!(s.window_height, workspace_geometry::initial_window_size().1);
 
         let too_small = ShellLayout {
             window_width: 10.0,
@@ -7013,8 +7009,8 @@ mod tests {
             ..ShellLayout::default()
         };
         let s = sanitize_shell_layout(too_small);
-        assert_eq!(s.window_width, MIN_WINDOW_WIDTH);
-        assert_eq!(s.window_height, MIN_WINDOW_HEIGHT);
+        assert_eq!(s.window_width, workspace_geometry::min_window_width());
+        assert_eq!(s.window_height, workspace_geometry::min_window_height());
 
         let legit = ShellLayout {
             window_width: 1800.0,
@@ -7234,22 +7230,25 @@ mod tests {
     fn clamp_left_width_within_bounds() {
         let state = test_state();
         let l = apply_column_drag(state, Divider::LeftRight, 1440.0, 500.0);
-        assert_eq!(l.left_width, 500.0 - ICON_RAIL_WIDTH);
+        assert_eq!(l.left_width, 500.0 - workspace_geometry::icon_rail_width());
     }
 
     #[test]
     fn clamp_left_width_to_minimum() {
         let state = test_state();
         let l = apply_column_drag(state, Divider::LeftRight, 1440.0, 10.0);
-        assert_eq!(l.left_width, MIN_ZONE_WIDTH);
+        assert_eq!(l.left_width, workspace_geometry::min_zone_width());
     }
 
     #[test]
     fn clamp_left_width_to_maximum_keeps_right_zone_alive() {
-        // 拖到最右也要给右面板区留 MIN_ZONE_WIDTH。
+        // 拖到最右也要给右面板区留 workspace_geometry::min_zone_width()。
         let state = test_state();
         let l = apply_column_drag(state, Divider::LeftRight, 1440.0, 1430.0);
-        let expected = 1440.0 - 2.0 * ICON_RAIL_WIDTH - DIVIDER_WIDTH - MIN_ZONE_WIDTH;
+        let expected = 1440.0
+            - 2.0 * workspace_geometry::icon_rail_width()
+            - workspace_geometry::divider_width()
+            - workspace_geometry::min_zone_width();
         assert_eq!(l.left_width, expected);
     }
 
@@ -7258,7 +7257,7 @@ mod tests {
         // 窗口窄到上界低于下界时,`.max(下限)` 把上界垫平,恒不 panic。
         let state = test_state();
         let l = apply_column_drag(state, Divider::LeftRight, 700.0, 650.0);
-        assert_eq!(l.left_width, MIN_ZONE_WIDTH);
+        assert_eq!(l.left_width, workspace_geometry::min_zone_width());
     }
 
     #[test]
@@ -7269,7 +7268,7 @@ mod tests {
             state,
             Divider::LeftPairSplit,
             1440.0,
-            ICON_RAIL_WIDTH + 316.0,
+            workspace_geometry::icon_rail_width() + 316.0,
         );
         assert!((l.files_split - 0.5).abs() < 0.001, "{}", l.files_split);
     }
@@ -7278,9 +7277,9 @@ mod tests {
     fn clamp_files_split_to_range() {
         let state = test_state();
         let l = apply_column_drag(state, Divider::LeftPairSplit, 1440.0, 10.0);
-        assert_eq!(l.files_split, MIN_SPLIT_RATIO);
+        assert_eq!(l.files_split, workspace_geometry::min_split_ratio());
         let l = apply_column_drag(state, Divider::LeftPairSplit, 1440.0, 5000.0);
-        assert_eq!(l.files_split, MAX_SPLIT_RATIO);
+        assert_eq!(l.files_split, workspace_geometry::max_split_ratio());
     }
 
     #[test]

@@ -19,6 +19,7 @@ mod theme;
 mod transcript;
 mod workspace;
 mod workspace_font;
+mod workspace_geometry;
 
 use workspace::{App, Message};
 // `with_allow_link_preview` 是 macOS 专有扩展 trait,需显式引入作用域。
@@ -361,8 +362,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     let logical_size = window.inner_size();
                     let window_w = (logical_size.width as f64 / scale) as f32;
                     let window_h = (logical_size.height as f64 / scale) as f32;
-                    let x = x.min((window_w - workspace::CONTEXT_MENU_WIDTH).max(0.0));
-                    let y = y.min((window_h - workspace::CONTEXT_MENU_HEIGHT).max(0.0));
+                    let x = x.min((window_w - workspace_geometry::context_menu_width()).max(0.0));
+                    let y = y.min((window_h - workspace_geometry::context_menu_height()).max(0.0));
                     app.update(Message::RightClickAt { x, y });
                     // 不在这里 request_redraw——右键若真的命中某行,该行的
                     // `MouseArea::on_right_press` 随本轮事件走 iced 正常分发,
@@ -727,8 +728,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // `clamp_left_width`(持久化宽可能远大于这个最小
                                 // 宽),这里只是把最坏情形挡在外面。
                                 .with_min_inner_size(LogicalSize::new(
-                                    workspace::MIN_WINDOW_WIDTH,
-                                    workspace::MIN_WINDOW_HEIGHT,
+                                    workspace_geometry::min_window_width(),
+                                    workspace_geometry::min_window_height(),
                                 )),
                         )
                         .expect("Create window"),
