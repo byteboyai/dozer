@@ -2,7 +2,6 @@ mod assets;
 mod chrome_style;
 mod conversation;
 mod delivery;
-mod font_style;
 mod fonts;
 mod goal;
 mod icons;
@@ -15,9 +14,11 @@ mod preview_state;
 mod project;
 mod term_model;
 mod term_view;
+mod terminal_font;
 mod theme;
 mod transcript;
 mod workspace;
+mod workspace_font;
 
 use workspace::{App, Message};
 

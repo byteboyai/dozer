@@ -20,8 +20,8 @@
 //!
 //! 光标最后画：先补一块实心格（focused：CREAM 底 + TERM_BG 字；未聚焦：
 //! CREAM 描边），覆盖在 run 字形之上，天然处理"光标落在任意 run 中间"。
-use crate::font_style;
 use crate::term_model::{Cell, TerminalModel};
+use crate::terminal_font;
 use crate::theme;
 use crate::workspace::Message;
 use iced_widget::canvas::{self, Canvas};
@@ -30,13 +30,13 @@ use iced_widget::core::mouse::{self, ScrollDelta};
 use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Color, Element, Event, Font, Length, Pixels, Point, Rectangle, Size};
 
-/// 等宽字体单元格宽度 ≈ 0.6em（`font_style::terminal_size()` 驱动）。
+/// 等宽字体单元格宽度 ≈ 0.6em（`terminal_font::size()` 驱动）。
 fn cell_width() -> f32 {
-    font_style::terminal_size() * 0.6
+    terminal_font::size() * 0.6
 }
-/// 行高（逻辑像素），供 `grid_size` 换算用（`font_style::terminal_*` 驱动）。
+/// 行高（逻辑像素），供 `grid_size` 换算用（`terminal_font::*` 驱动）。
 fn line_height_px() -> f32 {
-    font_style::terminal_size() * font_style::terminal_line_height_factor()
+    terminal_font::size() * terminal_font::line_height_factor()
 }
 
 /// 终端 pane 的像素尺寸 → 网格尺寸 `(cols, rows)`，向下取整（不足一格的
@@ -256,7 +256,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
                     content: run.text,
                     position: Point::new(x, y),
                     color: rgb(run.fg),
-                    size: Pixels(font_style::terminal_size()),
+                    size: Pixels(terminal_font::size()),
                     line_height: LineHeight::Absolute(Pixels(line_height_px())),
                     font: cell_font(run.bold),
                     ..canvas::Text::default()
@@ -285,7 +285,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
                         content: cell.ch.to_string(),
                         position: Point::new(x, y),
                         color: theme::TERM_BG,
-                        size: Pixels(font_style::terminal_size()),
+                        size: Pixels(terminal_font::size()),
                         line_height: LineHeight::Absolute(Pixels(line_height_px())),
                         font: cell_font(cell.bold),
                         ..canvas::Text::default()
