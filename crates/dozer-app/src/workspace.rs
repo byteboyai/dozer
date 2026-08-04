@@ -3608,7 +3608,7 @@ impl App {
             left_icon_rail(self),
             left_panel_area(self, ws, false),
             divider_bar(Divider::LeftRight),
-            right_panel_area(self, ws),
+            right_panel_area(self, ws, false),
             right_icon_rail(self),
         ];
         let base = column![top, body];
@@ -4575,6 +4575,10 @@ fn split_portions(split: f32) -> (u16, u16) {
 /// 图标收起本侧是可达路径),此时上面那条收起分支返回空元素;`maximized`
 /// 会被 `LeftIconSelect`/`RightIconSelect` 无条件清掉,所以这个组合不会
 /// 停留超过一帧(Fix round 2 #2)。
+/// 非放大态下,左1(项目树/Web)+左2(预览)两栏被视觉框成一个整体,套
+/// `chrome_style::left_zone()` 的外边框。放大态跳过——`maximize_overlay`
+/// 已经用金色边框把同一块内容整体框起来,再套一层普通色边框会在金框内侧
+/// 多出一圈视觉噪音。
 fn left_panel_area<'a>(
     app: &'a App,
     ws: &'a Workspace,
@@ -4592,7 +4596,8 @@ fn left_panel_area<'a>(
     } else {
         Length::Fixed(app.effective_left_width())
     };
-    match app.left_view {
+    let inner: Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> = match app.left_view
+    {
         LeftView::Files => {
             let (list_portion, content_portion) = split_portions(app.shell_layout.files_split);
             row![
@@ -4604,7 +4609,20 @@ fn left_panel_area<'a>(
             .into()
         }
         LeftView::Web => browser_pane(ws, total),
+    };
+    if maximized {
+        return inner;
     }
+    let region = chrome_style::left_zone();
+    container(inner)
+        .width(total)
+        .height(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: region.background.map(Into::into),
+            border: region.border.unwrap_or_default(),
+            ..container::Style::default()
+        })
+        .into()
 }
 
 /// 右面板区:按当前右视图组合"Agent 列表+终端"或"对话列表+对话审阅"配对;
@@ -4615,36 +4633,55 @@ fn left_panel_area<'a>(
 /// 包装容器:`Limits::width(Fixed(w))` 会把子元素的 min/max 都钉成 `w`,父级
 /// 的 `FillPortion` 只约束包装容器本身、传不进子元素,曾导致这四块 pane 全部
 /// 以 0 宽布局(右半边整片空白)。
+///
+/// 非放大态下,右1(Agent 列表/对话列表)+右2(终端/审阅)两栏被视觉框成
+/// 一个整体,套 `chrome_style::right_zone()` 的外边框,`maximized` 时跳过
+/// (理由同 `left_panel_area`)。
 fn right_panel_area<'a>(
     app: &'a App,
     ws: &'a Workspace,
+    maximized: bool,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     if app.right_collapsed {
         return column![].into();
     }
-    match app.right_view {
-        RightView::Agent => {
-            let (list_portion, content_portion) = split_portions(app.shell_layout.agent_split);
-            row![
-                agent_list_pane(ws, Length::FillPortion(list_portion)),
-                divider_bar(Divider::RightPairSplit),
-                terminal_pane(app, ws, Length::FillPortion(content_portion)),
-            ]
-            .width(Length::Fill)
-            .into()
-        }
-        RightView::Conversations => {
-            let (list_portion, content_portion) =
-                split_portions(app.shell_layout.conversations_split);
-            row![
-                conversation_list_pane(ws, Length::FillPortion(list_portion)),
-                divider_bar(Divider::RightPairSplit),
-                review_content_pane(ws, Length::FillPortion(content_portion)),
-            ]
-            .width(Length::Fill)
-            .into()
-        }
+    let inner: Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> =
+        match app.right_view {
+            RightView::Agent => {
+                let (list_portion, content_portion) = split_portions(app.shell_layout.agent_split);
+                row![
+                    agent_list_pane(ws, Length::FillPortion(list_portion)),
+                    divider_bar(Divider::RightPairSplit),
+                    terminal_pane(app, ws, Length::FillPortion(content_portion)),
+                ]
+                .width(Length::Fill)
+                .into()
+            }
+            RightView::Conversations => {
+                let (list_portion, content_portion) =
+                    split_portions(app.shell_layout.conversations_split);
+                row![
+                    conversation_list_pane(ws, Length::FillPortion(list_portion)),
+                    divider_bar(Divider::RightPairSplit),
+                    review_content_pane(ws, Length::FillPortion(content_portion)),
+                ]
+                .width(Length::Fill)
+                .into()
+            }
+        };
+    if maximized {
+        return inner;
     }
+    let region = chrome_style::right_zone();
+    container(inner)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: region.background.map(Into::into),
+            border: region.border.unwrap_or_default(),
+            ..container::Style::default()
+        })
+        .into()
 }
 
 /// 放大态浮层:两条图标栏之间的整个内容区变暗+背景虚化，放大的那一侧
@@ -4657,7 +4694,7 @@ fn maximize_overlay<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let inner = match which {
         MaximizedPane::Left => left_panel_area(app, ws, true),
-        MaximizedPane::Right => right_panel_area(app, ws),
+        MaximizedPane::Right => right_panel_area(app, ws, true),
     };
     // `bordered` 显式给 `Length::Fill`(不留给默认 `Length::Shrink`)——
     // iced 0.14 的 `Limits` 有个"compression"传染机制:一个 `Shrink` 容器

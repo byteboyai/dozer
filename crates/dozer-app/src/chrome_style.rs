@@ -1,7 +1,7 @@
-//! 外壳区域样式配置:13 个区域(主导航/左右图标栏/放大态浮层/右键菜单/
-//! 状态条 + 7 个面板内容区)各自外层容器的背景色/边框/内边距/子元素
-//! 间距,编译期内嵌 `assets/theme/workspace.json` 的 `regions` 节点,
-//! 启动时解析一次。`workspace.json` 同时也是 `workspace_font.rs` 的
+//! 外壳区域样式配置:15 个区域(主导航/左右图标栏/放大态浮层/右键菜单/
+//! 状态条 + 7 个面板内容区 + 左右面板区整体外框)各自外层容器的背景色/
+//! 边框/内边距/子元素间距,编译期内嵌 `assets/theme/workspace.json` 的
+//! `regions` 节点,启动时解析一次。`workspace.json` 同时也是 `workspace_font.rs` 的
 //! 数据源(`font_sizes` 节点)——两个模块各自只解析自己关心的顶层字段,
 //! 互不干扰,合并成一个文件是为了"workspace 相关配置都在一处"。
 //!
@@ -88,6 +88,8 @@ struct RawRegions {
     status_bar: RawRegion,
     maximize_overlay: RawMaximizeOverlay,
     context_menu: RawRegion,
+    left_zone: RawRegion,
+    right_zone: RawRegion,
 }
 
 /// `workspace.json` 顶层结构里本模块只关心的部分——`font_sizes` 节点是
@@ -195,6 +197,8 @@ struct ResolvedRegions {
     status_bar: RegionStyle,
     maximize_overlay: MaximizeOverlayStyle,
     context_menu: RegionStyle,
+    left_zone: RegionStyle,
+    right_zone: RegionStyle,
 }
 
 fn load(raw: &str) -> ResolvedRegions {
@@ -219,6 +223,8 @@ fn load(raw: &str) -> ResolvedRegions {
             border: resolve_border(&parsed.maximize_overlay.border),
         },
         context_menu: resolve_region(parsed.context_menu),
+        left_zone: resolve_region(parsed.left_zone),
+        right_zone: resolve_region(parsed.right_zone),
     }
 }
 
@@ -262,6 +268,15 @@ pub fn maximize_overlay() -> MaximizeOverlayStyle {
 }
 pub fn context_menu() -> RegionStyle {
     REGIONS.context_menu
+}
+/// 左面板区(项目树+预览,或单个 Web 预览)整体外边框——把"左1左2两栏"
+/// 框成一个视觉整体,不是某一栏自己的边框。
+pub fn left_zone() -> RegionStyle {
+    REGIONS.left_zone
+}
+/// 右面板区(Agent 列表+终端,或对话列表+审阅)整体外边框,同 `left_zone`。
+pub fn right_zone() -> RegionStyle {
+    REGIONS.right_zone
 }
 
 #[cfg(test)]
@@ -337,6 +352,26 @@ mod tests {
         assert_eq!(border.radius, 6.0.into());
         assert_eq!(s.padding, Padding::from(6.0));
         assert_eq!(s.gap, 2.0);
+    }
+
+    #[test]
+    fn left_zone_matches_config() {
+        let s = left_zone();
+        assert!(s.background.is_none());
+        let border = s.border.expect("left_zone 应有整体外边框");
+        assert_eq!(border.color, theme::BORDER);
+        assert_eq!(border.width, 1.0);
+        assert_eq!(border.radius, 0.0.into());
+    }
+
+    #[test]
+    fn right_zone_matches_config() {
+        let s = right_zone();
+        assert!(s.background.is_none());
+        let border = s.border.expect("right_zone 应有整体外边框");
+        assert_eq!(border.color, theme::BORDER);
+        assert_eq!(border.width, 1.0);
+        assert_eq!(border.radius, 0.0.into());
     }
 
     #[test]
