@@ -54,7 +54,7 @@ use iced_widget::core::font::Weight;
 use iced_widget::core::mouse;
 use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Color, Element, Font, Length, Padding};
-use iced_widget::{MouseArea, button, column, container, row, stack, text};
+use iced_widget::{MouseArea, button, column, container, responsive, row, stack, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -977,6 +977,9 @@ pub enum Message {
     /// 项目树:菜单选"复制绝对/相对路径"→ main.rs 拦截写系统剪贴板,
     /// 不落 `Workspace::update`。
     ProjectTreeCopyPath(PathBuf, project::PathKind),
+    /// 项目树:菜单选"在 Finder 中打开"→ `open -R` 拉起 Finder 并选中目标,
+    /// 无需窗口句柄/剪贴板,直接在 `App::update` 里同步 `spawn`(不等待退出)。
+    ProjectTreeRevealInFinder(PathBuf),
     /// 项目树:菜单选"复制"→ 标记应用内剪贴槽(参数=路径,是否目录)。
     ProjectTreeCopy(PathBuf, bool),
     /// 项目树:菜单选"粘贴"→ 异步复制剪贴槽项到目标目录(参数=目标目录)。
@@ -3556,6 +3559,15 @@ impl App {
                 self.context_menu = None;
             }
             Message::ProjectTreeCopyPath(_, _) => {} // 副作用在 main.rs(写系统剪贴板需 Clipboard 句柄)
+            Message::ProjectTreeRevealInFinder(path) => {
+                self.context_menu = None;
+                // spawn 不等待子进程退出,不阻塞 UI 线程;拉起失败(如非 macOS)
+                // 静默忽略——不是值得打断用户的错误。
+                let _ = std::process::Command::new("open")
+                    .arg("-R")
+                    .arg(&path)
+                    .spawn();
+            }
             Message::ProjectTreeCopy(path, is_dir) => {
                 self.context_menu = None;
                 self.with_focused_project(move |ws, _io| {
@@ -4335,47 +4347,74 @@ struct ProjectTabEntry {
     dot: Option<(Color, bool)>,
 }
 
-/// 顶栏项目页签行:Chrome 式无限收窄的页签 + 恒在最右的"＋"。
+/// 顶栏项目页签行:固定默认宽 + 拥挤时均分收窄的页签 + 恒在最右的"＋"。
 ///
-/// 不再有翻页箭头/裁剪窗口:每个页签用 `FillPortion(1)` 均分页签区可用宽度,
-/// 项目少时每片不超过 `project_tab_max_width`(不撑爆),项目多时被 `FillPortion`
-/// 一路压窄到均分(长名在 `project_tab_item` 内部裁剪),绝不出现"最右页签连同
-/// ＋够不着"的情况。"＋"钉在页签区右侧、恒在可视范围。
+/// 每片页签的宽度按如下规则算(`project_tab_max_width()` 即"默认/合适宽"):
+/// 页签少、每片都能容下默认宽时,统一用默认宽(左对齐,右侧留白,不撑爆);
+/// 页签多到塞不下默认宽时,按可用宽均分,每片窄于默认宽(随实际拥挤程度收窄)。
+/// 这样少数页签始终是固定的"默认宽度",只有真挤了才缩。可用宽在布局期由
+///
+/// `responsive` 实时拿到(不引入窗口尺寸依赖),再扣掉"＋"按钮与各处 gap。
 fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let active_project_id = app.active_project_id;
+    let blink_on = app.blink_on;
     let entries = project_tab_entries(app);
+    let n = entries.len();
 
-    let mut tabs = row![]
-        .spacing(workspace_geometry::project_tab_gap())
-        .align_y(iced_widget::core::Alignment::Center)
-        .width(Length::Fill);
-    for entry in entries {
-        let active = app.active_project_id == Some(entry.id);
-        let item = project_tab_item(entry.id, entry.name, entry.dot, active, app.blink_on);
-        // 每片均分可用宽,但单个不超过上限;溢出时 `FillPortion` 把每片压窄。
-        let cell = container(item)
-            .width(Length::FillPortion(1))
-            .max_width(workspace_geometry::project_tab_max_width());
-        tabs = tabs.push(cell);
-    }
+    // `responsive` 在每轮布局把页签区可用宽交给闭包,闭包据此算每片宽。
+    responsive(move |size| {
+        let gap = workspace_geometry::project_tab_gap();
+        let default_w = workspace_geometry::project_tab_max_width();
+        // 预留"＋"按钮与其左右两道 gap(页签内部还有 n-1 道 gap),避免
+        // 页签在拥挤时压到"＋"上。"＋"与页签之间靠 `Space::fill()` 留白。
+        let reserved = workspace_geometry::project_tab_add_button_width() + (n as f32 + 1.0) * gap;
+        let avail = (size.width - reserved).max(0.0);
+        // 每片目标宽:少页签用默认宽(固定);多到塞不下默认宽才均分收窄。
+        let per_tab = if n == 0 {
+            default_w
+        } else {
+            let fit = avail / n as f32;
+            if fit >= default_w {
+                default_w
+            } else {
+                fit
+            }
+        };
+        let per_tab = per_tab.max(0.0);
 
-    let add = button(
-        text("＋")
-            .font(top_bar_font())
-            .size(workspace_font::title())
-            .color(theme::DIM),
-    )
-    .on_press(Message::ProjectTabPickFolder)
-    .padding([6, 8])
-    .style(|_t: &iced_widget::Theme, _s| button::Style {
-        background: None,
-        text_color: theme::DIM,
-        ..button::Style::default()
-    });
+        let mut tabs = row![]
+            .spacing(gap)
+            .align_y(iced_widget::core::Alignment::Center)
+            .width(Length::Shrink); // 固定宽,不撑满;右侧留白把"＋"顶到最右
+        for entry in &entries {
+            let active = active_project_id == Some(entry.id);
+            let item = project_tab_item(entry.id, entry.name.clone(), entry.dot, active, blink_on);
+            // 固定宽:少页签时为默认宽,挤时为均分窄宽(Chrome 式收窄)。
+            let cell = container(item).width(Length::Fixed(per_tab));
+            tabs = tabs.push(cell);
+        }
 
-    row![tabs, add]
-        .spacing(workspace_geometry::project_tab_gap())
-        .align_y(iced_widget::core::Alignment::Center)
-        .into()
+        let add = button(
+            text("＋")
+                .font(top_bar_font())
+                .size(workspace_font::title())
+                .color(theme::DIM),
+        )
+        .on_press(Message::ProjectTabPickFolder)
+        .padding([6, 8])
+        .style(|_t: &iced_widget::Theme, _s| button::Style {
+            background: None,
+            text_color: theme::DIM,
+            ..button::Style::default()
+        });
+
+        // 页签(固定宽,左对齐) + 弹性留白 + "＋"(恒在最右)。
+        row![tabs, iced_widget::Space::new().width(Length::Fill), add]
+            .spacing(gap)
+            .align_y(iced_widget::core::Alignment::Center)
+            .into()
+    })
+    .into()
 }
 
 /// 单个项目页签:状态点(可选)+ 项目名的切换按钮 + 关闭按钮。结构与终端
@@ -6046,6 +6085,11 @@ fn context_menu_popup<'a>(
         "复制相对路径",
         Message::ProjectTreeCopyPath(menu.target.clone(), project::PathKind::Relative),
     ));
+    items.push(menu_item(
+        icons::IconKind::FolderOpen,
+        "在 Finder 中打开",
+        Message::ProjectTreeRevealInFinder(menu.target.clone()),
+    ));
 
     let region = chrome_style::context_menu();
     let list = container(column(items).spacing(region.gap))
@@ -6240,7 +6284,7 @@ fn tab_bar<'a>(
     let widths: Vec<f32> = ws
         .tabs
         .iter()
-        .map(|t| tab_display_width(&tab_title(t.cwd.as_deref(), &t.info.name)))
+        .map(|t| tab_display_width(&tab_title(t.agent, t.cwd.as_deref(), &t.info.name)))
         .collect();
     let (first, can_left, can_right) = tab_window(
         &widths,
@@ -6397,8 +6441,12 @@ fn file_change_line(fc: &FileChange) -> String {
     }
 }
 
-/// tab 标题：OSC 7 的 cwd basename 优先，无 cwd 回落会话名。
-fn tab_title(cwd: Option<&Path>, fallback: &str) -> String {
+/// tab 标题：已识别出 agent（hook 上报）则显 agent 名（如 "claude"）；
+/// 否则回落到 OSC 7 的 cwd basename，再无 cwd 才回落会话名。
+fn tab_title(agent: AgentKind, cwd: Option<&Path>, fallback: &str) -> String {
+    if agent != AgentKind::Unknown {
+        return agent.label().to_string();
+    }
     match cwd {
         Some(p) => p
             .file_name()
@@ -6511,7 +6559,7 @@ fn tab_item(
     }
     let label = row![
         text("●").size(workspace_font::caption()).color(color),
-        text(tab_title(tab.cwd.as_deref(), &tab.info.name))
+        text(tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name))
             .size(workspace_font::subtitle())
             .color(theme::CREAM),
     ]
@@ -7770,9 +7818,29 @@ mod tests {
     #[test]
     fn tab_title_prefers_cwd_basename() {
         use std::path::Path;
-        assert_eq!(tab_title(Some(Path::new("/Users/c/proj")), "shell"), "proj");
-        assert_eq!(tab_title(Some(Path::new("/")), "shell"), "/");
-        assert_eq!(tab_title(None, "shell"), "shell");
+        assert_eq!(
+            tab_title(
+                AgentKind::Unknown,
+                Some(Path::new("/Users/c/proj")),
+                "shell"
+            ),
+            "proj"
+        );
+        assert_eq!(
+            tab_title(AgentKind::Unknown, Some(Path::new("/")), "shell"),
+            "/"
+        );
+        assert_eq!(tab_title(AgentKind::Unknown, None, "shell"), "shell");
+    }
+
+    #[test]
+    fn tab_title_prefers_agent_name_once_known() {
+        use std::path::Path;
+        assert_eq!(
+            tab_title(AgentKind::Claude, Some(Path::new("/Users/c/proj")), "shell"),
+            "claude"
+        );
+        assert_eq!(tab_title(AgentKind::Claude, None, "shell"), "claude");
     }
 
     #[test]

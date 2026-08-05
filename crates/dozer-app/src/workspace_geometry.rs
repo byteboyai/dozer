@@ -27,10 +27,13 @@ struct Geometry {
     initial_window_height: f32,
     min_window_height: f32,
     top_bar_height: f32,
-    /// 顶栏项目页签的单个最大宽(设计基准 200)。页签行用 `FillPortion` 均分
-    /// 可用宽度,空间充足时每片不超过这个上限(Chrome 式:不撑爆);空间不够
-    /// 时被 `FillPortion` 压到下限均分收窄。已含全局 scale。
+    /// 顶栏项目页签的"默认/合适宽"(设计基准 200,已含全局 scale)。少数页签时
+    /// 每片统一用这个宽(固定,左对齐不撑爆);页签多到塞不下这个宽时,
+    /// `project_tabs_row` 按可用宽均分把它收窄到低于此值。它既是默认宽也是上限宽。
     project_tab_max_width: f32,
+    /// 顶栏页签行最右"＋"按钮的估算宽(设计基准 36,已含全局 scale)。`project_tabs_row`
+    /// 用它在布局期从可用宽里预留出"＋"的位置,避免页签在拥挤时被压到"＋"上。
+    project_tab_add_button_width: f32,
     status_bar_height: f32,
     context_menu_width: f32,
     context_menu_height: f32,
@@ -135,10 +138,17 @@ pub fn top_bar_height() -> f32 {
     GEOMETRY.top_bar_height * icon_size::scale()
 }
 
-/// 顶栏项目页签的单个最大宽(逻辑像素),已含全局 scale。见 `project_tab_max_width`
-/// 字段注释。
+/// 顶栏项目页签的"默认/合适宽"(逻辑像素),已含全局 scale。少数页签时每片固定
+/// 用这个宽;页签多到塞不下时才由 `project_tabs_row` 均分收窄。见
+/// `project_tab_max_width` 字段注释。
 pub fn project_tab_max_width() -> f32 {
     GEOMETRY.project_tab_max_width * icon_size::scale()
+}
+
+/// 顶栏页签行最右"＋"按钮的估算宽(逻辑像素),已含全局 scale。仅用于在布局期
+/// 从页签可用宽里预留"＋"的位置,估偏只影响开始收窄的临界点,不影响正确性。
+pub fn project_tab_add_button_width() -> f32 {
+    GEOMETRY.project_tab_add_button_width * icon_size::scale()
 }
 
 /// 单条状态栏固定高（逻辑像素）。与 `status_bar_container` 同源。已含全局 scale。
@@ -146,10 +156,10 @@ pub fn status_bar_height() -> f32 {
     GEOMETRY.status_bar_height * icon_size::scale()
 }
 
-/// 右键菜单浮层的最坏情形(目录:8 项)外接宽/高（逻辑像素）,main.rs 在
+/// 右键菜单浮层的最坏情形(目录:9 项)外接宽/高（逻辑像素）,main.rs 在
 /// `RightClickAt` 落点处用它把坐标钳制在窗口内,避免菜单下沿/右沿超出
 /// 窗口导致底部几项点不到（Important #7）。宽度取 `menu_item` 固定宽
-/// 180 加列表容器左右 padding；高度按目录菜单最多 8 项估算,每项文字
+/// 180 加列表容器左右 padding；高度按目录菜单最多 9 项估算,每项文字
 /// 13 号加上下 padding 约 28px,项间 spacing 2,列表容器上下 padding 6,
 /// 不必像素级精确,留够余量保证任何一项都可点即可。文件菜单项更少,用
 /// 目录的最坏值同时覆盖两种情况更简单。
@@ -267,7 +277,7 @@ mod tests {
         assert_eq!(top_bar_height(), 40.0);
         assert_eq!(status_bar_height(), 26.0);
         assert_eq!(context_menu_width(), 200.0);
-        assert_eq!(context_menu_height(), 280.0);
+        assert_eq!(context_menu_height(), 310.0);
         assert_eq!(chrome_width_px(), 16.0);
         assert_eq!(chrome_height_px(), 50.0);
         assert_eq!(preview_chrome_top_px(), 38.0);
