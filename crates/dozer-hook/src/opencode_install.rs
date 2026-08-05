@@ -78,8 +78,7 @@ mod tests {
             "占位符必须被替换成真实 exe 路径"
         );
         assert!(dozer_ts.contains("DozerPlugin"));
-        let translate_ts =
-            std::fs::read_to_string(dir.path().join("dozer-translate.ts")).unwrap();
+        let translate_ts = std::fs::read_to_string(dir.path().join("dozer-translate.ts")).unwrap();
         assert!(translate_ts.contains("onSessionCreated"));
     }
 

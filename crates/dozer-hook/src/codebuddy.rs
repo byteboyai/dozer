@@ -26,17 +26,38 @@ mod tests {
 
     #[test]
     fn passthrough_events_map_to_same_name() {
-        assert_eq!(translate_event("SessionStart"), Some("SessionStart".to_string()));
-        assert_eq!(translate_event("UserPromptSubmit"), Some("UserPromptSubmit".to_string()));
-        assert_eq!(translate_event("PreToolUse"), Some("PreToolUse".to_string()));
-        assert_eq!(translate_event("PostToolUse"), Some("PostToolUse".to_string()));
-        assert_eq!(translate_event("Notification"), Some("Notification".to_string()));
-        assert_eq!(translate_event("SessionEnd"), Some("SessionEnd".to_string()));
+        assert_eq!(
+            translate_event("SessionStart"),
+            Some("SessionStart".to_string())
+        );
+        assert_eq!(
+            translate_event("UserPromptSubmit"),
+            Some("UserPromptSubmit".to_string())
+        );
+        assert_eq!(
+            translate_event("PreToolUse"),
+            Some("PreToolUse".to_string())
+        );
+        assert_eq!(
+            translate_event("PostToolUse"),
+            Some("PostToolUse".to_string())
+        );
+        assert_eq!(
+            translate_event("Notification"),
+            Some("Notification".to_string())
+        );
+        assert_eq!(
+            translate_event("SessionEnd"),
+            Some("SessionEnd".to_string())
+        );
     }
 
     #[test]
     fn failure_variants_merge_into_success_variant() {
-        assert_eq!(translate_event("PostToolUseFailure"), Some("PostToolUse".to_string()));
+        assert_eq!(
+            translate_event("PostToolUseFailure"),
+            Some("PostToolUse".to_string())
+        );
         assert_eq!(translate_event("StopFailure"), Some("Stop".to_string()));
         assert_eq!(translate_event("Stop"), Some("Stop".to_string()));
     }
@@ -51,6 +72,9 @@ mod tests {
     fn unknown_event_passes_through_unmapped() {
         // 未知事件原样透传给 dozerd 的 agent_state_for，那边自己会因为
         // 认不出而不改状态（spec §3：翻译层对未知事件不 panic、不拦截）。
-        assert_eq!(translate_event("SomeFutureEvent"), Some("SomeFutureEvent".to_string()));
+        assert_eq!(
+            translate_event("SomeFutureEvent"),
+            Some("SomeFutureEvent".to_string())
+        );
     }
 }

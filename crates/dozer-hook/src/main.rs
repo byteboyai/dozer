@@ -13,16 +13,30 @@ fn main() {
         Some("install") => {
             let agent = std::env::args().nth(2).unwrap_or_else(|| "claude".into());
             if agent == "opencode" {
-                std::process::exit(opencode_install::run_at(&opencode_install::plugins_dir(), true));
+                std::process::exit(opencode_install::run_at(
+                    &opencode_install::plugins_dir(),
+                    true,
+                ));
             }
-            std::process::exit(install::run_at(&install::settings_path_for(&agent), &agent, true))
+            std::process::exit(install::run_at(
+                &install::settings_path_for(&agent),
+                &agent,
+                true,
+            ))
         }
         Some("uninstall") => {
             let agent = std::env::args().nth(2).unwrap_or_else(|| "claude".into());
             if agent == "opencode" {
-                std::process::exit(opencode_install::run_at(&opencode_install::plugins_dir(), false));
+                std::process::exit(opencode_install::run_at(
+                    &opencode_install::plugins_dir(),
+                    false,
+                ));
             }
-            std::process::exit(install::run_at(&install::settings_path_for(&agent), &agent, false))
+            std::process::exit(install::run_at(
+                &install::settings_path_for(&agent),
+                &agent,
+                false,
+            ))
         }
         Some(agent_arg) => {
             let agent = parse_agent(agent_arg);
@@ -78,10 +92,7 @@ fn forward(agent: AgentKind, event_arg: Option<&str>) {
     if agent == AgentKind::Opencode
         && let Some(line) = data.get("transcript_line").filter(|v| !v.is_null())
     {
-        let cwd = data
-            .get("cwd")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let cwd = data.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
         if let Err(e) = opencode::append_transcript_line(cwd, &session_id, line) {
             eprintln!("opencode transcript 落盘失败（已忽略，不影响转发）: {e}");
         }
@@ -134,7 +145,10 @@ mod tests {
 
     #[test]
     fn resolve_event_drops_codebuddy_subagent_events() {
-        assert_eq!(resolve_event(AgentKind::Codebuddy, Some("SubagentStart")), None);
+        assert_eq!(
+            resolve_event(AgentKind::Codebuddy, Some("SubagentStart")),
+            None
+        );
     }
 
     #[test]
