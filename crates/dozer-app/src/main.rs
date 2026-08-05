@@ -33,6 +33,73 @@ use wry::WebViewBuilderExtDarwin;
 use winit::platform::macos::WindowAttributesExtMacOS;
 
 use std::process::{Command, Stdio};
+
+/// macOS 专有：把原生红黄绿交通灯在垂直方向居中到 app 自己画的 `top_bar`
+/// （默认 40pt 高）中部，而不是系统默认的 28pt 标题栏中部。去掉原生标题栏
+/// 后系统仍按 28pt 旧基准排版交通灯，导致它们贴着顶栏上沿、与 40pt 顶栏里
+/// 的 Dozer 字标/页签不对齐。差额对半即把三个灯整体下移、落入顶栏正中。
+///
+/// 放在 `WindowEvent::Resized`（含首屏显隐、全屏进出、拖拽缩放）里重设——
+/// 一次拖拽缩放会连续触发几十次 `Resized`。首次成功读到的 frame 被锁成
+/// 三个灯各自的原生基线（`BASELINE_Y`），此后每次都从基线重算绝对目标 y
+/// 再整体覆盖，不对"当前 frame"做相对减法：早先版本是相对减法
+/// （`origin.y -= offset`），错误地假设系统会在两次 `Resized` 之间把灯摆回
+/// 默认位置——实测并不总成立，导致偏移跨调用累积，且三个灯被系统"纠正"
+/// 的次数不一定相同，越拖越偏、灯与灯之间还会彼此错位。仅在
+/// `target_os = "macos"` 编译——其它平台无原生交通灯可摆。
+#[cfg(target_os = "macos")]
+fn center_traffic_lights(window: &winit::window::Window) {
+    use objc2_app_kit::{NSView, NSWindowButton};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use std::sync::OnceLock;
+
+    static BASELINE_Y: OnceLock<[f64; 3]> = OnceLock::new();
+
+    const BAND_HEIGHT: f32 = 28.0;
+    let offset = (workspace_geometry::top_bar_height() - BAND_HEIGHT) / 2.0;
+    if offset <= 0.0 {
+        return;
+    }
+
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::AppKit(ah) = handle.as_raw() else {
+        return;
+    };
+    // 安全：窗口由 winit 主线程持有且已建好；`ns_view` 是已安装进窗口的
+    // 合法 NSView 指针。只借只读引用去读/改交通灯按钮的 frame，不持有/
+    // 释放 NSView 或 NSWindow。
+    let ns_view: &NSView = unsafe { &*(ah.ns_view.as_ptr() as *mut NSView) };
+    let Some(ns_window) = ns_view.window() else {
+        return;
+    };
+
+    let buttons = [
+        ns_window.standardWindowButton(NSWindowButton::CloseButton),
+        ns_window.standardWindowButton(NSWindowButton::MiniaturizeButton),
+        ns_window.standardWindowButton(NSWindowButton::ZoomButton),
+    ];
+
+    let baseline = *BASELINE_Y.get_or_init(|| {
+        let mut ys = [0.0; 3];
+        for (slot, btn) in ys.iter_mut().zip(&buttons) {
+            if let Some(btn) = btn {
+                *slot = btn.frame().origin.y;
+            }
+        }
+        ys
+    });
+
+    for (i, btn) in buttons.into_iter().enumerate() {
+        let Some(btn) = btn else { continue };
+        // `frame`/`setFrameOrigin` 在当前 objc2 版本是安全方法；只挪 y,
+        // x 保留系统原生间距。
+        let mut origin = btn.frame().origin;
+        origin.y = baseline[i] - offset as f64;
+        btn.setFrameOrigin(origin);
+    }
+}
 use std::time::Duration;
 
 use iced_wgpu::graphics::{Shell, Viewport};
@@ -1132,6 +1199,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         // `TerminalModel` 并同步给 daemon。
                         let logical: LogicalSize<f32> = new_size.to_logical(window.scale_factor());
                         app.set_window_size(logical.width, logical.height);
+                        // 每次尺寸变化都把原生交通灯重新居中到顶栏中部——首屏
+                        // 显隐、全屏进出、拖拽缩放都会经过这里，见
+                        // `center_traffic_lights`（内部按基线幂等，重复调用安全）。
+                        center_traffic_lights(window);
                         // bounds 同步由本函数末尾的 sync_previews 统一执行
                     }
                     WindowEvent::CloseRequested => {
