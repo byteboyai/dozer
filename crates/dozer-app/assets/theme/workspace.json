@@ -137,6 +137,7 @@
     "menu_item_width": 180.0,
     "menu_gap": 8.0,
     "menu_pad_v": 6.0,
-    "menu_pad_h": 10.0
+    "menu_pad_h": 10.0,
+    "h0_sidebar_width": 248.0
   }
 }

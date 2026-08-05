@@ -59,6 +59,8 @@ struct Geometry {
     menu_pad_v: f32,
     /// 菜单项左右内边距（设计基准 10）。
     menu_pad_h: f32,
+    /// H0 项目中心左栏固定宽（设计基准 248，Figma 同值）。
+    h0_sidebar_width: f32,
 }
 
 /// `workspace.json` 顶层结构里本模块只关心的部分——`regions`/`font_sizes`
@@ -259,6 +261,11 @@ pub fn menu_pad_h() -> f32 {
     GEOMETRY.menu_pad_h * icon_size::scale()
 }
 
+/// H0 项目中心左栏固定宽（逻辑像素），已含全局 scale。
+pub fn h0_sidebar_width() -> f32 {
+    GEOMETRY.h0_sidebar_width * icon_size::scale()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,6 +300,7 @@ mod tests {
         assert_eq!(menu_gap(), 8.0);
         assert_eq!(menu_pad_v(), 6.0);
         assert_eq!(menu_pad_h(), 10.0);
+        assert_eq!(h0_sidebar_width(), 248.0);
     }
 
     #[test]

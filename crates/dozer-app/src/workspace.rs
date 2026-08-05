@@ -85,6 +85,17 @@ pub enum RightView {
     Conversations,
 }
 
+/// 四个图标栏按钮的标识,用于追踪 hover 态(图标颜色在 hover 时需变金,
+/// 而 SVG 颜色在构建时就定死、不随 `button::Status` 变化,所以得在 App
+/// 里记一个 hovered 目标,改色时按它重算)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RailButton {
+    LeftFiles,
+    LeftWeb,
+    RightAgent,
+    RightConversations,
+}
+
 /// 顶层级页面：工作区(默认,左右面板区+页签) / 首页落地页(点顶栏 Dozer 进入)。
 /// 默认 `Workspace`——程序启动照常进工作区,Home 是用户主动点击 Dozer 才进。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -375,6 +386,8 @@ pub struct ShellState {
     /// 焦点路由、终端 PTY 网格都会对着放大前的旧几何算,和 `maximize_overlay`
     /// 实际渲染的画面对不上。
     pub maximized: Option<MaximizedPane>,
+    /// 当前 hover 的图标栏按钮,语义同 `App::rail_hovered`。
+    pub rail_hovered: Option<RailButton>,
 }
 
 /// 两条图标栏与那条恒在的 `LeftRight` 分隔线之外，留给左右两个面板区的
@@ -870,6 +883,9 @@ pub enum Message {
     LeftIconSelect(LeftView),
     /// 同上,右图标栏。
     RightIconSelect(RightView),
+    /// 图标栏按钮 hover 进入/离开:进入带 `Some(id)`,离开带 `None`,
+    /// 驱动图标在 hover 时变金(见 `RailButton`)。
+    RailHover(Option<RailButton>),
     /// 点击某内容 pane 的放大按钮:已放大同一侧则还原,否则放大该侧。
     MaximizeToggle(MaximizedPane),
     /// 点击放大态背后的变暗遮罩:退出放大。
@@ -949,6 +965,9 @@ pub enum Message {
     /// 项目页签:`ProjectTabOpen` 异步完成(daemon upsert 结果 + 最近列表)。
     /// `None` = 这次打开失败,只报错、不改任何页签状态。
     ProjectTabOpened(Option<ProjectInfo>, Vec<ProjectInfo>),
+    /// H0 项目中心:`Message::TopBarHome` 发起的异步刷新完成(最近改动的文件、
+    /// 最近的对话两份列表;D4)。
+    HomeRecentsLoaded(Vec<HomeRecentFile>, Vec<HomeRecentConversation>),
     /// 项目页签:点已存在的页签 → 前台化该项目。只改"当前是哪个页签",
     /// 不结束任何会话、不改写任何 `Workspace` 的内容。
     ProjectTabSwitch(i64),
@@ -1012,6 +1031,9 @@ pub enum Message {
     ProjectTreeNewFolder(PathBuf),
     /// 项目树:菜单选"重命名"→ 进入行内编辑(参数=被改名项路径)。
     ProjectTreeRenameStart(PathBuf),
+    /// 项目树:菜单选"从磁盘重新加载"→ 重读所有已缓存目录,让树与磁盘实际
+    /// 状态保持一致(不依赖右键目标,故不带参数)。
+    ProjectTreeReloadFromDisk,
     /// 项目树:行内编辑框的键盘事件(main.rs 键盘拦截层送入,复用 AddrEvent)。
     ProjectTreeEditEvent(AddrEvent),
     /// UI 整体放大(Ctrl +)：放大/还原的全局 scale 乘一个步近因子,下一帧
@@ -1187,6 +1209,8 @@ pub struct App {
     /// 外边框的高亮态(见 `set_active_zone`/`zone_at_x`)。启动默认
     /// `Some(Right)`——终端默认聚焦(`term_focused: true`),终端在右面板区。
     active_zone: Option<ZoneSide>,
+    /// 当前 hover 的图标栏按钮(`None`=都没 hover),驱动图标 hover 变金。
+    rail_hovered: Option<RailButton>,
     /// 双击顶栏空白处待处理标记,见 `Message::TopBarDoubleClick`/
     /// `take_pending_zoom_toggle`。`App` 不持有 `winit::window::Window`
     /// 句柄,真正切换最大化态由 main.rs 轮询这个标记后调用。
@@ -1211,6 +1235,18 @@ pub struct App {
     /// 当前顶层页面(工作区 / 首页)。默认 `Workspace`;点顶栏 Dozer 切到
     /// `Home`,打开/切换项目切回 `Workspace`。
     current_page: AppPage,
+    /// H0 项目中心侧栏用的"最近项目"列表(D2)。与 `Workspace.recent_projects`
+    /// 语义相同但字段独立——避免为了 H0 牵连项目栏"未打开项目"兜底列表那条
+    /// 无关路径。`App::bootstrap()`/`Message::ProjectTabOpened` 处理函数负责
+    /// 让它跟 daemon 的 `list_projects()` 结果保持同步。
+    recent_projects: Vec<ProjectInfo>,
+    /// H0"最近的文件"卡数据(D4);`Message::TopBarHome` 时异步刷新。
+    home_recent_files: Vec<HomeRecentFile>,
+    /// H0"最近的对话"卡数据(D4);语义同上。
+    home_recent_conversations: Vec<HomeRecentConversation>,
+    /// 是否已经收到过至少一次 `HomeRecentsLoaded`——区分"还在加载"与"加载完
+    /// 但结果为空"，两张卡据此决定画"加载中…"还是空状态文案(spec §4)。
+    home_recents_loaded: bool,
 }
 
 pub struct Workspace {
@@ -2283,6 +2319,7 @@ impl App {
         // daemon 不再记"活跃项目"(P2a Task 1-3 删掉了这个概念),开着哪些
         // 项目改由 GUI 侧的 open_projects.json 记(Task 4/6 写,这里读回)。
         let known = io.client.list_projects().await.unwrap_or_default();
+        app.recent_projects = known.clone();
         let sessions = io.client.list().await.unwrap_or_default();
         let saved = open_projects::load();
         let (order, active) = restore_open_tabs(&known, &saved);
@@ -2355,6 +2392,7 @@ impl App {
             shell_layout,
             maximized: None,
             active_zone: Some(ZoneSide::Right),
+            rail_hovered: None,
             pending_zoom_toggle: false,
             window_size: workspace_geometry::initial_window_size(),
             dragging: None,
@@ -2364,6 +2402,10 @@ impl App {
             project_order: Vec::new(),
             active_project_id: None,
             current_page: AppPage::Workspace,
+            recent_projects: Vec::new(),
+            home_recent_files: Vec::new(),
+            home_recent_conversations: Vec::new(),
+            home_recents_loaded: false,
         }
     }
 
@@ -2685,6 +2727,7 @@ impl App {
             right_view: self.right_view,
             right_collapsed: self.right_collapsed,
             maximized: self.maximized,
+            rail_hovered: self.rail_hovered,
         }
     }
 
@@ -3138,7 +3181,12 @@ impl App {
             }
             Message::LeftIconSelect(v) => {
                 if self.left_view == v {
-                    self.left_collapsed = !self.left_collapsed;
+                    // 点的是已选中(激活)的图标:应退回未选中并收起左面板区。
+                    // 但若右面板区也已经收起了,左就是最后一个还开着的 zone,
+                    // 不能关——保持展开、图标维持选中态(什么都不做)。
+                    if !self.right_collapsed {
+                        self.left_collapsed = !self.left_collapsed;
+                    }
                 } else {
                     self.left_view = v;
                     self.left_collapsed = false;
@@ -3154,7 +3202,10 @@ impl App {
             }
             Message::RightIconSelect(v) => {
                 if self.right_view == v {
-                    self.right_collapsed = !self.right_collapsed;
+                    // 同上,对称:右是最后开着的 zone 时不收起。
+                    if !self.left_collapsed {
+                        self.right_collapsed = !self.right_collapsed;
+                    }
                 } else {
                     self.right_view = v;
                     self.right_collapsed = false;
@@ -3162,6 +3213,9 @@ impl App {
                 // 同 LeftIconSelect(Fix round 2 #2)。
                 self.maximized = None;
                 self.on_shell_layout_changed();
+            }
+            Message::RailHover(b) => {
+                self.rail_hovered = b;
             }
             Message::MaximizeToggle(which) => {
                 self.maximized = if self.maximized == Some(which) {
@@ -3183,6 +3237,22 @@ impl App {
             }
             Message::TopBarHome => {
                 self.current_page = AppPage::Home;
+                self.home_recents_loaded = false;
+                let projects: Vec<ProjectInfo> =
+                    self.recent_projects.iter().take(5).cloned().collect();
+                let proxy = self.proxy.clone();
+                self.handle.spawn(async move {
+                    let (files, convs) =
+                        tokio::task::spawn_blocking(move || load_home_recents(&projects))
+                            .await
+                            .unwrap_or_default();
+                    let _ = proxy.send_event(Message::HomeRecentsLoaded(files, convs));
+                });
+            }
+            Message::HomeRecentsLoaded(files, convs) => {
+                self.home_recent_files = files;
+                self.home_recent_conversations = convs;
+                self.home_recents_loaded = true;
             }
             Message::Noop => {}
             Message::DaemonError(message) => self.daemon_error = Some(message),
@@ -3377,6 +3447,7 @@ impl App {
                 });
             }
             Message::ProjectTabOpened(project, recent) => {
+                self.recent_projects = recent.clone();
                 // `None` = 这次打开失败(daemon 不通/回 `Reply::Error`)。硬性
                 // 要求:失败绝不能落进任何 `Workspace`,否则会留下"有界面、没
                 // 归属项目"的破状态,用户一点 tab 栏的"＋"就 panic
@@ -3678,6 +3749,15 @@ impl App {
                 self.context_menu = None;
                 self.with_focused_project(move |ws, _io| {
                     ws.start_tree_new(parent, TreeEditMode::NewFolder)
+                });
+            }
+            Message::ProjectTreeReloadFromDisk => {
+                self.context_menu = None;
+                self.with_focused_project(|ws, _io| {
+                    ws.tree_error = None;
+                    if let Some(tree) = &mut ws.file_tree {
+                        tree.reload_from_disk();
+                    }
                 });
             }
             Message::ProjectTreeRenameStart(path) => {
@@ -4103,29 +4183,61 @@ fn top_bar_font() -> Font {
     }
 }
 
+/// 顶栏"Dozer"页签(D1)：视觉语言与 `project_tab_item` 一致(激活态 CARD 底
+/// 及 BORDER 描边)，但没有关闭按钮、恒在最左、不参与 `project_tabs_row` 的
+/// 拥挤收窄——与当前项目页签行"＋"按钮同款的"固定位不参与收窄"处理。
+fn dozer_home_tab<'a>(
+    active: bool,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let label = row![
+        icons::view(
+            icons::IconKind::Home,
+            crate::icon_size::rail(),
+            if active { theme::CREAM } else { theme::DIM },
+        ),
+        text("Dozer")
+            .font(top_bar_font())
+            .size(workspace_font::body())
+            .color(if active { theme::CREAM } else { theme::DIM }),
+    ]
+    .spacing(6)
+    .align_y(iced_widget::core::Alignment::Center);
+
+    let select =
+        button(label)
+            .on_press(Message::TopBarHome)
+            .style(|_t: &iced_widget::Theme, _s| button::Style {
+                background: None,
+                text_color: theme::CREAM,
+                ..button::Style::default()
+            });
+
+    container(select)
+        .padding([0, 14])
+        .height(Length::Fixed(workspace_geometry::top_bar_height()))
+        .width(Length::Shrink)
+        .style(move |_t: &iced_widget::Theme| {
+            if active {
+                container::Style {
+                    background: Some(theme::CARD.into()),
+                    border: Border {
+                        color: theme::BORDER,
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..container::Style::default()
+                }
+            } else {
+                container::Style::default()
+            }
+        })
+        .into()
+}
+
 fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     // Dozer 字标做成按钮:home 图标 + 文字,点它进首页(`AppPage::Home`)。
-    let title = button(
-        row![
-            icons::view(
-                icons::IconKind::Home,
-                crate::icon_size::rail(),
-                theme::CREAM,
-            ),
-            text("Dozer")
-                .font(top_bar_font())
-                .size(workspace_font::body())
-                .color(theme::CREAM),
-        ]
-        .spacing(6)
-        .align_y(iced_widget::core::Alignment::Center),
-    )
-    .on_press(Message::TopBarHome)
-    .style(|_t: &iced_widget::Theme, _s| button::Style {
-        background: None,
-        text_color: theme::CREAM,
-        ..button::Style::default()
-    });
+    // Dozer 页签:视觉与右侧项目页签一致,恒在最左、不参与拥挤收窄(D1)。
+    let title = dozer_home_tab(app.current_page == AppPage::Home);
 
     // 页签行占满标题与右侧之间的全部空间。裁剪与翻页在 `project_tabs_row`
     // 内部做(只裁页签本身,箭头与"＋"钉在裁剪区外),这里**不能**再套一层
@@ -4204,40 +4316,160 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
         .into()
 }
 
-/// 首页落地页(点顶栏 Dozer 进入):品牌区 + 打开项目入口 + 已开项目列表。
-/// 风格沿用 ByteBoy2077 主题。打开/切换项目会自动退回工作区视图。
+/// 首页落地页(点顶栏 Dozer 进入):规格 §3(⓪c) H0 帧——左栏"我的项目"列表,
+/// 右侧"最近的文件"与"最近的对话"两卡(D1-D7)。风格沿用 ByteBoy2077 主题。
+/// 点某张最近项目卡会自动退回工作区视图(`Message::ProjectSelect`)。
 fn home_page(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let mut col = column![]
-        .spacing(16)
-        .align_x(iced_widget::core::Alignment::Center);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
 
-    // 品牌区:home 图标 + 大号 Dozer 字标 + 标语
+    let body = row![home_sidebar(app, now_ms), home_recents_column(app, now_ms)]
+        .spacing(24)
+        .height(Length::Fill);
+
+    let mut col = column![body].spacing(16).height(Length::Fill);
+    if let Some(err) = &app.daemon_error {
+        col = col.push(
+            text(format!("⚠ {err}"))
+                .size(workspace_font::body())
+                .color(theme::RED),
+        );
+    }
+
+    container(col.padding(24))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(chrome_style::background().into()),
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// H0 左栏(固定宽 `h0_sidebar_width`):品牌区、"我的项目"、搜索占位(D7)、
+/// 最近项目卡(取 `app.recent_projects` 前 5 条,D2/D3)、"更多项目"占位(D7)、
+/// "＋新增项目"(复用 `Message::ProjectTabPickFolder`)。
+/// `app.recent_projects` 为空时画"还没有项目"兜底文案,不崩(spec §4)。
+fn home_sidebar(
+    app: &App,
+    now_ms: u64,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let mut col = column![].spacing(16);
+
     col = col.push(
         row![
-            icons::view(icons::IconKind::Home, 48.0, theme::GOLD),
+            icons::view(icons::IconKind::Home, crate::icon_size::rail(), theme::GOLD),
             text("Dozer")
                 .font(top_bar_font())
-                .size((workspace_font::title() as f32) * 2.0)
+                .size(workspace_font::subtitle())
                 .color(theme::CREAM),
+            text(format!("v{}", env!("CARGO_PKG_VERSION")))
+                .size(workspace_font::caption_sm())
+                .color(theme::DIM),
         ]
-        .spacing(12)
+        .spacing(8)
         .align_y(iced_widget::core::Alignment::Center),
     );
+
     col = col.push(
-        text("甲方侧 AI 治理与验收层")
-            .size(workspace_font::subtitle())
+        text("我的项目")
+            .size(workspace_font::caption())
             .color(theme::DIM),
     );
 
-    // 打开项目入口(复用顶栏"＋"的文件夹选择落地路径)
+    // 搜索框:视觉占位,不接线(D7；precedent:顶栏 ⌘K 搜索框同款"先视觉后接线")。
+    col = col.push(
+        container(
+            row![
+                icons::view(icons::IconKind::Search, crate::icon_size::row(), theme::DIM),
+                text("搜索项目…")
+                    .size(workspace_font::body())
+                    .color(theme::DIM),
+            ]
+            .spacing(8)
+            .align_y(iced_widget::core::Alignment::Center),
+        )
+        .padding([6, 10])
+        .width(Length::Fill)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::CARD.into()),
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        }),
+    );
+
+    if app.recent_projects.is_empty() {
+        col = col.push(
+            text("还没有项目")
+                .size(workspace_font::body())
+                .color(theme::DIM),
+        );
+    } else {
+        let mut list = column![].spacing(8);
+        for p in app.recent_projects.iter().take(5) {
+            let card = button(
+                column![
+                    lh(text(p.name.clone())
+                        .size(workspace_font::body())
+                        .color(theme::CREAM)),
+                    lh(text(relative_time_text(p.last_active_ms, now_ms))
+                        .size(workspace_font::caption_sm())
+                        .color(theme::DIM)),
+                    lh(text(p.path.clone())
+                        .size(workspace_font::caption_sm())
+                        .color(theme::DIM)),
+                ]
+                .spacing(2),
+            )
+            .on_press(Message::ProjectSelect(p.id))
+            .width(Length::Fill)
+            .padding(10)
+            .style(|_t: &iced_widget::Theme, _s| button::Style {
+                background: Some(theme::CARD.into()),
+                text_color: theme::CREAM,
+                border: Border {
+                    color: theme::BORDER,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..button::Style::default()
+            });
+            list = list.push(card);
+        }
+        col = col.push(
+            Scrollable::new(list)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .direction(scrollable::Direction::Vertical(scrollable::Scrollbar::new())),
+        );
+    }
+
+    // "更多项目":视觉占位,不接线——对应的"全部项目列表"视图现在不存在,
+    // 属于后续增量(D7)。
+    col = col.push(
+        container(
+            text("更多项目")
+                .size(workspace_font::caption())
+                .color(theme::DIM),
+        )
+        .padding([6, 0]),
+    );
+
     col = col.push(
         button(
-            text("打开项目…")
+            text("＋新增项目")
                 .size(workspace_font::body())
                 .color(theme::GOLD),
         )
         .on_press(Message::ProjectTabPickFolder)
         .padding([8, 16])
+        .width(Length::Fill)
         .style(|_t: &iced_widget::Theme, _s| button::Style {
             background: Some(theme::CARD.into()),
             border: Border {
@@ -4250,64 +4482,163 @@ fn home_page(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget:
         }),
     );
 
-    // 已开项目列表:点卡片即前台化该项目并退回工作区
-    let entries = project_tab_entries(app);
-    if !entries.is_empty() {
-        let mut list = column![]
-            .spacing(8)
-            .align_x(iced_widget::core::Alignment::Center);
-        for entry in entries {
-            let mut label = row![]
-                .spacing(6)
-                .align_y(iced_widget::core::Alignment::Center);
-            if let Some((color, blinking)) = entry.dot {
-                let color = if blinking && !app.blink_on {
-                    Color { a: 0.15, ..color }
-                } else {
-                    color
-                };
-                label = label.push(text("●").size(workspace_font::caption_sm()).color(color));
-            }
-            label = label.push(
-                text(entry.name)
-                    .size(workspace_font::body())
-                    .color(theme::CREAM),
-            );
-            let card = button(label)
-                .on_press(Message::ProjectTabSwitch(entry.id))
-                .padding([8, 16])
-                .style(|_t: &iced_widget::Theme, _s| button::Style {
-                    background: Some(theme::CARD.into()),
-                    text_color: theme::CREAM,
-                    ..button::Style::default()
-                });
-            list = list.push(card);
-        }
+    container(col)
+        .width(Length::Fixed(workspace_geometry::h0_sidebar_width()))
+        .height(Length::Fill)
+        .into()
+}
+
+/// H0 右侧："最近的文件"/"最近的对话"两卡并排(D4)。
+fn home_recents_column(
+    app: &App,
+    now_ms: u64,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    row![
+        home_recent_files_card(app, now_ms),
+        home_recent_conversations_card(app, now_ms)
+    ]
+    .spacing(24)
+    .height(Length::Fill)
+    .into()
+}
+
+/// "最近的文件"卡：`app.home_recents_loaded` 为 false 时(刚点进 Home 还没等
+/// 到异步结果)画"加载中…"，避免第一帧空白跳变(spec §4)。
+fn home_recent_files_card(
+    app: &App,
+    now_ms: u64,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let mut col = column![
+        text("最近的文件")
+            .size(workspace_font::subtitle())
+            .color(theme::CREAM)
+    ]
+    .spacing(8);
+
+    if !app.home_recents_loaded {
         col = col.push(
-            text("已打开的项目")
-                .size(workspace_font::caption())
+            text("加载中…")
+                .size(workspace_font::body())
                 .color(theme::DIM),
         );
-        col = col.push(list);
-    }
-
-    if let Some(err) = &app.daemon_error {
+    } else if app.home_recent_files.is_empty() {
         col = col.push(
-            text(format!("⚠ {err}"))
+            text("暂无最近改动的文件")
                 .size(workspace_font::body())
-                .color(theme::RED),
+                .color(theme::DIM),
         );
+    } else {
+        for f in &app.home_recent_files {
+            let filename = f
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| f.path.display().to_string());
+            let row_el = row![
+                icons::view(
+                    icons::icon_for_file(&filename),
+                    crate::icon_size::row(),
+                    theme::DIM
+                ),
+                column![
+                    lh(text(filename.clone())
+                        .size(workspace_font::body())
+                        .color(theme::CREAM)),
+                    lh(text(format!(
+                        "{} · {}",
+                        f.project_name,
+                        relative_time_text(f.modified_ms, now_ms)
+                    ))
+                    .size(workspace_font::caption_sm())
+                    .color(theme::DIM)),
+                ]
+                .spacing(2),
+            ]
+            .spacing(8)
+            .align_y(iced_widget::core::Alignment::Center);
+            col = col.push(container(row_el).padding(10).width(Length::Fill).style(
+                |_t: &iced_widget::Theme| container::Style {
+                    background: Some(theme::CARD.into()),
+                    border: Border {
+                        color: theme::BORDER,
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    },
+                    ..container::Style::default()
+                },
+            ));
+        }
     }
 
-    container(col.padding(48))
-        .width(Length::Fill)
+    container(col)
+        .width(Length::FillPortion(1))
         .height(Length::Fill)
-        .align_x(iced_widget::core::Alignment::Center)
-        .align_y(iced_widget::core::Alignment::Center)
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(chrome_style::background().into()),
-            ..container::Style::default()
-        })
+        .into()
+}
+
+/// "最近的对话"卡：语义同 `home_recent_files_card`。裁剪掉"进行中/已验收
+/// vN"状态字(D4)，只显示"标题 · 项目名 · agent · 相对时间"。
+fn home_recent_conversations_card(
+    app: &App,
+    now_ms: u64,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let mut col = column![
+        text("最近的对话")
+            .size(workspace_font::subtitle())
+            .color(theme::CREAM)
+    ]
+    .spacing(8);
+
+    if !app.home_recents_loaded {
+        col = col.push(
+            text("加载中…")
+                .size(workspace_font::body())
+                .color(theme::DIM),
+        );
+    } else if app.home_recent_conversations.is_empty() {
+        col = col.push(
+            text("暂无对话记录")
+                .size(workspace_font::body())
+                .color(theme::DIM),
+        );
+    } else {
+        for c in &app.home_recent_conversations {
+            let sub = format!(
+                "{} · {} · {}",
+                c.project_name,
+                c.meta.agent.label(),
+                relative_time_text(c.meta.modified_ms, now_ms)
+            );
+            col = col.push(
+                container(
+                    column![
+                        lh(text(c.meta.title.clone())
+                            .size(workspace_font::body())
+                            .color(theme::CREAM)),
+                        lh(text(sub)
+                            .size(workspace_font::caption_sm())
+                            .color(theme::DIM)),
+                    ]
+                    .spacing(4),
+                )
+                .padding(10)
+                .width(Length::Fill)
+                .style(|_t: &iced_widget::Theme| container::Style {
+                    background: Some(theme::CARD.into()),
+                    border: Border {
+                        color: theme::BORDER,
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    },
+                    ..container::Style::default()
+                }),
+            );
+        }
+    }
+
+    container(col)
+        .width(Length::FillPortion(1))
+        .height(Length::Fill)
         .into()
 }
 
@@ -4376,11 +4707,7 @@ fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_
             default_w
         } else {
             let fit = avail / n as f32;
-            if fit >= default_w {
-                default_w
-            } else {
-                fit
-            }
+            if fit >= default_w { default_w } else { fit }
         };
         let per_tab = per_tab.max(0.0);
 
@@ -4747,13 +5074,21 @@ fn review_content_pane(
         .into()
 }
 
-/// 单个图标栏按钮：32x32 圆角正方形，hover 显亮色背景，选中态金色图标+外框。
+/// 单个图标栏按钮：圆角正方形背景常驻,hover 图标变金(无金框),选中图标
+/// 变金且带金色外框。
 fn rail_icon_button<'a>(
     icon: icons::IconKind,
     active: bool,
+    hovered: bool,
     msg: Message,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let color = if active { theme::GOLD } else { theme::DIM };
+    // 图标颜色:选中或 hover 时金色,否则 DIM。SVG 颜色构建时定死、不吃
+    // `button::Status`,所以 hover 态靠 `hovered` 参数从 App 算进来。
+    let color = if active || hovered {
+        theme::GOLD
+    } else {
+        theme::DIM
+    };
     let inner = container(icons::view(icon, crate::icon_size::rail(), color))
         .width(Length::Fill)
         .height(Length::Fill)
@@ -4772,32 +5107,20 @@ fn rail_icon_button<'a>(
         .width(Length::Fixed(crate::workspace_geometry::rail_button_size()))
         .height(Length::Fixed(crate::workspace_geometry::rail_button_size()))
         .padding(0)
-        .style(move |_t: &iced_widget::Theme, status: button::Status| {
-            // `active` 先判:选中态不管 status 是 Active/Hovered/Pressed 都要
-            // 保住金色边框,不能让 iced 的交互态(悬停/按下)盖过咱们的选中态
-            // ——否则悬停在当前选中的图标上时,金色边框会被 Hovered 分支
-            // 短暂顶掉(先前的 bug:guard 只挂在 Status::Active 这一支上)。
-            if active {
-                return button::Style {
-                    background: Some(theme::CARD.into()),
-                    border: Border {
-                        color: theme::GOLD,
-                        ..base_border
+        .style(move |_t: &iced_widget::Theme, _status: button::Status| {
+            // 圆角正方形背景常驻(`CARD`);金色外框只在选中态出现,hover
+            // 不放金框——所以样式完全由 `active` 决定,与交互态无关。
+            button::Style {
+                background: Some(theme::CARD.into()),
+                border: Border {
+                    color: if active {
+                        theme::GOLD
+                    } else {
+                        Color::TRANSPARENT
                     },
-                    ..button::Style::default()
-                };
-            }
-            match status {
-                button::Status::Hovered | button::Status::Pressed => button::Style {
-                    background: Some(theme::CARD.into()),
-                    border: base_border,
-                    ..button::Style::default()
+                    ..base_border
                 },
-                _ => button::Style {
-                    background: None,
-                    border: base_border,
-                    ..button::Style::default()
-                },
+                ..button::Style::default()
             }
         })
         .into()
@@ -4806,17 +5129,27 @@ fn rail_icon_button<'a>(
 /// 左图标栏:文件列表 / Web 两个图标,点已激活的那个即收起左面板区。
 fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = chrome_style::left_icon_rail();
+    // 视觉"选中"= 该视图激活 **且**左面板区展开。点已选中的图标会收起面板区,
+    // 此时图标要退回未选中态(见 `LeftIconSelect`),所以 `active` 得带上
+    // `!left_collapsed`。
+    let left_open = !app.left_collapsed;
     let content = column![
-        rail_icon_button(
+        MouseArea::new(rail_icon_button(
             icons::IconKind::Folder,
-            app.left_view == LeftView::Files,
+            app.left_view == LeftView::Files && left_open,
+            app.rail_hovered == Some(RailButton::LeftFiles),
             Message::LeftIconSelect(LeftView::Files),
-        ),
-        rail_icon_button(
+        ))
+        .on_enter(Message::RailHover(Some(RailButton::LeftFiles)))
+        .on_exit(Message::RailHover(None)),
+        MouseArea::new(rail_icon_button(
             icons::IconKind::Globe,
-            app.left_view == LeftView::Web,
+            app.left_view == LeftView::Web && left_open,
+            app.rail_hovered == Some(RailButton::LeftWeb),
             Message::LeftIconSelect(LeftView::Web),
-        ),
+        ))
+        .on_enter(Message::RailHover(Some(RailButton::LeftWeb)))
+        .on_exit(Message::RailHover(None)),
     ]
     .spacing(region.gap)
     .padding(region.padding);
@@ -4835,17 +5168,25 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_wi
 /// 右图标栏:Agent / 对话两个图标,语义同 `left_icon_rail`。
 fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = chrome_style::right_icon_rail();
+    // 同 `left_icon_rail`:视觉"选中"需右面板区展开。
+    let right_open = !app.right_collapsed;
     let content = column![
-        rail_icon_button(
+        MouseArea::new(rail_icon_button(
             icons::IconKind::Bot,
-            app.right_view == RightView::Agent,
+            app.right_view == RightView::Agent && right_open,
+            app.rail_hovered == Some(RailButton::RightAgent),
             Message::RightIconSelect(RightView::Agent),
-        ),
-        rail_icon_button(
+        ))
+        .on_enter(Message::RailHover(Some(RailButton::RightAgent)))
+        .on_exit(Message::RailHover(None)),
+        MouseArea::new(rail_icon_button(
             icons::IconKind::MessageSquare,
-            app.right_view == RightView::Conversations,
+            app.right_view == RightView::Conversations && right_open,
+            app.rail_hovered == Some(RailButton::RightConversations),
             Message::RightIconSelect(RightView::Conversations),
-        ),
+        ))
+        .on_enter(Message::RailHover(Some(RailButton::RightConversations)))
+        .on_exit(Message::RailHover(None)),
     ]
     .spacing(region.gap)
     .padding(region.padding);
@@ -6097,6 +6438,11 @@ fn context_menu_popup<'a>(
         "在 Finder 中打开",
         Message::ProjectTreeRevealInFinder(menu.target.clone()),
     ));
+    items.push(menu_item(
+        icons::IconKind::RefreshCw,
+        "从磁盘重新加载",
+        Message::ProjectTreeReloadFromDisk,
+    ));
 
     let region = chrome_style::context_menu();
     let list = container(column(items).spacing(region.gap))
@@ -6350,9 +6696,12 @@ fn banner_text(pending: bool) -> Option<&'static str> {
 }
 
 /// 对话副行文案：`<agent> · <相对时间> · <规模>`（P1j）。
-fn conversation_sub(agent: &str, modified_ms: u64, size_bytes: u64, now_ms: u64) -> String {
+/// 相对时间文案：刚刚/N 分钟前/N 小时前/N 天前（D5，从 `conversation_sub`
+/// 抽出为独立纯函数）。H0 项目卡"活跃时间"、文件卡、对话卡三处复用，
+/// 不要三份重复 switch。
+fn relative_time_text(modified_ms: u64, now_ms: u64) -> String {
     let ago = now_ms.saturating_sub(modified_ms) / 1000; // 秒
-    let when = if ago < 60 {
+    if ago < 60 {
         "刚刚".to_string()
     } else if ago < 3600 {
         format!("{} 分钟前", ago / 60)
@@ -6360,13 +6709,80 @@ fn conversation_sub(agent: &str, modified_ms: u64, size_bytes: u64, now_ms: u64)
         format!("{} 小时前", ago / 3600)
     } else {
         format!("{} 天前", ago / 86400)
-    };
+    }
+}
+
+/// 对话副行文案：`<agent> · <相对时间> · <规模>`（P1j）。
+fn conversation_sub(agent: &str, modified_ms: u64, size_bytes: u64, now_ms: u64) -> String {
+    let when = relative_time_text(modified_ms, now_ms);
     let size = if size_bytes >= 1024 * 1024 {
         format!("{:.1}MB", size_bytes as f64 / (1024.0 * 1024.0))
     } else {
         format!("{}KB", (size_bytes / 1024).max(1))
     };
     format!("{agent} · {when} · {size}")
+}
+
+/// H0"最近的文件"卡一行(跨项目合并前的中间表示；D4)。`Message::
+/// HomeRecentsLoaded` 的载荷用到它，因此至少是 `pub(crate)`(见 `private_interfaces`)。
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct HomeRecentFile {
+    path: PathBuf,
+    project_name: String,
+    modified_ms: u64,
+}
+
+/// H0"最近的对话"卡一行；语义同上。
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct HomeRecentConversation {
+    project_name: String,
+    meta: ConversationMeta,
+}
+
+/// D4 纯 IO 内核：对给定项目列表分别取"最近改动的文件"(git 改动/未跟踪 +
+/// fs mtime)与"最近的对话"(三个 agent 来源已聚合、按 mtime 倒序)，跨项目
+/// 合并后各自按时间倒序，取前 4 条 / 前 3 条(对齐 Figma 卡片行数)。
+///
+/// 必须在 `spawn_blocking` 里跑，不能在 UI 线程直呼——内部既有阻塞 git
+/// 子进程调用，也有阻塞文件系统调用。签名固定(`&[ProjectInfo]` 输入，两个
+/// `Vec` 输出)方便 headless 单测：不需要 daemon 连接或 winit `EventLoopProxy`。
+fn load_home_recents(
+    projects: &[ProjectInfo],
+) -> (Vec<HomeRecentFile>, Vec<HomeRecentConversation>) {
+    let mut files: Vec<HomeRecentFile> = Vec::new();
+    let mut convs: Vec<HomeRecentConversation> = Vec::new();
+    for p in projects {
+        let cwd = PathBuf::from(&p.path);
+        if let Some(repo) = delivery::repo_root(&cwd) {
+            for (path, _status) in delivery::file_statuses(&repo) {
+                let Ok(meta) = std::fs::metadata(&path) else {
+                    continue; // 路径已在磁盘消失(用户手动删了),静默跳过(spec §4)
+                };
+                let modified_ms = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                files.push(HomeRecentFile {
+                    path,
+                    project_name: p.name.clone(),
+                    modified_ms,
+                });
+            }
+        }
+        for meta in conversation::list_all_conversations(&cwd) {
+            convs.push(HomeRecentConversation {
+                project_name: p.name.clone(),
+                meta,
+            });
+        }
+    }
+    files.sort_by_key(|f| std::cmp::Reverse(f.modified_ms));
+    files.truncate(4);
+    convs.sort_by_key(|c| std::cmp::Reverse(c.meta.modified_ms));
+    convs.truncate(3);
+    (files, convs)
 }
 
 /// AI 回合折叠行文案（P1i）：过程 = thinking + N 工具。
@@ -7000,6 +7416,7 @@ mod tests {
             right_view: RightView::Agent,
             right_collapsed: false,
             maximized: None,
+            rail_hovered: None,
         }
     }
 
@@ -7520,6 +7937,92 @@ mod tests {
         assert!(s.ends_with("· 78KB"), "含规模: {s}");
         let s2 = conversation_sub("claude", 1000, 8 * 1024 * 1024, 1000);
         assert!(s2.ends_with("· 8.0MB"), "MB 规模: {s2}");
+    }
+
+    #[test]
+    fn relative_time_text_boundaries() {
+        assert_eq!(relative_time_text(1000, 1000), "刚刚");
+        assert_eq!(relative_time_text(0, 59_000), "刚刚");
+        assert_eq!(relative_time_text(0, 60_000), "1 分钟前");
+        assert_eq!(relative_time_text(0, 3_599_000), "59 分钟前");
+        assert_eq!(relative_time_text(0, 3_600_000), "1 小时前");
+        assert_eq!(relative_time_text(0, 86_399_000), "23 小时前");
+        assert_eq!(relative_time_text(0, 86_400_000), "1 天前");
+    }
+
+    #[test]
+    fn load_home_recents_empty_input_returns_empty_vecs() {
+        let (files, convs) = load_home_recents(&[]);
+        assert!(files.is_empty());
+        assert!(convs.is_empty());
+    }
+
+    #[test]
+    fn load_home_recents_merges_and_sorts_across_projects() {
+        let proj_a = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(proj_a.path())
+            .status()
+            .unwrap();
+        std::fs::write(proj_a.path().join("a.txt"), "changed").unwrap();
+
+        let proj_b = tempfile::tempdir().unwrap(); // 非 git 目录,没有改动可报告
+
+        let projects = vec![
+            ProjectInfo {
+                id: 1,
+                path: proj_a.path().to_string_lossy().into_owned(),
+                name: "proj-a".into(),
+                last_active_ms: 0,
+            },
+            ProjectInfo {
+                id: 2,
+                path: proj_b.path().to_string_lossy().into_owned(),
+                name: "proj-b".into(),
+                last_active_ms: 0,
+            },
+        ];
+
+        let (files, convs) = load_home_recents(&projects);
+        assert_eq!(files.len(), 1, "只有项目 A(git repo)贡献一条改动文件");
+        assert_eq!(files[0].project_name, "proj-a");
+        assert!(files[0].path.ends_with("a.txt"));
+        // 这里不额外造一个带假 Claude 对话目录的项目去断言"合并进 convs"：
+        // `conversation::list_all_conversations` 内部读真实 `HOME` 环境变量
+        // (`conversation.rs::home_dir`)，没有注入点；`conversation.rs` 自己的
+        // 测试也因为同样原因(cargo test 多线程、mutate HOME 不安全)绕开了
+        // 真实入口，转而在 `project_dir_in` 这一层验证目录拼接+合并排序(见
+        // `list_all_conversations_merges_three_dirs_sorted_by_mtime`)。三个
+        // agent 目录的合并/排序逻辑已经在那条测试里覆盖，这里只需确认
+        // "没有可达对话目录时 convs 为空、不 panic"这一层 `load_home_recents`
+        // 自己的收尾逻辑。
+        assert!(convs.is_empty(), "两个项目都没有可达的 agent 对话目录");
+    }
+
+    #[test]
+    fn load_home_recents_truncates_files_to_top_4() {
+        let proj = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(proj.path())
+            .status()
+            .unwrap();
+        for i in 0..6 {
+            std::fs::write(proj.path().join(format!("f{i}.txt")), "x").unwrap();
+        }
+        let projects = vec![ProjectInfo {
+            id: 1,
+            path: proj.path().to_string_lossy().into_owned(),
+            name: "proj".into(),
+            last_active_ms: 0,
+        }];
+        let (files, _convs) = load_home_recents(&projects);
+        assert_eq!(
+            files.len(),
+            4,
+            "跨项目合并后只取前 4 条(对齐 Figma 卡片行数)"
+        );
     }
 
     #[test]
