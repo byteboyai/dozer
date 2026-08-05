@@ -465,17 +465,22 @@ fn apply_column_drag(
                 return state.layout;
             }
             let right_x0 = window_width - workspace_geometry::icon_rail_width() - right_w;
+            // `ratio` 是"配对里渲染在左边那块"的宽度占比(拖拽点左侧的宽度
+            // 除以配对总宽)——这块现在是终端/审阅,不是 agent_split/
+            // conversations_split 存的"列表侧(Agent 列表/对话列表)占比"。
+            // 两者互补(列表侧渲染在右边),所以要写 1.0-ratio,不能直接写
+            // ratio,否则拖拽方向会反(见 `right_panel_area` 顶部注释)。
             let ratio = ((logical_x - right_x0) / pair_w).clamp(
                 workspace_geometry::min_split_ratio(),
                 workspace_geometry::max_split_ratio(),
             );
             match state.right_view {
                 RightView::Agent => ShellLayout {
-                    agent_split: ratio,
+                    agent_split: 1.0 - ratio,
                     ..state.layout
                 },
                 RightView::Conversations => ShellLayout {
-                    conversations_split: ratio,
+                    conversations_split: 1.0 - ratio,
                     ..state.layout
                 },
             }
@@ -4789,14 +4794,22 @@ fn right_panel_area<'a>(
     if app.right_collapsed {
         return column![].into();
     }
+    // 两个配对都是"内容侧渲染在左、列表侧渲染在右"——终端在左/Agent 列表
+    // 在右,审阅在左/对话列表在右。`agent_split`/`conversations_split` 仍是
+    // "列表侧(Agent 列表/对话列表)占右面板区宽度的比例"这个原有语义不变
+    // (`terminal_pane_pixel_size` 等既有几何公式全靠它,不能跟着挪);只是
+    // `content_portion`(∝ 1-split)现在给左边那块、`list_portion`(∝ split)
+    // 给右边那块,单纯是 `row!` 里两个 pane 的先后顺序换了。`apply_column_drag`
+    // 的 `RightPairSplit` 分支要相应把算出来的 ratio 取反再写回,否则拖拽
+    // 方向感会反过来(见该函数注释)。
     let inner: Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> =
         match app.right_view {
             RightView::Agent => {
                 let (list_portion, content_portion) = split_portions(app.shell_layout.agent_split);
                 row![
-                    agent_list_pane(ws, Length::FillPortion(list_portion)),
-                    divider_bar(Divider::RightPairSplit),
                     terminal_pane(app, ws, Length::FillPortion(content_portion)),
+                    divider_bar(Divider::RightPairSplit),
+                    agent_list_pane(ws, Length::FillPortion(list_portion)),
                 ]
                 .width(Length::Fill)
                 .into()
@@ -4805,9 +4818,9 @@ fn right_panel_area<'a>(
                 let (list_portion, content_portion) =
                     split_portions(app.shell_layout.conversations_split);
                 row![
-                    conversation_list_pane(ws, Length::FillPortion(list_portion)),
-                    divider_bar(Divider::RightPairSplit),
                     review_content_pane(ws, Length::FillPortion(content_portion)),
+                    divider_bar(Divider::RightPairSplit),
+                    conversation_list_pane(ws, Length::FillPortion(list_portion)),
                 ]
                 .width(Length::Fill)
                 .into()
@@ -7400,6 +7413,40 @@ mod tests {
             l.conversations_split
         );
         assert_eq!(l.agent_split, conversations.layout.agent_split);
+    }
+
+    /// 中点(0.5)拖到哪都是 0.5,取反前后数值一样,不能证明真的取反了。
+    /// 这里挑一个偏离中点的落点单独验证方向:配对渲染顺序是"终端/审阅在
+    /// 左、Agent 列表/对话列表在右"(见 `right_panel_area`),拖拽点落在
+    /// 离左边缘 1/4 处 → 左边(终端/审阅)只分到 25% 宽 → 右边(列表侧,
+    /// `agent_split`/`conversations_split` 存的量)理应分到 75%,而不是 25%。
+    #[test]
+    fn right_pair_split_ratio_is_inverted_for_swapped_visual_order() {
+        // 同上一个测试:右面板区左边缘 x=692,配对内容宽=696。落点在左边缘
+        // 往右 174(=696/4)处,即左侧(终端)拿到 1/4 宽。
+        let agent = test_state();
+        let l = apply_column_drag(agent, Divider::RightPairSplit, 1440.0, 692.0 + 174.0);
+        assert!(
+            (l.agent_split - 0.75).abs() < 0.001,
+            "左侧(终端)占 1/4 时,右侧(Agent 列表)该占 3/4,实得 {}",
+            l.agent_split
+        );
+
+        let conversations = ShellState {
+            right_view: RightView::Conversations,
+            ..test_state()
+        };
+        let l = apply_column_drag(
+            conversations,
+            Divider::RightPairSplit,
+            1440.0,
+            692.0 + 174.0,
+        );
+        assert!(
+            (l.conversations_split - 0.75).abs() < 0.001,
+            "左侧(审阅)占 1/4 时,右侧(对话列表)该占 3/4,实得 {}",
+            l.conversations_split
+        );
     }
 
     #[test]
