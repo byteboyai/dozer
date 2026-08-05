@@ -98,6 +98,22 @@ impl FileTree {
         self.children.insert(dir.to_path_buf(), read_children(dir));
     }
 
+    /// 从磁盘整体重新加载:重读每一个已缓存过的目录(含已收起的——`toggle`
+    /// 展开时若缓存已存在不会重读,收起目录的缓存不刷新就会在重新展开时
+    /// 冒出陈旧内容),目录若已在磁盘上消失则连同其展开态一并丢弃。
+    /// 不重建整棵树(不清 `expanded`),用户当前展开的层级保持不变。
+    pub fn reload_from_disk(&mut self) {
+        let dirs: Vec<PathBuf> = self.children.keys().cloned().collect();
+        for dir in dirs {
+            if dir.is_dir() {
+                self.children.insert(dir.clone(), read_children(&dir));
+            } else {
+                self.children.remove(&dir);
+                self.expanded.remove(&dir);
+            }
+        }
+    }
+
     /// 确保目录处于展开态（新建文件/文件夹前调用，让新项有可见位置）。
     /// 与 `toggle` 不同：无条件标记 expanded，哪怕目录当前是空的——
     /// 新建文件/文件夹的落点必须可见，即便"可见"只是一个空的展开态
@@ -227,6 +243,30 @@ mod tests {
         t.refresh(&d.path().join("src"));
         let after: Vec<_> = t.visible_rows().iter().map(|r| r.name.clone()).collect();
         assert!(after.contains(&"lib.rs".to_string()));
+    }
+
+    #[test]
+    fn reload_from_disk_refreshes_collapsed_dir_cache() {
+        let d = mktree();
+        let mut t = FileTree::new(d.path().to_path_buf());
+        t.toggle(&d.path().join("src")); // 展开并缓存(此时只有 main.rs)
+        std::fs::write(d.path().join("src/lib.rs"), "").unwrap();
+        t.toggle(&d.path().join("src")); // 收起:缓存不会因收起而刷新
+        t.reload_from_disk();
+        t.toggle(&d.path().join("src")); // 再展开:命中缓存,应已是重载后的新内容
+        let names: Vec<_> = t.visible_rows().iter().map(|r| r.name.clone()).collect();
+        assert!(names.contains(&"lib.rs".to_string()));
+    }
+
+    #[test]
+    fn reload_from_disk_drops_deleted_dir_and_its_expanded_state() {
+        let d = mktree();
+        let mut t = FileTree::new(d.path().to_path_buf());
+        t.toggle(&d.path().join("src"));
+        std::fs::remove_dir_all(d.path().join("src")).unwrap();
+        t.reload_from_disk();
+        let rows = t.visible_rows();
+        assert!(rows.iter().all(|r| r.name != "src"));
     }
 
     #[test]
