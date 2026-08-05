@@ -41,19 +41,30 @@ use std::process::{Command, Stdio};
 ///
 /// 放在 `WindowEvent::Resized`（含首屏显隐、全屏进出、拖拽缩放）里重设——
 /// 一次拖拽缩放会连续触发几十次 `Resized`。首次成功读到的 frame 被锁成
-/// 三个灯各自的原生基线（`BASELINE_Y`），此后每次都从基线重算绝对目标 y
-/// 再整体覆盖，不对"当前 frame"做相对减法：早先版本是相对减法
-/// （`origin.y -= offset`），错误地假设系统会在两次 `Resized` 之间把灯摆回
-/// 默认位置——实测并不总成立，导致偏移跨调用累积，且三个灯被系统"纠正"
-/// 的次数不一定相同，越拖越偏、灯与灯之间还会彼此错位。仅在
-/// `target_os = "macos"` 编译——其它平台无原生交通灯可摆。
+/// 三个灯各自的原生基线，此后每次都从基线重算绝对目标 y 再整体覆盖，不对
+/// "当前 frame"做相对减法：早先版本是相对减法（`origin.y -= offset`），
+/// 错误地假设系统会在两次 `Resized` 之间把灯摆回默认位置——实测并不总成立，
+/// 导致偏移跨调用累积，且三个灯被系统"纠正"的次数不一定相同，越拖越偏、
+/// 灯与灯之间还会彼此错位。
+///
+/// 基线按"是否最大化"分两条（`BASELINE_NORMAL`/`BASELINE_MAXIMIZED`），各自
+/// 第一次遇到该状态时读一次原生位置——不能只留一条：普通窗口态与最大化态
+/// (尤其是铺满整个屏幕宽度、贴着刘海屏摄像头挖孔的情形)系统原生摆放交通灯
+/// 的 y 并不是同一个值。只用一条基线时，谁先触发第一次 `Resized` 谁就把
+/// 基线定死；若这次启动窗口一开始就是（上次退出前记住的）铺满屏幕尺寸，
+/// 基线会按最大化态的位置锁定，之后窗口变回普通大小时又被强行按这条错的
+/// 基线摆回去——反之，若基线来自普通态，窗口后来被最大化时同样会被摆错，
+/// 错到超出可见/可点的标题栏范围就直接看不见了（用户反馈"最大化后交通灯
+/// 消失"的根因）。仅在 `target_os = "macos"` 编译——其它平台无原生交通灯
+/// 可摆。
 #[cfg(target_os = "macos")]
 fn center_traffic_lights(window: &winit::window::Window) {
     use objc2_app_kit::{NSView, NSWindowButton};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use std::sync::OnceLock;
 
-    static BASELINE_Y: OnceLock<[f64; 3]> = OnceLock::new();
+    static BASELINE_NORMAL: OnceLock<[f64; 3]> = OnceLock::new();
+    static BASELINE_MAXIMIZED: OnceLock<[f64; 3]> = OnceLock::new();
 
     const BAND_HEIGHT: f32 = 28.0;
     let offset = (workspace_geometry::top_bar_height() - BAND_HEIGHT) / 2.0;
@@ -81,7 +92,12 @@ fn center_traffic_lights(window: &winit::window::Window) {
         ns_window.standardWindowButton(NSWindowButton::ZoomButton),
     ];
 
-    let baseline = *BASELINE_Y.get_or_init(|| {
+    let baseline_cell = if window.is_maximized() {
+        &BASELINE_MAXIMIZED
+    } else {
+        &BASELINE_NORMAL
+    };
+    let baseline = *baseline_cell.get_or_init(|| {
         let mut ys = [0.0; 3];
         for (slot, btn) in ys.iter_mut().zip(&buttons) {
             if let Some(btn) = btn {
