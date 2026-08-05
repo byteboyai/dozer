@@ -33,6 +33,7 @@ pub enum IconKind {
     MessageSquare,
     Maximize,
     Home,
+    RefreshCw,
 }
 
 impl IconKind {
@@ -62,6 +63,7 @@ impl IconKind {
             IconKind::MessageSquare => include_bytes!("../assets/icons/message-square.svg"),
             IconKind::Maximize => include_bytes!("../assets/icons/maximize-2.svg"),
             IconKind::Home => include_bytes!("../assets/icons/home.svg"),
+            IconKind::RefreshCw => include_bytes!("../assets/icons/refresh-cw.svg"),
         }
     }
 }
