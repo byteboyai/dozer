@@ -43,11 +43,11 @@ mod tests {
     use super::*;
 
     /// 防漂移锚：终端字号必须和 RustRover 编辑器对齐——JetBrains Mono
-    /// 14px、行距 1.0。改前是硬编码 15.0 / 1.4。
+    /// 14px、行距 1.2。改前是硬编码 15.0 / 1.4。
     #[test]
     fn matches_rustrover_editor_font() {
         assert_eq!(size(), 14.0);
-        assert_eq!(line_height_factor(), 1.0);
+        assert_eq!(line_height_factor(), 1.2);
     }
 
     #[test]

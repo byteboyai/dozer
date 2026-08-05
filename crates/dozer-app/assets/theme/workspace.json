@@ -1,4 +1,5 @@
 {
+  "background": "#fbe6ba",
   "regions": {
     "top_bar": {
       "background": "#0e1620",
@@ -22,7 +23,7 @@
       "background": "#0a0e16",
       "border": null,
       "padding": 8,
-      "gap": 4
+      "gap": 2
     },
     "preview_pane": {
       "background": "#0a0e16",
@@ -77,16 +78,18 @@
       "gap": 2
     },
     "left_zone": {
-      "background": null,
-      "border": { "color": "BORDER", "width": 1.0, "radius": 8.0 },
+      "background": "#12202a",
+      "border": { "color": "BORDER", "width": 0.0, "radius": 8.0 },
       "padding": 1,
-      "gap": 0
+      "gap": 0,
+      "margin": [6, 0, 6, 6]
     },
     "right_zone": {
-      "background": null,
-      "border": { "color": "BORDER", "width": 1.0, "radius": 8.0 },
+      "background": "#12202a",
+      "border": { "color": "BORDER", "width": 0.0, "radius": 8.0 },
       "padding": 1,
-      "gap": 0
+      "gap": 0,
+      "margin": [6, 6, 6, 0]
     }
   },
   "font_sizes": {
@@ -99,6 +102,13 @@
     "subtitle": 14,
     "title": 15
   },
+  "icon_sizes": {
+    "rail": 16.0,
+    "row": 14.0,
+    "chevron": 12.0,
+    "tree_row_gap": 2.0,
+    "scale": 1.0
+  },
   "geometry": {
     "icon_rail_width": 44.0,
     "divider_width": 8.0,
@@ -108,7 +118,7 @@
     "initial_window_width": 1440.0,
     "initial_window_height": 900.0,
     "min_window_height": 480.0,
-    "top_bar_height": 44.0,
+    "top_bar_height": 40.0,
     "status_bar_height": 26.0,
     "context_menu_width": 200.0,
     "context_menu_height": 280.0,
@@ -118,7 +128,14 @@
     "browser_chrome_top_px": 72.0,
     "maximize_overlay_padding": 40.0,
     "project_tab_gap": 4.0,
-    "project_tab_avail_px": 420.0,
-    "tab_bar_avail_px": 360.0
+    "project_tab_max_width": 200.0,
+    "tab_bar_avail_px": 360.0,
+    "rail_button_size": 32.0,
+    "tab_button_size": 24.0,
+    "maximize_button_size": 24.0,
+    "menu_item_width": 180.0,
+    "menu_gap": 8.0,
+    "menu_pad_v": 6.0,
+    "menu_pad_h": 10.0
   }
 }

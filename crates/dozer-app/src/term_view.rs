@@ -20,6 +20,7 @@
 //!
 //! 光标最后画：先补一块实心格（focused：CREAM 底 + TERM_BG 字；未聚焦：
 //! CREAM 描边），覆盖在 run 字形之上，天然处理"光标落在任意 run 中间"。
+use crate::icon_size;
 use crate::term_model::{Cell, TerminalModel};
 use crate::terminal_font;
 use crate::theme;
@@ -30,13 +31,19 @@ use iced_widget::core::mouse::{self, ScrollDelta};
 use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Color, Element, Event, Font, Length, Pixels, Point, Rectangle, Size};
 
-/// 等宽字体单元格宽度 ≈ 0.6em（`terminal_font::size()` 驱动）。
-fn cell_width() -> f32 {
-    terminal_font::size() * 0.6
+/// 终端字号（逻辑像素），已乘全局 UI scale——Ctrl + / Ctrl - 缩放时
+/// 终端字符与图标/控件一起放大，而不是卡在设计基准 14px。grid 换算与
+/// 实际绘制都走这里，二者始终一致。
+fn font_size() -> f32 {
+    terminal_font::size() * icon_size::scale()
 }
-/// 行高（逻辑像素），供 `grid_size` 换算用（`terminal_font::*` 驱动）。
+/// 等宽字体单元格宽度 ≈ 0.6em（`font_size()` 驱动，含 scale）。
+fn cell_width() -> f32 {
+    font_size() * 0.6
+}
+/// 行高（逻辑像素），供 `grid_size` 换算用（`font_size()` 驱动，含 scale）。
 fn line_height_px() -> f32 {
-    terminal_font::size() * terminal_font::line_height_factor()
+    font_size() * terminal_font::line_height_factor()
 }
 
 /// 终端 pane 的像素尺寸 → 网格尺寸 `(cols, rows)`，向下取整（不足一格的
@@ -55,10 +62,10 @@ fn cell_font(bold: bool) -> Font {
     if bold {
         Font {
             weight: Weight::Bold,
-            ..Font::MONOSPACE
+            ..crate::fonts::code_font()
         }
     } else {
-        Font::MONOSPACE
+        crate::fonts::code_font()
     }
 }
 
@@ -256,7 +263,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
                     content: run.text,
                     position: Point::new(x, y),
                     color: rgb(run.fg),
-                    size: Pixels(terminal_font::size()),
+                    size: Pixels(font_size()),
                     line_height: LineHeight::Absolute(Pixels(line_height_px())),
                     font: cell_font(run.bold),
                     ..canvas::Text::default()
@@ -285,7 +292,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
                         content: cell.ch.to_string(),
                         position: Point::new(x, y),
                         color: theme::TERM_BG,
-                        size: Pixels(terminal_font::size()),
+                        size: Pixels(font_size()),
                         line_height: LineHeight::Absolute(Pixels(line_height_px())),
                         font: cell_font(cell.bold),
                         ..canvas::Text::default()
@@ -404,10 +411,10 @@ mod tests {
 
     #[test]
     fn grid_size_from_pixels() {
-        // 字号 14px 等宽：单元格宽 ≈ 8.4px（0.6em），行高 ≈ 14.0px（1.0）
+        // 字号 14px 等宽：单元格宽 ≈ 8.4px（0.6em），行高 ≈ 16.8px（1.2，对齐 RustRover）
         let (cols, rows) = grid_size(780.0, 546.0);
         assert!((88..=96).contains(&cols), "cols={cols}");
-        assert!((36..=42).contains(&rows), "rows={rows}");
+        assert!((28..=38).contains(&rows), "rows={rows}");
     }
 
     #[test]

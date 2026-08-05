@@ -6,7 +6,8 @@
 //! 互不干扰,合并成一个文件是为了"workspace 相关配置都在一处"。
 //!
 //! 颜色字段是字符串,支持两种写法:`theme.rs` 现成的令牌名(如
-//! `"BORDER"`),或 `#RRGGBB` / `#RRGGBBAA` 字面量十六进制值——后者让
+//! `"BORDER"`),或 `#RGB` / `#RGBA` / `#RRGGBB` / `#RRGGBBAA` 字面量十六进制
+//! 值(3/4 位按 CSS 简写每位复制成两位,`#ccc` = `#cccccc`)——后者让
 //! `background` 这类用户最常自定义的字段脱离令牌表,直接改 JSON 就能
 //! 调色,不必碰 Rust 代码。解析失败(格式错误、非法十六进制、未知颜色
 //! 令牌名)直接 panic:这是编译期就该发现的开发期配置错误,不是需要
@@ -14,6 +15,10 @@
 //!
 //! 只覆盖区域**外层容器**的样式;区域内部控件的 active/hover/pressed
 //! 等交互态样式(如 `rail_icon_button`)不在这里,留在 Rust 代码里。
+//!
+//! `resolve_region` 会把每个区域的 `padding`/`gap` 乘过全局 scale，因此
+//! 改 `icon_size::scale()` 时区域内部间距也等比放大，与图标/字号同步。
+use crate::icon_size;
 use crate::theme;
 use iced_widget::core::{Border, Color, Padding};
 use serde::Deserialize;
@@ -59,6 +64,10 @@ struct RawRegion {
     border: Option<RawBorder>,
     padding: RawPadding,
     gap: f32,
+    /// 区域整体相对外围容器(顶栏/窗口底/相邻面板)的外边距,默认零。
+    /// 仅 `left_zone`/`right_zone` 用它做上下留白,其余区域不声明即无边距。
+    #[serde(default)]
+    margin: Option<RawPadding>,
 }
 
 #[derive(Deserialize)]
@@ -96,12 +105,29 @@ struct RawRegions {
 /// `workspace_font.rs` 的地盘,这里不声明,serde 默认忽略未知字段。
 #[derive(Deserialize)]
 struct RawWorkspaceFile {
+    /// 整体背景色:窗口根容器的底色(顶栏/面板之间、放大态遮罩之外的"留白"处),
+    /// 以及渲染管线的清屏色。区域各自的 `background` 若未设置则在此之上叠加。
+    background: String,
     regions: RawRegions,
 }
 
-/// `#RRGGBB` / `#RRGGBBAA` 十六进制字面量 → `Color`。
+/// `#RGB` / `#RGBA` / `#RRGGBB` / `#RRGGBBAA` 十六进制字面量 → `Color`。
+/// 3/4 位简写按 CSS 规则每位复制成两位(`#ccc` → `#cccccc`,`#ccc8` →
+/// `#cccccc88`),让用户直接改 JSON 就能写出惯用的短色值。
 fn parse_hex_color(hex: &str) -> Color {
-    let digits = hex.strip_prefix('#').unwrap_or(hex);
+    let raw = hex.strip_prefix('#').unwrap_or(hex);
+    // 3/4 位简写展开为 6/8 位(CSS 语义:每位复制成两位)。
+    let digits: std::borrow::Cow<str> = match raw.len() {
+        3 | 4 => {
+            let mut s = String::with_capacity(raw.len() * 2);
+            for c in raw.chars() {
+                s.push(c);
+                s.push(c);
+            }
+            s.into()
+        }
+        _ => raw.into(),
+    };
     let component = |i: usize| -> f32 {
         u8::from_str_radix(&digits[i..i + 2], 16)
             .unwrap_or_else(|e| panic!("workspace.json: 非法十六进制颜色 \"{hex}\": {e}"))
@@ -121,7 +147,7 @@ fn parse_hex_color(hex: &str) -> Color {
             b: component(4),
             a: component(6),
         },
-        _ => panic!("workspace.json: 非法十六进制颜色 \"{hex}\"(需 6 或 8 位)"),
+        _ => panic!("workspace.json: 非法十六进制颜色 \"{hex}\"(需 3/4/6/8 位)"),
     }
 }
 
@@ -165,6 +191,11 @@ pub struct RegionStyle {
     pub border: Option<Border>,
     pub padding: Padding,
     pub gap: f32,
+    /// 区域整体相对外围容器的外边距(默认零,仅 `left_zone`/
+    /// `right_zone` 用它做上下留白)。渲染时套一层外容器做 inset,
+    /// 几何侧(`preview_content_bounds`/`terminal_pane_pixel_size`)要同步
+    /// 扣减,否则原生子视图(webview/PTY)会戳出边框。
+    pub margin: Padding,
 }
 
 fn resolve_region(r: RawRegion) -> RegionStyle {
@@ -173,6 +204,45 @@ fn resolve_region(r: RawRegion) -> RegionStyle {
         border: r.border.as_ref().map(resolve_border),
         padding: r.padding.into(),
         gap: r.gap,
+        margin: r.margin.map(Into::into).unwrap_or_default(),
+    }
+}
+
+/// 把区域样式按当前全局 scale 折算：padding 四边与 gap 都乘 `icon_size::scale()`。
+/// 在**每个 accessor** 调用时执行（不经 `REGIONS` 缓存），这样运行时改
+/// `scale`（Ctrl +/-）时区域内部间距能跟着重排，而不是冻结在启动时刻。
+fn scaled_region(r: RegionStyle) -> RegionStyle {
+    let s = icon_size::scale();
+    let mut padding = r.padding;
+    padding.top *= s;
+    padding.right *= s;
+    padding.bottom *= s;
+    padding.left *= s;
+    let mut margin = r.margin;
+    margin.top *= s;
+    margin.right *= s;
+    margin.bottom *= s;
+    margin.left *= s;
+    RegionStyle {
+        padding,
+        margin,
+        gap: r.gap * s,
+        ..r
+    }
+}
+
+/// 放大态浮层样式按当前全局 scale 折算：scrim 内边距与金色描边盒的
+/// 线宽/圆角都乘 `icon_size::scale()`（同 `scaled_region`，逐 accessor 应用）。
+fn scaled_overlay(r: MaximizeOverlayStyle) -> MaximizeOverlayStyle {
+    let s = icon_size::scale();
+    MaximizeOverlayStyle {
+        scrim_background: r.scrim_background,
+        scrim_padding: r.scrim_padding * s,
+        border: Border {
+            color: r.border.color,
+            width: r.border.width * s,
+            radius: r.border.radius * s,
+        },
     }
 }
 
@@ -230,53 +300,65 @@ fn load(raw: &str) -> ResolvedRegions {
 
 static REGIONS: LazyLock<ResolvedRegions> = LazyLock::new(|| load(RAW));
 
+/// 整体背景色,解析一次(`#ccc` 这类十六进制字面量或 theme 令牌名)。
+static BACKGROUND: LazyLock<Color> = LazyLock::new(|| {
+    let file: RawWorkspaceFile =
+        serde_json::from_str(RAW).expect("workspace.json 格式错误(解析失败,background 节点)");
+    resolve_color(&file.background)
+});
+
+/// 整体背景色:窗口根容器底色 / 渲染清屏色。
+pub fn background() -> Color {
+    *BACKGROUND
+}
+
 pub fn top_bar() -> RegionStyle {
-    REGIONS.top_bar
+    scaled_region(REGIONS.top_bar)
 }
 pub fn left_icon_rail() -> RegionStyle {
-    REGIONS.left_icon_rail
+    scaled_region(REGIONS.left_icon_rail)
 }
 pub fn right_icon_rail() -> RegionStyle {
-    REGIONS.right_icon_rail
+    scaled_region(REGIONS.right_icon_rail)
 }
 pub fn project_pane() -> RegionStyle {
-    REGIONS.project_pane
+    scaled_region(REGIONS.project_pane)
 }
 pub fn preview_pane() -> RegionStyle {
-    REGIONS.preview_pane
+    scaled_region(REGIONS.preview_pane)
 }
 pub fn browser_pane() -> RegionStyle {
-    REGIONS.browser_pane
+    scaled_region(REGIONS.browser_pane)
 }
 pub fn agent_list_pane() -> RegionStyle {
-    REGIONS.agent_list_pane
+    scaled_region(REGIONS.agent_list_pane)
 }
 pub fn terminal_pane() -> RegionStyle {
-    REGIONS.terminal_pane
+    scaled_region(REGIONS.terminal_pane)
 }
 pub fn conversation_list_pane() -> RegionStyle {
-    REGIONS.conversation_list_pane
+    scaled_region(REGIONS.conversation_list_pane)
 }
 pub fn review_content_pane() -> RegionStyle {
-    REGIONS.review_content_pane
+    scaled_region(REGIONS.review_content_pane)
 }
 pub fn status_bar() -> RegionStyle {
-    REGIONS.status_bar
+    scaled_region(REGIONS.status_bar)
 }
 pub fn maximize_overlay() -> MaximizeOverlayStyle {
-    REGIONS.maximize_overlay
+    scaled_overlay(REGIONS.maximize_overlay)
 }
 pub fn context_menu() -> RegionStyle {
-    REGIONS.context_menu
+    scaled_region(REGIONS.context_menu)
 }
 /// 左面板区(项目树+预览,或单个 Web 预览)整体外边框——把"左1左2两栏"
 /// 框成一个视觉整体,不是某一栏自己的边框。
 pub fn left_zone() -> RegionStyle {
-    REGIONS.left_zone
+    scaled_region(REGIONS.left_zone)
 }
 /// 右面板区(Agent 列表+终端,或对话列表+审阅)整体外边框,同 `left_zone`。
 pub fn right_zone() -> RegionStyle {
-    REGIONS.right_zone
+    scaled_region(REGIONS.right_zone)
 }
 
 #[cfg(test)]
@@ -371,24 +453,24 @@ mod tests {
     #[test]
     fn left_zone_matches_config() {
         let s = left_zone();
-        assert!(s.background.is_none());
-        let border = s.border.expect("left_zone 应有整体外边框");
+        // 左右面板区整体用圆角背景浮起:背景填充 CARD 色(比内层面板 PANEL
+        // 略亮,在灰底窗口上显出圆角卡片),描边宽为 0 但带圆角(用 0 宽描边
+        // 保留"无描边"观感,仅让背景走圆角),四向 margin 做悬浮留白。
+        assert_eq!(s.background, Some(theme::CARD));
+        let border = s.border.expect("left_zone 应有圆角边框(宽 0)");
         assert_eq!(border.color, theme::BORDER);
-        assert_eq!(border.width, 1.0);
+        assert_eq!(border.width, 0.0);
         assert_eq!(border.radius, 8.0.into());
-        // padding=1(等于边框宽度):防止内部两栏的不透明背景在零边距下
-        // 整片盖住边框描边(容器边框画在 bounds 边缘,子元素零 padding 时
-        // 会以同样的 bounds 铺满,视觉上把边框吃掉)。
         assert_eq!(s.padding, Padding::from(1.0));
     }
 
     #[test]
     fn right_zone_matches_config() {
         let s = right_zone();
-        assert!(s.background.is_none());
-        let border = s.border.expect("right_zone 应有整体外边框");
+        assert_eq!(s.background, Some(theme::CARD));
+        let border = s.border.expect("right_zone 应有圆角边框(宽 0)");
         assert_eq!(border.color, theme::BORDER);
-        assert_eq!(border.width, 1.0);
+        assert_eq!(border.width, 0.0);
         assert_eq!(border.radius, 8.0.into());
         assert_eq!(s.padding, Padding::from(1.0));
     }
@@ -412,6 +494,19 @@ mod tests {
         assert_eq!(c.g, 0.0);
         assert_eq!(c.b, 0.0);
         assert_eq!(c.a, 0x80 as f32 / 255.0);
+    }
+
+    #[test]
+    fn shorthand_hex_color_expands() {
+        // `#ccc` 是合法的 CSS 简写,展开为 `#cccccc`(doc 注释也以它为合法示例)。
+        assert_eq!(resolve_color("#ccc"), resolve_color("#cccccc"));
+        assert_eq!(resolve_color("#ccc"), Color::from_rgb8(0xcc, 0xcc, 0xcc));
+        // 4 位带 alpha 简写:每位复制成两位。
+        let c = resolve_color("#ccc8");
+        assert_eq!(c.r, 0xcc as f32 / 255.0);
+        assert_eq!(c.g, 0xcc as f32 / 255.0);
+        assert_eq!(c.b, 0xcc as f32 / 255.0);
+        assert_eq!(c.a, 0x88 as f32 / 255.0);
     }
 
     #[test]

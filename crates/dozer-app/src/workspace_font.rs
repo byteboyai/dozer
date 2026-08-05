@@ -9,6 +9,10 @@
 //! 这里只管控件内部文字字号，不越界。解析失败（格式错误、缺字段）直接
 //! panic：开发期配置错误，不是需要优雅降级的运行时数据（同
 //! `chrome_style.rs` 的定位）。
+//!
+//! 每个 accessor 返回的字号都乘过 `icon_size::scale()`（全局缩放因子），
+//! 因此改 `scale` 即整体缩放全部控件文字，与图标尺寸同步。
+use crate::icon_size;
 use serde::Deserialize;
 use std::sync::LazyLock;
 
@@ -42,28 +46,33 @@ fn load(raw: &str) -> WorkspaceFonts {
 static SIZES: LazyLock<WorkspaceFonts> = LazyLock::new(|| load(RAW));
 
 pub fn dot_xs() -> u32 {
-    SIZES.dot_xs
+    scale(SIZES.dot_xs)
 }
 pub fn dot_sm() -> u32 {
-    SIZES.dot_sm
+    scale(SIZES.dot_sm)
 }
 pub fn caption_sm() -> u32 {
-    SIZES.caption_sm
+    scale(SIZES.caption_sm)
 }
 pub fn caption() -> u32 {
-    SIZES.caption
+    scale(SIZES.caption)
 }
 pub fn label() -> u32 {
-    SIZES.label
+    scale(SIZES.label)
 }
 pub fn body() -> u32 {
-    SIZES.body
+    scale(SIZES.body)
 }
 pub fn subtitle() -> u32 {
-    SIZES.subtitle
+    scale(SIZES.subtitle)
 }
 pub fn title() -> u32 {
-    SIZES.title
+    scale(SIZES.title)
+}
+
+/// 把设计基准字号按全局 scale 折算成实际像素字号（四舍五入）。
+fn scale(base: u32) -> u32 {
+    ((base as f32) * icon_size::scale()).round() as u32
 }
 
 #[cfg(test)]

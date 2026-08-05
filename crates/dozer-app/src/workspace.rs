@@ -42,14 +42,17 @@ use crate::preview_state;
 use crate::project::{self, FileTree};
 use crate::term_model::TerminalModel;
 use crate::term_view;
+use crate::terminal_font;
 use crate::theme;
 use crate::transcript::{self, ReviewEntry};
 use crate::workspace_font;
 use crate::workspace_geometry;
 use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
+use iced_widget::core::border::Radius;
 use iced_widget::core::font::Weight;
 use iced_widget::core::mouse;
+use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Color, Element, Font, Length, Padding};
 use iced_widget::{MouseArea, button, column, container, row, stack, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
@@ -78,6 +81,15 @@ pub enum LeftView {
 pub enum RightView {
     Agent,
     Conversations,
+}
+
+/// 顶层级页面：工作区(默认,左右面板区+页签) / 首页落地页(点顶栏 Dozer 进入)。
+/// 默认 `Workspace`——程序启动照常进工作区,Home 是用户主动点击 Dozer 才进。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AppPage {
+    #[default]
+    Workspace,
+    Home,
 }
 
 /// 当前放大态：放大的是左面板区的内容子面板，还是右面板区的。`None` = 未放大。
@@ -565,27 +577,33 @@ pub fn preview_content_bounds(
         };
     }
     let left_w = left_zone_width(window_width, state);
+    // `left_zone` 的上下 margin:webview 必须跟着 inset,否则会戳出外边框
+    // (原生子视图不听 iced 布局,逐像素靠这里算)。左右 margin 同样要算进去,
+    // 否则去掉外边框后 webview 会戳出新增的左侧留白。
+    let m = chrome_style::left_zone().margin;
+    let y_top =
+        |chrome_top: f32| -> f32 { workspace_geometry::top_bar_height() + m.top + chrome_top };
+    let h_for = |y: f32| -> f32 { (window_height - y - m.bottom - 8.0).max(0.0) };
     match state.left_view {
         LeftView::Web => {
-            let y =
-                workspace_geometry::top_bar_height() + workspace_geometry::browser_chrome_top_px();
-            let h = (window_height - y - 8.0).max(0.0);
-            let x = workspace_geometry::icon_rail_width() + 8.0;
-            let w = (left_w - 16.0).max(0.0);
+            let y = y_top(workspace_geometry::browser_chrome_top_px());
+            let h = h_for(y);
+            let x = workspace_geometry::icon_rail_width() + 8.0 + m.left;
+            let w = (left_w - 16.0 - m.left - m.right).max(0.0);
             (x, y, w, h)
         }
         LeftView::Files => {
-            let y =
-                workspace_geometry::top_bar_height() + workspace_geometry::preview_chrome_top_px();
-            let h = (window_height - y - 8.0).max(0.0);
+            let y = y_top(workspace_geometry::preview_chrome_top_px());
+            let h = h_for(y);
             let pair_w = pair_content_width(left_w);
             let list_w = pair_w * state.layout.files_split;
             let content_w = pair_w * (1.0 - state.layout.files_split);
             let x = workspace_geometry::icon_rail_width()
                 + list_w
                 + workspace_geometry::divider_width()
-                + 8.0;
-            let w = (content_w - 16.0).max(0.0);
+                + 8.0
+                + m.left;
+            let w = (content_w - 16.0 - m.left - m.right).max(0.0);
             (x, y, w, h)
         }
     }
@@ -744,11 +762,16 @@ pub fn terminal_pane_pixel_size(
     let right_w = right_zone_width(window_width, state);
     let content_w = pair_content_width(right_w) * (1.0 - state.layout.agent_split);
     let pane_width = (content_w - workspace_geometry::chrome_width_px()).max(0.0);
+    // `right_zone` 上下 margin:终端是 iced 布局(自动 inset),但其 PTY 网格
+    // 尺寸靠这里算,必须同步扣掉上下 margin,否则字符网格比实际渲染区高。
+    let m = chrome_style::right_zone().margin;
     let pane_height = (window_height
         - workspace_geometry::top_bar_height()
         - workspace_geometry::status_bar_height()
-        - workspace_geometry::chrome_height_px())
-    .max(0.0);
+        - workspace_geometry::chrome_height_px()
+        - m.top
+        - m.bottom)
+        .max(0.0);
     (pane_width, pane_height)
 }
 
@@ -769,6 +792,9 @@ pub fn terminal_pane_pixel_size(
 /// 触发的消息(`TermInput`/`AcceptanceOpen`/`PreviewSelectTab` …)仍然走
 /// `with_focused_project`——它们的语义本来就是"作用于用户此刻看着的那个项目"。
 pub type ProjectId = i64;
+
+/// Ctrl + / Ctrl - 每次触发的相对缩放步近因子（1.1 ≈ 每按一次放大 10%）。
+const UI_ZOOM_STEP: f32 = 1.1;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -852,6 +878,10 @@ pub enum Message {
     /// 的是 main.rs——`App` 不持有 `winit::window::Window` 句柄,这里只
     /// 记一个待处理标记,由 `take_pending_zoom_toggle` 供 main.rs 轮询。
     TopBarDoubleClick,
+    /// 点击顶栏 Dozer(带 home 图标)按钮:进入首页落地页(`AppPage::Home`)。
+    /// 打开/切换项目会自动退回 `Workspace`(见 `ProjectTabOpened`/
+    /// `ProjectTabSwitch`/`ProjectSelect`)。
+    TopBarHome,
     /// 什么也不做。专门给"就地吃掉事件、不让它冒泡到父级"的 `MouseArea`
     /// 用(`MouseArea::on_press`/`on_scroll` 一旦有消息就会
     /// `shell.capture_event()`)。目前唯一用处:放大态浮层里罩在放大内容
@@ -922,9 +952,6 @@ pub enum Message {
     ProjectTabSwitch(i64),
     /// 项目页签:点页签的 × → 关闭该页签,并结束该项目下所有会话。
     ProjectTabClose(i64),
-    /// 项目页签栏箭头翻页(`true`=右/`false`=左),语义同 `TermTabScroll`。
-    /// 上界不在此钳,渲染时 `tab_window` 钳制(见 `project_tabs_row`)。
-    ProjectTabScroll(bool),
     /// 项目页签:`App::ensure_loaded` 的异步促成完成——素材已取回,由
     /// `update` 在 UI 线程上装配成 `Workspace`,替换掉那份"加载中"占位
     /// (载荷是一次性信封,见 [`RestorePayload`])。
@@ -982,6 +1009,13 @@ pub enum Message {
     ProjectTreeRenameStart(PathBuf),
     /// 项目树:行内编辑框的键盘事件(main.rs 键盘拦截层送入,复用 AddrEvent)。
     ProjectTreeEditEvent(AddrEvent),
+    /// UI 整体放大(Ctrl +)：放大/还原的全局 scale 乘一个步近因子,下一帧
+    /// 按新 scale 重排全部图标/字号/间距/骨架。
+    ZoomIn,
+    /// UI 整体缩小(Ctrl -)。
+    ZoomOut,
+    /// UI 缩放还原(Ctrl+1)：回到启动基准 scale。
+    ZoomReset,
 }
 
 /// 地址栏编辑事件:由 main.rs 的键盘拦截层在 `browser_addr_editing()`
@@ -1169,9 +1203,9 @@ pub struct App {
     project_order: Vec<i64>,
     /// 当前聚焦的项目页签(`None`=一个项目都没打开)。
     active_project_id: Option<i64>,
-    /// 顶栏项目页签行当前最左可见页签序号(箭头翻页用),语义同
-    /// `Workspace::term_tab_first`。外壳态:页签行本身不属于任何项目。
-    project_tab_first: usize,
+    /// 当前顶层页面(工作区 / 首页)。默认 `Workspace`;点顶栏 Dozer 切到
+    /// `Home`,打开/切换项目切回 `Workspace`。
+    current_page: AppPage,
 }
 
 pub struct Workspace {
@@ -2324,7 +2358,7 @@ impl App {
             projects: HashMap::new(),
             project_order: Vec::new(),
             active_project_id: None,
-            project_tab_first: 0,
+            current_page: AppPage::Workspace,
         }
     }
 
@@ -3142,6 +3176,9 @@ impl App {
             Message::TopBarDoubleClick => {
                 self.pending_zoom_toggle = true;
             }
+            Message::TopBarHome => {
+                self.current_page = AppPage::Home;
+            }
             Message::Noop => {}
             Message::DaemonError(message) => self.daemon_error = Some(message),
             Message::TermScroll(delta) => {
@@ -3168,15 +3205,6 @@ impl App {
                         ws.preview_tab_first = ws.preview_tab_first.saturating_sub(2);
                     }
                 });
-            }
-            Message::ProjectTabScroll(right) => {
-                // 外壳态,不经 `with_focused_project`:页签行在"一个项目都没
-                // 打开"时也画得出来,翻页也该照样能用。
-                self.project_tab_first = if right {
-                    self.project_tab_first.saturating_add(2)
-                } else {
-                    self.project_tab_first.saturating_sub(2)
-                };
             }
             Message::BrowserTabScroll(right) => {
                 self.with_focused_project(|ws, _io| {
@@ -3311,6 +3339,7 @@ impl App {
                 // 路径——绝不能杀掉任何已有页签的会话(设计文档 §2)。
                 if focus_project_tab(&self.projects, &mut self.active_project_id, id) {
                     self.maximized = None;
+                    self.current_page = AppPage::Workspace;
                     self.ensure_loaded(id);
                     // 清放大态改变了终端 pane 的像素尺寸,网格必须跟着重算:
                     // `terminal_grid_state` 把 `maximized` 算进去,不重算的话
@@ -3364,6 +3393,7 @@ impl App {
                 if focus_project_tab(&self.projects, &mut self.active_project_id, id) {
                     // 这个项目已经开着页签了:只前台化,绝不改写它的内容——
                     // 那会把这个页签既有的终端全关掉、文件树对话列表全清空重来。
+                    self.current_page = AppPage::Workspace;
                     self.ensure_loaded(id);
                     self.with_focused_project(move |ws, _io| {
                         ws.recent_projects = recent;
@@ -3380,6 +3410,7 @@ impl App {
                     .insert(id, WorkspaceSlot::Loaded(Box::new(ws)));
                 self.project_order.push(id);
                 self.active_project_id = Some(id);
+                self.current_page = AppPage::Workspace;
                 self.sync_terminal_grid(); // 同上
                 self.persist_open_projects();
             }
@@ -3391,6 +3422,7 @@ impl App {
                     return;
                 }
                 self.maximized = None;
+                self.current_page = AppPage::Workspace;
                 self.ensure_loaded(id);
                 // 清放大态后必须重算终端网格。`PaneResized` 那条分支只在**窗口
                 // 几何变化**时触发,清 `maximized` 不会自己走到那里;而
@@ -3667,6 +3699,20 @@ impl App {
                     }
                 });
             }
+            Message::ZoomIn => {
+                crate::icon_size::zoom_by(UI_ZOOM_STEP);
+                crate::icon_size::persist_scale();
+                self.sync_terminal_grid();
+            }
+            Message::ZoomOut => {
+                crate::icon_size::zoom_by(1.0 / UI_ZOOM_STEP);
+                crate::icon_size::persist_scale();
+                self.sync_terminal_grid();
+            }
+            Message::ZoomReset => {
+                crate::icon_size::reset_scale();
+                self.sync_terminal_grid();
+            }
         }
     }
 
@@ -3676,6 +3722,11 @@ impl App {
         // 顶栏先画:它是外壳的一部分(项目页签行 + "＋"就在上面),一个项目都
         // 没打开时更要画得出来——否则用户没有任何入口去打开第一个项目。
         let top = top_bar(self);
+        // 首页落地页:点顶栏 Dozer 进入,独立于工作区(即使没开任何项目也画得
+        // 出来)。打开/切换项目会自动退回工作区(见各 `ProjectTab*` 处理器)。
+        if self.current_page == AppPage::Home {
+            return column![top, home_page(self)].into();
+        }
         // 一个项目页签都没有(或当前页签还停在 `Stub` 没促成)时的占位正文。
         let Some(ws) = self.active_workspace() else {
             // `daemon_error` 必须在这里也画:它平时挂在 `terminal_pane`/
@@ -3703,7 +3754,7 @@ impl App {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .style(|_t: &iced_widget::Theme| container::Style {
-                    background: Some(theme::BG.into()),
+                    background: Some(chrome_style::background().into()),
                     ..container::Style::default()
                 });
             return column![top, hint].into();
@@ -3717,7 +3768,7 @@ impl App {
         let body = row![
             left_icon_rail(self),
             left_panel_area(self, ws, false),
-            divider_bar(Divider::LeftRight),
+            divider_bar(Divider::LeftRight, theme::BG, theme::BG),
             right_panel_area(self, ws, false),
             right_icon_rail(self),
         ];
@@ -3833,20 +3884,16 @@ fn review_content<'a>(
         );
     }
     if rv.entries.is_empty() {
-        return content.push(
-            text("暂无对话")
-                .size(workspace_font::subtitle())
-                .color(theme::DIM),
-        );
+        return content.push(lh(text("暂无对话")
+            .size(workspace_font::subtitle())
+            .color(theme::DIM)));
     }
     for (i, e) in rv.entries.iter().enumerate() {
         match e {
             ReviewEntry::Human { text: t } => {
-                content = content.push(
-                    text(format!("▎{t}"))
-                        .size(workspace_font::title())
-                        .color(theme::CREAM),
-                );
+                content = content.push(lh(text(format!("▎{t}"))
+                    .size(workspace_font::title())
+                    .color(theme::CREAM)));
             }
             ReviewEntry::AiTurn {
                 text: body,
@@ -3854,23 +3901,19 @@ fn review_content<'a>(
                 thinking,
             } => {
                 if !body.is_empty() {
-                    content = content.push(
-                        text(body.clone())
-                            .size(workspace_font::subtitle())
-                            .color(theme::BODY),
-                    );
+                    content = content.push(lh(text(body.clone())
+                        .size(workspace_font::subtitle())
+                        .color(theme::BODY)));
                 }
                 let expanded = rv.expanded.contains(&i);
                 let glyph = if expanded { "▾ " } else { "▸ " };
                 content = content.push(
-                    button(
-                        text(format!(
-                            "{glyph}{}",
-                            ai_turn_summary(tools.len(), *thinking)
-                        ))
-                        .size(workspace_font::body())
-                        .color(theme::DIM),
-                    )
+                    button(lh(text(format!(
+                        "{glyph}{}",
+                        ai_turn_summary(tools.len(), *thinking)
+                    ))
+                    .size(workspace_font::body())
+                    .color(theme::DIM)))
                     .on_press(Message::ReviewToggle(i))
                     .style(|_t, _s| button::Style {
                         background: None,
@@ -3880,18 +3923,14 @@ fn review_content<'a>(
                 );
                 if expanded {
                     if *thinking {
-                        content = content.push(
-                            text("  · 思考(略)")
-                                .size(workspace_font::label())
-                                .color(theme::DIM),
-                        );
+                        content = content.push(lh(text("  · 思考(略)")
+                            .size(workspace_font::label())
+                            .color(theme::DIM)));
                     }
                     for tool in tools {
-                        content = content.push(
-                            text(format!("  · {tool}"))
-                                .size(workspace_font::body())
-                                .color(theme::CYAN),
-                        );
+                        content = content.push(lh(text(format!("  · {tool}"))
+                            .size(workspace_font::body())
+                            .color(theme::CYAN)));
                     }
                 }
             }
@@ -3908,27 +3947,21 @@ fn acceptance_content<'a>(
         return content;
     };
     if let Some(n) = acc.accepted_version {
-        return content.push(
-            text(format!("✓ 已沉淀 v{n}"))
-                .size(workspace_font::title())
-                .color(theme::GOLD),
-        );
+        return content.push(lh(text(format!("✓ 已沉淀 v{n}"))
+            .size(workspace_font::title())
+            .color(theme::GOLD)));
     }
     match &acc.goal {
         Some(g) => {
-            content = content.push(
-                text(g.title.clone())
-                    .size(workspace_font::title())
-                    .color(theme::CREAM),
-            );
+            content = content.push(lh(text(g.title.clone())
+                .size(workspace_font::title())
+                .color(theme::CREAM)));
             for (i, c) in g.criteria.iter().enumerate() {
                 let checked = acc.checked.get(i).copied().unwrap_or(false);
                 content = content.push(
-                    button(
-                        text(criteria_line(checked, c))
-                            .size(workspace_font::body())
-                            .color(if checked { theme::GOLD } else { theme::BODY }),
-                    )
+                    button(lh(text(criteria_line(checked, c))
+                        .size(workspace_font::body())
+                        .color(if checked { theme::GOLD } else { theme::BODY })))
                     .on_press(Message::AcceptanceToggle(i))
                     .style(|_t, _s| button::Style {
                         background: None,
@@ -3939,26 +3972,22 @@ fn acceptance_content<'a>(
             }
         }
         None => {
-            content = content.push(
-                text("未定标——先在仓库写 .dozer/goal.md（首行目标,\n- [ ] 列表为标准）")
-                    .size(workspace_font::body())
-                    .color(theme::DIM),
-            );
+            content = content.push(lh(text(
+                "未定标——先在仓库写 .dozer/goal.md（首行目标,\n- [ ] 列表为标准）",
+            )
+            .size(workspace_font::body())
+            .color(theme::DIM)));
         }
     }
-    content = content.push(
-        text("变更文件")
-            .size(workspace_font::body())
-            .color(theme::DIM),
-    );
+    content = content.push(lh(text("变更文件")
+        .size(workspace_font::body())
+        .color(theme::DIM)));
     for fc in &acc.changes {
         let path = acc.repo.join(&fc.path);
         content = content.push(
-            button(
-                text(file_change_line(fc))
-                    .size(workspace_font::body())
-                    .color(theme::CYAN),
-            )
+            button(lh(text(file_change_line(fc))
+                .size(workspace_font::body())
+                .color(theme::CYAN)))
             .on_press(Message::PreviewOpenPath(path))
             .style(|_t, _s| button::Style {
                 background: None,
@@ -3976,11 +4005,9 @@ fn acceptance_content<'a>(
         acc.comment.clone()
     };
     content = content.push(
-        button(
-            text(comment_text)
-                .size(workspace_font::body())
-                .color(if editing { theme::CREAM } else { theme::DIM }),
-        )
+        button(lh(text(comment_text)
+            .size(workspace_font::body())
+            .color(if editing { theme::CREAM } else { theme::DIM })))
         .on_press(Message::AcceptanceCommentClick)
         .width(Length::Fill)
         .style(move |_t, _s| button::Style {
@@ -3995,11 +4022,9 @@ fn acceptance_content<'a>(
         }),
     );
     let actions = row![
-        button(
-            text("通过·沉淀")
-                .size(workspace_font::body())
-                .color(theme::BG)
-        )
+        button(lh(text("通过·沉淀")
+            .size(workspace_font::body())
+            .color(theme::BG)))
         .on_press(Message::AcceptanceAccept)
         .style(|_t, _s| button::Style {
             background: Some(theme::GOLD.into()),
@@ -4011,11 +4036,9 @@ fn acceptance_content<'a>(
             },
             ..button::Style::default()
         }),
-        button(
-            text("打回并注回")
-                .size(workspace_font::body())
-                .color(theme::RED)
-        )
+        button(lh(text("打回并注回")
+            .size(workspace_font::body())
+            .color(theme::RED)))
         .on_press(Message::AcceptanceReject)
         .style(|_t, _s| button::Style {
             background: None,
@@ -4031,11 +4054,9 @@ fn acceptance_content<'a>(
     .spacing(8);
     content = content.push(actions);
     if let Some(err) = &acc.error {
-        content = content.push(
-            text(format!("⚠ {err}"))
-                .size(workspace_font::body())
-                .color(theme::RED),
-        );
+        content = content.push(lh(text(format!("⚠ {err}"))
+            .size(workspace_font::body())
+            .color(theme::RED)));
     }
     content
 }
@@ -4053,14 +4074,11 @@ fn acceptance_content<'a>(
 ///
 /// 原先中间的 ⌘K 搜索框是视觉占位（没有任何交互接线），让位给页签行；
 /// 搜索入口日后回来时应另找位置，不要再把页签挤掉。
-/// macOS 原生红黄绿交通灯的纵向居中基准:`fullSizeContentView` 打开后,
-/// 系统仍按"标准标题栏高 28pt"给交通灯定位——它不知道、也不关心 app 自己
-/// 的顶栏画多高。`top_bar()` 的内容行故意只取 28 高、贴顶栏容器顶边
-/// (容器默认纵向 Top 对齐),让内容的纵向居中基准和交通灯保持一致;多出的
-/// `workspace_geometry::top_bar_height() - 28` 留在内容行下方当空白,不参与
-/// 居中计算。这不是设计稿数值,是 macOS 平台约定,因此不走 workspace.json。
-const MACOS_TRAFFIC_LIGHT_BAND_HEIGHT: f32 = 28.0;
-
+/// 顶栏内容行直接吃满 `top_bar_height()` 并 `align_y(Center)` 垂直居中——
+/// 高度由 `workspace.json` 的 `geometry.top_bar_height` 单一来源驱动。
+/// (`MACOS_TRAFFIC_LIGHT_BAND_HEIGHT` 的 28px 顶对齐约定已废弃:用户要
+/// 求顶栏用自身高度居中内容,不再贴 macOS 交通灯基准。)
+///
 /// Figma 设计稿(Dozer Phase 1 UI,node-id=87:31)里顶栏标题/页签/加号
 /// 文字标的都是 Inter Medium——应用没绑定 Inter,用系统默认字体的
 /// Medium 档位贴近这个字重意图,不引入新字体文件。
@@ -4072,10 +4090,28 @@ fn top_bar_font() -> Font {
 }
 
 fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let title = text("Dozer")
-        .font(top_bar_font())
-        .size(workspace_font::body())
-        .color(theme::CREAM);
+    // Dozer 字标做成按钮:home 图标 + 文字,点它进首页(`AppPage::Home`)。
+    let title = button(
+        row![
+            icons::view(
+                icons::IconKind::Home,
+                crate::icon_size::rail(),
+                theme::CREAM,
+            ),
+            text("Dozer")
+                .font(top_bar_font())
+                .size(workspace_font::body())
+                .color(theme::CREAM),
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center),
+    )
+    .on_press(Message::TopBarHome)
+    .style(|_t: &iced_widget::Theme, _s| button::Style {
+        background: None,
+        text_color: theme::CREAM,
+        ..button::Style::default()
+    });
 
     // 页签行占满标题与右侧之间的全部空间。裁剪与翻页在 `project_tabs_row`
     // 内部做(只裁页签本身,箭头与"＋"钉在裁剪区外),这里**不能**再套一层
@@ -4110,7 +4146,12 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
     // 图标本身仍是 16x16)。目前尚未接入设置面板,先只还原视觉,不加
     // on_press——没有对应 Message 变体可派发。
     right = right.push(
-        container(icons::view(icons::IconKind::Settings, 16.0, theme::DIM)).padding(Padding {
+        container(icons::view(
+            icons::IconKind::Settings,
+            crate::icon_size::rail(),
+            theme::DIM,
+        ))
+        .padding(Padding {
             top: 4.0,
             right: 0.0,
             bottom: 4.0,
@@ -4122,7 +4163,7 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
     let bar = row![title, tabs, right]
         .spacing(region.gap)
         .padding(region.padding)
-        .height(Length::Fixed(MACOS_TRAFFIC_LIGHT_BAND_HEIGHT))
+        .height(Length::Fixed(workspace_geometry::top_bar_height()))
         .align_y(iced_widget::core::Alignment::Center);
 
     // 双击顶栏空白处缩放窗口(原生标题栏没了之后,系统"双击标题栏缩放"
@@ -4144,6 +4185,113 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
             border: region.border.unwrap_or_default(),
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// 首页落地页(点顶栏 Dozer 进入):品牌区 + 打开项目入口 + 已开项目列表。
+/// 风格沿用 ByteBoy2077 主题。打开/切换项目会自动退回工作区视图。
+fn home_page(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let mut col = column![]
+        .spacing(16)
+        .align_x(iced_widget::core::Alignment::Center);
+
+    // 品牌区:home 图标 + 大号 Dozer 字标 + 标语
+    col = col.push(
+        row![
+            icons::view(icons::IconKind::Home, 48.0, theme::GOLD),
+            text("Dozer")
+                .font(top_bar_font())
+                .size((workspace_font::title() as f32) * 2.0)
+                .color(theme::CREAM),
+        ]
+        .spacing(12)
+        .align_y(iced_widget::core::Alignment::Center),
+    );
+    col = col.push(
+        text("甲方侧 AI 治理与验收层")
+            .size(workspace_font::subtitle())
+            .color(theme::DIM),
+    );
+
+    // 打开项目入口(复用顶栏"＋"的文件夹选择落地路径)
+    col = col.push(
+        button(
+            text("打开项目…")
+                .size(workspace_font::body())
+                .color(theme::GOLD),
+        )
+        .on_press(Message::ProjectTabPickFolder)
+        .padding([8, 16])
+        .style(|_t: &iced_widget::Theme, _s| button::Style {
+            background: Some(theme::CARD.into()),
+            border: Border {
+                color: theme::GOLD,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            text_color: theme::GOLD,
+            ..button::Style::default()
+        }),
+    );
+
+    // 已开项目列表:点卡片即前台化该项目并退回工作区
+    let entries = project_tab_entries(app);
+    if !entries.is_empty() {
+        let mut list = column![]
+            .spacing(8)
+            .align_x(iced_widget::core::Alignment::Center);
+        for entry in entries {
+            let mut label = row![]
+                .spacing(6)
+                .align_y(iced_widget::core::Alignment::Center);
+            if let Some((color, blinking)) = entry.dot {
+                let color = if blinking && !app.blink_on {
+                    Color { a: 0.15, ..color }
+                } else {
+                    color
+                };
+                label = label.push(text("●").size(workspace_font::caption_sm()).color(color));
+            }
+            label = label.push(
+                text(entry.name)
+                    .size(workspace_font::body())
+                    .color(theme::CREAM),
+            );
+            let card = button(label)
+                .on_press(Message::ProjectTabSwitch(entry.id))
+                .padding([8, 16])
+                .style(|_t: &iced_widget::Theme, _s| button::Style {
+                    background: Some(theme::CARD.into()),
+                    text_color: theme::CREAM,
+                    ..button::Style::default()
+                });
+            list = list.push(card);
+        }
+        col = col.push(
+            text("已打开的项目")
+                .size(workspace_font::caption())
+                .color(theme::DIM),
+        );
+        col = col.push(list);
+    }
+
+    if let Some(err) = &app.daemon_error {
+        col = col.push(
+            text(format!("⚠ {err}"))
+                .size(workspace_font::body())
+                .color(theme::RED),
+        );
+    }
+
+    container(col.padding(48))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::Alignment::Center)
+        .align_y(iced_widget::core::Alignment::Center)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(chrome_style::background().into()),
             ..container::Style::default()
         })
         .into()
@@ -4187,51 +4335,28 @@ struct ProjectTabEntry {
     dot: Option<(Color, bool)>,
 }
 
-/// 顶栏项目页签行:左右翻页箭头 + 裁剪窗口内的页签 + 恒在最右的"＋"。
+/// 顶栏项目页签行:Chrome 式无限收窄的页签 + 恒在最右的"＋"。
 ///
-/// 溢出处理与终端/预览 tab 栏用**同一套**(`tab_window` 索引窗口化、`clip`、
-/// 左右箭头),不另发明一种交互语言(设计文档 §6)。此前这里只 `clip` 不翻
-/// 页,而设计文档 §2 明确"并行项目数不设硬上限"——两者合在一起就是"开够多
-/// 的项目后,最右边的页签连同"＋"本身永久够不着,没有任何办法翻回去"
-/// (最终审查 Required Fix #6)。"＋"因此必须钉在裁剪区**外面**。
+/// 不再有翻页箭头/裁剪窗口:每个页签用 `FillPortion(1)` 均分页签区可用宽度,
+/// 项目少时每片不超过 `project_tab_max_width`(不撑爆),项目多时被 `FillPortion`
+/// 一路压窄到均分(长名在 `project_tab_item` 内部裁剪),绝不出现"最右页签连同
+/// ＋够不着"的情况。"＋"钉在页签区右侧、恒在可视范围。
 fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let entries = project_tab_entries(app);
-    let widths: Vec<f32> = entries
-        .iter()
-        .map(|e| project_tab_display_width(&e.name, e.dot.is_some()))
-        .collect();
-    let (first, can_left, can_right) = tab_window(
-        &widths,
-        workspace_geometry::project_tab_gap(),
-        workspace_geometry::project_tab_avail_px(),
-        app.project_tab_first,
-    );
 
     let mut tabs = row![]
         .spacing(workspace_geometry::project_tab_gap())
-        .align_y(iced_widget::core::Alignment::Center);
-    for entry in entries.into_iter().skip(first) {
+        .align_y(iced_widget::core::Alignment::Center)
+        .width(Length::Fill);
+    for entry in entries {
         let active = app.active_project_id == Some(entry.id);
-        tabs = tabs.push(project_tab_item(
-            entry.id,
-            entry.name,
-            entry.dot,
-            active,
-            app.blink_on,
-        ));
+        let item = project_tab_item(entry.id, entry.name, entry.dot, active, app.blink_on);
+        // 每片均分可用宽,但单个不超过上限;溢出时 `FillPortion` 把每片压窄。
+        let cell = container(item)
+            .width(Length::FillPortion(1))
+            .max_width(workspace_geometry::project_tab_max_width());
+        tabs = tabs.push(cell);
     }
-    let clipped = container(tabs).width(Length::Fill).clip(true);
-
-    let left_arrow = tab_arrow_button(
-        icons::IconKind::ChevronLeft,
-        can_left,
-        Message::ProjectTabScroll(false),
-    );
-    let right_arrow = tab_arrow_button(
-        icons::IconKind::ChevronRight,
-        can_right,
-        Message::ProjectTabScroll(true),
-    );
 
     let add = button(
         text("＋")
@@ -4247,21 +4372,10 @@ fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_
         ..button::Style::default()
     });
 
-    row![left_arrow, right_arrow, clipped, add]
+    row![tabs, add]
         .spacing(workspace_geometry::project_tab_gap())
         .align_y(iced_widget::core::Alignment::Center)
         .into()
-}
-
-/// 项目页签估算显示宽:结构同 `tab_display_width`,但状态点是可选的
-/// (`Stub` 无存活会话时不画),所以按有无分开算。
-fn project_tab_display_width(name: &str, has_dot: bool) -> f32 {
-    // 状态点●+spacing ≈ 18(可选), 名称 ≈ units * 半宽 8.0(13px 近似),
-    // 关闭× ≈ 18, pill padding ≈ 32(容器左右各 14,Figma 还原后比旧值
-    // 大不少——`project_tab_item` 的 container padding 从 [2,4] 改成
-    // [6,14] 时这个估算常量必须跟着改,否则翻页窗口化会低估实际渲染宽)。
-    let dot = if has_dot { 18.0 } else { 0.0 };
-    dot + text_width_units(name) * 8.0 + 18.0 + 32.0
 }
 
 /// 单个项目页签:状态点(可选)+ 项目名的切换按钮 + 关闭按钮。结构与终端
@@ -4289,9 +4403,15 @@ fn project_tab_item<'a>(
             .size(workspace_font::body())
             .color(if active { theme::CREAM } else { theme::DIM }),
     );
+    // 标签行撑满并裁剪:页签被 `FillPortion` 压窄时长名在此截断(Chrome 式
+    // 无限收窄),不会把关闭按钮挤出去。
+    let label = container(label.align_y(iced_widget::core::Alignment::Center))
+        .width(Length::Fill)
+        .clip(true);
 
-    let select = button(label.align_y(iced_widget::core::Alignment::Center))
+    let select = button(label)
         .on_press(Message::ProjectTabSwitch(id))
+        .width(Length::Fill)
         .style(|_t: &iced_widget::Theme, _s| button::Style {
             background: None,
             text_color: theme::CREAM,
@@ -4311,7 +4431,10 @@ fn project_tab_item<'a>(
             .spacing(2)
             .align_y(iced_widget::core::Alignment::Center),
     )
-    .padding([6, 14])
+    .padding([0, 14])
+    .height(Length::Fixed(workspace_geometry::top_bar_height()))
+    .width(Length::Fill)
+    .clip(true)
     .style(move |_t: &iced_widget::Theme| {
         if active {
             container::Style {
@@ -4398,21 +4521,22 @@ fn stub_activity(sessions: &[SessionInfo], project_id: i64) -> Option<AgentState
 fn conversation_list_pane(
     ws: &Workspace,
     width: Length,
+    outer: Border,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = chrome_style::conversation_list_pane();
     let mut content = column![
         row![
-            text("对话")
+            lh(text("对话")
                 .size(workspace_font::subtitle())
-                .color(theme::CREAM),
-            text(
+                .color(theme::CREAM)),
+            lh(text(
                 ws.project
                     .as_ref()
                     .map(|p| p.name.clone())
                     .unwrap_or_else(|| "未打开项目".into())
             )
             .size(workspace_font::label())
-            .color(theme::DIM),
+            .color(theme::DIM)),
         ]
         .spacing(8)
     ]
@@ -4426,21 +4550,21 @@ fn conversation_list_pane(
         .count();
     content = content.push(
         row![
-            text("对话")
+            lh(text("对话")
                 .size(workspace_font::caption())
-                .color(theme::DIM),
-            text(format!("{} 条 · {} 活跃", ws.conversations.len(), active_n))
-                .size(workspace_font::caption())
-                .color(theme::DIM),
+                .color(theme::DIM)),
+            lh(
+                text(format!("{} 条 · {} 活跃", ws.conversations.len(), active_n))
+                    .size(workspace_font::caption())
+                    .color(theme::DIM)
+            ),
         ]
         .spacing(6),
     );
     if ws.conversations.is_empty() {
-        content = content.push(
-            text("暂无对话记录")
-                .size(workspace_font::body())
-                .color(theme::DIM),
-        );
+        content = content.push(lh(text("暂无对话记录")
+            .size(workspace_font::body())
+            .color(theme::DIM)));
     }
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -4463,12 +4587,12 @@ fn conversation_list_pane(
         let sub_color = if current { theme::GREEN } else { theme::DIM };
         let card = button(
             column![
-                text(c.title.clone())
+                lh(text(c.title.clone())
                     .size(workspace_font::body())
-                    .color(theme::CREAM),
-                text(sub)
+                    .color(theme::CREAM)),
+                lh(text(sub)
                     .size(workspace_font::caption_sm())
-                    .color(sub_color),
+                    .color(sub_color)),
             ]
             .spacing(4),
         )
@@ -4493,7 +4617,7 @@ fn conversation_list_pane(
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
-            border: region.border.unwrap_or_default(),
+            border: outer,
             ..container::Style::default()
         })
         .into()
@@ -4504,26 +4628,27 @@ fn conversation_list_pane(
 fn agent_list_pane(
     ws: &Workspace,
     width: Length,
+    outer: Border,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = chrome_style::agent_list_pane();
     let content = column![
         row![
-            text("Agent")
+            lh(text("Agent")
                 .size(workspace_font::subtitle())
-                .color(theme::CREAM),
-            text(
+                .color(theme::CREAM)),
+            lh(text(
                 ws.project
                     .as_ref()
                     .map(|p| p.name.clone())
                     .unwrap_or_else(|| "未打开项目".into())
             )
             .size(workspace_font::label())
-            .color(theme::DIM),
+            .color(theme::DIM)),
         ]
         .spacing(8),
-        text("Agents（后续）")
+        lh(text("Agents（后续）")
             .size(workspace_font::body())
-            .color(theme::DIM),
+            .color(theme::DIM)),
     ]
     .spacing(region.gap);
 
@@ -4532,7 +4657,7 @@ fn agent_list_pane(
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
-            border: region.border.unwrap_or_default(),
+            border: outer,
             ..container::Style::default()
         })
         .into()
@@ -4544,13 +4669,14 @@ fn agent_list_pane(
 fn review_content_pane(
     ws: &Workspace,
     width: Length,
+    outer: Border,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = chrome_style::review_content_pane();
     let maximize_btn = maximize_button(MaximizedPane::Right);
     let header = row![
-        text("会话审阅")
+        lh(text("会话审阅")
             .size(workspace_font::body())
-            .color(theme::CREAM),
+            .color(theme::CREAM)),
         iced_widget::space::horizontal(),
         maximize_btn,
     ]
@@ -4561,11 +4687,9 @@ fn review_content_pane(
         content = review_content(content, ws);
     } else {
         content = content.push(
-            container(
-                text("暂无审阅内容——点击左侧对话列表中的对话开始审阅")
-                    .size(workspace_font::subtitle())
-                    .color(theme::DIM),
-            )
+            container(lh(text("暂无审阅内容——点击左侧对话列表中的对话开始审阅")
+                .size(workspace_font::subtitle())
+                .color(theme::DIM)))
             .width(Length::Fill)
             .height(Length::Fill),
         );
@@ -4576,7 +4700,7 @@ fn review_content_pane(
         .height(Length::Fill)
         .style(move |_theme: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
-            border: region.border.unwrap_or_default(),
+            border: outer,
             ..container::Style::default()
         })
         .into()
@@ -4589,7 +4713,7 @@ fn rail_icon_button<'a>(
     msg: Message,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let color = if active { theme::GOLD } else { theme::DIM };
-    let inner = container(icons::view(icon, 16.0, color))
+    let inner = container(icons::view(icon, crate::icon_size::rail(), color))
         .width(Length::Fill)
         .height(Length::Fill)
         .align_x(iced_widget::core::alignment::Horizontal::Center)
@@ -4604,8 +4728,8 @@ fn rail_icon_button<'a>(
 
     button(inner)
         .on_press(msg)
-        .width(Length::Fixed(32.0))
-        .height(Length::Fixed(32.0))
+        .width(Length::Fixed(crate::workspace_geometry::rail_button_size()))
+        .height(Length::Fixed(crate::workspace_geometry::rail_button_size()))
         .padding(0)
         .style(move |_t: &iced_widget::Theme, status: button::Status| {
             // `active` 先判:选中态不管 status 是 Active/Hovered/Pressed 都要
@@ -4704,6 +4828,46 @@ fn split_portions(split: f32) -> (u16, u16) {
     (list, content)
 }
 
+/// 面板区里某块 pane 在外框圆角处要收圆的外角:`Left`/`Right` 配对视图里
+/// 左 pane 收左侧、右 pane 收右侧;`All` 是 Web 单 pane 收全部四角;`None`
+/// 不收(放大态下 pane 直接撑满放大盒子,外框由金色浮层负责,方角才对)。
+#[derive(Clone, Copy)]
+enum PaneCorner {
+    None,
+    Left,
+    Right,
+    All,
+}
+
+/// 把 `left_zone`/`right_zone` 的圆角背景"透"到内部 pane 上:iced 的
+/// `Container::clip(true)` 只把子元素裁成**矩形**,裁不出圆角,所以 pane
+/// 自己的方角会戳出 zone 的圆角 CARD 背景,在四角形成小尖角。让 pane 的外
+/// 圆角跟随 zone 圆角(半径减掉 zone 内边距),方角就被收进圆角里,只在外
+/// 侧那一边收(`corner` 决定),配对的内部接缝仍是方角(本来就藏在 zone 内)。
+fn zone_pane_border(zone: chrome_style::RegionStyle, corner: PaneCorner) -> Border {
+    let r = zone.border.map(|b| b.radius.top_left).unwrap_or(0.0);
+    let r = (r - zone.padding.top).max(0.0);
+    let radius = match corner {
+        PaneCorner::None => Radius::from(0.0),
+        PaneCorner::All => Radius::from(r),
+        PaneCorner::Left => Radius {
+            top_left: r,
+            bottom_left: r,
+            ..Radius::from(0.0)
+        },
+        PaneCorner::Right => Radius {
+            top_right: r,
+            bottom_right: r,
+            ..Radius::from(0.0)
+        },
+    };
+    Border {
+        color: Color::TRANSPARENT,
+        width: 0.0,
+        radius,
+    }
+}
+
 /// 左面板区:按当前左视图组合"项目树+文件预览"配对或单个 Web 预览面板;
 /// 收起时渲染成空元素(不占宽度)。
 ///
@@ -4723,9 +4887,9 @@ fn split_portions(split: f32) -> (u16, u16) {
 /// 会被 `LeftIconSelect`/`RightIconSelect` 无条件清掉,所以这个组合不会
 /// 停留超过一帧(Fix round 2 #2)。
 /// 非放大态下,左1(项目树/Web)+左2(预览)两栏被视觉框成一个整体,套
-/// `chrome_style::left_zone()` 的外边框。放大态跳过——`maximize_overlay`
-/// 已经用金色边框把同一块内容整体框起来,再套一层普通色边框会在金框内侧
-/// 多出一圈视觉噪音。
+/// `chrome_style::left_zone()` 的外框(四向 margin 做悬浮留白,无描边)。
+/// 放大态跳过——`maximize_overlay` 已经用金色边框把同一块内容整体框起来,
+/// 再套一层外框会在金框内侧多出一圈视觉噪音。
 fn left_panel_area<'a>(
     app: &'a App,
     ws: &'a Workspace,
@@ -4743,33 +4907,64 @@ fn left_panel_area<'a>(
     } else {
         Length::Fixed(app.effective_left_width())
     };
+    let zone = chrome_style::left_zone();
+    let (lc, rc, ac) = if maximized {
+        (PaneCorner::None, PaneCorner::None, PaneCorner::None)
+    } else {
+        (PaneCorner::Left, PaneCorner::Right, PaneCorner::All)
+    };
     let inner: Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> = match app.left_view
     {
         LeftView::Files => {
             let (list_portion, content_portion) = split_portions(app.shell_layout.files_split);
             row![
-                project_pane(app, ws, Length::FillPortion(list_portion)),
-                divider_bar(Divider::LeftPairSplit),
-                preview_pane(ws, Length::FillPortion(content_portion)),
+                project_pane(
+                    app,
+                    ws,
+                    Length::FillPortion(list_portion),
+                    zone_pane_border(zone, lc)
+                ),
+                divider_bar(
+                    Divider::LeftPairSplit,
+                    chrome_style::project_pane().background.unwrap_or(theme::BG),
+                    chrome_style::preview_pane().background.unwrap_or(theme::BG),
+                ),
+                preview_pane(
+                    ws,
+                    Length::FillPortion(content_portion),
+                    zone_pane_border(zone, rc)
+                ),
             ]
-            .width(total)
+            .width(Length::Fill)
             .into()
         }
-        LeftView::Web => browser_pane(ws, total),
+        LeftView::Web => browser_pane(ws, Length::Fill, zone_pane_border(zone, ac)),
     };
     if maximized {
         return inner;
     }
-    let region = chrome_style::left_zone();
-    let is_active = app.active_zone == Some(ZoneSide::Left);
-    container(inner)
-        .width(total)
+    let region = zone;
+    let zone_box = container(inner)
+        .width(Length::Fill)
         .height(Length::Fill)
         .padding(region.padding)
+        .clip(true)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
-            border: zone_border(region.border, is_active),
+            border: region.border.unwrap_or_default(),
             ..container::Style::default()
+        });
+    // 四向 margin:把整块外边框从顶栏/窗口底/图标栏/对侧分隔条各推开一段,
+    // 做出悬浮留白。左右 margin 来自 `left_zone` 配置(默认左 8、右 0)。
+    let m = region.margin;
+    container(zone_box)
+        .width(total)
+        .height(Length::Fill)
+        .padding(Padding {
+            top: m.top,
+            right: m.right,
+            bottom: m.bottom,
+            left: m.left,
         })
         .into()
 }
@@ -4784,8 +4979,8 @@ fn left_panel_area<'a>(
 /// 以 0 宽布局(右半边整片空白)。
 ///
 /// 非放大态下,右1(Agent 列表/对话列表)+右2(终端/审阅)两栏被视觉框成
-/// 一个整体,套 `chrome_style::right_zone()` 的外边框,`maximized` 时跳过
-/// (理由同 `left_panel_area`)。
+/// 一个整体,套 `chrome_style::right_zone()` 的外框(四向 margin 做悬浮留白,
+/// 无描边),`maximized` 时跳过(理由同 `left_panel_area`)。
 fn right_panel_area<'a>(
     app: &'a App,
     ws: &'a Workspace,
@@ -4802,14 +4997,37 @@ fn right_panel_area<'a>(
     // 给右边那块,单纯是 `row!` 里两个 pane 的先后顺序换了。`apply_column_drag`
     // 的 `RightPairSplit` 分支要相应把算出来的 ratio 取反再写回,否则拖拽
     // 方向感会反过来(见该函数注释)。
+    let zone = chrome_style::right_zone();
+    let (lc, rc) = if maximized {
+        (PaneCorner::None, PaneCorner::None)
+    } else {
+        (PaneCorner::Left, PaneCorner::Right)
+    };
     let inner: Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> =
         match app.right_view {
             RightView::Agent => {
                 let (list_portion, content_portion) = split_portions(app.shell_layout.agent_split);
                 row![
-                    terminal_pane(app, ws, Length::FillPortion(content_portion)),
-                    divider_bar(Divider::RightPairSplit),
-                    agent_list_pane(ws, Length::FillPortion(list_portion)),
+                    terminal_pane(
+                        app,
+                        ws,
+                        Length::FillPortion(content_portion),
+                        zone_pane_border(zone, lc)
+                    ),
+                    divider_bar(
+                        Divider::RightPairSplit,
+                        chrome_style::terminal_pane()
+                            .background
+                            .unwrap_or(theme::BG),
+                        chrome_style::agent_list_pane()
+                            .background
+                            .unwrap_or(theme::BG),
+                    ),
+                    agent_list_pane(
+                        ws,
+                        Length::FillPortion(list_portion),
+                        zone_pane_border(zone, rc)
+                    ),
                 ]
                 .width(Length::Fill)
                 .into()
@@ -4818,9 +5036,25 @@ fn right_panel_area<'a>(
                 let (list_portion, content_portion) =
                     split_portions(app.shell_layout.conversations_split);
                 row![
-                    review_content_pane(ws, Length::FillPortion(content_portion)),
-                    divider_bar(Divider::RightPairSplit),
-                    conversation_list_pane(ws, Length::FillPortion(list_portion)),
+                    review_content_pane(
+                        ws,
+                        Length::FillPortion(content_portion),
+                        zone_pane_border(zone, lc)
+                    ),
+                    divider_bar(
+                        Divider::RightPairSplit,
+                        chrome_style::review_content_pane()
+                            .background
+                            .unwrap_or(theme::BG),
+                        chrome_style::conversation_list_pane()
+                            .background
+                            .unwrap_or(theme::BG),
+                    ),
+                    conversation_list_pane(
+                        ws,
+                        Length::FillPortion(list_portion),
+                        zone_pane_border(zone, rc)
+                    ),
                 ]
                 .width(Length::Fill)
                 .into()
@@ -4829,33 +5063,30 @@ fn right_panel_area<'a>(
     if maximized {
         return inner;
     }
-    let region = chrome_style::right_zone();
-    let is_active = app.active_zone == Some(ZoneSide::Right);
-    container(inner)
+    let region = zone;
+    let zone_box = container(inner)
         .width(Length::Fill)
         .height(Length::Fill)
         .padding(region.padding)
+        .clip(true)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
-            border: zone_border(region.border, is_active),
+            border: region.border.unwrap_or_default(),
             ..container::Style::default()
+        });
+    // 四向 margin:同 `left_panel_area`,左右 margin 来自 `right_zone` 配置
+    // (默认左 0、右 8)。
+    let m = region.margin;
+    container(zone_box)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(Padding {
+            top: m.top,
+            right: m.right,
+            bottom: m.bottom,
+            left: m.left,
         })
         .into()
-}
-
-/// `left_zone`/`right_zone` 的边框颜色随 `active_zone` 切换:聚焦时描边
-/// 换成 GOLD(仓库既有"当前态用金色描边"惯例,如对话卡片/文件树高亮同款),
-/// 宽度/圆角原样取自 JSON 配置,不聚焦时颜色也原样取自配置(BORDER)。
-fn zone_border(region_border: Option<Border>, is_active: bool) -> Border {
-    let border = region_border.unwrap_or_default();
-    if is_active {
-        Border {
-            color: theme::GOLD,
-            ..border
-        }
-    } else {
-        border
-    }
 }
 
 /// 放大态浮层:两条图标栏之间的整个内容区变暗+背景虚化，放大的那一侧
@@ -4931,35 +5162,30 @@ fn maximize_overlay<'a>(
     .into()
 }
 
+/// 文件树目录/文件名行的字号：与终端字号(`terminal_font`)对齐（含全局 UI
+/// scale），配合下面的 `LineHeight::Relative(line_height_factor)` 让每行行高
+/// 等于终端行距，目录/文件列表不再比终端稀疏。
+fn tree_row_font_size() -> f32 {
+    terminal_font::size() * crate::icon_size::scale()
+}
+
+/// 统一行高：把一段文字的行高设为终端行高
+/// (`terminal_font::line_height_factor()` = 1.2)，让各面板列表/正文行的行距
+/// 与文件树、终端观感一致。`size`/`color` 等仍由调用方设置，这里只补行高。
+fn lh<'a>(
+    t: iced_widget::text::Text<'a, iced_widget::Theme, iced_widget::Renderer>,
+) -> iced_widget::text::Text<'a, iced_widget::Theme, iced_widget::Renderer> {
+    t.line_height(LineHeight::Relative(terminal_font::line_height_factor()))
+}
+
 fn project_pane<'a>(
     app: &'a App,
     ws: &'a Workspace,
     width: Length,
+    outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = chrome_style::project_pane();
     let mut content = column![].spacing(region.gap);
-
-    // 与顶栏"＋"完全同一条入口:选中的文件夹一律作为**新页签**打开。
-    // 此前这里走的是 `ProjectPickFolder`→`ProjectOpen`→`ProjectOpened` 的
-    // 就地改写路径,而这颗按钮在**已经打开着项目**时也照画不误——点它挑一个
-    // 新文件夹,会把当前聚焦项目的终端会话连同正在跑的 agent 一起 kill 掉。
-    // 设计文档 §2 只允许"显式关闭页签"才结束会话,这条路径已整体删除。
-    let open_btn = button(
-        text("打开项目…")
-            .size(workspace_font::body())
-            .color(theme::CREAM),
-    )
-    .on_press(Message::ProjectTabPickFolder)
-    .style(|_t, _s| button::Style {
-        background: Some(theme::CARD.into()),
-        text_color: theme::CREAM,
-        border: Border {
-            color: theme::BORDER,
-            width: 1.0,
-            radius: 2.0.into(),
-        },
-        ..button::Style::default()
-    });
 
     match &ws.project {
         Some(p) => {
@@ -4994,7 +5220,6 @@ fn project_pane<'a>(
                 },
             );
             content = content.push(card);
-            content = content.push(open_btn);
             if let Some(err) = &ws.tree_error {
                 content = content.push(
                     text(format!("⚠ {err}"))
@@ -5041,28 +5266,39 @@ fn project_pane<'a>(
                                 icons::IconKind::Folder
                             };
                             row![
-                                icons::view(chevron, 12.0, theme::DIM),
-                                icons::view(folder, 14.0, theme::DIM),
+                                icons::view(chevron, crate::icon_size::chevron(), theme::DIM),
+                                icons::view(folder, crate::icon_size::row(), theme::DIM),
                             ]
-                            .spacing(2)
+                            .spacing(crate::icon_size::tree_row_gap())
                             .align_y(iced_widget::core::Alignment::Center)
                             .into()
                         } else {
                             row![
                                 iced_widget::space::Space::new()
-                                    .width(Length::Fixed(14.0))
+                                    .width(Length::Fixed(
+                                        crate::icon_size::chevron()
+                                            + crate::icon_size::tree_row_gap(),
+                                    ))
                                     .height(Length::Shrink),
-                                icons::view(icons::icon_for_file(&row.name), 14.0, theme::DIM),
+                                icons::view(
+                                    icons::icon_for_file(&row.name),
+                                    crate::icon_size::row(),
+                                    theme::DIM
+                                ),
                             ]
                             .spacing(0)
                             .align_y(iced_widget::core::Alignment::Center)
                             .into()
                         };
                     let mut line = row![
-                        text(indent).size(workspace_font::title()).color(name_color),
+                        text(indent)
+                            .size(tree_row_font_size())
+                            .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
+                            .color(name_color),
                         row_icon,
                         text(row.name.clone())
-                            .size(workspace_font::title())
+                            .size(tree_row_font_size())
+                            .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
                             .color(name_color),
                     ]
                     .spacing(6)
@@ -5129,7 +5365,6 @@ fn project_pane<'a>(
                     .size(workspace_font::body())
                     .color(theme::DIM),
             );
-            content = content.push(open_btn);
             for p in &ws.recent_projects {
                 content = content.push(
                     button(
@@ -5153,11 +5388,15 @@ fn project_pane<'a>(
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
-            border: region.border.unwrap_or_default(),
+            border: outer,
             ..container::Style::default()
         });
 
-    container(column![body, project_status_bar(app, ws)])
+    // 底栏(`project_status_bar`)是贴在 `body` 下方的独立元素,若它自己的
+    // 底角不收圆,方角会戳出 `body` 已收圆的左下角,在 zone 圆角 CARD 背景上
+    // 顶出一个小尖角——所以把 `outer` 的圆角半径透给底栏,只收底角,保留它
+    // 自己那条 1px 上边分隔线。
+    container(column![body, project_status_bar(app, ws, outer)])
         .width(width)
         .height(Length::Fill)
         .into()
@@ -5167,6 +5406,7 @@ fn project_pane<'a>(
 fn project_status_bar<'a>(
     app: &'a App,
     ws: &'a Workspace,
+    outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let (env, dot) = env_status_text(app.daemon_error.is_none());
     let left = row![
@@ -5193,12 +5433,14 @@ fn project_status_bar<'a>(
     status_bar_container(
         row![left, iced_widget::space::horizontal(), tabs]
             .align_y(iced_widget::core::Alignment::Center),
+        outer,
     )
 }
 
 /// 终端栏底状态条：当前激活 tab 的 agent 态 · resume · dozerd 持有。
 fn terminal_status_bar(
     ws: &Workspace,
+    outer: Border,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let (label, dot) = match ws.tabs.get(ws.active) {
         Some(t) => (
@@ -5223,21 +5465,31 @@ fn terminal_status_bar(
             .color(theme::DIM),
     ]
     .spacing(6);
-    status_bar_container(line)
+    status_bar_container(line, outer)
 }
 
-/// 状态条通用外框：略深底 + 上边线 + 固定高。
+/// 状态条通用外框：略深底 + 上边线 + 固定高。`outer` 是所属 pane 的整体
+/// 外框圆角（`zone_pane_border` 算出的 `Border`），只取它的 `radius` 套到
+/// 底栏上——底栏贴在 pane 最底部,若不收圆角和会戳出 pane 已收圆的底角,
+/// 在 zone 圆角 CARD 背景上顶出小尖角。保留底栏自己那条 1px 上边分隔线
+/// （颜色/宽度沿用 `status_bar` 区域配置,只改圆角）。
 fn status_bar_container<'a>(
     inner: impl Into<Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>>,
+    outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = chrome_style::status_bar();
+    let base = region.border.unwrap_or_default();
     container(inner)
         .width(Length::Fill)
         .height(Length::Fixed(workspace_geometry::status_bar_height()))
         .padding(region.padding)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
-            border: region.border.unwrap_or_default(),
+            border: Border {
+                color: base.color,
+                width: base.width,
+                radius: outer.radius,
+            },
             ..container::Style::default()
         })
         .into()
@@ -5246,6 +5498,7 @@ fn status_bar_container<'a>(
 fn preview_pane(
     ws: &Workspace,
     width: Length,
+    outer: Border,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     // tab 栏:箭头翻页(到头变灰) + 每 tab 选择按钮 + 关闭 ×。tab 只能由项目树
     // 点击/会话恢复产生——面板本身已不再有"打开文件…"按钮或地址栏(P1 后续
@@ -5273,18 +5526,16 @@ fn preview_pane(
         .filter(|(idx, _)| *idx >= first)
         .map(|(idx, tab)| {
             let active = idx == ws.preview.active_idx();
-            let select = button(
-                text(tab.title.clone())
-                    .size(workspace_font::subtitle())
-                    .color(theme::CREAM),
-            )
+            let select = button(lh(text(tab.title.clone())
+                .size(workspace_font::subtitle())
+                .color(theme::CREAM)))
             .on_press(Message::PreviewSelectTab(idx))
             .style(|_t, _s| button::Style {
                 background: None,
                 text_color: theme::CREAM,
                 ..button::Style::default()
             });
-            let close = button(text("×").size(workspace_font::body()).color(theme::DIM))
+            let close = button(lh(text("×").size(workspace_font::body()).color(theme::DIM)))
                 .on_press(Message::PreviewCloseTab(idx))
                 .style(|_t, _s| button::Style {
                     background: None,
@@ -5336,22 +5587,18 @@ fn preview_pane(
     let mut content = column![tab_bar, tab_divider()].spacing(region.gap);
 
     if let Some(err) = &ws.preview_error {
-        content = content.push(
-            text(format!("⚠ {err}"))
-                .size(workspace_font::body())
-                .color(theme::RED),
-        );
+        content = content.push(lh(text(format!("⚠ {err}"))
+            .size(workspace_font::body())
+            .color(theme::RED)));
     }
 
     if ws.preview.acceptance_active() {
         content = acceptance_content(content, ws);
     } else if ws.preview.tabs().is_empty() {
         content = content.push(
-            container(
-                text("暂无预览——在左侧文件树选择文件")
-                    .size(workspace_font::subtitle())
-                    .color(theme::DIM),
-            )
+            container(lh(text("暂无预览——在左侧文件树选择文件")
+                .size(workspace_font::subtitle())
+                .color(theme::DIM)))
             .width(Length::Fill)
             .height(Length::Fill),
         );
@@ -5362,7 +5609,7 @@ fn preview_pane(
         .height(Length::Fill)
         .style(move |_theme: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
-            border: region.border.unwrap_or_default(),
+            border: outer,
             ..container::Style::default()
         })
         .into()
@@ -5374,6 +5621,7 @@ fn preview_pane(
 fn browser_pane(
     ws: &Workspace,
     width: Length,
+    outer: Border,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = chrome_style::browser_pane();
     let widths: Vec<f32> = ws
@@ -5397,18 +5645,16 @@ fn browser_pane(
         .filter(|(idx, _)| *idx >= first)
         .map(|(idx, tab)| {
             let active = idx == ws.browser.active_idx();
-            let select = button(
-                text(tab.title.clone())
-                    .size(workspace_font::subtitle())
-                    .color(theme::CREAM),
-            )
+            let select = button(lh(text(tab.title.clone())
+                .size(workspace_font::subtitle())
+                .color(theme::CREAM)))
             .on_press(Message::BrowserSelectTab(idx))
             .style(|_t, _s| button::Style {
                 background: None,
                 text_color: theme::CREAM,
                 ..button::Style::default()
             });
-            let close = button(text("×").size(workspace_font::body()).color(theme::DIM))
+            let close = button(lh(text("×").size(workspace_font::body()).color(theme::DIM)))
                 .on_press(Message::BrowserCloseTab(idx))
                 .style(|_t, _s| button::Style {
                     background: None,
@@ -5462,11 +5708,9 @@ fn browser_pane(
     } else {
         "输入网址".to_string()
     };
-    let addr = button(
-        text(addr_text)
-            .size(workspace_font::body())
-            .color(if editing { theme::CREAM } else { theme::DIM }),
-    )
+    let addr = button(lh(text(addr_text)
+        .size(workspace_font::body())
+        .color(if editing { theme::CREAM } else { theme::DIM })))
     .on_press(Message::BrowserAddrClick)
     .width(Length::Fill)
     .style(move |_t, _s| button::Style {
@@ -5483,20 +5727,16 @@ fn browser_pane(
     let mut content = column![tab_bar, tab_divider(), addr].spacing(region.gap);
 
     if let Some(err) = &ws.browser_error {
-        content = content.push(
-            text(format!("⚠ {err}"))
-                .size(workspace_font::body())
-                .color(theme::RED),
-        );
+        content = content.push(lh(text(format!("⚠ {err}"))
+            .size(workspace_font::body())
+            .color(theme::RED)));
     }
 
     if ws.browser.tabs().is_empty() {
         content = content.push(
-            container(
-                text("暂无网页——在地址栏输入网址")
-                    .size(workspace_font::subtitle())
-                    .color(theme::DIM),
-            )
+            container(lh(text("暂无网页——在地址栏输入网址")
+                .size(workspace_font::subtitle())
+                .color(theme::DIM)))
             .width(Length::Fill)
             .height(Length::Fill),
         );
@@ -5507,7 +5747,7 @@ fn browser_pane(
         .height(Length::Fill)
         .style(move |_theme: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
-            border: region.border.unwrap_or_default(),
+            border: outer,
             ..container::Style::default()
         })
         .into()
@@ -5518,6 +5758,7 @@ fn terminal_pane<'a>(
     app: &'a App,
     ws: &'a Workspace,
     width: Length,
+    outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = chrome_style::terminal_pane();
     let mut content = column![tab_bar(app, ws)].spacing(region.gap);
@@ -5590,42 +5831,77 @@ fn terminal_pane<'a>(
         .height(Length::Fill)
         .style(move |_theme: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
-            border: region.border.unwrap_or_default(),
+            border: outer,
             ..container::Style::default()
         });
 
-    container(column![body, terminal_status_bar(ws)])
+    // 底栏(`terminal_status_bar`)是贴在 `body` 下方的独立元素,同
+    // `project_status_bar` 一样需要 `outer` 的圆角半径收底角,否则左下角
+    // 顶出小尖角。
+    container(column![body, terminal_status_bar(ws, outer)])
         .width(width)
         .height(Length::Fill)
         .into()
 }
 
-/// 分隔线:命中区 `workspace_geometry::divider_width()` 宽、`Length::Fill` 高,内部一条 2px BORDER
-/// 竖线居中。悬停变 resize 光标走 `MouseArea::interaction` → iced 既有的
-/// `mouse_interaction` → `window.set_cursor` 管线(main.rs:808-816 已有),
-/// 不必另起一套光标代码。`on_press` 只发起拖拽状态,不指望 `MouseArea` 的
-/// `on_move`/`on_release`——它们要求光标不离开这条 8px 窄带才触发,快速拖
-/// 拽会在光标移出后"断掉";持续追踪交给 Task 4 的 `main.rs` 原始事件层。
+/// 分隔线:命中区 `workspace_geometry::divider_width()` 宽、`Length::Fill` 高,
+/// 中间一条 2px BORDER 竖线。悬停变 resize 光标走 `MouseArea::interaction` →
+/// iced 既有的 `mouse_interaction` → `window.set_cursor` 管线(main.rs:808-816
+/// 已有),不必另起一套光标代码。`on_press` 只发起拖拽状态,不指望 `MouseArea`
+/// 的 `on_move`/`on_release`——它们要求光标不离开这条窄带才触发,快速拖拽会
+/// 在光标移出后"断掉";持续追踪交给 `main.rs` 原始事件层。
 ///
-/// `Divider::LeftRight` 不画那条 2px 竖线——它两侧现在各自套了
-/// `chrome_style::left_zone()`/`right_zone()` 的整体外边框,这条线再画出来
-/// 会和两侧边框挤成三条紧贴的线。拖拽命中区照常保留,只是视觉上空出
-/// `workspace_geometry::divider_width()` 那道缝,交给两侧的 zone 边框各自收边。
+/// 配对视图(左1左2 / 右1右2)内部:`left_bg`/`right_bg` 是分隔线两侧紧贴的
+/// pane 底色。命中区左右两半(各 `(divider_width-2)/2`)分别填上这两色,只留
+/// 中间 2px BORDER 竖线——否则 8px 命中区是透明的,会露出 zone 的 CARD 底色,
+/// 在两块 pane 之间顶出一条浅色"沟",看起来像多了 padding/margin。填色后两块
+/// pane 视觉贴合、只剩一条分割线,命中区宽度(拖拽手感)不变。
+///
+/// `Divider::LeftRight` 不画那条 2px 竖线、也不填色——它两侧各自套了
+/// `chrome_style::left_zone()`/`right_zone()` 的整体外框,这条 8px 缝是故意
+/// 空出来给两侧 zone 圆角边框各自收边的,不能填成某侧 pane 色。
 fn divider_bar<'a>(
     divider: Divider,
+    left_bg: Color,
+    right_bg: Color,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let show_line = !matches!(divider, Divider::LeftRight);
-    let line = container(iced_widget::Space::new())
-        .width(Length::Fixed(2.0))
+    if !show_line {
+        let gap = iced_widget::Space::new()
+            .width(Length::Fixed(workspace_geometry::divider_width()))
+            .height(Length::Fill);
+        return MouseArea::new(gap)
+            .interaction(mouse::Interaction::ResizingColumn)
+            .on_press(Message::ColumnDragStart(divider))
+            .into();
+    }
+    let line_w = 2.0_f32;
+    let side_w = (workspace_geometry::divider_width() - line_w) / 2.0;
+    let left_side = container(iced_widget::Space::new())
+        .width(Length::Fixed(side_w))
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
-            background: show_line.then_some(theme::BORDER.into()),
+            background: Some(left_bg.into()),
             ..container::Style::default()
         });
-    let hit_area = container(line)
-        .center_x(Length::Fixed(workspace_geometry::divider_width()))
+    let right_side = container(iced_widget::Space::new())
+        .width(Length::Fixed(side_w))
+        .height(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(right_bg.into()),
+            ..container::Style::default()
+        });
+    let line = container(iced_widget::Space::new())
+        .width(Length::Fixed(line_w))
+        .height(Length::Fill)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::BORDER.into()),
+            ..container::Style::default()
+        });
+    let row = row![left_side, line, right_side]
+        .width(Length::Fixed(workspace_geometry::divider_width()))
         .height(Length::Fill);
-    MouseArea::new(hit_area)
+    MouseArea::new(row)
         .interaction(mouse::Interaction::ResizingColumn)
         .on_press(Message::ColumnDragStart(divider))
         .into()
@@ -5640,15 +5916,18 @@ fn menu_item<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     button(
         row![
-            icons::view(icon, 14.0, theme::CREAM),
+            icons::view(icon, crate::icon_size::row(), theme::CREAM),
             text(label).size(workspace_font::body()).color(theme::CREAM),
         ]
-        .spacing(8)
+        .spacing(crate::workspace_geometry::menu_gap())
         .align_y(iced_widget::core::Alignment::Center),
     )
     .on_press(msg)
-    .width(Length::Fixed(180.0))
-    .padding([6, 10])
+    .width(Length::Fixed(crate::workspace_geometry::menu_item_width()))
+    .padding([
+        crate::workspace_geometry::menu_pad_v(),
+        crate::workspace_geometry::menu_pad_h(),
+    ])
     .style(|_t, _s| button::Style {
         background: Some(theme::CARD.into()),
         text_color: theme::CREAM,
@@ -5666,7 +5945,8 @@ fn tree_edit_row(
     let indent = "  ".repeat(depth);
     container(
         text(format!("{indent}{buffer}▏"))
-            .size(workspace_font::title())
+            .size(tree_row_font_size())
+            .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
             .color(theme::CREAM),
     )
     .width(Length::Fill)
@@ -5723,14 +6003,21 @@ fn context_menu_popup<'a>(
             // "到头变灰"的既有处理口径,不是视觉变灰但仍能点)。
             button(
                 row![
-                    icons::view(icons::IconKind::ClipboardPaste, 14.0, theme::DIM),
+                    icons::view(
+                        icons::IconKind::ClipboardPaste,
+                        crate::icon_size::row(),
+                        theme::DIM
+                    ),
                     text("粘贴").size(workspace_font::body()).color(theme::DIM),
                 ]
-                .spacing(8)
+                .spacing(crate::workspace_geometry::menu_gap())
                 .align_y(iced_widget::core::Alignment::Center),
             )
-            .width(Length::Fixed(180.0))
-            .padding([6, 10])
+            .width(Length::Fixed(crate::workspace_geometry::menu_item_width()))
+            .padding([
+                crate::workspace_geometry::menu_pad_v(),
+                crate::workspace_geometry::menu_pad_h(),
+            ])
             .style(|_t, _s| button::Style {
                 background: Some(theme::CARD.into()),
                 text_color: theme::DIM,
@@ -5863,9 +6150,9 @@ fn tab_arrow_button<'a>(
     msg: Message,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let color = if enabled { theme::GOLD } else { theme::DIM };
-    let mut btn = button(icons::view(icon, 14.0, color))
-        .width(Length::Fixed(24.0))
-        .height(Length::Fixed(24.0))
+    let mut btn = button(icons::view(icon, crate::icon_size::row(), color))
+        .width(Length::Fixed(crate::workspace_geometry::tab_button_size()))
+        .height(Length::Fixed(crate::workspace_geometry::tab_button_size()))
         .padding(0)
         .style(move |_theme, status| {
             let base = button::Style {
@@ -5911,27 +6198,35 @@ fn tab_divider<'a>() -> Element<'a, Message, iced_widget::Theme, iced_widget::Re
 fn maximize_button<'a>(
     pane: MaximizedPane,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    button(icons::view(icons::IconKind::Maximize, 14.0, theme::DIM))
-        .on_press(Message::MaximizeToggle(pane))
-        .width(Length::Fixed(24.0))
-        .height(Length::Fixed(24.0))
-        .padding(0)
-        .style(|_t, status| match status {
-            button::Status::Hovered | button::Status::Pressed => button::Style {
-                background: Some(theme::CARD.into()),
-                border: Border {
-                    color: Color::TRANSPARENT,
-                    width: 1.0,
-                    radius: 4.0.into(),
-                },
-                ..button::Style::default()
+    button(icons::view(
+        icons::IconKind::Maximize,
+        crate::icon_size::row(),
+        theme::DIM,
+    ))
+    .on_press(Message::MaximizeToggle(pane))
+    .width(Length::Fixed(
+        crate::workspace_geometry::maximize_button_size(),
+    ))
+    .height(Length::Fixed(
+        crate::workspace_geometry::maximize_button_size(),
+    ))
+    .padding(0)
+    .style(|_t, status| match status {
+        button::Status::Hovered | button::Status::Pressed => button::Style {
+            background: Some(theme::CARD.into()),
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 1.0,
+                radius: 4.0.into(),
             },
-            _ => button::Style {
-                background: None,
-                ..button::Style::default()
-            },
-        })
-        .into()
+            ..button::Style::default()
+        },
+        _ => button::Style {
+            background: None,
+            ..button::Style::default()
+        },
+    })
+    .into()
 }
 
 /// tab 栏：两侧箭头翻页(到头变灰) + 每会话一个按钮(状态点 + 名称 + 关闭
@@ -6664,8 +6959,8 @@ mod tests {
         assert!(x >= col_start && x < col_start + 16.0, "x={x}");
         assert!((380.0..=420.0).contains(&w), "w={w}");
         assert!(
-            (y - 82.0).abs() < 0.1,
-            "y={y}(顶栏 44 + tab 栏 38 之下,地址栏已去)"
+            (y - (78.0 + chrome_style::left_zone().margin.top)).abs() < 0.1,
+            "y={y}(顶栏 40 + tab 栏 38 + left_zone 上 margin 之下,地址栏已去)"
         );
         assert!(h > 700.0 && h < 900.0 - y, "h={h}");
     }
@@ -6678,8 +6973,9 @@ mod tests {
             ..test_state()
         };
         let (x, _, w, _) = preview_content_bounds(1440.0, 900.0, &state);
-        assert_eq!(x, workspace_geometry::icon_rail_width() + 8.0);
-        assert_eq!(w, state.layout.left_width - 16.0);
+        let m = chrome_style::left_zone().margin;
+        assert_eq!(x, workspace_geometry::icon_rail_width() + 8.0 + m.left);
+        assert_eq!(w, state.layout.left_width - 16.0 - m.left - m.right);
     }
 
     #[test]
@@ -6715,8 +7011,8 @@ mod tests {
     /// x0=workspace_geometry::icon_rail_width()(44)+workspace_geometry::maximize_overlay_padding()(40)=84,
     /// avail_w=1440-2*44-2*40=1272,pair_w=1272-8=1264,
     /// list_w=1264*0.35=442.4,x=84+442.4+8+8=542.4,w=1264*0.65-16=805.6;
-    /// y0=workspace_geometry::top_bar_height()(44)+40=84,y=84+38(workspace_geometry::preview_chrome_top_px(),地址栏已去)=122,
-    /// avail_h=900-44-80=776,h=776-38-8=730。
+    /// y0=workspace_geometry::top_bar_height()(40)+40=80,y=80+38(workspace_geometry::preview_chrome_top_px(),地址栏已去)=118,
+    /// avail_h=900-40-80=780,h=780-38-8=734。
     #[test]
     fn preview_content_bounds_left_maximized_files_matches_overlay_geometry() {
         let state = ShellState {
@@ -6725,9 +7021,9 @@ mod tests {
         };
         let (x, y, w, h) = preview_content_bounds(1440.0, 900.0, &state);
         assert!((x - 542.4).abs() < 0.1, "x={x}");
-        assert!((y - 122.0).abs() < 0.1, "y={y}");
+        assert!((y - 118.0).abs() < 0.1, "y={y}");
         assert!((w - 805.6).abs() < 0.1, "w={w}");
-        assert!((h - 730.0).abs() < 0.1, "h={h}");
+        assert!((h - 734.0).abs() < 0.1, "h={h}");
         // 明显区别于平时(非放大)的几何——不能巧合碰上同一个值。
         let normal = preview_content_bounds(1440.0, 900.0, &test_state());
         assert_ne!((x, y, w, h), normal, "放大态几何必须和平时不同");
@@ -6776,13 +7072,17 @@ mod tests {
         let state = test_state();
         let (_, h_with) = terminal_pane_pixel_size(1440.0, 900.0, &state);
         let only_chrome = 900.0 - workspace_geometry::chrome_height_px();
+        let m = chrome_style::right_zone().margin;
         assert!(
             (only_chrome
                 - h_with
-                - (workspace_geometry::top_bar_height() + workspace_geometry::status_bar_height()))
-            .abs()
+                - (workspace_geometry::top_bar_height()
+                    + workspace_geometry::status_bar_height()
+                    + m.top
+                    + m.bottom))
+                .abs()
                 < 0.01,
-            "终端 pane 高度必须再扣顶栏+状态栏"
+            "终端 pane 高度必须再扣顶栏+状态栏+right_zone 上下 margin"
         );
     }
 
@@ -6951,11 +7251,11 @@ mod tests {
     /// 具体数字(1440x900,`agent_split`=0.4):
     /// avail_w = 1440 - 2*44 - 2*40 = 1272,pair_w = 1272 - 8 = 1264,
     /// 终端占 1-0.4 → 1264*0.6 = 758.4,减 `workspace_geometry::chrome_width_px()`(16) = 742.4;
-    /// 盒子高 = 900 - 44(顶栏) - 2*40 = 776,再减 pane 自带底栏 26
-    /// (`workspace_geometry::status_bar_height()`)与 `workspace_geometry::chrome_height_px()`(50) = 700。
+    /// 盒子高 = 900 - 40(顶栏) - 2*40 = 780,再减 pane 自带底栏 26
+    /// (`workspace_geometry::status_bar_height()`)与 `workspace_geometry::chrome_height_px()`(50) = 704。
     /// 对照平时:zones_width = 1440-2*44-8=1344,right_w = 1344 - 640 = 704,pair = 696,
-    /// 696*0.6 = 417.6,减 16 = 401.6;高 = 900 - 44 - 26 - 50 = 780。
-    /// 换成网格(CELL_WIDTH=8.4,LINE_HEIGHT_PX=14):放大后 88x50,平时 47x55。
+    /// 696*0.6 = 417.6,减 16 = 401.6;高 = 900 - 40 - 26 - 50 - right_zone 上下 margin(各 6) = 772。
+    /// 换成网格(CELL_WIDTH=8.4,LINE_HEIGHT_PX=16.8 即 14*1.2):放大后 88x41,平时 47x45。
     #[test]
     fn terminal_pane_pixel_size_right_maximized_matches_overlay_box() {
         let maxed = ShellState {
@@ -6964,16 +7264,16 @@ mod tests {
         };
         let (w, h) = terminal_pane_pixel_size(1440.0, 900.0, &maxed);
         assert!((w - 742.4).abs() < 0.1, "w={w}");
-        assert!((h - 700.0).abs() < 0.1, "h={h}");
+        assert!((h - 704.0).abs() < 0.1, "h={h}");
 
         let normal = terminal_pane_pixel_size(1440.0, 900.0, &test_state());
         assert!((normal.0 - 401.6).abs() < 0.1, "平时 w={}", normal.0);
-        assert!((normal.1 - 780.0).abs() < 0.1, "平时 h={}", normal.1);
+        assert!((normal.1 - 772.0).abs() < 0.1, "平时 h={}", normal.1);
         assert_ne!((w, h), normal, "放大态几何必须和平时不同");
         assert!(w > normal.0, "放大后终端必须真的更宽(网格跟着变宽)");
 
-        assert_eq!(crate::term_view::grid_size(w, h), (88, 50));
-        assert_eq!(crate::term_view::grid_size(normal.0, normal.1), (47, 55));
+        assert_eq!(crate::term_view::grid_size(w, h), (88, 41));
+        assert_eq!(crate::term_view::grid_size(normal.0, normal.1), (47, 45));
 
         // 左侧放大不改变右面板区几何(右半只是被遮罩盖住)。
         let left_maxed = ShellState {
@@ -7008,9 +7308,9 @@ mod tests {
             assert_eq!(terminal_pane_pixel_size(1440.0, 900.0, &for_grid), shown);
         }
 
-        // 具体网格:1440x900 下应是 47x55,而不是兜底的 80x24。
+        // 具体网格:1440x900 下应是 47x45(已扣 right_zone 上下 margin),不是兜底的 80x24。
         let (cols, rows) = crate::term_view::grid_size(shown.0, shown.1);
-        assert_eq!((cols, rows), (47, 55));
+        assert_eq!((cols, rows), (47, 45));
         assert_ne!(
             (cols as u16, rows as u16),
             (DEFAULT_COLS, DEFAULT_ROWS),

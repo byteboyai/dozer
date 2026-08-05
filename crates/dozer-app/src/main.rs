@@ -1,9 +1,11 @@
 mod assets;
 mod chrome_style;
+mod clipboard_image;
 mod conversation;
 mod delivery;
 mod fonts;
 mod goal;
+mod icon_size;
 mod icons;
 mod keymap;
 mod layout;
@@ -155,8 +157,15 @@ async fn build_app(
 pub fn main() -> Result<(), winit::error::EventLoopError> {
     tracing_subscriber::fmt::init();
 
-    // 第一次文本排版之前剔除毒化 CJK 回退的位图字体（见 fonts.rs 模块注释）。
+    // 第一次文本排版之前：先注册内嵌的 JetBrains Mono（代码/终端字体），
+    // 再剔除毒化 CJK 回退的位图字体（见 fonts.rs 模块注释）。顺序很重要——
+    // 注册在前，终端 `Family::Name("JetBrains Mono")` 才能解析。
+    fonts::load_embedded_fonts();
     fonts::sanitize_font_db();
+
+    // 把上次退出前存盘的 UI scale 读回，确保首帧几何/布局按退出时的缩放排布
+    // （Ctrl +/- 改过的 scale 由 `icon_size::persist_scale` 在每次缩放后落盘）。
+    crate::icon_size::init_scale();
 
     // Initialize winit：用户事件类型直接是 `Message`——tokio 任务经
     // `EventLoopProxy<Message>::send_event` 把事件流/daemon 状态送回 UI
@@ -453,6 +462,15 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             {
                                 app.update(Message::TermPaste(text));
                                 window.request_redraw();
+                            } else if let Some(path) =
+                                clipboard_image::read_pasteboard_image_as_temp_file()
+                            {
+                                // 剪贴板没有文本表示(纯截图),iced 的
+                                // Clipboard::read 只认字符串,取不到图片
+                                // 字节。落临时 PNG,粘贴文件路径——claude
+                                // 等 CLI 会把路径识别成图片附件加载。
+                                app.update(Message::TermPaste(path.to_string_lossy().into_owned()));
+                                window.request_redraw();
                             }
                         }
                         _ => {}
@@ -507,6 +525,33 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     window.request_redraw();
                 }
                 return;
+            }
+
+            // Ctrl + / Ctrl - 全局 UI 缩放:与 ⌘ 应用快捷键同级拦截,不进 PTY。
+            // 同时接受 `=`/`+`(Ctrl+= 通常需 Shift,逻辑键可能是 "=" 或 "+"),
+            // 覆盖不同键盘布局。
+            if modifiers.control_key()
+                && let WindowEvent::KeyboardInput {
+                    event,
+                    is_synthetic: false,
+                    ..
+                } = event
+                && event.state == ElementState::Pressed
+            {
+                let zoom = match &event.logical_key {
+                    winit::keyboard::Key::Character(s) => match s.as_str() {
+                        "+" | "=" => Some(Message::ZoomIn),
+                        "-" => Some(Message::ZoomOut),
+                        "1" => Some(Message::ZoomReset),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(msg) = zoom {
+                    app.update(msg);
+                    window.request_redraw();
+                    return;
+                }
             }
 
             let bytes = match event {
@@ -606,6 +651,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             };
             // 打开/切到预览 tab → 键盘焦点跟去预览(否则 ⌘C 复制的是终端选区)。
             // 浏览器 tab 同理归浏览器(各自独立的 webview 池,焦点不能混)。
+            // 新建/切换/落成终端 tab 时把焦点交回窗口,确保光标落在输入框。
             if matches!(
                 message,
                 Message::PreviewOpenPath(_) | Message::PreviewSelectTab(_)
@@ -616,6 +662,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 Message::BrowserOpenUrl(_) | Message::BrowserSelectTab(_)
             ) {
                 *pending_focus = Some(FocusIntent::Browser);
+            } else if matches!(
+                message,
+                Message::NewTab | Message::SelectTab(_) | Message::TabAttached(_, _, _, _)
+            ) {
+                *pending_focus = Some(FocusIntent::Terminal);
             }
             match message {
                 // 顶栏"＋"与项目栏"打开项目…"共用的唯一打开入口:rfd 模态选中
@@ -992,8 +1043,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 );
 
                                 {
-                                    // Clear the frame to the ByteBoy2077 background
-                                    let _render_pass = clear(&view, &mut encoder, theme::BG);
+                                    // Clear the frame to the overall workspace background
+                                    let _render_pass =
+                                        clear(&view, &mut encoder, chrome_style::background());
                                 }
 
                                 // Submit the clear pass

@@ -32,6 +32,7 @@ pub enum IconKind {
     Bot,
     MessageSquare,
     Maximize,
+    Home,
 }
 
 impl IconKind {
@@ -60,6 +61,7 @@ impl IconKind {
             IconKind::Bot => include_bytes!("../assets/icons/bot.svg"),
             IconKind::MessageSquare => include_bytes!("../assets/icons/message-square.svg"),
             IconKind::Maximize => include_bytes!("../assets/icons/maximize-2.svg"),
+            IconKind::Home => include_bytes!("../assets/icons/home.svg"),
         }
     }
 }
@@ -71,6 +73,8 @@ pub fn view<'a, Message: 'a>(
     size: f32,
     color: Color,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    // 调用方传入的 `size` 应为 `icon_size` 的 token（已含全局 scale），
+    // 本函数是纯渲染入口，不再二次乘 scale。
     svg(svg::Handle::from_memory(kind.bytes()))
         .width(Length::Fixed(size))
         .height(Length::Fixed(size))
