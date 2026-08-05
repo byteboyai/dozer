@@ -1,6 +1,7 @@
 mod codebuddy;
 mod install;
 mod opencode;
+mod opencode_install;
 
 use dozer_core::protocol::{AgentKind, Request, encode_line};
 use std::io::{Read, Write};
@@ -11,10 +12,16 @@ fn main() {
     match arg1.as_deref() {
         Some("install") => {
             let agent = std::env::args().nth(2).unwrap_or_else(|| "claude".into());
+            if agent == "opencode" {
+                std::process::exit(opencode_install::run_at(&opencode_install::plugins_dir(), true));
+            }
             std::process::exit(install::run_at(&install::settings_path_for(&agent), &agent, true))
         }
         Some("uninstall") => {
             let agent = std::env::args().nth(2).unwrap_or_else(|| "claude".into());
+            if agent == "opencode" {
+                std::process::exit(opencode_install::run_at(&opencode_install::plugins_dir(), false));
+            }
             std::process::exit(install::run_at(&install::settings_path_for(&agent), &agent, false))
         }
         Some(agent_arg) => {
