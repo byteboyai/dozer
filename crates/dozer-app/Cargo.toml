@@ -18,6 +18,9 @@ iced_winit = "0.14"
 iced_wgpu = { version = "0.14", default-features = true }
 iced_widget = { version = "0.14", features = ["wgpu", "canvas", "svg"] }
 winit = "0.30"
+raw-window-handle = "0.6"
+objc2 = "0.6"
+objc2-app-kit = "0.3"
 futures = { version = "0.3", features = ["thread-pool"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
