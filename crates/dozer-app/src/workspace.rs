@@ -54,7 +54,9 @@ use iced_widget::core::font::Weight;
 use iced_widget::core::mouse;
 use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Color, Element, Font, Length, Padding};
-use iced_widget::{MouseArea, button, column, container, responsive, row, stack, text};
+use iced_widget::{
+    MouseArea, Scrollable, button, column, container, responsive, row, scrollable, stack, text,
+};
 use iced_winit::winit::event_loop::EventLoopProxy;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -5422,14 +5424,19 @@ fn project_pane<'a>(
         }
     }
 
-    let body = container(content.padding(region.padding))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: region.background.map(Into::into),
-            border: outer,
-            ..container::Style::default()
-        });
+    let body = container(
+        Scrollable::new(content.padding(region.padding))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .direction(scrollable::Direction::Vertical(scrollable::Scrollbar::new())),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(move |_t: &iced_widget::Theme| container::Style {
+        background: region.background.map(Into::into),
+        border: outer,
+        ..container::Style::default()
+    });
 
     // 底栏(`project_status_bar`)是贴在 `body` 下方的独立元素,若它自己的
     // 底角不收圆,方角会戳出 `body` 已收圆的左下角,在 zone 圆角 CARD 背景上
