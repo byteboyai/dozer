@@ -5716,7 +5716,11 @@ fn project_pane<'a>(
                     } else {
                         ws.git_statuses.get(&row.path).copied()
                     };
-                    let name_color = theme::BODY;
+                    let name_color = if row.is_dir {
+                        theme::BODY
+                    } else {
+                        theme::CREAM
+                    };
                     let row_icon: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> =
                         if row.is_dir {
                             let chevron = if row.expanded {
