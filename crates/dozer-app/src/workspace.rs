@@ -4410,6 +4410,8 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
     // 页签行占满标题与右侧之间的全部空间。裁剪与翻页在 `project_tabs_row`
     // 内部做(只裁页签本身,箭头与"＋"钉在裁剪区外),这里**不能**再套一层
     // `clip`——那会把"＋"和箭头一起裁掉,正是要修的问题。
+    // 贴底对齐在 `project_tabs_row` 内部(`responsive` 闭包里)完成,这里
+    // 套 `align_y` 对它不起作用,见该函数内注释。
     let tabs = container(project_tabs_row(app)).width(Length::Fill);
 
     let mut right = row![].spacing(10);
@@ -4963,10 +4965,19 @@ fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_
         // 页签(固定宽,左对齐) + "＋"紧邻最后一片页签之后(不再用弹性留白把
         // 它顶到最右——它隶属于页签区,跟在最后一片页签后面,像浏览器新建
         // 页签的 ＋)。
-        row![tabs, add]
-            .spacing(gap)
-            .align_y(iced_widget::core::Alignment::Center)
-            .into()
+        // 贴底必须在这里(闭包*内部*)包一层 `Length::Fill` + `align_y(End)`
+        // 才生效——`responsive` 自身默认已是 Fill×Fill,闭包返回的内容在
+        // `Responsive::layout` 里直接贴 (0,0) 摆放,外层 `top_bar()` 包多少层
+        // `container(...).align_y(..)` 都摸不到它,曾经这样试过没用。
+        container(
+            row![tabs, add]
+                .spacing(gap)
+                .align_y(iced_widget::core::Alignment::Center),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_y(iced_widget::core::Alignment::End)
+        .into()
     })
     .into()
 }
@@ -4980,9 +4991,15 @@ fn project_tab_item<'a>(
     active: bool,
     blink_on: bool,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    // 悬停背景的高度/圆角与顶栏 Dozer 按钮(圆角正方形)对齐:固定高 `sq`、
-    // 半径 8,而非吃满整条顶栏高度(那样太满、与 Dozer 按钮不一致)。
+    // 页签背景圆角半径参考 Dozer 按钮(圆角正方形)的边长 `sq`,但实际背景高
+    // 用更高的 `tab_h`——页签贴底(见 `project_tabs_row` 的 `align_y(End)`)、
+    // 底部留白必须是 0,可 Dozer 按钮在顶栏里是居中的,顶部留白
+    // `(top_bar_height-sq)/2` 不为 0;要让页签顶边跟 Dozer 按钮背景顶边对齐,
+    // 页签背景就不能也用 `sq` 这个高度贴底(那样顶边会比 Dozer 的更低),
+    // 必须把高度补到 `(top_bar_height+sq)/2`,贴底后顶部留白才恰好等于
+    // Dozer 按钮那份 `(top_bar_height-sq)/2`。
     let sq = crate::icon_size::rail() + 14.0;
+    let tab_h = (workspace_geometry::top_bar_height() + sq) / 2.0;
     // 关闭按钮用与顶栏其它图标按钮(tab 箭头 / 最大化)同尺寸的方形命中区。
     let close_sz = crate::workspace_geometry::tab_button_size();
     let mut label = row![]
@@ -5025,7 +5042,7 @@ fn project_tab_item<'a>(
     let select = button(label)
         .on_press(Message::ProjectTabSwitch(id))
         .width(Length::Fill)
-        .height(Length::Fixed(sq))
+        .height(Length::Fixed(tab_h))
         .style(move |_t: &iced_widget::Theme, s| {
             let mut st = button::Style {
                 background: None,
@@ -5049,30 +5066,39 @@ fn project_tab_item<'a>(
     // 显 CARD 圆角底(半径 4,透明 1px 描边),与顶栏其它图标按钮(tab 箭头 /
     // 最大化)一致;不再用原来的 TAB_HOVER 大胶囊(半径 8)。选中态同样不单独
     // 高亮(由页签主体兜底)。
-    let close = button(text("×").size(workspace_font::body()).color(theme::DIM))
-        .on_press(Message::ProjectTabClose(id))
-        .width(Length::Fixed(close_sz))
-        .height(Length::Fixed(close_sz))
-        .padding(0)
-        .style(move |_t: &iced_widget::Theme, status| {
-            let base = button::Style {
-                background: None,
-                text_color: theme::DIM,
-                ..button::Style::default()
-            };
-            match status {
-                button::Status::Hovered | button::Status::Pressed => button::Style {
-                    background: Some(theme::CARD.into()),
-                    border: Border {
-                        color: Color::TRANSPARENT,
-                        width: 1.0,
-                        radius: 4.0.into(),
-                    },
-                    ..base
+    // `×` 必须包一层 `Fill`+`align_y(Center)`(与下面 `label` 同一条注释里
+    // 说的 iced 按钮布局 quirk)——按钮只吃 padding,不回收多余竖向空间,
+    // 裸 `text` 会贴在按钮内容区顶部,跟垂直居中的标题文字对不上。
+    let close = button(
+        container(text("×").size(workspace_font::body()).color(theme::DIM))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(iced_widget::core::Alignment::Center)
+            .align_y(iced_widget::core::Alignment::Center),
+    )
+    .on_press(Message::ProjectTabClose(id))
+    .width(Length::Fixed(close_sz))
+    .height(Length::Fixed(close_sz))
+    .padding(0)
+    .style(move |_t: &iced_widget::Theme, status| {
+        let base = button::Style {
+            background: None,
+            text_color: theme::DIM,
+            ..button::Style::default()
+        };
+        match status {
+            button::Status::Hovered | button::Status::Pressed => button::Style {
+                background: Some(theme::CARD.into()),
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 1.0,
+                    radius: 4.0.into(),
                 },
-                _ => base,
-            }
-        });
+                ..base
+            },
+            _ => base,
+        }
+    });
 
     // 页签主体(select)为底层、关闭按钮为上层叠在其右:关闭按钮视觉上落在
     // 页签背景里,而非独立的相邻按钮。两层都 `Fill` 撑满整条顶栏高,select
@@ -5093,29 +5119,42 @@ fn project_tab_item<'a>(
 
     // 激活态:实底背景(左上/右上圆角) + 底部 1px 强调线
     // (`#dcc9a3` = `TAB_ACTIVE_BORDER`),不要外边框;未激活态:无背景、无边框
-    // (仅 hover 时画胶囊,见上)。
+    // (仅 hover 时画胶囊,见上)。强调线用 `stack!` 叠在 `tab_row` 之上(贴底
+    // 对齐),不能用 `column!` 把它当 `tab_row` 的兄弟项——`column!` 会从
+    // `tab_row` 的 `Fill` 高度里瓜分掉这 1px,导致选中页签的 `select`
+    // 按钮比未选中页签矮 1px,标题文字的居中基准跟着偏,与未选中页签的
+    // 标题对不上(貌似"没对齐"的根因)。`stack!` 的每一层都吃满同一块
+    // 区域,不会互相抢空间。
     let inner = if active {
-        column![
+        container(stack![
             tab_row,
-            container(iced_widget::space::Space::new())
-                .width(Length::Fill)
-                .height(Length::Fixed(1.0))
-                .style(|_t: &iced_widget::Theme| container::Style {
-                    background: Some(theme::TAB_ACTIVE_BORDER.into()),
-                    ..container::Style::default()
-                }),
-        ]
+            container(
+                container(iced_widget::space::Space::new())
+                    .width(Length::Fill)
+                    .height(Length::Fixed(1.0))
+                    .style(|_t: &iced_widget::Theme| container::Style {
+                        background: Some(theme::TAB_ACTIVE_BORDER.into()),
+                        ..container::Style::default()
+                    }),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_y(iced_widget::core::alignment::Vertical::Bottom),
+        ])
+        .width(Length::Fill)
         .height(Length::Fill)
     } else {
-        column![tab_row].height(Length::Fill)
+        tab_row
     };
 
-    // 选中背景的竖向几何与 Dozer 按钮对齐:背景是 `sq` 高的圆角矩形,在顶栏里
-    // 垂直居中,因此距顶栏顶/底的间距 = (top_bar_height - sq)/2,正好等于 Dozer
-    // 按钮背景距顶栏顶的间距(见 `dozer_home_tab`)。未激活态同样高 `sq` 居中、
-    // 无背景;select 命中区本就居中,点击/hover 不受影响。
+    // 背景高 `tab_h`(见上,比 `sq` 高),贴底放进 `project_tabs_row` 的行里后
+    // 顶部留白与 Dozer 按钮背景顶部留白相等,视觉上两者顶边对齐,底部则贴到
+    // 顶栏下沿(页签式,与内容区无缝衔接)。未激活态同样高 `tab_h`、无背景;
+    // 这里的 `align_y` 对贴底本身不起作用(那层在 `project_tabs_row` 的
+    // `container(...).align_y(End)` 完成),留着只是 iced `container` 布局
+    // 惯例、无空间可分配时是无操作。
     container(inner)
-        .height(Length::Fixed(sq))
+        .height(Length::Fixed(tab_h))
         .width(Length::Fill)
         .align_y(iced_widget::core::alignment::Vertical::Center)
         .clip(true)
