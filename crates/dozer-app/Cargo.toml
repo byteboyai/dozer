@@ -31,9 +31,10 @@ trash = "5.2.6"
 arboard = "3"
 png = "0.17"
 uuid.workspace = true
-# spike(2026-08-06): 验证 gleisbau 作为原生 git 提交图布局库嵌入 iced Canvas
-# 的可行性,见 docs/superpowers/plans 对应 spike 记录。若验证通过转正,再评估
-# 是否需要 pin 具体版本/替换掉 git-graph CLI 同源代码库。
+# gleisbau = 原生 git 提交图布局库,嵌入 iced Canvas(已转正,非 spike)。
+# git2 = git 数据层(git_log 提交图 + delivery 状态查询 + worktree 列表),
+# 依赖版本与 gleisbau 传递依赖对齐,避免 cargo 拉两份。
+# notify = 项目工作区实时文件系统监听(git_watch 的 debounce 基础)。
 gleisbau = "0.7"
 git2 = "0.21"
 notify = "8"
