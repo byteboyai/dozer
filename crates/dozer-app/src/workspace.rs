@@ -917,9 +917,7 @@ pub enum Message {
     /// 反馈裁决：重开 app 只恢复"关 app 时还开着"的 tab，已关的不还魂）。
     /// "会话存活"保的是关 app/崩溃不掉会话——退 app 才是 detach。
     CloseTab(usize),
-    /// 点击 "＋"：以 `$SHELL`（缺省 `/bin/zsh`）在 `$HOME` 新建一个会话。
-    NewTab,
-    /// Agent 面板"＋新建"按钮:开/关 agent 选择菜单。
+    /// Agent 面板"＋"按钮:开/关 agent 选择菜单。
     AgentPickerToggle,
     /// agent 选择菜单:点击菜单外/Esc,关闭不建会话。
     AgentPickerClose,
@@ -927,8 +925,7 @@ pub enum Message {
     /// `Some(agent)` = 新建会话后自动键入该 agent 的 CLI 名字)。
     AgentPickerSelect(Option<AgentKind>),
     /// 新建会话完成 attach（tab_id、`SessionInfo`、初始快照）。
-    /// 只有 `NewTab` 走这条路径——启动时的恢复走同步的 `bootstrap`，
-    /// 不需要过一次消息循环。
+    /// 启动时的恢复走同步的 `bootstrap`，不需要过一次消息循环。
     TabAttached(ProjectId, usize, SessionInfo, Vec<u8>),
     /// 终端 pane 像素尺寸变化换算出的新网格尺寸；对所有 tab 生效
     /// （包括当前不可见的），保证切换 tab 时尺寸已经是最新的。
@@ -1328,7 +1325,7 @@ pub struct Workspace {
     /// 当前显示的 tab 在 `tabs` 中的位置（不是 `tab_id`）。
     active: usize,
     next_tab_id: usize,
-    /// `NewTab` 发起 create+attach 期间的转发任务句柄暂存区，
+    /// 发起新建会话(create+attach)期间的转发任务句柄暂存区，
     /// `Message::TabAttached` 到达时取出、装进新建的 `SessionTab`。
     pending: HashMap<usize, tokio::task::JoinHandle<()>>,
     /// 预览域状态机(P1d).
@@ -1381,7 +1378,7 @@ pub struct Workspace {
     tree_delete_confirm: Option<(PathBuf, bool)>,
     /// 项目树行内编辑态(新建/重命名共用;None=未在编辑)。
     tree_edit: Option<TreeEdit>,
-    /// Agent 面板"＋新建"菜单当前是否打开。不需要坐标——面板顶部固定
+    /// Agent 面板"＋"按钮弹出的"新建"菜单当前是否打开。不需要坐标——面板顶部固定
     /// 位置的下拉,不像项目树右键菜单需要跟随点击坐标。
     agent_picker_open: bool,
     /// 这份 `Workspace` 是否只是 `Stub` → `Loaded` 促成期间的"加载中"占位
@@ -2103,7 +2100,7 @@ impl Workspace {
         // `create` 要 project_id,P2a Task 3),而一个活着的 `Workspace` 之所以
         // 存在于 `App.projects` 里,前提就是它已知自己归属哪个项目——这里
         // 的 expect 失败只可能是上游逻辑错了(比如给还没促成的占位
-        // `Workspace` 发了 `NewTab`),该让它响亮地 panic,而不是静默落到
+        // `Workspace` 发了新建会话消息),该让它响亮地 panic,而不是静默落到
         // $HOME 建一个无归属的野会话。
         let project = self.project.as_ref().expect("Workspace 存在即已知归属项目");
         let cwd = project.path.clone();
@@ -3266,7 +3263,6 @@ impl App {
                     ws.ensure_project_terminal(io);
                 });
             }
-            Message::NewTab => self.with_focused_project(|ws, io| ws.spawn_new_tab(io, None)),
             Message::AgentPickerToggle => {
                 self.with_focused_project(|ws, _io| {
                     ws.agent_picker_open = !ws.agent_picker_open;
@@ -5484,35 +5480,30 @@ fn agent_list_row(
         .into()
 }
 
-/// Agent 面板头部"＋新建"按钮:点击切换 `agent_picker_open`,弹出 agent
-/// 选择菜单(`agent_picker_popup`)。样式复用终端 tab 栏"＋"
-/// (`Message::NewTab` 那颗,`workspace.rs` 里 `plus` 变量)同款
-/// CARD 底 + BORDER 描边。
+/// Agent 面板头部"＋"按钮:点击切换 `agent_picker_open`,弹出 agent
+/// 选择菜单(`agent_picker_popup`)。样式为 CARD 底 + BORDER 描边的"＋",
+/// 与已移除的终端 tab 栏"＋"同源。
 fn agent_picker_toggle_button<'a>()
 -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    button(
-        text("＋新建")
-            .size(workspace_font::label())
-            .color(theme::CREAM),
-    )
-    .on_press(Message::AgentPickerToggle)
-    .padding([4, 10])
-    .style(|_theme, _status| button::Style {
-        background: Some(theme::CARD.into()),
-        text_color: theme::CREAM,
-        border: Border {
-            color: theme::BORDER,
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        ..button::Style::default()
-    })
-    .into()
+    button(text("＋").size(workspace_font::title()).color(theme::CREAM))
+        .on_press(Message::AgentPickerToggle)
+        .padding([4, 8])
+        .style(|_theme, _status| button::Style {
+            background: Some(theme::CARD.into()),
+            text_color: theme::CREAM,
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..button::Style::default()
+        })
+        .into()
 }
 
-/// Agent 选择菜单浮层:固定挂在窗口右上角("＋新建"按钮下方——该按钮
-/// 就在最靠右的 Agent 面板头部,近似等于窗口右上角),四个选项
-/// Claude/CodeBuddy/OpenCode/纯 Shell。跟项目树右键菜单
+/// Agent 选择菜单浮层:固定挂在窗口右上角("＋"按钮下方——该按钮
+/// 就在最靠右的 Agent 面板头部,近似等于窗口右上角),五个选项
+/// Claude/CodeBuddy/OpenCode/纯 Shell/Git Shell。跟项目树右键菜单
 /// (`context_menu_popup`)同款按钮样式,但不需要像素坐标定位——同
 /// `delete_confirm_popup` 一样固定 padding 摆位。`ws.agent_picker_open`
 /// 为假时返回空视图,调用方(`App::view`)据此决定要不要把这层塞进
@@ -5555,7 +5546,7 @@ fn agent_picker_popup(
             ..container::Style::default()
         });
     // 右上角固定偏移:48px 避开顶栏,16px 避开窗口右边缘。这是估算值,
-    // 不是像素级对齐"＋新建"按钮(spec 明确"不算点击坐标")——Task 4 最后
+    // 不是像素级对齐"＋"按钮(spec 明确"不算点击坐标")——Task 4 最后
     // 一步的人工验收里如果视觉上偏得明显,回来调这两个数字即可,不影响
     // 其余逻辑。
     container(list)
@@ -7149,7 +7140,8 @@ fn tab_divider<'a>() -> Element<'a, Message, iced_widget::Theme, iced_widget::Re
 }
 
 /// tab 栏：两侧箭头翻页(到头变灰) + 每会话一个按钮(状态点 + 名称 + 关闭
-/// ×) + 末尾一个 "＋" 新建。P1L T5 验收返工：横向 scrollable(底部滚动条)
+/// ×)。新建会话走 Agent 面板"＋"(纯 Shell 也在其菜单里),终端 tab 栏
+/// 不再放独立"＋"。P1L T5 验收返工：横向 scrollable(底部滚动条)
 /// 换成索引窗口化 + `clip`——`on_scroll` 只认滚轮/拖拽，程序化滚动在本
 /// app 自建循环里够不到，箭头翻页必须走状态驱动的窗口渲染。
 fn tab_bar<'a>(
@@ -7190,20 +7182,7 @@ fn tab_bar<'a>(
         Message::TermTabScroll(true),
     );
 
-    let plus = button(text("＋").size(workspace_font::title()).color(theme::CREAM))
-        .on_press(Message::NewTab)
-        .style(|_theme, _status| button::Style {
-            background: Some(theme::CARD.into()),
-            text_color: theme::CREAM,
-            border: Border {
-                color: theme::BORDER,
-                width: 1.0,
-                radius: 2.0.into(),
-            },
-            ..button::Style::default()
-        });
-
-    let tab_row = row![left_arrow, right_arrow, clipped, plus]
+    let tab_row = row![left_arrow, right_arrow, clipped]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
 
@@ -7579,7 +7558,7 @@ fn active_tab_view<'a>(
     match ws.tabs.get(ws.active) {
         Some(tab) => term_view::view(&tab.model, app.term_focused),
         None => container(
-            text("暂无会话——点击 ＋ 新建")
+            text("暂无会话——到 Agent 面板点「＋」")
                 .size(workspace_font::subtitle())
                 .color(theme::DIM),
         )

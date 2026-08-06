@@ -775,8 +775,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 *pending_focus = Some(FocusIntent::Browser);
             } else if matches!(
                 message,
-                Message::NewTab
-                    | Message::SelectTab(_)
+                Message::SelectTab(_)
                     | Message::TabAttached(_, _, _, _)
                     | Message::AgentPickerSelect(_)
             ) {
