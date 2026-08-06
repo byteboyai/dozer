@@ -5105,6 +5105,7 @@ fn agent_list_pane(
             agent_picker_toggle_button(),
         ]
         .spacing(8)
+        .align_y(iced_widget::core::Alignment::Center)
     ]
     .spacing(region.gap);
 
@@ -5151,9 +5152,11 @@ fn agent_list_row(
         lh(text(agent_state_label(tab.agent_state))
             .size(workspace_font::caption_sm())
             .color(theme::DIM)),
-        lh(text(tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name))
-            .size(workspace_font::body())
-            .color(theme::CREAM)),
+        lh(
+            text(tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name))
+                .size(workspace_font::body())
+                .color(theme::CREAM)
+        ),
     ]
     .spacing(6)
     .align_y(iced_widget::core::Alignment::Center);
@@ -5206,7 +5209,9 @@ fn agent_picker_toggle_button<'a>()
 /// `delete_confirm_popup` 一样固定 padding 摆位。`ws.agent_picker_open`
 /// 为假时返回空视图,调用方(`App::view`)据此决定要不要把这层塞进
 /// `stack!`。
-fn agent_picker_popup(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn agent_picker_popup(
+    ws: &Workspace,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     if !ws.agent_picker_open {
         return column![].into();
     }
@@ -5230,15 +5235,17 @@ fn agent_picker_popup(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme
                 }),
         );
     }
-    let list = container(col).padding(6).style(|_t: &iced_widget::Theme| container::Style {
-        background: Some(theme::CARD.into()),
-        border: Border {
-            color: theme::BORDER,
-            width: 1.0,
-            radius: 6.0.into(),
-        },
-        ..container::Style::default()
-    });
+    let list = container(col)
+        .padding(6)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::CARD.into()),
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        });
     // 右上角固定偏移:48px 避开顶栏,16px 避开窗口右边缘。这是估算值,
     // 不是像素级对齐"＋新建"按钮(spec 明确"不算点击坐标")——Task 4 最后
     // 一步的人工验收里如果视觉上偏得明显,回来调这两个数字即可,不影响
@@ -8728,7 +8735,10 @@ mod tests {
     #[test]
     fn group_tabs_by_agent_empty_list() {
         let tabs: Vec<SessionTab> = Vec::new();
-        assert_eq!(group_tabs_by_agent(&tabs), Vec::<(AgentKind, Vec<usize>)>::new());
+        assert_eq!(
+            group_tabs_by_agent(&tabs),
+            Vec::<(AgentKind, Vec<usize>)>::new()
+        );
     }
 
     #[test]
@@ -8778,7 +8788,8 @@ mod tests {
             let color = agent_dot_color(agent);
             assert_eq!(color, expected, "{agent:?}");
             assert_ne!(
-                color, theme::GOLD,
+                color,
+                theme::GOLD,
                 "{agent:?} 的对话列表圆点色不能是 GOLD(甲方动作专属,CLAUDE.md 明文规定)"
             );
         }
