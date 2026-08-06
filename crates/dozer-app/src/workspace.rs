@@ -862,6 +862,13 @@ pub enum Message {
     CloseTab(usize),
     /// 点击 "＋"：以 `$SHELL`（缺省 `/bin/zsh`）在 `$HOME` 新建一个会话。
     NewTab,
+    /// Agent 面板"＋新建"按钮:开/关 agent 选择菜单。
+    AgentPickerToggle,
+    /// agent 选择菜单:点击菜单外/Esc,关闭不建会话。
+    AgentPickerClose,
+    /// agent 选择菜单:选中一项(`None` = 纯 Shell,同现有"＋"效果;
+    /// `Some(agent)` = 新建会话后自动键入该 agent 的 CLI 名字)。
+    AgentPickerSelect(Option<AgentKind>),
     /// 新建会话完成 attach（tab_id、`SessionInfo`、初始快照）。
     /// 只有 `NewTab` 走这条路径——启动时的恢复走同步的 `bootstrap`，
     /// 不需要过一次消息循环。
@@ -1307,6 +1314,9 @@ pub struct Workspace {
     tree_delete_confirm: Option<(PathBuf, bool)>,
     /// 项目树行内编辑态(新建/重命名共用;None=未在编辑)。
     tree_edit: Option<TreeEdit>,
+    /// Agent 面板"＋新建"菜单当前是否打开。不需要坐标——面板顶部固定
+    /// 位置的下拉,不像项目树右键菜单需要跟随点击坐标。
+    agent_picker_open: bool,
     /// 这份 `Workspace` 是否只是 `Stub` → `Loaded` 促成期间的"加载中"占位
     /// (见 [`Workspace::loading_for_project`])。占位有正确的 `project`/文件树,
     /// 但会话/git/对话都还没拉,并且整份对象会在
@@ -1564,6 +1574,7 @@ impl Workspace {
             tree_error: None,
             tree_delete_confirm: None,
             tree_edit: None,
+            agent_picker_open: false,
             loading: false,
         }
     }
@@ -2009,11 +2020,11 @@ impl Workspace {
     /// 当前行为。
     fn ensure_project_terminal(&mut self, io: &ShellIo) {
         if self.project.is_some() && self.tabs.is_empty() {
-            self.spawn_new_tab(io);
+            self.spawn_new_tab(io, None);
         }
     }
 
-    fn spawn_new_tab(&mut self, io: &ShellIo) {
+    fn spawn_new_tab(&mut self, io: &ShellIo, launch: Option<AgentKind>) {
         // 促成中的"加载中"占位不建会话:这份 `Workspace` 马上会被
         // `Message::ProjectSlotLoaded` 整份换掉,此刻建出来的会话会连同占位
         // 一起被丢弃,却仍在 daemon 上占着 PTY(见 `loading` 字段)。
@@ -2050,11 +2061,20 @@ impl Workspace {
             };
             match client.attach(&info.id, 0).await {
                 Ok((snapshot, _next_offset, rx)) => {
+                    let session_id = info.id.clone();
                     if proxy
                         .send_event(Message::TabAttached(project_id, tab_id, info, snapshot))
                         .is_err()
                     {
                         return;
+                    }
+                    if let Some(agent) = launch
+                        && let Some(cmd) = agent_cli_command(agent)
+                    {
+                        let bytes = format!("{cmd}\n").into_bytes();
+                        if let Err(e) = client.write(&session_id, &bytes).await {
+                            tracing::warn!("自动键入 agent CLI 失败: {e}");
+                        }
                     }
                     forward_events(project_id, tab_id, rx, proxy).await;
                 }
@@ -2742,6 +2762,13 @@ impl App {
         self.context_menu.is_some()
     }
 
+    /// Agent 选择菜单是否打开(main.rs Esc 键路由用)。
+    pub fn agent_picker_open(&self) -> bool {
+        self.active_workspace()
+            .map(|ws| ws.agent_picker_open)
+            .unwrap_or(false)
+    }
+
     /// 取走"双击顶栏空白处"待处理标记(取走即清零)。main.rs 在派发完
     /// 消息后轮询这个方法,命中就调用 `window.set_maximized(!window.
     /// is_maximized())`——`App` 自己不持有 `Window` 句柄,做不到这一步。
@@ -3139,7 +3166,23 @@ impl App {
                     ws.ensure_project_terminal(io);
                 });
             }
-            Message::NewTab => self.with_focused_project(|ws, io| ws.spawn_new_tab(io)),
+            Message::NewTab => self.with_focused_project(|ws, io| ws.spawn_new_tab(io, None)),
+            Message::AgentPickerToggle => {
+                self.with_focused_project(|ws, _io| {
+                    ws.agent_picker_open = !ws.agent_picker_open;
+                });
+            }
+            Message::AgentPickerClose => {
+                self.with_focused_project(|ws, _io| {
+                    ws.agent_picker_open = false;
+                });
+            }
+            Message::AgentPickerSelect(agent) => {
+                self.with_focused_project(|ws, io| {
+                    ws.agent_picker_open = false;
+                    ws.spawn_new_tab(io, agent);
+                });
+            }
             Message::TabAttached(project_id, tab_id, info, snapshot) => {
                 self.with_project(project_id, move |ws, io| {
                     ws.on_tab_attached(io, tab_id, info, snapshot)
@@ -3887,6 +3930,17 @@ impl App {
             )
             .on_press(Message::ProjectTreeContextMenuClose);
             stack![base, dismiss, context_menu_popup(self, ws)]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else if ws.agent_picker_open {
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::AgentPickerClose);
+            stack![base, dismiss, agent_picker_popup(ws)]
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
@@ -4955,9 +5009,16 @@ fn conversation_list_pane(
         let sub_color = if current { theme::GREEN } else { theme::DIM };
         let card = button(
             column![
-                lh(text(c.title.clone())
-                    .size(workspace_font::body())
-                    .color(theme::CREAM)),
+                row![
+                    text("●")
+                        .size(workspace_font::caption())
+                        .color(agent_dot_color(c.agent)),
+                    lh(text(c.title.clone())
+                        .size(workspace_font::body())
+                        .color(theme::CREAM)),
+                ]
+                .spacing(6)
+                .align_y(iced_widget::core::Alignment::Center),
                 lh(text(sub)
                     .size(workspace_font::caption_sm())
                     .color(sub_color)),
@@ -4991,15 +5052,43 @@ fn conversation_list_pane(
         .into()
 }
 
-/// Agent 列表面板(右面板区"Agent"视图的列表侧):当前只有占位文案,
-/// 真实 agent 托管留后续任务。
+/// 按 `AgentKind` 把会话 tab 分组,固定顺序 Claude → Codebuddy → Opencode
+/// → Unknown,只返回非空分组(没有该 agent 的会话就不出现,面板不留空
+/// 分组占位)。组内保持 `tabs` 原有顺序(tab 打开顺序)。返回下标而非
+/// 引用——渲染时既要下标发 `Message::SelectTab(idx)`,又要用下标回查
+/// `ws.tabs[idx]` 取展示字段,直接存下标比存 `&SessionTab` 省一次生命
+/// 周期纠缠。
+fn group_tabs_by_agent(tabs: &[SessionTab]) -> Vec<(AgentKind, Vec<usize>)> {
+    const ORDER: [AgentKind; 4] = [
+        AgentKind::Claude,
+        AgentKind::Codebuddy,
+        AgentKind::Opencode,
+        AgentKind::Unknown,
+    ];
+    ORDER
+        .into_iter()
+        .filter_map(|kind| {
+            let idxs: Vec<usize> = tabs
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.agent == kind)
+                .map(|(i, _)| i)
+                .collect();
+            (!idxs.is_empty()).then_some((kind, idxs))
+        })
+        .collect()
+}
+
+/// Agent 列表面板(右面板区"Agent"视图的列表侧):按 `AgentKind` 分组展示
+/// 当前项目的会话,组内保留 tab 打开顺序;点击一行 = `Message::SelectTab`
+/// 切焦点(同终端 tab 栏点击效果)。
 fn agent_list_pane(
     ws: &Workspace,
     width: Length,
     outer: Border,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = chrome_style::agent_list_pane();
-    let content = column![
+    let mut content = column![
         row![
             lh(text("Agent")
                 .size(workspace_font::subtitle())
@@ -5012,13 +5101,28 @@ fn agent_list_pane(
             )
             .size(workspace_font::label())
             .color(theme::DIM)),
+            iced_widget::space::horizontal(),
+            agent_picker_toggle_button(),
         ]
-        .spacing(8),
-        lh(text("Agents（后续）")
-            .size(workspace_font::body())
-            .color(theme::DIM)),
+        .spacing(8)
+        .align_y(iced_widget::core::Alignment::Center)
     ]
     .spacing(region.gap);
+
+    if ws.tabs.is_empty() {
+        content = content.push(lh(text("暂无会话")
+            .size(workspace_font::body())
+            .color(theme::DIM)));
+    } else {
+        for (agent, idxs) in group_tabs_by_agent(&ws.tabs) {
+            content = content.push(lh(text(format!("{}（{}）", agent.label(), idxs.len()))
+                .size(workspace_font::caption())
+                .color(theme::DIM)));
+            for idx in idxs {
+                content = content.push(agent_list_row(ws, idx));
+            }
+        }
+    }
 
     container(content.padding(region.padding))
         .width(width)
@@ -5027,6 +5131,135 @@ fn agent_list_pane(
             background: region.background.map(Into::into),
             border: outer,
             ..container::Style::default()
+        })
+        .into()
+}
+
+/// Agent 面板里单条会话行:状态点(`dot_color`)+ 状态文字
+/// (`agent_state_label`)+ 会话名(`tab_title`),整行可点选中该 tab
+/// (`idx == ws.active` 时 `theme::CARD` 背景高亮,同项目树选中行的手法,
+/// 见 `workspace.rs` 里 `is_selected` 那段)。
+fn agent_list_row(
+    ws: &Workspace,
+    idx: usize,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let tab = &ws.tabs[idx];
+    let active = idx == ws.active;
+    let row_el = row![
+        text("●")
+            .size(workspace_font::caption())
+            .color(dot_color(tab.agent_state, tab.alive)),
+        lh(text(agent_state_label(tab.agent_state))
+            .size(workspace_font::caption_sm())
+            .color(theme::DIM)),
+        lh(
+            text(tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name))
+                .size(workspace_font::body())
+                .color(theme::CREAM)
+        ),
+    ]
+    .spacing(6)
+    .align_y(iced_widget::core::Alignment::Center);
+    button(row_el)
+        .on_press(Message::SelectTab(idx))
+        .width(Length::Fill)
+        .padding(6)
+        .style(move |_t, _s| button::Style {
+            background: if active {
+                Some(theme::CARD.into())
+            } else {
+                None
+            },
+            text_color: theme::CREAM,
+            ..button::Style::default()
+        })
+        .into()
+}
+
+/// Agent 面板头部"＋新建"按钮:点击切换 `agent_picker_open`,弹出 agent
+/// 选择菜单(`agent_picker_popup`)。样式复用终端 tab 栏"＋"
+/// (`Message::NewTab` 那颗,`workspace.rs` 里 `plus` 变量)同款
+/// CARD 底 + BORDER 描边。
+fn agent_picker_toggle_button<'a>()
+-> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    button(
+        text("＋新建")
+            .size(workspace_font::label())
+            .color(theme::CREAM),
+    )
+    .on_press(Message::AgentPickerToggle)
+    .padding([4, 10])
+    .style(|_theme, _status| button::Style {
+        background: Some(theme::CARD.into()),
+        text_color: theme::CREAM,
+        border: Border {
+            color: theme::BORDER,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..button::Style::default()
+    })
+    .into()
+}
+
+/// Agent 选择菜单浮层:固定挂在窗口右上角("＋新建"按钮下方——该按钮
+/// 就在最靠右的 Agent 面板头部,近似等于窗口右上角),四个选项
+/// Claude/CodeBuddy/OpenCode/纯 Shell。跟项目树右键菜单
+/// (`context_menu_popup`)同款按钮样式,但不需要像素坐标定位——同
+/// `delete_confirm_popup` 一样固定 padding 摆位。`ws.agent_picker_open`
+/// 为假时返回空视图,调用方(`App::view`)据此决定要不要把这层塞进
+/// `stack!`。
+fn agent_picker_popup(
+    ws: &Workspace,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    if !ws.agent_picker_open {
+        return column![].into();
+    }
+    let items: [(&str, Option<AgentKind>); 4] = [
+        ("Claude", Some(AgentKind::Claude)),
+        ("CodeBuddy", Some(AgentKind::Codebuddy)),
+        ("OpenCode", Some(AgentKind::Opencode)),
+        ("纯 Shell", None),
+    ];
+    let mut col = column![].spacing(2);
+    for (label, agent) in items {
+        col = col.push(
+            button(text(label).size(workspace_font::body()).color(theme::CREAM))
+                .on_press(Message::AgentPickerSelect(agent))
+                .width(Length::Fixed(140.0))
+                .padding([6, 12])
+                .style(|_t, _s| button::Style {
+                    background: Some(theme::CARD.into()),
+                    text_color: theme::CREAM,
+                    ..button::Style::default()
+                }),
+        );
+    }
+    let list = container(col)
+        .padding(6)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::CARD.into()),
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        });
+    // 右上角固定偏移:48px 避开顶栏,16px 避开窗口右边缘。这是估算值,
+    // 不是像素级对齐"＋新建"按钮(spec 明确"不算点击坐标")——Task 4 最后
+    // 一步的人工验收里如果视觉上偏得明显,回来调这两个数字即可,不影响
+    // 其余逻辑。
+    container(list)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Right)
+        .align_y(iced_widget::core::alignment::Vertical::Top)
+        .padding(Padding {
+            top: 48.0,
+            left: 0.0,
+            right: 16.0,
+            bottom: 0.0,
         })
         .into()
 }
@@ -6864,6 +7097,19 @@ fn file_change_line(fc: &FileChange) -> String {
     }
 }
 
+/// agent 选择菜单选中的 agent → 要自动键入 PTY 的 CLI 命令名。`Unknown`
+/// 不该从选择菜单产生(选项只有 Claude/CodeBuddy/OpenCode/纯 Shell 四选
+/// 一,纯 Shell 走 `launch: None`,不经过这个函数),但函数保持穷尽
+/// match,防止未来枚举新增变体时静默漏写。已知变体的 CLI 名字与
+/// `AgentKind::label()` 逐字节一致(`label()` 本身就是给这三个变体返回
+/// 小写 CLI 名),这里直接复用而不重复一份映射表,避免两处拼写分叉。
+fn agent_cli_command(agent: AgentKind) -> Option<&'static str> {
+    match agent {
+        AgentKind::Unknown => None,
+        known => Some(known.label()),
+    }
+}
+
 /// tab 标题：已识别出 agent（hook 上报）则显 agent 名（如 "claude"）；
 /// 否则回落到 OSC 7 的 cwd basename，再无 cwd 才回落会话名。
 fn tab_title(agent: AgentKind, cwd: Option<&Path>, fallback: &str) -> String {
@@ -6960,6 +7206,17 @@ fn dot_color(state: AgentState, alive: bool) -> Color {
         AgentState::Idle | AgentState::Running => theme::GREEN,
         AgentState::AwaitingInput => theme::PURPLE,
         AgentState::TurnEnded => theme::GOLD,
+    }
+}
+
+/// agent → 对话列表圆点颜色。避开 `theme::GOLD`(甲方动作专属色,
+/// CLAUDE.md 明文规定,不能被 agent 分类语义借用)。
+fn agent_dot_color(agent: AgentKind) -> Color {
+    match agent {
+        AgentKind::Claude => theme::CYAN,
+        AgentKind::Codebuddy => theme::PURPLE,
+        AgentKind::Opencode => theme::GREEN,
+        AgentKind::Unknown => theme::DIM,
     }
 }
 
@@ -8444,5 +8701,105 @@ mod tests {
             criteria: vec![],
         };
         assert_eq!(goal_capsule_text(Some(&empty), 10), None);
+    }
+
+    fn make_test_tab(rt: &tokio::runtime::Runtime, id: &str, agent: AgentKind) -> SessionTab {
+        SessionTab {
+            info: SessionInfo {
+                id: id.to_string(),
+                name: "shell".into(),
+                command: "shell".into(),
+                cwd: "/tmp".into(),
+                alive: true,
+                created_ms: 0,
+                agent_state: AgentState::Idle,
+                transcript_path: None,
+                project_id: None,
+                agent,
+            },
+            model: TerminalModel::new(80, 24),
+            alive: true,
+            agent_state: AgentState::Idle,
+            agent,
+            transcript_path: None,
+            osc: OscScanner::new(),
+            cwd: None,
+            last_exit: None,
+            delivery_pending: false,
+            last_turn_head: None,
+            tab_id: 0,
+            forwarder: rt.spawn(async {}),
+        }
+    }
+
+    #[test]
+    fn group_tabs_by_agent_empty_list() {
+        let tabs: Vec<SessionTab> = Vec::new();
+        assert_eq!(
+            group_tabs_by_agent(&tabs),
+            Vec::<(AgentKind, Vec<usize>)>::new()
+        );
+    }
+
+    #[test]
+    fn group_tabs_by_agent_single_agent_multiple_sessions() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let tabs = vec![
+            make_test_tab(&rt, "a", AgentKind::Claude),
+            make_test_tab(&rt, "b", AgentKind::Claude),
+        ];
+        assert_eq!(
+            group_tabs_by_agent(&tabs),
+            vec![(AgentKind::Claude, vec![0, 1])]
+        );
+    }
+
+    #[test]
+    fn group_tabs_by_agent_mixed_fixed_order_no_empty_groups() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        // 故意打乱插入顺序(Opencode 先、Claude 后),验证分组输出顺序
+        // 固定为 Claude→Codebuddy→Opencode→Unknown,不是插入顺序;
+        // 没有任何会话的 Codebuddy 不出现在结果里(空分组不占位)。
+        let tabs = vec![
+            make_test_tab(&rt, "a", AgentKind::Opencode),
+            make_test_tab(&rt, "b", AgentKind::Claude),
+            make_test_tab(&rt, "c", AgentKind::Unknown),
+            make_test_tab(&rt, "d", AgentKind::Claude),
+        ];
+        assert_eq!(
+            group_tabs_by_agent(&tabs),
+            vec![
+                (AgentKind::Claude, vec![1, 3]),
+                (AgentKind::Opencode, vec![0]),
+                (AgentKind::Unknown, vec![2]),
+            ]
+        );
+    }
+
+    #[test]
+    fn agent_dot_color_maps_each_kind_and_avoids_gold() {
+        let cases = [
+            (AgentKind::Claude, theme::CYAN),
+            (AgentKind::Codebuddy, theme::PURPLE),
+            (AgentKind::Opencode, theme::GREEN),
+            (AgentKind::Unknown, theme::DIM),
+        ];
+        for (agent, expected) in cases {
+            let color = agent_dot_color(agent);
+            assert_eq!(color, expected, "{agent:?}");
+            assert_ne!(
+                color,
+                theme::GOLD,
+                "{agent:?} 的对话列表圆点色不能是 GOLD(甲方动作专属,CLAUDE.md 明文规定)"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_cli_command_maps_known_agents_and_none_for_unknown() {
+        assert_eq!(agent_cli_command(AgentKind::Claude), Some("claude"));
+        assert_eq!(agent_cli_command(AgentKind::Codebuddy), Some("codebuddy"));
+        assert_eq!(agent_cli_command(AgentKind::Opencode), Some("opencode"));
+        assert_eq!(agent_cli_command(AgentKind::Unknown), None);
     }
 }
