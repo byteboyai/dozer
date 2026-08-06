@@ -3038,9 +3038,24 @@ impl App {
         if self.left_view != LeftView::Files {
             return Vec::new();
         }
-        match self.active_workspace() {
-            Some(ws) => ws.preview.desired_webviews(),
-            None => Vec::new(),
+        let Some(ws) = self.active_workspace() else {
+            return Vec::new();
+        };
+        let specs = ws.preview.desired_webviews();
+        // 编辑弹层开着时,应用级模态盖住了预览区,原生 wry 子视图不听 iced
+        // 绘制顺序摆布,必须显式 visible=false 才能真正藏起来——与
+        // `TabKind::Acceptance` 隐藏其余 webview 的机制完全一致
+        // (`PreviewPane::desired_webviews` 内部的 `acceptance_active`)。
+        if ws.edit_session.is_some() {
+            specs
+                .into_iter()
+                .map(|mut s| {
+                    s.visible = false;
+                    s
+                })
+                .collect()
+        } else {
+            specs
         }
     }
 
@@ -6616,6 +6631,27 @@ fn preview_pane(
                 text_color: theme::CREAM,
                 ..button::Style::default()
             });
+            let editable = matches!(&tab.kind, TabKind::File(path) if is_editable_extension(path));
+            let edit: Option<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> =
+                if editable {
+                    Some(
+                        button(icons::view(
+                            icons::IconKind::Rename,
+                            crate::icon_size::row(),
+                            theme::DIM,
+                        ))
+                        .on_press(Message::PreviewEditOpen(idx))
+                        .padding(0)
+                        .style(|_t, _s| button::Style {
+                            background: None,
+                            text_color: theme::DIM,
+                            ..button::Style::default()
+                        })
+                        .into(),
+                    )
+                } else {
+                    None
+                };
             let close = button(lh(text("×").size(workspace_font::body()).color(theme::DIM)))
                 .on_press(Message::PreviewCloseTab(idx))
                 .style(|_t, _s| button::Style {
@@ -6623,11 +6659,12 @@ fn preview_pane(
                     text_color: theme::DIM,
                     ..button::Style::default()
                 });
-            container(
-                row![select, close]
-                    .spacing(2)
-                    .align_y(iced_widget::core::Alignment::Center),
-            )
+            let mut chip_row = row![select].spacing(2);
+            if let Some(edit) = edit {
+                chip_row = chip_row.push(edit);
+            }
+            chip_row = chip_row.push(close);
+            container(chip_row.align_y(iced_widget::core::Alignment::Center))
             .padding([2, 4])
             .style(move |_t: &iced_widget::Theme| {
                 if active {
