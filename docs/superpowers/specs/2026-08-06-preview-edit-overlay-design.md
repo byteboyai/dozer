@@ -4,7 +4,7 @@
 
 ## 背景
 
-预览域（`crates/dozer-app/src/preview_state.rs` 的 `PreviewPane`）目前对每个
+预览域（`crates/dozer-app/src/preview.rs` 的 `PreviewPane`）目前对每个
 `TabKind::File(path)`，无条件把路径拼成 flyfish（vendored `@file-viewer/web`
 JS 包，经 `dozer://flyfish/host.html?p=<encoded path>` 由 wry webview 渲染）的
 URL。渲染路径完全没有分支点：任何文件都走同一套 webview 管线。
@@ -19,13 +19,13 @@ URL。渲染路径完全没有分支点：任何文件都走同一套 webview �
 
 ## 现状梳理（决定设计形状的关键约束）
 
-- `PreviewPane`（`preview_state.rs`）是纯数据结构，不碰 wry/iced；
+- `PreviewPane`（`preview.rs`）是纯数据结构，不碰 wry/iced；
   `desired_webviews()` 产出的 `WebviewSpec{id,url,visible}` 由 main.rs 的
   `sync_webview_pool`（`main.rs:338`）做差集同步：建缺失、毁多余、
   `set_visible`/`set_bounds`/`load_url`。这是唯一改 webview 实际状态的地方。
 - 已有一个"非 webview、iced 原生绘制"的先例：`TabKind::Acceptance`。它不产
-  `WebviewSpec`（`preview_state.rs:223`），且激活时通过 `acceptance_active()`
-  强制其余 tab 的 `visible=false`（`preview_state.rs:210-232`）。这证明
+  `WebviewSpec`（`preview.rs:223`），且激活时通过 `acceptance_active()`
+  强制其余 tab 的 `visible=false`（`preview.rs:210-232`）。这证明
   **仅靠 `visible=false` 就能完全隐藏 wry 原生子视图**，不需要动
   `preview_content_bounds`（那是另一套只服务"折叠/放大"窗口级坐标的开关，
   两者正交）。
@@ -160,7 +160,7 @@ let popped = if ws.edit_session.is_some() {
 
 - `is_editable_extension`：各扩展名 + 无扩展名 + 大小写的单测。
 - `PreviewPane::bump_reload` + 拼出的 URL 带 `_r` 参数：单测（仿照
-  `preview_state.rs` 现有的 `desired_webviews_builds_urls_and_visibility`
+  `preview.rs` 现有的 `desired_webviews_builds_urls_and_visibility`
   测法）。
 - `EditSession` 状态机（打开失败态/脏标记/保存清脏/关闭前二次确认）：
   能抽出纯函数的部分单测，其余走 `update()` 集成测试。
