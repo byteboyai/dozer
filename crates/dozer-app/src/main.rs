@@ -4,6 +4,8 @@ mod clipboard_image;
 mod conversation;
 mod delivery;
 mod fonts;
+mod git_log;
+mod git_watch;
 mod goal;
 mod icon_size;
 mod icons;
@@ -19,6 +21,8 @@ mod term_model;
 mod term_view;
 mod terminal_font;
 mod theme;
+mod todo;
+mod todo_meta;
 mod transcript;
 mod workspace;
 mod workspace_font;
@@ -147,6 +151,8 @@ const BLINK_INTERVAL: Duration = Duration::from_millis(450);
 /// 所有按钮悬停动画的帧间隔:约 60fps。配合 `App::advance_hover_anims`
 /// 的指数逼近(每拍残余 75%),约 150ms 收敛,给出跟手的 ease-out 过渡。
 const HOVER_ANIM_INTERVAL: Duration = Duration::from_millis(16);
+/// Todo 面板可见时轮询 `.dozer/todo.md` 的间隔,兼顾响应与省电。
+const TODO_POLL_INTERVAL: Duration = Duration::from_millis(1000);
 
 /// 清空一帧到给定背景色，不再绘制 spike 阶段的示例三角形
 /// （spike B 的 `scene.rs`/wgsl shader 已随本任务删除）。
@@ -550,6 +556,23 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
+            // Todo 派发选择层打开时,Esc 同样优先关掉弹出层,口径同上面的
+            // agent 选择菜单。
+            if app.todo_dispatch_open()
+                && let WindowEvent::KeyboardInput {
+                    event,
+                    is_synthetic: false,
+                    ..
+                } = event
+                && event.state == ElementState::Pressed
+                && event.logical_key
+                    == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+            {
+                app.update(Message::TodoDispatchClose);
+                window.request_redraw();
+                return;
+            }
+
             // ⌘ 组合键是应用级快捷键，一律不进 PTY（此前 ⌘C 会把裸 "c"
             // 漏写进终端）。⌘C 复制当前选区；⌘V 粘贴剪贴板。
             if modifiers.super_key() {
@@ -890,6 +913,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 && let Self::Ready { app, window, .. } = self
             {
                 app.toggle_blink();
+                // Todo 面板可见时轮询磁盘上的 `.dozer/todo.md`,agent 或用户
+                // 在编辑器中改完文件,面板能自动跟上。
+                app.poll_todo_if_visible();
                 // 按钮悬停动画:有动画进行中才逐拍推进,全部收敛后本拍不再改
                 // 状态(`any_hover_anim_active` 为 false 时 `about_to_wait` 不会再
                 // 排下一拍,自然停下)。
@@ -904,15 +930,17 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         /// 唤醒，否则回到 `Wait` 省电（不再空转重绘）。
         fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
             if let Self::Ready { app, .. } = self {
-                if app.any_blinking() || app.any_hover_anim_active() {
-                    // 闪烁与悬停动画共用一个定时唤醒:只有闪烁时仍按
-                    // `BLINK_INTERVAL` 节奏;有悬停动画参与时切到更密的
-                    // `HOVER_ANIM_INTERVAL`(缩短的只是动画帧间隔,闪烁相位
-                    // 照样每拍翻转,只是翻得更勤,无副作用)。
+                if app.any_blinking() || app.any_hover_anim_active() || app.todo_panel_visible() {
                     let interval = if app.any_hover_anim_active() {
                         HOVER_ANIM_INTERVAL
                     } else {
-                        BLINK_INTERVAL
+                        // Todo 面板可见时按固定的 TODO_POLL_INTERVAL 节奏轮询,
+                        // 兼顾响应与省电;不需要像悬停动画那样切到更密的帧率。
+                        if app.todo_panel_visible() && !app.any_blinking() {
+                            TODO_POLL_INTERVAL
+                        } else {
+                            BLINK_INTERVAL
+                        }
                     };
                     event_loop.set_control_flow(ControlFlow::WaitUntil(
                         std::time::Instant::now() + interval,

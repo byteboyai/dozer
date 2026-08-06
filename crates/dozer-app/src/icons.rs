@@ -36,9 +36,18 @@ pub enum IconKind {
     RefreshCw,
     SquarePlus,
     GitBranch,
+    ListChecks,
+    /// 终端/Shell(纯 Shell 启动项),Lucide。
+    Terminal,
     /// Dozer 品牌标(dozer-logo-main.jpeg → potrace 矢量化),
     /// 只用于顶栏"Dozer"页签,与其他 Lucide 图标同款通过 `currentColor` 着色。
     Dozer,
+    /// Agent 品牌标(着色用 `currentColor`,由调用方按 agent 指定主题色)。
+    /// 来源:Claude/CodeBuddy 取自 Simple Icons,OpenCode 取自其官网 favicon 并
+    /// 归一化到 24×24。均为品牌标识,非 Lucide;仅供 Agent 身份识别。
+    Claude,
+    Codebuddy,
+    Opencode,
 }
 
 impl IconKind {
@@ -71,7 +80,12 @@ impl IconKind {
             IconKind::RefreshCw => include_bytes!("../assets/icons/refresh-cw.svg"),
             IconKind::SquarePlus => include_bytes!("../assets/icons/square-plus.svg"),
             IconKind::GitBranch => include_bytes!("../assets/icons/git-branch.svg"),
+            IconKind::ListChecks => include_bytes!("../assets/icons/list-checks.svg"),
+            IconKind::Terminal => include_bytes!("../assets/icons/terminal.svg"),
             IconKind::Dozer => include_bytes!("../assets/icons/dozer-logo.svg"),
+            IconKind::Claude => include_bytes!("../assets/icons/claude.svg"),
+            IconKind::Codebuddy => include_bytes!("../assets/icons/codebuddy.svg"),
+            IconKind::Opencode => include_bytes!("../assets/icons/opencode.svg"),
         }
     }
 }

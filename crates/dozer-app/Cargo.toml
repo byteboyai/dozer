@@ -31,6 +31,12 @@ trash = "5.2.6"
 arboard = "3"
 png = "0.17"
 uuid.workspace = true
+# spike(2026-08-06): 验证 gleisbau 作为原生 git 提交图布局库嵌入 iced Canvas
+# 的可行性,见 docs/superpowers/plans 对应 spike 记录。若验证通过转正,再评估
+# 是否需要 pin 具体版本/替换掉 git-graph CLI 同源代码库。
+gleisbau = "0.7"
+git2 = "0.21"
+notify = "8"
 
 [dev-dependencies]
 tempfile = "3"

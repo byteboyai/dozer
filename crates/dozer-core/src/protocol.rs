@@ -419,8 +419,14 @@ mod tests {
 
     #[test]
     fn agent_kind_serializes_snake_case() {
-        assert_eq!(serde_json::to_string(&AgentKind::Codebuddy).unwrap(), "\"codebuddy\"");
-        assert_eq!(serde_json::to_string(&AgentKind::Opencode).unwrap(), "\"opencode\"");
+        assert_eq!(
+            serde_json::to_string(&AgentKind::Codebuddy).unwrap(),
+            "\"codebuddy\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AgentKind::Opencode).unwrap(),
+            "\"opencode\""
+        );
         assert_eq!(
             serde_json::from_str::<AgentKind>("\"claude\"").unwrap(),
             AgentKind::Claude
@@ -464,7 +470,8 @@ mod tests {
 
     #[test]
     fn old_agent_event_without_agent_decodes_unknown() {
-        let old = r#"{"type":"agent_event","session_id":"s","state":"running","event":"test","ts_ms":1}"#;
+        let old =
+            r#"{"type":"agent_event","session_id":"s","state":"running","event":"test","ts_ms":1}"#;
         match decode_line::<Reply>(old).unwrap() {
             Reply::AgentEvent { agent, .. } => assert_eq!(agent, AgentKind::Unknown),
             other => panic!("{other:?}"),
