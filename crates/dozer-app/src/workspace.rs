@@ -862,6 +862,13 @@ pub enum Message {
     CloseTab(usize),
     /// 点击 "＋"：以 `$SHELL`（缺省 `/bin/zsh`）在 `$HOME` 新建一个会话。
     NewTab,
+    /// Agent 面板"＋新建"按钮:开/关 agent 选择菜单。
+    AgentPickerToggle,
+    /// agent 选择菜单:点击菜单外/Esc,关闭不建会话。
+    AgentPickerClose,
+    /// agent 选择菜单:选中一项(`None` = 纯 Shell,同现有"＋"效果;
+    /// `Some(agent)` = 新建会话后自动键入该 agent 的 CLI 名字)。
+    AgentPickerSelect(Option<AgentKind>),
     /// 新建会话完成 attach（tab_id、`SessionInfo`、初始快照）。
     /// 只有 `NewTab` 走这条路径——启动时的恢复走同步的 `bootstrap`，
     /// 不需要过一次消息循环。
@@ -1307,6 +1314,9 @@ pub struct Workspace {
     tree_delete_confirm: Option<(PathBuf, bool)>,
     /// 项目树行内编辑态(新建/重命名共用;None=未在编辑)。
     tree_edit: Option<TreeEdit>,
+    /// Agent 面板"＋新建"菜单当前是否打开。不需要坐标——面板顶部固定
+    /// 位置的下拉,不像项目树右键菜单需要跟随点击坐标。
+    agent_picker_open: bool,
     /// 这份 `Workspace` 是否只是 `Stub` → `Loaded` 促成期间的"加载中"占位
     /// (见 [`Workspace::loading_for_project`])。占位有正确的 `project`/文件树,
     /// 但会话/git/对话都还没拉,并且整份对象会在
@@ -1564,6 +1574,7 @@ impl Workspace {
             tree_error: None,
             tree_delete_confirm: None,
             tree_edit: None,
+            agent_picker_open: false,
             loading: false,
         }
     }
@@ -2751,6 +2762,13 @@ impl App {
         self.context_menu.is_some()
     }
 
+    /// Agent 选择菜单是否打开(main.rs Esc 键路由用)。
+    pub fn agent_picker_open(&self) -> bool {
+        self.active_workspace()
+            .map(|ws| ws.agent_picker_open)
+            .unwrap_or(false)
+    }
+
     /// 取走"双击顶栏空白处"待处理标记(取走即清零)。main.rs 在派发完
     /// 消息后轮询这个方法,命中就调用 `window.set_maximized(!window.
     /// is_maximized())`——`App` 自己不持有 `Window` 句柄,做不到这一步。
@@ -3149,6 +3167,22 @@ impl App {
                 });
             }
             Message::NewTab => self.with_focused_project(|ws, io| ws.spawn_new_tab(io, None)),
+            Message::AgentPickerToggle => {
+                self.with_focused_project(|ws, _io| {
+                    ws.agent_picker_open = !ws.agent_picker_open;
+                });
+            }
+            Message::AgentPickerClose => {
+                self.with_focused_project(|ws, _io| {
+                    ws.agent_picker_open = false;
+                });
+            }
+            Message::AgentPickerSelect(agent) => {
+                self.with_focused_project(|ws, io| {
+                    ws.agent_picker_open = false;
+                    ws.spawn_new_tab(io, agent);
+                });
+            }
             Message::TabAttached(project_id, tab_id, info, snapshot) => {
                 self.with_project(project_id, move |ws, io| {
                     ws.on_tab_attached(io, tab_id, info, snapshot)
@@ -3896,6 +3930,17 @@ impl App {
             )
             .on_press(Message::ProjectTreeContextMenuClose);
             stack![base, dismiss, context_menu_popup(self, ws)]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else if ws.agent_picker_open {
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::AgentPickerClose);
+            stack![base, dismiss, agent_picker_popup(ws)]
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
@@ -5056,6 +5101,8 @@ fn agent_list_pane(
             )
             .size(workspace_font::label())
             .color(theme::DIM)),
+            iced_widget::space::horizontal(),
+            agent_picker_toggle_button(),
         ]
         .spacing(8)
     ]
@@ -5122,6 +5169,90 @@ fn agent_list_row(
             },
             text_color: theme::CREAM,
             ..button::Style::default()
+        })
+        .into()
+}
+
+/// Agent 面板头部"＋新建"按钮:点击切换 `agent_picker_open`,弹出 agent
+/// 选择菜单(`agent_picker_popup`)。样式复用终端 tab 栏"＋"
+/// (`Message::NewTab` 那颗,`workspace.rs` 里 `plus` 变量)同款
+/// CARD 底 + BORDER 描边。
+fn agent_picker_toggle_button<'a>()
+-> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    button(
+        text("＋新建")
+            .size(workspace_font::label())
+            .color(theme::CREAM),
+    )
+    .on_press(Message::AgentPickerToggle)
+    .padding([4, 10])
+    .style(|_theme, _status| button::Style {
+        background: Some(theme::CARD.into()),
+        text_color: theme::CREAM,
+        border: Border {
+            color: theme::BORDER,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..button::Style::default()
+    })
+    .into()
+}
+
+/// Agent 选择菜单浮层:固定挂在窗口右上角("＋新建"按钮下方——该按钮
+/// 就在最靠右的 Agent 面板头部,近似等于窗口右上角),四个选项
+/// Claude/CodeBuddy/OpenCode/纯 Shell。跟项目树右键菜单
+/// (`context_menu_popup`)同款按钮样式,但不需要像素坐标定位——同
+/// `delete_confirm_popup` 一样固定 padding 摆位。`ws.agent_picker_open`
+/// 为假时返回空视图,调用方(`App::view`)据此决定要不要把这层塞进
+/// `stack!`。
+fn agent_picker_popup(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    if !ws.agent_picker_open {
+        return column![].into();
+    }
+    let items: [(&str, Option<AgentKind>); 4] = [
+        ("Claude", Some(AgentKind::Claude)),
+        ("CodeBuddy", Some(AgentKind::Codebuddy)),
+        ("OpenCode", Some(AgentKind::Opencode)),
+        ("纯 Shell", None),
+    ];
+    let mut col = column![].spacing(2);
+    for (label, agent) in items {
+        col = col.push(
+            button(text(label).size(workspace_font::body()).color(theme::CREAM))
+                .on_press(Message::AgentPickerSelect(agent))
+                .width(Length::Fixed(140.0))
+                .padding([6, 12])
+                .style(|_t, _s| button::Style {
+                    background: Some(theme::CARD.into()),
+                    text_color: theme::CREAM,
+                    ..button::Style::default()
+                }),
+        );
+    }
+    let list = container(col).padding(6).style(|_t: &iced_widget::Theme| container::Style {
+        background: Some(theme::CARD.into()),
+        border: Border {
+            color: theme::BORDER,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..container::Style::default()
+    });
+    // 右上角固定偏移:48px 避开顶栏,16px 避开窗口右边缘。这是估算值,
+    // 不是像素级对齐"＋新建"按钮(spec 明确"不算点击坐标")——Task 4 最后
+    // 一步的人工验收里如果视觉上偏得明显,回来调这两个数字即可,不影响
+    // 其余逻辑。
+    container(list)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Right)
+        .align_y(iced_widget::core::alignment::Vertical::Top)
+        .padding(Padding {
+            top: 48.0,
+            left: 0.0,
+            right: 16.0,
+            bottom: 0.0,
         })
         .into()
 }

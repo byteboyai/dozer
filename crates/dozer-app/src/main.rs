@@ -522,6 +522,23 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
+            // Agent 选择菜单打开时,Esc 优先关菜单,同右键菜单的处理口径
+            // (见上一段紧邻的 context_menu_open 分支的注释)。
+            if app.agent_picker_open()
+                && let WindowEvent::KeyboardInput {
+                    event,
+                    is_synthetic: false,
+                    ..
+                } = event
+                && event.state == ElementState::Pressed
+                && event.logical_key
+                    == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+            {
+                app.update(Message::AgentPickerClose);
+                window.request_redraw();
+                return;
+            }
+
             // ⌘ 组合键是应用级快捷键，一律不进 PTY（此前 ⌘C 会把裸 "c"
             // 漏写进终端）。⌘C 复制当前选区；⌘V 粘贴剪贴板。
             if modifiers.super_key() {
@@ -747,7 +764,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 *pending_focus = Some(FocusIntent::Browser);
             } else if matches!(
                 message,
-                Message::NewTab | Message::SelectTab(_) | Message::TabAttached(_, _, _, _)
+                Message::NewTab
+                    | Message::SelectTab(_)
+                    | Message::TabAttached(_, _, _, _)
+                    | Message::AgentPickerSelect(_)
             ) {
                 *pending_focus = Some(FocusIntent::Terminal);
             }
