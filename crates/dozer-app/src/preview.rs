@@ -79,8 +79,23 @@ pub fn is_editable_extension(path: &std::path::Path) -> bool {
             .unwrap_or("")
             .to_ascii_lowercase()
             .as_str(),
-        "rs" | "toml" | "md" | "txt" | "json" | "yaml" | "yml" | "sh" | "py" | "js" | "ts"
-            | "tsx" | "jsx" | "html" | "css" | "xml" | "log" | "conf"
+        "rs" | "toml"
+            | "md"
+            | "txt"
+            | "json"
+            | "yaml"
+            | "yml"
+            | "sh"
+            | "py"
+            | "js"
+            | "ts"
+            | "tsx"
+            | "jsx"
+            | "html"
+            | "css"
+            | "xml"
+            | "log"
+            | "conf"
     )
 }
 
@@ -386,7 +401,10 @@ mod tests {
         assert!(is_editable_extension(Path::new("main.rs")));
         assert!(is_editable_extension(Path::new("Cargo.toml")));
         assert!(is_editable_extension(Path::new("README.md")));
-        assert!(is_editable_extension(Path::new("notes.TXT")), "大小写不敏感");
+        assert!(
+            is_editable_extension(Path::new("notes.TXT")),
+            "大小写不敏感"
+        );
         assert!(is_editable_extension(Path::new("package.json")));
         assert!(is_editable_extension(Path::new("ci.yaml")));
         assert!(is_editable_extension(Path::new("ci.yml")));

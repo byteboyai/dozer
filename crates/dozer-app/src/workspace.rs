@@ -56,6 +56,7 @@ use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Color, Element, Font, Length, Padding};
 use iced_widget::{
     MouseArea, Scrollable, button, column, container, responsive, row, scrollable, stack, text,
+    text_editor,
 };
 use iced_winit::winit::event_loop::EventLoopProxy;
 use serde::{Deserialize, Serialize};
