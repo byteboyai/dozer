@@ -66,6 +66,24 @@ fn flyfish_url(path: &std::path::Path) -> String {
     )
 }
 
+/// "编辑"按钮的显示范围:纯扩展名白名单,不做内容嗅探(YAGNI,见设计文档
+/// "范围外")。`.gitignore` 这类点开头、`Path::extension()` 认不出扩展名
+/// 的文件单独特判文件名。
+pub fn is_editable_extension(path: &std::path::Path) -> bool {
+    if path.file_name().and_then(|n| n.to_str()) == Some(".gitignore") {
+        return true;
+    }
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
+        "rs" | "toml" | "md" | "txt" | "json" | "yaml" | "yml" | "sh" | "py" | "js" | "ts"
+            | "tsx" | "jsx" | "html" | "css" | "xml" | "log" | "conf"
+    )
+}
+
 #[derive(Default)]
 pub struct PreviewPane {
     tabs: Vec<PreviewTab>,
@@ -266,7 +284,7 @@ impl PreviewPane {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn open_select_close_tabs() {
@@ -361,6 +379,43 @@ mod tests {
         );
         // 未知 id 是 no-op,不 panic。
         p.bump_reload(9999);
+    }
+
+    #[test]
+    fn is_editable_extension_covers_common_text_types() {
+        assert!(is_editable_extension(Path::new("main.rs")));
+        assert!(is_editable_extension(Path::new("Cargo.toml")));
+        assert!(is_editable_extension(Path::new("README.md")));
+        assert!(is_editable_extension(Path::new("notes.TXT")), "大小写不敏感");
+        assert!(is_editable_extension(Path::new("package.json")));
+        assert!(is_editable_extension(Path::new("ci.yaml")));
+        assert!(is_editable_extension(Path::new("ci.yml")));
+        assert!(is_editable_extension(Path::new("run.sh")));
+        assert!(is_editable_extension(Path::new("app.py")));
+        assert!(is_editable_extension(Path::new("index.js")));
+        assert!(is_editable_extension(Path::new("index.ts")));
+        assert!(is_editable_extension(Path::new("index.tsx")));
+        assert!(is_editable_extension(Path::new("index.jsx")));
+        assert!(is_editable_extension(Path::new("page.html")));
+        assert!(is_editable_extension(Path::new("style.css")));
+        assert!(is_editable_extension(Path::new("data.xml")));
+        assert!(is_editable_extension(Path::new("out.log")));
+        assert!(is_editable_extension(Path::new("nginx.conf")));
+        assert!(
+            is_editable_extension(Path::new(".gitignore")),
+            "点开头的无扩展名文件要特判"
+        );
+    }
+
+    #[test]
+    fn is_editable_extension_rejects_unknown_and_binary_like() {
+        assert!(!is_editable_extension(Path::new("logo.png")));
+        assert!(!is_editable_extension(Path::new("archive.zip")));
+        assert!(
+            !is_editable_extension(Path::new("LICENSE")),
+            "无扩展名不在白名单里"
+        );
+        assert!(!is_editable_extension(Path::new("Makefile")));
     }
 
     #[test]
