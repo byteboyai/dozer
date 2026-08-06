@@ -4955,9 +4955,16 @@ fn conversation_list_pane(
         let sub_color = if current { theme::GREEN } else { theme::DIM };
         let card = button(
             column![
-                lh(text(c.title.clone())
-                    .size(workspace_font::body())
-                    .color(theme::CREAM)),
+                row![
+                    text("●")
+                        .size(workspace_font::caption())
+                        .color(agent_dot_color(c.agent)),
+                    lh(text(c.title.clone())
+                        .size(workspace_font::body())
+                        .color(theme::CREAM)),
+                ]
+                .spacing(6)
+                .align_y(iced_widget::core::Alignment::Center),
                 lh(text(sub)
                     .size(workspace_font::caption_sm())
                     .color(sub_color)),
@@ -5709,11 +5716,7 @@ fn project_pane<'a>(
                     } else {
                         ws.git_statuses.get(&row.path).copied()
                     };
-                    let name_color = if row.is_dir {
-                        theme::BODY
-                    } else {
-                        theme::CREAM
-                    };
+                    let name_color = theme::BODY;
                     let row_icon: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> =
                         if row.is_dir {
                             let chevron = if row.expanded {
@@ -7039,6 +7042,17 @@ fn dot_color(state: AgentState, alive: bool) -> Color {
         AgentState::Idle | AgentState::Running => theme::GREEN,
         AgentState::AwaitingInput => theme::PURPLE,
         AgentState::TurnEnded => theme::GOLD,
+    }
+}
+
+/// agent → 对话列表圆点颜色。避开 `theme::GOLD`(甲方动作专属色,
+/// CLAUDE.md 明文规定,不能被 agent 分类语义借用)。
+fn agent_dot_color(agent: AgentKind) -> Color {
+    match agent {
+        AgentKind::Claude => theme::CYAN,
+        AgentKind::Codebuddy => theme::PURPLE,
+        AgentKind::Opencode => theme::GREEN,
+        AgentKind::Unknown => theme::DIM,
     }
 }
 
@@ -8593,5 +8607,23 @@ mod tests {
                 (AgentKind::Unknown, vec![2]),
             ]
         );
+    }
+
+    #[test]
+    fn agent_dot_color_maps_each_kind_and_avoids_gold() {
+        let cases = [
+            (AgentKind::Claude, theme::CYAN),
+            (AgentKind::Codebuddy, theme::PURPLE),
+            (AgentKind::Opencode, theme::GREEN),
+            (AgentKind::Unknown, theme::DIM),
+        ];
+        for (agent, expected) in cases {
+            let color = agent_dot_color(agent);
+            assert_eq!(color, expected, "{agent:?}");
+            assert_ne!(
+                color, theme::GOLD,
+                "{agent:?} 的对话列表圆点色不能是 GOLD(甲方动作专属,CLAUDE.md 明文规定)"
+            );
+        }
     }
 }
