@@ -37,7 +37,7 @@ use crate::icons;
 use crate::layout;
 use crate::open_projects;
 use crate::osc::{OscEvent, OscScanner};
-use crate::preview::{AddrTarget, PreviewPane, TabKind, WebviewSpec};
+use crate::preview::{AddrTarget, PreviewPane, TabKind, WebviewSpec, is_editable_extension};
 use crate::preview_state;
 use crate::project::{self, FileTree};
 use crate::term_model::TerminalModel;
@@ -1007,6 +1007,19 @@ pub enum Message {
     PreviewSelectTab(usize),
     /// 预览:关闭 tab(vec 位置).
     PreviewCloseTab(usize),
+    /// 预览:点 tab chip 上的"编辑"按钮,携带 tab 下标(渲染时发出,和
+    /// `PreviewSelectTab`/`PreviewCloseTab` 同一约定)。
+    PreviewEditOpen(usize),
+    /// 预览编辑弹层:`text_editor` widget 的编辑动作回调。
+    PreviewEditAction(iced_widget::text_editor::Action),
+    /// 预览编辑弹层:"保存"按钮 / ⌘S。
+    PreviewEditSave,
+    /// 预览编辑弹层:×按钮 / 点遮罩——脏改动会先转成二次确认,不直接关。
+    PreviewEditCloseRequest,
+    /// 预览编辑弹层二次确认:"放弃改动"。
+    PreviewEditConfirmDiscard,
+    /// 预览编辑弹层二次确认:"取消"(回到编辑态)。
+    PreviewEditConfirmCancel,
     /// 浏览器:打开 URL 为新网页 tab——落在独立的 `Workspace::browser` 上,
     /// 不产生任何文件预览 tab(该功能只服务左图标栏"地球"进入的独立浏览器
     /// 视图)。
@@ -1145,6 +1158,20 @@ pub struct ReviewView {
     pub error: Option<String>,
     /// 展开了过程区的 AI 回合下标（entries 中的位置）。
     pub expanded: std::collections::HashSet<usize>,
+}
+
+/// 预览编辑弹层的进行中会话(全局至多一个;弹层是应用级模态)。
+pub struct EditSession {
+    /// `PreviewTab.id`(webview 池用的稳定 id,不是 `tabs` vec 下标——见
+    /// `Workspace::preview_edit_open` 的取值处)。
+    pub tab_id: usize,
+    pub path: PathBuf,
+    pub content: iced_widget::text_editor::Content,
+    pub dirty: bool,
+    /// 打开失败(理论上不会,打开前已判过存在)或保存失败的错误文案。
+    pub error: Option<String>,
+    /// 脏改动下点关闭:先弹二次确认,不直接丢。
+    pub confirm_discard: bool,
 }
 
 /// 验收 tab 的一次进行中验收（spec P1f D8）。
@@ -1390,6 +1417,8 @@ pub struct Workspace {
     /// Agent 面板"＋"按钮弹出的"新建"菜单当前是否打开。不需要坐标——面板顶部固定
     /// 位置的下拉,不像项目树右键菜单需要跟随点击坐标。
     agent_picker_open: bool,
+    /// 预览编辑弹层进行中的会话;`None` = 未打开。
+    edit_session: Option<EditSession>,
     /// 这份 `Workspace` 是否只是 `Stub` → `Loaded` 促成期间的"加载中"占位
     /// (见 [`Workspace::loading_for_project`])。占位有正确的 `project`/文件树,
     /// 但会话/git/对话都还没拉,并且整份对象会在
@@ -1648,6 +1677,7 @@ impl Workspace {
             tree_delete_confirm: None,
             tree_edit: None,
             agent_picker_open: false,
+            edit_session: None,
             loading: false,
         }
     }
@@ -1692,6 +1722,94 @@ impl Workspace {
 
     fn tab_by_id_mut(&mut self, tab_id: usize) -> Option<&mut SessionTab> {
         self.tabs.iter_mut().find(|t| t.tab_id == tab_id)
+    }
+
+    /// 打开预览编辑弹层:按 tab 下标取路径读盘。下标越界或该 tab 不是
+    /// `TabKind::File` 时静默 no-op(按钮本就只在 file tab 上画,正常路径
+    /// 走不到这两种情况)。读盘失败写 `preview_error`,不开弹层。
+    fn preview_edit_open(&mut self, idx: usize) {
+        let Some(tab) = self.preview.tabs().get(idx) else {
+            return;
+        };
+        let TabKind::File(path) = &tab.kind else {
+            return;
+        };
+        let path = path.clone();
+        let tab_id = tab.id;
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                self.preview_error = None;
+                self.edit_session = Some(EditSession {
+                    tab_id,
+                    path,
+                    content: iced_widget::text_editor::Content::with_text(&text),
+                    dirty: false,
+                    error: None,
+                    confirm_discard: false,
+                });
+            }
+            Err(e) => {
+                self.preview_error = Some(format!("打开编辑失败: {e}"));
+            }
+        }
+    }
+
+    /// 转发 `text_editor` 的编辑动作;只有真正的编辑(增删字符,非光标
+    /// 移动/选区/滚动)才置脏。没有打开编辑会话时 no-op。
+    fn preview_edit_action(&mut self, action: iced_widget::text_editor::Action) {
+        let Some(session) = self.edit_session.as_mut() else {
+            return;
+        };
+        let is_edit = action.is_edit();
+        session.content.perform(action);
+        if is_edit {
+            session.dirty = true;
+        }
+    }
+
+    /// 保存当前编辑会话到磁盘,成功则清脏并推进该 tab 的 reload nonce
+    /// (逼预览 webview 重新加载,否则用户会看到保存前的旧内容)。失败写
+    /// `session.error`,弹层不关。没有打开编辑会话时 no-op。
+    fn preview_edit_save(&mut self) {
+        let Some(session) = self.edit_session.as_mut() else {
+            return;
+        };
+        match std::fs::write(&session.path, session.content.text()) {
+            Ok(()) => {
+                session.dirty = false;
+                session.error = None;
+                let tab_id = session.tab_id;
+                self.preview.bump_reload(tab_id);
+            }
+            Err(e) => {
+                session.error = Some(format!("保存失败: {e}"));
+            }
+        }
+    }
+
+    /// 请求关闭编辑弹层:有未保存改动则转成二次确认,否则直接关。没有
+    /// 打开编辑会话时 no-op。
+    fn preview_edit_close_request(&mut self) {
+        let Some(session) = self.edit_session.as_mut() else {
+            return;
+        };
+        if session.dirty {
+            session.confirm_discard = true;
+        } else {
+            self.edit_session = None;
+        }
+    }
+
+    /// 二次确认:确认放弃未保存改动,真正关闭。
+    fn preview_edit_confirm_discard(&mut self) {
+        self.edit_session = None;
+    }
+
+    /// 二次确认:取消,回到编辑态(改动不丢)。
+    fn preview_edit_confirm_cancel(&mut self) {
+        if let Some(session) = self.edit_session.as_mut() {
+            session.confirm_discard = false;
+        }
     }
 
     /// 把键盘/IME 字节直接写给当前激活 tab 对应的 daemon 会话。异步写
@@ -3493,6 +3611,24 @@ impl App {
                     ws.preview_tab_first = 0;
                     ws.spawn_preview_state_save(io);
                 });
+            }
+            Message::PreviewEditOpen(idx) => {
+                self.with_focused_project(move |ws, _io| ws.preview_edit_open(idx));
+            }
+            Message::PreviewEditAction(action) => {
+                self.with_focused_project(move |ws, _io| ws.preview_edit_action(action));
+            }
+            Message::PreviewEditSave => {
+                self.with_focused_project(|ws, _io| ws.preview_edit_save());
+            }
+            Message::PreviewEditCloseRequest => {
+                self.with_focused_project(|ws, _io| ws.preview_edit_close_request());
+            }
+            Message::PreviewEditConfirmDiscard => {
+                self.with_focused_project(|ws, _io| ws.preview_edit_confirm_discard());
+            }
+            Message::PreviewEditConfirmCancel => {
+                self.with_focused_project(|ws, _io| ws.preview_edit_confirm_cancel());
             }
             Message::BrowserOpenUrl(url) => {
                 self.with_focused_project(move |ws, _io| {
@@ -7591,6 +7727,7 @@ fn active_tab_view<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iced_widget::text_editor;
 
     /// 造一个带记号的 `Loaded` 槽位,用 `tree_error` 当身份标记——这样
     /// 重挂之后能断言"搬过去的确实是同一个槽位",而不只是"新 id 上有东西"。
@@ -9110,5 +9247,119 @@ mod tests {
             picker_launch_command(PickerLaunch::Git),
             Some("git status".to_string())
         );
+    }
+
+    fn write_temp_file(name: &str, content: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(name);
+        std::fs::write(&path, content).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn preview_edit_open_reads_file_and_starts_clean_session() {
+        let (_dir, path) = write_temp_file("a.rs", "fn main() {}");
+        let mut ws = Workspace::empty_for_project_placeholder();
+        let tab_id = ws.preview.open_path(path.clone());
+        ws.preview_edit_open(0);
+        let session = ws.edit_session.as_ref().expect("应打开编辑会话");
+        assert_eq!(session.tab_id, tab_id);
+        assert_eq!(session.path, path);
+        assert_eq!(session.content.text(), "fn main() {}");
+        assert!(!session.dirty);
+        assert!(session.error.is_none());
+        assert!(!session.confirm_discard);
+    }
+
+    #[test]
+    fn preview_edit_open_missing_file_reports_error_and_does_not_open() {
+        let mut ws = Workspace::empty_for_project_placeholder();
+        ws.preview
+            .open_path(PathBuf::from("/nonexistent/does-not-exist.rs"));
+        ws.preview_edit_open(0);
+        assert!(ws.edit_session.is_none());
+        assert!(ws.preview_error.is_some());
+    }
+
+    #[test]
+    fn preview_edit_open_out_of_range_index_is_noop() {
+        let mut ws = Workspace::empty_for_project_placeholder();
+        ws.preview_edit_open(0);
+        assert!(ws.edit_session.is_none());
+        assert!(ws.preview_error.is_none());
+    }
+
+    #[test]
+    fn preview_edit_action_marks_dirty_only_on_edit_actions() {
+        let (_dir, path) = write_temp_file("a.txt", "hi");
+        let mut ws = Workspace::empty_for_project_placeholder();
+        ws.preview.open_path(path);
+        ws.preview_edit_open(0);
+        // 非编辑动作(光标移动)不置脏。
+        ws.preview_edit_action(text_editor::Action::Move(text_editor::Motion::Right));
+        assert!(!ws.edit_session.as_ref().unwrap().dirty);
+        // 编辑动作置脏。前一步光标右移了一位,Insert 落在 'h' 之后。
+        ws.preview_edit_action(text_editor::Action::Edit(text_editor::Edit::Insert('!')));
+        assert!(ws.edit_session.as_ref().unwrap().dirty);
+        assert_eq!(ws.edit_session.as_ref().unwrap().content.text(), "h!i");
+    }
+
+    #[test]
+    fn preview_edit_save_writes_disk_clears_dirty_and_bumps_reload() {
+        let (_dir, path) = write_temp_file("a.txt", "hi");
+        let mut ws = Workspace::empty_for_project_placeholder();
+        let tab_id = ws.preview.open_path(path.clone());
+        ws.preview_edit_open(0);
+        ws.preview_edit_action(text_editor::Action::Edit(text_editor::Edit::Insert('!')));
+        ws.preview_edit_save();
+        assert!(!ws.edit_session.as_ref().unwrap().dirty);
+        assert!(ws.edit_session.as_ref().unwrap().error.is_none());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "!hi");
+        let specs = ws.preview.desired_webviews();
+        let spec = specs.iter().find(|s| s.id == tab_id).unwrap();
+        assert!(
+            spec.url.contains("&_r=1"),
+            "保存后应推进 reload nonce: {}",
+            spec.url
+        );
+    }
+
+    #[test]
+    fn preview_edit_close_request_without_dirty_closes_immediately() {
+        let (_dir, path) = write_temp_file("a.txt", "hi");
+        let mut ws = Workspace::empty_for_project_placeholder();
+        ws.preview.open_path(path);
+        ws.preview_edit_open(0);
+        ws.preview_edit_close_request();
+        assert!(ws.edit_session.is_none());
+    }
+
+    #[test]
+    fn preview_edit_close_request_with_dirty_asks_confirm_then_discard_or_cancel() {
+        let (_dir, path) = write_temp_file("a.txt", "hi");
+        let mut ws = Workspace::empty_for_project_placeholder();
+        ws.preview.open_path(path);
+        ws.preview_edit_open(0);
+        ws.preview_edit_action(text_editor::Action::Edit(text_editor::Edit::Insert('!')));
+        ws.preview_edit_close_request();
+        assert!(
+            ws.edit_session.as_ref().unwrap().confirm_discard,
+            "脏改动关闭要先确认"
+        );
+        assert!(ws.edit_session.is_some(), "确认前不能真的关掉");
+
+        ws.preview_edit_confirm_cancel();
+        assert!(
+            !ws.edit_session.as_ref().unwrap().confirm_discard,
+            "取消要回到编辑态"
+        );
+        assert!(
+            ws.edit_session.as_ref().unwrap().dirty,
+            "取消不丢改动"
+        );
+
+        ws.preview_edit_close_request();
+        ws.preview_edit_confirm_discard();
+        assert!(ws.edit_session.is_none(), "确认放弃要真正关闭");
     }
 }
