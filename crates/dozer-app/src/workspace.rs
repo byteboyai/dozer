@@ -868,6 +868,15 @@ pub type ProjectId = i64;
 /// Ctrl + / Ctrl - 每次触发的相对缩放步近因子（1.1 ≈ 每按一次放大 10%）。
 const UI_ZOOM_STEP: f32 = 1.1;
 
+/// Agent 面板"＋"弹出菜单选择项的语义。`Agent` 复用原 `Option<AgentKind>`
+/// 语义(`None` = 纯 Shell);`Git` 在项目根开一个 shell 并自动跑 `git status`
+/// 看仓库状态。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum PickerLaunch {
+    Agent(Option<AgentKind>),
+    Git,
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     /// 终端聚焦时的键盘/IME 输入字节（已经过 `keymap` 翻译）。直接写给
@@ -921,9 +930,9 @@ pub enum Message {
     AgentPickerToggle,
     /// agent 选择菜单:点击菜单外/Esc,关闭不建会话。
     AgentPickerClose,
-    /// agent 选择菜单:选中一项(`None` = 纯 Shell,同现有"＋"效果;
-    /// `Some(agent)` = 新建会话后自动键入该 agent 的 CLI 名字)。
-    AgentPickerSelect(Option<AgentKind>),
+    /// agent 选择菜单:选中一项(`Agent(None)` = 纯 Shell,`Agent(Some(a))`
+    /// = 新建会话后自动键入该 agent 的 CLI 名字,`Git` = 项目根开 git shell)。
+    AgentPickerSelect(PickerLaunch),
     /// 新建会话完成 attach（tab_id、`SessionInfo`、初始快照）。
     /// 启动时的恢复走同步的 `bootstrap`，不需要过一次消息循环。
     TabAttached(ProjectId, usize, SessionInfo, Vec<u8>),
@@ -2084,11 +2093,11 @@ impl Workspace {
     /// 当前行为。
     fn ensure_project_terminal(&mut self, io: &ShellIo) {
         if self.project.is_some() && self.tabs.is_empty() {
-            self.spawn_new_tab(io, None);
+            self.spawn_new_tab(io, PickerLaunch::Agent(None));
         }
     }
 
-    fn spawn_new_tab(&mut self, io: &ShellIo, launch: Option<AgentKind>) {
+    fn spawn_new_tab(&mut self, io: &ShellIo, launch: PickerLaunch) {
         // 促成中的"加载中"占位不建会话:这份 `Workspace` 马上会被
         // `Message::ProjectSlotLoaded` 整份换掉,此刻建出来的会话会连同占位
         // 一起被丢弃,却仍在 daemon 上占着 PTY(见 `loading` 字段)。
@@ -2132,12 +2141,10 @@ impl Workspace {
                     {
                         return;
                     }
-                    if let Some(agent) = launch
-                        && let Some(cmd) = agent_cli_command(agent)
-                    {
+                    if let Some(cmd) = picker_launch_command(launch) {
                         let bytes = format!("{cmd}\n").into_bytes();
                         if let Err(e) = client.write(&session_id, &bytes).await {
-                            tracing::warn!("自动键入 agent CLI 失败: {e}");
+                            tracing::warn!("自动键入初始命令失败: {e}");
                         }
                     }
                     forward_events(project_id, tab_id, rx, proxy).await;
@@ -5514,11 +5521,12 @@ fn agent_picker_popup(
     if !ws.agent_picker_open {
         return column![].into();
     }
-    let items: [(&str, Option<AgentKind>); 4] = [
-        ("Claude", Some(AgentKind::Claude)),
-        ("CodeBuddy", Some(AgentKind::Codebuddy)),
-        ("OpenCode", Some(AgentKind::Opencode)),
-        ("纯 Shell", None),
+    let items: [(&str, PickerLaunch); 5] = [
+        ("Claude", PickerLaunch::Agent(Some(AgentKind::Claude))),
+        ("CodeBuddy", PickerLaunch::Agent(Some(AgentKind::Codebuddy))),
+        ("OpenCode", PickerLaunch::Agent(Some(AgentKind::Opencode))),
+        ("纯 Shell", PickerLaunch::Agent(None)),
+        ("Git Shell", PickerLaunch::Git),
     ];
     let mut col = column![].spacing(2);
     for (label, agent) in items {
@@ -7376,6 +7384,18 @@ fn agent_cli_command(agent: AgentKind) -> Option<&'static str> {
     }
 }
 
+/// picker 选择项 → attach 成功后自动键入 PTY 的初始命令。`Agent(Some(a))`
+/// 复用 `agent_cli_command`(键入 agent CLI);`Agent(None)` 不键入(纯 Shell);
+/// `Git` 键入 `git status`——新开的 shell 已在项目根,直接看仓库状态。
+/// 抽成纯函数是为了能 headless 单测(同 `agent_cli_command` 的惯例)。
+fn picker_launch_command(launch: PickerLaunch) -> Option<String> {
+    match launch {
+        PickerLaunch::Agent(Some(agent)) => agent_cli_command(agent).map(str::to_owned),
+        PickerLaunch::Agent(None) => None,
+        PickerLaunch::Git => Some("git status".to_string()),
+    }
+}
+
 /// tab 标题：已识别出 agent（hook 上报）则显 agent 名（如 "claude"）；
 /// 否则回落到 OSC 7 的 cwd basename，再无 cwd 才回落会话名。
 fn tab_title(agent: AgentKind, cwd: Option<&Path>, fallback: &str) -> String {
@@ -9066,5 +9086,29 @@ mod tests {
         assert_eq!(agent_cli_command(AgentKind::Codebuddy), Some("codebuddy"));
         assert_eq!(agent_cli_command(AgentKind::Opencode), Some("opencode"));
         assert_eq!(agent_cli_command(AgentKind::Unknown), None);
+    }
+
+    #[test]
+    fn picker_launch_command_maps_selection_to_initial_command() {
+        // 已知 agent → 其 CLI 名(复用 agent_cli_command)。
+        assert_eq!(
+            picker_launch_command(PickerLaunch::Agent(Some(AgentKind::Claude))),
+            Some("claude".to_string())
+        );
+        assert_eq!(
+            picker_launch_command(PickerLaunch::Agent(Some(AgentKind::Codebuddy))),
+            Some("codebuddy".to_string())
+        );
+        assert_eq!(
+            picker_launch_command(PickerLaunch::Agent(Some(AgentKind::Opencode))),
+            Some("opencode".to_string())
+        );
+        // 纯 Shell → 不键入任何初始命令。
+        assert_eq!(picker_launch_command(PickerLaunch::Agent(None)), None);
+        // Git Shell → 项目根开 shell 后自动跑 git status。
+        assert_eq!(
+            picker_launch_command(PickerLaunch::Git),
+            Some("git status".to_string())
+        );
     }
 }
