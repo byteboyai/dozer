@@ -22,12 +22,27 @@ import {
   onSessionDeleted,
   type SessionState,
   type TranslatedEvent,
-} from "./dozer-translate"
+} from "./dozer-lib/dozer-translate"
 
 const HOOK_BIN_PLACEHOLDER = "__DOZER_HOOK_BIN_PATH__"
 const hookBin = process.env.DOZER_HOOK_BIN || HOOK_BIN_PLACEHOLDER
 
+// 已知局限（design §5.3"同一 opencode 进程内多 session 切换的精确区分"
+// 已记在案的同一类缺口的具体表现）：这个 Map 只在 `session.created` 分
+// 支里填充。用户如果恢复（resume）一个不是在本 opencode 进程里新建的
+// 会话，所有其它事件分支都会因为 map miss 直接 return，导致该会话整个
+// 生命周期一条事件都不转发给 dozer-hook——不是"切换不精确"，是完全不可
+// 见。修这个需要设计恢复态 cwd 的方案，不在这版范围内，先留注释别忘。
 const sessions = new Map<string, SessionState>()
+
+// sessionID -> 已知的"用户消息" messageID 集合。`message.part.updated`
+// 对用户 prompt 的文本 part 也会触发（不只是 assistant 回复），如果不
+// 区分，用户自己敲的话会被当成 assistant 输出缓冲进 Stop 的 transcript
+// 行里。在 `chat.message` hook（只在用户消息时触发）里记录 messageID，
+// 转发文本 part 前拿 part.messageID 查一下这个集合来排除。独立于
+// `SessionState`（Task 1 的纯状态类型，有测试覆盖）之外维护，避免给它
+// 加一个胶水层专用、没测试覆盖的字段。
+const userMessageIds = new Map<string, Set<string>>()
 
 function stateFor(sessionID: string, cwd: string): SessionState {
   let s = sessions.get(sessionID)
@@ -49,7 +64,10 @@ async function emit($: any, translated: TranslatedEvent | null): Promise<void> {
   })
   // `echo ... | hookBin opencode <event>`：真实 shell 管道，把 stdin 喂给
   // dozer-hook——Bun `$` 的插值会自动给 stdin 加引号转义成单个 echo 参数。
-  await $`echo ${stdin} | ${hookBin} opencode ${translated.event}`
+  // `.quiet()`：Bun `$` 默认把子进程 stdout/stderr 转发到当前进程——
+  // dozer-hook 失败时会 eprintln 中文错误信息，不加 `.quiet()` 会直接喷
+  // 进用户的 opencode 终端。
+  await $`echo ${stdin} | ${hookBin} opencode ${translated.event}`.quiet()
 }
 
 export const DozerPlugin: Plugin = async ({ $ }) => {
@@ -59,7 +77,12 @@ export const DozerPlugin: Plugin = async ({ $ }) => {
         switch (event.type) {
           case "session.created": {
             const info = event.properties?.info
-            if (!info?.id) return
+            // parentID 非空 = 子/subagent 会话——在这里就拦掉，不能先建
+            // state 再指望 onSessionCreated 内部的 parentID 检查兜底：
+            // state 一旦进了 `sessions` map，子会话自己的后续事件（比如
+            // 它自己的 session.idle）就会命中 map、被当成根会话转发，
+            // 平白多出一次 Stop/TurnEnded，把 Dozer 的回合状态搞乱。
+            if (!info?.id || info.parentID) return
             const state = stateFor(info.id, info.directory ?? ".")
             await emit($, onSessionCreated(state, info))
             return
@@ -72,21 +95,33 @@ export const DozerPlugin: Plugin = async ({ $ }) => {
             return
           }
           case "session.deleted": {
-            const sessionID = event.properties?.sessionID
+            // `session.deleted` 的 properties 实测（opencode 1.18.11）
+            // 是 `{ info: Session }`，sessionID 走 `info.id`；同时保留对
+            // 顶层 `sessionID` 的兜底，防止运行时/SDK 版本差异。
+            const sessionID = event.properties?.info?.id ?? event.properties?.sessionID
             const state = sessionID ? sessions.get(sessionID) : undefined
             if (!state) return
             await emit($, onSessionDeleted(state))
             sessions.delete(sessionID)
+            userMessageIds.delete(sessionID)
             return
           }
           case "message.part.updated": {
             const part = event.properties?.part
-            const sessionID = event.properties?.sessionID
+            // 同上：`part.updated` 的 properties 实测是 `{ part, delta?
+            // }`，sessionID 走 `part.sessionID`；顶层 `sessionID` 兜底。
+            const sessionID = part?.sessionID ?? event.properties?.sessionID
             const state = sessionID ? sessions.get(sessionID) : undefined
             if (!state || !part) return
             if (part.type === "tool") {
               await emit($, onToolPartUpdated(state, part))
             } else if (part.type === "text" && typeof part.text === "string") {
+              // 用户自己的 prompt 文本也会走这个分支（不只是 assistant
+              // 回复）——如果不排除，会被误当成 assistant 输出缓冲进
+              // Stop 的 transcript 行。`chat.message` hook 记录了已知的
+              // 用户消息 messageID，这里查一下跳过。
+              const knownUserMessageIds = userMessageIds.get(sessionID)
+              if (part.messageID && knownUserMessageIds?.has(part.messageID)) return
               onTextPartUpdated(state, part)
             }
             return
@@ -98,16 +133,35 @@ export const DozerPlugin: Plugin = async ({ $ }) => {
         // 任何翻译/转发失败都吞掉，绝不抛到 opencode 主流程。
       }
     },
+    // `input` 类型依据 @opencode-ai/plugin 的 `Hooks["chat.message"]`
+    // 签名核对（`~/.config/opencode/node_modules/@opencode-ai/plugin/
+    // dist/index.d.ts`，对应实测运行时 opencode 1.18.11）：
+    // `{ sessionID: string; messageID?: string; ... }`。`output.message`
+    // 是 `UserMessage`，有保证非空的 `id`/`sessionID`/`role` 字段，用作
+    // `input.messageID` 缺失时的兜底。
     "chat.message": async (
-      _input: unknown,
+      input: { sessionID?: string; messageID?: string },
       output: {
-        message?: { sessionID?: string; role?: string }
+        message?: { sessionID?: string; role?: string; id?: string }
         parts?: Array<{ type: string; text?: string }>
       }
     ) => {
       try {
-        const sessionID = output?.message?.sessionID
+        const sessionID = output?.message?.sessionID ?? input?.sessionID
         if (!sessionID || output?.message?.role !== "user") return
+        // 记录这条用户消息的 messageID，供 `message.part.updated` 排除
+        // 用户自己的文本 part（见 finding 2）。即使当前会话还没有
+        // `SessionState`（比如 resume 场景），也先记下 messageID——万一
+        // state 后面才出现，至少不会把旧数据当成新的漏判。
+        const messageID = input?.messageID ?? output?.message?.id
+        if (messageID) {
+          let ids = userMessageIds.get(sessionID)
+          if (!ids) {
+            ids = new Set()
+            userMessageIds.set(sessionID, ids)
+          }
+          ids.add(messageID)
+        }
         const state = sessions.get(sessionID)
         if (!state) return
         await emit($, onUserMessage(state, output.parts ?? []))
