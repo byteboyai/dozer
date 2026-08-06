@@ -2009,11 +2009,11 @@ impl Workspace {
     /// 当前行为。
     fn ensure_project_terminal(&mut self, io: &ShellIo) {
         if self.project.is_some() && self.tabs.is_empty() {
-            self.spawn_new_tab(io);
+            self.spawn_new_tab(io, None);
         }
     }
 
-    fn spawn_new_tab(&mut self, io: &ShellIo) {
+    fn spawn_new_tab(&mut self, io: &ShellIo, launch: Option<AgentKind>) {
         // 促成中的"加载中"占位不建会话:这份 `Workspace` 马上会被
         // `Message::ProjectSlotLoaded` 整份换掉,此刻建出来的会话会连同占位
         // 一起被丢弃,却仍在 daemon 上占着 PTY(见 `loading` 字段)。
@@ -2050,11 +2050,20 @@ impl Workspace {
             };
             match client.attach(&info.id, 0).await {
                 Ok((snapshot, _next_offset, rx)) => {
+                    let session_id = info.id.clone();
                     if proxy
                         .send_event(Message::TabAttached(project_id, tab_id, info, snapshot))
                         .is_err()
                     {
                         return;
+                    }
+                    if let Some(agent) = launch
+                        && let Some(cmd) = agent_cli_command(agent)
+                    {
+                        let bytes = format!("{cmd}\n").into_bytes();
+                        if let Err(e) = client.write(&session_id, &bytes).await {
+                            tracing::warn!("自动键入 agent CLI 失败: {e}");
+                        }
                     }
                     forward_events(project_id, tab_id, rx, proxy).await;
                 }
@@ -3139,7 +3148,7 @@ impl App {
                     ws.ensure_project_terminal(io);
                 });
             }
-            Message::NewTab => self.with_focused_project(|ws, io| ws.spawn_new_tab(io)),
+            Message::NewTab => self.with_focused_project(|ws, io| ws.spawn_new_tab(io, None)),
             Message::TabAttached(project_id, tab_id, info, snapshot) => {
                 self.with_project(project_id, move |ws, io| {
                     ws.on_tab_attached(io, tab_id, info, snapshot)
@@ -6950,6 +6959,19 @@ fn file_change_line(fc: &FileChange) -> String {
     }
 }
 
+/// agent 选择菜单选中的 agent → 要自动键入 PTY 的 CLI 命令名。`Unknown`
+/// 不该从选择菜单产生(选项只有 Claude/CodeBuddy/OpenCode/纯 Shell 四选
+/// 一,纯 Shell 走 `launch: None`,不经过这个函数),但函数保持穷尽
+/// match,防止未来枚举新增变体时静默漏写。已知变体的 CLI 名字与
+/// `AgentKind::label()` 逐字节一致(`label()` 本身就是给这三个变体返回
+/// 小写 CLI 名),这里直接复用而不重复一份映射表,避免两处拼写分叉。
+fn agent_cli_command(agent: AgentKind) -> Option<&'static str> {
+    match agent {
+        AgentKind::Unknown => None,
+        known => Some(known.label()),
+    }
+}
+
 /// tab 标题：已识别出 agent（hook 上报）则显 agent 名（如 "claude"）；
 /// 否则回落到 OSC 7 的 cwd basename，再无 cwd 才回落会话名。
 fn tab_title(agent: AgentKind, cwd: Option<&Path>, fallback: &str) -> String {
@@ -8629,5 +8651,13 @@ mod tests {
                 "{agent:?} 的对话列表圆点色不能是 GOLD(甲方动作专属,CLAUDE.md 明文规定)"
             );
         }
+    }
+
+    #[test]
+    fn agent_cli_command_maps_known_agents_and_none_for_unknown() {
+        assert_eq!(agent_cli_command(AgentKind::Claude), Some("claude"));
+        assert_eq!(agent_cli_command(AgentKind::Codebuddy), Some("codebuddy"));
+        assert_eq!(agent_cli_command(AgentKind::Opencode), Some("opencode"));
+        assert_eq!(agent_cli_command(AgentKind::Unknown), None);
     }
 }
