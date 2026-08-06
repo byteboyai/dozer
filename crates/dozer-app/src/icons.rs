@@ -34,6 +34,11 @@ pub enum IconKind {
     Maximize,
     Home,
     RefreshCw,
+    SquarePlus,
+    GitBranch,
+    /// Dozer 品牌标(dozer-logo-main.jpeg → potrace 矢量化),
+    /// 只用于顶栏"Dozer"页签,与其他 Lucide 图标同款通过 `currentColor` 着色。
+    Dozer,
 }
 
 impl IconKind {
@@ -64,6 +69,9 @@ impl IconKind {
             IconKind::Maximize => include_bytes!("../assets/icons/maximize-2.svg"),
             IconKind::Home => include_bytes!("../assets/icons/home.svg"),
             IconKind::RefreshCw => include_bytes!("../assets/icons/refresh-cw.svg"),
+            IconKind::SquarePlus => include_bytes!("../assets/icons/square-plus.svg"),
+            IconKind::GitBranch => include_bytes!("../assets/icons/git-branch.svg"),
+            IconKind::Dozer => include_bytes!("../assets/icons/dozer-logo.svg"),
         }
     }
 }

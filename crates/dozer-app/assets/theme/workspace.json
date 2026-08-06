@@ -1,5 +1,5 @@
 {
-  "background": "#fbe6ba",
+  "background": "#dcc9a3",
   "regions": {
     "top_bar": {
       "background": "#0e1620",
@@ -128,7 +128,7 @@
     "browser_chrome_top_px": 72.0,
     "maximize_overlay_padding": 40.0,
     "project_tab_gap": 4.0,
-    "project_tab_max_width": 200.0,
+    "project_tab_max_width": 160.0,
     "project_tab_add_button_width": 36.0,
     "tab_bar_avail_px": 360.0,
     "rail_button_size": 32.0,

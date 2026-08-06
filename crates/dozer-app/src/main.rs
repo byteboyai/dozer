@@ -14,6 +14,7 @@ mod osc;
 mod preview;
 mod preview_state;
 mod project;
+mod scrollbar;
 mod term_model;
 mod term_view;
 mod terminal_font;
@@ -143,6 +144,9 @@ use std::sync::Arc;
 /// tab 状态点闪烁的半周期：每 450ms 翻一次相位（≈1.1Hz 一明一暗）。
 /// 仅当有 tab 处于工作态时才据此定时唤醒，空闲仍是 `ControlFlow::Wait`。
 const BLINK_INTERVAL: Duration = Duration::from_millis(450);
+/// 所有按钮悬停动画的帧间隔:约 60fps。配合 `App::advance_hover_anims`
+/// 的指数逼近(每拍残余 75%),约 150ms 收敛,给出跟手的 ease-out 过渡。
+const HOVER_ANIM_INTERVAL: Duration = Duration::from_millis(16);
 
 /// 清空一帧到给定背景色，不再绘制 spike 阶段的示例三角形
 /// （spike B 的 `scene.rs`/wgsl shader 已随本任务删除）。
@@ -350,6 +354,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             tracing::warn!("预览导航失败: {e}");
                         }
                         *loaded_url = spec.url.clone();
+                        // 导航会重置 WKWebView 的 pageZoom,重建后把当前
+                        // 全局 UI 缩放补回去,否则预览字号会跳回 100%。
+                        let _ = view.zoom(crate::icon_size::scale() as f64);
                     }
                     let _ = view.set_bounds(bounds);
                     let _ = view.set_visible(spec.visible);
@@ -381,6 +388,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         .build_as_child(window);
                     match built {
                         Ok(view) => {
+                            // 新 webview 按当前全局 UI 缩放初始化,使预览字号
+                            // 跟着 ⌘/Ctrl +/- 一起缩放(`WebView::zoom` 在
+                            // macOS 11+ 走 WKWebView 的 pageZoom)。
+                            let _ = view.zoom(crate::icon_size::scale() as f64);
                             pool.insert(spec.id, (view, spec.url.clone()));
                         }
                         Err(e) => tracing::error!("创建预览 webview 失败: {e}"),
@@ -839,11 +850,30 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         /// 调用 `set_maximized` 只能在这里做——与 `apply_pending_focus`
         /// 同一套"派发完消息后轮询待处理标记"节奏。
         fn apply_pending_zoom_toggle(&mut self) {
-            let Self::Ready { app, window, .. } = self else {
+            let Self::Ready {
+                app,
+                window,
+                webviews,
+                browser_webviews,
+                ..
+            } = self
+            else {
                 return;
             };
             if app.take_pending_zoom_toggle() {
                 window.set_maximized(!window.is_maximized());
+            }
+            // 全局 UI 缩放变更后,把同一 scale 同步给所有已存在的预览/
+            // 浏览器 webview(新建的 webview 已在 `sync_webview_pool` 里按
+            // 当前 scale 初始化,这里只补"已存在"这一增量)。
+            if app.take_pending_preview_zoom() {
+                let scale = crate::icon_size::scale() as f64;
+                for (view, _) in webviews.values() {
+                    let _ = view.zoom(scale);
+                }
+                for (view, _) in browser_webviews.values() {
+                    let _ = view.zoom(scale);
+                }
             }
         }
     }
@@ -861,6 +891,12 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 && let Self::Ready { app, window, .. } = self
             {
                 app.toggle_blink();
+                // 按钮悬停动画:有动画进行中才逐拍推进,全部收敛后本拍不再改
+                // 状态(`any_hover_anim_active` 为 false 时 `about_to_wait` 不会再
+                // 排下一拍,自然停下)。
+                if app.any_hover_anim_active() {
+                    app.advance_hover_anims();
+                }
                 window.request_redraw();
             }
         }
@@ -869,9 +905,18 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         /// 唤醒，否则回到 `Wait` 省电（不再空转重绘）。
         fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
             if let Self::Ready { app, .. } = self {
-                if app.any_blinking() {
+                if app.any_blinking() || app.any_hover_anim_active() {
+                    // 闪烁与悬停动画共用一个定时唤醒:只有闪烁时仍按
+                    // `BLINK_INTERVAL` 节奏;有悬停动画参与时切到更密的
+                    // `HOVER_ANIM_INTERVAL`(缩短的只是动画帧间隔,闪烁相位
+                    // 照样每拍翻转,只是翻得更勤,无副作用)。
+                    let interval = if app.any_hover_anim_active() {
+                        HOVER_ANIM_INTERVAL
+                    } else {
+                        BLINK_INTERVAL
+                    };
                     event_loop.set_control_flow(ControlFlow::WaitUntil(
-                        std::time::Instant::now() + BLINK_INTERVAL,
+                        std::time::Instant::now() + interval,
                     ));
                 } else {
                     event_loop.set_control_flow(ControlFlow::Wait);

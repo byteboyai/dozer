@@ -26,6 +26,18 @@ pub const GREEN: Color = c(0x1A, 0xD5, 0x85);
 pub const PURPLE: Color = c(0x95, 0x80, 0xFF);
 pub const RED: Color = c(0xFF, 0x6E, 0x6E);
 
+/// 两色按 `t`(0..=1)线性插值,返回中间色。iced 0.14 的 `Color` 没有自带的
+/// `lerp`/`mix`,这里补一个给悬停动画等需要平滑过渡颜色的地方用。
+/// `t` 超出 [0,1] 不外夹,调用方保证区间。
+pub fn mix(a: Color, b: Color, t: f32) -> Color {
+    Color {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: a.a + (b.a - a.a) * t,
+    }
+}
+
 /// 放大态浮层的变暗遮罩色(半透明黑)。不在设计规格锁死的 14 色之内——
 /// 之前是 `maximize_overlay` 函数里的游离字面量,这里给它转正成具名令牌,
 /// 值不变,纯增量,不改动上面 14 个锁定颜色。
@@ -35,6 +47,19 @@ pub const SCRIM: Color = Color {
     b: 0.0,
     a: 0.55,
 };
+
+/// 顶栏选中项目页签的边框色(`#dcc9a3`)。不在设计规格锁死的 14 色之内——
+/// 是顶栏页签"当前选中"态的专属描边,作为增量具名令牌加在此,不动上面
+/// 的锁定颜色。
+pub const TAB_ACTIVE_BORDER: Color = c(0xDC, 0xC9, 0xA3);
+
+/// 顶栏选中项目页签的实底背景色(`#152630`)。与 `TAB_ACTIVE_BORDER` 同属
+/// 顶栏页签专属增量令牌,不动上面锁死的 14 色。
+pub const TAB_ACTIVE_BG: Color = c(0x15, 0x26, 0x30);
+
+/// 顶栏未选中项目页签 hover 态的背景色(`#152630`)。与
+/// `TAB_ACTIVE_BORDER` 同属顶栏页签专属增量令牌,不动上面锁死的 14 色。
+pub const TAB_HOVER: Color = c(0x15, 0x26, 0x30);
 
 #[cfg(test)]
 mod tests {

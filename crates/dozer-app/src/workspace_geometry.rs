@@ -153,6 +153,17 @@ pub fn project_tab_add_button_width() -> f32 {
     GEOMETRY.project_tab_add_button_width * icon_size::scale()
 }
 
+/// 统一滚动条(轨道)宽度(逻辑像素),已含全局 scale。各面板共用,收窄一致。
+pub fn scrollbar_width() -> f32 {
+    10.0 * icon_size::scale()
+}
+
+/// 统一滚动条滑块(thumb)宽度(逻辑像素),已含全局 scale。同时作为滑块圆角
+/// 半径的基准,让滑块呈细窄的胶囊形;各面板共用,收窄一致。
+pub fn scrollbar_thumb_width() -> f32 {
+    4.0 * icon_size::scale()
+}
+
 /// 单条状态栏固定高（逻辑像素）。与 `status_bar_container` 同源。已含全局 scale。
 pub fn status_bar_height() -> f32 {
     GEOMETRY.status_bar_height * icon_size::scale()
@@ -291,7 +302,7 @@ mod tests {
         assert_eq!(browser_chrome_top_px(), 72.0);
         assert_eq!(maximize_overlay_padding(), 40.0);
         assert_eq!(project_tab_gap(), 4.0);
-        assert_eq!(project_tab_max_width(), 200.0);
+        assert_eq!(project_tab_max_width(), 160.0);
         assert_eq!(tab_bar_avail_px(), 360.0);
         assert_eq!(rail_button_size(), 32.0);
         assert_eq!(tab_button_size(), 24.0);

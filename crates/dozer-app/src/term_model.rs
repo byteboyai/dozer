@@ -317,6 +317,26 @@ impl TerminalModel {
     pub fn bracketed_paste(&self) -> bool {
         self.term.mode().contains(TermMode::BRACKETED_PASTE)
     }
+
+    /// 是否处于任意鼠标上报模式（`CSI ?1000/1002/1003h` 任一开启）。
+    ///
+    /// claude 等 TUI 进 alt screen 后没有真正的 scrollback 可回看（alt
+    /// grid 的 history 容量恒为 0，这是 alacritty_terminal 的既定行为，
+    /// 真实终端同样如此），于是自己开鼠标上报、靠接收滚轮转义序列在
+    /// 应用内部实现"滚动"。此前本模块不查这个 mode，滚轮永远走本地
+    /// `scroll_display`——在 alt screen 下这是滚不动的死路，表现为"无法
+    /// 上下滚动"。开启时滚轮应编码成鼠标转义序列转发给前台程序，而不是
+    /// 走本地 scrollback。
+    pub fn mouse_report_mode(&self) -> bool {
+        self.term.mode().intersects(TermMode::MOUSE_MODE)
+    }
+
+    /// 鼠标上报是否用 SGR 扩展格式（`CSI ?1006h`）。开启时坐标无单字节
+    /// 数值上限；未开启则退回 legacy X10 编码（列/行数值需 +32 压进一个
+    /// 字节，超宽终端会溢出，故封顶）。
+    pub fn sgr_mouse(&self) -> bool {
+        self.term.mode().contains(TermMode::SGR_MOUSE)
+    }
 }
 
 #[cfg(test)]
@@ -330,6 +350,32 @@ mod tests {
             .collect::<String>()
             .trim_end()
             .to_string()
+    }
+
+    #[test]
+    fn mouse_report_mode_off_by_default() {
+        let t = TerminalModel::new(40, 10);
+        assert!(!t.mouse_report_mode());
+        assert!(!t.sgr_mouse());
+    }
+
+    #[test]
+    fn mouse_report_mode_on_after_claude_startup_sequence() {
+        // claude 启动时实测发出的模式序列(节选,足以复现):进 alt screen +
+        // 开三档鼠标上报(1000/1002/1003)+ SGR 扩展坐标(1006)。
+        let mut t = TerminalModel::new(80, 24);
+        let _ = t.feed(b"\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h");
+        assert!(t.mouse_report_mode());
+        assert!(t.sgr_mouse());
+    }
+
+    #[test]
+    fn mouse_report_mode_reflects_disable() {
+        let mut t = TerminalModel::new(40, 10);
+        let _ = t.feed(b"\x1b[?1000h");
+        assert!(t.mouse_report_mode());
+        let _ = t.feed(b"\x1b[?1000l");
+        assert!(!t.mouse_report_mode());
     }
 
     #[test]

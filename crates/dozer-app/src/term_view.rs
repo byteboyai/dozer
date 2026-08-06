@@ -25,6 +25,7 @@ use crate::term_model::{Cell, TerminalModel};
 use crate::terminal_font;
 use crate::theme;
 use crate::workspace::Message;
+use crate::workspace_geometry;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::font::Weight;
 use iced_widget::core::mouse::{self, ScrollDelta};
@@ -145,6 +146,25 @@ fn wheel_to_lines(delta: ScrollDelta, residual: f32) -> (i32, f32) {
     (whole as i32, total - whole)
 }
 
+/// 一行滚轮 → xterm 鼠标上报字节。`up`=true 对应滚轮上滑（按钮码 64,
+/// xterm 协议为滚轮预留的专用码位，不是常规左中右键 0/1/2）；`col`/`row`
+/// 是 0-based 网格坐标，协议要求 1-based。
+///
+/// SGR 扩展格式（`CSI ?1006h`）坐标无字节上限，用 `ESC[<Cb;Px;PyM`；
+/// 未开启则退回 legacy X10 单字节编码（`ESC[M` + 三个 `值+32` 字节），
+/// 列/行封顶 223 避免单字节溢出。
+fn encode_wheel_report(up: bool, col: usize, row: usize, sgr: bool) -> Vec<u8> {
+    let button = if up { 64u32 } else { 65 };
+    let px = col + 1;
+    let py = row + 1;
+    if sgr {
+        format!("\x1b[<{button};{px};{py}M").into_bytes()
+    } else {
+        let byte = |v: usize| (v.min(223) + 32) as u8;
+        vec![0x1b, b'[', b'M', (button + 32) as u8, byte(px), byte(py)]
+    }
+}
+
 /// canvas 绘制程序：持有当前 tab 的 `TerminalModel` 快照引用逐帧重画。
 /// 网格规模（百列 × 数十行）下 run 数量有限，不做 `canvas::Cache`——
 /// 终端输出本来就是高频失效场景，缓存收益低。
@@ -194,6 +214,22 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
                 state.residual = residual;
                 if lines == 0 {
                     return None;
+                }
+                // 前台程序自己开了鼠标上报(典型如 claude 进 alt screen 后
+                // 用它实现内部滚动——alt screen 没有真正的 scrollback，
+                // 本地 `TermScroll` 在那儿是滚不动的死路):把滚轮编码成
+                // 鼠标转义序列转发给它，而不是走本地 scrollback。
+                if self.model.mouse_report_mode() {
+                    let pos = cursor.position_in(bounds)?;
+                    let (cols, rows) = self.model.grid_dims();
+                    let (col, row, _) = cell_at(pos, cols, rows);
+                    let sgr = self.model.sgr_mouse();
+                    let up = lines > 0;
+                    let mut bytes = Vec::new();
+                    for _ in 0..lines.unsigned_abs() {
+                        bytes.extend(encode_wheel_report(up, col, row, sgr));
+                    }
+                    return Some(canvas::Action::publish(Message::TermInput(bytes)).and_capture());
                 }
                 Some(canvas::Action::publish(Message::TermScroll(lines)).and_capture())
             }
@@ -315,14 +351,19 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
             let rows = lines.len() as f32;
             let total = history + rows;
             let h = bounds.height;
-            let track_x = bounds.width - 4.0;
+            // 复用全应用统一滚动条配置(见 `crate::scrollbar`):轨道宽度
+            // `scrollbar_width`,滑块(thumb)宽度 `scrollbar_thumb_width` 并居
+            // 中,滑块颜色甲方金 `#dcc9a3`(`theme::TAB_ACTIVE_BORDER`)。
+            let bar_w = workspace_geometry::scrollbar_width();
+            let thumb_w = workspace_geometry::scrollbar_thumb_width();
+            let track_x = bounds.width - bar_w;
             let thumb_h = (rows / total * h).max(12.0);
             let thumb_top = ((history - offset as f32) / total * h).min(h - thumb_h);
-            frame.fill_rectangle(Point::new(track_x, 0.0), Size::new(3.0, h), theme::BORDER);
+            frame.fill_rectangle(Point::new(track_x, 0.0), Size::new(bar_w, h), theme::BORDER);
             frame.fill_rectangle(
-                Point::new(track_x, thumb_top),
-                Size::new(3.0, thumb_h),
-                theme::CREAM,
+                Point::new(track_x + (bar_w - thumb_w) / 2.0, thumb_top),
+                Size::new(thumb_w, thumb_h),
+                theme::TAB_ACTIVE_BORDER,
             );
         }
 
@@ -382,6 +423,31 @@ mod tests {
             (runs[0].col, runs[0].text.as_str(), runs[0].selected),
             (0, "a b", true)
         );
+    }
+
+    #[test]
+    fn wheel_report_sgr_encoding() {
+        // 列/行 0-based → 协议 1-based；上滑=按钮 64。
+        assert_eq!(
+            encode_wheel_report(true, 3, 7, true),
+            b"\x1b[<64;4;8M".to_vec()
+        );
+        // 下滑=按钮 65。
+        assert_eq!(
+            encode_wheel_report(false, 3, 7, true),
+            b"\x1b[<65;4;8M".to_vec()
+        );
+    }
+
+    #[test]
+    fn wheel_report_legacy_encoding_clamps_to_single_byte() {
+        // legacy X10:三个 值+32 字节，列/行封顶 223 避免超宽终端溢出。
+        assert_eq!(
+            encode_wheel_report(true, 3, 7, false),
+            vec![0x1b, b'[', b'M', 64 + 32, 4 + 32, 8 + 32]
+        );
+        let huge = encode_wheel_report(false, 300, 300, false);
+        assert_eq!(huge, vec![0x1b, b'[', b'M', 65 + 32, 223 + 32, 223 + 32]);
     }
 
     #[test]

@@ -88,12 +88,68 @@ pub enum RightView {
 /// 四个图标栏按钮的标识,用于追踪 hover 态(图标颜色在 hover 时需变金,
 /// 而 SVG 颜色在构建时就定死、不随 `button::Status` 变化,所以得在 App
 /// 里记一个 hovered 目标,改色时按它重算)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RailButton {
     LeftFiles,
     LeftWeb,
     RightAgent,
     RightConversations,
+}
+
+/// 顶栏右侧按钮(添加项目 / 设置)的标识,用于追踪 hover 态(图标颜色在
+/// hover 时需变金,而 SVG 颜色在构建时就定死、不随 `button::Status` 变化,
+/// 所以得在 App 里记一个 hovered 目标,改色时按它重算)。语义同
+/// `RailButton`,只是作用域在顶栏而非图标栏。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TopbarButton {
+    AddProject,
+    Settings,
+}
+
+/// 所有需要"悬停平滑过渡动画"的按钮的统一标识。把顶栏右侧按钮
+/// (`TopbarButton`)、图标栏按钮(`RailButton`)、顶栏 Home 按钮收进同一个
+/// 枚举,这样它们能共用一套 `hover_anims` 状态机与同一条自驱 redraw 定时
+/// 唤醒(见 `App::set_hover`/`advance_hover_anims`/`hover_progress`),不必
+/// 每个按钮各写一套进度字段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HoverId {
+    Home,
+    Topbar(TopbarButton),
+    Rail(RailButton),
+}
+
+/// 一个可平滑过渡的 hover 动画状态机。iced 0.14 无内置动画 API,这套自驱
+/// redraw(与光标闪烁同款范式)把图标/背景颜色在 idle↔hover 之间做 ease-out
+/// 插值,而非硬切。`progress` 朝 `target`(0 或 1)指数逼近,约 150ms 收敛。
+#[derive(Debug, Clone, Copy, Default)]
+struct HoverAnim {
+    /// 当前帧插值系数(0..=1)。
+    progress: f32,
+    /// 动画目标(0=未悬停,1=悬停)。
+    target: f32,
+}
+impl HoverAnim {
+    /// 设置悬停目标(`true`=进入,`false`=离开);动画由 `advance` 循环逼近。
+    fn set(&mut self, hovered: bool) {
+        self.target = if hovered { 1.0 } else { 0.0 };
+    }
+    /// 朝目标逼近一拍(每拍残余 75%),足够接近则 snap 到目标避免无限抖动。
+    fn advance(&mut self) {
+        let next = self.progress + (self.target - self.progress) * 0.25;
+        self.progress = if (next - self.target).abs() < 0.01 {
+            self.target
+        } else {
+            next
+        };
+    }
+    /// 动画是否仍在进行中(进度未到目标)。
+    fn active(&self) -> bool {
+        (self.progress - self.target).abs() > 0.001
+    }
+    /// 当前插值系数,给视图层做颜色插值。
+    fn t(&self) -> f32 {
+        self.progress
+    }
 }
 
 /// 顶层级页面：工作区(默认,左右面板区+页签) / 首页落地页(点顶栏 Dozer 进入)。
@@ -386,8 +442,6 @@ pub struct ShellState {
     /// 焦点路由、终端 PTY 网格都会对着放大前的旧几何算,和 `maximize_overlay`
     /// 实际渲染的画面对不上。
     pub maximized: Option<MaximizedPane>,
-    /// 当前 hover 的图标栏按钮,语义同 `App::rail_hovered`。
-    pub rail_hovered: Option<RailButton>,
 }
 
 /// 两条图标栏与那条恒在的 `LeftRight` 分隔线之外，留给左右两个面板区的
@@ -891,8 +945,11 @@ pub enum Message {
     /// 同上,右图标栏。
     RightIconSelect(RightView),
     /// 图标栏按钮 hover 进入/离开:进入带 `Some(id)`,离开带 `None`,
-    /// 驱动图标在 hover 时变金(见 `RailButton`)。
-    RailHover(Option<RailButton>),
+    /// 任意按钮的 hover 进入/离开:带按钮标识 `HoverId` 与 `true`/`false`,
+    /// 驱动该按钮图标/背景/边框颜色的平滑过渡动画(见 `App::set_hover`/
+    /// `advance_hover_anims`/`hover_progress`)。取代原 `RailHover`/
+    /// `TopbarHover`/`HomeHover` 三个专为各自按钮写的变体。
+    Hover(HoverId, bool),
     /// 点击某内容 pane 的放大按钮:已放大同一侧则还原,否则放大该侧。
     MaximizeToggle(MaximizedPane),
     /// 点击放大态背后的变暗遮罩:退出放大。
@@ -1216,12 +1273,21 @@ pub struct App {
     /// 外边框的高亮态(见 `set_active_zone`/`zone_at_x`)。启动默认
     /// `Some(Right)`——终端默认聚焦(`term_focused: true`),终端在右面板区。
     active_zone: Option<ZoneSide>,
-    /// 当前 hover 的图标栏按钮(`None`=都没 hover),驱动图标 hover 变金。
-    rail_hovered: Option<RailButton>,
+    /// 所有按钮的悬停动画状态机(顶栏 Home / 顶栏右侧 / 图标栏),key 为
+    /// `HoverId`。iced 0.14 无内置动画 API,这套自驱 redraw(与光标闪烁同款)
+    /// 把图标/背景颜色在 idle↔hover 间 ease-out 过渡。进度由 main.rs 的定时
+    /// 唤醒经 `advance_hover_anims` 指数逼近各自 `target`(见 `HoverAnim`)。
+    hover_anims: std::collections::HashMap<HoverId, HoverAnim>,
     /// 双击顶栏空白处待处理标记,见 `Message::TopBarDoubleClick`/
     /// `take_pending_zoom_toggle`。`App` 不持有 `winit::window::Window`
     /// 句柄,真正切换最大化态由 main.rs 轮询这个标记后调用。
     pending_zoom_toggle: bool,
+    /// 全局 UI 缩放(⌘/Ctrl +/-)改变后,预览/浏览器 webview 的
+    /// `WebView::zoom` 也要同步——但 `App` 不持有 webview 句柄,只能
+    /// 置这个标记,由 main.rs 轮询 `take_pending_preview_zoom` 后逐个
+    /// 应用。新 webview 在 `sync_webview_pool` 建出来时直接按当前 scale
+    /// 初始化,所以本标记只管"已存在 webview 的缩放变更"这一增量。
+    pending_preview_zoom: bool,
     /// 当前窗口逻辑尺寸(宽,高)。由 main.rs 建窗口/`WindowEvent::Resized`
     /// 时经 `set_window_size` 写入。
     window_size: (f32, f32),
@@ -2412,8 +2478,9 @@ impl App {
             shell_layout,
             maximized: None,
             active_zone: Some(ZoneSide::Right),
-            rail_hovered: None,
+            hover_anims: std::collections::HashMap::new(),
             pending_zoom_toggle: false,
+            pending_preview_zoom: false,
             window_size: workspace_geometry::initial_window_size(),
             dragging: None,
             context_menu: None,
@@ -2573,6 +2640,32 @@ impl App {
     /// 翻转闪烁相位；由 main.rs 的定时唤醒每拍调用一次。
     pub fn toggle_blink(&mut self) {
         self.blink_on = !self.blink_on;
+    }
+
+    /// 设置某按钮的悬停目标（`true`=进入,`false`=离开）；动画由
+    /// `advance_hover_anims` 循环把它指数逼近（见 `HoverAnim`）。
+    pub fn set_hover(&mut self, id: HoverId, hovered: bool) {
+        self.hover_anims.entry(id).or_default().set(hovered);
+    }
+
+    /// 推进所有按钮的悬停动画一拍（约 60fps 一拍，由 main.rs 的定时唤醒
+    /// 驱动；与光标闪烁同款自驱 redraw 范式）。每拍残余 75%（逼近系数
+    /// 0.25），约 150ms 内收敛到目标，视觉上是干脆的 ease-out。
+    pub fn advance_hover_anims(&mut self) {
+        for a in self.hover_anims.values_mut() {
+            a.advance();
+        }
+    }
+
+    /// 是否还有按钮的悬停动画在进行中（任一进度未到目标）。
+    /// main.rs 据此决定是否继续排下一拍定时唤醒。
+    pub fn any_hover_anim_active(&self) -> bool {
+        self.hover_anims.values().any(HoverAnim::active)
+    }
+
+    /// 某按钮当前悬停动画进度(0..=1)，给视图层做颜色插值。
+    pub fn hover_progress(&self, id: HoverId) -> f32 {
+        self.hover_anims.get(&id).map(HoverAnim::t).unwrap_or(0.0)
     }
 
     /// 当前激活 tab 的选区文本（⌘C 复制用）。
@@ -2747,7 +2840,6 @@ impl App {
             right_view: self.right_view,
             right_collapsed: self.right_collapsed,
             maximized: self.maximized,
-            rail_hovered: self.rail_hovered,
         }
     }
 
@@ -2774,6 +2866,13 @@ impl App {
     /// is_maximized())`——`App` 自己不持有 `Window` 句柄,做不到这一步。
     pub fn take_pending_zoom_toggle(&mut self) -> bool {
         std::mem::take(&mut self.pending_zoom_toggle)
+    }
+
+    /// 全局 UI 缩放改了之后,main.rs 轮询这个标记把新 scale 应用到所有
+    /// 已存在的预览/浏览器 webview(新的 webview 由 `sync_webview_pool`
+    /// 在创建时按当前 scale 初始化,不依赖本标记)。
+    pub fn take_pending_preview_zoom(&mut self) -> bool {
+        std::mem::take(&mut self.pending_preview_zoom)
     }
 
     /// 当前文本光标的窗口逻辑坐标 `(x, y_底, 行高)`,给 main.rs 设 IME
@@ -3257,8 +3356,8 @@ impl App {
                 self.maximized = None;
                 self.on_shell_layout_changed();
             }
-            Message::RailHover(b) => {
-                self.rail_hovered = b;
+            Message::Hover(id, h) => {
+                self.set_hover(id, h);
             }
             Message::MaximizeToggle(which) => {
                 self.maximized = if self.maximized == Some(which) {
@@ -3840,15 +3939,18 @@ impl App {
                 crate::icon_size::zoom_by(UI_ZOOM_STEP);
                 crate::icon_size::persist_scale();
                 self.sync_terminal_grid();
+                self.pending_preview_zoom = true;
             }
             Message::ZoomOut => {
                 crate::icon_size::zoom_by(1.0 / UI_ZOOM_STEP);
                 crate::icon_size::persist_scale();
                 self.sync_terminal_grid();
+                self.pending_preview_zoom = true;
             }
             Message::ZoomReset => {
                 crate::icon_size::reset_scale();
                 self.sync_terminal_grid();
+                self.pending_preview_zoom = true;
             }
         }
     }
@@ -3945,7 +4047,14 @@ impl App {
                 .height(Length::Fill)
                 .into()
         } else {
-            base.into()
+            // 始终用 `Stack` 作根,与上面两个分支(删确认弹窗 / 右键菜单)保持一致:
+            // 右键菜单开关会把根 widget 类型在 `Column`(`base.into()`)与 `Stack`
+            // 之间切换,而 iced 的 `Tree::diff` 在根 tag 变化时(见
+            // `iced_core::widget::tree::Tree::diff`)会整体重建整棵树、丢掉所有
+            // 嵌套状态——文件树 scrollable 的滚动偏移就在其中,于是右键后滚动条
+            // 跳回顶部。统一成 `Stack` 后根 tag 恒定,`base` 子树被 reconcile 原地
+            // 保留,滚动位置不再丢失。
+            stack![base].into()
         };
 
         if let Some(which) = self.maximized {
@@ -4237,61 +4346,79 @@ fn top_bar_font() -> Font {
     }
 }
 
-/// 顶栏"Dozer"页签(D1)：视觉语言与 `project_tab_item` 一致(激活态 CARD 底
-/// 及 BORDER 描边)，但没有关闭按钮、恒在最左、不参与 `project_tabs_row` 的
-/// 拥挤收窄——与当前项目页签行"＋"按钮同款的"固定位不参与收窄"处理。
+/// 顶栏 Home 按钮(D1)：Lucide house(`IconKind::Home`) + 圆角正方形底,
+/// 无文字、恒在最左、不参与 `project_tabs_row` 的拥挤收窄——与当前项目
+/// 页签行"＋"按钮同款的"固定位不参与收窄"处理。点它进首页(`AppPage::Home`)。
+///
+/// `hover_t`(0..=1)是悬停动画进度,由 App 自驱 redraw 平滑推进:图标色
+/// idle→金、背景 idle→CARD、边框 idle→金,都是按它插值,给出悬停时的
+/// 平滑过渡而非硬切(见 `App::advance_hover_anims`/`hover_progress`)。
 fn dozer_home_tab<'a>(
     active: bool,
+    hover_t: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let label = row![
-        icons::view(
+    // idle 图标色随激活态取 CREAM/DIM,与既有顶栏页签 hover 一致；悬停时
+    // 朝金插值。背景 idle 取 CARD(激活)/TAB_HOVER(未激活),悬停朝 CARD 插值；
+    // 边框 idle 取 BORDER,悬停朝金插值。
+    let idle_icon = if active { theme::CREAM } else { theme::DIM };
+    let icon_color = theme::mix(idle_icon, theme::GOLD, hover_t);
+    let bg_idle = if active {
+        theme::CARD
+    } else {
+        theme::TAB_HOVER
+    };
+    let bg = theme::mix(bg_idle, theme::CARD, hover_t);
+    let border_color = theme::mix(theme::BORDER, theme::GOLD, hover_t);
+    // 圆角正方形边长 = 图标尺寸 + 留白(图标居中)。
+    let sq = crate::icon_size::rail() + 14.0;
+
+    let btn = button(
+        container(icons::view(
             icons::IconKind::Home,
             crate::icon_size::rail(),
-            if active { theme::CREAM } else { theme::DIM },
-        ),
-        text("Dozer")
-            .font(top_bar_font())
-            .size(workspace_font::body())
-            .color(if active { theme::CREAM } else { theme::DIM }),
-    ]
-    .spacing(6)
-    .align_y(iced_widget::core::Alignment::Center);
+            icon_color,
+        ))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::Alignment::Center)
+        .align_y(iced_widget::core::Alignment::Center),
+    )
+    .on_press(Message::TopBarHome)
+    .width(Length::Fixed(sq))
+    .height(Length::Fixed(sq))
+    .style(move |_t: &iced_widget::Theme, _s| button::Style {
+        background: Some(bg.into()),
+        text_color: icon_color,
+        border: Border {
+            color: border_color,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        ..button::Style::default()
+    });
 
-    let select =
-        button(label)
-            .on_press(Message::TopBarHome)
-            .style(|_t: &iced_widget::Theme, _s| button::Style {
-                background: None,
-                text_color: theme::CREAM,
-                ..button::Style::default()
-            });
+    // `MouseArea` 提供 hover 进入/离开事件(按钮本身无 `on_enter`/`on_exit`),
+    // 用来驱动 `Hover(HoverId::Home, ..)` 动画;点击仍由内层 `btn` 的 `on_press` 处理。
+    let hit = MouseArea::new(btn)
+        .on_enter(Message::Hover(HoverId::Home, true))
+        .on_exit(Message::Hover(HoverId::Home, false));
 
-    container(select)
-        .padding([0, 14])
+    // 外层 `container` 只负责在顶栏里垂直居中(按钮是 Fixed 高,默认贴顶,
+    // 与交通灯对不齐——同 `project_tab_item` 里注释过的根因)。
+    container(hit)
         .height(Length::Fixed(workspace_geometry::top_bar_height()))
-        .width(Length::Shrink)
-        .style(move |_t: &iced_widget::Theme| {
-            if active {
-                container::Style {
-                    background: Some(theme::CARD.into()),
-                    border: Border {
-                        color: theme::BORDER,
-                        width: 1.0,
-                        radius: 6.0.into(),
-                    },
-                    ..container::Style::default()
-                }
-            } else {
-                container::Style::default()
-            }
-        })
+        .align_y(iced_widget::core::Alignment::Center)
         .into()
 }
 
 fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    // Dozer 字标做成按钮:home 图标 + 文字,点它进首页(`AppPage::Home`)。
-    // Dozer 页签:视觉与右侧项目页签一致,恒在最左、不参与拥挤收窄(D1)。
-    let title = dozer_home_tab(app.current_page == AppPage::Home);
+    // Dozer 字标做成按钮:Dozer 品牌标(dozer-logo-main.jpeg 矢量化) + 文字,
+    // 点它进首页(`AppPage::Home`)。Dozer 页签:视觉与右侧项目页签一致,
+    // 恒在最左、不参与拥挤收窄(D1)。
+    let title = dozer_home_tab(
+        app.current_page == AppPage::Home,
+        app.hover_progress(HoverId::Home),
+    );
 
     // 页签行占满标题与右侧之间的全部空间。裁剪与翻页在 `project_tabs_row`
     // 内部做(只裁页签本身,箭头与"＋"钉在裁剪区外),这里**不能**再套一层
@@ -4325,18 +4452,35 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
     // 设计稿"btn settings"外框 padding-left 6 / padding-y 4(hit-box 留白,
     // 图标本身仍是 16x16)。目前尚未接入设置面板,先只还原视觉,不加
     // on_press——没有对应 Message 变体可派发。
+    // 图标颜色:SVG 颜色构建时定死,hover 态平滑过渡到金(见 `HoverId`/
+    // `App::hover_progress`——与光标闪烁同款自驱 redraw 动画)。
+    let settings_color = theme::mix(
+        theme::DIM,
+        theme::GOLD,
+        app.hover_progress(HoverId::Topbar(TopbarButton::Settings)),
+    );
     right = right.push(
-        container(icons::view(
-            icons::IconKind::Settings,
-            crate::icon_size::rail(),
-            theme::DIM,
+        MouseArea::new(
+            container(icons::view(
+                icons::IconKind::Settings,
+                crate::icon_size::rail(),
+                settings_color,
+            ))
+            .padding(Padding {
+                top: 4.0,
+                right: 0.0,
+                bottom: 4.0,
+                left: 6.0,
+            }),
+        )
+        .on_enter(Message::Hover(
+            HoverId::Topbar(TopbarButton::Settings),
+            true,
         ))
-        .padding(Padding {
-            top: 4.0,
-            right: 0.0,
-            bottom: 4.0,
-            left: 6.0,
-        }),
+        .on_exit(Message::Hover(
+            HoverId::Topbar(TopbarButton::Settings),
+            false,
+        )),
     );
 
     let region = chrome_style::top_bar();
@@ -4500,7 +4644,10 @@ fn home_sidebar(
             Scrollable::new(list)
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .direction(scrollable::Direction::Vertical(scrollable::Scrollbar::new())),
+                .direction(scrollable::Direction::Vertical(
+                    crate::scrollbar::scrollbar(),
+                ))
+                .style(|_t, _s| crate::scrollbar::scrollbar_style()),
         );
     }
 
@@ -4734,7 +4881,7 @@ struct ProjectTabEntry {
     dot: Option<(Color, bool)>,
 }
 
-/// 顶栏项目页签行:固定默认宽 + 拥挤时均分收窄的页签 + 恒在最右的"＋"。
+/// 顶栏项目页签行:固定默认宽 + 拥挤时均分收窄的页签 + 紧跟最后一片页签之后的"＋"。
 ///
 /// 每片页签的宽度按如下规则算(`project_tab_max_width()` 即"默认/合适宽"):
 /// 页签少、每片都能容下默认宽时,统一用默认宽(左对齐,右侧留白,不撑爆);
@@ -4752,8 +4899,8 @@ fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_
     responsive(move |size| {
         let gap = workspace_geometry::project_tab_gap();
         let default_w = workspace_geometry::project_tab_max_width();
-        // 预留"＋"按钮与其左右两道 gap(页签内部还有 n-1 道 gap),避免
-        // 页签在拥挤时压到"＋"上。"＋"与页签之间靠 `Space::fill()` 留白。
+        // 预留"＋"按钮与其紧跟最后一片页签的 gap(页签内部还有 n-1 道 gap),
+        // 避免页签在拥挤时压到"＋"上。
         let reserved = workspace_geometry::project_tab_add_button_width() + (n as f32 + 1.0) * gap;
         let avail = (size.width - reserved).max(0.0);
         // 每片目标宽:少页签用默认宽(固定);多到塞不下默认宽才均分收窄。
@@ -4769,30 +4916,67 @@ fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_
             .spacing(gap)
             .align_y(iced_widget::core::Alignment::Center)
             .width(Length::Shrink); // 固定宽,不撑满;右侧留白把"＋"顶到最右
-        for entry in &entries {
+        // 分割竖线高度:顶栏高的约 45%,在行内 `align_y(Center)` 自然垂直居中。
+        let sep_h = workspace_geometry::top_bar_height() * 0.45;
+        for (i, entry) in entries.iter().enumerate() {
             let active = active_project_id == Some(entry.id);
             let item = project_tab_item(entry.id, entry.name.clone(), entry.dot, active, blink_on);
             // 固定宽:少页签时为默认宽,挤时为均分窄宽(Chrome 式收窄)。
             let cell = container(item).width(Length::Fixed(per_tab));
             tabs = tabs.push(cell);
+            // 仅当"当前"与"下一个"页签都未选中时,二者之间插一条小竖线做
+            // 分割;只要相邻任意一侧是选中态,那一侧就不画(选中页签左右都
+            // 干净,既不被竖线打断,也把"当前页签"在视觉上独立出来)。
+            if i + 1 < n {
+                let next_active = active_project_id == Some(entries[i + 1].id);
+                if !active && !next_active {
+                    tabs = tabs.push(
+                        container(iced_widget::space::Space::new())
+                            .width(Length::Fixed(1.0))
+                            .height(Length::Fixed(sep_h))
+                            .style(|_t: &iced_widget::Theme| container::Style {
+                                background: Some(theme::BORDER.into()),
+                                ..container::Style::default()
+                            }),
+                    );
+                }
+            }
         }
 
-        let add = button(
-            text("＋")
-                .font(top_bar_font())
-                .size(workspace_font::title())
-                .color(theme::DIM),
+        // 图标颜色:SVG 构建时定死、不吃 `button::Status`,hover 态平滑过渡到
+        // 金(见 `HoverId`/`App::hover_progress`)。
+        let add_color = theme::mix(
+            theme::DIM,
+            theme::GOLD,
+            app.hover_progress(HoverId::Topbar(TopbarButton::AddProject)),
+        );
+        let add = MouseArea::new(
+            button(icons::view(
+                icons::IconKind::SquarePlus,
+                crate::icon_size::row(),
+                add_color,
+            ))
+            .on_press(Message::ProjectTabPickFolder)
+            .padding([6, 8])
+            .style(move |_t: &iced_widget::Theme, _s| button::Style {
+                background: None,
+                text_color: add_color,
+                ..button::Style::default()
+            }),
         )
-        .on_press(Message::ProjectTabPickFolder)
-        .padding([6, 8])
-        .style(|_t: &iced_widget::Theme, _s| button::Style {
-            background: None,
-            text_color: theme::DIM,
-            ..button::Style::default()
-        });
+        .on_enter(Message::Hover(
+            HoverId::Topbar(TopbarButton::AddProject),
+            true,
+        ))
+        .on_exit(Message::Hover(
+            HoverId::Topbar(TopbarButton::AddProject),
+            false,
+        ));
 
-        // 页签(固定宽,左对齐) + 弹性留白 + "＋"(恒在最右)。
-        row![tabs, iced_widget::Space::new().width(Length::Fill), add]
+        // 页签(固定宽,左对齐) + "＋"紧邻最后一片页签之后(不再用弹性留白把
+        // 它顶到最右——它隶属于页签区,跟在最后一片页签后面,像浏览器新建
+        // 页签的 ＋)。
+        row![tabs, add]
             .spacing(gap)
             .align_y(iced_widget::core::Alignment::Center)
             .into()
@@ -4809,7 +4993,14 @@ fn project_tab_item<'a>(
     active: bool,
     blink_on: bool,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let mut label = row![].spacing(4);
+    // 悬停背景的高度/圆角与顶栏 Dozer 按钮(圆角正方形)对齐:固定高 `sq`、
+    // 半径 8,而非吃满整条顶栏高度(那样太满、与 Dozer 按钮不一致)。
+    let sq = crate::icon_size::rail() + 14.0;
+    // 关闭按钮用与顶栏其它图标按钮(tab 箭头 / 最大化)同尺寸的方形命中区。
+    let close_sz = crate::workspace_geometry::tab_button_size();
+    let mut label = row![]
+        .spacing(4)
+        .align_y(iced_widget::core::Alignment::Center);
     if let Some((color, blinking)) = dot {
         // 工作中且处于暗相位:点点压到近乎透明,与终端 tab 同一套"呼吸"。
         let color = if blinking && !blink_on {
@@ -4827,52 +5018,135 @@ fn project_tab_item<'a>(
     );
     // 标签行撑满并裁剪:页签被 `FillPortion` 压窄时长名在此截断(Chrome 式
     // 无限收窄),不会把关闭按钮挤出去。
+    // `height(Fill)` + `align_y(Center)` 缺一不可:`button` 的布局只加
+    // padding、不回收多余竖向空间(iced_widget::button::layout 用
+    // `layout::padded`,内容按 padding 定位后剩余空间原样留在下方),内层
+    // `row` 的 `align_y(Center)` 因此形同虚设——必须让这层 `container` 撑满
+    // 按钮内容区、自己吃掉那截空间才能真正居中,否则页签文字贴顶,与
+    // `main.rs::center_traffic_lights` 摆在顶栏正中的交通灯对不齐。
     let label = container(label.align_y(iced_widget::core::Alignment::Center))
         .width(Length::Fill)
+        .height(Length::Fill)
+        .align_y(iced_widget::core::Alignment::Center)
+        // 右侧留白给叠在页签之上的关闭按钮:长名在此截断,不会跑到 × 底下。
+        .padding(Padding {
+            right: close_sz + 6.0,
+            ..Padding::ZERO
+        })
         .clip(true);
 
     let select = button(label)
         .on_press(Message::ProjectTabSwitch(id))
         .width(Length::Fill)
-        .style(|_t: &iced_widget::Theme, _s| button::Style {
-            background: None,
-            text_color: theme::CREAM,
-            ..button::Style::default()
+        .height(Length::Fixed(sq))
+        .style(move |_t: &iced_widget::Theme, s| {
+            let mut st = button::Style {
+                background: None,
+                text_color: theme::CREAM,
+                ..button::Style::default()
+            };
+            // 选中态不参与 hover 提亮(已有实底 TAB_ACTIVE_BG + 底部强调线,
+            // 无需再高亮);未选中态 hover 时画一条与 Dozer 按钮同高同圆角的
+            // 胶囊背景(#152630)。
+            if !active && let button::Status::Hovered = s {
+                st.background = Some(theme::TAB_HOVER.into());
+                st.border = Border {
+                    radius: 8.0.into(),
+                    ..Border::default()
+                };
+            }
+            st
         });
 
+    // 关闭按钮:方形图标按钮,叠在页签主体之上(见下方 tab_row)。hover/press
+    // 显 CARD 圆角底(半径 4,透明 1px 描边),与顶栏其它图标按钮(tab 箭头 /
+    // 最大化)一致;不再用原来的 TAB_HOVER 大胶囊(半径 8)。选中态同样不单独
+    // 高亮(由页签主体兜底)。
     let close = button(text("×").size(workspace_font::body()).color(theme::DIM))
         .on_press(Message::ProjectTabClose(id))
-        .style(|_t: &iced_widget::Theme, _s| button::Style {
-            background: None,
-            text_color: theme::DIM,
-            ..button::Style::default()
+        .width(Length::Fixed(close_sz))
+        .height(Length::Fixed(close_sz))
+        .padding(0)
+        .style(move |_t: &iced_widget::Theme, status| {
+            let base = button::Style {
+                background: None,
+                text_color: theme::DIM,
+                ..button::Style::default()
+            };
+            match status {
+                button::Status::Hovered | button::Status::Pressed => button::Style {
+                    background: Some(theme::CARD.into()),
+                    border: Border {
+                        color: Color::TRANSPARENT,
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    ..base
+                },
+                _ => base,
+            }
         });
 
-    container(
-        row![select, close]
-            .spacing(2)
-            .align_y(iced_widget::core::Alignment::Center),
-    )
-    .padding([0, 14])
-    .height(Length::Fixed(workspace_geometry::top_bar_height()))
-    .width(Length::Fill)
-    .clip(true)
-    .style(move |_t: &iced_widget::Theme| {
-        if active {
-            container::Style {
-                background: Some(theme::CARD.into()),
-                border: Border {
-                    color: theme::BORDER,
-                    width: 1.0,
-                    radius: 6.0.into(),
-                },
-                ..container::Style::default()
+    // 页签主体(select)为底层、关闭按钮为上层叠在其右:关闭按钮视觉上落在
+    // 页签背景里,而非独立的相邻按钮。两层都 `Fill` 撑满整条顶栏高,select
+    // 用容器垂直居中、close 用容器靠右居中;横向内缩 14。
+    let select_layer = container(select)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_y(iced_widget::core::alignment::Vertical::Center);
+    let close_layer = container(close)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Right)
+        .align_y(iced_widget::core::alignment::Vertical::Center);
+    let tab_row = container(stack![select_layer, close_layer])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding([0, 14]);
+
+    // 激活态:实底背景(左上/右上圆角) + 底部 1px 强调线
+    // (`#dcc9a3` = `TAB_ACTIVE_BORDER`),不要外边框;未激活态:无背景、无边框
+    // (仅 hover 时画胶囊,见上)。
+    let inner = if active {
+        column![
+            tab_row,
+            container(iced_widget::space::Space::new())
+                .width(Length::Fill)
+                .height(Length::Fixed(1.0))
+                .style(|_t: &iced_widget::Theme| container::Style {
+                    background: Some(theme::TAB_ACTIVE_BORDER.into()),
+                    ..container::Style::default()
+                }),
+        ]
+        .height(Length::Fill)
+    } else {
+        column![tab_row].height(Length::Fill)
+    };
+
+    container(inner)
+        .height(Length::Fixed(workspace_geometry::top_bar_height()))
+        .width(Length::Fill)
+        .clip(true)
+        .style(move |_t: &iced_widget::Theme| {
+            if active {
+                container::Style {
+                    background: Some(theme::TAB_ACTIVE_BG.into()),
+                    // 仅左上/右上圆角,底部 1px 强调线由 inner 承载(见上)。
+                    border: Border {
+                        radius: Radius {
+                            top_left: 8.0,
+                            top_right: 8.0,
+                            ..Radius::default()
+                        },
+                        ..Border::default()
+                    },
+                    ..container::Style::default()
+                }
+            } else {
+                container::Style::default()
             }
-        } else {
-            container::Style::default()
-        }
-    })
-    .into()
+        })
+        .into()
 }
 
 /// 一个项目页签的后台活动指示点:取该项目所有**存活**会话里最值得关注的
@@ -5312,15 +5586,17 @@ fn review_content_pane(
 fn rail_icon_button<'a>(
     icon: icons::IconKind,
     active: bool,
-    hovered: bool,
+    hover_t: f32,
     msg: Message,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    // 图标颜色:选中或 hover 时金色,否则 DIM。SVG 颜色构建时定死、不吃
-    // `button::Status`,所以 hover 态靠 `hovered` 参数从 App 算进来。
-    let color = if active || hovered {
+    // 图标颜色:选中态恒为金;未选中时 hover 平滑过渡到金(见 `HoverId`/
+    // `App::hover_progress`——与光标闪烁同款自驱 redraw 动画)。SVG 颜色
+    // 构建时定死、不吃 `button::Status`,所以 hover 进度靠 `hover_t` 参数从
+    // App 算进来。
+    let color = if active {
         theme::GOLD
     } else {
-        theme::DIM
+        theme::mix(theme::DIM, theme::GOLD, hover_t)
     };
     let inner = container(icons::view(icon, crate::icon_size::rail(), color))
         .width(Length::Fill)
@@ -5370,19 +5646,19 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_wi
         MouseArea::new(rail_icon_button(
             icons::IconKind::Folder,
             app.left_view == LeftView::Files && left_open,
-            app.rail_hovered == Some(RailButton::LeftFiles),
+            app.hover_progress(HoverId::Rail(RailButton::LeftFiles)),
             Message::LeftIconSelect(LeftView::Files),
         ))
-        .on_enter(Message::RailHover(Some(RailButton::LeftFiles)))
-        .on_exit(Message::RailHover(None)),
+        .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftFiles), true))
+        .on_exit(Message::Hover(HoverId::Rail(RailButton::LeftFiles), false)),
         MouseArea::new(rail_icon_button(
             icons::IconKind::Globe,
             app.left_view == LeftView::Web && left_open,
-            app.rail_hovered == Some(RailButton::LeftWeb),
+            app.hover_progress(HoverId::Rail(RailButton::LeftWeb)),
             Message::LeftIconSelect(LeftView::Web),
         ))
-        .on_enter(Message::RailHover(Some(RailButton::LeftWeb)))
-        .on_exit(Message::RailHover(None)),
+        .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftWeb), true))
+        .on_exit(Message::Hover(HoverId::Rail(RailButton::LeftWeb), false)),
     ]
     .spacing(region.gap)
     .padding(region.padding);
@@ -5407,19 +5683,25 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_w
         MouseArea::new(rail_icon_button(
             icons::IconKind::Bot,
             app.right_view == RightView::Agent && right_open,
-            app.rail_hovered == Some(RailButton::RightAgent),
+            app.hover_progress(HoverId::Rail(RailButton::RightAgent)),
             Message::RightIconSelect(RightView::Agent),
         ))
-        .on_enter(Message::RailHover(Some(RailButton::RightAgent)))
-        .on_exit(Message::RailHover(None)),
+        .on_enter(Message::Hover(HoverId::Rail(RailButton::RightAgent), true))
+        .on_exit(Message::Hover(HoverId::Rail(RailButton::RightAgent), false)),
         MouseArea::new(rail_icon_button(
             icons::IconKind::MessageSquare,
             app.right_view == RightView::Conversations && right_open,
-            app.rail_hovered == Some(RailButton::RightConversations),
+            app.hover_progress(HoverId::Rail(RailButton::RightConversations)),
             Message::RightIconSelect(RightView::Conversations),
         ))
-        .on_enter(Message::RailHover(Some(RailButton::RightConversations)))
-        .on_exit(Message::RailHover(None)),
+        .on_enter(Message::Hover(
+            HoverId::Rail(RailButton::RightConversations),
+            true
+        ))
+        .on_exit(Message::Hover(
+            HoverId::Rail(RailButton::RightConversations),
+            false
+        )),
     ]
     .spacing(region.gap)
     .padding(region.padding);
@@ -5800,20 +6082,26 @@ fn project_pane<'a>(
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = chrome_style::project_pane();
-    let mut content = column![].spacing(region.gap);
+    // 头部:项目信息卡,固定在文件树上方,不随滚动条滚走(需求 1)。
+    let mut header = column![].spacing(region.gap).width(Length::Fill);
+    // 文件树行:唯一进入 scrollable 的内容。
+    let mut tree_col = column![].spacing(region.gap);
 
     match &ws.project {
         Some(p) => {
             let label = project_branch_label(ws.branch.as_deref(), ws.dirty);
             let bcolor = if ws.dirty { theme::GOLD } else { theme::BODY };
+            // 需求 3:git 分支名前加 git-branch icon;需求 2:去掉完整文件路径。
             let mut card_col = column![
                 text(p.name.clone())
                     .size(workspace_font::title())
                     .color(theme::CREAM),
-                text(label).size(workspace_font::label()).color(bcolor),
-                text(p.path.clone())
-                    .size(workspace_font::caption())
-                    .color(theme::DIM),
+                row![
+                    icons::view(icons::IconKind::GitBranch, crate::icon_size::row(), bcolor),
+                    text(label).size(workspace_font::label()).color(bcolor),
+                ]
+                .spacing(6)
+                .align_y(iced_widget::core::Alignment::Center),
             ]
             .spacing(2);
             if let Some(n) = ws.project_acceptance_count.filter(|n| *n > 0) {
@@ -5834,9 +6122,9 @@ fn project_pane<'a>(
                     ..container::Style::default()
                 },
             );
-            content = content.push(card);
+            header = header.push(card);
             if let Some(err) = &ws.tree_error {
-                content = content.push(
+                header = header.push(
                     text(format!("⚠ {err}"))
                         .size(workspace_font::label())
                         .color(theme::RED),
@@ -5854,7 +6142,7 @@ fn project_pane<'a>(
                             .as_ref()
                             .map(|e| e.buffer.as_str())
                             .unwrap_or("");
-                        content = content.push(tree_edit_row(row.depth, buffer));
+                        tree_col = tree_col.push(tree_edit_row(row.depth, buffer));
                         continue;
                     }
                     let indent = "  ".repeat(row.depth);
@@ -5863,11 +6151,7 @@ fn project_pane<'a>(
                     } else {
                         ws.git_statuses.get(&row.path).copied()
                     };
-                    let name_color = if row.is_dir {
-                        theme::BODY
-                    } else {
-                        theme::CREAM
-                    };
+                    let name_color = theme::BODY;
                     let row_icon: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> =
                         if row.is_dir {
                             let chevron = if row.expanded {
@@ -5949,7 +6233,7 @@ fn project_pane<'a>(
                             text_color: theme::BODY,
                             ..button::Style::default()
                         });
-                    content = content.push(MouseArea::new(row_btn).on_right_press(
+                    tree_col = tree_col.push(MouseArea::new(row_btn).on_right_press(
                         Message::ProjectTreeContextMenu {
                             path: row.path.clone(),
                             is_dir: row.is_dir,
@@ -5969,19 +6253,19 @@ fn project_pane<'a>(
                             .as_ref()
                             .map(|e| e.buffer.as_str())
                             .unwrap_or("");
-                        content = content.push(tree_edit_row(row.depth + 1, buffer));
+                        tree_col = tree_col.push(tree_edit_row(row.depth + 1, buffer));
                     }
                 }
             }
         }
         None => {
-            content = content.push(
+            header = header.push(
                 text("未打开项目")
                     .size(workspace_font::body())
                     .color(theme::DIM),
             );
             for p in &ws.recent_projects {
-                content = content.push(
+                header = header.push(
                     button(
                         text(p.name.clone())
                             .size(workspace_font::body())
@@ -5998,14 +6282,24 @@ fn project_pane<'a>(
         }
     }
 
+    // 头部(项目信息卡)固定在文件树上方、不进 scrollable,所以即使文件树
+    // 出现滚动条,项目信息也始终可见;scrollable 只承载文件树行。
     let body = container(
-        Scrollable::new(content.padding(region.padding))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .direction(scrollable::Direction::Vertical(scrollable::Scrollbar::new())),
+        column![
+            header,
+            Scrollable::new(tree_col)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .direction(scrollable::Direction::Vertical(
+                    crate::scrollbar::scrollbar()
+                ))
+                .style(|_t, _s| crate::scrollbar::scrollbar_style()),
+        ]
+        .spacing(region.gap),
     )
     .width(Length::Fill)
     .height(Length::Fill)
+    .padding(region.padding)
     .style(move |_t: &iced_widget::Theme| container::Style {
         background: region.background.map(Into::into),
         border: outer,
@@ -7673,7 +7967,6 @@ mod tests {
             right_view: RightView::Agent,
             right_collapsed: false,
             maximized: None,
-            rail_hovered: None,
         }
     }
 
