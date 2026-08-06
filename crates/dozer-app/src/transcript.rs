@@ -135,9 +135,12 @@ fn parse_codebuddy_shaped_jsonl(jsonl: &str) -> Vec<ReviewEntry> {
             continue;
         };
         match v.get("role").and_then(|r| r.as_str()) {
-            Some("user") => out.push(ReviewEntry::Human {
-                text: join_codebuddy_text_blocks(blocks, "input_text"),
-            }),
+            Some("user") => {
+                let text = join_codebuddy_text_blocks(blocks, "input_text");
+                if !text.is_empty() {
+                    out.push(ReviewEntry::Human { text });
+                }
+            }
             Some("assistant") => out.push(ReviewEntry::AiTurn {
                 text: join_codebuddy_text_blocks(blocks, "output_text"),
                 tools: Vec::new(),
@@ -300,6 +303,30 @@ mod tests {
                 },
             ],
             "多个 input_text/output_text 块按顺序拼接;坏行与未知 role 跳过"
+        );
+    }
+
+    #[test]
+    fn codebuddy_user_row_without_input_text_block_yields_no_human_entry() {
+        // role:"user" 行的 content 里没有 input_text 类型的块（结构上可能，
+        // 只是当前 fixture 里没观测到）——join 出来是空字符串，不该推入一个
+        // 空 Human 气泡（见 final review finding：要跟 conversation.rs 的
+        // codebuddy_shaped_title 弃权行为对齐）。
+        let jsonl = concat!(
+            "{\"type\":\"message\",\"role\":\"user\",\"content\":",
+            "[{\"type\":\"something_else\",\"text\":\"x\"}]}\n",
+            "{\"type\":\"message\",\"role\":\"assistant\",\"content\":",
+            "[{\"type\":\"output_text\",\"text\":\"回复\"}]}\n"
+        );
+        let entries = parse_transcript(AgentKind::Codebuddy, jsonl);
+        assert_eq!(
+            entries,
+            vec![ReviewEntry::AiTurn {
+                text: "回复".into(),
+                tools: Vec::new(),
+                thinking: false,
+            }],
+            "user 行没有 input_text 块时不产出空 Human 气泡，直接跳过该行"
         );
     }
 

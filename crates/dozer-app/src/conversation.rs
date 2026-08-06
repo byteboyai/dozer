@@ -81,6 +81,9 @@ fn claude_shaped_title(jsonl_head: &str) -> Option<String> {
     None
 }
 
+/// 只取第一个匹配的 `input_text` 块就返回，不像 `transcript.rs` 的
+/// `join_codebuddy_text_blocks` 那样把所有匹配块拼接起来——这是故意的：
+/// 标题要单行，拼接全部块不是这里被漏掉的 bug，以后别"顺手"改成拼接。
 fn codebuddy_shaped_title(jsonl_head: &str) -> Option<String> {
     for line in jsonl_head.lines() {
         let Ok(v) = serde_json::from_str::<Value>(line.trim()) else {
