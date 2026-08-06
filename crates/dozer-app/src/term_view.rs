@@ -30,7 +30,9 @@ use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::font::Weight;
 use iced_widget::core::mouse::{self, ScrollDelta};
 use iced_widget::core::text::LineHeight;
-use iced_widget::core::{Color, Element, Event, Font, Length, Pixels, Point, Rectangle, Size};
+use iced_widget::core::{
+    Color, Element, Event, Font, Length, Pixels, Point, Rectangle, Size, Vector,
+};
 
 /// 终端字号（逻辑像素），已乘全局 UI scale——Ctrl + / Ctrl - 缩放时
 /// 终端字符与图标/控件一起放大，而不是卡在设计基准 14px。grid 换算与
@@ -70,6 +72,76 @@ fn cell_font(bold: bool) -> Font {
     }
 }
 
+/// 宽字符（CJK 等）相对其 2 格绘制盒的水平补偿缩放。JetBrains Mono 没有
+/// CJK 字形，cosmic-text 回退到系统 CJK 字体后其字形 advance 实测只有
+/// ~1.661 个等宽格（不是网格假设的 2 格，见模块笔记）——`layout_runs`
+/// 已经把每个宽字符定位在正确的格子起点上（不再整行漂移），但字形本身比
+/// 绘制盒窄，视觉上中文比英文松散。这里量出实际比例、画的时候水平方向
+/// 补偿放大，只改字形宽度，不碰行高/列定位。
+///
+/// 用固定参考字号测量并缓存：比例是量纲无关的（字形宽度与字号同比例
+/// 缩放），全局 UI 缩放（Ctrl +/-）改变 `font_size()` 时无需重新测量。
+fn wide_glyph_scale() -> f32 {
+    use iced_wgpu::core::alignment::Vertical;
+    use iced_wgpu::core::text::{Paragraph as _, Shaping, Text, Wrapping};
+    use iced_wgpu::graphics::text::Paragraph;
+    use std::sync::OnceLock;
+
+    static SCALE: OnceLock<f32> = OnceLock::new();
+    *SCALE.get_or_init(|| {
+        let size = terminal_font::size();
+        let p = Paragraph::with_text(Text {
+            content: "中",
+            bounds: Size::new(10_000.0, 10_000.0),
+            size: Pixels(size),
+            line_height: LineHeight::Absolute(Pixels(size * terminal_font::line_height_factor())),
+            font: cell_font(false),
+            align_x: Default::default(),
+            align_y: Vertical::Top,
+            shaping: Shaping::Advanced,
+            wrapping: Wrapping::None,
+        });
+        let measured = p.min_bounds().width;
+        let expected = 2.0 * size * 0.6; // cell_width() 在参考字号下的值
+        if measured.is_finite() && measured > 0.0 {
+            // 封顶：字形量出比盒子还宽（回退字体换了/环境差异）时不倒缩小，
+            // 也不许无限放大——1.0（不缩放）到 1.5（留够安全边界不越界描边）。
+            (expected / measured).clamp(1.0, 1.5)
+        } else {
+            1.0
+        }
+    })
+}
+
+/// 画一格/一个 run 的字形：宽字符按 `wide_glyph_scale()` 水平补偿缩放使其
+/// 视觉填满 2 格绘制盒，窄字符原样绘制（scale=1.0 等价于不缩放）。缩放包在
+/// `with_save` 里，不影响后续绘制的坐标系。
+fn fill_cell_text(
+    frame: &mut canvas::Frame,
+    content: String,
+    x: f32,
+    y: f32,
+    color: Color,
+    font: Font,
+    wide: bool,
+) {
+    frame.with_save(|frame| {
+        frame.translate(Vector::new(x, y));
+        if wide {
+            frame.scale_nonuniform(Vector::new(wide_glyph_scale(), 1.0));
+        }
+        frame.fill_text(canvas::Text {
+            content,
+            position: Point::ORIGIN,
+            color,
+            size: Pixels(font_size()),
+            line_height: LineHeight::Absolute(Pixels(line_height_px())),
+            font,
+            ..canvas::Text::default()
+        });
+    });
+}
+
 /// 一段可一次 `fill_text` 画完的连续格子：起始列、占据列数、文本与风格。
 #[derive(Debug, Clone, PartialEq)]
 struct Run {
@@ -80,6 +152,9 @@ struct Run {
     bg: Option<(u8, u8, u8)>,
     bold: bool,
     selected: bool,
+    /// 宽字符（CJK 等）本体 run：`cells == 2` 不能当宽字符判据——两个窄
+    /// 字符合并的 run 也可能 `cells == 2`（如 "ab"）,必须显式记录。
+    wide: bool,
 }
 
 /// 单行 cell 序列 → 绘制 run 序列。切分规则见模块注释；选区内的空白格
@@ -104,6 +179,7 @@ fn layout_runs(row: &[Cell]) -> Vec<Run> {
                 bg: cell.bg,
                 bold: cell.bold,
                 selected: cell.selected,
+                wide: true,
             });
             col += 2; // 本体 + spacer
             continue;
@@ -128,6 +204,7 @@ fn layout_runs(row: &[Cell]) -> Vec<Run> {
             bg: style.1,
             bold: style.2,
             selected: style.3,
+            wide: false,
         });
     }
     runs
@@ -295,15 +372,15 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
                         },
                     );
                 }
-                frame.fill_text(canvas::Text {
-                    content: run.text,
-                    position: Point::new(x, y),
-                    color: rgb(run.fg),
-                    size: Pixels(font_size()),
-                    line_height: LineHeight::Absolute(Pixels(line_height_px())),
-                    font: cell_font(run.bold),
-                    ..canvas::Text::default()
-                });
+                fill_cell_text(
+                    &mut frame,
+                    run.text,
+                    x,
+                    y,
+                    rgb(run.fg),
+                    cell_font(run.bold),
+                    run.wide,
+                );
             }
         }
 
@@ -324,15 +401,15 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
                     theme::CREAM,
                 );
                 if cell.ch != ' ' {
-                    frame.fill_text(canvas::Text {
-                        content: cell.ch.to_string(),
-                        position: Point::new(x, y),
-                        color: theme::TERM_BG,
-                        size: Pixels(font_size()),
-                        line_height: LineHeight::Absolute(Pixels(line_height_px())),
-                        font: cell_font(cell.bold),
-                        ..canvas::Text::default()
-                    });
+                    fill_cell_text(
+                        &mut frame,
+                        cell.ch.to_string(),
+                        x,
+                        y,
+                        theme::TERM_BG,
+                        cell_font(cell.bold),
+                        cell.wide,
+                    );
                 }
             } else {
                 frame.stroke(
@@ -473,6 +550,28 @@ mod tests {
             0.0,
         );
         assert_eq!(n, -2);
+    }
+
+    #[test]
+    fn wide_flag_distinguishes_cjk_run_from_same_cell_count_ascii_run() {
+        // "ab" 是两个窄字符合并的 run，cells 也是 2——不能靠 cells==2 判断
+        // 宽字符（见 `Run::wide` 字段注释），必须显式 flag。
+        let ascii = &layout_runs(&row_of(b"ab", 40))[0];
+        assert_eq!((ascii.cells, ascii.wide), (2, false));
+        let cjk = &layout_runs(&row_of("你".as_bytes(), 40))[0];
+        assert_eq!((cjk.cells, cjk.wide), (2, true));
+    }
+
+    #[test]
+    fn wide_glyph_scale_compensates_narrow_cjk_fallback_without_exploding() {
+        // cosmic-text 回退字形若比 2 格盒子窄，缩放应 > 1.0（放大填满）；
+        // 封顶 1.5 防止环境差异导致的极端值把字形拉得离谱大或方向搞反。
+        let scale = wide_glyph_scale();
+        assert!(scale.is_finite());
+        assert!(
+            (1.0..=1.5).contains(&scale),
+            "wide_glyph_scale 超出预期区间: {scale}"
+        );
     }
 
     #[test]
