@@ -6,9 +6,20 @@
 //! 独占的文件名，不与用户/其他工具共享同一份配置——install 直接整体
 //! 覆盖写，uninstall 直接删，不需要合并逻辑。
 //!
+//! `dozer-translate.ts` 写进 `plugins/dozer-lib/` 子目录，而不是跟
+//! `dozer.ts` 平铺在 `plugins/` 里——opencode 会把 `plugins/` 目录下每个
+//! `*.ts`/`*.js` 文件当成独立插件加载，对文件里每个具名导出都当
+//! `Plugin` 工厂调用一次。`dozer-translate.ts` 导出的是纯函数
+//! （`onSessionCreated` 等），平铺时会被 opencode 拿插件初始化参数去调
+//! 这些函数，触发 `undefined is not an object (evaluating
+//! 'info.parentID')` 之类的运行时错误——2026-08-05 最终评审用真实
+//! opencode 1.18.11 装机复现确认。塞进子目录能让 opencode 的平铺式自动
+//! 发现完全看不到它，同时 `dozer.ts` 用相对路径 import 照常能找到它。
+//!
 //! `dozer.ts` 里 spawn `dozer-hook` 用的二进制路径在安装时被替换成
 //! `current_exe()` 的绝对路径（跟 Claude/CodeBuddy 安装器把 exe 路径写
-//! 进 hook command 字符串是同一手法），避免依赖插件运行时的 PATH。
+//! 进 hook command 字符串是同一手法），避免依赖插件运行时的 PATH。路径
+//! 里的 `"`/`\` 会被转义，防止小概率把 TS 源码写坏。
 
 use std::path::{Path, PathBuf};
 
@@ -30,34 +41,54 @@ pub fn plugins_dir() -> PathBuf {
         .join("plugins")
 }
 
+/// 转义 `\`/`"`：exe 路径若含这两个字符（极少见，取决于安装位置），直
+/// 接拼进 TS 字符串字面量会产出语法错误的源码，导致插件静默加载失败。
+fn escape_ts_string_literal(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 pub fn run_at(dir: &Path, install: bool) -> i32 {
     if install {
         if let Err(e) = std::fs::create_dir_all(dir) {
             eprintln!("建目录失败: {e}");
             return 1;
         }
+        let lib_dir = dir.join("dozer-lib");
+        if let Err(e) = std::fs::create_dir_all(&lib_dir) {
+            eprintln!("建目录失败: {e}");
+            return 1;
+        }
         let exe = std::env::current_exe()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| "dozer-hook".into());
-        let dozer_ts = DOZER_TS_TEMPLATE.replace(HOOK_BIN_PLACEHOLDER, &exe);
+        let escaped_exe = escape_ts_string_literal(&exe);
+        let dozer_ts = DOZER_TS_TEMPLATE.replace(HOOK_BIN_PLACEHOLDER, &escaped_exe);
         if let Err(e) = std::fs::write(dir.join("dozer.ts"), dozer_ts) {
             eprintln!("写 dozer.ts 失败: {e}");
             return 1;
         }
-        if let Err(e) = std::fs::write(dir.join("dozer-translate.ts"), TRANSLATE_TS) {
+        if let Err(e) = std::fs::write(lib_dir.join("dozer-translate.ts"), TRANSLATE_TS) {
             eprintln!("写 dozer-translate.ts 失败: {e}");
             return 1;
         }
         println!("已安装: {}", dir.display());
     } else {
-        for name in ["dozer.ts", "dozer-translate.ts"] {
-            let p = dir.join(name);
-            if p.exists()
-                && let Err(e) = std::fs::remove_file(&p)
-            {
-                eprintln!("删 {} 失败: {e}", p.display());
-                return 1;
-            }
+        let translate_ts = dir.join("dozer-lib").join("dozer-translate.ts");
+        if translate_ts.exists()
+            && let Err(e) = std::fs::remove_file(&translate_ts)
+        {
+            eprintln!("删 {} 失败: {e}", translate_ts.display());
+            return 1;
+        }
+        // 尽力而为：子目录若已空就顺手删掉，删不掉（不存在/非空/权限）
+        // 不算卸载失败。
+        let _ = std::fs::remove_dir(dir.join("dozer-lib"));
+        let dozer_ts = dir.join("dozer.ts");
+        if dozer_ts.exists()
+            && let Err(e) = std::fs::remove_file(&dozer_ts)
+        {
+            eprintln!("删 {} 失败: {e}", dozer_ts.display());
+            return 1;
         }
         println!("已卸载: {}", dir.display());
     }
@@ -78,8 +109,47 @@ mod tests {
             "占位符必须被替换成真实 exe 路径"
         );
         assert!(dozer_ts.contains("DozerPlugin"));
-        let translate_ts = std::fs::read_to_string(dir.path().join("dozer-translate.ts")).unwrap();
+        let translate_ts =
+            std::fs::read_to_string(dir.path().join("dozer-lib").join("dozer-translate.ts"))
+                .unwrap();
         assert!(translate_ts.contains("onSessionCreated"));
+    }
+
+    #[test]
+    fn install_puts_translate_ts_in_lib_subdir_not_flat() {
+        // Critical: opencode 平铺加载 plugins/ 目录下每个 *.ts 文件当插
+        // 件，把 dozer-translate.ts 的具名导出（纯函数）当 Plugin 工厂调
+        // 用会直接报错。必须塞进子目录，让平铺式自动发现看不到它。
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(run_at(dir.path(), true), 0);
+        assert!(
+            !dir.path().join("dozer-translate.ts").exists(),
+            "dozer-translate.ts 不能直接平铺在 plugins/ 下，否则会被 opencode 当插件加载"
+        );
+        assert!(
+            dir.path()
+                .join("dozer-lib")
+                .join("dozer-translate.ts")
+                .exists()
+        );
+        let dozer_ts = std::fs::read_to_string(dir.path().join("dozer.ts")).unwrap();
+        assert!(
+            dozer_ts.contains("./dozer-lib/dozer-translate"),
+            "dozer.ts 的 import 路径必须指向子目录"
+        );
+    }
+
+    #[test]
+    fn escape_ts_string_literal_handles_quotes_and_backslashes() {
+        // Minor finding 5：exe 路径含 `"`/`\` 时必须被转义，否则拼进 TS
+        // 字符串字面量会产出语法错误的源码。
+        let raw = r#"/opt/weird "path"\dozer-hook"#;
+        let escaped = escape_ts_string_literal(raw);
+        assert_eq!(escaped, r#"/opt/weird \"path\"\\dozer-hook"#);
+        // 拼进真实模板后必须是语法合法的双引号字符串字面量内容——不能
+        // 出现未转义的 `"` 提前结束字符串。
+        let ts = format!("const x = \"{escaped}\"");
+        assert_eq!(ts.matches('"').count(), 4); // 开/闭各一对，内部两个都转义过
     }
 
     #[test]
@@ -96,7 +166,14 @@ mod tests {
         assert_eq!(run_at(dir.path(), true), 0);
         assert_eq!(run_at(dir.path(), false), 0);
         assert!(!dir.path().join("dozer.ts").exists());
-        assert!(!dir.path().join("dozer-translate.ts").exists());
+        assert!(
+            !dir.path()
+                .join("dozer-lib")
+                .join("dozer-translate.ts")
+                .exists()
+        );
+        // 空的 dozer-lib/ 子目录也该被顺手清掉。
+        assert!(!dir.path().join("dozer-lib").exists());
     }
 
     #[test]
