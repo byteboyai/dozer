@@ -111,21 +111,75 @@ fn parse_claude_shaped_jsonl(jsonl: &str) -> Vec<ReviewEntry> {
     out
 }
 
+/// CodeBuddy transcript(JSONL)独立 schema：顶层 `type:"message"` + `role` +
+/// `content[].type: "input_text"/"output_text"`,与 Claude 的
+/// `type:"user"/"assistant"` 不兼容,不能复用 `parse_claude_shaped_jsonl`
+/// （spec `2026-07-31-codebuddy-spike-findings.md` 实测确认）。混杂的
+/// `type:"file-history-snapshot"` 行是快照噪音,原样跳过。样本里没有出现
+/// 工具调用/thinking 的等价字段,`tools`/`thinking` 一律留空/false——
+/// 等真的观测到再补,不臆测。
+fn parse_codebuddy_shaped_jsonl(jsonl: &str) -> Vec<ReviewEntry> {
+    let mut out = Vec::new();
+    for line in jsonl.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) != Some("message") {
+            continue;
+        }
+        let Some(blocks) = v.get("content").and_then(|c| c.as_array()) else {
+            continue;
+        };
+        match v.get("role").and_then(|r| r.as_str()) {
+            Some("user") => out.push(ReviewEntry::Human {
+                text: join_codebuddy_text_blocks(blocks, "input_text"),
+            }),
+            Some("assistant") => out.push(ReviewEntry::AiTurn {
+                text: join_codebuddy_text_blocks(blocks, "output_text"),
+                tools: Vec::new(),
+                thinking: false,
+            }),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// `content` 数组里 `type == kind` 的块按顺序拼 `text` 字段,多块用换行分隔
+/// （与 `parse_claude_shaped_jsonl` 里 assistant 文本块的拼接规则一致）。
+fn join_codebuddy_text_blocks(blocks: &[Value], kind: &str) -> String {
+    let mut text = String::new();
+    for b in blocks {
+        if b.get("type").and_then(|t| t.as_str()) == Some(kind)
+            && let Some(t) = b.get("text").and_then(|t| t.as_str())
+        {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(t);
+        }
+    }
+    text
+}
+
 /// 按 agent 分派 transcript 解析。`Opencode` 复用 Claude 分支——
 /// dozer-hook 代写 OpenCode 的 transcript 时就是按 Claude 字段形状写的
 /// （spec §5.3），不是巧合。`Unknown` 也复用 Claude 分支：老装的 hook（还没
 /// 重跑 `dozer-hook install`）上报的每个事件 agent 字段都是 `Unknown`，
 /// 而在 CodeBuddy/OpenCode 真正进入用户机器之前，磁盘上现存的 transcript
 /// 事实上全是 Claude 形状——保守地假定 Unknown 就是 Claude 形状，比直接
-/// 返回空白审阅面板是严格更好的猜测。`Codebuddy` 暂时返回空：CodeBuddy
-/// 真实 transcript schema 待独立的适配计划验证后再接（spec §6），在那之前
-/// "不产出数据"是唯一诚实的行为，不是占位符。
+/// 返回空白审阅面板是严格更好的猜测。`Codebuddy` 走独立 schema 的解析器
+/// （见 `parse_codebuddy_shaped_jsonl`)。
 pub fn parse_transcript(agent: AgentKind, jsonl: &str) -> Vec<ReviewEntry> {
     match agent {
         AgentKind::Claude | AgentKind::Opencode | AgentKind::Unknown => {
             parse_claude_shaped_jsonl(jsonl)
         }
-        AgentKind::Codebuddy => Vec::new(),
+        AgentKind::Codebuddy => parse_codebuddy_shaped_jsonl(jsonl),
     }
 }
 
@@ -195,9 +249,70 @@ mod tests {
     }
 
     #[test]
-    fn codebuddy_yields_empty_until_schema_confirmed() {
-        let jsonl = r#"{"type":"user","message":{"role":"user","content":"应该被忽略"}}"#;
-        assert!(parse_transcript(AgentKind::Codebuddy, jsonl).is_empty());
+    fn codebuddy_parses_real_fixture_sample() {
+        // 真实脱敏样本，见 docs/superpowers/specs/2026-07-31-codebuddy-spike-findings.md。
+        // include_str! 直接读已入库文件，避免测试数据和真实 fixture 走漂。
+        let jsonl = include_str!("../../dozer-hook/fixtures/codebuddy-transcript-sample.jsonl");
+        let entries = parse_transcript(AgentKind::Codebuddy, jsonl);
+        assert_eq!(
+            entries.len(),
+            2,
+            "1 用户消息 + 1 assistant 消息;中间的 file-history-snapshot 行应被跳过"
+        );
+        assert_eq!(
+            entries[0],
+            ReviewEntry::Human {
+                text: "reply with exactly one word: hello".into()
+            }
+        );
+        assert_eq!(
+            entries[1],
+            ReviewEntry::AiTurn {
+                text: "hello".into(),
+                tools: Vec::new(),
+                thinking: false,
+            }
+        );
+    }
+
+    #[test]
+    fn codebuddy_joins_multiple_text_blocks_and_skips_other_kinds() {
+        let jsonl = concat!(
+            "{\"type\":\"message\",\"role\":\"user\",\"content\":",
+            "[{\"type\":\"input_text\",\"text\":\"第一段\"},",
+            "{\"type\":\"input_text\",\"text\":\"第二段\"}]}\n",
+            "{\"type\":\"message\",\"role\":\"assistant\",\"content\":",
+            "[{\"type\":\"output_text\",\"text\":\"回复一\"}],\"status\":\"completed\"}\n",
+            "不是 json 的坏行\n",
+            "{\"type\":\"message\",\"role\":\"tool\",\"content\":[]}\n"
+        );
+        let entries = parse_transcript(AgentKind::Codebuddy, jsonl);
+        assert_eq!(
+            entries,
+            vec![
+                ReviewEntry::Human {
+                    text: "第一段\n第二段".into()
+                },
+                ReviewEntry::AiTurn {
+                    text: "回复一".into(),
+                    tools: Vec::new(),
+                    thinking: false,
+                },
+            ],
+            "多个 input_text/output_text 块按顺序拼接;坏行与未知 role 跳过"
+        );
+    }
+
+    #[test]
+    fn codebuddy_empty_and_all_noise_yield_nothing() {
+        assert!(parse_transcript(AgentKind::Codebuddy, "").is_empty());
+        assert!(
+            parse_transcript(
+                AgentKind::Codebuddy,
+                "{\"type\":\"file-history-snapshot\"}\nbad\n"
+            )
+            .is_empty()
+        );
     }
 
     #[test]
