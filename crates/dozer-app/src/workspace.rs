@@ -116,6 +116,9 @@ pub enum HoverId {
     Home,
     Topbar(TopbarButton),
     Rail(RailButton),
+    /// 某个项目页签的关闭按钮(`×`),按项目 id 区分——同一时刻可能有多个
+    /// 页签,不能像 `TopbarButton`/`RailButton` 那样用一个全局标识共用。
+    ProjectTabClose(i64),
 }
 
 /// 一个可平滑过渡的 hover 动画状态机。iced 0.14 无内置动画 API,这套自驱
@@ -4909,7 +4912,15 @@ fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_
         let sep_h = workspace_geometry::top_bar_height() * 0.45;
         for (i, entry) in entries.iter().enumerate() {
             let active = active_project_id == Some(entry.id);
-            let item = project_tab_item(entry.id, entry.name.clone(), entry.dot, active, blink_on);
+            let close_hover_t = app.hover_progress(HoverId::ProjectTabClose(entry.id));
+            let item = project_tab_item(
+                entry.id,
+                entry.name.clone(),
+                entry.dot,
+                active,
+                blink_on,
+                close_hover_t,
+            );
             // 固定宽:少页签时为默认宽,挤时为均分窄宽(Chrome 式收窄)。
             let cell = container(item).width(Length::Fixed(per_tab));
             tabs = tabs.push(cell);
@@ -4990,6 +5001,7 @@ fn project_tab_item<'a>(
     dot: Option<(Color, bool)>,
     active: bool,
     blink_on: bool,
+    close_hover_t: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     // 页签背景圆角半径参考 Dozer 按钮(圆角正方形)的边长 `sq`,但实际背景高
     // 用更高的 `tab_h`——页签贴底(见 `project_tabs_row` 的 `align_y(End)`)、
@@ -5062,43 +5074,34 @@ fn project_tab_item<'a>(
             st
         });
 
-    // 关闭按钮:方形图标按钮,叠在页签主体之上(见下方 tab_row)。hover/press
-    // 显 CARD 圆角底(半径 4,透明 1px 描边),与顶栏其它图标按钮(tab 箭头 /
-    // 最大化)一致;不再用原来的 TAB_HOVER 大胶囊(半径 8)。选中态同样不单独
-    // 高亮(由页签主体兜底)。
+    // 关闭按钮:方形图标按钮,叠在页签主体之上(见下方 tab_row)。hover 效果
+    // 与顶栏"＋"新建项目按钮一致——无背景胶囊,图标(这里是 `×` 文字)颜色
+    // 随 `close_hover_t` 从 DIM 平滑过渡到 GOLD(见 `HoverId::ProjectTabClose`/
+    // `App::hover_progress`),不用 iced `button::Status` 的硬切背景。
     // `×` 必须包一层 `Fill`+`align_y(Center)`(与下面 `label` 同一条注释里
     // 说的 iced 按钮布局 quirk)——按钮只吃 padding,不回收多余竖向空间,
     // 裸 `text` 会贴在按钮内容区顶部,跟垂直居中的标题文字对不上。
-    let close = button(
-        container(text("×").size(workspace_font::body()).color(theme::DIM))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_x(iced_widget::core::Alignment::Center)
-            .align_y(iced_widget::core::Alignment::Center),
-    )
-    .on_press(Message::ProjectTabClose(id))
-    .width(Length::Fixed(close_sz))
-    .height(Length::Fixed(close_sz))
-    .padding(0)
-    .style(move |_t: &iced_widget::Theme, status| {
-        let base = button::Style {
+    let close_color = theme::mix(theme::DIM, theme::GOLD, close_hover_t);
+    let close = MouseArea::new(
+        button(
+            container(text("×").size(workspace_font::body()).color(close_color))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(iced_widget::core::Alignment::Center)
+                .align_y(iced_widget::core::Alignment::Center),
+        )
+        .on_press(Message::ProjectTabClose(id))
+        .width(Length::Fixed(close_sz))
+        .height(Length::Fixed(close_sz))
+        .padding(0)
+        .style(move |_t: &iced_widget::Theme, _status| button::Style {
             background: None,
-            text_color: theme::DIM,
+            text_color: close_color,
             ..button::Style::default()
-        };
-        match status {
-            button::Status::Hovered | button::Status::Pressed => button::Style {
-                background: Some(theme::CARD.into()),
-                border: Border {
-                    color: Color::TRANSPARENT,
-                    width: 1.0,
-                    radius: 4.0.into(),
-                },
-                ..base
-            },
-            _ => base,
-        }
-    });
+        }),
+    )
+    .on_enter(Message::Hover(HoverId::ProjectTabClose(id), true))
+    .on_exit(Message::Hover(HoverId::ProjectTabClose(id), false));
 
     // 页签主体(select)为底层、关闭按钮为上层叠在其右:关闭按钮视觉上落在
     // 页签背景里,而非独立的相邻按钮。两层都 `Fill` 撑满整条顶栏高,select
