@@ -2,6 +2,11 @@
 
 **状态：已批准（brainstorming 会话，2026-08-06）**
 
+**设计稿**（Figma "Dozer Phase 1 UI"，"一期主界面v2" 页，从最贴近当前代码实现的
+`S1v2 主工作区` 克隆改造）：
+- 主视图：https://www.figma.com/design/NXfLQp5XQk1kF7Ohls2EbX/Dozer-Phase-1-UI?node-id=120-58
+- 派发选择层：https://www.figma.com/design/NXfLQp5XQk1kF7Ohls2EbX/Dozer-Phase-1-UI?node-id=127-97
+
 ## 背景
 
 用户提出给 Dozer 加一个 todo 面板，要求"跟着项目仓库走"（像 `.dozer/goal.md` 一样 git 可追踪），
