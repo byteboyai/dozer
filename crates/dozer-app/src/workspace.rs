@@ -4991,15 +4991,43 @@ fn conversation_list_pane(
         .into()
 }
 
-/// Agent 列表面板(右面板区"Agent"视图的列表侧):当前只有占位文案,
-/// 真实 agent 托管留后续任务。
+/// 按 `AgentKind` 把会话 tab 分组,固定顺序 Claude → Codebuddy → Opencode
+/// → Unknown,只返回非空分组(没有该 agent 的会话就不出现,面板不留空
+/// 分组占位)。组内保持 `tabs` 原有顺序(tab 打开顺序)。返回下标而非
+/// 引用——渲染时既要下标发 `Message::SelectTab(idx)`,又要用下标回查
+/// `ws.tabs[idx]` 取展示字段,直接存下标比存 `&SessionTab` 省一次生命
+/// 周期纠缠。
+fn group_tabs_by_agent(tabs: &[SessionTab]) -> Vec<(AgentKind, Vec<usize>)> {
+    const ORDER: [AgentKind; 4] = [
+        AgentKind::Claude,
+        AgentKind::Codebuddy,
+        AgentKind::Opencode,
+        AgentKind::Unknown,
+    ];
+    ORDER
+        .into_iter()
+        .filter_map(|kind| {
+            let idxs: Vec<usize> = tabs
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.agent == kind)
+                .map(|(i, _)| i)
+                .collect();
+            (!idxs.is_empty()).then_some((kind, idxs))
+        })
+        .collect()
+}
+
+/// Agent 列表面板(右面板区"Agent"视图的列表侧):按 `AgentKind` 分组展示
+/// 当前项目的会话,组内保留 tab 打开顺序;点击一行 = `Message::SelectTab`
+/// 切焦点(同终端 tab 栏点击效果)。
 fn agent_list_pane(
     ws: &Workspace,
     width: Length,
     outer: Border,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = chrome_style::agent_list_pane();
-    let content = column![
+    let mut content = column![
         row![
             lh(text("Agent")
                 .size(workspace_font::subtitle())
@@ -5013,12 +5041,24 @@ fn agent_list_pane(
             .size(workspace_font::label())
             .color(theme::DIM)),
         ]
-        .spacing(8),
-        lh(text("Agents（后续）")
-            .size(workspace_font::body())
-            .color(theme::DIM)),
+        .spacing(8)
     ]
     .spacing(region.gap);
+
+    if ws.tabs.is_empty() {
+        content = content.push(lh(text("暂无会话")
+            .size(workspace_font::body())
+            .color(theme::DIM)));
+    } else {
+        for (agent, idxs) in group_tabs_by_agent(&ws.tabs) {
+            content = content.push(lh(text(format!("{}（{}）", agent.label(), idxs.len()))
+                .size(workspace_font::caption())
+                .color(theme::DIM)));
+            for idx in idxs {
+                content = content.push(agent_list_row(ws, idx));
+            }
+        }
+    }
 
     container(content.padding(region.padding))
         .width(width)
@@ -5027,6 +5067,45 @@ fn agent_list_pane(
             background: region.background.map(Into::into),
             border: outer,
             ..container::Style::default()
+        })
+        .into()
+}
+
+/// Agent 面板里单条会话行:状态点(`dot_color`)+ 状态文字
+/// (`agent_state_label`)+ 会话名(`tab_title`),整行可点选中该 tab
+/// (`idx == ws.active` 时 `theme::CARD` 背景高亮,同项目树选中行的手法,
+/// 见 `workspace.rs` 里 `is_selected` 那段)。
+fn agent_list_row(
+    ws: &Workspace,
+    idx: usize,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let tab = &ws.tabs[idx];
+    let active = idx == ws.active;
+    let row_el = row![
+        text("●")
+            .size(workspace_font::caption())
+            .color(dot_color(tab.agent_state, tab.alive)),
+        lh(text(agent_state_label(tab.agent_state))
+            .size(workspace_font::caption_sm())
+            .color(theme::DIM)),
+        lh(text(tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name))
+            .size(workspace_font::body())
+            .color(theme::CREAM)),
+    ]
+    .spacing(6)
+    .align_y(iced_widget::core::Alignment::Center);
+    button(row_el)
+        .on_press(Message::SelectTab(idx))
+        .width(Length::Fill)
+        .padding(6)
+        .style(move |_t, _s| button::Style {
+            background: if active {
+                Some(theme::CARD.into())
+            } else {
+                None
+            },
+            text_color: theme::CREAM,
+            ..button::Style::default()
         })
         .into()
 }
@@ -8444,5 +8523,75 @@ mod tests {
             criteria: vec![],
         };
         assert_eq!(goal_capsule_text(Some(&empty), 10), None);
+    }
+
+    fn make_test_tab(rt: &tokio::runtime::Runtime, id: &str, agent: AgentKind) -> SessionTab {
+        SessionTab {
+            info: SessionInfo {
+                id: id.to_string(),
+                name: "shell".into(),
+                command: "shell".into(),
+                cwd: "/tmp".into(),
+                alive: true,
+                created_ms: 0,
+                agent_state: AgentState::Idle,
+                transcript_path: None,
+                project_id: None,
+                agent,
+            },
+            model: TerminalModel::new(80, 24),
+            alive: true,
+            agent_state: AgentState::Idle,
+            agent,
+            transcript_path: None,
+            osc: OscScanner::new(),
+            cwd: None,
+            last_exit: None,
+            delivery_pending: false,
+            last_turn_head: None,
+            tab_id: 0,
+            forwarder: rt.spawn(async {}),
+        }
+    }
+
+    #[test]
+    fn group_tabs_by_agent_empty_list() {
+        let tabs: Vec<SessionTab> = Vec::new();
+        assert_eq!(group_tabs_by_agent(&tabs), Vec::<(AgentKind, Vec<usize>)>::new());
+    }
+
+    #[test]
+    fn group_tabs_by_agent_single_agent_multiple_sessions() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let tabs = vec![
+            make_test_tab(&rt, "a", AgentKind::Claude),
+            make_test_tab(&rt, "b", AgentKind::Claude),
+        ];
+        assert_eq!(
+            group_tabs_by_agent(&tabs),
+            vec![(AgentKind::Claude, vec![0, 1])]
+        );
+    }
+
+    #[test]
+    fn group_tabs_by_agent_mixed_fixed_order_no_empty_groups() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        // 故意打乱插入顺序(Opencode 先、Claude 后),验证分组输出顺序
+        // 固定为 Claude→Codebuddy→Opencode→Unknown,不是插入顺序;
+        // 没有任何会话的 Codebuddy 不出现在结果里(空分组不占位)。
+        let tabs = vec![
+            make_test_tab(&rt, "a", AgentKind::Opencode),
+            make_test_tab(&rt, "b", AgentKind::Claude),
+            make_test_tab(&rt, "c", AgentKind::Unknown),
+            make_test_tab(&rt, "d", AgentKind::Claude),
+        ];
+        assert_eq!(
+            group_tabs_by_agent(&tabs),
+            vec![
+                (AgentKind::Claude, vec![1, 3]),
+                (AgentKind::Opencode, vec![0]),
+                (AgentKind::Unknown, vec![2]),
+            ]
+        );
     }
 }
