@@ -9,6 +9,10 @@ pub struct PreviewTab {
     pub id: usize,
     pub kind: TabKind,
     pub title: String,
+    /// 保存编辑后 `+1`,驱动 `desired_webviews()` 换 URL 逼 `sync_webview_pool`
+    /// 重新 `load_url`(同 URL 不会重载,flyfish 的 WKWebView 会一直显示
+    /// 保存前的旧内容)。
+    pub reload_nonce: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -49,6 +53,17 @@ pub fn encode_component(s: &str) -> String {
         }
     }
     out
+}
+
+/// `TabKind::File` → flyfish 渲染 URL 的唯一决策点。目前只有这一条渲染
+/// 路径;把它从内联拼接抽成具名函数,是为将来"某些扩展名不走 flyfish、
+/// 走 Acceptance 式 iced 原生 pane"的分叉预留一个函数级插入点——不引入
+/// trait/注册表,YAGNI。
+fn flyfish_url(path: &std::path::Path) -> String {
+    format!(
+        "dozer://flyfish/host.html?p={}",
+        encode_component(&path.to_string_lossy())
+    )
 }
 
 #[derive(Default)]
@@ -102,7 +117,12 @@ impl PreviewPane {
     fn push_tab(&mut self, kind: TabKind, title: String) -> usize {
         let id = self.next_id;
         self.next_id += 1;
-        self.tabs.push(PreviewTab { id, kind, title });
+        self.tabs.push(PreviewTab {
+            id,
+            kind,
+            title,
+            reload_nonce: 0,
+        });
         self.active = self.tabs.len() - 1;
         id
     }
@@ -206,7 +226,7 @@ impl PreviewPane {
     }
 
     /// webview 期望清单:每文件/网页 tab 一个,仅激活者可见(设计 D2)；
-    /// 验收 tab 不产 webview,且它激活时其余 webview 全隐藏（iced 直绘 pane）。
+    /// 验收 tab 不产 webview,且它激活时其余 webview 全隐藏(iced 直绘 pane)。
     pub fn desired_webviews(&self) -> Vec<WebviewSpec> {
         // 验收 tab 是 iced 直绘的覆盖层,它激活时其余 webview 全隐藏。
         let overlay_active = self.acceptance_active();
@@ -215,10 +235,13 @@ impl PreviewPane {
             .enumerate()
             .filter_map(|(idx, tab)| {
                 let url = match &tab.kind {
-                    TabKind::File(path) => format!(
-                        "dozer://flyfish/host.html?p={}",
-                        encode_component(&path.to_string_lossy())
-                    ),
+                    TabKind::File(path) => {
+                        let mut u = flyfish_url(path);
+                        if tab.reload_nonce > 0 {
+                            u.push_str(&format!("&_r={}", tab.reload_nonce));
+                        }
+                        u
+                    }
                     TabKind::Web { url } => url.clone(),
                     TabKind::Acceptance => return None,
                 };
@@ -229,6 +252,14 @@ impl PreviewPane {
                 })
             })
             .collect()
+    }
+
+    /// 编辑保存后调用:按 `PreviewTab.id` 找到对应 tab,推进它的 reload
+    /// 计数器。未知 id 是 no-op(tab 可能已被关闭)。
+    pub fn bump_reload(&mut self, tab_id: usize) {
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+            tab.reload_nonce += 1;
+        }
     }
 }
 
@@ -309,6 +340,27 @@ mod tests {
         assert!(!specs[0].visible, "非激活 tab 不可见");
         assert_eq!(specs[1].url, "http://localhost:3000");
         assert!(specs[1].visible);
+    }
+
+    #[test]
+    fn bump_reload_appends_query_param_and_only_affects_target_tab() {
+        let mut p = PreviewPane::default();
+        let id0 = p.open_path(PathBuf::from("/tmp/a.md"));
+        let _id1 = p.open_path(PathBuf::from("/tmp/b.md"));
+        p.bump_reload(id0);
+        let specs = p.desired_webviews();
+        assert_eq!(
+            specs[0].url,
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&_r=1"
+        );
+        assert_eq!(specs[1].url, "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md");
+        p.bump_reload(id0);
+        assert_eq!(
+            p.desired_webviews()[0].url,
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&_r=2"
+        );
+        // 未知 id 是 no-op,不 panic。
+        p.bump_reload(9999);
     }
 
     #[test]
