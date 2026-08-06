@@ -950,8 +950,6 @@ pub enum Message {
     /// `advance_hover_anims`/`hover_progress`)。取代原 `RailHover`/
     /// `TopbarHover`/`HomeHover` 三个专为各自按钮写的变体。
     Hover(HoverId, bool),
-    /// 点击某内容 pane 的放大按钮:已放大同一侧则还原,否则放大该侧。
-    MaximizeToggle(MaximizedPane),
     /// 点击放大态背后的变暗遮罩:退出放大。
     MaximizeClose,
     /// 双击顶栏空白处(去掉原生标题栏后,原生"双击标题栏缩放窗口"手势
@@ -3359,17 +3357,6 @@ impl App {
             Message::Hover(id, h) => {
                 self.set_hover(id, h);
             }
-            Message::MaximizeToggle(which) => {
-                self.maximized = if self.maximized == Some(which) {
-                    None
-                } else {
-                    Some(which)
-                };
-                // 放大/还原改变了终端 pane 的像素尺寸,网格要跟着重算,否则
-                // "放大终端"只放大外框、字符网格不变(Fix round 2 #6)。放大态
-                // 本身不持久化,所以只重算、不写盘。
-                self.sync_terminal_grid();
-            }
             Message::MaximizeClose => {
                 self.maximized = None;
                 self.sync_terminal_grid();
@@ -5123,9 +5110,14 @@ fn project_tab_item<'a>(
         column![tab_row].height(Length::Fill)
     };
 
+    // 选中背景的竖向几何与 Dozer 按钮对齐:背景是 `sq` 高的圆角矩形,在顶栏里
+    // 垂直居中,因此距顶栏顶/底的间距 = (top_bar_height - sq)/2,正好等于 Dozer
+    // 按钮背景距顶栏顶的间距(见 `dozer_home_tab`)。未激活态同样高 `sq` 居中、
+    // 无背景;select 命中区本就居中,点击/hover 不受影响。
     container(inner)
-        .height(Length::Fixed(workspace_geometry::top_bar_height()))
+        .height(Length::Fixed(sq))
         .width(Length::Fill)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
         .clip(true)
         .style(move |_t: &iced_widget::Theme| {
             if active {
@@ -5547,13 +5539,11 @@ fn review_content_pane(
     outer: Border,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = chrome_style::review_content_pane();
-    let maximize_btn = maximize_button(MaximizedPane::Right);
     let header = row![
         lh(text("会话审阅")
             .size(workspace_font::body())
             .color(theme::CREAM)),
         iced_widget::space::horizontal(),
-        maximize_btn,
     ]
     .spacing(4);
     let mut content = column![header].spacing(region.gap);
@@ -6493,8 +6483,7 @@ fn preview_pane(
         can_right,
         Message::PreviewTabScroll(true),
     );
-    let maximize_btn = maximize_button(MaximizedPane::Left);
-    let tab_bar = row![left_arrow, right_arrow, clipped, maximize_btn]
+    let tab_bar = row![left_arrow, right_arrow, clipped]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
 
@@ -6611,8 +6600,7 @@ fn browser_pane(
         can_right,
         Message::BrowserTabScroll(true),
     );
-    let maximize_btn = maximize_button(MaximizedPane::Left);
-    let tab_bar = row![left_arrow, right_arrow, clipped, maximize_btn]
+    let tab_bar = row![left_arrow, right_arrow, clipped]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
 
@@ -7118,41 +7106,6 @@ fn tab_divider<'a>() -> Element<'a, Message, iced_widget::Theme, iced_widget::Re
         .into()
 }
 
-/// 内容 pane 的放大/还原按钮：hover 显 CARD 圆角底。
-fn maximize_button<'a>(
-    pane: MaximizedPane,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    button(icons::view(
-        icons::IconKind::Maximize,
-        crate::icon_size::row(),
-        theme::DIM,
-    ))
-    .on_press(Message::MaximizeToggle(pane))
-    .width(Length::Fixed(
-        crate::workspace_geometry::maximize_button_size(),
-    ))
-    .height(Length::Fixed(
-        crate::workspace_geometry::maximize_button_size(),
-    ))
-    .padding(0)
-    .style(|_t, status| match status {
-        button::Status::Hovered | button::Status::Pressed => button::Style {
-            background: Some(theme::CARD.into()),
-            border: Border {
-                color: Color::TRANSPARENT,
-                width: 1.0,
-                radius: 4.0.into(),
-            },
-            ..button::Style::default()
-        },
-        _ => button::Style {
-            background: None,
-            ..button::Style::default()
-        },
-    })
-    .into()
-}
-
 /// tab 栏：两侧箭头翻页(到头变灰) + 每会话一个按钮(状态点 + 名称 + 关闭
 /// ×) + 末尾一个 "＋" 新建。P1L T5 验收返工：横向 scrollable(底部滚动条)
 /// 换成索引窗口化 + `clip`——`on_scroll` 只认滚轮/拖拽，程序化滚动在本
@@ -7208,9 +7161,7 @@ fn tab_bar<'a>(
             ..button::Style::default()
         });
 
-    let maximize_btn = maximize_button(MaximizedPane::Right);
-
-    let tab_row = row![left_arrow, right_arrow, clipped, plus, maximize_btn]
+    let tab_row = row![left_arrow, right_arrow, clipped, plus]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
 

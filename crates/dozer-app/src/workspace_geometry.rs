@@ -48,8 +48,6 @@ struct Geometry {
     rail_button_size: f32,
     /// 顶栏页签翻页箭头按钮（tab_arrow_button）方形命中区边长（设计基准 24）。
     tab_button_size: f32,
-    /// 内容 pane 放大/还原按钮（maximize_button）方形命中区边长（设计基准 24）。
-    maximize_button_size: f32,
     /// 右键菜单项（menu_item）固定宽（设计基准 180）；`context_menu_width`
     /// 由它 + 菜单列表左右 padding 推导，两者需同步缩放。
     menu_item_width: f32,
@@ -247,11 +245,6 @@ pub fn tab_button_size() -> f32 {
     GEOMETRY.tab_button_size * icon_size::scale()
 }
 
-/// 内容 pane 放大/还原按钮方形命中区边长，已含全局 scale。
-pub fn maximize_button_size() -> f32 {
-    GEOMETRY.maximize_button_size * icon_size::scale()
-}
-
 /// 右键菜单项固定宽，已含全局 scale（与 `context_menu_width` 同步缩放）。
 pub fn menu_item_width() -> f32 {
     GEOMETRY.menu_item_width * icon_size::scale()
@@ -306,7 +299,6 @@ mod tests {
         assert_eq!(tab_bar_avail_px(), 360.0);
         assert_eq!(rail_button_size(), 32.0);
         assert_eq!(tab_button_size(), 24.0);
-        assert_eq!(maximize_button_size(), 24.0);
         assert_eq!(menu_item_width(), 180.0);
         assert_eq!(menu_gap(), 8.0);
         assert_eq!(menu_pad_v(), 6.0);
