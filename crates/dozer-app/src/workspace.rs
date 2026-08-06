@@ -4158,7 +4158,26 @@ impl App {
         ];
         let base = column![top, body];
 
-        let popped = if ws.tree_delete_confirm.is_some() {
+        let popped = if ws.edit_session.is_some() {
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::PreviewEditCloseRequest);
+            let confirm_discard = ws.edit_session.as_ref().is_some_and(|s| s.confirm_discard);
+            if confirm_discard {
+                stack![base, dismiss, edit_modal(ws), edit_discard_confirm_popup()]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
+            } else {
+                stack![base, dismiss, edit_modal(ws)]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
+            }
+        } else if ws.tree_delete_confirm.is_some() {
             let dismiss = MouseArea::new(
                 container(column![])
                     .width(Length::Fill)
@@ -6666,23 +6685,23 @@ fn preview_pane(
             }
             chip_row = chip_row.push(close);
             container(chip_row.align_y(iced_widget::core::Alignment::Center))
-            .padding([2, 4])
-            .style(move |_t: &iced_widget::Theme| {
-                if active {
-                    container::Style {
-                        background: Some(theme::CARD.into()),
-                        border: Border {
-                            color: theme::BORDER,
-                            width: 1.0,
-                            radius: 6.0.into(),
-                        },
-                        ..container::Style::default()
+                .padding([2, 4])
+                .style(move |_t: &iced_widget::Theme| {
+                    if active {
+                        container::Style {
+                            background: Some(theme::CARD.into()),
+                            border: Border {
+                                color: theme::BORDER,
+                                width: 1.0,
+                                radius: 6.0.into(),
+                            },
+                            ..container::Style::default()
+                        }
+                    } else {
+                        container::Style::default()
                     }
-                } else {
-                    container::Style::default()
-                }
-            })
-            .into()
+                })
+                .into()
         })
         .collect();
     // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;左右箭头钉在裁剪区外。
@@ -7246,6 +7265,185 @@ fn delete_confirm_popup(
                         },
                         ..button::Style::default()
                     }),
+            ]
+            .spacing(8),
+        ]
+        .spacing(8),
+    )
+    .padding(16)
+    .style(|_t: &iced_widget::Theme| container::Style {
+        background: Some(theme::CARD.into()),
+        border: Border {
+            color: theme::BORDER,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..container::Style::default()
+    });
+
+    container(dialog)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .into()
+}
+
+/// 文本编辑弹层:标题行(文件名+关闭)+ `text_editor` 主体(等宽字体)+
+/// 错误位 + 保存/关闭按钮。宽高吃满大部分屏幕("放大窗口"的产品意图,
+/// 不是小弹窗),四周留 `40.0` 边距,与 `maximize_overlay` 的
+/// `scrim_padding` 同一量级,视觉上是同一族"大号应用内模态"。
+fn edit_modal(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let Some(session) = &ws.edit_session else {
+        return column![].into();
+    };
+    let name = session
+        .path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| session.path.display().to_string());
+
+    let title_row = row![
+        text(name)
+            .size(workspace_font::subtitle())
+            .color(theme::CREAM),
+        iced_widget::space::horizontal(),
+        button(text("×").size(workspace_font::subtitle()).color(theme::DIM))
+            .on_press(Message::PreviewEditCloseRequest)
+            .padding(0)
+            .style(|_t, _s| button::Style {
+                background: None,
+                text_color: theme::DIM,
+                ..button::Style::default()
+            }),
+    ]
+    .align_y(iced_widget::core::Alignment::Center);
+
+    let editor: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> =
+        text_editor(&session.content)
+            .on_action(Message::PreviewEditAction)
+            .font(crate::fonts::code_font())
+            .size(workspace_font::body())
+            .height(Length::Fill)
+            .into();
+
+    let mut body = column![title_row, editor].spacing(8);
+
+    if let Some(err) = &session.error {
+        body = body.push(
+            text(format!("⚠ {err}"))
+                .size(workspace_font::body())
+                .color(theme::RED),
+        );
+    }
+
+    let close_btn = button(
+        text("关闭")
+            .size(workspace_font::body())
+            .color(theme::CREAM),
+    )
+    .on_press(Message::PreviewEditCloseRequest)
+    .padding([6, 12])
+    .style(|_t, _s| button::Style {
+        background: Some(theme::CARD.into()),
+        text_color: theme::CREAM,
+        border: Border {
+            color: theme::BORDER,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..button::Style::default()
+    });
+    let save_btn = button(
+        text("保存")
+            .size(workspace_font::body())
+            .color(theme::CREAM),
+    )
+    .on_press(Message::PreviewEditSave)
+    .padding([6, 12])
+    .style(|_t, _s| button::Style {
+        background: Some(theme::CARD.into()),
+        text_color: theme::CREAM,
+        border: Border {
+            color: theme::CREAM,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..button::Style::default()
+    });
+    body = body.push(row![close_btn, save_btn].spacing(8));
+
+    let dialog = container(body.padding(16))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::CARD.into()),
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        });
+
+    container(dialog)
+        .padding(40.0)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::SCRIM.into()),
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// 编辑弹层的二次确认:脏改动状态下点关闭,叠在 `edit_modal` 之上。
+/// 视觉风格与 `delete_confirm_popup` 一致。
+fn edit_discard_confirm_popup<'a>()
+-> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let dialog = container(
+        column![
+            text("放弃未保存的改动?")
+                .size(workspace_font::subtitle())
+                .color(theme::CREAM),
+            text("关闭后这次编辑不会被保存。")
+                .size(workspace_font::label())
+                .color(theme::DIM),
+            row![
+                button(
+                    text("取消")
+                        .size(workspace_font::body())
+                        .color(theme::CREAM)
+                )
+                .on_press(Message::PreviewEditConfirmCancel)
+                .padding([6, 12])
+                .style(|_t, _s| button::Style {
+                    background: Some(theme::CARD.into()),
+                    text_color: theme::CREAM,
+                    border: Border {
+                        color: theme::BORDER,
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    ..button::Style::default()
+                }),
+                button(
+                    text("放弃改动")
+                        .size(workspace_font::body())
+                        .color(theme::RED)
+                )
+                .on_press(Message::PreviewEditConfirmDiscard)
+                .padding([6, 12])
+                .style(|_t, _s| button::Style {
+                    background: Some(theme::CARD.into()),
+                    text_color: theme::RED,
+                    border: Border {
+                        color: theme::RED,
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    ..button::Style::default()
+                }),
             ]
             .spacing(8),
         ]
@@ -9391,10 +9589,7 @@ mod tests {
             !ws.edit_session.as_ref().unwrap().confirm_discard,
             "取消要回到编辑态"
         );
-        assert!(
-            ws.edit_session.as_ref().unwrap().dirty,
-            "取消不丢改动"
-        );
+        assert!(ws.edit_session.as_ref().unwrap().dirty, "取消不丢改动");
 
         ws.preview_edit_close_request();
         ws.preview_edit_confirm_discard();
