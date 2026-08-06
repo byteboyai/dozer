@@ -143,8 +143,8 @@ pub enum TodoFilter {
 /// 纯前端过滤：状态相等匹配 + 关键字对 `TodoItem.text` 做大小写不敏感
 /// 的子串匹配（空 `query` 不过滤）。作用在"已经解析+推导好状态"的
 /// 内存列表上，不碰文件、不碰 sidecar（design 第 7 节）。
-pub fn filter_todos<'a>(
-    items: &'a [TodoItem],
+pub fn filter_todos(
+    items: &[TodoItem],
     states: &[TodoState],
     filter: TodoFilter,
     query: &str,

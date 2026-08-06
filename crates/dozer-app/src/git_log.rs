@@ -11,13 +11,16 @@ use crate::workspace::Message;
 use crate::workspace_font;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::alignment;
-use iced_widget::core::{Color, Element, Font, Length, Pixels, Point, Rectangle, Vector};
+use iced_widget::core::{Color, Element, Font, Length, Padding, Pixels, Point, Rectangle, Vector};
 use iced_widget::{column, container, row, scrollable, text};
 use std::path::{Path, PathBuf};
 
-/// 一次性拉多少个 commit——够看出分叉/合并的形状,又不至于让 revwalk +
-/// 分支归属分析在大仓库上明显卡顿(spike 阶段没做分页/增量)。
-const MAX_COMMITS: usize = 200;
+/// 首次打开面板拉多少个 commit——够看出分叉/合并的形状,又不至于让
+/// revwalk + 分支归属分析在大仓库上明显卡顿。"加载更多"每次在当前基础上
+/// 加这么多再整份重算(gleisbau 的 API 是"从头按 max_count 走一遍
+/// revwalk",没有增量/游标接口,重算是唯一选项——见 build() 文档)。
+pub const DEFAULT_MAX_COMMITS: usize = 200;
+pub const LOAD_MORE_STEP: usize = 200;
 
 const ROW_HEIGHT: f32 = 22.0;
 const COL_WIDTH: f32 = 14.0;
@@ -25,6 +28,9 @@ const DOT_RADIUS: f32 = 3.5;
 const LEFT_MARGIN: f32 = 12.0;
 const TEXT_GAP: f32 = 12.0;
 const LINE_WIDTH: f32 = 1.6;
+/// 选中提交详情子面板的宽度(px)。面板本身是 `Length::Fill` 高度、固定在
+/// canvas 右侧,宽度固定以免挤压提交图。
+const DETAIL_WIDTH: f32 = 320.0;
 
 /// 与主题色轮换配色的 track 调色板——不用 gleisbau 自带的 CSS 颜色名,
 /// 省掉一个颜色名解析器,顺便让图和 ByteBoy2077 主题保持一致。
@@ -40,28 +46,54 @@ fn track_color(color_idx: usize) -> Color {
     TRACK_COLORS[color_idx % TRACK_COLORS.len()]
 }
 
-/// 一个 commit 在图上的位置与连线目标,构造完就是自持有数据(不挂
-/// `git2::Repository`/`Commit` 的生命周期),可以直接存进 `App` 缓存。
+/// 一个 commit 指向的引用(分支/远程分支/tag),供图上显示彩色标签。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefLabel {
+    pub name: String,
+    pub kind: RefKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefKind {
+    LocalBranch,
+    RemoteBranch,
+    Tag,
+}
+
 pub struct CommitRow {
     column: usize,
     color_idx: usize,
     short_sha: String,
     summary: String,
     /// 父 commit 的 (row, column, color_idx),用于画连线;可能落在
-    /// `MAX_COMMITS` 截断范围之外——那种父 commit 不出现在 `rows` 里,
+    /// `max_count` 截断范围之外——那种父 commit 不出现在 `rows` 里,
     /// 此处已被过滤掉。
     parents: Vec<(usize, usize, usize)>,
+    /// 指向这个 commit 的分支/tag(可能为空)。
+    refs: Vec<RefLabel>,
+    /// 这个 commit 的完整 40 位 oid,选中详情(Task 2)用——`short_sha` 只
+    /// 够显示,不够拿去 `git2::Repository::find_commit`。
+    oid: git2::Oid,
 }
 
 pub struct GitLogSnapshot {
     repo_path: PathBuf,
     rows: Vec<CommitRow>,
     max_column: usize,
+    /// 当前 HEAD 所在的本地分支名(detached HEAD 时为 `None`)——图上给这
+    /// 个分支的标签加个 `→` 前缀区分"这是我现在checkout的那条"。
+    head_branch: Option<String>,
+    /// 这份快照实际请求的 `max_count`("加载更多"算下一次请求值用)。
+    max_count: usize,
 }
 
 impl GitLogSnapshot {
     pub fn repo_path(&self) -> &Path {
         &self.repo_path
+    }
+
+    pub fn max_count(&self) -> usize {
+        self.max_count
     }
 }
 
@@ -91,16 +123,19 @@ fn default_settings() -> Result<gleisbau::settings::Settings, String> {
 }
 
 /// 对 `repo_path` 跑一次 `gleisbau` 布局,产出可渲染快照。同步执行——
-/// `MAX_COMMITS` 量级下 revwalk + 分支归属分析是毫秒级,spike 阶段不值得
-/// 为此引入异步往返。
-pub fn build(repo_path: &Path) -> Result<GitLogSnapshot, String> {
+/// `max_count` 量级(几百到几千)下 revwalk + 分支归属分析是毫秒到低两位
+/// 数毫秒级。gleisbau 没有增量/游标 API,"加载更多"就是拿更大的
+/// `max_count` 再整份跑一遍,见 [`LOAD_MORE_STEP`]。
+pub fn build(repo_path: &Path, max_count: usize) -> Result<GitLogSnapshot, String> {
     let repository = gleisbau::get_repo(repo_path, false).map_err(|e| e.message().to_string())?;
     let settings = std::rc::Rc::new(default_settings()?);
     let graph = gleisbau::graph::Builder::new()
         .with_repository(repository)
         .with_settings(settings)
-        .with_max_count(MAX_COMMITS)
+        .with_max_count(max_count)
         .build()?;
+
+    let head_branch = graph.head.is_branch.then(|| graph.head.name.clone());
 
     let mut max_column = 0usize;
     let rows = graph
@@ -144,12 +179,35 @@ pub fn build(repo_path: &Path) -> Result<GitLogSnapshot, String> {
                     Some((p_idx, p_column, p_b_idx.index()))
                 })
                 .collect();
+            let refs = graph
+                .labels
+                .get_labels(&commit.oid)
+                .map(|labels| {
+                    labels
+                        .iter()
+                        .map(|l| RefLabel {
+                            name: l.name.clone(),
+                            kind: match l.kind {
+                                gleisbau::print::label::LabelType::LocalBranch => {
+                                    RefKind::LocalBranch
+                                }
+                                gleisbau::print::label::LabelType::RemoteBranch => {
+                                    RefKind::RemoteBranch
+                                }
+                                gleisbau::print::label::LabelType::Tag => RefKind::Tag,
+                            },
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             Ok(CommitRow {
                 column,
                 color_idx,
                 short_sha,
                 summary,
                 parents,
+                refs,
+                oid: commit.oid,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -158,11 +216,95 @@ pub fn build(repo_path: &Path) -> Result<GitLogSnapshot, String> {
         repo_path: repo_path.to_path_buf(),
         rows,
         max_column,
+        head_branch,
+        max_count,
     })
+}
+
+/// 单个改动文件:哪个文件、什么类型的改动、这个文件自己的 unified diff
+/// 文本(不是整个提交的 diff——按文件拆开,方便 UI 逐文件展开)。
+/// 派生 `Clone`(`Message::GitLogDetailLoaded` 要装 `Result<CommitDetail, _>`,
+/// `Message` 本身 `derive(Debug, Clone)`——workspace.rs 的 `Message`,
+/// 这两个结构体的字段类型都天然 `Debug + Clone`,一起派生即可)。
+#[derive(Debug, Clone)]
+pub struct DiffFileEntry {
+    pub path: String,
+    pub status: git2::Delta,
+    pub patch: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommitDetail {
+    pub files: Vec<DiffFileEntry>,
+}
+
+/// 取某个提交改动了哪些文件、每个文件的 diff 文本。合并提交(≥2 parent)
+/// 相对**第一父**算(与 `git show` 默认行为一致,不做三方 diff——spec D5)。
+/// 根提交(无 parent)相对空树算,等价于"全部文件都是新增"。
+pub fn commit_detail(repo_path: &Path, oid: git2::Oid) -> Result<CommitDetail, String> {
+    let repo = git2::Repository::open(repo_path).map_err(|e| e.message().to_string())?;
+    let commit = repo.find_commit(oid).map_err(|e| e.message().to_string())?;
+    let new_tree = commit.tree().map_err(|e| e.message().to_string())?;
+    let old_tree = match commit.parent(0) {
+        Ok(parent) => Some(parent.tree().map_err(|e| e.message().to_string())?),
+        Err(_) => None, // 根提交,相对空树
+    };
+    let diff = repo
+        .diff_tree_to_tree(old_tree.as_ref(), Some(&new_tree), None)
+        .map_err(|e| e.message().to_string())?;
+
+    let mut files: Vec<DiffFileEntry> = diff
+        .deltas()
+        .filter_map(|delta| {
+            let path = delta
+                .new_file()
+                .path()
+                .or_else(|| delta.old_file().path())?
+                .to_string_lossy()
+                .into_owned();
+            Some(DiffFileEntry {
+                path,
+                status: delta.status(),
+                patch: String::new(), // 下面按文件路径回填
+            })
+        })
+        .collect();
+
+    // git2 的 `Diff::print` 是整份 diff 一次性回调、按行给,不是按文件给
+    // 一整块文本——这里按 `DiffLine::origin_value()` 是不是文件头
+    // (`FileHeader`)切分,把每一行追加到当前文件对应的 `patch` 里。
+    let mut current_path: Option<String> = None;
+    diff.print(git2::DiffFormat::Patch, |delta, _hunk, line| {
+        if matches!(line.origin_value(), git2::DiffLineType::FileHeader) {
+            current_path = delta
+                .new_file()
+                .path()
+                .or_else(|| delta.old_file().path())
+                .map(|p| p.to_string_lossy().into_owned());
+        }
+        if let Some(path) = &current_path
+            && let Some(entry) = files.iter_mut().find(|f| &f.path == path)
+        {
+            let prefix = match line.origin() {
+                '+' | '-' | ' ' => line.origin().to_string(),
+                _ => String::new(),
+            };
+            entry.patch.push_str(&prefix);
+            entry
+                .patch
+                .push_str(&String::from_utf8_lossy(line.content()));
+        }
+        true
+    })
+    .map_err(|e| e.message().to_string())?;
+
+    Ok(CommitDetail { files })
 }
 
 struct GitLogCanvas<'a> {
     snapshot: &'a GitLogSnapshot,
+    selected: Option<git2::Oid>,
+    head_branch: Option<&'a str>,
 }
 
 fn row_center(row: usize, column: usize) -> Point {
@@ -174,6 +316,28 @@ fn row_center(row: usize, column: usize) -> Point {
 
 impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for GitLogCanvas<'_> {
     type State = ();
+
+    fn update(
+        &self,
+        _state: &mut Self::State,
+        event: &iced_widget::core::Event,
+        bounds: Rectangle,
+        cursor: iced_widget::core::mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        let iced_widget::core::Event::Mouse(iced_widget::core::mouse::Event::ButtonPressed(
+            iced_widget::core::mouse::Button::Left,
+        )) = event
+        else {
+            return None;
+        };
+        let pos = cursor.position_in(bounds)?;
+        if pos.x < 0.0 || pos.y < 0.0 {
+            return None;
+        }
+        let row_idx = (pos.y / ROW_HEIGHT) as usize;
+        let row = self.snapshot.rows.get(row_idx)?;
+        Some(canvas::Action::publish(Message::GitLogSelectCommit(row.oid)).and_capture())
+    }
 
     fn draw(
         &self,
@@ -204,15 +368,30 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Git
         for (row_idx, commit) in self.snapshot.rows.iter().enumerate() {
             let center = row_center(row_idx, commit.column);
             let color = track_color(commit.color_idx);
+            if self.selected == Some(commit.oid) {
+                frame.stroke(
+                    &canvas::Path::circle(center, DOT_RADIUS + 2.5),
+                    canvas::Stroke::default()
+                        .with_color(theme::GOLD)
+                        .with_width(1.5),
+                );
+            }
             frame.fill(&canvas::Path::circle(center, DOT_RADIUS), color);
+
+            let refs_prefix = ref_labels_text(&commit.refs, self.head_branch);
 
             frame.with_save(|frame| {
                 frame.translate(Vector::new(
                     text_x,
                     row_idx as f32 * ROW_HEIGHT + ROW_HEIGHT * 0.5,
                 ));
+                let content = if refs_prefix.is_empty() {
+                    format!("{}  {}", commit.short_sha, commit.summary)
+                } else {
+                    format!("{}  {}  {}", commit.short_sha, refs_prefix, commit.summary)
+                };
                 frame.fill_text(canvas::Text {
-                    content: format!("{}  {}", commit.short_sha, commit.summary),
+                    content,
                     position: Point::ORIGIN,
                     color: theme::CREAM,
                     size: Pixels(workspace_font::body() as f32),
@@ -227,12 +406,32 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Git
     }
 }
 
+/// 把一行 commit 的 `refs` 拼成形如 `[main][origin/main]` 的前缀文本;当前
+/// HEAD 所在的本地分支加 `→` 标记(`[→main]`)。空 `refs` 返回空字符串。
+/// 不在这里上色——canvas 文本整体只有一个 `Color`,没法给子串单独上色,
+/// 颜色区分留给后续真的做背景色块 pill 时再处理(见 Task 4)。
+fn ref_labels_text(refs: &[RefLabel], head_branch: Option<&str>) -> String {
+    refs.iter()
+        .map(|r| {
+            let marker = if head_branch == Some(r.name.as_str()) {
+                "→"
+            } else {
+                ""
+            };
+            format!("[{marker}{}]", r.name)
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 /// 渲染整块提交图面板:有数据画 Canvas,出错画错误文案,两者皆无(比如
 /// 尚未打开项目)画空状态提示。纯函数——不碰 `App`/`Workspace` 内部状态,
-/// 调用方(`workspace.rs`)负责取数据、决定何时重建缓存。
+/// 调用方(`workspace.rs`)负责取数据、决定何时重建缓存、维护选中态。
 pub fn view<'a>(
     snapshot: Option<&'a GitLogSnapshot>,
     error: Option<&'a str>,
+    selected: Option<git2::Oid>,
+    detail: Option<&'a Result<CommitDetail, String>>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     if let Some(err) = error {
         return container(text(format!("git log 读取失败: {err}")).color(theme::RED))
@@ -250,24 +449,112 @@ pub fn view<'a>(
             .into();
     }
     let height = ROW_HEIGHT * snapshot.rows.len() as f32;
+    let head_branch = snapshot.head_branch.as_deref();
     let canvas: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> =
-        Canvas::new(GitLogCanvas { snapshot })
-            .width(Length::Fill)
-            .height(Length::Fixed(height))
-            .into();
+        Canvas::new(GitLogCanvas {
+            snapshot,
+            selected,
+            head_branch,
+        })
+        .width(Length::Fill)
+        .height(Length::Fixed(height))
+        .into();
     let header = row![
         text(snapshot.repo_path.display().to_string())
             .size(workspace_font::caption())
             .color(theme::DIM)
     ]
     .padding([4, 8]);
-    column![
-        header,
-        scrollable(canvas).width(Length::Fill).height(Length::Fill),
-    ]
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
+    let load_more = iced_widget::button(
+        text("加载更多提交 (+200)")
+            .size(workspace_font::caption())
+            .color(theme::CREAM),
+    )
+    .on_press(Message::GitLogLoadMore)
+    .padding([4, 12]);
+    let graph_body = column![canvas, load_more].padding(Padding {
+        top: 0.0,
+        right: 0.0,
+        bottom: 8.0,
+        left: 0.0,
+    });
+    let graph = scrollable(graph_body)
+        .width(Length::Fill)
+        .height(Length::Fill);
+    if let Some(detail_res) = detail {
+        let detail_panel = detail_view(snapshot, selected, detail_res);
+        column![header, row![graph, detail_panel],]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    } else {
+        column![header, graph]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+}
+
+/// 选中提交右侧的详情子面板:文件列表(状态色点 + 路径)+ 聚焦文件的
+/// unified diff。不内聚滚动,交给外层 `column` 撑;文件列表自滚动。
+/// 纯函数:选中态、详情结果都由上层 `view` 传进来。
+fn detail_view<'a>(
+    _snapshot: &GitLogSnapshot,
+    _selected: Option<git2::Oid>,
+    result: &'a Result<CommitDetail, String>,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let body: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> = match result {
+        Err(err) => container(text(format!("详情加载失败: {err}")).color(theme::RED))
+            .padding(8)
+            .into(),
+        Ok(detail) if detail.files.is_empty() => container(text("无文件改动").color(theme::DIM))
+            .padding(8)
+            .into(),
+        Ok(detail) => {
+            let files = scrollable(detail.files.iter().fold(column![].spacing(2), |acc, f| {
+                let color = match f.status {
+                    git2::Delta::Added => theme::GREEN,
+                    git2::Delta::Deleted => theme::RED,
+                    _ => theme::GOLD,
+                };
+                acc.push(
+                    row![
+                        text(status_glyph(f.status)).color(color).width(18),
+                        text(&f.path)
+                            .size(workspace_font::caption())
+                            .color(theme::CREAM),
+                    ]
+                    .spacing(4)
+                    .padding([2, 8]),
+                )
+            }))
+            .width(Length::Fill)
+            .height(Length::Fill);
+            files.into()
+        }
+    };
+    // 详情面板右半边暂时只放文件列表(状态 + 路径);每个文件的 patch 文本
+    // 已在 `CommitDetail.files[].patch` 里,后续要做统一 diff 视图时再铺开。
+    container(body)
+        .width(Length::Fixed(DETAIL_WIDTH))
+        .height(Length::Fill)
+        .padding(8)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(crate::chrome_style::background().into()),
+            ..container::Style::default()
+        })
+        .into()
+}
+
+fn status_glyph(status: git2::Delta) -> &'static str {
+    match status {
+        git2::Delta::Added => "+",
+        git2::Delta::Deleted => "-",
+        git2::Delta::Modified => "M",
+        git2::Delta::Renamed => "R",
+        git2::Delta::Copied => "C",
+        _ => "?",
+    }
 }
 
 #[cfg(test)]
@@ -284,7 +571,8 @@ mod tests {
             .parent()
             .and_then(Path::parent)
             .expect("crates/dozer-app 应有两层上级目录到仓库根");
-        let snapshot = build(repo_root).expect("gleisbau 应能解析 dozer 自己的仓库");
+        let snapshot =
+            build(repo_root, DEFAULT_MAX_COMMITS).expect("gleisbau 应能解析 dozer 自己的仓库");
 
         assert!(!snapshot.rows.is_empty(), "真实仓库应至少有一个 commit");
         assert!(
@@ -307,5 +595,87 @@ mod tests {
             snapshot.rows.iter().any(|r| r.parents.len() >= 2),
             "200 个 commit 窗口内应能看到至少一个 merge"
         );
+    }
+
+    #[test]
+    fn build_marks_head_branch_and_labels() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("crates/dozer-app 应有两层上级目录到仓库根");
+        let snapshot = build(repo_root, 50).expect("gleisbau 应能解析 dozer 自己的仓库");
+
+        // 当前 HEAD 分支(dogfooding 仓库跑测试时几乎总在 main,但不强行假设
+        // 分支名——只断言"存在且第 0 行的 refs 里能找到它")。
+        let head = snapshot.head_branch.clone().expect("应能取到当前分支名");
+        let first = &snapshot.rows[0];
+        assert!(
+            first
+                .refs
+                .iter()
+                .any(|r| r.name == head && r.kind == RefKind::LocalBranch),
+            "HEAD 所在行的 refs 应包含当前分支: {:?}",
+            first.refs
+        );
+    }
+
+    #[test]
+    fn build_respects_max_count() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .unwrap();
+        let small = build(repo_root, 5).unwrap();
+        let bigger = build(repo_root, 50).unwrap();
+        assert!(small.rows.len() <= 5);
+        assert!(bigger.rows.len() > small.rows.len());
+        assert_eq!(small.max_count(), 5);
+        assert_eq!(bigger.max_count(), 50);
+        // 重算稳定性:更大窗口的前 N 行应与小窗口结果一致(同一份历史,只是
+        // 走得更远,不应该导致已经算出来的部分变形)。
+        for (a, b) in small.rows.iter().zip(bigger.rows.iter()) {
+            assert_eq!(a.short_sha, b.short_sha);
+            assert_eq!(a.column, b.column);
+        }
+    }
+
+    #[test]
+    fn commit_detail_uses_first_parent_diff() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("crates/dozer-app 应有两层上级目录到仓库根");
+        // 取最新提交(当前 HEAD 也就是第 0 行),真实仓库上它总有一个 parent,
+        // diff 应该有 ≥1 个文件(至少动过 `git_log.rs` 或本测试自身)。
+        let snapshot = build(repo_root, 1).expect("应能解析 dozer 自己的仓库");
+        let head_oid = snapshot.rows[0].oid;
+        let detail = commit_detail(repo_root, head_oid).expect("HEAD 提交的 diff 应能算出");
+        assert!(!detail.files.is_empty(), "HEAD 对 parent 至少改动一个文件");
+        for f in &detail.files {
+            assert!(!f.path.is_empty());
+        }
+    }
+
+    #[test]
+    fn ref_labels_text_head_marker_and_join() {
+        let refs = vec![
+            RefLabel {
+                name: "main".into(),
+                kind: RefKind::LocalBranch,
+            },
+            RefLabel {
+                name: "origin/main".into(),
+                kind: RefKind::RemoteBranch,
+            },
+        ];
+        // HEAD 在 main,只给 main 加箭头;远端分支不加。
+        assert_eq!(ref_labels_text(&refs, Some("main")), "[→main][origin/main]");
+        // 没有匹配的 HEAD 分支,全都不加箭头。
+        assert_eq!(
+            ref_labels_text(&refs, Some("feature")),
+            "[main][origin/main]"
+        );
+        // 空 refs(一般提交)返回空串。
+        assert_eq!(ref_labels_text(&[], Some("main")), "");
     }
 }

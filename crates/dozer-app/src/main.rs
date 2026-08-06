@@ -573,6 +573,34 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
+            // 预览编辑弹层打开时,Esc 优先触发关闭流程(脏则弹确认,不脏直接
+            // 关),口径同上面几个弹层。
+            if app.edit_session_open()
+                && let WindowEvent::KeyboardInput {
+                    event,
+                    is_synthetic: false,
+                    ..
+                } = event
+                && event.state == ElementState::Pressed
+                && event.logical_key
+                    == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+            {
+                app.update(Message::PreviewEditCloseRequest);
+                window.request_redraw();
+                return;
+            }
+
+            // 预览编辑弹层打开时,其余按键一律不再往下走 ⌘ 快捷键/地址栏/
+            // 终端转发——弹层里的 `text_editor` 走标准 iced 事件管线
+            // (`.on_action(Message::PreviewEditAction)`),这里不需要也不
+            // 应该手工转发。不加这道闸门的话,`terminal_visible()` 只看右侧
+            // 是否展开、对弹层状态一无所知,默认布局(右侧终端可见)下弹层
+            // 里打的每个字符、包括回车,都会同时写进背后那个终端/agent 会话
+            // (Critical,code review 发现)。
+            if app.edit_session_open() {
+                return;
+            }
+
             // ⌘ 组合键是应用级快捷键，一律不进 PTY（此前 ⌘C 会把裸 "c"
             // 漏写进终端）。⌘C 复制当前选区；⌘V 粘贴剪贴板。
             if modifiers.super_key() {

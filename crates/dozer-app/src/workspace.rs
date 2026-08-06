@@ -32,6 +32,7 @@
 use crate::chrome_style;
 use crate::conversation::{self, ConversationMeta};
 use crate::delivery::{self, FileChange, FileGitStatus, WorktreeInfo};
+use crate::git_log;
 use crate::git_watch;
 use crate::goal::{self, Goal};
 use crate::icons;
@@ -1123,6 +1124,15 @@ pub enum Message {
     /// 了(D4)。`Relevance` 决定这次触发要不要顺带做 Plan 2 的 Git Log 快照
     /// 重建。
     ProjectFsChanged(ProjectId, git_watch::Relevance),
+    /// Git Log 面板:选中一行提交,触发异步取改动文件+diff。
+    GitLogSelectCommit(git2::Oid),
+    /// Git Log 面板:某个提交的详情异步加载完成。带上请求时的仓库路径与
+    /// oid,处理时校验"这份结果还对不对得上当前状态"(项目切换/换选中项
+    /// 后,旧请求的结果要被丢弃,不能覆盖新状态——见处理分支注释)。
+    GitLogDetailLoaded(PathBuf, git2::Oid, Result<git_log::CommitDetail, String>),
+    /// Git Log 面板:点"加载更多",拿更大的 `max_count` 重新跑一次
+    /// `git_log::build`。
+    GitLogLoadMore,
     /// 项目:当前项目验收次数刷新结果(项目卡"N 次验收"副行用)。
     AcceptanceCountLoaded(ProjectId, Option<u64>),
     /// 项目树:右键按下的窗口逻辑坐标(main.rs 原始事件层发,供随后可能
@@ -1407,12 +1417,19 @@ pub struct App {
     /// 是否已经收到过至少一次 `HomeRecentsLoaded`——区分"还在加载"与"加载完
     /// 但结果为空"，两张卡据此决定画"加载中…"还是空状态文案(spec §4)。
     home_recents_loaded: bool,
-    /// spike(2026-08-06):Git 提交图缓存,`LeftIconSelect(LeftView::GitLog)`
-    /// 激活时按当前项目路径同步计算一次(见 `git_log::build`)。切换项目或
-    /// 重新点击图标不会自动刷新——spike 阶段没做失效策略。
-    git_log_cache: Option<crate::git_log::GitLogSnapshot>,
+    /// Git 提交图缓存,`LeftIconSelect(LeftView::GitLog)` 激活、`git_watch`
+    /// 检测到 `.git` 引用变化(Plan 1 D4)、或点"加载更多"时重建(见
+    /// `App::refresh_git_log`)。
+    git_log_cache: Option<git_log::GitLogSnapshot>,
     /// 上一次 `git_log::build` 失败的错误文案(`None`=未出错)。
     git_log_error: Option<String>,
+    /// 当前选中查看详情的提交(`None`=没选中,详情区不显示)。项目切换/
+    /// 快照重建时随 `git_log_cache` 一起清空。
+    git_log_selected: Option<git2::Oid>,
+    /// 选中提交的详情异步加载结果。`None` 有两种含义:没选中,或选中了但
+    /// 还在加载中——两者靠 `git_log_selected.is_some()` 区分(渲染层:
+    /// selected 有值但 detail 是 None → 画"加载中…")。
+    git_log_detail: Option<Result<git_log::CommitDetail, String>>,
     /// Todo 面板本地元数据（派发记录/计划时间/完成时间），启动时
     /// `todo_meta::load()` 读盘，每次变更后 `todo_meta::save` 落盘。
     todo_meta: todo_meta::TodoMetaState,
@@ -2007,11 +2024,11 @@ impl Workspace {
         let path = todo::todo_path(std::path::Path::new(&project.path));
         let content = std::fs::read_to_string(&path).unwrap_or_default();
         let new_content = todo::append_todo_item(&content, &text);
-        if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                tracing::warn!("创建 .dozer 目录失败: {e}");
-                return;
-            }
+        if let Some(parent) = path.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            tracing::warn!("创建 .dozer 目录失败: {e}");
+            return;
         }
         if let Err(e) = std::fs::write(&path, &new_content) {
             tracing::warn!("写入 todo.md 失败: {e}");
@@ -2842,6 +2859,8 @@ impl App {
             home_recents_loaded: false,
             git_log_cache: None,
             git_log_error: None,
+            git_log_selected: None,
+            git_log_detail: None,
             todo_meta: todo_meta::load(),
         }
     }
@@ -3295,6 +3314,17 @@ impl App {
             .unwrap_or(false)
     }
 
+    /// 预览编辑弹层是否打开(main.rs 键盘路由用)。打开期间键盘必须走
+    /// 弹层的文本编辑器,不能落进终端 PTY——弹层挂在左侧预览面板,不影响
+    /// `terminal_visible()` 的判断条件(右侧展开与否),不加这道闸门的话,
+    /// 默认布局(右侧终端可见)下编辑弹层里敲的每个字符,包括回车,都会
+    /// 同时写进背后那个终端/agent 会话。
+    pub fn edit_session_open(&self) -> bool {
+        self.active_workspace()
+            .map(|ws| ws.edit_session.is_some())
+            .unwrap_or(false)
+    }
+
     /// 取走"双击顶栏空白处"待处理标记(取走即清零)。main.rs 在派发完
     /// 消息后轮询这个方法,命中就调用 `window.set_maximized(!window.
     /// is_maximized())`——`App` 自己不持有 `Window` 句柄,做不到这一步。
@@ -3380,6 +3410,27 @@ impl App {
             Some(ws) => ws.browser.desired_webviews(),
             None => Vec::new(),
         }
+    }
+
+    /// 对当前项目重建 Git Log 快照,`max_count` 由调用方决定(打开面板/
+    /// 引用变化用 `git_log::DEFAULT_MAX_COMMITS`,"加载更多"用当前值 +
+    /// `git_log::LOAD_MORE_STEP`)。`git_log::build` 是同步的 `gleisbau`
+    /// 布局,调用方(`update()`)在受影响的消息分支里调用,不在 UI 线程
+    /// `block_on`,通常量级下毫秒级足够顺。成功后写回缓存;重建意味着缓存
+    /// 换了内容,选中的提交/详情也随之失效,一并清空。
+    fn refresh_git_log(&mut self, repo_path: &std::path::Path, max_count: usize) {
+        match git_log::build(repo_path, max_count) {
+            Ok(snapshot) => {
+                self.git_log_cache = Some(snapshot);
+                self.git_log_error = None;
+            }
+            Err(err) => {
+                self.git_log_cache = None;
+                self.git_log_error = Some(err);
+            }
+        }
+        self.git_log_selected = None;
+        self.git_log_detail = None;
     }
 
     pub fn update(&mut self, message: Message) {
@@ -3919,20 +3970,13 @@ impl App {
                                 .as_ref()
                                 .is_none_or(|c| c.repo_path() != p) =>
                         {
-                            match crate::git_log::build(&p) {
-                                Ok(snapshot) => {
-                                    self.git_log_cache = Some(snapshot);
-                                    self.git_log_error = None;
-                                }
-                                Err(err) => {
-                                    self.git_log_cache = None;
-                                    self.git_log_error = Some(err);
-                                }
-                            }
+                            self.refresh_git_log(&p, git_log::DEFAULT_MAX_COMMITS);
                         }
                         None => {
                             self.git_log_cache = None;
                             self.git_log_error = None;
+                            self.git_log_selected = None;
+                            self.git_log_detail = None;
                         }
                         _ => {}
                     }
@@ -4366,12 +4410,83 @@ impl App {
                     ws.worktrees = worktrees;
                 });
             }
-            Message::ProjectFsChanged(project_id, _relevance) => {
-                // Plan 2 会在这里按 `_relevance == Relevance::GitRefs` 加一段
-                // Git Log 快照重建;这里先只管文件树/worktree 刷新。
+            Message::ProjectFsChanged(project_id, relevance) => {
                 self.with_project(project_id, |ws, io| {
                     ws.spawn_project_git_refresh(io);
                 });
+                // 只有 `.git` 引用类变化(分支切换/外部提交/其他 worktree
+                // 提交)才值得重建 Git Log 快照——纯工作区文件编辑不影响
+                // 提交历史,重算是纯浪费。只在这个项目的面板缓存已经建过
+                // 一次、且路径匹配时才重建(用户可能根本没打开过 Git Log
+                // 面板,`git_log_cache` 是 `None` 就没必要现在算)。
+                if relevance == git_watch::Relevance::GitRefs
+                    && let Some(repo_path) = self
+                        .git_log_cache
+                        .as_ref()
+                        .map(|c| c.repo_path().to_path_buf())
+                    && self
+                        .active_workspace()
+                        .and_then(|ws| ws.active_project_path())
+                        .as_deref()
+                        == Some(repo_path.as_path())
+                {
+                    let max = self
+                        .git_log_cache
+                        .as_ref()
+                        .map(|c| c.max_count())
+                        .unwrap_or(git_log::DEFAULT_MAX_COMMITS);
+                    self.refresh_git_log(&repo_path, max);
+                }
+            }
+            Message::GitLogSelectCommit(oid) => {
+                self.git_log_selected = Some(oid);
+                self.git_log_detail = None;
+                let Some(repo_path) = self
+                    .git_log_cache
+                    .as_ref()
+                    .map(|c| c.repo_path().to_path_buf())
+                else {
+                    return;
+                };
+                let proxy = self.proxy.clone();
+                self.handle.spawn(async move {
+                    let repo_path2 = repo_path.clone();
+                    let result = tokio::task::spawn_blocking(move || {
+                        git_log::commit_detail(&repo_path2, oid)
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(format!("详情加载任务失败: {e}")));
+                    let _ = proxy.send_event(Message::GitLogDetailLoaded(repo_path, oid, result));
+                });
+            }
+            Message::GitLogDetailLoaded(repo_path, oid, result) => {
+                let still_current = self.git_log_cache.as_ref().map(|c| c.repo_path())
+                    == Some(repo_path.as_path())
+                    && self.git_log_selected == Some(oid);
+                if still_current {
+                    self.git_log_detail = Some(result);
+                }
+                // 否则:项目已切换,或用户点了别的提交——这份结果过期了,丢弃。
+            }
+            Message::GitLogLoadMore => {
+                let Some(path) = self
+                    .active_workspace()
+                    .and_then(|ws| ws.active_project_path())
+                else {
+                    return;
+                };
+                let next = self
+                    .git_log_cache
+                    .as_ref()
+                    .map(|c| c.max_count() + git_log::LOAD_MORE_STEP)
+                    .unwrap_or(git_log::DEFAULT_MAX_COMMITS);
+                // refresh_git_log 会清掉 selected/detail——"加载更多"不该
+                // 打断用户正在看的详情,所以这里手动重建快照后把选中态还原。
+                let selected = self.git_log_selected;
+                self.refresh_git_log(&path, next);
+                if let Some(oid) = selected {
+                    self.update(Message::GitLogSelectCommit(oid));
+                }
             }
             Message::AcceptanceCountLoaded(project_id, n) => {
                 self.with_project(project_id, move |ws, _io| {
@@ -6497,6 +6612,58 @@ fn zone_pane_border(zone: chrome_style::RegionStyle, corner: PaneCorner) -> Bord
 /// `chrome_style::left_zone()` 的外框(四向 margin 做悬浮留白,无描边)。
 /// 放大态跳过——`maximize_overlay` 已经用金色边框把同一块内容整体框起来,
 /// 再套一层外框会在金框内侧多出一圈视觉噪音。
+fn worktree_strip<'a>(
+    worktrees: &[WorktreeInfo],
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    // 把同仓库的其他 worktree 压成一行小字,标示当前提交图对应哪个 worktree
+    // 上下文。主 worktree + N 个链接 worktree 各自的分支会散落在同一条图上,
+    // 这个条带帮助用户分辨 `[→main]` 到底指谁。
+    let current = worktrees.iter().find(|w| w.is_current);
+    let others = worktrees
+        .iter()
+        .filter(|w| !w.is_current)
+        .collect::<Vec<_>>();
+    let mut chips: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = vec![];
+    if let Some(c) = current {
+        chips.push(
+            text(format!(
+                "本工作区:{}",
+                c.branch.as_deref().unwrap_or("(无分支)")
+            ))
+            .size(workspace_font::caption())
+            .color(theme::GOLD)
+            .into(),
+        );
+    }
+    for o in others {
+        let label = match (&o.branch, o.missing) {
+            (Some(b), true) => format!("{b} (缺失)"),
+            (Some(b), _) => b.clone(),
+            (None, true) => "无分支 (缺失)".into(),
+            (None, _) => "无分支".into(),
+        };
+        chips.push(
+            text(label)
+                .size(workspace_font::caption())
+                .color(theme::DIM)
+                .into(),
+        );
+    }
+    if chips.is_empty() {
+        return container(iced_widget::Space::new())
+            .height(Length::Shrink)
+            .into();
+    }
+    row![
+        iced_widget::Row::with_children(chips).spacing(12),
+        iced_widget::Space::new().width(Length::Fill),
+    ]
+    .padding([4, 8])
+    .width(Length::Fill)
+    .height(Length::Shrink)
+    .into()
+}
+
 fn left_panel_area<'a>(
     app: &'a App,
     ws: &'a Workspace,
@@ -6546,16 +6713,32 @@ fn left_panel_area<'a>(
             .into()
         }
         LeftView::Web => browser_pane(ws, Length::Fill, zone_pane_border(zone, ac)),
-        LeftView::GitLog => {
-            crate::git_log::view(app.git_log_cache.as_ref(), app.git_log_error.as_deref())
-        }
+        LeftView::GitLog => crate::git_log::view(
+            app.git_log_cache.as_ref(),
+            app.git_log_error.as_deref(),
+            app.git_log_selected,
+            app.git_log_detail.as_ref(),
+        ),
         LeftView::Todo => todo_pane(app, ws, Length::Fill, zone_pane_border(zone, ac)),
     };
     if maximized {
         return inner;
     }
     let region = zone;
-    let zone_box = container(inner)
+    let strip: Option<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> =
+        if app.left_view == LeftView::GitLog && app.git_log_cache.is_some() {
+            Some(worktree_strip(&ws.worktrees))
+        } else {
+            None
+        };
+    let mut zone_body: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> = inner;
+    if let Some(strip) = strip {
+        zone_body = column![strip, zone_body]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+    }
+    let zone_box = container(zone_body)
         .width(Length::Fill)
         .height(Length::Fill)
         .padding(region.padding)
@@ -7355,10 +7538,10 @@ fn todo_pane<'a>(
                 .and_then(|pid| app.todo_meta.get(&pid))
                 .and_then(|m| m.get(&key));
             let mut row = None;
-            if let Some((editing_idx, draft)) = &ws.todo_editing_plan_date {
-                if *editing_idx == idx {
-                    row = Some(todo_plan_date_edit_row(item, draft));
-                }
+            if let Some((editing_idx, draft)) = &ws.todo_editing_plan_date
+                && *editing_idx == idx
+            {
+                row = Some(todo_plan_date_edit_row(item, draft));
             }
             match row {
                 Some(r) => list = list.push(r),
@@ -7404,7 +7587,6 @@ fn todo_pane<'a>(
                 color: theme::BORDER,
                 width: 1.0,
                 radius: 0.0.into(),
-                ..Border::default()
             },
             ..container::Style::default()
         });
@@ -7711,8 +7893,9 @@ fn format_todo_time(t: std::time::SystemTime) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    // days = 秒数 → 自 1970-01-01 的整数日,处理负偏移(1970 前)夹到 0。
-    let days = (secs / 86400).max(0) as i64;
+    // days = 秒数 → 自 1970-01-01 的整数日;`secs` 已经是 `u64`(1970 前会被
+    // 上面的 `unwrap_or_default()` 夹到 0),这里不会是负数。
+    let days = (secs / 86400) as i64;
     let rem = secs % 86400;
     let (hour, minute) = (rem / 3600, (rem % 3600) / 60);
     let (_y, m, d) = civil_from_days(days);
