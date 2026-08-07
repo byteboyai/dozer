@@ -24,7 +24,9 @@ Files 是因为它对瘦身 `workspace.rs` 的贡献最直接,且引入了前三
 1. 新建 `extensions::files`,拥有自己的 `Message`/`update`/`view`,内核只留一个包装变体
    `Message::Files(files::Message)` 做转发。
 2. `project_pane`(项目信息卡:项目名/git 分支图标+名字/脏标颜色/验收次数 + 文件树可滚动
-   列表)整体搬入,渲染逻辑原样保留。
+   列表)整体搬入,渲染逻辑原样保留。`context_menu_popup`/`delete_confirm_popup` 两个浮层
+   函数单独导出(它们是 `App::view()` 顶层互斥浮层判断链的成员,不在 `project_pane` 的
+   `Element` 树里,详见"架构与数据流 §5")。
 3. `FileTree`(已在 `project.rs`,不用重写,直接被 `files::WorkspaceState` 持有)、
    `TreeEdit`/`TreeEditMode`(项目树行内编辑,新建/重命名共用)、`ContextMenu`(右键菜单
    浮层状态)三个现有类型随所属字段一起搬进 `extensions::files`。
@@ -240,22 +242,44 @@ pub fn spawn_git_refresh(
 
 ### 5. `view`
 
+**`project_pane` 与两个浮层是三个独立导出函数,不是一个 `view()`**——现有代码里
+`context_menu_popup`/`delete_confirm_popup` 不在 `project_pane` 返回的 `Element` 树里,
+是 `App::view()` 顶层"当前该显示哪个互斥浮层"判断链(`edit_modal`/删除确认/右键菜单/
+`agent_picker` 平级判断,只在其中一个条件成立时 `stack![base, dismiss, 那个浮层]`)里
+单独调用的两个函数。迁移后保持这个调用形状,否则会把浮层错误地嵌进 `LeftView::Files`
+的渲染分支,导致切到别的左侧视图时浮层消失(现状恰恰是不管哪个 `LeftView`,浮层都能显示,
+因为判断链在 `LeftView` 分支之外)。
+
 ```rust
+/// 项目信息卡 + 文件树可滚动列表(现有 `project_pane`/`project_status_bar` 的搬家版本)。
+/// `daemon_ok` 是内核摘要传入的跨领域状态(daemon 连接状态是 App 级、多处共享,
+/// 同 Todo 试点 `tabs: &[SessionTabSummary]` 的处理原则,`files` 模块不认识 `App`)。
 pub fn view<'a>(
     ws_state: &'a WorkspaceState,
-    app_state: &'a AppState,
     project: Option<&'a ProjectInfo>,
+    daemon_ok: bool,
     width: Length,
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>
+
+/// 右键菜单浮层(现有 `context_menu_popup`+私有辅助 `menu_item` 的搬家版本)。
+pub fn context_menu_popup<'a>(
+    app_state: &'a AppState,
+    ws_state: &'a WorkspaceState,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>
+
+/// 删除确认框(现有 `delete_confirm_popup` 的搬家版本)。
+pub fn delete_confirm_popup(
+    ws_state: &WorkspaceState,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>
 ```
 
-现有 `project_pane`(项目信息卡 + 文件树可滚动列表)、`tree_edit_row`、
-`context_menu_popup` 整体搬过来,签名从吃 `app: &App, ws: &Workspace` 改吃上面这组参数,
-`Message` 类型从顶层换成本模块的。`project` 用 `Option<&ProjectInfo>` 而不是让
+`tree_edit_row`(项目树行内编辑,`project_pane` 内联调用)随 `project_pane` 一起搬,是
+`view` 的私有辅助,不单独导出。`project` 用 `Option<&ProjectInfo>` 而不是让
 `WorkspaceState` 自己持有(项目身份是内核概念,`files` 模块只认"文件树数据",不重复
 `Workspace.project` 这份状态——同 Todo 试点"内核摘要传入,模块不认识核心领域类型"
-的原则)。
+的原则)。`env_status_text`(daemon 状态→文案+颜色的纯函数,`terminal_pane` 也共用)留在
+`workspace.rs`,可见性改 `pub(crate)`,`files::view` 内部直接调用,不重复实现。
 
 ### 6. 内核侧(`workspace.rs`)改动
 
@@ -291,8 +315,19 @@ pub fn view<'a>(
 
 内核 `worktree_strip(&ws.worktrees)` 改成 `worktree_strip(ws.files.worktrees())`。
 
-`App::view()` 的 `LeftView::Files` 分支:`files::view(&ws.files, &app.files,
-ws.project.as_ref(), ..).map(Message::Files)`,紧邻的 `preview_pane(..)` 调用不变。
+`App::view()` 的 `LeftView::Files` 分支:`files::view(&ws.files, ws.project.as_ref(),
+app.daemon_error.is_none(), ..).map(Message::Files)`,紧邻的 `preview_pane(..)` 调用不变。
+
+顶层"当前显示哪个互斥浮层"判断链(`edit_modal`/删除确认/右键菜单/`agent_picker` 平级
+`if/else if`,现有代码在 `App::view()` 里)结构不变,只改两处调用:
+`context_menu_popup(self, ws)` → `files::context_menu_popup(&app.files,
+&ws.files).map(Message::Files)`;`delete_confirm_popup(ws)` → `files::delete_confirm_popup(
+&ws.files).map(Message::Files)`。判断条件 `ws.tree_delete_confirm.is_some()`/
+`self.context_menu.is_some()` 相应改成 `ws.files.tree_delete_confirm_is_some()`/
+`app.files.context_menu_is_some()`(或直接开等价的只读访问器,写计划时定具体方法名)。
+两处 `on_press`(`Message::ProjectTreeDeleteCancel`/`Message::ProjectTreeContextMenuClose`)
+改成 `Message::Files(files::Message::DeleteCancel)`/`Message::Files(files::Message
+::ContextMenuClose)`。
 
 `main.rs` 里原 `Message::ProjectTreeCopyPath(path, kind) => { .. }` 改匹配
 `Message::Files(files::Message::CopyPath(path, kind))`。
