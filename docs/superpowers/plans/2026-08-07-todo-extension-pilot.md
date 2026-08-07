@@ -1153,7 +1153,7 @@ Run: `cargo build -p dozer-app && cargo test -p dozer-app && cargo clippy -p doz
 Expected: 全绿,包括 `extensions::todo::` 下 Task 1(原 `todo.rs`/`todo_meta.rs` 的全部
 既有测试)+ Task 2(新增单测)全部通过。
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add -A crates/dozer-app
