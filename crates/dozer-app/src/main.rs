@@ -286,7 +286,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         /// `resumed()` 建好窗口/wgpu 后把它 `take()` 出来转入 `Ready`。用
         /// `Option` 包一层只是为了能在 `&mut self` 上 `take`，正常情况下
         /// `resumed()` 只会被调用一次。
-        Loading(Option<App>),
+        Loading(Option<App>, winit::event_loop::EventLoopProxy<Message>),
         Ready {
             window: Arc<winit::window::Window>,
             queue: wgpu::Queue,
@@ -328,6 +328,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             /// 待应用的焦点意图(点击/消息设置,sync_previews 之后统一 apply,
             /// 确保新建 webview 已入池)。
             pending_focus: Option<FocusIntent>,
+            /// 事件循环代理:webview IPC handler 用它把 `WebViewFocused` 送回
+            /// UI 线程(winit 收不到子 webview 上的鼠标点击)。
+            proxy: winit::event_loop::EventLoopProxy<Message>,
         },
     }
 
@@ -350,6 +353,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         allowed_files: std::sync::Arc<
             std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
         >,
+        proxy: winit::event_loop::EventLoopProxy<Message>,
     ) {
         let desired_ids: std::collections::HashSet<usize> = specs.iter().map(|s| s.id).collect();
         pool.retain(|id, _| desired_ids.contains(id));
@@ -372,6 +376,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 None => {
                     let allowed = std::sync::Arc::clone(&allowed_files);
                     let root = assets::assets_root();
+                    let ipc_proxy = proxy.clone();
                     let built = wry::WebViewBuilder::new()
                         .with_url(&spec.url)
                         .with_bounds(bounds)
@@ -380,6 +385,18 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         // 否则点网页里的超链接会变成"预览"而非跳转,表现就是
                         // "能打开网页但点不了超链接"。wry 默认 allow_link_preview=true。
                         .with_allow_link_preview(false)
+                        // 子 webview 上的 mousedown winit 收不到,这里注入 JS
+                        // 在捕获阶段监听 mousedown,经 IPC 通知宿主调 view.focus()
+                        // 让 WKWebView 成为 first responder(否则 ⌘C 选区复制
+                        // 走不通:WKWebView 不是 first responder 时 keyDown 不到它)。
+                        .with_initialization_script(
+                            "document.addEventListener('mousedown',function(){window.ipc.postMessage('focus')},true);"
+                        )
+                        .with_ipc_handler(move |_req| {
+                            if _req.body() == "focus" {
+                                let _ = ipc_proxy.send_event(Message::WebViewFocused);
+                            }
+                        })
                         .with_custom_protocol("dozer".into(), move |_id, request| {
                             let allowed = allowed.lock().expect("allowed_files 锁");
                             let reply = assets::handle_protocol(
@@ -758,6 +775,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 webviews,
                 browser_webviews,
                 webview_project,
+                proxy,
                 ..
             } = self
             else {
@@ -789,6 +807,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 app.preview_desired(),
                 bounds,
                 app.allowed_files(),
+                proxy.clone(),
             );
             sync_webview_pool(
                 window.as_ref(),
@@ -796,6 +815,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 app.browser_desired(),
                 bounds,
                 app.allowed_files(),
+                proxy.clone(),
             );
         }
 
@@ -833,6 +853,15 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     | Message::AgentPickerSelect(_)
             ) {
                 *pending_focus = Some(FocusIntent::Terminal);
+            } else if matches!(message, Message::WebViewFocused) {
+                // 子 webview 上的 mousedown winit 收不到,JS 经 IPC 发来这条
+                // 消息——按当前 `left_view` 判断归预览池还是浏览器池。
+                let state = app.shell_state();
+                *pending_focus = Some(if state.left_view == workspace::LeftView::Web {
+                    FocusIntent::Browser
+                } else {
+                    FocusIntent::Preview
+                });
             }
             match message {
                 // 顶栏"＋"与项目栏"打开项目…"共用的唯一打开入口:rfd 模态选中
@@ -982,7 +1011,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         }
 
         fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-            if let Self::Loading(pending_app) = self {
+            if let Self::Loading(pending_app, proxy) = self {
                 let Some(mut app) = pending_app.take() else {
                     // `resumed()` 理论上只会真正建窗口这一次；后续（若平台
                     // 又调用一次 `resumed`）直接跳过，避免重复建窗口。
@@ -1141,6 +1170,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     webview_project: None,
                     cursor_phys: winit::dpi::PhysicalPosition::new(0.0, 0.0),
                     pending_focus: None,
+                    proxy: proxy.clone(),
                 };
             }
         }
@@ -1421,7 +1451,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         }
     }
 
-    let mut runner = Runner::Loading(Some(app));
+    let mut runner = Runner::Loading(Some(app), proxy.clone());
     event_loop.run_app(&mut runner)
 
     // `runtime` 在这里才真正 drop（`main` 持有到最后一刻）：`run_app`

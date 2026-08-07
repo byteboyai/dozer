@@ -1221,6 +1221,12 @@ pub enum Message {
     ZoomOut,
     /// UI 缩放还原(Ctrl+1)：回到启动基准 scale。
     ZoomReset,
+    /// 预览/浏览器 webview 收到鼠标点击(JS mousedown → IPC → EventLoopProxy),
+    /// 通知 main.rs 调 `view.focus()` 让 WKWebView 成为 first responder。
+    /// winit 收不到子 webview 上的 `MouseInput`,这条消息是唯一焦点信号源。
+    /// 不区分 Preview/Browser:`left_view` 互斥,`dispatch` 按 `shell_state`
+    /// 判断归谁。
+    WebViewFocused,
 }
 
 /// 地址栏编辑事件:由 main.rs 的键盘拦截层在 `browser_addr_editing()`
@@ -4978,6 +4984,9 @@ impl App {
                 self.sync_terminal_grid();
                 self.pending_preview_zoom = true;
             }
+            // WebViewFocused 只在 main.rs 的 dispatch 里设 pending_focus,
+            // App::update 无需处理。
+            Message::WebViewFocused => {}
         }
     }
 
