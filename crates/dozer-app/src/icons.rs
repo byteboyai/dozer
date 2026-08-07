@@ -37,6 +37,8 @@ pub enum IconKind {
     SquarePlus,
     GitBranch,
     ListChecks,
+    /// Agent 用量统计面板的图标(Lucide bar-chart-3)。
+    BarChart3,
     /// 终端/Shell(纯 Shell 启动项),Lucide。
     Terminal,
     /// Dozer 品牌标(dozer-logo-main.jpeg → potrace 矢量化),
@@ -81,6 +83,7 @@ impl IconKind {
             IconKind::SquarePlus => include_bytes!("../assets/icons/square-plus.svg"),
             IconKind::GitBranch => include_bytes!("../assets/icons/git-branch.svg"),
             IconKind::ListChecks => include_bytes!("../assets/icons/list-checks.svg"),
+            IconKind::BarChart3 => include_bytes!("../assets/icons/bar-chart-3.svg"),
             IconKind::Terminal => include_bytes!("../assets/icons/terminal.svg"),
             IconKind::Dozer => include_bytes!("../assets/icons/dozer-logo.svg"),
             IconKind::Claude => include_bytes!("../assets/icons/claude.svg"),
