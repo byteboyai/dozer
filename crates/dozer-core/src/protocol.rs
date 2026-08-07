@@ -22,16 +22,24 @@ pub enum AgentKind {
     Claude,
     Codebuddy,
     Opencode,
+    Codex,
+    Qoder,
+    Kilo,
 }
 
 impl AgentKind {
-    /// 展示用短标签（对话历史副行、GUI 角标）。
+    /// 展示用短标签（对话历史副行、GUI 角标）。同时也是启动器菜单键入
+    /// 的 CLI 命令名——三家均已核实与官方命令名一致（见计划 Global
+    /// Constraints）。
     pub fn label(&self) -> &'static str {
         match self {
             AgentKind::Unknown => "未知",
             AgentKind::Claude => "claude",
             AgentKind::Codebuddy => "codebuddy",
             AgentKind::Opencode => "opencode",
+            AgentKind::Codex => "codex",
+            AgentKind::Qoder => "qoder",
+            AgentKind::Kilo => "kilo",
         }
     }
 }
@@ -428,6 +436,18 @@ mod tests {
             "\"opencode\""
         );
         assert_eq!(
+            serde_json::to_string(&AgentKind::Codex).unwrap(),
+            "\"codex\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AgentKind::Qoder).unwrap(),
+            "\"qoder\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AgentKind::Kilo).unwrap(),
+            "\"kilo\""
+        );
+        assert_eq!(
             serde_json::from_str::<AgentKind>("\"claude\"").unwrap(),
             AgentKind::Claude
         );
@@ -439,6 +459,9 @@ mod tests {
         assert_eq!(AgentKind::Claude.label(), "claude");
         assert_eq!(AgentKind::Codebuddy.label(), "codebuddy");
         assert_eq!(AgentKind::Opencode.label(), "opencode");
+        assert_eq!(AgentKind::Codex.label(), "codex");
+        assert_eq!(AgentKind::Qoder.label(), "qoder");
+        assert_eq!(AgentKind::Kilo.label(), "kilo");
     }
 
     #[test]
