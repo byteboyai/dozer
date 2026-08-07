@@ -33,7 +33,7 @@ use crate::bookmarks;
 use crate::chrome_style;
 use crate::conversation::{self, ConversationMeta};
 use crate::delivery::{self, FileChange, FileGitStatus, WorktreeInfo};
-use crate::git_log;
+use crate::extensions::git_log;
 use crate::git_watch;
 use crate::goal::{self, Goal};
 use crate::icons;
@@ -7045,7 +7045,7 @@ fn left_panel_area<'a>(
             .into()
         }
         LeftView::Web => browser_pane(ws, Length::Fill, zone_pane_border(zone, ac)),
-        LeftView::GitLog => crate::git_log::view(
+        LeftView::GitLog => git_log::view(
             app.git_log_cache.as_ref(),
             app.git_log_error.as_deref(),
             app.git_log_selected,
