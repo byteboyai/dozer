@@ -5,18 +5,16 @@
 //! `dozerd`/`dozer-core::protocol` 完全不参与——所有数据直接读磁盘上的
 //! agent transcript JSONL。
 
-// Task 7/8 接线后（`daily_totals_by_agent`/`agent_token_share` 被条形图/饼图
-// 视图调用）这些死代码警告会自然消失；在此之前的中间态暂时放行，避免每轮
-// cargo check 刷噪音。
-#![allow(dead_code)]
-
 use crate::conversation::ConversationMeta;
 use crate::icons;
 use crate::theme;
 use crate::workspace::Message;
 use crate::workspace_font;
 use dozer_core::protocol::AgentKind;
-use iced_widget::core::{Border, Color, Element, Length};
+use iced_widget::canvas::{self, Canvas};
+use iced_widget::core::{
+    Border, Color, Element, Length, Radians, Rectangle,
+};
 use iced_widget::{button, column, container, text};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -346,6 +344,16 @@ pub fn view<'a>(
         if !days.is_empty() {
             content = content.push(bar_chart(&days));
         }
+        let share = agent_token_share(rows);
+        if !share.is_empty() {
+            content = content.push(
+                column![
+                    chart_legend(&share),
+                    pie_chart(&share),
+                ]
+                .spacing(10),
+            );
+        }
         content = content.push(grouped_list(rows));
     }
 
@@ -565,6 +573,97 @@ fn format_token_short(n: u64) -> String {
     } else {
         n.to_string()
     }
+}
+
+const PIE_RADIUS: f32 = 52.0;
+const PIE_GAP_RAD: f32 = 0.035;
+
+struct PieChart {
+    share: Vec<(AgentKind, u64)>,
+}
+
+impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for PieChart {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced_widget::Renderer,
+        _theme: &iced_widget::Theme,
+        bounds: Rectangle,
+        _cursor: iced_widget::core::mouse::Cursor,
+    ) -> Vec<canvas::Geometry<iced_widget::Renderer>> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let center = frame.center();
+        let total: u64 = self.share.iter().map(|(_, v)| v).sum();
+        if total == 0 {
+            return vec![frame.into_geometry()];
+        }
+        // 12 点钟方向起(-90°),顺时针累加每片的角度(iced 的 Radians 约定
+        // "从正 x 轴顺时针"——见 iced_graphics::geometry::path::arc::Arc 文档)。
+        let mut angle = Radians(-std::f32::consts::FRAC_PI_2);
+        for (agent, value) in &self.share {
+            let sweep = Radians(2.0 * std::f32::consts::PI * (*value as f32 / total as f32));
+            let start = Radians(angle.0 + PIE_GAP_RAD / 2.0);
+            let end = Radians(angle.0 + sweep.0 - PIE_GAP_RAD / 2.0);
+            let path = canvas::Path::new(|b| {
+                b.arc(canvas::path::Arc {
+                    center,
+                    radius: PIE_RADIUS,
+                    start_angle: start,
+                    end_angle: end,
+                });
+                b.line_to(center);
+                b.close();
+            });
+            frame.fill(&path, crate::workspace::agent_dot_color(*agent));
+            angle = Radians(angle.0 + sweep.0);
+        }
+        vec![frame.into_geometry()]
+    }
+}
+
+fn pie_chart(share: &[(AgentKind, u64)]) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+    Canvas::new(PieChart {
+        share: share.to_vec(),
+    })
+    .width(Length::Fixed(PIE_RADIUS * 2.0 + 8.0))
+    .height(Length::Fixed(PIE_RADIUS * 2.0 + 8.0))
+    .into()
+}
+
+fn chart_legend(share: &[(AgentKind, u64)]) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let total: u64 = share.iter().map(|(_, v)| v).sum();
+    let mut row = iced_widget::row![].spacing(18);
+    for (agent, value) in share {
+        let pct = if total == 0 { 0 } else { value * 100 / total };
+        let dot = container(iced_widget::Space::new())
+            .width(Length::Fixed(8.0))
+            .height(Length::Fixed(8.0))
+            .style({
+                let color = crate::workspace::agent_dot_color(*agent);
+                move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                    background: Some(color.into()),
+                    border: Border {
+                        radius: 4.0.into(),
+                        ..Border::default()
+                    },
+                    ..iced_widget::container::Style::default()
+                }
+            });
+        row = row.push(
+            iced_widget::row![
+                dot,
+                text(format!("{} {}% · {}", agent.label(), pct, format_token_short(*value)))
+                    .size(workspace_font::caption_sm())
+                    .color(theme::DIM)
+                    .font(iced_widget::core::Font::MONOSPACE),
+            ]
+            .spacing(6)
+            .align_y(iced_widget::core::Alignment::Center),
+        );
+    }
+    row.into()
 }
 
 #[cfg(test)]
