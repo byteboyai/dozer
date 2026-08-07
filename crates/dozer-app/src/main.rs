@@ -1,4 +1,5 @@
 mod assets;
+mod bookmarks;
 mod chrome_style;
 mod clipboard_image;
 mod conversation;
