@@ -4,7 +4,9 @@
 
 **Goal:** 把 `workspace.rs` 里的 Files 面板(`project_pane` 项目信息卡 + 文件树 + 右键菜单/删除确认浮层,约 20 个 `ProjectTreeXxx`/`ProjectGitRefreshed`/`AcceptanceCountLoaded`/`RightClickAt` 消息)拆成自洽模块 `extensions::files`(自己的 `Message`/`WorkspaceState`/`AppState`/`update`/`view`),`workspace.rs` 内核只留包装转发——阶段 1 扩展化重构的第四个试点。
 
-**Architecture:** 新文件 `crates/dozer-app/src/extensions/files.rs`:`WorkspaceState`(挂 `Workspace`,对应现有 11 个字段)、`AppState`(挂 `App`,对应现有 2 个字段:`context_menu`/`last_right_click`)、`Message`(20 个变体)、`update`(处理 `CopyPath` 之外的全部消息)、`spawn_git_refresh`(内核直调的自由函数,替代 `Workspace::spawn_project_git_refresh`)、`view`/`context_menu_popup`/`delete_confirm_popup`(三个独立导出的渲染函数——后两个是 `App::view()` 顶层互斥浮层判断链的成员,不在 `project_pane` 的 `Element` 树里)。`TreeEditMode`/`TreeEdit`/`ContextMenu` 三个现有类型随字段一起搬入。`FileTree`(已在 `project.rs`)不搬,`files::WorkspaceState` 直接持有一份。
+**Architecture:** 新文件 `crates/dozer-app/src/extensions/files.rs`:`WorkspaceState`(挂 `Workspace`,对应现有 11 个字段)、`AppState`(挂 `App`,对应现有 2 个字段:`context_menu`/`last_right_click`)、`Message`(21 个变体,含一个设计文档遗漏、代码审查时补上的 `OpenFile`——文件行点击要跨过
+`files::Message` 边界打开预览,处理方式同 `CopyPath`,见 Task 1 Step 1 `OpenFile` 变体的
+文档注释)、`update`(处理 `CopyPath`/`OpenFile` 之外的全部消息)、`spawn_git_refresh`(内核直调的自由函数,替代 `Workspace::spawn_project_git_refresh`)、`view`/`context_menu_popup`/`delete_confirm_popup`(三个独立导出的渲染函数——后两个是 `App::view()` 顶层互斥浮层判断链的成员,不在 `project_pane` 的 `Element` 树里)。`TreeEditMode`/`TreeEdit`/`ContextMenu` 三个现有类型随字段一起搬入。`FileTree`(已在 `project.rs`)不搬,`files::WorkspaceState` 直接持有一份。
 
 **Tech Stack:** Rust workspace;iced 0.14;`tokio::runtime::Handle` + `emit: impl Fn(Message) + Send + 'static` 回调风格(同 Git Log/浏览器两个试点),不用 `iced::Task`/`Command`。
 
@@ -100,7 +102,11 @@ pub struct AppState {
 }
 
 /// 对应现在顶层 `Message` 里的 20 个 `ProjectTreeXxx`/`ProjectGitRefreshed`/
-/// `AcceptanceCountLoaded`/`RightClickAt` 变体,去前缀原样搬来。
+/// `AcceptanceCountLoaded`/`RightClickAt` 变体,去前缀原样搬来,外加一个
+/// `OpenFile`——它不是哪个 `ProjectTreeXxx` 去前缀来的,是设计文档遗漏、
+/// 代码审查时才发现的缺口:原 `project_pane` 对非目录行发的是跨域消息
+/// `Message::PreviewOpenPath`,不在 `ProjectTreeXxx` 家族里,`files::Message`
+/// 需要自己的变体才能表达"点了一个文件"。
 #[derive(Debug, Clone)]
 pub enum Message {
     Toggle(PathBuf),
@@ -115,6 +121,14 @@ pub enum Message {
     RightClickAt { x: f32, y: f32 },
     ContextMenuOpen { path: PathBuf, is_dir: bool },
     ContextMenuClose,
+    /// 单击文件行(非目录):在内核里打开预览。设计文档遗漏了这一条——
+    /// 原 `project_pane` 对非目录行的 `on_press` 发的是跨域消息
+    /// `Message::PreviewOpenPath(row.path.clone())`(预览域,核心,不属于
+    /// Files),`files::Message` 里没有能表达"打开预览"的变体就没法照抄。
+    /// 处理方式同 `CopyPath`:内核拦截,不进 `update`,收到时转发成
+    /// `self.update(Message::PreviewOpenPath(path))`(Task 4 Step 4 补一条
+    /// 拦截分支,写在 `CopyPath` 拦截分支旁边)。
+    OpenFile(PathBuf),
     /// 内核拦截,不进 `update`——真正的系统剪贴板写入需要 `main.rs` 的
     /// `Clipboard` 句柄,`update()` 拿不到(见设计文档"关键语义确认")。
     CopyPath(PathBuf, PathKind),
@@ -538,6 +552,9 @@ pub fn update(
         }
         Message::CopyPath(..) => {
             unreachable!("由内核拦截处理,见 files::Message::CopyPath 文档")
+        }
+        Message::OpenFile(..) => {
+            unreachable!("由内核拦截处理,见 files::Message::OpenFile 文档")
         }
     }
 }
@@ -1084,8 +1101,11 @@ pub fn view<'a>(
 - `ws.branch`/`ws.dirty`/`ws.git_statuses`/`ws.tree_error`/`ws.file_tree`/
   `ws.tree_edit`/`ws.project_acceptance_count` 全部改成 `ws_state.` 加同名字段。
 - `Message::ProjectTreeToggle(row.path.clone())` 改成
-  `Message::Toggle(row.path.clone())`(这是 `visible_rows()` 循环里唯一出现的
-  消息构造)。
+  `Message::Toggle(row.path.clone())`(目录行的点击消息)。
+- `Message::PreviewOpenPath(row.path.clone())` 改成
+  `Message::OpenFile(row.path.clone())`(非目录行的点击消息——原代码按
+  `row.is_dir` 在这两条消息间二选一构造 `msg`,这是设计文档遗漏、代码审查时
+  才补上的一条,`OpenFile` 定义见 Task 1 Step 1)。
 - 函数结尾 `container(column![body, project_status_bar(app, ws, outer)])` 改成
   `container(column![body, project_status_bar(daemon_ok, ws_state, outer)])`
   (对应 Step 4 里 `project_status_bar` 的新签名)。
@@ -1298,11 +1318,18 @@ Files(files::Message),
 `ProjectTreeOpDone`/`ProjectTreeNewFile`/`ProjectTreeNewFolder`/
 `ProjectTreeReloadFromDisk`/`ProjectTreeRenameStart`/`ProjectTreeEditEvent`/
 `AcceptanceCountLoaded`/`RightClickAt` 这 20 个分支(散落在现约 4240-4610 行区间),
-加 3 支:
+加 4 支(比设计文档多一支 `OpenFile`——见 Task 1 Step 1 关于这条消息的说明,是
+设计遗漏、代码审查时才补上的):
 
 ```rust
 Message::Files(files::Message::CopyPath(path, kind)) => {
     let _ = (path, kind); // main.rs 拦截处理写剪贴板,这里维持现状空分支
+}
+Message::Files(files::Message::OpenFile(path)) => {
+    // 单击文件行打开预览——`files` 模块不认识预览域,这条消息由内核拦截
+    // 转发成核心的 `PreviewOpenPath`(同 `ProjectTreeCopyPath` 现状,不能
+    // 落进下面的兜底分支,否则会命中 `files::update` 里的 `unreachable!`)。
+    self.update(Message::PreviewOpenPath(path));
 }
 Message::Files(
     msg @ (files::Message::GitRefreshed(project_id, ..)
@@ -1531,6 +1558,8 @@ Expected: 全绿。
 
 对照 Files 面板现有行为逐项走一遍,确认拆分没有改变任何可见行为:
 - 展开/收起目录,切换到别的 `LeftView` 再切回来,展开态保持记忆。
+- 单击一个文件行(非目录),预览面板正确打开该文件(验证 `OpenFile` 的内核拦截
+  确实生效,没有落进 `files::update` 触发 `unreachable!` panic)。
 - 右键文件/文件夹,菜单选项齐全(文件:复制/删除/重命名/复制绝对路径/复制相对
   路径/在 Finder 中打开/从磁盘重新加载;文件夹额外有新建文件/新建文件夹/粘贴)。
 - 复制一个文件,粘贴到另一个目录,新文件出现在目标目录且父目录自动展开。
