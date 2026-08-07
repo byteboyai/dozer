@@ -3,8 +3,8 @@
 **状态：已批准（brainstorming 会话，2026-08-07）**
 
 **设计稿**（Figma "Dozer Phase 1 UI"，"一期主界面v2" 页，从 `S1v2 主工作区` 克隆改造，
-右图标栏新增"用量统计"图标并设为选中态，`对话列表 Rail` 替换为项目汇总条 + 按 agent
-分组的会话明细，删除了不需要的 `对话审阅 Pane` 让面板本体拉宽到 764px）：
+右图标栏新增"用量统计"图标并设为选中态，`对话列表 Rail` 替换为项目汇总条 + 统计图表卡 +
+按 agent 分组的会话明细，删除了不需要的 `对话审阅 Pane` 让面板本体拉宽到 764px）：
 https://www.figma.com/design/NXfLQp5XQk1kF7Ohls2EbX/Dozer-Phase-1-UI?node-id=158-30
 
 ## 背景
@@ -31,6 +31,7 @@ https://www.figma.com/design/NXfLQp5XQk1kF7Ohls2EbX/Dozer-Phase-1-UI?node-id=158
 3. 统计维度：token 用量（input/output/cache read/cache write 分列，不合并）、会话/任务数量、工具调用次数（区分"改动类"）、触达的文件数（去重）。
 4. 数据源与解析完全在 `dozer-app` 侧新增的纯函数模块（`usage.rs`）完成，不改 `dozer-core` 协议、不碰 `dozerd`（"客户端纯计算"路线，brainstorming 阶段的方案 A）。
 5. 手动触发：面板打开或点刷新按钮时异步解析一遍；不做文件监听、不做自动实时更新。
+6. 两张聚合图表（用户在设计稿定稿后追加）：按天分 agent 的堆叠条形图（近 7 天 token 用量趋势）、按 agent 的 token 占比饼图（整个项目范围）。
 
 **非目标**（brainstorming 阶段逐条问清楚、明确砍掉的）：
 
@@ -48,6 +49,8 @@ https://www.figma.com/design/NXfLQp5XQk1kF7Ohls2EbX/Dozer-Phase-1-UI?node-id=158
 - "复杂度"由四个维度构成，全部保留：对话轮次/消息数、工具调用次数（尤其改动类）、触达的文件数、会话/任务数量。不做代码改动行数（diff 行级）统计——三家 agent 的工具入参形状不统一，精确行级 diff 需要接入 git，超出本次范围；"改动类工具调用次数"作为代理指标已经覆盖了"改动量"的意图。
 - token 只分 input/output/cache read/cache write 四列原始数，不加总成一个"总 token"之外的衍生指标，不换算金额。
 - 面板范围锁定当前项目，不做全局视图，也不做跨项目对比。
+- 条形图：按天聚合，值 = 该 agent 当天四项 token 的加总（不细分 in/out/cache，跟明细行的"分列不合并"原则不冲突——图表的目的是看趋势形状，细分留给下面的明细表）。
+- 饼图：按 agent 的 token 总量占比（四项合计），统计范围是"整个项目"，不是"近 7 天"——跟条形图的时间窗口刻意不同（一个看趋势，一个看总量构成）。
 
 ## 架构与数据流
 
@@ -125,10 +128,42 @@ enum Message {
 
 1. 头部：标题"用量统计" + 当前项目名 + 右侧手动刷新按钮。
 2. 项目汇总条：一张卡片，`ProjectUsageTotals` 各字段横排成一行统计位（轮次 / 工具调用(改动) / 触达文件 三项用主文字色，input / output / cache 读 / cache 写 四项 token 用青色 `#47DEF0`区分——token 数据在视觉上单独成一类，跟"活动量"三项分开）。
-3. 按 agent 分组的明细列表：分组方式镜像 `group_tabs_by_agent`（新写一个 `group_usage_by_agent`，对象是 `(ConversationMeta, ConversationUsage)` 而不是 `SessionTab`），组内按 `modified_ms` 倒序（与 `list_all_conversations` 已排好的顺序一致）。分组标题行：agent 名 + "N 会话 · M tokens" 摘要。每行三部分：标题行（`ConversationMeta.title` + 最近活跃时间）、活动行（"N 轮 · M 次工具(K 改动) · J 文件"，`Roboto Mono` 暗灰）、token 行（四项 token 数，同上青色），纯展示、不接点击交互。
+3. 统计图表卡：见下方"5. 统计图表：数据准备与绘制"独立小节。
+4. 按 agent 分组的明细列表：分组方式镜像 `group_tabs_by_agent`（新写一个 `group_usage_by_agent`，对象是 `(ConversationMeta, ConversationUsage)` 而不是 `SessionTab`），组内按 `modified_ms` 倒序（与 `list_all_conversations` 已排好的顺序一致）。分组标题行：agent 名 + "N 会话 · M tokens" 摘要。每行三部分：标题行（`ConversationMeta.title` + 最近活跃时间）、活动行（"N 轮 · M 次工具(K 改动) · J 文件"，`Roboto Mono` 暗灰）、token 行（四项 token 数，同上青色），纯展示、不接点击交互。
    - **视觉细节（来自设计稿，非硬性需求，实现时可按性价比取舍）**：若该会话就是当前打开着的会话（复用 `conversation.rs::is_current_conversation` 现成的"transcript 路径是否在已打开会话集合里"判断，不新增数据源），标题行前缀一个绿色圆点、整行改用金色描边，呼应 Conversations 面板"当前会话"的既有视觉语言。这不是本次 brainstorming 问清楚的核心需求，纯粹是画设计稿时顺手加的一致性细节，v1 没做也不影响功能完整。
-4. 加载中占位态："统计中…"；解析完成前面板不显示陈旧数据（避免用户误读为最新值）。
-5. 空态：项目下一个 transcript 都没有时，提示"这个项目还没有 agent 对话记录"。
+5. 加载中占位态："统计中…"；解析完成前面板不显示陈旧数据（避免用户误读为最新值）。
+6. 空态：项目下一个 transcript 都没有时，提示"这个项目还没有 agent 对话记录"（统计图表卡跟着一起不渲染，不留一个空壳）。
+
+### 5. 统计图表：数据准备与绘制
+
+两张图共用一套配色：**复用 `workspace.rs::agent_dot_color` 的既有映射**（`Claude → CYAN`、`CodeBuddy → PURPLE`、`OpenCode → GREEN`），不新造一套配色——这是全代码库唯一的 agent 识别色映射（`agent_dot_color_maps_each_kind_and_avoids_gold` 测试名本身就说明了"不能用 GOLD"这条约束，GOLD 是甲方动作专属色），图表理应跟对话面板的圆点用同一套颜色，否则用户要在两套配色间做心理映射。
+
+**数据准备**（`usage.rs` 新增两个纯函数）：
+
+```rust
+/// 按天聚合（本地日期，取 `ConversationMeta.modified_ms` 归一化到当地日期）
+/// 每个 agent 当天四项 token 的加总；只取最近 7 天，不足 7 天则从项目最早
+/// 一天开始，不补占位空天。
+pub fn daily_totals_by_agent(
+    rows: &[(ConversationMeta, ConversationUsage)],
+) -> Vec<DayAgentTotals> // { date: NaiveDate, claude: u64, codebuddy: u64, opencode: u64 }
+
+/// 整个项目范围（不限"近 7 天"，跟条形图的时间窗刻意不同）按 agent 的 token
+/// 总量（四项合计），供饼图用。
+pub fn agent_token_share(
+    rows: &[(ConversationMeta, ConversationUsage)],
+) -> Vec<(AgentKind, u64)>
+```
+
+**绘制**：iced 0.14 没有现成图表部件，两张图都用基础几何图元手搭，不引入图表 crate（YAGNI——只有两个图，犯不上为此拉一个通用图表库依赖）：
+
+- 条形图：堆叠柱用简单的 `Column`/`Container` 色块堆叠即可实现（不需要 `iced::widget::canvas`），跟设计稿里 Figma 用矩形堆叠的做法一一对应——每天一根柱子，固定顺序自底向上 Claude → CodeBuddy → OpenCode（顺序恒定，不随数值大小重排，见 dataviz 规范"颜色跟着实体走，不跟着排名走"），段与段之间留 2px 背景色间隔（不画描边分隔线），只有最顶段的柱子画圆角（4px，顶部两角），贴基线的底段直角。每根柱子只标一个总量数字（该天四项之和），不逐段标数字。
+- 饼图：3 个扇形需要真正的角度计算，用 `iced::widget::canvas::Path` 的 `arc` 画（`Canvas` widget），扇形之间留一点角度间隙（同样是"间隔而非描边"分隔）。
+- 图例：一行 3 个色点 + agent 名 + 占比 % + token 数，同时服务两张图（条形图靠色点/名字识别系列，饼图的百分比直接读图例，不用在扇形上做角度定位的浮动标签——3 个扇形本来就是"图例即答案"，没必要为了摆标签文字算三角函数）。
+- 不做 hover tooltip、不做点击交互（v1，同面板整体的"纯展示"基调）；两张图里的每个数字在下方明细列表/汇总条里都能查到原始值，图表之外始终有数据兜底，不存在"只有图表能看到这个数"的情况。
+- 空态/加载态跟随整个面板（见"面板渲染"第 5/6 点），图表卡不单独处理。
+
+**已知的设计取舍**：Dozer 的既有主题色（GOLD/CYAN/GREEN 等）饱和度和明度都偏高，是"暗底霓虹"风格的既定选择（CLAUDE.md 明确定死、违反即错）；用通用图表可读性规范去检验会在"暗色模式下色块不宜过亮"这一项上不通过，但这几个颜色已经在 Conversations 面板的会话圆点等处大面积复用，为了两张小图单独发明一套更暗的图表专用色反而会制造新的不一致，所以这里选择跟随既有主题、不新增色板。三色的色相区分度、色盲安全性（CVD ΔE）、对比度均已用 `dataviz` 技能的 `validate_palette.js` 跑过，除明度带外全部通过。
 
 ## 错误处理
 
@@ -145,7 +180,9 @@ enum Message {
 - 边界用例：空文件 → 全零 `ConversationUsage`；混入非法 JSON 行 → 跳过该行不影响其余行统计；只有人类发言没有 assistant 回复 → token 全零但 turns 计数正确。
 - `aggregate`：多个 `ConversationUsage` 加总后的 `ProjectUsageTotals` 数值正确，包括跨会话 `files_touched` 去重（同一文件在两个会话里都出现过，汇总只算一次）。
 - `group_usage_by_agent`：分组结果按 agent 归类正确，组内保持传入顺序。
-- UI 侧不写自动化测试（现有面板惯例：view 函数不测，纯逻辑测），加载态/空态/手动刷新交互留给 `cargo run -p dozer-app` 人工验收。
+- `daily_totals_by_agent`：同一天多个会话的 token 正确按 agent 累加到同一天；跨天数据分到不同天；超过 7 天的历史只保留最近 7 天；不足 7 天不补占位空天（返回长度等于实际有数据的天数）。
+- `agent_token_share`：三个 agent 各自 token 总量正确（四项合计），某 agent 在项目里完全没出现过时不产生一条全零记录（而不是三条固定输出）。
+- 图表绘制（堆叠柱的分段高度、圆角只在顶段、饼图扇形角度换算）留给 `cargo run -p dozer-app` 人工验收，同现有面板惯例（view 函数不测，纯逻辑测）；加载态/空态/手动刷新交互一并人工验收。
 
 ## 依赖变更
 
