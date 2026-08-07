@@ -9,8 +9,12 @@
 //! 用不到的逻辑),两者各自维护、互不知情。
 
 use crate::preview::WebviewSpec;
+use crate::workspace::{lh, preview_tab_display_width, tab_arrow_button, tab_divider, tab_window};
+use crate::{chrome_style, icon_size, icons, theme, workspace_font, workspace_geometry};
 use dozer_client::Client;
 use dozer_core::protocol::{BookmarkInfo, BookmarkScope};
+use iced_widget::core::{Border, Element, Length};
+use iced_widget::{button, column, container, row, text};
 
 /// 一个浏览器 tab。
 #[derive(Debug, Clone, PartialEq)]
@@ -52,11 +56,7 @@ impl Tabs {
             .to_string();
         let id = self.next_id;
         self.next_id += 1;
-        self.tabs.push(BrowserTab {
-            id,
-            url,
-            title,
-        });
+        self.tabs.push(BrowserTab { id, url, title });
         self.active = self.tabs.len() - 1;
         id
     }
@@ -198,17 +198,11 @@ mod tests {
 
         t.addr_begin();
         t.addr_text("/tmp/x");
-        assert_eq!(
-            t.addr_submit(),
-            Err("浏览器不支持打开本地文件".to_string())
-        );
+        assert_eq!(t.addr_submit(), Err("浏览器不支持打开本地文件".to_string()));
 
         t.addr_begin();
         t.addr_text("~/x");
-        assert_eq!(
-            t.addr_submit(),
-            Err("浏览器不支持打开本地文件".to_string())
-        );
+        assert_eq!(t.addr_submit(), Err("浏览器不支持打开本地文件".to_string()));
 
         t.addr_begin();
         t.addr_text("abc");
@@ -257,7 +251,9 @@ mod tests {
     }
 
     fn client_for_test() -> Client {
-        Client::new(std::path::PathBuf::from("/tmp/dozer-browser-test-nonexistent.sock"))
+        Client::new(std::path::PathBuf::from(
+            "/tmp/dozer-browser-test-nonexistent.sock",
+        ))
     }
 
     fn bm(id: i64, scope: BookmarkScope, project_id: Option<i64>, url: &str) -> BookmarkInfo {
@@ -410,7 +406,14 @@ mod tests {
         let mut state = State::default();
         let handle = tokio::runtime::Handle::current();
         let client = client_for_test();
-        update(&mut state, Message::AddrClick, Some(1), &client, &handle, |_| {});
+        update(
+            &mut state,
+            Message::AddrClick,
+            Some(1),
+            &client,
+            &handle,
+            |_| {},
+        );
         update(
             &mut state,
             Message::AddrEvent(crate::workspace::AddrEvent::Text("http://a.com".into())),
@@ -427,7 +430,11 @@ mod tests {
             &handle,
             |_| {},
         );
-        assert_eq!(state.tabs.tabs().len(), 1, "提交应递归触发 OpenUrl 开一个 tab");
+        assert_eq!(
+            state.tabs.tabs().len(),
+            1,
+            "提交应递归触发 OpenUrl 开一个 tab"
+        );
         assert_eq!(state.tabs.tabs()[0].url, "http://a.com");
     }
 
@@ -436,7 +443,14 @@ mod tests {
         let mut state = State::default();
         let handle = tokio::runtime::Handle::current();
         let client = client_for_test();
-        update(&mut state, Message::AddrClick, Some(1), &client, &handle, |_| {});
+        update(
+            &mut state,
+            Message::AddrClick,
+            Some(1),
+            &client,
+            &handle,
+            |_| {},
+        );
         update(
             &mut state,
             Message::AddrEvent(crate::workspace::AddrEvent::Text("/tmp/x".into())),
@@ -462,9 +476,23 @@ mod tests {
         let mut state = State::default();
         let handle = tokio::runtime::Handle::current();
         let client = client_for_test();
-        update(&mut state, Message::TabScroll(false), Some(1), &client, &handle, |_| {});
+        update(
+            &mut state,
+            Message::TabScroll(false),
+            Some(1),
+            &client,
+            &handle,
+            |_| {},
+        );
         assert_eq!(state.tab_first, 0, "不该下溢");
-        update(&mut state, Message::TabScroll(true), Some(1), &client, &handle, |_| {});
+        update(
+            &mut state,
+            Message::TabScroll(true),
+            Some(1),
+            &client,
+            &handle,
+            |_| {},
+        );
         assert_eq!(state.tab_first, 2);
     }
 
@@ -476,10 +504,24 @@ mod tests {
         };
         let handle = tokio::runtime::Handle::current();
         let client = client_for_test();
-        update(&mut state, Message::StarClick, Some(1), &client, &handle, |_| {});
+        update(
+            &mut state,
+            Message::StarClick,
+            Some(1),
+            &client,
+            &handle,
+            |_| {},
+        );
         assert!(state.star_menu_open);
         assert!(state.error.is_none());
-        update(&mut state, Message::StarClick, Some(1), &client, &handle, |_| {});
+        update(
+            &mut state,
+            Message::StarClick,
+            Some(1),
+            &client,
+            &handle,
+            |_| {},
+        );
         assert!(!state.star_menu_open);
     }
 
@@ -488,7 +530,14 @@ mod tests {
         let mut state = State::default();
         let handle = tokio::runtime::Handle::current();
         let client = client_for_test();
-        update(&mut state, Message::BookmarksToggle, Some(1), &client, &handle, |_| {});
+        update(
+            &mut state,
+            Message::BookmarksToggle,
+            Some(1),
+            &client,
+            &handle,
+            |_| {},
+        );
         assert!(state.bookmarks_open);
     }
 
@@ -646,7 +695,9 @@ fn bookmark_status(
     let project = project_id.and_then(|pid| {
         bookmarks
             .iter()
-            .find(|b| b.scope == BookmarkScope::Project && b.project_id == Some(pid) && b.url == url)
+            .find(|b| {
+                b.scope == BookmarkScope::Project && b.project_id == Some(pid) && b.url == url
+            })
             .map(|b| b.id)
     });
     BookmarkStatus { global, project }
@@ -774,9 +825,14 @@ pub fn update(
             crate::workspace::AddrEvent::Backspace => state.tabs.addr_backspace(),
             crate::workspace::AddrEvent::Cancel => state.tabs.addr_cancel(),
             crate::workspace::AddrEvent::Submit => match state.tabs.addr_submit() {
-                Ok(Some(url)) => {
-                    update(state, Message::OpenUrl(url), project_id, client, handle, emit)
-                }
+                Ok(Some(url)) => update(
+                    state,
+                    Message::OpenUrl(url),
+                    project_id,
+                    client,
+                    handle,
+                    emit,
+                ),
                 Ok(None) => {}
                 Err(message) => state.error = Some(message),
             },
@@ -863,4 +919,361 @@ pub fn request_bookmarks_refresh(
             .unwrap_or_default();
         emit(Message::BookmarksLoaded(project_id, bookmarks));
     });
+}
+
+/// 地址栏星标:当前 URL 在全局/本项目任一边已收藏则 GOLD 实心,否则
+/// DIM;当前无 tab 时禁用(浏览器 tab 恒为网页,不需要像旧版
+/// `current_browser_url` 那样再判一次 `TabKind`)。`project_id` 必须传
+/// 真实值,不能传 `None` 占位——否则"只在本项目收藏、没加全局收藏"的
+/// 网址会被误判成未收藏(`bookmark_status` 的 `project` 字段只在传了
+/// `Some(pid)` 时才会去匹配)。
+fn star_button(
+    state: &State,
+    project_id: Option<i64>,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let url = state
+        .tabs
+        .tabs()
+        .get(state.tabs.active_idx())
+        .map(|t| t.url.clone());
+    let starred = url
+        .as_ref()
+        .map(|u| bookmark_status(&state.bookmarks, u, project_id).is_bookmarked())
+        .unwrap_or(false);
+    let color = if starred { theme::GOLD } else { theme::DIM };
+    let mut btn = button(icons::view(icons::IconKind::Star, icon_size::row(), color))
+        .width(Length::Fixed(workspace_geometry::tab_button_size()))
+        .height(Length::Fixed(workspace_geometry::tab_button_size()))
+        .padding(0)
+        .style(move |_t, _s| button::Style {
+            background: None,
+            text_color: color,
+            ..button::Style::default()
+        });
+    if url.is_some() {
+        btn = btn.on_press(Message::StarClick);
+    }
+    btn.into()
+}
+
+/// tab 栏"收藏夹"下拉面板触发按钮,颜色恒定(不像星标那样带收藏状态)。
+fn bookmark_menu_row(
+    label: String,
+    msg: Message,
+) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+    button(lh(text(label)
+        .size(workspace_font::body())
+        .color(theme::CREAM)))
+    .on_press(msg)
+    .width(Length::Fill)
+    .padding([6, 12])
+    .style(|_t: &iced_widget::Theme, _s| button::Style {
+        background: None,
+        text_color: theme::CREAM,
+        ..button::Style::default()
+    })
+    .into()
+}
+
+/// 星标小菜单:未收藏显示"加入…",已收藏显示"移出…"(打勾态)。
+fn star_menu_popup(
+    state: &State,
+    project_id: Option<i64>,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let Some(url) = state
+        .tabs
+        .tabs()
+        .get(state.tabs.active_idx())
+        .map(|t| t.url.clone())
+    else {
+        return column![].into();
+    };
+    let status = bookmark_status(&state.bookmarks, &url, project_id);
+
+    let mut col = column![match status.global {
+        Some(id) => bookmark_menu_row("移出全局收藏".to_string(), Message::BookmarkRemove(id)),
+        None => bookmark_menu_row(
+            "加入全局收藏".to_string(),
+            Message::BookmarkAdd(BookmarkScope::Global)
+        ),
+    }]
+    .spacing(2);
+
+    if project_id.is_some() {
+        col = col.push(match status.project {
+            Some(id) => {
+                bookmark_menu_row("移出本项目收藏".to_string(), Message::BookmarkRemove(id))
+            }
+            None => bookmark_menu_row(
+                "加入本项目收藏".to_string(),
+                Message::BookmarkAdd(BookmarkScope::Project),
+            ),
+        });
+    }
+
+    container(col)
+        .padding(6)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::CARD.into()),
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// 一组收藏条目:标题(点击新开 tab)+ `×` 删除按钮,风格照抄 tab 关闭
+/// 按钮。
+fn bookmark_group<'a>(
+    title: &'static str,
+    items: &[&'a BookmarkInfo],
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let mut col = column![lh(text(title)
+        .size(workspace_font::subtitle())
+        .color(theme::DIM))]
+    .spacing(2);
+    for b in items {
+        let open = button(lh(text(b.title.clone())
+            .size(workspace_font::body())
+            .color(theme::CREAM)))
+        .on_press(Message::OpenUrl(b.url.clone()))
+        .width(Length::Fill)
+        .style(|_t: &iced_widget::Theme, _s| button::Style {
+            background: None,
+            text_color: theme::CREAM,
+            ..button::Style::default()
+        });
+        let remove = button(lh(text("×").size(workspace_font::body()).color(theme::DIM)))
+            .on_press(Message::BookmarkRemove(b.id))
+            .style(|_t: &iced_widget::Theme, _s| button::Style {
+                background: None,
+                text_color: theme::DIM,
+                ..button::Style::default()
+            });
+        col = col.push(
+            row![open, remove]
+                .spacing(4)
+                .align_y(iced_widget::core::Alignment::Center),
+        );
+    }
+    col.into()
+}
+
+/// 收藏夹下拉面板:分"全局收藏"/"本项目收藏"两组,都为空时显示占位文案。
+fn bookmarks_panel(
+    state: &State,
+    project_id: Option<i64>,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let global: Vec<&BookmarkInfo> = state
+        .bookmarks
+        .iter()
+        .filter(|b| b.scope == BookmarkScope::Global)
+        .collect();
+    let project: Vec<&BookmarkInfo> = state
+        .bookmarks
+        .iter()
+        .filter(|b| b.scope == BookmarkScope::Project && b.project_id == project_id)
+        .collect();
+
+    let both_empty = global.is_empty() && project.is_empty();
+    let mut col = column![].spacing(6);
+    col = col.push(bookmark_group("全局收藏", &global));
+    if project_id.is_some() {
+        col = col.push(bookmark_group("本项目收藏", &project));
+    }
+    if both_empty {
+        col = col.push(lh(text("暂无收藏")
+            .size(workspace_font::subtitle())
+            .color(theme::DIM)));
+    }
+
+    container(col)
+        .padding(6)
+        .width(Length::Fill)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::CARD.into()),
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// 浏览器面板:表头 + (可选 tab 栏)+ 地址栏(与星标/收藏夹按钮)+ (可选
+/// 星标菜单/收藏夹面板)+ (可选错误文案)+ 激活 tab 的网页预览。
+/// `project_id` 用于星标收藏态判定(全局/本项目两档)。
+pub fn view(
+    state: &State,
+    project_id: Option<i64>,
+    width: Length,
+    outer: Border,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let region = chrome_style::browser_pane();
+    let widths: Vec<f32> = state
+        .tabs
+        .tabs()
+        .iter()
+        .map(|t| preview_tab_display_width(&t.title))
+        .collect();
+    let (first, can_left, can_right) = tab_window(
+        &widths,
+        4.0,
+        workspace_geometry::tab_bar_avail_px(),
+        state.tab_first,
+    );
+
+    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = state
+        .tabs
+        .tabs()
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| *idx >= first)
+        .map(|(idx, tab)| {
+            let active = idx == state.tabs.active_idx();
+            let select = button(lh(text(tab.title.clone())
+                .size(workspace_font::subtitle())
+                .color(theme::CREAM)))
+            .on_press(Message::SelectTab(idx))
+            .style(|_t, _s| button::Style {
+                background: None,
+                text_color: theme::CREAM,
+                ..button::Style::default()
+            });
+            let close = button(lh(text("×").size(workspace_font::body()).color(theme::DIM)))
+                .on_press(Message::CloseTab(idx))
+                .style(|_t, _s| button::Style {
+                    background: None,
+                    text_color: theme::DIM,
+                    ..button::Style::default()
+                });
+            container(
+                row![select, close]
+                    .spacing(2)
+                    .align_y(iced_widget::core::Alignment::Center),
+            )
+            .padding([2, 4])
+            .style(move |_t: &iced_widget::Theme| {
+                if active {
+                    container::Style {
+                        background: Some(theme::CARD.into()),
+                        border: Border {
+                            color: theme::BORDER,
+                            width: 1.0,
+                            radius: 6.0.into(),
+                        },
+                        ..container::Style::default()
+                    }
+                } else {
+                    container::Style::default()
+                }
+            })
+            .into()
+        })
+        .collect();
+    let tabs_row = row(items).spacing(4);
+    let clipped = container(tabs_row).width(Length::Fill).clip(true);
+    let left_arrow = tab_arrow_button(
+        icons::IconKind::ChevronLeft,
+        can_left,
+        Message::TabScroll(false),
+    );
+    let right_arrow = tab_arrow_button(
+        icons::IconKind::ChevronRight,
+        can_right,
+        Message::TabScroll(true),
+    );
+    let tab_bar = row![left_arrow, right_arrow, clipped]
+        .spacing(4)
+        .align_y(iced_widget::core::Alignment::Center);
+
+    let editing = state.addr_editing();
+    let addr_text = if editing {
+        format!("{}▏", state.tabs.addr_buffer())
+    } else {
+        "输入网址".to_string()
+    };
+    let addr = button(lh(text(addr_text)
+        .size(workspace_font::body())
+        .color(if editing { theme::CREAM } else { theme::DIM })))
+    .on_press(Message::AddrClick)
+    .width(Length::Fill)
+    .style(move |_t, _s| button::Style {
+        background: Some(theme::TERM_BG.into()),
+        text_color: theme::CREAM,
+        border: Border {
+            color: if editing { theme::GOLD } else { theme::BORDER },
+            width: 1.0,
+            radius: 2.0.into(),
+        },
+        ..button::Style::default()
+    });
+
+    let addr_row = row![
+        addr,
+        star_button(state, project_id),
+        bookmarks_toggle_button()
+    ]
+    .spacing(4)
+    .align_y(iced_widget::core::Alignment::Center);
+
+    let mut content = column![tab_bar, tab_divider(), addr_row].spacing(region.gap);
+
+    if state.star_menu_open {
+        content = content.push(star_menu_popup(state, project_id));
+    }
+    if state.bookmarks_open {
+        content = content.push(bookmarks_panel(state, project_id));
+    }
+
+    if let Some(err) = &state.error {
+        content = content.push(lh(text(format!("⚠ {err}"))
+            .size(workspace_font::body())
+            .color(theme::RED)));
+    }
+
+    if state.tabs.tabs().is_empty() {
+        content = content.push(
+            container(lh(text("暂无网页——在地址栏输入网址")
+                .size(workspace_font::subtitle())
+                .color(theme::DIM)))
+            .width(Length::Fill)
+            .height(Length::Fill),
+        );
+    }
+
+    container(content.padding(region.padding))
+        .width(width)
+        .height(Length::Fill)
+        .style(move |_theme: &iced_widget::Theme| container::Style {
+            background: region.background.map(Into::into),
+            border: outer,
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// tab 栏"收藏夹"下拉面板触发按钮。返回带收藏夹切换消息的按钮。
+fn bookmarks_toggle_button<'a>() -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>
+{
+    button(icons::view(
+        icons::IconKind::Bookmark,
+        icon_size::row(),
+        theme::DIM,
+    ))
+    .on_press(Message::BookmarksToggle)
+    .width(Length::Fixed(workspace_geometry::tab_button_size()))
+    .height(Length::Fixed(workspace_geometry::tab_button_size()))
+    .padding(0)
+    .style(|_t, _s| button::Style {
+        background: None,
+        text_color: theme::DIM,
+        ..button::Style::default()
+    })
+    .into()
 }
