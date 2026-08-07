@@ -1144,19 +1144,9 @@ pub enum Message {
     /// 了(D4)。`Relevance` 决定这次触发要不要顺带做 Plan 2 的 Git Log 快照
     /// 重建。
     ProjectFsChanged(ProjectId, git_watch::Relevance),
-    /// Git Log 面板:选中一行提交,触发异步取改动文件+diff。
-    GitLogSelectCommit(git2::Oid),
-    /// Git Log 面板:某个提交的详情异步加载完成。带上请求时的仓库路径与
-    /// oid,处理时校验"这份结果还对不对得上当前状态"(项目切换/换选中项
-    /// 后,旧请求的结果要被丢弃,不能覆盖新状态——见处理分支注释)。
-    GitLogDetailLoaded(PathBuf, git2::Oid, Result<git_log::CommitDetail, String>),
-    /// Git Log 面板:点"加载更多",拿更大的 `max_count` 重新跑一次
-    /// `git_log::build`。
-    GitLogLoadMore,
-    /// Git Log 面板:异步 `git_log::build` 请求(面板打开/切项目/引用变化/
-    /// 加载更多)落地。带上请求时的仓库路径与 `max_count`,处理时核对是否
-    /// 还等着这份结果(见 `App::git_log_pending`),不是就丢弃。
-    GitLogSnapshotLoaded(PathBuf, usize, Result<git_log::GitLogSnapshot, String>),
+    /// Git Log 面板的全部消息,内核只转发不解读——见
+    /// `extensions::git_log::Message`。
+    GitLog(git_log::Message),
     /// 项目:当前项目验收次数刷新结果(项目卡"N 次验收"副行用)。
     AcceptanceCountLoaded(ProjectId, Option<u64>),
     /// 浏览器:收藏夹"全局+当前项目"合集刷新结果(项目打开/切换,或一次
@@ -1454,30 +1444,10 @@ pub struct App {
     /// 是否已经收到过至少一次 `HomeRecentsLoaded`——区分"还在加载"与"加载完
     /// 但结果为空"，两张卡据此决定画"加载中…"还是空状态文案(spec §4)。
     home_recents_loaded: bool,
-    /// Git 提交图缓存,`LeftIconSelect(LeftView::GitLog)` 激活、`git_watch`
-    /// 检测到 `.git` 引用变化(Plan 1 D4)、或点"加载更多"时重建(见
-    /// `App::spawn_git_log_refresh`)。
-    git_log_cache: Option<git_log::GitLogSnapshot>,
-    /// 上一次 `git_log::build` 失败的错误文案(`None`=未出错)。
-    git_log_error: Option<String>,
-    /// 当前选中查看详情的提交(`None`=没选中,详情区不显示)。项目切换/
-    /// 快照重建时随 `git_log_cache` 一起清空。
-    git_log_selected: Option<git2::Oid>,
-    /// 选中提交的详情异步加载结果。`None` 有两种含义:没选中,或选中了但
-    /// 还在加载中——两者靠 `git_log_selected.is_some()` 区分(渲染层:
-    /// selected 有值但 detail 是 None → 画"加载中…")。
-    git_log_detail: Option<Result<git_log::CommitDetail, String>>,
-    /// 最近一次派发的 `git_log::build` 请求(repo_path, max_count)——
-    /// `GitLogSnapshotLoaded` 落地时核对是否还对得上"现在真正需要的",不是
-    /// 就丢弃(项目已经又切走,或紧接着发起了另一次请求)。`None`=当前没有
-    /// 在途请求;渲染层拿它算"是不是该显示加载中/刷新中"(见 `git_log::view`
-    /// 的 `loading` 参数)。
-    git_log_pending: Option<(PathBuf, usize)>,
-    /// `GitLogLoadMore` 请求的新快照落地后要恢复的选中提交——"加载更多"
-    /// 不该打断用户正在看的详情,但异步落地前 `spawn_git_log_refresh` 已经
-    /// 把 `git_log_selected` 清空了,所以先记下来,快照真正换新后在
-    /// `GitLogSnapshotLoaded` 里补一次 `GitLogSelectCommit`。
-    git_log_restore_after_load: Option<git2::Oid>,
+    /// Git Log 面板状态——自己的 `Message`/`update`/`view`,见
+    /// `extensions::git_log`。`App` 级共享、不按项目分(现状,纯重构不改,
+    /// 见 `sync_git_log_to_active_project`)。
+    git_log: git_log::State,
     /// Todo 面板本地元数据（派发记录/计划时间/完成时间），启动时
     /// `todo_meta::load()` 读盘，每次变更后 `todo_meta::save` 落盘。
     todo_meta: todo_meta::TodoMetaState,
@@ -2988,12 +2958,7 @@ impl App {
             home_recent_files: Vec::new(),
             home_recent_conversations: Vec::new(),
             home_recents_loaded: false,
-            git_log_cache: None,
-            git_log_error: None,
-            git_log_selected: None,
-            git_log_detail: None,
-            git_log_pending: None,
-            git_log_restore_after_load: None,
+            git_log: git_log::State::default(),
             todo_meta: todo_meta::load(),
         }
     }
@@ -3545,64 +3510,35 @@ impl App {
         }
     }
 
-    /// 对当前项目异步重建 Git Log 快照,`max_count` 由调用方决定(打开面板/
-    /// 引用变化用 `git_log::DEFAULT_MAX_COMMITS`,"加载更多"用当前值 +
-    /// `git_log::LOAD_MORE_STEP`)。`git_log::build` 是同步的 `gleisbau`
-    /// revwalk + 分支归属分析——早先假设"通常量级下毫秒级",但真实仓库提
-    /// 交数/分支数上去后能到秒级,摆在 `update()` 里同步跑会直接冻结 UI
-    /// 线程(dogfooding 反馈:面板打开有几秒卡顿)。改用 `spawn_blocking` +
-    /// `EventLoopProxy` 回投,套路跟 `GitLogSelectCommit`/`commit_detail`
-    /// 一致。派发前先记下这次请求(repo_path, max_count)到
-    /// `git_log_pending`,`GitLogSnapshotLoaded` 落地时核对还对不对得上、
-    /// 不对就丢弃(旧请求被项目切换/新请求取代)。选中的提交/详情绑定着
-    /// "当前"这份快照,请求一发出就失效,不等新快照到——旧图留着继续画,
-    /// 只是选中态/详情先清,避免展示对不上的 diff。
-    fn spawn_git_log_refresh(&mut self, repo_path: &std::path::Path, max_count: usize) {
-        self.git_log_selected = None;
-        self.git_log_detail = None;
-        self.git_log_restore_after_load = None;
-        let repo_path = repo_path.to_path_buf();
-        self.git_log_pending = Some((repo_path.clone(), max_count));
-        let proxy = self.proxy.clone();
-        self.handle.spawn(async move {
-            let repo_path2 = repo_path.clone();
-            let result =
-                tokio::task::spawn_blocking(move || git_log::build(&repo_path2, max_count))
-                    .await
-                    .unwrap_or_else(|e| Err(format!("Git Log 加载任务失败: {e}")));
-            let _ = proxy.send_event(Message::GitLogSnapshotLoaded(repo_path, max_count, result));
-        });
-    }
-
-    /// 保证 `git_log_cache` 跟得上"现在应该看哪个项目"——`git_log_cache`/
-    /// `git_log_selected`/`git_log_detail` 是 `App` 级字段,不是每个项目
-    /// 各自一份(不像 `Workspace.worktrees`),所以面板打开时(`LeftIconSelect`)
-    /// 和切项目页签时(`ProjectTabSwitch`)都得调这个方法对齐一次,否则
-    /// Git Log 面板开着的状态下切页签,提交图会停在上一个项目不动,而同一
-    /// 面板里的 worktree 速览条(`ws.worktrees` 是按项目取的)却已经跳到新
-    /// 项目——两者对不上。缓存已经是当前项目的路径就不动(避免每次切页签
-    /// 都重算一遍),路径不一致就重建,没有项目就清空。只在 `left_view ==
-    /// LeftView::GitLog` 时调用才有意义。
+    /// 保证 `git_log` 状态跟得上"现在应该看哪个项目"——`git_log: State`
+    /// 是 `App` 级字段,不是每个项目各自一份(不像 `Workspace.worktrees`),
+    /// 所以面板打开时(`LeftIconSelect`)和切项目页签时(`ProjectTabSwitch`)
+    /// 都得调这个方法对齐一次,否则 Git Log 面板开着的状态下切页签,提交图
+    /// 会停在上一个项目不动,而同一面板里的 worktree 速览条(`ws.worktrees`
+    /// 是按项目取的)却已经跳到新项目——两者对不上。缓存已经是当前项目的
+    /// 路径就不动(避免每次切页签都重算一遍),路径不一致就重建,没有项目
+    /// 就清空。只在 `left_view == LeftView::GitLog` 时调用才有意义。
     fn sync_git_log_to_active_project(&mut self) {
         let path = self
             .active_workspace()
             .and_then(|ws| ws.active_project_path());
         match path {
-            Some(p)
-                if self
-                    .git_log_cache
-                    .as_ref()
-                    .is_none_or(|c| c.repo_path() != p) =>
-            {
-                self.spawn_git_log_refresh(&p, git_log::DEFAULT_MAX_COMMITS);
+            Some(p) if self.git_log.cache_repo_path() != Some(p.as_path()) => {
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                let emit = move |m| {
+                    let _ = proxy.send_event(Message::GitLog(m));
+                };
+                git_log::request_refresh(
+                    &mut self.git_log,
+                    p,
+                    git_log::DEFAULT_MAX_COMMITS,
+                    &handle,
+                    emit,
+                );
             }
             None => {
-                self.git_log_cache = None;
-                self.git_log_error = None;
-                self.git_log_selected = None;
-                self.git_log_detail = None;
-                self.git_log_pending = None;
-                self.git_log_restore_after_load = None;
+                self.git_log = git_log::State::default();
             }
             _ => {}
         }
@@ -4685,101 +4621,55 @@ impl App {
                 // 没变。项目 id 匹配之外再核一次路径,双保险防状态漂移。
                 if relevance == git_watch::Relevance::GitRefs
                     && self.active_project_id == Some(project_id)
-                    && let Some(repo_path) = self
-                        .git_log_cache
-                        .as_ref()
-                        .map(|c| c.repo_path().to_path_buf())
+                    && let Some(repo_path) = self.git_log.cache_repo_path().map(|p| p.to_path_buf())
                     && self
                         .active_workspace()
                         .and_then(|ws| ws.active_project_path())
                         .as_deref()
                         == Some(repo_path.as_path())
                 {
-                    let max = self
-                        .git_log_cache
-                        .as_ref()
-                        .map(|c| c.max_count())
-                        .unwrap_or(git_log::DEFAULT_MAX_COMMITS);
-                    self.spawn_git_log_refresh(&repo_path, max);
+                    // 引用变化只是要"内容不变、重新拉一遍",窗口大小维持原样——
+                    // 用 `cache_max_count()`(读当前缓存的 max_count),不是"加载
+                    // 更多"专用、会 `+LOAD_MORE_STEP` 的 `next_load_more_count()`。
+                    let max = self.git_log.cache_max_count();
+                    let handle = self.handle.clone();
+                    let proxy = self.proxy.clone();
+                    let emit = move |m| {
+                        let _ = proxy.send_event(Message::GitLog(m));
+                    };
+                    git_log::request_refresh(&mut self.git_log, repo_path, max, &handle, emit);
                 }
             }
-            Message::GitLogSelectCommit(oid) => {
-                self.git_log_selected = Some(oid);
-                self.git_log_detail = None;
-                let Some(repo_path) = self
-                    .git_log_cache
-                    .as_ref()
-                    .map(|c| c.repo_path().to_path_buf())
-                else {
-                    return;
-                };
-                let proxy = self.proxy.clone();
-                self.handle.spawn(async move {
-                    let repo_path2 = repo_path.clone();
-                    let result = tokio::task::spawn_blocking(move || {
-                        git_log::commit_detail(&repo_path2, oid)
-                    })
-                    .await
-                    .unwrap_or_else(|e| Err(format!("详情加载任务失败: {e}")));
-                    let _ = proxy.send_event(Message::GitLogDetailLoaded(repo_path, oid, result));
-                });
-            }
-            Message::GitLogDetailLoaded(repo_path, oid, result) => {
-                let still_current = self.git_log_cache.as_ref().map(|c| c.repo_path())
-                    == Some(repo_path.as_path())
-                    && self.git_log_selected == Some(oid);
-                if still_current {
-                    self.git_log_detail = Some(result);
-                }
-                // 否则:项目已切换,或用户点了别的提交——这份结果过期了,丢弃。
-            }
-            Message::GitLogSnapshotLoaded(repo_path, max_count, result) => {
-                let still_pending = self
-                    .git_log_pending
-                    .as_ref()
-                    .map(|(p, m)| (p.as_path(), *m))
-                    == Some((repo_path.as_path(), max_count));
-                if !still_pending {
-                    // 项目已经又切走,或紧接着发起了另一次请求(比如快速连点
-                    // 两次"加载更多")——这份结果过期了,丢弃,不能覆盖比它
-                    // 更新的状态。
-                    return;
-                }
-                self.git_log_pending = None;
-                match result {
-                    Ok(snapshot) => {
-                        self.git_log_cache = Some(snapshot);
-                        self.git_log_error = None;
-                    }
-                    Err(err) => {
-                        self.git_log_cache = None;
-                        self.git_log_error = Some(err);
-                    }
-                }
-                if let Some(oid) = self.git_log_restore_after_load.take() {
-                    self.update(Message::GitLogSelectCommit(oid));
-                }
-            }
-            Message::GitLogLoadMore => {
+            Message::GitLog(git_log::Message::LoadMore) => {
                 let Some(path) = self
                     .active_workspace()
                     .and_then(|ws| ws.active_project_path())
                 else {
                     return;
                 };
-                let next = self
-                    .git_log_cache
-                    .as_ref()
-                    .map(|c| c.max_count() + git_log::LOAD_MORE_STEP)
-                    .unwrap_or(git_log::DEFAULT_MAX_COMMITS);
-                // spawn_git_log_refresh 会立即清掉 selected/detail——"加载
-                // 更多"不该打断用户正在看的详情,所以先记下选中的提交,新
-                // 快照真正落地(`GitLogSnapshotLoaded`)后再补一次
-                // `GitLogSelectCommit` 还原(这里还拿不到新快照,不能提前
-                // 还原)。
-                let selected = self.git_log_selected;
-                self.spawn_git_log_refresh(&path, next);
-                self.git_log_restore_after_load = selected;
+                let next = self.git_log.next_load_more_count();
+                // `request_refresh` 内部会把 `selected` 清空,所以必须在调用它之前
+                // 先读出来,落地新快照后(`update()` 处理 `SnapshotLoaded` 那支)才能
+                // 据此还原选中态——镜像现有 `Message::GitLogLoadMore` 分支"先记
+                // selected,刷新,再把 restore_after_load 设回去"的顺序。
+                let selected = self.git_log.selected();
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                let emit = move |m| {
+                    let _ = proxy.send_event(Message::GitLog(m));
+                };
+                git_log::request_refresh(&mut self.git_log, path, next, &handle, emit);
+                self.git_log.set_restore_after_load(selected);
+            }
+            Message::GitLog(msg) => {
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                let emit = move |m| {
+                    let _ = proxy.send_event(Message::GitLog(m));
+                };
+                if let Some(next) = git_log::update(&mut self.git_log, msg, &handle, emit) {
+                    self.update(Message::GitLog(next));
+                }
             }
             Message::AcceptanceCountLoaded(project_id, n) => {
                 self.with_project(project_id, move |ws, _io| {
@@ -7045,13 +6935,7 @@ fn left_panel_area<'a>(
             .into()
         }
         LeftView::Web => browser_pane(ws, Length::Fill, zone_pane_border(zone, ac)),
-        LeftView::GitLog => git_log::view(
-            app.git_log_cache.as_ref(),
-            app.git_log_error.as_deref(),
-            app.git_log_selected,
-            app.git_log_detail.as_ref(),
-            app.git_log_pending.is_some(),
-        ),
+        LeftView::GitLog => git_log::view(&app.git_log).map(Message::GitLog),
         LeftView::Todo => todo_pane(app, ws, Length::Fill, zone_pane_border(zone, ac)),
     };
     if maximized {
