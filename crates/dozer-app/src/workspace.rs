@@ -29,10 +29,10 @@
 //!   把 `Message` 送回 UI 线程；`main.rs` 的 `ApplicationHandler::user_event`
 //!   收到后调用 `app.update(..)` 并请求重绘。反方向（UI → tokio）
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
-use crate::bookmarks;
 use crate::chrome_style;
 use crate::conversation::{self, ConversationMeta};
 use crate::delivery::{self, FileChange, FileGitStatus, WorktreeInfo};
+use crate::extensions::browser;
 use crate::extensions::git_log;
 use crate::git_watch;
 use crate::goal::{self, Goal};
@@ -41,7 +41,7 @@ use crate::icons::IconKind;
 use crate::layout;
 use crate::open_projects;
 use crate::osc::{OscEvent, OscScanner};
-use crate::preview::{AddrTarget, PreviewPane, TabKind, WebviewSpec, is_editable_extension};
+use crate::preview::{PreviewPane, TabKind, WebviewSpec, is_editable_extension};
 use crate::preview_state;
 use crate::project::{self, FileTree};
 use crate::term_model::TerminalModel;
@@ -55,9 +55,7 @@ use crate::usage;
 use crate::workspace_font;
 use crate::workspace_geometry;
 use dozer_client::{Client, TermEvent};
-use dozer_core::protocol::{
-    AgentKind, AgentState, BookmarkInfo, BookmarkScope, ProjectInfo, SessionInfo,
-};
+use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 use iced_widget::core::border::Radius;
 use iced_widget::core::font::Weight;
 use iced_widget::core::mouse;
@@ -1051,8 +1049,6 @@ pub enum Message {
     TermTabScroll(bool),
     /// 预览 tab 栏箭头翻页，语义同 `TermTabScroll`。
     PreviewTabScroll(bool),
-    /// 浏览器 tab 栏箭头翻页，语义同 `TermTabScroll`。
-    BrowserTabScroll(bool),
     /// 终端左键按下：在视口格 `(col, row)` 起新选区（`right` = 按点在
     /// 格子右半）。
     TermSelStart { col: usize, row: usize, right: bool },
@@ -1081,26 +1077,9 @@ pub enum Message {
     PreviewEditConfirmDiscard,
     /// 预览编辑弹层二次确认:"取消"(回到编辑态)。
     PreviewEditConfirmCancel,
-    /// 浏览器:打开 URL 为新网页 tab——落在独立的 `Workspace::browser` 上,
-    /// 不产生任何文件预览 tab(该功能只服务左图标栏"地球"进入的独立浏览器
-    /// 视图)。
-    BrowserOpenUrl(String),
-    /// 浏览器:切换 tab(vec 位置)。
-    BrowserSelectTab(usize),
-    /// 浏览器:关闭 tab(vec 位置)。
-    BrowserCloseTab(usize),
-    /// 浏览器:点击地址栏,进入编辑态。
-    BrowserAddrClick,
-    /// 浏览器:地址栏编辑事件。
-    BrowserAddrEvent(AddrEvent),
-    /// 浏览器:点击地址栏星标,开合"加入/移出收藏"小菜单。
-    BrowserStarClick,
-    /// 浏览器:星标菜单里点"加入全局/本项目收藏"。
-    BrowserBookmarkAdd(BookmarkScope),
-    /// 浏览器:星标菜单/收藏面板里点"移出收藏"(按 dozerd 记录 id)。
-    BrowserBookmarkRemove(i64),
-    /// 浏览器:tab 栏"收藏夹"图标按钮,开合下拉面板。
-    BrowserBookmarksToggle,
+    /// 浏览器面板的全部消息,内核只转发不解读——见
+    /// `extensions::browser::Message`。
+    Browser(browser::Message),
     /// 项目:切换到最近项目。
     ProjectSelect(i64),
     /// 项目:"打开项目…"→ rfd 文件夹选择(main.rs 执行),选中后回送
@@ -1149,13 +1128,6 @@ pub enum Message {
     GitLog(git_log::Message),
     /// 项目:当前项目验收次数刷新结果(项目卡"N 次验收"副行用)。
     AcceptanceCountLoaded(ProjectId, Option<u64>),
-    /// 浏览器:收藏夹"全局+当前项目"合集刷新结果(项目打开/切换,或一次
-    /// 增删收藏之后的重新拉取)。
-    BrowserBookmarksLoaded(ProjectId, Vec<BookmarkInfo>),
-    /// 浏览器:一次 `AddBookmark`/`RemoveBookmark` 往返完成——无论成功
-    /// 失败都触发一次 `BrowserBookmarksLoaded` 式的全量刷新去纠正本地
-    /// 乐观更新;失败时额外把错误文案落进 `browser_error`。
-    BrowserBookmarksMutated(ProjectId, Result<(), String>),
     /// 项目树:右键按下的窗口逻辑坐标(main.rs 原始事件层发,供随后可能
     /// 触发的 `ProjectTreeContextMenu` 定位弹出菜单)。
     RightClickAt { x: f32, y: f32 },
@@ -1465,18 +1437,10 @@ pub struct Workspace {
     preview: PreviewPane,
     /// 预览域错误文案(打开文件失败等), RED 显示在预览栏地址栏下方。
     preview_error: Option<String>,
-    /// 浏览器域状态机:与 `preview` 完全独立的一份 tab/地址栏/webview
-    /// 状态,只承载网页(点左图标栏"地球"进入,不受文件预览影响,反之亦然)。
-    browser: PreviewPane,
-    /// 浏览器域错误文案,语义同 `preview_error`。
-    browser_error: Option<String>,
-    /// 收藏夹本地缓存(全局 + 当前项目合集),`Message::BrowserBookmarksLoaded`
-    /// 落地时整份替换;加入/移出走乐观本地更新,见 `crate::bookmarks`。
-    bookmarks: Vec<BookmarkInfo>,
-    /// 收藏夹下拉面板(tab 栏"收藏夹"图标按钮)开合。
-    browser_bookmarks_open: bool,
-    /// 地址栏星标"加入/移出收藏"小菜单开合。
-    browser_star_menu_open: bool,
+    /// 浏览器面板状态——自己的 `Message`/`update`/`view`,见
+    /// `extensions::browser`。挂在每个 `Workspace` 上(不像 Git Log 挂在
+    /// `App` 上),项目切换靠 `Workspace` 生命周期天然隔离。
+    browser: browser::State,
     /// `dozer://flyfish/__file__` 端点的文件白名单;与 main.rs 的协议
     /// 闭包共享(Arc),打开文件时插入.
     allowed_files: Arc<Mutex<HashSet<PathBuf>>>,
@@ -1519,8 +1483,6 @@ pub struct Workspace {
     term_tab_first: usize,
     /// 预览 tab 栏当前最左可见 tab 序号，语义同 `term_tab_first`。
     preview_tab_first: usize,
-    /// 浏览器 tab 栏当前最左可见 tab 序号，语义同 `term_tab_first`。
-    browser_tab_first: usize,
     /// 项目树当前"选中"行(左键点击或右键命中都会更新),渲染时给该行背景色。
     tree_selected: Option<PathBuf>,
     /// 项目树"文件管理器式"剪贴槽:最近一次"复制"的项(路径,是否目录)。
@@ -1770,7 +1732,17 @@ impl Workspace {
         ws.spawn_project_git_refresh(io);
         ws.spawn_conversations_refresh(io);
         ws.spawn_acceptance_count_refresh(io);
-        ws.spawn_bookmarks_refresh(io);
+        browser::request_bookmarks_refresh(
+            ws.project.as_ref().map(|p| p.id),
+            &io.client,
+            &io.handle,
+            {
+                let proxy = io.proxy.clone();
+                move |m| {
+                    let _ = proxy.send_event(Message::Browser(m));
+                }
+            },
+        );
         ws.start_git_watch(io);
         ws
     }
@@ -1815,8 +1787,7 @@ impl Workspace {
             pending: HashMap::new(),
             preview: PreviewPane::default(),
             preview_error: None,
-            browser: PreviewPane::default(),
-            browser_error: None,
+            browser: browser::State::default(),
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
             acceptance: None,
             review: None,
@@ -1835,10 +1806,6 @@ impl Workspace {
             git_watch: None,
             term_tab_first: 0,
             preview_tab_first: 0,
-            browser_tab_first: 0,
-            bookmarks: Vec::new(),
-            browser_bookmarks_open: false,
-            browser_star_menu_open: false,
             tree_selected: None,
             tree_clipboard: None,
             tree_error: None,
@@ -2170,21 +2137,6 @@ impl Workspace {
         });
     }
 
-    /// 异步拉取"全局 + 当前项目"收藏夹合集 → `BrowserBookmarksLoaded`。
-    fn spawn_bookmarks_refresh(&self, io: &ShellIo) {
-        let Some(p) = &self.project else { return };
-        let project_id = p.id;
-        let client = io.client.clone();
-        let proxy = io.proxy.clone();
-        io.handle.spawn(async move {
-            let bookmarks = client
-                .list_bookmarks(Some(project_id))
-                .await
-                .unwrap_or_default();
-            let _ = proxy.send_event(Message::BrowserBookmarksLoaded(project_id, bookmarks));
-        });
-    }
-
     /// 本 `Workspace` 归属的项目 id。所有"发起时已知项目、结果晚些才回来"的
     /// 异步任务都要带上它,让 [`App::with_project`] 能投回原主(见
     /// [`ProjectId`])。`None` 只可能出现在 `ProjectOpened` 单条消息内部那个
@@ -2304,7 +2256,17 @@ impl Workspace {
         self.spawn_project_git_refresh(io);
         self.spawn_conversations_refresh(io);
         self.spawn_acceptance_count_refresh(io);
-        self.spawn_bookmarks_refresh(io);
+        browser::request_bookmarks_refresh(
+            self.project.as_ref().map(|p| p.id),
+            &io.client,
+            &io.handle,
+            {
+                let proxy = io.proxy.clone();
+                move |m| {
+                    let _ = proxy.send_event(Message::Browser(m));
+                }
+            },
+        );
         // D4:新开的项目页签也要有实时刷新——此前只有跨重启恢复
         // (`from_restore`)/`Stub` 促成时会启动 watcher,直接开新项目这条最
         // 常见的路径反而漏了,退化成"只在开项目/回合结束时刷新"(code
@@ -4175,15 +4137,6 @@ impl App {
                     }
                 });
             }
-            Message::BrowserTabScroll(right) => {
-                self.with_focused_project(|ws, _io| {
-                    if right {
-                        ws.browser_tab_first = ws.browser_tab_first.saturating_add(2);
-                    } else {
-                        ws.browser_tab_first = ws.browser_tab_first.saturating_sub(2);
-                    }
-                });
-            }
             Message::TermSelStart { col, row, right } => {
                 self.with_focused_project(|ws, _io| {
                     if let Some(tab) = ws.tabs.get_mut(ws.active) {
@@ -4271,129 +4224,52 @@ impl App {
             Message::PreviewEditConfirmCancel => {
                 self.with_focused_project(|ws, _io| ws.preview_edit_confirm_cancel());
             }
-            Message::BrowserOpenUrl(url) => {
-                self.with_focused_project(move |ws, _io| {
-                    ws.browser_error = None;
-                    ws.browser.open_url(url);
-                    ws.browser_tab_first = 0;
-                });
-            }
-            Message::BrowserSelectTab(idx) => {
-                self.with_focused_project(|ws, _io| ws.browser.select(idx));
-            }
-            Message::BrowserCloseTab(idx) => {
-                self.with_focused_project(|ws, _io| {
-                    ws.browser.close(idx);
-                    ws.browser_tab_first = 0;
-                });
-            }
-            Message::BrowserAddrClick => {
-                self.with_focused_project(|ws, _io| {
-                    ws.browser_error = None;
-                    ws.browser.addr_begin();
-                });
-            }
-            Message::BrowserAddrEvent(ev) => {
-                // 地址栏回车解析出网址时要走一遍完整的 `BrowserOpenUrl` 处理,
-                // 而 `self.update(..)` 不能在 `with_focused_project` 的闭包里调(闭包正握着
-                // 从 `self` 借出去的 `&mut Workspace`),所以先把结果攒出来,
-                // 出了闭包再派发。
-                let mut open_url = None;
-                self.with_focused_project(|ws, _io| match ev {
-                    AddrEvent::Text(s) => ws.browser.addr_text(&s),
-                    AddrEvent::Backspace => ws.browser.addr_backspace(),
-                    AddrEvent::Cancel => ws.browser.addr_cancel(),
-                    AddrEvent::Submit => match ws.browser.addr_submit() {
-                        // 浏览器只承载网页 tab,地址栏解析出的本地路径不受支持
-                        // (与文件预览彻底独立,不借它的文件打开能力)。
-                        Some(AddrTarget::File(_)) => {
-                            ws.browser_error = Some("浏览器不支持打开本地文件".to_string());
-                        }
-                        Some(AddrTarget::Url(url)) => open_url = Some(url),
-                        None => {}
-                    },
-                });
-                if let Some(url) = open_url {
-                    self.update(Message::BrowserOpenUrl(url));
-                }
-            }
-            Message::BrowserStarClick => {
-                self.with_focused_project(|ws, _io| {
-                    ws.browser_error = None;
-                    ws.browser_star_menu_open = !ws.browser_star_menu_open;
-                });
-            }
-            Message::BrowserBookmarksToggle => {
-                self.with_focused_project(|ws, _io| {
-                    ws.browser_bookmarks_open = !ws.browser_bookmarks_open;
-                });
-            }
-            Message::BrowserBookmarkAdd(scope) => {
-                self.with_focused_project(|ws, io| {
-                    ws.browser_star_menu_open = false;
-                    let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
-                        return;
+            Message::Browser(browser::Message::BookmarksLoaded(pid, bookmarks)) => {
+                self.with_project(pid, move |ws, io| {
+                    let handle = io.handle.clone();
+                    let client = io.client.clone();
+                    let proxy = io.proxy.clone();
+                    let emit = move |m| {
+                        let _ = proxy.send_event(Message::Browser(m));
                     };
-                    let Some(tab) = ws.browser.tabs().get(ws.browser.active_idx()) else {
-                        return;
-                    };
-                    let TabKind::Web { url } = tab.kind.clone() else {
-                        return;
-                    };
-                    let title = tab.title.clone();
-                    let target_project_id = match scope {
-                        BookmarkScope::Global => None,
-                        BookmarkScope::Project => Some(project_id),
-                    };
-                    let created_ms = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0);
-                    bookmarks::optimistic_add(
-                        &mut ws.bookmarks,
-                        scope,
-                        target_project_id,
-                        &url,
-                        &title,
-                        created_ms,
+                    browser::update(
+                        &mut ws.browser,
+                        browser::Message::BookmarksLoaded(pid, bookmarks),
+                        Some(pid),
+                        &client,
+                        &handle,
+                        emit,
                     );
-                    let client = io.client.clone();
-                    let proxy = io.proxy.clone();
-                    io.handle.spawn(async move {
-                        let res = client
-                            .add_bookmark(scope, target_project_id, &url, &title)
-                            .await
-                            .map_err(|e| e.to_string());
-                        let _ = proxy.send_event(Message::BrowserBookmarksMutated(project_id, res));
-                    });
                 });
             }
-            Message::BrowserBookmarkRemove(id) => {
-                self.with_focused_project(|ws, io| {
-                    ws.browser_star_menu_open = false;
-                    let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
-                        return;
+            Message::Browser(browser::Message::BookmarksMutated(pid, res)) => {
+                self.with_project(pid, move |ws, io| {
+                    let handle = io.handle.clone();
+                    let client = io.client.clone();
+                    let proxy = io.proxy.clone();
+                    let emit = move |m| {
+                        let _ = proxy.send_event(Message::Browser(m));
                     };
-                    bookmarks::optimistic_remove(&mut ws.bookmarks, id);
+                    browser::update(
+                        &mut ws.browser,
+                        browser::Message::BookmarksMutated(pid, res),
+                        Some(pid),
+                        &client,
+                        &handle,
+                        emit,
+                    );
+                });
+            }
+            Message::Browser(msg) => {
+                self.with_focused_project(|ws, io| {
+                    let project_id = ws.project.as_ref().map(|p| p.id);
                     let client = io.client.clone();
+                    let handle = io.handle.clone();
                     let proxy = io.proxy.clone();
-                    io.handle.spawn(async move {
-                        let res = client.remove_bookmark(id).await.map_err(|e| e.to_string());
-                        let _ = proxy.send_event(Message::BrowserBookmarksMutated(project_id, res));
-                    });
-                });
-            }
-            Message::BrowserBookmarksLoaded(project_id, bookmarks) => {
-                self.with_project(project_id, move |ws, _io| {
-                    ws.bookmarks = bookmarks;
-                });
-            }
-            Message::BrowserBookmarksMutated(project_id, res) => {
-                self.with_project(project_id, move |ws, io| {
-                    if let Err(msg) = res {
-                        ws.browser_error = Some(msg);
-                    }
-                    ws.spawn_bookmarks_refresh(io);
+                    let emit = move |m| {
+                        let _ = proxy.send_event(Message::Browser(m));
+                    };
+                    browser::update(&mut ws.browser, msg, project_id, &client, &handle, emit);
                 });
             }
             Message::ProjectSelect(id) => {
@@ -6934,7 +6810,13 @@ fn left_panel_area<'a>(
             .width(Length::Fill)
             .into()
         }
-        LeftView::Web => browser_pane(ws, Length::Fill, zone_pane_border(zone, ac)),
+        LeftView::Web => browser::view(
+            &ws.browser,
+            ws.project.as_ref().map(|p| p.id),
+            Length::Fill,
+            zone_pane_border(zone, ac),
+        )
+        .map(Message::Browser),
         LeftView::GitLog => git_log::view(&app.git_log).map(Message::GitLog),
         LeftView::Todo => todo_pane(app, ws, Length::Fill, zone_pane_border(zone, ac)),
     };
@@ -8146,375 +8028,6 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
 }
 
-/// 浏览器栏:左图标栏"地球"进入的独立浏览器,tab 栏 + 地址栏 + 内容,
-/// 读写完全独立的 `ws.browser`——文件预览面板已不再有地址栏,浏览器是
-/// 唯一还能输入网址打开网页的入口,也不受文件预览的 tab 状态影响。
-fn browser_pane(
-    ws: &Workspace,
-    width: Length,
-    outer: Border,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let region = chrome_style::browser_pane();
-    let widths: Vec<f32> = ws
-        .browser
-        .tabs()
-        .iter()
-        .map(|t| preview_tab_display_width(&t.title))
-        .collect();
-    let (first, can_left, can_right) = tab_window(
-        &widths,
-        4.0,
-        workspace_geometry::tab_bar_avail_px(),
-        ws.browser_tab_first,
-    );
-
-    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = ws
-        .browser
-        .tabs()
-        .iter()
-        .enumerate()
-        .filter(|(idx, _)| *idx >= first)
-        .map(|(idx, tab)| {
-            let active = idx == ws.browser.active_idx();
-            let select = button(lh(text(tab.title.clone())
-                .size(workspace_font::subtitle())
-                .color(theme::CREAM)))
-            .on_press(Message::BrowserSelectTab(idx))
-            .style(|_t, _s| button::Style {
-                background: None,
-                text_color: theme::CREAM,
-                ..button::Style::default()
-            });
-            let close = button(lh(text("×").size(workspace_font::body()).color(theme::DIM)))
-                .on_press(Message::BrowserCloseTab(idx))
-                .style(|_t, _s| button::Style {
-                    background: None,
-                    text_color: theme::DIM,
-                    ..button::Style::default()
-                });
-            container(
-                row![select, close]
-                    .spacing(2)
-                    .align_y(iced_widget::core::Alignment::Center),
-            )
-            .padding([2, 4])
-            .style(move |_t: &iced_widget::Theme| {
-                if active {
-                    container::Style {
-                        background: Some(theme::CARD.into()),
-                        border: Border {
-                            color: theme::BORDER,
-                            width: 1.0,
-                            radius: 6.0.into(),
-                        },
-                        ..container::Style::default()
-                    }
-                } else {
-                    container::Style::default()
-                }
-            })
-            .into()
-        })
-        .collect();
-    let tabs_row = row(items).spacing(4);
-    let clipped = container(tabs_row).width(Length::Fill).clip(true);
-    let left_arrow = tab_arrow_button(
-        icons::IconKind::ChevronLeft,
-        can_left,
-        Message::BrowserTabScroll(false),
-    );
-    let right_arrow = tab_arrow_button(
-        icons::IconKind::ChevronRight,
-        can_right,
-        Message::BrowserTabScroll(true),
-    );
-    let tab_bar = row![left_arrow, right_arrow, clipped]
-        .spacing(4)
-        .align_y(iced_widget::core::Alignment::Center);
-
-    let editing = ws.browser.addr_editing();
-    let addr_text = if editing {
-        format!("{}▏", ws.browser.addr_buffer())
-    } else {
-        "输入网址".to_string()
-    };
-    let addr = button(lh(text(addr_text)
-        .size(workspace_font::body())
-        .color(if editing { theme::CREAM } else { theme::DIM })))
-    .on_press(Message::BrowserAddrClick)
-    .width(Length::Fill)
-    .style(move |_t, _s| button::Style {
-        background: Some(theme::TERM_BG.into()),
-        text_color: theme::CREAM,
-        border: Border {
-            color: if editing { theme::GOLD } else { theme::BORDER },
-            width: 1.0,
-            radius: 2.0.into(),
-        },
-        ..button::Style::default()
-    });
-
-    let addr_row = row![
-        addr,
-        browser_star_button(ws),
-        browser_bookmarks_toggle_button()
-    ]
-    .spacing(4)
-    .align_y(iced_widget::core::Alignment::Center);
-
-    let mut content = column![tab_bar, tab_divider(), addr_row].spacing(region.gap);
-
-    if ws.browser_star_menu_open {
-        content = content.push(browser_star_menu_popup(ws));
-    }
-    if ws.browser_bookmarks_open {
-        content = content.push(browser_bookmarks_panel(ws));
-    }
-
-    if let Some(err) = &ws.browser_error {
-        content = content.push(lh(text(format!("⚠ {err}"))
-            .size(workspace_font::body())
-            .color(theme::RED)));
-    }
-
-    if ws.browser.tabs().is_empty() {
-        content = content.push(
-            container(lh(text("暂无网页——在地址栏输入网址")
-                .size(workspace_font::subtitle())
-                .color(theme::DIM)))
-            .width(Length::Fill)
-            .height(Length::Fill),
-        );
-    }
-
-    container(content.padding(region.padding))
-        .width(width)
-        .height(Length::Fill)
-        .style(move |_theme: &iced_widget::Theme| container::Style {
-            background: region.background.map(Into::into),
-            border: outer,
-            ..container::Style::default()
-        })
-        .into()
-}
-
-/// 当前浏览器激活 tab 若是网页,取其 URL;文件/验收 tab 返回 `None`
-/// (星标按钮据此判定是否可点、菜单据此判定收藏状态)。
-fn current_browser_url(ws: &Workspace) -> Option<String> {
-    match ws
-        .browser
-        .tabs()
-        .get(ws.browser.active_idx())
-        .map(|t| &t.kind)
-    {
-        Some(TabKind::Web { url }) => Some(url.clone()),
-        _ => None,
-    }
-}
-
-/// 地址栏星标:当前 URL 在全局/本项目任一边已收藏则 GOLD 实心,否则
-/// DIM;非网页 tab(文件/验收)禁用。
-fn browser_star_button(
-    ws: &Workspace,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let url = current_browser_url(ws);
-    let starred = url
-        .as_ref()
-        .map(|u| {
-            bookmarks::bookmark_status(&ws.bookmarks, u, ws.project.as_ref().map(|p| p.id))
-                .is_bookmarked()
-        })
-        .unwrap_or(false);
-    let color = if starred { theme::GOLD } else { theme::DIM };
-    let mut btn = button(icons::view(
-        icons::IconKind::Star,
-        crate::icon_size::row(),
-        color,
-    ))
-    .width(Length::Fixed(crate::workspace_geometry::tab_button_size()))
-    .height(Length::Fixed(crate::workspace_geometry::tab_button_size()))
-    .padding(0)
-    .style(move |_t, _s| button::Style {
-        background: None,
-        text_color: color,
-        ..button::Style::default()
-    });
-    if url.is_some() {
-        btn = btn.on_press(Message::BrowserStarClick);
-    }
-    btn.into()
-}
-
-/// tab 栏"收藏夹"下拉面板触发按钮,颜色恒定(不像星标那样带收藏状态)。
-fn browser_bookmarks_toggle_button<'a>()
--> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    button(icons::view(
-        icons::IconKind::Bookmark,
-        crate::icon_size::row(),
-        theme::DIM,
-    ))
-    .on_press(Message::BrowserBookmarksToggle)
-    .width(Length::Fixed(crate::workspace_geometry::tab_button_size()))
-    .height(Length::Fixed(crate::workspace_geometry::tab_button_size()))
-    .padding(0)
-    .style(|_t, _s| button::Style {
-        background: None,
-        text_color: theme::DIM,
-        ..button::Style::default()
-    })
-    .into()
-}
-
-fn bookmark_menu_row(
-    label: String,
-    msg: Message,
-) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
-    button(lh(text(label)
-        .size(workspace_font::body())
-        .color(theme::CREAM)))
-    .on_press(msg)
-    .width(Length::Fill)
-    .padding([6, 12])
-    .style(|_t: &iced_widget::Theme, _s| button::Style {
-        background: None,
-        text_color: theme::CREAM,
-        ..button::Style::default()
-    })
-    .into()
-}
-
-/// 星标小菜单:未收藏显示"加入…",已收藏显示"移出…"(打勾态)。当前
-/// tab 非网页时(`current_browser_url` 返回 `None`)不该能弹出这个菜单
-/// (`browser_star_button` 已经不给非网页 tab 挂 `on_press`),这里仍防御
-/// 性处理为空内容,不 panic。
-fn browser_star_menu_popup(
-    ws: &Workspace,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let Some(url) = current_browser_url(ws) else {
-        return column![].into();
-    };
-    let project_id = ws.project.as_ref().map(|p| p.id);
-    let status = bookmarks::bookmark_status(&ws.bookmarks, &url, project_id);
-
-    let mut col = column![match status.global {
-        Some(id) => bookmark_menu_row(
-            "移出全局收藏".to_string(),
-            Message::BrowserBookmarkRemove(id)
-        ),
-        None => bookmark_menu_row(
-            "加入全局收藏".to_string(),
-            Message::BrowserBookmarkAdd(BookmarkScope::Global)
-        ),
-    }]
-    .spacing(2);
-
-    if project_id.is_some() {
-        col = col.push(match status.project {
-            Some(id) => bookmark_menu_row(
-                "移出本项目收藏".to_string(),
-                Message::BrowserBookmarkRemove(id),
-            ),
-            None => bookmark_menu_row(
-                "加入本项目收藏".to_string(),
-                Message::BrowserBookmarkAdd(BookmarkScope::Project),
-            ),
-        });
-    }
-
-    container(col)
-        .padding(6)
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::CARD.into()),
-            border: Border {
-                color: theme::BORDER,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..container::Style::default()
-        })
-        .into()
-}
-
-/// 一组收藏条目:标题(点击新开 tab)+ `×` 删除按钮,风格照抄 tab 关闭
-/// 按钮。
-fn bookmark_group<'a>(
-    title: &'static str,
-    items: &[&'a BookmarkInfo],
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let mut col = column![lh(text(title)
-        .size(workspace_font::subtitle())
-        .color(theme::DIM))]
-    .spacing(2);
-    for b in items {
-        let open = button(lh(text(b.title.clone())
-            .size(workspace_font::body())
-            .color(theme::CREAM)))
-        .on_press(Message::BrowserOpenUrl(b.url.clone()))
-        .width(Length::Fill)
-        .style(|_t: &iced_widget::Theme, _s| button::Style {
-            background: None,
-            text_color: theme::CREAM,
-            ..button::Style::default()
-        });
-        let remove = button(lh(text("×").size(workspace_font::body()).color(theme::DIM)))
-            .on_press(Message::BrowserBookmarkRemove(b.id))
-            .style(|_t: &iced_widget::Theme, _s| button::Style {
-                background: None,
-                text_color: theme::DIM,
-                ..button::Style::default()
-            });
-        col = col.push(
-            row![open, remove]
-                .spacing(4)
-                .align_y(iced_widget::core::Alignment::Center),
-        );
-    }
-    col.into()
-}
-
-/// 收藏夹下拉面板:分"全局收藏"/"本项目收藏"两组,都为空时显示占位文案。
-fn browser_bookmarks_panel(
-    ws: &Workspace,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let project_id = ws.project.as_ref().map(|p| p.id);
-    let global: Vec<&BookmarkInfo> = ws
-        .bookmarks
-        .iter()
-        .filter(|b| b.scope == BookmarkScope::Global)
-        .collect();
-    let project: Vec<&BookmarkInfo> = ws
-        .bookmarks
-        .iter()
-        .filter(|b| b.scope == BookmarkScope::Project && b.project_id == project_id)
-        .collect();
-
-    let both_empty = global.is_empty() && project.is_empty();
-    let mut col = column![].spacing(6);
-    col = col.push(bookmark_group("全局收藏", &global));
-    if project_id.is_some() {
-        col = col.push(bookmark_group("本项目收藏", &project));
-    }
-    if both_empty {
-        col = col.push(lh(text("暂无收藏")
-            .size(workspace_font::subtitle())
-            .color(theme::DIM)));
-    }
-
-    container(col)
-        .padding(6)
-        .width(Length::Fill)
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::CARD.into()),
-            border: Border {
-                color: theme::BORDER,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..container::Style::default()
-        })
-        .into()
-}
-
 /// 终端栏：表头 + tab 栏 + （可能的错误文案）+ 当前激活 tab 的终端网格。
 fn terminal_pane<'a>(
     app: &'a App,
@@ -9134,7 +8647,8 @@ pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
 }
 
 /// tab 栏下方的 1px 分割线。
-pub(crate) fn tab_divider<'a, M: 'a>() -> Element<'a, M, iced_widget::Theme, iced_widget::Renderer> {
+pub(crate) fn tab_divider<'a, M: 'a>() -> Element<'a, M, iced_widget::Theme, iced_widget::Renderer>
+{
     container(iced_widget::Space::new())
         .width(Length::Fill)
         .height(Length::Fixed(1.0))
@@ -9444,7 +8958,12 @@ pub(crate) fn preview_tab_display_width(title: &str) -> f32 {
 /// - 全部 tab 能放下(总宽<=avail) → first=0, 两端皆不可滚(箭头都变灰)。
 /// - 溢出 → max_first = 最小的 i 使 tabs[i..] 总宽 <= avail(即从 i 起剩余恰好放得下);
 ///   钳制 first 到 [0, max_first]; 左可滚 = first>0; 右可滚 = first<max_first。
-pub(crate) fn tab_window(widths: &[f32], gap: f32, avail: f32, first: usize) -> (usize, bool, bool) {
+pub(crate) fn tab_window(
+    widths: &[f32],
+    gap: f32,
+    avail: f32,
+    first: usize,
+) -> (usize, bool, bool) {
     let n = widths.len();
     if n == 0 {
         return (0, false, false);

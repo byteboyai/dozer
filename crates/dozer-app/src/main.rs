@@ -1,5 +1,4 @@
 mod assets;
-mod bookmarks;
 mod chrome_style;
 mod clipboard_image;
 mod conversation;
@@ -696,7 +695,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     // 罕见,谁先建的编辑态谁优先没有实际冲突场景,这个顺序只是
                     // 一个确定性兜底)。
                     let message = if to_browser {
-                        Message::BrowserAddrEvent(ev)
+                        Message::Browser(extensions::browser::Message::AddrEvent(ev))
                     } else if to_comment {
                         Message::AcceptanceCommentEvent(ev)
                     } else {
@@ -843,7 +842,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 *pending_focus = Some(FocusIntent::Preview);
             } else if matches!(
                 message,
-                Message::BrowserOpenUrl(_) | Message::BrowserSelectTab(_)
+                Message::Browser(extensions::browser::Message::OpenUrl(_))
+                    | Message::Browser(extensions::browser::Message::SelectTab(_))
             ) {
                 *pending_focus = Some(FocusIntent::Browser);
             } else if matches!(
