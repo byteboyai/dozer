@@ -2,7 +2,8 @@ use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use dozer_core::protocol::{
-    AgentKind, AgentState, ProjectInfo, Reply, Request, SessionInfo, decode_line, encode_line,
+    AgentKind, AgentState, BookmarkInfo, BookmarkScope, ProjectInfo, Reply, Request, SessionInfo,
+    decode_line, encode_line,
 };
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -176,6 +177,44 @@ impl Client {
             Reply::AcceptanceCount { count } => Ok(count),
             Reply::Error { message } => Err(anyhow::anyhow!(message)),
             other => Err(anyhow::anyhow!("非预期应答: {other:?}")),
+        }
+    }
+
+    pub async fn add_bookmark(
+        &self,
+        scope: BookmarkScope,
+        project_id: Option<i64>,
+        url: &str,
+        title: &str,
+    ) -> Result<()> {
+        match self
+            .roundtrip(&Request::AddBookmark {
+                scope,
+                project_id,
+                url: url.into(),
+                title: title.into(),
+            })
+            .await?
+        {
+            Reply::Ok => Ok(()),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn remove_bookmark(&self, id: i64) -> Result<()> {
+        match self.roundtrip(&Request::RemoveBookmark { id }).await? {
+            Reply::Ok => Ok(()),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn list_bookmarks(&self, project_id: Option<i64>) -> Result<Vec<BookmarkInfo>> {
+        match self
+            .roundtrip(&Request::ListBookmarks { project_id })
+            .await?
+        {
+            Reply::Bookmarks { bookmarks } => Ok(bookmarks),
+            other => bail!("意外应答: {other:?}"),
         }
     }
 
