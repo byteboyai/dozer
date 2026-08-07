@@ -30,8 +30,9 @@
 //!   收到后调用 `app.update(..)` 并请求重绘。反方向（UI → tokio）
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
 use crate::conversation::{self, ConversationMeta};
-use crate::delivery::{self, FileChange, FileGitStatus, WorktreeInfo};
+use crate::delivery::{self, FileChange, WorktreeInfo};
 use crate::extensions::browser;
+use crate::extensions::files;
 use crate::extensions::git_log;
 use crate::extensions::todo;
 use crate::git_watch;
@@ -43,7 +44,7 @@ use crate::open_projects;
 use crate::osc::{OscEvent, OscScanner};
 use crate::preview::{PreviewPane, TabKind, WebviewSpec, is_editable_extension};
 use crate::preview_state;
-use crate::project::{self, FileTree};
+use crate::project::FileTree;
 use crate::term_model::TerminalModel;
 use crate::term_view;
 use crate::theme;
@@ -411,33 +412,6 @@ pub enum Divider {
     LeftRight,
     LeftPairSplit,
     RightPairSplit,
-}
-
-/// 项目树右键菜单当前打开状态：定位坐标 + 目标（路径/是否目录）。
-#[derive(Debug, Clone, PartialEq)]
-struct ContextMenu {
-    x: f32,
-    y: f32,
-    target: PathBuf,
-    is_dir: bool,
-}
-
-/// 项目树行内编辑的模式：新建文件/新建文件夹/重命名(携带原路径)。
-#[derive(Debug, Clone, PartialEq)]
-enum TreeEditMode {
-    NewFile,
-    NewFolder,
-    Rename(PathBuf),
-}
-
-/// 项目树行内编辑态：新建/重命名共用。`parent_dir` 对 `Rename` 而言是
-/// 被改名项的父目录(新路径=parent_dir.join(新名字));对 `NewFile`/
-/// `NewFolder` 就是目标创建位置。
-#[derive(Debug, Clone, PartialEq)]
-struct TreeEdit {
-    parent_dir: PathBuf,
-    mode: TreeEditMode,
-    buffer: String,
 }
 
 /// 主界面当前几何状态的只读快照(main.rs 拖拽追踪/离屏几何计算用途,
@@ -1078,73 +1052,17 @@ pub enum Message {
     /// `update` 在 UI 线程上装配成 `Workspace`,替换掉那份"加载中"占位
     /// (载荷是一次性信封,见 [`RestorePayload`])。
     ProjectSlotLoaded(i64, RestorePayload),
-    /// 项目:文件树展开/收起某目录。
-    ProjectTreeToggle(PathBuf),
-    /// 项目:git 分支/脏/文件状态/worktree 列表刷新结果。
-    ProjectGitRefreshed(
-        ProjectId,
-        Option<String>,
-        bool,
-        HashMap<PathBuf, FileGitStatus>,
-        Vec<WorktreeInfo>,
-    ),
     /// 项目:`git_watch` 监听到工作区/`.git` 引用变化,该重新跑一次 git 刷新
     /// 了(D4)。`Relevance` 决定这次触发要不要顺带做 Plan 2 的 Git Log 快照
-    /// 重建。
+    /// 重建。这条消息同时喂给 Files(刷新 branch/dirty/git_statuses/worktrees)
+    /// 和 Git Log(条件触发快照重建)两个独立扩展,内核继续拦截、分别转发,
+    /// 不包进 `files::Message`。
     ProjectFsChanged(ProjectId, git_watch::Relevance),
     /// Git Log 面板的全部消息,内核只转发不解读——见
     /// `extensions::git_log::Message`。
     GitLog(git_log::Message),
-    /// 项目:当前项目验收次数刷新结果(项目卡"N 次验收"副行用)。
-    AcceptanceCountLoaded(ProjectId, Option<u64>),
-    /// 项目树:右键按下的窗口逻辑坐标(main.rs 原始事件层发,供随后可能
-    /// 触发的 `ProjectTreeContextMenu` 定位弹出菜单)。
-    RightClickAt { x: f32, y: f32 },
-    /// 项目树:某行右键命中,打开菜单(位置取 `last_right_click`)。
-    ProjectTreeContextMenu { path: PathBuf, is_dir: bool },
-    /// 项目树:关闭菜单(点击外部/Esc/动作完成后)。
-    ProjectTreeContextMenuClose,
-    /// 项目树:菜单选"复制绝对/相对路径"→ main.rs 拦截写系统剪贴板,
-    /// 不落 `Workspace::update`。
-    ProjectTreeCopyPath(PathBuf, project::PathKind),
-    /// 项目树:菜单选"在 Finder 中打开"→ `open -R` 拉起 Finder 并选中目标,
-    /// 无需窗口句柄/剪贴板,直接在 `App::update` 里同步 `spawn`(不等待退出)。
-    ProjectTreeRevealInFinder(PathBuf),
-    /// 项目树:菜单选"复制"→ 标记应用内剪贴槽(参数=路径,是否目录)。
-    ProjectTreeCopy(PathBuf, bool),
-    /// 项目树:菜单选"粘贴"→ 异步复制剪贴槽项到目标目录(参数=目标目录)。
-    ProjectTreePaste(PathBuf),
-    /// 项目树:粘贴异步结果(Ok=新建出的路径,Err=错误文案)。
-    ProjectTreePasteDone(ProjectId, Result<PathBuf, String>),
-    /// 项目树:菜单选"删除"→ 打开确认框(参数=路径,是否目录)。
-    ProjectTreeDeleteRequest(PathBuf, bool),
-    /// 项目树:确认框点"删除"。
-    ProjectTreeDeleteConfirm,
-    /// 项目树:确认框点"取消"。
-    ProjectTreeDeleteCancel,
-    /// 项目树:删除/重命名/新建文件/新建文件夹 异步操作统一完成回传。
-    /// `parent`:Ok=需要刷新的父目录,Err=错误文案。`expand`:成功时是否
-    /// 需要顺带把 `parent` 标为展开态——新建文件/文件夹传 true(让刚建出
-    /// 的项立刻可见,哪怕父目录之前是空的/收起的);删除/重命名传 false
-    /// (删除后没有理由展开父目录,重命名不改变展开态)。四个操作共用一个
-    /// 变量曾叫 `ProjectTreeDeleteDone`,重命名/新建完成后也发它,读起来
-    /// 会以为出了删除——改名 + 加 `expand` 字段一并解决。
-    ProjectTreeOpDone {
-        project_id: ProjectId,
-        parent: Result<PathBuf, String>,
-        expand: bool,
-    },
-    /// 项目树:菜单选"新建文件"→ 进入行内编辑(参数=目标父目录)。
-    ProjectTreeNewFile(PathBuf),
-    /// 项目树:菜单选"新建文件夹"→ 进入行内编辑(参数=目标父目录)。
-    ProjectTreeNewFolder(PathBuf),
-    /// 项目树:菜单选"重命名"→ 进入行内编辑(参数=被改名项路径)。
-    ProjectTreeRenameStart(PathBuf),
-    /// 项目树:菜单选"从磁盘重新加载"→ 重读所有已缓存目录,让树与磁盘实际
-    /// 状态保持一致(不依赖右键目标,故不带参数)。
-    ProjectTreeReloadFromDisk,
-    /// 项目树:行内编辑框的键盘事件(main.rs 键盘拦截层送入,复用 AddrEvent)。
-    ProjectTreeEditEvent(AddrEvent),
+    /// Files 面板的全部消息,内核只转发不解读——见 `extensions::files::Message`。
+    Files(files::Message),
     /// UI 整体放大(Ctrl +)：放大/还原的全局 scale 乘一个步近因子,下一帧
     /// 按新 scale 重排全部图标/字号/间距/骨架。
     ZoomIn,
@@ -1358,11 +1276,8 @@ pub struct App {
     window_size: (f32, f32),
     /// 正在拖拽的分隔线;`None` 表示未在拖拽。
     dragging: Option<Divider>,
-    /// 项目树右键菜单当前打开状态(None=未打开)。窗口级浮层,同一时刻
-    /// 只可能有一个,因此是外壳态而非项目态。
-    context_menu: Option<ContextMenu>,
-    /// 最近一次右键点击的窗口逻辑坐标,给 `ProjectTreeContextMenu` 定位菜单用。
-    last_right_click: (f32, f32),
+    /// Files 面板右键菜单浮层状态——见 `extensions::files::AppState`。
+    files: files::AppState,
 
     /// 并行打开的项目页签:project id → 该项目的完整/占位状态。
     projects: HashMap<i64, WorkspaceSlot>,
@@ -1429,39 +1344,19 @@ pub struct Workspace {
     usage_loading: bool,
     /// 当前项目（None=未打开；P1g）。
     project: Option<ProjectInfo>,
-    /// 当前项目的文件树（随 project 建立）。
-    file_tree: Option<FileTree>,
-    /// 当前项目 git 分支（非 git 为 None）。
-    branch: Option<String>,
-    /// 当前项目工作树是否脏。
-    dirty: bool,
     /// 最近项目（切换用）。
     recent_projects: Vec<ProjectInfo>,
-    /// 当前项目的 git 文件状态（路径→状态；文件树装饰用；P1h）。
-    git_statuses: HashMap<PathBuf, FileGitStatus>,
-    /// 同仓库的其他 git worktree(D3),随 git 刷新一起更新。
-    worktrees: Vec<WorktreeInfo>,
     /// 本项目的实时文件系统监听(D4)。`None` 只可能出现在 watcher 启动
     /// 失败时(降级为"只在开项目/回合结束时刷新")。Drop 时自动停止。
     git_watch: Option<git_watch::Handle>,
     /// 顶栏胶囊用的项目级目标（打开项目时同步读 .dozer/goal.md）。
     project_goal: Option<Goal>,
-    /// 当前项目的验收次数（项目卡"N 次验收"副行；None=未载入/取不到）。
-    project_acceptance_count: Option<u64>,
     /// 终端 tab 栏当前最左可见 tab 序号（箭头翻页用；P1L T5）。
     term_tab_first: usize,
     /// 预览 tab 栏当前最左可见 tab 序号，语义同 `term_tab_first`。
     preview_tab_first: usize,
-    /// 项目树当前"选中"行(左键点击或右键命中都会更新),渲染时给该行背景色。
-    tree_selected: Option<PathBuf>,
-    /// 项目树"文件管理器式"剪贴槽:最近一次"复制"的项(路径,是否目录)。
-    tree_clipboard: Option<(PathBuf, bool)>,
-    /// 项目树操作的行内报错文案(冲突/失败时显示;下次树操作发起时清空)。
-    tree_error: Option<String>,
-    /// 项目树删除确认框目标(路径,是否目录;None=未打开确认框)。
-    tree_delete_confirm: Option<(PathBuf, bool)>,
-    /// 项目树行内编辑态(新建/重命名共用;None=未在编辑)。
-    tree_edit: Option<TreeEdit>,
+    /// Files 面板 per-project 状态——见 `extensions::files::WorkspaceState`。
+    files: files::WorkspaceState,
     /// Agent 面板"＋"按钮弹出的"新建"菜单当前是否打开。不需要坐标——面板顶部固定
     /// 位置的下拉,不像项目树右键菜单需要跟随点击坐标。
     agent_picker_open: bool,
@@ -1655,7 +1550,7 @@ impl Workspace {
             }
         }
 
-        let file_tree = Some(FileTree::new(PathBuf::from(&project.path)));
+        let files = files::WorkspaceState::new(FileTree::new(PathBuf::from(&project.path)));
         let project_goal = load_project_goal(&project.path);
 
         let mut ws = Self {
@@ -1664,7 +1559,7 @@ impl Workspace {
             next_tab_id,
             pending: HashMap::new(),
             project: Some(project),
-            file_tree,
+            files,
             project_goal,
             recent_projects,
             // 必须在 `restore_preview_state()` **之前**就位:那一步会把重开的
@@ -1747,22 +1642,12 @@ impl Workspace {
             usage: Vec::new(),
             usage_loading: false,
             project: None,
-            file_tree: None,
             project_goal: None,
-            project_acceptance_count: None,
-            branch: None,
-            dirty: false,
             recent_projects: Vec::new(),
-            git_statuses: HashMap::new(),
-            worktrees: Vec::new(),
             git_watch: None,
             term_tab_first: 0,
             preview_tab_first: 0,
-            tree_selected: None,
-            tree_clipboard: None,
-            tree_error: None,
-            tree_delete_confirm: None,
-            tree_edit: None,
+            files: files::WorkspaceState::default(),
             agent_picker_open: false,
             edit_session: None,
             todo: todo::WorkspaceState::default(),
@@ -1782,11 +1667,11 @@ impl Workspace {
     /// 可达路径,用户在这段窗口里点一下终端 tab 栏的"＋"就会 panic 掉整个
     /// GUI。同步构造 + 恒有 `project` 是这条不变式的落地方式。
     fn loading_for_project(project: ProjectInfo) -> Self {
-        let file_tree = Some(FileTree::new(PathBuf::from(&project.path)));
+        let files = files::WorkspaceState::new(FileTree::new(PathBuf::from(&project.path)));
         let project_goal = load_project_goal(&project.path);
         Self {
             project: Some(project),
-            file_tree,
+            files,
             project_goal,
             loading: true,
             ..Self::empty_for_project_placeholder()
@@ -2007,7 +1892,9 @@ impl Workspace {
                 Some(repo) => client.acceptance_count(&repo).await.ok(),
                 None => None,
             };
-            let _ = proxy.send_event(Message::AcceptanceCountLoaded(project_id, n));
+            let _ = proxy.send_event(Message::Files(files::Message::AcceptanceCountLoaded(
+                project_id, n,
+            )));
         });
     }
 
@@ -2053,26 +1940,18 @@ impl Workspace {
 
     /// 异步刷新当前项目的 git 分支/脏/文件状态/worktree 列表(打开项目 +
     /// 回合结束 + `git_watch` 检测到变化时触发,见 `Message::ProjectFsChanged`)。
+    /// 薄封装,真正的查询逻辑在 `extensions::files::spawn_git_refresh`。
     fn spawn_project_git_refresh(&self, io: &ShellIo) {
         let Some(p) = &self.project else {
             return;
         };
         let project_id = p.id;
-        let repo = PathBuf::from(&p.path);
+        let repo_path = PathBuf::from(&p.path);
         let proxy = io.proxy.clone();
-        io.handle.spawn(async move {
-            let (b, d, s, w) = tokio::task::spawn_blocking(move || {
-                (
-                    delivery::branch(&repo),
-                    delivery::is_dirty(&repo),
-                    delivery::file_statuses(&repo),
-                    delivery::worktrees(&repo),
-                )
-            })
-            .await
-            .unwrap_or((None, false, HashMap::new(), Vec::new()));
-            let _ = proxy.send_event(Message::ProjectGitRefreshed(project_id, b, d, s, w));
-        });
+        let emit = move |m| {
+            let _ = proxy.send_event(Message::Files(m));
+        };
+        files::spawn_git_refresh(project_id, repo_path, &io.handle, emit);
     }
 
     /// 项目切换清理：关掉所有终端 tab（=结束会话，同 CloseTab 语义）与
@@ -2107,11 +1986,8 @@ impl Workspace {
         // 清掉 `loading`,否则(1)`spawn_new_tab` 会继续拒绝建会话,(2)一个
         // 迟到的 `ProjectSlotLoaded` 会把刚认领好的内容当成占位覆盖掉。
         self.loading = false;
-        self.file_tree = Some(FileTree::new(PathBuf::from(&project.path)));
-        self.tree_selected = None;
-        self.branch = None;
-        self.dirty = false;
-        self.git_statuses = HashMap::new();
+        self.files
+            .reset_for_project(FileTree::new(PathBuf::from(&project.path)));
         // 复用中的 `Workspace`(就地改写成另一个项目,见本方法文档)可能还
         // 挂着上一个项目的 watcher——显式清掉再重开,而不是指望
         // `start_git_watch` 成功时的赋值顺带把旧的 drop 掉:万一新项目的
@@ -2124,7 +2000,6 @@ impl Workspace {
         self.usage_loading = false;
         self.project_goal = load_project_goal(&project.path);
         self.project = Some(project);
-        self.project_acceptance_count = None;
         self.ensure_project_terminal(io);
         self.restore_preview_state();
         self.spawn_project_git_refresh(io);
@@ -2146,140 +2021,6 @@ impl Workspace {
         // 常见的路径反而漏了,退化成"只在开项目/回合结束时刷新"(code
         // review 发现)。
         self.start_git_watch(io);
-    }
-
-    /// "新建文件"/"新建文件夹"的公共起点:关菜单、确保目标目录展开(让
-    /// 待插入的空白编辑行有可见位置)、进入空白行内编辑。
-    fn start_tree_new(&mut self, parent: PathBuf, mode: TreeEditMode) {
-        self.tree_error = None;
-        if let Some(tree) = &mut self.file_tree {
-            tree.ensure_expanded(&parent);
-        }
-        self.tree_edit = Some(TreeEdit {
-            parent_dir: parent,
-            mode,
-            buffer: String::new(),
-        });
-    }
-
-    /// 行内编辑框回车提交：按 `TreeEditMode` 分派成重命名/新建文件/新建
-    /// 文件夹的实际文件系统操作(异步,`handle.spawn`)。名字为空或就是原名
-    /// (仅 Rename 场景)直接静默取消编辑，不发起任何 IO。
-    fn submit_tree_edit(&mut self, io: &ShellIo) {
-        let Some(edit) = self.tree_edit.take() else {
-            return;
-        };
-        // 树操作的异步结果要投回**发起它的**项目,不能投给"结果回来时恰好
-        // 在前台的那个"(见 `ProjectId`)。
-        let Some(project_id) = self.project_id() else {
-            return;
-        };
-        // 清掉可能残留的上一次失败(哪怕是另一次操作,比如粘贴冲突)留下的
-        // 红字——用户这次成功了就不该再看见旧错误(Important #4)。若这次
-        // 也失败,下面各分支会立刻重新设置,不会丢失新错误。
-        self.tree_error = None;
-        let name = edit.buffer.trim();
-        if name.is_empty() {
-            return;
-        }
-        // 名字必须是单一正常路径分量,不能含 `/` 或是 `..`——否则
-        // parent_dir.join(name) 会把项目挪出/建到目标目录之外
-        // (Important #6)。三种模式共用同一检查,放在分派前。
-        if !project::is_single_path_component(name) {
-            self.tree_error = Some("名字不能包含路径分隔符".to_string());
-            self.tree_edit = Some(TreeEdit {
-                parent_dir: edit.parent_dir,
-                mode: edit.mode,
-                buffer: name.to_string(),
-            });
-            return;
-        }
-        let new_path = edit.parent_dir.join(name);
-        match edit.mode {
-            TreeEditMode::Rename(old_path) => {
-                if new_path == old_path {
-                    return; // 没改名,直接结束编辑
-                }
-                if new_path.exists() {
-                    self.tree_error = Some(format!("{} 已存在同名项", new_path.display()));
-                    self.tree_edit = Some(TreeEdit {
-                        parent_dir: edit.parent_dir,
-                        mode: TreeEditMode::Rename(old_path),
-                        buffer: name.to_string(),
-                    });
-                    return;
-                }
-                let parent = edit.parent_dir.clone();
-                let proxy = io.proxy.clone();
-                io.handle.spawn(async move {
-                    let result = tokio::task::spawn_blocking(move || {
-                        std::fs::rename(&old_path, &new_path).map_err(|e| e.to_string())
-                    })
-                    .await
-                    .unwrap_or_else(|e| Err(e.to_string()));
-                    let outcome = result.map(|()| parent);
-                    let _ = proxy.send_event(Message::ProjectTreeOpDone {
-                        project_id,
-                        parent: outcome,
-                        expand: false, // 重命名不改变展开态
-                    });
-                });
-            }
-            TreeEditMode::NewFile => {
-                if new_path.exists() {
-                    self.tree_error = Some(format!("{} 已存在同名项", new_path.display()));
-                    self.tree_edit = Some(TreeEdit {
-                        parent_dir: edit.parent_dir,
-                        mode: TreeEditMode::NewFile,
-                        buffer: name.to_string(),
-                    });
-                    return;
-                }
-                let parent = edit.parent_dir.clone();
-                let proxy = io.proxy.clone();
-                io.handle.spawn(async move {
-                    let result = tokio::task::spawn_blocking(move || {
-                        std::fs::File::create(&new_path)
-                            .map(|_| ())
-                            .map_err(|e| e.to_string())
-                    })
-                    .await
-                    .unwrap_or_else(|e| Err(e.to_string()));
-                    let outcome = result.map(|()| parent);
-                    let _ = proxy.send_event(Message::ProjectTreeOpDone {
-                        project_id,
-                        parent: outcome,
-                        expand: true, // 新建的项要立刻可见,哪怕父目录之前是空的
-                    });
-                });
-            }
-            TreeEditMode::NewFolder => {
-                if new_path.exists() {
-                    self.tree_error = Some(format!("{} 已存在同名项", new_path.display()));
-                    self.tree_edit = Some(TreeEdit {
-                        parent_dir: edit.parent_dir,
-                        mode: TreeEditMode::NewFolder,
-                        buffer: name.to_string(),
-                    });
-                    return;
-                }
-                let parent = edit.parent_dir.clone();
-                let proxy = io.proxy.clone();
-                io.handle.spawn(async move {
-                    let result = tokio::task::spawn_blocking(move || {
-                        std::fs::create_dir(&new_path).map_err(|e| e.to_string())
-                    })
-                    .await
-                    .unwrap_or_else(|e| Err(e.to_string()));
-                    let outcome = result.map(|()| parent);
-                    let _ = proxy.send_event(Message::ProjectTreeOpDone {
-                        project_id,
-                        parent: outcome,
-                        expand: true, // 新建的项要立刻可见,哪怕父目录之前是空的
-                    });
-                });
-            }
-        }
     }
 
     /// tab 关闭 = 结束会话：中断转发任务（`rx` 随任务栈析构）并 kill
@@ -2541,7 +2282,7 @@ impl Workspace {
     /// 项目树是否处于行内编辑态(main.rs 键盘路由用,同款
     /// `browser_addr_editing()`/`acceptance_comment_editing()`)。
     pub fn tree_editing(&self) -> bool {
-        self.tree_edit.is_some()
+        self.files.tree_edit_is_some()
     }
 
     /// 当前项目根路径(供 main.rs 算相对路径用;未打开项目时 None)。
@@ -2553,7 +2294,7 @@ impl Workspace {
     /// 浏览器地址栏取消(清空半输入),意见框仅退出编辑(保留已输入文字),树内
     /// 编辑(重命名/新建)直接取消(Important #5——不清会导致点到别处后键盘还
     /// 在悄悄写进树编辑缓冲区,"打不出字"的假象)。`context_menu` 不在这里
-    /// 清:它已经有专门的外点 dismiss 遮罩(`ProjectTreeContextMenuClose`,
+    /// 清:它已经有专门的外点 dismiss 遮罩(`files::Message::ContextMenuClose`,
     /// 见 view() 里的 stack dismiss 层),这里重复清是死代码。
     pub fn blur_inputs(&mut self) {
         if self.browser.addr_editing() {
@@ -2562,7 +2303,7 @@ impl Workspace {
         if let Some(acc) = &mut self.acceptance {
             acc.comment_editing = false;
         }
-        self.tree_edit = None;
+        self.files.cancel_tree_edit();
     }
 
     /// 通过·沉淀：git update-ref + 落库（脏工作区在 delivery::accept 内被拒）。
@@ -2784,8 +2525,7 @@ impl App {
             pending_preview_zoom: false,
             window_size: theme::geometry::initial_window_size(),
             dragging: None,
-            context_menu: None,
-            last_right_click: (0.0, 0.0),
+            files: files::AppState::default(),
             projects: HashMap::new(),
             project_order: Vec::new(),
             active_project_id: None,
@@ -3182,7 +2922,7 @@ impl App {
 
     /// 项目树右键菜单是否打开(main.rs Esc 键路由用)。
     pub fn context_menu_open(&self) -> bool {
-        self.context_menu.is_some()
+        self.files.context_menu_is_some()
     }
 
     /// Agent 选择菜单是否打开(main.rs Esc 键路由用)。
@@ -3298,11 +3038,11 @@ impl App {
     }
 
     /// 保证 `git_log` 状态跟得上"现在应该看哪个项目"——`git_log: State`
-    /// 是 `App` 级字段,不是每个项目各自一份(不像 `Workspace.worktrees`),
+    /// 是 `App` 级字段,不是每个项目各自一份(不像 `Workspace.files`),
     /// 所以面板打开时(`LeftIconSelect`)和切项目页签时(`ProjectTabSwitch`)
     /// 都得调这个方法对齐一次,否则 Git Log 面板开着的状态下切页签,提交图
-    /// 会停在上一个项目不动,而同一面板里的 worktree 速览条(`ws.worktrees`
-    /// 是按项目取的)却已经跳到新项目——两者对不上。缓存已经是当前项目的
+    /// 会停在上一个项目不动,而同一面板里的 worktree 速览条(`ws.files
+    /// .worktrees()` 是按项目取的)却已经跳到新项目——两者对不上。缓存已经是当前项目的
     /// 路径就不动(避免每次切页签都重算一遍),路径不一致就重建,没有项目
     /// 就清空。只在 `left_view == LeftView::GitLog` 时调用才有意义。
     fn sync_git_log_to_active_project(&mut self) {
@@ -3952,7 +3692,7 @@ impl App {
                         return;
                     }
                     ws.preview_error = None;
-                    ws.tree_selected = Some(path.clone());
+                    ws.files.set_tree_selected(path.clone());
                     ws.allowed_files
                         .lock()
                         .expect("allowed_files 锁")
@@ -4237,25 +3977,15 @@ impl App {
                 self.projects
                     .insert(id, WorkspaceSlot::Loaded(Box::new(ws)));
             }
-            Message::ProjectTreeToggle(dir) => {
-                self.with_focused_project(move |ws, _io| {
-                    ws.tree_selected = Some(dir.clone());
-                    if let Some(t) = &mut ws.file_tree {
-                        t.toggle(&dir);
-                    }
-                });
-            }
-            Message::ProjectGitRefreshed(project_id, branch, dirty, statuses, worktrees) => {
-                self.with_project(project_id, move |ws, _io| {
-                    ws.branch = branch;
-                    ws.dirty = dirty;
-                    ws.git_statuses = statuses;
-                    ws.worktrees = worktrees;
-                });
-            }
             Message::ProjectFsChanged(project_id, relevance) => {
                 self.with_project(project_id, |ws, io| {
-                    ws.spawn_project_git_refresh(io);
+                    let Some(project) = &ws.project else { return };
+                    let repo_path = PathBuf::from(&project.path);
+                    let proxy = io.proxy.clone();
+                    let emit = move |m| {
+                        let _ = proxy.send_event(Message::Files(m));
+                    };
+                    files::spawn_git_refresh(project_id, repo_path, &io.handle, emit);
                 });
                 // 只有 `.git` 引用类变化(分支切换/外部提交/其他 worktree
                 // 提交)才值得重建 Git Log 快照——纯工作区文件编辑不影响
@@ -4318,191 +4048,47 @@ impl App {
                     self.update(Message::GitLog(next));
                 }
             }
-            Message::AcceptanceCountLoaded(project_id, n) => {
-                self.with_project(project_id, move |ws, _io| {
-                    ws.project_acceptance_count = n;
-                });
+            Message::Files(files::Message::CopyPath(path, kind)) => {
+                let _ = (path, kind); // main.rs 拦截处理写剪贴板,这里维持现状空分支
             }
-            Message::RightClickAt { x, y } => {
-                self.last_right_click = (x, y);
+            Message::Files(files::Message::OpenFile(path)) => {
+                // 单击文件行打开预览——`files` 模块不认识预览域,这条消息由
+                // 内核拦截转发成核心的 `PreviewOpenPath`(同
+                // `files::Message::CopyPath`,不能落进下面的兜底分支,否则会
+                // 命中 `files::update` 里的 `unreachable!`)。
+                self.update(Message::PreviewOpenPath(path));
             }
-            Message::ProjectTreeContextMenu { path, is_dir } => {
-                let (x, y) = self.last_right_click;
-                let target = path.clone();
-                self.with_focused_project(move |ws, _io| {
-                    ws.tree_selected = Some(path);
-                });
-                self.context_menu = Some(ContextMenu {
-                    x,
-                    y,
-                    target,
-                    is_dir,
-                });
+            Message::Files(
+                msg @ (files::Message::GitRefreshed(project_id, ..)
+                | files::Message::PasteDone(project_id, ..)
+                | files::Message::OpDone { project_id, .. }
+                | files::Message::AcceptanceCountLoaded(project_id, ..)),
+            ) => {
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                let emit = move |m| {
+                    let _ = proxy.send_event(Message::Files(m));
+                };
+                let app_files = &mut self.files;
+                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+                    return;
+                };
+                files::update(&mut ws.files, app_files, msg, project_id, &handle, emit);
             }
-            Message::ProjectTreeContextMenuClose => {
-                self.context_menu = None;
-            }
-            Message::ProjectTreeCopyPath(_, _) => {} // 副作用在 main.rs(写系统剪贴板需 Clipboard 句柄)
-            Message::ProjectTreeRevealInFinder(path) => {
-                self.context_menu = None;
-                // spawn 不等待子进程退出,不阻塞 UI 线程;拉起失败(如非 macOS)
-                // 静默忽略——不是值得打断用户的错误。
-                let _ = std::process::Command::new("open")
-                    .arg("-R")
-                    .arg(&path)
-                    .spawn();
-            }
-            Message::ProjectTreeCopy(path, is_dir) => {
-                self.context_menu = None;
-                self.with_focused_project(move |ws, _io| {
-                    ws.tree_clipboard = Some((path, is_dir));
-                });
-            }
-            Message::ProjectTreePaste(target_dir) => {
-                self.context_menu = None;
-                self.with_focused_project(move |ws, io| {
-                    ws.tree_error = None;
-                    let Some((source, source_is_dir)) = ws.tree_clipboard.clone() else {
-                        return;
-                    };
-                    // 结果要投回**发起它的**项目(见 `ProjectId`)。
-                    let Some(project_id) = ws.project_id() else {
-                        return;
-                    };
-                    let proxy = io.proxy.clone();
-                    io.handle.spawn(async move {
-                        let result = tokio::task::spawn_blocking(move || {
-                            project::paste_item(&source, source_is_dir, &target_dir)
-                        })
-                        .await
-                        .unwrap_or_else(|e| Err(e.to_string()));
-                        let _ = proxy.send_event(Message::ProjectTreePasteDone(project_id, result));
-                    });
-                });
-            }
-            Message::ProjectTreePasteDone(project_id, result) => {
-                self.with_project(project_id, move |ws, _io| match result {
-                    Ok(new_path) => {
-                        if let (Some(tree), Some(parent)) = (&mut ws.file_tree, new_path.parent()) {
-                            tree.refresh(parent);
-                        }
-                    }
-                    Err(e) => ws.tree_error = Some(e),
-                });
-            }
-            Message::ProjectTreeDeleteRequest(path, is_dir) => {
-                self.context_menu = None;
-                self.with_focused_project(move |ws, _io| {
-                    ws.tree_delete_confirm = Some((path, is_dir));
-                });
-            }
-            Message::ProjectTreeDeleteCancel => {
-                self.with_focused_project(|ws, _io| {
-                    ws.tree_delete_confirm = None;
-                });
-            }
-            Message::ProjectTreeDeleteConfirm => {
-                self.with_focused_project(|ws, io| {
-                    let Some((path, _)) = ws.tree_delete_confirm.take() else {
-                        return;
-                    };
-                    ws.tree_error = None;
-                    // 结果要投回**发起它的**项目(见 `ProjectId`)。
-                    let Some(project_id) = ws.project_id() else {
-                        return;
-                    };
-                    let proxy = io.proxy.clone();
-                    io.handle.spawn(async move {
-                        let parent = path.parent().map(|p| p.to_path_buf());
-                        let result = tokio::task::spawn_blocking(move || {
-                            trash::delete(&path).map_err(|e| e.to_string())
-                        })
-                        .await
-                        .unwrap_or_else(|e| Err(e.to_string()));
-                        let outcome = match (result, parent) {
-                            (Ok(()), Some(p)) => Ok(p),
-                            (Ok(()), None) => Err("删除的是项目根,无父目录可刷新".to_string()),
-                            (Err(e), _) => Err(e),
-                        };
-                        let _ = proxy.send_event(Message::ProjectTreeOpDone {
-                            project_id,
-                            parent: outcome,
-                            expand: false, // 删除不展开父目录
-                        });
-                    });
-                });
-            }
-            Message::ProjectTreeOpDone {
-                project_id,
-                parent,
-                expand,
-            } => {
-                self.with_project(project_id, move |ws, _io| match parent {
-                    Ok(parent) => {
-                        ws.tree_error = None; // 成功后清掉上一次失败重试留下的红字(Important #4)
-                        if let Some(tree) = &mut ws.file_tree {
-                            tree.refresh(&parent);
-                            if expand {
-                                tree.ensure_expanded(&parent);
-                            }
-                        }
-                    }
-                    Err(e) => ws.tree_error = Some(e),
-                });
-            }
-            Message::ProjectTreeNewFile(parent) => {
-                self.context_menu = None;
-                self.with_focused_project(move |ws, _io| {
-                    ws.start_tree_new(parent, TreeEditMode::NewFile)
-                });
-            }
-            Message::ProjectTreeNewFolder(parent) => {
-                self.context_menu = None;
-                self.with_focused_project(move |ws, _io| {
-                    ws.start_tree_new(parent, TreeEditMode::NewFolder)
-                });
-            }
-            Message::ProjectTreeReloadFromDisk => {
-                self.context_menu = None;
-                self.with_focused_project(|ws, _io| {
-                    ws.tree_error = None;
-                    if let Some(tree) = &mut ws.file_tree {
-                        tree.reload_from_disk();
-                    }
-                });
-            }
-            Message::ProjectTreeRenameStart(path) => {
-                self.context_menu = None;
-                self.with_focused_project(move |ws, _io| {
-                    ws.tree_error = None;
-                    let Some(parent) = path.parent().map(|p| p.to_path_buf()) else {
-                        return;
-                    };
-                    let name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    ws.tree_edit = Some(TreeEdit {
-                        parent_dir: parent,
-                        mode: TreeEditMode::Rename(path),
-                        buffer: name,
-                    });
-                });
-            }
-            Message::ProjectTreeEditEvent(ev) => {
-                self.with_focused_project(|ws, io| {
-                    let Some(edit) = &mut ws.tree_edit else {
-                        return;
-                    };
-                    match ev {
-                        AddrEvent::Text(s) => edit.buffer.push_str(&s),
-                        AddrEvent::Backspace => {
-                            edit.buffer.pop();
-                        }
-                        AddrEvent::Cancel => ws.tree_edit = None,
-                        AddrEvent::Submit => ws.submit_tree_edit(io),
-                    }
-                });
+            Message::Files(msg) => {
+                let Some(project_id) = self.active_project_id else {
+                    return;
+                };
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                let emit = move |m| {
+                    let _ = proxy.send_event(Message::Files(m));
+                };
+                let app_files = &mut self.files;
+                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+                    return;
+                };
+                files::update(&mut ws.files, app_files, msg, project_id, &handle, emit);
             }
             Message::ZoomIn => {
                 crate::theme::icon_size::zoom_by(UI_ZOOM_STEP);
@@ -4604,28 +4190,36 @@ impl App {
                     .height(Length::Fill)
                     .into()
             }
-        } else if ws.tree_delete_confirm.is_some() {
+        } else if ws.files.tree_delete_confirm_is_some() {
             let dismiss = MouseArea::new(
                 container(column![])
                     .width(Length::Fill)
                     .height(Length::Fill),
             )
-            .on_press(Message::ProjectTreeDeleteCancel);
-            stack![base, dismiss, delete_confirm_popup(ws)]
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
-        } else if self.context_menu.is_some() {
+            .on_press(Message::Files(files::Message::DeleteCancel));
+            stack![
+                base,
+                dismiss,
+                files::delete_confirm_popup(&ws.files).map(Message::Files)
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        } else if self.files.context_menu_is_some() {
             let dismiss = MouseArea::new(
                 container(column![])
                     .width(Length::Fill)
                     .height(Length::Fill),
             )
-            .on_press(Message::ProjectTreeContextMenuClose);
-            stack![base, dismiss, context_menu_popup(self, ws)]
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
+            .on_press(Message::Files(files::Message::ContextMenuClose));
+            stack![
+                base,
+                dismiss,
+                files::context_menu_popup(&self.files, &ws.files).map(Message::Files)
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
         } else if ws.agent_picker_open {
             let dismiss = MouseArea::new(
                 container(column![])
@@ -6600,13 +6194,26 @@ fn left_panel_area<'a>(
     {
         LeftView::Files => {
             let (list_portion, content_portion) = split_portions(app.shell_layout.files_split);
+            let list_pane: Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> =
+                if ws.project.is_some() {
+                    files::view(
+                        &ws.files,
+                        ws.project.as_ref(),
+                        app.daemon_error.is_none(),
+                        Length::FillPortion(list_portion),
+                        zone_pane_border(zone, lc),
+                    )
+                    .map(Message::Files)
+                } else {
+                    no_project_placeholder(
+                        app,
+                        ws,
+                        Length::FillPortion(list_portion),
+                        zone_pane_border(zone, lc),
+                    )
+                };
             row![
-                project_pane(
-                    app,
-                    ws,
-                    Length::FillPortion(list_portion),
-                    zone_pane_border(zone, lc)
-                ),
+                list_pane,
                 divider_bar(
                     Divider::LeftPairSplit,
                     theme::region::project_pane()
@@ -6665,7 +6272,7 @@ fn left_panel_area<'a>(
     // 显示——用户可能就是先想看看有哪些 worktree,不必等图先画出来。
     let strip: Option<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> =
         if app.left_view == LeftView::GitLog {
-            Some(worktree_strip(&ws.worktrees))
+            Some(worktree_strip(ws.files.worktrees()))
         } else {
             None
         };
@@ -6919,232 +6526,40 @@ pub(crate) fn lh<'a>(
     t.line_height(LineHeight::Relative(terminal_font::line_height_factor()))
 }
 
-fn project_pane<'a>(
+/// `LeftView::Files` 在没有打开项目时的占位:"未打开项目"提示 + 最近项目
+/// 列表(点击即打开)。这是一个项目切换器,不是文件树的一部分,`files` 模块
+/// 不认识 `ws.recent_projects`/`Message::ProjectSelect` 这些核心概念,留在
+/// 内核(现有 `project_pane` 的 `None` 分支的搬家版本,渲染结构原样保留,
+/// 含底部状态条——原代码不论 `Some`/`None` 都无条件画它)。
+fn no_project_placeholder<'a>(
     app: &'a App,
     ws: &'a Workspace,
     width: Length,
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = theme::region::project_pane();
-    // 头部:项目信息卡,固定在文件树上方,不随滚动条滚走(需求 1)。
     let mut header = column![].spacing(region.gap).width(Length::Fill);
-    // 文件树行:唯一进入 scrollable 的内容。
-    let mut tree_col = column![].spacing(region.gap);
-
-    match &ws.project {
-        Some(p) => {
-            let label = project_branch_label(ws.branch.as_deref(), ws.dirty);
-            let bcolor = if ws.dirty {
-                theme::color::GOLD
-            } else {
-                theme::color::BODY
-            };
-            // 需求 3:git 分支名前加 git-branch icon;需求 2:去掉完整文件路径。
-            let mut card_col = column![
+    let tree_col = column![].spacing(region.gap);
+    header = header.push(
+        text("未打开项目")
+            .size(theme::font::body())
+            .color(theme::color::DIM),
+    );
+    for p in &ws.recent_projects {
+        header = header.push(
+            button(
                 text(p.name.clone())
-                    .size(theme::font::title())
-                    .color(theme::color::CREAM),
-                row![
-                    icons::view(
-                        icons::IconKind::GitBranch,
-                        crate::theme::icon_size::row(),
-                        bcolor
-                    ),
-                    text(label).size(theme::font::label()).color(bcolor),
-                ]
-                .spacing(6)
-                .align_y(iced_widget::core::Alignment::Center),
-            ]
-            .spacing(2);
-            if let Some(n) = ws.project_acceptance_count.filter(|n| *n > 0) {
-                card_col = card_col.push(
-                    text(format!("{n} 次验收"))
-                        .size(theme::font::caption())
-                        .color(theme::color::GOLD),
-                );
-            }
-            let card = container(card_col).width(Length::Fill).padding(10).style(
-                |_t: &iced_widget::Theme| container::Style {
-                    background: Some(theme::color::CARD.into()),
-                    border: Border {
-                        color: theme::color::BORDER,
-                        width: 1.0,
-                        radius: 8.0.into(),
-                    },
-                    ..container::Style::default()
-                },
-            );
-            header = header.push(card);
-            if let Some(err) = &ws.tree_error {
-                header = header.push(
-                    text(format!("⚠ {err}"))
-                        .size(theme::font::label())
-                        .color(theme::color::RED),
-                );
-            }
-            if let Some(tree) = &ws.file_tree {
-                for row in tree.visible_rows() {
-                    let is_renaming = matches!(
-                        &ws.tree_edit,
-                        Some(TreeEdit { mode: TreeEditMode::Rename(p), .. }) if *p == row.path
-                    );
-                    if is_renaming {
-                        let buffer = ws
-                            .tree_edit
-                            .as_ref()
-                            .map(|e| e.buffer.as_str())
-                            .unwrap_or("");
-                        tree_col = tree_col.push(tree_edit_row(row.depth, buffer));
-                        continue;
-                    }
-                    let indent = "  ".repeat(row.depth);
-                    let status: Option<(delivery::ChangeKind, bool)> = if row.is_dir {
-                        delivery::dir_status(&row.path, &ws.git_statuses)
-                            .map(|d| (d.kind, d.unstaged))
-                    } else {
-                        ws.git_statuses.get(&row.path).map(|s| (s.kind, s.unstaged))
-                    };
-                    let name_color = theme::color::BODY;
-                    let row_icon: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> =
-                        if row.is_dir {
-                            let chevron = if row.expanded {
-                                icons::IconKind::ChevronDown
-                            } else {
-                                icons::IconKind::ChevronRight
-                            };
-                            let folder = if row.expanded {
-                                icons::IconKind::FolderOpen
-                            } else {
-                                icons::IconKind::Folder
-                            };
-                            row![
-                                icons::view(
-                                    chevron,
-                                    crate::theme::icon_size::chevron(),
-                                    theme::color::DIM
-                                ),
-                                icons::view(
-                                    folder,
-                                    crate::theme::icon_size::row(),
-                                    theme::color::DIM
-                                ),
-                            ]
-                            .spacing(crate::theme::icon_size::tree_row_gap())
-                            .align_y(iced_widget::core::Alignment::Center)
-                            .into()
-                        } else {
-                            row![
-                                iced_widget::space::Space::new()
-                                    .width(Length::Fixed(
-                                        crate::theme::icon_size::chevron()
-                                            + crate::theme::icon_size::tree_row_gap(),
-                                    ))
-                                    .height(Length::Shrink),
-                                icons::view(
-                                    icons::icon_for_file(&row.name),
-                                    crate::theme::icon_size::row(),
-                                    theme::color::DIM
-                                ),
-                            ]
-                            .spacing(0)
-                            .align_y(iced_widget::core::Alignment::Center)
-                            .into()
-                        };
-                    let mut line = row![
-                        text(indent)
-                            .size(tree_row_font_size())
-                            .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
-                            .color(name_color),
-                        row_icon,
-                        text(row.name.clone())
-                            .size(tree_row_font_size())
-                            .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
-                            .color(name_color),
-                    ]
-                    .spacing(6)
-                    .align_y(iced_widget::core::Alignment::Center);
-                    if let Some((kind, unstaged)) = status {
-                        line = line.push(iced_widget::space::horizontal());
-                        line = line.push(
-                            text(tree_row_dot_glyph(unstaged))
-                                .size(theme::font::dot_xs())
-                                .color(tree_row_dot_color(kind)),
-                        );
-                    }
-                    let msg = if row.is_dir {
-                        Message::ProjectTreeToggle(row.path.clone())
-                    } else {
-                        Message::PreviewOpenPath(row.path.clone())
-                    };
-                    let is_selected = ws.tree_selected.as_deref() == Some(row.path.as_path());
-                    let row_btn: iced_widget::Button<
-                        '_,
-                        Message,
-                        iced_widget::Theme,
-                        iced_widget::Renderer,
-                    > = button(line)
-                        .on_press(msg)
-                        .width(Length::Fill)
-                        .style(move |_t, _s| button::Style {
-                            background: if is_selected {
-                                Some(theme::color::CARD.into())
-                            } else {
-                                None
-                            },
-                            text_color: theme::color::BODY,
-                            ..button::Style::default()
-                        });
-                    tree_col = tree_col.push(MouseArea::new(row_btn).on_right_press(
-                        Message::ProjectTreeContextMenu {
-                            path: row.path.clone(),
-                            is_dir: row.is_dir,
-                        },
-                    ));
-                    let is_new_target = matches!(
-                        &ws.tree_edit,
-                        Some(TreeEdit {
-                            mode: TreeEditMode::NewFile | TreeEditMode::NewFolder,
-                            parent_dir,
-                            ..
-                        }) if *parent_dir == row.path
-                    );
-                    if is_new_target && row.expanded {
-                        let buffer = ws
-                            .tree_edit
-                            .as_ref()
-                            .map(|e| e.buffer.as_str())
-                            .unwrap_or("");
-                        tree_col = tree_col.push(tree_edit_row(row.depth + 1, buffer));
-                    }
-                }
-            }
-        }
-        None => {
-            header = header.push(
-                text("未打开项目")
                     .size(theme::font::body())
-                    .color(theme::color::DIM),
-            );
-            for p in &ws.recent_projects {
-                header = header.push(
-                    button(
-                        text(p.name.clone())
-                            .size(theme::font::body())
-                            .color(theme::color::CREAM),
-                    )
-                    .on_press(Message::ProjectSelect(p.id))
-                    .style(|_t, _s| button::Style {
-                        background: None,
-                        text_color: theme::color::CREAM,
-                        ..button::Style::default()
-                    }),
-                );
-            }
-        }
+                    .color(theme::color::CREAM),
+            )
+            .on_press(Message::ProjectSelect(p.id))
+            .style(|_t, _s| button::Style {
+                background: None,
+                text_color: theme::color::CREAM,
+                ..button::Style::default()
+            }),
+        );
     }
-
-    // 头部(项目信息卡)固定在文件树上方、不进 scrollable,所以即使文件树
-    // 出现滚动条,项目信息也始终可见;scrollable 只承载文件树行。
     let body = container(
         column![
             header,
@@ -7166,58 +6581,13 @@ fn project_pane<'a>(
         border: outer,
         ..container::Style::default()
     });
-
-    // 底栏(`project_status_bar`)是贴在 `body` 下方的独立元素,若它自己的
-    // 底角不收圆,方角会戳出 `body` 已收圆的左下角,在 zone 圆角 CARD 背景上
-    // 顶出一个小尖角——所以把 `outer` 的圆角半径透给底栏,只收底角,保留它
-    // 自己那条 1px 上边分隔线。
-    container(column![body, project_status_bar(app, ws, outer)])
-        .width(width)
-        .height(Length::Fill)
-        .into()
-}
-
-/// 项目栏底状态条：左 环境/dozerd 点，右 [文件|git {分支}|组件]（文件高亮,组件占位）。
-fn project_status_bar<'a>(
-    app: &'a App,
-    ws: &'a Workspace,
-    outer: Border,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let (env, dot) = env_status_text(app.daemon_error.is_none());
-    let left = row![
-        text("●").size(theme::font::dot_sm()).color(dot),
-        text(env)
-            .size(theme::font::caption())
-            .color(theme::color::BODY)
-    ]
-    .spacing(6);
-    let git = format!(
-        "git {}",
-        project_branch_label(ws.branch.as_deref(), ws.dirty)
-    );
-    let tabs = row![
-        text("文件")
-            .size(theme::font::caption())
-            .color(theme::color::CREAM),
-        text("·")
-            .size(theme::font::caption())
-            .color(theme::color::DIM),
-        text(git)
-            .size(theme::font::caption())
-            .color(theme::color::BODY),
-        text("·")
-            .size(theme::font::caption())
-            .color(theme::color::DIM),
-        text("组件")
-            .size(theme::font::caption())
-            .color(theme::color::DIM),
-    ]
-    .spacing(6);
-    status_bar_container(
-        row![left, iced_widget::space::horizontal(), tabs]
-            .align_y(iced_widget::core::Alignment::Center),
-        outer,
-    )
+    container(column![
+        body,
+        files::project_status_bar(app.daemon_error.is_none(), &ws.files, outer)
+    ])
+    .width(width)
+    .height(Length::Fill)
+    .into()
 }
 
 /// 终端栏底状态条：当前激活 tab 的 agent 态 · resume · dozerd 持有。
@@ -7576,260 +6946,6 @@ fn divider_bar<'a>(
     MouseArea::new(row)
         .interaction(mouse::Interaction::ResizingColumn)
         .on_press(Message::ColumnDragStart(divider))
-        .into()
-}
-
-/// 右键菜单一项:图标+文字按钮,CARD 底+BORDER 描边悬停态由 iced 默认
-/// button 交互色处理(本仓其余按钮同款,不额外定制)。
-fn menu_item<'a>(
-    icon: icons::IconKind,
-    label: &'static str,
-    msg: Message,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    button(
-        row![
-            icons::view(icon, crate::theme::icon_size::row(), theme::color::CREAM),
-            text(label)
-                .size(theme::font::body())
-                .color(theme::color::CREAM),
-        ]
-        .spacing(crate::theme::geometry::menu_gap())
-        .align_y(iced_widget::core::Alignment::Center),
-    )
-    .on_press(msg)
-    .width(Length::Fixed(crate::theme::geometry::menu_item_width()))
-    .padding([
-        crate::theme::geometry::menu_pad_v(),
-        crate::theme::geometry::menu_pad_h(),
-    ])
-    .style(|_t, _s| button::Style {
-        background: Some(theme::color::CARD.into()),
-        text_color: theme::color::CREAM,
-        ..button::Style::default()
-    })
-    .into()
-}
-
-/// 行内编辑框(新建/重命名共用):自绘输入,尾缀 "▏" 模拟光标,与地址栏/
-/// 验收意见框同款风格(键盘走 main.rs 拦截层,不用 iced 原生 text_input)。
-fn tree_edit_row(
-    depth: usize,
-    buffer: &str,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let indent = "  ".repeat(depth);
-    container(
-        text(format!("{indent}{buffer}▏"))
-            .size(tree_row_font_size())
-            .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
-            .color(theme::color::CREAM),
-    )
-    .width(Length::Fill)
-    .padding([2, 4])
-    .style(|_t: &iced_widget::Theme| container::Style {
-        background: Some(theme::color::CARD.into()),
-        border: Border {
-            color: theme::color::CREAM,
-            width: 1.0,
-            radius: 2.0.into(),
-        },
-        ..container::Style::default()
-    })
-    .into()
-}
-
-/// 右键菜单浮层本体:纵向按钮列表,`container` 用 `Padding{top,left,..}`
-/// 手算定位到点击坐标——`Stack` 各层共享同一份 bounds,不像原生系统菜单
-/// 那样自带绝对定位,这是本仓一贯的手算像素定位风格(`ime_cursor_area`/
-/// `preview_content_bounds` 同款)。
-fn context_menu_popup<'a>(
-    app: &'a App,
-    ws: &'a Workspace,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let Some(menu) = &app.context_menu else {
-        return column![].into();
-    };
-    let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> =
-        Vec::new();
-    if menu.is_dir {
-        items.push(menu_item(
-            icons::IconKind::FilePlus,
-            "新建文件",
-            Message::ProjectTreeNewFile(menu.target.clone()),
-        ));
-        items.push(menu_item(
-            icons::IconKind::FolderPlus,
-            "新建文件夹",
-            Message::ProjectTreeNewFolder(menu.target.clone()),
-        ));
-    }
-    items.push(menu_item(
-        icons::IconKind::Copy,
-        "复制",
-        Message::ProjectTreeCopy(menu.target.clone(), menu.is_dir),
-    ));
-    if menu.is_dir {
-        let has_clipboard = ws.tree_clipboard.is_some();
-        let paste_msg = Message::ProjectTreePaste(menu.target.clone());
-        items.push(if has_clipboard {
-            menu_item(icons::IconKind::ClipboardPaste, "粘贴", paste_msg)
-        } else {
-            // 剪贴槽为空:置灰且不挂 on_press,真正不可点(同 P1L tab 箭头
-            // "到头变灰"的既有处理口径,不是视觉变灰但仍能点)。
-            button(
-                row![
-                    icons::view(
-                        icons::IconKind::ClipboardPaste,
-                        crate::theme::icon_size::row(),
-                        theme::color::DIM
-                    ),
-                    text("粘贴")
-                        .size(theme::font::body())
-                        .color(theme::color::DIM),
-                ]
-                .spacing(crate::theme::geometry::menu_gap())
-                .align_y(iced_widget::core::Alignment::Center),
-            )
-            .width(Length::Fixed(crate::theme::geometry::menu_item_width()))
-            .padding([
-                crate::theme::geometry::menu_pad_v(),
-                crate::theme::geometry::menu_pad_h(),
-            ])
-            .style(|_t, _s| button::Style {
-                background: Some(theme::color::CARD.into()),
-                text_color: theme::color::DIM,
-                ..button::Style::default()
-            })
-            .into()
-        });
-    }
-    items.push(menu_item(
-        icons::IconKind::Trash,
-        "删除",
-        Message::ProjectTreeDeleteRequest(menu.target.clone(), menu.is_dir),
-    ));
-    items.push(menu_item(
-        icons::IconKind::Rename,
-        "重命名",
-        Message::ProjectTreeRenameStart(menu.target.clone()),
-    ));
-    items.push(menu_item(
-        icons::IconKind::Copy,
-        "复制绝对路径",
-        Message::ProjectTreeCopyPath(menu.target.clone(), project::PathKind::Absolute),
-    ));
-    items.push(menu_item(
-        icons::IconKind::Copy,
-        "复制相对路径",
-        Message::ProjectTreeCopyPath(menu.target.clone(), project::PathKind::Relative),
-    ));
-    items.push(menu_item(
-        icons::IconKind::FolderOpen,
-        "在 Finder 中打开",
-        Message::ProjectTreeRevealInFinder(menu.target.clone()),
-    ));
-    items.push(menu_item(
-        icons::IconKind::RefreshCw,
-        "从磁盘重新加载",
-        Message::ProjectTreeReloadFromDisk,
-    ));
-
-    let region = theme::region::context_menu();
-    let list = container(column(items).spacing(region.gap))
-        .padding(region.padding)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: region.background.map(Into::into),
-            border: region.border.unwrap_or_default(),
-            ..container::Style::default()
-        });
-
-    container(list)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(Padding {
-            top: menu.y,
-            left: menu.x,
-            right: 0.0,
-            bottom: 0.0,
-        })
-        .into()
-}
-
-/// 删除确认框:居中浮层,显示目标文件名 + 确认/取消两个按钮。
-fn delete_confirm_popup(
-    ws: &Workspace,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let Some((path, is_dir)) = &ws.tree_delete_confirm else {
-        return column![].into();
-    };
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string());
-    let kind = if *is_dir { "文件夹" } else { "文件" };
-    let dialog = container(
-        column![
-            text(format!("删除{kind} \"{name}\"?"))
-                .size(theme::font::subtitle())
-                .color(theme::color::CREAM),
-            text("会移入系统回收站,可从回收站找回。")
-                .size(theme::font::label())
-                .color(theme::color::DIM),
-            row![
-                button(
-                    text("取消")
-                        .size(theme::font::body())
-                        .color(theme::color::CREAM)
-                )
-                .on_press(Message::ProjectTreeDeleteCancel)
-                .padding([6, 12])
-                .style(|_t, _s| button::Style {
-                    background: Some(theme::color::CARD.into()),
-                    text_color: theme::color::CREAM,
-                    border: Border {
-                        color: theme::color::BORDER,
-                        width: 1.0,
-                        radius: 4.0.into()
-                    },
-                    ..button::Style::default()
-                }),
-                button(
-                    text("删除")
-                        .size(theme::font::body())
-                        .color(theme::color::RED)
-                )
-                .on_press(Message::ProjectTreeDeleteConfirm)
-                .padding([6, 12])
-                .style(|_t, _s| button::Style {
-                    background: Some(theme::color::CARD.into()),
-                    text_color: theme::color::RED,
-                    border: Border {
-                        color: theme::color::RED,
-                        width: 1.0,
-                        radius: 4.0.into()
-                    },
-                    ..button::Style::default()
-                }),
-            ]
-            .spacing(8),
-        ]
-        .spacing(8),
-    )
-    .padding(16)
-    .style(|_t: &iced_widget::Theme| container::Style {
-        background: Some(theme::color::CARD.into()),
-        border: Border {
-            color: theme::color::BORDER,
-            width: 1.0,
-            radius: 6.0.into(),
-        },
-        ..container::Style::default()
-    });
-
-    container(dialog)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(iced_widget::core::alignment::Horizontal::Center)
-        .align_y(iced_widget::core::alignment::Vertical::Center)
         .into()
 }
 
@@ -8234,24 +7350,6 @@ fn effective_project_repo(active: Option<&Path>, session_cwd: &Path) -> PathBuf 
         .unwrap_or_else(|| session_cwd.to_path_buf())
 }
 
-/// 文件/目录 git 状态 → 行尾彩色圆点色。金=改/绿=新/红=删。
-/// 色点颜色编码改动类型(kind),不变——D2 只新增了填充态维度,不推翻既有
-/// 配色约定。
-fn tree_row_dot_color(kind: delivery::ChangeKind) -> Color {
-    match kind {
-        delivery::ChangeKind::Modified => theme::color::GOLD,
-        delivery::ChangeKind::New => theme::color::GREEN,
-        delivery::ChangeKind::Deleted => theme::color::RED,
-    }
-}
-
-/// 色点字形编码暂存态(D2):全部暂存(无未暂存改动)→ 实心 `●`;有任何未
-/// 暂存改动(不论是否同时有暂存部分)→ 空心 `○`。尾缀字符不重复编码 kind
-/// (颜色已经够用),避免过度设计。
-fn tree_row_dot_glyph(unstaged: bool) -> &'static str {
-    if unstaged { "○" } else { "●" }
-}
-
 /// 项目卡分支标签：`分支` / `分支*`（脏）/ `—`（非 git）。
 pub(crate) fn project_branch_label(branch: Option<&str>, dirty: bool) -> String {
     match branch {
@@ -8551,13 +7649,13 @@ mod tests {
     /// 重挂之后能断言"搬过去的确实是同一个槽位",而不只是"新 id 上有东西"。
     fn loaded_slot(marker: &str) -> WorkspaceSlot {
         let mut ws = Workspace::empty_for_project_placeholder();
-        ws.tree_error = Some(marker.to_string());
+        ws.files.set_tree_error(Some(marker.to_string()));
         WorkspaceSlot::Loaded(Box::new(ws))
     }
 
     fn slot_marker(slot: Option<&WorkspaceSlot>) -> Option<String> {
         match slot {
-            Some(WorkspaceSlot::Loaded(ws)) => ws.tree_error.clone(),
+            Some(WorkspaceSlot::Loaded(ws)) => ws.files.tree_error().map(String::from),
             _ => None,
         }
     }
@@ -8643,13 +7741,13 @@ mod tests {
         // A 的异步结果(A 在后台)必须落到 A 身上。
         let ws = loaded_workspace_mut(&mut projects, 1).expect("A 已加载");
         assert_eq!(
-            ws.tree_error.as_deref(),
+            ws.files.tree_error(),
             Some("A"),
             "后台项目的结果不能落到前台项目"
         );
         // 反向同理:B 的结果落到 B。
         let ws = loaded_workspace_mut(&mut projects, 2).expect("B 已加载");
-        assert_eq!(ws.tree_error.as_deref(), Some("B"));
+        assert_eq!(ws.files.tree_error(), Some("B"));
         assert_eq!(active, Some(2), "路由全程没有读过 active_project_id");
     }
 
@@ -8671,7 +7769,8 @@ mod tests {
         );
         // 丢弃的那两条没有波及仍在的槽位。
         assert_eq!(
-            loaded_workspace_mut(&mut projects, 1).and_then(|w| w.tree_error.clone()),
+            loaded_workspace_mut(&mut projects, 1)
+                .and_then(|w| w.files.tree_error().map(String::from)),
             Some("A".to_string())
         );
     }
@@ -8783,7 +7882,10 @@ mod tests {
             ws.project.as_ref().map(|p| p.path.as_str()),
             Some("/tmp/p42")
         );
-        assert!(ws.file_tree.is_some(), "文件树根不需要 IO,应当立刻可画");
+        assert!(
+            ws.files.file_tree_is_some(),
+            "文件树根不需要 IO,应当立刻可画"
+        );
         assert!(ws.loading, "必须打上占位标记,促成结果才认得出该替换谁");
         assert!(ws.tabs.is_empty(), "会话要等 IO,占位阶段不该有 tab");
     }
@@ -9539,24 +8641,6 @@ mod tests {
         assert_eq!(ai_turn_summary(2, false), "过程:2 工具");
         assert_eq!(ai_turn_summary(2, true), "过程:思考 + 2 工具");
         assert_eq!(ai_turn_summary(0, true), "过程:思考");
-    }
-
-    #[test]
-    fn tree_dot_maps_status_colors() {
-        assert_eq!(
-            tree_row_dot_color(delivery::ChangeKind::Modified),
-            theme::color::GOLD
-        );
-        assert_eq!(
-            tree_row_dot_color(delivery::ChangeKind::New),
-            theme::color::GREEN
-        );
-        assert_eq!(
-            tree_row_dot_color(delivery::ChangeKind::Deleted),
-            theme::color::RED
-        );
-        assert_eq!(tree_row_dot_glyph(false), "●", "全部暂存=实心");
-        assert_eq!(tree_row_dot_glyph(true), "○", "有未暂存改动=空心");
     }
 
     #[test]

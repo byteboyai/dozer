@@ -489,7 +489,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     let window_h = (logical_size.height as f64 / scale) as f32;
                     let x = x.min((window_w - theme::geometry::context_menu_width()).max(0.0));
                     let y = y.min((window_h - theme::geometry::context_menu_height()).max(0.0));
-                    app.update(Message::RightClickAt { x, y });
+                    app.update(Message::Files(extensions::files::Message::RightClickAt {
+                        x,
+                        y,
+                    }));
                     // 不在这里 request_redraw——右键若真的命中某行,该行的
                     // `MouseArea::on_right_press` 随本轮事件走 iced 正常分发,
                     // 那条路径自会触发重绘;若点在空白处,菜单本就不该开,不必
@@ -545,7 +548,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 && event.logical_key
                     == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
             {
-                app.update(Message::ProjectTreeContextMenuClose);
+                app.update(Message::Files(extensions::files::Message::ContextMenuClose));
                 window.request_redraw();
                 return;
             }
@@ -692,7 +695,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     } else if to_comment {
                         Message::AcceptanceCommentEvent(ev)
                     } else {
-                        Message::ProjectTreeEditEvent(ev)
+                        Message::Files(extensions::files::Message::EditEvent(ev))
                     };
                     app.update(message);
                     window.request_redraw();
@@ -866,11 +869,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         app.update(Message::ProjectTabOpen(dir));
                     }
                 }
-                Message::ProjectTreeCopyPath(path, kind) => {
+                Message::Files(extensions::files::Message::CopyPath(path, kind)) => {
                     let root = app.active_project_path().unwrap_or_else(|| path.clone());
                     let s = crate::project::path_string(kind, &path, &root);
                     clipboard.write(iced_winit::core::clipboard::Kind::Standard, s);
-                    app.update(Message::ProjectTreeContextMenuClose);
+                    app.update(Message::Files(extensions::files::Message::ContextMenuClose));
                     window.request_redraw();
                 }
                 other => app.update(other),

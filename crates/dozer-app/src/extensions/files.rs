@@ -150,6 +150,47 @@ impl WorkspaceState {
         self.tree_delete_confirm.is_some()
     }
 
+    /// 供内核 `Workspace::blur_inputs`(点击输入框外时退出所有自绘输入的
+    /// 编辑态)调用——原逻辑直接 `self.tree_edit = None`,字段私有化后改走
+    /// 这个访问器。
+    pub fn cancel_tree_edit(&mut self) {
+        self.tree_edit = None;
+    }
+
+    /// 供内核 `Workspace::tree_editing`(main.rs 键盘路由用,判断项目树是否
+    /// 处于行内编辑态)调用。
+    pub fn tree_edit_is_some(&self) -> bool {
+        self.tree_edit.is_some()
+    }
+
+    /// 供内核 `Message::PreviewOpenPath` 处理器调用——打开预览的同时把该
+    /// 文件标记为项目树里的"选中"行(点击文件行→打开预览→该行高亮,是
+    /// 现状既有的联动效果,不是这次重构新增的)。
+    pub fn set_tree_selected(&mut self, path: PathBuf) {
+        self.tree_selected = Some(path);
+    }
+
+    /// 项目树操作的行内报错文案,供内核测试用作槽位内容的身份标记(见
+    /// `workspace.rs` 测试模块 `loaded_slot`)。只有测试会调用,生产代码不
+    /// 需要读它(渲染走 `files::view` 内部,不经这个访问器)。
+    #[cfg(test)]
+    pub fn tree_error(&self) -> Option<&str> {
+        self.tree_error.as_deref()
+    }
+
+    /// 同上,供测试构造带标记的槽位用。
+    #[cfg(test)]
+    pub fn set_tree_error(&mut self, e: Option<String>) {
+        self.tree_error = e;
+    }
+
+    /// 文件树是否已建立(供内核测试断言"占位构造立刻有文件树根,不需要
+    /// 等 IO"用)。只有测试会调用。
+    #[cfg(test)]
+    pub fn file_tree_is_some(&self) -> bool {
+        self.file_tree.is_some()
+    }
+
     /// "新建文件"/"新建文件夹"的公共起点(现有 `Workspace::start_tree_new`
     /// 的搬家版本,逻辑不变)。
     fn start_tree_new(&mut self, parent: PathBuf, mode: TreeEditMode) {
@@ -730,11 +771,14 @@ pub fn view<'a>(
 }
 
 /// 项目栏底状态条：左 环境/dozerd 点，右 [文件|git {分支}|组件]（文件高亮,组件占位）。
-fn project_status_bar<'a>(
+/// 泛型化(同 `crate::workspace::status_bar_container`)——纯展示,不产生任何
+/// 消息,内核在"未打开项目"占位里也要复用它(见 `no_project_placeholder`),
+/// 那边的 `Element` 泛型参数是顶层 `Message`,不是 `files::Message`。
+pub(crate) fn project_status_bar<'a, Msg: 'a>(
     daemon_ok: bool,
     ws_state: &'a WorkspaceState,
     outer: Border,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Msg, iced_widget::Theme, iced_widget::Renderer> {
     let (env, dot) = crate::workspace::env_status_text(daemon_ok);
     let left = row![
         text("●").size(theme::font::dot_sm()).color(dot),
@@ -1048,6 +1092,24 @@ mod tests {
 
     fn ws_with_tree(root: PathBuf) -> WorkspaceState {
         WorkspaceState::new(FileTree::new(root))
+    }
+
+    #[test]
+    fn tree_dot_maps_status_colors() {
+        assert_eq!(
+            tree_row_dot_color(delivery::ChangeKind::Modified),
+            theme::color::GOLD
+        );
+        assert_eq!(
+            tree_row_dot_color(delivery::ChangeKind::New),
+            theme::color::GREEN
+        );
+        assert_eq!(
+            tree_row_dot_color(delivery::ChangeKind::Deleted),
+            theme::color::RED
+        );
+        assert_eq!(tree_row_dot_glyph(false), "●", "全部暂存=实心");
+        assert_eq!(tree_row_dot_glyph(true), "○", "有未暂存改动=空心");
     }
 
     #[tokio::test]
