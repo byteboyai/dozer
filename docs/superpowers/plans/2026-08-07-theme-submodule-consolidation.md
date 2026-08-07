@@ -314,20 +314,20 @@ git commit -m "refactor(dozer-app): move chrome_style.rs into theme/region.rs su
 - Modify: `crates/dozer-app/src/main.rs`(删 `mod workspace_font;`)
 - Modify: 全仓库所有 `use crate::workspace_font;` 与 `workspace_font::` 引用点
 
-- [ ] **Step 1: 搬文件**
+- [x] **Step 1: 搬文件**
 
 ```bash
 git mv crates/dozer-app/src/workspace_font.rs crates/dozer-app/src/theme/font.rs
 ```
 
-- [ ] **Step 2: 顺手把文件内部的跨模块引用改成 `super::`(推荐但非强制)**
+- [x] **Step 2: 顺手把文件内部的跨模块引用改成 `super::`(推荐但非强制)**
 
 `workspace_font.rs` 的 `use crate::icon_size;` 在 Task 2 Step 4 已经被改成了
 `use crate::theme::icon_size;`——这是合法的绝对路径,不改也能编译过。现在文件挪进了
 `theme/font.rs`,跟 `theme/icon_size.rs` 是平级子模块,可以顺手缩短成
 `use super::icon_size;`,纯风格清理。
 
-- [ ] **Step 3: `theme.rs` 加声明**
+- [x] **Step 3: `theme.rs` 加声明**
 
 ```rust
 pub mod color;
@@ -337,11 +337,11 @@ pub mod region;
 pub mod terminal_font;
 ```
 
-- [ ] **Step 4: `main.rs` 删旧声明**
+- [x] **Step 4: `main.rs` 删旧声明**
 
 删除 `mod workspace_font;` 这一行。
 
-- [ ] **Step 5: 全仓库批量替换**
+- [x] **Step 5: 全仓库批量替换**
 
 ```bash
 grep -rl --include='*.rs' 'workspace_font::' crates/dozer-app/src \
@@ -356,17 +356,17 @@ grep -rln 'use crate::workspace_font;' crates/dozer-app/src \
 改成单独一行 `use crate::theme::font;`(参照 Task 2 Step 4 处理 `icon_size` 时的同款
 手法)。
 
-- [ ] **Step 6: 编译 + 测试**
+- [x] **Step 6: 编译 + 测试**
 
 Run: `cargo build --workspace && cargo test --workspace 2>&1 | tail -60`
 Expected: 干净通过。
 
-- [ ] **Step 7: 确认没有遗留引用**
+- [x] **Step 7: 确认没有遗留引用**
 
 Run: `grep -rn "workspace_font" crates/dozer-app/src`
 Expected: 无编译期代码引用残留(同 Task 4 Step 7 的判断标准)。
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add -A crates/dozer-app/src
