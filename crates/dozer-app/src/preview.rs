@@ -1,6 +1,10 @@
-//! 预览域状态机(P1d):左二 tabs、地址栏编辑态、webview 期望清单。
-//! 纯数据,不碰 wry/iced——webview 副作用由 main.rs 对照
-//! `desired_webviews()` 差集执行(spike 约束:句柄只活在事件分发环)。
+//! 预览域状态机(P1d):左二 tabs、webview 期望清单。纯数据,不碰
+//! wry/iced——webview 副作用由 main.rs 对照 `desired_webviews()` 差集
+//! 执行(spike 约束:句柄只活在事件分发环)。
+//!
+//! 地址栏/URL tab(`TabKind::Web`)、`AddrTarget` 这套逻辑已经随浏览器
+//! 面板扩展化(`extensions::browser::Tabs`)搬走——文件预览面板从来没有
+//! 地址栏,这里只保留文件/验收两种 tab。
 use std::path::PathBuf;
 
 /// 一个预览 tab。
@@ -18,19 +22,8 @@ pub struct PreviewTab {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TabKind {
     File(PathBuf),
-    Web {
-        url: String,
-    },
     /// 验收 tab（P1f）:不产 webview,内容由 iced 直绘。
     Acceptance,
-}
-
-/// 地址栏提交的解析结果:绝对路径 → 文件预览;其余按 URL 处理
-/// (无 scheme 自动补 `http://`,localhost 场景免敲协议头)。
-#[derive(Debug, Clone, PartialEq)]
-pub enum AddrTarget {
-    File(PathBuf),
-    Url(String),
 }
 
 /// main.rs 同步 webview 的期望清单项。
@@ -104,8 +97,6 @@ pub struct PreviewPane {
     tabs: Vec<PreviewTab>,
     active: usize,
     next_id: usize,
-    addr_editing: bool,
-    addr_buffer: String,
 }
 
 impl PreviewPane {
@@ -134,17 +125,6 @@ impl PreviewPane {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string_lossy().into_owned());
         self.push_tab(TabKind::File(path), title)
-    }
-
-    pub fn open_url(&mut self, url: String) -> usize {
-        let title = url
-            .trim_start_matches("http://")
-            .trim_start_matches("https://")
-            .split('/')
-            .next()
-            .unwrap_or(&url)
-            .to_string();
-        self.push_tab(TabKind::Web { url: url.clone() }, title)
     }
 
     fn push_tab(&mut self, kind: TabKind, title: String) -> usize {
@@ -185,7 +165,7 @@ impl PreviewPane {
     /// 当前激活 tab 若是 webview(文件/网页)则返回其 id(=webview 池的 key)。
     pub fn active_webview_id(&self) -> Option<usize> {
         self.tabs.get(self.active).and_then(|t| match t.kind {
-            TabKind::File(_) | TabKind::Web { .. } => Some(t.id),
+            TabKind::File(_) => Some(t.id),
             TabKind::Acceptance => None,
         })
     }
@@ -208,56 +188,6 @@ impl PreviewPane {
         }
     }
 
-    pub fn addr_editing(&self) -> bool {
-        self.addr_editing
-    }
-
-    pub fn addr_buffer(&self) -> &str {
-        &self.addr_buffer
-    }
-
-    /// 进入地址栏编辑:预填当前激活网页 tab 的 URL(文件 tab 不预填)。
-    pub fn addr_begin(&mut self) {
-        self.addr_editing = true;
-        self.addr_buffer = match self.tabs.get(self.active).map(|t| &t.kind) {
-            Some(TabKind::Web { url }) => url.clone(),
-            _ => String::new(),
-        };
-    }
-
-    pub fn addr_text(&mut self, s: &str) {
-        self.addr_buffer.push_str(s);
-    }
-
-    pub fn addr_backspace(&mut self) {
-        self.addr_buffer.pop();
-    }
-
-    pub fn addr_cancel(&mut self) {
-        self.addr_editing = false;
-        self.addr_buffer.clear();
-    }
-
-    pub fn addr_submit(&mut self) -> Option<AddrTarget> {
-        self.addr_editing = false;
-        let input = std::mem::take(&mut self.addr_buffer);
-        let input = input.trim();
-        if input.is_empty() {
-            return None;
-        }
-        if input.starts_with('/') {
-            return Some(AddrTarget::File(PathBuf::from(input)));
-        }
-        if let Some(rest) = input.strip_prefix("~/") {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
-            return Some(AddrTarget::File(PathBuf::from(home).join(rest)));
-        }
-        if input.contains("://") {
-            return Some(AddrTarget::Url(input.to_string()));
-        }
-        Some(AddrTarget::Url(format!("http://{input}")))
-    }
-
     /// webview 期望清单:每文件/网页 tab 一个,仅激活者可见(设计 D2)；
     /// 验收 tab 不产 webview,且它激活时其余 webview 全隐藏(iced 直绘 pane)。
     pub fn desired_webviews(&self) -> Vec<WebviewSpec> {
@@ -275,7 +205,6 @@ impl PreviewPane {
                         }
                         u
                     }
-                    TabKind::Web { url } => url.clone(),
                     TabKind::Acceptance => return None,
                 };
                 Some(WebviewSpec {
@@ -305,12 +234,12 @@ mod tests {
     fn open_select_close_tabs() {
         let mut p = PreviewPane::default();
         let id0 = p.open_path(PathBuf::from("/tmp/a.md"));
-        let id1 = p.open_url("http://localhost:3000".into());
+        let id1 = p.open_path(PathBuf::from("/tmp/b.md"));
         assert_eq!(p.tabs().len(), 2);
         assert_eq!(p.active_idx(), 1, "新开 tab 即激活");
         assert_ne!(id0, id1);
         assert_eq!(p.tabs()[0].title, "a.md");
-        assert_eq!(p.tabs()[1].title, "localhost:3000");
+        assert_eq!(p.tabs()[1].title, "b.md");
         p.select(0);
         assert_eq!(p.active_idx(), 0);
         p.close(0);
@@ -319,51 +248,10 @@ mod tests {
     }
 
     #[test]
-    fn addr_edit_and_submit_parses_path_vs_url() {
-        let mut p = PreviewPane::default();
-        p.addr_begin();
-        assert!(p.addr_editing());
-        for c in "/tmp/设计 稿.pdf".chars() {
-            p.addr_text(&c.to_string());
-        }
-        assert_eq!(
-            p.addr_submit(),
-            Some(AddrTarget::File(PathBuf::from("/tmp/设计 稿.pdf")))
-        );
-        assert!(!p.addr_editing());
-
-        p.addr_begin();
-        p.addr_text("localhost:3000/x");
-        assert_eq!(
-            p.addr_submit(),
-            Some(AddrTarget::Url("http://localhost:3000/x".into()))
-        );
-
-        p.addr_begin();
-        p.addr_text("https://example.com");
-        assert_eq!(
-            p.addr_submit(),
-            Some(AddrTarget::Url("https://example.com".into()))
-        );
-
-        p.addr_begin();
-        p.addr_text("abc");
-        p.addr_backspace();
-        p.addr_backspace();
-        p.addr_backspace();
-        assert_eq!(p.addr_submit(), None, "空输入不产生动作");
-
-        p.addr_begin();
-        p.addr_text("x");
-        p.addr_cancel();
-        assert!(!p.addr_editing());
-    }
-
-    #[test]
     fn desired_webviews_builds_urls_and_visibility() {
         let mut p = PreviewPane::default();
         p.open_path(PathBuf::from("/tmp/a b.md"));
-        p.open_url("http://localhost:3000".into());
+        p.open_path(PathBuf::from("/tmp/c.md"));
         let specs = p.desired_webviews();
         assert_eq!(specs.len(), 2);
         assert_eq!(
@@ -371,7 +259,7 @@ mod tests {
             "dozer://flyfish/host.html?p=%2Ftmp%2Fa%20b.md"
         );
         assert!(!specs[0].visible, "非激活 tab 不可见");
-        assert_eq!(specs[1].url, "http://localhost:3000");
+        assert_eq!(specs[1].url, "dozer://flyfish/host.html?p=%2Ftmp%2Fc.md");
         assert!(specs[1].visible);
     }
 
@@ -440,7 +328,7 @@ mod tests {
     fn reopening_same_file_reuses_tab() {
         let mut p = PreviewPane::default();
         let id0 = p.open_path(PathBuf::from("/tmp/a.md"));
-        p.open_url("http://localhost:3000".into()); // 中间插一个,把激活挪走
+        p.open_path(PathBuf::from("/tmp/b.md")); // 中间插一个,把激活挪走
         assert_eq!(p.active_idx(), 1);
         let id_again = p.open_path(PathBuf::from("/tmp/a.md"));
         assert_eq!(id_again, id0, "同文件复用同一 tab");
@@ -451,7 +339,7 @@ mod tests {
     #[test]
     fn acceptance_tab_produces_no_webview_and_hides_others() {
         let mut p = PreviewPane::default();
-        p.open_url("http://localhost:3000".into());
+        p.open_path(PathBuf::from("/tmp/a.md"));
         let acc_id = p.open_acceptance();
         let specs = p.desired_webviews();
         assert_eq!(specs.len(), 1, "验收 tab 不产 webview");
@@ -459,7 +347,7 @@ mod tests {
         // 重复打开复用同一 tab
         assert_eq!(p.open_acceptance(), acc_id);
         assert_eq!(p.tabs().len(), 2);
-        // 切回网页 tab → webview 复显
+        // 切回文件 tab → webview 复显
         p.select(0);
         assert!(p.desired_webviews()[0].visible);
     }
