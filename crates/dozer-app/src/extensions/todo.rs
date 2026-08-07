@@ -264,6 +264,29 @@ impl WorkspaceState {
     pub fn take_pending_dispatch(&mut self, tab_id: usize) -> Option<String> {
         self.pending_dispatch.remove(&tab_id)
     }
+
+    /// 只读当前已解析的任务列表,给内核派发(`DispatchToExisting`/`Dispatch
+    /// `New`)时按下标取任务文本用。
+    pub fn items(&self) -> &[TodoItem] {
+        &self.items
+    }
+
+    /// 关闭派发选择层(选中目标/新建后,或 Esc)。
+    pub fn close_dispatch_popup(&mut self) {
+        self.dispatch_open = None;
+    }
+
+    /// "派发到新建"发起时记一笔 `tab_id → text`,等 `on_tab_attached` 落地
+    /// 时用真正的 `session_id` 补派发记录。
+    pub fn insert_pending_dispatch(&mut self, tab_id: usize, text: String) {
+        self.pending_dispatch.insert(tab_id, text);
+    }
+
+    /// 上次成功读取时 `.dozer/todo.md` 的 mtime,轮询靠比较它决定要不要
+    /// 重读(`App::poll_todo_if_visible`)。`None` = 还没读过,或文件不存在。
+    pub fn mtime(&self) -> Option<std::time::SystemTime> {
+        self.mtime
+    }
 }
 
 /// Todo 面板挂在 `App` 上的元数据(派发记录/计划时间/完成时间),按
@@ -477,7 +500,7 @@ pub fn view<'a>(
     app_state: &'a AppState,
     ws_state: &'a WorkspaceState,
     project_id: i64,
-    tabs: &'a [SessionTabSummary],
+    tabs: &[SessionTabSummary],
     width: Length,
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {

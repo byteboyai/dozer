@@ -34,6 +34,7 @@ use crate::conversation::{self, ConversationMeta};
 use crate::delivery::{self, FileChange, FileGitStatus, WorktreeInfo};
 use crate::extensions::browser;
 use crate::extensions::git_log;
+use crate::extensions::todo;
 use crate::git_watch;
 use crate::goal::{self, Goal};
 use crate::icons;
@@ -48,8 +49,6 @@ use crate::term_model::TerminalModel;
 use crate::term_view;
 use crate::terminal_font;
 use crate::theme;
-use crate::todo;
-use crate::todo_meta;
 use crate::transcript::{self, ReviewEntry};
 use crate::usage;
 use crate::workspace_font;
@@ -62,8 +61,8 @@ use iced_widget::core::mouse;
 use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Color, Element, Font, Length, Padding};
 use iced_widget::{
-    MouseArea, Scrollable, button, column, container, responsive, rich_text, row, scrollable, span,
-    stack, text, text_editor, text_input,
+    MouseArea, Scrollable, button, column, container, responsive, row, scrollable, stack, text,
+    text_editor,
 };
 use iced_winit::winit::event_loop::EventLoopProxy;
 use serde::{Deserialize, Serialize};
@@ -971,30 +970,10 @@ pub enum Message {
     /// 新建会话完成 attach（tab_id、`SessionInfo`、初始快照）。
     /// 启动时的恢复走同步的 `bootstrap`，不需要过一次消息循环。
     TabAttached(ProjectId, usize, SessionInfo, Vec<u8>),
-    /// Todo 面板：点击任务行勾选框，`usize` 是 `Workspace.todo_items` 下标。
-    TodoToggle(usize),
-    /// Todo 面板："＋新增任务"输入框内容变化。
-    TodoAddInputChanged(String),
-    /// Todo 面板：提交"＋新增任务"（回车）。
-    TodoAddSubmit,
-    /// Todo 面板：点击筛选分段（全部/待办/进行中/完成）。
-    TodoFilterSet(todo::TodoFilter),
-    /// Todo 面板：搜索框内容变化。
-    TodoSearchChanged(String),
-    /// Todo 面板：点击某条任务"派发"按钮，打开派发选择层。
-    TodoDispatchOpen(usize),
-    /// Todo 面板：点击派发选择层外/Esc，关闭不派发。
-    TodoDispatchClose,
-    /// Todo 面板：选中一个已存活的 agent tab 派发：(任务下标, 目标 session id)。
-    TodoDispatchToExisting(usize, String),
-    /// Todo 面板：选"新建"派发：(任务下标, 要新建的 agent/shell 选项)。
-    TodoDispatchNew(usize, PickerLaunch),
-    /// Todo 面板：点击某条任务旁"计划"文字，进入内联编辑计划时间。
-    TodoPlanDateEditStart(usize),
-    /// Todo 面板：计划时间编辑框内容变化。
-    TodoPlanDateChanged(String),
-    /// Todo 面板：提交计划时间（回车）。
-    TodoPlanDateSubmit,
+    /// Todo 面板的全部消息(派发到已有/新建会话除外——那两条内核直接
+    /// 拦截处理,见 `update()` 对应分支),内核只转发不解读——见
+    /// `extensions::todo::Message`。
+    Todo(todo::Message),
     /// 终端 pane 像素尺寸变化换算出的新网格尺寸；对所有 tab 生效
     /// （包括当前不可见的），保证切换 tab 时尺寸已经是最新的。
     PaneResized { cols: u16, rows: u16 },
@@ -1420,9 +1399,9 @@ pub struct App {
     /// `extensions::git_log`。`App` 级共享、不按项目分(现状,纯重构不改,
     /// 见 `sync_git_log_to_active_project`)。
     git_log: git_log::State,
-    /// Todo 面板本地元数据（派发记录/计划时间/完成时间），启动时
-    /// `todo_meta::load()` 读盘，每次变更后 `todo_meta::save` 落盘。
-    todo_meta: todo_meta::TodoMetaState,
+    /// Todo 面板 App 级状态(派发记录/计划时间/完成时间,按项目分桶,
+    /// 启动时读盘、每次变更落盘)——见 `extensions::todo::AppState`。
+    todo: todo::AppState,
 }
 
 pub struct Workspace {
@@ -1498,25 +1477,8 @@ pub struct Workspace {
     agent_picker_open: bool,
     /// 预览编辑弹层进行中的会话;`None` = 未打开。
     edit_session: Option<EditSession>,
-    /// `.dozer/todo.md` 解析后的内存缓存，`reload_todo_from_disk` 刷新。
-    todo_items: Vec<todo::TodoItem>,
-    /// 上一次成功读取时 `.dozer/todo.md` 的 mtime，轮询靠比较它决定要不要
-    /// 重读（`App::poll_todo_if_visible`）。`None` = 还没读过，或文件不存在。
-    todo_mtime: Option<std::time::SystemTime>,
-    /// "＋新增任务"输入框当前内容（未提交）。
-    todo_add_draft: String,
-    /// 当前状态筛选（全部/待办/进行中/完成），纯前端状态，不持久化。
-    todo_filter: todo::TodoFilter,
-    /// 搜索框当前关键字，纯前端状态，不持久化。
-    todo_search: String,
-    /// 当前打开着派发选择层的任务下标（`None` = 未打开任何派发层）。
-    todo_dispatch_open: Option<usize>,
-    /// "派发到新建"发起时记一笔：`tab_id` → 任务文本。`on_tab_attached`
-    /// 时消费掉、往 `App.todo_meta` 补派发记录（这时才知道真的 `session_id`）。
-    todo_pending_dispatch: HashMap<usize, String>,
-    /// 正在内联编辑计划时间的任务下标 + 输入框草稿；`None` = 当前没有
-    /// 任何一条在编辑计划时间。
-    todo_editing_plan_date: Option<(usize, String)>,
+    /// Todo 面板 per-project 状态——见 `extensions::todo::WorkspaceState`。
+    todo: todo::WorkspaceState,
     /// 这份 `Workspace` 是否只是 `Stub` → `Loaded` 促成期间的"加载中"占位
     /// (见 [`Workspace::loading_for_project`])。占位有正确的 `project`/文件树,
     /// 但会话/git/对话都还没拉,并且整份对象会在
@@ -1813,14 +1775,7 @@ impl Workspace {
             tree_edit: None,
             agent_picker_open: false,
             edit_session: None,
-            todo_items: Vec::new(),
-            todo_mtime: None,
-            todo_add_draft: String::new(),
-            todo_filter: todo::TodoFilter::All,
-            todo_search: String::new(),
-            todo_dispatch_open: None,
-            todo_pending_dispatch: HashMap::new(),
-            todo_editing_plan_date: None,
+            todo: todo::WorkspaceState::default(),
             loading: false,
         }
     }
@@ -1971,77 +1926,6 @@ impl Workspace {
                 tracing::warn!("写入终端失败: {e}");
             }
         });
-    }
-
-    /// 从磁盘重新读取并解析 `.dozer/todo.md`，刷新 `todo_items`/
-    /// `todo_mtime`。文件不存在/读失败按"空列表"处理，不 panic、不报错。
-    fn reload_todo_from_disk(&mut self) {
-        let Some(project) = self.project.as_ref() else {
-            return;
-        };
-        let path = todo::todo_path(std::path::Path::new(&project.path));
-        self.todo_mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-        let md = std::fs::read_to_string(&path).unwrap_or_default();
-        self.todo_items = todo::parse_todo(&md);
-    }
-
-    /// 勾选/取消勾选第 `idx` 条任务：算出新行文本、用
-    /// `todo::replace_todo_line` 定点替换、写回磁盘、重新解析刷新内存态。
-    /// 找不到要替换的原始行（文件已被 agent 并发改过）时静默放弃这次操作、
-    /// 强制走一次 `reload_todo_from_disk`（冲突不是错误）。
-    fn toggle_todo_item(&mut self, idx: usize) {
-        let Some(project) = self.project.as_ref() else {
-            return;
-        };
-        let Some(item) = self.todo_items.get(idx) else {
-            return;
-        };
-        let old_line = format!("- [{}] {}", if item.done { "x" } else { " " }, item.text);
-        let new_line = format!("- [{}] {}", if item.done { " " } else { "x" }, item.text);
-        let path = todo::todo_path(std::path::Path::new(&project.path));
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            return;
-        };
-        match todo::replace_todo_line(&content, &old_line, &new_line) {
-            Some(new_content) => {
-                if let Err(e) = std::fs::write(&path, &new_content) {
-                    tracing::warn!("写入 todo.md 失败: {e}");
-                    return;
-                }
-                self.reload_todo_from_disk();
-            }
-            None => {
-                // 冲突：文件已经变了，放弃这次写入，直接重读展示最新状态。
-                self.reload_todo_from_disk();
-            }
-        }
-    }
-
-    /// 提交"＋新增任务"输入框：草稿为空/全空白时不动作（不追加空任务）。
-    /// 用 `todo::append_todo_item` 纯追加，冲突面比 `replace_todo_line` 小。
-    fn submit_todo_add(&mut self) {
-        let text = self.todo_add_draft.trim().to_string();
-        if text.is_empty() {
-            return;
-        }
-        let Some(project) = self.project.as_ref() else {
-            return;
-        };
-        let path = todo::todo_path(std::path::Path::new(&project.path));
-        let content = std::fs::read_to_string(&path).unwrap_or_default();
-        let new_content = todo::append_todo_item(&content, &text);
-        if let Some(parent) = path.parent()
-            && let Err(e) = std::fs::create_dir_all(parent)
-        {
-            tracing::warn!("创建 .dozer 目录失败: {e}");
-            return;
-        }
-        if let Err(e) = std::fs::write(&path, &new_content) {
-            tracing::warn!("写入 todo.md 失败: {e}");
-            return;
-        }
-        self.todo_add_draft.clear();
-        self.reload_todo_from_disk();
     }
 
     /// 把 `text` 当输入写进已存活的 `session_id` 对应 tab。派发目标可能在
@@ -2921,7 +2805,7 @@ impl App {
             home_recent_conversations: Vec::new(),
             home_recents_loaded: false,
             git_log: git_log::State::default(),
-            todo_meta: todo_meta::load(),
+            todo: todo::AppState::load(),
         }
     }
 
@@ -3066,8 +2950,8 @@ impl App {
 
     /// `main.rs` 定时唤醒调用：只在 `todo_panel_visible()` 时才真的
     /// `stat` 一下 `.dozer/todo.md` 的 mtime；没变就是一次系统调用，
-    /// 变了才重读+reparse（`reload_todo_from_disk` 内部也会再 stat 一次
-    /// mtime，多一次系统调用换取 `reload_todo_from_disk` 保持独立可复用）。
+    /// 变了才重读+reparse（`todo::reload_from_disk` 内部也会再 stat 一次
+    /// mtime，多一次系统调用换取它保持独立可复用）。
     pub fn poll_todo_if_visible(&mut self) {
         if !self.todo_panel_visible() {
             return;
@@ -3080,57 +2964,8 @@ impl App {
         };
         let path = todo::todo_path(std::path::Path::new(&project.path));
         let current = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-        if current != ws.todo_mtime {
-            ws.reload_todo_from_disk();
-        }
-    }
-
-    /// 把一条派发记录写进 `todo_meta` 并落盘。`text` 用来算
-    /// `todo::todo_line_key`——跟渲染时查询用的 key 必须是同一套算法，
-    /// 否则写进去的记录永远查不到。
-    fn record_todo_dispatch(&mut self, project_id: ProjectId, text: &str, session_id: String) {
-        let key = todo::todo_line_key(text);
-        let entry = self.todo_meta.entry(project_id).or_default();
-        entry.insert(
-            key,
-            todo_meta::TodoTaskMeta {
-                dispatch: Some(todo_meta::DispatchRecord {
-                    session_id,
-                    dispatched_at: std::time::SystemTime::now(),
-                }),
-                ..entry.get(&key).cloned().unwrap_or_default()
-            },
-        );
-        if let Err(e) = todo_meta::save(&self.todo_meta) {
-            tracing::warn!("写入 todo_meta.json 失败: {e}");
-        }
-    }
-
-    /// 写/清计划时间：`draft` 为空字符串时存 `None`（清空这个字段，
-    /// 不留空白占位——空草稿等价于用户想清空这条）。
-    fn set_todo_plan_date(&mut self, project_id: ProjectId, text: &str, draft: String) {
-        let key = todo::todo_line_key(text);
-        let entry = self.todo_meta.entry(project_id).or_default();
-        let meta = entry.entry(key).or_default();
-        meta.plan_date = if draft.trim().is_empty() {
-            None
-        } else {
-            Some(draft.trim().to_string())
-        };
-        if let Err(e) = todo_meta::save(&self.todo_meta) {
-            tracing::warn!("写入 todo_meta.json 失败: {e}");
-        }
-    }
-
-    /// 勾选变完成 → 盖章当前时间；取消勾选 → 清空（避免待办任务身上挂着
-    /// 陈旧的完成于时间戳）。
-    fn set_todo_completed_at(&mut self, project_id: ProjectId, text: &str, done: bool) {
-        let key = todo::todo_line_key(text);
-        let entry = self.todo_meta.entry(project_id).or_default();
-        let meta = entry.entry(key).or_default();
-        meta.completed_at = todo::completed_at_for_toggle(done, std::time::SystemTime::now());
-        if let Err(e) = todo_meta::save(&self.todo_meta) {
-            tracing::warn!("写入 todo_meta.json 失败: {e}");
+        if current != ws.todo.mtime() {
+            todo::reload_from_disk(&mut ws.todo, std::path::Path::new(&project.path));
         }
     }
 
@@ -3370,7 +3205,7 @@ impl App {
     /// Todo 派发选择层是否打开(给 main.rs 的 Esc 关闭用)。
     pub fn todo_dispatch_open(&self) -> bool {
         self.active_workspace()
-            .map(|ws| ws.todo_dispatch_open.is_some())
+            .map(|ws| ws.todo.dispatch_popup_open())
             .unwrap_or(false)
     }
 
@@ -3866,119 +3701,58 @@ impl App {
                     ws.spawn_new_tab(io, agent, None);
                 });
             }
-            Message::TodoToggle(idx) => {
-                let Some(project_id) = self.active_project_id else {
-                    return;
-                };
-                let before = self
-                    .active_workspace()
-                    .and_then(|ws| ws.todo_items.get(idx))
-                    .cloned();
-                self.with_focused_project(|ws, _io| ws.toggle_todo_item(idx));
-                let after = self
-                    .active_workspace()
-                    .and_then(|ws| ws.todo_items.get(idx))
-                    .cloned();
-                if let (Some(before), Some(after)) = (before, after) {
-                    // 文本没变(正常勾选场景)才更新 `completed_at`；如果文本变了
-                    // (文件可能在加载期间被 agent 并发改过)，跳过，避免把完成
-                    // 时间错记到另一条任务上。
-                    if before.text == after.text {
-                        self.set_todo_completed_at(project_id, &after.text, after.done);
-                    }
-                }
-            }
-            Message::TodoAddInputChanged(s) => {
-                self.with_focused_project(|ws, _io| ws.todo_add_draft = s);
-            }
-            Message::TodoAddSubmit => {
-                self.with_focused_project(|ws, _io| ws.submit_todo_add());
-            }
-            Message::TodoFilterSet(f) => {
-                self.with_focused_project(|ws, _io| ws.todo_filter = f);
-            }
-            Message::TodoSearchChanged(s) => {
-                self.with_focused_project(|ws, _io| ws.todo_search = s);
-            }
-            Message::TodoDispatchOpen(idx) => {
-                self.with_focused_project(|ws, _io| ws.todo_dispatch_open = Some(idx));
-            }
-            Message::TodoDispatchClose => {
-                self.with_focused_project(|ws, _io| ws.todo_dispatch_open = None);
-            }
-            Message::TodoDispatchToExisting(idx, session_id) => {
+            Message::Todo(todo::Message::DispatchToExisting(idx, session_id)) => {
                 let Some(project_id) = self.active_project_id else {
                     return;
                 };
                 let text = self
                     .active_workspace()
-                    .and_then(|ws| ws.todo_items.get(idx))
+                    .and_then(|ws| ws.todo.items().get(idx))
                     .map(|item| item.text.clone());
                 let Some(text) = text else {
                     return;
                 };
                 self.with_focused_project(|ws, io| {
-                    ws.todo_dispatch_open = None;
+                    ws.todo.close_dispatch_popup();
                     ws.dispatch_todo_to_existing(io, &session_id, &text);
                 });
-                self.record_todo_dispatch(project_id, &text, session_id);
+                self.todo.record_dispatch(project_id, &text, session_id);
             }
-            Message::TodoDispatchNew(idx, launch) => {
+            Message::Todo(todo::Message::DispatchNew(idx, launch)) => {
                 let text = self
                     .active_workspace()
-                    .and_then(|ws| ws.todo_items.get(idx))
+                    .and_then(|ws| ws.todo.items().get(idx))
                     .map(|item| item.text.clone());
                 let Some(text) = text else {
                     return;
                 };
                 self.with_focused_project(|ws, io| {
-                    ws.todo_dispatch_open = None;
+                    ws.todo.close_dispatch_popup();
                     if let Some(tab_id) = ws.spawn_new_tab(io, launch, Some(text.clone())) {
-                        ws.todo_pending_dispatch.insert(tab_id, text);
+                        ws.todo.insert_pending_dispatch(tab_id, text);
                     }
                 });
             }
-            Message::TodoPlanDateEditStart(idx) => {
-                let existing = self
-                    .active_workspace()
-                    .and_then(|ws| ws.project.as_ref().map(|p| p.id))
-                    .and_then(|pid| {
-                        let key = self
-                            .active_workspace()
-                            .and_then(|ws| ws.todo_items.get(idx))
-                            .map(|item| todo::todo_line_key(&item.text))?;
-                        self.todo_meta.get(&pid)?.get(&key)?.plan_date.clone()
-                    })
-                    .unwrap_or_default();
-                self.with_focused_project(|ws, _io| {
-                    ws.todo_editing_plan_date = Some((idx, existing));
-                });
-            }
-            Message::TodoPlanDateChanged(s) => {
-                self.with_focused_project(|ws, _io| {
-                    if let Some((_, draft)) = ws.todo_editing_plan_date.as_mut() {
-                        *draft = s;
-                    }
-                });
-            }
-            Message::TodoPlanDateSubmit => {
+            Message::Todo(msg) => {
                 let Some(project_id) = self.active_project_id else {
                     return;
                 };
-                let entry = self
-                    .active_workspace()
-                    .and_then(|ws| ws.todo_editing_plan_date.clone())
-                    .and_then(|(idx, draft)| {
-                        let text = self
-                            .active_workspace()
-                            .and_then(|ws| ws.todo_items.get(idx))
-                            .map(|item| item.text.clone())?;
-                        Some((text, draft))
-                    });
-                if let Some((text, draft)) = entry {
-                    self.set_todo_plan_date(project_id, &text, draft);
-                }
-                self.with_focused_project(|ws, _io| ws.todo_editing_plan_date = None);
+                // `self.todo`(App 级)和某个 `Workspace` 要同时可变借用,
+                // `todo::update` 才能一次处理完两块状态——不能套用
+                // `with_focused_project(|ws, _io| ..)` 那种单参数闭包(它只
+                // 借出 `ws`,拿不到 `self.todo`)。改用 `loaded_workspace_mut`
+                // 直接从 `self.projects` 借 `&mut Workspace`,跟 `&mut self.todo`
+                // 是结构体的两个不同字段,互不冲突,Rust 借用检查器允许分别
+                // 借用。
+                let app_todo = &mut self.todo;
+                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+                    return;
+                };
+                let Some(project) = ws.project.as_ref() else {
+                    return;
+                };
+                let project_path = std::path::PathBuf::from(&project.path);
+                todo::update(&mut ws.todo, app_todo, msg, project_id, &project_path);
             }
             Message::TabAttached(project_id, tab_id, info, snapshot) => {
                 let session_id = info.id.clone();
@@ -3990,9 +3764,9 @@ impl App {
                 // 必须按自带的 `project_id` 路由(同 `on_tab_attached` 那一步),
                 // 不能用 `active_workspace_mut()`(当前聚焦项目可能已经切走)。
                 if let Some(text) = loaded_workspace_mut(&mut self.projects, project_id)
-                    .and_then(|ws| ws.todo_pending_dispatch.remove(&tab_id))
+                    .and_then(|ws| ws.todo.take_pending_dispatch(tab_id))
                 {
-                    self.record_todo_dispatch(project_id, &text, session_id);
+                    self.todo.record_dispatch(project_id, &text, session_id);
                 }
             }
             Message::PaneResized { cols, rows } => {
@@ -4050,7 +3824,14 @@ impl App {
                 // Todo 面板：切入即从磁盘重读一次 `.dozer/todo.md`，保证切进来
                 // 立刻是最新内容（轮询只负责"停留期间"的同步，切换本身不算）。
                 if self.left_view == LeftView::Todo {
-                    self.with_focused_project(|ws, _io| ws.reload_todo_from_disk());
+                    self.with_focused_project(|ws, _io| {
+                        if let Some(project) = ws.project.as_ref() {
+                            todo::reload_from_disk(
+                                &mut ws.todo,
+                                std::path::Path::new(&project.path),
+                            );
+                        }
+                    });
                 }
                 // 图标栏点击一律退出放大态。放大态浮层不拦图标栏上的点击
                 // (遮罩两侧垫的是无交互 Space,点击穿到下层图标按钮),所以
@@ -6818,7 +6599,29 @@ fn left_panel_area<'a>(
         )
         .map(Message::Browser),
         LeftView::GitLog => git_log::view(&app.git_log).map(Message::GitLog),
-        LeftView::Todo => todo_pane(app, ws, Length::Fill, zone_pane_border(zone, ac)),
+        LeftView::Todo => {
+            let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
+                return column![].into();
+            };
+            let tabs: Vec<todo::SessionTabSummary> = ws
+                .tabs
+                .iter()
+                .map(|t| todo::SessionTabSummary {
+                    session_id: t.info.id.clone(),
+                    title: tab_title(t.agent, t.cwd.as_deref(), &t.info.name),
+                    alive: t.alive,
+                })
+                .collect();
+            todo::view(
+                &app.todo,
+                &ws.todo,
+                project_id,
+                &tabs,
+                Length::Fill,
+                zone_pane_border(zone, ac),
+            )
+            .map(Message::Todo)
+        }
     };
     if maximized {
         return inner;
@@ -7557,475 +7360,6 @@ fn preview_pane(
             ..container::Style::default()
         })
         .into()
-}
-
-/// 左面板区 Todo 视图：`.dozer/todo.md` 任务列表 + 筛选/搜索 + 派发 +
-/// 计划/完成时间。
-fn todo_pane<'a>(
-    app: &'a App,
-    ws: &'a Workspace,
-    width: Length,
-    border: Border,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let header = column![
-        text("Todo")
-            .size(workspace_font::title())
-            .color(theme::CREAM),
-        text(format!("{} 条任务 · .dozer/todo.md", ws.todo_items.len()))
-            .size(workspace_font::caption())
-            .color(theme::DIM),
-    ]
-    .spacing(4)
-    .padding([20, 20]);
-
-    // 状态三态推导 + 筛选下标。
-    let states: Vec<todo::TodoState> = ws
-        .todo_items
-        .iter()
-        .map(|item| {
-            let key = todo::todo_line_key(&item.text);
-            let dispatch = app_todo_dispatch_for(app, ws, key);
-            let target_alive = dispatch
-                .map(|d| ws.tabs.iter().any(|t| t.info.id == d.session_id && t.alive))
-                .unwrap_or(false);
-            todo::todo_display_state(item, dispatch, target_alive)
-        })
-        .collect();
-    let visible_idx = todo::filter_todos(&ws.todo_items, &states, ws.todo_filter, &ws.todo_search);
-
-    // 派发选择层要列出的存活 agent tab。
-    let existing_tabs: Vec<(&str, String)> = ws
-        .tabs
-        .iter()
-        .filter(|t| t.alive)
-        .map(|t| {
-            (
-                t.info.id.as_str(),
-                tab_title(t.agent, t.cwd.as_deref(), &t.info.name),
-            )
-        })
-        .collect();
-
-    let toolbar = row![
-        todo_filter_segment("全部", todo::TodoFilter::All, ws.todo_filter),
-        todo_filter_segment("待办", todo::TodoFilter::Pending, ws.todo_filter),
-        todo_filter_segment("进行中", todo::TodoFilter::InProgress, ws.todo_filter),
-        todo_filter_segment("完成", todo::TodoFilter::Done, ws.todo_filter),
-        text_input("搜索任务关键字…", &ws.todo_search)
-            .on_input(Message::TodoSearchChanged)
-            .size(workspace_font::body())
-            .width(Length::Fill)
-            .style(
-                |_t: &iced_widget::Theme, _s| iced_widget::text_input::Style {
-                    background: theme::BG.into(),
-                    border: Border::default(),
-                    icon: theme::DIM,
-                    placeholder: theme::DIM,
-                    value: theme::CREAM,
-                    selection: theme::GOLD,
-                }
-            ),
-    ]
-    .spacing(8)
-    .padding([12, 20])
-    .align_y(iced_widget::core::alignment::Vertical::Center);
-
-    let mut list = column![].spacing(2);
-    if visible_idx.is_empty() {
-        list = list.push(
-            container(
-                text("没有匹配的任务")
-                    .size(workspace_font::body())
-                    .color(theme::DIM),
-            )
-            .padding([20, 20]),
-        );
-    } else {
-        for &idx in &visible_idx {
-            let item = &ws.todo_items[idx];
-            let key = todo::todo_line_key(&item.text);
-            let project_id = ws.project.as_ref().map(|p| p.id);
-            let meta = project_id
-                .and_then(|pid| app.todo_meta.get(&pid))
-                .and_then(|m| m.get(&key));
-            let mut row = None;
-            if let Some((editing_idx, draft)) = &ws.todo_editing_plan_date
-                && *editing_idx == idx
-            {
-                row = Some(todo_plan_date_edit_row(item, draft));
-            }
-            match row {
-                Some(r) => list = list.push(r),
-                None => {
-                    list = list.push(todo_row(
-                        idx,
-                        item,
-                        states[idx],
-                        meta,
-                        ws.todo_dispatch_open == Some(idx),
-                        &existing_tabs,
-                    ));
-                }
-            }
-        }
-    }
-
-    let add_row = text_input("＋新增任务…", &ws.todo_add_draft)
-        .on_input(Message::TodoAddInputChanged)
-        .on_submit(Message::TodoAddSubmit)
-        .size(workspace_font::body())
-        .padding([10, 20])
-        .style(
-            |_t: &iced_widget::Theme, _s| iced_widget::text_input::Style {
-                background: theme::BG.into(),
-                border: Border {
-                    color: Color::TRANSPARENT,
-                    width: 0.0,
-                    radius: 0.0.into(),
-                },
-                icon: theme::DIM,
-                placeholder: theme::DIM,
-                value: theme::CREAM,
-                selection: theme::GOLD,
-            },
-        );
-
-    let divider = container(iced_widget::Space::new())
-        .width(Length::Fill)
-        .height(Length::Fixed(1.0))
-        .style(|_t: &iced_widget::Theme| container::Style {
-            border: Border {
-                color: theme::BORDER,
-                width: 1.0,
-                radius: 0.0.into(),
-            },
-            ..container::Style::default()
-        });
-
-    let content = column![
-        header,
-        toolbar,
-        scrollable(list).height(Length::Fill),
-        divider,
-        add_row,
-    ]
-    .height(Length::Fill);
-
-    container(content)
-        .width(width)
-        .height(Length::Fill)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::BG.into()),
-            border,
-            ..container::Style::default()
-        })
-        .into()
-}
-
-/// 一条 Todo 任务行。勾选框+文本（完成态删除线+暗色）+ 右侧按状态显示：
-/// 待办=派发按钮；进行中=绿点+"进行中"标签；完成=占位。派发选择层叠在行下方。
-fn todo_row<'a>(
-    idx: usize,
-    item: &'a todo::TodoItem,
-    state: todo::TodoState,
-    meta: Option<&'a todo_meta::TodoTaskMeta>,
-    dispatch_open: bool,
-    existing_tabs: &'a [(&'a str, String)],
-) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let done = item.done;
-    let box_color = if done { theme::BORDER } else { theme::DIM };
-    let checkbox = button(
-        container(if done {
-            text("✓")
-                .size(workspace_font::caption())
-                .color(theme::DIM)
-                .into()
-        } else {
-            Element::from(iced_widget::space::Space::new())
-        })
-        .width(Length::Fixed(18.0))
-        .height(Length::Fixed(18.0))
-        .align_x(iced_widget::core::alignment::Horizontal::Center)
-        .align_y(iced_widget::core::alignment::Vertical::Center)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: if done {
-                Some(theme::BORDER.into())
-            } else {
-                None
-            },
-            border: Border {
-                color: box_color,
-                width: 1.5,
-                radius: 4.0.into(),
-            },
-            ..container::Style::default()
-        }),
-    )
-    .on_press(Message::TodoToggle(idx))
-    .padding(0)
-    .style(|_t: &iced_widget::Theme, _s| button::Style {
-        background: None,
-        text_color: theme::CREAM,
-        ..button::Style::default()
-    });
-
-    let label_color = if done { theme::DIM } else { theme::CREAM };
-    let label: Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> = if done {
-        // `rich_text!` 会经 `FromIterator` 收集成 `Rich`，再 `.into()` 成
-        // `Element` 抹掉 `Link` 泛型；没有链接时 `Link` 无从推导，得用
-        // 显式类型钉住它（iced 文档也提示无链接时要人工指定 `Link`）。
-        let rich: iced_widget::text::Rich<
-            '_,
-            (),
-            Message,
-            iced_widget::Theme,
-            iced_widget::Renderer,
-        > = rich_text![
-            span(item.text.clone())
-                .size(workspace_font::body())
-                .color(label_color)
-                .strikethrough(true)
-        ];
-        rich.into()
-    } else {
-        text(item.text.clone())
-            .size(workspace_font::body())
-            .color(label_color)
-            .into()
-    };
-
-    // 中间段：日期标签（完成=完成于 xx；待办/进行中=计划 xx）。
-    let date_label: Option<Element<'static, Message, iced_widget::Theme, iced_widget::Renderer>> =
-        match state {
-            todo::TodoState::Done => meta.and_then(|m| m.completed_at).map(|t| {
-                text(format!("完成于 {}", format_todo_time(t)))
-                    .size(workspace_font::caption())
-                    .color(theme::DIM)
-                    .into()
-            }),
-            _ => meta.and_then(|m| m.plan_date.as_deref()).map(|d| {
-                button(
-                    text(format!("计划 {d}"))
-                        .size(workspace_font::caption())
-                        .color(theme::DIM),
-                )
-                .on_press(Message::TodoPlanDateEditStart(idx))
-                .padding(0)
-                .style(|_t: &iced_widget::Theme, _s| button::Style {
-                    background: None,
-                    text_color: theme::DIM,
-                    ..button::Style::default()
-                })
-                .into()
-            }),
-        };
-    let mut middle = row![checkbox, label]
-        .spacing(10)
-        .align_y(iced_widget::core::alignment::Vertical::Center);
-    if let Some(label) = date_label {
-        middle = middle.push(label);
-    }
-
-    let trailing: Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> = match state
-    {
-        todo::TodoState::Pending => button(
-            row![
-                icons::view(
-                    icons::IconKind::SquarePlus,
-                    crate::icon_size::row(),
-                    theme::GOLD
-                ),
-                text("派发")
-                    .size(workspace_font::caption())
-                    .color(theme::GOLD),
-            ]
-            .spacing(4)
-            .align_y(iced_widget::core::alignment::Vertical::Center),
-        )
-        .on_press(Message::TodoDispatchOpen(idx))
-        .padding([5, 10])
-        .style(|_t: &iced_widget::Theme, _s| button::Style {
-            background: None,
-            text_color: theme::GOLD,
-            border: Border {
-                color: theme::BORDER,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..button::Style::default()
-        })
-        .into(),
-        todo::TodoState::InProgress => row![
-            text("●").size(workspace_font::dot_sm()).color(theme::GREEN),
-            text("进行中")
-                .size(workspace_font::caption())
-                .color(theme::GREEN),
-        ]
-        .spacing(5)
-        .into(),
-        todo::TodoState::Done => iced_widget::space::Space::new().into(),
-    };
-
-    let base: Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> =
-        row![middle, trailing]
-            .spacing(10)
-            .align_y(iced_widget::core::alignment::Vertical::Center)
-            .padding([10, 20])
-            .into();
-    if dispatch_open {
-        column![base, todo_dispatch_popup(idx, existing_tabs)].into()
-    } else {
-        base
-    }
-}
-
-/// Todo 派发选择层：列出当前项目存活的 agent tab + 一个"新建"入口，样式
-/// 对齐 `agent_picker_popup`（CARD 底 + BORDER 描边）。挂在触发它的那一行
-/// 下方，不需要额外的坐标计算。
-fn todo_dispatch_popup<'a>(
-    idx: usize,
-    existing_tabs: &'a [(&'a str, String)],
-) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let mut col = column![].spacing(2);
-    // `title` 是 `String`，非 `Copy`；match ergonomics 下 `(session_id, title)`
-    // 对 `&(&str, String)` 解构自动按引用绑定，两者都够用。
-    for (session_id, title) in existing_tabs {
-        col = col.push(
-            button(
-                text(title.clone())
-                    .size(workspace_font::body())
-                    .color(theme::CREAM),
-            )
-            .on_press(Message::TodoDispatchToExisting(idx, session_id.to_string()))
-            .width(Length::Fill)
-            .padding([6, 12])
-            .style(|_t: &iced_widget::Theme, _s| button::Style {
-                background: None,
-                text_color: theme::CREAM,
-                ..button::Style::default()
-            }),
-        );
-    }
-    col = col.push(
-        button(
-            text("新建 agent 会话…")
-                .size(workspace_font::body())
-                .color(theme::GOLD),
-        )
-        .on_press(Message::TodoDispatchNew(idx, PickerLaunch::Agent(None)))
-        .width(Length::Fill)
-        .padding([6, 12])
-        .style(|_t: &iced_widget::Theme, _s| button::Style {
-            background: None,
-            text_color: theme::GOLD,
-            ..button::Style::default()
-        }),
-    );
-    container(col)
-        .padding(6)
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::CARD.into()),
-            border: Border {
-                color: theme::BORDER,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..container::Style::default()
-        })
-        .into()
-}
-
-/// 计划时间内联编辑态：任务文本 + 一个 `text_input`，回车提交。
-fn todo_plan_date_edit_row<'a>(
-    item: &'a todo::TodoItem,
-    draft: &'a str,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    row![
-        text(item.text.clone())
-            .size(workspace_font::body())
-            .color(theme::CREAM),
-        text_input("计划时间，如 08-10", draft)
-            .on_input(Message::TodoPlanDateChanged)
-            .on_submit(Message::TodoPlanDateSubmit)
-            .size(workspace_font::caption())
-            .width(Length::Fixed(140.0)),
-    ]
-    .spacing(10)
-    .align_y(iced_widget::core::alignment::Vertical::Center)
-    .padding([10, 20])
-    .into()
-}
-
-/// 筛选分段按钮，选中态高亮。
-fn todo_filter_segment<'a>(
-    label: &'a str,
-    value: todo::TodoFilter,
-    current: todo::TodoFilter,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let active = value == current;
-    button(
-        text(label)
-            .size(workspace_font::caption())
-            .color(if active { theme::CREAM } else { theme::DIM }),
-    )
-    .on_press(Message::TodoFilterSet(value))
-    .padding([4, 10])
-    .style(move |_t: &iced_widget::Theme, _s| button::Style {
-        background: if active {
-            Some(theme::CARD.into())
-        } else {
-            None
-        },
-        text_color: if active { theme::CREAM } else { theme::DIM },
-        border: Border {
-            radius: 5.0.into(),
-            ..Border::default()
-        },
-        ..button::Style::default()
-    })
-    .into()
-}
-
-/// 按 `todo_line_key` 查 `App.todo_meta` 拿这条任务的派发记录（如果有）。
-fn app_todo_dispatch_for<'a>(
-    app: &'a App,
-    ws: &Workspace,
-    key: u64,
-) -> Option<&'a todo_meta::DispatchRecord> {
-    let project_id = ws.project.as_ref()?.id;
-    app.todo_meta.get(&project_id)?.get(&key)?.dispatch.as_ref()
-}
-
-/// `SystemTime` → "MM-DD HH:MM"(UTC)。不引 `chrono`,用 civil-from-days
-/// 算法(Howard Hinnant)手推公历年月日,再拼 HH:MM。只用于"完成于"这种
-/// 粗粒度提示,UTC 而非本地时区,不追求夏令时/时区严格正确。
-fn format_todo_time(t: std::time::SystemTime) -> String {
-    let secs = t
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    // days = 秒数 → 自 1970-01-01 的整数日;`secs` 已经是 `u64`(1970 前会被
-    // 上面的 `unwrap_or_default()` 夹到 0),这里不会是负数。
-    let days = (secs / 86400) as i64;
-    let rem = secs % 86400;
-    let (hour, minute) = (rem / 3600, (rem % 3600) / 60);
-    let (_y, m, d) = civil_from_days(days);
-    format!("{:02}-{:02} {:02}:{:02}", m, d, hour, minute)
-}
-
-/// civil-from-days：把"自 1970-01-01 的天数"换算成 (年, 月, 日)。
-/// 用 Hinnant 经典公式,范围覆盖 1970..=2100,足够"完成于"提示用。
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
 }
 
 /// 终端栏：表头 + tab 栏 + （可能的错误文案）+ 当前激活 tab 的终端网格。

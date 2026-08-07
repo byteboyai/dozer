@@ -855,7 +855,7 @@ git commit -m "feat(dozer-app): add todo::view and render helpers"
 **Interfaces:**
 - Consumes: `extensions::todo::{Message, WorkspaceState, AppState, SessionTabSummary, update, reload_from_disk, record_dispatch}`(Task 1-3)
 
-- [ ] **Step 1: `use` 与字段合并**
+- [x] **Step 1: `use` 与字段合并**
 
 文件顶部加 `use crate::extensions::todo;`(紧跟 `use crate::extensions::browser;`/
 `use crate::extensions::git_log;` 之后)。
@@ -918,7 +918,7 @@ git commit -m "feat(dozer-app): add todo::view and render helpers"
             todo: todo::WorkspaceState::default(),
 ```
 
-- [ ] **Step 2: 顶层 `Message` 枚举**
+- [x] **Step 2: 顶层 `Message` 枚举**
 
 把 12 个 `Todo*` 变体(约第 974-997 行,连同文档注释)整段删除,换成一个(位置放在原来
 `TodoToggle` 所在处):
@@ -930,7 +930,7 @@ git commit -m "feat(dozer-app): add todo::view and render helpers"
     Todo(todo::Message),
 ```
 
-- [ ] **Step 3: `update()` 分支**
+- [x] **Step 3: `update()` 分支**
 
 删除现有 `Message::TodoToggle` 到 `Message::TodoPlanDateSubmit` 这 12 段(内容见 Task
 之前勘探时读到的原文,整段删掉),换成三支(位置放在原 `Message::TodoToggle` 所在处):
@@ -998,7 +998,7 @@ git commit -m "feat(dozer-app): add todo::view and render helpers"
 才做,这样两次借用不重叠,能编译过;这次三支修改都要保持"闭包/借用 `ws` 的那段代码块先
 结束,再单独借用 `self.todo`"这个顺序,不能在同一个语句里同时借。)
 
-- [ ] **Step 4: `Workspace::todo` 需要的新增小方法**
+- [x] **Step 4: `Workspace::todo` 需要的新增小方法**
 
 回到 `extensions/todo.rs`(本步骤补 Task 2 遗漏的两个方法,因为 Step 3 的内核代码用到了
 它们),`impl WorkspaceState` 追加:
@@ -1017,7 +1017,7 @@ git commit -m "feat(dozer-app): add todo::view and render helpers"
     }
 ```
 
-- [ ] **Step 5: `Message::TabAttached` 分支的小修改**
+- [x] **Step 5: `Message::TabAttached` 分支的小修改**
 
 现有分支(约第 3983-3997 行)：
 
@@ -1054,7 +1054,7 @@ git commit -m "feat(dozer-app): add todo::view and render helpers"
 (只换了 `ws.todo_pending_dispatch.remove(&tab_id)` → `ws.todo.take_pending_dispatch(tab_id)`、
 `self.record_todo_dispatch(..)` → `self.todo.record_dispatch(..)` 两处,其余不动。)
 
-- [ ] **Step 6: 删除旧的 `App`/`Workspace` 方法,访问器改用新接口**
+- [x] **Step 6: 删除旧的 `App`/`Workspace` 方法,访问器改用新接口**
 
 删除这些已被 `extensions::todo` 取代的方法整段:`Workspace::reload_todo_from_disk`、
 `Workspace::toggle_todo_item`、`Workspace::submit_todo_add`、`App::record_todo_dispatch`、
@@ -1095,7 +1095,7 @@ Option<std::time::SystemTime> { self.mtime }`。）
     }
 ```
 
-- [ ] **Step 7: `App::view()` 的 `LeftView::Todo` 分支**
+- [x] **Step 7: `App::view()` 的 `LeftView::Todo` 分支**
 
 约第 6821 行:
 
@@ -1139,7 +1139,7 @@ column![].into(); }` 是防御性写法,不应该真的触发;如果写代码时
 是 `None`,可以把这层 `Option` 判断去掉、直接 `.expect(...)`,两种写法都符合"不改变可见
 行为"的约束,选哪种由实现者根据代码整洁度判断。
 
-- [ ] **Step 8: 编译,逐条修正**
+- [x] **Step 8: 编译,逐条修正**
 
 Run: `cargo build -p dozer-app 2>&1 | head -200`
 Expected: 逐条修正——重点关注 Step 3 里提到的"`self.todo` 与 `ws` 借用冲突"这类问题,
@@ -1147,7 +1147,7 @@ Expected: 逐条修正——重点关注 Step 3 里提到的"`self.todo` 与 `ws
 克隆一份再写回去这种取巧办法(那样会在两次读写之间产生数据竞争窗口,即使单线程 UI
 更新循环里实际不会触发,也不是干净的解法)。
 
-- [ ] **Step 9: 全量测试 + clippy + fmt**
+- [x] **Step 9: 全量测试 + clippy + fmt**
 
 Run: `cargo build -p dozer-app && cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets && cargo fmt --check`
 Expected: 全绿,包括 `extensions::todo::` 下 Task 1(原 `todo.rs`/`todo_meta.rs` 的全部

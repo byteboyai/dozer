@@ -584,7 +584,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 && event.logical_key
                     == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
             {
-                app.update(Message::TodoDispatchClose);
+                app.update(Message::Todo(extensions::todo::Message::DispatchClose));
                 window.request_redraw();
                 return;
             }
