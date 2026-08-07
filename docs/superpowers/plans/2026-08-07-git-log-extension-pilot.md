@@ -30,14 +30,14 @@
 **Interfaces:**
 - Produces: `crate::extensions::git_log::*` 在原 `crate::git_log::*` 的位置上原样可用(内容零改动,只挪了文件位置)。
 
-- [ ] **Step 1: 建目录、搬文件**
+- [x] **Step 1: 建目录、搬文件**
 
 ```bash
 mkdir -p crates/dozer-app/src/extensions
 git mv crates/dozer-app/src/git_log.rs crates/dozer-app/src/extensions/git_log.rs
 ```
 
-- [ ] **Step 2: 新建 `extensions.rs` 模块入口**
+- [x] **Step 2: 新建 `extensions.rs` 模块入口**
 
 `crates/dozer-app/src/extensions.rs`:
 
@@ -50,7 +50,7 @@ git mv crates/dozer-app/src/git_log.rs crates/dozer-app/src/extensions/git_log.r
 pub mod git_log;
 ```
 
-- [ ] **Step 3: `main.rs` 模块声明**
+- [x] **Step 3: `main.rs` 模块声明**
 
 把 `mod git_log;`(第 8 行)删掉,按字母序插入:
 
@@ -62,7 +62,7 @@ mod fonts;
 
 (`extensions` 排在 `delivery` 之后、`fonts` 之前,与文件里其余 `mod` 声明的字母序一致。)
 
-- [ ] **Step 4: `workspace.rs` 的 import**
+- [x] **Step 4: `workspace.rs` 的 import**
 
 第 36 行:
 
@@ -79,12 +79,12 @@ use crate::extensions::git_log;
 (`workspace.rs` 其余所有 `git_log::xxx` 调用点不用动——本地别名名字没变,只是它现在指向
 `extensions::git_log` 而不是顶层 `git_log`。)
 
-- [ ] **Step 5: 编译 + 测试确认纯移动没有破坏任何东西**
+- [x] **Step 5: 编译 + 测试确认纯移动没有破坏任何东西**
 
 Run: `cargo build -p dozer-app && cargo test -p dozer-app git_log::`
 Expected: 编译通过;`extensions::git_log` 模块里原有的 6 组测试全部 PASS(测试内容/路径没有变化,只是现在挂在新模块路径下)。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/dozer-app/src/extensions.rs crates/dozer-app/src/extensions/git_log.rs \
@@ -111,7 +111,7 @@ git commit -m "refactor(dozer-app): move git_log.rs into extensions/ module dire
   - `pub fn view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>`(签名变了,内部渲染逻辑不变)
 - Consumes(下个任务用):以上全部 pub 项。Task 3 的内核代码会调用这些。
 
-- [ ] **Step 1: 删除对顶层 `Message` 的依赖,定义自己的 `Message`**
+- [x] **Step 1: 删除对顶层 `Message` 的依赖,定义自己的 `Message`**
 
 删除文件顶部这一行:
 
@@ -139,7 +139,7 @@ pub enum Message {
 确认插入点在 `pub struct CommitDetail { .. }` 之后,`commit_detail` 函数之后即可,不用卡死在
 "紧跟 `GitLogSnapshot`"这个粗略描述上。）
 
-- [ ] **Step 2: 定义 `State`**
+- [x] **Step 2: 定义 `State`**
 
 紧跟 `Message` 定义之后:
 
@@ -207,7 +207,7 @@ impl State {
 `Path` 需要在文件顶部 `use std::path::{Path, PathBuf};` 已有(现有代码本就 `use` 了两者,不用
 新增 import)。
 
-- [ ] **Step 3: `update` 函数**
+- [x] **Step 3: `update` 函数**
 
 紧跟 `State`/`impl State` 之后:
 
@@ -284,7 +284,7 @@ pub fn update(
 }
 ```
 
-- [ ] **Step 4: `request_refresh` 函数**
+- [x] **Step 4: `request_refresh` 函数**
 
 紧跟 `update` 之后:
 
@@ -313,7 +313,7 @@ pub fn request_refresh(
 }
 ```
 
-- [ ] **Step 5: 改 `view`/`GitLogCanvas`/`load_more` 按钮吃本模块 `Message`**
+- [x] **Step 5: 改 `view`/`GitLogCanvas`/`load_more` 按钮吃本模块 `Message`**
 
 `GitLogCanvas` 的 `impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer>`
 不用改签名文字(`Message` 现在解析到本模块刚定义的类型,不再是 `crate::workspace::Message`);
@@ -380,7 +380,7 @@ pub fn view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_widg
     .on_press_maybe((!loading).then_some(Message::LoadMore))
 ```
 
-- [ ] **Step 6: 编译确认模块自洽**
+- [x] **Step 6: 编译确认模块自洽**
 
 Run: `cargo build -p dozer-app 2>&1 | head -100`
 Expected: `extensions/git_log.rs` 自身不再报"`Message` 未定义"之类的错;此时 `workspace.rs`
@@ -389,7 +389,7 @@ Expected: `extensions/git_log.rs` 自身不再报"`Message` 未定义"之类的�
 错误(可以用 `cargo check -p dozer-app 2>&1 | grep "extensions/git_log.rs"` 单独确认这个文件
 没有报错,即使整个 crate 因为 workspace.rs 还没跟进而编译不过)。
 
-- [ ] **Step 7: 新增 `update`/`request_refresh`/`State` 的单测**
+- [x] **Step 7: 新增 `update`/`request_refresh`/`State` 的单测**
 
 在文件末尾 `mod tests` 里追加(`use super::*;` 已存在,直接加测试函数):
 
@@ -645,7 +645,7 @@ Expected: `extensions/git_log.rs` 自身不再报"`Message` 未定义"之类的�
     }
 ```
 
-- [ ] **Step 8: 运行新测试确认通过**
+- [x] **Step 8: 运行新测试确认通过**
 
 Run: `cargo test -p dozer-app --lib extensions::git_log:: 2>&1 | tail -80`
 Expected: 新增 16 个测试(加上 Task 1 保留的 6 个,共 22 个)全部 PASS。若 `#[tokio::test]`
@@ -669,7 +669,7 @@ git commit -m "refactor(dozer-app): give git_log its own Message/State/update/vi
 **Interfaces:**
 - Consumes: `extensions::git_log::{Message, State, update, request_refresh, view}`(Task 2)
 
-- [ ] **Step 1: `App` 结构体字段合并**
+- [x] **Step 1: `App` 结构体字段合并**
 
 把这 6 行(结构体定义处,约第 1457-1480 行区域):
 
@@ -691,7 +691,7 @@ git commit -m "refactor(dozer-app): give git_log its own Message/State/update/vi
     git_log: git_log::State,
 ```
 
-- [ ] **Step 2: `App::bootstrap` 初始化**
+- [x] **Step 2: `App::bootstrap` 初始化**
 
 第 2991-2996 行(6 个 `git_log_*: None,`)替换成:
 
@@ -699,7 +699,7 @@ git commit -m "refactor(dozer-app): give git_log its own Message/State/update/vi
             git_log: git_log::State::default(),
 ```
 
-- [ ] **Step 3: 顶层 `Message` 枚举**
+- [x] **Step 3: 顶层 `Message` 枚举**
 
 把这四个变体(约第 1146-1157 行,连同文档注释):
 
@@ -718,7 +718,7 @@ git commit -m "refactor(dozer-app): give git_log its own Message/State/update/vi
     GitLog(git_log::Message),
 ```
 
-- [ ] **Step 4: `update()` 里四支旧分支合并成两支**
+- [x] **Step 4: `update()` 里四支旧分支合并成两支**
 
 删除这四个 match 分支(`Message::GitLogSelectCommit` / `Message::GitLogDetailLoaded` /
 `Message::GitLogSnapshotLoaded` / `Message::GitLogLoadMore`,约第 4706-4783 行,内容见前面
@@ -758,7 +758,7 @@ git commit -m "refactor(dozer-app): give git_log its own Message/State/update/vi
             }
 ```
 
-- [ ] **Step 5: `sync_git_log_to_active_project` 改用新入口**
+- [x] **Step 5: `sync_git_log_to_active_project` 改用新入口**
 
 ```rust
     fn sync_git_log_to_active_project(&mut self) {
@@ -790,7 +790,7 @@ git commit -m "refactor(dozer-app): give git_log its own Message/State/update/vi
 
 （用到的 `cache_repo_path()` 访问器 Task 2 Step 2 已经加进 `impl State` 了,这里直接用。）
 
-- [ ] **Step 6: `ProjectFsChanged` 分支改用新访问器**
+- [x] **Step 6: `ProjectFsChanged` 分支改用新访问器**
 
 原代码里这一段(约第 4686-4703 行):
 
@@ -841,12 +841,12 @@ git commit -m "refactor(dozer-app): give git_log its own Message/State/update/vi
                 }
 ```
 
-- [ ] **Step 7: `LeftIconSelect`/`ProjectTabSwitch` 里的 `sync_git_log_to_active_project()` 调用点**
+- [x] **Step 7: `LeftIconSelect`/`ProjectTabSwitch` 里的 `sync_git_log_to_active_project()` 调用点**
 
 这两处(约第 4149-4151 行、第 4562-4564 行)调用方式不变,`sync_git_log_to_active_project`
 本身签名没变,不用动调用点代码。
 
-- [ ] **Step 8: `App::view()` 的渲染调用**
+- [x] **Step 8: `App::view()` 的渲染调用**
 
 约第 7048-7054 行:
 
@@ -866,7 +866,7 @@ git commit -m "refactor(dozer-app): give git_log its own Message/State/update/vi
         LeftView::GitLog => git_log::view(&app.git_log).map(Message::GitLog),
 ```
 
-- [ ] **Step 9: 编译,逐条修正**
+- [x] **Step 9: 编译,逐条修正**
 
 Run: `cargo build -p dozer-app 2>&1 | head -150`
 Expected: `State` 上用到的 `next_load_more_count`/`cache_max_count`/`cache_repo_path`/
