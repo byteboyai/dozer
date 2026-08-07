@@ -34,7 +34,7 @@
   `pub struct AppState`(含 `Default` 实现)、`pub enum Message`。本任务结束时这些类型
   还没有任何方法/`update`/`view`,只是定义齐全、能编译。
 
-- [ ] **Step 1: 创建文件,写类型定义**
+- [x] **Step 1: 创建文件,写类型定义**
 
 创建 `crates/dozer-app/src/extensions/files.rs`:
 
@@ -156,7 +156,7 @@ pub enum Message {
 `use` 即可,不需要改可见性。`AddrEvent` 已经是 `pub` 且被浏览器/Todo 两个试点共用,同样
 直接引用 `crate::workspace::AddrEvent`。）
 
-- [ ] **Step 2: 声明模块**
+- [x] **Step 2: 声明模块**
 
 `crates/dozer-app/src/extensions.rs`,按字母序插入:
 
@@ -167,7 +167,7 @@ pub mod git_log;
 pub mod todo;
 ```
 
-- [ ] **Step 3: 编译确认**
+- [x] **Step 3: 编译确认**
 
 ```bash
 cargo build -p dozer-app
@@ -176,7 +176,7 @@ cargo build -p dozer-app
 Expected: 编译通过(`Message`/`WorkspaceState`/`AppState` 目前未被任何地方引用,允许
 `dead_code` 警告,不允许报错)。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/dozer-app/src/extensions/files.rs crates/dozer-app/src/extensions.rs
@@ -201,7 +201,7 @@ git commit -m "feat(dozer-app): add extensions::files type skeleton"
   `pub fn update(ws_state: &mut WorkspaceState, app_state: &mut AppState, msg: Message, project_id: i64, handle: &tokio::runtime::Handle, emit: impl Fn(Message) + Send + 'static)`、
   `pub fn spawn_git_refresh(project_id: i64, repo_path: PathBuf, handle: &tokio::runtime::Handle, emit: impl Fn(Message) + Send + 'static)`。
 
-- [ ] **Step 1: `WorkspaceState` 构造/重置/访问器方法**
+- [x] **Step 1: `WorkspaceState` 构造/重置/访问器方法**
 
 在 `impl WorkspaceState` 里加(紧跟 `#[derive(Default)] pub struct WorkspaceState {...}`
 之后新开一个 `impl` 块):
@@ -371,7 +371,7 @@ impl WorkspaceState {
 }
 ```
 
-- [ ] **Step 2: `AppState` 访问器方法**
+- [x] **Step 2: `AppState` 访问器方法**
 
 ```rust
 impl AppState {
@@ -383,7 +383,7 @@ impl AppState {
 }
 ```
 
-- [ ] **Step 3: `update`**
+- [x] **Step 3: `update`**
 
 紧跟在类型定义之后加:
 
@@ -585,7 +585,7 @@ pub fn spawn_git_refresh(
 }
 ```
 
-- [ ] **Step 4: 编译确认**
+- [x] **Step 4: 编译确认**
 
 ```bash
 cargo build -p dozer-app
@@ -595,7 +595,7 @@ Expected: 编译通过。`update`/`spawn_git_refresh`/`WorkspaceState::new` 等�
 调用,`dead_code` 警告可接受,不允许报错。`trash`/`project`/`delivery` 三个 crate 内
 模块已经是 `workspace.rs` 的既有依赖,`Cargo.toml` 不需要改。
 
-- [ ] **Step 5: 新增单测**
+- [x] **Step 5: 新增单测**
 
 在 `files.rs` 文件末尾加 `#[cfg(test)] mod tests`:
 
@@ -1013,7 +1013,7 @@ mod tests {
 `ChangeKind { New, Modified, Deleted }` 已确认为 `crates/dozer-app/src/delivery.rs`
 现有定义,上面测试代码里的字段名/变体名直接可编译。
 
-- [ ] **Step 6: 跑测试**
+- [x] **Step 6: 跑测试**
 
 ```bash
 cargo test -p dozer-app files::
@@ -1021,7 +1021,7 @@ cargo test -p dozer-app files::
 
 Expected: 全部新增测试 PASS。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/dozer-app/src/extensions/files.rs crates/dozer-app/Cargo.toml
@@ -1044,7 +1044,7 @@ git commit -m "feat(dozer-app): add files WorkspaceState/AppState/Message/update
   ws_state: &'a WorkspaceState) -> Element<'a, Message, ..>`、`pub fn
   delete_confirm_popup(ws_state: &WorkspaceState) -> Element<'_, Message, ..>`。
 
-- [ ] **Step 1: 文件顶部补齐 `view` 需要的 import**
+- [x] **Step 1: 文件顶部补齐 `view` 需要的 import**
 
 在 `files.rs` 顶部 `use` 块追加(与现有 `workspace.rs` 里 `project_pane` 用到的这批
 完全对应):
@@ -1058,7 +1058,7 @@ use iced_widget::{button, column, container, row, scrollable, text, Scrollable};
 （`iced_widget::core::alignment`/`Padding`/`Alignment` 等更细的类型按实际编译报错逐条
 补,这里只列最容易漏、非补不可的几个。）
 
-- [ ] **Step 2: 私有辅助 —— `tree_row_font_size`/`project_branch_label`/`env_status_text`/`status_bar_container` 的可见性处理**
+- [x] **Step 2: 私有辅助 —— `tree_row_font_size`/`project_branch_label`/`env_status_text`/`status_bar_container` 的可见性处理**
 
 这四个函数现在定义在 `workspace.rs` 里且是私有 `fn`(`env_status_text` 在
 `terminal_pane` 也用到,其余三个目前只有 Files 用)。改
@@ -1077,7 +1077,7 @@ cargo build -p dozer-app
 
 Expected: 编译通过(只是可见性放宽,函数体不变)。
 
-- [ ] **Step 3: `view` 主体(整体照搬现有 `project_pane`,签名与类型改成本模块的)**
+- [x] **Step 3: `view` 主体(整体照搬现有 `project_pane`,签名与类型改成本模块的)**
 
 把 `workspace.rs` 里 `project_pane`"已打开项目"那一半(现 6922-6934 行的函数开头
 + 6934-7121 行 `match &ws.project { Some(p) => { .. } ..}` 里 `Some(p)` 分支的
@@ -1127,7 +1127,7 @@ Element<Message>`,内容就是现有 `project_pane` `None` 分支那几行,原�
 `project: Option<&ProjectInfo>` 这个参数形状已经暗示了"没有项目时 files 模块给不出
 有意义的树",这里补上具体处理方式,不算违背设计文档的既定架构。
 
-- [ ] **Step 4: `project_status_bar` 私有辅助迁入(签名改吃 `daemon_ok: bool`)**
+- [x] **Step 4: `project_status_bar` 私有辅助迁入(签名改吃 `daemon_ok: bool`)**
 
 把 `workspace.rs` 里 `project_status_bar`(现 7181-7226 行左右,渲染
 "●环境状态 · 文件·git{分支}·组件" 底栏)整段复制进 `files.rs`,签名从
@@ -1145,13 +1145,13 @@ fn project_status_bar<'a>(
 }
 ```
 
-- [ ] **Step 5: `tree_edit_row` 私有辅助迁入**
+- [x] **Step 5: `tree_edit_row` 私有辅助迁入**
 
 把 `workspace.rs` 里 `tree_edit_row`(现 7615-7638 行)整段原样复制进 `files.rs`,
 只改返回类型的 `Message` 泛型参数指向本模块的 `Message`(函数体不引用任何
 `Message` 变体,原样照抄即可编译)。
 
-- [ ] **Step 6: `context_menu_popup` + `menu_item` 迁入**
+- [x] **Step 6: `context_menu_popup` + `menu_item` 迁入**
 
 把 `workspace.rs` 里 `menu_item`(现 7584-7611 行)与 `context_menu_popup`(现
 7644-7755 行)整段复制进 `files.rs`,做以下替换:
@@ -1183,7 +1183,7 @@ pub fn context_menu_popup<'a>(
 `menu_item` 函数体不引用具体 `Message` 变体(签名里的 `msg: Message` 参数类型
 自动跟随本模块 `Message`),原样照抄即可编译。
 
-- [ ] **Step 7: `delete_confirm_popup` 迁入**
+- [x] **Step 7: `delete_confirm_popup` 迁入**
 
 把 `workspace.rs` 里 `delete_confirm_popup`(现 7758-7830 行左右)整段复制进
 `files.rs`,签名从 `fn delete_confirm_popup(ws: &Workspace)` 改成
@@ -1192,7 +1192,7 @@ pub fn context_menu_popup<'a>(
 `Message::ProjectTreeDeleteConfirm` 改成 `Message::DeleteCancel`/
 `Message::DeleteConfirm`。
 
-- [ ] **Step 8: 编译,逐条修正**
+- [x] **Step 8: 编译,逐条修正**
 
 ```bash
 cargo build -p dozer-app
@@ -1205,14 +1205,14 @@ cargo build -p dozer-app
 避免 `dead_code` 编译错误——如果现在删,`workspace.rs` 里 `LeftView::Files` 分支等
 调用点会立刻报错未定义,不如等 Task 4 一次性替换调用点+删除旧定义)。
 
-- [ ] **Step 9: `cargo clippy`/`fmt`**
+- [x] **Step 9: `cargo clippy`/`fmt`**
 
 ```bash
 cargo clippy -p dozer-app --all-targets
 cargo fmt
 ```
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add crates/dozer-app/src/extensions/files.rs crates/dozer-app/src/workspace.rs
@@ -1232,7 +1232,7 @@ git commit -m "feat(dozer-app): add files::view/context_menu_popup/delete_confir
   `files::update`/`files::spawn_git_refresh`/`files::view`/`files::context_menu_popup`/
   `files::delete_confirm_popup`。
 
-- [ ] **Step 1: `Workspace` 结构体字段合并**
+- [x] **Step 1: `Workspace` 结构体字段合并**
 
 `crates/dozer-app/src/workspace.rs` 里 `pub struct Workspace { .. }`(现约 1397-1479
 行),删除 11 个字段:`file_tree`/`branch`/`dirty`/`git_statuses`/`worktrees`/
@@ -1280,7 +1280,7 @@ self.files.reset_for_project(FileTree::new(PathBuf::from(&project.path)));
 （`self.project_acceptance_count = None;` 这一行原本在 5 行之后单独出现,一并纳入
 `reset_for_project` 内部,原地删除。）
 
-- [ ] **Step 2: `App` 结构体字段合并**
+- [x] **Step 2: `App` 结构体字段合并**
 
 `pub struct App { .. }` 里删除 `context_menu`/`last_right_click` 两个字段,加:
 
@@ -1292,7 +1292,7 @@ files: files::AppState,
 `App` 的构造处(现约 2787-2788 行 `context_menu: None, last_right_click: (0.0,
 0.0),`)改成 `files: files::AppState::default(),`。
 
-- [ ] **Step 3: 顶层 `Message` 枚举**
+- [x] **Step 3: 顶层 `Message` 枚举**
 
 删除 20 个变体:`ProjectTreeToggle`/`ProjectGitRefreshed`/`AcceptanceCountLoaded`/
 `RightClickAt`/`ProjectTreeContextMenu`/`ProjectTreeContextMenuClose`/
@@ -1309,7 +1309,7 @@ Files(files::Message),
 
 `ProjectFsChanged(ProjectId, git_watch::Relevance)` 保留不动。
 
-- [ ] **Step 4: `update()` 里 Files 相关分支**
+- [x] **Step 4: `update()` 里 Files 相关分支**
 
 删除原 `Message::ProjectTreeToggle`/`ProjectGitRefreshed`/`ProjectTreeContextMenu`/
 `ProjectTreeContextMenuClose`/`ProjectTreeCopyPath`/`ProjectTreeRevealInFinder`/
@@ -1369,7 +1369,7 @@ Message::Files(msg) => {
 `Message::AcceptanceCountLoaded(project_id, n)` 的地方)改成构造
 `Message::Files(files::Message::AcceptanceCountLoaded(project_id, n))`。
 
-- [ ] **Step 5: 4 处 `spawn_project_git_refresh` 调用点改用新入口**
+- [x] **Step 5: 4 处 `spawn_project_git_refresh` 调用点改用新入口**
 
 `workspace.rs` 里删除 `Workspace::spawn_project_git_refresh` 方法(现 2056-2076
 行),4 个调用点(`from_restore`/`adopt_project`/一处手动刷新/`ProjectFsChanged`
@@ -1387,17 +1387,17 @@ files::spawn_git_refresh(project_id, repo_path.clone(), &io.handle, {
 （`project_id`/`repo_path` 从各调用点现有的 `self.project_id()`/`self.project`
 取,变量名按各处上下文实际命名调整,逻辑等价于原方法体内联到调用处。）
 
-- [ ] **Step 6: `ProjectFsChanged` 分支改用新访问器**
+- [x] **Step 6: `ProjectFsChanged` 分支改用新访问器**
 
 现有分支里 `ws.spawn_project_git_refresh(io)` 一行按 Step 5 的新写法替换,其余
 Git Log 快照重建的条件判断逻辑不动。
 
-- [ ] **Step 7: `worktree_strip` 调用点**
+- [x] **Step 7: `worktree_strip` 调用点**
 
 现约 6668 行 `Some(worktree_strip(&ws.worktrees))` 改成
 `Some(worktree_strip(ws.files.worktrees()))`。
 
-- [ ] **Step 8: `App::view()` 的 `LeftView::Files` 分支 + 顶层浮层判断链**
+- [x] **Step 8: `App::view()` 的 `LeftView::Files` 分支 + 顶层浮层判断链**
 
 `LeftView::Files` 分支(现约 6601-6627 行)里 `project_pane(app, ws, ..)` 调用改成:
 
@@ -1461,7 +1461,7 @@ Task 3 Step 4 一并改成 `pub(crate)` 供这里调用)。
 }
 ```
 
-- [ ] **Step 9: 右键坐标捕获与右键菜单打开的触发点**
+- [x] **Step 9: 右键坐标捕获与右键菜单打开的触发点**
 
 `main.rs` 里原先发 `Message::RightClickAt { x, y }` 的地方(现约 492 行)改发
 `Message::Files(files::Message::RightClickAt { x, y })`。`workspace.rs` 里原
@@ -1472,7 +1472,7 @@ row.is_dir }` 一带,已经在 Task 3 迁移 `view` 时随 `project_pane` 一起
 Step 3(Task 3)里已经在"替换规则"清单中覆盖(`ProjectTreeContextMenu` →
 `ContextMenuOpen`,若 Task 3 Step 3 的替换清单里漏列这一条,在本步骤补上)。
 
-- [ ] **Step 10: 删除旧函数定义**
+- [x] **Step 10: 删除旧函数定义**
 
 删除 `workspace.rs` 里原 `project_pane`/`project_status_bar`/`tree_edit_row`/
 `menu_item`/`context_menu_popup`/`delete_confirm_popup`/
@@ -1481,7 +1481,7 @@ Step 3(Task 3)里已经在"替换规则"清单中覆盖(`ProjectTreeContextMenu`
 避免死代码/重复定义)。`TreeEditMode`/`TreeEdit`/`ContextMenu` 三个类型定义(现
 416-441 行)一并删除(Task 1 已经在 `files.rs` 里重新定义)。
 
-- [ ] **Step 11: `main.rs` 里 `ProjectTreeCopyPath` 改路径**
+- [x] **Step 11: `main.rs` 里 `ProjectTreeCopyPath` 改路径**
 
 现约 869 行:
 
@@ -1507,7 +1507,7 @@ Message::Files(files::Message::CopyPath(path, kind)) => {
 }
 ```
 
-- [ ] **Step 12: 编译,逐条修正**
+- [x] **Step 12: 编译,逐条修正**
 
 ```bash
 cargo build -p dozer-app
@@ -1519,7 +1519,7 @@ Expected: 先会有一长串报错(引用了已删除的 `ws.file_tree`/`ws.bran
 `files.rs` 补一个只读 getter,遵循 Task 2 已经建立的"字段私有、按需开访问器"
 风格)或 `Message::Files(files::Message::Xxx)`。
 
-- [ ] **Step 13: 全量测试 + clippy + fmt**
+- [x] **Step 13: 全量测试 + clippy + fmt**
 
 ```bash
 cargo build -p dozer-app
@@ -1530,7 +1530,7 @@ cargo fmt
 
 Expected: 全绿。
 
-- [ ] **Step 14: Commit**
+- [x] **Step 14: Commit**
 
 ```bash
 git add crates/dozer-app/src/workspace.rs crates/dozer-app/src/main.rs
