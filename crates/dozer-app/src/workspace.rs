@@ -911,10 +911,8 @@ pub enum Message {
     ReviewToggle(usize),
     /// 对话列表刷新结果（扫描完成）。
     ConversationsRefreshed(ProjectId, Vec<ConversationMeta>),
-    /// 手动点用量面板头部的刷新按钮 → 触发一次异步扫描。
-    UsageRefresh,
-    /// 用量面板的异步扫描/解析结果落地。
-    UsageLoaded(ProjectId, Vec<(ConversationMeta, usage::ConversationUsage)>),
+    /// Usage 面板的全部消息,内核只转发不解读——见 `extensions::usage::Message`。
+    Usage(usage::Message),
     /// 点对话列表某条 → 审阅该对话（当前会话用 Session 源以便回合刷新,历史用 File）。
     ConversationOpen(PathBuf),
     /// 切换当前显示的 tab（这里的 `usize` 是 vec 位置——用户点击的是
@@ -1338,10 +1336,8 @@ pub struct Workspace {
     /// `conversations` 贵得多,所以不像它那样跟着 `DeliveryChecked` 自动
     /// 刷新——只在切到 `RightView::Usage` 或点手动刷新按钮时才重新扫
     /// （spec 非目标"不做实时更新"）。
-    usage: Vec<(ConversationMeta, usage::ConversationUsage)>,
-    /// `spawn_usage_refresh` 发起到 `UsageLoaded` 落地之间为真；面板据此
-    /// 显示"统计中…"，避免展示陈旧数据被误读成最新值。
-    usage_loading: bool,
+    /// Usage 面板 per-project 状态——见 `extensions::usage::WorkspaceState`。
+    usage: usage::WorkspaceState,
     /// 当前项目（None=未打开；P1g）。
     project: Option<ProjectInfo>,
     /// 最近项目（切换用）。
@@ -1639,8 +1635,7 @@ impl Workspace {
             acceptance: None,
             review: None,
             conversations: Vec::new(),
-            usage: Vec::new(),
-            usage_loading: false,
+            usage: usage::WorkspaceState::default(),
             project: None,
             project_goal: None,
             recent_projects: Vec::new(),
@@ -1841,7 +1836,7 @@ impl Workspace {
         });
     }
 
-    /// 异步扫当前项目的全部 transcript 并逐个解析用量 → `UsageLoaded`。
+    /// 异步扫当前项目的全部 transcript 并逐个解析用量 → `Usage(Loaded)`。
     /// 比 `spawn_conversations_refresh` 贵得多(要读整份文件内容，不只是
     /// 文件头)，所以不接入它那条"回合结束自动刷新"的调用链——只在
     /// `RightIconSelect(RightView::Usage)` 或手动刷新按钮时触发。
@@ -1850,27 +1845,12 @@ impl Workspace {
             return;
         };
         let project_id = p.id;
-        let cwd = PathBuf::from(&p.path);
+        let project_path = PathBuf::from(&p.path);
         let proxy = io.proxy.clone();
-        io.handle.spawn(async move {
-            let rows = tokio::task::spawn_blocking(move || {
-                conversation::list_all_conversations(&cwd)
-                    .into_iter()
-                    .filter_map(|meta| {
-                        // 读失败(权限/IO error)的会话整条跳过、不计入汇总——
-                        // 不能退化成"记一条全零 usage"，那样会把这次失败悄悄
-                        // 算进 `ProjectUsageTotals::conversation_count`（spec
-                        // 错误处理:"该会话跳过、不计入汇总"）。
-                        let jsonl = std::fs::read_to_string(&meta.path).ok()?;
-                        let u = usage::parse_usage(meta.agent, &jsonl);
-                        Some((meta, u))
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .await
-            .unwrap_or_default();
-            let _ = proxy.send_event(Message::UsageLoaded(project_id, rows));
-        });
+        let emit = move |m| {
+            let _ = proxy.send_event(Message::Usage(m));
+        };
+        usage::spawn_refresh(project_id, project_path, &io.handle, emit);
     }
 
     /// 异步取当前项目验收次数 → AcceptanceCountLoaded（项目卡副行）。
@@ -1996,8 +1976,7 @@ impl Workspace {
         // 的刷新信号会挂在一个此刻已经不对应这份 `Workspace` 的项目 id 上。
         self.git_watch = None;
         self.conversations = Vec::new();
-        self.usage = Vec::new();
-        self.usage_loading = false;
+        self.usage = usage::WorkspaceState::default();
         self.project_goal = load_project_goal(&project.path);
         self.project = Some(project);
         self.ensure_project_terminal(io);
@@ -3357,16 +3336,29 @@ impl App {
                     ws.conversations = list;
                 });
             }
-            Message::UsageRefresh => {
-                self.with_focused_project(|ws, io| {
-                    ws.usage_loading = true;
-                    ws.spawn_usage_refresh(io);
+            Message::Usage(msg @ usage::Message::Loaded(project_id, ..)) => {
+                self.with_project(project_id, move |ws, io| {
+                    let Some(project) = &ws.project else { return };
+                    let project_path = PathBuf::from(&project.path);
+                    let handle = io.handle.clone();
+                    let proxy = io.proxy.clone();
+                    let emit = move |m| {
+                        let _ = proxy.send_event(Message::Usage(m));
+                    };
+                    usage::update(&mut ws.usage, msg, project_id, project_path, &handle, emit);
                 });
             }
-            Message::UsageLoaded(project_id, rows) => {
-                self.with_project(project_id, move |ws, _io| {
-                    ws.usage = rows;
-                    ws.usage_loading = false;
+            Message::Usage(msg) => {
+                self.with_focused_project(|ws, io| {
+                    let Some(project) = &ws.project else { return };
+                    let project_id = project.id;
+                    let project_path = PathBuf::from(&project.path);
+                    let handle = io.handle.clone();
+                    let proxy = io.proxy.clone();
+                    let emit = move |m| {
+                        let _ = proxy.send_event(Message::Usage(m));
+                    };
+                    usage::update(&mut ws.usage, msg, project_id, project_path, &handle, emit);
                 });
             }
             Message::ConversationOpen(path) => {
@@ -3583,7 +3575,7 @@ impl App {
                     self.right_collapsed = false;
                     if v == RightView::Usage {
                         self.with_focused_project(|ws, io| {
-                            ws.usage_loading = true;
+                            ws.usage.set_loading(true);
                             ws.spawn_usage_refresh(io);
                         });
                     }
@@ -6400,14 +6392,14 @@ fn right_panel_area<'a>(
             }
             RightView::Usage => usage::view(
                 &ws.usage,
-                ws.usage_loading,
                 ws.project
                     .as_ref()
                     .map(|p| p.name.as_str())
                     .unwrap_or("未打开项目"),
                 Length::Fill,
                 zone_pane_border(zone, ac),
-            ),
+            )
+            .map(Message::Usage),
         };
     if maximized {
         return inner;
