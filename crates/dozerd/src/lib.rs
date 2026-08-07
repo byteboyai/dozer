@@ -1,4 +1,5 @@
 pub mod acceptance;
+pub mod bookmarks;
 pub mod projects;
 pub mod registry;
 pub mod ring;
