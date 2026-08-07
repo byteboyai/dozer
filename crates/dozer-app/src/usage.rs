@@ -10,7 +10,13 @@
 #![allow(dead_code)]
 
 use crate::conversation::ConversationMeta;
+use crate::icons;
+use crate::theme;
+use crate::workspace::Message;
+use crate::workspace_font;
 use dozer_core::protocol::AgentKind;
+use iced_widget::core::{Border, Color, Element, Length};
+use iced_widget::{button, column, container, text};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
@@ -284,6 +290,65 @@ pub fn agent_token_share(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<
             (total > 0).then_some((kind, total))
         })
         .collect()
+}
+
+/// 头部：标题 + 项目名 + 右侧手动刷新按钮（spec"面板渲染"#1）。
+fn panel_header(project_name: &str) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    iced_widget::row![
+        column![
+            text("用量统计")
+                .size(workspace_font::subtitle())
+                .color(theme::CREAM),
+            text(project_name)
+                .size(workspace_font::label())
+                .color(theme::DIM),
+        ]
+        .spacing(2),
+        iced_widget::Space::new().width(Length::Fill),
+        button(icons::view::<Message>(icons::IconKind::RefreshCw, 14.0, theme::DIM))
+            .on_press(Message::UsageRefresh)
+            .style(|_t, _s| button::Style::default()),
+    ]
+    .align_y(iced_widget::core::Alignment::Center)
+    .into()
+}
+
+/// 面板主入口，对应右图标栏的"用量统计"视图（单栏，不像 Conversations
+/// 那样是"列表:内容"配对分栏——见 spec）。`rows` 为空且 `loading` 为假时
+/// 是"还没数据"的空态；`loading` 为真时是刷新中占位态；两者互斥由调用方
+/// 保证（`Workspace::usage_loading` 一旦收到 `UsageLoaded` 就会清掉）。
+pub fn view<'a>(
+    rows: &'a [(ConversationMeta, ConversationUsage)],
+    loading: bool,
+    project_name: &'a str,
+    width: Length,
+    outer: Border,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let mut content = column![panel_header(project_name)].spacing(12).padding(14);
+
+    if loading {
+        content = content.push(
+            text("统计中…")
+                .size(workspace_font::body())
+                .color(theme::DIM),
+        );
+    } else if rows.is_empty() {
+        content = content.push(
+            text("这个项目还没有 agent 对话记录")
+                .size(workspace_font::body())
+                .color(theme::DIM),
+        );
+    }
+
+    container(content)
+        .width(width)
+        .height(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| iced_widget::container::Style {
+            background: Some(theme::PANEL.into()),
+            border: outer,
+            ..iced_widget::container::Style::default()
+        })
+        .into()
 }
 
 #[cfg(test)]

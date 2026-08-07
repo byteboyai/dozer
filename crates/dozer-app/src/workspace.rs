@@ -50,6 +50,7 @@ use crate::theme;
 use crate::todo;
 use crate::todo_meta;
 use crate::transcript::{self, ReviewEntry};
+use crate::usage;
 use crate::workspace_font;
 use crate::workspace_geometry;
 use dozer_client::{Client, TermEvent};
@@ -93,6 +94,7 @@ pub enum LeftView {
 pub enum RightView {
     Agent,
     Conversations,
+    Usage,
 }
 
 /// 四个图标栏按钮的标识,用于追踪 hover 态(图标颜色在 hover 时需变金,
@@ -106,6 +108,7 @@ pub enum RailButton {
     LeftTodo,
     RightAgent,
     RightConversations,
+    RightUsage,
 }
 
 /// 顶栏右侧按钮(添加项目 / 设置)的标识,用于追踪 hover 态(图标颜色在
@@ -579,6 +582,8 @@ fn apply_column_drag(
                     conversations_split: 1.0 - ratio,
                     ..state.layout
                 },
+                // 用量统计是单栏（不分割），没有自己的 split 权重。
+                RightView::Usage => state.layout,
             }
         }
     }
@@ -942,6 +947,10 @@ pub enum Message {
     ReviewToggle(usize),
     /// 对话列表刷新结果（扫描完成）。
     ConversationsRefreshed(ProjectId, Vec<ConversationMeta>),
+    /// 手动点用量面板头部的刷新按钮 → 触发一次异步扫描。
+    UsageRefresh,
+    /// 用量面板的异步扫描/解析结果落地。
+    UsageLoaded(ProjectId, Vec<(ConversationMeta, usage::ConversationUsage)>),
     /// 点对话列表某条 → 审阅该对话（当前会话用 Session 源以便回合刷新,历史用 File）。
     ConversationOpen(PathBuf),
     /// 切换当前显示的 tab（这里的 `usize` 是 vec 位置——用户点击的是
@@ -1133,6 +1142,10 @@ pub enum Message {
     /// Git Log 面板:点"加载更多",拿更大的 `max_count` 重新跑一次
     /// `git_log::build`。
     GitLogLoadMore,
+    /// Git Log 面板:异步 `git_log::build` 请求(面板打开/切项目/引用变化/
+    /// 加载更多)落地。带上请求时的仓库路径与 `max_count`,处理时核对是否
+    /// 还等着这份结果(见 `App::git_log_pending`),不是就丢弃。
+    GitLogSnapshotLoaded(PathBuf, usize, Result<git_log::GitLogSnapshot, String>),
     /// 项目:当前项目验收次数刷新结果(项目卡"N 次验收"副行用)。
     AcceptanceCountLoaded(ProjectId, Option<u64>),
     /// 项目树:右键按下的窗口逻辑坐标(main.rs 原始事件层发,供随后可能
@@ -1419,7 +1432,7 @@ pub struct App {
     home_recents_loaded: bool,
     /// Git 提交图缓存,`LeftIconSelect(LeftView::GitLog)` 激活、`git_watch`
     /// 检测到 `.git` 引用变化(Plan 1 D4)、或点"加载更多"时重建(见
-    /// `App::refresh_git_log`)。
+    /// `App::spawn_git_log_refresh`)。
     git_log_cache: Option<git_log::GitLogSnapshot>,
     /// 上一次 `git_log::build` 失败的错误文案(`None`=未出错)。
     git_log_error: Option<String>,
@@ -1430,6 +1443,17 @@ pub struct App {
     /// 还在加载中——两者靠 `git_log_selected.is_some()` 区分(渲染层:
     /// selected 有值但 detail 是 None → 画"加载中…")。
     git_log_detail: Option<Result<git_log::CommitDetail, String>>,
+    /// 最近一次派发的 `git_log::build` 请求(repo_path, max_count)——
+    /// `GitLogSnapshotLoaded` 落地时核对是否还对得上"现在真正需要的",不是
+    /// 就丢弃(项目已经又切走,或紧接着发起了另一次请求)。`None`=当前没有
+    /// 在途请求;渲染层拿它算"是不是该显示加载中/刷新中"(见 `git_log::view`
+    /// 的 `loading` 参数)。
+    git_log_pending: Option<(PathBuf, usize)>,
+    /// `GitLogLoadMore` 请求的新快照落地后要恢复的选中提交——"加载更多"
+    /// 不该打断用户正在看的详情,但异步落地前 `spawn_git_log_refresh` 已经
+    /// 把 `git_log_selected` 清空了,所以先记下来,快照真正换新后在
+    /// `GitLogSnapshotLoaded` 里补一次 `GitLogSelectCommit`。
+    git_log_restore_after_load: Option<git2::Oid>,
     /// Todo 面板本地元数据（派发记录/计划时间/完成时间），启动时
     /// `todo_meta::load()` 读盘，每次变更后 `todo_meta::save` 落盘。
     todo_meta: todo_meta::TodoMetaState,
@@ -1461,6 +1485,14 @@ pub struct Workspace {
     review: Option<ReviewView>,
     /// 当前项目的对话列表（扫 Claude 目录；P1j）。
     conversations: Vec<ConversationMeta>,
+    /// 当前项目的 agent 用量统计（会话粒度；扫描+解析全量 transcript，比
+    /// `conversations` 贵得多,所以不像它那样跟着 `DeliveryChecked` 自动
+    /// 刷新——只在切到 `RightView::Usage` 或点手动刷新按钮时才重新扫
+    /// （spec 非目标"不做实时更新"）。
+    usage: Vec<(ConversationMeta, usage::ConversationUsage)>,
+    /// `spawn_usage_refresh` 发起到 `UsageLoaded` 落地之间为真；面板据此
+    /// 显示"统计中…"，避免展示陈旧数据被误读成最新值。
+    usage_loading: bool,
     /// 当前项目（None=未打开；P1g）。
     project: Option<ProjectInfo>,
     /// 当前项目的文件树（随 project 建立）。
@@ -1787,6 +1819,8 @@ impl Workspace {
             acceptance: None,
             review: None,
             conversations: Vec::new(),
+            usage: Vec::new(),
+            usage_loading: false,
             project: None,
             file_tree: None,
             project_goal: None,
@@ -2076,6 +2110,38 @@ impl Workspace {
         });
     }
 
+    /// 异步扫当前项目的全部 transcript 并逐个解析用量 → `UsageLoaded`。
+    /// 比 `spawn_conversations_refresh` 贵得多(要读整份文件内容，不只是
+    /// 文件头)，所以不接入它那条"回合结束自动刷新"的调用链——只在
+    /// `RightIconSelect(RightView::Usage)` 或手动刷新按钮时触发。
+    fn spawn_usage_refresh(&self, io: &ShellIo) {
+        let Some(p) = &self.project else {
+            return;
+        };
+        let project_id = p.id;
+        let cwd = PathBuf::from(&p.path);
+        let proxy = io.proxy.clone();
+        io.handle.spawn(async move {
+            let rows = tokio::task::spawn_blocking(move || {
+                conversation::list_all_conversations(&cwd)
+                    .into_iter()
+                    .filter_map(|meta| {
+                        // 读失败(权限/IO error)的会话整条跳过、不计入汇总——
+                        // 不能退化成"记一条全零 usage"，那样会把这次失败悄悄
+                        // 算进 `ProjectUsageTotals::conversation_count`（spec
+                        // 错误处理:"该会话跳过、不计入汇总"）。
+                        let jsonl = std::fs::read_to_string(&meta.path).ok()?;
+                        let u = usage::parse_usage(meta.agent, &jsonl);
+                        Some((meta, u))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await
+            .unwrap_or_default();
+            let _ = proxy.send_event(Message::UsageLoaded(project_id, rows));
+        });
+    }
+
     /// 异步取当前项目验收次数 → AcceptanceCountLoaded（项目卡副行）。
     /// 查询键走 `acceptance_query_repo`（= 落库侧 `delivery::repo_root`），
     /// 而非原始 `p.path`，否则子目录/符号链接路径撞不到库、副行静默空白。
@@ -2200,7 +2266,16 @@ impl Workspace {
         self.branch = None;
         self.dirty = false;
         self.git_statuses = HashMap::new();
+        // 复用中的 `Workspace`(就地改写成另一个项目,见本方法文档)可能还
+        // 挂着上一个项目的 watcher——显式清掉再重开,而不是指望
+        // `start_git_watch` 成功时的赋值顺带把旧的 drop 掉:万一新项目的
+        // 路径打不开 watcher(见其内部 `Err` 分支),不清的话旧 watcher 会
+        // 带着旧 project_id 继续在后台跑,`Message::ProjectFsChanged` 送来
+        // 的刷新信号会挂在一个此刻已经不对应这份 `Workspace` 的项目 id 上。
+        self.git_watch = None;
         self.conversations = Vec::new();
+        self.usage = Vec::new();
+        self.usage_loading = false;
         self.project_goal = load_project_goal(&project.path);
         self.project = Some(project);
         self.project_acceptance_count = None;
@@ -2209,6 +2284,11 @@ impl Workspace {
         self.spawn_project_git_refresh(io);
         self.spawn_conversations_refresh(io);
         self.spawn_acceptance_count_refresh(io);
+        // D4:新开的项目页签也要有实时刷新——此前只有跨重启恢复
+        // (`from_restore`)/`Stub` 促成时会启动 watcher,直接开新项目这条最
+        // 常见的路径反而漏了,退化成"只在开项目/回合结束时刷新"(code
+        // review 发现)。
+        self.start_git_watch(io);
     }
 
     /// "新建文件"/"新建文件夹"的公共起点:关菜单、确保目标目录展开(让
@@ -2861,6 +2941,8 @@ impl App {
             git_log_error: None,
             git_log_selected: None,
             git_log_detail: None,
+            git_log_pending: None,
+            git_log_restore_after_load: None,
             todo_meta: todo_meta::load(),
         }
     }
@@ -3412,25 +3494,67 @@ impl App {
         }
     }
 
-    /// 对当前项目重建 Git Log 快照,`max_count` 由调用方决定(打开面板/
+    /// 对当前项目异步重建 Git Log 快照,`max_count` 由调用方决定(打开面板/
     /// 引用变化用 `git_log::DEFAULT_MAX_COMMITS`,"加载更多"用当前值 +
     /// `git_log::LOAD_MORE_STEP`)。`git_log::build` 是同步的 `gleisbau`
-    /// 布局,调用方(`update()`)在受影响的消息分支里调用,不在 UI 线程
-    /// `block_on`,通常量级下毫秒级足够顺。成功后写回缓存;重建意味着缓存
-    /// 换了内容,选中的提交/详情也随之失效,一并清空。
-    fn refresh_git_log(&mut self, repo_path: &std::path::Path, max_count: usize) {
-        match git_log::build(repo_path, max_count) {
-            Ok(snapshot) => {
-                self.git_log_cache = Some(snapshot);
-                self.git_log_error = None;
-            }
-            Err(err) => {
-                self.git_log_cache = None;
-                self.git_log_error = Some(err);
-            }
-        }
+    /// revwalk + 分支归属分析——早先假设"通常量级下毫秒级",但真实仓库提
+    /// 交数/分支数上去后能到秒级,摆在 `update()` 里同步跑会直接冻结 UI
+    /// 线程(dogfooding 反馈:面板打开有几秒卡顿)。改用 `spawn_blocking` +
+    /// `EventLoopProxy` 回投,套路跟 `GitLogSelectCommit`/`commit_detail`
+    /// 一致。派发前先记下这次请求(repo_path, max_count)到
+    /// `git_log_pending`,`GitLogSnapshotLoaded` 落地时核对还对不对得上、
+    /// 不对就丢弃(旧请求被项目切换/新请求取代)。选中的提交/详情绑定着
+    /// "当前"这份快照,请求一发出就失效,不等新快照到——旧图留着继续画,
+    /// 只是选中态/详情先清,避免展示对不上的 diff。
+    fn spawn_git_log_refresh(&mut self, repo_path: &std::path::Path, max_count: usize) {
         self.git_log_selected = None;
         self.git_log_detail = None;
+        self.git_log_restore_after_load = None;
+        let repo_path = repo_path.to_path_buf();
+        self.git_log_pending = Some((repo_path.clone(), max_count));
+        let proxy = self.proxy.clone();
+        self.handle.spawn(async move {
+            let repo_path2 = repo_path.clone();
+            let result =
+                tokio::task::spawn_blocking(move || git_log::build(&repo_path2, max_count))
+                    .await
+                    .unwrap_or_else(|e| Err(format!("Git Log 加载任务失败: {e}")));
+            let _ = proxy.send_event(Message::GitLogSnapshotLoaded(repo_path, max_count, result));
+        });
+    }
+
+    /// 保证 `git_log_cache` 跟得上"现在应该看哪个项目"——`git_log_cache`/
+    /// `git_log_selected`/`git_log_detail` 是 `App` 级字段,不是每个项目
+    /// 各自一份(不像 `Workspace.worktrees`),所以面板打开时(`LeftIconSelect`)
+    /// 和切项目页签时(`ProjectTabSwitch`)都得调这个方法对齐一次,否则
+    /// Git Log 面板开着的状态下切页签,提交图会停在上一个项目不动,而同一
+    /// 面板里的 worktree 速览条(`ws.worktrees` 是按项目取的)却已经跳到新
+    /// 项目——两者对不上。缓存已经是当前项目的路径就不动(避免每次切页签
+    /// 都重算一遍),路径不一致就重建,没有项目就清空。只在 `left_view ==
+    /// LeftView::GitLog` 时调用才有意义。
+    fn sync_git_log_to_active_project(&mut self) {
+        let path = self
+            .active_workspace()
+            .and_then(|ws| ws.active_project_path());
+        match path {
+            Some(p)
+                if self
+                    .git_log_cache
+                    .as_ref()
+                    .is_none_or(|c| c.repo_path() != p) =>
+            {
+                self.spawn_git_log_refresh(&p, git_log::DEFAULT_MAX_COMMITS);
+            }
+            None => {
+                self.git_log_cache = None;
+                self.git_log_error = None;
+                self.git_log_selected = None;
+                self.git_log_detail = None;
+                self.git_log_pending = None;
+                self.git_log_restore_after_load = None;
+            }
+            _ => {}
+        }
     }
 
     pub fn update(&mut self, message: Message) {
@@ -3719,6 +3843,18 @@ impl App {
                     ws.conversations = list;
                 });
             }
+            Message::UsageRefresh => {
+                self.with_focused_project(|ws, io| {
+                    ws.usage_loading = true;
+                    ws.spawn_usage_refresh(io);
+                });
+            }
+            Message::UsageLoaded(project_id, rows) => {
+                self.with_project(project_id, move |ws, _io| {
+                    ws.usage = rows;
+                    ws.usage_loading = false;
+                });
+            }
             Message::ConversationOpen(path) => {
                 self.with_focused_project(move |ws, io| {
                     // 若点开的是某活会话的当前对话 → Session 源(回合结束刷新);否则 File 快照。
@@ -3956,30 +4092,11 @@ impl App {
                     self.left_view = v;
                     self.left_collapsed = false;
                 }
-                // spike(2026-08-06):切进 Git 提交图视图时,若缓存为空或不属于
-                // 当前项目,同步跑一次 `gleisbau` 布局。失败/未打开项目都落成
-                // 文案,交给 `git_log::view` 画出来,不 panic、不静默吞掉。
+                // 切进 Git 提交图视图时,若缓存为空或不属于当前项目,同步跑
+                // 一次 `gleisbau` 布局。失败/未打开项目都落成文案,交给
+                // `git_log::view` 画出来,不 panic、不静默吞掉。
                 if self.left_view == LeftView::GitLog {
-                    let path = self
-                        .active_workspace()
-                        .and_then(|ws| ws.active_project_path());
-                    match path {
-                        Some(p)
-                            if self
-                                .git_log_cache
-                                .as_ref()
-                                .is_none_or(|c| c.repo_path() != p) =>
-                        {
-                            self.refresh_git_log(&p, git_log::DEFAULT_MAX_COMMITS);
-                        }
-                        None => {
-                            self.git_log_cache = None;
-                            self.git_log_error = None;
-                            self.git_log_selected = None;
-                            self.git_log_detail = None;
-                        }
-                        _ => {}
-                    }
+                    self.sync_git_log_to_active_project();
                 }
                 // Todo 面板：切入即从磁盘重读一次 `.dozer/todo.md`，保证切进来
                 // 立刻是最新内容（轮询只负责"停留期间"的同步，切换本身不算）。
@@ -4004,6 +4121,12 @@ impl App {
                 } else {
                     self.right_view = v;
                     self.right_collapsed = false;
+                    if v == RightView::Usage {
+                        self.with_focused_project(|ws, io| {
+                            ws.usage_loading = true;
+                            ws.spawn_usage_refresh(io);
+                        });
+                    }
                 }
                 // 同 LeftIconSelect(Fix round 2 #2)。
                 self.maximized = None;
@@ -4302,6 +4425,13 @@ impl App {
                 self.maximized = None;
                 self.current_page = AppPage::Workspace;
                 self.ensure_loaded(id);
+                // Git Log 面板已经开着的话,提交图缓存是 `App` 级的、不随项目
+                // 页签走(见 `sync_git_log_to_active_project` 文档),不补这一
+                // 下切页签会让提交图停在上一个项目,跟同一面板里已经按新项目
+                // 刷新的 worktree 速览条对不上。
+                if self.left_view == LeftView::GitLog {
+                    self.sync_git_log_to_active_project();
+                }
                 // 清放大态后必须重算终端网格。`PaneResized` 那条分支只在**窗口
                 // 几何变化**时触发,清 `maximized` 不会自己走到那里;而
                 // `terminal_grid_state` 把 `maximized` 算进公式,不重算的话
@@ -4416,10 +4546,15 @@ impl App {
                 });
                 // 只有 `.git` 引用类变化(分支切换/外部提交/其他 worktree
                 // 提交)才值得重建 Git Log 快照——纯工作区文件编辑不影响
-                // 提交历史,重算是纯浪费。只在这个项目的面板缓存已经建过
-                // 一次、且路径匹配时才重建(用户可能根本没打开过 Git Log
-                // 面板,`git_log_cache` 是 `None` 就没必要现在算)。
+                // 提交历史,重算是纯浪费。`git_log_cache` 是 `App` 级、不是
+                // 按项目分的(见 `sync_git_log_to_active_project`),所以这里
+                // 必须先核实这条事件本来就是"当前聚焦项目"发出的
+                // (`project_id == self.active_project_id`)——否则后台项目
+                // 的引用变化会拿"缓存路径恰好等于前台项目路径"这个巧合当
+                // 通行证,把前台正打开的详情/选中态平白清掉,而其实什么都
+                // 没变。项目 id 匹配之外再核一次路径,双保险防状态漂移。
                 if relevance == git_watch::Relevance::GitRefs
+                    && self.active_project_id == Some(project_id)
                     && let Some(repo_path) = self
                         .git_log_cache
                         .as_ref()
@@ -4435,7 +4570,7 @@ impl App {
                         .as_ref()
                         .map(|c| c.max_count())
                         .unwrap_or(git_log::DEFAULT_MAX_COMMITS);
-                    self.refresh_git_log(&repo_path, max);
+                    self.spawn_git_log_refresh(&repo_path, max);
                 }
             }
             Message::GitLogSelectCommit(oid) => {
@@ -4468,6 +4603,33 @@ impl App {
                 }
                 // 否则:项目已切换,或用户点了别的提交——这份结果过期了,丢弃。
             }
+            Message::GitLogSnapshotLoaded(repo_path, max_count, result) => {
+                let still_pending = self
+                    .git_log_pending
+                    .as_ref()
+                    .map(|(p, m)| (p.as_path(), *m))
+                    == Some((repo_path.as_path(), max_count));
+                if !still_pending {
+                    // 项目已经又切走,或紧接着发起了另一次请求(比如快速连点
+                    // 两次"加载更多")——这份结果过期了,丢弃,不能覆盖比它
+                    // 更新的状态。
+                    return;
+                }
+                self.git_log_pending = None;
+                match result {
+                    Ok(snapshot) => {
+                        self.git_log_cache = Some(snapshot);
+                        self.git_log_error = None;
+                    }
+                    Err(err) => {
+                        self.git_log_cache = None;
+                        self.git_log_error = Some(err);
+                    }
+                }
+                if let Some(oid) = self.git_log_restore_after_load.take() {
+                    self.update(Message::GitLogSelectCommit(oid));
+                }
+            }
             Message::GitLogLoadMore => {
                 let Some(path) = self
                     .active_workspace()
@@ -4480,13 +4642,14 @@ impl App {
                     .as_ref()
                     .map(|c| c.max_count() + git_log::LOAD_MORE_STEP)
                     .unwrap_or(git_log::DEFAULT_MAX_COMMITS);
-                // refresh_git_log 会清掉 selected/detail——"加载更多"不该
-                // 打断用户正在看的详情,所以这里手动重建快照后把选中态还原。
+                // spawn_git_log_refresh 会立即清掉 selected/detail——"加载
+                // 更多"不该打断用户正在看的详情,所以先记下选中的提交,新
+                // 快照真正落地(`GitLogSnapshotLoaded`)后再补一次
+                // `GitLogSelectCommit` 还原(这里还拿不到新快照,不能提前
+                // 还原)。
                 let selected = self.git_log_selected;
-                self.refresh_git_log(&path, next);
-                if let Some(oid) = selected {
-                    self.update(Message::GitLogSelectCommit(oid));
-                }
+                self.spawn_git_log_refresh(&path, next);
+                self.git_log_restore_after_load = selected;
             }
             Message::AcceptanceCountLoaded(project_id, n) => {
                 self.with_project(project_id, move |ws, _io| {
@@ -6527,6 +6690,14 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_w
             HoverId::Rail(RailButton::RightConversations),
             false
         )),
+        MouseArea::new(rail_icon_button(
+            icons::IconKind::BarChart3,
+            app.right_view == RightView::Usage && right_open,
+            app.hover_progress(HoverId::Rail(RailButton::RightUsage)),
+            Message::RightIconSelect(RightView::Usage),
+        ))
+        .on_enter(Message::Hover(HoverId::Rail(RailButton::RightUsage), true))
+        .on_exit(Message::Hover(HoverId::Rail(RailButton::RightUsage), false)),
     ]
     .spacing(region.gap)
     .padding(region.padding);
@@ -6613,11 +6784,13 @@ fn zone_pane_border(zone: chrome_style::RegionStyle, corner: PaneCorner) -> Bord
 /// 放大态跳过——`maximize_overlay` 已经用金色边框把同一块内容整体框起来,
 /// 再套一层外框会在金框内侧多出一圈视觉噪音。
 fn worktree_strip<'a>(
-    worktrees: &[WorktreeInfo],
+    worktrees: &'a [WorktreeInfo],
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     // 把同仓库的其他 worktree 压成一行小字,标示当前提交图对应哪个 worktree
     // 上下文。主 worktree + N 个链接 worktree 各自的分支会散落在同一条图上,
-    // 这个条带帮助用户分辨 `[→main]` 到底指谁。
+    // 这个条带帮助用户分辨 `[→main]` 到底指谁。"本工作区"是状态展示,不是
+    // 甲方动作,不能用 `theme::GOLD`(CLAUDE.md 硬性裁决,GOLD 专属甲方动作)
+    // ——真正的动作是点其它 worktree 切过去,那些按钮才该用 GOLD。
     let current = worktrees.iter().find(|w| w.is_current);
     let others = worktrees
         .iter()
@@ -6631,7 +6804,7 @@ fn worktree_strip<'a>(
                 c.branch.as_deref().unwrap_or("(无分支)")
             ))
             .size(workspace_font::caption())
-            .color(theme::GOLD)
+            .color(theme::CYAN)
             .into(),
         );
     }
@@ -6642,12 +6815,31 @@ fn worktree_strip<'a>(
             (None, true) => "无分支 (缺失)".into(),
             (None, _) => "无分支".into(),
         };
-        chips.push(
-            text(label)
-                .size(workspace_font::caption())
-                .color(theme::DIM)
+        if o.missing {
+            // 目录已经不在磁盘上,没有可切换的目标——保留纯展示文案。
+            chips.push(
+                text(label)
+                    .size(workspace_font::caption())
+                    .color(theme::DIM)
+                    .into(),
+            );
+        } else {
+            chips.push(
+                button(
+                    text(label)
+                        .size(workspace_font::caption())
+                        .color(theme::GOLD),
+                )
+                .on_press(Message::ProjectTabOpen(o.path.clone()))
+                .padding(0)
+                .style(|_t: &iced_widget::Theme, _s| button::Style {
+                    background: None,
+                    text_color: theme::GOLD,
+                    ..button::Style::default()
+                })
                 .into(),
-        );
+            );
+        }
     }
     if chips.is_empty() {
         return container(iced_widget::Space::new())
@@ -6718,6 +6910,7 @@ fn left_panel_area<'a>(
             app.git_log_error.as_deref(),
             app.git_log_selected,
             app.git_log_detail.as_ref(),
+            app.git_log_pending.is_some(),
         ),
         LeftView::Todo => todo_pane(app, ws, Length::Fill, zone_pane_border(zone, ac)),
     };
@@ -6725,8 +6918,10 @@ fn left_panel_area<'a>(
         return inner;
     }
     let region = zone;
+    // 哪怕提交图还没画出来(加载中/出错/空仓库),worktree 速览条也该照常
+    // 显示——用户可能就是先想看看有哪些 worktree,不必等图先画出来。
     let strip: Option<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> =
-        if app.left_view == LeftView::GitLog && app.git_log_cache.is_some() {
+        if app.left_view == LeftView::GitLog {
             Some(worktree_strip(&ws.worktrees))
         } else {
             None
@@ -6792,10 +6987,10 @@ fn right_panel_area<'a>(
     // 的 `RightPairSplit` 分支要相应把算出来的 ratio 取反再写回,否则拖拽
     // 方向感会反过来(见该函数注释)。
     let zone = chrome_style::right_zone();
-    let (lc, rc) = if maximized {
-        (PaneCorner::None, PaneCorner::None)
+    let (lc, rc, ac) = if maximized {
+        (PaneCorner::None, PaneCorner::None, PaneCorner::None)
     } else {
-        (PaneCorner::Left, PaneCorner::Right)
+        (PaneCorner::Left, PaneCorner::Right, PaneCorner::All)
     };
     let inner: Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> =
         match app.right_view {
@@ -6853,6 +7048,16 @@ fn right_panel_area<'a>(
                 .width(Length::Fill)
                 .into()
             }
+            RightView::Usage => usage::view(
+                &ws.usage,
+                ws.usage_loading,
+                ws.project
+                    .as_ref()
+                    .map(|p| p.name.as_str())
+                    .unwrap_or("未打开项目"),
+                Length::Fill,
+                zone_pane_border(zone, ac),
+            ),
         };
     if maximized {
         return inner;
@@ -9043,7 +9248,7 @@ fn dot_color(state: AgentState, alive: bool) -> Color {
 
 /// agent → 对话列表圆点颜色。避开 `theme::GOLD`(甲方动作专属色,
 /// CLAUDE.md 明文规定,不能被 agent 分类语义借用)。
-fn agent_dot_color(agent: AgentKind) -> Color {
+pub(crate) fn agent_dot_color(agent: AgentKind) -> Color {
     match agent {
         AgentKind::Claude => theme::CYAN,
         AgentKind::Codebuddy => theme::PURPLE,
