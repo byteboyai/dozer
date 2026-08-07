@@ -42,7 +42,9 @@ pub fn bookmark_status(
     let project = project_id.and_then(|pid| {
         bookmarks
             .iter()
-            .find(|b| b.scope == BookmarkScope::Project && b.project_id == Some(pid) && b.url == url)
+            .find(|b| {
+                b.scope == BookmarkScope::Project && b.project_id == Some(pid) && b.url == url
+            })
             .map(|b| b.id)
     });
     BookmarkStatus { global, project }
@@ -130,7 +132,14 @@ mod tests {
     #[test]
     fn optimistic_add_appends_new_entry() {
         let mut list = vec![];
-        optimistic_add(&mut list, BookmarkScope::Global, None, "https://a.com", "A", 100);
+        optimistic_add(
+            &mut list,
+            BookmarkScope::Global,
+            None,
+            "https://a.com",
+            "A",
+            100,
+        );
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, OPTIMISTIC_BOOKMARK_ID);
         assert_eq!(list[0].title, "A");
@@ -139,8 +148,22 @@ mod tests {
     #[test]
     fn optimistic_add_is_idempotent_for_same_scope_and_url() {
         let mut list = vec![];
-        optimistic_add(&mut list, BookmarkScope::Global, None, "https://a.com", "A", 100);
-        optimistic_add(&mut list, BookmarkScope::Global, None, "https://a.com", "改名", 200);
+        optimistic_add(
+            &mut list,
+            BookmarkScope::Global,
+            None,
+            "https://a.com",
+            "A",
+            100,
+        );
+        optimistic_add(
+            &mut list,
+            BookmarkScope::Global,
+            None,
+            "https://a.com",
+            "改名",
+            200,
+        );
         assert_eq!(list.len(), 1, "已存在则不重复插入");
         assert_eq!(list[0].title, "A");
     }
@@ -148,8 +171,22 @@ mod tests {
     #[test]
     fn optimistic_add_allows_same_url_in_different_scope() {
         let mut list = vec![];
-        optimistic_add(&mut list, BookmarkScope::Global, None, "https://a.com", "A", 100);
-        optimistic_add(&mut list, BookmarkScope::Project, Some(1), "https://a.com", "A", 100);
+        optimistic_add(
+            &mut list,
+            BookmarkScope::Global,
+            None,
+            "https://a.com",
+            "A",
+            100,
+        );
+        optimistic_add(
+            &mut list,
+            BookmarkScope::Project,
+            Some(1),
+            "https://a.com",
+            "A",
+            100,
+        );
         assert_eq!(list.len(), 2);
     }
 
