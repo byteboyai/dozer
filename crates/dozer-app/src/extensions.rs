@@ -3,4 +3,5 @@
 //! `docs/superpowers/specs/2026-08-07-git-log-extension-pilot-design.md`)。
 //! 目前只有 `git_log` 一个试点;browser/todo 等面板视后续排期跟进。
 
+pub mod browser;
 pub mod git_log;
