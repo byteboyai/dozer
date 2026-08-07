@@ -5,6 +5,7 @@
 //! 字段;`terminal_font` 内嵌 `assets/theme/terminal.json`。
 
 pub mod color;
+pub mod font;
 pub mod icon_size;
 pub mod region;
 pub mod terminal_font;

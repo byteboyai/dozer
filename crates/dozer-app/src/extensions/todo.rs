@@ -7,7 +7,8 @@
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use crate::{icons, theme, workspace_font};
+use crate::theme::font;
+use crate::{icons, theme};
 use iced_widget::core::{Border, Color, Element, Length};
 use iced_widget::{button, column, container, rich_text, row, scrollable, span, text, text_input};
 
@@ -506,10 +507,10 @@ pub fn view<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let header = column![
         text("Todo")
-            .size(workspace_font::title())
+            .size(theme::font::title())
             .color(theme::color::CREAM),
         text(format!("{} 条任务 · .dozer/todo.md", ws_state.items.len()))
-            .size(workspace_font::caption())
+            .size(theme::font::caption())
             .color(theme::color::DIM),
     ]
     .spacing(4)
@@ -544,7 +545,7 @@ pub fn view<'a>(
         todo_filter_segment("完成", TodoFilter::Done, ws_state.filter),
         text_input("搜索任务关键字…", &ws_state.search)
             .on_input(Message::SearchChanged)
-            .size(workspace_font::body())
+            .size(theme::font::body())
             .width(Length::Fill)
             .style(
                 |_t: &iced_widget::Theme, _s| iced_widget::text_input::Style {
@@ -566,7 +567,7 @@ pub fn view<'a>(
         list = list.push(
             container(
                 text("没有匹配的任务")
-                    .size(workspace_font::body())
+                    .size(theme::font::body())
                     .color(theme::color::DIM),
             )
             .padding([20, 20]),
@@ -601,7 +602,7 @@ pub fn view<'a>(
     let add_row = text_input("＋新增任务…", &ws_state.add_draft)
         .on_input(Message::AddInputChanged)
         .on_submit(Message::AddSubmit)
-        .size(workspace_font::body())
+        .size(theme::font::body())
         .padding([10, 20])
         .style(
             |_t: &iced_widget::Theme, _s| iced_widget::text_input::Style {
@@ -665,7 +666,7 @@ fn todo_row<'a>(
     let checkbox = button(
         container(if done {
             text("✓")
-                .size(workspace_font::caption())
+                .size(theme::font::caption())
                 .color(theme::color::DIM)
                 .into()
         } else {
@@ -707,14 +708,14 @@ fn todo_row<'a>(
             iced_widget::Renderer,
         > = rich_text![
             span(item.text.clone())
-                .size(workspace_font::body())
+                .size(theme::font::body())
                 .color(label_color)
                 .strikethrough(true)
         ];
         rich.into()
     } else {
         text(item.text.clone())
-            .size(workspace_font::body())
+            .size(theme::font::body())
             .color(label_color)
             .into()
     };
@@ -723,14 +724,14 @@ fn todo_row<'a>(
         match state {
             TodoState::Done => meta.and_then(|m| m.completed_at).map(|t| {
                 text(format!("完成于 {}", format_todo_time(t)))
-                    .size(workspace_font::caption())
+                    .size(theme::font::caption())
                     .color(theme::color::DIM)
                     .into()
             }),
             _ => meta.and_then(|m| m.plan_date.as_deref()).map(|d| {
                 button(
                     text(format!("计划 {d}"))
-                        .size(workspace_font::caption())
+                        .size(theme::font::caption())
                         .color(theme::color::DIM),
                 )
                 .on_press(Message::PlanDateEditStart(idx))
@@ -760,7 +761,7 @@ fn todo_row<'a>(
                     theme::color::GOLD
                 ),
                 text("派发")
-                    .size(workspace_font::caption())
+                    .size(theme::font::caption())
                     .color(theme::color::GOLD),
             ]
             .spacing(4)
@@ -780,9 +781,9 @@ fn todo_row<'a>(
         })
         .into(),
         TodoState::InProgress => row![
-            text("●").size(workspace_font::dot_sm()).color(theme::color::GREEN),
+            text("●").size(theme::font::dot_sm()).color(theme::color::GREEN),
             text("进行中")
-                .size(workspace_font::caption())
+                .size(theme::font::caption())
                 .color(theme::color::GREEN),
         ]
         .spacing(5)
@@ -815,7 +816,7 @@ fn todo_dispatch_popup<'a>(
         col = col.push(
             button(
                 text(title.clone())
-                    .size(workspace_font::body())
+                    .size(theme::font::body())
                     .color(theme::color::CREAM),
             )
             .on_press(Message::DispatchToExisting(idx, session_id.to_string()))
@@ -831,7 +832,7 @@ fn todo_dispatch_popup<'a>(
     col = col.push(
         button(
             text("新建 agent 会话…")
-                .size(workspace_font::body())
+                .size(theme::font::body())
                 .color(theme::color::GOLD),
         )
         .on_press(Message::DispatchNew(
@@ -867,12 +868,12 @@ fn todo_plan_date_edit_row<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     row![
         text(item.text.clone())
-            .size(workspace_font::body())
+            .size(theme::font::body())
             .color(theme::color::CREAM),
         text_input("计划时间，如 08-10", draft)
             .on_input(Message::PlanDateChanged)
             .on_submit(Message::PlanDateSubmit)
-            .size(workspace_font::caption())
+            .size(theme::font::caption())
             .width(Length::Fixed(140.0)),
     ]
     .spacing(10)
@@ -890,7 +891,7 @@ fn todo_filter_segment<'a>(
     let active = value == current;
     button(
         text(label)
-            .size(workspace_font::caption())
+            .size(theme::font::caption())
             .color(if active { theme::color::CREAM } else { theme::color::DIM }),
     )
     .on_press(Message::FilterSet(value))

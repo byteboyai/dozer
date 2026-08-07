@@ -9,7 +9,7 @@ use crate::conversation::ConversationMeta;
 use crate::icons;
 use crate::theme;
 use crate::workspace::Message;
-use crate::workspace_font;
+use crate::theme::font;
 use dozer_core::protocol::AgentKind;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::{Border, Color, Element, Length, Radians, Rectangle};
@@ -303,10 +303,10 @@ fn panel_header(
     iced_widget::row![
         column![
             text("用量统计")
-                .size(workspace_font::subtitle())
+                .size(theme::font::subtitle())
                 .color(theme::color::CREAM),
             text(project_name)
-                .size(workspace_font::label())
+                .size(theme::font::label())
                 .color(theme::color::DIM),
         ]
         .spacing(2),
@@ -339,13 +339,13 @@ pub fn view<'a>(
     if loading {
         content = content.push(
             text("统计中…")
-                .size(workspace_font::body())
+                .size(theme::font::body())
                 .color(theme::color::DIM),
         );
     } else if rows.is_empty() {
         content = content.push(
             text("这个项目还没有 agent 对话记录")
-                .size(workspace_font::body())
+                .size(theme::font::body())
                 .color(theme::color::DIM),
         );
     } else {
@@ -385,7 +385,7 @@ fn summary_card(
     ) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
         column![
             text(label)
-                .size(workspace_font::caption())
+                .size(theme::font::caption())
                 .color(theme::color::DIM),
             text(value)
                 .size(15.0)
@@ -422,7 +422,7 @@ fn summary_card(
     container(
         column![
             text(format!("项目汇总 · {} 会话", totals.conversation_count))
-                .size(workspace_font::caption())
+                .size(theme::font::caption())
                 .color(theme::color::DIM),
             row,
         ]
@@ -458,14 +458,14 @@ fn usage_row<'a>(
     container(
         column![
             text(meta.title.clone())
-                .size(workspace_font::body())
+                .size(theme::font::body())
                 .color(theme::color::CREAM),
             text(activity)
-                .size(workspace_font::caption_sm())
+                .size(theme::font::caption_sm())
                 .color(theme::color::DIM)
                 .font(iced_widget::core::Font::MONOSPACE),
             text(tokens)
-                .size(workspace_font::caption_sm())
+                .size(theme::font::caption_sm())
                 .color(theme::color::CYAN)
                 .font(iced_widget::core::Font::MONOSPACE),
         ]
@@ -500,10 +500,10 @@ fn grouped_list<'a>(
         col = col.push(
             iced_widget::row![
                 text(agent.label())
-                    .size(workspace_font::caption())
+                    .size(theme::font::caption())
                     .color(crate::workspace::agent_dot_color(agent)),
                 text(format!("{} 会话 · {} tokens", idxs.len(), group_tokens))
-                    .size(workspace_font::caption())
+                    .size(theme::font::caption())
                     .color(theme::color::DIM),
             ]
             .spacing(8),
@@ -701,7 +701,7 @@ fn chart_legend(
                     pct,
                     format_token_short(*value)
                 ))
-                .size(workspace_font::caption_sm())
+                .size(theme::font::caption_sm())
                 .color(theme::color::DIM)
                 .font(iced_widget::core::Font::MONOSPACE),
             ]

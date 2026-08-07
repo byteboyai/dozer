@@ -12,11 +12,11 @@
 //!
 //! 每个 accessor 返回的字号都乘过 `icon_size::scale()`（全局缩放因子），
 //! 因此改 `scale` 即整体缩放全部控件文字，与图标尺寸同步。
-use crate::theme::icon_size;
+use super::icon_size;
 use serde::Deserialize;
 use std::sync::LazyLock;
 
-const RAW: &str = include_str!("../assets/theme/workspace.json");
+const RAW: &str = include_str!("../../assets/theme/workspace.json");
 
 #[derive(Deserialize)]
 struct WorkspaceFonts {

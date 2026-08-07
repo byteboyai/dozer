@@ -12,7 +12,8 @@ use crate::preview::WebviewSpec;
 use crate::workspace::{lh, preview_tab_display_width, tab_arrow_button, tab_divider, tab_window};
 use crate::theme::icon_size;
 use crate::theme::region;
-use crate::{icons, theme, workspace_font, workspace_geometry};
+use crate::theme::font;
+use crate::{icons, theme, workspace_geometry};
 use dozer_client::Client;
 use dozer_core::protocol::{BookmarkInfo, BookmarkScope};
 use iced_widget::core::{Border, Element, Length};
@@ -964,7 +965,7 @@ fn bookmark_menu_row(
     msg: Message,
 ) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
     button(lh(text(label)
-        .size(workspace_font::body())
+        .size(theme::font::body())
         .color(theme::color::CREAM)))
     .on_press(msg)
     .width(Length::Fill)
@@ -1034,12 +1035,12 @@ fn bookmark_group<'a>(
     items: &[&'a BookmarkInfo],
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let mut col = column![lh(text(title)
-        .size(workspace_font::subtitle())
+        .size(theme::font::subtitle())
         .color(theme::color::DIM))]
     .spacing(2);
     for b in items {
         let open = button(lh(text(b.title.clone())
-            .size(workspace_font::body())
+            .size(theme::font::body())
             .color(theme::color::CREAM)))
         .on_press(Message::OpenUrl(b.url.clone()))
         .width(Length::Fill)
@@ -1048,7 +1049,7 @@ fn bookmark_group<'a>(
             text_color: theme::color::CREAM,
             ..button::Style::default()
         });
-        let remove = button(lh(text("×").size(workspace_font::body()).color(theme::color::DIM)))
+        let remove = button(lh(text("×").size(theme::font::body()).color(theme::color::DIM)))
             .on_press(Message::BookmarkRemove(b.id))
             .style(|_t: &iced_widget::Theme, _s| button::Style {
                 background: None,
@@ -1088,7 +1089,7 @@ fn bookmarks_panel(
     }
     if both_empty {
         col = col.push(lh(text("暂无收藏")
-            .size(workspace_font::subtitle())
+            .size(theme::font::subtitle())
             .color(theme::color::DIM)));
     }
 
@@ -1139,7 +1140,7 @@ pub fn view(
         .map(|(idx, tab)| {
             let active = idx == state.tabs.active_idx();
             let select = button(lh(text(tab.title.clone())
-                .size(workspace_font::subtitle())
+                .size(theme::font::subtitle())
                 .color(theme::color::CREAM)))
             .on_press(Message::SelectTab(idx))
             .style(|_t, _s| button::Style {
@@ -1147,7 +1148,7 @@ pub fn view(
                 text_color: theme::color::CREAM,
                 ..button::Style::default()
             });
-            let close = button(lh(text("×").size(workspace_font::body()).color(theme::color::DIM)))
+            let close = button(lh(text("×").size(theme::font::body()).color(theme::color::DIM)))
                 .on_press(Message::CloseTab(idx))
                 .style(|_t, _s| button::Style {
                     background: None,
@@ -1201,7 +1202,7 @@ pub fn view(
         "输入网址".to_string()
     };
     let addr = button(lh(text(addr_text)
-        .size(workspace_font::body())
+        .size(theme::font::body())
         .color(if editing { theme::color::CREAM } else { theme::color::DIM })))
     .on_press(Message::AddrClick)
     .width(Length::Fill)
@@ -1235,14 +1236,14 @@ pub fn view(
 
     if let Some(err) = &state.error {
         content = content.push(lh(text(format!("⚠ {err}"))
-            .size(workspace_font::body())
+            .size(theme::font::body())
             .color(theme::color::RED)));
     }
 
     if state.tabs.tabs().is_empty() {
         content = content.push(
             container(lh(text("暂无网页——在地址栏输入网址")
-                .size(workspace_font::subtitle())
+                .size(theme::font::subtitle())
                 .color(theme::color::DIM)))
             .width(Length::Fill)
             .height(Length::Fill),

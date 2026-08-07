@@ -21,7 +21,6 @@ mod theme;
 mod transcript;
 mod usage;
 mod workspace;
-mod workspace_font;
 mod workspace_geometry;
 
 use workspace::{App, Message};

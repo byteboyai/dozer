@@ -7,7 +7,7 @@
 //! 画一根直线,commit 是线上的一个圆点,父子关系用直线连接(不是贝塞尔)。
 //! 验证通过、决定转正时,再补动画/交互/性能优化。
 use crate::theme;
-use crate::workspace_font;
+use crate::theme::font;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::alignment;
 use iced_widget::core::{Color, Element, Font, Length, Padding, Pixels, Point, Rectangle, Vector};
@@ -574,7 +574,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Git
                     content,
                     position: Point::ORIGIN,
                     color: theme::color::CREAM,
-                    size: Pixels(workspace_font::body() as f32),
+                    size: Pixels(theme::font::body() as f32),
                     align_y: alignment::Vertical::Center,
                     font: Font::MONOSPACE,
                     ..canvas::Text::default()
@@ -645,7 +645,7 @@ pub fn view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_widg
         .into();
     let mut header = row![
         text(snapshot.repo_path.display().to_string())
-            .size(workspace_font::caption())
+            .size(theme::font::caption())
             .color(theme::color::DIM)
     ]
     .padding([4, 8]);
@@ -655,13 +655,13 @@ pub fn view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_widg
     if loading {
         header = header.push(
             text("刷新中…")
-                .size(workspace_font::caption())
+                .size(theme::font::caption())
                 .color(theme::color::DIM),
         );
     }
     let load_more = iced_widget::button(
         text("加载更多提交 (+200)")
-            .size(workspace_font::caption())
+            .size(theme::font::caption())
             .color(theme::color::CREAM),
     )
     .on_press_maybe((!loading).then_some(Message::LoadMore))
@@ -716,7 +716,7 @@ fn detail_view<'a>(
                 let header = row![
                     text(status_glyph(f.status)).color(color).width(18),
                     text(&f.path)
-                        .size(workspace_font::caption())
+                        .size(theme::font::caption())
                         .color(theme::color::CREAM),
                 ]
                 .spacing(4)
@@ -727,7 +727,7 @@ fn detail_view<'a>(
                 } else {
                     acc.push(
                         text(f.patch.clone())
-                            .size(workspace_font::caption())
+                            .size(theme::font::caption())
                             .color(theme::color::BODY)
                             .font(Font::MONOSPACE),
                     )
