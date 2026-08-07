@@ -149,7 +149,7 @@ Expected: 无输出。
 Run: `cargo build --workspace && cargo test --workspace 2>&1 | tail -60`
 Expected: 干净通过。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add -A crates/dozer-app/src
