@@ -17,8 +17,8 @@ pub enum Relevance {
     GitRefs,
 }
 
-/// `changed` 是否值得触发刷新,值得的话是哪一类。`.git` 目录整体在
-/// `project::HIDDEN` 排除名单里,但其中的 HEAD/index/refs/packed-refs
+/// `changed` 是否值得触发刷新,值得的话是哪一类。仓库根的 `.git` 目录整体
+/// 在 `project::HIDDEN` 排除名单里,但其中的 HEAD/index/refs/packed-refs
 /// 要单独放行(D4)。
 fn is_relevant_path(repo: &Path, changed: &Path) -> Option<Relevance> {
     let rel = changed.strip_prefix(repo).ok()?;
@@ -39,6 +39,19 @@ fn is_relevant_path(repo: &Path, changed: &Path) -> Option<Relevance> {
         return None; // .git 下其余内容(objects/ 等)不关心
     }
     if crate::project::HIDDEN.contains(&first.as_ref()) {
+        return None;
+    }
+    // 不止顶层——嵌套在子目录里的 node_modules/target/.git(子模块)同样要
+    // 排除,口径对齐 `project::HIDDEN` 在文件树展开时逐层过滤(见
+    // `project.rs` 的 `read_children`)。不查嵌套层的话,monorepo/多包项目
+    // 里 `packages/foo/node_modules`、每个子包各自的 `target/` 这类改动会
+    // 被当成"工作区改动"上报,写依赖/编译产物时白白触发一轮 git 状态刷新
+    // (code review 发现)。
+    let nested_hidden = parts.any(|c| {
+        matches!(c, std::path::Component::Normal(name)
+            if crate::project::HIDDEN.contains(&name.to_string_lossy().as_ref()))
+    });
+    if nested_hidden {
         return None;
     }
     Some(Relevance::Workdir)
@@ -134,6 +147,31 @@ mod tests {
             None
         );
         assert_eq!(is_relevant_path(repo, Path::new("/r/.DS_Store")), None);
+    }
+
+    #[test]
+    fn nested_hidden_dirs_are_not_relevant() {
+        // monorepo/多包项目:嵌套在子目录里的 node_modules/target/.git(子
+        // 模块)同样不该触发刷新,不止顶层——否则 `npm install`/编译产物
+        // 写入子包目录会被误判成"工作区改动"。
+        let repo = Path::new("/r");
+        assert_eq!(
+            is_relevant_path(repo, Path::new("/r/packages/foo/node_modules/x/index.js")),
+            None
+        );
+        assert_eq!(
+            is_relevant_path(repo, Path::new("/r/crates/bar/target/debug/foo")),
+            None
+        );
+        assert_eq!(
+            is_relevant_path(repo, Path::new("/r/vendor/sub/.git/HEAD")),
+            None
+        );
+        // 但子目录本身的正常源码改动依然相关。
+        assert_eq!(
+            is_relevant_path(repo, Path::new("/r/packages/foo/src/main.rs")),
+            Some(Relevance::Workdir)
+        );
     }
 
     #[test]

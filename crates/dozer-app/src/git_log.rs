@@ -29,8 +29,9 @@ const LEFT_MARGIN: f32 = 12.0;
 const TEXT_GAP: f32 = 12.0;
 const LINE_WIDTH: f32 = 1.6;
 /// 选中提交详情子面板的宽度(px)。面板本身是 `Length::Fill` 高度、固定在
-/// canvas 右侧,宽度固定以免挤压提交图。
-const DETAIL_WIDTH: f32 = 320.0;
+/// canvas 右侧,宽度固定以免挤压提交图。要放得下每个文件的 unified diff
+/// 文本(等宽字体,常见改动行 60-80 列),比只放文件列表时的宽度宽一截。
+const DETAIL_WIDTH: f32 = 460.0;
 
 /// 与主题色轮换配色的 track 调色板——不用 gleisbau 自带的 CSS 颜色名,
 /// 省掉一个颜色名解析器,顺便让图和 ByteBoy2077 主题保持一致。
@@ -60,6 +61,10 @@ pub enum RefKind {
     Tag,
 }
 
+/// 派生 `Debug + Clone`——`Message::GitLogSnapshotLoaded` 要装
+/// `Result<GitLogSnapshot, _>`,`Message` 本身 `derive(Debug, Clone)`(见
+/// `CommitDetail` 上同理由的注释)。
+#[derive(Debug, Clone)]
 pub struct CommitRow {
     column: usize,
     color_idx: usize,
@@ -76,6 +81,8 @@ pub struct CommitRow {
     oid: git2::Oid,
 }
 
+/// 派生 `Debug + Clone`,理由同 [`CommitRow`]。
+#[derive(Debug, Clone)]
 pub struct GitLogSnapshot {
     repo_path: PathBuf,
     rows: Vec<CommitRow>,
@@ -122,10 +129,12 @@ fn default_settings() -> Result<gleisbau::settings::Settings, String> {
     })
 }
 
-/// 对 `repo_path` 跑一次 `gleisbau` 布局,产出可渲染快照。同步执行——
-/// `max_count` 量级(几百到几千)下 revwalk + 分支归属分析是毫秒到低两位
-/// 数毫秒级。gleisbau 没有增量/游标 API,"加载更多"就是拿更大的
-/// `max_count` 再整份跑一遍,见 [`LOAD_MORE_STEP`]。
+/// 对 `repo_path` 跑一次 `gleisbau` 布局,产出可渲染快照。函数本身是同步
+/// 阻塞的(revwalk + 分支归属分析在提交/分支数量大时可到秒级),调用方
+/// (`workspace.rs` 的 `App::spawn_git_log_refresh`)必须扔进
+/// `tokio::task::spawn_blocking`,不能直接摆在 UI 线程的 `update()` 里跑。
+/// gleisbau 没有增量/游标 API,"加载更多"就是拿更大的 `max_count` 再整份
+/// 跑一遍,见 [`LOAD_MORE_STEP`]。
 pub fn build(repo_path: &Path, max_count: usize) -> Result<GitLogSnapshot, String> {
     let repository = gleisbau::get_repo(repo_path, false).map_err(|e| e.message().to_string())?;
     let settings = std::rc::Rc::new(default_settings()?);
@@ -231,7 +240,15 @@ pub struct DiffFileEntry {
     pub path: String,
     pub status: git2::Delta,
     pub patch: String,
+    /// `patch` 是否因为过大被截断——超过 [`MAX_PATCH_CHARS`] 就不再追加
+    /// 正文,只留一行提示。大 diff(几千行)一次性喂给 `text()` widget 排版,
+    /// 布局开销肉眼可见("打开一次提交详情也有些卡顿"),而详情面板本来就
+    /// 不是给通读整份 diff 用的,截断只影响展示,不影响 diff 计算的正确性。
+    pub truncated: bool,
 }
+
+/// 单个文件 `patch` 文本的字符数上限,超过就截断(见 [`DiffFileEntry::truncated`])。
+const MAX_PATCH_CHARS: usize = 20_000;
 
 #[derive(Debug, Clone)]
 pub struct CommitDetail {
@@ -266,6 +283,7 @@ pub fn commit_detail(repo_path: &Path, oid: git2::Oid) -> Result<CommitDetail, S
                 path,
                 status: delta.status(),
                 patch: String::new(), // 下面按文件路径回填
+                truncated: false,
             })
         })
         .collect();
@@ -284,15 +302,21 @@ pub fn commit_detail(repo_path: &Path, oid: git2::Oid) -> Result<CommitDetail, S
         }
         if let Some(path) = &current_path
             && let Some(entry) = files.iter_mut().find(|f| &f.path == path)
+            && !entry.truncated
         {
-            let prefix = match line.origin() {
-                '+' | '-' | ' ' => line.origin().to_string(),
-                _ => String::new(),
-            };
-            entry.patch.push_str(&prefix);
-            entry
-                .patch
-                .push_str(&String::from_utf8_lossy(line.content()));
+            if entry.patch.len() >= MAX_PATCH_CHARS {
+                entry.truncated = true;
+                entry.patch.push_str("\n… diff 过长,已截断显示\n");
+            } else {
+                let prefix = match line.origin() {
+                    '+' | '-' | ' ' => line.origin().to_string(),
+                    _ => String::new(),
+                };
+                entry.patch.push_str(&prefix);
+                entry
+                    .patch
+                    .push_str(&String::from_utf8_lossy(line.content()));
+            }
         }
         true
     })
@@ -432,6 +456,7 @@ pub fn view<'a>(
     error: Option<&'a str>,
     selected: Option<git2::Oid>,
     detail: Option<&'a Result<CommitDetail, String>>,
+    loading: bool,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     if let Some(err) = error {
         return container(text(format!("git log 读取失败: {err}")).color(theme::RED))
@@ -439,7 +464,15 @@ pub fn view<'a>(
             .into();
     }
     let Some(snapshot) = snapshot else {
-        return container(text("未打开项目").color(theme::DIM))
+        // `build()` 现在是异步派发(见 workspace.rs `spawn_git_log_refresh`),
+        // 面板刚打开、还没等到第一份快照落地时,`snapshot`/`error` 都是
+        // `None`——不能直接落回"未打开项目"文案,否则用户会以为没反应。
+        let text_content = if loading {
+            "加载中…"
+        } else {
+            "未打开项目"
+        };
+        return container(text(text_content).color(theme::DIM))
             .padding(16)
             .into();
     };
@@ -459,18 +492,28 @@ pub fn view<'a>(
         .width(Length::Fill)
         .height(Length::Fixed(height))
         .into();
-    let header = row![
+    let mut header = row![
         text(snapshot.repo_path.display().to_string())
             .size(workspace_font::caption())
             .color(theme::DIM)
     ]
     .padding([4, 8]);
+    // 已经有旧快照在画的时候(引用变化重建/加载更多)又发起了新一轮异步
+    // 加载——旧图先留着不闪空,但得给个文案说明"正在换新",不然用户会
+    // 疑惑点了"加载更多"怎么行数没变。
+    if loading {
+        header = header.push(
+            text("刷新中…")
+                .size(workspace_font::caption())
+                .color(theme::DIM),
+        );
+    }
     let load_more = iced_widget::button(
         text("加载更多提交 (+200)")
             .size(workspace_font::caption())
             .color(theme::CREAM),
     )
-    .on_press(Message::GitLogLoadMore)
+    .on_press_maybe((!loading).then_some(Message::GitLogLoadMore))
     .padding([4, 12]);
     let graph_body = column![canvas, load_more].padding(Padding {
         top: 0.0,
@@ -511,30 +554,40 @@ fn detail_view<'a>(
             .padding(8)
             .into(),
         Ok(detail) => {
-            let files = scrollable(detail.files.iter().fold(column![].spacing(2), |acc, f| {
+            let list = detail.files.iter().fold(column![].spacing(10), |acc, f| {
                 let color = match f.status {
                     git2::Delta::Added => theme::GREEN,
                     git2::Delta::Deleted => theme::RED,
-                    _ => theme::GOLD,
+                    // 修改/重命名/复制等其余状态是纯分类展示,不是甲方动作,
+                    // 不能借用 `theme::GOLD`(CLAUDE.md 硬性裁决)。
+                    _ => theme::CYAN,
                 };
-                acc.push(
-                    row![
-                        text(status_glyph(f.status)).color(color).width(18),
-                        text(&f.path)
+                let header = row![
+                    text(status_glyph(f.status)).color(color).width(18),
+                    text(&f.path)
+                        .size(workspace_font::caption())
+                        .color(theme::CREAM),
+                ]
+                .spacing(4)
+                .padding([2, 8]);
+                let acc = acc.push(header);
+                if f.patch.is_empty() {
+                    acc
+                } else {
+                    acc.push(
+                        text(f.patch.clone())
                             .size(workspace_font::caption())
-                            .color(theme::CREAM),
-                    ]
-                    .spacing(4)
-                    .padding([2, 8]),
-                )
-            }))
-            .width(Length::Fill)
-            .height(Length::Fill);
-            files.into()
+                            .color(theme::BODY)
+                            .font(Font::MONOSPACE),
+                    )
+                }
+            });
+            scrollable(list)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
         }
     };
-    // 详情面板右半边暂时只放文件列表(状态 + 路径);每个文件的 patch 文本
-    // 已在 `CommitDetail.files[].patch` 里,后续要做统一 diff 视图时再铺开。
     container(body)
         .width(Length::Fixed(DETAIL_WIDTH))
         .height(Length::Fill)
@@ -654,6 +707,57 @@ mod tests {
         for f in &detail.files {
             assert!(!f.path.is_empty());
         }
+        // 至少一个文件真的算出了 diff 文本——否则 `detail_view` 渲染的 patch
+        // 永远是空字符串,回归成"只有文件列表看不到 diff"(code review 发现)。
+        assert!(
+            detail.files.iter().any(|f| !f.patch.is_empty()),
+            "至少一个改动文件应该有非空 patch 文本"
+        );
+    }
+
+    /// tempdir 里造一个只有一次提交(根提交)的真 git 仓库,同 `delivery.rs`
+    /// 的 `mkrepo` 惯例(用真 `git` CLI,不手搓 git2 底层对象)。
+    fn mkrepo_with_one_commit() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .unwrap();
+            assert!(st.status.success(), "git {args:?}: {st:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        std::fs::write(repo.join("b.txt"), "two\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "root"]);
+        (dir, repo)
+    }
+
+    #[test]
+    fn commit_detail_handles_root_commit_as_all_added() {
+        let (_dir, repo) = mkrepo_with_one_commit();
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).expect("应能解析临时仓库");
+        assert_eq!(snapshot.rows.len(), 1, "临时仓库只有一个根提交");
+        let root_oid = snapshot.rows[0].oid;
+
+        let detail = commit_detail(&repo, root_oid).expect("根提交相对空树应该也能算出 diff");
+        assert_eq!(detail.files.len(), 2, "根提交里的两个文件都应该出现");
+        assert!(
+            detail.files.iter().all(|f| f.status == git2::Delta::Added),
+            "根提交相对空树,所有文件都该是 Added: {:?}",
+            detail.files.iter().map(|f| f.status).collect::<Vec<_>>()
+        );
+        assert!(
+            detail.files.iter().all(|f| !f.patch.is_empty()),
+            "根提交的每个文件都该有非空 patch 文本"
+        );
     }
 
     #[test]
