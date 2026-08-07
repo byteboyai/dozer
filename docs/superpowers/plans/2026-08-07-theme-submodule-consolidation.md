@@ -297,7 +297,7 @@ Expected: 无输出(连注释里的历史提及也搬空了——如果 `theme/r
 提到"原 chrome_style.rs"这种说明性文字,那是允许保留的,写代码时用人工判断区分"代码引用"
 和"说明性历史提及",不要机械地要求这条 grep 必须零输出,只要没有编译期需要的代码引用即可)。
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add -A crates/dozer-app/src
