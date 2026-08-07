@@ -11,7 +11,8 @@
 use crate::preview::WebviewSpec;
 use crate::workspace::{lh, preview_tab_display_width, tab_arrow_button, tab_divider, tab_window};
 use crate::theme::icon_size;
-use crate::{chrome_style, icons, theme, workspace_font, workspace_geometry};
+use crate::theme::region;
+use crate::{icons, theme, workspace_font, workspace_geometry};
 use dozer_client::Client;
 use dozer_core::protocol::{BookmarkInfo, BookmarkScope};
 use iced_widget::core::{Border, Element, Length};
@@ -1115,7 +1116,7 @@ pub fn view(
     width: Length,
     outer: Border,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let region = chrome_style::browser_pane();
+    let region = theme::region::browser_pane();
     let widths: Vec<f32> = state
         .tabs
         .tabs()

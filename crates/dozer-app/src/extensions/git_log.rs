@@ -744,7 +744,7 @@ fn detail_view<'a>(
         .height(Length::Fill)
         .padding(8)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(crate::chrome_style::background().into()),
+            background: Some(crate::theme::region::background().into()),
             ..container::Style::default()
         })
         .into()

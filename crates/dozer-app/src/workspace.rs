@@ -29,7 +29,7 @@
 //!   把 `Message` 送回 UI 线程；`main.rs` 的 `ApplicationHandler::user_event`
 //!   收到后调用 `app.update(..)` 并请求重绘。反方向（UI → tokio）
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
-use crate::chrome_style;
+use crate::theme::region;
 use crate::conversation::{self, ConversationMeta};
 use crate::delivery::{self, FileChange, FileGitStatus, WorktreeInfo};
 use crate::extensions::browser;
@@ -673,7 +673,7 @@ pub fn preview_content_bounds(
     // `left_zone` 的上下 margin:webview 必须跟着 inset,否则会戳出外边框
     // (原生子视图不听 iced 布局,逐像素靠这里算)。左右 margin 同样要算进去,
     // 否则去掉外边框后 webview 会戳出新增的左侧留白。
-    let m = chrome_style::left_zone().margin;
+    let m = theme::region::left_zone().margin;
     let y_top =
         |chrome_top: f32| -> f32 { workspace_geometry::top_bar_height() + m.top + chrome_top };
     let h_for = |y: f32| -> f32 { (window_height - y - m.bottom - 8.0).max(0.0) };
@@ -866,7 +866,7 @@ pub fn terminal_pane_pixel_size(
     let pane_width = (content_w - workspace_geometry::chrome_width_px()).max(0.0);
     // `right_zone` 上下 margin:终端是 iced 布局(自动 inset),但其 PTY 网格
     // 尺寸靠这里算,必须同步扣掉上下 margin,否则字符网格比实际渲染区高。
-    let m = chrome_style::right_zone().margin;
+    let m = theme::region::right_zone().margin;
     let pane_height = (window_height
         - workspace_geometry::top_bar_height()
         - workspace_geometry::status_bar_height()
@@ -4575,7 +4575,7 @@ impl App {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .style(|_t: &iced_widget::Theme| container::Style {
-                    background: Some(chrome_style::background().into()),
+                    background: Some(theme::region::background().into()),
                     ..container::Style::default()
                 });
             return column![top, hint].into();
@@ -5086,7 +5086,7 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
         )),
     );
 
-    let region = chrome_style::top_bar();
+    let region = theme::region::top_bar();
     let bar = row![title, tabs, right]
         .spacing(region.gap)
         .padding(region.padding)
@@ -5143,7 +5143,7 @@ fn home_page(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget:
         .width(Length::Fill)
         .height(Length::Fill)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(chrome_style::background().into()),
+            background: Some(theme::region::background().into()),
             ..container::Style::default()
         })
         .into()
@@ -5868,7 +5868,7 @@ fn conversation_list_pane(
     width: Length,
     outer: Border,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let region = chrome_style::conversation_list_pane();
+    let region = theme::region::conversation_list_pane();
     let mut content = column![
         row![
             lh(text("对话")
@@ -6010,7 +6010,7 @@ fn agent_list_pane(
     width: Length,
     outer: Border,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let region = chrome_style::agent_list_pane();
+    let region = theme::region::agent_list_pane();
     let mut content = column![
         row![
             lh(text("Agent")
@@ -6205,7 +6205,7 @@ fn review_content_pane(
     width: Length,
     outer: Border,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let region = chrome_style::review_content_pane();
+    let region = theme::region::review_content_pane();
     let header = row![
         lh(text("会话审阅")
             .size(workspace_font::body())
@@ -6294,7 +6294,7 @@ fn rail_icon_button<'a>(
 
 /// 左图标栏:文件列表 / Web 两个图标,点已激活的那个即收起左面板区。
 fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let region = chrome_style::left_icon_rail();
+    let region = theme::region::left_icon_rail();
     // 视觉"选中"= 该视图激活 **且**左面板区展开。点已选中的图标会收起面板区,
     // 此时图标要退回未选中态(见 `LeftIconSelect`),所以 `active` 得带上
     // `!left_collapsed`。
@@ -6351,7 +6351,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_wi
 
 /// 右图标栏:Agent / 对话两个图标,语义同 `left_icon_rail`。
 fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let region = chrome_style::right_icon_rail();
+    let region = theme::region::right_icon_rail();
     // 同 `left_icon_rail`:视觉"选中"需右面板区展开。
     let right_open = !app.right_collapsed;
     let content = column![
@@ -6424,7 +6424,7 @@ enum PaneCorner {
 /// 自己的方角会戳出 zone 的圆角 CARD 背景,在四角形成小尖角。让 pane 的外
 /// 圆角跟随 zone 圆角(半径减掉 zone 内边距),方角就被收进圆角里,只在外
 /// 侧那一边收(`corner` 决定),配对的内部接缝仍是方角(本来就藏在 zone 内)。
-fn zone_pane_border(zone: chrome_style::RegionStyle, corner: PaneCorner) -> Border {
+fn zone_pane_border(zone: theme::region::RegionStyle, corner: PaneCorner) -> Border {
     let r = zone.border.map(|b| b.radius.top_left).unwrap_or(0.0);
     let r = (r - zone.padding.top).max(0.0);
     let radius = match corner {
@@ -6467,7 +6467,7 @@ fn zone_pane_border(zone: chrome_style::RegionStyle, corner: PaneCorner) -> Bord
 /// 会被 `LeftIconSelect`/`RightIconSelect` 无条件清掉,所以这个组合不会
 /// 停留超过一帧(Fix round 2 #2)。
 /// 非放大态下,左1(项目树/Web)+左2(预览)两栏被视觉框成一个整体,套
-/// `chrome_style::left_zone()` 的外框(四向 margin 做悬浮留白,无描边)。
+/// `theme::region::left_zone()` 的外框(四向 margin 做悬浮留白,无描边)。
 /// 放大态跳过——`maximize_overlay` 已经用金色边框把同一块内容整体框起来,
 /// 再套一层外框会在金框内侧多出一圈视觉噪音。
 fn worktree_strip<'a>(
@@ -6560,7 +6560,7 @@ fn left_panel_area<'a>(
     } else {
         Length::Fixed(app.effective_left_width())
     };
-    let zone = chrome_style::left_zone();
+    let zone = theme::region::left_zone();
     let (lc, rc, ac) = if maximized {
         (PaneCorner::None, PaneCorner::None, PaneCorner::None)
     } else {
@@ -6579,8 +6579,8 @@ fn left_panel_area<'a>(
                 ),
                 divider_bar(
                     Divider::LeftPairSplit,
-                    chrome_style::project_pane().background.unwrap_or(theme::color::BG),
-                    chrome_style::preview_pane().background.unwrap_or(theme::color::BG),
+                    theme::region::project_pane().background.unwrap_or(theme::color::BG),
+                    theme::region::preview_pane().background.unwrap_or(theme::color::BG),
                 ),
                 preview_pane(
                     ws,
@@ -6677,7 +6677,7 @@ fn left_panel_area<'a>(
 /// 以 0 宽布局(右半边整片空白)。
 ///
 /// 非放大态下,右1(Agent 列表/对话列表)+右2(终端/审阅)两栏被视觉框成
-/// 一个整体,套 `chrome_style::right_zone()` 的外框(四向 margin 做悬浮留白,
+/// 一个整体,套 `theme::region::right_zone()` 的外框(四向 margin 做悬浮留白,
 /// 无描边),`maximized` 时跳过(理由同 `left_panel_area`)。
 fn right_panel_area<'a>(
     app: &'a App,
@@ -6695,7 +6695,7 @@ fn right_panel_area<'a>(
     // 给右边那块,单纯是 `row!` 里两个 pane 的先后顺序换了。`apply_column_drag`
     // 的 `RightPairSplit` 分支要相应把算出来的 ratio 取反再写回,否则拖拽
     // 方向感会反过来(见该函数注释)。
-    let zone = chrome_style::right_zone();
+    let zone = theme::region::right_zone();
     let (lc, rc, ac) = if maximized {
         (PaneCorner::None, PaneCorner::None, PaneCorner::None)
     } else {
@@ -6714,10 +6714,10 @@ fn right_panel_area<'a>(
                     ),
                     divider_bar(
                         Divider::RightPairSplit,
-                        chrome_style::terminal_pane()
+                        theme::region::terminal_pane()
                             .background
                             .unwrap_or(theme::color::BG),
-                        chrome_style::agent_list_pane()
+                        theme::region::agent_list_pane()
                             .background
                             .unwrap_or(theme::color::BG),
                     ),
@@ -6741,10 +6741,10 @@ fn right_panel_area<'a>(
                     ),
                     divider_bar(
                         Divider::RightPairSplit,
-                        chrome_style::review_content_pane()
+                        theme::region::review_content_pane()
                             .background
                             .unwrap_or(theme::color::BG),
-                        chrome_style::conversation_list_pane()
+                        theme::region::conversation_list_pane()
                             .background
                             .unwrap_or(theme::color::BG),
                     ),
@@ -6818,7 +6818,7 @@ fn maximize_overlay<'a>(
     // `inner`(`left_panel_area`/`right_panel_area` 内部大量 FillPortion
     // 组成)会整体收缩成远小于放大盒子的intrinsic 尺寸,金色描边就会贴着
     // 一小块内容而不是撑满两条图标栏之间的放大区域。
-    let overlay_style = chrome_style::maximize_overlay();
+    let overlay_style = theme::region::maximize_overlay();
     let bordered = container(inner)
         .width(Length::Fill)
         .height(Length::Fill)
@@ -6892,7 +6892,7 @@ fn project_pane<'a>(
     width: Length,
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let region = chrome_style::project_pane();
+    let region = theme::region::project_pane();
     // 头部:项目信息卡,固定在文件树上方,不随滚动条滚走(需求 1)。
     let mut header = column![].spacing(region.gap).width(Length::Fill);
     // 文件树行:唯一进入 scrollable 的内容。
@@ -7203,7 +7203,7 @@ fn status_bar_container<'a>(
     inner: impl Into<Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>>,
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let region = chrome_style::status_bar();
+    let region = theme::region::status_bar();
     let base = region.border.unwrap_or_default();
     container(inner)
         .width(Length::Fill)
@@ -7230,7 +7230,7 @@ fn preview_pane(
     // 点击/会话恢复产生——面板本身已不再有"打开文件…"按钮或地址栏(P1 后续
     // 反馈:文件预览与浏览器彻底分离,文件只走项目树入口)。
     // P1L T5 验收返工:同 term `tab_bar`,横向 scrollable 换成索引窗口化 + clip.
-    let region = chrome_style::preview_pane();
+    let region = theme::region::preview_pane();
     let widths: Vec<f32> = ws
         .preview
         .tabs()
@@ -7369,7 +7369,7 @@ fn terminal_pane<'a>(
     width: Length,
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let region = chrome_style::terminal_pane();
+    let region = theme::region::terminal_pane();
     let mut content = column![tab_bar(app, ws)].spacing(region.gap);
 
     if let Some(err) = &app.daemon_error {
@@ -7467,7 +7467,7 @@ fn terminal_pane<'a>(
 /// pane 视觉贴合、只剩一条分割线,命中区宽度(拖拽手感)不变。
 ///
 /// `Divider::LeftRight` 不画那条 2px 竖线、也不填色——它两侧各自套了
-/// `chrome_style::left_zone()`/`right_zone()` 的整体外框,这条 8px 缝是故意
+/// `theme::region::left_zone()`/`right_zone()` 的整体外框,这条 8px 缝是故意
 /// 空出来给两侧 zone 圆角边框各自收边的,不能填成某侧 pane 色。
 fn divider_bar<'a>(
     divider: Divider,
@@ -7666,7 +7666,7 @@ fn context_menu_popup<'a>(
         Message::ProjectTreeReloadFromDisk,
     ));
 
-    let region = chrome_style::context_menu();
+    let region = theme::region::context_menu();
     let list = container(column(items).spacing(region.gap))
         .padding(region.padding)
         .style(move |_t: &iced_widget::Theme| container::Style {
@@ -8849,7 +8849,7 @@ mod tests {
         assert!(x >= col_start && x < col_start + 16.0, "x={x}");
         assert!((380.0..=420.0).contains(&w), "w={w}");
         assert!(
-            (y - (78.0 + chrome_style::left_zone().margin.top)).abs() < 0.1,
+            (y - (78.0 + theme::region::left_zone().margin.top)).abs() < 0.1,
             "y={y}(顶栏 40 + tab 栏 38 + left_zone 上 margin 之下,地址栏已去)"
         );
         assert!(h > 700.0 && h < 900.0 - y, "h={h}");
@@ -8863,7 +8863,7 @@ mod tests {
             ..test_state()
         };
         let (x, _, w, _) = preview_content_bounds(1440.0, 900.0, &state);
-        let m = chrome_style::left_zone().margin;
+        let m = theme::region::left_zone().margin;
         assert_eq!(x, workspace_geometry::icon_rail_width() + 8.0 + m.left);
         assert_eq!(w, state.layout.left_width - 16.0 - m.left - m.right);
     }
@@ -8962,7 +8962,7 @@ mod tests {
         let state = test_state();
         let (_, h_with) = terminal_pane_pixel_size(1440.0, 900.0, &state);
         let only_chrome = 900.0 - workspace_geometry::chrome_height_px();
-        let m = chrome_style::right_zone().margin;
+        let m = theme::region::right_zone().margin;
         assert!(
             (only_chrome
                 - h_with

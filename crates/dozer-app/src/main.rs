@@ -1,5 +1,4 @@
 mod assets;
-mod chrome_style;
 mod clipboard_image;
 mod conversation;
 mod delivery;
@@ -1276,7 +1275,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 {
                                     // Clear the frame to the overall workspace background
                                     let _render_pass =
-                                        clear(&view, &mut encoder, chrome_style::background());
+                                        clear(&view, &mut encoder, theme::region::background());
                                 }
 
                                 // Submit the clear pass

@@ -219,13 +219,13 @@ git commit -m "refactor(dozer-app): move terminal_font.rs into theme/terminal_fo
 - Consumes: `theme::color`、`theme::icon_size`(Task 1/2 已完成,这个任务能正确引用它们是
   前两个任务顺序先做的原因)。
 
-- [ ] **Step 1: 搬文件**
+- [x] **Step 1: 搬文件**
 
 ```bash
 git mv crates/dozer-app/src/chrome_style.rs crates/dozer-app/src/theme/region.rs
 ```
 
-- [ ] **Step 2: 顺手把文件内部的跨模块引用改成 `super::`(推荐但非强制)**
+- [x] **Step 2: 顺手把文件内部的跨模块引用改成 `super::`(推荐但非强制)**
 
 进入这一步之前,`chrome_style.rs` 已经被前两个任务改过两处:Task 2 Step 4 把它的
 `use crate::icon_size;` 改成了 `use crate::theme::icon_size;`;Task 1 Step 3 的批量替换
@@ -251,7 +251,7 @@ use super::icon_size;
 
 文件体内 `resolve_color` 函数里所有 `theme::color::xxx` 改成 `color::xxx`。
 
-- [ ] **Step 3: `theme.rs` 加声明**
+- [x] **Step 3: `theme.rs` 加声明**
 
 ```rust
 pub mod color;
@@ -260,11 +260,11 @@ pub mod region;
 pub mod terminal_font;
 ```
 
-- [ ] **Step 4: `main.rs` 删旧声明**
+- [x] **Step 4: `main.rs` 删旧声明**
 
 删除 `mod chrome_style;` 这一行。
 
-- [ ] **Step 5: 全仓库批量替换**
+- [x] **Step 5: 全仓库批量替换**
 
 `chrome_style::` 整个前缀替换成 `theme::region::`(这次不用像颜色常量那样列举标识符——
 整个模块都在搬,任何 `chrome_style::xxx` 都该变成 `theme::region::xxx`,没有"部分留在原
@@ -285,12 +285,12 @@ grep -rln 'use crate::chrome_style;' crates/dozer-app/src \
 
 （`crates/dozer-app/src/workspace.rs` 是这两条命令预期会命中的文件。）
 
-- [ ] **Step 6: 编译 + 测试**
+- [x] **Step 6: 编译 + 测试**
 
 Run: `cargo build --workspace && cargo test --workspace 2>&1 | tail -60`
 Expected: 干净通过。
 
-- [ ] **Step 7: 确认没有遗留引用**
+- [x] **Step 7: 确认没有遗留引用**
 
 Run: `grep -rn "chrome_style" crates/dozer-app/src`
 Expected: 无输出(连注释里的历史提及也搬空了——如果 `theme/region.rs` 自己的文档注释里
