@@ -5,8 +5,9 @@
 //! `dozerd`/`dozer-core::protocol` 完全不参与——所有数据直接读磁盘上的
 //! agent transcript JSONL。
 
-// Task 5 接线后（`workspace.rs` 调用 `usage::view`/`parse_usage`）这些死代码
-// 警告会自然消失；在此之前的中间态暂时放行，避免每轮 cargo check 刷噪音。
+// Task 7/8 接线后（`daily_totals_by_agent`/`agent_token_share` 被条形图/饼图
+// 视图调用）这些死代码警告会自然消失；在此之前的中间态暂时放行，避免每轮
+// cargo check 刷噪音。
 #![allow(dead_code)]
 
 use crate::conversation::ConversationMeta;
@@ -338,6 +339,10 @@ pub fn view<'a>(
                 .size(workspace_font::body())
                 .color(theme::DIM),
         );
+    } else {
+        let usages: Vec<ConversationUsage> = rows.iter().map(|(_, u)| u.clone()).collect();
+        content = content.push(summary_card(&aggregate(&usages)));
+        content = content.push(grouped_list(rows));
     }
 
     container(content)
@@ -349,6 +354,128 @@ pub fn view<'a>(
             ..iced_widget::container::Style::default()
         })
         .into()
+}
+
+fn summary_card(totals: &ProjectUsageTotals) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+    fn stat(label: &'static str, value: String, color: Color) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+        column![
+            text(label).size(workspace_font::caption()).color(theme::DIM),
+            text(value).size(15.0).color(color).font(iced_widget::core::Font::MONOSPACE),
+        ]
+        .spacing(2)
+        .into()
+    }
+
+    let row = iced_widget::row![
+        stat("轮次", totals.turns.to_string(), theme::CREAM),
+        stat(
+            "工具调用(改动)",
+            format!("{} ({})", totals.tool_calls, totals.mutating_tool_calls),
+            theme::CREAM
+        ),
+        stat("触达文件", totals.files_touched.to_string(), theme::CREAM),
+        stat("input", totals.tokens_in.to_string(), theme::CYAN),
+        stat("output", totals.tokens_out.to_string(), theme::CYAN),
+        stat("cache 读", totals.tokens_cache_read.to_string(), theme::CYAN),
+        stat("cache 写", totals.tokens_cache_write.to_string(), theme::CYAN),
+    ]
+    .spacing(24);
+
+    container(
+        column![
+            text(format!("项目汇总 · {} 会话", totals.conversation_count))
+                .size(workspace_font::caption())
+                .color(theme::DIM),
+            row,
+        ]
+        .spacing(10),
+    )
+    .padding(12)
+    .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+        background: Some(theme::CARD.into()),
+        border: Border {
+            radius: 10.0.into(),
+            ..Border::default()
+        },
+        ..iced_widget::container::Style::default()
+    })
+    .into()
+}
+
+fn usage_row<'a>(
+    meta: &'a ConversationMeta,
+    u: &'a ConversationUsage,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let activity = format!(
+        "{} 轮 · {} 次工具({} 改动) · {} 文件",
+        u.turns,
+        u.tool_calls,
+        u.mutating_tool_calls,
+        u.files_touched.len()
+    );
+    let tokens = format!(
+        "in {} · out {} · cache读 {} · cache写 {}",
+        u.tokens_in, u.tokens_out, u.tokens_cache_read, u.tokens_cache_write
+    );
+    container(
+        column![
+            text(meta.title.clone())
+                .size(workspace_font::body())
+                .color(theme::CREAM),
+            text(activity)
+                .size(workspace_font::caption_sm())
+                .color(theme::DIM)
+                .font(iced_widget::core::Font::MONOSPACE),
+            text(tokens)
+                .size(workspace_font::caption_sm())
+                .color(theme::CYAN)
+                .font(iced_widget::core::Font::MONOSPACE),
+        ]
+        .spacing(4),
+    )
+    .width(Length::Fill)
+    .padding(10)
+    .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+        background: Some(theme::CARD.into()),
+        border: Border {
+            radius: 10.0.into(),
+            ..Border::default()
+        },
+        ..iced_widget::container::Style::default()
+    })
+    .into()
+}
+
+fn grouped_list<'a>(
+    rows: &'a [(ConversationMeta, ConversationUsage)],
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let groups = group_usage_by_agent(rows);
+    let mut col = column![].spacing(12);
+    for (agent, idxs) in groups {
+        let group_tokens: u64 = idxs
+            .iter()
+            .map(|&i| {
+                let u = &rows[i].1;
+                u.tokens_in + u.tokens_out + u.tokens_cache_read + u.tokens_cache_write
+            })
+            .sum();
+        col = col.push(
+            iced_widget::row![
+                text(agent.label())
+                    .size(workspace_font::caption())
+                    .color(crate::workspace::agent_dot_color(agent)),
+                text(format!("{} 会话 · {} tokens", idxs.len(), group_tokens))
+                    .size(workspace_font::caption())
+                    .color(theme::DIM),
+            ]
+            .spacing(8),
+        );
+        for &i in &idxs {
+            let (meta, u) = &rows[i];
+            col = col.push(usage_row(meta, u));
+        }
+    }
+    col.into()
 }
 
 #[cfg(test)]
