@@ -21,8 +21,6 @@ mod term_model;
 mod term_view;
 mod terminal_font;
 mod theme;
-mod todo;
-mod todo_meta;
 mod transcript;
 mod usage;
 mod workspace;
