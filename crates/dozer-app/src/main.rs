@@ -21,7 +21,6 @@ mod theme;
 mod transcript;
 mod usage;
 mod workspace;
-mod workspace_geometry;
 
 use workspace::{App, Message};
 // `with_allow_link_preview` 是 macOS 专有扩展 trait,需显式引入作用域。
@@ -67,7 +66,7 @@ fn center_traffic_lights(window: &winit::window::Window) {
     static BASELINE_MAXIMIZED: OnceLock<[f64; 3]> = OnceLock::new();
 
     const BAND_HEIGHT: f32 = 28.0;
-    let offset = (workspace_geometry::top_bar_height() - BAND_HEIGHT) / 2.0;
+    let offset = (theme::geometry::top_bar_height() - BAND_HEIGHT) / 2.0;
     if offset <= 0.0 {
         return;
     }
@@ -488,8 +487,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     let logical_size = window.inner_size();
                     let window_w = (logical_size.width as f64 / scale) as f32;
                     let window_h = (logical_size.height as f64 / scale) as f32;
-                    let x = x.min((window_w - workspace_geometry::context_menu_width()).max(0.0));
-                    let y = y.min((window_h - workspace_geometry::context_menu_height()).max(0.0));
+                    let x = x.min((window_w - theme::geometry::context_menu_width()).max(0.0));
+                    let y = y.min((window_h - theme::geometry::context_menu_height()).max(0.0));
                     app.update(Message::RightClickAt { x, y });
                     // 不在这里 request_redraw——右键若真的命中某行,该行的
                     // `MouseArea::on_right_press` 随本轮事件走 iced 正常分发,
@@ -1025,8 +1024,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // `clamp_left_width`(持久化宽可能远大于这个最小
                                 // 宽),这里只是把最坏情形挡在外面。
                                 .with_min_inner_size(LogicalSize::new(
-                                    workspace_geometry::min_window_width(),
-                                    workspace_geometry::min_window_height(),
+                                    theme::geometry::min_window_width(),
+                                    theme::geometry::min_window_height(),
                                 ))
                                 // 统一工具栏:标题栏背景透明 + 不画标题文字 + 内容
                                 // 视图延伸到标题栏区域下面,三者必须同时打开——少

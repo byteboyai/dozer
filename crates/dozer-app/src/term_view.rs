@@ -25,7 +25,7 @@ use crate::term_model::{Cell, TerminalModel};
 use crate::theme::terminal_font;
 use crate::theme;
 use crate::workspace::Message;
-use crate::workspace_geometry;
+use crate::theme::geometry;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::font::Weight;
 use iced_widget::core::mouse::{self, ScrollDelta};
@@ -384,8 +384,8 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
             // 复用全应用统一滚动条配置(见 `crate::scrollbar`):轨道宽度
             // `scrollbar_width`,滑块(thumb)宽度 `scrollbar_thumb_width` 并居
             // 中,滑块颜色甲方金 `#dcc9a3`(`theme::color::TAB_ACTIVE_BORDER`)。
-            let bar_w = workspace_geometry::scrollbar_width();
-            let thumb_w = workspace_geometry::scrollbar_thumb_width();
+            let bar_w = theme::geometry::scrollbar_width();
+            let thumb_w = theme::geometry::scrollbar_thumb_width();
             let track_x = bounds.width - bar_w;
             let thumb_h = (rows / total * h).max(12.0);
             let thumb_top = ((history - offset as f32) / total * h).min(h - thumb_h);

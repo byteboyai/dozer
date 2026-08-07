@@ -4,7 +4,7 @@
 //! API,这里成对提供,避免各处重复、漂移。
 
 use crate::theme;
-use crate::workspace_geometry;
+use crate::theme::geometry;
 use iced_widget::core::{Background, Border, Color, Shadow};
 use iced_widget::scrollable;
 
@@ -12,8 +12,8 @@ use iced_widget::scrollable;
 /// 用法:`scrollable::Direction::Vertical(crate::scrollbar::scrollbar())`。
 pub fn scrollbar() -> scrollable::Scrollbar {
     scrollable::Scrollbar::new()
-        .width(workspace_geometry::scrollbar_width())
-        .scroller_width(workspace_geometry::scrollbar_thumb_width())
+        .width(theme::geometry::scrollbar_width())
+        .scroller_width(theme::geometry::scrollbar_thumb_width())
 }
 
 /// 统一滚动条外观:滑块(thumb)用甲方金 `#dcc9a3`(`theme::color::TAB_ACTIVE_BORDER`),
@@ -23,7 +23,7 @@ pub fn scrollbar_style() -> scrollable::Style {
     let scroller = scrollable::Scroller {
         background: Background::Color(theme::color::TAB_ACTIVE_BORDER),
         border: Border {
-            radius: (workspace_geometry::scrollbar_thumb_width() / 2.0).into(),
+            radius: (theme::geometry::scrollbar_thumb_width() / 2.0).into(),
             ..Border::default()
         },
     };

@@ -52,7 +52,7 @@ use crate::theme;
 use crate::transcript::{self, ReviewEntry};
 use crate::usage;
 use crate::theme::font;
-use crate::workspace_geometry;
+use crate::theme::geometry;
 use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 use iced_widget::core::border::Radius;
@@ -340,10 +340,10 @@ pub struct ShellLayout {
     pub left_collapsed: bool,
     pub right_collapsed: bool,
     /// 上次退出时的窗口逻辑尺寸(宽,高)。`main.rs` 建窗时读它决定初始
-    /// `with_inner_size`,取代写死的 `workspace_geometry::initial_window_size()`；`App::
+    /// `with_inner_size`,取代写死的 `theme::geometry::initial_window_size()`；`App::
     /// persist_window_size_on_exit` 在 `WindowEvent::CloseRequested` 时
     /// 写回。跟其余字段一样走 `#[serde(default)]`,老 `layout.json` 缺这
-    /// 两个字段时退化成 `workspace_geometry::initial_window_size()`,不影响其余已存的偏好。
+    /// 两个字段时退化成 `theme::geometry::initial_window_size()`,不影响其余已存的偏好。
     pub window_width: f32,
     pub window_height: f32,
 }
@@ -359,8 +359,8 @@ impl Default for ShellLayout {
             right_view: RightView::Agent,
             left_collapsed: false,
             right_collapsed: false,
-            window_width: workspace_geometry::initial_window_size().0,
-            window_height: workspace_geometry::initial_window_size().1,
+            window_width: theme::geometry::initial_window_size().0,
+            window_height: theme::geometry::initial_window_size().1,
         }
     }
 }
@@ -370,15 +370,15 @@ impl Default for ShellLayout {
 /// 会给出 `FillPortion(0)`,那一块在 flex 里拿不到任何宽度、整块消失;
 /// `left_width` 只保下限(上限依赖窗口宽,由渲染/几何时刻的
 /// `clamp_left_width` 负责,不在这里写死)。`window_width`/`window_height`
-/// 同样只夹下限(`workspace_geometry::min_window_width()`/`workspace_geometry::min_window_height()`,建窗时还有
+/// 同样只夹下限(`theme::geometry::min_window_width()`/`theme::geometry::min_window_height()`,建窗时还有
 /// `with_min_inner_size` 兜底),非法值(非有限数、缺字段的 0.0)退化成
-/// `workspace_geometry::initial_window_size()`。
+/// `theme::geometry::initial_window_size()`。
 pub fn sanitize_shell_layout(l: ShellLayout) -> ShellLayout {
     let clamp_split = |v: f32| {
         if v.is_finite() {
             v.clamp(
-                workspace_geometry::min_split_ratio(),
-                workspace_geometry::max_split_ratio(),
+                theme::geometry::min_split_ratio(),
+                theme::geometry::max_split_ratio(),
             )
         } else {
             ShellLayout::default().files_split
@@ -386,7 +386,7 @@ pub fn sanitize_shell_layout(l: ShellLayout) -> ShellLayout {
     };
     ShellLayout {
         left_width: if l.left_width.is_finite() {
-            l.left_width.max(workspace_geometry::min_zone_width())
+            l.left_width.max(theme::geometry::min_zone_width())
         } else {
             ShellLayout::default().left_width
         },
@@ -394,14 +394,14 @@ pub fn sanitize_shell_layout(l: ShellLayout) -> ShellLayout {
         agent_split: clamp_split(l.agent_split),
         conversations_split: clamp_split(l.conversations_split),
         window_width: if l.window_width.is_finite() && l.window_width > 0.0 {
-            l.window_width.max(workspace_geometry::min_window_width())
+            l.window_width.max(theme::geometry::min_window_width())
         } else {
-            workspace_geometry::initial_window_size().0
+            theme::geometry::initial_window_size().0
         },
         window_height: if l.window_height.is_finite() && l.window_height > 0.0 {
-            l.window_height.max(workspace_geometry::min_window_height())
+            l.window_height.max(theme::geometry::min_window_height())
         } else {
-            workspace_geometry::initial_window_size().1
+            theme::geometry::initial_window_size().1
         },
         ..l
     }
@@ -468,14 +468,14 @@ pub struct ShellState {
 /// 扣，导致收起一侧后几何比实际渲染宽 8px 且原点左偏 8px。
 fn zones_width(window_width: f32) -> f32 {
     (window_width
-        - 2.0 * workspace_geometry::icon_rail_width()
-        - workspace_geometry::divider_width())
+        - 2.0 * theme::geometry::icon_rail_width()
+        - theme::geometry::divider_width())
     .max(0.0)
 }
 
 /// 把持久化的 `left_width` 夹进"当前窗口宽度下合法"的区间:下限
-/// `workspace_geometry::min_zone_width()`,上限"给右面板区也留够 `workspace_geometry::min_zone_width()`"。窗口窄到
-/// 上界低于下界时用 `.max(workspace_geometry::min_zone_width())` 把上界垫平,`clamp` 恒不 panic。
+/// `theme::geometry::min_zone_width()`,上限"给右面板区也留够 `theme::geometry::min_zone_width()`"。窗口窄到
+/// 上界低于下界时用 `.max(theme::geometry::min_zone_width())` 把上界垫平,`clamp` 恒不 panic。
 ///
 /// 这是**唯一**一处 left_width 的夹取:渲染侧(`left_panel_area` 经
 /// `Workspace::effective_left_width`)、几何侧(`left_zone_width` → webview
@@ -486,9 +486,9 @@ fn zones_width(window_width: f32) -> f32 {
 /// 凭空消失(Fix round 2 Critical #1)。夹取只发生在渲染/几何时刻,不回写
 /// `ShellLayout`,窗口再拉宽时用户原来偏好的宽度自动复原。
 fn clamp_left_width(window_width: f32, left_width: f32) -> f32 {
-    let upper = (zones_width(window_width) - workspace_geometry::min_zone_width())
-        .max(workspace_geometry::min_zone_width());
-    left_width.clamp(workspace_geometry::min_zone_width(), upper)
+    let upper = (zones_width(window_width) - theme::geometry::min_zone_width())
+        .max(theme::geometry::min_zone_width());
+    left_width.clamp(theme::geometry::min_zone_width(), upper)
 }
 
 /// 左面板区当前实际宽度(逻辑像素)：收起时 0；对侧收起时独占 `zones_width`
@@ -519,7 +519,7 @@ fn right_zone_width(window_width: f32, state: &ShellState) -> f32 {
 /// 宽的分隔线之后才按比例分剩余空间的，所以比例的分母必须是这个值，不是
 /// 区宽本身。
 fn pair_content_width(zone_width: f32) -> f32 {
-    (zone_width - workspace_geometry::divider_width()).max(0.0)
+    (zone_width - theme::geometry::divider_width()).max(0.0)
 }
 
 /// 拖拽某条分隔线到窗口逻辑 x 坐标 `logical_x` 后的新 `ShellLayout`。
@@ -536,7 +536,7 @@ fn apply_column_drag(
         Divider::LeftRight => {
             let new_left = clamp_left_width(
                 window_width,
-                logical_x - workspace_geometry::icon_rail_width(),
+                logical_x - theme::geometry::icon_rail_width(),
             );
             ShellLayout {
                 left_width: new_left,
@@ -548,9 +548,9 @@ fn apply_column_drag(
             if pair_w <= 0.0 {
                 return state.layout;
             }
-            let ratio = ((logical_x - workspace_geometry::icon_rail_width()) / pair_w).clamp(
-                workspace_geometry::min_split_ratio(),
-                workspace_geometry::max_split_ratio(),
+            let ratio = ((logical_x - theme::geometry::icon_rail_width()) / pair_w).clamp(
+                theme::geometry::min_split_ratio(),
+                theme::geometry::max_split_ratio(),
             );
             ShellLayout {
                 files_split: ratio,
@@ -563,15 +563,15 @@ fn apply_column_drag(
             if pair_w <= 0.0 {
                 return state.layout;
             }
-            let right_x0 = window_width - workspace_geometry::icon_rail_width() - right_w;
+            let right_x0 = window_width - theme::geometry::icon_rail_width() - right_w;
             // `ratio` 是"配对里渲染在左边那块"的宽度占比(拖拽点左侧的宽度
             // 除以配对总宽)——这块现在是终端/审阅,不是 agent_split/
             // conversations_split 存的"列表侧(Agent 列表/对话列表)占比"。
             // 两者互补(列表侧渲染在右边),所以要写 1.0-ratio,不能直接写
             // ratio,否则拖拽方向会反(见 `right_panel_area` 顶部注释)。
             let ratio = ((logical_x - right_x0) / pair_w).clamp(
-                workspace_geometry::min_split_ratio(),
-                workspace_geometry::max_split_ratio(),
+                theme::geometry::min_split_ratio(),
+                theme::geometry::max_split_ratio(),
             );
             match state.right_view {
                 RightView::Agent => ShellLayout {
@@ -598,22 +598,22 @@ fn apply_column_drag(
 /// 都靠它换算放大态几何,不能各写各的字面量,否则和 `maximize_overlay`
 /// 实际渲染的画面对不上。
 fn maximized_box_x_range(window_width: f32) -> (f32, f32) {
-    let x0 = workspace_geometry::icon_rail_width() + workspace_geometry::maximize_overlay_padding();
+    let x0 = theme::geometry::icon_rail_width() + theme::geometry::maximize_overlay_padding();
     let avail_w = (window_width
-        - 2.0 * workspace_geometry::icon_rail_width()
-        - 2.0 * workspace_geometry::maximize_overlay_padding())
+        - 2.0 * theme::geometry::icon_rail_width()
+        - 2.0 * theme::geometry::maximize_overlay_padding())
     .max(0.0);
     (x0, avail_w)
 }
 
 /// 放大态金色描边盒子的纵向可用高度(逻辑像素)。`maximize_overlay` 顶部
-/// 垫了一条 `workspace_geometry::top_bar_height()` 高的 Space 把遮罩钉在顶栏之下,盒子上下各留
-/// `workspace_geometry::maximize_overlay_padding()`;遮罩铺到窗口底边(状态栏也被盖住),所以这里
-/// **不**扣 `workspace_geometry::status_bar_height()`——与 `preview_content_bounds` 放大分支同源。
+/// 垫了一条 `theme::geometry::top_bar_height()` 高的 Space 把遮罩钉在顶栏之下,盒子上下各留
+/// `theme::geometry::maximize_overlay_padding()`;遮罩铺到窗口底边(状态栏也被盖住),所以这里
+/// **不**扣 `theme::geometry::status_bar_height()`——与 `preview_content_bounds` 放大分支同源。
 fn maximized_box_height(window_height: f32) -> f32 {
     (window_height
-        - workspace_geometry::top_bar_height()
-        - 2.0 * workspace_geometry::maximize_overlay_padding())
+        - theme::geometry::top_bar_height()
+        - 2.0 * theme::geometry::maximize_overlay_padding())
     .max(0.0)
 }
 
@@ -643,23 +643,23 @@ pub fn preview_content_bounds(
     if state.maximized == Some(MaximizedPane::Left) {
         let (x0, avail_w) = maximized_box_x_range(window_width);
         let y0 =
-            workspace_geometry::top_bar_height() + workspace_geometry::maximize_overlay_padding();
+            theme::geometry::top_bar_height() + theme::geometry::maximize_overlay_padding();
         let avail_h = maximized_box_height(window_height);
         return match state.left_view {
             LeftView::Web => {
-                let y = y0 + workspace_geometry::browser_chrome_top_px();
-                let h = (avail_h - workspace_geometry::browser_chrome_top_px() - 8.0).max(0.0);
+                let y = y0 + theme::geometry::browser_chrome_top_px();
+                let h = (avail_h - theme::geometry::browser_chrome_top_px() - 8.0).max(0.0);
                 let x = x0 + 8.0;
                 let w = (avail_w - 16.0).max(0.0);
                 (x, y, w, h)
             }
             LeftView::Files => {
-                let y = y0 + workspace_geometry::preview_chrome_top_px();
-                let h = (avail_h - workspace_geometry::preview_chrome_top_px() - 8.0).max(0.0);
+                let y = y0 + theme::geometry::preview_chrome_top_px();
+                let h = (avail_h - theme::geometry::preview_chrome_top_px() - 8.0).max(0.0);
                 let pair_w = pair_content_width(avail_w);
                 let list_w = pair_w * state.layout.files_split;
                 let content_w = pair_w * (1.0 - state.layout.files_split);
-                let x = x0 + list_w + workspace_geometry::divider_width() + 8.0;
+                let x = x0 + list_w + theme::geometry::divider_width() + 8.0;
                 let w = (content_w - 16.0).max(0.0);
                 (x, y, w, h)
             }
@@ -675,25 +675,25 @@ pub fn preview_content_bounds(
     // 否则去掉外边框后 webview 会戳出新增的左侧留白。
     let m = theme::region::left_zone().margin;
     let y_top =
-        |chrome_top: f32| -> f32 { workspace_geometry::top_bar_height() + m.top + chrome_top };
+        |chrome_top: f32| -> f32 { theme::geometry::top_bar_height() + m.top + chrome_top };
     let h_for = |y: f32| -> f32 { (window_height - y - m.bottom - 8.0).max(0.0) };
     match state.left_view {
         LeftView::Web => {
-            let y = y_top(workspace_geometry::browser_chrome_top_px());
+            let y = y_top(theme::geometry::browser_chrome_top_px());
             let h = h_for(y);
-            let x = workspace_geometry::icon_rail_width() + 8.0 + m.left;
+            let x = theme::geometry::icon_rail_width() + 8.0 + m.left;
             let w = (left_w - 16.0 - m.left - m.right).max(0.0);
             (x, y, w, h)
         }
         LeftView::Files => {
-            let y = y_top(workspace_geometry::preview_chrome_top_px());
+            let y = y_top(theme::geometry::preview_chrome_top_px());
             let h = h_for(y);
             let pair_w = pair_content_width(left_w);
             let list_w = pair_w * state.layout.files_split;
             let content_w = pair_w * (1.0 - state.layout.files_split);
-            let x = workspace_geometry::icon_rail_width()
+            let x = theme::geometry::icon_rail_width()
                 + list_w
-                + workspace_geometry::divider_width()
+                + theme::geometry::divider_width()
                 + 8.0
                 + m.left;
             let w = (content_w - 16.0 - m.left - m.right).max(0.0);
@@ -727,7 +727,7 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
             }
             LeftView::Files => {
                 let list_w = pair_content_width(avail_w) * state.layout.files_split;
-                let start = x0 + list_w + workspace_geometry::divider_width();
+                let start = x0 + list_w + theme::geometry::divider_width();
                 let end = x0 + avail_w;
                 x >= start && x < end
             }
@@ -739,16 +739,16 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
     let left_w = left_zone_width(window_width, state);
     match state.left_view {
         LeftView::Web => {
-            let start = workspace_geometry::icon_rail_width();
+            let start = theme::geometry::icon_rail_width();
             let end = start + left_w;
             x >= start && x < end
         }
         LeftView::Files => {
             let list_w = pair_content_width(left_w) * state.layout.files_split;
-            let start = workspace_geometry::icon_rail_width()
+            let start = theme::geometry::icon_rail_width()
                 + list_w
-                + workspace_geometry::divider_width();
-            let end = workspace_geometry::icon_rail_width() + left_w;
+                + theme::geometry::divider_width();
+            let end = theme::geometry::icon_rail_width() + left_w;
             x >= start && x < end
         }
         LeftView::GitLog => false,
@@ -759,7 +759,7 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
 
 /// 逻辑 x 落在哪一侧面板区(整区,不分区内具体是哪个 pane)。左键点击
 /// 落点决定当前"聚焦"哪一侧,驱动 `left_zone`/`right_zone` 外边框的高亮态
-/// (见 [`ZoneSide`])。落在图标栏本身(两侧各 `workspace_geometry::icon_rail_width()` 宽)或
+/// (见 [`ZoneSide`])。落在图标栏本身(两侧各 `theme::geometry::icon_rail_width()` 宽)或
 /// 某侧收起而点在了"不存在的那一侧"时不算数,返回 `None`(调用方应保持
 /// 点击前的聚焦态不变,而不是清空)。
 ///
@@ -767,8 +767,8 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
 /// `maximize_overlay` 渲染时两条图标栏原样露在外面,和非放大态同一
 /// 横向范围,所以图标栏判定不用跟着改。
 pub fn zone_at_x(x: f32, window_width: f32, state: &ShellState) -> Option<ZoneSide> {
-    if x < workspace_geometry::icon_rail_width()
-        || x > window_width - workspace_geometry::icon_rail_width()
+    if x < theme::geometry::icon_rail_width()
+        || x > window_width - theme::geometry::icon_rail_width()
     {
         return None;
     }
@@ -788,7 +788,7 @@ pub fn zone_at_x(x: f32, window_width: f32, state: &ShellState) -> Option<ZoneSi
     if state.right_collapsed {
         return Some(ZoneSide::Left);
     }
-    let boundary = workspace_geometry::icon_rail_width() + left_zone_width(window_width, state);
+    let boundary = theme::geometry::icon_rail_width() + left_zone_width(window_width, state);
     Some(if x < boundary {
         ZoneSide::Left
     } else {
@@ -852,25 +852,25 @@ pub fn terminal_pane_pixel_size(
     if state.maximized == Some(MaximizedPane::Right) {
         let (_x0, avail_w) = maximized_box_x_range(window_width);
         let content_w = pair_content_width(avail_w) * (1.0 - state.layout.agent_split);
-        let pane_width = (content_w - workspace_geometry::chrome_width_px()).max(0.0);
-        // `workspace_geometry::status_bar_height()` 是终端 pane 自带的底栏(`terminal_status_bar`,
+        let pane_width = (content_w - theme::geometry::chrome_width_px()).max(0.0);
+        // `theme::geometry::status_bar_height()` 是终端 pane 自带的底栏(`terminal_status_bar`,
         // 不是窗口级状态栏),放大态一样在盒子里,照扣。
         let pane_height = (maximized_box_height(window_height)
-            - workspace_geometry::status_bar_height()
-            - workspace_geometry::chrome_height_px())
+            - theme::geometry::status_bar_height()
+            - theme::geometry::chrome_height_px())
         .max(0.0);
         return (pane_width, pane_height);
     }
     let right_w = right_zone_width(window_width, state);
     let content_w = pair_content_width(right_w) * (1.0 - state.layout.agent_split);
-    let pane_width = (content_w - workspace_geometry::chrome_width_px()).max(0.0);
+    let pane_width = (content_w - theme::geometry::chrome_width_px()).max(0.0);
     // `right_zone` 上下 margin:终端是 iced 布局(自动 inset),但其 PTY 网格
     // 尺寸靠这里算,必须同步扣掉上下 margin,否则字符网格比实际渲染区高。
     let m = theme::region::right_zone().margin;
     let pane_height = (window_height
-        - workspace_geometry::top_bar_height()
-        - workspace_geometry::status_bar_height()
-        - workspace_geometry::chrome_height_px()
+        - theme::geometry::top_bar_height()
+        - theme::geometry::status_bar_height()
+        - theme::geometry::chrome_height_px()
         - m.top
         - m.bottom)
         .max(0.0);
@@ -2792,7 +2792,7 @@ impl App {
             hover_anims: std::collections::HashMap::new(),
             pending_zoom_toggle: false,
             pending_preview_zoom: false,
-            window_size: workspace_geometry::initial_window_size(),
+            window_size: theme::geometry::initial_window_size(),
             dragging: None,
             context_menu: None,
             last_right_click: (0.0, 0.0),
@@ -3114,7 +3114,7 @@ impl App {
     /// 建窗时用的初始窗口尺寸偏好:优先用上次退出前持久化的
     /// `shell_layout.window_width/height`(已经过 `sanitize_shell_layout`
     /// 夹取),`layout.json` 不存在/读不到时 `layout::load()` 本身已经退化
-    /// 成 `ShellLayout::default()`,即 `workspace_geometry::initial_window_size()`,这里不用再
+    /// 成 `ShellLayout::default()`,即 `theme::geometry::initial_window_size()`,这里不用再
     /// 单独处理"没存过"的分支。
     pub fn window_size_pref(&self) -> (f32, f32) {
         (
@@ -3249,12 +3249,12 @@ impl App {
         let line_h = pane_h / self.rows.max(1) as f32;
         let right_w = right_zone_width(window_w, &state);
         let list_w = pair_content_width(right_w) * state.layout.agent_split;
-        let x0 = window_w - workspace_geometry::icon_rail_width() - right_w
+        let x0 = window_w - theme::geometry::icon_rail_width() - right_w
             + list_w
-            + workspace_geometry::divider_width()
+            + theme::geometry::divider_width()
             + 8.0;
         // 终端网格上方 chrome:顶栏 44 + 上 padding 8 + tab 栏 30 + spacing 4(header 已去,P1L #4)
-        let y0 = workspace_geometry::top_bar_height() + 8.0 + 30.0 + 4.0;
+        let y0 = theme::geometry::top_bar_height() + 8.0 + 30.0 + 4.0;
         let (col, row) = self
             .active_workspace()
             .and_then(|ws| ws.tabs.get(ws.active))
@@ -5007,7 +5007,7 @@ fn dozer_home_tab<'a>(
     // 外层 `container` 只负责在顶栏里垂直居中(按钮是 Fixed 高,默认贴顶,
     // 与交通灯对不齐——同 `project_tab_item` 里注释过的根因)。
     container(hit)
-        .height(Length::Fixed(workspace_geometry::top_bar_height()))
+        .height(Length::Fixed(theme::geometry::top_bar_height()))
         .align_y(iced_widget::core::Alignment::Center)
         .into()
 }
@@ -5090,7 +5090,7 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
     let bar = row![title, tabs, right]
         .spacing(region.gap)
         .padding(region.padding)
-        .height(Length::Fixed(workspace_geometry::top_bar_height()))
+        .height(Length::Fixed(theme::geometry::top_bar_height()))
         .align_y(iced_widget::core::Alignment::Center);
 
     // 双击顶栏空白处缩放窗口(原生标题栏没了之后,系统"双击标题栏缩放"
@@ -5108,7 +5108,7 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
 
     container(stack![background, bar])
         .width(Length::Fill)
-        .height(Length::Fixed(workspace_geometry::top_bar_height()))
+        .height(Length::Fixed(theme::geometry::top_bar_height()))
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
             border: region.border.unwrap_or_default(),
@@ -5291,7 +5291,7 @@ fn home_sidebar(
     );
 
     container(col)
-        .width(Length::Fixed(workspace_geometry::h0_sidebar_width()))
+        .width(Length::Fixed(theme::geometry::h0_sidebar_width()))
         .height(Length::Fill)
         .into()
 }
@@ -5504,11 +5504,11 @@ fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_
 
     // `responsive` 在每轮布局把页签区可用宽交给闭包,闭包据此算每片宽。
     responsive(move |size| {
-        let gap = workspace_geometry::project_tab_gap();
-        let default_w = workspace_geometry::project_tab_max_width();
+        let gap = theme::geometry::project_tab_gap();
+        let default_w = theme::geometry::project_tab_max_width();
         // 预留"＋"按钮与其紧跟最后一片页签的 gap(页签内部还有 n-1 道 gap),
         // 避免页签在拥挤时压到"＋"上。
-        let reserved = workspace_geometry::project_tab_add_button_width() + (n as f32 + 1.0) * gap;
+        let reserved = theme::geometry::project_tab_add_button_width() + (n as f32 + 1.0) * gap;
         let avail = (size.width - reserved).max(0.0);
         // 每片目标宽:少页签用默认宽(固定);多到塞不下默认宽才均分收窄。
         let per_tab = if n == 0 {
@@ -5524,7 +5524,7 @@ fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_
             .align_y(iced_widget::core::Alignment::Center)
             .width(Length::Shrink); // 固定宽,不撑满;右侧留白把"＋"顶到最右
         // 分割竖线高度:顶栏高的约 45%,在行内 `align_y(Center)` 自然垂直居中。
-        let sep_h = workspace_geometry::top_bar_height() * 0.45;
+        let sep_h = theme::geometry::top_bar_height() * 0.45;
         for (i, entry) in entries.iter().enumerate() {
             let active = active_project_id == Some(entry.id);
             let close_hover_t = app.hover_progress(HoverId::ProjectTabClose(entry.id));
@@ -5626,9 +5626,9 @@ fn project_tab_item<'a>(
     // 必须把高度补到 `(top_bar_height+sq)/2`,贴底后顶部留白才恰好等于
     // Dozer 按钮那份 `(top_bar_height-sq)/2`。
     let sq = crate::theme::icon_size::rail() + 14.0;
-    let tab_h = (workspace_geometry::top_bar_height() + sq) / 2.0;
+    let tab_h = (theme::geometry::top_bar_height() + sq) / 2.0;
     // 关闭按钮用与顶栏其它图标按钮(tab 箭头 / 最大化)同尺寸的方形命中区。
-    let close_sz = crate::workspace_geometry::tab_button_size();
+    let close_sz = crate::theme::geometry::tab_button_size();
     let mut label = row![]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
@@ -6270,8 +6270,8 @@ fn rail_icon_button<'a>(
 
     button(inner)
         .on_press(msg)
-        .width(Length::Fixed(crate::workspace_geometry::rail_button_size()))
-        .height(Length::Fixed(crate::workspace_geometry::rail_button_size()))
+        .width(Length::Fixed(crate::theme::geometry::rail_button_size()))
+        .height(Length::Fixed(crate::theme::geometry::rail_button_size()))
         .padding(0)
         .style(move |_t: &iced_widget::Theme, _status: button::Status| {
             // 圆角正方形背景常驻(`CARD`);金色外框只在选中态出现,hover
@@ -6339,7 +6339,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_wi
     .padding(region.padding);
 
     container(content)
-        .width(Length::Fixed(workspace_geometry::icon_rail_width()))
+        .width(Length::Fixed(theme::geometry::icon_rail_width()))
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
@@ -6390,7 +6390,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_w
     .padding(region.padding);
 
     container(content)
-        .width(Length::Fixed(workspace_geometry::icon_rail_width()))
+        .width(Length::Fixed(theme::geometry::icon_rail_width()))
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
@@ -6849,20 +6849,20 @@ fn maximize_overlay<'a>(
     )
     .on_press(Message::MaximizeClose);
 
-    // 顶部垫一条透明的 `workspace_geometry::top_bar_height()` 高 Space,把变暗遮罩钉在顶栏
+    // 顶部垫一条透明的 `theme::geometry::top_bar_height()` 高 Space,把变暗遮罩钉在顶栏
     // 之下——`base = column![top, body]` 里顶栏和内容区就是这么分的,
     // 这里镜像同一结构,让变暗区域精确对齐 `body` 的渲染范围,不覆盖顶栏
     // (Important:此前没有这条 Space,遮罩会盖住整个窗口高度,连顶栏的
     // 项目 tab 等控件都会被染黑)。
     column![
         iced_widget::space::Space::new()
-            .height(Length::Fixed(workspace_geometry::top_bar_height())),
+            .height(Length::Fixed(theme::geometry::top_bar_height())),
         row![
             iced_widget::space::Space::new()
-                .width(Length::Fixed(workspace_geometry::icon_rail_width())),
+                .width(Length::Fixed(theme::geometry::icon_rail_width())),
             dim_bg,
             iced_widget::space::Space::new()
-                .width(Length::Fixed(workspace_geometry::icon_rail_width())),
+                .width(Length::Fixed(theme::geometry::icon_rail_width())),
         ],
     ]
     .width(Length::Fill)
@@ -7207,7 +7207,7 @@ fn status_bar_container<'a>(
     let base = region.border.unwrap_or_default();
     container(inner)
         .width(Length::Fill)
-        .height(Length::Fixed(workspace_geometry::status_bar_height()))
+        .height(Length::Fixed(theme::geometry::status_bar_height()))
         .padding(region.padding)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
@@ -7240,7 +7240,7 @@ fn preview_pane(
     let (first, can_left, can_right) = tab_window(
         &widths,
         4.0,
-        workspace_geometry::tab_bar_avail_px(),
+        theme::geometry::tab_bar_avail_px(),
         ws.preview_tab_first,
     );
 
@@ -7453,7 +7453,7 @@ fn terminal_pane<'a>(
         .into()
 }
 
-/// 分隔线:命中区 `workspace_geometry::divider_width()` 宽、`Length::Fill` 高,
+/// 分隔线:命中区 `theme::geometry::divider_width()` 宽、`Length::Fill` 高,
 /// 中间一条 2px BORDER 竖线。悬停变 resize 光标走 `MouseArea::interaction` →
 /// iced 既有的 `mouse_interaction` → `window.set_cursor` 管线(main.rs:808-816
 /// 已有),不必另起一套光标代码。`on_press` 只发起拖拽状态,不指望 `MouseArea`
@@ -7477,7 +7477,7 @@ fn divider_bar<'a>(
     let show_line = !matches!(divider, Divider::LeftRight);
     if !show_line {
         let gap = iced_widget::Space::new()
-            .width(Length::Fixed(workspace_geometry::divider_width()))
+            .width(Length::Fixed(theme::geometry::divider_width()))
             .height(Length::Fill);
         return MouseArea::new(gap)
             .interaction(mouse::Interaction::ResizingColumn)
@@ -7485,7 +7485,7 @@ fn divider_bar<'a>(
             .into();
     }
     let line_w = 2.0_f32;
-    let side_w = (workspace_geometry::divider_width() - line_w) / 2.0;
+    let side_w = (theme::geometry::divider_width() - line_w) / 2.0;
     let left_side = container(iced_widget::Space::new())
         .width(Length::Fixed(side_w))
         .height(Length::Fill)
@@ -7508,7 +7508,7 @@ fn divider_bar<'a>(
             ..container::Style::default()
         });
     let row = row![left_side, line, right_side]
-        .width(Length::Fixed(workspace_geometry::divider_width()))
+        .width(Length::Fixed(theme::geometry::divider_width()))
         .height(Length::Fill);
     MouseArea::new(row)
         .interaction(mouse::Interaction::ResizingColumn)
@@ -7528,14 +7528,14 @@ fn menu_item<'a>(
             icons::view(icon, crate::theme::icon_size::row(), theme::color::CREAM),
             text(label).size(theme::font::body()).color(theme::color::CREAM),
         ]
-        .spacing(crate::workspace_geometry::menu_gap())
+        .spacing(crate::theme::geometry::menu_gap())
         .align_y(iced_widget::core::Alignment::Center),
     )
     .on_press(msg)
-    .width(Length::Fixed(crate::workspace_geometry::menu_item_width()))
+    .width(Length::Fixed(crate::theme::geometry::menu_item_width()))
     .padding([
-        crate::workspace_geometry::menu_pad_v(),
-        crate::workspace_geometry::menu_pad_h(),
+        crate::theme::geometry::menu_pad_v(),
+        crate::theme::geometry::menu_pad_h(),
     ])
     .style(|_t, _s| button::Style {
         background: Some(theme::color::CARD.into()),
@@ -7619,13 +7619,13 @@ fn context_menu_popup<'a>(
                     ),
                     text("粘贴").size(theme::font::body()).color(theme::color::DIM),
                 ]
-                .spacing(crate::workspace_geometry::menu_gap())
+                .spacing(crate::theme::geometry::menu_gap())
                 .align_y(iced_widget::core::Alignment::Center),
             )
-            .width(Length::Fixed(crate::workspace_geometry::menu_item_width()))
+            .width(Length::Fixed(crate::theme::geometry::menu_item_width()))
             .padding([
-                crate::workspace_geometry::menu_pad_v(),
-                crate::workspace_geometry::menu_pad_h(),
+                crate::theme::geometry::menu_pad_v(),
+                crate::theme::geometry::menu_pad_h(),
             ])
             .style(|_t, _s| button::Style {
                 background: Some(theme::color::CARD.into()),
@@ -7949,8 +7949,8 @@ pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
 ) -> Element<'a, M, iced_widget::Theme, iced_widget::Renderer> {
     let color = if enabled { theme::color::GOLD } else { theme::color::DIM };
     let mut btn = button(icons::view(icon, crate::theme::icon_size::row(), color))
-        .width(Length::Fixed(crate::workspace_geometry::tab_button_size()))
-        .height(Length::Fixed(crate::workspace_geometry::tab_button_size()))
+        .width(Length::Fixed(crate::theme::geometry::tab_button_size()))
+        .height(Length::Fixed(crate::theme::geometry::tab_button_size()))
         .padding(0)
         .style(move |_theme, status| {
             let base = button::Style {
@@ -8010,7 +8010,7 @@ fn tab_bar<'a>(
     let (first, can_left, can_right) = tab_window(
         &widths,
         4.0,
-        workspace_geometry::tab_bar_avail_px(),
+        theme::geometry::tab_bar_avail_px(),
         ws.term_tab_first,
     );
 
@@ -8810,17 +8810,17 @@ mod tests {
         // chrome 高度分道,不能再共用同一个值——否则文件预览顶上会露一截
         // 再也画不出东西的空白。
         assert_eq!(
-            workspace_geometry::preview_chrome_top_px(),
+            theme::geometry::preview_chrome_top_px(),
             38.0,
             "文件预览 chrome 顶应为去地址栏后的 38(8 内边距 + 30 tab 栏)"
         );
         assert_eq!(
-            workspace_geometry::browser_chrome_top_px(),
+            theme::geometry::browser_chrome_top_px(),
             72.0,
             "浏览器 chrome 顶应为 72(8 内边距 + 30 tab 栏 + 4 spacing + 30 地址栏)"
         );
         assert_eq!(
-            workspace_geometry::chrome_height_px(),
+            theme::geometry::chrome_height_px(),
             50.0,
             "终端 chrome 高应为去 header 后的 50"
         );
@@ -8845,7 +8845,7 @@ mod tests {
         let (x, y, w, h) = preview_content_bounds(1440.0, 900.0, &state);
         let list_w = state.layout.left_width * state.layout.files_split;
         let col_start =
-            workspace_geometry::icon_rail_width() + list_w + workspace_geometry::divider_width();
+            theme::geometry::icon_rail_width() + list_w + theme::geometry::divider_width();
         assert!(x >= col_start && x < col_start + 16.0, "x={x}");
         assert!((380.0..=420.0).contains(&w), "w={w}");
         assert!(
@@ -8864,7 +8864,7 @@ mod tests {
         };
         let (x, _, w, _) = preview_content_bounds(1440.0, 900.0, &state);
         let m = theme::region::left_zone().margin;
-        assert_eq!(x, workspace_geometry::icon_rail_width() + 8.0 + m.left);
+        assert_eq!(x, theme::geometry::icon_rail_width() + 8.0 + m.left);
         assert_eq!(w, state.layout.left_width - 16.0 - m.left - m.right);
     }
 
@@ -8898,10 +8898,10 @@ mod tests {
     /// Fix round 1 Critical:左侧被放大(Files 配对)时,webview 矩形必须
     /// 按 `maximize_overlay` 实际渲染的更大盒子换算,不能再用平时的
     /// `left_zone_width`(640)。用具体数字核对,不只看"落在范围内"：
-    /// x0=workspace_geometry::icon_rail_width()(44)+workspace_geometry::maximize_overlay_padding()(40)=84,
+    /// x0=theme::geometry::icon_rail_width()(44)+theme::geometry::maximize_overlay_padding()(40)=84,
     /// avail_w=1440-2*44-2*40=1272,pair_w=1272-8=1264,
     /// list_w=1264*0.35=442.4,x=84+442.4+8+8=542.4,w=1264*0.65-16=805.6;
-    /// y0=workspace_geometry::top_bar_height()(40)+40=80,y=80+38(workspace_geometry::preview_chrome_top_px(),地址栏已去)=118,
+    /// y0=theme::geometry::top_bar_height()(40)+40=80,y=80+38(theme::geometry::preview_chrome_top_px(),地址栏已去)=118,
     /// avail_h=900-40-80=780,h=780-38-8=734。
     #[test]
     fn preview_content_bounds_left_maximized_files_matches_overlay_geometry() {
@@ -8961,13 +8961,13 @@ mod tests {
     fn terminal_pane_height_excludes_top_and_status_bars() {
         let state = test_state();
         let (_, h_with) = terminal_pane_pixel_size(1440.0, 900.0, &state);
-        let only_chrome = 900.0 - workspace_geometry::chrome_height_px();
+        let only_chrome = 900.0 - theme::geometry::chrome_height_px();
         let m = theme::region::right_zone().margin;
         assert!(
             (only_chrome
                 - h_with
-                - (workspace_geometry::top_bar_height()
-                    + workspace_geometry::status_bar_height()
+                - (theme::geometry::top_bar_height()
+                    + theme::geometry::status_bar_height()
                     + m.top
                     + m.bottom))
                 .abs()
@@ -9002,7 +9002,7 @@ mod tests {
     ///
     /// 具体数字(窗口逻辑宽 720——1440pt 屏上把窗口贴半屏就是这个宽度):
     /// `zones_width(720)` = 720 - 2*44(图标栏) - 8(LeftRight 分隔线) = 624;
-    /// 上界 = max(624 - 320(workspace_geometry::min_zone_width()), 320) = 320;
+    /// 上界 = max(624 - 320(theme::geometry::min_zone_width()), 320) = 320;
     /// 默认 `left_width`=640 夹取后 = 320,右面板区 = 624 - 320 = 304(>0)。
     ///
     /// 修复前的 flex 追账(iced_core flex.rs `resolve` 第一趟按顺序给
@@ -9042,26 +9042,26 @@ mod tests {
         );
     }
 
-    /// 极窄窗口(比 `workspace_geometry::min_window_width()` 还窄,例如外部强制 resize)下也不 panic,
+    /// 极窄窗口(比 `theme::geometry::min_window_width()` 还窄,例如外部强制 resize)下也不 panic,
     /// 且左区宽不会超过 `zones_width` 本身。
     #[test]
     fn clamp_left_width_survives_absurdly_narrow_window() {
         assert_eq!(
             clamp_left_width(200.0, 640.0),
-            workspace_geometry::min_zone_width()
+            theme::geometry::min_zone_width()
         );
         assert_eq!(
             clamp_left_width(0.0, 640.0),
-            workspace_geometry::min_zone_width()
+            theme::geometry::min_zone_width()
         );
-        // 最小窗口宽恰好能让两侧都拿到 workspace_geometry::min_zone_width()。
+        // 最小窗口宽恰好能让两侧都拿到 theme::geometry::min_zone_width()。
         assert_eq!(
-            clamp_left_width(workspace_geometry::min_window_width(), 640.0),
-            workspace_geometry::min_zone_width()
+            clamp_left_width(theme::geometry::min_window_width(), 640.0),
+            theme::geometry::min_zone_width()
         );
         assert!(
-            (zones_width(workspace_geometry::min_window_width())
-                - 2.0 * workspace_geometry::min_zone_width())
+            (zones_width(theme::geometry::min_window_width())
+                - 2.0 * theme::geometry::min_zone_width())
             .abs()
                 < 0.01
         );
@@ -9140,9 +9140,9 @@ mod tests {
     ///
     /// 具体数字(1440x900,`agent_split`=0.4):
     /// avail_w = 1440 - 2*44 - 2*40 = 1272,pair_w = 1272 - 8 = 1264,
-    /// 终端占 1-0.4 → 1264*0.6 = 758.4,减 `workspace_geometry::chrome_width_px()`(16) = 742.4;
+    /// 终端占 1-0.4 → 1264*0.6 = 758.4,减 `theme::geometry::chrome_width_px()`(16) = 742.4;
     /// 盒子高 = 900 - 40(顶栏) - 2*40 = 780,再减 pane 自带底栏 26
-    /// (`workspace_geometry::status_bar_height()`)与 `workspace_geometry::chrome_height_px()`(50) = 704。
+    /// (`theme::geometry::status_bar_height()`)与 `theme::geometry::chrome_height_px()`(50) = 704。
     /// 对照平时:zones_width = 1440-2*44-8=1344,right_w = 1344 - 640 = 704,pair = 696,
     /// 696*0.6 = 417.6,减 16 = 401.6;高 = 900 - 40 - 26 - 50 - right_zone 上下 margin(各 6) = 772。
     /// 换成网格(CELL_WIDTH=8.4,LINE_HEIGHT_PX=16.8 即 14*1.2):放大后 88x41,平时 47x45。
@@ -9233,9 +9233,9 @@ mod tests {
             ..ShellLayout::default()
         };
         let s = sanitize_shell_layout(poisoned);
-        assert_eq!(s.left_width, workspace_geometry::min_zone_width());
-        assert_eq!(s.files_split, workspace_geometry::min_split_ratio());
-        assert_eq!(s.agent_split, workspace_geometry::max_split_ratio());
+        assert_eq!(s.left_width, theme::geometry::min_zone_width());
+        assert_eq!(s.files_split, theme::geometry::min_split_ratio());
+        assert_eq!(s.agent_split, theme::geometry::max_split_ratio());
         assert_eq!(s.conversations_split, ShellLayout::default().files_split);
         // 夹过之后 FillPortion 两侧都非 0(那一块不会凭空消失)。
         for split in [s.files_split, s.agent_split, s.conversations_split] {
@@ -9253,7 +9253,7 @@ mod tests {
 
     /// `window_width`/`window_height` 的夹取单独测:老 `layout.json` 缺这两
     /// 个字段时 serde 补 0.0(不是 `f32::NAN`,判断要用 `> 0.0` 而不能只查
-    /// `is_finite`),负数/NAN 同样要落回 `workspace_geometry::initial_window_size()`;合法但过小
+    /// `is_finite`),负数/NAN 同样要落回 `theme::geometry::initial_window_size()`;合法但过小
     /// 的值只夹下限,不整个重置。
     #[test]
     fn sanitize_shell_layout_clamps_window_size() {
@@ -9263,8 +9263,8 @@ mod tests {
             ..ShellLayout::default()
         };
         let s = sanitize_shell_layout(missing_fields);
-        assert_eq!(s.window_width, workspace_geometry::initial_window_size().0);
-        assert_eq!(s.window_height, workspace_geometry::initial_window_size().1);
+        assert_eq!(s.window_width, theme::geometry::initial_window_size().0);
+        assert_eq!(s.window_height, theme::geometry::initial_window_size().1);
 
         let poisoned = ShellLayout {
             window_width: -100.0,
@@ -9272,8 +9272,8 @@ mod tests {
             ..ShellLayout::default()
         };
         let s = sanitize_shell_layout(poisoned);
-        assert_eq!(s.window_width, workspace_geometry::initial_window_size().0);
-        assert_eq!(s.window_height, workspace_geometry::initial_window_size().1);
+        assert_eq!(s.window_width, theme::geometry::initial_window_size().0);
+        assert_eq!(s.window_height, theme::geometry::initial_window_size().1);
 
         let too_small = ShellLayout {
             window_width: 10.0,
@@ -9281,8 +9281,8 @@ mod tests {
             ..ShellLayout::default()
         };
         let s = sanitize_shell_layout(too_small);
-        assert_eq!(s.window_width, workspace_geometry::min_window_width());
-        assert_eq!(s.window_height, workspace_geometry::min_window_height());
+        assert_eq!(s.window_width, theme::geometry::min_window_width());
+        assert_eq!(s.window_height, theme::geometry::min_window_height());
 
         let legit = ShellLayout {
             window_width: 1800.0,
@@ -9596,25 +9596,25 @@ mod tests {
     fn clamp_left_width_within_bounds() {
         let state = test_state();
         let l = apply_column_drag(state, Divider::LeftRight, 1440.0, 500.0);
-        assert_eq!(l.left_width, 500.0 - workspace_geometry::icon_rail_width());
+        assert_eq!(l.left_width, 500.0 - theme::geometry::icon_rail_width());
     }
 
     #[test]
     fn clamp_left_width_to_minimum() {
         let state = test_state();
         let l = apply_column_drag(state, Divider::LeftRight, 1440.0, 10.0);
-        assert_eq!(l.left_width, workspace_geometry::min_zone_width());
+        assert_eq!(l.left_width, theme::geometry::min_zone_width());
     }
 
     #[test]
     fn clamp_left_width_to_maximum_keeps_right_zone_alive() {
-        // 拖到最右也要给右面板区留 workspace_geometry::min_zone_width()。
+        // 拖到最右也要给右面板区留 theme::geometry::min_zone_width()。
         let state = test_state();
         let l = apply_column_drag(state, Divider::LeftRight, 1440.0, 1430.0);
         let expected = 1440.0
-            - 2.0 * workspace_geometry::icon_rail_width()
-            - workspace_geometry::divider_width()
-            - workspace_geometry::min_zone_width();
+            - 2.0 * theme::geometry::icon_rail_width()
+            - theme::geometry::divider_width()
+            - theme::geometry::min_zone_width();
         assert_eq!(l.left_width, expected);
     }
 
@@ -9623,7 +9623,7 @@ mod tests {
         // 窗口窄到上界低于下界时,`.max(下限)` 把上界垫平,恒不 panic。
         let state = test_state();
         let l = apply_column_drag(state, Divider::LeftRight, 700.0, 650.0);
-        assert_eq!(l.left_width, workspace_geometry::min_zone_width());
+        assert_eq!(l.left_width, theme::geometry::min_zone_width());
     }
 
     #[test]
@@ -9634,7 +9634,7 @@ mod tests {
             state,
             Divider::LeftPairSplit,
             1440.0,
-            workspace_geometry::icon_rail_width() + 316.0,
+            theme::geometry::icon_rail_width() + 316.0,
         );
         assert!((l.files_split - 0.5).abs() < 0.001, "{}", l.files_split);
     }
@@ -9643,9 +9643,9 @@ mod tests {
     fn clamp_files_split_to_range() {
         let state = test_state();
         let l = apply_column_drag(state, Divider::LeftPairSplit, 1440.0, 10.0);
-        assert_eq!(l.files_split, workspace_geometry::min_split_ratio());
+        assert_eq!(l.files_split, theme::geometry::min_split_ratio());
         let l = apply_column_drag(state, Divider::LeftPairSplit, 1440.0, 5000.0);
-        assert_eq!(l.files_split, workspace_geometry::max_split_ratio());
+        assert_eq!(l.files_split, theme::geometry::max_split_ratio());
     }
 
     #[test]

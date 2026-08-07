@@ -12,8 +12,9 @@ use crate::preview::WebviewSpec;
 use crate::workspace::{lh, preview_tab_display_width, tab_arrow_button, tab_divider, tab_window};
 use crate::theme::icon_size;
 use crate::theme::region;
+use crate::theme::geometry;
 use crate::theme::font;
-use crate::{icons, theme, workspace_geometry};
+use crate::{icons, theme};
 use dozer_client::Client;
 use dozer_core::protocol::{BookmarkInfo, BookmarkScope};
 use iced_widget::core::{Border, Element, Length};
@@ -945,8 +946,8 @@ fn star_button(
         .unwrap_or(false);
     let color = if starred { theme::color::GOLD } else { theme::color::DIM };
     let mut btn = button(icons::view(icons::IconKind::Star, icon_size::row(), color))
-        .width(Length::Fixed(workspace_geometry::tab_button_size()))
-        .height(Length::Fixed(workspace_geometry::tab_button_size()))
+        .width(Length::Fixed(theme::geometry::tab_button_size()))
+        .height(Length::Fixed(theme::geometry::tab_button_size()))
         .padding(0)
         .style(move |_t, _s| button::Style {
             background: None,
@@ -1127,7 +1128,7 @@ pub fn view(
     let (first, can_left, can_right) = tab_window(
         &widths,
         4.0,
-        workspace_geometry::tab_bar_avail_px(),
+        theme::geometry::tab_bar_avail_px(),
         state.tab_first,
     );
 
@@ -1270,8 +1271,8 @@ fn bookmarks_toggle_button<'a>() -> Element<'a, Message, iced_widget::Theme, ice
         theme::color::DIM,
     ))
     .on_press(Message::BookmarksToggle)
-    .width(Length::Fixed(workspace_geometry::tab_button_size()))
-    .height(Length::Fixed(workspace_geometry::tab_button_size()))
+    .width(Length::Fixed(theme::geometry::tab_button_size()))
+    .height(Length::Fixed(theme::geometry::tab_button_size()))
     .padding(0)
     .style(|_t, _s| button::Style {
         background: None,

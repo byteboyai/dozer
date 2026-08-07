@@ -10,11 +10,11 @@
 //!
 //! 解析失败(格式错误、缺字段)直接 panic:开发期配置错误,不是需要
 //! 优雅降级的运行时数据(同 `chrome_style.rs`/`workspace_font.rs` 的定位)。
-use crate::theme::icon_size;
+use super::icon_size;
 use serde::Deserialize;
 use std::sync::LazyLock;
 
-const RAW: &str = include_str!("../assets/theme/workspace.json");
+const RAW: &str = include_str!("../../assets/theme/workspace.json");
 
 #[derive(Deserialize)]
 struct Geometry {
