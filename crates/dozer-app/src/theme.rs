@@ -21,6 +21,12 @@ pub const GREEN: Color = c(0x1A, 0xD5, 0x85);
 pub const PURPLE: Color = c(0x95, 0x80, 0xFF);
 pub const RED: Color = c(0xFF, 0x6E, 0x6E);
 
+/// Codex 强调色（picker 圆点/图标底色）。ByteBoy2077 核心 5 色（bg/金/
+/// 奶油/青/绿）之外的扩展色，`PURPLE` 已是先例。
+pub const ORANGE: Color = c(0xFF, 0x9B, 0x4D);
+pub const MAGENTA: Color = c(0xFF, 0x6E, 0xC7);
+pub const BLUE: Color = c(0x4D, 0x8C, 0xFF);
+
 /// 两色按 `t`(0..=1)线性插值,返回中间色。iced 0.14 的 `Color` 没有自带的
 /// `lerp`/`mix`,这里补一个给悬停动画等需要平滑过渡颜色的地方用。
 /// `t` 超出 [0,1] 不外夹,调用方保证区间。

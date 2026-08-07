@@ -6441,8 +6441,8 @@ fn agent_picker_toggle_button<'a>()
 }
 
 /// Agent 选择菜单浮层:固定挂在窗口右上角("＋"按钮下方——该按钮
-/// 就在最靠右的 Agent 面板头部,近似等于窗口右上角),五个选项
-/// Claude/CodeBuddy/OpenCode/纯 Shell/Git Shell。跟项目树右键菜单
+/// 就在最靠右的 Agent 面板头部,近似等于窗口右上角),八个选项
+/// Claude/CodeBuddy/OpenCode/Codex/Qoder/Kilo/纯 Shell/Git Shell。跟项目树右键菜单
 /// (`context_menu_popup`)同款按钮样式,但不需要像素坐标定位——同
 /// `delete_confirm_popup` 一样固定 padding 摆位。`ws.agent_picker_open`
 /// 为假时返回空视图,调用方(`App::view`)据此决定要不要把这层塞进
@@ -6453,10 +6453,13 @@ fn agent_picker_popup(
     if !ws.agent_picker_open {
         return column![].into();
     }
-    let items: [(&str, PickerLaunch); 5] = [
+    let items: [(&str, PickerLaunch); 8] = [
         ("Claude", PickerLaunch::Agent(Some(AgentKind::Claude))),
         ("CodeBuddy", PickerLaunch::Agent(Some(AgentKind::Codebuddy))),
         ("OpenCode", PickerLaunch::Agent(Some(AgentKind::Opencode))),
+        ("Codex", PickerLaunch::Agent(Some(AgentKind::Codex))),
+        ("Qoder", PickerLaunch::Agent(Some(AgentKind::Qoder))),
+        ("Kilo", PickerLaunch::Agent(Some(AgentKind::Kilo))),
         ("纯 Shell", PickerLaunch::Agent(None)),
         ("Git Shell", PickerLaunch::Git),
     ];
@@ -9257,6 +9260,9 @@ pub(crate) fn agent_dot_color(agent: AgentKind) -> Color {
         AgentKind::Claude => theme::CYAN,
         AgentKind::Codebuddy => theme::PURPLE,
         AgentKind::Opencode => theme::GREEN,
+        AgentKind::Codex => theme::ORANGE,
+        AgentKind::Qoder => theme::MAGENTA,
+        AgentKind::Kilo => theme::BLUE,
         AgentKind::Unknown => theme::DIM,
     }
 }
@@ -9268,7 +9274,10 @@ fn agent_icon(agent: AgentKind) -> IconKind {
         AgentKind::Claude => IconKind::Claude,
         AgentKind::Codebuddy => IconKind::Codebuddy,
         AgentKind::Opencode => IconKind::Opencode,
-        AgentKind::Unknown => IconKind::Bot,
+        // 暂无确认可用的品牌素材，回落通用图标（spec §8/§6 明确允许）。
+        AgentKind::Codex | AgentKind::Qoder | AgentKind::Kilo | AgentKind::Unknown => {
+            IconKind::Bot
+        }
     }
 }
 
@@ -10842,6 +10851,9 @@ mod tests {
             (AgentKind::Claude, theme::CYAN),
             (AgentKind::Codebuddy, theme::PURPLE),
             (AgentKind::Opencode, theme::GREEN),
+            (AgentKind::Codex, theme::ORANGE),
+            (AgentKind::Qoder, theme::MAGENTA),
+            (AgentKind::Kilo, theme::BLUE),
             (AgentKind::Unknown, theme::DIM),
         ];
         for (agent, expected) in cases {
@@ -10860,7 +10872,12 @@ mod tests {
         assert_eq!(agent_icon(AgentKind::Claude), IconKind::Claude);
         assert_eq!(agent_icon(AgentKind::Codebuddy), IconKind::Codebuddy);
         assert_eq!(agent_icon(AgentKind::Opencode), IconKind::Opencode);
-        // Unknown 无品牌标,回落到通用 Bot 图标。
+        // Codex/Qoder/Kilo 暂无确认可用的品牌素材，回落通用 Bot 图标
+        // （见计划 Task 3 说明，非占位符——spec §8/§6 明确允许的兜底）。
+        assert_eq!(agent_icon(AgentKind::Codex), IconKind::Bot);
+        assert_eq!(agent_icon(AgentKind::Qoder), IconKind::Bot);
+        assert_eq!(agent_icon(AgentKind::Kilo), IconKind::Bot);
+        // Unknown 同样回落 Bot 图标。
         assert_eq!(agent_icon(AgentKind::Unknown), IconKind::Bot);
     }
 
@@ -10869,6 +10886,9 @@ mod tests {
         assert_eq!(agent_cli_command(AgentKind::Claude), Some("claude"));
         assert_eq!(agent_cli_command(AgentKind::Codebuddy), Some("codebuddy"));
         assert_eq!(agent_cli_command(AgentKind::Opencode), Some("opencode"));
+        assert_eq!(agent_cli_command(AgentKind::Codex), Some("codex"));
+        assert_eq!(agent_cli_command(AgentKind::Qoder), Some("qoder"));
+        assert_eq!(agent_cli_command(AgentKind::Kilo), Some("kilo"));
         assert_eq!(agent_cli_command(AgentKind::Unknown), None);
     }
 
@@ -10886,6 +10906,18 @@ mod tests {
         assert_eq!(
             picker_launch_command(PickerLaunch::Agent(Some(AgentKind::Opencode))),
             Some("opencode".to_string())
+        );
+        assert_eq!(
+            picker_launch_command(PickerLaunch::Agent(Some(AgentKind::Codex))),
+            Some("codex".to_string())
+        );
+        assert_eq!(
+            picker_launch_command(PickerLaunch::Agent(Some(AgentKind::Qoder))),
+            Some("qoder".to_string())
+        );
+        assert_eq!(
+            picker_launch_command(PickerLaunch::Agent(Some(AgentKind::Kilo))),
+            Some("kilo".to_string())
         );
         // 纯 Shell → 不键入任何初始命令。
         assert_eq!(picker_launch_command(PickerLaunch::Agent(None)), None);
