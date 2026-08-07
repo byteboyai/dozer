@@ -1261,11 +1261,11 @@ git commit -m "docs: record Kilo plugin feasibility spike findings (go/no-go)"
 
 ## 完成检查
 
-- [ ] `AgentKind` 有 7 个变体（含新增 `Codex`/`Qoder`/`Kilo`），`label()` 全部覆盖，老协议帧回落 `Unknown` 的既有行为不变。
-- [ ] 启动器菜单 8 项，Codex/Qoder/Kilo 键入正确的 CLI 命令名（`codex`/`qoder`/`kilo`），各自有独立强调色，图标回落 `Bot`（诚实降级，非占位符）。
-- [ ] `dozer-hook install codex` / `dozer-hook install qoder` 能正确装 `~/.codex/hooks.json` / `~/.qoder/settings.json`；`Notification`/`PostToolUseFailure` 等归并、`Subagent*`/压缩类事件正确丢弃、未知事件透传不 panic。
-- [ ] `cargo build --workspace && cargo test --workspace` 全绿。
-- [ ] 三份 spike 决策记录已写清楚（`2026-08-07-{codex,qoder,kilo}-spike-findings.md`），Kilo 的记录明确给出 go/no-go 结论。
+- [x] `AgentKind` 有 7 个变体（含新增 `Codex`/`Qoder`/`Kilo`），`label()` 全部覆盖，老协议帧回落 `Unknown` 的既有行为不变。
+- [x] 启动器菜单 8 项，Codex/Qoder/Kilo 键入正确的 CLI 命令名（`codex`/`qoder`/`kilo`），各自有独立强调色，图标回落 `Bot`（诚实降级，非占位符）。
+- [x] `dozer-hook install codex` / `dozer-hook install qoder` 能正确装 `~/.codex/hooks.json` / `~/.qoder/settings.json`；`Notification`/`PostToolUseFailure` 等归并、`Subagent*`/压缩类事件正确丢弃、未知事件透传不 panic。
+- [x] `cargo build --workspace && cargo test --workspace` 全绿。
+- [x] 三份 spike 决策记录已写清楚（`2026-08-07-{codex,qoder,kilo}-spike-findings.md`），Kilo 的记录明确给出 go/no-go 结论。
 - [ ] **明确排除在本计划外，留给独立后续计划**：
   - Codex/Qoder 的真实 transcript 解析（`transcript.rs`/`usage.rs` 里这两家的分支目前诚实返回空/默认值）与历史对话目录扫描（`conversation.rs::list_all_conversations` 不含这两家）——依赖各自 spike 产出的 fixture 与目录结构核实结果。
   - Kilo 插件代码（`dozer.ts`/`dozer-translate.ts`/`kilo_install.rs`）——依赖 Task 10 的 go/no-go 结论；如果 go，需要一份新的 brainstorming/plan 周期（涉及 TypeScript 代码、不是本计划"纯 Rust 机械扩展"的范畴）。
