@@ -50,17 +50,20 @@ pub fn opencode_project_dir(cwd: &Path) -> PathBuf {
     project_dir_in(&home_dir(), ".dozer/agents/opencode", cwd)
 }
 
-/// transcript 首段 → 首句人类发言。按 agent 分派——Claude/Opencode/Unknown
-/// 共用一套 schema（`type:"user"` + `message.content` 是字符串)，CodeBuddy
-/// 是独立 schema（`type:"message"` + `role:"user"` + `content[].type:
+/// transcript 首段 → 首句人类发言。按 agent 分派——Claude/Opencode/Kilo/
+/// Unknown 共用一套 schema（`type:"user"` + `message.content` 是字符串)，
+/// CodeBuddy 是独立 schema（`type:"message"` + `role:"user"` + `content[].type:
 /// "input_text"`），跟 `transcript.rs::parse_transcript` 的分派方式对齐。
-/// 纯函数。
+/// `Codex`/`Qoder` 暂时返回 `None`（真实 schema 待 spike 确认；这两家目前
+/// 也不会被 `list_all_conversations` 扫到，本分支纯粹是让穷举 match 编译
+/// 通过，见计划 Global Constraints）。纯函数。
 pub fn conversation_title(agent: AgentKind, jsonl_head: &str) -> Option<String> {
     match agent {
-        AgentKind::Claude | AgentKind::Opencode | AgentKind::Unknown => {
+        AgentKind::Claude | AgentKind::Opencode | AgentKind::Kilo | AgentKind::Unknown => {
             claude_shaped_title(jsonl_head)
         }
         AgentKind::Codebuddy => codebuddy_shaped_title(jsonl_head),
+        AgentKind::Codex | AgentKind::Qoder => None,
     }
 }
 
@@ -210,6 +213,22 @@ mod tests {
         assert_eq!(
             conversation_title(AgentKind::Codebuddy, jsonl).as_deref(),
             Some("reply with exactly one word: hello")
+        );
+    }
+
+    #[test]
+    fn codex_and_qoder_title_is_none_until_schema_confirmed() {
+        let head = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"忽略\"}}\n";
+        assert_eq!(conversation_title(AgentKind::Codex, head), None);
+        assert_eq!(conversation_title(AgentKind::Qoder, head), None);
+    }
+
+    #[test]
+    fn kilo_title_reuses_claude_shaped_parser() {
+        let head = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"改一下 README\"}}\n";
+        assert_eq!(
+            conversation_title(AgentKind::Kilo, head).as_deref(),
+            Some("改一下 README")
         );
     }
 

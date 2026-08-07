@@ -169,20 +169,22 @@ fn join_codebuddy_text_blocks(blocks: &[Value], kind: &str) -> String {
     text
 }
 
-/// 按 agent 分派 transcript 解析。`Opencode` 复用 Claude 分支——
-/// dozer-hook 代写 OpenCode 的 transcript 时就是按 Claude 字段形状写的
-/// （spec §5.3），不是巧合。`Unknown` 也复用 Claude 分支：老装的 hook（还没
-/// 重跑 `dozer-hook install`）上报的每个事件 agent 字段都是 `Unknown`，
-/// 而在 CodeBuddy/OpenCode 真正进入用户机器之前，磁盘上现存的 transcript
-/// 事实上全是 Claude 形状——保守地假定 Unknown 就是 Claude 形状，比直接
-/// 返回空白审阅面板是严格更好的猜测。`Codebuddy` 走独立 schema 的解析器
-/// （见 `parse_codebuddy_shaped_jsonl`)。
+/// 按 agent 分派 transcript 解析。`Opencode`/`Kilo` 复用 Claude 分支——
+/// dozer-hook 代写它们的 transcript 时就是按 Claude 字段形状写的（spec
+/// §5.3/§7），不是巧合，且不依赖各自适配层是否已实现。`Unknown` 也复用
+/// Claude 分支：老装的 hook 上报的事件 agent 字段恒 `Unknown`，磁盘上
+/// 现存的 transcript 事实上全是 Claude 形状。`Codebuddy` 走独立 schema
+/// 的解析器（见 `parse_codebuddy_shaped_jsonl`)。`Codex`/`Qoder` 暂时返回
+/// 空：真实 transcript schema 待各自 spike 产出 fixture 后另开计划接（见
+/// 计划 Global Constraints），在那之前"不产出数据"是唯一诚实的行为，
+/// 不是占位符。
 pub fn parse_transcript(agent: AgentKind, jsonl: &str) -> Vec<ReviewEntry> {
     match agent {
-        AgentKind::Claude | AgentKind::Opencode | AgentKind::Unknown => {
+        AgentKind::Claude | AgentKind::Opencode | AgentKind::Kilo | AgentKind::Unknown => {
             parse_claude_shaped_jsonl(jsonl)
         }
         AgentKind::Codebuddy => parse_codebuddy_shaped_jsonl(jsonl),
+        AgentKind::Codex | AgentKind::Qoder => Vec::new(),
     }
 }
 
@@ -249,6 +251,27 @@ mod tests {
                 text: "opencode 里也这么解析".into()
             }]
         );
+    }
+
+    #[test]
+    fn kilo_reuses_claude_shaped_parser() {
+        // Kilo 的 transcript 由 dozer-hook 代写成 Claude 形状（跟 OpenCode
+        // 同理，见 spec §7），不依赖 Kilo 插件本身是否已实现。
+        let jsonl = r#"{"type":"user","message":{"role":"user","content":"kilo 里也这么解析"}}"#;
+        let entries = parse_transcript(AgentKind::Kilo, jsonl);
+        assert_eq!(
+            entries,
+            vec![ReviewEntry::Human {
+                text: "kilo 里也这么解析".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn codex_and_qoder_yield_empty_until_schema_confirmed() {
+        let jsonl = r#"{"type":"user","message":{"role":"user","content":"应该被忽略"}}"#;
+        assert!(parse_transcript(AgentKind::Codex, jsonl).is_empty());
+        assert!(parse_transcript(AgentKind::Qoder, jsonl).is_empty());
     }
 
     #[test]

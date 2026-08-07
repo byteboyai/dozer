@@ -33,15 +33,17 @@ pub struct ConversationUsage {
 /// 改动类工具——命中这些名字才计入 `mutating_tool_calls`/`files_touched`。
 const MUTATING_TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
 
-/// 按 agent 分派解析,Claude/OpenCode 共用一套 schema、CodeBuddy 独立一套,
-/// 与 `transcript.rs::parse_transcript` 同一分派方式。单行解析失败/字段
+/// 按 agent 分派解析,Claude/OpenCode/Kilo 共用一套 schema、CodeBuddy 独立
+/// 一套,与 `transcript.rs::parse_transcript` 同一分派方式；`Codex`/`Qoder`
+/// 暂时返回默认值(全零),理由同 `parse_transcript`。单行解析失败/字段
 /// 缺失一律跳过该行/记 0,不 panic、不中断整份文件的解析。
 pub fn parse_usage(agent: AgentKind, jsonl: &str) -> ConversationUsage {
     match agent {
-        AgentKind::Claude | AgentKind::Opencode | AgentKind::Unknown => {
+        AgentKind::Claude | AgentKind::Opencode | AgentKind::Kilo | AgentKind::Unknown => {
             parse_claude_shaped_usage(jsonl)
         }
         AgentKind::Codebuddy => parse_codebuddy_shaped_usage(jsonl),
+        AgentKind::Codex | AgentKind::Qoder => ConversationUsage::default(),
     }
 }
 
@@ -254,7 +256,7 @@ pub fn daily_totals_by_agent(
             AgentKind::Claude => entry.0 += total,
             AgentKind::Codebuddy => entry.1 += total,
             AgentKind::Opencode => entry.2 += total,
-            AgentKind::Unknown => {}
+            AgentKind::Unknown | AgentKind::Codex | AgentKind::Qoder | AgentKind::Kilo => {}
         }
     }
     let mut days: Vec<DayAgentTotals> = by_day
@@ -771,6 +773,19 @@ mod tests {
     }
 
     #[test]
+    fn kilo_usage_reuses_claude_shaped_parser() {
+        let jsonl = r#"{"type":"user","message":{"role":"user","content":"hi"}}"#;
+        assert_eq!(parse_usage(AgentKind::Kilo, jsonl).turns, 1);
+    }
+
+    #[test]
+    fn codex_and_qoder_usage_is_default_until_schema_confirmed() {
+        let jsonl = r#"{"type":"user","message":{"role":"user","content":"hi"}}"#;
+        assert_eq!(parse_usage(AgentKind::Codex, jsonl), ConversationUsage::default());
+        assert_eq!(parse_usage(AgentKind::Qoder, jsonl), ConversationUsage::default());
+    }
+
+    #[test]
     fn parse_codebuddy_shaped_reads_provider_usage_and_zero_tool_calls() {
         let jsonl = include_str!("../../dozer-hook/fixtures/codebuddy-transcript-sample.jsonl");
         let u = parse_usage(AgentKind::Codebuddy, jsonl);
@@ -902,6 +917,20 @@ mod tests {
         assert_eq!(days[1].day_index, 20_673);
         assert_eq!(days[1].opencode, 7);
         assert_eq!(days[0].label, "08/07");
+    }
+
+    #[test]
+    fn daily_totals_ignores_agents_without_dedicated_bucket() {
+        // Codex/Qoder/Kilo 目前没有专属的 DayAgentTotals 字段（这三家的
+        // 用量还进不了统计，见计划 Global Constraints），跟 Unknown 一样
+        // 被忽略，不能 panic。
+        let rows = vec![(
+            meta_at(AgentKind::Codex, 0),
+            usage_with_tokens(99),
+        )];
+        let days = daily_totals_by_agent(&rows);
+        assert_eq!(days.len(), 1);
+        assert_eq!(days[0].claude + days[0].codebuddy + days[0].opencode, 0);
     }
 
     #[test]
