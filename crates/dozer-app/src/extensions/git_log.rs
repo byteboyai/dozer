@@ -7,7 +7,6 @@
 //! 画一根直线,commit 是线上的一个圆点,父子关系用直线连接(不是贝塞尔)。
 //! 验证通过、决定转正时,再补动画/交互/性能优化。
 use crate::theme;
-use crate::workspace::Message;
 use crate::workspace_font;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::alignment;
@@ -255,6 +254,163 @@ pub struct CommitDetail {
     pub files: Vec<DiffFileEntry>,
 }
 
+/// Git Log 模块自己的消息类型——内核(`workspace.rs`)只认一个包装变体
+/// `Message::GitLog(extensions::git_log::Message)`,这个模块本身不 import
+/// 顶层 `Message`,不知道自己被包在哪个外层类型里。
+#[derive(Debug, Clone)]
+pub enum Message {
+    SelectCommit(git2::Oid),
+    LoadMore,
+    DetailLoaded(PathBuf, git2::Oid, Result<CommitDetail, String>),
+    SnapshotLoaded(PathBuf, usize, Result<GitLogSnapshot, String>),
+}
+
+/// Git Log 面板的全部状态。现在挂在 `App`(不按项目分,见设计文档"非
+/// 目标"——这次纯重构不改这个现状),以后要改成按项目分的话,类型本身
+/// 不用变,只是挪个持有位置。
+#[derive(Default)]
+pub struct State {
+    cache: Option<GitLogSnapshot>,
+    error: Option<String>,
+    selected: Option<git2::Oid>,
+    detail: Option<Result<CommitDetail, String>>,
+    /// 最近一次派发的 `build` 请求 (repo_path, max_count)——落地时核对
+    /// 还对不对得上"现在真正需要的",不对就丢弃。
+    pending: Option<(PathBuf, usize)>,
+    /// "加载更多"发起前记下的选中提交,新快照落地后据此还原选中态。
+    restore_after_load: Option<git2::Oid>,
+}
+
+impl State {
+    /// "加载更多"按钮下一个请求的 `max_count`:有缓存则在当前基础上
+    /// `+ LOAD_MORE_STEP`,否则回落 `DEFAULT_MAX_COMMITS`。
+    pub fn next_load_more_count(&self) -> usize {
+        self.cache
+            .as_ref()
+            .map(|c| c.max_count() + LOAD_MORE_STEP)
+            .unwrap_or(DEFAULT_MAX_COMMITS)
+    }
+
+    /// 当前缓存的 `max_count`(无缓存则回落 `DEFAULT_MAX_COMMITS`)——用于
+    /// "内容不变、只是要重新拉一遍"的场景(`.git` 引用变化触发的重建),
+    /// 跟"加载更多"要的 `next_load_more_count()`(会 `+LOAD_MORE_STEP`)
+    /// 是两回事,内核代码里不要混用。
+    pub fn cache_max_count(&self) -> usize {
+        self.cache
+            .as_ref()
+            .map(|c| c.max_count())
+            .unwrap_or(DEFAULT_MAX_COMMITS)
+    }
+
+    /// 当前缓存快照所属的仓库路径(`None` = 还没有缓存)。内核靠它判断
+    /// "缓存是不是已经属于当前聚焦项目",不用时不重建。
+    pub fn cache_repo_path(&self) -> Option<&Path> {
+        self.cache.as_ref().map(|c| c.repo_path())
+    }
+
+    /// 当前选中的提交(`None` = 未选中)。内核发起"加载更多"前需要先读一次
+    /// 这个值——`request_refresh` 会把它清空,内核得自己先存一份,请求
+    /// 落地后再用 `set_restore_after_load` 传回来。
+    pub fn selected(&self) -> Option<git2::Oid> {
+        self.selected
+    }
+
+    /// `request_refresh` 落地新快照之前,内核用这个把"发起刷新前选中的
+    /// 提交"记下来,新快照真正落地(`SnapshotLoaded` 处理完)时
+    /// `update()` 会据此还原选中态(见其返回值 `Some(Message::SelectCommit)`
+    /// 那条路径)。
+    pub fn set_restore_after_load(&mut self, oid: Option<git2::Oid>) {
+        self.restore_after_load = oid;
+    }
+}
+
+/// 处理 `SelectCommit`/`DetailLoaded`/`SnapshotLoaded` 三种消息。
+/// `LoadMore` 需要内核才知道的"当前聚焦项目路径",不在这里处理——传进来
+/// 会直接 panic,调用方(`workspace.rs`)必须在转发前先拦掉这一种(见
+/// 设计文档"内核转发不是无差别盲转"）。
+///
+/// 返回值:`Some(next)` = 这次处理还产生了一条要递归分发的后续消息(目前
+/// 只有 `SnapshotLoaded` 落地后恢复选中提交这一种情况)。
+pub fn update(
+    state: &mut State,
+    msg: Message,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) -> Option<Message> {
+    match msg {
+        Message::SelectCommit(oid) => {
+            state.selected = Some(oid);
+            state.detail = None;
+            let repo_path = state.cache.as_ref().map(|c| c.repo_path().to_path_buf())?;
+            handle.spawn(async move {
+                let repo_path2 = repo_path.clone();
+                let result = tokio::task::spawn_blocking(move || commit_detail(&repo_path2, oid))
+                    .await
+                    .unwrap_or_else(|e| Err(format!("详情加载任务失败: {e}")));
+                emit(Message::DetailLoaded(repo_path, oid, result));
+            });
+            None
+        }
+        Message::DetailLoaded(repo_path, oid, result) => {
+            let still_current = state.cache.as_ref().map(|c| c.repo_path())
+                == Some(repo_path.as_path())
+                && state.selected == Some(oid);
+            if still_current {
+                state.detail = Some(result);
+            }
+            // 否则:项目已切换,或用户点了别的提交——这份结果过期了,丢弃。
+            None
+        }
+        Message::SnapshotLoaded(repo_path, max_count, result) => {
+            let still_pending = state.pending.as_ref().map(|(p, m)| (p.as_path(), *m))
+                == Some((repo_path.as_path(), max_count));
+            if !still_pending {
+                return None;
+            }
+            state.pending = None;
+            match result {
+                Ok(snapshot) => {
+                    state.cache = Some(snapshot);
+                    state.error = None;
+                }
+                Err(err) => {
+                    state.cache = None;
+                    state.error = Some(err);
+                }
+            }
+            state.restore_after_load.take().map(Message::SelectCommit)
+        }
+        Message::LoadMore => {
+            unreachable!(
+                "LoadMore 由内核在 Message::GitLog 分支里直接处理(需要仓库路径),不会转发到这里"
+            )
+        }
+    }
+}
+
+/// 异步重建 Git Log 快照,`max_count` 由调用方决定(打开面板/引用变化用
+/// `DEFAULT_MAX_COMMITS`,"加载更多"用 `State::next_load_more_count()`)。
+/// 现有 `App::spawn_git_log_refresh` 的搬家版本,行为不变。
+pub fn request_refresh(
+    state: &mut State,
+    repo_path: PathBuf,
+    max_count: usize,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    state.selected = None;
+    state.detail = None;
+    state.restore_after_load = None;
+    state.pending = Some((repo_path.clone(), max_count));
+    handle.spawn(async move {
+        let repo_path2 = repo_path.clone();
+        let result = tokio::task::spawn_blocking(move || build(&repo_path2, max_count))
+            .await
+            .unwrap_or_else(|e| Err(format!("Git Log 加载任务失败: {e}")));
+        emit(Message::SnapshotLoaded(repo_path, max_count, result));
+    });
+}
+
 /// 取某个提交改动了哪些文件、每个文件的 diff 文本。合并提交(≥2 parent)
 /// 相对**第一父**算(与 `git show` 默认行为一致,不做三方 diff——spec D5)。
 /// 根提交(无 parent)相对空树算,等价于"全部文件都是新增"。
@@ -360,7 +516,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Git
         }
         let row_idx = (pos.y / ROW_HEIGHT) as usize;
         let row = self.snapshot.rows.get(row_idx)?;
-        Some(canvas::Action::publish(Message::GitLogSelectCommit(row.oid)).and_capture())
+        Some(canvas::Action::publish(Message::SelectCommit(row.oid)).and_capture())
     }
 
     fn draw(
@@ -451,22 +607,15 @@ fn ref_labels_text(refs: &[RefLabel], head_branch: Option<&str>) -> String {
 /// 渲染整块提交图面板:有数据画 Canvas,出错画错误文案,两者皆无(比如
 /// 尚未打开项目)画空状态提示。纯函数——不碰 `App`/`Workspace` 内部状态,
 /// 调用方(`workspace.rs`)负责取数据、决定何时重建缓存、维护选中态。
-pub fn view<'a>(
-    snapshot: Option<&'a GitLogSnapshot>,
-    error: Option<&'a str>,
-    selected: Option<git2::Oid>,
-    detail: Option<&'a Result<CommitDetail, String>>,
-    loading: bool,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+pub fn view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let error = state.error.as_deref();
     if let Some(err) = error {
         return container(text(format!("git log 读取失败: {err}")).color(theme::RED))
             .padding(16)
             .into();
     }
-    let Some(snapshot) = snapshot else {
-        // `build()` 现在是异步派发(见 workspace.rs `spawn_git_log_refresh`),
-        // 面板刚打开、还没等到第一份快照落地时,`snapshot`/`error` 都是
-        // `None`——不能直接落回"未打开项目"文案,否则用户会以为没反应。
+    let loading = state.pending.is_some();
+    let Some(snapshot) = state.cache.as_ref() else {
         let text_content = if loading {
             "加载中…"
         } else {
@@ -476,6 +625,8 @@ pub fn view<'a>(
             .padding(16)
             .into();
     };
+    let selected = state.selected;
+    let detail = state.detail.as_ref();
     if snapshot.rows.is_empty() {
         return container(text("没有可显示的提交").color(theme::DIM))
             .padding(16)
@@ -513,7 +664,7 @@ pub fn view<'a>(
             .size(workspace_font::caption())
             .color(theme::CREAM),
     )
-    .on_press_maybe((!loading).then_some(Message::GitLogLoadMore))
+    .on_press_maybe((!loading).then_some(Message::LoadMore))
     .padding([4, 12]);
     let graph_body = column![canvas, load_more].padding(Padding {
         top: 0.0,
@@ -700,7 +851,9 @@ mod tests {
             .expect("crates/dozer-app 应有两层上级目录到仓库根");
         // 取最新提交(当前 HEAD 也就是第 0 行),真实仓库上它总有一个 parent,
         // diff 应该有 ≥1 个文件(至少动过 `git_log.rs` 或本测试自身)。
-        let snapshot = build(repo_root, 1).expect("应能解析 dozer 自己的仓库");
+        // 不用 `max_count=1`:gleisbau 的 `with_max_count(1)` 会解析成 0 行,
+        // 得给足额度(用面板默认值),只取第 0 行即 HEAD。
+        let snapshot = build(repo_root, DEFAULT_MAX_COMMITS).expect("应能解析 dozer 自己的仓库");
         let head_oid = snapshot.rows[0].oid;
         let detail = commit_detail(repo_root, head_oid).expect("HEAD 提交的 diff 应能算出");
         assert!(!detail.files.is_empty(), "HEAD 对 parent 至少改动一个文件");
@@ -781,5 +934,262 @@ mod tests {
         );
         // 空 refs(一般提交)返回空串。
         assert_eq!(ref_labels_text(&[], Some("main")), "");
+    }
+
+    fn snapshot_at(repo_path: &Path, max_count: usize) -> GitLogSnapshot {
+        GitLogSnapshot {
+            repo_path: repo_path.to_path_buf(),
+            rows: Vec::new(),
+            max_column: 0,
+            head_branch: None,
+            max_count,
+        }
+    }
+
+    #[tokio::test]
+    async fn select_commit_sets_selected_and_clears_detail() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let mut state = State {
+            cache: Some(snapshot_at(&repo_path, 10)),
+            detail: Some(Ok(CommitDetail { files: Vec::new() })),
+            ..State::default()
+        };
+        let oid = git2::Oid::from_bytes(&[1; 20]).unwrap();
+        let handle = tokio::runtime::Handle::current();
+        let result = update(&mut state, Message::SelectCommit(oid), &handle, |_| {});
+        assert_eq!(state.selected, Some(oid));
+        assert!(state.detail.is_none());
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn select_commit_without_cache_sets_selected_but_spawns_nothing() {
+        let mut state = State::default();
+        let oid = git2::Oid::from_bytes(&[2; 20]).unwrap();
+        let handle = tokio::runtime::Handle::current();
+        let result = update(&mut state, Message::SelectCommit(oid), &handle, |_| {
+            panic!("无缓存时不该 emit 任何消息");
+        });
+        assert_eq!(state.selected, Some(oid));
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn detail_loaded_writes_when_repo_path_and_selected_match() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let oid = git2::Oid::from_bytes(&[3; 20]).unwrap();
+        let mut state = State {
+            cache: Some(snapshot_at(&repo_path, 10)),
+            selected: Some(oid),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        let result = update(
+            &mut state,
+            Message::DetailLoaded(repo_path, oid, Ok(CommitDetail { files: Vec::new() })),
+            &handle,
+            |_| {},
+        );
+        match &state.detail {
+            Some(Ok(detail)) => assert!(detail.files.is_empty()),
+            other => panic!("期望 Some(Ok(空 CommitDetail)),实际 {other:?}"),
+        }
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn detail_loaded_discarded_when_repo_path_mismatches() {
+        let mut state = State {
+            cache: Some(snapshot_at(Path::new("/tmp/a"), 10)),
+            selected: Some(git2::Oid::from_bytes(&[4; 20]).unwrap()),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::DetailLoaded(
+                PathBuf::from("/tmp/b"),
+                git2::Oid::from_bytes(&[4; 20]).unwrap(),
+                Ok(CommitDetail { files: Vec::new() }),
+            ),
+            &handle,
+            |_| {},
+        );
+        assert!(state.detail.is_none(), "仓库路径对不上,结果应被丢弃");
+    }
+
+    #[tokio::test]
+    async fn detail_loaded_discarded_when_selected_mismatches() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let mut state = State {
+            cache: Some(snapshot_at(&repo_path, 10)),
+            selected: Some(git2::Oid::from_bytes(&[5; 20]).unwrap()),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::DetailLoaded(
+                repo_path,
+                git2::Oid::from_bytes(&[6; 20]).unwrap(),
+                Ok(CommitDetail { files: Vec::new() }),
+            ),
+            &handle,
+            |_| {},
+        );
+        assert!(state.detail.is_none(), "选中的提交对不上,结果应被丢弃");
+    }
+
+    #[tokio::test]
+    async fn snapshot_loaded_lands_when_pending_matches() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let mut state = State {
+            pending: Some((repo_path.clone(), 10)),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        let result = update(
+            &mut state,
+            Message::SnapshotLoaded(repo_path.clone(), 10, Ok(snapshot_at(&repo_path, 10))),
+            &handle,
+            |_| {},
+        );
+        assert!(state.cache.is_some());
+        assert!(state.error.is_none());
+        assert!(state.pending.is_none());
+        assert!(
+            result.is_none(),
+            "restore_after_load 为 None 时不该产生后续消息"
+        );
+    }
+
+    #[tokio::test]
+    async fn snapshot_loaded_discarded_when_pending_mismatches() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let mut state = State {
+            pending: Some((repo_path.clone(), 10)),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::SnapshotLoaded(repo_path.clone(), 20, Ok(snapshot_at(&repo_path, 20))),
+            &handle,
+            |_| {},
+        );
+        assert!(state.cache.is_none(), "max_count 对不上,不该落地");
+        assert_eq!(state.pending, Some((repo_path, 10)), "pending 也不该被清掉");
+    }
+
+    #[tokio::test]
+    async fn snapshot_loaded_error_clears_cache_and_sets_error() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let mut state = State {
+            cache: Some(snapshot_at(&repo_path, 10)),
+            pending: Some((repo_path.clone(), 10)),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::SnapshotLoaded(repo_path, 10, Err("boom".to_string())),
+            &handle,
+            |_| {},
+        );
+        assert!(state.cache.is_none());
+        assert_eq!(state.error.as_deref(), Some("boom"));
+    }
+
+    #[tokio::test]
+    async fn snapshot_loaded_returns_select_commit_when_restore_after_load_set() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let oid = git2::Oid::from_bytes(&[7; 20]).unwrap();
+        let mut state = State {
+            pending: Some((repo_path.clone(), 10)),
+            restore_after_load: Some(oid),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        let result = update(
+            &mut state,
+            Message::SnapshotLoaded(repo_path.clone(), 10, Ok(snapshot_at(&repo_path, 10))),
+            &handle,
+            |_| {},
+        );
+        match result {
+            Some(Message::SelectCommit(got)) => assert_eq!(got, oid),
+            other => panic!("期望 Some(SelectCommit(oid)),实际 {other:?}"),
+        }
+        assert!(state.restore_after_load.is_none(), "取用后应清空");
+    }
+
+    #[test]
+    fn next_load_more_count_with_cache_adds_step() {
+        let state = State {
+            cache: Some(snapshot_at(Path::new("/tmp/repo"), 200)),
+            ..State::default()
+        };
+        assert_eq!(state.next_load_more_count(), 200 + LOAD_MORE_STEP);
+    }
+
+    #[test]
+    fn next_load_more_count_without_cache_falls_back_to_default() {
+        let state = State::default();
+        assert_eq!(state.next_load_more_count(), DEFAULT_MAX_COMMITS);
+    }
+
+    #[test]
+    fn cache_max_count_reflects_current_cache_without_adding_step() {
+        let with_cache = State {
+            cache: Some(snapshot_at(Path::new("/tmp/repo"), 37)),
+            ..State::default()
+        };
+        assert_eq!(
+            with_cache.cache_max_count(),
+            37,
+            "不该像 next_load_more_count 那样 +LOAD_MORE_STEP"
+        );
+        assert_eq!(State::default().cache_max_count(), DEFAULT_MAX_COMMITS);
+    }
+
+    #[test]
+    fn cache_repo_path_reflects_cache_presence() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let with_cache = State {
+            cache: Some(snapshot_at(&repo_path, 10)),
+            ..State::default()
+        };
+        assert_eq!(with_cache.cache_repo_path(), Some(repo_path.as_path()));
+        assert_eq!(State::default().cache_repo_path(), None);
+    }
+
+    #[test]
+    fn selected_and_set_restore_after_load_roundtrip() {
+        let mut state = State::default();
+        assert_eq!(state.selected(), None);
+        let oid = git2::Oid::from_bytes(&[9; 20]).unwrap();
+        state.selected = Some(oid);
+        assert_eq!(state.selected(), Some(oid));
+        state.set_restore_after_load(Some(oid));
+        assert_eq!(state.restore_after_load, Some(oid));
+        state.set_restore_after_load(None);
+        assert_eq!(state.restore_after_load, None);
+    }
+
+    #[tokio::test]
+    async fn request_refresh_resets_selection_and_records_pending() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let mut state = State {
+            selected: Some(git2::Oid::from_bytes(&[8; 20]).unwrap()),
+            detail: Some(Ok(CommitDetail { files: Vec::new() })),
+            restore_after_load: Some(git2::Oid::from_bytes(&[8; 20]).unwrap()),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        request_refresh(&mut state, repo_path.clone(), 50, &handle, |_| {});
+        assert!(state.selected.is_none());
+        assert!(state.detail.is_none());
+        assert!(state.restore_after_load.is_none());
+        assert_eq!(state.pending, Some((repo_path, 50)));
     }
 }
