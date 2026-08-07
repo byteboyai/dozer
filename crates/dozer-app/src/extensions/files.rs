@@ -3,7 +3,13 @@
 //! `docs/superpowers/specs/2026-08-07-files-extension-pilot-design.md`。
 use crate::delivery::{FileGitStatus, WorktreeInfo};
 use crate::project::{FileTree, PathKind};
+use crate::theme::terminal_font;
 use crate::workspace::AddrEvent;
+use crate::{delivery, icons, theme};
+use dozer_core::protocol::ProjectInfo;
+use iced_widget::core::text::LineHeight;
+use iced_widget::core::{Border, Element, Length, Padding};
+use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -82,6 +88,10 @@ pub enum Message {
         is_dir: bool,
     },
     ContextMenuClose,
+    /// 单击文件行:在内核里打开预览。该面板本身不渲染预览(预览是被窗格),
+    /// 故文件行点击要跨过 `files::Message` 边界、由内核拦截映射到
+    /// `Message::PreviewOpenPath`——本模块不渲染预览,`update()` 不处理它。
+    OpenFile(PathBuf),
     /// 内核拦截,不进 `update`——真正的系统剪贴板写入需要 `main.rs` 的
     /// `Clipboard` 句柄,`update()` 拿不到(见设计文档"关键语义确认")。
     CopyPath(PathBuf, PathKind),
@@ -164,20 +174,14 @@ impl WorkspaceState {
         handle: &tokio::runtime::Handle,
         emit: impl Fn(Message) + Send + 'static,
     ) {
-        // 空名字(trim 后)静默取消提交且保留编辑框,让用户继续输入——先于
-        // `take()` 判断,否则会把 `tree_edit` 取走导致编辑框消失。
-        if self
-            .tree_edit
-            .as_ref()
-            .is_some_and(|e| e.buffer.trim().is_empty())
-        {
-            return;
-        }
         let Some(edit) = self.tree_edit.take() else {
             return;
         };
         self.tree_error = None;
         let name = edit.buffer.trim();
+        if name.is_empty() {
+            return;
+        }
         if !crate::project::is_single_path_component(name) {
             self.tree_error = Some("名字不能包含路径分隔符".to_string());
             self.tree_edit = Some(TreeEdit {
@@ -353,7 +357,6 @@ pub fn update(
         }
         Message::PasteDone(_, result) => match result {
             Ok(new_path) => {
-                ws_state.tree_error = None;
                 if let (Some(tree), Some(parent)) = (&mut ws_state.file_tree, new_path.parent()) {
                     tree.refresh(parent);
                 }
@@ -450,9 +453,11 @@ pub fn update(
         Message::CopyPath(..) => {
             unreachable!("由内核拦截处理,见 files::Message::CopyPath 文档")
         }
+        Message::OpenFile(_) => {
+            unreachable!("由内核拦截处理,见 files::Message::OpenFile 文档")
+        }
     }
 }
-
 /// 内核在项目打开(`from_restore`/`adopt_project`)/`ProjectFsChanged`/手动
 /// 刷新等 4 个现有调用点直接调用,异步跑 4 个 git 查询,完成后经 `emit` 送回
 /// `GitRefreshed`。现有 `Workspace::spawn_project_git_refresh` 的搬家版本,
@@ -476,6 +481,565 @@ pub fn spawn_git_refresh(
         .unwrap_or((None, false, HashMap::new(), Vec::new()));
         emit(Message::GitRefreshed(project_id, b, d, s, w));
     });
+}
+
+/// 项目信息卡 + 文件树可滚动列表(现有 `workspace.rs::project_pane` 的搬家
+/// 版本,签名改吃本模块状态)。`project` 用 `Option<&ProjectInfo>`——项目身份
+/// 是内核概念,本模块只认"文件树数据"。
+pub fn view<'a>(
+    ws_state: &'a WorkspaceState,
+    project: Option<&'a ProjectInfo>,
+    daemon_ok: bool,
+    width: Length,
+    outer: Border,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let region = theme::region::project_pane();
+    // `project` 为 `None` 时本模块给不出有意义的文件树——"未打开项目"的兜底
+    // UI(最近项目列表)是项目切换器,属内核职责,由内核在 `LeftView::Files`
+    // 分支自行渲染,这里返回空列。
+    let Some(p) = project else {
+        return column![].into();
+    };
+    // 头部:项目信息卡,固定在文件树上方,不随滚动条滚走(需求 1)。
+    let mut header = column![].spacing(region.gap).width(Length::Fill);
+    // 文件树行:唯一进入 scrollable 的内容。
+    let mut tree_col = column![].spacing(region.gap);
+
+    let label = crate::workspace::project_branch_label(ws_state.branch.as_deref(), ws_state.dirty);
+    let bcolor = if ws_state.dirty {
+        theme::color::GOLD
+    } else {
+        theme::color::BODY
+    };
+    // 需求 3:git 分支名前加 git-branch icon;需求 2:去掉完整文件路径。
+    let mut card_col = column![
+        text(p.name.clone())
+            .size(theme::font::title())
+            .color(theme::color::CREAM),
+        row![
+            icons::view(
+                icons::IconKind::GitBranch,
+                crate::theme::icon_size::row(),
+                bcolor
+            ),
+            text(label).size(theme::font::label()).color(bcolor),
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center),
+    ]
+    .spacing(2);
+    if let Some(n) = ws_state.project_acceptance_count.filter(|n| *n > 0) {
+        card_col = card_col.push(
+            text(format!("{n} 次验收"))
+                .size(theme::font::caption())
+                .color(theme::color::GOLD),
+        );
+    }
+    let card =
+        container(card_col)
+            .width(Length::Fill)
+            .padding(10)
+            .style(|_t: &iced_widget::Theme| container::Style {
+                background: Some(theme::color::CARD.into()),
+                border: Border {
+                    color: theme::color::BORDER,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..container::Style::default()
+            });
+    header = header.push(card);
+    if let Some(err) = &ws_state.tree_error {
+        header = header.push(
+            text(format!("⚠ {err}"))
+                .size(theme::font::label())
+                .color(theme::color::RED),
+        );
+    }
+    if let Some(tree) = &ws_state.file_tree {
+        for row in tree.visible_rows() {
+            let is_renaming = matches!(
+                &ws_state.tree_edit,
+                Some(TreeEdit { mode: TreeEditMode::Rename(p), .. }) if *p == row.path
+            );
+            if is_renaming {
+                let buffer = ws_state
+                    .tree_edit
+                    .as_ref()
+                    .map(|e| e.buffer.as_str())
+                    .unwrap_or("");
+                tree_col = tree_col.push(tree_edit_row(row.depth, buffer));
+                continue;
+            }
+            let indent = "  ".repeat(row.depth);
+            let status: Option<(delivery::ChangeKind, bool)> = if row.is_dir {
+                delivery::dir_status(&row.path, &ws_state.git_statuses)
+                    .map(|d| (d.kind, d.unstaged))
+            } else {
+                ws_state
+                    .git_statuses
+                    .get(&row.path)
+                    .map(|s| (s.kind, s.unstaged))
+            };
+            let name_color = theme::color::BODY;
+            let row_icon: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> =
+                if row.is_dir {
+                    let chevron = if row.expanded {
+                        icons::IconKind::ChevronDown
+                    } else {
+                        icons::IconKind::ChevronRight
+                    };
+                    let folder = if row.expanded {
+                        icons::IconKind::FolderOpen
+                    } else {
+                        icons::IconKind::Folder
+                    };
+                    row![
+                        icons::view(
+                            chevron,
+                            crate::theme::icon_size::chevron(),
+                            theme::color::DIM
+                        ),
+                        icons::view(folder, crate::theme::icon_size::row(), theme::color::DIM),
+                    ]
+                    .spacing(crate::theme::icon_size::tree_row_gap())
+                    .align_y(iced_widget::core::Alignment::Center)
+                    .into()
+                } else {
+                    row![
+                        iced_widget::space::Space::new()
+                            .width(Length::Fixed(
+                                crate::theme::icon_size::chevron()
+                                    + crate::theme::icon_size::tree_row_gap(),
+                            ))
+                            .height(Length::Shrink),
+                        icons::view(
+                            icons::icon_for_file(&row.name),
+                            crate::theme::icon_size::row(),
+                            theme::color::DIM
+                        ),
+                    ]
+                    .spacing(0)
+                    .align_y(iced_widget::core::Alignment::Center)
+                    .into()
+                };
+            let mut line = row![
+                text(indent)
+                    .size(crate::workspace::tree_row_font_size())
+                    .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
+                    .color(name_color),
+                row_icon,
+                text(row.name.clone())
+                    .size(crate::workspace::tree_row_font_size())
+                    .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
+                    .color(name_color),
+            ]
+            .spacing(6)
+            .align_y(iced_widget::core::Alignment::Center);
+            if let Some((kind, unstaged)) = status {
+                line = line.push(iced_widget::space::horizontal());
+                line = line.push(
+                    text(tree_row_dot_glyph(unstaged))
+                        .size(theme::font::dot_xs())
+                        .color(tree_row_dot_color(kind)),
+                );
+            }
+            let msg = if row.is_dir {
+                Message::Toggle(row.path.clone())
+            } else {
+                Message::OpenFile(row.path.clone())
+            };
+            let is_selected = ws_state.tree_selected.as_deref() == Some(row.path.as_path());
+            let row_btn: iced_widget::Button<
+                '_,
+                Message,
+                iced_widget::Theme,
+                iced_widget::Renderer,
+            > = button(line)
+                .on_press(msg)
+                .width(Length::Fill)
+                .style(move |_t, _s| button::Style {
+                    background: if is_selected {
+                        Some(theme::color::CARD.into())
+                    } else {
+                        None
+                    },
+                    text_color: theme::color::BODY,
+                    ..button::Style::default()
+                });
+            tree_col = tree_col.push(MouseArea::new(row_btn).on_right_press(
+                Message::ContextMenuOpen {
+                    path: row.path.clone(),
+                    is_dir: row.is_dir,
+                },
+            ));
+            let is_new_target = matches!(
+                &ws_state.tree_edit,
+                Some(TreeEdit {
+                    mode: TreeEditMode::NewFile | TreeEditMode::NewFolder,
+                    parent_dir,
+                    ..
+                }) if *parent_dir == row.path
+            );
+            if is_new_target && row.expanded {
+                let buffer = ws_state
+                    .tree_edit
+                    .as_ref()
+                    .map(|e| e.buffer.as_str())
+                    .unwrap_or("");
+                tree_col = tree_col.push(tree_edit_row(row.depth + 1, buffer));
+            }
+        }
+    }
+
+    // 头部(项目信息卡)固定在文件树上方、不进 scrollable,所以即使文件树
+    // 出现滚动条,项目信息也始终可见;scrollable 只承载文件树行。
+    let body = container(
+        column![
+            header,
+            Scrollable::new(tree_col)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .direction(scrollable::Direction::Vertical(
+                    crate::scrollbar::scrollbar()
+                ))
+                .style(|_t, _s| crate::scrollbar::scrollbar_style()),
+        ]
+        .spacing(region.gap),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .padding(region.padding)
+    .style(move |_t: &iced_widget::Theme| container::Style {
+        background: region.background.map(Into::into),
+        border: outer,
+        ..container::Style::default()
+    });
+
+    // 底栏(`project_status_bar`)是贴在 `body` 下方的独立元素,若它自己的
+    // 底角不收圆,方角会戳出 `body` 已收圆的左下角,在 zone 圆角 CARD 背景上
+    // 顶出一个小尖角——所以把 `outer` 的圆角半径透给底栏,只收底角,保留它
+    // 自己那条 1px 上边分隔线。
+    container(column![
+        body,
+        project_status_bar(daemon_ok, ws_state, outer)
+    ])
+    .width(width)
+    .height(Length::Fill)
+    .into()
+}
+
+/// 项目栏底状态条：左 环境/dozerd 点，右 [文件|git {分支}|组件]（文件高亮,组件占位）。
+fn project_status_bar<'a>(
+    daemon_ok: bool,
+    ws_state: &'a WorkspaceState,
+    outer: Border,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let (env, dot) = crate::workspace::env_status_text(daemon_ok);
+    let left = row![
+        text("●").size(theme::font::dot_sm()).color(dot),
+        text(env)
+            .size(theme::font::caption())
+            .color(theme::color::BODY)
+    ]
+    .spacing(6);
+    let git = format!(
+        "git {}",
+        crate::workspace::project_branch_label(ws_state.branch.as_deref(), ws_state.dirty)
+    );
+    let tabs = row![
+        text("文件")
+            .size(theme::font::caption())
+            .color(theme::color::CREAM),
+        text("·")
+            .size(theme::font::caption())
+            .color(theme::color::DIM),
+        text(git)
+            .size(theme::font::caption())
+            .color(theme::color::BODY),
+        text("·")
+            .size(theme::font::caption())
+            .color(theme::color::DIM),
+        text("组件")
+            .size(theme::font::caption())
+            .color(theme::color::DIM),
+    ]
+    .spacing(6);
+    crate::workspace::status_bar_container(
+        row![left, iced_widget::space::horizontal(), tabs]
+            .align_y(iced_widget::core::Alignment::Center),
+        outer,
+    )
+}
+
+/// 行内编辑框(新建/重命名共用):自绘输入,尾缀 "▏" 模拟光标,与地址栏/
+/// 验收意见框同款风格(键盘走 main.rs 拦截层,不用 iced 原生 text_input)。
+fn tree_edit_row(
+    depth: usize,
+    buffer: &str,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let indent = "  ".repeat(depth);
+    container(
+        text(format!("{indent}{buffer}▏"))
+            .size(crate::workspace::tree_row_font_size())
+            .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
+            .color(theme::color::CREAM),
+    )
+    .width(Length::Fill)
+    .padding([2, 4])
+    .style(|_t: &iced_widget::Theme| container::Style {
+        background: Some(theme::color::CARD.into()),
+        border: Border {
+            color: theme::color::CREAM,
+            width: 1.0,
+            radius: 2.0.into(),
+        },
+        ..container::Style::default()
+    })
+    .into()
+}
+
+/// 右键菜单一项:图标+文字按钮,CARD 底+BORDER 描边悬停态由 iced 默认
+/// button 交互色处理(本仓其余按钮同款,不额外定制)。
+fn menu_item<'a>(
+    icon: icons::IconKind,
+    label: &'static str,
+    msg: Message,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    button(
+        row![
+            icons::view(icon, crate::theme::icon_size::row(), theme::color::CREAM),
+            text(label)
+                .size(theme::font::body())
+                .color(theme::color::CREAM),
+        ]
+        .spacing(crate::theme::geometry::menu_gap())
+        .align_y(iced_widget::core::Alignment::Center),
+    )
+    .on_press(msg)
+    .width(Length::Fixed(crate::theme::geometry::menu_item_width()))
+    .padding([
+        crate::theme::geometry::menu_pad_v(),
+        crate::theme::geometry::menu_pad_h(),
+    ])
+    .style(|_t, _s| button::Style {
+        background: Some(theme::color::CARD.into()),
+        text_color: theme::color::CREAM,
+        ..button::Style::default()
+    })
+    .into()
+}
+
+/// 右键菜单浮层本体:纵向按钮列表,`container` 用 `Padding{top,left,..}`
+/// 手算定位到点击坐标——`Stack` 各层共享同一份 bounds,不像原生系统菜单
+/// 那样自带绝对定位,这是本仓一贯的手算像素定位风格(`ime_cursor_area`/
+/// `preview_content_bounds` 同款)。
+pub fn context_menu_popup<'a>(
+    app_state: &'a AppState,
+    ws_state: &'a WorkspaceState,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let Some(menu) = &app_state.context_menu else {
+        return column![].into();
+    };
+    let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> =
+        Vec::new();
+    if menu.is_dir {
+        items.push(menu_item(
+            icons::IconKind::FilePlus,
+            "新建文件",
+            Message::NewFile(menu.target.clone()),
+        ));
+        items.push(menu_item(
+            icons::IconKind::FolderPlus,
+            "新建文件夹",
+            Message::NewFolder(menu.target.clone()),
+        ));
+    }
+    items.push(menu_item(
+        icons::IconKind::Copy,
+        "复制",
+        Message::Copy(menu.target.clone(), menu.is_dir),
+    ));
+    if menu.is_dir {
+        let has_clipboard = ws_state.tree_clipboard.is_some();
+        let paste_msg = Message::Paste(menu.target.clone());
+        items.push(if has_clipboard {
+            menu_item(icons::IconKind::ClipboardPaste, "粘贴", paste_msg)
+        } else {
+            // 剪贴槽为空:置灰且不挂 on_press,真正不可点(同 P1L tab 箭头
+            // "到头变灰"的既有处理口径,不是视觉变灰但仍能点)。
+            button(
+                row![
+                    icons::view(
+                        icons::IconKind::ClipboardPaste,
+                        crate::theme::icon_size::row(),
+                        theme::color::DIM
+                    ),
+                    text("粘贴")
+                        .size(theme::font::body())
+                        .color(theme::color::DIM),
+                ]
+                .spacing(crate::theme::geometry::menu_gap())
+                .align_y(iced_widget::core::Alignment::Center),
+            )
+            .width(Length::Fixed(crate::theme::geometry::menu_item_width()))
+            .padding([
+                crate::theme::geometry::menu_pad_v(),
+                crate::theme::geometry::menu_pad_h(),
+            ])
+            .style(|_t, _s| button::Style {
+                background: Some(theme::color::CARD.into()),
+                text_color: theme::color::DIM,
+                ..button::Style::default()
+            })
+            .into()
+        });
+    }
+    items.push(menu_item(
+        icons::IconKind::Trash,
+        "删除",
+        Message::DeleteRequest(menu.target.clone(), menu.is_dir),
+    ));
+    items.push(menu_item(
+        icons::IconKind::Rename,
+        "重命名",
+        Message::RenameStart(menu.target.clone()),
+    ));
+    items.push(menu_item(
+        icons::IconKind::Copy,
+        "复制绝对路径",
+        Message::CopyPath(menu.target.clone(), crate::project::PathKind::Absolute),
+    ));
+    items.push(menu_item(
+        icons::IconKind::Copy,
+        "复制相对路径",
+        Message::CopyPath(menu.target.clone(), crate::project::PathKind::Relative),
+    ));
+    items.push(menu_item(
+        icons::IconKind::FolderOpen,
+        "在 Finder 中打开",
+        Message::RevealInFinder(menu.target.clone()),
+    ));
+    items.push(menu_item(
+        icons::IconKind::RefreshCw,
+        "从磁盘重新加载",
+        Message::ReloadFromDisk,
+    ));
+
+    let region = theme::region::context_menu();
+    let list = container(column(items).spacing(region.gap))
+        .padding(region.padding)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: region.background.map(Into::into),
+            border: region.border.unwrap_or_default(),
+            ..container::Style::default()
+        });
+
+    container(list)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(Padding {
+            top: menu.y,
+            left: menu.x,
+            right: 0.0,
+            bottom: 0.0,
+        })
+        .into()
+}
+
+/// 删除确认框:居中浮层,显示目标文件名 + 确认/取消两个按钮。
+pub fn delete_confirm_popup(
+    ws_state: &WorkspaceState,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let Some((path, is_dir)) = &ws_state.tree_delete_confirm else {
+        return column![].into();
+    };
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    let kind = if *is_dir { "文件夹" } else { "文件" };
+    let dialog = container(
+        column![
+            text(format!("删除{kind} \"{name}\"?"))
+                .size(theme::font::subtitle())
+                .color(theme::color::CREAM),
+            text("会移入系统回收站,可从回收站找回。")
+                .size(theme::font::label())
+                .color(theme::color::DIM),
+            row![
+                button(
+                    text("取消")
+                        .size(theme::font::body())
+                        .color(theme::color::CREAM)
+                )
+                .on_press(Message::DeleteCancel)
+                .padding([6, 12])
+                .style(|_t, _s| button::Style {
+                    background: Some(theme::color::CARD.into()),
+                    text_color: theme::color::CREAM,
+                    border: Border {
+                        color: theme::color::BORDER,
+                        width: 1.0,
+                        radius: 4.0.into()
+                    },
+                    ..button::Style::default()
+                }),
+                button(
+                    text("删除")
+                        .size(theme::font::body())
+                        .color(theme::color::RED)
+                )
+                .on_press(Message::DeleteConfirm)
+                .padding([6, 12])
+                .style(|_t, _s| button::Style {
+                    background: Some(theme::color::CARD.into()),
+                    text_color: theme::color::RED,
+                    border: Border {
+                        color: theme::color::RED,
+                        width: 1.0,
+                        radius: 4.0.into()
+                    },
+                    ..button::Style::default()
+                }),
+            ]
+            .spacing(8),
+        ]
+        .spacing(8),
+    )
+    .padding(16)
+    .style(|_t: &iced_widget::Theme| container::Style {
+        background: Some(theme::color::CARD.into()),
+        border: Border {
+            color: theme::color::BORDER,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..container::Style::default()
+    });
+
+    container(dialog)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .into()
+}
+
+/// 文件树色点颜色编码 git 状态(D2):修改=金,新增=绿,删除=红。
+fn tree_row_dot_color(kind: delivery::ChangeKind) -> iced_widget::core::Color {
+    match kind {
+        delivery::ChangeKind::Modified => theme::color::GOLD,
+        delivery::ChangeKind::New => theme::color::GREEN,
+        delivery::ChangeKind::Deleted => theme::color::RED,
+    }
+}
+
+/// 色点字形编码暂存态(D2):全部暂存(无未暂存改动)→ 实心 `●`;有任何未
+/// 暂存改动(不论是否同时有暂存部分)→ 空心 `○`。尾缀字符不重复编码 kind
+/// (颜色已经够用),避免过度设计。
+fn tree_row_dot_glyph(unstaged: bool) -> &'static str {
+    if unstaged { "○" } else { "●" }
 }
 
 #[cfg(test)]
@@ -598,11 +1162,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn paste_done_ok_clears_error_and_refreshes_parent() {
+    async fn paste_done_ok_refreshes_parent_without_touching_stale_error() {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("sub");
         std::fs::create_dir(&sub).unwrap();
         let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        // 现有 `ProjectTreePasteDone` 的 `Ok` 分支不清 `tree_error`(只有
+        // `ProjectTreeOpDone` 的 `Ok` 分支才清)——纯迁移原样保留这个不对称,
+        // 不是这次重构该修的行为。
         ws_state.tree_error = Some("stale".to_string());
         let new_file = sub.join("new.txt");
         std::fs::write(&new_file, "x").unwrap();
@@ -616,7 +1183,7 @@ mod tests {
             &handle,
             |_| {},
         );
-        assert!(ws_state.tree_error.is_none());
+        assert_eq!(ws_state.tree_error.as_deref(), Some("stale"));
     }
 
     #[tokio::test]
@@ -766,7 +1333,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn submit_edit_empty_name_silently_cancels_without_clearing_edit() {
+    async fn submit_edit_empty_name_cancels_and_closes_edit_box() {
         let dir = tempfile::tempdir().unwrap();
         let mut ws_state = ws_with_tree(dir.path().to_path_buf());
         let mut app_state = AppState::default();
@@ -784,7 +1351,10 @@ mod tests {
             &handle,
             |_| panic!("空名字不该发起任何异步操作"),
         );
-        assert!(ws_state.tree_edit.is_some());
+        // 现有 `submit_tree_edit` 先 `take()` 再判断空名字,空名字直接 `return`
+        // 时 `tree_edit` 已经被取走——提交空名字会关闭行内编辑框(等价于取消),
+        // 不是保留编辑框让用户继续输入。
+        assert!(ws_state.tree_edit.is_none());
     }
 
     #[tokio::test]

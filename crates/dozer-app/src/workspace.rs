@@ -6906,7 +6906,7 @@ fn maximize_overlay<'a>(
 /// 文件树目录/文件名行的字号：与终端字号(`terminal_font`)对齐（含全局 UI
 /// scale），配合下面的 `LineHeight::Relative(line_height_factor)` 让每行行高
 /// 等于终端行距，目录/文件列表不再比终端稀疏。
-fn tree_row_font_size() -> f32 {
+pub(crate) fn tree_row_font_size() -> f32 {
     terminal_font::size() * crate::theme::icon_size::scale()
 }
 
@@ -7260,10 +7260,10 @@ fn terminal_status_bar(
 /// 底栏上——底栏贴在 pane 最底部,若不收圆角和会戳出 pane 已收圆的底角,
 /// 在 zone 圆角 CARD 背景上顶出小尖角。保留底栏自己那条 1px 上边分隔线
 /// （颜色/宽度沿用 `status_bar` 区域配置,只改圆角）。
-fn status_bar_container<'a>(
-    inner: impl Into<Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>>,
+pub(crate) fn status_bar_container<'a, Msg: 'a>(
+    inner: impl Into<Element<'a, Msg, iced_widget::Theme, iced_widget::Renderer>>,
     outer: Border,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Msg, iced_widget::Theme, iced_widget::Renderer> {
     let region = theme::region::status_bar();
     let base = region.border.unwrap_or_default();
     container(inner)
@@ -8253,7 +8253,7 @@ fn tree_row_dot_glyph(unstaged: bool) -> &'static str {
 }
 
 /// 项目卡分支标签：`分支` / `分支*`（脏）/ `—`（非 git）。
-fn project_branch_label(branch: Option<&str>, dirty: bool) -> String {
+pub(crate) fn project_branch_label(branch: Option<&str>, dirty: bool) -> String {
     match branch {
         Some(b) if dirty => format!("{b}*"),
         Some(b) => b.to_string(),
@@ -8412,7 +8412,7 @@ fn agent_state_label(state: AgentState) -> &'static str {
 }
 
 /// 环境状态栏文案 + 点色：daemon 连通=绿"环境正常", 断=红"未连接"。
-fn env_status_text(daemon_ok: bool) -> (&'static str, Color) {
+pub(crate) fn env_status_text(daemon_ok: bool) -> (&'static str, Color) {
     if daemon_ok {
         ("环境正常 · dozerd 运行中", theme::color::GREEN)
     } else {
