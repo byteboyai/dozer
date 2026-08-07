@@ -53,6 +53,26 @@ pub struct ProjectInfo {
     pub last_active_ms: u64,
 }
 
+/// 收藏夹范围:全局(跨项目共享)或挂靠某个项目(`project_id` 必填)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BookmarkScope {
+    Global,
+    Project,
+}
+
+/// 一条收藏记录。`project_id`:`scope=Global` 时恒为 `None`,
+/// `scope=Project` 时是该项目在 `projects` 表里的 `id`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BookmarkInfo {
+    pub id: i64,
+    pub scope: BookmarkScope,
+    pub project_id: Option<i64>,
+    pub url: String,
+    pub title: String,
+    pub created_ms: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: String,
@@ -141,6 +161,21 @@ pub enum Request {
     GetAcceptanceCount {
         repo: String,
     },
+    /// 加入收藏(幂等:同 scope+project_id+url 已存在则 no-op)。
+    AddBookmark {
+        scope: BookmarkScope,
+        project_id: Option<i64>,
+        url: String,
+        title: String,
+    },
+    /// 移除收藏(按记录 id;不存在则 no-op)。
+    RemoveBookmark {
+        id: i64,
+    },
+    /// 列出"全局 + 指定项目"的收藏合集;`project_id: None` 时只返回全局。
+    ListBookmarks {
+        project_id: Option<i64>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -193,6 +228,10 @@ pub enum Reply {
     /// 验收次数。
     AcceptanceCount {
         count: u64,
+    },
+    /// 收藏夹列表。
+    Bookmarks {
+        bookmarks: Vec<BookmarkInfo>,
     },
 }
 
@@ -486,6 +525,54 @@ mod tests {
             r#"{"id":"a","name":"n","command":"/bin/sh","cwd":"/tmp","alive":true,"created_ms":1}"#;
         let info: SessionInfo = decode_line(old).unwrap();
         assert_eq!(info.agent, AgentKind::Unknown);
+    }
+
+    #[test]
+    fn bookmark_scope_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&BookmarkScope::Global).unwrap(),
+            "\"global\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BookmarkScope::Project).unwrap(),
+            "\"project\""
+        );
+    }
+
+    #[test]
+    fn bookmark_messages_roundtrip() {
+        let req = Request::AddBookmark {
+            scope: BookmarkScope::Project,
+            project_id: Some(7),
+            url: "https://example.com".into(),
+            title: "example".into(),
+        };
+        assert_eq!(decode_line::<Request>(&encode_line(&req)).unwrap(), req);
+
+        let req = Request::RemoveBookmark { id: 3 };
+        assert_eq!(decode_line::<Request>(&encode_line(&req)).unwrap(), req);
+
+        let req = Request::ListBookmarks {
+            project_id: Some(7),
+        };
+        assert_eq!(decode_line::<Request>(&encode_line(&req)).unwrap(), req);
+
+        let req = Request::ListBookmarks { project_id: None };
+        assert_eq!(decode_line::<Request>(&encode_line(&req)).unwrap(), req);
+
+        let reply = Reply::Bookmarks {
+            bookmarks: vec![BookmarkInfo {
+                id: 1,
+                scope: BookmarkScope::Global,
+                project_id: None,
+                url: "https://example.com".into(),
+                title: "example".into(),
+                created_ms: 5,
+            }],
+        };
+        let line = encode_line(&reply);
+        assert!(line.contains(r#""type":"bookmarks""#));
+        assert_eq!(decode_line::<Reply>(line.trim()).unwrap(), reply);
     }
 
     #[test]
