@@ -15,6 +15,7 @@ pub async fn serve(
     registry: Arc<SessionRegistry>,
     store: Arc<crate::acceptance::AcceptanceStore>,
     projects: Arc<crate::projects::ProjectStore>,
+    bookmarks: Arc<crate::bookmarks::BookmarkStore>,
 ) -> Result<()> {
     if socket.exists() {
         std::fs::remove_file(socket)?;
@@ -35,8 +36,9 @@ pub async fn serve(
         let registry = registry.clone();
         let store = store.clone();
         let projects = projects.clone();
+        let bookmarks = bookmarks.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_conn(stream, registry, store, projects).await {
+            if let Err(e) = handle_conn(stream, registry, store, projects, bookmarks).await {
                 tracing::debug!(error = %e, "连接结束");
             }
         });
@@ -60,6 +62,7 @@ async fn handle_conn(
     registry: Arc<SessionRegistry>,
     store: Arc<crate::acceptance::AcceptanceStore>,
     projects: Arc<crate::projects::ProjectStore>,
+    bookmarks: Arc<crate::bookmarks::BookmarkStore>,
 ) -> Result<()> {
     let (r, mut w) = stream.into_split();
     let mut lines = BufReader::new(r).lines();
@@ -184,6 +187,31 @@ async fn handle_conn(
                             Ok(count) => Reply::AcceptanceCount { count },
                             Err(e) => Reply::Error { message: format!("验收计数失败: {e}") },
                         },
+                        Request::AddBookmark {
+                            scope,
+                            project_id,
+                            url,
+                            title,
+                        } => match bookmarks.add(scope, project_id, &url, &title) {
+                            Ok(_) => Reply::Ok,
+                            Err(e) => Reply::Error {
+                                message: format!("加入收藏失败: {e}"),
+                            },
+                        },
+                        Request::RemoveBookmark { id } => match bookmarks.remove(id) {
+                            Ok(()) => Reply::Ok,
+                            Err(e) => Reply::Error {
+                                message: format!("移除收藏失败: {e}"),
+                            },
+                        },
+                        Request::ListBookmarks { project_id } => {
+                            match bookmarks.list(project_id) {
+                                Ok(bookmarks) => Reply::Bookmarks { bookmarks },
+                                Err(e) => Reply::Error {
+                                    message: format!("列收藏失败: {e}"),
+                                },
+                            }
+                        }
                     },
                 };
                 w.write_all(encode_line(&reply).as_bytes()).await?;
