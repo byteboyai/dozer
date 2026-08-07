@@ -1166,7 +1166,7 @@ git commit -m "refactor(dozer-app): route Todo messages through extensions::todo
 
 **Files:** 无新增/修改(纯校验任务)
 
-- [ ] **Step 1: 全 workspace 构建 + 测试 + clippy + fmt**
+- [x] **Step 1: 全 workspace 构建 + 测试 + clippy + fmt**
 
 Run: `cargo build && cargo test && cargo clippy --all-targets && cargo fmt --check`
 Expected: 全部 crate 编译通过、测试全绿、无警告、无格式差异。
