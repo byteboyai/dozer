@@ -12,9 +12,7 @@ use crate::workspace::Message;
 use crate::workspace_font;
 use dozer_core::protocol::AgentKind;
 use iced_widget::canvas::{self, Canvas};
-use iced_widget::core::{
-    Border, Color, Element, Length, Radians, Rectangle,
-};
+use iced_widget::core::{Border, Color, Element, Length, Radians, Rectangle};
 use iced_widget::{button, column, container, text};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -242,12 +240,15 @@ pub struct DayAgentTotals {
     pub opencode: u64,
 }
 
-pub fn daily_totals_by_agent(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<DayAgentTotals> {
+pub fn daily_totals_by_agent(
+    rows: &[(ConversationMeta, ConversationUsage)],
+) -> Vec<DayAgentTotals> {
     use std::collections::BTreeMap;
     let mut by_day: BTreeMap<i64, (u64, u64, u64)> = BTreeMap::new();
     for (meta, usage) in rows {
         let day = day_index_from_ms(meta.modified_ms);
-        let total = usage.tokens_in + usage.tokens_out + usage.tokens_cache_read + usage.tokens_cache_write;
+        let total =
+            usage.tokens_in + usage.tokens_out + usage.tokens_cache_read + usage.tokens_cache_write;
         let entry = by_day.entry(day).or_insert((0, 0, 0));
         match meta.agent {
             AgentKind::Claude => entry.0 += total,
@@ -284,7 +285,9 @@ pub fn agent_token_share(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<
             let total: u64 = rows
                 .iter()
                 .filter(|(meta, _)| meta.agent == kind)
-                .map(|(_, u)| u.tokens_in + u.tokens_out + u.tokens_cache_read + u.tokens_cache_write)
+                .map(|(_, u)| {
+                    u.tokens_in + u.tokens_out + u.tokens_cache_read + u.tokens_cache_write
+                })
                 .sum();
             (total > 0).then_some((kind, total))
         })
@@ -292,7 +295,9 @@ pub fn agent_token_share(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<
 }
 
 /// 头部：标题 + 项目名 + 右侧手动刷新按钮（spec"面板渲染"#1）。
-fn panel_header(project_name: &str) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn panel_header(
+    project_name: &str,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     iced_widget::row![
         column![
             text("用量统计")
@@ -304,9 +309,13 @@ fn panel_header(project_name: &str) -> Element<'_, Message, iced_widget::Theme, 
         ]
         .spacing(2),
         iced_widget::Space::new().width(Length::Fill),
-        button(icons::view::<Message>(icons::IconKind::RefreshCw, 14.0, theme::DIM))
-            .on_press(Message::UsageRefresh)
-            .style(|_t, _s| button::Style::default()),
+        button(icons::view::<Message>(
+            icons::IconKind::RefreshCw,
+            14.0,
+            theme::DIM
+        ))
+        .on_press(Message::UsageRefresh)
+        .style(|_t, _s| button::Style::default()),
     ]
     .align_y(iced_widget::core::Alignment::Center)
     .into()
@@ -346,13 +355,7 @@ pub fn view<'a>(
         }
         let share = agent_token_share(rows);
         if !share.is_empty() {
-            content = content.push(
-                column![
-                    chart_legend(&share),
-                    pie_chart(&share),
-                ]
-                .spacing(10),
-            );
+            content = content.push(column![chart_legend(&share), pie_chart(&share),].spacing(10));
         }
         content = content.push(grouped_list(rows));
     }
@@ -360,19 +363,32 @@ pub fn view<'a>(
     container(content)
         .width(width)
         .height(Length::Fill)
-        .style(move |_t: &iced_widget::Theme| iced_widget::container::Style {
-            background: Some(theme::PANEL.into()),
-            border: outer,
-            ..iced_widget::container::Style::default()
-        })
+        .style(
+            move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                background: Some(theme::PANEL.into()),
+                border: outer,
+                ..iced_widget::container::Style::default()
+            },
+        )
         .into()
 }
 
-fn summary_card(totals: &ProjectUsageTotals) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
-    fn stat(label: &'static str, value: String, color: Color) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn summary_card(
+    totals: &ProjectUsageTotals,
+) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+    fn stat(
+        label: &'static str,
+        value: String,
+        color: Color,
+    ) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
         column![
-            text(label).size(workspace_font::caption()).color(theme::DIM),
-            text(value).size(15.0).color(color).font(iced_widget::core::Font::MONOSPACE),
+            text(label)
+                .size(workspace_font::caption())
+                .color(theme::DIM),
+            text(value)
+                .size(15.0)
+                .color(color)
+                .font(iced_widget::core::Font::MONOSPACE),
         ]
         .spacing(2)
         .into()
@@ -388,8 +404,16 @@ fn summary_card(totals: &ProjectUsageTotals) -> Element<'static, Message, iced_w
         stat("触达文件", totals.files_touched.to_string(), theme::CREAM),
         stat("input", totals.tokens_in.to_string(), theme::CYAN),
         stat("output", totals.tokens_out.to_string(), theme::CYAN),
-        stat("cache 读", totals.tokens_cache_read.to_string(), theme::CYAN),
-        stat("cache 写", totals.tokens_cache_write.to_string(), theme::CYAN),
+        stat(
+            "cache 读",
+            totals.tokens_cache_read.to_string(),
+            theme::CYAN
+        ),
+        stat(
+            "cache 写",
+            totals.tokens_cache_write.to_string(),
+            theme::CYAN
+        ),
     ]
     .spacing(24);
 
@@ -493,7 +517,11 @@ fn grouped_list<'a>(
 const BAR_MAX_HEIGHT: f32 = 72.0;
 const BAR_WIDTH: f32 = 20.0;
 
-fn bar_segment(height: f32, color: Color, round_top: bool) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn bar_segment(
+    height: f32,
+    color: Color,
+    round_top: bool,
+) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
     let radius = if round_top {
         iced_widget::core::border::Radius {
             top_left: 4.0,
@@ -506,18 +534,22 @@ fn bar_segment(height: f32, color: Color, round_top: bool) -> Element<'static, M
     container(iced_widget::Space::new())
         .width(Length::Fixed(BAR_WIDTH))
         .height(Length::Fixed(height.max(1.0)))
-        .style(move |_t: &iced_widget::Theme| iced_widget::container::Style {
-            background: Some(color.into()),
-            border: Border {
-                radius,
-                ..Border::default()
+        .style(
+            move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                background: Some(color.into()),
+                border: Border {
+                    radius,
+                    ..Border::default()
+                },
+                ..iced_widget::container::Style::default()
             },
-            ..iced_widget::container::Style::default()
-        })
+        )
         .into()
 }
 
-fn bar_chart(days: &[DayAgentTotals]) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn bar_chart(
+    days: &[DayAgentTotals],
+) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
     let max_total = days
         .iter()
         .map(|d| d.claude + d.codebuddy + d.opencode)
@@ -623,7 +655,9 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Pie
     }
 }
 
-fn pie_chart(share: &[(AgentKind, u64)]) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn pie_chart(
+    share: &[(AgentKind, u64)],
+) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
     Canvas::new(PieChart {
         share: share.to_vec(),
     })
@@ -632,11 +666,16 @@ fn pie_chart(share: &[(AgentKind, u64)]) -> Element<'static, Message, iced_widge
     .into()
 }
 
-fn chart_legend(share: &[(AgentKind, u64)]) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn chart_legend(
+    share: &[(AgentKind, u64)],
+) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
     let total: u64 = share.iter().map(|(_, v)| v).sum();
     let mut row = iced_widget::row![].spacing(18);
     for (agent, value) in share {
-        let pct = if total == 0 { 0 } else { value * 100 / total };
+        let pct = value
+            .checked_mul(100)
+            .and_then(|n| n.checked_div(total))
+            .unwrap_or(0);
         let dot = container(iced_widget::Space::new())
             .width(Length::Fixed(8.0))
             .height(Length::Fixed(8.0))
@@ -654,10 +693,15 @@ fn chart_legend(share: &[(AgentKind, u64)]) -> Element<'static, Message, iced_wi
         row = row.push(
             iced_widget::row![
                 dot,
-                text(format!("{} {}% · {}", agent.label(), pct, format_token_short(*value)))
-                    .size(workspace_font::caption_sm())
-                    .color(theme::DIM)
-                    .font(iced_widget::core::Font::MONOSPACE),
+                text(format!(
+                    "{} {}% · {}",
+                    agent.label(),
+                    pct,
+                    format_token_short(*value)
+                ))
+                .size(workspace_font::caption_sm())
+                .color(theme::DIM)
+                .font(iced_widget::core::Font::MONOSPACE),
             ]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center),
@@ -714,7 +758,10 @@ mod tests {
 
     #[test]
     fn parse_usage_empty_file_is_all_zero() {
-        assert_eq!(parse_usage(AgentKind::Claude, ""), ConversationUsage::default());
+        assert_eq!(
+            parse_usage(AgentKind::Claude, ""),
+            ConversationUsage::default()
+        );
     }
 
     #[test]
@@ -725,8 +772,7 @@ mod tests {
 
     #[test]
     fn parse_codebuddy_shaped_reads_provider_usage_and_zero_tool_calls() {
-        let jsonl =
-            include_str!("../../dozer-hook/fixtures/codebuddy-transcript-sample.jsonl");
+        let jsonl = include_str!("../../dozer-hook/fixtures/codebuddy-transcript-sample.jsonl");
         let u = parse_usage(AgentKind::Codebuddy, jsonl);
         assert_eq!(u.tokens_in, 22563);
         assert_eq!(u.tokens_out, 3);
@@ -750,7 +796,10 @@ mod tests {
 
     #[test]
     fn aggregate_sums_fields_and_dedups_files_across_conversations() {
-        let rows = [sample_usage(&["/a.rs", "/b.rs"]), sample_usage(&["/a.rs", "/c.rs"])];
+        let rows = [
+            sample_usage(&["/a.rs", "/b.rs"]),
+            sample_usage(&["/a.rs", "/c.rs"]),
+        ];
         let totals = aggregate(&rows);
         assert_eq!(totals.conversation_count, 2);
         assert_eq!(totals.turns, 4);
@@ -781,12 +830,19 @@ mod tests {
     #[test]
     fn group_usage_by_agent_orders_claude_codebuddy_opencode_and_skips_empty_groups() {
         let rows = vec![
-            (meta(AgentKind::Codebuddy, "b"), ConversationUsage::default()),
+            (
+                meta(AgentKind::Codebuddy, "b"),
+                ConversationUsage::default(),
+            ),
             (meta(AgentKind::Claude, "a"), ConversationUsage::default()),
         ];
         let groups = group_usage_by_agent(&rows);
         assert_eq!(groups.len(), 2, "没有 OpenCode 数据,不留空分组");
-        assert_eq!(groups[0].0, AgentKind::Claude, "固定顺序:Claude 先于 CodeBuddy");
+        assert_eq!(
+            groups[0].0,
+            AgentKind::Claude,
+            "固定顺序:Claude 先于 CodeBuddy"
+        );
         assert_eq!(groups[0].1, vec![1]);
         assert_eq!(groups[1].0, AgentKind::Codebuddy);
         assert_eq!(groups[1].1, vec![0]);
@@ -824,9 +880,18 @@ mod tests {
         let day0_ms = 20_672u64 * 86_400_000;
         let rows = vec![
             (meta_at(AgentKind::Claude, day0_ms), usage_with_tokens(10)),
-            (meta_at(AgentKind::Claude, day0_ms + 3_600_000), usage_with_tokens(5)),
-            (meta_at(AgentKind::Codebuddy, day0_ms + 1000), usage_with_tokens(2)),
-            (meta_at(AgentKind::Opencode, day0_ms + 86_400_000), usage_with_tokens(7)), // 次日
+            (
+                meta_at(AgentKind::Claude, day0_ms + 3_600_000),
+                usage_with_tokens(5),
+            ),
+            (
+                meta_at(AgentKind::Codebuddy, day0_ms + 1000),
+                usage_with_tokens(2),
+            ),
+            (
+                meta_at(AgentKind::Opencode, day0_ms + 86_400_000),
+                usage_with_tokens(7),
+            ), // 次日
         ];
         let days = daily_totals_by_agent(&rows);
         assert_eq!(days.len(), 2, "只返回实际有数据的两天,不补空天占位");
@@ -851,7 +916,11 @@ mod tests {
             .collect();
         let days = daily_totals_by_agent(&rows);
         assert_eq!(days.len(), 7, "超过 7 天的历史只保留最近 7 天");
-        assert_eq!(days.last().unwrap().day_index, 20_677, "最后一天是最新的那天");
+        assert_eq!(
+            days.last().unwrap().day_index,
+            20_677,
+            "最后一天是最新的那天"
+        );
         assert_eq!(days.first().unwrap().day_index, 20_671);
     }
 
@@ -863,6 +932,9 @@ mod tests {
             (meta(AgentKind::Codebuddy, "c"), usage_with_tokens(3)),
         ];
         let share = agent_token_share(&rows);
-        assert_eq!(share, vec![(AgentKind::Claude, 15), (AgentKind::Codebuddy, 3)]);
+        assert_eq!(
+            share,
+            vec![(AgentKind::Claude, 15), (AgentKind::Codebuddy, 3)]
+        );
     }
 }
