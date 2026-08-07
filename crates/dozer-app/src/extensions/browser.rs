@@ -9,6 +9,8 @@
 //! 用不到的逻辑),两者各自维护、互不知情。
 
 use crate::preview::WebviewSpec;
+use dozer_client::Client;
+use dozer_core::protocol::{BookmarkInfo, BookmarkScope};
 
 /// 一个浏览器 tab。
 #[derive(Debug, Clone, PartialEq)]
@@ -253,4 +255,612 @@ mod tests {
         assert_eq!(specs[1].url, "http://b.com");
         assert!(specs[1].visible);
     }
+
+    fn client_for_test() -> Client {
+        Client::new(std::path::PathBuf::from("/tmp/dozer-browser-test-nonexistent.sock"))
+    }
+
+    fn bm(id: i64, scope: BookmarkScope, project_id: Option<i64>, url: &str) -> BookmarkInfo {
+        BookmarkInfo {
+            id,
+            scope,
+            project_id,
+            url: url.into(),
+            title: url.into(),
+            created_ms: 0,
+        }
+    }
+
+    #[test]
+    fn bookmark_status_detects_global_and_project_independently() {
+        let list = vec![
+            bm(1, BookmarkScope::Global, None, "https://a.com"),
+            bm(2, BookmarkScope::Project, Some(7), "https://a.com"),
+        ];
+        let status = bookmark_status(&list, "https://a.com", Some(7));
+        assert_eq!(status.global, Some(1));
+        assert_eq!(status.project, Some(2));
+        assert!(status.is_bookmarked());
+    }
+
+    #[test]
+    fn bookmark_status_project_none_when_no_project_open() {
+        let list = vec![bm(1, BookmarkScope::Global, None, "https://a.com")];
+        let status = bookmark_status(&list, "https://a.com", None);
+        assert_eq!(status.global, Some(1));
+        assert_eq!(status.project, None);
+    }
+
+    #[test]
+    fn bookmark_status_project_scoped_to_current_project_only() {
+        let list = vec![bm(1, BookmarkScope::Project, Some(7), "https://a.com")];
+        let status = bookmark_status(&list, "https://a.com", Some(8));
+        assert_eq!(status.project, None, "不该看到别的项目的收藏");
+    }
+
+    #[test]
+    fn is_bookmarked_false_when_neither_side_has_it() {
+        let list: Vec<BookmarkInfo> = vec![];
+        assert!(!bookmark_status(&list, "https://a.com", Some(1)).is_bookmarked());
+    }
+
+    #[test]
+    fn optimistic_add_appends_new_entry() {
+        let mut list = vec![];
+        optimistic_add(
+            &mut list,
+            BookmarkScope::Global,
+            None,
+            "https://a.com",
+            "A",
+            100,
+        );
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, OPTIMISTIC_BOOKMARK_ID);
+        assert_eq!(list[0].title, "A");
+    }
+
+    #[test]
+    fn optimistic_add_is_idempotent_for_same_scope_and_url() {
+        let mut list = vec![];
+        optimistic_add(
+            &mut list,
+            BookmarkScope::Global,
+            None,
+            "https://a.com",
+            "A",
+            100,
+        );
+        optimistic_add(
+            &mut list,
+            BookmarkScope::Global,
+            None,
+            "https://a.com",
+            "改名",
+            200,
+        );
+        assert_eq!(list.len(), 1, "已存在则不重复插入");
+        assert_eq!(list[0].title, "A");
+    }
+
+    #[test]
+    fn optimistic_add_allows_same_url_in_different_scope() {
+        let mut list = vec![];
+        optimistic_add(
+            &mut list,
+            BookmarkScope::Global,
+            None,
+            "https://a.com",
+            "A",
+            100,
+        );
+        optimistic_add(
+            &mut list,
+            BookmarkScope::Project,
+            Some(1),
+            "https://a.com",
+            "A",
+            100,
+        );
+        assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn optimistic_remove_filters_by_id() {
+        let mut list = vec![
+            bm(1, BookmarkScope::Global, None, "https://a.com"),
+            bm(2, BookmarkScope::Global, None, "https://b.com"),
+        ];
+        optimistic_remove(&mut list, 1);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, 2);
+    }
+
+    #[test]
+    fn optimistic_remove_unknown_id_is_noop() {
+        let mut list = vec![bm(1, BookmarkScope::Global, None, "https://a.com")];
+        optimistic_remove(&mut list, 999);
+        assert_eq!(list.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn update_open_url_clears_error_and_resets_tab_first() {
+        let mut state = State {
+            error: Some("旧错误".to_string()),
+            tab_first: 3,
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        let client = client_for_test();
+        update(
+            &mut state,
+            Message::OpenUrl("http://a.com".into()),
+            Some(1),
+            &client,
+            &handle,
+            |_| {},
+        );
+        assert!(state.error.is_none());
+        assert_eq!(state.tab_first, 0);
+        assert_eq!(state.tabs.tabs().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn update_addr_event_submit_ok_recurses_into_open_url() {
+        let mut state = State::default();
+        let handle = tokio::runtime::Handle::current();
+        let client = client_for_test();
+        update(&mut state, Message::AddrClick, Some(1), &client, &handle, |_| {});
+        update(
+            &mut state,
+            Message::AddrEvent(crate::workspace::AddrEvent::Text("http://a.com".into())),
+            Some(1),
+            &client,
+            &handle,
+            |_| {},
+        );
+        update(
+            &mut state,
+            Message::AddrEvent(crate::workspace::AddrEvent::Submit),
+            Some(1),
+            &client,
+            &handle,
+            |_| {},
+        );
+        assert_eq!(state.tabs.tabs().len(), 1, "提交应递归触发 OpenUrl 开一个 tab");
+        assert_eq!(state.tabs.tabs()[0].url, "http://a.com");
+    }
+
+    #[tokio::test]
+    async fn update_addr_event_submit_local_path_sets_error_without_opening_tab() {
+        let mut state = State::default();
+        let handle = tokio::runtime::Handle::current();
+        let client = client_for_test();
+        update(&mut state, Message::AddrClick, Some(1), &client, &handle, |_| {});
+        update(
+            &mut state,
+            Message::AddrEvent(crate::workspace::AddrEvent::Text("/tmp/x".into())),
+            Some(1),
+            &client,
+            &handle,
+            |_| {},
+        );
+        update(
+            &mut state,
+            Message::AddrEvent(crate::workspace::AddrEvent::Submit),
+            Some(1),
+            &client,
+            &handle,
+            |_| {},
+        );
+        assert_eq!(state.error.as_deref(), Some("浏览器不支持打开本地文件"));
+        assert!(state.tabs.tabs().is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_tab_scroll_saturates_at_zero() {
+        let mut state = State::default();
+        let handle = tokio::runtime::Handle::current();
+        let client = client_for_test();
+        update(&mut state, Message::TabScroll(false), Some(1), &client, &handle, |_| {});
+        assert_eq!(state.tab_first, 0, "不该下溢");
+        update(&mut state, Message::TabScroll(true), Some(1), &client, &handle, |_| {});
+        assert_eq!(state.tab_first, 2);
+    }
+
+    #[tokio::test]
+    async fn update_star_click_toggles_menu_and_clears_error() {
+        let mut state = State {
+            error: Some("旧错误".to_string()),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        let client = client_for_test();
+        update(&mut state, Message::StarClick, Some(1), &client, &handle, |_| {});
+        assert!(state.star_menu_open);
+        assert!(state.error.is_none());
+        update(&mut state, Message::StarClick, Some(1), &client, &handle, |_| {});
+        assert!(!state.star_menu_open);
+    }
+
+    #[tokio::test]
+    async fn update_bookmarks_toggle_flips_panel() {
+        let mut state = State::default();
+        let handle = tokio::runtime::Handle::current();
+        let client = client_for_test();
+        update(&mut state, Message::BookmarksToggle, Some(1), &client, &handle, |_| {});
+        assert!(state.bookmarks_open);
+    }
+
+    #[tokio::test]
+    async fn update_bookmark_add_without_active_tab_is_noop() {
+        let mut state = State::default();
+        let handle = tokio::runtime::Handle::current();
+        let client = client_for_test();
+        update(
+            &mut state,
+            Message::BookmarkAdd(BookmarkScope::Global),
+            Some(1),
+            &client,
+            &handle,
+            |_| panic!("无 tab 时不该 emit"),
+        );
+        assert!(state.bookmarks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_bookmark_add_global_optimistically_inserts() {
+        let mut state = State::default();
+        state.tabs.open_url("http://a.com".into());
+        let handle = tokio::runtime::Handle::current();
+        let client = client_for_test();
+        update(
+            &mut state,
+            Message::BookmarkAdd(BookmarkScope::Global),
+            Some(1),
+            &client,
+            &handle,
+            |_| {},
+        );
+        assert_eq!(state.bookmarks.len(), 1);
+        assert_eq!(state.bookmarks[0].scope, BookmarkScope::Global);
+        assert_eq!(state.bookmarks[0].project_id, None);
+        assert!(!state.star_menu_open);
+    }
+
+    #[tokio::test]
+    async fn update_bookmark_add_project_scope_without_project_id_is_local_only() {
+        let mut state = State::default();
+        state.tabs.open_url("http://a.com".into());
+        let handle = tokio::runtime::Handle::current();
+        let client = client_for_test();
+        update(
+            &mut state,
+            Message::BookmarkAdd(BookmarkScope::Project),
+            None,
+            &client,
+            &handle,
+            |_| panic!("project_id 为 None 时不该 emit 网络请求"),
+        );
+        assert_eq!(state.bookmarks.len(), 1, "本地乐观更新仍然发生");
+    }
+
+    #[tokio::test]
+    async fn update_bookmark_remove_filters_local_cache() {
+        let mut state = State {
+            bookmarks: vec![bm(1, BookmarkScope::Global, None, "https://a.com")],
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        let client = client_for_test();
+        update(
+            &mut state,
+            Message::BookmarkRemove(1),
+            Some(1),
+            &client,
+            &handle,
+            |_| {},
+        );
+        assert!(state.bookmarks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_bookmarks_loaded_replaces_local_cache() {
+        let mut state = State {
+            bookmarks: vec![bm(1, BookmarkScope::Global, None, "https://stale.com")],
+            ..State::default()
+        };
+        let fresh = vec![bm(2, BookmarkScope::Global, None, "https://fresh.com")];
+        let handle = tokio::runtime::Handle::current();
+        let client = client_for_test();
+        update(
+            &mut state,
+            Message::BookmarksLoaded(1, fresh.clone()),
+            Some(1),
+            &client,
+            &handle,
+            |_| {},
+        );
+        assert_eq!(state.bookmarks, fresh);
+    }
+
+    #[tokio::test]
+    async fn update_bookmarks_mutated_error_sets_state_error() {
+        let mut state = State::default();
+        let handle = tokio::runtime::Handle::current();
+        let client = client_for_test();
+        update(
+            &mut state,
+            Message::BookmarksMutated(1, Err("boom".to_string())),
+            Some(1),
+            &client,
+            &handle,
+            |_| {},
+        );
+        assert_eq!(state.error.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn state_accessors_delegate_to_tabs() {
+        let mut state = State::default();
+        assert!(!state.addr_editing());
+        assert_eq!(state.active_webview_id(), None);
+        assert!(state.desired_webviews().is_empty());
+        state.tabs.open_url("http://a.com".into());
+        state.tabs.addr_begin();
+        assert!(state.addr_editing());
+        state.addr_cancel();
+        assert!(!state.addr_editing());
+        assert_eq!(state.active_webview_id(), Some(0));
+        assert_eq!(state.desired_webviews().len(), 1);
+    }
+}
+
+/// 乐观本地插入的占位 id:落库前不知道真实自增 id,只在"点击→下一次
+/// 全量刷新落地"这一帧内部当哨兵用,不参与任何持久化或跨帧比较。
+const OPTIMISTIC_BOOKMARK_ID: i64 = -1;
+
+/// 当前 URL 在全局/本项目两边各自的收藏状态(`Some(id)` = 已收藏,
+/// `id` 是"移出收藏"要传的记录 id)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BookmarkStatus {
+    global: Option<i64>,
+    project: Option<i64>,
+}
+
+impl BookmarkStatus {
+    fn is_bookmarked(&self) -> bool {
+        self.global.is_some() || self.project.is_some()
+    }
+}
+
+fn bookmark_status(
+    bookmarks: &[BookmarkInfo],
+    url: &str,
+    project_id: Option<i64>,
+) -> BookmarkStatus {
+    let global = bookmarks
+        .iter()
+        .find(|b| b.scope == BookmarkScope::Global && b.url == url)
+        .map(|b| b.id);
+    let project = project_id.and_then(|pid| {
+        bookmarks
+            .iter()
+            .find(|b| b.scope == BookmarkScope::Project && b.project_id == Some(pid) && b.url == url)
+            .map(|b| b.id)
+    });
+    BookmarkStatus { global, project }
+}
+
+/// 已存在(同 scope+project_id+url)则 no-op,幂等,与 dozerd 侧
+/// `INSERT OR IGNORE` 语义一致。
+fn optimistic_add(
+    bookmarks: &mut Vec<BookmarkInfo>,
+    scope: BookmarkScope,
+    project_id: Option<i64>,
+    url: &str,
+    title: &str,
+    created_ms: u64,
+) {
+    let exists = bookmarks
+        .iter()
+        .any(|b| b.scope == scope && b.project_id == project_id && b.url == url);
+    if exists {
+        return;
+    }
+    bookmarks.push(BookmarkInfo {
+        id: OPTIMISTIC_BOOKMARK_ID,
+        scope,
+        project_id,
+        url: url.to_string(),
+        title: title.to_string(),
+        created_ms,
+    });
+}
+
+/// 按 id 过滤;未知 id 是 no-op,同 dozerd 侧 `remove` 语义。
+fn optimistic_remove(bookmarks: &mut Vec<BookmarkInfo>, id: i64) {
+    bookmarks.retain(|b| b.id != id);
+}
+
+/// 浏览器面板自己的消息类型——内核(`workspace.rs`)只认一个包装变体
+/// `Message::Browser(extensions::browser::Message)`,这个模块本身不
+/// import 顶层 `Message`。`AddrEvent` 是地址栏/验收意见框/项目树行内
+/// 编辑三处共用的通用文本输入事件类型,定义在 `crate::workspace`,这里
+/// 直接引用,不复制。
+#[derive(Debug, Clone)]
+pub enum Message {
+    OpenUrl(String),
+    SelectTab(usize),
+    CloseTab(usize),
+    AddrClick,
+    AddrEvent(crate::workspace::AddrEvent),
+    TabScroll(bool),
+    StarClick,
+    BookmarkAdd(BookmarkScope),
+    BookmarkRemove(i64),
+    BookmarksToggle,
+    BookmarksLoaded(i64, Vec<BookmarkInfo>),
+    BookmarksMutated(i64, Result<(), String>),
+}
+
+/// 浏览器面板的全部状态。挂在每个 `Workspace` 上(不像 Git Log 挂在
+/// `App` 上)——项目切换靠 `Workspace` 自身生命周期天然隔离,不需要
+/// 手动同步/清空逻辑。
+#[derive(Default)]
+pub struct State {
+    tabs: Tabs,
+    error: Option<String>,
+    tab_first: usize,
+    bookmarks: Vec<BookmarkInfo>,
+    bookmarks_open: bool,
+    star_menu_open: bool,
+}
+
+impl State {
+    /// 地址栏是否在编辑态(内核 `App::browser_addr_editing` 键盘路由用)。
+    pub fn addr_editing(&self) -> bool {
+        self.tabs.addr_editing()
+    }
+
+    /// 取消地址栏编辑(内核 `App::blur_inputs` 用)。
+    pub fn addr_cancel(&mut self) {
+        self.tabs.addr_cancel();
+    }
+
+    /// 当前激活 tab 的 webview id(内核 `App::active_browser_webview_id`
+    /// 焦点路由用)。
+    pub fn active_webview_id(&self) -> Option<usize> {
+        self.tabs.active_webview_id()
+    }
+
+    /// webview 期望清单(内核 `App::browser_desired` 用,供 main.rs 同步
+    /// webview 池)。
+    pub fn desired_webviews(&self) -> Vec<WebviewSpec> {
+        self.tabs.desired_webviews()
+    }
+}
+
+/// 处理浏览器面板的全部消息。`project_id` 由内核每次调用时从
+/// `ws.project.as_ref().map(|p| p.id)` 现取传入(`State` 本身不存这个,
+/// 避免状态冗余/漂移)。`client` 用于收藏夹的 dozerd RPC 往返——这是跟
+/// Git Log 试点 `update` 签名的主要差异(Git Log 只有本地 `git2` 阻塞
+/// 调用,不需要网络)。
+pub fn update(
+    state: &mut State,
+    msg: Message,
+    project_id: Option<i64>,
+    client: &Client,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    match msg {
+        Message::OpenUrl(url) => {
+            state.error = None;
+            state.tabs.open_url(url);
+            state.tab_first = 0;
+        }
+        Message::SelectTab(idx) => state.tabs.select(idx),
+        Message::CloseTab(idx) => {
+            state.tabs.close(idx);
+            state.tab_first = 0;
+        }
+        Message::AddrClick => {
+            state.error = None;
+            state.tabs.addr_begin();
+        }
+        Message::AddrEvent(ev) => match ev {
+            crate::workspace::AddrEvent::Text(s) => state.tabs.addr_text(&s),
+            crate::workspace::AddrEvent::Backspace => state.tabs.addr_backspace(),
+            crate::workspace::AddrEvent::Cancel => state.tabs.addr_cancel(),
+            crate::workspace::AddrEvent::Submit => match state.tabs.addr_submit() {
+                Ok(Some(url)) => {
+                    update(state, Message::OpenUrl(url), project_id, client, handle, emit)
+                }
+                Ok(None) => {}
+                Err(message) => state.error = Some(message),
+            },
+        },
+        Message::TabScroll(right) => {
+            if right {
+                state.tab_first = state.tab_first.saturating_add(2);
+            } else {
+                state.tab_first = state.tab_first.saturating_sub(2);
+            }
+        }
+        Message::StarClick => {
+            state.error = None;
+            state.star_menu_open = !state.star_menu_open;
+        }
+        Message::BookmarksToggle => state.bookmarks_open = !state.bookmarks_open,
+        Message::BookmarkAdd(scope) => {
+            state.star_menu_open = false;
+            let Some(tab) = state.tabs.tabs().get(state.tabs.active_idx()) else {
+                return;
+            };
+            let url = tab.url.clone();
+            let title = tab.title.clone();
+            let target_project_id = match scope {
+                BookmarkScope::Global => None,
+                BookmarkScope::Project => project_id,
+            };
+            let created_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            optimistic_add(
+                &mut state.bookmarks,
+                scope,
+                target_project_id,
+                &url,
+                &title,
+                created_ms,
+            );
+            let Some(project_id) = project_id else { return };
+            let client = client.clone();
+            handle.spawn(async move {
+                let res = client
+                    .add_bookmark(scope, target_project_id, &url, &title)
+                    .await
+                    .map_err(|e| e.to_string());
+                emit(Message::BookmarksMutated(project_id, res));
+            });
+        }
+        Message::BookmarkRemove(id) => {
+            state.star_menu_open = false;
+            optimistic_remove(&mut state.bookmarks, id);
+            let Some(project_id) = project_id else { return };
+            let client = client.clone();
+            handle.spawn(async move {
+                let res = client.remove_bookmark(id).await.map_err(|e| e.to_string());
+                emit(Message::BookmarksMutated(project_id, res));
+            });
+        }
+        Message::BookmarksLoaded(_, bookmarks) => state.bookmarks = bookmarks,
+        Message::BookmarksMutated(_, res) => {
+            if let Err(message) = res {
+                state.error = Some(message);
+            }
+            request_bookmarks_refresh(project_id, client, handle, emit);
+        }
+    }
+}
+
+/// 现有 `Workspace::spawn_bookmarks_refresh` 的搬家版本:异步拉取
+/// "全局 + 当前项目"收藏夹合集。
+pub fn request_bookmarks_refresh(
+    project_id: Option<i64>,
+    client: &Client,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    let Some(project_id) = project_id else { return };
+    let client = client.clone();
+    handle.spawn(async move {
+        let bookmarks = client
+            .list_bookmarks(Some(project_id))
+            .await
+            .unwrap_or_default();
+        emit(Message::BookmarksLoaded(project_id, bookmarks));
+    });
 }
