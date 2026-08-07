@@ -893,7 +893,7 @@ git commit -m "refactor(dozer-app): route Git Log messages through extensions::g
 
 **Files:** 无新增/修改(纯校验任务)
 
-- [ ] **Step 1: 全 workspace 构建 + 测试 + clippy + fmt**
+- [x] **Step 1: 全 workspace 构建 + 测试 + clippy + fmt**
 
 Run: `cargo build && cargo test && cargo clippy --all-targets && cargo fmt --check`
 Expected: 全部 crate 编译通过、测试全绿、无 clippy 警告、无格式差异。
@@ -917,7 +917,7 @@ Expected: 全部 crate 编译通过、测试全绿、无 clippy 警告、无格�
 `restore_after_load` 传递路径,和"`.git` 引用变化"用的是 `cache_max_count()` 而不是
 `next_load_more_count()` 这两个最容易犯的语义混淆点)。
 
-- [ ] **Step 3: 确认没有遗留未提交的改动**
+- [x] **Step 3: 确认没有遗留未提交的改动**
 
 Run: `git status`
 Expected: 干净(所有改动都已在前面各 Task 的 Step 里提交)。
