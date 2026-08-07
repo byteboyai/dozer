@@ -8,13 +8,45 @@
 use crate::conversation::ConversationMeta;
 use crate::icons;
 use crate::theme;
-use crate::workspace::Message;
 use dozer_core::protocol::AgentKind;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::{Border, Color, Element, Length, Radians, Rectangle};
 use iced_widget::{button, column, container, text};
 use serde_json::Value;
 use std::collections::BTreeSet;
+use std::path::PathBuf;
+
+/// 挂在每个 Workspace 上的 Usage 面板状态,对应现有 `Workspace` 上
+/// `usage`/`usage_loading` 两个字段。
+#[derive(Default)]
+pub struct WorkspaceState {
+    rows: Vec<(ConversationMeta, ConversationUsage)>,
+    loading: bool,
+}
+
+impl WorkspaceState {
+    pub fn rows(&self) -> &[(ConversationMeta, ConversationUsage)] {
+        &self.rows
+    }
+
+    pub fn loading(&self) -> bool {
+        self.loading
+    }
+
+    /// 供内核 `RightIconSelect(RightView::Usage)` 分支调用——切到面板时
+    /// 立即标记"统计中",不等 `spawn_refresh` 的异步结果落地才置真。
+    pub fn set_loading(&mut self, loading: bool) {
+        self.loading = loading;
+    }
+}
+
+/// 对应现在顶层 `Message` 里的 `UsageRefresh`/`UsageLoaded` 两个变体,去
+/// 前缀原样搬来。
+#[derive(Debug, Clone)]
+pub enum Message {
+    Refresh,
+    Loaded(i64, Vec<(ConversationMeta, ConversationUsage)>),
+}
 
 /// 单个会话（= 一份 transcript 文件）的用量统计。
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -295,6 +327,54 @@ pub fn agent_token_share(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<
         .collect()
 }
 
+pub fn update(
+    ws_state: &mut WorkspaceState,
+    msg: Message,
+    project_id: i64,
+    project_path: PathBuf,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    match msg {
+        Message::Refresh => {
+            ws_state.loading = true;
+            spawn_refresh(project_id, project_path, handle, emit);
+        }
+        Message::Loaded(_, rows) => {
+            ws_state.rows = rows;
+            ws_state.loading = false;
+        }
+    }
+}
+
+/// 异步扫描项目全部 agent transcript 并逐个解析用量。内核在
+/// `RightIconSelect(RightView::Usage)` 分支(切到面板首次刷新)与
+/// `update` 处理 `Refresh`(手动点刷新按钮)两处调用。现有
+/// `Workspace::spawn_usage_refresh` 的搬家版本,逻辑不变(读失败的会话
+/// 整条跳过、不计入汇总)。
+pub fn spawn_refresh(
+    project_id: i64,
+    project_path: PathBuf,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    handle.spawn(async move {
+        let rows = tokio::task::spawn_blocking(move || {
+            crate::conversation::list_all_conversations(&project_path)
+                .into_iter()
+                .filter_map(|meta| {
+                    let jsonl = std::fs::read_to_string(&meta.path).ok()?;
+                    let u = parse_usage(meta.agent, &jsonl);
+                    Some((meta, u))
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default();
+        emit(Message::Loaded(project_id, rows));
+    });
+}
+
 /// 头部：标题 + 项目名 + 右侧手动刷新按钮（spec"面板渲染"#1）。
 fn panel_header(
     project_name: &str,
@@ -315,7 +395,7 @@ fn panel_header(
             14.0,
             theme::color::DIM
         ))
-        .on_press(Message::UsageRefresh)
+        .on_press(Message::Refresh)
         .style(|_t, _s| button::Style::default()),
     ]
     .align_y(iced_widget::core::Alignment::Center)
@@ -324,15 +404,16 @@ fn panel_header(
 
 /// 面板主入口，对应右图标栏的"用量统计"视图（单栏，不像 Conversations
 /// 那样是"列表:内容"配对分栏——见 spec）。`rows` 为空且 `loading` 为假时
-/// 是"还没数据"的空态；`loading` 为真时是刷新中占位态；两者互斥由调用方
-/// 保证（`Workspace::usage_loading` 一旦收到 `UsageLoaded` 就会清掉）。
+/// 是"还没数据"的空态；`loading` 为真时是刷新中占位态；两者互斥由 `update`
+/// 保证（`WorkspaceState::set_loading` 调用后、`Loaded` 落地时清掉）。
 pub fn view<'a>(
-    rows: &'a [(ConversationMeta, ConversationUsage)],
-    loading: bool,
+    ws_state: &'a WorkspaceState,
     project_name: &'a str,
     width: Length,
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let rows = ws_state.rows();
+    let loading = ws_state.loading();
     let mut content = column![panel_header(project_name)].spacing(12).padding(14);
 
     if loading {
@@ -971,5 +1052,46 @@ mod tests {
             share,
             vec![(AgentKind::Claude, 15), (AgentKind::Codebuddy, 3)]
         );
+    }
+
+    #[tokio::test]
+    async fn refresh_sets_loading_true() {
+        let mut ws_state = WorkspaceState::default();
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut ws_state,
+            Message::Refresh,
+            1,
+            std::path::PathBuf::from("/tmp/does-not-matter"),
+            &handle,
+            |_| {},
+        );
+        assert!(ws_state.loading());
+    }
+
+    #[tokio::test]
+    async fn loaded_clears_loading_and_stores_rows() {
+        let mut ws_state = WorkspaceState {
+            loading: true,
+            ..WorkspaceState::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        let rows = vec![(
+            meta(AgentKind::Claude, "a"),
+            ConversationUsage {
+                turns: 3,
+                ..Default::default()
+            },
+        )];
+        update(
+            &mut ws_state,
+            Message::Loaded(1, rows.clone()),
+            1,
+            std::path::PathBuf::from("/tmp/does-not-matter"),
+            &handle,
+            |_| {},
+        );
+        assert!(!ws_state.loading());
+        assert_eq!(ws_state.rows(), rows.as_slice());
     }
 }
