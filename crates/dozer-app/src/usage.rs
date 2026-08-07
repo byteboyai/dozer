@@ -781,8 +781,14 @@ mod tests {
     #[test]
     fn codex_and_qoder_usage_is_default_until_schema_confirmed() {
         let jsonl = r#"{"type":"user","message":{"role":"user","content":"hi"}}"#;
-        assert_eq!(parse_usage(AgentKind::Codex, jsonl), ConversationUsage::default());
-        assert_eq!(parse_usage(AgentKind::Qoder, jsonl), ConversationUsage::default());
+        assert_eq!(
+            parse_usage(AgentKind::Codex, jsonl),
+            ConversationUsage::default()
+        );
+        assert_eq!(
+            parse_usage(AgentKind::Qoder, jsonl),
+            ConversationUsage::default()
+        );
     }
 
     #[test]
@@ -924,10 +930,7 @@ mod tests {
         // Codex/Qoder/Kilo 目前没有专属的 DayAgentTotals 字段（这三家的
         // 用量还进不了统计，见计划 Global Constraints），跟 Unknown 一样
         // 被忽略，不能 panic。
-        let rows = vec![(
-            meta_at(AgentKind::Codex, 0),
-            usage_with_tokens(99),
-        )];
+        let rows = vec![(meta_at(AgentKind::Codex, 0), usage_with_tokens(99))];
         let days = daily_totals_by_agent(&rows);
         assert_eq!(days.len(), 1);
         assert_eq!(days[0].claude + days[0].codebuddy + days[0].opencode, 0);

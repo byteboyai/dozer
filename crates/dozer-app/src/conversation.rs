@@ -225,7 +225,8 @@ mod tests {
 
     #[test]
     fn kilo_title_reuses_claude_shaped_parser() {
-        let head = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"改一下 README\"}}\n";
+        let head =
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"改一下 README\"}}\n";
         assert_eq!(
             conversation_title(AgentKind::Kilo, head).as_deref(),
             Some("改一下 README")

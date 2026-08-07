@@ -9275,9 +9275,7 @@ fn agent_icon(agent: AgentKind) -> IconKind {
         AgentKind::Codebuddy => IconKind::Codebuddy,
         AgentKind::Opencode => IconKind::Opencode,
         // 暂无确认可用的品牌素材，回落通用图标（spec §8/§6 明确允许）。
-        AgentKind::Codex | AgentKind::Qoder | AgentKind::Kilo | AgentKind::Unknown => {
-            IconKind::Bot
-        }
+        AgentKind::Codex | AgentKind::Qoder | AgentKind::Kilo | AgentKind::Unknown => IconKind::Bot,
     }
 }
 

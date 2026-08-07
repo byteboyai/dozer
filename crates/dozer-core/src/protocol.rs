@@ -443,10 +443,7 @@ mod tests {
             serde_json::to_string(&AgentKind::Qoder).unwrap(),
             "\"qoder\""
         );
-        assert_eq!(
-            serde_json::to_string(&AgentKind::Kilo).unwrap(),
-            "\"kilo\""
-        );
+        assert_eq!(serde_json::to_string(&AgentKind::Kilo).unwrap(), "\"kilo\"");
         assert_eq!(
             serde_json::from_str::<AgentKind>("\"claude\"").unwrap(),
             AgentKind::Claude
