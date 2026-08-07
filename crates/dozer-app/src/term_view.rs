@@ -22,7 +22,7 @@
 //! CREAM 描边），覆盖在 run 字形之上，天然处理"光标落在任意 run 中间"。
 use crate::theme::icon_size;
 use crate::term_model::{Cell, TerminalModel};
-use crate::terminal_font;
+use crate::theme::terminal_font;
 use crate::theme;
 use crate::workspace::Message;
 use crate::workspace_geometry;

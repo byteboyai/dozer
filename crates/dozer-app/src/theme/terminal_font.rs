@@ -12,7 +12,7 @@
 use serde::Deserialize;
 use std::sync::LazyLock;
 
-const RAW: &str = include_str!("../assets/theme/terminal.json");
+const RAW: &str = include_str!("../../assets/theme/terminal.json");
 
 #[derive(Deserialize)]
 struct TerminalFont {

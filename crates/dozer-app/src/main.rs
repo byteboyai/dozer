@@ -18,7 +18,6 @@ mod project;
 mod scrollbar;
 mod term_model;
 mod term_view;
-mod terminal_font;
 mod theme;
 mod transcript;
 mod usage;

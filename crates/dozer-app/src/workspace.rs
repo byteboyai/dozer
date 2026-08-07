@@ -47,7 +47,7 @@ use crate::preview_state;
 use crate::project::{self, FileTree};
 use crate::term_model::TerminalModel;
 use crate::term_view;
-use crate::terminal_font;
+use crate::theme::terminal_font;
 use crate::theme;
 use crate::transcript::{self, ReviewEntry};
 use crate::usage;

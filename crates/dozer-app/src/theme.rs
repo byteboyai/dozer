@@ -6,3 +6,4 @@
 
 pub mod color;
 pub mod icon_size;
+pub mod terminal_font;

@@ -167,13 +167,13 @@ git commit -m "refactor(dozer-app): move icon_size.rs into theme/icon_size.rs su
 - Modify: `crates/dozer-app/src/workspace.rs`、`crates/dozer-app/src/term_view.rs`(各自的
   `use crate::terminal_font;` → `use crate::theme::terminal_font;`)
 
-- [ ] **Step 1: 搬文件**
+- [x] **Step 1: 搬文件**
 
 ```bash
 git mv crates/dozer-app/src/terminal_font.rs crates/dozer-app/src/theme/terminal_font.rs
 ```
 
-- [ ] **Step 2: `theme.rs` 加声明**
+- [x] **Step 2: `theme.rs` 加声明**
 
 ```rust
 pub mod color;
@@ -181,11 +181,11 @@ pub mod icon_size;
 pub mod terminal_font;
 ```
 
-- [ ] **Step 3: `main.rs` 删旧声明**
+- [x] **Step 3: `main.rs` 删旧声明**
 
 删除 `mod terminal_font;` 这一行。
 
-- [ ] **Step 4: 改两处 `use`**
+- [x] **Step 4: 改两处 `use`**
 
 `crates/dozer-app/src/workspace.rs`:`use crate::terminal_font;` → `use crate::theme::terminal_font;`。
 
@@ -193,12 +193,12 @@ pub mod terminal_font;
 
 调用点 `terminal_font::xxx` 不用变(本地绑定名字不变)。
 
-- [ ] **Step 5: 编译 + 测试**
+- [x] **Step 5: 编译 + 测试**
 
 Run: `cargo build --workspace && cargo test --workspace 2>&1 | tail -60`
 Expected: 干净通过。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add -A crates/dozer-app/src
