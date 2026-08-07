@@ -182,7 +182,12 @@ mod tests {
             .add(BookmarkScope::Global, None, "https://a.com", "A")
             .unwrap();
         let second = store
-            .add(BookmarkScope::Global, None, "https://a.com", "改了标题也不生效")
+            .add(
+                BookmarkScope::Global,
+                None,
+                "https://a.com",
+                "改了标题也不生效",
+            )
             .unwrap();
         assert_eq!(first.id, second.id);
         assert_eq!(second.title, "A");
@@ -198,7 +203,11 @@ mod tests {
         store
             .add(BookmarkScope::Project, Some(1), "https://a.com", "A")
             .unwrap();
-        assert_eq!(store.list(Some(1)).unwrap().len(), 2, "全局和项目各一条,互不去重");
+        assert_eq!(
+            store.list(Some(1)).unwrap().len(),
+            2,
+            "全局和项目各一条,互不去重"
+        );
     }
 
     #[test]

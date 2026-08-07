@@ -29,8 +29,8 @@
 //!   把 `Message` 送回 UI 线程；`main.rs` 的 `ApplicationHandler::user_event`
 //!   收到后调用 `app.update(..)` 并请求重绘。反方向（UI → tokio）
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
-use crate::chrome_style;
 use crate::bookmarks;
+use crate::chrome_style;
 use crate::conversation::{self, ConversationMeta};
 use crate::delivery::{self, FileChange, FileGitStatus, WorktreeInfo};
 use crate::git_log;
@@ -55,7 +55,9 @@ use crate::usage;
 use crate::workspace_font;
 use crate::workspace_geometry;
 use dozer_client::{Client, TermEvent};
-use dozer_core::protocol::{AgentKind, AgentState, BookmarkInfo, BookmarkScope, ProjectInfo, SessionInfo};
+use dozer_core::protocol::{
+    AgentKind, AgentState, BookmarkInfo, BookmarkScope, ProjectInfo, SessionInfo,
+};
 use iced_widget::core::border::Radius;
 use iced_widget::core::font::Weight;
 use iced_widget::core::mouse;
@@ -8359,7 +8361,22 @@ fn browser_pane(
         ..button::Style::default()
     });
 
-    let mut content = column![tab_bar, tab_divider(), addr].spacing(region.gap);
+    let addr_row = row![
+        addr,
+        browser_star_button(ws),
+        browser_bookmarks_toggle_button()
+    ]
+    .spacing(4)
+    .align_y(iced_widget::core::Alignment::Center);
+
+    let mut content = column![tab_bar, tab_divider(), addr_row].spacing(region.gap);
+
+    if ws.browser_star_menu_open {
+        content = content.push(browser_star_menu_popup(ws));
+    }
+    if ws.browser_bookmarks_open {
+        content = content.push(browser_bookmarks_panel(ws));
+    }
 
     if let Some(err) = &ws.browser_error {
         content = content.push(lh(text(format!("⚠ {err}"))
@@ -8383,6 +8400,223 @@ fn browser_pane(
         .style(move |_theme: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
             border: outer,
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// 当前浏览器激活 tab 若是网页,取其 URL;文件/验收 tab 返回 `None`
+/// (星标按钮据此判定是否可点、菜单据此判定收藏状态)。
+fn current_browser_url(ws: &Workspace) -> Option<String> {
+    match ws
+        .browser
+        .tabs()
+        .get(ws.browser.active_idx())
+        .map(|t| &t.kind)
+    {
+        Some(TabKind::Web { url }) => Some(url.clone()),
+        _ => None,
+    }
+}
+
+/// 地址栏星标:当前 URL 在全局/本项目任一边已收藏则 GOLD 实心,否则
+/// DIM;非网页 tab(文件/验收)禁用。
+fn browser_star_button(
+    ws: &Workspace,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let url = current_browser_url(ws);
+    let starred = url
+        .as_ref()
+        .map(|u| {
+            bookmarks::bookmark_status(&ws.bookmarks, u, ws.project.as_ref().map(|p| p.id))
+                .is_bookmarked()
+        })
+        .unwrap_or(false);
+    let color = if starred { theme::GOLD } else { theme::DIM };
+    let mut btn = button(icons::view(
+        icons::IconKind::Star,
+        crate::icon_size::row(),
+        color,
+    ))
+    .width(Length::Fixed(crate::workspace_geometry::tab_button_size()))
+    .height(Length::Fixed(crate::workspace_geometry::tab_button_size()))
+    .padding(0)
+    .style(move |_t, _s| button::Style {
+        background: None,
+        text_color: color,
+        ..button::Style::default()
+    });
+    if url.is_some() {
+        btn = btn.on_press(Message::BrowserStarClick);
+    }
+    btn.into()
+}
+
+/// tab 栏"收藏夹"下拉面板触发按钮,颜色恒定(不像星标那样带收藏状态)。
+fn browser_bookmarks_toggle_button<'a>()
+-> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    button(icons::view(
+        icons::IconKind::Bookmark,
+        crate::icon_size::row(),
+        theme::DIM,
+    ))
+    .on_press(Message::BrowserBookmarksToggle)
+    .width(Length::Fixed(crate::workspace_geometry::tab_button_size()))
+    .height(Length::Fixed(crate::workspace_geometry::tab_button_size()))
+    .padding(0)
+    .style(|_t, _s| button::Style {
+        background: None,
+        text_color: theme::DIM,
+        ..button::Style::default()
+    })
+    .into()
+}
+
+fn bookmark_menu_row(
+    label: String,
+    msg: Message,
+) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+    button(lh(text(label)
+        .size(workspace_font::body())
+        .color(theme::CREAM)))
+    .on_press(msg)
+    .width(Length::Fill)
+    .padding([6, 12])
+    .style(|_t: &iced_widget::Theme, _s| button::Style {
+        background: None,
+        text_color: theme::CREAM,
+        ..button::Style::default()
+    })
+    .into()
+}
+
+/// 星标小菜单:未收藏显示"加入…",已收藏显示"移出…"(打勾态)。当前
+/// tab 非网页时(`current_browser_url` 返回 `None`)不该能弹出这个菜单
+/// (`browser_star_button` 已经不给非网页 tab 挂 `on_press`),这里仍防御
+/// 性处理为空内容,不 panic。
+fn browser_star_menu_popup(
+    ws: &Workspace,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let Some(url) = current_browser_url(ws) else {
+        return column![].into();
+    };
+    let project_id = ws.project.as_ref().map(|p| p.id);
+    let status = bookmarks::bookmark_status(&ws.bookmarks, &url, project_id);
+
+    let mut col = column![match status.global {
+        Some(id) => bookmark_menu_row(
+            "移出全局收藏".to_string(),
+            Message::BrowserBookmarkRemove(id)
+        ),
+        None => bookmark_menu_row(
+            "加入全局收藏".to_string(),
+            Message::BrowserBookmarkAdd(BookmarkScope::Global)
+        ),
+    }]
+    .spacing(2);
+
+    if project_id.is_some() {
+        col = col.push(match status.project {
+            Some(id) => bookmark_menu_row(
+                "移出本项目收藏".to_string(),
+                Message::BrowserBookmarkRemove(id),
+            ),
+            None => bookmark_menu_row(
+                "加入本项目收藏".to_string(),
+                Message::BrowserBookmarkAdd(BookmarkScope::Project),
+            ),
+        });
+    }
+
+    container(col)
+        .padding(6)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::CARD.into()),
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// 一组收藏条目:标题(点击新开 tab)+ `×` 删除按钮,风格照抄 tab 关闭
+/// 按钮。
+fn bookmark_group<'a>(
+    title: &'static str,
+    items: &[&'a BookmarkInfo],
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let mut col = column![lh(text(title)
+        .size(workspace_font::subtitle())
+        .color(theme::DIM))]
+    .spacing(2);
+    for b in items {
+        let open = button(lh(text(b.title.clone())
+            .size(workspace_font::body())
+            .color(theme::CREAM)))
+        .on_press(Message::BrowserOpenUrl(b.url.clone()))
+        .width(Length::Fill)
+        .style(|_t: &iced_widget::Theme, _s| button::Style {
+            background: None,
+            text_color: theme::CREAM,
+            ..button::Style::default()
+        });
+        let remove = button(lh(text("×").size(workspace_font::body()).color(theme::DIM)))
+            .on_press(Message::BrowserBookmarkRemove(b.id))
+            .style(|_t: &iced_widget::Theme, _s| button::Style {
+                background: None,
+                text_color: theme::DIM,
+                ..button::Style::default()
+            });
+        col = col.push(
+            row![open, remove]
+                .spacing(4)
+                .align_y(iced_widget::core::Alignment::Center),
+        );
+    }
+    col.into()
+}
+
+/// 收藏夹下拉面板:分"全局收藏"/"本项目收藏"两组,都为空时显示占位文案。
+fn browser_bookmarks_panel(
+    ws: &Workspace,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let project_id = ws.project.as_ref().map(|p| p.id);
+    let global: Vec<&BookmarkInfo> = ws
+        .bookmarks
+        .iter()
+        .filter(|b| b.scope == BookmarkScope::Global)
+        .collect();
+    let project: Vec<&BookmarkInfo> = ws
+        .bookmarks
+        .iter()
+        .filter(|b| b.scope == BookmarkScope::Project && b.project_id == project_id)
+        .collect();
+
+    let both_empty = global.is_empty() && project.is_empty();
+    let mut col = column![].spacing(6);
+    col = col.push(bookmark_group("全局收藏", &global));
+    if project_id.is_some() {
+        col = col.push(bookmark_group("本项目收藏", &project));
+    }
+    if both_empty {
+        col = col.push(lh(text("暂无收藏")
+            .size(workspace_font::subtitle())
+            .color(theme::DIM)));
+    }
+
+    container(col)
+        .padding(6)
+        .width(Length::Fill)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::CARD.into()),
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
             ..container::Style::default()
         })
         .into()

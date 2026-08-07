@@ -30,7 +30,16 @@ async fn hook_event_reaches_attached_client_and_list() {
     tokio::spawn({
         let sock = sock.clone();
         let registry = registry.clone();
-        async move { dozerd::server::serve(&sock, registry, test_store(), test_projects(), test_bookmarks()).await }
+        async move {
+            dozerd::server::serve(
+                &sock,
+                registry,
+                test_store(),
+                test_projects(),
+                test_bookmarks(),
+            )
+            .await
+        }
     });
     for _ in 0..100 {
         if sock.exists() {
