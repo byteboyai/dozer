@@ -652,7 +652,7 @@ Expected: 新增 16 个测试(加上 Task 1 保留的 6 个,共 22 个)全部 PA
 报缺 feature,检查根 `Cargo.toml` 的 `tokio = { version = "1", features = ["full"] }`——
 `full` 已包含 `macros`/`rt`,不需要改 `Cargo.toml`。
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add crates/dozer-app/src/extensions/git_log.rs
@@ -875,12 +875,12 @@ Expected: `State` 上用到的 `next_load_more_count`/`cache_max_count`/`cache_r
 `cargo build -p dozer-app` 干净通过。**不要**为了让它编译过而改变行为语义(比如拿
 `next_load_more_count` 顶替 `cache_max_count`)——两者语义不同,前面已经写明区别。
 
-- [ ] **Step 10: 全量测试 + clippy + fmt**
+- [x] **Step 10: 全量测试 + clippy + fmt**
 
 Run: `cargo build -p dozer-app && cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets && cargo fmt --check`
 Expected: 全绿。
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add crates/dozer-app/src/workspace.rs crates/dozer-app/src/extensions/git_log.rs
