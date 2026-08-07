@@ -7195,7 +7195,7 @@ fn tree_row_font_size() -> f32 {
 /// 统一行高：把一段文字的行高设为终端行高
 /// (`terminal_font::line_height_factor()` = 1.2)，让各面板列表/正文行的行距
 /// 与文件树、终端观感一致。`size`/`color` 等仍由调用方设置，这里只补行高。
-fn lh<'a>(
+pub(crate) fn lh<'a>(
     t: iced_widget::text::Text<'a, iced_widget::Theme, iced_widget::Renderer>,
 ) -> iced_widget::text::Text<'a, iced_widget::Theme, iced_widget::Renderer> {
     t.line_height(LineHeight::Relative(terminal_font::line_height_factor()))
@@ -9095,11 +9095,11 @@ fn edit_discard_confirm_popup<'a>()
 }
 
 /// 箭头翻页按钮：ChevronLeft / ChevronRight，可用时 GOLD，hover 显 CARD 圆角底，到头时 DIM 且不可点。
-fn tab_arrow_button<'a>(
+pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
     icon: icons::IconKind,
     enabled: bool,
-    msg: Message,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    msg: M,
+) -> Element<'a, M, iced_widget::Theme, iced_widget::Renderer> {
     let color = if enabled { theme::GOLD } else { theme::DIM };
     let mut btn = button(icons::view(icon, crate::icon_size::row(), color))
         .width(Length::Fixed(crate::workspace_geometry::tab_button_size()))
@@ -9134,7 +9134,7 @@ fn tab_arrow_button<'a>(
 }
 
 /// tab 栏下方的 1px 分割线。
-fn tab_divider<'a>() -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+pub(crate) fn tab_divider<'a, M: 'a>() -> Element<'a, M, iced_widget::Theme, iced_widget::Renderer> {
     container(iced_widget::Space::new())
         .width(Length::Fill)
         .height(Length::Fixed(1.0))
@@ -9434,7 +9434,7 @@ fn tab_display_width(title: &str) -> f32 {
 }
 
 /// 预览 tab 估算显示宽：同 `tab_display_width` 但无状态点。
-fn preview_tab_display_width(title: &str) -> f32 {
+pub(crate) fn preview_tab_display_width(title: &str) -> f32 {
     // 名称 ≈ units * 半宽 8.0(14px), 关闭× ≈ 18, pill padding ≈ 12
     text_width_units(title) * 8.0 + 18.0 + 12.0
 }
@@ -9444,7 +9444,7 @@ fn preview_tab_display_width(title: &str) -> f32 {
 /// - 全部 tab 能放下(总宽<=avail) → first=0, 两端皆不可滚(箭头都变灰)。
 /// - 溢出 → max_first = 最小的 i 使 tabs[i..] 总宽 <= avail(即从 i 起剩余恰好放得下);
 ///   钳制 first 到 [0, max_first]; 左可滚 = first>0; 右可滚 = first<max_first。
-fn tab_window(widths: &[f32], gap: f32, avail: f32, first: usize) -> (usize, bool, bool) {
+pub(crate) fn tab_window(widths: &[f32], gap: f32, avail: f32, first: usize) -> (usize, bool, bool) {
     let n = widths.len();
     if n == 0 {
         return (0, false, false);
