@@ -756,7 +756,7 @@ fn todo_row<'a>(
             row![
                 icons::view(
                     icons::IconKind::SquarePlus,
-                    crate::icon_size::row(),
+                    crate::theme::icon_size::row(),
                     theme::color::GOLD
                 ),
                 text("派发")

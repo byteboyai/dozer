@@ -5,3 +5,4 @@
 //! 字段;`terminal_font` 内嵌 `assets/theme/terminal.json`。
 
 pub mod color;
+pub mod icon_size;

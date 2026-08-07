@@ -99,20 +99,20 @@ git commit -m "refactor(dozer-app): move theme.rs into theme/color.rs submodule"
 - Modify: `crates/dozer-app/src/main.rs`(删 `mod icon_size;`)
 - Modify: 全仓库所有 `use crate::icon_size;` 与 `icon_size::` 引用点
 
-- [ ] **Step 1: 搬文件**
+- [x] **Step 1: 搬文件**
 
 ```bash
 git mv crates/dozer-app/src/icon_size.rs crates/dozer-app/src/theme/icon_size.rs
 ```
 
-- [ ] **Step 2: `theme.rs` 加声明**
+- [x] **Step 2: `theme.rs` 加声明**
 
 ```rust
 pub mod color;
 pub mod icon_size;
 ```
 
-- [ ] **Step 3: `main.rs` 删旧声明**
+- [x] **Step 3: `main.rs` 删旧声明**
 
 删除 `mod icon_size;` 这一行。
 
@@ -144,7 +144,7 @@ Expected: 无输出。
 （`icon_size::xxx()` 这些调用点本身**不用批量替换**——因为上面把 `use crate::icon_size;`
 改成了 `use crate::theme::icon_size;`,本地绑定的名字还是 `icon_size`,调用点文本不变。）
 
-- [ ] **Step 5: 编译 + 测试**
+- [x] **Step 5: 编译 + 测试**
 
 Run: `cargo build --workspace && cargo test --workspace 2>&1 | tail -60`
 Expected: 干净通过。

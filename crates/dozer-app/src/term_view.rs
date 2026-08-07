@@ -20,7 +20,7 @@
 //!
 //! 光标最后画：先补一块实心格（focused：CREAM 底 + TERM_BG 字；未聚焦：
 //! CREAM 描边），覆盖在 run 字形之上，天然处理"光标落在任意 run 中间"。
-use crate::icon_size;
+use crate::theme::icon_size;
 use crate::term_model::{Cell, TerminalModel};
 use crate::terminal_font;
 use crate::theme;

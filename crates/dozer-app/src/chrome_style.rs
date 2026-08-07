@@ -18,7 +18,7 @@
 //!
 //! `resolve_region` 会把每个区域的 `padding`/`gap` 乘过全局 scale，因此
 //! 改 `icon_size::scale()` 时区域内部间距也等比放大，与图标/字号同步。
-use crate::icon_size;
+use crate::theme::icon_size;
 use crate::theme;
 use iced_widget::core::{Border, Color, Padding};
 use serde::Deserialize;

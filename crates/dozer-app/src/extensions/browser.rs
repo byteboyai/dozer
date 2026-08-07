@@ -10,7 +10,8 @@
 
 use crate::preview::WebviewSpec;
 use crate::workspace::{lh, preview_tab_display_width, tab_arrow_button, tab_divider, tab_window};
-use crate::{chrome_style, icon_size, icons, theme, workspace_font, workspace_geometry};
+use crate::theme::icon_size;
+use crate::{chrome_style, icons, theme, workspace_font, workspace_geometry};
 use dozer_client::Client;
 use dozer_core::protocol::{BookmarkInfo, BookmarkScope};
 use iced_widget::core::{Border, Element, Length};

@@ -4515,19 +4515,19 @@ impl App {
                 });
             }
             Message::ZoomIn => {
-                crate::icon_size::zoom_by(UI_ZOOM_STEP);
-                crate::icon_size::persist_scale();
+                crate::theme::icon_size::zoom_by(UI_ZOOM_STEP);
+                crate::theme::icon_size::persist_scale();
                 self.sync_terminal_grid();
                 self.pending_preview_zoom = true;
             }
             Message::ZoomOut => {
-                crate::icon_size::zoom_by(1.0 / UI_ZOOM_STEP);
-                crate::icon_size::persist_scale();
+                crate::theme::icon_size::zoom_by(1.0 / UI_ZOOM_STEP);
+                crate::theme::icon_size::persist_scale();
                 self.sync_terminal_grid();
                 self.pending_preview_zoom = true;
             }
             Message::ZoomReset => {
-                crate::icon_size::reset_scale();
+                crate::theme::icon_size::reset_scale();
                 self.sync_terminal_grid();
                 self.pending_preview_zoom = true;
             }
@@ -4971,12 +4971,12 @@ fn dozer_home_tab<'a>(
     let bg = theme::color::mix(bg_idle, theme::color::CARD, hover_t);
     let border_color = theme::color::mix(theme::color::BORDER, theme::color::GOLD, hover_t);
     // 圆角正方形边长 = 图标尺寸 + 留白(图标居中)。
-    let sq = crate::icon_size::rail() + 14.0;
+    let sq = crate::theme::icon_size::rail() + 14.0;
 
     let btn = button(
         container(icons::view(
             icons::IconKind::Home,
-            crate::icon_size::rail(),
+            crate::theme::icon_size::rail(),
             icon_color,
         ))
         .width(Length::Fill)
@@ -5066,7 +5066,7 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
         MouseArea::new(
             container(icons::view(
                 icons::IconKind::Settings,
-                crate::icon_size::rail(),
+                crate::theme::icon_size::rail(),
                 settings_color,
             ))
             .padding(Padding {
@@ -5163,7 +5163,7 @@ fn home_sidebar(
         row![
             icons::view(
                 icons::IconKind::Dozer,
-                crate::icon_size::rail(),
+                crate::theme::icon_size::rail(),
                 theme::color::GOLD
             ),
             text("Dozer")
@@ -5188,7 +5188,7 @@ fn home_sidebar(
     col = col.push(
         container(
             row![
-                icons::view(icons::IconKind::Search, crate::icon_size::row(), theme::color::DIM),
+                icons::view(icons::IconKind::Search, crate::theme::icon_size::row(), theme::color::DIM),
                 text("搜索项目…")
                     .size(workspace_font::body())
                     .color(theme::color::DIM),
@@ -5345,7 +5345,7 @@ fn home_recent_files_card(
             let row_el = row![
                 icons::view(
                     icons::icon_for_file(&filename),
-                    crate::icon_size::row(),
+                    crate::theme::icon_size::row(),
                     theme::color::DIM
                 ),
                 column![
@@ -5568,7 +5568,7 @@ fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_
         let add = MouseArea::new(
             button(icons::view(
                 icons::IconKind::SquarePlus,
-                crate::icon_size::row(),
+                crate::theme::icon_size::row(),
                 add_color,
             ))
             .on_press(Message::ProjectTabPickFolder)
@@ -5625,7 +5625,7 @@ fn project_tab_item<'a>(
     // 页签背景就不能也用 `sq` 这个高度贴底(那样顶边会比 Dozer 的更低),
     // 必须把高度补到 `(top_bar_height+sq)/2`,贴底后顶部留白才恰好等于
     // Dozer 按钮那份 `(top_bar_height-sq)/2`。
-    let sq = crate::icon_size::rail() + 14.0;
+    let sq = crate::theme::icon_size::rail() + 14.0;
     let tab_h = (workspace_geometry::top_bar_height() + sq) / 2.0;
     // 关闭按钮用与顶栏其它图标按钮(tab 箭头 / 最大化)同尺寸的方形命中区。
     let close_sz = crate::workspace_geometry::tab_button_size();
@@ -6151,7 +6151,7 @@ fn agent_picker_popup(
             PickerLaunch::Git => (IconKind::GitBranch, theme::color::CREAM),
         };
         let content = row![
-            icons::view(icon, crate::icon_size::row(), icon_color),
+            icons::view(icon, crate::theme::icon_size::row(), icon_color),
             text(label).size(workspace_font::body()).color(theme::color::CREAM),
         ]
         .align_y(iced_widget::core::alignment::Vertical::Center)
@@ -6255,7 +6255,7 @@ fn rail_icon_button<'a>(
     } else {
         theme::color::mix(theme::color::DIM, theme::color::GOLD, hover_t)
     };
-    let inner = container(icons::view(icon, crate::icon_size::rail(), color))
+    let inner = container(icons::view(icon, crate::theme::icon_size::rail(), color))
         .width(Length::Fill)
         .height(Length::Fill)
         .align_x(iced_widget::core::alignment::Horizontal::Center)
@@ -6874,7 +6874,7 @@ fn maximize_overlay<'a>(
 /// scale），配合下面的 `LineHeight::Relative(line_height_factor)` 让每行行高
 /// 等于终端行距，目录/文件列表不再比终端稀疏。
 fn tree_row_font_size() -> f32 {
-    terminal_font::size() * crate::icon_size::scale()
+    terminal_font::size() * crate::theme::icon_size::scale()
 }
 
 /// 统一行高：把一段文字的行高设为终端行高
@@ -6908,7 +6908,7 @@ fn project_pane<'a>(
                     .size(workspace_font::title())
                     .color(theme::color::CREAM),
                 row![
-                    icons::view(icons::IconKind::GitBranch, crate::icon_size::row(), bcolor),
+                    icons::view(icons::IconKind::GitBranch, crate::theme::icon_size::row(), bcolor),
                     text(label).size(workspace_font::label()).color(bcolor),
                 ]
                 .spacing(6)
@@ -6977,23 +6977,23 @@ fn project_pane<'a>(
                                 icons::IconKind::Folder
                             };
                             row![
-                                icons::view(chevron, crate::icon_size::chevron(), theme::color::DIM),
-                                icons::view(folder, crate::icon_size::row(), theme::color::DIM),
+                                icons::view(chevron, crate::theme::icon_size::chevron(), theme::color::DIM),
+                                icons::view(folder, crate::theme::icon_size::row(), theme::color::DIM),
                             ]
-                            .spacing(crate::icon_size::tree_row_gap())
+                            .spacing(crate::theme::icon_size::tree_row_gap())
                             .align_y(iced_widget::core::Alignment::Center)
                             .into()
                         } else {
                             row![
                                 iced_widget::space::Space::new()
                                     .width(Length::Fixed(
-                                        crate::icon_size::chevron()
-                                            + crate::icon_size::tree_row_gap(),
+                                        crate::theme::icon_size::chevron()
+                                            + crate::theme::icon_size::tree_row_gap(),
                                     ))
                                     .height(Length::Shrink),
                                 icons::view(
                                     icons::icon_for_file(&row.name),
-                                    crate::icon_size::row(),
+                                    crate::theme::icon_size::row(),
                                     theme::color::DIM
                                 ),
                             ]
@@ -7267,7 +7267,7 @@ fn preview_pane(
                     Some(
                         button(icons::view(
                             icons::IconKind::Rename,
-                            crate::icon_size::row(),
+                            crate::theme::icon_size::row(),
                             theme::color::DIM,
                         ))
                         .on_press(Message::PreviewEditOpen(idx))
@@ -7525,7 +7525,7 @@ fn menu_item<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     button(
         row![
-            icons::view(icon, crate::icon_size::row(), theme::color::CREAM),
+            icons::view(icon, crate::theme::icon_size::row(), theme::color::CREAM),
             text(label).size(workspace_font::body()).color(theme::color::CREAM),
         ]
         .spacing(crate::workspace_geometry::menu_gap())
@@ -7614,7 +7614,7 @@ fn context_menu_popup<'a>(
                 row![
                     icons::view(
                         icons::IconKind::ClipboardPaste,
-                        crate::icon_size::row(),
+                        crate::theme::icon_size::row(),
                         theme::color::DIM
                     ),
                     text("粘贴").size(workspace_font::body()).color(theme::color::DIM),
@@ -7948,7 +7948,7 @@ pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
     msg: M,
 ) -> Element<'a, M, iced_widget::Theme, iced_widget::Renderer> {
     let color = if enabled { theme::color::GOLD } else { theme::color::DIM };
-    let mut btn = button(icons::view(icon, crate::icon_size::row(), color))
+    let mut btn = button(icons::view(icon, crate::theme::icon_size::row(), color))
         .width(Length::Fixed(crate::workspace_geometry::tab_button_size()))
         .height(Length::Fixed(crate::workspace_geometry::tab_button_size()))
         .padding(0)

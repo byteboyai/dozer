@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-const RAW: &str = include_str!("../assets/theme/workspace.json");
+const RAW: &str = include_str!("../../assets/theme/workspace.json");
 
 #[derive(Deserialize)]
 struct IconSizes {
