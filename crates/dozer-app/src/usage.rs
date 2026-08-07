@@ -200,6 +200,92 @@ pub fn group_usage_by_agent(
         .collect()
 }
 
+/// epoch 毫秒 → 该毫秒所在的 UTC 日索引(自 1970-01-01 起的第几天)。用于
+/// 按天分桶;**不做本地时区换算**——纯 std 没有时区能力,引入 `chrono`/`time`
+/// 属于新增依赖(spec 明确不新增)，UTC 分桶对"看近 7 天趋势形状"这个用途
+/// 足够，不追求跟用户本地墙上时钟严格对齐。
+fn day_index_from_ms(ms: u64) -> i64 {
+    (ms / 86_400_000) as i64
+}
+
+/// UTC 日索引 → (year, month, day)。Howard Hinnant 的公开 civil_from_days
+/// 算法(纯数学换算，不依赖任何日期库)。
+fn civil_from_days(z: i64) -> (i32, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = if m <= 2 { y + 1 } else { y };
+    (y as i32, m, d)
+}
+
+/// 按天、按 agent 聚合的 token 合计（四项 token 加总，不细分 in/out/
+/// cache——见 spec"关键语义确认"）。只保留最近 7 天，不足 7 天不补占位
+/// 空天，按 `day_index` 升序（最旧在前，最新在后，图表从左到右自然是时间
+/// 顺序）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DayAgentTotals {
+    pub day_index: i64,
+    pub label: String,
+    pub claude: u64,
+    pub codebuddy: u64,
+    pub opencode: u64,
+}
+
+pub fn daily_totals_by_agent(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<DayAgentTotals> {
+    use std::collections::BTreeMap;
+    let mut by_day: BTreeMap<i64, (u64, u64, u64)> = BTreeMap::new();
+    for (meta, usage) in rows {
+        let day = day_index_from_ms(meta.modified_ms);
+        let total = usage.tokens_in + usage.tokens_out + usage.tokens_cache_read + usage.tokens_cache_write;
+        let entry = by_day.entry(day).or_insert((0, 0, 0));
+        match meta.agent {
+            AgentKind::Claude => entry.0 += total,
+            AgentKind::Codebuddy => entry.1 += total,
+            AgentKind::Opencode => entry.2 += total,
+            AgentKind::Unknown => {}
+        }
+    }
+    let mut days: Vec<DayAgentTotals> = by_day
+        .into_iter()
+        .map(|(day_index, (claude, codebuddy, opencode))| {
+            // 年份在"近 7 天"这种短窗口的标签里用不上，解构时直接忽略。
+            let (_, m, d) = civil_from_days(day_index);
+            DayAgentTotals {
+                day_index,
+                label: format!("{m:02}/{d:02}"),
+                claude,
+                codebuddy,
+                opencode,
+            }
+        })
+        .collect();
+    let start = days.len().saturating_sub(7);
+    days.split_off(start)
+}
+
+/// 整个项目范围（不限"近 7 天"）按 agent 的 token 总量（四项合计），供
+/// 饼图用；只返回项目里实际出现过的 agent，不产生全零占位记录。
+pub fn agent_token_share(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<(AgentKind, u64)> {
+    const ORDER: [AgentKind; 3] = [AgentKind::Claude, AgentKind::Codebuddy, AgentKind::Opencode];
+    ORDER
+        .into_iter()
+        .filter_map(|kind| {
+            let total: u64 = rows
+                .iter()
+                .filter(|(meta, _)| meta.agent == kind)
+                .map(|(_, u)| u.tokens_in + u.tokens_out + u.tokens_cache_read + u.tokens_cache_write)
+                .sum();
+            (total > 0).then_some((kind, total))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,5 +410,79 @@ mod tests {
         assert_eq!(groups[0].1, vec![1]);
         assert_eq!(groups[1].0, AgentKind::Codebuddy);
         assert_eq!(groups[1].1, vec![0]);
+    }
+
+    #[test]
+    fn civil_from_days_known_epoch_dates() {
+        // 1970-01-01 是 epoch day 0。
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        // 2026-08-07 手工核对(用 `date -u -j -f "%Y-%m-%d" 2026-08-07 +%s`
+        // 算出 epoch 秒 1786071805 再除以 86400 取整得到 day_index=20672)。
+        assert_eq!(civil_from_days(20672), (2026, 8, 7));
+    }
+
+    fn meta_at(agent: AgentKind, ms: u64) -> ConversationMeta {
+        ConversationMeta {
+            path: std::path::PathBuf::from(format!("/{ms}.jsonl")),
+            title: String::new(),
+            modified_ms: ms,
+            size_bytes: 0,
+            agent,
+        }
+    }
+
+    fn usage_with_tokens(input: u64) -> ConversationUsage {
+        ConversationUsage {
+            tokens_in: input,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn daily_totals_by_agent_buckets_by_day_and_sums_per_agent() {
+        // day 20672 = 2026-08-07 00:00:00 UTC 起的毫秒;+3600_000 还在同一天。
+        let day0_ms = 20_672u64 * 86_400_000;
+        let rows = vec![
+            (meta_at(AgentKind::Claude, day0_ms), usage_with_tokens(10)),
+            (meta_at(AgentKind::Claude, day0_ms + 3_600_000), usage_with_tokens(5)),
+            (meta_at(AgentKind::Codebuddy, day0_ms + 1000), usage_with_tokens(2)),
+            (meta_at(AgentKind::Opencode, day0_ms + 86_400_000), usage_with_tokens(7)), // 次日
+        ];
+        let days = daily_totals_by_agent(&rows);
+        assert_eq!(days.len(), 2, "只返回实际有数据的两天,不补空天占位");
+        assert_eq!(days[0].day_index, 20_672);
+        assert_eq!(days[0].claude, 15, "同一天两条 Claude 会话的 token 要累加");
+        assert_eq!(days[0].codebuddy, 2);
+        assert_eq!(days[0].opencode, 0);
+        assert_eq!(days[1].day_index, 20_673);
+        assert_eq!(days[1].opencode, 7);
+        assert_eq!(days[0].label, "08/07");
+    }
+
+    #[test]
+    fn daily_totals_by_agent_keeps_only_most_recent_7_days() {
+        let rows: Vec<_> = (0..10)
+            .map(|i| {
+                (
+                    meta_at(AgentKind::Claude, (20_668 + i) as u64 * 86_400_000),
+                    usage_with_tokens(1),
+                )
+            })
+            .collect();
+        let days = daily_totals_by_agent(&rows);
+        assert_eq!(days.len(), 7, "超过 7 天的历史只保留最近 7 天");
+        assert_eq!(days.last().unwrap().day_index, 20_677, "最后一天是最新的那天");
+        assert_eq!(days.first().unwrap().day_index, 20_671);
+    }
+
+    #[test]
+    fn agent_token_share_sums_four_token_fields_per_agent_and_skips_absent_agents() {
+        let rows = vec![
+            (meta(AgentKind::Claude, "a"), usage_with_tokens(10)),
+            (meta(AgentKind::Claude, "b"), usage_with_tokens(5)),
+            (meta(AgentKind::Codebuddy, "c"), usage_with_tokens(3)),
+        ];
+        let share = agent_token_share(&rows);
+        assert_eq!(share, vec![(AgentKind::Claude, 15), (AgentKind::Codebuddy, 3)]);
     }
 }
