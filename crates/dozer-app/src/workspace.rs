@@ -30,6 +30,7 @@
 //!   收到后调用 `app.update(..)` 并请求重绘。反方向（UI → tokio）
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
 use crate::chrome_style;
+use crate::bookmarks;
 use crate::conversation::{self, ConversationMeta};
 use crate::delivery::{self, FileChange, FileGitStatus, WorktreeInfo};
 use crate::git_log;
@@ -54,7 +55,7 @@ use crate::usage;
 use crate::workspace_font;
 use crate::workspace_geometry;
 use dozer_client::{Client, TermEvent};
-use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
+use dozer_core::protocol::{AgentKind, AgentState, BookmarkInfo, BookmarkScope, ProjectInfo, SessionInfo};
 use iced_widget::core::border::Radius;
 use iced_widget::core::font::Weight;
 use iced_widget::core::mouse;
@@ -1090,6 +1091,14 @@ pub enum Message {
     BrowserAddrClick,
     /// 浏览器:地址栏编辑事件。
     BrowserAddrEvent(AddrEvent),
+    /// 浏览器:点击地址栏星标,开合"加入/移出收藏"小菜单。
+    BrowserStarClick,
+    /// 浏览器:星标菜单里点"加入全局/本项目收藏"。
+    BrowserBookmarkAdd(BookmarkScope),
+    /// 浏览器:星标菜单/收藏面板里点"移出收藏"(按 dozerd 记录 id)。
+    BrowserBookmarkRemove(i64),
+    /// 浏览器:tab 栏"收藏夹"图标按钮,开合下拉面板。
+    BrowserBookmarksToggle,
     /// 项目:切换到最近项目。
     ProjectSelect(i64),
     /// 项目:"打开项目…"→ rfd 文件夹选择(main.rs 执行),选中后回送
@@ -1148,6 +1157,13 @@ pub enum Message {
     GitLogSnapshotLoaded(PathBuf, usize, Result<git_log::GitLogSnapshot, String>),
     /// 项目:当前项目验收次数刷新结果(项目卡"N 次验收"副行用)。
     AcceptanceCountLoaded(ProjectId, Option<u64>),
+    /// 浏览器:收藏夹"全局+当前项目"合集刷新结果(项目打开/切换,或一次
+    /// 增删收藏之后的重新拉取)。
+    BrowserBookmarksLoaded(ProjectId, Vec<BookmarkInfo>),
+    /// 浏览器:一次 `AddBookmark`/`RemoveBookmark` 往返完成——无论成功
+    /// 失败都触发一次 `BrowserBookmarksLoaded` 式的全量刷新去纠正本地
+    /// 乐观更新;失败时额外把错误文案落进 `browser_error`。
+    BrowserBookmarksMutated(ProjectId, Result<(), String>),
     /// 项目树:右键按下的窗口逻辑坐标(main.rs 原始事件层发,供随后可能
     /// 触发的 `ProjectTreeContextMenu` 定位弹出菜单)。
     RightClickAt { x: f32, y: f32 },
@@ -1476,6 +1492,13 @@ pub struct Workspace {
     browser: PreviewPane,
     /// 浏览器域错误文案,语义同 `preview_error`。
     browser_error: Option<String>,
+    /// 收藏夹本地缓存(全局 + 当前项目合集),`Message::BrowserBookmarksLoaded`
+    /// 落地时整份替换;加入/移出走乐观本地更新,见 `crate::bookmarks`。
+    bookmarks: Vec<BookmarkInfo>,
+    /// 收藏夹下拉面板(tab 栏"收藏夹"图标按钮)开合。
+    browser_bookmarks_open: bool,
+    /// 地址栏星标"加入/移出收藏"小菜单开合。
+    browser_star_menu_open: bool,
     /// `dozer://flyfish/__file__` 端点的文件白名单;与 main.rs 的协议
     /// 闭包共享(Arc),打开文件时插入.
     allowed_files: Arc<Mutex<HashSet<PathBuf>>>,
@@ -1769,6 +1792,7 @@ impl Workspace {
         ws.spawn_project_git_refresh(io);
         ws.spawn_conversations_refresh(io);
         ws.spawn_acceptance_count_refresh(io);
+        ws.spawn_bookmarks_refresh(io);
         ws.start_git_watch(io);
         ws
     }
@@ -1834,6 +1858,9 @@ impl Workspace {
             term_tab_first: 0,
             preview_tab_first: 0,
             browser_tab_first: 0,
+            bookmarks: Vec::new(),
+            browser_bookmarks_open: false,
+            browser_star_menu_open: false,
             tree_selected: None,
             tree_clipboard: None,
             tree_error: None,
@@ -2165,6 +2192,21 @@ impl Workspace {
         });
     }
 
+    /// 异步拉取"全局 + 当前项目"收藏夹合集 → `BrowserBookmarksLoaded`。
+    fn spawn_bookmarks_refresh(&self, io: &ShellIo) {
+        let Some(p) = &self.project else { return };
+        let project_id = p.id;
+        let client = io.client.clone();
+        let proxy = io.proxy.clone();
+        io.handle.spawn(async move {
+            let bookmarks = client
+                .list_bookmarks(Some(project_id))
+                .await
+                .unwrap_or_default();
+            let _ = proxy.send_event(Message::BrowserBookmarksLoaded(project_id, bookmarks));
+        });
+    }
+
     /// 本 `Workspace` 归属的项目 id。所有"发起时已知项目、结果晚些才回来"的
     /// 异步任务都要带上它,让 [`App::with_project`] 能投回原主(见
     /// [`ProjectId`])。`None` 只可能出现在 `ProjectOpened` 单条消息内部那个
@@ -2284,6 +2326,7 @@ impl Workspace {
         self.spawn_project_git_refresh(io);
         self.spawn_conversations_refresh(io);
         self.spawn_acceptance_count_refresh(io);
+        self.spawn_bookmarks_refresh(io);
         // D4:新开的项目页签也要有实时刷新——此前只有跨重启恢复
         // (`from_restore`)/`Stub` 促成时会启动 watcher,直接开新项目这条最
         // 常见的路径反而漏了,退化成"只在开项目/回合结束时刷新"(code
@@ -4329,6 +4372,85 @@ impl App {
                 if let Some(url) = open_url {
                     self.update(Message::BrowserOpenUrl(url));
                 }
+            }
+            Message::BrowserStarClick => {
+                self.with_focused_project(|ws, _io| {
+                    ws.browser_error = None;
+                    ws.browser_star_menu_open = !ws.browser_star_menu_open;
+                });
+            }
+            Message::BrowserBookmarksToggle => {
+                self.with_focused_project(|ws, _io| {
+                    ws.browser_bookmarks_open = !ws.browser_bookmarks_open;
+                });
+            }
+            Message::BrowserBookmarkAdd(scope) => {
+                self.with_focused_project(|ws, io| {
+                    ws.browser_star_menu_open = false;
+                    let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
+                        return;
+                    };
+                    let Some(tab) = ws.browser.tabs().get(ws.browser.active_idx()) else {
+                        return;
+                    };
+                    let TabKind::Web { url } = tab.kind.clone() else {
+                        return;
+                    };
+                    let title = tab.title.clone();
+                    let target_project_id = match scope {
+                        BookmarkScope::Global => None,
+                        BookmarkScope::Project => Some(project_id),
+                    };
+                    let created_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    bookmarks::optimistic_add(
+                        &mut ws.bookmarks,
+                        scope,
+                        target_project_id,
+                        &url,
+                        &title,
+                        created_ms,
+                    );
+                    let client = io.client.clone();
+                    let proxy = io.proxy.clone();
+                    io.handle.spawn(async move {
+                        let res = client
+                            .add_bookmark(scope, target_project_id, &url, &title)
+                            .await
+                            .map_err(|e| e.to_string());
+                        let _ = proxy.send_event(Message::BrowserBookmarksMutated(project_id, res));
+                    });
+                });
+            }
+            Message::BrowserBookmarkRemove(id) => {
+                self.with_focused_project(|ws, io| {
+                    ws.browser_star_menu_open = false;
+                    let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
+                        return;
+                    };
+                    bookmarks::optimistic_remove(&mut ws.bookmarks, id);
+                    let client = io.client.clone();
+                    let proxy = io.proxy.clone();
+                    io.handle.spawn(async move {
+                        let res = client.remove_bookmark(id).await.map_err(|e| e.to_string());
+                        let _ = proxy.send_event(Message::BrowserBookmarksMutated(project_id, res));
+                    });
+                });
+            }
+            Message::BrowserBookmarksLoaded(project_id, bookmarks) => {
+                self.with_project(project_id, move |ws, _io| {
+                    ws.bookmarks = bookmarks;
+                });
+            }
+            Message::BrowserBookmarksMutated(project_id, res) => {
+                self.with_project(project_id, move |ws, io| {
+                    if let Err(msg) = res {
+                        ws.browser_error = Some(msg);
+                    }
+                    ws.spawn_bookmarks_refresh(io);
+                });
             }
             Message::ProjectSelect(id) => {
                 // 切项目不再通知 daemon:"活跃项目"是 GUI 侧的概念了(P2a
