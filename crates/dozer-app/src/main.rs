@@ -19,7 +19,6 @@ mod term_model;
 mod term_view;
 mod theme;
 mod transcript;
-mod usage;
 mod workspace;
 
 use workspace::{App, Message};

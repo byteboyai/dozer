@@ -796,7 +796,7 @@ mod tests {
 
     #[test]
     fn parse_codebuddy_shaped_reads_provider_usage_and_zero_tool_calls() {
-        let jsonl = include_str!("../../dozer-hook/fixtures/codebuddy-transcript-sample.jsonl");
+        let jsonl = include_str!("../../../dozer-hook/fixtures/codebuddy-transcript-sample.jsonl");
         let u = parse_usage(AgentKind::Codebuddy, jsonl);
         assert_eq!(u.tokens_in, 22563);
         assert_eq!(u.tokens_out, 3);

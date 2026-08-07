@@ -7,3 +7,4 @@ pub mod browser;
 pub mod files;
 pub mod git_log;
 pub mod todo;
+pub mod usage;
