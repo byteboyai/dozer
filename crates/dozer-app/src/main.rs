@@ -24,6 +24,7 @@ mod theme;
 mod todo;
 mod todo_meta;
 mod transcript;
+mod usage;
 mod workspace;
 mod workspace_font;
 mod workspace_geometry;
