@@ -342,6 +342,10 @@ pub fn view<'a>(
     } else {
         let usages: Vec<ConversationUsage> = rows.iter().map(|(_, u)| u.clone()).collect();
         content = content.push(summary_card(&aggregate(&usages)));
+        let days = daily_totals_by_agent(rows);
+        if !days.is_empty() {
+            content = content.push(bar_chart(&days));
+        }
         content = content.push(grouped_list(rows));
     }
 
@@ -476,6 +480,91 @@ fn grouped_list<'a>(
         }
     }
     col.into()
+}
+
+const BAR_MAX_HEIGHT: f32 = 72.0;
+const BAR_WIDTH: f32 = 20.0;
+
+fn bar_segment(height: f32, color: Color, round_top: bool) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let radius = if round_top {
+        iced_widget::core::border::Radius {
+            top_left: 4.0,
+            top_right: 4.0,
+            ..iced_widget::core::border::Radius::from(0.0)
+        }
+    } else {
+        iced_widget::core::border::Radius::from(0.0)
+    };
+    container(iced_widget::Space::new())
+        .width(Length::Fixed(BAR_WIDTH))
+        .height(Length::Fixed(height.max(1.0)))
+        .style(move |_t: &iced_widget::Theme| iced_widget::container::Style {
+            background: Some(color.into()),
+            border: Border {
+                radius,
+                ..Border::default()
+            },
+            ..iced_widget::container::Style::default()
+        })
+        .into()
+}
+
+fn bar_chart(days: &[DayAgentTotals]) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let max_total = days
+        .iter()
+        .map(|d| d.claude + d.codebuddy + d.opencode)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+
+    let mut bars = iced_widget::row![].spacing(10);
+    for d in days {
+        let total = d.claude + d.codebuddy + d.opencode;
+        let scale = BAR_MAX_HEIGHT / max_total as f32;
+        // 自底向上固定顺序:Claude 贴基线(直角)→ CodeBuddy → OpenCode 顶部(圆角)。
+        let stack = column![
+            bar_segment(d.opencode as f32 * scale, theme::GREEN, true),
+            bar_segment(d.codebuddy as f32 * scale, theme::PURPLE, false),
+            bar_segment(d.claude as f32 * scale, theme::CYAN, false),
+        ]
+        .spacing(2);
+
+        let col = column![
+            container(
+                column![
+                    text(format_token_short(total))
+                        .size(8.0)
+                        .color(theme::DIM)
+                        .font(iced_widget::core::Font::MONOSPACE),
+                    stack,
+                ]
+                .spacing(2)
+                .align_x(iced_widget::core::alignment::Horizontal::Center),
+            )
+            .height(Length::Fixed(BAR_MAX_HEIGHT + 14.0))
+            .align_y(iced_widget::core::alignment::Vertical::Bottom),
+            text(d.label.clone())
+                .size(8.0)
+                .color(theme::DIM)
+                .font(iced_widget::core::Font::MONOSPACE),
+        ]
+        .spacing(4)
+        .align_x(iced_widget::core::alignment::Horizontal::Center);
+
+        bars = bars.push(col);
+    }
+    bars.into()
+}
+
+/// 紧凑数字标签(1234 → "1.2k"，小于 1000 原样显示)，只用于条形图顶部的
+/// 总量标注，跟汇总条/明细行的完整数字(不做单位换算)是两回事——图表标签
+/// 空间小，明细数字要精确,两者刻意不共用格式化函数。
+fn format_token_short(n: u64) -> String {
+    if n >= 1000 {
+        format!("{:.1}k", n as f32 / 1000.0)
+    } else {
+        n.to_string()
+    }
 }
 
 #[cfg(test)]
