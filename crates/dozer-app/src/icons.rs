@@ -1,7 +1,6 @@
 //! Lucide 图标(MIT/ISC，见 `assets/icons/LICENSE`)编译期内嵌 + 统一渲染入口。
 //! `IconKind` 是穷举枚举而非开放式字符串——新增图标 = 加一个变体 + 一个 svg 文件，
 //! 与 `theme.rs` 精选 14 色而非任意色值同一哲学。
-#![allow(dead_code)] // 本模块先整体建好接口，Task 3-5 逐个消费，同 theme.rs 先例
 
 use iced_widget::core::{Color, Element, Length};
 use iced_widget::svg;
@@ -31,6 +30,11 @@ pub enum IconKind {
     Globe,
     Bot,
     MessageSquare,
+    /// 内容 pane 放大/还原(`MaximizedPane`)的触发图标。触发按钮已在
+    /// `a0d324e`(2026-08-06)被主动移除,状态机/overlay 仍保留,是否重新
+    /// 接一个入口留给后续产品决策——见
+    /// `docs/superpowers/plans/2026-08-07-dozer-milestone-summary-and-plan-audit.md`。
+    #[allow(dead_code)]
     Maximize,
     Home,
     RefreshCw,

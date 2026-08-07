@@ -4,10 +4,6 @@
 //! 包装 `alacritty_terminal` 的 VTE 解析器与 `Term` 网格状态，向渲染层
 //! （T5）暴露一份纯数据快照（`Cell` 网格 + 光标位置），不依赖 iced，避免
 //! 渲染 crate 反向渗入本模块。
-//!
-//! T5 消费：`Cell`、`TerminalModel` 及其全部方法目前尚无调用方（渲染层未
-//! 接线），下方 `#![allow(dead_code)]` 是过渡期占位，等 T5 接上渲染后可去掉。
-#![allow(dead_code)]
 
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};

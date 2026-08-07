@@ -5481,7 +5481,11 @@ fn home_sidebar(
 
     col = col.push(
         row![
-            icons::view(icons::IconKind::Home, crate::icon_size::rail(), theme::GOLD),
+            icons::view(
+                icons::IconKind::Dozer,
+                crate::icon_size::rail(),
+                theme::GOLD
+            ),
             text("Dozer")
                 .font(top_bar_font())
                 .size(workspace_font::subtitle())

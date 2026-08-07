@@ -93,7 +93,6 @@ impl FileTree {
     /// 强制重读一个目录的子项缓存（增删改后调用，让 `visible_rows()`
     /// 反映最新磁盘状态）。目录本身若已展开保持展开；未展开的话，本次
     /// 调用不强行展开，只刷新缓存——下次展开时自然是最新的。
-    #[allow(dead_code)] // 留给 Task 3(粘贴)/Task 4(删除)/Task 5(重命名)/Task 6(新建)
     pub fn refresh(&mut self, dir: &Path) {
         self.children.insert(dir.to_path_buf(), read_children(dir));
     }

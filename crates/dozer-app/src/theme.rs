@@ -1,11 +1,6 @@
 // crates/dozer-app/src/theme.rs
 //! ByteBoy2077 主题常量。这 14 个颜色值来自设计规格，禁止改动——
 //! 改动请回到规格文档 (Global Constraints 表) 重新核对再同步。
-//!
-//! 本任务（P1c T3）的四栏骨架只用到其中几个常量；其余（CARD/BODY/
-//! DIM/GOLD/CYAN/GREEN/PURPLE/RED）是给终端渲染、AI 面板等后续任务
-//! （T4-T6）用的，先整体建好接口，因此这里放行 dead_code。
-#![allow(dead_code)]
 use iced_widget::core::Color;
 
 const fn c(r: u8, g: u8, b: u8) -> Color {
