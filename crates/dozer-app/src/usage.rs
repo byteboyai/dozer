@@ -9,6 +9,7 @@
 // 警告会自然消失；在此之前的中间态暂时放行，避免每轮 cargo check 刷噪音。
 #![allow(dead_code)]
 
+use crate::conversation::ConversationMeta;
 use dozer_core::protocol::AgentKind;
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -137,6 +138,68 @@ fn parse_codebuddy_shaped_usage(jsonl: &str) -> ConversationUsage {
     u
 }
 
+/// 多个会话的 `ConversationUsage` 加总成项目级汇总。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProjectUsageTotals {
+    pub conversation_count: u32,
+    pub turns: u32,
+    pub tool_calls: u32,
+    pub mutating_tool_calls: u32,
+    pub files_touched: u32,
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub tokens_cache_read: u64,
+    pub tokens_cache_write: u64,
+}
+
+pub fn aggregate(rows: &[ConversationUsage]) -> ProjectUsageTotals {
+    let mut files = BTreeSet::new();
+    let mut totals = ProjectUsageTotals {
+        conversation_count: rows.len() as u32,
+        ..Default::default()
+    };
+    for r in rows {
+        totals.turns += r.turns;
+        totals.tool_calls += r.tool_calls;
+        totals.mutating_tool_calls += r.mutating_tool_calls;
+        totals.tokens_in += r.tokens_in;
+        totals.tokens_out += r.tokens_out;
+        totals.tokens_cache_read += r.tokens_cache_read;
+        totals.tokens_cache_write += r.tokens_cache_write;
+        files.extend(r.files_touched.iter().cloned());
+    }
+    totals.files_touched = files.len() as u32;
+    totals
+}
+
+/// 按 `AgentKind` 把会话分组，固定顺序 Claude → Codebuddy → Opencode →
+/// Unknown，只返回非空分组；组内保持传入顺序。返回下标而非引用，语义同
+/// `workspace.rs::group_tabs_by_agent`——渲染时既要下标回查
+/// `rows[idx]` 取展示字段，直接存下标比存 `&(ConversationMeta, ConversationUsage)`
+/// 省一次生命周期纠缠。
+pub fn group_usage_by_agent(
+    rows: &[(ConversationMeta, ConversationUsage)],
+) -> Vec<(AgentKind, Vec<usize>)> {
+    const ORDER: [AgentKind; 4] = [
+        AgentKind::Claude,
+        AgentKind::Codebuddy,
+        AgentKind::Opencode,
+        AgentKind::Unknown,
+    ];
+    ORDER
+        .into_iter()
+        .filter_map(|kind| {
+            let idxs: Vec<usize> = rows
+                .iter()
+                .enumerate()
+                .filter(|(_, (meta, _))| meta.agent == kind)
+                .map(|(i, _)| i)
+                .collect();
+            (!idxs.is_empty()).then_some((kind, idxs))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,5 +267,62 @@ mod tests {
         assert_eq!(u.turns, 2, "一条 user + 一条 assistant");
         assert_eq!(u.tool_calls, 0, "CodeBuddy 工具调用形状未观测到,恒为 0");
         assert!(u.files_touched.is_empty());
+    }
+
+    fn sample_usage(files: &[&str]) -> ConversationUsage {
+        ConversationUsage {
+            turns: 2,
+            tool_calls: 3,
+            mutating_tool_calls: 1,
+            files_touched: files.iter().map(|s| s.to_string()).collect(),
+            tokens_in: 10,
+            tokens_out: 2,
+            tokens_cache_read: 1,
+            tokens_cache_write: 1,
+        }
+    }
+
+    #[test]
+    fn aggregate_sums_fields_and_dedups_files_across_conversations() {
+        let rows = [sample_usage(&["/a.rs", "/b.rs"]), sample_usage(&["/a.rs", "/c.rs"])];
+        let totals = aggregate(&rows);
+        assert_eq!(totals.conversation_count, 2);
+        assert_eq!(totals.turns, 4);
+        assert_eq!(totals.tool_calls, 6);
+        assert_eq!(totals.mutating_tool_calls, 2);
+        assert_eq!(totals.files_touched, 3, "/a.rs 在两个会话里都出现,只算一次");
+        assert_eq!(totals.tokens_in, 20);
+        assert_eq!(totals.tokens_out, 4);
+        assert_eq!(totals.tokens_cache_read, 2);
+        assert_eq!(totals.tokens_cache_write, 2);
+    }
+
+    #[test]
+    fn aggregate_empty_slice_is_all_zero() {
+        assert_eq!(aggregate(&[]), ProjectUsageTotals::default());
+    }
+
+    fn meta(agent: AgentKind, title: &str) -> ConversationMeta {
+        ConversationMeta {
+            path: std::path::PathBuf::from(format!("/{title}.jsonl")),
+            title: title.to_string(),
+            modified_ms: 0,
+            size_bytes: 0,
+            agent,
+        }
+    }
+
+    #[test]
+    fn group_usage_by_agent_orders_claude_codebuddy_opencode_and_skips_empty_groups() {
+        let rows = vec![
+            (meta(AgentKind::Codebuddy, "b"), ConversationUsage::default()),
+            (meta(AgentKind::Claude, "a"), ConversationUsage::default()),
+        ];
+        let groups = group_usage_by_agent(&rows);
+        assert_eq!(groups.len(), 2, "没有 OpenCode 数据,不留空分组");
+        assert_eq!(groups[0].0, AgentKind::Claude, "固定顺序:Claude 先于 CodeBuddy");
+        assert_eq!(groups[0].1, vec![1]);
+        assert_eq!(groups[1].0, AgentKind::Codebuddy);
+        assert_eq!(groups[1].1, vec![0]);
     }
 }
