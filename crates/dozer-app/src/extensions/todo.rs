@@ -133,10 +133,10 @@ pub fn todo_display_state(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TodoFilter {
+    #[default]
     All,
     Pending,
     InProgress,
-    #[default]
     Done,
 }
 
@@ -233,6 +233,234 @@ fn save_to(path: &Path, state: &TodoMetaState) -> io::Result<()> {
     }
     let json = serde_json::to_string_pretty(state).expect("TodoMetaState 总能序列化");
     std::fs::write(path, json)
+}
+
+/// Todo 面板挂在每个 `Workspace` 上的状态。
+#[derive(Default)]
+pub struct WorkspaceState {
+    items: Vec<TodoItem>,
+    mtime: Option<std::time::SystemTime>,
+    add_draft: String,
+    filter: TodoFilter,
+    search: String,
+    dispatch_open: Option<usize>,
+    pending_dispatch: std::collections::HashMap<usize, String>,
+    editing_plan_date: Option<(usize, String)>,
+}
+
+impl WorkspaceState {
+    /// 派发选择层是否打开(内核 `App::todo_dispatch_open` 键盘/UI 状态查询用)。
+    pub fn dispatch_popup_open(&self) -> bool {
+        self.dispatch_open.is_some()
+    }
+
+    /// "派发到新建"发起时记的 `tab_id → 任务文本` 映射,内核在
+    /// `Message::TabAttached` 落地时用真正的 `session_id` 消费掉这条,
+    /// 补记派发记录。未知 `tab_id` 返回 `None`,是 no-op。
+    pub fn take_pending_dispatch(&mut self, tab_id: usize) -> Option<String> {
+        self.pending_dispatch.remove(&tab_id)
+    }
+}
+
+/// Todo 面板挂在 `App` 上的元数据(派发记录/计划时间/完成时间),按
+/// `project_id` 分桶,整体持久化到 `todo_meta.json`。
+#[derive(Default)]
+pub struct AppState {
+    meta: TodoMetaState,
+}
+
+impl AppState {
+    pub fn load() -> Self {
+        Self {
+            meta: meta_load(),
+        }
+    }
+
+    fn save(&self) {
+        if let Err(e) = meta_save(&self.meta) {
+            tracing::warn!("写入 todo_meta.json 失败: {e}");
+        }
+    }
+
+    /// 按 `project_id`+`todo_line_key` 查这条任务的元数据(派发记录/计划
+    /// 时间/完成时间),渲染层(`view`)和三态推导都用这个。
+    pub fn meta_for(&self, project_id: i64, key: u64) -> Option<&TodoTaskMeta> {
+        self.meta.get(&project_id)?.get(&key)
+    }
+
+    /// 把一条派发记录写进去并落盘。`text` 用来算 `todo_line_key`——跟
+    /// 查询用的 key 必须是同一套算法,否则写进去的记录永远查不到。
+    pub fn record_dispatch(&mut self, project_id: i64, text: &str, session_id: String) {
+        let key = todo_line_key(text);
+        let entry = self.meta.entry(project_id).or_default();
+        entry.insert(
+            key,
+            TodoTaskMeta {
+                dispatch: Some(DispatchRecord {
+                    session_id,
+                    dispatched_at: std::time::SystemTime::now(),
+                }),
+                ..entry.get(&key).cloned().unwrap_or_default()
+            },
+        );
+        self.save();
+    }
+
+    /// 写/清计划时间:`draft` 为空字符串时存 `None`。
+    pub fn set_plan_date(&mut self, project_id: i64, text: &str, draft: String) {
+        let key = todo_line_key(text);
+        let entry = self.meta.entry(project_id).or_default();
+        let meta = entry.entry(key).or_default();
+        meta.plan_date = if draft.trim().is_empty() {
+            None
+        } else {
+            Some(draft.trim().to_string())
+        };
+        self.save();
+    }
+
+    /// 勾选变完成 → 盖章当前时间;取消勾选 → 清空。
+    pub fn set_completed_at(&mut self, project_id: i64, text: &str, done: bool) {
+        let key = todo_line_key(text);
+        let entry = self.meta.entry(project_id).or_default();
+        let meta = entry.entry(key).or_default();
+        meta.completed_at = completed_at_for_toggle(done, std::time::SystemTime::now());
+        self.save();
+    }
+}
+
+/// Todo 面板自己的消息类型。`DispatchToExisting`/`DispatchNew` 涉及终端
+/// 会话读写,内核在到达 `update` 之前就会拦截处理,不会真的传进
+/// `update`——传进来会 `unreachable!`(同 Git Log 试点 `LoadMore` 的
+/// 处理方式)。
+#[derive(Debug, Clone)]
+pub enum Message {
+    Toggle(usize),
+    AddInputChanged(String),
+    AddSubmit,
+    FilterSet(TodoFilter),
+    SearchChanged(String),
+    DispatchOpen(usize),
+    DispatchClose,
+    DispatchToExisting(usize, String),
+    DispatchNew(usize, crate::workspace::PickerLaunch),
+    PlanDateEditStart(usize),
+    PlanDateChanged(String),
+    PlanDateSubmit,
+}
+
+/// 重读 `.dozer/todo.md`,刷新 `items`/`mtime`。文件不存在/读失败按空
+/// 列表处理,不 panic。现有 `Workspace::reload_todo_from_disk` 的搬家
+/// 版本。
+pub fn reload_from_disk(ws_state: &mut WorkspaceState, project_path: &std::path::Path) {
+    let path = todo_path(project_path);
+    ws_state.mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+    let md = std::fs::read_to_string(&path).unwrap_or_default();
+    ws_state.items = parse_todo(&md);
+}
+
+/// 处理除 `DispatchToExisting`/`DispatchNew` 之外的 10 条消息,统一接收
+/// 两块状态——`Toggle`/`PlanDateEditStart`/`PlanDateSubmit` 需要读写
+/// `AppState`(不只是 Git Log/浏览器试点里"只有派发类消息碰跨领域状态"
+/// 那么简单,写计划前重新核对现有代码才发现这点)。
+pub fn update(
+    ws_state: &mut WorkspaceState,
+    app_state: &mut AppState,
+    msg: Message,
+    project_id: i64,
+    project_path: &std::path::Path,
+) {
+    match msg {
+        Message::Toggle(idx) => {
+            let Some(item) = ws_state.items.get(idx) else {
+                return;
+            };
+            let old_line = format!("- [{}] {}", if item.done { "x" } else { " " }, item.text);
+            let new_line = format!("- [{}] {}", if item.done { " " } else { "x" }, item.text);
+            let before_text = item.text.clone();
+            let path = todo_path(project_path);
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                return;
+            };
+            match replace_todo_line(&content, &old_line, &new_line) {
+                Some(new_content) => {
+                    if let Err(e) = std::fs::write(&path, &new_content) {
+                        tracing::warn!("写入 todo.md 失败: {e}");
+                        return;
+                    }
+                    reload_from_disk(ws_state, project_path);
+                }
+                None => {
+                    // 冲突:文件已经变了,放弃这次写入,直接重读展示最新状态。
+                    reload_from_disk(ws_state, project_path);
+                    return;
+                }
+            }
+            // 文本没变(正常勾选场景)才更新 completed_at;如果文本变了
+            // (文件可能在重读期间被 agent 并发改过),跳过,避免把完成
+            // 时间错记到另一条任务上。
+            if let Some(after) = ws_state.items.get(idx)
+                && after.text == before_text
+            {
+                app_state.set_completed_at(project_id, &after.text, after.done);
+            }
+        }
+        Message::AddInputChanged(s) => ws_state.add_draft = s,
+        Message::AddSubmit => {
+            let text = ws_state.add_draft.trim().to_string();
+            if text.is_empty() {
+                return;
+            }
+            let path = todo_path(project_path);
+            let content = std::fs::read_to_string(&path).unwrap_or_default();
+            let new_content = append_todo_item(&content, &text);
+            if let Some(parent) = path.parent()
+                && let Err(e) = std::fs::create_dir_all(parent)
+            {
+                tracing::warn!("创建 .dozer 目录失败: {e}");
+                return;
+            }
+            if let Err(e) = std::fs::write(&path, &new_content) {
+                tracing::warn!("写入 todo.md 失败: {e}");
+                return;
+            }
+            ws_state.add_draft.clear();
+            reload_from_disk(ws_state, project_path);
+        }
+        Message::FilterSet(f) => ws_state.filter = f,
+        Message::SearchChanged(s) => ws_state.search = s,
+        Message::DispatchOpen(idx) => ws_state.dispatch_open = Some(idx),
+        Message::DispatchClose => ws_state.dispatch_open = None,
+        Message::PlanDateEditStart(idx) => {
+            let existing = ws_state
+                .items
+                .get(idx)
+                .map(|item| todo_line_key(&item.text))
+                .and_then(|key| app_state.meta_for(project_id, key))
+                .and_then(|m| m.plan_date.clone())
+                .unwrap_or_default();
+            ws_state.editing_plan_date = Some((idx, existing));
+        }
+        Message::PlanDateChanged(s) => {
+            if let Some((_, draft)) = ws_state.editing_plan_date.as_mut() {
+                *draft = s;
+            }
+        }
+        Message::PlanDateSubmit => {
+            if let Some((idx, draft)) = ws_state.editing_plan_date.clone()
+                && let Some(text) = ws_state.items.get(idx).map(|item| item.text.clone())
+            {
+                app_state.set_plan_date(project_id, &text, draft);
+            }
+            ws_state.editing_plan_date = None;
+        }
+        Message::DispatchToExisting(..) | Message::DispatchNew(..) => {
+            unreachable!(
+                "DispatchToExisting/DispatchNew 由内核在 Message::Todo 分支里直接处理\
+                 (需要终端会话读写能力),不会转发到这里"
+            )
+        }
+    }
 }
 
 #[cfg(test)]
@@ -483,5 +711,206 @@ mod tests {
         assert_eq!(loaded, state);
         assert!(loaded[&42][&1].dispatch.is_none());
         assert!(loaded[&42][&2].plan_date.is_none());
+    }
+
+    fn ws_with_item(text: &str, done: bool) -> WorkspaceState {
+        WorkspaceState {
+            items: vec![TodoItem {
+                text: text.to_string(),
+                done,
+            }],
+            ..WorkspaceState::default()
+        }
+    }
+
+    fn project_dir_with_todo(md: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = todo_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, md).unwrap();
+        let root = dir.path().to_path_buf();
+        (dir, root)
+    }
+
+    #[test]
+    fn reload_from_disk_populates_items_and_mtime() {
+        let (_dir, root) = project_dir_with_todo("- [ ] 任务A\n");
+        let mut ws_state = WorkspaceState::default();
+        reload_from_disk(&mut ws_state, &root);
+        assert_eq!(ws_state.items.len(), 1);
+        assert!(ws_state.mtime.is_some());
+    }
+
+    #[test]
+    fn reload_from_disk_missing_file_yields_empty_items() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws_state = WorkspaceState::default();
+        reload_from_disk(&mut ws_state, dir.path());
+        assert!(ws_state.items.is_empty());
+        assert!(ws_state.mtime.is_none());
+    }
+
+    #[test]
+    fn update_toggle_flips_line_on_disk_and_sets_completed_at() {
+        let (_dir, root) = project_dir_with_todo("- [ ] 任务A\n");
+        let mut ws_state = ws_with_item("任务A", false);
+        let mut app_state = AppState::default();
+        update(&mut ws_state, &mut app_state, Message::Toggle(0), 1, &root);
+        assert!(ws_state.items[0].done, "内存态应反映勾选后的完成态");
+        let key = todo_line_key("任务A");
+        assert!(app_state.meta_for(1, key).unwrap().completed_at.is_some());
+        let content = std::fs::read_to_string(todo_path(&root)).unwrap();
+        assert!(content.contains("- [x] 任务A"));
+    }
+
+    #[test]
+    fn update_toggle_missing_original_line_reloads_without_setting_completed_at() {
+        // 文件内容跟内存态对不上(模拟并发冲突):old_line 找不到。
+        let (_dir, root) = project_dir_with_todo("- [x] 任务A(已经被改过)\n");
+        let mut ws_state = ws_with_item("任务A", false);
+        let mut app_state = AppState::default();
+        update(&mut ws_state, &mut app_state, Message::Toggle(0), 1, &root);
+        let key = todo_line_key("任务A");
+        assert!(app_state.meta_for(1, key).is_none(), "冲突时不该记完成时间");
+    }
+
+    #[test]
+    fn update_add_submit_appends_and_clears_draft() {
+        let (_dir, root) = project_dir_with_todo("# Todo\n");
+        let mut ws_state = WorkspaceState {
+            add_draft: "新任务".to_string(),
+            ..WorkspaceState::default()
+        };
+        let mut app_state = AppState::default();
+        update(&mut ws_state, &mut app_state, Message::AddSubmit, 1, &root);
+        assert!(ws_state.add_draft.is_empty());
+        assert_eq!(ws_state.items.len(), 1);
+        assert_eq!(ws_state.items[0].text, "新任务");
+    }
+
+    #[test]
+    fn update_add_submit_empty_draft_is_noop() {
+        let (_dir, root) = project_dir_with_todo("# Todo\n");
+        let mut ws_state = WorkspaceState::default();
+        let mut app_state = AppState::default();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::AddSubmit,
+            1,
+            &root,
+        );
+        assert!(ws_state.items.is_empty());
+    }
+
+    #[test]
+    fn update_filter_and_search_set_fields() {
+        let (_dir, root) = project_dir_with_todo("# Todo\n");
+        let mut ws_state = WorkspaceState::default();
+        let mut app_state = AppState::default();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::FilterSet(TodoFilter::Done),
+            1,
+            &root,
+        );
+        assert_eq!(ws_state.filter, TodoFilter::Done);
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::SearchChanged("关键字".to_string()),
+            1,
+            &root,
+        );
+        assert_eq!(ws_state.search, "关键字");
+    }
+
+    #[test]
+    fn update_dispatch_open_and_close_toggle_popup() {
+        let (_dir, root) = project_dir_with_todo("# Todo\n");
+        let mut ws_state = WorkspaceState::default();
+        let mut app_state = AppState::default();
+        update(&mut ws_state, &mut app_state, Message::DispatchOpen(2), 1, &root);
+        assert!(ws_state.dispatch_popup_open());
+        update(&mut ws_state, &mut app_state, Message::DispatchClose, 1, &root);
+        assert!(!ws_state.dispatch_popup_open());
+    }
+
+    #[test]
+    fn update_plan_date_edit_start_prefills_from_app_state() {
+        let (_dir, root) = project_dir_with_todo("# Todo\n");
+        let mut ws_state = ws_with_item("任务A", false);
+        let mut app_state = AppState::default();
+        app_state.set_plan_date(1, "任务A", "08-10".to_string());
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::PlanDateEditStart(0),
+            1,
+            &root,
+        );
+        assert_eq!(
+            ws_state.editing_plan_date,
+            Some((0, "08-10".to_string()))
+        );
+    }
+
+    #[test]
+    fn update_plan_date_edit_start_no_existing_value_prefills_empty() {
+        let (_dir, root) = project_dir_with_todo("# Todo\n");
+        let mut ws_state = ws_with_item("任务A", false);
+        let mut app_state = AppState::default();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::PlanDateEditStart(0),
+            1,
+            &root,
+        );
+        assert_eq!(ws_state.editing_plan_date, Some((0, String::new())));
+    }
+
+    #[test]
+    fn update_plan_date_submit_writes_app_state_and_clears_editing() {
+        let (_dir, root) = project_dir_with_todo("# Todo\n");
+        let mut ws_state = ws_with_item("任务A", false);
+        ws_state.editing_plan_date = Some((0, "08-10".to_string()));
+        let mut app_state = AppState::default();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::PlanDateSubmit,
+            1,
+            &root,
+        );
+        assert!(ws_state.editing_plan_date.is_none());
+        let key = todo_line_key("任务A");
+        assert_eq!(
+            app_state.meta_for(1, key).unwrap().plan_date.as_deref(),
+            Some("08-10")
+        );
+    }
+
+    #[test]
+    fn app_state_record_dispatch_then_meta_for_finds_it() {
+        let mut app_state = AppState::default();
+        app_state.record_dispatch(1, "任务A", "sess-1".to_string());
+        let key = todo_line_key("任务A");
+        let meta = app_state.meta_for(1, key).unwrap();
+        assert_eq!(meta.dispatch.as_ref().unwrap().session_id, "sess-1");
+    }
+
+    #[test]
+    fn take_pending_dispatch_removes_and_returns_once() {
+        let mut ws_state = WorkspaceState::default();
+        ws_state
+            .pending_dispatch
+            .insert(7, "任务A".to_string());
+        assert_eq!(
+            ws_state.take_pending_dispatch(7),
+            Some("任务A".to_string())
+        );
+        assert_eq!(ws_state.take_pending_dispatch(7), None, "取过一次就没了");
     }
 }
