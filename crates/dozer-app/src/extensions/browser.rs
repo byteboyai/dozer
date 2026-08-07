@@ -940,7 +940,7 @@ fn star_button(
         .as_ref()
         .map(|u| bookmark_status(&state.bookmarks, u, project_id).is_bookmarked())
         .unwrap_or(false);
-    let color = if starred { theme::GOLD } else { theme::DIM };
+    let color = if starred { theme::color::GOLD } else { theme::color::DIM };
     let mut btn = button(icons::view(icons::IconKind::Star, icon_size::row(), color))
         .width(Length::Fixed(workspace_geometry::tab_button_size()))
         .height(Length::Fixed(workspace_geometry::tab_button_size()))
@@ -963,13 +963,13 @@ fn bookmark_menu_row(
 ) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
     button(lh(text(label)
         .size(workspace_font::body())
-        .color(theme::CREAM)))
+        .color(theme::color::CREAM)))
     .on_press(msg)
     .width(Length::Fill)
     .padding([6, 12])
     .style(|_t: &iced_widget::Theme, _s| button::Style {
         background: None,
-        text_color: theme::CREAM,
+        text_color: theme::color::CREAM,
         ..button::Style::default()
     })
     .into()
@@ -1014,9 +1014,9 @@ fn star_menu_popup(
     container(col)
         .padding(6)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::CARD.into()),
+            background: Some(theme::color::CARD.into()),
             border: Border {
-                color: theme::BORDER,
+                color: theme::color::BORDER,
                 width: 1.0,
                 radius: 6.0.into(),
             },
@@ -1033,24 +1033,24 @@ fn bookmark_group<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let mut col = column![lh(text(title)
         .size(workspace_font::subtitle())
-        .color(theme::DIM))]
+        .color(theme::color::DIM))]
     .spacing(2);
     for b in items {
         let open = button(lh(text(b.title.clone())
             .size(workspace_font::body())
-            .color(theme::CREAM)))
+            .color(theme::color::CREAM)))
         .on_press(Message::OpenUrl(b.url.clone()))
         .width(Length::Fill)
         .style(|_t: &iced_widget::Theme, _s| button::Style {
             background: None,
-            text_color: theme::CREAM,
+            text_color: theme::color::CREAM,
             ..button::Style::default()
         });
-        let remove = button(lh(text("×").size(workspace_font::body()).color(theme::DIM)))
+        let remove = button(lh(text("×").size(workspace_font::body()).color(theme::color::DIM)))
             .on_press(Message::BookmarkRemove(b.id))
             .style(|_t: &iced_widget::Theme, _s| button::Style {
                 background: None,
-                text_color: theme::DIM,
+                text_color: theme::color::DIM,
                 ..button::Style::default()
             });
         col = col.push(
@@ -1087,16 +1087,16 @@ fn bookmarks_panel(
     if both_empty {
         col = col.push(lh(text("暂无收藏")
             .size(workspace_font::subtitle())
-            .color(theme::DIM)));
+            .color(theme::color::DIM)));
     }
 
     container(col)
         .padding(6)
         .width(Length::Fill)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::CARD.into()),
+            background: Some(theme::color::CARD.into()),
             border: Border {
-                color: theme::BORDER,
+                color: theme::color::BORDER,
                 width: 1.0,
                 radius: 6.0.into(),
             },
@@ -1138,18 +1138,18 @@ pub fn view(
             let active = idx == state.tabs.active_idx();
             let select = button(lh(text(tab.title.clone())
                 .size(workspace_font::subtitle())
-                .color(theme::CREAM)))
+                .color(theme::color::CREAM)))
             .on_press(Message::SelectTab(idx))
             .style(|_t, _s| button::Style {
                 background: None,
-                text_color: theme::CREAM,
+                text_color: theme::color::CREAM,
                 ..button::Style::default()
             });
-            let close = button(lh(text("×").size(workspace_font::body()).color(theme::DIM)))
+            let close = button(lh(text("×").size(workspace_font::body()).color(theme::color::DIM)))
                 .on_press(Message::CloseTab(idx))
                 .style(|_t, _s| button::Style {
                     background: None,
-                    text_color: theme::DIM,
+                    text_color: theme::color::DIM,
                     ..button::Style::default()
                 });
             container(
@@ -1161,9 +1161,9 @@ pub fn view(
             .style(move |_t: &iced_widget::Theme| {
                 if active {
                     container::Style {
-                        background: Some(theme::CARD.into()),
+                        background: Some(theme::color::CARD.into()),
                         border: Border {
-                            color: theme::BORDER,
+                            color: theme::color::BORDER,
                             width: 1.0,
                             radius: 6.0.into(),
                         },
@@ -1200,14 +1200,14 @@ pub fn view(
     };
     let addr = button(lh(text(addr_text)
         .size(workspace_font::body())
-        .color(if editing { theme::CREAM } else { theme::DIM })))
+        .color(if editing { theme::color::CREAM } else { theme::color::DIM })))
     .on_press(Message::AddrClick)
     .width(Length::Fill)
     .style(move |_t, _s| button::Style {
-        background: Some(theme::TERM_BG.into()),
-        text_color: theme::CREAM,
+        background: Some(theme::color::TERM_BG.into()),
+        text_color: theme::color::CREAM,
         border: Border {
-            color: if editing { theme::GOLD } else { theme::BORDER },
+            color: if editing { theme::color::GOLD } else { theme::color::BORDER },
             width: 1.0,
             radius: 2.0.into(),
         },
@@ -1234,14 +1234,14 @@ pub fn view(
     if let Some(err) = &state.error {
         content = content.push(lh(text(format!("⚠ {err}"))
             .size(workspace_font::body())
-            .color(theme::RED)));
+            .color(theme::color::RED)));
     }
 
     if state.tabs.tabs().is_empty() {
         content = content.push(
             container(lh(text("暂无网页——在地址栏输入网址")
                 .size(workspace_font::subtitle())
-                .color(theme::DIM)))
+                .color(theme::color::DIM)))
             .width(Length::Fill)
             .height(Length::Fill),
         );
@@ -1264,7 +1264,7 @@ fn bookmarks_toggle_button<'a>() -> Element<'a, Message, iced_widget::Theme, ice
     button(icons::view(
         icons::IconKind::Bookmark,
         icon_size::row(),
-        theme::DIM,
+        theme::color::DIM,
     ))
     .on_press(Message::BookmarksToggle)
     .width(Length::Fixed(workspace_geometry::tab_button_size()))
@@ -1272,7 +1272,7 @@ fn bookmarks_toggle_button<'a>() -> Element<'a, Message, iced_widget::Theme, ice
     .padding(0)
     .style(|_t, _s| button::Style {
         background: None,
-        text_color: theme::DIM,
+        text_color: theme::color::DIM,
         ..button::Style::default()
     })
     .into()

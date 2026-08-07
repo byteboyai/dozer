@@ -159,20 +159,20 @@ fn resolve_color(name: &str) -> Color {
         return parse_hex_color(name);
     }
     match name {
-        "BG" => theme::BG,
-        "PANEL" => theme::PANEL,
-        "TERM_BG" => theme::TERM_BG,
-        "CARD" => theme::CARD,
-        "BORDER" => theme::BORDER,
-        "CREAM" => theme::CREAM,
-        "BODY" => theme::BODY,
-        "DIM" => theme::DIM,
-        "GOLD" => theme::GOLD,
-        "CYAN" => theme::CYAN,
-        "GREEN" => theme::GREEN,
-        "PURPLE" => theme::PURPLE,
-        "RED" => theme::RED,
-        "SCRIM" => theme::SCRIM,
+        "BG" => theme::color::BG,
+        "PANEL" => theme::color::PANEL,
+        "TERM_BG" => theme::color::TERM_BG,
+        "CARD" => theme::color::CARD,
+        "BORDER" => theme::color::BORDER,
+        "CREAM" => theme::color::CREAM,
+        "BODY" => theme::color::BODY,
+        "DIM" => theme::color::DIM,
+        "GOLD" => theme::color::GOLD,
+        "CYAN" => theme::color::CYAN,
+        "GREEN" => theme::color::GREEN,
+        "PURPLE" => theme::color::PURPLE,
+        "RED" => theme::color::RED,
+        "SCRIM" => theme::color::SCRIM,
         other => panic!("workspace.json: 未知颜色令牌 \"{other}\""),
     }
 }
@@ -370,7 +370,7 @@ mod tests {
     #[test]
     fn preview_pane_matches_pre_migration_literals() {
         let s = preview_pane();
-        assert_eq!(s.background, Some(theme::PANEL));
+        assert_eq!(s.background, Some(theme::color::PANEL));
         assert!(s.border.is_none());
         assert_eq!(s.padding, Padding::from(8.0));
         assert_eq!(s.gap, 4.0);
@@ -384,7 +384,7 @@ mod tests {
         let s = top_bar();
         assert_eq!(s.background, Some(Color::from_rgb8(0x0e, 0x16, 0x20)));
         let border = s.border.expect("top_bar 应有底部分隔线(设计稿 border-b)");
-        assert_eq!(border.color, theme::BORDER);
+        assert_eq!(border.color, theme::color::BORDER);
         assert_eq!(border.width, 1.0);
         // left=78:统一工具栏改造后,原生红黄绿交通灯叠在 top_bar 左侧,
         // 这段留白给交通灯让位,不是设计稿本身的数值(设计稿假设交通灯是
@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn left_icon_rail_matches_pre_migration_literals() {
         let s = left_icon_rail();
-        assert_eq!(s.background, Some(theme::PANEL));
+        assert_eq!(s.background, Some(theme::color::PANEL));
         assert!(s.border.is_none());
         assert_eq!(
             s.padding,
@@ -421,9 +421,9 @@ mod tests {
     #[test]
     fn status_bar_matches_pre_migration_literals() {
         let s = status_bar();
-        assert_eq!(s.background, Some(theme::PANEL));
+        assert_eq!(s.background, Some(theme::color::PANEL));
         let border = s.border.expect("status_bar 应有上边线");
-        assert_eq!(border.color, theme::BORDER);
+        assert_eq!(border.color, theme::color::BORDER);
         assert_eq!(border.width, 1.0);
         assert_eq!(s.padding, Padding::from([0.0, 8.0]));
     }
@@ -431,9 +431,9 @@ mod tests {
     #[test]
     fn maximize_overlay_matches_pre_migration_literals() {
         let s = maximize_overlay();
-        assert_eq!(s.scrim_background, theme::SCRIM);
+        assert_eq!(s.scrim_background, theme::color::SCRIM);
         assert_eq!(s.scrim_padding, 40.0);
-        assert_eq!(s.border.color, theme::GOLD);
+        assert_eq!(s.border.color, theme::color::GOLD);
         assert_eq!(s.border.width, 1.5);
         assert_eq!(s.border.radius, 10.0.into());
     }
@@ -441,9 +441,9 @@ mod tests {
     #[test]
     fn context_menu_matches_pre_migration_literals() {
         let s = context_menu();
-        assert_eq!(s.background, Some(theme::CARD));
+        assert_eq!(s.background, Some(theme::color::CARD));
         let border = s.border.expect("context_menu 应有边框");
-        assert_eq!(border.color, theme::BORDER);
+        assert_eq!(border.color, theme::color::BORDER);
         assert_eq!(border.width, 1.0);
         assert_eq!(border.radius, 6.0.into());
         assert_eq!(s.padding, Padding::from(6.0));
@@ -456,9 +456,9 @@ mod tests {
         // 左右面板区整体用圆角背景浮起:背景填充 CARD 色(比内层面板 PANEL
         // 略亮,在灰底窗口上显出圆角卡片),描边宽为 0 但带圆角(用 0 宽描边
         // 保留"无描边"观感,仅让背景走圆角),四向 margin 做悬浮留白。
-        assert_eq!(s.background, Some(theme::CARD));
+        assert_eq!(s.background, Some(theme::color::CARD));
         let border = s.border.expect("left_zone 应有圆角边框(宽 0)");
-        assert_eq!(border.color, theme::BORDER);
+        assert_eq!(border.color, theme::color::BORDER);
         assert_eq!(border.width, 0.0);
         assert_eq!(border.radius, 8.0.into());
         assert_eq!(s.padding, Padding::from(1.0));
@@ -467,9 +467,9 @@ mod tests {
     #[test]
     fn right_zone_matches_config() {
         let s = right_zone();
-        assert_eq!(s.background, Some(theme::CARD));
+        assert_eq!(s.background, Some(theme::color::CARD));
         let border = s.border.expect("right_zone 应有圆角边框(宽 0)");
-        assert_eq!(border.color, theme::BORDER);
+        assert_eq!(border.color, theme::color::BORDER);
         assert_eq!(border.width, 0.0);
         assert_eq!(border.radius, 8.0.into());
         assert_eq!(s.padding, Padding::from(1.0));
@@ -483,8 +483,8 @@ mod tests {
 
     #[test]
     fn hex_color_matches_equivalent_token() {
-        assert_eq!(resolve_color("#0a0e16"), theme::BG);
-        assert_eq!(resolve_color("#12202a"), theme::CARD);
+        assert_eq!(resolve_color("#0a0e16"), theme::color::BG);
+        assert_eq!(resolve_color("#12202a"), theme::color::CARD);
     }
 
     #[test]

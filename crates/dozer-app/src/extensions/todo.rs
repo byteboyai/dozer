@@ -507,10 +507,10 @@ pub fn view<'a>(
     let header = column![
         text("Todo")
             .size(workspace_font::title())
-            .color(theme::CREAM),
+            .color(theme::color::CREAM),
         text(format!("{} 条任务 · .dozer/todo.md", ws_state.items.len()))
             .size(workspace_font::caption())
-            .color(theme::DIM),
+            .color(theme::color::DIM),
     ]
     .spacing(4)
     .padding([20, 20]);
@@ -548,12 +548,12 @@ pub fn view<'a>(
             .width(Length::Fill)
             .style(
                 |_t: &iced_widget::Theme, _s| iced_widget::text_input::Style {
-                    background: theme::BG.into(),
+                    background: theme::color::BG.into(),
                     border: Border::default(),
-                    icon: theme::DIM,
-                    placeholder: theme::DIM,
-                    value: theme::CREAM,
-                    selection: theme::GOLD,
+                    icon: theme::color::DIM,
+                    placeholder: theme::color::DIM,
+                    value: theme::color::CREAM,
+                    selection: theme::color::GOLD,
                 }
             ),
     ]
@@ -567,7 +567,7 @@ pub fn view<'a>(
             container(
                 text("没有匹配的任务")
                     .size(workspace_font::body())
-                    .color(theme::DIM),
+                    .color(theme::color::DIM),
             )
             .padding([20, 20]),
         );
@@ -605,16 +605,16 @@ pub fn view<'a>(
         .padding([10, 20])
         .style(
             |_t: &iced_widget::Theme, _s| iced_widget::text_input::Style {
-                background: theme::BG.into(),
+                background: theme::color::BG.into(),
                 border: Border {
                     color: Color::TRANSPARENT,
                     width: 0.0,
                     radius: 0.0.into(),
                 },
-                icon: theme::DIM,
-                placeholder: theme::DIM,
-                value: theme::CREAM,
-                selection: theme::GOLD,
+                icon: theme::color::DIM,
+                placeholder: theme::color::DIM,
+                value: theme::color::CREAM,
+                selection: theme::color::GOLD,
             },
         );
 
@@ -623,7 +623,7 @@ pub fn view<'a>(
         .height(Length::Fixed(1.0))
         .style(|_t: &iced_widget::Theme| container::Style {
             border: Border {
-                color: theme::BORDER,
+                color: theme::color::BORDER,
                 width: 1.0,
                 radius: 0.0.into(),
             },
@@ -643,7 +643,7 @@ pub fn view<'a>(
         .width(width)
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::BG.into()),
+            background: Some(theme::color::BG.into()),
             border: outer,
             ..container::Style::default()
         })
@@ -661,12 +661,12 @@ fn todo_row<'a>(
     existing_tabs: &'a [(&'a str, String)],
 ) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
     let done = item.done;
-    let box_color = if done { theme::BORDER } else { theme::DIM };
+    let box_color = if done { theme::color::BORDER } else { theme::color::DIM };
     let checkbox = button(
         container(if done {
             text("✓")
                 .size(workspace_font::caption())
-                .color(theme::DIM)
+                .color(theme::color::DIM)
                 .into()
         } else {
             Element::from(iced_widget::space::Space::new())
@@ -677,7 +677,7 @@ fn todo_row<'a>(
         .align_y(iced_widget::core::alignment::Vertical::Center)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: if done {
-                Some(theme::BORDER.into())
+                Some(theme::color::BORDER.into())
             } else {
                 None
             },
@@ -693,11 +693,11 @@ fn todo_row<'a>(
     .padding(0)
     .style(|_t: &iced_widget::Theme, _s| button::Style {
         background: None,
-        text_color: theme::CREAM,
+        text_color: theme::color::CREAM,
         ..button::Style::default()
     });
 
-    let label_color = if done { theme::DIM } else { theme::CREAM };
+    let label_color = if done { theme::color::DIM } else { theme::color::CREAM };
     let label: Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> = if done {
         let rich: iced_widget::text::Rich<
             '_,
@@ -724,20 +724,20 @@ fn todo_row<'a>(
             TodoState::Done => meta.and_then(|m| m.completed_at).map(|t| {
                 text(format!("完成于 {}", format_todo_time(t)))
                     .size(workspace_font::caption())
-                    .color(theme::DIM)
+                    .color(theme::color::DIM)
                     .into()
             }),
             _ => meta.and_then(|m| m.plan_date.as_deref()).map(|d| {
                 button(
                     text(format!("计划 {d}"))
                         .size(workspace_font::caption())
-                        .color(theme::DIM),
+                        .color(theme::color::DIM),
                 )
                 .on_press(Message::PlanDateEditStart(idx))
                 .padding(0)
                 .style(|_t: &iced_widget::Theme, _s| button::Style {
                     background: None,
-                    text_color: theme::DIM,
+                    text_color: theme::color::DIM,
                     ..button::Style::default()
                 })
                 .into()
@@ -757,11 +757,11 @@ fn todo_row<'a>(
                 icons::view(
                     icons::IconKind::SquarePlus,
                     crate::icon_size::row(),
-                    theme::GOLD
+                    theme::color::GOLD
                 ),
                 text("派发")
                     .size(workspace_font::caption())
-                    .color(theme::GOLD),
+                    .color(theme::color::GOLD),
             ]
             .spacing(4)
             .align_y(iced_widget::core::alignment::Vertical::Center),
@@ -770,9 +770,9 @@ fn todo_row<'a>(
         .padding([5, 10])
         .style(|_t: &iced_widget::Theme, _s| button::Style {
             background: None,
-            text_color: theme::GOLD,
+            text_color: theme::color::GOLD,
             border: Border {
-                color: theme::BORDER,
+                color: theme::color::BORDER,
                 width: 1.0,
                 radius: 6.0.into(),
             },
@@ -780,10 +780,10 @@ fn todo_row<'a>(
         })
         .into(),
         TodoState::InProgress => row![
-            text("●").size(workspace_font::dot_sm()).color(theme::GREEN),
+            text("●").size(workspace_font::dot_sm()).color(theme::color::GREEN),
             text("进行中")
                 .size(workspace_font::caption())
-                .color(theme::GREEN),
+                .color(theme::color::GREEN),
         ]
         .spacing(5)
         .into(),
@@ -816,14 +816,14 @@ fn todo_dispatch_popup<'a>(
             button(
                 text(title.clone())
                     .size(workspace_font::body())
-                    .color(theme::CREAM),
+                    .color(theme::color::CREAM),
             )
             .on_press(Message::DispatchToExisting(idx, session_id.to_string()))
             .width(Length::Fill)
             .padding([6, 12])
             .style(|_t: &iced_widget::Theme, _s| button::Style {
                 background: None,
-                text_color: theme::CREAM,
+                text_color: theme::color::CREAM,
                 ..button::Style::default()
             }),
         );
@@ -832,7 +832,7 @@ fn todo_dispatch_popup<'a>(
         button(
             text("新建 agent 会话…")
                 .size(workspace_font::body())
-                .color(theme::GOLD),
+                .color(theme::color::GOLD),
         )
         .on_press(Message::DispatchNew(
             idx,
@@ -842,16 +842,16 @@ fn todo_dispatch_popup<'a>(
         .padding([6, 12])
         .style(|_t: &iced_widget::Theme, _s| button::Style {
             background: None,
-            text_color: theme::GOLD,
+            text_color: theme::color::GOLD,
             ..button::Style::default()
         }),
     );
     container(col)
         .padding(6)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::CARD.into()),
+            background: Some(theme::color::CARD.into()),
             border: Border {
-                color: theme::BORDER,
+                color: theme::color::BORDER,
                 width: 1.0,
                 radius: 6.0.into(),
             },
@@ -868,7 +868,7 @@ fn todo_plan_date_edit_row<'a>(
     row![
         text(item.text.clone())
             .size(workspace_font::body())
-            .color(theme::CREAM),
+            .color(theme::color::CREAM),
         text_input("计划时间，如 08-10", draft)
             .on_input(Message::PlanDateChanged)
             .on_submit(Message::PlanDateSubmit)
@@ -891,17 +891,17 @@ fn todo_filter_segment<'a>(
     button(
         text(label)
             .size(workspace_font::caption())
-            .color(if active { theme::CREAM } else { theme::DIM }),
+            .color(if active { theme::color::CREAM } else { theme::color::DIM }),
     )
     .on_press(Message::FilterSet(value))
     .padding([4, 10])
     .style(move |_t: &iced_widget::Theme, _s| button::Style {
         background: if active {
-            Some(theme::CARD.into())
+            Some(theme::color::CARD.into())
         } else {
             None
         },
-        text_color: if active { theme::CREAM } else { theme::DIM },
+        text_color: if active { theme::color::CREAM } else { theme::color::DIM },
         border: Border {
             radius: 5.0.into(),
             ..Border::default()

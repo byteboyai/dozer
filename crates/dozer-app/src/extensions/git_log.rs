@@ -35,11 +35,11 @@ const DETAIL_WIDTH: f32 = 460.0;
 /// 与主题色轮换配色的 track 调色板——不用 gleisbau 自带的 CSS 颜色名,
 /// 省掉一个颜色名解析器,顺便让图和 ByteBoy2077 主题保持一致。
 const TRACK_COLORS: [Color; 5] = [
-    theme::CYAN,
-    theme::GREEN,
-    theme::GOLD,
-    theme::PURPLE,
-    theme::RED,
+    theme::color::CYAN,
+    theme::color::GREEN,
+    theme::color::GOLD,
+    theme::color::PURPLE,
+    theme::color::RED,
 ];
 
 fn track_color(color_idx: usize) -> Color {
@@ -552,7 +552,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Git
                 frame.stroke(
                     &canvas::Path::circle(center, DOT_RADIUS + 2.5),
                     canvas::Stroke::default()
-                        .with_color(theme::GOLD)
+                        .with_color(theme::color::GOLD)
                         .with_width(1.5),
                 );
             }
@@ -573,7 +573,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Git
                 frame.fill_text(canvas::Text {
                     content,
                     position: Point::ORIGIN,
-                    color: theme::CREAM,
+                    color: theme::color::CREAM,
                     size: Pixels(workspace_font::body() as f32),
                     align_y: alignment::Vertical::Center,
                     font: Font::MONOSPACE,
@@ -610,7 +610,7 @@ fn ref_labels_text(refs: &[RefLabel], head_branch: Option<&str>) -> String {
 pub fn view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let error = state.error.as_deref();
     if let Some(err) = error {
-        return container(text(format!("git log 读取失败: {err}")).color(theme::RED))
+        return container(text(format!("git log 读取失败: {err}")).color(theme::color::RED))
             .padding(16)
             .into();
     }
@@ -621,14 +621,14 @@ pub fn view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_widg
         } else {
             "未打开项目"
         };
-        return container(text(text_content).color(theme::DIM))
+        return container(text(text_content).color(theme::color::DIM))
             .padding(16)
             .into();
     };
     let selected = state.selected;
     let detail = state.detail.as_ref();
     if snapshot.rows.is_empty() {
-        return container(text("没有可显示的提交").color(theme::DIM))
+        return container(text("没有可显示的提交").color(theme::color::DIM))
             .padding(16)
             .into();
     }
@@ -646,7 +646,7 @@ pub fn view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_widg
     let mut header = row![
         text(snapshot.repo_path.display().to_string())
             .size(workspace_font::caption())
-            .color(theme::DIM)
+            .color(theme::color::DIM)
     ]
     .padding([4, 8]);
     // 已经有旧快照在画的时候(引用变化重建/加载更多)又发起了新一轮异步
@@ -656,13 +656,13 @@ pub fn view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_widg
         header = header.push(
             text("刷新中…")
                 .size(workspace_font::caption())
-                .color(theme::DIM),
+                .color(theme::color::DIM),
         );
     }
     let load_more = iced_widget::button(
         text("加载更多提交 (+200)")
             .size(workspace_font::caption())
-            .color(theme::CREAM),
+            .color(theme::color::CREAM),
     )
     .on_press_maybe((!loading).then_some(Message::LoadMore))
     .padding([4, 12]);
@@ -698,26 +698,26 @@ fn detail_view<'a>(
     result: &'a Result<CommitDetail, String>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let body: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> = match result {
-        Err(err) => container(text(format!("详情加载失败: {err}")).color(theme::RED))
+        Err(err) => container(text(format!("详情加载失败: {err}")).color(theme::color::RED))
             .padding(8)
             .into(),
-        Ok(detail) if detail.files.is_empty() => container(text("无文件改动").color(theme::DIM))
+        Ok(detail) if detail.files.is_empty() => container(text("无文件改动").color(theme::color::DIM))
             .padding(8)
             .into(),
         Ok(detail) => {
             let list = detail.files.iter().fold(column![].spacing(10), |acc, f| {
                 let color = match f.status {
-                    git2::Delta::Added => theme::GREEN,
-                    git2::Delta::Deleted => theme::RED,
+                    git2::Delta::Added => theme::color::GREEN,
+                    git2::Delta::Deleted => theme::color::RED,
                     // 修改/重命名/复制等其余状态是纯分类展示,不是甲方动作,
-                    // 不能借用 `theme::GOLD`(CLAUDE.md 硬性裁决)。
-                    _ => theme::CYAN,
+                    // 不能借用 `theme::color::GOLD`(CLAUDE.md 硬性裁决)。
+                    _ => theme::color::CYAN,
                 };
                 let header = row![
                     text(status_glyph(f.status)).color(color).width(18),
                     text(&f.path)
                         .size(workspace_font::caption())
-                        .color(theme::CREAM),
+                        .color(theme::color::CREAM),
                 ]
                 .spacing(4)
                 .padding([2, 8]);
@@ -728,7 +728,7 @@ fn detail_view<'a>(
                     acc.push(
                         text(f.patch.clone())
                             .size(workspace_font::caption())
-                            .color(theme::BODY)
+                            .color(theme::color::BODY)
                             .font(Font::MONOSPACE),
                     )
                 }

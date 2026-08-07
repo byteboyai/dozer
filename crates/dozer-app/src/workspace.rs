@@ -4561,14 +4561,14 @@ impl App {
             let mut hint_col = column![
                 text("未打开任何项目——点顶栏的 ＋ 打开一个")
                     .size(workspace_font::subtitle())
-                    .color(theme::DIM)
+                    .color(theme::color::DIM)
             ]
             .spacing(8);
             if let Some(err) = &self.daemon_error {
                 hint_col = hint_col.push(
                     text(format!("⚠ {err}"))
                         .size(workspace_font::body())
-                        .color(theme::RED),
+                        .color(theme::color::RED),
                 );
             }
             let hint = container(hint_col.padding(16))
@@ -4589,7 +4589,7 @@ impl App {
         let body = row![
             left_icon_rail(self),
             left_panel_area(self, ws, false),
-            divider_bar(Divider::LeftRight, theme::BG, theme::BG),
+            divider_bar(Divider::LeftRight, theme::color::BG, theme::color::BG),
             right_panel_area(self, ws, false),
             right_icon_rail(self),
         ];
@@ -4711,7 +4711,7 @@ async fn forward_events(
 }
 
 /// `[会话已结束]` 尾行标记：CREAM 字 / CARD 底。颜色值直接镜像
-/// `theme::CREAM` / `theme::CARD`——`TerminalModel` 只吃 ANSI truecolor
+/// `theme::color::CREAM` / `theme::color::CARD`——`TerminalModel` 只吃 ANSI truecolor
 /// 转义序列，认不出 `iced::Color`，这里手工写死 RGB 常量；本任务范围
 /// 不含 `theme.rs`，若那边颜色改动，这两个常量需要手动同步。
 fn exited_marker() -> Vec<u8> {
@@ -4738,20 +4738,20 @@ fn review_content<'a>(
         return content.push(
             text(format!("⚠ {err}"))
                 .size(workspace_font::subtitle())
-                .color(theme::RED),
+                .color(theme::color::RED),
         );
     }
     if rv.entries.is_empty() {
         return content.push(lh(text("暂无对话")
             .size(workspace_font::subtitle())
-            .color(theme::DIM)));
+            .color(theme::color::DIM)));
     }
     for (i, e) in rv.entries.iter().enumerate() {
         match e {
             ReviewEntry::Human { text: t } => {
                 content = content.push(lh(text(format!("▎{t}"))
                     .size(workspace_font::title())
-                    .color(theme::CREAM)));
+                    .color(theme::color::CREAM)));
             }
             ReviewEntry::AiTurn {
                 text: body,
@@ -4761,7 +4761,7 @@ fn review_content<'a>(
                 if !body.is_empty() {
                     content = content.push(lh(text(body.clone())
                         .size(workspace_font::subtitle())
-                        .color(theme::BODY)));
+                        .color(theme::color::BODY)));
                 }
                 let expanded = rv.expanded.contains(&i);
                 let glyph = if expanded { "▾ " } else { "▸ " };
@@ -4771,11 +4771,11 @@ fn review_content<'a>(
                         ai_turn_summary(tools.len(), *thinking)
                     ))
                     .size(workspace_font::body())
-                    .color(theme::DIM)))
+                    .color(theme::color::DIM)))
                     .on_press(Message::ReviewToggle(i))
                     .style(|_t, _s| button::Style {
                         background: None,
-                        text_color: theme::DIM,
+                        text_color: theme::color::DIM,
                         ..button::Style::default()
                     }),
                 );
@@ -4783,12 +4783,12 @@ fn review_content<'a>(
                     if *thinking {
                         content = content.push(lh(text("  · 思考(略)")
                             .size(workspace_font::label())
-                            .color(theme::DIM)));
+                            .color(theme::color::DIM)));
                     }
                     for tool in tools {
                         content = content.push(lh(text(format!("  · {tool}"))
                             .size(workspace_font::body())
-                            .color(theme::CYAN)));
+                            .color(theme::color::CYAN)));
                     }
                 }
             }
@@ -4807,23 +4807,23 @@ fn acceptance_content<'a>(
     if let Some(n) = acc.accepted_version {
         return content.push(lh(text(format!("✓ 已沉淀 v{n}"))
             .size(workspace_font::title())
-            .color(theme::GOLD)));
+            .color(theme::color::GOLD)));
     }
     match &acc.goal {
         Some(g) => {
             content = content.push(lh(text(g.title.clone())
                 .size(workspace_font::title())
-                .color(theme::CREAM)));
+                .color(theme::color::CREAM)));
             for (i, c) in g.criteria.iter().enumerate() {
                 let checked = acc.checked.get(i).copied().unwrap_or(false);
                 content = content.push(
                     button(lh(text(criteria_line(checked, c))
                         .size(workspace_font::body())
-                        .color(if checked { theme::GOLD } else { theme::BODY })))
+                        .color(if checked { theme::color::GOLD } else { theme::color::BODY })))
                     .on_press(Message::AcceptanceToggle(i))
                     .style(|_t, _s| button::Style {
                         background: None,
-                        text_color: theme::BODY,
+                        text_color: theme::color::BODY,
                         ..button::Style::default()
                     }),
                 );
@@ -4834,22 +4834,22 @@ fn acceptance_content<'a>(
                 "未定标——先在仓库写 .dozer/goal.md（首行目标,\n- [ ] 列表为标准）",
             )
             .size(workspace_font::body())
-            .color(theme::DIM)));
+            .color(theme::color::DIM)));
         }
     }
     content = content.push(lh(text("变更文件")
         .size(workspace_font::body())
-        .color(theme::DIM)));
+        .color(theme::color::DIM)));
     for fc in &acc.changes {
         let path = acc.repo.join(&fc.path);
         content = content.push(
             button(lh(text(file_change_line(fc))
                 .size(workspace_font::body())
-                .color(theme::CYAN)))
+                .color(theme::color::CYAN)))
             .on_press(Message::PreviewOpenPath(path))
             .style(|_t, _s| button::Style {
                 background: None,
-                text_color: theme::CYAN,
+                text_color: theme::color::CYAN,
                 ..button::Style::default()
             }),
         );
@@ -4865,14 +4865,14 @@ fn acceptance_content<'a>(
     content = content.push(
         button(lh(text(comment_text)
             .size(workspace_font::body())
-            .color(if editing { theme::CREAM } else { theme::DIM })))
+            .color(if editing { theme::color::CREAM } else { theme::color::DIM })))
         .on_press(Message::AcceptanceCommentClick)
         .width(Length::Fill)
         .style(move |_t, _s| button::Style {
-            background: Some(theme::TERM_BG.into()),
-            text_color: theme::CREAM,
+            background: Some(theme::color::TERM_BG.into()),
+            text_color: theme::color::CREAM,
             border: Border {
-                color: if editing { theme::GOLD } else { theme::BORDER },
+                color: if editing { theme::color::GOLD } else { theme::color::BORDER },
                 width: 1.0,
                 radius: 2.0.into(),
             },
@@ -4882,13 +4882,13 @@ fn acceptance_content<'a>(
     let actions = row![
         button(lh(text("通过·沉淀")
             .size(workspace_font::body())
-            .color(theme::BG)))
+            .color(theme::color::BG)))
         .on_press(Message::AcceptanceAccept)
         .style(|_t, _s| button::Style {
-            background: Some(theme::GOLD.into()),
-            text_color: theme::BG,
+            background: Some(theme::color::GOLD.into()),
+            text_color: theme::color::BG,
             border: Border {
-                color: theme::GOLD,
+                color: theme::color::GOLD,
                 width: 1.0,
                 radius: 2.0.into()
             },
@@ -4896,13 +4896,13 @@ fn acceptance_content<'a>(
         }),
         button(lh(text("打回并注回")
             .size(workspace_font::body())
-            .color(theme::RED)))
+            .color(theme::color::RED)))
         .on_press(Message::AcceptanceReject)
         .style(|_t, _s| button::Style {
             background: None,
-            text_color: theme::RED,
+            text_color: theme::color::RED,
             border: Border {
-                color: theme::RED,
+                color: theme::color::RED,
                 width: 1.0,
                 radius: 2.0.into()
             },
@@ -4914,7 +4914,7 @@ fn acceptance_content<'a>(
     if let Some(err) = &acc.error {
         content = content.push(lh(text(format!("⚠ {err}"))
             .size(workspace_font::body())
-            .color(theme::RED)));
+            .color(theme::color::RED)));
     }
     content
 }
@@ -4961,15 +4961,15 @@ fn dozer_home_tab<'a>(
     // idle 图标色随激活态取 CREAM/DIM,与既有顶栏页签 hover 一致；悬停时
     // 朝金插值。背景 idle 取 CARD(激活)/TAB_HOVER(未激活),悬停朝 CARD 插值；
     // 边框 idle 取 BORDER,悬停朝金插值。
-    let idle_icon = if active { theme::CREAM } else { theme::DIM };
-    let icon_color = theme::mix(idle_icon, theme::GOLD, hover_t);
+    let idle_icon = if active { theme::color::CREAM } else { theme::color::DIM };
+    let icon_color = theme::color::mix(idle_icon, theme::color::GOLD, hover_t);
     let bg_idle = if active {
-        theme::CARD
+        theme::color::CARD
     } else {
-        theme::TAB_HOVER
+        theme::color::TAB_HOVER
     };
-    let bg = theme::mix(bg_idle, theme::CARD, hover_t);
-    let border_color = theme::mix(theme::BORDER, theme::GOLD, hover_t);
+    let bg = theme::color::mix(bg_idle, theme::color::CARD, hover_t);
+    let border_color = theme::color::mix(theme::color::BORDER, theme::color::GOLD, hover_t);
     // 圆角正方形边长 = 图标尺寸 + 留白(图标居中)。
     let sq = crate::icon_size::rail() + 14.0;
 
@@ -5035,16 +5035,16 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
     {
         let capsule = container(
             row![
-                text("●").size(workspace_font::dot_sm()).color(theme::GOLD),
-                text(cap).size(workspace_font::body()).color(theme::CREAM)
+                text("●").size(workspace_font::dot_sm()).color(theme::color::GOLD),
+                text(cap).size(workspace_font::body()).color(theme::color::CREAM)
             ]
             .spacing(6),
         )
         .padding([5, 10])
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::CARD.into()),
+            background: Some(theme::color::CARD.into()),
             border: Border {
-                color: theme::GOLD,
+                color: theme::color::GOLD,
                 width: 1.0,
                 radius: 6.0.into(),
             },
@@ -5057,9 +5057,9 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
     // on_press——没有对应 Message 变体可派发。
     // 图标颜色:SVG 颜色构建时定死,hover 态平滑过渡到金(见 `HoverId`/
     // `App::hover_progress`——与光标闪烁同款自驱 redraw 动画)。
-    let settings_color = theme::mix(
-        theme::DIM,
-        theme::GOLD,
+    let settings_color = theme::color::mix(
+        theme::color::DIM,
+        theme::color::GOLD,
         app.hover_progress(HoverId::Topbar(TopbarButton::Settings)),
     );
     right = right.push(
@@ -5135,7 +5135,7 @@ fn home_page(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget:
         col = col.push(
             text(format!("⚠ {err}"))
                 .size(workspace_font::body())
-                .color(theme::RED),
+                .color(theme::color::RED),
         );
     }
 
@@ -5164,15 +5164,15 @@ fn home_sidebar(
             icons::view(
                 icons::IconKind::Dozer,
                 crate::icon_size::rail(),
-                theme::GOLD
+                theme::color::GOLD
             ),
             text("Dozer")
                 .font(top_bar_font())
                 .size(workspace_font::subtitle())
-                .color(theme::CREAM),
+                .color(theme::color::CREAM),
             text(format!("v{}", env!("CARGO_PKG_VERSION")))
                 .size(workspace_font::caption_sm())
-                .color(theme::DIM),
+                .color(theme::color::DIM),
         ]
         .spacing(8)
         .align_y(iced_widget::core::Alignment::Center),
@@ -5181,17 +5181,17 @@ fn home_sidebar(
     col = col.push(
         text("我的项目")
             .size(workspace_font::caption())
-            .color(theme::DIM),
+            .color(theme::color::DIM),
     );
 
     // 搜索框:视觉占位,不接线(D7；precedent:顶栏 ⌘K 搜索框同款"先视觉后接线")。
     col = col.push(
         container(
             row![
-                icons::view(icons::IconKind::Search, crate::icon_size::row(), theme::DIM),
+                icons::view(icons::IconKind::Search, crate::icon_size::row(), theme::color::DIM),
                 text("搜索项目…")
                     .size(workspace_font::body())
-                    .color(theme::DIM),
+                    .color(theme::color::DIM),
             ]
             .spacing(8)
             .align_y(iced_widget::core::Alignment::Center),
@@ -5199,9 +5199,9 @@ fn home_sidebar(
         .padding([6, 10])
         .width(Length::Fill)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::CARD.into()),
+            background: Some(theme::color::CARD.into()),
             border: Border {
-                color: theme::BORDER,
+                color: theme::color::BORDER,
                 width: 1.0,
                 radius: 6.0.into(),
             },
@@ -5213,7 +5213,7 @@ fn home_sidebar(
         col = col.push(
             text("还没有项目")
                 .size(workspace_font::body())
-                .color(theme::DIM),
+                .color(theme::color::DIM),
         );
     } else {
         let mut list = column![].spacing(8);
@@ -5222,13 +5222,13 @@ fn home_sidebar(
                 column![
                     lh(text(p.name.clone())
                         .size(workspace_font::body())
-                        .color(theme::CREAM)),
+                        .color(theme::color::CREAM)),
                     lh(text(relative_time_text(p.last_active_ms, now_ms))
                         .size(workspace_font::caption_sm())
-                        .color(theme::DIM)),
+                        .color(theme::color::DIM)),
                     lh(text(p.path.clone())
                         .size(workspace_font::caption_sm())
-                        .color(theme::DIM)),
+                        .color(theme::color::DIM)),
                 ]
                 .spacing(2),
             )
@@ -5236,10 +5236,10 @@ fn home_sidebar(
             .width(Length::Fill)
             .padding(10)
             .style(|_t: &iced_widget::Theme, _s| button::Style {
-                background: Some(theme::CARD.into()),
-                text_color: theme::CREAM,
+                background: Some(theme::color::CARD.into()),
+                text_color: theme::color::CREAM,
                 border: Border {
-                    color: theme::BORDER,
+                    color: theme::color::BORDER,
                     width: 1.0,
                     radius: 8.0.into(),
                 },
@@ -5264,7 +5264,7 @@ fn home_sidebar(
         container(
             text("更多项目")
                 .size(workspace_font::caption())
-                .color(theme::DIM),
+                .color(theme::color::DIM),
         )
         .padding([6, 0]),
     );
@@ -5273,19 +5273,19 @@ fn home_sidebar(
         button(
             text("＋新增项目")
                 .size(workspace_font::body())
-                .color(theme::GOLD),
+                .color(theme::color::GOLD),
         )
         .on_press(Message::ProjectTabPickFolder)
         .padding([8, 16])
         .width(Length::Fill)
         .style(|_t: &iced_widget::Theme, _s| button::Style {
-            background: Some(theme::CARD.into()),
+            background: Some(theme::color::CARD.into()),
             border: Border {
-                color: theme::GOLD,
+                color: theme::color::GOLD,
                 width: 1.0,
                 radius: 6.0.into(),
             },
-            text_color: theme::GOLD,
+            text_color: theme::color::GOLD,
             ..button::Style::default()
         }),
     );
@@ -5319,7 +5319,7 @@ fn home_recent_files_card(
     let mut col = column![
         text("最近的文件")
             .size(workspace_font::subtitle())
-            .color(theme::CREAM)
+            .color(theme::color::CREAM)
     ]
     .spacing(8);
 
@@ -5327,13 +5327,13 @@ fn home_recent_files_card(
         col = col.push(
             text("加载中…")
                 .size(workspace_font::body())
-                .color(theme::DIM),
+                .color(theme::color::DIM),
         );
     } else if app.home_recent_files.is_empty() {
         col = col.push(
             text("暂无最近改动的文件")
                 .size(workspace_font::body())
-                .color(theme::DIM),
+                .color(theme::color::DIM),
         );
     } else {
         for f in &app.home_recent_files {
@@ -5346,19 +5346,19 @@ fn home_recent_files_card(
                 icons::view(
                     icons::icon_for_file(&filename),
                     crate::icon_size::row(),
-                    theme::DIM
+                    theme::color::DIM
                 ),
                 column![
                     lh(text(filename.clone())
                         .size(workspace_font::body())
-                        .color(theme::CREAM)),
+                        .color(theme::color::CREAM)),
                     lh(text(format!(
                         "{} · {}",
                         f.project_name,
                         relative_time_text(f.modified_ms, now_ms)
                     ))
                     .size(workspace_font::caption_sm())
-                    .color(theme::DIM)),
+                    .color(theme::color::DIM)),
                 ]
                 .spacing(2),
             ]
@@ -5366,9 +5366,9 @@ fn home_recent_files_card(
             .align_y(iced_widget::core::Alignment::Center);
             col = col.push(container(row_el).padding(10).width(Length::Fill).style(
                 |_t: &iced_widget::Theme| container::Style {
-                    background: Some(theme::CARD.into()),
+                    background: Some(theme::color::CARD.into()),
                     border: Border {
-                        color: theme::BORDER,
+                        color: theme::color::BORDER,
                         width: 1.0,
                         radius: 8.0.into(),
                     },
@@ -5393,7 +5393,7 @@ fn home_recent_conversations_card(
     let mut col = column![
         text("最近的对话")
             .size(workspace_font::subtitle())
-            .color(theme::CREAM)
+            .color(theme::color::CREAM)
     ]
     .spacing(8);
 
@@ -5401,13 +5401,13 @@ fn home_recent_conversations_card(
         col = col.push(
             text("加载中…")
                 .size(workspace_font::body())
-                .color(theme::DIM),
+                .color(theme::color::DIM),
         );
     } else if app.home_recent_conversations.is_empty() {
         col = col.push(
             text("暂无对话记录")
                 .size(workspace_font::body())
-                .color(theme::DIM),
+                .color(theme::color::DIM),
         );
     } else {
         for c in &app.home_recent_conversations {
@@ -5422,19 +5422,19 @@ fn home_recent_conversations_card(
                     column![
                         lh(text(c.meta.title.clone())
                             .size(workspace_font::body())
-                            .color(theme::CREAM)),
+                            .color(theme::color::CREAM)),
                         lh(text(sub)
                             .size(workspace_font::caption_sm())
-                            .color(theme::DIM)),
+                            .color(theme::color::DIM)),
                     ]
                     .spacing(4),
                 )
                 .padding(10)
                 .width(Length::Fill)
                 .style(|_t: &iced_widget::Theme| container::Style {
-                    background: Some(theme::CARD.into()),
+                    background: Some(theme::color::CARD.into()),
                     border: Border {
-                        color: theme::BORDER,
+                        color: theme::color::BORDER,
                         width: 1.0,
                         radius: 8.0.into(),
                     },
@@ -5550,7 +5550,7 @@ fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_
                             .width(Length::Fixed(1.0))
                             .height(Length::Fixed(sep_h))
                             .style(|_t: &iced_widget::Theme| container::Style {
-                                background: Some(theme::BORDER.into()),
+                                background: Some(theme::color::BORDER.into()),
                                 ..container::Style::default()
                             }),
                     );
@@ -5560,9 +5560,9 @@ fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_
 
         // 图标颜色:SVG 构建时定死、不吃 `button::Status`,hover 态平滑过渡到
         // 金(见 `HoverId`/`App::hover_progress`)。
-        let add_color = theme::mix(
-            theme::DIM,
-            theme::GOLD,
+        let add_color = theme::color::mix(
+            theme::color::DIM,
+            theme::color::GOLD,
             app.hover_progress(HoverId::Topbar(TopbarButton::AddProject)),
         );
         let add = MouseArea::new(
@@ -5645,7 +5645,7 @@ fn project_tab_item<'a>(
         text(name)
             .font(top_bar_font())
             .size(workspace_font::body())
-            .color(if active { theme::CREAM } else { theme::DIM }),
+            .color(if active { theme::color::CREAM } else { theme::color::DIM }),
     );
     // 标签行撑满并裁剪:页签被 `FillPortion` 压窄时长名在此截断(Chrome 式
     // 无限收窄),不会把关闭按钮挤出去。
@@ -5673,14 +5673,14 @@ fn project_tab_item<'a>(
         .style(move |_t: &iced_widget::Theme, s| {
             let mut st = button::Style {
                 background: None,
-                text_color: theme::CREAM,
+                text_color: theme::color::CREAM,
                 ..button::Style::default()
             };
             // 选中态不参与 hover 提亮(已有实底 TAB_ACTIVE_BG + 底部强调线,
             // 无需再高亮);未选中态 hover 时画一条与 Dozer 按钮同高同圆角的
             // 胶囊背景(#152630)。
             if !active && let button::Status::Hovered = s {
-                st.background = Some(theme::TAB_HOVER.into());
+                st.background = Some(theme::color::TAB_HOVER.into());
                 st.border = Border {
                     radius: 8.0.into(),
                     ..Border::default()
@@ -5696,7 +5696,7 @@ fn project_tab_item<'a>(
     // `×` 必须包一层 `Fill`+`align_y(Center)`(与下面 `label` 同一条注释里
     // 说的 iced 按钮布局 quirk)——按钮只吃 padding,不回收多余竖向空间,
     // 裸 `text` 会贴在按钮内容区顶部,跟垂直居中的标题文字对不上。
-    let close_color = theme::mix(theme::DIM, theme::GOLD, close_hover_t);
+    let close_color = theme::color::mix(theme::color::DIM, theme::color::GOLD, close_hover_t);
     let close = MouseArea::new(
         button(
             container(text("×").size(workspace_font::body()).color(close_color))
@@ -5751,7 +5751,7 @@ fn project_tab_item<'a>(
                     .width(Length::Fill)
                     .height(Length::Fixed(1.0))
                     .style(|_t: &iced_widget::Theme| container::Style {
-                        background: Some(theme::TAB_ACTIVE_BORDER.into()),
+                        background: Some(theme::color::TAB_ACTIVE_BORDER.into()),
                         ..container::Style::default()
                     }),
             )
@@ -5779,7 +5779,7 @@ fn project_tab_item<'a>(
         .style(move |_t: &iced_widget::Theme| {
             if active {
                 container::Style {
-                    background: Some(theme::TAB_ACTIVE_BG.into()),
+                    background: Some(theme::color::TAB_ACTIVE_BG.into()),
                     // 仅左上/右上圆角,底部 1px 强调线由 inner 承载(见上)。
                     border: Border {
                         radius: Radius {
@@ -5873,7 +5873,7 @@ fn conversation_list_pane(
         row![
             lh(text("对话")
                 .size(workspace_font::subtitle())
-                .color(theme::CREAM)),
+                .color(theme::color::CREAM)),
             lh(text(
                 ws.project
                     .as_ref()
@@ -5881,7 +5881,7 @@ fn conversation_list_pane(
                     .unwrap_or_else(|| "未打开项目".into())
             )
             .size(workspace_font::label())
-            .color(theme::DIM)),
+            .color(theme::color::DIM)),
         ]
         .spacing(8)
     ]
@@ -5897,11 +5897,11 @@ fn conversation_list_pane(
         row![
             lh(text("对话")
                 .size(workspace_font::caption())
-                .color(theme::DIM)),
+                .color(theme::color::DIM)),
             lh(
                 text(format!("{} 条 · {} 活跃", ws.conversations.len(), active_n))
                     .size(workspace_font::caption())
-                    .color(theme::DIM)
+                    .color(theme::color::DIM)
             ),
         ]
         .spacing(6),
@@ -5909,7 +5909,7 @@ fn conversation_list_pane(
     if ws.conversations.is_empty() {
         content = content.push(lh(text("暂无对话记录")
             .size(workspace_font::body())
-            .color(theme::DIM)));
+            .color(theme::color::DIM)));
     }
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -5929,7 +5929,7 @@ fn conversation_list_pane(
         } else {
             conversation_sub(c.agent.label(), c.modified_ms, c.size_bytes, now_ms)
         };
-        let sub_color = if current { theme::GREEN } else { theme::DIM };
+        let sub_color = if current { theme::color::GREEN } else { theme::color::DIM };
         let card = button(
             column![
                 row![
@@ -5938,7 +5938,7 @@ fn conversation_list_pane(
                         .color(agent_dot_color(c.agent)),
                     lh(text(c.title.clone())
                         .size(workspace_font::body())
-                        .color(theme::CREAM)),
+                        .color(theme::color::CREAM)),
                 ]
                 .spacing(6)
                 .align_y(iced_widget::core::Alignment::Center),
@@ -5952,10 +5952,10 @@ fn conversation_list_pane(
         .width(Length::Fill)
         .padding(10)
         .style(move |_t, _s| button::Style {
-            background: Some(theme::CARD.into()),
-            text_color: theme::CREAM,
+            background: Some(theme::color::CARD.into()),
+            text_color: theme::color::CREAM,
             border: Border {
-                color: if current { theme::GOLD } else { theme::BORDER },
+                color: if current { theme::color::GOLD } else { theme::color::BORDER },
                 width: 1.0,
                 radius: 8.0.into(),
             },
@@ -6015,7 +6015,7 @@ fn agent_list_pane(
         row![
             lh(text("Agent")
                 .size(workspace_font::subtitle())
-                .color(theme::CREAM)),
+                .color(theme::color::CREAM)),
             lh(text(
                 ws.project
                     .as_ref()
@@ -6023,7 +6023,7 @@ fn agent_list_pane(
                     .unwrap_or_else(|| "未打开项目".into())
             )
             .size(workspace_font::label())
-            .color(theme::DIM)),
+            .color(theme::color::DIM)),
             iced_widget::space::horizontal(),
             agent_picker_toggle_button(),
         ]
@@ -6035,12 +6035,12 @@ fn agent_list_pane(
     if ws.tabs.is_empty() {
         content = content.push(lh(text("暂无会话")
             .size(workspace_font::body())
-            .color(theme::DIM)));
+            .color(theme::color::DIM)));
     } else {
         for (agent, idxs) in group_tabs_by_agent(&ws.tabs) {
             content = content.push(lh(text(format!("{}（{}）", agent.label(), idxs.len()))
                 .size(workspace_font::caption())
-                .color(theme::DIM)));
+                .color(theme::color::DIM)));
             for idx in idxs {
                 content = content.push(agent_list_row(ws, idx));
             }
@@ -6060,7 +6060,7 @@ fn agent_list_pane(
 
 /// Agent 面板里单条会话行:状态点(`dot_color`)+ 状态文字
 /// (`agent_state_label`)+ 会话名(`tab_title`),整行可点选中该 tab
-/// (`idx == ws.active` 时 `theme::CARD` 背景高亮,同项目树选中行的手法,
+/// (`idx == ws.active` 时 `theme::color::CARD` 背景高亮,同项目树选中行的手法,
 /// 见 `workspace.rs` 里 `is_selected` 那段)。
 fn agent_list_row(
     ws: &Workspace,
@@ -6074,11 +6074,11 @@ fn agent_list_row(
             .color(dot_color(tab.agent_state, tab.alive)),
         lh(text(agent_state_label(tab.agent_state))
             .size(workspace_font::caption_sm())
-            .color(theme::DIM)),
+            .color(theme::color::DIM)),
         lh(
             text(tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name))
                 .size(workspace_font::body())
-                .color(theme::CREAM)
+                .color(theme::color::CREAM)
         ),
     ]
     .spacing(6)
@@ -6089,11 +6089,11 @@ fn agent_list_row(
         .padding(6)
         .style(move |_t, _s| button::Style {
             background: if active {
-                Some(theme::CARD.into())
+                Some(theme::color::CARD.into())
             } else {
                 None
             },
-            text_color: theme::CREAM,
+            text_color: theme::color::CREAM,
             ..button::Style::default()
         })
         .into()
@@ -6104,14 +6104,14 @@ fn agent_list_row(
 /// 与已移除的终端 tab 栏"＋"同源。
 fn agent_picker_toggle_button<'a>()
 -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    button(text("＋").size(workspace_font::title()).color(theme::CREAM))
+    button(text("＋").size(workspace_font::title()).color(theme::color::CREAM))
         .on_press(Message::AgentPickerToggle)
         .padding([4, 8])
         .style(|_theme, _status| button::Style {
-            background: Some(theme::CARD.into()),
-            text_color: theme::CREAM,
+            background: Some(theme::color::CARD.into()),
+            text_color: theme::color::CREAM,
             border: Border {
-                color: theme::BORDER,
+                color: theme::color::BORDER,
                 width: 1.0,
                 radius: 4.0.into(),
             },
@@ -6147,12 +6147,12 @@ fn agent_picker_popup(
     for (label, agent) in items {
         let (icon, icon_color) = match agent {
             PickerLaunch::Agent(Some(kind)) => (agent_icon(kind), agent_dot_color(kind)),
-            PickerLaunch::Agent(None) => (IconKind::Terminal, theme::CREAM),
-            PickerLaunch::Git => (IconKind::GitBranch, theme::CREAM),
+            PickerLaunch::Agent(None) => (IconKind::Terminal, theme::color::CREAM),
+            PickerLaunch::Git => (IconKind::GitBranch, theme::color::CREAM),
         };
         let content = row![
             icons::view(icon, crate::icon_size::row(), icon_color),
-            text(label).size(workspace_font::body()).color(theme::CREAM),
+            text(label).size(workspace_font::body()).color(theme::color::CREAM),
         ]
         .align_y(iced_widget::core::alignment::Vertical::Center)
         .spacing(8);
@@ -6162,8 +6162,8 @@ fn agent_picker_popup(
                 .width(Length::Fixed(160.0))
                 .padding([6, 12])
                 .style(|_t, _s| button::Style {
-                    background: Some(theme::CARD.into()),
-                    text_color: theme::CREAM,
+                    background: Some(theme::color::CARD.into()),
+                    text_color: theme::color::CREAM,
                     ..button::Style::default()
                 }),
         );
@@ -6171,9 +6171,9 @@ fn agent_picker_popup(
     let list = container(col)
         .padding(6)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::CARD.into()),
+            background: Some(theme::color::CARD.into()),
             border: Border {
-                color: theme::BORDER,
+                color: theme::color::BORDER,
                 width: 1.0,
                 radius: 6.0.into(),
             },
@@ -6209,7 +6209,7 @@ fn review_content_pane(
     let header = row![
         lh(text("会话审阅")
             .size(workspace_font::body())
-            .color(theme::CREAM)),
+            .color(theme::color::CREAM)),
         iced_widget::space::horizontal(),
     ]
     .spacing(4);
@@ -6221,7 +6221,7 @@ fn review_content_pane(
         content = content.push(
             container(lh(text("暂无审阅内容——点击左侧对话列表中的对话开始审阅")
                 .size(workspace_font::subtitle())
-                .color(theme::DIM)))
+                .color(theme::color::DIM)))
             .width(Length::Fill)
             .height(Length::Fill),
         );
@@ -6251,9 +6251,9 @@ fn rail_icon_button<'a>(
     // 构建时定死、不吃 `button::Status`,所以 hover 进度靠 `hover_t` 参数从
     // App 算进来。
     let color = if active {
-        theme::GOLD
+        theme::color::GOLD
     } else {
-        theme::mix(theme::DIM, theme::GOLD, hover_t)
+        theme::color::mix(theme::color::DIM, theme::color::GOLD, hover_t)
     };
     let inner = container(icons::view(icon, crate::icon_size::rail(), color))
         .width(Length::Fill)
@@ -6277,10 +6277,10 @@ fn rail_icon_button<'a>(
             // 圆角正方形背景常驻(`CARD`);金色外框只在选中态出现,hover
             // 不放金框——所以样式完全由 `active` 决定,与交互态无关。
             button::Style {
-                background: Some(theme::CARD.into()),
+                background: Some(theme::color::CARD.into()),
                 border: Border {
                     color: if active {
-                        theme::GOLD
+                        theme::color::GOLD
                     } else {
                         Color::TRANSPARENT
                     },
@@ -6476,7 +6476,7 @@ fn worktree_strip<'a>(
     // 把同仓库的其他 worktree 压成一行小字,标示当前提交图对应哪个 worktree
     // 上下文。主 worktree + N 个链接 worktree 各自的分支会散落在同一条图上,
     // 这个条带帮助用户分辨 `[→main]` 到底指谁。"本工作区"是状态展示,不是
-    // 甲方动作,不能用 `theme::GOLD`(CLAUDE.md 硬性裁决,GOLD 专属甲方动作)
+    // 甲方动作,不能用 `theme::color::GOLD`(CLAUDE.md 硬性裁决,GOLD 专属甲方动作)
     // ——真正的动作是点其它 worktree 切过去,那些按钮才该用 GOLD。
     let current = worktrees.iter().find(|w| w.is_current);
     let others = worktrees
@@ -6491,7 +6491,7 @@ fn worktree_strip<'a>(
                 c.branch.as_deref().unwrap_or("(无分支)")
             ))
             .size(workspace_font::caption())
-            .color(theme::CYAN)
+            .color(theme::color::CYAN)
             .into(),
         );
     }
@@ -6507,7 +6507,7 @@ fn worktree_strip<'a>(
             chips.push(
                 text(label)
                     .size(workspace_font::caption())
-                    .color(theme::DIM)
+                    .color(theme::color::DIM)
                     .into(),
             );
         } else {
@@ -6515,13 +6515,13 @@ fn worktree_strip<'a>(
                 button(
                     text(label)
                         .size(workspace_font::caption())
-                        .color(theme::GOLD),
+                        .color(theme::color::GOLD),
                 )
                 .on_press(Message::ProjectTabOpen(o.path.clone()))
                 .padding(0)
                 .style(|_t: &iced_widget::Theme, _s| button::Style {
                     background: None,
-                    text_color: theme::GOLD,
+                    text_color: theme::color::GOLD,
                     ..button::Style::default()
                 })
                 .into(),
@@ -6579,8 +6579,8 @@ fn left_panel_area<'a>(
                 ),
                 divider_bar(
                     Divider::LeftPairSplit,
-                    chrome_style::project_pane().background.unwrap_or(theme::BG),
-                    chrome_style::preview_pane().background.unwrap_or(theme::BG),
+                    chrome_style::project_pane().background.unwrap_or(theme::color::BG),
+                    chrome_style::preview_pane().background.unwrap_or(theme::color::BG),
                 ),
                 preview_pane(
                     ws,
@@ -6716,10 +6716,10 @@ fn right_panel_area<'a>(
                         Divider::RightPairSplit,
                         chrome_style::terminal_pane()
                             .background
-                            .unwrap_or(theme::BG),
+                            .unwrap_or(theme::color::BG),
                         chrome_style::agent_list_pane()
                             .background
-                            .unwrap_or(theme::BG),
+                            .unwrap_or(theme::color::BG),
                     ),
                     agent_list_pane(
                         ws,
@@ -6743,10 +6743,10 @@ fn right_panel_area<'a>(
                         Divider::RightPairSplit,
                         chrome_style::review_content_pane()
                             .background
-                            .unwrap_or(theme::BG),
+                            .unwrap_or(theme::color::BG),
                         chrome_style::conversation_list_pane()
                             .background
-                            .unwrap_or(theme::BG),
+                            .unwrap_or(theme::color::BG),
                     ),
                     conversation_list_pane(
                         ws,
@@ -6901,12 +6901,12 @@ fn project_pane<'a>(
     match &ws.project {
         Some(p) => {
             let label = project_branch_label(ws.branch.as_deref(), ws.dirty);
-            let bcolor = if ws.dirty { theme::GOLD } else { theme::BODY };
+            let bcolor = if ws.dirty { theme::color::GOLD } else { theme::color::BODY };
             // 需求 3:git 分支名前加 git-branch icon;需求 2:去掉完整文件路径。
             let mut card_col = column![
                 text(p.name.clone())
                     .size(workspace_font::title())
-                    .color(theme::CREAM),
+                    .color(theme::color::CREAM),
                 row![
                     icons::view(icons::IconKind::GitBranch, crate::icon_size::row(), bcolor),
                     text(label).size(workspace_font::label()).color(bcolor),
@@ -6919,14 +6919,14 @@ fn project_pane<'a>(
                 card_col = card_col.push(
                     text(format!("{n} 次验收"))
                         .size(workspace_font::caption())
-                        .color(theme::GOLD),
+                        .color(theme::color::GOLD),
                 );
             }
             let card = container(card_col).width(Length::Fill).padding(10).style(
                 |_t: &iced_widget::Theme| container::Style {
-                    background: Some(theme::CARD.into()),
+                    background: Some(theme::color::CARD.into()),
                     border: Border {
-                        color: theme::BORDER,
+                        color: theme::color::BORDER,
                         width: 1.0,
                         radius: 8.0.into(),
                     },
@@ -6938,7 +6938,7 @@ fn project_pane<'a>(
                 header = header.push(
                     text(format!("⚠ {err}"))
                         .size(workspace_font::label())
-                        .color(theme::RED),
+                        .color(theme::color::RED),
                 );
             }
             if let Some(tree) = &ws.file_tree {
@@ -6963,7 +6963,7 @@ fn project_pane<'a>(
                     } else {
                         ws.git_statuses.get(&row.path).map(|s| (s.kind, s.unstaged))
                     };
-                    let name_color = theme::BODY;
+                    let name_color = theme::color::BODY;
                     let row_icon: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> =
                         if row.is_dir {
                             let chevron = if row.expanded {
@@ -6977,8 +6977,8 @@ fn project_pane<'a>(
                                 icons::IconKind::Folder
                             };
                             row![
-                                icons::view(chevron, crate::icon_size::chevron(), theme::DIM),
-                                icons::view(folder, crate::icon_size::row(), theme::DIM),
+                                icons::view(chevron, crate::icon_size::chevron(), theme::color::DIM),
+                                icons::view(folder, crate::icon_size::row(), theme::color::DIM),
                             ]
                             .spacing(crate::icon_size::tree_row_gap())
                             .align_y(iced_widget::core::Alignment::Center)
@@ -6994,7 +6994,7 @@ fn project_pane<'a>(
                                 icons::view(
                                     icons::icon_for_file(&row.name),
                                     crate::icon_size::row(),
-                                    theme::DIM
+                                    theme::color::DIM
                                 ),
                             ]
                             .spacing(0)
@@ -7038,11 +7038,11 @@ fn project_pane<'a>(
                         .width(Length::Fill)
                         .style(move |_t, _s| button::Style {
                             background: if is_selected {
-                                Some(theme::CARD.into())
+                                Some(theme::color::CARD.into())
                             } else {
                                 None
                             },
-                            text_color: theme::BODY,
+                            text_color: theme::color::BODY,
                             ..button::Style::default()
                         });
                     tree_col = tree_col.push(MouseArea::new(row_btn).on_right_press(
@@ -7074,19 +7074,19 @@ fn project_pane<'a>(
             header = header.push(
                 text("未打开项目")
                     .size(workspace_font::body())
-                    .color(theme::DIM),
+                    .color(theme::color::DIM),
             );
             for p in &ws.recent_projects {
                 header = header.push(
                     button(
                         text(p.name.clone())
                             .size(workspace_font::body())
-                            .color(theme::CREAM),
+                            .color(theme::color::CREAM),
                     )
                     .on_press(Message::ProjectSelect(p.id))
                     .style(|_t, _s| button::Style {
                         background: None,
-                        text_color: theme::CREAM,
+                        text_color: theme::color::CREAM,
                         ..button::Style::default()
                     }),
                 );
@@ -7137,7 +7137,7 @@ fn project_status_bar<'a>(
     let (env, dot) = env_status_text(app.daemon_error.is_none());
     let left = row![
         text("●").size(workspace_font::dot_sm()).color(dot),
-        text(env).size(workspace_font::caption()).color(theme::BODY)
+        text(env).size(workspace_font::caption()).color(theme::color::BODY)
     ]
     .spacing(6);
     let git = format!(
@@ -7147,13 +7147,13 @@ fn project_status_bar<'a>(
     let tabs = row![
         text("文件")
             .size(workspace_font::caption())
-            .color(theme::CREAM),
-        text("·").size(workspace_font::caption()).color(theme::DIM),
-        text(git).size(workspace_font::caption()).color(theme::BODY),
-        text("·").size(workspace_font::caption()).color(theme::DIM),
+            .color(theme::color::CREAM),
+        text("·").size(workspace_font::caption()).color(theme::color::DIM),
+        text(git).size(workspace_font::caption()).color(theme::color::BODY),
+        text("·").size(workspace_font::caption()).color(theme::color::DIM),
         text("组件")
             .size(workspace_font::caption())
-            .color(theme::DIM),
+            .color(theme::color::DIM),
     ]
     .spacing(6);
     status_bar_container(
@@ -7173,22 +7173,22 @@ fn terminal_status_bar(
             agent_state_label(t.agent_state),
             dot_color(t.agent_state, t.alive),
         ),
-        None => ("空闲", theme::DIM),
+        None => ("空闲", theme::color::DIM),
     };
     let resume = ws.tabs.get(ws.active).map(|t| t.alive).unwrap_or(false);
     let line = row![
         text("●").size(workspace_font::dot_sm()).color(dot),
         text(label)
             .size(workspace_font::caption())
-            .color(theme::BODY),
-        text("·").size(workspace_font::caption()).color(theme::DIM),
+            .color(theme::color::BODY),
+        text("·").size(workspace_font::caption()).color(theme::color::DIM),
         text(format!("resume {}", if resume { "✓" } else { "—" }))
             .size(workspace_font::caption())
-            .color(theme::BODY),
-        text("·").size(workspace_font::caption()).color(theme::DIM),
+            .color(theme::color::BODY),
+        text("·").size(workspace_font::caption()).color(theme::color::DIM),
         text("dozerd 持有 · 断连可恢复")
             .size(workspace_font::caption())
-            .color(theme::DIM),
+            .color(theme::color::DIM),
     ]
     .spacing(6);
     status_bar_container(line, outer)
@@ -7254,11 +7254,11 @@ fn preview_pane(
             let active = idx == ws.preview.active_idx();
             let select = button(lh(text(tab.title.clone())
                 .size(workspace_font::subtitle())
-                .color(theme::CREAM)))
+                .color(theme::color::CREAM)))
             .on_press(Message::PreviewSelectTab(idx))
             .style(|_t, _s| button::Style {
                 background: None,
-                text_color: theme::CREAM,
+                text_color: theme::color::CREAM,
                 ..button::Style::default()
             });
             let editable = matches!(&tab.kind, TabKind::File(path) if is_editable_extension(path));
@@ -7268,13 +7268,13 @@ fn preview_pane(
                         button(icons::view(
                             icons::IconKind::Rename,
                             crate::icon_size::row(),
-                            theme::DIM,
+                            theme::color::DIM,
                         ))
                         .on_press(Message::PreviewEditOpen(idx))
                         .padding(0)
                         .style(|_t, _s| button::Style {
                             background: None,
-                            text_color: theme::DIM,
+                            text_color: theme::color::DIM,
                             ..button::Style::default()
                         })
                         .into(),
@@ -7282,11 +7282,11 @@ fn preview_pane(
                 } else {
                     None
                 };
-            let close = button(lh(text("×").size(workspace_font::body()).color(theme::DIM)))
+            let close = button(lh(text("×").size(workspace_font::body()).color(theme::color::DIM)))
                 .on_press(Message::PreviewCloseTab(idx))
                 .style(|_t, _s| button::Style {
                     background: None,
-                    text_color: theme::DIM,
+                    text_color: theme::color::DIM,
                     ..button::Style::default()
                 });
             let mut chip_row = row![select].spacing(2);
@@ -7299,9 +7299,9 @@ fn preview_pane(
                 .style(move |_t: &iced_widget::Theme| {
                     if active {
                         container::Style {
-                            background: Some(theme::CARD.into()),
+                            background: Some(theme::color::CARD.into()),
                             border: Border {
-                                color: theme::BORDER,
+                                color: theme::color::BORDER,
                                 width: 1.0,
                                 radius: 6.0.into(),
                             },
@@ -7336,7 +7336,7 @@ fn preview_pane(
     if let Some(err) = &ws.preview_error {
         content = content.push(lh(text(format!("⚠ {err}"))
             .size(workspace_font::body())
-            .color(theme::RED)));
+            .color(theme::color::RED)));
     }
 
     if ws.preview.acceptance_active() {
@@ -7345,7 +7345,7 @@ fn preview_pane(
         content = content.push(
             container(lh(text("暂无预览——在左侧文件树选择文件")
                 .size(workspace_font::subtitle())
-                .color(theme::DIM)))
+                .color(theme::color::DIM)))
             .width(Length::Fill)
             .height(Length::Fill),
         );
@@ -7376,7 +7376,7 @@ fn terminal_pane<'a>(
         content = content.push(
             text(format!("⚠ {err}"))
                 .size(workspace_font::body())
-                .color(theme::RED),
+                .color(theme::color::RED),
         );
     }
 
@@ -7387,7 +7387,7 @@ fn terminal_pane<'a>(
         content = content.push(
             text(format!("exit {code}"))
                 .size(workspace_font::label())
-                .color(theme::RED),
+                .color(theme::color::RED),
         );
     }
 
@@ -7399,18 +7399,18 @@ fn terminal_pane<'a>(
             row![
                 text(text_str)
                     .size(workspace_font::body())
-                    .color(theme::GOLD),
+                    .color(theme::color::GOLD),
                 button(
                     text("进入验收")
                         .size(workspace_font::body())
-                        .color(theme::GOLD)
+                        .color(theme::color::GOLD)
                 )
                 .on_press(Message::AcceptanceOpen(tab.tab_id))
                 .style(|_t, _s| button::Style {
-                    background: Some(theme::CARD.into()),
-                    text_color: theme::GOLD,
+                    background: Some(theme::color::CARD.into()),
+                    text_color: theme::color::GOLD,
                     border: Border {
-                        color: theme::GOLD,
+                        color: theme::color::GOLD,
                         width: 1.0,
                         radius: 2.0.into()
                     },
@@ -7422,7 +7422,7 @@ fn terminal_pane<'a>(
         .padding([6, 10])
         .style(|_t: &iced_widget::Theme| container::Style {
             border: Border {
-                color: theme::GOLD,
+                color: theme::color::GOLD,
                 width: 1.0,
                 radius: 6.0.into(),
             },
@@ -7504,7 +7504,7 @@ fn divider_bar<'a>(
         .width(Length::Fixed(line_w))
         .height(Length::Fill)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::BORDER.into()),
+            background: Some(theme::color::BORDER.into()),
             ..container::Style::default()
         });
     let row = row![left_side, line, right_side]
@@ -7525,8 +7525,8 @@ fn menu_item<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     button(
         row![
-            icons::view(icon, crate::icon_size::row(), theme::CREAM),
-            text(label).size(workspace_font::body()).color(theme::CREAM),
+            icons::view(icon, crate::icon_size::row(), theme::color::CREAM),
+            text(label).size(workspace_font::body()).color(theme::color::CREAM),
         ]
         .spacing(crate::workspace_geometry::menu_gap())
         .align_y(iced_widget::core::Alignment::Center),
@@ -7538,8 +7538,8 @@ fn menu_item<'a>(
         crate::workspace_geometry::menu_pad_h(),
     ])
     .style(|_t, _s| button::Style {
-        background: Some(theme::CARD.into()),
-        text_color: theme::CREAM,
+        background: Some(theme::color::CARD.into()),
+        text_color: theme::color::CREAM,
         ..button::Style::default()
     })
     .into()
@@ -7556,14 +7556,14 @@ fn tree_edit_row(
         text(format!("{indent}{buffer}▏"))
             .size(tree_row_font_size())
             .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
-            .color(theme::CREAM),
+            .color(theme::color::CREAM),
     )
     .width(Length::Fill)
     .padding([2, 4])
     .style(|_t: &iced_widget::Theme| container::Style {
-        background: Some(theme::CARD.into()),
+        background: Some(theme::color::CARD.into()),
         border: Border {
-            color: theme::CREAM,
+            color: theme::color::CREAM,
             width: 1.0,
             radius: 2.0.into(),
         },
@@ -7615,9 +7615,9 @@ fn context_menu_popup<'a>(
                     icons::view(
                         icons::IconKind::ClipboardPaste,
                         crate::icon_size::row(),
-                        theme::DIM
+                        theme::color::DIM
                     ),
-                    text("粘贴").size(workspace_font::body()).color(theme::DIM),
+                    text("粘贴").size(workspace_font::body()).color(theme::color::DIM),
                 ]
                 .spacing(crate::workspace_geometry::menu_gap())
                 .align_y(iced_widget::core::Alignment::Center),
@@ -7628,8 +7628,8 @@ fn context_menu_popup<'a>(
                 crate::workspace_geometry::menu_pad_h(),
             ])
             .style(|_t, _s| button::Style {
-                background: Some(theme::CARD.into()),
-                text_color: theme::DIM,
+                background: Some(theme::color::CARD.into()),
+                text_color: theme::color::DIM,
                 ..button::Style::default()
             })
             .into()
@@ -7703,36 +7703,36 @@ fn delete_confirm_popup(
         column![
             text(format!("删除{kind} \"{name}\"?"))
                 .size(workspace_font::subtitle())
-                .color(theme::CREAM),
+                .color(theme::color::CREAM),
             text("会移入系统回收站,可从回收站找回。")
                 .size(workspace_font::label())
-                .color(theme::DIM),
+                .color(theme::color::DIM),
             row![
                 button(
                     text("取消")
                         .size(workspace_font::body())
-                        .color(theme::CREAM)
+                        .color(theme::color::CREAM)
                 )
                 .on_press(Message::ProjectTreeDeleteCancel)
                 .padding([6, 12])
                 .style(|_t, _s| button::Style {
-                    background: Some(theme::CARD.into()),
-                    text_color: theme::CREAM,
+                    background: Some(theme::color::CARD.into()),
+                    text_color: theme::color::CREAM,
                     border: Border {
-                        color: theme::BORDER,
+                        color: theme::color::BORDER,
                         width: 1.0,
                         radius: 4.0.into()
                     },
                     ..button::Style::default()
                 }),
-                button(text("删除").size(workspace_font::body()).color(theme::RED))
+                button(text("删除").size(workspace_font::body()).color(theme::color::RED))
                     .on_press(Message::ProjectTreeDeleteConfirm)
                     .padding([6, 12])
                     .style(|_t, _s| button::Style {
-                        background: Some(theme::CARD.into()),
-                        text_color: theme::RED,
+                        background: Some(theme::color::CARD.into()),
+                        text_color: theme::color::RED,
                         border: Border {
-                            color: theme::RED,
+                            color: theme::color::RED,
                             width: 1.0,
                             radius: 4.0.into()
                         },
@@ -7745,9 +7745,9 @@ fn delete_confirm_popup(
     )
     .padding(16)
     .style(|_t: &iced_widget::Theme| container::Style {
-        background: Some(theme::CARD.into()),
+        background: Some(theme::color::CARD.into()),
         border: Border {
-            color: theme::BORDER,
+            color: theme::color::BORDER,
             width: 1.0,
             radius: 6.0.into(),
         },
@@ -7779,14 +7779,14 @@ fn edit_modal(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_w
     let title_row = row![
         text(name)
             .size(workspace_font::subtitle())
-            .color(theme::CREAM),
+            .color(theme::color::CREAM),
         iced_widget::space::horizontal(),
-        button(text("×").size(workspace_font::subtitle()).color(theme::DIM))
+        button(text("×").size(workspace_font::subtitle()).color(theme::color::DIM))
             .on_press(Message::PreviewEditCloseRequest)
             .padding(0)
             .style(|_t, _s| button::Style {
                 background: None,
-                text_color: theme::DIM,
+                text_color: theme::color::DIM,
                 ..button::Style::default()
             }),
     ]
@@ -7806,22 +7806,22 @@ fn edit_modal(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_w
         body = body.push(
             text(format!("⚠ {err}"))
                 .size(workspace_font::body())
-                .color(theme::RED),
+                .color(theme::color::RED),
         );
     }
 
     let close_btn = button(
         text("关闭")
             .size(workspace_font::body())
-            .color(theme::CREAM),
+            .color(theme::color::CREAM),
     )
     .on_press(Message::PreviewEditCloseRequest)
     .padding([6, 12])
     .style(|_t, _s| button::Style {
-        background: Some(theme::CARD.into()),
-        text_color: theme::CREAM,
+        background: Some(theme::color::CARD.into()),
+        text_color: theme::color::CREAM,
         border: Border {
-            color: theme::BORDER,
+            color: theme::color::BORDER,
             width: 1.0,
             radius: 4.0.into(),
         },
@@ -7830,15 +7830,15 @@ fn edit_modal(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_w
     let save_btn = button(
         text("保存")
             .size(workspace_font::body())
-            .color(theme::CREAM),
+            .color(theme::color::CREAM),
     )
     .on_press(Message::PreviewEditSave)
     .padding([6, 12])
     .style(|_t, _s| button::Style {
-        background: Some(theme::CARD.into()),
-        text_color: theme::CREAM,
+        background: Some(theme::color::CARD.into()),
+        text_color: theme::color::CREAM,
         border: Border {
-            color: theme::CREAM,
+            color: theme::color::CREAM,
             width: 1.0,
             radius: 4.0.into(),
         },
@@ -7850,9 +7850,9 @@ fn edit_modal(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_w
         .width(Length::Fill)
         .height(Length::Fill)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::CARD.into()),
+            background: Some(theme::color::CARD.into()),
             border: Border {
-                color: theme::BORDER,
+                color: theme::color::BORDER,
                 width: 1.0,
                 radius: 6.0.into(),
             },
@@ -7864,7 +7864,7 @@ fn edit_modal(ws: &Workspace) -> Element<'_, Message, iced_widget::Theme, iced_w
         .width(Length::Fill)
         .height(Length::Fill)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::SCRIM.into()),
+            background: Some(theme::color::SCRIM.into()),
             ..container::Style::default()
         })
         .into()
@@ -7878,23 +7878,23 @@ fn edit_discard_confirm_popup<'a>()
         column![
             text("放弃未保存的改动?")
                 .size(workspace_font::subtitle())
-                .color(theme::CREAM),
+                .color(theme::color::CREAM),
             text("关闭后这次编辑不会被保存。")
                 .size(workspace_font::label())
-                .color(theme::DIM),
+                .color(theme::color::DIM),
             row![
                 button(
                     text("取消")
                         .size(workspace_font::body())
-                        .color(theme::CREAM)
+                        .color(theme::color::CREAM)
                 )
                 .on_press(Message::PreviewEditConfirmCancel)
                 .padding([6, 12])
                 .style(|_t, _s| button::Style {
-                    background: Some(theme::CARD.into()),
-                    text_color: theme::CREAM,
+                    background: Some(theme::color::CARD.into()),
+                    text_color: theme::color::CREAM,
                     border: Border {
-                        color: theme::BORDER,
+                        color: theme::color::BORDER,
                         width: 1.0,
                         radius: 4.0.into(),
                     },
@@ -7903,15 +7903,15 @@ fn edit_discard_confirm_popup<'a>()
                 button(
                     text("放弃改动")
                         .size(workspace_font::body())
-                        .color(theme::RED)
+                        .color(theme::color::RED)
                 )
                 .on_press(Message::PreviewEditConfirmDiscard)
                 .padding([6, 12])
                 .style(|_t, _s| button::Style {
-                    background: Some(theme::CARD.into()),
-                    text_color: theme::RED,
+                    background: Some(theme::color::CARD.into()),
+                    text_color: theme::color::RED,
                     border: Border {
-                        color: theme::RED,
+                        color: theme::color::RED,
                         width: 1.0,
                         radius: 4.0.into(),
                     },
@@ -7924,9 +7924,9 @@ fn edit_discard_confirm_popup<'a>()
     )
     .padding(16)
     .style(|_t: &iced_widget::Theme| container::Style {
-        background: Some(theme::CARD.into()),
+        background: Some(theme::color::CARD.into()),
         border: Border {
-            color: theme::BORDER,
+            color: theme::color::BORDER,
             width: 1.0,
             radius: 6.0.into(),
         },
@@ -7947,7 +7947,7 @@ pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
     enabled: bool,
     msg: M,
 ) -> Element<'a, M, iced_widget::Theme, iced_widget::Renderer> {
-    let color = if enabled { theme::GOLD } else { theme::DIM };
+    let color = if enabled { theme::color::GOLD } else { theme::color::DIM };
     let mut btn = button(icons::view(icon, crate::icon_size::row(), color))
         .width(Length::Fixed(crate::workspace_geometry::tab_button_size()))
         .height(Length::Fixed(crate::workspace_geometry::tab_button_size()))
@@ -7963,7 +7963,7 @@ pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
             }
             match status {
                 button::Status::Hovered | button::Status::Pressed => button::Style {
-                    background: Some(theme::CARD.into()),
+                    background: Some(theme::color::CARD.into()),
                     border: Border {
                         color: Color::TRANSPARENT,
                         width: 1.0,
@@ -7987,7 +7987,7 @@ pub(crate) fn tab_divider<'a, M: 'a>() -> Element<'a, M, iced_widget::Theme, ice
         .width(Length::Fill)
         .height(Length::Fixed(1.0))
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::BORDER.into()),
+            background: Some(theme::color::BORDER.into()),
             ..container::Style::default()
         })
         .into()
@@ -8160,9 +8160,9 @@ fn effective_project_repo(active: Option<&Path>, session_cwd: &Path) -> PathBuf 
 /// 配色约定。
 fn tree_row_dot_color(kind: delivery::ChangeKind) -> Color {
     match kind {
-        delivery::ChangeKind::Modified => theme::GOLD,
-        delivery::ChangeKind::New => theme::GREEN,
-        delivery::ChangeKind::Deleted => theme::RED,
+        delivery::ChangeKind::Modified => theme::color::GOLD,
+        delivery::ChangeKind::New => theme::color::GREEN,
+        delivery::ChangeKind::Deleted => theme::color::RED,
     }
 }
 
@@ -8335,9 +8335,9 @@ fn agent_state_label(state: AgentState) -> &'static str {
 /// 环境状态栏文案 + 点色：daemon 连通=绿"环境正常", 断=红"未连接"。
 fn env_status_text(daemon_ok: bool) -> (&'static str, Color) {
     if daemon_ok {
-        ("环境正常 · dozerd 运行中", theme::GREEN)
+        ("环境正常 · dozerd 运行中", theme::color::GREEN)
     } else {
-        ("dozerd 未连接", theme::RED)
+        ("dozerd 未连接", theme::color::RED)
     }
 }
 
@@ -8346,26 +8346,26 @@ fn env_status_text(daemon_ok: bool) -> (&'static str, Color) {
 /// 与空闲态同为绿，靠 `tab_item` 里的闪烁区分（工作中才闪）。
 fn dot_color(state: AgentState, alive: bool) -> Color {
     if !alive {
-        return theme::DIM;
+        return theme::color::DIM;
     }
     match state {
-        AgentState::Idle | AgentState::Running => theme::GREEN,
-        AgentState::AwaitingInput => theme::PURPLE,
-        AgentState::TurnEnded => theme::GOLD,
+        AgentState::Idle | AgentState::Running => theme::color::GREEN,
+        AgentState::AwaitingInput => theme::color::PURPLE,
+        AgentState::TurnEnded => theme::color::GOLD,
     }
 }
 
-/// agent → 对话列表圆点颜色。避开 `theme::GOLD`(甲方动作专属色,
+/// agent → 对话列表圆点颜色。避开 `theme::color::GOLD`(甲方动作专属色,
 /// CLAUDE.md 明文规定,不能被 agent 分类语义借用)。
 pub(crate) fn agent_dot_color(agent: AgentKind) -> Color {
     match agent {
-        AgentKind::Claude => theme::CYAN,
-        AgentKind::Codebuddy => theme::PURPLE,
-        AgentKind::Opencode => theme::GREEN,
-        AgentKind::Codex => theme::ORANGE,
-        AgentKind::Qoder => theme::MAGENTA,
-        AgentKind::Kilo => theme::BLUE,
-        AgentKind::Unknown => theme::DIM,
+        AgentKind::Claude => theme::color::CYAN,
+        AgentKind::Codebuddy => theme::color::PURPLE,
+        AgentKind::Opencode => theme::color::GREEN,
+        AgentKind::Codex => theme::color::ORANGE,
+        AgentKind::Qoder => theme::color::MAGENTA,
+        AgentKind::Kilo => theme::color::BLUE,
+        AgentKind::Unknown => theme::color::DIM,
     }
 }
 
@@ -8402,7 +8402,7 @@ fn tab_item(
         text("●").size(workspace_font::caption()).color(color),
         text(tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name))
             .size(workspace_font::subtitle())
-            .color(theme::CREAM),
+            .color(theme::color::CREAM),
     ]
     .spacing(4);
 
@@ -8410,15 +8410,15 @@ fn tab_item(
         .on_press(Message::SelectTab(idx))
         .style(|_theme, _status| button::Style {
             background: None,
-            text_color: theme::CREAM,
+            text_color: theme::color::CREAM,
             ..button::Style::default()
         });
 
-    let close = button(text("×").size(workspace_font::body()).color(theme::DIM))
+    let close = button(text("×").size(workspace_font::body()).color(theme::color::DIM))
         .on_press(Message::CloseTab(idx))
         .style(|_theme, _status| button::Style {
             background: None,
-            text_color: theme::DIM,
+            text_color: theme::color::DIM,
             ..button::Style::default()
         });
 
@@ -8431,9 +8431,9 @@ fn tab_item(
     .style(move |_t: &iced_widget::Theme| {
         if active {
             container::Style {
-                background: Some(theme::CARD.into()),
+                background: Some(theme::color::CARD.into()),
                 border: Border {
-                    color: theme::BORDER,
+                    color: theme::color::BORDER,
                     width: 1.0,
                     radius: 6.0.into(),
                 },
@@ -8455,7 +8455,7 @@ fn active_tab_view<'a>(
         None => container(
             text("暂无会话——到 Agent 面板点「＋」")
                 .size(workspace_font::subtitle())
-                .color(theme::DIM),
+                .color(theme::color::DIM),
         )
         .width(Length::Fill)
         .height(Length::Fill)
@@ -8780,20 +8780,20 @@ mod tests {
         use dozer_core::protocol::AgentState::*;
 
         assert_eq!(project_dot(&[]), None, "无存活会话不画点");
-        assert_eq!(project_dot(&[Idle]), Some((theme::GREEN, false)));
+        assert_eq!(project_dot(&[Idle]), Some((theme::color::GREEN, false)));
         assert_eq!(
             project_dot(&[Idle, Running]),
-            Some((theme::GREEN, true)),
+            Some((theme::color::GREEN, true)),
             "有会话在跑 → 同为绿但要闪,靠闪烁与空闲区分"
         );
         assert_eq!(
             project_dot(&[Idle, Running, AwaitingInput]),
-            Some((theme::PURPLE, false)),
+            Some((theme::color::PURPLE, false)),
             "待输入优先于运行/空闲"
         );
         assert_eq!(
             project_dot(&[Idle, Running, AwaitingInput, TurnEnded]),
-            Some((theme::GOLD, false)),
+            Some((theme::color::GOLD, false)),
             "回合结束(该甲方出手了)优先级最高"
         );
         // 顺序无关:优先级看的是状态集合,不是 tab 的先后。
@@ -9466,12 +9466,12 @@ mod tests {
     fn tree_dot_maps_status_colors() {
         assert_eq!(
             tree_row_dot_color(delivery::ChangeKind::Modified),
-            theme::GOLD
+            theme::color::GOLD
         );
-        assert_eq!(tree_row_dot_color(delivery::ChangeKind::New), theme::GREEN);
+        assert_eq!(tree_row_dot_color(delivery::ChangeKind::New), theme::color::GREEN);
         assert_eq!(
             tree_row_dot_color(delivery::ChangeKind::Deleted),
-            theme::RED
+            theme::color::RED
         );
         assert_eq!(tree_row_dot_glyph(false), "●", "全部暂存=实心");
         assert_eq!(tree_row_dot_glyph(true), "○", "有未暂存改动=空心");
@@ -9809,12 +9809,12 @@ mod tests {
     fn dot_color_states() {
         use dozer_core::protocol::AgentState::*;
         // 死会话恒为灰，不论 agent 状态。
-        assert_eq!(dot_color(Running, false), theme::DIM, "死会话灰点");
+        assert_eq!(dot_color(Running, false), theme::color::DIM, "死会话灰点");
         // 存活：空闲/运行同绿（运行靠闪烁区分），待输入紫、回合毕金。
-        assert_eq!(dot_color(Idle, true), theme::GREEN);
-        assert_eq!(dot_color(Running, true), theme::GREEN);
-        assert_eq!(dot_color(AwaitingInput, true), theme::PURPLE);
-        assert_eq!(dot_color(TurnEnded, true), theme::GOLD);
+        assert_eq!(dot_color(Idle, true), theme::color::GREEN);
+        assert_eq!(dot_color(Running, true), theme::color::GREEN);
+        assert_eq!(dot_color(AwaitingInput, true), theme::color::PURPLE);
+        assert_eq!(dot_color(TurnEnded, true), theme::color::GOLD);
     }
 
     #[test]
@@ -9838,9 +9838,9 @@ mod tests {
     fn env_status_text_ok_and_down() {
         assert_eq!(
             env_status_text(true),
-            ("环境正常 · dozerd 运行中", theme::GREEN)
+            ("环境正常 · dozerd 运行中", theme::color::GREEN)
         );
-        assert_eq!(env_status_text(false), ("dozerd 未连接", theme::RED));
+        assert_eq!(env_status_text(false), ("dozerd 未连接", theme::color::RED));
     }
 
     #[test]
@@ -9948,20 +9948,20 @@ mod tests {
     #[test]
     fn agent_dot_color_maps_each_kind_and_avoids_gold() {
         let cases = [
-            (AgentKind::Claude, theme::CYAN),
-            (AgentKind::Codebuddy, theme::PURPLE),
-            (AgentKind::Opencode, theme::GREEN),
-            (AgentKind::Codex, theme::ORANGE),
-            (AgentKind::Qoder, theme::MAGENTA),
-            (AgentKind::Kilo, theme::BLUE),
-            (AgentKind::Unknown, theme::DIM),
+            (AgentKind::Claude, theme::color::CYAN),
+            (AgentKind::Codebuddy, theme::color::PURPLE),
+            (AgentKind::Opencode, theme::color::GREEN),
+            (AgentKind::Codex, theme::color::ORANGE),
+            (AgentKind::Qoder, theme::color::MAGENTA),
+            (AgentKind::Kilo, theme::color::BLUE),
+            (AgentKind::Unknown, theme::color::DIM),
         ];
         for (agent, expected) in cases {
             let color = agent_dot_color(agent);
             assert_eq!(color, expected, "{agent:?}");
             assert_ne!(
                 color,
-                theme::GOLD,
+                theme::color::GOLD,
                 "{agent:?} 的对话列表圆点色不能是 GOLD(甲方动作专属,CLAUDE.md 明文规定)"
             );
         }

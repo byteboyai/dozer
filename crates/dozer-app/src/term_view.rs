@@ -330,7 +330,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
                         run_size,
                         Color {
                             a: 0.25,
-                            ..theme::CYAN
+                            ..theme::color::CYAN
                         },
                     );
                 }
@@ -352,7 +352,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
                 frame.fill_rectangle(
                     Point::new(x, y),
                     Size::new(box_w, line_height_px()),
-                    theme::CREAM,
+                    theme::color::CREAM,
                 );
                 if cell.ch != ' ' {
                     fill_cell_text(
@@ -360,7 +360,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
                         cell.ch.to_string(),
                         x,
                         y,
-                        theme::TERM_BG,
+                        theme::color::TERM_BG,
                         cell_font(cell.bold),
                     );
                 }
@@ -368,7 +368,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
                 frame.stroke(
                     &canvas::Path::rectangle(Point::new(x, y), Size::new(box_w, line_height_px())),
                     canvas::Stroke::default()
-                        .with_color(theme::CREAM)
+                        .with_color(theme::color::CREAM)
                         .with_width(1.0),
                 );
             }
@@ -383,17 +383,17 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
             let h = bounds.height;
             // 复用全应用统一滚动条配置(见 `crate::scrollbar`):轨道宽度
             // `scrollbar_width`,滑块(thumb)宽度 `scrollbar_thumb_width` 并居
-            // 中,滑块颜色甲方金 `#dcc9a3`(`theme::TAB_ACTIVE_BORDER`)。
+            // 中,滑块颜色甲方金 `#dcc9a3`(`theme::color::TAB_ACTIVE_BORDER`)。
             let bar_w = workspace_geometry::scrollbar_width();
             let thumb_w = workspace_geometry::scrollbar_thumb_width();
             let track_x = bounds.width - bar_w;
             let thumb_h = (rows / total * h).max(12.0);
             let thumb_top = ((history - offset as f32) / total * h).min(h - thumb_h);
-            frame.fill_rectangle(Point::new(track_x, 0.0), Size::new(bar_w, h), theme::BORDER);
+            frame.fill_rectangle(Point::new(track_x, 0.0), Size::new(bar_w, h), theme::color::BORDER);
             frame.fill_rectangle(
                 Point::new(track_x + (bar_w - thumb_w) / 2.0, thumb_top),
                 Size::new(thumb_w, thumb_h),
-                theme::TAB_ACTIVE_BORDER,
+                theme::color::TAB_ACTIVE_BORDER,
             );
         }
 

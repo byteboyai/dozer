@@ -28,7 +28,7 @@
 - Create: `crates/dozer-app/src/theme.rs`(新的模块入口)
 - Modify: 全仓库所有引用 `theme::` 颜色常量/`theme::mix` 的文件(见 Step 3 清单)
 
-- [ ] **Step 1: 搬文件**
+- [x] **Step 1: 搬文件**
 
 `theme.rs`(文件)和 `theme/`(目录)是两个不同的路径,不存在命名冲突,一步到位即可:
 
@@ -37,7 +37,7 @@ mkdir -p crates/dozer-app/src/theme
 git mv crates/dozer-app/src/theme.rs crates/dozer-app/src/theme/color.rs
 ```
 
-- [ ] **Step 2: 新建 `theme.rs` 模块入口**
+- [x] **Step 2: 新建 `theme.rs` 模块入口**
 
 ```rust
 //! 设计 token 系统入口——颜色(`color`)、区域样式(`region`)、UI 字号
@@ -51,7 +51,7 @@ pub mod color;
 
 （其余五个 `pub mod` 声明在后续任务里逐个补上。）
 
-- [ ] **Step 3: 全仓库替换颜色常量引用**
+- [x] **Step 3: 全仓库替换颜色常量引用**
 
 `theme.rs` 现有 21 个 `pub` 项(20 个颜色常量/函数 + `mix`):`BG`、`PANEL`、`TERM_BG`、
 `CARD`、`BORDER`、`CREAM`、`BODY`、`DIM`、`GOLD`、`CYAN`、`GREEN`、`PURPLE`、`RED`、
@@ -71,13 +71,13 @@ cd -
 不会误伤 `theme::region::xxx` 这类还没搬过去的其他模块引用,也不会误伤注释里提到
 "`theme.rs`"这种文字。）
 
-- [ ] **Step 4: 编译 + 测试**
+- [x] **Step 4: 编译 + 测试**
 
 Run: `cargo build --workspace && cargo test --workspace 2>&1 | tail -60`
 Expected: 干净通过。若报"找不到 `theme::color::` 里没有的标识符",说明 Step 3 的标识符
 列表漏了一个,回 `theme/color.rs` 核对补全。
 
-- [ ] **Step 5: 全仓库确认没有遗留的旧式颜色引用**
+- [x] **Step 5: 全仓库确认没有遗留的旧式颜色引用**
 
 Run: `grep -rn -E '\btheme::(BG|PANEL|TERM_BG|CARD|BORDER|CREAM|BODY|DIM|GOLD|CYAN|GREEN|PURPLE|RED|ORANGE|MAGENTA|BLUE|SCRIM|TAB_ACTIVE_BORDER|TAB_ACTIVE_BG|TAB_HOVER|mix)\b' crates/dozer-app/src`
 Expected: 无输出(全部已经带上 `color::`)。

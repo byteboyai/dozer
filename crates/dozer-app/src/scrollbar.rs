@@ -16,12 +16,12 @@ pub fn scrollbar() -> scrollable::Scrollbar {
         .scroller_width(workspace_geometry::scrollbar_thumb_width())
 }
 
-/// 统一滚动条外观:滑块(thumb)用甲方金 `#dcc9a3`(`theme::TAB_ACTIVE_BORDER`),
+/// 统一滚动条外观:滑块(thumb)用甲方金 `#dcc9a3`(`theme::color::TAB_ACTIVE_BORDER`),
 /// 轨道背景透明、无边框;竖直/水平滚动条一致。
 /// 用法:`Scrollable::new(..).style(|_t, _s| crate::scrollbar::scrollbar_style())`。
 pub fn scrollbar_style() -> scrollable::Style {
     let scroller = scrollable::Scroller {
-        background: Background::Color(theme::TAB_ACTIVE_BORDER),
+        background: Background::Color(theme::color::TAB_ACTIVE_BORDER),
         border: Border {
             radius: (workspace_geometry::scrollbar_thumb_width() / 2.0).into(),
             ..Border::default()
