@@ -7,6 +7,10 @@
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
+use crate::{icons, theme, workspace_font};
+use iced_widget::core::{Border, Color, Element, Length};
+use iced_widget::{button, column, container, rich_text, row, scrollable, span, text, text_input};
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TodoItem {
     pub text: String,
@@ -271,9 +275,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn load() -> Self {
-        Self {
-            meta: meta_load(),
-        }
+        Self { meta: meta_load() }
     }
 
     fn save(&self) {
@@ -327,6 +329,14 @@ impl AppState {
         meta.completed_at = completed_at_for_toggle(done, std::time::SystemTime::now());
         self.save();
     }
+}
+
+/// `view` 渲染派发相关 UI 需要的终端会话摘要,由内核从 `ws.tabs` 摘出来
+/// 传入——`extensions::todo` 不知道 `SessionTab` 这个终端领域的类型。
+pub struct SessionTabSummary {
+    pub session_id: String,
+    pub title: String,
+    pub alive: bool,
 }
 
 /// Todo 面板自己的消息类型。`DispatchToExisting`/`DispatchNew` 涉及终端
@@ -461,6 +471,453 @@ pub fn update(
             )
         }
     }
+}
+
+pub fn view<'a>(
+    app_state: &'a AppState,
+    ws_state: &'a WorkspaceState,
+    project_id: i64,
+    tabs: &'a [SessionTabSummary],
+    width: Length,
+    outer: Border,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let header = column![
+        text("Todo")
+            .size(workspace_font::title())
+            .color(theme::CREAM),
+        text(format!("{} 条任务 · .dozer/todo.md", ws_state.items.len()))
+            .size(workspace_font::caption())
+            .color(theme::DIM),
+    ]
+    .spacing(4)
+    .padding([20, 20]);
+
+    let states: Vec<TodoState> = ws_state
+        .items
+        .iter()
+        .map(|item| {
+            let key = todo_line_key(&item.text);
+            let dispatch = app_state
+                .meta_for(project_id, key)
+                .and_then(|m| m.dispatch.as_ref());
+            let target_alive = dispatch
+                .map(|d| tabs.iter().any(|t| t.session_id == d.session_id && t.alive))
+                .unwrap_or(false);
+            todo_display_state(item, dispatch, target_alive)
+        })
+        .collect();
+    let visible_idx = filter_todos(&ws_state.items, &states, ws_state.filter, &ws_state.search);
+
+    let existing_tabs: Vec<(&str, String)> = tabs
+        .iter()
+        .filter(|t| t.alive)
+        .map(|t| (t.session_id.as_str(), t.title.clone()))
+        .collect();
+
+    let toolbar = row![
+        todo_filter_segment("全部", TodoFilter::All, ws_state.filter),
+        todo_filter_segment("待办", TodoFilter::Pending, ws_state.filter),
+        todo_filter_segment("进行中", TodoFilter::InProgress, ws_state.filter),
+        todo_filter_segment("完成", TodoFilter::Done, ws_state.filter),
+        text_input("搜索任务关键字…", &ws_state.search)
+            .on_input(Message::SearchChanged)
+            .size(workspace_font::body())
+            .width(Length::Fill)
+            .style(
+                |_t: &iced_widget::Theme, _s| iced_widget::text_input::Style {
+                    background: theme::BG.into(),
+                    border: Border::default(),
+                    icon: theme::DIM,
+                    placeholder: theme::DIM,
+                    value: theme::CREAM,
+                    selection: theme::GOLD,
+                }
+            ),
+    ]
+    .spacing(8)
+    .padding([12, 20])
+    .align_y(iced_widget::core::alignment::Vertical::Center);
+
+    let mut list = column![].spacing(2);
+    if visible_idx.is_empty() {
+        list = list.push(
+            container(
+                text("没有匹配的任务")
+                    .size(workspace_font::body())
+                    .color(theme::DIM),
+            )
+            .padding([20, 20]),
+        );
+    } else {
+        for &idx in &visible_idx {
+            let item = &ws_state.items[idx];
+            let key = todo_line_key(&item.text);
+            let meta = app_state.meta_for(project_id, key);
+            let mut row = None;
+            if let Some((editing_idx, draft)) = &ws_state.editing_plan_date
+                && *editing_idx == idx
+            {
+                row = Some(todo_plan_date_edit_row(item, draft));
+            }
+            match row {
+                Some(r) => list = list.push(r),
+                None => {
+                    list = list.push(todo_row(
+                        idx,
+                        item,
+                        states[idx],
+                        meta,
+                        ws_state.dispatch_open == Some(idx),
+                        &existing_tabs,
+                    ));
+                }
+            }
+        }
+    }
+
+    let add_row = text_input("＋新增任务…", &ws_state.add_draft)
+        .on_input(Message::AddInputChanged)
+        .on_submit(Message::AddSubmit)
+        .size(workspace_font::body())
+        .padding([10, 20])
+        .style(
+            |_t: &iced_widget::Theme, _s| iced_widget::text_input::Style {
+                background: theme::BG.into(),
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 0.0,
+                    radius: 0.0.into(),
+                },
+                icon: theme::DIM,
+                placeholder: theme::DIM,
+                value: theme::CREAM,
+                selection: theme::GOLD,
+            },
+        );
+
+    let divider = container(iced_widget::Space::new())
+        .width(Length::Fill)
+        .height(Length::Fixed(1.0))
+        .style(|_t: &iced_widget::Theme| container::Style {
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
+            ..container::Style::default()
+        });
+
+    let content = column![
+        header,
+        toolbar,
+        scrollable(list).height(Length::Fill),
+        divider,
+        add_row,
+    ]
+    .height(Length::Fill);
+
+    container(content)
+        .width(width)
+        .height(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::BG.into()),
+            border: outer,
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// 一条 Todo 任务行。勾选框+文本（完成态删除线+暗色）+ 右侧按状态显示：
+/// 待办=派发按钮；进行中=绿点+"进行中"标签；完成=占位。派发选择层叠在行下方。
+fn todo_row<'a>(
+    idx: usize,
+    item: &'a TodoItem,
+    state: TodoState,
+    meta: Option<&'a TodoTaskMeta>,
+    dispatch_open: bool,
+    existing_tabs: &'a [(&'a str, String)],
+) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let done = item.done;
+    let box_color = if done { theme::BORDER } else { theme::DIM };
+    let checkbox = button(
+        container(if done {
+            text("✓")
+                .size(workspace_font::caption())
+                .color(theme::DIM)
+                .into()
+        } else {
+            Element::from(iced_widget::space::Space::new())
+        })
+        .width(Length::Fixed(18.0))
+        .height(Length::Fixed(18.0))
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: if done {
+                Some(theme::BORDER.into())
+            } else {
+                None
+            },
+            border: Border {
+                color: box_color,
+                width: 1.5,
+                radius: 4.0.into(),
+            },
+            ..container::Style::default()
+        }),
+    )
+    .on_press(Message::Toggle(idx))
+    .padding(0)
+    .style(|_t: &iced_widget::Theme, _s| button::Style {
+        background: None,
+        text_color: theme::CREAM,
+        ..button::Style::default()
+    });
+
+    let label_color = if done { theme::DIM } else { theme::CREAM };
+    let label: Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> = if done {
+        let rich: iced_widget::text::Rich<
+            '_,
+            (),
+            Message,
+            iced_widget::Theme,
+            iced_widget::Renderer,
+        > = rich_text![
+            span(item.text.clone())
+                .size(workspace_font::body())
+                .color(label_color)
+                .strikethrough(true)
+        ];
+        rich.into()
+    } else {
+        text(item.text.clone())
+            .size(workspace_font::body())
+            .color(label_color)
+            .into()
+    };
+
+    let date_label: Option<Element<'static, Message, iced_widget::Theme, iced_widget::Renderer>> =
+        match state {
+            TodoState::Done => meta.and_then(|m| m.completed_at).map(|t| {
+                text(format!("完成于 {}", format_todo_time(t)))
+                    .size(workspace_font::caption())
+                    .color(theme::DIM)
+                    .into()
+            }),
+            _ => meta.and_then(|m| m.plan_date.as_deref()).map(|d| {
+                button(
+                    text(format!("计划 {d}"))
+                        .size(workspace_font::caption())
+                        .color(theme::DIM),
+                )
+                .on_press(Message::PlanDateEditStart(idx))
+                .padding(0)
+                .style(|_t: &iced_widget::Theme, _s| button::Style {
+                    background: None,
+                    text_color: theme::DIM,
+                    ..button::Style::default()
+                })
+                .into()
+            }),
+        };
+    let mut middle = row![checkbox, label]
+        .spacing(10)
+        .align_y(iced_widget::core::alignment::Vertical::Center);
+    if let Some(label) = date_label {
+        middle = middle.push(label);
+    }
+
+    let trailing: Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> = match state
+    {
+        TodoState::Pending => button(
+            row![
+                icons::view(
+                    icons::IconKind::SquarePlus,
+                    crate::icon_size::row(),
+                    theme::GOLD
+                ),
+                text("派发")
+                    .size(workspace_font::caption())
+                    .color(theme::GOLD),
+            ]
+            .spacing(4)
+            .align_y(iced_widget::core::alignment::Vertical::Center),
+        )
+        .on_press(Message::DispatchOpen(idx))
+        .padding([5, 10])
+        .style(|_t: &iced_widget::Theme, _s| button::Style {
+            background: None,
+            text_color: theme::GOLD,
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..button::Style::default()
+        })
+        .into(),
+        TodoState::InProgress => row![
+            text("●").size(workspace_font::dot_sm()).color(theme::GREEN),
+            text("进行中")
+                .size(workspace_font::caption())
+                .color(theme::GREEN),
+        ]
+        .spacing(5)
+        .into(),
+        TodoState::Done => iced_widget::space::Space::new().into(),
+    };
+
+    let base: Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> =
+        row![middle, trailing]
+            .spacing(10)
+            .align_y(iced_widget::core::alignment::Vertical::Center)
+            .padding([10, 20])
+            .into();
+    if dispatch_open {
+        column![base, todo_dispatch_popup(idx, existing_tabs)].into()
+    } else {
+        base
+    }
+}
+
+/// Todo 派发选择层：列出当前项目存活的 agent tab + 一个"新建"入口，样式
+/// 对齐 `agent_picker_popup`（CARD 底 + BORDER 描边）。挂在触发它的那一行
+/// 下方，不需要额外的坐标计算。
+fn todo_dispatch_popup<'a>(
+    idx: usize,
+    existing_tabs: &'a [(&'a str, String)],
+) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let mut col = column![].spacing(2);
+    for (session_id, title) in existing_tabs {
+        col = col.push(
+            button(
+                text(title.clone())
+                    .size(workspace_font::body())
+                    .color(theme::CREAM),
+            )
+            .on_press(Message::DispatchToExisting(idx, session_id.to_string()))
+            .width(Length::Fill)
+            .padding([6, 12])
+            .style(|_t: &iced_widget::Theme, _s| button::Style {
+                background: None,
+                text_color: theme::CREAM,
+                ..button::Style::default()
+            }),
+        );
+    }
+    col = col.push(
+        button(
+            text("新建 agent 会话…")
+                .size(workspace_font::body())
+                .color(theme::GOLD),
+        )
+        .on_press(Message::DispatchNew(
+            idx,
+            crate::workspace::PickerLaunch::Agent(None),
+        ))
+        .width(Length::Fill)
+        .padding([6, 12])
+        .style(|_t: &iced_widget::Theme, _s| button::Style {
+            background: None,
+            text_color: theme::GOLD,
+            ..button::Style::default()
+        }),
+    );
+    container(col)
+        .padding(6)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::CARD.into()),
+            border: Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// 计划时间内联编辑态：任务文本 + 一个 `text_input`，回车提交。
+fn todo_plan_date_edit_row<'a>(
+    item: &'a TodoItem,
+    draft: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    row![
+        text(item.text.clone())
+            .size(workspace_font::body())
+            .color(theme::CREAM),
+        text_input("计划时间，如 08-10", draft)
+            .on_input(Message::PlanDateChanged)
+            .on_submit(Message::PlanDateSubmit)
+            .size(workspace_font::caption())
+            .width(Length::Fixed(140.0)),
+    ]
+    .spacing(10)
+    .align_y(iced_widget::core::alignment::Vertical::Center)
+    .padding([10, 20])
+    .into()
+}
+
+/// 筛选分段按钮，选中态高亮。
+fn todo_filter_segment<'a>(
+    label: &'a str,
+    value: TodoFilter,
+    current: TodoFilter,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let active = value == current;
+    button(
+        text(label)
+            .size(workspace_font::caption())
+            .color(if active { theme::CREAM } else { theme::DIM }),
+    )
+    .on_press(Message::FilterSet(value))
+    .padding([4, 10])
+    .style(move |_t: &iced_widget::Theme, _s| button::Style {
+        background: if active {
+            Some(theme::CARD.into())
+        } else {
+            None
+        },
+        text_color: if active { theme::CREAM } else { theme::DIM },
+        border: Border {
+            radius: 5.0.into(),
+            ..Border::default()
+        },
+        ..button::Style::default()
+    })
+    .into()
+}
+
+/// `SystemTime` → "MM-DD HH:MM"(UTC)。不引 `chrono`,用 civil-from-days
+/// 算法(Howard Hinnant)手推公历年月日,再拼 HH:MM。只用于"完成于"这种
+/// 粗粒度提示,UTC 而非本地时区,不追求夏令时/时区严格正确。
+fn format_todo_time(t: std::time::SystemTime) -> String {
+    let secs = t
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // days = 秒数 → 自 1970-01-01 的整数日;`secs` 已经是 `u64`(1970 前会被
+    // 上面的 `unwrap_or_default()` 夹到 0),这里不会是负数。
+    let days = (secs / 86400) as i64;
+    let rem = secs % 86400;
+    let (hour, minute) = (rem / 3600, (rem % 3600) / 60);
+    let (_y, m, d) = civil_from_days(days);
+    format!("{:02}-{:02} {:02}:{:02}", m, d, hour, minute)
+}
+
+/// civil-from-days：把"自 1970-01-01 的天数"换算成 (年, 月, 日)。
+/// 用 Hinnant 经典公式,范围覆盖 1970..=2100,足够"完成于"提示用。
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
 }
 
 #[cfg(test)]
@@ -793,13 +1250,7 @@ mod tests {
         let (_dir, root) = project_dir_with_todo("# Todo\n");
         let mut ws_state = WorkspaceState::default();
         let mut app_state = AppState::default();
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::AddSubmit,
-            1,
-            &root,
-        );
+        update(&mut ws_state, &mut app_state, Message::AddSubmit, 1, &root);
         assert!(ws_state.items.is_empty());
     }
 
@@ -831,9 +1282,21 @@ mod tests {
         let (_dir, root) = project_dir_with_todo("# Todo\n");
         let mut ws_state = WorkspaceState::default();
         let mut app_state = AppState::default();
-        update(&mut ws_state, &mut app_state, Message::DispatchOpen(2), 1, &root);
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::DispatchOpen(2),
+            1,
+            &root,
+        );
         assert!(ws_state.dispatch_popup_open());
-        update(&mut ws_state, &mut app_state, Message::DispatchClose, 1, &root);
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::DispatchClose,
+            1,
+            &root,
+        );
         assert!(!ws_state.dispatch_popup_open());
     }
 
@@ -850,10 +1313,7 @@ mod tests {
             1,
             &root,
         );
-        assert_eq!(
-            ws_state.editing_plan_date,
-            Some((0, "08-10".to_string()))
-        );
+        assert_eq!(ws_state.editing_plan_date, Some((0, "08-10".to_string())));
     }
 
     #[test]
@@ -904,13 +1364,8 @@ mod tests {
     #[test]
     fn take_pending_dispatch_removes_and_returns_once() {
         let mut ws_state = WorkspaceState::default();
-        ws_state
-            .pending_dispatch
-            .insert(7, "任务A".to_string());
-        assert_eq!(
-            ws_state.take_pending_dispatch(7),
-            Some("任务A".to_string())
-        );
+        ws_state.pending_dispatch.insert(7, "任务A".to_string());
+        assert_eq!(ws_state.take_pending_dispatch(7), Some("任务A".to_string()));
         assert_eq!(ws_state.take_pending_dispatch(7), None, "取过一次就没了");
     }
 }
