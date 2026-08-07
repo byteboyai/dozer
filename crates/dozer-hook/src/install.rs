@@ -15,9 +15,10 @@ pub const EVENTS: [&str; 7] = [
     "SessionEnd",
 ];
 
-/// agent 名 → 该 agent 的 hook 配置文件路径。CodeBuddy 走
-/// `~/.codebuddy/settings.json`（Task 1 spike 确认的机制），环境变量
-/// 覆盖用于测试，跟既有 Claude 路径同一套手法。
+/// agent 名 → 该 agent 的 hook 配置文件路径。CodeBuddy/Codex 走各自的
+/// 全局配置文件（与 Claude 同构的 JSON 补丁机制，Codex 的结构已通过官方
+/// 文档核实、Task 4 spike 现场验证），环境变量覆盖用于测试，跟既有 Claude
+/// 路径同一套手法。
 pub fn settings_path_for(agent: &str) -> PathBuf {
     match agent {
         "codebuddy" => {
@@ -26,6 +27,13 @@ pub fn settings_path_for(agent: &str) -> PathBuf {
             }
             let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
             PathBuf::from(home).join(".codebuddy").join("settings.json")
+        }
+        "codex" => {
+            if let Ok(p) = std::env::var("DOZER_CODEX_SETTINGS") {
+                return PathBuf::from(p);
+            }
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+            PathBuf::from(home).join(".codex").join("hooks.json")
         }
         _ => {
             if let Ok(p) = std::env::var("DOZER_CLAUDE_SETTINGS") {
@@ -171,6 +179,28 @@ mod tests {
             std::path::PathBuf::from("/tmp/probe-codebuddy.json")
         );
         unsafe { std::env::remove_var("DOZER_CODEBUDDY_SETTINGS") };
+    }
+
+    #[test]
+    fn install_writes_agent_specific_command_for_codex() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hooks.json");
+        assert_eq!(run_at(&path, "codex", true), 0);
+        let root = read(&path);
+        let cmd = root["hooks"]["Stop"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(cmd.contains(" codex "), "{cmd}");
+    }
+
+    #[test]
+    fn settings_path_for_codex_points_at_codex_hooks_json() {
+        unsafe { std::env::set_var("DOZER_CODEX_SETTINGS", "/tmp/probe-codex.json") };
+        assert_eq!(
+            settings_path_for("codex"),
+            std::path::PathBuf::from("/tmp/probe-codex.json")
+        );
+        unsafe { std::env::remove_var("DOZER_CODEX_SETTINGS") };
     }
 
     #[test]
