@@ -1,4 +1,5 @@
 mod codebuddy;
+mod codex;
 mod install;
 mod opencode;
 mod opencode_install;
@@ -55,6 +56,7 @@ fn parse_agent(arg: &str) -> AgentKind {
         "claude" => AgentKind::Claude,
         "codebuddy" => AgentKind::Codebuddy,
         "opencode" => AgentKind::Opencode,
+        "codex" => AgentKind::Codex,
         _ => AgentKind::Unknown,
     }
 }
@@ -67,6 +69,7 @@ fn resolve_event(agent: AgentKind, event_arg: Option<&str>) -> Option<String> {
     let raw = raw.unwrap_or_else(|| "unknown".to_string());
     match agent {
         AgentKind::Codebuddy => codebuddy::translate_event(&raw),
+        AgentKind::Codex => codex::translate_event(&raw),
         _ => Some(raw),
     }
 }
@@ -158,5 +161,23 @@ mod tests {
             Some("PostToolUseFailure".to_string()),
             "Claude 分支不套用 CodeBuddy 的翻译表"
         );
+    }
+
+    #[test]
+    fn parse_agent_recognizes_codex() {
+        assert_eq!(parse_agent("codex"), AgentKind::Codex);
+    }
+
+    #[test]
+    fn resolve_event_translates_codex_permission_request() {
+        assert_eq!(
+            resolve_event(AgentKind::Codex, Some("PermissionRequest")),
+            Some("Notification".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_event_drops_codex_compaction_events() {
+        assert_eq!(resolve_event(AgentKind::Codex, Some("PreCompact")), None);
     }
 }
