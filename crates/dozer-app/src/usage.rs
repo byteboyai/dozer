@@ -9,7 +9,6 @@ use crate::conversation::ConversationMeta;
 use crate::icons;
 use crate::theme;
 use crate::workspace::Message;
-use crate::theme::font;
 use dozer_core::protocol::AgentKind;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::{Border, Color, Element, Length, Radians, Rectangle};
@@ -403,7 +402,11 @@ fn summary_card(
             format!("{} ({})", totals.tool_calls, totals.mutating_tool_calls),
             theme::color::CREAM
         ),
-        stat("触达文件", totals.files_touched.to_string(), theme::color::CREAM),
+        stat(
+            "触达文件",
+            totals.files_touched.to_string(),
+            theme::color::CREAM
+        ),
         stat("input", totals.tokens_in.to_string(), theme::color::CYAN),
         stat("output", totals.tokens_out.to_string(), theme::color::CYAN),
         stat(

@@ -448,12 +448,12 @@ git commit -m "refactor(dozer-app): move workspace_geometry.rs into theme/geomet
 
 **Files:** 无新增/修改(纯校验任务)
 
-- [ ] **Step 1: 全 workspace 构建 + 测试 + clippy + fmt**
+- [x] **Step 1: 全 workspace 构建 + 测试 + clippy + fmt**
 
 Run: `cargo build && cargo test && cargo clippy --all-targets && cargo fmt --check`
 Expected: 全部 crate 编译通过、测试全绿、无新增警告、无格式差异。
 
-- [ ] **Step 2: 确认六个旧文件都已经不存在,`theme/` 目录结构完整**
+- [x] **Step 2: 确认六个旧文件都已经不存在,`theme/` 目录结构完整**
 
 ```bash
 ls crates/dozer-app/src/theme.rs crates/dozer-app/src/theme/color.rs \
@@ -467,7 +467,7 @@ ls crates/dozer-app/src/chrome_style.rs crates/dozer-app/src/icon_size.rs \
 
 Expected: 第一条 `ls` 全部存在;第二条 `ls` 全部报"不存在"。
 
-- [ ] **Step 3: 全仓库确认没有任何遗留的旧模块路径引用**
+- [x] **Step 3: 全仓库确认没有任何遗留的旧模块路径引用**
 
 ```bash
 grep -rn -E '\b(chrome_style|workspace_font|workspace_geometry)::' crates/dozer-app/src
@@ -477,14 +477,14 @@ grep -rn -E '\btheme::(BG|PANEL|TERM_BG|CARD|BORDER|CREAM|BODY|DIM|GOLD|CYAN|GRE
 
 Expected: 三条都无输出。
 
-- [ ] **Step 4: 人工确认没有行为变化**
+- [x] **Step 4: 人工确认没有行为变化**
 
 Run: `cargo run -p dozer-app`,随便打开一个项目走一遍常见界面(终端/预览/浏览器/项目树)——
 颜色、字号、图标大小、面板间距应该跟改动前肉眼看不出差别(这本来就是预期,纯路径重命名)。
 主要确认没有崩溃/panic(如果哪个 JSON 解析路径没搬对,`chrome_style.rs`/`icon_size.rs`
 等文件里"解析失败直接 panic"的设计会在启动时就报出来,不会是运行期才发现的隐蔽问题)。
 
-- [ ] **Step 5: 确认没有遗留未提交的改动**
+- [x] **Step 5: 确认没有遗留未提交的改动**
 
 Run: `git status`
 Expected: 干净。

@@ -7,7 +7,6 @@
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use crate::theme::font;
 use crate::{icons, theme};
 use iced_widget::core::{Border, Color, Element, Length};
 use iced_widget::{button, column, container, rich_text, row, scrollable, span, text, text_input};
@@ -662,7 +661,11 @@ fn todo_row<'a>(
     existing_tabs: &'a [(&'a str, String)],
 ) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
     let done = item.done;
-    let box_color = if done { theme::color::BORDER } else { theme::color::DIM };
+    let box_color = if done {
+        theme::color::BORDER
+    } else {
+        theme::color::DIM
+    };
     let checkbox = button(
         container(if done {
             text("✓")
@@ -698,7 +701,11 @@ fn todo_row<'a>(
         ..button::Style::default()
     });
 
-    let label_color = if done { theme::color::DIM } else { theme::color::CREAM };
+    let label_color = if done {
+        theme::color::DIM
+    } else {
+        theme::color::CREAM
+    };
     let label: Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> = if done {
         let rich: iced_widget::text::Rich<
             '_,
@@ -781,7 +788,9 @@ fn todo_row<'a>(
         })
         .into(),
         TodoState::InProgress => row![
-            text("●").size(theme::font::dot_sm()).color(theme::color::GREEN),
+            text("●")
+                .size(theme::font::dot_sm())
+                .color(theme::color::GREEN),
             text("进行中")
                 .size(theme::font::caption())
                 .color(theme::color::GREEN),
@@ -889,11 +898,11 @@ fn todo_filter_segment<'a>(
     current: TodoFilter,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let active = value == current;
-    button(
-        text(label)
-            .size(theme::font::caption())
-            .color(if active { theme::color::CREAM } else { theme::color::DIM }),
-    )
+    button(text(label).size(theme::font::caption()).color(if active {
+        theme::color::CREAM
+    } else {
+        theme::color::DIM
+    }))
     .on_press(Message::FilterSet(value))
     .padding([4, 10])
     .style(move |_t: &iced_widget::Theme, _s| button::Style {
@@ -902,7 +911,11 @@ fn todo_filter_segment<'a>(
         } else {
             None
         },
-        text_color: if active { theme::color::CREAM } else { theme::color::DIM },
+        text_color: if active {
+            theme::color::CREAM
+        } else {
+            theme::color::DIM
+        },
         border: Border {
             radius: 5.0.into(),
             ..Border::default()

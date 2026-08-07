@@ -7,7 +7,6 @@
 //! 画一根直线,commit 是线上的一个圆点,父子关系用直线连接(不是贝塞尔)。
 //! 验证通过、决定转正时,再补动画/交互/性能优化。
 use crate::theme;
-use crate::theme::font;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::alignment;
 use iced_widget::core::{Color, Element, Font, Length, Padding, Pixels, Point, Rectangle, Vector};
@@ -701,9 +700,11 @@ fn detail_view<'a>(
         Err(err) => container(text(format!("详情加载失败: {err}")).color(theme::color::RED))
             .padding(8)
             .into(),
-        Ok(detail) if detail.files.is_empty() => container(text("无文件改动").color(theme::color::DIM))
-            .padding(8)
-            .into(),
+        Ok(detail) if detail.files.is_empty() => {
+            container(text("无文件改动").color(theme::color::DIM))
+                .padding(8)
+                .into()
+        }
         Ok(detail) => {
             let list = detail.files.iter().fold(column![].spacing(10), |acc, f| {
                 let color = match f.status {

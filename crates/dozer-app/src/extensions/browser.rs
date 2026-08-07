@@ -9,11 +9,8 @@
 //! 用不到的逻辑),两者各自维护、互不知情。
 
 use crate::preview::WebviewSpec;
-use crate::workspace::{lh, preview_tab_display_width, tab_arrow_button, tab_divider, tab_window};
 use crate::theme::icon_size;
-use crate::theme::region;
-use crate::theme::geometry;
-use crate::theme::font;
+use crate::workspace::{lh, preview_tab_display_width, tab_arrow_button, tab_divider, tab_window};
 use crate::{icons, theme};
 use dozer_client::Client;
 use dozer_core::protocol::{BookmarkInfo, BookmarkScope};
@@ -944,7 +941,11 @@ fn star_button(
         .as_ref()
         .map(|u| bookmark_status(&state.bookmarks, u, project_id).is_bookmarked())
         .unwrap_or(false);
-    let color = if starred { theme::color::GOLD } else { theme::color::DIM };
+    let color = if starred {
+        theme::color::GOLD
+    } else {
+        theme::color::DIM
+    };
     let mut btn = button(icons::view(icons::IconKind::Star, icon_size::row(), color))
         .width(Length::Fixed(theme::geometry::tab_button_size()))
         .height(Length::Fixed(theme::geometry::tab_button_size()))
@@ -1050,13 +1051,15 @@ fn bookmark_group<'a>(
             text_color: theme::color::CREAM,
             ..button::Style::default()
         });
-        let remove = button(lh(text("×").size(theme::font::body()).color(theme::color::DIM)))
-            .on_press(Message::BookmarkRemove(b.id))
-            .style(|_t: &iced_widget::Theme, _s| button::Style {
-                background: None,
-                text_color: theme::color::DIM,
-                ..button::Style::default()
-            });
+        let remove = button(lh(text("×")
+            .size(theme::font::body())
+            .color(theme::color::DIM)))
+        .on_press(Message::BookmarkRemove(b.id))
+        .style(|_t: &iced_widget::Theme, _s| button::Style {
+            background: None,
+            text_color: theme::color::DIM,
+            ..button::Style::default()
+        });
         col = col.push(
             row![open, remove]
                 .spacing(4)
@@ -1149,13 +1152,15 @@ pub fn view(
                 text_color: theme::color::CREAM,
                 ..button::Style::default()
             });
-            let close = button(lh(text("×").size(theme::font::body()).color(theme::color::DIM)))
-                .on_press(Message::CloseTab(idx))
-                .style(|_t, _s| button::Style {
-                    background: None,
-                    text_color: theme::color::DIM,
-                    ..button::Style::default()
-                });
+            let close = button(lh(text("×")
+                .size(theme::font::body())
+                .color(theme::color::DIM)))
+            .on_press(Message::CloseTab(idx))
+            .style(|_t, _s| button::Style {
+                background: None,
+                text_color: theme::color::DIM,
+                ..button::Style::default()
+            });
             container(
                 row![select, close]
                     .spacing(2)
@@ -1202,16 +1207,24 @@ pub fn view(
     } else {
         "输入网址".to_string()
     };
-    let addr = button(lh(text(addr_text)
-        .size(theme::font::body())
-        .color(if editing { theme::color::CREAM } else { theme::color::DIM })))
+    let addr = button(lh(text(addr_text).size(theme::font::body()).color(
+        if editing {
+            theme::color::CREAM
+        } else {
+            theme::color::DIM
+        },
+    )))
     .on_press(Message::AddrClick)
     .width(Length::Fill)
     .style(move |_t, _s| button::Style {
         background: Some(theme::color::TERM_BG.into()),
         text_color: theme::color::CREAM,
         border: Border {
-            color: if editing { theme::color::GOLD } else { theme::color::BORDER },
+            color: if editing {
+                theme::color::GOLD
+            } else {
+                theme::color::BORDER
+            },
             width: 1.0,
             radius: 2.0.into(),
         },

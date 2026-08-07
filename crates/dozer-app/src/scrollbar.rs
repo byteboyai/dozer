@@ -4,7 +4,6 @@
 //! API,这里成对提供,避免各处重复、漂移。
 
 use crate::theme;
-use crate::theme::geometry;
 use iced_widget::core::{Background, Border, Color, Shadow};
 use iced_widget::scrollable;
 
