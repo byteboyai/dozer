@@ -32,7 +32,7 @@
   - `Request::ListBookmarks { project_id: Option<i64> }`
   - `Reply::Bookmarks { bookmarks: Vec<BookmarkInfo> }`
 
-- [ ] **Step 1: 写失败的序列化往返测试**
+- [x] **Step 1: 写失败的序列化往返测试**
 
 在 `crates/dozer-core/src/protocol.rs` 的 `mod tests` 里追加(紧跟 `acceptance_count_request_roundtrips` 之后即可):
 
@@ -86,12 +86,12 @@
     }
 ```
 
-- [ ] **Step 2: 运行测试确认失败(类型不存在)**
+- [x] **Step 2: 运行测试确认失败(类型不存在)**
 
 Run: `cargo test -p dozer-core bookmark`
 Expected: 编译失败,报 `BookmarkScope`/`BookmarkInfo`/`Request::AddBookmark` 等未定义。
 
-- [ ] **Step 3: 添加类型与枚举变体**
+- [x] **Step 3: 添加类型与枚举变体**
 
 在 `ProjectInfo` 定义之后插入:
 
@@ -146,17 +146,17 @@ pub struct BookmarkInfo {
     },
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozer-core bookmark`
 Expected: PASS(`bookmark_scope_serializes_snake_case`、`bookmark_messages_roundtrip` 两条)
 
-- [ ] **Step 5: 跑一遍全量 protocol 测试,确认没有破坏既有序列化**
+- [x] **Step 5: 跑一遍全量 protocol 测试,确认没有破坏既有序列化**
 
 Run: `cargo test -p dozer-core`
 Expected: 全绿
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/dozer-core/src/protocol.rs
@@ -177,7 +177,7 @@ git commit -m "feat(protocol): add bookmark types and Add/Remove/List messages"
   - `pub struct BookmarkStore`
   - `impl BookmarkStore { pub fn new(path: &Path) -> Result<Self>; pub fn add(&self, scope: BookmarkScope, project_id: Option<i64>, url: &str, title: &str) -> Result<BookmarkInfo>; pub fn remove(&self, id: i64) -> Result<()>; pub fn list(&self, project_id: Option<i64>) -> Result<Vec<BookmarkInfo>>; }`
 
-- [ ] **Step 1: 写失败的存储测试**
+- [x] **Step 1: 写失败的存储测试**
 
 创建 `crates/dozerd/src/bookmarks.rs`,先写测试模块(此时 `BookmarkStore` 还不存在,编译会失败):
 
@@ -407,7 +407,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 声明模块**
+- [x] **Step 2: 声明模块**
 
 在 `crates/dozerd/src/lib.rs` 加一行(按字母序插到 `acceptance` 之后):
 
@@ -417,12 +417,12 @@ pub mod bookmarks;
 pub mod projects;
 ```
 
-- [ ] **Step 3: 运行测试确认通过**
+- [x] **Step 3: 运行测试确认通过**
 
 Run: `cargo test -p dozerd bookmarks::`
 Expected: 6 个测试全部 PASS。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/dozerd/src/bookmarks.rs crates/dozerd/src/lib.rs
@@ -441,7 +441,7 @@ git commit -m "feat(dozerd): add BookmarkStore backed by dozer.db"
 - Consumes: `crate::bookmarks::BookmarkStore`(Task 2)、`Request::{AddBookmark,RemoveBookmark,ListBookmarks}`/`Reply::Bookmarks`(Task 1)
 - Produces: `serve(socket, registry, store, projects, bookmarks)` 新签名(供 Task 4/集成测试之外无消费方,`main.rs` 是唯一调用点)
 
-- [ ] **Step 1: 改 `serve`/`handle_conn` 签名,加一个参数**
+- [x] **Step 1: 改 `serve`/`handle_conn` 签名,加一个参数**
 
 `crates/dozerd/src/server.rs`:
 
@@ -478,7 +478,7 @@ async fn handle_conn(
 ) -> Result<()> {
 ```
 
-- [ ] **Step 2: 三个新 Request 分支**
+- [x] **Step 2: 三个新 Request 分支**
 
 紧跟 `Request::GetAcceptanceCount { repo } => ...,` 之后(`match req` 的最后一支之前)加:
 
@@ -510,7 +510,7 @@ async fn handle_conn(
                         }
 ```
 
-- [ ] **Step 3: `main.rs` 构造 `BookmarkStore` 并传入 `serve`**
+- [x] **Step 3: `main.rs` 构造 `BookmarkStore` 并传入 `serve`**
 
 ```rust
     let projects = Arc::new(dozerd::projects::ProjectStore::new(
@@ -525,12 +525,12 @@ async fn handle_conn(
     let serve = dozerd::server::serve(&socket, registry, store, projects, bookmarks);
 ```
 
-- [ ] **Step 4: 编译 + 跑既有测试确认没弄坏别的**
+- [x] **Step 4: 编译 + 跑既有测试确认没弄坏别的**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd`
 Expected: 编译通过,`server.rs` 里 `agent_state_mapping_matches_spec_d6` 等既有测试照常 PASS。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozerd/src/server.rs crates/dozerd/src/main.rs
@@ -551,7 +551,7 @@ git commit -m "feat(dozerd): wire AddBookmark/RemoveBookmark/ListBookmarks into 
   - `Client::remove_bookmark(&self, id: i64) -> Result<()>`
   - `Client::list_bookmarks(&self, project_id: Option<i64>) -> Result<Vec<BookmarkInfo>>`
 
-- [ ] **Step 1: 扩 import**
+- [x] **Step 1: 扩 import**
 
 ```rust
 use dozer_core::protocol::{
@@ -560,7 +560,7 @@ use dozer_core::protocol::{
 };
 ```
 
-- [ ] **Step 2: 三个方法(紧跟 `acceptance_count` 之后)**
+- [x] **Step 2: 三个方法(紧跟 `acceptance_count` 之后)**
 
 ```rust
     pub async fn add_bookmark(
@@ -602,12 +602,12 @@ use dozer_core::protocol::{
     }
 ```
 
-- [ ] **Step 3: 编译确认**
+- [x] **Step 3: 编译确认**
 
 Run: `cargo build -p dozer-client`
 Expected: 编译通过(`dozer-client` 本身没有单测,靠 `dozer-core` 的协议测试兜底,同现有约定)。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/dozer-client/src/lib.rs
@@ -631,7 +631,7 @@ git commit -m "feat(dozer-client): add bookmark RPC methods"
   - `pub fn optimistic_add(bookmarks: &mut Vec<BookmarkInfo>, scope: BookmarkScope, project_id: Option<i64>, url: &str, title: &str, created_ms: u64)`
   - `pub fn optimistic_remove(bookmarks: &mut Vec<BookmarkInfo>, id: i64)`
 
-- [ ] **Step 1: 写失败的单测(先写整份文件,含测试)**
+- [x] **Step 1: 写失败的单测(先写整份文件,含测试)**
 
 创建 `crates/dozer-app/src/bookmarks.rs`:
 
@@ -811,7 +811,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 声明模块**
+- [x] **Step 2: 声明模块**
 
 `crates/dozer-app/src/main.rs`,按字母序插到 `assets;` 之后:
 
@@ -821,12 +821,12 @@ mod bookmarks;
 mod chrome_style;
 ```
 
-- [ ] **Step 3: 运行测试确认通过**
+- [x] **Step 3: 运行测试确认通过**
 
 Run: `cargo test -p dozer-app bookmarks::`
 Expected: 8 个测试全部 PASS。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/dozer-app/src/bookmarks.rs crates/dozer-app/src/main.rs
@@ -851,7 +851,7 @@ git commit -m "feat(dozer-app): add pure bookmark status/optimistic-update helpe
   - `Message::BrowserBookmarkRemove(i64)`
   - `Message::BrowserBookmarksToggle`
 
-- [ ] **Step 1: import 新协议类型**
+- [x] **Step 1: import 新协议类型**
 
 `crates/dozer-app/src/workspace.rs` 顶部:
 
@@ -861,7 +861,7 @@ use dozer_core::protocol::{
 };
 ```
 
-- [ ] **Step 2: `Workspace` 结构体新增三个字段**
+- [x] **Step 2: `Workspace` 结构体新增三个字段**
 
 紧跟 `browser_error: Option<String>,` 之后(约第 1478 行):
 
@@ -876,7 +876,7 @@ use dozer_core::protocol::{
     browser_star_menu_open: bool,
 ```
 
-- [ ] **Step 3: `empty_for_project_placeholder()` 补三个字段初始值**
+- [x] **Step 3: `empty_for_project_placeholder()` 补三个字段初始值**
 
 在该函数里紧跟 `browser_tab_first: 0,` 之后:
 
@@ -887,12 +887,12 @@ use dozer_core::protocol::{
             browser_star_menu_open: false,
 ```
 
-- [ ] **Step 4: 编译确认字段接线正确(此时新 Message 变体还没加,先只验证结构体)**
+- [x] **Step 4: 编译确认字段接线正确(此时新 Message 变体还没加,先只验证结构体)**
 
 Run: `cargo build -p dozer-app 2>&1 | head -50`
 Expected: 大概率还有别的报错(Message 变体/字段用途都还没接),预期能看到的只是"未使用字段"类 warning,不应有关于 `bookmarks`/`browser_bookmarks_open`/`browser_star_menu_open` 字段缺失初始化的 error。若报"missing field",说明还有别的构造点用了旧式全字段字面量,回去补上(全仓库搜 `Workspace {` 逐个确认)。
 
-- [ ] **Step 5: `Message` 枚举加五个新变体**
+- [x] **Step 5: `Message` 枚举加五个新变体**
 
 紧跟 `BrowserAddrEvent(AddrEvent),` 之后(约第 1092 行):
 
@@ -923,7 +923,7 @@ Expected: 大概率还有别的报错(Message 变体/字段用途都还没接),�
     BrowserBookmarksMutated(ProjectId, Result<(), String>),
 ```
 
-- [ ] **Step 6: `spawn_bookmarks_refresh` 方法**
+- [x] **Step 6: `spawn_bookmarks_refresh` 方法**
 
 在 `impl Workspace` 块里,紧跟 `spawn_acceptance_count_refresh` 方法之后(约第 2166 行):
 
@@ -944,7 +944,7 @@ Expected: 大概率还有别的报错(Message 变体/字段用途都还没接),�
     }
 ```
 
-- [ ] **Step 7: 两处刷新时机接线**
+- [x] **Step 7: 两处刷新时机接线**
 
 `from_restore`(约第 1771 行),紧跟 `ws.spawn_acceptance_count_refresh(io);` 之后:
 
@@ -960,7 +960,7 @@ Expected: 大概率还有别的报错(Message 变体/字段用途都还没接),�
         self.spawn_bookmarks_refresh(io);
 ```
 
-- [ ] **Step 8: `update()` 里新增 6 个消息分支**
+- [x] **Step 8: `update()` 里新增 6 个消息分支**
 
 紧跟现有 `Message::BrowserAddrEvent(ev) => { ... }` 分支之后(约第 4332 行,`BrowserOpenUrl`/`BrowserSelectTab` 等其余 Browser* 分支同一片区域):
 
@@ -1048,12 +1048,12 @@ Expected: 大概率还有别的报错(Message 变体/字段用途都还没接),�
 
 同时在文件顶部加 `use crate::bookmarks;`(紧跟其余 `use crate::` 系列 import,如 `use crate::preview_state;` 之后)。
 
-- [ ] **Step 9: 编译 + 跑 dozer-app 全量测试**
+- [x] **Step 9: 编译 + 跑 dozer-app 全量测试**
 
 Run: `cargo build -p dozer-app && cargo test -p dozer-app`
 Expected: 编译通过;既有测试(包括 Task 5 的 8 个 `bookmarks::` 测试)全绿。此时 UI 还没接星标/面板按钮,`browser_bookmarks_open`/`browser_star_menu_open`/新 Message 变体会有"从未被构造"之外的 dead-code 提示是正常的,留给 Task 7 消化;若报真正的类型错误(签名对不上),对照本步骤代码块逐字核对。
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add crates/dozer-app/src/workspace.rs
@@ -1074,7 +1074,7 @@ git commit -m "feat(dozer-app): wire bookmark state, messages, and async refresh
 - Consumes: `Workspace.bookmarks`/`browser_bookmarks_open`/`browser_star_menu_open`(Task 6)、`bookmarks::bookmark_status`(Task 5)
 - Produces: 无(叶子任务,UI 渲染)
 
-- [ ] **Step 1: 新增两个 Lucide SVG 资源(MIT/ISC,同现有 `assets/icons/LICENSE` 覆盖范围)**
+- [x] **Step 1: 新增两个 Lucide SVG 资源(MIT/ISC,同现有 `assets/icons/LICENSE` 覆盖范围)**
 
 `crates/dozer-app/assets/icons/star.svg`:
 
@@ -1112,7 +1112,7 @@ git commit -m "feat(dozer-app): wire bookmark state, messages, and async refresh
 </svg>
 ```
 
-- [ ] **Step 2: `icons.rs` 加两个 `IconKind` 变体**
+- [x] **Step 2: `icons.rs` 加两个 `IconKind` 变体**
 
 `IconKind` 枚举里紧跟 `ListChecks,` 之后:
 
@@ -1134,12 +1134,12 @@ git commit -m "feat(dozer-app): wire bookmark state, messages, and async refresh
             IconKind::Bookmark => include_bytes!("../assets/icons/bookmark.svg"),
 ```
 
-- [ ] **Step 3: 编译确认图标资源接线正确**
+- [x] **Step 3: 编译确认图标资源接线正确**
 
 Run: `cargo build -p dozer-app`
 Expected: 编译通过(两个新 `include_bytes!` 路径存在即可)。
 
-- [ ] **Step 4: `browser_pane` 里加星标/收藏夹两个图标按钮 + 三个新渲染函数**
+- [x] **Step 4: `browser_pane` 里加星标/收藏夹两个图标按钮 + 三个新渲染函数**
 
 在 `crates/dozer-app/src/workspace.rs` 里,`browser_pane` 函数内找到这一段(约第 8218-8240 行):
 
@@ -1402,17 +1402,17 @@ fn browser_bookmarks_panel(ws: &Workspace) -> Element<'_, Message, iced_widget::
 }
 ```
 
-- [ ] **Step 5: 编译,逐条修正类型报错**
+- [x] **Step 5: 编译,逐条修正类型报错**
 
 Run: `cargo build -p dozer-app 2>&1 | head -100`
 Expected: 大概率有若干 borrow/类型细节需要按报错信息微调(例如 `Vec<&BookmarkInfo>` 的生命周期、`match` 表达式当 `column!` 宏参数时的类型推断);逐条修正直至 `cargo build -p dozer-app` 干净通过。**不要**为了让它编译过而删掉设计要求的行为(比如"本项目未打开时不渲染该组"),只调整语法层面的写法。
 
-- [ ] **Step 6: `cargo test`/`clippy`/`fmt` 全绿**
+- [x] **Step 6: `cargo test`/`clippy`/`fmt` 全绿**
 
 Run: `cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets && cargo fmt --check`
 Expected: 全部通过;`fmt --check` 若报差异,跑 `cargo fmt` 后重新 `git diff` 确认改动仍符合本计划描述的逻辑,再继续。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/dozer-app/assets/icons/star.svg crates/dozer-app/assets/icons/bookmark.svg \
@@ -1426,17 +1426,17 @@ git commit -m "feat(dozer-app): render bookmark star button, add/remove menu, an
 
 **Files:** 无新增/修改(纯校验任务)
 
-- [ ] **Step 1: 全 workspace 构建**
+- [x] **Step 1: 全 workspace 构建**
 
 Run: `cargo build`
 Expected: 全部 crate 编译通过。
 
-- [ ] **Step 2: 全 workspace 测试**
+- [x] **Step 2: 全 workspace 测试**
 
 Run: `cargo test`
 Expected: 全绿,重点关注 `dozer-core`(Task 1)、`dozerd`(Task 2/3)、`dozer-app`(Task 5/6)新增的测试都在列表里跑到了。
 
-- [ ] **Step 3: clippy + fmt**
+- [x] **Step 3: clippy + fmt**
 
 Run: `cargo clippy --all-targets && cargo fmt --check`
 Expected: 无警告、无格式差异。
@@ -1454,7 +1454,7 @@ Expected: 无警告、无格式差异。
 
 若上述任一步与预期不符,回到对应 Task 排查(状态判定在 Task 5/6,持久化在 Task 2/3,渲染在 Task 7)。
 
-- [ ] **Step 5: 最终确认没有遗留未提交的改动**
+- [x] **Step 5: 最终确认没有遗留未提交的改动**
 
 Run: `git status`
 Expected: 干净(所有改动都已在前面各 Task 的 Step 里提交)。
