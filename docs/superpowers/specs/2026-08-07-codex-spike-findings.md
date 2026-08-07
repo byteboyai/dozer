@@ -57,3 +57,7 @@
 
 1. **Task 5/6**：Codex 翻译表与安装器已按计划落地，本记录确认路径/版本/transcript 结构与假设一致，唯一待探针绑定的是 hooks.json 三层结构是否真触发 + payload 字段名逐字一致性。
 2. **transcript 解析（未来独立计划）**：本记录实读已确认 Codex transcript 是 `session_meta`/`event_msg`/`response_item` + 嵌套 `payload` 的分层 schema，Claude 解析器（`parse_claude_shaped_jsonl`/`parse_usage`）**无法复用**；且 cwd 内嵌在 `session_meta.payload.cwd`、目录不按 cwd 建——做目录扫描必须全量扫 `sessions/` 再按内容 cwd 过滤。这些结论足够未来解析计划直接立项，不必等探针。
+
+## 附：预置的合成样本 fixture 说明
+
+仓库里 `crates/dozer-hook/fixtures/codex-transcript-sample.jsonl` 是**手写合成样本**——字段名/结构取自上文 Step 3 的真实实读，但内容用 `demo-` UUID 编造、三行精简（`session_meta`/`event_msg`/`response_item` 各一行）。它**不是**真实 rollout 的抓取，只用于让未来的 Codex 解析计划有一个"能 include_str! 进测试"的结构参照；真实脱敏样本待探针（Task 4 Step 5）拿到后替换/扩充。
