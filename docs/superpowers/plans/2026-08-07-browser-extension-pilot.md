@@ -32,7 +32,7 @@
 **Interfaces:**
 - Produces: `pub(crate) fn tab_arrow_button<'a, M: 'a>(icon: icons::IconKind, enabled: bool, msg: M) -> Element<'a, M, iced_widget::Theme, iced_widget::Renderer>`、`pub(crate) fn tab_divider<'a, M: 'a>() -> Element<'a, M, iced_widget::Theme, iced_widget::Renderer>`、`pub(crate) fn lh<'a>(..) -> Text<'a>`(签名不变,只改可见性)、`pub(crate) fn preview_tab_display_width(title: &str) -> f32`、`pub(crate) fn tab_window(widths: &[f32], gap: f32, avail: f32, first: usize) -> (usize, bool, bool)`。
 
-- [ ] **Step 1: `tab_arrow_button` 泛型化**
+- [x] **Step 1: `tab_arrow_button` 泛型化**
 
 ```rust
 fn tab_arrow_button<'a>(
@@ -54,7 +54,7 @@ pub(crate) fn tab_arrow_button<'a, M: 'a>(
 
 函数体不用改一个字(`btn.on_press(msg)` 本来就是对泛型 `Message` 参数类型工作,`iced_widget::button` 的 `on_press` 方法签名对任意 widget 消息类型都成立)。
 
-- [ ] **Step 2: `tab_divider` 泛型化**
+- [x] **Step 2: `tab_divider` 泛型化**
 
 ```rust
 fn tab_divider<'a>() -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
@@ -68,7 +68,7 @@ pub(crate) fn tab_divider<'a, M: 'a>() -> Element<'a, M, iced_widget::Theme, ice
 
 函数体不变(纯装饰性的 `Space`,从不构造 `Message` 值,泛型化零风险)。
 
-- [ ] **Step 3: 其余三个函数改可见性**
+- [x] **Step 3: 其余三个函数改可见性**
 
 ```rust
 fn lh<'a>(
@@ -94,14 +94,14 @@ fn tab_window(widths: &[f32], gap: f32, avail: f32, first: usize) -> (usize, boo
 pub(crate) fn tab_window(widths: &[f32], gap: f32, avail: f32, first: usize) -> (usize, bool, bool) {
 ```
 
-- [ ] **Step 4: 编译 + 测试确认现有调用点不受影响**
+- [x] **Step 4: 编译 + 测试确认现有调用点不受影响**
 
 Run: `cargo build -p dozer-app && cargo test -p dozer-app`
 Expected: 干净通过——这一步只放宽可见性/泛型化两个纯 UI 函数,`workspace.rs` 内部所有现有
 调用点(`tab_arrow_button(..., Message::XxxTabScroll(..))` 等)的类型推断应该自动落回
 `M = Message`,不需要改动任何调用点代码。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/workspace.rs
@@ -132,7 +132,7 @@ git commit -m "refactor(dozer-app): widen tab-bar UI helpers for cross-module re
     `active_webview_id(&self) -> Option<usize>`、
     `desired_webviews(&self) -> Vec<crate::preview::WebviewSpec>`
 
-- [ ] **Step 1: 写失败的单测(先写整份文件的 `Tabs` 部分,含测试)**
+- [x] **Step 1: 写失败的单测(先写整份文件的 `Tabs` 部分,含测试)**
 
 创建 `crates/dozer-app/src/extensions/browser.rs`:
 
@@ -395,7 +395,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 声明模块**
+- [x] **Step 2: 声明模块**
 
 `crates/dozer-app/src/extensions.rs`(Git Log 试点已建好这个文件,这里只加一行,按字母序插在
 `git_log` 之前):
@@ -405,12 +405,12 @@ pub mod browser;
 pub mod git_log;
 ```
 
-- [ ] **Step 3: 运行测试确认通过**
+- [x] **Step 3: 运行测试确认通过**
 
 Run: `cargo test -p dozer-app --bin dozer extensions::browser::`
 Expected: 6 个测试全部 PASS。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/dozer-app/src/extensions.rs crates/dozer-app/src/extensions/browser.rs
@@ -437,7 +437,7 @@ git commit -m "feat(dozer-app): add browser Tabs type (URL-only, no PreviewPane 
   - `pub fn update(state: &mut State, msg: Message, project_id: Option<i64>, client: &Client, handle: &tokio::runtime::Handle, emit: impl Fn(Message) + Send + 'static)`
   - `pub fn request_bookmarks_refresh(project_id: Option<i64>, client: &Client, handle: &tokio::runtime::Handle, emit: impl Fn(Message) + Send + 'static)`
 
-- [ ] **Step 1: 把 `crate::bookmarks` 的纯逻辑并进来(改私有,不再 `pub`)**
+- [x] **Step 1: 把 `crate::bookmarks` 的纯逻辑并进来(改私有,不再 `pub`)**
 
 在 `browser.rs` 顶部 `use crate::preview::WebviewSpec;` 之后追加:
 
@@ -522,7 +522,7 @@ fn optimistic_remove(bookmarks: &mut Vec<BookmarkInfo>, id: i64) {
 `#[cfg(test)] mod tests { use super::*; ... }` 块里(跟 `Tabs` 的 6 个测试放在同一个
 `mod tests` 里,不用重复写 `#[cfg(test)] mod tests`)。
 
-- [ ] **Step 2: `browser::Message`**
+- [x] **Step 2: `browser::Message`**
 
 紧跟 `optimistic_remove` 之后:
 
@@ -549,7 +549,7 @@ pub enum Message {
 }
 ```
 
-- [ ] **Step 3: `browser::State`**
+- [x] **Step 3: `browser::State`**
 
 ```rust
 /// 浏览器面板的全部状态。挂在每个 `Workspace` 上(不像 Git Log 挂在
@@ -590,7 +590,7 @@ impl State {
 }
 ```
 
-- [ ] **Step 4: `update` 函数**
+- [x] **Step 4: `update` 函数**
 
 ```rust
 /// 处理浏览器面板的全部消息。`project_id` 由内核每次调用时从
@@ -699,7 +699,7 @@ pub fn update(
 }
 ```
 
-- [ ] **Step 5: `request_bookmarks_refresh` 函数**
+- [x] **Step 5: `request_bookmarks_refresh` 函数**
 
 紧跟 `update` 之后:
 
@@ -730,7 +730,7 @@ pub fn request_bookmarks_refresh(
 use dozer_client::Client;
 ```
 
-- [ ] **Step 6: 编译确认**
+- [x] **Step 6: 编译确认**
 
 Run: `cargo build -p dozer-app 2>&1 | head -100`
 Expected: `extensions/browser.rs` 这个文件本身不应再报"未定义"类错误;`workspace.rs` 那边
@@ -738,7 +738,7 @@ Expected: `extensions/browser.rs` 这个文件本身不应再报"未定义"类�
 Task 5 修。可用 `cargo check -p dozer-app 2>&1 | grep "extensions/browser.rs"` 单独确认
 本文件没有报错。
 
-- [ ] **Step 7: 新增 `update`/`request_bookmarks_refresh` 的单测**
+- [x] **Step 7: 新增 `update`/`request_bookmarks_refresh` 的单测**
 
 在 `mod tests` 里追加(`use super::*;` 已存在):
 
@@ -1019,13 +1019,13 @@ Task 5 修。可用 `cargo check -p dozer-app 2>&1 | grep "extensions/browser.rs
 `state.error` 这一步同步行为;`handle.spawn` 出去的任务在测试函数返回后可能还没跑完,这是
 可接受的:同类模式在 Git Log 试点的 `request_refresh`/`update` 测试里已经用过。）
 
-- [ ] **Step 8: 运行测试确认通过**
+- [x] **Step 8: 运行测试确认通过**
 
 Run: `cargo test -p dozer-app --bin dozer extensions::browser:: 2>&1 | tail -80`
 Expected: Task 2 的 6 个 + 本任务新增的 8 个收藏夹相关 + 14 个 `update`/`State` 相关测试,
 共 28 个,全部 PASS。
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add crates/dozer-app/src/extensions/browser.rs
@@ -1043,7 +1043,7 @@ git commit -m "feat(dozer-app): fold bookmarks logic into browser::Message/State
 - Consumes: `Tabs`/`State`(Task 2/3)、`crate::workspace::{tab_arrow_button, tab_divider, lh, preview_tab_display_width, tab_window}`(Task 1,`pub(crate)` 后可跨模块调用)
 - Produces: `pub fn view(state: &State, project_id: Option<i64>, width: Length, outer: Border) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>`
 
-- [ ] **Step 1: 文件顶部补齐 `view` 需要的 import**
+- [x] **Step 1: 文件顶部补齐 `view` 需要的 import**
 
 在 `browser.rs` 顶部现有 `use` 语句块里追加:
 
@@ -1054,7 +1054,7 @@ use iced_widget::core::{Border, Element, Length};
 use iced_widget::{button, column, container, row, text};
 ```
 
-- [ ] **Step 2: `view` 主体(整体照搬现有 `browser_pane`,签名与类型改成本模块的)**
+- [x] **Step 2: `view` 主体(整体照搬现有 `browser_pane`,签名与类型改成本模块的)**
 
 紧跟 `request_bookmarks_refresh` 之后:
 
@@ -1207,7 +1207,7 @@ pub fn view(
 }
 ```
 
-- [ ] **Step 3: 星标按钮/收藏夹按钮/菜单/面板辅助函数**
+- [x] **Step 3: 星标按钮/收藏夹按钮/菜单/面板辅助函数**
 
 紧跟 `view` 之后:
 
@@ -1404,19 +1404,19 @@ fn bookmarks_panel(
 }
 ```
 
-- [ ] **Step 4: 编译,逐条修正**
+- [x] **Step 4: 编译,逐条修正**
 
 Run: `cargo build -p dozer-app 2>&1 | head -150`
 Expected: 大概率会有 `chrome_style`/`icon_size`/`icons`/`theme`/`workspace_font`/
 `workspace_geometry` 等 `use` 路径的细节问题,对照 `extensions/git_log.rs` 顶部已经验证过的
 `use crate::theme;` 等写法修正。逐条修正直到 `cargo build -p dozer-app` 干净通过。
 
-- [ ] **Step 5: `cargo test`/`clippy`/`fmt`**
+- [x] **Step 5: `cargo test`/`clippy`/`fmt`**
 
 Run: `cargo test -p dozer-app --bin dozer extensions::browser:: && cargo clippy -p dozer-app --all-targets && cargo fmt --check`
 Expected: 全部通过。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/dozer-app/src/extensions/browser.rs
@@ -1436,7 +1436,7 @@ git commit -m "feat(dozer-app): add browser::view and bookmark UI render helpers
 - Consumes: `extensions::browser::{Message, State, update, request_bookmarks_refresh, view}`
   (Task 2-4)
 
-- [ ] **Step 1: `Workspace` 结构体字段合并**
+- [x] **Step 1: `Workspace` 结构体字段合并**
 
 把这 6 行(约第 1465-1479 行区域,连同各自文档注释)从:
 
@@ -1460,7 +1460,7 @@ git commit -m "feat(dozer-app): add browser::view and bookmark UI render helpers
 
 （在文件顶部 `use crate::extensions::git_log;` 附近加一行 `use crate::extensions::browser;`。)
 
-- [ ] **Step 2: `empty_for_project_placeholder()` 初始化**
+- [x] **Step 2: `empty_for_project_placeholder()` 初始化**
 
 原来的:
 
@@ -1484,7 +1484,7 @@ git commit -m "feat(dozer-app): add browser::view and bookmark UI render helpers
             browser: browser::State::default(),
 ```
 
-- [ ] **Step 3: 顶层 `Message` 枚举**
+- [x] **Step 3: 顶层 `Message` 枚举**
 
 删除这 12 个变体(连同文档注释,分散在两处:大部分在 `BrowserAddrEvent` 附近一堆,
 `BrowserTabScroll` 单独在 `PreviewTabScroll` 旁边,`BrowserBookmarksLoaded`/
@@ -1513,7 +1513,7 @@ git commit -m "feat(dozer-app): add browser::view and bookmark UI render helpers
     Browser(browser::Message),
 ```
 
-- [ ] **Step 4: `update()` 里的分支**
+- [x] **Step 4: `update()` 里的分支**
 
 删除以下这些旧分支(整段删掉):`Message::BrowserTabScroll`(在 `PreviewTabScroll` 分支
 之后)、`Message::BrowserOpenUrl` 到 `Message::BrowserBookmarksMutated` 这一整串(共 11 个
@@ -1572,7 +1572,7 @@ git commit -m "feat(dozer-app): add browser::view and bookmark UI render helpers
             }
 ```
 
-- [ ] **Step 5: 内核访问器方法改用 `browser::State` 的新接口**
+- [x] **Step 5: 内核访问器方法改用 `browser::State` 的新接口**
 
 `Workspace::browser_addr_editing`(约第 2684 行):
 
@@ -1591,7 +1591,7 @@ git commit -m "feat(dozer-app): add browser::view and bookmark UI render helpers
 `addr_cancel`/`desired_webviews`)完全一致,**不用改任何代码**,只是它们现在调用的是
 `browser::State` 而不是 `PreviewPane` 的同名方法。
 
-- [ ] **Step 6: `adopt_project`/`from_restore` 的刷新调用点**
+- [x] **Step 6: `adopt_project`/`from_restore` 的刷新调用点**
 
 原来的 `ws.spawn_bookmarks_refresh(io)`(约第 1773 行,`from_restore` 内)和
 `self.spawn_bookmarks_refresh(io)`(约第 2307 行,`adopt_project` 内)改成:
@@ -1616,7 +1616,7 @@ git commit -m "feat(dozer-app): add browser::view and bookmark UI render helpers
 同时删除 `Workspace::spawn_bookmarks_refresh` 这个方法本身(约第 2174-2186 行,已经被
 `browser::request_bookmarks_refresh` 取代)。
 
-- [ ] **Step 7: `browser_pane`/辅助渲染函数整段删除**
+- [x] **Step 7: `browser_pane`/辅助渲染函数整段删除**
 
 删除 `workspace.rs` 里的 `fn browser_pane`、`fn current_browser_url`、
 `fn browser_star_button`、`fn browser_bookmarks_toggle_button`、`fn bookmark_menu_row`、
@@ -1641,7 +1641,7 @@ git commit -m "feat(dozer-app): add browser::view and bookmark UI render helpers
         .map(Message::Browser),
 ```
 
-- [ ] **Step 8: 删除 `use crate::bookmarks;` 与旧模块**
+- [x] **Step 8: 删除 `use crate::bookmarks;` 与旧模块**
 
 `workspace.rs` 顶部删除 `use crate::bookmarks;`(收藏夹逻辑已并入
 `extensions::browser`,不再需要这个模块)。
@@ -1654,7 +1654,7 @@ git commit -m "feat(dozer-app): add browser::view and bookmark UI render helpers
 git rm crates/dozer-app/src/bookmarks.rs
 ```
 
-- [ ] **Step 9: `main.rs` 里 `AddrEvent` 构造消息的那一行**
+- [x] **Step 9: `main.rs` 里 `AddrEvent` 构造消息的那一行**
 
 约第 699 行:
 
@@ -1678,7 +1678,7 @@ git rm crates/dozer-app/src/bookmarks.rs
 main.rs 现有 `workspace::AddrEvent::Text(..)` 那种"`mod` 声明过的模块直接带路径引用,不
 额外 `use` 单个类型"的风格,`extensions::browser::Message::AddrEvent` 同理直接可用。)
 
-- [ ] **Step 10: 编译,逐条修正**
+- [x] **Step 10: 编译,逐条修正**
 
 Run: `cargo build -p dozer-app 2>&1 | head -200`
 Expected: 会有不少细节要修——按报错逐条核对是不是漏删了旧字段/旧分支、`with_project`/
@@ -1686,12 +1686,12 @@ Expected: 会有不少细节要修——按报错逐条核对是不是漏删了�
 **不要**为了让它编译过而绕开"两个异步结果变体按 `ProjectId` 路由、其余走
 `with_focused_project`"这条既定规则。
 
-- [ ] **Step 11: 全量测试 + clippy + fmt**
+- [x] **Step 11: 全量测试 + clippy + fmt**
 
 Run: `cargo build -p dozer-app && cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets && cargo fmt --check`
 Expected: 全绿。
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 git add -A crates/dozer-app
@@ -1704,7 +1704,7 @@ git commit -m "refactor(dozer-app): route browser messages through extensions::b
 
 **Files:** 无新增/修改(纯校验任务)
 
-- [ ] **Step 1: 全 workspace 构建 + 测试 + clippy + fmt**
+- [x] **Step 1: 全 workspace 构建 + 测试 + clippy + fmt**
 
 Run: `cargo build && cargo test && cargo clippy --all-targets && cargo fmt --check`
 Expected: 全部 crate 编译通过、测试全绿、无警告、无格式差异。
@@ -1728,7 +1728,7 @@ Expected: 全部 crate 编译通过、测试全绿、无警告、无格式差异
 若上述任一步与预期不符,对照 Task 3/4/5 的具体分支重新核对(尤其 Task 4 里提到的
 `star_button` 需要 `project_id` 参数那个易错点)。
 
-- [ ] **Step 3: 确认没有遗留未提交的改动**
+- [x] **Step 3: 确认没有遗留未提交的改动**
 
 Run: `git status`
 Expected: 干净。
