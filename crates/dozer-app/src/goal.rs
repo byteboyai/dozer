@@ -35,6 +35,22 @@ pub fn parse_goal(md: &str) -> Option<Goal> {
     title.map(|title| Goal { title, criteria })
 }
 
+/// 按固定格式整份重写 `.dozer/goal.md`:首行 `# {title}`,空行,然后每条
+/// 标准各占一行 `- [ ] {criterion}`。不保留/不合并文件里其它手写内容——
+/// `parse_goal` 本来就只认标题行与 `- [ ]`/`- [x]` 列表项这两种语义,重新
+/// 生成不算破坏数据(见设计文档"非目标")。`.dozer` 目录不存在则先创建。
+pub fn write_goal(repo: &Path, goal: &Goal) -> std::io::Result<()> {
+    let path = goal_path(repo);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut md = format!("# {}\n\n", goal.title);
+    for c in &goal.criteria {
+        md.push_str(&format!("- [ ] {c}\n"));
+    }
+    std::fs::write(path, md)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,5 +82,47 @@ mod tests {
             goal_path(std::path::Path::new("/repo")),
             std::path::PathBuf::from("/repo/.dozer/goal.md")
         );
+    }
+
+    #[test]
+    fn write_goal_creates_dozer_dir_and_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let goal = Goal {
+            title: "标题".into(),
+            criteria: vec!["标准一".into()],
+        };
+        write_goal(dir.path(), &goal).unwrap();
+        let content = std::fs::read_to_string(goal_path(dir.path())).unwrap();
+        assert_eq!(content, "# 标题\n\n- [ ] 标准一\n");
+    }
+
+    #[test]
+    fn write_goal_overwrites_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let g1 = Goal {
+            title: "旧标题".into(),
+            criteria: vec!["旧标准".into()],
+        };
+        write_goal(dir.path(), &g1).unwrap();
+        let g2 = Goal {
+            title: "新标题".into(),
+            criteria: vec![],
+        };
+        write_goal(dir.path(), &g2).unwrap();
+        let content = std::fs::read_to_string(goal_path(dir.path())).unwrap();
+        assert_eq!(content, "# 新标题\n\n");
+    }
+
+    #[test]
+    fn write_then_parse_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let goal = Goal {
+            title: "圆环测试".into(),
+            criteria: vec!["一".into(), "二".into()],
+        };
+        write_goal(dir.path(), &goal).unwrap();
+        let content = std::fs::read_to_string(goal_path(dir.path())).unwrap();
+        let parsed = parse_goal(&content).unwrap();
+        assert_eq!(parsed, goal);
     }
 }
