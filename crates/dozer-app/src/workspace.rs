@@ -3446,6 +3446,69 @@ impl App {
                     emit,
                 );
             }
+            // schema 树两个异步结果同 `TestConnectionResult` 口径:自带 project_id,
+            // 按自带 id 路由,不能用当前聚焦项目。特化分支必须排在通配
+            // `Message::Database(msg)` 之前,否则永远匹配不到。
+            Message::Database(database::Message::TablesLoaded(project_id, source_id, result)) => {
+                let app_db = &mut self.database;
+                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+                    return;
+                };
+                let Some(project) = ws.project.as_ref() else {
+                    return;
+                };
+                let repo_path = std::path::PathBuf::from(&project.path);
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                let emit = move |m| {
+                    let _ = proxy.send_event(Message::Database(m));
+                };
+                database::update(
+                    &mut ws.database,
+                    app_db,
+                    database::Message::TablesLoaded(project_id, source_id, result),
+                    project_id,
+                    &repo_path,
+                    &handle,
+                    emit,
+                );
+            }
+            Message::Database(database::Message::ColumnsLoaded {
+                project_id,
+                source_id,
+                schema,
+                table,
+                result,
+            }) => {
+                let app_db = &mut self.database;
+                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+                    return;
+                };
+                let Some(project) = ws.project.as_ref() else {
+                    return;
+                };
+                let repo_path = std::path::PathBuf::from(&project.path);
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                let emit = move |m| {
+                    let _ = proxy.send_event(Message::Database(m));
+                };
+                database::update(
+                    &mut ws.database,
+                    app_db,
+                    database::Message::ColumnsLoaded {
+                        project_id,
+                        source_id,
+                        schema,
+                        table,
+                        result,
+                    },
+                    project_id,
+                    &repo_path,
+                    &handle,
+                    emit,
+                );
+            }
             Message::Database(msg) => {
                 let Some(project_id) = self.active_project_id else {
                     return;

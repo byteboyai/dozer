@@ -55,6 +55,10 @@ pub enum IconKind {
     BadgeCheck,
     /// 数据库面板 rail 图标(Lucide database)。
     Database,
+    /// schema 树表节点图标(Lucide table)。
+    Table,
+    /// schema 树视图节点图标(Lucide eye)。
+    Eye,
     /// 终端/Shell(纯 Shell 启动项),Lucide。
     Terminal,
     /// SSH 主机面板 rail 图标(Lucide server)。
@@ -114,6 +118,8 @@ impl IconKind {
             IconKind::BarChart3 => include_bytes!("../assets/icons/bar-chart-3.svg"),
             IconKind::BadgeCheck => include_bytes!("../assets/icons/badge-check.svg"),
             IconKind::Database => include_bytes!("../assets/icons/database.svg"),
+            IconKind::Table => include_bytes!("../assets/icons/table.svg"),
+            IconKind::Eye => include_bytes!("../assets/icons/eye.svg"),
             IconKind::Terminal => include_bytes!("../assets/icons/terminal.svg"),
             IconKind::Server => include_bytes!("../assets/icons/server.svg"),
             IconKind::LayoutList => include_bytes!("../assets/icons/layout-list.svg"),
