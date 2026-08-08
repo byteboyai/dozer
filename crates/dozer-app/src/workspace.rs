@@ -39,6 +39,7 @@ use crate::extensions::project;
 use crate::extensions::todo;
 use crate::extensions::usage;
 use crate::git_watch;
+use crate::homespace::{HomeRecentConversation, HomeRecentFile, load_home_recents};
 use crate::icons;
 use crate::icons::IconKind;
 use crate::layout;
@@ -7025,68 +7026,6 @@ fn conversation_sub(agent: &str, modified_ms: u64, size_bytes: u64, now_ms: u64)
     format!("{agent} · {when} · {size}")
 }
 
-/// H0"最近的文件"卡一行(跨项目合并前的中间表示；D4)。`Message::
-/// HomeRecentsLoaded` 的载荷用到它，因此至少是 `pub(crate)`(见 `private_interfaces`)。
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct HomeRecentFile {
-    path: PathBuf,
-    project_name: String,
-    modified_ms: u64,
-}
-
-/// H0"最近的对话"卡一行；语义同上。
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct HomeRecentConversation {
-    project_name: String,
-    meta: ConversationMeta,
-}
-
-/// D4 纯 IO 内核：对给定项目列表分别取"最近改动的文件"(git 改动/未跟踪 +
-/// fs mtime)与"最近的对话"(三个 agent 来源已聚合、按 mtime 倒序)，跨项目
-/// 合并后各自按时间倒序，取前 4 条 / 前 3 条(对齐 Figma 卡片行数)。
-///
-/// 必须在 `spawn_blocking` 里跑，不能在 UI 线程直呼——内部既有阻塞 git
-/// 子进程调用，也有阻塞文件系统调用。签名固定(`&[ProjectInfo]` 输入，两个
-/// `Vec` 输出)方便 headless 单测：不需要 daemon 连接或 winit `EventLoopProxy`。
-fn load_home_recents(
-    projects: &[ProjectInfo],
-) -> (Vec<HomeRecentFile>, Vec<HomeRecentConversation>) {
-    let mut files: Vec<HomeRecentFile> = Vec::new();
-    let mut convs: Vec<HomeRecentConversation> = Vec::new();
-    for p in projects {
-        let cwd = PathBuf::from(&p.path);
-        if let Some(repo) = delivery::repo_root(&cwd) {
-            for (path, _status) in delivery::file_statuses(&repo) {
-                let Ok(meta) = std::fs::metadata(&path) else {
-                    continue; // 路径已在磁盘消失(用户手动删了),静默跳过(spec §4)
-                };
-                let modified_ms = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0);
-                files.push(HomeRecentFile {
-                    path,
-                    project_name: p.name.clone(),
-                    modified_ms,
-                });
-            }
-        }
-        for meta in conversation::list_all_conversations(&cwd) {
-            convs.push(HomeRecentConversation {
-                project_name: p.name.clone(),
-                meta,
-            });
-        }
-    }
-    files.sort_by_key(|f| std::cmp::Reverse(f.modified_ms));
-    files.truncate(4);
-    convs.sort_by_key(|c| std::cmp::Reverse(c.meta.modified_ms));
-    convs.truncate(3);
-    (files, convs)
-}
-
 /// AI 回合折叠行文案（P1i）：过程 = thinking + N 工具。
 fn ai_turn_summary(tools_len: usize, thinking: bool) -> String {
     match (thinking, tools_len) {
@@ -8224,81 +8163,6 @@ mod tests {
         assert_eq!(relative_time_text(0, 3_600_000), "1 小时前");
         assert_eq!(relative_time_text(0, 86_399_000), "23 小时前");
         assert_eq!(relative_time_text(0, 86_400_000), "1 天前");
-    }
-
-    #[test]
-    fn load_home_recents_empty_input_returns_empty_vecs() {
-        let (files, convs) = load_home_recents(&[]);
-        assert!(files.is_empty());
-        assert!(convs.is_empty());
-    }
-
-    #[test]
-    fn load_home_recents_merges_and_sorts_across_projects() {
-        let proj_a = tempfile::tempdir().unwrap();
-        std::process::Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(proj_a.path())
-            .status()
-            .unwrap();
-        std::fs::write(proj_a.path().join("a.txt"), "changed").unwrap();
-
-        let proj_b = tempfile::tempdir().unwrap(); // 非 git 目录,没有改动可报告
-
-        let projects = vec![
-            ProjectInfo {
-                id: 1,
-                path: proj_a.path().to_string_lossy().into_owned(),
-                name: "proj-a".into(),
-                last_active_ms: 0,
-            },
-            ProjectInfo {
-                id: 2,
-                path: proj_b.path().to_string_lossy().into_owned(),
-                name: "proj-b".into(),
-                last_active_ms: 0,
-            },
-        ];
-
-        let (files, convs) = load_home_recents(&projects);
-        assert_eq!(files.len(), 1, "只有项目 A(git repo)贡献一条改动文件");
-        assert_eq!(files[0].project_name, "proj-a");
-        assert!(files[0].path.ends_with("a.txt"));
-        // 这里不额外造一个带假 Claude 对话目录的项目去断言"合并进 convs"：
-        // `conversation::list_all_conversations` 内部读真实 `HOME` 环境变量
-        // (`conversation.rs::home_dir`)，没有注入点；`conversation.rs` 自己的
-        // 测试也因为同样原因(cargo test 多线程、mutate HOME 不安全)绕开了
-        // 真实入口，转而在 `project_dir_in` 这一层验证目录拼接+合并排序(见
-        // `list_all_conversations_merges_three_dirs_sorted_by_mtime`)。三个
-        // agent 目录的合并/排序逻辑已经在那条测试里覆盖，这里只需确认
-        // "没有可达对话目录时 convs 为空、不 panic"这一层 `load_home_recents`
-        // 自己的收尾逻辑。
-        assert!(convs.is_empty(), "两个项目都没有可达的 agent 对话目录");
-    }
-
-    #[test]
-    fn load_home_recents_truncates_files_to_top_4() {
-        let proj = tempfile::tempdir().unwrap();
-        std::process::Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(proj.path())
-            .status()
-            .unwrap();
-        for i in 0..6 {
-            std::fs::write(proj.path().join(format!("f{i}.txt")), "x").unwrap();
-        }
-        let projects = vec![ProjectInfo {
-            id: 1,
-            path: proj.path().to_string_lossy().into_owned(),
-            name: "proj".into(),
-            last_active_ms: 0,
-        }];
-        let (files, _convs) = load_home_recents(&projects);
-        assert_eq!(
-            files.len(),
-            4,
-            "跨项目合并后只取前 4 条(对齐 Figma 卡片行数)"
-        );
     }
 
     #[test]

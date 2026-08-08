@@ -6,6 +6,7 @@ mod extensions;
 mod fonts;
 mod git_watch;
 mod goal;
+mod homespace;
 mod icons;
 mod keymap;
 mod layout;
