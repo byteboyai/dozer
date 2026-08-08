@@ -49,6 +49,8 @@ pub enum IconKind {
     Bookmark,
     /// Agent 用量统计面板的图标(Lucide bar-chart-3)。
     BarChart3,
+    /// 验收面板 rail 图标(Lucide badge-check)。
+    BadgeCheck,
     /// 终端/Shell(纯 Shell 启动项),Lucide。
     Terminal,
     /// Dozer 品牌标(dozer-logo-main.jpeg → potrace 矢量化),
@@ -96,6 +98,7 @@ impl IconKind {
             IconKind::Star => include_bytes!("../assets/icons/star.svg"),
             IconKind::Bookmark => include_bytes!("../assets/icons/bookmark.svg"),
             IconKind::BarChart3 => include_bytes!("../assets/icons/bar-chart-3.svg"),
+            IconKind::BadgeCheck => include_bytes!("../assets/icons/badge-check.svg"),
             IconKind::Terminal => include_bytes!("../assets/icons/terminal.svg"),
             IconKind::Dozer => include_bytes!("../assets/icons/dozer-logo.svg"),
             IconKind::Claude => include_bytes!("../assets/icons/claude.svg"),
