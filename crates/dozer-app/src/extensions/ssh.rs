@@ -73,6 +73,14 @@ pub struct WorkspaceState {
     editing: Option<SshHostDraft>,
     test_status: HashMap<String, TestStatus>,
     pending_unknown_keys: HashMap<String, Vec<u8>>,
+    /// 信任 host key 后要不要自动重开终端(而不是阶段 1 默认的"重新测试
+    /// 连接")——存的是"上一次点'终端'按钮、连接过程中撞上未知 key 那台
+    /// 主机的 id"。`TrustHostKey` 分支里核对是否等于本次信任的 host id,
+    /// 相等才重开终端,否则落回测试连接。字段只有一个槽位,极少数"两台
+    /// 主机同时未知 key、按点终端的顺序信任"场景下,后点的会覆盖先点的
+    /// 意图,顶多导致"该开终端却重新测试连接"这种安全的降级,不会误开
+    /// 错主机的终端或者崩溃(设计文档 §6 的论证)。
+    reopen_after_trust: Option<String>,
 }
 
 impl WorkspaceState {
@@ -84,6 +92,25 @@ impl WorkspaceState {
     }
     pub fn test_status(&self, host_id: &str) -> &TestStatus {
         self.test_status.get(host_id).unwrap_or(&TestStatus::Idle)
+    }
+    /// 记"点了终端按钮的这台主机,如果接下来撞上未知 host key,信任后要
+    /// 自动重开终端"(内核 `App::update` 的 `OpenTerminal` 拦截分支调用;
+    /// 字段本身私有,不能让内核直接赋值)。
+    pub(crate) fn record_reopen_after_trust(&mut self, host_id: String) {
+        self.reopen_after_trust = Some(host_id);
+    }
+}
+
+/// `TrustHostKey` 里"信任后是重开终端还是重新测试连接"的纯判定:id 命中
+/// `reopen_after_trust`(上次点终端撞未知 key 的那台)才重开终端并清槽位,
+/// 否则落回测试连接。拆出来是为了能被无网络单测直接测,不碰
+/// `known_hosts`。
+pub(crate) fn pick_retry_message(reopen: &mut Option<String>, id: &str) -> Message {
+    if reopen.as_deref() == Some(id) {
+        *reopen = None;
+        Message::OpenTerminal(id.to_string())
+    } else {
+        Message::TestConnection(id.to_string())
     }
 }
 
@@ -110,8 +137,41 @@ fn keyring_entry(project_id: i64, host_id: &str) -> Result<keyring::Entry, keyri
     keyring::Entry::new("dozer-ssh", &format!("{project_id}:{host_id}"))
 }
 
+/// 从 Keychain 读某台主机的密码/私钥口令,读不到按无密码处理(不 panic,
+/// 同阶段 1 `TestConnection` 分支的既有口径)。`spawn_ssh_tab`/`update`
+/// 里的 `TestConnection` 分支共用这个,不重复写 `.ok().and_then(..)`。
+pub(crate) fn keyring_password(project_id: i64, host_id: &str) -> Option<String> {
+    keyring_entry(project_id, host_id)
+        .ok()
+        .and_then(|e| e.get_password().ok())
+}
+
+/// 合成 SSH tab 的 `SessionInfo`(`dozer_core::protocol::SessionInfo` 没有
+/// `Default` impl,9 个字段全要给值)。`command`/`created_ms` 现状全仓库
+/// 没有任何地方读取,给有意义但不影响功能的值,不留空。
+pub(crate) fn synth_session_info(
+    host: &SshHost,
+    project_id: i64,
+) -> dozer_core::protocol::SessionInfo {
+    dozer_core::protocol::SessionInfo {
+        id: format!("ssh:{}", host.id),
+        name: format!("ssh: {}", host.name),
+        command: format!("ssh {}@{}:{}", host.username, host.host, host.port),
+        cwd: "~".to_string(),
+        alive: true,
+        created_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0),
+        agent_state: dozer_core::protocol::AgentState::Idle,
+        transcript_path: None,
+        project_id: Some(project_id),
+        agent: dozer_core::protocol::AgentKind::Unknown,
+    }
+}
+
 #[derive(Debug)]
-enum SshError {
+pub(crate) enum SshError {
     Russh(russh::Error),
     UnknownHostKey {
         fingerprint: String,
@@ -145,7 +205,7 @@ impl From<russh::Error> for SshError {
     }
 }
 
-struct TestHandler {
+pub(crate) struct TestHandler {
     host: String,
     port: u16,
 }
@@ -183,7 +243,13 @@ impl russh::client::Handler for TestHandler {
     }
 }
 
-async fn test_connection(host: SshHost, password: Option<String>) -> Result<(), SshError> {
+/// SSH 握手共享段。connect + host key 校验(`TestHandler::check_server_key`)加认证,返回 `Handle` 本身。
+///
+/// 调用方若要继续开 channel(阶段 2 终端),`Handle` 必须留在作用域内全程存活到 channel 读写半都不再用为止(见设计文档"背景"末尾;不能在这个函数里把 `Handle` 提前丢弃只返回别的东西)。`test_connection` 只需要确认握手成功,用完直接让 `handle` 在函数结尾正常析构(不开 channel,没有"提前丢弃"的风险)。`pub(crate)` 是因为阶段 2 的 `Workspace::spawn_ssh_tab`(在 `workspace.rs`,另一个模块)要直接调它来建终端连接。
+pub(crate) async fn handshake(
+    host: &SshHost,
+    password: Option<String>,
+) -> Result<russh::client::Handle<TestHandler>, SshError> {
     let config = std::sync::Arc::new(russh::client::Config::default());
     let handler = TestHandler {
         host: host.host.clone(),
@@ -212,9 +278,14 @@ async fn test_connection(host: SshHost, password: Option<String>) -> Result<(), 
         }
     };
     match auth_result {
-        russh::client::AuthResult::Success => Ok(()),
+        russh::client::AuthResult::Success => Ok(handle),
         russh::client::AuthResult::Failure { .. } => Err(SshError::AuthFailed),
     }
+}
+
+async fn test_connection(host: SshHost, password: Option<String>) -> Result<(), SshError> {
+    handshake(&host, password).await?;
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -247,6 +318,18 @@ pub enum Message {
     /// 用户确认信任某台主机的 host key:写入 known_hosts,然后重新发起
     /// 一次 `TestConnection`。
     TrustHostKey(String),
+    /// 点主机卡片"终端":内核 `App::update` 里有专门的拦截分支(见
+    /// `workspace.rs`),真正的 tab 创建逻辑在那边的 `Workspace::
+    /// spawn_ssh_tab`——这个变体在 `ssh::update` 自己的 `match` 里只是
+    /// 穷尽匹配需要,不会真的走到这里(内核在通配 `Message::Ssh(msg)`
+    /// 之前就拦截了)。
+    OpenTerminal(String),
+    /// 终端连接失败的异步结果,带 `project_id`(异步结果不能假设聚焦
+    /// 项目没变,同 `TestConnectionResult`)。同上,内核在 `ssh::update`
+    /// 之前会先做 `pending`/`ssh_out_pending` 清理,这里只负责落卡片
+    /// 状态(与 `TestConnectionResult`/`UnknownKeyDetected`/`KeyChanged`
+    /// 共用同一列卡片状态,不新增第二列)。
+    TerminalConnectFailed(i64, String, usize, String),
 }
 
 pub fn update(
@@ -342,9 +425,7 @@ pub fn update(
                 return;
             };
             ws_state.test_status.insert(id.clone(), TestStatus::Testing);
-            let password = keyring_entry(project_id, &id)
-                .ok()
-                .and_then(|e| e.get_password().ok());
+            let password = keyring_password(project_id, &id);
             handle.spawn(async move {
                 let result = tokio::time::timeout(
                     std::time::Duration::from_secs(5),
@@ -448,16 +529,38 @@ pub fn update(
             if let Ok(key) = russh::keys::ssh_key::PublicKey::from_bytes(&key_bytes) {
                 let _ = russh::keys::known_hosts::learn_known_hosts(&host.host, host.port, &key);
             }
-            // 写完 known_hosts,重新发起一次测试——这次 `check_server_key`
-            // 应该在 `check_known_hosts` 里能查到刚写入的记录。
-            update(
-                ws_state,
-                Message::TestConnection(id),
-                project_id,
-                repo_path,
-                handle,
-                emit,
-            );
+            // 写完 known_hosts,按"是不是上次点终端撞未知 key 的那台主机"
+            // 决定重开终端还是重新测试连接(设计文档 §6)。
+            //
+            // `OpenTerminal` 不能走下面 `update(ws_state, ..)` 这条本地递归
+            // 调用——`update` 只有 `&mut WorkspaceState`,够不到
+            // `spawn_ssh_tab` 需要的 `&mut Workspace`,递归调用只会落进
+            // `ssh::update` 自己那个空转的 `OpenTerminal(_) => {}` 分支,
+            // 终端永远不会真的打开(而且此时 `pending_unknown_keys` 已经
+            // 被上面 `remove` 清空,再点一次"信任并重试"也无法重试)。必须
+            // 走 `emit` 把消息送回事件循环,才能命中内核 `App::update` 里
+            // 那条专门调 `Workspace::spawn_ssh_tab` 的拦截分支。
+            let retry = pick_retry_message(&mut ws_state.reopen_after_trust, &id);
+            match retry {
+                Message::OpenTerminal(_) => emit(retry),
+                other => update(ws_state, other, project_id, repo_path, handle, emit),
+            }
+        }
+        Message::OpenTerminal(_) => {
+            // 内核 `App::update` 在通配 `Message::Ssh(msg)` 之前拦截,
+            // 这里理论上到不了;写出来只是为了 `match` 穷尽。
+        }
+        Message::TerminalConnectFailed(_project_id, host_id, _tab_id, err) => {
+            // 内核已经在转发之前清过 pending/ssh_out_pending,这里只需要
+            // 落卡片状态——与 TestConnectionResult 的 Err 分支同一套过期
+            // 防线(不得覆盖 UnknownHostKey/KeyChanged)。
+            if matches!(
+                ws_state.test_status.get(&host_id),
+                Some(TestStatus::UnknownHostKey { .. } | TestStatus::KeyChanged { .. })
+            ) {
+                return;
+            }
+            ws_state.test_status.insert(host_id, TestStatus::Err(err));
         }
     }
 }
@@ -491,6 +594,7 @@ fn host_card<'a>(
     };
     let mut actions = row![
         button(text("测试连接")).on_press(Message::TestConnection(host.id.clone())),
+        button(text("终端")).on_press(Message::OpenTerminal(host.id.clone())),
         button(text("编辑")).on_press(Message::EditHostStart(host.id.clone())),
         button(text("删除")).on_press(Message::DeleteHost(host.id.clone())),
     ]
@@ -712,5 +816,39 @@ mod tests {
         let mut ws_state = WorkspaceState::default();
         reload_from_disk(&mut ws_state, dir.path());
         assert!(ws_state.hosts().is_empty());
+    }
+
+    #[test]
+    fn synth_session_info_shape() {
+        let host = host("h1");
+        let info = synth_session_info(&host, 7);
+        assert_eq!(info.id, "ssh:h1");
+        assert!(info.name.starts_with("ssh: "));
+        assert_eq!(info.project_id, Some(7));
+        assert!(info.alive);
+        assert_eq!(info.agent, dozer_core::protocol::AgentKind::Unknown);
+    }
+
+    #[test]
+    fn trust_host_key_reopens_terminal_only_when_ids_match() {
+        let mut reopen = Some("A".to_string());
+        // id 命中 → 重开终端并清槽位。
+        assert!(matches!(
+            pick_retry_message(&mut reopen, "A"),
+            Message::OpenTerminal(_)
+        ));
+        assert_eq!(reopen, None);
+        // 槽位清空后(id 不再匹配),信任别的/同一台都应落回测试连接。
+        let mut reopen2 = Some("B".to_string());
+        assert!(matches!(
+            pick_retry_message(&mut reopen2, "A"),
+            Message::TestConnection(_)
+        ));
+        assert_eq!(reopen2.as_deref(), Some("B"));
+        // 与 reopen_after_trust 无关的直接测试连接路径。
+        assert!(matches!(
+            pick_retry_message(&mut None, "A"),
+            Message::TestConnection(_)
+        ));
     }
 }
