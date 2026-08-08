@@ -9,5 +9,6 @@ pub mod database;
 pub mod files;
 pub mod git_log;
 pub mod project;
+pub mod ssh;
 pub mod todo;
 pub mod usage;

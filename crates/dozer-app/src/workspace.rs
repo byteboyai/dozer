@@ -37,6 +37,7 @@ use crate::extensions::database;
 use crate::extensions::files;
 use crate::extensions::git_log;
 use crate::extensions::project;
+use crate::extensions::ssh;
 use crate::extensions::todo;
 use crate::extensions::usage;
 use crate::git_watch;
@@ -90,6 +91,9 @@ pub enum LeftView {
     Todo,
     Project,
     Database,
+    /// SSH 远程主机面板(Lucide server)。阶段 1:主机连接管理 + 认证 +
+    /// 连接测试(含 host key 验证)。
+    Ssh,
 }
 
 /// 右侧面板区当前显示哪个视图：Agent(Agent列表+终端配对) / 对话(对话列表+对话审阅配对)。
@@ -112,6 +116,8 @@ pub enum RailButton {
     LeftTodo,
     LeftProject,
     LeftDatabase,
+    /// SSH 主机面板入口。
+    LeftSsh,
     RightAgent,
     RightConversations,
     RightUsage,
@@ -654,6 +660,8 @@ pub fn preview_content_bounds(
             LeftView::Project => (0.0, 0.0, 0.0, 0.0),
             // Database 面板同 Project,纯 iced 绘制,不挂 webview 子视图。
             LeftView::Database => (0.0, 0.0, 0.0, 0.0),
+            // SSH 面板同 Project,纯 iced 绘制,阶段 1 不挂 webview 子视图。
+            LeftView::Ssh => (0.0, 0.0, 0.0, 0.0),
         };
     }
     let left_w = left_zone_width(window_width, state);
@@ -692,6 +700,8 @@ pub fn preview_content_bounds(
         LeftView::Project => (0.0, 0.0, 0.0, 0.0),
         // Database 面板同 Project,纯 iced 绘制,不挂 webview 子视图。
         LeftView::Database => (0.0, 0.0, 0.0, 0.0),
+        // SSH 面板同 Project,纯 iced 绘制,阶段 1 不挂 webview 子视图。
+        LeftView::Ssh => (0.0, 0.0, 0.0, 0.0),
     }
 }
 
@@ -728,6 +738,8 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
             LeftView::Project => false,
             // Database 面板同 Project,纯 iced 绘制,永无 webview。
             LeftView::Database => false,
+            // SSH 面板同 Project,纯 iced 绘制,永无 webview。
+            LeftView::Ssh => false,
         };
     }
     let left_w = left_zone_width(window_width, state);
@@ -751,6 +763,8 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
         LeftView::Project => false,
         // Database 面板同 Project,纯 iced 绘制,永无 webview。
         LeftView::Database => false,
+        // SSH 面板同 Project,纯 iced 绘制,永无 webview。
+        LeftView::Ssh => false,
     }
 }
 
@@ -1097,6 +1111,9 @@ pub enum Message {
     /// Project 信息面板的全部消息,内核只转发不解读——见
     /// `extensions::project::Message`。
     Project(project::Message),
+    /// SSH 主机面板的全部消息,内核只转发不解读——见
+    /// `extensions::ssh::Message`。
+    Ssh(ssh::Message),
     /// UI 整体放大(Ctrl +)：放大/还原的全局 scale 乘一个步近因子,下一帧
     /// 按新 scale 重排全部图标/字号/间距/骨架。
     ZoomIn,
@@ -1397,6 +1414,8 @@ pub struct Workspace {
     /// 数据库面板 per-project 状态(当前项目的数据源列表 + 编辑草稿 + 测试
     /// 状态 map)——见 `extensions::database::WorkspaceState`。
     database: database::WorkspaceState,
+    /// SSH 面板 per-project 状态——见 `extensions::ssh::WorkspaceState`。
+    ssh: ssh::WorkspaceState,
     /// 这份 `Workspace` 是否只是 `Stub` → `Loaded` 促成期间的"加载中"占位
     /// (见 [`Workspace::loading_for_project`])。占位有正确的 `project`/文件树,
     /// 但会话/git/对话都还没拉,并且整份对象会在
@@ -1685,6 +1704,7 @@ impl Workspace {
             edit_session: None,
             todo: todo::WorkspaceState::default(),
             database: database::WorkspaceState::default(),
+            ssh: ssh::WorkspaceState::default(),
             loading: false,
         }
     }
@@ -3565,6 +3585,15 @@ impl App {
                         }
                     });
                 }
+                // SSH 面板：切入即从磁盘重读一次 `.dozer/ssh_hosts.json`，语义
+                // 同 Todo 面板(切换本身触发重读,停留期间的同步靠别的机制)。
+                if self.left_view == LeftView::Ssh {
+                    self.with_focused_project(|ws, _io| {
+                        if let Some(project) = ws.project.as_ref() {
+                            ssh::reload_from_disk(&mut ws.ssh, std::path::Path::new(&project.path));
+                        }
+                    });
+                }
                 // 图标栏点击一律退出放大态。放大态浮层不拦图标栏上的点击
                 // (遮罩两侧垫的是无交互 Space,点击穿到下层图标按钮),所以
                 // "放大左侧 → 点文件夹图标收起左侧"是可达的:不清 `maximized`
@@ -4136,6 +4165,97 @@ impl App {
                 };
                 let repo_path = Path::new(&project.path).to_path_buf();
                 project::update(&mut ws.project_panel, msg, project_id, &repo_path);
+            }
+            Message::Ssh(ssh::Message::TestConnectionResult(project_id, host_id, result)) => {
+                self.with_project(project_id, move |ws, io| {
+                    let handle = io.handle.clone();
+                    let proxy = io.proxy.clone();
+                    let emit = move |m| {
+                        let _ = proxy.send_event(Message::Ssh(m));
+                    };
+                    let repo_path = ws
+                        .project
+                        .as_ref()
+                        .map(|p| PathBuf::from(&p.path))
+                        .unwrap_or_default();
+                    ssh::update(
+                        &mut ws.ssh,
+                        ssh::Message::TestConnectionResult(project_id, host_id, result),
+                        project_id,
+                        &repo_path,
+                        &handle,
+                        emit,
+                    );
+                });
+            }
+            Message::Ssh(ssh::Message::UnknownKeyDetected(
+                project_id,
+                host_id,
+                fingerprint,
+                key_bytes,
+            )) => {
+                self.with_project(project_id, move |ws, io| {
+                    let handle = io.handle.clone();
+                    let proxy = io.proxy.clone();
+                    let emit = move |m| {
+                        let _ = proxy.send_event(Message::Ssh(m));
+                    };
+                    let repo_path = ws
+                        .project
+                        .as_ref()
+                        .map(|p| PathBuf::from(&p.path))
+                        .unwrap_or_default();
+                    ssh::update(
+                        &mut ws.ssh,
+                        ssh::Message::UnknownKeyDetected(
+                            project_id,
+                            host_id,
+                            fingerprint,
+                            key_bytes,
+                        ),
+                        project_id,
+                        &repo_path,
+                        &handle,
+                        emit,
+                    );
+                });
+            }
+            Message::Ssh(ssh::Message::KeyChanged(project_id, host_id, fingerprint)) => {
+                self.with_project(project_id, move |ws, io| {
+                    let handle = io.handle.clone();
+                    let proxy = io.proxy.clone();
+                    let emit = move |m| {
+                        let _ = proxy.send_event(Message::Ssh(m));
+                    };
+                    let repo_path = ws
+                        .project
+                        .as_ref()
+                        .map(|p| PathBuf::from(&p.path))
+                        .unwrap_or_default();
+                    ssh::update(
+                        &mut ws.ssh,
+                        ssh::Message::KeyChanged(project_id, host_id, fingerprint),
+                        project_id,
+                        &repo_path,
+                        &handle,
+                        emit,
+                    );
+                });
+            }
+            Message::Ssh(msg) => {
+                self.with_focused_project(|ws, io| {
+                    let Some(project) = ws.project.as_ref() else {
+                        return;
+                    };
+                    let project_id = project.id;
+                    let repo_path = PathBuf::from(&project.path);
+                    let handle = io.handle.clone();
+                    let proxy = io.proxy.clone();
+                    let emit = move |m| {
+                        let _ = proxy.send_event(Message::Ssh(m));
+                    };
+                    ssh::update(&mut ws.ssh, msg, project_id, &repo_path, &handle, emit);
+                });
             }
             Message::ZoomIn => {
                 crate::theme::icon_size::zoom_by(UI_ZOOM_STEP);
@@ -5517,7 +5637,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_wi
         .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftProject), true))
         .on_exit(Message::Hover(
             HoverId::Rail(RailButton::LeftProject),
-            false
+            false,
         )),
         // 数据库面板入口:数据源管理 + 连接测试。
         MouseArea::new(rail_icon_button(
@@ -5534,6 +5654,15 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_wi
             HoverId::Rail(RailButton::LeftDatabase),
             false
         )),
+        // SSH 主机面板入口。
+        MouseArea::new(rail_icon_button(
+            icons::IconKind::Server,
+            app.left_view == LeftView::Ssh && left_open,
+            app.hover_progress(HoverId::Rail(RailButton::LeftSsh)),
+            Message::LeftIconSelect(LeftView::Ssh),
+        ))
+        .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftSsh), true))
+        .on_exit(Message::Hover(HoverId::Rail(RailButton::LeftSsh), false)),
     ]
     .spacing(region.gap)
     .padding(region.padding);
@@ -5899,6 +6028,16 @@ fn left_panel_area<'a>(
                 zone_pane_border(zone, ac),
             )
             .map(Message::Database)
+        }
+        LeftView::Ssh => {
+            // 同 Files/Database 面板:`ws.project.is_none()` 是 Stub→Loaded
+            // 促成期间的占位态,这时不该渲染出一个看似可点、实际上
+            // `Message::Ssh` 分发会被内核静默吞掉(无 project 时直接
+            // return)的"＋新增主机"按钮。
+            if ws.project.is_none() {
+                return column![].into();
+            }
+            ssh::view(&ws.ssh, Length::Fill, zone_pane_border(zone, ac)).map(Message::Ssh)
         }
     };
     if maximized {

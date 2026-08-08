@@ -57,6 +57,8 @@ pub enum IconKind {
     Database,
     /// 终端/Shell(纯 Shell 启动项),Lucide。
     Terminal,
+    /// SSH 主机面板 rail 图标(Lucide server)。
+    Server,
     /// 首页左栏"项目列表" pane rail 图标(Lucide layout-list)。
     LayoutList,
     /// 首页左栏"Recents" pane rail 图标(Lucide history)。
@@ -113,6 +115,7 @@ impl IconKind {
             IconKind::BadgeCheck => include_bytes!("../assets/icons/badge-check.svg"),
             IconKind::Database => include_bytes!("../assets/icons/database.svg"),
             IconKind::Terminal => include_bytes!("../assets/icons/terminal.svg"),
+            IconKind::Server => include_bytes!("../assets/icons/server.svg"),
             IconKind::LayoutList => include_bytes!("../assets/icons/layout-list.svg"),
             IconKind::History => include_bytes!("../assets/icons/history.svg"),
             IconKind::Dozer => include_bytes!("../assets/icons/dozer-logo.svg"),
