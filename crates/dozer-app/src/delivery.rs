@@ -110,6 +110,64 @@ pub fn changes(repo: &Path) -> Vec<FileChange> {
     out
 }
 
+/// 单文件相对验收基线(有上次沉淀取那个 ref,没有则 HEAD——与
+/// `changes()` 用的同一套 base 解析)的 unified diff 原始文本。用
+/// `diff_tree_to_workdir_with_index`(基线 tree vs 当前工作区,含已 stage
+/// 的改动 + 未跟踪文件)。过长截断,截断阈值/提示文案与
+/// `git_log::commit_detail` 的 `MAX_PATCH_CHARS` 处理方式类似但独立实现
+/// (两个模块不共用代码,见设计文档"关键语义确认")。
+const FILE_DIFF_MAX_CHARS: usize = 20_000;
+
+pub fn file_diff(repo_path: &Path, path: &str) -> Result<String, String> {
+    let repo = git2::Repository::open(repo_path).map_err(|e| e.message().to_string())?;
+    let base_ref = last_accepted(repo_path)
+        .map(|(n, _)| format!("{ACCEPTED_REF_PREFIX}{n}"))
+        .or_else(|| head_commit(repo_path).map(|_| "HEAD".to_string()));
+    let old_tree = match base_ref {
+        Some(refname) => {
+            let obj = repo
+                .revparse_single(&refname)
+                .map_err(|e| e.message().to_string())?;
+            Some(obj.peel_to_tree().map_err(|e| e.message().to_string())?)
+        }
+        None => None,
+    };
+    let mut opts = git2::DiffOptions::new();
+    opts.pathspec(path);
+    opts.include_untracked(true);
+    opts.recurse_untracked_dirs(true);
+    opts.show_untracked_content(true);
+    let diff = repo
+        .diff_tree_to_workdir_with_index(old_tree.as_ref(), Some(&mut opts))
+        .map_err(|e| e.message().to_string())?;
+
+    let mut patch = String::new();
+    let mut truncated = false;
+    diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+        if truncated {
+            return true;
+        }
+        if patch.len() >= FILE_DIFF_MAX_CHARS {
+            truncated = true;
+            patch.push_str("\n… diff 过长,已截断显示\n");
+            return true;
+        }
+        let prefix = match line.origin() {
+            '+' | '-' | ' ' => line.origin().to_string(),
+            _ => String::new(),
+        };
+        patch.push_str(&prefix);
+        patch.push_str(&String::from_utf8_lossy(line.content()));
+        true
+    })
+    .map_err(|e| e.message().to_string())?;
+
+    if patch.is_empty() {
+        return Err(format!("{path}: 没有可显示的改动"));
+    }
+    Ok(patch)
+}
+
 /// 通过·沉淀：脏工作区拒绝（沉淀物必须是提交，spec D6）。
 pub fn accept(repo: &Path) -> Result<u32> {
     if is_dirty(repo) {
@@ -709,6 +767,36 @@ mod tests {
             .expect("git 元数据还在,不该从列表消失");
         assert!(missing.missing);
         assert!(missing.branch.is_none());
+    }
+
+    #[test]
+    fn file_diff_new_file_shows_all_added_lines() {
+        let (dir, repo) = mkrepo();
+        std::fs::write(dir.path().join("new.txt"), "a\nb\n").unwrap();
+        let diff = file_diff(&repo, "new.txt").unwrap();
+        assert!(diff.contains("+a"));
+        assert!(diff.contains("+b"));
+    }
+
+    #[test]
+    fn file_diff_modified_file_shows_plus_minus_lines() {
+        let (dir, repo) = mkrepo();
+        // `mkrepo()` 已经提交了内容为 "one\n" 的 a.txt,替换成不同内容,
+        // 应该同时看到删除旧行(-)和新增行(+)。
+        std::fs::write(dir.path().join("a.txt"), "two\n").unwrap();
+        let diff = file_diff(&repo, "a.txt").unwrap();
+        assert!(diff.contains("-one"));
+        assert!(diff.contains("+two"));
+    }
+
+    #[test]
+    fn file_diff_truncates_when_too_long() {
+        let (dir, repo) = mkrepo();
+        let big: String = (0..5000).map(|i| format!("line{i}\n")).collect();
+        std::fs::write(dir.path().join("big.txt"), big).unwrap();
+        let diff = file_diff(&repo, "big.txt").unwrap();
+        assert!(diff.contains("已截断显示"));
+        assert!(diff.len() < 21_000, "截断后不应远超 FILE_DIFF_MAX_CHARS");
     }
 
     #[test]
