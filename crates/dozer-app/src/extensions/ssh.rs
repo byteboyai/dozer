@@ -4,6 +4,9 @@
 //! SSH 终端(阶段 2)/SFTP(阶段 3)留后续,见
 //! `docs/superpowers/specs/2026-08-08-ssh-panel-phase1-design.md`。
 
+use crate::theme;
+use iced_widget::core::Element;
+use iced_widget::{button, column, container, row, text, text_input};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -437,6 +440,196 @@ fn set_draft(ws_state: &mut WorkspaceState, f: impl FnOnce(&mut SshHostDraft)) {
     if let Some(draft) = ws_state.editing.as_mut() {
         f(draft);
     }
+}
+
+fn host_card<'a>(
+    host: &'a SshHost,
+    status: &'a TestStatus,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let auth_label = match &host.auth {
+        AuthMethod::Password => "密码".to_string(),
+        AuthMethod::PrivateKey { key_path } => format!("私钥: {key_path}"),
+    };
+    let (status_text, status_color) = match status {
+        TestStatus::Idle => (String::new(), theme::color::DIM),
+        TestStatus::Testing => ("测试中…".to_string(), theme::color::DIM),
+        TestStatus::Ok => ("✓ 连接成功".to_string(), theme::color::GREEN),
+        TestStatus::UnknownHostKey { fingerprint } => {
+            (format!("⚠ 未知主机,指纹 {fingerprint}"), theme::color::GOLD)
+        }
+        TestStatus::KeyChanged { fingerprint } => (
+            format!("✗ 主机指纹已变化({fingerprint}),拒绝连接"),
+            theme::color::RED,
+        ),
+        TestStatus::Err(e) => (format!("✗ {e}"), theme::color::RED),
+    };
+    let mut actions = row![
+        button(text("测试连接")).on_press(Message::TestConnection(host.id.clone())),
+        button(text("编辑")).on_press(Message::EditHostStart(host.id.clone())),
+        button(text("删除")).on_press(Message::DeleteHost(host.id.clone())),
+    ]
+    .spacing(8);
+    if matches!(status, TestStatus::UnknownHostKey { .. }) {
+        actions = actions
+            .push(button(text("信任并重试")).on_press(Message::TrustHostKey(host.id.clone())));
+    }
+    container(
+        column![
+            row![
+                text(host.name.clone())
+                    .size(theme::font::body())
+                    .color(theme::color::CREAM),
+                text(format!("{}@{}:{}", host.username, host.host, host.port))
+                    .size(theme::font::caption_sm())
+                    .color(theme::color::DIM),
+            ]
+            .spacing(8),
+            text(auth_label)
+                .size(theme::font::caption_sm())
+                .color(theme::color::DIM),
+            actions,
+            text(status_text)
+                .size(theme::font::caption_sm())
+                .color(status_color),
+        ]
+        .spacing(6),
+    )
+    .padding(10)
+    .width(iced_widget::core::Length::Fill)
+    .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+        background: Some(theme::color::CARD.into()),
+        border: iced_widget::core::Border {
+            color: theme::color::BORDER,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        ..iced_widget::container::Style::default()
+    })
+    .into()
+}
+
+fn host_form<'a>(
+    draft: &'a SshHostDraft,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let mut col = column![
+        text_input("名字", &draft.name)
+            .on_input(Message::DraftNameChanged)
+            .size(theme::font::body()),
+        text_input("host", &draft.host)
+            .on_input(Message::DraftHostChanged)
+            .size(theme::font::body()),
+        text_input("port(默认 22)", &draft.port)
+            .on_input(Message::DraftPortChanged)
+            .size(theme::font::body()),
+        text_input("username", &draft.username)
+            .on_input(Message::DraftUsernameChanged)
+            .size(theme::font::body()),
+        row![
+            button(text(if draft.use_private_key {
+                "● 私钥"
+            } else {
+                "○ 私钥"
+            }))
+            .on_press(Message::DraftAuthMethodToggled(true)),
+            button(text(if !draft.use_private_key {
+                "● 密码"
+            } else {
+                "○ 密码"
+            }))
+            .on_press(Message::DraftAuthMethodToggled(false)),
+        ]
+        .spacing(8),
+    ]
+    .spacing(8);
+
+    if draft.use_private_key {
+        col = col.push(
+            text_input("私钥文件路径,如 ~/.ssh/id_ed25519", &draft.key_path)
+                .on_input(Message::DraftKeyPathChanged)
+                .size(theme::font::body()),
+        );
+        col = col.push(
+            text_input("私钥口令(留空则不修改/无口令)", &draft.password)
+                .secure(true)
+                .on_input(Message::DraftPasswordChanged)
+                .size(theme::font::body()),
+        );
+    } else {
+        col = col.push(
+            text_input("password(留空则不修改)", &draft.password)
+                .secure(true)
+                .on_input(Message::DraftPasswordChanged)
+                .size(theme::font::body()),
+        );
+    }
+
+    col = col.push(
+        row![
+            button(text("保存")).on_press(Message::DraftSave),
+            button(text("取消")).on_press(Message::DraftCancel),
+        ]
+        .spacing(8),
+    );
+
+    container(col)
+        .padding(12)
+        .width(iced_widget::core::Length::Fill)
+        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+            background: Some(theme::color::CARD.into()),
+            border: iced_widget::core::Border {
+                color: theme::color::GOLD,
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..iced_widget::container::Style::default()
+        })
+        .into()
+}
+
+pub fn view<'a>(
+    ws_state: &'a WorkspaceState,
+    width: iced_widget::core::Length,
+    outer: iced_widget::core::Border,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let mut col = column![
+        row![
+            text("SSH 主机")
+                .size(theme::font::subtitle())
+                .color(theme::color::CREAM),
+            button(text("＋新增主机")).on_press(Message::AddHostStart),
+        ]
+        .spacing(8)
+        .align_y(iced_widget::core::Alignment::Center),
+    ]
+    .spacing(12);
+
+    if let Some(draft) = ws_state.editing() {
+        col = col.push(host_form(draft));
+    }
+
+    if ws_state.hosts().is_empty() {
+        col = col.push(
+            text("还没有主机")
+                .size(theme::font::body())
+                .color(theme::color::DIM),
+        );
+    } else {
+        for h in ws_state.hosts() {
+            col = col.push(host_card(h, ws_state.test_status(&h.id)));
+        }
+    }
+
+    container(col.padding(16))
+        .width(width)
+        .height(iced_widget::core::Length::Fill)
+        .style(
+            move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                background: Some(theme::color::BG.into()),
+                border: outer,
+                ..iced_widget::container::Style::default()
+            },
+        )
+        .into()
 }
 
 #[cfg(test)]
