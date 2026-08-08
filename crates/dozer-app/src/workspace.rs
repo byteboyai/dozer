@@ -2269,7 +2269,7 @@ impl Workspace {
                 ssh::handshake(&host, password),
             )
             .await;
-            let mut handle = match handshake_result {
+            let handle = match handshake_result {
                 Ok(Ok(h)) => h,
                 Ok(Err(ssh::SshError::UnknownHostKey { fingerprint, key_bytes })) => {
                     let _ = proxy.send_event(Message::Ssh(ssh::Message::UnknownKeyDetected(
@@ -4425,6 +4425,46 @@ impl App {
                     ssh::update(
                         &mut ws.ssh,
                         ssh::Message::KeyChanged(project_id, host_id, fingerprint),
+                        project_id,
+                        &repo_path,
+                        &handle,
+                        emit,
+                    );
+                });
+            }
+            // 点"终端"按钮:与既有 `TestConnection`/其它同步交互消息不同,
+            // 这个消息不走 `ssh::update`(它要新建一个 tab,需要 `&mut
+            // Workspace` 整体,`ssh::update` 只拿得到 `&mut ws.ssh`)——
+            // 拦截在通配 `Message::Ssh(msg)` 之前,直接调 `Workspace::
+            // spawn_ssh_tab`。
+            Message::Ssh(ssh::Message::OpenTerminal(host_id)) => {
+                self.with_focused_project(|ws, io| {
+                    ws.ssh.record_reopen_after_trust(host_id.clone());
+                    ws.spawn_ssh_tab(io, host_id);
+                });
+            }
+            // 终端连接失败:先做内核层面的清理(pending/ssh_out_pending
+            // 两处暂存——这次连接没能走到 `TabAttached`,不清理会一直占着
+            // 这两个 map 的位置),再转给 `ssh::update` 落卡片状态(同
+            // `TestConnectionResult` 的路由口径,带显式 project_id,套用
+            // 一模一样的 `with_project` 外壳)。
+            Message::Ssh(ssh::Message::TerminalConnectFailed(project_id, host_id, tab_id, err)) => {
+                self.with_project(project_id, move |ws, io| {
+                    ws.pending.remove(&tab_id);
+                    ws.ssh_out_pending.remove(&tab_id);
+                    let handle = io.handle.clone();
+                    let proxy = io.proxy.clone();
+                    let emit = move |m| {
+                        let _ = proxy.send_event(Message::Ssh(m));
+                    };
+                    let repo_path = ws
+                        .project
+                        .as_ref()
+                        .map(|p| PathBuf::from(&p.path))
+                        .unwrap_or_default();
+                    ssh::update(
+                        &mut ws.ssh,
+                        ssh::Message::TerminalConnectFailed(project_id, host_id, tab_id, err),
                         project_id,
                         &repo_path,
                         &handle,

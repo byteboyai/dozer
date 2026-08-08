@@ -93,6 +93,12 @@ impl WorkspaceState {
     pub fn test_status(&self, host_id: &str) -> &TestStatus {
         self.test_status.get(host_id).unwrap_or(&TestStatus::Idle)
     }
+    /// 记"点了终端按钮的这台主机,如果接下来撞上未知 host key,信任后要
+    /// 自动重开终端"(内核 `App::update` 的 `OpenTerminal` 拦截分支调用;
+    /// 字段本身私有,不能让内核直接赋值)。
+    pub(crate) fn record_reopen_after_trust(&mut self, host_id: String) {
+        self.reopen_after_trust = Some(host_id);
+    }
 }
 
 pub fn hosts_path(repo: &Path) -> PathBuf {
