@@ -5,8 +5,12 @@
 //! `docs/superpowers/specs/2026-08-08-acceptance-pane-design.md`。
 use crate::delivery::FileChange;
 use crate::goal::Goal;
+use crate::theme;
 use crate::workspace::AddrEvent;
 use dozer_client::Client;
+use iced_widget::core::text::LineHeight;
+use iced_widget::core::{Border, Element, Length};
+use iced_widget::{button, column, container, row, text};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -291,6 +295,240 @@ pub fn spawn_open(
             emit(Message::Loaded(project_id, repo, tab_id, goal, changes));
         }
     });
+}
+
+/// 面板主入口。`session` 为 `None` 时是空态(还没有进行中的验收);有
+/// `session` 且 `accepted_version.is_some()` 时只显示"已沉淀"提示(现有
+/// `acceptance_content` 提前 return 那部分逻辑)。
+pub fn view<'a>(
+    ws_state: &'a WorkspaceState,
+    width: Length,
+    outer: Border,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let Some(session) = ws_state.session() else {
+        return container(
+            text("没有待验收的交付——完成一轮 agent 会话后,点这个图标就能看到")
+                .size(theme::font::subtitle())
+                .color(theme::color::DIM),
+        )
+        .width(width)
+        .height(Length::Fill)
+        .padding(20)
+        .into();
+    };
+
+    let mut content = column![].spacing(12).padding(14);
+
+    if let Some(n) = session.accepted_version {
+        content = content.push(
+            text(format!("✓ 已沉淀 v{n}"))
+                .size(theme::font::title())
+                .color(theme::color::GOLD),
+        );
+        return container(content).width(width).height(Length::Fill).into();
+    }
+
+    match &session.goal {
+        Some(g) => {
+            content = content.push(
+                text(g.title.clone())
+                    .size(theme::font::title())
+                    .color(theme::color::CREAM),
+            );
+            for (i, c) in g.criteria.iter().enumerate() {
+                let checked = session.checked.get(i).copied().unwrap_or(false);
+                content = content.push(
+                    button(
+                        text(format!("{} {c}", if checked { "✓" } else { "○" }))
+                            .size(theme::font::body())
+                            .color(if checked {
+                                theme::color::GOLD
+                            } else {
+                                theme::color::BODY
+                            }),
+                    )
+                    .on_press(Message::Toggle(i))
+                    .style(|_t, _s| button::Style {
+                        background: None,
+                        text_color: theme::color::BODY,
+                        ..button::Style::default()
+                    }),
+                );
+            }
+        }
+        None => {
+            content = content.push(
+                text("未定标——先在仓库写 .dozer/goal.md（首行目标,\n- [ ] 列表为标准）")
+                    .size(theme::font::body())
+                    .color(theme::color::DIM),
+            );
+        }
+    }
+
+    content = content.push(
+        text("变更文件")
+            .size(theme::font::body())
+            .color(theme::color::DIM),
+    );
+    for (i, fc) in session.changes.iter().enumerate() {
+        let line = match (fc.added, fc.removed) {
+            (Some(a), Some(r)) => format!("{}  +{a} −{r}", fc.path),
+            _ => format!("{}  (新)", fc.path),
+        };
+        content = content.push(
+            button(
+                text(line)
+                    .size(theme::font::body())
+                    .color(theme::color::CYAN),
+            )
+            .on_press(Message::ToggleDiff(i))
+            .width(Length::Fill)
+            .style(|_t, _s| button::Style {
+                background: None,
+                text_color: theme::color::CYAN,
+                ..button::Style::default()
+            }),
+        );
+        if session.expanded.contains(&i) {
+            content = content.push(diff_view(session.diffs.get(&i)));
+        }
+    }
+
+    let editing = session.comment_editing;
+    let comment_text = if editing {
+        format!("{}▏", session.comment)
+    } else if session.comment.is_empty() {
+        "验收意见…（打回时注回会话）".to_string()
+    } else {
+        session.comment.clone()
+    };
+    content = content.push(
+        button(
+            text(comment_text)
+                .size(theme::font::body())
+                .color(if editing {
+                    theme::color::CREAM
+                } else {
+                    theme::color::DIM
+                }),
+        )
+        .on_press(Message::CommentClick)
+        .width(Length::Fill)
+        .style(move |_t, _s| button::Style {
+            background: Some(theme::color::TERM_BG.into()),
+            text_color: theme::color::CREAM,
+            border: Border {
+                color: if editing {
+                    theme::color::GOLD
+                } else {
+                    theme::color::BORDER
+                },
+                width: 1.0,
+                radius: 2.0.into(),
+            },
+            ..button::Style::default()
+        }),
+    );
+
+    content = content.push(
+        row![
+            button(
+                text("通过·沉淀")
+                    .size(theme::font::body())
+                    .color(theme::color::BG)
+            )
+            .on_press(Message::Accept)
+            .style(|_t, _s| button::Style {
+                background: Some(theme::color::GOLD.into()),
+                text_color: theme::color::BG,
+                border: Border {
+                    color: theme::color::GOLD,
+                    width: 1.0,
+                    radius: 2.0.into()
+                },
+                ..button::Style::default()
+            }),
+            button(
+                text("打回并注回")
+                    .size(theme::font::body())
+                    .color(theme::color::RED)
+            )
+            .on_press(Message::Reject)
+            .style(|_t, _s| button::Style {
+                background: None,
+                text_color: theme::color::RED,
+                border: Border {
+                    color: theme::color::RED,
+                    width: 1.0,
+                    radius: 2.0.into()
+                },
+                ..button::Style::default()
+            }),
+        ]
+        .spacing(8),
+    );
+
+    if let Some(err) = &session.error {
+        content = content.push(
+            text(format!("⚠ {err}"))
+                .size(theme::font::body())
+                .color(theme::color::RED),
+        );
+    }
+
+    container(content)
+        .width(width)
+        .height(Length::Fill)
+        .style(
+            move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                background: None,
+                border: outer,
+                ..iced_widget::container::Style::default()
+            },
+        )
+        .into()
+}
+
+/// 手风琴展开的 diff 内容:`Ok(patch)` 按行首字符 `+`/`-`/` ` 分三色渲染,
+/// `Err(e)` 显示红字,`None`(还没加载完)显示"加载中…"。
+fn diff_view<'a>(
+    diff: Option<&'a Result<String, String>>,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    match diff {
+        None => text("加载中…")
+            .size(theme::font::caption())
+            .color(theme::color::DIM)
+            .into(),
+        Some(Err(e)) => text(format!("⚠ {e}"))
+            .size(theme::font::caption())
+            .color(theme::color::RED)
+            .into(),
+        Some(Ok(patch)) => {
+            let mut col = column![].spacing(0).padding([4, 12]);
+            for line in patch.lines() {
+                let color = if line.starts_with('+') {
+                    theme::color::GREEN
+                } else if line.starts_with('-') {
+                    theme::color::RED
+                } else {
+                    theme::color::DIM
+                };
+                col = col.push(
+                    text(line.to_string())
+                        .size(theme::font::caption_sm())
+                        .color(color)
+                        .font(iced_widget::core::Font::MONOSPACE)
+                        .line_height(LineHeight::Relative(1.3)),
+                );
+            }
+            container(col)
+                .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+                    background: Some(theme::color::TERM_BG.into()),
+                    ..iced_widget::container::Style::default()
+                })
+                .into()
+        }
+    }
 }
 
 #[cfg(test)]
