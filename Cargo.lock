@@ -1826,6 +1826,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "trash",
+ "url",
  "uuid",
  "winit",
  "wry",

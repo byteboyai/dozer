@@ -46,6 +46,8 @@ gleisbau = "0.7"
 git2 = "0.21"
 notify = "8"
 russh = "0.62.5"
+# url：数据库面板"直接粘贴连接 URI"解析用(已是 workspace 传递依赖,无新增编译物)。
+url = "2"
 
 [dev-dependencies]
 tempfile = "3"

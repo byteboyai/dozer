@@ -53,6 +53,9 @@ pub struct DataSource {
     /// SQLite 这里存文件路径,其它驱动存库名。
     pub database: Option<String>,
     pub username: Option<String>,
+    /// 可选连接 URI(Postgres/MySQL,设计文档"可整串粘贴")。持久化时密码会被
+    /// 抽取到 Keychain、URI 里不留明文;连接时若缺密码再从 Keychain 补回。
+    pub uri: Option<String>,
 }
 
 /// 某条数据源当前的连接测试状态,画在卡片上。
@@ -220,7 +223,9 @@ fn push_table_rows<'a>(
 fn tables_sql(driver: DriverKind) -> &'static str {
     match driver {
         DriverKind::Postgres => {
-            "SELECT table_schema, table_name, table_type \
+            // information_schema.tables 列是 sql_identifier/character_data(sqlx Any 驱动
+            // 只认 text/varchar),必须 ::text 转成 text 才不会被 Any 拒绝解码。
+            "SELECT table_schema::text, table_name::text, table_type::text \
              FROM information_schema.tables \
              WHERE table_schema NOT IN ('pg_catalog', 'information_schema') \
              ORDER BY table_schema, table_name"
@@ -246,7 +251,8 @@ fn tables_sql(driver: DriverKind) -> &'static str {
 fn columns_sql(driver: DriverKind) -> &'static str {
     match driver {
         DriverKind::Postgres => {
-            "SELECT column_name, data_type, is_nullable \
+            // 同 tables:@Any 不认 sql_identifier/character_data,列首三列 ::text 转 text
+            "SELECT column_name::text, data_type::text, is_nullable::text \
              FROM information_schema.columns \
              WHERE table_schema = $1 AND table_name = $2 \
              ORDER BY ordinal_position"
@@ -525,6 +531,8 @@ pub struct DataSourceDraft {
     pub database: String,
     pub username: String,
     pub password: String,
+    /// 可选连接 URI 输入(Postgres/MySQL)。保存时优先用它,并抽取密码进 Keychain。
+    pub uri: String,
 }
 
 /// 挂在每个 `Workspace` 上:当前项目配置的数据源列表 + 编辑态 + 每条数据源
@@ -619,6 +627,8 @@ pub enum Message {
     DraftDatabaseChanged(String),
     DraftUsernameChanged(String),
     DraftPasswordChanged(String),
+    /// 表单里的"连接 URI"输入变更(Postgres/MySQL 便捷粘贴)。
+    DraftUriChanged(String),
     /// 提交表单:新增或更新(视 `draft.id` 是否为 `None`),写盘 + 密码进
     /// Keychain,关闭表单。
     DraftSave,
@@ -692,6 +702,7 @@ pub fn update(
                     database: src.database.clone().unwrap_or_default(),
                     username: src.username.clone().unwrap_or_default(),
                     password: String::new(), // 不回显已存密码,留空=不改密码
+                    uri: src.uri.clone().unwrap_or_default(),
                 });
             }
         }
@@ -702,6 +713,7 @@ pub fn update(
         Message::DraftDatabaseChanged(v) => set_draft(ws_state, |d| d.database = v),
         Message::DraftUsernameChanged(v) => set_draft(ws_state, |d| d.username = v),
         Message::DraftPasswordChanged(v) => set_draft(ws_state, |d| d.password = v),
+        Message::DraftUriChanged(v) => set_draft(ws_state, |d| d.uri = v),
         Message::DraftSave => {
             let Some(draft) = ws_state.editing.take() else {
                 return;
@@ -714,24 +726,52 @@ pub fn update(
                 .id
                 .clone()
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+            // 连接 URI(可选):存在则以此为准填字段,并从 URI 抽出密码进 Keychain。
+            let mut uri: Option<String> = None;
+            let mut uri_pw: Option<String> = None;
+            let mut host = non_empty(&draft.host);
+            let mut port = draft.port.parse().ok();
+            let mut database = non_empty(&draft.database);
+            let mut username = non_empty(&draft.username);
+            // URI 无效(非 postgres/mysql 或解析失败):忽略 URI,退化为字段式。
+            if !draft.uri.trim().is_empty()
+                && let Some(p) = parse_connection_uri(draft.uri.trim())
+            {
+                uri = Some(p.uri);
+                uri_pw = p.password;
+                host = p.host;
+                port = p.port;
+                database = p.database;
+                username = p.username;
+            }
             let source = DataSource {
                 id: id.clone(),
                 name: draft.name.clone(),
                 driver: draft.driver,
-                host: non_empty(&draft.host),
-                port: draft.port.parse().ok(),
-                database: non_empty(&draft.database),
-                username: non_empty(&draft.username),
+                host,
+                port,
+                database,
+                username,
+                uri,
             };
             if let Some(pos) = ws_state.sources.iter().position(|s| s.id == id) {
                 ws_state.sources[pos] = source;
             } else {
                 ws_state.sources.push(source);
             }
-            if !draft.password.is_empty()
+            // 密码:URI 内嵌优先,其次表单 password 字段。
+            let pw_to_save = uri_pw.or_else(|| {
+                if draft.password.is_empty() {
+                    None
+                } else {
+                    Some(draft.password.clone())
+                }
+            });
+            if let Some(p) = pw_to_save
                 && let Ok(entry) = keyring_entry(project_id, &id)
             {
-                let _ = entry.set_password(&draft.password);
+                let _ = entry.set_password(&p);
             }
             // 编辑已有源:连接信息可能变了,旧结构快照不作数(设计文档 §2)。
             if draft.id.is_some() {
@@ -1010,6 +1050,14 @@ fn build_sql_url(source: &DataSource, password: Option<&str>) -> String {
         let path = source.database.as_deref().unwrap_or("");
         return format!("sqlite://{path}");
     }
+    // 连接 URI 优先(用户整串粘贴);密码留 Keychain,用时补回。
+    if let Some(u) = source.uri.as_deref().filter(|u| !u.trim().is_empty()) {
+        let u = u.trim();
+        if u.contains("://") {
+            return inject_password_into_uri(u, password);
+        }
+        return u.to_string();
+    }
     let host = source.host.as_deref().unwrap_or("localhost");
     let port = source.port.map(|p| format!(":{p}")).unwrap_or_default();
     let db = source.database.as_deref().unwrap_or("");
@@ -1030,6 +1078,67 @@ fn build_mongo_url(source: &DataSource, password: Option<&str>) -> String {
         (None, _) => String::new(),
     };
     format!("mongodb://{auth}{host}{port}")
+}
+
+/// 解析用户粘贴的连接 URI(仅 postgres/postgresql/mysql)。返回:脱敏后的
+/// 一次 `parse_connection_uri` 的解析结果。
+struct ParsedUri {
+    /// 脱敏后的 URI(密码已抽走,保留用户名/host/port/库名)。
+    uri: String,
+    host: Option<String>,
+    port: Option<u16>,
+    database: Option<String>,
+    username: Option<String>,
+    /// 从 URI 抽出的密码,交调用方写入 Keychain。
+    password: Option<String>,
+}
+
+/// 解析用户粘贴的连接 URI(仅 postgres/postgresql/mysql)。脱敏 = 密码抽走
+/// (交调用方进 Keychain),URI 里不再留明文,避免写进 `database.json`。
+/// 解析失败或 scheme 不受支持返回 None。
+fn parse_connection_uri(uri: &str) -> Option<ParsedUri> {
+    let u = url::Url::parse(uri).ok()?;
+    let scheme = u.scheme();
+    if scheme != "postgres" && scheme != "postgresql" && scheme != "mysql" {
+        return None;
+    }
+    let host = u.host_str().map(|h| h.to_string());
+    let host = host.filter(|h| !h.is_empty())?;
+    let port = u.port();
+    let database = u
+        .path_segments()
+        .and_then(|mut s| s.next())
+        .map(|s| s.to_string());
+    let username = if u.username().is_empty() {
+        None
+    } else {
+        Some(u.username().to_string())
+    };
+    let password = u.password().map(|p| p.to_string());
+    let mut redacted = u;
+    let _ = redacted.set_password(None);
+    Some(ParsedUri {
+        uri: redacted.to_string(),
+        host: Some(host),
+        port,
+        database,
+        username,
+        password,
+    })
+}
+
+/// 连接时把 Keychain 密码补回 URI(URI 若已带密码则保留原样)。
+fn inject_password_into_uri(uri: &str, password: Option<&str>) -> String {
+    let Ok(mut u) = url::Url::parse(uri) else {
+        return uri.to_string();
+    };
+    if u.password().is_none()
+        && let Some(p) = password
+        && !p.is_empty()
+    {
+        let _ = u.set_password(Some(p));
+    }
+    u.to_string()
 }
 
 async fn test_connection(source: DataSource, password: Option<String>) -> Result<(), String> {
@@ -1122,12 +1231,18 @@ fn source_card<'a>(
     };
     let summary = match source.driver {
         DriverKind::Sqlite => source.database.clone().unwrap_or_default(),
-        _ => format!(
-            "{}:{}/{}",
-            source.host.as_deref().unwrap_or("-"),
-            source.port.map(|p| p.to_string()).unwrap_or_default(),
-            source.database.as_deref().unwrap_or("-"),
-        ),
+        _ => source
+            .uri
+            .as_deref()
+            .map(|u| u.to_string())
+            .unwrap_or_else(|| {
+                format!(
+                    "{}:{}/{}",
+                    source.host.as_deref().unwrap_or("-"),
+                    source.port.map(|p| p.to_string()).unwrap_or_default(),
+                    source.database.as_deref().unwrap_or("-"),
+                )
+            }),
     };
     container(
         column![
@@ -1231,6 +1346,14 @@ fn source_form<'a>(
                 .size(crate::theme::font::body()),
         );
     } else {
+        col = col.push(
+            text_input(
+                "连接 URI(可选,填了则忽略下面各项,例如 postgres://user:pw@host:5432/db)",
+                &draft.uri,
+            )
+            .on_input(Message::DraftUriChanged)
+            .size(crate::theme::font::body()),
+        );
         col = col.push(
             text_input("host", &draft.host)
                 .on_input(Message::DraftHostChanged)
@@ -1604,6 +1727,7 @@ mod url_tests {
             port: Some(5432),
             database: Some("mydb".into()),
             username: Some("alice".into()),
+            uri: None,
         }
     }
 
@@ -1640,6 +1764,57 @@ mod url_tests {
             "mongodb://alice:secret@db.internal:5432"
         );
     }
+
+    #[test]
+    fn parse_uri_extracts_password_and_redacts() {
+        let p =
+            parse_connection_uri("postgresql://alice:SuperSecret@db.internal:5433/shop").unwrap();
+        assert_eq!(p.host.as_deref(), Some("db.internal"));
+        assert_eq!(p.port, Some(5433));
+        assert_eq!(p.database.as_deref(), Some("shop"));
+        assert_eq!(p.username.as_deref(), Some("alice"));
+        assert_eq!(p.password.as_deref(), Some("SuperSecret"));
+        // 脱敏:密码已抽走,不留在 uri 里。
+        assert!(!p.uri.contains("SuperSecret"));
+        assert!(p.uri.contains("@db.internal:5433/shop"));
+    }
+
+    #[test]
+    fn parse_uri_mysql_without_password() {
+        let p = parse_connection_uri("mysql://root@db/shop").unwrap();
+        assert_eq!(p.host.as_deref(), Some("db"));
+        assert_eq!(p.database.as_deref(), Some("shop"));
+        assert_eq!(p.username.as_deref(), Some("root"));
+        assert!(p.password.is_none());
+        assert_eq!(p.uri, "mysql://root@db/shop");
+    }
+
+    #[test]
+    fn parse_uri_rejects_non_db_schemes() {
+        assert!(parse_connection_uri("https://db/shop").is_none());
+        assert!(parse_connection_uri("not-a-uri").is_none());
+    }
+
+    #[test]
+    fn uri_takes_precedence_in_build_sql_url() {
+        let mut s = base(DriverKind::Postgres);
+        s.uri = Some("postgresql://alice@db:5433/shop".into());
+        // 无 keychain 密码:直接抄 URI。
+        assert_eq!(build_sql_url(&s, None), "postgresql://alice@db:5433/shop");
+        // 有 keychain 密码且 URI 无密码:补回。
+        assert_eq!(
+            build_sql_url(&s, Some("secret")),
+            "postgresql://alice:secret@db:5433/shop"
+        );
+    }
+
+    #[test]
+    fn inject_password_keeps_existing_uri_password() {
+        assert_eq!(
+            inject_password_into_uri("postgresql://alice:pw@db/shop", Some("other")),
+            "postgresql://alice:pw@db/shop"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1655,6 +1830,7 @@ mod tests {
             port: Some(5432),
             database: Some("mydb".into()),
             username: Some("user".into()),
+            uri: None,
         }
     }
 
@@ -1821,6 +1997,7 @@ mod tests {
             port: Some(1),
             database: Some("mydb".into()),
             username: Some("user".into()),
+            uri: None,
         }
     }
 
@@ -2100,6 +2277,7 @@ mod tests {
             port: "1".into(),
             database: "mydb".into(),
             username: "user".into(),
+            uri: String::new(),
             password: String::new(), // 留空 → 跳过 Keychain,不写真实密码
         });
         update_with(&mut ws, Message::DraftSave);
