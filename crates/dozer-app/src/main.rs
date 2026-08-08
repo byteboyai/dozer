@@ -1,3 +1,4 @@
+mod app;
 mod assets;
 mod clipboard_image;
 mod conversation;
@@ -22,7 +23,7 @@ mod theme;
 mod transcript;
 mod workspace;
 
-use workspace::{App, Message};
+use app::{App, LeftView, Message, is_in_preview_column, preview_content_bounds};
 // `with_allow_link_preview` 是 macOS 专有扩展 trait,需显式引入作用域。
 use wry::WebViewBuilderExtDarwin;
 // `with_titlebar_transparent`/`with_title_hidden`/`with_fullsize_content_view`
@@ -512,17 +513,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     // 覆盖整个面板区,不区分区内具体哪个 pane)。
                     app.set_active_zone(logical_x, logical_w);
                     let state = app.shell_state();
-                    *pending_focus = Some(
-                        if workspace::is_in_preview_column(logical_x, logical_w, &state) {
-                            if state.left_view == workspace::LeftView::Web {
+                    *pending_focus =
+                        Some(if app::is_in_preview_column(logical_x, logical_w, &state) {
+                            if state.left_view == LeftView::Web {
                                 FocusIntent::Browser
                             } else {
                                 FocusIntent::Preview
                             }
                         } else {
                             FocusIntent::Terminal
-                        },
-                    );
+                        });
                     window.request_redraw();
                 }
                 WindowEvent::MouseInput {
@@ -794,7 +794,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             let logical_w = size.width as f32 / scale as f32;
             let logical_h = size.height as f32 / scale as f32;
             let (x, y, w, h) =
-                workspace::preview_content_bounds(logical_w, logical_h, &app.shell_state());
+                app::preview_content_bounds(logical_w, logical_h, &app.shell_state());
             let bounds = wry::Rect {
                 position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
                 size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
@@ -857,7 +857,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 // 子 webview 上的 mousedown winit 收不到,JS 经 IPC 发来这条
                 // 消息——按当前 `left_view` 判断归预览池还是浏览器池。
                 let state = app.shell_state();
-                *pending_focus = Some(if state.left_view == workspace::LeftView::Web {
+                *pending_focus = Some(if state.left_view == LeftView::Web {
                     FocusIntent::Browser
                 } else {
                     FocusIntent::Preview

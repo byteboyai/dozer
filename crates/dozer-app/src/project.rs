@@ -133,6 +133,12 @@ impl FileTree {
         out
     }
 
+    /// 项目根目录（`FileTree::new` 传入的 `root`）。文件树面板用它显示
+    /// "根目录名(完整路径)" 头部。
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     fn push_rows(&self, dir: &Path, depth: usize, out: &mut Vec<TreeRow>) {
         let Some(entries) = self.children.get(dir) else {
             return;
