@@ -201,6 +201,289 @@ fn keyring_entry(project_id: i64, source_id: &str) -> Result<keyring::Entry, key
     keyring::Entry::new("dozer", &format!("{project_id}:{source_id}"))
 }
 
+/// 连接测试 / 表单交互的统一消息。`TestConnectionResult` 特化携带
+/// `project_id`——异步结果可能晚于用户切换项目才回来,必须按这个项目 id
+/// 而不是"当前聚焦项目"路由回正确的 `WorkspaceState`。
+#[derive(Debug, Clone)]
+pub enum Message {
+    /// 驱动管理弹层:勾/取消勾某个驱动类型。
+    ToggleDriver(DriverKind),
+    /// 打开"驱动管理"弹层。
+    DriversPopupToggle,
+    /// 点"＋新增数据源"→ 打开空白草稿表单。
+    AddSourceStart,
+    /// 点某张卡的"编辑"→ 用该数据源现有字段(不含密码)预填草稿表单。
+    EditSourceStart(String),
+    /// 表单字段编辑(草稿态,未提交)。
+    DraftNameChanged(String),
+    DraftDriverChanged(DriverKind),
+    DraftHostChanged(String),
+    DraftPortChanged(String),
+    DraftDatabaseChanged(String),
+    DraftUsernameChanged(String),
+    DraftPasswordChanged(String),
+    /// 提交表单:新增或更新(视 `draft.id` 是否为 `None`),写盘 + 密码进
+    /// Keychain,关闭表单。
+    DraftSave,
+    /// 取消表单,丢弃草稿。
+    DraftCancel,
+    /// 删除一条数据源:同时删 `.dozer/database.json` 里的记录和 Keychain
+    /// 里的密码条目。
+    DeleteSource(String),
+    /// 点"测试连接":发起异步测试,`ws_state.test_status` 先置
+    /// `Testing`。
+    TestConnection(String),
+    /// 异步测试结果。**带 `project_id`**——见设计文档"结果经 `emit`
+    /// 回传"一节,不能只带 `source_id`,用户可能在等待期间切走了项目
+    /// 页签,`App::update` 必须按这里的 `project_id` 而不是"当前聚焦
+    /// 项目"路由。
+    TestConnectionResult(i64, String, Result<(), String>),
+}
+
+pub fn update(
+    ws_state: &mut WorkspaceState,
+    app_state: &mut AppState,
+    msg: Message,
+    project_id: i64,
+    repo_path: &Path,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    match msg {
+        Message::ToggleDriver(driver) => app_state.toggle(driver),
+        Message::DriversPopupToggle => {
+            app_state.drivers_popup_open = !app_state.drivers_popup_open;
+        }
+        Message::AddSourceStart => {
+            ws_state.editing = Some(DataSourceDraft::default());
+        }
+        Message::EditSourceStart(id) => {
+            if let Some(src) = ws_state.sources.iter().find(|s| s.id == id) {
+                ws_state.editing = Some(DataSourceDraft {
+                    id: Some(src.id.clone()),
+                    name: src.name.clone(),
+                    driver: src.driver,
+                    host: src.host.clone().unwrap_or_default(),
+                    port: src.port.map(|p| p.to_string()).unwrap_or_default(),
+                    database: src.database.clone().unwrap_or_default(),
+                    username: src.username.clone().unwrap_or_default(),
+                    password: String::new(), // 不回显已存密码,留空=不改密码
+                });
+            }
+        }
+        Message::DraftNameChanged(v) => set_draft(ws_state, |d| d.name = v),
+        Message::DraftDriverChanged(v) => set_draft(ws_state, |d| d.driver = v),
+        Message::DraftHostChanged(v) => set_draft(ws_state, |d| d.host = v),
+        Message::DraftPortChanged(v) => set_draft(ws_state, |d| d.port = v),
+        Message::DraftDatabaseChanged(v) => set_draft(ws_state, |d| d.database = v),
+        Message::DraftUsernameChanged(v) => set_draft(ws_state, |d| d.username = v),
+        Message::DraftPasswordChanged(v) => set_draft(ws_state, |d| d.password = v),
+        Message::DraftSave => {
+            let Some(draft) = ws_state.editing.take() else {
+                return;
+            };
+            if draft.name.trim().is_empty() {
+                ws_state.editing = Some(draft); // 名字必填,打回表单
+                return;
+            }
+            let id = draft
+                .id
+                .clone()
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let source = DataSource {
+                id: id.clone(),
+                name: draft.name.clone(),
+                driver: draft.driver,
+                host: non_empty(&draft.host),
+                port: draft.port.parse().ok(),
+                database: non_empty(&draft.database),
+                username: non_empty(&draft.username),
+            };
+            if let Some(pos) = ws_state.sources.iter().position(|s| s.id == id) {
+                ws_state.sources[pos] = source;
+            } else {
+                ws_state.sources.push(source);
+            }
+            if !draft.password.is_empty()
+                && let Ok(entry) = keyring_entry(project_id, &id)
+            {
+                let _ = entry.set_password(&draft.password);
+            }
+            if let Err(e) = save_sources(repo_path, &ws_state.sources) {
+                tracing::warn!("写入 database.json 失败: {e}");
+            }
+        }
+        Message::DraftCancel => {
+            ws_state.editing = None;
+        }
+        Message::DeleteSource(id) => {
+            ws_state.sources.retain(|s| s.id != id);
+            ws_state.test_status.remove(&id);
+            if let Ok(entry) = keyring_entry(project_id, &id) {
+                let _ = entry.delete_credential();
+            }
+            if let Err(e) = save_sources(repo_path, &ws_state.sources) {
+                tracing::warn!("写入 database.json 失败: {e}");
+            }
+        }
+        Message::TestConnection(id) => {
+            let Some(source) = ws_state.sources.iter().find(|s| s.id == id).cloned() else {
+                return;
+            };
+            ws_state.test_status.insert(id.clone(), TestStatus::Testing);
+            let password = keyring_entry(project_id, &id)
+                .ok()
+                .and_then(|e| e.get_password().ok());
+            handle.spawn(async move {
+                let result = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    test_connection(source, password),
+                )
+                .await;
+                let result = match result {
+                    Ok(r) => r,
+                    Err(_) => Err("连接超时(5秒)".to_string()),
+                };
+                emit(Message::TestConnectionResult(project_id, id, result));
+            });
+        }
+        Message::TestConnectionResult(_project_id, id, result) => {
+            let status = match result {
+                Ok(()) => TestStatus::Ok,
+                Err(e) => TestStatus::Err(e),
+            };
+            ws_state.test_status.insert(id, status);
+        }
+    }
+}
+
+fn set_draft(ws_state: &mut WorkspaceState, f: impl FnOnce(&mut DataSourceDraft)) {
+    if let Some(draft) = ws_state.editing.as_mut() {
+        f(draft);
+    }
+}
+
+fn non_empty(s: &str) -> Option<String> {
+    let t = s.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
+}
+
+fn build_sql_url(source: &DataSource, password: Option<&str>) -> String {
+    let scheme = match source.driver {
+        DriverKind::Postgres => "postgres",
+        DriverKind::MySQL => "mysql",
+        DriverKind::Sqlite => "sqlite",
+        DriverKind::MongoDB => unreachable!("build_sql_url 不处理 MongoDB"),
+    };
+    if source.driver == DriverKind::Sqlite {
+        // SQLite: sqlite://<文件路径>,不带 host/port/用户名/密码。
+        let path = source.database.as_deref().unwrap_or("");
+        return format!("sqlite://{path}");
+    }
+    let host = source.host.as_deref().unwrap_or("localhost");
+    let port = source.port.map(|p| format!(":{p}")).unwrap_or_default();
+    let db = source.database.as_deref().unwrap_or("");
+    let auth = match (source.username.as_deref(), password) {
+        (Some(u), Some(p)) if !p.is_empty() => format!("{u}:{p}@"),
+        (Some(u), _) => format!("{u}@"),
+        (None, _) => String::new(),
+    };
+    format!("{scheme}://{auth}{host}{port}/{db}")
+}
+
+fn build_mongo_url(source: &DataSource, password: Option<&str>) -> String {
+    let host = source.host.as_deref().unwrap_or("localhost");
+    let port = source.port.map(|p| format!(":{p}")).unwrap_or_default();
+    let auth = match (source.username.as_deref(), password) {
+        (Some(u), Some(p)) if !p.is_empty() => format!("{u}:{p}@"),
+        (Some(u), _) => format!("{u}@"),
+        (None, _) => String::new(),
+    };
+    format!("mongodb://{auth}{host}{port}")
+}
+
+async fn test_connection(source: DataSource, password: Option<String>) -> Result<(), String> {
+    match source.driver {
+        DriverKind::Postgres | DriverKind::MySQL | DriverKind::Sqlite => {
+            let url = build_sql_url(&source, password.as_deref());
+            let pool = sqlx::AnyPool::connect(&url)
+                .await
+                .map_err(|e| e.to_string())?;
+            sqlx::query("SELECT 1")
+                .execute(&pool)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        }
+        DriverKind::MongoDB => {
+            let url = build_mongo_url(&source, password.as_deref());
+            let client = mongodb::Client::with_uri_str(&url)
+                .await
+                .map_err(|e| e.to_string())?;
+            client
+                .list_database_names()
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::*;
+
+    fn base(driver: DriverKind) -> DataSource {
+        DataSource {
+            id: "x".into(),
+            name: "n".into(),
+            driver,
+            host: Some("db.internal".into()),
+            port: Some(5432),
+            database: Some("mydb".into()),
+            username: Some("alice".into()),
+        }
+    }
+
+    #[test]
+    fn postgres_url_with_password() {
+        let s = base(DriverKind::Postgres);
+        assert_eq!(
+            build_sql_url(&s, Some("secret")),
+            "postgres://alice:secret@db.internal:5432/mydb"
+        );
+    }
+
+    #[test]
+    fn postgres_url_without_password() {
+        let s = base(DriverKind::Postgres);
+        assert_eq!(
+            build_sql_url(&s, None),
+            "postgres://alice@db.internal:5432/mydb"
+        );
+    }
+
+    #[test]
+    fn sqlite_url_uses_database_as_path_ignores_host() {
+        let mut s = base(DriverKind::Sqlite);
+        s.database = Some("/tmp/my.sqlite".into());
+        assert_eq!(build_sql_url(&s, None), "sqlite:///tmp/my.sqlite");
+    }
+
+    #[test]
+    fn mongo_url_with_password() {
+        let s = base(DriverKind::MongoDB);
+        assert_eq!(
+            build_mongo_url(&s, Some("secret")),
+            "mongodb://alice:secret@db.internal:5432"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

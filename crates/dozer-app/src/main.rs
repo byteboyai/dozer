@@ -254,6 +254,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
     // （Ctrl +/- 改过的 scale 由 `icon_size::persist_scale` 在每次缩放后落盘）。
     crate::theme::icon_size::init_scale();
 
+    // 注册 sqlx `Any` 驱动的具体实现(Postgres/MySQL/SQLite),必须在第一次
+    // `sqlx::AnyPool::connect` 之前跑一次(数据库面板连接测试用)。
+    sqlx::any::install_default_drivers();
+
     // Initialize winit：用户事件类型直接是 `Message`——tokio 任务经
     // `EventLoopProxy<Message>::send_event` 把事件流/daemon 状态送回 UI
     // 线程，`ApplicationHandler::user_event` 收到后转发给
