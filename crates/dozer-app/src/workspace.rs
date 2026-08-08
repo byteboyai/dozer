@@ -3940,7 +3940,8 @@ impl App {
                 self.update(Message::PreviewOpenPath(path));
             }
             Message::Files(
-                msg @ (files::Message::PasteDone(project_id, ..)
+                msg @ (files::Message::StatusesRefreshed(project_id, ..)
+                | files::Message::PasteDone(project_id, ..)
                 | files::Message::OpDone { project_id, .. }),
             ) => {
                 let handle = self.handle.clone();
@@ -3968,6 +3969,19 @@ impl App {
                     return;
                 };
                 files::update(&mut ws.files, app_files, msg, project_id, &handle, emit);
+            }
+            Message::Project(
+                msg @ (project::Message::GitRefreshed(project_id, ..)
+                | project::Message::AcceptanceCountLoaded(project_id, ..)),
+            ) => {
+                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+                    return;
+                };
+                let Some(project) = ws.project.as_ref() else {
+                    return;
+                };
+                let repo_path = Path::new(&project.path).to_path_buf();
+                project::update(&mut ws.project_panel, msg, project_id, &repo_path);
             }
             Message::Project(msg) => {
                 let Some(project_id) = self.active_project_id else {
@@ -7204,15 +7218,6 @@ fn agent_state_label(state: AgentState) -> &'static str {
     }
 }
 
-/// 环境状态栏文案 + 点色：daemon 连通=绿"环境正常", 断=红"未连接"。
-pub(crate) fn env_status_text(daemon_ok: bool) -> (&'static str, Color) {
-    if daemon_ok {
-        ("环境正常 · dozerd 运行中", theme::color::GREEN)
-    } else {
-        ("dozerd 未连接", theme::color::RED)
-    }
-}
-
 /// tab 前状态点配色：死会话灰；存活按 agent 状态——绿=空闲/运行、
 /// 紫蓝=待输入、金=回合结束（金是甲方动作专属色：该出手了）。运行态
 /// 与空闲态同为绿，靠 `tab_item` 里的闪烁区分（工作中才闪）。
@@ -8657,15 +8662,6 @@ mod tests {
         assert_eq!(agent_state_label(AgentState::AwaitingInput), "待输入");
         assert_eq!(agent_state_label(AgentState::TurnEnded), "回合毕");
         assert_eq!(agent_state_label(AgentState::Idle), "空闲");
-    }
-
-    #[test]
-    fn env_status_text_ok_and_down() {
-        assert_eq!(
-            env_status_text(true),
-            ("环境正常 · dozerd 运行中", theme::color::GREEN)
-        );
-        assert_eq!(env_status_text(false), ("dozerd 未连接", theme::color::RED));
     }
 
     fn make_test_tab(rt: &tokio::runtime::Runtime, id: &str, agent: AgentKind) -> SessionTab {
