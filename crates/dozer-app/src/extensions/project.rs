@@ -4,6 +4,10 @@
 use crate::delivery::WorktreeInfo;
 use crate::goal::{self, Goal};
 use crate::workspace::AddrEvent;
+use crate::{icons, theme};
+use dozer_core::protocol::ProjectInfo;
+use iced_widget::core::{Border, Element, Length};
+use iced_widget::{button, column, container, row, text, text_input};
 use std::path::Path;
 
 /// 挂在每个 Workspace 上的项目信息面板状态。
@@ -181,6 +185,213 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message, _project_id: i64, rep
             }
         }
     }
+}
+
+/// 项目卡分支标签:`分支` / `分支*`(脏)/ `—`(非 git)。
+fn project_branch_label(branch: Option<&str>, dirty: bool) -> String {
+    match branch {
+        Some(b) if dirty => format!("{b}*"),
+        Some(b) => b.to_string(),
+        None => "—".to_string(),
+    }
+}
+
+/// 目标标题文案:`目标：{标题}`;标题过长按字符截断加省略号。无 goal 或空
+/// 标题 → None。`max_chars` 含省略号占位。现有 `workspace.rs` 顶栏胶囊同名
+/// 函数的搬家版本,断言不变——原顶栏用途已删除(设计文档目标 #6),这次复用
+/// 给面板内标题按钮展示。
+fn goal_capsule_text(goal: Option<&Goal>, max_chars: usize) -> Option<String> {
+    let title = goal?.title.trim();
+    if title.is_empty() {
+        return None;
+    }
+    let shown = if title.chars().count() > max_chars {
+        let mut s: String = title.chars().take(max_chars.saturating_sub(1)).collect();
+        s.push('…');
+        s
+    } else {
+        title.to_string()
+    };
+    Some(format!("目标：{shown}"))
+}
+
+/// 面板主入口(单栏,不与任何其它面板配对——同 GitLog/Usage)。`project` 为
+/// `None` 时内核不会真正走到这里(`left_panel_area` 对 `LeftView::Project`
+/// 无条件调用本函数,但 `App::view()` 顶层只在有聚焦项目时才会渲染到这个
+/// 分支),这里仍保留一次防御性判断,风格对齐 Files 试点。
+pub fn view<'a>(
+    ws_state: &'a WorkspaceState,
+    project: Option<&'a ProjectInfo>,
+    width: Length,
+    outer: Border,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let Some(p) = project else {
+        return container(iced_widget::Space::new())
+            .width(width)
+            .height(Length::Fill)
+            .into();
+    };
+
+    let mut content = column![].spacing(12).padding(14);
+
+    content = content.push(
+        text(p.name.clone())
+            .size(theme::font::title())
+            .color(theme::color::CREAM),
+    );
+
+    let label = project_branch_label(ws_state.branch.as_deref(), ws_state.dirty);
+    let bcolor = if ws_state.dirty {
+        theme::color::GOLD
+    } else {
+        theme::color::BODY
+    };
+    content = content.push(
+        row![
+            icons::view(
+                icons::IconKind::GitBranch,
+                crate::theme::icon_size::row(),
+                bcolor
+            ),
+            text(label).size(theme::font::label()).color(bcolor),
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center),
+    );
+
+    if let Some(n) = ws_state.project_acceptance_count.filter(|n| *n > 0) {
+        content = content.push(
+            text(format!("{n} 次验收"))
+                .size(theme::font::caption())
+                .color(theme::color::GOLD),
+        );
+    }
+
+    content = content.push(goal_block(ws_state));
+
+    container(content)
+        .width(width)
+        .height(Length::Fill)
+        .style(
+            move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                background: Some(theme::color::PANEL.into()),
+                border: outer,
+                ..iced_widget::container::Style::default()
+            },
+        )
+        .into()
+}
+
+/// 目标区块:标题行(点击进入编辑,编辑态下换成自绘输入框)+ 有目标时逐条
+/// 列出标准(各带删除按钮)+ "＋新增标准"输入框(复用 Todo 面板"加一条"的
+/// 既有交互形状,原生 `text_input`);没有目标时只显示"未定标"入口,不渲染
+/// 标准列表/输入框(点击进入同一个标题编辑态,创建首个目标)。
+fn goal_block(
+    ws_state: &WorkspaceState,
+) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let mut col = column![].spacing(8);
+
+    let title_row: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> =
+        if let Some(buf) = &ws_state.title_editing {
+            container(
+                text(format!("{buf}▏"))
+                    .size(theme::font::title())
+                    .color(theme::color::CREAM),
+            )
+            .padding([2, 4])
+            .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+                background: Some(theme::color::CARD.into()),
+                border: Border {
+                    color: theme::color::CREAM,
+                    width: 1.0,
+                    radius: 2.0.into(),
+                },
+                ..iced_widget::container::Style::default()
+            })
+            .into()
+        } else if let Some(g) = &ws_state.goal {
+            let title_text =
+                goal_capsule_text(Some(g), 60).unwrap_or_else(|| "（未命名目标）".to_string());
+            button(
+                text(title_text)
+                    .size(theme::font::title())
+                    .color(theme::color::CREAM),
+            )
+            .on_press(Message::TitleEditStart)
+            .style(|_t, _s| iced_widget::button::Style {
+                background: None,
+                text_color: theme::color::CREAM,
+                ..iced_widget::button::Style::default()
+            })
+            .into()
+        } else {
+            button(
+                text("未定标 · 点击设置目标")
+                    .size(theme::font::body())
+                    .color(theme::color::DIM),
+            )
+            .on_press(Message::TitleEditStart)
+            .style(|_t, _s| iced_widget::button::Style {
+                background: None,
+                text_color: theme::color::DIM,
+                ..iced_widget::button::Style::default()
+            })
+            .into()
+        };
+    col = col.push(title_row);
+
+    if let Some(g) = &ws_state.goal {
+        for (i, c) in g.criteria.iter().enumerate() {
+            col = col.push(
+                row![
+                    text(format!("· {c}"))
+                        .size(theme::font::body())
+                        .color(theme::color::BODY),
+                    iced_widget::space::horizontal(),
+                    button(text("×").size(theme::font::body()).color(theme::color::DIM))
+                        .on_press(Message::CriterionRemove(i))
+                        .style(|_t, _s| iced_widget::button::Style {
+                            background: None,
+                            text_color: theme::color::DIM,
+                            ..iced_widget::button::Style::default()
+                        }),
+                ]
+                .spacing(6)
+                .align_y(iced_widget::core::Alignment::Center),
+            );
+        }
+        col = col.push(
+            text_input("＋新增标准…", &ws_state.add_criterion_draft)
+                .on_input(Message::CriterionAddInputChanged)
+                .on_submit(Message::CriterionAddSubmit)
+                .size(theme::font::body())
+                .padding([8, 10])
+                .style(
+                    |_t: &iced_widget::Theme, _s| iced_widget::text_input::Style {
+                        background: theme::color::BG.into(),
+                        border: Border {
+                            color: theme::color::BORDER,
+                            width: 1.0,
+                            radius: 2.0.into(),
+                        },
+                        icon: theme::color::DIM,
+                        placeholder: theme::color::DIM,
+                        value: theme::color::CREAM,
+                        selection: theme::color::GOLD,
+                    },
+                ),
+        );
+    }
+
+    if let Some(err) = &ws_state.error {
+        col = col.push(
+            text(format!("⚠ {err}"))
+                .size(theme::font::label())
+                .color(theme::color::RED),
+        );
+    }
+
+    col.into()
 }
 
 #[cfg(test)]
@@ -373,5 +584,38 @@ mod tests {
     fn load_goal_missing_file_is_none() {
         let repo = tempfile::tempdir().unwrap();
         assert_eq!(load_goal(repo.path()), None);
+    }
+
+    #[test]
+    fn project_card_branch_label() {
+        assert_eq!(project_branch_label(Some("main"), false), "main");
+        assert_eq!(project_branch_label(Some("main"), true), "main*");
+        assert_eq!(project_branch_label(None, false), "—");
+    }
+
+    #[test]
+    fn goal_capsule_prefixes_and_truncates() {
+        let g = Goal {
+            title: "会话存活 daemon 雏形".into(),
+            criteria: vec![],
+        };
+        assert_eq!(
+            goal_capsule_text(Some(&g), 100).as_deref(),
+            Some("目标：会话存活 daemon 雏形")
+        );
+        let long = Goal {
+            title: "一二三四五六七八九十".into(),
+            criteria: vec![],
+        };
+        assert_eq!(
+            goal_capsule_text(Some(&long), 5).as_deref(),
+            Some("目标：一二三四…")
+        );
+        assert_eq!(goal_capsule_text(None, 10), None);
+        let empty = Goal {
+            title: "   ".into(),
+            criteria: vec![],
+        };
+        assert_eq!(goal_capsule_text(Some(&empty), 10), None);
     }
 }
