@@ -33,6 +33,7 @@ use crate::conversation::{self, ConversationMeta};
 use crate::delivery::{self, WorktreeInfo};
 use crate::extensions::acceptance;
 use crate::extensions::browser;
+use crate::extensions::database;
 use crate::extensions::files;
 use crate::extensions::git_log;
 use crate::extensions::project;
@@ -88,6 +89,7 @@ pub enum LeftView {
     GitLog,
     Todo,
     Project,
+    Database,
 }
 
 /// 右侧面板区当前显示哪个视图：Agent(Agent列表+终端配对) / 对话(对话列表+对话审阅配对)。
@@ -109,6 +111,7 @@ pub enum RailButton {
     LeftGit,
     LeftTodo,
     LeftProject,
+    LeftDatabase,
     RightAgent,
     RightConversations,
     RightUsage,
@@ -649,6 +652,8 @@ pub fn preview_content_bounds(
             LeftView::Todo => (0.0, 0.0, 0.0, 0.0),
             // Project 面板同 GitLog,纯 iced 绘制,不挂 webview 子视图。
             LeftView::Project => (0.0, 0.0, 0.0, 0.0),
+            // Database 面板同 Project,纯 iced 绘制,不挂 webview 子视图。
+            LeftView::Database => (0.0, 0.0, 0.0, 0.0),
         };
     }
     let left_w = left_zone_width(window_width, state);
@@ -685,6 +690,8 @@ pub fn preview_content_bounds(
         LeftView::Todo => (0.0, 0.0, 0.0, 0.0),
         // Project 面板同 GitLog,纯 iced 绘制,不挂 webview 子视图。
         LeftView::Project => (0.0, 0.0, 0.0, 0.0),
+        // Database 面板同 Project,纯 iced 绘制,不挂 webview 子视图。
+        LeftView::Database => (0.0, 0.0, 0.0, 0.0),
     }
 }
 
@@ -719,6 +726,8 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
             LeftView::Todo => false,
             // Project 面板同 Todo,纯 iced 绘制,永无 webview。
             LeftView::Project => false,
+            // Database 面板同 Project,纯 iced 绘制,永无 webview。
+            LeftView::Database => false,
         };
     }
     let left_w = left_zone_width(window_width, state);
@@ -740,6 +749,8 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
         LeftView::Todo => false,
         // Project 面板同 Todo,纯 iced 绘制,永无 webview。
         LeftView::Project => false,
+        // Database 面板同 Project,纯 iced 绘制,永无 webview。
+        LeftView::Database => false,
     }
 }
 
@@ -944,6 +955,9 @@ pub enum Message {
     /// 拦截处理,见 `update()` 对应分支),内核只转发不解读——见
     /// `extensions::todo::Message`。
     Todo(todo::Message),
+    /// 数据库面板的全部消息。`TestConnectionResult` 特化分支内核直接拦截
+    /// 处理(带 `project_id`,不能按当前聚焦项目路由),其余走通配分发。
+    Database(database::Message),
     /// 终端 pane 像素尺寸变化换算出的新网格尺寸；对所有 tab 生效
     /// （包括当前不可见的），保证切换 tab 时尺寸已经是最新的。
     PaneResized { cols: u16, rows: u16 },
@@ -1321,6 +1335,9 @@ pub struct App {
     /// Todo 面板 App 级状态(派发记录/计划时间/完成时间,按项目分桶,
     /// 启动时读盘、每次变更落盘)——见 `extensions::todo::AppState`。
     todo: todo::AppState,
+    /// 数据库面板 App 级状态(哪些驱动类型在"新增数据源"下拉里可选,
+    /// 启动时读盘)——见 `extensions::database::AppState`。
+    database: database::AppState,
 }
 
 pub struct Workspace {
@@ -1377,6 +1394,9 @@ pub struct Workspace {
     edit_session: Option<EditSession>,
     /// Todo 面板 per-project 状态——见 `extensions::todo::WorkspaceState`。
     todo: todo::WorkspaceState,
+    /// 数据库面板 per-project 状态(当前项目的数据源列表 + 编辑草稿 + 测试
+    /// 状态 map)——见 `extensions::database::WorkspaceState`。
+    database: database::WorkspaceState,
     /// 这份 `Workspace` 是否只是 `Stub` → `Loaded` 促成期间的"加载中"占位
     /// (见 [`Workspace::loading_for_project`])。占位有正确的 `project`/文件树,
     /// 但会话/git/对话都还没拉,并且整份对象会在
@@ -1664,6 +1684,7 @@ impl Workspace {
             agent_picker_open: false,
             edit_session: None,
             todo: todo::WorkspaceState::default(),
+            database: database::WorkspaceState::default(),
             loading: false,
         }
     }
@@ -2458,6 +2479,7 @@ impl App {
             home_browser: browser::State::default(),
             git_log: git_log::State::default(),
             todo: todo::AppState::load(),
+            database: database::AppState::load(),
         }
     }
 
@@ -3371,6 +3393,66 @@ impl App {
                     }
                 });
             }
+            // 数据库连接测试的异步结果带显式 `project_id`——用户可能在等待
+            // 期间切走了项目页签,必须按自带 id 路由,不能用当前聚焦项目
+            // (同 `TabAttached`/`ProjectSlotLoaded` 那批异步消息的约定,见设计
+            // 文档"结果经 `emit` 回传"一节)。特化分支必须排在通配
+            // `Message::Database(msg)` **之前**,否则永远匹配不到。
+            Message::Database(database::Message::TestConnectionResult(
+                project_id,
+                source_id,
+                result,
+            )) => {
+                let app_db = &mut self.database;
+                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+                    return;
+                };
+                let Some(project) = ws.project.as_ref() else {
+                    return;
+                };
+                let repo_path = std::path::PathBuf::from(&project.path);
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                let emit = move |m| {
+                    let _ = proxy.send_event(Message::Database(m));
+                };
+                database::update(
+                    &mut ws.database,
+                    app_db,
+                    database::Message::TestConnectionResult(project_id, source_id, result),
+                    project_id,
+                    &repo_path,
+                    &handle,
+                    emit,
+                );
+            }
+            Message::Database(msg) => {
+                let Some(project_id) = self.active_project_id else {
+                    return;
+                };
+                let app_db = &mut self.database;
+                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+                    return;
+                };
+                let Some(project) = ws.project.as_ref() else {
+                    return;
+                };
+                let repo_path = std::path::PathBuf::from(&project.path);
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                let emit = move |m| {
+                    let _ = proxy.send_event(Message::Database(m));
+                };
+                database::update(
+                    &mut ws.database,
+                    app_db,
+                    msg,
+                    project_id,
+                    &repo_path,
+                    &handle,
+                    emit,
+                );
+            }
             Message::Todo(msg) => {
                 let Some(project_id) = self.active_project_id else {
                     return;
@@ -3466,6 +3548,18 @@ impl App {
                         if let Some(project) = ws.project.as_ref() {
                             todo::reload_from_disk(
                                 &mut ws.todo,
+                                std::path::Path::new(&project.path),
+                            );
+                        }
+                    });
+                }
+                // 数据库面板：切入即从磁盘重读一次 `.dozer/database.json`，
+                // 保证切进来立刻是最新内容(同 Todo 面板的切换时语义)。
+                if self.left_view == LeftView::Database {
+                    self.with_focused_project(|ws, _io| {
+                        if let Some(project) = ws.project.as_ref() {
+                            database::reload_from_disk(
+                                &mut ws.database,
                                 std::path::Path::new(&project.path),
                             );
                         }
@@ -5425,6 +5519,21 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_wi
             HoverId::Rail(RailButton::LeftProject),
             false
         )),
+        // 数据库面板入口:数据源管理 + 连接测试。
+        MouseArea::new(rail_icon_button(
+            icons::IconKind::Database,
+            app.left_view == LeftView::Database && left_open,
+            app.hover_progress(HoverId::Rail(RailButton::LeftDatabase)),
+            Message::LeftIconSelect(LeftView::Database),
+        ))
+        .on_enter(Message::Hover(
+            HoverId::Rail(RailButton::LeftDatabase),
+            true
+        ))
+        .on_exit(Message::Hover(
+            HoverId::Rail(RailButton::LeftDatabase),
+            false
+        )),
     ]
     .spacing(region.gap)
     .padding(region.padding);
@@ -5778,6 +5887,19 @@ fn left_panel_area<'a>(
             zone_pane_border(zone, ac),
         )
         .map(Message::Project),
+        LeftView::Database => {
+            // 数据库面板需要项目已打开才能读写 `.dozer/database.json`。
+            if ws.project.is_none() {
+                return column![].into();
+            }
+            database::view(
+                &app.database,
+                &ws.database,
+                Length::Fill,
+                zone_pane_border(zone, ac),
+            )
+            .map(Message::Database)
+        }
     };
     if maximized {
         return inner;

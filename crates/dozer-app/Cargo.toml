@@ -31,6 +31,9 @@ trash = "5.2.6"
 arboard = "3"
 png = "0.17"
 uuid.workspace = true
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "any", "postgres", "mysql", "sqlite"] }
+mongodb = { version = "3", default-features = false, features = ["rustls-tls", "compat-3-0-0"] }
+keyring = "3"
 # gleisbau = 原生 git 提交图布局库,嵌入 iced Canvas(已转正,非 spike)。
 # git2 = git 数据层(git_log 提交图 + delivery 状态查询 + worktree 列表),
 # 依赖版本与 gleisbau 传递依赖对齐,避免 cargo 拉两份。
