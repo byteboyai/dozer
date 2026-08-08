@@ -5908,6 +5908,13 @@ fn left_panel_area<'a>(
         )
         .map(Message::Project),
         LeftView::Ssh => {
+            // 同 Files/Database 面板:`ws.project.is_none()` 是 Stub→Loaded
+            // 促成期间的占位态,这时不该渲染出一个看似可点、实际上
+            // `Message::Ssh` 分发会被内核静默吞掉(无 project 时直接
+            // return)的"＋新增主机"按钮。
+            if ws.project.is_none() {
+                return column![].into();
+            }
             ssh::view(&ws.ssh, Length::Fill, zone_pane_border(zone, ac)).map(Message::Ssh)
         }
     };
