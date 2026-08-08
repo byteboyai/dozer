@@ -35,10 +35,10 @@ use crate::extensions::acceptance;
 use crate::extensions::browser;
 use crate::extensions::files;
 use crate::extensions::git_log;
+use crate::extensions::project;
 use crate::extensions::todo;
 use crate::extensions::usage;
 use crate::git_watch;
-use crate::goal::{self, Goal};
 use crate::icons;
 use crate::icons::IconKind;
 use crate::layout;
@@ -86,6 +86,7 @@ pub enum LeftView {
     Web,
     GitLog,
     Todo,
+    Project,
 }
 
 /// 右侧面板区当前显示哪个视图：Agent(Agent列表+终端配对) / 对话(对话列表+对话审阅配对)。
@@ -106,6 +107,7 @@ pub enum RailButton {
     LeftWeb,
     LeftGit,
     LeftTodo,
+    LeftProject,
     RightAgent,
     RightConversations,
     RightUsage,
@@ -638,6 +640,8 @@ pub fn preview_content_bounds(
             LeftView::GitLog => (0.0, 0.0, 0.0, 0.0),
             // Todo 面板同 GitLog,纯 iced 绘制,不挂 webview 子视图。
             LeftView::Todo => (0.0, 0.0, 0.0, 0.0),
+            // Project 面板同 GitLog,纯 iced 绘制,不挂 webview 子视图。
+            LeftView::Project => (0.0, 0.0, 0.0, 0.0),
         };
     }
     let left_w = left_zone_width(window_width, state);
@@ -672,6 +676,8 @@ pub fn preview_content_bounds(
         LeftView::GitLog => (0.0, 0.0, 0.0, 0.0),
         // Todo 面板同 GitLog,纯 iced 绘制,不挂 webview 子视图。
         LeftView::Todo => (0.0, 0.0, 0.0, 0.0),
+        // Project 面板同 GitLog,纯 iced 绘制,不挂 webview 子视图。
+        LeftView::Project => (0.0, 0.0, 0.0, 0.0),
     }
 }
 
@@ -704,6 +710,8 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
             LeftView::GitLog => false,
             // Todo 面板纯 iced 绘制,无 webview,永不落在预览列。
             LeftView::Todo => false,
+            // Project 面板同 Todo,纯 iced 绘制,永无 webview。
+            LeftView::Project => false,
         };
     }
     let left_w = left_zone_width(window_width, state);
@@ -723,6 +731,8 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
         LeftView::GitLog => false,
         // Todo 面板纯 iced 绘制,无 webview,永不落在预览列。
         LeftView::Todo => false,
+        // Project 面板同 Todo,纯 iced 绘制,永无 webview。
+        LeftView::Project => false,
     }
 }
 
@@ -1043,15 +1053,18 @@ pub enum Message {
     ProjectSlotLoaded(i64, RestorePayload),
     /// 项目:`git_watch` 监听到工作区/`.git` 引用变化,该重新跑一次 git 刷新
     /// 了(D4)。`Relevance` 决定这次触发要不要顺带做 Plan 2 的 Git Log 快照
-    /// 重建。这条消息同时喂给 Files(刷新 branch/dirty/git_statuses/worktrees)
-    /// 和 Git Log(条件触发快照重建)两个独立扩展,内核继续拦截、分别转发,
-    /// 不包进 `files::Message`。
+    /// 重建。这条消息同时喂给 Files(刷新 git_statuses)、Project(刷新
+    /// branch/dirty/worktrees)和 Git Log(条件触发快照重建)三个独立扩展,
+    /// 内核继续拦截、分别转发,不包进任何一个 extension 的 `Message`。
     ProjectFsChanged(ProjectId, git_watch::Relevance),
     /// Git Log 面板的全部消息,内核只转发不解读——见
     /// `extensions::git_log::Message`。
     GitLog(git_log::Message),
     /// Files 面板的全部消息,内核只转发不解读——见 `extensions::files::Message`。
     Files(files::Message),
+    /// Project 信息面板的全部消息,内核只转发不解读——见
+    /// `extensions::project::Message`。
+    Project(project::Message),
     /// UI 整体放大(Ctrl +)：放大/还原的全局 scale 乘一个步近因子,下一帧
     /// 按新 scale 重排全部图标/字号/间距/骨架。
     ZoomIn,
@@ -1322,8 +1335,8 @@ pub struct Workspace {
     /// 本项目的实时文件系统监听(D4)。`None` 只可能出现在 watcher 启动
     /// 失败时(降级为"只在开项目/回合结束时刷新")。Drop 时自动停止。
     git_watch: Option<git_watch::Handle>,
-    /// 顶栏胶囊用的项目级目标（打开项目时同步读 .dozer/goal.md）。
-    project_goal: Option<Goal>,
+    /// Project 信息面板 per-project 状态——见 `extensions::project::WorkspaceState`。
+    project_panel: project::WorkspaceState,
     /// 终端 tab 栏当前最左可见 tab 序号（箭头翻页用；P1L T5）。
     term_tab_first: usize,
     /// 预览 tab 栏当前最左可见 tab 序号，语义同 `term_tab_first`。
@@ -1524,7 +1537,8 @@ impl Workspace {
         }
 
         let files = files::WorkspaceState::new(FileTree::new(PathBuf::from(&project.path)));
-        let project_goal = load_project_goal(&project.path);
+        let repo_path = PathBuf::from(&project.path);
+        let project_panel = project::WorkspaceState::new(project::load_goal(&repo_path));
 
         let mut ws = Self {
             tabs,
@@ -1533,7 +1547,7 @@ impl Workspace {
             pending: HashMap::new(),
             project: Some(project),
             files,
-            project_goal,
+            project_panel,
             recent_projects,
             // 必须在 `restore_preview_state()` **之前**就位:那一步会把重开的
             // 预览文件写进白名单,写晚了就写到了一个没人看的 Arc 上。
@@ -1549,7 +1563,7 @@ impl Workspace {
         ws.ensure_project_terminal(io);
         // 认回上次退出前打开的预览文件 tab（重启后自动重开）。
         ws.restore_preview_state();
-        ws.spawn_project_git_refresh(io);
+        spawn_project_git_refresh(project_id, repo_path, io);
         ws.spawn_conversations_refresh(io);
         ws.spawn_acceptance_count_refresh(io);
         browser::request_bookmarks_refresh(
@@ -1614,7 +1628,7 @@ impl Workspace {
             conversations: Vec::new(),
             usage: usage::WorkspaceState::default(),
             project: None,
-            project_goal: None,
+            project_panel: project::WorkspaceState::default(),
             recent_projects: Vec::new(),
             git_watch: None,
             term_tab_first: 0,
@@ -1640,11 +1654,12 @@ impl Workspace {
     /// GUI。同步构造 + 恒有 `project` 是这条不变式的落地方式。
     fn loading_for_project(project: ProjectInfo) -> Self {
         let files = files::WorkspaceState::new(FileTree::new(PathBuf::from(&project.path)));
-        let project_goal = load_project_goal(&project.path);
+        let project_panel =
+            project::WorkspaceState::new(project::load_goal(Path::new(&project.path)));
         Self {
             project: Some(project),
             files,
-            project_goal,
+            project_panel,
             loading: true,
             ..Self::empty_for_project_placeholder()
         }
@@ -1847,7 +1862,7 @@ impl Workspace {
                 Some(repo) => client.acceptance_count(&repo).await.ok(),
                 None => None,
             };
-            let _ = proxy.send_event(Message::Files(files::Message::AcceptanceCountLoaded(
+            let _ = proxy.send_event(Message::Project(project::Message::AcceptanceCountLoaded(
                 project_id, n,
             )));
         });
@@ -1893,22 +1908,6 @@ impl Workspace {
         });
     }
 
-    /// 异步刷新当前项目的 git 分支/脏/文件状态/worktree 列表(打开项目 +
-    /// 回合结束 + `git_watch` 检测到变化时触发,见 `Message::ProjectFsChanged`)。
-    /// 薄封装,真正的查询逻辑在 `extensions::files::spawn_git_refresh`。
-    fn spawn_project_git_refresh(&self, io: &ShellIo) {
-        let Some(p) = &self.project else {
-            return;
-        };
-        let project_id = p.id;
-        let repo_path = PathBuf::from(&p.path);
-        let proxy = io.proxy.clone();
-        let emit = move |m| {
-            let _ = proxy.send_event(Message::Files(m));
-        };
-        files::spawn_git_refresh(project_id, repo_path, &io.handle, emit);
-    }
-
     /// 项目切换清理：关掉所有终端 tab（=结束会话，同 CloseTab 语义）与
     /// 所有预览 tab，给新项目一个干净起点（P1g 验收反馈）。webview 池由
     /// main.rs 的 sync_previews 依据空的期望清单自动销毁。
@@ -1952,11 +1951,13 @@ impl Workspace {
         self.git_watch = None;
         self.conversations = Vec::new();
         self.usage = usage::WorkspaceState::default();
-        self.project_goal = load_project_goal(&project.path);
+        let project_id = project.id;
+        let repo_path = PathBuf::from(&project.path);
+        self.project_panel = project::WorkspaceState::new(project::load_goal(&repo_path));
         self.project = Some(project);
         self.ensure_project_terminal(io);
         self.restore_preview_state();
-        self.spawn_project_git_refresh(io);
+        spawn_project_git_refresh(project_id, repo_path, io);
         self.spawn_conversations_refresh(io);
         self.spawn_acceptance_count_refresh(io);
         browser::request_bookmarks_refresh(
@@ -2238,6 +2239,11 @@ impl Workspace {
         self.files.tree_edit_is_some()
     }
 
+    /// 项目信息面板标题是否处于自绘编辑态(main.rs 键盘路由用)。
+    pub fn project_title_editing(&self) -> bool {
+        self.project_panel.title_editing_is_some()
+    }
+
     /// 当前项目根路径(供 main.rs 算相对路径用;未打开项目时 None)。
     pub fn active_project_path(&self) -> Option<PathBuf> {
         self.project.as_ref().map(|p| PathBuf::from(&p.path))
@@ -2255,6 +2261,7 @@ impl Workspace {
         }
         self.acceptance.clear_comment_editing();
         self.files.cancel_tree_edit();
+        self.project_panel.cancel_title_edit();
     }
 
     /// 协议闭包共享的文件白名单句柄.
@@ -2272,6 +2279,39 @@ impl Workspace {
             .map(|t| t.model.app_cursor_mode())
             .unwrap_or(false)
     }
+}
+
+/// 异步跑一次组合 git 查询(分支/脏/文件状态/worktree),完成后分发成两条
+/// 独立消息:`Files(StatusesRefreshed)` 只带文件级状态,`Project(GitRefreshed)`
+/// 带分支/脏/worktree。两个 extension 互不知道对方存在,内核是唯一知道
+/// "这两份数据同源"的地方(设计文档"关键语义确认")。4 个既有调用点:
+/// `Workspace::from_restore`/`adopt_project`/回合结束(`DeliveryChecked`)/
+/// `Message::ProjectFsChanged`——因为要同时认识 `files::Message`/
+/// `project::Message` 两个类型,不适合作为任何一个 extension 的自由函数,
+/// 也不需要 `&self`,做成纯自由函数、参数显式传入。
+fn spawn_project_git_refresh(project_id: i64, repo_path: PathBuf, io: &ShellIo) {
+    let proxy = io.proxy.clone();
+    io.handle.spawn(async move {
+        let (b, d, s, w) = tokio::task::spawn_blocking({
+            let repo_path = repo_path.clone();
+            move || {
+                (
+                    delivery::branch(&repo_path),
+                    delivery::is_dirty(&repo_path),
+                    delivery::file_statuses(&repo_path),
+                    delivery::worktrees(&repo_path),
+                )
+            }
+        })
+        .await
+        .unwrap_or((None, false, HashMap::new(), Vec::new()));
+        let _ = proxy.send_event(Message::Files(files::Message::StatusesRefreshed(
+            project_id, s,
+        )));
+        let _ = proxy.send_event(Message::Project(project::Message::GitRefreshed(
+            project_id, b, d, w,
+        )));
+    });
 }
 
 impl App {
@@ -2611,6 +2651,12 @@ impl App {
     /// 项目树是否处于行内编辑态(main.rs 键盘路由用)。
     pub fn tree_editing(&self) -> bool {
         self.active_workspace().is_some_and(|ws| ws.tree_editing())
+    }
+
+    /// 项目信息面板标题是否处于自绘编辑态(main.rs 键盘路由用)。
+    pub fn project_title_editing(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.project_title_editing())
     }
 
     /// 当前项目根路径(供 main.rs 算相对路径用;未打开项目时 None)。
@@ -3059,7 +3105,9 @@ impl App {
                         }
                     }
                     // 回合结束后刷新项目 git 状态,文件树装饰随之更新（P1h）。
-                    ws.spawn_project_git_refresh(io);
+                    if let Some(project) = &ws.project {
+                        spawn_project_git_refresh(project_id, PathBuf::from(&project.path), io);
+                    }
                     // 回合结束后刷新对话列表(transcript 增长/新增；P1j)。
                     ws.spawn_conversations_refresh(io);
                 });
@@ -3818,12 +3866,7 @@ impl App {
             Message::ProjectFsChanged(project_id, relevance) => {
                 self.with_project(project_id, |ws, io| {
                     let Some(project) = &ws.project else { return };
-                    let repo_path = PathBuf::from(&project.path);
-                    let proxy = io.proxy.clone();
-                    let emit = move |m| {
-                        let _ = proxy.send_event(Message::Files(m));
-                    };
-                    files::spawn_git_refresh(project_id, repo_path, &io.handle, emit);
+                    spawn_project_git_refresh(project_id, PathBuf::from(&project.path), io);
                 });
                 // 只有 `.git` 引用类变化(分支切换/外部提交/其他 worktree
                 // 提交)才值得重建 Git Log 快照——纯工作区文件编辑不影响
@@ -3897,10 +3940,8 @@ impl App {
                 self.update(Message::PreviewOpenPath(path));
             }
             Message::Files(
-                msg @ (files::Message::GitRefreshed(project_id, ..)
-                | files::Message::PasteDone(project_id, ..)
-                | files::Message::OpDone { project_id, .. }
-                | files::Message::AcceptanceCountLoaded(project_id, ..)),
+                msg @ (files::Message::PasteDone(project_id, ..)
+                | files::Message::OpDone { project_id, .. }),
             ) => {
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
@@ -3927,6 +3968,19 @@ impl App {
                     return;
                 };
                 files::update(&mut ws.files, app_files, msg, project_id, &handle, emit);
+            }
+            Message::Project(msg) => {
+                let Some(project_id) = self.active_project_id else {
+                    return;
+                };
+                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+                    return;
+                };
+                let Some(project) = ws.project.as_ref() else {
+                    return;
+                };
+                let repo_path = Path::new(&project.path).to_path_buf();
+                project::update(&mut ws.project_panel, msg, project_id, &repo_path);
             }
             Message::ZoomIn => {
                 crate::theme::icon_size::zoom_by(UI_ZOOM_STEP);
@@ -4333,33 +4387,6 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
     let tabs = container(project_tabs_row(app)).width(Length::Fill);
 
     let mut right = row![].spacing(10);
-    if let Some(cap) = app
-        .active_workspace()
-        .and_then(|ws| goal_capsule_text(ws.project_goal.as_ref(), 28))
-    {
-        let capsule = container(
-            row![
-                text("●")
-                    .size(theme::font::dot_sm())
-                    .color(theme::color::GOLD),
-                text(cap)
-                    .size(theme::font::body())
-                    .color(theme::color::CREAM)
-            ]
-            .spacing(6),
-        )
-        .padding([5, 10])
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::CARD.into()),
-            border: Border {
-                color: theme::color::GOLD,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..container::Style::default()
-        });
-        right = right.push(capsule);
-    }
     // 设计稿"btn settings"外框 padding-left 6 / padding-y 4(hit-box 留白,
     // 图标本身仍是 16x16)。目前尚未接入设置面板,先只还原视觉,不加
     // on_press——没有对应 Message 变体可派发。
@@ -5662,6 +5689,18 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_wi
         ))
         .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftTodo), true))
         .on_exit(Message::Hover(HoverId::Rail(RailButton::LeftTodo), false)),
+        // Project 信息面板入口：项目名 / git 分支+脏标 / 验收次数 / 可编辑目标。
+        MouseArea::new(rail_icon_button(
+            icons::IconKind::Info,
+            app.left_view == LeftView::Project && left_open,
+            app.hover_progress(HoverId::Rail(RailButton::LeftProject)),
+            Message::LeftIconSelect(LeftView::Project),
+        ))
+        .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftProject), true))
+        .on_exit(Message::Hover(
+            HoverId::Rail(RailButton::LeftProject),
+            false
+        )),
     ]
     .spacing(region.gap)
     .padding(region.padding);
@@ -5946,15 +5985,12 @@ fn left_panel_area<'a>(
                 if ws.project.is_some() {
                     files::view(
                         &ws.files,
-                        ws.project.as_ref(),
-                        app.daemon_error.is_none(),
                         Length::FillPortion(list_portion),
                         zone_pane_border(zone, lc),
                     )
                     .map(Message::Files)
                 } else {
                     no_project_placeholder(
-                        app,
                         ws,
                         Length::FillPortion(list_portion),
                         zone_pane_border(zone, lc),
@@ -6011,6 +6047,13 @@ fn left_panel_area<'a>(
             )
             .map(Message::Todo)
         }
+        LeftView::Project => project::view(
+            &ws.project_panel,
+            ws.project.as_ref(),
+            Length::Fill,
+            zone_pane_border(zone, ac),
+        )
+        .map(Message::Project),
     };
     if maximized {
         return inner;
@@ -6020,7 +6063,7 @@ fn left_panel_area<'a>(
     // 显示——用户可能就是先想看看有哪些 worktree,不必等图先画出来。
     let strip: Option<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> =
         if app.left_view == LeftView::GitLog {
-            Some(worktree_strip(ws.files.worktrees()))
+            Some(worktree_strip(ws.project_panel.worktrees()))
         } else {
             None
         };
@@ -6281,10 +6324,8 @@ pub(crate) fn lh<'a>(
 /// `LeftView::Files` 在没有打开项目时的占位:"未打开项目"提示 + 最近项目
 /// 列表(点击即打开)。这是一个项目切换器,不是文件树的一部分,`files` 模块
 /// 不认识 `ws.recent_projects`/`Message::ProjectSelect` 这些核心概念,留在
-/// 内核(现有 `project_pane` 的 `None` 分支的搬家版本,渲染结构原样保留,
-/// 含底部状态条——原代码不论 `Some`/`None` 都无条件画它)。
+/// 内核(现有 `project_pane` 的 `None` 分支的搬家版本,渲染结构原样保留)。
 fn no_project_placeholder<'a>(
-    app: &'a App,
     ws: &'a Workspace,
     width: Length,
     outer: Border,
@@ -6333,13 +6374,7 @@ fn no_project_placeholder<'a>(
         border: outer,
         ..container::Style::default()
     });
-    container(column![
-        body,
-        files::project_status_bar(app.daemon_error.is_none(), &ws.files, outer)
-    ])
-    .width(width)
-    .height(Length::Fill)
-    .into()
+    container(body).width(width).height(Length::Fill).into()
 }
 
 /// 终端栏底状态条：当前激活 tab 的 agent 态 · resume · dozerd 持有。
@@ -7053,38 +7088,6 @@ fn effective_project_repo(active: Option<&Path>, session_cwd: &Path) -> PathBuf 
     active
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| session_cwd.to_path_buf())
-}
-
-/// 项目卡分支标签：`分支` / `分支*`（脏）/ `—`（非 git）。
-pub(crate) fn project_branch_label(branch: Option<&str>, dirty: bool) -> String {
-    match branch {
-        Some(b) if dirty => format!("{b}*"),
-        Some(b) => b.to_string(),
-        None => "—".to_string(),
-    }
-}
-
-/// 顶栏目标胶囊文案：`目标：{标题}`；标题过长按字符截断加省略号。
-/// 无 goal 或空标题 → None（胶囊隐藏）。`max_chars` 含省略号占位。
-fn goal_capsule_text(goal: Option<&Goal>, max_chars: usize) -> Option<String> {
-    let title = goal?.title.trim();
-    if title.is_empty() {
-        return None;
-    }
-    let shown = if title.chars().count() > max_chars {
-        let mut s: String = title.chars().take(max_chars.saturating_sub(1)).collect();
-        s.push('…');
-        s
-    } else {
-        title.to_string()
-    };
-    Some(format!("目标：{shown}"))
-}
-
-/// 同步读 `.dozer/goal.md` 并解析（顶栏胶囊用；文件极小，可容忍同步读）。
-fn load_project_goal(repo_path: &str) -> Option<Goal> {
-    let md = std::fs::read_to_string(goal::goal_path(Path::new(repo_path))).ok()?;
-    goal::parse_goal(&md)
 }
 
 /// 从项目路径求"验收查询键"：与落库侧同款 `delivery::repo_root`（git
@@ -8313,13 +8316,6 @@ mod tests {
     }
 
     #[test]
-    fn project_card_branch_label() {
-        assert_eq!(project_branch_label(Some("main"), false), "main");
-        assert_eq!(project_branch_label(Some("main"), true), "main*");
-        assert_eq!(project_branch_label(None, false), "—");
-    }
-
-    #[test]
     fn preview_column_hit_test() {
         // 窗口宽 1440:左图标栏 44 + 左面板区 640(项目树 0.35=224 + 分隔线 8)。
         // 预览内容列 = [273.2, 684)。
@@ -8670,35 +8666,6 @@ mod tests {
             ("环境正常 · dozerd 运行中", theme::color::GREEN)
         );
         assert_eq!(env_status_text(false), ("dozerd 未连接", theme::color::RED));
-    }
-
-    #[test]
-    fn goal_capsule_prefixes_and_truncates() {
-        use crate::goal::Goal;
-        let g = Goal {
-            title: "会话存活 daemon 雏形".into(),
-            criteria: vec![],
-        };
-        assert_eq!(
-            goal_capsule_text(Some(&g), 100).as_deref(),
-            Some("目标：会话存活 daemon 雏形")
-        );
-        // 过长按字符截断并加省略号（max_chars 含省略号位）
-        let long = Goal {
-            title: "一二三四五六七八九十".into(),
-            criteria: vec![],
-        };
-        assert_eq!(
-            goal_capsule_text(Some(&long), 5).as_deref(),
-            Some("目标：一二三四…")
-        );
-        // 无 goal / 空标题 → None（胶囊隐藏）
-        assert_eq!(goal_capsule_text(None, 10), None);
-        let empty = Goal {
-            title: "   ".into(),
-            criteria: vec![],
-        };
-        assert_eq!(goal_capsule_text(Some(&empty), 10), None);
     }
 
     fn make_test_tab(rt: &tokio::runtime::Runtime, id: &str, agent: AgentKind) -> SessionTab {

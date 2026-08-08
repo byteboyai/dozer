@@ -1,12 +1,11 @@
-//! Files(项目文件树)面板:项目信息卡 + git 分支/脏标/worktree 速览数据 +
-//! 文件树 + 右键菜单/删除确认浮层。阶段 1 扩展化重构第四个试点,设计见
+//! Files(项目文件树)面板:文件树 + 右键菜单/删除确认浮层。阶段 1 扩展化
+//! 重构第四个试点,设计见
 //! `docs/superpowers/specs/2026-08-07-files-extension-pilot-design.md`。
-use crate::delivery::{FileGitStatus, WorktreeInfo};
+use crate::delivery::FileGitStatus;
 use crate::project::{FileTree, PathKind};
 use crate::theme::terminal_font;
 use crate::workspace::AddrEvent;
 use crate::{delivery, icons, theme};
-use dozer_core::protocol::ProjectInfo;
 use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Element, Length, Padding};
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
@@ -46,11 +45,7 @@ pub(super) struct ContextMenu {
 #[derive(Default)]
 pub struct WorkspaceState {
     file_tree: Option<FileTree>,
-    branch: Option<String>,
-    dirty: bool,
     git_statuses: HashMap<PathBuf, FileGitStatus>,
-    worktrees: Vec<WorktreeInfo>,
-    project_acceptance_count: Option<u64>,
     tree_selected: Option<PathBuf>,
     tree_clipboard: Option<(PathBuf, bool)>,
     tree_error: Option<String>,
@@ -67,18 +62,11 @@ pub struct AppState {
 }
 
 /// 对应现在顶层 `Message` 里的 20 个 `ProjectTreeXxx`/`ProjectGitRefreshed`/
-/// `AcceptanceCountLoaded`/`RightClickAt` 变体,去前缀原样搬来。
+/// `RightClickAt` 变体,去前缀原样搬来。
 #[derive(Debug, Clone)]
 pub enum Message {
     Toggle(PathBuf),
-    GitRefreshed(
-        i64,
-        Option<String>,
-        bool,
-        HashMap<PathBuf, FileGitStatus>,
-        Vec<WorktreeInfo>,
-    ),
-    AcceptanceCountLoaded(i64, Option<u64>),
+    StatusesRefreshed(i64, HashMap<PathBuf, FileGitStatus>),
     RightClickAt {
         x: f32,
         y: f32,
@@ -131,17 +119,7 @@ impl WorkspaceState {
     pub fn reset_for_project(&mut self, file_tree: FileTree) {
         self.file_tree = Some(file_tree);
         self.tree_selected = None;
-        self.branch = None;
-        self.dirty = false;
         self.git_statuses = HashMap::new();
-        self.project_acceptance_count = None;
-    }
-
-    /// 供内核 `worktree_strip`(Git Log 视图外层装饰,不属于
-    /// `extensions::git_log`)读取——`worktrees` 数据来自这次 git 刷新,但
-    /// 消费方是 Git Log 视图,见设计文档"关键语义确认"。
-    pub fn worktrees(&self) -> &[WorktreeInfo] {
-        &self.worktrees
     }
 
     /// 供内核判断"删除确认浮层该不该显示"(`App::view()` 顶层互斥浮层
@@ -345,14 +323,8 @@ pub fn update(
                 tree.toggle(&dir);
             }
         }
-        Message::GitRefreshed(_, branch, dirty, statuses, worktrees) => {
-            ws_state.branch = branch;
-            ws_state.dirty = dirty;
+        Message::StatusesRefreshed(_, statuses) => {
             ws_state.git_statuses = statuses;
-            ws_state.worktrees = worktrees;
-        }
-        Message::AcceptanceCountLoaded(_, n) => {
-            ws_state.project_acceptance_count = n;
         }
         Message::RightClickAt { x, y } => {
             app_state.last_right_click = (x, y);
@@ -499,97 +471,18 @@ pub fn update(
         }
     }
 }
-/// 内核在项目打开(`from_restore`/`adopt_project`)/`ProjectFsChanged`/手动
-/// 刷新等 4 个现有调用点直接调用,异步跑 4 个 git 查询,完成后经 `emit` 送回
-/// `GitRefreshed`。现有 `Workspace::spawn_project_git_refresh` 的搬家版本,
-/// 逻辑不变。
-pub fn spawn_git_refresh(
-    project_id: i64,
-    repo_path: PathBuf,
-    handle: &tokio::runtime::Handle,
-    emit: impl Fn(Message) + Send + 'static,
-) {
-    handle.spawn(async move {
-        let (b, d, s, w) = tokio::task::spawn_blocking(move || {
-            (
-                crate::delivery::branch(&repo_path),
-                crate::delivery::is_dirty(&repo_path),
-                crate::delivery::file_statuses(&repo_path),
-                crate::delivery::worktrees(&repo_path),
-            )
-        })
-        .await
-        .unwrap_or((None, false, HashMap::new(), Vec::new()));
-        emit(Message::GitRefreshed(project_id, b, d, s, w));
-    });
-}
 
-/// 项目信息卡 + 文件树可滚动列表(现有 `workspace.rs::project_pane` 的搬家
-/// 版本,签名改吃本模块状态)。`project` 用 `Option<&ProjectInfo>`——项目身份
-/// 是内核概念,本模块只认"文件树数据"。
+/// 文件树可滚动列表(现有 `workspace.rs::project_pane` 的搬家版本,签名改吃
+/// 本模块状态,去掉了不再归属本模块的项目信息卡/底部状态条)。
 pub fn view<'a>(
     ws_state: &'a WorkspaceState,
-    project: Option<&'a ProjectInfo>,
-    daemon_ok: bool,
     width: Length,
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = theme::region::project_pane();
-    // `project` 为 `None` 时本模块给不出有意义的文件树——"未打开项目"的兜底
-    // UI(最近项目列表)是项目切换器,属内核职责,由内核在 `LeftView::Files`
-    // 分支自行渲染,这里返回空列。
-    let Some(p) = project else {
-        return column![].into();
-    };
-    // 头部:项目信息卡,固定在文件树上方,不随滚动条滚走(需求 1)。
     let mut header = column![].spacing(region.gap).width(Length::Fill);
-    // 文件树行:唯一进入 scrollable 的内容。
     let mut tree_col = column![].spacing(region.gap);
 
-    let label = crate::workspace::project_branch_label(ws_state.branch.as_deref(), ws_state.dirty);
-    let bcolor = if ws_state.dirty {
-        theme::color::GOLD
-    } else {
-        theme::color::BODY
-    };
-    // 需求 3:git 分支名前加 git-branch icon;需求 2:去掉完整文件路径。
-    let mut card_col = column![
-        text(p.name.clone())
-            .size(theme::font::title())
-            .color(theme::color::CREAM),
-        row![
-            icons::view(
-                icons::IconKind::GitBranch,
-                crate::theme::icon_size::row(),
-                bcolor
-            ),
-            text(label).size(theme::font::label()).color(bcolor),
-        ]
-        .spacing(6)
-        .align_y(iced_widget::core::Alignment::Center),
-    ]
-    .spacing(2);
-    if let Some(n) = ws_state.project_acceptance_count.filter(|n| *n > 0) {
-        card_col = card_col.push(
-            text(format!("{n} 次验收"))
-                .size(theme::font::caption())
-                .color(theme::color::GOLD),
-        );
-    }
-    let card =
-        container(card_col)
-            .width(Length::Fill)
-            .padding(10)
-            .style(|_t: &iced_widget::Theme| container::Style {
-                background: Some(theme::color::CARD.into()),
-                border: Border {
-                    color: theme::color::BORDER,
-                    width: 1.0,
-                    radius: 8.0.into(),
-                },
-                ..container::Style::default()
-            });
-    header = header.push(card);
     if let Some(err) = &ws_state.tree_error {
         header = header.push(
             text(format!("⚠ {err}"))
@@ -733,8 +626,6 @@ pub fn view<'a>(
         }
     }
 
-    // 头部(项目信息卡)固定在文件树上方、不进 scrollable,所以即使文件树
-    // 出现滚动条,项目信息也始终可见;scrollable 只承载文件树行。
     let body = container(
         column![
             header,
@@ -757,63 +648,7 @@ pub fn view<'a>(
         ..container::Style::default()
     });
 
-    // 底栏(`project_status_bar`)是贴在 `body` 下方的独立元素,若它自己的
-    // 底角不收圆,方角会戳出 `body` 已收圆的左下角,在 zone 圆角 CARD 背景上
-    // 顶出一个小尖角——所以把 `outer` 的圆角半径透给底栏,只收底角,保留它
-    // 自己那条 1px 上边分隔线。
-    container(column![
-        body,
-        project_status_bar(daemon_ok, ws_state, outer)
-    ])
-    .width(width)
-    .height(Length::Fill)
-    .into()
-}
-
-/// 项目栏底状态条：左 环境/dozerd 点，右 [文件|git {分支}|组件]（文件高亮,组件占位）。
-/// 泛型化(同 `crate::workspace::status_bar_container`)——纯展示,不产生任何
-/// 消息,内核在"未打开项目"占位里也要复用它(见 `no_project_placeholder`),
-/// 那边的 `Element` 泛型参数是顶层 `Message`,不是 `files::Message`。
-pub(crate) fn project_status_bar<'a, Msg: 'a>(
-    daemon_ok: bool,
-    ws_state: &'a WorkspaceState,
-    outer: Border,
-) -> Element<'a, Msg, iced_widget::Theme, iced_widget::Renderer> {
-    let (env, dot) = crate::workspace::env_status_text(daemon_ok);
-    let left = row![
-        text("●").size(theme::font::dot_sm()).color(dot),
-        text(env)
-            .size(theme::font::caption())
-            .color(theme::color::BODY)
-    ]
-    .spacing(6);
-    let git = format!(
-        "git {}",
-        crate::workspace::project_branch_label(ws_state.branch.as_deref(), ws_state.dirty)
-    );
-    let tabs = row![
-        text("文件")
-            .size(theme::font::caption())
-            .color(theme::color::CREAM),
-        text("·")
-            .size(theme::font::caption())
-            .color(theme::color::DIM),
-        text(git)
-            .size(theme::font::caption())
-            .color(theme::color::BODY),
-        text("·")
-            .size(theme::font::caption())
-            .color(theme::color::DIM),
-        text("组件")
-            .size(theme::font::caption())
-            .color(theme::color::DIM),
-    ]
-    .spacing(6);
-    crate::workspace::status_bar_container(
-        row![left, iced_widget::space::horizontal(), tabs]
-            .align_y(iced_widget::core::Alignment::Center),
-        outer,
-    )
+    container(body).width(width).height(Length::Fill).into()
 }
 
 /// 行内编辑框(新建/重命名共用):自绘输入,尾缀 "▏" 模拟光标,与地址栏/
@@ -1475,7 +1310,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn git_refreshed_updates_four_fields() {
+    async fn statuses_refreshed_updates_git_statuses() {
         let mut ws_state = ws_with_tree(std::env::temp_dir());
         let mut app_state = AppState::default();
         let mut statuses = HashMap::new();
@@ -1491,14 +1326,12 @@ mod tests {
         update(
             &mut ws_state,
             &mut app_state,
-            Message::GitRefreshed(1, Some("main".to_string()), true, statuses, Vec::new()),
+            Message::StatusesRefreshed(1, statuses.clone()),
             1,
             &handle,
             |_| {},
         );
-        assert_eq!(ws_state.branch.as_deref(), Some("main"));
-        assert!(ws_state.dirty);
-        assert_eq!(ws_state.worktrees().len(), 0);
+        assert_eq!(ws_state.git_statuses.len(), 1);
     }
 
     #[tokio::test]
