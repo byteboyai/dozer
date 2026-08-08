@@ -41,6 +41,8 @@ pub enum IconKind {
     SquarePlus,
     GitBranch,
     ListChecks,
+    /// 项目信息面板 rail 图标(Lucide info)。
+    Info,
     /// 浏览器地址栏"加入/移出收藏"星标(Lucide star)。已收藏态靠调用方
     /// 传 GOLD 而非切换到另一份实心图标——`icons::view` 只管描边色,单一
     /// 资源足够表达"已收藏/未收藏"两态(YAGNI,不新增 filled 变体)。
@@ -95,6 +97,7 @@ impl IconKind {
             IconKind::SquarePlus => include_bytes!("../assets/icons/square-plus.svg"),
             IconKind::GitBranch => include_bytes!("../assets/icons/git-branch.svg"),
             IconKind::ListChecks => include_bytes!("../assets/icons/list-checks.svg"),
+            IconKind::Info => include_bytes!("../assets/icons/info.svg"),
             IconKind::Star => include_bytes!("../assets/icons/star.svg"),
             IconKind::Bookmark => include_bytes!("../assets/icons/bookmark.svg"),
             IconKind::BarChart3 => include_bytes!("../assets/icons/bar-chart-3.svg"),
