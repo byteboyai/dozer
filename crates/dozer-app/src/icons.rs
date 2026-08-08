@@ -55,8 +55,15 @@ pub enum IconKind {
     BadgeCheck,
     /// 终端/Shell(纯 Shell 启动项),Lucide。
     Terminal,
-    /// Dozer 品牌标(dozer-logo-main.jpeg → potrace 矢量化),
-    /// 只用于顶栏"Dozer"页签,与其他 Lucide 图标同款通过 `currentColor` 着色。
+    /// 首页左栏"项目列表" pane rail 图标(Lucide layout-list)。
+    LayoutList,
+    /// 首页左栏"Recents" pane rail 图标(Lucide history)。
+    History,
+    /// Dozer 品牌标(dozer-logo-main.jpeg → potrace 矢量化)。首页项目列表
+    /// pane 的品牌行在 2026-08-08 首页四栏化重构中被删除(顶栏已有
+    /// `dozer_home_tab` 品牌页签,视觉去重),这个变体暂时没有调用点——资源
+    /// 本身保留(重新矢量化成本不低),供以后需要展示这枚定制矢量标时复用。
+    #[allow(dead_code)]
     Dozer,
     /// Agent 品牌标(着色用 `currentColor`,由调用方按 agent 指定主题色)。
     /// 来源:Claude/CodeBuddy 取自 Simple Icons,OpenCode 取自其官网 favicon 并
@@ -103,6 +110,8 @@ impl IconKind {
             IconKind::BarChart3 => include_bytes!("../assets/icons/bar-chart-3.svg"),
             IconKind::BadgeCheck => include_bytes!("../assets/icons/badge-check.svg"),
             IconKind::Terminal => include_bytes!("../assets/icons/terminal.svg"),
+            IconKind::LayoutList => include_bytes!("../assets/icons/layout-list.svg"),
+            IconKind::History => include_bytes!("../assets/icons/history.svg"),
             IconKind::Dozer => include_bytes!("../assets/icons/dozer-logo.svg"),
             IconKind::Claude => include_bytes!("../assets/icons/claude.svg"),
             IconKind::Codebuddy => include_bytes!("../assets/icons/codebuddy.svg"),
