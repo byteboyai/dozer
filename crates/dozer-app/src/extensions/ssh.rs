@@ -118,6 +118,39 @@ fn keyring_entry(project_id: i64, host_id: &str) -> Result<keyring::Entry, keyri
     keyring::Entry::new("dozer-ssh", &format!("{project_id}:{host_id}"))
 }
 
+/// 从 Keychain 读某台主机的密码/私钥口令,读不到按无密码处理(不 panic,
+/// 同阶段 1 `TestConnection` 分支的既有口径)。`spawn_ssh_tab`/`update`
+/// 里的 `TestConnection` 分支共用这个,不重复写 `.ok().and_then(..)`。
+pub(crate) fn keyring_password(project_id: i64, host_id: &str) -> Option<String> {
+    keyring_entry(project_id, host_id)
+        .ok()
+        .and_then(|e| e.get_password().ok())
+}
+
+/// 合成 SSH tab 的 `SessionInfo`(`dozer_core::protocol::SessionInfo` 没有
+/// `Default` impl,9 个字段全要给值)。`command`/`created_ms` 现状全仓库
+/// 没有任何地方读取,给有意义但不影响功能的值,不留空。
+pub(crate) fn synth_session_info(
+    host: &SshHost,
+    project_id: i64,
+) -> dozer_core::protocol::SessionInfo {
+    dozer_core::protocol::SessionInfo {
+        id: format!("ssh:{}", host.id),
+        name: format!("ssh: {}", host.name),
+        command: format!("ssh {}@{}:{}", host.username, host.host, host.port),
+        cwd: "~".to_string(),
+        alive: true,
+        created_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0),
+        agent_state: dozer_core::protocol::AgentState::Idle,
+        transcript_path: None,
+        project_id: Some(project_id),
+        agent: dozer_core::protocol::AgentKind::Unknown,
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum SshError {
     Russh(russh::Error),
@@ -378,9 +411,7 @@ pub fn update(
                 return;
             };
             ws_state.test_status.insert(id.clone(), TestStatus::Testing);
-            let password = keyring_entry(project_id, &id)
-                .ok()
-                .and_then(|e| e.get_password().ok());
+            let password = keyring_password(project_id, &id);
             handle.spawn(async move {
                 let result = tokio::time::timeout(
                     std::time::Duration::from_secs(5),

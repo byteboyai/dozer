@@ -1381,6 +1381,10 @@ pub struct Workspace {
     /// 发起新建会话(create+attach)期间的转发任务句柄暂存区，
     /// `Message::TabAttached` 到达时取出、装进新建的 `SessionTab`。
     pending: HashMap<usize, tokio::task::JoinHandle<()>>,
+    /// SSH tab 创建期间的写指令发送端暂存区,语义同 `pending`——
+    /// `on_tab_attached` 时取出,取得到就是 SSH tab(`backend = Ssh {
+    /// out }`),取不到就是本地 tab(`backend = Daemon`)。
+    ssh_out_pending: HashMap<usize, mpsc::UnboundedSender<SshOut>>,
     /// 预览域状态机(P1d).
     preview: PreviewPane,
     /// 预览域错误文案(打开文件失败等), RED 显示在预览栏地址栏下方。
@@ -1702,6 +1706,7 @@ impl Workspace {
             active: 0,
             next_tab_id: 0,
             pending: HashMap::new(),
+            ssh_out_pending: HashMap::new(),
             preview: PreviewPane::default(),
             preview_error: None,
             browser: browser::State::default(),
@@ -2235,6 +2240,167 @@ impl Workspace {
         Some(tab_id)
     }
 
+    /// SSH 版 `spawn_new_tab`:握手 + host key 校验 + 认证 + 开 channel +
+    /// request_pty/request_shell,成功后进入读写泵循环。10 秒超时罩住
+    /// "握手到 channel 就绪"这一段(同阶段 1 `test_connection` 的超时
+    /// 口径,泵循环本身不设超时——那是长连接,超时语义不适用)。
+    fn spawn_ssh_tab(&mut self, io: &ShellIo, host_id: String) {
+        if self.loading {
+            return; // 同 spawn_new_tab:促成中的占位不建会话
+        }
+        let Some(host) = self.ssh.hosts().iter().find(|h| h.id == host_id).cloned() else {
+            return;
+        };
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        let project_id = project.id;
+        let (cols, rows) = (io.cols, io.rows);
+        let tab_id = self.next_tab_id;
+        self.next_tab_id += 1;
+
+        let password = ssh::keyring_password(project_id, &host_id);
+        let (tx_out, mut rx_out) = mpsc::unbounded_channel::<SshOut>();
+        let proxy = io.proxy.clone();
+
+        let jh = io.handle.spawn(async move {
+            let handshake_result = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                ssh::handshake(&host, password),
+            )
+            .await;
+            let mut handle = match handshake_result {
+                Ok(Ok(h)) => h,
+                Ok(Err(ssh::SshError::UnknownHostKey { fingerprint, key_bytes })) => {
+                    let _ = proxy.send_event(Message::Ssh(ssh::Message::UnknownKeyDetected(
+                        project_id,
+                        host_id.clone(),
+                        fingerprint.clone(),
+                        key_bytes,
+                    )));
+                    let _ = proxy.send_event(Message::Ssh(ssh::Message::TerminalConnectFailed(
+                        project_id,
+                        host_id,
+                        tab_id,
+                        format!("未知主机,指纹 {fingerprint}——需要确认信任"),
+                    )));
+                    return;
+                }
+                Ok(Err(ssh::SshError::KeyChanged { fingerprint })) => {
+                    let _ = proxy.send_event(Message::Ssh(ssh::Message::KeyChanged(
+                        project_id,
+                        host_id.clone(),
+                        fingerprint.clone(),
+                    )));
+                    let _ = proxy.send_event(Message::Ssh(ssh::Message::TerminalConnectFailed(
+                        project_id,
+                        host_id,
+                        tab_id,
+                        format!("主机指纹已变化({fingerprint}),拒绝连接"),
+                    )));
+                    return;
+                }
+                Ok(Err(e)) => {
+                    let _ = proxy.send_event(Message::Ssh(ssh::Message::TerminalConnectFailed(
+                        project_id,
+                        host_id,
+                        tab_id,
+                        e.to_string(),
+                    )));
+                    return;
+                }
+                Err(_) => {
+                    let _ = proxy.send_event(Message::Ssh(ssh::Message::TerminalConnectFailed(
+                        project_id,
+                        host_id,
+                        tab_id,
+                        "连接超时(10 秒)".to_string(),
+                    )));
+                    return;
+                }
+            };
+            // `handle` 必须留在作用域内到函数结尾(泵循环退出前),不能被
+            // 提前丢弃——见设计文档"背景"末尾与本计划 Global Constraints。
+            let channel = match handle.channel_open_session().await {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = proxy.send_event(Message::Ssh(ssh::Message::TerminalConnectFailed(
+                        project_id,
+                        host_id,
+                        tab_id,
+                        e.to_string(),
+                    )));
+                    return;
+                }
+            };
+            let (mut read_half, write_half) = channel.split();
+            if let Err(e) = write_half
+                .request_pty(true, "xterm-256color", cols as u32, rows as u32, 0, 0, &[])
+                .await
+            {
+                let _ = proxy.send_event(Message::Ssh(ssh::Message::TerminalConnectFailed(
+                    project_id,
+                    host_id,
+                    tab_id,
+                    e.to_string(),
+                )));
+                return;
+            }
+            if let Err(e) = write_half.request_shell(true).await {
+                let _ = proxy.send_event(Message::Ssh(ssh::Message::TerminalConnectFailed(
+                    project_id,
+                    host_id,
+                    tab_id,
+                    e.to_string(),
+                )));
+                return;
+            }
+
+            let info = ssh::synth_session_info(&host, project_id);
+            if proxy
+                .send_event(Message::TabAttached(project_id, tab_id, info, Vec::new()))
+                .is_err()
+            {
+                return;
+            }
+
+            loop {
+                tokio::select! {
+                    msg = read_half.wait() => match msg {
+                        Some(russh::ChannelMsg::Data { data }) | Some(russh::ChannelMsg::ExtendedData { data, .. }) => {
+                            if proxy
+                                .send_event(Message::TermOutput(project_id, tab_id, data.to_vec()))
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                        Some(russh::ChannelMsg::Eof) | Some(russh::ChannelMsg::Close) | None => {
+                            let _ = proxy.send_event(Message::SessionExited(project_id, tab_id));
+                            return;
+                        }
+                        Some(_) => continue,
+                    },
+                    out = rx_out.recv() => match out {
+                        Some(SshOut::Data(bytes)) => {
+                            if write_half.data_bytes(bytes).await.is_err() {
+                                let _ = proxy.send_event(Message::SessionExited(project_id, tab_id));
+                                return;
+                            }
+                        }
+                        Some(SshOut::Resize { cols, rows }) => {
+                            let _ = write_half.window_change(cols as u32, rows as u32, 0, 0).await;
+                        }
+                        None => return, // 所有 sender 已 drop(tab 关了/Workspace 没了)
+                    },
+                }
+            }
+        });
+
+        self.pending.insert(tab_id, jh);
+        self.ssh_out_pending.insert(tab_id, tx_out);
+    }
+
     fn on_tab_attached(
         &mut self,
         io: &ShellIo,
@@ -2264,7 +2430,13 @@ impl Workspace {
             last_exit: None,
             delivery_pending: false,
             last_turn_head: None,
-            backend: TabBackend::Daemon,
+            // SSH tab 的写指令发送端在 `spawn_ssh_tab` 里就插进了
+            // `ssh_out_pending`,这里取得到 → `Ssh`;取不到(正常本地会话,或
+            // SSH 那次`on_tab_attached` 之前被别的东西消费掉) → `Daemon`。
+            backend: match self.ssh_out_pending.remove(&tab_id) {
+                Some(out) => TabBackend::Ssh { out },
+                None => TabBackend::Daemon,
+            },
         });
         if let Some(t) = self.tabs.last_mut() {
             t.ingest_osc(&snapshot);
