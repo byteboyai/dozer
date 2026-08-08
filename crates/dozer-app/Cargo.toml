@@ -38,6 +38,8 @@ uuid.workspace = true
 gleisbau = "0.7"
 git2 = "0.21"
 notify = "8"
+russh = "0.62.5"
+keyring = "4.1.6"
 
 [dev-dependencies]
 tempfile = "3"
