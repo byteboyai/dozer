@@ -243,14 +243,9 @@ impl russh::client::Handler for TestHandler {
     }
 }
 
-/// SSH 握手共享段:connect + host key 校验(`TestHandler::check_server_key`)
-/// + 认证。返回 `Handle` 本身——调用方若要继续开 channel(阶段 2 终端),
-/// `Handle` 必须留在作用域内全程存活到 channel 读写半都不再用为止(见
-/// 设计文档"背景"末尾;不能在这个函数里把 `Handle` 提前丢弃只返回别的
-/// 东西)。`test_connection` 只需要确认握手成功,用完直接让 `handle`
-/// 在函数结尾正常析构(不开 channel,没有"提前丢弃"的风险)。`pub(crate)`
-/// 是因为阶段 2 的 `Workspace::spawn_ssh_tab`(在 `workspace.rs`,另一个
-/// 模块)要直接调它来建终端连接。
+/// SSH 握手共享段。connect + host key 校验(`TestHandler::check_server_key`)加认证,返回 `Handle` 本身。
+///
+/// 调用方若要继续开 channel(阶段 2 终端),`Handle` 必须留在作用域内全程存活到 channel 读写半都不再用为止(见设计文档"背景"末尾;不能在这个函数里把 `Handle` 提前丢弃只返回别的东西)。`test_connection` 只需要确认握手成功,用完直接让 `handle` 在函数结尾正常析构(不开 channel,没有"提前丢弃"的风险)。`pub(crate)` 是因为阶段 2 的 `Workspace::spawn_ssh_tab`(在 `workspace.rs`,另一个模块)要直接调它来建终端连接。
 pub(crate) async fn handshake(
     host: &SshHost,
     password: Option<String>,
@@ -536,8 +531,20 @@ pub fn update(
             }
             // 写完 known_hosts,按"是不是上次点终端撞未知 key 的那台主机"
             // 决定重开终端还是重新测试连接(设计文档 §6)。
+            //
+            // `OpenTerminal` 不能走下面 `update(ws_state, ..)` 这条本地递归
+            // 调用——`update` 只有 `&mut WorkspaceState`,够不到
+            // `spawn_ssh_tab` 需要的 `&mut Workspace`,递归调用只会落进
+            // `ssh::update` 自己那个空转的 `OpenTerminal(_) => {}` 分支,
+            // 终端永远不会真的打开(而且此时 `pending_unknown_keys` 已经
+            // 被上面 `remove` 清空,再点一次"信任并重试"也无法重试)。必须
+            // 走 `emit` 把消息送回事件循环,才能命中内核 `App::update` 里
+            // 那条专门调 `Workspace::spawn_ssh_tab` 的拦截分支。
             let retry = pick_retry_message(&mut ws_state.reopen_after_trust, &id);
-            update(ws_state, retry, project_id, repo_path, handle, emit);
+            match retry {
+                Message::OpenTerminal(_) => emit(retry),
+                other => update(ws_state, other, project_id, repo_path, handle, emit),
+            }
         }
         Message::OpenTerminal(_) => {
             // 内核 `App::update` 在通配 `Message::Ssh(msg)` 之前拦截,
