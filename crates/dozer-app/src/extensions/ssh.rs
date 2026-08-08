@@ -579,6 +579,7 @@ fn host_card<'a>(
     };
     let mut actions = row![
         button(text("测试连接")).on_press(Message::TestConnection(host.id.clone())),
+        button(text("终端")).on_press(Message::OpenTerminal(host.id.clone())),
         button(text("编辑")).on_press(Message::EditHostStart(host.id.clone())),
         button(text("删除")).on_press(Message::DeleteHost(host.id.clone())),
     ]
