@@ -82,8 +82,63 @@
 - 浏览器 pane 不新增"当前是否有活跃项目"的判断分支——首页的浏览器就是全局的,
   跟工作区里 `LeftView::Web`(绑定 `ws.project` 的那个)是两个独立实例,互不同步、
   互不影响。
+- **不做 `App`/`Workspace` 拆分**:brainstorming 过程中讨论过要不要顺带把
+  `workspace.rs`(现 7000+ 行,`App`/`Workspace` 两个 struct、`Message` 枚举、
+  几十个视图函数混在一起)拆成 `app.rs` + `workspace.rs`。已与用户确认这是独立的
+  大重构(`Message` 枚举归属、大量混合传参函数的拆分边界都需要单独定案),这次
+  只拆 `homespace.rs`,`App`/`Workspace` 拆分留给以后单独一轮 brainstorming。
 
 ## 架构与数据流
+
+### 0. 文件组织:独立 `homespace.rs`
+
+首页相关代码从 `workspace.rs` 拆到新文件 `crates/dozer-app/src/homespace.rs`,
+`main.rs` 加 `mod homespace;`。拆分边界比照仓库已有的 `preview.rs`/
+`conversation.rs`/`layout.rs`——这几个都是"纯类型 + 纯函数"模块,不持有
+`App`/`Workspace` 的 `impl` 块,`workspace.rs` 通过 `use crate::homespace::{..}`
+引入后在 `App` 的方法里组装:
+
+**移入 `homespace.rs`**:
+- 类型:`HomeLeftView`、`HomeRightView`、`HomeRecentFile`、`HomeRecentConversation`。
+- 纯函数:`load_home_recents`。
+- 视图构建函数:`home_page`、`home_left_icon_rail`、`home_right_icon_rail`、
+  `home_left_zone`、`home_right_zone`、`home_project_list_view`(原
+  `home_sidebar`)、`home_recents_view`(原 `home_recents_column`)、
+  `home_recent_files_card`、`home_recent_conversations_card`。这些函数签名不变
+  (`fn xxx(app: &App, ..) -> Element<'_, Message, ..>`),只是从 `workspace.rs`
+  搬到 `homespace.rs`,内部逻辑不改。
+
+**留在 `workspace.rs`**:
+- `App` 结构体本身(含 `home_left_view`/`home_right_view`/`home_browser`/
+  `recent_projects`/`home_recent_files`/`home_recent_conversations`/
+  `home_recents_loaded` 字段声明)——单一数据源仍是 `App`,跟 `PreviewPane`/
+  `browser::State` 这些"类型定义在别处、实例字段仍声明在 `App`/`Workspace` 上"
+  的既有先例一致。
+- `Message` 枚举(顶层 `TopBarHome`/`HomeRecentsLoaded`/`HomeLeftIconSelect`/
+  `HomeRightIconSelect`/`HomeBrowser` 变体不变,只是变体携带的 `HomeLeftView`/
+  `HomeRightView` 类型改从 `crate::homespace` 导入)。
+- `App::update` 里这 5 个消息的处理逻辑(第 3 节所述,直接改 `App` 私有字段,
+  天然属于 `App` 自己的 `impl`,不下放)。
+
+**可见性调整**(本次拆分带来的唯一"新增工作量",纯签名改动、不改行为):
+`homespace.rs` 里的视图函数需要读 `App` 私有字段与调用 `workspace.rs` 里的
+私有辅助函数/类型,以下改成 `pub(crate)`:
+- `App` 字段:`recent_projects`、`home_recent_files`、`home_recent_conversations`、
+  `home_recents_loaded`、`home_left_view`、`home_right_view`、`home_browser`、
+  `daemon_error`。
+- `workspace.rs` 里的辅助函数/类型:`rail_icon_button`、`divider_bar`、
+  `zone_pane_border`、`relative_time_text`、`PaneCorner`。
+- 均限定 `pub(crate)`(仓内可见),不导出到 crate 外部,不影响任何公共 API。
+  `RailButton`/`HoverId`/`Divider`/`App::hover_progress`/`lh` 现状已是
+  `pub`/`pub(crate)`,不需要改动(写计划时以实际代码为准复核一遍,这里只是
+  brainstorming 阶段核对过的现状快照)。
+
+这次**不**把项目列表/Recents 做成 `extensions::` 模块、**不**接入工作区自己的
+`LeftView`/`RightView`(已跟用户确认:两者虽然只依赖 `App` 级数据、理论上通用,
+但这次范围只做首页,以后若要在工作区内也能直接切出这两个面板,再单独立项——届时
+因为不依赖任何 `Workspace` 级状态,升级成 extension 的改动成本低)。浏览器 pane
+本身已经是 `extensions::browser`,首页这次只是复用它的第二份独立 `State`
+(`app.home_browser`,`project_id` 恒 `None`),不需要额外改造。
 
 ### 1. 顶层布局
 
