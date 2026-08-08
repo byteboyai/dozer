@@ -2284,6 +2284,61 @@ mod tests {
         assert!(ws.schema_state("s1").is_none());
         assert_eq!(ws.browsing, None);
     }
+
+    #[test]
+    fn draft_save_legal_uri_redacts_and_backfills_fields() {
+        // 无密码 URI:不触 Keychain(本仓库测试不写真实钥匙串)。
+        let draft = DataSourceDraft {
+            id: None, // 新建
+            name: "cloud".into(),
+            driver: DriverKind::Postgres,
+            host: "wrong-field-host".into(), // 字段填错,应为 URI 覆盖
+            port: String::new(),
+            database: String::new(),
+            username: String::new(),
+            uri: "postgresql://alice@db:5433/shop".into(),
+            password: String::new(),
+        };
+        let mut ws = WorkspaceState {
+            editing: Some(draft),
+            ..Default::default()
+        };
+        update_with(&mut ws, Message::DraftSave);
+        let src = ws.sources.iter().find(|s| s.name == "cloud").unwrap();
+        assert_eq!(src.uri.as_deref(), Some("postgresql://alice@db:5433/shop"));
+        assert_eq!(src.host.as_deref(), Some("db")); // URI 优先,覆盖错误字段
+        assert_eq!(src.port, Some(5433));
+        assert_eq!(src.database.as_deref(), Some("shop"));
+        assert_eq!(src.username.as_deref(), Some("alice"));
+        // 无密码 → 不产生 Keychain 写入,uri 无明文密码(来源本就没有)。
+        assert_eq!(src.uri.as_deref(), Some("postgresql://alice@db:5433/shop"));
+    }
+
+    #[test]
+    fn draft_save_invalid_uri_falls_back_to_fields() {
+        let draft = DataSourceDraft {
+            id: None,
+            name: "legacy".into(),
+            driver: DriverKind::Postgres,
+            host: "plain.example".into(),
+            port: "6543".into(),
+            database: "mydb".into(),
+            username: "user".into(),
+            uri: "https://not-a-db-scheme".into(), // 非法 → 退化为字段式
+            password: String::new(),
+        };
+        let mut ws = WorkspaceState {
+            editing: Some(draft),
+            ..Default::default()
+        };
+        update_with(&mut ws, Message::DraftSave);
+        let src = ws.sources.iter().find(|s| s.name == "legacy").unwrap();
+        assert_eq!(src.uri, None); // 非法 URI 不落盘
+        assert_eq!(src.host.as_deref(), Some("plain.example"));
+        assert_eq!(src.port, Some(6543));
+        assert_eq!(src.database.as_deref(), Some("mydb"));
+        assert_eq!(src.username.as_deref(), Some("user"));
+    }
 }
 
 #[cfg(test)]
