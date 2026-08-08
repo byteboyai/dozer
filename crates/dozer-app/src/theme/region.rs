@@ -441,11 +441,22 @@ mod tests {
     #[test]
     fn context_menu_matches_pre_migration_literals() {
         let s = context_menu();
-        assert_eq!(s.background, Some(color::CARD));
+        // 背景 `#12202ad9`:在 CARD 底上叠 0xd9/0xff≈85% alpha,做 macOS
+        // 系统菜单那种半透明观感(让底下工作区隐约透出)。8 位十六进制由
+        // `parse_hex_color` 解析成带 alpha 的 Color,不再等于纯 CARD。
+        assert_eq!(
+            s.background,
+            Some(Color {
+                r: 0x12 as f32 / 255.0,
+                g: 0x20 as f32 / 255.0,
+                b: 0x2a as f32 / 255.0,
+                a: 0xd9 as f32 / 255.0,
+            })
+        );
         let border = s.border.expect("context_menu 应有边框");
         assert_eq!(border.color, color::BORDER);
         assert_eq!(border.width, 1.0);
-        assert_eq!(border.radius, 6.0.into());
+        assert_eq!(border.radius, 10.0.into());
         assert_eq!(s.padding, Padding::from(6.0));
         assert_eq!(s.gap, 2.0);
     }

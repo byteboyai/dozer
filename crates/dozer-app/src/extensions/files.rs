@@ -7,7 +7,7 @@ use crate::theme::terminal_font;
 use crate::workspace::AddrEvent;
 use crate::{delivery, icons, theme};
 use iced_widget::core::text::LineHeight;
-use iced_widget::core::{Border, Element, Length, Padding};
+use iced_widget::core::{Border, Color, Element, Length, Padding};
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -678,22 +678,30 @@ fn tree_edit_row(
     .into()
 }
 
-/// 右键菜单一项:图标+文字按钮,CARD 底+BORDER 描边悬停态由 iced 默认
-/// button 交互色处理(本仓其余按钮同款,不额外定制)。
+/// 右键菜单一项:图标(可选)+文字按钮。默认底色透出容器背景,hover/pressed
+/// 切到 BLUE 高亮(文本同步切白,与 macOS 系统菜单选中态一致);按下即
+/// `Pressed` 仍走高亮色,让按住期间有视觉反馈。图标颜色在创建时烘焙,
+/// 无法随 hover 切换——保持 CREAM(在 BLUE 底上仍可读,与 text 白色差异
+/// 不显著,避免过度工程去重写 `icons::view` 的颜色级联)。
+///
+/// `icon` 传 `None` 时只渲染文字(用于"复制绝对路径/相对路径"这类不需要
+/// 图标的条目),文字起始 x 与有图标项的图标起始 x 对齐。
 fn menu_item<'a>(
-    icon: icons::IconKind,
+    icon: Option<icons::IconKind>,
     label: &'static str,
     msg: Message,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    button(
-        row![
+    let content = match icon {
+        Some(icon) => row![
             icons::view(icon, crate::theme::icon_size::row(), theme::color::CREAM),
-            text(label)
-                .size(theme::font::body())
-                .color(theme::color::CREAM),
-        ]
-        .spacing(crate::theme::geometry::menu_gap())
-        .align_y(iced_widget::core::Alignment::Center),
+            text(label).size(theme::font::body()),
+        ],
+        None => row![text(label).size(theme::font::body())],
+    };
+    button(
+        content
+            .spacing(crate::theme::geometry::menu_gap())
+            .align_y(iced_widget::core::Alignment::Center),
     )
     .on_press(msg)
     .width(Length::Fixed(crate::theme::geometry::menu_item_width()))
@@ -701,10 +709,25 @@ fn menu_item<'a>(
         crate::theme::geometry::menu_pad_v(),
         crate::theme::geometry::menu_pad_h(),
     ])
-    .style(|_t, _s| button::Style {
-        background: Some(theme::color::CARD.into()),
-        text_color: theme::color::CREAM,
-        ..button::Style::default()
+    .style(|_t, s| {
+        let base = button::Style {
+            background: None,
+            text_color: theme::color::CREAM,
+            ..button::Style::default()
+        };
+        match s {
+            button::Status::Hovered | button::Status::Pressed => button::Style {
+                background: Some(theme::color::BLUE.into()),
+                text_color: Color::WHITE,
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 0.0,
+                    radius: 4.0.into(),
+                },
+                ..base
+            },
+            _ => base,
+        }
     })
     .into()
 }
@@ -722,20 +745,27 @@ pub fn context_menu_popup<'a>(
     };
     let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> =
         Vec::new();
+    let push_sep =
+        |items: &mut Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>>| {
+            if !items.is_empty() {
+                items.push(menu_separator());
+            }
+        };
     if menu.is_dir {
         items.push(menu_item(
-            icons::IconKind::FilePlus,
+            Some(icons::IconKind::FilePlus),
             "新建文件",
             Message::NewFile(menu.target.clone()),
         ));
         items.push(menu_item(
-            icons::IconKind::FolderPlus,
+            Some(icons::IconKind::FolderPlus),
             "新建文件夹",
             Message::NewFolder(menu.target.clone()),
         ));
     }
+    push_sep(&mut items);
     items.push(menu_item(
-        icons::IconKind::Copy,
+        Some(icons::IconKind::Copy),
         "复制",
         Message::Copy(menu.target.clone(), menu.is_dir),
     ));
@@ -743,10 +773,13 @@ pub fn context_menu_popup<'a>(
         let has_clipboard = ws_state.tree_clipboard.is_some();
         let paste_msg = Message::Paste(menu.target.clone());
         items.push(if has_clipboard {
-            menu_item(icons::IconKind::ClipboardPaste, "粘贴", paste_msg)
+            menu_item(Some(icons::IconKind::ClipboardPaste), "粘贴", paste_msg)
         } else {
             // 剪贴槽为空:置灰且不挂 on_press,真正不可点(同 P1L tab 箭头
-            // "到头变灰"的既有处理口径,不是视觉变灰但仍能点)。
+            // "到头变灰"的既有处理口径,不是视觉变灰但仍能点)。背景透明
+            // 透出容器底,不要 hover 高亮——保持视觉一致的"灰且不可点"。
+            // 文字不挂显式 color,让 button style 的 text_color(DIM)接管,
+            // 与 `menu_item` 让 text_color 接管 hover 切白的处理同源。
             button(
                 row![
                     icons::view(
@@ -754,9 +787,7 @@ pub fn context_menu_popup<'a>(
                         crate::theme::icon_size::row(),
                         theme::color::DIM
                     ),
-                    text("粘贴")
-                        .size(theme::font::body())
-                        .color(theme::color::DIM),
+                    text("粘贴").size(theme::font::body()),
                 ]
                 .spacing(crate::theme::geometry::menu_gap())
                 .align_y(iced_widget::core::Alignment::Center),
@@ -767,7 +798,7 @@ pub fn context_menu_popup<'a>(
                 crate::theme::geometry::menu_pad_h(),
             ])
             .style(|_t, _s| button::Style {
-                background: Some(theme::color::CARD.into()),
+                background: None,
                 text_color: theme::color::DIM,
                 ..button::Style::default()
             })
@@ -775,32 +806,33 @@ pub fn context_menu_popup<'a>(
         });
     }
     items.push(menu_item(
-        icons::IconKind::Trash,
+        Some(icons::IconKind::Trash),
         "删除",
         Message::DeleteRequest(menu.target.clone(), menu.is_dir),
     ));
     items.push(menu_item(
-        icons::IconKind::Rename,
+        Some(icons::IconKind::Rename),
         "重命名",
         Message::RenameStart(menu.target.clone()),
     ));
+    push_sep(&mut items);
     items.push(menu_item(
-        icons::IconKind::Copy,
+        None,
         "复制绝对路径",
         Message::CopyPath(menu.target.clone(), crate::project::PathKind::Absolute),
     ));
     items.push(menu_item(
-        icons::IconKind::Copy,
+        None,
         "复制相对路径",
         Message::CopyPath(menu.target.clone(), crate::project::PathKind::Relative),
     ));
     items.push(menu_item(
-        icons::IconKind::FolderOpen,
+        Some(icons::IconKind::FolderOpen),
         "在 Finder 中打开",
         Message::RevealInFinder(menu.target.clone()),
     ));
     items.push(menu_item(
-        icons::IconKind::RefreshCw,
+        Some(icons::IconKind::RefreshCw),
         "从磁盘重新加载",
         Message::ReloadFromDisk,
     ));
@@ -822,6 +854,20 @@ pub fn context_menu_popup<'a>(
             left: menu.x,
             right: 0.0,
             bottom: 0.0,
+        })
+        .into()
+}
+
+/// 菜单项之间的细分隔线:1px BORDER 高度,左右各留一点内边距,与 macOS
+/// 系统菜单分组线同款。列项之间由 `column.spacing` 控间距,分隔线本身不
+/// 再额外加 padding。
+fn menu_separator<'a>() -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    container(iced_widget::Space::new())
+        .width(Length::Fill)
+        .height(Length::Fixed(1.0))
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::color::BORDER.into()),
+            ..container::Style::default()
         })
         .into()
 }
