@@ -109,8 +109,14 @@ app-workspace-file-split-design.md`,进行中,另一个 agent 在
    - 整个测试套 5 秒超时(`tokio::time::timeout`)——网络不可达时不能让
      UI 一直转圈。
    - 结果经 `emit`/`EventLoopProxy` 回传 `Message::TestConnectionResult
-     (data_source_id, Result<(), String>)`,落地成 `TestStatus::Ok` /
-     `TestStatus::Err(错误文案)`,卡片上直接显示(绿勾/红叉+简短错误)。
+     (project_id, data_source_id, Result<(), String>)`——**必须带
+     `project_id`**,不能只带 `data_source_id`:这是异步结果,用户可能在
+     5 秒等待期间已经切到别的项目页签,`App::update` 收到它时不能假设
+     "当前聚焦项目就是发起测试的那个项目",要用消息自带的 `project_id`
+     直接定位到正确的 `Workspace`(同 `browser::Message::BookmarksLoaded
+     (pid, ..)`/`Message::TabAttached(project_id, ..)` 现有的异步结果
+     路由惯例)。落地成 `TestStatus::Ok`/`TestStatus::Err(错误文案)`,卡片
+     上直接显示(绿勾/红叉+简短错误)。
 6. `update` 签名(照搬 `browser`/`git_log` 那套异步 extension 的
    `handle`+`emit` 风格,不是 `todo` 那套同步风格——因为这个模块的核心操作
    `TestConnection` 本质是网络 IO):
