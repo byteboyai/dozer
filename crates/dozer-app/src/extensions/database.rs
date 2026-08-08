@@ -9,7 +9,7 @@
 use iced_widget::core::{Border, Element, Length};
 use iced_widget::{button, column, container, row, text, text_input};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// 数据库面板支持的驱动类型。穷举枚举,不做插件机制(见设计文档"非目标")。
@@ -62,6 +62,156 @@ pub enum TestStatus {
     Testing,
     Ok,
     Err(String),
+}
+
+/// schema 树里的一个表/视图(阶段 2)。
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableRef {
+    /// 仅 Postgres 有值(table_schema);MySQL/SQLite 恒 None。
+    pub schema: Option<String>,
+    pub name: String,
+    pub is_view: bool,
+}
+
+/// 列元信息(阶段 2)。主键/索引/默认值不在本阶段范围(设计文档"非目标")。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColumnInfo {
+    pub name: String,
+    pub type_name: String,
+    pub nullable: bool,
+}
+
+/// 某张表的列加载进度(阶段 2)。
+#[derive(Debug, Clone)]
+pub enum ColumnLoad {
+    Loading,
+    Loaded(Vec<ColumnInfo>),
+    Failed(String),
+}
+
+/// 单个数据源的 schema 树状态(**纯内存,不持久化**——schema 是即时快照,
+/// 重启后重新拉,展开状态不值得落盘)。
+#[derive(Debug, Default)]
+pub struct SchemaState {
+    loading_tables: bool,
+    tables_error: Option<String>,
+    /// 按 (schema, name) 有序(SQL 层 ORDER BY,客户端不再排序)。
+    tables: Vec<TableRef>,
+    /// Postgres schema 节点展开集。
+    expanded_schemas: HashSet<String>,
+    /// 表节点展开集,key = (schema, name)。
+    expanded_tables: HashSet<(Option<String>, String)>,
+    /// 每表列缓存,key = (schema, name)。
+    columns: HashMap<(Option<String>, String), ColumnLoad>,
+}
+
+impl SchemaState {
+    pub fn loading_tables(&self) -> bool {
+        self.loading_tables
+    }
+
+    pub fn tables_error(&self) -> Option<&str> {
+        self.tables_error.as_deref()
+    }
+
+    pub fn tables(&self) -> &[TableRef] {
+        &self.tables
+    }
+
+    /// 指定表的列加载态(单测断言与过期防线用)。
+    pub fn column_load(&self, key: &(Option<String>, String)) -> Option<&ColumnLoad> {
+        self.columns.get(key)
+    }
+}
+
+/// schema 树可见行(摊平结果)。
+pub struct SchemaRow<'a> {
+    pub kind: SchemaRowKind<'a>,
+    pub depth: usize,
+    pub expanded: bool,
+}
+
+/// schema 树行类型。`ColumnsLoading`/`ColumnsFailed` 是展开表之后的占位行。
+pub enum SchemaRowKind<'a> {
+    Schema(&'a str),
+    Table(&'a TableRef),
+    Column(&'a ColumnInfo),
+    ColumnsLoading,
+    ColumnsFailed(&'a str),
+}
+
+/// 把 `SchemaState` 摊平成可见行(纯函数,单测友好;渲染侧单层循环)。
+/// Postgres 比 MySQL/SQLite 多一层 schema 节点(schema 节点不做异步加载,
+/// 表列表一次查全后客户端按 `table_schema` 分组)。
+pub fn tree_rows(state: &SchemaState, driver: DriverKind) -> Vec<SchemaRow<'_>> {
+    let mut out: Vec<SchemaRow<'_>> = Vec::new();
+    if driver == DriverKind::Postgres {
+        let mut by_schema: BTreeMap<&str, Vec<&TableRef>> = BTreeMap::new();
+        for t in &state.tables {
+            by_schema
+                .entry(t.schema.as_deref().unwrap_or("public"))
+                .or_default()
+                .push(t);
+        }
+        for (schema, tables) in by_schema {
+            let expanded = state.expanded_schemas.contains(schema);
+            out.push(SchemaRow {
+                kind: SchemaRowKind::Schema(schema),
+                depth: 0,
+                expanded,
+            });
+            if expanded {
+                push_table_rows(&mut out, state, &tables, 1);
+            }
+        }
+    } else {
+        let tables: Vec<&TableRef> = state.tables.iter().collect();
+        push_table_rows(&mut out, state, &tables, 0);
+    }
+    out
+}
+
+fn push_table_rows<'a>(
+    out: &mut Vec<SchemaRow<'a>>,
+    state: &'a SchemaState,
+    tables: &[&'a TableRef],
+    depth: usize,
+) {
+    for t in tables {
+        let key = (t.schema.clone(), t.name.clone());
+        let expanded = state.expanded_tables.contains(&key);
+        out.push(SchemaRow {
+            kind: SchemaRowKind::Table(t),
+            depth,
+            expanded,
+        });
+        if !expanded {
+            continue;
+        }
+        match state.columns.get(&key) {
+            // 展开动作总会伴随加载触发,正常到不了这里;防御性忽略。
+            None => {}
+            Some(ColumnLoad::Loading) => out.push(SchemaRow {
+                kind: SchemaRowKind::ColumnsLoading,
+                depth: depth + 1,
+                expanded: false,
+            }),
+            Some(ColumnLoad::Failed(e)) => out.push(SchemaRow {
+                kind: SchemaRowKind::ColumnsFailed(e),
+                depth: depth + 1,
+                expanded: false,
+            }),
+            Some(ColumnLoad::Loaded(cols)) => {
+                for c in cols {
+                    out.push(SchemaRow {
+                        kind: SchemaRowKind::Column(c),
+                        depth: depth + 1,
+                        expanded: false,
+                    });
+                }
+            }
+        }
+    }
 }
 
 fn drivers_path() -> PathBuf {
@@ -149,12 +299,16 @@ pub struct DataSourceDraft {
 }
 
 /// 挂在每个 `Workspace` 上:当前项目配置的数据源列表 + 编辑态 + 每条数据源
-/// 的连接测试状态。
+/// 的连接测试状态 + schema 树浏览态(阶段 2,纯内存)。
 #[derive(Debug, Default)]
 pub struct WorkspaceState {
     sources: Vec<DataSource>,
     editing: Option<DataSourceDraft>,
     test_status: HashMap<String, TestStatus>,
+    /// 正在浏览 schema 树的数据源 id;`None` = 卡片列表视图(阶段 2)。
+    browsing: Option<String>,
+    /// 每个数据源 id 一份 schema 树状态(阶段 2,纯内存)。
+    schemas: HashMap<String, SchemaState>,
 }
 
 impl WorkspaceState {
@@ -168,6 +322,21 @@ impl WorkspaceState {
 
     pub fn test_status(&self, source_id: &str) -> &TestStatus {
         self.test_status.get(source_id).unwrap_or(&TestStatus::Idle)
+    }
+
+    /// 当前正在浏览的数据源及其 schema 树状态(阶段 2 树视图用)。
+    /// `reload_from_disk` 后 `browsing` 可能指向磁盘已不存在的源——取不到
+    /// 返回 `None`,调用方回退卡片列表即可,不专门清理(设计文档 §2 过期防线)。
+    pub fn browsing_source(&self) -> Option<(&DataSource, &SchemaState)> {
+        let id = self.browsing.as_deref()?;
+        let source = self.sources.iter().find(|s| s.id == id)?;
+        let st = self.schemas.get(id)?;
+        Some((source, st))
+    }
+
+    /// 指定数据源的 schema 树状态只读视图(状态机单测断言用)。
+    pub fn schema_state(&self, source_id: &str) -> Option<&SchemaState> {
+        self.schemas.get(source_id)
     }
 }
 
@@ -819,5 +988,81 @@ mod tests {
         let mut ws_state = WorkspaceState::default();
         reload_from_disk(&mut ws_state, dir.path());
         assert!(ws_state.sources().is_empty());
+    }
+
+    fn tree_table(schema: Option<&str>, name: &str, is_view: bool) -> TableRef {
+        TableRef {
+            schema: schema.map(|s| s.to_string()),
+            name: name.into(),
+            is_view,
+        }
+    }
+
+    #[test]
+    fn tree_rows_flat_for_sqlite() {
+        let mut st = SchemaState::default();
+        st.tables = vec![
+            tree_table(None, "users", false),
+            tree_table(None, "orders", true),
+        ];
+        st.expanded_tables.insert((None, "users".into()));
+        st.columns.insert(
+            (None, "users".into()),
+            ColumnLoad::Loaded(vec![ColumnInfo {
+                name: "id".into(),
+                type_name: "INTEGER".into(),
+                nullable: false,
+            }]),
+        );
+        let rows = tree_rows(&st, DriverKind::Sqlite);
+        assert_eq!(rows.len(), 3);
+        assert!(matches!(rows[0].kind, SchemaRowKind::Table(t) if t.name == "users"));
+        assert_eq!(rows[0].depth, 0);
+        assert!(rows[0].expanded);
+        assert!(matches!(rows[1].kind, SchemaRowKind::Column(c) if c.name == "id" && !c.nullable));
+        assert_eq!(rows[1].depth, 1);
+        assert!(matches!(rows[2].kind, SchemaRowKind::Table(t) if t.name == "orders" && t.is_view));
+    }
+
+    #[test]
+    fn tree_rows_postgres_groups_by_schema_and_folds() {
+        let mut st = SchemaState::default();
+        st.tables = vec![
+            tree_table(Some("public"), "users", false),
+            tree_table(Some("audit"), "events", false),
+        ];
+        // 未展开:只有两个 schema 行(BTreeMap 序 audit < public)
+        let rows = tree_rows(&st, DriverKind::Postgres);
+        assert_eq!(rows.len(), 2);
+        assert!(matches!(rows[0].kind, SchemaRowKind::Schema("audit")));
+        assert!(matches!(rows[1].kind, SchemaRowKind::Schema("public")));
+        assert!(!rows[1].expanded);
+
+        // 展开 public:表行挂在 depth 1
+        st.expanded_schemas.insert("public".into());
+        let rows = tree_rows(&st, DriverKind::Postgres);
+        assert_eq!(rows.len(), 3);
+        assert!(matches!(rows[2].kind, SchemaRowKind::Table(t) if t.name == "users"));
+        assert_eq!(rows[2].depth, 1);
+    }
+
+    #[test]
+    fn tree_rows_emits_loading_and_failed_placeholders() {
+        let mut st = SchemaState::default();
+        st.tables = vec![tree_table(None, "a", false), tree_table(None, "b", false)];
+        st.expanded_tables.insert((None, "a".into()));
+        st.expanded_tables.insert((None, "b".into()));
+        st.columns.insert((None, "a".into()), ColumnLoad::Loading);
+        st.columns
+            .insert((None, "b".into()), ColumnLoad::Failed("nope".into()));
+        let rows = tree_rows(&st, DriverKind::MySQL);
+        assert!(
+            rows.iter()
+                .any(|r| matches!(r.kind, SchemaRowKind::ColumnsLoading) && r.depth == 1)
+        );
+        assert!(
+            rows.iter()
+                .any(|r| matches!(r.kind, SchemaRowKind::ColumnsFailed(e) if e == "nope"))
+        );
     }
 }
