@@ -73,6 +73,14 @@ pub struct WorkspaceState {
     editing: Option<SshHostDraft>,
     test_status: HashMap<String, TestStatus>,
     pending_unknown_keys: HashMap<String, Vec<u8>>,
+    /// 信任 host key 后要不要自动重开终端(而不是阶段 1 默认的"重新测试
+    /// 连接")——存的是"上一次点'终端'按钮、连接过程中撞上未知 key 那台
+    /// 主机的 id"。`TrustHostKey` 分支里核对是否等于本次信任的 host id,
+    /// 相等才重开终端,否则落回测试连接。字段只有一个槽位,极少数"两台
+    /// 主机同时未知 key、按点终端的顺序信任"场景下,后点的会覆盖先点的
+    /// 意图,顶多导致"该开终端却重新测试连接"这种安全的降级,不会误开
+    /// 错主机的终端或者崩溃(设计文档 §6 的论证)。
+    reopen_after_trust: Option<String>,
 }
 
 impl WorkspaceState {
@@ -263,6 +271,18 @@ pub enum Message {
     /// 用户确认信任某台主机的 host key:写入 known_hosts,然后重新发起
     /// 一次 `TestConnection`。
     TrustHostKey(String),
+    /// 点主机卡片"终端":内核 `App::update` 里有专门的拦截分支(见
+    /// `workspace.rs`),真正的 tab 创建逻辑在那边的 `Workspace::
+    /// spawn_ssh_tab`——这个变体在 `ssh::update` 自己的 `match` 里只是
+    /// 穷尽匹配需要,不会真的走到这里(内核在通配 `Message::Ssh(msg)`
+    /// 之前就拦截了)。
+    OpenTerminal(String),
+    /// 终端连接失败的异步结果,带 `project_id`(异步结果不能假设聚焦
+    /// 项目没变,同 `TestConnectionResult`)。同上,内核在 `ssh::update`
+    /// 之前会先做 `pending`/`ssh_out_pending` 清理,这里只负责落卡片
+    /// 状态(与 `TestConnectionResult`/`UnknownKeyDetected`/`KeyChanged`
+    /// 共用同一列卡片状态,不新增第二列)。
+    TerminalConnectFailed(i64, String, usize, String),
 }
 
 pub fn update(
@@ -464,16 +484,31 @@ pub fn update(
             if let Ok(key) = russh::keys::ssh_key::PublicKey::from_bytes(&key_bytes) {
                 let _ = russh::keys::known_hosts::learn_known_hosts(&host.host, host.port, &key);
             }
-            // 写完 known_hosts,重新发起一次测试——这次 `check_server_key`
-            // 应该在 `check_known_hosts` 里能查到刚写入的记录。
-            update(
-                ws_state,
-                Message::TestConnection(id),
-                project_id,
-                repo_path,
-                handle,
-                emit,
-            );
+            // 写完 known_hosts,按"是不是上次点终端撞未知 key 的那台主机"
+            // 决定重开终端还是重新测试连接(设计文档 §6)。
+            let retry = if ws_state.reopen_after_trust.as_deref() == Some(id.as_str()) {
+                ws_state.reopen_after_trust = None;
+                Message::OpenTerminal(id)
+            } else {
+                Message::TestConnection(id)
+            };
+            update(ws_state, retry, project_id, repo_path, handle, emit);
+        }
+        Message::OpenTerminal(_) => {
+            // 内核 `App::update` 在通配 `Message::Ssh(msg)` 之前拦截,
+            // 这里理论上到不了;写出来只是为了 `match` 穷尽。
+        }
+        Message::TerminalConnectFailed(_project_id, host_id, _tab_id, err) => {
+            // 内核已经在转发之前清过 pending/ssh_out_pending,这里只需要
+            // 落卡片状态——与 TestConnectionResult 的 Err 分支同一套过期
+            // 防线(不得覆盖 UnknownHostKey/KeyChanged)。
+            if matches!(
+                ws_state.test_status.get(&host_id),
+                Some(TestStatus::UnknownHostKey { .. } | TestStatus::KeyChanged { .. })
+            ) {
+                return;
+            }
+            ws_state.test_status.insert(host_id, TestStatus::Err(err));
         }
     }
 }
