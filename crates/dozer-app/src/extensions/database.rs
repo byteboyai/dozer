@@ -6,8 +6,9 @@
 //! 阶段,见
 //! `docs/superpowers/specs/2026-08-08-database-panel-phase1-design.md`。
 
+use crate::icons;
 use iced_widget::core::{Border, Element, Length};
-use iced_widget::{button, column, container, row, text, text_input};
+use iced_widget::{button, column, container, row, scrollable, text, text_input};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -119,6 +120,7 @@ impl SchemaState {
     }
 
     /// 指定表的列加载态(单测断言与过期防线用)。
+    #[cfg(test)]
     pub fn column_load(&self, key: &(Option<String>, String)) -> Option<&ColumnLoad> {
         self.columns.get(key)
     }
@@ -402,6 +404,7 @@ fn spawn_tables_load(
     });
 }
 
+#[allow(clippy::too_many_arguments)] // 计划给定签名:加载器游标 + 结果回传 emit 共 8 参,边界合理
 fn spawn_columns_load(
     handle: &tokio::runtime::Handle,
     project_id: i64,
@@ -553,6 +556,7 @@ impl WorkspaceState {
     }
 
     /// 指定数据源的 schema 树状态只读视图(状态机单测断言用)。
+    #[cfg(test)]
     pub fn schema_state(&self, source_id: &str) -> Option<&SchemaState> {
         self.schemas.get(source_id)
     }
@@ -912,10 +916,10 @@ pub fn update(
                             .iter()
                             .filter_map(|t| t.schema.as_deref())
                             .collect();
-                        if distinct.len() == 1 {
-                            if let Some(only) = distinct.into_iter().next() {
-                                st.expanded_schemas.insert(only.to_string());
-                            }
+                        if distinct.len() == 1
+                            && let Some(only) = distinct.into_iter().next()
+                        {
+                            st.expanded_schemas.insert(only.to_string());
                         }
                     }
                     // 对账三:仍然展开的表全部重新拉列(置 Loading + spawn)
@@ -1131,12 +1135,22 @@ fn source_card<'a>(
             text(summary)
                 .size(crate::theme::font::caption_sm())
                 .color(crate::theme::color::DIM),
-            row![
-                button(text("测试连接")).on_press(Message::TestConnection(source.id.clone())),
-                button(text("编辑")).on_press(Message::EditSourceStart(source.id.clone())),
-                button(text("删除")).on_press(Message::DeleteSource(source.id.clone())),
-            ]
-            .spacing(8),
+            {
+                let mut btns = row![
+                    button(text("测试连接")).on_press(Message::TestConnection(source.id.clone()))
+                ]
+                .spacing(8);
+                if source.driver != DriverKind::MongoDB {
+                    // MongoDB 集合浏览是阶段 5;本阶段无入口
+                    btns = btns.push(
+                        button(text("浏览结构")).on_press(Message::BrowseSchema(source.id.clone())),
+                    );
+                }
+                btns.push(
+                    button(text("编辑")).on_press(Message::EditSourceStart(source.id.clone())),
+                )
+                .push(button(text("删除")).on_press(Message::DeleteSource(source.id.clone())))
+            },
             text(status_text)
                 .size(crate::theme::font::caption_sm())
                 .color(status_color),
@@ -1266,6 +1280,10 @@ pub fn view<'a>(
     width: Length,
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    // 正在浏览某数据源的 schema 树 → 树视图;否则阶段 1 卡片列表(以下原样)。
+    if let Some((source, st)) = ws_state.browsing_source() {
+        return schema_tree_view(source, st, width, outer);
+    }
     let mut col = column![
         row![
             text("数据源")
@@ -1310,6 +1328,259 @@ pub fn view<'a>(
             },
         )
         .into()
+}
+
+/// schema 树浏览视图(阶段 2)。drill-down:从卡片列表进入,`SchemaBack` 返回。
+fn schema_tree_view<'a>(
+    source: &'a DataSource,
+    st: &'a SchemaState,
+    width: Length,
+    outer: Border,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let header = row![
+        button(icons::view(
+            icons::IconKind::ChevronLeft,
+            crate::theme::icon_size::row(),
+            crate::theme::color::CREAM,
+        ))
+        .on_press(Message::SchemaBack),
+        text(source.name.clone())
+            .size(crate::theme::font::subtitle())
+            .color(crate::theme::color::CREAM),
+        text(source.driver.label())
+            .size(crate::theme::font::caption_sm())
+            .color(crate::theme::color::DIM),
+        iced_widget::space::horizontal(),
+        button(text("刷新")).on_press(Message::SchemaRefresh(source.id.clone())),
+    ]
+    .spacing(8)
+    .align_y(iced_widget::core::Alignment::Center);
+
+    let mut col = column![header].spacing(8);
+
+    // 旧快照在手 + 正在刷新 → 一行"刷新中…"提示,旧树照常(同 git_log 不闪空惯例)
+    if st.loading_tables() && !st.tables().is_empty() {
+        col = col.push(
+            text("刷新中…")
+                .size(crate::theme::font::caption_sm())
+                .color(crate::theme::color::DIM),
+        );
+    }
+    if let Some(e) = st.tables_error()
+        && !st.tables().is_empty()
+    {
+        // 有旧快照:树保留,一行红字说明刷新失败
+        col = col.push(
+            text(format!("刷新失败:{e}"))
+                .size(crate::theme::font::caption_sm())
+                .color(crate::theme::color::RED),
+        );
+    }
+
+    if st.loading_tables() && st.tables().is_empty() {
+        col = col.push(
+            text("加载中…")
+                .size(crate::theme::font::body())
+                .color(crate::theme::color::DIM),
+        );
+    } else if st.tables().is_empty() {
+        if let Some(e) = st.tables_error() {
+            col = col.push(
+                text(format!("✗ {e}"))
+                    .size(crate::theme::font::body())
+                    .color(crate::theme::color::RED),
+            );
+            col =
+                col.push(button(text("重试")).on_press(Message::SchemaRefresh(source.id.clone())));
+        } else {
+            col = col.push(
+                text("该库没有表或视图")
+                    .size(crate::theme::font::body())
+                    .color(crate::theme::color::DIM),
+            );
+        }
+    } else {
+        let mut tree = column![].spacing(2);
+        for r in tree_rows(st, source.driver) {
+            tree = tree.push(schema_tree_row(&source.id, r));
+        }
+        col = col.push(
+            scrollable(tree)
+                .direction(scrollable::Direction::Vertical(
+                    crate::scrollbar::scrollbar(),
+                ))
+                .style(|_t, _s| crate::scrollbar::scrollbar_style()),
+        );
+    }
+
+    container(col.padding(16))
+        .width(width)
+        .height(iced_widget::core::Length::Fill)
+        .style(
+            move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                background: Some(crate::theme::color::BG.into()),
+                border: outer,
+                ..iced_widget::container::Style::default()
+            },
+        )
+        .into()
+}
+
+/// 单行渲染。source_id 用于构造 `ToggleTable`。
+fn schema_tree_row<'a>(
+    source_id: &str,
+    r: SchemaRow<'a>,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let indent = text("  ".repeat(r.depth)).size(crate::workspace::tree_row_font_size());
+    match r.kind {
+        SchemaRowKind::Schema(name) => {
+            let chevron = if r.expanded {
+                icons::IconKind::ChevronDown
+            } else {
+                icons::IconKind::ChevronRight
+            };
+            let folder = if r.expanded {
+                icons::IconKind::FolderOpen
+            } else {
+                icons::IconKind::Folder
+            };
+            button(
+                row![
+                    indent,
+                    icons::view(
+                        chevron,
+                        crate::theme::icon_size::chevron(),
+                        crate::theme::color::DIM
+                    ),
+                    icons::view(
+                        folder,
+                        crate::theme::icon_size::row(),
+                        crate::theme::color::DIM
+                    ),
+                    text(name.to_string())
+                        .size(crate::workspace::tree_row_font_size())
+                        .color(crate::theme::color::CREAM),
+                ]
+                .spacing(crate::theme::icon_size::tree_row_gap())
+                .align_y(iced_widget::core::Alignment::Center),
+            )
+            .on_press(Message::ToggleSchema(name.to_string()))
+            .width(Length::Fill)
+            .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+                background: None,
+                ..iced_widget::button::Style::default()
+            })
+            .into()
+        }
+        SchemaRowKind::Table(t) => {
+            let chevron = if r.expanded {
+                icons::IconKind::ChevronDown
+            } else {
+                icons::IconKind::ChevronRight
+            };
+            let icon = if t.is_view {
+                icons::IconKind::Eye
+            } else {
+                icons::IconKind::Table
+            };
+            button(
+                row![
+                    indent,
+                    icons::view(
+                        chevron,
+                        crate::theme::icon_size::chevron(),
+                        crate::theme::color::DIM
+                    ),
+                    icons::view(
+                        icon,
+                        crate::theme::icon_size::row(),
+                        crate::theme::color::DIM
+                    ),
+                    text(t.name.clone())
+                        .size(crate::workspace::tree_row_font_size())
+                        .color(crate::theme::color::CREAM),
+                ]
+                .spacing(crate::theme::icon_size::tree_row_gap())
+                .align_y(iced_widget::core::Alignment::Center),
+            )
+            .on_press(Message::ToggleTable {
+                source_id: source_id.to_string(),
+                schema: t.schema.clone(),
+                table: t.name.clone(),
+            })
+            .width(Length::Fill)
+            .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+                background: None,
+                ..iced_widget::button::Style::default()
+            })
+            .into()
+        }
+        SchemaRowKind::Column(c) => {
+            // 可空性用颜色深浅表达:非空 CREAM、可空 BODY(不加 "NOT NULL" 文本)
+            let name_color = if c.nullable {
+                crate::theme::color::BODY
+            } else {
+                crate::theme::color::CREAM
+            };
+            row![
+                indent,
+                iced_widget::space::Space::new()
+                    .width(Length::Fixed(
+                        crate::theme::icon_size::chevron()
+                            + crate::theme::icon_size::tree_row_gap()
+                            + crate::theme::icon_size::row()
+                            + crate::theme::icon_size::tree_row_gap(),
+                    ))
+                    .height(Length::Shrink),
+                text(c.name.clone())
+                    .size(crate::workspace::tree_row_font_size())
+                    .color(name_color),
+                text(c.type_name.clone())
+                    .size(crate::theme::font::caption_sm())
+                    .color(crate::theme::color::DIM),
+            ]
+            .spacing(6)
+            .align_y(iced_widget::core::Alignment::Center)
+            .into()
+        }
+        SchemaRowKind::ColumnsLoading => row![
+            indent,
+            iced_widget::space::Space::new()
+                .width(Length::Fixed(
+                    crate::theme::icon_size::chevron()
+                        + crate::theme::icon_size::tree_row_gap()
+                        + crate::theme::icon_size::row()
+                        + crate::theme::icon_size::tree_row_gap(),
+                ))
+                .height(Length::Shrink),
+            text("加载列中…")
+                .size(crate::workspace::tree_row_font_size())
+                .color(crate::theme::color::DIM),
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center)
+        .into(),
+        SchemaRowKind::ColumnsFailed(e) => row![
+            indent,
+            iced_widget::space::Space::new()
+                .width(Length::Fixed(
+                    crate::theme::icon_size::chevron()
+                        + crate::theme::icon_size::tree_row_gap()
+                        + crate::theme::icon_size::row()
+                        + crate::theme::icon_size::tree_row_gap(),
+                ))
+                .height(Length::Shrink),
+            text(format!("列加载失败:{e}"))
+                .size(crate::workspace::tree_row_font_size())
+                .color(crate::theme::color::RED),
+            text("(收起再展开可重试)")
+                .size(crate::theme::font::caption_sm())
+                .color(crate::theme::color::DIM),
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center)
+        .into(),
+    }
 }
 
 #[cfg(test)]
@@ -1447,11 +1718,13 @@ mod tests {
 
     #[test]
     fn tree_rows_flat_for_sqlite() {
-        let mut st = SchemaState::default();
-        st.tables = vec![
-            tree_table(None, "users", false),
-            tree_table(None, "orders", true),
-        ];
+        let mut st = SchemaState {
+            tables: vec![
+                tree_table(None, "users", false),
+                tree_table(None, "orders", true),
+            ],
+            ..Default::default()
+        };
         st.expanded_tables.insert((None, "users".into()));
         st.columns.insert(
             (None, "users".into()),
@@ -1473,11 +1746,13 @@ mod tests {
 
     #[test]
     fn tree_rows_postgres_groups_by_schema_and_folds() {
-        let mut st = SchemaState::default();
-        st.tables = vec![
-            tree_table(Some("public"), "users", false),
-            tree_table(Some("audit"), "events", false),
-        ];
+        let mut st = SchemaState {
+            tables: vec![
+                tree_table(Some("public"), "users", false),
+                tree_table(Some("audit"), "events", false),
+            ],
+            ..Default::default()
+        };
         // 未展开:只有两个 schema 行(BTreeMap 序 audit < public)
         let rows = tree_rows(&st, DriverKind::Postgres);
         assert_eq!(rows.len(), 2);
@@ -1495,8 +1770,10 @@ mod tests {
 
     #[test]
     fn tree_rows_emits_loading_and_failed_placeholders() {
-        let mut st = SchemaState::default();
-        st.tables = vec![tree_table(None, "a", false), tree_table(None, "b", false)];
+        let mut st = SchemaState {
+            tables: vec![tree_table(None, "a", false), tree_table(None, "b", false)],
+            ..Default::default()
+        };
         st.expanded_tables.insert((None, "a".into()));
         st.expanded_tables.insert((None, "b".into()));
         st.columns.insert((None, "a".into()), ColumnLoad::Loading);
@@ -1540,8 +1817,10 @@ mod tests {
     }
 
     fn seeded_ws(source: DataSource) -> WorkspaceState {
-        let mut ws = WorkspaceState::default();
-        ws.browsing = Some(source.id.clone());
+        let mut ws = WorkspaceState {
+            browsing: Some(source.id.clone()),
+            ..Default::default()
+        };
         ws.sources.push(source.clone());
         ws.schemas.insert(source.id.clone(), SchemaState::default());
         ws
