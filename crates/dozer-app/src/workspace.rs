@@ -1869,13 +1869,20 @@ impl Workspace {
         if !tab.alive {
             return;
         }
-        let client = io.client.clone();
-        let id = tab.info.id.clone();
-        io.handle.spawn(async move {
-            if let Err(e) = client.write(&id, &bytes).await {
-                tracing::warn!("写入终端失败: {e}");
+        match &tab.backend {
+            TabBackend::Daemon => {
+                let client = io.client.clone();
+                let id = tab.info.id.clone();
+                io.handle.spawn(async move {
+                    if let Err(e) = client.write(&id, &bytes).await {
+                        tracing::warn!("写入终端失败: {e}");
+                    }
+                });
             }
-        });
+            TabBackend::Ssh { out } => {
+                let _ = out.send(SshOut::Data(bytes));
+            }
+        }
     }
 
     /// 把 `text` 当输入写进已存活的 `session_id` 对应 tab。派发目标可能在
@@ -1887,14 +1894,21 @@ impl Workspace {
         if !tab.alive {
             return;
         }
-        let client = io.client.clone();
-        let id = session_id.to_string();
         let bytes = format!("{text}\n").into_bytes();
-        io.handle.spawn(async move {
-            if let Err(e) = client.write(&id, &bytes).await {
-                tracing::warn!("派发任务文本失败: {e}");
+        match &tab.backend {
+            TabBackend::Daemon => {
+                let client = io.client.clone();
+                let id = session_id.to_string();
+                io.handle.spawn(async move {
+                    if let Err(e) = client.write(&id, &bytes).await {
+                        tracing::warn!("派发任务文本失败: {e}");
+                    }
+                });
             }
-        });
+            TabBackend::Ssh { out } => {
+                let _ = out.send(SshOut::Data(bytes));
+            }
+        }
     }
 
     /// 异步扫当前项目的对话目录 → ConversationsRefreshed（GUI 侧 spawn_blocking；P1j）。
@@ -2077,7 +2091,7 @@ impl Workspace {
         }
         let tab = self.tabs.remove(idx);
         tab.forwarder.abort();
-        if tab.alive {
+        if tab.alive && matches!(tab.backend, TabBackend::Daemon) {
             let client = io.client.clone();
             let id = tab.info.id.clone();
             io.handle.spawn(async move {
@@ -2456,14 +2470,22 @@ impl Workspace {
         let handle = io.handle.clone();
         for tab in &mut self.tabs {
             tab.model.resize(cols, rows);
-            if tab.alive {
-                let client = client.clone();
-                let id = tab.info.id.clone();
-                handle.spawn(async move {
-                    if let Err(e) = client.resize(&id, cols, rows).await {
-                        tracing::warn!("同步终端尺寸到 daemon 失败: {e}");
-                    }
-                });
+            if !tab.alive {
+                continue;
+            }
+            match &tab.backend {
+                TabBackend::Daemon => {
+                    let client = client.clone();
+                    let id = tab.info.id.clone();
+                    handle.spawn(async move {
+                        if let Err(e) = client.resize(&id, cols, rows).await {
+                            tracing::warn!("同步终端尺寸到 daemon 失败: {e}");
+                        }
+                    });
+                }
+                TabBackend::Ssh { out } => {
+                    let _ = out.send(SshOut::Resize { cols, rows });
+                }
             }
         }
     }
@@ -3257,15 +3279,22 @@ impl App {
                     // ——atuin/claude 等 TUI 依赖它（此前丢弃导致探测超时）。
                     tab.ingest_osc(&bytes);
                     let responses = tab.model.feed(&bytes);
-                    let alive = tab.alive;
-                    let id = tab.info.id.clone();
-                    if !responses.is_empty() && alive {
-                        let client = io.client.clone();
-                        io.handle.spawn(async move {
-                            if let Err(e) = client.write(&id, &responses).await {
-                                tracing::warn!("回写终端查询应答失败: {e}");
-                            }
-                        });
+                    if responses.is_empty() || !tab.alive {
+                        return;
+                    }
+                    match &tab.backend {
+                        TabBackend::Daemon => {
+                            let client = io.client.clone();
+                            let id = tab.info.id.clone();
+                            io.handle.spawn(async move {
+                                if let Err(e) = client.write(&id, &responses).await {
+                                    tracing::warn!("回写终端查询应答失败: {e}");
+                                }
+                            });
+                        }
+                        TabBackend::Ssh { out } => {
+                            let _ = out.send(SshOut::Data(responses));
+                        }
                     }
                 });
             }
@@ -6619,9 +6648,12 @@ fn terminal_status_bar(
         text("·")
             .size(theme::font::caption())
             .color(theme::color::DIM),
-        text("dozerd 持有 · 断连可恢复")
-            .size(theme::font::caption())
-            .color(theme::color::DIM),
+        text(match ws.tabs.get(ws.active).map(|t| &t.backend) {
+            Some(TabBackend::Ssh { .. }) => "SSH 直连 · 断连不可恢复",
+            _ => "dozerd 持有 · 断连可恢复",
+        })
+        .size(theme::font::caption())
+        .color(theme::color::DIM),
     ]
     .spacing(6);
     status_bar_container(line, outer)
