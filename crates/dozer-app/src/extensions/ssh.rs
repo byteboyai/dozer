@@ -240,6 +240,10 @@ pub enum Message {
     /// 测试过程中遇到未知 host key,携带指纹文案(给 UI 显示)+ 公钥原始
     /// 字节(存进 `pending_unknown_keys`,点"信任并重试"时要用)。
     UnknownKeyDetected(i64, String, String, Vec<u8>),
+    /// 测试过程中发现 host key 变了(known_hosts 里有同算法但公钥不同的
+    /// 记录,可能中间人攻击)——直接拒绝,没有"信任并继续"这个选项。
+    /// 携带 `project_id`、`host_id`、指纹文案。
+    KeyChanged(i64, String, String),
     /// 用户确认信任某台主机的 host key:写入 known_hosts,然后重新发起
     /// 一次 `TestConnection`。
     TrustHostKey(String),
@@ -370,6 +374,21 @@ pub fn update(
                             Err(format!("未知主机,指纹 {fingerprint}——需要确认信任")),
                         ));
                     }
+                    Ok(Err(SshError::KeyChanged { fingerprint })) => {
+                        // 同上面的 UnknownHostKey:先发 `KeyChanged`(带指纹,
+                        // 让 UI 落成明确的"指纹已变化·拒绝连接"状态),再发
+                        // 一条 `TestConnectionResult` 兜底文案。
+                        emit(Message::KeyChanged(
+                            project_id,
+                            id.clone(),
+                            fingerprint.clone(),
+                        ));
+                        emit(Message::TestConnectionResult(
+                            project_id,
+                            id,
+                            Err(format!("主机指纹已变化({fingerprint}),拒绝连接")),
+                        ));
+                    }
                     Ok(Err(e)) => {
                         emit(Message::TestConnectionResult(
                             project_id,
@@ -395,9 +414,11 @@ pub fn update(
                     // 主机"这个原因)已经在下面这个分支之前处理过、把
                     // `UnknownHostKey` 状态写进去了——这里如果状态已经是
                     // `UnknownHostKey` 就不要用泛化的 `Err(String)` 盖掉它。
+                    // `KeyChanged` 同理:上面 `KeyChanged` 分支已经把它落成
+                    // 明确的"指纹已变化"状态,也不能被泛化错误覆盖。
                     if matches!(
                         ws_state.test_status.get(&id),
-                        Some(TestStatus::UnknownHostKey { .. })
+                        Some(TestStatus::UnknownHostKey { .. } | TestStatus::KeyChanged { .. })
                     ) {
                         return;
                     }
@@ -411,6 +432,11 @@ pub fn update(
                 .test_status
                 .insert(id.clone(), TestStatus::UnknownHostKey { fingerprint });
             ws_state.pending_unknown_keys.insert(id, key_bytes);
+        }
+        Message::KeyChanged(_project_id, id, fingerprint) => {
+            ws_state
+                .test_status
+                .insert(id, TestStatus::KeyChanged { fingerprint });
         }
         Message::TrustHostKey(id) => {
             let Some(key_bytes) = ws_state.pending_unknown_keys.remove(&id) else {
