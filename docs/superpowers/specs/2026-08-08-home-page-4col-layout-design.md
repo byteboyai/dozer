@@ -27,7 +27,9 @@
 1. `home_page` 改为 `row![home_left_icon_rail, home_left_zone, divider, home_right_zone, home_right_icon_rail]`,
    直接复用工作区已有的视觉 token(`theme::region::left_icon_rail`/
    `right_icon_rail`/`left_zone`/`right_zone`、`theme::geometry::icon_rail_width`、
-   `divider_bar`、`rail_icon_button`、`HoverId::Rail` 悬停动画机制),不新建样式系统。
+   `rail_icon_button`、`HoverId::Rail` 悬停动画机制),不新建样式系统;中间分隔线
+   是新写的静态 `home_divider`(不复用工作区 `divider_bar`,理由见"架构与数据流"
+   第 1 节)。
 2. 新枚举 `HomeLeftView { ProjectList, Recents }`(默认 `ProjectList`)、
    `HomeRightView { Browser }`(默认且目前唯一 `Browser`,为将来扩展占位,呼应
    "以后再加 Todo/Files 等 pane"的既定方向)。语义、命名风格对齐既有
@@ -126,8 +128,8 @@
 - `App` 字段:`recent_projects`、`home_recent_files`、`home_recent_conversations`、
   `home_recents_loaded`、`home_left_view`、`home_right_view`、`home_browser`、
   `daemon_error`。
-- `workspace.rs` 里的辅助函数/类型:`rail_icon_button`、`divider_bar`、
-  `zone_pane_border`、`relative_time_text`、`PaneCorner`。
+- `workspace.rs` 里的辅助函数/类型:`rail_icon_button`、`zone_pane_border`、
+  `relative_time_text`、`PaneCorner`。
 - 均限定 `pub(crate)`(仓内可见),不导出到 crate 外部,不影响任何公共 API。
   `RailButton`/`HoverId`/`Divider`/`App::hover_progress`/`lh` 现状已是
   `pub`/`pub(crate)`,不需要改动(写计划时以实际代码为准复核一遍,这里只是
@@ -147,7 +149,7 @@ fn home_page(app: &App) -> Element<'_, Message, ..> {
     let body = row![
         home_left_icon_rail(app),
         home_left_zone(app),
-        divider_bar(Divider::LeftRight, ..),
+        home_divider(),
         home_right_zone(app),
         home_right_icon_rail(app),
     ]
@@ -156,6 +158,16 @@ fn home_page(app: &App) -> Element<'_, Message, ..> {
     // 保持现有 home_page 的收尾逻辑不变。
 }
 ```
+
+**不复用 `divider_bar(Divider::LeftRight, ..)`**:brainstorming 过程中核对了它的实现
+(workspace.rs:6664-6709)才发现,`Divider::LeftRight` 分支恰恰是"不画可见线,只画一条
+`MouseArea` 拖拽热区,`on_press` 直接派发 `Message::ColumnDragStart(Divider::LeftRight)`"
+——这正是工作区左右面板区之间那条可拖拽分隔线的实现,拖拽状态机(`self.dragging`/
+`self.shell_layout.left_width`)是工作区专属的。已确认首页不做拖拽调宽(见"目标"第 6
+条),原样复用会导致在首页拖动分隔线时意外改写工作区的拖宽状态。改为新增一个纯装饰、
+不接 `MouseArea`/`on_press` 的 `home_divider() -> Element<'_, Message, ..>`(固定宽
+`theme::geometry::divider_width()`、背景色 `theme::color::BG`,视觉效果等价于
+`Divider::LeftRight` 分支在不拖拽时的静态观感,但没有交互)。
 
 `home_left_icon_rail`/`home_right_icon_rail` 结构镜像现有 `left_icon_rail`/
 `right_icon_rail`(`rail_icon_button` + `MouseArea` hover + `container` 固定宽
@@ -257,17 +269,33 @@ HomeBrowser(browser::Message),
 
 ## 测试策略
 
-- `HomeLeftIconSelect`/`HomeRightIconSelect` 处理器的单测:赋值正确性。
-- `Message::TopBarHome` 处理器单测追加断言:重复进入首页后
-  `home_left_view`/`home_right_view` 回到默认值(即使上次退出前手动切换过)。
-- `home_browser` 路由的 `HomeBrowser` 消息单测:复用/参考现有
-  `extensions::browser` 测试里 `project_id: None` 的用例(如
-  `update_bookmark_add_project_scope_without_project_id_is_local_only`),确认
-  首页浏览器打开 URL、全局收藏夹增删的行为符合预期。
-- 人工验收:首页四栏视觉与工作区一致(rail 宽度、zone 背景/边框/margin 观感统一);
-  左栏默认项目列表、点 Recents 图标能切到上下堆叠的两张卡且数据完整;右栏默认
-  浏览器可用(能开 URL、能收藏);切工作区再切回首页,左右栏都回到默认 pane;
-  项目列表为空/`daemon_error` 场景兜底文案不崩。
+**已核实的约束**:`workspace.rs` 现有 85 个测试全部是纯函数/纯逻辑测试
+(`load_home_recents`/`relative_time_text`/`ai_turn_summary`……),没有任何测试
+直接构造 `App` 或调用 `App::update(..)`——`App` 依赖真实 `Client`/
+`tokio::runtime::Handle`/`EventLoopProxy<Message>`,现状没有为它搭测试夹具。
+`HomeLeftIconSelect`/`HomeRightIconSelect`/`TopBarHome` 三个处理器的行为因此
+**不可能**写成 `App::update` 级别的单测(没有能力构造 `App` 实例)——这一点
+brainstorming 早先版本的测试策略写错了,这里订正。
+
+- `HomeLeftView`/`HomeRightView` 的 `Default` 实现:直接对枚举值断言(
+  `assert_eq!(HomeLeftView::default(), HomeLeftView::ProjectList)` 等),不
+  依赖 `App`,可测。
+- `load_home_recents` 现有 3 个测试原样搬进 `homespace.rs` 的测试模块,断言
+  不变(纯文件搬家)。
+- `home_browser` 的 `project_id: None` 路径**不需要新增测试**——首页浏览器
+  只是把已有的 `browser::update(&mut state, msg, None, &client, &handle,
+  emit)` 换一个调用点(`state` 换成 `app.home_browser`),`project_id: None`
+  这条路径已经被 `extensions::browser` 自己的测试覆盖(如
+  `update_bookmark_add_project_scope_without_project_id_is_local_only`),
+  行为不因调用方是首页还是工作区而改变。
+- `HomeLeftIconSelect`/`HomeRightIconSelect`/`TopBarHome` 重置逻辑、四栏视图
+  渲染、rail 图标选中态、Recents 上下堆叠观感——均只能人工验收(与
+  `left_icon_rail`/`right_icon_rail`/`left_panel_area` 等既有工作区视图代码
+  现状一致,这些也从未被单测覆盖)。
+- 人工验收清单:首页四栏视觉与工作区一致(rail 宽度、zone 背景/边框/margin 观感
+  统一);左栏默认项目列表、点 Recents 图标能切到上下堆叠的两张卡且数据完整;
+  右栏默认浏览器可用(能开 URL、能收藏);切工作区再切回首页,左右栏都回到默认
+  pane;项目列表为空/`daemon_error` 场景兜底文案不崩。
 
 ## 依赖变更
 
