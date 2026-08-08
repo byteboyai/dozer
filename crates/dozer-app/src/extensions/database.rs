@@ -257,8 +257,11 @@ fn columns_sql(driver: DriverKind) -> &'static str {
              WHERE table_schema = DATABASE() AND table_name = ? \
              ORDER BY ordinal_position"
         }
-        // pragma_table_info 表值函数:常规 SELECT,`Any` 驱动下比 PRAGMA 语句稳
-        DriverKind::Sqlite => "SELECT name, type, notnull FROM pragma_table_info(?) ORDER BY cid",
+        // pragma_table_info 表值函数:常规 SELECT,`Any` 驱动下比 PRAGMA 语句稳;
+        // notnull 是保留字,须用 "notnull" 引号包住(SQLite 3.x 实库验证)
+        DriverKind::Sqlite => {
+            "SELECT name, type, \"notnull\" FROM pragma_table_info(?) ORDER BY cid"
+        }
         DriverKind::MongoDB => unreachable!("columns_sql 不处理 MongoDB"),
     }
 }
@@ -378,6 +381,11 @@ async fn load_columns(
                 }
                 DriverKind::MongoDB => unreachable!("load_columns 已在入口拦下 MongoDB"),
             };
+            // 真实表必然有 ≥1 列;0 行 → 表不存在(Postgres/MySQL 走 information_schema,
+            // SQLite 走 pragma_table_info,缺表一律返回空集而非错误)
+            if out.is_empty() {
+                return Err(format!("表不存在或无可见列:{table}"));
+            }
             Ok::<_, String>(out)
         }
         .await;
@@ -2097,5 +2105,87 @@ mod tests {
         update_with(&mut ws, Message::DraftSave);
         assert!(ws.schema_state("s1").is_none());
         assert_eq!(ws.browsing, None);
+    }
+}
+
+#[cfg(test)]
+mod sqlite_introspection {
+    use super::*;
+    use std::sync::Once;
+
+    static INSTALL: Once = Once::new();
+
+    fn install_drivers() {
+        INSTALL.call_once(sqlx::any::install_default_drivers);
+    }
+
+    async fn setup_db() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        // mode=rwc:文件不存在时创建(默认 create_if_missing=false,新库必须显式造文件)
+        let url = format!("sqlite://{}/phase2.sqlite?mode=rwc", dir.path().display());
+        let pool = sqlx::AnyPool::connect(&url).await.unwrap();
+        sqlx::query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE VIEW v_users AS SELECT id FROM users")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        (dir, url)
+    }
+
+    #[tokio::test]
+    async fn load_tables_lists_tables_and_views_in_order() {
+        install_drivers();
+        let (_dir, url) = setup_db().await;
+        let tables = load_tables(DriverKind::Sqlite, &url).await.unwrap();
+        assert_eq!(tables.len(), 2);
+        // SQLite: name ORDER BY → users 在 v_users 前
+        assert_eq!(tables[0].name, "users");
+        assert!(!tables[0].is_view);
+        assert_eq!(tables[1].name, "v_users");
+        assert!(tables[1].is_view);
+        assert!(tables.iter().all(|t| t.schema.is_none()));
+    }
+
+    #[tokio::test]
+    async fn load_columns_reports_name_type_nullability() {
+        install_drivers();
+        let (_dir, url) = setup_db().await;
+        let cols = load_columns(DriverKind::Sqlite, &url, None, "users")
+            .await
+            .unwrap();
+        assert_eq!(cols.len(), 2);
+        // pragma_table_info 按 cid 序:id 在前
+        assert_eq!(cols[0].name, "id");
+        let name = &cols[1];
+        assert_eq!(name.name, "name");
+        assert_eq!(name.type_name.to_uppercase(), "TEXT");
+        assert!(!name.nullable); // NOT NULL 列
+    }
+
+    #[tokio::test]
+    async fn load_columns_missing_table_is_error() {
+        install_drivers();
+        let (_dir, url) = setup_db().await;
+        let err = load_columns(DriverKind::Sqlite, &url, None, "nope")
+            .await
+            .unwrap_err();
+        assert!(!err.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mongodb_loaders_refuse_with_friendly_error() {
+        // UI 已无入口的双保险:直接错误文案,不 panic/不尝试连接
+        let err = load_tables(DriverKind::MongoDB, "mongodb://x")
+            .await
+            .unwrap_err();
+        assert!(err.contains("MongoDB"));
+        let err = load_columns(DriverKind::MongoDB, "mongodb://x", None, "c")
+            .await
+            .unwrap_err();
+        assert!(err.contains("MongoDB"));
     }
 }
