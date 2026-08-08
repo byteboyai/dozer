@@ -214,6 +214,224 @@ fn push_table_rows<'a>(
     }
 }
 
+/// 表/视图清单 SQL(免绑定参数;三种后端各写各的,is_view 在 Rust 侧判断)。
+fn tables_sql(driver: DriverKind) -> &'static str {
+    match driver {
+        DriverKind::Postgres => {
+            "SELECT table_schema, table_name, table_type \
+             FROM information_schema.tables \
+             WHERE table_schema NOT IN ('pg_catalog', 'information_schema') \
+             ORDER BY table_schema, table_name"
+        }
+        DriverKind::MySQL => {
+            "SELECT table_name, table_type \
+             FROM information_schema.tables \
+             WHERE table_schema = DATABASE() \
+             ORDER BY table_name"
+        }
+        DriverKind::Sqlite => {
+            "SELECT name, type FROM sqlite_master \
+             WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' \
+             ORDER BY name"
+        }
+        DriverKind::MongoDB => {
+            unreachable!("tables_sql 不处理 MongoDB(UI 无入口 + load_tables 双保险)")
+        }
+    }
+}
+
+/// 列清单 SQL(需绑定参数 → 占位符风格按后端)。
+fn columns_sql(driver: DriverKind) -> &'static str {
+    match driver {
+        DriverKind::Postgres => {
+            "SELECT column_name, data_type, is_nullable \
+             FROM information_schema.columns \
+             WHERE table_schema = $1 AND table_name = $2 \
+             ORDER BY ordinal_position"
+        }
+        DriverKind::MySQL => {
+            "SELECT column_name, data_type, is_nullable \
+             FROM information_schema.columns \
+             WHERE table_schema = DATABASE() AND table_name = ? \
+             ORDER BY ordinal_position"
+        }
+        // pragma_table_info 表值函数:常规 SELECT,`Any` 驱动下比 PRAGMA 语句稳
+        DriverKind::Sqlite => "SELECT name, type, notnull FROM pragma_table_info(?) ORDER BY cid",
+        DriverKind::MongoDB => unreachable!("columns_sql 不处理 MongoDB"),
+    }
+}
+
+async fn load_tables(kind: DriverKind, url: &str) -> Result<Vec<TableRef>, String> {
+    if kind == DriverKind::MongoDB {
+        return Err("MongoDB 集合浏览将在后续阶段支持".to_string());
+    }
+    let work = async {
+        let pool = sqlx::AnyPool::connect(url)
+            .await
+            .map_err(|e| e.to_string())?;
+        let out = async {
+            let sql = tables_sql(kind);
+            if kind == DriverKind::Postgres {
+                let rows: Vec<(String, String, String)> = sqlx::query_as(sql)
+                    .fetch_all(&pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok::<_, String>(
+                    rows.into_iter()
+                        .map(|(schema, name, table_type)| TableRef {
+                            schema: Some(schema),
+                            name,
+                            is_view: table_type == "VIEW",
+                        })
+                        .collect(),
+                )
+            } else {
+                let rows: Vec<(String, String)> = sqlx::query_as(sql)
+                    .fetch_all(&pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(rows
+                    .into_iter()
+                    .map(|(name, ty)| TableRef {
+                        schema: None,
+                        name,
+                        // MySQL: information_schema.tables.table_type == 'VIEW';
+                        // SQLite: sqlite_master.type == 'view'
+                        is_view: if kind == DriverKind::MySQL {
+                            ty == "VIEW"
+                        } else {
+                            ty == "view"
+                        },
+                    })
+                    .collect())
+            }
+        }
+        .await;
+        pool.close().await;
+        out
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(5), work).await {
+        Ok(r) => r,
+        Err(_) => Err("加载超时(5秒)".to_string()),
+    }
+}
+
+async fn load_columns(
+    kind: DriverKind,
+    url: &str,
+    schema: Option<&str>,
+    table: &str,
+) -> Result<Vec<ColumnInfo>, String> {
+    if kind == DriverKind::MongoDB {
+        return Err("MongoDB 集合浏览将在后续阶段支持".to_string());
+    }
+    let work = async {
+        let pool = sqlx::AnyPool::connect(url)
+            .await
+            .map_err(|e| e.to_string())?;
+        let out = async {
+            let out: Vec<ColumnInfo> = match kind {
+                DriverKind::Postgres => {
+                    let rows: Vec<(String, String, String)> = sqlx::query_as(columns_sql(kind))
+                        .bind(schema.unwrap_or("public"))
+                        .bind(table)
+                        .fetch_all(&pool)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    rows.into_iter()
+                        .map(|(name, dt, nullable)| ColumnInfo {
+                            name,
+                            type_name: dt,
+                            nullable: nullable == "YES",
+                        })
+                        .collect()
+                }
+                DriverKind::MySQL => {
+                    let rows: Vec<(String, String, String)> = sqlx::query_as(columns_sql(kind))
+                        .bind(table)
+                        .fetch_all(&pool)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    rows.into_iter()
+                        .map(|(name, dt, nullable)| ColumnInfo {
+                            name,
+                            type_name: dt,
+                            nullable: nullable == "YES",
+                        })
+                        .collect()
+                }
+                DriverKind::Sqlite => {
+                    let rows: Vec<(String, String, i64)> = sqlx::query_as(columns_sql(kind))
+                        .bind(table)
+                        .fetch_all(&pool)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    rows.into_iter()
+                        .map(|(name, ty, notnull)| ColumnInfo {
+                            name,
+                            type_name: ty,
+                            nullable: notnull == 0,
+                        })
+                        .collect()
+                }
+                DriverKind::MongoDB => unreachable!("load_columns 已在入口拦下 MongoDB"),
+            };
+            Ok::<_, String>(out)
+        }
+        .await;
+        pool.close().await;
+        out
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(5), work).await {
+        Ok(r) => r,
+        Err(_) => Err("加载超时(5秒)".to_string()),
+    }
+}
+
+fn spawn_tables_load(
+    handle: &tokio::runtime::Handle,
+    project_id: i64,
+    source_id: String,
+    kind: DriverKind,
+    url: String,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    handle.spawn(async move {
+        let result = load_tables(kind, &url).await;
+        emit(Message::TablesLoaded(project_id, source_id, result));
+    });
+}
+
+fn spawn_columns_load(
+    handle: &tokio::runtime::Handle,
+    project_id: i64,
+    source_id: String,
+    kind: DriverKind,
+    url: String,
+    schema: Option<String>,
+    table: String,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    handle.spawn(async move {
+        let result = load_columns(kind, &url, schema.as_deref(), &table).await;
+        emit(Message::ColumnsLoaded {
+            project_id,
+            source_id,
+            schema,
+            table,
+            result,
+        });
+    });
+}
+
+fn driver_of(ws_state: &WorkspaceState, source_id: &str) -> Option<DriverKind> {
+    ws_state
+        .sources
+        .iter()
+        .find(|s| s.id == source_id)
+        .map(|s| s.driver)
+}
+
 fn drivers_path() -> PathBuf {
     dozer_core::paths::config_dir().join("database_drivers.json")
 }
@@ -405,6 +623,33 @@ pub enum Message {
     /// 页签,`App::update` 必须按这里的 `project_id` 而不是"当前聚焦
     /// 项目"路由。
     TestConnectionResult(i64, String, Result<(), String>),
+    /// 点"浏览结构":`browsing = Some(id)`;该源从未加载过则自动发起表加载
+    /// (有缓存/有错误保留现状,错误态由"重试"触发)。
+    BrowseSchema(String),
+    /// schema 树顶部"← 返回":回到卡片列表(树状态保留,再进入不重拉)。
+    SchemaBack,
+    /// schema 树顶部"刷新":重拉表列表(旧快照保留不闪空,成功后对账)。
+    /// 处理前先核对 `browsing == Some(id)`,防旧视图残留按钮。
+    SchemaRefresh(String),
+    /// Postgres schema 节点展开/收起(纯同步,不触发加载)。
+    ToggleSchema(String),
+    /// 表节点展开/收起;展开时列缓存缺失或曾失败 → 置 `Loading` 并发起列加载。
+    ToggleTable {
+        source_id: String,
+        schema: Option<String>,
+        table: String,
+    },
+    /// 表清单异步结果。**带 `project_id`**——结果可能晚于用户切走项目页签,
+    /// 必须按自带 id 路由(同 `TestConnectionResult` 的口径)。
+    TablesLoaded(i64, String, Result<Vec<TableRef>, String>),
+    /// 列加载异步结果,带 `project_id`/`source_id` 双路由。
+    ColumnsLoaded {
+        project_id: i64,
+        source_id: String,
+        schema: Option<String>,
+        table: String,
+        result: Result<Vec<ColumnInfo>, String>,
+    },
 }
 
 pub fn update(
@@ -414,7 +659,7 @@ pub fn update(
     project_id: i64,
     repo_path: &Path,
     handle: &tokio::runtime::Handle,
-    emit: impl Fn(Message) + Send + 'static,
+    emit: impl Fn(Message) + Send + Clone + 'static,
 ) {
     match msg {
         Message::ToggleDriver(driver) => app_state.toggle(driver),
@@ -476,6 +721,13 @@ pub fn update(
             {
                 let _ = entry.set_password(&draft.password);
             }
+            // 编辑已有源:连接信息可能变了,旧结构快照不作数(设计文档 §2)。
+            if draft.id.is_some() {
+                ws_state.schemas.remove(&id);
+                if ws_state.browsing.as_deref() == Some(id.as_str()) {
+                    ws_state.browsing = None;
+                }
+            }
             if let Err(e) = save_sources(repo_path, &ws_state.sources) {
                 tracing::warn!("写入 database.json 失败: {e}");
             }
@@ -486,6 +738,10 @@ pub fn update(
         Message::DeleteSource(id) => {
             ws_state.sources.retain(|s| s.id != id);
             ws_state.test_status.remove(&id);
+            ws_state.schemas.remove(&id);
+            if ws_state.browsing.as_deref() == Some(id.as_str()) {
+                ws_state.browsing = None;
+            }
             if let Ok(entry) = keyring_entry(project_id, &id) {
                 let _ = entry.delete_credential();
             }
@@ -520,6 +776,197 @@ pub fn update(
                 Err(e) => TestStatus::Err(e),
             };
             ws_state.test_status.insert(id, status);
+        }
+        Message::BrowseSchema(id) => {
+            let Some(source) = ws_state.sources.iter().find(|s| s.id == id).cloned() else {
+                return;
+            };
+            ws_state.browsing = Some(id.clone());
+            let st = ws_state.schemas.entry(id.clone()).or_default();
+            // 从未加载过才拉:有缓存 → 直接显示;有错误 → 等用户点"重试"
+            let need_load = st.tables.is_empty() && !st.loading_tables && st.tables_error.is_none();
+            if !need_load {
+                return;
+            }
+            st.loading_tables = true;
+            let password = keyring_entry(project_id, &id)
+                .ok()
+                .and_then(|e| e.get_password().ok());
+            spawn_tables_load(
+                handle,
+                project_id,
+                id,
+                source.driver,
+                build_sql_url(&source, password.as_deref()),
+                emit,
+            );
+        }
+        Message::SchemaBack => {
+            ws_state.browsing = None;
+        }
+        Message::SchemaRefresh(source_id) => {
+            if ws_state.browsing.as_deref() != Some(source_id.as_str()) {
+                return; // 旧视图残留按钮防线
+            }
+            let Some(source) = ws_state.sources.iter().find(|s| s.id == source_id).cloned() else {
+                return;
+            };
+            let st = ws_state.schemas.entry(source_id.clone()).or_default();
+            st.loading_tables = true;
+            st.tables_error = None;
+            // 旧表快照保留不闪空(设计文档 UI 节)
+            let password = keyring_entry(project_id, &source_id)
+                .ok()
+                .and_then(|e| e.get_password().ok());
+            spawn_tables_load(
+                handle,
+                project_id,
+                source_id,
+                source.driver,
+                build_sql_url(&source, password.as_deref()),
+                emit,
+            );
+        }
+        Message::ToggleSchema(name) => {
+            let Some(browsing) = ws_state.browsing.clone() else {
+                return;
+            };
+            let Some(st) = ws_state.schemas.get_mut(&browsing) else {
+                return;
+            };
+            if !st.expanded_schemas.remove(&name) {
+                st.expanded_schemas.insert(name);
+            }
+        }
+        Message::ToggleTable {
+            source_id,
+            schema,
+            table,
+        } => {
+            if ws_state.browsing.as_deref() != Some(source_id.as_str()) {
+                return; // 旧视图残留按钮防线
+            }
+            let Some(source) = ws_state.sources.iter().find(|s| s.id == source_id).cloned() else {
+                return;
+            };
+            let key = (schema, table);
+            let Some(st) = ws_state.schemas.get_mut(&source_id) else {
+                return;
+            };
+            if st.expanded_tables.remove(&key) {
+                return; // 收起:保留缓存,不取消飞行中的加载(回来照常写缓存)
+            }
+            st.expanded_tables.insert(key.clone());
+            if matches!(
+                st.columns.get(&key),
+                Some(ColumnLoad::Loaded(_)) | Some(ColumnLoad::Loading)
+            ) {
+                return;
+            }
+            // 缺失或曾失败 → (重新)加载
+            st.columns.insert(key.clone(), ColumnLoad::Loading);
+            let password = keyring_entry(project_id, &source_id)
+                .ok()
+                .and_then(|e| e.get_password().ok());
+            spawn_columns_load(
+                handle,
+                project_id,
+                source.id.clone(),
+                source.driver,
+                build_sql_url(&source, password.as_deref()),
+                key.0,
+                key.1,
+                emit,
+            );
+        }
+        Message::TablesLoaded(_project_id, source_id, result) => {
+            // 借用顺序:先只读查驱动,再拿 schemas 可变借用(st 存活期间
+            // 不能再回借 ws_state.sources,见下 Ok 分支尾部)
+            let is_pg = driver_of(ws_state, &source_id) == Some(DriverKind::Postgres);
+            let Some(st) = ws_state.schemas.get_mut(&source_id) else {
+                return;
+            };
+            if !st.loading_tables {
+                return; // 过期防线:源已删/被新一轮加载覆盖
+            }
+            st.loading_tables = false;
+            match result {
+                Err(e) => {
+                    st.tables_error = Some(e); // 旧快照保留,视图按有无快照分别渲染
+                }
+                Ok(tables) => {
+                    st.tables_error = None;
+                    st.tables = tables;
+                    // 对账一:新表列表里不存在的展开项/列缓存清掉
+                    let keys: HashSet<(Option<String>, String)> = st
+                        .tables
+                        .iter()
+                        .map(|t| (t.schema.clone(), t.name.clone()))
+                        .collect();
+                    st.expanded_tables.retain(|k| keys.contains(k));
+                    st.columns.retain(|k, _| keys.contains(k));
+                    // 对账二:Postgres 全表同属一个 schema → 自动展开(MVP 少一次点击)
+                    if is_pg {
+                        let distinct: HashSet<&str> = st
+                            .tables
+                            .iter()
+                            .filter_map(|t| t.schema.as_deref())
+                            .collect();
+                        if distinct.len() == 1 {
+                            if let Some(only) = distinct.into_iter().next() {
+                                st.expanded_schemas.insert(only.to_string());
+                            }
+                        }
+                    }
+                    // 对账三:仍然展开的表全部重新拉列(置 Loading + spawn)
+                    let reload: Vec<(Option<String>, String)> =
+                        st.expanded_tables.iter().cloned().collect();
+                    for key in &reload {
+                        st.columns.insert(key.clone(), ColumnLoad::Loading);
+                    }
+                    let Some(source) = ws_state.sources.iter().find(|s| s.id == source_id).cloned()
+                    else {
+                        return;
+                    };
+                    for key in reload {
+                        let password = keyring_entry(project_id, &source.id)
+                            .ok()
+                            .and_then(|e| e.get_password().ok());
+                        spawn_columns_load(
+                            handle,
+                            project_id,
+                            source.id.clone(),
+                            source.driver,
+                            build_sql_url(&source, password.as_deref()),
+                            key.0,
+                            key.1,
+                            emit.clone(),
+                        );
+                    }
+                }
+            }
+        }
+        Message::ColumnsLoaded {
+            project_id: _project_id,
+            source_id,
+            schema,
+            table,
+            result,
+        } => {
+            let Some(st) = ws_state.schemas.get_mut(&source_id) else {
+                return;
+            };
+            let key = (schema, table);
+            if !matches!(st.columns.get(&key), Some(ColumnLoad::Loading)) {
+                return; // 过期防线:只接收仍在等的加载结果
+            }
+            st.columns.insert(
+                key,
+                match result {
+                    Ok(cols) => ColumnLoad::Loaded(cols),
+                    Err(e) => ColumnLoad::Failed(e),
+                },
+            );
         }
     }
 }
@@ -1064,5 +1511,312 @@ mod tests {
             rows.iter()
                 .any(|r| matches!(r.kind, SchemaRowKind::ColumnsFailed(e) if e == "nope"))
         );
+    }
+
+    fn update_with(ws: &mut WorkspaceState, msg: Message) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let mut app_state = AppState::default();
+        let dir = tempfile::tempdir().unwrap();
+        rt.block_on(async {
+            update(ws, &mut app_state, msg, 42, dir.path(), rt.handle(), |_| ());
+        });
+    }
+
+    /// Postgres 源 + 不可达端口:BrowseSchema/ToggleTable 触发的后台任务
+    /// 要么不执行(单测 runtime),要么秒拒连,且不会有 SQLite 建文件副作用。
+    fn pg_source(id: &str) -> DataSource {
+        DataSource {
+            id: id.into(),
+            name: format!("test-{id}"),
+            driver: DriverKind::Postgres,
+            host: Some("127.0.0.1".into()),
+            port: Some(1),
+            database: Some("mydb".into()),
+            username: Some("user".into()),
+        }
+    }
+
+    fn seeded_ws(source: DataSource) -> WorkspaceState {
+        let mut ws = WorkspaceState::default();
+        ws.browsing = Some(source.id.clone());
+        ws.sources.push(source.clone());
+        ws.schemas.insert(source.id.clone(), SchemaState::default());
+        ws
+    }
+
+    #[test]
+    fn browse_schema_first_time_starts_loading() {
+        let src = pg_source("s1");
+        let mut ws = WorkspaceState::default();
+        ws.sources.push(src.clone());
+        update_with(&mut ws, Message::BrowseSchema("s1".into()));
+        assert_eq!(ws.browsing.as_deref(), Some("s1"));
+        let st = ws.schema_state("s1").unwrap_or_else(|| panic!());
+        assert!(st.loading_tables());
+        assert!(st.tables().is_empty());
+        assert!(st.tables_error().is_none());
+    }
+
+    #[test]
+    fn browse_schema_second_time_uses_cache() {
+        let mut ws = seeded_ws(pg_source("s1"));
+        ws.schemas.get_mut("s1").unwrap().tables = vec![tree_table(Some("public"), "users", false)];
+        // 模拟已加载完成
+        update_with(&mut ws, Message::SchemaBack);
+        update_with(&mut ws, Message::BrowseSchema("s1".into()));
+        let st = ws.schema_state("s1").unwrap();
+        assert!(!st.loading_tables()); // 有缓存,不重拉
+        assert_eq!(st.tables().len(), 1);
+    }
+
+    #[test]
+    fn schema_back_clears_browsing_keeps_cache() {
+        let mut ws = seeded_ws(pg_source("s1"));
+        ws.schemas.get_mut("s1").unwrap().tables = vec![tree_table(Some("public"), "users", false)];
+        update_with(&mut ws, Message::SchemaBack);
+        assert_eq!(ws.browsing, None);
+        assert_eq!(ws.schema_state("s1").unwrap().tables().len(), 1);
+    }
+
+    #[test]
+    fn schema_refresh_requires_browsing_match() {
+        let mut ws = seeded_ws(pg_source("s1"));
+        update_with(&mut ws, Message::SchemaBack); // browsing = None
+        update_with(&mut ws, Message::SchemaRefresh("s1".into()));
+        assert!(!ws.schema_state("s1").unwrap().loading_tables()); // 旧按钮防线
+    }
+
+    #[test]
+    fn toggle_schema_flips_expansion() {
+        let mut ws = seeded_ws(pg_source("s1"));
+        let st = ws.schemas.get_mut("s1").unwrap();
+        st.tables = vec![tree_table(Some("public"), "users", false)];
+        update_with(&mut ws, Message::ToggleSchema("public".into()));
+        assert!(
+            tree_rows(ws.schema_state("s1").unwrap(), DriverKind::Postgres)
+                .iter()
+                .any(|r| matches!(r.kind, SchemaRowKind::Table(_)))
+        );
+        update_with(&mut ws, Message::ToggleSchema("public".into()));
+        assert!(
+            !tree_rows(ws.schema_state("s1").unwrap(), DriverKind::Postgres)
+                .iter()
+                .any(|r| matches!(r.kind, SchemaRowKind::Table(_)))
+        );
+    }
+
+    #[test]
+    fn toggle_table_expands_to_loading_then_loaded() {
+        let mut ws = seeded_ws(pg_source("s1"));
+        ws.schemas.get_mut("s1").unwrap().tables = vec![tree_table(Some("public"), "users", false)];
+        // 展开 schema 节点,表行/列行才会进 tree_rows(Postgres 多一层)
+        update_with(&mut ws, Message::ToggleSchema("public".into()));
+        // 首次展开 → Loading(spawn 的任务不会在本测试 runtime 里跑完)
+        update_with(
+            &mut ws,
+            Message::ToggleTable {
+                source_id: "s1".into(),
+                schema: Some("public".into()),
+                table: "users".into(),
+            },
+        );
+        let key = (Some("public".to_string()), "users".to_string());
+        assert!(matches!(
+            ws.schema_state("s1").unwrap().column_load(&key),
+            Some(ColumnLoad::Loading)
+        ));
+        // 结果落地 → Loaded,树里出现列行
+        update_with(
+            &mut ws,
+            Message::ColumnsLoaded {
+                project_id: 42,
+                source_id: "s1".into(),
+                schema: Some("public".into()),
+                table: "users".into(),
+                result: Ok(vec![ColumnInfo {
+                    name: "id".into(),
+                    type_name: "integer".into(),
+                    nullable: false,
+                }]),
+            },
+        );
+        assert!(
+            tree_rows(ws.schema_state("s1").unwrap(), DriverKind::Postgres)
+                .iter()
+                .any(|r| matches!(r.kind, SchemaRowKind::Column(c) if c.name == "id"))
+        );
+        // 过期结果(已不是 Loading)→ 丢弃,仍是旧 Loaded
+        update_with(
+            &mut ws,
+            Message::ColumnsLoaded {
+                project_id: 42,
+                source_id: "s1".into(),
+                schema: Some("public".into()),
+                table: "users".into(),
+                result: Ok(vec![]),
+            },
+        );
+        assert!(matches!(
+            ws.schema_state("s1").unwrap().column_load(&key),
+            Some(ColumnLoad::Loaded(cols)) if cols.len() == 1
+        ));
+    }
+
+    #[test]
+    fn failed_columns_retry_by_recollapse_expand() {
+        let mut ws = seeded_ws(pg_source("s1"));
+        ws.schemas.get_mut("s1").unwrap().tables = vec![tree_table(Some("public"), "users", false)];
+        update_with(&mut ws, Message::ToggleSchema("public".into()));
+        let key = (Some("public".to_string()), "users".to_string());
+        update_with(
+            &mut ws,
+            Message::ToggleTable {
+                source_id: "s1".into(),
+                schema: key.0.clone(),
+                table: key.1.clone(),
+            },
+        );
+        update_with(
+            &mut ws,
+            Message::ColumnsLoaded {
+                project_id: 42,
+                source_id: "s1".into(),
+                schema: key.0.clone(),
+                table: key.1.clone(),
+                result: Err("boom".into()),
+            },
+        );
+        assert!(
+            tree_rows(ws.schema_state("s1").unwrap(), DriverKind::Postgres)
+                .iter()
+                .any(|r| matches!(r.kind, SchemaRowKind::ColumnsFailed("boom")))
+        );
+        // 收起再展开 → 回到 Loading(重试语义)
+        update_with(
+            &mut ws,
+            Message::ToggleTable {
+                source_id: "s1".into(),
+                schema: key.0.clone(),
+                table: key.1.clone(),
+            },
+        );
+        update_with(
+            &mut ws,
+            Message::ToggleTable {
+                source_id: "s1".into(),
+                schema: key.0.clone(),
+                table: key.1.clone(),
+            },
+        );
+        assert!(matches!(
+            ws.schema_state("s1").unwrap().column_load(&key),
+            Some(ColumnLoad::Loading)
+        ));
+    }
+
+    #[test]
+    fn tables_loaded_ok_prunes_autoexpands_and_reloads_expanded() {
+        let mut ws = seeded_ws(pg_source("s1"));
+        {
+            let st = ws.schemas.get_mut("s1").unwrap();
+            st.loading_tables = true;
+            st.tables = vec![
+                tree_table(Some("public"), "gone", false),
+                tree_table(Some("public"), "users", false),
+            ];
+            st.expanded_tables
+                .insert((Some("public".into()), "users".into()));
+            st.columns.insert(
+                (Some("public".into()), "users".into()),
+                ColumnLoad::Failed("旧错误".into()),
+            );
+            st.expanded_tables
+                .insert((Some("public".into()), "gone".into()));
+        }
+        update_with(
+            &mut ws,
+            Message::TablesLoaded(
+                42,
+                "s1".into(),
+                Ok(vec![tree_table(Some("public"), "users", false)]),
+            ),
+        );
+        let st = ws.schema_state("s1").unwrap();
+        assert!(!st.loading_tables());
+        assert_eq!(st.tables().len(), 1);
+        // 对账一:gone 的展开项被清
+        let rows = tree_rows(st, DriverKind::Postgres);
+        assert!(
+            !rows
+                .iter()
+                .any(|r| matches!(r.kind, SchemaRowKind::Table(t) if t.name == "gone"))
+        );
+        // 对账二:单 schema public 自动展开(users 直接可见)
+        assert!(
+            rows.iter()
+                .any(|r| matches!(r.kind, SchemaRowKind::Table(t) if t.name == "users"))
+        );
+        // 对账三:仍展开的 users 重新拉列(Failed → Loading)
+        assert!(matches!(
+            st.column_load(&(Some("public".into()), "users".into())),
+            Some(ColumnLoad::Loading)
+        ));
+    }
+
+    #[test]
+    fn tables_loaded_stale_or_err() {
+        // 过期:loading_tables=false → 丢弃
+        let mut ws = seeded_ws(pg_source("s1"));
+        ws.schemas.get_mut("s1").unwrap().tables = vec![tree_table(Some("public"), "keep", false)];
+        update_with(
+            &mut ws,
+            Message::TablesLoaded(
+                42,
+                "s1".into(),
+                Ok(vec![tree_table(Some("public"), "new", false)]),
+            ),
+        );
+        assert_eq!(ws.schema_state("s1").unwrap().tables()[0].name, "keep");
+
+        // 错误:记 tables_error,旧快照保留
+        let mut ws = seeded_ws(pg_source("s2"));
+        let st = ws.schemas.get_mut("s2").unwrap();
+        st.loading_tables = true;
+        st.tables = vec![tree_table(Some("public"), "old", false)];
+        update_with(
+            &mut ws,
+            Message::TablesLoaded(42, "s2".into(), Err("net down".into())),
+        );
+        let st = ws.schema_state("s2").unwrap();
+        assert_eq!(st.tables_error(), Some("net down"));
+        assert_eq!(st.tables()[0].name, "old"); // 旧快照不闪空
+    }
+
+    #[test]
+    fn delete_source_and_draft_save_clear_schema_state() {
+        // DeleteSource:正在浏览的源被删 → schemas 条目与 browsing 一并清掉
+        let mut ws = seeded_ws(pg_source("s1"));
+        update_with(&mut ws, Message::DeleteSource("s1".into()));
+        assert!(ws.schema_state("s1").is_none());
+        assert_eq!(ws.browsing, None);
+
+        // DraftSave 编辑已有源 → 同样清理(连接信息可能变,旧快照不作数)
+        let mut ws = seeded_ws(pg_source("s1"));
+        ws.editing = Some(DataSourceDraft {
+            id: Some("s1".into()),
+            name: "renamed".into(),
+            driver: DriverKind::Postgres,
+            host: "127.0.0.1".into(),
+            port: "1".into(),
+            database: "mydb".into(),
+            username: "user".into(),
+            password: String::new(), // 留空 → 跳过 Keychain,不写真实密码
+        });
+        update_with(&mut ws, Message::DraftSave);
+        assert!(ws.schema_state("s1").is_none());
+        assert_eq!(ws.browsing, None);
     }
 }
