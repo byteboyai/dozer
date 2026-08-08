@@ -132,10 +132,6 @@ impl AppState {
     pub fn drivers_popup_open(&self) -> bool {
         self.drivers_popup_open
     }
-
-    pub fn set_drivers_popup_open(&mut self, open: bool) {
-        self.drivers_popup_open = open;
-    }
 }
 
 /// 新增/编辑数据源表单的草稿态。`id` 为 `None` = 新增,`Some(..)` = 编辑
