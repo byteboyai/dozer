@@ -6,6 +6,8 @@
 //! 阶段,见
 //! `docs/superpowers/specs/2026-08-08-database-panel-phase1-design.md`。
 
+use iced_widget::core::{Border, Element, Length};
+use iced_widget::{button, column, container, row, text, text_input};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -431,6 +433,271 @@ async fn test_connection(source: DataSource, password: Option<String>) -> Result
             Ok(())
         }
     }
+}
+
+/// 驱动管理弹层:列出全部驱动类型,点按切换启用/禁用。
+fn drivers_popup<'a>(
+    app_state: &'a AppState,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let mut col = column![
+        text("已启用的驱动")
+            .size(crate::theme::font::caption())
+            .color(crate::theme::color::DIM)
+    ]
+    .spacing(8);
+    for driver in DriverKind::ALL {
+        let enabled = app_state.is_enabled(driver);
+        col = col.push(
+            button(
+                row![
+                    text(if enabled { "✓" } else { " " }).size(crate::theme::font::body()),
+                    text(driver.label())
+                        .size(crate::theme::font::body())
+                        .color(crate::theme::color::CREAM),
+                ]
+                .spacing(8),
+            )
+            .on_press(Message::ToggleDriver(driver))
+            .width(iced_widget::core::Length::Fill)
+            .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+                background: Some(crate::theme::color::CARD.into()),
+                ..iced_widget::button::Style::default()
+            }),
+        );
+    }
+    container(col)
+        .padding(12)
+        .width(iced_widget::core::Length::Fixed(220.0))
+        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+            background: Some(crate::theme::color::CARD.into()),
+            border: iced_widget::core::Border {
+                color: crate::theme::color::BORDER,
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..iced_widget::container::Style::default()
+        })
+        .into()
+}
+
+/// 单条数据源卡片:名称 + 驱动 + 连接摘要 + 测试/编辑/删除按钮 + 测试状态。
+fn source_card<'a>(
+    source: &'a DataSource,
+    status: &'a TestStatus,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let status_text = match status {
+        TestStatus::Idle => "".to_string(),
+        TestStatus::Testing => "测试中…".to_string(),
+        TestStatus::Ok => "✓ 连接成功".to_string(),
+        TestStatus::Err(e) => format!("✗ {e}"),
+    };
+    let status_color = match status {
+        TestStatus::Ok => crate::theme::color::GREEN,
+        TestStatus::Err(_) => crate::theme::color::RED,
+        _ => crate::theme::color::DIM,
+    };
+    let summary = match source.driver {
+        DriverKind::Sqlite => source.database.clone().unwrap_or_default(),
+        _ => format!(
+            "{}:{}/{}",
+            source.host.as_deref().unwrap_or("-"),
+            source.port.map(|p| p.to_string()).unwrap_or_default(),
+            source.database.as_deref().unwrap_or("-"),
+        ),
+    };
+    container(
+        column![
+            row![
+                text(source.name.clone())
+                    .size(crate::theme::font::body())
+                    .color(crate::theme::color::CREAM),
+                text(source.driver.label())
+                    .size(crate::theme::font::caption_sm())
+                    .color(crate::theme::color::DIM),
+            ]
+            .spacing(8),
+            text(summary)
+                .size(crate::theme::font::caption_sm())
+                .color(crate::theme::color::DIM),
+            row![
+                button(text("测试连接")).on_press(Message::TestConnection(source.id.clone())),
+                button(text("编辑")).on_press(Message::EditSourceStart(source.id.clone())),
+                button(text("删除")).on_press(Message::DeleteSource(source.id.clone())),
+            ]
+            .spacing(8),
+            text(status_text)
+                .size(crate::theme::font::caption_sm())
+                .color(status_color),
+        ]
+        .spacing(6),
+    )
+    .padding(10)
+    .width(iced_widget::core::Length::Fill)
+    .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+        background: Some(crate::theme::color::CARD.into()),
+        border: iced_widget::core::Border {
+            color: crate::theme::color::BORDER,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        ..iced_widget::container::Style::default()
+    })
+    .into()
+}
+
+/// 新增/编辑数据源表单。SQLite 只留"文件路径"一栏,其它驱动列出 host/port/
+/// database/username/password。
+fn source_form<'a>(
+    draft: &'a DataSourceDraft,
+    app_state: &'a AppState,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let mut driver_row = row![].spacing(8);
+    for driver in DriverKind::ALL {
+        // 只列已启用的驱动;若正在编辑的数据源本身用的驱动已被禁用,
+        // 仍把它加回来并标注"已禁用"(设计文档"目标"第 4 条)——这里判断
+        // "已禁用但是当前草稿正用着"这个特例。
+        let is_current = draft.driver == driver;
+        if !app_state.is_enabled(driver) && !is_current {
+            continue;
+        }
+        let label = if app_state.is_enabled(driver) {
+            driver.label().to_string()
+        } else {
+            format!("{}(已禁用)", driver.label())
+        };
+        driver_row = driver_row.push(
+            button(text(label))
+                .on_press(Message::DraftDriverChanged(driver))
+                .style(
+                    move |_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+                        background: Some(
+                            if is_current {
+                                crate::theme::color::GOLD
+                            } else {
+                                crate::theme::color::CARD
+                            }
+                            .into(),
+                        ),
+                        ..iced_widget::button::Style::default()
+                    },
+                ),
+        );
+    }
+
+    let mut col = column![driver_row].spacing(8);
+    col = col.push(
+        text_input("名字", &draft.name)
+            .on_input(Message::DraftNameChanged)
+            .size(crate::theme::font::body()),
+    );
+    if draft.driver == DriverKind::Sqlite {
+        col = col.push(
+            text_input("文件路径", &draft.database)
+                .on_input(Message::DraftDatabaseChanged)
+                .size(crate::theme::font::body()),
+        );
+    } else {
+        col = col.push(
+            text_input("host", &draft.host)
+                .on_input(Message::DraftHostChanged)
+                .size(crate::theme::font::body()),
+        );
+        col = col.push(
+            text_input("port", &draft.port)
+                .on_input(Message::DraftPortChanged)
+                .size(crate::theme::font::body()),
+        );
+        col = col.push(
+            text_input("database", &draft.database)
+                .on_input(Message::DraftDatabaseChanged)
+                .size(crate::theme::font::body()),
+        );
+        col = col.push(
+            text_input("username", &draft.username)
+                .on_input(Message::DraftUsernameChanged)
+                .size(crate::theme::font::body()),
+        );
+        col = col.push(
+            text_input("password(留空则不修改)", &draft.password)
+                .secure(true)
+                .on_input(Message::DraftPasswordChanged)
+                .size(crate::theme::font::body()),
+        );
+    }
+    col = col.push(
+        row![
+            button(text("保存")).on_press(Message::DraftSave),
+            button(text("取消")).on_press(Message::DraftCancel),
+        ]
+        .spacing(8),
+    );
+
+    container(col)
+        .padding(12)
+        .width(iced_widget::core::Length::Fill)
+        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+            background: Some(crate::theme::color::CARD.into()),
+            border: iced_widget::core::Border {
+                color: crate::theme::color::GOLD,
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..iced_widget::container::Style::default()
+        })
+        .into()
+}
+
+/// 面板主视图:驱动管理弹层 + 新增/编辑表单 + 数据源卡片列表。
+pub fn view<'a>(
+    app_state: &'a AppState,
+    ws_state: &'a WorkspaceState,
+    width: Length,
+    outer: Border,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let mut col = column![
+        row![
+            text("数据源")
+                .size(crate::theme::font::subtitle())
+                .color(crate::theme::color::CREAM),
+            button(text("管理驱动")).on_press(Message::DriversPopupToggle),
+            button(text("＋新增数据源")).on_press(Message::AddSourceStart),
+        ]
+        .spacing(8)
+        .align_y(iced_widget::core::Alignment::Center),
+    ]
+    .spacing(12);
+
+    if app_state.drivers_popup_open() {
+        col = col.push(drivers_popup(app_state));
+    }
+
+    if let Some(draft) = ws_state.editing() {
+        col = col.push(source_form(draft, app_state));
+    }
+
+    if ws_state.sources().is_empty() {
+        col = col.push(
+            text("还没有数据源")
+                .size(crate::theme::font::body())
+                .color(crate::theme::color::DIM),
+        );
+    } else {
+        for source in ws_state.sources() {
+            col = col.push(source_card(source, ws_state.test_status(&source.id)));
+        }
+    }
+
+    container(col.padding(16))
+        .width(width)
+        .height(iced_widget::core::Length::Fill)
+        .style(
+            move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                background: Some(crate::theme::color::BG.into()),
+                border: outer,
+                ..iced_widget::container::Style::default()
+            },
+        )
+        .into()
 }
 
 #[cfg(test)]
