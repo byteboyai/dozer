@@ -25,6 +25,19 @@ impl WorkspaceState {
         self.session.as_ref()
     }
 
+    /// 意见框是否处于编辑态(main.rs 键盘路由用它决定是否把按键直达
+    /// `CommentEvent`,同 `browser::addr_editing` 的用途)。
+    pub fn comment_editing(&self) -> bool {
+        self.session.as_ref().is_some_and(|s| s.comment_editing)
+    }
+
+    /// 退出意见框编辑态(main.rs 键盘路由失焦时调用,保留已输入文字)。
+    pub fn clear_comment_editing(&mut self) {
+        if let Some(s) = &mut self.session {
+            s.comment_editing = false;
+        }
+    }
+
     /// 供内核 `Open` 拦截处理后落地新会话——不经过 `Message::Loaded`,
     /// 因为 `Loaded` 本身就是通过 `update` 落地的(见 `update` 的
     /// `Loaded` 分支)。这个方法留给测试/未来直接构造场景用,`update`
@@ -70,22 +83,6 @@ pub struct AcceptanceSession {
 }
 
 impl AcceptanceSession {
-    pub fn expanded_contains(&self, i: usize) -> bool {
-        self.expanded.contains(&i)
-    }
-
-    pub fn diff_for(&self, i: usize) -> Option<&Result<String, String>> {
-        self.diffs.get(&i)
-    }
-
-    pub fn accepted_version(&self) -> Option<u32> {
-        self.accepted_version
-    }
-
-    pub fn error(&self) -> Option<&str> {
-        self.error.as_deref()
-    }
-
     /// 供内核 `Reject` 拦截处理读取——要往哪个来源会话写打回意见。
     pub fn source_tab_id(&self) -> usize {
         self.source_tab_id
@@ -608,7 +605,7 @@ mod tests {
         // 注意:上面这行会真的 spawn 一个读 /tmp/repo 的异步任务(大概率
         // 失败,emit 不会被调用,因为 /tmp/repo 不是真实仓库)——测试只关心
         // 同步部分:`expanded` 立刻加入 0。
-        assert!(ws_state.session().unwrap().expanded_contains(0));
+        assert!(ws_state.session().unwrap().expanded.contains(&0));
         update(
             &mut ws_state,
             Message::ToggleDiff(0),
@@ -618,7 +615,7 @@ mod tests {
             |_| {},
         );
         assert!(
-            !ws_state.session().unwrap().expanded_contains(0),
+            !ws_state.session().unwrap().expanded.contains(&0),
             "第二次点收起"
         );
     }
@@ -636,7 +633,7 @@ mod tests {
             |_| {},
         );
         assert_eq!(
-            ws_state.session().unwrap().diff_for(0),
+            ws_state.session().unwrap().diffs.get(&0),
             Some(Ok("+line".to_string())).as_ref()
         );
     }
@@ -653,7 +650,7 @@ mod tests {
             &handle,
             |_| {},
         );
-        assert_eq!(ws_state.session().unwrap().accepted_version(), Some(3));
+        assert_eq!(ws_state.session().unwrap().accepted_version, Some(3));
         let mut ws_state = ws_with_session();
         update(
             &mut ws_state,
@@ -663,7 +660,7 @@ mod tests {
             &handle,
             |_| {},
         );
-        assert_eq!(ws_state.session().unwrap().error(), Some("boom"));
+        assert_eq!(ws_state.session().unwrap().error.as_deref(), Some("boom"));
     }
 
     #[tokio::test]

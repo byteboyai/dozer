@@ -30,7 +30,8 @@
 //!   收到后调用 `app.update(..)` 并请求重绘。反方向（UI → tokio）
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
 use crate::conversation::{self, ConversationMeta};
-use crate::delivery::{self, FileChange, WorktreeInfo};
+use crate::delivery::{self, WorktreeInfo};
+use crate::extensions::acceptance;
 use crate::extensions::browser;
 use crate::extensions::files;
 use crate::extensions::git_log;
@@ -93,6 +94,7 @@ pub enum RightView {
     Agent,
     Conversations,
     Usage,
+    Acceptance,
 }
 
 /// 四个图标栏按钮的标识,用于追踪 hover 态(图标颜色在 hover 时需变金,
@@ -107,6 +109,7 @@ pub enum RailButton {
     RightAgent,
     RightConversations,
     RightUsage,
+    RightAcceptance,
 }
 
 /// 顶栏右侧按钮(添加项目 / 设置)的标识,用于追踪 hover 态(图标颜色在
@@ -549,8 +552,10 @@ fn apply_column_drag(
                     conversations_split: 1.0 - ratio,
                     ..state.layout
                 },
-                // 用量统计是单栏（不分割），没有自己的 split 权重。
+                // 用量统计是单栏（不分割）,没有自己的 split 权重。
                 RightView::Usage => state.layout,
+                // 验收面板同用量统计是单栏,不分割。
+                RightView::Acceptance => state.layout,
             }
         }
     }
@@ -855,7 +860,7 @@ pub fn terminal_pane_pixel_size(
 /// 所以凡是"发起时就已知归属项目、结果晚些才回来"的消息,一律带上
 /// `project_id`,由 [`App::with_project`] 直接投递到对应槽位;投递不到
 /// (项目已被关掉/还没促成)就静默丢弃。反过来,由用户点击当前界面直接
-/// 触发的消息(`TermInput`/`AcceptanceOpen`/`PreviewSelectTab` …)仍然走
+/// 触发的消息(`TermInput`/`Acceptance(..::Open(..))`/`PreviewSelectTab` …)仍然走
 /// `with_focused_project`——它们的语义本来就是"作用于用户此刻看着的那个项目"。
 pub type ProjectId = i64;
 
@@ -888,23 +893,9 @@ pub enum Message {
     AgentStateChanged(ProjectId, usize, AgentKind, AgentState, Option<String>),
     /// TurnEnded 触发的交付检测结果（tab_id, 是否有待验收交付）。
     DeliveryChecked(ProjectId, usize, bool),
-    /// 点击横幅"进入验收"（tab_id 为来源会话）。用户点的是当前界面上的
-    /// 横幅,归属天然是聚焦项目,不需要 `ProjectId`。
-    AcceptanceOpen(usize),
-    /// 验收数据装载完成（repo, 来源 tab_id, goal, 变更清单）。
-    AcceptanceLoaded(ProjectId, PathBuf, usize, Option<Goal>, Vec<FileChange>),
-    /// 勾选/取消第 n 条标准。
-    AcceptanceToggle(usize),
-    /// 点击意见输入框进入编辑态。
-    AcceptanceCommentClick,
-    /// 意见输入事件（main.rs 键盘路由送入,复用 AddrEvent）。
-    AcceptanceCommentEvent(AddrEvent),
-    /// 点"通过·沉淀"。
-    AcceptanceAccept,
-    /// 点"打回并注回"。
-    AcceptanceReject,
-    /// 通过动作结果（Ok(版本号)/Err(红字文案)）。
-    AcceptanceDone(ProjectId, Result<u32, String>),
+    /// 验收面板的全部消息,内核只转发不解读——见
+    /// `extensions::acceptance::Message`。
+    Acceptance(acceptance::Message),
     /// 会话审阅:解析完成（来源, 条目 / 错误文案）。
     ReviewLoaded(ProjectId, ReviewSource, Result<Vec<ReviewEntry>, String>),
     /// 会话审阅:展开/收起第 n 个 AI 回合的过程区。
@@ -1121,21 +1112,6 @@ pub struct EditSession {
     pub confirm_discard: bool,
 }
 
-/// 验收 tab 的一次进行中验收（spec P1f D8）。
-pub struct AcceptanceView {
-    pub repo: PathBuf,
-    /// 来源会话 tab（打回意见注回目标）。
-    pub source_tab_id: usize,
-    pub goal: Option<Goal>,
-    pub changes: Vec<FileChange>,
-    pub checked: Vec<bool>,
-    pub comment: String,
-    pub comment_editing: bool,
-    pub error: Option<String>,
-    /// 通过后记录版本号（显示"已沉淀 v<n>"）。
-    pub accepted_version: Option<u32>,
-}
-
 /// 一个 tab 对应一个 daemon 会话。
 pub struct SessionTab {
     pub info: SessionInfo,
@@ -1326,8 +1302,9 @@ pub struct Workspace {
     /// `dozer://flyfish/__file__` 端点的文件白名单;与 main.rs 的协议
     /// 闭包共享(Arc),打开文件时插入.
     allowed_files: Arc<Mutex<HashSet<PathBuf>>>,
-    /// 进行中的验收（验收 tab 内容;None=未打开）。
-    acceptance: Option<AcceptanceView>,
+    /// 进行中的验收——验收面板 per-project 状态,见
+    /// `extensions::acceptance::WorkspaceState`。
+    acceptance: acceptance::WorkspaceState,
     /// 进行中的会话审阅（审阅 tab 内容;None=未打开;P1i）。
     review: Option<ReviewView>,
     /// 当前项目的对话列表（扫 Claude 目录；P1j）。
@@ -1632,7 +1609,7 @@ impl Workspace {
             preview_error: None,
             browser: browser::State::default(),
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
-            acceptance: None,
+            acceptance: acceptance::WorkspaceState::default(),
             review: None,
             conversations: Vec::new(),
             usage: usage::WorkspaceState::default(),
@@ -1699,9 +1676,7 @@ impl Workspace {
         let Some(tab) = self.preview.tabs().get(idx) else {
             return;
         };
-        let TabKind::File(path) = &tab.kind else {
-            return;
-        };
+        let TabKind::File(path) = &tab.kind;
         let path = path.clone();
         let tab_id = tab.id;
         match std::fs::read_to_string(&path) {
@@ -1944,7 +1919,7 @@ impl Workspace {
         while !self.preview.tabs().is_empty() {
             self.preview.close(0);
         }
-        self.acceptance = None;
+        self.acceptance = acceptance::WorkspaceState::default();
         self.preview_error = None;
         self.term_tab_first = 0;
         self.preview_tab_first = 0;
@@ -2041,11 +2016,10 @@ impl Workspace {
         let mut paths = Vec::new();
         let mut active_path = None;
         for (idx, tab) in self.preview.tabs().iter().enumerate() {
-            if let TabKind::File(p) = &tab.kind {
-                paths.push(p.clone());
-                if idx == active_idx {
-                    active_path = Some(p.clone());
-                }
+            let TabKind::File(p) = &tab.kind;
+            paths.push(p.clone());
+            if idx == active_idx {
+                active_path = Some(p.clone());
             }
         }
         let state = preview_state::PreviewState { paths, active_path };
@@ -2243,7 +2217,7 @@ impl Workspace {
 
     /// 验收意见输入是否在编辑态（main.rs 键盘路由用）。
     pub fn acceptance_comment_editing(&self) -> bool {
-        self.acceptance.as_ref().is_some_and(|a| a.comment_editing)
+        self.acceptance.comment_editing()
     }
 
     /// 当前激活预览 tab 若是 webview(文件/网页)则返回其 id,供 main.rs
@@ -2279,109 +2253,8 @@ impl Workspace {
         if self.browser.addr_editing() {
             self.browser.addr_cancel();
         }
-        if let Some(acc) = &mut self.acceptance {
-            acc.comment_editing = false;
-        }
+        self.acceptance.clear_comment_editing();
         self.files.cancel_tree_edit();
-    }
-
-    /// 通过·沉淀：git update-ref + 落库（脏工作区在 delivery::accept 内被拒）。
-    fn acceptance_accept(&mut self, io: &ShellIo) {
-        let Some(project_id) = self.project_id() else {
-            return;
-        };
-        let Some(acc) = &mut self.acceptance else {
-            return;
-        };
-        acc.error = None;
-        let repo = acc.repo.clone();
-        let goal_title = acc
-            .goal
-            .as_ref()
-            .map(|g| g.title.clone())
-            .unwrap_or_default();
-        let checked: Vec<String> = acc
-            .goal
-            .as_ref()
-            .map(|g| {
-                g.criteria
-                    .iter()
-                    .zip(&acc.checked)
-                    .filter(|(_, c)| **c)
-                    .map(|(s, _)| s.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let comment = acc.comment.clone();
-        let client = io.client.clone();
-        let proxy = io.proxy.clone();
-        io.handle.spawn(async move {
-            let repo2 = repo.clone();
-            let accepted = tokio::task::spawn_blocking(move || delivery::accept(&repo2)).await;
-            let result = match accepted {
-                Ok(Ok(n)) => {
-                    let ref_name = format!("{}{n}", delivery::ACCEPTED_REF_PREFIX);
-                    let ts_ms = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0);
-                    if let Err(e) = client
-                        .record_acceptance(
-                            &repo.to_string_lossy(),
-                            &goal_title,
-                            &checked,
-                            "accepted",
-                            &comment,
-                            &ref_name,
-                            ts_ms,
-                        )
-                        .await
-                    {
-                        // ref 已写成立（真相源）,库失败只提示（spec §3）
-                        Err(format!("已沉淀 v{n},但记录落库失败: {e}"))
-                    } else {
-                        Ok(n)
-                    }
-                }
-                Ok(Err(e)) => Err(e.to_string()),
-                Err(e) => Err(format!("任务失败: {e}")),
-            };
-            let _ = proxy.send_event(Message::AcceptanceDone(project_id, result));
-        });
-    }
-
-    /// 打回并注回：意见 write 回来源会话 PTY，关验收 tab 回执行现场。
-    fn acceptance_reject(&mut self, io: &ShellIo) {
-        let Some(acc) = &self.acceptance else {
-            return;
-        };
-        let comment = acc.comment.trim().to_string();
-        let source = acc.source_tab_id;
-        let target = self.tabs.iter().find(|t| t.tab_id == source);
-        let Some(tab) = target.filter(|t| t.alive) else {
-            if let Some(acc) = &mut self.acceptance {
-                acc.error = Some("会话已结束,意见无处可注".into());
-            }
-            return;
-        };
-        let id = tab.info.id.clone();
-        let client = io.client.clone();
-        let text_out = format!("[Dozer 验收打回] {comment}\n");
-        io.handle.spawn(async move {
-            if let Err(e) = client.write(&id, text_out.as_bytes()).await {
-                tracing::warn!("打回注回失败: {e}");
-            }
-        });
-        // 关验收 tab（打回后回执行现场）
-        if let Some(idx) = self
-            .preview
-            .tabs()
-            .iter()
-            .position(|t| t.kind == crate::preview::TabKind::Acceptance)
-        {
-            self.preview.close(idx);
-        }
-        self.acceptance = None;
     }
 
     /// 协议闭包共享的文件白名单句柄.
@@ -2988,9 +2861,7 @@ impl App {
         };
         let specs = ws.preview.desired_webviews();
         // 编辑弹层开着时,应用级模态盖住了预览区,原生 wry 子视图不听 iced
-        // 绘制顺序摆布,必须显式 visible=false 才能真正藏起来——与
-        // `TabKind::Acceptance` 隐藏其余 webview 的机制完全一致
-        // (`PreviewPane::desired_webviews` 内部的 `acceptance_active`)。
+        // 绘制顺序摆布,必须显式 visible=false 才能真正藏起来。
         if ws.edit_session.is_some() {
             specs
                 .into_iter()
@@ -3193,12 +3064,9 @@ impl App {
                     ws.spawn_conversations_refresh(io);
                 });
             }
-            Message::AcceptanceOpen(tab_id) => {
+            Message::Acceptance(acceptance::Message::Open(tab_id)) => {
                 self.with_focused_project(|ws, io| {
                     let active_repo = ws.project.as_ref().map(|p| PathBuf::from(&p.path));
-                    // 用户点的是当前界面上的横幅,所以入口走 `with_focused_project`;但异步
-                    // 装载结果要投回**这个**项目,不能投给"结果回来时恰好在
-                    // 前台的那个"(见 `ProjectId`)。
                     let Some(project_id) = ws.project_id() else {
                         return;
                     };
@@ -3207,104 +3075,74 @@ impl App {
                     };
                     tab.delivery_pending = false;
                     let cwd = effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
+                    let handle = io.handle.clone();
                     let proxy = io.proxy.clone();
+                    let emit = move |m| {
+                        let _ = proxy.send_event(Message::Acceptance(m));
+                    };
+                    acceptance::spawn_open(project_id, tab_id, cwd, &handle, emit);
+                });
+            }
+            Message::Acceptance(acceptance::Message::Reject) => {
+                self.with_focused_project(|ws, io| {
+                    let Some(session) = ws.acceptance.session() else {
+                        return;
+                    };
+                    let comment = session.comment().trim().to_string();
+                    let source = session.source_tab_id();
+                    let target = ws.tabs.iter().find(|t| t.tab_id == source);
+                    let Some(tab) = target.filter(|t| t.alive) else {
+                        // 会话已结束,意见无处可注——留住当前 session,不清空,让用户
+                        // 看到错误(现有 `acceptance_reject` 的降级路径)。
+                        ws.acceptance
+                            .set_error("会话已结束,意见无处可注".to_string());
+                        return;
+                    };
+                    let id = tab.info.id.clone();
+                    let client = io.client.clone();
+                    let text_out = format!("[Dozer 验收打回] {comment}\n");
                     io.handle.spawn(async move {
-                        let loaded = tokio::task::spawn_blocking(move || {
-                            let repo = delivery::repo_root(&cwd)?;
-                            let goal = std::fs::read_to_string(goal::goal_path(&repo))
-                                .ok()
-                                .and_then(|md| goal::parse_goal(&md));
-                            let changes = delivery::changes(&repo);
-                            Some((repo, goal, changes))
-                        })
-                        .await
-                        .ok()
-                        .flatten();
-                        if let Some((repo, goal, changes)) = loaded {
-                            let _ = proxy.send_event(Message::AcceptanceLoaded(
-                                project_id, repo, tab_id, goal, changes,
-                            ));
+                        if let Err(e) = client.write(&id, text_out.as_bytes()).await {
+                            tracing::warn!("打回注回失败: {e}");
                         }
                     });
+                    ws.acceptance.clear_session();
                 });
             }
-            Message::AcceptanceLoaded(project_id, repo, source_tab_id, goal, changes) => {
-                // 这条异步结果可能属于**后台**项目(用户在加载期间切了页签)。
-                // 那种情况下只把验收内容装进那个项目的 `Workspace`,绝不动外壳:
-                // 展开左面板是"让你现在就看见"的动作,而现在你看的是别的项目。
-                let landed_on_focused = self.active_project_id == Some(project_id);
-                self.with_project(project_id, move |ws, _io| {
-                    let n = goal.as_ref().map(|g| g.criteria.len()).unwrap_or(0);
-                    ws.acceptance = Some(AcceptanceView {
-                        repo,
-                        source_tab_id,
-                        goal,
-                        changes,
-                        checked: vec![false; n],
-                        comment: String::new(),
-                        comment_editing: false,
-                        error: None,
-                        accepted_version: None,
-                    });
-                    ws.preview.open_acceptance();
-                });
-                // 验收内容画在 `preview_pane` 里,而 `preview_pane` 属于左
-                // 面板区:左侧收起时点"进入验收"会毫无反应(内容装进了一个
-                // 没被渲染的面板)。新外壳鼓励收起左侧给终端腾空间,所以这里
-                // 必须主动展开(Fix round 2 #5)。左侧收起态是外壳态,搬家后
-                // 留在 `App` 上处理。
-                if landed_on_focused && self.left_collapsed {
-                    self.left_collapsed = false;
-                    self.on_shell_layout_changed();
-                }
-            }
-            Message::AcceptanceToggle(i) => {
-                self.with_focused_project(|ws, _io| {
-                    if let Some(acc) = &mut ws.acceptance
-                        && let Some(c) = acc.checked.get_mut(i)
-                    {
-                        *c = !*c;
-                    }
-                });
-            }
-            Message::AcceptanceCommentClick => {
-                self.with_focused_project(|ws, _io| {
-                    if let Some(acc) = &mut ws.acceptance {
-                        acc.comment_editing = true;
-                    }
-                });
-            }
-            Message::AcceptanceCommentEvent(ev) => {
-                self.with_focused_project(|ws, _io| {
-                    if let Some(acc) = &mut ws.acceptance {
-                        match ev {
-                            AddrEvent::Text(s) => acc.comment.push_str(&s),
-                            AddrEvent::Backspace => {
-                                acc.comment.pop();
-                            }
-                            AddrEvent::Submit | AddrEvent::Cancel => acc.comment_editing = false,
-                        }
-                    }
-                });
-            }
-            Message::AcceptanceAccept => {
-                self.with_focused_project(|ws, io| ws.acceptance_accept(io))
-            }
-            Message::AcceptanceReject => {
-                self.with_focused_project(|ws, io| ws.acceptance_reject(io))
-            }
-            Message::AcceptanceDone(project_id, result) => {
-                self.with_project(project_id, |ws, io| {
-                    let landed = result.is_ok();
-                    if let Some(acc) = &mut ws.acceptance {
-                        match result {
-                            Ok(n) => acc.accepted_version = Some(n),
-                            Err(e) => acc.error = Some(e),
-                        }
-                    }
-                    if landed {
+            Message::Acceptance(
+                msg @ (acceptance::Message::Loaded(project_id, ..)
+                | acceptance::Message::DiffLoaded(project_id, ..)
+                | acceptance::Message::Done(project_id, ..)),
+            ) => {
+                // 判断"这次是不是通过成功"要在 `msg` 被 `move` 进闭包之前算好
+                // (用 `&msg` 引用匹配,不消耗它;闭包里 `acceptance::update` 会真正
+                // 拿走 `msg` 的所有权),否则会撞上"用后借用"的编译错误。
+                let is_accept_ok = matches!(&msg, acceptance::Message::Done(_, Ok(_)));
+                self.with_project(project_id, move |ws, io| {
+                    let client = io.client.clone();
+                    let handle = io.handle.clone();
+                    let proxy = io.proxy.clone();
+                    let emit = move |m| {
+                        let _ = proxy.send_event(Message::Acceptance(m));
+                    };
+                    acceptance::update(&mut ws.acceptance, msg, project_id, &client, &handle, emit);
+                    if is_accept_ok {
                         ws.spawn_acceptance_count_refresh(io);
                     }
+                });
+            }
+            Message::Acceptance(msg) => {
+                let Some(project_id) = self.active_project_id else {
+                    return;
+                };
+                self.with_focused_project(|ws, io| {
+                    let client = io.client.clone();
+                    let handle = io.handle.clone();
+                    let proxy = io.proxy.clone();
+                    let emit = move |m| {
+                        let _ = proxy.send_event(Message::Acceptance(m));
+                    };
+                    acceptance::update(&mut ws.acceptance, msg, project_id, &client, &handle, emit);
                 });
             }
             Message::ReviewLoaded(project_id, source, result) => {
@@ -3578,6 +3416,14 @@ impl App {
                             ws.usage.set_loading(true);
                             ws.spawn_usage_refresh(io);
                         });
+                    } else if v == RightView::Acceptance {
+                        let tab_id = self
+                            .active_workspace()
+                            .and_then(|ws| ws.tabs.get(ws.active))
+                            .map(|t| t.tab_id);
+                        if let Some(tab_id) = tab_id {
+                            self.update(Message::Acceptance(acceptance::Message::Open(tab_id)));
+                        }
                     }
                 }
                 // 同 LeftIconSelect(Fix round 2 #2)。
@@ -4369,140 +4215,6 @@ fn review_content<'a>(
                 }
             }
         }
-    }
-    content
-}
-
-fn acceptance_content<'a>(
-    mut content: iced_widget::Column<'a, Message, iced_widget::Theme, iced_widget::Renderer>,
-    ws: &'a Workspace,
-) -> iced_widget::Column<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let Some(acc) = &ws.acceptance else {
-        return content;
-    };
-    if let Some(n) = acc.accepted_version {
-        return content.push(lh(text(format!("✓ 已沉淀 v{n}"))
-            .size(theme::font::title())
-            .color(theme::color::GOLD)));
-    }
-    match &acc.goal {
-        Some(g) => {
-            content = content.push(lh(text(g.title.clone())
-                .size(theme::font::title())
-                .color(theme::color::CREAM)));
-            for (i, c) in g.criteria.iter().enumerate() {
-                let checked = acc.checked.get(i).copied().unwrap_or(false);
-                content = content.push(
-                    button(lh(text(criteria_line(checked, c))
-                        .size(theme::font::body())
-                        .color(if checked {
-                            theme::color::GOLD
-                        } else {
-                            theme::color::BODY
-                        })))
-                    .on_press(Message::AcceptanceToggle(i))
-                    .style(|_t, _s| button::Style {
-                        background: None,
-                        text_color: theme::color::BODY,
-                        ..button::Style::default()
-                    }),
-                );
-            }
-        }
-        None => {
-            content = content.push(lh(text(
-                "未定标——先在仓库写 .dozer/goal.md（首行目标,\n- [ ] 列表为标准）",
-            )
-            .size(theme::font::body())
-            .color(theme::color::DIM)));
-        }
-    }
-    content = content.push(lh(text("变更文件")
-        .size(theme::font::body())
-        .color(theme::color::DIM)));
-    for fc in &acc.changes {
-        let path = acc.repo.join(&fc.path);
-        content = content.push(
-            button(lh(text(file_change_line(fc))
-                .size(theme::font::body())
-                .color(theme::color::CYAN)))
-            .on_press(Message::PreviewOpenPath(path))
-            .style(|_t, _s| button::Style {
-                background: None,
-                text_color: theme::color::CYAN,
-                ..button::Style::default()
-            }),
-        );
-    }
-    let editing = acc.comment_editing;
-    let comment_text = if editing {
-        format!("{}▏", acc.comment)
-    } else if acc.comment.is_empty() {
-        "验收意见…（打回时注回会话）".to_string()
-    } else {
-        acc.comment.clone()
-    };
-    content = content.push(
-        button(lh(text(comment_text).size(theme::font::body()).color(
-            if editing {
-                theme::color::CREAM
-            } else {
-                theme::color::DIM
-            },
-        )))
-        .on_press(Message::AcceptanceCommentClick)
-        .width(Length::Fill)
-        .style(move |_t, _s| button::Style {
-            background: Some(theme::color::TERM_BG.into()),
-            text_color: theme::color::CREAM,
-            border: Border {
-                color: if editing {
-                    theme::color::GOLD
-                } else {
-                    theme::color::BORDER
-                },
-                width: 1.0,
-                radius: 2.0.into(),
-            },
-            ..button::Style::default()
-        }),
-    );
-    let actions = row![
-        button(lh(text("通过·沉淀")
-            .size(theme::font::body())
-            .color(theme::color::BG)))
-        .on_press(Message::AcceptanceAccept)
-        .style(|_t, _s| button::Style {
-            background: Some(theme::color::GOLD.into()),
-            text_color: theme::color::BG,
-            border: Border {
-                color: theme::color::GOLD,
-                width: 1.0,
-                radius: 2.0.into()
-            },
-            ..button::Style::default()
-        }),
-        button(lh(text("打回并注回")
-            .size(theme::font::body())
-            .color(theme::color::RED)))
-        .on_press(Message::AcceptanceReject)
-        .style(|_t, _s| button::Style {
-            background: None,
-            text_color: theme::color::RED,
-            border: Border {
-                color: theme::color::RED,
-                width: 1.0,
-                radius: 2.0.into()
-            },
-            ..button::Style::default()
-        }),
-    ]
-    .spacing(8);
-    content = content.push(actions);
-    if let Some(err) = &acc.error {
-        content = content.push(lh(text(format!("⚠ {err}"))
-            .size(theme::font::body())
-            .color(theme::color::RED)));
     }
     content
 }
@@ -6001,6 +5713,50 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_w
         ))
         .on_enter(Message::Hover(HoverId::Rail(RailButton::RightUsage), true))
         .on_exit(Message::Hover(HoverId::Rail(RailButton::RightUsage), false)),
+        {
+            let pending = app
+                .active_workspace()
+                .and_then(|ws| ws.tabs.get(ws.active))
+                .map(|t| t.delivery_pending)
+                .unwrap_or(false);
+            let base: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> =
+                MouseArea::new(rail_icon_button(
+                    icons::IconKind::BadgeCheck,
+                    app.right_view == RightView::Acceptance && right_open,
+                    app.hover_progress(HoverId::Rail(RailButton::RightAcceptance)),
+                    Message::RightIconSelect(RightView::Acceptance),
+                ))
+                .on_enter(Message::Hover(
+                    HoverId::Rail(RailButton::RightAcceptance),
+                    true,
+                ))
+                .on_exit(Message::Hover(
+                    HoverId::Rail(RailButton::RightAcceptance),
+                    false,
+                ))
+                .into();
+            if pending {
+                let badge: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> =
+                    stack![
+                        base,
+                        container(iced_widget::Space::new())
+                            .width(Length::Fixed(8.0))
+                            .height(Length::Fixed(8.0))
+                            .style(|_t: &iced_widget::Theme| container::Style {
+                                background: Some(theme::color::GOLD.into()),
+                                border: Border {
+                                    radius: 4.0.into(),
+                                    ..Border::default()
+                                },
+                                ..container::Style::default()
+                            }),
+                    ]
+                    .into();
+                badge
+            } else {
+                base
+            }
+        },
     ]
     .spacing(region.gap)
     .padding(region.padding);
@@ -6400,6 +6156,10 @@ fn right_panel_area<'a>(
                 zone_pane_border(zone, ac),
             )
             .map(Message::Usage),
+            RightView::Acceptance => {
+                acceptance::view(&ws.acceptance, Length::Fill, zone_pane_border(zone, ac))
+                    .map(Message::Acceptance)
+            }
         };
     if maximized {
         return inner;
@@ -6764,9 +6524,7 @@ fn preview_pane(
             .color(theme::color::RED)));
     }
 
-    if ws.preview.acceptance_active() {
-        content = acceptance_content(content, ws);
-    } else if ws.preview.tabs().is_empty() {
+    if ws.preview.tabs().is_empty() {
         content = content.push(
             container(lh(text("暂无预览——在左侧文件树选择文件")
                 .size(theme::font::subtitle())
@@ -6814,46 +6572,6 @@ fn terminal_pane<'a>(
                 .size(theme::font::label())
                 .color(theme::color::RED),
         );
-    }
-
-    // 交付横幅（spec P1f D3）:金字金框,CTA 进入验收
-    if let Some(tab) = ws.tabs.get(ws.active)
-        && let Some(text_str) = banner_text(tab.delivery_pending)
-    {
-        let banner = container(
-            row![
-                text(text_str)
-                    .size(theme::font::body())
-                    .color(theme::color::GOLD),
-                button(
-                    text("进入验收")
-                        .size(theme::font::body())
-                        .color(theme::color::GOLD)
-                )
-                .on_press(Message::AcceptanceOpen(tab.tab_id))
-                .style(|_t, _s| button::Style {
-                    background: Some(theme::color::CARD.into()),
-                    text_color: theme::color::GOLD,
-                    border: Border {
-                        color: theme::color::GOLD,
-                        width: 1.0,
-                        radius: 2.0.into()
-                    },
-                    ..button::Style::default()
-                }),
-            ]
-            .spacing(8),
-        )
-        .padding([6, 10])
-        .style(|_t: &iced_widget::Theme| container::Style {
-            border: Border {
-                color: theme::color::GOLD,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..container::Style::default()
-        });
-        content = content.push(banner);
     }
 
     // P1j 收敛：终端"审阅"按钮移除，会话审阅入口统一到右一对话列表。
@@ -7230,11 +6948,6 @@ fn tab_bar<'a>(
     column![tab_row, tab_divider()].spacing(4).into()
 }
 
-/// 交付横幅文案：pending 才有（金色,甲方动作）。
-fn banner_text(pending: bool) -> Option<&'static str> {
-    pending.then_some("交付待验收")
-}
-
 /// 对话副行文案：`<agent> · <相对时间> · <规模>`（P1j）。
 /// 相对时间文案：刚刚/N 分钟前/N 小时前/N 天前（D5，从 `conversation_sub`
 /// 抽出为独立纯函数）。H0 项目卡"活跃时间"、文件卡、对话卡三处复用，
@@ -7380,19 +7093,6 @@ fn load_project_goal(repo_path: &str) -> Option<Goal> {
 /// 直接不查，别拿未规范化的原始路径去撞库（会静默查不到→副行空白）。
 fn acceptance_query_repo(project_path: &str) -> Option<String> {
     delivery::repo_root(Path::new(project_path)).map(|p| p.to_string_lossy().into_owned())
-}
-
-/// 标准行文案:金勾 ✓ / 空圈 ○。
-fn criteria_line(checked: bool, text: &str) -> String {
-    format!("{} {}", if checked { "✓" } else { "○" }, text)
-}
-
-/// 变更文件行:path  +a −r;未跟踪标 (新)。
-fn file_change_line(fc: &FileChange) -> String {
-    match (fc.added, fc.removed) {
-        (Some(a), Some(r)) => format!("{}  +{a} −{r}", fc.path),
-        _ => format!("{}  (新)", fc.path),
-    }
 }
 
 /// agent 选择菜单选中的 agent → 要自动键入 PTY 的 CLI 命令名。`Unknown`
@@ -8473,29 +8173,6 @@ mod tests {
     }
 
     #[test]
-    fn criteria_check_line_renders_gold_check() {
-        assert_eq!(criteria_line(true, "测试全绿"), "✓ 测试全绿");
-        assert_eq!(criteria_line(false, "测试全绿"), "○ 测试全绿");
-    }
-
-    #[test]
-    fn file_change_line_formats_counts() {
-        use crate::delivery::FileChange;
-        let fc = FileChange {
-            path: "src/a.rs".into(),
-            added: Some(3),
-            removed: Some(1),
-        };
-        assert_eq!(file_change_line(&fc), "src/a.rs  +3 −1");
-        let un = FileChange {
-            path: "new.txt".into(),
-            added: None,
-            removed: None,
-        };
-        assert_eq!(file_change_line(&un), "new.txt  (新)");
-    }
-
-    #[test]
     fn acceptance_query_repo_none_for_non_git_path() {
         // 非 git 目录必须回 None(不能退化成原始路径去撞库——Important #2)。
         let dir = tempfile::tempdir().unwrap();
@@ -8889,12 +8566,6 @@ mod tests {
             "左侧(审阅)占 1/4 时,右侧(对话列表)该占 3/4,实得 {}",
             l.conversations_split
         );
-    }
-
-    #[test]
-    fn banner_text_for_pending() {
-        assert_eq!(banner_text(true), Some("交付待验收"));
-        assert_eq!(banner_text(false), None);
     }
 
     #[test]

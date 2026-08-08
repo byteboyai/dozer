@@ -22,8 +22,6 @@ pub struct PreviewTab {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TabKind {
     File(PathBuf),
-    /// 验收 tab（P1f）:不产 webview,内容由 iced 直绘。
-    Acceptance,
 }
 
 /// main.rs 同步 webview 的期望清单项。
@@ -140,36 +138,10 @@ impl PreviewPane {
         id
     }
 
-    /// 打开验收 tab:已存在则激活复用（全局至多一个）。
-    pub fn open_acceptance(&mut self) -> usize {
-        if let Some((idx, tab)) = self
-            .tabs
-            .iter()
-            .enumerate()
-            .find(|(_, t)| t.kind == TabKind::Acceptance)
-        {
-            let id = tab.id;
-            self.active = idx;
-            return id;
-        }
-        self.push_tab(TabKind::Acceptance, "验收".to_string())
-    }
-
-    /// 当前激活 tab 是否验收 tab。
-    pub fn acceptance_active(&self) -> bool {
-        self.tabs
-            .get(self.active)
-            .is_some_and(|t| t.kind == TabKind::Acceptance)
-    }
-
-    /// 当前激活 tab 若是 webview(文件/网页)则返回其 id(=webview 池的 key)。
+    /// 当前激活 tab 若是文件(webview)则返回其 id(=webview 池的 key)。
     pub fn active_webview_id(&self) -> Option<usize> {
-        self.tabs.get(self.active).and_then(|t| match t.kind {
-            TabKind::File(_) => Some(t.id),
-            TabKind::Acceptance => None,
-        })
+        self.tabs.get(self.active).map(|t| t.id)
     }
-
     pub fn select(&mut self, idx: usize) {
         if idx < self.tabs.len() {
             self.active = idx;
@@ -188,30 +160,22 @@ impl PreviewPane {
         }
     }
 
-    /// webview 期望清单:每文件/网页 tab 一个,仅激活者可见(设计 D2)；
-    /// 验收 tab 不产 webview,且它激活时其余 webview 全隐藏(iced 直绘 pane)。
+    /// webview 期望清单:每文件 tab 一个,仅激活者可见(设计 D2)。
     pub fn desired_webviews(&self) -> Vec<WebviewSpec> {
-        // 验收 tab 是 iced 直绘的覆盖层,它激活时其余 webview 全隐藏。
-        let overlay_active = self.acceptance_active();
         self.tabs
             .iter()
             .enumerate()
-            .filter_map(|(idx, tab)| {
-                let url = match &tab.kind {
-                    TabKind::File(path) => {
-                        let mut u = flyfish_url(path);
-                        if tab.reload_nonce > 0 {
-                            u.push_str(&format!("&_r={}", tab.reload_nonce));
-                        }
-                        u
-                    }
-                    TabKind::Acceptance => return None,
-                };
-                Some(WebviewSpec {
+            .map(|(idx, tab)| {
+                let TabKind::File(path) = &tab.kind;
+                let mut u = flyfish_url(path);
+                if tab.reload_nonce > 0 {
+                    u.push_str(&format!("&_r={}", tab.reload_nonce));
+                }
+                WebviewSpec {
                     id: tab.id,
-                    url,
-                    visible: idx == self.active && !overlay_active,
-                })
+                    url: u,
+                    visible: idx == self.active,
+                }
             })
             .collect()
     }
@@ -334,22 +298,6 @@ mod tests {
         assert_eq!(id_again, id0, "同文件复用同一 tab");
         assert_eq!(p.tabs().len(), 2, "不新增 tab");
         assert_eq!(p.active_idx(), 0, "切回已开的那个 tab");
-    }
-
-    #[test]
-    fn acceptance_tab_produces_no_webview_and_hides_others() {
-        let mut p = PreviewPane::default();
-        p.open_path(PathBuf::from("/tmp/a.md"));
-        let acc_id = p.open_acceptance();
-        let specs = p.desired_webviews();
-        assert_eq!(specs.len(), 1, "验收 tab 不产 webview");
-        assert!(!specs[0].visible, "验收 tab 激活时其余全隐藏");
-        // 重复打开复用同一 tab
-        assert_eq!(p.open_acceptance(), acc_id);
-        assert_eq!(p.tabs().len(), 2);
-        // 切回文件 tab → webview 复显
-        p.select(0);
-        assert!(p.desired_webviews()[0].visible);
     }
 
     #[test]

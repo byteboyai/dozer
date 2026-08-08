@@ -692,7 +692,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     let message = if to_browser {
                         Message::Browser(extensions::browser::Message::AddrEvent(ev))
                     } else if to_comment {
-                        Message::AcceptanceCommentEvent(ev)
+                        Message::Acceptance(extensions::acceptance::Message::CommentEvent(ev))
                     } else {
                         Message::Files(extensions::files::Message::EditEvent(ev))
                     };
