@@ -7,5 +7,6 @@ pub mod acceptance;
 pub mod browser;
 pub mod files;
 pub mod git_log;
+pub mod project;
 pub mod todo;
 pub mod usage;
