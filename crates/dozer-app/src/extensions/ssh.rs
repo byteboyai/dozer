@@ -101,6 +101,19 @@ impl WorkspaceState {
     }
 }
 
+/// `TrustHostKey` 里"信任后是重开终端还是重新测试连接"的纯判定:id 命中
+/// `reopen_after_trust`(上次点终端撞未知 key 的那台)才重开终端并清槽位,
+/// 否则落回测试连接。拆出来是为了能被无网络单测直接测,不碰
+/// `known_hosts`。
+pub(crate) fn pick_retry_message(reopen: &mut Option<String>, id: &str) -> Message {
+    if reopen.as_deref() == Some(id) {
+        *reopen = None;
+        Message::OpenTerminal(id.to_string())
+    } else {
+        Message::TestConnection(id.to_string())
+    }
+}
+
 pub fn hosts_path(repo: &Path) -> PathBuf {
     repo.join(".dozer").join("ssh_hosts.json")
 }
@@ -523,12 +536,7 @@ pub fn update(
             }
             // 写完 known_hosts,按"是不是上次点终端撞未知 key 的那台主机"
             // 决定重开终端还是重新测试连接(设计文档 §6)。
-            let retry = if ws_state.reopen_after_trust.as_deref() == Some(id.as_str()) {
-                ws_state.reopen_after_trust = None;
-                Message::OpenTerminal(id)
-            } else {
-                Message::TestConnection(id)
-            };
+            let retry = pick_retry_message(&mut ws_state.reopen_after_trust, &id);
             update(ws_state, retry, project_id, repo_path, handle, emit);
         }
         Message::OpenTerminal(_) => {
@@ -801,5 +809,39 @@ mod tests {
         let mut ws_state = WorkspaceState::default();
         reload_from_disk(&mut ws_state, dir.path());
         assert!(ws_state.hosts().is_empty());
+    }
+
+    #[test]
+    fn synth_session_info_shape() {
+        let host = host("h1");
+        let info = synth_session_info(&host, 7);
+        assert_eq!(info.id, "ssh:h1");
+        assert!(info.name.starts_with("ssh: "));
+        assert_eq!(info.project_id, Some(7));
+        assert!(info.alive);
+        assert_eq!(info.agent, dozer_core::protocol::AgentKind::Unknown);
+    }
+
+    #[test]
+    fn trust_host_key_reopens_terminal_only_when_ids_match() {
+        let mut reopen = Some("A".to_string());
+        // id 命中 → 重开终端并清槽位。
+        assert!(matches!(
+            pick_retry_message(&mut reopen, "A"),
+            Message::OpenTerminal(_)
+        ));
+        assert_eq!(reopen, None);
+        // 槽位清空后(id 不再匹配),信任别的/同一台都应落回测试连接。
+        let mut reopen2 = Some("B".to_string());
+        assert!(matches!(
+            pick_retry_message(&mut reopen2, "A"),
+            Message::TestConnection(_)
+        ));
+        assert_eq!(reopen2.as_deref(), Some("B"));
+        // 与 reopen_after_trust 无关的直接测试连接路径。
+        assert!(matches!(
+            pick_retry_message(&mut None, "A"),
+            Message::TestConnection(_)
+        ));
     }
 }

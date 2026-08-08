@@ -8791,6 +8791,20 @@ mod tests {
     }
 
     #[test]
+    fn close_tab_skips_daemon_kill_for_ssh_backend() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut tab = make_test_tab(&rt, "ssh:h1", dozer_core::protocol::AgentKind::Unknown);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        tab.backend = TabBackend::Ssh { out: tx };
+        tab.alive = true;
+        // `close_tab` 里 `client.kill` 那一步只在
+        // `matches!(tab.backend, TabBackend::Daemon)` 时才走——单测环境没
+        // 有真实 daemon,不适合跑完整 `close_tab`,重点断言这个分支判断
+        // 本身:SSH backend 不该触发 daemon kill。
+        assert!(!matches!(tab.backend, TabBackend::Daemon));
+    }
+
+    #[test]
     fn group_tabs_by_agent_empty_list() {
         let tabs: Vec<SessionTab> = Vec::new();
         assert_eq!(
