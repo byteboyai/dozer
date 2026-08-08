@@ -1174,6 +1174,20 @@ pub struct EditSession {
     pub confirm_discard: bool,
 }
 
+/// UI → SSH 泵任务的写指令(`Workspace::spawn_ssh_tab` 消费)。
+pub enum SshOut {
+    Data(Vec<u8>),
+    Resize { cols: u16, rows: u16 },
+}
+
+/// 一个终端 tab 的字节流去向。
+pub enum TabBackend {
+    /// dozerd 托管的本地 PTY(现状所有 tab)。
+    Daemon,
+    /// SSH channel,UI 侧写操作经 `out` 送进泵任务。
+    Ssh { out: mpsc::UnboundedSender<SshOut> },
+}
+
 /// 一个 tab 对应一个 daemon 会话。
 pub struct SessionTab {
     pub info: SessionInfo,
@@ -1206,6 +1220,8 @@ pub struct SessionTab {
     /// 任务被中断即意味着 receiver 被 drop（detach）。app 整体退出时
     /// 只发生 detach（会话存活）；显式关 tab 则再补一次 kill。
     forwarder: tokio::task::JoinHandle<()>,
+    /// 字节流去向(本地 PTY 还是 SSH channel;阶段 2)。
+    pub backend: TabBackend,
 }
 
 /// 会话当前有效工作目录：OSC 7 跟踪的实时 cwd 优先，回落到会话
@@ -1596,6 +1612,7 @@ impl Workspace {
                 last_exit: None,
                 delivery_pending: false,
                 last_turn_head: None,
+                backend: TabBackend::Daemon,
             });
             if let Some(t) = tabs.last_mut() {
                 t.ingest_osc(&snapshot);
@@ -2247,6 +2264,7 @@ impl Workspace {
             last_exit: None,
             delivery_pending: false,
             last_turn_head: None,
+            backend: TabBackend::Daemon,
         });
         if let Some(t) = self.tabs.last_mut() {
             t.ingest_osc(&snapshot);
@@ -8524,6 +8542,7 @@ mod tests {
             last_turn_head: None,
             tab_id: 0,
             forwarder: rt.spawn(async {}),
+            backend: TabBackend::Daemon,
         }
     }
 

@@ -111,7 +111,7 @@ fn keyring_entry(project_id: i64, host_id: &str) -> Result<keyring::Entry, keyri
 }
 
 #[derive(Debug)]
-enum SshError {
+pub(crate) enum SshError {
     Russh(russh::Error),
     UnknownHostKey {
         fingerprint: String,
@@ -145,7 +145,7 @@ impl From<russh::Error> for SshError {
     }
 }
 
-struct TestHandler {
+pub(crate) struct TestHandler {
     host: String,
     port: u16,
 }
@@ -183,7 +183,18 @@ impl russh::client::Handler for TestHandler {
     }
 }
 
-async fn test_connection(host: SshHost, password: Option<String>) -> Result<(), SshError> {
+/// SSH 握手共享段:connect + host key 校验(`TestHandler::check_server_key`)
+/// + 认证。返回 `Handle` 本身——调用方若要继续开 channel(阶段 2 终端),
+/// `Handle` 必须留在作用域内全程存活到 channel 读写半都不再用为止(见
+/// 设计文档"背景"末尾;不能在这个函数里把 `Handle` 提前丢弃只返回别的
+/// 东西)。`test_connection` 只需要确认握手成功,用完直接让 `handle`
+/// 在函数结尾正常析构(不开 channel,没有"提前丢弃"的风险)。`pub(crate)`
+/// 是因为阶段 2 的 `Workspace::spawn_ssh_tab`(在 `workspace.rs`,另一个
+/// 模块)要直接调它来建终端连接。
+pub(crate) async fn handshake(
+    host: &SshHost,
+    password: Option<String>,
+) -> Result<russh::client::Handle<TestHandler>, SshError> {
     let config = std::sync::Arc::new(russh::client::Config::default());
     let handler = TestHandler {
         host: host.host.clone(),
@@ -212,9 +223,14 @@ async fn test_connection(host: SshHost, password: Option<String>) -> Result<(), 
         }
     };
     match auth_result {
-        russh::client::AuthResult::Success => Ok(()),
+        russh::client::AuthResult::Success => Ok(handle),
         russh::client::AuthResult::Failure { .. } => Err(SshError::AuthFailed),
     }
+}
+
+async fn test_connection(host: SshHost, password: Option<String>) -> Result<(), SshError> {
+    handshake(&host, password).await?;
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
