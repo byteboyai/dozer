@@ -2,6 +2,9 @@
 //! App 级状态(挂 `App.footbar`,不挂 `Workspace`——跨所有项目页签共享)。
 //! 设计见 `docs/superpowers/specs/2026-08-09-footbar-system-info-design.md`。
 
+use crate::theme;
+use iced_widget::core::{Alignment, Border, Element, Length};
+use iced_widget::{container, row, text};
 use std::path::PathBuf;
 
 /// App 级系统信息条状态——挂在 `App.footbar`,跨所有项目页签共享。
@@ -52,6 +55,61 @@ pub fn update(state: &mut AppState, msg: Message) {
     match msg {
         Message::Sampled(s) => state.sample = s,
     }
+}
+
+/// footbar 主入口。被 `App::view` 在根 `column!` 末尾调用,`.map(Message::Footbar)`
+/// 转成顶层消息。无项目依赖、无交互——纯展示条,样式直接用
+/// `theme::region::status_bar()` + `theme::geometry::status_bar_height()`
+/// (视觉口径与 in-pane status_bar 一致,不新增主题令牌)。
+pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let region = theme::region::status_bar();
+    let base = region.border.unwrap_or_default();
+    let s = &state.sample;
+
+    let mut segs: Vec<String> = Vec::new();
+    segs.push(format!("CPU  {:.0}%", s.cpu_percent));
+    segs.push(format!("RAM  {:.0}%", s.ram_percent));
+    segs.push(format!("SSD  {:.0}%", s.ssd_percent));
+    if let Some(h) = s.hdd_percent {
+        segs.push(format!("HDD  {:.0}%", h));
+    }
+    segs.push(format!("Proxy  {}", s.proxy.as_deref().unwrap_or("—")));
+    segs.push(format!(
+        "↓ {}  ↑ {}",
+        format_speed(s.net_down_bps),
+        format_speed(s.net_up_bps)
+    ));
+    let body = segs.join("｜");
+
+    // 用户样张首尾也带 `｜`,这里照做。
+    let content = row![
+        text("｜")
+            .size(theme::font::caption())
+            .color(theme::color::DIM),
+        text(body)
+            .size(theme::font::caption())
+            .color(theme::color::BODY),
+        text("｜")
+            .size(theme::font::caption())
+            .color(theme::color::DIM),
+    ]
+    .spacing(0)
+    .align_y(Alignment::Center);
+
+    container(content)
+        .width(Length::Fill)
+        .height(Length::Fixed(theme::geometry::status_bar_height()))
+        .padding(region.padding)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: region.background.map(Into::into),
+            border: Border {
+                color: base.color,
+                width: base.width,
+                radius: base.radius,
+            },
+            ..container::Style::default()
+        })
+        .into()
 }
 
 /// 网速按量级自动选单位,1 位小数。`<1 KB/s` → `0.0 KB/s`(向下取整,
