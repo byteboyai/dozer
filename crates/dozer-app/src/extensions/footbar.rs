@@ -3,9 +3,11 @@
 //! 设计见 `docs/superpowers/specs/2026-08-09-footbar-system-info-design.md`。
 
 use crate::theme;
+use crate::workspace::ShellIo;
 use iced_widget::core::{Alignment, Border, Element, Length};
 use iced_widget::{container, row, text};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 /// App 级系统信息条状态——挂在 `App.footbar`,跨所有项目页签共享。
 #[derive(Default)]
@@ -172,6 +174,179 @@ fn aggregate_disks(disks: &[(PathBuf, u64, u64, bool)]) -> (f32, Option<f32>) {
     (ssd, hdd)
 }
 
+/// 把 `sysinfo::Disks` 适配成 `aggregate_disks` 需要的切片再调它。
+/// 分离这一层让 `aggregate_disks` 可以纯单测覆盖(不必 mock sysinfo 类型)。
+fn compute_disk_usage(disks: &sysinfo::Disks) -> (f32, Option<f32>) {
+    let slice: Vec<(PathBuf, u64, u64, bool)> = disks
+        .iter()
+        .map(|d| {
+            (
+                d.mount_point().to_path_buf(),
+                d.total_space(),
+                d.available_space(),
+                d.is_read_only(),
+            )
+        })
+        .collect();
+    aggregate_disks(&slice)
+}
+
+/// 代理检测:env(`ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY` 及小写变体)→
+/// macOS `scutil --proxy` 解析 → 都没有返回 None。env 值剥掉
+/// `http://`/`https://`/`socks5://` 等 scheme 前缀,只留 `host:port`。
+fn detect_proxy() -> Option<String> {
+    if let Some(p) = detect_proxy_from_env() {
+        return Some(p);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(p) = detect_proxy_via_scutil() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// env 变量路径——单测覆盖(不开进程,不依赖系统)。优先级:
+/// `ALL_PROXY` > `HTTPS_PROXY` > `HTTP_PROXY`,大小写变体都查。
+fn detect_proxy_from_env() -> Option<String> {
+    for name in [
+        "ALL_PROXY",
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "all_proxy",
+        "https_proxy",
+        "http_proxy",
+    ] {
+        if let Ok(v) = std::env::var(name) {
+            let v = v.trim();
+            if v.is_empty() {
+                continue;
+            }
+            return Some(strip_proxy_scheme(v));
+        }
+    }
+    None
+}
+
+/// 剥掉 `http://`/`https://`/`socks5://`/`socks5h://`/`socks4://`/`socks4a://`
+/// 等 scheme 前缀(大小写不敏感),并去掉尾随 `/`。
+fn strip_proxy_scheme(s: &str) -> String {
+    let s = s.trim();
+    let lower = s.to_ascii_lowercase();
+    for scheme in [
+        "http://",
+        "https://",
+        "socks5://",
+        "socks5h://",
+        "socks4://",
+        "socks4a://",
+    ] {
+        if lower.starts_with(scheme) {
+            return s[scheme.len()..].trim_end_matches('/').to_string();
+        }
+    }
+    s.to_string()
+}
+
+/// macOS `scutil --proxy` 解析:找 `HTTPEnable: 1` 后取 `HTTPProxy:` 与
+/// `HTTPPort:`,组装 `host:port`。无 enable 或无 host/port → None。
+#[cfg(target_os = "macos")]
+fn detect_proxy_via_scutil() -> Option<String> {
+    let out = std::process::Command::new("scutil")
+        .arg("--proxy")
+        .output()
+        .ok()?;
+    let txt = String::from_utf8_lossy(&out.stdout);
+    let mut enable = false;
+    let mut host: Option<String> = None;
+    let mut port: Option<String> = None;
+    for line in txt.lines() {
+        let line = line.trim();
+        if let Some(v) = line.strip_prefix("HTTPEnable : ") {
+            enable = v == "1";
+        } else if let Some(v) = line.strip_prefix("HTTPProxy : ") {
+            host = Some(v.to_string());
+        } else if let Some(v) = line.strip_prefix("HTTPPort : ") {
+            port = Some(v.to_string());
+        }
+    }
+    if enable {
+        if let (Some(h), Some(p)) = (host, port) {
+            return Some(format!("{h}:{p}"));
+        }
+    }
+    None
+}
+
+/// 在 `App::new_shell` 阶段调一次,fire-and-forget。runtime drop 时任务随
+/// `tokio::Runtime` 一起取消。内部管两个节奏:1s 的 CPU/RAM/网络,
+/// 300s 的代理/磁盘——靠"距上次慢节奏采样的时间差"判断,不另起 interval
+/// (避免快慢两个 interval tick 漂移导致同秒双发)。
+///
+/// **Task 4 占位**:真实采样逻辑依赖 `ShellIo` 字段 `pub(crate)`(Task 5
+/// 改)+ `workspace::Message::Footbar` 变体(Task 5 加),所以 Task 4
+/// 阶段只放空壳 + TODO,Task 5 把真实采样体补上。
+pub fn spawn_sampler(io: &ShellIo) {
+    // Task 4 占位:让 Duration/Instant import 不被警告 unused,
+    // 真实采样逻辑(Task 5 启用)会真正用上这两个类型。
+    let _ = (Duration::from_secs(0), Instant::now());
+    let _ = io;
+    // TODO(Task 5): 启用下面注释里的真实采样逻辑。
+    //
+    // let proxy = io.proxy.clone();
+    // io.handle.spawn(async move {
+    //     let mut sys = sysinfo::System::new();
+    //     let mut nets = sysinfo::Networks::new_with_refreshed_list();
+    //     let mut disks = sysinfo::Disks::new_with_refreshed_list();
+    //     let mut cached_proxy: Option<String> = detect_proxy();
+    //     let mut last_proxy_check = Instant::now();
+    //     sys.refresh_cpu_usage();
+    //     tokio::time::sleep(Duration::from_millis(500)).await;
+    //
+    //     let mut tick = tokio::time::interval(Duration::from_secs(1));
+    //     tick.tick().await;
+    //     let mut last_ts = Instant::now();
+    //     loop {
+    //         tick.tick().await;
+    //         sys.refresh_cpu_usage();
+    //         sys.refresh_memory();
+    //         nets.refresh();
+    //         let now = Instant::now();
+    //         let elapsed = (now - last_ts).as_secs_f64().max(0.001);
+    //         last_ts = now;
+    //         let mut down: u64 = 0;
+    //         let mut up: u64 = 0;
+    //         for (name, net) in &nets {
+    //             if is_virtual_interface(name) { continue; }
+    //             down += net.received();
+    //             up += net.transmitted();
+    //         }
+    //         let cpu = sys.global_cpu_usage();
+    //         let ram = (sys.used_memory() as f64
+    //             / sys.total_memory().max(1) as f64) * 100.0;
+    //         if now.duration_since(last_proxy_check).as_secs() >= 300 {
+    //             cached_proxy = detect_proxy();
+    //             last_proxy_check = now;
+    //             disks.refresh();
+    //         }
+    //         let (ssd, hdd) = compute_disk_usage(&disks);
+    //         let sample = Sample {
+    //             cpu_percent: cpu,
+    //             ram_percent: ram as f32,
+    //             ssd_percent: ssd,
+    //             hdd_percent: hdd,
+    //             proxy: cached_proxy.clone(),
+    //             net_down_bps: down as f64 / elapsed,
+    //             net_up_bps: up as f64 / elapsed,
+    //         };
+    //         let _ = proxy.send_event(
+    //             crate::workspace::Message::Footbar(Message::Sampled(sample)),
+    //         );
+    //     }
+    // });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,5 +463,67 @@ mod tests {
         update(&mut state, Message::Sampled(sample.clone()));
         assert!(approx_eq(state.sample.cpu_percent, 18.0));
         assert!(approx_eq(state.sample.net_down_bps as f32, 12_000_000.0));
+    }
+
+    #[test]
+    fn detect_proxy_from_env_priority_and_scheme_stripping() {
+        // 单测试函数内串行改 env,避免 cargo test 默认多线程下的 env race。
+        // Rust 2024 edition 把 set_var/remove_var 标记 unsafe(非线程安全),
+        // 通过 helper 函数封装 unsafe 块。
+        fn set_env(name: &str, value: &str) {
+            // SAFETY: 测试函数串行执行,无并发访问同名 env 变量。
+            unsafe { std::env::set_var(name, value) }
+        }
+        fn remove_env(name: &str) {
+            // SAFETY: 同上。
+            unsafe { std::env::remove_var(name) }
+        }
+        let names = [
+            "ALL_PROXY",
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "all_proxy",
+            "https_proxy",
+            "http_proxy",
+        ];
+        for v in names {
+            remove_env(v);
+        }
+
+        // 1. 无 env → None
+        assert_eq!(detect_proxy_from_env(), None);
+
+        // 2. ALL_PROXY 带 http:// scheme → 剥 scheme
+        set_env("ALL_PROXY", "http://127.0.0.1:7890");
+        assert_eq!(detect_proxy_from_env().as_deref(), Some("127.0.0.1:7890"));
+        remove_env("ALL_PROXY");
+
+        // 3. HTTPS_PROXY 无 scheme → 原样
+        set_env("HTTPS_PROXY", "127.0.0.1:7890");
+        assert_eq!(detect_proxy_from_env().as_deref(), Some("127.0.0.1:7890"));
+        remove_env("HTTPS_PROXY");
+
+        // 4. http_proxy(小写)→ 优先级最低,但 None 时被命中
+        set_env("http_proxy", "127.0.0.1:8080");
+        assert_eq!(detect_proxy_from_env().as_deref(), Some("127.0.0.1:8080"));
+        remove_env("http_proxy");
+
+        // 5. 优先级:ALL_PROXY > HTTPS_PROXY
+        set_env("ALL_PROXY", "http://1.1.1.1:1111");
+        set_env("HTTPS_PROXY", "127.0.0.1:7890");
+        assert_eq!(detect_proxy_from_env().as_deref(), Some("1.1.1.1:1111"));
+        remove_env("ALL_PROXY");
+        assert_eq!(detect_proxy_from_env().as_deref(), Some("127.0.0.1:7890"));
+        remove_env("HTTPS_PROXY");
+
+        // 6. scheme 剥离 socks5:// 与尾随斜杠
+        set_env("ALL_PROXY", "socks5://127.0.0.1:1080/");
+        assert_eq!(detect_proxy_from_env().as_deref(), Some("127.0.0.1:1080"));
+        remove_env("ALL_PROXY");
+
+        // 7. 大写 scheme 也要剥(HTTP://)
+        set_env("ALL_PROXY", "HTTP://127.0.0.1:7890");
+        assert_eq!(detect_proxy_from_env().as_deref(), Some("127.0.0.1:7890"));
+        remove_env("ALL_PROXY");
     }
 }
