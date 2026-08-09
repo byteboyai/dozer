@@ -7,6 +7,7 @@ pub mod acceptance;
 pub mod browser;
 pub mod database;
 pub mod files;
+pub mod footbar;
 pub mod git_log;
 pub mod project;
 pub mod ssh;
