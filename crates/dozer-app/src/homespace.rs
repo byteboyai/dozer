@@ -396,9 +396,14 @@ fn home_project_list_view(
         }),
     );
 
+    // 与外边框保持标准内边距:外层 `zone_box` 只留 1px 圆角裁切余量,内容
+    // 若直接贴边会顶到圆角边框,因此这里补一层标准面板内距(与 project_pane
+    // 的 8 / 卡片的 10 同量级),让"我的项目"标题、搜索框、卡片、底部按钮
+    // 四周都不顶边框。
     container(col)
         .width(Length::Fill)
         .height(Length::Fill)
+        .padding(12)
         .into()
 }
 
@@ -411,13 +416,19 @@ fn home_recents_view(
     app: &App,
     now_ms: u64,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    column![
+    // 与 project list 面板同款:外层 `zone_box` 仅留 1px 圆角裁切余量,这里
+    // 再补一层标准内距,让两张卡片(含各自的标题)四周都不顶圆角边框。
+    let inner = column![
         home_recent_files_card(app, now_ms),
         home_recent_conversations_card(app, now_ms)
     ]
     .spacing(24)
-    .height(Length::Fill)
-    .into()
+    .height(Length::Fill);
+    container(inner)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(12)
+        .into()
 }
 
 /// "最近的文件"卡：`app.home_recents_loaded` 为 false 时(刚点进 Home 还没等
