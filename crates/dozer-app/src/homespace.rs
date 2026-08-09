@@ -76,7 +76,7 @@ pub(crate) fn home_page(
     ]
     .height(Length::Fill);
 
-    let mut col = column![body].spacing(16).height(Length::Fill);
+    let mut col = column![body].height(Length::Fill);
     if let Some(err) = &app.daemon_error {
         col = col.push(
             text(format!("⚠ {err}"))
@@ -85,7 +85,7 @@ pub(crate) fn home_page(
         );
     }
 
-    container(col.padding(24))
+    container(col)
         .width(Length::Fill)
         .height(Length::Fill)
         .style(|_t: &iced_widget::Theme| container::Style {
