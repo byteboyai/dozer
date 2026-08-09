@@ -10,7 +10,7 @@ use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Color, Element, Length, Padding};
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// 项目树行内编辑的模式:新建文件/新建文件夹/重命名(携带原路径)。
 /// 现有 `workspace.rs::TreeEditMode` 的搬家版本,定义不变。
@@ -483,6 +483,29 @@ pub fn view<'a>(
     let mut header = column![].spacing(region.gap).width(Length::Fill);
     let mut tree_col = column![].spacing(region.gap);
 
+    // 根目录头部:`<name>(<完整路径>)` —— 名称用 CREAM 高亮,路径用 DIM
+    // 跑配角,家目录前缀以 `~` 简写(与终端/IDE 通用的路径展示惯例一致)。
+    if let Some(tree) = &ws_state.file_tree {
+        let root = tree.root();
+        let name = root
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| root.display().to_string());
+        let full = tilde_display(root);
+        header = header.push(
+            row![
+                text(name)
+                    .size(theme::font::body())
+                    .color(theme::color::CREAM),
+                text(format!("({full})"))
+                    .size(theme::font::label())
+                    .color(theme::color::DIM),
+            ]
+            .spacing(4)
+            .align_y(iced_widget::core::Alignment::Center),
+        );
+    }
+
     if let Some(err) = &ws_state.tree_error {
         header = header.push(
             text(format!("⚠ {err}"))
@@ -870,6 +893,22 @@ fn menu_separator<'a>() -> Element<'a, Message, iced_widget::Theme, iced_widget:
             ..container::Style::default()
         })
         .into()
+}
+
+/// 路径展示用字符串:家目录前缀以 `~` 简写(`/Users/me/foo` → `~/foo`),
+/// 不在家目录下或读不到 `$HOME` 时原样返回绝对路径。仅用于展示,不参与
+/// 路径解析/IO——文件树头部显示根路径时让长路径更易读。
+fn tilde_display(path: &Path) -> String {
+    if let Ok(home) = std::env::var("HOME") {
+        let home = PathBuf::from(home);
+        if let Ok(rest) = path.strip_prefix(&home) {
+            if rest.as_os_str().is_empty() {
+                return "~".to_string();
+            }
+            return format!("~/{}", rest.display());
+        }
+    }
+    path.display().to_string()
 }
 
 /// 删除确认框:居中浮层,显示目标文件名 + 确认/取消两个按钮。

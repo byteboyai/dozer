@@ -4,7 +4,7 @@
 //! `dozer_core::paths::config_dir()/layout.json`）；`load_from`/`save_to`
 //! 接收显式路径，供单测指向临时文件，不碰用户真实配置目录。
 
-use crate::workspace::{ShellLayout, sanitize_shell_layout};
+use crate::app::{ShellLayout, sanitize_shell_layout};
 use std::path::{Path, PathBuf};
 
 pub fn default_path() -> PathBuf {
@@ -43,7 +43,7 @@ fn save_to(path: &Path, layout: &ShellLayout) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::{LeftView, RightView};
+    use crate::app::{LeftView, RightView};
 
     #[test]
     fn load_from_missing_file_returns_default() {

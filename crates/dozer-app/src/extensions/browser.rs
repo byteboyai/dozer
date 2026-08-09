@@ -8,9 +8,10 @@
 //! `Acceptance`、`open_path`/`is_editable_extension`/`flyfish_url` 等浏览器
 //! 用不到的逻辑),两者各自维护、互不知情。
 
+use crate::app::{tab_arrow_button, tab_divider, tab_window};
 use crate::preview::WebviewSpec;
 use crate::theme::icon_size;
-use crate::workspace::{lh, preview_tab_display_width, tab_arrow_button, tab_divider, tab_window};
+use crate::workspace::{lh, preview_tab_display_width};
 use crate::{icons, theme};
 use dozer_client::Client;
 use dozer_core::protocol::{BookmarkInfo, BookmarkScope};

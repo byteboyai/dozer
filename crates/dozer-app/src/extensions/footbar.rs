@@ -360,7 +360,7 @@ pub fn spawn_sampler(io: &ShellIo) {
                 net_down_bps: down as f64 / elapsed,
                 net_up_bps: up as f64 / elapsed,
             };
-            let _ = proxy.send_event(crate::workspace::Message::Footbar(Message::Sampled(sample)));
+            let _ = proxy.send_event(crate::app::Message::Footbar(Message::Sampled(sample)));
         }
     });
 }

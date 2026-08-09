@@ -20,11 +20,11 @@
 //!
 //! 光标最后画：先补一块实心格（focused：CREAM 底 + TERM_BG 字；未聚焦：
 //! CREAM 描边），覆盖在 run 字形之上，天然处理"光标落在任意 run 中间"。
+use crate::app::Message;
 use crate::term_model::{Cell, TerminalModel};
 use crate::theme;
 use crate::theme::icon_size;
 use crate::theme::terminal_font;
-use crate::workspace::Message;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::font::Weight;
 use iced_widget::core::mouse::{self, ScrollDelta};
