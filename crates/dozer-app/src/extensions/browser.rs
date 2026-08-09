@@ -8,7 +8,7 @@
 //! `Acceptance`、`open_path`/`is_editable_extension`/`flyfish_url` 等浏览器
 //! 用不到的逻辑),两者各自维护、互不知情。
 
-use crate::app::{tab_arrow_button, tab_divider, tab_window};
+use crate::app::{panel_tab, tab_arrow_button, tab_divider, tab_window};
 use crate::preview::WebviewSpec;
 use crate::theme::icon_size;
 use crate::workspace::{lh, preview_tab_display_width};
@@ -17,6 +17,7 @@ use dozer_client::Client;
 use dozer_core::protocol::{BookmarkInfo, BookmarkScope};
 use iced_widget::core::{Border, Element, Length};
 use iced_widget::{button, column, container, row, text};
+use std::collections::HashMap;
 
 /// 一个浏览器 tab。
 #[derive(Debug, Clone, PartialEq)]
@@ -755,11 +756,41 @@ pub enum Message {
     BookmarksToggle,
     BookmarksLoaded(i64, Vec<BookmarkInfo>),
     BookmarksMutated(i64, Result<(), String>),
+    /// tab 标题/关闭按钮的 hover 进入/离开(idx = tab 序号, bool = 是否关闭
+    /// 按钮, 最后 bool = 进入/离开)。浏览器面板有独立 `State`,无法复用顶栏
+    /// 全局 `App::hover_progress`,自己维护一套进度机(见 `State::hover`)。
+    Hover(usize, bool, bool),
 }
 
 /// 浏览器面板的全部状态。挂在每个 `Workspace` 上(不像 Git Log 挂在
 /// `App` 上)——项目切换靠 `Workspace` 自身生命周期天然隔离,不需要
 /// 手动同步/清空逻辑。
+/// 单个 tab 标题/关闭按钮的 hover 动画状态机,与顶栏 `HoverAnim` 同款
+/// (每拍残余 50%,约 80ms 收敛,snap 0.01):浏览器面板独立 `State`,自带
+/// 进度机,借全局 HOVER_ANIM 定时 redraw 推进(见 `State::advance_hover_anims`)。
+#[derive(Debug, Clone, Copy, Default)]
+struct TabHover {
+    progress: f32,
+    target: f32,
+}
+
+impl TabHover {
+    fn set(&mut self, hovered: bool) {
+        self.target = if hovered { 1.0 } else { 0.0 };
+    }
+    fn advance(&mut self) {
+        let next = self.progress + (self.target - self.progress) * 0.5;
+        self.progress = if (next - self.target).abs() < 0.01 {
+            self.target
+        } else {
+            next
+        };
+    }
+    fn active(&self) -> bool {
+        (self.progress - self.target).abs() > 0.001
+    }
+}
+
 #[derive(Default)]
 pub struct State {
     tabs: Tabs,
@@ -768,6 +799,8 @@ pub struct State {
     bookmarks: Vec<BookmarkInfo>,
     bookmarks_open: bool,
     star_menu_open: bool,
+    /// tab 标题/关闭按钮的 hover 进度,键 `(tab 序号, 是否关闭按钮)`。
+    hover: HashMap<(usize, bool), TabHover>,
 }
 
 impl State {
@@ -791,6 +824,30 @@ impl State {
     /// webview 池)。
     pub fn desired_webviews(&self) -> Vec<WebviewSpec> {
         self.tabs.desired_webviews()
+    }
+
+    /// 推进所有 tab 的 hover 动画一拍(每拍残余 50%,约 80ms 收敛),与顶栏
+    /// `App::advance_hover_anims` 同款。由内核在全局 HOVER_ANIM 定时里调用,
+    /// 浏览器面板靠它复用顶栏那套自驱 redraw(见 `any_hover_active`)。
+    pub fn advance_hover_anims(&mut self) {
+        for h in self.hover.values_mut() {
+            h.advance();
+        }
+    }
+
+    /// 是否还有 tab hover 动画在进行中(进度未到目标)——内核
+    /// `App::any_hover_anim_active` 据此决定是否继续排下一拍定时唤醒。
+    pub fn any_hover_active(&self) -> bool {
+        self.hover.values().any(TabHover::active)
+    }
+
+    /// 取某 tab 标题(idx, is_close=false)或关闭按钮(idx, is_close=true)的
+    /// 当前 hover 进度(0..=1),给 `view` 做颜色插值。
+    pub(crate) fn hover_progress(&self, idx: usize, is_close: bool) -> f32 {
+        self.hover
+            .get(&(idx, is_close))
+            .map(|h| h.progress)
+            .unwrap_or(0.0)
     }
 }
 
@@ -817,6 +874,9 @@ pub fn update(
         Message::CloseTab(idx) => {
             state.tabs.close(idx);
             state.tab_first = 0;
+        }
+        Message::Hover(idx, is_close, hovered) => {
+            state.hover.entry((idx, is_close)).or_default().set(hovered);
         }
         Message::AddrClick => {
             state.error = None;
@@ -1144,46 +1204,20 @@ pub fn view(
         .filter(|(idx, _)| *idx >= first)
         .map(|(idx, tab)| {
             let active = idx == state.tabs.active_idx();
-            let select = button(lh(text(tab.title.clone())
-                .size(theme::font::subtitle())
-                .color(theme::color::CREAM)))
-            .on_press(Message::SelectTab(idx))
-            .style(|_t, _s| button::Style {
-                background: None,
-                text_color: theme::color::CREAM,
-                ..button::Style::default()
-            });
-            let close = button(lh(text("×")
-                .size(theme::font::body())
-                .color(theme::color::DIM)))
-            .on_press(Message::CloseTab(idx))
-            .style(|_t, _s| button::Style {
-                background: None,
-                text_color: theme::color::DIM,
-                ..button::Style::default()
-            });
-            container(
-                row![select, close]
-                    .spacing(2)
-                    .align_y(iced_widget::core::Alignment::Center),
+            let title_hover_t = state.hover_progress(idx, false);
+            let close_hover_t = state.hover_progress(idx, true);
+            panel_tab(
+                tab.title.clone(),
+                active,
+                title_hover_t,
+                close_hover_t,
+                None,
+                None,
+                Message::SelectTab(idx),
+                Message::CloseTab(idx),
+                move |h| Message::Hover(idx, false, h),
+                move |h| Message::Hover(idx, true, h),
             )
-            .padding([2, 4])
-            .style(move |_t: &iced_widget::Theme| {
-                if active {
-                    container::Style {
-                        background: Some(theme::color::CARD.into()),
-                        border: Border {
-                            color: theme::color::BORDER,
-                            width: 1.0,
-                            radius: 6.0.into(),
-                        },
-                        ..container::Style::default()
-                    }
-                } else {
-                    container::Style::default()
-                }
-            })
-            .into()
         })
         .collect();
     let tabs_row = row(items).spacing(4);

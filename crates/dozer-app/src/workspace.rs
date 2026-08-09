@@ -31,7 +31,8 @@
 //!   收到后调用 `app.update(..)` 并请求重绘。反方向（UI → tokio）
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
 use crate::app::{
-    DEFAULT_COLS, DEFAULT_ROWS, Message, ProjectId, tab_arrow_button, tab_divider, tab_window,
+    App, DEFAULT_COLS, DEFAULT_ROWS, HoverId, Message, ProjectId, panel_tab, tab_arrow_button,
+    tab_divider, tab_window,
 };
 use crate::conversation::{self, ConversationMeta};
 use crate::delivery::{self};
@@ -2007,11 +2008,12 @@ pub(crate) fn status_bar_container<'a, Msg: 'a>(
         .into()
 }
 
-pub(crate) fn preview_pane(
-    ws: &Workspace,
+pub(crate) fn preview_pane<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
     width: Length,
     outer: Border,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     // tab 栏:箭头翻页(到头变灰) + 每 tab 选择按钮 + 关闭 ×。tab 只能由项目树
     // 点击/会话恢复产生——面板本身已不再有"打开文件…"按钮或地址栏(P1 后续
     // 反馈:文件预览与浏览器彻底分离,文件只走项目树入口)。
@@ -2038,17 +2040,12 @@ pub(crate) fn preview_pane(
         .filter(|(idx, _)| *idx >= first)
         .map(|(idx, tab)| {
             let active = idx == ws.preview.active_idx();
-            let select = button(lh(text(tab.title.clone())
-                .size(theme::font::subtitle())
-                .color(theme::color::CREAM)))
-            .on_press(Message::PreviewSelectTab(idx))
-            .style(|_t, _s| button::Style {
-                background: None,
-                text_color: theme::color::CREAM,
-                ..button::Style::default()
-            });
+            let title_hover_t = app.hover_progress(HoverId::PreviewTabItem(idx));
+            let close_hover_t = app.hover_progress(HoverId::PreviewTabClose(idx));
+            // 可编辑文件才有重命名入口(原 preview 面板的编辑图标),作 `panel_tab`
+            // 的 suffix(标题右侧、关闭前、独立可点)。
             let editable = matches!(&tab.kind, TabKind::File(path) if is_editable_extension(path));
-            let edit: Option<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> =
+            let suffix: Option<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> =
                 if editable {
                     Some(
                         button(icons::view(
@@ -2068,38 +2065,18 @@ pub(crate) fn preview_pane(
                 } else {
                     None
                 };
-            let close = button(lh(text("×")
-                .size(theme::font::body())
-                .color(theme::color::DIM)))
-            .on_press(Message::PreviewCloseTab(idx))
-            .style(|_t, _s| button::Style {
-                background: None,
-                text_color: theme::color::DIM,
-                ..button::Style::default()
-            });
-            let mut chip_row = row![select].spacing(2);
-            if let Some(edit) = edit {
-                chip_row = chip_row.push(edit);
-            }
-            chip_row = chip_row.push(close);
-            container(chip_row.align_y(iced_widget::core::Alignment::Center))
-                .padding([2, 4])
-                .style(move |_t: &iced_widget::Theme| {
-                    if active {
-                        container::Style {
-                            background: Some(theme::color::CARD.into()),
-                            border: Border {
-                                color: theme::color::BORDER,
-                                width: 1.0,
-                                radius: 6.0.into(),
-                            },
-                            ..container::Style::default()
-                        }
-                    } else {
-                        container::Style::default()
-                    }
-                })
-                .into()
+            panel_tab(
+                tab.title.clone(),
+                active,
+                title_hover_t,
+                close_hover_t,
+                None,
+                suffix,
+                Message::PreviewSelectTab(idx),
+                Message::PreviewCloseTab(idx),
+                move |h| Message::Hover(HoverId::PreviewTabItem(idx), h),
+                move |h| Message::Hover(HoverId::PreviewTabClose(idx), h),
+            )
         })
         .collect();
     // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;左右箭头钉在裁剪区外。
@@ -2440,16 +2417,21 @@ pub(crate) fn text_width_units(s: &str) -> f32 {
 }
 
 /// 终端 tab 估算显示宽（逻辑像素）：状态点+名称+关闭×+pill padding 的粗估。
-/// 不追求精确——估偏几像素只会让翻页边界差一个 tab。
+/// 不追求精确——估偏几像素只会让翻页边界差一个 tab。上限封顶到
+/// `PANEL_TAB_MAX_W`,与 `preview_tab_display_width` 同款理由。
 pub(crate) fn tab_display_width(title: &str) -> f32 {
     // 状态点●+spacing ≈ 18, 名称 ≈ units * 半宽 8.0(14px), 关闭× ≈ 18, pill padding ≈ 12
-    18.0 + text_width_units(title) * 8.0 + 18.0 + 12.0
+    let est = 18.0 + text_width_units(title) * 8.0 + 18.0 + 12.0;
+    est.min(crate::app::PANEL_TAB_MAX_W)
 }
 
-/// 预览 tab 估算显示宽：同 `tab_display_width` 但无状态点。
+/// 预览 tab 估算显示宽：同 `tab_display_width` 但无状态点。上限封顶到
+/// `PANEL_TAB_MAX_W`——标题超宽会被省略号截断,翻页窗口数学据此不会把
+/// 被裁剪的 tab 算成比实际渲染更宽。
 pub(crate) fn preview_tab_display_width(title: &str) -> f32 {
     // 名称 ≈ units * 半宽 8.0(14px), 关闭× ≈ 18, pill padding ≈ 12
-    text_width_units(title) * 8.0 + 18.0 + 12.0
+    let est = text_width_units(title) * 8.0 + 18.0 + 12.0;
+    est.min(crate::app::PANEL_TAB_MAX_W)
 }
 
 /// agent 四态中文（终端状态栏用）。

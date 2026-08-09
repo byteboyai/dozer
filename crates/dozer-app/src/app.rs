@@ -138,6 +138,16 @@ pub enum HoverId {
     /// 某个项目页签的标题文字,按项目 id 区分(同 `ProjectTabClose` 的考量):
     /// 未选中态 hover 时标题从 DIM 平滑过渡到 GOLD(见 `project_tab_item`)。
     ProjectTabItem(i64),
+    /// 终端面板某个会话 tab 的标题文字,按会话序号区分——未选中态 hover 时
+    /// 标题从 DIM 平滑过渡到 GOLD(见 `panel_tab`)。
+    TermTabItem(usize),
+    /// 终端面板某个会话 tab 的关闭按钮(×),按会话序号区分——hover 时颜色从
+    /// DIM 平滑过渡到 GOLD(见 `panel_tab`)。
+    TermTabClose(usize),
+    /// 预览面板某个文件 tab 的标题文字,按 tab 序号区分(同 `TermTabItem`)。
+    PreviewTabItem(usize),
+    /// 预览面板某个文件 tab 的关闭按钮(×),按 tab 序号区分(同 `TermTabClose`)。
+    PreviewTabClose(usize),
 }
 
 /// 一个可平滑过渡的 hover 动画状态机。iced 0.14 无内置动画 API,这套自驱
@@ -1548,12 +1558,25 @@ impl App {
         for a in self.hover_anims.values_mut() {
             a.advance();
         }
+        // 浏览器面板有独立 hover 进度机(无法复用全局 `hover_anims`),这里
+        // 一并推进:首页 `home_browser` 与每个已加载工作区的浏览器。
+        self.home_browser.advance_hover_anims();
+        for slot in self.projects.values_mut() {
+            if let WorkspaceSlot::Loaded(ws) = slot {
+                ws.browser.advance_hover_anims();
+            }
+        }
     }
 
     /// 是否还有按钮的悬停动画在进行中（任一进度未到目标）。
     /// main.rs 据此决定是否继续排下一拍定时唤醒。
     pub fn any_hover_anim_active(&self) -> bool {
         self.hover_anims.values().any(HoverAnim::active)
+            || self.home_browser.any_hover_active()
+            || self
+                .projects
+                .values()
+                .any(|s| matches!(s, WorkspaceSlot::Loaded(ws) if ws.browser.any_hover_active()))
     }
 
     /// 某按钮当前悬停动画进度(0..=1)，给视图层做颜色插值。
@@ -4499,6 +4522,7 @@ fn left_panel_area<'a>(
                         .unwrap_or(theme::color::BG),
                 ),
                 preview_pane(
+                    app,
                     ws,
                     Length::FillPortion(content_portion),
                     zone_pane_border(zone, rc)
@@ -4989,6 +5013,176 @@ pub(crate) fn tab_divider<'a, M: 'a>() -> Element<'a, M, iced_widget::Theme, ice
         .into()
 }
 
+/// 面板内 tab（终端 / 预览 / 浏览器三处共用）的渲染器，样式对齐顶栏未选中
+/// 页签：标题 `body()`(13px) + `top_bar_font()`，静止 `DIM`、hover 动画
+/// `DIM→金`；关闭 `×` 静止 `DIM`、hover `DIM→金`、24×24 命中框；未选中
+/// hover 显 `TAB_HOVER` 胶囊背景（radius 8）。tab 宽度随标题适配
+/// (`Length::Shrink`)，超过 `PANEL_TAB_MAX_W` 时标题省略号截断。激活态外观
+/// (CREAM 标题 + CARD 实底 + 1px 边框)由本函数统一绘制，未选中态额外画
+/// hover 细节。
+///
+/// 泛型 over 消息类型 `M`：终端/预览传 `app::Message`，浏览器传
+/// `browser::Message`，保证三处渲染完全一致。`hover_t`/`close_hover_t` 是
+/// 调用方动画源给的插值进度(0..=1)；`prefix` 承载终端状态点(标题左侧)，
+/// `suffix` 承载预览编辑图标(标题右侧、关闭按钮前，仍是独立可点元素)。
+/// (iced 0.14 的 `Text` 无原生省略号，截断靠 `fit_title` 手动补 `…`。)
+// 共享的 panel tab 渲染器,被终端/预览/browser 三处复用;参数多是刻意保留的
+// 单一职责接口(标题/激活态/两组 hover 进度与回调/前后缀),拆结构体反而要
+// 引入 `Box<dyn Fn>`,得不偿失。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn panel_tab<'a, M: Clone + 'a>(
+    title: String,
+    active: bool,
+    hover_t: f32,
+    close_hover_t: f32,
+    prefix: Option<Element<'a, M, iced_widget::Theme, iced_widget::Renderer>>,
+    suffix: Option<Element<'a, M, iced_widget::Theme, iced_widget::Renderer>>,
+    on_select: M,
+    on_close: M,
+    title_hover: impl Fn(bool) -> M + 'a,
+    close_hover: impl Fn(bool) -> M + 'a,
+) -> Element<'a, M, iced_widget::Theme, iced_widget::Renderer> {
+    let close_sz = crate::theme::geometry::tab_button_size();
+    // 标题区域最大宽 = 整 tab 上限 - 左右 padding - 与关闭按钮的间距 - 关闭按钮。
+    let title_max = PANEL_TAB_MAX_W - 2.0 * PANEL_TAB_PAD_X - 2.0 - close_sz;
+    let title_color = if active {
+        theme::color::CREAM
+    } else {
+        // 未选中态:静止 DIM,hover 时平滑过渡到金(与顶栏页签同一套动画)。
+        theme::color::mix(theme::color::DIM, theme::color::GOLD, hover_t)
+    };
+
+    let mut title_row = row![].spacing(4).align_y(iced_widget::core::Alignment::Center);
+    if let Some(p) = prefix {
+        title_row = title_row.push(p);
+    }
+    title_row = title_row.push(
+        container(
+            text(fit_title(&title, title_max))
+                .font(top_bar_font())
+                .size(theme::font::body())
+                .color(title_color),
+        )
+        // 随标题长度适配,超宽则截到 title_max 并靠 `fit_title` 补省略号。
+        .width(Length::Shrink)
+        .max_width(title_max)
+        .clip(true),
+    );
+
+    let select = button(title_row)
+        .on_press(on_select)
+        .style(move |_t: &iced_widget::Theme, s| {
+            let mut st = button::Style {
+                background: None,
+                text_color: title_color,
+                ..button::Style::default()
+            };
+            // 未选中态 hover 时画一条与顶栏页签同款的胶囊背景,选中态不参与。
+            if !active && let button::Status::Hovered = s {
+                st.background = Some(theme::color::TAB_HOVER.into());
+                st.border = Border {
+                    radius: 8.0.into(),
+                    ..Border::default()
+                };
+            }
+            st
+        });
+    // 标题 hover 变色走 `MouseArea` + 调用方给的 hover 消息(只抓 enter/exit,
+    // 按下仍由底层 `select` 按钮处理)。
+    let select = MouseArea::new(select)
+        .on_enter(title_hover(true))
+        .on_exit(title_hover(false));
+
+    let close_color = theme::color::mix(theme::color::DIM, theme::color::GOLD, close_hover_t);
+    let close = MouseArea::new(
+        button(
+            container(
+                text("×")
+                    .size(theme::font::body())
+                    .color(close_color)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(iced_widget::core::Alignment::Center)
+                    .align_y(iced_widget::core::Alignment::Center),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill),
+        )
+        .on_press(on_close)
+        .width(Length::Fixed(close_sz))
+        .height(Length::Fixed(close_sz))
+        .padding(0)
+        .style(move |_t: &iced_widget::Theme, _s| button::Style {
+            background: None,
+            text_color: close_color,
+            ..button::Style::default()
+        }),
+    )
+    .on_enter(close_hover(true))
+    .on_exit(close_hover(false));
+
+    let mut tab_row = row![select].spacing(2).align_y(iced_widget::core::Alignment::Center);
+    if let Some(s) = suffix {
+        tab_row = tab_row.push(s);
+    }
+    tab_row = tab_row.push(close);
+    container(
+        tab_row,
+    )
+    .padding(Padding {
+        top: PANEL_TAB_PAD_Y,
+        right: PANEL_TAB_PAD_X,
+        bottom: PANEL_TAB_PAD_Y,
+        left: PANEL_TAB_PAD_X,
+    })
+    .width(Length::Shrink)
+    .max_width(PANEL_TAB_MAX_W)
+    .style(move |_t: &iced_widget::Theme| {
+        if active {
+            container::Style {
+                background: Some(theme::color::CARD.into()),
+                border: Border {
+                    color: theme::color::BORDER,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..container::Style::default()
+            }
+        } else {
+            container::Style::default()
+        }
+    })
+    .into()
+}
+
+/// 面板 tab 统一上限宽（对齐顶栏 `project_tab_max_width`）。标题超宽时省略号
+/// 截断,正常情况下 tab 宽度随标题适配。导出给 `workspace.rs`/`browser.rs`
+/// 的翻页宽度估算共用,避免各处硬编码 160。
+pub(crate) const PANEL_TAB_MAX_W: f32 = 160.0;
+/// 面板 tab 内边距:横向留白给 hover 胶囊,纵向收紧以缩小高度。
+const PANEL_TAB_PAD_X: f32 = 6.0;
+const PANEL_TAB_PAD_Y: f32 = 1.0;
+
+/// 按 `max_w` 把标题裁到能放下的长度,截掉的部分用 `…` 替代(iced 0.14 的
+/// `Text` 无原生省略号)。粗估每字符宽:CJK 全宽 16、其余半宽 8,留 8px 给
+/// `…` 自身。估偏只会让省略号早/晚一个字符,不影响布局。
+fn fit_title(title: &str, max_w: f32) -> String {
+    const ELLIPSIS_W: f32 = 8.0;
+    let mut out = String::new();
+    let mut used: f32 = 0.0;
+    for c in title.chars() {
+        let w = if (c as u32) > 0x2E80 { 16.0 } else { 8.0 };
+        // 放不下当前字(且还需为 `…` 留位)就截断并补省略号。
+        if used + w > max_w - ELLIPSIS_W {
+            out.push('…');
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    out
+}
+
 /// tab 栏：两侧箭头翻页(到头变灰) + 每会话一个按钮(状态点 + 名称 + 关闭
 /// ×)。新建会话走 Agent 面板"＋"(纯 Shell 也在其菜单里),终端 tab 栏
 /// 不再放独立"＋"。P1L T5 验收返工：横向 scrollable(底部滚动条)
@@ -5015,7 +5209,18 @@ fn tab_bar<'a>(
         .iter()
         .enumerate()
         .filter(|(idx, _)| *idx >= first)
-        .map(|(idx, tab)| tab_item(idx, tab, idx == ws.active, app.blink_on))
+        .map(|(idx, tab)| {
+            let title_hover_t = app.hover_progress(HoverId::TermTabItem(idx));
+            let close_hover_t = app.hover_progress(HoverId::TermTabClose(idx));
+            tab_item(
+                idx,
+                tab,
+                idx == ws.active,
+                app.blink_on,
+                title_hover_t,
+                close_hover_t,
+            )
+        })
         .collect();
 
     // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;左右箭头钉在裁剪区外.
@@ -5083,6 +5288,8 @@ fn tab_item(
     tab: &SessionTab,
     active: bool,
     blink_on: bool,
+    title_hover_t: f32,
+    close_hover_t: f32,
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let working = tab.alive && tab.agent_state == AgentState::Running;
     let mut color = dot_color(tab.agent_state, tab.alive);
@@ -5091,52 +5298,23 @@ fn tab_item(
     if working && !blink_on {
         color = Color { a: 0.15, ..color };
     }
-    let label = row![
-        text("●").size(theme::font::caption()).color(color),
-        text(tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name))
-            .size(theme::font::subtitle())
-            .color(theme::color::CREAM),
-    ]
-    .spacing(4);
+    // 状态点作 `panel_tab` 的 prefix（颜色/呼吸逻辑不变）。
+    let dot = text("●")
+        .size(theme::font::caption_sm())
+        .color(color);
 
-    let select = button(label)
-        .on_press(Message::SelectTab(idx))
-        .style(|_theme, _status| button::Style {
-            background: None,
-            text_color: theme::color::CREAM,
-            ..button::Style::default()
-        });
-
-    let close = button(text("×").size(theme::font::body()).color(theme::color::DIM))
-        .on_press(Message::CloseTab(idx))
-        .style(|_theme, _status| button::Style {
-            background: None,
-            text_color: theme::color::DIM,
-            ..button::Style::default()
-        });
-
-    container(
-        row![select, close]
-            .spacing(2)
-            .align_y(iced_widget::core::Alignment::Center),
+    panel_tab(
+        tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
+        active,
+        title_hover_t,
+        close_hover_t,
+        Some(dot.into()),
+        None,
+        Message::SelectTab(idx),
+        Message::CloseTab(idx),
+        move |h| Message::Hover(HoverId::TermTabItem(idx), h),
+        move |h| Message::Hover(HoverId::TermTabClose(idx), h),
     )
-    .padding([2, 4])
-    .style(move |_t: &iced_widget::Theme| {
-        if active {
-            container::Style {
-                background: Some(theme::color::CARD.into()),
-                border: Border {
-                    color: theme::color::BORDER,
-                    width: 1.0,
-                    radius: 6.0.into(),
-                },
-                ..container::Style::default()
-            }
-        } else {
-            container::Style::default()
-        }
-    })
-    .into()
 }
 
 fn active_tab_view<'a>(
