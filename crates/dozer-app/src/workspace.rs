@@ -634,7 +634,9 @@ pub fn preview_content_bounds(
     if state.maximized == Some(MaximizedPane::Left) {
         let (x0, avail_w) = maximized_box_x_range(window_width);
         let y0 = theme::geometry::top_bar_height() + theme::geometry::maximize_overlay_padding();
-        let avail_h = maximized_box_height(window_height);
+        // 同样扣掉 footbar 高度,让放大态 webview 底部也不戳到 footbar。
+        let avail_h =
+            (maximized_box_height(window_height) - theme::geometry::status_bar_height()).max(0.0);
         return match state.left_view {
             LeftView::Web => {
                 let y = y0 + theme::geometry::browser_chrome_top_px();
@@ -671,7 +673,13 @@ pub fn preview_content_bounds(
     // 否则去掉外边框后 webview 会戳出新增的左侧留白。
     let m = theme::region::left_zone().margin;
     let y_top = |chrome_top: f32| -> f32 { theme::geometry::top_bar_height() + m.top + chrome_top };
-    let h_for = |y: f32| -> f32 { (window_height - y - m.bottom - 8.0).max(0.0) };
+    // 底部扣 footbar(`extensions::footbar::view` 的固定高度
+    // = `theme::geometry::status_bar_height()`)——wry webview 不听 iced
+    // 布局,若不扣会把 footbar 文字盖在底下。不留额外 8px 间隙,让
+    // webview 底部紧贴 footbar 顶部(只留 left_zone 的下 margin)。
+    let h_for = |y: f32| -> f32 {
+        (window_height - y - m.bottom - theme::geometry::status_bar_height()).max(0.0)
+    };
     match state.left_view {
         LeftView::Web => {
             let y = y_top(theme::geometry::browser_chrome_top_px());
@@ -4674,16 +4682,19 @@ impl App {
         // 执行,右图标栏就会缩到窗口中间——不要在不理解这个前提的情况下改写。
         let body = row![
             left_icon_rail(self),
-            left_panel_area(self, ws, false),
-            divider_bar(Divider::LeftRight, theme::color::BG, theme::color::BG),
-            right_panel_area(self, ws, false),
+            column![
+                row![
+                    left_panel_area(self, ws, false),
+                    divider_bar(Divider::LeftRight, theme::color::BG, theme::color::BG),
+                    right_panel_area(self, ws, false),
+                ]
+                .height(Length::Fill),
+                footbar::view(&self.footbar).map(Message::Footbar),
+            ]
+            .width(Length::Fill),
             right_icon_rail(self),
         ];
-        let base = column![
-            top,
-            body,
-            footbar::view(&self.footbar).map(Message::Footbar)
-        ];
+        let base = column![top, body];
 
         let popped = if ws.edit_session.is_some() {
             let dismiss = MouseArea::new(
@@ -8042,7 +8053,8 @@ mod tests {
     /// avail_w=1440-2*44-2*40=1272,pair_w=1272-8=1264,
     /// list_w=1264*0.35=442.4,x=84+442.4+8+8=542.4,w=1264*0.65-16=805.6;
     /// y0=theme::geometry::top_bar_height()(40)+40=80,y=80+38(theme::geometry::preview_chrome_top_px(),地址栏已去)=118,
-    /// avail_h=900-40-80=780,h=780-38-8=734。
+    /// avail_h=900-40-80=780 - status_bar_height()(26,扣 footbar)=754,
+    /// h=754-38-8=708。
     #[test]
     fn preview_content_bounds_left_maximized_files_matches_overlay_geometry() {
         let state = ShellState {
@@ -8053,7 +8065,7 @@ mod tests {
         assert!((x - 542.4).abs() < 0.1, "x={x}");
         assert!((y - 118.0).abs() < 0.1, "y={y}");
         assert!((w - 805.6).abs() < 0.1, "w={w}");
-        assert!((h - 734.0).abs() < 0.1, "h={h}");
+        assert!((h - 708.0).abs() < 0.1, "h={h}");
         // 明显区别于平时(非放大)的几何——不能巧合碰上同一个值。
         let normal = preview_content_bounds(1440.0, 900.0, &test_state());
         assert_ne!((x, y, w, h), normal, "放大态几何必须和平时不同");

@@ -4,8 +4,8 @@
 
 use crate::theme;
 use crate::workspace::ShellIo;
-use iced_widget::core::{Alignment, Border, Element, Length};
-use iced_widget::{container, row, text};
+use iced_widget::core::{Alignment, Element, Length};
+use iced_widget::{container, text};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -59,17 +59,22 @@ pub fn update(state: &mut AppState, msg: Message) {
 /// (视觉口径与 in-pane status_bar 一致,不新增主题令牌)。
 pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = theme::region::status_bar();
-    let base = region.border.unwrap_or_default();
     let s = &state.sample;
 
     let mut segs: Vec<String> = Vec::new();
     segs.push(format!("CPU  {:.0}%", s.cpu_percent));
     segs.push(format!("RAM  {:.0}%", s.ram_percent));
-    segs.push(format!("SSD  {:.0}%", s.ssd_percent));
+    // SSD/HDD/Proxy 不存在时折叠不显示(SSD=0.0 表示无启动盘,
+    // HDD=None 表示无额外盘,Proxy=None 表示未启用代理)。
+    if s.ssd_percent > 0.0 {
+        segs.push(format!("SSD  {:.0}%", s.ssd_percent));
+    }
     if let Some(h) = s.hdd_percent {
         segs.push(format!("HDD  {:.0}%", h));
     }
-    segs.push(format!("Proxy  {}", s.proxy.as_deref().unwrap_or("—")));
+    if let Some(p) = &s.proxy {
+        segs.push(format!("Proxy  {}", p));
+    }
     segs.push(format!(
         "↓ {}  ↑ {}",
         format_speed(s.net_down_bps),
@@ -77,32 +82,23 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_w
     ));
     let body = segs.join("｜");
 
-    // 用户样张首尾也带 `｜`,这里照做。
-    let content = row![
-        text("｜")
-            .size(theme::font::caption())
-            .color(theme::color::DIM),
-        text(body)
-            .size(theme::font::caption())
-            .color(theme::color::BODY),
-        text("｜")
-            .size(theme::font::caption())
-            .color(theme::color::DIM),
-    ]
-    .spacing(0)
-    .align_y(Alignment::Center);
+    // 整条右对齐(信息放右边)——row 本身没有 align_x,用外层 container
+    // 的 align_x(End) 把内容推到右边。background 用窗口根背景色
+    // `#dcc9a3`(theme::region::background),文字用 `#0a0e16`
+    // (theme::color::BG)——footbar 跟窗口根背景融为一体,深色文字
+    // 浮在奶油色背景上。首尾不带 `｜`,只段间用 `｜` 分隔。
+    let content = text(body)
+        .size(theme::font::caption())
+        .color(theme::color::BG);
 
     container(content)
         .width(Length::Fill)
         .height(Length::Fixed(theme::geometry::status_bar_height()))
         .padding(region.padding)
+        .align_x(Alignment::End)
+        .align_y(Alignment::Center)
         .style(move |_t: &iced_widget::Theme| container::Style {
-            background: region.background.map(Into::into),
-            border: Border {
-                color: base.color,
-                width: base.width,
-                radius: base.radius,
-            },
+            background: Some(theme::region::background().into()),
             ..container::Style::default()
         })
         .into()
@@ -150,7 +146,13 @@ fn aggregate_disks(disks: &[(PathBuf, u64, u64, bool)]) -> (f32, Option<f32>) {
         if mp == std::path::Path::new("/") {
             ssd_used += used;
             ssd_total += *total;
-        } else if !ro {
+        } else if !ro && !is_macos_apfs_system_volume(mp) {
+            // 非启动盘、可写、不是 macOS APFS 系统 volume → HDD。
+            // macOS APFS 把启动盘分成多个 volume(`/`、`/System/Volumes/Data`、
+            // `/Volumes/Preboot`、`/Volumes/Recovery` 等),其中可写的非启动盘
+            // (如 `/System/Volumes/Data`)是启动盘的子卷不是独立盘,必须过滤,
+            // 否则 MacBook 会错误显示 HDD 段。Preboot/Recovery 通常只读已被
+            // `!ro` 过滤,这里主要挡 Data 卷。
             hdd_used += used;
             hdd_total += *total;
         }
@@ -166,6 +168,19 @@ fn aggregate_disks(disks: &[(PathBuf, u64, u64, bool)]) -> (f32, Option<f32>) {
         None
     };
     (ssd, hdd)
+}
+
+/// 判断 mountpoint 是否是 macOS APFS 系统 volume(启动盘的子卷,
+/// 不是独立盘)。这些 volume 是可写的(`/System/Volumes/Data`),
+/// 但它们跟启动盘在同一个 APFS container,占用空间共享,
+/// 不应该当作 HDD 单独统计。
+fn is_macos_apfs_system_volume(mp: &std::path::Path) -> bool {
+    let p = mp.to_string_lossy();
+    p.starts_with("/System/Volumes/")
+        || p == "/Volumes/Preboot"
+        || p == "/Volumes/Recovery"
+        || p == "/Volumes/VM"
+        || p == "/private/var/vm"
 }
 
 /// 把 `sysinfo::Disks` 适配成 `aggregate_disks` 需要的切片再调它。
@@ -427,6 +442,27 @@ mod tests {
         let (ssd, hdd) = aggregate_disks(&disks);
         assert!(approx_eq(ssd, 90.0), "ssd was {ssd}");
         assert_eq!(hdd, None);
+    }
+
+    #[test]
+    fn aggregate_disks_macos_apfs_system_volumes_excluded() {
+        // MacBook 上 APFS 把启动盘分成多个 volume,可写的非启动盘
+        // (如 `/System/Volumes/Data`)是启动盘子卷不是独立盘,必须过滤,
+        // 否则会错误显示 HDD 段。Preboot/Recovery 通常只读已被 `!ro` 过滤,
+        // 这里主要验证 Data 卷(可写)被排除。
+        let disks = make_disks(&[
+            ("/", 500_000_000_000, 50_000_000_000, false),
+            (
+                "/System/Volumes/Data",
+                500_000_000_000,
+                100_000_000_000,
+                false,
+            ),
+            ("/Volumes/Preboot", 100_000_000, 50_000_000, true),
+        ]);
+        let (ssd, hdd) = aggregate_disks(&disks);
+        assert!(approx_eq(ssd, 90.0), "ssd was {ssd}");
+        assert_eq!(hdd, None, "macOS APFS 系统 volume 不应该算 HDD");
     }
 
     #[test]
