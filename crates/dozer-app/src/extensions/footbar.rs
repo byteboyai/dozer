@@ -2,10 +2,12 @@
 //! App 级状态(挂 `App.footbar`,不挂 `Workspace`——跨所有项目页签共享)。
 //! 设计见 `docs/superpowers/specs/2026-08-09-footbar-system-info-design.md`。
 
+use crate::icons;
 use crate::theme;
+use crate::theme::icon_size;
 use crate::workspace::ShellIo;
 use iced_widget::core::{Alignment, Element, Length};
-use iced_widget::{container, text};
+use iced_widget::{container, row, text};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -54,9 +56,10 @@ pub fn update(state: &mut AppState, msg: Message) {
 }
 
 /// footbar 主入口。被 `App::view` 在根 `column!` 末尾调用,`.map(Message::Footbar)`
-/// 转成顶层消息。无项目依赖、无交互——纯展示条,样式直接用
-/// `theme::region::status_bar()` + `theme::geometry::status_bar_height()`
-/// (视觉口径与 in-pane status_bar 一致,不新增主题令牌)。
+/// 转成顶层消息。无项目依赖、无交互——纯展示条,外层容器背景/对齐沿用
+/// `theme::region::status_bar()`,但字号用更小的 `caption_sm()`、高度用
+/// 独立的 `theme::geometry::footbar_height()`(比 in-pane status_bar 更矮更紧凑,
+/// 不与 `status_bar_height()` 共用,避免改 footbar 时连坐 in-pane status bar)。
 pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let region = theme::region::status_bar();
     let s = &state.sample;
@@ -87,13 +90,25 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_w
     // `#dcc9a3`(theme::region::background),文字用 `#0a0e16`
     // (theme::color::BG)——footbar 跟窗口根背景融为一体,深色文字
     // 浮在奶油色背景上。首尾不带 `｜`,只段间用 `｜` 分隔。
-    let content = text(body)
-        .size(theme::font::caption())
+    let body_text = text(body)
+        .size(theme::font::caption_sm())
         .color(theme::color::BG);
+
+    // CPU 段前缀图标(Lucide square-activity),深色描边浮在奶油背景上,
+    // 与文字同色、垂直居中对齐。
+    let cpu_icon = icons::view(
+        icons::IconKind::SquareActivity,
+        icon_size::row(),
+        theme::color::BG,
+    );
+
+    let content = row![cpu_icon, body_text]
+        .align_y(Alignment::Center)
+        .spacing(4);
 
     container(content)
         .width(Length::Fill)
-        .height(Length::Fixed(theme::geometry::status_bar_height()))
+        .height(Length::Fixed(theme::geometry::footbar_height()))
         .padding(region.padding)
         .align_x(Alignment::End)
         .align_y(Alignment::Center)

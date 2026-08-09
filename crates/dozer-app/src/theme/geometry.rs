@@ -35,6 +35,9 @@ struct Geometry {
     /// 用它在布局期从可用宽里预留出"＋"的位置,避免页签在拥挤时被压到"＋"上。
     project_tab_add_button_width: f32,
     status_bar_height: f32,
+    /// 底部 footbar 系统信息条高度（设计基准 22，已含全局 scale）。与
+    /// `status_bar_height` 解耦——in-pane status bar 保持 26，footbar 单独更矮更紧凑。
+    footbar_height: f32,
     context_menu_width: f32,
     context_menu_height: f32,
     chrome_width_px: f32,
@@ -167,6 +170,12 @@ pub fn status_bar_height() -> f32 {
     GEOMETRY.status_bar_height * icon_size::scale()
 }
 
+/// 底部 footbar 系统信息条高度（逻辑像素）。与 in-pane status bar 解耦，
+/// 单独更矮更紧凑（见 `footbar.rs`）。已含全局 scale。
+pub fn footbar_height() -> f32 {
+    GEOMETRY.footbar_height * icon_size::scale()
+}
+
 /// 右键菜单浮层的最坏情形(目录:9 项)外接宽/高（逻辑像素）,main.rs 在
 /// `RightClickAt` 落点处用它把坐标钳制在窗口内,避免菜单下沿/右沿超出
 /// 窗口导致底部几项点不到（Important #7）。宽度取 `menu_item` 固定宽
@@ -287,6 +296,7 @@ mod tests {
         assert_eq!(min_window_height(), 480.0);
         assert_eq!(top_bar_height(), 40.0);
         assert_eq!(status_bar_height(), 26.0);
+        assert_eq!(footbar_height(), 22.0);
         assert_eq!(context_menu_width(), 200.0);
         assert_eq!(context_menu_height(), 310.0);
         assert_eq!(chrome_width_px(), 16.0);

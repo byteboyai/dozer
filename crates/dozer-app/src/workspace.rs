@@ -5051,7 +5051,8 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
         .on_exit(Message::Hover(
             HoverId::Topbar(TopbarButton::Settings),
             false,
-        )),
+        ))
+        .interaction(mouse::Interaction::Pointer),
     );
 
     let region = theme::region::top_bar();

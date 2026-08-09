@@ -120,6 +120,7 @@
     "min_window_height": 480.0,
     "top_bar_height": 40.0,
     "status_bar_height": 26.0,
+    "footbar_height": 22.0,
     "context_menu_width": 200.0,
     "context_menu_height": 310.0,
     "chrome_width_px": 16.0,

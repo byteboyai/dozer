@@ -36,6 +36,7 @@ pub enum IconKind {
     /// `docs/superpowers/plans/2026-08-07-dozer-milestone-summary-and-plan-audit.md`。
     #[allow(dead_code)]
     Maximize,
+    /// 顶栏 `dozer_home_tab` 品牌页签标题图标(Lucide house)。
     Home,
     RefreshCw,
     SquarePlus,
@@ -67,10 +68,10 @@ pub enum IconKind {
     LayoutList,
     /// 首页左栏"Recents" pane rail 图标(Lucide history)。
     History,
-    /// Dozer 品牌标(dozer-logo-main.jpeg → potrace 矢量化)。首页项目列表
-    /// pane 的品牌行在 2026-08-08 首页四栏化重构中被删除(顶栏已有
-    /// `dozer_home_tab` 品牌页签,视觉去重),这个变体暂时没有调用点——资源
-    /// 本身保留(重新矢量化成本不低),供以后需要展示这枚定制矢量标时复用。
+    /// Dozer 品牌标(dozer-logo-main.jpeg → potrace 矢量化)。顶栏
+    /// `dozer_home_tab` 品牌页签改用 Lucide house(`IconKind::Home`)后暂无
+    /// 调用点——资源本身保留(重新矢量化成本不低),供以后需要展示这枚
+    /// 定制矢量标时复用。
     #[allow(dead_code)]
     Dozer,
     /// Agent 品牌标(着色用 `currentColor`,由调用方按 agent 指定主题色)。
@@ -79,6 +80,8 @@ pub enum IconKind {
     Claude,
     Codebuddy,
     Opencode,
+    /// footbar CPU 段前缀图标(Lucide square-activity:圆角方框 + 折线,表活跃度)。
+    SquareActivity,
 }
 
 impl IconKind {
@@ -128,6 +131,7 @@ impl IconKind {
             IconKind::Claude => include_bytes!("../assets/icons/claude.svg"),
             IconKind::Codebuddy => include_bytes!("../assets/icons/codebuddy.svg"),
             IconKind::Opencode => include_bytes!("../assets/icons/opencode.svg"),
+            IconKind::SquareActivity => include_bytes!("../assets/icons/square-activity.svg"),
         }
     }
 }
