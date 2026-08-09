@@ -37,6 +37,9 @@ struct IconSizes {
     row: f32,
     /// 文件树展开/收起箭头：12x12（比同行文件图标略小）。
     chevron: f32,
+    /// 顶栏 "Dozer Home" tab 的品牌图标(house)：12x12，比 rail 略小以让
+    /// 字标更聚焦。
+    home: f32,
     /// 文件树行内"箭头↔图标"之间的间距（设计基准 2px）。
     tree_row_gap: f32,
     /// 全局缩放因子：1.0 = 设计基准；调到 1.5 即全部图标放大 50%。
@@ -66,6 +69,10 @@ pub fn row() -> f32 {
 }
 pub fn chevron() -> f32 {
     SIZES.chevron * scale()
+}
+/// 顶栏 "Dozer Home" tab 品牌图标尺寸，已含全局 scale。
+pub fn home() -> f32 {
+    SIZES.home * scale()
 }
 /// 文件树行内"箭头↔图标"间距，已含全局 scale。
 pub fn tree_row_gap() -> f32 {

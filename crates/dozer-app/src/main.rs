@@ -144,7 +144,7 @@ use std::sync::Arc;
 /// 仅当有 tab 处于工作态时才据此定时唤醒，空闲仍是 `ControlFlow::Wait`。
 const BLINK_INTERVAL: Duration = Duration::from_millis(450);
 /// 所有按钮悬停动画的帧间隔:约 60fps。配合 `App::advance_hover_anims`
-/// 的指数逼近(每拍残余 75%),约 150ms 收敛,给出跟手的 ease-out 过渡。
+/// 的指数逼近(每拍残余 50%),约 80ms 收敛,给出跟手的 ease-out 过渡。
 const HOVER_ANIM_INTERVAL: Duration = Duration::from_millis(16);
 /// Todo 面板可见时轮询 `.dozer/todo.md` 的间隔,兼顾响应与省电。
 const TODO_POLL_INTERVAL: Duration = Duration::from_millis(1000);

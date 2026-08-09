@@ -59,19 +59,30 @@ pub(crate) struct HomeRecentConversation {
 /// `workspace::left_icon_rail`/`left_panel_area` 等),但不做拖拽调宽/收起/
 /// 放大——首页没有这个产品需求。左栏默认"项目列表"(`HomeLeftView::
 /// ProjectList`),右栏固定"浏览器"(全局态,不绑定项目)。
-pub(crate) fn home_page(
-    app: &App,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+pub(crate) fn home_page<'a>(
+    app: &'a App,
+    footbar_state: &'a crate::extensions::footbar::AppState,
+) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
 
+    // 图标栏要贯穿到页面最底部(覆盖 footbar 上方),因此 footbar 放进中间
+    // 列、与三栏面板同行,左右图标栏作为本 row 的兄弟节点一起吃到 Fill 高度。
     let body = row![
         home_left_icon_rail(app),
-        home_left_zone(app, now_ms),
-        home_divider(),
-        home_right_zone(app),
+        column![
+            row![
+                home_left_zone(app, now_ms),
+                home_divider(),
+                home_right_zone(app),
+            ]
+            .height(Length::Fill)
+            .width(Length::Fill),
+            crate::extensions::footbar::view(footbar_state).map(Message::Footbar),
+        ]
+        .width(Length::Fill),
         home_right_icon_rail(app),
     ]
     .height(Length::Fill);

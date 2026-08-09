@@ -64,36 +64,65 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_w
     let region = theme::region::status_bar();
     let s = &state.sample;
 
-    let mut segs: Vec<String> = Vec::new();
-    segs.push(format!("CPU  {:.0}%", s.cpu_percent));
-    segs.push(format!("RAM  {:.0}%", s.ram_percent));
+    let mut segs: Vec<(bool, String)> = Vec::new();
+    segs.push((false, format!("CPU  {:.0}%", s.cpu_percent)));
+    segs.push((false, format!("RAM  {:.0}%", s.ram_percent)));
     // SSD/HDD/Proxy 不存在时折叠不显示(SSD=0.0 表示无启动盘,
     // HDD=None 表示无额外盘,Proxy=None 表示未启用代理)。
     if s.ssd_percent > 0.0 {
-        segs.push(format!("SSD  {:.0}%", s.ssd_percent));
+        segs.push((false, format!("SSD  {:.0}%", s.ssd_percent)));
     }
     if let Some(h) = s.hdd_percent {
-        segs.push(format!("HDD  {:.0}%", h));
+        segs.push((false, format!("HDD  {:.0}%", h)));
     }
     if let Some(p) = &s.proxy {
-        segs.push(format!("Proxy  {}", p));
+        // is_proxy=true:该段前的分隔符用 square-radical 图标(Lucide),
+        // 代替段间的 `｜`,作为"代理/路由"的视觉标识。
+        segs.push((true, format!("Proxy  {}", p)));
     }
-    segs.push(format!(
-        "↓ {}  ↑ {}",
-        format_speed(s.net_down_bps),
-        format_speed(s.net_up_bps)
+    segs.push((
+        false,
+        format!(
+            "↓ {}  ↑ {}",
+            format_speed(s.net_down_bps),
+            format_speed(s.net_up_bps)
+        ),
     ));
-    let body = segs.join("｜");
+
+    // 逐段拼装:段间分隔符默认 `｜`,但 Proxy 段前用 square-radical 图标
+    // (Lucide,深色描边浮在奶油背景上,与文字同色、垂直居中)。
+    let mut parts: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> =
+        Vec::with_capacity(segs.len() * 2);
+    for (i, (is_proxy, label)) in segs.iter().enumerate() {
+        if i > 0 {
+            if *is_proxy {
+                parts.push(icons::view(
+                    icons::IconKind::SquareRadical,
+                    icon_size::row(),
+                    theme::color::BG,
+                ));
+            } else {
+                parts.push(
+                    text("｜")
+                        .size(theme::font::caption_sm())
+                        .color(theme::color::BG)
+                        .into(),
+                );
+            }
+        }
+        parts.push(
+            text(label.to_string())
+                .size(theme::font::caption_sm())
+                .color(theme::color::BG)
+                .into(),
+        );
+    }
 
     // 整条右对齐(信息放右边)——row 本身没有 align_x,用外层 container
     // 的 align_x(End) 把内容推到右边。background 用窗口根背景色
     // `#dcc9a3`(theme::region::background),文字用 `#0a0e16`
     // (theme::color::BG)——footbar 跟窗口根背景融为一体,深色文字
-    // 浮在奶油色背景上。首尾不带 `｜`,只段间用 `｜` 分隔。
-    let body_text = text(body)
-        .size(theme::font::caption_sm())
-        .color(theme::color::BG);
-
+    // 浮在奶油色背景上。首尾不带 `｜`,只段间用 `｜`(Proxy 段前用图标)分隔。
     // CPU 段前缀图标(Lucide square-activity),深色描边浮在奶油背景上,
     // 与文字同色、垂直居中对齐。
     let cpu_icon = icons::view(
@@ -102,7 +131,8 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_w
         theme::color::BG,
     );
 
-    let content = row![cpu_icon, body_text]
+    let content = row![cpu_icon]
+        .push(row(parts).spacing(4).align_y(Alignment::Center))
         .align_y(Alignment::Center)
         .spacing(4);
 

@@ -122,23 +122,27 @@ pub enum TopbarButton {
 }
 
 /// 所有需要"悬停平滑过渡动画"的按钮的统一标识。把顶栏右侧按钮
-/// (`TopbarButton`)、图标栏按钮(`RailButton`)、顶栏 Home 按钮收进同一个
+/// (`TopbarButton`)、图标栏按钮(`RailButton`)收进同一个
 /// 枚举,这样它们能共用一套 `hover_anims` 状态机与同一条自驱 redraw 定时
 /// 唤醒(见 `App::set_hover`/`advance_hover_anims`/`hover_progress`),不必
-/// 每个按钮各写一套进度字段。
+/// 每个按钮各写一套进度字段。顶栏 Home 按钮视觉与项目页签一致,复用
+/// `button::Status::Hovered` 硬切背景,不需要进这个动画表(见
+/// `dozer_home_tab`)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HoverId {
-    Home,
     Topbar(TopbarButton),
     Rail(RailButton),
     /// 某个项目页签的关闭按钮(`×`),按项目 id 区分——同一时刻可能有多个
     /// 页签,不能像 `TopbarButton`/`RailButton` 那样用一个全局标识共用。
     ProjectTabClose(i64),
+    /// 某个项目页签的标题文字,按项目 id 区分(同 `ProjectTabClose` 的考量):
+    /// 未选中态 hover 时标题从 DIM 平滑过渡到 GOLD(见 `project_tab_item`)。
+    ProjectTabItem(i64),
 }
 
 /// 一个可平滑过渡的 hover 动画状态机。iced 0.14 无内置动画 API,这套自驱
 /// redraw(与光标闪烁同款范式)把图标/背景颜色在 idle↔hover 之间做 ease-out
-/// 插值,而非硬切。`progress` 朝 `target`(0 或 1)指数逼近,约 150ms 收敛。
+/// 插值,而非硬切。`progress` 朝 `target`(0 或 1)指数逼近,约 80ms 收敛。
 #[derive(Debug, Clone, Copy, Default)]
 struct HoverAnim {
     /// 当前帧插值系数(0..=1)。
@@ -152,9 +156,9 @@ impl HoverAnim {
     fn set(&mut self, hovered: bool) {
         self.target = if hovered { 1.0 } else { 0.0 };
     }
-    /// 朝目标逼近一拍(每拍残余 75%),足够接近则 snap 到目标避免无限抖动。
+    /// 朝目标逼近一拍(每拍残余 50%),足够接近则 snap 到目标避免无限抖动。
     fn advance(&mut self) {
-        let next = self.progress + (self.target - self.progress) * 0.25;
+        let next = self.progress + (self.target - self.progress) * 0.5;
         self.progress = if (next - self.target).abs() < 0.01 {
             self.target
         } else {
@@ -1538,8 +1542,8 @@ impl App {
     }
 
     /// 推进所有按钮的悬停动画一拍（约 60fps 一拍，由 main.rs 的定时唤醒
-    /// 驱动；与光标闪烁同款自驱 redraw 范式）。每拍残余 75%（逼近系数
-    /// 0.25），约 150ms 内收敛到目标，视觉上是干脆的 ease-out。
+    /// 驱动；与光标闪烁同款自驱 redraw 范式）。每拍残余 50%（逼近系数
+    /// 0.5），约 80ms 内收敛到目标，视觉上是干脆的 ease-out。
     pub fn advance_hover_anims(&mut self) {
         for a in self.hover_anims.values_mut() {
             a.advance();
@@ -3258,7 +3262,7 @@ impl App {
         // 首页落地页:点顶栏 Dozer 进入,独立于工作区(即使没开任何项目也画得
         // 出来)。打开/切换项目会自动退回工作区(见各 `ProjectTab*` 处理器)。
         if self.current_page == AppPage::Home {
-            return column![top, homespace::home_page(self)].into();
+            return column![top, homespace::home_page(self, &self.footbar)].into();
         }
         // 一个项目页签都没有(或当前页签还停在 `Stub` 没促成)时的占位正文。
         let Some(ws) = self.active_workspace() else {
@@ -3424,83 +3428,138 @@ fn top_bar_font() -> Font {
     }
 }
 
-/// 顶栏 Home 按钮(D1)：Lucide house(`IconKind::Home`) + 圆角正方形底,
-/// 无文字、恒在最左、不参与 `project_tabs_row` 的拥挤收窄——与当前项目
-/// 页签行"＋"按钮同款的"固定位不参与收窄"处理。点它进首页(`AppPage::Home`)。
+/// 顶栏 Home 按钮(D1)：Lucide house(`IconKind::Home`) + "Dozer"文字,视觉、
+/// 高度、选中态样式与右侧项目页签(`project_tab_item`)完全一致——同一份
+/// `tab_h`、同一套 hover 胶囊/选中态实底+底部强调线,只是没有状态点和关闭
+/// 按钮。恒在最左、不参与 `project_tabs_row` 的拥挤收窄——与当前项目页签
+/// 行"＋"按钮同款的"固定位不参与收窄"处理。点它进首页(`AppPage::Home`)。
 ///
-/// `hover_t`(0..=1)是悬停动画进度,由 App 自驱 redraw 平滑推进:图标色
-/// idle→金、背景 idle→CARD、边框 idle→金,都是按它插值,给出悬停时的
-/// 平滑过渡而非硬切(见 `App::advance_hover_anims`/`hover_progress`)。
+/// `active` 由调用方传入 `current_page == AppPage::Home`,与项目页签的
+/// `active_project_id == Some(id)` 是两套独立状态,靠调用方各自互斥地计算
+/// (见 `top_bar`/`project_tabs_row`),不然会出现两边同时"选中"的视觉冲突。
 fn dozer_home_tab<'a>(
     active: bool,
-    hover_t: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    // idle 图标色随激活态取 CREAM/DIM,与既有顶栏页签 hover 一致；悬停时
-    // 朝金插值。背景 idle 取 CARD(激活)/TAB_HOVER(未激活),悬停朝 CARD 插值；
-    // 边框 idle 取 BORDER,悬停朝金插值。
-    let idle_icon = if active {
+    // 与 `project_tab_item` 用同一份高度公式,保证两者视觉同高、顶边对齐。
+    let sq = crate::theme::icon_size::rail() + 14.0;
+    let tab_h = (theme::geometry::top_bar_height() + sq) / 2.0;
+
+    let icon_color = if active {
         theme::color::CREAM
     } else {
         theme::color::DIM
     };
-    let icon_color = theme::color::mix(idle_icon, theme::color::GOLD, hover_t);
-    let bg_idle = if active {
-        theme::color::CARD
-    } else {
-        theme::color::TAB_HOVER
-    };
-    let bg = theme::color::mix(bg_idle, theme::color::CARD, hover_t);
-    let border_color = theme::color::mix(theme::color::BORDER, theme::color::GOLD, hover_t);
-    // 圆角正方形边长 = 图标尺寸 + 留白(图标居中)。
-    let sq = crate::theme::icon_size::rail() + 14.0;
 
-    let btn = button(
-        container(icons::view(
-            icons::IconKind::Home,
-            crate::theme::icon_size::rail(),
-            icon_color,
-        ))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(iced_widget::core::Alignment::Center)
+    // `height(Fill)` + `align_y(Center)` 缺一不可:与 `project_tab_item` 同一处
+    // iced 按钮布局 quirk——`button` 只加 padding、不回收多余竖向空间,内层
+    // `row` 的 `align_y(Center)` 因此形同虚设,必须让这层 `container` 撑满按钮
+    // 内容区、自己吃掉那截空间才能真正居中,否则 icon + "Dozer" 贴顶。这里
+    // `width(Fill)` 与该项目页签同款,内层 icon / 文字才会稳稳落在按钮垂直中线。
+    let label = container(
+        row![
+            icons::view(
+                icons::IconKind::Home,
+                crate::theme::icon_size::home(),
+                icon_color
+            ),
+            text("Dozer")
+                .font(top_bar_font())
+                .size(theme::font::body())
+                .color(icon_color),
+        ]
+        .spacing(6)
         .align_y(iced_widget::core::Alignment::Center),
     )
-    .on_press(Message::TopBarHome)
-    .width(Length::Fixed(sq))
-    .height(Length::Fixed(sq))
-    .style(move |_t: &iced_widget::Theme, _s| button::Style {
-        background: Some(bg.into()),
-        text_color: icon_color,
-        border: Border {
-            color: border_color,
-            width: 1.0,
-            radius: 8.0.into(),
-        },
-        ..button::Style::default()
-    });
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .align_y(iced_widget::core::Alignment::Center);
 
-    // `MouseArea` 提供 hover 进入/离开事件(按钮本身无 `on_enter`/`on_exit`),
-    // 用来驱动 `Hover(HoverId::Home, ..)` 动画;点击仍由内层 `btn` 的 `on_press` 处理。
-    let hit = MouseArea::new(btn)
-        .on_enter(Message::Hover(HoverId::Home, true))
-        .on_exit(Message::Hover(HoverId::Home, false));
+    // 未选中态 hover 时画一条与项目页签同款的胶囊背景(`TAB_HOVER`);选中态
+    // 不参与 hover 提亮,同 `project_tab_item::select`。`width(Shrink)` 让这枚
+    // 品牌页签只包住 icon + "Dozer" 本身,不抢顶栏横向空间(项目页签是
+    // `Fill` 因为它要均分页签行宽度)。
+    let select = button(label)
+        .on_press(Message::TopBarHome)
+        .width(Length::Shrink)
+        .height(Length::Fixed(tab_h))
+        .padding([0, 14])
+        .style(move |_t: &iced_widget::Theme, s| {
+            let mut st = button::Style {
+                background: None,
+                text_color: icon_color,
+                ..button::Style::default()
+            };
+            if !active && let button::Status::Hovered = s {
+                st.background = Some(theme::color::TAB_HOVER.into());
+                st.border = Border {
+                    radius: 8.0.into(),
+                    ..Border::default()
+                };
+            }
+            st
+        });
 
-    // 外层 `container` 只负责在顶栏里垂直居中(按钮是 Fixed 高,默认贴顶,
-    // 与交通灯对不齐——同 `project_tab_item` 里注释过的根因)。
-    container(hit)
-        .height(Length::Fixed(theme::geometry::top_bar_height()))
-        .align_y(iced_widget::core::Alignment::Center)
+    // 选中态:实底背景(左上/右上圆角) + 底部 1px 强调线,与 `project_tab_item`
+    // 同一手法——`stack!` 叠加而非 `column!`,避免强调线瓜分 `select` 的
+    // `Fixed` 高度导致文字居中基准跟项目页签错位(见该函数同一处注释)。
+    let inner: Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> = if active {
+        container(stack![
+            select,
+            container(
+                container(iced_widget::space::Space::new())
+                    .width(Length::Fill)
+                    .height(Length::Fixed(1.0))
+                    .style(|_t: &iced_widget::Theme| container::Style {
+                        background: Some(theme::color::TAB_ACTIVE_BORDER.into()),
+                        ..container::Style::default()
+                    }),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_y(iced_widget::core::alignment::Vertical::Bottom),
+        ])
+        .into()
+    } else {
+        select.into()
+    };
+
+    let tab_box = container(inner)
+        .height(Length::Fixed(tab_h))
+        .clip(true)
+        .style(move |_t: &iced_widget::Theme| {
+            if active {
+                container::Style {
+                    background: Some(theme::color::TAB_ACTIVE_BG.into()),
+                    border: Border {
+                        radius: Radius {
+                            top_left: 8.0,
+                            top_right: 8.0,
+                            ..Radius::default()
+                        },
+                        ..Border::default()
+                    },
+                    ..container::Style::default()
+                }
+            } else {
+                container::Style::default()
+            }
+        });
+
+    // 外层贴底对齐,与项目页签在 `project_tabs_row` 里的贴底方式一致
+    // (那边靠 `responsive` 闭包最外层 `container(...).height(Fill).align_y(End)`,
+    // 见该函数注释),这样两者的顶边才能真正对齐,而不是像旧版那样一个居中
+    // 一个贴底、靠公式凑巧对齐。
+    container(tab_box)
+        .height(Length::Fill)
+        .align_y(iced_widget::core::alignment::Vertical::Bottom)
         .into()
 }
 
 fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    // Dozer 字标做成按钮:Dozer 品牌标(dozer-logo-main.jpeg 矢量化) + 文字,
+    // Dozer 字标做成按钮:house 图标(`IconKind::Home`) + "Dozer"文字,
     // 点它进首页(`AppPage::Home`)。Dozer 页签:视觉与右侧项目页签一致,
     // 恒在最左、不参与拥挤收窄(D1)。
-    let title = dozer_home_tab(
-        app.current_page == AppPage::Home,
-        app.hover_progress(HoverId::Home),
-    );
+    let title = dozer_home_tab(app.current_page == AppPage::Home);
 
     // 页签行占满标题与右侧之间的全部空间。裁剪与翻页在 `project_tabs_row`
     // 内部做(只裁页签本身,箭头与"＋"钉在裁剪区外),这里**不能**再套一层
@@ -3623,7 +3682,14 @@ struct ProjectTabEntry {
 ///
 /// `responsive` 实时拿到(不引入窗口尺寸依赖),再扣掉"＋"按钮与各处 gap。
 fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let active_project_id = app.active_project_id;
+    // `active_project_id` 记的是"最后聚焦的项目",跟 Dozer Home 页签是否被
+    // 选中的 `current_page` 是两套独立状态(见 `dozer_home_tab` 注释)——切去
+    // Home 时 `active_project_id` 不会被清空(方便切回来时记得原项目),所以
+    // 页签的"选中"视觉要额外拿 `current_page` 挡一道,否则 Home 和某个项目
+    // 页签会同时高亮。
+    let active_project_id = (app.current_page == AppPage::Workspace)
+        .then_some(app.active_project_id)
+        .flatten();
     let blink_on = app.blink_on;
     let entries = project_tab_entries(app);
     let n = entries.len();
@@ -3654,6 +3720,7 @@ fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_
         for (i, entry) in entries.iter().enumerate() {
             let active = active_project_id == Some(entry.id);
             let close_hover_t = app.hover_progress(HoverId::ProjectTabClose(entry.id));
+            let title_hover_t = app.hover_progress(HoverId::ProjectTabItem(entry.id));
             let item = project_tab_item(
                 entry.id,
                 entry.name.clone(),
@@ -3661,6 +3728,7 @@ fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_
                 active,
                 blink_on,
                 close_hover_t,
+                title_hover_t,
             );
             // 固定宽:少页签时为默认宽,挤时为均分窄宽(Chrome 式收窄)。
             let cell = container(item).width(Length::Fixed(per_tab));
@@ -3743,6 +3811,7 @@ fn project_tab_item<'a>(
     active: bool,
     blink_on: bool,
     close_hover_t: f32,
+    title_hover_t: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     // 页签背景圆角半径参考 Dozer 按钮(圆角正方形)的边长 `sq`,但实际背景高
     // 用更高的 `tab_h`——页签贴底(见 `project_tabs_row` 的 `align_y(End)`)、
@@ -3772,9 +3841,11 @@ fn project_tab_item<'a>(
             .font(top_bar_font())
             .size(theme::font::body())
             .color(if active {
-                theme::color::CREAM
+                // 选中态标题恒为金 `#F2D94E`(甲方动作专属色)。
+                theme::color::GOLD
             } else {
-                theme::color::DIM
+                // 未选中态:静止 DIM,hover 时平滑过渡到金(见 `ProjectTabItem`)。
+                theme::color::mix(theme::color::DIM, theme::color::GOLD, title_hover_t)
             }),
     );
     // 标签行撑满并裁剪:页签被 `FillPortion` 压窄时长名在此截断(Chrome 式
@@ -3818,6 +3889,12 @@ fn project_tab_item<'a>(
             }
             st
         });
+    // 标题文字的 hover 变色走 `MouseArea` + `HoverId::ProjectTabItem`(与
+    // 关闭按钮同款叠层:`MouseArea` 只抓 enter/exit 事件,按下仍由底层
+    // `select` 按钮处理)。
+    let select = MouseArea::new(select)
+        .on_enter(Message::Hover(HoverId::ProjectTabItem(id), true))
+        .on_exit(Message::Hover(HoverId::ProjectTabItem(id), false));
 
     // 关闭按钮:方形图标按钮,叠在页签主体之上(见下方 tab_row)。hover 效果
     // 与顶栏"＋"新建项目按钮一致——无背景胶囊,图标(这里是 `×` 文字)颜色

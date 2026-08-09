@@ -82,6 +82,8 @@ pub enum IconKind {
     Opencode,
     /// footbar CPU 段前缀图标(Lucide square-activity:圆角方框 + 折线,表活跃度)。
     SquareActivity,
+    /// footbar Proxy 段前分隔图标(Lucide square-radical:方括号根号,代代理/路由)。
+    SquareRadical,
 }
 
 impl IconKind {
@@ -132,6 +134,7 @@ impl IconKind {
             IconKind::Codebuddy => include_bytes!("../assets/icons/codebuddy.svg"),
             IconKind::Opencode => include_bytes!("../assets/icons/opencode.svg"),
             IconKind::SquareActivity => include_bytes!("../assets/icons/square-activity.svg"),
+            IconKind::SquareRadical => include_bytes!("../assets/icons/square-radical.svg"),
         }
     }
 }

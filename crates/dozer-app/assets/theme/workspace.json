@@ -103,12 +103,13 @@
     "title": 15
   },
   "icon_sizes": {
-    "rail": 16.0,
-    "row": 14.0,
-    "chevron": 12.0,
-    "tree_row_gap": 2.0,
-    "scale": 1.0
-  },
+  "rail": 16.0,
+  "row": 14.0,
+  "chevron": 12.0,
+  "home": 12.0,
+  "tree_row_gap": 2.0,
+  "scale": 1.0
+},
   "geometry": {
     "icon_rail_width": 44.0,
     "divider_width": 8.0,
