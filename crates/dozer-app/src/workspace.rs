@@ -35,6 +35,7 @@ use crate::extensions::acceptance;
 use crate::extensions::browser;
 use crate::extensions::database;
 use crate::extensions::files;
+use crate::extensions::footbar;
 use crate::extensions::git_log;
 use crate::extensions::project;
 use crate::extensions::ssh;
@@ -1114,6 +1115,11 @@ pub enum Message {
     /// SSH 主机面板的全部消息,内核只转发不解读——见
     /// `extensions::ssh::Message`。
     Ssh(ssh::Message),
+    /// Footbar 系统信息条的消息,内核只转发不解读——见
+    /// `extensions::footbar::Message`。App 级状态(不挂 `Workspace`),
+    /// 路由比其它 extension 简单:不带 `project_id`,不需要
+    /// `with_project`/`with_focused_project`,直接 `footbar::update`。
+    Footbar(footbar::Message),
     /// UI 整体放大(Ctrl +)：放大/还原的全局 scale 乘一个步近因子,下一帧
     /// 按新 scale 重排全部图标/字号/间距/骨架。
     ZoomIn,
@@ -1264,8 +1270,8 @@ impl SessionTab {
 #[derive(Clone)]
 pub struct ShellIo {
     client: Client,
-    handle: Handle,
-    proxy: EventLoopProxy<Message>,
+    pub(crate) handle: Handle,
+    pub(crate) proxy: EventLoopProxy<Message>,
     /// 终端网格尺寸快照(新建会话时让新 PTY 一开始就匹配 pane 实际大小)。
     cols: u16,
     rows: u16,
@@ -1371,6 +1377,11 @@ pub struct App {
     /// 数据库面板 App 级状态(哪些驱动类型在"新增数据源"下拉里可选,
     /// 启动时读盘)——见 `extensions::database::AppState`。
     database: database::AppState,
+    /// Footbar 系统信息条 App 级状态——跨所有项目页签共享(见
+    /// `extensions::footbar::AppState`)。`spawn_sampler` 在 `new_shell`
+    /// 阶段启动一个长生命周期 tokio 任务,每 1s/300s 采样一次发回
+    /// `Message::Footbar(Message::Sampled)`,UI 即刻刷新。
+    footbar: footbar::AppState,
 }
 
 pub struct Workspace {
@@ -2676,7 +2687,7 @@ impl App {
         daemon_error: Option<String>,
     ) -> Self {
         let shell_layout = layout::load();
-        Self {
+        let shell = Self {
             client,
             handle,
             proxy,
@@ -2712,7 +2723,12 @@ impl App {
             git_log: git_log::State::default(),
             todo: todo::AppState::load(),
             database: database::AppState::load(),
-        }
+            footbar: footbar::AppState::default(),
+        };
+        // 启动 footbar 采样任务(fire-and-forget):runtime drop 时任务自然取消。
+        let io = shell.shell_io();
+        footbar::spawn_sampler(&io);
+        shell
     }
 
     /// 外壳侧共享句柄的快照,交给项目态方法发起异步 IO(见 [`ShellIo`])。
@@ -4579,6 +4595,11 @@ impl App {
                     ssh::update(&mut ws.ssh, msg, project_id, &repo_path, &handle, emit);
                 });
             }
+            Message::Footbar(msg) => {
+                // App 级 + 纯展示,不带 project_id,不需要
+                // `with_project`/`with_focused_project`,直接更新。
+                footbar::update(&mut self.footbar, msg);
+            }
             Message::ZoomIn => {
                 crate::theme::icon_size::zoom_by(UI_ZOOM_STEP);
                 crate::theme::icon_size::persist_scale();
@@ -4658,7 +4679,11 @@ impl App {
             right_panel_area(self, ws, false),
             right_icon_rail(self),
         ];
-        let base = column![top, body];
+        let base = column![
+            top,
+            body,
+            footbar::view(&self.footbar).map(Message::Footbar)
+        ];
 
         let popped = if ws.edit_session.is_some() {
             let dismiss = MouseArea::new(

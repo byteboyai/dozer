@@ -15,12 +15,6 @@ pub struct AppState {
     sample: Sample,
 }
 
-impl AppState {
-    pub fn sample(&self) -> &Sample {
-        &self.sample
-    }
-}
-
 /// 一次完整采样的结果。CPU/RAM/网络是 1s 节奏,代理/硬盘是 300s 节奏
 /// (代理在两次 300s 之间复用上次结果)。网络速度已是除以 elapsed 之后
 /// 的最终 bytes/sec,UI 不再算差分。
@@ -271,10 +265,8 @@ fn detect_proxy_via_scutil() -> Option<String> {
             port = Some(v.to_string());
         }
     }
-    if enable {
-        if let (Some(h), Some(p)) = (host, port) {
-            return Some(format!("{h}:{p}"));
-        }
+    if enable && let (Some(h), Some(p)) = (host, port) {
+        return Some(format!("{h}:{p}"));
     }
     None
 }
@@ -283,68 +275,64 @@ fn detect_proxy_via_scutil() -> Option<String> {
 /// `tokio::Runtime` 一起取消。内部管两个节奏:1s 的 CPU/RAM/网络,
 /// 300s 的代理/磁盘——靠"距上次慢节奏采样的时间差"判断,不另起 interval
 /// (避免快慢两个 interval tick 漂移导致同秒双发)。
-///
-/// **Task 4 占位**:真实采样逻辑依赖 `ShellIo` 字段 `pub(crate)`(Task 5
-/// 改)+ `workspace::Message::Footbar` 变体(Task 5 加),所以 Task 4
-/// 阶段只放空壳 + TODO,Task 5 把真实采样体补上。
 pub fn spawn_sampler(io: &ShellIo) {
-    // Task 4 占位:让 Duration/Instant import 不被警告 unused,
-    // 真实采样逻辑(Task 5 启用)会真正用上这两个类型。
-    let _ = (Duration::from_secs(0), Instant::now());
-    let _ = io;
-    // TODO(Task 5): 启用下面注释里的真实采样逻辑。
-    //
-    // let proxy = io.proxy.clone();
-    // io.handle.spawn(async move {
-    //     let mut sys = sysinfo::System::new();
-    //     let mut nets = sysinfo::Networks::new_with_refreshed_list();
-    //     let mut disks = sysinfo::Disks::new_with_refreshed_list();
-    //     let mut cached_proxy: Option<String> = detect_proxy();
-    //     let mut last_proxy_check = Instant::now();
-    //     sys.refresh_cpu_usage();
-    //     tokio::time::sleep(Duration::from_millis(500)).await;
-    //
-    //     let mut tick = tokio::time::interval(Duration::from_secs(1));
-    //     tick.tick().await;
-    //     let mut last_ts = Instant::now();
-    //     loop {
-    //         tick.tick().await;
-    //         sys.refresh_cpu_usage();
-    //         sys.refresh_memory();
-    //         nets.refresh();
-    //         let now = Instant::now();
-    //         let elapsed = (now - last_ts).as_secs_f64().max(0.001);
-    //         last_ts = now;
-    //         let mut down: u64 = 0;
-    //         let mut up: u64 = 0;
-    //         for (name, net) in &nets {
-    //             if is_virtual_interface(name) { continue; }
-    //             down += net.received();
-    //             up += net.transmitted();
-    //         }
-    //         let cpu = sys.global_cpu_usage();
-    //         let ram = (sys.used_memory() as f64
-    //             / sys.total_memory().max(1) as f64) * 100.0;
-    //         if now.duration_since(last_proxy_check).as_secs() >= 300 {
-    //             cached_proxy = detect_proxy();
-    //             last_proxy_check = now;
-    //             disks.refresh();
-    //         }
-    //         let (ssd, hdd) = compute_disk_usage(&disks);
-    //         let sample = Sample {
-    //             cpu_percent: cpu,
-    //             ram_percent: ram as f32,
-    //             ssd_percent: ssd,
-    //             hdd_percent: hdd,
-    //             proxy: cached_proxy.clone(),
-    //             net_down_bps: down as f64 / elapsed,
-    //             net_up_bps: up as f64 / elapsed,
-    //         };
-    //         let _ = proxy.send_event(
-    //             crate::workspace::Message::Footbar(Message::Sampled(sample)),
-    //         );
-    //     }
-    // });
+    let proxy = io.proxy.clone();
+    io.handle.spawn(async move {
+        let mut sys = sysinfo::System::new();
+        let mut nets = sysinfo::Networks::new_with_refreshed_list();
+        let mut disks = sysinfo::Disks::new_with_refreshed_list();
+        // 代理缓存:启动时立刻测一次,之后 300s 复用。
+        let mut cached_proxy: Option<String> = detect_proxy();
+        let mut last_proxy_check = Instant::now();
+        // CPU 首次 refresh——sysinfo 需要一次 baseline 才能
+        // `global_cpu_usage()` 出值。
+        sys.refresh_cpu_usage();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let mut tick = tokio::time::interval(Duration::from_secs(1));
+        tick.tick().await; // 跳过首次立即触发,与上面的 500ms 一起避免冷启 0%。
+        let mut last_ts = Instant::now();
+        loop {
+            tick.tick().await;
+            // 1s 节奏
+            sys.refresh_cpu_usage();
+            sys.refresh_memory();
+            nets.refresh();
+            let now = Instant::now();
+            let elapsed = (now - last_ts).as_secs_f64().max(0.001);
+            last_ts = now;
+            // `received()`/`transmitted()` 返回"自上次 refresh 以来的增量"
+            // ——sysinfo 自管 baseline,task 闭包不需要持有 `last_net: HashMap`。
+            let mut down: u64 = 0;
+            let mut up: u64 = 0;
+            for (name, net) in &nets {
+                if is_virtual_interface(name) {
+                    continue;
+                }
+                down += net.received();
+                up += net.transmitted();
+            }
+            let cpu = sys.global_cpu_usage();
+            let ram = (sys.used_memory() as f64 / sys.total_memory().max(1) as f64) * 100.0;
+            // 300s 节奏(代理/磁盘)
+            if now.duration_since(last_proxy_check).as_secs() >= 300 {
+                cached_proxy = detect_proxy();
+                last_proxy_check = now;
+                disks.refresh();
+            }
+            let (ssd, hdd) = compute_disk_usage(&disks);
+            let sample = Sample {
+                cpu_percent: cpu,
+                ram_percent: ram as f32,
+                ssd_percent: ssd,
+                hdd_percent: hdd,
+                proxy: cached_proxy.clone(),
+                net_down_bps: down as f64 / elapsed,
+                net_up_bps: up as f64 / elapsed,
+            };
+            let _ = proxy.send_event(crate::workspace::Message::Footbar(Message::Sampled(sample)));
+        }
+    });
 }
 
 #[cfg(test)]
