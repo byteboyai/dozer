@@ -304,20 +304,32 @@ impl CodeEditor {
             return;
         }
 
-        // `▶` when collapsed, `▼` when expanded.
-        let chevron = if self.is_folded(visual_line.logical_line) {
-            "▶"
+        // Lucide 风格的折叠箭头:用两段矢量描边画出(不依赖字形字体),
+        // 收起时朝右 `chevron-right`,展开时朝下 `chevron-down`。
+        let cx = number_area_width + super::FOLD_MARGIN_WIDTH * 0.5;
+        let cy = y + ctx.line_height * 0.5;
+        let s = (ctx.font_size * 0.30).max(3.0);
+        let stroke = canvas::Stroke::default()
+            .with_color(self.style.line_number_color)
+            .with_width((ctx.font_size * 0.12).max(1.0))
+            .with_line_cap(canvas::LineCap::Round);
+        let (a, b, c) = if self.is_folded(visual_line.logical_line) {
+            // ">" : 上 -> 中 -> 下
+            (
+                Point::new(cx - s, cy - s),
+                Point::new(cx + s, cy),
+                Point::new(cx - s, cy + s),
+            )
         } else {
-            "▼"
+            // "v" : 左 -> 中 -> 右
+            (
+                Point::new(cx - s, cy - s),
+                Point::new(cx, cy + s),
+                Point::new(cx + s, cy - s),
+            )
         };
-        frame.fill_text(canvas::Text {
-            content: chevron.to_string(),
-            position: Point::new(number_area_width + 1.0, y + 2.0),
-            color: self.style.line_number_color,
-            size: ctx.font_size.into(),
-            font: ctx.font,
-            ..canvas::Text::default()
-        });
+        frame.stroke(&canvas::Path::line(a, b), stroke);
+        frame.stroke(&canvas::Path::line(b, c), stroke);
     }
 
     /// Draws a `⋯` marker after the text of a collapsed fold header, signalling
