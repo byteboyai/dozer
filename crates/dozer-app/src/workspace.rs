@@ -573,6 +573,34 @@ impl Workspace {
         self.tabs.iter_mut().find(|t| t.tab_id == tab_id)
     }
 
+    /// 编辑器主题对齐到 Dozer 的 ByteBoy2077 配色——是编辑器来适配 Dozer,
+    /// 不是反过来让四栏骨架迁就编辑器的默认蓝底。语法高亮 token 色由
+    /// `iced-code-editor` 内固定为 `base16-ocean.dark`(无公开接口可改),
+    /// 这里只接管编辑器 chrome(背景/文本/行号栏/滚动条/当前行高亮)这一层,
+    /// 使其与 bg `#0a0e16` + 奶油 `#FFE5B4` + 青 `#47DEF0` + 边框灰 `#1c3440`
+    /// 一致。金 `#F2D94E` 是"甲方动作专属",不在此处使用。
+    fn dozer_editor_style() -> iced_code_editor::theme::Style {
+        use iced_widget::core::Color;
+        let bg = theme::color::BG;
+        let cyan = theme::color::CYAN;
+        iced_code_editor::theme::Style {
+            background: bg,
+            text_color: theme::color::CREAM,
+            gutter_background: theme::color::TERM_BG,
+            gutter_border: theme::color::BORDER,
+            line_number_color: theme::color::DIM,
+            scrollbar_background: bg,
+            scroller_color: cyan,
+            current_line_highlight: Color {
+                r: cyan.r,
+                g: cyan.g,
+                b: cyan.b,
+                a: 0.10,
+            },
+            whitespace_color: theme::color::DIM,
+        }
+    }
+
     /// 打开预览编辑弹层:按 tab 下标取路径读盘。下标越界或该 tab 不是
     /// `TabKind::File` 时静默 no-op(按钮本就只在 file tab 上画,正常路径
     /// 走不到这两种情况)。读盘失败写 `preview_error`,不开弹层。
@@ -587,11 +615,9 @@ impl Workspace {
             Ok(text) => {
                 self.preview_error = None;
                 let mut editor = CodeEditor::new(&text, &Self::extension_to_syntax(&path));
-                // 主题/字体与 ByteBoy2077 暗色外壳协调(Tokyo Night Storm 是
-                // 偏冷的蓝底主题,契合 bg `#0a0e16` + 青 `#47DEF0` 的配色)。
-                editor.set_theme(iced_code_editor::theme::from_iced_theme(
-                    &iced_widget::Theme::TokyoNightStorm,
-                ));
+                // 让编辑器适配 Dozer 配色(见 `dozer_editor_style`),而非
+                // 让 Dozer 迁就编辑器的默认蓝底。
+                editor.set_theme(Self::dozer_editor_style());
                 editor.set_font(crate::fonts::code_font());
                 editor.set_font_size(theme::font::body() as f32, false);
                 // 打开即夺焦点:设置内部 focus 标记,使键盘事件无需先点击
