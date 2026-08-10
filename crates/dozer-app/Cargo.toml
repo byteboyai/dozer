@@ -23,7 +23,13 @@ iced_widget = { version = "0.14", features = ["wgpu", "canvas", "svg"] }
 # Cargo feature 联合无法关掉 tiny-skia,所以 dozer 自己的 widget 树也必须改用
 # 同一个枚举 renderer,才能把编辑器 widget 嵌进预览编辑弹层(否则类型不兼容)。
 iced_renderer = "0.14"
-iced-code-editor = "0.3"
+# 本地 vendored 副本(见 `vendor/iced-code-editor`):打了补丁以暴露
+# `set_syntax_theme`,让语法高亮 token 颜色也能换成 ByteBoy2077 配色
+# (上游 0.3.11 把 syntect 主题硬编码成 base16-ocean.dark,无公开接口可改)。
+iced-code-editor = { path = "../../vendor/iced-code-editor", version = "0.3" }
+# 构造 Dozer 的 syntect 语法主题时复用与编辑器完全一致的 syntect 版本,
+# 保证 `Theme` 类型对得上(`set_syntax_theme` 接收的就是这个类型)。
+syntect = "5.3"
 winit = "0.30"
 raw-window-handle = "0.6"
 objc2 = "0.6"

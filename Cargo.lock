@@ -1875,6 +1875,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "syntect",
  "sysinfo",
  "tempfile",
  "tokio",
@@ -3246,14 +3247,14 @@ dependencies = [
 [[package]]
 name = "iced-code-editor"
 version = "0.3.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5454b0f7890c2f54e9b84bc395bca9a52f5e3baa5e2cab03d34e1994516f8438"
 dependencies = [
  "iced",
  "iced_aw",
  "iced_font_awesome",
  "rust-i18n",
+ "serde_json",
  "syntect",
+ "two-face 0.5.2+bat-0.26.1",
  "unicode-width",
  "web-time",
 ]
@@ -3378,7 +3379,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb24e1610502779b4e307c6f95da616ec7e883b67a18108cb0a036b169e50359"
 dependencies = [
  "iced_core",
- "two-face",
+ "two-face 0.4.5",
 ]
 
 [[package]]
@@ -5182,6 +5183,28 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
+
+[[package]]
+name = "onig"
+version = "6.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0cc3cbf698f9438986c11a880c90a6d04b9de27575afd28bbf45b154b6c709e2"
+dependencies = [
+ "bitflags 2.13.0",
+ "libc",
+ "once_cell",
+ "onig_sys",
+]
+
+[[package]]
+name = "onig_sys"
+version = "69.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e68317604e77e53b85896388e1a803c1d21b74c899ec9e5e1112db90735edd7"
+dependencies = [
+ "cc",
+ "pkg-config",
+]
 
 [[package]]
 name = "option-ext"
@@ -7701,6 +7724,7 @@ dependencies = [
  "flate2",
  "fnv",
  "once_cell",
+ "onig",
  "plist",
  "regex-syntax",
  "serde",
@@ -8279,6 +8303,17 @@ name = "two-face"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39e51b6e60e545cfdae5a4639ff423818f52372211a8d9a3e892b4b0761f76b2"
+dependencies = [
+ "serde",
+ "serde_derive",
+ "syntect",
+]
+
+[[package]]
+name = "two-face"
+version = "0.5.2+bat-0.26.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "915be7adc2ff6f4338acbf71f3eda0a146f46003b992a1669c674308610efdac"
 dependencies = [
  "serde",
  "serde_derive",
