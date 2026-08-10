@@ -1,4 +1,5 @@
-//! 底部 footbar 系统信息条:CPU/RAM/SSD/HDD/Proxy/下行/上行 7 段常驻显示。
+//! 底部 footbar 系统信息条:CPU/RAM/SSD/HDD/下行/上行/Proxy 常驻显示,
+//! 末段呈现为 `图标 网速 | Proxy`(无代理时 `|` 与 Proxy 段皆不显示)。
 //! App 级状态(挂 `App.footbar`,不挂 `Workspace`——跨所有项目页签共享)。
 //! 设计见 `docs/superpowers/specs/2026-08-09-footbar-system-info-design.md`。
 
@@ -64,65 +65,87 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_w
     let region = theme::region::status_bar();
     let s = &state.sample;
 
-    let mut segs: Vec<(bool, String)> = Vec::new();
-    segs.push((false, format!("CPU  {:.0}%", s.cpu_percent)));
-    segs.push((false, format!("RAM  {:.0}%", s.ram_percent)));
-    // SSD/HDD/Proxy 不存在时折叠不显示(SSD=0.0 表示无启动盘,
-    // HDD=None 表示无额外盘,Proxy=None 表示未启用代理)。
+    // 各段:CPU/RAM/SSD/HDD 是数值段(用量 >75% 时数值变红,见 `metric_row`),
+    // 网速段纯展示。最终呈现为 `… HDD [图标] 网速 | Proxy`:网速段永远以
+    // square-radical 图标作前导(替代原先的 `｜`),排在代理段之前;代理段
+    // 排在网速段之后,其前 `｜` 仅在代理存在时出现。无代理时代理段整体
+    // 不渲染、`｜` 自然也不显示,呈现为 `… [图标] 网速`。
+    /// 每段前导分隔:`None`=无,`Pipe`=`｜`,`Icon`=square-radical 图标。
+    #[derive(Clone, Copy)]
+    enum Lead {
+        None,
+        Pipe,
+        Icon,
+    }
+
+    let mut segs: Vec<(
+        Lead,
+        Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>,
+    )> = Vec::new();
+    segs.push((Lead::None, metric_row("CPU", s.cpu_percent)));
+    segs.push((Lead::Pipe, metric_row("RAM", s.ram_percent)));
+    // SSD/HDD 不存在时折叠不显示(SSD=0.0 表示无启动盘,HDD=None 表示无额外盘)。
     if s.ssd_percent > 0.0 {
-        segs.push((false, format!("SSD  {:.0}%", s.ssd_percent)));
+        segs.push((Lead::Pipe, metric_row("SSD", s.ssd_percent)));
     }
     if let Some(h) = s.hdd_percent {
-        segs.push((false, format!("HDD  {:.0}%", h)));
+        segs.push((Lead::Pipe, metric_row("HDD", h)));
     }
-    if let Some(p) = &s.proxy {
-        // is_proxy=true:该段前的分隔符用 square-radical 图标(Lucide),
-        // 代替段间的 `｜`,作为"代理/路由"的视觉标识。
-        segs.push((true, format!("Proxy  {}", p)));
-    }
+    // 网速段:永远以 square-radical 图标作前导(替代原先的 `｜`),排在代理段之前。
     segs.push((
-        false,
-        format!(
+        Lead::Icon,
+        text(format!(
             "↓ {}  ↑ {}",
             format_speed(s.net_down_bps),
             format_speed(s.net_up_bps)
-        ),
+        ))
+        .size(theme::font::caption_sm())
+        .color(theme::color::BG)
+        .into(),
     ));
+    // 代理段:排在网速段之后,前导 `｜` 仅在代理存在时出现;无代理时整段
+    // 不渲染,`｜` 自然也不显示。
+    if let Some(p) = &s.proxy {
+        segs.push((
+            Lead::Pipe,
+            text(format!("Proxy  {}", p))
+                .size(theme::font::caption_sm())
+                .color(theme::color::BG)
+                .into(),
+        ));
+    }
 
-    // 逐段拼装:段间分隔符默认 `｜`,但 Proxy 段前用 square-radical 图标
-    // (Lucide,深色描边浮在奶油背景上,与文字同色、垂直居中)。
+    // 逐段拼装:每段前导由 `Lead` 决定——默认 `｜`,网速段前用 square-radical
+    // 图标(Lucide,深色描边浮在奶油背景上,与文字同色、垂直居中)作区分,
+    // 代理段前用普通 `｜`(仅代理存在时出现)。
     let mut parts: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> =
         Vec::with_capacity(segs.len() * 2);
-    for (i, (is_proxy, label)) in segs.iter().enumerate() {
+    for (i, (lead, elem)) in segs.into_iter().enumerate() {
         if i > 0 {
-            if *is_proxy {
-                parts.push(icons::view(
-                    icons::IconKind::SquareRadical,
-                    icon_size::row(),
-                    theme::color::BG,
-                ));
-            } else {
-                parts.push(
+            match lead {
+                Lead::None => {}
+                Lead::Pipe => parts.push(
                     text("｜")
                         .size(theme::font::caption_sm())
                         .color(theme::color::BG)
                         .into(),
-                );
+                ),
+                Lead::Icon => parts.push(icons::view(
+                    icons::IconKind::SquareRadical,
+                    icon_size::row(),
+                    theme::color::BG,
+                )),
             }
         }
-        parts.push(
-            text(label.to_string())
-                .size(theme::font::caption_sm())
-                .color(theme::color::BG)
-                .into(),
-        );
+        parts.push(elem);
     }
 
     // 整条右对齐(信息放右边)——row 本身没有 align_x,用外层 container
     // 的 align_x(End) 把内容推到右边。background 用窗口根背景色
     // `#dcc9a3`(theme::region::background),文字用 `#0a0e16`
     // (theme::color::BG)——footbar 跟窗口根背景融为一体,深色文字
-    // 浮在奶油色背景上。首尾不带 `｜`,只段间用 `｜`(Proxy 段前用图标)分隔。
+    // 浮在奶油色背景上。首尾不带 `｜`;网速段前用 square-radical 图标分隔,
+    // 代理段前用 `｜` 分隔(无代理时两者皆不出现)。
     // CPU 段前缀图标(Lucide square-activity),深色描边浮在奶油背景上,
     // 与文字同色、垂直居中对齐。
     let cpu_icon = icons::view(
@@ -147,6 +170,29 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_w
             ..container::Style::default()
         })
         .into()
+}
+
+/// 单个数值段:标签(深色)+ 数值(用量 >75% 时变红 `#FF6E6E`)。
+/// 标签与数值分两段拼接,只让数值部分随阈值变色,标签保持原色。
+fn metric_row(
+    prefix: &'static str,
+    percent: f32,
+) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+    let value_color = if percent > 75.0 {
+        iced_widget::core::Color::from_rgb8(0xFF, 0x6E, 0x6E)
+    } else {
+        theme::color::BG
+    };
+    row![
+        text(prefix)
+            .size(theme::font::caption_sm())
+            .color(theme::color::BG),
+        text(format!("  {:.0}%", percent))
+            .size(theme::font::caption_sm())
+            .color(value_color),
+    ]
+    .align_y(Alignment::Center)
+    .into()
 }
 
 /// 网速按量级自动选单位,1 位小数。`<1 KB/s` → `0.0 KB/s`(向下取整,

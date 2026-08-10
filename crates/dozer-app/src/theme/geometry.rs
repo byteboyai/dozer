@@ -179,7 +179,7 @@ pub fn footbar_height() -> f32 {
 /// 右键菜单浮层的最坏情形(目录:9 项)外接宽/高（逻辑像素）,main.rs 在
 /// `RightClickAt` 落点处用它把坐标钳制在窗口内,避免菜单下沿/右沿超出
 /// 窗口导致底部几项点不到（Important #7）。宽度取 `menu_item` 固定宽
-/// 180 加列表容器左右 padding；高度按目录菜单最多 9 项估算,每项文字
+/// 160 加列表容器左右 padding；高度按目录菜单最多 9 项估算,每项文字
 /// 13 号加上下 padding 约 28px,项间 spacing 2,列表容器上下 padding 6,
 /// 不必像素级精确,留够余量保证任何一项都可点即可。文件菜单项更少,用
 /// 目录的最坏值同时覆盖两种情况更简单。
@@ -297,7 +297,7 @@ mod tests {
         assert_eq!(top_bar_height(), 40.0);
         assert_eq!(status_bar_height(), 26.0);
         assert_eq!(footbar_height(), 22.0);
-        assert_eq!(context_menu_width(), 200.0);
+        assert_eq!(context_menu_width(), 180.0);
         assert_eq!(context_menu_height(), 310.0);
         assert_eq!(chrome_width_px(), 16.0);
         assert_eq!(chrome_height_px(), 50.0);
@@ -309,7 +309,7 @@ mod tests {
         assert_eq!(tab_bar_avail_px(), 360.0);
         assert_eq!(rail_button_size(), 32.0);
         assert_eq!(tab_button_size(), 24.0);
-        assert_eq!(menu_item_width(), 180.0);
+        assert_eq!(menu_item_width(), 160.0);
         assert_eq!(menu_gap(), 8.0);
         assert_eq!(menu_pad_v(), 6.0);
         assert_eq!(menu_pad_h(), 10.0);

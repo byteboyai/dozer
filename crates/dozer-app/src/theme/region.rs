@@ -441,8 +441,9 @@ mod tests {
     #[test]
     fn context_menu_matches_pre_migration_literals() {
         let s = context_menu();
-        // 背景 `#12202ad9`:在 CARD 底上叠 0xd9/0xff≈85% alpha,做 macOS
-        // 系统菜单那种半透明观感(让底下工作区隐约透出)。8 位十六进制由
+        // 背景 `#12202af0`:在 CARD 底上叠 0xf0/0xff≈94% alpha,做 macOS
+        // 系统菜单那种半透明观感(让底下工作区隐约透出,但比原先更实,
+        // 降低透明度避免文字压在复杂背景上看不清)。8 位十六进制由
         // `parse_hex_color` 解析成带 alpha 的 Color,不再等于纯 CARD。
         assert_eq!(
             s.background,
@@ -450,7 +451,7 @@ mod tests {
                 r: 0x12 as f32 / 255.0,
                 g: 0x20 as f32 / 255.0,
                 b: 0x2a as f32 / 255.0,
-                a: 0xd9 as f32 / 255.0,
+                a: 0xf0 as f32 / 255.0,
             })
         );
         let border = s.border.expect("context_menu 应有边框");

@@ -702,10 +702,11 @@ fn tree_edit_row(
 }
 
 /// 右键菜单一项:图标(可选)+文字按钮。默认底色透出容器背景,hover/pressed
-/// 切到 BLUE 高亮(文本同步切白,与 macOS 系统菜单选中态一致);按下即
-/// `Pressed` 仍走高亮色,让按住期间有视觉反馈。图标颜色在创建时烘焙,
-/// 无法随 hover 切换——保持 CREAM(在 BLUE 底上仍可读,与 text 白色差异
-/// 不显著,避免过度工程去重写 `icons::view` 的颜色级联)。
+/// 切到 `TAB_HOVER`(同顶栏/面板 tab 的 hover 背景 `#152630`);按下即
+/// `Pressed` 仍走同款背景,让按住期间有视觉反馈。文本保持 CREAM(在
+/// `TAB_HOVER` 深底上可读,与 tab hover 文字色一致)。图标颜色在创建时烘焙,
+/// 无法随 hover 切换——保持 CREAM(同文字色,差异不显著,避免过度工程去
+/// 重写 `icons::view` 的颜色级联)。
 ///
 /// `icon` 传 `None` 时只渲染文字(用于"复制绝对路径/相对路径"这类不需要
 /// 图标的条目),文字起始 x 与有图标项的图标起始 x 对齐。
@@ -740,8 +741,8 @@ fn menu_item<'a>(
         };
         match s {
             button::Status::Hovered | button::Status::Pressed => button::Style {
-                background: Some(theme::color::BLUE.into()),
-                text_color: Color::WHITE,
+                background: Some(theme::color::TAB_HOVER.into()),
+                text_color: theme::color::CREAM,
                 border: Border {
                     color: Color::TRANSPARENT,
                     width: 0.0,

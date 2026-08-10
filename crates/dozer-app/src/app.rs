@@ -4963,12 +4963,14 @@ pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
     enabled: bool,
     msg: M,
 ) -> Element<'a, M, iced_widget::Theme, iced_widget::Renderer> {
+    // 激活(可点)态用 `#dcc9a3`(同顶栏选中页签描边 `TAB_ACTIVE_BORDER`),
+    // 静止不再用金;hover 再跳到金 `#F2D94E` 提亮。
     let color = if enabled {
-        theme::color::GOLD
+        theme::color::TAB_ACTIVE_BORDER
     } else {
         theme::color::DIM
     };
-    let mut btn = button(icons::view(icon, crate::theme::icon_size::row(), color))
+    let mut btn = button(icons::view(icon, crate::theme::icon_size::tab_arrow(), color))
         .width(Length::Fixed(crate::theme::geometry::tab_button_size()))
         .height(Length::Fixed(crate::theme::geometry::tab_button_size()))
         .padding(0)
@@ -4984,6 +4986,7 @@ pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
             match status {
                 button::Status::Hovered | button::Status::Pressed => button::Style {
                     background: Some(theme::color::CARD.into()),
+                    text_color: theme::color::GOLD,
                     border: Border {
                         color: Color::TRANSPARENT,
                         width: 1.0,

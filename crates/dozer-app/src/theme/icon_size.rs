@@ -37,6 +37,9 @@ struct IconSizes {
     row: f32,
     /// 文件树展开/收起箭头：12x12（比同行文件图标略小）。
     chevron: f32,
+    /// 面板 tab 栏翻页箭头（`<` / `>`）：10x10，比文件树 chevron 略小，
+    /// 让翻页箭头在密集的 tab 行里更精致、不抢标题视觉。
+    tab_arrow: f32,
     /// 顶栏 "Dozer Home" tab 的品牌图标(house)：12x12，比 rail 略小以让
     /// 字标更聚焦。
     home: f32,
@@ -69,6 +72,11 @@ pub fn row() -> f32 {
 }
 pub fn chevron() -> f32 {
     SIZES.chevron * scale()
+}
+/// 面板 tab 栏翻页箭头（`<` / `>`）尺寸，已含全局 scale。比文件树
+/// `chevron` 略小。
+pub fn tab_arrow() -> f32 {
+    SIZES.tab_arrow * scale()
 }
 /// 顶栏 "Dozer Home" tab 品牌图标尺寸，已含全局 scale。
 pub fn home() -> f32 {
@@ -200,6 +208,7 @@ mod tests {
         assert_eq!(rail(), 16.0);
         assert_eq!(row(), 14.0);
         assert_eq!(chevron(), 12.0);
+        assert_eq!(tab_arrow(), 10.0);
         assert_eq!(scale(), 1.0);
     }
 
