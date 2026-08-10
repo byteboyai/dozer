@@ -1,0 +1,16 @@
+{
+  "colors": {
+    "error": "RED",
+    "dim": "DIM",
+    "card_bg": "#0a0e16",
+    "cream": "CREAM",
+    "gold": "GOLD",
+    "border": "BORDER"
+  },
+  "font_sizes": {
+    "caption": 11,
+    "caption_sm": 10,
+    "body": 13,
+    "subtitle": 14
+  }
+}

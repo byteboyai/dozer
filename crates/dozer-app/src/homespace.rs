@@ -91,8 +91,8 @@ pub(crate) fn home_page<'a>(
     if let Some(err) = &app.daemon_error {
         col = col.push(
             text(format!("⚠ {err}"))
-                .size(theme::font::body())
-                .color(theme::color::RED),
+                .size(theme::homespace_font::body())
+                .color(theme::homespace_color::error()),
         );
     }
 
@@ -282,8 +282,8 @@ fn home_project_list_view(
 
     col = col.push(
         text("我的项目")
-            .size(theme::font::caption())
-            .color(theme::color::DIM),
+            .size(theme::homespace_font::caption())
+            .color(theme::homespace_color::dim()),
     );
 
     // 搜索框:视觉占位,不接线(D7；precedent:顶栏 ⌘K 搜索框同款"先视觉后接线")。
@@ -293,11 +293,11 @@ fn home_project_list_view(
                 icons::view(
                     icons::IconKind::Search,
                     crate::theme::icon_size::row(),
-                    theme::color::DIM
+                    theme::homespace_color::dim()
                 ),
                 text("搜索项目…")
-                    .size(theme::font::body())
-                    .color(theme::color::DIM),
+                    .size(theme::homespace_font::body())
+                    .color(theme::homespace_color::dim()),
             ]
             .spacing(8)
             .align_y(iced_widget::core::Alignment::Center),
@@ -305,9 +305,9 @@ fn home_project_list_view(
         .padding([6, 10])
         .width(Length::Fill)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::CARD.into()),
+            background: Some(theme::homespace_color::card_bg().into()),
             border: Border {
-                color: theme::color::BORDER,
+                color: theme::homespace_color::border(),
                 width: 1.0,
                 radius: 6.0.into(),
             },
@@ -318,8 +318,8 @@ fn home_project_list_view(
     if app.recent_projects.is_empty() {
         col = col.push(
             text("还没有项目")
-                .size(theme::font::body())
-                .color(theme::color::DIM),
+                .size(theme::homespace_font::body())
+                .color(theme::homespace_color::dim()),
         );
     } else {
         let mut list = column![].spacing(8);
@@ -327,14 +327,21 @@ fn home_project_list_view(
             let card = button(
                 column![
                     lh(text(p.name.clone())
-                        .size(theme::font::body())
-                        .color(theme::color::CREAM)),
-                    lh(text(relative_time_text(p.last_active_ms, now_ms))
-                        .size(theme::font::caption_sm())
-                        .color(theme::color::DIM)),
+                        .size(theme::homespace_font::body())
+                        .color(theme::homespace_color::cream())),
+                    lh(
+                        text(format!("更新 {}", relative_time_text(p.updated_ms, now_ms)))
+                            .size(theme::homespace_font::caption_sm())
+                            .color(theme::homespace_color::dim())
+                    ),
+                    lh(
+                        text(format!("创建 {}", relative_time_text(p.created_ms, now_ms)))
+                            .size(theme::homespace_font::caption_sm())
+                            .color(theme::homespace_color::dim())
+                    ),
                     lh(text(p.path.clone())
-                        .size(theme::font::caption_sm())
-                        .color(theme::color::DIM)),
+                        .size(theme::homespace_font::caption_sm())
+                        .color(theme::homespace_color::dim())),
                 ]
                 .spacing(2),
             )
@@ -342,10 +349,10 @@ fn home_project_list_view(
             .width(Length::Fill)
             .padding(10)
             .style(|_t: &iced_widget::Theme, _s| button::Style {
-                background: Some(theme::color::CARD.into()),
-                text_color: theme::color::CREAM,
+                background: Some(theme::homespace_color::card_bg().into()),
+                text_color: theme::homespace_color::cream(),
                 border: Border {
-                    color: theme::color::BORDER,
+                    color: theme::homespace_color::border(),
                     width: 1.0,
                     radius: 8.0.into(),
                 },
@@ -369,8 +376,8 @@ fn home_project_list_view(
     col = col.push(
         container(
             text("更多项目")
-                .size(theme::font::caption())
-                .color(theme::color::DIM),
+                .size(theme::homespace_font::caption())
+                .color(theme::homespace_color::dim()),
         )
         .padding([6, 0]),
     );
@@ -378,20 +385,20 @@ fn home_project_list_view(
     col = col.push(
         button(
             text("＋新增项目")
-                .size(theme::font::body())
-                .color(theme::color::GOLD),
+                .size(theme::homespace_font::body())
+                .color(theme::homespace_color::gold()),
         )
         .on_press(Message::ProjectTabPickFolder)
         .padding([8, 16])
         .width(Length::Fill)
         .style(|_t: &iced_widget::Theme, _s| button::Style {
-            background: Some(theme::color::CARD.into()),
+            background: Some(theme::homespace_color::card_bg().into()),
             border: Border {
-                color: theme::color::GOLD,
+                color: theme::homespace_color::gold(),
                 width: 1.0,
                 radius: 6.0.into(),
             },
-            text_color: theme::color::GOLD,
+            text_color: theme::homespace_color::gold(),
             ..button::Style::default()
         }),
     );
@@ -439,22 +446,22 @@ fn home_recent_files_card(
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let mut col = column![
         text("最近的文件")
-            .size(theme::font::subtitle())
-            .color(theme::color::CREAM)
+            .size(theme::homespace_font::subtitle())
+            .color(theme::homespace_color::cream())
     ]
     .spacing(8);
 
     if !app.home_recents_loaded {
         col = col.push(
             text("加载中…")
-                .size(theme::font::body())
-                .color(theme::color::DIM),
+                .size(theme::homespace_font::body())
+                .color(theme::homespace_color::dim()),
         );
     } else if app.home_recent_files.is_empty() {
         col = col.push(
             text("暂无最近改动的文件")
-                .size(theme::font::body())
-                .color(theme::color::DIM),
+                .size(theme::homespace_font::body())
+                .color(theme::homespace_color::dim()),
         );
     } else {
         for f in &app.home_recent_files {
@@ -467,19 +474,19 @@ fn home_recent_files_card(
                 icons::view(
                     icons::icon_for_file(&filename),
                     crate::theme::icon_size::row(),
-                    theme::color::DIM
+                    theme::homespace_color::dim()
                 ),
                 column![
                     lh(text(filename.clone())
-                        .size(theme::font::body())
-                        .color(theme::color::CREAM)),
+                        .size(theme::homespace_font::body())
+                        .color(theme::homespace_color::cream())),
                     lh(text(format!(
                         "{} · {}",
                         f.project_name,
                         relative_time_text(f.modified_ms, now_ms)
                     ))
-                    .size(theme::font::caption_sm())
-                    .color(theme::color::DIM)),
+                    .size(theme::homespace_font::caption_sm())
+                    .color(theme::homespace_color::dim())),
                 ]
                 .spacing(2),
             ]
@@ -487,9 +494,9 @@ fn home_recent_files_card(
             .align_y(iced_widget::core::Alignment::Center);
             col = col.push(container(row_el).padding(10).width(Length::Fill).style(
                 |_t: &iced_widget::Theme| container::Style {
-                    background: Some(theme::color::CARD.into()),
+                    background: Some(theme::homespace_color::card_bg().into()),
                     border: Border {
-                        color: theme::color::BORDER,
+                        color: theme::homespace_color::border(),
                         width: 1.0,
                         radius: 8.0.into(),
                     },
@@ -513,22 +520,22 @@ fn home_recent_conversations_card(
 ) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
     let mut col = column![
         text("最近的对话")
-            .size(theme::font::subtitle())
-            .color(theme::color::CREAM)
+            .size(theme::homespace_font::subtitle())
+            .color(theme::homespace_color::cream())
     ]
     .spacing(8);
 
     if !app.home_recents_loaded {
         col = col.push(
             text("加载中…")
-                .size(theme::font::body())
-                .color(theme::color::DIM),
+                .size(theme::homespace_font::body())
+                .color(theme::homespace_color::dim()),
         );
     } else if app.home_recent_conversations.is_empty() {
         col = col.push(
             text("暂无对话记录")
-                .size(theme::font::body())
-                .color(theme::color::DIM),
+                .size(theme::homespace_font::body())
+                .color(theme::homespace_color::dim()),
         );
     } else {
         for c in &app.home_recent_conversations {
@@ -542,20 +549,20 @@ fn home_recent_conversations_card(
                 container(
                     column![
                         lh(text(c.meta.title.clone())
-                            .size(theme::font::body())
-                            .color(theme::color::CREAM)),
+                            .size(theme::homespace_font::body())
+                            .color(theme::homespace_color::cream())),
                         lh(text(sub)
-                            .size(theme::font::caption_sm())
-                            .color(theme::color::DIM)),
+                            .size(theme::homespace_font::caption_sm())
+                            .color(theme::homespace_color::dim())),
                     ]
                     .spacing(4),
                 )
                 .padding(10)
                 .width(Length::Fill)
                 .style(|_t: &iced_widget::Theme| container::Style {
-                    background: Some(theme::color::CARD.into()),
+                    background: Some(theme::homespace_color::card_bg().into()),
                     border: Border {
-                        color: theme::color::BORDER,
+                        color: theme::homespace_color::border(),
                         width: 1.0,
                         radius: 8.0.into(),
                     },
@@ -658,12 +665,16 @@ mod tests {
                 path: proj_a.path().to_string_lossy().into_owned(),
                 name: "proj-a".into(),
                 last_active_ms: 0,
+                created_ms: 0,
+                updated_ms: 0,
             },
             ProjectInfo {
                 id: 2,
                 path: proj_b.path().to_string_lossy().into_owned(),
                 name: "proj-b".into(),
                 last_active_ms: 0,
+                created_ms: 0,
+                updated_ms: 0,
             },
         ];
 
@@ -690,6 +701,8 @@ mod tests {
             path: proj.path().to_string_lossy().into_owned(),
             name: "proj".into(),
             last_active_ms: 0,
+            created_ms: 0,
+            updated_ms: 0,
         }];
         let (files, _convs) = load_home_recents(&projects);
         assert_eq!(

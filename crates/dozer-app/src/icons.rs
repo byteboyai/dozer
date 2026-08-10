@@ -84,6 +84,9 @@ pub enum IconKind {
     SquareActivity,
     /// footbar Proxy 段前分隔图标(Lucide square-radical:方括号根号,代代理/路由)。
     SquareRadical,
+    /// 顶栏/footbar 品牌前置图标(Lucide square-terminal:方角框 + 终端提示符),
+    /// 用于 footbar 右侧 "Dozer AI Coder" 名称前作品牌标记。
+    SquareTerminal,
 }
 
 impl IconKind {
@@ -135,6 +138,7 @@ impl IconKind {
             IconKind::Opencode => include_bytes!("../assets/icons/opencode.svg"),
             IconKind::SquareActivity => include_bytes!("../assets/icons/square-activity.svg"),
             IconKind::SquareRadical => include_bytes!("../assets/icons/square-radical.svg"),
+            IconKind::SquareTerminal => include_bytes!("../assets/icons/square-terminal.svg"),
         }
     }
 }

@@ -125,8 +125,8 @@ pub enum TopbarButton {
 /// (`TopbarButton`)、图标栏按钮(`RailButton`)收进同一个
 /// 枚举,这样它们能共用一套 `hover_anims` 状态机与同一条自驱 redraw 定时
 /// 唤醒(见 `App::set_hover`/`advance_hover_anims`/`hover_progress`),不必
-/// 每个按钮各写一套进度字段。顶栏 Home 按钮视觉与项目页签一致,复用
-/// `button::Status::Hovered` 硬切背景,不需要进这个动画表(见
+/// 每个按钮各写一套进度字段。顶栏 Home 品牌页签的标题文字 hover 时也走这个
+/// 动画表(从 DIM 平滑过渡到 GOLD),与项目页签一致;选中态恒为 GOLD(见
 /// `dozer_home_tab`)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HoverId {
@@ -148,6 +148,10 @@ pub enum HoverId {
     PreviewTabItem(usize),
     /// 预览面板某个文件 tab 的关闭按钮(×),按 tab 序号区分(同 `TermTabClose`)。
     PreviewTabClose(usize),
+    /// 顶栏 Dozer Home 品牌页签的标题文字(图标 + "Dozer"):未选中态 hover 时
+    /// 从 DIM 平滑过渡到 GOLD,选中态恒为 GOLD——与 `ProjectTabItem` 同一手法
+    /// (见 `dozer_home_tab`)。
+    HomeTab,
 }
 
 /// 一个可平滑过渡的 hover 动画状态机。iced 0.14 无内置动画 API,这套自驱
@@ -1359,7 +1363,7 @@ impl App {
             home_recents_loaded: false,
             home_left_view: homespace::HomeLeftView::default(),
             home_right_view: homespace::HomeRightView::default(),
-            home_browser: browser::State::default(),
+            home_browser: browser::State::with_initial_url("https://byteboy.ai"),
             git_log: git_log::State::default(),
             todo: todo::AppState::load(),
             database: database::AppState::load(),
@@ -1630,7 +1634,16 @@ impl App {
 
     /// 当前激活浏览器 tab 的 webview id,语义同 `active_preview_webview_id`。
     pub fn active_browser_webview_id(&self) -> Option<usize> {
+        if self.current_page == AppPage::Home {
+            return self.home_browser.active_webview_id();
+        }
         self.active_workspace()?.active_browser_webview_id()
+    }
+
+    /// 当前是否在首页(`AppPage::Home`)——内核(main.rs 的 webview 池同步)
+    /// 据此判断浏览器 webview 该用右面板区边界还是工作区左面板预览边界。
+    pub(crate) fn is_home(&self) -> bool {
+        self.current_page == AppPage::Home
     }
 
     /// 协议闭包共享的文件白名单句柄(当前项目的那一份)。没有项目打开时
@@ -1852,6 +1865,14 @@ impl App {
     /// 同理)。webview 池是窗口级的,所以只认当前聚焦项目的清单——后台项目
     /// 的预览 tab 不该把自己的原生子视图画到别人的界面上。
     pub fn preview_desired(&self) -> Vec<WebviewSpec> {
+        // 进首页(Dozer Home)时,预览区根本不在屏上——原生 wry 子视图无视
+        // iced 绘制顺序,若不主动清空,会径直叠在 homespace 页面之上。
+        // 与 `browser_desired`(app.rs:1896 已对 Home 重定向到 `home_browser`)
+        // 保持一致:首页时不返回任何文件预览 webview,让 main.rs 的差集同步
+        // 把残留的那个销毁掉。
+        if self.current_page == AppPage::Home {
+            return Vec::new();
+        }
         if self.left_view != LeftView::Files {
             return Vec::new();
         }
@@ -1877,6 +1898,12 @@ impl App {
     /// 浏览器域的 webview 清单,语义同 `preview_desired`,查独立的
     /// `Workspace::browser`,且只在左视图为 Web 时非空。
     pub fn browser_desired(&self) -> Vec<WebviewSpec> {
+        // 首页右栏恒为全局浏览器(`home_browser`),与 `left_view` 无关——
+        // 进首页就让它成为浏览器 webview 池的唯一来源,否则默认 URL 的 tab
+        // 建了却永远等不到 webview(见 `sync_webview_pool`)。
+        if self.current_page == AppPage::Home {
+            return self.home_browser.desired_webviews();
+        }
         if self.left_view != LeftView::Web {
             return Vec::new();
         }
@@ -3462,15 +3489,19 @@ fn top_bar_font() -> Font {
 /// (见 `top_bar`/`project_tabs_row`),不然会出现两边同时"选中"的视觉冲突。
 fn dozer_home_tab<'a>(
     active: bool,
+    title_hover_t: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
     // 与 `project_tab_item` 用同一份高度公式,保证两者视觉同高、顶边对齐。
     let sq = crate::theme::icon_size::rail() + 14.0;
     let tab_h = (theme::geometry::top_bar_height() + sq) / 2.0;
 
-    let icon_color = if active {
-        theme::color::CREAM
+    // 标题(图标 + "Dozer" 文字)颜色:选中态恒为金 `#F2D94E`(甲方动作专属色,
+    // 与项目页签一致);未选中态静止 DIM,hover 时随 `title_hover_t` 平滑过渡
+    // 到金(同一套悬停动画,见 `HoverId::HomeTab`)。
+    let title_color = if active {
+        theme::color::GOLD
     } else {
-        theme::color::DIM
+        theme::color::mix(theme::color::DIM, theme::color::GOLD, title_hover_t)
     };
 
     // `height(Fill)` + `align_y(Center)` 缺一不可:与 `project_tab_item` 同一处
@@ -3483,12 +3514,12 @@ fn dozer_home_tab<'a>(
             icons::view(
                 icons::IconKind::Home,
                 crate::theme::icon_size::home(),
-                icon_color
+                title_color
             ),
             text("Dozer")
                 .font(top_bar_font())
                 .size(theme::font::body())
-                .color(icon_color),
+                .color(title_color),
         ]
         .spacing(6)
         .align_y(iced_widget::core::Alignment::Center),
@@ -3509,7 +3540,7 @@ fn dozer_home_tab<'a>(
         .style(move |_t: &iced_widget::Theme, s| {
             let mut st = button::Style {
                 background: None,
-                text_color: icon_color,
+                text_color: title_color,
                 ..button::Style::default()
             };
             if !active && let button::Status::Hovered = s {
@@ -3521,6 +3552,12 @@ fn dozer_home_tab<'a>(
             }
             st
         });
+    // 标题文字的 hover 变色走 `MouseArea` + `HoverId::HomeTab`(与项目页签的
+    // `ProjectTabItem` 同款叠层:`MouseArea` 只抓 enter/exit 事件,按下仍由
+    // 底层 `select` 按钮处理),驱动 `title_color` 从 DIM 平滑过渡到 GOLD。
+    let select = MouseArea::new(select)
+        .on_enter(Message::Hover(HoverId::HomeTab, true))
+        .on_exit(Message::Hover(HoverId::HomeTab, false));
 
     // 选中态:实底背景(左上/右上圆角) + 底部 1px 强调线,与 `project_tab_item`
     // 同一手法——`stack!` 叠加而非 `column!`,避免强调线瓜分 `select` 的
@@ -3582,7 +3619,10 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::R
     // Dozer 字标做成按钮:house 图标(`IconKind::Home`) + "Dozer"文字,
     // 点它进首页(`AppPage::Home`)。Dozer 页签:视觉与右侧项目页签一致,
     // 恒在最左、不参与拥挤收窄(D1)。
-    let title = dozer_home_tab(app.current_page == AppPage::Home);
+    let title = dozer_home_tab(
+        app.current_page == AppPage::Home,
+        app.hover_progress(HoverId::HomeTab),
+    );
 
     // 页签行占满标题与右侧之间的全部空间。裁剪与翻页在 `project_tabs_row`
     // 内部做(只裁页签本身,箭头与"＋"钉在裁剪区外),这里**不能**再套一层
@@ -4970,33 +5010,37 @@ pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
     } else {
         theme::color::DIM
     };
-    let mut btn = button(icons::view(icon, crate::theme::icon_size::tab_arrow(), color))
-        .width(Length::Fixed(crate::theme::geometry::tab_button_size()))
-        .height(Length::Fixed(crate::theme::geometry::tab_button_size()))
-        .padding(0)
-        .style(move |_theme, status| {
-            let base = button::Style {
-                background: None,
-                text_color: color,
-                ..button::Style::default()
-            };
-            if !enabled {
-                return base;
-            }
-            match status {
-                button::Status::Hovered | button::Status::Pressed => button::Style {
-                    background: Some(theme::color::CARD.into()),
-                    text_color: theme::color::GOLD,
-                    border: Border {
-                        color: Color::TRANSPARENT,
-                        width: 1.0,
-                        radius: 4.0.into(),
-                    },
-                    ..base
+    let mut btn = button(icons::view(
+        icon,
+        crate::theme::icon_size::tab_arrow(),
+        color,
+    ))
+    .width(Length::Fixed(crate::theme::geometry::tab_button_size()))
+    .height(Length::Fixed(crate::theme::geometry::tab_button_size()))
+    .padding(0)
+    .style(move |_theme, status| {
+        let base = button::Style {
+            background: None,
+            text_color: color,
+            ..button::Style::default()
+        };
+        if !enabled {
+            return base;
+        }
+        match status {
+            button::Status::Hovered | button::Status::Pressed => button::Style {
+                background: Some(theme::color::CARD.into()),
+                text_color: theme::color::GOLD,
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 1.0,
+                    radius: 4.0.into(),
                 },
-                _ => base,
-            }
-        });
+                ..base
+            },
+            _ => base,
+        }
+    });
     if enabled {
         btn = btn.on_press(msg);
     }
@@ -5055,7 +5099,9 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
         theme::color::mix(theme::color::DIM, theme::color::GOLD, hover_t)
     };
 
-    let mut title_row = row![].spacing(4).align_y(iced_widget::core::Alignment::Center);
+    let mut title_row = row![]
+        .spacing(4)
+        .align_y(iced_widget::core::Alignment::Center);
     if let Some(p) = prefix {
         title_row = title_row.push(p);
     }
@@ -5124,38 +5170,38 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
     .on_enter(close_hover(true))
     .on_exit(close_hover(false));
 
-    let mut tab_row = row![select].spacing(2).align_y(iced_widget::core::Alignment::Center);
+    let mut tab_row = row![select]
+        .spacing(2)
+        .align_y(iced_widget::core::Alignment::Center);
     if let Some(s) = suffix {
         tab_row = tab_row.push(s);
     }
     tab_row = tab_row.push(close);
-    container(
-        tab_row,
-    )
-    .padding(Padding {
-        top: PANEL_TAB_PAD_Y,
-        right: PANEL_TAB_PAD_X,
-        bottom: PANEL_TAB_PAD_Y,
-        left: PANEL_TAB_PAD_X,
-    })
-    .width(Length::Shrink)
-    .max_width(PANEL_TAB_MAX_W)
-    .style(move |_t: &iced_widget::Theme| {
-        if active {
-            container::Style {
-                background: Some(theme::color::CARD.into()),
-                border: Border {
-                    color: theme::color::BORDER,
-                    width: 1.0,
-                    radius: 6.0.into(),
-                },
-                ..container::Style::default()
+    container(tab_row)
+        .padding(Padding {
+            top: PANEL_TAB_PAD_Y,
+            right: PANEL_TAB_PAD_X,
+            bottom: PANEL_TAB_PAD_Y,
+            left: PANEL_TAB_PAD_X,
+        })
+        .width(Length::Shrink)
+        .max_width(PANEL_TAB_MAX_W)
+        .style(move |_t: &iced_widget::Theme| {
+            if active {
+                container::Style {
+                    background: Some(theme::color::CARD.into()),
+                    border: Border {
+                        color: theme::color::BORDER,
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..container::Style::default()
+                }
+            } else {
+                container::Style::default()
             }
-        } else {
-            container::Style::default()
-        }
-    })
-    .into()
+        })
+        .into()
 }
 
 /// 面板 tab 统一上限宽（对齐顶栏 `project_tab_max_width`）。标题超宽时省略号
@@ -5302,9 +5348,7 @@ fn tab_item(
         color = Color { a: 0.15, ..color };
     }
     // 状态点作 `panel_tab` 的 prefix（颜色/呼吸逻辑不变）。
-    let dot = text("●")
-        .size(theme::font::caption_sm())
-        .color(color);
+    let dot = text("●").size(theme::font::caption_sm()).color(color);
 
     panel_tab(
         tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
@@ -5360,6 +5404,8 @@ mod tests {
             path: format!("/tmp/p{id}"),
             name: format!("p{id}"),
             last_active_ms: 0,
+            created_ms: 0,
+            updated_ms: 0,
         }
     }
 
@@ -5476,6 +5522,8 @@ mod tests {
                 path: format!("/tmp/p{id}"),
                 name: format!("p{id}"),
                 last_active_ms: 0,
+                created_ms: 0,
+                updated_ms: 0,
             })
             .collect()
     }

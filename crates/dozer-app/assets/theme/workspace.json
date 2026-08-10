@@ -2,7 +2,7 @@
   "background": "#dcc9a3",
   "regions": {
     "top_bar": {
-      "background": "#0e1620",
+      "background": "#0a0e16",
       "border": { "color": "BORDER", "width": 1.0, "radius": 0.0 },
       "padding": [0, 16, 0, 78],
       "gap": 8
@@ -72,20 +72,20 @@
       "border": { "color": "GOLD", "width": 1.5, "radius": 10.0 }
     },
     "context_menu": {
-      "background": "#12202af0",
+      "background": "#0a0e16",
       "border": { "color": "BORDER", "width": 1.0, "radius": 10.0 },
       "padding": 6,
       "gap": 2
     },
     "left_zone": {
-      "background": "#12202a",
+      "background": "#0a0e16",
       "border": { "color": "BORDER", "width": 0.0, "radius": 8.0 },
       "padding": 1,
       "gap": 0,
       "margin": [6, 0, 0, 6]
     },
     "right_zone": {
-      "background": "#12202a",
+      "background": "#0a0e16",
       "border": { "color": "BORDER", "width": 0.0, "radius": 8.0 },
       "padding": 1,
       "gap": 0,

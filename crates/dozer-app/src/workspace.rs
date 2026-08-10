@@ -2585,6 +2585,8 @@ mod tests {
             path: "/tmp/p42".to_string(),
             name: "p42".to_string(),
             last_active_ms: 0,
+            created_ms: 0,
+            updated_ms: 0,
         };
         let ws = Workspace::loading_for_project(info.clone());
         assert_eq!(

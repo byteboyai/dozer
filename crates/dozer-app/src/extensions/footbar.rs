@@ -1,5 +1,6 @@
 //! 底部 footbar 系统信息条:CPU/RAM/SSD/HDD/下行/上行/Proxy 常驻显示,
-//! 末段呈现为 `图标 网速 | Proxy`(无代理时 `|` 与 Proxy 段皆不显示)。
+//! 末段呈现为 `图标 网速 | Proxy`:有代理时为 `Proxy {addr}`,无代理时
+//! 为 `Proxy OFF`(不再隐藏整段)。
 //! App 级状态(挂 `App.footbar`,不挂 `Workspace`——跨所有项目页签共享)。
 //! 设计见 `docs/superpowers/specs/2026-08-09-footbar-system-info-design.md`。
 
@@ -8,7 +9,7 @@ use crate::theme;
 use crate::theme::icon_size;
 use crate::workspace::ShellIo;
 use iced_widget::core::{Alignment, Element, Length};
-use iced_widget::{container, row, text};
+use iced_widget::{container, row, text, Space};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -68,8 +69,8 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_w
     // 各段:CPU/RAM/SSD/HDD 是数值段(用量 >75% 时数值变红,见 `metric_row`),
     // 网速段纯展示。最终呈现为 `… HDD [图标] 网速 | Proxy`:网速段永远以
     // square-radical 图标作前导(替代原先的 `｜`),排在代理段之前;代理段
-    // 排在网速段之后,其前 `｜` 仅在代理存在时出现。无代理时代理段整体
-    // 不渲染、`｜` 自然也不显示,呈现为 `… [图标] 网速`。
+    // 永远渲染、排在网速段之后,其前 `｜` 恒显——有代理为 `Proxy {addr}`,
+    // 无代理为 `Proxy OFF`。
     /// 每段前导分隔:`None`=无,`Pipe`=`｜`,`Icon`=square-radical 图标。
     #[derive(Clone, Copy)]
     enum Lead {
@@ -103,17 +104,16 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_w
         .color(theme::color::BG)
         .into(),
     ));
-    // 代理段:排在网速段之后,前导 `｜` 仅在代理存在时出现;无代理时整段
-    // 不渲染,`｜` 自然也不显示。
-    if let Some(p) = &s.proxy {
-        segs.push((
-            Lead::Pipe,
-            text(format!("Proxy  {}", p))
-                .size(theme::font::caption_sm())
-                .color(theme::color::BG)
-                .into(),
-        ));
-    }
+    // 代理段:永远渲染,排在网速段之后,前导 `｜`。有代理时显示
+    // `Proxy {addr}`,无代理时显示 `Proxy OFF`(系统未配置代理的明确状态,
+    // 不再像之前那样整段隐藏)。
+    segs.push((
+        Lead::Pipe,
+        text(format!("Proxy  {}", s.proxy.as_deref().unwrap_or("OFF")))
+            .size(theme::font::caption_sm())
+            .color(theme::color::BG)
+            .into(),
+    ));
 
     // 逐段拼装:每段前导由 `Lead` 决定——默认 `｜`,网速段前用 square-radical
     // 图标(Lucide,深色描边浮在奶油背景上,与文字同色、垂直居中)作区分,
@@ -140,30 +140,50 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_w
         parts.push(elem);
     }
 
-    // 整条右对齐(信息放右边)——row 本身没有 align_x,用外层 container
-    // 的 align_x(End) 把内容推到右边。background 用窗口根背景色
-    // `#dcc9a3`(theme::region::background),文字用 `#0a0e16`
-    // (theme::color::BG)——footbar 跟窗口根背景融为一体,深色文字
-    // 浮在奶油色背景上。首尾不带 `｜`;网速段前用 square-radical 图标分隔,
-    // 代理段前用 `｜` 分隔(无代理时两者皆不出现)。
-    // CPU 段前缀图标(Lucide square-activity),深色描边浮在奶油背景上,
-    // 与文字同色、垂直居中对齐。
+    // 布局:系统信息(CPU/RAM/SSD/HDD/网速/Proxy)**靠左**,Dozer 应用名称与
+    // 版本**靠右**——中间用 `Space::with_width(Length::Fill)` 撑开。footbar
+    // 背景用窗口根背景色(`#dcc9a3`,theme::region::background),文字/图标
+    // 用深色 `#0a0e16`(theme::color::BG)浮在奶油背景上。CPU 段前缀图标
+    // (Lucide square-activity)同色同对齐。
     let cpu_icon = icons::view(
         icons::IconKind::SquareActivity,
         icon_size::row(),
         theme::color::BG,
     );
 
-    let content = row![cpu_icon]
+    let left = row![cpu_icon]
         .push(row(parts).spacing(4).align_y(Alignment::Center))
         .align_y(Alignment::Center)
         .spacing(4);
+
+    // 右侧:应用名称 + 版本,右对齐。版本号取 crate 版本
+    // (`env!("CARGO_PKG_VERSION")`),与 Cargo.toml 同步。footbar 背景是奶油色
+    // `#dcc9a3`:金 `#F2D94E` 在其上对比度极低(几乎看不见),次级灰 DIM
+    // 又太接近深色 BG 不易区分,所以名称用深色 BG、版本号用主题蓝
+    // `#4D8CFF` 作明确区分——在奶油底上清晰可读且与左侧系统信息拉开层级。
+    let app_icon = icons::view(
+        icons::IconKind::SquareTerminal,
+        icon_size::row(),
+        theme::color::BG,
+    );
+    let app_name = text("Dozer AI Coder")
+        .size(theme::font::caption_sm())
+        .color(theme::color::BG);
+    let app_version = text(format!("v{}", env!("CARGO_PKG_VERSION")))
+        .size(theme::font::caption_sm())
+        .color(theme::color::BLUE);
+    let right = row![app_icon, app_name, app_version]
+        .spacing(6)
+        .align_y(Alignment::Center);
+
+    let content = row![left, Space::new().width(Length::Fill), right]
+        .align_y(Alignment::Center)
+        .width(Length::Fill);
 
     container(content)
         .width(Length::Fill)
         .height(Length::Fixed(theme::geometry::footbar_height()))
         .padding(region.padding)
-        .align_x(Alignment::End)
         .align_y(Alignment::Center)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: Some(theme::region::background().into()),

@@ -812,14 +812,50 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 app.allowed_files(),
                 proxy.clone(),
             );
+            // 首页右栏浏览器(`home_browser`)占的是右面板区,不是工作区的左
+            // 面板预览区,所以单独算一套边界(见 `home_browser_bounds`);工作区
+            // 浏览器仍在左面板,沿用 `preview_content_bounds`。
+            let browser_bounds = if app.is_home() {
+                Self::home_browser_bounds(logical_w, logical_h)
+            } else {
+                bounds
+            };
             sync_webview_pool(
                 window.as_ref(),
                 browser_webviews,
                 app.browser_desired(),
-                bounds,
+                browser_bounds,
                 app.allowed_files(),
                 proxy.clone(),
             );
+        }
+
+        /// 首页右栏全局浏览器(`home_browser`)的 webview 像素边界:占满右侧
+        /// 面板区(左图标栏 + 首页侧栏 + 分隔线之后,到右侧图标栏之前),扣掉
+        /// right_zone 的 margin、顶栏/footbar 高度与浏览器地址栏高度。原生
+        /// 子视图不听 iced 布局,逐像素算(同 `preview_content_bounds` 的思路)。
+        fn home_browser_bounds(window_width: f32, window_height: f32) -> wry::Rect {
+            let rail = theme::geometry::icon_rail_width();
+            let sidebar = theme::geometry::h0_sidebar_width();
+            let divider = theme::geometry::divider_width();
+            let chrome = theme::geometry::browser_chrome_top_px();
+            let m = theme::region::right_zone().margin;
+            let x = rail + sidebar + divider + m.left + 8.0;
+            let w =
+                (window_width - rail - sidebar - divider - rail - m.left - m.right - 16.0).max(0.0);
+            let y = theme::geometry::top_bar_height() + m.top + chrome;
+            let h = (window_height
+                - theme::geometry::top_bar_height()
+                - theme::geometry::status_bar_height()
+                - m.top
+                - m.bottom
+                - chrome
+                - 8.0)
+                .max(0.0);
+            wry::Rect {
+                position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
+                size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
+            }
         }
 
         /// `ProjectTabPickFolder`/`ProjectTreeCopyPath` 等需要窗口句柄侧原生

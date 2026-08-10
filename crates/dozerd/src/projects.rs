@@ -6,7 +6,8 @@
 use anyhow::{Context, Result};
 use dozer_core::protocol::ProjectInfo;
 use rusqlite::Connection;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Mutex;
 
 pub struct ProjectStore {
@@ -25,6 +26,52 @@ fn basename(path: &str) -> String {
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string())
+}
+
+/// 取 `dir` 所属 git 仓库的根目录（无 git 或 git 不可用时返回 `None`）。
+fn git_repo_root(dir: &Path) -> Option<PathBuf> {
+    if !dir.is_dir() {
+        return None;
+    }
+    let out = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let line = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()?
+        .trim()
+        .to_string();
+    (!line.is_empty()).then(|| PathBuf::from(line))
+}
+
+/// 仓库最新 commit 的提交时间（毫秒）。无 commit / git 不可用 / 解析失败
+/// 时返回 `None`。
+fn git_head_commit_ms(repo: &Path) -> Option<u64> {
+    let out = Command::new("git")
+        .args(["log", "-1", "--format=%ct"])
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let secs: u64 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
+    Some(secs * 1000)
+}
+
+/// 计算项目的 git 感知更新时间：优先取仓库最新 commit 时间，若该仓库没有
+/// commit，或 commit 时间早于 `last_active_ms`，则回落为 `last_active_ms`。
+fn compute_updated_ms(path: &str, last_active_ms: u64) -> u64 {
+    let commit = git_repo_root(Path::new(path)).and_then(|root| git_head_commit_ms(&root));
+    match commit {
+        Some(c) if c >= last_active_ms => c,
+        _ => last_active_ms,
+    }
 }
 
 /// 严格单调的"活跃时间戳"：至少比现有最大值大 1。毫秒时钟分辨率下同一
@@ -56,6 +103,26 @@ impl ProjectStore {
              );",
         )
         .context("建表")?;
+        // 迁移：老库没有 `created_ms` 列时补上。既有行的创建时间未知，
+        // 回落为它们已知的 `last_active_ms`（都是首次 upsert 时写入的）。
+        let has_col: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'created_ms'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if has_col == 0 {
+            conn.execute_batch(
+                "ALTER TABLE projects ADD COLUMN created_ms INTEGER NOT NULL DEFAULT 0",
+            )
+            .context("加 created_ms 列")?;
+            conn.execute(
+                "UPDATE projects SET created_ms = last_active_ms WHERE created_ms = 0",
+                [],
+            )
+            .context("迁移 created_ms")?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -63,16 +130,18 @@ impl ProjectStore {
 
     /// upsert（按 path）+ 刷新活跃时间，返回该项目。P2a 起不再"置为当前
     /// 项目"——daemon 没有这个概念了，"当前显示哪个"是 GUI 侧本地状态。
+    /// `created_ms` 仅在首次插入时写入（= 本次 `open` 的活跃戳，即 Dozer
+    /// 中新建该项目的时间）；之后 `open` 只刷新 `last_active_ms`。
     pub fn open(&self, path: &str) -> Result<ProjectInfo> {
         let conn = self.conn.lock().expect("db lock");
         let ts = next_active_stamp(&conn);
         conn.execute(
-            "INSERT INTO projects (path, name, last_active_ms) VALUES (?1, ?2, ?3)
+            "INSERT INTO projects (path, name, last_active_ms, created_ms) VALUES (?1, ?2, ?3, ?3)
              ON CONFLICT(path) DO UPDATE SET last_active_ms = ?3",
             rusqlite::params![path, basename(path), ts],
         )?;
         conn.query_row(
-            "SELECT id, path, name, last_active_ms FROM projects WHERE path = ?1",
+            "SELECT id, path, name, last_active_ms, created_ms FROM projects WHERE path = ?1",
             [path],
             row_to_project,
         )
@@ -82,7 +151,7 @@ impl ProjectStore {
     pub fn list(&self) -> Result<Vec<ProjectInfo>> {
         let conn = self.conn.lock().expect("db lock");
         let mut stmt = conn.prepare(
-            "SELECT id, path, name, last_active_ms FROM projects ORDER BY last_active_ms DESC",
+            "SELECT id, path, name, last_active_ms, created_ms FROM projects ORDER BY last_active_ms DESC",
         )?;
         let rows = stmt.query_map([], row_to_project)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -90,11 +159,17 @@ impl ProjectStore {
 }
 
 fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<ProjectInfo> {
+    let path: String = row.get(1)?;
+    let last_active_ms = row.get::<_, i64>(3)? as u64;
+    let created_ms = row.get::<_, i64>(4)? as u64;
+    let updated_ms = compute_updated_ms(&path, last_active_ms);
     Ok(ProjectInfo {
         id: row.get(0)?,
-        path: row.get(1)?,
+        path,
         name: row.get(2)?,
-        last_active_ms: row.get::<_, i64>(3)? as u64,
+        last_active_ms,
+        created_ms,
+        updated_ms,
     })
 }
 

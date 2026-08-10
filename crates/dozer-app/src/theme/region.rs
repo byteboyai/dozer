@@ -154,7 +154,10 @@ fn parse_hex_color(hex: &str) -> Color {
 /// 颜色字符串 → `Color`:`#` 开头按十六进制字面量解析,否则按 `theme.rs`
 /// 令牌名查表。未知名字/非法格式直接 panic——配置写错在启动时就能发现,
 /// 不会带着错误的透明色静默跑起来。
-fn resolve_color(name: &str) -> Color {
+///
+/// `pub(crate)`:`homespace_color` 复用同一套"令牌名或十六进制字面量"
+/// 解析,与 workspace.json 的 region 颜色保持一致(见 `theme/homespace_color.rs`)。
+pub(crate) fn resolve_color(name: &str) -> Color {
     if name.starts_with('#') {
         return parse_hex_color(name);
     }
@@ -382,7 +385,7 @@ mod tests {
     #[test]
     fn top_bar_matches_figma_design() {
         let s = top_bar();
-        assert_eq!(s.background, Some(Color::from_rgb8(0x0e, 0x16, 0x20)));
+        assert_eq!(s.background, Some(color::BG));
         let border = s.border.expect("top_bar 应有底部分隔线(设计稿 border-b)");
         assert_eq!(border.color, color::BORDER);
         assert_eq!(border.width, 1.0);
@@ -441,19 +444,9 @@ mod tests {
     #[test]
     fn context_menu_matches_pre_migration_literals() {
         let s = context_menu();
-        // 背景 `#12202af0`:在 CARD 底上叠 0xf0/0xff≈94% alpha,做 macOS
-        // 系统菜单那种半透明观感(让底下工作区隐约透出,但比原先更实,
-        // 降低透明度避免文字压在复杂背景上看不清)。8 位十六进制由
-        // `parse_hex_color` 解析成带 alpha 的 Color,不再等于纯 CARD。
-        assert_eq!(
-            s.background,
-            Some(Color {
-                r: 0x12 as f32 / 255.0,
-                g: 0x20 as f32 / 255.0,
-                b: 0x2a as f32 / 255.0,
-                a: 0xf0 as f32 / 255.0,
-            })
-        );
+        // 背景统一为 `#0a0e16`(与其它面板一致),不再用 CARD 叠 alpha 的
+        // 半透明观感。
+        assert_eq!(s.background, Some(color::BG));
         let border = s.border.expect("context_menu 应有边框");
         assert_eq!(border.color, color::BORDER);
         assert_eq!(border.width, 1.0);
@@ -465,10 +458,10 @@ mod tests {
     #[test]
     fn left_zone_matches_config() {
         let s = left_zone();
-        // 左右面板区整体用圆角背景浮起:背景填充 CARD 色(比内层面板 PANEL
-        // 略亮,在灰底窗口上显出圆角卡片),描边宽为 0 但带圆角(用 0 宽描边
-        // 保留"无描边"观感,仅让背景走圆角),四向 margin 做悬浮留白。
-        assert_eq!(s.background, Some(color::CARD));
+        // 左右面板区整体用圆角背景浮起:背景填充 BG 色(与内层面板一致),
+        // 描边宽为 0 但带圆角(用 0 宽描边保留"无描边"观感,仅让背景走圆角),
+        // 四向 margin 做悬浮留白。
+        assert_eq!(s.background, Some(color::BG));
         let border = s.border.expect("left_zone 应有圆角边框(宽 0)");
         assert_eq!(border.color, color::BORDER);
         assert_eq!(border.width, 0.0);
@@ -479,7 +472,7 @@ mod tests {
     #[test]
     fn right_zone_matches_config() {
         let s = right_zone();
-        assert_eq!(s.background, Some(color::CARD));
+        assert_eq!(s.background, Some(color::BG));
         let border = s.border.expect("right_zone 应有圆角边框(宽 0)");
         assert_eq!(border.color, color::BORDER);
         assert_eq!(border.width, 0.0);

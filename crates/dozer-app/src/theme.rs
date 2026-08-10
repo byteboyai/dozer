@@ -7,6 +7,8 @@
 pub mod color;
 pub mod font;
 pub mod geometry;
+pub mod homespace_color;
+pub mod homespace_font;
 pub mod icon_size;
 pub mod region;
 pub mod terminal_font;

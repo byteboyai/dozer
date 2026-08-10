@@ -804,6 +804,14 @@ pub struct State {
 }
 
 impl State {
+    /// 构造一个带初始 tab 的浏览器状态——用于首页全局浏览器默认打开某个
+    /// 站点(见 `app::App::home_browser` 初始化)。
+    pub fn with_initial_url(url: &str) -> Self {
+        let mut s = State::default();
+        s.tabs.open_url(url.to_string());
+        s
+    }
+
     /// 地址栏是否在编辑态(内核 `App::browser_addr_editing` 键盘路由用)。
     pub fn addr_editing(&self) -> bool {
         self.tabs.addr_editing()

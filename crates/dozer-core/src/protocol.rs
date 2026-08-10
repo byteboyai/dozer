@@ -50,7 +50,17 @@ pub struct ProjectInfo {
     pub id: i64,
     pub path: String,
     pub name: String,
+    /// 用户在 Dozer 里最后一次打开/激活该项目的时间（严格单调活跃戳，
+    /// 见 `dozerd::projects`）。仅用于排序/判定"最近用过"，不再作为列表
+    /// 展示的更新时间。
     pub last_active_ms: u64,
+    /// 创建时间：项目在 Dozer 中首次被新建（首次 `open`）时的时间。
+    pub created_ms: u64,
+    /// 更新时间（git 感知）：优先取项目仓库最新 commit 时间；若该仓库没有
+    /// commit，或 commit 时间早于 `last_active_ms`，则回落为 `last_active_ms`。
+    /// 由 dozerd 在 `list()` 时实时计算（不入库），保证每次打开或新提交后
+    /// 都能拿到最新值。
+    pub updated_ms: u64,
 }
 
 /// 收藏夹范围:全局(跨项目共享)或挂靠某个项目(`project_id` 必填)。
@@ -336,6 +346,8 @@ mod tests {
                 path: "/repo/x".into(),
                 name: "x".into(),
                 last_active_ms: 5,
+                created_ms: 0,
+                updated_ms: 5,
             }],
         };
         let line = encode_line(&reply);
