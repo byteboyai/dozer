@@ -3887,6 +3887,11 @@ fn project_tab_item<'a>(
     let tab_h = (theme::geometry::top_bar_height() + sq) / 2.0;
     // 关闭按钮用与顶栏其它图标按钮(tab 箭头 / 最大化)同尺寸的方形命中区。
     let close_sz = crate::theme::geometry::tab_button_size();
+    // 组合 hover:鼠标悬停标题或关闭按钮任一,都应让胶囊背景浮现、× 显形。
+    // 不能只依赖 select 按钮的 `button::Status::Hovered`——× 叠在 select 之上,
+    // 悬停 × 时底层 select 拿不到 `Hovered`,胶囊会凭空消失。
+    let hover = title_hover_t.max(close_hover_t).clamp(0.0, 1.0);
+    let hovered = hover > 0.001;
     let mut label = row![]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
@@ -3925,7 +3930,7 @@ fn project_tab_item<'a>(
         .align_y(iced_widget::core::Alignment::Center)
         // 右侧留白给叠在页签之上的关闭按钮:长名在此截断,不会跑到 × 底下。
         .padding(Padding {
-            right: close_sz + 6.0,
+            right: close_sz + 4.0,
             ..Padding::ZERO
         })
         .clip(true);
@@ -3934,23 +3939,12 @@ fn project_tab_item<'a>(
         .on_press(Message::ProjectTabSwitch(id))
         .width(Length::Fill)
         .height(Length::Fixed(tab_h))
-        .style(move |_t: &iced_widget::Theme, s| {
-            let mut st = button::Style {
-                background: None,
-                text_color: theme::color::CREAM,
-                ..button::Style::default()
-            };
-            // 选中态不参与 hover 提亮(已有实底 TAB_ACTIVE_BG + 底部强调线,
-            // 无需再高亮);未选中态 hover 时画一条与 Dozer 按钮同高同圆角的
-            // 胶囊背景(#152630)。
-            if !active && let button::Status::Hovered = s {
-                st.background = Some(theme::color::TAB_HOVER.into());
-                st.border = Border {
-                    radius: 8.0.into(),
-                    ..Border::default()
-                };
-            }
-            st
+        .style(move |_t: &iced_widget::Theme, _s| button::Style {
+            // 胶囊背景改由下方 `capsule_layer` 统一承载(悬停标题或 × 都触发),
+            // 这里不再画——否则悬停 × 时 select 拿不到 `Hovered`、胶囊会消失。
+            background: None,
+            text_color: theme::color::CREAM,
+            ..button::Style::default()
         });
     // 标题文字的 hover 变色走 `MouseArea` + `HoverId::ProjectTabItem`(与
     // 关闭按钮同款叠层:`MouseArea` 只抓 enter/exit 事件,按下仍由底层
@@ -3959,34 +3953,40 @@ fn project_tab_item<'a>(
         .on_enter(Message::Hover(HoverId::ProjectTabItem(id), true))
         .on_exit(Message::Hover(HoverId::ProjectTabItem(id), false));
 
-    // 关闭按钮:方形图标按钮,叠在页签主体之上(见下方 tab_row)。hover 效果
-    // 与顶栏"＋"新建项目按钮一致——无背景胶囊,图标(这里是 `×` 文字)颜色
-    // 随 `close_hover_t` 从 DIM 平滑过渡到 GOLD(见 `HoverId::ProjectTabClose`/
-    // `App::hover_progress`),不用 iced `button::Status` 的硬切背景。
-    // `×` 必须包一层 `Fill`+`align_y(Center)`(与下面 `label` 同一条注释里
+    // 关闭按钮:方形图标按钮,叠在页签主体之上(见下方 tab_row)。默认隐藏
+    // (hover==0 时 alpha=0),悬停页签任一区域才显形——颜色仍随 `close_hover_t`
+    // (悬停 × 本身时)从 DIM 平滑过渡到 GOLD。未悬停时不挂 `on_press`,避免
+    // 不可见的 × 在页签右缘偷偷吃掉点击、误关 tab(见 `App::hover_progress`)。
+    // `×` 必须包一层 `Fill`+`align_y(Center)`(与上面 `label` 同一条注释里
     // 说的 iced 按钮布局 quirk)——按钮只吃 padding,不回收多余竖向空间,
     // 裸 `text` 会贴在按钮内容区顶部,跟垂直居中的标题文字对不上。
-    let close_color = theme::color::mix(theme::color::DIM, theme::color::GOLD, close_hover_t);
-    let close = MouseArea::new(
-        button(
-            container(text("×").size(theme::font::body()).color(close_color))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(iced_widget::core::Alignment::Center)
-                .align_y(iced_widget::core::Alignment::Center),
-        )
-        .on_press(Message::ProjectTabClose(id))
-        .width(Length::Fixed(close_sz))
-        .height(Length::Fixed(close_sz))
-        .padding(0)
-        .style(move |_t: &iced_widget::Theme, _status| button::Style {
-            background: None,
-            text_color: close_color,
-            ..button::Style::default()
-        }),
+    let close_base = theme::color::mix(theme::color::DIM, theme::color::GOLD, close_hover_t);
+    let close_color = Color { a: hover, ..close_base };
+    let close_btn = button(
+        container(text("×").size(theme::font::body()).color(close_color))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(iced_widget::core::Alignment::Center)
+            .align_y(iced_widget::core::Alignment::Center),
     )
-    .on_enter(Message::Hover(HoverId::ProjectTabClose(id), true))
-    .on_exit(Message::Hover(HoverId::ProjectTabClose(id), false));
+    .width(Length::Fixed(close_sz))
+    .height(Length::Fixed(close_sz))
+    .padding(0)
+    .style(move |_t: &iced_widget::Theme, _status| button::Style {
+        background: None,
+        text_color: close_color,
+        ..button::Style::default()
+    });
+    // 仅在悬停时挂 `on_press`——悬停进度刚起步(>0.001)就立刻可点,鼠标离开
+    // 后随进度归零变回不可点,既不误吞点击也不影响正常关闭。
+    let close_btn = if hovered {
+        close_btn.on_press(Message::ProjectTabClose(id))
+    } else {
+        close_btn
+    };
+    let close = MouseArea::new(close_btn)
+        .on_enter(Message::Hover(HoverId::ProjectTabClose(id), true))
+        .on_exit(Message::Hover(HoverId::ProjectTabClose(id), false));
 
     // 页签主体(select)为底层、关闭按钮为上层叠在其右:关闭按钮视觉上落在
     // 页签背景里,而非独立的相邻按钮。两层都 `Fill` 撑满整条顶栏高,select
@@ -4000,10 +4000,34 @@ fn project_tab_item<'a>(
         .height(Length::Fill)
         .align_x(iced_widget::core::alignment::Horizontal::Right)
         .align_y(iced_widget::core::alignment::Vertical::Center);
-    let tab_row = container(stack![select_layer, close_layer])
+    // 悬停胶囊:与 select 按钮同高同圆角、铺满整片页签(含右缘 × 区),由组合
+    // hover 进度驱动透明度——只在悬停页签时浮现,且 × 落在其内部。选中态已有
+    // 实底背景(TAB_ACTIVE_BG),不再叠胶囊。
+    let capsule = container(iced_widget::space::Space::new())
+        .width(Length::Fill)
+        .height(Length::Fixed(tab_h))
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: if !active && hover > 0.0 {
+                Some(Color { a: hover, ..theme::color::TAB_HOVER }.into())
+            } else {
+                None
+            },
+            border: if !active && hover > 0.0 {
+                Border { radius: 8.0.into(), ..Border::default() }
+            } else {
+                Border::default()
+            },
+            ..container::Style::default()
+        });
+    let capsule_layer = container(capsule)
         .width(Length::Fill)
         .height(Length::Fill)
-        .padding([0, 14]);
+        .align_y(iced_widget::core::alignment::Vertical::Center);
+    let tab_row = container(stack![capsule_layer, select_layer, close_layer])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding([0, 8]);
 
     // 激活态:实底背景(左上/右上圆角) + 底部 1px 强调线
     // (`#dcc9a3` = `TAB_ACTIVE_BORDER`),不要外边框;未激活态:无背景、无边框
@@ -5090,6 +5114,9 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
     close_hover: impl Fn(bool) -> M + 'a,
 ) -> Element<'a, M, iced_widget::Theme, iced_widget::Renderer> {
     let close_sz = crate::theme::geometry::tab_button_size();
+    // 组合 hover:悬停标题或 × 任一,胶囊背景都浮现、× 显形。
+    let hover = hover_t.max(close_hover_t).clamp(0.0, 1.0);
+    let hovered = hover > 0.001;
     // 标题区域最大宽 = 整 tab 上限 - 左右 padding - 与关闭按钮的间距 - 关闭按钮。
     let title_max = PANEL_TAB_MAX_W - 2.0 * PANEL_TAB_PAD_X - 2.0 - close_sz;
     let title_color = if active {
@@ -5120,21 +5147,13 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
 
     let select = button(title_row)
         .on_press(on_select)
-        .style(move |_t: &iced_widget::Theme, s| {
-            let mut st = button::Style {
-                background: None,
-                text_color: title_color,
-                ..button::Style::default()
-            };
-            // 未选中态 hover 时画一条与顶栏页签同款的胶囊背景,选中态不参与。
-            if !active && let button::Status::Hovered = s {
-                st.background = Some(theme::color::TAB_HOVER.into());
-                st.border = Border {
-                    radius: 8.0.into(),
-                    ..Border::default()
-                };
-            }
-            st
+        .style(move |_t: &iced_widget::Theme, _s| button::Style {
+            // 胶囊背景改由外层 `container` 统一承载(悬停标题或 × 都触发),
+            // 这里不再画——否则悬停 × 时 select 拿不到 `Hovered`、胶囊消失,
+            // 且 × 会落到胶囊之外。
+            background: None,
+            text_color: title_color,
+            ..button::Style::default()
         });
     // 标题 hover 变色走 `MouseArea` + 调用方给的 hover 消息(只抓 enter/exit,
     // 按下仍由底层 `select` 按钮处理)。
@@ -5142,33 +5161,39 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
         .on_enter(title_hover(true))
         .on_exit(title_hover(false));
 
-    let close_color = theme::color::mix(theme::color::DIM, theme::color::GOLD, close_hover_t);
-    let close = MouseArea::new(
-        button(
-            container(
-                text("×")
-                    .size(theme::font::body())
-                    .color(close_color)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .align_x(iced_widget::core::Alignment::Center)
-                    .align_y(iced_widget::core::Alignment::Center),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill),
+    // × 默认隐藏(hover==0 时 alpha=0),悬停页签任一区域才显形;颜色随
+    // `close_hover_t` 从 DIM→GOLD。未悬停不挂 `on_press`,避免隐形 × 误吞点击。
+    let close_base = theme::color::mix(theme::color::DIM, theme::color::GOLD, close_hover_t);
+    let close_color = Color { a: hover, ..close_base };
+    let close_btn = button(
+        container(
+            text("×")
+                .size(theme::font::body())
+                .color(close_color)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(iced_widget::core::Alignment::Center)
+                .align_y(iced_widget::core::Alignment::Center),
         )
-        .on_press(on_close)
-        .width(Length::Fixed(close_sz))
-        .height(Length::Fixed(close_sz))
-        .padding(0)
-        .style(move |_t: &iced_widget::Theme, _s| button::Style {
-            background: None,
-            text_color: close_color,
-            ..button::Style::default()
-        }),
+        .width(Length::Fill)
+        .height(Length::Fill),
     )
-    .on_enter(close_hover(true))
-    .on_exit(close_hover(false));
+    .width(Length::Fixed(close_sz))
+    .height(Length::Fixed(close_sz))
+    .padding(0)
+    .style(move |_t: &iced_widget::Theme, _s| button::Style {
+        background: None,
+        text_color: close_color,
+        ..button::Style::default()
+    });
+    let close_btn = if hovered {
+        close_btn.on_press(on_close)
+    } else {
+        close_btn
+    };
+    let close = MouseArea::new(close_btn)
+        .on_enter(close_hover(true))
+        .on_exit(close_hover(false));
 
     let mut tab_row = row![select]
         .spacing(2)
@@ -5197,6 +5222,13 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
                     },
                     ..container::Style::default()
                 }
+            } else if hover > 0.0 {
+                // 悬停胶囊铺满整片 tab(含 × 区),× 落在其内部。
+                container::Style {
+                    background: Some(Color { a: hover, ..theme::color::TAB_HOVER }.into()),
+                    border: Border { radius: 6.0.into(), ..Border::default() },
+                    ..container::Style::default()
+                }
             } else {
                 container::Style::default()
             }
@@ -5209,7 +5241,7 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
 /// 的翻页宽度估算共用,避免各处硬编码 160。
 pub(crate) const PANEL_TAB_MAX_W: f32 = 160.0;
 /// 面板 tab 内边距:横向留白给 hover 胶囊,纵向收紧以缩小高度。
-const PANEL_TAB_PAD_X: f32 = 6.0;
+const PANEL_TAB_PAD_X: f32 = 4.0;
 const PANEL_TAB_PAD_Y: f32 = 1.0;
 
 /// 按 `max_w` 把标题裁到能放下的长度,截掉的部分用 `…` 替代(iced 0.14 的

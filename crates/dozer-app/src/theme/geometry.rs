@@ -305,7 +305,7 @@ mod tests {
         assert_eq!(browser_chrome_top_px(), 72.0);
         assert_eq!(maximize_overlay_padding(), 40.0);
         assert_eq!(project_tab_gap(), 4.0);
-        assert_eq!(project_tab_max_width(), 160.0);
+        assert_eq!(project_tab_max_width(), 140.0);
         assert_eq!(tab_bar_avail_px(), 360.0);
         assert_eq!(rail_button_size(), 32.0);
         assert_eq!(tab_button_size(), 24.0);
