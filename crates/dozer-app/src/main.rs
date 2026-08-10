@@ -128,7 +128,9 @@ use iced_winit::core::time::Instant;
 use iced_winit::core::window;
 use iced_winit::core::{Event, Font, Pixels, Size, Theme};
 use iced_winit::futures;
+use iced_winit::runtime::task;
 use iced_winit::runtime::user_interface::{self, UserInterface};
+use iced_winit::runtime::{Action, clipboard::Action as ClipboardAction};
 use iced_winit::winit;
 
 use winit::{
@@ -290,7 +292,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             device: wgpu::Device,
             surface: wgpu::Surface<'static>,
             format: wgpu::TextureFormat,
-            renderer: Renderer,
+            renderer: iced_renderer::Renderer,
             app: App,
             events: Vec<Event>,
             cursor: mouse::Cursor,
@@ -552,7 +554,12 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 && event.logical_key
                     == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
             {
-                app.update(Message::Files(extensions::files::Message::ContextMenuClose));
+                // 预览 tab 右键菜单与文件树右键菜单互斥——关掉当前开着的那个。
+                if app.preview_tab_context_menu_open() {
+                    app.update(Message::PreviewTabContextMenuClose);
+                } else {
+                    app.update(Message::Files(extensions::files::Message::ContextMenuClose));
+                }
                 window.request_redraw();
                 return;
             }
@@ -609,9 +616,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             }
 
             // 预览编辑弹层打开时,其余按键一律不再往下走 ⌘ 快捷键/地址栏/
-            // 终端转发——弹层里的 `text_editor` 走标准 iced 事件管线
-            // (`.on_action(Message::PreviewEditAction)`),这里不需要也不
-            // 应该手工转发。不加这道闸门的话,`terminal_visible()` 只看右侧
+            // 终端转发——弹层里的 `iced-code-editor` 走标准 iced 事件管线
+            // (键盘事件经 `Canvas` widget 的 `on_event` 自己消化),这里不需要
+            // 也不应该手工转发。不加这道闸门的话,`terminal_visible()` 只看右侧
             // 是否展开、对弹层状态一无所知,默认布局(右侧终端可见)下弹层
             // 里打的每个字符、包括回车,都会同时写进背后那个终端/agent 会话
             // (Critical,code review 发现)。
@@ -904,6 +911,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 });
             }
             match message {
+                // `iced-code-editor` 的内部消息:编辑器产生的 `iced::Task`(剪贴板
+                // 读写/搜索框聚焦)需要在持有 `Clipboard` 句柄的这里执行,不能走
+                // `app.update`(其返回 `()`,无运行时)。桥接器把 Task 里的
+                // 副作用(剪贴板)落到系统剪贴板,把 `Output` 子消息递归回灌编辑器。
+                Message::EditorEvent(event) => {
+                    Self::run_editor_task(app, clipboard, event);
+                    window.request_redraw();
+                }
                 // 顶栏"＋"与项目栏"打开项目…"共用的唯一打开入口:rfd 模态选中
                 // 后一律落成**新增页签**(`ProjectTabOpen`)。此前项目栏那颗按钮
                 // 另有一条 `ProjectPickFolder`→`ProjectOpen` 的就地改写路径,
@@ -923,6 +938,55 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 other => app.update(other),
             }
             window.request_redraw();
+        }
+
+        /// 执行 `iced-code-editor` 产生的 `iced::Task`。dozer 的 `App::update`
+        /// 返回 `()`、没有 iced 运行时,编辑器把剪贴板读写等副作用包成
+        /// `Task` 委托给宿主——这里手动把 Task 拆成 `Action` 流,把剪贴板
+        /// 动作落到系统剪贴板(持有 `Clipboard` 句柄的只有 `Runner`),把
+        /// `Output` 子消息(如剪贴板读到的 `Paste(text)`)递归回灌编辑器。
+        ///
+        /// 普通编辑路径(打字/删改/移动)产生的 Task 恒为 `Task::none()`,这里
+        /// 直接跳过;只有复制/剪切/粘贴会真正走剪贴板分支。
+        fn run_editor_task(
+            app: &mut App,
+            clipboard: &mut Clipboard,
+            event: iced_code_editor::Message,
+        ) {
+            use iced_winit::futures::futures::stream::StreamExt;
+            let mut queue = std::collections::VecDeque::new();
+            queue.push_back(event);
+            while let Some(ev) = queue.pop_front() {
+                let t = app.preview_edit_event(ev);
+                let Some(stream) = task::into_stream(t) else {
+                    continue;
+                };
+                // 把这一轮 Task 流里的 `Output` 子消息收集起来,剪贴板动作
+                // 同步落到系统剪贴板。流里可能有 `yield_now` 占位项,被
+                // `filter_map` 跳过,不影响。
+                let mut outputs: Vec<iced_code_editor::Message> = Vec::new();
+                futures::futures::executor::block_on(async {
+                    let mut stream = stream;
+                    while let Some(action) = stream.next().await {
+                        match action {
+                            Action::Output(m) => outputs.push(m),
+                            Action::Clipboard(cb) => match cb {
+                                ClipboardAction::Read { target, channel } => {
+                                    let text = clipboard.read(target);
+                                    let _ = channel.send(text);
+                                }
+                                ClipboardAction::Write { target, contents } => {
+                                    clipboard.write(target, contents);
+                                }
+                            },
+                            _ => {}
+                        }
+                    }
+                });
+                for m in outputs {
+                    queue.push_back(m);
+                }
+            }
         }
 
         /// sync_previews 之后统一应用焦点意图(此时新建 webview 已入池)。
@@ -1182,7 +1246,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         Shell::headless(),
                     );
 
-                    Renderer::new(engine, Font::default(), Pixels::from(16))
+                    iced_renderer::Renderer::Primary(Renderer::new(
+                        engine,
+                        Font::default(),
+                        Pixels::from(16),
+                    ))
                 };
 
                 // You should change this if you want to render continuously
@@ -1369,7 +1437,18 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 );
                                 *cache = interface.into_cache();
 
-                                renderer.present(None, frame.texture.format(), &view, viewport);
+                                // `iced_renderer::Renderer` 是 fallback 枚举
+                                // (`wgpu` + `tiny-skia` 双后端);macOS 上恒走
+                                // `Primary`(wgpu) 分支,`Secondary`(tiny-skia)
+                                // 在此平台不会被选中,直接 `unreachable`。
+                                match renderer {
+                                    iced_renderer::Renderer::Primary(r) => {
+                                        r.present(None, frame.texture.format(), &view, viewport);
+                                    }
+                                    iced_renderer::Renderer::Secondary(_) => {
+                                        unreachable!("tiny-skia 渲染器在 macOS(wgpu)上不会被选中")
+                                    }
+                                }
 
                                 // Present the frame
                                 frame.present();

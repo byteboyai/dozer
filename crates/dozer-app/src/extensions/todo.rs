@@ -503,7 +503,7 @@ pub fn view<'a>(
     tabs: &[SessionTabSummary],
     width: Length,
     outer: Border,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let header = column![
         text("Todo")
             .size(theme::font::title())
@@ -659,7 +659,7 @@ fn todo_row<'a>(
     meta: Option<&'a TodoTaskMeta>,
     dispatch_open: bool,
     existing_tabs: &'a [(&'a str, String)],
-) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let done = item.done;
     let box_color = if done {
         theme::color::BORDER
@@ -706,13 +706,13 @@ fn todo_row<'a>(
     } else {
         theme::color::CREAM
     };
-    let label: Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> = if done {
+    let label: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> = if done {
         let rich: iced_widget::text::Rich<
             '_,
             (),
             Message,
             iced_widget::Theme,
-            iced_widget::Renderer,
+            iced_renderer::Renderer,
         > = rich_text![
             span(item.text.clone())
                 .size(theme::font::body())
@@ -727,7 +727,7 @@ fn todo_row<'a>(
             .into()
     };
 
-    let date_label: Option<Element<'static, Message, iced_widget::Theme, iced_widget::Renderer>> =
+    let date_label: Option<Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer>> =
         match state {
             TodoState::Done => meta.and_then(|m| m.completed_at).map(|t| {
                 text(format!("完成于 {}", format_todo_time(t)))
@@ -758,49 +758,49 @@ fn todo_row<'a>(
         middle = middle.push(label);
     }
 
-    let trailing: Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> = match state
-    {
-        TodoState::Pending => button(
-            row![
-                icons::view(
-                    icons::IconKind::SquarePlus,
-                    crate::theme::icon_size::row(),
-                    theme::color::GOLD
-                ),
-                text("派发")
+    let trailing: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        match state {
+            TodoState::Pending => button(
+                row![
+                    icons::view(
+                        icons::IconKind::SquarePlus,
+                        crate::theme::icon_size::row(),
+                        theme::color::GOLD
+                    ),
+                    text("派发")
+                        .size(theme::font::caption())
+                        .color(theme::color::GOLD),
+                ]
+                .spacing(4)
+                .align_y(iced_widget::core::alignment::Vertical::Center),
+            )
+            .on_press(Message::DispatchOpen(idx))
+            .padding([5, 10])
+            .style(|_t: &iced_widget::Theme, _s| button::Style {
+                background: None,
+                text_color: theme::color::GOLD,
+                border: Border {
+                    color: theme::color::BORDER,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..button::Style::default()
+            })
+            .into(),
+            TodoState::InProgress => row![
+                text("●")
+                    .size(theme::font::dot_sm())
+                    .color(theme::color::GREEN),
+                text("进行中")
                     .size(theme::font::caption())
-                    .color(theme::color::GOLD),
+                    .color(theme::color::GREEN),
             ]
-            .spacing(4)
-            .align_y(iced_widget::core::alignment::Vertical::Center),
-        )
-        .on_press(Message::DispatchOpen(idx))
-        .padding([5, 10])
-        .style(|_t: &iced_widget::Theme, _s| button::Style {
-            background: None,
-            text_color: theme::color::GOLD,
-            border: Border {
-                color: theme::color::BORDER,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..button::Style::default()
-        })
-        .into(),
-        TodoState::InProgress => row![
-            text("●")
-                .size(theme::font::dot_sm())
-                .color(theme::color::GREEN),
-            text("进行中")
-                .size(theme::font::caption())
-                .color(theme::color::GREEN),
-        ]
-        .spacing(5)
-        .into(),
-        TodoState::Done => iced_widget::space::Space::new().into(),
-    };
+            .spacing(5)
+            .into(),
+            TodoState::Done => iced_widget::space::Space::new().into(),
+        };
 
-    let base: Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> =
+    let base: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> =
         row![middle, trailing]
             .spacing(10)
             .align_y(iced_widget::core::alignment::Vertical::Center)
@@ -819,7 +819,7 @@ fn todo_row<'a>(
 fn todo_dispatch_popup<'a>(
     idx: usize,
     existing_tabs: &'a [(&'a str, String)],
-) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![].spacing(2);
     for (session_id, title) in existing_tabs {
         col = col.push(
@@ -874,7 +874,7 @@ fn todo_dispatch_popup<'a>(
 fn todo_plan_date_edit_row<'a>(
     item: &'a TodoItem,
     draft: &'a str,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     row![
         text(item.text.clone())
             .size(theme::font::body())
@@ -896,7 +896,7 @@ fn todo_filter_segment<'a>(
     label: &'a str,
     value: TodoFilter,
     current: TodoFilter,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let active = value == current;
     button(text(label).size(theme::font::caption()).color(if active {
         theme::color::CREAM

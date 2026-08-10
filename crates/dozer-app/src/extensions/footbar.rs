@@ -9,7 +9,7 @@ use crate::theme;
 use crate::theme::icon_size;
 use crate::workspace::ShellIo;
 use iced_widget::core::{Alignment, Element, Length};
-use iced_widget::{container, row, text, Space};
+use iced_widget::{Space, container, row, text};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -62,7 +62,7 @@ pub fn update(state: &mut AppState, msg: Message) {
 /// `theme::region::status_bar()`,但字号用更小的 `caption_sm()`、高度用
 /// 独立的 `theme::geometry::footbar_height()`(比 in-pane status_bar 更矮更紧凑,
 /// 不与 `status_bar_height()` 共用,避免改 footbar 时连坐 in-pane status bar)。
-pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::status_bar();
     let s = &state.sample;
 
@@ -81,7 +81,7 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_w
 
     let mut segs: Vec<(
         Lead,
-        Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>,
+        Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>,
     )> = Vec::new();
     segs.push((Lead::None, metric_row("CPU", s.cpu_percent)));
     segs.push((Lead::Pipe, metric_row("RAM", s.ram_percent)));
@@ -118,7 +118,7 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_w
     // 逐段拼装:每段前导由 `Lead` 决定——默认 `｜`,网速段前用 square-radical
     // 图标(Lucide,深色描边浮在奶油背景上,与文字同色、垂直居中)作区分,
     // 代理段前用普通 `｜`(仅代理存在时出现)。
-    let mut parts: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> =
+    let mut parts: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
         Vec::with_capacity(segs.len() * 2);
     for (i, (lead, elem)) in segs.into_iter().enumerate() {
         if i > 0 {
@@ -197,7 +197,7 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_w
 fn metric_row(
     prefix: &'static str,
     percent: f32,
-) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let value_color = if percent > 75.0 {
         iced_widget::core::Color::from_rgb8(0xFF, 0x6E, 0x6E)
     } else {

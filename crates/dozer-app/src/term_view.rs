@@ -230,7 +230,7 @@ fn cell_at(pos: Point, cols: usize, rows: usize) -> (usize, usize, bool) {
     (col, row, right_half)
 }
 
-impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for TermCanvas<'_> {
+impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for TermCanvas<'_> {
     type State = InteractionState;
 
     fn update(
@@ -305,11 +305,11 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
     fn draw(
         &self,
         _state: &Self::State,
-        renderer: &iced_widget::Renderer,
+        renderer: &iced_renderer::Renderer,
         _theme: &iced_widget::Theme,
         bounds: Rectangle,
         _cursor: iced_widget::core::mouse::Cursor,
-    ) -> Vec<canvas::Geometry<iced_widget::Renderer>> {
+    ) -> Vec<canvas::Geometry<iced_renderer::Renderer>> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         let lines = self.model.visible_lines();
         let (cursor_col, cursor_row) = self.model.cursor();
@@ -408,7 +408,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Ter
 pub fn view(
     model: &TerminalModel,
     focused: bool,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     Canvas::new(TermCanvas { model, focused })
         .width(Length::Fill)
         .height(Length::Fill)

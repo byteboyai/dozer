@@ -224,7 +224,7 @@ pub fn view<'a>(
     project: Option<&'a ProjectInfo>,
     width: Length,
     outer: Border,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(p) = project else {
         return container(iced_widget::Space::new())
             .width(width)
@@ -288,10 +288,10 @@ pub fn view<'a>(
 /// 标准列表/输入框(点击进入同一个标题编辑态,创建首个目标)。
 fn goal_block(
     ws_state: &WorkspaceState,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![].spacing(8);
 
-    let title_row: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> =
+    let title_row: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
         if let Some(buf) = &ws_state.title_editing {
             container(
                 text(format!("{buf}▏"))

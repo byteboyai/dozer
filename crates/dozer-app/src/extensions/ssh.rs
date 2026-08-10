@@ -574,7 +574,7 @@ fn set_draft(ws_state: &mut WorkspaceState, f: impl FnOnce(&mut SshHostDraft)) {
 fn host_card<'a>(
     host: &'a SshHost,
     status: &'a TestStatus,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let auth_label = match &host.auth {
         AuthMethod::Password => "密码".to_string(),
         AuthMethod::PrivateKey { key_path } => format!("私钥: {key_path}"),
@@ -640,7 +640,7 @@ fn host_card<'a>(
 
 fn host_form<'a>(
     draft: &'a SshHostDraft,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![
         text_input("名字", &draft.name)
             .on_input(Message::DraftNameChanged)
@@ -720,7 +720,7 @@ pub fn view<'a>(
     ws_state: &'a WorkspaceState,
     width: iced_widget::core::Length,
     outer: iced_widget::core::Border,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![
         row![
             text("SSH 主机")

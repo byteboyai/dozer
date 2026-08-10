@@ -149,7 +149,7 @@ pub fn view<'a, Message: 'a>(
     kind: IconKind,
     size: f32,
     color: Color,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 调用方传入的 `size` 应为 `icon_size` 的 token（已含全局 scale），
     // 本函数是纯渲染入口，不再二次乘 scale。
     svg(svg::Handle::from_memory(kind.bytes()))

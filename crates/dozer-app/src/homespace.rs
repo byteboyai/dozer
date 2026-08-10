@@ -62,7 +62,7 @@ pub(crate) struct HomeRecentConversation {
 pub(crate) fn home_page<'a>(
     app: &'a App,
     footbar_state: &'a crate::extensions::footbar::AppState,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -113,7 +113,7 @@ pub(crate) fn home_page<'a>(
 /// 的 `shell_layout` 宽度状态。这里只留一块与 `divider_width()` 同宽的
 /// 空白——`Divider::LeftRight` 分支本身也不画任何可见的线/背景色,视觉
 /// 效果与之一致,只是去掉了 `MouseArea`/`on_press`。
-fn home_divider<'a>() -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn home_divider<'a>() -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     iced_widget::Space::new()
         .width(Length::Fixed(theme::geometry::divider_width()))
         .height(Length::Fill)
@@ -125,7 +125,7 @@ fn home_divider<'a>() -> Element<'a, Message, iced_widget::Theme, iced_widget::R
 /// pane 显示。
 fn home_left_icon_rail(
     app: &App,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::left_icon_rail();
     let content = column![
         MouseArea::new(rail_icon_button(
@@ -171,7 +171,7 @@ fn home_left_icon_rail(
 /// 首页右图标栏:只有浏览器一个图标(`HomeRightView` 目前只有一个变体)。
 fn home_right_icon_rail(
     app: &App,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::right_icon_rail();
     let content = column![
         MouseArea::new(rail_icon_button(
@@ -205,9 +205,9 @@ fn home_right_icon_rail(
 fn home_left_zone(
     app: &App,
     now_ms: u64,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let zone = theme::region::left_zone();
-    let inner: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> =
+    let inner: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
         match app.home_left_view {
             HomeLeftView::ProjectList => home_project_list_view(app, now_ms),
             HomeLeftView::Recents => home_recents_view(app, now_ms),
@@ -237,7 +237,7 @@ fn home_left_zone(
 
 /// 首页右栏:恒显示全局浏览器 pane(`app.home_browser`,`project_id` 传
 /// `None`)。铺满剩余宽度,不支持拖拽调宽。
-fn home_right_zone(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn home_right_zone(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let zone = theme::region::right_zone();
     let inner = browser::view(
         &app.home_browser,
@@ -277,7 +277,7 @@ fn home_right_zone(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_w
 fn home_project_list_view(
     app: &App,
     now_ms: u64,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![].spacing(16);
 
     col = col.push(
@@ -422,7 +422,7 @@ fn home_project_list_view(
 fn home_recents_view(
     app: &App,
     now_ms: u64,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 与 project list 面板同款:外层 `zone_box` 仅留 1px 圆角裁切余量,这里
     // 再补一层标准内距,让两张卡片(含各自的标题)四周都不顶圆角边框。
     let inner = column![
@@ -443,7 +443,7 @@ fn home_recents_view(
 fn home_recent_files_card(
     app: &App,
     now_ms: u64,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![
         text("最近的文件")
             .size(theme::homespace_font::subtitle())
@@ -517,7 +517,7 @@ fn home_recent_files_card(
 fn home_recent_conversations_card(
     app: &App,
     now_ms: u64,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![
         text("最近的对话")
             .size(theme::homespace_font::subtitle())

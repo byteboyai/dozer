@@ -378,7 +378,7 @@ pub fn spawn_refresh(
 /// 头部：标题 + 项目名 + 右侧手动刷新按钮（spec"面板渲染"#1）。
 fn panel_header(
     project_name: &str,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     iced_widget::row![
         column![
             text("用量统计")
@@ -411,7 +411,7 @@ pub fn view<'a>(
     project_name: &'a str,
     width: Length,
     outer: Border,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let rows = ws_state.rows();
     let loading = ws_state.loading();
     let mut content = column![panel_header(project_name)].spacing(12).padding(14);
@@ -457,12 +457,12 @@ pub fn view<'a>(
 
 fn summary_card(
     totals: &ProjectUsageTotals,
-) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     fn stat(
         label: &'static str,
         value: String,
         color: Color,
-    ) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+    ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
         column![
             text(label)
                 .size(theme::font::caption())
@@ -527,7 +527,7 @@ fn summary_card(
 fn usage_row<'a>(
     meta: &'a ConversationMeta,
     u: &'a ConversationUsage,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let activity = format!(
         "{} 轮 · {} 次工具({} 改动) · {} 文件",
         u.turns,
@@ -570,7 +570,7 @@ fn usage_row<'a>(
 
 fn grouped_list<'a>(
     rows: &'a [(ConversationMeta, ConversationUsage)],
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let groups = group_usage_by_agent(rows);
     let mut col = column![].spacing(12);
     for (agent, idxs) in groups {
@@ -607,7 +607,7 @@ fn bar_segment(
     height: f32,
     color: Color,
     round_top: bool,
-) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let radius = if round_top {
         iced_widget::core::border::Radius {
             top_left: 4.0,
@@ -635,7 +635,7 @@ fn bar_segment(
 
 fn bar_chart(
     days: &[DayAgentTotals],
-) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let max_total = days
         .iter()
         .map(|d| d.claude + d.codebuddy + d.opencode)
@@ -700,17 +700,17 @@ struct PieChart {
     share: Vec<(AgentKind, u64)>,
 }
 
-impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for PieChart {
+impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for PieChart {
     type State = ();
 
     fn draw(
         &self,
         _state: &Self::State,
-        renderer: &iced_widget::Renderer,
+        renderer: &iced_renderer::Renderer,
         _theme: &iced_widget::Theme,
         bounds: Rectangle,
         _cursor: iced_widget::core::mouse::Cursor,
-    ) -> Vec<canvas::Geometry<iced_widget::Renderer>> {
+    ) -> Vec<canvas::Geometry<iced_renderer::Renderer>> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         let center = frame.center();
         let total: u64 = self.share.iter().map(|(_, v)| v).sum();
@@ -743,7 +743,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Pie
 
 fn pie_chart(
     share: &[(AgentKind, u64)],
-) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     Canvas::new(PieChart {
         share: share.to_vec(),
     })
@@ -754,7 +754,7 @@ fn pie_chart(
 
 fn chart_legend(
     share: &[(AgentKind, u64)],
-) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let total: u64 = share.iter().map(|(_, v)| v).sum();
     let mut row = iced_widget::row![].spacing(18);
     for (agent, value) in share {

@@ -1171,7 +1171,7 @@ async fn test_connection(source: DataSource, password: Option<String>) -> Result
 /// 驱动管理弹层:列出全部驱动类型,点按切换启用/禁用。
 fn drivers_popup<'a>(
     app_state: &'a AppState,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![
         text("已启用的驱动")
             .size(crate::theme::font::caption())
@@ -1217,7 +1217,7 @@ fn drivers_popup<'a>(
 fn source_card<'a>(
     source: &'a DataSource,
     status: &'a TestStatus,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let status_text = match status {
         TestStatus::Idle => "".to_string(),
         TestStatus::Testing => "测试中…".to_string(),
@@ -1299,7 +1299,7 @@ fn source_card<'a>(
 fn source_form<'a>(
     draft: &'a DataSourceDraft,
     app_state: &'a AppState,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut driver_row = row![].spacing(8);
     for driver in DriverKind::ALL {
         // 只列已启用的驱动;若正在编辑的数据源本身用的驱动已被禁用,
@@ -1410,7 +1410,7 @@ pub fn view<'a>(
     ws_state: &'a WorkspaceState,
     width: Length,
     outer: Border,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 正在浏览某数据源的 schema 树 → 树视图;否则阶段 1 卡片列表(以下原样)。
     if let Some((source, st)) = ws_state.browsing_source() {
         return schema_tree_view(source, st, width, outer);
@@ -1467,7 +1467,7 @@ fn schema_tree_view<'a>(
     st: &'a SchemaState,
     width: Length,
     outer: Border,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let header = row![
         button(icons::view(
             icons::IconKind::ChevronLeft,
@@ -1561,7 +1561,7 @@ fn schema_tree_view<'a>(
 fn schema_tree_row<'a>(
     source_id: &str,
     r: SchemaRow<'a>,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let indent = text("  ".repeat(r.depth)).size(crate::workspace::tree_row_font_size());
     match r.kind {
         SchemaRowKind::Schema(name) => {

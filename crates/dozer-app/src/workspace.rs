@@ -57,9 +57,10 @@ use crate::theme::terminal_font;
 use crate::transcript::{self, ReviewEntry};
 use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
+use iced_code_editor::{CodeEditor, Message as EditorMessage};
 use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Color, Element, Length, Padding};
-use iced_widget::{Scrollable, button, column, container, row, scrollable, text, text_editor};
+use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -172,8 +173,13 @@ pub struct EditSession {
     /// `Workspace::preview_edit_open` 的取值处)。
     pub tab_id: usize,
     pub path: PathBuf,
-    pub content: iced_widget::text_editor::Content,
-    pub dirty: bool,
+    /// 编辑器组件(`iced-code-editor`)。有状态 widget,持有内容与撤销栈。
+    pub editor: CodeEditor,
+    /// 上次落盘(或打开)时的内容快照。脏标记 = `editor.content() !=
+    /// saved_content`,不依赖 `editor.is_modified()`——后者在连续输入
+    /// 的 undo 分组(`is_grouping`)未提交期间会恒为 `true`,导致保存后
+    /// 仍误报脏(`iced-code-editor` 没有公开的 `end_group` 接口来收口分组)。
+    pub saved_content: String,
     /// 打开失败(理论上不会,打开前已判过存在)或保存失败的错误文案。
     pub error: Option<String>,
     /// 脏改动下点关闭:先弹二次确认,不直接丢。
@@ -580,11 +586,23 @@ impl Workspace {
         match std::fs::read_to_string(&path) {
             Ok(text) => {
                 self.preview_error = None;
+                let mut editor = CodeEditor::new(&text, &Self::extension_to_syntax(&path));
+                // 主题/字体与 ByteBoy2077 暗色外壳协调(Tokyo Night Storm 是
+                // 偏冷的蓝底主题,契合 bg `#0a0e16` + 青 `#47DEF0` 的配色)。
+                editor.set_theme(iced_code_editor::theme::from_iced_theme(
+                    &iced_widget::Theme::TokyoNightStorm,
+                ));
+                editor.set_font(crate::fonts::code_font());
+                editor.set_font_size(theme::font::body() as f32, false);
+                // 打开即夺焦点:设置内部 focus 标记,使键盘事件无需先点击
+                // 即可直达编辑器(仍建议点击以触发光标定位与选区)。
+                editor.request_focus();
+                let _ = editor.update(&EditorMessage::CanvasFocusGained);
                 self.edit_session = Some(EditSession {
                     tab_id,
                     path,
-                    content: iced_widget::text_editor::Content::with_text(&text),
-                    dirty: false,
+                    editor,
+                    saved_content: text.clone(),
                     error: None,
                     confirm_discard: false,
                 });
@@ -595,29 +613,31 @@ impl Workspace {
         }
     }
 
-    /// 转发 `text_editor` 的编辑动作;只有真正的编辑(增删字符,非光标
-    /// 移动/选区/滚动)才置脏。没有打开编辑会话时 no-op。
-    pub(crate) fn preview_edit_action(&mut self, action: iced_widget::text_editor::Action) {
+    /// 转发 `iced-code-editor` 的内部消息,返回编辑器产生的
+    /// `iced::Task<EditorMessage>`(交由 `main.rs` 的 Task 桥接器执行——
+    /// 主要是剪贴板读写与搜索框聚焦;无运行时下普通编辑路径恒为
+    /// `Task::none()`)。没有打开编辑会话时直接返回 `Task::none()`。
+    pub(crate) fn preview_edit_event(
+        &mut self,
+        event: EditorMessage,
+    ) -> iced_winit::runtime::Task<EditorMessage> {
         let Some(session) = self.edit_session.as_mut() else {
-            return;
+            return iced_winit::runtime::Task::none();
         };
-        let is_edit = action.is_edit();
-        session.content.perform(action);
-        if is_edit {
-            session.dirty = true;
-        }
+        session.editor.update(&event)
     }
 
-    /// 保存当前编辑会话到磁盘,成功则清脏并推进该 tab 的 reload nonce
-    /// (逼预览 webview 重新加载,否则用户会看到保存前的旧内容)。失败写
-    /// `session.error`,弹层不关。没有打开编辑会话时 no-op。
+    /// 保存当前编辑会话到磁盘,成功则清脏(`mark_saved`)并推进该 tab 的
+    /// reload nonce(逼预览 webview 重新加载,否则用户会看到保存前的旧内容)。
+    /// 失败写 `session.error`,弹层不关。没有打开编辑会话时 no-op。
     pub(crate) fn preview_edit_save(&mut self) {
         let Some(session) = self.edit_session.as_mut() else {
             return;
         };
-        match std::fs::write(&session.path, session.content.text()) {
+        match std::fs::write(&session.path, session.editor.content()) {
             Ok(()) => {
-                session.dirty = false;
+                session.saved_content = session.editor.content();
+                session.editor.mark_saved();
                 session.error = None;
                 let tab_id = session.tab_id;
                 self.preview.bump_reload(tab_id);
@@ -634,7 +654,7 @@ impl Workspace {
         let Some(session) = self.edit_session.as_mut() else {
             return;
         };
-        if session.dirty {
+        if session.editor.content() != session.saved_content {
             session.confirm_discard = true;
         } else {
             self.edit_session = None;
@@ -651,6 +671,55 @@ impl Workspace {
         if let Some(session) = self.edit_session.as_mut() {
             session.confirm_discard = false;
         }
+    }
+
+    /// 把文件扩展名映射到 `iced-code-editor` 的语法名(即 syntect 扩展名)。
+    /// 未知扩展名回退 "txt"(plain text),编辑器内部也会再兜底一次。
+    fn extension_to_syntax(path: &Path) -> String {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .unwrap_or_default();
+        match ext.as_str() {
+            "rs" => "rust",
+            "py" => "python",
+            "js" | "mjs" | "cjs" => "javascript",
+            "ts" => "typescript",
+            "jsx" => "jsx",
+            "tsx" => "tsx",
+            "go" => "go",
+            "java" => "java",
+            "kt" => "kotlin",
+            "c" | "h" => "c",
+            "cpp" | "cc" | "cxx" | "hpp" => "cpp",
+            "rb" => "ruby",
+            "php" => "php",
+            "sh" | "bash" | "zsh" => "bash",
+            "html" | "htm" => "html",
+            "css" => "css",
+            "scss" => "scss",
+            "json" => "json",
+            "yaml" | "yml" => "yaml",
+            "toml" => "toml",
+            "md" | "markdown" => "markdown",
+            "xml" => "xml",
+            "sql" => "sql",
+            "diff" => "diff",
+            "lua" => "lua",
+            "r" => "r",
+            "swift" => "swift",
+            "zig" => "zig",
+            "dockerfile" => "dockerfile",
+            "makefile" => "makefile",
+            "proto" => "protobuf",
+            "graphql" | "gql" => "graphql",
+            "ex" | "exs" => "elixir",
+            "hs" => "haskell",
+            "scala" => "scala",
+            _ => "txt",
+        }
+        .to_string()
     }
 
     /// 把键盘/IME 字节直接写给当前激活 tab 对应的 daemon 会话。异步写
@@ -1405,9 +1474,9 @@ pub(crate) fn exited_marker() -> Vec<u8> {
 /// iced 直绘（验收 tab 激活时 webview 全隐藏，不抢层）。
 /// 会话审阅 tab 内容（P1i）：人类锚点 + AI 回合折叠（正文/过程）。
 pub(crate) fn review_content<'a>(
-    mut content: iced_widget::Column<'a, Message, iced_widget::Theme, iced_widget::Renderer>,
+    mut content: iced_widget::Column<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
     ws: &'a Workspace,
-) -> iced_widget::Column<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> iced_widget::Column<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(rv) = &ws.review else {
         return content;
     };
@@ -1480,7 +1549,7 @@ pub(crate) fn conversation_list_pane(
     ws: &Workspace,
     width: Length,
     outer: Border,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::conversation_list_pane();
     let mut content = column![
         row![
@@ -1628,7 +1697,7 @@ pub(crate) fn agent_list_pane(
     ws: &Workspace,
     width: Length,
     outer: Border,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::agent_list_pane();
     let mut content = column![
         row![
@@ -1684,7 +1753,7 @@ pub(crate) fn agent_list_pane(
 pub(crate) fn agent_list_row(
     ws: &Workspace,
     idx: usize,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let tab = &ws.tabs[idx];
     let active = idx == ws.active;
     let row_el = row![
@@ -1722,7 +1791,7 @@ pub(crate) fn agent_list_row(
 /// 选择菜单(`agent_picker_popup`)。样式为 CARD 底 + BORDER 描边的"＋",
 /// 与已移除的终端 tab 栏"＋"同源。
 pub(crate) fn agent_picker_toggle_button<'a>()
--> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+-> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     button(
         text("＋")
             .size(theme::font::title())
@@ -1752,7 +1821,7 @@ pub(crate) fn agent_picker_toggle_button<'a>()
 /// `stack!`。
 pub(crate) fn agent_picker_popup(
     ws: &Workspace,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     if !ws.agent_picker_open {
         return column![].into();
     }
@@ -1829,7 +1898,7 @@ pub(crate) fn review_content_pane(
     ws: &Workspace,
     width: Length,
     outer: Border,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::review_content_pane();
     let header = row![
         lh(text("会话审阅")
@@ -1882,8 +1951,8 @@ pub(crate) fn tree_row_font_size() -> f32 {
 /// (`terminal_font::line_height_factor()` = 1.2)，让各面板列表/正文行的行距
 /// 与文件树、终端观感一致。`size`/`color` 等仍由调用方设置，这里只补行高。
 pub(crate) fn lh<'a>(
-    t: iced_widget::text::Text<'a, iced_widget::Theme, iced_widget::Renderer>,
-) -> iced_widget::text::Text<'a, iced_widget::Theme, iced_widget::Renderer> {
+    t: iced_widget::text::Text<'a, iced_widget::Theme, iced_renderer::Renderer>,
+) -> iced_widget::text::Text<'a, iced_widget::Theme, iced_renderer::Renderer> {
     t.line_height(LineHeight::Relative(terminal_font::line_height_factor()))
 }
 
@@ -1895,7 +1964,7 @@ pub(crate) fn no_project_placeholder<'a>(
     ws: &'a Workspace,
     width: Length,
     outer: Border,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::project_pane();
     let mut header = column![].spacing(region.gap).width(Length::Fill);
     let tree_col = column![].spacing(region.gap);
@@ -1947,7 +2016,7 @@ pub(crate) fn no_project_placeholder<'a>(
 pub(crate) fn terminal_status_bar(
     ws: &Workspace,
     outer: Border,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let (label, dot) = match ws.tabs.get(ws.active) {
         Some(t) => (
             agent_state_label(t.agent_state),
@@ -1987,9 +2056,9 @@ pub(crate) fn terminal_status_bar(
 /// 在 zone 圆角 CARD 背景上顶出小尖角。保留底栏自己那条 1px 上边分隔线
 /// （颜色/宽度沿用 `status_bar` 区域配置,只改圆角）。
 pub(crate) fn status_bar_container<'a, Msg: 'a>(
-    inner: impl Into<Element<'a, Msg, iced_widget::Theme, iced_widget::Renderer>>,
+    inner: impl Into<Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer>>,
     outer: Border,
-) -> Element<'a, Msg, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::status_bar();
     let base = region.border.unwrap_or_default();
     container(inner)
@@ -2013,7 +2082,7 @@ pub(crate) fn preview_pane<'a>(
     ws: &'a Workspace,
     width: Length,
     outer: Border,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // tab 栏:箭头翻页(到头变灰) + 每 tab 选择按钮 + 关闭 ×。tab 只能由项目树
     // 点击/会话恢复产生——面板本身已不再有"打开文件…"按钮或地址栏(P1 后续
     // 反馈:文件预览与浏览器彻底分离,文件只走项目树入口)。
@@ -2032,7 +2101,7 @@ pub(crate) fn preview_pane<'a>(
         ws.preview_tab_first,
     );
 
-    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = ws
+    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = ws
         .preview
         .tabs()
         .iter()
@@ -2042,41 +2111,25 @@ pub(crate) fn preview_pane<'a>(
             let active = idx == ws.preview.active_idx();
             let title_hover_t = app.hover_progress(HoverId::PreviewTabItem(idx));
             let close_hover_t = app.hover_progress(HoverId::PreviewTabClose(idx));
-            // 可编辑文件才有重命名入口(原 preview 面板的编辑图标),作 `panel_tab`
-            // 的 suffix(标题右侧、关闭前、独立可点)。
+            // 仅文本类文件可编辑——决定右键菜单里"编辑"项是否出现(标题后的
+            // 编辑图标已移除,编辑入口统一收进 tab 右键菜单,见 `PreviewTabContextMenu`)。
             let editable = matches!(&tab.kind, TabKind::File(path) if is_editable_extension(path));
-            let suffix: Option<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> =
-                if editable {
-                    Some(
-                        button(icons::view(
-                            icons::IconKind::Rename,
-                            crate::theme::icon_size::row(),
-                            theme::color::DIM,
-                        ))
-                        .on_press(Message::PreviewEditOpen(idx))
-                        .padding(0)
-                        .style(|_t, _s| button::Style {
-                            background: None,
-                            text_color: theme::color::DIM,
-                            ..button::Style::default()
-                        })
-                        .into(),
-                    )
-                } else {
-                    None
-                };
-            panel_tab(
+            let tab = panel_tab(
                 tab.title.clone(),
                 active,
                 title_hover_t,
                 close_hover_t,
                 None,
-                suffix,
+                None,
                 Message::PreviewSelectTab(idx),
                 Message::PreviewCloseTab(idx),
                 move |h| Message::Hover(HoverId::PreviewTabItem(idx), h),
                 move |h| Message::Hover(HoverId::PreviewTabClose(idx), h),
-            )
+            );
+            // 右键 tab 弹上下文菜单:"编辑"(仅可编辑)/"关闭"。
+            MouseArea::new(tab)
+                .on_right_press(Message::PreviewTabContextMenu { idx, editable })
+                .into()
         })
         .collect();
     // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;左右箭头钉在裁剪区外。
@@ -2125,13 +2178,14 @@ pub(crate) fn preview_pane<'a>(
         .into()
 }
 
-/// 文本编辑弹层:标题行(文件名+关闭)+ `text_editor` 主体(等宽字体)+
-/// 错误位 + 保存/关闭按钮。宽高吃满大部分屏幕("放大窗口"的产品意图,
+/// 文本编辑弹层:标题行(文件名+关闭)+ `iced-code-editor` 代码编辑器主体
+/// (语法高亮/等宽字体)+ 错误位 + 保存/关闭按钮。宽高吃满大部分屏幕("放大
+/// 窗口"的产品意图,
 /// 不是小弹窗),四周留 `40.0` 边距,与 `maximize_overlay` 的
 /// `scrim_padding` 同一量级,视觉上是同一族"大号应用内模态"。
 pub(crate) fn edit_modal(
     ws: &Workspace,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(session) = &ws.edit_session else {
         return column![].into();
     };
@@ -2161,11 +2215,10 @@ pub(crate) fn edit_modal(
     ]
     .align_y(iced_widget::core::Alignment::Center);
 
-    let editor: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> =
-        text_editor(&session.content)
-            .on_action(Message::PreviewEditAction)
-            .font(crate::fonts::code_font())
-            .size(theme::font::body())
+    // `iced-code-editor::view()` 返回的是裸 `Element`,没有 `height` 这类
+    // widget 方法,用 `container` 包一层再撑满弹层正文高度。
+    let editor: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        container(session.editor.view().map(Message::EditorEvent))
             .height(Length::Fill)
             .into();
 
@@ -2242,7 +2295,7 @@ pub(crate) fn edit_modal(
 /// 编辑弹层的二次确认:脏改动状态下点关闭,叠在 `edit_modal` 之上。
 /// 视觉风格与 `delete_confirm_popup` 一致。
 pub(crate) fn edit_discard_confirm_popup<'a>()
--> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+-> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let dialog = container(
         column![
             text("放弃未保存的改动?")
@@ -2986,8 +3039,9 @@ mod tests {
         let session = ws.edit_session.as_ref().expect("应打开编辑会话");
         assert_eq!(session.tab_id, tab_id);
         assert_eq!(session.path, path);
-        assert_eq!(session.content.text(), "fn main() {}");
-        assert!(!session.dirty);
+        assert_eq!(session.editor.content(), "fn main() {}");
+        assert_eq!(session.saved_content, "fn main() {}");
+        assert!(session.editor.content() == session.saved_content);
         assert!(session.error.is_none());
         assert!(!session.confirm_discard);
     }
@@ -3017,12 +3071,21 @@ mod tests {
         ws.preview.open_path(path);
         ws.preview_edit_open(0);
         // 非编辑动作(光标移动)不置脏。
-        ws.preview_edit_action(text_editor::Action::Move(text_editor::Motion::Right));
-        assert!(!ws.edit_session.as_ref().unwrap().dirty);
+        let _ = ws.preview_edit_event(EditorMessage::ArrowKey(
+            iced_code_editor::ArrowDirection::Right,
+            false,
+        ));
+        assert!(
+            ws.edit_session.as_ref().unwrap().editor.content()
+                == ws.edit_session.as_ref().unwrap().saved_content
+        );
         // 编辑动作置脏。前一步光标右移了一位,Insert 落在 'h' 之后。
-        ws.preview_edit_action(text_editor::Action::Edit(text_editor::Edit::Insert('!')));
-        assert!(ws.edit_session.as_ref().unwrap().dirty);
-        assert_eq!(ws.edit_session.as_ref().unwrap().content.text(), "h!i");
+        let _ = ws.preview_edit_event(EditorMessage::CharacterInput('!'));
+        assert!(
+            ws.edit_session.as_ref().unwrap().editor.content()
+                != ws.edit_session.as_ref().unwrap().saved_content
+        );
+        assert_eq!(ws.edit_session.as_ref().unwrap().editor.content(), "h!i");
     }
 
     #[test]
@@ -3031,9 +3094,12 @@ mod tests {
         let mut ws = Workspace::empty_for_project_placeholder();
         let tab_id = ws.preview.open_path(path.clone());
         ws.preview_edit_open(0);
-        ws.preview_edit_action(text_editor::Action::Edit(text_editor::Edit::Insert('!')));
+        let _ = ws.preview_edit_event(EditorMessage::CharacterInput('!'));
         ws.preview_edit_save();
-        assert!(!ws.edit_session.as_ref().unwrap().dirty);
+        assert!(
+            ws.edit_session.as_ref().unwrap().editor.content()
+                == ws.edit_session.as_ref().unwrap().saved_content
+        );
         assert!(ws.edit_session.as_ref().unwrap().error.is_none());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "!hi");
         let specs = ws.preview.desired_webviews();
@@ -3061,7 +3127,7 @@ mod tests {
         let mut ws = Workspace::empty_for_project_placeholder();
         ws.preview.open_path(path);
         ws.preview_edit_open(0);
-        ws.preview_edit_action(text_editor::Action::Edit(text_editor::Edit::Insert('!')));
+        let _ = ws.preview_edit_event(EditorMessage::CharacterInput('!'));
         ws.preview_edit_close_request();
         assert!(
             ws.edit_session.as_ref().unwrap().confirm_discard,
@@ -3074,7 +3140,11 @@ mod tests {
             !ws.edit_session.as_ref().unwrap().confirm_discard,
             "取消要回到编辑态"
         );
-        assert!(ws.edit_session.as_ref().unwrap().dirty, "取消不丢改动");
+        assert!(
+            ws.edit_session.as_ref().unwrap().editor.content()
+                != ws.edit_session.as_ref().unwrap().saved_content,
+            "取消不丢改动"
+        );
 
         ws.preview_edit_close_request();
         ws.preview_edit_confirm_discard();

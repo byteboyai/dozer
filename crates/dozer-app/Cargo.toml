@@ -17,6 +17,13 @@ tokio.workspace = true
 iced_winit = "0.14"
 iced_wgpu = { version = "0.14", default-features = true }
 iced_widget = { version = "0.14", features = ["wgpu", "canvas", "svg"] }
+# `iced_renderer::Renderer`(fallback 枚举)是 dozer 全工程统一的 renderer 类型:
+# `iced-code-editor` 经 umbrella `iced` crate 默认拉起 `iced_renderer/tiny-skia`,
+# 把 `iced_renderer::Renderer` 固化为 `fallback::Renderer<wgpu, tiny_skia>` 枚举;
+# Cargo feature 联合无法关掉 tiny-skia,所以 dozer 自己的 widget 树也必须改用
+# 同一个枚举 renderer,才能把编辑器 widget 嵌进预览编辑弹层(否则类型不兼容)。
+iced_renderer = "0.14"
+iced-code-editor = "0.3"
 winit = "0.30"
 raw-window-handle = "0.6"
 objc2 = "0.6"

@@ -493,7 +493,7 @@ fn row_center(row: usize, column: usize) -> Point {
     )
 }
 
-impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for GitLogCanvas<'_> {
+impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for GitLogCanvas<'_> {
     type State = ();
 
     fn update(
@@ -521,11 +521,11 @@ impl canvas::Program<Message, iced_widget::Theme, iced_widget::Renderer> for Git
     fn draw(
         &self,
         _state: &Self::State,
-        renderer: &iced_widget::Renderer,
+        renderer: &iced_renderer::Renderer,
         _theme: &iced_widget::Theme,
         bounds: Rectangle,
         _cursor: iced_widget::core::mouse::Cursor,
-    ) -> Vec<canvas::Geometry<iced_widget::Renderer>> {
+    ) -> Vec<canvas::Geometry<iced_renderer::Renderer>> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         let text_x = LEFT_MARGIN + (self.snapshot.max_column + 1) as f32 * COL_WIDTH + TEXT_GAP;
 
@@ -606,7 +606,7 @@ fn ref_labels_text(refs: &[RefLabel], head_branch: Option<&str>) -> String {
 /// 渲染整块提交图面板:有数据画 Canvas,出错画错误文案,两者皆无(比如
 /// 尚未打开项目)画空状态提示。纯函数——不碰 `App`/`Workspace` 内部状态,
 /// 调用方(`workspace.rs`)负责取数据、决定何时重建缓存、维护选中态。
-pub fn view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+pub fn view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let error = state.error.as_deref();
     if let Some(err) = error {
         return container(text(format!("git log 读取失败: {err}")).color(theme::color::RED))
@@ -633,7 +633,7 @@ pub fn view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_widg
     }
     let height = ROW_HEIGHT * snapshot.rows.len() as f32;
     let head_branch = snapshot.head_branch.as_deref();
-    let canvas: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> =
+    let canvas: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
         Canvas::new(GitLogCanvas {
             snapshot,
             selected,
@@ -695,8 +695,8 @@ fn detail_view<'a>(
     _snapshot: &GitLogSnapshot,
     _selected: Option<git2::Oid>,
     result: &'a Result<CommitDetail, String>,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
-    let body: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> = match result {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> = match result {
         Err(err) => container(text(format!("详情加载失败: {err}")).color(theme::color::RED))
             .padding(8)
             .into(),

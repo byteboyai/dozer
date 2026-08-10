@@ -302,6 +302,16 @@ impl AppState {
     pub fn context_menu_is_some(&self) -> bool {
         self.context_menu.is_some()
     }
+    /// 关掉文件树右键菜单(供其它浮层打开时互斥清理,见 `App::update` 的
+    /// `PreviewTabContextMenu` 分支——避免两者同时挂着导致 dismiss 串味)。
+    pub fn close_context_menu(&mut self) {
+        self.context_menu = None;
+    }
+    /// 最近一次右键落点坐标(屏幕空间,已由 main.rs 钳制在窗口内)。
+    /// 预览 tab 右键菜单复用同一份坐标,避免再写一套捕获逻辑。
+    pub fn last_right_click(&self) -> (f32, f32) {
+        self.last_right_click
+    }
 }
 
 /// 处理 `CopyPath` 之外的全部消息。内核在到达这里之前已经拦截了
@@ -478,7 +488,7 @@ pub fn view<'a>(
     ws_state: &'a WorkspaceState,
     width: Length,
     outer: Border,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::project_pane();
     let mut header = column![].spacing(region.gap).width(Length::Fill);
     let mut tree_col = column![].spacing(region.gap);
@@ -539,7 +549,7 @@ pub fn view<'a>(
                     .map(|s| (s.kind, s.unstaged))
             };
             let name_color = theme::color::BODY;
-            let row_icon: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> =
+            let row_icon: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
                 if row.is_dir {
                     let chevron = if row.expanded {
                         icons::IconKind::ChevronDown
@@ -611,7 +621,7 @@ pub fn view<'a>(
                 '_,
                 Message,
                 iced_widget::Theme,
-                iced_widget::Renderer,
+                iced_renderer::Renderer,
             > = button(line)
                 .on_press(msg)
                 .width(Length::Fill)
@@ -679,7 +689,7 @@ pub fn view<'a>(
 fn tree_edit_row(
     depth: usize,
     buffer: &str,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let indent = "  ".repeat(depth);
     container(
         text(format!("{indent}{buffer}▏"))
@@ -714,7 +724,7 @@ fn menu_item<'a>(
     icon: Option<icons::IconKind>,
     label: &'static str,
     msg: Message,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let content = match icon {
         Some(icon) => row![
             icons::view(icon, crate::theme::icon_size::row(), theme::color::CREAM),
@@ -763,14 +773,14 @@ fn menu_item<'a>(
 pub fn context_menu_popup<'a>(
     app_state: &'a AppState,
     ws_state: &'a WorkspaceState,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(menu) = &app_state.context_menu else {
         return column![].into();
     };
-    let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> =
+    let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
         Vec::new();
     let push_sep =
-        |items: &mut Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>>| {
+        |items: &mut Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>>| {
             if !items.is_empty() {
                 items.push(menu_separator());
             }
@@ -885,7 +895,7 @@ pub fn context_menu_popup<'a>(
 /// 菜单项之间的细分隔线:1px BORDER 高度,左右各留一点内边距,与 macOS
 /// 系统菜单分组线同款。列项之间由 `column.spacing` 控间距,分隔线本身不
 /// 再额外加 padding。
-fn menu_separator<'a>() -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn menu_separator<'a>() -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     container(iced_widget::Space::new())
         .width(Length::Fill)
         .height(Length::Fixed(1.0))
@@ -915,7 +925,7 @@ fn tilde_display(path: &Path) -> String {
 /// 删除确认框:居中浮层,显示目标文件名 + 确认/取消两个按钮。
 pub fn delete_confirm_popup(
     ws_state: &WorkspaceState,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some((path, is_dir)) = &ws_state.tree_delete_confirm else {
         return column![].into();
     };

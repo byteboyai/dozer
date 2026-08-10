@@ -941,8 +941,10 @@ pub enum Message {
     /// 预览:点 tab chip 上的"编辑"按钮,携带 tab 下标(渲染时发出,和
     /// `PreviewSelectTab`/`PreviewCloseTab` 同一约定)。
     PreviewEditOpen(usize),
-    /// 预览编辑弹层:`text_editor` widget 的编辑动作回调。
-    PreviewEditAction(iced_widget::text_editor::Action),
+    /// 预览编辑弹层:`iced-code-editor` 的内部消息。由 `main.rs` 的 Task
+    /// 桥接器消费(编辑产生的 `iced::Task` 在此执行剪贴板/聚焦等副作用),
+    /// 不经 `App::update`。
+    EditorEvent(iced_code_editor::Message),
     /// 预览编辑弹层:"保存"按钮 / ⌘S。
     PreviewEditSave,
     /// 预览编辑弹层:×按钮 / 点遮罩——脏改动会先转成二次确认,不直接关。
@@ -951,6 +953,12 @@ pub enum Message {
     PreviewEditConfirmDiscard,
     /// 预览编辑弹层二次确认:"取消"(回到编辑态)。
     PreviewEditConfirmCancel,
+    /// 预览 tab 右键菜单:在 `preview_pane` 某 tab 上右键打开,携带 tab 下标
+    /// 与该文件是否可编辑(仅文本类文件,决定菜单"编辑"项是否出现)。定位
+    /// 坐标复用 `files.last_right_click`(main.rs 右键时写入)。
+    PreviewTabContextMenu { idx: usize, editable: bool },
+    /// 预览 tab 右键菜单关闭(点遮罩 / 按 Esc)。
+    PreviewTabContextMenuClose,
     /// 浏览器面板的全部消息,内核只转发不解读——见
     /// `extensions::browser::Message`。
     Browser(browser::Message),
@@ -1034,6 +1042,16 @@ pub enum Message {
 /// 顶层容器:main.rs 持有的就是这个(取代此前直接持有单个 `Workspace`)。
 /// 外壳字段是整个程序只有一份的窗口态,`projects` 承载并行打开的项目
 /// 页签——每个 `Workspace` 是完全独立、同时存活的一套项目态(P2a)。
+/// 文件预览 tab 的右键菜单浮层状态:定位坐标(屏幕空间,复用 `files`
+/// 右键落点)+ 目标 tab 下标 + 该文件是否可编辑(仅文本类文件可编辑,
+/// 决定菜单里"编辑"项是否出现)。见 `preview_pane` / 顶层 `view`。
+struct PreviewTabMenu {
+    x: f32,
+    y: f32,
+    idx: usize,
+    editable: bool,
+}
+
 pub struct App {
     client: Client,
     handle: Handle,
@@ -1090,6 +1108,9 @@ pub struct App {
     dragging: Option<Divider>,
     /// Files 面板右键菜单浮层状态——见 `extensions::files::AppState`。
     files: files::AppState,
+    /// 文件预览 tab 右键菜单浮层状态(屏幕空间单例,不随项目切换各自保留);
+    /// 定位坐标复用 `files.last_right_click`(main.rs 右键时已写入)。
+    preview_tab_menu: Option<PreviewTabMenu>,
 
     /// 并行打开的项目页签:project id → 该项目的完整/占位状态。
     projects: HashMap<i64, WorkspaceSlot>,
@@ -1353,6 +1374,7 @@ impl App {
             window_size: theme::geometry::initial_window_size(),
             dragging: None,
             files: files::AppState::default(),
+            preview_tab_menu: None,
             projects: HashMap::new(),
             project_order: Vec::new(),
             active_project_id: None,
@@ -1786,7 +1808,12 @@ impl App {
 
     /// 项目树右键菜单是否打开(main.rs Esc 键路由用)。
     pub fn context_menu_open(&self) -> bool {
-        self.files.context_menu_is_some()
+        self.files.context_menu_is_some() || self.preview_tab_menu.is_some()
+    }
+
+    /// 预览 tab 右键菜单是否打开(main.rs Esc 键路由用)。
+    pub fn preview_tab_context_menu_open(&self) -> bool {
+        self.preview_tab_menu.is_some()
     }
 
     /// Agent 选择菜单是否打开(main.rs Esc 键路由用)。
@@ -1812,6 +1839,21 @@ impl App {
         self.active_workspace()
             .map(|ws| ws.edit_session.is_some())
             .unwrap_or(false)
+    }
+
+    /// 转发 `iced-code-editor` 的内部消息到当前聚焦项目的编辑器,返回编辑器
+    /// 产生的 `iced::Task`(剪贴板读写/搜索框聚焦等),交由 `main.rs` 的 Task
+    /// 桥接器执行。`iced_code_editor::Message` 经 `Message::EditorEvent` 进入
+    /// `main.rs::dispatch` 后才会走到这里。
+    pub fn preview_edit_event(
+        &mut self,
+        event: iced_code_editor::Message,
+    ) -> iced_winit::runtime::Task<iced_code_editor::Message> {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.preview_edit_event(event)
+        } else {
+            iced_winit::runtime::Task::none()
+        }
     }
 
     /// 取走"双击顶栏空白处"待处理标记(取走即清零)。main.rs 在派发完
@@ -1882,6 +1924,8 @@ impl App {
         let specs = ws.preview.desired_webviews();
         // 编辑弹层开着时,应用级模态盖住了预览区,原生 wry 子视图不听 iced
         // 绘制顺序摆布,必须显式 visible=false 才能真正藏起来。
+        // (预览 tab 右键菜单不藏 webview——它向上弹出,落在 tab 栏上方的
+        // iced 区域,根本不压到下方 webview,见 `preview_tab_context_menu_popup`。)
         if ws.edit_session.is_some() {
             specs
                 .into_iter()
@@ -2744,6 +2788,7 @@ impl App {
                 });
             }
             Message::PreviewCloseTab(idx) => {
+                self.preview_tab_menu = None;
                 self.with_focused_project(|ws, io| {
                     ws.preview.close(idx);
                     // 关 tab 后位置全变，旧 first 可能越界——归零防御（P1L T5）。
@@ -2752,10 +2797,13 @@ impl App {
                 });
             }
             Message::PreviewEditOpen(idx) => {
+                self.preview_tab_menu = None;
                 self.with_focused_project(move |ws, _io| ws.preview_edit_open(idx));
             }
-            Message::PreviewEditAction(action) => {
-                self.with_focused_project(move |ws, _io| ws.preview_edit_action(action));
+            Message::EditorEvent(_event) => {
+                // `iced-code-editor` 的内部消息走 `main.rs` 的 Task 桥接器
+                // (需要 `Clipboard` 句柄执行剪贴板副作用),这里不处理——若
+                // 真到达 `App::update` 说明事件未走 dispatch 拦截,直接忽略。
             }
             Message::PreviewEditSave => {
                 self.with_focused_project(|ws, _io| ws.preview_edit_save());
@@ -2768,6 +2816,21 @@ impl App {
             }
             Message::PreviewEditConfirmCancel => {
                 self.with_focused_project(|ws, _io| ws.preview_edit_confirm_cancel());
+            }
+            Message::PreviewTabContextMenu { idx, editable } => {
+                let (x, y) = self.files.last_right_click();
+                // 与文件树右键菜单互斥——避免两者同时挂着,关掉一个把另一个
+                // 意外顶出来。
+                self.files.close_context_menu();
+                self.preview_tab_menu = Some(PreviewTabMenu {
+                    x,
+                    y,
+                    idx,
+                    editable,
+                });
+            }
+            Message::PreviewTabContextMenuClose => {
+                self.preview_tab_menu = None;
             }
             Message::Browser(browser::Message::BookmarksLoaded(pid, bookmarks)) => {
                 self.with_project(pid, move |ws, io| {
@@ -3303,9 +3366,111 @@ impl App {
         }
     }
 
+    /// 文件预览 tab 右键菜单浮层:含"编辑"(仅可编辑文本文件)与"关闭"两项。
+    /// 定位坐标由 `PreviewTabContextMenu` 打开时记录,风格与文件树右键菜单
+    /// 一致(`files::context_menu_popup`/`menu_item`)。
+    fn preview_tab_context_menu_popup<'a>(
+        &self,
+    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+        let menu = match &self.preview_tab_menu {
+            Some(m) => m,
+            None => return column![].into(),
+        };
+        let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
+            Vec::new();
+        // 仅可编辑文本文件显示"编辑"(见 `is_editable_extension`)。
+        if menu.editable {
+            items.push(Self::preview_menu_item(
+                Some(icons::IconKind::Rename),
+                "编辑",
+                Message::PreviewEditOpen(menu.idx),
+            ));
+        }
+        items.push(Self::preview_menu_item(
+            None,
+            "关闭",
+            Message::PreviewCloseTab(menu.idx),
+        ));
+
+        let region = theme::region::context_menu();
+        let list = container(column(items).spacing(region.gap))
+            .padding(region.padding)
+            .style(move |_t: &iced_widget::Theme| container::Style {
+                background: region.background.map(Into::into),
+                border: region.border.unwrap_or_default(),
+                ..container::Style::default()
+            });
+        // 文件预览的 webview 只铺在 tab 栏**下方**的内容区(这就是 tab 栏本身
+        // 始终以 iced 显示、不被 webview 盖住的原因)。右键菜单若向下弹会压到
+        // webview、被原生子视图挡住;故改为**向上弹**——以光标为底边、向上展开,
+        // 整片落在 tab 栏上方的 iced 区域,既不被 webview 遮、也不用在菜单期间
+        // 藏掉预览内容(那个方案会让预览整片消失,体验更差)。
+        let window_h = self.window_size.1;
+        let bottom = (window_h - menu.y).max(0.0);
+        container(list)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_y(iced_widget::core::alignment::Vertical::Bottom)
+            .padding(Padding {
+                top: 0.0,
+                left: menu.x,
+                right: 0.0,
+                bottom,
+            })
+            .into()
+    }
+
+    /// 预览 tab 右键菜单单项(图标可选 + 文字按钮)。hover/pressed 切到
+    /// `TAB_HOVER` 背景,与文件树右键菜单 `menu_item` 同款。
+    fn preview_menu_item<'a>(
+        icon: Option<icons::IconKind>,
+        label: &'static str,
+        msg: Message,
+    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+        let content = match icon {
+            Some(icon) => row![
+                icons::view(icon, crate::theme::icon_size::row(), theme::color::CREAM),
+                text(label).size(theme::font::body()),
+            ],
+            None => row![text(label).size(theme::font::body())],
+        };
+        button(
+            content
+                .spacing(crate::theme::geometry::menu_gap())
+                .align_y(iced_widget::core::Alignment::Center),
+        )
+        .on_press(msg)
+        .width(Length::Fixed(crate::theme::geometry::menu_item_width()))
+        .padding([
+            crate::theme::geometry::menu_pad_v(),
+            crate::theme::geometry::menu_pad_h(),
+        ])
+        .style(|_t, s| {
+            let base = button::Style {
+                background: None,
+                text_color: theme::color::CREAM,
+                ..button::Style::default()
+            };
+            match s {
+                button::Status::Hovered | button::Status::Pressed => button::Style {
+                    background: Some(theme::color::TAB_HOVER.into()),
+                    text_color: theme::color::CREAM,
+                    border: Border {
+                        color: Color::TRANSPARENT,
+                        width: 0.0,
+                        radius: 4.0.into(),
+                    },
+                    ..base
+                },
+                _ => base,
+            }
+        })
+        .into()
+    }
+
     pub fn view(
         &self,
-    ) -> iced_widget::core::Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+    ) -> iced_widget::core::Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
         // 顶栏先画:它是外壳的一部分(项目页签行 + "＋"就在上面),一个项目都
         // 没打开时更要画得出来——否则用户没有任何入口去打开第一个项目。
         let top = top_bar(self);
@@ -3417,6 +3582,17 @@ impl App {
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
+        } else if self.preview_tab_menu.is_some() {
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::PreviewTabContextMenuClose);
+            stack![base, dismiss, self.preview_tab_context_menu_popup()]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
         } else if ws.agent_picker_open {
             let dismiss = MouseArea::new(
                 container(column![])
@@ -3490,7 +3666,7 @@ fn top_bar_font() -> Font {
 fn dozer_home_tab<'a>(
     active: bool,
     title_hover_t: f32,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 与 `project_tab_item` 用同一份高度公式,保证两者视觉同高、顶边对齐。
     let sq = crate::theme::icon_size::rail() + 14.0;
     let tab_h = (theme::geometry::top_bar_height() + sq) / 2.0;
@@ -3562,7 +3738,7 @@ fn dozer_home_tab<'a>(
     // 选中态:实底背景(左上/右上圆角) + 底部 1px 强调线,与 `project_tab_item`
     // 同一手法——`stack!` 叠加而非 `column!`,避免强调线瓜分 `select` 的
     // `Fixed` 高度导致文字居中基准跟项目页签错位(见该函数同一处注释)。
-    let inner: Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> = if active {
+    let inner: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = if active {
         container(stack![
             select,
             container(
@@ -3615,7 +3791,7 @@ fn dozer_home_tab<'a>(
         .into()
 }
 
-fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // Dozer 字标做成按钮:house 图标(`IconKind::Home`) + "Dozer"文字,
     // 点它进首页(`AppPage::Home`)。Dozer 页签:视觉与右侧项目页签一致,
     // 恒在最左、不参与拥挤收窄(D1)。
@@ -3744,7 +3920,9 @@ struct ProjectTabEntry {
 /// 这样少数页签始终是固定的"默认宽度",只有真挤了才缩。可用宽在布局期由
 ///
 /// `responsive` 实时拿到(不引入窗口尺寸依赖),再扣掉"＋"按钮与各处 gap。
-fn project_tabs_row(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn project_tabs_row(
+    app: &App,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // `active_project_id` 记的是"最后聚焦的项目",跟 Dozer Home 页签是否被
     // 选中的 `current_page` 是两套独立状态(见 `dozer_home_tab` 注释)——切去
     // Home 时 `active_project_id` 不会被清空(方便切回来时记得原项目),所以
@@ -3875,7 +4053,7 @@ fn project_tab_item<'a>(
     blink_on: bool,
     close_hover_t: f32,
     title_hover_t: f32,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 页签背景圆角半径参考 Dozer 按钮(圆角正方形)的边长 `sq`,但实际背景高
     // 用更高的 `tab_h`——页签贴底(见 `project_tabs_row` 的 `align_y(End)`)、
     // 底部留白必须是 0,可 Dozer 按钮在顶栏里是居中的,顶部留白
@@ -3961,7 +4139,10 @@ fn project_tab_item<'a>(
     // 说的 iced 按钮布局 quirk)——按钮只吃 padding,不回收多余竖向空间,
     // 裸 `text` 会贴在按钮内容区顶部,跟垂直居中的标题文字对不上。
     let close_base = theme::color::mix(theme::color::DIM, theme::color::GOLD, close_hover_t);
-    let close_color = Color { a: hover, ..close_base };
+    let close_color = Color {
+        a: hover,
+        ..close_base
+    };
     let close_btn = button(
         container(text("×").size(theme::font::body()).color(close_color))
             .width(Length::Fill)
@@ -4009,12 +4190,21 @@ fn project_tab_item<'a>(
         .align_y(iced_widget::core::alignment::Vertical::Center)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: if !active && hover > 0.0 {
-                Some(Color { a: hover, ..theme::color::TAB_HOVER }.into())
+                Some(
+                    Color {
+                        a: hover,
+                        ..theme::color::TAB_HOVER
+                    }
+                    .into(),
+                )
             } else {
                 None
             },
             border: if !active && hover > 0.0 {
-                Border { radius: 8.0.into(), ..Border::default() }
+                Border {
+                    radius: 8.0.into(),
+                    ..Border::default()
+                }
             } else {
                 Border::default()
             },
@@ -4162,7 +4352,7 @@ pub(crate) fn rail_icon_button<'a>(
     active: bool,
     hover_t: f32,
     msg: Message,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 图标颜色:选中态恒为金;未选中时 hover 平滑过渡到金(见 `HoverId`/
     // `App::hover_progress`——与光标闪烁同款自驱 redraw 动画)。SVG 颜色
     // 构建时定死、不吃 `button::Status`,所以 hover 进度靠 `hover_t` 参数从
@@ -4210,7 +4400,7 @@ pub(crate) fn rail_icon_button<'a>(
 }
 
 /// 左图标栏:文件列表 / Web 两个图标,点已激活的那个即收起左面板区。
-fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::left_icon_rail();
     // 视觉"选中"= 该视图激活 **且**左面板区展开。点已选中的图标会收起面板区,
     // 此时图标要退回未选中态(见 `LeftIconSelect`),所以 `active` 得带上
@@ -4303,7 +4493,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_wi
 }
 
 /// 右图标栏:Agent / 对话两个图标,语义同 `left_icon_rail`。
-fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::right_icon_rail();
     // 同 `left_icon_rail`:视觉"选中"需右面板区展开。
     let right_open = !app.right_collapsed;
@@ -4344,7 +4534,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_w
                 .and_then(|ws| ws.tabs.get(ws.active))
                 .map(|t| t.delivery_pending)
                 .unwrap_or(false);
-            let base: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> =
+            let base: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
                 MouseArea::new(rail_icon_button(
                     icons::IconKind::BadgeCheck,
                     app.right_view == RightView::Acceptance && right_open,
@@ -4361,7 +4551,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_w
                 ))
                 .into();
             if pending {
-                let badge: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> =
+                let badge: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
                     stack![
                         base,
                         container(iced_widget::Space::new())
@@ -4461,7 +4651,7 @@ pub(crate) fn zone_pane_border(zone: theme::region::RegionStyle, corner: PaneCor
 /// 再套一层外框会在金框内侧多出一圈视觉噪音。
 fn worktree_strip<'a>(
     worktrees: &'a [WorktreeInfo],
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 把同仓库的其他 worktree 压成一行小字,标示当前提交图对应哪个 worktree
     // 上下文。主 worktree + N 个链接 worktree 各自的分支会散落在同一条图上,
     // 这个条带帮助用户分辨 `[→main]` 到底指谁。"本工作区"是状态展示,不是
@@ -4472,7 +4662,7 @@ fn worktree_strip<'a>(
         .iter()
         .filter(|w| !w.is_current)
         .collect::<Vec<_>>();
-    let mut chips: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = vec![];
+    let mut chips: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = vec![];
     if let Some(c) = current {
         chips.push(
             text(format!(
@@ -4536,7 +4726,7 @@ fn left_panel_area<'a>(
     app: &'a App,
     ws: &'a Workspace,
     maximized: bool,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     if app.left_collapsed {
         return if app.right_collapsed {
             iced_widget::space::horizontal().into()
@@ -4555,121 +4745,121 @@ fn left_panel_area<'a>(
     } else {
         (PaneCorner::Left, PaneCorner::Right, PaneCorner::All)
     };
-    let inner: Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> = match app.left_view
-    {
-        LeftView::Files => {
-            let (list_portion, content_portion) = split_portions(app.shell_layout.files_split);
-            let list_pane: Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> =
-                if ws.project.is_some() {
-                    files::view(
-                        &ws.files,
-                        Length::FillPortion(list_portion),
-                        zone_pane_border(zone, lc),
-                    )
-                    .map(Message::Files)
-                } else {
-                    no_project_placeholder(
+    let inner: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        match app.left_view {
+            LeftView::Files => {
+                let (list_portion, content_portion) = split_portions(app.shell_layout.files_split);
+                let list_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+                    if ws.project.is_some() {
+                        files::view(
+                            &ws.files,
+                            Length::FillPortion(list_portion),
+                            zone_pane_border(zone, lc),
+                        )
+                        .map(Message::Files)
+                    } else {
+                        no_project_placeholder(
+                            ws,
+                            Length::FillPortion(list_portion),
+                            zone_pane_border(zone, lc),
+                        )
+                    };
+                row![
+                    list_pane,
+                    divider_bar(
+                        Divider::LeftPairSplit,
+                        theme::region::project_pane()
+                            .background
+                            .unwrap_or(theme::color::BG),
+                        theme::region::preview_pane()
+                            .background
+                            .unwrap_or(theme::color::BG),
+                    ),
+                    preview_pane(
+                        app,
                         ws,
-                        Length::FillPortion(list_portion),
-                        zone_pane_border(zone, lc),
-                    )
+                        Length::FillPortion(content_portion),
+                        zone_pane_border(zone, rc)
+                    ),
+                ]
+                .width(Length::Fill)
+                .into()
+            }
+            LeftView::Web => browser::view(
+                &ws.browser,
+                ws.project.as_ref().map(|p| p.id),
+                Length::Fill,
+                zone_pane_border(zone, ac),
+            )
+            .map(Message::Browser),
+            LeftView::GitLog => git_log::view(&app.git_log).map(Message::GitLog),
+            LeftView::Todo => {
+                let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
+                    return column![].into();
                 };
-            row![
-                list_pane,
-                divider_bar(
-                    Divider::LeftPairSplit,
-                    theme::region::project_pane()
-                        .background
-                        .unwrap_or(theme::color::BG),
-                    theme::region::preview_pane()
-                        .background
-                        .unwrap_or(theme::color::BG),
-                ),
-                preview_pane(
-                    app,
-                    ws,
-                    Length::FillPortion(content_portion),
-                    zone_pane_border(zone, rc)
-                ),
-            ]
-            .width(Length::Fill)
-            .into()
-        }
-        LeftView::Web => browser::view(
-            &ws.browser,
-            ws.project.as_ref().map(|p| p.id),
-            Length::Fill,
-            zone_pane_border(zone, ac),
-        )
-        .map(Message::Browser),
-        LeftView::GitLog => git_log::view(&app.git_log).map(Message::GitLog),
-        LeftView::Todo => {
-            let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
-                return column![].into();
-            };
-            let tabs: Vec<todo::SessionTabSummary> = ws
-                .tabs
-                .iter()
-                .map(|t| todo::SessionTabSummary {
-                    session_id: t.info.id.clone(),
-                    title: tab_title(t.agent, t.cwd.as_deref(), &t.info.name),
-                    alive: t.alive,
-                })
-                .collect();
-            todo::view(
-                &app.todo,
-                &ws.todo,
-                project_id,
-                &tabs,
+                let tabs: Vec<todo::SessionTabSummary> = ws
+                    .tabs
+                    .iter()
+                    .map(|t| todo::SessionTabSummary {
+                        session_id: t.info.id.clone(),
+                        title: tab_title(t.agent, t.cwd.as_deref(), &t.info.name),
+                        alive: t.alive,
+                    })
+                    .collect();
+                todo::view(
+                    &app.todo,
+                    &ws.todo,
+                    project_id,
+                    &tabs,
+                    Length::Fill,
+                    zone_pane_border(zone, ac),
+                )
+                .map(Message::Todo)
+            }
+            LeftView::Project => project::view(
+                &ws.project_panel,
+                ws.project.as_ref(),
                 Length::Fill,
                 zone_pane_border(zone, ac),
             )
-            .map(Message::Todo)
-        }
-        LeftView::Project => project::view(
-            &ws.project_panel,
-            ws.project.as_ref(),
-            Length::Fill,
-            zone_pane_border(zone, ac),
-        )
-        .map(Message::Project),
-        LeftView::Database => {
-            // 数据库面板需要项目已打开才能读写 `.dozer/database.json`。
-            if ws.project.is_none() {
-                return column![].into();
+            .map(Message::Project),
+            LeftView::Database => {
+                // 数据库面板需要项目已打开才能读写 `.dozer/database.json`。
+                if ws.project.is_none() {
+                    return column![].into();
+                }
+                database::view(
+                    &app.database,
+                    &ws.database,
+                    Length::Fill,
+                    zone_pane_border(zone, ac),
+                )
+                .map(Message::Database)
             }
-            database::view(
-                &app.database,
-                &ws.database,
-                Length::Fill,
-                zone_pane_border(zone, ac),
-            )
-            .map(Message::Database)
-        }
-        LeftView::Ssh => {
-            // 同 Files/Database 面板:`ws.project.is_none()` 是 Stub→Loaded
-            // 促成期间的占位态,这时不该渲染出一个看似可点、实际上
-            // `Message::Ssh` 分发会被内核静默吞掉(无 project 时直接
-            // return)的"＋新增主机"按钮。
-            if ws.project.is_none() {
-                return column![].into();
+            LeftView::Ssh => {
+                // 同 Files/Database 面板:`ws.project.is_none()` 是 Stub→Loaded
+                // 促成期间的占位态,这时不该渲染出一个看似可点、实际上
+                // `Message::Ssh` 分发会被内核静默吞掉(无 project 时直接
+                // return)的"＋新增主机"按钮。
+                if ws.project.is_none() {
+                    return column![].into();
+                }
+                ssh::view(&ws.ssh, Length::Fill, zone_pane_border(zone, ac)).map(Message::Ssh)
             }
-            ssh::view(&ws.ssh, Length::Fill, zone_pane_border(zone, ac)).map(Message::Ssh)
-        }
-    };
+        };
     if maximized {
         return inner;
     }
     let region = zone;
     // 哪怕提交图还没画出来(加载中/出错/空仓库),worktree 速览条也该照常
     // 显示——用户可能就是先想看看有哪些 worktree,不必等图先画出来。
-    let strip: Option<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> =
+    let strip: Option<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
         if app.left_view == LeftView::GitLog {
             Some(worktree_strip(ws.project_panel.worktrees()))
         } else {
             None
         };
-    let mut zone_body: Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> = inner;
+    let mut zone_body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> = inner;
     if let Some(strip) = strip {
         zone_body = column![strip, zone_body]
             .width(Length::Fill)
@@ -4717,7 +4907,7 @@ fn right_panel_area<'a>(
     app: &'a App,
     ws: &'a Workspace,
     maximized: bool,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     if app.right_collapsed {
         return column![].into();
     }
@@ -4735,7 +4925,7 @@ fn right_panel_area<'a>(
     } else {
         (PaneCorner::Left, PaneCorner::Right, PaneCorner::All)
     };
-    let inner: Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> =
+    let inner: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         match app.right_view {
             RightView::Agent => {
                 let (list_portion, content_portion) = split_portions(app.shell_layout.agent_split);
@@ -4842,7 +5032,7 @@ fn maximize_overlay<'a>(
     app: &'a App,
     ws: &'a Workspace,
     which: MaximizedPane,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let inner = match which {
         MaximizedPane::Left => left_panel_area(app, ws, true),
         MaximizedPane::Right => right_panel_area(app, ws, true),
@@ -4913,7 +5103,7 @@ fn terminal_pane<'a>(
     ws: &'a Workspace,
     width: Length,
     outer: Border,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::terminal_pane();
     let mut content = column![tab_bar(app, ws)].spacing(region.gap);
 
@@ -4978,7 +5168,7 @@ fn divider_bar<'a>(
     divider: Divider,
     left_bg: Color,
     right_bg: Color,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let show_line = !matches!(divider, Divider::LeftRight);
     if !show_line {
         let gap = iced_widget::Space::new()
@@ -5026,7 +5216,7 @@ pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
     icon: icons::IconKind,
     enabled: bool,
     msg: M,
-) -> Element<'a, M, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
     // 激活(可点)态用 `#dcc9a3`(同顶栏选中页签描边 `TAB_ACTIVE_BORDER`),
     // 静止不再用金;hover 再跳到金 `#F2D94E` 提亮。
     let color = if enabled {
@@ -5072,7 +5262,7 @@ pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
 }
 
 /// tab 栏下方的 1px 分割线。
-pub(crate) fn tab_divider<'a, M: 'a>() -> Element<'a, M, iced_widget::Theme, iced_widget::Renderer>
+pub(crate) fn tab_divider<'a, M: 'a>() -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>
 {
     container(iced_widget::Space::new())
         .width(Length::Fill)
@@ -5106,13 +5296,13 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
     active: bool,
     hover_t: f32,
     close_hover_t: f32,
-    prefix: Option<Element<'a, M, iced_widget::Theme, iced_widget::Renderer>>,
-    suffix: Option<Element<'a, M, iced_widget::Theme, iced_widget::Renderer>>,
+    prefix: Option<Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>>,
+    suffix: Option<Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>>,
     on_select: M,
     on_close: M,
     title_hover: impl Fn(bool) -> M + 'a,
     close_hover: impl Fn(bool) -> M + 'a,
-) -> Element<'a, M, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
     let close_sz = crate::theme::geometry::tab_button_size();
     // 组合 hover:悬停标题或 × 任一,胶囊背景都浮现、× 显形。
     let hover = hover_t.max(close_hover_t).clamp(0.0, 1.0);
@@ -5164,7 +5354,10 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
     // × 默认隐藏(hover==0 时 alpha=0),悬停页签任一区域才显形;颜色随
     // `close_hover_t` 从 DIM→GOLD。未悬停不挂 `on_press`,避免隐形 × 误吞点击。
     let close_base = theme::color::mix(theme::color::DIM, theme::color::GOLD, close_hover_t);
-    let close_color = Color { a: hover, ..close_base };
+    let close_color = Color {
+        a: hover,
+        ..close_base
+    };
     let close_btn = button(
         container(
             text("×")
@@ -5225,8 +5418,17 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
             } else if hover > 0.0 {
                 // 悬停胶囊铺满整片 tab(含 × 区),× 落在其内部。
                 container::Style {
-                    background: Some(Color { a: hover, ..theme::color::TAB_HOVER }.into()),
-                    border: Border { radius: 6.0.into(), ..Border::default() },
+                    background: Some(
+                        Color {
+                            a: hover,
+                            ..theme::color::TAB_HOVER
+                        }
+                        .into(),
+                    ),
+                    border: Border {
+                        radius: 6.0.into(),
+                        ..Border::default()
+                    },
                     ..container::Style::default()
                 }
             } else {
@@ -5272,7 +5474,7 @@ fn fit_title(title: &str, max_w: f32) -> String {
 fn tab_bar<'a>(
     app: &'a App,
     ws: &'a Workspace,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let widths: Vec<f32> = ws
         .tabs
         .iter()
@@ -5285,7 +5487,7 @@ fn tab_bar<'a>(
         ws.term_tab_first,
     );
 
-    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = ws
+    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = ws
         .tabs
         .iter()
         .enumerate()
@@ -5371,7 +5573,7 @@ fn tab_item(
     blink_on: bool,
     title_hover_t: f32,
     close_hover_t: f32,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let working = tab.alive && tab.agent_state == AgentState::Running;
     let mut color = dot_color(tab.agent_state, tab.alive);
     // 工作中且处于暗相位：把点点压到近乎透明，形成"呼吸"般的闪烁。
@@ -5399,7 +5601,7 @@ fn tab_item(
 fn active_tab_view<'a>(
     app: &'a App,
     ws: &'a Workspace,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     match ws.tabs.get(ws.active) {
         Some(tab) => term_view::view(&tab.model, app.term_focused),
         None => container(

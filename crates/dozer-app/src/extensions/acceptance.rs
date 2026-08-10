@@ -301,7 +301,7 @@ pub fn view<'a>(
     ws_state: &'a WorkspaceState,
     width: Length,
     outer: Border,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(session) = ws_state.session() else {
         return container(
             text("没有待验收的交付——完成一轮 agent 会话后,点这个图标就能看到")
@@ -490,7 +490,7 @@ pub fn view<'a>(
 /// `Err(e)` 显示红字,`None`(还没加载完)显示"加载中…"。
 fn diff_view<'a>(
     diff: Option<&'a Result<String, String>>,
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     match diff {
         None => text("加载中…")
             .size(theme::font::caption())

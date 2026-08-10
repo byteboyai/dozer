@@ -1000,7 +1000,7 @@ pub fn request_bookmarks_refresh(
 fn star_button(
     state: &State,
     project_id: Option<i64>,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let url = state
         .tabs
         .tabs()
@@ -1034,7 +1034,7 @@ fn star_button(
 fn bookmark_menu_row(
     label: String,
     msg: Message,
-) -> Element<'static, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     button(lh(text(label)
         .size(theme::font::body())
         .color(theme::color::CREAM)))
@@ -1053,7 +1053,7 @@ fn bookmark_menu_row(
 fn star_menu_popup(
     state: &State,
     project_id: Option<i64>,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(url) = state
         .tabs
         .tabs()
@@ -1104,7 +1104,7 @@ fn star_menu_popup(
 fn bookmark_group<'a>(
     title: &'static str,
     items: &[&'a BookmarkInfo],
-) -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![lh(text(title)
         .size(theme::font::subtitle())
         .color(theme::color::DIM))]
@@ -1142,7 +1142,7 @@ fn bookmark_group<'a>(
 fn bookmarks_panel(
     state: &State,
     project_id: Option<i64>,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let global: Vec<&BookmarkInfo> = state
         .bookmarks
         .iter()
@@ -1189,7 +1189,7 @@ pub fn view(
     project_id: Option<i64>,
     width: Length,
     outer: Border,
-) -> Element<'_, Message, iced_widget::Theme, iced_widget::Renderer> {
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::browser_pane();
     let widths: Vec<f32> = state
         .tabs
@@ -1204,7 +1204,7 @@ pub fn view(
         state.tab_first,
     );
 
-    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_widget::Renderer>> = state
+    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = state
         .tabs
         .tabs()
         .iter()
@@ -1319,7 +1319,7 @@ pub fn view(
 }
 
 /// tab 栏"收藏夹"下拉面板触发按钮。返回带收藏夹切换消息的按钮。
-fn bookmarks_toggle_button<'a>() -> Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>
+fn bookmarks_toggle_button<'a>() -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>
 {
     button(icons::view(
         icons::IconKind::Bookmark,
