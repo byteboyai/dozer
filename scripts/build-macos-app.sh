@@ -14,7 +14,7 @@ esac
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PACKAGING_DIR="$ROOT_DIR/crates/dozer-app/packaging/macos"
-APP_NAME="Dozer"
+APP_NAME="Dozer AI Coder"
 BIN_NAME="dozer"
 
 # Ask cargo for the built executable's actual path via JSON output, rather

@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key>
-  <string>Dozer</string>
+  <string>Dozer AI Coder</string>
   <key>CFBundleDisplayName</key>
-  <string>Dozer</string>
+  <string>Dozer AI Coder</string>
   <key>CFBundleIdentifier</key>
   <string>com.byteboy.dozer</string>
   <key>CFBundleVersion</key>
