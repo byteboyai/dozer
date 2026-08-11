@@ -13,11 +13,20 @@ pub enum IconKind {
     ChevronLeft,
     ChevronRight,
     ChevronDown,
+    /// 文件树底部分支切换按钮在弹层**展开**态下的图标(Lucide chevron-up):
+    /// 收起时为 `ChevronDown`,展开后翻转,提示"点此收起弹层"。
+    ChevronUp,
     Folder,
     FolderOpen,
     /// 文件树根目录头部图标(Lucide folder-open-dot:展开的文件夹 + 右上圆点,
     /// 醒目标识项目根)。
     FolderOpenDot,
+    /// 文件树底部 git 分支栏图标(Lucide folder-git-2:文件夹 + git 分支/网络,
+    /// 表示当前项目在 git 仓库内)。
+    FolderGit2,
+    /// 文件树底部"未受 git 保护"栏图标(Lucide folder-minus:文件夹 + 减号,
+    /// 表示当前项目尚无 git 仓库)。
+    FolderMinus,
     FolderTree,
     FileCode,
     FileJson,
@@ -113,9 +122,12 @@ impl IconKind {
             IconKind::ChevronLeft => include_bytes!("../assets/icons/chevron-left.svg"),
             IconKind::ChevronRight => include_bytes!("../assets/icons/chevron-right.svg"),
             IconKind::ChevronDown => include_bytes!("../assets/icons/chevron-down.svg"),
+            IconKind::ChevronUp => include_bytes!("../assets/icons/chevron-up.svg"),
             IconKind::Folder => include_bytes!("../assets/icons/folder.svg"),
             IconKind::FolderOpen => include_bytes!("../assets/icons/folder-open.svg"),
             IconKind::FolderOpenDot => include_bytes!("../assets/icons/folder-open-dot.svg"),
+            IconKind::FolderGit2 => include_bytes!("../assets/icons/folder-git-2.svg"),
+            IconKind::FolderMinus => include_bytes!("../assets/icons/folder-minus.svg"),
             IconKind::FolderTree => include_bytes!("../assets/icons/folder-tree.svg"),
             IconKind::FileCode => include_bytes!("../assets/icons/file-code.svg"),
             IconKind::FileJson => include_bytes!("../assets/icons/braces.svg"),

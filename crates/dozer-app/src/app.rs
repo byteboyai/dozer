@@ -1845,6 +1845,23 @@ impl App {
         self.files.context_menu_is_some() || self.preview_tab_menu.is_some()
     }
 
+    /// 当前右键菜单的屏幕矩形 `(x, y, w, h)`(逻辑像素)。文件树与预览 tab
+    /// 两种右键菜单都复用 `files.last_right_click` 定位、同宽同高的主题菜单
+    /// 尺寸,所以共用这一套取法。main.rs 判断"菜单是否盖到预览 webview"
+    /// 时用;没开菜单返回 `None`。
+    pub fn context_menu_rect(&self) -> Option<(f32, f32, f32, f32)> {
+        if !self.context_menu_open() {
+            return None;
+        }
+        let (x, y) = self.files.last_right_click();
+        Some((
+            x,
+            y,
+            theme::geometry::context_menu_width(),
+            theme::geometry::context_menu_height(),
+        ))
+    }
+
     /// 预览 tab 右键菜单是否打开(main.rs Esc 键路由用)。
     pub fn preview_tab_context_menu_open(&self) -> bool {
         self.preview_tab_menu.is_some()
@@ -3216,6 +3233,16 @@ impl App {
                 };
                 files::update(&mut ws.files, app_files, msg, project_id, &handle, emit);
             }
+            Message::Files(files::Message::ToolbarHover(target, hovered)) => {
+                // 文件树工具行 icon 按钮的 hover:本面板不挂 App 的 hover 动画
+                // 表,把进入/离开转发成 `HoverId` 由内核统一驱动动画进度。
+                let id = match target {
+                    files::FilesToolbarTarget::SearchSubmit => HoverId::FilesSearchSubmit,
+                    files::FilesToolbarTarget::Dotfiles => HoverId::FilesDotfiles,
+                    files::FilesToolbarTarget::BranchSwitch => HoverId::FilesBranchSwitch,
+                };
+                self.set_hover(id, hovered);
+            }
             Message::Files(msg) => {
                 let Some(project_id) = self.active_project_id else {
                     return;
@@ -3628,6 +3655,24 @@ impl App {
                 base,
                 dismiss,
                 files::context_menu_popup(&self.files, &ws.files).map(Message::Files)
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        } else if ws.files.branch_picker_is_open() {
+            // 分支切换弹层:窗口级浮层。下层铺一块透明 `MouseArea` 承接
+            // "点弹层外的任何地方收起"(与右键菜单同款 dismiss 约定),弹层
+            // 本体(`branch_picker_popup`)只占 git 底栏上方一隅。
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::Files(files::Message::BranchPickerClose));
+            stack![
+                base,
+                dismiss,
+                files::branch_picker_popup(&ws.files).map(Message::Files)
             ]
             .width(Length::Fill)
             .height(Length::Fill)
@@ -4736,6 +4781,9 @@ fn left_panel_area<'a>(
                             &ws.files,
                             Length::FillPortion(list_portion),
                             zone_pane_border(zone, lc),
+                            app.hover_progress(HoverId::FilesSearchSubmit),
+                            app.hover_progress(HoverId::FilesDotfiles),
+                            app.hover_progress(HoverId::FilesBranchSwitch),
                         )
                         .map(Message::Files)
                     } else {

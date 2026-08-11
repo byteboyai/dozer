@@ -60,6 +60,33 @@ pub struct WorkspaceState {
     /// 按键路由成 `SearchEvent`,不再喂给 PTY——否则在搜索框里打字会同时
     /// 漏进已聚焦的终端(本项目所有文本输入都是自绘,理由一致)。
     search_editing: bool,
+    /// 底部 git 分支栏信息是否已加载(`GitInfoLoaded` 送达前为 false,此时
+    /// 分支栏显示中性"…"占位)。
+    git_loaded: bool,
+    /// 项目根目录是否在 git 仓库内(决定底栏显示"分支切换"还是
+    /// "未受 git 保护 / 新建仓库")。
+    git_is_repo: bool,
+    /// 当前分支名(detached HEAD / 无提交时为 None)。
+    current_branch: Option<String>,
+    /// 当前分支是否已有至少一次提交(unborn/空仓为 false)。分支菜单据此把
+    /// 其余分支置灰禁用 `BranchPickerOpen` 时的渲染用)。
+    current_branch_has_commits: bool,
+    /// 本地分支列表(仅 git 仓库内有意义;空则无分支可切)。
+    git_branches: Vec<String>,
+    /// 分支切换弹层是否展开(展开时在底栏上方罗列可切换的本地分支)。
+    branch_picker_open: bool,
+    /// 底栏 git 操作(切换分支/新建仓库)的最近错误,就地显示在底栏下缘。
+    git_error: Option<String>,
+}
+
+/// 一次 git 仓库信息加载的结果(分支栏渲染用)。判"是否在仓库内"靠
+/// `repo_root().is_some()`,再取当前分支与本地分支表。
+#[derive(Debug, Clone, PartialEq)]
+pub struct GitInfo {
+    pub is_repo: bool,
+    pub current_branch: Option<String>,
+    pub current_branch_has_commits: bool,
+    pub branches: Vec<String>,
 }
 
 /// 挂在 App 上的右键菜单浮层状态(屏幕空间单例,不随项目切换各自保留)。
@@ -119,6 +146,40 @@ pub enum Message {
     /// 切换"显示/隐藏以 `.` 开头的文件/目录"(搜索框后的眼睛按钮)。翻转
     /// 后调用 `file_tree.set_show_dotfiles` 重读已缓存目录,让树立刻反映。
     ToggleDotfiles,
+    /// 触发一次 git 仓库信息加载(判仓库/当前分支/本地分支表)。项目刚打开
+    /// 或 git 文件变化(`StatusesRefreshed` 送达)时随之触发,结果回传
+    /// `GitInfoLoaded`。
+    GitInfoRefresh,
+    /// 异步加载 git 仓库信息的结果:落 `git_is_repo`/`current_branch`/
+    /// `git_branches` 并置 `git_loaded`。
+    GitInfoLoaded(i64, GitInfo),
+    /// 展开/收起底部分支切换弹层。
+    BranchPickerOpen,
+    BranchPickerClose,
+    /// 用户从分支列表选中 `name`:异步 `git checkout` 切换,结果回传
+    /// `BranchSwitchDone`。
+    BranchSwitch(String),
+    /// 切换分支的异步结果;成功后仓库的 HEAD/refs 变化会被 git_watch 拾起、
+    /// 触发 git 状态刷新,文件树随之更新。
+    BranchSwitchDone(i64, Result<(), String>),
+    /// 项目无 git 仓库时点"新建仓库":异步 `git init` 创建,结果回传
+    /// `GitInitDone`。
+    GitInit,
+    GitInitDone(i64, Result<(), String>),
+    /// 文件树工具行(搜索按钮/点文件按钮/底部分支切换按钮)的 hover 进入/
+    /// 离开。文件树面板只有 `WorkspaceState`,不挂内核 `App` 的 hover 动画
+    /// 表,`view` 通过传入的 `hover_t` 参数取动画进度,进入/离开则以本消息
+    /// 上报给内核(`Message::Files` 分支里转发到 `HoverId`)。
+    ToolbarHover(FilesToolbarTarget, bool),
+}
+
+/// 文件树工具行里带 hover 动画的 icon 按钮。与内核 `HoverId` 一一对应
+/// (`HoverId::FilesSearchSubmit` / `FilesDotfiles` / `FilesBranchSwitch`)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilesToolbarTarget {
+    SearchSubmit,
+    Dotfiles,
+    BranchSwitch,
 }
 
 impl WorkspaceState {
@@ -167,6 +228,11 @@ impl WorkspaceState {
     /// 是否处于自绘编辑态。
     pub fn search_editing(&self) -> bool {
         self.search_editing
+    }
+
+    /// 分支切换弹层是否展开(`App::view()` 顶层互斥浮层判断链用)。
+    pub fn branch_picker_is_open(&self) -> bool {
+        self.branch_picker_open
     }
 
     /// 供内核 `Workspace::tree_editing`(main.rs 键盘路由用,判断项目树是否
@@ -367,8 +433,11 @@ pub fn update(
                 tree.toggle(&dir);
             }
         }
-        Message::StatusesRefreshed(_, statuses) => {
+        Message::StatusesRefreshed(project_id, statuses) => {
             ws_state.git_statuses = statuses;
+            // 项目 git 状态更新(git_watch 拾起 HEAD/refs 变化后)常伴随分支
+            // 切换,顺手把分支栏的仓库信息一并刷新,让底栏与树保持一致。
+            spawn_git_info_load(ws_state, project_id, handle, emit);
         }
         Message::RightClickAt { x, y } => {
             app_state.last_right_click = (x, y);
@@ -376,6 +445,9 @@ pub fn update(
         Message::ContextMenuOpen { path, is_dir } => {
             let (x, y) = app_state.last_right_click;
             ws_state.tree_selected = Some(path.clone());
+            // 与分支切换弹层互斥:开右键菜单时收起分支弹层,避免两个浮层
+            // 同时挂着(同 `PreviewTabContextMenu` 关文件树右键菜单的约定)。
+            ws_state.branch_picker_open = false;
             app_state.context_menu = Some(ContextMenu {
                 x,
                 y,
@@ -507,6 +579,74 @@ pub fn update(
                 tree.set_show_dotfiles(!tree.dotfiles_shown());
             }
         }
+        Message::GitInfoRefresh => {
+            spawn_git_info_load(ws_state, project_id, handle, emit);
+        }
+        Message::GitInfoLoaded(_, info) => {
+            ws_state.git_loaded = true;
+            ws_state.git_is_repo = info.is_repo;
+            ws_state.current_branch = info.current_branch;
+            ws_state.current_branch_has_commits = info.current_branch_has_commits;
+            ws_state.git_branches = info.branches;
+        }
+        Message::BranchPickerOpen => {
+            ws_state.branch_picker_open = true;
+            ws_state.git_error = None;
+        }
+        Message::BranchPickerClose => {
+            ws_state.branch_picker_open = false;
+        }
+        Message::BranchSwitch(name) => {
+            ws_state.branch_picker_open = false;
+            ws_state.git_error = None;
+            let Some(tree) = &ws_state.file_tree else {
+                return;
+            };
+            let root = tree.root().to_path_buf();
+            handle.spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::delivery::checkout_branch(&root, &name)
+                })
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()));
+                emit(Message::BranchSwitchDone(project_id, result));
+            });
+        }
+        Message::BranchSwitchDone(_, result) => {
+            match result {
+                Ok(()) => {
+                    // checkout 成功后 HEAD/refs 变化由 git_watch 拾起,会再次
+                    // 触发 StatusesRefreshed → spawn_git_info_load。这里再主动
+                    // 刷一次分支信息(脱离 watch 兜底,如未启动 watch 时)。
+                    spawn_git_info_load(ws_state, project_id, handle, emit);
+                }
+                Err(e) => ws_state.git_error = Some(e),
+            }
+        }
+        Message::GitInit => {
+            ws_state.git_error = None;
+            if let Some(tree) = &ws_state.file_tree {
+                let root = tree.root().to_path_buf();
+                handle.spawn(async move {
+                    let result = tokio::task::spawn_blocking(move || {
+                        crate::delivery::init_repo(&root)
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+                    emit(Message::GitInitDone(project_id, result));
+                });
+            }
+        }
+        Message::GitInitDone(_, result) => match result {
+            Ok(()) => {
+                ws_state.git_loaded = true;
+                ws_state.git_is_repo = true;
+                // 新建的空仓库没有提交/分支,分支栏仍显示"分支切换"态但当前
+                // 分支为空;git status / 文件树颜色等后续由 git_watch 正常驱动。
+                spawn_git_info_load(ws_state, project_id, handle, emit);
+            }
+            Err(e) => ws_state.git_error = Some(e),
+        },
         Message::RenameStart(path) => {
             app_state.context_menu = None;
             ws_state.tree_error = None;
@@ -542,7 +682,53 @@ pub fn update(
         Message::OpenFile(_) => {
             unreachable!("由内核拦截处理,见 files::Message::OpenFile 文档")
         }
+        // 工具行 icon 按钮的 hover 由内核 `Message::Files` 分支转发到
+        // `HoverId`(文件树面板不挂 App 的 hover 动画表),`update` 吃不到
+        // 这里;保 no-op 分支维持 match 穷尽。
+        Message::ToolbarHover(..) => {}
     }
+}
+
+/// 异步加载一次 git 仓库信息:判项目根是否在仓库内、读当前分支、读本地分支
+/// 表,结果通过 `emit(GitInfoLoaded(..))` 回投。走 `spawn_blocking` 防止阻塞
+/// UI 线程(交付层的 git 调用都是同步阻塞,见 delivery.rs 模块头注释)。
+fn spawn_git_info_load(
+    ws_state: &WorkspaceState,
+    project_id: i64,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    let Some(tree) = &ws_state.file_tree else {
+        return;
+    };
+    let root = tree.root().to_path_buf();
+    handle.spawn(async move {
+        let info = tokio::task::spawn_blocking(move || {
+            use crate::delivery::{branch, current_branch_has_commits, local_branches, repo_root};
+            match repo_root(&root) {
+                Some(repo) => GitInfo {
+                    is_repo: true,
+                    current_branch: branch(&repo),
+                    current_branch_has_commits: current_branch_has_commits(&repo),
+                    branches: local_branches(&repo).unwrap_or_default(),
+                },
+                None => GitInfo {
+                    is_repo: false,
+                    current_branch: None,
+                    current_branch_has_commits: false,
+                    branches: Vec::new(),
+                },
+            }
+        })
+        .await
+        .unwrap_or_else(|_| GitInfo {
+            is_repo: false,
+            current_branch: None,
+            current_branch_has_commits: false,
+            branches: Vec::new(),
+        });
+        emit(Message::GitInfoLoaded(project_id, info));
+    });
 }
 
 /// 文件树可滚动列表(现有 `workspace.rs::project_pane` 的搬家版本,签名改吃
@@ -551,6 +737,9 @@ pub fn view<'a>(
     ws_state: &'a WorkspaceState,
     width: Length,
     outer: Border,
+    search_hover_t: f32,
+    dotfiles_hover_t: f32,
+    branch_hover_t: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::project_pane();
     let mut header = column![].spacing(region.gap).width(Length::Fill);
@@ -568,23 +757,22 @@ pub fn view<'a>(
         ws_state.search_editing,
         search_active,
     );
-    let search_button = button(icons::view(
-        icons::IconKind::FolderSearch,
-        crate::theme::icon_size::row(),
-        theme::color::CREAM,
-    ))
-    .on_press(Message::SearchSubmit)
-    .padding([6, 8])
-    .style(|_t: &iced_widget::Theme, _s| button::Style {
-        background: Some(theme::color::CARD.into()),
-        border: Border {
-            color: theme::color::BORDER,
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        text_color: theme::color::CREAM,
-        ..button::Style::default()
-    });
+    let box_len = crate::theme::icon_size::row() + 12.0;
+    let search_button = MouseArea::new(
+        icons::icon_button(
+            icons::IconKind::FolderSearch,
+            crate::theme::icon_size::row(),
+            false,
+            search_hover_t,
+            true,
+        )
+        .width(Length::Fixed(box_len))
+        .height(Length::Fixed(box_len))
+        .on_press(Message::SearchSubmit),
+    )
+    .interaction(iced_widget::core::mouse::Interaction::Pointer)
+    .on_enter(Message::ToolbarHover(FilesToolbarTarget::SearchSubmit, true))
+    .on_exit(Message::ToolbarHover(FilesToolbarTarget::SearchSubmit, false));
 
     // "显示/隐藏点文件"按钮:切换后 `ToggleDotfiles` 调
     // `set_show_dotfiles` 重读树。图标反映当前口径——正显示(`eye`)时点它
@@ -595,45 +783,35 @@ pub fn view<'a>(
         .as_ref()
         .map(|t| t.dotfiles_shown())
         .unwrap_or(true);
-    let dotfiles_button = button(icons::view(
-        if dotfiles_shown {
-            icons::IconKind::Eye
-        } else {
-            icons::IconKind::EyeOff
-        },
-        crate::theme::icon_size::row(),
-        if dotfiles_shown {
-            theme::color::CREAM
-        } else {
-            theme::color::GOLD
-        },
-    ))
-    .on_press(Message::ToggleDotfiles)
-    .padding([6, 8])
-    .style(move |_t: &iced_widget::Theme, _s| button::Style {
-        background: Some(theme::color::CARD.into()),
-        border: Border {
-            color: if dotfiles_shown {
-                theme::color::BORDER
+    let dotfiles_button = MouseArea::new(
+        icons::icon_button(
+            if dotfiles_shown {
+                icons::IconKind::Eye
             } else {
-                theme::color::GOLD
+                icons::IconKind::EyeOff
             },
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        text_color: theme::color::CREAM,
-        ..button::Style::default()
-    });
-    header = header.push(
+            crate::theme::icon_size::row(),
+            !dotfiles_shown,
+            dotfiles_hover_t,
+            true,
+        )
+        .width(Length::Fixed(box_len))
+        .height(Length::Fixed(box_len))
+        .on_press(Message::ToggleDotfiles),
+    )
+    .interaction(iced_widget::core::mouse::Interaction::Pointer)
+    .on_enter(Message::ToolbarHover(FilesToolbarTarget::Dotfiles, true))
+    .on_exit(Message::ToolbarHover(FilesToolbarTarget::Dotfiles, false));    header = header.push(
         row![search_box, search_button, dotfiles_button]
             .spacing(6)
-            .align_y(iced_widget::core::Alignment::Center),
+            .align_y(iced_widget::core::Alignment::Center)
+            .padding([6, 0]),
     );
 
     // 根目录头部:只显示名称(CREAM 高亮),不再直接显示完整路径;名称前
     // 挂 folder-open-dot 图标(lucide 的展开文件夹 + 圆点,有别于普通展开目录
-    // 的 folder-open,特标项目根)。顶部留一点边距,把根目录头和上方
-    // 搜索/点文件工具行分隔开。右键根目录打开目录右键菜单(新建文件/文件夹、
+    // 的 folder-open,特标项目根)。与上方工具行的间距由搜索行的底部 padding
+    // 承担,这里不再额外加顶边距。右键根目录打开目录右键菜单(新建文件/文件夹、
     // 复制、粘贴、删除、重命名、在 Finder 打开、从磁盘重新加载…),坐标复用
     // `main.rs` 右键时写入的 `last_right_click`。
     if let Some(tree) = &ws_state.file_tree {
@@ -642,22 +820,27 @@ pub fn view<'a>(
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| root.display().to_string());
+        // 根目录名称颜色跟着 git 状态走(与树行同款 `tree_state_color`),
+        // 图标恒为灰(`DIM`),不再用 CREAM 高亮。
+        let root_state = delivery::dir_status(&root.to_path_buf(), &ws_state.git_statuses)
+            .unwrap_or(delivery::TreeState::Unchanged);
+        let root_color = tree_state_color(root_state);
         let root_header = container(
             row![
                 icons::view(
                     icons::IconKind::FolderOpenDot,
                     crate::theme::icon_size::row(),
-                    theme::color::CREAM
+                    theme::color::DIM
                 ),
                 text(name)
                     .size(theme::font::body())
-                    .color(theme::color::CREAM),
+                    .color(root_color),
             ]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center),
         )
         .width(Length::Fill)
-        .padding([8, 0]);
+        .padding([0, 0]);
         header = header.push(MouseArea::new(root_header).on_right_press(
             Message::ContextMenuOpen {
                 path: root.to_path_buf(),
@@ -825,6 +1008,7 @@ pub fn view<'a>(
                     crate::scrollbar::scrollbar()
                 ))
                 .style(|_t, _s| crate::scrollbar::scrollbar_style()),
+            git_footer_bar(ws_state, branch_hover_t),
         ]
         .spacing(region.gap),
     )
@@ -865,6 +1049,335 @@ fn tree_edit_row(
         ..container::Style::default()
     })
     .into()
+}
+
+/// 文件树底部 git 栏:项目在仓库内显示
+/// `folder-git-2 当前分支名 〔切换按钮〕`;项目无 git 仓库显示
+/// `folder-minus 未受Git保护 〔新建Git仓库〕`;仓库信息尚未加载显示中性
+/// 占位。最左图标与文字之间、右缘切换/新建按钮始终可见;整栏无底色、
+/// 顶部一条 BORDER 分隔线,与上方滚动树区隔。
+fn git_footer_bar(
+    ws_state: &WorkspaceState,
+    branch_hover_t: f32,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let box_len = crate::theme::icon_size::row() + 12.0;
+    let (icon, label, action): (
+        icons::IconKind,
+        Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>,
+        Option<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>>,
+    ) = if !ws_state.git_loaded {
+        (
+            icons::IconKind::GitBranch,
+            text("加载仓库信息…")
+                .size(theme::font::label())
+                .color(theme::color::CREAM)
+                .into(),
+            None,
+        )
+    } else if ws_state.git_is_repo {
+        // 有仓库:当前分支名(detached/无提交时 None → "无分支"),右侧切换按钮。
+        // 若工作区有未提交改动,分支名以对应 git 状态色高亮(色即提示;
+        // "(Uncommitted)" 文案只在展开的分支下拉菜单里对当前分支追加)。
+        let root = ws_state.file_tree.as_ref().map(|t| t.root().to_path_buf());
+        let dirty_state = root
+            .as_deref()
+            .and_then(|r| delivery::dir_status(r, &ws_state.git_statuses))
+            // `dir_status` 聚合时忽略被忽略文件,`Some` 即真实未提交改动。
+            .filter(|st| *st != delivery::TreeState::Ignored);
+        let branch_name = ws_state
+            .current_branch
+            .clone()
+            .unwrap_or_else(|| "无分支".to_string());
+        let label_color = if let Some(st) = dirty_state {
+            tree_state_color(st)
+        } else {
+            theme::color::CREAM
+        };
+        let switch = MouseArea::new(
+            icons::icon_button(
+                if ws_state.branch_picker_open {
+                    icons::IconKind::ChevronUp
+                } else {
+                    icons::IconKind::ChevronDown
+                },
+                crate::theme::icon_size::row(),
+                false,
+                branch_hover_t,
+                false,
+            )
+            .width(Length::Fixed(box_len))
+            .height(Length::Fixed(box_len))
+            .on_press(Message::BranchPickerOpen),
+        )
+        .interaction(iced_widget::core::mouse::Interaction::Pointer)
+        .on_enter(Message::ToolbarHover(
+            FilesToolbarTarget::BranchSwitch,
+            true,
+        ))
+        .on_exit(Message::ToolbarHover(FilesToolbarTarget::BranchSwitch, false));
+        (
+            icons::IconKind::FolderGit2,
+            text(branch_name)
+                .size(theme::font::label())
+                .color(label_color)
+                .into(),
+            Some(switch.into()),
+        )
+    } else {
+        // 无 git 仓库:提示未受 git 保护 + 新建仓库按钮。
+        let init = button(
+            row![
+                icons::view(
+                    icons::IconKind::FolderMinus,
+                    crate::theme::icon_size::row(),
+                    theme::color::CREAM
+                ),
+                text("新建Git仓库")
+                    .size(theme::font::label())
+                    .color(theme::color::CREAM),
+            ]
+            .spacing(6)
+            .align_y(iced_widget::core::Alignment::Center),
+        )
+        .on_press(Message::GitInit)
+        .padding([4, 8])
+        .style(|_t: &iced_widget::Theme, _s| button::Style {
+            background: Some(theme::color::BG.into()),
+            border: Border {
+                color: theme::color::BORDER,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            text_color: theme::color::CREAM,
+            ..button::Style::default()
+        });
+        (
+            icons::IconKind::FolderMinus,
+            text("未受Git保护")
+                .size(theme::font::label())
+                .color(theme::color::CREAM)
+                .into(),
+            Some(init.into()),
+        )
+    };
+
+    let bar = row![
+        icons::view(icon, crate::theme::icon_size::row(), theme::color::CREAM),
+        label,
+        iced_widget::space::horizontal(),
+        if let Some(btn) = action {
+            btn
+        } else {
+            iced_widget::space::Space::new()
+                .height(Length::Fixed(crate::theme::icon_size::row() + 8.0))
+                .into()
+        },
+    ]
+    .spacing(6)
+    .align_y(iced_widget::core::Alignment::Center);
+
+    let top_line = container(iced_widget::space::Space::new())
+        .width(Length::Fill)
+        .height(Length::Fixed(1.0))
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::color::BORDER.into()),
+            ..container::Style::default()
+        });
+
+    let mut content = column![top_line, bar].spacing(4);
+    if let Some(err) = &ws_state.git_error {
+        content = content.push(
+            text(format!("⚠ {err}"))
+                .size(theme::font::label())
+                .color(theme::color::RED),
+        );
+    }
+
+    container(content)
+        .width(Length::Fill)
+        .padding([6, 8])
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: None,
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// 分支切换弹层（窗口级浮层）:底栏"切换按钮"按下(`branch_picker_open`)时在
+/// git 底栏上方弹出全部本地分支(当前分支高亮),点某行即 `BranchSwitch(name)`
+/// 切换并收起。**以 window-wide overlay 渲染**(`App::view` 的 `stack!` 里,
+/// 下层垫一块透明 `MouseArea` 承接"点别处收起")——所以返回的是**占满全窗的
+/// 填充容器**,靠 `Padding{bottom, left}` 把下拉框钉到 git 底栏正上方;这与
+/// `context_menu_popup` 用 `Padding{top,left}` 手算像素定位是同一套约定。非
+/// git/未加载/未展开时返回空(零高度元素)。
+///
+/// 宽度注意:菜单列与每行按钮都用 `Length::Shrink` 贴合最宽项——不能在
+/// Shrink 容器里给按钮 `Length::Fill`,否则 Fill 子在无确定宽的 Shrink 轴上
+/// 会折叠成 0 宽,整个菜单就消失;`align_y(End)`(配合外层 `Padding`)负责把
+/// 菜单压在 git 底栏正上方、并把下沉量交给动画起点,不会让它跑到窗口顶部。
+///
+/// 视觉与右键菜单(`context_menu_popup` 的 `menu_item`)对齐:同一套
+/// `context_menu` 区域底色/描边/内外边距、`TAB_HOVER` hover 底。
+/// 当前分支带未提交改动(dirty)时,除当前分支外的其余分支全部置灰且
+/// 不可点——dirty 下切分支会被 git 拒绝(checkout 报错),提前禁用避免
+/// 触发错误;同时给当前分支行追加 "(Uncommitted)" 提示。
+pub fn branch_picker_popup(
+    ws_state: &WorkspaceState,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    if !ws_state.git_loaded || !ws_state.git_is_repo || !ws_state.branch_picker_open {
+        return iced_widget::space::Space::new().into();
+    }
+    let current = ws_state.current_branch.as_deref();
+    // 当前分支是否带未提交改动(dirty)?是则锁定其余分支(禁用切换)并给
+    // 当前分支行追加 "(Uncommitted)"。
+    let is_dirty = ws_state
+        .file_tree
+        .as_ref()
+        .map(|t| t.root().to_path_buf())
+        .as_deref()
+        .and_then(|r| delivery::dir_status(r, &ws_state.git_statuses))
+        .filter(|st| *st != delivery::TreeState::Ignored)
+        .is_some();
+    // dirty → 除当前分支外的其余分支全部置灰禁用。
+    let lock_others = is_dirty;
+    let region = theme::region::context_menu();
+    let mut list = column![].spacing(region.gap).width(Length::Shrink);
+    if ws_state.git_branches.is_empty() {
+        list = list.push(
+            text("暂无本地分支")
+                .size(theme::font::body())
+                .color(theme::color::DIM),
+        );
+    }
+    let pad_v = crate::theme::geometry::menu_pad_v();
+    let pad_h = crate::theme::geometry::menu_pad_h();
+    let gap = crate::theme::geometry::menu_gap();
+    for name in &ws_state.git_branches {
+        let is_current = Some(name.as_str()) == current;
+        // 当前分支 GOLD 高亮 + 指示点;其余分支:dirty 锁定时 DIM 置灰,否则
+        // 常规 CREAM(同上下文菜单项文字)。
+        let color = if is_current {
+            theme::color::GOLD
+        } else if lock_others {
+            theme::color::DIM
+        } else {
+            theme::color::CREAM
+        };
+        let indicator: Element<
+            '_, Message,
+            iced_widget::Theme,
+            iced_renderer::Renderer,
+        > = if is_current {
+            iced_widget::text::Text::new("● ")
+                .size(theme::font::body())
+                .color(color)
+                .into()
+        } else {
+            iced_widget::space::Space::new()
+                .width(Length::Fixed(18.0))
+                .into()
+        };
+        let row_btn = button(
+            row![
+                indicator,
+                text({
+                    let mut n = name.clone();
+                    if is_current && is_dirty {
+                        n.push_str("(Uncommitted)");
+                    }
+                    n
+                })
+                .size(theme::font::body())
+                .color(color),
+            ]
+            .spacing(gap)
+            .align_y(iced_widget::core::Alignment::Center),
+        )
+        .width(Length::Shrink)
+        .padding([pad_v, pad_h])
+        .style(move |_t: &iced_widget::Theme, s: button::Status| {
+            let base = button::Style {
+                background: None,
+                text_color: color,
+                ..button::Style::default()
+            };
+            // 置灰禁用项不响应 hover,始终透出容器底(同右键菜单"粘贴"禁用态)。
+            if lock_others && !is_current {
+                return base;
+            }
+            match s {
+                button::Status::Hovered | button::Status::Pressed => button::Style {
+                    background: Some(theme::color::TAB_HOVER.into()),
+                    text_color: color,
+                    border: Border {
+                        color: Color::TRANSPARENT,
+                        width: 0.0,
+                        radius: 4.0.into(),
+                    },
+                    ..base
+                },
+                _ => base,
+            }
+        });
+        // dirty 锁定时,非当前分支不可点(不挂 `on_press`)。
+        let enabled = is_current || !lock_others;
+        let row_btn = if enabled {
+            row_btn.on_press(Message::BranchSwitch(name.clone()))
+        } else {
+            row_btn
+        };
+        list = list.push(row_btn);
+    }
+    let list = container(list)
+        .width(Length::Shrink)
+        .padding(region.padding)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: region.background.map(Into::into),
+            border: region.border.unwrap_or_default(),
+            ..container::Style::default()
+        });
+
+    // 把下拉框钉到 git 底栏正上方:左缘对齐文件面板(左图标栏 + project_pane
+    // 左 padding),底缘对齐 git 底栏顶部(footbar 高 + project_pane 底 padding
+    // + git 底栏自身高)。外层容器铺满全窗,靠 `Padding{left,bottom}` + 子原件
+    // `align_x(Start)`/`align_y(End)` 把它推到左下角(仅 `bottom` padding 而不
+    // `align_y(End)` 时,Shrink 高子原件会落在内容区**顶部**,菜单就跑到窗口
+    // 最上方去了——与右键菜单 `top` 定位同源,方向相反)。宽度用 `Shrink` 让
+    // 菜单贴合最宽项,不会铺满窗口右缘。
+    let (left, bottom) = branch_picker_popup_offset(ws_state);
+    iced_widget::Container::new(list)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(Padding {
+            top: 0.0,
+            right: 0.0,
+            bottom,
+            left,
+        })
+        .align_x(iced_widget::core::Alignment::Start)
+        .align_y(iced_widget::core::Alignment::End)
+        .into()
+}
+
+/// `branch_picker_popup` 的基准偏移:左缘=左图标栏宽 + project_pane 左 padding;
+/// 底缘=footbar 高 + project_pane 底 padding + git 底栏高。二者都吃全局 scale,
+/// 随主题/缩放联动,不写死像素。
+fn branch_picker_popup_offset(ws_state: &WorkspaceState) -> (f32, f32) {
+    let rail = crate::theme::geometry::icon_rail_width();
+    let pane = theme::region::project_pane();
+    let left = rail + pane.padding.left;
+    // git 底栏高度:顶部分隔 1px + 栏内容(icon_box + 上下 padding 6) + 栏间
+    // spacing 4 + 可能的 git_error 一行;project_pane gap 计入把下拉钉紧底栏。
+    let git_bar_top_line = 1.0;
+    let git_bar_vpad = 6.0 * 2.0;
+    let bar_h = crate::theme::icon_size::row() + 12.0;
+    let error_line = if ws_state.git_error.is_some() { 18.0 } else { 0.0 };
+    let git_bar_h = git_bar_top_line + bar_h + git_bar_vpad + 4.0 + error_line;
+    let bottom = crate::theme::geometry::footbar_height()
+        + pane.padding.bottom
+        + git_bar_h
+        + pane.gap;
+    (left, bottom)
 }
 
 /// 文件树搜索框:自绘输入(键盘走 main.rs 拦截层路由成 `SearchEvent`,不用
@@ -1084,6 +1597,7 @@ pub fn context_menu_popup<'a>(
 
     let region = theme::region::context_menu();
     let list = container(column(items).spacing(region.gap))
+        .width(Length::Shrink)
         .padding(region.padding)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
@@ -1108,7 +1622,7 @@ pub fn context_menu_popup<'a>(
 /// 再额外加 padding。
 fn menu_separator<'a>() -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     container(iced_widget::Space::new())
-        .width(Length::Fill)
+        .width(Length::Fixed(crate::theme::geometry::menu_item_width()))
         .height(Length::Fixed(1.0))
         .style(|_t: &iced_widget::Theme| container::Style {
             background: Some(theme::color::BORDER.into()),

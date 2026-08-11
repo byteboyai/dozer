@@ -380,6 +380,62 @@ pub fn branch(repo: &Path) -> Option<String> {
     head.shorthand().ok().map(str::to_string)
 }
 
+/// 所有本地分支名(按 refs/heads 前缀,short 名)。非 git 仓库返回 None;
+/// git 仓库但没有分支(空仓未提交)返回 Some(空 vec)。
+pub fn local_branches(repo: &Path) -> Option<Vec<String>> {
+    let out = git(repo, &["for-each-ref", "--format=%(refname:short)", "refs/heads/"])?;
+    Some(
+        out.lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect(),
+    )
+}
+
+/// 当前分支是否已有提交。空仓(刚 `git init` 未 commit 的 unborn 分支)——
+/// HEAD 指不到任何提交对象,返回 `false`;已有一条或更多提交返回 `true`。
+/// 非 git / detached HEAD 一律按 `false` 处理。分支菜单据此把其余分支
+/// 置灰禁用(没有提交可切换的合理基线)。
+pub fn current_branch_has_commits(repo: &Path) -> bool {
+    let Ok(git_repo) = git2::Repository::open(repo) else {
+        return false;
+    };
+    git_repo
+        .head()
+        .ok()
+        .and_then(|h| h.peel_to_commit().ok())
+        .is_some()
+}
+
+/// 切换到 `name` 指定分支(本地分支)。错误透传 git 的 stderr,便于展示给
+/// 用户(如工作区有未提交改动导致的 checkout 失败)。
+pub fn checkout_branch(repo: &Path, name: &str) -> Result<(), String> {
+    let out = Command::new("git")
+        .args(["checkout", name])
+        .current_dir(repo)
+        .output()
+        .map_err(|e| format!("无法运行 git: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+/// 在项目根目录执行 `git init` 新建仓库。错误透传 git 的 stderr。
+pub fn init_repo(repo: &Path) -> Result<(), String> {
+    let out = Command::new("git")
+        .args(["init"])
+        .current_dir(repo)
+        .output()
+        .map_err(|e| format!("无法运行 git: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
 /// 同仓库的一个 worktree(主或链接)。见 [`worktrees`]。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeInfo {
