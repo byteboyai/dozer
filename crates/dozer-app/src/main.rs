@@ -388,13 +388,18 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         // 在捕获阶段监听 mousedown,经 IPC 通知宿主调 view.focus()
                         // 让 WKWebView 成为 first responder(否则 ⌘C 选区复制
                         // 走不通:WKWebView 不是 first responder 时 keyDown 不到它)。
+                        // 顺带监听 mouseup:页签拖拽拖进 webview 后在这里松开,
+                        // winit 收不到 `Released`,靠这条 IPC 结束拖拽
+                        // (`WebViewMouseUp`)。
                         .with_initialization_script(
-                            "document.addEventListener('mousedown',function(){window.ipc.postMessage('focus')},true);"
+                            "document.addEventListener('mousedown',function(){window.ipc.postMessage('focus')},true);document.addEventListener('mouseup',function(){window.ipc.postMessage('mouseup')},true);"
                         )
                         .with_ipc_handler(move |_req| {
-                            if _req.body() == "focus" {
-                                let _ = ipc_proxy.send_event(Message::WebViewFocused);
+                            if _req.body() == "mouseup" {
+                                let _ = ipc_proxy.send_event(Message::WebViewMouseUp);
+                                return;
                             }
+                            let _ = ipc_proxy.send_event(Message::WebViewFocused);
                         })
                         .with_custom_protocol("dozer".into(), move |_id, request| {
                             let allowed = allowed.lock().expect("allowed_files 锁");
@@ -539,6 +544,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     ..
                 } if app.dragging_divider().is_some() => {
                     app.update(Message::ColumnDragEnd);
+                    window.request_redraw();
+                }
+                // 页签拖拽换位同理:左键松开即结束(不需要位置续传,CursorMoved
+                // 里没有对应分支——换位是靠被拖过 tab 的 on_move 驱动的)。
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: winit::event::MouseButton::Left,
+                    ..
+                } if app.dragging_tab().is_some() => {
+                    app.update(Message::TabDragEnd);
                     window.request_redraw();
                 }
                 _ => {}
@@ -894,10 +909,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         /// 两个 `(x, y, w, h)` 逻辑矩形是否重叠(含恰好边贴边的情况)。用于
         /// 判断右键菜单是否盖到预览 webview——重叠才把 webview 藏零,避免
         /// 菜单没伸进预览区时把整片预览误藏。
-        fn rects_overlap(
-            a: (f32, f32, f32, f32),
-            b: (f32, f32, f32, f32),
-        ) -> bool {
+        fn rects_overlap(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
             a.0 < b.0 + b.2 && a.0 + a.2 > b.0 && a.1 < b.1 + b.3 && a.1 + a.3 > b.1
         }
 

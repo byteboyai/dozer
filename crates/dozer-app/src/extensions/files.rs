@@ -628,11 +628,10 @@ pub fn update(
             if let Some(tree) = &ws_state.file_tree {
                 let root = tree.root().to_path_buf();
                 handle.spawn(async move {
-                    let result = tokio::task::spawn_blocking(move || {
-                        crate::delivery::init_repo(&root)
-                    })
-                    .await
-                    .unwrap_or_else(|e| Err(e.to_string()));
+                    let result =
+                        tokio::task::spawn_blocking(move || crate::delivery::init_repo(&root))
+                            .await
+                            .unwrap_or_else(|e| Err(e.to_string()));
                     emit(Message::GitInitDone(project_id, result));
                 });
             }
@@ -771,8 +770,14 @@ pub fn view<'a>(
         .on_press(Message::SearchSubmit),
     )
     .interaction(iced_widget::core::mouse::Interaction::Pointer)
-    .on_enter(Message::ToolbarHover(FilesToolbarTarget::SearchSubmit, true))
-    .on_exit(Message::ToolbarHover(FilesToolbarTarget::SearchSubmit, false));
+    .on_enter(Message::ToolbarHover(
+        FilesToolbarTarget::SearchSubmit,
+        true,
+    ))
+    .on_exit(Message::ToolbarHover(
+        FilesToolbarTarget::SearchSubmit,
+        false,
+    ));
 
     // "显示/隐藏点文件"按钮:切换后 `ToggleDotfiles` 调
     // `set_show_dotfiles` 重读树。图标反映当前口径——正显示(`eye`)时点它
@@ -801,7 +806,8 @@ pub fn view<'a>(
     )
     .interaction(iced_widget::core::mouse::Interaction::Pointer)
     .on_enter(Message::ToolbarHover(FilesToolbarTarget::Dotfiles, true))
-    .on_exit(Message::ToolbarHover(FilesToolbarTarget::Dotfiles, false));    header = header.push(
+    .on_exit(Message::ToolbarHover(FilesToolbarTarget::Dotfiles, false));
+    header = header.push(
         row![search_box, search_button, dotfiles_button]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center)
@@ -832,9 +838,7 @@ pub fn view<'a>(
                     crate::theme::icon_size::row(),
                     theme::color::DIM
                 ),
-                text(name)
-                    .size(theme::font::body())
-                    .color(root_color),
+                text(name).size(theme::font::body()).color(root_color),
             ]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center),
@@ -1114,7 +1118,10 @@ fn git_footer_bar(
             FilesToolbarTarget::BranchSwitch,
             true,
         ))
-        .on_exit(Message::ToolbarHover(FilesToolbarTarget::BranchSwitch, false));
+        .on_exit(Message::ToolbarHover(
+            FilesToolbarTarget::BranchSwitch,
+            false,
+        ));
         (
             icons::IconKind::FolderGit2,
             text(branch_name)
@@ -1265,20 +1272,17 @@ pub fn branch_picker_popup(
         } else {
             theme::color::CREAM
         };
-        let indicator: Element<
-            '_, Message,
-            iced_widget::Theme,
-            iced_renderer::Renderer,
-        > = if is_current {
-            iced_widget::text::Text::new("● ")
-                .size(theme::font::body())
-                .color(color)
-                .into()
-        } else {
-            iced_widget::space::Space::new()
-                .width(Length::Fixed(18.0))
-                .into()
-        };
+        let indicator: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+            if is_current {
+                iced_widget::text::Text::new("● ")
+                    .size(theme::font::body())
+                    .color(color)
+                    .into()
+            } else {
+                iced_widget::space::Space::new()
+                    .width(Length::Fixed(18.0))
+                    .into()
+            };
         let row_btn = button(
             row![
                 indicator,
@@ -1373,12 +1377,14 @@ fn branch_picker_popup_offset(ws_state: &WorkspaceState) -> (f32, f32) {
     let git_bar_top_line = 1.0;
     let git_bar_vpad = 6.0 * 2.0;
     let bar_h = crate::theme::icon_size::row() + 12.0;
-    let error_line = if ws_state.git_error.is_some() { 18.0 } else { 0.0 };
+    let error_line = if ws_state.git_error.is_some() {
+        18.0
+    } else {
+        0.0
+    };
     let git_bar_h = git_bar_top_line + bar_h + git_bar_vpad + 4.0 + error_line;
-    let bottom = crate::theme::geometry::footbar_height()
-        + pane.padding.bottom
-        + git_bar_h
-        + pane.gap;
+    let bottom =
+        crate::theme::geometry::footbar_height() + pane.padding.bottom + git_bar_h + pane.gap;
     (left, bottom)
 }
 

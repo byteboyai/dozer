@@ -356,6 +356,25 @@ pub enum Divider {
     RightPairSplit,
 }
 
+/// 参与拖拽换位的四种 tab 组：顶栏项目页签、终端会话页签、预览页签、浏览器
+/// 页签。`main.rs` 在拖拽中只知道"当前在拖哪个组"，据此转发光标位置；真正
+/// 的换位发生在 `App::update`（持有各组的状态与纯函数算宽度的能力）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabGroup {
+    Project,
+    Terminal,
+    Preview,
+    Browser,
+}
+
+/// 正在进行的页签拖拽换位。`source` 记拖起时该组里的源下标，换位过程中源
+/// 下标会随 `Vec` 移动而更新（移动后源跑到新位置，续拖以新位置为准）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabDrag {
+    pub group: TabGroup,
+    pub source: usize,
+}
+
 /// 主界面当前几何状态的只读快照(main.rs 拖拽追踪/离屏几何计算用途,
 /// `Copy` 类型直接按值传递)。取代旧 `PanelLayout` 单独传递的做法——
 /// 新几何公式(webview bounds/焦点路由/IME 光标)都依赖"当前是哪个视图、
@@ -909,6 +928,15 @@ pub enum Message {
     /// 松开左键,结束拖拽并触发写盘。构造方为 main.rs 的
     /// `MouseInput{Released}` 分支。
     ColumnDragEnd,
+    /// 拖拽中,光标进入了 `group` 组的第 `index` 个 tab 上空——拖起的源项
+    /// 应移动到这个目标位(换位)。构造方为该组每个 tab 顶层的
+    /// `MouseArea::on_move`(仅在 `tab_drag` 命中本组时挂载)。按住页签＝
+    /// 准备拖的来源,由各选中处理(`SelectTab`/`PreviewSelectTab`/
+    /// `ProjectTabSwitch` 及浏览器 `SelectTab`)在按住瞬间把 `tab_drag` 置位。
+    TabDragMove { group: TabGroup, index: usize },
+    /// 松开左键,结束页签拖拽。构造方为 main.rs 的 `MouseInput{Released}`
+    /// 分支;项目页签组顺带把新顺序写盘。
+    TabDragEnd,
     /// 点击左图标栏某图标:已是当前视图则切换收起态,否则切到该视图并展开。
     LeftIconSelect(LeftView),
     /// 同上,右图标栏。
@@ -1064,6 +1092,11 @@ pub enum Message {
     /// 不区分 Preview/Browser:`left_view` 互斥,`dispatch` 按 `shell_state`
     /// 判断归谁。
     WebViewFocused,
+    /// 子 webview 上的鼠标松开(winit 收不到,JS 经 IPC 发来)。目的是结束
+    /// 页签拖拽:若用户把 tab 从 iced 表层一路拖进 webview 并在这里松开,
+    /// winit 的根本 `MouseInput{Released}` 收不到,`TabDragEnd` 就永不触发,
+    /// 拖拽状态会残留、变成"松开还能继续拖"。这条消息统一兜底清掉。
+    WebViewMouseUp,
 }
 
 /// 顶层容器:main.rs 持有的就是这个(取代此前直接持有单个 `Workspace`)。
@@ -1133,6 +1166,9 @@ pub struct App {
     window_size: (f32, f32),
     /// 正在拖拽的分隔线;`None` 表示未在拖拽。
     dragging: Option<Divider>,
+    /// 正在拖拽的页签(换位);`None` 表示未在拖拽页签。与 `dragging` 分隔线
+    /// 互斥(一次左键拖拽只能是一件事)。
+    tab_drag: Option<TabDrag>,
     /// Files 面板右键菜单浮层状态——见 `extensions::files::AppState`。
     files: files::AppState,
     /// 文件预览 tab 右键菜单浮层状态(屏幕空间单例,不随项目切换各自保留);
@@ -1400,6 +1436,7 @@ impl App {
             pending_preview_zoom: false,
             window_size: theme::geometry::initial_window_size(),
             dragging: None,
+            tab_drag: None,
             files: files::AppState::default(),
             preview_tab_menu: None,
             projects: HashMap::new(),
@@ -1637,6 +1674,116 @@ impl App {
         self.hover_anims.get(&id).map(HoverAnim::t).unwrap_or(0.0)
     }
 
+    /// 拖拽换位:把当前拖起的源项(`self.tab_drag.source`)移到 `group` 组的
+    /// `to` 处。源与目标同址/越界/不在拖拽中均 no-op。换位后把 `self.tab_drag
+    /// .source` 更新成新位置(续拖以新位置为准),并顺带修正受影响的 index-
+    /// keyed hover 键/激活项。
+    fn tab_drag_move(&mut self, group: TabGroup, to: usize) {
+        let Some(drag) = self.tab_drag else {
+            return;
+        };
+        if drag.group != group {
+            return;
+        }
+        let from = drag.source;
+        match group {
+            TabGroup::Project => {
+                if from == to || from >= self.project_order.len() || to >= self.project_order.len()
+                {
+                    return;
+                }
+                let id = self.project_order.remove(from);
+                self.project_order.insert(to, id);
+                self.tab_drag = Some(TabDrag { group, source: to });
+                // 项目页签 hover 是 id-keyed,无需重排。
+            }
+            TabGroup::Terminal => {
+                if from == to {
+                    return;
+                }
+                {
+                    let Some(ws) = self.active_workspace_mut() else {
+                        return;
+                    };
+                    if to >= ws.tabs.len() {
+                        return;
+                    }
+                    ws.reorder_term_tab(from, to);
+                }
+                self.tab_drag = Some(TabDrag { group, source: to });
+                self.rekey_hover_range(HoverId::TermTabItem, HoverId::TermTabClose, from, to);
+            }
+            TabGroup::Preview => {
+                if from == to {
+                    return;
+                }
+                {
+                    let Some(ws) = self.active_workspace_mut() else {
+                        return;
+                    };
+                    if to >= ws.preview.tabs().len() {
+                        return;
+                    }
+                    ws.preview.reorder(from, to);
+                }
+                self.tab_drag = Some(TabDrag { group, source: to });
+                self.rekey_hover_range(HoverId::PreviewTabItem, HoverId::PreviewTabClose, from, to);
+            }
+            TabGroup::Browser => {
+                if from == to {
+                    return;
+                }
+                {
+                    let Some(ws) = self.active_workspace_mut() else {
+                        return;
+                    };
+                    if to >= ws.browser.tab_count() {
+                        return;
+                    }
+                    ws.browser.reorder_tab(from, to);
+                }
+                self.tab_drag = Some(TabDrag { group, source: to });
+            }
+        }
+    }
+
+    /// 给 `from..=to` 区间的 index-keyed hover 键整体顺移一位,使其跟上拖拽换位
+    /// 后的条目位置:`Item(i)` 与 `Close(i)` 两种键都必须跟着槽位移。`item_f`/
+    /// `close_f` 是构造 `HoverId` 的两个构造器(终端/预览各自的 `Item`/`Close`
+    /// 变体)。键在拖拽期间通常无动画在跑(拖走即离开),把它们重排到正确槽位
+    /// 即可,不追求平滑。
+    fn rekey_hover_range(
+        &mut self,
+        item_f: fn(usize) -> HoverId,
+        close_f: fn(usize) -> HoverId,
+        from: usize,
+        to: usize,
+    ) {
+        let lo = from.min(to);
+        let hi = from.max(to);
+        // 取旧槽上每个键的当前动画值,再按换位后的新槽写回。
+        let mut remap = Vec::new();
+        for i in lo..=hi {
+            for f in [item_f, close_f] {
+                if let Some(h) = self.hover_anims.remove(&f(i)) {
+                    let new_i = if i == from {
+                        to
+                    } else if from < to {
+                        // 向右拖:中间 from+1..=to 全左移一位。
+                        i - 1
+                    } else {
+                        // 向左拖:中间 to..from 全右移一位。
+                        i + 1
+                    };
+                    remap.push((f(new_i), h));
+                }
+            }
+        }
+        for (id, h) in remap {
+            self.hover_anims.insert(id, h);
+        }
+    }
+
     /// 当前激活 tab 的选区文本（⌘C 复制用）。
     pub fn active_selection_text(&self) -> Option<String> {
         self.active_workspace()?.active_selection_text()
@@ -1838,6 +1985,29 @@ impl App {
     /// `on_window_event` 的 `CursorMoved`/`MouseInput{Released}` 分支)。
     pub fn dragging_divider(&self) -> Option<Divider> {
         self.dragging
+    }
+
+    /// 当前正在拖拽的页签(main.rs 拖拽追踪用,调用方同 `dragging_divider`)。
+    pub fn dragging_tab(&self) -> Option<TabDrag> {
+        self.tab_drag
+    }
+
+    /// 当前是否正按住 `group` 组的页签(渲染侧据此把光标改成"抓取"把手)。
+    pub fn dragging_group(&self, group: TabGroup) -> bool {
+        self.tab_drag.is_some_and(|d| d.group == group)
+    }
+
+    /// 结束页签拖拽:清掉拖拽态,若是项目页签组还把新顺序写盘。松开左键的
+    /// 两条路径都会走到这里——winit 的 `MouseInput{Released}`(`TabDragEnd`)
+    /// 与子 webview 上 JS 上报的 `mouseup`(`WebViewMouseUp`)——保证拖拽态
+    /// 在任何情况下都不会残留。
+    fn end_tab_drag(&mut self) {
+        if let Some(drag) = self.tab_drag.take()
+            && drag.group == TabGroup::Project
+        {
+            // 项目页签顺序变了——写盘(同打开项目那条持久化路径)。
+            self.persist_open_projects();
+        }
     }
 
     /// 项目树右键菜单是否打开(main.rs Esc 键路由用)。
@@ -2317,7 +2487,9 @@ impl App {
                 });
             }
             Message::Usage(msg @ usage::Message::Hover(_)) => {
-                let usage::Message::Hover(h) = msg else { unreachable!() };
+                let usage::Message::Hover(h) = msg else {
+                    unreachable!()
+                };
                 self.set_hover(HoverId::UsageRefresh, h);
             }
             Message::Usage(msg) => {
@@ -2367,11 +2539,22 @@ impl App {
                 });
             }
             Message::SelectTab(idx) => {
+                // 按下页签＝选中＋准备被拖走:选中仍是唯一的语义,但顺带记下
+                // "这一页签正被按住",随后鼠标划过其它页签时 `on_move` 触发
+                // `TabDragMove` 完成换位;松开时 main.rs `TabDragEnd` 收尾。
                 self.with_focused_project(|ws, _io| {
                     if idx < ws.tabs.len() {
                         ws.active = idx;
                     }
                 });
+                if let Some(ws) = self.active_workspace()
+                    && idx < ws.tabs.len()
+                {
+                    self.tab_drag = Some(TabDrag {
+                        group: TabGroup::Terminal,
+                        source: idx,
+                    });
+                }
             }
             Message::CloseTab(idx) => {
                 self.with_focused_project(|ws, io| {
@@ -2628,6 +2811,12 @@ impl App {
                 self.dragging = None;
                 self.on_shell_layout_changed();
             }
+            Message::TabDragMove { group, index } => {
+                self.tab_drag_move(group, index);
+            }
+            Message::TabDragEnd => {
+                self.end_tab_drag();
+            }
             Message::LeftIconSelect(v) => {
                 if self.left_view == v {
                     // 点的是已选中(激活)的图标:应退回未选中并收起左面板区。
@@ -2845,10 +3034,20 @@ impl App {
                 });
             }
             Message::PreviewSelectTab(idx) => {
+                let arming = self
+                    .active_workspace()
+                    .map(|ws| idx < ws.preview.tabs().len())
+                    .unwrap_or(false);
                 self.with_focused_project(|ws, io| {
                     ws.preview.select(idx);
                     ws.spawn_preview_state_save(io);
                 });
+                if arming {
+                    self.tab_drag = Some(TabDrag {
+                        group: TabGroup::Preview,
+                        source: idx,
+                    });
+                }
             }
             Message::PreviewCloseTab(idx) => {
                 self.preview_tab_menu = None;
@@ -2931,7 +3130,14 @@ impl App {
                     );
                 });
             }
+            Message::Browser(browser::Message::DragHover(idx)) => {
+                // 浏览器 tab 脱的换位:光标扫过 `idx` 页签 → 走共同换位逻辑。
+                self.tab_drag_move(TabGroup::Browser, idx);
+            }
             Message::Browser(msg) => {
+                // 按下浏览器页签＝选中＋准备被拖走(`SelectTab` 在
+                // `browser::update` 里真正选中为 `active`,这里按它记下拖起源)。
+                let was_select = matches!(msg, browser::Message::SelectTab(_));
                 self.with_focused_project(|ws, io| {
                     let project_id = ws.project.as_ref().map(|p| p.id);
                     let client = io.client.clone();
@@ -2942,6 +3148,16 @@ impl App {
                     };
                     browser::update(&mut ws.browser, msg, project_id, &client, &handle, emit);
                 });
+                if was_select
+                    && let Some(ws) = self.active_workspace()
+                    && ws.browser.active_tab_idx() < ws.browser.tab_count()
+                {
+                    let active = ws.browser.active_tab_idx();
+                    self.tab_drag = Some(TabDrag {
+                        group: TabGroup::Browser,
+                        source: active,
+                    });
+                }
             }
             Message::ProjectSelect(id) => {
                 // 切项目不再通知 daemon:"活跃项目"是 GUI 侧的概念了(P2a
@@ -3053,6 +3269,13 @@ impl App {
                 // 与当前 `cols/rows` 相同时 `PaneResized` 的去重会原地返回。
                 self.sync_terminal_grid();
                 self.persist_open_projects();
+                // 按下项目页签＝选中＋准备被拖走(同终端/预览页签)。
+                if let Some(idx) = self.project_order.iter().position(|p| *p == id) {
+                    self.tab_drag = Some(TabDrag {
+                        group: TabGroup::Project,
+                        source: idx,
+                    });
+                }
             }
             Message::ProjectTabClose(id) => {
                 let io = self.shell_io();
@@ -3440,6 +3663,9 @@ impl App {
             // WebViewFocused 只在 main.rs 的 dispatch 里设 pending_focus,
             // App::update 无需处理。
             Message::WebViewFocused => {}
+            // 鼠标在子 webview 上松开(见 `WebViewMouseUp` 文档):一并结束页签
+            // 拖拽,避免"松开还能继续拖"。
+            Message::WebViewMouseUp => self.end_tab_drag(),
         }
     }
 
@@ -4068,7 +4294,17 @@ fn project_tabs_row(
             );
             // 固定宽:少页签时为默认宽,挤时为均分窄宽(Chrome 式收窄)。
             let cell = container(item).width(Length::Fixed(per_tab));
-            tabs = tabs.push(cell);
+            // 拖拽换位:按住页签(选中处理已把 `tab_drag` 置位)后光标扫过哪个
+            // 页签,这个 `on_move` 就按它发 `TabDragMove`,完成换位。
+            let armed = app.dragging_group(TabGroup::Project);
+            let mut surface = MouseArea::new(cell).on_move(move |_| Message::TabDragMove {
+                group: TabGroup::Project,
+                index: i,
+            });
+            if armed {
+                surface = surface.interaction(mouse::Interaction::Grabbing);
+            }
+            tabs = tabs.push(surface);
             // 仅当"当前"与"下一个"页签都未选中时,二者之间插一条小竖线做
             // 分割;只要相邻任意一侧是选中态,那一侧就不画(选中页签左右都
             // 干净,既不被竖线打断,也把"当前页签"在视觉上独立出来)。
@@ -5292,6 +5528,28 @@ pub(crate) fn tab_divider<'a, M: 'a>() -> Element<'a, M, iced_widget::Theme, ice
         .into()
 }
 
+/// 给一块 tab 内容包上"拖拽换位"的感应层:内容本身仍是原来的交互(点标题
+/// 选中/点 × 关闭全在内部),外层只补一个 `on_move`——因为子按钮只会吞掉
+/// **按下**事件,光标在页签上移动的 `CursorMoved` 不会被吞,`on_move` 照常
+/// 触发,据此发出 `TabDragMove`。真正"按住页签＝准备拖"由各选中处理
+/// (`SelectTab`/`PreviewSelectTab`/`ProjectTabSwitch`)在按住瞬间把
+/// `tab_drag` 置位,这里的 `on_move` 只认"当前拖的是本组"的时刻(见
+/// `App::tab_drag_move` 的组校验),松开由 main.rs 发 `TabDragEnd`。这样
+/// 点击选中与拖拽换位互不干扰,也和 `ColumnDrag` 同一套原始事件后端。
+pub(crate) fn tab_drag_surface(
+    content: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>,
+    group: TabGroup,
+    index: usize,
+    armed: bool,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let area = MouseArea::new(content).on_move(move |_| Message::TabDragMove { group, index });
+    if armed {
+        let area = area.interaction(mouse::Interaction::Grabbing);
+        return area.into();
+    }
+    area.into()
+}
+
 /// 面板内 tab（终端 / 预览 / 浏览器三处共用）的渲染器，样式对齐顶栏未选中
 /// 页签：标题 `body()`(13px) + `top_bar_font()`，静止 `DIM`、hover 动画
 /// `DIM→金`；关闭 `×` 静止 `DIM`、hover `DIM→金`、24×24 命中框；未选中
@@ -5513,13 +5771,19 @@ fn tab_bar<'a>(
         .map(|(idx, tab)| {
             let title_hover_t = app.hover_progress(HoverId::TermTabItem(idx));
             let close_hover_t = app.hover_progress(HoverId::TermTabClose(idx));
-            tab_item(
+            let armed = app.dragging_group(TabGroup::Terminal);
+            tab_drag_surface(
+                tab_item(
+                    idx,
+                    tab,
+                    idx == ws.active,
+                    app.blink_on,
+                    title_hover_t,
+                    close_hover_t,
+                ),
+                TabGroup::Terminal,
                 idx,
-                tab,
-                idx == ws.active,
-                app.blink_on,
-                title_hover_t,
-                close_hover_t,
+                armed,
             )
         })
         .collect();

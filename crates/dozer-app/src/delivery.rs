@@ -383,7 +383,10 @@ pub fn branch(repo: &Path) -> Option<String> {
 /// 所有本地分支名(按 refs/heads 前缀,short 名)。非 git 仓库返回 None;
 /// git 仓库但没有分支(空仓未提交)返回 Some(空 vec)。
 pub fn local_branches(repo: &Path) -> Option<Vec<String>> {
-    let out = git(repo, &["for-each-ref", "--format=%(refname:short)", "refs/heads/"])?;
+    let out = git(
+        repo,
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+    )?;
     Some(
         out.lines()
             .map(|l| l.trim().to_string())

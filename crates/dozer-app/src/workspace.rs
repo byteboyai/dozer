@@ -59,6 +59,7 @@ use crate::transcript::{self, ReviewEntry};
 use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 use iced_code_editor::{CodeEditor, Message as EditorMessage};
+use iced_widget::core::mouse;
 use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Color, Element, Length, Padding};
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
@@ -2267,9 +2268,19 @@ pub(crate) fn preview_pane<'a>(
                 move |h| Message::Hover(HoverId::PreviewTabClose(idx), h),
             );
             // 右键 tab 弹上下文菜单:"编辑"(仅可编辑)/"关闭"。
-            MouseArea::new(tab)
+            // 拖拽换位:按住页签(选中处理已把 `app.tab_drag` 置位)后光标
+            // 扫过哪个页签,这个 `on_move` 就按它发 `TabDragMove`,完成换位。
+            let armed = app.dragging_group(crate::app::TabGroup::Preview);
+            let mut area = MouseArea::new(tab)
                 .on_right_press(Message::PreviewTabContextMenu { idx, editable })
-                .into()
+                .on_move(move |_| Message::TabDragMove {
+                    group: crate::app::TabGroup::Preview,
+                    index: idx,
+                });
+            if armed {
+                area = area.interaction(mouse::Interaction::Grabbing);
+            }
+            area.into()
         })
         .collect();
     // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;左右箭头钉在裁剪区外。
@@ -2674,7 +2685,11 @@ pub(crate) fn agent_icon(agent: AgentKind) -> IconKind {
         AgentKind::Codebuddy => IconKind::Codebuddy,
         AgentKind::Opencode => IconKind::Opencode,
         // 暂无确认可用的品牌素材，回落通用图标（spec §8/§6 明确允许）。
-        AgentKind::Codex | AgentKind::Qoder | AgentKind::Kilo | AgentKind::V8agent | AgentKind::Unknown => IconKind::Bot,
+        AgentKind::Codex
+        | AgentKind::Qoder
+        | AgentKind::Kilo
+        | AgentKind::V8agent
+        | AgentKind::Unknown => IconKind::Bot,
     }
 }
 

@@ -237,36 +237,38 @@ pub fn icon_button<'a, Message: Clone + 'a>(
     .align_x(iced_widget::core::alignment::Horizontal::Center)
     .align_y(iced_widget::core::alignment::Vertical::Center);
 
-    button(inner).padding(0).style(move |_t: &iced_widget::Theme, _s: button::Status| {
-        let (background, border_color) = if card {
-            (
-                Some(crate::theme::color::CARD.into()),
-                if active {
-                    crate::theme::color::GOLD
-                } else {
-                    crate::theme::color::BORDER
+    button(inner)
+        .padding(0)
+        .style(move |_t: &iced_widget::Theme, _s: button::Status| {
+            let (background, border_color) = if card {
+                (
+                    Some(crate::theme::color::CARD.into()),
+                    if active {
+                        crate::theme::color::GOLD
+                    } else {
+                        crate::theme::color::BORDER
+                    },
+                )
+            } else {
+                (
+                    None,
+                    if active {
+                        crate::theme::color::GOLD
+                    } else {
+                        Color::TRANSPARENT
+                    },
+                )
+            };
+            button::Style {
+                background,
+                border: Border {
+                    color: border_color,
+                    width: 1.0,
+                    radius: 8.0.into(),
                 },
-            )
-        } else {
-            (
-                None,
-                if active {
-                    crate::theme::color::GOLD
-                } else {
-                    Color::TRANSPARENT
-                },
-            )
-        };
-        button::Style {
-            background,
-            border: Border {
-                color: border_color,
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..button::Style::default()
-        }
-    })
+                ..button::Style::default()
+            }
+        })
 }
 
 /// 文件名 → 图标类别(按扩展名，类别式而非按语言品牌，见设计文档 §3.1 caveat；

@@ -168,6 +168,26 @@ impl PreviewPane {
         }
     }
 
+    /// 拖拽换位:把 `from` 处的 tab 移到 `to` 处,并同步 `active` 下标。`from`
+    /// 与 `to` 相等或越界时是 no-op。返回移动前后 `active` 是否变化(调用方
+    /// 据此决定是否要重排 index-keyed 的 hover 动画键)。
+    pub fn reorder(&mut self, from: usize, to: usize) {
+        if from == to || from >= self.tabs.len() || to >= self.tabs.len() {
+            return;
+        }
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        if self.active == from {
+            self.active = to;
+        } else if from < self.active && to >= self.active {
+            // 源在激活项左侧,且目标落到了激活项右侧/身上——激活项左移一位。
+            self.active -= 1;
+        } else if from > self.active && to <= self.active {
+            // 源在激活项右侧,且目标落到了激活项左侧/身上——激活项右移一位。
+            self.active += 1;
+        }
+    }
+
     /// webview 期望清单:每文件 tab 一个,仅激活者可见(设计 D2)。
     pub fn desired_webviews(&self) -> Vec<WebviewSpec> {
         self.tabs

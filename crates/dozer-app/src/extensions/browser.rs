@@ -16,7 +16,7 @@ use crate::{icons, theme};
 use dozer_client::Client;
 use dozer_core::protocol::{BookmarkInfo, BookmarkScope};
 use iced_widget::core::{Border, Element, Length};
-use iced_widget::{button, column, container, row, text, MouseArea};
+use iced_widget::{MouseArea, button, column, container, row, text};
 use std::collections::HashMap;
 
 /// 一个浏览器 tab。
@@ -79,6 +79,23 @@ impl Tabs {
             self.active = self.tabs.len().saturating_sub(1);
         } else if idx < self.active {
             self.active -= 1;
+        }
+    }
+
+    /// 拖拽换位:把 `from` 处的 tab 移到 `to`,并同步 `active`。越界/同址即
+    /// no-op。
+    pub fn reorder(&mut self, from: usize, to: usize) {
+        if from == to || from >= self.tabs.len() || to >= self.tabs.len() {
+            return;
+        }
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        if self.active == from {
+            self.active = to;
+        } else if from < self.active && to >= self.active {
+            self.active -= 1;
+        } else if from > self.active && to <= self.active {
+            self.active += 1;
         }
     }
 
@@ -747,6 +764,9 @@ pub enum Message {
     OpenUrl(String),
     SelectTab(usize),
     CloseTab(usize),
+    /// 拖拽换位:光标扫过页签 `idx` 时由 tab 的 `MouseArea::on_move` 发出,
+    /// `App::update` 翻译成 `TabDragMove`(浏览器组在这里完成换位)。
+    DragHover(usize),
     AddrClick,
     AddrEvent(crate::workspace::AddrEvent),
     TabScroll(bool),
@@ -828,6 +848,16 @@ impl State {
         self.tabs.active_webview_id()
     }
 
+    /// 页签总数(内核 `App` 拖拽换位的越界保护用)。
+    pub fn tab_count(&self) -> usize {
+        self.tabs.tabs().len()
+    }
+
+    /// 当前激活页签下标(内核 `App` 拖拽换位的源记录用)。
+    pub fn active_tab_idx(&self) -> usize {
+        self.tabs.active_idx()
+    }
+
     /// webview 期望清单(内核 `App::browser_desired` 用,供 main.rs 同步
     /// webview 池)。
     pub fn desired_webviews(&self) -> Vec<WebviewSpec> {
@@ -862,12 +892,50 @@ impl State {
     /// `(STAR_HOVER_KEY, false)` 区分于真实 tab(真实 tab 序号不可能
     /// 等于 `usize::MAX`)。
     pub(crate) fn star_hover(&self) -> f32 {
-        self.hover.get(&(STAR_HOVER_KEY, false)).map(|h| h.progress).unwrap_or(0.0)
+        self.hover
+            .get(&(STAR_HOVER_KEY, false))
+            .map(|h| h.progress)
+            .unwrap_or(0.0)
+    }
+
+    /// 拖拽换位:把 `from` 处的 tab 移到 `to`,并重排 index-keyed 的 hover 键
+    /// (键 `(idx, is_close)`)。哨兵键 `STAR_HOVER_KEY` 不受影响。
+    pub fn reorder_tab(&mut self, from: usize, to: usize) {
+        self.tabs.reorder(from, to);
+        // 源与目标之间所有条目顺移一位,把它们的 hover 键跟着挪。
+        let lo = from.min(to);
+        let hi = from.max(to);
+        if lo != hi {
+            let mut remap = Vec::new();
+            for i in lo..=hi {
+                for is_close in [false, true] {
+                    if let Some(h) = self.hover.remove(&(i, is_close)) {
+                        // 换位后:与 from 同侧锚定更直观——若 i==from 移到的
+                        // 是新位 to;否则若从右往左(hi<原次序)各 i 左移,反
+                        // 之右移。这里直接让"所在槽位的 hover"跟着槽位走最省心:
+                        let new_i = if i == from {
+                            to
+                        } else if from < to {
+                            i - 1
+                        } else {
+                            i + 1
+                        };
+                        remap.push((new_i, is_close, h));
+                    }
+                }
+            }
+            for (i, is_close, h) in remap {
+                self.hover.insert((i, is_close), h);
+            }
+        }
     }
 
     /// 收藏夹下拉按钮的 hover 进度,哨兵键 `(STAR_HOVER_KEY, true)`。
     pub(crate) fn bookmark_hover(&self) -> f32 {
-        self.hover.get(&(STAR_HOVER_KEY, true)).map(|h| h.progress).unwrap_or(0.0)
+        self.hover
+            .get(&(STAR_HOVER_KEY, true))
+            .map(|h| h.progress)
+            .unwrap_or(0.0)
     }
 
     /// 星标/收藏夹按钮的 hover 进入/离开(hovered),用哨兵键写进度机。
@@ -903,6 +971,7 @@ pub fn update(
             state.tab_first = 0;
         }
         Message::SelectTab(idx) => state.tabs.select(idx),
+        Message::DragHover(_) => {} // 拖拽换位在 `App::update` 翻译后处理,不落到这里
         Message::CloseTab(idx) => {
             state.tabs.close(idx);
             state.tab_first = 0;
@@ -1036,9 +1105,15 @@ fn star_button(
         .unwrap_or(false);
     // 统一 icon 按钮规范:未收藏静止 DIM、hover 过渡到 GOLD;已收藏恒金
     // (active=true)。hover 动画走浏览器自己的 `State` 进度机(哨兵键)。
-    let mut btn = icons::icon_button(icons::IconKind::Star, icon_size::row(), starred, state.star_hover(), false)
-        .width(Length::Fixed(theme::geometry::tab_button_size()))
-        .height(Length::Fixed(theme::geometry::tab_button_size()));
+    let mut btn = icons::icon_button(
+        icons::IconKind::Star,
+        icon_size::row(),
+        starred,
+        state.star_hover(),
+        false,
+    )
+    .width(Length::Fixed(theme::geometry::tab_button_size()))
+    .height(Length::Fixed(theme::geometry::tab_button_size()));
     if url.is_some() {
         btn = btn.on_press(Message::StarClick);
     }
@@ -1233,7 +1308,7 @@ pub fn view(
             let active = idx == state.tabs.active_idx();
             let title_hover_t = state.hover_progress(idx, false);
             let close_hover_t = state.hover_progress(idx, true);
-            panel_tab(
+            let tab = panel_tab(
                 tab.title.clone(),
                 active,
                 title_hover_t,
@@ -1244,7 +1319,13 @@ pub fn view(
                 Message::CloseTab(idx),
                 move |h| Message::Hover(idx, false, h),
                 move |h| Message::Hover(idx, true, h),
-            )
+            );
+            // 拖拽换位:按住页签(App 侧把 `tab_drag` 置位)后光标扫过哪个
+            // 页签,这个 `on_move` 发出 `DragHover(idx)`,再在 `App::update`
+            // 翻译成 `TabDragMove`(组校验在那里做),完成换位。
+            MouseArea::new(tab)
+                .on_move(move |_| Message::DragHover(idx))
+                .into()
         })
         .collect();
     let tabs_row = row(items).spacing(4);
@@ -1340,8 +1421,9 @@ pub fn view(
 /// tab 栏"收藏夹"下拉面板触发按钮。返回带收藏夹切换消息的按钮。走统一
 /// icon 按钮规范(DIM→GOLD hover,无选中态),hover 动画走浏览器自己的
 /// `State` 进度机(哨兵键)。
-fn bookmarks_toggle_button(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>
-{
+fn bookmarks_toggle_button(
+    state: &State,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let btn = icons::icon_button(
         icons::IconKind::Bookmark,
         icon_size::row(),

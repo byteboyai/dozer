@@ -8,7 +8,7 @@
 
 use crate::icons;
 use iced_widget::core::{Border, Element, Length};
-use iced_widget::{button, column, container, row, scrollable, text, text_input, MouseArea};
+use iced_widget::{MouseArea, button, column, container, row, scrollable, text, text_input};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -1497,8 +1497,14 @@ fn schema_tree_view<'a>(
         .on_press(Message::SchemaBack),
     )
     .interaction(iced_widget::core::mouse::Interaction::Pointer)
-    .on_enter(Message::ToolbarHover(DatabaseToolbarTarget::SchemaBack, true))
-    .on_exit(Message::ToolbarHover(DatabaseToolbarTarget::SchemaBack, false));
+    .on_enter(Message::ToolbarHover(
+        DatabaseToolbarTarget::SchemaBack,
+        true,
+    ))
+    .on_exit(Message::ToolbarHover(
+        DatabaseToolbarTarget::SchemaBack,
+        false,
+    ));
 
     let header = row![
         back_button,
