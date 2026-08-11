@@ -242,9 +242,7 @@ pub fn lsp_server_config(key: &str) -> Option<&'static LspServerConfig> {
 ///     }
 /// }
 /// ```
-pub fn resolve_lsp_command(
-    config: &LspServerConfig,
-) -> Result<LspCommand, String> {
+pub fn resolve_lsp_command(config: &LspServerConfig) -> Result<LspCommand, String> {
     let program = if config.key == "rust-analyzer" {
         resolve_rust_analyzer_command()?
     } else if config.key == "gopls" {
@@ -292,11 +290,16 @@ fn resolve_rust_analyzer_command() -> Result<String, String> {
     {
         return Ok(path);
     }
-    if Command::new("rust-analyzer").arg("--version").output().is_ok() {
+    if Command::new("rust-analyzer")
+        .arg("--version")
+        .output()
+        .is_ok()
+    {
         return Ok("rust-analyzer".to_string());
     }
-    if let Ok(output) =
-        Command::new("rustup").args(["which", "rust-analyzer"]).output()
+    if let Ok(output) = Command::new("rustup")
+        .args(["which", "rust-analyzer"])
+        .output()
         && output.status.success()
     {
         let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -343,10 +346,7 @@ fn resolve_gopls_command() -> Result<String, String> {
             }
         }
     }
-    Err(
-        "gopls not found. Please set GOPLS/GOPLS_PATH or add GOPATH/bin to PATH"
-            .to_string(),
-    )
+    Err("gopls not found. Please set GOPLS/GOPLS_PATH or add GOPATH/bin to PATH".to_string())
 }
 
 /// Ensures rust-analyzer configuration directory exists on macOS.
@@ -364,7 +364,9 @@ fn resolve_gopls_command() -> Result<String, String> {
 /// ```
 #[cfg(target_os = "macos")]
 pub fn ensure_rust_analyzer_config() {
-    let Some(home) = std::env::var_os("HOME") else { return };
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
     let mut path = std::path::PathBuf::from(home);
     path.push("Library");
     path.push("Application Support");

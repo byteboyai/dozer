@@ -167,11 +167,7 @@ impl CommandHistory {
     /// # Returns
     ///
     /// `true` if a command was undone, `false` if nothing to undo
-    pub fn undo(
-        &self,
-        buffer: &mut TextBuffer,
-        cursor: &mut (usize, usize),
-    ) -> bool {
+    pub fn undo(&self, buffer: &mut TextBuffer, cursor: &mut (usize, usize)) -> bool {
         let mut inner = self.inner.lock().unwrap();
 
         // End any current grouping
@@ -198,11 +194,7 @@ impl CommandHistory {
     /// # Returns
     ///
     /// `true` if a command was redone, `false` if nothing to redo
-    pub fn redo(
-        &self,
-        buffer: &mut TextBuffer,
-        cursor: &mut (usize, usize),
-    ) -> bool {
+    pub fn redo(&self, buffer: &mut TextBuffer, cursor: &mut (usize, usize)) -> bool {
         let mut inner = self.inner.lock().unwrap();
 
         if let Some(mut command) = inner.redo_stack.pop() {
@@ -296,8 +288,7 @@ impl CommandHistory {
     pub fn begin_group(&self, description: &str) {
         let mut inner = self.inner.lock().unwrap();
         if inner.current_group.is_none() {
-            inner.current_group =
-                Some(CompositeCommand::new(description.to_string()));
+            inner.current_group = Some(CompositeCommand::new(description.to_string()));
         }
     }
 

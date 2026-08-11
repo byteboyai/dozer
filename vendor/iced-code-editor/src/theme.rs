@@ -186,7 +186,12 @@ fn blend_colors(color1: Color, color2: Color, factor: f32) -> Color {
 
 /// Applies an alpha transparency to a color.
 fn with_alpha(color: Color, alpha: f32) -> Color {
-    Color { r: color.r, g: color.g, b: color.b, a: alpha }
+    Color {
+        r: color.r,
+        g: color.g,
+        b: color.b,
+        a: alpha,
+    }
 }
 
 #[cfg(test)]
@@ -199,15 +204,11 @@ mod tests {
         let style = from_iced_theme(&theme);
 
         // Dark theme should have dark background
-        let brightness =
-            (style.background.r + style.background.g + style.background.b)
-                / 3.0;
+        let brightness = (style.background.r + style.background.g + style.background.b) / 3.0;
         assert!(brightness < 0.5, "Dark theme should have dark background");
 
         // Text should be bright for contrast
-        let text_brightness =
-            (style.text_color.r + style.text_color.g + style.text_color.b)
-                / 3.0;
+        let text_brightness = (style.text_color.r + style.text_color.g + style.text_color.b) / 3.0;
         assert!(text_brightness > 0.5, "Dark theme should have bright text");
     }
 
@@ -217,15 +218,14 @@ mod tests {
         let style = from_iced_theme(&theme);
 
         // Light theme should have bright background
-        let brightness =
-            (style.background.r + style.background.g + style.background.b)
-                / 3.0;
-        assert!(brightness > 0.5, "Light theme should have bright background");
+        let brightness = (style.background.r + style.background.g + style.background.b) / 3.0;
+        assert!(
+            brightness > 0.5,
+            "Light theme should have bright background"
+        );
 
         // Text should be dark for contrast
-        let text_brightness =
-            (style.text_color.r + style.text_color.g + style.text_color.b)
-                / 3.0;
+        let text_brightness = (style.text_color.r + style.text_color.g + style.text_color.b) / 3.0;
         assert!(text_brightness < 0.5, "Light theme should have dark text");
     }
 
@@ -238,14 +238,8 @@ mod tests {
             // All color components should be valid (0.0 to 1.0)
             assert!(style.background.r >= 0.0 && style.background.r <= 1.0);
             assert!(style.text_color.r >= 0.0 && style.text_color.r <= 1.0);
-            assert!(
-                style.gutter_background.r >= 0.0
-                    && style.gutter_background.r <= 1.0
-            );
-            assert!(
-                style.line_number_color.r >= 0.0
-                    && style.line_number_color.r <= 1.0
-            );
+            assert!(style.gutter_background.r >= 0.0 && style.gutter_background.r <= 1.0);
+            assert!(style.line_number_color.r >= 0.0 && style.line_number_color.r <= 1.0);
 
             // Current line highlight should have transparency
             assert!(
@@ -269,9 +263,7 @@ mod tests {
 
         let tokyo_light = iced::Theme::TokyoNightLight;
         let style = from_iced_theme(&tokyo_light);
-        let brightness =
-            (style.background.r + style.background.g + style.background.b)
-                / 3.0;
+        let brightness = (style.background.r + style.background.g + style.background.b) / 3.0;
         assert!(
             brightness > 0.5,
             "Tokyo Night Light should have bright background"
@@ -302,8 +294,7 @@ mod tests {
         let style = from_iced_theme(&theme);
 
         // Gutter background should be different from editor background
-        let gutter_diff = (style.gutter_background.r - style.background.r)
-            .abs()
+        let gutter_diff = (style.gutter_background.r - style.background.r).abs()
             + (style.gutter_background.g - style.background.g).abs()
             + (style.gutter_background.b - style.background.b).abs();
 
@@ -320,18 +311,15 @@ mod tests {
             let palette = theme.extended_palette();
 
             // Line numbers should be dimmed compared to text
-            let line_num_brightness = (style.line_number_color.r
-                + style.line_number_color.g
-                + style.line_number_color.b)
-                / 3.0;
+            let line_num_brightness =
+                (style.line_number_color.r + style.line_number_color.g + style.line_number_color.b)
+                    / 3.0;
 
             let text_brightness =
-                (style.text_color.r + style.text_color.g + style.text_color.b)
-                    / 3.0;
+                (style.text_color.r + style.text_color.g + style.text_color.b) / 3.0;
 
             let bg_brightness =
-                (style.background.r + style.background.g + style.background.b)
-                    / 3.0;
+                (style.background.r + style.background.g + style.background.b) / 3.0;
 
             // Line numbers should be between text and background (more subtle than text)
             // For dark themes: text is bright, line numbers dimmer, background dark
@@ -347,8 +335,7 @@ mod tests {
             } else {
                 // Light theme: line numbers should be between text (dark) and background (bright)
                 assert!(
-                    line_num_brightness > text_brightness
-                        && line_num_brightness < bg_brightness,
+                    line_num_brightness > text_brightness && line_num_brightness < bg_brightness,
                     "Light theme line numbers should be between text and background. Text: {}, Line num: {}, Bg: {}",
                     text_brightness,
                     line_num_brightness,
@@ -391,16 +378,9 @@ mod tests {
         let style2 = style1;
 
         // Verify colors are approximately equal (using epsilon for float comparison)
-        assert!(
-            (style1.background.r - style2.background.r).abs() < f32::EPSILON
-        );
-        assert!(
-            (style1.text_color.r - style2.text_color.r).abs() < f32::EPSILON
-        );
-        assert!(
-            (style1.gutter_background.r - style2.gutter_background.r).abs()
-                < f32::EPSILON
-        );
+        assert!((style1.background.r - style2.background.r).abs() < f32::EPSILON);
+        assert!((style1.text_color.r - style2.text_color.r).abs() < f32::EPSILON);
+        assert!((style1.gutter_background.r - style2.gutter_background.r).abs() < f32::EPSILON);
     }
 
     #[test]

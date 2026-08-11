@@ -9,9 +9,7 @@ use std::borrow::Cow;
 use std::rc::Rc;
 use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{
-    HighlightIterator, HighlightState, Highlighter, Style, ThemeSet,
-};
+use syntect::highlighting::{HighlightIterator, HighlightState, Highlighter, Style, ThemeSet};
 use syntect::parsing::{ParseState, ScopeStack, SyntaxSet};
 
 /// Computes geometry (x start and width) for a text segment used in rendering or highlighting.
@@ -187,9 +185,7 @@ pub fn highlight_line_spans(
 
 use super::folding;
 use super::wrapping::{VisualLine, WrappingCalculator};
-use super::{
-    ArrowDirection, CodeEditor, Message, measure_char_width, measure_text_width,
-};
+use super::{ArrowDirection, CodeEditor, Message, measure_char_width, measure_text_width};
 use iced::widget::canvas::Action;
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
@@ -245,11 +241,8 @@ impl CodeEditor {
                 // Draw line number for first segment, centered in the number area.
                 let line_num = visual_line.logical_line + 1;
                 let line_num_text = format!("{}", line_num);
-                let text_width = measure_text_width(
-                    &line_num_text,
-                    ctx.full_char_width,
-                    ctx.char_width,
-                );
+                let text_width =
+                    measure_text_width(&line_num_text, ctx.full_char_width, ctx.char_width);
                 let x_pos = (number_area_width - text_width) / 2.0;
                 frame.fill_text(canvas::Text {
                     content: line_num_text,
@@ -299,8 +292,7 @@ impl CodeEditor {
             return;
         }
 
-        if !folding::is_line_fold_header(&self.buffer, visual_line.logical_line)
-        {
+        if !folding::is_line_fold_header(&self.buffer, visual_line.logical_line) {
             return;
         }
 
@@ -353,14 +345,8 @@ impl CodeEditor {
         }
 
         let line_content = self.buffer.line(visual_line.logical_line);
-        let line_width = measure_text_width(
-            line_content,
-            ctx.full_char_width,
-            ctx.char_width,
-        );
-        let x = ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset
-            + line_width
-            + 6.0;
+        let line_width = measure_text_width(line_content, ctx.full_char_width, ctx.char_width);
+        let x = ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset + line_width + 6.0;
         frame.fill_text(canvas::Text {
             content: "⋯".to_string(),
             position: Point::new(x, y + 2.0),
@@ -386,7 +372,10 @@ impl CodeEditor {
         visual_line: &VisualLine,
         y: f32,
     ) {
-        if self.cursors.iter().any(|c| c.position.0 == visual_line.logical_line)
+        if self
+            .cursors
+            .iter()
+            .any(|c| c.position.0 == visual_line.logical_line)
         {
             frame.fill_rectangle(
                 Point::new(ctx.gutter_width, y),
@@ -428,8 +417,9 @@ impl CodeEditor {
         let mut guard = self.highlight_cache.borrow_mut();
 
         // Reset the whole cache only when the active syntax changes.
-        let needs_reset =
-            guard.as_ref().is_none_or(|cache| cache.syntax() != self.syntax);
+        let needs_reset = guard
+            .as_ref()
+            .is_none_or(|cache| cache.syntax() != self.syntax);
         if needs_reset {
             *guard = Some(super::HighlightCache::new(self.syntax.clone()));
         }
@@ -452,20 +442,17 @@ impl CodeEditor {
         // Extend the valid prefix sequentially up to `logical_line`, carrying
         // the parser/highlight state forward across lines.
         let highlighter = Highlighter::new(theme);
-        let (mut parse_state, mut highlight_state) =
-            cache.resume_state().unwrap_or_else(|| {
-                (
-                    ParseState::new(syntax),
-                    HighlightState::new(&highlighter, ScopeStack::new()),
-                )
-            });
+        let (mut parse_state, mut highlight_state) = cache.resume_state().unwrap_or_else(|| {
+            (
+                ParseState::new(syntax),
+                HighlightState::new(&highlighter, ScopeStack::new()),
+            )
+        });
 
         let line_count = self.buffer.line_count();
         let target = logical_line.min(line_count.saturating_sub(1));
-        let missing_lines =
-            target.saturating_add(1).saturating_sub(cache.valid_len());
-        let lines_to_parse =
-            missing_lines.min(self.highlight_lines_remaining.get());
+        let missing_lines = target.saturating_add(1).saturating_sub(cache.valid_len());
+        let lines_to_parse = missing_lines.min(self.highlight_lines_remaining.get());
         let parse_end = cache
             .valid_len()
             .saturating_add(lines_to_parse)
@@ -482,21 +469,17 @@ impl CodeEditor {
                 let ops = parse_state
                     .parse_line(&line, syntax_set)
                     .unwrap_or_default();
-                let spans: Vec<(Color, String)> = HighlightIterator::new(
-                    &mut highlight_state,
-                    &ops,
-                    &line,
-                    &highlighter,
-                )
-                .filter_map(|(style, text)| {
-                    let text = text.strip_suffix('\n').unwrap_or(text);
-                    if text.is_empty() {
-                        None
-                    } else {
-                        Some((color_from_style(style), text.to_string()))
-                    }
-                })
-                .collect();
+                let spans: Vec<(Color, String)> =
+                    HighlightIterator::new(&mut highlight_state, &ops, &line, &highlighter)
+                        .filter_map(|(style, text)| {
+                            let text = text.strip_suffix('\n').unwrap_or(text);
+                            if text.is_empty() {
+                                None
+                            } else {
+                                Some((color_from_style(style), text.to_string()))
+                            }
+                        })
+                        .collect();
 
                 let spans = Rc::new(spans);
                 cache.push_line(
@@ -510,15 +493,19 @@ impl CodeEditor {
             }
         }
         self.highlight_lines_remaining.set(
-            self.highlight_lines_remaining.get().saturating_sub(lines_to_parse),
+            self.highlight_lines_remaining
+                .get()
+                .saturating_sub(lines_to_parse),
         );
 
-        result.or_else(|| cache.spans(logical_line)).unwrap_or_else(|| {
-            Rc::new(vec![(
-                self.style.text_color,
-                self.buffer.line(logical_line).to_string(),
-            )])
-        })
+        result
+            .or_else(|| cache.spans(logical_line))
+            .unwrap_or_else(|| {
+                Rc::new(vec![(
+                    self.style.text_color,
+                    self.buffer.line(logical_line).to_string(),
+                )])
+            })
     }
 
     /// Draws text content with syntax highlighting or plain text fallback.
@@ -553,8 +540,7 @@ impl CodeEditor {
                 syntax_set,
             );
 
-            let mut x_offset =
-                ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset;
+            let mut x_offset = ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset;
             let mut char_pos = 0;
 
             for (color, text) in spans.iter() {
@@ -562,23 +548,16 @@ impl CodeEditor {
                 let text_end = char_pos + text_len;
 
                 // Check if this token intersects with our segment
-                if text_end > visual_line.start_col
-                    && char_pos < visual_line.end_col
-                {
+                if text_end > visual_line.start_col && char_pos < visual_line.end_col {
                     // Calculate the intersection
                     let segment_start = char_pos.max(visual_line.start_col);
                     let segment_end = text_end.min(visual_line.end_col);
 
-                    let text_start_offset =
-                        segment_start.saturating_sub(char_pos);
-                    let text_end_offset =
-                        text_start_offset + (segment_end - segment_start);
+                    let text_start_offset = segment_start.saturating_sub(char_pos);
+                    let text_end_offset = text_start_offset + (segment_end - segment_start);
 
-                    let (start_byte, end_byte) = char_range_to_byte_range(
-                        text,
-                        text_start_offset,
-                        text_end_offset,
-                    );
+                    let (start_byte, end_byte) =
+                        char_range_to_byte_range(text, text_start_offset, text_end_offset);
 
                     let segment_text = &text[start_byte..end_byte];
                     let display_text = if self.show_whitespace {
@@ -586,25 +565,16 @@ impl CodeEditor {
                     } else {
                         expand_tabs(segment_text, super::TAB_WIDTH).into_owned()
                     };
-                    let display_width = measure_text_width(
-                        &display_text,
-                        ctx.full_char_width,
-                        ctx.char_width,
-                    );
+                    let display_width =
+                        measure_text_width(&display_text, ctx.full_char_width, ctx.char_width);
 
                     if self.show_whitespace {
                         let ws_color = self.style.whitespace_color;
                         let mut seg_x = x_offset;
-                        for (is_ws, seg) in
-                            split_whitespace_segments(&display_text)
-                        {
-                            let seg_color =
-                                if is_ws { ws_color } else { *color };
-                            let seg_width = measure_text_width(
-                                seg,
-                                ctx.full_char_width,
-                                ctx.char_width,
-                            );
+                        for (is_ws, seg) in split_whitespace_segments(&display_text) {
+                            let seg_color = if is_ws { ws_color } else { *color };
+                            let seg_width =
+                                measure_text_width(seg, ctx.full_char_width, ctx.char_width);
                             frame.fill_text(canvas::Text {
                                 content: seg.to_string(),
                                 position: Point::new(seg_x, y + 2.0),
@@ -652,11 +622,7 @@ impl CodeEditor {
                 let mut seg_x = base_x;
                 for (is_ws, seg) in split_whitespace_segments(&display_text) {
                     let seg_color = if is_ws { ws_color } else { text_color };
-                    let seg_width = measure_text_width(
-                        seg,
-                        ctx.full_char_width,
-                        ctx.char_width,
-                    );
+                    let seg_width = measure_text_width(seg, ctx.full_char_width, ctx.char_width);
                     frame.fill_text(canvas::Text {
                         content: seg.to_string(),
                         position: Point::new(seg_x, y + 2.0),
@@ -738,8 +704,7 @@ impl CodeEditor {
         start_visual_idx: usize,
         end_visual_idx: usize,
     ) {
-        if !self.search_matches_visible() || self.search_state.query.is_empty()
-        {
+        if !self.search_matches_visible() || self.search_state.query.is_empty() {
             return;
         }
 
@@ -776,15 +741,24 @@ impl CodeEditor {
                 .take(match_range.len())
             {
                 // Determine if this is the current match
-                let is_current =
-                    self.search_state.current_match_index == Some(match_idx);
+                let is_current = self.search_state.current_match_index == Some(match_idx);
 
                 let highlight_color = if is_current {
                     // Orange for current match
-                    Color { r: 1.0, g: 0.6, b: 0.0, a: 0.4 }
+                    Color {
+                        r: 1.0,
+                        g: 0.6,
+                        b: 0.0,
+                        a: 0.4,
+                    }
                 } else {
                     // Yellow for other matches
-                    Color { r: 1.0, g: 1.0, b: 0.0, a: 0.3 }
+                    Color {
+                        r: 1.0,
+                        g: 1.0,
+                        b: 0.0,
+                        a: 0.3,
+                    }
                 };
 
                 // Convert logical position to visual line
@@ -799,8 +773,7 @@ impl CodeEditor {
                     search_match.col + query_len,
                 );
 
-                if let (Some(start_v), Some(end_v)) = (start_visual, end_visual)
-                {
+                if let (Some(start_v), Some(end_v)) = (start_visual, end_visual) {
                     if start_v == end_v {
                         // Match within same visual line
                         let vl = &ctx.visual_lines[start_v];
@@ -862,20 +835,18 @@ impl CodeEditor {
         start: (usize, usize),
         end: (usize, usize),
     ) {
-        let selection_color = Color { r: 0.3, g: 0.5, b: 0.8, a: 0.3 };
+        let selection_color = Color {
+            r: 0.3,
+            g: 0.5,
+            b: 0.8,
+            a: 0.3,
+        };
 
         if start.0 == end.0 {
             // Single line selection - need to handle wrapped segments
-            let start_visual = WrappingCalculator::logical_to_visual(
-                ctx.visual_lines,
-                start.0,
-                start.1,
-            );
-            let end_visual = WrappingCalculator::logical_to_visual(
-                ctx.visual_lines,
-                end.0,
-                end.1,
-            );
+            let start_visual =
+                WrappingCalculator::logical_to_visual(ctx.visual_lines, start.0, start.1);
+            let end_visual = WrappingCalculator::logical_to_visual(ctx.visual_lines, end.0, end.1);
 
             if let (Some(start_v), Some(end_v)) = (start_visual, end_visual) {
                 if start_v == end_v {
@@ -903,8 +874,7 @@ impl CodeEditor {
                         } else {
                             vl.start_col
                         };
-                        let sel_end_col =
-                            if v_idx == end_v { end.1 } else { vl.end_col };
+                        let sel_end_col = if v_idx == end_v { end.1 } else { vl.end_col };
 
                         self.fill_highlight_segment(
                             frame,
@@ -919,16 +889,9 @@ impl CodeEditor {
             }
         } else {
             // Multi-line selection
-            let start_visual = WrappingCalculator::logical_to_visual(
-                ctx.visual_lines,
-                start.0,
-                start.1,
-            );
-            let end_visual = WrappingCalculator::logical_to_visual(
-                ctx.visual_lines,
-                end.0,
-                end.1,
-            );
+            let start_visual =
+                WrappingCalculator::logical_to_visual(ctx.visual_lines, start.0, start.1);
+            let end_visual = WrappingCalculator::logical_to_visual(ctx.visual_lines, end.0, end.1);
 
             if let (Some(start_v), Some(end_v)) = (start_visual, end_visual) {
                 for (v_idx, vl) in ctx
@@ -938,19 +901,17 @@ impl CodeEditor {
                     .skip(start_v)
                     .take(end_v - start_v + 1)
                 {
-                    let sel_start_col =
-                        if vl.logical_line == start.0 && v_idx == start_v {
-                            start.1
-                        } else {
-                            vl.start_col
-                        };
+                    let sel_start_col = if vl.logical_line == start.0 && v_idx == start_v {
+                        start.1
+                    } else {
+                        vl.start_col
+                    };
 
-                    let sel_end_col =
-                        if vl.logical_line == end.0 && v_idx == end_v {
-                            end.1
-                        } else {
-                            vl.end_col
-                        };
+                    let sel_end_col = if vl.logical_line == end.0 && v_idx == end_v {
+                        end.1
+                    } else {
+                        vl.end_col
+                    };
 
                     self.fill_highlight_segment(
                         frame,
@@ -971,11 +932,7 @@ impl CodeEditor {
     ///
     /// * `frame` - The canvas frame to draw on
     /// * `ctx` - Rendering context containing visual lines and metrics
-    fn draw_selection_highlight(
-        &self,
-        frame: &mut canvas::Frame,
-        ctx: &RenderContext,
-    ) {
+    fn draw_selection_highlight(&self, frame: &mut canvas::Frame, ctx: &RenderContext) {
         for cursor in self.cursors.iter() {
             if let Some((start, end)) = cursor.selection_range()
                 && start != end
@@ -1001,10 +958,7 @@ impl CodeEditor {
         // 3. Use `WrappingCalculator` to map logical (line, col) to visual (x, y)
         //    for correct cursor positioning with line wrapping.
         // -------------------------------------------------------------------------
-        if self.show_cursor
-            && self.cursor_visible
-            && self.has_focus()
-            && self.ime_preedit.is_some()
+        if self.show_cursor && self.cursor_visible && self.has_focus() && self.ime_preedit.is_some()
         {
             // [Branch A] IME preedit rendering mode
             // ---------------------------------------------------------------------
@@ -1038,18 +992,20 @@ impl CodeEditor {
                 let cursor_y = cursor_visual as f32 * ctx.line_height;
 
                 if let Some(preedit) = self.ime_preedit.as_ref() {
-                    let preedit_width = measure_text_width(
-                        &preedit.content,
-                        ctx.full_char_width,
-                        ctx.char_width,
-                    );
+                    let preedit_width =
+                        measure_text_width(&preedit.content, ctx.full_char_width, ctx.char_width);
 
                     // 1. Draw preedit background (light translucent)
                     // This indicates the text is not committed yet
                     frame.fill_rectangle(
                         Point::new(cursor_x, cursor_y + 2.0),
                         Size::new(preedit_width, ctx.line_height - 4.0),
-                        Color { r: 1.0, g: 1.0, b: 1.0, a: 0.08 },
+                        Color {
+                            r: 1.0,
+                            g: 1.0,
+                            b: 1.0,
+                            a: 0.08,
+                        },
                     );
 
                     // 2. Draw preedit selection (if any)
@@ -1059,11 +1015,9 @@ impl CodeEditor {
                         && range.start != range.end
                     {
                         // Validate indices before slicing to prevent panic
-                        if let Some((start, end)) = validate_selection_indices(
-                            &preedit.content,
-                            range.start,
-                            range.end,
-                        ) {
+                        if let Some((start, end)) =
+                            validate_selection_indices(&preedit.content, range.start, range.end)
+                        {
                             let selected_prefix = &preedit.content[..start];
                             let selected_text = &preedit.content[start..end];
 
@@ -1082,7 +1036,12 @@ impl CodeEditor {
                             frame.fill_rectangle(
                                 Point::new(selection_x, cursor_y + 2.0),
                                 Size::new(selection_w, ctx.line_height - 4.0),
-                                Color { r: 0.3, g: 0.5, b: 0.8, a: 0.3 },
+                                Color {
+                                    r: 0.3,
+                                    g: 0.5,
+                                    b: 0.8,
+                                    a: 0.3,
+                                },
                             );
                         }
                     }
@@ -1158,20 +1117,13 @@ impl CodeEditor {
     /// Normal and Visual modes use the width of the character under the cursor;
     /// an empty line or end-of-line position uses one narrow character width.
     fn cursor_size_for_position(&self, position: (usize, usize)) -> Size {
-        let uses_block =
-            self.vim_enabled && self.vim_state.mode() != super::VimMode::Insert;
+        let uses_block = self.vim_enabled && self.vim_state.mode() != super::VimMode::Insert;
         let width = if uses_block {
             self.buffer
                 .line(position.0)
                 .chars()
                 .nth(position.1)
-                .map(|ch| {
-                    measure_char_width(
-                        ch,
-                        self.full_char_width,
-                        self.char_width,
-                    )
-                })
+                .map(|ch| measure_char_width(ch, self.full_char_width, self.char_width))
                 .filter(|width| *width > 0.0)
                 .unwrap_or(self.char_width)
         } else {
@@ -1195,11 +1147,9 @@ impl CodeEditor {
         position: (usize, usize),
     ) {
         // Map logical cursor position (line, col) to visual line index
-        if let Some(cursor_visual) = WrappingCalculator::logical_to_visual(
-            ctx.visual_lines,
-            position.0,
-            position.1,
-        ) {
+        if let Some(cursor_visual) =
+            WrappingCalculator::logical_to_visual(ctx.visual_lines, position.0, position.1)
+        {
             let vl = &ctx.visual_lines[cursor_visual];
             let line_content = self.buffer.line(vl.logical_line);
 
@@ -1237,11 +1187,8 @@ impl CodeEditor {
     /// `true` if the editor has both Iced focus and internal canvas focus and is not focus-locked; `false` otherwise
     pub(crate) fn has_focus(&self) -> bool {
         // Check if this editor has Iced focus
-        let focused_id =
-            super::FOCUSED_EDITOR_ID.load(std::sync::atomic::Ordering::Relaxed);
-        focused_id == self.editor_id
-            && self.has_canvas_focus
-            && !self.focus_locked
+        let focused_id = super::FOCUSED_EDITOR_ID.load(std::sync::atomic::Ordering::Relaxed);
+        focused_id == self.editor_id && self.has_canvas_focus && !self.focus_locked
     }
 
     /// Handles keyboard shortcut combinations (Ctrl+C, Ctrl+Z, etc.).
@@ -1284,9 +1231,7 @@ impl CodeEditor {
             && !modifiers.shift()
             && matches!(key, keyboard::Key::Character(s) if s.as_str() == "s")
         {
-            return Some(
-                Action::publish(Message::WriteRequested).and_capture(),
-            );
+            return Some(Action::publish(Message::WriteRequested).and_capture());
         }
 
         // Shift+Tab: focus navigation backward (Tab alone inserts indentation)
@@ -1294,34 +1239,24 @@ impl CodeEditor {
             && modifiers.shift()
             && !self.search_state.is_open
         {
-            return Some(
-                Action::publish(Message::FocusNavigationShiftTab).and_capture(),
-            );
+            return Some(Action::publish(Message::FocusNavigationShiftTab).and_capture());
         }
 
         // Handle Ctrl+C / Ctrl+Insert (copy)
-        if (command_pressed
-            && matches!(key, keyboard::Key::Character(c) if c.as_str() == "c"))
+        if (command_pressed && matches!(key, keyboard::Key::Character(c) if c.as_str() == "c"))
             || (modifiers.control()
-                && matches!(
-                    key,
-                    keyboard::Key::Named(keyboard::key::Named::Insert)
-                ))
+                && matches!(key, keyboard::Key::Named(keyboard::key::Named::Insert)))
         {
             return Some(Action::publish(Message::Copy).and_capture());
         }
 
         // Handle Ctrl/Cmd+X (cut)
-        if command_pressed
-            && matches!(key, keyboard::Key::Character(x) if x.as_str() == "x")
-        {
+        if command_pressed && matches!(key, keyboard::Key::Character(x) if x.as_str() == "x") {
             return Some(Action::publish(Message::Cut).and_capture());
         }
 
         // Handle Ctrl/Cmd+A (select all)
-        if command_pressed
-            && matches!(key, keyboard::Key::Character(a) if a.as_str() == "a")
-        {
+        if command_pressed && matches!(key, keyboard::Key::Character(a) if a.as_str() == "a") {
             return Some(Action::publish(Message::SelectAll).and_capture());
         }
 
@@ -1366,15 +1301,11 @@ impl CodeEditor {
             && matches!(key, keyboard::Key::Character(h) if h.as_str() == "h")
             && self.search_replace_enabled
         {
-            return Some(
-                Action::publish(Message::OpenSearchReplace).and_capture(),
-            );
+            return Some(Action::publish(Message::OpenSearchReplace).and_capture());
         }
 
         // Handle Cmd/Ctrl+G (open go-to-line input)
-        if command_pressed
-            && matches!(key, keyboard::Key::Character(g) if g.as_str() == "g")
-        {
+        if command_pressed && matches!(key, keyboard::Key::Character(g) if g.as_str() == "g") {
             return Some(Action::publish(Message::OpenGotoLine).and_capture());
         }
 
@@ -1393,12 +1324,8 @@ impl CodeEditor {
         }
 
         // Handle Ctrl+D (select next occurrence)
-        if command_pressed
-            && matches!(key, keyboard::Key::Character(d) if d.as_str() == "d")
-        {
-            return Some(
-                Action::publish(Message::SelectNextOccurrence).and_capture(),
-            );
+        if command_pressed && matches!(key, keyboard::Key::Character(d) if d.as_str() == "d") {
+            return Some(Action::publish(Message::SelectNextOccurrence).and_capture());
         }
 
         // Handle Ctrl+/ (toggle line comment).
@@ -1417,37 +1344,24 @@ impl CodeEditor {
         // Handle Ctrl+Alt+Up (add cursor above)
         if modifiers.control()
             && modifiers.alt()
-            && matches!(
-                key,
-                keyboard::Key::Named(keyboard::key::Named::ArrowUp)
-            )
+            && matches!(key, keyboard::Key::Named(keyboard::key::Named::ArrowUp))
         {
-            return Some(
-                Action::publish(Message::AddCursorAbove).and_capture(),
-            );
+            return Some(Action::publish(Message::AddCursorAbove).and_capture());
         }
 
         // Handle Ctrl+Alt+Down (add cursor below)
         if modifiers.control()
             && modifiers.alt()
-            && matches!(
-                key,
-                keyboard::Key::Named(keyboard::key::Named::ArrowDown)
-            )
+            && matches!(key, keyboard::Key::Named(keyboard::key::Named::ArrowDown))
         {
-            return Some(
-                Action::publish(Message::AddCursorBelow).and_capture(),
-            );
+            return Some(Action::publish(Message::AddCursorBelow).and_capture());
         }
 
         // Handle Alt+Up / Alt+Down (move line) and Shift+Alt+Up / Shift+Alt+Down
         // (duplicate line). Exclude Control to avoid clashing with the
         // Ctrl+Alt+Up/Down multi-cursor shortcuts above.
         if modifiers.alt() && !modifiers.control() {
-            if matches!(
-                key,
-                keyboard::Key::Named(keyboard::key::Named::ArrowUp)
-            ) {
+            if matches!(key, keyboard::Key::Named(keyboard::key::Named::ArrowUp)) {
                 let message = if modifiers.shift() {
                     Message::DuplicateLineUp
                 } else {
@@ -1455,10 +1369,7 @@ impl CodeEditor {
                 };
                 return Some(Action::publish(message).and_capture());
             }
-            if matches!(
-                key,
-                keyboard::Key::Named(keyboard::key::Named::ArrowDown)
-            ) {
+            if matches!(key, keyboard::Key::Named(keyboard::key::Named::ArrowDown)) {
                 let message = if modifiers.shift() {
                     Message::DuplicateLineDown
                 } else {
@@ -1474,15 +1385,10 @@ impl CodeEditor {
         {
             if modifiers.shift() {
                 // Shift+Tab: cycle backward
-                return Some(
-                    Action::publish(Message::SearchDialogShiftTab)
-                        .and_capture(),
-                );
+                return Some(Action::publish(Message::SearchDialogShiftTab).and_capture());
             } else {
                 // Tab: cycle forward
-                return Some(
-                    Action::publish(Message::SearchDialogTab).and_capture(),
-                );
+                return Some(Action::publish(Message::SearchDialogTab).and_capture());
             }
         }
 
@@ -1491,48 +1397,34 @@ impl CodeEditor {
             && self.search_replace_enabled
         {
             if modifiers.shift() {
-                return Some(
-                    Action::publish(Message::FindPrevious).and_capture(),
-                );
+                return Some(Action::publish(Message::FindPrevious).and_capture());
             } else {
                 return Some(Action::publish(Message::FindNext).and_capture());
             }
         }
 
         // Handle Ctrl+V / Shift+Insert (paste) - read clipboard and send paste message
-        if (command_pressed
-            && matches!(key, keyboard::Key::Character(v) if v.as_str() == "v"))
+        if (command_pressed && matches!(key, keyboard::Key::Character(v) if v.as_str() == "v"))
             || (modifiers.shift()
-                && matches!(
-                    key,
-                    keyboard::Key::Named(keyboard::key::Named::Insert)
-                ))
+                && matches!(key, keyboard::Key::Named(keyboard::key::Named::Insert)))
         {
             // Return an action that requests clipboard read
             return Some(Action::publish(Message::Paste(String::new())));
         }
 
         // Handle Ctrl+Home (go to start of document)
-        if command_pressed
-            && matches!(key, keyboard::Key::Named(keyboard::key::Named::Home))
-        {
+        if command_pressed && matches!(key, keyboard::Key::Named(keyboard::key::Named::Home)) {
             return Some(Action::publish(Message::CtrlHome).and_capture());
         }
 
         // Handle Ctrl+End (go to end of document)
-        if command_pressed
-            && matches!(key, keyboard::Key::Named(keyboard::key::Named::End))
-        {
+        if command_pressed && matches!(key, keyboard::Key::Named(keyboard::key::Named::End)) {
             return Some(Action::publish(Message::CtrlEnd).and_capture());
         }
 
         // Handle Shift+Delete (delete selection)
-        if modifiers.shift()
-            && matches!(key, keyboard::Key::Named(keyboard::key::Named::Delete))
-        {
-            return Some(
-                Action::publish(Message::DeleteSelection).and_capture(),
-            );
+        if modifiers.shift() && matches!(key, keyboard::Key::Named(keyboard::key::Named::Delete)) {
+            return Some(Action::publish(Message::DeleteSelection).and_capture());
         }
 
         // Code folding shortcuts (only when folding is enabled).
@@ -1541,9 +1433,7 @@ impl CodeEditor {
             if modifiers.control()
                 && matches!(key, keyboard::Key::Character(c) if c.as_str() == ".")
             {
-                return Some(
-                    Action::publish(Message::ToggleFoldAtCursor).and_capture(),
-                );
+                return Some(Action::publish(Message::ToggleFoldAtCursor).and_capture());
             }
 
             // Ctrl+K : fold all blocks.
@@ -1617,8 +1507,7 @@ impl CodeEditor {
                 && !first_char.is_control()
             {
                 return Some(
-                    Action::publish(self.printable_input_message(first_char))
-                        .and_capture(),
+                    Action::publish(self.printable_input_message(first_char)).and_capture(),
                 );
             }
         }
@@ -1638,8 +1527,7 @@ impl CodeEditor {
                 }
             }
             keyboard::Key::Named(keyboard::key::Named::Delete)
-                if !self.vim_enabled
-                    || self.vim_state.mode() == super::VimMode::Insert =>
+                if !self.vim_enabled || self.vim_state.mode() == super::VimMode::Insert =>
             {
                 Some(Message::Delete)
             }
@@ -1655,8 +1543,7 @@ impl CodeEditor {
                 }
             }
             keyboard::Key::Named(keyboard::key::Named::Tab)
-                if !self.vim_enabled
-                    || self.vim_state.mode() == super::VimMode::Insert =>
+                if !self.vim_enabled || self.vim_state.mode() == super::VimMode::Insert =>
             {
                 // Handle Tab for focus navigation or text insertion
                 // This implements focus event propagation and focus chain management
@@ -1682,15 +1569,11 @@ impl CodeEditor {
             keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
                 Some(Message::ArrowKey(ArrowDirection::Left, modifiers.shift()))
             }
-            keyboard::Key::Named(keyboard::key::Named::ArrowRight) => Some(
-                Message::ArrowKey(ArrowDirection::Right, modifiers.shift()),
-            ),
-            keyboard::Key::Named(keyboard::key::Named::PageUp) => {
-                Some(Message::PageUp)
+            keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+                Some(Message::ArrowKey(ArrowDirection::Right, modifiers.shift()))
             }
-            keyboard::Key::Named(keyboard::key::Named::PageDown) => {
-                Some(Message::PageDown)
-            }
+            keyboard::Key::Named(keyboard::key::Named::PageUp) => Some(Message::PageUp),
+            keyboard::Key::Named(keyboard::key::Named::PageDown) => Some(Message::PageDown),
             keyboard::Key::Named(keyboard::key::Named::Home) => {
                 Some(Message::Home(modifiers.shift()))
             }
@@ -1754,16 +1637,12 @@ impl CodeEditor {
         }
 
         // Skip if IME is active (unless Ctrl/Command is pressed)
-        if self.ime_preedit.is_some()
-            && !(modifiers.control() || modifiers.command())
-        {
+        if self.ime_preedit.is_some() && !(modifiers.control() || modifiers.command()) {
             return None;
         }
 
         // Try keyboard shortcuts first
-        if let Some(action) =
-            self.handle_keyboard_shortcuts(key, modified_key, modifiers)
-        {
+        if let Some(action) = self.handle_keyboard_shortcuts(key, modified_key, modifiers) {
             return Some(action);
         }
 
@@ -1828,8 +1707,7 @@ impl CodeEditor {
                     // Clicking a fold chevron toggles the block instead of
                     // moving the caret.
                     if let Some(header) = self.fold_header_at_point(position) {
-                        return Action::publish(Message::ToggleFold(header))
-                            .and_capture();
+                        return Action::publish(Message::ToggleFold(header)).and_capture();
                     }
 
                     // Check for Ctrl (or Command on macOS) + Click
@@ -1854,10 +1732,8 @@ impl CodeEditor {
 
                     let click_count = self.classify_click(position);
                     match click_count {
-                        2 => Action::publish(Message::DoubleClick(position))
-                            .and_capture(),
-                        3 => Action::publish(Message::TripleClick(position))
-                            .and_capture(),
+                        2 => Action::publish(Message::DoubleClick(position)).and_capture(),
+                        3 => Action::publish(Message::TripleClick(position)).and_capture(),
                         // Don't capture the event so it can bubble up for focus management
                         // This implements focus event propagation through the widget hierarchy
                         _ => Action::publish(Message::MouseClick(position)),
@@ -1866,16 +1742,14 @@ impl CodeEditor {
             }
             mouse::Event::ButtonPressed(mouse::Button::Right) => {
                 cursor.position_in(bounds).map(|position| {
-                    Action::publish(Message::ContextMenuRequested(position))
-                        .and_capture()
+                    Action::publish(Message::ContextMenuRequested(position)).and_capture()
                 })
             }
             mouse::Event::CursorMoved { .. } => {
                 cursor.position_in(bounds).map(|position| {
                     if self.is_dragging {
                         // Handle mouse drag for selection only when cursor is within bounds
-                        Action::publish(Message::MouseDrag(position))
-                            .and_capture()
+                        Action::publish(Message::MouseDrag(position)).and_capture()
                     } else {
                         // Forward hover events when not dragging to enable LSP hover.
                         Action::publish(Message::MouseHover(position))
@@ -1944,9 +1818,7 @@ impl CodeEditor {
             input_method::Event::Preedit(content, selection) => {
                 Message::ImePreedit(content.clone(), selection.clone())
             }
-            input_method::Event::Commit(content) => {
-                Message::ImeCommit(content.clone())
-            }
+            input_method::Event::Commit(content) => Message::ImeCommit(content.clone()),
             input_method::Event::Closed => Message::ImeClosed,
         };
 
@@ -1987,8 +1859,7 @@ impl CodeEditor {
             }
 
             // Find the first visual line for this logical line
-            if let Some(mut idx) =
-                WrappingCalculator::logical_to_visual(ctx.visual_lines, line, 0)
+            if let Some(mut idx) = WrappingCalculator::logical_to_visual(ctx.visual_lines, line, 0)
             {
                 // Iterate all visual lines belonging to this logical line
                 while idx < ctx.visual_lines.len() {
@@ -2007,8 +1878,7 @@ impl CodeEditor {
                             visual_line.start_col,
                             seg_start,
                             seg_end,
-                            ctx.gutter_width + 5.0
-                                - ctx.horizontal_scroll_offset,
+                            ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset,
                             ctx.full_char_width,
                             ctx.char_width,
                         );
@@ -2016,10 +1886,7 @@ impl CodeEditor {
                         let y = idx as f32 * ctx.line_height + ctx.line_height; // Underline at bottom
 
                         // Draw underline
-                        let path = canvas::Path::line(
-                            Point::new(x, y),
-                            Point::new(x + width, y),
-                        );
+                        let path = canvas::Path::line(Point::new(x, y), Point::new(x + width, y));
 
                         frame.stroke(
                             &path,
@@ -2061,8 +1928,7 @@ impl canvas::Program<Message> for CodeEditor {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let visual_lines: Rc<Vec<VisualLine>> =
-            self.visual_lines_cached(bounds.width);
+        let visual_lines: Rc<Vec<VisualLine>> = self.visual_lines_cached(bounds.width);
 
         // Prefer the tracked viewport height when available, but fall back to
         // the current bounds during initial layout when viewport metrics have
@@ -2072,21 +1938,18 @@ impl canvas::Program<Message> for CodeEditor {
         } else {
             bounds.height
         };
-        let first_visible_line =
-            (self.viewport_scroll / self.line_height).floor() as usize;
+        let first_visible_line = (self.viewport_scroll / self.line_height).floor() as usize;
         let visible_lines_count =
             (effective_viewport_height / self.line_height).ceil() as usize + 2;
-        let last_visible_line =
-            (first_visible_line + visible_lines_count).min(visual_lines.len());
+        let last_visible_line = (first_visible_line + visible_lines_count).min(visual_lines.len());
 
-        let (start_idx, end_idx) =
-            if self.cache_window_end_line > self.cache_window_start_line {
-                let s = self.cache_window_start_line.min(visual_lines.len());
-                let e = self.cache_window_end_line.min(visual_lines.len());
-                (s, e)
-            } else {
-                (first_visible_line, last_visible_line)
-            };
+        let (start_idx, end_idx) = if self.cache_window_end_line > self.cache_window_start_line {
+            let s = self.cache_window_start_line.min(visual_lines.len());
+            let e = self.cache_window_end_line.min(visual_lines.len());
+            (s, e)
+        } else {
+            (first_visible_line, last_visible_line)
+        };
 
         // Split rendering into two cached layers:
         // - content: expensive, mostly static text/gutter rendering
@@ -2095,95 +1958,67 @@ impl canvas::Program<Message> for CodeEditor {
         // This keeps selection dragging and cursor blinking smooth by avoiding
         // invalidation of the text layer on every overlay update.
         let visual_lines_for_content = visual_lines.clone();
-        let content_geometry =
-            self.content_cache.draw(renderer, bounds.size(), |frame| {
-                // Bound sequential syntect catch-up work for this frame. This
-                // keeps a deep jump or a cache truncation in a huge file from
-                // blocking the UI while parsing every preceding line.
-                self.highlight_lines_remaining
-                    .set(super::HIGHLIGHT_LINES_PER_FRAME);
+        let content_geometry = self.content_cache.draw(renderer, bounds.size(), |frame| {
+            // Bound sequential syntect catch-up work for this frame. This
+            // keeps a deep jump or a cache truncation in a huge file from
+            // blocking the UI while parsing every preceding line.
+            self.highlight_lines_remaining
+                .set(super::HIGHLIGHT_LINES_PER_FRAME);
 
-                // syntect initialization is relatively expensive; keep it global.
-                let syntax_set = SYNTAX_SET.get_or_init(|| {
-                    #[cfg(feature = "two-face")]
-                    {
-                        two_face::syntax::extra_newlines()
-                    }
-                    #[cfg(not(feature = "two-face"))]
-                    {
-                        SyntaxSet::load_defaults_newlines()
-                    }
-                });
-                let theme_set = THEME_SET.get_or_init(ThemeSet::load_defaults);
-                let syntax_theme = self
-                    .syntax_theme
-                    .as_ref()
-                    .or_else(|| theme_set.themes.get("base16-ocean.dark"))
-                    .or_else(|| theme_set.themes.values().next());
-
-                // Normalize common language aliases/extensions used by consumers.
-                let syntax_ref = match self.syntax.as_str() {
-                    "python" => syntax_set.find_syntax_by_extension("py"),
-                    "rust" => syntax_set.find_syntax_by_extension("rs"),
-                    "javascript" => syntax_set.find_syntax_by_extension("js"),
-                    "htm" => syntax_set.find_syntax_by_extension("html"),
-                    "svg" => syntax_set.find_syntax_by_extension("xml"),
-                    "markdown" => syntax_set.find_syntax_by_extension("md"),
-                    "text" => Some(syntax_set.find_syntax_plain_text()),
-                    _ => syntax_set
-                        .find_syntax_by_extension(self.syntax.as_str()),
+            // syntect initialization is relatively expensive; keep it global.
+            let syntax_set = SYNTAX_SET.get_or_init(|| {
+                #[cfg(feature = "two-face")]
+                {
+                    two_face::syntax::extra_newlines()
                 }
-                .or(Some(syntax_set.find_syntax_plain_text()));
+                #[cfg(not(feature = "two-face"))]
+                {
+                    SyntaxSet::load_defaults_newlines()
+                }
+            });
+            let theme_set = THEME_SET.get_or_init(ThemeSet::load_defaults);
+            let syntax_theme = self
+                .syntax_theme
+                .as_ref()
+                .or_else(|| theme_set.themes.get("base16-ocean.dark"))
+                .or_else(|| theme_set.themes.values().next());
 
-                let ctx = RenderContext {
-                    visual_lines: visual_lines_for_content.as_ref(),
-                    bounds_width: bounds.width,
-                    gutter_width: self.gutter_width(),
-                    line_height: self.line_height,
-                    font_size: self.font_size,
-                    full_char_width: self.full_char_width,
-                    char_width: self.char_width,
-                    font: self.font,
-                    horizontal_scroll_offset: self.horizontal_scroll_offset,
-                };
+            // Normalize common language aliases/extensions used by consumers.
+            let syntax_ref = match self.syntax.as_str() {
+                "python" => syntax_set.find_syntax_by_extension("py"),
+                "rust" => syntax_set.find_syntax_by_extension("rs"),
+                "javascript" => syntax_set.find_syntax_by_extension("js"),
+                "htm" => syntax_set.find_syntax_by_extension("html"),
+                "svg" => syntax_set.find_syntax_by_extension("xml"),
+                "markdown" => syntax_set.find_syntax_by_extension("md"),
+                "text" => Some(syntax_set.find_syntax_plain_text()),
+                _ => syntax_set.find_syntax_by_extension(self.syntax.as_str()),
+            }
+            .or(Some(syntax_set.find_syntax_plain_text()));
 
-                // Clip code text to the code area (right of gutter) so that
-                // horizontal scrolling cannot cause text to bleed into the gutter.
-                // Note: iced renders ALL text on top of ALL geometry, so a
-                // fill_rectangle cannot mask text bleed — with_clip is required.
-                let code_clip = Rectangle {
-                    x: ctx.gutter_width,
-                    y: 0.0,
-                    width: (bounds.width - ctx.gutter_width).max(0.0),
-                    height: bounds.height,
-                };
-                frame.with_clip(code_clip, |f| {
-                    for (idx, visual_line) in visual_lines_for_content
-                        .iter()
-                        .enumerate()
-                        .skip(start_idx)
-                        .take(end_idx.saturating_sub(start_idx))
-                    {
-                        let y = idx as f32 * self.line_height;
-                        self.draw_text_with_syntax_highlighting(
-                            f,
-                            &ctx,
-                            visual_line,
-                            y,
-                            syntax_ref,
-                            syntax_set,
-                            syntax_theme,
-                        );
-                        self.draw_fold_collapsed_marker(
-                            f,
-                            &ctx,
-                            visual_line,
-                            y,
-                        );
-                    }
-                });
+            let ctx = RenderContext {
+                visual_lines: visual_lines_for_content.as_ref(),
+                bounds_width: bounds.width,
+                gutter_width: self.gutter_width(),
+                line_height: self.line_height,
+                font_size: self.font_size,
+                full_char_width: self.full_char_width,
+                char_width: self.char_width,
+                font: self.font,
+                horizontal_scroll_offset: self.horizontal_scroll_offset,
+            };
 
-                // Draw line numbers in the gutter (no clip — fixed position)
+            // Clip code text to the code area (right of gutter) so that
+            // horizontal scrolling cannot cause text to bleed into the gutter.
+            // Note: iced renders ALL text on top of ALL geometry, so a
+            // fill_rectangle cannot mask text bleed — with_clip is required.
+            let code_clip = Rectangle {
+                x: ctx.gutter_width,
+                y: 0.0,
+                width: (bounds.width - ctx.gutter_width).max(0.0),
+                height: bounds.height,
+            };
+            frame.with_clip(code_clip, |f| {
                 for (idx, visual_line) in visual_lines_for_content
                     .iter()
                     .enumerate()
@@ -2191,47 +2026,62 @@ impl canvas::Program<Message> for CodeEditor {
                     .take(end_idx.saturating_sub(start_idx))
                 {
                     let y = idx as f32 * self.line_height;
-                    self.draw_line_numbers(frame, &ctx, visual_line, y);
-                }
-            });
-
-        let visual_lines_for_overlay = visual_lines;
-        let overlay_geometry =
-            self.overlay_cache.draw(renderer, bounds.size(), |frame| {
-                // The overlay layer shares the same visual lines, but draws only
-                // elements that change without modifying the buffer content.
-                let ctx = RenderContext {
-                    visual_lines: visual_lines_for_overlay.as_ref(),
-                    bounds_width: bounds.width,
-                    gutter_width: self.gutter_width(),
-                    line_height: self.line_height,
-                    font_size: self.font_size,
-                    full_char_width: self.full_char_width,
-                    char_width: self.char_width,
-                    font: self.font,
-                    horizontal_scroll_offset: self.horizontal_scroll_offset,
-                };
-
-                for (idx, visual_line) in visual_lines_for_overlay
-                    .iter()
-                    .enumerate()
-                    .skip(start_idx)
-                    .take(end_idx.saturating_sub(start_idx))
-                {
-                    let y = idx as f32 * self.line_height;
-                    self.draw_current_line_highlight(
-                        frame,
+                    self.draw_text_with_syntax_highlighting(
+                        f,
                         &ctx,
                         visual_line,
                         y,
+                        syntax_ref,
+                        syntax_set,
+                        syntax_theme,
                     );
+                    self.draw_fold_collapsed_marker(f, &ctx, visual_line, y);
                 }
-
-                self.draw_search_highlights(frame, &ctx, start_idx, end_idx);
-                self.draw_selection_highlight(frame, &ctx);
-                self.draw_jump_link_highlight(frame, &ctx, bounds, _cursor);
-                self.draw_cursor(frame, &ctx);
             });
+
+            // Draw line numbers in the gutter (no clip — fixed position)
+            for (idx, visual_line) in visual_lines_for_content
+                .iter()
+                .enumerate()
+                .skip(start_idx)
+                .take(end_idx.saturating_sub(start_idx))
+            {
+                let y = idx as f32 * self.line_height;
+                self.draw_line_numbers(frame, &ctx, visual_line, y);
+            }
+        });
+
+        let visual_lines_for_overlay = visual_lines;
+        let overlay_geometry = self.overlay_cache.draw(renderer, bounds.size(), |frame| {
+            // The overlay layer shares the same visual lines, but draws only
+            // elements that change without modifying the buffer content.
+            let ctx = RenderContext {
+                visual_lines: visual_lines_for_overlay.as_ref(),
+                bounds_width: bounds.width,
+                gutter_width: self.gutter_width(),
+                line_height: self.line_height,
+                font_size: self.font_size,
+                full_char_width: self.full_char_width,
+                char_width: self.char_width,
+                font: self.font,
+                horizontal_scroll_offset: self.horizontal_scroll_offset,
+            };
+
+            for (idx, visual_line) in visual_lines_for_overlay
+                .iter()
+                .enumerate()
+                .skip(start_idx)
+                .take(end_idx.saturating_sub(start_idx))
+            {
+                let y = idx as f32 * self.line_height;
+                self.draw_current_line_highlight(frame, &ctx, visual_line, y);
+            }
+
+            self.draw_search_highlights(frame, &ctx, start_idx, end_idx);
+            self.draw_selection_highlight(frame, &ctx);
+            self.draw_jump_link_highlight(frame, &ctx, bounds, _cursor);
+            self.draw_cursor(frame, &ctx);
+        });
 
         vec![content_geometry, overlay_geometry]
     }
@@ -2268,27 +2118,14 @@ impl canvas::Program<Message> for CodeEditor {
                 ..
             }) => {
                 self.modifiers.set(*modifiers);
-                self.handle_keyboard_event(
-                    key,
-                    modified_key,
-                    modifiers,
-                    text,
-                    bounds,
-                    &cursor,
-                )
+                self.handle_keyboard_event(key, modified_key, modifiers, text, bounds, &cursor)
             }
-            Event::Keyboard(keyboard::Event::KeyReleased {
-                modifiers, ..
-            }) => {
+            Event::Keyboard(keyboard::Event::KeyReleased { modifiers, .. }) => {
                 self.modifiers.set(*modifiers);
                 None
             }
-            Event::Mouse(mouse_event) => {
-                self.handle_mouse_event(mouse_event, bounds, &cursor)
-            }
-            Event::InputMethod(ime_event) => {
-                self.handle_ime_event(ime_event, bounds, &cursor)
-            }
+            Event::Mouse(mouse_event) => self.handle_mouse_event(mouse_event, bounds, &cursor),
+            Event::InputMethod(ime_event) => self.handle_ime_event(ime_event, bounds, &cursor),
             _ => None,
         }
     }
@@ -2330,11 +2167,7 @@ impl canvas::Program<Message> for CodeEditor {
 /// # Returns
 ///
 /// `Some((start, end))` if indices are valid, `None` otherwise.
-fn validate_selection_indices(
-    content: &str,
-    start: usize,
-    end: usize,
-) -> Option<(usize, usize)> {
+fn validate_selection_indices(content: &str, start: usize, end: usize) -> Option<(usize, usize)> {
     let len = content.len();
     // Clamp indices to content length
     let start = start.min(len);
@@ -2364,12 +2197,7 @@ mod tests {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
-        canvas::Program::<Message>::mouse_interaction(
-            editor,
-            &(),
-            bounds,
-            cursor,
-        )
+        canvas::Program::<Message>::mouse_interaction(editor, &(), bounds, cursor)
     }
 
     #[test]
@@ -2483,10 +2311,7 @@ mod tests {
     fn test_mouse_interaction_uses_text_cursor_in_editable_area() {
         let editor = CodeEditor::new("fn main() {}", "rs");
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(800.0, 600.0));
-        let cursor = mouse::Cursor::Available(Point::new(
-            editor.gutter_width() + 10.0,
-            10.0,
-        ));
+        let cursor = mouse::Cursor::Available(Point::new(editor.gutter_width() + 10.0, 10.0));
 
         assert_eq!(
             editor_mouse_interaction(&editor, bounds, cursor),
@@ -2525,9 +2350,7 @@ mod tests {
         // width("Hello ") = 6 * CHAR_WIDTH
         // width("World") = 5 * CHAR_WIDTH
         let content = "Hello World";
-        let (x, w) = calculate_segment_geometry(
-            content, 0, 6, 11, 0.0, FONT_SIZE, CHAR_WIDTH,
-        );
+        let (x, w) = calculate_segment_geometry(content, 0, 6, 11, 0.0, FONT_SIZE, CHAR_WIDTH);
 
         let expected_x = CHAR_WIDTH * 6.0;
         let expected_w = CHAR_WIDTH * 5.0;
@@ -2552,9 +2375,7 @@ mod tests {
         // width("你好") = 2 * FONT_SIZE
         // width("世界") = 2 * FONT_SIZE
         let content = "你好世界";
-        let (x, w) = calculate_segment_geometry(
-            content, 0, 2, 4, 10.0, FONT_SIZE, CHAR_WIDTH,
-        );
+        let (x, w) = calculate_segment_geometry(content, 0, 2, 4, 10.0, FONT_SIZE, CHAR_WIDTH);
 
         let expected_x = 10.0 + FONT_SIZE * 2.0;
         let expected_w = FONT_SIZE * 2.0;
@@ -2579,9 +2400,7 @@ mod tests {
         // width("Hi") = 2 * CHAR_WIDTH
         // width("你好") = 2 * FONT_SIZE
         let content = "Hi你好";
-        let (x, w) = calculate_segment_geometry(
-            content, 0, 2, 4, 0.0, FONT_SIZE, CHAR_WIDTH,
-        );
+        let (x, w) = calculate_segment_geometry(content, 0, 2, 4, 0.0, FONT_SIZE, CHAR_WIDTH);
 
         let expected_x = CHAR_WIDTH * 2.0;
         let expected_w = FONT_SIZE * 2.0;
@@ -2601,9 +2420,7 @@ mod tests {
     #[test]
     fn test_calculate_segment_geometry_empty_range() {
         let content = "Hello";
-        let (x, w) = calculate_segment_geometry(
-            content, 0, 0, 0, 0.0, FONT_SIZE, CHAR_WIDTH,
-        );
+        let (x, w) = calculate_segment_geometry(content, 0, 0, 0, 0.0, FONT_SIZE, CHAR_WIDTH);
         assert!((x - 0.0).abs() < f32::EPSILON);
         assert!((w - 0.0).abs() < f32::EPSILON);
     }
@@ -2617,9 +2434,7 @@ mod tests {
         // prefix width: 1 * CHAR_WIDTH
         // segment width: 2 * CHAR_WIDTH
         let content = "0123456789";
-        let (x, w) = calculate_segment_geometry(
-            content, 2, 3, 5, 5.0, FONT_SIZE, CHAR_WIDTH,
-        );
+        let (x, w) = calculate_segment_geometry(content, 2, 3, 5, 5.0, FONT_SIZE, CHAR_WIDTH);
 
         let expected_x = 5.0 + CHAR_WIDTH * 1.0;
         let expected_w = CHAR_WIDTH * 2.0;
@@ -2644,9 +2459,7 @@ mod tests {
         // Prefix should consume whole string ("Hello") and stop.
         // Segment should be empty.
         let content = "Hello";
-        let (x, w) = calculate_segment_geometry(
-            content, 0, 10, 15, 0.0, FONT_SIZE, CHAR_WIDTH,
-        );
+        let (x, w) = calculate_segment_geometry(content, 0, 10, 15, 0.0, FONT_SIZE, CHAR_WIDTH);
 
         let expected_x = CHAR_WIDTH * 5.0; // Width of "Hello"
         let expected_w = 0.0;
@@ -2671,9 +2484,7 @@ mod tests {
         // Indices in chars: 'A' (0), '👋' (1), '\t' (2), 'B' (3)
 
         // Segment covering Emoji
-        let (x, w) = calculate_segment_geometry(
-            content, 0, 1, 2, 0.0, FONT_SIZE, CHAR_WIDTH,
-        );
+        let (x, w) = calculate_segment_geometry(content, 0, 1, 2, 0.0, FONT_SIZE, CHAR_WIDTH);
         let expected_x_emoji = CHAR_WIDTH; // 'A'
         let expected_w_emoji = FONT_SIZE; // '👋'
 
@@ -2689,12 +2500,10 @@ mod tests {
         );
 
         // Segment covering Tab
-        let (x_tab, w_tab) = calculate_segment_geometry(
-            content, 0, 2, 3, 0.0, FONT_SIZE, CHAR_WIDTH,
-        );
+        let (x_tab, w_tab) =
+            calculate_segment_geometry(content, 0, 2, 3, 0.0, FONT_SIZE, CHAR_WIDTH);
         let expected_x_tab = CHAR_WIDTH + FONT_SIZE; // 'A' + '👋'
-        let expected_w_tab =
-            CHAR_WIDTH * crate::canvas_editor::TAB_WIDTH as f32;
+        let expected_w_tab = CHAR_WIDTH * crate::canvas_editor::TAB_WIDTH as f32;
 
         assert_eq!(
             compare_floats(x_tab, expected_x_tab),
@@ -2713,9 +2522,7 @@ mod tests {
         // Start 5, End 3
         // Should result in empty segment at start 5
         let content = "0123456789";
-        let (x, w) = calculate_segment_geometry(
-            content, 0, 5, 3, 0.0, FONT_SIZE, CHAR_WIDTH,
-        );
+        let (x, w) = calculate_segment_geometry(content, 0, 5, 3, 0.0, FONT_SIZE, CHAR_WIDTH);
 
         let expected_x = CHAR_WIDTH * 5.0;
         let expected_w = 0.0;
@@ -2767,8 +2574,7 @@ mod tests {
         let spans = highlight_line_spans(line, syntax, &theme, &syntax_set);
 
         assert!(!spans.is_empty(), "expected at least one span");
-        let combined: String =
-            spans.iter().map(|(_, text)| text.as_str()).collect();
+        let combined: String = spans.iter().map(|(_, text)| text.as_str()).collect();
         assert_eq!(combined, line, "spans must cover the entire line");
     }
 
@@ -2779,18 +2585,15 @@ mod tests {
         let syntax = syntax_set.find_syntax_plain_text();
         let theme = syntect::highlighting::Theme::default();
 
-        let first =
-            editor.highlighted_line_cached(0, syntax, &theme, &syntax_set);
-        let second =
-            editor.highlighted_line_cached(0, syntax, &theme, &syntax_set);
+        let first = editor.highlighted_line_cached(0, syntax, &theme, &syntax_set);
+        let second = editor.highlighted_line_cached(0, syntax, &theme, &syntax_set);
         assert!(
             Rc::ptr_eq(&first, &second),
             "a cached line should be reused as the same Rc"
         );
 
         editor.invalidate_highlight_from(0);
-        let third =
-            editor.highlighted_line_cached(0, syntax, &theme, &syntax_set);
+        let third = editor.highlighted_line_cached(0, syntax, &theme, &syntax_set);
         assert!(
             !Rc::ptr_eq(&first, &third),
             "invalidation should force the line to be recomputed"
@@ -2805,10 +2608,8 @@ mod tests {
         let theme = syntect::highlighting::Theme::default();
         editor.highlight_lines_remaining.set(2);
 
-        let spans =
-            editor.highlighted_line_cached(4, syntax, &theme, &syntax_set);
-        let combined: String =
-            spans.iter().map(|(_, text)| text.as_str()).collect();
+        let spans = editor.highlighted_line_cached(4, syntax, &theme, &syntax_set);
+        let combined: String = spans.iter().map(|(_, text)| text.as_str()).collect();
 
         assert_eq!(combined, "four");
         assert_eq!(
@@ -2839,15 +2640,9 @@ mod tests {
         let editor = CodeEditor::new(code, "rs");
 
         // Sequential highlighting resumes inside the block comment.
-        let sequential =
-            editor.highlighted_line_cached(2, syntax, &theme, &syntax_set);
+        let sequential = editor.highlighted_line_cached(2, syntax, &theme, &syntax_set);
         // Independent highlighting wrongly treats the line as ordinary code.
-        let independent = highlight_line_spans(
-            editor.buffer.line(2),
-            syntax,
-            &theme,
-            &syntax_set,
-        );
+        let independent = highlight_line_spans(editor.buffer.line(2), syntax, &theme, &syntax_set);
 
         let sequential_color = sequential.first().map(|(color, _)| *color);
         let independent_color = independent.first().map(|(color, _)| *color);
@@ -2907,11 +2702,7 @@ mod tests {
         let key = keyboard::Key::Character("g".into());
 
         let message = editor
-            .handle_keyboard_shortcuts(
-                &key,
-                &key,
-                &keyboard::Modifiers::COMMAND,
-            )
+            .handle_keyboard_shortcuts(&key, &key, &keyboard::Modifiers::COMMAND)
             .map(|action| action.into_inner().0);
 
         assert!(matches!(message, Some(Some(Message::OpenGotoLine))));

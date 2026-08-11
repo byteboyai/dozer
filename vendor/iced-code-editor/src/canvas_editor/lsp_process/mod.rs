@@ -16,12 +16,9 @@ const METHOD_WORK_DONE_PROGRESS_CREATE: &str = "window/workDoneProgress/create";
 const PROGRESS_KIND_END: &str = "end";
 
 use self::config::{
-    LspCommand, ensure_rust_analyzer_config, lsp_server_config,
-    resolve_lsp_command,
+    LspCommand, ensure_rust_analyzer_config, lsp_server_config, resolve_lsp_command,
 };
-use crate::canvas_editor::lsp::{
-    LspClient, LspDocument, LspPosition, LspTextChange,
-};
+use crate::canvas_editor::lsp::{LspClient, LspDocument, LspPosition, LspTextChange};
 use crate::text_utils::char_to_byte_index;
 use serde_json::json;
 use std::collections::HashMap;
@@ -87,11 +84,7 @@ impl TextModel {
             for mid in inserted.iter().take(inserted.len() - 1).skip(1) {
                 replacement.push((*mid).to_string());
             }
-            replacement.push(format!(
-                "{}{}",
-                inserted[inserted.len() - 1],
-                suffix
-            ));
+            replacement.push(format!("{}{}", inserted[inserted.len() - 1], suffix));
         }
 
         self.lines.splice(start_line..=end_line, replacement);
@@ -105,9 +98,15 @@ impl TextModel {
         let char_index = position.character as usize;
         let line = self.lines.get(line_index).map_or("", |l| l.as_str());
 
-        let utf16_col =
-            line.chars().take(char_index).map(|c| c.len_utf16() as u32).sum();
-        LspPosition { line: position.line, character: utf16_col }
+        let utf16_col = line
+            .chars()
+            .take(char_index)
+            .map(|c| c.len_utf16() as u32)
+            .sum();
+        LspPosition {
+            line: position.line,
+            character: utf16_col,
+        }
     }
 }
 
@@ -361,24 +360,14 @@ impl LspProcessClient {
                     return;
                 }
 
-                if let Ok(value) =
-                    serde_json::from_slice::<serde_json::Value>(&buf)
-                {
+                if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&buf) {
                     if let Some(id) = value.get("id").and_then(|v| v.as_u64()) {
-                        if let Some(method) =
-                            value.get("method").and_then(|m| m.as_str())
-                        {
+                        if let Some(method) = value.get("method").and_then(|m| m.as_str()) {
                             handle_server_request(id, method, &tx_reader);
                         } else {
-                            handle_client_response(
-                                id,
-                                &value,
-                                &pending_reader,
-                                &events_reader,
-                            );
+                            handle_client_response(id, &value, &pending_reader, &events_reader);
                         }
-                    } else if let Some(method) =
-                        value.get("method").and_then(|m| m.as_str())
+                    } else if let Some(method) = value.get("method").and_then(|m| m.as_str())
                         && let Some(params) = value.get("params")
                     {
                         handle_server_notification(
@@ -462,8 +451,7 @@ impl LspProcessClient {
     /// Formats the message with the required `Content-Length` header.
     fn send_message(&self, value: &serde_json::Value) {
         if let Ok(data) = serde_json::to_vec(&value) {
-            let mut header =
-                format!("Content-Length: {}\r\n\r\n", data.len()).into_bytes();
+            let mut header = format!("Content-Length: {}\r\n\r\n", data.len()).into_bytes();
             header.extend_from_slice(&data);
             let _ = self.writer.send(header);
         }
@@ -479,7 +467,9 @@ impl LspProcessClient {
     ) -> Vec<serde_json::Value> {
         let mut out = Vec::new();
         let mut docs = self.documents.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(state) = docs.get_mut(uri) else { return out };
+        let Some(state) = docs.get_mut(uri) else {
+            return out;
+        };
 
         for change in changes {
             let start = state.text.to_utf16_position(change.range.start);
@@ -515,8 +505,7 @@ fn handle_server_request(id: u64, method: &str, tx: &mpsc::Sender<Vec<u8>>) {
             "result": null
         });
         if let Ok(data) = serde_json::to_vec(&response) {
-            let mut header =
-                format!("Content-Length: {}\r\n\r\n", data.len()).into_bytes();
+            let mut header = format!("Content-Length: {}\r\n\r\n", data.len()).into_bytes();
             header.extend_from_slice(&data);
             let _ = tx.send(header);
         }
@@ -582,7 +571,9 @@ fn handle_server_notification(
         return;
     };
 
-    let Some(val) = params.get("value") else { return };
+    let Some(val) = params.get("value") else {
+        return;
+    };
 
     let kind = val.get("kind").and_then(|k| k.as_str()).unwrap_or("");
     let title = val
@@ -590,9 +581,14 @@ fn handle_server_notification(
         .and_then(|t| t.as_str())
         .map(String::from)
         .unwrap_or_default();
-    let message = val.get("message").and_then(|m| m.as_str()).map(String::from);
-    let percentage =
-        val.get("percentage").and_then(|p| p.as_u64()).map(|p| p as u32);
+    let message = val
+        .get("message")
+        .and_then(|m| m.as_str())
+        .map(String::from);
+    let percentage = val
+        .get("percentage")
+        .and_then(|p| p.as_u64())
+        .map(|p| p as u32);
     let done = kind == PROGRESS_KIND_END;
 
     let _ = events.send(LspEvent::Progress {
@@ -646,9 +642,12 @@ fn hover_text_from_contents(value: &serde_json::Value) -> Option<String> {
     match value {
         serde_json::Value::String(text) => Some(text.clone()),
         serde_json::Value::Array(items) => {
-            let parts: Vec<String> =
-                items.iter().filter_map(hover_text_from_contents).collect();
-            if parts.is_empty() { None } else { Some(parts.join("\n")) }
+            let parts: Vec<String> = items.iter().filter_map(hover_text_from_contents).collect();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("\n"))
+            }
         }
         serde_json::Value::Object(map) => {
             map.get("value").and_then(|v| v.as_str()).map(String::from)
@@ -715,8 +714,9 @@ fn parse_definition_location(
         link: &serde_json::Value,
     ) -> Option<(String, crate::canvas_editor::lsp::LspRange)> {
         let uri = link.get("targetUri")?.as_str()?.to_string();
-        let range_val =
-            link.get("targetSelectionRange").or(link.get("targetRange"))?;
+        let range_val = link
+            .get("targetSelectionRange")
+            .or(link.get("targetRange"))?;
 
         let start = range_val.get("start")?;
         let end = range_val.get("end")?;
@@ -767,7 +767,9 @@ impl LspClient for LspProcessClient {
         let mut docs = self.documents.lock().unwrap_or_else(|e| e.into_inner());
         docs.insert(
             document.uri.clone(),
-            DocumentState { text: TextModel::from_text(text) },
+            DocumentState {
+                text: TextModel::from_text(text),
+            },
         );
 
         let msg = json!({
@@ -785,13 +787,8 @@ impl LspClient for LspProcessClient {
         self.send_message(&msg);
     }
 
-    fn did_change(
-        &mut self,
-        document: &LspDocument,
-        changes: &[LspTextChange],
-    ) {
-        let content_changes =
-            self.apply_change_and_convert(&document.uri, changes);
+    fn did_change(&mut self, document: &LspDocument, changes: &[LspTextChange]) {
+        let content_changes = self.apply_change_and_convert(&document.uri, changes);
         if content_changes.is_empty() {
             return;
         }
@@ -838,13 +835,17 @@ impl LspClient for LspProcessClient {
 
     fn request_hover(&mut self, document: &LspDocument, position: LspPosition) {
         let docs = self.documents.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(state) = docs.get(&document.uri) else { return };
+        let Some(state) = docs.get(&document.uri) else {
+            return;
+        };
         let pos = state.text.to_utf16_position(position);
 
         let id = self.next_id();
         {
-            let mut pending =
-                self.pending_requests.lock().unwrap_or_else(|e| e.into_inner());
+            let mut pending = self
+                .pending_requests
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             pending.insert(id, LspRequestKind::Hover);
         }
 
@@ -860,19 +861,19 @@ impl LspClient for LspProcessClient {
         self.send_message(&msg);
     }
 
-    fn request_completion(
-        &mut self,
-        document: &LspDocument,
-        position: LspPosition,
-    ) {
+    fn request_completion(&mut self, document: &LspDocument, position: LspPosition) {
         let docs = self.documents.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(state) = docs.get(&document.uri) else { return };
+        let Some(state) = docs.get(&document.uri) else {
+            return;
+        };
         let pos = state.text.to_utf16_position(position);
 
         let id = self.next_id();
         {
-            let mut pending =
-                self.pending_requests.lock().unwrap_or_else(|e| e.into_inner());
+            let mut pending = self
+                .pending_requests
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             pending.insert(id, LspRequestKind::Completion);
         }
 
@@ -889,19 +890,19 @@ impl LspClient for LspProcessClient {
         self.send_message(&msg);
     }
 
-    fn request_definition(
-        &mut self,
-        document: &LspDocument,
-        position: LspPosition,
-    ) {
+    fn request_definition(&mut self, document: &LspDocument, position: LspPosition) {
         let docs = self.documents.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(state) = docs.get(&document.uri) else { return };
+        let Some(state) = docs.get(&document.uri) else {
+            return;
+        };
         let pos = state.text.to_utf16_position(position);
 
         let id = self.next_id();
         {
-            let mut pending =
-                self.pending_requests.lock().unwrap_or_else(|e| e.into_inner());
+            let mut pending = self
+                .pending_requests
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             pending.insert(id, LspRequestKind::Definition);
         }
 
@@ -985,7 +986,10 @@ mod tests {
     fn test_handle_client_response_completion() {
         let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
         let pending = Arc::new(Mutex::new(HashMap::new()));
-        pending.lock().unwrap().insert(2u64, LspRequestKind::Completion);
+        pending
+            .lock()
+            .unwrap()
+            .insert(2u64, LspRequestKind::Completion);
 
         let value = serde_json::json!({
             "id": 2,
@@ -1005,7 +1009,10 @@ mod tests {
     fn test_handle_client_response_definition() {
         let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
         let pending = Arc::new(Mutex::new(HashMap::new()));
-        pending.lock().unwrap().insert(3u64, LspRequestKind::Definition);
+        pending
+            .lock()
+            .unwrap()
+            .insert(3u64, LspRequestKind::Definition);
 
         let value = serde_json::json!({
             "id": 3,
@@ -1056,15 +1063,15 @@ mod tests {
             }
         });
 
-        handle_server_notification(
-            METHOD_PROGRESS,
-            &params,
-            &events_tx,
-            "lua-ls",
-        );
+        handle_server_notification(METHOD_PROGRESS, &params, &events_tx, "lua-ls");
 
         match events_rx.try_recv().expect("expected a Progress event") {
-            LspEvent::Progress { token, done, server_key, .. } => {
+            LspEvent::Progress {
+                token,
+                done,
+                server_key,
+                ..
+            } => {
                 assert_eq!(token, "my-token");
                 assert!(done);
                 assert_eq!(server_key, "lua-ls");
@@ -1081,12 +1088,7 @@ mod tests {
             "value": { "kind": "report", "title": "Building" }
         });
 
-        handle_server_notification(
-            METHOD_PROGRESS,
-            &params,
-            &events_tx,
-            "rust-analyzer",
-        );
+        handle_server_notification(METHOD_PROGRESS, &params, &events_tx, "rust-analyzer");
 
         match events_rx.try_recv().expect("expected a Progress event") {
             LspEvent::Progress { done, .. } => assert!(!done),
@@ -1098,12 +1100,7 @@ mod tests {
     fn test_handle_server_notification_unknown_method_ignored() {
         let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
         let params = serde_json::json!({});
-        handle_server_notification(
-            "$/somethingElse",
-            &params,
-            &events_tx,
-            "server",
-        );
+        handle_server_notification("$/somethingElse", &params, &events_tx, "server");
         assert!(events_rx.try_recv().is_err());
     }
 }

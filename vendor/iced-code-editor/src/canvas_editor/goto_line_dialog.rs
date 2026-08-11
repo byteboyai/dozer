@@ -49,10 +49,7 @@ impl canvas::Program<Message> for EscapeListener {
 }
 
 /// Builds the go-to-line input shown over the editor.
-pub(crate) fn view(
-    state: &GotoLineState,
-    line_count: usize,
-) -> Element<'_, Message> {
+pub(crate) fn view(state: &GotoLineState, line_count: usize) -> Element<'_, Message> {
     if !state.is_open {
         return Space::new().into();
     }

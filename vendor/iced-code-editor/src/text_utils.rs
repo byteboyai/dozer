@@ -34,7 +34,9 @@ pub(crate) fn char_to_byte_index(s: &str, char_index: usize) -> usize {
         return char_index.min(s.len());
     }
 
-    s.char_indices().nth(char_index).map_or(s.len(), |(idx, _)| idx)
+    s.char_indices()
+        .nth(char_index)
+        .map_or(s.len(), |(idx, _)| idx)
 }
 
 /// Converts a `[start_char, end_char)` character range into the corresponding

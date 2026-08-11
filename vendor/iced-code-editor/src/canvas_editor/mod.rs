@@ -4,9 +4,7 @@
 //! and input directly, bypassing Iced's higher-level widgets for optimal speed.
 
 use iced::Color;
-use iced::advanced::text::{
-    Alignment, Paragraph, Renderer as TextRenderer, Text,
-};
+use iced::advanced::text::{Alignment, Paragraph, Renderer as TextRenderer, Text};
 use iced::widget::operation::{RelativeOffset, snap_to};
 use iced::widget::{Id, canvas};
 use std::cell::{Cell, RefCell};
@@ -84,8 +82,7 @@ pub mod bench_support {
         /// Creates an editor, primes its visual-line cache, and places the
         /// cursor at `line`/`column`.
         pub fn new(content: &str, line: usize, column: usize) -> Self {
-            let mut editor = super::CodeEditor::new(content, "rs")
-                .with_wrap_column(Some(80));
+            let mut editor = super::CodeEditor::new(content, "rs").with_wrap_column(Some(80));
             editor.request_focus();
             editor.has_canvas_focus = true;
             editor.focus_locked = false;
@@ -119,8 +116,7 @@ pub mod bench_support {
     impl IncrementalLspEditBenchmark {
         /// Creates and primes a focused editor with a no-op LSP client.
         pub fn new(content: &str, line: usize, column: usize) -> Self {
-            let mut editor = super::CodeEditor::new(content, "rs")
-                .with_wrap_column(Some(80));
+            let mut editor = super::CodeEditor::new(content, "rs").with_wrap_column(Some(80));
             editor.attach_lsp(
                 Box::new(NoopLspClient),
                 super::lsp::LspDocument::new("file:///benchmark.rs", "rust"),
@@ -185,16 +181,12 @@ pub mod bench_support {
 
     impl IncrementalSearchEditBenchmark {
         /// Creates an editor with populated search results and a warm layout.
-        pub fn new(
-            content: &str,
-            query: &str,
-            line: usize,
-            column: usize,
-        ) -> Self {
-            let mut editor = super::CodeEditor::new(content, "rs")
-                .with_wrap_column(Some(80));
+        pub fn new(content: &str, query: &str, line: usize, column: usize) -> Self {
+            let mut editor = super::CodeEditor::new(content, "rs").with_wrap_column(Some(80));
             editor.search_state.open_search();
-            editor.search_state.set_query(query.to_owned(), &editor.buffer);
+            editor
+                .search_state
+                .set_query(query.to_owned(), &editor.buffer);
             editor.request_focus();
             editor.has_canvas_focus = true;
             editor.focus_locked = false;
@@ -246,8 +238,7 @@ pub(crate) const GUTTER_WIDTH: f32 = 45.0;
 /// Width in pixels of the fold margin (chevron column) added to the gutter when
 /// code folding is enabled.
 pub(crate) const FOLD_MARGIN_WIDTH: f32 = 14.0;
-pub(crate) const CURSOR_BLINK_INTERVAL: std::time::Duration =
-    std::time::Duration::from_millis(530);
+pub(crate) const CURSOR_BLINK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(530);
 
 /// Measures the width of a single character.
 ///
@@ -260,11 +251,7 @@ pub(crate) const CURSOR_BLINK_INTERVAL: std::time::Duration =
 /// # Returns
 ///
 /// The calculated width of the character as a `f32`
-pub(crate) fn measure_char_width(
-    c: char,
-    full_char_width: f32,
-    char_width: f32,
-) -> f32 {
+pub(crate) fn measure_char_width(c: char, full_char_width: f32, char_width: f32) -> f32 {
     if c == '\t' {
         return char_width * TAB_WIDTH as f32;
     }
@@ -290,11 +277,7 @@ pub(crate) fn measure_char_width(
 /// # Returns
 ///
 /// The total calculated width of the text as a `f32`
-pub(crate) fn measure_text_width(
-    text: &str,
-    full_char_width: f32,
-    char_width: f32,
-) -> f32 {
+pub(crate) fn measure_text_width(text: &str, full_char_width: f32, char_width: f32) -> f32 {
     text.chars()
         .map(|c| measure_char_width(c, full_char_width, char_width))
         .sum()
@@ -435,8 +418,7 @@ pub struct CodeEditor {
     /// derived layout caches (visual lines) are invalidated.
     pub(crate) fold_revision: u64,
     /// Cached foldable regions, keyed by `buffer_revision`.
-    pub(crate) foldable_regions_cache:
-        RefCell<Option<(u64, Rc<Vec<folding::FoldRegion>>)>>,
+    pub(crate) foldable_regions_cache: RefCell<Option<(u64, Rc<Vec<folding::FoldRegion>>)>>,
     /// Search state
     pub(crate) search_state: search::SearchState,
     /// Custom entries displayed before the built-in context-menu actions.
@@ -588,8 +570,7 @@ impl MaxContentWidthCache {
 
     fn remove_width(&mut self, width: f32) {
         let bits = width.to_bits();
-        let remove_entry = if let Some(count) = self.width_counts.get_mut(&bits)
-        {
+        let remove_entry = if let Some(count) = self.width_counts.get_mut(&bits) {
             *count = count.saturating_sub(1);
             *count == 0
         } else {
@@ -643,7 +624,10 @@ impl HighlightCache {
     ///
     /// * `syntax` - Active syntax/language identifier the cache is built for.
     pub(crate) fn new(syntax: String) -> Self {
-        Self { syntax, lines: Vec::new() }
+        Self {
+            syntax,
+            lines: Vec::new(),
+        }
     }
 
     /// Returns the syntax identifier these lines were highlighted with.
@@ -661,11 +645,10 @@ impl HighlightCache {
     /// # Arguments
     ///
     /// * `logical_line` - Index of the logical line to look up.
-    pub(crate) fn spans(
-        &self,
-        logical_line: usize,
-    ) -> Option<Rc<Vec<(Color, String)>>> {
-        self.lines.get(logical_line).map(|line| Rc::clone(&line.spans))
+    pub(crate) fn spans(&self, logical_line: usize) -> Option<Rc<Vec<(Color, String)>>> {
+        self.lines
+            .get(logical_line)
+            .map(|line| Rc::clone(&line.spans))
     }
 
     /// Returns the syntect state to resume highlighting the next line from.
@@ -674,9 +657,9 @@ impl HighlightCache {
     /// cache is empty (highlighting then starts from the syntax's initial
     /// state).
     pub(crate) fn resume_state(&self) -> Option<(ParseState, HighlightState)> {
-        self.lines.last().map(|line| {
-            (line.parse_state.clone(), line.highlight_state.clone())
-        })
+        self.lines
+            .last()
+            .map(|line| (line.parse_state.clone(), line.highlight_state.clone()))
     }
 
     /// Appends one highlighted line and its post-line state to the prefix.
@@ -1005,19 +988,13 @@ impl CodeEditor {
     }
 
     /// Replaces the custom context-menu entries.
-    pub fn set_custom_context_menu_entries(
-        &mut self,
-        entries: Vec<ContextMenuEntry>,
-    ) {
+    pub fn set_custom_context_menu_entries(&mut self, entries: Vec<ContextMenuEntry>) {
         self.custom_context_menu_entries = entries;
     }
 
     /// Replaces the custom context-menu entries using the builder pattern.
     #[must_use]
-    pub fn with_custom_context_menu_entries(
-        mut self,
-        entries: Vec<ContextMenuEntry>,
-    ) -> Self {
+    pub fn with_custom_context_menu_entries(mut self, entries: Vec<ContextMenuEntry>) -> Self {
         self.set_custom_context_menu_entries(entries);
         self
     }
@@ -1051,10 +1028,7 @@ impl CodeEditor {
 
     /// Sets reveal-in-file-manager visibility using the builder pattern.
     #[must_use]
-    pub fn with_reveal_in_file_manager_enabled(
-        mut self,
-        enabled: bool,
-    ) -> Self {
+    pub fn with_reveal_in_file_manager_enabled(mut self, enabled: bool) -> Self {
         self.set_reveal_in_file_manager_enabled(enabled);
         self
     }
@@ -1383,7 +1357,9 @@ impl CodeEditor {
     ///
     /// * `document` - Document metadata describing the buffer
     pub fn lsp_open_document(&mut self, mut document: lsp::LspDocument) {
-        let Some(client) = self.lsp_client.as_mut() else { return };
+        let Some(client) = self.lsp_client.as_mut() else {
+            return;
+        };
         if let Some(current) = self.lsp_document.as_ref() {
             client.did_close(current);
         }
@@ -1457,10 +1433,7 @@ impl CodeEditor {
     /// Requests hover information at an explicit LSP position.
     ///
     /// Returns `true` if an LSP client is attached and the request was sent.
-    pub fn lsp_request_hover_at_position(
-        &mut self,
-        position: lsp::LspPosition,
-    ) -> bool {
+    pub fn lsp_request_hover_at_position(&mut self, position: lsp::LspPosition) -> bool {
         if let (Some(client), Some(document)) =
             (self.lsp_client.as_mut(), self.lsp_document.as_ref())
         {
@@ -1471,10 +1444,7 @@ impl CodeEditor {
     }
 
     /// Converts a canvas point to an LSP position, if possible.
-    pub fn lsp_position_at_point(
-        &self,
-        point: iced::Point,
-    ) -> Option<lsp::LspPosition> {
+    pub fn lsp_position_at_point(&self, point: iced::Point) -> Option<lsp::LspPosition> {
         self.lsp_position_from_point(point)
     }
 
@@ -1490,8 +1460,7 @@ impl CodeEditor {
         let (line, col) = self.calculate_cursor_from_point(point)?;
         let line_content = self.buffer.line(line);
         let anchor_col = Self::word_start_in_line(line_content, col);
-        let anchor_point =
-            self.point_from_position(line, anchor_col).unwrap_or(point);
+        let anchor_point = self.point_from_position(line, anchor_col).unwrap_or(point);
         let line = u32::try_from(line).unwrap_or(u32::MAX);
         let character = u32::try_from(anchor_col).unwrap_or(u32::MAX);
         Some((lsp::LspPosition { line, character }, anchor_point))
@@ -1642,10 +1611,7 @@ impl CodeEditor {
     }
 
     /// Converts a canvas point into an LSP position, if it hits the buffer.
-    fn lsp_position_from_point(
-        &self,
-        point: iced::Point,
-    ) -> Option<lsp::LspPosition> {
+    fn lsp_position_from_point(&self, point: iced::Point) -> Option<lsp::LspPosition> {
         let (line, col) = self.calculate_cursor_from_point(point)?;
         let line = u32::try_from(line).unwrap_or(u32::MAX);
         let character = u32::try_from(col).unwrap_or(u32::MAX);
@@ -1653,17 +1619,10 @@ impl CodeEditor {
     }
 
     /// Converts a logical buffer position into a canvas point, if visible.
-    fn point_from_position(
-        &self,
-        line: usize,
-        col: usize,
-    ) -> Option<iced::Point> {
+    fn point_from_position(&self, line: usize, col: usize) -> Option<iced::Point> {
         let visual_lines = self.visual_lines_cached(self.viewport_width);
-        let visual_index = wrapping::WrappingCalculator::logical_to_visual(
-            &visual_lines,
-            line,
-            col,
-        )?;
+        let visual_index =
+            wrapping::WrappingCalculator::logical_to_visual(&visual_lines, line, col)?;
         let visual_line = &visual_lines[visual_index];
         let line_content = self.buffer.line(visual_line.logical_line);
         let prefix_len = col.saturating_sub(visual_line.start_col);
@@ -1674,11 +1633,7 @@ impl CodeEditor {
             .collect();
         let x = self.gutter_width()
             + 5.0
-            + measure_text_width(
-                &prefix_text,
-                self.full_char_width,
-                self.char_width,
-            );
+            + measure_text_width(&prefix_text, self.full_char_width, self.char_width);
         let y = visual_index as f32 * self.line_height;
         Some(iced::Point::new(x, y))
     }
@@ -1760,11 +1715,13 @@ impl CodeEditor {
             let end_line = self.lsp_synced_line_count.saturating_sub(1);
             Some(lsp::LspTextChange {
                 range: lsp::LspRange {
-                    start: lsp::LspPosition { line: 0, character: 0 },
+                    start: lsp::LspPosition {
+                        line: 0,
+                        character: 0,
+                    },
                     end: lsp::LspPosition {
                         line: u32::try_from(end_line).unwrap_or(u32::MAX),
-                        character: u32::try_from(self.lsp_synced_last_line_len)
-                            .unwrap_or(u32::MAX),
+                        character: u32::try_from(self.lsp_synced_last_line_len).unwrap_or(u32::MAX),
                     },
                 },
                 text: new_text.clone(),
@@ -1796,8 +1753,7 @@ impl CodeEditor {
         };
 
         let new_line_count = self.buffer.line_count();
-        let start_line =
-            snapshot.start_line.min(new_line_count.saturating_sub(1));
+        let start_line = snapshot.start_line.min(new_line_count.saturating_sub(1));
         let new_end_exclusive = if new_line_count >= snapshot.old_line_count {
             snapshot
                 .old_end_exclusive
@@ -1810,13 +1766,13 @@ impl CodeEditor {
                 .max(start_line.saturating_add(1))
                 .min(new_line_count)
         };
-        let text =
-            self.buffer.line_range_to_string(start_line, new_end_exclusive);
+        let text = self
+            .buffer
+            .line_range_to_string(start_line, new_end_exclusive);
         self.lsp_pending_changes.push(lsp::LspTextChange {
             range: lsp::LspRange {
                 start: lsp::LspPosition {
-                    line: u32::try_from(snapshot.start_line)
-                        .unwrap_or(u32::MAX),
+                    line: u32::try_from(snapshot.start_line).unwrap_or(u32::MAX),
                     character: 0,
                 },
                 end: snapshot.old_end,
@@ -1839,8 +1795,9 @@ impl CodeEditor {
     /// and already-flushed LSP changes.
     fn update_lsp_synced_extent(&mut self) {
         self.lsp_synced_line_count = self.buffer.line_count();
-        self.lsp_synced_last_line_len =
-            self.buffer.line_len(self.lsp_synced_line_count.saturating_sub(1));
+        self.lsp_synced_last_line_len = self
+            .buffer
+            .line_len(self.lsp_synced_line_count.saturating_sub(1));
     }
 
     /// Refreshes search matches after buffer modification.
@@ -1849,8 +1806,7 @@ impl CodeEditor {
     /// If search is active, recalculates only the affected logical lines and
     /// selects the match closest to the current cursor position.
     pub(crate) fn refresh_search_matches_if_needed(&mut self) {
-        if self.search_matches_visible() && !self.search_state.query.is_empty()
-        {
+        if self.search_matches_visible() && !self.search_state.query.is_empty() {
             let start_line = self.pre_edit_line.saturating_sub(1);
             let old_end_exclusive = self.pre_edit_last_line.saturating_add(2);
             self.search_state.update_matches_after_edit(
@@ -1866,8 +1822,7 @@ impl CodeEditor {
     }
 
     pub(crate) fn search_matches_visible(&self) -> bool {
-        self.search_state.is_open
-            || (self.vim_enabled && self.vim_state.last_search().is_some())
+        self.search_state.is_open || (self.vim_enabled && self.vim_state.last_search().is_some())
     }
 
     /// Returns whether the editor has unsaved changes.
@@ -2482,13 +2437,21 @@ impl CodeEditor {
 
     /// Returns the width of the line-number area (excluding the fold margin).
     pub(crate) fn line_number_gutter_width(&self) -> f32 {
-        if self.line_numbers_enabled { GUTTER_WIDTH } else { 0.0 }
+        if self.line_numbers_enabled {
+            GUTTER_WIDTH
+        } else {
+            0.0
+        }
     }
 
     /// Returns the width of the fold margin (the chevron column), or `0.0` when
     /// folding is disabled.
     pub(crate) fn fold_margin_width(&self) -> f32 {
-        if self.folding_enabled { FOLD_MARGIN_WIDTH } else { 0.0 }
+        if self.folding_enabled {
+            FOLD_MARGIN_WIDTH
+        } else {
+            0.0
+        }
     }
 
     /// Removes canvas focus from this editor.
@@ -2614,8 +2577,7 @@ impl CodeEditor {
         }
 
         let gutter = self.gutter_width();
-        let max_line_width =
-            cache.as_ref().map_or(0.0, MaxContentWidthCache::max_width);
+        let max_line_width = cache.as_ref().map_or(0.0, MaxContentWidthCache::max_width);
 
         // gutter + left padding + text + right margin
         gutter + 5.0 + max_line_width + 20.0
@@ -2638,10 +2600,7 @@ impl CodeEditor {
     /// The returned `Rc<Vec<VisualLine>>` is cheap to clone and allows multiple
     /// rendering passes (content + overlay layers) to share the same computed
     /// layout without extra allocation.
-    pub(crate) fn visual_lines_cached(
-        &self,
-        viewport_width: f32,
-    ) -> Rc<Vec<wrapping::VisualLine>> {
+    pub(crate) fn visual_lines_cached(&self, viewport_width: f32) -> Rc<Vec<wrapping::VisualLine>> {
         let key = VisualLinesKey {
             buffer_revision: self.buffer_revision,
             viewport_width_bits: viewport_width.to_bits(),
@@ -2690,24 +2649,22 @@ impl CodeEditor {
     /// and suffix prevents wrapping work from scaling with total file size.
     /// Collapsed folds intentionally fall back to a full rebuild because an
     /// indentation edit can change which distant lines are hidden.
-    pub(crate) fn refresh_visual_lines_after_edit(
-        &self,
-        previous_revision: u64,
-    ) {
+    pub(crate) fn refresh_visual_lines_after_edit(&self, previous_revision: u64) {
         if !self.collapsed_folds.is_empty() {
             *self.visual_lines_cache.borrow_mut() = None;
             return;
         }
 
         let mut cache_guard = self.visual_lines_cache.borrow_mut();
-        let Some(cache) = cache_guard.as_mut() else { return };
+        let Some(cache) = cache_guard.as_mut() else {
+            return;
+        };
         if cache.key.buffer_revision != previous_revision {
             *cache_guard = None;
             return;
         }
 
-        let same_layout = cache.key.gutter_width_bits
-            == self.gutter_width().to_bits()
+        let same_layout = cache.key.gutter_width_bits == self.gutter_width().to_bits()
             && cache.key.wrap_enabled == self.wrap_enabled
             && cache.key.wrap_column == self.wrap_column
             && cache.key.folding_enabled == self.folding_enabled
@@ -2721,10 +2678,11 @@ impl CodeEditor {
 
         let old_line_count = cache.buffer_line_count;
         let new_line_count = self.buffer.line_count();
-        let start_line =
-            self.pre_edit_line.saturating_sub(1).min(old_line_count);
-        let old_end_line =
-            self.pre_edit_last_line.saturating_add(2).min(old_line_count);
+        let start_line = self.pre_edit_line.saturating_sub(1).min(old_line_count);
+        let old_end_line = self
+            .pre_edit_last_line
+            .saturating_add(2)
+            .min(old_line_count);
         let new_end_line = if new_line_count >= old_line_count {
             old_end_line
                 .saturating_add(new_line_count - old_line_count)
@@ -2764,11 +2722,8 @@ impl CodeEditor {
         // The overwhelmingly common typing case keeps both the logical-line
         // count and the number of wrapped segments stable. Update that tiny
         // slice in place, without allocating or moving the rest of the file.
-        if new_line_count == old_line_count
-            && old_segment_count == new_segment_count
-        {
-            visual_lines[prefix_end..suffix_start]
-                .clone_from_slice(&changed_visual_lines);
+        if new_line_count == old_line_count && old_segment_count == new_segment_count {
+            visual_lines[prefix_end..suffix_start].clone_from_slice(&changed_visual_lines);
         } else {
             visual_lines.splice(prefix_end..suffix_start, changed_visual_lines);
 
@@ -2794,12 +2749,11 @@ impl CodeEditor {
     ///
     /// This removes the final whole-file pass that used to happen after every
     /// keystroke when wrapping was disabled.
-    pub(crate) fn refresh_max_content_width_after_edit(
-        &self,
-        previous_revision: u64,
-    ) {
+    pub(crate) fn refresh_max_content_width_after_edit(&self, previous_revision: u64) {
         let mut cache_guard = self.max_content_width_cache.borrow_mut();
-        let Some(cache) = cache_guard.as_mut() else { return };
+        let Some(cache) = cache_guard.as_mut() else {
+            return;
+        };
         if cache.revision != previous_revision {
             *cache_guard = None;
             return;
@@ -2807,10 +2761,11 @@ impl CodeEditor {
 
         let old_line_count = cache.line_widths.len();
         let new_line_count = self.buffer.line_count();
-        let start_line =
-            self.pre_edit_line.saturating_sub(1).min(old_line_count);
-        let old_end_line =
-            self.pre_edit_last_line.saturating_add(2).min(old_line_count);
+        let start_line = self.pre_edit_line.saturating_sub(1).min(old_line_count);
+        let old_end_line = self
+            .pre_edit_last_line
+            .saturating_add(2)
+            .min(old_line_count);
         if start_line == 0 && old_end_line == old_line_count {
             *cache_guard = None;
             return;
@@ -2843,7 +2798,9 @@ impl CodeEditor {
         for width in &new_widths {
             cache.add_width(*width);
         }
-        cache.line_widths.splice(start_line..old_end_line, new_widths);
+        cache
+            .line_widths
+            .splice(start_line..old_end_line, new_widths);
         cache.revision = self.buffer_revision;
     }
 
@@ -2892,12 +2849,10 @@ mod tests {
     #[test]
     fn test_custom_context_menu_configuration() {
         let custom_entries = vec![
-            ContextMenuEntry::item("format", "Format document")
-                .with_shortcut("Shift+Alt+F"),
+            ContextMenuEntry::item("format", "Format document").with_shortcut("Shift+Alt+F"),
             ContextMenuEntry::separator(),
             ContextMenuEntry::Item(
-                ContextMenuItem::new("rename", "Rename symbol")
-                    .with_enabled(false),
+                ContextMenuItem::new("rename", "Rename symbol").with_enabled(false),
             ),
         ];
 
@@ -2921,8 +2876,7 @@ mod tests {
         editor.set_reveal_in_file_manager_enabled(true);
         assert!(editor.reveal_in_file_manager_enabled());
 
-        let editor =
-            CodeEditor::new("", "rs").with_reveal_in_file_manager_enabled(true);
+        let editor = CodeEditor::new("", "rs").with_reveal_in_file_manager_enabled(true);
         assert!(editor.reveal_in_file_manager_enabled());
     }
 
@@ -2962,8 +2916,7 @@ mod tests {
 
     #[test]
     fn vim_disable_clears_pending_state() {
-        let mut editor =
-            CodeEditor::new("unchanged", "rs").with_vim_enabled(true);
+        let mut editor = CodeEditor::new("unchanged", "rs").with_vim_enabled(true);
         assert_eq!(editor.vim_state.parse_key('4'), None);
         assert_eq!(editor.vim_state.parse_key('d'), None);
 
@@ -3153,8 +3106,7 @@ mod tests {
         // "漢字" (Kanji, 2 chars) -> 2 * FONT_SIZE
 
         let text_hiragana = "こんにちは";
-        let width_hiragana =
-            measure_text_width(text_hiragana, FONT_SIZE, CHAR_WIDTH);
+        let width_hiragana = measure_text_width(text_hiragana, FONT_SIZE, CHAR_WIDTH);
         let expected_hiragana = FONT_SIZE * 5.0;
         assert_eq!(
             compare_floats(width_hiragana, expected_hiragana),
@@ -3163,8 +3115,7 @@ mod tests {
         );
 
         let text_katakana = "カタカナ";
-        let width_katakana =
-            measure_text_width(text_katakana, FONT_SIZE, CHAR_WIDTH);
+        let width_katakana = measure_text_width(text_katakana, FONT_SIZE, CHAR_WIDTH);
         let expected_katakana = FONT_SIZE * 4.0;
         assert_eq!(
             compare_floats(width_katakana, expected_katakana),
@@ -3273,11 +3224,7 @@ mod tests {
     }
 
     impl lsp::LspClient for TestLspClient {
-        fn did_change(
-            &mut self,
-            _document: &lsp::LspDocument,
-            changes: &[lsp::LspTextChange],
-        ) {
+        fn did_change(&mut self, _document: &lsp::LspDocument, changes: &[lsp::LspTextChange]) {
             self.changes.borrow_mut().push(changes.to_vec());
         }
     }
@@ -3295,7 +3242,9 @@ mod tests {
     #[test]
     fn test_enqueue_lsp_change_auto_flush() {
         let changes = Rc::new(RefCell::new(Vec::new()));
-        let client = TestLspClient { changes: Rc::clone(&changes) };
+        let client = TestLspClient {
+            changes: Rc::clone(&changes),
+        };
         let mut editor = CodeEditor::new("hello", "rs");
         editor.attach_lsp(
             Box::new(client),
@@ -3320,7 +3269,9 @@ mod tests {
     #[test]
     fn test_editor_update_sends_bounded_incremental_lsp_change() {
         let changes = Rc::new(RefCell::new(Vec::new()));
-        let client = TestLspClient { changes: Rc::clone(&changes) };
+        let client = TestLspClient {
+            changes: Rc::clone(&changes),
+        };
         let content = (0..10)
             .map(|line| format!("line{line}"))
             .collect::<Vec<_>>()
@@ -3380,8 +3331,7 @@ mod tests {
     #[test]
     fn test_max_content_width_increases_with_longer_lines() {
         let short = CodeEditor::new("ab", "rs");
-        let long =
-            CodeEditor::new("abcdefghijklmnopqrstuvwxyz0123456789", "rs");
+        let long = CodeEditor::new("abcdefghijklmnopqrstuvwxyz0123456789", "rs");
 
         assert!(
             long.max_content_width() > short.max_content_width(),
@@ -3404,9 +3354,7 @@ mod tests {
         // Bump revision to simulate edit
         editor.buffer_revision = editor.buffer_revision.wrapping_add(1);
         // Update the buffer to reflect a longer line
-        editor.buffer = crate::text_buffer::TextBuffer::new(
-            "hello world with extra content",
-        );
+        editor.buffer = crate::text_buffer::TextBuffer::new("hello world with extra content");
         let w3 = editor.max_content_width();
         assert!(
             w3 > w1,
@@ -3416,8 +3364,7 @@ mod tests {
 
     #[test]
     fn test_max_content_width_cache_updates_incrementally_after_newline() {
-        let mut editor =
-            CodeEditor::new("short\nthis is the longest line\ntail", "rs");
+        let mut editor = CodeEditor::new("short\nthis is the longest line\ntail", "rs");
         editor.set_wrap_enabled(false);
         editor.request_focus();
         editor.has_canvas_focus = true;
@@ -3429,9 +3376,7 @@ mod tests {
         let incremental = editor.max_content_width();
         let expected = CodeEditor::new(&editor.content(), "rs");
 
-        assert!(
-            (incremental - expected.max_content_width()).abs() < f32::EPSILON
-        );
+        assert!((incremental - expected.max_content_width()).abs() < f32::EPSILON);
         let cache = editor.max_content_width_cache.borrow();
         assert_eq!(
             cache.as_ref().map(|cache| cache.line_widths.len()),

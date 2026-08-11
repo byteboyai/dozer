@@ -30,7 +30,10 @@ pub struct Cursor {
 impl Cursor {
     /// Creates a new cursor at the given position with no selection.
     pub fn new(position: (usize, usize)) -> Self {
-        Self { position, anchor: None }
+        Self {
+            position,
+            anchor: None,
+        }
     }
 
     /// Returns `true` if this cursor has an active selection.
@@ -90,7 +93,10 @@ pub struct CursorSet {
 impl CursorSet {
     /// Creates a `CursorSet` with a single cursor at `pos`.
     pub fn new(pos: (usize, usize)) -> Self {
-        Self { cursors: vec![Cursor::new(pos)], primary_idx: 0 }
+        Self {
+            cursors: vec![Cursor::new(pos)],
+            primary_idx: 0,
+        }
     }
 
     // -----------------------------------------------------------------
@@ -201,8 +207,7 @@ impl CursorSet {
 
         // Tag each cursor with its original index so we can track the primary.
         let primary_orig = self.primary_idx;
-        let mut tagged: Vec<(usize, Cursor)> =
-            self.cursors.drain(..).enumerate().collect();
+        let mut tagged: Vec<(usize, Cursor)> = self.cursors.drain(..).enumerate().collect();
 
         // Sort by the *minimum* position (considering anchor) so overlapping
         // selections are adjacent.
@@ -253,11 +258,12 @@ fn cmp_pos(a: (usize, usize), b: (usize, usize)) -> Ordering {
 }
 
 /// Returns `(start, end)` with `start <= end`.
-fn normalise(
-    a: (usize, usize),
-    b: (usize, usize),
-) -> ((usize, usize), (usize, usize)) {
-    if cmp_pos(a, b) == Ordering::Greater { (b, a) } else { (a, b) }
+fn normalise(a: (usize, usize), b: (usize, usize)) -> ((usize, usize), (usize, usize)) {
+    if cmp_pos(a, b) == Ordering::Greater {
+        (b, a)
+    } else {
+        (a, b)
+    }
 }
 
 /// Minimum position covered by a cursor (position or anchor, whichever is earlier).
@@ -301,12 +307,20 @@ fn merge_into(dst: &mut Cursor, src: &Cursor) {
     let combined_min = {
         let a = min_pos(dst);
         let b = min_pos(src);
-        if cmp_pos(a, b) == Ordering::Less { a } else { b }
+        if cmp_pos(a, b) == Ordering::Less {
+            a
+        } else {
+            b
+        }
     };
     let combined_max = {
         let a = max_pos(dst);
         let b = max_pos(src);
-        if cmp_pos(a, b) == Ordering::Greater { a } else { b }
+        if cmp_pos(a, b) == Ordering::Greater {
+            a
+        } else {
+            b
+        }
     };
 
     // If either cursor had a selection, the merged cursor keeps the union.
