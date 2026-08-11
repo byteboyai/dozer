@@ -273,6 +273,42 @@ fn home_right_zone(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
 /// 最近项目卡(取 `app.recent_projects` 前 5 条,D2/D3)、"更多项目"占位(D7)、
 /// "＋新增项目"(复用 `Message::ProjectTabPickFolder`)。不画品牌行——顶栏
 /// 本身已有 `dozer_home_tab` 品牌页签,这里重复画属于视觉冗余。
+/// 通用面板标题组件:图标 + 标题(金色 `subtitle` 字号),标题底部一条 1px
+/// 分割线。各 pane / 卡片标题统一复用,保证视觉一致(首页项目列表、Recents
+/// 两卡、工作区文件树、Git 提交图等)。`Message` 泛型——本身不发出任何
+/// 交互消息,可在任意 `Message` 类型的视图里直接内嵌。
+pub(crate) fn home_panel_head<'a, Message>(
+    icon: icons::IconKind,
+    title: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>
+where
+    Message: 'a,
+{
+    column![
+        row![
+            icons::view(
+                icon,
+                crate::theme::icon_size::row(),
+                theme::homespace_color::gold(),
+            ),
+            text(title)
+                .size(theme::homespace_font::subtitle())
+                .color(theme::homespace_color::gold()),
+        ]
+        .spacing(8)
+        .align_y(iced_widget::core::Alignment::Center),
+        container(iced_widget::Space::new())
+            .width(Length::Fill)
+            .height(Length::Fixed(1.0))
+            .style(|_t: &iced_widget::Theme| container::Style {
+                background: Some(theme::homespace_color::border().into()),
+                ..container::Style::default()
+            }),
+    ]
+    .spacing(8)
+    .into()
+}
+
 /// `app.recent_projects` 为空时画"还没有项目"兜底文案,不崩(spec §4)。
 fn home_project_list_view(
     app: &App,
@@ -280,11 +316,7 @@ fn home_project_list_view(
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![].spacing(16);
 
-    col = col.push(
-        text("我的项目")
-            .size(theme::homespace_font::caption())
-            .color(theme::homespace_color::dim()),
-    );
+    col = col.push(home_panel_head(icons::IconKind::LayoutList, "项目"));
 
     // 搜索框:视觉占位,不接线(D7；precedent:顶栏 ⌘K 搜索框同款"先视觉后接线")。
     col = col.push(
@@ -405,7 +437,7 @@ fn home_project_list_view(
 
     // 与外边框保持标准内边距:外层 `zone_box` 只留 1px 圆角裁切余量,内容
     // 若直接贴边会顶到圆角边框,因此这里补一层标准面板内距(与 project_pane
-    // 的 8 / 卡片的 10 同量级),让"我的项目"标题、搜索框、卡片、底部按钮
+    // 的 8 / 卡片的 10 同量级),让"项目"标题、搜索框、卡片、底部按钮
     // 四周都不顶边框。
     container(col)
         .width(Length::Fill)
@@ -444,12 +476,7 @@ fn home_recent_files_card(
     app: &App,
     now_ms: u64,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let mut col = column![
-        text("最近的文件")
-            .size(theme::homespace_font::subtitle())
-            .color(theme::homespace_color::cream())
-    ]
-    .spacing(8);
+    let mut col = column![home_panel_head(icons::IconKind::FileText, "最近的文件")].spacing(8);
 
     if !app.home_recents_loaded {
         col = col.push(
@@ -518,11 +545,10 @@ fn home_recent_conversations_card(
     app: &App,
     now_ms: u64,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let mut col = column![
-        text("最近的对话")
-            .size(theme::homespace_font::subtitle())
-            .color(theme::homespace_color::cream())
-    ]
+    let mut col = column![home_panel_head(
+        icons::IconKind::MessageSquare,
+        "最近的对话"
+    )]
     .spacing(8);
 
     if !app.home_recents_loaded {

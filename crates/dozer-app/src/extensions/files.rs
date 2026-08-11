@@ -661,6 +661,7 @@ pub fn view<'a>(
 
     let body = container(
         column![
+            crate::homespace::home_panel_head(icons::IconKind::Folder, "文件"),
             header,
             Scrollable::new(tree_col)
                 .width(Length::Fill)

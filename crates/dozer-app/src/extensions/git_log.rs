@@ -9,7 +9,7 @@
 use crate::theme;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::alignment;
-use iced_widget::core::{Color, Element, Font, Length, Padding, Pixels, Point, Rectangle, Vector};
+use iced_widget::core::{Color, Element, Font, Length, Pixels, Point, Rectangle, Vector};
 use iced_widget::{column, container, row, scrollable, text};
 use std::path::{Path, PathBuf};
 
@@ -609,9 +609,15 @@ fn ref_labels_text(refs: &[RefLabel], head_branch: Option<&str>) -> String {
 pub fn view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let error = state.error.as_deref();
     if let Some(err) = error {
-        return container(text(format!("git log 读取失败: {err}")).color(theme::color::RED))
-            .padding(16)
-            .into();
+        return container(
+            column![
+                crate::homespace::home_panel_head(crate::icons::IconKind::GitBranch, "Git"),
+                text(format!("git log 读取失败: {err}")).color(theme::color::RED),
+            ]
+            .spacing(8)
+            .padding(12),
+        )
+        .into();
     }
     let loading = state.pending.is_some();
     let Some(snapshot) = state.cache.as_ref() else {
@@ -620,16 +626,28 @@ pub fn view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_rend
         } else {
             "未打开项目"
         };
-        return container(text(text_content).color(theme::color::DIM))
-            .padding(16)
-            .into();
+        return container(
+            column![
+                crate::homespace::home_panel_head(crate::icons::IconKind::GitBranch, "Git"),
+                text(text_content).color(theme::color::DIM),
+            ]
+            .spacing(8)
+            .padding(12),
+        )
+        .into();
     };
     let selected = state.selected;
     let detail = state.detail.as_ref();
     if snapshot.rows.is_empty() {
-        return container(text("没有可显示的提交").color(theme::color::DIM))
-            .padding(16)
-            .into();
+        return container(
+            column![
+                crate::homespace::home_panel_head(crate::icons::IconKind::GitBranch, "Git"),
+                text("没有可显示的提交").color(theme::color::DIM),
+            ]
+            .spacing(8)
+            .padding(12),
+        )
+        .into();
     }
     let height = ROW_HEIGHT * snapshot.rows.len() as f32;
     let head_branch = snapshot.head_branch.as_deref();
@@ -646,8 +664,7 @@ pub fn view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_rend
         text(snapshot.repo_path.display().to_string())
             .size(theme::font::caption())
             .color(theme::color::DIM)
-    ]
-    .padding([4, 8]);
+    ];
     // 已经有旧快照在画的时候(引用变化重建/加载更多)又发起了新一轮异步
     // 加载——旧图先留着不闪空,但得给个文案说明"正在换新",不然用户会
     // 疑惑点了"加载更多"怎么行数没变。
@@ -665,26 +682,33 @@ pub fn view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_rend
     )
     .on_press_maybe((!loading).then_some(Message::LoadMore))
     .padding([4, 12]);
-    let graph_body = column![canvas, load_more].padding(Padding {
-        top: 0.0,
-        right: 0.0,
-        bottom: 8.0,
-        left: 0.0,
-    });
+    let graph_body = column![canvas, load_more];
     let graph = scrollable(graph_body)
         .width(Length::Fill)
         .height(Length::Fill);
     if let Some(detail_res) = detail {
         let detail_panel = detail_view(snapshot, selected, detail_res);
-        column![header, row![graph, detail_panel],]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        column![
+            crate::homespace::home_panel_head(crate::icons::IconKind::GitBranch, "Git"),
+            header,
+            row![graph, detail_panel],
+        ]
+        .spacing(8)
+        .padding(12)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     } else {
-        column![header, graph]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        column![
+            crate::homespace::home_panel_head(crate::icons::IconKind::GitBranch, "Git"),
+            header,
+            graph,
+        ]
+        .spacing(8)
+        .padding(12)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 }
 
