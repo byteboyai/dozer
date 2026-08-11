@@ -20,6 +20,7 @@ use crate::extensions::files;
 use crate::extensions::footbar;
 use crate::extensions::git_log;
 use crate::extensions::project;
+use crate::extensions::search;
 use crate::extensions::ssh;
 use crate::extensions::todo;
 use crate::extensions::usage;
@@ -932,6 +933,10 @@ pub enum Message {
     /// 数据库面板的全部消息。`TestConnectionResult` 特化分支内核直接拦截
     /// 处理(带 `project_id`,不能按当前聚焦项目路由),其余走通配分发。
     Database(database::Message),
+    /// 文件树右键"搜索"弹窗的全部消息,内核只转发不解读——见
+    /// `extensions::search::Message`。`SearchResults`(带 `project_id`)按
+    /// 项目路由,其余(弹窗常驻 UI 交互)投给当前聚焦项目。
+    Search(search::Message),
     /// 终端 pane 像素尺寸变化换算出的新网格尺寸；对所有 tab 生效
     /// （包括当前不可见的），保证切换 tab 时尺寸已经是最新的。
     PaneResized { cols: u16, rows: u16 },
@@ -1842,6 +1847,18 @@ impl App {
     pub fn search_editing(&self) -> bool {
         self.active_workspace()
             .is_some_and(|ws| ws.search_editing())
+    }
+
+    /// 右键文件树"搜索"弹窗是否打开(main.rs 键盘路由 + App view 浮层用)。
+    pub fn search_popup_open(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.search_popup_open())
+    }
+
+    /// 右键文件树"搜索"弹窗查询框是否处于编辑态(main.rs 键盘路由用)。
+    pub fn search_popup_editing(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.search_popup_editing())
     }
 
     /// 项目信息面板标题是否处于自绘编辑态(main.rs 键盘路由用)。
@@ -2833,6 +2850,37 @@ impl App {
                 let project_path = std::path::PathBuf::from(&project.path);
                 todo::update(&mut ws.todo, app_todo, msg, project_id, &project_path);
             }
+            // 文件树右键"搜索"弹窗:`SearchResults` 带 `project_id`,异步结果
+            // 按所属项目路由(用户可能已切走);其余交互投当前聚焦项目。
+            Message::Search(search::Message::SearchResults(project_id, result)) => {
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                self.with_project(project_id, move |ws, _io| {
+                    let emit = move |m| {
+                        let _ = proxy.send_event(Message::Search(m));
+                    };
+                    search::update(
+                        &mut ws.search,
+                        search::Message::SearchResults(project_id, result),
+                        project_id,
+                        &handle,
+                        emit,
+                    );
+                });
+            }
+            Message::Search(msg) => {
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                let Some(project_id) = self.active_project_id else {
+                    return;
+                };
+                self.with_focused_project(move |ws, _io| {
+                    let emit = move |m| {
+                        let _ = proxy.send_event(Message::Search(m));
+                    };
+                    search::update(&mut ws.search, msg, project_id, &handle, emit);
+                });
+            }
             Message::TabAttached(project_id, tab_id, info, snapshot) => {
                 let session_id = info.id.clone();
                 self.with_project(project_id, move |ws, io| {
@@ -3527,6 +3575,19 @@ impl App {
                 // 命中 `files::update` 里的 `unreachable!`)。
                 self.update(Message::PreviewOpenPath(path));
             }
+            Message::Files(files::Message::OpenSearch(path, is_dir)) => {
+                // 右键菜单"搜索":跨 `files::Message` 边界,由内核把它映射成
+                // `search::Message::SearchOpen`。先关右键菜单(否则搜索弹窗
+                // dismiss 一关,旧菜单又冒回来),作用域由 `is_dir` 决定——目录
+                // 按目录递归搜,文件只搜单文件。
+                self.files.close_context_menu();
+                let scope = if is_dir {
+                    search::Scope::Dir(path)
+                } else {
+                    search::Scope::File(path)
+                };
+                self.update(Message::Search(search::Message::SearchOpen(scope)));
+            }
             Message::Files(
                 msg @ (files::Message::StatusesRefreshed(project_id, ..)
                 | files::Message::PasteDone(project_id, ..)
@@ -3923,7 +3984,19 @@ impl App {
         ];
         let base = column![top, body];
 
-        let popped = if ws.edit_session.is_some() {
+        let popped = if ws.search_popup_open() {
+            // 文件树右键"搜索"弹窗:窗口级浮层。遮罩"点点即关"由
+            // `search_modal` 内部自己处理(整窗 `SCRIM` 做成可点击目标,卡片
+            // 是兄弟元素盖在上面),这里只需把弹窗叠在 `base` 之上。
+            let project_root = ws.project.as_ref().map(|p| std::path::Path::new(&p.path));
+            stack![
+                base,
+                search::search_modal(&ws.search, project_root).map(Message::Search)
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        } else if ws.edit_session.is_some() {
             let dismiss = MouseArea::new(
                 container(column![])
                     .width(Length::Fill)
@@ -4531,23 +4604,20 @@ fn project_tab_item<'a>(
         })
         .clip(true);
 
-    let select = button(label)
-        .on_press(Message::ProjectTabSwitch(id))
-        .width(Length::Fill)
-        .height(Length::Fixed(tab_h))
-        .style(move |_t: &iced_widget::Theme, _s| button::Style {
-            // 胶囊背景改由下方 `capsule_layer` 统一承载(悬停标题或 × 都触发),
-            // 这里不再画——否则悬停 × 时 select 拿不到 `Hovered`、胶囊会消失。
-            background: None,
-            text_color: theme::color::CREAM,
-            ..button::Style::default()
-        });
-    // 标题文字的 hover 变色走 `MouseArea` + `HoverId::ProjectTabItem`(与
-    // 关闭按钮同款叠层:`MouseArea` 只抓 enter/exit 事件,按下仍由底层
-    // `select` 按钮处理)。
-    let select = MouseArea::new(select)
-        .on_enter(Message::Hover(HoverId::ProjectTabItem(id), true))
-        .on_exit(Message::Hover(HoverId::ProjectTabItem(id), false));
+    // 选中改走 `MouseArea::on_press`(与 `panel_tab` 同一处修复、同一条理由:
+    // `Button::on_press` 实际在松开时才发消息,会让"按下页签＝选中＋准备被
+    // 拖走"名不副实,导致拖拽状态按不下去、也松不开——见 `panel_tab` 里的
+    // 详细注释)。宽高原来靠 `button(..).width(..).height(..)` 撑,这里改用
+    // 一层 `container` 顶上(`MouseArea` 自身不认宽高,直接照抄内容尺寸)。
+    let select = MouseArea::new(
+        container(label)
+            .width(Length::Fill)
+            .height(Length::Fixed(tab_h)),
+    )
+    .on_press(Message::ProjectTabSwitch(id))
+    .on_enter(Message::Hover(HoverId::ProjectTabItem(id), true))
+    .on_exit(Message::Hover(HoverId::ProjectTabItem(id), false))
+    .interaction(mouse::Interaction::Pointer);
 
     // 关闭按钮:方形图标按钮,叠在页签主体之上(见下方 tab_row)。默认隐藏
     // (hover==0 时 alpha=0),悬停页签任一区域才显形——颜色仍随 `close_hover_t`
@@ -5698,21 +5768,20 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
         .clip(true),
     );
 
-    let select = button(title_row)
+    // 选中改走 `MouseArea::on_press`——iced 的 `Button::on_press` 实际在
+    // **松开**时才发消息(cursor 仍在按钮上才算一次点击,见 button.rs
+    // update),不是按下瞬间。这与本函数原先的设想("按下页签＝选中＋准备被
+    // 拖走")名不副实:`tab_drag` 直到松开一刻才置位,而 main.rs 那条原始
+    // `WindowEvent::MouseInput{Released}` 早于 iced 派发同一事件给按钮,检查
+    // 的还是松开前的旧状态,永远赶不上——于是拖拽状态"按不下去、也松不开":
+    // 光标不按住也能把 tab 拖着换位,松手也锁不住位置。换成 `on_press` 后
+    // 选中与拖拽起点严格对齐物理按下(mousedown),释放对齐物理松开
+    // (mouseup),与 Chrome 页签一致。
+    let select = MouseArea::new(title_row)
         .on_press(on_select)
-        .style(move |_t: &iced_widget::Theme, _s| button::Style {
-            // 胶囊背景改由外层 `container` 统一承载(悬停标题或 × 都触发),
-            // 这里不再画——否则悬停 × 时 select 拿不到 `Hovered`、胶囊消失,
-            // 且 × 会落到胶囊之外。
-            background: None,
-            text_color: title_color,
-            ..button::Style::default()
-        });
-    // 标题 hover 变色走 `MouseArea` + 调用方给的 hover 消息(只抓 enter/exit,
-    // 按下仍由底层 `select` 按钮处理)。
-    let select = MouseArea::new(select)
         .on_enter(title_hover(true))
-        .on_exit(title_hover(false));
+        .on_exit(title_hover(false))
+        .interaction(mouse::Interaction::Pointer);
 
     // × 默认隐藏(hover==0 时 alpha=0),悬停页签任一区域才显形;颜色随
     // `close_hover_t` 从 DIM→GOLD。未悬停不挂 `on_press`,避免隐形 × 误吞点击。

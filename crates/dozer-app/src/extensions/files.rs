@@ -112,6 +112,9 @@ pub enum Message {
         is_dir: bool,
     },
     ContextMenuClose,
+    /// 右键菜单"搜索":内核拦截,不进 `update`——由内核映射成
+    /// `search::Message::SearchOpen` 打开文件树右键作用域的搜索弹窗。
+    OpenSearch(PathBuf, bool),
     /// 单击文件行:在内核里打开预览。该面板本身不渲染预览(预览是被窗格),
     /// 故文件行点击要跨过 `files::Message` 边界、由内核拦截映射到
     /// `Message::PreviewOpenPath`——本模块不渲染预览,`update()` 不处理它。
@@ -680,6 +683,9 @@ pub fn update(
         }
         Message::OpenFile(_) => {
             unreachable!("由内核拦截处理,见 files::Message::OpenFile 文档")
+        }
+        Message::OpenSearch(..) => {
+            unreachable!("由内核拦截处理,映射成 search::Message::SearchOpen")
         }
         // 工具行 icon 按钮的 hover 由内核 `Message::Files` 分支转发到
         // `HoverId`(文件树面板不挂 App 的 hover 动画表),`update` 吃不到
@@ -1514,6 +1520,14 @@ pub fn context_menu_popup<'a>(
         .as_ref()
         .map(|t| t.root() == menu.target.as_path())
         .unwrap_or(false);
+    // "搜索"恒置顶(对目录=全文搜该目录,对文件=搜该文件),与其余项用一条
+    // 分隔线隔开。
+    items.push(menu_item(
+        Some(icons::IconKind::Search),
+        "搜索",
+        Message::OpenSearch(menu.target.clone(), menu.is_dir),
+    ));
+    push_sep(&mut items);
     if menu.is_dir {
         items.push(menu_item(
             Some(icons::IconKind::FilePlus),
