@@ -37,6 +37,12 @@
   el.setAttribute('src', '__file__' + encodeURI(p));
   el.setAttribute('theme', 'dark');
   el.setAttribute('toolbar', 'false');
+  // 文本预览挂了 &ln=1(Rust 侧按扩展名白名单判定):开 flyfish text
+  // 渲染器的行号栏。option 走 JSON 化的 attributes,与 theme/toolbar
+  // 属性合并,图片/PDF 渲染器不认此 option,无副作用。
+  if (new URLSearchParams(location.search).get('ln') === '1') {
+    el.setAttribute('options', JSON.stringify({ text: { lineNumbers: true } }));
+  }
   document.body.appendChild(el);
 </script>
 </body>

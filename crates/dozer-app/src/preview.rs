@@ -50,11 +50,19 @@ pub fn encode_component(s: &str) -> String {
 /// 路径;把它从内联拼接抽成具名函数,是为将来"某些扩展名不走 flyfish、
 /// 走 Acceptance 式 iced 原生 pane"的分叉预留一个函数级插入点——不引入
 /// trait/注册表,YAGNI。
+///
+/// 文本文件(`is_editable_extension`)额外挂 `&ln=1`:host.html 读到后给
+/// flyfish 的 text 渲染器开 `options.text.lineNumbers`,预览里显示行号
+///(图片/PDF 渲染器不认这个 option,挂了也无副作用)。
 fn flyfish_url(path: &std::path::Path) -> String {
-    format!(
+    let mut u = format!(
         "dozer://flyfish/host.html?p={}",
         encode_component(&path.to_string_lossy())
-    )
+    );
+    if is_editable_extension(path) {
+        u.push_str("&ln=1");
+    }
+    u
 }
 
 /// "编辑"按钮的显示范围:纯扩展名白名单,不做内容嗅探(YAGNI,见设计文档
@@ -220,10 +228,13 @@ mod tests {
         assert_eq!(specs.len(), 2);
         assert_eq!(
             specs[0].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fa%20b.md"
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fa%20b.md&ln=1"
         );
         assert!(!specs[0].visible, "非激活 tab 不可见");
-        assert_eq!(specs[1].url, "dozer://flyfish/host.html?p=%2Ftmp%2Fc.md");
+        assert_eq!(
+            specs[1].url,
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fc.md&ln=1"
+        );
         assert!(specs[1].visible);
     }
 
@@ -236,13 +247,16 @@ mod tests {
         let specs = p.desired_webviews();
         assert_eq!(
             specs[0].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&_r=1"
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&ln=1&_r=1"
         );
-        assert_eq!(specs[1].url, "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md");
+        assert_eq!(
+            specs[1].url,
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&ln=1"
+        );
         p.bump_reload(id0);
         assert_eq!(
             p.desired_webviews()[0].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&_r=2"
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&ln=1&_r=2"
         );
         // 未知 id 是 no-op,不 panic。
         p.bump_reload(9999);
