@@ -1104,6 +1104,25 @@ impl Workspace {
         self.term_tab_first = 0;
     }
 
+    /// 拖拽换位:把 `from` 处的终端 tab 移到 `to`,并同步 `active`。`tab_id`
+    /// 不变(它独立于 Vec 位置,异步路由按 id 走),forwarder/后端都不动。
+    /// `from`/`to` 同址或越界是 no-op。
+    pub(crate) fn reorder_term_tab(&mut self, from: usize, to: usize) {
+        if from == to || from >= self.tabs.len() || to >= self.tabs.len() {
+            return;
+        }
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        if self.active == from {
+            self.active = to;
+        } else if from < self.active && to >= self.active {
+            self.active -= 1;
+        } else if from > self.active && to <= self.active {
+            self.active += 1;
+        }
+        // 换位不影响能见度,但拖拽中视觉以光标为准,无需强制归零 first。
+    }
+
     /// 把当前预览 tab(仅文件类)异步写盘,同 `layout::save` 走
     /// `handle.spawn` 的既有模式,不阻塞 UI 线程。没有打开项目时不存
     /// (状态按项目 id 分文件,没有项目就没有归属)。
@@ -1938,8 +1957,8 @@ pub(crate) fn agent_picker_toggle_button<'a>(
 }
 
 /// Agent 选择菜单浮层:固定挂在窗口右上角("＋"按钮下方——该按钮
-/// 就在最靠右的 Agent 面板头部,近似等于窗口右上角),八个选项
-/// Claude/CodeBuddy/OpenCode/Codex/Qoder/Kilo/纯 Shell/Git Shell。跟项目树右键菜单
+/// 就在最靠右的 Agent 面板头部,近似等于窗口右上角),九个选项
+/// Claude/CodeBuddy/OpenCode/Codex/Qoder/Kilo/v8agent/纯 Shell/Git Shell。跟项目树右键菜单
 /// (`context_menu_popup`)同款按钮样式,但不需要像素坐标定位——同
 /// `delete_confirm_popup` 一样固定 padding 摆位。`ws.agent_picker_open`
 /// 为假时返回空视图,调用方(`App::view`)据此决定要不要把这层塞进
@@ -1950,13 +1969,14 @@ pub(crate) fn agent_picker_popup(
     if !ws.agent_picker_open {
         return column![].into();
     }
-    let items: [(&str, PickerLaunch); 8] = [
+    let items: [(&str, PickerLaunch); 9] = [
         ("Claude", PickerLaunch::Agent(Some(AgentKind::Claude))),
         ("CodeBuddy", PickerLaunch::Agent(Some(AgentKind::Codebuddy))),
         ("OpenCode", PickerLaunch::Agent(Some(AgentKind::Opencode))),
         ("Codex", PickerLaunch::Agent(Some(AgentKind::Codex))),
         ("Qoder", PickerLaunch::Agent(Some(AgentKind::Qoder))),
         ("Kilo", PickerLaunch::Agent(Some(AgentKind::Kilo))),
+        ("v8agent", PickerLaunch::Agent(Some(AgentKind::V8agent))),
         ("纯 Shell", PickerLaunch::Agent(None)),
         ("Git Shell", PickerLaunch::Git),
     ];
@@ -3107,6 +3127,7 @@ mod tests {
         assert_eq!(agent_cli_command(AgentKind::Codex), Some("codex"));
         assert_eq!(agent_cli_command(AgentKind::Qoder), Some("qoder"));
         assert_eq!(agent_cli_command(AgentKind::Kilo), Some("kilo"));
+        assert_eq!(agent_cli_command(AgentKind::V8agent), Some("v8agent"));
         assert_eq!(agent_cli_command(AgentKind::Unknown), None);
     }
 
@@ -3136,6 +3157,10 @@ mod tests {
         assert_eq!(
             picker_launch_command(PickerLaunch::Agent(Some(AgentKind::Kilo))),
             Some("kilo".to_string())
+        );
+        assert_eq!(
+            picker_launch_command(PickerLaunch::Agent(Some(AgentKind::V8agent))),
+            Some("v8agent".to_string())
         );
         // 纯 Shell → 不键入任何初始命令。
         assert_eq!(picker_launch_command(PickerLaunch::Agent(None)), None);
