@@ -184,7 +184,7 @@ pub fn parse_transcript(agent: AgentKind, jsonl: &str) -> Vec<ReviewEntry> {
             parse_claude_shaped_jsonl(jsonl)
         }
         AgentKind::Codebuddy => parse_codebuddy_shaped_jsonl(jsonl),
-        AgentKind::Codex | AgentKind::Qoder => Vec::new(),
+        AgentKind::Codex | AgentKind::Qoder | AgentKind::V8agent => Vec::new(),
     }
 }
 
@@ -272,6 +272,7 @@ mod tests {
         let jsonl = r#"{"type":"user","message":{"role":"user","content":"应该被忽略"}}"#;
         assert!(parse_transcript(AgentKind::Codex, jsonl).is_empty());
         assert!(parse_transcript(AgentKind::Qoder, jsonl).is_empty());
+        assert!(parse_transcript(AgentKind::V8agent, jsonl).is_empty());
     }
 
     #[test]

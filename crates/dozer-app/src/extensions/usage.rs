@@ -79,7 +79,7 @@ pub fn parse_usage(agent: AgentKind, jsonl: &str) -> ConversationUsage {
             parse_claude_shaped_usage(jsonl)
         }
         AgentKind::Codebuddy => parse_codebuddy_shaped_usage(jsonl),
-        AgentKind::Codex | AgentKind::Qoder => ConversationUsage::default(),
+        AgentKind::Codex | AgentKind::Qoder | AgentKind::V8agent => ConversationUsage::default(),
     }
 }
 
@@ -292,7 +292,7 @@ pub fn daily_totals_by_agent(
             AgentKind::Claude => entry.0 += total,
             AgentKind::Codebuddy => entry.1 += total,
             AgentKind::Opencode => entry.2 += total,
-            AgentKind::Unknown | AgentKind::Codex | AgentKind::Qoder | AgentKind::Kilo => {}
+            AgentKind::Unknown | AgentKind::Codex | AgentKind::Qoder | AgentKind::Kilo | AgentKind::V8agent => {}
         }
     }
     let mut days: Vec<DayAgentTotals> = by_day
@@ -867,6 +867,10 @@ mod tests {
         );
         assert_eq!(
             parse_usage(AgentKind::Qoder, jsonl),
+            ConversationUsage::default()
+        );
+        assert_eq!(
+            parse_usage(AgentKind::V8agent, jsonl),
             ConversationUsage::default()
         );
     }

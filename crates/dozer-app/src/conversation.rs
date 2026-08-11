@@ -63,7 +63,7 @@ pub fn conversation_title(agent: AgentKind, jsonl_head: &str) -> Option<String> 
             claude_shaped_title(jsonl_head)
         }
         AgentKind::Codebuddy => codebuddy_shaped_title(jsonl_head),
-        AgentKind::Codex | AgentKind::Qoder => None,
+        AgentKind::Codex | AgentKind::Qoder | AgentKind::V8agent => None,
     }
 }
 
@@ -221,6 +221,7 @@ mod tests {
         let head = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"忽略\"}}\n";
         assert_eq!(conversation_title(AgentKind::Codex, head), None);
         assert_eq!(conversation_title(AgentKind::Qoder, head), None);
+        assert_eq!(conversation_title(AgentKind::V8agent, head), None);
     }
 
     #[test]

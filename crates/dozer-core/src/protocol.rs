@@ -25,6 +25,7 @@ pub enum AgentKind {
     Codex,
     Qoder,
     Kilo,
+    V8agent,
 }
 
 impl AgentKind {
@@ -40,6 +41,7 @@ impl AgentKind {
             AgentKind::Codex => "codex",
             AgentKind::Qoder => "qoder",
             AgentKind::Kilo => "kilo",
+            AgentKind::V8agent => "v8agent",
         }
     }
 }
@@ -595,5 +597,18 @@ mod tests {
             Reply::AgentEvent { agent, .. } => assert_eq!(agent, AgentKind::Unknown),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn agent_kind_recognizes_v8agent() {
+        assert_eq!(
+            serde_json::to_string(&AgentKind::V8agent).unwrap(),
+            "\"v8agent\""
+        );
+        assert_eq!(
+            serde_json::from_str::<AgentKind>("\"v8agent\"").unwrap(),
+            AgentKind::V8agent
+        );
+        assert_eq!(AgentKind::V8agent.label(), "v8agent");
     }
 }
