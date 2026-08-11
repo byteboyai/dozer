@@ -8,9 +8,7 @@ use crate::workspace::AddrEvent;
 use crate::{delivery, icons, theme};
 use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Color, Element, Length, Padding};
-use iced_widget::{
-    MouseArea, Scrollable, button, column, container, row, scrollable, text, text_input,
-};
+use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -57,6 +55,11 @@ pub struct WorkspaceState {
     tree_search: String,
     /// 已提交的搜索关键字:仅当提交(敲回车/点搜索按钮)后用它过滤树。
     search_query: String,
+    /// 搜索框是否处于自绘编辑态:键盘走 main.rs 拦截层(同树内行编辑
+    /// `tree_edit`/验收意见框,不用 iced 原生 text_input)。为真时 main.rs 把
+    /// 按键路由成 `SearchEvent`,不再喂给 PTY——否则在搜索框里打字会同时
+    /// 漏进已聚焦的终端(本项目所有文本输入都是自绘,理由一致)。
+    search_editing: bool,
 }
 
 /// 挂在 App 上的右键菜单浮层状态(屏幕空间单例,不随项目切换各自保留)。
@@ -106,9 +109,11 @@ pub enum Message {
     RenameStart(PathBuf),
     ReloadFromDisk,
     EditEvent(AddrEvent),
-    /// 搜索框文本变化:只更新草稿,不影响已提交的过滤(需敲回车或点搜索
-    /// 按钮触发 `SearchSubmit` 才真正过滤)。
-    SearchInputChanged(String),
+    /// 点进搜索框开始编辑:置 `search_editing = true`,此后按键交 main.rs
+    /// 拦截层路由成 `SearchEvent`(不再漏进终端)。
+    SearchEditStart,
+    /// 搜索框编辑态下的按键:只动草稿 `tree_search`,不重新过滤(需提交)。
+    SearchEvent(AddrEvent),
     /// 提交搜索:把草稿 `tree_search` 落成生效的过滤 `search_query`。
     SearchSubmit,
 }
@@ -133,6 +138,7 @@ impl WorkspaceState {
         self.git_statuses = HashMap::new();
         self.tree_search.clear();
         self.search_query.clear();
+        self.search_editing = false;
     }
 
     /// 供内核判断"删除确认浮层该不该显示"(`App::view()` 顶层互斥浮层
@@ -146,6 +152,18 @@ impl WorkspaceState {
     /// 这个访问器。
     pub fn cancel_tree_edit(&mut self) {
         self.tree_edit = None;
+    }
+
+    /// 搜索框失焦退出编辑态(`Workspace::blur_inputs` 用)`:草稿 `tree_search`
+    /// 保留,退出后仍作为盒子里的占位/已输入文本继续显示。
+    pub fn cancel_search_edit(&mut self) {
+        self.search_editing = false;
+    }
+
+    /// 供内核 `Workspace::search_editing`(main.rs 键盘路由用)判断搜索框
+    /// 是否处于自绘编辑态。
+    pub fn search_editing(&self) -> bool {
+        self.search_editing
     }
 
     /// 供内核 `Workspace::tree_editing`(main.rs 键盘路由用,判断项目树是否
@@ -457,8 +475,26 @@ pub fn update(
                 tree.reload_from_disk();
             }
         }
-        Message::SearchInputChanged(q) => {
-            ws_state.tree_search = q;
+        Message::SearchEditStart => {
+            ws_state.search_editing = true;
+        }
+        Message::SearchEvent(ev) => {
+            // 只在搜索框编辑态处理按键(点击盒子进入编辑态后,main.rs 才把
+            // 按键路由成这个变体);未进入时收到属异常,直接忽略。
+            if !ws_state.search_editing {
+                return;
+            }
+            match ev {
+                AddrEvent::Text(s) => ws_state.tree_search.push_str(&s),
+                AddrEvent::Backspace => {
+                    ws_state.tree_search.pop();
+                }
+                AddrEvent::Cancel => ws_state.search_editing = false,
+                AddrEvent::Submit => {
+                    ws_state.search_query = ws_state.tree_search.clone();
+                    ws_state.search_editing = false;
+                }
+            }
         }
         Message::SearchSubmit => {
             ws_state.search_query = ws_state.tree_search.clone();
@@ -513,28 +549,17 @@ pub fn view<'a>(
     let mut tree_col = column![].spacing(region.gap);
 
     // 文件树搜索框:按文件/目录名称筛选整棵树(大小写不敏感子串匹配)。
-    // 不会边输入边过滤——敲回车(`on_submit`)或点右侧"搜索"按钮后,
-    // 由 `SearchSubmit` 把草稿落成为生效的 `search_query`。附带外边框。
+    // 不会边输入边过滤——敲回车/点右侧"搜索"按钮后,由 `SearchSubmit` 把
+    // 草稿落成为生效的 `search_query`。这是自绘输入(同树内行编辑/验收意见
+    // 框):键盘走 main.rs 拦截层路由成 `SearchEvent`,不用 iced 原生
+    // text_input——原生输入无法让 main.rs 知道它挂在焦点上,打字会同时漏进
+    // 已聚焦的终端(本项目所有文本输入都为此自绘,理由一致)。
     let search_active = !ws_state.search_query.is_empty();
-    let search_input = text_input("搜索文件/目录…", &ws_state.tree_search)
-        .on_input(Message::SearchInputChanged)
-        .on_submit(Message::SearchSubmit)
-        .size(theme::font::body())
-        .width(Length::Fill)
-        .style(
-            |_t: &iced_widget::Theme, _s| iced_widget::text_input::Style {
-                background: theme::color::BG.into(),
-                border: Border {
-                    color: theme::color::BORDER,
-                    width: 1.0,
-                    radius: 4.0.into(),
-                },
-                icon: theme::color::DIM,
-                placeholder: theme::color::DIM,
-                value: theme::color::CREAM,
-                selection: theme::color::GOLD,
-            },
-        );
+    let search_box = search_box_widget(
+        &ws_state.tree_search,
+        ws_state.search_editing,
+        search_active,
+    );
     let search_button = button(icons::view(
         icons::IconKind::FolderSearch,
         crate::theme::icon_size::row(),
@@ -553,7 +578,7 @@ pub fn view<'a>(
         ..button::Style::default()
     });
     header = header.push(
-        row![search_input, search_button]
+        row![search_box, search_button]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center),
     );
@@ -790,6 +815,51 @@ fn tree_edit_row(
         ..container::Style::default()
     })
     .into()
+}
+
+/// 文件树搜索框:自绘输入(键盘走 main.rs 拦截层路由成 `SearchEvent`,不用
+/// iced 原生 text_input——原生输入没法让 main.rs 知道它挂着焦点,打字会同步
+/// 漏进已聚焦的终端)。整体是 `button`,点击(`SearchEditStart`)进入编辑态;
+/// 视觉上是普通输入框,不带按钮的按压/悬停感。
+///
+/// - 草稿为空且未编辑:显式 DIM 占位符 "搜索文件/目录…"。
+/// - 编辑态:草稿文本 + 尾缀 "▏" 光标,边框 GOLD 高亮表示焦点归属搜索框。
+/// - 已过滤(`active`):边框 GOLD 常亮,提示当前树被搜索词收窄。
+fn search_box_widget(
+    draft: &str,
+    editing: bool,
+    active: bool,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let body = if draft.is_empty() && !editing {
+        text("搜索文件/目录…")
+            .size(theme::font::body())
+            .color(theme::color::DIM)
+    } else {
+        let caret = if editing { "▏" } else { "" };
+        text(format!("{draft}{caret}"))
+            .size(theme::font::body())
+            .color(theme::color::CREAM)
+    };
+
+    button(body)
+        .on_press(Message::SearchEditStart)
+        .width(Length::Fill)
+        .padding([6, 8])
+        .style(move |_t: &iced_widget::Theme, _s| button::Style {
+            background: Some(theme::color::BG.into()),
+            border: Border {
+                color: if editing || active {
+                    theme::color::GOLD
+                } else {
+                    theme::color::BORDER
+                },
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            text_color: theme::color::CREAM,
+            ..button::Style::default()
+        })
+        .into()
 }
 
 /// 右键菜单一项:图标(可选)+文字按钮。默认底色透出容器背景,hover/pressed
@@ -1129,11 +1199,22 @@ mod tests {
         let mut app_state = AppState::default();
         let handle = tokio::runtime::Handle::current();
 
+        // 点进搜索框:进入自绘编辑态。
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::SearchEditStart,
+            1,
+            &handle,
+            |_| {},
+        );
+        assert!(ws_state.search_editing());
+
         // 键入:只进草稿,不触发过滤(生效的 search_query 仍为空)。
         update(
             &mut ws_state,
             &mut app_state,
-            Message::SearchInputChanged("main".to_string()),
+            Message::SearchEvent(AddrEvent::Text("main".to_string())),
             1,
             &handle,
             |_| {},
@@ -1141,7 +1222,9 @@ mod tests {
         assert_eq!(ws_state.tree_search, "main");
         assert!(ws_state.search_query.is_empty());
 
-        // 提交(敲回车/点搜索按钮):草稿落成为生效过滤词。
+        // 提交(点右侧"搜索"按钮):草稿落成为生效过滤词。按钮本身不退出编辑
+        // 态——下次 mousedown 的 `blur_inputs` 会清掉;敲回车(SearchEvent 的
+        // Submit 分支)才在更新内直接退出编辑态,见断言其后。
         update(
             &mut ws_state,
             &mut app_state,
@@ -1152,9 +1235,58 @@ mod tests {
         );
         assert_eq!(ws_state.search_query, "main");
 
-        // 认领其它项目时清空草稿与生效词,避免旧筛选残留在新项目树上。
+        // 编辑态敲回车:提交并退出编辑态。
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::SearchEvent(AddrEvent::Submit),
+            1,
+            &handle,
+            |_| {},
+        );
+        assert_eq!(ws_state.search_query, "main");
+        assert!(!ws_state.search_editing());
+
+        // 认领其它项目时清空草稿、生效词与编辑态,避免旧筛选残留在新项目树上。
         ws_state.reset_for_project(FileTree::new(dir.path().to_path_buf()));
         assert!(ws_state.tree_search.is_empty() && ws_state.search_query.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_editing_flag_and_cancel_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+
+        // 初始未编辑。
+        assert!(!ws_state.search_editing());
+
+        // 进入编辑态。
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::SearchEditStart,
+            1,
+            &handle,
+            |_| {},
+        );
+        assert!(ws_state.search_editing());
+
+        // blur_inputs 入口 `cancel_search_edit` 退出编辑态。
+        ws_state.cancel_search_edit();
+        assert!(!ws_state.search_editing());
+
+        // 非编辑态下 SearchEvent 不该做任何事(草稿保持为空)。
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::SearchEvent(AddrEvent::Text("x".to_string())),
+            1,
+            &handle,
+            |_| {},
+        );
+        assert!(ws_state.tree_search.is_empty());
     }
 
     #[tokio::test]

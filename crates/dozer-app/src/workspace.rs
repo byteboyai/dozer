@@ -1514,6 +1514,12 @@ impl Workspace {
         self.files.tree_edit_is_some()
     }
 
+    /// 文件树搜索框是否处于自绘编辑态(main.rs 键盘路由用):为真时按键改
+    /// 路由成 `files::Message::SearchEvent`,不再喂 PTY。
+    pub fn search_editing(&self) -> bool {
+        self.files.search_editing()
+    }
+
     /// 项目信息面板标题是否处于自绘编辑态(main.rs 键盘路由用)。
     pub fn project_title_editing(&self) -> bool {
         self.project_panel.title_editing_is_some()
@@ -1536,6 +1542,7 @@ impl Workspace {
         }
         self.acceptance.clear_comment_editing();
         self.files.cancel_tree_edit();
+        self.files.cancel_search_edit();
         self.project_panel.cancel_title_edit();
     }
 

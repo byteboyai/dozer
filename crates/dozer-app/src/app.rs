@@ -1644,6 +1644,13 @@ impl App {
         self.active_workspace().is_some_and(|ws| ws.tree_editing())
     }
 
+    /// 文件树搜索框是否处于自绘编辑态(main.rs 键盘路由用)。为真时按键改
+    /// 路由成 `files::Message::SearchEvent`,不再喂 PTY。
+    pub fn search_editing(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.search_editing())
+    }
+
     /// 项目信息面板标题是否处于自绘编辑态(main.rs 键盘路由用)。
     pub fn project_title_editing(&self) -> bool {
         self.active_workspace()
