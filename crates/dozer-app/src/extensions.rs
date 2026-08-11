@@ -10,6 +10,7 @@ pub mod files;
 pub mod footbar;
 pub mod git_log;
 pub mod project;
+pub mod search;
 pub mod ssh;
 pub mod todo;
 pub mod usage;
