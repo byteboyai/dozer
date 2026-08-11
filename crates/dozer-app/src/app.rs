@@ -4536,7 +4536,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
         .on_exit(Message::Hover(HoverId::Rail(RailButton::LeftFiles), false)),
         // spike(2026-08-06):Git 提交图入口,验证 gleisbau 库可行性用。
         MouseArea::new(rail_icon_button(
-            icons::IconKind::GitBranch,
+            icons::IconKind::GitGraph,
             app.left_view == LeftView::GitLog && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftGit)),
             Message::LeftIconSelect(LeftView::GitLog),

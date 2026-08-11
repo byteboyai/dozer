@@ -1211,10 +1211,12 @@ fn git_footer_bar(
 /// `context_menu_popup` 用 `Padding{top,left}` 手算像素定位是同一套约定。非
 /// git/未加载/未展开时返回空(零高度元素)。
 ///
-/// 宽度注意:菜单列与每行按钮都用 `Length::Shrink` 贴合最宽项——不能在
-/// Shrink 容器里给按钮 `Length::Fill`,否则 Fill 子在无确定宽的 Shrink 轴上
-/// 会折叠成 0 宽,整个菜单就消失;`align_y(End)`(配合外层 `Padding`)负责把
-/// 菜单压在 git 底栏正上方、并把下沉量交给动画起点,不会让它跑到窗口顶部。
+/// 宽度注意:与右键菜单同款——每行按钮用 `Length::Fixed(menu_item_width())`
+/// 固定宽,列容器保持 `Length::Shrink`,于是整个菜单总宽恒定、不会随分支名
+/// 长短自动收缩(短分支名时下拉框保持同一宽度)。不能在 Shrink 容器里给按钮
+/// `Length::Fill`,否则 Fill 子在无确定宽的 Shrink 轴上会折叠成 0 宽,整个
+/// 菜单就消失;`align_y(End)`(配合外层 `Padding`)负责把菜单压在 git 底栏
+/// 正上方、并把下沉量交给动画起点,不会让它跑到窗口顶部。
 ///
 /// 视觉与右键菜单(`context_menu_popup` 的 `menu_item`)对齐:同一套
 /// `context_menu` 区域底色/描边/内外边距、`TAB_HOVER` hover 底。
@@ -1293,7 +1295,7 @@ pub fn branch_picker_popup(
             .spacing(gap)
             .align_y(iced_widget::core::Alignment::Center),
         )
-        .width(Length::Shrink)
+        .width(Length::Fixed(crate::theme::geometry::menu_item_width()))
         .padding([pad_v, pad_h])
         .style(move |_t: &iced_widget::Theme, s: button::Status| {
             let base = button::Style {
@@ -1385,7 +1387,7 @@ fn branch_picker_popup_offset(ws_state: &WorkspaceState) -> (f32, f32) {
 /// 漏进已聚焦的终端)。整体是 `button`,点击(`SearchEditStart`)进入编辑态;
 /// 视觉上是普通输入框,不带按钮的按压/悬停感。
 ///
-/// - 草稿为空且未编辑:显式 DIM 占位符 "搜索文件/目录…"。
+/// - 草稿为空且未编辑:显式 DIM 占位符 "搜索目录…"。
 /// - 编辑态:草稿文本 + 尾缀 "▏" 光标,边框 GOLD 高亮表示焦点归属搜索框。
 /// - 已过滤(`active`):边框 GOLD 常亮,提示当前树被搜索词收窄。
 fn search_box_widget(
@@ -1394,7 +1396,7 @@ fn search_box_widget(
     active: bool,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let body = if draft.is_empty() && !editing {
-        text("搜索文件/目录…")
+        text("搜索目录…")
             .size(theme::font::body())
             .color(theme::color::DIM)
     } else {
