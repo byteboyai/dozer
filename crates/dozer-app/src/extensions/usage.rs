@@ -12,7 +12,7 @@ use crate::theme;
 use dozer_core::protocol::AgentKind;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::{Border, Color, Element, Length, Radians, Rectangle};
-use iced_widget::{button, column, container, text};
+use iced_widget::{column, container, text, MouseArea};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -47,6 +47,10 @@ impl WorkspaceState {
 pub enum Message {
     Refresh,
     Loaded(i64, Vec<(ConversationMeta, ConversationUsage)>),
+    /// 手动刷新按钮的 hover 进入/离开,由 `App` 转发到自己的 hover 动画系统
+    /// (见 `Message::Usage` 的分支)。图标颜色在构建时定死,必须由
+    /// `App::hover_progress` 提供给本面板。
+    Hover(bool),
 }
 
 /// 单个会话（= 一份 transcript 文件）的用量统计。
@@ -345,6 +349,9 @@ pub fn update(
             ws_state.rows = rows;
             ws_state.loading = false;
         }
+        // hover 动画由 App 在转发 `usage` 消息前吃掉(`Message::Usage(msg)`),
+        // 不会进到这里;保一个 no-op 分支保持 match 穷尽。
+        Message::Hover(_) => {}
     }
 }
 
@@ -384,24 +391,26 @@ pub fn view<'a>(
     ws_state: &'a WorkspaceState,
     width: Length,
     outer: Border,
+    refresh_hover_t: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let rows = ws_state.rows();
     let loading = ws_state.loading();
     // 套用统一 panel head:Lucide `BarChart3` 图标 + 暖金 `#dcc9a3` 的 "用量"
     // 标题 + 1px 分割线;手动刷新按钮放到 head 下方(同 数据库/SSH 面板的
-    // 操作按钮布局)。
-    let mut content = column![
-        home_panel_head(icons::IconKind::BarChart3, "用量"),
-        button(icons::view::<Message>(
-            icons::IconKind::RefreshCw,
-            14.0,
-            theme::color::DIM
-        ))
-        .on_press(Message::Refresh)
-        .style(|_t, _s| button::Style::default()),
-    ]
-    .spacing(12)
-    .padding(14);
+    // 操作按钮布局)。刷新按钮走统一 icon 按钮规范:DIM→GOLD hover,无选中态。
+    let refresh = MouseArea::new(
+        icons::icon_button(icons::IconKind::RefreshCw, crate::theme::icon_size::row(), false, refresh_hover_t, false)
+            .width(Length::Fixed(crate::theme::geometry::rail_button_size()))
+            .height(Length::Fixed(crate::theme::geometry::rail_button_size()))
+            .on_press(Message::Refresh),
+    )
+    .interaction(iced_widget::core::mouse::Interaction::Pointer)
+    .on_enter(Message::Hover(true))
+    .on_exit(Message::Hover(false));
+
+    let mut content = column![home_panel_head(icons::IconKind::BarChart3, "用量"), refresh]
+        .spacing(12)
+        .padding(14);
 
     if loading {
         content = content.push(

@@ -160,6 +160,21 @@ pub enum HoverId {
     /// Agent 面板头部"＋"按钮:无背景的 `SquarePlus` 图标,未选中态静止 DIM,
     /// hover 平滑过渡到 GOLD(见 `agent_picker_toggle_button`)。
     AgentPickerToggle,
+    /// Usage 用量面板"手动刷新"按钮(`RefreshCw`):静止 DIM,hover 平滑过渡
+    /// 到 GOLD(见 `extensions/usage.rs`)。
+    UsageRefresh,
+    /// 文件树搜索提交按钮(`FolderSearch`):静止 DIM,hover 过渡到 GOLD
+    /// (见 `extensions/files.rs` 的搜索按钮)。
+    FilesSearchSubmit,
+    /// 文件树"显示隐藏文件"切换按钮(`Eye`/`EyeOff`):静止 DIM,hover 过渡
+    /// 到 GOLD;已开启(隐藏文件可见)恒金(见 `extensions/files.rs`)。
+    FilesDotfiles,
+    /// 文件树底栏 git 分支切换按钮(`ChevronDown`):静止 DIM,hover 过渡到
+    /// GOLD(见 `extensions/files.rs` 的 `git_footer_bar`)。
+    FilesBranchSwitch,
+    /// 数据库面板 schema 树"返回"按钮(`ChevronLeft`):静止 DIM,hover 过渡
+    /// 到 GOLD(见 `extensions/database.rs`)。
+    DatabaseSchemaBack,
 }
 
 /// 一个可平滑过渡的 hover 动画状态机。iced 0.14 无内置动画 API,这套自驱
@@ -2284,6 +2299,10 @@ impl App {
                     usage::update(&mut ws.usage, msg, project_id, project_path, &handle, emit);
                 });
             }
+            Message::Usage(msg @ usage::Message::Hover(_)) => {
+                let usage::Message::Hover(h) = msg else { unreachable!() };
+                self.set_hover(HoverId::UsageRefresh, h);
+            }
             Message::Usage(msg) => {
                 self.with_focused_project(|ws, io| {
                     let Some(project) = &ws.project else { return };
@@ -2486,6 +2505,14 @@ impl App {
                     &handle,
                     emit,
                 );
+            }
+            Message::Database(database::Message::ToolbarHover(target, hovered)) => {
+                // 数据库面板 schema 树头部 icon 按钮的悬停:本面板不挂 App 的
+                // hover 动画表,把进入/离开转发成 `HoverId` 由内核统一驱动动画。
+                let id = match target {
+                    database::DatabaseToolbarTarget::SchemaBack => HoverId::DatabaseSchemaBack,
+                };
+                self.set_hover(id, hovered);
             }
             Message::Database(msg) => {
                 let Some(project_id) = self.active_project_id else {
@@ -4782,6 +4809,7 @@ fn left_panel_area<'a>(
                     &ws.database,
                     Length::Fill,
                     zone_pane_border(zone, ac),
+                    app.hover_progress(HoverId::DatabaseSchemaBack),
                 )
                 .map(Message::Database)
             }
@@ -4926,9 +4954,13 @@ fn right_panel_area<'a>(
                 .width(Length::Fill)
                 .into()
             }
-            RightView::Usage => {
-                usage::view(&ws.usage, Length::Fill, zone_pane_border(zone, ac)).map(Message::Usage)
-            }
+            RightView::Usage => usage::view(
+                &ws.usage,
+                Length::Fill,
+                zone_pane_border(zone, ac),
+                app.hover_progress(HoverId::UsageRefresh),
+            )
+            .map(Message::Usage),
             RightView::Acceptance => {
                 acceptance::view(&ws.acceptance, Length::Fill, zone_pane_border(zone, ac))
                     .map(Message::Acceptance)

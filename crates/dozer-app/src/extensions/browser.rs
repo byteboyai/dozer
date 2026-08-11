@@ -16,7 +16,7 @@ use crate::{icons, theme};
 use dozer_client::Client;
 use dozer_core::protocol::{BookmarkInfo, BookmarkScope};
 use iced_widget::core::{Border, Element, Length};
-use iced_widget::{button, column, container, row, text};
+use iced_widget::{button, column, container, row, text, MouseArea};
 use std::collections::HashMap;
 
 /// 一个浏览器 tab。
@@ -857,7 +857,31 @@ impl State {
             .map(|h| h.progress)
             .unwrap_or(0.0)
     }
+
+    /// 星标按钮(当前 tab 收藏/取消收藏)的 hover 进度。用哨兵键
+    /// `(STAR_HOVER_KEY, false)` 区分于真实 tab(真实 tab 序号不可能
+    /// 等于 `usize::MAX`)。
+    pub(crate) fn star_hover(&self) -> f32 {
+        self.hover.get(&(STAR_HOVER_KEY, false)).map(|h| h.progress).unwrap_or(0.0)
+    }
+
+    /// 收藏夹下拉按钮的 hover 进度,哨兵键 `(STAR_HOVER_KEY, true)`。
+    pub(crate) fn bookmark_hover(&self) -> f32 {
+        self.hover.get(&(STAR_HOVER_KEY, true)).map(|h| h.progress).unwrap_or(0.0)
+    }
+
+    /// 星标/收藏夹按钮的 hover 进入/离开(hovered),用哨兵键写进度机。
+    pub(crate) fn set_toolbar_hover(&mut self, bookmarks: bool, hovered: bool) {
+        self.hover
+            .entry((STAR_HOVER_KEY, bookmarks))
+            .or_default()
+            .set(hovered);
+    }
 }
+
+/// 浏览器面板"星标/收藏夹"两个工具栏按钮的 hover 哨兵键——真实 tab 序号
+/// 从 0 递增,不可能等于 `usize::MAX`,用它作键不与 tab 冲突。
+const STAR_HOVER_KEY: usize = usize::MAX;
 
 /// 处理浏览器面板的全部消息。`project_id` 由内核每次调用时从
 /// `ws.project.as_ref().map(|p| p.id)` 现取传入(`State` 本身不存这个,
@@ -1010,24 +1034,19 @@ fn star_button(
         .as_ref()
         .map(|u| bookmark_status(&state.bookmarks, u, project_id).is_bookmarked())
         .unwrap_or(false);
-    let color = if starred {
-        theme::color::GOLD
-    } else {
-        theme::color::DIM
-    };
-    let mut btn = button(icons::view(icons::IconKind::Star, icon_size::row(), color))
+    // 统一 icon 按钮规范:未收藏静止 DIM、hover 过渡到 GOLD;已收藏恒金
+    // (active=true)。hover 动画走浏览器自己的 `State` 进度机(哨兵键)。
+    let mut btn = icons::icon_button(icons::IconKind::Star, icon_size::row(), starred, state.star_hover(), false)
         .width(Length::Fixed(theme::geometry::tab_button_size()))
-        .height(Length::Fixed(theme::geometry::tab_button_size()))
-        .padding(0)
-        .style(move |_t, _s| button::Style {
-            background: None,
-            text_color: color,
-            ..button::Style::default()
-        });
+        .height(Length::Fixed(theme::geometry::tab_button_size()));
     if url.is_some() {
         btn = btn.on_press(Message::StarClick);
     }
-    btn.into()
+    MouseArea::new(btn)
+        .interaction(iced_widget::core::mouse::Interaction::Pointer)
+        .on_enter(Message::Hover(STAR_HOVER_KEY, false, true))
+        .on_exit(Message::Hover(STAR_HOVER_KEY, false, false))
+        .into()
 }
 
 /// tab 栏"收藏夹"下拉面板触发按钮,颜色恒定(不像星标那样带收藏状态)。
@@ -1277,7 +1296,7 @@ pub fn view(
     let addr_row = row![
         addr,
         star_button(state, project_id),
-        bookmarks_toggle_button()
+        bookmarks_toggle_button(state)
     ]
     .spacing(4)
     .align_y(iced_widget::core::Alignment::Center);
@@ -1318,22 +1337,25 @@ pub fn view(
         .into()
 }
 
-/// tab 栏"收藏夹"下拉面板触发按钮。返回带收藏夹切换消息的按钮。
-fn bookmarks_toggle_button<'a>() -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>
+/// tab 栏"收藏夹"下拉面板触发按钮。返回带收藏夹切换消息的按钮。走统一
+/// icon 按钮规范(DIM→GOLD hover,无选中态),hover 动画走浏览器自己的
+/// `State` 进度机(哨兵键)。
+fn bookmarks_toggle_button(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>
 {
-    button(icons::view(
+    let btn = icons::icon_button(
         icons::IconKind::Bookmark,
         icon_size::row(),
-        theme::color::DIM,
-    ))
+        false,
+        state.bookmark_hover(),
+        false,
+    )
     .on_press(Message::BookmarksToggle)
     .width(Length::Fixed(theme::geometry::tab_button_size()))
-    .height(Length::Fixed(theme::geometry::tab_button_size()))
-    .padding(0)
-    .style(|_t, _s| button::Style {
-        background: None,
-        text_color: theme::color::DIM,
-        ..button::Style::default()
-    })
-    .into()
+    .height(Length::Fixed(theme::geometry::tab_button_size()));
+
+    MouseArea::new(btn)
+        .interaction(iced_widget::core::mouse::Interaction::Pointer)
+        .on_enter(Message::Hover(STAR_HOVER_KEY, true, true))
+        .on_exit(Message::Hover(STAR_HOVER_KEY, true, false))
+        .into()
 }

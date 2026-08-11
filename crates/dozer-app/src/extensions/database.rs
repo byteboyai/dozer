@@ -8,7 +8,7 @@
 
 use crate::icons;
 use iced_widget::core::{Border, Element, Length};
-use iced_widget::{button, column, container, row, scrollable, text, text_input};
+use iced_widget::{button, column, container, row, scrollable, text, text_input, MouseArea};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -609,6 +609,14 @@ fn keyring_entry(project_id: i64, source_id: &str) -> Result<keyring::Entry, key
 /// 连接测试 / 表单交互的统一消息。`TestConnectionResult` 特化携带
 /// `project_id`——异步结果可能晚于用户切换项目才回来,必须按这个项目 id
 /// 而不是"当前聚焦项目"路由回正确的 `WorkspaceState`。
+/// 数据库面板里可悬停的 icon 按钮(schema 树头部行的 "← 返回""刷新")。
+/// 悬停进度不由本模块挂的动画表驱动,内核把进入/离开转发成 `HoverId`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatabaseToolbarTarget {
+    /// schema 树顶部 "← 返回"(回卡片列表)。
+    SchemaBack,
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     /// 驱动管理弹层:勾/取消勾某个驱动类型。
@@ -653,6 +661,10 @@ pub enum Message {
     /// schema 树顶部"刷新":重拉表列表(旧快照保留不闪空,成功后对账)。
     /// 处理前先核对 `browsing == Some(id)`,防旧视图残留按钮。
     SchemaRefresh(String),
+    /// schema 树头部 icon 按钮的悬停进入/离开。悬停进度由内核统一驱动
+    /// (本面板不挂 App 的 hover 动画表),`update` 吃不到这里;保 no-op
+    /// 分支维持 match 穷尽。
+    ToolbarHover(DatabaseToolbarTarget, bool),
     /// Postgres schema 节点展开/收起(纯同步,不触发加载)。
     ToggleSchema(String),
     /// 表节点展开/收起;展开时列缓存缺失或曾失败 → 置 `Loading` 并发起列加载。
@@ -1019,6 +1031,9 @@ pub fn update(
                     Err(e) => ColumnLoad::Failed(e),
                 },
             );
+        }
+        Message::ToolbarHover(..) => {
+            // 悬停进度由内核 `Message::Database` 分支转发到 `HoverId`,吃不到这里。
         }
     }
 }
@@ -1410,10 +1425,11 @@ pub fn view<'a>(
     ws_state: &'a WorkspaceState,
     width: Length,
     outer: Border,
+    schema_back_hover_t: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 正在浏览某数据源的 schema 树 → 树视图;否则阶段 1 卡片列表(以下原样)。
     if let Some((source, st)) = ws_state.browsing_source() {
-        return schema_tree_view(source, st, width, outer);
+        return schema_tree_view(source, st, width, outer, schema_back_hover_t);
     }
     let mut col = column![
         crate::homespace::home_panel_head(icons::IconKind::Database, "数据库"),
@@ -1465,14 +1481,27 @@ fn schema_tree_view<'a>(
     st: &'a SchemaState,
     width: Length,
     outer: Border,
+    schema_back_hover_t: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let header = row![
-        button(icons::view(
+    let box_len = crate::theme::icon_size::row() + 12.0;
+    let back_button = MouseArea::new(
+        icons::icon_button(
             icons::IconKind::ChevronLeft,
             crate::theme::icon_size::row(),
-            crate::theme::color::CREAM,
-        ))
+            false,
+            schema_back_hover_t,
+            false,
+        )
+        .width(Length::Fixed(box_len))
+        .height(Length::Fixed(box_len))
         .on_press(Message::SchemaBack),
+    )
+    .interaction(iced_widget::core::mouse::Interaction::Pointer)
+    .on_enter(Message::ToolbarHover(DatabaseToolbarTarget::SchemaBack, true))
+    .on_exit(Message::ToolbarHover(DatabaseToolbarTarget::SchemaBack, false));
+
+    let header = row![
+        back_button,
         text(source.name.clone())
             .size(crate::theme::font::subtitle())
             .color(crate::theme::color::CREAM),

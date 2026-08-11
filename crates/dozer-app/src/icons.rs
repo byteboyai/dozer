@@ -2,7 +2,9 @@
 //! `IconKind` 是穷举枚举而非开放式字符串——新增图标 = 加一个变体 + 一个 svg 文件，
 //! 与 `theme.rs` 精选 14 色而非任意色值同一哲学。
 
-use iced_widget::core::{Color, Element, Length};
+use iced_widget::button;
+use iced_widget::container;
+use iced_widget::core::{Border, Color, Element, Length};
 use iced_widget::svg;
 use std::path::Path;
 
@@ -180,6 +182,79 @@ pub fn view<'a, Message: 'a>(
         .height(Length::Fixed(size))
         .style(move |_theme: &iced_widget::Theme, _status| svg::Style { color: Some(color) })
         .into()
+}
+
+/// 统一 icon 按钮样式规范（ByteBoy2077）：
+///
+/// - **默认**：无背景、无边框，图标灰色 `DIM`。
+/// - **hover**：图标平滑过渡到金色 `GOLD`（过渡进度 `hover_t: 0..=1` 来自
+///   `App::hover_progress` + `HoverId` 动画，同 rail 手法——SVG 颜色在构建时
+///   就定死、不吃 `button::Status`，所以 hover 必须由调用方把 `hover_t` 算进来）。
+/// - **选中**（只有少数按钮有）：图标恒金 `GOLD` + 1px 金框。有选中态的按钮
+///   传 `active: true`，其余传 `false`。
+/// - **卡片底**：工具栏行里的按钮（如文件树搜索/显示隐藏文件）需要一块
+///   `CARD` 圆角方底 + 1px `BORDER` 描边来与输入框对齐的，传 `card: true`；
+///   纯 hover 图标按钮传 `false`（无背景）。
+///
+/// 返回裸 `Button`（未包 `MouseArea`、未设 `on_press`），调用方按需
+/// `.width/.height/.padding/.on_press(...)` 并自行用 `MouseArea` 接
+/// `on_enter`/`on_exit` 驱动 `hover_t`；也可用便捷包装 `view_button`。
+pub fn icon_button<'a, Message: Clone + 'a>(
+    kind: IconKind,
+    size: f32,
+    active: bool,
+    hover_t: f32,
+    card: bool,
+) -> button::Button<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let color = if active {
+        crate::theme::color::GOLD
+    } else {
+        crate::theme::color::mix(crate::theme::color::DIM, crate::theme::color::GOLD, hover_t)
+    };
+    let inner = container(
+        svg({
+            let bytes = kind.bytes();
+            svg::Handle::from_memory(bytes)
+        })
+        .width(Length::Fixed(size))
+        .height(Length::Fixed(size))
+        .style(move |_theme: &iced_widget::Theme, _status| svg::Style { color: Some(color) }),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .align_x(iced_widget::core::alignment::Horizontal::Center)
+    .align_y(iced_widget::core::alignment::Vertical::Center);
+
+    button(inner).padding(0).style(move |_t: &iced_widget::Theme, _s: button::Status| {
+        let (background, border_color) = if card {
+            (
+                Some(crate::theme::color::CARD.into()),
+                if active {
+                    crate::theme::color::GOLD
+                } else {
+                    crate::theme::color::BORDER
+                },
+            )
+        } else {
+            (
+                None,
+                if active {
+                    crate::theme::color::GOLD
+                } else {
+                    Color::TRANSPARENT
+                },
+            )
+        };
+        button::Style {
+            background,
+            border: Border {
+                color: border_color,
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..button::Style::default()
+        }
+    })
 }
 
 /// 文件名 → 图标类别(按扩展名，类别式而非按语言品牌，见设计文档 §3.1 caveat；
