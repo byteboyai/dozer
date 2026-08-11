@@ -64,6 +64,13 @@ url = "2"
 # sysinfo：footbar 系统信息条(CPU/RAM/网络/磁盘)的统一数据源。
 # 版本与 crates/legacy-boy 一致,workspace Cargo.lock 已热,不引入新版本解析。
 sysinfo = "0.32"
+# grep = ripgrep 搜索内核(纯 Rust),用于文件树右键"搜索"弹窗的全文内容搜索。
+# 用 grep-searcher + grep-regex 做匹配,grep-ignore 负责目录 walk 时尊重
+# .gitignore/hidden。grep 伞 crate 的默认 features 不含 grep-pcre2。
+grep = "0.4.1"
+grep-regex = "0.1.14"
+grep-searcher = "0.1.17"
+ignore = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
