@@ -28,6 +28,7 @@ use crate::homespace::{self, HomeRecentConversation, HomeRecentFile, load_home_r
 use crate::icons;
 use crate::layout;
 use crate::open_projects;
+use crate::panel_layouts;
 use crate::preview::WebviewSpec;
 use crate::term_view;
 use crate::theme;
@@ -275,10 +276,6 @@ pub struct ShellLayout {
     pub agent_split: f32,
     /// 对话配对:对话列表占右面板区宽度的比例，对话审阅拿剩下的。
     pub conversations_split: f32,
-    pub left_view: LeftView,
-    pub right_view: RightView,
-    pub left_collapsed: bool,
-    pub right_collapsed: bool,
     /// 上次退出时的窗口逻辑尺寸(宽,高)。`main.rs` 建窗时读它决定初始
     /// `with_inner_size`,取代写死的 `theme::geometry::initial_window_size()`；`App::
     /// persist_window_size_on_exit` 在 `WindowEvent::CloseRequested` 时
@@ -295,12 +292,33 @@ impl Default for ShellLayout {
             files_split: 0.35,
             agent_split: 0.4,
             conversations_split: 0.4,
+            window_width: theme::geometry::initial_window_size().0,
+            window_height: theme::geometry::initial_window_size().1,
+        }
+    }
+}
+
+/// 每个项目各自记住的面板布局:左右面板区当前显示的配对视图、以及左右
+/// 面板区是否收起。原来这几项是全局 `ShellLayout` 的字段,所有项目共享同一
+/// 份,导致"在项目 A 改完面板,切到项目 B 时 B 被 A 的面板状态盖掉"(切换
+/// 项目 bug)。改成按项目 id 记到 `panel_layouts.json`(见 `panel_layouts`
+/// 模块),切换项目只换当前这份、绝不碰别的项目那份。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct PanelLayout {
+    pub left_view: LeftView,
+    pub right_view: RightView,
+    pub left_collapsed: bool,
+    pub right_collapsed: bool,
+}
+
+impl Default for PanelLayout {
+    fn default() -> Self {
+        Self {
             left_view: LeftView::Files,
             right_view: RightView::Agent,
             left_collapsed: false,
             right_collapsed: false,
-            window_width: theme::geometry::initial_window_size().0,
-            window_height: theme::geometry::initial_window_size().1,
         }
     }
 }
@@ -343,7 +361,6 @@ pub fn sanitize_shell_layout(l: ShellLayout) -> ShellLayout {
         } else {
             theme::geometry::initial_window_size().1
         },
-        ..l
     }
 }
 
@@ -1130,8 +1147,16 @@ pub struct App {
     /// 每拍翻转(见 `toggle_blink`/`any_blinking`)。
     blink_on: bool,
     /// 图标栏+左右面板区宽度/分割状态;启动时 `layout::load()` 读盘作
-    /// 起始值,拖拽结束(`ColumnDragEnd`)写盘。
+    /// 起始值,拖拽结束(`ColumnDragEnd`)写盘。只存几何(宽度/分割比例/
+    /// 窗口尺寸),**不存**左右视图选择与收起态——那些是**每个项目各自**的
+    /// 偏好,见 `panel_layouts`。
     shell_layout: ShellLayout,
+    /// 每个项目各自的面板布局(左右视图选择 + 收起态),按项目 id 索引;
+    /// 启动时从 `panel_layouts::load()` 读回,切换/改面板时写回。当前正
+    /// 显示的项目的布局由 `left_view`/`right_view`/`left_collapsed`/
+    /// `right_collapsed` 这几份"活值"承载,切换项目前先 `stash` 回这里、
+    /// 切过去再 `adopt` 出来,别的项目那份绝不被当前项目盖掉。
+    panel_layouts: HashMap<i64, PanelLayout>,
     /// 左面板区当前显示的配对视图(左图标栏点击切换)。
     left_view: LeftView,
     /// 右面板区当前显示的配对视图(右图标栏点击切换)。
@@ -1377,6 +1402,10 @@ impl App {
         let pruned = order != saved.project_ids || active != saved.active_project_id;
         app.project_order = order;
         app.active_project_id = active;
+        // 启动恢复出的活跃项目,把它的面板布局换上来(没存过就退化成默认)。
+        if let Some(id) = active {
+            app.adopt_panel_layout(id);
+        }
         if let Some(id) = active
             && let Some(WorkspaceSlot::Stub { info, .. }) = app.projects.get(&id)
         {
@@ -1415,6 +1444,7 @@ impl App {
         daemon_error: Option<String>,
     ) -> Self {
         let shell_layout = layout::load();
+        let panel_layouts = panel_layouts::load();
         let shell = Self {
             client,
             handle,
@@ -1424,11 +1454,12 @@ impl App {
             term_focused: true,
             daemon_error,
             blink_on: true,
-            left_view: shell_layout.left_view,
-            right_view: shell_layout.right_view,
-            left_collapsed: shell_layout.left_collapsed,
-            right_collapsed: shell_layout.right_collapsed,
+            left_view: PanelLayout::default().left_view,
+            right_view: PanelLayout::default().right_view,
+            left_collapsed: PanelLayout::default().left_collapsed,
+            right_collapsed: PanelLayout::default().right_collapsed,
             shell_layout,
+            panel_layouts,
             maximized: None,
             active_zone: Some(ZoneSide::Right),
             hover_anims: std::collections::HashMap::new(),
@@ -1866,18 +1897,55 @@ impl App {
         }
     }
 
-    /// 把 `left_view`/`right_view`/`left_collapsed`/`right_collapsed` 同步进
-    /// `shell_layout` 再异步写盘。图标切换/收起要立即持久化，不能只靠
-    /// `ColumnDragEnd` 顺带存(用户可能从没拖过分隔线)。
+    /// 把几何状态(宽度/分割比例/窗口尺寸,**不含**左右视图选择与收起态——
+    /// 那些按项目分,见 `panel_layouts`)写盘。图标切换/收起要立即持久化几何,
+    /// 不能只靠 `ColumnDragEnd` 顺带存(用户可能从没拖过分隔线)。
     fn spawn_shell_layout_save(&mut self) {
-        self.shell_layout.left_view = self.left_view;
-        self.shell_layout.right_view = self.right_view;
-        self.shell_layout.left_collapsed = self.left_collapsed;
-        self.shell_layout.right_collapsed = self.right_collapsed;
         let layout = self.shell_layout;
         self.handle.spawn(async move {
             if let Err(e) = layout::save(&layout) {
                 tracing::warn!("外壳布局写盘失败: {e}");
+            }
+        });
+    }
+
+    /// 当前正显示项目的面板布局(活值)打包成 `PanelLayout`。
+    fn current_panel_layout(&self) -> PanelLayout {
+        PanelLayout {
+            left_view: self.left_view,
+            right_view: self.right_view,
+            left_collapsed: self.left_collapsed,
+            right_collapsed: self.right_collapsed,
+        }
+    }
+
+    /// 把当前活值存回"当前活跃项目"在 `panel_layouts` 里的那份,并异步写盘。
+    /// 切换项目**之前**调:此时 `active_project_id` 还指着老项目,于是老项目
+    /// 的面板状态被原样记下,绝不会被接下来要切过去的新项目盖掉。
+    fn stash_active_panel_layout(&mut self) {
+        if let Some(id) = self.active_project_id {
+            self.panel_layouts.insert(id, self.current_panel_layout());
+            self.spawn_panel_layouts_save();
+        }
+    }
+
+    /// 把 `id` 项目自己存的面板布局取出来灌进活值,让界面切到它的样子。
+    /// `id` 还没存过(layout.json 升级前/第一次开)时退化成 `PanelLayout::
+    /// default()`,跟旧行为一致。
+    fn adopt_panel_layout(&mut self, id: i64) {
+        let pl = self.panel_layouts.get(&id).copied().unwrap_or_default();
+        self.left_view = pl.left_view;
+        self.right_view = pl.right_view;
+        self.left_collapsed = pl.left_collapsed;
+        self.right_collapsed = pl.right_collapsed;
+    }
+
+    /// 把整份 `panel_layouts`(所有项目的面板布局)异步写盘。
+    fn spawn_panel_layouts_save(&mut self) {
+        let map = self.panel_layouts.clone();
+        self.handle.spawn(async move {
+            if let Err(e) = panel_layouts::save(&map) {
+                tracing::warn!("面板布局写盘失败: {e}");
             }
         });
     }
@@ -1887,6 +1955,9 @@ impl App {
     /// handler 都该走这里,不要只调其中一半——只存不重算,终端网格会停在
     /// 上一次窗口 resize 时的尺寸(Fix round 2 #6)。
     fn on_shell_layout_changed(&mut self) {
+        // 视图选择/收起态变了:先记进当前活跃项目自己的那份(别的项目不动),
+        // 再存几何、重算网格。
+        self.stash_active_panel_layout();
         self.spawn_shell_layout_save();
         self.sync_terminal_grid();
     }
@@ -3166,7 +3237,10 @@ impl App {
                 // 这个项目已经开着页签(`Loaded` 或还没促成的 `Stub`)时,点最近
                 // 项目卡片就只是"切到那个页签",走与点页签完全相同的非破坏性
                 // 路径——绝不能杀掉任何已有页签的会话(设计文档 §2)。
+                // 切走前先把当前(老)项目的面板布局原样存下,再换成新项目的。
+                self.stash_active_panel_layout();
                 if focus_project_tab(&self.projects, &mut self.active_project_id, id) {
+                    self.adopt_panel_layout(id);
                     self.maximized = None;
                     self.current_page = AppPage::Workspace;
                     self.ensure_loaded(id);
@@ -3220,7 +3294,10 @@ impl App {
                 // 放大态是外壳态,换页签后留着只会挡住新页签的界面。
                 self.maximized = None;
                 let id = project.id;
+                // 切走前先把当前(老)项目的面板布局原样存下,再换成新项目的。
+                self.stash_active_panel_layout();
                 if focus_project_tab(&self.projects, &mut self.active_project_id, id) {
+                    self.adopt_panel_layout(id);
                     // 这个项目已经开着页签了:只前台化,绝不改写它的内容——
                     // 那会把这个页签既有的终端全关掉、文件树对话列表全清空重来。
                     self.current_page = AppPage::Workspace;
@@ -3240,6 +3317,8 @@ impl App {
                     .insert(id, WorkspaceSlot::Loaded(Box::new(ws)));
                 self.project_order.push(id);
                 self.active_project_id = Some(id);
+                // 换成新项目的面板布局(它自己没存过就退化成默认)。
+                self.adopt_panel_layout(id);
                 self.current_page = AppPage::Workspace;
                 self.sync_terminal_grid(); // 同上
                 self.persist_open_projects();
@@ -3248,9 +3327,12 @@ impl App {
                 // 切页签只有两件事:改 `active_project_id`、必要时促成 `Stub`。
                 // 没有任何内容改写,因此后台项目的终端/预览/审阅原样留着,切
                 // 回来还是刚才那副样子。
+                // 切走前先把当前(老)项目的面板布局原样存下,再换成新项目的。
+                self.stash_active_panel_layout();
                 if !focus_project_tab(&self.projects, &mut self.active_project_id, id) {
                     return;
                 }
+                self.adopt_panel_layout(id);
                 self.maximized = None;
                 self.current_page = AppPage::Workspace;
                 self.ensure_loaded(id);
@@ -3278,6 +3360,9 @@ impl App {
                 }
             }
             Message::ProjectTabClose(id) => {
+                // 关掉当前页签前先把它的面板布局原样存下(焦点还在它身上,
+                // `stash` 会记进 `id` 那份),以后重开还能恢复。
+                self.stash_active_panel_layout();
                 let io = self.shell_io();
                 let Some(slot) = take_project_tab(
                     &mut self.projects,
@@ -3300,6 +3385,8 @@ impl App {
                 // 那个页签明明高亮着。必须在这里显式促成(最终审查 Required
                 // Fix #3)。
                 if let Some(next) = self.active_project_id {
+                    // 焦点被挪到了邻居页签,把它的面板布局换上来。
+                    self.adopt_panel_layout(next);
                     self.ensure_loaded(next);
                 }
                 self.sync_terminal_grid(); // 清放大态后重算网格,理由同 `ProjectTabSwitch`

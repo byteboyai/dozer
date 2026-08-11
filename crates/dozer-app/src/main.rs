@@ -13,6 +13,7 @@ mod keymap;
 mod layout;
 mod open_projects;
 mod osc;
+mod panel_layouts;
 mod preview;
 mod preview_state;
 mod project;

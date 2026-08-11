@@ -43,7 +43,6 @@ fn save_to(path: &Path, layout: &ShellLayout) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{LeftView, RightView};
 
     #[test]
     fn load_from_missing_file_returns_default() {
@@ -75,7 +74,12 @@ mod tests {
         assert_eq!(l.files_split, 0.2, "0.0 应被夹到 MIN_SPLIT_RATIO");
         // 缺的字段取默认值,而不是整份回退默认(left_width 保住了读到的值路径)。
         assert_eq!(l.agent_split, ShellLayout::default().agent_split);
-        assert_eq!(l.left_view, ShellLayout::default().left_view);
+        // 老 layout.json 里可能还带着已迁移走的 left_view 等字段,serde 忽略
+        // 未知字段,不应让整体反序列化失败(几何仍在)。
+        assert_eq!(
+            l.conversations_split,
+            ShellLayout::default().conversations_split
+        );
     }
 
     #[test]
@@ -103,7 +107,7 @@ mod tests {
     }
 
     #[test]
-    fn shell_layout_persists_view_selection_and_collapse() {
+    fn shell_layout_persists_geometry_and_window_size() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("shell_layout.json");
         let layout = ShellLayout {
@@ -111,10 +115,6 @@ mod tests {
             files_split: 0.4,
             agent_split: 0.35,
             conversations_split: 0.45,
-            right_view: RightView::Agent,
-            left_view: LeftView::Files,
-            left_collapsed: true,
-            right_collapsed: false,
             window_width: 1600.0,
             window_height: 1000.0,
         };
