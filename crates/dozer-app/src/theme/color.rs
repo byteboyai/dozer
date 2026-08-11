@@ -27,11 +27,12 @@ pub const RED: Color = c(0xFF, 0x6E, 0x6E);
 /// 锁定的颜色。
 pub const IGNORED: Color = c(0x6B, 0x7F, 0x8F);
 
-/// Codex 强调色（picker 圆点/图标底色）。ByteBoy2077 核心 5 色（bg/金/
-/// 奶油/青/绿）之外的扩展色，`PURPLE` 已是先例。
+/// Agent-identity 扩展色（Codex/Qoder/Kilo/V8agent 的 picker 圆点/图标底色）。
+/// ByteBoy2077 核心 5 色（bg/金/奶油/青/绿）之外，`PURPLE` 等已是先例。
 pub const ORANGE: Color = c(0xFF, 0x9B, 0x4D);
 pub const MAGENTA: Color = c(0xFF, 0x6E, 0xC7);
 pub const BLUE: Color = c(0x4D, 0x8C, 0xFF);
+pub const LIME: Color = c(0xA3, 0xE6, 0x35);
 
 /// 两色按 `t`(0..=1)线性插值,返回中间色。iced 0.14 的 `Color` 没有自带的
 /// `lerp`/`mix`,这里补一个给悬停动画等需要平滑过渡颜色的地方用。

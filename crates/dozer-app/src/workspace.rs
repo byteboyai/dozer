@@ -2641,6 +2641,7 @@ pub(crate) fn agent_dot_color(agent: AgentKind) -> Color {
         AgentKind::Codex => theme::color::ORANGE,
         AgentKind::Qoder => theme::color::MAGENTA,
         AgentKind::Kilo => theme::color::BLUE,
+        AgentKind::V8agent => theme::color::LIME,
         AgentKind::Unknown => theme::color::DIM,
     }
 }
@@ -2653,7 +2654,7 @@ pub(crate) fn agent_icon(agent: AgentKind) -> IconKind {
         AgentKind::Codebuddy => IconKind::Codebuddy,
         AgentKind::Opencode => IconKind::Opencode,
         // 暂无确认可用的品牌素材，回落通用图标（spec §8/§6 明确允许）。
-        AgentKind::Codex | AgentKind::Qoder | AgentKind::Kilo | AgentKind::Unknown => IconKind::Bot,
+        AgentKind::Codex | AgentKind::Qoder | AgentKind::Kilo | AgentKind::V8agent | AgentKind::Unknown => IconKind::Bot,
     }
 }
 
@@ -3069,6 +3070,7 @@ mod tests {
             (AgentKind::Codex, theme::color::ORANGE),
             (AgentKind::Qoder, theme::color::MAGENTA),
             (AgentKind::Kilo, theme::color::BLUE),
+            (AgentKind::V8agent, theme::color::LIME),
             (AgentKind::Unknown, theme::color::DIM),
         ];
         for (agent, expected) in cases {
@@ -3087,11 +3089,12 @@ mod tests {
         assert_eq!(agent_icon(AgentKind::Claude), IconKind::Claude);
         assert_eq!(agent_icon(AgentKind::Codebuddy), IconKind::Codebuddy);
         assert_eq!(agent_icon(AgentKind::Opencode), IconKind::Opencode);
-        // Codex/Qoder/Kilo 暂无确认可用的品牌素材，回落通用 Bot 图标
+        // Codex/Qoder/Kilo/V8agent 暂无确认可用的品牌素材，回落通用 Bot 图标
         // （见计划 Task 3 说明，非占位符——spec §8/§6 明确允许的兜底）。
         assert_eq!(agent_icon(AgentKind::Codex), IconKind::Bot);
         assert_eq!(agent_icon(AgentKind::Qoder), IconKind::Bot);
         assert_eq!(agent_icon(AgentKind::Kilo), IconKind::Bot);
+        assert_eq!(agent_icon(AgentKind::V8agent), IconKind::Bot);
         // Unknown 同样回落 Bot 图标。
         assert_eq!(agent_icon(AgentKind::Unknown), IconKind::Bot);
     }
