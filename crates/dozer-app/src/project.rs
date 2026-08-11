@@ -133,6 +133,102 @@ impl FileTree {
         out
     }
 
+    /// 全树搜索：递归遍历整棵树（含未展开的深层目录），返回名称包含
+    /// `query`（大小写不敏感子串）的行。只读——不写 `children` 缓存、不改
+    /// `expanded`：搜索是一次性的浏览视图，不应悄悄改变用户当前展开态。
+    /// 未缓存目录直接按现用 `read_children` 读盘（与 `toggle` 展开时共享
+    /// 同一隐藏名单/排序，故搜索结果与手动展开看到的一致）。
+    ///
+    /// 结果按"展开路径"呈现：命中的项连同它到根的全部祖先目录一起返回，
+    /// 让用户一眼看清命中文件所在完整路径（缺少祖先上下文会显得突兀）。
+    /// 行按深度缩进（`depth` 从 0 起）。遍历按 DFS 序进行，目录在前、同名
+    /// 有序；一个命中项可能让多个祖先目录入列。空查询与根同义（根层全部
+    /// 项）。
+    pub fn search_rows(&self, query: &str) -> Vec<TreeRow> {
+        let q = query.to_lowercase();
+        // 第一遍:纯遍历,收集命中项与命中项祖先目录集合。
+        // matched: 命中项路径。ancestors_keep: 命中项祖先目录(自身不匹配但
+        // 需作为路径上下文显示)。用路径判等,便于后续直接判该目录是否要保留。
+        let mut matched: Vec<PathBuf> = Vec::new();
+        let mut ancestors_keep: HashSet<PathBuf> = HashSet::new();
+        let mut stack: Vec<(PathBuf, usize)> = vec![(self.root.clone(), 0)];
+        while let Some((dir, depth)) = stack.pop() {
+            let entries = match self.children.get(&dir) {
+                Some(cached) => cached.clone(),
+                None => read_children(&dir),
+            };
+            for e in entries.iter().rev() {
+                if !query.is_empty() && e.name.to_lowercase().contains(&q) {
+                    matched.push(e.path.clone());
+                    // 记录命中项到根之间的每个祖先目录,展开路径用。
+                    let mut anc = dir.clone();
+                    while anc != self.root {
+                        ancestors_keep.insert(anc.clone());
+                        anc = match anc.parent() {
+                            Some(p) => p.to_path_buf(),
+                            None => break,
+                        };
+                    }
+                }
+                if e.is_dir {
+                    stack.push((e.path.clone(), depth + 1));
+                }
+            }
+        }
+        // 空查询退化为整个可见根层(不再递归展示全部后代,与 `visible_rows`
+        // 一致,避免空搜索把整棵树摊平)。
+        if query.is_empty() {
+            let root_entries = match self.children.get(&self.root) {
+                Some(cached) => cached.clone(),
+                None => read_children(&self.root),
+            };
+            return root_entries
+                .into_iter()
+                .map(|e| {
+                    let expanded = self.expanded.contains(&e.path);
+                    TreeRow {
+                        path: e.path,
+                        name: e.name,
+                        depth: 0,
+                        is_dir: e.is_dir,
+                        expanded,
+                    }
+                })
+                .collect();
+        }
+        // 第二遍:按 DFS 序重走整棵树,输出"命中项 ∪ 其祖先目录"的行。
+        let mut out = Vec::new();
+        let mut stack: Vec<(PathBuf, usize)> = vec![(self.root.clone(), 0)];
+        while let Some((dir, depth)) = stack.pop() {
+            let entries = match self.children.get(&dir) {
+                Some(cached) => cached.clone(),
+                None => read_children(&dir),
+            };
+            for e in entries.iter().rev() {
+                // 目录:命中即该目录本身,或它是某命中项的祖先 → 保留。
+                // 文件:只有命中才保留。
+                let keep = if e.is_dir {
+                    matched.contains(&e.path) || ancestors_keep.contains(&e.path)
+                } else {
+                    matched.contains(&e.path)
+                };
+                if keep {
+                    out.push(TreeRow {
+                        path: e.path.clone(),
+                        name: e.name.clone(),
+                        depth,
+                        is_dir: e.is_dir,
+                        expanded: self.expanded.contains(&e.path),
+                    });
+                }
+                if e.is_dir {
+                    stack.push((e.path.clone(), depth + 1));
+                }
+            }
+        }
+        out
+    }
+
     /// 项目根目录（`FileTree::new` 传入的 `root`）。文件树面板用它显示
     /// "根目录名(完整路径)" 头部。
     pub fn root(&self) -> &Path {
@@ -470,6 +566,38 @@ mod tests {
         // 再 toggle 收起
         t.toggle(&d.path().join("src"));
         assert_eq!(t.visible_rows().len(), 2);
+    }
+
+    #[test]
+    fn search_rows_reaches_nested_unexpanded_dirs() {
+        let d = mktree();
+        // 建一个未展开的深层嵌套文件:src/util/helpers.rs
+        std::fs::create_dir(d.path().join("src/util")).unwrap();
+        std::fs::write(d.path().join("src/util/helpers.rs"), "").unwrap();
+        let t = FileTree::new(d.path().to_path_buf());
+        // 未展开任何目录:visible_rows 只见根层
+        assert_eq!(t.visible_rows().len(), 2);
+        // 全树搜索必须穿透未展开的深层目录命中,并带回祖先目录形成完整路径:
+        // src(深度0) → src/util(深度1) → helpers.rs(深度2)
+        let rows = t.search_rows("helpers");
+        let names: Vec<_> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["src", "util", "helpers.rs"]);
+        assert_eq!(rows[2].depth, 2);
+        assert!(rows[0].is_dir && rows[1].is_dir && !rows[2].is_dir);
+    }
+
+    #[test]
+    fn search_rows_matches_dir_and_case_insensitive() {
+        let d = mktree();
+        let t = FileTree::new(d.path().to_path_buf());
+        // 目录名匹配 + 大小写不敏感:src 本身命中(无祖先需带回,恰在根层)
+        let rows = t.search_rows("SRC");
+        let names: Vec<_> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["src"]);
+        assert!(rows[0].is_dir);
+        // 空查询退化为根层(与可见树一致)
+        let empty = t.search_rows("");
+        assert_eq!(empty.len(), 2);
     }
 
     #[test]

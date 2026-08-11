@@ -8,7 +8,9 @@ use crate::workspace::AddrEvent;
 use crate::{delivery, icons, theme};
 use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Color, Element, Length, Padding};
-use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
+use iced_widget::{
+    MouseArea, Scrollable, button, column, container, row, scrollable, text, text_input,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -51,6 +53,10 @@ pub struct WorkspaceState {
     tree_error: Option<String>,
     tree_delete_confirm: Option<(PathBuf, bool)>,
     tree_edit: Option<TreeEdit>,
+    /// 搜索框里正在键入的草稿文本(尚未提交时不影响树)。
+    tree_search: String,
+    /// 已提交的搜索关键字:仅当提交(敲回车/点搜索按钮)后用它过滤树。
+    search_query: String,
 }
 
 /// 挂在 App 上的右键菜单浮层状态(屏幕空间单例,不随项目切换各自保留)。
@@ -100,6 +106,11 @@ pub enum Message {
     RenameStart(PathBuf),
     ReloadFromDisk,
     EditEvent(AddrEvent),
+    /// 搜索框文本变化:只更新草稿,不影响已提交的过滤(需敲回车或点搜索
+    /// 按钮触发 `SearchSubmit` 才真正过滤)。
+    SearchInputChanged(String),
+    /// 提交搜索:把草稿 `tree_search` 落成生效的过滤 `search_query`。
+    SearchSubmit,
 }
 
 impl WorkspaceState {
@@ -120,6 +131,8 @@ impl WorkspaceState {
         self.file_tree = Some(file_tree);
         self.tree_selected = None;
         self.git_statuses = HashMap::new();
+        self.tree_search.clear();
+        self.search_query.clear();
     }
 
     /// 供内核判断"删除确认浮层该不该显示"(`App::view()` 顶层互斥浮层
@@ -444,6 +457,12 @@ pub fn update(
                 tree.reload_from_disk();
             }
         }
+        Message::SearchInputChanged(q) => {
+            ws_state.tree_search = q;
+        }
+        Message::SearchSubmit => {
+            ws_state.search_query = ws_state.tree_search.clone();
+        }
         Message::RenameStart(path) => {
             app_state.context_menu = None;
             ws_state.tree_error = None;
@@ -493,6 +512,52 @@ pub fn view<'a>(
     let mut header = column![].spacing(region.gap).width(Length::Fill);
     let mut tree_col = column![].spacing(region.gap);
 
+    // 文件树搜索框:按文件/目录名称筛选整棵树(大小写不敏感子串匹配)。
+    // 不会边输入边过滤——敲回车(`on_submit`)或点右侧"搜索"按钮后,
+    // 由 `SearchSubmit` 把草稿落成为生效的 `search_query`。附带外边框。
+    let search_active = !ws_state.search_query.is_empty();
+    let search_input = text_input("搜索文件/目录…", &ws_state.tree_search)
+        .on_input(Message::SearchInputChanged)
+        .on_submit(Message::SearchSubmit)
+        .size(theme::font::body())
+        .width(Length::Fill)
+        .style(
+            |_t: &iced_widget::Theme, _s| iced_widget::text_input::Style {
+                background: theme::color::BG.into(),
+                border: Border {
+                    color: theme::color::BORDER,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                icon: theme::color::DIM,
+                placeholder: theme::color::DIM,
+                value: theme::color::CREAM,
+                selection: theme::color::GOLD,
+            },
+        );
+    let search_button = button(icons::view(
+        icons::IconKind::FolderSearch,
+        crate::theme::icon_size::row(),
+        theme::color::CREAM,
+    ))
+    .on_press(Message::SearchSubmit)
+    .padding([6, 8])
+    .style(|_t: &iced_widget::Theme, _s| button::Style {
+        background: Some(theme::color::CARD.into()),
+        border: Border {
+            color: theme::color::BORDER,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        text_color: theme::color::CREAM,
+        ..button::Style::default()
+    });
+    header = header.push(
+        row![search_input, search_button]
+            .spacing(6)
+            .align_y(iced_widget::core::Alignment::Center),
+    );
+
     // 根目录头部:只显示名称(CREAM 高亮),不再直接显示完整路径;名称前
     // 挂 folder-open 图标,与文件树里展开目录同款。右键根目录打开目录右键
     // 菜单(新建文件/文件夹、复制、粘贴、删除、重命名、在 Finder 打开、
@@ -534,7 +599,14 @@ pub fn view<'a>(
         );
     }
     if let Some(tree) = &ws_state.file_tree {
-        for row in tree.visible_rows() {
+        // 搜索激活时走全树搜索(递归遍历含未展开深层目录),否则走当前展开
+        // 的可见行。`search_rows` 只读不写缓存/展开态,view 的不变借用即可。
+        let rows: Vec<crate::project::TreeRow> = if search_active {
+            tree.search_rows(&ws_state.search_query)
+        } else {
+            tree.visible_rows()
+        };
+        for row in rows {
             let is_renaming = matches!(
                 &ws_state.tree_edit,
                 Some(TreeEdit { mode: TreeEditMode::Rename(p), .. }) if *p == row.path
@@ -1048,6 +1120,41 @@ mod tests {
             tree_state_color(delivery::TreeState::Ignored),
             theme::color::IGNORED
         );
+    }
+
+    #[tokio::test]
+    async fn search_input_then_submit_commits_draft_and_reset_clears() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+
+        // 键入:只进草稿,不触发过滤(生效的 search_query 仍为空)。
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::SearchInputChanged("main".to_string()),
+            1,
+            &handle,
+            |_| {},
+        );
+        assert_eq!(ws_state.tree_search, "main");
+        assert!(ws_state.search_query.is_empty());
+
+        // 提交(敲回车/点搜索按钮):草稿落成为生效过滤词。
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::SearchSubmit,
+            1,
+            &handle,
+            |_| {},
+        );
+        assert_eq!(ws_state.search_query, "main");
+
+        // 认领其它项目时清空草稿与生效词,避免旧筛选残留在新项目树上。
+        ws_state.reset_for_project(FileTree::new(dir.path().to_path_buf()));
+        assert!(ws_state.tree_search.is_empty() && ws_state.search_query.is_empty());
     }
 
     #[tokio::test]

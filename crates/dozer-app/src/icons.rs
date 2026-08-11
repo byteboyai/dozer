@@ -13,6 +13,7 @@ pub enum IconKind {
     ChevronDown,
     Folder,
     FolderOpen,
+    FolderTree,
     FileCode,
     FileJson,
     FileText,
@@ -29,7 +30,11 @@ pub enum IconKind {
     Rename,
     Globe,
     Bot,
+    Brain,
     MessageSquare,
+    /// 会话列表面板(右面板区"对话"视图列表侧)的图标(Lucide
+    /// bot-message-square)。
+    BotMessageSquare,
     /// 内容 pane 放大/还原(`MaximizedPane`)的触发图标。触发按钮已在
     /// `a0d324e`(2026-08-06)被主动移除,状态机/overlay 仍保留,是否重新
     /// 接一个入口留给后续产品决策——见
@@ -41,9 +46,10 @@ pub enum IconKind {
     RefreshCw,
     SquarePlus,
     GitBranch,
-    ListChecks,
-    /// 项目信息面板 rail 图标(Lucide info)。
-    Info,
+    /// Todo 面板 rail 图标(Lucide list-todo)。
+    ListTodo,
+    /// 项目信息面板 rail 图标(Lucide briefcase)。
+    Briefcase,
     /// 浏览器地址栏"加入/移出收藏"星标(Lucide star)。已收藏态靠调用方
     /// 传 GOLD 而非切换到另一份实心图标——`icons::view` 只管描边色,单一
     /// 资源足够表达"已收藏/未收藏"两态(YAGNI,不新增 filled 变体)。
@@ -89,6 +95,8 @@ pub enum IconKind {
     SquareTerminal,
     /// git-log 面板 rail 图标(Lucide git-graph:节点 + 连线的图形化历史)。
     GitGraph,
+    /// 文件树搜索框的搜索按钮图标(Lucide folder-search:文件夹 + 放大镜)。
+    FolderSearch,
 }
 
 impl IconKind {
@@ -99,6 +107,7 @@ impl IconKind {
             IconKind::ChevronDown => include_bytes!("../assets/icons/chevron-down.svg"),
             IconKind::Folder => include_bytes!("../assets/icons/folder.svg"),
             IconKind::FolderOpen => include_bytes!("../assets/icons/folder-open.svg"),
+            IconKind::FolderTree => include_bytes!("../assets/icons/folder-tree.svg"),
             IconKind::FileCode => include_bytes!("../assets/icons/file-code.svg"),
             IconKind::FileJson => include_bytes!("../assets/icons/braces.svg"),
             IconKind::FileText => include_bytes!("../assets/icons/file-text.svg"),
@@ -115,14 +124,16 @@ impl IconKind {
             IconKind::Rename => include_bytes!("../assets/icons/pen-line.svg"),
             IconKind::Globe => include_bytes!("../assets/icons/globe.svg"),
             IconKind::Bot => include_bytes!("../assets/icons/bot.svg"),
+            IconKind::Brain => include_bytes!("../assets/icons/brain.svg"),
             IconKind::MessageSquare => include_bytes!("../assets/icons/message-square.svg"),
+            IconKind::BotMessageSquare => include_bytes!("../assets/icons/bot-message-square.svg"),
             IconKind::Maximize => include_bytes!("../assets/icons/maximize-2.svg"),
             IconKind::Home => include_bytes!("../assets/icons/home.svg"),
             IconKind::RefreshCw => include_bytes!("../assets/icons/refresh-cw.svg"),
             IconKind::SquarePlus => include_bytes!("../assets/icons/square-plus.svg"),
             IconKind::GitBranch => include_bytes!("../assets/icons/git-branch.svg"),
-            IconKind::ListChecks => include_bytes!("../assets/icons/list-checks.svg"),
-            IconKind::Info => include_bytes!("../assets/icons/info.svg"),
+            IconKind::ListTodo => include_bytes!("../assets/icons/list-todo.svg"),
+            IconKind::Briefcase => include_bytes!("../assets/icons/briefcase.svg"),
             IconKind::Star => include_bytes!("../assets/icons/star.svg"),
             IconKind::Bookmark => include_bytes!("../assets/icons/bookmark.svg"),
             IconKind::BarChart3 => include_bytes!("../assets/icons/bar-chart-3.svg"),
@@ -142,6 +153,7 @@ impl IconKind {
             IconKind::SquareRadical => include_bytes!("../assets/icons/square-radical.svg"),
             IconKind::SquareTerminal => include_bytes!("../assets/icons/square-terminal.svg"),
             IconKind::GitGraph => include_bytes!("../assets/icons/git-graph.svg"),
+            IconKind::FolderSearch => include_bytes!("../assets/icons/folder-search.svg"),
         }
     }
 }
