@@ -12,6 +12,12 @@ case "$PROFILE" in
   *) echo "usage: $0 [debug|release]" >&2; exit 1 ;;
 esac
 
+# 发布打包前自动把版本号 patch +1(debug 构建不自动 bump,避免无意义自增)。
+# 想验证而不改文件时,先手动跑 scripts/bump-version.sh --dry-run。
+if [[ "$PROFILE" == "release" ]]; then
+  "$(dirname "${BASH_SOURCE[0]}")/bump-version.sh"
+fi
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PACKAGING_DIR="$ROOT_DIR/crates/dozer-app/packaging/macos"
 APP_NAME="Dozer AI Coder"
