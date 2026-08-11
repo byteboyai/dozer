@@ -698,7 +698,7 @@ pub fn view<'a>(
     if let Some(err) = error {
         return container(
             column![
-                crate::homespace::home_panel_head(crate::icons::IconKind::GitBranch, "Git"),
+                crate::homespace::home_panel_head(crate::icons::IconKind::GitGraph, "Git"),
                 text(format!("git log 读取失败: {err}")).color(theme::color::RED),
             ]
             .spacing(8)
@@ -715,7 +715,7 @@ pub fn view<'a>(
         };
         return container(
             column![
-                crate::homespace::home_panel_head(crate::icons::IconKind::GitBranch, "Git"),
+                crate::homespace::home_panel_head(crate::icons::IconKind::GitGraph, "Git"),
                 text(text_content).color(theme::color::DIM),
             ]
             .spacing(8)
@@ -728,7 +728,7 @@ pub fn view<'a>(
     if snapshot.rows.is_empty() {
         return container(
             column![
-                crate::homespace::home_panel_head(crate::icons::IconKind::GitBranch, "Git"),
+                crate::homespace::home_panel_head(crate::icons::IconKind::GitGraph, "Git"),
                 text("没有可显示的提交").color(theme::color::DIM),
             ]
             .spacing(8)
@@ -776,7 +776,7 @@ pub fn view<'a>(
     if let Some(detail_res) = detail {
         let detail_panel = detail_view(snapshot, selected, detail_res);
         column![
-            crate::homespace::home_panel_head(crate::icons::IconKind::GitBranch, "Git"),
+            crate::homespace::home_panel_head(crate::icons::IconKind::GitGraph, "Git"),
             header,
             worktree_strip(worktrees),
             row![graph, detail_panel],
@@ -788,7 +788,7 @@ pub fn view<'a>(
         .into()
     } else {
         column![
-            crate::homespace::home_panel_head(crate::icons::IconKind::GitBranch, "Git"),
+            crate::homespace::home_panel_head(crate::icons::IconKind::GitGraph, "Git"),
             header,
             worktree_strip(worktrees),
             graph,

@@ -87,6 +87,8 @@ pub enum IconKind {
     /// 顶栏/footbar 品牌前置图标(Lucide square-terminal:方角框 + 终端提示符),
     /// 用于 footbar 右侧 "Dozer AI Coder" 名称前作品牌标记。
     SquareTerminal,
+    /// git-log 面板 rail 图标(Lucide git-graph:节点 + 连线的图形化历史)。
+    GitGraph,
 }
 
 impl IconKind {
@@ -139,6 +141,7 @@ impl IconKind {
             IconKind::SquareActivity => include_bytes!("../assets/icons/square-activity.svg"),
             IconKind::SquareRadical => include_bytes!("../assets/icons/square-radical.svg"),
             IconKind::SquareTerminal => include_bytes!("../assets/icons/square-terminal.svg"),
+            IconKind::GitGraph => include_bytes!("../assets/icons/git-graph.svg"),
         }
     }
 }
