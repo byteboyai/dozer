@@ -12,7 +12,7 @@
 //! `docs/superpowers/specs/2026-08-08-app-workspace-file-split-design.md`.
 
 use crate::conversation::ConversationMeta;
-use crate::delivery::{self, WorktreeInfo};
+use crate::delivery;
 use crate::extensions::acceptance;
 use crate::extensions::browser;
 use crate::extensions::database;
@@ -3109,6 +3109,10 @@ impl App {
                     git_log::request_refresh(&mut self.git_log, repo_path, max, &handle, emit);
                 }
             }
+            Message::GitLog(git_log::Message::ProjectTabOpen(p)) => {
+                // worktree 条带里点其它 worktree,转成内核的切项目消息。
+                self.update(Message::ProjectTabOpen(p));
+            }
             Message::GitLog(git_log::Message::LoadMore) => {
                 let Some(path) = self
                     .active_workspace()
@@ -4649,79 +4653,6 @@ pub(crate) fn zone_pane_border(zone: theme::region::RegionStyle, corner: PaneCor
 /// `theme::region::left_zone()` 的外框(四向 margin 做悬浮留白,无描边)。
 /// 放大态跳过——`maximize_overlay` 已经用金色边框把同一块内容整体框起来,
 /// 再套一层外框会在金框内侧多出一圈视觉噪音。
-fn worktree_strip<'a>(
-    worktrees: &'a [WorktreeInfo],
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    // 把同仓库的其他 worktree 压成一行小字,标示当前提交图对应哪个 worktree
-    // 上下文。主 worktree + N 个链接 worktree 各自的分支会散落在同一条图上,
-    // 这个条带帮助用户分辨 `[→main]` 到底指谁。"本工作区"是状态展示,不是
-    // 甲方动作,不能用 `theme::color::GOLD`(CLAUDE.md 硬性裁决,GOLD 专属甲方动作)
-    // ——真正的动作是点其它 worktree 切过去,那些按钮才该用 GOLD。
-    let current = worktrees.iter().find(|w| w.is_current);
-    let others = worktrees
-        .iter()
-        .filter(|w| !w.is_current)
-        .collect::<Vec<_>>();
-    let mut chips: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = vec![];
-    if let Some(c) = current {
-        chips.push(
-            text(format!(
-                "本工作区:{}",
-                c.branch.as_deref().unwrap_or("(无分支)")
-            ))
-            .size(theme::font::caption())
-            .color(theme::color::CYAN)
-            .into(),
-        );
-    }
-    for o in others {
-        let label = match (&o.branch, o.missing) {
-            (Some(b), true) => format!("{b} (缺失)"),
-            (Some(b), _) => b.clone(),
-            (None, true) => "无分支 (缺失)".into(),
-            (None, _) => "无分支".into(),
-        };
-        if o.missing {
-            // 目录已经不在磁盘上,没有可切换的目标——保留纯展示文案。
-            chips.push(
-                text(label)
-                    .size(theme::font::caption())
-                    .color(theme::color::DIM)
-                    .into(),
-            );
-        } else {
-            chips.push(
-                button(
-                    text(label)
-                        .size(theme::font::caption())
-                        .color(theme::color::GOLD),
-                )
-                .on_press(Message::ProjectTabOpen(o.path.clone()))
-                .padding(0)
-                .style(|_t: &iced_widget::Theme, _s| button::Style {
-                    background: None,
-                    text_color: theme::color::GOLD,
-                    ..button::Style::default()
-                })
-                .into(),
-            );
-        }
-    }
-    if chips.is_empty() {
-        return container(iced_widget::Space::new())
-            .height(Length::Shrink)
-            .into();
-    }
-    row![
-        iced_widget::Row::with_children(chips).spacing(12),
-        iced_widget::Space::new().width(Length::Fill),
-    ]
-    .padding([4, 8])
-    .width(Length::Fill)
-    .height(Length::Shrink)
-    .into()
-}
-
 fn left_panel_area<'a>(
     app: &'a App,
     ws: &'a Workspace,
@@ -4792,7 +4723,9 @@ fn left_panel_area<'a>(
                 zone_pane_border(zone, ac),
             )
             .map(Message::Browser),
-            LeftView::GitLog => git_log::view(&app.git_log).map(Message::GitLog),
+            LeftView::GitLog => {
+                git_log::view(&app.git_log, ws.project_panel.worktrees()).map(Message::GitLog)
+            }
             LeftView::Todo => {
                 let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
                     return column![].into();
@@ -4851,21 +4784,9 @@ fn left_panel_area<'a>(
         return inner;
     }
     let region = zone;
-    // 哪怕提交图还没画出来(加载中/出错/空仓库),worktree 速览条也该照常
-    // 显示——用户可能就是先想看看有哪些 worktree,不必等图先画出来。
-    let strip: Option<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
-        if app.left_view == LeftView::GitLog {
-            Some(worktree_strip(ws.project_panel.worktrees()))
-        } else {
-            None
-        };
-    let mut zone_body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> = inner;
-    if let Some(strip) = strip {
-        zone_body = column![strip, zone_body]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into();
-    }
+    // worktree 速览条("本工作区：xxx" + 其它 worktree 切换)现在由 `git_log::view`
+    // 自己渲染在文件夹路径下方,不再在这里额外包一层,避免盖在面板标题上方。
+    let zone_body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> = inner;
     let zone_box = container(zone_body)
         .width(Length::Fill)
         .height(Length::Fill)

@@ -6,6 +6,7 @@
 //! 只验证数据链路是否走得通,不追求 curve/fork 的像素级还原:每条 track
 //! 画一根直线,commit 是线上的一个圆点,父子关系用直线连接(不是贝塞尔)。
 //! 验证通过、决定转正时,再补动画/交互/性能优化。
+use crate::delivery::WorktreeInfo;
 use crate::theme;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::alignment;
@@ -260,6 +261,10 @@ pub struct CommitDetail {
 pub enum Message {
     SelectCommit(git2::Oid),
     LoadMore,
+    /// 点 worktree 条带里的其它 worktree,切过去。内核(`app.rs`)在
+    /// `Message::GitLog` 分发里拦截,转成 `Message::ProjectTabOpen`,
+    /// 不会转发到 `update`(见其 `unreachable!` 分支)。
+    ProjectTabOpen(PathBuf),
     DetailLoaded(PathBuf, git2::Oid, Result<CommitDetail, String>),
     SnapshotLoaded(PathBuf, usize, Result<GitLogSnapshot, String>),
 }
@@ -384,7 +389,86 @@ pub fn update(
                 "LoadMore 由内核在 Message::GitLog 分支里直接处理(需要仓库路径),不会转发到这里"
             )
         }
+        Message::ProjectTabOpen(_) => {
+            unreachable!(
+                "ProjectTabOpen 由内核在 Message::GitLog 分支里直接处理(切到对应 worktree),不会转发到这里"
+            )
+        }
     }
+}
+
+/// 同仓库其它 worktree 压成一行小字,标示当前提交图对应哪个 worktree 上下文。
+/// 主 worktree + N 个链接 worktree 各自的分支会散落在同一条图上,这个条带帮
+/// 用户分辨 `[→main]` 到底指谁。它渲染在文件夹路径下方(见 `view` 的
+/// `header` 之后)。"本工作区"是状态展示,不是甲方动作,不能用 GOLD(CLAUDE.md
+/// 硬性裁决,GOLD 专属甲方动作)——真正的动作是点其它 worktree 切过去,那些
+/// 按钮才该用 GOLD。
+fn worktree_strip<'a>(
+    worktrees: &'a [WorktreeInfo],
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let current = worktrees.iter().find(|w| w.is_current);
+    let others = worktrees
+        .iter()
+        .filter(|w| !w.is_current)
+        .collect::<Vec<_>>();
+    let mut chips: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = vec![];
+    if let Some(c) = current {
+        chips.push(
+            text(format!(
+                "本工作区:{}",
+                c.branch.as_deref().unwrap_or("(无分支)")
+            ))
+            .size(theme::font::caption())
+            .color(theme::color::CYAN)
+            .into(),
+        );
+    }
+    for o in others {
+        let label = match (&o.branch, o.missing) {
+            (Some(b), true) => format!("{b} (缺失)"),
+            (Some(b), _) => b.clone(),
+            (None, true) => "无分支 (缺失)".into(),
+            (None, _) => "无分支".into(),
+        };
+        if o.missing {
+            // 目录已经不在磁盘上,没有可切换的目标——保留纯展示文案。
+            chips.push(
+                text(label)
+                    .size(theme::font::caption())
+                    .color(theme::color::DIM)
+                    .into(),
+            );
+        } else {
+            chips.push(
+                iced_widget::button(
+                    text(label)
+                        .size(theme::font::caption())
+                        .color(theme::color::GOLD),
+                )
+                .on_press(Message::ProjectTabOpen(o.path.clone()))
+                .padding(0)
+                .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+                    background: None,
+                    text_color: theme::color::GOLD,
+                    ..iced_widget::button::Style::default()
+                })
+                .into(),
+            );
+        }
+    }
+    if chips.is_empty() {
+        return container(iced_widget::Space::new())
+            .height(Length::Shrink)
+            .into();
+    }
+    row![
+        iced_widget::Row::with_children(chips).spacing(12),
+        iced_widget::Space::new().width(Length::Fill),
+    ]
+    .padding([4, 8])
+    .width(Length::Fill)
+    .height(Length::Shrink)
+    .into()
 }
 
 /// 异步重建 Git Log 快照,`max_count` 由调用方决定(打开面板/引用变化用
@@ -606,7 +690,10 @@ fn ref_labels_text(refs: &[RefLabel], head_branch: Option<&str>) -> String {
 /// 渲染整块提交图面板:有数据画 Canvas,出错画错误文案,两者皆无(比如
 /// 尚未打开项目)画空状态提示。纯函数——不碰 `App`/`Workspace` 内部状态,
 /// 调用方(`workspace.rs`)负责取数据、决定何时重建缓存、维护选中态。
-pub fn view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+pub fn view<'a>(
+    state: &'a State,
+    worktrees: &'a [WorktreeInfo],
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let error = state.error.as_deref();
     if let Some(err) = error {
         return container(
@@ -691,6 +778,7 @@ pub fn view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_rend
         column![
             crate::homespace::home_panel_head(crate::icons::IconKind::GitBranch, "Git"),
             header,
+            worktree_strip(worktrees),
             row![graph, detail_panel],
         ]
         .spacing(8)
@@ -702,6 +790,7 @@ pub fn view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_rend
         column![
             crate::homespace::home_panel_head(crate::icons::IconKind::GitBranch, "Git"),
             header,
+            worktree_strip(worktrees),
             graph,
         ]
         .spacing(8)
