@@ -67,11 +67,11 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_r
     let s = &state.sample;
 
     // 各段:CPU/RAM/SSD/HDD 是数值段(用量 >75% 时数值变红,见 `metric_row`),
-    // 网速段纯展示。最终呈现为 `… HDD [图标] 网速 | Proxy`:网速段永远以
-    // square-radical 图标作前导(替代原先的 `｜`),排在代理段之前;代理段
-    // 永远渲染、排在网速段之后,其前 `｜` 恒显——有代理为 `Proxy {addr}`,
-    // 无代理为 `Proxy OFF`。
-    /// 每段前导分隔:`None`=无,`Pipe`=`｜`,`Icon`=square-radical 图标。
+    // 代理段与网速段纯展示。最终呈现为 `… HDD ｜ [图标] Proxy ｜ 网速`:
+    // 代理段以图标作前导(替代原先的 `Proxy` 文字标签),排在网速段之前;
+    // 网速段前用 `｜` 分隔,排在代理段之后。
+    /// 每段前导分隔:`None`=无,`Pipe`=`｜`,`Icon`=指定图标(默认
+    /// square-radical,可覆盖)。
     #[derive(Clone, Copy)]
     enum Lead {
         None,
@@ -92,9 +92,19 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_r
     if let Some(h) = s.hdd_percent {
         segs.push((Lead::Pipe, metric_row("HDD", h)));
     }
-    // 网速段:永远以 square-radical 图标作前导(替代原先的 `｜`),排在代理段之前。
+    // 代理段:以网卡图标作前导(替代原先的 `Proxy` 文字标签),排在网络段之前。
+    // 永远渲染——有代理显示 `{addr}`,无代理显示 `OFF`(系统未配置代理的明确
+    // 状态,不再像之前那样整段隐藏)。
     segs.push((
         Lead::Icon,
+        text(format!("Proxy  {}", s.proxy.as_deref().unwrap_or("OFF")))
+            .size(theme::font::caption_sm())
+            .color(theme::color::BG)
+            .into(),
+    ));
+    // 网速段:排在代理段之后,前导 `｜`,纯展示。
+    segs.push((
+        Lead::Pipe,
         text(format!(
             "↓ {}  ↑ {}",
             format_speed(s.net_down_bps),
@@ -104,20 +114,10 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_r
         .color(theme::color::BG)
         .into(),
     ));
-    // 代理段:永远渲染,排在网速段之后,前导 `｜`。有代理时显示
-    // `Proxy {addr}`,无代理时显示 `Proxy OFF`(系统未配置代理的明确状态,
-    // 不再像之前那样整段隐藏)。
-    segs.push((
-        Lead::Pipe,
-        text(format!("Proxy  {}", s.proxy.as_deref().unwrap_or("OFF")))
-            .size(theme::font::caption_sm())
-            .color(theme::color::BG)
-            .into(),
-    ));
 
-    // 逐段拼装:每段前导由 `Lead` 决定——默认 `｜`,网速段前用 square-radical
-    // 图标(Lucide,深色描边浮在奶油背景上,与文字同色、垂直居中)作区分,
-    // 代理段前用普通 `｜`(仅代理存在时出现)。
+    // 逐段拼装:每段前导由 `Lead` 决定——默认 `｜`,代理段前用 icon
+    // (Lucide,深色描边浮在奶油背景上,与文字同色、垂直居中)作区分,
+    // 网速段前用普通 `｜`。
     let mut parts: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
         Vec::with_capacity(segs.len() * 2);
     for (i, (lead, elem)) in segs.into_iter().enumerate() {
@@ -171,7 +171,7 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_r
         .color(theme::color::BG);
     let app_version = text(format!("v{}", env!("CARGO_PKG_VERSION")))
         .size(theme::font::caption_sm())
-        .color(theme::color::BLUE);
+        .color(iced_widget::core::Color::from_rgb8(0xFF, 0x6E, 0x6E));
     let right = row![app_icon, app_name, app_version]
         .spacing(6)
         .align_y(Alignment::Center);

@@ -235,7 +235,7 @@ pub fn view<'a>(
     let mut content = column![].spacing(12).padding(14);
 
     content = content.push(crate::homespace::home_panel_head(
-        icons::IconKind::Info,
+        icons::IconKind::Briefcase,
         "项目",
     ));
 

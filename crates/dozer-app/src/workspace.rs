@@ -45,6 +45,7 @@ use crate::extensions::ssh;
 use crate::extensions::todo;
 use crate::extensions::usage;
 use crate::git_watch;
+use crate::homespace::home_panel_head;
 use crate::icons;
 use crate::icons::IconKind;
 use crate::osc::{OscEvent, OscScanner};
@@ -1683,23 +1684,10 @@ pub(crate) fn conversation_list_pane(
     outer: Border,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::conversation_list_pane();
-    let mut content = column![
-        row![
-            lh(text("对话")
-                .size(theme::font::subtitle())
-                .color(theme::color::CREAM)),
-            lh(text(
-                ws.project
-                    .as_ref()
-                    .map(|p| p.name.clone())
-                    .unwrap_or_else(|| "未打开项目".into())
-            )
-            .size(theme::font::label())
-            .color(theme::color::DIM)),
-        ]
-        .spacing(8)
-    ]
-    .spacing(region.gap);
+    // 套用统一 panel head:Lucide `BotMessageSquare` 图标 + 暖金 `#dcc9a3`
+    // 的 "会话" 标题 + 1px 分割线;去掉原先跟在项目名后的 "Dozer 项目" 副标题。
+    let mut content =
+        column![home_panel_head(IconKind::BotMessageSquare, "会话"),].spacing(region.gap);
 
     let opens = ws.open_transcript_paths();
     let active_n = ws
@@ -1709,7 +1697,7 @@ pub(crate) fn conversation_list_pane(
         .count();
     content = content.push(
         row![
-            lh(text("对话")
+            lh(text("会话")
                 .size(theme::font::caption())
                 .color(theme::color::DIM)),
             lh(
@@ -1825,30 +1813,22 @@ pub(crate) fn group_tabs_by_agent(tabs: &[SessionTab]) -> Vec<(AgentKind, Vec<us
 /// Agent 列表面板(右面板区"Agent"视图的列表侧):按 `AgentKind` 分组展示
 /// 当前项目的会话,组内保留 tab 打开顺序;点击一行 = `Message::SelectTab`
 /// 切焦点(同终端 tab 栏点击效果)。
-pub(crate) fn agent_list_pane(
-    ws: &Workspace,
+pub(crate) fn agent_list_pane<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
     width: Length,
     outer: Border,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::agent_list_pane();
     let mut content = column![
+        // 套用统一 panel head:暖金 `#dcc9a3` 的 Bot 图标 + "Agent" 标题 +
+        // 1px 分割线;去掉原来跟在项目名后的 "Dozer 项目" 副标题文字。
+        home_panel_head(IconKind::Brain, "Agent"),
         row![
-            lh(text("Agent")
-                .size(theme::font::subtitle())
-                .color(theme::color::CREAM)),
-            lh(text(
-                ws.project
-                    .as_ref()
-                    .map(|p| p.name.clone())
-                    .unwrap_or_else(|| "未打开项目".into())
-            )
-            .size(theme::font::label())
-            .color(theme::color::DIM)),
             iced_widget::space::horizontal(),
-            agent_picker_toggle_button(),
+            agent_picker_toggle_button(app),
         ]
-        .spacing(8)
-        .align_y(iced_widget::core::Alignment::Center)
+        .align_y(iced_widget::core::Alignment::Center),
     ]
     .spacing(region.gap);
 
@@ -1920,28 +1900,34 @@ pub(crate) fn agent_list_row(
 }
 
 /// Agent 面板头部"＋"按钮:点击切换 `agent_picker_open`,弹出 agent
-/// 选择菜单(`agent_picker_popup`)。样式为 CARD 底 + BORDER 描边的"＋",
-/// 与已移除的终端 tab 栏"＋"同源。
-pub(crate) fn agent_picker_toggle_button<'a>()
--> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    button(
-        text("＋")
-            .size(theme::font::title())
-            .color(theme::color::CREAM),
+/// 选择菜单(`agent_picker_popup`)。样式与顶栏页签行的"＋"一致——无背景、
+/// Lucide `SquarePlus` 图标、静止灰(`DIM`)、hover 平滑过渡到金(`GOLD`),
+/// 由 `HoverId::AgentPickerToggle` + `MouseArea` 驱动同一套悬停动画。
+pub(crate) fn agent_picker_toggle_button<'a>(
+    app: &App,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let color = theme::color::mix(
+        theme::color::DIM,
+        theme::color::GOLD,
+        app.hover_progress(HoverId::AgentPickerToggle),
+    );
+    let add = MouseArea::new(
+        button(icons::view(
+            icons::IconKind::SquarePlus,
+            crate::theme::icon_size::row(),
+            color,
+        ))
+        .on_press(Message::AgentPickerToggle)
+        .padding([6, 8])
+        .style(move |_t: &iced_widget::Theme, _s| button::Style {
+            background: None,
+            text_color: color,
+            ..button::Style::default()
+        }),
     )
-    .on_press(Message::AgentPickerToggle)
-    .padding([4, 8])
-    .style(|_theme, _status| button::Style {
-        background: Some(theme::color::CARD.into()),
-        text_color: theme::color::CREAM,
-        border: Border {
-            color: theme::color::BORDER,
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        ..button::Style::default()
-    })
-    .into()
+    .on_enter(Message::Hover(HoverId::AgentPickerToggle, true))
+    .on_exit(Message::Hover(HoverId::AgentPickerToggle, false));
+    add.into()
 }
 
 /// Agent 选择菜单浮层:固定挂在窗口右上角("＋"按钮下方——该按钮
@@ -2032,14 +2018,9 @@ pub(crate) fn review_content_pane(
     outer: Border,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::review_content_pane();
-    let header = row![
-        lh(text("会话审阅")
-            .size(theme::font::body())
-            .color(theme::color::CREAM)),
-        iced_widget::space::horizontal(),
-    ]
-    .spacing(4);
-    let mut content = column![header].spacing(region.gap);
+    // 去掉原先的 "会话审阅" 标题文字——列表侧已统一为 "会话" panel head,
+    // 内容侧直接展示选中会话的审阅正文,不再重复标题。
+    let mut content = column![].spacing(region.gap);
 
     if ws.review.is_some() {
         content = review_content(content, ws);

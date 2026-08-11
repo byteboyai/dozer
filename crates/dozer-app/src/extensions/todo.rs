@@ -505,7 +505,7 @@ pub fn view<'a>(
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let header = column![
-        crate::homespace::home_panel_head(icons::IconKind::ListChecks, "Todo"),
+        crate::homespace::home_panel_head(icons::IconKind::ListTodo, "Todo"),
         text(format!("{} 条任务 · .dozer/todo.md", ws_state.items.len()))
             .size(theme::font::caption())
             .color(theme::color::DIM),

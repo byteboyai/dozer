@@ -6,6 +6,7 @@
 //! agent transcript JSONL。
 
 use crate::conversation::ConversationMeta;
+use crate::homespace::home_panel_head;
 use crate::icons;
 use crate::theme;
 use dozer_core::protocol::AgentKind;
@@ -375,21 +376,22 @@ pub fn spawn_refresh(
     });
 }
 
-/// 头部：标题 + 项目名 + 右侧手动刷新按钮（spec"面板渲染"#1）。
-fn panel_header(
-    project_name: &str,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    iced_widget::row![
-        column![
-            text("用量统计")
-                .size(theme::font::subtitle())
-                .color(theme::color::CREAM),
-            text(project_name)
-                .size(theme::font::label())
-                .color(theme::color::DIM),
-        ]
-        .spacing(2),
-        iced_widget::Space::new().width(Length::Fill),
+/// 面板主入口，对应右图标栏的"用量"视图（单栏，不像 Conversations
+/// 那样是"列表:内容"配对分栏——见 spec）。`rows` 为空且 `loading` 为假时
+/// 是"还没数据"的空态；`loading` 为真时是刷新中占位态；两者互斥由 `update`
+/// 保证（`WorkspaceState::set_loading` 调用后、`Loaded` 落地时清掉）。
+pub fn view<'a>(
+    ws_state: &'a WorkspaceState,
+    width: Length,
+    outer: Border,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let rows = ws_state.rows();
+    let loading = ws_state.loading();
+    // 套用统一 panel head:Lucide `BarChart3` 图标 + 暖金 `#dcc9a3` 的 "用量"
+    // 标题 + 1px 分割线;手动刷新按钮放到 head 下方(同 数据库/SSH 面板的
+    // 操作按钮布局)。
+    let mut content = column![
+        home_panel_head(icons::IconKind::BarChart3, "用量"),
         button(icons::view::<Message>(
             icons::IconKind::RefreshCw,
             14.0,
@@ -398,23 +400,8 @@ fn panel_header(
         .on_press(Message::Refresh)
         .style(|_t, _s| button::Style::default()),
     ]
-    .align_y(iced_widget::core::Alignment::Center)
-    .into()
-}
-
-/// 面板主入口，对应右图标栏的"用量统计"视图（单栏，不像 Conversations
-/// 那样是"列表:内容"配对分栏——见 spec）。`rows` 为空且 `loading` 为假时
-/// 是"还没数据"的空态；`loading` 为真时是刷新中占位态；两者互斥由 `update`
-/// 保证（`WorkspaceState::set_loading` 调用后、`Loaded` 落地时清掉）。
-pub fn view<'a>(
-    ws_state: &'a WorkspaceState,
-    project_name: &'a str,
-    width: Length,
-    outer: Border,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let rows = ws_state.rows();
-    let loading = ws_state.loading();
-    let mut content = column![panel_header(project_name)].spacing(12).padding(14);
+    .spacing(12)
+    .padding(14);
 
     if loading {
         content = content.push(
