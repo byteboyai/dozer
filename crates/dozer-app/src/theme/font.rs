@@ -20,7 +20,6 @@ const RAW: &str = include_str!("../../assets/theme/workspace.json");
 
 #[derive(Deserialize)]
 struct WorkspaceFonts {
-    dot_xs: u32,
     dot_sm: u32,
     caption_sm: u32,
     caption: u32,
@@ -45,9 +44,6 @@ fn load(raw: &str) -> WorkspaceFonts {
 
 static SIZES: LazyLock<WorkspaceFonts> = LazyLock::new(|| load(RAW));
 
-pub fn dot_xs() -> u32 {
-    scale(SIZES.dot_xs)
-}
 pub fn dot_sm() -> u32 {
     scale(SIZES.dot_sm)
 }
@@ -83,7 +79,6 @@ mod tests {
     /// 字面量完全一致——纯代码搬家,数值不该变。
     #[test]
     fn tokens_match_pre_migration_literals() {
-        assert_eq!(dot_xs(), 8);
         assert_eq!(dot_sm(), 9);
         assert_eq!(caption_sm(), 10);
         assert_eq!(caption(), 11);

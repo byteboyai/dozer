@@ -21,6 +21,12 @@ pub const GREEN: Color = c(0x1A, 0xD5, 0x85);
 pub const PURPLE: Color = c(0x95, 0x80, 0xFF);
 pub const RED: Color = c(0xFF, 0x6E, 0x6E);
 
+/// 文件树被 `.gitignore` 忽略的条目的名称颜色(`#6B7F8F`,与 `DIM` 同值)。
+/// 中性的低饱和灰,比正文 `BODY` 更弱一号,示意"存在但不在版本控制视线
+/// 内"。不在设计规格锁死的 14 色之内,作为增量具名令牌加在此,不动上面
+/// 锁定的颜色。
+pub const IGNORED: Color = c(0x6B, 0x7F, 0x8F);
+
 /// Codex 强调色（picker 圆点/图标底色）。ByteBoy2077 核心 5 色（bg/金/
 /// 奶油/青/绿）之外的扩展色，`PURPLE` 已是先例。
 pub const ORANGE: Color = c(0xFF, 0x9B, 0x4D);

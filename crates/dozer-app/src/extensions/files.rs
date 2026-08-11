@@ -549,16 +549,22 @@ pub fn view<'a>(
                 continue;
             }
             let indent = "  ".repeat(row.depth);
-            let status: Option<(delivery::ChangeKind, bool)> = if row.is_dir {
+            // git 状态编码名称颜色:未加入版本=红(最高优先),加入版本未提交
+            // 的新文件=绿,修改/删除未提交=青,一般=灰,被忽略=弱灰。目录
+            // 聚合取子孙中最高档(`dir_status`),让用户先注意到没加入版本
+            // 管理的文件。无任何 git 记录的干净条目(状态 `None`)补成"一般"。
+            let state: delivery::TreeState = if row.is_dir {
                 delivery::dir_status(&row.path, &ws_state.git_statuses)
-                    .map(|d| (d.kind, d.unstaged))
+                    .unwrap_or(delivery::TreeState::Unchanged)
             } else {
                 ws_state
                     .git_statuses
                     .get(&row.path)
-                    .map(|s| (s.kind, s.unstaged))
+                    .copied()
+                    .map(delivery::TreeState::from)
+                    .unwrap_or(delivery::TreeState::Unchanged)
             };
-            let name_color = theme::color::BODY;
+            let name_color = tree_state_color(state);
             let row_icon: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
                 if row.is_dir {
                     let chevron = if row.expanded {
@@ -600,7 +606,7 @@ pub fn view<'a>(
                     .align_y(iced_widget::core::Alignment::Center)
                     .into()
                 };
-            let mut line = row![
+            let line = row![
                 text(indent)
                     .size(crate::workspace::tree_row_font_size())
                     .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
@@ -613,14 +619,6 @@ pub fn view<'a>(
             ]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center);
-            if let Some((kind, unstaged)) = status {
-                line = line.push(iced_widget::space::horizontal());
-                line = line.push(
-                    text(tree_row_dot_glyph(unstaged))
-                        .size(theme::font::dot_xs())
-                        .color(tree_row_dot_color(kind)),
-                );
-            }
             let msg = if row.is_dir {
                 Message::Toggle(row.path.clone())
             } else {
@@ -671,7 +669,7 @@ pub fn view<'a>(
 
     let body = container(
         column![
-            crate::homespace::home_panel_head(icons::IconKind::Folder, "文件"),
+            crate::homespace::home_panel_head(icons::IconKind::FolderTree, "文件"),
             header,
             Scrollable::new(tree_col)
                 .width(Length::Fill)
@@ -857,16 +855,19 @@ pub fn context_menu_popup<'a>(
             .into()
         });
     }
-    items.push(menu_item(
-        Some(icons::IconKind::Trash),
-        "删除",
-        Message::DeleteRequest(menu.target.clone(), menu.is_dir),
-    ));
-    items.push(menu_item(
-        Some(icons::IconKind::Rename),
-        "重命名",
-        Message::RenameStart(menu.target.clone()),
-    ));
+    // 项目根不可删除/重命名:从菜单隐去这两项(其余目录均可)。
+    if !is_root {
+        items.push(menu_item(
+            Some(icons::IconKind::Trash),
+            "删除",
+            Message::DeleteRequest(menu.target.clone(), menu.is_dir),
+        ));
+        items.push(menu_item(
+            Some(icons::IconKind::Rename),
+            "重命名",
+            Message::RenameStart(menu.target.clone()),
+        ));
+    }
     push_sep(&mut items);
     items.push(menu_item(
         None,
@@ -1003,20 +1004,18 @@ pub fn delete_confirm_popup(
         .into()
 }
 
-/// 文件树色点颜色编码 git 状态(D2):修改=金,新增=绿,删除=红。
-fn tree_row_dot_color(kind: delivery::ChangeKind) -> iced_widget::core::Color {
-    match kind {
-        delivery::ChangeKind::Modified => theme::color::GOLD,
-        delivery::ChangeKind::New => theme::color::GREEN,
-        delivery::ChangeKind::Deleted => theme::color::RED,
+/// 文件树名称颜色编码 git 状态,取代早前 D2 的行尾色点。按
+/// `delivery::TreeState` 档位取色:未加入版本 → 红 `RED`;加入版本未提交的
+/// 新文件 → 绿 `GREEN`;修改/删除未提交 → 青 `CYAN`;被忽略 → 弱灰
+/// `IGNORED`。无改动(状态为 `None`)由调用方给灰色 `BODY`。
+fn tree_state_color(state: delivery::TreeState) -> iced_widget::core::Color {
+    match state {
+        delivery::TreeState::Untracked => theme::color::RED,
+        delivery::TreeState::StagedNew => theme::color::GREEN,
+        delivery::TreeState::Modified => theme::color::CYAN,
+        delivery::TreeState::Unchanged => theme::color::BODY,
+        delivery::TreeState::Ignored => theme::color::IGNORED,
     }
-}
-
-/// 色点字形编码暂存态(D2):全部暂存(无未暂存改动)→ 实心 `●`;有任何未
-/// 暂存改动(不论是否同时有暂存部分)→ 空心 `○`。尾缀字符不重复编码 kind
-/// (颜色已经够用),避免过度设计。
-fn tree_row_dot_glyph(unstaged: bool) -> &'static str {
-    if unstaged { "○" } else { "●" }
 }
 
 #[cfg(test)]
@@ -1028,21 +1027,27 @@ mod tests {
     }
 
     #[test]
-    fn tree_dot_maps_status_colors() {
+    fn tree_state_colors() {
         assert_eq!(
-            tree_row_dot_color(delivery::ChangeKind::Modified),
-            theme::color::GOLD
+            tree_state_color(delivery::TreeState::Untracked),
+            theme::color::RED
         );
         assert_eq!(
-            tree_row_dot_color(delivery::ChangeKind::New),
+            tree_state_color(delivery::TreeState::StagedNew),
             theme::color::GREEN
         );
         assert_eq!(
-            tree_row_dot_color(delivery::ChangeKind::Deleted),
-            theme::color::RED
+            tree_state_color(delivery::TreeState::Modified),
+            theme::color::CYAN
         );
-        assert_eq!(tree_row_dot_glyph(false), "●", "全部暂存=实心");
-        assert_eq!(tree_row_dot_glyph(true), "○", "有未暂存改动=空心");
+        assert_eq!(
+            tree_state_color(delivery::TreeState::Unchanged),
+            theme::color::BODY
+        );
+        assert_eq!(
+            tree_state_color(delivery::TreeState::Ignored),
+            theme::color::IGNORED
+        );
     }
 
     #[tokio::test]
@@ -1418,6 +1423,7 @@ mod tests {
                 kind: crate::delivery::ChangeKind::Modified,
                 staged: false,
                 unstaged: true,
+                ignored: false,
             },
         );
         let handle = tokio::runtime::Handle::current();

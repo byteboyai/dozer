@@ -197,15 +197,17 @@ pub enum ChangeKind {
     Deleted,
 }
 
-/// 单个文件的 git 状态:`kind` 决定色点颜色,`staged`/`unstaged` 决定色点
-/// 填充态(见 workspace.rs `tree_row_dot_glyph`)。二者可同时为真(对应旧
-/// porcelain 码里的 `MM`:部分暂存 + 又有新改动)。只要这个文件出现在
-/// `file_statuses` 返回的 map 里,`staged`/`unstaged` 至少一个为真。
+/// 单个文件的 git 状态:`kind` 决定名称颜色里"改动类型"那一档,`staged`/
+/// `unstaged` 区分暂存与否(对应旧 porcelain 码里的 `MM`:部分暂存 + 又有
+/// 新改动)。二者可同时为真。`ignored` 为真表示该路径被 `.gitignore` 忽略
+/// (此时 `staged`/`unstaged` 恒为 false,`kind` 被忽略,名称颜色优先走
+/// 忽略档)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileGitStatus {
     pub kind: ChangeKind,
     pub staged: bool,
     pub unstaged: bool,
+    pub ignored: bool,
 }
 
 /// 用 `git2::Repository::statuses` 取代 shell 出 `git status --porcelain`
@@ -217,7 +219,9 @@ pub fn file_statuses(repo: &Path) -> HashMap<PathBuf, FileGitStatus> {
         return map;
     };
     let mut opts = git2::StatusOptions::new();
-    opts.include_untracked(true).recurse_untracked_dirs(true);
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .include_ignored(true);
     let Ok(statuses) = git_repo.statuses(Some(&mut opts)) else {
         return map;
     };
@@ -229,23 +233,45 @@ pub fn file_statuses(repo: &Path) -> HashMap<PathBuf, FileGitStatus> {
             continue;
         }
         let s = entry.status();
-        if s.contains(git2::Status::IGNORED) {
+        if s.is_empty() {
+            // 纯已跟踪且无改动:git 不放这类条目,出现空状态直接跳过。
             continue;
         }
-        let staged = s.intersects(
-            git2::Status::INDEX_NEW
-                | git2::Status::INDEX_MODIFIED
-                | git2::Status::INDEX_DELETED
-                | git2::Status::INDEX_RENAMED
-                | git2::Status::INDEX_TYPECHANGE,
-        );
-        let unstaged = s.intersects(
-            git2::Status::WT_NEW
-                | git2::Status::WT_MODIFIED
-                | git2::Status::WT_DELETED
-                | git2::Status::WT_RENAMED
-                | git2::Status::WT_TYPECHANGE,
-        );
+        let ignored = s.contains(git2::Status::IGNORED);
+        let staged = if ignored {
+            false
+        } else {
+            s.intersects(
+                git2::Status::INDEX_NEW
+                    | git2::Status::INDEX_MODIFIED
+                    | git2::Status::INDEX_DELETED
+                    | git2::Status::INDEX_RENAMED
+                    | git2::Status::INDEX_TYPECHANGE,
+            )
+        };
+        let unstaged = if ignored {
+            false
+        } else {
+            s.intersects(
+                git2::Status::WT_NEW
+                    | git2::Status::WT_MODIFIED
+                    | git2::Status::WT_DELETED
+                    | git2::Status::WT_RENAMED
+                    | git2::Status::WT_TYPECHANGE,
+            )
+        };
+        if ignored {
+            map.insert(
+                repo.join(rel),
+                FileGitStatus {
+                    kind: ChangeKind::Modified,
+                    staged: false,
+                    unstaged: false,
+                    ignored: true,
+                },
+            );
+            continue;
+        }
         if !staged && !unstaged {
             continue;
         }
@@ -262,44 +288,86 @@ pub fn file_statuses(repo: &Path) -> HashMap<PathBuf, FileGitStatus> {
                 kind,
                 staged,
                 unstaged,
+                ignored: false,
             },
         );
     }
     map
 }
 
-/// 目录(含深层)的聚合 git 状态(rollup):`kind` 取子孙中最"重"的
-/// (Modified/Deleted > New,与 P1h 现状一致,让新建目录显绿而非误标金);
-/// `staged`/`unstaged` 只要有任一子孙为真就为真(D2)。
+/// 文件树名称颜色要编码的 git 状态档位,按优先级从高到低:
+/// `Untracked`(未加入版本,红)> `StagedNew`(加入版本未提交的新文件,绿)>
+/// `Modified`(修改/删除未提交,青)> `Unchanged`(无改动/一般,灰)>
+/// `Ignored`(被 `.gitignore` 忽略,弱灰)。`Unchanged` 对应不在
+/// `git_statuses` 里的干净条目(调用方将 `None` 补成该档)。目录聚合取子孙
+/// 中的**最高档**,让用户一眼先注意到没加入版本管理的文件。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DirGitStatus {
-    pub kind: ChangeKind,
-    pub staged: bool,
-    pub unstaged: bool,
+pub enum TreeState {
+    Untracked,
+    StagedNew,
+    Modified,
+    Unchanged,
+    Ignored,
 }
 
-pub fn dir_status(dir: &Path, statuses: &HashMap<PathBuf, FileGitStatus>) -> Option<DirGitStatus> {
-    let mut found_new = false;
-    let mut heavy: Option<ChangeKind> = None;
-    let mut staged = false;
-    let mut unstaged = false;
-    for (path, st) in statuses {
-        if !path.starts_with(dir) {
-            continue;
+impl From<FileGitStatus> for TreeState {
+    fn from(s: FileGitStatus) -> Self {
+        if s.ignored {
+            return TreeState::Ignored;
         }
-        staged |= st.staged;
-        unstaged |= st.unstaged;
-        match st.kind {
-            ChangeKind::Modified | ChangeKind::Deleted => heavy = Some(ChangeKind::Modified),
-            ChangeKind::New => found_new = true,
+        match s.kind {
+            ChangeKind::New => {
+                if s.staged {
+                    TreeState::StagedNew
+                } else {
+                    TreeState::Untracked
+                }
+            }
+            ChangeKind::Modified | ChangeKind::Deleted => TreeState::Modified,
         }
     }
-    let kind = heavy.or(found_new.then_some(ChangeKind::New))?;
-    Some(DirGitStatus {
-        kind,
-        staged,
-        unstaged,
-    })
+}
+
+/// 目录(含深层)的聚合 git 状态(rollup):收集所有子孙,取优先级最高的
+/// `TreeState` 作为整个目录的颜色档(见 [`TreeState`] 的档位序)——
+/// 未加入版本 > 加入版本未提交的新文件 > 修改未提交 > 一般 > 忽略。
+/// 无任何在状态表里的子孙、自身也没被忽略时返回 `None`(调用方补成
+/// `Unchanged`·灰)。被忽略的子孙不参与聚合(否则目录里顺带忽略的
+/// `.DS_Store` 会往上带),忽略档只在**目录自身**被 `.gitignore` 忽略时
+/// 触发。
+pub fn dir_status(dir: &Path, statuses: &HashMap<PathBuf, FileGitStatus>) -> Option<TreeState> {
+    if matches!(statuses.get(dir), Some(FileGitStatus { ignored: true, .. })) {
+        return Some(TreeState::Ignored);
+    }
+    let mut best: Option<TreeState> = None;
+    for (path, st) in statuses {
+        if path == dir || !path.starts_with(dir) {
+            continue;
+        }
+        if st.ignored {
+            continue;
+        }
+        let state = TreeState::from(*st);
+        if best
+            .map(|b| state_priority(state) > state_priority(b))
+            .unwrap_or(true)
+        {
+            best = Some(state);
+        }
+    }
+    best
+}
+
+/// `TreeState` 的档位权重,越大优先级越高(用于目录聚合挑最高档)。
+/// 档位序:Untracked(5)> StagedNew(4)> Modified(3)> Unchanged(2)> Ignored(1)。
+fn state_priority(state: TreeState) -> u8 {
+    match state {
+        TreeState::Untracked => 5,
+        TreeState::StagedNew => 4,
+        TreeState::Modified => 3,
+        TreeState::Unchanged => 2,
+        TreeState::Ignored => 1,
+    }
 }
 
 /// 当前分支名;非 git / 无提交 / detached HEAD 返回 None。
@@ -574,7 +642,63 @@ mod tests {
     }
 
     #[test]
-    fn dir_status_aggregates_new_vs_modified() {
+    fn file_statuses_marks_ignored_files() {
+        let (_d, repo) = mkrepo();
+        std::fs::write(repo.join(".gitignore"), "cache/\n*.log\n").unwrap();
+        std::fs::create_dir(repo.join("cache")).unwrap();
+        std::fs::write(repo.join("cache/x.bin"), "b\n").unwrap();
+        std::fs::write(repo.join("app.log"), "l\n").unwrap();
+
+        let m = file_statuses(&repo);
+        let i = m.get(&repo.join("app.log")).expect("被忽略日志应有状态");
+        assert!(i.ignored, "被忽略: {i:?}");
+        assert!(
+            !i.staged && !i.unstaged,
+            "被忽略条目无暂存/未暂存语义: {i:?}"
+        );
+        // 忽略目录需要 git 递归忽略才能逐条放出;至少验证根级忽略文件命中。
+        let _ = repo.join("cache/x.bin");
+    }
+
+    #[test]
+    fn dir_status_marks_ignored_dir_only_when_dir_itself_ignored() {
+        use std::path::{Path, PathBuf};
+        let mut s = HashMap::new();
+        // 目录自身被忽略(该精确路径在状态表里被标 ignored)→ 整目录走忽略档。
+        s.insert(
+            PathBuf::from("/r/out"),
+            FileGitStatus {
+                kind: ChangeKind::Modified,
+                staged: false,
+                unstaged: false,
+                ignored: true,
+            },
+        );
+        assert_eq!(
+            dir_status(Path::new("/r/out"), &s),
+            Some(TreeState::Ignored),
+            "目录自身忽略"
+        );
+
+        // 仅一个被忽略的子孙不向上传播忽略(否则 .DS_Store 会污染整个目录)。
+        let mut s2 = HashMap::new();
+        s2.insert(
+            PathBuf::from("/r/out/a.o"),
+            FileGitStatus {
+                kind: ChangeKind::Modified,
+                staged: false,
+                unstaged: false,
+                ignored: true,
+            },
+        );
+        assert!(
+            dir_status(Path::new("/r/out"), &s2).is_none(),
+            "只有被忽略子孙时不该标忽略"
+        );
+    }
+
+    #[test]
+    fn dir_status_aggregates_untracked_over_modified() {
         use std::path::{Path, PathBuf};
         let mut s = HashMap::new();
         s.insert(
@@ -583,6 +707,7 @@ mod tests {
                 kind: ChangeKind::New,
                 staged: false,
                 unstaged: true,
+                ignored: false,
             },
         );
         s.insert(
@@ -591,6 +716,7 @@ mod tests {
                 kind: ChangeKind::New,
                 staged: false,
                 unstaged: true,
+                ignored: false,
             },
         );
         s.insert(
@@ -599,47 +725,101 @@ mod tests {
                 kind: ChangeKind::Modified,
                 staged: false,
                 unstaged: true,
+                ignored: false,
             },
         );
+        // 纯未加入版本目录 → 红(未加入版本)
         assert_eq!(
-            dir_status(Path::new("/r/logo"), &s).map(|d| d.kind),
-            Some(ChangeKind::New)
+            dir_status(Path::new("/r/logo"), &s),
+            Some(TreeState::Untracked)
         );
+        // 纯已修改目录 → 青(修改未提交)
         assert_eq!(
-            dir_status(Path::new("/r/src"), &s).map(|d| d.kind),
-            Some(ChangeKind::Modified)
+            dir_status(Path::new("/r/src"), &s),
+            Some(TreeState::Modified)
         );
-        assert_eq!(
-            dir_status(Path::new("/r"), &s).map(|d| d.kind),
-            Some(ChangeKind::Modified)
-        );
+        // 同时含未加入版本与已修改 → 取最高档红(未加入版本)
+        assert_eq!(dir_status(Path::new("/r"), &s), Some(TreeState::Untracked));
         assert!(dir_status(Path::new("/r/docs"), &s).is_none());
     }
 
     #[test]
-    fn dir_status_rolls_up_staged_and_unstaged() {
+    fn dir_status_priority_staged_new_over_modified() {
         use std::path::{Path, PathBuf};
         let mut s = HashMap::new();
+        // 已暂存新文件(绿)
         s.insert(
             PathBuf::from("/r/src/a.rs"),
             FileGitStatus {
-                kind: ChangeKind::Modified,
+                kind: ChangeKind::New,
                 staged: true,
                 unstaged: false,
+                ignored: false,
             },
         );
+        // 已修改未提交(青)
         s.insert(
             PathBuf::from("/r/src/b.rs"),
+            FileGitStatus {
+                kind: ChangeKind::Modified,
+                staged: false,
+                unstaged: true,
+                ignored: false,
+            },
+        );
+        // 绿(加入版本未提交的新文件)优先于青(修改未提交)
+        assert_eq!(
+            dir_status(Path::new("/r/src"), &s),
+            Some(TreeState::StagedNew)
+        );
+    }
+
+    #[test]
+    fn dir_status_untracked_beats_every_other() {
+        use std::path::{Path, PathBuf};
+        // 目录里同时有:未加入版本、已加入未提交、已修改、被忽略子孙。
+        // 最该被关注的是未加入版本 → 红。
+        let mut s = HashMap::new();
+        s.insert(
+            PathBuf::from("/r/mix/u.txt"),
             FileGitStatus {
                 kind: ChangeKind::New,
                 staged: false,
                 unstaged: true,
+                ignored: false,
             },
         );
-        let rollup = dir_status(Path::new("/r/src"), &s).expect("有改动的目录应有 rollup");
-        assert_eq!(rollup.kind, ChangeKind::Modified, "Modified 优先级高于 New");
-        assert!(rollup.staged, "子文件里有一个暂存了");
-        assert!(rollup.unstaged, "子文件里有一个只在工作区");
+        s.insert(
+            PathBuf::from("/r/mix/s.rs"),
+            FileGitStatus {
+                kind: ChangeKind::New,
+                staged: true,
+                unstaged: false,
+                ignored: false,
+            },
+        );
+        s.insert(
+            PathBuf::from("/r/mix/m.rs"),
+            FileGitStatus {
+                kind: ChangeKind::Modified,
+                staged: false,
+                unstaged: true,
+                ignored: false,
+            },
+        );
+        s.insert(
+            PathBuf::from("/r/mix/.DS_Store"),
+            FileGitStatus {
+                kind: ChangeKind::Modified,
+                staged: false,
+                unstaged: false,
+                ignored: true,
+            },
+        );
+        assert_eq!(
+            dir_status(Path::new("/r/mix"), &s),
+            Some(TreeState::Untracked)
+        );
     }
 
     #[test]

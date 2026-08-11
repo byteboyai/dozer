@@ -93,7 +93,6 @@
     }
   },
   "font_sizes": {
-    "dot_xs": 8,
     "dot_sm": 9,
     "caption_sm": 10,
     "caption": 11,
