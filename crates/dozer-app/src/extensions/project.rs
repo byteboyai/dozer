@@ -234,6 +234,11 @@ pub fn view<'a>(
 
     let mut content = column![].spacing(12).padding(14);
 
+    content = content.push(crate::homespace::home_panel_head(
+        icons::IconKind::Info,
+        "项目",
+    ));
+
     content = content.push(
         text(p.name.clone())
             .size(theme::font::title())

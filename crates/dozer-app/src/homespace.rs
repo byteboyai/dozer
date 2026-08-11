@@ -15,7 +15,7 @@ use crate::icons;
 use crate::theme;
 use crate::workspace::{lh, relative_time_text};
 use dozer_core::protocol::ProjectInfo;
-use iced_widget::core::{Border, Element, Length, Padding};
+use iced_widget::core::{Border, Color, Element, Length, Padding};
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use std::path::PathBuf;
 
@@ -274,6 +274,10 @@ fn home_right_zone(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
 /// "＋新增项目"(复用 `Message::ProjectTabPickFolder`)。不画品牌行——顶栏
 /// 本身已有 `dozer_home_tab` 品牌页签,这里重复画属于视觉冗余。
 /// 通用面板标题组件:图标 + 标题(金色 `subtitle` 字号),标题底部一条 1px
+/// panel 标题与图标用的强调色(暖金 `#dcc9a3`)——刻意区别于甲方动作专属的
+/// GOLD(`#F2D94E`):标题是装饰性的「section 标」,不是可点的甲方动作。
+const PANEL_HEAD_ACCENT: Color = Color::from_rgb8(0xdc, 0xc9, 0xa3);
+
 /// 分割线。各 pane / 卡片标题统一复用,保证视觉一致(首页项目列表、Recents
 /// 两卡、工作区文件树、Git 提交图等)。`Message` 泛型——本身不发出任何
 /// 交互消息,可在任意 `Message` 类型的视图里直接内嵌。
@@ -286,14 +290,10 @@ where
 {
     column![
         row![
-            icons::view(
-                icon,
-                crate::theme::icon_size::row(),
-                theme::homespace_color::gold(),
-            ),
+            icons::view(icon, crate::theme::icon_size::row(), PANEL_HEAD_ACCENT,),
             text(title)
                 .size(theme::homespace_font::subtitle())
-                .color(theme::homespace_color::gold()),
+                .color(PANEL_HEAD_ACCENT),
         ]
         .spacing(8)
         .align_y(iced_widget::core::Alignment::Center),

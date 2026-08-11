@@ -722,14 +722,8 @@ pub fn view<'a>(
     outer: iced_widget::core::Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![
-        row![
-            text("SSH 主机")
-                .size(theme::font::subtitle())
-                .color(theme::color::CREAM),
-            button(text("＋新增主机")).on_press(Message::AddHostStart),
-        ]
-        .spacing(8)
-        .align_y(iced_widget::core::Alignment::Center),
+        crate::homespace::home_panel_head(crate::icons::IconKind::Server, "主机"),
+        button(text("＋新增主机")).on_press(Message::AddHostStart),
     ]
     .spacing(12);
 

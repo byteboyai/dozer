@@ -1416,10 +1416,8 @@ pub fn view<'a>(
         return schema_tree_view(source, st, width, outer);
     }
     let mut col = column![
+        crate::homespace::home_panel_head(icons::IconKind::Database, "数据库"),
         row![
-            text("数据源")
-                .size(crate::theme::font::subtitle())
-                .color(crate::theme::color::CREAM),
             button(text("管理驱动")).on_press(Message::DriversPopupToggle),
             button(text("＋新增数据源")).on_press(Message::AddSourceStart),
         ]
