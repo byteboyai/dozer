@@ -2641,7 +2641,7 @@ pub(crate) fn agent_dot_color(agent: AgentKind) -> Color {
         AgentKind::Codex => theme::color::ORANGE,
         AgentKind::Qoder => theme::color::MAGENTA,
         AgentKind::Kilo => theme::color::BLUE,
-        AgentKind::V8agent => theme::color::CREAM,
+        AgentKind::V8agent => theme::color::ROSE,
         AgentKind::Unknown => theme::color::DIM,
     }
 }
@@ -3070,7 +3070,7 @@ mod tests {
             (AgentKind::Codex, theme::color::ORANGE),
             (AgentKind::Qoder, theme::color::MAGENTA),
             (AgentKind::Kilo, theme::color::BLUE),
-            (AgentKind::V8agent, theme::color::CREAM),
+            (AgentKind::V8agent, theme::color::ROSE),
             (AgentKind::Unknown, theme::color::DIM),
         ];
         for (agent, expected) in cases {
