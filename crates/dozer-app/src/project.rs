@@ -34,18 +34,30 @@ pub struct FileTree {
     root: PathBuf,
     expanded: HashSet<PathBuf>,
     children: HashMap<PathBuf, Vec<Entry>>,
+    /// 是否显示以 `.` 开头的文件/目录(点文件,如 `.env`、`.gitignore`)。
+    /// 为 true 时只按 `HIDDEN` 名单过滤(默认);为 false 时额外隐藏所有
+    /// 点文件和点目录。搜索框后的"眼睛"按钮(`ToggleDotfiles`)切换此值,
+    /// 切换后重读所有已缓存目录让树立刻反映新口径。
+    show_dotfiles: bool,
 }
 
-/// 读一个目录:剔隐藏名单,目录在前、各自按名排序。read_dir 失败返回空。
-fn read_children(dir: &Path) -> Vec<Entry> {
+/// 读一个目录:剔除隐藏名单(以及关闭点文件时所有 `.` 开头项)、目录在前、
+/// 各自按名排序。read_dir 失败返回空。是 `FileTree` 实例方法以便读取
+/// `self.show_dotfiles` 口径;`toggle`/`refresh`/`search_rows` 未缓存的目录
+/// 都走它,保证手动展开与搜索结果看到的口径一致。
+fn read_children(tree: &FileTree, dir: &Path) -> Vec<Entry> {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
+    let show_dot = tree.show_dotfiles;
     let mut entries: Vec<Entry> = rd
         .flatten()
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             if HIDDEN.contains(&name.as_str()) {
+                return None;
+            }
+            if !show_dot && name.starts_with('.') {
                 return None;
             }
             let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
@@ -62,13 +74,28 @@ fn read_children(dir: &Path) -> Vec<Entry> {
 
 impl FileTree {
     pub fn new(root: PathBuf) -> Self {
-        let mut children = HashMap::new();
-        children.insert(root.clone(), read_children(&root));
-        Self {
+        let mut tree = Self {
             root,
             expanded: HashSet::new(),
-            children,
-        }
+            children: HashMap::new(),
+            show_dotfiles: true,
+        };
+        tree.children
+            .insert(tree.root.clone(), read_children(&tree, &tree.root));
+        tree
+    }
+
+    /// 切换"显示/隐藏点文件"(文件树搜索框后的眼睛按钮)。置口径后重读所有
+    /// 已缓存目录(`reload_from_disk`),让当前展开的树立刻反映新过滤,无需
+    /// 用户手动重新展开。纯偏好项,不清 `expanded`。
+    pub fn set_show_dotfiles(&mut self, v: bool) {
+        self.show_dotfiles = v;
+        self.reload_from_disk();
+    }
+
+    /// 当前"显示点文件"口径(文件树眼睛按钮需要读出以选 eye/eye-off 图标)。
+    pub fn dotfiles_shown(&self) -> bool {
+        self.show_dotfiles
     }
 
     /// 展开/收起一个目录。展开时若未缓存则同步读一次。
@@ -76,9 +103,8 @@ impl FileTree {
         if self.expanded.remove(dir) {
             return; // 已展开 → 收起
         }
-        self.children
-            .entry(dir.to_path_buf())
-            .or_insert_with(|| read_children(dir));
+        let children = read_children(self, dir);
+        self.children.entry(dir.to_path_buf()).or_insert(children);
         // 空目录/不可读:缓存为空 vec,不标 expanded(无可展开内容)
         if self
             .children
@@ -94,7 +120,8 @@ impl FileTree {
     /// 反映最新磁盘状态）。目录本身若已展开保持展开；未展开的话，本次
     /// 调用不强行展开，只刷新缓存——下次展开时自然是最新的。
     pub fn refresh(&mut self, dir: &Path) {
-        self.children.insert(dir.to_path_buf(), read_children(dir));
+        self.children
+            .insert(dir.to_path_buf(), read_children(self, dir));
     }
 
     /// 从磁盘整体重新加载:重读每一个已缓存过的目录(含已收起的——`toggle`
@@ -105,7 +132,7 @@ impl FileTree {
         let dirs: Vec<PathBuf> = self.children.keys().cloned().collect();
         for dir in dirs {
             if dir.is_dir() {
-                self.children.insert(dir.clone(), read_children(&dir));
+                self.children.insert(dir.clone(), read_children(self, &dir));
             } else {
                 self.children.remove(&dir);
                 self.expanded.remove(&dir);
@@ -120,9 +147,8 @@ impl FileTree {
     /// "空目录不标 expanded" 逻辑，右键空目录→新建，编辑框永远不会
     /// 出现在屏幕上，但键盘输入已经在悄悄写进不可见的编辑缓冲区。
     pub fn ensure_expanded(&mut self, dir: &Path) {
-        self.children
-            .entry(dir.to_path_buf())
-            .or_insert_with(|| read_children(dir));
+        let children = read_children(self, dir);
+        self.children.entry(dir.to_path_buf()).or_insert(children);
         self.expanded.insert(dir.to_path_buf());
     }
 
@@ -155,7 +181,7 @@ impl FileTree {
         while let Some((dir, depth)) = stack.pop() {
             let entries = match self.children.get(&dir) {
                 Some(cached) => cached.clone(),
-                None => read_children(&dir),
+                None => read_children(self, &dir),
             };
             for e in entries.iter().rev() {
                 if !query.is_empty() && e.name.to_lowercase().contains(&q) {
@@ -180,7 +206,7 @@ impl FileTree {
         if query.is_empty() {
             let root_entries = match self.children.get(&self.root) {
                 Some(cached) => cached.clone(),
-                None => read_children(&self.root),
+                None => read_children(self, &self.root),
             };
             return root_entries
                 .into_iter()
@@ -202,7 +228,7 @@ impl FileTree {
         while let Some((dir, depth)) = stack.pop() {
             let entries = match self.children.get(&dir) {
                 Some(cached) => cached.clone(),
-                None => read_children(&dir),
+                None => read_children(self, &dir),
             };
             for e in entries.iter().rev() {
                 // 目录:命中即该目录本身,或它是某命中项的祖先 → 保留。
@@ -551,6 +577,53 @@ mod tests {
         assert_eq!(names, vec!["src", "README.md"], "目录在前、隐藏名单剔除");
         assert!(rows[0].is_dir && !rows[0].expanded);
         assert_eq!(rows[0].depth, 0);
+    }
+
+    #[test]
+    fn toggle_dotfiles_shows_hides_dot_prefix_entries() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        std::fs::create_dir(r.join("src")).unwrap();
+        std::fs::write(r.join("src/main.rs"), "").unwrap();
+        std::fs::write(r.join(".env"), "").unwrap(); // 点文件(非 HIDDEN 名单)
+        std::fs::write(r.join(".gitignore"), "").unwrap(); // 点文件
+        std::fs::create_dir(r.join(".git")).unwrap(); // 仍在固定 HIDDEN 名单
+
+        let mut t = FileTree::new(r.to_path_buf());
+        // 默认:显示点文件(.env/.gitignore 都在;.git 仍按 HIDDEN 名单剔除)。
+        assert!(t.dotfiles_shown());
+        let names: Vec<_> = t
+            .visible_rows()
+            .into_iter()
+            .map(|r| r.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["src", ".env", ".gitignore"]);
+
+        // 展开 src 后隐藏点文件:set_show_dotfiles 重读全部缓存目录,根层
+        // 只剩 src,已展开的 src 仍保留(不清 expanded)。
+        t.toggle(&r.join("src"));
+        assert_eq!(
+            t.visible_rows().len(),
+            4,
+            "展开 src 后可见 src、main.rs、.env、.gitignore"
+        );
+        t.set_show_dotfiles(false);
+        assert!(!t.dotfiles_shown());
+        let names: Vec<_> = t
+            .visible_rows()
+            .into_iter()
+            .map(|r| r.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["src", "main.rs"], "点文件全隐藏,src 展开保留");
+
+        // 重新显示点文件,点文件立刻回来。
+        t.set_show_dotfiles(true);
+        let names: Vec<_> = t
+            .visible_rows()
+            .into_iter()
+            .map(|r| r.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["src", "main.rs", ".env", ".gitignore"]);
     }
 
     #[test]

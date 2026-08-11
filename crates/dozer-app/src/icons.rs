@@ -13,6 +13,9 @@ pub enum IconKind {
     ChevronDown,
     Folder,
     FolderOpen,
+    /// 文件树根目录头部图标(Lucide folder-open-dot:展开的文件夹 + 右上圆点,
+    /// 醒目标识项目根)。
+    FolderOpenDot,
     FolderTree,
     FileCode,
     FileJson,
@@ -66,6 +69,9 @@ pub enum IconKind {
     Table,
     /// schema 树视图节点图标(Lucide eye)。
     Eye,
+    /// 文件树"显示/隐藏以 . 开头的文件/目录"按钮图标(Lucide eye-off:
+    /// 眼睛被打上斜杠,表示点文件当前不可见)。
+    EyeOff,
     /// 终端/Shell(纯 Shell 启动项),Lucide。
     Terminal,
     /// SSH 主机面板 rail 图标(Lucide server)。
@@ -107,6 +113,7 @@ impl IconKind {
             IconKind::ChevronDown => include_bytes!("../assets/icons/chevron-down.svg"),
             IconKind::Folder => include_bytes!("../assets/icons/folder.svg"),
             IconKind::FolderOpen => include_bytes!("../assets/icons/folder-open.svg"),
+            IconKind::FolderOpenDot => include_bytes!("../assets/icons/folder-open-dot.svg"),
             IconKind::FolderTree => include_bytes!("../assets/icons/folder-tree.svg"),
             IconKind::FileCode => include_bytes!("../assets/icons/file-code.svg"),
             IconKind::FileJson => include_bytes!("../assets/icons/braces.svg"),
@@ -141,6 +148,7 @@ impl IconKind {
             IconKind::Database => include_bytes!("../assets/icons/database.svg"),
             IconKind::Table => include_bytes!("../assets/icons/table.svg"),
             IconKind::Eye => include_bytes!("../assets/icons/eye.svg"),
+            IconKind::EyeOff => include_bytes!("../assets/icons/eye-off.svg"),
             IconKind::Terminal => include_bytes!("../assets/icons/terminal.svg"),
             IconKind::Server => include_bytes!("../assets/icons/server.svg"),
             IconKind::LayoutList => include_bytes!("../assets/icons/layout-list.svg"),

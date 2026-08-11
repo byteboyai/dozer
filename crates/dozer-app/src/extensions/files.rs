@@ -116,6 +116,9 @@ pub enum Message {
     SearchEvent(AddrEvent),
     /// 提交搜索:把草稿 `tree_search` 落成生效的过滤 `search_query`。
     SearchSubmit,
+    /// 切换"显示/隐藏以 `.` 开头的文件/目录"(搜索框后的眼睛按钮)。翻转
+    /// 后调用 `file_tree.set_show_dotfiles` 重读已缓存目录,让树立刻反映。
+    ToggleDotfiles,
 }
 
 impl WorkspaceState {
@@ -499,6 +502,11 @@ pub fn update(
         Message::SearchSubmit => {
             ws_state.search_query = ws_state.tree_search.clone();
         }
+        Message::ToggleDotfiles => {
+            if let Some(tree) = &mut ws_state.file_tree {
+                tree.set_show_dotfiles(!tree.dotfiles_shown());
+            }
+        }
         Message::RenameStart(path) => {
             app_state.context_menu = None;
             ws_state.tree_error = None;
@@ -577,16 +585,57 @@ pub fn view<'a>(
         text_color: theme::color::CREAM,
         ..button::Style::default()
     });
+
+    // "显示/隐藏点文件"按钮:切换后 `ToggleDotfiles` 调
+    // `set_show_dotfiles` 重读树。图标反映当前口径——正显示(`eye`)时点它
+    // 隐藏点文件;隐藏(`eye-off`)时点它恢复显示。点文件被隐藏时按钮边框
+    // 用 GOLD 高亮提示当前树缺了点文件(与搜索生效同款"功能开启"信号)。
+    let dotfiles_shown = ws_state
+        .file_tree
+        .as_ref()
+        .map(|t| t.dotfiles_shown())
+        .unwrap_or(true);
+    let dotfiles_button = button(icons::view(
+        if dotfiles_shown {
+            icons::IconKind::Eye
+        } else {
+            icons::IconKind::EyeOff
+        },
+        crate::theme::icon_size::row(),
+        if dotfiles_shown {
+            theme::color::CREAM
+        } else {
+            theme::color::GOLD
+        },
+    ))
+    .on_press(Message::ToggleDotfiles)
+    .padding([6, 8])
+    .style(move |_t: &iced_widget::Theme, _s| button::Style {
+        background: Some(theme::color::CARD.into()),
+        border: Border {
+            color: if dotfiles_shown {
+                theme::color::BORDER
+            } else {
+                theme::color::GOLD
+            },
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        text_color: theme::color::CREAM,
+        ..button::Style::default()
+    });
     header = header.push(
-        row![search_box, search_button]
+        row![search_box, search_button, dotfiles_button]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center),
     );
 
     // 根目录头部:只显示名称(CREAM 高亮),不再直接显示完整路径;名称前
-    // 挂 folder-open 图标,与文件树里展开目录同款。右键根目录打开目录右键
-    // 菜单(新建文件/文件夹、复制、粘贴、删除、重命名、在 Finder 打开、
-    // 从磁盘重新加载…),坐标复用 `main.rs` 右键时写入的 `last_right_click`。
+    // 挂 folder-open-dot 图标(lucide 的展开文件夹 + 圆点,有别于普通展开目录
+    // 的 folder-open,特标项目根)。顶部留一点边距,把根目录头和上方
+    // 搜索/点文件工具行分隔开。右键根目录打开目录右键菜单(新建文件/文件夹、
+    // 复制、粘贴、删除、重命名、在 Finder 打开、从磁盘重新加载…),坐标复用
+    // `main.rs` 右键时写入的 `last_right_click`。
     if let Some(tree) = &ws_state.file_tree {
         let root = tree.root();
         let name = root
@@ -596,7 +645,7 @@ pub fn view<'a>(
         let root_header = container(
             row![
                 icons::view(
-                    icons::IconKind::FolderOpen,
+                    icons::IconKind::FolderOpenDot,
                     crate::theme::icon_size::row(),
                     theme::color::CREAM
                 ),
@@ -607,7 +656,8 @@ pub fn view<'a>(
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center),
         )
-        .width(Length::Fill);
+        .width(Length::Fill)
+        .padding([8, 0]);
         header = header.push(MouseArea::new(root_header).on_right_press(
             Message::ContextMenuOpen {
                 path: root.to_path_buf(),
