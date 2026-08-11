@@ -6,7 +6,7 @@
 use crate::theme;
 use grep_searcher::{Searcher, SearcherBuilder, Sink, SinkMatch};
 use iced_widget::core::{Border, Color, Element, Length};
-use iced_widget::{button, column, container, row, scrollable, text};
+use iced_widget::{MouseArea, button, column, container, row, scrollable, stack, text};
 use std::path::{Path, PathBuf};
 
 /// 搜索作用域：右键目标。
@@ -119,23 +119,8 @@ impl WorkspaceState {
     pub fn is_open(&self) -> bool {
         self.open
     }
-    pub fn query(&self) -> &str {
-        &self.query
-    }
     pub fn query_editing(&self) -> bool {
         self.query_editing
-    }
-    pub fn running(&self) -> bool {
-        self.running
-    }
-    pub fn results(&self) -> &[(String, Vec<SearchHit>)] {
-        &self.results
-    }
-    pub fn has_searched(&self) -> bool {
-        self.has_searched
-    }
-    pub fn error(&self) -> Option<&str> {
-        self.error.as_deref()
     }
 }
 
@@ -144,10 +129,11 @@ impl WorkspaceState {
 pub enum Message {
     SearchOpen(Scope),
     SearchClose,
-    /// 自绘输入框草稿变化(编辑态时由 main.rs 拦截层路由进来)。
-    QueryChanged(String),
+    /// 自绘查询框的按键事件(main.rs 拦截层在编辑态下路由进来,同
+    /// `files::Message::SearchEvent` 的口径)。
+    QueryEvent(crate::workspace::AddrEvent),
     /// 自绘输入框进入/离开编辑态(main.rs 据此决定是否把按键路由成
-    /// `QueryChanged` 而不是下钻到 PTY)。
+    /// `QueryEvent` 而不是下钻到 PTY)。
     QueryEditing(bool),
     /// 回车 / 点"搜索"→ 启动异步搜索。
     QuerySubmit,
@@ -178,7 +164,24 @@ pub fn update(
     match msg {
         Message::SearchOpen(scope) => open(ws, scope),
         Message::SearchClose => ws.open = false,
-        Message::QueryChanged(s) => ws.query = s,
+        Message::QueryEvent(ev) => {
+            // 只在查询框编辑态处理按键(点击盒子进入编辑态后,main.rs 才把
+            // 按键路由成这个变体);未进入时收到属异常,直接忽略。
+            if !ws.query_editing {
+                return;
+            }
+            match ev {
+                crate::workspace::AddrEvent::Text(s) => ws.query.push_str(&s),
+                crate::workspace::AddrEvent::Backspace => {
+                    ws.query.pop();
+                }
+                crate::workspace::AddrEvent::Cancel => ws.query_editing = false,
+                crate::workspace::AddrEvent::Submit => {
+                    ws.query_editing = false;
+                    update(ws, Message::QuerySubmit, project_id, handle, emit);
+                }
+            }
+        }
         Message::QueryEditing(b) => ws.query_editing = b,
         Message::QuerySubmit => {
             let Some(scope) = ws.scope.clone() else {
@@ -250,16 +253,23 @@ fn query_box(
         .into()
 }
 
+/// 把绝对路径裁成相对项目根的展示路径;`project_root` 取不到(理论上只有没开
+/// 项目却打开弹窗这种到不了的状态)时退回显示原路径。
+fn rel_to_root<'a>(path: &'a Path, project_root: Option<&'a Path>) -> &'a Path {
+    match project_root {
+        Some(root) => path.strip_prefix(root).unwrap_or(path),
+        None => path,
+    }
+}
+
 /// 结果列表:文件分组标题 + 组内命中行,点击命中行发 `Message::Pick`。
 fn results_list<'a>(
     ws: &'a WorkspaceState,
-    project_root: &'a Path,
+    project_root: Option<&'a Path>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![].spacing(4);
     for (path_str, hits) in &ws.results {
-        let rel = Path::new(path_str)
-            .strip_prefix(project_root)
-            .unwrap_or(Path::new(path_str));
+        let rel = rel_to_root(Path::new(path_str), project_root);
         col = col.push(
             text(rel.display().to_string())
                 .size(theme::font::label())
@@ -298,7 +308,7 @@ fn results_list<'a>(
     }
     scrollable(container(col).padding(8))
         .width(Length::Fill)
-        .height(Length::Fill)
+        .height(Length::Fixed(360.0))
         .into()
 }
 
@@ -306,7 +316,7 @@ fn results_list<'a>(
 /// `CARD` 对话框。由 `App::view()` 顶层浮层链的 `stack!` 里调用;未打开时返回空元素。
 pub fn search_modal<'a>(
     ws: &'a WorkspaceState,
-    project_root: &'a Path,
+    project_root: Option<&'a Path>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     if !ws.open {
         return column![].into();
@@ -314,11 +324,11 @@ pub fn search_modal<'a>(
 
     let scope_label = match &ws.scope {
         Some(Scope::Dir(p)) => {
-            let rel = p.strip_prefix(project_root).unwrap_or(p);
+            let rel = rel_to_root(p, project_root);
             format!("目录: {}", rel.display())
         }
         Some(Scope::File(p)) => {
-            let rel = p.strip_prefix(project_root).unwrap_or(p);
+            let rel = rel_to_root(p, project_root);
             format!("文件: {}", rel.display())
         }
         None => String::new(),
@@ -369,7 +379,7 @@ pub fn search_modal<'a>(
     let mut body = column![title_row, query_row]
         .width(Length::Fill)
         .spacing(8)
-        .height(Length::Fill);
+        .height(Length::Shrink);
 
     if ws.has_searched && ws.results.is_empty() && ws.error.is_none() {
         body = body.push(
@@ -389,8 +399,9 @@ pub fn search_modal<'a>(
     }
 
     let dialog = container(body.padding(16))
-        .width(Length::Fill)
-        .height(Length::Fill)
+        .width(Length::Fixed(560.0))
+        .height(Length::Shrink)
+        .max_height(640.0)
         .style(|_t: &iced_widget::Theme| container::Style {
             background: Some(theme::color::CARD.into()),
             border: Border {
@@ -401,21 +412,40 @@ pub fn search_modal<'a>(
             ..container::Style::default()
         });
 
-    container(dialog)
-        .padding(40.0)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::SCRIM.into()),
-            ..container::Style::default()
-        })
-        .into()
+    // 全窗 `SCRIM` 遮罩做成可点击的目标:点在卡片**外**(遮罩上)即 `SearchClose`。
+    // 卡片本体是上层 `stack!` 的兄弟元素(自适配宽高、垂直/水平居中),不盖住
+    // 遮罩的点击——所以"点遮罩关闭"能成立(与只靠 ×/Esc 的 `edit_modal` 略不同,
+    // 但更贴合 spec 验收"点遮罩都能关闭")。
+    let scrim = MouseArea::new(
+        container(column![])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_t: &iced_widget::Theme| container::Style {
+                background: Some(theme::color::SCRIM.into()),
+                ..container::Style::default()
+            }),
+    )
+    .on_press(Message::SearchClose);
+
+    stack![
+        scrim,
+        container(dialog)
+            .padding(40.0)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(iced_widget::core::alignment::Horizontal::Center)
+            .align_y(iced_widget::core::alignment::Vertical::Center)
+    ]
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    fn write(root: &Path, rel: &str, content: &str) -> PathBuf {
+    fn place(root: &Path, rel: &str, content: &str) -> PathBuf {
         let p = root.join(rel);
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent).unwrap();
@@ -427,7 +457,7 @@ mod tests {
     #[test]
     fn empty_query_yields_no_results() {
         let dir = tempfile::tempdir().unwrap();
-        let f = write(dir.path(), "a.txt", "needle\n");
+        let f = place(dir.path(), "a.txt", "needle\n");
         let hits = search_scope(&Scope::File(f), "  ").unwrap();
         assert!(hits.is_empty());
     }
@@ -435,7 +465,7 @@ mod tests {
     #[test]
     fn single_file_matches_with_line_number() {
         let dir = tempfile::tempdir().unwrap();
-        let f = write(dir.path(), "a.txt", "first line\nneedle here\nthird line\n");
+        let f = place(dir.path(), "a.txt", "first line\nneedle here\nthird line\n");
         let hits = search_scope(&Scope::File(f), "needle").unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1.len(), 1);
@@ -446,7 +476,7 @@ mod tests {
     #[test]
     fn search_is_case_insensitive() {
         let dir = tempfile::tempdir().unwrap();
-        let f = write(dir.path(), "a.txt", "HELLO world\n");
+        let f = place(dir.path(), "a.txt", "HELLO world\n");
         let hits = search_scope(&Scope::File(f), "hello").unwrap();
         assert_eq!(hits.len(), 1);
     }
@@ -454,10 +484,10 @@ mod tests {
     #[test]
     fn dir_scope_recurses_and_respects_gitignore() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), ".gitignore", "ignored.txt\n");
-        write(dir.path(), "keep.txt", "needle keep\n");
-        write(dir.path(), "ignored.txt", "needle ignored\n");
-        write(dir.path(), "nested/sub.txt", "needle nested\n");
+        place(dir.path(), ".gitignore", "ignored.txt\n");
+        place(dir.path(), "keep.txt", "needle keep\n");
+        place(dir.path(), "ignored.txt", "needle ignored\n");
+        place(dir.path(), "nested/sub.txt", "needle nested\n");
         let hits = search_scope(&Scope::Dir(dir.path().to_path_buf()), "needle").unwrap();
         // 只命中 keep.txt 与 nested/sub.txt,忽略文件不参与。
         let keys: Vec<&str> = hits.iter().map(|(k, _)| k.as_str()).collect();
@@ -469,7 +499,7 @@ mod tests {
     #[test]
     fn binary_utf8_file_does_not_panic() {
         let dir = tempfile::tempdir().unwrap();
-        let f = write(dir.path(), "bin.dat", "needle text\n");
+        let f = place(dir.path(), "bin.dat", "needle text\n");
         std::fs::write(&f, [0xFF, 0x21, b'\n']).unwrap(); // 非法 UTF-8 + 非 ASCII 第一字节
         let hits = search_scope(&Scope::File(f), "anything").unwrap();
         // 不 panic 即可;二进制内容不命中查询词,结果可为空。
@@ -479,9 +509,9 @@ mod tests {
     #[test]
     fn file_scope_does_not_recurse() {
         let dir = tempfile::tempdir().unwrap();
-        let f = write(dir.path(), "a.txt", "needle\n");
+        let f = place(dir.path(), "a.txt", "needle\n");
         // 在 scope 外另外造一个会命中的文件,证明文件作用域不扫它。
-        write(dir.path(), "b.txt", "needle b\n");
+        place(dir.path(), "b.txt", "needle b\n");
         let hits = search_scope(&Scope::File(f), "needle").unwrap();
         assert_eq!(hits.len(), 1);
         assert!(hits[0].0.ends_with("a.txt"));

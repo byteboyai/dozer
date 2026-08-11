@@ -41,6 +41,7 @@ use crate::extensions::browser;
 use crate::extensions::database;
 use crate::extensions::files;
 use crate::extensions::project;
+use crate::extensions::search;
 use crate::extensions::ssh;
 use crate::extensions::todo;
 use crate::extensions::usage;
@@ -348,6 +349,9 @@ pub struct Workspace {
     pub(crate) database: database::WorkspaceState,
     /// SSH 面板 per-project 状态——见 `extensions::ssh::WorkspaceState`。
     pub(crate) ssh: ssh::WorkspaceState,
+    /// 文件树右键"搜索"弹窗 per-project 状态——见
+    /// `extensions::search::WorkspaceState`。瞬态弹窗,不挂 LeftView。
+    pub(crate) search: search::WorkspaceState,
     /// 这份 `Workspace` 是否只是 `Stub` → `Loaded` 促成期间的"加载中"占位
     /// (见 [`Workspace::loading_for_project`])。占位有正确的 `project`/文件树,
     /// 但会话/git/对话都还没拉,并且整份对象会在
@@ -528,6 +532,7 @@ impl Workspace {
             todo: todo::WorkspaceState::default(),
             database: database::WorkspaceState::default(),
             ssh: ssh::WorkspaceState::default(),
+            search: search::WorkspaceState::default(),
             loading: false,
         }
     }
@@ -1538,6 +1543,17 @@ impl Workspace {
     /// 路由成 `files::Message::SearchEvent`,不再喂 PTY。
     pub fn search_editing(&self) -> bool {
         self.files.search_editing()
+    }
+
+    /// 右键文件树"搜索"弹窗是否打开(main.rs 键盘路由/App view 浮层用)。
+    pub fn search_popup_open(&self) -> bool {
+        self.search.is_open()
+    }
+
+    /// 右键文件树"搜索"弹窗查询框是否处于自绘编辑态(main.rs 键盘路由用):
+    /// 为真时按键路由成 `search::Message::QueryChanged`,不再喂 PTY。
+    pub fn search_popup_editing(&self) -> bool {
+        self.search.query_editing()
     }
 
     /// 项目信息面板标题是否处于自绘编辑态(main.rs 键盘路由用)。

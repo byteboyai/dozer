@@ -560,6 +560,30 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 _ => {}
             }
 
+            // 右键"搜索"弹窗打开时,Esc 优先:查询框编辑态先退编辑态(按第二次
+            // 才整个关弹窗),非编辑态直接关弹窗。不放靠后位置以免被终端当
+            // 普通按键消费掉。
+            if app.search_popup_open()
+                && let WindowEvent::KeyboardInput {
+                    event,
+                    is_synthetic: false,
+                    ..
+                } = event
+                && event.state == ElementState::Pressed
+                && event.logical_key
+                    == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+            {
+                if app.search_popup_editing() {
+                    app.update(Message::Search(extensions::search::Message::QueryEvent(
+                        workspace::AddrEvent::Cancel,
+                    )));
+                } else {
+                    app.update(Message::Search(extensions::search::Message::SearchClose));
+                }
+                window.request_redraw();
+                return;
+            }
+
             // 右键菜单打开时,Esc 优先关菜单,不进正常键盘分发(不然会被当作
             // 普通按键继续往下走,可能被地址栏/终端等其它分支消费掉)。
             if app.context_menu_open()
@@ -685,14 +709,21 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             }
 
             // 浏览器地址栏 / 验收意见 / 项目树行内编辑态 / 项目标题编辑 /
-            // 文件树搜索框:键盘直达自绘输入(不经 keymap、不进 PTY)。文件
-            // 预览面板已不再有地址栏。
+            // 文件树搜索框 / 右键"搜索"弹窗查询框:键盘直达自绘输入(不经
+            // keymap、不进 PTY)。文件预览面板已不再有地址栏。
             let to_browser = app.browser_addr_editing();
             let to_comment = app.acceptance_comment_editing();
             let to_tree_edit = app.tree_editing();
             let to_project_title = app.project_title_editing();
             let to_search = app.search_editing();
-            if to_browser || to_comment || to_tree_edit || to_project_title || to_search {
+            let to_search_popup = app.search_popup_editing();
+            if to_browser
+                || to_comment
+                || to_tree_edit
+                || to_project_title
+                || to_search
+                || to_search_popup
+            {
                 let addr_event = match event {
                     WindowEvent::KeyboardInput {
                         event,
@@ -719,10 +750,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     _ => None,
                 };
                 if let Some(ev) = addr_event {
-                    // 优先级:浏览器地址栏 > 验收意见 > 项目树编辑 > 项目信息
-                    // 面板标题 > 文件树搜索框(多者同真时罕见,谁先建的编辑态
-                    // 谁优先没有实际冲突场景,这个顺序只是一个确定性兜底)。
-                    let message = if to_browser {
+                    // 优先级:右键"搜索"弹窗查询框 > 浏览器地址栏 > 验收意见 >
+                    // 项目树编辑 > 项目信息面板标题 > 文件树搜索框(多者同真时
+                    // 罕见,谁先建的编辑态谁优先没有实际冲突场景,这个顺序只是一
+                    // 个确定性兜底)。
+                    let message = if to_search_popup {
+                        Message::Search(extensions::search::Message::QueryEvent(ev))
+                    } else if to_browser {
                         Message::Browser(extensions::browser::Message::AddrEvent(ev))
                     } else if to_comment {
                         Message::Acceptance(extensions::acceptance::Message::CommentEvent(ev))
@@ -982,6 +1016,17 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     let s = crate::project::path_string(kind, &path, &root);
                     clipboard.write(iced_winit::core::clipboard::Kind::Standard, s);
                     app.update(Message::Files(extensions::files::Message::ContextMenuClose));
+                    window.request_redraw();
+                }
+                // 点击搜索弹窗里的命中行:由窗口句柄侧拦截,映射回预览域打开
+                // (文件预览需要 `allowed_files` 白名单与 tree 高亮,走
+                // `App::update` 的 `PreviewOpenPath` 最合适)。权限/焦点一并
+                // 处理,并关掉搜索弹窗——"挑中即落地预览",不留浮层悬浮(同
+                // 其它弹层互斥清理口径)。
+                Message::Search(extensions::search::Message::Pick(hit)) => {
+                    app.update(Message::Search(extensions::search::Message::SearchClose));
+                    *pending_focus = Some(FocusIntent::Preview);
+                    app.update(Message::PreviewOpenPath(hit.path));
                     window.request_redraw();
                 }
                 other => app.update(other),
