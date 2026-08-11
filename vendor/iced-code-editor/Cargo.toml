@@ -56,12 +56,26 @@ path = "src/lib.rs"
 
 [dependencies.iced]
 version = "0.14"
+default-features = false
 features = [
     "advanced",
     "highlighter",
     "canvas",
     "markdown",
+    "wgpu",
+    "thread-pool",
 ]
+# Dozer 本地补丁：`iced` umbrella 的 default 特性含 `web-colors`，会经特性联合打开
+# 共享的 `iced_graphics::GAMMA_CORRECTION=false`（颜色不再 `into_linear()`），叠加
+# sRGB 交换链表面的自动 gamma 编码后，把 Dozer 全部 ByteBoy2077 主题色二次 gamma
+# 拉平，表现为整窗灰白发灰的"滤镜"（实测 `#0a0e16` 渲成 `#38424a`）。这里是第二条
+# `[patch]`/vendored 处理的一环（另一处见根 Cargo.toml 的 `[patch.crates-io]` 与
+# `vendor/iced_font_awesome/`）：显式关掉 default，只补本编辑器确实用到的特性。
+# `advanced/highlighter/canvas/markdown` 复刻上游，`wgpu` 与 `thread-pool` 是为了在
+# 关掉 default 后维持 wgpu 渲染后端与 iced future executor 可用。注意：关掉 default
+# 同时意味着 `tiny-skia` 不再进解析图，`iced_renderer::Renderer` 不再是
+# `wgpu+tiny-skia` 的 fallback 枚举，而直接是 `iced_wgpu::Renderer`（`dozer-app` 的
+# `main.rs` 已相应去掉 `Primary/Secondary` 分支）。
 
 [dependencies.iced_aw]
 version = "0.13"

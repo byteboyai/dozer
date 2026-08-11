@@ -519,6 +519,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     // 覆盖整个面板区,不区分区内具体哪个 pane)。
                     app.set_active_zone(logical_x, logical_w);
                     let state = app.shell_state();
+                    // 文件预览与浏览器现在都在左面板区(前者 `Files`、后者
+                    // `Web`),落在左预览列时按当前左视图区分交给哪个 webview 池。
                     *pending_focus =
                         Some(if app::is_in_preview_column(logical_x, logical_w, &state) {
                             if state.left_view == LeftView::Web {
@@ -821,11 +823,19 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             );
             // 首页右栏浏览器(`home_browser`)占的是右面板区,不是工作区的左
             // 面板预览区,所以单独算一套边界(见 `home_browser_bounds`);工作区
-            // 浏览器仍在左面板,沿用 `preview_content_bounds`。
+            // 浏览器 2026-08-11 曾短暂迁到右面板,同日已按用户要求移回左面板区
+            // (`LeftView::Web`),与文件预览共用 `preview_content_bounds`。
             let browser_bounds = if app.is_home() {
                 Self::home_browser_bounds(logical_w, logical_h)
             } else {
-                bounds
+                // 浏览器已移回左面板区(`LeftView::Web`),与文件预览共用同一套
+                // 左侧几何(见 `preview_content_bounds` 的 `LeftView::Web` 分支)。
+                let (x, y, w, h) =
+                    app::preview_content_bounds(logical_w, logical_h, &app.shell_state());
+                wry::Rect {
+                    position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
+                    size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
+                }
             };
             sync_webview_pool(
                 window.as_ref(),
@@ -1246,11 +1256,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         Shell::headless(),
                     );
 
-                    iced_renderer::Renderer::Primary(Renderer::new(
-                        engine,
-                        Font::default(),
-                        Pixels::from(16),
-                    ))
+                    Renderer::new(engine, Font::default(), Pixels::from(16))
                 };
 
                 // You should change this if you want to render continuously
@@ -1437,18 +1443,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 );
                                 *cache = interface.into_cache();
 
-                                // `iced_renderer::Renderer` 是 fallback 枚举
-                                // (`wgpu` + `tiny-skia` 双后端);macOS 上恒走
-                                // `Primary`(wgpu) 分支,`Secondary`(tiny-skia)
-                                // 在此平台不会被选中,直接 `unreachable`。
-                                match renderer {
-                                    iced_renderer::Renderer::Primary(r) => {
-                                        r.present(None, frame.texture.format(), &view, viewport);
-                                    }
-                                    iced_renderer::Renderer::Secondary(_) => {
-                                        unreachable!("tiny-skia 渲染器在 macOS(wgpu)上不会被选中")
-                                    }
-                                }
+                                // 关闭掉 `iced_graphics` 的 `web-colors` 后(见根
+                                // Cargo.toml 的 `[patch]`: 阻断 umbrella `iced`
+                                // default 特性里的 `web-colors`, 恢复 sRGB 伽马校正),
+                                // `iced_renderer::Renderer` 不再是 `wgpu+tiny-skia`
+                                // 的 fallback 枚举, 而直接就是 `iced_wgpu::Renderer`,
+                                // 因此这里不再分支, 直接 present。
+                                renderer.present(None, frame.texture.format(), &view, viewport);
 
                                 // Present the frame
                                 frame.present();

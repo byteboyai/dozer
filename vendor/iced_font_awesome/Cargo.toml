@@ -1,0 +1,48 @@
+[package]
+edition = "2021"
+name = "iced_font_awesome"
+version = "0.4.3"
+authors = ["Daniel M. Bomfim"]
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "Font Awesome component for Iced"
+homepage = "https://github.com/danielmbomfim/iced_font_awesome"
+readme = "README.md"
+keywords = [
+    "gui",
+    "iced",
+    "icons",
+]
+categories = ["gui"]
+license = "MIT"
+repository = "https://github.com/danielmbomfim/iced_font_awesome"
+
+[features]
+default = ["v7"]
+v6 = []
+v7 = []
+
+[lib]
+name = "iced_font_awesome"
+path = "src/lib.rs"
+
+[dependencies.iced]
+version = "^0.14"
+default-features = false
+features = ["advanced"]
+# Dozer 本地补丁：上游 0.4.3 的 `iced` 依赖未关 default，经 umbrella `iced` 的
+# default 特性拉起 `web-colors`，特性联合打开共享 `iced_graphics::GAMMA_CORRECTION`
+# =false（颜色不做 `into_linear()`），叠加 sRGB 面自动 gamma 编码把 ByteBoy2077
+# 主题整窗二次 gamma 拉平成灰白。这里关掉 default 只留 `advanced`，让
+# `web-colors` 彻底离开解析图（真正元凶是 umbrella `iced` default 里的 web-colors）。
+
+[dependencies.serde]
+version = "1.0.209"
+features = ["derive"]
+
+[dependencies.serde_json]
+version = "1.0.127"

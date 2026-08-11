@@ -61,13 +61,14 @@ pub(crate) const DEFAULT_COLS: u16 = 80;
 
 pub(crate) const DEFAULT_ROWS: u16 = 24;
 
-/// 左侧面板区当前显示哪个视图：文件列表(项目树+文件预览配对) / Web(单面板) /
+/// 左侧面板区当前显示哪个视图：文件列表(项目树+文件预览配对) /
 /// Git 提交图(单面板;spike(2026-08-06) 验证 `gleisbau` 库可行性用) / Todo
-/// (单面板;`.dozer/todo.md` 任务列表)。
+/// (单面板;`.dozer/todo.md` 任务列表) / 浏览器(Web 单面板,左图标栏最底部
+/// 的 Globe 按钮切换;2026-08-11 曾短暂迁至右栏,同日按用户
+/// 要求移回左栏)。
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum LeftView {
     Files,
-    Web,
     GitLog,
     Todo,
     Project,
@@ -75,9 +76,12 @@ pub enum LeftView {
     /// SSH 远程主机面板(Lucide server)。阶段 1:主机连接管理 + 认证 +
     /// 连接测试(含 host key 验证)。
     Ssh,
+    /// 浏览器(Web)单面板:左图标栏最底部的 Globe 按钮切换。
+    Web,
 }
 
-/// 右侧面板区当前显示哪个视图：Agent(Agent列表+终端配对) / 对话(对话列表+对话审阅配对)。
+/// 右侧面板区当前显示哪个视图：Agent(Agent列表+终端配对) / 对话(对话列表+
+/// 对话审阅配对) / 用量 / 验收。浏览器已移回左栏(见 `LeftView::Web`)。
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum RightView {
     Agent,
@@ -92,13 +96,14 @@ pub enum RightView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RailButton {
     LeftFiles,
-    LeftWeb,
     LeftGit,
     LeftTodo,
     LeftProject,
     LeftDatabase,
     /// SSH 主机面板入口。
     LeftSsh,
+    /// 浏览器面板入口(左图标栏最底部 Globe 按钮)。
+    LeftWeb,
     RightAgent,
     RightConversations,
     RightUsage,
@@ -152,6 +157,9 @@ pub enum HoverId {
     /// 从 DIM 平滑过渡到 GOLD,选中态恒为 GOLD——与 `ProjectTabItem` 同一手法
     /// (见 `dozer_home_tab`)。
     HomeTab,
+    /// Agent 面板头部"＋"按钮:无背景的 `SquarePlus` 图标,未选中态静止 DIM,
+    /// hover 平滑过渡到 GOLD(见 `agent_picker_toggle_button`)。
+    AgentPickerToggle,
 }
 
 /// 一个可平滑过渡的 hover 动画状态机。iced 0.14 无内置动画 API,这套自驱
@@ -505,7 +513,7 @@ fn maximized_box_height(window_height: f32) -> f32 {
     .max(0.0)
 }
 
-/// 窗口逻辑尺寸 → 左侧文件/Web 预览内容区矩形(逻辑像素 x/y/w/h)，供
+/// 窗口逻辑尺寸 → 左侧文件预览内容区矩形(逻辑像素 x/y/w/h)，供
 /// main.rs 摆放 wry webview 用。左侧收起时返回零尺寸矩形。
 ///
 /// 放大态(Task 5):右侧被放大时左侧内容被 `maximize_overlay` 的变暗遮罩
@@ -535,13 +543,6 @@ pub fn preview_content_bounds(
         let avail_h =
             (maximized_box_height(window_height) - theme::geometry::status_bar_height()).max(0.0);
         return match state.left_view {
-            LeftView::Web => {
-                let y = y0 + theme::geometry::browser_chrome_top_px();
-                let h = (avail_h - theme::geometry::browser_chrome_top_px() - 8.0).max(0.0);
-                let x = x0 + 8.0;
-                let w = (avail_w - 16.0).max(0.0);
-                (x, y, w, h)
-            }
             LeftView::Files => {
                 let y = y0 + theme::geometry::preview_chrome_top_px();
                 let h = (avail_h - theme::geometry::preview_chrome_top_px() - 8.0).max(0.0);
@@ -550,6 +551,14 @@ pub fn preview_content_bounds(
                 let content_w = pair_w * (1.0 - state.layout.files_split);
                 let x = x0 + list_w + theme::geometry::divider_width() + 8.0;
                 let w = (content_w - 16.0).max(0.0);
+                (x, y, w, h)
+            }
+            // 浏览器(Web)是单栏(无配对),放大态占满整条放大盒子。
+            LeftView::Web => {
+                let y = y0 + theme::geometry::browser_chrome_top_px();
+                let h = (avail_h - theme::geometry::browser_chrome_top_px() - 8.0).max(0.0);
+                let x = x0 + 8.0;
+                let w = (avail_w - 16.0).max(0.0);
                 (x, y, w, h)
             }
             // Git 提交图是原生 Canvas 绘制,不挂 webview 子视图。
@@ -578,13 +587,6 @@ pub fn preview_content_bounds(
         (window_height - y - m.bottom - theme::geometry::status_bar_height()).max(0.0)
     };
     match state.left_view {
-        LeftView::Web => {
-            let y = y_top(theme::geometry::browser_chrome_top_px());
-            let h = h_for(y);
-            let x = theme::geometry::icon_rail_width() + 8.0 + m.left;
-            let w = (left_w - 16.0 - m.left - m.right).max(0.0);
-            (x, y, w, h)
-        }
         LeftView::Files => {
             let y = y_top(theme::geometry::preview_chrome_top_px());
             let h = h_for(y);
@@ -599,6 +601,14 @@ pub fn preview_content_bounds(
             let w = (content_w - 16.0 - m.left - m.right).max(0.0);
             (x, y, w, h)
         }
+        // 浏览器(Web)是单栏,左图标栏右侧 + 左 margin + 8 起,占满左面板区。
+        LeftView::Web => {
+            let y = y_top(theme::geometry::browser_chrome_top_px());
+            let h = h_for(y);
+            let x = theme::geometry::icon_rail_width() + 8.0 + m.left;
+            let w = (left_w - 16.0 - m.left - m.right).max(0.0);
+            (x, y, w, h)
+        }
         LeftView::GitLog => (0.0, 0.0, 0.0, 0.0),
         // Todo 面板同 GitLog,纯 iced 绘制,不挂 webview 子视图。
         LeftView::Todo => (0.0, 0.0, 0.0, 0.0),
@@ -611,7 +621,7 @@ pub fn preview_content_bounds(
     }
 }
 
-/// 逻辑 x 是否落在左侧文件/Web 预览内容区列内。焦点路由用:点击落在
+/// 逻辑 x 是否落在左侧文件预览内容区列内。焦点路由用:点击落在
 /// 该列 → 键盘交给 webview;落在别处 → 交回窗口(终端)。
 ///
 /// 放大态(Task 5):右侧被放大时左侧内容不可见,恒不落在预览列;左侧被
@@ -626,15 +636,16 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
     if state.maximized == Some(MaximizedPane::Left) {
         let (x0, avail_w) = maximized_box_x_range(window_width);
         return match state.left_view {
-            LeftView::Web => {
-                let start = x0;
-                let end = start + avail_w;
-                x >= start && x < end
-            }
             LeftView::Files => {
                 let list_w = pair_content_width(avail_w) * state.layout.files_split;
                 let start = x0 + list_w + theme::geometry::divider_width();
                 let end = x0 + avail_w;
+                x >= start && x < end
+            }
+            // 浏览器(Web)是单栏,放大态占满整条放大盒子横向范围。
+            LeftView::Web => {
+                let start = x0;
+                let end = start + avail_w;
                 x >= start && x < end
             }
             LeftView::GitLog => false,
@@ -650,16 +661,17 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
     }
     let left_w = left_zone_width(window_width, state);
     match state.left_view {
-        LeftView::Web => {
-            let start = theme::geometry::icon_rail_width();
-            let end = start + left_w;
-            x >= start && x < end
-        }
         LeftView::Files => {
             let list_w = pair_content_width(left_w) * state.layout.files_split;
             let start =
                 theme::geometry::icon_rail_width() + list_w + theme::geometry::divider_width();
             let end = theme::geometry::icon_rail_width() + left_w;
+            x >= start && x < end
+        }
+        // 浏览器(Web)是单栏,占满整条左面板区横向范围。
+        LeftView::Web => {
+            let start = theme::geometry::icon_rail_width();
+            let end = start + left_w;
             x >= start && x < end
         }
         LeftView::GitLog => false,
@@ -1940,7 +1952,7 @@ impl App {
     }
 
     /// 浏览器域的 webview 清单,语义同 `preview_desired`,查独立的
-    /// `Workspace::browser`,且只在左视图为 Web 时非空。
+    /// `Workspace::browser`,且只在左视图为 `Web`(非首页)或首页时非空。
     pub fn browser_desired(&self) -> Vec<WebviewSpec> {
         // 首页右栏恒为全局浏览器(`home_browser`),与 `left_view` 无关——
         // 进首页就让它成为浏览器 webview 池的唯一来源,否则默认 URL 的 tab
@@ -4411,22 +4423,38 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
     // `!left_collapsed`。
     let left_open = !app.left_collapsed;
     let content = column![
+        // Project 信息面板入口：项目名 / git 分支+脏标 / 验收次数 / 可编辑目标。
+        // 置顶(用户 2026-08-11 指定)。
         MouseArea::new(rail_icon_button(
-            icons::IconKind::Folder,
+            icons::IconKind::Briefcase,
+            app.left_view == LeftView::Project && left_open,
+            app.hover_progress(HoverId::Rail(RailButton::LeftProject)),
+            Message::LeftIconSelect(LeftView::Project),
+        ))
+        .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftProject), true))
+        .on_exit(Message::Hover(
+            HoverId::Rail(RailButton::LeftProject),
+            false
+        )),
+        // Todo 面板入口：`.dozer/todo.md` 任务列表。第二顺位(用户 2026-08-11
+        // 指定)。
+        MouseArea::new(rail_icon_button(
+            icons::IconKind::ListTodo,
+            app.left_view == LeftView::Todo && left_open,
+            app.hover_progress(HoverId::Rail(RailButton::LeftTodo)),
+            Message::LeftIconSelect(LeftView::Todo),
+        ))
+        .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftTodo), true))
+        .on_exit(Message::Hover(HoverId::Rail(RailButton::LeftTodo), false)),
+        // 文件列表入口：项目树 + 文件预览配对。
+        MouseArea::new(rail_icon_button(
+            icons::IconKind::FolderTree,
             app.left_view == LeftView::Files && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftFiles)),
             Message::LeftIconSelect(LeftView::Files),
         ))
         .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftFiles), true))
         .on_exit(Message::Hover(HoverId::Rail(RailButton::LeftFiles), false)),
-        MouseArea::new(rail_icon_button(
-            icons::IconKind::Globe,
-            app.left_view == LeftView::Web && left_open,
-            app.hover_progress(HoverId::Rail(RailButton::LeftWeb)),
-            Message::LeftIconSelect(LeftView::Web),
-        ))
-        .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftWeb), true))
-        .on_exit(Message::Hover(HoverId::Rail(RailButton::LeftWeb), false)),
         // spike(2026-08-06):Git 提交图入口,验证 gleisbau 库可行性用。
         MouseArea::new(rail_icon_button(
             icons::IconKind::GitBranch,
@@ -4436,27 +4464,6 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
         ))
         .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftGit), true))
         .on_exit(Message::Hover(HoverId::Rail(RailButton::LeftGit), false)),
-        // Todo 面板入口：`.dozer/todo.md` 任务列表。
-        MouseArea::new(rail_icon_button(
-            icons::IconKind::ListChecks,
-            app.left_view == LeftView::Todo && left_open,
-            app.hover_progress(HoverId::Rail(RailButton::LeftTodo)),
-            Message::LeftIconSelect(LeftView::Todo),
-        ))
-        .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftTodo), true))
-        .on_exit(Message::Hover(HoverId::Rail(RailButton::LeftTodo), false)),
-        // Project 信息面板入口：项目名 / git 分支+脏标 / 验收次数 / 可编辑目标。
-        MouseArea::new(rail_icon_button(
-            icons::IconKind::Info,
-            app.left_view == LeftView::Project && left_open,
-            app.hover_progress(HoverId::Rail(RailButton::LeftProject)),
-            Message::LeftIconSelect(LeftView::Project),
-        ))
-        .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftProject), true))
-        .on_exit(Message::Hover(
-            HoverId::Rail(RailButton::LeftProject),
-            false,
-        )),
         // 数据库面板入口:数据源管理 + 连接测试。
         MouseArea::new(rail_icon_button(
             icons::IconKind::Database,
@@ -4481,6 +4488,15 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
         ))
         .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftSsh), true))
         .on_exit(Message::Hover(HoverId::Rail(RailButton::LeftSsh), false)),
+        // 浏览器面板入口:左图标栏最底部 Globe 按钮(2026-08-11 从右栏移回)。
+        MouseArea::new(rail_icon_button(
+            icons::IconKind::Globe,
+            app.left_view == LeftView::Web && left_open,
+            app.hover_progress(HoverId::Rail(RailButton::LeftWeb)),
+            Message::LeftIconSelect(LeftView::Web),
+        ))
+        .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftWeb), true))
+        .on_exit(Message::Hover(HoverId::Rail(RailButton::LeftWeb), false)),
     ]
     .spacing(region.gap)
     .padding(region.padding);
@@ -4503,7 +4519,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
     let right_open = !app.right_collapsed;
     let content = column![
         MouseArea::new(rail_icon_button(
-            icons::IconKind::Bot,
+            icons::IconKind::Brain,
             app.right_view == RightView::Agent && right_open,
             app.hover_progress(HoverId::Rail(RailButton::RightAgent)),
             Message::RightIconSelect(RightView::Agent),
@@ -4511,7 +4527,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
         .on_enter(Message::Hover(HoverId::Rail(RailButton::RightAgent), true))
         .on_exit(Message::Hover(HoverId::Rail(RailButton::RightAgent), false)),
         MouseArea::new(rail_icon_button(
-            icons::IconKind::MessageSquare,
+            icons::IconKind::BotMessageSquare,
             app.right_view == RightView::Conversations && right_open,
             app.hover_progress(HoverId::Rail(RailButton::RightConversations)),
             Message::RightIconSelect(RightView::Conversations),
@@ -4716,13 +4732,6 @@ fn left_panel_area<'a>(
                 .width(Length::Fill)
                 .into()
             }
-            LeftView::Web => browser::view(
-                &ws.browser,
-                ws.project.as_ref().map(|p| p.id),
-                Length::Fill,
-                zone_pane_border(zone, ac),
-            )
-            .map(Message::Browser),
             LeftView::GitLog => {
                 git_log::view(&app.git_log, ws.project_panel.worktrees()).map(Message::GitLog)
             }
@@ -4779,6 +4788,13 @@ fn left_panel_area<'a>(
                 }
                 ssh::view(&ws.ssh, Length::Fill, zone_pane_border(zone, ac)).map(Message::Ssh)
             }
+            LeftView::Web => browser::view(
+                &ws.browser,
+                ws.project.as_ref().map(|p| p.id),
+                Length::Fill,
+                zone_pane_border(zone, ac),
+            )
+            .map(Message::Browser),
         };
     if maximized {
         return inner;
@@ -4867,6 +4883,7 @@ fn right_panel_area<'a>(
                             .unwrap_or(theme::color::BG),
                     ),
                     agent_list_pane(
+                        app,
                         ws,
                         Length::FillPortion(list_portion),
                         zone_pane_border(zone, rc)
@@ -4902,16 +4919,9 @@ fn right_panel_area<'a>(
                 .width(Length::Fill)
                 .into()
             }
-            RightView::Usage => usage::view(
-                &ws.usage,
-                ws.project
-                    .as_ref()
-                    .map(|p| p.name.as_str())
-                    .unwrap_or("未打开项目"),
-                Length::Fill,
-                zone_pane_border(zone, ac),
-            )
-            .map(Message::Usage),
+            RightView::Usage => {
+                usage::view(&ws.usage, Length::Fill, zone_pane_border(zone, ac)).map(Message::Usage)
+            }
             RightView::Acceptance => {
                 acceptance::view(&ws.acceptance, Length::Fill, zone_pane_border(zone, ac))
                     .map(Message::Acceptance)
@@ -5869,15 +5879,17 @@ mod tests {
 
     #[test]
     fn preview_content_bounds_web_view_spans_whole_left_zone() {
-        // Web 视图没有项目树配对,预览内容区从图标栏右侧起占满左面板区。
+        // Web 视图(左栏最底部 Globe 按钮)没有配对,预览内容区从图标栏右侧起
+        // 占满左面板区。
         let state = ShellState {
             left_view: LeftView::Web,
             ..test_state()
         };
         let (x, _, w, _) = preview_content_bounds(1440.0, 900.0, &state);
         let m = theme::region::left_zone().margin;
+        let left_w = left_zone_width(1440.0, &state);
         assert_eq!(x, theme::geometry::icon_rail_width() + 8.0 + m.left);
-        assert_eq!(w, state.layout.left_width - 16.0 - m.left - m.right);
+        assert_eq!(w, left_w - 16.0 - m.left - m.right);
     }
 
     #[test]
@@ -5932,8 +5944,8 @@ mod tests {
         assert_ne!((x, y, w, h), normal, "放大态几何必须和平时不同");
     }
 
-    /// Fix round 1 Critical:左侧被放大(Web 视图,无项目树配对)时同样要
-    /// 按放大盒子换算。x=x0+8=92,w=avail_w-16=1256。
+    /// Fix round 1 Critical:左侧被放大(Web 视图,无配对)时同样要按放大盒子
+    /// 换算。x=x0+8=92,w=avail_w-16=1256。
     #[test]
     fn preview_content_bounds_left_maximized_web_spans_whole_overlay_box() {
         let state = ShellState {
