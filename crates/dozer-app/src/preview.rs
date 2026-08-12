@@ -87,7 +87,9 @@ fn flyfish_url(path: &std::path::Path) -> String {
 /// 用 lossy 转换(不当错误);其余读取失败(不存在/权限不够等)原样透传
 /// `std::io::Error`,调用方(`push_tab`/`bump_reload`)按现有"打开失败"路径
 /// 处理,不在这里新增错误类型。
-fn read_and_build_native_editor(path: &std::path::Path) -> std::io::Result<iced_code_editor::CodeEditor> {
+fn read_and_build_native_editor(
+    path: &std::path::Path,
+) -> std::io::Result<iced_code_editor::CodeEditor> {
     let text = std::fs::read_to_string(path).or_else(|e| {
         // 白名单扩展名但内容不是合法 UTF-8:降级用 lossy 转换,不当错误处理
         // (多数文本查看器的通行做法,见设计文档"错误处理"一节)。
@@ -482,7 +484,8 @@ mod tests {
 
     #[test]
     fn bump_reload_rebuilds_native_editor_without_bumping_nonce() {
-        let path = std::env::temp_dir().join(format!("preview_reload_test_{}.rs", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("preview_reload_test_{}.rs", std::process::id()));
         std::fs::write(&path, "fn one() {}").unwrap();
 
         let mut p = PreviewPane::default();
@@ -494,7 +497,8 @@ mod tests {
         p.bump_reload(id);
 
         assert_eq!(
-            p.tabs()[0].reload_nonce, nonce_before,
+            p.tabs()[0].reload_nonce,
+            nonce_before,
             "原生 tab 的 reload 不该走 reload_nonce 计数(那是 wry URL 换参专用信号)"
         );
         assert!(
@@ -522,10 +526,7 @@ mod tests {
         p.open_path(rs_path.clone());
         p.open_path(png_path.clone());
 
-        assert!(
-            p.tabs()[0].editor.is_some(),
-            ".rs 扩展名应构造原生 editor"
-        );
+        assert!(p.tabs()[0].editor.is_some(), ".rs 扩展名应构造原生 editor");
         assert!(
             p.tabs()[1].editor.is_none(),
             ".png 扩展名不应构造原生 editor,继续走 wry"

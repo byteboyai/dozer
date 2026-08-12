@@ -594,7 +594,8 @@ impl Workspace {
         match std::fs::read_to_string(&path) {
             Ok(text) => {
                 self.preview_error = None;
-                let mut editor = CodeEditor::new(&text, &crate::preview::extension_to_syntax(&path));
+                let mut editor =
+                    CodeEditor::new(&text, &crate::preview::extension_to_syntax(&path));
                 // 让编辑器适配 Dozer 配色(见 `dozer_editor_style`),而非
                 // 让 Dozer 迁就编辑器的默认蓝底。chrome 与语法 token 一起接管。
                 editor.set_theme(crate::preview::dozer_editor_style());
@@ -2172,9 +2173,13 @@ pub(crate) fn preview_pane<'a>(
         // 的 wry webview 子视图负责渲染,现状不变。
         let tab_id = ws.preview.tabs()[ws.preview.active_idx()].id;
         content = content.push(
-            container(editor.view().map(move |ev| Message::PreviewEditorEvent(tab_id, ev)))
-                .width(Length::Fill)
-                .height(Length::Fill),
+            container(
+                editor
+                    .view()
+                    .map(move |ev| Message::PreviewEditorEvent(tab_id, ev)),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill),
         );
     }
 
