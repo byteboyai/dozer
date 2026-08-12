@@ -5944,57 +5944,26 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
         .clip(true),
     );
 
-    // 选中改走 `MouseArea::on_press`——iced 的 `Button::on_press` 实际在
-    // **松开**时才发消息(cursor 仍在按钮上才算一次点击,见 button.rs
-    // update),不是按下瞬间。这与本函数原先的设想("按下页签＝选中＋准备被
-    // 拖走")名不副实:`tab_drag` 直到松开一刻才置位,而 main.rs 那条原始
-    // `WindowEvent::MouseInput{Released}` 早于 iced 派发同一事件给按钮,检查
-    // 的还是松开前的旧状态,永远赶不上——于是拖拽状态"按不下去、也松不开":
-    // 光标不按住也能把 tab 拖着换位,松手也锁不住位置。换成 `on_press` 后
-    // 选中与拖拽起点严格对齐物理按下(mousedown),释放对齐物理松开
-    // (mouseup),与 Chrome 页签一致。
-    let select = MouseArea::new(title_row)
-        .on_press(on_select)
-        .on_enter(title_hover(true))
-        .on_exit(title_hover(false))
-        .interaction(mouse::Interaction::Pointer);
-
-    // × 默认隐藏(hover==0 时 alpha=0),悬停页签任一区域才显形;颜色随
-    // `close_hover_t` 从 DIM→GOLD。未悬停不挂 `on_press`,避免隐形 × 误吞点击。
+    // 选中/关闭的接线逻辑收在 `tabs::tab_core`(2026-08-12 抽取,试点已
+    // 验证过——项目页签早已用它;这里是把面板 tab 自己那份原版实现换
+    // 成同一个共享内核)。四个现有参数 title_hover/close_hover/on_select/
+    // on_close 与 tab_core 的 on_select_hover/on_close_hover/on_select/
+    // on_close 逐个对应,直接透传。
     let close_base = theme::color::mix(theme::color::DIM, theme::color::GOLD, close_hover_t);
     let close_color = Color {
         a: hover,
         ..close_base
     };
-    let close_btn = button(
-        container(
-            text("×")
-                .size(theme::font::body())
-                .color(close_color)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(iced_widget::core::Alignment::Center)
-                .align_y(iced_widget::core::Alignment::Center),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill),
-    )
-    .width(Length::Fixed(close_sz))
-    .height(Length::Fixed(close_sz))
-    .padding(0)
-    .style(move |_t: &iced_widget::Theme, _s| button::Style {
-        background: None,
-        text_color: close_color,
-        ..button::Style::default()
-    });
-    let close_btn = if hovered {
-        close_btn.on_press(on_close)
-    } else {
-        close_btn
-    };
-    let close = MouseArea::new(close_btn)
-        .on_enter(close_hover(true))
-        .on_exit(close_hover(false));
+    let (select, close) = tabs::tab_core(
+        title_row.into(),
+        close_sz,
+        close_color,
+        hovered,
+        on_select,
+        on_close,
+        title_hover,
+        close_hover,
+    );
 
     let mut tab_row = row![select]
         .spacing(2)
