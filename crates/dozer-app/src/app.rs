@@ -31,6 +31,7 @@ use crate::layout;
 use crate::open_projects;
 use crate::panel_layouts;
 use crate::preview::WebviewSpec;
+use crate::tabs;
 use crate::term_view;
 use crate::theme;
 use crate::transcript::ReviewEntry;
@@ -4639,58 +4640,29 @@ fn project_tab_item<'a>(
         })
         .clip(true);
 
-    // 选中改走 `MouseArea::on_press`(与 `panel_tab` 同一处修复、同一条理由:
-    // `Button::on_press` 实际在松开时才发消息,会让"按下页签＝选中＋准备被
-    // 拖走"名不副实,导致拖拽状态按不下去、也松不开——见 `panel_tab` 里的
-    // 详细注释)。宽高原来靠 `button(..).width(..).height(..)` 撑,这里改用
-    // 一层 `container` 顶上(`MouseArea` 自身不认宽高,直接照抄内容尺寸)。
-    let select = MouseArea::new(
-        container(label)
-            .width(Length::Fill)
-            .height(Length::Fixed(tab_h)),
-    )
-    .on_press(Message::ProjectTabSwitch(id))
-    .on_enter(Message::Hover(HoverId::ProjectTabItem(id), true))
-    .on_exit(Message::Hover(HoverId::ProjectTabItem(id), false))
-    .interaction(mouse::Interaction::Pointer);
-
-    // 关闭按钮:方形图标按钮,叠在页签主体之上(见下方 tab_row)。默认隐藏
-    // (hover==0 时 alpha=0),悬停页签任一区域才显形——颜色仍随 `close_hover_t`
-    // (悬停 × 本身时)从 DIM 平滑过渡到 GOLD。未悬停时不挂 `on_press`,避免
-    // 不可见的 × 在页签右缘偷偷吃掉点击、误关 tab(见 `App::hover_progress`)。
-    // `×` 必须包一层 `Fill`+`align_y(Center)`(与上面 `label` 同一条注释里
-    // 说的 iced 按钮布局 quirk)——按钮只吃 padding,不回收多余竖向空间,
-    // 裸 `text` 会贴在按钮内容区顶部,跟垂直居中的标题文字对不上。
+    // 选中/关闭的接线逻辑收在 `tabs::tab_core`(2026-08-12 抽取)——mousedown
+    // 即选中+备拖、关闭按钮仅悬停时可点这两条规则只在一处维护。`hovered`
+    // 已经在上方算好(`let hovered = hover > 0.001;`),就是原来关闭按钮挂
+    // `on_press` 的判定条件,直接复用。宽高原来靠 `MouseArea` 里的 `container`
+    // 撑(Fill + Fixed(tab_h)),`MouseArea` 自身不认宽高,照抄内容尺寸。
     let close_base = theme::color::mix(theme::color::DIM, theme::color::GOLD, close_hover_t);
     let close_color = Color {
         a: hover,
         ..close_base
     };
-    let close_btn = button(
-        container(text("×").size(theme::font::body()).color(close_color))
+    let (select, close) = tabs::tab_core(
+        container(label)
             .width(Length::Fill)
-            .height(Length::Fill)
-            .align_x(iced_widget::core::Alignment::Center)
-            .align_y(iced_widget::core::Alignment::Center),
-    )
-    .width(Length::Fixed(close_sz))
-    .height(Length::Fixed(close_sz))
-    .padding(0)
-    .style(move |_t: &iced_widget::Theme, _status| button::Style {
-        background: None,
-        text_color: close_color,
-        ..button::Style::default()
-    });
-    // 仅在悬停时挂 `on_press`——悬停进度刚起步(>0.001)就立刻可点,鼠标离开
-    // 后随进度归零变回不可点,既不误吞点击也不影响正常关闭。
-    let close_btn = if hovered {
-        close_btn.on_press(Message::ProjectTabClose(id))
-    } else {
-        close_btn
-    };
-    let close = MouseArea::new(close_btn)
-        .on_enter(Message::Hover(HoverId::ProjectTabClose(id), true))
-        .on_exit(Message::Hover(HoverId::ProjectTabClose(id), false));
+            .height(Length::Fixed(tab_h))
+            .into(),
+        close_sz,
+        close_color,
+        hovered,
+        Message::ProjectTabSwitch(id),
+        Message::ProjectTabClose(id),
+        move |hovered| Message::Hover(HoverId::ProjectTabItem(id), hovered),
+        move |hovered| Message::Hover(HoverId::ProjectTabClose(id), hovered),
+    );
 
     // 页签主体(select)为底层、关闭按钮为上层叠在其右:关闭按钮视觉上落在
     // 页签背景里,而非独立的相邻按钮。两层都 `Fill` 撑满整条顶栏高,select

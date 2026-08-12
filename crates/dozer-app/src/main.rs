@@ -18,6 +18,7 @@ mod preview;
 mod preview_state;
 mod project;
 mod scrollbar;
+mod tabs;
 mod term_model;
 mod term_view;
 mod theme;
