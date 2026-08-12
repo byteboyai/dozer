@@ -96,7 +96,17 @@
 
 ## 架构
 
-### 1. `icon_button_entry` 加 `card`/`button_size` 参数(`icons.rs:287`)
+### 1. `icon_button_entry` 加 `card`/`button_size`/`interactive` 参数(`icons.rs:287`)
+
+写这份设计后、进一步核对 7 个迁移目标的完整代码时又发现一处:
+`browser.rs:1108`(收藏星标按钮)的 `on_press` 是**条件挂载**的——只有
+当前 tab 有 URL 时才挂 `Message::StarClick`,没有 URL 时完全不挂(源码
+注释:未收藏静止 DIM,已收藏恒金;没有 URL 时点星标没有意义,不该弹出
+收藏菜单)。`icon_button_entry` 现在对 `on_press` 是无条件挂载,直接套用
+会让没有 URL 时也能点开收藏菜单,是行为改动。这与 `tab_core` 处理"关闭
+按钮仅悬停可点"的 `close_interactive: bool` 是同一类需求,补一个同款
+`interactive: bool` 参数(为真才挂 `on_press`,其余 6 个迁移目标恒传
+`true`,行为不变):
 
 ```rust
 pub fn icon_button_entry<'a, M: Clone + 'a>(
@@ -106,6 +116,7 @@ pub fn icon_button_entry<'a, M: Clone + 'a>(
     hover_t: f32,
     card: bool,
     button_size: f32,
+    interactive: bool,
     on_select: M,
     on_hover: impl Fn(bool) -> M + 'a,
 ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
@@ -126,7 +137,7 @@ pub fn icon_button_entry<'a, M: Clone + 'a>(
         width: 1.0,
         radius: radius.into(),
     };
-    let btn = button(inner)
+    let mut btn = button(inner)
         .width(Length::Fixed(button_size))
         .height(Length::Fixed(button_size))
         .padding(0)
@@ -147,8 +158,10 @@ pub fn icon_button_entry<'a, M: Clone + 'a>(
                 },
                 ..button::Style::default()
             }
-        })
-        .on_press(on_select);
+        });
+    if interactive {
+        btn = btn.on_press(on_select);
+    }
 
     MouseArea::new(btn)
         .interaction(mouse::Interaction::Pointer)
@@ -159,21 +172,21 @@ pub fn icon_button_entry<'a, M: Clone + 'a>(
 ```
 
 `card: false` 时背景恒 `None`(原先的 `Some(CARD)` 变成条件分支),其余
-逻辑不变。11 个 rail 调用点(`left_icon_rail`/`right_icon_rail`)加两个
-实参:`card: true, button_size: crate::theme::geometry::rail_button_size()`
-——与当前硬编码值完全相同,纯粹把隐式变显式。
+逻辑不变。11 个 rail 调用点(`left_icon_rail`/`right_icon_rail`)加三个
+实参:`card: true, button_size: crate::theme::geometry::rail_button_size(),
+interactive: true`——与当前硬编码值/行为完全相同,纯粹把隐式变显式。
 
 ### 2. 7 个 icon 按钮迁移清单
 
-| 调用点 | `active` | `card` | `button_size` |
-|---|---|---|---|
-| `browser.rs:1108`(收藏星标) | `starred`(动态) | `false` | `theme::geometry::tab_button_size()` |
-| `browser.rs:1427`(书签开关) | `false` | `false` | `theme::geometry::tab_button_size()` |
-| `database.rs:1488`(schema 返回箭头) | `false` | `false` | `box_len`(调用方局部变量,原样传入) |
-| `files.rs:767`(目录搜索) | `false` | `true` | `box_len` |
-| `files.rs:798`(隐藏文件切换) | `false` | `true` | `box_len` |
-| `files.rs:1107`(分支选择器箭头) | `false` | `false` | `box_len` |
-| `usage.rs:406`(刷新) | `false` | `false` | `crate::theme::geometry::rail_button_size()` |
+| 调用点 | `active` | `card` | `button_size` | `interactive` |
+|---|---|---|---|---|
+| `browser.rs:1108`(收藏星标) | `starred`(动态) | `false` | `theme::geometry::tab_button_size()` | `url.is_some()` |
+| `browser.rs:1427`(书签开关) | `false` | `false` | `theme::geometry::tab_button_size()` | `true` |
+| `database.rs:1488`(schema 返回箭头) | `false` | `false` | `box_len`(调用方局部变量,原样传入) | `true` |
+| `files.rs:767`(目录搜索) | `false` | `true` | `box_len` | `true` |
+| `files.rs:798`(隐藏文件切换) | `false` | `true` | `box_len` | `true` |
+| `files.rs:1107`(分支选择器箭头) | `false` | `false` | `box_len` | `true` |
+| `usage.rs:406`(刷新) | `false` | `false` | `crate::theme::geometry::rail_button_size()` | `true` |
 
 调用方原有的 `MouseArea::new(...).on_enter(...).on_exit(...)` 包裹层删除,
 换成 `icon_button_entry(...)` 一次调用返回已经接好线的 `Element`。
@@ -216,7 +229,8 @@ pub fn icon_button_entry<'a, M: Clone + 'a>(
   - 11 个 rail 按钮(补参数后)外观/交互与迁移前逐一比对无差异。
   - `browser`/`database`/`files`/`usage` 7 个面板操作按钮:hover 过渡、
     点击行为、卡片背景(`files.rs` 两处应保留卡片底,其余不应有)与
-    迁移前一致。
+    迁移前一致;收藏星标按钮额外验证"当前 tab 无 URL 时点击无反应"这条
+    (`interactive: url.is_some()`)在迁移后依然成立。
   - `panel_tab`:终端/预览/浏览器三组面板 tab 的选中(mousedown 即选中)、
     关闭按钮(仅悬停可点)、hover 胶囊背景与迁移前完全一致——这组此前
     brainstorming 阶段用户已确认"panel 处 tab 已经完美",这次验证的
