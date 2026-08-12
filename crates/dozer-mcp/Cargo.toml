@@ -20,6 +20,7 @@ serde.workspace = true
 serde_json.workspace = true
 rmcp = { version = "3.1.2", features = ["server", "macros", "transport-io"] }
 schemars = "1"
+toml = "0.9"
 
 [dev-dependencies]
 dozerd = { path = "../dozerd" }
