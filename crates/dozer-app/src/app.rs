@@ -2554,24 +2554,7 @@ impl App {
                     ws.spawn_review_load(io, source, path_s, agent);
                 });
             }
-            Message::SelectTab(idx) => {
-                // 按下页签＝选中＋准备被拖走:选中仍是唯一的语义,但顺带记下
-                // "这一页签正被按住",随后鼠标划过其它页签时 `on_move` 触发
-                // `TabDragMove` 完成换位;松开时 main.rs `TabDragEnd` 收尾。
-                self.with_focused_project(|ws, _io| {
-                    if idx < ws.tabs.len() {
-                        ws.active = idx;
-                    }
-                });
-                if let Some(ws) = self.active_workspace()
-                    && idx < ws.tabs.len()
-                {
-                    self.tab_drag = Some(TabDrag {
-                        group: TabGroup::Terminal,
-                        source: idx,
-                    });
-                }
-            }
+            Message::SelectTab(idx) => self.select_tab(idx),
             Message::CloseTab(idx) => {
                 self.with_focused_project(|ws, io| {
                     ws.close_tab(io, idx);
@@ -2679,24 +2662,7 @@ impl App {
                     self.todo.record_dispatch(project_id, &text, session_id);
                 }
             }
-            Message::PaneResized { cols, rows } => {
-                if cols == 0 || rows == 0 || (cols, rows) == (self.cols, self.rows) {
-                    return;
-                }
-                self.cols = cols;
-                self.rows = rows;
-                let io = self.shell_io();
-                // 终端网格是窗口级的:并行打开的每个项目各有一套终端 tab,
-                // 但它们共用同一块终端 pane。只改当前项目的话,切回后台项目
-                // 会看到一个停在旧网格、和 pane 对不上的画面,直到用户偶然
-                // 再拖一次窗口才纠正——所以这里对所有已加载项目一起改
-                // (`Stub` 还没有任何 tab,促成时自然按当时的 `io.cols/rows`)。
-                for slot in self.projects.values_mut() {
-                    if let WorkspaceSlot::Loaded(ws) = slot {
-                        ws.resize_all(&io, cols, rows);
-                    }
-                }
-            }
+            Message::PaneResized { cols, rows } => self.pane_resized(cols, rows),
             Message::ColumnDragStart(divider) => {
                 self.dragging = Some(divider);
             }
@@ -2719,94 +2685,8 @@ impl App {
             Message::TabDragEnd => {
                 self.end_tab_drag();
             }
-            Message::LeftIconSelect(v) => {
-                if self.left_view == v {
-                    // 点的是已选中(激活)的图标:应退回未选中并收起左面板区。
-                    // 但若右面板区也已经收起了,左就是最后一个还开着的 zone,
-                    // 不能关——保持展开、图标维持选中态(什么都不做)。
-                    if !self.right_collapsed {
-                        self.left_collapsed = !self.left_collapsed;
-                    }
-                } else {
-                    self.left_view = v;
-                    self.left_collapsed = false;
-                }
-                // 切进 Git 提交图视图时,若缓存为空或不属于当前项目,同步跑
-                // 一次 `gleisbau` 布局。失败/未打开项目都落成文案,交给
-                // `git_log::view` 画出来,不 panic、不静默吞掉。
-                if self.left_view == LeftView::GitLog {
-                    self.sync_git_log_to_active_project();
-                }
-                // Todo 面板：切入即从磁盘重读一次 `.dozer/todo.md`，保证切进来
-                // 立刻是最新内容（轮询只负责"停留期间"的同步，切换本身不算）。
-                if self.left_view == LeftView::Todo {
-                    self.with_focused_project(|ws, _io| {
-                        if let Some(project) = ws.project.as_ref() {
-                            todo::reload_from_disk(
-                                &mut ws.todo,
-                                std::path::Path::new(&project.path),
-                            );
-                        }
-                    });
-                }
-                // 数据库面板：切入即从磁盘重读一次 `.dozer/database.json`，
-                // 保证切进来立刻是最新内容(同 Todo 面板的切换时语义)。
-                if self.left_view == LeftView::Database {
-                    self.with_focused_project(|ws, _io| {
-                        if let Some(project) = ws.project.as_ref() {
-                            database::reload_from_disk(
-                                &mut ws.database,
-                                std::path::Path::new(&project.path),
-                            );
-                        }
-                    });
-                }
-                // SSH 面板：切入即从磁盘重读一次 `.dozer/ssh_hosts.json`，语义
-                // 同 Todo 面板(切换本身触发重读,停留期间的同步靠别的机制)。
-                if self.left_view == LeftView::Ssh {
-                    self.with_focused_project(|ws, _io| {
-                        if let Some(project) = ws.project.as_ref() {
-                            ssh::reload_from_disk(&mut ws.ssh, std::path::Path::new(&project.path));
-                        }
-                    });
-                }
-                // 图标栏点击一律退出放大态。放大态浮层不拦图标栏上的点击
-                // (遮罩两侧垫的是无交互 Space,点击穿到下层图标按钮),所以
-                // "放大左侧 → 点文件夹图标收起左侧"是可达的:不清 `maximized`
-                // 就会留下一个空的金色描边浮层,只能点变暗区才能脱身
-                // (Fix round 2 #2)。切换本侧显示什么内容时,放大态本也不该
-                // 存活,无条件清最简单也最不容易出意外。
-                self.maximized = None;
-                self.on_shell_layout_changed();
-            }
-            Message::RightIconSelect(v) => {
-                if self.right_view == v {
-                    // 同上,对称:右是最后开着的 zone 时不收起。
-                    if !self.left_collapsed {
-                        self.right_collapsed = !self.right_collapsed;
-                    }
-                } else {
-                    self.right_view = v;
-                    self.right_collapsed = false;
-                    if v == RightView::Usage {
-                        self.with_focused_project(|ws, io| {
-                            ws.usage.set_loading(true);
-                            ws.spawn_usage_refresh(io);
-                        });
-                    } else if v == RightView::Acceptance {
-                        let tab_id = self
-                            .active_workspace()
-                            .and_then(|ws| ws.tabs.get(ws.active))
-                            .map(|t| t.tab_id);
-                        if let Some(tab_id) = tab_id {
-                            self.update(Message::Acceptance(acceptance::Message::Open(tab_id)));
-                        }
-                    }
-                }
-                // 同 LeftIconSelect(Fix round 2 #2)。
-                self.maximized = None;
-                self.on_shell_layout_changed();
-            }
+            Message::LeftIconSelect(v) => self.left_icon_select(v),
+            Message::RightIconSelect(v) => self.right_icon_select(v),
             Message::Hover(id, h) => {
                 self.set_hover(id, h);
             }
@@ -2817,22 +2697,7 @@ impl App {
             Message::TopBarDoubleClick => {
                 self.pending_zoom_toggle = true;
             }
-            Message::TopBarHome => {
-                self.current_page = AppPage::Home;
-                self.home_recents_loaded = false;
-                self.home_left_view = homespace::HomeLeftView::default();
-                self.home_right_view = homespace::HomeRightView::default();
-                let projects: Vec<ProjectInfo> =
-                    self.recent_projects.iter().take(5).cloned().collect();
-                let proxy = self.proxy.clone();
-                self.handle.spawn(async move {
-                    let (files, convs) =
-                        tokio::task::spawn_blocking(move || load_home_recents(&projects))
-                            .await
-                            .unwrap_or_default();
-                    let _ = proxy.send_event(Message::HomeRecentsLoaded(files, convs));
-                });
-            }
+            Message::TopBarHome => self.top_bar_home(),
             Message::HomeRecentsLoaded(files, convs) => {
                 self.home_recent_files = files;
                 self.home_recent_conversations = convs;
@@ -2895,40 +2760,8 @@ impl App {
                 });
             }
             Message::TermPaste(text) => self.term_paste(text),
-            Message::PreviewOpenPath(path) => {
-                self.with_focused_project(move |ws, io| {
-                    if !path.is_file() {
-                        ws.preview_error = Some(format!("文件不存在或不可读: {}", path.display()));
-                        return;
-                    }
-                    ws.preview_error = None;
-                    ws.files.set_tree_selected(path.clone());
-                    ws.allowed_files
-                        .lock()
-                        .expect("allowed_files 锁")
-                        .insert(path.clone());
-                    ws.preview.open_path(path);
-                    // 新 tab 落在末尾，滚回最左让它可见（P1L T5）。
-                    ws.preview_tab_first = 0;
-                    ws.spawn_preview_state_save(io);
-                });
-            }
-            Message::PreviewSelectTab(idx) => {
-                let arming = self
-                    .active_workspace()
-                    .map(|ws| idx < ws.preview.tabs().len())
-                    .unwrap_or(false);
-                self.with_focused_project(|ws, io| {
-                    ws.preview.select(idx);
-                    ws.spawn_preview_state_save(io);
-                });
-                if arming {
-                    self.tab_drag = Some(TabDrag {
-                        group: TabGroup::Preview,
-                        source: idx,
-                    });
-                }
-            }
+            Message::PreviewOpenPath(path) => self.preview_open_path(path),
+            Message::PreviewSelectTab(idx) => self.preview_select_tab(idx),
             Message::PreviewCloseTab(idx) => {
                 self.preview_tab_menu = None;
                 self.with_focused_project(|ws, io| {
@@ -3945,6 +3778,182 @@ impl App {
             };
             ws.send_input(io, bytes);
         });
+    }
+
+    fn select_tab(&mut self, idx: usize) {
+        // 按下页签＝选中＋准备被拖走:选中仍是唯一的语义,但顺带记下
+        // "这一页签正被按住",随后鼠标划过其它页签时 `on_move` 触发
+        // `TabDragMove` 完成换位;松开时 main.rs `TabDragEnd` 收尾。
+        self.with_focused_project(|ws, _io| {
+            if idx < ws.tabs.len() {
+                ws.active = idx;
+            }
+        });
+        if let Some(ws) = self.active_workspace()
+            && idx < ws.tabs.len()
+        {
+            self.tab_drag = Some(TabDrag {
+                group: TabGroup::Terminal,
+                source: idx,
+            });
+        }
+    }
+
+    fn pane_resized(&mut self, cols: u16, rows: u16) {
+        if cols == 0 || rows == 0 || (cols, rows) == (self.cols, self.rows) {
+            return;
+        }
+        self.cols = cols;
+        self.rows = rows;
+        let io = self.shell_io();
+        // 终端网格是窗口级的:并行打开的每个项目各有一套终端 tab,
+        // 但它们共用同一块终端 pane。只改当前项目的话,切回后台项目
+        // 会看到一个停在旧网格、和 pane 对不上的画面,直到用户偶然
+        // 再拖一次窗口才纠正——所以这里对所有已加载项目一起改
+        // (`Stub` 还没有任何 tab,促成时自然按当时的 `io.cols/rows`)。
+        for slot in self.projects.values_mut() {
+            if let WorkspaceSlot::Loaded(ws) = slot {
+                ws.resize_all(&io, cols, rows);
+            }
+        }
+    }
+
+    fn left_icon_select(&mut self, v: LeftView) {
+        if self.left_view == v {
+            // 点的是已选中(激活)的图标:应退回未选中并收起左面板区。
+            // 但若右面板区也已经收起了,左就是最后一个还开着的 zone,
+            // 不能关——保持展开、图标维持选中态(什么都不做)。
+            if !self.right_collapsed {
+                self.left_collapsed = !self.left_collapsed;
+            }
+        } else {
+            self.left_view = v;
+            self.left_collapsed = false;
+        }
+        // 切进 Git 提交图视图时,若缓存为空或不属于当前项目,同步跑
+        // 一次 `gleisbau` 布局。失败/未打开项目都落成文案,交给
+        // `git_log::view` 画出来,不 panic、不静默吞掉。
+        if self.left_view == LeftView::GitLog {
+            self.sync_git_log_to_active_project();
+        }
+        // Todo 面板：切入即从磁盘重读一次 `.dozer/todo.md`，保证切进来
+        // 立刻是最新内容（轮询只负责"停留期间"的同步，切换本身不算）。
+        if self.left_view == LeftView::Todo {
+            self.with_focused_project(|ws, _io| {
+                if let Some(project) = ws.project.as_ref() {
+                    todo::reload_from_disk(&mut ws.todo, std::path::Path::new(&project.path));
+                }
+            });
+        }
+        // 数据库面板：切入即从磁盘重读一次 `.dozer/database.json`，
+        // 保证切进来立刻是最新内容(同 Todo 面板的切换时语义)。
+        if self.left_view == LeftView::Database {
+            self.with_focused_project(|ws, _io| {
+                if let Some(project) = ws.project.as_ref() {
+                    database::reload_from_disk(
+                        &mut ws.database,
+                        std::path::Path::new(&project.path),
+                    );
+                }
+            });
+        }
+        // SSH 面板：切入即从磁盘重读一次 `.dozer/ssh_hosts.json`，语义
+        // 同 Todo 面板(切换本身触发重读,停留期间的同步靠别的机制)。
+        if self.left_view == LeftView::Ssh {
+            self.with_focused_project(|ws, _io| {
+                if let Some(project) = ws.project.as_ref() {
+                    ssh::reload_from_disk(&mut ws.ssh, std::path::Path::new(&project.path));
+                }
+            });
+        }
+        // 图标栏点击一律退出放大态。放大态浮层不拦图标栏上的点击
+        // (遮罩两侧垫的是无交互 Space,点击穿到下层图标按钮),所以
+        // "放大左侧 → 点文件夹图标收起左侧"是可达的:不清 `maximized`
+        // 就会留下一个空的金色描边浮层,只能点变暗区才能脱身
+        // (Fix round 2 #2)。切换本侧显示什么内容时,放大态本也不该
+        // 存活,无条件清最简单也最不容易出意外。
+        self.maximized = None;
+        self.on_shell_layout_changed();
+    }
+
+    fn right_icon_select(&mut self, v: RightView) {
+        if self.right_view == v {
+            // 同上,对称:右是最后开着的 zone 时不收起。
+            if !self.left_collapsed {
+                self.right_collapsed = !self.right_collapsed;
+            }
+        } else {
+            self.right_view = v;
+            self.right_collapsed = false;
+            if v == RightView::Usage {
+                self.with_focused_project(|ws, io| {
+                    ws.usage.set_loading(true);
+                    ws.spawn_usage_refresh(io);
+                });
+            } else if v == RightView::Acceptance {
+                let tab_id = self
+                    .active_workspace()
+                    .and_then(|ws| ws.tabs.get(ws.active))
+                    .map(|t| t.tab_id);
+                if let Some(tab_id) = tab_id {
+                    self.update(Message::Acceptance(acceptance::Message::Open(tab_id)));
+                }
+            }
+        }
+        // 同 LeftIconSelect(Fix round 2 #2)。
+        self.maximized = None;
+        self.on_shell_layout_changed();
+    }
+
+    fn top_bar_home(&mut self) {
+        self.current_page = AppPage::Home;
+        self.home_recents_loaded = false;
+        self.home_left_view = homespace::HomeLeftView::default();
+        self.home_right_view = homespace::HomeRightView::default();
+        let projects: Vec<ProjectInfo> = self.recent_projects.iter().take(5).cloned().collect();
+        let proxy = self.proxy.clone();
+        self.handle.spawn(async move {
+            let (files, convs) = tokio::task::spawn_blocking(move || load_home_recents(&projects))
+                .await
+                .unwrap_or_default();
+            let _ = proxy.send_event(Message::HomeRecentsLoaded(files, convs));
+        });
+    }
+
+    fn preview_open_path(&mut self, path: PathBuf) {
+        self.with_focused_project(move |ws, io| {
+            if !path.is_file() {
+                ws.preview_error = Some(format!("文件不存在或不可读: {}", path.display()));
+                return;
+            }
+            ws.preview_error = None;
+            ws.files.set_tree_selected(path.clone());
+            ws.allowed_files
+                .lock()
+                .expect("allowed_files 锁")
+                .insert(path.clone());
+            ws.preview.open_path(path);
+            // 新 tab 落在末尾，滚回最左让它可见（P1L T5）。
+            ws.preview_tab_first = 0;
+            ws.spawn_preview_state_save(io);
+        });
+    }
+
+    fn preview_select_tab(&mut self, idx: usize) {
+        let arming = self
+            .active_workspace()
+            .map(|ws| idx < ws.preview.tabs().len())
+            .unwrap_or(false);
+        self.with_focused_project(|ws, io| {
+            ws.preview.select(idx);
+            ws.spawn_preview_state_save(io);
+        });
+        if arming {
+            self.tab_drag = Some(TabDrag {
+                group: TabGroup::Preview,
+                source: idx,
+            });
+        }
     }
 
     /// 文件预览 tab 右键菜单浮层:含"编辑"(仅可编辑文本文件)与"关闭"两项。
