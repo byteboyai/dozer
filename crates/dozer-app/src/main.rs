@@ -228,7 +228,9 @@ pub(crate) const BLINK_INTERVAL: Duration = Duration::from_millis(450);
 /// 的指数逼近(每拍残余 50%),约 80ms 收敛,给出跟手的 ease-out 过渡。
 const HOVER_ANIM_INTERVAL: Duration = Duration::from_millis(16);
 /// Todo 面板可见时轮询 `.dozer/todo.md` 的间隔,兼顾响应与省电。
-const TODO_POLL_INTERVAL: Duration = Duration::from_millis(1000);
+/// `pub(crate)`——`App::poll_todo_if_visible` 也要用它把自己限速到这个
+/// 节奏(同 `BLINK_INTERVAL` 的处理,理由见该常量文档)。
+pub(crate) const TODO_POLL_INTERVAL: Duration = Duration::from_millis(1000);
 
 /// 清空一帧到给定背景色，不再绘制 spike 阶段的示例三角形
 /// （spike B 的 `scene.rs`/wgsl shader 已随本任务删除）。

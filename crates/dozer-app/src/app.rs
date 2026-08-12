@@ -1159,6 +1159,13 @@ pub struct App {
     /// hover 的那份高频唤醒一起快速明灭,观感是"悬停 icon 按钮,别处的点
     /// 跟着闪"。
     last_blink_at: std::time::Instant,
+    /// 上次真正执行 Todo 面板磁盘轮询(`poll_todo_if_visible`)的时刻,
+    /// 用法与 `last_blink_at` 一致:按 `TODO_POLL_INTERVAL` 自限速,未到
+    /// 点的调用直接 no-op。现在靠 mtime 检查已经安全(没变化就早退,见
+    /// 该方法文档),这里补上限速是为了让"周期性函数自己对被更快唤醒
+    /// 节奏带跑免疫"这条约定对全部三个周期性关注点(闪烁/悬停动画/
+    /// Todo 轮询)都显式成立,不留一个"靠巧合安全"的例外。
+    last_todo_poll_at: std::time::Instant,
     /// 图标栏+左右面板区宽度/分割状态;启动时 `layout::load()` 读盘作
     /// 起始值,拖拽结束(`ColumnDragEnd`)写盘。只存几何(宽度/分割比例/
     /// 窗口尺寸),**不存**左右视图选择与收起态——那些是**每个项目各自**的
@@ -1468,6 +1475,7 @@ impl App {
             daemon_error,
             blink_on: true,
             last_blink_at: std::time::Instant::now(),
+            last_todo_poll_at: std::time::Instant::now(),
             left_view: PanelLayout::default().left_view,
             right_view: PanelLayout::default().right_view,
             left_collapsed: PanelLayout::default().left_collapsed,
@@ -1648,11 +1656,19 @@ impl App {
     /// `main.rs` 定时唤醒调用：只在 `todo_panel_visible()` 时才真的
     /// `stat` 一下 `.dozer/todo.md` 的 mtime；没变就是一次系统调用，
     /// 变了才重读+reparse（`todo::reload_from_disk` 内部也会再 stat 一次
-    /// mtime，多一次系统调用换取它保持独立可复用）。
+    /// mtime，多一次系统调用换取它保持独立可复用）。按 `last_todo_poll_at`
+    /// 自限速到 `TODO_POLL_INTERVAL`——悬停动画等更快节奏把唤醒带密时
+    /// 不会跟着高频重复 `stat`(2026-08-12 解耦重构,同 `toggle_blink` 的
+    /// 处理)。
     pub fn poll_todo_if_visible(&mut self) {
         if !self.todo_panel_visible() {
             return;
         }
+        let now = std::time::Instant::now();
+        if now.duration_since(self.last_todo_poll_at) < crate::TODO_POLL_INTERVAL {
+            return;
+        }
+        self.last_todo_poll_at = now;
         let Some(ws) = self.active_workspace_mut() else {
             return;
         };
