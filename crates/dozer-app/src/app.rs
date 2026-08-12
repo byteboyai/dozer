@@ -2331,50 +2331,9 @@ impl App {
 
     pub fn update(&mut self, message: Message) {
         match message {
-            Message::TermInput(bytes) => {
-                // 终端不在屏上时丢弃按键(不报错、不写 PTY):否则用户在读
-                // 对话审阅时敲的回车/方向键会静默提交给隐藏在后面的 agent
-                // 会话(Fix round 2 #3)。
-                if !self.terminal_visible() {
-                    return;
-                }
-                self.with_focused_project(|ws, io| {
-                    // 键入即回底 + 清选区：正在回看历史时一敲键盘，视口跳回
-                    // 实时输出（常规终端语义），再把字节写给 daemon。
-                    if let Some(tab) = ws.tabs.get_mut(ws.active) {
-                        tab.model.scroll_to_bottom();
-                        tab.model.selection_clear();
-                    }
-                    ws.send_input(io, bytes);
-                });
-            }
+            Message::TermInput(bytes) => self.term_input(bytes),
             Message::TermOutput(project_id, tab_id, bytes) => {
-                self.with_project(project_id, |ws, io| {
-                    let Some(tab) = ws.tab_by_id_mut(tab_id) else {
-                        return;
-                    };
-                    // 实时输出可能含设备查询（DSR/DA 等），应答必须写回 PTY
-                    // ——atuin/claude 等 TUI 依赖它（此前丢弃导致探测超时）。
-                    tab.ingest_osc(&bytes);
-                    let responses = tab.model.feed(&bytes);
-                    if responses.is_empty() || !tab.alive {
-                        return;
-                    }
-                    match &tab.backend {
-                        TabBackend::Daemon => {
-                            let client = io.client.clone();
-                            let id = tab.info.id.clone();
-                            io.handle.spawn(async move {
-                                if let Err(e) = client.write(&id, &responses).await {
-                                    tracing::warn!("回写终端查询应答失败: {e}");
-                                }
-                            });
-                        }
-                        TabBackend::Ssh { out } => {
-                            let _ = out.send(SshOut::Data(responses));
-                        }
-                    }
-                });
+                self.term_output(project_id, tab_id, bytes)
             }
             Message::SessionExited(project_id, tab_id) => {
                 self.with_project(project_id, |ws, _io| {
@@ -2935,29 +2894,7 @@ impl App {
                     }
                 });
             }
-            Message::TermPaste(text) => {
-                // 同 TermInput 的可见性闸门(Fix round 3):⌘V 粘贴走同一条
-                // PTY 写入路径,粘贴内容若含换行还会在看不见的会话里直接
-                // 执行,比单个按键更危险,必须同样拦截。
-                if !self.terminal_visible() {
-                    return;
-                }
-                self.with_focused_project(move |ws, io| {
-                    let Some(tab) = ws.tabs.get_mut(ws.active) else {
-                        return;
-                    };
-                    tab.model.scroll_to_bottom();
-                    let bytes = if tab.model.bracketed_paste() {
-                        let mut b = b"\x1b[200~".to_vec();
-                        b.extend_from_slice(text.as_bytes());
-                        b.extend_from_slice(b"\x1b[201~");
-                        b
-                    } else {
-                        text.into_bytes()
-                    };
-                    ws.send_input(io, bytes);
-                });
-            }
+            Message::TermPaste(text) => self.term_paste(text),
             Message::PreviewOpenPath(path) => {
                 self.with_focused_project(move |ws, io| {
                     if !path.is_file() {
@@ -3937,6 +3874,77 @@ impl App {
                 source: active,
             });
         }
+    }
+
+    fn term_input(&mut self, bytes: Vec<u8>) {
+        // 终端不在屏上时丢弃按键(不报错、不写 PTY):否则用户在读
+        // 对话审阅时敲的回车/方向键会静默提交给隐藏在后面的 agent
+        // 会话(Fix round 2 #3)。
+        if !self.terminal_visible() {
+            return;
+        }
+        self.with_focused_project(|ws, io| {
+            // 键入即回底 + 清选区：正在回看历史时一敲键盘，视口跳回
+            // 实时输出（常规终端语义），再把字节写给 daemon。
+            if let Some(tab) = ws.tabs.get_mut(ws.active) {
+                tab.model.scroll_to_bottom();
+                tab.model.selection_clear();
+            }
+            ws.send_input(io, bytes);
+        });
+    }
+
+    fn term_output(&mut self, project_id: ProjectId, tab_id: usize, bytes: Vec<u8>) {
+        self.with_project(project_id, |ws, io| {
+            let Some(tab) = ws.tab_by_id_mut(tab_id) else {
+                return;
+            };
+            // 实时输出可能含设备查询（DSR/DA 等），应答必须写回 PTY
+            // ——atuin/claude 等 TUI 依赖它（此前丢弃导致探测超时）。
+            tab.ingest_osc(&bytes);
+            let responses = tab.model.feed(&bytes);
+            if responses.is_empty() || !tab.alive {
+                return;
+            }
+            match &tab.backend {
+                TabBackend::Daemon => {
+                    let client = io.client.clone();
+                    let id = tab.info.id.clone();
+                    io.handle.spawn(async move {
+                        if let Err(e) = client.write(&id, &responses).await {
+                            tracing::warn!("回写终端查询应答失败: {e}");
+                        }
+                    });
+                }
+                TabBackend::Ssh { out } => {
+                    let _ = out.send(SshOut::Data(responses));
+                }
+            }
+        });
+    }
+
+    fn term_paste(&mut self, text: String) {
+        // 同 TermInput 的可见性闸门(Fix round 3):⌘V 粘贴走同一条
+        // PTY 写入路径,粘贴内容若含换行还会在看不见的会话里直接
+        // 执行,比单个按键更危险,必须同样拦截。
+        if !self.terminal_visible() {
+            return;
+        }
+        self.with_focused_project(move |ws, io| {
+            let Some(tab) = ws.tabs.get_mut(ws.active) else {
+                return;
+            };
+            tab.model.scroll_to_bottom();
+            let bytes = if tab.model.bracketed_paste() {
+                let mut b = b"\x1b[200~".to_vec();
+                b.extend_from_slice(text.as_bytes());
+                b.extend_from_slice(b"\x1b[201~");
+                b
+            } else {
+                text.into_bytes()
+            };
+            ws.send_input(io, bytes);
+        });
     }
 
     /// 文件预览 tab 右键菜单浮层:含"编辑"(仅可编辑文本文件)与"关闭"两项。
