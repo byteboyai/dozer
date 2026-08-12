@@ -1196,6 +1196,12 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             let mut queue = std::collections::VecDeque::new();
             queue.push_back(event);
             while let Some(ev) = queue.pop_front() {
+                // 只读预览的右键"编辑"项:不入编辑器(编辑器是只读的,内部也没有
+                // 对应处理),直接转成本体消息打开该 tab 的编辑浮层。
+                if let iced_code_editor::Message::OpenInEditor = ev {
+                    app.update(Message::PreviewEditOpenByTab(tab_id));
+                    continue;
+                }
                 let t = app.preview_tab_editor_event(tab_id, ev);
                 let Some(stream) = task::into_stream(t) else {
                     continue;

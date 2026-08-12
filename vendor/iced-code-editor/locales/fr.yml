@@ -20,6 +20,7 @@ context_menu:
   copy: "Copier"
   paste: "Coller"
   select_all: "Tout sélectionner"
+  edit: "Modifier"
   reveal_in_finder: "Révéler dans le Finder"
   reveal_in_file_explorer: "Afficher dans l'Explorateur de fichiers"
   open_containing_folder: "Ouvrir le dossier contenant"

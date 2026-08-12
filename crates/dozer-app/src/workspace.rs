@@ -625,8 +625,16 @@ impl Workspace {
         }
     }
 
-    /// 转发 `iced-code-editor` 的内部消息,返回编辑器产生的
-    /// `iced::Task<EditorMessage>`(交由 `main.rs` 的 Task 桥接器执行——
+    /// 按预览 tab id 打开对应文件的编辑浮层——右键"编辑"上下文菜单动作
+    /// (`Message::OpenInEditor`)落地的入口。没找到该 tab 时 no-op。
+    pub(crate) fn preview_edit_open_by_id(&mut self, tab_id: usize) {
+        let idx = self.preview.tabs().iter().position(|tab| tab.id == tab_id);
+        if let Some(idx) = idx {
+            self.preview_edit_open(idx);
+        }
+    }
+
+    /// 转发 `iced-code-editor` 的内部消息,返回编辑器产生的    /// `iced::Task<EditorMessage>`(交由 `main.rs` 的 Task 桥接器执行——
     /// 主要是剪贴板读写与搜索框聚焦;无运行时下普通编辑路径恒为
     /// `Task::none()`)。没有打开编辑会话时直接返回 `Task::none()`。
     pub(crate) fn preview_edit_event(
@@ -3129,6 +3137,25 @@ mod tests {
     fn preview_edit_open_out_of_range_index_is_noop() {
         let mut ws = Workspace::empty_for_project_placeholder();
         ws.preview_edit_open(0);
+        assert!(ws.edit_session.is_none());
+        assert!(ws.preview_error.is_none());
+    }
+
+    #[test]
+    fn preview_edit_open_by_id_opens_matching_tab() {
+        let (_dir, path) = write_temp_file("a.rs", "fn main() {}");
+        let mut ws = Workspace::empty_for_project_placeholder();
+        let tab_id = ws.preview.open_path(path.clone());
+        ws.preview_edit_open_by_id(tab_id);
+        let session = ws.edit_session.as_ref().expect("应打开编辑会话");
+        assert_eq!(session.tab_id, tab_id);
+        assert_eq!(session.path, path);
+    }
+
+    #[test]
+    fn preview_edit_open_by_id_unknown_tab_is_noop() {
+        let mut ws = Workspace::empty_for_project_placeholder();
+        ws.preview_edit_open_by_id(424242);
         assert!(ws.edit_session.is_none());
         assert!(ws.preview_error.is_none());
     }

@@ -1019,6 +1019,10 @@ pub enum Message {
     /// 预览:点 tab chip 上的"编辑"按钮,携带 tab 下标(渲染时发出,和
     /// `PreviewSelectTab`/`PreviewCloseTab` 同一约定)。
     PreviewEditOpen(usize),
+    /// 预览:原生编辑器右键菜单里的"编辑"项(`Message::OpenInEditor`),
+    /// 携带 `PreviewTab.id`。由 `main.rs` 从 `PreviewEditorEvent` 前置拦截,
+    /// 转成这条,打开对应文件的编辑浮层。
+    PreviewEditOpenByTab(usize),
     /// 预览编辑弹层:`iced-code-editor` 的内部消息。由 `main.rs` 的 Task
     /// 桥接器消费(编辑产生的 `iced::Task` 在此执行剪贴板/聚焦等副作用),
     /// 不经 `App::update`。
@@ -2668,6 +2672,9 @@ impl App {
             Message::PreviewEditOpen(idx) => {
                 self.preview_tab_menu = None;
                 self.with_focused_project(move |ws, _io| ws.preview_edit_open(idx));
+            }
+            Message::PreviewEditOpenByTab(tab_id) => {
+                self.with_focused_project(move |ws, _io| ws.preview_edit_open_by_id(tab_id));
             }
             Message::EditorEvent(_event) => {
                 // `iced-code-editor` 的内部消息走 `main.rs` 的 Task 桥接器

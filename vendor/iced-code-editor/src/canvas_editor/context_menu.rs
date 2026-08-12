@@ -128,6 +128,7 @@ pub(crate) struct MenuState {
     pub(crate) has_selection: bool,
     pub(crate) has_content: bool,
     pub(crate) reveal_in_file_manager_enabled: bool,
+    pub(crate) edit_entry_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -167,7 +168,19 @@ fn custom_entries(entries: &[ContextMenuEntry]) -> Vec<MenuEntry> {
 }
 
 fn default_entries(state: MenuState, translations: &Translations) -> Vec<MenuEntry> {
-    let mut entries = if state.reveal_in_file_manager_enabled {
+    let mut entries = if state.edit_entry_enabled {
+        vec![
+            MenuEntry::Item {
+                label: translations.context_menu_edit(),
+                shortcut: String::new(),
+                message: Some(Message::OpenInEditor),
+            },
+            MenuEntry::Separator,
+        ]
+    } else {
+        Vec::new()
+    };
+    entries.extend(if state.reveal_in_file_manager_enabled {
         vec![
             MenuEntry::Item {
                 label: translations.context_menu_reveal_in_file_manager(),
@@ -178,7 +191,7 @@ fn default_entries(state: MenuState, translations: &Translations) -> Vec<MenuEnt
         ]
     } else {
         Vec::new()
-    };
+    });
     entries.extend([
         MenuEntry::Item {
             label: translations.context_menu_undo(),
@@ -378,6 +391,50 @@ mod tests {
 
         let custom = custom_entries(&[ContextMenuEntry::item("custom.format", "Format document")]);
         assert_eq!(custom[0].label(), Some("Format document"));
+    }
+
+    #[test]
+    fn test_edit_entry_precedes_defaults_and_emits_open_request() {
+        let translations = Translations::new(Language::English);
+        let entries = build_entries(
+            &[],
+            true,
+            MenuState {
+                edit_entry_enabled: true,
+                ..MenuState::default()
+            },
+            &translations,
+        );
+
+        assert!(matches!(
+            &entries[0],
+            MenuEntry::Item {
+                label,
+                shortcut,
+                message: Some(Message::OpenInEditor)
+            } if label == &translations.context_menu_edit() && shortcut.is_empty()
+        ));
+        assert!(matches!(entries[1], MenuEntry::Separator));
+        assert_eq!(entries[2].label(), Some("Undo"), "编辑项应排在内建动作最前");
+    }
+
+    #[test]
+    fn test_edit_entry_respects_default_menu_toggle_and_flag() {
+        let translations = Translations::new(Language::English);
+        // default 菜单关掉时不出现。
+        let disabled = build_entries(
+            &[],
+            false,
+            MenuState {
+                edit_entry_enabled: true,
+                ..MenuState::default()
+            },
+            &translations,
+        );
+        assert!(disabled.is_empty());
+        // 标志没置位时不出现。
+        let unset = default_entries(MenuState::default(), &translations);
+        assert!(unset.iter().all(|e| e.label() != Some("Edit")));
     }
 
     #[test]

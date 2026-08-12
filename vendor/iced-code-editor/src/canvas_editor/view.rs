@@ -344,6 +344,7 @@ impl CodeEditor {
         let custom_context_menu_entries = self.custom_context_menu_entries().to_vec();
         let default_context_menu_enabled = self.default_context_menu_enabled();
         let reveal_in_file_manager_enabled = self.reveal_in_file_manager_enabled();
+        let edit_entry_enabled = self.edit_entry_enabled();
         let translations = self.translations;
         let editor_style = self.style;
         let editor_container = ContextMenu::new(editor_container, move || {
@@ -356,6 +357,7 @@ impl CodeEditor {
                     has_selection,
                     has_content,
                     reveal_in_file_manager_enabled,
+                    edit_entry_enabled,
                 },
                 translations,
                 &editor_style,

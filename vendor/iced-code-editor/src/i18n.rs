@@ -325,6 +325,12 @@ impl Translations {
         .into_owned()
     }
 
+    /// Returns the context-menu label for the "edit" action(打开宿主编辑浮层)。
+    #[must_use]
+    pub fn context_menu_edit(&self) -> String {
+        rust_i18n::t!("context_menu.edit", locale = self.language.to_locale()).into_owned()
+    }
+
     /// Returns the macOS context-menu label for revealing a file.
     #[must_use]
     pub fn context_menu_reveal_in_finder(&self) -> String {
@@ -563,6 +569,7 @@ mod tests {
                     "Reveal in Finder",
                     "Reveal in File Explorer",
                     "Open Containing Folder",
+                    "Edit",
                 ],
             ),
             (
@@ -577,6 +584,7 @@ mod tests {
                     "Révéler dans le Finder",
                     "Afficher dans l'Explorateur de fichiers",
                     "Ouvrir le dossier contenant",
+                    "Modifier",
                 ],
             ),
             (
@@ -591,6 +599,7 @@ mod tests {
                     "Mostrar en Finder",
                     "Mostrar en el Explorador de archivos",
                     "Abrir carpeta contenedora",
+                    "Editar",
                 ],
             ),
             (
@@ -605,6 +614,7 @@ mod tests {
                     "Im Finder anzeigen",
                     "Im Datei-Explorer anzeigen",
                     "Übergeordneten Ordner öffnen",
+                    "Bearbeiten",
                 ],
             ),
             (
@@ -619,6 +629,7 @@ mod tests {
                     "Visualizza in Finder",
                     "Visualizza in Esplora file",
                     "Apri cartella superiore",
+                    "Modifica",
                 ],
             ),
             (
@@ -633,6 +644,7 @@ mod tests {
                     "Revelar no Finder",
                     "Revelar no Explorador de Arquivos",
                     "Abrir a Pasta Que Contém",
+                    "Editar",
                 ],
             ),
             (
@@ -647,6 +659,7 @@ mod tests {
                     "Mostrar no Finder",
                     "Mostrar no Explorador de Ficheiros",
                     "Abrir pasta contentora",
+                    "Editar",
                 ],
             ),
             (
@@ -661,6 +674,7 @@ mod tests {
                     "在访达中显示",
                     "在文件资源管理器中显示",
                     "打开所在的文件夹",
+                    "编辑",
                 ],
             ),
         ];
@@ -682,6 +696,7 @@ mod tests {
                 translations.context_menu_open_containing_folder(),
                 expected[8]
             );
+            assert_eq!(translations.context_menu_edit(), expected[9]);
         }
     }
 }

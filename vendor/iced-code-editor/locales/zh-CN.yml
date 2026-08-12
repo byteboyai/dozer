@@ -19,6 +19,7 @@ context_menu:
   copy: "复制"
   paste: "粘贴"
   select_all: "选择全部"
+  edit: "编辑"
   reveal_in_finder: "在访达中显示"
   reveal_in_file_explorer: "在文件资源管理器中显示"
   open_containing_folder: "打开所在的文件夹"

@@ -101,6 +101,9 @@ fn read_and_build_native_editor(
     })?;
     let mut editor =
         iced_code_editor::CodeEditor::new(&text, &extension_to_syntax(path)).with_read_only(true);
+    // 只读预览也挂右键"编辑"项:点击即发 `Message::OpenInEditor`,由宿主接管
+    // 打开可编辑的编辑浮层(编辑浮层本身是读写的,不再挂这一项)。
+    editor.set_edit_entry_enabled(true);
     editor.set_theme(dozer_editor_style());
     editor.set_syntax_theme(dozer_syntax_theme());
     editor.set_font(crate::fonts::code_font());

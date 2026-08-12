@@ -2680,7 +2680,8 @@ impl CodeEditor {
             Message::ContextMenuRequested(point) => self.handle_context_menu_requested_msg(*point),
             Message::WriteRequested
             | Message::CustomContextMenuAction(_)
-            | Message::RevealInFileManager => Task::none(),
+            | Message::RevealInFileManager
+            | Message::OpenInEditor => Task::none(),
 
             // Clipboard operations
             Message::Cut => self.handle_cut_msg(),

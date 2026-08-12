@@ -427,6 +427,9 @@ pub struct CodeEditor {
     default_context_menu_enabled: bool,
     /// Whether the built-in reveal-in-file-manager action is shown.
     reveal_in_file_manager_enabled: bool,
+    /// Whether the built-in "edit" context-menu action(请求宿主打开编辑
+    /// 浮层)is shown。只读预览 tab 用它把右键"编辑"接到宿主。
+    edit_entry_enabled: bool,
     /// Go-to-line dialog state
     pub(crate) goto_line_state: goto_line::GotoLineState,
     /// Whether Vim key handling is enabled for this editor instance.
@@ -746,6 +749,9 @@ pub enum Message {
     CustomContextMenuAction(String),
     /// Requests that the host reveal the editor's file in the system file manager.
     RevealInFileManager,
+    /// Requests that the host open the editor's file for editing(打开宿主的
+    /// 编辑浮层)。只读预览 tab 的右键"编辑"发出,由宿主拦截落地。
+    OpenInEditor,
     /// Cut selected text
     Cut,
     /// Copy selected text (Ctrl+C)
@@ -953,6 +959,7 @@ impl CodeEditor {
             custom_context_menu_entries: Vec::new(),
             default_context_menu_enabled: true,
             reveal_in_file_manager_enabled: false,
+            edit_entry_enabled: false,
             goto_line_state: goto_line::GotoLineState::new(),
             vim_enabled: false,
             read_only: false,
@@ -1054,6 +1061,23 @@ impl CodeEditor {
     /// Returns whether the reveal-in-file-manager action is shown.
     pub fn reveal_in_file_manager_enabled(&self) -> bool {
         self.reveal_in_file_manager_enabled
+    }
+
+    /// Sets whether the context-menu "edit" action is shown.
+    pub fn set_edit_entry_enabled(&mut self, enabled: bool) {
+        self.edit_entry_enabled = enabled;
+    }
+
+    /// Sets edit-entry visibility using the builder pattern.
+    #[must_use]
+    pub fn with_edit_entry_enabled(mut self, enabled: bool) -> Self {
+        self.set_edit_entry_enabled(enabled);
+        self
+    }
+
+    /// Returns whether the context-menu "edit" action is shown.
+    pub fn edit_entry_enabled(&self) -> bool {
+        self.edit_entry_enabled
     }
 
     /// Sets the font used by the editor
