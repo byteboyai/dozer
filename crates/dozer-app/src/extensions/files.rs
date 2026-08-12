@@ -149,10 +149,6 @@ pub enum Message {
     /// 切换"显示/隐藏以 `.` 开头的文件/目录"(搜索框后的眼睛按钮)。翻转
     /// 后调用 `file_tree.set_show_dotfiles` 重读已缓存目录,让树立刻反映。
     ToggleDotfiles,
-    /// 触发一次 git 仓库信息加载(判仓库/当前分支/本地分支表)。项目刚打开
-    /// 或 git 文件变化(`StatusesRefreshed` 送达)时随之触发,结果回传
-    /// `GitInfoLoaded`。
-    GitInfoRefresh,
     /// 异步加载 git 仓库信息的结果:落 `git_is_repo`/`current_branch`/
     /// `git_branches` 并置 `git_loaded`。
     GitInfoLoaded(i64, GitInfo),
@@ -581,9 +577,6 @@ pub fn update(
             if let Some(tree) = &mut ws_state.file_tree {
                 tree.set_show_dotfiles(!tree.dotfiles_shown());
             }
-        }
-        Message::GitInfoRefresh => {
-            spawn_git_info_load(ws_state, project_id, handle, emit);
         }
         Message::GitInfoLoaded(_, info) => {
             ws_state.git_loaded = true;
