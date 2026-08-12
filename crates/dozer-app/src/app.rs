@@ -2345,100 +2345,10 @@ impl App {
                 });
             }
             Message::AgentStateChanged(project_id, tab_id, agent, state, transcript_path) => {
-                self.with_project(project_id, |ws, io| {
-                    // 当前项目路径先取出（下面要 &mut 借 tab，冲突）；重锚:项目优先。
-                    let active_repo = ws.project.as_ref().map(|p| PathBuf::from(&p.path));
-                    if let Some(tab) = ws.tab_by_id_mut(tab_id) {
-                        tab.agent_state = state;
-                        tab.agent = agent;
-                        if let Some(tp) = transcript_path {
-                            tab.transcript_path = Some(tp);
-                        }
-                        tracing::info!(tab_id, ?state, "agent 状态变更");
-                        if state == AgentState::TurnEnded {
-                            // git 检测不许在 UI 线程跑：丢 tokio,结果经 proxy 回来
-                            let cwd =
-                                effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
-                            let last_turn = tab.last_turn_head.clone();
-                            let proxy = io.proxy.clone();
-                            tracing::info!(tab_id, cwd = %cwd.display(), "回合结束,开始交付检测");
-                            io.handle.spawn(async move {
-                                let pending = tokio::task::spawn_blocking(move || {
-                                    let Some(repo) = delivery::repo_root(&cwd) else {
-                                        tracing::info!(cwd = %cwd.display(), "非 git 仓库,不参与闭环");
-                                        return None;
-                                    };
-                                    let dirty = delivery::is_dirty(&repo);
-                                    let head = delivery::head_commit(&repo);
-                                    let accepted = delivery::last_accepted(&repo).map(|(_, c)| c);
-                                    let pending = delivery::delivery_pending(
-                                        dirty,
-                                        head.as_deref(),
-                                        accepted.as_deref(),
-                                        last_turn.as_deref(),
-                                    );
-                                    tracing::info!(
-                                        repo = %repo.display(),
-                                        dirty,
-                                        has_accepted = accepted.is_some(),
-                                        pending,
-                                        "交付检测完成"
-                                    );
-                                    Some(pending)
-                                })
-                                .await
-                                .ok()
-                                .flatten();
-                                if let Some(pending) = pending {
-                                    let _ =
-                                        proxy.send_event(Message::DeliveryChecked(
-                                            project_id, tab_id, pending,
-                                        ));
-                                }
-                            });
-                        }
-                    }
-                    // 审阅 tab 若开着且属本会话,回合结束重解析 transcript（P1i）。
-                    if state == AgentState::TurnEnded
-                        && let Some(rv) = &ws.review
-                        && review_should_refresh_on_turn(&rv.source, tab_id)
-                        && let Some((path, tab_agent)) = ws
-                            .tabs
-                            .iter()
-                            .find(|t| t.tab_id == tab_id)
-                            .and_then(|t| t.transcript_path.clone().map(|p| (p, t.agent)))
-                    {
-                        ws.spawn_review_load(io, ReviewSource::Session(tab_id), path, tab_agent);
-                    }
-                });
+                self.agent_state_changed(project_id, tab_id, agent, state, transcript_path)
             }
             Message::DeliveryChecked(project_id, tab_id, pending) => {
-                self.with_project(project_id, |ws, io| {
-                    let active_id = ws.tabs.get(ws.active).map(|t| t.tab_id);
-                    let is_active = active_id == Some(tab_id);
-                    let active_repo = ws.project.as_ref().map(|p| PathBuf::from(&p.path));
-                    tracing::info!(
-                        tab_id,
-                        pending,
-                        is_active,
-                        "交付检测结果落地(pending 写入该 tab;仅当前激活 tab 显示横幅)"
-                    );
-                    if let Some(tab) = ws.tab_by_id_mut(tab_id) {
-                        tab.delivery_pending = pending;
-                        // 记录本回合 HEAD 供下回合比对（同步读一次可容忍:仅 rev-parse）
-                        let cwd =
-                            effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
-                        if let Some(repo) = delivery::repo_root(&cwd) {
-                            tab.last_turn_head = delivery::head_commit(&repo);
-                        }
-                    }
-                    // 回合结束后刷新项目 git 状态,文件树装饰随之更新（P1h）。
-                    if let Some(project) = &ws.project {
-                        spawn_project_git_refresh(project_id, PathBuf::from(&project.path), io);
-                    }
-                    // 回合结束后刷新对话列表(transcript 增长/新增；P1j)。
-                    ws.spawn_conversations_refresh(io);
-                });
+                self.delivery_checked(project_id, tab_id, pending)
             }
             Message::Acceptance(acceptance::Message::Open(tab_id)) => self.acceptance_open(tab_id),
             Message::Acceptance(acceptance::Message::Reject) => self.acceptance_reject(),
@@ -2521,39 +2431,8 @@ impl App {
                     usage::update(&mut ws.usage, msg, project_id, project_path, &handle, emit);
                 });
             }
-            Message::ConversationOpen(path) => {
-                self.with_focused_project(move |ws, io| {
-                    // 若点开的是某活会话的当前对话 → Session 源(回合结束刷新);否则 File 快照。
-                    let path_s = path.to_string_lossy().into_owned();
-                    let session_tab = ws
-                        .tabs
-                        .iter()
-                        .find(|t| t.transcript_path.as_deref() == Some(path_s.as_str()));
-                    // 活会话 tab 的 agent 若还是 Unknown（hook 事件还没到，或
-                    // 老装的 hook 一直上报 Unknown）不该盖掉从对话历史扫描
-                    // 位置推断出的已知 agent——优先取“已知”的那个。
-                    let agent = session_tab
-                        .map(|t| t.agent)
-                        .filter(|a| *a != AgentKind::Unknown)
-                        .or_else(|| {
-                            ws.conversations
-                                .iter()
-                                .find(|c| c.path == path)
-                                .map(|c| c.agent)
-                        })
-                        .unwrap_or_default();
-                    let source = session_tab
-                        .map(|t| ReviewSource::Session(t.tab_id))
-                        .unwrap_or_else(|| ReviewSource::File(path.clone()));
-                    ws.review = Some(ReviewView {
-                        source: source.clone(),
-                        entries: Vec::new(),
-                        error: None,
-                        expanded: std::collections::HashSet::new(),
-                    });
-                    ws.spawn_review_load(io, source, path_s, agent);
-                });
-            }
+            Message::ConversationOpen(path) => self.conversation_open(path),
+
             Message::SelectTab(idx) => self.select_tab(idx),
             Message::CloseTab(idx) => {
                 self.with_focused_project(|ws, io| {
@@ -2619,20 +2498,7 @@ impl App {
             // 文件树右键"搜索"弹窗:`SearchResults` 带 `project_id`,异步结果
             // 按所属项目路由(用户可能已切走);其余交互投当前聚焦项目。
             Message::Search(search::Message::SearchResults(project_id, result)) => {
-                let handle = self.handle.clone();
-                let proxy = self.proxy.clone();
-                self.with_project(project_id, move |ws, _io| {
-                    let emit = move |m| {
-                        let _ = proxy.send_event(Message::Search(m));
-                    };
-                    search::update(
-                        &mut ws.search,
-                        search::Message::SearchResults(project_id, result),
-                        project_id,
-                        &handle,
-                        emit,
-                    );
-                });
+                self.search_results(project_id, result)
             }
             Message::Search(msg) => {
                 let handle = self.handle.clone();
@@ -2841,27 +2707,7 @@ impl App {
                 // worktree 条带里点其它 worktree,转成内核的切项目消息。
                 self.update(Message::ProjectTabOpen(p));
             }
-            Message::GitLog(git_log::Message::LoadMore) => {
-                let Some(path) = self
-                    .active_workspace()
-                    .and_then(|ws| ws.active_project_path())
-                else {
-                    return;
-                };
-                let next = self.git_log.next_load_more_count();
-                // `request_refresh` 内部会把 `selected` 清空,所以必须在调用它之前
-                // 先读出来,落地新快照后(`update()` 处理 `SnapshotLoaded` 那支)才能
-                // 据此还原选中态——镜像现有 `Message::GitLogLoadMore` 分支"先记
-                // selected,刷新,再把 restore_after_load 设回去"的顺序。
-                let selected = self.git_log.selected();
-                let handle = self.handle.clone();
-                let proxy = self.proxy.clone();
-                let emit = move |m| {
-                    let _ = proxy.send_event(Message::GitLog(m));
-                };
-                git_log::request_refresh(&mut self.git_log, path, next, &handle, emit);
-                self.git_log.set_restore_after_load(selected);
-            }
+            Message::GitLog(git_log::Message::LoadMore) => self.git_log_load_more(),
             Message::GitLog(msg) => {
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
@@ -2899,18 +2745,8 @@ impl App {
                 msg @ (files::Message::StatusesRefreshed(project_id, ..)
                 | files::Message::PasteDone(project_id, ..)
                 | files::Message::OpDone { project_id, .. }),
-            ) => {
-                let handle = self.handle.clone();
-                let proxy = self.proxy.clone();
-                let emit = move |m| {
-                    let _ = proxy.send_event(Message::Files(m));
-                };
-                let app_files = &mut self.files;
-                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
-                    return;
-                };
-                files::update(&mut ws.files, app_files, msg, project_id, &handle, emit);
-            }
+            ) => self.files_project_message(project_id, msg),
+
             Message::Files(files::Message::ToolbarHover(target, hovered)) => {
                 // 文件树工具行 icon 按钮的 hover:本面板不挂 App 的 hover 动画
                 // 表,把进入/离开转发成 `HoverId` 由内核统一驱动动画进度。
@@ -3954,6 +3790,197 @@ impl App {
                 source: idx,
             });
         }
+    }
+
+    fn agent_state_changed(
+        &mut self,
+        project_id: ProjectId,
+        tab_id: usize,
+        agent: AgentKind,
+        state: AgentState,
+        transcript_path: Option<String>,
+    ) {
+        self.with_project(project_id, |ws, io| {
+            // 当前项目路径先取出（下面要 &mut 借 tab，冲突）；重锚:项目优先。
+            let active_repo = ws.project.as_ref().map(|p| PathBuf::from(&p.path));
+            if let Some(tab) = ws.tab_by_id_mut(tab_id) {
+                tab.agent_state = state;
+                tab.agent = agent;
+                if let Some(tp) = transcript_path {
+                    tab.transcript_path = Some(tp);
+                }
+                tracing::info!(tab_id, ?state, "agent 状态变更");
+                if state == AgentState::TurnEnded {
+                    // git 检测不许在 UI 线程跑：丢 tokio,结果经 proxy 回来
+                    let cwd = effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
+                    let last_turn = tab.last_turn_head.clone();
+                    let proxy = io.proxy.clone();
+                    tracing::info!(tab_id, cwd = %cwd.display(), "回合结束,开始交付检测");
+                    io.handle.spawn(async move {
+                        let pending = tokio::task::spawn_blocking(move || {
+                            let Some(repo) = delivery::repo_root(&cwd) else {
+                                tracing::info!(cwd = %cwd.display(), "非 git 仓库,不参与闭环");
+                                return None;
+                            };
+                            let dirty = delivery::is_dirty(&repo);
+                            let head = delivery::head_commit(&repo);
+                            let accepted = delivery::last_accepted(&repo).map(|(_, c)| c);
+                            let pending = delivery::delivery_pending(
+                                dirty,
+                                head.as_deref(),
+                                accepted.as_deref(),
+                                last_turn.as_deref(),
+                            );
+                            tracing::info!(
+                                repo = %repo.display(),
+                                dirty,
+                                has_accepted = accepted.is_some(),
+                                pending,
+                                "交付检测完成"
+                            );
+                            Some(pending)
+                        })
+                        .await
+                        .ok()
+                        .flatten();
+                        if let Some(pending) = pending {
+                            let _ = proxy
+                                .send_event(Message::DeliveryChecked(project_id, tab_id, pending));
+                        }
+                    });
+                }
+            }
+            // 审阅 tab 若开着且属本会话,回合结束重解析 transcript（P1i）。
+            if state == AgentState::TurnEnded
+                && let Some(rv) = &ws.review
+                && review_should_refresh_on_turn(&rv.source, tab_id)
+                && let Some((path, tab_agent)) = ws
+                    .tabs
+                    .iter()
+                    .find(|t| t.tab_id == tab_id)
+                    .and_then(|t| t.transcript_path.clone().map(|p| (p, t.agent)))
+            {
+                ws.spawn_review_load(io, ReviewSource::Session(tab_id), path, tab_agent);
+            }
+        });
+    }
+
+    fn delivery_checked(&mut self, project_id: ProjectId, tab_id: usize, pending: bool) {
+        self.with_project(project_id, |ws, io| {
+            let active_id = ws.tabs.get(ws.active).map(|t| t.tab_id);
+            let is_active = active_id == Some(tab_id);
+            let active_repo = ws.project.as_ref().map(|p| PathBuf::from(&p.path));
+            tracing::info!(
+                tab_id,
+                pending,
+                is_active,
+                "交付检测结果落地(pending 写入该 tab;仅当前激活 tab 显示横幅)"
+            );
+            if let Some(tab) = ws.tab_by_id_mut(tab_id) {
+                tab.delivery_pending = pending;
+                // 记录本回合 HEAD 供下回合比对（同步读一次可容忍:仅 rev-parse）
+                let cwd = effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
+                if let Some(repo) = delivery::repo_root(&cwd) {
+                    tab.last_turn_head = delivery::head_commit(&repo);
+                }
+            }
+            // 回合结束后刷新项目 git 状态,文件树装饰随之更新（P1h）。
+            if let Some(project) = &ws.project {
+                spawn_project_git_refresh(project_id, PathBuf::from(&project.path), io);
+            }
+            // 回合结束后刷新对话列表(transcript 增长/新增；P1j)。
+            ws.spawn_conversations_refresh(io);
+        });
+    }
+
+    fn conversation_open(&mut self, path: PathBuf) {
+        self.with_focused_project(move |ws, io| {
+            // 若点开的是某活会话的当前对话 → Session 源(回合结束刷新);否则 File 快照。
+            let path_s = path.to_string_lossy().into_owned();
+            let session_tab = ws
+                .tabs
+                .iter()
+                .find(|t| t.transcript_path.as_deref() == Some(path_s.as_str()));
+            // 活会话 tab 的 agent 若还是 Unknown（hook 事件还没到，或
+            // 老装的 hook 一直上报 Unknown）不该盖掉从对话历史扫描
+            // 位置推断出的已知 agent——优先取“已知”的那个。
+            let agent = session_tab
+                .map(|t| t.agent)
+                .filter(|a| *a != AgentKind::Unknown)
+                .or_else(|| {
+                    ws.conversations
+                        .iter()
+                        .find(|c| c.path == path)
+                        .map(|c| c.agent)
+                })
+                .unwrap_or_default();
+            let source = session_tab
+                .map(|t| ReviewSource::Session(t.tab_id))
+                .unwrap_or_else(|| ReviewSource::File(path.clone()));
+            ws.review = Some(ReviewView {
+                source: source.clone(),
+                entries: Vec::new(),
+                error: None,
+                expanded: std::collections::HashSet::new(),
+            });
+            ws.spawn_review_load(io, source, path_s, agent);
+        });
+    }
+
+    fn search_results(
+        &mut self,
+        project_id: i64,
+        result: Result<Vec<(String, Vec<search::SearchHit>)>, String>,
+    ) {
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        self.with_project(project_id, move |ws, _io| {
+            let emit = move |m| {
+                let _ = proxy.send_event(Message::Search(m));
+            };
+            search::update(
+                &mut ws.search,
+                search::Message::SearchResults(project_id, result),
+                project_id,
+                &handle,
+                emit,
+            );
+        });
+    }
+
+    fn git_log_load_more(&mut self) {
+        let Some(path) = self
+            .active_workspace()
+            .and_then(|ws| ws.active_project_path())
+        else {
+            return;
+        };
+        let next = self.git_log.next_load_more_count();
+        // `request_refresh` 内部会把 `selected` 清空,所以必须在调用它之前
+        // 先读出来,落地新快照后(`update()` 处理 `SnapshotLoaded` 那支)才能
+        // 据此还原选中态——镜像现有 `Message::GitLogLoadMore` 分支"先记
+        // selected,刷新,再把 restore_after_load 设回去"的顺序。
+        let selected = self.git_log.selected();
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        let emit = move |m| {
+            let _ = proxy.send_event(Message::GitLog(m));
+        };
+        git_log::request_refresh(&mut self.git_log, path, next, &handle, emit);
+        self.git_log.set_restore_after_load(selected);
+    }
+
+    fn files_project_message(&mut self, project_id: i64, msg: files::Message) {
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        let emit = move |m| {
+            let _ = proxy.send_event(Message::Files(m));
+        };
+        let app_files = &mut self.files;
+        let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+            return;
+        };
+        files::update(&mut ws.files, app_files, msg, project_id, &handle, emit);
     }
 
     /// 文件预览 tab 右键菜单浮层:含"编辑"(仅可编辑文本文件)与"关闭"两项。
