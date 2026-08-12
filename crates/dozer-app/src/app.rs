@@ -2736,56 +2736,12 @@ impl App {
                 project_id,
                 source_id,
                 result,
-            )) => {
-                let app_db = &mut self.database;
-                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
-                    return;
-                };
-                let Some(project) = ws.project.as_ref() else {
-                    return;
-                };
-                let repo_path = std::path::PathBuf::from(&project.path);
-                let handle = self.handle.clone();
-                let proxy = self.proxy.clone();
-                let emit = move |m| {
-                    let _ = proxy.send_event(Message::Database(m));
-                };
-                database::update(
-                    &mut ws.database,
-                    app_db,
-                    database::Message::TestConnectionResult(project_id, source_id, result),
-                    project_id,
-                    &repo_path,
-                    &handle,
-                    emit,
-                );
-            }
+            )) => self.database_test_connection_result(project_id, source_id, result),
             // schema 树两个异步结果同 `TestConnectionResult` 口径:自带 project_id,
             // 按自带 id 路由,不能用当前聚焦项目。特化分支必须排在通配
             // `Message::Database(msg)` 之前,否则永远匹配不到。
             Message::Database(database::Message::TablesLoaded(project_id, source_id, result)) => {
-                let app_db = &mut self.database;
-                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
-                    return;
-                };
-                let Some(project) = ws.project.as_ref() else {
-                    return;
-                };
-                let repo_path = std::path::PathBuf::from(&project.path);
-                let handle = self.handle.clone();
-                let proxy = self.proxy.clone();
-                let emit = move |m| {
-                    let _ = proxy.send_event(Message::Database(m));
-                };
-                database::update(
-                    &mut ws.database,
-                    app_db,
-                    database::Message::TablesLoaded(project_id, source_id, result),
-                    project_id,
-                    &repo_path,
-                    &handle,
-                    emit,
-                );
+                self.database_tables_loaded(project_id, source_id, result)
             }
             Message::Database(database::Message::ColumnsLoaded {
                 project_id,
@@ -2793,36 +2749,7 @@ impl App {
                 schema,
                 table,
                 result,
-            }) => {
-                let app_db = &mut self.database;
-                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
-                    return;
-                };
-                let Some(project) = ws.project.as_ref() else {
-                    return;
-                };
-                let repo_path = std::path::PathBuf::from(&project.path);
-                let handle = self.handle.clone();
-                let proxy = self.proxy.clone();
-                let emit = move |m| {
-                    let _ = proxy.send_event(Message::Database(m));
-                };
-                database::update(
-                    &mut ws.database,
-                    app_db,
-                    database::Message::ColumnsLoaded {
-                        project_id,
-                        source_id,
-                        schema,
-                        table,
-                        result,
-                    },
-                    project_id,
-                    &repo_path,
-                    &handle,
-                    emit,
-                );
-            }
+            }) => self.database_columns_loaded(project_id, source_id, schema, table, result),
             Message::Database(database::Message::ToolbarHover(target, hovered)) => {
                 // 数据库面板 schema 树头部 icon 按钮的悬停:本面板不挂 App 的
                 // hover 动画表,把进入/离开转发成 `HoverId` 由内核统一驱动动画。
@@ -2831,33 +2758,7 @@ impl App {
                 };
                 self.set_hover(id, hovered);
             }
-            Message::Database(msg) => {
-                let Some(project_id) = self.active_project_id else {
-                    return;
-                };
-                let app_db = &mut self.database;
-                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
-                    return;
-                };
-                let Some(project) = ws.project.as_ref() else {
-                    return;
-                };
-                let repo_path = std::path::PathBuf::from(&project.path);
-                let handle = self.handle.clone();
-                let proxy = self.proxy.clone();
-                let emit = move |m| {
-                    let _ = proxy.send_event(Message::Database(m));
-                };
-                database::update(
-                    &mut ws.database,
-                    app_db,
-                    msg,
-                    project_id,
-                    &repo_path,
-                    &handle,
-                    emit,
-                );
-            }
+            Message::Database(msg) => self.database_message(msg),
             Message::Todo(msg) => {
                 let Some(project_id) = self.active_project_id else {
                     return;
@@ -3858,6 +3759,132 @@ impl App {
             };
             git_log::request_refresh(&mut self.git_log, repo_path, max, &handle, emit);
         }
+    }
+
+    fn database_test_connection_result(
+        &mut self,
+        project_id: i64,
+        source_id: String,
+        result: Result<(), String>,
+    ) {
+        let app_db = &mut self.database;
+        let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+            return;
+        };
+        let Some(project) = ws.project.as_ref() else {
+            return;
+        };
+        let repo_path = std::path::PathBuf::from(&project.path);
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        let emit = move |m| {
+            let _ = proxy.send_event(Message::Database(m));
+        };
+        database::update(
+            &mut ws.database,
+            app_db,
+            database::Message::TestConnectionResult(project_id, source_id, result),
+            project_id,
+            &repo_path,
+            &handle,
+            emit,
+        );
+    }
+
+    fn database_tables_loaded(
+        &mut self,
+        project_id: i64,
+        source_id: String,
+        result: Result<Vec<database::TableRef>, String>,
+    ) {
+        let app_db = &mut self.database;
+        let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+            return;
+        };
+        let Some(project) = ws.project.as_ref() else {
+            return;
+        };
+        let repo_path = std::path::PathBuf::from(&project.path);
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        let emit = move |m| {
+            let _ = proxy.send_event(Message::Database(m));
+        };
+        database::update(
+            &mut ws.database,
+            app_db,
+            database::Message::TablesLoaded(project_id, source_id, result),
+            project_id,
+            &repo_path,
+            &handle,
+            emit,
+        );
+    }
+
+    fn database_columns_loaded(
+        &mut self,
+        project_id: i64,
+        source_id: String,
+        schema: Option<String>,
+        table: String,
+        result: Result<Vec<database::ColumnInfo>, String>,
+    ) {
+        let app_db = &mut self.database;
+        let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+            return;
+        };
+        let Some(project) = ws.project.as_ref() else {
+            return;
+        };
+        let repo_path = std::path::PathBuf::from(&project.path);
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        let emit = move |m| {
+            let _ = proxy.send_event(Message::Database(m));
+        };
+        database::update(
+            &mut ws.database,
+            app_db,
+            database::Message::ColumnsLoaded {
+                project_id,
+                source_id,
+                schema,
+                table,
+                result,
+            },
+            project_id,
+            &repo_path,
+            &handle,
+            emit,
+        );
+    }
+
+    fn database_message(&mut self, msg: database::Message) {
+        let Some(project_id) = self.active_project_id else {
+            return;
+        };
+        let app_db = &mut self.database;
+        let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+            return;
+        };
+        let Some(project) = ws.project.as_ref() else {
+            return;
+        };
+        let repo_path = std::path::PathBuf::from(&project.path);
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        let emit = move |m| {
+            let _ = proxy.send_event(Message::Database(m));
+        };
+        database::update(
+            &mut ws.database,
+            app_db,
+            msg,
+            project_id,
+            &repo_path,
+            &handle,
+            emit,
+        );
     }
 
     /// 文件预览 tab 右键菜单浮层:含"编辑"(仅可编辑文本文件)与"关闭"两项。
