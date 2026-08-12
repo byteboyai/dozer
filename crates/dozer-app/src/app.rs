@@ -2636,36 +2636,10 @@ impl App {
                 });
             }
             Message::Todo(todo::Message::DispatchToExisting(idx, session_id)) => {
-                let Some(project_id) = self.active_project_id else {
-                    return;
-                };
-                let text = self
-                    .active_workspace()
-                    .and_then(|ws| ws.todo.items().get(idx))
-                    .map(|item| item.text.clone());
-                let Some(text) = text else {
-                    return;
-                };
-                self.with_focused_project(|ws, io| {
-                    ws.todo.close_dispatch_popup();
-                    ws.dispatch_todo_to_existing(io, &session_id, &text);
-                });
-                self.todo.record_dispatch(project_id, &text, session_id);
+                self.todo_dispatch_to_existing(idx, session_id)
             }
             Message::Todo(todo::Message::DispatchNew(idx, launch)) => {
-                let text = self
-                    .active_workspace()
-                    .and_then(|ws| ws.todo.items().get(idx))
-                    .map(|item| item.text.clone());
-                let Some(text) = text else {
-                    return;
-                };
-                self.with_focused_project(|ws, io| {
-                    ws.todo.close_dispatch_popup();
-                    if let Some(tab_id) = ws.spawn_new_tab(io, launch, Some(text.clone())) {
-                        ws.todo.insert_pending_dispatch(tab_id, text);
-                    }
-                });
+                self.todo_dispatch_new(idx, launch)
             }
             // 数据库连接测试的异步结果带显式 `project_id`——用户可能在等待
             // 期间切走了项目页签,必须按自带 id 路由,不能用当前聚焦项目
@@ -2699,27 +2673,7 @@ impl App {
                 self.set_hover(id, hovered);
             }
             Message::Database(msg) => self.database_message(msg),
-            Message::Todo(msg) => {
-                let Some(project_id) = self.active_project_id else {
-                    return;
-                };
-                // `self.todo`(App 级)和某个 `Workspace` 要同时可变借用,
-                // `todo::update` 才能一次处理完两块状态——不能套用
-                // `with_focused_project(|ws, _io| ..)` 那种单参数闭包(它只
-                // 借出 `ws`,拿不到 `self.todo`)。改用 `loaded_workspace_mut`
-                // 直接从 `self.projects` 借 `&mut Workspace`,跟 `&mut self.todo`
-                // 是结构体的两个不同字段,互不冲突,Rust 借用检查器允许分别
-                // 借用。
-                let app_todo = &mut self.todo;
-                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
-                    return;
-                };
-                let Some(project) = ws.project.as_ref() else {
-                    return;
-                };
-                let project_path = std::path::PathBuf::from(&project.path);
-                todo::update(&mut ws.todo, app_todo, msg, project_id, &project_path);
-            }
+            Message::Todo(msg) => self.todo_message(msg),
             // 文件树右键"搜索"弹窗:`SearchResults` 带 `project_id`,异步结果
             // 按所属项目路由(用户可能已切走);其余交互投当前聚焦项目。
             Message::Search(search::Message::SearchResults(project_id, result)) => {
@@ -3917,6 +3871,62 @@ impl App {
                 ws.spawn_acceptance_count_refresh(io);
             }
         });
+    }
+
+    fn todo_dispatch_to_existing(&mut self, idx: usize, session_id: String) {
+        let Some(project_id) = self.active_project_id else {
+            return;
+        };
+        let text = self
+            .active_workspace()
+            .and_then(|ws| ws.todo.items().get(idx))
+            .map(|item| item.text.clone());
+        let Some(text) = text else {
+            return;
+        };
+        self.with_focused_project(|ws, io| {
+            ws.todo.close_dispatch_popup();
+            ws.dispatch_todo_to_existing(io, &session_id, &text);
+        });
+        self.todo.record_dispatch(project_id, &text, session_id);
+    }
+
+    fn todo_dispatch_new(&mut self, idx: usize, launch: crate::workspace::PickerLaunch) {
+        let text = self
+            .active_workspace()
+            .and_then(|ws| ws.todo.items().get(idx))
+            .map(|item| item.text.clone());
+        let Some(text) = text else {
+            return;
+        };
+        self.with_focused_project(|ws, io| {
+            ws.todo.close_dispatch_popup();
+            if let Some(tab_id) = ws.spawn_new_tab(io, launch, Some(text.clone())) {
+                ws.todo.insert_pending_dispatch(tab_id, text);
+            }
+        });
+    }
+
+    fn todo_message(&mut self, msg: todo::Message) {
+        let Some(project_id) = self.active_project_id else {
+            return;
+        };
+        // `self.todo`(App 级)和某个 `Workspace` 要同时可变借用,
+        // `todo::update` 才能一次处理完两块状态——不能套用
+        // `with_focused_project(|ws, _io| ..)` 那种单参数闭包(它只
+        // 借出 `ws`,拿不到 `self.todo`)。改用 `loaded_workspace_mut`
+        // 直接从 `self.projects` 借 `&mut Workspace`,跟 `&mut self.todo`
+        // 是结构体的两个不同字段,互不冲突,Rust 借用检查器允许分别
+        // 借用。
+        let app_todo = &mut self.todo;
+        let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+            return;
+        };
+        let Some(project) = ws.project.as_ref() else {
+            return;
+        };
+        let project_path = std::path::PathBuf::from(&project.path);
+        todo::update(&mut ws.todo, app_todo, msg, project_id, &project_path);
     }
 
     /// 文件预览 tab 右键菜单浮层:含"编辑"(仅可编辑文本文件)与"关闭"两项。
