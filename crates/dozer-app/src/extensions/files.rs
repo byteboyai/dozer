@@ -1110,7 +1110,7 @@ fn git_footer_bar(
                 .size(theme::font::label())
                 .color(label_color)
                 .into(),
-            Some(switch.into()),
+            Some(switch),
         )
     } else {
         // 无 git 仓库:提示未受 git 保护 + 新建仓库按钮。

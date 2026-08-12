@@ -284,6 +284,7 @@ pub fn icon_button<'a, Message: Clone + 'a>(
 /// 圆角方底,图标恒为 GOLD 或随 hover 从 DIM 平滑过渡到 GOLD,`active` 时
 /// 加 1px 金框(未选中无边框),方形命中区取 `rail_button_size()`——迁移
 /// rail 的 11 个按钮外观与迁移前完全一致(见实现计划 2026-08-12)。
+#[allow(clippy::too_many_arguments)]
 pub fn icon_button_entry<'a, M: Clone + 'a>(
     kind: IconKind,
     size: f32,
