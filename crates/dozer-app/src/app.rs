@@ -4626,8 +4626,15 @@ fn project_tab_item<'a>(
         .height(Length::Fill)
         .align_y(iced_widget::core::Alignment::Center)
         // 右侧留白给叠在页签之上的关闭按钮:长名在此截断,不会跑到 × 底下。
+        // 左侧留白是这里单独加的,不是靠下面 `tab_row` 的外层 padding——
+        // `capsule`(悬停胶囊背景)和这层 `label` 是 `stack!` 里的平级层,共用
+        // `tab_row` 那份外层 padding 定的同一个起点,只调外层 padding 只会让
+        // 胶囊和文字**一起**往右挪,两者间距不变;点点因此贴着胶囊圆角左缘
+        // (验收反馈截图)。真正拉开点点与胶囊边缘间距,得单独加在 `label`
+        // 自己的 padding 上。
         .padding(Padding {
             right: close_sz + 4.0,
+            left: 6.0,
             ..Padding::ZERO
         })
         .clip(true);
