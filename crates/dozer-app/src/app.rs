@@ -674,6 +674,73 @@ pub fn preview_content_bounds(
     }
 }
 
+/// 左侧文件树的**目录列表 Scrollable** 在窗口坐标系里的矩形（上/左/宽/高，
+/// 逻辑像素），供 main.rs 做外部文件拖拽命中测试。返回的矩形只覆盖列表
+/// 视口本身——命中测试据此把窗口 Y 换算成 `tree_scroll` 偏移下的"可见行
+/// 序号"，再推出那行是不是目录。
+///
+/// 与 `preview_content_bounds` 同源（外层）但其目标是**配对里左侧那一栏**
+/// （树），不是右侧的 webview 列，所以横向起点去掉了分隔线+8px、纵向起点
+/// 换用 `tree_chrome_top_px`（面板头+搜索/工具栏），底部扣 `git 脚注栏`
+/// 而非 footbar 专用常量。表单汇总：
+///
+/// - 外层：左栏位于 `icon_rail_width + m.left`，纵向从 `top_bar_height +
+///   m.top` 起、到 `window_height - m.bottom - status_bar_height` 止；
+///   栏宽 = `pair_content_width(left_w) * files_split`。
+/// - 内层：`project_pane().padding` 给容器留内边距；`tree_chrome_top_px()`
+///   盖掉上方（面板头+搜索行+两段间距），`tree_chrome_bottom_px()` 盖掉
+///   下方（git 脚注栏+间距+下内边距）。
+///
+/// 不可命中（左侧收起 / 右侧放大 / 不在文件树视图）时返回零尺寸矩形。
+/// 放大态左侧(`MaximizedPane::Left`)按 `maximize_overlay` 的实际盒子换算。
+pub fn left_files_tree_bounds(
+    window_width: f32,
+    window_height: f32,
+    state: &ShellState,
+) -> (f32, f32, f32, f32) {
+    let zero = || (0.0, 0.0, 0.0, 0.0);
+    if state.left_collapsed || state.left_view != LeftView::Files {
+        return zero();
+    }
+    let m = theme::region::left_zone().margin;
+    let p = theme::region::project_pane();
+    if state.maximized == Some(MaximizedPane::Right) {
+        return zero();
+    }
+    if state.maximized == Some(MaximizedPane::Left) {
+        let (x0, avail_w) = maximized_box_x_range(window_width);
+        let y_top = theme::geometry::top_bar_height() + theme::geometry::maximize_overlay_padding();
+        let avail_h =
+            (maximized_box_height(window_height) - theme::geometry::status_bar_height()).max(0.0);
+        let pair_w = pair_content_width(avail_w);
+        let list_w = pair_w * state.layout.files_split;
+        let x = x0 + m.left + p.padding.left;
+        let w = (list_w - p.padding.left - p.padding.right).max(0.0);
+        let y = y_top + m.top + p.padding.top + theme::geometry::tree_chrome_top_px();
+        let h = (avail_h
+            - m.top
+            - m.bottom
+            - p.padding.top
+            - p.padding.bottom
+            - theme::geometry::tree_chrome_top_px()
+            - theme::geometry::tree_chrome_bottom_px())
+        .max(0.0);
+        return (x, y, w, h);
+    }
+    let left_w = left_zone_width(window_width, state);
+    let list_w = pair_content_width(left_w) * state.layout.files_split;
+    let x = theme::geometry::icon_rail_width() + m.left + p.padding.left;
+    let w = (list_w - p.padding.left - p.padding.right).max(0.0);
+    let y_pane = theme::geometry::top_bar_height() + m.top;
+    let y = y_pane + p.padding.top + theme::geometry::tree_chrome_top_px();
+    let h = ((window_height - m.bottom - theme::geometry::status_bar_height())
+        - (y_pane + p.padding.top + theme::geometry::tree_chrome_top_px())
+        - p.padding.bottom
+        - theme::geometry::tree_chrome_bottom_px())
+    .max(0.0);
+    (x, y, w, h)
+}
+
 /// 逻辑 x 是否落在左侧文件预览内容区列内。焦点路由用:点击落在
 /// 该列 → 键盘交给 webview;落在别处 → 交回窗口(终端)。
 ///
@@ -1541,6 +1608,30 @@ impl App {
             WorkspaceSlot::Loaded(ws) => Some(ws),
             WorkspaceSlot::Stub { .. } => None,
         }
+    }
+
+    /// 外部 OS 文件拖拽命中测试：窗口坐标 (x, y) 在**当前**左侧是否落在某个
+    /// 目录行上，返回该目录路径。main.rs 在 winit 原生事件层的
+    /// `CursorMoved`/`DroppedFile` 上调用它——只要不在文件树目录行上就返回
+    /// `None`（此时拖入按现状落给终端）。
+    ///
+    /// 不做任何像素布局复制：文件树列的矩形由 [`left_files_tree_bounds`]
+    /// 按 `preview_content_bounds` 同源的谱系换算，可见行集合从当前项目
+    /// `WorkspaceState` 现取现算，二者与渲染侧 `files::view` 同源。
+    pub fn files_drop_target(
+        &self,
+        window_w: f32,
+        window_h: f32,
+        x: f32,
+        y: f32,
+    ) -> Option<PathBuf> {
+        if self.left_collapsed || self.left_view != LeftView::Files {
+            return None;
+        }
+        let ws = self.active_workspace()?;
+        let bounds = left_files_tree_bounds(window_w, window_h, &self.shell_state());
+        let rows = ws.files.visible_tree_rows();
+        files::tree_drop_target(x, y, bounds, ws.files.tree_scroll(), &rows)
     }
 
     /// 同上，可变引用版本；如果对应槽位是 `Stub`，就地促成 `Loaded`
@@ -2787,7 +2878,8 @@ impl App {
                 | files::Message::OpDone { project_id, .. }
                 | files::Message::GitInfoLoaded(project_id, ..)
                 | files::Message::BranchSwitchDone(project_id, ..)
-                | files::Message::GitInitDone(project_id, ..)),
+                | files::Message::GitInitDone(project_id, ..)
+                | files::Message::FileDropDone(project_id, ..)),
             ) => self.files_project_message(project_id, msg),
 
             Message::Files(files::Message::ToolbarHover(target, hovered)) => {

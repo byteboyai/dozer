@@ -2,14 +2,14 @@
 //! 重构第四个试点,设计见
 //! `docs/superpowers/specs/2026-08-07-files-extension-pilot-design.md`。
 use crate::delivery::FileGitStatus;
-use crate::project::{FileTree, PathKind};
+use crate::project::{FileTree, PathKind, TreeRow};
 use crate::theme::terminal_font;
 use crate::workspace::AddrEvent;
 use crate::{delivery, icons, theme};
 use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Color, Element, Length, Padding};
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 /// 项目树行内编辑的模式:新建文件/新建文件夹/重命名(携带原路径)。
@@ -60,6 +60,14 @@ pub struct WorkspaceState {
     /// 按键路由成 `SearchEvent`,不再喂给 PTY——否则在搜索框里打字会同时
     /// 漏进已聚焦的终端(本项目所有文本输入都是自绘,理由一致)。
     search_editing: bool,
+    /// 文件树 Scrollable 当前滚动偏移(逻辑像素,Y 向下偏移)。由树自身的
+    /// `on_scroll` 上报;main.rs 在外部文件拖拽事件层用它与行高几何做命中
+    /// 测试,把光标位置换算成命中的目录行。此偏移只影响命中测试,不影响
+    /// 渲染(渲染仍由 Scrollable 内部状态驱动)。
+    tree_scroll: f32,
+    /// 外部文件拖拽悬停时命中的目录集合:命中即整行高亮为"拖入落点",
+    /// 由 `FileDragHover` 更新、清空时为空集合。
+    drag_hover: HashSet<PathBuf>,
     /// 底部 git 分支栏信息是否已加载(`GitInfoLoaded` 送达前为 false,此时
     /// 分支栏显示中性"…"占位)。
     git_loaded: bool,
@@ -170,6 +178,23 @@ pub enum Message {
     /// 表,`view` 通过传入的 `hover_t` 参数取动画进度,进入/离开则以本消息
     /// 上报给内核(`Message::Files` 分支里转发到 `HoverId`)。
     ToolbarHover(FilesToolbarTarget, bool),
+    /// 文件树滚动偏移上报(逻辑像素 Y):树自身 `on_scroll` 发出,写进
+    /// `tree_scroll` 供外部拖拽命中测试用(渲染仍由 Scrollable 内部状态驱动)。
+    TreeScroll(f32),
+    /// 外部文件被拖拽悬停在文件树上:`dirs` 是命中的目标目录集合(可为空)。
+    /// 由 main.rs 在原生 `HoveredFile`/`CursorMoved` 事件层命中测试后发出,
+    /// 用于把那些目录行高亮成"拖入落点"(整行高亮),见 `view()`。
+    FileDragHover(HashSet<PathBuf>),
+    /// 外部文件被松开(落下)在某个目录上:`paths` 是本次拖入的文件/目录
+    /// 完整路径,`target` 是落点目录。由 main.rs 在原生 `DroppedFile` 事件层
+    /// 命中测试后发出,异步移动(见 `Message::FileDrop` 处理器)。
+    FileDrop {
+        paths: Vec<PathBuf>,
+        target: PathBuf,
+    },
+    /// 一次拖入的异步移动结果:成功时刷新 `target` 目录,失败时置
+    /// `tree_error`。
+    FileDropDone(i64, PathBuf, Result<(), String>),
 }
 
 /// 文件树工具行里带 hover 动画的 icon 按钮。与内核 `HoverId` 一一对应
@@ -266,6 +291,24 @@ impl WorkspaceState {
     #[cfg(test)]
     pub fn file_tree_is_some(&self) -> bool {
         self.file_tree.is_some()
+    }
+
+    /// 当前滚动偏移(逻辑像素,内容 Y 向下偏移)。外部拖拽命中测试用——
+    /// `Main` 层拿不到 iced 布局,只能靠它与树视口矩形把窗口 Y 换算成可见
+    /// 行序号。**不是**渲染驱动的真相(`Scrollable` 内部状态才是),是
+    /// `TreeScroll` 消息实时上报的镜像。
+    pub fn tree_scroll(&self) -> f32 {
+        self.tree_scroll
+    }
+
+    /// 当前文件树**全体可见行**(按展开状态折叠后的顺序,与
+    /// `files::view` 渲染逐行一一对应)。外部拖拽命中测试 `App::files_drop_target`
+    /// 用它 + `tree_scroll` 命中目录行;滚动只改视口不改这份可见行集合。
+    pub fn visible_tree_rows(&self) -> Vec<crate::project::TreeRow> {
+        self.file_tree
+            .as_ref()
+            .map(|t| t.visible_rows())
+            .unwrap_or_default()
     }
 
     /// "新建文件"/"新建文件夹"的公共起点(现有 `Workspace::start_tree_new`
@@ -684,6 +727,47 @@ pub fn update(
         // `HoverId`(文件树面板不挂 App 的 hover 动画表),`update` 吃不到
         // 这里;保 no-op 分支维持 match 穷尽。
         Message::ToolbarHover(..) => {}
+        // 文件树滚动偏移:写进 `tree_scroll` 供外部拖拽命中测试。
+        Message::TreeScroll(off) => {
+            ws_state.tree_scroll = off;
+        }
+        // 外部文件拖拽悬停命中目录集合:整行高亮这些目录为"拖入落点"。
+        // `view` 读 `drag_hover` 渲染金色高亮边框。
+        Message::FileDragHover(dirs) => {
+            ws_state.drag_hover = dirs;
+        }
+        // 外部文件被松开在某目录上:逐个移动(同 Finder 拖拽的 move 语义,
+        // 跨文件系统在 `move_item` 里降级为复制+删源)。全部完成后 `emit`
+        // `FileDropDone` 刷新目标目录。
+        Message::FileDrop { paths, target } => {
+            ws_state.tree_error = None;
+            ws_state.drag_hover = HashSet::new();
+            if paths.is_empty() {
+                return;
+            }
+            let drop_target = target.clone();
+            handle.spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    for p in &paths {
+                        let is_dir = std::fs::metadata(p).map(|m| m.is_dir()).unwrap_or(false);
+                        crate::project::move_item(p, is_dir, &target)?;
+                    }
+                    Ok::<(), String>(())
+                })
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()));
+                emit(Message::FileDropDone(project_id, drop_target, result));
+            });
+        }
+        Message::FileDropDone(_, target, result) => match result {
+            Ok(()) => {
+                ws_state.tree_error = None;
+                if let Some(tree) = &mut ws_state.file_tree {
+                    tree.refresh(&target);
+                }
+            }
+            Err(e) => ws_state.tree_error = Some(e),
+        },
     }
 }
 
@@ -727,6 +811,46 @@ fn spawn_git_info_load(
         });
         emit(Message::GitInfoLoaded(project_id, info));
     });
+}
+
+/// 窗口坐标 (x, y) → 命中的**目录行**路径。外部 OS 文件拖拽的命中测试：
+/// main.rs 在原生事件层拿不到 iced 布局，只能靠 `left_files_tree_bounds`
+/// 算出的树视口矩形 + `tree_scroll` 偏移 + 行高/行间距，把窗口 Y 换算成
+/// 可见行序号，再确认命中行是目录。
+///
+/// 只返回**目录**（文件不可作落点）；命中视图外 / 非目录行返回 `None`。
+/// 行 i 的屏幕上沿 = `bounds.y - scroll + i * (row_h + region.gap)`，行高
+/// 与间距必须和渲染侧同源（`tree_row_h()`、`project_pane().gap`）。行间死
+/// 区（间距）落在任一相邻目录行之间时按最近目录行吸住。
+pub fn tree_drop_target(
+    x: f32,
+    y: f32,
+    bounds: (f32, f32, f32, f32),
+    scroll: f32,
+    rows: &[TreeRow],
+) -> Option<PathBuf> {
+    let (bx, by, bw, bh) = bounds;
+    if bw <= 0.0 || bh <= 0.0 || !(bx..bx + bw).contains(&x) || !(by..by + bh).contains(&y) {
+        return None;
+    }
+    let row_h = crate::theme::geometry::tree_row_h();
+    let gap = crate::theme::region::project_pane().gap;
+    let pitch = row_h + gap;
+    // 内容坐标(未滚动)下的命中 Y。
+    let content_y = (y - by) + scroll;
+    // 命中行序号(含行间死区吸附)。
+    let idx = (content_y / pitch).floor() as isize;
+    let within_row = content_y - idx as f32 * pitch <= row_h;
+    let idx = if within_row { idx } else { idx + 1 };
+    if idx >= rows.len() as isize || idx < 0 {
+        return None;
+    }
+    let row = &rows[idx as usize];
+    if row.is_dir {
+        Some(row.path.clone())
+    } else {
+        None
+    }
 }
 
 /// 文件树可滚动列表(现有 `workspace.rs::project_pane` 的搬家版本,签名改吃
@@ -946,6 +1070,8 @@ pub fn view<'a>(
                 Message::OpenFile(row.path.clone())
             };
             let is_selected = ws_state.tree_selected.as_deref() == Some(row.path.as_path());
+            // 外部文件拖拽落点:目录被命中 → 整行金色描边高亮(仅目录可作落点)。
+            let is_drop_target = row.is_dir && ws_state.drag_hover.contains(&row.path);
             let row_btn: iced_widget::Button<
                 '_,
                 Message,
@@ -961,6 +1087,19 @@ pub fn view<'a>(
                         None
                     },
                     text_color: theme::color::BODY,
+                    border: if is_drop_target {
+                        Border {
+                            color: theme::color::GOLD,
+                            width: 1.0,
+                            radius: 6.0.into(),
+                        }
+                    } else {
+                        Border {
+                            color: Color::TRANSPARENT,
+                            width: 0.0,
+                            radius: 0.0.into(),
+                        }
+                    },
                     ..button::Style::default()
                 });
             tree_col = tree_col.push(MouseArea::new(row_btn).on_right_press(
@@ -998,6 +1137,7 @@ pub fn view<'a>(
                 .direction(scrollable::Direction::Vertical(
                     crate::scrollbar::scrollbar()
                 ))
+                .on_scroll(|viewport| { Message::TreeScroll(viewport.absolute_offset().y) })
                 .style(|_t, _s| crate::scrollbar::scrollbar_style()),
             git_footer_bar(ws_state, branch_hover_t),
         ]
@@ -1724,6 +1864,81 @@ mod tests {
 
     fn ws_with_tree(root: PathBuf) -> WorkspaceState {
         WorkspaceState::new(FileTree::new(root))
+    }
+
+    fn row(path: &str, is_dir: bool) -> TreeRow {
+        TreeRow {
+            path: PathBuf::from(path),
+            name: String::new(),
+            depth: 0,
+            is_dir,
+            expanded: false,
+        }
+    }
+
+    #[test]
+    fn tree_drop_target_hits_only_folders_within_viewport() {
+        let rows = vec![
+            row("/a", true),
+            row("/a/f.rs", false),
+            row("/b", true),
+            row("/c", true),
+        ];
+        let bounds = (100.0, 100.0, 400.0, 400.0);
+        let scroll = 0.0;
+        let row_h = crate::theme::geometry::tree_row_h();
+        let gap = crate::theme::region::project_pane().gap;
+        let pitch = row_h + gap;
+        let by = bounds.1;
+        // 第 0 行是目录 → 命中。
+        assert_eq!(
+            tree_drop_target(200.0, by + row_h / 2.0, bounds, scroll, &rows),
+            Some(PathBuf::from("/a"))
+        );
+        // 第 1 行是文件 → None。
+        assert_eq!(
+            tree_drop_target(200.0, by + pitch + row_h / 2.0, bounds, scroll, &rows),
+            None
+        );
+        // 第 2、3 行都是目录 → 各自命中。
+        assert_eq!(
+            tree_drop_target(200.0, by + 2.0 * pitch + row_h / 2.0, bounds, scroll, &rows),
+            Some(PathBuf::from("/b"))
+        );
+        assert_eq!(
+            tree_drop_target(200.0, by + 3.0 * pitch + row_h / 2.0, bounds, scroll, &rows),
+            Some(PathBuf::from("/c"))
+        );
+        // 视图上方 / 右侧外 → None。
+        assert_eq!(
+            tree_drop_target(50.0, by + row_h / 2.0, bounds, scroll, &rows),
+            None
+        );
+        assert_eq!(
+            tree_drop_target(200.0, by - 5.0, bounds, scroll, &rows),
+            None
+        );
+        // 行间死区吸到下一行目录(idx1 是文件 /a/f.rs,2*pitch 的空档应在 /b
+        // 之上;吸住 /b)。
+        assert_eq!(
+            tree_drop_target(200.0, by + 2.0 * pitch - 1.0, bounds, scroll, &rows),
+            Some(PathBuf::from("/b"))
+        );
+    }
+
+    #[test]
+    fn tree_drop_target_respects_scroll() {
+        let rows = vec![row("/a", true), row("/b", true), row("/c", true)];
+        let bounds = (0.0, 0.0, 500.0, 500.0);
+        let row_h = crate::theme::geometry::tree_row_h();
+        let gap = crate::theme::region::project_pane().gap;
+        let pitch = row_h + gap;
+        // 滚过一整行：视觉第 0 行其实是内容第 1 行 → 命中 /b。
+        let scroll = pitch;
+        assert_eq!(
+            tree_drop_target(100.0, row_h / 2.0, bounds, scroll, &rows),
+            Some(PathBuf::from("/b"))
+        );
     }
 
     #[test]

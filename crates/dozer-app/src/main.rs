@@ -405,6 +405,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             webview_project: Option<i64>,
             /// 最近一次光标物理位置(CursorMoved 更新),鼠标点击时用于命中测试。
             cursor_phys: winit::dpi::PhysicalPosition<f64>,
+            /// 是否有外部 OS 文件正处于拖拽过程(winit `HoveredFile` 置
+            /// true、`HoveredFileCancelled`/`DroppedFile` 置 false)。置 true
+            /// 期间每个 `CursorMoved` 都会 re-hit-test 文件树并刷新 `FileDragHover`
+            /// 高亮;置 false 时收起高亮并把拖入交回终端现状行为。
+            files_dragging: bool,
             /// 待应用的焦点意图(点击/消息设置,sync_previews 之后统一 apply,
             /// 确保新建 webview 已入池)。一次性:apply 完就被 `.take()` 走。
             pending_focus: Option<FocusIntent>,
@@ -525,6 +530,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         /// `App::update` 收到 `TermInput` 后写给 daemon（`client.write`），
         /// 不再本地 echo——回显完全走 PTY 真实回路（daemon → attach 流 →
         /// `Message::TermOutput` → `TerminalModel::feed`）。
+        /// 清除文件树拖拽高亮(`drag_hover` 置空)。拖拽取消/落下但不在树上时
+        /// 调用,让上一帧金框高亮立刻消失(否则树会一直亮着直到下一次 hover)。
+        fn clear_file_drag_hover(app: &mut App) {
+            app.update(Message::Files(extensions::files::Message::FileDragHover(
+                std::collections::HashSet::new(),
+            )));
+        }
+
         fn on_window_event(&mut self, event: &WindowEvent) {
             // 把 `modifiers` 和 `app`/`window` 放进同一次解构里取，
             // 避免先借一次 `self` 再调用 `&self` 方法造成的重复借用。
@@ -534,6 +547,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 modifiers,
                 clipboard,
                 cursor_phys,
+                files_dragging,
                 pending_focus,
                 current_focus,
                 ..
@@ -548,6 +562,31 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             match event {
                 WindowEvent::CursorMoved { position, .. } => {
                     *cursor_phys = *position;
+                    // 外部文件拖拽悬停:实时 re-hit-test 文件树目录行,把
+                    // 命中结果作为 `FileDragHover` 刷给 `drag_hover`,驱动
+                    // 目录行整行金色高亮(用户要求的"拖拽时实时高亮")。命中
+                    // 不到目录就清空高亮。拖拽在树上移动时 iced 不重绘
+                    // MouseArea,必须靠这里主动请求重绘。
+                    if *files_dragging {
+                        let scale = window.scale_factor();
+                        let logical_x = (cursor_phys.x / scale) as f32;
+                        let logical_y = (cursor_phys.y / scale) as f32;
+                        let window_width = (window.inner_size().width as f64 / scale) as f32;
+                        let window_height = (window.inner_size().height as f64 / scale) as f32;
+                        let target = app.files_drop_target(
+                            window_width,
+                            window_height,
+                            logical_x,
+                            logical_y,
+                        );
+                        let hover = target
+                            .into_iter()
+                            .collect::<std::collections::HashSet<std::path::PathBuf>>();
+                        app.update(Message::Files(extensions::files::Message::FileDragHover(
+                            hover,
+                        )));
+                        window.request_redraw();
+                    }
                     if app.dragging_divider().is_some() {
                         let scale = window.scale_factor();
                         let logical_x = (cursor_phys.x / scale) as f32;
@@ -645,9 +684,41 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     app.update(Message::TabDragEnd);
                     window.request_redraw();
                 }
+                // 外部 OS 文件拖拽进入窗口:进入即置拖拽标记,之后每个
+                // `CursorMoved` 都会 re-hit-test 树并刷新高亮(见上面
+                // CursorMoved 分支);离开窗口/取消时清标记并收起高亮。
+                WindowEvent::HoveredFile(_) => {
+                    *files_dragging = true;
+                }
+                WindowEvent::HoveredFileCancelled => {
+                    *files_dragging = false;
+                    Self::clear_file_drag_hover(app);
+                    window.request_redraw();
+                    return;
+                }
+                // 外部 OS 文件拖拽落下:优先落到文件树目录行 → 触发移动
+                // (吸收掉,不再进后面的终端字节分发);否则落给终端现状行为
+                // (不 return,继续走 bytes 匹配的 `DroppedFile` 分支)。
+                WindowEvent::DroppedFile(path) if *files_dragging => {
+                    let scale = window.scale_factor();
+                    let logical_x = (cursor_phys.x / scale) as f32;
+                    let logical_y = (cursor_phys.y / scale) as f32;
+                    let window_w = (window.inner_size().width as f64 / scale) as f32;
+                    let window_h = (window.inner_size().height as f64 / scale) as f32;
+                    let target = app.files_drop_target(window_w, window_h, logical_x, logical_y);
+                    *files_dragging = false;
+                    if let Some(target) = target {
+                        app.update(Message::Files(extensions::files::Message::FileDrop {
+                            paths: vec![path.clone()],
+                            target,
+                        }));
+                        window.request_redraw();
+                        return;
+                    }
+                    Self::clear_file_drag_hover(app);
+                }
                 _ => {}
             }
-
             // 右键"搜索"弹窗打开时,Esc 优先:查询框编辑态先退编辑态(按第二次
             // 才整个关弹窗),非编辑态直接关弹窗。不放靠后位置以免被终端当
             // 普通按键消费掉。
@@ -1521,6 +1592,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     // 当前项目(清空空池是 no-op)。
                     webview_project: None,
                     cursor_phys: winit::dpi::PhysicalPosition::new(0.0, 0.0),
+                    files_dragging: false,
                     pending_focus: None,
                     // 默认终端拿键盘,跟现状(启动时终端可打字、没有任何
                     // 预览/编辑弹层抢焦点)一致。

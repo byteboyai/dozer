@@ -332,6 +332,40 @@ pub fn paste_item(
     result.map(|_| dest).map_err(|e| e.to_string())
 }
 
+/// 把 `source`(文件或目录)移动到 `target_dir` 下,用源的文件名。语义对齐
+/// macOS Finder 拖拽:同文件系统直接 `std::fs::rename`(改目录项、不拷数据);
+/// 跨文件系统(rename 返回 `EXDEV`)降级为复制 + 删除源。目标存在同名项 →
+/// `Err`;目录移进自身子树 → `Err`。成功返回新建出的完整路径。
+pub fn move_item(source: &Path, source_is_dir: bool, target_dir: &Path) -> Result<PathBuf, String> {
+    let dest = target_dir.join(source.file_name().unwrap_or_default());
+    // 同 `paste_item`:目录不能移进自己或自己的子目录(无界自增长)。
+    if source_is_dir && (dest.starts_with(source) || dest == source) {
+        return Err("不能把目录移到它自己或其子目录里".to_string());
+    }
+    if dest.exists() {
+        return Err(format!("{} 已存在同名项", dest.display()));
+    }
+    match std::fs::rename(source, &dest) {
+        Ok(()) => Ok(dest),
+        // 跨文件系统:ErrorKind::CrossesDevices(EXDEV)——复制后删源。
+        Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
+            match paste_item(source, source_is_dir, target_dir) {
+                Ok(copied) => {
+                    let cleanup = if source_is_dir {
+                        std::fs::remove_dir_all(source)
+                    } else {
+                        std::fs::remove_file(source)
+                    };
+                    cleanup.map_err(|e| format!("已复制到目标,但删除源失败: {e}"))?;
+                    Ok(copied)
+                }
+                Err(e) => Err(e),
+            }
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// 校验新建/重命名输入框里键入的名字是不是"单一正常路径分量"——不含
 /// `/`、不是 `.`/`..`、非空。名字最终会被 `parent_dir.join(name)`
 /// 直接拼成路径,若允许 `../x`/`foo/bar` 这类多段输入,拼出来的路径会
@@ -515,6 +549,75 @@ mod tests {
 
         let result = paste_item(&dir, true, &nested);
         assert!(result.is_err());
+        assert!(!nested.join("a").exists());
+    }
+
+    #[test]
+    fn move_item_moves_file_into_target_dir() {
+        let d = tempfile::tempdir().unwrap();
+        let src_file = d.path().join("a.txt");
+        std::fs::write(&src_file, "hello").unwrap();
+        let target_dir = d.path().join("target");
+        std::fs::create_dir(&target_dir).unwrap();
+
+        let result = move_item(&src_file, false, &target_dir).unwrap();
+        assert_eq!(result, target_dir.join("a.txt"));
+        assert_eq!(std::fs::read_to_string(&result).unwrap(), "hello");
+        // 源已移除(移动而非复制)
+        assert!(!src_file.exists());
+    }
+
+    #[test]
+    fn move_item_moves_dir_recursively_and_removes_source() {
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("s");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a.txt"), "A").unwrap();
+        std::fs::create_dir(src.join("nested")).unwrap();
+        std::fs::write(src.join("nested/b.txt"), "B").unwrap();
+
+        let target_dir = d.path().join("t");
+        std::fs::create_dir(&target_dir).unwrap();
+        let result = move_item(&src, true, &target_dir).unwrap();
+        assert_eq!(result, target_dir.join("s"));
+        assert_eq!(
+            std::fs::read_to_string(result.join("nested/b.txt")).unwrap(),
+            "B"
+        );
+        // 整个源目录已被移走
+        assert!(!src.exists());
+    }
+
+    #[test]
+    fn move_item_rejects_name_collision_without_touching_anywhere() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("t");
+        std::fs::create_dir(&dir).unwrap();
+        let src_file = d.path().join("a.txt");
+        std::fs::write(&src_file, "hello").unwrap();
+        std::fs::write(dir.join("a.txt"), "existing").unwrap();
+
+        let result = move_item(&src_file, false, &dir);
+        assert!(result.is_err());
+        // 冲突不覆盖目标,也不动源
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "existing"
+        );
+        assert!(src_file.exists());
+    }
+
+    #[test]
+    fn move_item_rejects_moving_dir_into_itself_and_descendant() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("a");
+        let nested = dir.join("nested");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::create_dir(&nested).unwrap();
+
+        assert!(move_item(&dir, true, &dir).is_err());
+        assert!(move_item(&dir, true, &nested).is_err());
+        // 没有递归出 a/nested/a 这样的产物
         assert!(!nested.join("a").exists());
     }
 
