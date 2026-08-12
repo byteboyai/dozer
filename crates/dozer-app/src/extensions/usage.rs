@@ -12,7 +12,7 @@ use crate::theme;
 use dozer_core::protocol::AgentKind;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::{Border, Color, Element, Length, Radians, Rectangle};
-use iced_widget::{MouseArea, column, container, text};
+use iced_widget::{column, container, text};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -402,21 +402,17 @@ pub fn view<'a>(
     // 套用统一 panel head:Lucide `BarChart3` 图标 + 暖金 `#dcc9a3` 的 "用量"
     // 标题 + 1px 分割线;手动刷新按钮放到 head 下方(同 数据库/SSH 面板的
     // 操作按钮布局)。刷新按钮走统一 icon 按钮规范:DIM→GOLD hover,无选中态。
-    let refresh = MouseArea::new(
-        icons::icon_button(
-            icons::IconKind::RefreshCw,
-            crate::theme::icon_size::row(),
-            false,
-            refresh_hover_t,
-            false,
-        )
-        .width(Length::Fixed(crate::theme::geometry::rail_button_size()))
-        .height(Length::Fixed(crate::theme::geometry::rail_button_size()))
-        .on_press(Message::Refresh),
-    )
-    .interaction(iced_widget::core::mouse::Interaction::Pointer)
-    .on_enter(Message::Hover(true))
-    .on_exit(Message::Hover(false));
+    let refresh = icons::icon_button_entry(
+        icons::IconKind::RefreshCw,
+        crate::theme::icon_size::row(),
+        false,
+        refresh_hover_t,
+        false,
+        crate::theme::geometry::rail_button_size(),
+        true,
+        Message::Refresh,
+        Message::Hover,
+    );
 
     let mut content = column![home_panel_head(icons::IconKind::BarChart3, "用量"), refresh]
         .spacing(12)

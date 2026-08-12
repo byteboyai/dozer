@@ -284,11 +284,15 @@ pub fn icon_button<'a, Message: Clone + 'a>(
 /// 圆角方底,图标恒为 GOLD 或随 hover 从 DIM 平滑过渡到 GOLD,`active` 时
 /// 加 1px 金框(未选中无边框),方形命中区取 `rail_button_size()`——迁移
 /// rail 的 11 个按钮外观与迁移前完全一致(见实现计划 2026-08-12)。
+#[allow(clippy::too_many_arguments)]
 pub fn icon_button_entry<'a, M: Clone + 'a>(
     kind: IconKind,
     size: f32,
     active: bool,
     hover_t: f32,
+    card: bool,
+    button_size: f32,
+    interactive: bool,
     on_select: M,
     on_hover: impl Fn(bool) -> M + 'a,
 ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
@@ -312,15 +316,20 @@ pub fn icon_button_entry<'a, M: Clone + 'a>(
         width: 1.0,
         radius: radius.into(),
     };
-    let btn = button(inner)
-        .width(Length::Fixed(crate::theme::geometry::rail_button_size()))
-        .height(Length::Fixed(crate::theme::geometry::rail_button_size()))
+    let mut btn = button(inner)
+        .width(Length::Fixed(button_size))
+        .height(Length::Fixed(button_size))
         .padding(0)
         .style(move |_t: &iced_widget::Theme, _status: button::Status| {
-            // 圆角正方形背景常驻(`CARD`);金色外框只在选中态出现,hover
-            // 不放金框——所以样式完全由 `active` 决定,与交互态无关。
+            // 圆角正方形背景常驻(`card` 为真时);金色外框只在选中态出现,
+            // hover 不放金框——所以样式完全由 `active`/`card` 决定,与
+            // 交互态无关。
             button::Style {
-                background: Some(crate::theme::color::CARD.into()),
+                background: if card {
+                    Some(crate::theme::color::CARD.into())
+                } else {
+                    None
+                },
                 border: Border {
                     color: if active {
                         crate::theme::color::GOLD
@@ -331,8 +340,13 @@ pub fn icon_button_entry<'a, M: Clone + 'a>(
                 },
                 ..button::Style::default()
             }
-        })
-        .on_press(on_select);
+        });
+    // `interactive` 为假时不挂 `on_press`——收藏星标按钮在没有 URL 时应该
+    // 不可点(2026-08-12 全量推广时发现,`browser.rs` 的星标按钮此前用的
+    // 是"条件挂载 on_press"这个手法,不能无条件套用)。
+    if interactive {
+        btn = btn.on_press(on_select);
+    }
 
     MouseArea::new(btn)
         .interaction(mouse::Interaction::Pointer)

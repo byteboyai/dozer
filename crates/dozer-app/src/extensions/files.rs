@@ -763,27 +763,17 @@ pub fn view<'a>(
         search_active,
     );
     let box_len = crate::theme::icon_size::row() + 12.0;
-    let search_button = MouseArea::new(
-        icons::icon_button(
-            icons::IconKind::FolderSearch,
-            crate::theme::icon_size::row(),
-            false,
-            search_hover_t,
-            true,
-        )
-        .width(Length::Fixed(box_len))
-        .height(Length::Fixed(box_len))
-        .on_press(Message::SearchSubmit),
-    )
-    .interaction(iced_widget::core::mouse::Interaction::Pointer)
-    .on_enter(Message::ToolbarHover(
-        FilesToolbarTarget::SearchSubmit,
-        true,
-    ))
-    .on_exit(Message::ToolbarHover(
-        FilesToolbarTarget::SearchSubmit,
+    let search_button = icons::icon_button_entry(
+        icons::IconKind::FolderSearch,
+        crate::theme::icon_size::row(),
         false,
-    ));
+        search_hover_t,
+        true,
+        box_len,
+        true,
+        Message::SearchSubmit,
+        |hovered| Message::ToolbarHover(FilesToolbarTarget::SearchSubmit, hovered),
+    );
 
     // "显示/隐藏点文件"按钮:切换后 `ToggleDotfiles` 调
     // `set_show_dotfiles` 重读树。图标反映当前口径——正显示(`eye`)时点它
@@ -794,25 +784,21 @@ pub fn view<'a>(
         .as_ref()
         .map(|t| t.dotfiles_shown())
         .unwrap_or(true);
-    let dotfiles_button = MouseArea::new(
-        icons::icon_button(
-            if dotfiles_shown {
-                icons::IconKind::Eye
-            } else {
-                icons::IconKind::EyeOff
-            },
-            crate::theme::icon_size::row(),
-            false,
-            dotfiles_hover_t,
-            true,
-        )
-        .width(Length::Fixed(box_len))
-        .height(Length::Fixed(box_len))
-        .on_press(Message::ToggleDotfiles),
-    )
-    .interaction(iced_widget::core::mouse::Interaction::Pointer)
-    .on_enter(Message::ToolbarHover(FilesToolbarTarget::Dotfiles, true))
-    .on_exit(Message::ToolbarHover(FilesToolbarTarget::Dotfiles, false));
+    let dotfiles_button = icons::icon_button_entry(
+        if dotfiles_shown {
+            icons::IconKind::Eye
+        } else {
+            icons::IconKind::EyeOff
+        },
+        crate::theme::icon_size::row(),
+        false,
+        dotfiles_hover_t,
+        true,
+        box_len,
+        true,
+        Message::ToggleDotfiles,
+        |hovered| Message::ToolbarHover(FilesToolbarTarget::Dotfiles, hovered),
+    );
     header = header.push(
         row![search_box, search_button, dotfiles_button]
             .spacing(6)
@@ -1103,38 +1089,28 @@ fn git_footer_bar(
         } else {
             theme::color::CREAM
         };
-        let switch = MouseArea::new(
-            icons::icon_button(
-                if ws_state.branch_picker_open {
-                    icons::IconKind::ChevronUp
-                } else {
-                    icons::IconKind::ChevronDown
-                },
-                crate::theme::icon_size::row(),
-                false,
-                branch_hover_t,
-                false,
-            )
-            .width(Length::Fixed(box_len))
-            .height(Length::Fixed(box_len))
-            .on_press(Message::BranchPickerOpen),
-        )
-        .interaction(iced_widget::core::mouse::Interaction::Pointer)
-        .on_enter(Message::ToolbarHover(
-            FilesToolbarTarget::BranchSwitch,
-            true,
-        ))
-        .on_exit(Message::ToolbarHover(
-            FilesToolbarTarget::BranchSwitch,
+        let switch = icons::icon_button_entry(
+            if ws_state.branch_picker_open {
+                icons::IconKind::ChevronUp
+            } else {
+                icons::IconKind::ChevronDown
+            },
+            crate::theme::icon_size::row(),
             false,
-        ));
+            branch_hover_t,
+            false,
+            box_len,
+            true,
+            Message::BranchPickerOpen,
+            |hovered| Message::ToolbarHover(FilesToolbarTarget::BranchSwitch, hovered),
+        );
         (
             icons::IconKind::FolderGit2,
             text(branch_name)
                 .size(theme::font::label())
                 .color(label_color)
                 .into(),
-            Some(switch.into()),
+            Some(switch),
         )
     } else {
         // 无 git 仓库:提示未受 git 保护 + 新建仓库按钮。
