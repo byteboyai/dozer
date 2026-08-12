@@ -3100,12 +3100,13 @@ mod tests {
         );
         assert!(ws.edit_session.as_ref().unwrap().error.is_none());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "!hi");
-        let specs = ws.preview.desired_webviews();
-        let spec = specs.iter().find(|s| s.id == tab_id).unwrap();
+        // `.txt` 是白名单扩展名,原生 tab。保存后它不进 wry 期望清单(原生
+        // tab 靠 `bump_reload` 读盘重建 editor,而非 reload nonce——见
+        // preview.rs 的 `bump_reload`,这套原生刷新语义在 Task 5 的
+        // `preview_edit_save` 里继续验证)。
         assert!(
-            spec.url.contains("&_r=1"),
-            "保存后应推进 reload nonce: {}",
-            spec.url
+            !ws.preview.desired_webviews().iter().any(|s| s.id == tab_id),
+            "原生 tab 移出 wry 期望清单"
         );
     }
 

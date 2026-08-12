@@ -10,7 +10,6 @@ use std::path::PathBuf;
 use crate::theme;
 
 /// 一个预览 tab。
-#[derive(Debug, Clone, PartialEq)]
 pub struct PreviewTab {
     pub id: usize,
     pub kind: TabKind,
@@ -19,6 +18,23 @@ pub struct PreviewTab {
     /// 重新 `load_url`(同 URL 不会重载,flyfish 的 WKWebView 会一直显示
     /// 保存前的旧内容)。
     pub reload_nonce: u64,
+    /// 仅白名单扩展名(`is_editable_extension`)的文件 tab 有值。非空即代表这个
+    /// tab 走原生渲染路径,`desired_webviews()` 据此把它从 wry 期望清单里排除。
+    /// `CodeEditor` 没有实现 `Clone`/`PartialEq`,这也是 `PreviewTab` 摘掉这两个
+    /// derive 的原因(见下方手写的 `Debug`)。
+    pub editor: Option<iced_code_editor::CodeEditor>,
+}
+
+impl std::fmt::Debug for PreviewTab {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreviewTab")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .field("title", &self.title)
+            .field("reload_nonce", &self.reload_nonce)
+            .field("editor", &self.editor.is_some())
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -65,6 +81,29 @@ fn flyfish_url(path: &std::path::Path) -> String {
         u.push_str("&ln=1");
     }
     u
+}
+
+/// 读盘并按白名单扩展名构造一个只读 `CodeEditor`。内容不是合法 UTF-8 时降级
+/// 用 lossy 转换(不当错误);其余读取失败(不存在/权限不够等)原样透传
+/// `std::io::Error`,调用方(`push_tab`/`bump_reload`)按现有"打开失败"路径
+/// 处理,不在这里新增错误类型。
+fn read_and_build_native_editor(path: &std::path::Path) -> std::io::Result<iced_code_editor::CodeEditor> {
+    let text = std::fs::read_to_string(path).or_else(|e| {
+        // 白名单扩展名但内容不是合法 UTF-8:降级用 lossy 转换,不当错误处理
+        // (多数文本查看器的通行做法,见设计文档"错误处理"一节)。
+        if e.kind() == std::io::ErrorKind::InvalidData {
+            std::fs::read(path).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        } else {
+            Err(e)
+        }
+    })?;
+    let mut editor =
+        iced_code_editor::CodeEditor::new(&text, &extension_to_syntax(path)).with_read_only(true);
+    editor.set_theme(dozer_editor_style());
+    editor.set_syntax_theme(dozer_syntax_theme());
+    editor.set_font(crate::fonts::code_font());
+    editor.set_font_size(theme::font::body() as f32, false);
+    Ok(editor)
 }
 
 /// "编辑"按钮的显示范围:纯扩展名白名单,不做内容嗅探(YAGNI,见设计文档
@@ -138,19 +177,30 @@ impl PreviewPane {
     fn push_tab(&mut self, kind: TabKind, title: String) -> usize {
         let id = self.next_id;
         self.next_id += 1;
+        let editor = match &kind {
+            TabKind::File(path) if is_editable_extension(path) => {
+                read_and_build_native_editor(path).ok()
+            }
+            _ => None,
+        };
         self.tabs.push(PreviewTab {
             id,
             kind,
             title,
             reload_nonce: 0,
+            editor,
         });
         self.active = self.tabs.len() - 1;
         id
     }
 
     /// 当前激活 tab 若是文件(webview)则返回其 id(=webview 池的 key)。
+    /// 原生渲染 tab(有 `editor`)返回 `None`——它不进 webview 池。
     pub fn active_webview_id(&self) -> Option<usize> {
-        self.tabs.get(self.active).map(|t| t.id)
+        self.tabs
+            .get(self.active)
+            .filter(|t| t.editor.is_none())
+            .map(|t| t.id)
     }
     pub fn select(&mut self, idx: usize) {
         if idx < self.tabs.len() {
@@ -195,6 +245,7 @@ impl PreviewPane {
         self.tabs
             .iter()
             .enumerate()
+            .filter(|(_, tab)| tab.editor.is_none())
             .map(|(idx, tab)| {
                 let TabKind::File(path) = &tab.kind;
                 let mut u = flyfish_url(path);
@@ -208,6 +259,16 @@ impl PreviewPane {
                 }
             })
             .collect()
+    }
+
+    /// 按 tab id 取该 tab 的原生 editor 可变引用。tab 不存在或该 tab 走 wry
+    /// 路径(没有 editor)都返回 `None`。main.rs 的 `Message::PreviewEditorEvent`
+    /// 桥接器用它把 `iced_code_editor::Message` 转发给正确的 tab。
+    pub fn editor_mut(&mut self, tab_id: usize) -> Option<&mut iced_code_editor::CodeEditor> {
+        self.tabs
+            .iter_mut()
+            .find(|t| t.id == tab_id)
+            .and_then(|t| t.editor.as_mut())
     }
 
     /// 编辑保存后调用:按 `PreviewTab.id` 找到对应 tab,推进它的 reload
@@ -405,6 +466,46 @@ pub(crate) fn extension_to_syntax(path: &std::path::Path) -> String {
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn open_path_builds_native_editor_for_whitelisted_extension_only() {
+        let dir = std::env::temp_dir();
+        let rs_path = dir.join(format!("preview_native_test_{}.rs", std::process::id()));
+        let png_path = dir.join(format!("preview_native_test_{}.png", std::process::id()));
+        std::fs::write(&rs_path, "fn main() {}").unwrap();
+        std::fs::write(&png_path, [0u8; 4]).unwrap();
+
+        let mut p = PreviewPane::default();
+        p.open_path(rs_path.clone());
+        p.open_path(png_path.clone());
+
+        assert!(
+            p.tabs()[0].editor.is_some(),
+            ".rs 扩展名应构造原生 editor"
+        );
+        assert!(
+            p.tabs()[1].editor.is_none(),
+            ".png 扩展名不应构造原生 editor,继续走 wry"
+        );
+
+        let specs = p.desired_webviews();
+        assert_eq!(
+            specs.len(),
+            1,
+            "原生 tab 不应出现在 wry 期望清单里,只剩 .png 那个"
+        );
+        assert_eq!(
+            specs[0].url,
+            format!(
+                "dozer://flyfish/host.html?p={}",
+                encode_component(&png_path.to_string_lossy())
+            ),
+            "剩下的唯一一条 wry 期望清单条目应该是 .png 那个,URL 编码规则同 flyfish_url"
+        );
+
+        std::fs::remove_file(&rs_path).ok();
+        std::fs::remove_file(&png_path).ok();
+    }
 
     #[test]
     fn open_select_close_tabs() {
