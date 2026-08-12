@@ -1105,23 +1105,17 @@ fn star_button(
         .unwrap_or(false);
     // 统一 icon 按钮规范:未收藏静止 DIM、hover 过渡到 GOLD;已收藏恒金
     // (active=true)。hover 动画走浏览器自己的 `State` 进度机(哨兵键)。
-    let mut btn = icons::icon_button(
+    icons::icon_button_entry(
         icons::IconKind::Star,
         icon_size::row(),
         starred,
         state.star_hover(),
         false,
+        theme::geometry::tab_button_size(),
+        url.is_some(),
+        Message::StarClick,
+        |hovered| Message::Hover(STAR_HOVER_KEY, false, hovered),
     )
-    .width(Length::Fixed(theme::geometry::tab_button_size()))
-    .height(Length::Fixed(theme::geometry::tab_button_size()));
-    if url.is_some() {
-        btn = btn.on_press(Message::StarClick);
-    }
-    MouseArea::new(btn)
-        .interaction(iced_widget::core::mouse::Interaction::Pointer)
-        .on_enter(Message::Hover(STAR_HOVER_KEY, false, true))
-        .on_exit(Message::Hover(STAR_HOVER_KEY, false, false))
-        .into()
 }
 
 /// tab 栏"收藏夹"下拉面板触发按钮,颜色恒定(不像星标那样带收藏状态)。
@@ -1424,20 +1418,15 @@ pub fn view(
 fn bookmarks_toggle_button(
     state: &State,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let btn = icons::icon_button(
+    icons::icon_button_entry(
         icons::IconKind::Bookmark,
         icon_size::row(),
         false,
         state.bookmark_hover(),
         false,
+        theme::geometry::tab_button_size(),
+        true,
+        Message::BookmarksToggle,
+        |hovered| Message::Hover(STAR_HOVER_KEY, true, hovered),
     )
-    .on_press(Message::BookmarksToggle)
-    .width(Length::Fixed(theme::geometry::tab_button_size()))
-    .height(Length::Fixed(theme::geometry::tab_button_size()));
-
-    MouseArea::new(btn)
-        .interaction(iced_widget::core::mouse::Interaction::Pointer)
-        .on_enter(Message::Hover(STAR_HOVER_KEY, true, true))
-        .on_exit(Message::Hover(STAR_HOVER_KEY, true, false))
-        .into()
 }

@@ -8,7 +8,7 @@
 
 use crate::icons;
 use iced_widget::core::{Border, Element, Length};
-use iced_widget::{MouseArea, button, column, container, row, scrollable, text, text_input};
+use iced_widget::{button, column, container, row, scrollable, text, text_input};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -1484,27 +1484,17 @@ fn schema_tree_view<'a>(
     schema_back_hover_t: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let box_len = crate::theme::icon_size::row() + 12.0;
-    let back_button = MouseArea::new(
-        icons::icon_button(
-            icons::IconKind::ChevronLeft,
-            crate::theme::icon_size::row(),
-            false,
-            schema_back_hover_t,
-            false,
-        )
-        .width(Length::Fixed(box_len))
-        .height(Length::Fixed(box_len))
-        .on_press(Message::SchemaBack),
-    )
-    .interaction(iced_widget::core::mouse::Interaction::Pointer)
-    .on_enter(Message::ToolbarHover(
-        DatabaseToolbarTarget::SchemaBack,
-        true,
-    ))
-    .on_exit(Message::ToolbarHover(
-        DatabaseToolbarTarget::SchemaBack,
+    let back_button = icons::icon_button_entry(
+        icons::IconKind::ChevronLeft,
+        crate::theme::icon_size::row(),
         false,
-    ));
+        schema_back_hover_t,
+        false,
+        box_len,
+        true,
+        Message::SchemaBack,
+        |hovered| Message::ToolbarHover(DatabaseToolbarTarget::SchemaBack, hovered),
+    );
 
     let header = row![
         back_button,
