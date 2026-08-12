@@ -1263,22 +1263,25 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             }
         }
 
-        /// 每轮事件处理完后决定下次唤醒时机：有 tab 在工作就排下一拍闪烁
-        /// 唤醒，否则回到 `Wait` 省电（不再空转重绘）。
+        /// 每轮事件处理完后决定下次唤醒时机:三个周期性关注点(状态点
+        /// 闪烁/按钮悬停动画/Todo 面板轮询)各自的"是否需要唤醒"+"需要
+        /// 多快"列在一起,取激活项里最小的 interval——新增第 4 个周期性
+        /// 关注点只需要在这个列表里加一行,不用碰其它分支(2026-08-12
+        /// 解耦重构:每个关注点自己的函数各自按自己的 `last_*_at` 限速,
+        /// 这里只负责"下次什么时候唤醒",不负责"唤醒后该不该真的做事")。
         fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
             if let Self::Ready { app, .. } = self {
-                if app.any_blinking() || app.any_hover_anim_active() || app.todo_panel_visible() {
-                    let interval = if app.any_hover_anim_active() {
-                        HOVER_ANIM_INTERVAL
-                    } else {
-                        // Todo 面板可见时按固定的 TODO_POLL_INTERVAL 节奏轮询,
-                        // 兼顾响应与省电;不需要像悬停动画那样切到更密的帧率。
-                        if app.todo_panel_visible() && !app.any_blinking() {
-                            TODO_POLL_INTERVAL
-                        } else {
-                            BLINK_INTERVAL
-                        }
-                    };
+                let wakes: [(bool, Duration); 3] = [
+                    (app.any_hover_anim_active(), HOVER_ANIM_INTERVAL),
+                    (app.any_blinking(), BLINK_INTERVAL),
+                    (app.todo_panel_visible(), TODO_POLL_INTERVAL),
+                ];
+                if let Some(interval) = wakes
+                    .into_iter()
+                    .filter(|(active, _)| *active)
+                    .map(|(_, interval)| interval)
+                    .min()
+                {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(
                         std::time::Instant::now() + interval,
                     ));
