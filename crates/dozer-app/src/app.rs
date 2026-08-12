@@ -4937,78 +4937,69 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
     let content = column![
         // Project 信息面板入口：项目名 / git 分支+脏标 / 验收次数 / 可编辑目标。
         // 置顶(用户 2026-08-11 指定)。
-        MouseArea::new(rail_icon_button(
+        icons::icon_button_entry(
             icons::IconKind::Briefcase,
+            crate::theme::icon_size::rail(),
             app.left_view == LeftView::Project && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftProject)),
             Message::LeftIconSelect(LeftView::Project),
-        ))
-        .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftProject), true))
-        .on_exit(Message::Hover(
-            HoverId::Rail(RailButton::LeftProject),
-            false
-        )),
+            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftProject), hovered),
+        ),
         // Todo 面板入口：`.dozer/todo.md` 任务列表。第二顺位(用户 2026-08-11
         // 指定)。
-        MouseArea::new(rail_icon_button(
+        icons::icon_button_entry(
             icons::IconKind::ListTodo,
+            crate::theme::icon_size::rail(),
             app.left_view == LeftView::Todo && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftTodo)),
             Message::LeftIconSelect(LeftView::Todo),
-        ))
-        .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftTodo), true))
-        .on_exit(Message::Hover(HoverId::Rail(RailButton::LeftTodo), false)),
+            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftTodo), hovered),
+        ),
         // 文件列表入口：项目树 + 文件预览配对。
-        MouseArea::new(rail_icon_button(
+        icons::icon_button_entry(
             icons::IconKind::FolderTree,
+            crate::theme::icon_size::rail(),
             app.left_view == LeftView::Files && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftFiles)),
             Message::LeftIconSelect(LeftView::Files),
-        ))
-        .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftFiles), true))
-        .on_exit(Message::Hover(HoverId::Rail(RailButton::LeftFiles), false)),
+            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftFiles), hovered),
+        ),
         // spike(2026-08-06):Git 提交图入口,验证 gleisbau 库可行性用。
-        MouseArea::new(rail_icon_button(
+        icons::icon_button_entry(
             icons::IconKind::GitGraph,
+            crate::theme::icon_size::rail(),
             app.left_view == LeftView::GitLog && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftGit)),
             Message::LeftIconSelect(LeftView::GitLog),
-        ))
-        .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftGit), true))
-        .on_exit(Message::Hover(HoverId::Rail(RailButton::LeftGit), false)),
+            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftGit), hovered),
+        ),
         // 数据库面板入口:数据源管理 + 连接测试。
-        MouseArea::new(rail_icon_button(
+        icons::icon_button_entry(
             icons::IconKind::Database,
+            crate::theme::icon_size::rail(),
             app.left_view == LeftView::Database && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftDatabase)),
             Message::LeftIconSelect(LeftView::Database),
-        ))
-        .on_enter(Message::Hover(
-            HoverId::Rail(RailButton::LeftDatabase),
-            true
-        ))
-        .on_exit(Message::Hover(
-            HoverId::Rail(RailButton::LeftDatabase),
-            false
-        )),
+            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftDatabase), hovered),
+        ),
         // SSH 主机面板入口。
-        MouseArea::new(rail_icon_button(
+        icons::icon_button_entry(
             icons::IconKind::Server,
+            crate::theme::icon_size::rail(),
             app.left_view == LeftView::Ssh && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftSsh)),
             Message::LeftIconSelect(LeftView::Ssh),
-        ))
-        .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftSsh), true))
-        .on_exit(Message::Hover(HoverId::Rail(RailButton::LeftSsh), false)),
+            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftSsh), hovered),
+        ),
         // 浏览器面板入口:左图标栏最底部 Globe 按钮(2026-08-11 从右栏移回)。
-        MouseArea::new(rail_icon_button(
+        icons::icon_button_entry(
             icons::IconKind::Globe,
+            crate::theme::icon_size::rail(),
             app.left_view == LeftView::Web && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftWeb)),
             Message::LeftIconSelect(LeftView::Web),
-        ))
-        .on_enter(Message::Hover(HoverId::Rail(RailButton::LeftWeb), true))
-        .on_exit(Message::Hover(HoverId::Rail(RailButton::LeftWeb), false)),
+            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftWeb), hovered),
+        ),
     ]
     .spacing(region.gap)
     .padding(region.padding);
@@ -5030,36 +5021,30 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
     // 同 `left_icon_rail`:视觉"选中"需右面板区展开。
     let right_open = !app.right_collapsed;
     let content = column![
-        MouseArea::new(rail_icon_button(
+        icons::icon_button_entry(
             icons::IconKind::Brain,
+            crate::theme::icon_size::rail(),
             app.right_view == RightView::Agent && right_open,
             app.hover_progress(HoverId::Rail(RailButton::RightAgent)),
             Message::RightIconSelect(RightView::Agent),
-        ))
-        .on_enter(Message::Hover(HoverId::Rail(RailButton::RightAgent), true))
-        .on_exit(Message::Hover(HoverId::Rail(RailButton::RightAgent), false)),
-        MouseArea::new(rail_icon_button(
+            |hovered| Message::Hover(HoverId::Rail(RailButton::RightAgent), hovered),
+        ),
+        icons::icon_button_entry(
             icons::IconKind::BotMessageSquare,
+            crate::theme::icon_size::rail(),
             app.right_view == RightView::Conversations && right_open,
             app.hover_progress(HoverId::Rail(RailButton::RightConversations)),
             Message::RightIconSelect(RightView::Conversations),
-        ))
-        .on_enter(Message::Hover(
-            HoverId::Rail(RailButton::RightConversations),
-            true
-        ))
-        .on_exit(Message::Hover(
-            HoverId::Rail(RailButton::RightConversations),
-            false
-        )),
-        MouseArea::new(rail_icon_button(
+            |hovered| Message::Hover(HoverId::Rail(RailButton::RightConversations), hovered),
+        ),
+        icons::icon_button_entry(
             icons::IconKind::BarChart3,
+            crate::theme::icon_size::rail(),
             app.right_view == RightView::Usage && right_open,
             app.hover_progress(HoverId::Rail(RailButton::RightUsage)),
             Message::RightIconSelect(RightView::Usage),
-        ))
-        .on_enter(Message::Hover(HoverId::Rail(RailButton::RightUsage), true))
-        .on_exit(Message::Hover(HoverId::Rail(RailButton::RightUsage), false)),
+            |hovered| Message::Hover(HoverId::Rail(RailButton::RightUsage), hovered),
+        ),
         {
             let pending = app
                 .active_workspace()
@@ -5067,21 +5052,14 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
                 .map(|t| t.delivery_pending)
                 .unwrap_or(false);
             let base: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-                MouseArea::new(rail_icon_button(
+                icons::icon_button_entry(
                     icons::IconKind::BadgeCheck,
+                    crate::theme::icon_size::rail(),
                     app.right_view == RightView::Acceptance && right_open,
                     app.hover_progress(HoverId::Rail(RailButton::RightAcceptance)),
                     Message::RightIconSelect(RightView::Acceptance),
-                ))
-                .on_enter(Message::Hover(
-                    HoverId::Rail(RailButton::RightAcceptance),
-                    true,
-                ))
-                .on_exit(Message::Hover(
-                    HoverId::Rail(RailButton::RightAcceptance),
-                    false,
-                ))
-                .into();
+                    |hovered| Message::Hover(HoverId::Rail(RailButton::RightAcceptance), hovered),
+                );
             if pending {
                 let badge: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
                     stack![
