@@ -44,7 +44,7 @@ use crate::workspace::{
     tab_title, terminal_status_bar,
 };
 use dozer_client::Client;
-use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
+use dozer_core::protocol::{AgentKind, AgentState, BookmarkInfo, ProjectInfo, SessionInfo};
 use iced_widget::core::border::Radius;
 use iced_widget::core::font::Weight;
 use iced_widget::core::mouse;
@@ -3038,70 +3038,16 @@ impl App {
                 self.preview_tab_menu = None;
             }
             Message::Browser(browser::Message::BookmarksLoaded(pid, bookmarks)) => {
-                self.with_project(pid, move |ws, io| {
-                    let handle = io.handle.clone();
-                    let client = io.client.clone();
-                    let proxy = io.proxy.clone();
-                    let emit = move |m| {
-                        let _ = proxy.send_event(Message::Browser(m));
-                    };
-                    browser::update(
-                        &mut ws.browser,
-                        browser::Message::BookmarksLoaded(pid, bookmarks),
-                        Some(pid),
-                        &client,
-                        &handle,
-                        emit,
-                    );
-                });
+                self.browser_bookmarks_loaded(pid, bookmarks)
             }
             Message::Browser(browser::Message::BookmarksMutated(pid, res)) => {
-                self.with_project(pid, move |ws, io| {
-                    let handle = io.handle.clone();
-                    let client = io.client.clone();
-                    let proxy = io.proxy.clone();
-                    let emit = move |m| {
-                        let _ = proxy.send_event(Message::Browser(m));
-                    };
-                    browser::update(
-                        &mut ws.browser,
-                        browser::Message::BookmarksMutated(pid, res),
-                        Some(pid),
-                        &client,
-                        &handle,
-                        emit,
-                    );
-                });
+                self.browser_bookmarks_mutated(pid, res)
             }
             Message::Browser(browser::Message::DragHover(idx)) => {
                 // 浏览器 tab 脱的换位:光标扫过 `idx` 页签 → 走共同换位逻辑。
                 self.tab_drag_move(TabGroup::Browser, idx);
             }
-            Message::Browser(msg) => {
-                // 按下浏览器页签＝选中＋准备被拖走(`SelectTab` 在
-                // `browser::update` 里真正选中为 `active`,这里按它记下拖起源)。
-                let was_select = matches!(msg, browser::Message::SelectTab(_));
-                self.with_focused_project(|ws, io| {
-                    let project_id = ws.project.as_ref().map(|p| p.id);
-                    let client = io.client.clone();
-                    let handle = io.handle.clone();
-                    let proxy = io.proxy.clone();
-                    let emit = move |m| {
-                        let _ = proxy.send_event(Message::Browser(m));
-                    };
-                    browser::update(&mut ws.browser, msg, project_id, &client, &handle, emit);
-                });
-                if was_select
-                    && let Some(ws) = self.active_workspace()
-                    && ws.browser.active_tab_idx() < ws.browser.tab_count()
-                {
-                    let active = ws.browser.active_tab_idx();
-                    self.tab_drag = Some(TabDrag {
-                        group: TabGroup::Browser,
-                        source: active,
-                    });
-                }
-            }
+            Message::Browser(msg) => self.browser_message(msg),
             Message::ProjectSelect(id) => self.project_select(id),
             Message::ProjectTabPickFolder => {} // 副作用在 main.rs(rfd 文件夹选择)
             Message::ProjectTabOpen(path) => {
@@ -3927,6 +3873,70 @@ impl App {
         };
         let project_path = std::path::PathBuf::from(&project.path);
         todo::update(&mut ws.todo, app_todo, msg, project_id, &project_path);
+    }
+
+    fn browser_bookmarks_loaded(&mut self, pid: i64, bookmarks: Vec<BookmarkInfo>) {
+        self.with_project(pid, move |ws, io| {
+            let handle = io.handle.clone();
+            let client = io.client.clone();
+            let proxy = io.proxy.clone();
+            let emit = move |m| {
+                let _ = proxy.send_event(Message::Browser(m));
+            };
+            browser::update(
+                &mut ws.browser,
+                browser::Message::BookmarksLoaded(pid, bookmarks),
+                Some(pid),
+                &client,
+                &handle,
+                emit,
+            );
+        });
+    }
+
+    fn browser_bookmarks_mutated(&mut self, pid: i64, res: Result<(), String>) {
+        self.with_project(pid, move |ws, io| {
+            let handle = io.handle.clone();
+            let client = io.client.clone();
+            let proxy = io.proxy.clone();
+            let emit = move |m| {
+                let _ = proxy.send_event(Message::Browser(m));
+            };
+            browser::update(
+                &mut ws.browser,
+                browser::Message::BookmarksMutated(pid, res),
+                Some(pid),
+                &client,
+                &handle,
+                emit,
+            );
+        });
+    }
+
+    fn browser_message(&mut self, msg: browser::Message) {
+        // 按下浏览器页签＝选中＋准备被拖走(`SelectTab` 在
+        // `browser::update` 里真正选中为 `active`,这里按它记下拖起源)。
+        let was_select = matches!(msg, browser::Message::SelectTab(_));
+        self.with_focused_project(|ws, io| {
+            let project_id = ws.project.as_ref().map(|p| p.id);
+            let client = io.client.clone();
+            let handle = io.handle.clone();
+            let proxy = io.proxy.clone();
+            let emit = move |m| {
+                let _ = proxy.send_event(Message::Browser(m));
+            };
+            browser::update(&mut ws.browser, msg, project_id, &client, &handle, emit);
+        });
+        if was_select
+            && let Some(ws) = self.active_workspace()
+            && ws.browser.active_tab_idx() < ws.browser.tab_count()
+        {
+            let active = ws.browser.active_tab_idx();
+            self.tab_drag = Some(TabDrag {
+                group: TabGroup::Browser,
+                source: active,
+            });
+        }
     }
 
     /// 文件预览 tab 右键菜单浮层:含"编辑"(仅可编辑文本文件)与"关闭"两项。
