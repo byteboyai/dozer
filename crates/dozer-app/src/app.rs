@@ -1731,7 +1731,18 @@ impl App {
                 let id = self.project_order.remove(from);
                 self.project_order.insert(to, id);
                 self.tab_drag = Some(TabDrag { group, source: to });
-                // 项目页签 hover 是 id-keyed,无需重排。
+                // 项目页签 hover 存的是 id-keyed 键(`HoverId::ProjectTabItem`/
+                // `ProjectTabClose`),值本身不会因换位错配到别的项目——但换位
+                // 让页签在**树里的位置**跟着挪，`MouseArea` 自己那份按位置续存
+                // 的悬停内部状态（`is_hovered` 等）跟这份 id-keyed 记录对不上
+                // 了：原来悬停中的那个 id，它的 `MouseArea` 实例已经换到别的
+                // 树位置，不会再收到 `on_exit`，`hover_anims` 里的值就砸在原地
+                // 出不来，页签松手后一直亮着金色胶囊（换位越频繁越容易撞上）。
+                // 没有更细粒度的续存机制（`MouseArea` 不支持 `.id()`），换位
+                // 时索性把两类项目页签 hover 全部清零最省事——真实悬停哪个,
+                // 下一帧鼠标移动会立刻重新点亮,观感上无感知。
+                self.hover_anims
+                    .retain(|k, _| !matches!(k, HoverId::ProjectTabItem(_) | HoverId::ProjectTabClose(_)));
             }
             TabGroup::Terminal => {
                 if from == to {
@@ -4705,7 +4716,12 @@ fn project_tab_item<'a>(
     let tab_row = container(stack![capsule_layer, select_layer, close_layer])
         .width(Length::Fill)
         .height(Length::Fill)
-        .padding([0, 8]);
+        .padding(Padding {
+            top: 0.0,
+            right: 8.0,
+            bottom: 0.0,
+            left: 12.0,
+        });
 
     // 激活态:实底背景(左上/右上圆角) + 底部 1px 强调线
     // (`#dcc9a3` = `TAB_ACTIVE_BORDER`),不要外边框;未激活态:无背景、无边框
@@ -5741,7 +5757,7 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
     let hover = hover_t.max(close_hover_t).clamp(0.0, 1.0);
     let hovered = hover > 0.001;
     // 标题区域最大宽 = 整 tab 上限 - 左右 padding - 与关闭按钮的间距 - 关闭按钮。
-    let title_max = PANEL_TAB_MAX_W - 2.0 * PANEL_TAB_PAD_X - 2.0 - close_sz;
+    let title_max = PANEL_TAB_MAX_W - PANEL_TAB_PAD_LEFT - PANEL_TAB_PAD_X - 2.0 - close_sz;
     let title_color = if active {
         theme::color::CREAM
     } else {
@@ -5832,7 +5848,7 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
             top: PANEL_TAB_PAD_Y,
             right: PANEL_TAB_PAD_X,
             bottom: PANEL_TAB_PAD_Y,
-            left: PANEL_TAB_PAD_X,
+            left: PANEL_TAB_PAD_LEFT,
         })
         .width(Length::Shrink)
         .max_width(PANEL_TAB_MAX_W)
@@ -5874,7 +5890,9 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
 /// 截断,正常情况下 tab 宽度随标题适配。导出给 `workspace.rs`/`browser.rs`
 /// 的翻页宽度估算共用,避免各处硬编码 160。
 pub(crate) const PANEL_TAB_MAX_W: f32 = 160.0;
-/// 面板 tab 内边距:横向留白给 hover 胶囊,纵向收紧以缩小高度。
+/// 面板 tab 内边距:横向留白给 hover 胶囊,纵向收紧以缩小高度。左侧单独
+/// 放大(原先与右侧同为 4,标题贴左缘太紧),右侧维持贴近关闭按钮的窄距。
+const PANEL_TAB_PAD_LEFT: f32 = 10.0;
 const PANEL_TAB_PAD_X: f32 = 4.0;
 const PANEL_TAB_PAD_Y: f32 = 1.0;
 
