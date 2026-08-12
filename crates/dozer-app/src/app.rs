@@ -2481,73 +2481,13 @@ impl App {
                     ws.spawn_conversations_refresh(io);
                 });
             }
-            Message::Acceptance(acceptance::Message::Open(tab_id)) => {
-                self.with_focused_project(|ws, io| {
-                    let active_repo = ws.project.as_ref().map(|p| PathBuf::from(&p.path));
-                    let Some(project_id) = ws.project_id() else {
-                        return;
-                    };
-                    let Some(tab) = ws.tab_by_id_mut(tab_id) else {
-                        return;
-                    };
-                    tab.delivery_pending = false;
-                    let cwd = effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
-                    let handle = io.handle.clone();
-                    let proxy = io.proxy.clone();
-                    let emit = move |m| {
-                        let _ = proxy.send_event(Message::Acceptance(m));
-                    };
-                    acceptance::spawn_open(project_id, tab_id, cwd, &handle, emit);
-                });
-            }
-            Message::Acceptance(acceptance::Message::Reject) => {
-                self.with_focused_project(|ws, io| {
-                    let Some(session) = ws.acceptance.session() else {
-                        return;
-                    };
-                    let comment = session.comment().trim().to_string();
-                    let source = session.source_tab_id();
-                    let target = ws.tabs.iter().find(|t| t.tab_id == source);
-                    let Some(tab) = target.filter(|t| t.alive) else {
-                        // 会话已结束,意见无处可注——留住当前 session,不清空,让用户
-                        // 看到错误(现有 `acceptance_reject` 的降级路径)。
-                        ws.acceptance
-                            .set_error("会话已结束,意见无处可注".to_string());
-                        return;
-                    };
-                    let id = tab.info.id.clone();
-                    let client = io.client.clone();
-                    let text_out = format!("[Dozer 验收打回] {comment}\n");
-                    io.handle.spawn(async move {
-                        if let Err(e) = client.write(&id, text_out.as_bytes()).await {
-                            tracing::warn!("打回注回失败: {e}");
-                        }
-                    });
-                    ws.acceptance.clear_session();
-                });
-            }
+            Message::Acceptance(acceptance::Message::Open(tab_id)) => self.acceptance_open(tab_id),
+            Message::Acceptance(acceptance::Message::Reject) => self.acceptance_reject(),
             Message::Acceptance(
                 msg @ (acceptance::Message::Loaded(project_id, ..)
                 | acceptance::Message::DiffLoaded(project_id, ..)
                 | acceptance::Message::Done(project_id, ..)),
-            ) => {
-                // 判断"这次是不是通过成功"要在 `msg` 被 `move` 进闭包之前算好
-                // (用 `&msg` 引用匹配,不消耗它;闭包里 `acceptance::update` 会真正
-                // 拿走 `msg` 的所有权),否则会撞上"用后借用"的编译错误。
-                let is_accept_ok = matches!(&msg, acceptance::Message::Done(_, Ok(_)));
-                self.with_project(project_id, move |ws, io| {
-                    let client = io.client.clone();
-                    let handle = io.handle.clone();
-                    let proxy = io.proxy.clone();
-                    let emit = move |m| {
-                        let _ = proxy.send_event(Message::Acceptance(m));
-                    };
-                    acceptance::update(&mut ws.acceptance, msg, project_id, &client, &handle, emit);
-                    if is_accept_ok {
-                        ws.spawn_acceptance_count_refresh(io);
-                    }
-                });
-            }
+            ) => self.acceptance_result(project_id, msg),
             Message::Acceptance(msg) => {
                 let Some(project_id) = self.active_project_id else {
                     return;
@@ -3910,6 +3850,72 @@ impl App {
                 &handle,
                 emit,
             );
+        });
+    }
+
+    fn acceptance_open(&mut self, tab_id: usize) {
+        self.with_focused_project(|ws, io| {
+            let active_repo = ws.project.as_ref().map(|p| PathBuf::from(&p.path));
+            let Some(project_id) = ws.project_id() else {
+                return;
+            };
+            let Some(tab) = ws.tab_by_id_mut(tab_id) else {
+                return;
+            };
+            tab.delivery_pending = false;
+            let cwd = effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
+            let handle = io.handle.clone();
+            let proxy = io.proxy.clone();
+            let emit = move |m| {
+                let _ = proxy.send_event(Message::Acceptance(m));
+            };
+            acceptance::spawn_open(project_id, tab_id, cwd, &handle, emit);
+        });
+    }
+
+    fn acceptance_reject(&mut self) {
+        self.with_focused_project(|ws, io| {
+            let Some(session) = ws.acceptance.session() else {
+                return;
+            };
+            let comment = session.comment().trim().to_string();
+            let source = session.source_tab_id();
+            let target = ws.tabs.iter().find(|t| t.tab_id == source);
+            let Some(tab) = target.filter(|t| t.alive) else {
+                // 会话已结束,意见无处可注——留住当前 session,不清空,让用户
+                // 看到错误(现有 `acceptance_reject` 的降级路径)。
+                ws.acceptance
+                    .set_error("会话已结束,意见无处可注".to_string());
+                return;
+            };
+            let id = tab.info.id.clone();
+            let client = io.client.clone();
+            let text_out = format!("[Dozer 验收打回] {comment}\n");
+            io.handle.spawn(async move {
+                if let Err(e) = client.write(&id, text_out.as_bytes()).await {
+                    tracing::warn!("打回注回失败: {e}");
+                }
+            });
+            ws.acceptance.clear_session();
+        });
+    }
+
+    fn acceptance_result(&mut self, project_id: i64, msg: acceptance::Message) {
+        // 判断"这次是不是通过成功"要在 `msg` 被 `move` 进闭包之前算好
+        // (用 `&msg` 引用匹配,不消耗它;闭包里 `acceptance::update` 会真正
+        // 拿走 `msg` 的所有权),否则会撞上"用后借用"的编译错误。
+        let is_accept_ok = matches!(&msg, acceptance::Message::Done(_, Ok(_)));
+        self.with_project(project_id, move |ws, io| {
+            let client = io.client.clone();
+            let handle = io.handle.clone();
+            let proxy = io.proxy.clone();
+            let emit = move |m| {
+                let _ = proxy.send_event(Message::Acceptance(m));
+            };
+            acceptance::update(&mut ws.acceptance, msg, project_id, &client, &handle, emit);
+            if is_accept_ok {
+                ws.spawn_acceptance_count_refresh(io);
+            }
         });
     }
 
