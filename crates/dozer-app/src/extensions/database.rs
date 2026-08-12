@@ -1494,6 +1494,7 @@ fn schema_tree_view<'a>(
         true,
         Message::SchemaBack,
         |hovered| Message::ToolbarHover(DatabaseToolbarTarget::SchemaBack, hovered),
+        "返回",
     );
 
     let header = row![

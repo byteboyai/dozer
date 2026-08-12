@@ -5032,6 +5032,7 @@ pub(crate) fn rail_icon_button<'a>(
     active: bool,
     hover_t: f32,
     msg: Message,
+    tooltip: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 图标颜色:选中态恒为金;未选中时 hover 平滑过渡到金(见 `HoverId`/
     // `App::hover_progress`——与光标闪烁同款自驱 redraw 动画)。SVG 颜色
@@ -5055,7 +5056,7 @@ pub(crate) fn rail_icon_button<'a>(
         radius: radius.into(),
     };
 
-    button(inner)
+    let content: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = button(inner)
         .on_press(msg)
         .width(Length::Fixed(crate::theme::geometry::rail_button_size()))
         .height(Length::Fixed(crate::theme::geometry::rail_button_size()))
@@ -5076,7 +5077,8 @@ pub(crate) fn rail_icon_button<'a>(
                 ..button::Style::default()
             }
         })
-        .into()
+        .into();
+    icons::with_tooltip(content, tooltip)
 }
 
 /// 左图标栏:文件列表 / Web 两个图标,点已激活的那个即收起左面板区。
@@ -5099,6 +5101,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
             true,
             Message::LeftIconSelect(LeftView::Project),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftProject), hovered),
+            "项目",
         ),
         // Todo 面板入口：`.dozer/todo.md` 任务列表。第二顺位(用户 2026-08-11
         // 指定)。
@@ -5112,6 +5115,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
             true,
             Message::LeftIconSelect(LeftView::Todo),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftTodo), hovered),
+            "待办",
         ),
         // 文件列表入口：项目树 + 文件预览配对。
         icons::icon_button_entry(
@@ -5124,6 +5128,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
             true,
             Message::LeftIconSelect(LeftView::Files),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftFiles), hovered),
+            "文件",
         ),
         // spike(2026-08-06):Git 提交图入口,验证 gleisbau 库可行性用。
         icons::icon_button_entry(
@@ -5136,6 +5141,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
             true,
             Message::LeftIconSelect(LeftView::GitLog),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftGit), hovered),
+            "Git 提交",
         ),
         // 数据库面板入口:数据源管理 + 连接测试。
         icons::icon_button_entry(
@@ -5148,6 +5154,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
             true,
             Message::LeftIconSelect(LeftView::Database),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftDatabase), hovered),
+            "数据库",
         ),
         // SSH 主机面板入口。
         icons::icon_button_entry(
@@ -5160,6 +5167,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
             true,
             Message::LeftIconSelect(LeftView::Ssh),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftSsh), hovered),
+            "SSH 主机",
         ),
         // 浏览器面板入口:左图标栏最底部 Globe 按钮(2026-08-11 从右栏移回)。
         icons::icon_button_entry(
@@ -5172,6 +5180,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
             true,
             Message::LeftIconSelect(LeftView::Web),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftWeb), hovered),
+            "浏览器",
         ),
     ]
     .spacing(region.gap)
@@ -5204,6 +5213,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
             true,
             Message::RightIconSelect(RightView::Agent),
             |hovered| Message::Hover(HoverId::Rail(RailButton::RightAgent), hovered),
+            "代理",
         ),
         icons::icon_button_entry(
             icons::IconKind::BotMessageSquare,
@@ -5215,6 +5225,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
             true,
             Message::RightIconSelect(RightView::Conversations),
             |hovered| Message::Hover(HoverId::Rail(RailButton::RightConversations), hovered),
+            "对话",
         ),
         icons::icon_button_entry(
             icons::IconKind::BarChart3,
@@ -5226,6 +5237,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
             true,
             Message::RightIconSelect(RightView::Usage),
             |hovered| Message::Hover(HoverId::Rail(RailButton::RightUsage), hovered),
+            "用量",
         ),
         {
             let pending = app
@@ -5244,6 +5256,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
                     true,
                     Message::RightIconSelect(RightView::Acceptance),
                     |hovered| Message::Hover(HoverId::Rail(RailButton::RightAcceptance), hovered),
+                    "验收",
                 );
             if pending {
                 let badge: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =

@@ -8,6 +8,7 @@ use iced_widget::container;
 use iced_widget::core::mouse;
 use iced_widget::core::{Border, Color, Element, Length};
 use iced_widget::svg;
+use iced_widget::{Tooltip, text, tooltip};
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -223,6 +224,7 @@ pub fn icon_button_entry<'a, M: Clone + 'a>(
     interactive: bool,
     on_select: M,
     on_hover: impl Fn(bool) -> M + 'a,
+    tooltip: &'a str,
 ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
     // 图标颜色:选中态恒为金;未选中时 hover 平滑过渡到金(SVG 颜色构建时
     // 定死、不吃 `button::Status`,所以 hover 进度靠 `hover_t` 参数从调用方
@@ -276,10 +278,36 @@ pub fn icon_button_entry<'a, M: Clone + 'a>(
         btn = btn.on_press(on_select);
     }
 
-    MouseArea::new(btn)
+    let content: Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> = MouseArea::new(btn)
         .interaction(mouse::Interaction::Pointer)
         .on_enter(on_hover(true))
         .on_exit(on_hover(false))
+        .into();
+    with_tooltip(content, tooltip)
+}
+
+/// ByteBoy2077 提示气泡:`Tooltip` 包一层,把 `content`(通常是图标按钮)用
+/// 指定 `label` 描述,鼠标悬停一小段延迟后弹出。背景 `CARD` 实底 + `BORDER`
+/// 1px 描边圆角 6、`CREAM` 文字 12px,三角指针对着按钮。`label` 用中文
+/// (项目 UI 面向甲方,中文优先)。
+pub fn with_tooltip<'a, M: Clone + 'a, R: iced_widget::core::text::Renderer + 'a>(
+    content: impl Into<Element<'a, M, iced_widget::Theme, R>> + 'a,
+    label: &'a str,
+) -> Element<'a, M, iced_widget::Theme, R> {
+    let bubble = container(text(label).size(12).color(crate::theme::color::CREAM)).padding([5, 9]);
+    Tooltip::new(content, bubble, tooltip::Position::Bottom)
+        .gap(3)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(iced_widget::core::Background::Color(
+                crate::theme::color::CARD,
+            )),
+            border: Border {
+                color: crate::theme::color::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        })
         .into()
 }
 

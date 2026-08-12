@@ -412,6 +412,7 @@ pub fn view<'a>(
         true,
         Message::Refresh,
         Message::Hover,
+        "刷新",
     );
 
     let mut content = column![home_panel_head(icons::IconKind::BarChart3, "用量"), refresh]

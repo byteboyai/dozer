@@ -133,6 +133,7 @@ fn home_left_icon_rail(
             app.home_left_view == HomeLeftView::ProjectList,
             app.hover_progress(HoverId::Rail(RailButton::HomeProjectList)),
             Message::HomeLeftIconSelect(HomeLeftView::ProjectList),
+            "项目列表",
         ))
         .on_enter(Message::Hover(
             HoverId::Rail(RailButton::HomeProjectList),
@@ -147,6 +148,7 @@ fn home_left_icon_rail(
             app.home_left_view == HomeLeftView::Recents,
             app.hover_progress(HoverId::Rail(RailButton::HomeRecents)),
             Message::HomeLeftIconSelect(HomeLeftView::Recents),
+            "最近记录",
         ))
         .on_enter(Message::Hover(HoverId::Rail(RailButton::HomeRecents), true))
         .on_exit(Message::Hover(
@@ -179,6 +181,7 @@ fn home_right_icon_rail(
             app.home_right_view == HomeRightView::Browser,
             app.hover_progress(HoverId::Rail(RailButton::HomeBrowser)),
             Message::HomeRightIconSelect(HomeRightView::Browser),
+            "浏览器",
         ))
         .on_enter(Message::Hover(HoverId::Rail(RailButton::HomeBrowser), true))
         .on_exit(Message::Hover(

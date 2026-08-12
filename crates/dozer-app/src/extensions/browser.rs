@@ -1107,6 +1107,7 @@ fn star_button(
         url.is_some(),
         Message::StarClick,
         |hovered| Message::Hover(STAR_HOVER_KEY, false, hovered),
+        "收藏",
     )
 }
 
@@ -1420,5 +1421,6 @@ fn bookmarks_toggle_button(
         true,
         Message::BookmarksToggle,
         |hovered| Message::Hover(STAR_HOVER_KEY, true, hovered),
+        "收藏夹",
     )
 }

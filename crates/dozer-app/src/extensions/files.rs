@@ -766,6 +766,7 @@ pub fn view<'a>(
         true,
         Message::SearchSubmit,
         |hovered| Message::ToolbarHover(FilesToolbarTarget::SearchSubmit, hovered),
+        "搜索",
     );
 
     // "显示/隐藏点文件"按钮:切换后 `ToggleDotfiles` 调
@@ -791,6 +792,7 @@ pub fn view<'a>(
         true,
         Message::ToggleDotfiles,
         |hovered| Message::ToolbarHover(FilesToolbarTarget::Dotfiles, hovered),
+        "切换点文件",
     );
     header = header.push(
         row![search_box, search_button, dotfiles_button]
@@ -1096,6 +1098,7 @@ fn git_footer_bar(
             true,
             Message::BranchPickerOpen,
             |hovered| Message::ToolbarHover(FilesToolbarTarget::BranchSwitch, hovered),
+            "切换分支",
         );
         (
             icons::IconKind::FolderGit2,
