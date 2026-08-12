@@ -47,6 +47,7 @@ use crate::extensions::todo;
 use crate::extensions::usage;
 use crate::git_watch;
 use crate::homespace::home_panel_head;
+use crate::homespace::home_panel_head_with_actions;
 use crate::icons;
 use crate::icons::IconKind;
 use crate::osc::{OscEvent, OscScanner};
@@ -1865,13 +1866,13 @@ pub(crate) fn agent_list_pane<'a>(
     let region = theme::region::agent_list_pane();
     let mut content = column![
         // 套用统一 panel head:暖金 `#dcc9a3` 的 Bot 图标 + "Agent" 标题 +
-        // 1px 分割线;去掉原来跟在项目名后的 "Dozer 项目" 副标题文字。
-        home_panel_head(IconKind::Brain, "Agent"),
-        row![
-            iced_widget::space::horizontal(),
-            agent_picker_toggle_button(app),
-        ]
-        .align_y(iced_widget::core::Alignment::Center),
+        // 1px 分割线;新建 agent 的"＋"按钮放到标题同一行的右侧(见
+        // `home_panel_head_with_actions` 的 `actions` 参数),不再单独占一行。
+        home_panel_head_with_actions(
+            IconKind::Brain,
+            "Agent",
+            Some(agent_picker_toggle_button(app)),
+        ),
     ]
     .spacing(region.gap);
 

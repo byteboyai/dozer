@@ -280,23 +280,37 @@ const PANEL_HEAD_ACCENT: Color = Color::from_rgb8(0xdc, 0xc9, 0xa3);
 
 /// 分割线。各 pane / 卡片标题统一复用,保证视觉一致(首页项目列表、Recents
 /// 两卡、工作区文件树、Git 提交图等)。`Message` 泛型——本身不发出任何
-/// 交互消息,可在任意 `Message` 类型的视图里直接内嵌。
-pub(crate) fn home_panel_head<'a, Message>(
+/// 交互消息,可在任意 `Message` 类型的视图里直接内嵌。`actions` 为
+/// `Some(...)` 时,把该元素推到标题同一行的右侧(靠 `Length::Fill` 的
+/// 间隔撑开),用于面板头部右侧的操作按钮(如 Agent 面板的"＋"新建)。
+pub(crate) fn home_panel_head_with_actions<'a, Message>(
     icon: icons::IconKind,
     title: &'a str,
+    actions: Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>
 where
     Message: 'a,
 {
+    let head_row = row![
+        icons::view(icon, crate::theme::icon_size::row(), PANEL_HEAD_ACCENT,),
+        text(title)
+            .size(theme::homespace_font::subtitle())
+            .color(PANEL_HEAD_ACCENT),
+    ]
+    .spacing(8)
+    .align_y(iced_widget::core::Alignment::Center);
+    // 有右侧操作就把标题行撑满宽度,用 Fill 间隔把操作推到最右。
+    let head_row = if let Some(actions) = actions {
+        head_row
+            .push(iced_widget::space::horizontal())
+            .push(actions)
+            .width(Length::Fill)
+    } else {
+        head_row
+    };
+
     column![
-        row![
-            icons::view(icon, crate::theme::icon_size::row(), PANEL_HEAD_ACCENT,),
-            text(title)
-                .size(theme::homespace_font::subtitle())
-                .color(PANEL_HEAD_ACCENT),
-        ]
-        .spacing(8)
-        .align_y(iced_widget::core::Alignment::Center),
+        head_row,
         container(iced_widget::Space::new())
             .width(Length::Fill)
             .height(Length::Fixed(1.0))
@@ -307,6 +321,17 @@ where
     ]
     .spacing(8)
     .into()
+}
+
+/// 不带右侧操作的 `home_panel_head_with_actions` 简写,其余面板照旧调用它。
+pub(crate) fn home_panel_head<'a, Message>(
+    icon: icons::IconKind,
+    title: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>
+where
+    Message: 'a,
+{
+    home_panel_head_with_actions(icon, title, None)
 }
 
 /// `app.recent_projects` 为空时画"还没有项目"兜底文案,不崩(spec §4)。
