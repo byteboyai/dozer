@@ -1841,7 +1841,6 @@ dependencies = [
  "futures",
  "git2",
  "gleisbau",
- "grep",
  "grep-regex",
  "grep-searcher",
  "iced-code-editor",
@@ -1903,7 +1902,6 @@ name = "dozer-hook"
 version = "0.1.0"
 dependencies = [
  "dozer-core",
- "serde",
  "serde_json",
  "tempfile",
 ]
@@ -2930,54 +2928,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "grep"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "309217bc53e2c691c314389c7fa91f9cd1a998cda19e25544ea47d94103880c3"
-dependencies = [
- "grep-cli",
- "grep-matcher",
- "grep-printer",
- "grep-regex",
- "grep-searcher",
-]
-
-[[package]]
-name = "grep-cli"
-version = "0.1.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf32d263c5d5cc2a23ce587097f5ddafdb188492ba2e6fb638eaccdc22453631"
-dependencies = [
- "bstr",
- "globset",
- "libc",
- "log",
- "termcolor",
- "winapi-util",
-]
-
-[[package]]
 name = "grep-matcher"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9417543f4870fc8f1c8e1af870afae2431007626d9e703fce6471c468d33847"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "grep-printer"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd76035e87871f51c1ee5b793e32122b3ccf9c692662d9622ef1686ff5321acb"
-dependencies = [
- "bstr",
- "grep-matcher",
- "grep-searcher",
- "log",
- "serde",
- "serde_json",
- "termcolor",
 ]
 
 [[package]]
@@ -4071,7 +4027,6 @@ dependencies = [
  "sysinfo",
  "thiserror 2.0.18",
  "toml 0.8.2",
- "tracing",
  "tracing-subscriber",
 ]
 
