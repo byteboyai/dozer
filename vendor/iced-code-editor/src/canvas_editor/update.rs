@@ -2603,6 +2603,33 @@ impl CodeEditor {
     /// # Returns
     /// A `Task<Message>` for any asynchronous operations, such as scrolling to keep the cursor visible after state updates
     pub fn update(&mut self, message: &Message) -> Task<Message> {
+        if self.read_only
+            && !matches!(
+                message,
+                Message::ArrowKey(..)
+                    | Message::MouseClick(..)
+                    | Message::MouseDrag(..)
+                    | Message::MouseHover(..)
+                    | Message::MouseRelease
+                    | Message::DoubleClick(..)
+                    | Message::TripleClick(..)
+                    | Message::SelectAll
+                    | Message::Copy
+                    | Message::Scrolled(..)
+                    | Message::HorizontalScrolled(..)
+                    | Message::PageUp
+                    | Message::PageDown
+                    | Message::Home(..)
+                    | Message::End(..)
+                    | Message::CtrlHome
+                    | Message::CtrlEnd
+                    | Message::Tick
+                    | Message::CanvasFocusGained
+                    | Message::CanvasFocusLost
+            )
+        {
+            return Task::none();
+        }
         // Capture the topmost active line before any edit mutates the buffer,
         // so `finish_edit_operation` can truncate the highlight cache precisely.
         self.pre_edit_line = self.min_active_line();

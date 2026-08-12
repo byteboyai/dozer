@@ -431,6 +431,10 @@ pub struct CodeEditor {
     pub(crate) goto_line_state: goto_line::GotoLineState,
     /// Whether Vim key handling is enabled for this editor instance.
     vim_enabled: bool,
+    /// 只读模式:`true` 时 `update()` 只放行滚动/光标移动/选区/复制,拦截
+    /// 一切会修改缓冲区内容的消息。给"文件预览"只读 tab 用——与可编辑的
+    /// `CodeEditor` 实例(编辑弹层)是同一份渲染实现,只是这个标志不同。
+    pub(crate) read_only: bool,
     /// Per-editor Vim mode, parser prefixes and unnamed register.
     pub(crate) vim_state: vim::VimState,
     /// Translations for UI text
@@ -941,6 +945,7 @@ impl CodeEditor {
             reveal_in_file_manager_enabled: false,
             goto_line_state: goto_line::GotoLineState::new(),
             vim_enabled: false,
+            read_only: false,
             vim_state: vim::VimState::default(),
             translations: Translations::default(),
             search_replace_enabled: true,
@@ -1212,6 +1217,23 @@ impl CodeEditor {
     /// Returns whether Vim behavior is enabled for this editor instance.
     pub fn vim_enabled(&self) -> bool {
         self.vim_enabled
+    }
+
+    /// 设置只读模式。见字段文档。
+    pub fn set_read_only(&mut self, enabled: bool) {
+        self.read_only = enabled;
+    }
+
+    /// 链式设置只读模式(构造后立即调用,如
+    /// `CodeEditor::new(&text, &syntax).with_read_only(true)`)。
+    pub fn with_read_only(mut self, enabled: bool) -> Self {
+        self.set_read_only(enabled);
+        self
+    }
+
+    /// 当前是否只读。
+    pub fn read_only(&self) -> bool {
+        self.read_only
     }
 
     /// Returns the active Vim mode, or `None` when Vim behavior is disabled.
@@ -2878,6 +2900,33 @@ mod tests {
 
         let editor = CodeEditor::new("", "rs").with_reveal_in_file_manager_enabled(true);
         assert!(editor.reveal_in_file_manager_enabled());
+    }
+
+    #[test]
+    fn test_read_only_defaults_to_false_and_is_settable() {
+        let mut editor = CodeEditor::new("hello", "txt");
+        assert!(!editor.read_only());
+
+        editor.set_read_only(true);
+        assert!(editor.read_only());
+
+        let editor2 = CodeEditor::new("hello", "txt").with_read_only(true);
+        assert!(editor2.read_only());
+    }
+
+    #[test]
+    fn test_read_only_blocks_character_input() {
+        let mut editor = CodeEditor::new("hello", "txt").with_read_only(true);
+        let _ = editor.update(&Message::CharacterInput('!'));
+        assert_eq!(editor.content(), "hello", "只读态下键入不应修改缓冲区");
+    }
+
+    #[test]
+    fn test_read_only_allows_arrow_key_and_scroll() {
+        let mut editor = CodeEditor::new("hello\nworld", "txt").with_read_only(true);
+        let _ = editor.update(&Message::ArrowKey(ArrowDirection::Right, false));
+        let (line, col) = editor.cursor_position();
+        assert_eq!((line, col), (0, 1), "只读态下光标移动应正常生效");
     }
 
     #[test]
