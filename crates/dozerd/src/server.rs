@@ -1,3 +1,4 @@
+use crate::preview_context::PreviewContextStore;
 use crate::registry::SessionRegistry;
 use crate::session::{SessionEvent, SessionSpec};
 use anyhow::Result;
@@ -17,6 +18,7 @@ pub async fn serve(
     projects: Arc<crate::projects::ProjectStore>,
     bookmarks: Arc<crate::bookmarks::BookmarkStore>,
 ) -> Result<()> {
+    let preview_contexts = Arc::new(PreviewContextStore::new());
     if socket.exists() {
         std::fs::remove_file(socket)?;
     }
@@ -37,8 +39,18 @@ pub async fn serve(
         let store = store.clone();
         let projects = projects.clone();
         let bookmarks = bookmarks.clone();
+        let preview_contexts = preview_contexts.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_conn(stream, registry, store, projects, bookmarks).await {
+            if let Err(e) = handle_conn(
+                stream,
+                registry,
+                store,
+                projects,
+                bookmarks,
+                preview_contexts,
+            )
+            .await
+            {
                 tracing::debug!(error = %e, "连接结束");
             }
         });
@@ -63,6 +75,7 @@ async fn handle_conn(
     store: Arc<crate::acceptance::AcceptanceStore>,
     projects: Arc<crate::projects::ProjectStore>,
     bookmarks: Arc<crate::bookmarks::BookmarkStore>,
+    preview_contexts: Arc<PreviewContextStore>,
 ) -> Result<()> {
     let (r, mut w) = stream.into_split();
     let mut lines = BufReader::new(r).lines();
@@ -212,6 +225,13 @@ async fn handle_conn(
                                 },
                             }
                         }
+                        Request::UpdatePreviewContext { project_id, context } => {
+                            preview_contexts.update(project_id, context);
+                            Reply::Ok
+                        }
+                        Request::GetPreviewContext { project_id } => Reply::PreviewContext {
+                            context: preview_contexts.get(project_id),
+                        },
                     },
                 };
                 w.write_all(encode_line(&reply).as_bytes()).await?;
