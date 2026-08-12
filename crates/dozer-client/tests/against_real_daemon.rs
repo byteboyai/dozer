@@ -162,3 +162,47 @@ async fn reader_task_exits_when_receiver_dropped() {
 
     c.kill(&info.id).await.unwrap();
 }
+
+#[tokio::test]
+async fn preview_context_push_and_query_round_trips() {
+    use dozer_core::protocol::PreviewContext;
+
+    let (sock, _registry, _guard) = start_daemon().await;
+    let c = Client::new(sock);
+
+    assert_eq!(c.get_preview_context(1).await.unwrap(), None);
+
+    let ctx = PreviewContext {
+        path: "/repo/src/main.rs".into(),
+        start_line: 3,
+        start_col: 1,
+        end_line: 5,
+        end_col: 2,
+        has_selection: true,
+    };
+    c.update_preview_context(1, Some(ctx.clone()))
+        .await
+        .unwrap();
+    assert_eq!(c.get_preview_context(1).await.unwrap(), Some(ctx.clone()));
+
+    // 不同 project_id 互不影响。
+    assert_eq!(c.get_preview_context(2).await.unwrap(), None);
+
+    // 后写覆盖前写。
+    let ctx2 = PreviewContext {
+        path: "/repo/README.md".into(),
+        start_line: 1,
+        start_col: 1,
+        end_line: 1,
+        end_col: 1,
+        has_selection: false,
+    };
+    c.update_preview_context(1, Some(ctx2.clone()))
+        .await
+        .unwrap();
+    assert_eq!(c.get_preview_context(1).await.unwrap(), Some(ctx2));
+
+    // 推 None 清空。
+    c.update_preview_context(1, None).await.unwrap();
+    assert_eq!(c.get_preview_context(1).await.unwrap(), None);
+}
