@@ -1070,6 +1070,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     Self::run_editor_task(app, clipboard, event);
                     window.request_redraw();
                 }
+                Message::PreviewEditorEvent(tab_id, event) => {
+                    Self::run_preview_tab_editor_task(app, clipboard, tab_id, event);
+                    window.request_redraw();
+                }
                 // 顶栏"＋"与项目栏"打开项目…"共用的唯一打开入口:rfd 模态选中
                 // 后一律落成**新增页签**(`ProjectTabOpen`)。此前项目栏那颗按钮
                 // 另有一条 `ProjectPickFolder`→`ProjectOpen` 的就地改写路径,
@@ -1126,6 +1130,48 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 // 把这一轮 Task 流里的 `Output` 子消息收集起来,剪贴板动作
                 // 同步落到系统剪贴板。流里可能有 `yield_now` 占位项,被
                 // `filter_map` 跳过,不影响。
+                let mut outputs: Vec<iced_code_editor::Message> = Vec::new();
+                futures::futures::executor::block_on(async {
+                    let mut stream = stream;
+                    while let Some(action) = stream.next().await {
+                        match action {
+                            Action::Output(m) => outputs.push(m),
+                            Action::Clipboard(cb) => match cb {
+                                ClipboardAction::Read { target, channel } => {
+                                    let text = clipboard.read(target);
+                                    let _ = channel.send(text);
+                                }
+                                ClipboardAction::Write { target, contents } => {
+                                    clipboard.write(target, contents);
+                                }
+                            },
+                            _ => {}
+                        }
+                    }
+                });
+                for m in outputs {
+                    queue.push_back(m);
+                }
+            }
+        }
+
+        /// 同 `run_editor_task`,但把消息转发给某个原生预览 tab(按 `tab_id`)而不是
+        /// 编辑弹层的单一 `edit_session`。两个函数体基本重复——保持"预览/编辑分层"
+        /// 这条既定决策(见设计文档),不引入一个把两种目标都塞进同一签名的抽象。
+        fn run_preview_tab_editor_task(
+            app: &mut App,
+            clipboard: &mut Clipboard,
+            tab_id: usize,
+            event: iced_code_editor::Message,
+        ) {
+            use iced_winit::futures::futures::stream::StreamExt;
+            let mut queue = std::collections::VecDeque::new();
+            queue.push_back(event);
+            while let Some(ev) = queue.pop_front() {
+                let t = app.preview_tab_editor_event(tab_id, ev);
+                let Some(stream) = task::into_stream(t) else {
+                    continue;
+                };
                 let mut outputs: Vec<iced_code_editor::Message> = Vec::new();
                 futures::futures::executor::block_on(async {
                     let mut stream = stream;

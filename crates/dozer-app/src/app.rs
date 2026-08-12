@@ -1023,6 +1023,10 @@ pub enum Message {
     /// 桥接器消费(编辑产生的 `iced::Task` 在此执行剪贴板/聚焦等副作用),
     /// 不经 `App::update`。
     EditorEvent(iced_code_editor::Message),
+    /// 原生预览 tab 的 `iced-code-editor` 内部消息,`usize` 是 `PreviewTab.id`。
+    /// 与 `EditorEvent`(编辑弹层专用)是两条独立路径,互不路由串台——见
+    /// `preview_tab_editor_event` 的文档。
+    PreviewEditorEvent(usize, iced_code_editor::Message),
     /// 预览编辑弹层:"保存"按钮 / ⌘S。
     PreviewEditSave,
     /// 预览编辑弹层:×按钮 / 点遮罩——脏改动会先转成二次确认,不直接关。
@@ -2193,6 +2197,21 @@ impl App {
         }
     }
 
+    /// 转发到聚焦项目里某个原生预览 tab 的 editor,语义同 `preview_edit_event`
+    /// 但按 `tab_id` 定位而不是"当前编辑弹层"。`Message::PreviewEditorEvent` 经
+    /// `main.rs::dispatch` 进入后走到这里。
+    pub fn preview_tab_editor_event(
+        &mut self,
+        tab_id: usize,
+        event: iced_code_editor::Message,
+    ) -> iced_winit::runtime::Task<iced_code_editor::Message> {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.preview_tab_editor_event(tab_id, event)
+        } else {
+            iced_winit::runtime::Task::none()
+        }
+    }
+
     /// 取走"双击顶栏空白处"待处理标记(取走即清零)。main.rs 在派发完
     /// 消息后轮询这个方法,命中就调用 `window.set_maximized(!window.
     /// is_maximized())`——`App` 自己不持有 `Window` 句柄,做不到这一步。
@@ -2644,6 +2663,11 @@ impl App {
                 // `iced-code-editor` 的内部消息走 `main.rs` 的 Task 桥接器
                 // (需要 `Clipboard` 句柄执行剪贴板副作用),这里不处理——若
                 // 真到达 `App::update` 说明事件未走 dispatch 拦截,直接忽略。
+            }
+            Message::PreviewEditorEvent(_tab_id, _event) => {
+                // 原生预览 tab 的 `iced-code-editor` 内部消息同样走 `main.rs`
+                // 的 Task 桥接器(`run_preview_tab_editor_task`),与 `EditorEvent`
+                // 同口径:到达 `App::update` 说明未走 dispatch 拦截,直接忽略。
             }
             Message::PreviewEditSave => {
                 self.with_focused_project(|ws, _io| ws.preview_edit_save());

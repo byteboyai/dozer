@@ -634,6 +634,20 @@ impl Workspace {
         session.editor.update(&event)
     }
 
+    /// 转发 `iced-code-editor` 的内部消息到某个原生预览 tab(按 `tab_id` 定位,
+    /// 不是"当前聚焦编辑弹层"——一个项目可以同时开好几个原生预览 tab,只有
+    /// 事件来源的那一个该收到)。tab 不存在或不是原生 tab 时静默 no-op。
+    pub(crate) fn preview_tab_editor_event(
+        &mut self,
+        tab_id: usize,
+        event: EditorMessage,
+    ) -> iced_winit::runtime::Task<EditorMessage> {
+        match self.preview.editor_mut(tab_id) {
+            Some(editor) => editor.update(&event),
+            None => iced_winit::runtime::Task::none(),
+        }
+    }
+
     /// 保存当前编辑会话到磁盘,成功则清脏(`mark_saved`)并推进该 tab 的
     /// reload nonce(逼预览 webview 重新加载,否则用户会看到保存前的旧内容)。
     /// 失败写 `session.error`,弹层不关。没有打开编辑会话时 no-op。
@@ -2150,6 +2164,17 @@ pub(crate) fn preview_pane<'a>(
                 .color(theme::color::DIM)))
             .width(Length::Fill)
             .height(Length::Fill),
+        );
+    } else if let Some(editor) = &ws.preview.tabs()[ws.preview.active_idx()].editor {
+        // 原生 tab:激活 tab 有原生 editor 时,直接在 iced 里渲染它(语法
+        // 高亮/行号/ByteBoy2077 配色),put 下 content。`editor` 为 `None`
+        // 的 wry 路由 tab 不 push 任何 iced 元素——那片区域由 main.rs 定位
+        // 的 wry webview 子视图负责渲染,现状不变。
+        let tab_id = ws.preview.tabs()[ws.preview.active_idx()].id;
+        content = content.push(
+            container(editor.view().map(move |ev| Message::PreviewEditorEvent(tab_id, ev)))
+                .width(Length::Fill)
+                .height(Length::Fill),
         );
     }
 
