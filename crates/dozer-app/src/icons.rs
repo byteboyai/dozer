@@ -64,6 +64,8 @@ pub enum IconKind {
     GitBranch,
     /// Todo 面板 rail 图标(Lucide list-todo)。
     ListTodo,
+    /// Todo 面板"进行中"分类 + EXECUTING 徽章(Lucide play)。
+    Play,
     /// 项目信息面板 rail 图标(Lucide briefcase)。
     Briefcase,
     /// 浏览器地址栏"加入/移出收藏"星标(Lucide star)。已收藏态靠调用方
@@ -156,6 +158,7 @@ impl IconKind {
             IconKind::SquarePlus => include_bytes!("../assets/icons/square-plus.svg"),
             IconKind::GitBranch => include_bytes!("../assets/icons/git-branch.svg"),
             IconKind::ListTodo => include_bytes!("../assets/icons/list-todo.svg"),
+            IconKind::Play => include_bytes!("../assets/icons/play.svg"),
             IconKind::Briefcase => include_bytes!("../assets/icons/briefcase.svg"),
             IconKind::Star => include_bytes!("../assets/icons/star.svg"),
             IconKind::Bookmark => include_bytes!("../assets/icons/bookmark.svg"),

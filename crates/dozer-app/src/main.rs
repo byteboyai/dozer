@@ -939,17 +939,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             let scale = window.scale_factor();
             let logical_w = size.width as f32 / scale as f32;
             let logical_h = size.height as f32 / scale as f32;
-            // 右键菜单仅在"真的盖到预览 webview"时才把它藏成零矩形:菜单
-            // 浮在 iced 顶层,但预览 webview 是原生子视图,无视 iced 绘制
-            // 顺序径直叠在最上盖住菜单,重叠时必须归零(同最大化遮罩隐藏
-            // webview 的手法)。若菜单没伸进预览区,预览照常显示,不被误藏。
-            let (x, y, w, h) = {
-                let preview = app::preview_content_bounds(logical_w, logical_h, &app.shell_state());
-                match app.context_menu_rect() {
-                    Some(menu) if Self::rects_overlap(menu, preview) => (0.0, 0.0, 0.0, 0.0),
-                    _ => preview,
-                }
-            };
+            // 预览 webview 是原生子视图,无视 iced 绘制顺序径直叠在最上——
+            // 曾经试过"菜单盖到预览区就把 webview 藏成零矩形"讨好右键菜单,
+            // 但预览区窄、菜单定宽,几乎任何右键都会让菜单探进预览区,
+            // 表现成"预览要么整体消失要么必须在最顶层"。已按要求退回原状:
+            // webview 照常显示,右键菜单会被它盖住。
+            let (x, y, w, h) =
+                app::preview_content_bounds(logical_w, logical_h, &app.shell_state());
             let bounds = wry::Rect {
                 position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
                 size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
@@ -972,12 +968,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             } else {
                 // 浏览器已移回左面板区(`LeftView::Web`),与文件预览共用同一套
                 // 左侧几何(见 `preview_content_bounds` 的 `LeftView::Web` 分支)。
-                // 仅当右键菜单真正盖到浏览器时归零,免得把整片预览误藏。
-                let preview = app::preview_content_bounds(logical_w, logical_h, &app.shell_state());
-                let (x, y, w, h) = match app.context_menu_rect() {
-                    Some(menu) if Self::rects_overlap(menu, preview) => (0.0, 0.0, 0.0, 0.0),
-                    _ => preview,
-                };
+                let (x, y, w, h) =
+                    app::preview_content_bounds(logical_w, logical_h, &app.shell_state());
                 wry::Rect {
                     position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
                     size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
@@ -1024,10 +1016,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         /// 两个 `(x, y, w, h)` 逻辑矩形是否重叠(含恰好边贴边的情况)。用于
         /// 判断右键菜单是否盖到预览 webview——重叠才把 webview 藏零,避免
         /// 菜单没伸进预览区时把整片预览误藏。
-        fn rects_overlap(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
-            a.0 < b.0 + b.2 && a.0 + a.2 > b.0 && a.1 < b.1 + b.3 && a.1 + a.3 > b.1
-        }
-
         /// `ProjectTabPickFolder`/`ProjectTreeCopyPath` 等需要窗口句柄侧原生
         /// 能力(rfd 模态、系统剪贴板)的消息在此拦截,其余原样转给
         /// `app.update`。

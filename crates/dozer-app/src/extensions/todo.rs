@@ -8,8 +8,10 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use crate::{icons, theme};
-use iced_widget::core::{Border, Color, Element, Length};
-use iced_widget::{button, column, container, rich_text, row, scrollable, span, text, text_input};
+use iced_widget::core::{Border, Color, Element, Length, mouse};
+use iced_widget::{
+    MouseArea, button, column, container, rich_text, row, scrollable, span, text, text_input,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TodoItem {
@@ -144,6 +146,16 @@ pub enum TodoFilter {
     Done,
 }
 
+/// Todo 面板右区的三种展示形态(对应截图顶部 列表 / 看板 / MARKDOWN 三
+/// 个 tab)。`List` 完整实现;`Kanban`/`Markdown` 当前为占位视图(见 design)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TodoViewMode {
+    #[default]
+    List,
+    Kanban,
+    Markdown,
+}
+
 /// 纯前端过滤：状态相等匹配 + 关键字对 `TodoItem.text` 做大小写不敏感
 /// 的子串匹配（空 `query` 不过滤）。作用在"已经解析+推导好状态"的
 /// 内存列表上，不碰文件、不碰 sidecar（design 第 7 节）。
@@ -246,6 +258,8 @@ pub struct WorkspaceState {
     mtime: Option<std::time::SystemTime>,
     add_draft: String,
     filter: TodoFilter,
+    view_mode: TodoViewMode,
+    selected_row: Option<usize>,
     search: String,
     dispatch_open: Option<usize>,
     pending_dispatch: std::collections::HashMap<usize, String>,
@@ -372,6 +386,8 @@ pub enum Message {
     AddInputChanged(String),
     AddSubmit,
     FilterSet(TodoFilter),
+    ViewModeSet(TodoViewMode),
+    RowSelect(Option<usize>),
     SearchChanged(String),
     DispatchOpen(usize),
     DispatchClose,
@@ -461,6 +477,8 @@ pub fn update(
             reload_from_disk(ws_state, project_path);
         }
         Message::FilterSet(f) => ws_state.filter = f,
+        Message::ViewModeSet(m) => ws_state.view_mode = m,
+        Message::RowSelect(idx) => ws_state.selected_row = idx,
         Message::SearchChanged(s) => ws_state.search = s,
         Message::DispatchOpen(idx) => ws_state.dispatch_open = Some(idx),
         Message::DispatchClose => ws_state.dispatch_open = None,
@@ -501,9 +519,11 @@ pub fn view<'a>(
     ws_state: &'a WorkspaceState,
     project_id: i64,
     tabs: &[SessionTabSummary],
+    project_path: Option<&Path>,
     width: Length,
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    // ---- header（保留，不去掉） ----
     let header = column![
         crate::homespace::home_panel_head(icons::IconKind::ListTodo, "Todo"),
         text(format!("{} 条任务 · .dozer/todo.md", ws_state.items.len()))
@@ -513,6 +533,7 @@ pub fn view<'a>(
     .spacing(8)
     .padding([20, 20]);
 
+    // ---- 状态推导（一次算好，侧栏计数 + 列表渲染共用） ----
     let states: Vec<TodoState> = ws_state
         .items
         .iter()
@@ -527,7 +548,67 @@ pub fn view<'a>(
             todo_display_state(item, dispatch, target_alive)
         })
         .collect();
-    let visible_idx = filter_todos(&ws_state.items, &states, ws_state.filter, &ws_state.search);
+    let counts = [
+        (TodoFilter::All, ws_state.items.len()),
+        (
+            TodoFilter::Pending,
+            states.iter().filter(|s| **s == TodoState::Pending).count(),
+        ),
+        (
+            TodoFilter::InProgress,
+            states
+                .iter()
+                .filter(|s| **s == TodoState::InProgress)
+                .count(),
+        ),
+        (
+            TodoFilter::Done,
+            states.iter().filter(|s| **s == TodoState::Done).count(),
+        ),
+    ];
+
+    // ---- 左栏：分类导航（= 原 filter 段，改为竖排带图标+计数） ----
+    let mut sidebar = column![].spacing(4).padding([12, 8]);
+    for (filter, count) in counts {
+        sidebar = sidebar.push(todo_category_button(filter, count, ws_state.filter));
+    }
+
+    // ---- 右栏：tab 段 + 视图主体 ----
+    let tabs_bar = todo_view_tabs(ws_state.view_mode);
+    let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        match ws_state.view_mode {
+            TodoViewMode::List => todo_list_view(app_state, ws_state, project_id, &states, tabs),
+            TodoViewMode::Kanban => todo_kanban_placeholder(&states, ws_state),
+            TodoViewMode::Markdown => todo_markdown_view(project_path),
+        };
+
+    let content = column![
+        header,
+        tabs_bar,
+        row![sidebar, body].spacing(0).height(Length::Fill),
+    ]
+    .height(Length::Fill);
+
+    container(content)
+        .width(width)
+        .height(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::color::BG.into()),
+            border: outer,
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// 列表视图主体：搜索栏 + 编号行列表 + 底部新增输入。
+fn todo_list_view<'a>(
+    app_state: &'a AppState,
+    ws_state: &'a WorkspaceState,
+    project_id: i64,
+    states: &[TodoState],
+    tabs: &[SessionTabSummary],
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let visible_idx = filter_todos(&ws_state.items, states, ws_state.filter, &ws_state.search);
 
     let existing_tabs: Vec<(&str, String)> = tabs
         .iter()
@@ -535,12 +616,13 @@ pub fn view<'a>(
         .map(|t| (t.session_id.as_str(), t.title.clone()))
         .collect();
 
-    let toolbar = row![
-        todo_filter_segment("全部", TodoFilter::All, ws_state.filter),
-        todo_filter_segment("待办", TodoFilter::Pending, ws_state.filter),
-        todo_filter_segment("进行中", TodoFilter::InProgress, ws_state.filter),
-        todo_filter_segment("完成", TodoFilter::Done, ws_state.filter),
-        text_input("搜索任务关键字…", &ws_state.search)
+    let search = row![
+        icons::view(
+            icons::IconKind::Search,
+            crate::theme::icon_size::row(),
+            theme::color::DIM
+        ),
+        text_input("Search List parameters...", &ws_state.search)
             .on_input(Message::SearchChanged)
             .size(theme::font::body())
             .width(Length::Fill)
@@ -570,10 +652,11 @@ pub fn view<'a>(
             .padding([20, 20]),
         );
     } else {
-        for &idx in &visible_idx {
+        for (display_no, &idx) in visible_idx.iter().enumerate() {
             let item = &ws_state.items[idx];
             let key = todo_line_key(&item.text);
             let meta = app_state.meta_for(project_id, key);
+            let dispatch = meta.and_then(|m| m.dispatch.as_ref());
             let mut row = None;
             if let Some((editing_idx, draft)) = &ws_state.editing_plan_date
                 && *editing_idx == idx
@@ -584,10 +667,13 @@ pub fn view<'a>(
                 Some(r) => list = list.push(r),
                 None => {
                     list = list.push(todo_row(
+                        display_no + 1,
                         idx,
                         item,
                         states[idx],
                         meta,
+                        dispatch,
+                        ws_state.selected_row == Some(idx),
                         ws_state.dispatch_open == Some(idx),
                         &existing_tabs,
                     ));
@@ -596,25 +682,35 @@ pub fn view<'a>(
         }
     }
 
-    let add_row = text_input("＋新增任务…", &ws_state.add_draft)
-        .on_input(Message::AddInputChanged)
-        .on_submit(Message::AddSubmit)
-        .size(theme::font::body())
-        .padding([10, 20])
-        .style(
-            |_t: &iced_widget::Theme, _s| iced_widget::text_input::Style {
-                background: theme::color::BG.into(),
-                border: Border {
-                    color: Color::TRANSPARENT,
-                    width: 0.0,
-                    radius: 0.0.into(),
+    let add_row = row![
+        icons::view(
+            icons::IconKind::SquarePlus,
+            crate::theme::icon_size::row(),
+            theme::color::GOLD
+        ),
+        text_input("Initiate new task protocol..", &ws_state.add_draft)
+            .on_input(Message::AddInputChanged)
+            .on_submit(Message::AddSubmit)
+            .size(theme::font::body())
+            .width(Length::Fill)
+            .style(
+                |_t: &iced_widget::Theme, _s| iced_widget::text_input::Style {
+                    background: theme::color::BG.into(),
+                    border: Border {
+                        color: Color::TRANSPARENT,
+                        width: 0.0,
+                        radius: 0.0.into(),
+                    },
+                    icon: theme::color::GOLD,
+                    placeholder: theme::color::DIM,
+                    value: theme::color::CREAM,
+                    selection: theme::color::GOLD,
                 },
-                icon: theme::color::DIM,
-                placeholder: theme::color::DIM,
-                value: theme::color::CREAM,
-                selection: theme::color::GOLD,
-            },
-        );
+            ),
+    ]
+    .spacing(8)
+    .padding([10, 20])
+    .align_y(iced_widget::core::alignment::Vertical::Center);
 
     let divider = container(iced_widget::Space::new())
         .width(Length::Fill)
@@ -628,33 +724,102 @@ pub fn view<'a>(
             ..container::Style::default()
         });
 
-    let content = column![
-        header,
-        toolbar,
+    column![
+        search,
         scrollable(list).height(Length::Fill),
         divider,
         add_row,
     ]
-    .height(Length::Fill);
-
-    container(content)
-        .width(width)
-        .height(Length::Fill)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::BG.into()),
-            border: outer,
-            ..container::Style::default()
-        })
-        .into()
+    .height(Length::Fill)
+    .into()
 }
 
-/// 一条 Todo 任务行。勾选框+文本（完成态删除线+暗色）+ 右侧按状态显示：
-/// 待办=派发按钮；进行中=绿点+"进行中"标签；完成=占位。派发选择层叠在行下方。
+/// 看板占位：三列（待办/进行中/完成）各列标题 + 该状态任务标题卡片，纯展示。
+fn todo_kanban_placeholder<'a>(
+    states: &[TodoState],
+    ws_state: &'a WorkspaceState,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let columns = [
+        (TodoFilter::Pending, "待办"),
+        (TodoFilter::InProgress, "进行中"),
+        (TodoFilter::Done, "完成"),
+    ];
+    let mut cols = row![].spacing(12).padding([12, 20]);
+    for (filter, title) in columns {
+        let mut col = column![].spacing(8).width(Length::Fill);
+        col = col.push(
+            text(title)
+                .size(theme::font::subtitle())
+                .color(theme::color::CREAM),
+        );
+        let mut any = false;
+        for (i, item) in ws_state.items.iter().enumerate() {
+            if states[i]
+                == match filter {
+                    TodoFilter::Pending => TodoState::Pending,
+                    TodoFilter::InProgress => TodoState::InProgress,
+                    TodoFilter::Done => TodoState::Done,
+                    TodoFilter::All => continue,
+                }
+            {
+                any = true;
+                col = col.push(
+                    container(
+                        text(item.text.clone())
+                            .size(theme::font::body())
+                            .color(theme::color::CREAM)
+                            .width(Length::Fill),
+                    )
+                    .padding([10, 12])
+                    .style(|_t: &iced_widget::Theme| container::Style {
+                        background: Some(theme::color::CARD.into()),
+                        border: Border {
+                            color: theme::color::BORDER,
+                            width: 1.0,
+                            radius: 6.0.into(),
+                        },
+                        ..container::Style::default()
+                    }),
+                );
+            }
+        }
+        if !any {
+            col = col.push(text("—").size(theme::font::body()).color(theme::color::DIM));
+        }
+        cols = cols.push(col);
+    }
+    scrollable(cols).height(Length::Fill).into()
+}
+
+/// MARKDOWN 占位：只读展示 `.dozer/todo.md` 原始源码。
+fn todo_markdown_view<'a>(
+    project_path: Option<&Path>,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let src = project_path
+        .map(todo_path)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_else(|| "# 暂无 .dozer/todo.md".to_string());
+    let body = container(
+        text(src)
+            .size(theme::font::body())
+            .color(theme::color::CREAM),
+    )
+    .padding([12, 20])
+    .width(Length::Fill);
+    scrollable(body).height(Length::Fill).into()
+}
+
+/// 一条 Todo 任务行：左侧序号 + 勾选框 + 可点击选中的标题 + 右侧状态徽章
+/// （进行中=EXECUTING、完成=SUCCESS_MM-DD、待办=计划日期/派发按钮）。选中
+/// 态加金边左条 + CARD 底色（对齐截图 04 行高亮）。派发选择层叠在行下方。
 fn todo_row<'a>(
+    number: usize,
     idx: usize,
     item: &'a TodoItem,
     state: TodoState,
     meta: Option<&'a TodoTaskMeta>,
+    dispatch: Option<&'a DispatchRecord>,
+    selected: bool,
     dispatch_open: bool,
     existing_tabs: &'a [(&'a str, String)],
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -725,90 +890,168 @@ fn todo_row<'a>(
             .into()
     };
 
-    let date_label: Option<Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer>> =
-        match state {
-            TodoState::Done => meta.and_then(|m| m.completed_at).map(|t| {
-                text(format!("完成于 {}", format_todo_time(t)))
-                    .size(theme::font::caption())
-                    .color(theme::color::DIM)
-                    .into()
-            }),
-            _ => meta.and_then(|m| m.plan_date.as_deref()).map(|d| {
-                button(
-                    text(format!("计划 {d}"))
-                        .size(theme::font::caption())
-                        .color(theme::color::DIM),
-                )
-                .on_press(Message::PlanDateEditStart(idx))
-                .padding(0)
-                .style(|_t: &iced_widget::Theme, _s| button::Style {
-                    background: None,
-                    text_color: theme::color::DIM,
-                    ..button::Style::default()
-                })
-                .into()
-            }),
-        };
-    let mut middle = row![checkbox, label]
-        .spacing(10)
-        .align_y(iced_widget::core::alignment::Vertical::Center);
-    if let Some(label) = date_label {
-        middle = middle.push(label);
-    }
+    // 点击标题切换选中高亮（再点同一行取消）。
+    let label_area: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        MouseArea::new(container(label).width(Length::Fill))
+            .interaction(mouse::Interaction::Pointer)
+            .on_press(Message::RowSelect(if selected { None } else { Some(idx) }))
+            .into();
+
+    let number_text = text(format!("{number:02}"))
+        .size(theme::font::caption())
+        .color(theme::color::DIM);
 
     let trailing: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> =
         match state {
-            TodoState::Pending => button(
+            TodoState::Pending => {
+                if let Some(d) = meta.and_then(|m| m.plan_date.as_deref()) {
+                    // 计划日期 pill（橙/金，截图里"明天/10月12日"那种红橙色）。
+                    button(
+                        text(format!("计划 {d}"))
+                            .size(theme::font::caption())
+                            .color(theme::color::ORANGE),
+                    )
+                    .on_press(Message::PlanDateEditStart(idx))
+                    .padding(0)
+                    .style(|_t: &iced_widget::Theme, _s| button::Style {
+                        background: None,
+                        text_color: theme::color::ORANGE,
+                        ..button::Style::default()
+                    })
+                    .into()
+                } else {
+                    button(
+                        row![
+                            icons::view(
+                                icons::IconKind::SquarePlus,
+                                crate::theme::icon_size::row(),
+                                theme::color::GOLD
+                            ),
+                            text("派发")
+                                .size(theme::font::caption())
+                                .color(theme::color::GOLD),
+                        ]
+                        .spacing(4)
+                        .align_y(iced_widget::core::alignment::Vertical::Center),
+                    )
+                    .on_press(Message::DispatchOpen(idx))
+                    .padding([5, 10])
+                    .style(|_t: &iced_widget::Theme, _s| button::Style {
+                        background: None,
+                        text_color: theme::color::GOLD,
+                        border: Border {
+                            color: theme::color::BORDER,
+                            width: 1.0,
+                            radius: 6.0.into(),
+                        },
+                        ..button::Style::default()
+                    })
+                    .into()
+                }
+            }
+            TodoState::InProgress => {
+                // EXECUTING 徽章：agent 头像圆 + 绿点指示 + 文字。
+                let initial = dispatch
+                    .and_then(|d| d.session_id.chars().next())
+                    .map(|c| c.to_uppercase().to_string())
+                    .unwrap_or_else(|| "A".to_string());
+                let avatar = container(
+                    text(initial)
+                        .size(theme::font::caption_sm())
+                        .color(theme::color::CREAM),
+                )
+                .width(Length::Fixed(20.0))
+                .height(Length::Fixed(20.0))
+                .align_x(iced_widget::core::alignment::Horizontal::Center)
+                .align_y(iced_widget::core::alignment::Vertical::Center)
+                .style(|_t: &iced_widget::Theme| container::Style {
+                    background: Some(theme::color::CYAN.into()),
+                    border: Border {
+                        radius: 10.0.into(),
+                        ..Border::default()
+                    },
+                    ..container::Style::default()
+                });
+                row![
+                    avatar,
+                    container(iced_widget::Space::new())
+                        .width(Length::Fixed(7.0))
+                        .height(Length::Fixed(7.0))
+                        .style(|_t: &iced_widget::Theme| container::Style {
+                            background: Some(theme::color::GREEN.into()),
+                            border: Border {
+                                radius: 4.0.into(),
+                                ..Border::default()
+                            },
+                            ..container::Style::default()
+                        }),
+                    text("EXECUTING")
+                        .size(theme::font::caption())
+                        .color(theme::color::GREEN),
+                ]
+                .spacing(6)
+                .align_y(iced_widget::core::alignment::Vertical::Center)
+                .into()
+            }
+            TodoState::Done => {
+                // SUCCESS_MM-DD 徽章。
+                let mmdd = meta
+                    .and_then(|m| m.completed_at)
+                    .map(format_todo_month_day)
+                    .unwrap_or_else(|| "——".to_string());
                 row![
                     icons::view(
-                        icons::IconKind::SquarePlus,
+                        icons::IconKind::BadgeCheck,
                         crate::theme::icon_size::row(),
-                        theme::color::GOLD
+                        theme::color::GREEN
                     ),
-                    text("派发")
+                    text(format!("SUCCESS_{mmdd}"))
                         .size(theme::font::caption())
-                        .color(theme::color::GOLD),
+                        .color(theme::color::GREEN),
                 ]
-                .spacing(4)
-                .align_y(iced_widget::core::alignment::Vertical::Center),
-            )
-            .on_press(Message::DispatchOpen(idx))
-            .padding([5, 10])
-            .style(|_t: &iced_widget::Theme, _s| button::Style {
-                background: None,
-                text_color: theme::color::GOLD,
-                border: Border {
-                    color: theme::color::BORDER,
-                    width: 1.0,
-                    radius: 6.0.into(),
-                },
-                ..button::Style::default()
-            })
-            .into(),
-            TodoState::InProgress => row![
-                text("●")
-                    .size(theme::font::dot_sm())
-                    .color(theme::color::GREEN),
-                text("进行中")
-                    .size(theme::font::caption())
-                    .color(theme::color::GREEN),
-            ]
-            .spacing(5)
-            .into(),
-            TodoState::Done => iced_widget::space::Space::new().into(),
+                .spacing(5)
+                .align_y(iced_widget::core::alignment::Vertical::Center)
+                .into()
+            }
         };
 
+    let accent = container(iced_widget::Space::new())
+        .width(Length::Fixed(3.0))
+        .height(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: if selected {
+                Some(theme::color::GOLD.into())
+            } else {
+                None
+            },
+            ..container::Style::default()
+        });
+
     let base: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        row![middle, trailing]
+        row![accent, number_text, checkbox, label_area, trailing,]
             .spacing(10)
             .align_y(iced_widget::core::alignment::Vertical::Center)
             .padding([10, 20])
             .into();
-    if dispatch_open {
-        column![base, todo_dispatch_popup(idx, existing_tabs)].into()
-    } else {
-        base
-    }
+
+    let wrapped: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        if dispatch_open {
+            column![base, todo_dispatch_popup(idx, existing_tabs)].into()
+        } else {
+            base
+        };
+
+    container(wrapped)
+        .width(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: if selected {
+                Some(theme::color::CARD.into())
+            } else {
+                None
+            },
+            ..container::Style::default()
+        })
+        .into()
 }
 
 /// Todo 派发选择层：列出当前项目存活的 agent tab + 一个"新建"入口，样式
@@ -889,38 +1132,146 @@ fn todo_plan_date_edit_row<'a>(
     .into()
 }
 
-/// 筛选分段按钮，选中态高亮。
-fn todo_filter_segment<'a>(
-    label: &'a str,
-    value: TodoFilter,
+/// 左栏分类导航项（= 原 filter 段，竖排）：图标 + 标签 + 右侧计数，选中态
+/// 金框 + CREAM 字 + CARD 底。点击 → `FilterSet`。
+fn todo_category_button<'a>(
+    filter: TodoFilter,
+    count: usize,
     current: TodoFilter,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let active = value == current;
-    button(text(label).size(theme::font::caption()).color(if active {
+    let (icon, label) = match filter {
+        TodoFilter::All => (icons::IconKind::ListTodo, "全部任务"),
+        TodoFilter::Pending => (icons::IconKind::SquarePlus, "待办任务"),
+        TodoFilter::InProgress => (icons::IconKind::Play, "进行中任务"),
+        TodoFilter::Done => (icons::IconKind::BadgeCheck, "已完成任务"),
+    };
+    let active = filter == current;
+    let fg = if active {
         theme::color::CREAM
     } else {
         theme::color::DIM
-    }))
-    .on_press(Message::FilterSet(value))
-    .padding([4, 10])
+    };
+    button(
+        row![
+            icons::view(
+                icon,
+                crate::theme::icon_size::row(),
+                if active {
+                    theme::color::GOLD
+                } else {
+                    theme::color::DIM
+                }
+            ),
+            text(label).size(theme::font::body()).color(fg),
+            iced_widget::space::Space::new()
+                .width(Length::Fill)
+                .height(Length::Shrink),
+            text(format!("{count}"))
+                .size(theme::font::caption())
+                .color(if active {
+                    theme::color::GOLD
+                } else {
+                    theme::color::DIM
+                }),
+        ]
+        .spacing(8)
+        .align_y(iced_widget::core::alignment::Vertical::Center),
+    )
+    .on_press(Message::FilterSet(filter))
+    .width(Length::Fill)
+    .padding([8, 10])
     .style(move |_t: &iced_widget::Theme, _s| button::Style {
         background: if active {
             Some(theme::color::CARD.into())
         } else {
             None
         },
-        text_color: if active {
-            theme::color::CREAM
-        } else {
-            theme::color::DIM
-        },
+        text_color: fg,
         border: Border {
-            radius: 5.0.into(),
-            ..Border::default()
+            color: if active {
+                theme::color::GOLD
+            } else {
+                Color::TRANSPARENT
+            },
+            width: if active { 1.0 } else { 0.0 },
+            radius: 6.0.into(),
         },
         ..button::Style::default()
     })
     .into()
+}
+
+/// 右区顶部 tab 段：列表 / 看板 / MARKDOWN，选中态金色下划线。点击 →
+/// `ViewModeSet`。
+fn todo_view_tabs<'a>(
+    current: TodoViewMode,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    row![
+        todo_tab(
+            icons::IconKind::ListTodo,
+            "列表",
+            TodoViewMode::List,
+            current
+        ),
+        todo_tab(
+            icons::IconKind::LayoutList,
+            "看板",
+            TodoViewMode::Kanban,
+            current
+        ),
+        todo_tab(
+            icons::IconKind::FileText,
+            "MARKDOWN",
+            TodoViewMode::Markdown,
+            current
+        ),
+    ]
+    .spacing(4)
+    .padding([8, 20])
+    .align_y(iced_widget::core::alignment::Vertical::Center)
+    .into()
+}
+
+/// 单个 tab 按钮 + 选中态金色下划线。
+fn todo_tab<'a>(
+    icon: icons::IconKind,
+    label: &'a str,
+    mode: TodoViewMode,
+    current: TodoViewMode,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let active = mode == current;
+    let fg = if active {
+        theme::color::GOLD
+    } else {
+        theme::color::DIM
+    };
+    let btn = button(
+        row![
+            icons::view(icon, crate::theme::icon_size::row(), fg),
+            text(label).size(theme::font::caption()).color(fg),
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::alignment::Vertical::Center),
+    )
+    .on_press(Message::ViewModeSet(mode))
+    .padding([8, 12])
+    .style(move |_t: &iced_widget::Theme, _s| button::Style {
+        background: None,
+        text_color: fg,
+        ..button::Style::default()
+    });
+    let underline = container(iced_widget::Space::new())
+        .width(Length::Fill)
+        .height(Length::Fixed(2.0))
+        .style(move |_t| container::Style {
+            background: if active {
+                Some(theme::color::GOLD.into())
+            } else {
+                None
+            },
+            ..container::Style::default()
+        });
+    column![btn, underline].into()
 }
 
 /// `SystemTime` → "MM-DD HH:MM"(UTC)。不引 `chrono`,用 civil-from-days
@@ -938,6 +1289,17 @@ fn format_todo_time(t: std::time::SystemTime) -> String {
     let (hour, minute) = (rem / 3600, (rem % 3600) / 60);
     let (_y, m, d) = civil_from_days(days);
     format!("{:02}-{:02} {:02}:{:02}", m, d, hour, minute)
+}
+
+/// `SystemTime` → "MM-DD"（SUCCESS 徽章用，只取月日）。
+fn format_todo_month_day(t: std::time::SystemTime) -> String {
+    let secs = t
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let days = (secs / 86400) as i64;
+    let (_y, m, d) = civil_from_days(days);
+    format!("{m:02}-{d:02}")
 }
 
 /// civil-from-days：把"自 1970-01-01 的天数"换算成 (年, 月, 日)。

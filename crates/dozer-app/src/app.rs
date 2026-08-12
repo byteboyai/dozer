@@ -2148,23 +2148,6 @@ impl App {
         self.files.context_menu_is_some() || self.preview_tab_menu.is_some()
     }
 
-    /// 当前右键菜单的屏幕矩形 `(x, y, w, h)`(逻辑像素)。文件树与预览 tab
-    /// 两种右键菜单都复用 `files.last_right_click` 定位、同宽同高的主题菜单
-    /// 尺寸,所以共用这一套取法。main.rs 判断"菜单是否盖到预览 webview"
-    /// 时用;没开菜单返回 `None`。
-    pub fn context_menu_rect(&self) -> Option<(f32, f32, f32, f32)> {
-        if !self.context_menu_open() {
-            return None;
-        }
-        let (x, y) = self.files.last_right_click();
-        Some((
-            x,
-            y,
-            theme::geometry::context_menu_width(),
-            theme::geometry::context_menu_height(),
-        ))
-    }
-
     /// 预览 tab 右键菜单是否打开(main.rs Esc 键路由用)。
     pub fn preview_tab_context_menu_open(&self) -> bool {
         self.preview_tab_menu.is_some()
@@ -5402,11 +5385,16 @@ fn left_panel_area<'a>(
                         alive: t.alive,
                     })
                     .collect();
+                let project_path = ws
+                    .project
+                    .as_ref()
+                    .map(|p| std::path::PathBuf::from(&p.path));
                 todo::view(
                     &app.todo,
                     &ws.todo,
                     project_id,
                     &tabs,
+                    project_path.as_deref(),
                     Length::Fill,
                     zone_pane_border(zone, ac),
                 )
