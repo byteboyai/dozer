@@ -7,6 +7,8 @@
 //! 地址栏,这里只保留文件/验收两种 tab。
 use std::path::PathBuf;
 
+use crate::theme;
+
 /// 一个预览 tab。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreviewTab {
@@ -215,6 +217,188 @@ impl PreviewPane {
             tab.reload_nonce += 1;
         }
     }
+}
+
+/// 编辑器 chrome 对齐到 Dozer 的 ByteBoy2077 配色——是编辑器来适配
+/// Dozer,不是反过来让四栏骨架迁就编辑器的默认蓝底。背景/文本/行号栏/
+/// 滚动条/当前行高亮这一层与 bg `#0a0e16` + 奶油 `#FFE5B4` + 青
+/// `#47DEF0` + 边框灰 `#1c3440` 一致。金 `#F2D94E` 是"甲方动作专属",
+/// 不在此处使用。语法高亮的 token 颜色由 `dozer_syntax_theme` 单独接管。
+pub(crate) fn dozer_editor_style() -> iced_code_editor::theme::Style {
+    use iced_widget::core::Color;
+    let bg = theme::color::BG;
+    let cyan = theme::color::CYAN;
+    iced_code_editor::theme::Style {
+        background: bg,
+        text_color: theme::color::CREAM,
+        gutter_background: theme::color::TERM_BG,
+        gutter_border: theme::color::BORDER,
+        line_number_color: theme::color::DIM,
+        scrollbar_background: bg,
+        scroller_color: cyan,
+        current_line_highlight: Color {
+            r: cyan.r,
+            g: cyan.g,
+            b: cyan.b,
+            a: 0.10,
+        },
+        whitespace_color: theme::color::DIM,
+    }
+}
+
+/// 构造一份 ByteBoy2077 的 syntect 语法主题,让语法高亮的 token 颜色
+/// (关键字/字符串/注释/类型/函数名……)也融入 Dozer 配色。`iced-code-editor`
+/// 上游把 syntect 主题硬编码成 base16-ocean.dark、无公开接口可改;我们
+/// vendored 了一份打了 `set_syntax_theme` 补丁的副本(`vendor/iced-code-editor`),
+/// 才能把这份主题灌进编辑器。金 `#F2D94E` 仅甲方动作专属,不用于语法着色。
+pub(crate) fn dozer_syntax_theme() -> syntect::highlighting::Theme {
+    use std::str::FromStr;
+    use syntect::highlighting::{Color, ScopeSelectors, StyleModifier, ThemeItem};
+
+    /// `#RRGGBB` -> syntect `Color`(alpha 固定 255)。
+    fn c(hex: u32) -> Color {
+        Color {
+            r: ((hex >> 16) & 0xff) as u8,
+            g: ((hex >> 8) & 0xff) as u8,
+            b: (hex & 0xff) as u8,
+            a: 255,
+        }
+    }
+    /// 单条 scope 着色规则。
+    fn scope(s: &str, hex: u32) -> ThemeItem {
+        ThemeItem {
+            scope: ScopeSelectors::from_str(s).expect("静态 scope 字符串必须合法"),
+            style: StyleModifier {
+                foreground: Some(c(hex)),
+                background: None,
+                font_style: None,
+            },
+        }
+    }
+
+    // ByteBoy2077 调色板(值与 `theme::color` 一致,这里用十六进制以便
+    // 对齐 syntect 的 u8 颜色)。
+    const CREAM: u32 = 0xFFE5B4;
+    const BODY: u32 = 0x9AB4C4;
+    const DIM: u32 = 0x6B7F8F;
+    const CYAN: u32 = 0x47DEF0;
+    const GREEN: u32 = 0x1AD585;
+    const PURPLE: u32 = 0x9580FF;
+    const RED: u32 = 0xFF6E6E;
+    const ORANGE: u32 = 0xFF9B4D;
+    const BLUE: u32 = 0x4D8CFF;
+
+    syntect::highlighting::Theme {
+        name: Some("ByteBoy2077".to_string()),
+        author: Some("Dozer".to_string()),
+        settings: syntect::highlighting::ThemeSettings {
+            foreground: Some(c(CREAM)),
+            background: Some(c(0x0a0e16)),
+            ..Default::default()
+        },
+        scopes: vec![
+            scope("comment", DIM),
+            scope("comment.line", DIM),
+            scope("comment.block", DIM),
+            scope("string", GREEN),
+            scope("string.quoted", GREEN),
+            scope("string.regexp", ORANGE),
+            scope("constant.numeric", ORANGE),
+            scope("constant.language", CYAN),
+            scope("constant", ORANGE),
+            scope("keyword", CYAN),
+            scope("keyword.control", CYAN),
+            scope("keyword.operator", BODY),
+            scope("keyword.other", CYAN),
+            scope("storage", CYAN),
+            scope("storage.type", CYAN),
+            scope("storage.modifier", CYAN),
+            scope("entity.name.function", BLUE),
+            scope("entity.name.type", PURPLE),
+            scope("entity.name.class", PURPLE),
+            scope("entity.name.struct", PURPLE),
+            scope("entity.name.enum", PURPLE),
+            scope("entity.name.trait", PURPLE),
+            scope("entity.name.namespace", BODY),
+            scope("entity.name", CREAM),
+            scope("entity.name.variable", CREAM),
+            scope("variable", CREAM),
+            scope("variable.parameter", CREAM),
+            scope("variable.language", CYAN),
+            scope("support.function", BLUE),
+            scope("support.type", PURPLE),
+            scope("support.class", PURPLE),
+            scope("support.constant", ORANGE),
+            scope("support.variable", CREAM),
+            scope("punctuation", BODY),
+            scope("punctuation.definition", BODY),
+            scope("punctuation.separator", BODY),
+            scope("punctuation.terminator", BODY),
+            scope("meta", CREAM),
+            scope("operator", BODY),
+            scope("markup.inserted", GREEN),
+            scope("markup.deleted", RED),
+            scope("markup.changed", ORANGE),
+            scope("markup.heading", CYAN),
+            scope("markup.bold", CREAM),
+            scope("markup.italic", CREAM),
+            scope("invalid", RED),
+            scope("invalid.deprecated", ORANGE),
+            scope("tag", CYAN),
+            scope("attribute", ORANGE),
+            scope("attribute.name", ORANGE),
+            scope("attribute.value", GREEN),
+        ],
+    }
+}
+
+/// 把文件扩展名映射到 `iced-code-editor` 的语法名(即 syntect 扩展名)。
+/// 未知扩展名回退 "txt"(plain text),编辑器内部也会再兜底一次。
+pub(crate) fn extension_to_syntax(path: &std::path::Path) -> String {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "rs" => "rust",
+        "py" => "python",
+        "js" | "mjs" | "cjs" => "javascript",
+        "ts" => "typescript",
+        "jsx" => "jsx",
+        "tsx" => "tsx",
+        "go" => "go",
+        "java" => "java",
+        "kt" => "kotlin",
+        "c" | "h" => "c",
+        "cpp" | "cc" | "cxx" | "hpp" => "cpp",
+        "rb" => "ruby",
+        "php" => "php",
+        "sh" | "bash" | "zsh" => "bash",
+        "html" | "htm" => "html",
+        "css" => "css",
+        "scss" => "scss",
+        "json" => "json",
+        "yaml" | "yml" => "yaml",
+        "toml" => "toml",
+        "md" | "markdown" => "markdown",
+        "xml" => "xml",
+        "sql" => "sql",
+        "diff" => "diff",
+        "lua" => "lua",
+        "r" => "r",
+        "swift" => "swift",
+        "zig" => "zig",
+        "dockerfile" => "dockerfile",
+        "makefile" => "makefile",
+        "proto" => "protobuf",
+        "graphql" | "gql" => "graphql",
+        "ex" | "exs" => "elixir",
+        "hs" => "haskell",
+        "scala" => "scala",
+        _ => "txt",
+    }
+    .to_string()
 }
 
 #[cfg(test)]
