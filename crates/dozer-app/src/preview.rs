@@ -271,10 +271,23 @@ impl PreviewPane {
             .and_then(|t| t.editor.as_mut())
     }
 
-    /// 编辑保存后调用:按 `PreviewTab.id` 找到对应 tab,推进它的 reload
-    /// 计数器。未知 id 是 no-op(tab 可能已被关闭)。
+    /// 编辑保存后调用:按 `PreviewTab.id` 找到对应 tab,推进 reload。原生
+    /// (有 `editor`)tab 直接读盘重建编辑器实例(`bump_reload` 路径),wry
+    /// tab 走 `reload_nonce` 计数(驱动 `desired_webviews()` 换 URL)。未知
+    /// id 是 no-op(tab 可能已被关闭)。
     pub fn bump_reload(&mut self, tab_id: usize) {
-        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return;
+        };
+        if tab.editor.is_some() {
+            // 原生 tab:只读态没有光标/undo 历史值得跨重建保留,直接读盘换新
+            // 实例比"原地更新缓冲区"更简单可靠。读取失败保留旧 editor 不动
+            // (比闪成空白/丢内容更安全的降级)。
+            let TabKind::File(path) = &tab.kind;
+            if let Ok(fresh) = read_and_build_native_editor(path) {
+                tab.editor = Some(fresh);
+            }
+        } else {
             tab.reload_nonce += 1;
         }
     }
@@ -466,6 +479,36 @@ pub(crate) fn extension_to_syntax(path: &std::path::Path) -> String {
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn bump_reload_rebuilds_native_editor_without_bumping_nonce() {
+        let path = std::env::temp_dir().join(format!("preview_reload_test_{}.rs", std::process::id()));
+        std::fs::write(&path, "fn one() {}").unwrap();
+
+        let mut p = PreviewPane::default();
+        let id = p.open_path(path.clone());
+        assert!(p.tabs()[0].editor.is_some());
+        let nonce_before = p.tabs()[0].reload_nonce;
+
+        std::fs::write(&path, "fn two() {}").unwrap();
+        p.bump_reload(id);
+
+        assert_eq!(
+            p.tabs()[0].reload_nonce, nonce_before,
+            "原生 tab 的 reload 不该走 reload_nonce 计数(那是 wry URL 换参专用信号)"
+        );
+        assert!(
+            p.tabs()[0].editor.is_some(),
+            "reload 后原生 tab 应仍持有(重建后的)editor"
+        );
+        assert_eq!(
+            p.tabs()[0].editor.as_ref().unwrap().content(),
+            "fn two() {}",
+            "原生 tab reload 应读入磁盘上的新内容"
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
 
     #[test]
     fn open_path_builds_native_editor_for_whitelisted_extension_only() {

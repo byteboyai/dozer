@@ -3100,10 +3100,20 @@ mod tests {
         );
         assert!(ws.edit_session.as_ref().unwrap().error.is_none());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "!hi");
-        // `.txt` 是白名单扩展名,原生 tab。保存后它不进 wry 期望清单(原生
-        // tab 靠 `bump_reload` 读盘重建 editor,而非 reload nonce——见
-        // preview.rs 的 `bump_reload`,这套原生刷新语义在 Task 5 的
-        // `preview_edit_save` 里继续验证)。
+        // `.txt` 是白名单扩展名,原生 tab。保存后 `bump_reload` 走原生路径:
+        // 读盘重建 editor,而非推进 reload nonce——原生 tab 不进 wry 期望清单,
+        // 也不会出现在 webview 规格里(闭包因 editor.is_some() 被 filter 掉)。
+        let tab = &ws.preview.tabs()[0];
+        assert!(tab.editor.is_some(), "原生 tab 保存后仍持有(重建的)editor");
+        assert_eq!(
+            tab.editor.as_ref().unwrap().content(),
+            "!hi",
+            "保存内容应反映磁盘上的新内容"
+        );
+        assert_eq!(
+            tab.reload_nonce, 0,
+            "原生 tab 的 reload 不推进 nonce(那是 wry URL 换参专用)"
+        );
         assert!(
             !ws.preview.desired_webviews().iter().any(|s| s.id == tab_id),
             "原生 tab 移出 wry 期望清单"
