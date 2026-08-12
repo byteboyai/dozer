@@ -12,7 +12,7 @@ use super::goto_line_dialog;
 use super::ime_requester::ImeRequester;
 use super::search_dialog;
 use super::wrapping::{self, WrappingCalculator};
-use super::{CodeEditor, GUTTER_WIDTH, Message};
+use super::{CodeEditor, Message};
 use std::rc::Rc;
 
 impl CodeEditor {
@@ -42,54 +42,9 @@ impl CodeEditor {
     fn create_scrollable_style(
         &self,
     ) -> impl Fn(&iced::Theme, scrollable::Status) -> scrollable::Style {
-        let scrollbar_bg = self.style.scrollbar_background;
-        let scroller_color = self.style.scroller_color;
+        let scrollbar = self.style.scrollbar;
 
-        move |_theme, _status| scrollable::Style {
-            container: container::Style {
-                background: Some(Background::Color(Color::TRANSPARENT)),
-                ..container::Style::default()
-            },
-            vertical_rail: scrollable::Rail {
-                background: Some(scrollbar_bg.into()),
-                border: Border {
-                    radius: 4.0.into(),
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
-                scroller: scrollable::Scroller {
-                    background: scroller_color.into(),
-                    border: Border {
-                        radius: 4.0.into(),
-                        width: 0.0,
-                        color: Color::TRANSPARENT,
-                    },
-                },
-            },
-            horizontal_rail: scrollable::Rail {
-                background: Some(scrollbar_bg.into()),
-                border: Border {
-                    radius: 4.0.into(),
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
-                scroller: scrollable::Scroller {
-                    background: scroller_color.into(),
-                    border: Border {
-                        radius: 4.0.into(),
-                        width: 0.0,
-                        color: Color::TRANSPARENT,
-                    },
-                },
-            },
-            gap: None,
-            auto_scroll: scrollable::AutoScroll {
-                background: Color::TRANSPARENT.into(),
-                border: Border::default(),
-                shadow: Shadow::default(),
-                icon: Color::TRANSPARENT,
-            },
-        }
+        move |_theme, status| scrollable_style(scrollbar, status)
     }
 
     /// Creates the canvas widget wrapped in a scrollable container.
@@ -110,6 +65,9 @@ impl CodeEditor {
             .id(self.scrollable_id.clone())
             .width(Length::Fill)
             .height(Length::Fill)
+            .direction(scrollable::Direction::Vertical(scrollbar_geometry(
+                self.style.scrollbar,
+            )))
             .on_scroll(Message::Scrolled)
             .style(self.create_scrollable_style())
     }
@@ -128,8 +86,7 @@ impl CodeEditor {
             return None;
         }
 
-        let scrollbar_bg = self.style.scrollbar_background;
-        let scroller_color = self.style.scroller_color;
+        let scrollbar = self.style.scrollbar;
 
         let h_scrollable = Scrollable::new(
             Space::new()
@@ -139,55 +96,11 @@ impl CodeEditor {
         .id(self.horizontal_scrollable_id.clone())
         .width(Length::Fill)
         .height(Length::Fixed(12.0))
-        .direction(scrollable::Direction::Horizontal(
-            scrollable::Scrollbar::new(),
-        ))
+        .direction(scrollable::Direction::Horizontal(scrollbar_geometry(
+            scrollbar,
+        )))
         .on_scroll(Message::HorizontalScrolled)
-        .style(move |_theme, _status| scrollable::Style {
-            container: container::Style {
-                background: Some(Background::Color(Color::TRANSPARENT)),
-                ..container::Style::default()
-            },
-            vertical_rail: scrollable::Rail {
-                background: Some(scrollbar_bg.into()),
-                border: Border {
-                    radius: 4.0.into(),
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
-                scroller: scrollable::Scroller {
-                    background: scroller_color.into(),
-                    border: Border {
-                        radius: 4.0.into(),
-                        width: 0.0,
-                        color: Color::TRANSPARENT,
-                    },
-                },
-            },
-            horizontal_rail: scrollable::Rail {
-                background: Some(scrollbar_bg.into()),
-                border: Border {
-                    radius: 4.0.into(),
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
-                scroller: scrollable::Scroller {
-                    background: scroller_color.into(),
-                    border: Border {
-                        radius: 4.0.into(),
-                        width: 0.0,
-                        color: Color::TRANSPARENT,
-                    },
-                },
-            },
-            gap: None,
-            auto_scroll: scrollable::AutoScroll {
-                background: Color::TRANSPARENT.into(),
-                border: Border::default(),
-                shadow: Shadow::default(),
-                icon: Color::TRANSPARENT,
-            },
-        });
+        .style(move |_theme, status| scrollable_style(scrollbar, status));
 
         Some(h_scrollable.into())
     }
@@ -200,9 +113,10 @@ impl CodeEditor {
     fn create_gutter_container(&self) -> Option<container::Container<'_, Message>> {
         if self.line_numbers_enabled {
             let gutter_background = self.style.gutter_background;
+            let gutter_width = self.line_number_gutter_width();
             Some(
                 container(Space::new().width(Length::Fill).height(Length::Fill))
-                    .width(Length::Fixed(GUTTER_WIDTH))
+                    .width(Length::Fixed(gutter_width))
                     .height(Length::Fill)
                     .style(move |_| container::Style {
                         background: Some(Background::Color(gutter_background)),
@@ -431,6 +345,7 @@ impl CodeEditor {
         let default_context_menu_enabled = self.default_context_menu_enabled();
         let reveal_in_file_manager_enabled = self.reveal_in_file_manager_enabled();
         let translations = self.translations;
+        let editor_style = self.style;
         let editor_container = ContextMenu::new(editor_container, move || {
             context_menu::view(
                 &custom_context_menu_entries,
@@ -443,6 +358,7 @@ impl CodeEditor {
                     reveal_in_file_manager_enabled,
                 },
                 translations,
+                &editor_style,
             )
         });
 
@@ -475,5 +391,105 @@ impl CodeEditor {
         } else {
             editor_body
         }
+    }
+}
+
+/// Builds the [`scrollable::Scrollbar`] geometry (rail width / thumb width) from a
+/// [`crate::theme::ScrollbarStyle`].
+fn scrollbar_geometry(
+    scrollbar: crate::theme::ScrollbarStyle,
+) -> iced::widget::scrollable::Scrollbar {
+    iced::widget::scrollable::Scrollbar::new()
+        .width(scrollbar.rail_width)
+        .scroller_width(scrollbar.thumb_width)
+}
+
+/// Builds the scrollable rail/scroller style from a [`crate::theme::ScrollbarStyle`], applying the
+/// hover color when the corresponding scrollbar is hovered or its thumb is dragged.
+fn scrollable_style(
+    scrollbar: crate::theme::ScrollbarStyle,
+    status: scrollable::Status,
+) -> iced::widget::scrollable::Style {
+    let (vertical_hover, horizontal_hover) = match status {
+        scrollable::Status::Hovered {
+            is_vertical_scrollbar_hovered,
+            is_horizontal_scrollbar_hovered,
+            ..
+        } => (
+            is_vertical_scrollbar_hovered,
+            is_horizontal_scrollbar_hovered,
+        ),
+        scrollable::Status::Dragged {
+            is_vertical_scrollbar_dragged,
+            is_horizontal_scrollbar_dragged,
+            ..
+        } => (
+            is_vertical_scrollbar_dragged,
+            is_horizontal_scrollbar_dragged,
+        ),
+        scrollable::Status::Active { .. } => (false, false),
+    };
+
+    let thumb_color = scrollbar.thumb_color;
+    let thumb_hover_color = scrollbar.thumb_hover_color;
+
+    let vertical_rail = scrollable::Rail {
+        background: scrollbar.track_background.map(Background::Color),
+        border: Border {
+            color: scrollbar.track_border.color,
+            width: scrollbar.track_border.width,
+            radius: scrollbar.track_radius.into(),
+        },
+        scroller: scrollable::Scroller {
+            background: (if vertical_hover {
+                thumb_hover_color
+            } else {
+                thumb_color
+            })
+            .into(),
+            border: Border {
+                color: scrollbar.thumb_border.color,
+                width: scrollbar.thumb_border.width,
+                radius: scrollbar.thumb_radius.into(),
+            },
+        },
+    };
+
+    let horizontal_rail = scrollable::Rail {
+        background: scrollbar.track_background.map(Background::Color),
+        border: Border {
+            color: scrollbar.track_border.color,
+            width: scrollbar.track_border.width,
+            radius: scrollbar.track_radius.into(),
+        },
+        scroller: scrollable::Scroller {
+            background: (if horizontal_hover {
+                thumb_hover_color
+            } else {
+                thumb_color
+            })
+            .into(),
+            border: Border {
+                color: scrollbar.thumb_border.color,
+                width: scrollbar.thumb_border.width,
+                radius: scrollbar.thumb_radius.into(),
+            },
+        },
+    };
+
+    iced::widget::scrollable::Style {
+        container: container::Style {
+            background: Some(Background::Color(Color::TRANSPARENT)),
+            ..container::Style::default()
+        },
+        vertical_rail,
+        horizontal_rail,
+        gap: None,
+        auto_scroll: scrollable::AutoScroll {
+            background: Background::Color(Color::TRANSPARENT),
+            border: Border::default(),
+            shadow: Shadow::default(),
+            icon: Color::TRANSPARENT,
+        },
     }
 }

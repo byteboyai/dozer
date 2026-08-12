@@ -212,6 +212,8 @@ struct RenderContext<'a> {
     char_width: f32,
     /// Font to use for rendering text
     font: iced::Font,
+    /// Vertical padding inset from the top of each line cell to the glyph box
+    top_padding: f32,
     /// Horizontal scroll offset in pixels (subtracted from text X positions)
     horizontal_scroll_offset: f32,
 }
@@ -246,7 +248,7 @@ impl CodeEditor {
                 let x_pos = (number_area_width - text_width) / 2.0;
                 frame.fill_text(canvas::Text {
                     content: line_num_text,
-                    position: Point::new(x_pos, y + 2.0),
+                    position: Point::new(x_pos, y + ctx.top_padding),
                     color: self.style.line_number_color,
                     size: ctx.font_size.into(),
                     font: ctx.font,
@@ -256,7 +258,10 @@ impl CodeEditor {
                 // Draw wrap indicator for continuation lines.
                 frame.fill_text(canvas::Text {
                     content: "↪".to_string(),
-                    position: Point::new(number_area_width - 20.0, y + 2.0),
+                    position: Point::new(
+                        number_area_width - ctx.char_width * 2.0,
+                        y + ctx.top_padding,
+                    ),
                     color: self.style.line_number_color,
                     size: ctx.font_size.into(),
                     font: ctx.font,
@@ -298,7 +303,7 @@ impl CodeEditor {
 
         // Lucide 风格的折叠箭头:用两段矢量描边画出(不依赖字形字体),
         // 收起时朝右 `chevron-right`,展开时朝下 `chevron-down`。
-        let cx = number_area_width + super::FOLD_MARGIN_WIDTH * 0.5;
+        let cx = number_area_width + self.fold_margin_width * 0.5;
         let cy = y + ctx.line_height * 0.5;
         let s = (ctx.font_size * 0.30).max(3.0);
         let stroke = canvas::Stroke::default()
@@ -349,7 +354,7 @@ impl CodeEditor {
         let x = ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset + line_width + 6.0;
         frame.fill_text(canvas::Text {
             content: "⋯".to_string(),
-            position: Point::new(x, y + 2.0),
+            position: Point::new(x, y + ctx.top_padding),
             color: self.style.line_number_color,
             size: ctx.font_size.into(),
             font: ctx.font,
@@ -569,26 +574,26 @@ impl CodeEditor {
                         measure_text_width(&display_text, ctx.full_char_width, ctx.char_width);
 
                     if self.show_whitespace {
-                        let ws_color = self.style.whitespace_color;
                         let mut seg_x = x_offset;
                         for (is_ws, seg) in split_whitespace_segments(&display_text) {
-                            let seg_color = if is_ws { ws_color } else { *color };
                             let seg_width =
                                 measure_text_width(seg, ctx.full_char_width, ctx.char_width);
-                            frame.fill_text(canvas::Text {
-                                content: seg.to_string(),
-                                position: Point::new(seg_x, y + 2.0),
-                                color: seg_color,
-                                size: ctx.font_size.into(),
-                                font: ctx.font,
-                                ..canvas::Text::default()
-                            });
+                            if !is_ws {
+                                frame.fill_text(canvas::Text {
+                                    content: seg.to_string(),
+                                    position: Point::new(seg_x, y + ctx.top_padding),
+                                    color: *color,
+                                    size: ctx.font_size.into(),
+                                    font: ctx.font,
+                                    ..canvas::Text::default()
+                                });
+                            }
                             seg_x += seg_width;
                         }
                     } else {
                         frame.fill_text(canvas::Text {
                             content: display_text,
-                            position: Point::new(x_offset, y + 2.0),
+                            position: Point::new(x_offset, y + ctx.top_padding),
                             color: *color,
                             size: ctx.font_size.into(),
                             font: ctx.font,
@@ -617,26 +622,26 @@ impl CodeEditor {
             };
             let base_x = ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset;
             if self.show_whitespace {
-                let ws_color = self.style.whitespace_color;
                 let text_color = self.style.text_color;
                 let mut seg_x = base_x;
                 for (is_ws, seg) in split_whitespace_segments(&display_text) {
-                    let seg_color = if is_ws { ws_color } else { text_color };
                     let seg_width = measure_text_width(seg, ctx.full_char_width, ctx.char_width);
-                    frame.fill_text(canvas::Text {
-                        content: seg.to_string(),
-                        position: Point::new(seg_x, y + 2.0),
-                        color: seg_color,
-                        size: ctx.font_size.into(),
-                        font: ctx.font,
-                        ..canvas::Text::default()
-                    });
+                    if !is_ws {
+                        frame.fill_text(canvas::Text {
+                            content: seg.to_string(),
+                            position: Point::new(seg_x, y + ctx.top_padding),
+                            color: text_color,
+                            size: ctx.font_size.into(),
+                            font: ctx.font,
+                            ..canvas::Text::default()
+                        });
+                    }
                     seg_x += seg_width;
                 }
             } else {
                 frame.fill_text(canvas::Text {
                     content: display_text,
-                    position: Point::new(base_x, y + 2.0),
+                    position: Point::new(base_x, y + ctx.top_padding),
                     color: self.style.text_color,
                     size: ctx.font_size.into(),
                     font: ctx.font,
@@ -683,7 +688,7 @@ impl CodeEditor {
         );
         let x_start = x_start - ctx.horizontal_scroll_offset;
         frame.fill_rectangle(
-            Point::new(x_start, y + 2.0),
+            Point::new(x_start, y + ctx.top_padding),
             Size::new(width, ctx.line_height - 4.0),
             color,
         );
@@ -998,7 +1003,7 @@ impl CodeEditor {
                     // 1. Draw preedit background (light translucent)
                     // This indicates the text is not committed yet
                     frame.fill_rectangle(
-                        Point::new(cursor_x, cursor_y + 2.0),
+                        Point::new(cursor_x, cursor_y + ctx.top_padding),
                         Size::new(preedit_width, ctx.line_height - 4.0),
                         Color {
                             r: 1.0,
@@ -1034,7 +1039,7 @@ impl CodeEditor {
                             );
 
                             frame.fill_rectangle(
-                                Point::new(selection_x, cursor_y + 2.0),
+                                Point::new(selection_x, cursor_y + ctx.top_padding),
                                 Size::new(selection_w, ctx.line_height - 4.0),
                                 Color {
                                     r: 0.3,
@@ -1049,7 +1054,7 @@ impl CodeEditor {
                     // 3. Draw preedit text itself
                     frame.fill_text(canvas::Text {
                         content: preedit.content.clone(),
-                        position: Point::new(cursor_x, cursor_y + 2.0),
+                        position: Point::new(cursor_x, cursor_y + ctx.top_padding),
                         color: self.style.text_color,
                         size: ctx.font_size.into(),
                         font: ctx.font,
@@ -1081,7 +1086,7 @@ impl CodeEditor {
                                 );
 
                             frame.fill_rectangle(
-                                Point::new(caret_x, cursor_y + 2.0),
+                                Point::new(caret_x, cursor_y + ctx.top_padding),
                                 Size::new(2.0, ctx.line_height - 4.0),
                                 self.style.text_color,
                             );
@@ -1173,7 +1178,7 @@ impl CodeEditor {
             }
 
             frame.fill_rectangle(
-                Point::new(cursor_x, cursor_y + 2.0),
+                Point::new(cursor_x, cursor_y + ctx.top_padding),
                 cursor_size,
                 cursor_color,
             );
@@ -2005,6 +2010,7 @@ impl canvas::Program<Message> for CodeEditor {
                 full_char_width: self.full_char_width,
                 char_width: self.char_width,
                 font: self.font,
+                top_padding: self.top_padding,
                 horizontal_scroll_offset: self.horizontal_scroll_offset,
             };
 
@@ -2064,6 +2070,7 @@ impl canvas::Program<Message> for CodeEditor {
                 full_char_width: self.full_char_width,
                 char_width: self.char_width,
                 font: self.font,
+                top_padding: self.top_padding,
                 horizontal_scroll_offset: self.horizontal_scroll_offset,
             };
 

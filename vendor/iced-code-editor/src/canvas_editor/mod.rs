@@ -234,10 +234,10 @@ pub(crate) const FONT_SIZE: f32 = 14.0;
 pub(crate) const LINE_HEIGHT: f32 = 20.0;
 pub(crate) const CHAR_WIDTH: f32 = 8.4; // Monospace character width
 pub(crate) const TAB_WIDTH: usize = 4;
-pub(crate) const GUTTER_WIDTH: f32 = 45.0;
+pub(crate) const GUTTER_WIDTH: f32 = crate::theme::DEFAULT_GUTTER_WIDTH;
 /// Width in pixels of the fold margin (chevron column) added to the gutter when
 /// code folding is enabled.
-pub(crate) const FOLD_MARGIN_WIDTH: f32 = 14.0;
+pub(crate) const FOLD_MARGIN_WIDTH: f32 = crate::theme::DEFAULT_FOLD_MARGIN_WIDTH;
 pub(crate) const CURSOR_BLINK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(530);
 
 /// Measures the width of a single character.
@@ -491,6 +491,16 @@ pub struct CodeEditor {
     pub(crate) line_height: f32,
     /// Character width in pixels
     pub(crate) char_width: f32,
+    /// Gutter (line-number area) width in pixels. Injected by consumers so the
+    /// value can scale with the app's global UI scale; default `GUTTER_WIDTH`.
+    pub(crate) line_number_gutter_width: f32,
+    /// Fold-margin width in pixels (chevron column). Injected like
+    /// `line_number_gutter_width`; default `FOLD_MARGIN_WIDTH`.
+    pub(crate) fold_margin_width: f32,
+    /// Vertical text top-padding in pixels (the distance the glyph baseline is
+    /// inset from the top of its line cell). Injected so it scales with the
+    /// app's global UI scale; default 2.0.
+    pub(crate) top_padding: f32,
     /// Cached render window: the first visual line index included in the cache.
     /// We keep a larger window than the currently visible range to avoid clearing
     /// the canvas cache on every small scroll. Only when scrolling crosses the
@@ -972,6 +982,9 @@ impl CodeEditor {
             full_char_width: CHAR_WIDTH * 2.0,
             line_height: LINE_HEIGHT,
             char_width: CHAR_WIDTH,
+            line_number_gutter_width: GUTTER_WIDTH,
+            fold_margin_width: FOLD_MARGIN_WIDTH,
+            top_padding: crate::theme::DEFAULT_TOP_PADDING,
             // Initialize render window tracking for virtual scrolling:
             // these indices define the cached visual line window. The window is
             // expanded beyond the visible range to amortize redraws and keep scrolling smooth.
@@ -1159,6 +1172,31 @@ impl CodeEditor {
     /// The line height in pixels
     pub fn line_height(&self) -> f32 {
         self.line_height
+    }
+
+    /// Sets the gutter (line-number area) width, the fold-margin width, and the
+    /// glyph top-padding for this editor.
+    ///
+    /// Consumers that couple the editor to a global UI scale pass pre-scaled
+    /// values here so these layout pixels move with `Ctrl +/-` instead of being
+    /// frozen at their `GUTTER_WIDTH`/`FOLD_MARGIN_WIDTH`/2.0 defaults.
+    ///
+    /// # Arguments
+    ///
+    /// * `gutter_width` - Width of the line-number area in pixels
+    /// * `fold_margin_width` - Width of the fold-chevron column in pixels
+    /// * `top_padding` - Vertical inset from the top of a line cell to the glyph box
+    pub fn set_layout_metrics(
+        &mut self,
+        gutter_width: f32,
+        fold_margin_width: f32,
+        top_padding: f32,
+    ) {
+        self.line_number_gutter_width = gutter_width;
+        self.fold_margin_width = fold_margin_width;
+        self.top_padding = top_padding;
+        self.content_cache.clear();
+        self.overlay_cache.clear();
     }
 
     /// Returns the current viewport height in pixels.
@@ -2460,7 +2498,7 @@ impl CodeEditor {
     /// Returns the width of the line-number area (excluding the fold margin).
     pub(crate) fn line_number_gutter_width(&self) -> f32 {
         if self.line_numbers_enabled {
-            GUTTER_WIDTH
+            self.line_number_gutter_width
         } else {
             0.0
         }
@@ -2470,7 +2508,7 @@ impl CodeEditor {
     /// folding is disabled.
     pub(crate) fn fold_margin_width(&self) -> f32 {
         if self.folding_enabled {
-            FOLD_MARGIN_WIDTH
+            self.fold_margin_width
         } else {
             0.0
         }
@@ -2888,6 +2926,38 @@ mod tests {
         let default_editor = CodeEditor::new("", "rs");
         assert!(default_editor.custom_context_menu_entries().is_empty());
         assert!(default_editor.default_context_menu_enabled());
+    }
+
+    /// 防漂移锚:`new()` 的布局默认值必须和 `theme` 公开常量一致,否则
+    /// 依赖这些常量做全局缩放的消费者(如 dozer-app)会悄悄错位。
+    #[test]
+    #[allow(clippy::float_cmp)] // 断言的正是精确赋值,非浮点计算
+    fn new_editor_layout_defaults_match_public_consts() {
+        let editor = CodeEditor::new("", "rs");
+        assert_eq!(
+            editor.line_number_gutter_width,
+            crate::theme::DEFAULT_GUTTER_WIDTH
+        );
+        assert_eq!(
+            editor.fold_margin_width,
+            crate::theme::DEFAULT_FOLD_MARGIN_WIDTH
+        );
+        assert_eq!(editor.top_padding, crate::theme::DEFAULT_TOP_PADDING);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn set_layout_metrics_applies_and_scales() {
+        let mut editor = CodeEditor::new("", "rs");
+        editor.set_layout_metrics(90.0, 28.0, 4.0);
+        assert_eq!(editor.line_number_gutter_width, 90.0);
+        assert_eq!(editor.fold_margin_width, 28.0);
+        assert_eq!(editor.top_padding, 4.0);
+        // gutter/fold margin 在对应开关开启时计入。
+        assert!(editor.line_numbers_enabled);
+        assert_eq!(editor.line_number_gutter_width(), 90.0);
+        assert!(editor.folding_enabled);
+        assert_eq!(editor.fold_margin_width(), 28.0);
     }
 
     #[test]

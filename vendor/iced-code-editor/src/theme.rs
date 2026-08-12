@@ -1,4 +1,13 @@
-use iced::Color;
+use iced::{Border, Color, Shadow, Vector};
+
+/// Default line-number gutter width (pixels), for a consumer that wants to
+/// scale it through a global UI scale rather than use the internal default.
+pub const DEFAULT_GUTTER_WIDTH: f32 = 45.0;
+/// Default fold-chevron column width (pixels), likewise scaleable by consumers.
+pub const DEFAULT_FOLD_MARGIN_WIDTH: f32 = 14.0;
+/// Default glyph top-padding (pixels), the vertical inset of the text box from
+/// the top of its line cell. Also scaleable by consumers.
+pub const DEFAULT_TOP_PADDING: f32 = 2.0;
 
 /// The appearance of a code editor.
 #[derive(Debug, Clone, Copy)]
@@ -13,14 +22,136 @@ pub struct Style {
     pub gutter_border: Color,
     /// Color for line numbers text
     pub line_number_color: Color,
-    /// Scrollbar background color
-    pub scrollbar_background: Color,
-    /// Scrollbar scroller (thumb) color
-    pub scroller_color: Color,
     /// Highlight color for the current line where cursor is located
     pub current_line_highlight: Color,
     /// Color for visible whitespace characters (spaces as `·`, tabs as `→`)
     pub whitespace_color: Color,
+    /// Right-click context menu appearance.
+    pub context_menu: ContextMenuStyle,
+    /// Scrollbar appearance shared by the vertical and horizontal rails.
+    pub scrollbar: ScrollbarStyle,
+}
+
+/// The appearance of the editor's scrollbars.
+///
+/// A concrete, self-contained palette so consumers (e.g. Dozer) can align the
+/// editor's scrollbars with their own app-wide spec without hooking a specific
+/// `iced::Theme`. Both the geometry (rail/thickness) and the appearance live
+/// here so a single source of truth renders the vertical and horizontal rails.
+#[derive(Debug, Clone, Copy)]
+pub struct ScrollbarStyle {
+    /// Rail (track) thickness, in logical pixels.
+    pub rail_width: f32,
+    /// Thumb thickness, in logical pixels.
+    pub thumb_width: f32,
+    /// Corner radius of the thumb (Dozer uses a capsule: `thumb_width / 2`).
+    pub thumb_radius: f32,
+    /// Idle thumb color.
+    pub thumb_color: Color,
+    /// Thumb color while its rail is hovered or the thumb is dragged.
+    pub thumb_hover_color: Color,
+    /// Thumb border.
+    pub thumb_border: Border,
+    /// Rail (track) background; `None` renders a transparent track.
+    pub track_background: Option<Color>,
+    /// Rail (track) corner radius.
+    pub track_radius: f32,
+    /// Rail (track) border.
+    pub track_border: Border,
+}
+
+impl Default for ScrollbarStyle {
+    /// A neutral, generic appearance derived from the default Iced theme's
+    /// `Dark` palette. Consumers that want a bespoke look should set the
+    /// fields explicitly (see `Style::scrollbar`).
+    fn default() -> Self {
+        let palette = iced::Theme::Dark.extended_palette();
+        let thumb_width = 4.0;
+        Self {
+            rail_width: 10.0,
+            thumb_width,
+            thumb_radius: thumb_width / 2.0,
+            thumb_color: palette.secondary.weak.color,
+            thumb_hover_color: lighten(palette.secondary.weak.color, 0.2),
+            thumb_border: Border::default(),
+            track_background: Some(palette.background.base.color),
+            track_radius: 4.0,
+            track_border: Border::default(),
+        }
+    }
+}
+
+/// The appearance of the editor's right-click context menu.
+///
+/// A concrete, self-contained palette so the editor can be styled by
+/// consumers (e.g. Dozer) without them having to hook into any particular
+/// `iced::Theme`. All values are plain `Copy` scalars so a [`Style`] remains
+/// trivially cloneable/copyable.
+#[derive(Debug, Clone, Copy)]
+pub struct ContextMenuStyle {
+    /// Menu container background color.
+    pub background: Color,
+    /// Menu container border color.
+    pub border_color: Color,
+    /// Menu container border width.
+    pub border_width: f32,
+    /// Menu container corner radius.
+    pub border_radius: f32,
+    /// Drop shadow under the menu container (use `Shadow::default()` for none).
+    pub shadow: Shadow,
+    /// Menu container inner padding (all sides).
+    pub padding: f32,
+    /// Vertical gap between menu rows (items and separators).
+    pub gap: f32,
+    /// Fixed width of the menu container.
+    pub menu_width: f32,
+    /// Item row corner radius.
+    pub item_radius: f32,
+    /// Item row hover/pressed background color.
+    pub item_hover_background: Color,
+    /// Enabled item text color.
+    pub item_text_color: Color,
+    /// Disabled item text color.
+    pub item_disabled_text_color: Color,
+    /// Item horizontal padding (left/right).
+    pub item_padding_h: f32,
+    /// Item vertical padding.
+    pub item_padding_v: f32,
+    /// Gap between the label and its shortcut hint on an item row.
+    pub item_gap: f32,
+    /// Separator line color.
+    pub separator_color: Color,
+}
+
+impl Default for ContextMenuStyle {
+    /// A neutral, generic appearance derived from the default Iced theme's
+    /// `Dark` palette. Consumers that want a bespoke look should set the
+    /// fields explicitly (see `Style::context_menu`).
+    fn default() -> Self {
+        let palette = iced::Theme::Dark.extended_palette();
+        Self {
+            background: palette.background.weak.color,
+            border_color: palette.background.strong.color,
+            border_width: 1.0,
+            border_radius: 6.0,
+            shadow: Shadow {
+                color: Color::BLACK.scale_alpha(0.35),
+                offset: Vector::new(0.0, 4.0),
+                blur_radius: 14.0,
+            },
+            padding: 4.0,
+            gap: 1.0,
+            menu_width: 224.0,
+            item_radius: 4.0,
+            item_hover_background: palette.background.strong.color,
+            item_text_color: palette.background.weak.text,
+            item_disabled_text_color: palette.background.weak.text.scale_alpha(0.35),
+            item_padding_h: 9.0,
+            item_padding_v: 6.0,
+            item_gap: 8.0,
+            separator_color: palette.background.strong.color,
+        }
+    }
 }
 
 /// The theme catalog of a code editor.
@@ -73,8 +204,6 @@ impl Catalog for iced::Theme {
 /// - `gutter_background`: Slightly darker/lighter than background
 /// - `gutter_border`: Border between gutter and editor
 /// - `line_number_color`: Dimmed text color for subtle line numbers
-/// - `scrollbar_background`: Matches editor background
-/// - `scroller_color`: Uses secondary color for visibility
 /// - `current_line_highlight`: Subtle highlight using primary color
 ///
 /// # Example
@@ -115,10 +244,6 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
         blend_colors(text_color, background, 0.5)
     };
 
-    // Scrollbar colors: blend with background
-    let scrollbar_background = background;
-    let scroller_color = palette.secondary.weak.color;
-
     // Current line highlight: very subtle with primary color
     let current_line_highlight = with_alpha(
         palette.primary.weak.color,
@@ -137,10 +262,10 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
         gutter_background,
         gutter_border,
         line_number_color,
-        scrollbar_background,
-        scroller_color,
         current_line_highlight,
         whitespace_color,
+        context_menu: ContextMenuStyle::default(),
+        scrollbar: ScrollbarStyle::default(),
     }
 }
 
@@ -227,6 +352,21 @@ mod tests {
         // Text should be dark for contrast
         let text_brightness = (style.text_color.r + style.text_color.g + style.text_color.b) / 3.0;
         assert!(text_brightness < 0.5, "Light theme should have dark text");
+    }
+
+    #[test]
+    fn test_style_env_populates_context_menu_default() {
+        // Every `Style` produced by the default builder carries a fully
+        // initialized context-menu palette (independently overridable by
+        // consumers, e.g. Dozer). Regression guard against forgetting the field.
+        let style = from_iced_theme(&iced::Theme::Dark);
+        assert!(style.context_menu.menu_width > 0.0);
+        assert!(style.context_menu.padding >= 0.0);
+        assert!(style.context_menu.border_width > 0.0);
+
+        // The struct is `Copy`, so the whole `Style` stays copyable.
+        let copy = style;
+        assert_eq!(copy.context_menu.background, style.context_menu.background);
     }
 
     #[test]

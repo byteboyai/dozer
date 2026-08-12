@@ -1,12 +1,11 @@
 //! Right-click context menu for editor actions.
 
 use iced::widget::{Space, button, column, container, row, text};
-use iced::{Background, Border, Color, Element, Length, Shadow, Theme, Vector};
+use iced::{Background, Border, Element, Length, Theme};
 
 use super::Message;
 use crate::i18n::Translations;
-
-const MENU_WIDTH: f32 = 224.0;
+use crate::theme::Style;
 
 /// An actionable entry in the editor context menu.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,6 +238,7 @@ pub(crate) fn view(
     default_context_menu_enabled: bool,
     state: MenuState,
     translations: Translations,
+    style: &Style,
 ) -> Element<'static, Message> {
     let items = build_entries(custom, default_context_menu_enabled, state, &translations)
         .into_iter()
@@ -247,30 +247,24 @@ pub(crate) fn view(
                 label,
                 shortcut,
                 message,
-            } => menu_item(label, shortcut, message),
-            MenuEntry::Separator => separator(),
+            } => menu_item(label, shortcut, message, style),
+            MenuEntry::Separator => separator(style),
         })
         .collect::<Vec<_>>();
 
-    container(column(items).spacing(1).padding(4))
-        .width(Length::Fixed(MENU_WIDTH))
-        .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(Background::Color(palette.background.weak.color)),
-                text_color: Some(palette.background.weak.text),
-                border: Border {
-                    color: palette.background.strong.color,
-                    width: 1.0,
-                    radius: 6.0.into(),
-                },
-                shadow: Shadow {
-                    color: Color::BLACK.scale_alpha(0.35),
-                    offset: Vector::new(0.0, 4.0),
-                    blur_radius: 14.0,
-                },
-                ..container::Style::default()
-            }
+    let menu = style.context_menu;
+    container(column(items).spacing(menu.gap).padding(menu.padding))
+        .width(Length::Fixed(menu.menu_width))
+        .style(move |_theme: &Theme| container::Style {
+            background: Some(Background::Color(menu.background)),
+            text_color: Some(menu.item_text_color),
+            border: Border {
+                color: menu.border_color,
+                width: menu.border_width,
+                radius: menu.border_radius.into(),
+            },
+            shadow: menu.shadow,
+            ..container::Style::default()
         })
         .into()
 }
@@ -279,34 +273,36 @@ fn menu_item(
     label: String,
     shortcut: String,
     message: Option<Message>,
+    style: &Style,
 ) -> Element<'static, Message> {
     let enabled = message.is_some();
+    let menu = style.context_menu;
     let content = row![
         text(label).size(13),
         Space::new().width(Length::Fill),
         text(shortcut).size(12),
     ]
+    .spacing(menu.item_gap)
     .align_y(iced::Alignment::Center);
 
     button(content)
         .width(Length::Fill)
-        .padding([6, 9])
+        .padding([menu.item_padding_v, menu.item_padding_h])
         .on_press_maybe(message)
-        .style(move |theme: &Theme, status| {
-            let palette = theme.extended_palette();
+        .style(move |_theme: &Theme, status| {
             let text_color = if enabled {
-                palette.background.weak.text
+                menu.item_text_color
             } else {
-                palette.background.weak.text.scale_alpha(0.35)
+                menu.item_disabled_text_color
             };
             let background = matches!(status, button::Status::Hovered | button::Status::Pressed)
-                .then_some(Background::Color(palette.background.strong.color));
+                .then_some(Background::Color(menu.item_hover_background));
 
             button::Style {
                 background,
                 text_color,
                 border: Border {
-                    radius: 4.0.into(),
+                    radius: menu.item_radius.into(),
                     ..Border::default()
                 },
                 ..button::Style::default()
@@ -315,14 +311,12 @@ fn menu_item(
         .into()
 }
 
-fn separator() -> Element<'static, Message> {
+fn separator(style: &Style) -> Element<'static, Message> {
+    let color = style.context_menu.separator_color;
     let line = container(Space::new().width(Length::Fill).height(Length::Fixed(1.0))).style(
-        |theme: &Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(Background::Color(palette.background.strong.color)),
-                ..container::Style::default()
-            }
+        move |_theme: &Theme| container::Style {
+            background: Some(Background::Color(color)),
+            ..container::Style::default()
         },
     );
 
