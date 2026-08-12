@@ -787,8 +787,8 @@ pub fn view<'a>(
 
     // "显示/隐藏点文件"按钮:切换后 `ToggleDotfiles` 调
     // `set_show_dotfiles` 重读树。图标反映当前口径——正显示(`eye`)时点它
-    // 隐藏点文件;隐藏(`eye-off`)时点它恢复显示。点文件被隐藏时按钮边框
-    // 用 GOLD 高亮提示当前树缺了点文件(与搜索生效同款"功能开启"信号)。
+    // 隐藏点文件;隐藏(`eye-off`)时点它恢复显示。切换只换图标,不套任何
+    // "选中生效"的视觉信号(无 GOLD 边框/无点亮图标),保持按钮常驻常态外观。
     let dotfiles_shown = ws_state
         .file_tree
         .as_ref()
@@ -802,7 +802,7 @@ pub fn view<'a>(
                 icons::IconKind::EyeOff
             },
             crate::theme::icon_size::row(),
-            !dotfiles_shown,
+            false,
             dotfiles_hover_t,
             true,
         )
