@@ -937,14 +937,6 @@ impl State {
             .map(|h| h.progress)
             .unwrap_or(0.0)
     }
-
-    /// 星标/收藏夹按钮的 hover 进入/离开(hovered),用哨兵键写进度机。
-    pub(crate) fn set_toolbar_hover(&mut self, bookmarks: bool, hovered: bool) {
-        self.hover
-            .entry((STAR_HOVER_KEY, bookmarks))
-            .or_default()
-            .set(hovered);
-    }
 }
 
 /// 浏览器面板"星标/收藏夹"两个工具栏按钮的 hover 哨兵键——真实 tab 序号

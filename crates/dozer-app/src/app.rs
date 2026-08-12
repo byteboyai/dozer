@@ -2760,7 +2760,10 @@ impl App {
             Message::Files(
                 msg @ (files::Message::StatusesRefreshed(project_id, ..)
                 | files::Message::PasteDone(project_id, ..)
-                | files::Message::OpDone { project_id, .. }),
+                | files::Message::OpDone { project_id, .. }
+                | files::Message::GitInfoLoaded(project_id, ..)
+                | files::Message::BranchSwitchDone(project_id, ..)
+                | files::Message::GitInitDone(project_id, ..)),
             ) => self.files_project_message(project_id, msg),
 
             Message::Files(files::Message::ToolbarHover(target, hovered)) => {
