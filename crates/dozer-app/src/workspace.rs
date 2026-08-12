@@ -303,6 +303,11 @@ pub struct Workspace {
     pub(crate) preview: PreviewPane,
     /// 预览域错误文案(打开文件失败等), RED 显示在预览栏地址栏下方。
     pub(crate) preview_error: Option<String>,
+    /// 预览上下文推送的防抖 nonce:每次变化时自增，延迟任务醒来后只有
+    /// "自己发起时的值仍是最新值"才真正推送，否则说明中途又有新变化，
+    /// 让更晚的那次任务去做(trailing-edge 防抖，见
+    /// `spawn_preview_context_push`)。
+    pub(crate) preview_context_nonce: Arc<std::sync::atomic::AtomicU64>,
     /// 浏览器面板状态——自己的 `Message`/`update`/`view`,见
     /// `extensions::browser`。挂在每个 `Workspace` 上(不像 Git Log 挂在
     /// `App` 上),项目切换靠 `Workspace` 生命周期天然隔离。
@@ -515,6 +520,7 @@ impl Workspace {
             ssh_out_pending: HashMap::new(),
             preview: PreviewPane::default(),
             preview_error: None,
+            preview_context_nonce: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             browser: browser::State::default(),
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
             acceptance: acceptance::WorkspaceState::default(),
@@ -997,6 +1003,48 @@ impl Workspace {
         io.handle.spawn(async move {
             if let Err(e) = preview_state::save(project_id, &state) {
                 tracing::warn!("预览 tab 状态写盘失败: {e}");
+            }
+        });
+    }
+
+    /// 把当前预览上下文(活动 tab 路径 + 光标/选区)防抖推给 `dozerd`。
+    /// 无活动 tab、或活动 tab 无原生 `CodeEditor`(图片/webview 类)时推
+    /// `None`。~250ms trailing-edge 防抖:连续快速触发(方向键连按)只有
+    /// 最后一次真正发出 UDS 请求。
+    pub(crate) fn spawn_preview_context_push(&mut self, io: &ShellIo) {
+        let Some(project) = &self.project else {
+            return;
+        };
+        let project_id = project.id;
+        let context = self
+            .preview
+            .tabs()
+            .get(self.preview.active_idx())
+            .and_then(|tab| {
+                let TabKind::File(path) = &tab.kind;
+                let editor = tab.editor.as_ref()?;
+                let path_str = path.to_string_lossy().into_owned();
+                Some(preview_context_from_editor_state(
+                    &path_str,
+                    editor.has_selection(),
+                    editor.cursor_position(),
+                    editor.selection_range(),
+                ))
+            });
+
+        let nonce = self
+            .preview_context_nonce
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        let flag = self.preview_context_nonce.clone();
+        let client = io.client.clone();
+        io.handle.spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            if flag.load(std::sync::atomic::Ordering::SeqCst) != nonce {
+                return; // 被更晚的一次变化取代
+            }
+            if let Err(e) = client.update_preview_context(project_id, context).await {
+                tracing::warn!("推送预览上下文失败: {e}");
             }
         });
     }
@@ -2584,6 +2632,30 @@ pub(crate) fn agent_icon(agent: AgentKind) -> IconKind {
     }
 }
 
+/// 由(路径, 是否有选区, 0-indexed 光标位置, 0-indexed 选区范围)组装
+/// 1-indexed 的 `PreviewContext`。抽成纯函数是为了不依赖真实
+/// `CodeEditor`/`PreviewPane` 就能单测坐标转换这一层逻辑。
+fn preview_context_from_editor_state(
+    path: &str,
+    has_selection: bool,
+    cursor: (usize, usize),
+    selection: Option<((usize, usize), (usize, usize))>,
+) -> dozer_core::protocol::PreviewContext {
+    let (start, end) = if has_selection {
+        selection.unwrap_or((cursor, cursor))
+    } else {
+        (cursor, cursor)
+    };
+    dozer_core::protocol::PreviewContext {
+        path: path.to_string(),
+        start_line: start.0 as u32 + 1,
+        start_col: start.1 as u32 + 1,
+        end_line: end.0 as u32 + 1,
+        end_col: end.1 as u32 + 1,
+        has_selection,
+    }
+}
+
 /// 促成的 **IO 段**:把一个项目在 daemon 上的存活会话逐一 attach 下来,连同
 /// 最近项目列表打包成 [`ProjectRestore`]。整段只碰 `Client`,不碰任何 GUI
 /// 类型,所以可以在 tokio 线程池上跑(`App::ensure_loaded` 正是这么用的)。
@@ -2670,6 +2742,30 @@ pub(crate) async fn forward_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_context_from_cursor_only_uses_1_indexed_point_range() {
+        // 无选区:0-indexed (1, 4) 光标 → 1-indexed start==end==(2, 5)。
+        let ctx = preview_context_from_editor_state("/repo/src/main.rs", false, (1, 4), None);
+        assert_eq!(ctx.path, "/repo/src/main.rs");
+        assert_eq!((ctx.start_line, ctx.start_col), (2, 5));
+        assert_eq!((ctx.end_line, ctx.end_col), (2, 5));
+        assert!(!ctx.has_selection);
+    }
+
+    #[test]
+    fn preview_context_from_selection_uses_1_indexed_range() {
+        // 0-indexed 选区 (1,4)..(3,0) → 1-indexed (2,5)..(4,1)。
+        let ctx = preview_context_from_editor_state(
+            "/repo/src/main.rs",
+            true,
+            (1, 4),
+            Some(((1, 4), (3, 0))),
+        );
+        assert_eq!((ctx.start_line, ctx.start_col), (2, 5));
+        assert_eq!((ctx.end_line, ctx.end_col), (4, 1));
+        assert!(ctx.has_selection);
+    }
 
     /// 促成期占位的**核心不变式**:同步换上的那一刻就必须已知归属项目。
     ///
