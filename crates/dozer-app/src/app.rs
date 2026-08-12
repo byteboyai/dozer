@@ -3307,39 +3307,7 @@ impl App {
                     });
                 }
             }
-            Message::ProjectSelect(id) => {
-                // 切项目不再通知 daemon:"活跃项目"是 GUI 侧的概念了(P2a
-                // Task 1-3 删掉了 SetActiveProject)。
-                //
-                // 这个项目已经开着页签(`Loaded` 或还没促成的 `Stub`)时,点最近
-                // 项目卡片就只是"切到那个页签",走与点页签完全相同的非破坏性
-                // 路径——绝不能杀掉任何已有页签的会话(设计文档 §2)。
-                // 切走前先把当前(老)项目的面板布局原样存下,再换成新项目的。
-                self.stash_active_panel_layout();
-                if focus_project_tab(&self.projects, &mut self.active_project_id, id) {
-                    self.adopt_panel_layout(id);
-                    self.maximized = None;
-                    self.current_page = AppPage::Workspace;
-                    self.ensure_loaded(id);
-                    // 清放大态改变了终端 pane 的像素尺寸,网格必须跟着重算:
-                    // `terminal_grid_state` 把 `maximized` 算进去,不重算的话
-                    // PTY 会一直停在放大时的 cols/rows,直到某个无关的几何事件
-                    // 偶然触发一次重算(最终审查 Required Fix #2)。
-                    self.sync_terminal_grid();
-                    self.persist_open_projects();
-                    return;
-                }
-                // 还没开着:作为**新页签**打开(与顶栏"＋"同一条 `ProjectTabOpened`
-                // 落地路径),而不是把当前页签的内容换掉——多页签下"点一张最近
-                // 项目卡片"的直觉是"再开一个",不是"把手上这个换掉"。
-                let client = self.client.clone();
-                let proxy = self.proxy.clone();
-                self.handle.spawn(async move {
-                    let recent = client.list_projects().await.unwrap_or_default();
-                    let opened = recent.iter().find(|p| p.id == id).cloned();
-                    let _ = proxy.send_event(Message::ProjectTabOpened(opened, recent));
-                });
-            }
+            Message::ProjectSelect(id) => self.project_select(id),
             Message::ProjectTabPickFolder => {} // 副作用在 main.rs(rfd 文件夹选择)
             Message::ProjectTabOpen(path) => {
                 let client = self.client.clone();
@@ -3351,213 +3319,12 @@ impl App {
                     let _ = proxy.send_event(Message::ProjectTabOpened(opened, recent));
                 });
             }
-            Message::ProjectTabOpened(project, recent) => {
-                self.recent_projects = recent.clone();
-                // `None` = 这次打开失败(daemon 不通/回 `Reply::Error`)。硬性
-                // 要求:失败绝不能落进任何 `Workspace`,否则会留下"有界面、没
-                // 归属项目"的破状态,用户一点 tab 栏的"＋"就 panic
-                // (`spawn_new_tab` 的 expect)。失败文案挂到 App 级的
-                // `daemon_error` 上——它不依赖任何 `Workspace` 存在,一个项目
-                // 都没打开时空态视图也画得出来(Required Fix #1)。
-                let Some(project) = project else {
-                    tracing::warn!("打开项目页签失败,页签集合保持不变");
-                    self.daemon_error = Some("打开项目失败,请确认 dozerd 正常后重试".to_string());
-                    self.with_focused_project(move |ws, _io| {
-                        ws.recent_projects = recent;
-                    });
-                    return;
-                };
-                self.daemon_error = None;
-                // 放大态是外壳态,换页签后留着只会挡住新页签的界面。
-                self.maximized = None;
-                let id = project.id;
-                // 切走前先把当前(老)项目的面板布局原样存下,再换成新项目的。
-                self.stash_active_panel_layout();
-                if focus_project_tab(&self.projects, &mut self.active_project_id, id) {
-                    self.adopt_panel_layout(id);
-                    // 这个项目已经开着页签了:只前台化,绝不改写它的内容——
-                    // 那会把这个页签既有的终端全关掉、文件树对话列表全清空重来。
-                    self.current_page = AppPage::Workspace;
-                    self.ensure_loaded(id);
-                    self.with_focused_project(move |ws, _io| {
-                        ws.recent_projects = recent;
-                    });
-                    self.sync_terminal_grid(); // 清放大态后重算网格,理由见 `ProjectSelect`
-                    self.persist_open_projects();
-                    return;
-                }
-                let io = self.shell_io();
-                let mut ws = Workspace::empty_for_project_placeholder();
-                ws.recent_projects = recent;
-                ws.adopt_project(&io, project);
-                self.projects
-                    .insert(id, WorkspaceSlot::Loaded(Box::new(ws)));
-                self.project_order.push(id);
-                self.active_project_id = Some(id);
-                // 换成新项目的面板布局(它自己没存过就退化成默认)。
-                self.adopt_panel_layout(id);
-                self.current_page = AppPage::Workspace;
-                self.sync_terminal_grid(); // 同上
-                self.persist_open_projects();
-            }
-            Message::ProjectTabSwitch(id) => {
-                // 切页签只有两件事:改 `active_project_id`、必要时促成 `Stub`。
-                // 没有任何内容改写,因此后台项目的终端/预览/审阅原样留着,切
-                // 回来还是刚才那副样子。
-                // 切走前先把当前(老)项目的面板布局原样存下,再换成新项目的。
-                self.stash_active_panel_layout();
-                if !focus_project_tab(&self.projects, &mut self.active_project_id, id) {
-                    return;
-                }
-                self.adopt_panel_layout(id);
-                self.maximized = None;
-                self.current_page = AppPage::Workspace;
-                self.ensure_loaded(id);
-                // Git Log 面板已经开着的话,提交图缓存是 `App` 级的、不随项目
-                // 页签走(见 `sync_git_log_to_active_project` 文档),不补这一
-                // 下切页签会让提交图停在上一个项目,跟同一面板里已经按新项目
-                // 刷新的 worktree 速览条对不上。
-                if self.left_view == LeftView::GitLog {
-                    self.sync_git_log_to_active_project();
-                }
-                // 清放大态后必须重算终端网格。`PaneResized` 那条分支只在**窗口
-                // 几何变化**时触发,清 `maximized` 不会自己走到那里;而
-                // `terminal_grid_state` 把 `maximized` 算进公式,不重算的话
-                // "在项目 A 放大终端 → 切到 B"会让 A 的 PTY 停在放大时的
-                // cols/rows(最终审查 Required Fix #2)。重算是幂等的:算出来
-                // 与当前 `cols/rows` 相同时 `PaneResized` 的去重会原地返回。
-                self.sync_terminal_grid();
-                self.persist_open_projects();
-                // 按下项目页签＝选中＋准备被拖走(同终端/预览页签)。
-                if let Some(idx) = self.project_order.iter().position(|p| *p == id) {
-                    self.tab_drag = Some(TabDrag {
-                        group: TabGroup::Project,
-                        source: idx,
-                    });
-                }
-            }
-            Message::ProjectTabClose(id) => {
-                // 关掉当前页签前先把它的面板布局原样存下(焦点还在它身上,
-                // `stash` 会记进 `id` 那份),以后重开还能恢复。
-                self.stash_active_panel_layout();
-                let io = self.shell_io();
-                let Some(slot) = take_project_tab(
-                    &mut self.projects,
-                    &mut self.project_order,
-                    &mut self.active_project_id,
-                    id,
-                ) else {
-                    return;
-                };
-                if let WorkspaceSlot::Loaded(mut ws) = slot {
-                    // 关页签 = 结束该项目下所有会话(abort 转发任务 + kill
-                    // daemon 侧会话)。不 kill 的话会话会继续在 daemon 上跑,
-                    // 还会被下次 bootstrap 恢复出来。
-                    ws.close_all_tabs_for_switch(&io);
-                }
-                self.maximized = None;
-                // 焦点被 `take_project_tab` 挪到了邻居页签上,而那个邻居可能还
-                // 是个懒加载 `Stub`——`view()` 走的是只读的 `active_workspace()`,
-                // 它**不促成** `Stub`,于是界面会画成"未打开任何项目",尽管顶栏
-                // 那个页签明明高亮着。必须在这里显式促成(最终审查 Required
-                // Fix #3)。
-                if let Some(next) = self.active_project_id {
-                    // 焦点被挪到了邻居页签,把它的面板布局换上来。
-                    self.adopt_panel_layout(next);
-                    self.ensure_loaded(next);
-                }
-                self.sync_terminal_grid(); // 清放大态后重算网格,理由同 `ProjectTabSwitch`
-                self.persist_open_projects();
-            }
-            Message::ProjectSlotLoaded(id, payload) => {
-                let Some(restore) = payload.take() else {
-                    return; // 信封已被取走(理论上不会发生),没有素材可落地
-                };
-                // 只在槽位仍是那份"加载中"占位时落地。两种落空情形:
-                // - 页签在促成完成前被用户关掉了(槽位已不存在);
-                // - 槽位已经被别的路径换成了真正的内容(比如
-                //   `ProjectTabOpened` 的 `adopt_project`)。
-                // 两种情形下这份素材都没人要了,但它已经 attach 上了该项目在
-                // daemon 上的存活会话——直接 drop 只是断开事件流,daemon 侧
-                // 会话仍在跑,会变成"没有任何页签持有、却还占着 PTY"的野会话。
-                // 所以按关页签的语义结束掉它们(`ProjectTabClose` 同款处理)。
-                // 落地的同时把占位那份 `allowed_files` 句柄接过来:main.rs 的
-                // webview 池只在 `active_project_id` **变化**时才清空,它看不见
-                // "同一个项目换了一份 `Workspace` 对象"。促成窗口期里用户点开
-                // 的文件预览已经建出一个 id 0 的 webview,其 `dozer://` 协议
-                // 闭包捕获的是**占位那一个** `Arc`;新 `Workspace` 若另起一个
-                // `Arc`,`restore_preview_state` 重开的 id 0 会被
-                // `sync_webview_pool` 认成"这个 id 已经有 webview 了"而只调
-                // `load_url`,于是文件请求走的还是旧 `Arc` 的白名单 → 对不上
-                // → 空白预览。这与 Required Fix #3 是同一个失效模式,只是触发
-                // 点从"切项目"变成"促成换对象"。共用同一个 `Arc` 即可,而且
-                // 不损失已经建好的 webview(比清空池更省一次导航)。
-                let inherited = match self.projects.get(&id) {
-                    Some(WorkspaceSlot::Loaded(cur)) if cur.loading => Some(cur.allowed_files()),
-                    _ => None,
-                };
-                let landed = inherited.is_some();
-                if !landed {
-                    let client = self.client.clone();
-                    let ids: Vec<String> = restore
-                        .sessions
-                        .iter()
-                        .map(|(info, _, _)| info.id.clone())
-                        .collect();
-                    self.handle.spawn(async move {
-                        for sid in ids {
-                            if let Err(e) = client.kill(&sid).await {
-                                tracing::warn!("丢弃过期促成结果时结束会话失败: {e}");
-                            }
-                        }
-                    });
-                    return;
-                }
-                let io = self.shell_io();
-                let mut ws = Workspace::from_restore(&io, *restore, inherited);
-                // 重挂出来的会话,终端模型是按 `DEFAULT_COLS`×`DEFAULT_ROWS`
-                // 建的,得按当前窗口几何纠正一次。这里**不能**指望
-                // `sync_terminal_grid`:它算出来的网格与 `self.cols/rows` 相同
-                // 时 `PaneResized` 会原地返回(去重),于是这份新装配的
-                // `Workspace` 会一直停在 80×24。直接对它自己 resize 一次。
-                ws.resize_all(&io, io.cols, io.rows);
-                self.projects
-                    .insert(id, WorkspaceSlot::Loaded(Box::new(ws)));
-            }
+            Message::ProjectTabOpened(project, recent) => self.project_tab_opened(project, recent),
+            Message::ProjectTabSwitch(id) => self.project_tab_switch(id),
+            Message::ProjectTabClose(id) => self.project_tab_close(id),
+            Message::ProjectSlotLoaded(id, payload) => self.project_slot_loaded(id, payload),
             Message::ProjectFsChanged(project_id, relevance) => {
-                self.with_project(project_id, |ws, io| {
-                    let Some(project) = &ws.project else { return };
-                    spawn_project_git_refresh(project_id, PathBuf::from(&project.path), io);
-                });
-                // 只有 `.git` 引用类变化(分支切换/外部提交/其他 worktree
-                // 提交)才值得重建 Git Log 快照——纯工作区文件编辑不影响
-                // 提交历史,重算是纯浪费。`git_log_cache` 是 `App` 级、不是
-                // 按项目分的(见 `sync_git_log_to_active_project`),所以这里
-                // 必须先核实这条事件本来就是"当前聚焦项目"发出的
-                // (`project_id == self.active_project_id`)——否则后台项目
-                // 的引用变化会拿"缓存路径恰好等于前台项目路径"这个巧合当
-                // 通行证,把前台正打开的详情/选中态平白清掉,而其实什么都
-                // 没变。项目 id 匹配之外再核一次路径,双保险防状态漂移。
-                if relevance == git_watch::Relevance::GitRefs
-                    && self.active_project_id == Some(project_id)
-                    && let Some(repo_path) = self.git_log.cache_repo_path().map(|p| p.to_path_buf())
-                    && self
-                        .active_workspace()
-                        .and_then(|ws| ws.active_project_path())
-                        .as_deref()
-                        == Some(repo_path.as_path())
-                {
-                    // 引用变化只是要"内容不变、重新拉一遍",窗口大小维持原样——
-                    // 用 `cache_max_count()`(读当前缓存的 max_count),不是"加载
-                    // 更多"专用、会 `+LOAD_MORE_STEP` 的 `next_load_more_count()`。
-                    let max = self.git_log.cache_max_count();
-                    let handle = self.handle.clone();
-                    let proxy = self.proxy.clone();
-                    let emit = move |m| {
-                        let _ = proxy.send_event(Message::GitLog(m));
-                    };
-                    git_log::request_refresh(&mut self.git_log, repo_path, max, &handle, emit);
-                }
+                self.project_fs_changed(project_id, relevance)
             }
             Message::GitLog(git_log::Message::ProjectTabOpen(p)) => {
                 // worktree 条带里点其它 worktree,转成内核的切项目消息。
@@ -3843,6 +3610,253 @@ impl App {
             // 鼠标在子 webview 上松开(见 `WebViewMouseUp` 文档):一并结束页签
             // 拖拽,避免"松开还能继续拖"。
             Message::WebViewMouseUp => self.end_tab_drag(),
+        }
+    }
+
+    fn project_select(&mut self, id: i64) {
+        // 切项目不再通知 daemon:"活跃项目"是 GUI 侧的概念了(P2a
+        // Task 1-3 删掉了 SetActiveProject)。
+        //
+        // 这个项目已经开着页签(`Loaded` 或还没促成的 `Stub`)时,点最近
+        // 项目卡片就只是"切到那个页签",走与点页签完全相同的非破坏性
+        // 路径——绝不能杀掉任何已有页签的会话(设计文档 §2)。
+        // 切走前先把当前(老)项目的面板布局原样存下,再换成新项目的。
+        self.stash_active_panel_layout();
+        if focus_project_tab(&self.projects, &mut self.active_project_id, id) {
+            self.adopt_panel_layout(id);
+            self.maximized = None;
+            self.current_page = AppPage::Workspace;
+            self.ensure_loaded(id);
+            // 清放大态改变了终端 pane 的像素尺寸,网格必须跟着重算:
+            // `terminal_grid_state` 把 `maximized` 算进去,不重算的话
+            // PTY 会一直停在放大时的 cols/rows,直到某个无关的几何事件
+            // 偶然触发一次重算(最终审查 Required Fix #2)。
+            self.sync_terminal_grid();
+            self.persist_open_projects();
+            return;
+        }
+        // 还没开着:作为**新页签**打开(与顶栏"＋"同一条 `ProjectTabOpened`
+        // 落地路径),而不是把当前页签的内容换掉——多页签下"点一张最近
+        // 项目卡片"的直觉是"再开一个",不是"把手上这个换掉"。
+        let client = self.client.clone();
+        let proxy = self.proxy.clone();
+        self.handle.spawn(async move {
+            let recent = client.list_projects().await.unwrap_or_default();
+            let opened = recent.iter().find(|p| p.id == id).cloned();
+            let _ = proxy.send_event(Message::ProjectTabOpened(opened, recent));
+        });
+    }
+
+    fn project_tab_opened(&mut self, project: Option<ProjectInfo>, recent: Vec<ProjectInfo>) {
+        self.recent_projects = recent.clone();
+        // `None` = 这次打开失败(daemon 不通/回 `Reply::Error`)。硬性
+        // 要求:失败绝不能落进任何 `Workspace`,否则会留下"有界面、没
+        // 归属项目"的破状态,用户一点 tab 栏的"＋"就 panic
+        // (`spawn_new_tab` 的 expect)。失败文案挂到 App 级的
+        // `daemon_error` 上——它不依赖任何 `Workspace` 存在,一个项目
+        // 都没打开时空态视图也画得出来(Required Fix #1)。
+        let Some(project) = project else {
+            tracing::warn!("打开项目页签失败,页签集合保持不变");
+            self.daemon_error = Some("打开项目失败,请确认 dozerd 正常后重试".to_string());
+            self.with_focused_project(move |ws, _io| {
+                ws.recent_projects = recent;
+            });
+            return;
+        };
+        self.daemon_error = None;
+        // 放大态是外壳态,换页签后留着只会挡住新页签的界面。
+        self.maximized = None;
+        let id = project.id;
+        // 切走前先把当前(老)项目的面板布局原样存下,再换成新项目的。
+        self.stash_active_panel_layout();
+        if focus_project_tab(&self.projects, &mut self.active_project_id, id) {
+            self.adopt_panel_layout(id);
+            // 这个项目已经开着页签了:只前台化,绝不改写它的内容——
+            // 那会把这个页签既有的终端全关掉、文件树对话列表全清空重来。
+            self.current_page = AppPage::Workspace;
+            self.ensure_loaded(id);
+            self.with_focused_project(move |ws, _io| {
+                ws.recent_projects = recent;
+            });
+            self.sync_terminal_grid(); // 清放大态后重算网格,理由见 `ProjectSelect`
+            self.persist_open_projects();
+            return;
+        }
+        let io = self.shell_io();
+        let mut ws = Workspace::empty_for_project_placeholder();
+        ws.recent_projects = recent;
+        ws.adopt_project(&io, project);
+        self.projects
+            .insert(id, WorkspaceSlot::Loaded(Box::new(ws)));
+        self.project_order.push(id);
+        self.active_project_id = Some(id);
+        // 换成新项目的面板布局(它自己没存过就退化成默认)。
+        self.adopt_panel_layout(id);
+        self.current_page = AppPage::Workspace;
+        self.sync_terminal_grid(); // 同上
+        self.persist_open_projects();
+    }
+
+    fn project_tab_switch(&mut self, id: i64) {
+        // 切页签只有两件事:改 `active_project_id`、必要时促成 `Stub`。
+        // 没有任何内容改写,因此后台项目的终端/预览/审阅原样留着,切
+        // 回来还是刚才那副样子。
+        // 切走前先把当前(老)项目的面板布局原样存下,再换成新项目的。
+        self.stash_active_panel_layout();
+        if !focus_project_tab(&self.projects, &mut self.active_project_id, id) {
+            return;
+        }
+        self.adopt_panel_layout(id);
+        self.maximized = None;
+        self.current_page = AppPage::Workspace;
+        self.ensure_loaded(id);
+        // Git Log 面板已经开着的话,提交图缓存是 `App` 级的、不随项目
+        // 页签走(见 `sync_git_log_to_active_project` 文档),不补这一
+        // 下切页签会让提交图停在上一个项目,跟同一面板里已经按新项目
+        // 刷新的 worktree 速览条对不上。
+        if self.left_view == LeftView::GitLog {
+            self.sync_git_log_to_active_project();
+        }
+        // 清放大态后必须重算终端网格。`PaneResized` 那条分支只在**窗口
+        // 几何变化**时触发,清 `maximized` 不会自己走到那里;而
+        // `terminal_grid_state` 把 `maximized` 算进公式,不重算的话
+        // "在项目 A 放大终端 → 切到 B"会让 A 的 PTY 停在放大时的
+        // cols/rows(最终审查 Required Fix #2)。重算是幂等的:算出来
+        // 与当前 `cols/rows` 相同时 `PaneResized` 的去重会原地返回。
+        self.sync_terminal_grid();
+        self.persist_open_projects();
+        // 按下项目页签＝选中＋准备被拖走(同终端/预览页签)。
+        if let Some(idx) = self.project_order.iter().position(|p| *p == id) {
+            self.tab_drag = Some(TabDrag {
+                group: TabGroup::Project,
+                source: idx,
+            });
+        }
+    }
+
+    fn project_tab_close(&mut self, id: i64) {
+        // 关掉当前页签前先把它的面板布局原样存下(焦点还在它身上,
+        // `stash` 会记进 `id` 那份),以后重开还能恢复。
+        self.stash_active_panel_layout();
+        let io = self.shell_io();
+        let Some(slot) = take_project_tab(
+            &mut self.projects,
+            &mut self.project_order,
+            &mut self.active_project_id,
+            id,
+        ) else {
+            return;
+        };
+        if let WorkspaceSlot::Loaded(mut ws) = slot {
+            // 关页签 = 结束该项目下所有会话(abort 转发任务 + kill
+            // daemon 侧会话)。不 kill 的话会话会继续在 daemon 上跑,
+            // 还会被下次 bootstrap 恢复出来。
+            ws.close_all_tabs_for_switch(&io);
+        }
+        self.maximized = None;
+        // 焦点被 `take_project_tab` 挪到了邻居页签上,而那个邻居可能还
+        // 是个懒加载 `Stub`——`view()` 走的是只读的 `active_workspace()`,
+        // 它**不促成** `Stub`,于是界面会画成"未打开任何项目",尽管顶栏
+        // 那个页签明明高亮着。必须在这里显式促成(最终审查 Required
+        // Fix #3)。
+        if let Some(next) = self.active_project_id {
+            // 焦点被挪到了邻居页签,把它的面板布局换上来。
+            self.adopt_panel_layout(next);
+            self.ensure_loaded(next);
+        }
+        self.sync_terminal_grid(); // 清放大态后重算网格,理由同 `ProjectTabSwitch`
+        self.persist_open_projects();
+    }
+
+    fn project_slot_loaded(&mut self, id: i64, payload: RestorePayload) {
+        let Some(restore) = payload.take() else {
+            return; // 信封已被取走(理论上不会发生),没有素材可落地
+        };
+        // 只在槽位仍是那份"加载中"占位时落地。两种落空情形:
+        // - 页签在促成完成前被用户关掉了(槽位已不存在);
+        // - 槽位已经被别的路径换成了真正的内容(比如
+        //   `ProjectTabOpened` 的 `adopt_project`)。
+        // 两种情形下这份素材都没人要了,但它已经 attach 上了该项目在
+        // daemon 上的存活会话——直接 drop 只是断开事件流,daemon 侧
+        // 会话仍在跑,会变成"没有任何页签持有、却还占着 PTY"的野会话。
+        // 所以按关页签的语义结束掉它们(`ProjectTabClose` 同款处理)。
+        // 落地的同时把占位那份 `allowed_files` 句柄接过来:main.rs 的
+        // webview 池只在 `active_project_id` **变化**时才清空,它看不见
+        // "同一个项目换了一份 `Workspace` 对象"。促成窗口期里用户点开
+        // 的文件预览已经建出一个 id 0 的 webview,其 `dozer://` 协议
+        // 闭包捕获的是**占位那一个** `Arc`;新 `Workspace` 若另起一个
+        // `Arc`,`restore_preview_state` 重开的 id 0 会被
+        // `sync_webview_pool` 认成"这个 id 已经有 webview 了"而只调
+        // `load_url`,于是文件请求走的还是旧 `Arc` 的白名单 → 对不上
+        // → 空白预览。这与 Required Fix #3 是同一个失效模式,只是触发
+        // 点从"切项目"变成"促成换对象"。共用同一个 `Arc` 即可,而且
+        // 不损失已经建好的 webview(比清空池更省一次导航)。
+        let inherited = match self.projects.get(&id) {
+            Some(WorkspaceSlot::Loaded(cur)) if cur.loading => Some(cur.allowed_files()),
+            _ => None,
+        };
+        let landed = inherited.is_some();
+        if !landed {
+            let client = self.client.clone();
+            let ids: Vec<String> = restore
+                .sessions
+                .iter()
+                .map(|(info, _, _)| info.id.clone())
+                .collect();
+            self.handle.spawn(async move {
+                for sid in ids {
+                    if let Err(e) = client.kill(&sid).await {
+                        tracing::warn!("丢弃过期促成结果时结束会话失败: {e}");
+                    }
+                }
+            });
+            return;
+        }
+        let io = self.shell_io();
+        let mut ws = Workspace::from_restore(&io, *restore, inherited);
+        // 重挂出来的会话,终端模型是按 `DEFAULT_COLS`×`DEFAULT_ROWS`
+        // 建的,得按当前窗口几何纠正一次。这里**不能**指望
+        // `sync_terminal_grid`:它算出来的网格与 `self.cols/rows` 相同
+        // 时 `PaneResized` 会原地返回(去重),于是这份新装配的
+        // `Workspace` 会一直停在 80×24。直接对它自己 resize 一次。
+        ws.resize_all(&io, io.cols, io.rows);
+        self.projects
+            .insert(id, WorkspaceSlot::Loaded(Box::new(ws)));
+    }
+
+    fn project_fs_changed(&mut self, project_id: ProjectId, relevance: git_watch::Relevance) {
+        self.with_project(project_id, |ws, io| {
+            let Some(project) = &ws.project else { return };
+            spawn_project_git_refresh(project_id, PathBuf::from(&project.path), io);
+        });
+        // 只有 `.git` 引用类变化(分支切换/外部提交/其他 worktree
+        // 提交)才值得重建 Git Log 快照——纯工作区文件编辑不影响
+        // 提交历史,重算是纯浪费。`git_log_cache` 是 `App` 级、不是
+        // 按项目分的(见 `sync_git_log_to_active_project`),所以这里
+        // 必须先核实这条事件本来就是"当前聚焦项目"发出的
+        // (`project_id == self.active_project_id`)——否则后台项目
+        // 的引用变化会拿"缓存路径恰好等于前台项目路径"这个巧合当
+        // 通行证,把前台正打开的详情/选中态平白清掉,而其实什么都
+        // 没变。项目 id 匹配之外再核一次路径,双保险防状态漂移。
+        if relevance == git_watch::Relevance::GitRefs
+            && self.active_project_id == Some(project_id)
+            && let Some(repo_path) = self.git_log.cache_repo_path().map(|p| p.to_path_buf())
+            && self
+                .active_workspace()
+                .and_then(|ws| ws.active_project_path())
+                .as_deref()
+                == Some(repo_path.as_path())
+        {
+            // 引用变化只是要"内容不变、重新拉一遍",窗口大小维持原样——
+            // 用 `cache_max_count()`(读当前缓存的 max_count),不是"加载
+            // 更多"专用、会 `+LOAD_MORE_STEP` 的 `next_load_more_count()`。
+            let max = self.git_log.cache_max_count();
+            let handle = self.handle.clone();
+            let proxy = self.proxy.clone();
+            let emit = move |m| {
+                let _ = proxy.send_event(Message::GitLog(m));
+            };
+            git_log::request_refresh(&mut self.git_log, repo_path, max, &handle, emit);
         }
     }
 
