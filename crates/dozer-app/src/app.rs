@@ -2182,6 +2182,16 @@ impl App {
             .unwrap_or(false)
     }
 
+    /// 当前激活预览 tab 是否走原生渲染。main.rs 键盘路由用,同 `edit_session_open`
+    /// 那道闸门的道理——但原生预览不是模态弹层,还要求键盘焦点确实在预览列
+    /// (`current_focus == FocusIntent::Preview`),否则用户正在打字给终端时,
+    /// 只因为预览列背景里开着一个原生 tab 就会把按键错误地拦下来。
+    pub fn active_preview_tab_has_native_editor(&self) -> bool {
+        self.active_workspace()
+            .map(|ws| ws.active_preview_tab_has_native_editor())
+            .unwrap_or(false)
+    }
+
     /// 转发 `iced-code-editor` 的内部消息到当前聚焦项目的编辑器,返回编辑器
     /// 产生的 `iced::Task`(剪贴板读写/搜索框聚焦等),交由 `main.rs` 的 Task
     /// 桥接器执行。`iced_code_editor::Message` 经 `Message::EditorEvent` 进入

@@ -406,8 +406,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             /// 最近一次光标物理位置(CursorMoved 更新),鼠标点击时用于命中测试。
             cursor_phys: winit::dpi::PhysicalPosition<f64>,
             /// 待应用的焦点意图(点击/消息设置,sync_previews 之后统一 apply,
-            /// 确保新建 webview 已入池)。
+            /// 确保新建 webview 已入池)。一次性:apply 完就被 `.take()` 走。
             pending_focus: Option<FocusIntent>,
+            /// 当前键盘焦点归属,跟 `pending_focus` 同一批地方一起设,但常驻
+            /// 不被消费——原生预览 tab(`iced-code-editor` 直接画在窗口里,
+            /// 不像旧 wry 预览那样有 OS 级 webview 抢走键盘)要靠这个字段
+            /// 才能在 `window_event` 的按键分发链里判断"键盘现在真的该给
+            /// 预览列,还是该给终端",见键盘路由那段注释。
+            current_focus: FocusIntent,
             /// 事件循环代理:webview IPC handler 用它把 `WebViewFocused` 送回
             /// UI 线程(winit 收不到子 webview 上的鼠标点击)。
             proxy: winit::event_loop::EventLoopProxy<Message>,
@@ -416,7 +422,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
     /// 点击/消息后决定键盘焦点归谁:预览 webview、浏览器 webview(各自
     /// ⌘C 走原生复制)或窗口(终端)。
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, PartialEq, Eq)]
     enum FocusIntent {
         Preview,
         Browser,
@@ -529,6 +535,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 clipboard,
                 cursor_phys,
                 pending_focus,
+                current_focus,
                 ..
             } = self
             else {
@@ -607,16 +614,17 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     let state = app.shell_state();
                     // 文件预览与浏览器现在都在左面板区(前者 `Files`、后者
                     // `Web`),落在左预览列时按当前左视图区分交给哪个 webview 池。
-                    *pending_focus =
-                        Some(if app::is_in_preview_column(logical_x, logical_w, &state) {
-                            if state.left_view == LeftView::Web {
-                                FocusIntent::Browser
-                            } else {
-                                FocusIntent::Preview
-                            }
+                    let intent = if app::is_in_preview_column(logical_x, logical_w, &state) {
+                        if state.left_view == LeftView::Web {
+                            FocusIntent::Browser
                         } else {
-                            FocusIntent::Terminal
-                        });
+                            FocusIntent::Preview
+                        }
+                    } else {
+                        FocusIntent::Terminal
+                    };
+                    *pending_focus = Some(intent);
+                    *current_focus = intent;
                     window.request_redraw();
                 }
                 WindowEvent::MouseInput {
@@ -745,6 +753,19 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             // 里打的每个字符、包括回车,都会同时写进背后那个终端/agent 会话
             // (Critical,code review 发现)。
             if app.edit_session_open() {
+                return;
+            }
+
+            // 原生预览 tab(白名单扩展名,`preview.rs` 直接画 `CodeEditor`,
+            // 不再是旧版 wry 预览那种能抢走 OS 级键盘焦点的子视图)打开且
+            // 键盘焦点确实在预览列时,同上一道闸门的道理放行——键盘事件走
+            // 标准 iced 管线直达 `CodeEditor`,不再往下落进 ⌘ 快捷键/终端
+            // 转发分支。多了 `current_focus == Preview` 这层判断是因为原生
+            // 预览不是模态弹层:用户切去终端敲字时,背景里开着的原生预览
+            // tab 不该继续偷键盘(不加这层判断会把这类按键错误地拦在这里,
+            // 而不是送进终端)。
+            if app.active_preview_tab_has_native_editor() && *current_focus == FocusIntent::Preview
+            {
                 return;
             }
 
@@ -1024,6 +1045,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 app,
                 window,
                 pending_focus,
+                current_focus,
                 clipboard,
                 ..
             } = self
@@ -1038,12 +1060,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 Message::PreviewOpenPath(_) | Message::PreviewSelectTab(_)
             ) {
                 *pending_focus = Some(FocusIntent::Preview);
+                *current_focus = FocusIntent::Preview;
             } else if matches!(
                 message,
                 Message::Browser(extensions::browser::Message::OpenUrl(_))
                     | Message::Browser(extensions::browser::Message::SelectTab(_))
             ) {
                 *pending_focus = Some(FocusIntent::Browser);
+                *current_focus = FocusIntent::Browser;
             } else if matches!(
                 message,
                 Message::SelectTab(_)
@@ -1051,15 +1075,18 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     | Message::AgentPickerSelect(_)
             ) {
                 *pending_focus = Some(FocusIntent::Terminal);
+                *current_focus = FocusIntent::Terminal;
             } else if matches!(message, Message::WebViewFocused) {
                 // 子 webview 上的 mousedown winit 收不到,JS 经 IPC 发来这条
                 // 消息——按当前 `left_view` 判断归预览池还是浏览器池。
                 let state = app.shell_state();
-                *pending_focus = Some(if state.left_view == LeftView::Web {
+                let intent = if state.left_view == LeftView::Web {
                     FocusIntent::Browser
                 } else {
                     FocusIntent::Preview
-                });
+                };
+                *pending_focus = Some(intent);
+                *current_focus = intent;
             }
             match message {
                 // `iced-code-editor` 的内部消息:编辑器产生的 `iced::Task`(剪贴板
@@ -1098,6 +1125,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 Message::Search(extensions::search::Message::Pick(hit)) => {
                     app.update(Message::Search(extensions::search::Message::SearchClose));
                     *pending_focus = Some(FocusIntent::Preview);
+                    *current_focus = FocusIntent::Preview;
                     app.update(Message::PreviewOpenPath(hit.path));
                     window.request_redraw();
                 }
@@ -1488,6 +1516,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     webview_project: None,
                     cursor_phys: winit::dpi::PhysicalPosition::new(0.0, 0.0),
                     pending_focus: None,
+                    // 默认终端拿键盘,跟现状(启动时终端可打字、没有任何
+                    // 预览/编辑弹层抢焦点)一致。
+                    current_focus: FocusIntent::Terminal,
                     proxy: proxy.clone(),
                 };
             }

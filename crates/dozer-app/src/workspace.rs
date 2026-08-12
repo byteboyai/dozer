@@ -1361,6 +1361,17 @@ impl Workspace {
         self.preview.active_webview_id()
     }
 
+    /// 当前激活预览 tab 是否走原生渲染(有 `editor`)。main.rs 键盘路由用:
+    /// 原生预览 tab 跟编辑弹层(`edit_session_open`)一样,需要在按键分发链
+    /// 里提前放行,让键盘事件走 iced 正常管线直达 `CodeEditor`,不落进
+    /// 终端/⌘ 快捷键那些手工转发分支。
+    pub fn active_preview_tab_has_native_editor(&self) -> bool {
+        self.preview
+            .tabs()
+            .get(self.preview.active_idx())
+            .is_some_and(|t| t.editor.is_some())
+    }
+
     /// 当前激活浏览器 tab 的 webview id,语义同 `active_preview_webview_id`,
     /// 查独立的 `self.browser`。
     pub fn active_browser_webview_id(&self) -> Option<usize> {
@@ -2166,21 +2177,24 @@ pub(crate) fn preview_pane<'a>(
             .width(Length::Fill)
             .height(Length::Fill),
         );
-    } else if let Some(editor) = &ws.preview.tabs()[ws.preview.active_idx()].editor {
-        // 原生 tab:激活 tab 有原生 editor 时,直接在 iced 里渲染它(语法
-        // 高亮/行号/ByteBoy2077 配色),put 下 content。`editor` 为 `None`
-        // 的 wry 路由 tab 不 push 任何 iced 元素——那片区域由 main.rs 定位
-        // 的 wry webview 子视图负责渲染,现状不变。
-        let tab_id = ws.preview.tabs()[ws.preview.active_idx()].id;
-        content = content.push(
-            container(
-                editor
-                    .view()
-                    .map(move |ev| Message::PreviewEditorEvent(tab_id, ev)),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill),
-        );
+    } else {
+        let active_tab = &ws.preview.tabs()[ws.preview.active_idx()];
+        if let Some(editor) = &active_tab.editor {
+            // 原生 tab:激活 tab 有原生 editor 时,直接在 iced 里渲染它(语法
+            // 高亮/行号/ByteBoy2077 配色),put 下 content。`editor` 为 `None`
+            // 的 wry 路由 tab 不 push 任何 iced 元素——那片区域由 main.rs 定位
+            // 的 wry webview 子视图负责渲染,现状不变。
+            let tab_id = active_tab.id;
+            content = content.push(
+                container(
+                    editor
+                        .view()
+                        .map(move |ev| Message::PreviewEditorEvent(tab_id, ev)),
+                )
+                .width(Length::Fill)
+                .height(Length::Fill),
+            );
+        }
     }
 
     container(content.padding(region.padding))
@@ -3056,6 +3070,29 @@ mod tests {
         let path = dir.path().join(name);
         std::fs::write(&path, content).unwrap();
         (dir, path)
+    }
+
+    #[test]
+    fn active_preview_tab_has_native_editor_reflects_active_tab_kind() {
+        let (_dir_rs, rs_path) = write_temp_file("a.rs", "fn main() {}");
+        let (_dir_png, png_path) = write_temp_file("a.png", "");
+        let mut ws = Workspace::empty_for_project_placeholder();
+        assert!(
+            !ws.active_preview_tab_has_native_editor(),
+            "没有 tab 时应为 false"
+        );
+
+        ws.preview.open_path(rs_path);
+        assert!(
+            ws.active_preview_tab_has_native_editor(),
+            ".rs 是白名单扩展名,应走原生渲染"
+        );
+
+        ws.preview.open_path(png_path);
+        assert!(
+            !ws.active_preview_tab_has_native_editor(),
+            "切到 .png 后激活 tab 应走 wry,不是原生"
+        );
     }
 
     #[test]

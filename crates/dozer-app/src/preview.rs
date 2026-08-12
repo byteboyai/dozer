@@ -105,6 +105,11 @@ fn read_and_build_native_editor(
     editor.set_syntax_theme(dozer_syntax_theme());
     editor.set_font(crate::fonts::code_font());
     editor.set_font_size(theme::font::body() as f32, false);
+    // 打开即夺焦点(同 `preview_edit_open` 的编辑弹层),键盘事件无需先点击
+    // 一次即可直达编辑器——否则新开的原生预览 tab 得先点一下才能用方向键
+    // 滚动/移动光标。
+    editor.request_focus();
+    let _ = editor.update(&iced_code_editor::Message::CanvasFocusGained);
     Ok(editor)
 }
 
