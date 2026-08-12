@@ -1151,6 +1151,13 @@ pub struct App {
     /// tab 前状态点的闪烁相位(true=亮/false=暗)。由 main.rs 的定时唤醒
     /// 每拍翻转(见 `toggle_blink`/`any_blinking`)。
     blink_on: bool,
+    /// 上次真正翻转 `blink_on` 的时刻,`toggle_blink` 据此把自己限速到
+    /// `BLINK_INTERVAL` 一拍——main.rs 的定时唤醒并不专属闪烁:悬停动画
+    /// 期间(`HOVER_ANIM_INTERVAL`=16ms)会把唤醒频率提到闪烁本该的 450ms
+    /// 的近 30 倍,若 `toggle_blink` 对"被叫到"照单全收,状态点就会跟着
+    /// hover 的那份高频唤醒一起快速明灭,观感是"悬停 icon 按钮,别处的点
+    /// 跟着闪"。
+    last_blink_at: std::time::Instant,
     /// 图标栏+左右面板区宽度/分割状态;启动时 `layout::load()` 读盘作
     /// 起始值,拖拽结束(`ColumnDragEnd`)写盘。只存几何(宽度/分割比例/
     /// 窗口尺寸),**不存**左右视图选择与收起态——那些是**每个项目各自**的
@@ -1459,6 +1466,7 @@ impl App {
             term_focused: true,
             daemon_error,
             blink_on: true,
+            last_blink_at: std::time::Instant::now(),
             left_view: PanelLayout::default().left_view,
             right_view: PanelLayout::default().right_view,
             left_collapsed: PanelLayout::default().left_collapsed,
@@ -1666,9 +1674,17 @@ impl App {
         })
     }
 
-    /// 翻转闪烁相位；由 main.rs 的定时唤醒每拍调用一次。
+    /// 翻转闪烁相位；由 main.rs 的定时唤醒每拍调用,但唤醒节奏不专属闪烁
+    /// (悬停动画期间会被提到 16ms 一拍),这里按 `last_blink_at` 自己限速
+    /// 到 `BLINK_INTERVAL`,未到点的调用直接是 no-op——否则悬停 icon 按钮
+    /// 时别处的状态点会跟着高频唤醒一起快速明灭。
     pub fn toggle_blink(&mut self) {
+        let now = std::time::Instant::now();
+        if now.duration_since(self.last_blink_at) < crate::BLINK_INTERVAL {
+            return;
+        }
         self.blink_on = !self.blink_on;
+        self.last_blink_at = now;
     }
 
     /// 设置某按钮的悬停目标（`true`=进入,`false`=离开）；动画由
@@ -1741,8 +1757,9 @@ impl App {
                 // 没有更细粒度的续存机制（`MouseArea` 不支持 `.id()`），换位
                 // 时索性把两类项目页签 hover 全部清零最省事——真实悬停哪个,
                 // 下一帧鼠标移动会立刻重新点亮,观感上无感知。
-                self.hover_anims
-                    .retain(|k, _| !matches!(k, HoverId::ProjectTabItem(_) | HoverId::ProjectTabClose(_)));
+                self.hover_anims.retain(|k, _| {
+                    !matches!(k, HoverId::ProjectTabItem(_) | HoverId::ProjectTabClose(_))
+                });
             }
             TabGroup::Terminal => {
                 if from == to {

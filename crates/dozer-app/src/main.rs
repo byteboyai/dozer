@@ -220,7 +220,9 @@ use std::sync::Arc;
 
 /// tab 状态点闪烁的半周期：每 450ms 翻一次相位（≈1.1Hz 一明一暗）。
 /// 仅当有 tab 处于工作态时才据此定时唤醒，空闲仍是 `ControlFlow::Wait`。
-const BLINK_INTERVAL: Duration = Duration::from_millis(450);
+/// `pub(crate)`——`App::toggle_blink` 也要用它把自己限速到这个节奏,不能
+/// 只让 main.rs 单边靠调用频率保证(唤醒节奏会被悬停动画等其它需求提速)。
+pub(crate) const BLINK_INTERVAL: Duration = Duration::from_millis(450);
 /// 所有按钮悬停动画的帧间隔:约 60fps。配合 `App::advance_hover_anims`
 /// 的指数逼近(每拍残余 50%),约 80ms 收敛,给出跟手的 ease-out 过渡。
 const HOVER_ANIM_INTERVAL: Duration = Duration::from_millis(16);
