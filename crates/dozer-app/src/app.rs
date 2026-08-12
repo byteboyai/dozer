@@ -3353,80 +3353,16 @@ impl App {
                 project::update(&mut ws.project_panel, msg, project_id, &repo_path);
             }
             Message::Ssh(ssh::Message::TestConnectionResult(project_id, host_id, result)) => {
-                self.with_project(project_id, move |ws, io| {
-                    let handle = io.handle.clone();
-                    let proxy = io.proxy.clone();
-                    let emit = move |m| {
-                        let _ = proxy.send_event(Message::Ssh(m));
-                    };
-                    let repo_path = ws
-                        .project
-                        .as_ref()
-                        .map(|p| PathBuf::from(&p.path))
-                        .unwrap_or_default();
-                    ssh::update(
-                        &mut ws.ssh,
-                        ssh::Message::TestConnectionResult(project_id, host_id, result),
-                        project_id,
-                        &repo_path,
-                        &handle,
-                        emit,
-                    );
-                });
+                self.ssh_test_connection_result(project_id, host_id, result)
             }
             Message::Ssh(ssh::Message::UnknownKeyDetected(
                 project_id,
                 host_id,
                 fingerprint,
                 key_bytes,
-            )) => {
-                self.with_project(project_id, move |ws, io| {
-                    let handle = io.handle.clone();
-                    let proxy = io.proxy.clone();
-                    let emit = move |m| {
-                        let _ = proxy.send_event(Message::Ssh(m));
-                    };
-                    let repo_path = ws
-                        .project
-                        .as_ref()
-                        .map(|p| PathBuf::from(&p.path))
-                        .unwrap_or_default();
-                    ssh::update(
-                        &mut ws.ssh,
-                        ssh::Message::UnknownKeyDetected(
-                            project_id,
-                            host_id,
-                            fingerprint,
-                            key_bytes,
-                        ),
-                        project_id,
-                        &repo_path,
-                        &handle,
-                        emit,
-                    );
-                });
-            }
+            )) => self.ssh_unknown_key_detected(project_id, host_id, fingerprint, key_bytes),
             Message::Ssh(ssh::Message::KeyChanged(project_id, host_id, fingerprint)) => {
-                self.with_project(project_id, move |ws, io| {
-                    let handle = io.handle.clone();
-                    let proxy = io.proxy.clone();
-                    let emit = move |m| {
-                        let _ = proxy.send_event(Message::Ssh(m));
-                    };
-                    let repo_path = ws
-                        .project
-                        .as_ref()
-                        .map(|p| PathBuf::from(&p.path))
-                        .unwrap_or_default();
-                    ssh::update(
-                        &mut ws.ssh,
-                        ssh::Message::KeyChanged(project_id, host_id, fingerprint),
-                        project_id,
-                        &repo_path,
-                        &handle,
-                        emit,
-                    );
-                });
+                self.ssh_key_changed(project_id, host_id, fingerprint)
             }
             // 点"终端"按钮:与既有 `TestConnection`/其它同步交互消息不同,
             // 这个消息不走 `ssh::update`(它要新建一个 tab,需要 `&mut
@@ -3445,28 +3381,7 @@ impl App {
             // `TestConnectionResult` 的路由口径,带显式 project_id,套用
             // 一模一样的 `with_project` 外壳)。
             Message::Ssh(ssh::Message::TerminalConnectFailed(project_id, host_id, tab_id, err)) => {
-                self.with_project(project_id, move |ws, io| {
-                    ws.pending.remove(&tab_id);
-                    ws.ssh_out_pending.remove(&tab_id);
-                    let handle = io.handle.clone();
-                    let proxy = io.proxy.clone();
-                    let emit = move |m| {
-                        let _ = proxy.send_event(Message::Ssh(m));
-                    };
-                    let repo_path = ws
-                        .project
-                        .as_ref()
-                        .map(|p| PathBuf::from(&p.path))
-                        .unwrap_or_default();
-                    ssh::update(
-                        &mut ws.ssh,
-                        ssh::Message::TerminalConnectFailed(project_id, host_id, tab_id, err),
-                        project_id,
-                        &repo_path,
-                        &handle,
-                        emit,
-                    );
-                });
+                self.ssh_terminal_connect_failed(project_id, host_id, tab_id, err)
             }
             Message::Ssh(msg) => {
                 self.with_focused_project(|ws, io| {
@@ -3885,6 +3800,117 @@ impl App {
             &handle,
             emit,
         );
+    }
+
+    fn ssh_test_connection_result(
+        &mut self,
+        project_id: i64,
+        host_id: String,
+        result: Result<(), String>,
+    ) {
+        self.with_project(project_id, move |ws, io| {
+            let handle = io.handle.clone();
+            let proxy = io.proxy.clone();
+            let emit = move |m| {
+                let _ = proxy.send_event(Message::Ssh(m));
+            };
+            let repo_path = ws
+                .project
+                .as_ref()
+                .map(|p| PathBuf::from(&p.path))
+                .unwrap_or_default();
+            ssh::update(
+                &mut ws.ssh,
+                ssh::Message::TestConnectionResult(project_id, host_id, result),
+                project_id,
+                &repo_path,
+                &handle,
+                emit,
+            );
+        });
+    }
+
+    fn ssh_unknown_key_detected(
+        &mut self,
+        project_id: i64,
+        host_id: String,
+        fingerprint: String,
+        key_bytes: Vec<u8>,
+    ) {
+        self.with_project(project_id, move |ws, io| {
+            let handle = io.handle.clone();
+            let proxy = io.proxy.clone();
+            let emit = move |m| {
+                let _ = proxy.send_event(Message::Ssh(m));
+            };
+            let repo_path = ws
+                .project
+                .as_ref()
+                .map(|p| PathBuf::from(&p.path))
+                .unwrap_or_default();
+            ssh::update(
+                &mut ws.ssh,
+                ssh::Message::UnknownKeyDetected(project_id, host_id, fingerprint, key_bytes),
+                project_id,
+                &repo_path,
+                &handle,
+                emit,
+            );
+        });
+    }
+
+    fn ssh_key_changed(&mut self, project_id: i64, host_id: String, fingerprint: String) {
+        self.with_project(project_id, move |ws, io| {
+            let handle = io.handle.clone();
+            let proxy = io.proxy.clone();
+            let emit = move |m| {
+                let _ = proxy.send_event(Message::Ssh(m));
+            };
+            let repo_path = ws
+                .project
+                .as_ref()
+                .map(|p| PathBuf::from(&p.path))
+                .unwrap_or_default();
+            ssh::update(
+                &mut ws.ssh,
+                ssh::Message::KeyChanged(project_id, host_id, fingerprint),
+                project_id,
+                &repo_path,
+                &handle,
+                emit,
+            );
+        });
+    }
+
+    fn ssh_terminal_connect_failed(
+        &mut self,
+        project_id: i64,
+        host_id: String,
+        tab_id: usize,
+        err: String,
+    ) {
+        self.with_project(project_id, move |ws, io| {
+            ws.pending.remove(&tab_id);
+            ws.ssh_out_pending.remove(&tab_id);
+            let handle = io.handle.clone();
+            let proxy = io.proxy.clone();
+            let emit = move |m| {
+                let _ = proxy.send_event(Message::Ssh(m));
+            };
+            let repo_path = ws
+                .project
+                .as_ref()
+                .map(|p| PathBuf::from(&p.path))
+                .unwrap_or_default();
+            ssh::update(
+                &mut ws.ssh,
+                ssh::Message::TerminalConnectFailed(project_id, host_id, tab_id, err),
+                project_id,
+                &repo_path,
+                &handle,
+                emit,
+            );
+        });
     }
 
     /// 文件预览 tab 右键菜单浮层:含"编辑"(仅可编辑文本文件)与"关闭"两项。
