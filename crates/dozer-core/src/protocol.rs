@@ -668,9 +668,7 @@ mod tests {
         let line = encode_line(&get);
         assert_eq!(decode_line::<Request>(&line).unwrap(), get);
 
-        let reply = Reply::PreviewContext {
-            context: Some(ctx),
-        };
+        let reply = Reply::PreviewContext { context: Some(ctx) };
         let line = encode_line(&reply);
         assert_eq!(decode_line::<Reply>(&line).unwrap(), reply);
     }
