@@ -601,7 +601,11 @@ impl Workspace {
                 editor.set_theme(crate::preview::dozer_editor_style());
                 editor.set_syntax_theme(crate::preview::dozer_syntax_theme());
                 editor.set_font(crate::fonts::code_font());
-                editor.set_font_size(theme::font::body() as f32, false);
+                // 编辑器/终端排版同步(见 CLAUDE.md 关键裁决,以及
+                // `font.rs` _font/tab 注释):字号、行高与终端同源,
+                // 一个字面量真相源 `terminal_font`(乘全局 scale)。
+                // 字距两者都走 cosmic-text 默认,不额外加宽。
+                crate::preview::dozer_editor_font_metrics(&mut editor);
                 // 打开即夺焦点:设置内部 focus 标记,使键盘事件无需先点击
                 // 即可直达编辑器(仍建议点击以触发光标定位与选区)。
                 editor.request_focus();

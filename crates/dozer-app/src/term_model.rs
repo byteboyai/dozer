@@ -39,6 +39,19 @@ const ANSI16: [(u8, u8, u8); 16] = [
 /// 默认前景色（无显式 SGR 时的字符颜色）。
 const DEFAULT_FG: (u8, u8, u8) = (0x9A, 0xB4, 0xC4);
 
+/// 终端默认前景色（无显式 SGR 时的字符颜色）。供预览编辑器把语法高亮
+/// token 锚定到终端同款观感时取用（见 `preview::dozer_syntax_theme`）。
+pub(crate) fn default_fg_rgb() -> (u8, u8, u8) {
+    DEFAULT_FG
+}
+
+/// ANSI 16 色主题的第 `idx` 个 RGB（`0..16`，下标即 `NamedColor`）。供
+/// 预览编辑器把语法高亮 token 锚定到终端色板时取用（见
+/// `preview::dozer_syntax_theme`）。越界返回 `None`。
+pub(crate) fn ansi16_color(idx: usize) -> Option<(u8, u8, u8)> {
+    ANSI16.get(idx).copied()
+}
+
 /// 渲染层唯一数据源：一个终端网格格子。刻意只含原始值（`char`/`(u8,u8,u8)`），
 /// 不引入 `iced::Color`，保持本模块可在无渲染依赖下单测。
 #[derive(Debug, Clone, PartialEq)]

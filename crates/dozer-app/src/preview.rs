@@ -315,8 +315,24 @@ pub(crate) fn dozer_editor_style() -> iced_code_editor::theme::Style {
         gutter_background: theme::color::TERM_BG,
         gutter_border: theme::color::BORDER,
         line_number_color: theme::color::DIM,
-        scrollbar_background: bg,
-        scroller_color: cyan,
+        scrollbar: iced_code_editor::theme::ScrollbarStyle {
+            // 与中央 `scrollbar.rs` 同一套几何/配色:轨道透明无描边、thumb 用
+            // `TAB_ACTIVE_BORDER`(#dcc9a3)胶囊,半径 = thumb宽/2。hover 时
+            // 朝奶油 `#FFE5B4` 提亮一档,便于在编辑器内看清可拖拽。
+            rail_width: theme::geometry::scrollbar_width(),
+            thumb_width: theme::geometry::scrollbar_thumb_width(),
+            thumb_radius: theme::geometry::scrollbar_thumb_width() / 2.0,
+            thumb_color: theme::color::TAB_ACTIVE_BORDER,
+            thumb_hover_color: theme::color::mix(
+                theme::color::TAB_ACTIVE_BORDER,
+                theme::color::CREAM,
+                0.35,
+            ),
+            thumb_border: iced_widget::core::Border::default(),
+            track_background: None,
+            track_radius: 0.0,
+            track_border: iced_widget::core::Border::default(),
+        },
         current_line_highlight: Color {
             r: cyan.r,
             g: cyan.g,
@@ -324,111 +340,173 @@ pub(crate) fn dozer_editor_style() -> iced_code_editor::theme::Style {
             a: 0.10,
         },
         whitespace_color: theme::color::DIM,
+        context_menu: iced_code_editor::theme::ContextMenuStyle {
+            // 与文件树/分支切换右键菜单同一套 `context_menu` 区域令牌:
+            // bg `#0a0e16` 实底 + `#1c3440` 1px 描边圆角 10 + 内边距 6、列距 2。
+            background: bg,
+            border_color: theme::color::BORDER,
+            border_width: 1.0,
+            border_radius: 10.0,
+            // Dozer 的右键菜单不投影(region 无 shadow),这里清掉编辑器默认阴影。
+            shadow: iced_widget::core::Shadow::default(),
+            padding: 6.0,
+            gap: 2.0,
+            // 固定宽:比文件树菜单项(160)略宽,给"操作名 + 快捷键"两列都留足
+            // 空间,不裁剪 ⇧⌘Z 这类长快捷键。取 `context_menu_width`(180)。
+            menu_width: theme::geometry::context_menu_width(),
+            item_radius: 4.0,
+            item_hover_background: theme::color::TAB_HOVER,
+            item_text_color: theme::color::CREAM,
+            item_disabled_text_color: theme::color::DIM,
+            item_padding_h: theme::geometry::menu_pad_h(),
+            item_padding_v: theme::geometry::menu_pad_v(),
+            item_gap: theme::geometry::menu_gap(),
+            separator_color: theme::color::BORDER,
+        },
     }
 }
 
+/// 给编辑器灌一套与终端同源的排版指标(字号、行高),再乘上全局 scale(
+/// `icon_size::scale`)做布局。见 `dozer_editor_style` 上方注释。
+///
+/// 字距不做处理:编辑器与终端都走 cosmic-text 默认字距,天然一致,显式
+/// 加宽反而会引入第二套数据源。
+pub(crate) fn dozer_editor_font_metrics(editor: &mut iced_code_editor::CodeEditor) {
+    let scale = theme::icon_size::scale();
+    let font_size = theme::terminal_font::size() * scale;
+    editor.set_font_size(font_size, false);
+    let line_height = font_size * theme::terminal_font::line_height_factor();
+    editor.set_line_height(line_height);
+
+    // 编辑器的静态布局像素(行号区宽 / 折叠列宽 / 字形顶部内边距)取
+    // `ice-code-editor::theme` 的公开默认(基线锚),再乘全局 scale——
+    // 这样 Ctrl ± 时编辑器与终端/图标一起等比放大,而非冻结在启动时刻。
+    // scale=1 时不漂移。
+    editor.set_layout_metrics(
+        iced_code_editor::theme::DEFAULT_GUTTER_WIDTH * scale,
+        iced_code_editor::theme::DEFAULT_FOLD_MARGIN_WIDTH * scale,
+        iced_code_editor::theme::DEFAULT_TOP_PADDING * scale,
+    );
+}
+
 /// 构造一份 ByteBoy2077 的 syntect 语法主题,让语法高亮的 token 颜色
-/// (关键字/字符串/注释/类型/函数名……)也融入 Dozer 配色。`iced-code-editor`
+/// (关键字/字符串/注释/类型/函数名……)融入 Dozer 配色。`iced-code-editor`
 /// 上游把 syntect 主题硬编码成 base16-ocean.dark、无公开接口可改;我们
 /// vendored 了一份打了 `set_syntax_theme` 补丁的副本(`vendor/iced-code-editor`),
-/// 才能把这份主题灌进编辑器。金 `#F2D94E` 仅甲方动作专属,不用于语法着色。
+/// 才能把这份主题灌进编辑器。
+///
+/// 配色唯一真相源是终端 16 色面板(`term_model::ANSI16`)与终端默认前景
+/// (`term_model::default_fg_rgb`)——编辑器里展示的语法色因此与终端里
+/// 同级角色(字符串/关键字/注释/类型/函数……)观感一致,不会出现"编辑
+/// 器一套饱和霓虹、终端一套灰调"的割裂。金 `#F2D94E`(ANSI Yellow)是
+/// 甲方动作专属,不用于语法着色——需要"奶油黄"角色时用 BrightYellow。
 pub(crate) fn dozer_syntax_theme() -> syntect::highlighting::Theme {
     use std::str::FromStr;
     use syntect::highlighting::{Color, ScopeSelectors, StyleModifier, ThemeItem};
 
-    /// `#RRGGBB` -> syntect `Color`(alpha 固定 255)。
-    fn c(hex: u32) -> Color {
+    /// `(r,g,b)` -> syntect `Color`(alpha 固定 255)。
+    fn c(rgb: (u8, u8, u8)) -> Color {
         Color {
-            r: ((hex >> 16) & 0xff) as u8,
-            g: ((hex >> 8) & 0xff) as u8,
-            b: (hex & 0xff) as u8,
+            r: rgb.0,
+            g: rgb.1,
+            b: rgb.2,
             a: 255,
         }
     }
+    /// 终端 16 色面板第 `idx` 项(下标见 `term_model::ANSI16`)。
+    fn ansi(idx: usize) -> (u8, u8, u8) {
+        crate::term_model::ansi16_color(idx).expect("ANSI16 静态色表必须完整")
+    }
+    /// 终端默认前景。
+    fn body() -> (u8, u8, u8) {
+        crate::term_model::default_fg_rgb()
+    }
     /// 单条 scope 着色规则。
-    fn scope(s: &str, hex: u32) -> ThemeItem {
+    fn scope(s: &str, rgb: (u8, u8, u8)) -> ThemeItem {
         ThemeItem {
             scope: ScopeSelectors::from_str(s).expect("静态 scope 字符串必须合法"),
             style: StyleModifier {
-                foreground: Some(c(hex)),
+                foreground: Some(c(rgb)),
                 background: None,
                 font_style: None,
             },
         }
     }
 
-    // ByteBoy2077 调色板(值与 `theme::color` 一致,这里用十六进制以便
-    // 对齐 syntect 的 u8 颜色)。
-    const CREAM: u32 = 0xFFE5B4;
-    const BODY: u32 = 0x9AB4C4;
-    const DIM: u32 = 0x6B7F8F;
-    const CYAN: u32 = 0x47DEF0;
-    const GREEN: u32 = 0x1AD585;
-    const PURPLE: u32 = 0x9580FF;
-    const RED: u32 = 0xFF6E6E;
-    const ORANGE: u32 = 0xFF9B4D;
-    const BLUE: u32 = 0x4D8CFF;
+    // 从终端色板取的语法角色(下标即 ANSI16 下标):
+    //   1 Red         2 Green       4 Blue(类型/类)    6 Cyan(关键字)
+    //   7 White(奶油) 8 BrightBlack(注解/屏弱)            9 BrightRed(删除)
+    //  11 BrightYellow(橙/数值/属性)                       12 BrightBlue(函数)
+    //  14 BrightCyan / 2 Green(插入)
+    const COMMENT: usize = 8; // BrightBlack #6B7F8F
+    const CREAM: usize = 7; //  White #FFE5B4
+    const GREEN: usize = 2; //  Green #1AD585
+    const CYAN: usize = 6; //  Cyan   #47DEF0
+    const PURPLE: usize = 4; // Blue   #9580FF
+    const RED: usize = 1; //  Red    #FF6E6E
+    const ORANGE: usize = 11; // BrightYellow #FFF3B0(非甲方金)
+    const FUNCTION: usize = 12; // BrightBlue   #B5A5FF
 
     syntect::highlighting::Theme {
         name: Some("ByteBoy2077".to_string()),
         author: Some("Dozer".to_string()),
         settings: syntect::highlighting::ThemeSettings {
-            foreground: Some(c(CREAM)),
-            background: Some(c(0x0a0e16)),
+            foreground: Some(c(ansi(CREAM))),
+            background: Some(c((0x0a, 0x0e, 0x16))),
             ..Default::default()
         },
         scopes: vec![
-            scope("comment", DIM),
-            scope("comment.line", DIM),
-            scope("comment.block", DIM),
-            scope("string", GREEN),
-            scope("string.quoted", GREEN),
-            scope("string.regexp", ORANGE),
-            scope("constant.numeric", ORANGE),
-            scope("constant.language", CYAN),
-            scope("constant", ORANGE),
-            scope("keyword", CYAN),
-            scope("keyword.control", CYAN),
-            scope("keyword.operator", BODY),
-            scope("keyword.other", CYAN),
-            scope("storage", CYAN),
-            scope("storage.type", CYAN),
-            scope("storage.modifier", CYAN),
-            scope("entity.name.function", BLUE),
-            scope("entity.name.type", PURPLE),
-            scope("entity.name.class", PURPLE),
-            scope("entity.name.struct", PURPLE),
-            scope("entity.name.enum", PURPLE),
-            scope("entity.name.trait", PURPLE),
-            scope("entity.name.namespace", BODY),
-            scope("entity.name", CREAM),
-            scope("entity.name.variable", CREAM),
-            scope("variable", CREAM),
-            scope("variable.parameter", CREAM),
-            scope("variable.language", CYAN),
-            scope("support.function", BLUE),
-            scope("support.type", PURPLE),
-            scope("support.class", PURPLE),
-            scope("support.constant", ORANGE),
-            scope("support.variable", CREAM),
-            scope("punctuation", BODY),
-            scope("punctuation.definition", BODY),
-            scope("punctuation.separator", BODY),
-            scope("punctuation.terminator", BODY),
-            scope("meta", CREAM),
-            scope("operator", BODY),
-            scope("markup.inserted", GREEN),
-            scope("markup.deleted", RED),
-            scope("markup.changed", ORANGE),
-            scope("markup.heading", CYAN),
-            scope("markup.bold", CREAM),
-            scope("markup.italic", CREAM),
-            scope("invalid", RED),
-            scope("invalid.deprecated", ORANGE),
-            scope("tag", CYAN),
-            scope("attribute", ORANGE),
-            scope("attribute.name", ORANGE),
-            scope("attribute.value", GREEN),
+            scope("comment", ansi(COMMENT)),
+            scope("comment.line", ansi(COMMENT)),
+            scope("comment.block", ansi(COMMENT)),
+            scope("string", ansi(GREEN)),
+            scope("string.quoted", ansi(GREEN)),
+            scope("string.regexp", ansi(ORANGE)),
+            scope("constant.numeric", ansi(ORANGE)),
+            scope("constant.language", ansi(CYAN)),
+            scope("constant", ansi(ORANGE)),
+            scope("keyword", ansi(CYAN)),
+            scope("keyword.control", ansi(CYAN)),
+            scope("keyword.operator", body()),
+            scope("keyword.other", ansi(CYAN)),
+            scope("storage", ansi(CYAN)),
+            scope("storage.type", ansi(CYAN)),
+            scope("storage.modifier", ansi(CYAN)),
+            scope("entity.name.function", ansi(FUNCTION)),
+            scope("entity.name.type", ansi(PURPLE)),
+            scope("entity.name.class", ansi(PURPLE)),
+            scope("entity.name.struct", ansi(PURPLE)),
+            scope("entity.name.enum", ansi(PURPLE)),
+            scope("entity.name.trait", ansi(PURPLE)),
+            scope("entity.name.namespace", body()),
+            scope("entity.name", ansi(CREAM)),
+            scope("entity.name.variable", ansi(CREAM)),
+            scope("variable", ansi(CREAM)),
+            scope("variable.parameter", ansi(CREAM)),
+            scope("variable.language", ansi(CYAN)),
+            scope("support.function", ansi(FUNCTION)),
+            scope("support.type", ansi(PURPLE)),
+            scope("support.class", ansi(PURPLE)),
+            scope("support.constant", ansi(ORANGE)),
+            scope("support.variable", ansi(CREAM)),
+            scope("punctuation", body()),
+            scope("punctuation.definition", body()),
+            scope("punctuation.separator", body()),
+            scope("punctuation.terminator", body()),
+            scope("meta", ansi(CREAM)),
+            scope("operator", body()),
+            scope("markup.inserted", ansi(GREEN)),
+            scope("markup.deleted", ansi(RED)),
+            scope("markup.changed", ansi(ORANGE)),
+            scope("markup.heading", ansi(CYAN)),
+            scope("markup.bold", ansi(CREAM)),
+            scope("markup.italic", ansi(CREAM)),
+            scope("invalid", ansi(RED)),
+            scope("invalid.deprecated", ansi(ORANGE)),
+            scope("tag", ansi(CYAN)),
+            scope("attribute", ansi(ORANGE)),
+            scope("attribute.name", ansi(ORANGE)),
+            scope("attribute.value", ansi(GREEN)),
         ],
     }
 }
@@ -673,5 +751,132 @@ mod tests {
         assert_eq!(encode_component("aZ09-._~"), "aZ09-._~");
         assert_eq!(encode_component("/a b"), "%2Fa%20b");
         assert_eq!(encode_component("你"), "%E4%BD%A0");
+    }
+
+    /// 防漂移锚:原生预览编辑器的右键菜单必须和 Dozer 文件树/分支切换右键
+    /// 菜单同一套 ByteBoy2077 视觉——`#0a0e16` 实底、`#1c3440` 1px 圆角 10
+    /// 描边、无投影、`TAB_HOVER` hover 底、`CREAM` 文字、`DIM` 禁用,内边距/
+    /// 列距取自 `context_menu` region 令牌。某天有人手滑改掉会在这里炸。
+    #[test]
+    fn dozer_editor_context_menu_matches_byteboy_style() {
+        let m = dozer_editor_style().context_menu;
+        assert_eq!(m.background, theme::color::BG);
+        assert_eq!(m.border_color, theme::color::BORDER);
+        assert_eq!(m.border_width, 1.0);
+        assert_eq!(m.border_radius, 10.0);
+        assert_eq!(m.shadow, iced_widget::core::Shadow::default());
+        assert_eq!(m.padding, 6.0);
+        assert_eq!(m.gap, 2.0);
+        assert_eq!(m.menu_width, theme::geometry::context_menu_width());
+        assert_eq!(m.item_radius, 4.0);
+        assert_eq!(m.item_hover_background, theme::color::TAB_HOVER);
+        assert_eq!(m.item_text_color, theme::color::CREAM);
+        assert_eq!(m.item_disabled_text_color, theme::color::DIM);
+        assert_eq!(m.item_padding_h, theme::geometry::menu_pad_h());
+        assert_eq!(m.item_padding_v, theme::geometry::menu_pad_v());
+        assert_eq!(m.item_gap, theme::geometry::menu_gap());
+        assert_eq!(m.separator_color, theme::color::BORDER);
+    }
+
+    /// 防漂移锚:编辑器排版指标必须和终端同源——字号 `terminal_font::size()`
+    /// 乘全局 scale、行高再乘 `terminal_font::line_height_factor()`,静态布局
+    /// 像素(行号区/折叠列/字形内边距)取 vendored 编辑器公开默认再乘 scale。
+    #[test]
+    fn dozer_editor_font_metrics_match_terminal() {
+        let scale = theme::icon_size::scale();
+        let mut editor = iced_code_editor::CodeEditor::new("abc", "rs");
+        dozer_editor_font_metrics(&mut editor);
+
+        assert_eq!(
+            editor.font_size(),
+            theme::terminal_font::size() * scale,
+            "编辑器字号应与终端同源(terminal_font)"
+        );
+        assert_eq!(
+            editor.line_height(),
+            theme::terminal_font::size() * scale * theme::terminal_font::line_height_factor(),
+            "编辑器行高应与终端同源(terminal_font::line_height_factor)"
+        );
+    }
+
+    /// 防漂移锚:编辑器语法高亮的 token 颜色必须锚定到终端 16 色面板与终端
+    /// 默认前景,而不是一套独立的十六进制魔数。字符串=Green、关键字=Cyan、
+    /// 注释=BrightBlack、类型=Blue、函数=BrightBlue、默认前/后景=终端本色。
+    fn syntax_token(theme: &syntect::highlighting::Theme, scope: &str) -> Option<(u8, u8, u8)> {
+        use std::str::FromStr;
+        let sel =
+            syntect::highlighting::ScopeSelectors::from_str(scope).expect("测试 scope 必须合法");
+        theme
+            .scopes
+            .iter()
+            .find(|item| item.scope == sel)
+            .and_then(|item| item.style.foreground)
+            .map(|c| (c.r, c.g, c.b))
+    }
+
+    #[test]
+    fn dozer_syntax_theme_anchored_to_terminal_palette() {
+        let t = dozer_syntax_theme();
+        assert_eq!(
+            syntax_token(&t, "string").expect("未命中 string"),
+            crate::term_model::ansi16_color(2).unwrap(),
+            "字符串应锚定终端 Green"
+        );
+        assert_eq!(
+            syntax_token(&t, "keyword").expect("未命中 keyword"),
+            crate::term_model::ansi16_color(6).unwrap(),
+            "关键字应锚定终端 Cyan"
+        );
+        assert_eq!(
+            syntax_token(&t, "comment").expect("未命中 comment"),
+            crate::term_model::ansi16_color(8).unwrap(),
+            "注释应锚定终端 BrightBlack"
+        );
+        assert_eq!(
+            syntax_token(&t, "entity.name.type").expect("未命中类型"),
+            crate::term_model::ansi16_color(4).unwrap(),
+            "类型应锚定终端 Blue"
+        );
+        assert_eq!(
+            syntax_token(&t, "entity.name.function").expect("未命中函数"),
+            crate::term_model::ansi16_color(12).unwrap(),
+            "函数应锚定终端 BrightBlue"
+        );
+        assert_eq!(
+            syntax_token(&t, "operator").expect("未命中 operator"),
+            crate::term_model::default_fg_rgb(),
+            "运算符应锚定终端默认前景"
+        );
+        assert!(
+            syntax_token(&t, "string.regexp")
+                .map(|(_, g, _)| g)
+                .expect("未命中 regexp")
+                != 0xd9,
+            "regexp 不应使用甲方金 #F2D94E"
+        );
+    }
+
+    /// 防漂移锚:编辑器滚动条的几何/配色必须与中央 `scrollbar.rs` 的规范一致。
+    #[test]
+    fn dozer_editor_scrollbar_matches_byteboy_style() {
+        let s = dozer_editor_style().scrollbar;
+        assert_eq!(s.rail_width, theme::geometry::scrollbar_width());
+        assert_eq!(s.thumb_width, theme::geometry::scrollbar_thumb_width());
+        assert_eq!(
+            s.thumb_radius,
+            theme::geometry::scrollbar_thumb_width() / 2.0
+        );
+        assert_eq!(s.thumb_color, theme::color::TAB_ACTIVE_BORDER);
+        assert_eq!(s.track_background, None);
+        assert_eq!(
+            s.track_border,
+            iced_widget::core::Border::default(),
+            "轨道应无描边"
+        );
+        assert_eq!(
+            s.thumb_border,
+            iced_widget::core::Border::default(),
+            "thumb 应无描边"
+        );
     }
 }
