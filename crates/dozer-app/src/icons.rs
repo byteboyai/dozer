@@ -126,6 +126,9 @@ pub enum IconKind {
     FolderSearch,
     /// 项目信息面板小节标题前的占位图标(Lucide circle-small:小圆点)。
     CircleSmall,
+    /// SSH 主机卡片"文件传输"按钮 + SFTP tab 前缀图标(Lucide
+    /// folder-sync)。
+    FolderSync,
 }
 
 impl IconKind {
@@ -192,6 +195,7 @@ impl IconKind {
             IconKind::GitGraph => include_bytes!("../assets/icons/git-graph.svg"),
             IconKind::FolderSearch => include_bytes!("../assets/icons/folder-search.svg"),
             IconKind::CircleSmall => include_bytes!("../assets/icons/circle-small.svg"),
+            IconKind::FolderSync => include_bytes!("../assets/icons/folder-sync.svg"),
         }
     }
 }
