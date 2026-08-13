@@ -993,6 +993,22 @@ pub(crate) fn terminal_visible(state: &ShellState) -> bool {
         && state.maximized != Some(MaximizedPane::Left)
 }
 
+/// 键盘/粘贴事件此刻该写给右侧共享终端条还是 SSH 面板自己的内嵌终端。
+/// 复用既有 `active_zone`(点击左右面板区任意位置就会更新,已经在驱动
+/// `left_zone`/`right_zone` 的高亮边框,见 `App::set_active_zone`)——
+/// SSH 面板在左侧且左侧是当前聚焦区时走 SSH 面板,否则走现状的共享
+/// 终端条(不需要新增专门的终端焦点状态)。
+pub(crate) fn keyboard_term_target(
+    left_view: LeftView,
+    active_zone: Option<ZoneSide>,
+) -> TermTarget {
+    if left_view == LeftView::Ssh && active_zone == Some(ZoneSide::Left) {
+        TermTarget::SshPanel
+    } else {
+        TermTarget::Shared
+    }
+}
+
 /// 换算终端 PTY 网格时用的假想外壳状态:强制"右侧展开 + 显示 Agent 配对"。
 ///
 /// 终端此刻可能不可见(右侧收起 / 右视图是对话),但它的 PTY 网格仍应按
@@ -2386,6 +2402,13 @@ impl App {
         if let Some(zone) = zone_at_x(x, window_width, &self.shell_state()) {
             self.active_zone = Some(zone);
         }
+    }
+
+    /// main.rs 键盘/粘贴路由用的目标终端(`Shared`/`SshPanel`)。委托给
+    /// 纯函数 `keyboard_term_target`(单测用),这里只补上 `App` 私有字段的
+    /// 读取。
+    pub(crate) fn keyboard_term_target(&self) -> TermTarget {
+        crate::app::keyboard_term_target(self.left_view, self.active_zone)
     }
 
     /// 建窗时用的初始窗口尺寸偏好:优先用上次退出前持久化的

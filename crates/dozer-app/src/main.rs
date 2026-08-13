@@ -920,7 +920,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             if let Some(text) =
                                 clipboard.read(iced_winit::core::clipboard::Kind::Standard)
                             {
-                                app.update(Message::TermPaste(text));
+                                let target = app.keyboard_term_target();
+                                app.update(Message::TermPaste(target, text));
                                 window.request_redraw();
                             } else if let Some(path) =
                                 clipboard_image::read_pasteboard_image_as_temp_file()
@@ -929,7 +930,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // Clipboard::read 只认字符串,取不到图片
                                 // 字节。落临时 PNG,粘贴文件路径——claude
                                 // 等 CLI 会把路径识别成图片附件加载。
-                                app.update(Message::TermPaste(path.to_string_lossy().into_owned()));
+                                let target = app.keyboard_term_target();
+                                app.update(Message::TermPaste(
+                                    target,
+                                    path.to_string_lossy().into_owned(),
+                                ));
                                 window.request_redraw();
                             }
                         }
@@ -1055,7 +1060,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             };
 
             if let Some(bytes) = bytes {
-                app.update(Message::TermInput(bytes));
+                let target = app.keyboard_term_target();
+                app.update(Message::TermInput(target, bytes));
                 window.request_redraw();
             }
         }
