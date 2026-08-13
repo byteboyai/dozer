@@ -16,16 +16,21 @@ Dozer 不是 IDE、不是编辑器、不是 AI 聊天应用、不是终端模拟
 
 | crate | 职责 |
 |-------|------|
-| `crates/dozer-core` | 共享类型与路径、UDS 协议 |
+| `crates/dozer-core` | 共享类型、路径、UDS 协议 |
 | `crates/dozerd` | session daemon：PTY 池、会话存活、验收闭环存储（bin: `dozerd`） |
 | `crates/dozer-app` | iced 0.14 GUI（bin: `dozer`） |
-| `crates/dozer-hook` | 被 agent hooks 调用的零依赖小工具（bin: `dozer-hook`） |
-| `crates/legacy-boy` | **已废弃**的 byteboy v0（bin: `boy`），仅作 dozerd 种子代码，禁止扩展 |
-| `spike/*` | 一次性技术验证 |
+| `crates/dozer-hook` | 被 agent hooks 调用的零依赖小二进制（bin: `dozer-hook`） |
+| `crates/dozer-client` | dozer-app/dozer-mcp 共用的 UDS 客户端库（`Client`） |
+| `crates/dozer-mcp` | 面向外部 CLI agent 的只读 MCP stdio server（bin: `dozer-mcp`） |
+| `spike/*` | 一次性技术验证，随时可删 |
+
+> `boy` CLI（legacy-boy）已于 2026-08-12 删除，永不回归；agent 启动/模型托管/doctor 全归 dozerd。
 
 ## 构建
 
 ```bash
-cargo build && cargo test
-cargo run -p dozer-app        # GUI 骨架
+cargo build                    # 全 workspace
+cargo test -p dozerd           # 单 crate 测试
+cargo run -p dozer-app         # 跑 GUI
+cargo clippy --all-targets && cargo fmt
 ```
