@@ -396,6 +396,10 @@ pub enum Message {
     PlanDateEditStart(usize),
     PlanDateChanged(String),
     PlanDateSubmit,
+    /// pill 菜单选中"待办"/"已完成"时发出，`bool` 是**目标** `done` 值
+    /// (显式设置，不是翻转)。当前 `done` 已经等于目标值时视为 no-op，
+    /// 不重复写盘——见 `set_done()` 的实现注释。
+    SetDone(usize, bool),
 }
 
 /// 重读 `.dozer/todo.md`,刷新 `items`/`mtime`。文件不存在/读失败按空
@@ -406,6 +410,55 @@ pub fn reload_from_disk(ws_state: &mut WorkspaceState, project_path: &std::path:
     ws_state.mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
     let md = std::fs::read_to_string(&path).unwrap_or_default();
     ws_state.items = parse_todo(&md);
+}
+
+/// `Toggle`/`SetDone` 共用的写盘逻辑：把任务行的 `[ ]`/`[x]` 改成
+/// `target_done` 对应的目标值(不是翻转)。`item.done == target_done` 时
+/// 直接 no-op 返回，不读写文件、不碰 `completed_at`——这是"进行中"态点
+/// pill 菜单"待办"选项时的关键行为：`done` 本来就是 `false`，不应该因为
+/// 用户点了这个选项就产生任何副作用。
+fn set_done(
+    ws_state: &mut WorkspaceState,
+    app_state: &mut AppState,
+    idx: usize,
+    project_id: i64,
+    project_path: &std::path::Path,
+    target_done: bool,
+) {
+    let Some(item) = ws_state.items.get(idx) else {
+        return;
+    };
+    if item.done == target_done {
+        return;
+    }
+    let old_line = format!("- [{}] {}", if item.done { "x" } else { " " }, item.text);
+    let new_line = format!("- [{}] {}", if target_done { "x" } else { " " }, item.text);
+    let before_text = item.text.clone();
+    let path = todo_path(project_path);
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    match replace_todo_line(&content, &old_line, &new_line) {
+        Some(new_content) => {
+            if let Err(e) = std::fs::write(&path, &new_content) {
+                tracing::warn!("写入 todo.md 失败: {e}");
+                return;
+            }
+            reload_from_disk(ws_state, project_path);
+        }
+        None => {
+            // 冲突:文件已经变了,放弃这次写入,直接重读展示最新状态。
+            reload_from_disk(ws_state, project_path);
+            return;
+        }
+    }
+    // 文本没变(正常场景)才更新 completed_at;如果文本变了(文件可能在
+    // 重读期间被 agent 并发改过),跳过,避免把完成时间错记到另一条任务上。
+    if let Some(after) = ws_state.items.get(idx)
+        && after.text == before_text
+    {
+        app_state.set_completed_at(project_id, &after.text, after.done);
+    }
 }
 
 /// 处理除 `DispatchToExisting`/`DispatchNew` 之外的 10 条消息,统一接收
@@ -424,35 +477,11 @@ pub fn update(
             let Some(item) = ws_state.items.get(idx) else {
                 return;
             };
-            let old_line = format!("- [{}] {}", if item.done { "x" } else { " " }, item.text);
-            let new_line = format!("- [{}] {}", if item.done { " " } else { "x" }, item.text);
-            let before_text = item.text.clone();
-            let path = todo_path(project_path);
-            let Ok(content) = std::fs::read_to_string(&path) else {
-                return;
-            };
-            match replace_todo_line(&content, &old_line, &new_line) {
-                Some(new_content) => {
-                    if let Err(e) = std::fs::write(&path, &new_content) {
-                        tracing::warn!("写入 todo.md 失败: {e}");
-                        return;
-                    }
-                    reload_from_disk(ws_state, project_path);
-                }
-                None => {
-                    // 冲突:文件已经变了,放弃这次写入,直接重读展示最新状态。
-                    reload_from_disk(ws_state, project_path);
-                    return;
-                }
-            }
-            // 文本没变(正常勾选场景)才更新 completed_at;如果文本变了
-            // (文件可能在重读期间被 agent 并发改过),跳过,避免把完成
-            // 时间错记到另一条任务上。
-            if let Some(after) = ws_state.items.get(idx)
-                && after.text == before_text
-            {
-                app_state.set_completed_at(project_id, &after.text, after.done);
-            }
+            let target = !item.done;
+            set_done(ws_state, app_state, idx, project_id, project_path, target);
+        }
+        Message::SetDone(idx, target_done) => {
+            set_done(ws_state, app_state, idx, project_id, project_path, target_done);
         }
         Message::AddInputChanged(s) => ws_state.add_draft = s,
         Message::AddSubmit => {
@@ -1626,6 +1655,52 @@ mod tests {
         update(&mut ws_state, &mut app_state, Message::Toggle(0), 1, &root);
         let key = todo_line_key("任务A");
         assert!(app_state.meta_for(1, key).is_none(), "冲突时不该记完成时间");
+    }
+
+    #[test]
+    fn update_set_done_pending_to_done_writes_and_stamps_completed_at() {
+        let (_dir, root) = project_dir_with_todo("- [ ] 任务A\n");
+        let mut ws_state = ws_with_item("任务A", false);
+        let mut app_state = AppState::default();
+        update(&mut ws_state, &mut app_state, Message::SetDone(0, true), 1, &root);
+        assert!(ws_state.items[0].done);
+        let key = todo_line_key("任务A");
+        assert!(app_state.meta_for(1, key).unwrap().completed_at.is_some());
+        let content = std::fs::read_to_string(todo_path(&root)).unwrap();
+        assert!(content.contains("- [x] 任务A"));
+    }
+
+    #[test]
+    fn update_set_done_noop_when_already_target_value() {
+        // 模拟"进行中"态点"待办"：done 已经是 false，SetDone(idx, false)
+        // 必须整个是 no-op(不读写文件、不碰 completed_at)，否则会把还在
+        // 执行的任务误标记。
+        let (_dir, root) = project_dir_with_todo("- [ ] 任务A\n");
+        let mut ws_state = ws_with_item("任务A", false);
+        let mut app_state = AppState::default();
+        update(&mut ws_state, &mut app_state, Message::SetDone(0, false), 1, &root);
+        assert!(!ws_state.items[0].done);
+        let key = todo_line_key("任务A");
+        assert!(
+            app_state.meta_for(1, key).is_none(),
+            "no-op 不该写 completed_at"
+        );
+        let content = std::fs::read_to_string(todo_path(&root)).unwrap();
+        assert_eq!(content, "- [ ] 任务A\n", "no-op 不该改动磁盘文件");
+    }
+
+    #[test]
+    fn update_set_done_done_to_pending_clears_completed_at() {
+        let (_dir, root) = project_dir_with_todo("- [x] 任务A\n");
+        let mut ws_state = ws_with_item("任务A", true);
+        let mut app_state = AppState::default();
+        app_state.set_completed_at(1, "任务A", true);
+        update(&mut ws_state, &mut app_state, Message::SetDone(0, false), 1, &root);
+        assert!(!ws_state.items[0].done);
+        let key = todo_line_key("任务A");
+        assert!(app_state.meta_for(1, key).unwrap().completed_at.is_none());
+        let content = std::fs::read_to_string(todo_path(&root)).unwrap();
+        assert!(content.contains("- [ ] 任务A"));
     }
 
     #[test]
