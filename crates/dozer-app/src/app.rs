@@ -993,6 +993,14 @@ pub(crate) fn terminal_visible(state: &ShellState) -> bool {
         && state.maximized != Some(MaximizedPane::Left)
 }
 
+/// SSH 面板内嵌终端此刻是否真的呈现在用户眼前——镜像 `terminal_visible`,
+/// 判定对象换成左侧:SSH 面板必须是当前左视图,且没有被"右侧放大"盖住
+/// (角色与 `terminal_visible` 的 `MaximizedPane::Left` 判断对调:终端在
+/// 右、被左侧放大遮住;SSH 面板在左、被右侧放大遮住)。
+pub(crate) fn ssh_terminal_visible(state: &ShellState) -> bool {
+    state.left_view == LeftView::Ssh && state.maximized != Some(MaximizedPane::Right)
+}
+
 /// 键盘/粘贴事件此刻该写给右侧共享终端条还是 SSH 面板自己的内嵌终端。
 /// 复用既有 `active_zone`(点击左右面板区任意位置就会更新,已经在驱动
 /// `left_zone`/`right_zone` 的高亮边框,见 `App::set_active_zone`)——
@@ -1418,9 +1426,6 @@ pub struct App {
     /// 尺寸,保证新会话从一开始就跟 pane 实际大小匹配。
     cols: u16,
     rows: u16,
-    /// 终端是否聚焦(决定光标反色画法)。当前是单窗口应用且没有其它可
-    /// 聚焦的输入控件,因此终端默认常驻聚焦。
-    term_focused: bool,
     /// daemon 连接失败,或某次会话操作失败时的错误文案。整个程序共享
     /// 一份:daemon 连不连得上不是某个项目自己的状态。
     pub(crate) daemon_error: Option<String>,
@@ -1467,7 +1472,7 @@ pub struct App {
     maximized: Option<MaximizedPane>,
     /// 左键点击落点决定的当前"聚焦"面板区,驱动 `left_zone`/`right_zone`
     /// 外边框的高亮态(见 `set_active_zone`/`zone_at_x`)。启动默认
-    /// `Some(Right)`——终端默认聚焦(`term_focused: true`),终端在右面板区。
+    /// `Some(Right)`——终端处默认焦点区,终端在右面板区。
     active_zone: Option<ZoneSide>,
     /// 所有按钮的悬停动画状态机(顶栏 Home / 顶栏右侧 / 图标栏),key 为
     /// `HoverId`。iced 0.14 无内置动画 API,这套自驱 redraw(与光标闪烁同款)
@@ -1755,7 +1760,6 @@ impl App {
             proxy,
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
-            term_focused: true,
             daemon_error,
             blink_on: true,
             last_blink_at: std::time::Instant::now(),
@@ -2481,6 +2485,11 @@ impl App {
     /// [`terminal_visible`];逻辑只此一份,便于单测直接喂 `ShellState`)。
     fn terminal_visible(&self) -> bool {
         terminal_visible(&self.shell_state())
+    }
+
+    /// 镜像 `terminal_visible` 的方法包装:SSH 面板内嵌终端是否可见。
+    fn ssh_terminal_visible(&self) -> bool {
+        ssh_terminal_visible(&self.shell_state())
     }
 
     /// 当前外壳几何状态快照(main.rs 拖拽追踪/离屏几何计算用;`Copy`
@@ -7062,7 +7071,11 @@ fn active_tab_view<'a>(
     ws: &'a Workspace,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     match ws.tabs.get(ws.active) {
-        Some(tab) => term_view::view(&tab.model, app.term_focused),
+        Some(tab) => term_view::view(
+            &tab.model,
+            keyboard_term_target(app.left_view, app.active_zone) == TermTarget::Shared,
+            TermTarget::Shared,
+        ),
         None => container(
             text("暂无会话——到 Agent 面板点「＋」")
                 .size(theme::font::subtitle())
