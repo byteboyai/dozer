@@ -8,7 +8,7 @@ use crate::workspace::AddrEvent;
 use crate::{icons, theme};
 use dozer_core::protocol::ProjectInfo;
 use iced_widget::core::{Border, Element, Length};
-use iced_widget::{button, column, container, row, text};
+use iced_widget::{MouseArea, button, column, container, row, text};
 use std::path::PathBuf;
 
 /// 挂在每个 Workspace 上的项目信息面板状态。
@@ -18,8 +18,9 @@ pub struct WorkspaceState {
     dirty: bool,
     worktrees: Vec<WorktreeInfo>,
     project_acceptance_count: Option<u64>,
-    /// git remote 的 fetch URL(`delivery::remote_url`)。无 remote/非 git → None。
-    remote_url: Option<String>,
+    /// git remote 的 fetch URL 列表(`delivery::remote_url`)。空 = 无 remote/
+    /// 非 git(面板据此显示"未设置")。
+    remote_url: Vec<String>,
     /// 磁盘占用字节数(排除构建产物)。None=尚未算出来。
     disk_usage_bytes: Option<u64>,
     /// 项目描述(`.dozer/description.md` 内容)。None=尚未写入。
@@ -89,7 +90,7 @@ impl WorkspaceState {
 /// `with_project`;其余是用户交互消息。
 #[derive(Debug, Clone)]
 pub enum Message {
-    GitRefreshed(i64, Option<String>, bool, Vec<WorktreeInfo>, Option<String>),
+    GitRefreshed(i64, Option<String>, bool, Vec<WorktreeInfo>, Vec<String>),
     AcceptanceCountLoaded(i64, Option<u64>),
     /// 磁盘占用统计结果(排除构建产物后的字节数)。
     DiskUsageLoaded(i64, u64),
@@ -120,10 +121,17 @@ pub enum Message {
         target: links::LinkTarget,
         path: PathBuf,
     },
+    /// 行内右键:由内核拦截,把目标项(区 + 下标)记进 App 级右键菜单浮层态,
+    /// 渲染删除菜单,见 `files::Message::ContextMenuOpen` 文档同款写法。
+    LinkContextMenu {
+        target: links::LinkTarget,
+        index: usize,
+    },
     /// 内核拦截处理,见 `files::Message::OpenFile` 文档同款写法。
     OpenLink(PathBuf),
-    PickFile(links::LinkTarget),
-    PickDir(links::LinkTarget),
+    /// 单颗"＋"按钮:由内核 rfd 弹 OS 文件浏览器(根目录在项目根),选中的
+    /// 文件/目录由内核判 `is_dir()` 定 `LinkKind`,再回送 `LinkAdd`。
+    Pick(links::LinkTarget),
 }
 
 /// 处理全部消息——本模块不触碰终端会话域,没有需要内核拦截、`update` 里
@@ -263,8 +271,11 @@ pub fn update(
         Message::OpenLink(_) => {
             unreachable!("由内核拦截处理,见 files::Message::OpenFile 文档")
         }
-        Message::PickFile(_) | Message::PickDir(_) => {
+        Message::Pick(_) => {
             unreachable!("由内核拦截处理,见 files::Message::OpenFile 文档")
+        }
+        Message::LinkContextMenu { .. } => {
+            unreachable!("由内核拦截处理,见 files::Message::ContextMenuOpen 文档")
         }
     }
 }
@@ -324,7 +335,7 @@ pub fn view<'a>(
             .into();
     };
 
-    let mut content = column![].spacing(12).padding(14);
+    let mut content = column![].spacing(12).padding(14).width(Length::Fill);
 
     content = content.push(crate::homespace::home_panel_head(
         icons::IconKind::Briefcase,
@@ -338,13 +349,14 @@ pub fn view<'a>(
                     .size(theme::font::title())
                     .color(theme::color::CREAM),
             )
-            .padding([2, 4])
+            .padding([8, 12])
+            .width(Length::Fill)
             .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
                 background: Some(theme::color::CARD.into()),
                 border: Border {
-                    color: theme::color::CREAM,
-                    width: 1.0,
-                    radius: 2.0.into(),
+                    color: theme::color::GOLD,
+                    width: 1.5,
+                    radius: 8.0.into(),
                 },
                 ..iced_widget::container::Style::default()
             })
@@ -370,7 +382,18 @@ pub fn view<'a>(
             iced_widget::text_editor(editing)
                 .placeholder("项目描述信息…")
                 .on_action(Message::DescriptionEditAction)
-                .height(Length::Fixed(72.0))
+                .height(Length::Fixed(96.0))
+                .style(|_t, _s| iced_widget::text_editor::Style {
+                    background: theme::color::CARD.into(),
+                    border: Border {
+                        color: theme::color::GOLD,
+                        width: 1.5,
+                        radius: 8.0.into(),
+                    },
+                    placeholder: theme::color::DIM,
+                    value: theme::color::CREAM,
+                    selection: theme::color::GOLD,
+                })
                 .into()
         } else {
             let label = ws_state
@@ -384,6 +407,8 @@ pub fn view<'a>(
             };
             button(text(label).size(theme::font::body()).color(color))
                 .on_press(Message::DescriptionEditStart)
+                .padding([10, 12])
+                .width(Length::Fill)
                 .style(|_t, _s| iced_widget::button::Style {
                     background: Some(theme::color::DESC_BG.into()),
                     border: Border {
@@ -424,27 +449,75 @@ pub fn view<'a>(
         .align_y(iced_widget::core::Alignment::Center),
     );
 
+    // 「项目文档」下的文件树项都包在 iced button 里,button 默认左内边距 10px;
+    // 为与之左对齐,标签行统一左缩 10px,值文本缩进到与文件树文件名同列。
+    let tree_indent = 10.0;
+    let value_indent = tree_indent + crate::theme::icon_size::row() + 6.0;
     content = content.push(
-        text("根目录")
-            .size(theme::font::label())
-            .color(theme::color::DIM),
+        container(
+            row![
+                icons::view(
+                    icons::IconKind::FolderDot,
+                    crate::theme::icon_size::row(),
+                    theme::color::DIM
+                ),
+                text("项目根目录")
+                    .size(theme::font::label())
+                    .color(theme::color::DIM),
+            ]
+            .spacing(6)
+            .align_y(iced_widget::core::Alignment::Center),
+        )
+        .padding(iced_widget::core::Padding::new(0.0).left(tree_indent)),
     );
     content = content.push(
-        text(p.path.clone())
-            .size(theme::font::caption())
-            .color(theme::color::BODY),
-    );
-    if let Some(url) = &ws_state.remote_url {
-        content = content.push(
-            text("Git 仓库")
-                .size(theme::font::label())
-                .color(theme::color::DIM),
-        );
-        content = content.push(
-            text(url.clone())
+        row![
+            iced_widget::Space::new().width(Length::Fixed(value_indent)),
+            text(shorten_path(&p.path))
                 .size(theme::font::caption())
                 .color(theme::color::BODY),
+        ]
+        .align_y(iced_widget::core::Alignment::Center),
+    );
+    content = content.push(
+        container(
+            row![
+                icons::view(
+                    icons::IconKind::FolderRoot,
+                    crate::theme::icon_size::row(),
+                    theme::color::DIM
+                ),
+                text("Git 远程仓库")
+                    .size(theme::font::label())
+                    .color(theme::color::DIM),
+            ]
+            .spacing(6)
+            .align_y(iced_widget::core::Alignment::Center),
+        )
+        .padding(iced_widget::core::Padding::new(0.0).left(tree_indent)),
+    );
+    if ws_state.remote_url.is_empty() {
+        content = content.push(
+            row![
+                iced_widget::Space::new().width(Length::Fixed(value_indent)),
+                text("未设置")
+                    .size(theme::font::caption())
+                    .color(theme::color::DIM),
+            ]
+            .align_y(iced_widget::core::Alignment::Center),
         );
+    } else {
+        for url in &ws_state.remote_url {
+            content = content.push(
+                row![
+                    iced_widget::Space::new().width(Length::Fixed(value_indent)),
+                    text(url.clone())
+                        .size(theme::font::caption())
+                        .color(theme::color::BODY),
+                ]
+                .align_y(iced_widget::core::Alignment::Center),
+            );
+        }
     }
 
     content = content.push(links_section(
@@ -481,6 +554,22 @@ pub fn view<'a>(
         .into()
 }
 
+/// 把可能很长的绝对路径压缩成一行可读字符串:超过 `MAX` 个字符时保留首尾、
+/// 中间用 `…` 代替,避免项目面板被长路径撑破。
+fn shorten_path(p: &str) -> String {
+    const MAX: usize = 48;
+    let chars: Vec<char> = p.chars().collect();
+    if chars.len() <= MAX {
+        return p.to_string();
+    }
+    let keep = MAX - 1;
+    let head_len = keep / 2;
+    let tail_len = keep - head_len;
+    let head: String = chars[..head_len].iter().collect();
+    let tail: String = chars[chars.len() - tail_len..].iter().collect();
+    format!("{head}…{tail}")
+}
+
 fn links_section<'a>(
     title: &'static str,
     target: links::LinkTarget,
@@ -500,22 +589,11 @@ fn links_section<'a>(
                 .color(theme::color::CREAM),
             iced_widget::space::horizontal(),
             button(
-                text("+文件")
-                    .size(theme::font::caption())
+                text("+")
+                    .size(theme::font::label())
                     .color(theme::color::DIM)
             )
-            .on_press(Message::PickFile(target))
-            .style(|_t, _s| iced_widget::button::Style {
-                background: None,
-                text_color: theme::color::DIM,
-                ..iced_widget::button::Style::default()
-            }),
-            button(
-                text("+目录")
-                    .size(theme::font::caption())
-                    .color(theme::color::DIM)
-            )
-            .on_press(Message::PickDir(target))
+            .on_press(Message::Pick(target))
             .style(|_t, _s| iced_widget::button::Style {
                 background: None,
                 text_color: theme::color::DIM,
@@ -545,35 +623,28 @@ fn links_section<'a>(
         } else {
             Message::OpenLink(entry.path.clone())
         };
-        col = col.push(
+        // 删除改由右键菜单(`LinkContextMenu`)触发,行内不再挂 × 按钮。
+        let row_btn = button(
             row![
-                button(
-                    row![
-                        icons::view(row_icon, crate::theme::icon_size::row(), theme::color::DIM),
-                        text(name)
-                            .size(theme::font::body())
-                            .color(theme::color::BODY),
-                    ]
-                    .spacing(6)
-                    .align_y(iced_widget::core::Alignment::Center)
-                )
-                .on_press(click_msg)
-                .style(|_t, _s| iced_widget::button::Style {
-                    background: None,
-                    text_color: theme::color::BODY,
-                    ..iced_widget::button::Style::default()
-                }),
-                iced_widget::space::horizontal(),
-                button(text("×").size(theme::font::body()).color(theme::color::DIM))
-                    .on_press(Message::LinkRemove { target, index: i })
-                    .style(|_t, _s| iced_widget::button::Style {
-                        background: None,
-                        text_color: theme::color::DIM,
-                        ..iced_widget::button::Style::default()
-                    }),
+                icons::view(row_icon, crate::theme::icon_size::row(), theme::color::DIM),
+                text(name)
+                    .size(theme::font::body())
+                    .color(theme::color::BODY),
             ]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center),
+        )
+        .on_press(click_msg)
+        .style(|_t, _s| iced_widget::button::Style {
+            background: None,
+            text_color: theme::color::BODY,
+            ..iced_widget::button::Style::default()
+        });
+        col = col.push(
+            MouseArea::new(row_btn).on_right_press(Message::LinkContextMenu {
+                target,
+                index: i,
+            }),
         );
         if entry.kind == links::LinkKind::Dir
             && let Some(rows) = expanded.get(&entry.path)
@@ -633,7 +704,7 @@ mod tests {
                 Some("main".to_string()),
                 true,
                 vec![],
-                Some("https://x.git".into()),
+                vec!["https://x.git".to_string()],
             ),
             1,
             "名字",
@@ -645,7 +716,7 @@ mod tests {
         assert_eq!(ws.branch.as_deref(), Some("main"));
         assert!(ws.dirty);
         assert_eq!(ws.worktrees().len(), 0);
-        assert_eq!(ws.remote_url.as_deref(), Some("https://x.git"));
+        assert_eq!(ws.remote_url.as_slice(), ["https://x.git"]);
     }
 
     #[test]

@@ -1621,7 +1621,7 @@ pub(crate) fn spawn_project_git_refresh(project_id: i64, repo_path: PathBuf, io:
             }
         })
         .await
-        .unwrap_or((None, false, HashMap::new(), Vec::new(), None));
+        .unwrap_or((None, false, HashMap::new(), Vec::new(), Vec::new()));
         let _ = proxy.send_event(Message::Files(files::Message::StatusesRefreshed(
             project_id, s,
         )));
