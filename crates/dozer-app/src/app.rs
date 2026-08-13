@@ -160,6 +160,14 @@ pub enum HoverId {
     ProjectPreviewTabItem(usize),
     /// Project 面板右配对预览某个文件 tab 的关闭按钮(×),按 tab 序号区分。
     ProjectPreviewTabClose(usize),
+    /// SSH 面板自己 tab 条上某个 tab 的标题文字,按 host_id 的哈希区分
+    /// (SSH tab 没有稳定的数字序号——按身份是 `(host_id, SshTabKind)`,
+    /// `HoverId` 整体 `derive(Copy)`,`String` 不是 `Copy`,不能直接塞
+    /// `host_id.clone()`,用哈希值退化成 `u64`,同 `todo_line_key` 的
+    /// 既有精度取舍)。
+    SshTabItem(u64),
+    /// SSH 面板自己 tab 条上某个 tab 的关闭按钮(×),同上按 host_id 哈希区分。
+    SshTabClose(u64),
     /// 顶栏 Dozer Home 品牌页签的标题文字(图标 + "Dozer"):未选中态 hover 时
     /// 从 DIM 平滑过渡到 GOLD,选中态恒为 GOLD——与 `ProjectTabItem` 同一手法
     /// (见 `dozer_home_tab`)。
@@ -310,6 +318,8 @@ pub struct PanelDims {
     pub files_split: f32,
     /// Project 面板配对:信息面板占左面板区宽度的比例，项目预览(右配对)拿剩下的。
     pub project_split: f32,
+    /// SSH 面板"主机列表 | 内嵌终端"两栏的分屏比例,镜像 `project_split`。
+    pub ssh_split: f32,
     /// Todo 面板配对:分类导航占左面板区宽度的比例，列表/看板/MARKDOWN 内容
     /// (右配对)拿剩下的。
     pub todo_split: f32,
@@ -328,6 +338,7 @@ fn default_panel_dims() -> PanelDims {
         left_width: 640.0,
         files_split: theme::geometry::default_split_ratio(),
         project_split: theme::geometry::default_split_ratio(),
+        ssh_split: theme::geometry::default_split_ratio(),
         todo_split: theme::geometry::default_split_ratio(),
         agent_split: theme::geometry::default_split_ratio(),
         conversations_split: theme::geometry::default_split_ratio(),
@@ -414,6 +425,7 @@ pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
         },
         files_split: clamp_split(d.files_split),
         project_split: clamp_split(d.project_split),
+        ssh_split: clamp_split(d.ssh_split),
         todo_split: clamp_split(d.todo_split),
         agent_split: clamp_split(d.agent_split),
         conversations_split: clamp_split(d.conversations_split),
@@ -428,6 +440,8 @@ pub enum Divider {
     LeftPairSplit,
     /// Project 面板内部的配对分隔线:左边信息面板、右边项目预览。
     ProjectSplit,
+    /// SSH 面板内部的分隔线:左边主机列表、右边内嵌终端。
+    SshSplit,
     /// Todo 面板内部的配对分隔线:左边分类导航、右边列表/看板/MARKDOWN 内容。
     TodoSplit,
     RightPairSplit,
@@ -589,6 +603,20 @@ pub(crate) fn apply_column_drag(
             );
             PanelDims {
                 project_split: ratio,
+                ..state.dims
+            }
+        }
+        Divider::SshSplit => {
+            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            if pair_w <= 0.0 {
+                return state.dims;
+            }
+            let ratio = ((logical_x - theme::geometry::icon_rail_width()) / pair_w).clamp(
+                theme::geometry::min_split_ratio(),
+                theme::geometry::max_split_ratio(),
+            );
+            PanelDims {
+                ssh_split: ratio,
                 ..state.dims
             }
         }
@@ -993,6 +1021,30 @@ pub(crate) fn terminal_visible(state: &ShellState) -> bool {
         && state.maximized != Some(MaximizedPane::Left)
 }
 
+/// SSH 面板内嵌终端此刻是否真的呈现在用户眼前——镜像 `terminal_visible`,
+/// 判定对象换成左侧:SSH 面板必须是当前左视图,且没有被"右侧放大"盖住
+/// (角色与 `terminal_visible` 的 `MaximizedPane::Left` 判断对调:终端在
+/// 右、被左侧放大遮住;SSH 面板在左、被右侧放大遮住)。
+pub(crate) fn ssh_terminal_visible(state: &ShellState) -> bool {
+    state.left_view == LeftView::Ssh && state.maximized != Some(MaximizedPane::Right)
+}
+
+/// 键盘/粘贴事件此刻该写给右侧共享终端条还是 SSH 面板自己的内嵌终端。
+/// 复用既有 `active_zone`(点击左右面板区任意位置就会更新,已经在驱动
+/// `left_zone`/`right_zone` 的高亮边框,见 `App::set_active_zone`)——
+/// SSH 面板在左侧且左侧是当前聚焦区时走 SSH 面板,否则走现状的共享
+/// 终端条(不需要新增专门的终端焦点状态)。
+pub(crate) fn keyboard_term_target(
+    left_view: LeftView,
+    active_zone: Option<ZoneSide>,
+) -> TermTarget {
+    if left_view == LeftView::Ssh && active_zone == Some(ZoneSide::Left) {
+        TermTarget::SshPanel
+    } else {
+        TermTarget::Shared
+    }
+}
+
 /// 换算终端 PTY 网格时用的假想外壳状态:强制"右侧展开 + 显示 Agent 配对"。
 ///
 /// 终端此刻可能不可见(右侧收起 / 右视图是对话),但它的 PTY 网格仍应按
@@ -1086,12 +1138,21 @@ pub type ProjectId = i64;
 /// Ctrl + / Ctrl - 每次触发的相对缩放步近因子（1.1 ≈ 每按一次放大 10%）。
 const UI_ZOOM_STEP: f32 = 1.1;
 
+/// 终端相关消息(键盘/滚轮/选区/粘贴)该写去右侧共享终端条还是 SSH 面板
+/// 自己的内嵌终端——两者可能同时在屏幕上,裸消息本身不带这个信息,靠
+/// canvas 渲染时(`term_view::view`)烘焙进它构造的每条消息里。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TermTarget {
+    Shared,
+    SshPanel,
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     /// 终端聚焦时的键盘/IME 输入字节（已经过 `keymap` 翻译）。直接写给
     /// 当前激活 tab 对应的 daemon 会话（`client.write`）——不再本地
     /// echo，回显完全走 PTY 真实回路（daemon → attach 流 → `TermOutput`）。
-    TermInput(Vec<u8>),
+    TermInput(TermTarget, Vec<u8>),
     /// attach 事件流转发来的输出字节，`usize` 是 tab 的稳定 id
     /// （`SessionTab::tab_id`，不是 vec 位置——关闭 tab 会移动位置，
     /// 但 id 不变，事件流路由必须认 id）。首字段的项目归属见 [`ProjectId`]
@@ -1201,7 +1262,7 @@ pub enum Message {
     DaemonError(String),
     /// 终端滚轮：视口向历史方向（正数）/活动区方向（负数）滚动的行数。
     /// 只作用于当前激活 tab（滚轮事件来自它的 canvas）。
-    TermScroll(i32),
+    TermScroll(TermTarget, i32),
     /// 终端 tab 栏箭头翻页（`true`=右/`false`=左）。一次翻 2 个 tab；
     /// 上界不在此钳，渲染时 `tab_window` 钳制显示（P1L T5 验收返工）。
     TermTabScroll(bool),
@@ -1209,12 +1270,22 @@ pub enum Message {
     PreviewTabScroll(bool),
     /// 终端左键按下：在视口格 `(col, row)` 起新选区（`right` = 按点在
     /// 格子右半）。
-    TermSelStart { col: usize, row: usize, right: bool },
+    TermSelStart {
+        target: TermTarget,
+        col: usize,
+        row: usize,
+        right: bool,
+    },
     /// 终端拖拽：选区末端更新到视口格 `(col, row)`。
-    TermSelUpdate { col: usize, row: usize, right: bool },
+    TermSelUpdate {
+        target: TermTarget,
+        col: usize,
+        row: usize,
+        right: bool,
+    },
     /// ⌘V 粘贴剪贴板文本：按会话的 bracketed paste 模式决定是否包裹
     /// `ESC[200~`/`ESC[201~` 后写入 daemon。
-    TermPaste(String),
+    TermPaste(TermTarget, String),
     /// 预览:打开本地文件为新 tab(路径已由入口侧确认存在,来自项目树点击/
     /// 会话恢复;预览面板本身已不再有"打开文件…"按钮或地址栏)。
     PreviewOpenPath(PathBuf),
@@ -1393,9 +1464,6 @@ pub struct App {
     /// 尺寸,保证新会话从一开始就跟 pane 实际大小匹配。
     cols: u16,
     rows: u16,
-    /// 终端是否聚焦(决定光标反色画法)。当前是单窗口应用且没有其它可
-    /// 聚焦的输入控件,因此终端默认常驻聚焦。
-    term_focused: bool,
     /// daemon 连接失败,或某次会话操作失败时的错误文案。整个程序共享
     /// 一份:daemon 连不连得上不是某个项目自己的状态。
     pub(crate) daemon_error: Option<String>,
@@ -1442,7 +1510,7 @@ pub struct App {
     maximized: Option<MaximizedPane>,
     /// 左键点击落点决定的当前"聚焦"面板区,驱动 `left_zone`/`right_zone`
     /// 外边框的高亮态(见 `set_active_zone`/`zone_at_x`)。启动默认
-    /// `Some(Right)`——终端默认聚焦(`term_focused: true`),终端在右面板区。
+    /// `Some(Right)`——终端处默认焦点区,终端在右面板区。
     active_zone: Option<ZoneSide>,
     /// 所有按钮的悬停动画状态机(顶栏 Home / 顶栏右侧 / 图标栏),key 为
     /// `HoverId`。iced 0.14 无内置动画 API,这套自驱 redraw(与光标闪烁同款)
@@ -1730,7 +1798,6 @@ impl App {
             proxy,
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
-            term_focused: true,
             daemon_error,
             blink_on: true,
             last_blink_at: std::time::Instant::now(),
@@ -2379,6 +2446,13 @@ impl App {
         }
     }
 
+    /// main.rs 键盘/粘贴路由用的目标终端(`Shared`/`SshPanel`)。委托给
+    /// 纯函数 `keyboard_term_target`(单测用),这里只补上 `App` 私有字段的
+    /// 读取。
+    pub(crate) fn keyboard_term_target(&self) -> TermTarget {
+        crate::app::keyboard_term_target(self.left_view, self.active_zone)
+    }
+
     /// 建窗时用的初始窗口尺寸偏好:优先用上次退出前持久化的
     /// `shell_layout.window_width/height`(已经过 `sanitize_shell_layout`
     /// 夹取),`layout.json` 不存在/读不到时 `layout::load()` 本身已经退化
@@ -2449,6 +2523,11 @@ impl App {
     /// [`terminal_visible`];逻辑只此一份,便于单测直接喂 `ShellState`)。
     fn terminal_visible(&self) -> bool {
         terminal_visible(&self.shell_state())
+    }
+
+    /// 镜像 `terminal_visible` 的方法包装:SSH 面板内嵌终端是否可见。
+    fn ssh_terminal_visible(&self) -> bool {
+        ssh_terminal_visible(&self.shell_state())
     }
 
     /// 当前外壳几何状态快照(main.rs 拖拽追踪/离屏几何计算用;`Copy`
@@ -2764,7 +2843,7 @@ impl App {
 
     pub fn update(&mut self, message: Message) {
         match message {
-            Message::TermInput(bytes) => self.term_input(bytes),
+            Message::TermInput(target, bytes) => self.term_input(target, bytes),
             Message::TermOutput(project_id, tab_id, bytes) => {
                 self.term_output(project_id, tab_id, bytes)
             }
@@ -2949,7 +3028,7 @@ impl App {
             Message::TabAttached(project_id, tab_id, info, snapshot) => {
                 let session_id = info.id.clone();
                 self.with_project(project_id, move |ws, io| {
-                    ws.on_tab_attached(io, tab_id, info, snapshot)
+                    ws.on_tab_attached(io.cols, io.rows, tab_id, info, snapshot)
                 });
                 // 若是从 Todo 面板"派发到新建"建的 tab,补记派发记录——此时才
                 // 第一次知道真正的 `session_id`。`TabAttached` 是异步结果消息,
@@ -3019,9 +3098,13 @@ impl App {
             }
             Message::Noop => {}
             Message::DaemonError(message) => self.daemon_error = Some(message),
-            Message::TermScroll(delta) => {
+            Message::TermScroll(target, delta) => {
                 self.with_focused_project(|ws, _io| {
-                    if let Some(tab) = ws.tabs.get_mut(ws.active) {
+                    let tab = match target {
+                        TermTarget::Shared => ws.tabs.get_mut(ws.active),
+                        TermTarget::SshPanel => ws.ssh_active_tab_mut(),
+                    };
+                    if let Some(tab) = tab {
                         tab.model.scroll_display(delta);
                     }
                 });
@@ -3044,21 +3127,39 @@ impl App {
                     }
                 });
             }
-            Message::TermSelStart { col, row, right } => {
+            Message::TermSelStart {
+                target,
+                col,
+                row,
+                right,
+            } => {
                 self.with_focused_project(|ws, _io| {
-                    if let Some(tab) = ws.tabs.get_mut(ws.active) {
+                    let tab = match target {
+                        TermTarget::Shared => ws.tabs.get_mut(ws.active),
+                        TermTarget::SshPanel => ws.ssh_active_tab_mut(),
+                    };
+                    if let Some(tab) = tab {
                         tab.model.selection_start(col, row, right);
                     }
                 });
             }
-            Message::TermSelUpdate { col, row, right } => {
+            Message::TermSelUpdate {
+                target,
+                col,
+                row,
+                right,
+            } => {
                 self.with_focused_project(|ws, _io| {
-                    if let Some(tab) = ws.tabs.get_mut(ws.active) {
+                    let tab = match target {
+                        TermTarget::Shared => ws.tabs.get_mut(ws.active),
+                        TermTarget::SshPanel => ws.ssh_active_tab_mut(),
+                    };
+                    if let Some(tab) = tab {
                         tab.model.selection_update(col, row, right);
                     }
                 });
             }
-            Message::TermPaste(text) => self.term_paste(text),
+            Message::TermPaste(target, text) => self.term_paste(target, text),
             Message::PreviewOpenPath(path) => self.preview_open_path(path),
             Message::PreviewSelectTab(idx) => self.preview_select_tab(idx),
             Message::PreviewCloseTab(idx) => {
@@ -3371,10 +3472,39 @@ impl App {
             // Workspace` 整体,`ssh::update` 只拿得到 `&mut ws.ssh`)——
             // 拦截在通配 `Message::Ssh(msg)` 之前,直接调 `Workspace::
             // spawn_ssh_tab`。
-            Message::Ssh(ssh::Message::OpenTerminal(host_id)) => {
+            Message::Ssh(ssh::Message::OpenSshTab(host_id, ssh::SshTabKind::Terminal)) => {
                 self.with_focused_project(|ws, io| {
-                    ws.ssh.record_reopen_after_trust(host_id.clone());
-                    ws.spawn_ssh_tab(io, host_id);
+                    // 已经开着这台主机的终端 tab 就直接切过去,不重新握手
+                    // 连一遍(阶段 3 SFTP 决定"每个 tab 独立新建连接",但
+                    // 终端 tab 本来就是"一台主机一条常驻连接",重复点
+                    // "终端"图标应该是切换焦点而不是叠加新连接)。
+                    let already_open = ws
+                        .ssh_tabs
+                        .iter()
+                        .any(|t| t.info.id.strip_prefix("ssh:") == Some(host_id.as_str()));
+                    if already_open {
+                        ws.select_ssh_tab(host_id, ssh::SshTabKind::Terminal);
+                    } else {
+                        ws.ssh.record_reopen_after_trust(host_id.clone());
+                        ws.spawn_ssh_tab(io, host_id);
+                    }
+                });
+            }
+            // Sftp 种类阶段 4 不处理内容(阶段 3 再接),但仍要吃掉这条
+            // 消息、不让它落进下面的通配分支(通配分支会把它转发给
+            // ssh::update,那边的穷尽匹配分支是空 no-op,效果上等价,
+            // 但显式吃掉更清楚地表达"阶段 4 有意不处理"这件事)。
+            Message::Ssh(ssh::Message::OpenSshTab(_, ssh::SshTabKind::Sftp)) => {}
+            Message::Ssh(ssh::Message::CloseSshTab(host_id, kind)) => {
+                self.with_focused_project(|ws, io| {
+                    if kind == ssh::SshTabKind::Terminal {
+                        ws.close_ssh_tab(io, &host_id, kind);
+                    }
+                });
+            }
+            Message::Ssh(ssh::Message::SelectSshTab(host_id, kind)) => {
+                self.with_focused_project(|ws, _io| {
+                    ws.select_ssh_tab(host_id, kind);
                 });
             }
             // 终端连接失败:先做内核层面的清理(pending/ssh_out_pending
@@ -4106,21 +4236,36 @@ impl App {
         }
     }
 
-    fn term_input(&mut self, bytes: Vec<u8>) {
+    fn term_input(&mut self, target: TermTarget, bytes: Vec<u8>) {
         // 终端不在屏上时丢弃按键(不报错、不写 PTY):否则用户在读
         // 对话审阅时敲的回车/方向键会静默提交给隐藏在后面的 agent
         // 会话(Fix round 2 #3)。
-        if !self.terminal_visible() {
+        let visible = match target {
+            TermTarget::Shared => self.terminal_visible(),
+            TermTarget::SshPanel => self.ssh_terminal_visible(), // Task 12 新增
+        };
+        if !visible {
             return;
         }
         self.with_focused_project(|ws, io| {
-            // 键入即回底 + 清选区：正在回看历史时一敲键盘，视口跳回
-            // 实时输出（常规终端语义），再把字节写给 daemon。
-            if let Some(tab) = ws.tabs.get_mut(ws.active) {
-                tab.model.scroll_to_bottom();
-                tab.model.selection_clear();
+            match target {
+                TermTarget::Shared => {
+                    // 键入即回底 + 清选区：正在回看历史时一敲键盘，视口跳回
+                    // 实时输出（常规终端语义），再把字节写给 daemon。
+                    if let Some(tab) = ws.tabs.get_mut(ws.active) {
+                        tab.model.scroll_to_bottom();
+                        tab.model.selection_clear();
+                    }
+                    ws.send_input(io, bytes);
+                }
+                TermTarget::SshPanel => {
+                    if let Some(tab) = ws.ssh_active_tab_mut() {
+                        tab.model.scroll_to_bottom();
+                        tab.model.selection_clear();
+                    }
+                    ws.ssh_send_input(io, bytes);
+                }
             }
-            ws.send_input(io, bytes);
         });
     }
 
@@ -4153,19 +4298,46 @@ impl App {
         });
     }
 
-    fn term_paste(&mut self, text: String) {
+    fn term_paste(&mut self, target: TermTarget, text: String) {
         // 同 TermInput 的可见性闸门(Fix round 3):⌘V 粘贴走同一条
         // PTY 写入路径,粘贴内容若含换行还会在看不见的会话里直接
         // 执行,比单个按键更危险,必须同样拦截。
-        if !self.terminal_visible() {
+        let visible = match target {
+            TermTarget::Shared => self.terminal_visible(),
+            TermTarget::SshPanel => self.ssh_terminal_visible(),
+        };
+        if !visible {
             return;
         }
         self.with_focused_project(move |ws, io| {
-            let Some(tab) = ws.tabs.get_mut(ws.active) else {
+            let bracketed = match target {
+                TermTarget::Shared => ws.tabs.get(ws.active).map(|t| t.model.bracketed_paste()),
+                TermTarget::SshPanel => ws
+                    .ssh_tabs
+                    .iter()
+                    .find(|t| {
+                        ws.ssh_active.as_ref().is_some_and(|(h, _)| {
+                            t.info.id.strip_prefix("ssh:") == Some(h.as_str())
+                        })
+                    })
+                    .map(|t| t.model.bracketed_paste()),
+            };
+            let Some(bracketed) = bracketed else {
                 return;
             };
-            tab.model.scroll_to_bottom();
-            let bytes = if tab.model.bracketed_paste() {
+            match target {
+                TermTarget::Shared => {
+                    if let Some(tab) = ws.tabs.get_mut(ws.active) {
+                        tab.model.scroll_to_bottom();
+                    }
+                }
+                TermTarget::SshPanel => {
+                    if let Some(tab) = ws.ssh_active_tab_mut() {
+                        tab.model.scroll_to_bottom();
+                    }
+                }
+            }
+            let bytes = if bracketed {
                 let mut b = b"\x1b[200~".to_vec();
                 b.extend_from_slice(text.as_bytes());
                 b.extend_from_slice(b"\x1b[201~");
@@ -4173,7 +4345,10 @@ impl App {
             } else {
                 text.into_bytes()
             };
-            ws.send_input(io, bytes);
+            match target {
+                TermTarget::Shared => ws.send_input(io, bytes),
+                TermTarget::SshPanel => ws.ssh_send_input(io, bytes),
+            }
         });
     }
 
@@ -6104,6 +6279,7 @@ fn left_panel_area<'a>(
                 let tabs: Vec<todo::SessionTabSummary> = ws
                     .tabs
                     .iter()
+                    .chain(ws.ssh_tabs.iter())
                     .map(|t| todo::SessionTabSummary {
                         session_id: t.info.id.clone(),
                         title: tab_title(t.agent, t.cwd.as_deref(), &t.info.name),
@@ -6195,7 +6371,33 @@ fn left_panel_area<'a>(
                 if ws.project.is_none() {
                     return column![].into();
                 }
-                ssh::view(&ws.ssh, Length::Fill, zone_pane_border(zone, ac)).map(Message::Ssh)
+                let (list_portion, content_portion) = split_portions(app.dims.ssh_split);
+                let list_pane = ssh::view(
+                    &ws.ssh,
+                    Length::FillPortion(list_portion),
+                    zone_pane_border(zone, lc),
+                )
+                .map(Message::Ssh);
+                row![
+                    list_pane,
+                    divider_bar(
+                        Divider::SshSplit,
+                        theme::region::project_pane()
+                            .background
+                            .unwrap_or(theme::color::BG),
+                        theme::region::preview_pane()
+                            .background
+                            .unwrap_or(theme::color::BG),
+                    ),
+                    ssh_terminal_pane(
+                        app,
+                        ws,
+                        Length::FillPortion(content_portion),
+                        zone_pane_border(zone, rc)
+                    ),
+                ]
+                .width(Length::Fill)
+                .into()
             }
             LeftView::Web => browser::view(
                 &ws.browser,
@@ -6967,12 +7169,124 @@ fn tab_item(
     )
 }
 
+/// `host_id` → `HoverId::SshTab{Item,Close}` 用的哈希键(`HoverId` 整体
+/// `derive(Copy)`,`String` 不是 `Copy`,退化成 `u64`,同 `todo_line_key`
+/// 的既有精度取舍——碰撞在同一台主机的 tab hover 高亮场景下不构成实际
+/// 风险)。
+fn ssh_tab_hover_key(host_id: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    host_id.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// SSH 面板自己的 tab 条:遍历 `ws.ssh_tabs`,每个渲染一个可关闭 tab。
+/// 直接复用 `panel_tab`(右侧共享终端条 `tab_item` 用的同一个函数)而不是
+/// 自己拼容器样式,视觉/hover 动画与全应用其它 tab 完全一致——不需要
+/// `tabs::tab_core` 手动接线。前缀图标固定用 `IconKind::Terminal`(阶段
+/// 4 只有这一种;阶段 3 加 `Sftp` 变体后按 tab 的种类换图标,`SessionTab`
+/// 本身不带 `SshTabKind` 字段,种类信息只在 `ws.ssh_active` 里——阶段 4
+/// 全部 `ssh_tabs` 里的 tab 都是 `Terminal` 种类,这里暂时不需要按 tab
+/// 查种类,阶段 3 扩展这个函数时才需要处理"同一个 host_id 可能对应两个
+/// 不同种类的 tab,要分别渲染两个 tab 条目"这件事)。
+fn ssh_tab_bar<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let mut bar = row![].spacing(4);
+    for tab in &ws.ssh_tabs {
+        let host_id = tab
+            .info
+            .id
+            .strip_prefix("ssh:")
+            .unwrap_or(&tab.info.id)
+            .to_string();
+        let is_active = ws
+            .ssh_active
+            .as_ref()
+            .is_some_and(|(h, k)| h == &host_id && *k == ssh::SshTabKind::Terminal);
+        let key = ssh_tab_hover_key(&host_id);
+        let title_hover_t = app.hover_progress(HoverId::SshTabItem(key));
+        let close_hover_t = app.hover_progress(HoverId::SshTabClose(key));
+        let icon = icons::view(
+            icons::IconKind::Terminal,
+            crate::theme::icon_size::row(),
+            theme::color::DIM,
+        );
+        let select_id = host_id.clone();
+        let close_id = host_id.clone();
+        let title_hover_id = host_id.clone();
+        let close_hover_id = host_id;
+        bar = bar.push(panel_tab(
+            tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
+            is_active,
+            title_hover_t,
+            close_hover_t,
+            Some(icon),
+            None,
+            Message::Ssh(ssh::Message::SelectSshTab(
+                select_id,
+                ssh::SshTabKind::Terminal,
+            )),
+            Message::Ssh(ssh::Message::CloseSshTab(
+                close_id,
+                ssh::SshTabKind::Terminal,
+            )),
+            move |h| Message::Hover(HoverId::SshTabItem(ssh_tab_hover_key(&title_hover_id)), h),
+            move |h| Message::Hover(HoverId::SshTabClose(ssh_tab_hover_key(&close_hover_id)), h),
+        ));
+    }
+    bar.into()
+}
+
+/// SSH 面板内嵌终端区:tab 条 + 终端画布(或空态)。镜像 `preview_pane`/
+/// `project_preview_pane` 的既有模式——渲染函数不属于 `extensions::ssh`
+/// 模块,因为它要用顶层 `Message` 直接操作 `ws.ssh_tabs`。
+fn ssh_terminal_pane<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
+    width: Length,
+    outer: Border,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let active_tab = ws.ssh_active.as_ref().and_then(|(host_id, _kind)| {
+        ws.ssh_tabs
+            .iter()
+            .find(|t| t.info.id.strip_prefix("ssh:") == Some(host_id.as_str()))
+    });
+    let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = match active_tab {
+        Some(tab) => term_view::view(
+            &tab.model,
+            keyboard_term_target(app.left_view, app.active_zone) == TermTarget::SshPanel,
+            TermTarget::SshPanel,
+        ),
+        None => container(
+            text("点主机卡片的终端/文件传输图标开始")
+                .size(theme::font::body())
+                .color(theme::color::DIM),
+        )
+        .padding(20)
+        .into(),
+    };
+    container(column![ssh_tab_bar(app, ws), body].height(Length::Fill))
+        .width(width)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::color::BG.into()),
+            border: outer,
+            ..container::Style::default()
+        })
+        .into()
+}
+
 fn active_tab_view<'a>(
     app: &'a App,
     ws: &'a Workspace,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     match ws.tabs.get(ws.active) {
-        Some(tab) => term_view::view(&tab.model, app.term_focused),
+        Some(tab) => term_view::view(
+            &tab.model,
+            keyboard_term_target(app.left_view, app.active_zone) == TermTarget::Shared,
+            TermTarget::Shared,
+        ),
         None => container(
             text("暂无会话——到 Agent 面板点「＋」")
                 .size(theme::font::subtitle())

@@ -299,6 +299,15 @@ pub struct Workspace {
     /// `on_tab_attached` 时取出,取得到就是 SSH tab(`backend = Ssh {
     /// out }`),取不到就是本地 tab(`backend = Daemon`)。
     pub(crate) ssh_out_pending: HashMap<usize, mpsc::UnboundedSender<SshOut>>,
+    /// SSH 面板自己的 tab 集合(阶段 4)——与 `tabs`/`active`(右侧共享
+    /// agent/本地终端条)完全独立。目前只装 `TabBackend::Ssh` 的
+    /// `SessionTab`(种类=`SshTabKind::Terminal`);阶段 3 起 SFTP 种类
+    /// 的 tab 走另一个集合(`sftp_tabs`,内容不是 `SessionTab`,见阶段 3
+    /// 计划),不混进这里。
+    pub(crate) ssh_tabs: Vec<SessionTab>,
+    /// SSH 面板当前显示哪个 tab——身份寻址(不是下标),因为 tab 会被
+    /// 用户关闭导致下标漂移。`None` = 没有任何 SSH 终端 tab 打开。
+    pub(crate) ssh_active: Option<(String, ssh::SshTabKind)>,
     /// 预览域状态机(P1d).
     pub(crate) preview: PreviewPane,
     /// Project 面板右配对的预览状态机——独立的 `PreviewPane` 实例,与
@@ -534,6 +543,8 @@ impl Workspace {
             next_tab_id: 0,
             pending: HashMap::new(),
             ssh_out_pending: HashMap::new(),
+            ssh_tabs: Vec::new(),
+            ssh_active: None,
             preview: PreviewPane::default(),
             project_preview: PreviewPane::default(),
             preview_error: None,
@@ -606,7 +617,10 @@ impl Workspace {
     }
 
     pub(crate) fn tab_by_id_mut(&mut self, tab_id: usize) -> Option<&mut SessionTab> {
-        self.tabs.iter_mut().find(|t| t.tab_id == tab_id)
+        self.tabs
+            .iter_mut()
+            .find(|t| t.tab_id == tab_id)
+            .or_else(|| self.ssh_tabs.iter_mut().find(|t| t.tab_id == tab_id))
     }
 
     /// 打开预览编辑弹层:按 tab 下标取路径读盘。下标越界或该 tab 不是
@@ -800,10 +814,54 @@ impl Workspace {
         }
     }
 
+    /// SSH 面板当前显示的 tab(`ssh_active` 指向的那个),可变引用。
+    /// 镜像 `ws.tabs.get_mut(ws.active)` 的既有用法,用于"敲键盘/滚动
+    /// 前先处理一下当前终端状态"(回底/清选区)这类场景。
+    pub(crate) fn ssh_active_tab_mut(&mut self) -> Option<&mut SessionTab> {
+        let (host_id, _kind) = self.ssh_active.as_ref()?;
+        let host_id = host_id.clone();
+        self.ssh_tabs
+            .iter_mut()
+            .find(|t| t.info.id.strip_prefix("ssh:") == Some(host_id.as_str()))
+    }
+
+    /// 把字节写进 SSH 面板当前显示的 tab。镜像 `send_input`,操作对象
+    /// 换成 `ssh_tabs`/`ssh_active`。
+    pub(crate) fn ssh_send_input(&self, io: &ShellIo, bytes: Vec<u8>) {
+        let _ = io; // ssh_tabs 里只会是 TabBackend::Ssh,不需要 io.client/handle,
+        // 保留参数是为了和 send_input 签名对齐、调用方不用分叉判断
+        let Some((host_id, _kind)) = self.ssh_active.as_ref() else {
+            return;
+        };
+        let Some(tab) = self
+            .ssh_tabs
+            .iter()
+            .find(|t| t.info.id.strip_prefix("ssh:") == Some(host_id.as_str()))
+        else {
+            return;
+        };
+        if !tab.alive {
+            return;
+        }
+        match &tab.backend {
+            TabBackend::Daemon => {
+                debug_assert!(false, "ssh_tabs 里不应该出现 TabBackend::Daemon");
+            }
+            TabBackend::Ssh { out } => {
+                let _ = out.send(SshOut::Data(bytes));
+            }
+        }
+    }
+
     /// 把 `text` 当输入写进已存活的 `session_id` 对应 tab。派发目标可能在
     /// 选择弹层打开期间被用户关掉（tab 已不在 `self.tabs` 里）——静默跳过。
     pub(crate) fn dispatch_todo_to_existing(&self, io: &ShellIo, session_id: &str, text: &str) {
-        let Some(tab) = self.tabs.iter().find(|t| t.info.id == session_id) else {
+        let Some(tab) = self
+            .tabs
+            .iter()
+            .find(|t| t.info.id == session_id)
+            .or_else(|| self.ssh_tabs.iter().find(|t| t.info.id == session_id))
+        else {
             return;
         };
         if !tab.alive {
@@ -1029,6 +1087,50 @@ impl Workspace {
         }
         // 关 tab 后位置全变，旧 first 可能越界——归零防御（P1L T5）。
         self.term_tab_first = 0;
+    }
+
+    /// 关闭 SSH 面板某个 tab(镜像 `close_tab` 的中断转发任务/kill 逻辑,
+    /// 按身份而不是下标寻址)。关的正好是当前显示的 tab 时,切到剩下
+    /// tab 里的第一个,没有剩下的就清空 `ssh_active`。
+    pub(crate) fn close_ssh_tab(&mut self, io: &ShellIo, host_id: &str, kind: ssh::SshTabKind) {
+        let Some(idx) = self
+            .ssh_tabs
+            .iter()
+            .position(|t| t.info.id.strip_prefix("ssh:") == Some(host_id))
+        else {
+            return;
+        };
+        let tab = self.ssh_tabs.remove(idx);
+        tab.forwarder.abort();
+        // SSH 后端不需要 kill——drop `out`(tx)后 spawn_ssh_tab 的泵循环
+        // `rx_out.recv() => None` 分支自然退出,同 close_tab 现有对
+        // TabBackend::Ssh 的既有处理口径(见 close_tab_skips_daemon_
+        // kill_for_ssh_backend 测试)。
+        let _ = io;
+        if self.ssh_active.as_ref().map(|(h, k)| (h.as_str(), *k)) == Some((host_id, kind)) {
+            self.ssh_active = self.ssh_tabs.first().map(|t| {
+                let h = t
+                    .info
+                    .id
+                    .strip_prefix("ssh:")
+                    .unwrap_or(&t.info.id)
+                    .to_string();
+                (h, ssh::SshTabKind::Terminal)
+            });
+        }
+    }
+
+    /// 切换 SSH 面板当前显示哪个 tab。目标 tab 不存在时 no-op(保持
+    /// 原有 `ssh_active` 不变,不是清空——镜像其它"目标已消失"场景的
+    /// 既有容错口径)。
+    pub(crate) fn select_ssh_tab(&mut self, host_id: String, kind: ssh::SshTabKind) {
+        let exists = self
+            .ssh_tabs
+            .iter()
+            .any(|t| t.info.id.strip_prefix("ssh:") == Some(host_id.as_str()));
+        if exists {
+            self.ssh_active = Some((host_id, kind));
+        }
     }
 
     /// 拖拽换位:把 `from` 处的终端 tab 移到 `to`,并同步 `active`。`tab_id`
@@ -1408,22 +1510,26 @@ impl Workspace {
         self.ssh_out_pending.insert(tab_id, tx_out);
     }
 
+    /// 只取 `cols`/`rows`(不取整个 `&ShellIo`)——`EventLoopProxy` 在单测
+    /// 里没法脱离真实 winit 事件循环构造,签名只留函数体实际用到的两个
+    /// `u16`,让 SSH-vs-daemon 的分流逻辑能被直接单测(镜像 `resize_one`
+    /// 同样为了可测性收窄参数的既有先例)。
     pub(crate) fn on_tab_attached(
         &mut self,
-        io: &ShellIo,
+        cols: u16,
+        rows: u16,
         tab_id: usize,
         info: SessionInfo,
         snapshot: Vec<u8>,
     ) {
-        // `pending` 条目总是在对应的 create+attach 任务 spawn 时就插入
-        // （见 `spawn_new_tab`），理论上不会缺失；防御性丢弃而不是
-        // panic，避免一次偶然的竞态打垮整个 GUI。
         let Some(forwarder) = self.pending.remove(&tab_id) else {
             return;
         };
-        let mut model = TerminalModel::new(io.cols, io.rows);
-        let _ = model.feed(&snapshot); // 快照回放：陈旧查询应答不可补发，丢弃
-        self.tabs.push(SessionTab {
+        let mut model = TerminalModel::new(cols, rows);
+        let _ = model.feed(&snapshot);
+        let ssh_backend = self.ssh_out_pending.remove(&tab_id);
+        let is_ssh = ssh_backend.is_some();
+        let mut tab = SessionTab {
             agent_state: info.agent_state,
             agent: info.agent,
             transcript_path: info.transcript_path.clone(),
@@ -1437,20 +1543,28 @@ impl Workspace {
             last_exit: None,
             delivery_pending: false,
             last_turn_head: None,
-            // SSH tab 的写指令发送端在 `spawn_ssh_tab` 里就插进了
-            // `ssh_out_pending`,这里取得到 → `Ssh`;取不到(正常本地会话,或
-            // SSH 那次`on_tab_attached` 之前被别的东西消费掉) → `Daemon`。
-            backend: match self.ssh_out_pending.remove(&tab_id) {
+            backend: match ssh_backend {
                 Some(out) => TabBackend::Ssh { out },
                 None => TabBackend::Daemon,
             },
-        });
-        if let Some(t) = self.tabs.last_mut() {
-            t.ingest_osc(&snapshot);
+        };
+        tab.ingest_osc(&snapshot);
+        if is_ssh {
+            // synth_session_info 把 id 编成 "ssh:{host_id}"(ssh.rs:157),
+            // 反解出 host_id 作为 ssh_tabs 里这个 tab 的身份。
+            let host_id = tab
+                .info
+                .id
+                .strip_prefix("ssh:")
+                .unwrap_or(&tab.info.id)
+                .to_string();
+            self.ssh_tabs.push(tab);
+            self.ssh_active = Some((host_id, ssh::SshTabKind::Terminal));
+        } else {
+            self.tabs.push(tab);
+            self.active = self.tabs.len() - 1;
+            self.term_tab_first = 0;
         }
-        self.active = self.tabs.len() - 1;
-        // 新 tab 落在末尾，滚回最左让它可见（P1L T5）。
-        self.term_tab_first = 0;
     }
 
     /// 终端 pane 尺寸变化：换算出的新网格套用到本项目的所有 tab（含当前
@@ -1462,23 +1576,39 @@ impl Workspace {
         let client = io.client.clone();
         let handle = io.handle.clone();
         for tab in &mut self.tabs {
-            tab.model.resize(cols, rows);
-            if !tab.alive {
-                continue;
+            Self::resize_one(tab, &client, &handle, cols, rows);
+        }
+        for tab in &mut self.ssh_tabs {
+            Self::resize_one(tab, &client, &handle, cols, rows);
+        }
+    }
+
+    /// 单个 tab 的尺寸同步:本地改模型 + 远端 resize。被 `resize_all` 对
+    /// `tabs`/`ssh_tabs` 各调一遍(两个字段分开遍历避免"同时可变借用
+    /// self 两个字段"的借用冲突)。
+    fn resize_one(
+        tab: &mut SessionTab,
+        client: &Client,
+        handle: &tokio::runtime::Handle,
+        cols: u16,
+        rows: u16,
+    ) {
+        tab.model.resize(cols, rows);
+        if !tab.alive {
+            return;
+        }
+        match &tab.backend {
+            TabBackend::Daemon => {
+                let client = client.clone();
+                let id = tab.info.id.clone();
+                handle.spawn(async move {
+                    if let Err(e) = client.resize(&id, cols, rows).await {
+                        tracing::warn!("同步终端尺寸到 daemon 失败: {e}");
+                    }
+                });
             }
-            match &tab.backend {
-                TabBackend::Daemon => {
-                    let client = client.clone();
-                    let id = tab.info.id.clone();
-                    handle.spawn(async move {
-                        if let Err(e) = client.resize(&id, cols, rows).await {
-                            tracing::warn!("同步终端尺寸到 daemon 失败: {e}");
-                        }
-                    });
-                }
-                TabBackend::Ssh { out } => {
-                    let _ = out.send(SshOut::Resize { cols, rows });
-                }
+            TabBackend::Ssh { out } => {
+                let _ = out.send(SshOut::Resize { cols, rows });
             }
         }
     }
@@ -3216,6 +3346,25 @@ mod tests {
         // 有真实 daemon,不适合跑完整 `close_tab`,重点断言这个分支判断
         // 本身:SSH backend 不该触发 daemon kill。
         assert!(!matches!(tab.backend, TabBackend::Daemon));
+    }
+
+    #[test]
+    fn resize_one_resizes_ssh_tab_model() {
+        // `resize_all` 对 `tabs`/`ssh_tabs` 各跑一遍 `resize_one`；这里直接测
+        // 那个被复用的核心逻辑(它不碰 `ShellIo`,单测不用构造 winit
+        // `EventLoopProxy`)——构造一个 SSH backend 的假 tab,断言 resize 后
+        // 网格尺寸跟着变了。
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut tab = make_test_tab(&rt, "ssh:h1", dozer_core::protocol::AgentKind::Unknown);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        tab.backend = TabBackend::Ssh { out: tx };
+        let before = tab.model.grid_dims();
+        let client = dozer_client::Client::new(std::path::PathBuf::from(
+            "/tmp/dozer-resize-test-nonexistent.sock",
+        ));
+        Workspace::resize_one(&mut tab, &client, rt.handle(), 100, 40);
+        let after = tab.model.grid_dims();
+        assert_ne!(before, after, "ssh_tab 的网格尺寸应随 resize 变化");
     }
 
     #[test]
