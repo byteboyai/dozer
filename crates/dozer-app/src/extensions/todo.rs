@@ -264,6 +264,9 @@ pub struct WorkspaceState {
     dispatch_open: Option<usize>,
     pending_dispatch: std::collections::HashMap<usize, String>,
     editing_plan_date: Option<(usize, String)>,
+    /// 状态 pill 菜单展开态(卡片下标)，`None` = 未展开。跟 `dispatch_open`
+    /// 同一种"同时只能有一个"模型，不做多卡片同时展开。
+    state_pill_open: Option<usize>,
 }
 
 impl WorkspaceState {
@@ -400,6 +403,10 @@ pub enum Message {
     /// (显式设置，不是翻转)。当前 `done` 已经等于目标值时视为 no-op，
     /// 不重复写盘——见 `set_done()` 的实现注释。
     SetDone(usize, bool),
+    /// 展开某张卡片的状态 pill 菜单(待办/已完成 二选一)。
+    StatePillOpen(usize),
+    /// 收起状态 pill 菜单(选中某项后，或点击外部)。
+    StatePillClose,
 }
 
 /// 重读 `.dozer/todo.md`,刷新 `items`/`mtime`。文件不存在/读失败按空
@@ -482,7 +489,10 @@ pub fn update(
         }
         Message::SetDone(idx, target_done) => {
             set_done(ws_state, app_state, idx, project_id, project_path, target_done);
+            ws_state.state_pill_open = None;
         }
+        Message::StatePillOpen(idx) => ws_state.state_pill_open = Some(idx),
+        Message::StatePillClose => ws_state.state_pill_open = None,
         Message::AddInputChanged(s) => ws_state.add_draft = s,
         Message::AddSubmit => {
             let text = ws_state.add_draft.trim().to_string();
@@ -1770,6 +1780,29 @@ mod tests {
             &root,
         );
         assert!(!ws_state.dispatch_popup_open());
+    }
+
+    #[test]
+    fn update_state_pill_open_and_close_toggle_field() {
+        let (_dir, root) = project_dir_with_todo("# Todo\n");
+        let mut ws_state = WorkspaceState::default();
+        let mut app_state = AppState::default();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::StatePillOpen(3),
+            1,
+            &root,
+        );
+        assert_eq!(ws_state.state_pill_open, Some(3));
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::StatePillClose,
+            1,
+            &root,
+        );
+        assert_eq!(ws_state.state_pill_open, None);
     }
 
     #[test]
