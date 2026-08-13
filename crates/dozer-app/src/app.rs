@@ -160,6 +160,14 @@ pub enum HoverId {
     ProjectPreviewTabItem(usize),
     /// Project 面板右配对预览某个文件 tab 的关闭按钮(×),按 tab 序号区分。
     ProjectPreviewTabClose(usize),
+    /// SSH 面板自己 tab 条上某个 tab 的标题文字,按 host_id 的哈希区分
+    /// (SSH tab 没有稳定的数字序号——按身份是 `(host_id, SshTabKind)`,
+    /// `HoverId` 整体 `derive(Copy)`,`String` 不是 `Copy`,不能直接塞
+    /// `host_id.clone()`,用哈希值退化成 `u64`,同 `todo_line_key` 的
+    /// 既有精度取舍)。
+    SshTabItem(u64),
+    /// SSH 面板自己 tab 条上某个 tab 的关闭按钮(×),同上按 host_id 哈希区分。
+    SshTabClose(u64),
     /// 顶栏 Dozer Home 品牌页签的标题文字(图标 + "Dozer"):未选中态 hover 时
     /// 从 DIM 平滑过渡到 GOLD,选中态恒为 GOLD——与 `ProjectTabItem` 同一手法
     /// (见 `dozer_home_tab`)。
@@ -3020,7 +3028,7 @@ impl App {
             Message::TabAttached(project_id, tab_id, info, snapshot) => {
                 let session_id = info.id.clone();
                 self.with_project(project_id, move |ws, io| {
-                    ws.on_tab_attached(io, tab_id, info, snapshot)
+                    ws.on_tab_attached(io.cols, io.rows, tab_id, info, snapshot)
                 });
                 // 若是从 Todo 面板"派发到新建"建的 tab,补记派发记录——此时才
                 // 第一次知道真正的 `session_id`。`TabAttached` 是异步结果消息,
@@ -7161,18 +7169,31 @@ fn tab_item(
     )
 }
 
-/// SSH 面板自己的 tab 条:遍历 `ws.ssh_tabs`,每个渲染一个可关闭 tab
-/// (复用 `tabs::tab_core`,同右侧共享终端条现有的可关闭语义)。前缀
-/// 图标固定用 `IconKind::Terminal`(阶段 4 只有这一种;阶段 3 加 Sftp
-/// 变体后按 tab 的种类换图标,写计划阶段核实 `SessionTab` 本身不带
-/// `SshTabKind` 字段,种类信息只在 `ws.ssh_active` 里——阶段 4 全部
-/// `ssh_tabs` 里的 tab 都是 `Terminal` 种类,这里暂时不需要按 tab 查
-/// 种类,阶段 3 扩展这个函数时才需要处理"同一个 host_id 可能对应两个
+/// `host_id` → `HoverId::SshTab{Item,Close}` 用的哈希键(`HoverId` 整体
+/// `derive(Copy)`,`String` 不是 `Copy`,退化成 `u64`,同 `todo_line_key`
+/// 的既有精度取舍——碰撞在同一台主机的 tab hover 高亮场景下不构成实际
+/// 风险)。
+fn ssh_tab_hover_key(host_id: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    host_id.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// SSH 面板自己的 tab 条:遍历 `ws.ssh_tabs`,每个渲染一个可关闭 tab。
+/// 直接复用 `panel_tab`(右侧共享终端条 `tab_item` 用的同一个函数)而不是
+/// 自己拼容器样式,视觉/hover 动画与全应用其它 tab 完全一致——不需要
+/// `tabs::tab_core` 手动接线。前缀图标固定用 `IconKind::Terminal`(阶段
+/// 4 只有这一种;阶段 3 加 `Sftp` 变体后按 tab 的种类换图标,`SessionTab`
+/// 本身不带 `SshTabKind` 字段,种类信息只在 `ws.ssh_active` 里——阶段 4
+/// 全部 `ssh_tabs` 里的 tab 都是 `Terminal` 种类,这里暂时不需要按 tab
+/// 查种类,阶段 3 扩展这个函数时才需要处理"同一个 host_id 可能对应两个
 /// 不同种类的 tab,要分别渲染两个 tab 条目"这件事)。
 fn ssh_tab_bar<'a>(
+    app: &'a App,
     ws: &'a Workspace,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let mut bar = row![].spacing(2);
+    let mut bar = row![].spacing(4);
     for tab in &ws.ssh_tabs {
         let host_id = tab
             .info
@@ -7184,46 +7205,36 @@ fn ssh_tab_bar<'a>(
             .ssh_active
             .as_ref()
             .is_some_and(|(h, k)| h == &host_id && *k == ssh::SshTabKind::Terminal);
-        let label = tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name);
-        let content = row![
-            icons::view(
-                icons::IconKind::Terminal,
-                crate::theme::icon_size::row(),
-                theme::color::DIM
-            ),
-            text(label).size(theme::font::caption()),
-        ]
-        .spacing(6)
-        .align_y(iced_widget::core::Alignment::Center);
-        let (select, close) = tabs::tab_core(
-            content.into(),
+        let key = ssh_tab_hover_key(&host_id);
+        let title_hover_t = app.hover_progress(HoverId::SshTabItem(key));
+        let close_hover_t = app.hover_progress(HoverId::SshTabClose(key));
+        let icon = icons::view(
+            icons::IconKind::Terminal,
             crate::theme::icon_size::row(),
             theme::color::DIM,
-            /* close_interactive */ true,
+        );
+        let select_id = host_id.clone();
+        let close_id = host_id.clone();
+        let title_hover_id = host_id.clone();
+        let close_hover_id = host_id;
+        bar = bar.push(panel_tab(
+            tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
+            is_active,
+            title_hover_t,
+            close_hover_t,
+            Some(icon),
+            None,
             Message::Ssh(ssh::Message::SelectSshTab(
-                host_id.clone(),
+                select_id,
                 ssh::SshTabKind::Terminal,
             )),
             Message::Ssh(ssh::Message::CloseSshTab(
-                host_id.clone(),
+                close_id,
                 ssh::SshTabKind::Terminal,
             )),
-            |_hover| Message::Noop, // 同 host_card 的 hover 处理,写计划阶段核实是否需要真实 HoverId 接线
-            |_hover| Message::Noop,
-        );
-        let bg = if is_active {
-            theme::color::CARD
-        } else {
-            theme::color::BG
-        };
-        bar = bar.push(
-            container(row![select, close].align_y(iced_widget::core::Alignment::Center))
-                .padding([6, 10])
-                .style(move |_t: &iced_widget::Theme| container::Style {
-                    background: Some(bg.into()),
-                    ..container::Style::default()
-                }),
-        );
+            move |h| Message::Hover(HoverId::SshTabItem(ssh_tab_hover_key(&title_hover_id)), h),
+            move |h| Message::Hover(HoverId::SshTabClose(ssh_tab_hover_key(&close_hover_id)), h),
+        ));
     }
     bar.into()
 }
@@ -7256,7 +7267,7 @@ fn ssh_terminal_pane<'a>(
         .padding(20)
         .into(),
     };
-    container(column![ssh_tab_bar(ws), body].height(Length::Fill))
+    container(column![ssh_tab_bar(app, ws), body].height(Length::Fill))
         .width(width)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: Some(theme::color::BG.into()),

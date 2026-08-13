@@ -1510,9 +1510,14 @@ impl Workspace {
         self.ssh_out_pending.insert(tab_id, tx_out);
     }
 
+    /// 只取 `cols`/`rows`(不取整个 `&ShellIo`)——`EventLoopProxy` 在单测
+    /// 里没法脱离真实 winit 事件循环构造,签名只留函数体实际用到的两个
+    /// `u16`,让 SSH-vs-daemon 的分流逻辑能被直接单测(镜像 `resize_one`
+    /// 同样为了可测性收窄参数的既有先例)。
     pub(crate) fn on_tab_attached(
         &mut self,
-        io: &ShellIo,
+        cols: u16,
+        rows: u16,
         tab_id: usize,
         info: SessionInfo,
         snapshot: Vec<u8>,
@@ -1520,7 +1525,7 @@ impl Workspace {
         let Some(forwarder) = self.pending.remove(&tab_id) else {
             return;
         };
-        let mut model = TerminalModel::new(io.cols, io.rows);
+        let mut model = TerminalModel::new(cols, rows);
         let _ = model.feed(&snapshot);
         let ssh_backend = self.ssh_out_pending.remove(&tab_id);
         let is_ssh = ssh_backend.is_some();
