@@ -198,6 +198,10 @@ pub(crate) fn synth_session_info(
 #[derive(Debug)]
 pub(crate) enum SshError {
     Russh(russh::Error),
+    /// SFTP 子系统错误(阶段 3)。`russh_sftp::Error` 自带 `Display`,但
+    /// 没有现成的 `Into<russh::Error>`/`Into<std::io::Error>`,单独一个
+    /// String 变体最干净,错误文案直接给用户看。
+    Sftp(String),
     UnknownHostKey {
         fingerprint: String,
         key_bytes: Vec<u8>,
@@ -212,6 +216,7 @@ impl std::fmt::Display for SshError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SshError::Russh(e) => write!(f, "{e}"),
+            SshError::Sftp(e) => write!(f, "SFTP: {e}"),
             SshError::UnknownHostKey { .. } => write!(f, "未知主机,需要确认指纹"),
             SshError::KeyChanged { fingerprint } => {
                 write!(
@@ -363,6 +368,13 @@ pub enum Message {
     /// 状态(与 `TestConnectionResult`/`UnknownKeyDetected`/`KeyChanged`
     /// 共用同一列卡片状态,不新增第二列)。
     TerminalConnectFailed(i64, String, usize, String),
+    /// SFTP tab 内部交互,嵌套消息(见 `sftp::Message`)。内核按 host_id
+    /// 路由到对应 `ws.sftp_tabs` 条目,不会转发到这个模块自己的
+    /// `update()`(同 `OpenSshTab`/`CloseSshTab` 的既有拦截模式——大部分
+    /// `sftp::Message` 变体要么需要 `&mut Workspace`(发起异步 IO 命令),
+    /// 要么需要直接改 `ws.sftp_tabs`,`ssh::update` 只有 `&mut ws.ssh`
+    /// 够不到)。
+    Sftp(sftp::Message),
 }
 
 pub fn update(
@@ -580,7 +592,8 @@ pub fn update(
                 other => update(ws_state, other, project_id, repo_path, handle, emit),
             }
         }
-        Message::OpenSshTab(..) | Message::CloseSshTab(..) | Message::SelectSshTab(..) => {
+        Message::OpenSshTab(..) | Message::CloseSshTab(..) | Message::SelectSshTab(..)
+        | Message::Sftp(..) => {
             // 内核 `App::update` 在通配 `Message::Ssh(msg)` 之前拦截,
             // 这里理论上到不了;写出来只是为了 `match` 穷尽。
         }

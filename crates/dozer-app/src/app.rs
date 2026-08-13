@@ -3490,21 +3490,45 @@ impl App {
                     }
                 });
             }
-            // Sftp 种类阶段 4 不处理内容(阶段 3 再接),但仍要吃掉这条
-            // 消息、不让它落进下面的通配分支(通配分支会把它转发给
-            // ssh::update,那边的穷尽匹配分支是空 no-op,效果上等价,
-            // 但显式吃掉更清楚地表达"阶段 4 有意不处理"这件事)。
-            Message::Ssh(ssh::Message::OpenSshTab(_, ssh::SshTabKind::Sftp)) => {}
-            Message::Ssh(ssh::Message::CloseSshTab(host_id, kind)) => {
+            // Sftp 阶段 3:真实打开一个 SFTP tab(独立连接 + 命令通道)。
+            Message::Ssh(ssh::Message::OpenSshTab(host_id, ssh::SshTabKind::Sftp)) => {
                 self.with_focused_project(|ws, io| {
-                    if kind == ssh::SshTabKind::Terminal {
-                        ws.close_ssh_tab(io, &host_id, kind);
+                    if ws.sftp_tabs.contains_key(&host_id) {
+                        ws.select_ssh_tab(host_id, ssh::SshTabKind::Sftp);
+                    } else {
+                        ws.spawn_sftp_tab(io, host_id.clone());
+                        ws.select_ssh_tab(host_id, ssh::SshTabKind::Sftp);
+                    }
+                });
+            }
+            Message::Ssh(ssh::Message::CloseSshTab(host_id, kind)) => {
+                self.with_focused_project(|ws, io| match kind {
+                    ssh::SshTabKind::Terminal => ws.close_ssh_tab(io, &host_id, kind),
+                    ssh::SshTabKind::Sftp => {
+                        ws.sftp_tabs.remove(&host_id);
+                        if ws.ssh_active.as_ref().map(|(h, k)| (h.as_str(), *k))
+                            == Some((host_id.as_str(), ssh::SshTabKind::Sftp))
+                        {
+                            ws.ssh_active = None; // 简化处理:关掉 SFTP tab 后不自动
+                                                   // 切到其它 tab,和终端 tab 关闭后的
+                                                   // "切到剩下第一个"逻辑不强行统一,
+                                                   // 因为 ssh_tabs/sftp_tabs 是两个不同
+                                                   // 集合,统一切换逻辑收益不大,YAGNI。
+                        }
                     }
                 });
             }
             Message::Ssh(ssh::Message::SelectSshTab(host_id, kind)) => {
                 self.with_focused_project(|ws, _io| {
                     ws.select_ssh_tab(host_id, kind);
+                });
+            }
+            // SFTP tab 内部交互:按 host_id 路由到 `sftp::route`,真正的
+            // 处理逻辑在那边(sftp::Message 有 7+ 个变体,内容又都操作
+            // `ws.sftp_tabs`,摊平会让这里的大 match 更难读)。
+            Message::Ssh(ssh::Message::Sftp(msg)) => {
+                self.with_focused_project(|ws, io| {
+                    ssh::sftp::route(ws, io, msg);
                 });
             }
             // 终端连接失败:先做内核层面的清理(pending/ssh_out_pending
