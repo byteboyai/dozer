@@ -310,6 +310,8 @@ pub struct PanelDims {
     pub files_split: f32,
     /// Project 面板配对:信息面板占左面板区宽度的比例，项目预览(右配对)拿剩下的。
     pub project_split: f32,
+    /// SSH 面板"主机列表 | 内嵌终端"两栏的分屏比例,镜像 `project_split`。
+    pub ssh_split: f32,
     /// Todo 面板配对:分类导航占左面板区宽度的比例，列表/看板/MARKDOWN 内容
     /// (右配对)拿剩下的。
     pub todo_split: f32,
@@ -328,6 +330,7 @@ fn default_panel_dims() -> PanelDims {
         left_width: 640.0,
         files_split: theme::geometry::default_split_ratio(),
         project_split: theme::geometry::default_split_ratio(),
+        ssh_split: theme::geometry::default_split_ratio(),
         todo_split: theme::geometry::default_split_ratio(),
         agent_split: theme::geometry::default_split_ratio(),
         conversations_split: theme::geometry::default_split_ratio(),
@@ -414,6 +417,7 @@ pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
         },
         files_split: clamp_split(d.files_split),
         project_split: clamp_split(d.project_split),
+        ssh_split: clamp_split(d.ssh_split),
         todo_split: clamp_split(d.todo_split),
         agent_split: clamp_split(d.agent_split),
         conversations_split: clamp_split(d.conversations_split),
@@ -428,6 +432,8 @@ pub enum Divider {
     LeftPairSplit,
     /// Project 面板内部的配对分隔线:左边信息面板、右边项目预览。
     ProjectSplit,
+    /// SSH 面板内部的分隔线:左边主机列表、右边内嵌终端。
+    SshSplit,
     /// Todo 面板内部的配对分隔线:左边分类导航、右边列表/看板/MARKDOWN 内容。
     TodoSplit,
     RightPairSplit,
@@ -589,6 +595,20 @@ pub(crate) fn apply_column_drag(
             );
             PanelDims {
                 project_split: ratio,
+                ..state.dims
+            }
+        }
+        Divider::SshSplit => {
+            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            if pair_w <= 0.0 {
+                return state.dims;
+            }
+            let ratio = ((logical_x - theme::geometry::icon_rail_width()) / pair_w).clamp(
+                theme::geometry::min_split_ratio(),
+                theme::geometry::max_split_ratio(),
+            );
+            PanelDims {
+                ssh_split: ratio,
                 ..state.dims
             }
         }
@@ -6324,7 +6344,30 @@ fn left_panel_area<'a>(
                 if ws.project.is_none() {
                     return column![].into();
                 }
-                ssh::view(&ws.ssh, Length::Fill, zone_pane_border(zone, ac)).map(Message::Ssh)
+                let (list_portion, content_portion) = split_portions(app.dims.ssh_split);
+                let list_pane =
+                    ssh::view(&ws.ssh, Length::FillPortion(list_portion), zone_pane_border(zone, lc))
+                        .map(Message::Ssh);
+                row![
+                    list_pane,
+                    divider_bar(
+                        Divider::SshSplit,
+                        theme::region::project_pane()
+                            .background
+                            .unwrap_or(theme::color::BG),
+                        theme::region::preview_pane()
+                            .background
+                            .unwrap_or(theme::color::BG),
+                    ),
+                    ssh_terminal_pane(
+                        app,
+                        ws,
+                        Length::FillPortion(content_portion),
+                        zone_pane_border(zone, rc)
+                    ),
+                ]
+                .width(Length::Fill)
+                .into()
             }
             LeftView::Web => browser::view(
                 &ws.browser,
@@ -7094,6 +7137,93 @@ fn tab_item(
         move |h| Message::Hover(HoverId::TermTabItem(idx), h),
         move |h| Message::Hover(HoverId::TermTabClose(idx), h),
     )
+}
+
+/// SSH 面板自己的 tab 条:遍历 `ws.ssh_tabs`,每个渲染一个可关闭 tab
+/// (复用 `tabs::tab_core`,同右侧共享终端条现有的可关闭语义)。前缀
+/// 图标固定用 `IconKind::Terminal`(阶段 4 只有这一种;阶段 3 加 Sftp
+/// 变体后按 tab 的种类换图标,写计划阶段核实 `SessionTab` 本身不带
+/// `SshTabKind` 字段,种类信息只在 `ws.ssh_active` 里——阶段 4 全部
+/// `ssh_tabs` 里的 tab 都是 `Terminal` 种类,这里暂时不需要按 tab 查
+/// 种类,阶段 3 扩展这个函数时才需要处理"同一个 host_id 可能对应两个
+/// 不同种类的 tab,要分别渲染两个 tab 条目"这件事)。
+fn ssh_tab_bar<'a>(
+    ws: &'a Workspace,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let mut bar = row![].spacing(2);
+    for tab in &ws.ssh_tabs {
+        let host_id = tab.info.id.strip_prefix("ssh:").unwrap_or(&tab.info.id).to_string();
+        let is_active = ws
+            .ssh_active
+            .as_ref()
+            .is_some_and(|(h, k)| h == &host_id && *k == ssh::SshTabKind::Terminal);
+        let label = tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name);
+        let content = row![
+            icons::view(icons::IconKind::Terminal, crate::theme::icon_size::row(), theme::color::DIM),
+            text(label).size(theme::font::caption()),
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center);
+        let (select, close) = tabs::tab_core(
+            content.into(),
+            crate::theme::icon_size::row(),
+            theme::color::DIM,
+            /* close_interactive */ true,
+            Message::Ssh(ssh::Message::SelectSshTab(host_id.clone(), ssh::SshTabKind::Terminal)),
+            Message::Ssh(ssh::Message::CloseSshTab(host_id.clone(), ssh::SshTabKind::Terminal)),
+            |_hover| Message::Noop, // 同 host_card 的 hover 处理,写计划阶段核实是否需要真实 HoverId 接线
+            |_hover| Message::Noop,
+        );
+        let bg = if is_active { theme::color::CARD } else { theme::color::BG };
+        bar = bar.push(
+            container(row![select, close].align_y(iced_widget::core::Alignment::Center))
+                .padding([6, 10])
+                .style(move |_t: &iced_widget::Theme| container::Style {
+                    background: Some(bg.into()),
+                    ..container::Style::default()
+                }),
+        );
+    }
+    bar.into()
+}
+
+/// SSH 面板内嵌终端区:tab 条 + 终端画布(或空态)。镜像 `preview_pane`/
+/// `project_preview_pane` 的既有模式——渲染函数不属于 `extensions::ssh`
+/// 模块,因为它要用顶层 `Message` 直接操作 `ws.ssh_tabs`。
+fn ssh_terminal_pane<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
+    width: Length,
+    outer: Border,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let active_tab = ws.ssh_active.as_ref().and_then(|(host_id, _kind)| {
+        ws.ssh_tabs
+            .iter()
+            .find(|t| t.info.id.strip_prefix("ssh:") == Some(host_id.as_str()))
+    });
+    let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = match active_tab {
+        Some(tab) => term_view::view(
+            &tab.model,
+            keyboard_term_target(app.left_view, app.active_zone) == TermTarget::SshPanel,
+            TermTarget::SshPanel,
+        )
+        .into(),
+        None => container(
+            text("点主机卡片的终端/文件传输图标开始")
+                .size(theme::font::body())
+                .color(theme::color::DIM),
+        )
+        .padding(20)
+        .into(),
+    };
+    container(column![ssh_tab_bar(ws), body].height(Length::Fill))
+        .width(width)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::color::BG.into()),
+            border: outer,
+            ..container::Style::default()
+        })
+        .into()
 }
 
 fn active_tab_view<'a>(
