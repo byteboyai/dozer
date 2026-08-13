@@ -400,17 +400,43 @@ ssh_active_tab_mut()` 天然返回 `None`,写入操作静默跳过,不需要在�
 Left` 判断正好对调(终端在右、被"左侧放大"遮住;SSH 面板在左、被"右侧
 放大"遮住)。
 
-### 7. 焦点:新增 `ssh_term_focused`,与 `term_focused` 并存互斥
+### 7. 焦点:复用既有 `active_zone`,不新增焦点状态
 
-`App` 现有 `term_focused: bool`(`app.rs:1377`,单一全局标志,决定光标
-闪烁/终端画布是否处于"接键盘"状态,初值 `true`,`app.rs:1712`)。阶段 4
-新增一个平行字段 `ssh_term_focused: bool`(初值 `false`——默认焦点在右侧
-共享终端,不在 SSH 面板)。点击 SSH 面板内嵌终端画布时把
-`ssh_term_focused` 置真、`term_focused` 置假(反之点击右侧终端画布时
-反过来)——两者互斥,同一时刻只有一个终端在"接键盘"。`main.rs` 的全局
-键盘拦截层按"`ssh_term_focused` 为真 → 走 `TermTarget::SshPanel` 路径;
-否则(现状)→ 走 `TermTarget::Shared` 路径"分叉,取代现在单一的
-`terminal_visible()` 判断。
+写计划阶段核实发现 `App` 现有 `term_focused: bool`(`app.rs:1377`,初值
+`true`,`app.rs:1712`)其实只在一处被读取(`app.rs:6929`,传给
+`term_view::view()` 控制光标是实心还是描边),从未在别处被写过——它不是
+真正驱动"键盘写给谁"的开关,只是一个视觉细节,恒为 `true`。真正已经在
+驱动"用户此刻在跟左边还是右边交互"的是 `App.active_zone: Option
+<ZoneSide>`(`app.rs:1425`,默认 `Some(ZoneSide::Right)`,`app.rs:1725`)
+——点击左/右面板区任意位置就会经 `App::set_active_zone`(`app.rs:2355-
+2357`)更新它,现状已经用来驱动 `left_zone`/`right_zone` 外边框的金色
+高亮(`app.rs:6171/6314`)。这正是"两个终端画布同时在屏幕上时,键盘该
+写给哪一个"所需要的信号,不需要新增专门的焦点字段/新的点击接线。
+
+阶段 4 新增一个纯函数(不新增 `App` 字段):
+
+```rust
+pub(crate) fn keyboard_term_target(app: &App) -> TermTarget {
+    if app.left_view == LeftView::Ssh && app.active_zone == Some(ZoneSide::Left) {
+        TermTarget::SshPanel
+    } else {
+        TermTarget::Shared
+    }
+}
+```
+
+`main.rs` 构造 `Message::TermInput`/`TermPaste` 之前调这个函数决定
+`target`(取代现状"无脑发 `TermInput(bytes)`,可见性闸门留给 `app.rs`
+内部 `term_input()` 判断"的写法——闸门本身还在,只是现在要先决定往哪个
+闸门送)。`active_tab_view()`(`app.rs:6924-6939`,渲染右侧共享终端条)
+调用 `term_view::view()` 时,`focused` 参数改传
+`keyboard_term_target(app) == TermTarget::Shared`(取代现在恒为 `true`
+的 `app.term_focused`);阶段 4 新增的 SSH 面板终端渲染函数同理传
+`keyboard_term_target(app) == TermTarget::SshPanel`——两处渲染用同一个
+判定函数,光标视觉状态和键盘实际路由天然一致,不会出现"看着像聚焦但
+键盘写去了另一边"的不一致。`term_focused` 字段本身在这次改动里可以
+删除(它现在完全被 `keyboard_term_target` 取代;写计划阶段确认没有
+其它读取点后删除,减少一个恒为真、容易让人误以为在生效的死状态)。
 
 ### 8. PTY 网格尺寸:v1 复用共享全局网格,不做独立像素测量
 
