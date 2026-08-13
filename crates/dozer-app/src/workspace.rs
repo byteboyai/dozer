@@ -299,6 +299,15 @@ pub struct Workspace {
     /// `on_tab_attached` 时取出,取得到就是 SSH tab(`backend = Ssh {
     /// out }`),取不到就是本地 tab(`backend = Daemon`)。
     pub(crate) ssh_out_pending: HashMap<usize, mpsc::UnboundedSender<SshOut>>,
+    /// SSH 面板自己的 tab 集合(阶段 4)——与 `tabs`/`active`(右侧共享
+    /// agent/本地终端条)完全独立。目前只装 `TabBackend::Ssh` 的
+    /// `SessionTab`(种类=`SshTabKind::Terminal`);阶段 3 起 SFTP 种类
+    /// 的 tab 走另一个集合(`sftp_tabs`,内容不是 `SessionTab`,见阶段 3
+    /// 计划),不混进这里。
+    pub(crate) ssh_tabs: Vec<SessionTab>,
+    /// SSH 面板当前显示哪个 tab——身份寻址(不是下标),因为 tab 会被
+    /// 用户关闭导致下标漂移。`None` = 没有任何 SSH 终端 tab 打开。
+    pub(crate) ssh_active: Option<(String, ssh::SshTabKind)>,
     /// 预览域状态机(P1d).
     pub(crate) preview: PreviewPane,
     /// Project 面板右配对的预览状态机——独立的 `PreviewPane` 实例,与
@@ -534,6 +543,8 @@ impl Workspace {
             next_tab_id: 0,
             pending: HashMap::new(),
             ssh_out_pending: HashMap::new(),
+            ssh_tabs: Vec::new(),
+            ssh_active: None,
             preview: PreviewPane::default(),
             project_preview: PreviewPane::default(),
             preview_error: None,
@@ -1415,15 +1426,14 @@ impl Workspace {
         info: SessionInfo,
         snapshot: Vec<u8>,
     ) {
-        // `pending` 条目总是在对应的 create+attach 任务 spawn 时就插入
-        // （见 `spawn_new_tab`），理论上不会缺失；防御性丢弃而不是
-        // panic，避免一次偶然的竞态打垮整个 GUI。
         let Some(forwarder) = self.pending.remove(&tab_id) else {
             return;
         };
         let mut model = TerminalModel::new(io.cols, io.rows);
-        let _ = model.feed(&snapshot); // 快照回放：陈旧查询应答不可补发，丢弃
-        self.tabs.push(SessionTab {
+        let _ = model.feed(&snapshot);
+        let ssh_backend = self.ssh_out_pending.remove(&tab_id);
+        let is_ssh = ssh_backend.is_some();
+        let mut tab = SessionTab {
             agent_state: info.agent_state,
             agent: info.agent,
             transcript_path: info.transcript_path.clone(),
@@ -1437,20 +1447,28 @@ impl Workspace {
             last_exit: None,
             delivery_pending: false,
             last_turn_head: None,
-            // SSH tab 的写指令发送端在 `spawn_ssh_tab` 里就插进了
-            // `ssh_out_pending`,这里取得到 → `Ssh`;取不到(正常本地会话,或
-            // SSH 那次`on_tab_attached` 之前被别的东西消费掉) → `Daemon`。
-            backend: match self.ssh_out_pending.remove(&tab_id) {
+            backend: match ssh_backend {
                 Some(out) => TabBackend::Ssh { out },
                 None => TabBackend::Daemon,
             },
-        });
-        if let Some(t) = self.tabs.last_mut() {
-            t.ingest_osc(&snapshot);
+        };
+        tab.ingest_osc(&snapshot);
+        if is_ssh {
+            // synth_session_info 把 id 编成 "ssh:{host_id}"(ssh.rs:157),
+            // 反解出 host_id 作为 ssh_tabs 里这个 tab 的身份。
+            let host_id = tab
+                .info
+                .id
+                .strip_prefix("ssh:")
+                .unwrap_or(&tab.info.id)
+                .to_string();
+            self.ssh_tabs.push(tab);
+            self.ssh_active = Some((host_id, ssh::SshTabKind::Terminal));
+        } else {
+            self.tabs.push(tab);
+            self.active = self.tabs.len() - 1;
+            self.term_tab_first = 0;
         }
-        self.active = self.tabs.len() - 1;
-        // 新 tab 落在末尾，滚回最左让它可见（P1L T5）。
-        self.term_tab_first = 0;
     }
 
     /// 终端 pane 尺寸变化：换算出的新网格套用到本项目的所有 tab（含当前
