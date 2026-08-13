@@ -119,6 +119,8 @@ pub enum IconKind {
     GitGraph,
     /// 文件树搜索框的搜索按钮图标(Lucide folder-search:文件夹 + 放大镜)。
     FolderSearch,
+    /// 项目信息面板小节标题前的占位图标(Lucide circle-small:小圆点)。
+    CircleSmall,
 }
 
 impl IconKind {
@@ -182,6 +184,7 @@ impl IconKind {
             IconKind::SquareTerminal => include_bytes!("../assets/icons/square-terminal.svg"),
             IconKind::GitGraph => include_bytes!("../assets/icons/git-graph.svg"),
             IconKind::FolderSearch => include_bytes!("../assets/icons/folder-search.svg"),
+            IconKind::CircleSmall => include_bytes!("../assets/icons/circle-small.svg"),
         }
     }
 }

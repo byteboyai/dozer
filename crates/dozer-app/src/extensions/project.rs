@@ -268,15 +268,6 @@ pub fn update(
     }
 }
 
-/// 项目卡分支标签:`分支` / `分支*`(脏)/ `—`(非 git)。
-fn project_branch_label(branch: Option<&str>, dirty: bool) -> String {
-    match branch {
-        Some(b) if dirty => format!("{b}*"),
-        Some(b) => b.to_string(),
-        None => "—".to_string(),
-    }
-}
-
 /// 磁盘占用统计的排除名单——跟 `crates/dozer-app/src/project.rs::HIDDEN`
 /// (文件树"要不要显示这一行")语义不同,这里是"算不算项目真实内容",不复用
 /// 那份常量。
@@ -393,32 +384,17 @@ pub fn view<'a>(
             button(text(label).size(theme::font::body()).color(color))
                 .on_press(Message::DescriptionEditStart)
                 .style(|_t, _s| iced_widget::button::Style {
-                    background: None,
+                    background: Some(theme::color::DESC_BG.into()),
+                    border: Border {
+                        radius: 8.0.into(),
+                        ..Default::default()
+                    },
                     text_color: theme::color::BODY,
                     ..iced_widget::button::Style::default()
                 })
                 .into()
         };
     content = content.push(description_block);
-
-    let label = project_branch_label(ws_state.branch.as_deref(), ws_state.dirty);
-    let bcolor = if ws_state.dirty {
-        theme::color::GOLD
-    } else {
-        theme::color::BODY
-    };
-    content = content.push(
-        row![
-            icons::view(
-                icons::IconKind::GitBranch,
-                crate::theme::icon_size::row(),
-                bcolor
-            ),
-            text(label).size(theme::font::label()).color(bcolor),
-        ]
-        .spacing(6)
-        .align_y(iced_widget::core::Alignment::Center),
-    );
 
     if let Some(n) = ws_state.project_acceptance_count.filter(|n| *n > 0) {
         content = content.push(
@@ -433,9 +409,18 @@ pub fn view<'a>(
         .map(|b| format!("文件存储 ({} MB)", b / 1_000_000))
         .unwrap_or_else(|| "文件存储".to_string());
     content = content.push(
-        text(usage_label)
-            .size(theme::font::label())
-            .color(theme::color::DIM),
+        row![
+            icons::view(
+                icons::IconKind::CircleSmall,
+                crate::theme::icon_size::row(),
+                theme::color::CREAM
+            ),
+            text(usage_label)
+                .size(theme::font::label())
+                .color(theme::color::CREAM),
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center),
     );
 
     content = content.push(
@@ -504,9 +489,14 @@ fn links_section<'a>(
     let mut col = column![].spacing(6);
     col = col.push(
         row![
+            icons::view(
+                icons::IconKind::CircleSmall,
+                crate::theme::icon_size::row(),
+                theme::color::CREAM
+            ),
             text(title)
                 .size(theme::font::label())
-                .color(theme::color::DIM),
+                .color(theme::color::CREAM),
             iced_widget::space::horizontal(),
             button(
                 text("+文件")
@@ -672,13 +662,6 @@ mod tests {
             |_| {},
         );
         assert_eq!(ws.project_acceptance_count, Some(3));
-    }
-
-    #[test]
-    fn project_card_branch_label() {
-        assert_eq!(project_branch_label(Some("main"), false), "main");
-        assert_eq!(project_branch_label(Some("main"), true), "main*");
-        assert_eq!(project_branch_label(None, false), "—");
     }
 
     #[test]
