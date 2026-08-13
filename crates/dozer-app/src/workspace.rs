@@ -301,8 +301,14 @@ pub struct Workspace {
     pub(crate) ssh_out_pending: HashMap<usize, mpsc::UnboundedSender<SshOut>>,
     /// 预览域状态机(P1d).
     pub(crate) preview: PreviewPane,
+    /// Project 面板右配对的预览状态机——独立的 `PreviewPane` 实例,与
+    /// `preview`(Files 面板)互不干扰,项目链接打开的文件进这里而不是进
+    /// Files 预览(见 `Project::OpenLink` 的路由)。
+    pub(crate) project_preview: PreviewPane,
     /// 预览域错误文案(打开文件失败等), RED 显示在预览栏地址栏下方。
     pub(crate) preview_error: Option<String>,
+    /// Project 面板右配对预览的错误文案,语义同 `preview_error`。
+    pub(crate) project_preview_error: Option<String>,
     /// 预览上下文推送的防抖 nonce:每次变化时自增，延迟任务醒来后只有
     /// "自己发起时的值仍是最新值"才真正推送，否则说明中途又有新变化，
     /// 让更晚的那次任务去做(trailing-edge 防抖，见
@@ -341,6 +347,9 @@ pub struct Workspace {
     pub(crate) term_tab_first: usize,
     /// 预览 tab 栏当前最左可见 tab 序号，语义同 `term_tab_first`。
     pub(crate) preview_tab_first: usize,
+    /// Project 面板右配对预览 tab 栏当前最左可见 tab 序号,语义同
+    /// `preview_tab_first`。
+    pub(crate) project_preview_tab_first: usize,
     /// Files 面板 per-project 状态——见 `extensions::files::WorkspaceState`。
     pub(crate) files: files::WorkspaceState,
     /// Agent 面板"＋"按钮弹出的"新建"菜单当前是否打开。不需要坐标——面板顶部固定
@@ -526,7 +535,9 @@ impl Workspace {
             pending: HashMap::new(),
             ssh_out_pending: HashMap::new(),
             preview: PreviewPane::default(),
+            project_preview: PreviewPane::default(),
             preview_error: None,
+            project_preview_error: None,
             preview_context_nonce: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             browser: browser::State::default(),
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
@@ -540,6 +551,7 @@ impl Workspace {
             git_watch: None,
             term_tab_first: 0,
             preview_tab_first: 0,
+            project_preview_tab_first: 0,
             files: files::WorkspaceState::default(),
             agent_picker_open: false,
             edit_session: None,
@@ -601,7 +613,21 @@ impl Workspace {
     /// `TabKind::File` 时静默 no-op(按钮本就只在 file tab 上画,正常路径
     /// 走不到这两种情况)。读盘失败写 `preview_error`,不开弹层。
     pub(crate) fn preview_edit_open(&mut self, idx: usize) {
-        let Some(tab) = self.preview.tabs().get(idx) else {
+        self.preview_edit_open_for(PreviewPaneKind::Files, idx);
+    }
+
+    /// Project 面板右配对预览的编辑入口,语义同 `preview_edit_open`,状态取自
+    /// `ws.project_preview`,错误写到 `project_preview_error`。
+    pub(crate) fn project_preview_edit_open(&mut self, idx: usize) {
+        self.preview_edit_open_for(PreviewPaneKind::Project, idx);
+    }
+
+    fn preview_edit_open_for(&mut self, kind: PreviewPaneKind, idx: usize) {
+        let (preview, error_field) = match kind {
+            PreviewPaneKind::Files => (&self.preview, &mut self.preview_error),
+            PreviewPaneKind::Project => (&self.project_preview, &mut self.project_preview_error),
+        };
+        let Some(tab) = preview.tabs().get(idx) else {
             return;
         };
         let TabKind::File(path) = &tab.kind;
@@ -609,7 +635,7 @@ impl Workspace {
         let tab_id = tab.id;
         match std::fs::read_to_string(&path) {
             Ok(text) => {
-                self.preview_error = None;
+                *error_field = None;
                 let mut editor =
                     CodeEditor::new(&text, &crate::preview::extension_to_syntax(&path));
                 // 让编辑器适配 Dozer 配色(见 `dozer_editor_style`),而非
@@ -636,7 +662,7 @@ impl Workspace {
                 });
             }
             Err(e) => {
-                self.preview_error = Some(format!("打开编辑失败: {e}"));
+                *error_field = Some(format!("打开编辑失败: {e}"));
             }
         }
     }
@@ -672,6 +698,32 @@ impl Workspace {
         event: EditorMessage,
     ) -> iced_winit::runtime::Task<EditorMessage> {
         match self.preview.editor_mut(tab_id) {
+            Some(editor) => editor.update(&event),
+            None => iced_winit::runtime::Task::none(),
+        }
+    }
+
+    /// 按 Project 面板右配对预览 tab id 打开编辑浮层,语义同
+    /// `preview_edit_open_by_id`,状态取自 `ws.project_preview`。
+    pub(crate) fn project_preview_edit_open_by_id(&mut self, tab_id: usize) {
+        let idx = self
+            .project_preview
+            .tabs()
+            .iter()
+            .position(|tab| tab.id == tab_id);
+        if let Some(idx) = idx {
+            self.project_preview_edit_open(idx);
+        }
+    }
+
+    /// 转发 `iced-code-editor` 的内部消息到 Project 面板右配对预览的某个原生
+    /// tab,语义同 `preview_tab_editor_event`,状态取自 `ws.project_preview`。
+    pub(crate) fn project_preview_tab_editor_event(
+        &mut self,
+        tab_id: usize,
+        event: EditorMessage,
+    ) -> iced_winit::runtime::Task<EditorMessage> {
+        match self.project_preview.editor_mut(tab_id) {
             Some(editor) => editor.update(&event),
             None => iced_winit::runtime::Task::none(),
         }
@@ -2196,9 +2248,40 @@ pub(crate) fn status_bar_container<'a, Msg: 'a>(
         .into()
 }
 
+/// Project 面板右配对的预览 pane,复用与 Files 预览同一套渲染。独立调一个
+/// 新 `PreviewPaneKind`,让项目链接打开的文件进 `ws.project_preview` 而不是
+/// 冲进 Files 预览(见 Task 12 `OpenLink` 路由)。
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PreviewPaneKind {
+    Files,
+    Project,
+}
+
 pub(crate) fn preview_pane<'a>(
     app: &'a App,
     ws: &'a Workspace,
+    width: Length,
+    outer: Border,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    preview_pane_for(app, ws, PreviewPaneKind::Files, width, outer)
+}
+
+pub(crate) fn project_preview_pane<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
+    width: Length,
+    outer: Border,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    preview_pane_for(app, ws, PreviewPaneKind::Project, width, outer)
+}
+
+/// 预览 pane 的共同渲染(Files 预览与 Project 面板右配对复用同一套 tab
+/// 栏/原生编辑器/占位文案逻辑,只是状态取自 `ws.preview` 还是
+/// `ws.project_preview`、消息与前缀路由到哪套)不同。
+fn preview_pane_for<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
+    kind: PreviewPaneKind,
     width: Length,
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -2207,29 +2290,66 @@ pub(crate) fn preview_pane<'a>(
     // 反馈:文件预览与浏览器彻底分离,文件只走项目树入口)。
     // P1L T5 验收返工:同 term `tab_bar`,横向 scrollable 换成索引窗口化 + clip.
     let region = theme::region::preview_pane();
-    let widths: Vec<f32> = ws
-        .preview
+    let (preview, tab_first, error) = match kind {
+        PreviewPaneKind::Files => (&ws.preview, ws.preview_tab_first, &ws.preview_error),
+        PreviewPaneKind::Project => (
+            &ws.project_preview,
+            ws.project_preview_tab_first,
+            &ws.project_preview_error,
+        ),
+    };
+    // 状态取的是一份只读引用,后续渲染把对应的消息/前缀按 `kind` 选好。
+    // `move` 只捕获 `PreviewPaneKind`(Clone/Copy),多余生命周期问题一并消掉。
+    let item_hover = move |idx| match kind {
+        PreviewPaneKind::Files => HoverId::PreviewTabItem(idx),
+        PreviewPaneKind::Project => HoverId::ProjectPreviewTabItem(idx),
+    };
+    let close_hover = move |idx| match kind {
+        PreviewPaneKind::Files => HoverId::PreviewTabClose(idx),
+        PreviewPaneKind::Project => HoverId::ProjectPreviewTabClose(idx),
+    };
+    let tab_group = match kind {
+        PreviewPaneKind::Files => crate::app::TabGroup::Preview,
+        PreviewPaneKind::Project => crate::app::TabGroup::ProjectPreview,
+    };
+    let select_msg = move |idx| match kind {
+        PreviewPaneKind::Files => Message::PreviewSelectTab(idx),
+        PreviewPaneKind::Project => Message::ProjectPreviewSelectTab(idx),
+    };
+    let close_msg = move |idx| match kind {
+        PreviewPaneKind::Files => Message::PreviewCloseTab(idx),
+        PreviewPaneKind::Project => Message::ProjectPreviewCloseTab(idx),
+    };
+    let scroll_msg = move |right| match kind {
+        PreviewPaneKind::Files => Message::PreviewTabScroll(right),
+        PreviewPaneKind::Project => Message::ProjectPreviewTabScroll(right),
+    };
+    let context_msg = move |idx, editable| match kind {
+        PreviewPaneKind::Files => Message::PreviewTabContextMenu { idx, editable },
+        PreviewPaneKind::Project => Message::ProjectPreviewTabContextMenu { idx, editable },
+    };
+    let editor_msg = move |tab_id, ev| match kind {
+        PreviewPaneKind::Files => Message::PreviewEditorEvent(tab_id, ev),
+        PreviewPaneKind::Project => Message::ProjectPreviewEditorEvent(tab_id, ev),
+    };
+
+    let widths: Vec<f32> = preview
         .tabs()
         .iter()
         .map(|t| preview_tab_display_width(&t.title))
         .collect();
-    let (first, can_left, can_right) = tab_window(
-        &widths,
-        4.0,
-        theme::geometry::tab_bar_avail_px(),
-        ws.preview_tab_first,
-    );
+    let (first, can_left, can_right) =
+        tab_window(&widths, 4.0, theme::geometry::tab_bar_avail_px(), tab_first);
 
-    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = ws
-        .preview
+    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = preview
         .tabs()
         .iter()
         .enumerate()
         .filter(|(idx, _)| *idx >= first)
         .map(|(idx, tab)| {
-            let active = idx == ws.preview.active_idx();
-            let title_hover_t = app.hover_progress(HoverId::PreviewTabItem(idx));
-            let close_hover_t = app.hover_progress(HoverId::PreviewTabClose(idx));
+            let active = idx == preview.active_idx();
+            let title_hover_t = app.hover_progress(item_hover(idx));
+            let close_hover_t = app.hover_progress(close_hover(idx));
             // 仅文本类文件可编辑——决定右键菜单里"编辑"项是否出现(标题后的
             // 编辑图标已移除,编辑入口统一收进 tab 右键菜单,见 `PreviewTabContextMenu`)。
             let editable = matches!(&tab.kind, TabKind::File(path) if is_editable_extension(path));
@@ -2240,19 +2360,19 @@ pub(crate) fn preview_pane<'a>(
                 close_hover_t,
                 None,
                 None,
-                Message::PreviewSelectTab(idx),
-                Message::PreviewCloseTab(idx),
-                move |h| Message::Hover(HoverId::PreviewTabItem(idx), h),
-                move |h| Message::Hover(HoverId::PreviewTabClose(idx), h),
+                select_msg(idx),
+                close_msg(idx),
+                move |h| Message::Hover(item_hover(idx), h),
+                move |h| Message::Hover(close_hover(idx), h),
             );
             // 右键 tab 弹上下文菜单:"编辑"(仅可编辑)/"关闭"。
             // 拖拽换位:按住页签(选中处理已把 `app.tab_drag` 置位)后光标
             // 扫过哪个页签,这个 `on_move` 就按它发 `TabDragMove`,完成换位。
-            let armed = app.dragging_group(crate::app::TabGroup::Preview);
+            let armed = app.dragging_group(tab_group);
             let mut area = MouseArea::new(tab)
-                .on_right_press(Message::PreviewTabContextMenu { idx, editable })
+                .on_right_press(context_msg(idx, editable))
                 .on_move(move |_| Message::TabDragMove {
-                    group: crate::app::TabGroup::Preview,
+                    group: tab_group,
                     index: idx,
                 });
             if armed {
@@ -2264,29 +2384,21 @@ pub(crate) fn preview_pane<'a>(
     // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;左右箭头钉在裁剪区外。
     let tabs_row = row(items).spacing(4);
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
-    let left_arrow = tab_arrow_button(
-        icons::IconKind::ChevronLeft,
-        can_left,
-        Message::PreviewTabScroll(false),
-    );
-    let right_arrow = tab_arrow_button(
-        icons::IconKind::ChevronRight,
-        can_right,
-        Message::PreviewTabScroll(true),
-    );
+    let left_arrow = tab_arrow_button(icons::IconKind::ChevronLeft, can_left, scroll_msg(false));
+    let right_arrow = tab_arrow_button(icons::IconKind::ChevronRight, can_right, scroll_msg(true));
     let tab_bar = row![left_arrow, right_arrow, clipped]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
 
     let mut content = column![tab_bar, tab_divider()].spacing(region.gap);
 
-    if let Some(err) = &ws.preview_error {
+    if let Some(err) = error {
         content = content.push(lh(text(format!("⚠ {err}"))
             .size(theme::font::body())
             .color(theme::color::RED)));
     }
 
-    if ws.preview.tabs().is_empty() {
+    if preview.tabs().is_empty() {
         content = content.push(
             container(lh(text("暂无预览——在左侧文件树选择文件")
                 .size(theme::font::subtitle())
@@ -2295,7 +2407,7 @@ pub(crate) fn preview_pane<'a>(
             .height(Length::Fill),
         );
     } else {
-        let active_tab = &ws.preview.tabs()[ws.preview.active_idx()];
+        let active_tab = &preview.tabs()[preview.active_idx()];
         if let Some(editor) = &active_tab.editor {
             // 原生 tab:激活 tab 有原生 editor 时,直接在 iced 里渲染它(语法
             // 高亮/行号/ByteBoy2077 配色),put 下 content。`editor` 为 `None`
@@ -2303,13 +2415,9 @@ pub(crate) fn preview_pane<'a>(
             // 的 wry webview 子视图负责渲染,现状不变。
             let tab_id = active_tab.id;
             content = content.push(
-                container(
-                    editor
-                        .view()
-                        .map(move |ev| Message::PreviewEditorEvent(tab_id, ev)),
-                )
-                .width(Length::Fill)
-                .height(Length::Fill),
+                container(editor.view().map(move |ev| editor_msg(tab_id, ev)))
+                    .width(Length::Fill)
+                    .height(Length::Fill),
             );
         }
     }

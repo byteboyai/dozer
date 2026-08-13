@@ -69,6 +69,10 @@ pub const TAB_ACTIVE_BG: Color = c(0x15, 0x26, 0x30);
 /// `TAB_ACTIVE_BORDER` 同属顶栏页签专属增量令牌,不动上面锁死的 14 色。
 pub const TAB_HOVER: Color = c(0x15, 0x26, 0x30);
 
+/// 项目信息面板描述 widget 的圆角实底背景(`#152630`)。与顶栏
+/// `TAB_ACTIVE_BG` 同色,但语义独立于页签,单独具名。
+pub const DESC_BG: Color = c(0x15, 0x26, 0x30);
+
 #[cfg(test)]
 mod tests {
     use super::*;

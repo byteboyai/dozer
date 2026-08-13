@@ -39,9 +39,9 @@ use crate::workspace::{
     PickerLaunch, RestorePayload, ReviewSource, ReviewView, SessionTab, ShellIo, SshOut,
     TabBackend, Workspace, agent_list_pane, agent_picker_popup, conversation_list_pane, dot_color,
     edit_discard_confirm_popup, edit_modal, effective_project_repo, exited_marker,
-    fetch_project_restore, no_project_placeholder, preview_pane, review_content_pane,
-    review_should_refresh_on_turn, spawn_disk_usage_refresh, spawn_project_git_refresh,
-    split_portions, tab_display_width, tab_title, terminal_status_bar,
+    fetch_project_restore, no_project_placeholder, preview_pane, project_preview_pane,
+    review_content_pane, review_should_refresh_on_turn, spawn_disk_usage_refresh,
+    spawn_project_git_refresh, split_portions, tab_display_width, tab_title, terminal_status_bar,
 };
 use dozer_client::Client;
 use dozer_core::protocol::{AgentKind, AgentState, BookmarkInfo, ProjectInfo, SessionInfo};
@@ -156,6 +156,10 @@ pub enum HoverId {
     PreviewTabItem(usize),
     /// 预览面板某个文件 tab 的关闭按钮(×),按 tab 序号区分(同 `TermTabClose`)。
     PreviewTabClose(usize),
+    /// Project 面板右配对预览某个文件 tab 的标题文字,按 tab 序号区分。
+    ProjectPreviewTabItem(usize),
+    /// Project 面板右配对预览某个文件 tab 的关闭按钮(×),按 tab 序号区分。
+    ProjectPreviewTabClose(usize),
     /// 顶栏 Dozer Home 品牌页签的标题文字(图标 + "Dozer"):未选中态 hover 时
     /// 从 DIM 平滑过渡到 GOLD,选中态恒为 GOLD——与 `ProjectTabItem` 同一手法
     /// (见 `dozer_home_tab`)。
@@ -274,6 +278,8 @@ pub struct ShellLayout {
     pub left_width: f32,
     /// 文件列表配对:项目树占左面板区宽度的比例，文件预览拿剩下的。
     pub files_split: f32,
+    /// Project 面板配对:信息面板占左面板区宽度的比例，项目预览(右配对)拿剩下的。
+    pub project_split: f32,
     /// Agent配对:Agent列表占右面板区宽度的比例，终端拿剩下的。
     pub agent_split: f32,
     /// 对话配对:对话列表占右面板区宽度的比例，对话审阅拿剩下的。
@@ -292,6 +298,7 @@ impl Default for ShellLayout {
         Self {
             left_width: 640.0,
             files_split: 0.35,
+            project_split: 0.5,
             agent_split: 0.4,
             conversations_split: 0.4,
             window_width: theme::geometry::initial_window_size().0,
@@ -351,6 +358,7 @@ pub fn sanitize_shell_layout(l: ShellLayout) -> ShellLayout {
             ShellLayout::default().left_width
         },
         files_split: clamp_split(l.files_split),
+        project_split: clamp_split(l.project_split),
         agent_split: clamp_split(l.agent_split),
         conversations_split: clamp_split(l.conversations_split),
         window_width: if l.window_width.is_finite() && l.window_width > 0.0 {
@@ -372,6 +380,8 @@ pub fn sanitize_shell_layout(l: ShellLayout) -> ShellLayout {
 pub enum Divider {
     LeftRight,
     LeftPairSplit,
+    /// Project 面板内部的配对分隔线:左边信息面板、右边项目预览。
+    ProjectSplit,
     RightPairSplit,
 }
 
@@ -383,6 +393,9 @@ pub enum TabGroup {
     Project,
     Terminal,
     Preview,
+    /// Project 面板右配对的预览 tab——与 `Preview`(Files 预览)是两套独立
+    /// 状态,拖拽换位不能混用,得单独一个组区分。
+    ProjectPreview,
     Browser,
 }
 
@@ -504,6 +517,20 @@ pub(crate) fn apply_column_drag(
                 ..state.layout
             }
         }
+        Divider::ProjectSplit => {
+            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            if pair_w <= 0.0 {
+                return state.layout;
+            }
+            let ratio = ((logical_x - theme::geometry::icon_rail_width()) / pair_w).clamp(
+                theme::geometry::min_split_ratio(),
+                theme::geometry::max_split_ratio(),
+            );
+            ShellLayout {
+                project_split: ratio,
+                ..state.layout
+            }
+        }
         Divider::RightPairSplit => {
             let right_w = right_zone_width(window_width, &state);
             let pair_w = pair_content_width(right_w);
@@ -618,8 +645,18 @@ pub fn preview_content_bounds(
             LeftView::GitLog => (0.0, 0.0, 0.0, 0.0),
             // Todo 面板同 GitLog,纯 iced 绘制,不挂 webview 子视图。
             LeftView::Todo => (0.0, 0.0, 0.0, 0.0),
-            // Project 面板同 GitLog,纯 iced 绘制,不挂 webview 子视图。
-            LeftView::Project => (0.0, 0.0, 0.0, 0.0),
+            // Project 面板的右配对(项目预览)是 Files 同款预览 chrome,按
+            // `project_split` 算出右配对那条 webview 的矩形。
+            LeftView::Project => {
+                let y = y0 + theme::geometry::preview_chrome_top_px();
+                let h = (avail_h - theme::geometry::preview_chrome_top_px() - 8.0).max(0.0);
+                let pair_w = pair_content_width(avail_w);
+                let list_w = pair_w * state.layout.project_split;
+                let content_w = pair_w * (1.0 - state.layout.project_split);
+                let x = x0 + list_w + theme::geometry::divider_width() + 8.0;
+                let w = (content_w - 16.0).max(0.0);
+                (x, y, w, h)
+            }
             // Database 面板同 Project,纯 iced 绘制,不挂 webview 子视图。
             LeftView::Database => (0.0, 0.0, 0.0, 0.0),
             // SSH 面板同 Project,纯 iced 绘制,阶段 1 不挂 webview 子视图。
@@ -665,8 +702,22 @@ pub fn preview_content_bounds(
         LeftView::GitLog => (0.0, 0.0, 0.0, 0.0),
         // Todo 面板同 GitLog,纯 iced 绘制,不挂 webview 子视图。
         LeftView::Todo => (0.0, 0.0, 0.0, 0.0),
-        // Project 面板同 GitLog,纯 iced 绘制,不挂 webview 子视图。
-        LeftView::Project => (0.0, 0.0, 0.0, 0.0),
+        // Project 面板右配对(项目预览)是 Files 同款预览 chrome,按
+        // `project_split` 算出右配对那条 webview 矩形。
+        LeftView::Project => {
+            let y = y_top(theme::geometry::preview_chrome_top_px());
+            let h = h_for(y);
+            let pair_w = pair_content_width(left_w);
+            let list_w = pair_w * state.layout.project_split;
+            let content_w = pair_w * (1.0 - state.layout.project_split);
+            let x = theme::geometry::icon_rail_width()
+                + list_w
+                + theme::geometry::divider_width()
+                + 8.0
+                + m.left;
+            let w = (content_w - 16.0 - m.left - m.right).max(0.0);
+            (x, y, w, h)
+        }
         // Database 面板同 Project,纯 iced 绘制,不挂 webview 子视图。
         LeftView::Database => (0.0, 0.0, 0.0, 0.0),
         // SSH 面板同 Project,纯 iced 绘制,阶段 1 不挂 webview 子视图。
@@ -771,8 +822,13 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
             LeftView::GitLog => false,
             // Todo 面板纯 iced 绘制,无 webview,永不落在预览列。
             LeftView::Todo => false,
-            // Project 面板同 Todo,纯 iced 绘制,永无 webview。
-            LeftView::Project => false,
+            // Project 面板右配对(项目预览)是 Files 同款预览列,按 `project_split` 算。
+            LeftView::Project => {
+                let list_w = pair_content_width(avail_w) * state.layout.project_split;
+                let start = x0 + list_w + theme::geometry::divider_width();
+                let end = x0 + avail_w;
+                x >= start && x < end
+            }
             // Database 面板同 Project,纯 iced 绘制,永无 webview。
             LeftView::Database => false,
             // SSH 面板同 Project,纯 iced 绘制,永无 webview。
@@ -797,8 +853,14 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
         LeftView::GitLog => false,
         // Todo 面板纯 iced 绘制,无 webview,永不落在预览列。
         LeftView::Todo => false,
-        // Project 面板同 Todo,纯 iced 绘制,永无 webview。
-        LeftView::Project => false,
+        // Project 面板右配对(项目预览)是 Files 同款预览列,按 `project_split` 算。
+        LeftView::Project => {
+            let list_w = pair_content_width(left_w) * state.layout.project_split;
+            let start =
+                theme::geometry::icon_rail_width() + list_w + theme::geometry::divider_width();
+            let end = theme::geometry::icon_rail_width() + left_w;
+            x >= start && x < end
+        }
         // Database 面板同 Project,纯 iced 绘制,永无 webview。
         LeftView::Database => false,
         // SSH 面板同 Project,纯 iced 绘制,永无 webview。
@@ -1132,6 +1194,30 @@ pub enum Message {
     },
     /// 预览 tab 右键菜单关闭(点遮罩 / 按 Esc)。
     PreviewTabContextMenuClose,
+    /// Project 面板右配对预览:打开本地文件为新 tab,语义同 `PreviewOpenPath`。
+    ProjectPreviewOpenPath(PathBuf),
+    /// Project 面板右配对预览:切换 tab(vec 位置)。
+    ProjectPreviewSelectTab(usize),
+    /// Project 面板右配对预览:关闭 tab(vec 位置)。
+    ProjectPreviewCloseTab(usize),
+    /// Project 面板右配对预览:tab 栏箭头翻页(语义同 `PreviewTabScroll`)。
+    ProjectPreviewTabScroll(bool),
+    /// Project 面板右配对预览的原生 `iced-code-editor` 内部消息，语义同
+    /// `PreviewEditorEvent`。
+    ProjectPreviewEditorEvent(usize, iced_code_editor::Message),
+    /// Project 面板右配对预览:右键菜单里的"编辑"项,语义同 `PreviewEditOpen`。
+    ProjectPreviewEditOpen(usize),
+    /// Project 面板右配对预览:原生编辑器里的"编辑"项
+    /// (`Message::OpenInEditor`),按 `PreviewTab.id` 路由,语义同
+    /// `PreviewEditOpenByTab`。
+    ProjectPreviewEditOpenByTab(usize),
+    /// Project 面板右配对预览 tab 右键菜单,语义同 `PreviewTabContextMenu`。
+    ProjectPreviewTabContextMenu {
+        idx: usize,
+        editable: bool,
+    },
+    /// Project 面板右配对预览 tab 右键菜单关闭。
+    ProjectPreviewTabContextMenuClose,
     /// 浏览器面板的全部消息,内核只转发不解读——见
     /// `extensions::browser::Message`。
     Browser(browser::Message),
@@ -1318,6 +1404,9 @@ pub struct App {
     /// 文件预览 tab 右键菜单浮层状态(屏幕空间单例,不随项目切换各自保留);
     /// 定位坐标复用 `files.last_right_click`(main.rs 右键时已写入)。
     preview_tab_menu: Option<PreviewTabMenu>,
+    /// Project 面板右配对预览 tab 的右键菜单浮层状态,语义同
+    /// `preview_tab_menu`,定位坐标同样复用 `files.last_right_click`。
+    project_preview_tab_menu: Option<PreviewTabMenu>,
 
     /// 并行打开的项目页签:project id → 该项目的完整/占位状态。
     projects: HashMap<i64, WorkspaceSlot>,
@@ -1591,6 +1680,7 @@ impl App {
             tab_drag: None,
             files: files::AppState::default(),
             preview_tab_menu: None,
+            project_preview_tab_menu: None,
             projects: HashMap::new(),
             project_order: Vec::new(),
             active_project_id: None,
@@ -1932,6 +2022,27 @@ impl App {
                 }
                 self.tab_drag = Some(TabDrag { group, source: to });
                 self.rekey_hover_range(HoverId::PreviewTabItem, HoverId::PreviewTabClose, from, to);
+            }
+            TabGroup::ProjectPreview => {
+                if from == to {
+                    return;
+                }
+                {
+                    let Some(ws) = self.active_workspace_mut() else {
+                        return;
+                    };
+                    if to >= ws.project_preview.tabs().len() {
+                        return;
+                    }
+                    ws.project_preview.reorder(from, to);
+                }
+                self.tab_drag = Some(TabDrag { group, source: to });
+                self.rekey_hover_range(
+                    HoverId::ProjectPreviewTabItem,
+                    HoverId::ProjectPreviewTabClose,
+                    from,
+                    to,
+                );
             }
             TabGroup::Browser => {
                 if from == to {
@@ -2280,12 +2391,19 @@ impl App {
 
     /// 项目树右键菜单是否打开(main.rs Esc 键路由用)。
     pub fn context_menu_open(&self) -> bool {
-        self.files.context_menu_is_some() || self.preview_tab_menu.is_some()
+        self.files.context_menu_is_some()
+            || self.preview_tab_menu.is_some()
+            || self.project_preview_tab_menu.is_some()
     }
 
     /// 预览 tab 右键菜单是否打开(main.rs Esc 键路由用)。
     pub fn preview_tab_context_menu_open(&self) -> bool {
         self.preview_tab_menu.is_some()
+    }
+
+    /// Project 面板右配对预览 tab 右键菜单是否打开(main.rs Esc 键路由用)。
+    pub fn project_preview_tab_context_menu_open(&self) -> bool {
+        self.project_preview_tab_menu.is_some()
     }
 
     /// Agent 选择菜单是否打开(main.rs Esc 键路由用)。
@@ -2356,6 +2474,20 @@ impl App {
         }
     }
 
+    /// Project 面板右配对预览 tab 的 `iced-code-editor` 内部消息转发,语义同
+    /// `preview_tab_editor_event`,作用于 `ws.project_preview`。
+    pub fn project_preview_tab_editor_event(
+        &mut self,
+        tab_id: usize,
+        event: iced_code_editor::Message,
+    ) -> iced_winit::runtime::Task<iced_code_editor::Message> {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.project_preview_tab_editor_event(tab_id, event)
+        } else {
+            iced_winit::runtime::Task::none()
+        }
+    }
+
     /// 取走"双击顶栏空白处"待处理标记(取走即清零)。main.rs 在派发完
     /// 消息后轮询这个方法,命中就调用 `window.set_maximized(!window.
     /// is_maximized())`——`App` 自己不持有 `Window` 句柄,做不到这一步。
@@ -2415,13 +2547,19 @@ impl App {
         if self.current_page == AppPage::Home {
             return Vec::new();
         }
-        if self.left_view != LeftView::Files {
+        if !matches!(self.left_view, LeftView::Files | LeftView::Project) {
             return Vec::new();
         }
         let Some(ws) = self.active_workspace() else {
             return Vec::new();
         };
-        let specs = ws.preview.desired_webviews();
+        // Files 预览取 `ws.preview`,Project 面板右配对取 `ws.project_preview`——
+        // 两者都是"预览区",复用同一支几何/可见性逻辑,只是状态源不同。
+        let specs = match self.left_view {
+            LeftView::Files => ws.preview.desired_webviews(),
+            LeftView::Project => ws.project_preview.desired_webviews(),
+            _ => Vec::new(),
+        };
         // 编辑弹层开着时,应用级模态盖住了预览区,原生 wry 子视图不听 iced
         // 绘制顺序摆布,必须显式 visible=false 才能真正藏起来。
         // (预览 tab 右键菜单不藏 webview——它向上弹出,落在 tab 栏上方的
@@ -2844,6 +2982,51 @@ impl App {
             Message::PreviewTabContextMenuClose => {
                 self.preview_tab_menu = None;
             }
+            Message::ProjectPreviewOpenPath(path) => self.project_preview_open_path(path),
+            Message::ProjectPreviewSelectTab(idx) => self.project_preview_select_tab(idx),
+            Message::ProjectPreviewCloseTab(idx) => {
+                self.project_preview_tab_menu = None;
+                self.with_focused_project(|ws, _io| {
+                    ws.project_preview.close(idx);
+                    ws.project_preview_tab_first = 0;
+                });
+            }
+            Message::ProjectPreviewTabScroll(right) => {
+                self.with_focused_project(|ws, _io| {
+                    if right {
+                        ws.project_preview_tab_first =
+                            ws.project_preview_tab_first.saturating_add(2);
+                    } else {
+                        ws.project_preview_tab_first =
+                            ws.project_preview_tab_first.saturating_sub(2);
+                    }
+                });
+            }
+            Message::ProjectPreviewEditorEvent(_tab_id, _event) => {
+                // 与 `PreviewEditorEvent` 同口径:到达 `App::update` 说明未走
+                // main.rs 的 Task 桥接器,直接忽略。
+            }
+            Message::ProjectPreviewEditOpen(idx) => {
+                self.project_preview_tab_menu = None;
+                self.with_focused_project(move |ws, _io| ws.project_preview_edit_open(idx));
+            }
+            Message::ProjectPreviewEditOpenByTab(tab_id) => {
+                self.with_focused_project(move |ws, _io| {
+                    ws.project_preview_edit_open_by_id(tab_id)
+                });
+            }
+            Message::ProjectPreviewTabContextMenu { idx, editable } => {
+                let (x, y) = self.files.last_right_click();
+                self.project_preview_tab_menu = Some(PreviewTabMenu {
+                    x,
+                    y,
+                    idx,
+                    editable,
+                });
+            }
+            Message::ProjectPreviewTabContextMenuClose => {
+                self.project_preview_tab_menu = None;
+            }
             Message::Browser(browser::Message::BookmarksLoaded(pid, bookmarks)) => {
                 self.browser_bookmarks_loaded(pid, bookmarks)
             }
@@ -2988,7 +3171,9 @@ impl App {
                 );
             }
             Message::Project(project::Message::OpenLink(path)) => {
-                self.update(Message::PreviewOpenPath(path));
+                // 项目链接打开的文件进 Project 面板右配对的预览(`ws.project_preview`),
+                // 不冲进 Files 预览——两条预览各自独立,互相不打扰。
+                self.update(Message::ProjectPreviewOpenPath(path));
             }
             Message::Project(project::Message::PickFile(target)) => {
                 self.update(Message::ProjectLinkPickFile(target));
@@ -4026,6 +4211,43 @@ impl App {
         }
     }
 
+    /// Project 面板右配对预览打开文件:写入 `ws.project_preview`(独立的
+    /// `PreviewPane`),完全不碰 Files 预览的 `ws.preview`/`ws.files`。
+    /// tab 是项目链接点开产生的会话期状态,不持久化、也不向 daemon 推上下文,
+    /// 避免与 Files 预览那份持久化 `preview_state` 互相覆盖。
+    fn project_preview_open_path(&mut self, path: PathBuf) {
+        self.with_focused_project(|ws, _io| {
+            if !path.is_file() {
+                ws.project_preview_error = Some(format!("文件不存在或不可读: {}", path.display()));
+                return;
+            }
+            ws.project_preview_error = None;
+            ws.allowed_files
+                .lock()
+                .expect("allowed_files 锁")
+                .insert(path.clone());
+            ws.project_preview.open_path(path);
+            // 新 tab 落在末尾,滚回最左让它可见(同 Files 预览)。
+            ws.project_preview_tab_first = 0;
+        });
+    }
+
+    fn project_preview_select_tab(&mut self, idx: usize) {
+        let arming = self
+            .active_workspace()
+            .map(|ws| idx < ws.project_preview.tabs().len())
+            .unwrap_or(false);
+        self.with_focused_project(|ws, _io| {
+            ws.project_preview.select(idx);
+        });
+        if arming {
+            self.tab_drag = Some(TabDrag {
+                group: TabGroup::ProjectPreview,
+                source: idx,
+            });
+        }
+    }
+
     fn agent_state_changed(
         &mut self,
         project_id: ProjectId,
@@ -4273,6 +4495,55 @@ impl App {
             .into()
     }
 
+    /// Project 面板右配对预览 tab 右键菜单浮层,语义同
+    /// `preview_tab_context_menu_popup`。定位坐标同样复用 `files.last_right_click`
+    /// (main.rs 任意右键都会先写入),"编辑"项落 `ProjectPreviewEditOpen`(编辑
+    /// project 预览的 tab)、"关闭"落 `ProjectPreviewCloseTab`。
+    fn project_preview_tab_context_menu_popup<'a>(
+        &self,
+    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+        let menu = match &self.project_preview_tab_menu {
+            Some(m) => m,
+            None => return column![].into(),
+        };
+        let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
+            Vec::new();
+        if menu.editable {
+            items.push(Self::preview_menu_item(
+                Some(icons::IconKind::Rename),
+                "编辑",
+                Message::ProjectPreviewEditOpen(menu.idx),
+            ));
+        }
+        items.push(Self::preview_menu_item(
+            None,
+            "关闭",
+            Message::ProjectPreviewCloseTab(menu.idx),
+        ));
+
+        let region = theme::region::context_menu();
+        let list = container(column(items).spacing(region.gap))
+            .padding(region.padding)
+            .style(move |_t: &iced_widget::Theme| container::Style {
+                background: region.background.map(Into::into),
+                border: region.border.unwrap_or_default(),
+                ..container::Style::default()
+            });
+        let window_h = self.window_size.1;
+        let bottom = (window_h - menu.y).max(0.0);
+        container(list)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_y(iced_widget::core::alignment::Vertical::Bottom)
+            .padding(Padding {
+                top: 0.0,
+                left: menu.x,
+                right: 0.0,
+                bottom,
+            })
+            .into()
+    }
+
     /// 预览 tab 右键菜单单项(图标可选 + 文字按钮)。hover/pressed 切到
     /// `TAB_HOVER` 背景,与文件树右键菜单 `menu_item` 同款。
     fn preview_menu_item<'a>(
@@ -4473,6 +4744,17 @@ impl App {
             )
             .on_press(Message::PreviewTabContextMenuClose);
             stack![base, dismiss, self.preview_tab_context_menu_popup()]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else if self.project_preview_tab_menu.is_some() {
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::ProjectPreviewTabContextMenuClose);
+            stack![base, dismiss, self.project_preview_tab_context_menu_popup()]
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
@@ -5573,119 +5855,144 @@ fn left_panel_area<'a>(
     } else {
         (PaneCorner::Left, PaneCorner::Right, PaneCorner::All)
     };
-    let inner: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        match app.left_view {
-            LeftView::Files => {
-                let (list_portion, content_portion) = split_portions(app.shell_layout.files_split);
-                let list_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-                    if ws.project.is_some() {
-                        files::view(
-                            &ws.files,
-                            Length::FillPortion(list_portion),
-                            zone_pane_border(zone, lc),
-                            app.hover_progress(HoverId::FilesSearchSubmit),
-                            app.hover_progress(HoverId::FilesDotfiles),
-                            app.hover_progress(HoverId::FilesBranchSwitch),
-                        )
-                        .map(Message::Files)
-                    } else {
-                        no_project_placeholder(
-                            ws,
-                            Length::FillPortion(list_portion),
-                            zone_pane_border(zone, lc),
-                        )
-                    };
-                row![
-                    list_pane,
-                    divider_bar(
-                        Divider::LeftPairSplit,
-                        theme::region::project_pane()
-                            .background
-                            .unwrap_or(theme::color::BG),
-                        theme::region::preview_pane()
-                            .background
-                            .unwrap_or(theme::color::BG),
-                    ),
-                    preview_pane(
-                        app,
+    let inner: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = match app
+        .left_view
+    {
+        LeftView::Files => {
+            let (list_portion, content_portion) = split_portions(app.shell_layout.files_split);
+            let list_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+                if ws.project.is_some() {
+                    files::view(
+                        &ws.files,
+                        Length::FillPortion(list_portion),
+                        zone_pane_border(zone, lc),
+                        app.hover_progress(HoverId::FilesSearchSubmit),
+                        app.hover_progress(HoverId::FilesDotfiles),
+                        app.hover_progress(HoverId::FilesBranchSwitch),
+                    )
+                    .map(Message::Files)
+                } else {
+                    no_project_placeholder(
                         ws,
-                        Length::FillPortion(content_portion),
-                        zone_pane_border(zone, rc)
-                    ),
-                ]
-                .width(Length::Fill)
-                .into()
-            }
-            LeftView::GitLog => {
-                git_log::view(&app.git_log, ws.project_panel.worktrees()).map(Message::GitLog)
-            }
-            LeftView::Todo => {
-                let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
-                    return column![].into();
+                        Length::FillPortion(list_portion),
+                        zone_pane_border(zone, lc),
+                    )
                 };
-                let tabs: Vec<todo::SessionTabSummary> = ws
-                    .tabs
-                    .iter()
-                    .map(|t| todo::SessionTabSummary {
-                        session_id: t.info.id.clone(),
-                        title: tab_title(t.agent, t.cwd.as_deref(), &t.info.name),
-                        alive: t.alive,
-                    })
-                    .collect();
-                let project_path = ws
-                    .project
-                    .as_ref()
-                    .map(|p| std::path::PathBuf::from(&p.path));
-                todo::view(
-                    &app.todo,
-                    &ws.todo,
-                    project_id,
-                    &tabs,
-                    project_path.as_deref(),
-                    Length::Fill,
-                    zone_pane_border(zone, ac),
-                )
-                .map(Message::Todo)
-            }
-            LeftView::Project => project::view(
-                &ws.project_panel,
-                ws.project.as_ref(),
+            row![
+                list_pane,
+                divider_bar(
+                    Divider::LeftPairSplit,
+                    theme::region::project_pane()
+                        .background
+                        .unwrap_or(theme::color::BG),
+                    theme::region::preview_pane()
+                        .background
+                        .unwrap_or(theme::color::BG),
+                ),
+                preview_pane(
+                    app,
+                    ws,
+                    Length::FillPortion(content_portion),
+                    zone_pane_border(zone, rc)
+                ),
+            ]
+            .width(Length::Fill)
+            .into()
+        }
+        LeftView::GitLog => {
+            git_log::view(&app.git_log, ws.project_panel.worktrees()).map(Message::GitLog)
+        }
+        LeftView::Todo => {
+            let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
+                return column![].into();
+            };
+            let tabs: Vec<todo::SessionTabSummary> = ws
+                .tabs
+                .iter()
+                .map(|t| todo::SessionTabSummary {
+                    session_id: t.info.id.clone(),
+                    title: tab_title(t.agent, t.cwd.as_deref(), &t.info.name),
+                    alive: t.alive,
+                })
+                .collect();
+            let project_path = ws
+                .project
+                .as_ref()
+                .map(|p| std::path::PathBuf::from(&p.path));
+            todo::view(
+                &app.todo,
+                &ws.todo,
+                project_id,
+                &tabs,
+                project_path.as_deref(),
                 Length::Fill,
                 zone_pane_border(zone, ac),
             )
-            .map(Message::Project),
-            LeftView::Database => {
-                // 数据库面板需要项目已打开才能读写 `.dozer/database.json`。
-                if ws.project.is_none() {
-                    return column![].into();
-                }
-                database::view(
-                    &app.database,
-                    &ws.database,
-                    Length::Fill,
-                    zone_pane_border(zone, ac),
-                    app.hover_progress(HoverId::DatabaseSchemaBack),
+            .map(Message::Todo)
+        }
+        LeftView::Project => {
+            let (list_portion, content_portion) = split_portions(app.shell_layout.project_split);
+            let info_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+                project::view(
+                    &ws.project_panel,
+                    ws.project.as_ref(),
+                    Length::FillPortion(list_portion),
+                    zone_pane_border(zone, lc),
                 )
-                .map(Message::Database)
+                .map(Message::Project);
+            row![
+                info_pane,
+                divider_bar(
+                    Divider::ProjectSplit,
+                    theme::region::project_pane()
+                        .background
+                        .unwrap_or(theme::color::BG),
+                    theme::region::preview_pane()
+                        .background
+                        .unwrap_or(theme::color::BG),
+                ),
+                project_preview_pane(
+                    app,
+                    ws,
+                    Length::FillPortion(content_portion),
+                    zone_pane_border(zone, rc)
+                ),
+            ]
+            .width(Length::Fill)
+            .into()
+        }
+        LeftView::Database => {
+            // 数据库面板需要项目已打开才能读写 `.dozer/database.json`。
+            if ws.project.is_none() {
+                return column![].into();
             }
-            LeftView::Ssh => {
-                // 同 Files/Database 面板:`ws.project.is_none()` 是 Stub→Loaded
-                // 促成期间的占位态,这时不该渲染出一个看似可点、实际上
-                // `Message::Ssh` 分发会被内核静默吞掉(无 project 时直接
-                // return)的"＋新增主机"按钮。
-                if ws.project.is_none() {
-                    return column![].into();
-                }
-                ssh::view(&ws.ssh, Length::Fill, zone_pane_border(zone, ac)).map(Message::Ssh)
-            }
-            LeftView::Web => browser::view(
-                &ws.browser,
-                ws.project.as_ref().map(|p| p.id),
+            database::view(
+                &app.database,
+                &ws.database,
                 Length::Fill,
                 zone_pane_border(zone, ac),
+                app.hover_progress(HoverId::DatabaseSchemaBack),
             )
-            .map(Message::Browser),
-        };
+            .map(Message::Database)
+        }
+        LeftView::Ssh => {
+            // 同 Files/Database 面板:`ws.project.is_none()` 是 Stub→Loaded
+            // 促成期间的占位态,这时不该渲染出一个看似可点、实际上
+            // `Message::Ssh` 分发会被内核静默吞掉(无 project 时直接
+            // return)的"＋新增主机"按钮。
+            if ws.project.is_none() {
+                return column![].into();
+            }
+            ssh::view(&ws.ssh, Length::Fill, zone_pane_border(zone, ac)).map(Message::Ssh)
+        }
+        LeftView::Web => browser::view(
+            &ws.browser,
+            ws.project.as_ref().map(|p| p.id),
+            Length::Fill,
+            zone_pane_border(zone, ac),
+        )
+        .map(Message::Browser),
+    };
     if maximized {
         return inner;
     }

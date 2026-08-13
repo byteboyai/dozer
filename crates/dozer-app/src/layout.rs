@@ -113,6 +113,7 @@ mod tests {
         let layout = ShellLayout {
             left_width: 500.0,
             files_split: 0.4,
+            project_split: 0.5,
             agent_split: 0.35,
             conversations_split: 0.45,
             window_width: 1600.0,
