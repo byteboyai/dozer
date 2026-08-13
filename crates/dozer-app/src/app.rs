@@ -2523,6 +2523,14 @@ impl App {
             .unwrap_or(false)
     }
 
+    /// Todo 状态 pill 菜单是否打开(给 main.rs 的 Esc 关闭用,同
+    /// `todo_dispatch_open` 的既有模式)。
+    pub fn todo_state_pill_open(&self) -> bool {
+        self.active_workspace()
+            .map(|ws| ws.todo.state_pill_menu_open())
+            .unwrap_or(false)
+    }
+
     /// 预览编辑弹层是否打开(main.rs 键盘路由用)。打开期间键盘必须走
     /// 弹层的文本编辑器,不能落进终端 PTY——弹层挂在左侧预览面板,不影响
     /// `terminal_visible()` 的判断条件(右侧展开与否),不加这道闸门的话,

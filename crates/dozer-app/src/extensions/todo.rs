@@ -275,6 +275,14 @@ impl WorkspaceState {
         self.dispatch_open.is_some()
     }
 
+    /// 状态 pill 菜单是否打开(内核 `App::todo_state_pill_open` 键盘 Esc
+    /// 关闭用,同 `dispatch_popup_open` 的既有模式——菜单打开后除了选中
+    /// 一个选项之外没有别的关闭入口会把用户逼着做一次未必想要的状态
+    /// 变更,Esc 必须能单独退出)。
+    pub fn state_pill_menu_open(&self) -> bool {
+        self.state_pill_open.is_some()
+    }
+
     /// "派发到新建"发起时记的 `tab_id → 任务文本` 映射,内核在
     /// `Message::TabAttached` 落地时用真正的 `session_id` 消费掉这条,
     /// 补记派发记录。未知 `tab_id` 返回 `None`,是 no-op。
@@ -831,19 +839,29 @@ fn todo_kanban_view<'a>(
                 let key = todo_line_key(&item.text);
                 let meta = app_state.meta_for(project_id, key);
                 let dispatch = meta.and_then(|m| m.dispatch.as_ref());
-                let card = container(todo_card(
-                    display_no + 1,
-                    idx,
-                    item,
-                    states[idx],
-                    meta,
-                    dispatch,
-                    ws_state.selected_row == Some(idx),
-                    ws_state.dispatch_open == Some(idx),
-                    ws_state.state_pill_open == Some(idx),
-                    &existing_tabs,
-                ))
-                .width(Length::Fixed(280.0));
+                // 计划日期编辑态跟列表视图共用同一个 ws_state.editing_plan_date
+                // 字段——看板也要在对应卡片这里换成编辑行，否则切到列表视图
+                // 才会看到编辑框，看板本身点了日期徽章却什么反应都没有。
+                let content: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+                    if let Some((editing_idx, draft)) = &ws_state.editing_plan_date
+                        && *editing_idx == idx
+                    {
+                        todo_plan_date_edit_row(item, draft)
+                    } else {
+                        todo_card(
+                            display_no + 1,
+                            idx,
+                            item,
+                            states[idx],
+                            meta,
+                            dispatch,
+                            ws_state.selected_row == Some(idx),
+                            ws_state.dispatch_open == Some(idx),
+                            ws_state.state_pill_open == Some(idx),
+                            &existing_tabs,
+                        )
+                    };
+                let card = container(content).width(Length::Fixed(280.0));
                 cards.push(card.into());
             }
             iced_aw::widget::Wrap::with_elements(cards)

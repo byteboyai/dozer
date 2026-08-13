@@ -840,6 +840,24 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
+            // Todo 状态 pill 菜单打开时,Esc 同样优先关掉弹出层,口径同上面
+            // 的 Todo 派发选择层——菜单里只有"待办"/"已完成"两个会真的
+            // 改任务状态的选项,没有 Esc 的话手滑点开就只能被迫选一个。
+            if app.todo_state_pill_open()
+                && let WindowEvent::KeyboardInput {
+                    event,
+                    is_synthetic: false,
+                    ..
+                } = event
+                && event.state == ElementState::Pressed
+                && event.logical_key
+                    == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+            {
+                app.update(Message::Todo(extensions::todo::Message::StatePillClose));
+                window.request_redraw();
+                return;
+            }
+
             // 预览编辑弹层打开时,Esc 优先触发关闭流程(脏则弹确认,不脏直接
             // 关),口径同上面几个弹层。
             if app.edit_session_open()
