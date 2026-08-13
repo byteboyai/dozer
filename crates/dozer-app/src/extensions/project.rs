@@ -16,6 +16,8 @@ pub struct WorkspaceState {
     project_acceptance_count: Option<u64>,
     /// git remote 的 fetch URL(`delivery::remote_url`)。无 remote/非 git → None。
     remote_url: Option<String>,
+    /// 磁盘占用字节数(排除构建产物)。None=尚未算出来。
+    disk_usage_bytes: Option<u64>,
     /// 项目名称行内编辑态(None=未在编辑)。
     name_editing: Option<String>,
     error: Option<String>,
@@ -49,6 +51,8 @@ impl WorkspaceState {
 pub enum Message {
     GitRefreshed(i64, Option<String>, bool, Vec<WorktreeInfo>, Option<String>),
     AcceptanceCountLoaded(i64, Option<u64>),
+    /// 磁盘占用统计结果(排除构建产物后的字节数)。
+    DiskUsageLoaded(i64, u64),
     /// daemon 改名结果。带 `project_id`,走 `with_project` 路由。
     NameRenamed(i64, Result<dozer_core::protocol::ProjectInfo, String>),
     NameEditStart,
@@ -77,6 +81,9 @@ pub fn update(
         }
         Message::AcceptanceCountLoaded(_, n) => {
             ws_state.project_acceptance_count = n;
+        }
+        Message::DiskUsageLoaded(_, bytes) => {
+            ws_state.disk_usage_bytes = Some(bytes);
         }
         Message::NameEditStart => {
             ws_state.name_editing = Some(current_name.to_string());
@@ -134,6 +141,44 @@ fn project_branch_label(branch: Option<&str>, dirty: bool) -> String {
         Some(b) => b.to_string(),
         None => "—".to_string(),
     }
+}
+
+/// 磁盘占用统计的排除名单——跟 `crates/dozer-app/src/project.rs::HIDDEN`
+/// (文件树"要不要显示这一行")语义不同,这里是"算不算项目真实内容",不复用
+/// 那份常量。
+pub const DISK_USAGE_EXCLUDE: [&str; 7] = [
+    ".git",
+    "target",
+    "node_modules",
+    "dist",
+    "build",
+    ".venv",
+    "__pycache__",
+];
+
+/// 递归求和 `root` 下所有文件大小,跳过名字命中 `exclude` 的目录(整个子树
+/// 跳过,不下钻)。读不到的条目(权限/符号链接死链)跳过不计入,不中断整体
+/// 计算。
+pub fn dir_size_excluding(root: &std::path::Path, exclude: &[&str]) -> u64 {
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return 0;
+    };
+    let mut total = 0u64;
+    for entry in rd.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            if exclude.contains(&name.as_str()) {
+                continue;
+            }
+            total += dir_size_excluding(&entry.path(), exclude);
+        } else if let Ok(meta) = entry.metadata() {
+            total += meta.len();
+        }
+    }
+    total
 }
 
 /// 面板主入口(单栏,不与任何其它面板配对——同 GitLog/Usage)。`project` 为
@@ -220,6 +265,16 @@ pub fn view<'a>(
                 .color(theme::color::GOLD),
         );
     }
+
+    let usage_label = ws_state
+        .disk_usage_bytes
+        .map(|b| format!("文件存储 ({} MB)", b / 1_000_000))
+        .unwrap_or_else(|| "文件存储".to_string());
+    content = content.push(
+        text(usage_label)
+            .size(theme::font::label())
+            .color(theme::color::DIM),
+    );
 
     content = content.push(
         text("根目录")
@@ -408,5 +463,39 @@ mod tests {
         );
         assert_eq!(ws.name_editing.as_deref(), Some("新名字"));
         assert!(ws.error.is_some());
+    }
+
+    #[test]
+    fn dir_size_excluding_sums_files_and_skips_excluded_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "12345").unwrap(); // 5 bytes
+        std::fs::create_dir(dir.path().join("target")).unwrap();
+        std::fs::write(dir.path().join("target").join("big.bin"), vec![0u8; 1000]).unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src").join("b.txt"), "12").unwrap(); // 2 bytes
+        let size = dir_size_excluding(dir.path(), &DISK_USAGE_EXCLUDE);
+        assert_eq!(size, 7); // 5 + 2, target 整个跳过
+    }
+
+    #[test]
+    fn dir_size_excluding_empty_dir_is_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(dir_size_excluding(dir.path(), &DISK_USAGE_EXCLUDE), 0);
+    }
+
+    #[test]
+    fn disk_usage_loaded_sets_field() {
+        let mut ws = new_ws();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::DiskUsageLoaded(1, 12345),
+            1,
+            "名字",
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert_eq!(ws.disk_usage_bytes, Some(12345));
     }
 }

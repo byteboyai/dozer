@@ -464,7 +464,8 @@ impl Workspace {
         // 启动就把"恢复出来的东西"（或 `None`）推一次:dozerd 可能比 GUI
         // 活得久,上次会话留下的缓存值不该在新会话里冒充当前上下文。
         ws.spawn_preview_context_push(io);
-        spawn_project_git_refresh(project_id, repo_path, io);
+        spawn_project_git_refresh(project_id, repo_path.clone(), io);
+        spawn_disk_usage_refresh(project_id, repo_path, io);
         ws.spawn_conversations_refresh(io);
         ws.spawn_acceptance_count_refresh(io);
         browser::request_bookmarks_refresh(
@@ -919,7 +920,8 @@ impl Workspace {
         // 启动就把"恢复出来的东西"（或 `None`）推一次:dozerd 可能比 GUI
         // 活得久,上次会话留下的缓存值不该在新会话里冒充当前上下文。
         self.spawn_preview_context_push(io);
-        spawn_project_git_refresh(project_id, repo_path, io);
+        spawn_project_git_refresh(project_id, repo_path.clone(), io);
+        spawn_disk_usage_refresh(project_id, repo_path, io);
         self.spawn_conversations_refresh(io);
         self.spawn_acceptance_count_refresh(io);
         browser::request_bookmarks_refresh(
@@ -1558,6 +1560,22 @@ pub(crate) fn spawn_project_git_refresh(project_id: i64, repo_path: PathBuf, io:
         )));
         let _ = proxy.send_event(Message::Project(project::Message::GitRefreshed(
             project_id, b, d, w, r,
+        )));
+    });
+}
+
+/// 磁盘占用是独立于组合 git 刷新的异步任务——避免大仓库的目录遍历拖慢
+/// 分支/脏标显示。触发点与 `spawn_project_git_refresh` 相同。
+pub(crate) fn spawn_disk_usage_refresh(project_id: i64, repo_path: PathBuf, io: &ShellIo) {
+    let proxy = io.proxy.clone();
+    io.handle.spawn(async move {
+        let bytes = tokio::task::spawn_blocking(move || {
+            project::dir_size_excluding(&repo_path, &project::DISK_USAGE_EXCLUDE)
+        })
+        .await
+        .unwrap_or(0);
+        let _ = proxy.send_event(Message::Project(project::Message::DiskUsageLoaded(
+            project_id, bytes,
         )));
     });
 }

@@ -40,8 +40,8 @@ use crate::workspace::{
     TabBackend, Workspace, agent_list_pane, agent_picker_popup, conversation_list_pane, dot_color,
     edit_discard_confirm_popup, edit_modal, effective_project_repo, exited_marker,
     fetch_project_restore, no_project_placeholder, preview_pane, review_content_pane,
-    review_should_refresh_on_turn, spawn_project_git_refresh, split_portions, tab_display_width,
-    tab_title, terminal_status_bar,
+    review_should_refresh_on_turn, spawn_disk_usage_refresh, spawn_project_git_refresh,
+    split_portions, tab_display_width, tab_title, terminal_status_bar,
 };
 use dozer_client::Client;
 use dozer_core::protocol::{AgentKind, AgentState, BookmarkInfo, ProjectInfo, SessionInfo};
@@ -2926,7 +2926,8 @@ impl App {
             Message::Project(
                 msg @ (project::Message::GitRefreshed(project_id, ..)
                 | project::Message::AcceptanceCountLoaded(project_id, ..)
-                | project::Message::NameRenamed(project_id, ..)),
+                | project::Message::NameRenamed(project_id, ..)
+                | project::Message::DiskUsageLoaded(project_id, ..)),
             ) => {
                 let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
                     return;
@@ -3278,7 +3279,9 @@ impl App {
     fn project_fs_changed(&mut self, project_id: ProjectId, relevance: git_watch::Relevance) {
         self.with_project(project_id, |ws, io| {
             let Some(project) = &ws.project else { return };
-            spawn_project_git_refresh(project_id, PathBuf::from(&project.path), io);
+            let repo_path = PathBuf::from(&project.path);
+            spawn_project_git_refresh(project_id, repo_path.clone(), io);
+            spawn_disk_usage_refresh(project_id, repo_path, io);
         });
         // 只有 `.git` 引用类变化(分支切换/外部提交/其他 worktree
         // 提交)才值得重建 Git Log 快照——纯工作区文件编辑不影响
@@ -4077,7 +4080,9 @@ impl App {
             }
             // 回合结束后刷新项目 git 状态,文件树装饰随之更新（P1h）。
             if let Some(project) = &ws.project {
-                spawn_project_git_refresh(project_id, PathBuf::from(&project.path), io);
+                let repo_path = PathBuf::from(&project.path);
+                spawn_project_git_refresh(project_id, repo_path.clone(), io);
+                spawn_disk_usage_refresh(project_id, repo_path, io);
             }
             // 回合结束后刷新对话列表(transcript 增长/新增；P1j)。
             ws.spawn_conversations_refresh(io);
