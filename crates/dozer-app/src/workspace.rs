@@ -461,6 +461,9 @@ impl Workspace {
         ws.ensure_project_terminal(io);
         // 认回上次退出前打开的预览文件 tab（重启后自动重开）。
         ws.restore_preview_state();
+        // 启动就把"恢复出来的东西"（或 `None`）推一次:dozerd 可能比 GUI
+        // 活得久,上次会话留下的缓存值不该在新会话里冒充当前上下文。
+        ws.spawn_preview_context_push(io);
         spawn_project_git_refresh(project_id, repo_path, io);
         ws.spawn_conversations_refresh(io);
         ws.spawn_acceptance_count_refresh(io);
@@ -1011,11 +1014,20 @@ impl Workspace {
     /// 无活动 tab、或活动 tab 无原生 `CodeEditor`(图片/webview 类)时推
     /// `None`。~250ms trailing-edge 防抖:连续快速触发(方向键连按)只有
     /// 最后一次真正发出 UDS 请求。
+    ///
+    /// 还有第三种"直接放弃、连 `None` 都不推"的情况:`self.project` 为
+    /// `None` 的加载期占位 `Workspace`——那时候没有 `project_id` 可以寻址,
+    /// 这次推送根本无处可去。占位很快会被真 `Workspace` 换掉,后者的
+    /// `bootstrap` 里会补一次推送,所以这里静默返回不会留下空窗。
     pub(crate) fn spawn_preview_context_push(&mut self, io: &ShellIo) {
         let Some(project) = &self.project else {
             return;
         };
         let project_id = project.id;
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
         let context = self
             .preview
             .tabs()
@@ -1029,6 +1041,7 @@ impl Workspace {
                     editor.has_selection(),
                     editor.cursor_position(),
                     editor.selection_range(),
+                    now_ms,
                 ))
             });
 
@@ -2632,14 +2645,16 @@ pub(crate) fn agent_icon(agent: AgentKind) -> IconKind {
     }
 }
 
-/// 由(路径, 是否有选区, 0-indexed 光标位置, 0-indexed 选区范围)组装
-/// 1-indexed 的 `PreviewContext`。抽成纯函数是为了不依赖真实
-/// `CodeEditor`/`PreviewPane` 就能单测坐标转换这一层逻辑。
+/// 由(路径, 是否有选区, 0-indexed 光标位置, 0-indexed 选区范围, 当前时间)
+/// 组装 1-indexed 的 `PreviewContext`。抽成纯函数是为了不依赖真实
+/// `CodeEditor`/`PreviewPane` 就能单测坐标转换这一层逻辑——`now_ms` 由调
+/// 用方传进来而不是在这里读 `SystemTime::now()`,正是为了保住这份纯度。
 fn preview_context_from_editor_state(
     path: &str,
     has_selection: bool,
     cursor: (usize, usize),
     selection: Option<((usize, usize), (usize, usize))>,
+    now_ms: u64,
 ) -> dozer_core::protocol::PreviewContext {
     let (start, end) = if has_selection {
         selection.unwrap_or((cursor, cursor))
@@ -2653,6 +2668,7 @@ fn preview_context_from_editor_state(
         end_line: end.0 as u32 + 1,
         end_col: end.1 as u32 + 1,
         has_selection,
+        updated_at_ms: now_ms,
     }
 }
 
@@ -2746,11 +2762,19 @@ mod tests {
     #[test]
     fn preview_context_from_cursor_only_uses_1_indexed_point_range() {
         // 无选区:0-indexed (1, 4) 光标 → 1-indexed start==end==(2, 5)。
-        let ctx = preview_context_from_editor_state("/repo/src/main.rs", false, (1, 4), None);
+        let ctx = preview_context_from_editor_state(
+            "/repo/src/main.rs",
+            false,
+            (1, 4),
+            None,
+            1_700_000_000_000,
+        );
         assert_eq!(ctx.path, "/repo/src/main.rs");
         assert_eq!((ctx.start_line, ctx.start_col), (2, 5));
         assert_eq!((ctx.end_line, ctx.end_col), (2, 5));
         assert!(!ctx.has_selection);
+        // 新鲜度戳原样透传调用方给的时间,不在函数里读时钟。
+        assert_eq!(ctx.updated_at_ms, 1_700_000_000_000);
     }
 
     #[test]
@@ -2761,10 +2785,12 @@ mod tests {
             true,
             (1, 4),
             Some(((1, 4), (3, 0))),
+            1_700_000_000_000,
         );
         assert_eq!((ctx.start_line, ctx.start_col), (2, 5));
         assert_eq!((ctx.end_line, ctx.end_col), (4, 1));
         assert!(ctx.has_selection);
+        assert_eq!(ctx.updated_at_ms, 1_700_000_000_000);
     }
 
     /// 促成期占位的**核心不变式**:同步换上的那一刻就必须已知归属项目。

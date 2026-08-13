@@ -179,6 +179,7 @@ async fn preview_context_push_and_query_round_trips() {
         end_line: 5,
         end_col: 2,
         has_selection: true,
+        updated_at_ms: 1_700_000_000_000,
     };
     c.update_preview_context(1, Some(ctx.clone()))
         .await
@@ -196,6 +197,7 @@ async fn preview_context_push_and_query_round_trips() {
         end_line: 1,
         end_col: 1,
         has_selection: false,
+        updated_at_ms: 1_700_000_001_000,
     };
     c.update_preview_context(1, Some(ctx2.clone()))
         .await

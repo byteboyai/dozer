@@ -1,6 +1,7 @@
 use dozer_client::Client;
 use dozer_core::protocol::PreviewContext;
-use dozer_mcp::server::DozerMcpServer;
+use dozer_mcp::server::{DozerMcpServer, NoParams};
+use rmcp::handler::server::wrapper::Parameters;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -61,6 +62,7 @@ async fn get_preview_context_returns_pushed_value_for_resolved_project() {
         end_line: 2,
         end_col: 5,
         has_selection: false,
+        updated_at_ms: 1_700_000_000_000,
     };
     client
         .update_preview_context(1, Some(ctx.clone()))
@@ -92,6 +94,96 @@ async fn get_preview_context_no_active_preview_returns_none() {
     let server = DozerMcpServer::new(Client::new(sock), session.id.clone());
     let got = server.fetch_context_for_test().await.unwrap();
     assert_eq!(got, None);
+}
+
+/// 直接调真正的 `#[tool]` 方法（不是绕开 JSON 的 `fetch_context_for_test`），
+/// 断言无预览时那份 payload 的形状：全 `null` + `reason`。
+#[tokio::test]
+async fn tool_json_payload_reports_no_active_preview() {
+    let (sock, _guard) = start_daemon().await;
+    let client = Client::new(sock.clone());
+    let session = client
+        .create(
+            "测试",
+            "/bin/sh",
+            &["-c".into(), "cat".into()],
+            "/tmp",
+            80,
+            24,
+            1,
+        )
+        .await
+        .unwrap();
+
+    let server = DozerMcpServer::new(Client::new(sock), session.id.clone());
+    let result = server
+        .get_preview_context(Parameters(NoParams {}))
+        .await
+        .unwrap();
+
+    let value = result.structured_content.expect("tool 返回结构化内容");
+    assert_eq!(value["reason"], "no_active_preview");
+    for key in [
+        "path",
+        "start_line",
+        "start_col",
+        "end_line",
+        "end_col",
+        "has_selection",
+        "updated_at_ms",
+    ] {
+        assert!(value[key].is_null(), "{key} 在无预览时应为 null: {value}");
+    }
+}
+
+/// 有预览时的 payload 形状：字段逐个透传，含新鲜度戳 `updated_at_ms`。
+#[tokio::test]
+async fn tool_json_payload_carries_context_fields_and_timestamp() {
+    let (sock, _guard) = start_daemon().await;
+    let client = Client::new(sock.clone());
+    let session = client
+        .create(
+            "测试",
+            "/bin/sh",
+            &["-c".into(), "cat".into()],
+            "/tmp",
+            80,
+            24,
+            1,
+        )
+        .await
+        .unwrap();
+    client
+        .update_preview_context(
+            1,
+            Some(PreviewContext {
+                path: "/repo/src/lib.rs".into(),
+                start_line: 3,
+                start_col: 1,
+                end_line: 9,
+                end_col: 4,
+                has_selection: true,
+                updated_at_ms: 1_700_000_000_000,
+            }),
+        )
+        .await
+        .unwrap();
+
+    let server = DozerMcpServer::new(Client::new(sock), session.id.clone());
+    let result = server
+        .get_preview_context(Parameters(NoParams {}))
+        .await
+        .unwrap();
+
+    let value = result.structured_content.expect("tool 返回结构化内容");
+    assert_eq!(value["path"], "/repo/src/lib.rs");
+    assert_eq!(value["start_line"], 3);
+    assert_eq!(value["start_col"], 1);
+    assert_eq!(value["end_line"], 9);
+    assert_eq!(value["end_col"], 4);
+    assert_eq!(value["has_selection"], true);
+    assert_eq!(value["updated_at_ms"], 1_700_000_000_000u64);
+    assert!(value["reason"].is_null());
 }
 
 #[tokio::test]

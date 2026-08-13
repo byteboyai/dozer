@@ -50,6 +50,7 @@ mod tests {
             end_line: 1,
             end_col: 1,
             has_selection: false,
+            updated_at_ms: 1000,
         }
     }
 

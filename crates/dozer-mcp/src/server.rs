@@ -27,7 +27,10 @@ impl DozerMcpServer {
     #[tool(
         description = "返回用户当前在 Dozer 预览面板里看的文件路径和光标/选中范围;想知道用户正在看哪段代码时调用。"
     )]
-    async fn get_preview_context(
+    /// `pub` 是为了让 `tests/*.rs`(外部 crate)能直接调真正的 tool 方法、
+    /// 断言它拼出来的 JSON 形状,而不是只测绕开 JSON 的
+    /// `fetch_context_for_test`。
+    pub async fn get_preview_context(
         &self,
         Parameters(NoParams {}): Parameters<NoParams>,
     ) -> Result<CallToolResult, McpError> {
@@ -41,6 +44,9 @@ impl DozerMcpServer {
                         "end_line": ctx.end_line,
                         "end_col": ctx.end_col,
                         "has_selection": ctx.has_selection,
+                        // 新鲜度:这份上下文是什么时候推上来的(Unix 毫秒)。
+                        // dozerd 可能比 GUI 活得久,调用方得能自己判断陈旧。
+                        "updated_at_ms": ctx.updated_at_ms,
                         "reason": null,
                     }),
                     None => json!({
@@ -50,6 +56,7 @@ impl DozerMcpServer {
                         "end_line": null,
                         "end_col": null,
                         "has_selection": null,
+                        "updated_at_ms": null,
                         "reason": "no_active_preview",
                     }),
                 };

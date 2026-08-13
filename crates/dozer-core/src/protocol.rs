@@ -56,6 +56,10 @@ pub struct PreviewContext {
     pub end_line: u32,
     pub end_col: u32,
     pub has_selection: bool,
+    /// 这份上下文被推送时的 Unix 纪元毫秒。没有它的话，一个陈旧的缓存值
+    /// （GUI 已退出但 dozerd 还活着、或用户几小时没碰过预览面板）和刚刚
+    /// 更新的值长得一模一样，调 MCP tool 的 agent 无从判断新鲜度。
+    pub updated_at_ms: u64,
 }
 
 /// 项目（甲方资产域的根；P1g）。id 为 dozerd SQLite 主键。
@@ -649,6 +653,7 @@ mod tests {
             end_line: 14,
             end_col: 1,
             has_selection: true,
+            updated_at_ms: 1_700_000_000_000,
         };
         let req = Request::UpdatePreviewContext {
             project_id: 7,
