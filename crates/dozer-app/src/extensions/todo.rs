@@ -568,23 +568,32 @@ pub fn update(
     }
 }
 
+/// Todo 面板渲染成两个独立的边框 pane(镜像 Files/Project 面板已有的
+/// "侧栏 + 内容区，中间一条可拖拽分隔线"两栏模式，不再是单个面板内部一个
+/// `row![sidebar, body]`)——调用方(`app.rs` 的 `LeftView::Todo` 分支)负责
+/// 拼 `row![sidebar_pane, divider_bar(Divider::TodoSplit, ..), content_pane]`。
+/// 左栏：面板头 + 分类导航。右栏：列表/看板/MARKDOWN 视图切换 tab + 视图
+/// 主体。
+#[allow(clippy::too_many_arguments)]
 pub fn view<'a>(
     app_state: &'a AppState,
     ws_state: &'a WorkspaceState,
     project_id: i64,
     tabs: &[SessionTabSummary],
     project_path: Option<&Path>,
-    width: Length,
-    outer: Border,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    // ---- header（保留，不去掉） ----
-    let header = column![
-        crate::homespace::home_panel_head(icons::IconKind::ListTodo, "Todo"),
-        text(format!("{} 条任务 · .dozer/todo.md", ws_state.items.len()))
-            .size(theme::font::caption())
-            .color(theme::color::DIM),
-    ]
-    .spacing(8)
+    sidebar_width: Length,
+    sidebar_outer: Border,
+    content_width: Length,
+    content_outer: Border,
+) -> (
+    Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
+    Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
+) {
+    // ---- header（挂在左栏，同 Project/Files 面板"头在列表侧"的既有惯例） ----
+    let header = container(crate::homespace::home_panel_head(
+        icons::IconKind::ListTodo,
+        "Todo",
+    ))
     .padding([20, 20]);
 
     // ---- 状态推导（一次算好，侧栏计数 + 列表渲染共用） ----
@@ -621,13 +630,23 @@ pub fn view<'a>(
         ),
     ];
 
-    // ---- 左栏：分类导航（= 原 filter 段，改为竖排带图标+计数） ----
-    let mut sidebar = column![].spacing(4).padding([12, 8]);
+    // ---- 左栏 pane：header + 分类导航 ----
+    let mut nav = column![].spacing(4).padding([12, 8]);
     for (filter, count) in counts {
-        sidebar = sidebar.push(todo_category_button(filter, count, ws_state.filter));
+        nav = nav.push(todo_category_button(filter, count, ws_state.filter));
     }
+    let sidebar_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        container(column![header, nav].height(Length::Fill))
+            .width(sidebar_width)
+            .height(Length::Fill)
+            .style(move |_t: &iced_widget::Theme| container::Style {
+                background: Some(theme::color::BG.into()),
+                border: sidebar_outer,
+                ..container::Style::default()
+            })
+            .into();
 
-    // ---- 右栏：tab 段 + 视图主体 ----
+    // ---- 右栏 pane：tab 段 + 视图主体 ----
     let tabs_bar = todo_view_tabs(ws_state.view_mode);
     let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = match ws_state
         .view_mode
@@ -636,23 +655,18 @@ pub fn view<'a>(
         TodoViewMode::Kanban => todo_kanban_view(app_state, ws_state, project_id, &states, tabs),
         TodoViewMode::Markdown => todo_markdown_view(project_path),
     };
+    let content_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        container(column![tabs_bar, body].height(Length::Fill))
+            .width(content_width)
+            .height(Length::Fill)
+            .style(move |_t: &iced_widget::Theme| container::Style {
+                background: Some(theme::color::BG.into()),
+                border: content_outer,
+                ..container::Style::default()
+            })
+            .into();
 
-    let content = column![
-        header,
-        tabs_bar,
-        row![sidebar, body].spacing(0).height(Length::Fill),
-    ]
-    .height(Length::Fill);
-
-    container(content)
-        .width(width)
-        .height(Length::Fill)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::BG.into()),
-            border: outer,
-            ..container::Style::default()
-        })
-        .into()
+    (sidebar_pane, content_pane)
 }
 
 /// 底部快速新建栏，结构对齐 `project.rs::project_footer_bar`(1px BORDER
@@ -1323,8 +1337,10 @@ fn todo_category_button<'a>(
     .into()
 }
 
-/// 右区顶部 tab 段：列表 / 看板 / MARKDOWN，选中态金色下划线。点击 →
-/// `ViewModeSet`。
+/// 右区顶部 tab 段：列表 / 看板 / MARKDOWN。视觉对齐全应用统一的"标准 tab"
+/// 样式(`app::panel_tab` 的选中态：`CARD` 底 + `BORDER` 1px 描边 + 6 圆角，
+/// 项目页签/终端会话 tab 都是这一套)，不再是这个面板自己发明的下划线
+/// 样式。点击 → `ViewModeSet`。
 fn todo_view_tabs<'a>(
     current: TodoViewMode,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -1354,7 +1370,11 @@ fn todo_view_tabs<'a>(
     .into()
 }
 
-/// 单个 tab 按钮 + 选中态金色下划线。
+/// 单个视图切换 tab：图标 + 标签，选中态 `CARD` 底 + `BORDER` 描边圆角
+/// (标准 tab 视觉，见 `todo_view_tabs` 文档)。这是纯粹的视图模式切换，没有
+/// 可关闭语义,不套 `tabs::tab_core`(那是为可关闭 tab 设计的交互内核,
+/// 强套需要传一个永远不触发的 `on_close` 并额外处理"×"淡入的悬停态，
+/// 削足适履)。
 fn todo_tab<'a>(
     icon: icons::IconKind,
     label: &'a str,
@@ -1363,37 +1383,44 @@ fn todo_tab<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let active = mode == current;
     let fg = if active {
+        theme::color::CREAM
+    } else {
+        theme::color::DIM
+    };
+    let icon_color = if active {
         theme::color::GOLD
     } else {
         theme::color::DIM
     };
-    let btn = button(
+    button(
         row![
-            icons::view(icon, crate::theme::icon_size::row(), fg),
+            icons::view(icon, crate::theme::icon_size::row(), icon_color),
             text(label).size(theme::font::caption()).color(fg),
         ]
         .spacing(6)
         .align_y(iced_widget::core::alignment::Vertical::Center),
     )
     .on_press(Message::ViewModeSet(mode))
-    .padding([8, 12])
+    .padding([6, 12])
     .style(move |_t: &iced_widget::Theme, _s| button::Style {
-        background: None,
+        background: if active {
+            Some(theme::color::CARD.into())
+        } else {
+            None
+        },
         text_color: fg,
-        ..button::Style::default()
-    });
-    let underline = container(iced_widget::Space::new())
-        .width(Length::Fill)
-        .height(Length::Fixed(2.0))
-        .style(move |_t| container::Style {
-            background: if active {
-                Some(theme::color::GOLD.into())
+        border: Border {
+            color: if active {
+                theme::color::BORDER
             } else {
-                None
+                Color::TRANSPARENT
             },
-            ..container::Style::default()
-        });
-    column![btn, underline].into()
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..button::Style::default()
+    })
+    .into()
 }
 
 /// `SystemTime` → "MM-DD HH:MM"(UTC)。不引 `chrono`,用 civil-from-days

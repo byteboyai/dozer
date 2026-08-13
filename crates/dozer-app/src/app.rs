@@ -310,6 +310,9 @@ pub struct PanelDims {
     pub files_split: f32,
     /// Project 面板配对:信息面板占左面板区宽度的比例，项目预览(右配对)拿剩下的。
     pub project_split: f32,
+    /// Todo 面板配对:分类导航占左面板区宽度的比例，列表/看板/MARKDOWN 内容
+    /// (右配对)拿剩下的。
+    pub todo_split: f32,
     /// Agent配对:Agent列表占右面板区宽度的比例，终端拿剩下的。
     pub agent_split: f32,
     /// 对话配对:对话列表占右面板区宽度的比例，对话审阅拿剩下的。
@@ -325,6 +328,7 @@ fn default_panel_dims() -> PanelDims {
         left_width: 640.0,
         files_split: theme::geometry::default_split_ratio(),
         project_split: theme::geometry::default_split_ratio(),
+        todo_split: theme::geometry::default_split_ratio(),
         agent_split: theme::geometry::default_split_ratio(),
         conversations_split: theme::geometry::default_split_ratio(),
     }
@@ -410,6 +414,7 @@ pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
         },
         files_split: clamp_split(d.files_split),
         project_split: clamp_split(d.project_split),
+        todo_split: clamp_split(d.todo_split),
         agent_split: clamp_split(d.agent_split),
         conversations_split: clamp_split(d.conversations_split),
     }
@@ -423,6 +428,8 @@ pub enum Divider {
     LeftPairSplit,
     /// Project 面板内部的配对分隔线:左边信息面板、右边项目预览。
     ProjectSplit,
+    /// Todo 面板内部的配对分隔线:左边分类导航、右边列表/看板/MARKDOWN 内容。
+    TodoSplit,
     RightPairSplit,
 }
 
@@ -582,6 +589,20 @@ pub(crate) fn apply_column_drag(
             );
             PanelDims {
                 project_split: ratio,
+                ..state.dims
+            }
+        }
+        Divider::TodoSplit => {
+            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            if pair_w <= 0.0 {
+                return state.dims;
+            }
+            let ratio = ((logical_x - theme::geometry::icon_rail_width()) / pair_w).clamp(
+                theme::geometry::min_split_ratio(),
+                theme::geometry::max_split_ratio(),
+            );
+            PanelDims {
+                todo_split: ratio,
                 ..state.dims
             }
         }
@@ -6093,16 +6114,33 @@ fn left_panel_area<'a>(
                     .project
                     .as_ref()
                     .map(|p| std::path::PathBuf::from(&p.path));
-                todo::view(
+                let (list_portion, content_portion) = split_portions(app.dims.todo_split);
+                let (sidebar_pane, content_pane) = todo::view(
                     &app.todo,
                     &ws.todo,
                     project_id,
                     &tabs,
                     project_path.as_deref(),
-                    Length::Fill,
-                    zone_pane_border(zone, ac),
-                )
-                .map(Message::Todo)
+                    Length::FillPortion(list_portion),
+                    zone_pane_border(zone, lc),
+                    Length::FillPortion(content_portion),
+                    zone_pane_border(zone, rc),
+                );
+                row![
+                    sidebar_pane.map(Message::Todo),
+                    divider_bar(
+                        Divider::TodoSplit,
+                        theme::region::project_pane()
+                            .background
+                            .unwrap_or(theme::color::BG),
+                        theme::region::preview_pane()
+                            .background
+                            .unwrap_or(theme::color::BG),
+                    ),
+                    content_pane.map(Message::Todo),
+                ]
+                .width(Length::Fill)
+                .into()
             }
             LeftView::Project => {
                 let (list_portion, content_portion) = split_portions(app.dims.project_split);

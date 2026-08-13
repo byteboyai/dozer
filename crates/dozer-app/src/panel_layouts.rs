@@ -34,6 +34,7 @@ fn legacy_global_dims(layout_path: &Path) -> PanelDims {
             left_width: v.get("left_width").and_then(num).unwrap_or_default(),
             files_split: v.get("files_split").and_then(num).unwrap_or_default(),
             project_split: v.get("project_split").and_then(num).unwrap_or_default(),
+            todo_split: v.get("todo_split").and_then(num).unwrap_or_default(),
             agent_split: v.get("agent_split").and_then(num).unwrap_or_default(),
             conversations_split: v
                 .get("conversations_split")
