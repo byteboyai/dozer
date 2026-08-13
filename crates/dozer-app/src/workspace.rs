@@ -1539,7 +1539,7 @@ impl Workspace {
 pub(crate) fn spawn_project_git_refresh(project_id: i64, repo_path: PathBuf, io: &ShellIo) {
     let proxy = io.proxy.clone();
     io.handle.spawn(async move {
-        let (b, d, s, w) = tokio::task::spawn_blocking({
+        let (b, d, s, w, r) = tokio::task::spawn_blocking({
             let repo_path = repo_path.clone();
             move || {
                 (
@@ -1547,16 +1547,17 @@ pub(crate) fn spawn_project_git_refresh(project_id: i64, repo_path: PathBuf, io:
                     delivery::is_dirty(&repo_path),
                     delivery::file_statuses(&repo_path),
                     delivery::worktrees(&repo_path),
+                    delivery::remote_url(&repo_path),
                 )
             }
         })
         .await
-        .unwrap_or((None, false, HashMap::new(), Vec::new()));
+        .unwrap_or((None, false, HashMap::new(), Vec::new(), None));
         let _ = proxy.send_event(Message::Files(files::Message::StatusesRefreshed(
             project_id, s,
         )));
         let _ = proxy.send_event(Message::Project(project::Message::GitRefreshed(
-            project_id, b, d, w,
+            project_id, b, d, w, r,
         )));
     });
 }

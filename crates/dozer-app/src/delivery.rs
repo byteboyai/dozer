@@ -380,6 +380,35 @@ pub fn branch(repo: &Path) -> Option<String> {
     head.shorthand().ok().map(str::to_string)
 }
 
+/// `git remote get-url origin`;没有 origin 时退化取 `git remote -v` 第一条
+/// 记录的 fetch URL;完全没有 remote 或非 git 目录 → `None`。
+pub fn remote_url(repo: &Path) -> Option<String> {
+    let out = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    if out.status.success() {
+        let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !url.is_empty() {
+            return Some(url);
+        }
+    }
+    let out = Command::new("git")
+        .args(["remote", "-v"])
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .map(|s| s.to_string())
+}
+
 /// 所有本地分支名(按 refs/heads 前缀,short 名)。非 git 仓库返回 None;
 /// git 仓库但没有分支(空仓未提交)返回 Some(空 vec)。
 pub fn local_branches(repo: &Path) -> Option<Vec<String>> {
@@ -1048,5 +1077,60 @@ mod tests {
         // 无 ref：与上回合 HEAD 比
         assert!(delivery_pending(false, Some("h2"), None, Some("h1")));
         assert!(!delivery_pending(false, Some("h1"), None, Some("h1")));
+    }
+
+    #[test]
+    fn remote_url_reads_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["remote", "add", "origin", "https://example.com/x.git"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert_eq!(
+            remote_url(dir.path()),
+            Some("https://example.com/x.git".to_string())
+        );
+    }
+
+    #[test]
+    fn remote_url_falls_back_to_first_remote_without_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["remote", "add", "upstream", "https://example.com/y.git"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert_eq!(
+            remote_url(dir.path()),
+            Some("https://example.com/y.git".to_string())
+        );
+    }
+
+    #[test]
+    fn remote_url_none_without_any_remote() {
+        let dir = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert_eq!(remote_url(dir.path()), None);
+    }
+
+    #[test]
+    fn remote_url_none_for_non_git_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(remote_url(dir.path()), None);
     }
 }

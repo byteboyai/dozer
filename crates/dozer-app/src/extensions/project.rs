@@ -14,6 +14,8 @@ pub struct WorkspaceState {
     dirty: bool,
     worktrees: Vec<WorktreeInfo>,
     project_acceptance_count: Option<u64>,
+    /// git remote 的 fetch URL(`delivery::remote_url`)。无 remote/非 git → None。
+    remote_url: Option<String>,
     /// 项目名称行内编辑态(None=未在编辑)。
     name_editing: Option<String>,
     error: Option<String>,
@@ -39,13 +41,13 @@ impl WorkspaceState {
     }
 }
 
-/// 组合 git 刷新结果里跟 Project 有关的部分(`branch`/`dirty`/`worktrees`)、
-/// 验收次数、daemon 改名结果。`GitRefreshed`/`AcceptanceCountLoaded`/
-/// `NameRenamed` 由内核分发,带 `project_id`,走 `with_project`;其余是用户
-/// 交互消息。
+/// 组合 git 刷新结果里跟 Project 有关的部分(`branch`/`dirty`/`worktrees`/
+/// `remote_url`)、验收次数、daemon 改名结果。`GitRefreshed`/
+/// `AcceptanceCountLoaded`/`NameRenamed` 由内核分发,带 `project_id`,走
+/// `with_project`;其余是用户交互消息。
 #[derive(Debug, Clone)]
 pub enum Message {
-    GitRefreshed(i64, Option<String>, bool, Vec<WorktreeInfo>),
+    GitRefreshed(i64, Option<String>, bool, Vec<WorktreeInfo>, Option<String>),
     AcceptanceCountLoaded(i64, Option<u64>),
     /// daemon 改名结果。带 `project_id`,走 `with_project` 路由。
     NameRenamed(i64, Result<dozer_core::protocol::ProjectInfo, String>),
@@ -67,10 +69,11 @@ pub fn update(
     emit: impl Fn(Message) + Send + 'static,
 ) {
     match msg {
-        Message::GitRefreshed(_, branch, dirty, worktrees) => {
+        Message::GitRefreshed(_, branch, dirty, worktrees, remote_url) => {
             ws_state.branch = branch;
             ws_state.dirty = dirty;
             ws_state.worktrees = worktrees;
+            ws_state.remote_url = remote_url;
         }
         Message::AcceptanceCountLoaded(_, n) => {
             ws_state.project_acceptance_count = n;
@@ -218,6 +221,29 @@ pub fn view<'a>(
         );
     }
 
+    content = content.push(
+        text("根目录")
+            .size(theme::font::label())
+            .color(theme::color::DIM),
+    );
+    content = content.push(
+        text(p.path.clone())
+            .size(theme::font::caption())
+            .color(theme::color::BODY),
+    );
+    if let Some(url) = &ws_state.remote_url {
+        content = content.push(
+            text("Git 仓库")
+                .size(theme::font::label())
+                .color(theme::color::DIM),
+        );
+        content = content.push(
+            text(url.clone())
+                .size(theme::font::caption())
+                .color(theme::color::BODY),
+        );
+    }
+
     if let Some(err) = &ws_state.error {
         content = content.push(
             text(format!("⚠ {err}"))
@@ -252,12 +278,18 @@ mod tests {
     }
 
     #[test]
-    fn git_refreshed_updates_three_fields() {
+    fn git_refreshed_updates_four_fields() {
         let mut ws = new_ws();
         let rt = tokio::runtime::Runtime::new().unwrap();
         update(
             &mut ws,
-            Message::GitRefreshed(1, Some("main".to_string()), true, vec![]),
+            Message::GitRefreshed(
+                1,
+                Some("main".to_string()),
+                true,
+                vec![],
+                Some("https://x.git".into()),
+            ),
             1,
             "名字",
             &test_client(),
@@ -267,6 +299,7 @@ mod tests {
         assert_eq!(ws.branch.as_deref(), Some("main"));
         assert!(ws.dirty);
         assert_eq!(ws.worktrees().len(), 0);
+        assert_eq!(ws.remote_url.as_deref(), Some("https://x.git"));
     }
 
     #[test]
