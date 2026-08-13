@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(rail(), 16.0);
         assert_eq!(row(), 14.0);
         assert_eq!(chevron(), 12.0);
-        assert_eq!(tab_arrow(), 10.0);
+        assert_eq!(tab_arrow(), 9.0);
         assert_eq!(scale(), 1.0);
     }
 

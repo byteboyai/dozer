@@ -49,8 +49,13 @@ struct Geometry {
     tab_bar_avail_px: f32,
     /// 左/右图标栏按钮（rail_icon_button）的方形命中区边长（设计基准 32）。
     rail_button_size: f32,
-    /// 顶栏页签翻页箭头按钮（tab_arrow_button）方形命中区边长（设计基准 24）。
+    /// tab 栏内小方形图标按钮通用命中区边长（关闭 × / 星标 / 收藏夹，
+    /// 设计基准 24）。翻页箭头走更小的 `tab_arrow_button_size`。
     tab_button_size: f32,
+    /// 翻页箭头按钮专属命中区边长，小于 `tab_button_size`（设计基准 18）。
+    /// `tab_button_size` 同时给关闭 ×/星标/收藏夹按钮用，不能跟着箭头一起
+    /// 缩小；箭头独立一个更紧凑的方形，让 `<`/`>` 的横向留白随之变窄。
+    tab_arrow_button_size: f32,
     /// 右键菜单项（menu_item）固定宽（设计基准 180）；`context_menu_width`
     /// 由它 + 菜单列表左右 padding 推导，两者需同步缩放。
     menu_item_width: f32,
@@ -254,6 +259,12 @@ pub fn tab_button_size() -> f32 {
     GEOMETRY.tab_button_size * icon_size::scale()
 }
 
+/// 翻页箭头（`tab_arrow_button`）专属方形命中区边长，已含全局 scale。比
+/// `tab_button_size` 小，配合更小的 `tab_arrow` 字形让 `<`/`>` 横向留白更窄。
+pub fn tab_arrow_button_size() -> f32 {
+    GEOMETRY.tab_arrow_button_size * icon_size::scale()
+}
+
 /// 右键菜单项固定宽，已含全局 scale（与 `context_menu_width` 同步缩放）。
 pub fn menu_item_width() -> f32 {
     GEOMETRY.menu_item_width * icon_size::scale()
@@ -351,6 +362,7 @@ mod tests {
         assert_eq!(tab_bar_avail_px(), 360.0);
         assert_eq!(rail_button_size(), 32.0);
         assert_eq!(tab_button_size(), 24.0);
+        assert_eq!(tab_arrow_button_size(), 18.0);
         assert_eq!(menu_item_width(), 160.0);
         assert_eq!(menu_gap(), 8.0);
         assert_eq!(menu_pad_v(), 6.0);

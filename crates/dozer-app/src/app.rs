@@ -5953,8 +5953,12 @@ pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
         crate::theme::icon_size::tab_arrow(),
         color,
     ))
-    .width(Length::Fixed(crate::theme::geometry::tab_button_size()))
-    .height(Length::Fixed(crate::theme::geometry::tab_button_size()))
+    .width(Length::Fixed(
+        crate::theme::geometry::tab_arrow_button_size(),
+    ))
+    .height(Length::Fixed(
+        crate::theme::geometry::tab_arrow_button_size(),
+    ))
     .padding(0)
     .style(move |_theme, status| {
         let base = button::Style {
