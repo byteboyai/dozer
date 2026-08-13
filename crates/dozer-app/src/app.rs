@@ -1086,12 +1086,21 @@ pub type ProjectId = i64;
 /// Ctrl + / Ctrl - 每次触发的相对缩放步近因子（1.1 ≈ 每按一次放大 10%）。
 const UI_ZOOM_STEP: f32 = 1.1;
 
+/// 终端相关消息(键盘/滚轮/选区/粘贴)该写去右侧共享终端条还是 SSH 面板
+/// 自己的内嵌终端——两者可能同时在屏幕上,裸消息本身不带这个信息,靠
+/// canvas 渲染时(`term_view::view`)烘焙进它构造的每条消息里。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TermTarget {
+    Shared,
+    SshPanel,
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     /// 终端聚焦时的键盘/IME 输入字节（已经过 `keymap` 翻译）。直接写给
     /// 当前激活 tab 对应的 daemon 会话（`client.write`）——不再本地
     /// echo，回显完全走 PTY 真实回路（daemon → attach 流 → `TermOutput`）。
-    TermInput(Vec<u8>),
+    TermInput(TermTarget, Vec<u8>),
     /// attach 事件流转发来的输出字节，`usize` 是 tab 的稳定 id
     /// （`SessionTab::tab_id`，不是 vec 位置——关闭 tab 会移动位置，
     /// 但 id 不变，事件流路由必须认 id）。首字段的项目归属见 [`ProjectId`]
@@ -1201,7 +1210,7 @@ pub enum Message {
     DaemonError(String),
     /// 终端滚轮：视口向历史方向（正数）/活动区方向（负数）滚动的行数。
     /// 只作用于当前激活 tab（滚轮事件来自它的 canvas）。
-    TermScroll(i32),
+    TermScroll(TermTarget, i32),
     /// 终端 tab 栏箭头翻页（`true`=右/`false`=左）。一次翻 2 个 tab；
     /// 上界不在此钳，渲染时 `tab_window` 钳制显示（P1L T5 验收返工）。
     TermTabScroll(bool),
@@ -1209,12 +1218,12 @@ pub enum Message {
     PreviewTabScroll(bool),
     /// 终端左键按下：在视口格 `(col, row)` 起新选区（`right` = 按点在
     /// 格子右半）。
-    TermSelStart { col: usize, row: usize, right: bool },
+    TermSelStart { target: TermTarget, col: usize, row: usize, right: bool },
     /// 终端拖拽：选区末端更新到视口格 `(col, row)`。
-    TermSelUpdate { col: usize, row: usize, right: bool },
+    TermSelUpdate { target: TermTarget, col: usize, row: usize, right: bool },
     /// ⌘V 粘贴剪贴板文本：按会话的 bracketed paste 模式决定是否包裹
     /// `ESC[200~`/`ESC[201~` 后写入 daemon。
-    TermPaste(String),
+    TermPaste(TermTarget, String),
     /// 预览:打开本地文件为新 tab(路径已由入口侧确认存在,来自项目树点击/
     /// 会话恢复;预览面板本身已不再有"打开文件…"按钮或地址栏)。
     PreviewOpenPath(PathBuf),
@@ -2764,7 +2773,7 @@ impl App {
 
     pub fn update(&mut self, message: Message) {
         match message {
-            Message::TermInput(bytes) => self.term_input(bytes),
+            Message::TermInput(target, bytes) => self.term_input(target, bytes),
             Message::TermOutput(project_id, tab_id, bytes) => {
                 self.term_output(project_id, tab_id, bytes)
             }
@@ -3019,9 +3028,13 @@ impl App {
             }
             Message::Noop => {}
             Message::DaemonError(message) => self.daemon_error = Some(message),
-            Message::TermScroll(delta) => {
+            Message::TermScroll(target, delta) => {
                 self.with_focused_project(|ws, _io| {
-                    if let Some(tab) = ws.tabs.get_mut(ws.active) {
+                    let tab = match target {
+                        TermTarget::Shared => ws.tabs.get_mut(ws.active),
+                        TermTarget::SshPanel => ws.ssh_active_tab_mut(),
+                    };
+                    if let Some(tab) = tab {
                         tab.model.scroll_display(delta);
                     }
                 });
@@ -3044,21 +3057,29 @@ impl App {
                     }
                 });
             }
-            Message::TermSelStart { col, row, right } => {
+            Message::TermSelStart { target, col, row, right } => {
                 self.with_focused_project(|ws, _io| {
-                    if let Some(tab) = ws.tabs.get_mut(ws.active) {
+                    let tab = match target {
+                        TermTarget::Shared => ws.tabs.get_mut(ws.active),
+                        TermTarget::SshPanel => ws.ssh_active_tab_mut(),
+                    };
+                    if let Some(tab) = tab {
                         tab.model.selection_start(col, row, right);
                     }
                 });
             }
-            Message::TermSelUpdate { col, row, right } => {
+            Message::TermSelUpdate { target, col, row, right } => {
                 self.with_focused_project(|ws, _io| {
-                    if let Some(tab) = ws.tabs.get_mut(ws.active) {
+                    let tab = match target {
+                        TermTarget::Shared => ws.tabs.get_mut(ws.active),
+                        TermTarget::SshPanel => ws.ssh_active_tab_mut(),
+                    };
+                    if let Some(tab) = tab {
                         tab.model.selection_update(col, row, right);
                     }
                 });
             }
-            Message::TermPaste(text) => self.term_paste(text),
+            Message::TermPaste(target, text) => self.term_paste(target, text),
             Message::PreviewOpenPath(path) => self.preview_open_path(path),
             Message::PreviewSelectTab(idx) => self.preview_select_tab(idx),
             Message::PreviewCloseTab(idx) => {
@@ -4106,21 +4127,36 @@ impl App {
         }
     }
 
-    fn term_input(&mut self, bytes: Vec<u8>) {
+    fn term_input(&mut self, target: TermTarget, bytes: Vec<u8>) {
         // 终端不在屏上时丢弃按键(不报错、不写 PTY):否则用户在读
         // 对话审阅时敲的回车/方向键会静默提交给隐藏在后面的 agent
         // 会话(Fix round 2 #3)。
-        if !self.terminal_visible() {
+        let visible = match target {
+            TermTarget::Shared => self.terminal_visible(),
+            TermTarget::SshPanel => self.ssh_terminal_visible(), // Task 12 新增
+        };
+        if !visible {
             return;
         }
         self.with_focused_project(|ws, io| {
-            // 键入即回底 + 清选区：正在回看历史时一敲键盘，视口跳回
-            // 实时输出（常规终端语义），再把字节写给 daemon。
-            if let Some(tab) = ws.tabs.get_mut(ws.active) {
-                tab.model.scroll_to_bottom();
-                tab.model.selection_clear();
+            match target {
+                TermTarget::Shared => {
+                    // 键入即回底 + 清选区：正在回看历史时一敲键盘，视口跳回
+                    // 实时输出（常规终端语义），再把字节写给 daemon。
+                    if let Some(tab) = ws.tabs.get_mut(ws.active) {
+                        tab.model.scroll_to_bottom();
+                        tab.model.selection_clear();
+                    }
+                    ws.send_input(io, bytes);
+                }
+                TermTarget::SshPanel => {
+                    if let Some(tab) = ws.ssh_active_tab_mut() {
+                        tab.model.scroll_to_bottom();
+                        tab.model.selection_clear();
+                    }
+                    ws.ssh_send_input(io, bytes);
+                }
             }
-            ws.send_input(io, bytes);
         });
     }
 
@@ -4153,19 +4189,47 @@ impl App {
         });
     }
 
-    fn term_paste(&mut self, text: String) {
+    fn term_paste(&mut self, target: TermTarget, text: String) {
         // 同 TermInput 的可见性闸门(Fix round 3):⌘V 粘贴走同一条
         // PTY 写入路径,粘贴内容若含换行还会在看不见的会话里直接
         // 执行,比单个按键更危险,必须同样拦截。
-        if !self.terminal_visible() {
+        let visible = match target {
+            TermTarget::Shared => self.terminal_visible(),
+            TermTarget::SshPanel => self.ssh_terminal_visible(),
+        };
+        if !visible {
             return;
         }
         self.with_focused_project(move |ws, io| {
-            let Some(tab) = ws.tabs.get_mut(ws.active) else {
+            let bracketed = match target {
+                TermTarget::Shared => ws.tabs.get(ws.active).map(|t| t.model.bracketed_paste()),
+                TermTarget::SshPanel => {
+                    ws.ssh_tabs
+                        .iter()
+                        .find(|t| {
+                            ws.ssh_active.as_ref().is_some_and(|(h, _)| {
+                                t.info.id.strip_prefix("ssh:") == Some(h.as_str())
+                            })
+                        })
+                        .map(|t| t.model.bracketed_paste())
+                }
+            };
+            let Some(bracketed) = bracketed else {
                 return;
             };
-            tab.model.scroll_to_bottom();
-            let bytes = if tab.model.bracketed_paste() {
+            match target {
+                TermTarget::Shared => {
+                    if let Some(tab) = ws.tabs.get_mut(ws.active) {
+                        tab.model.scroll_to_bottom();
+                    }
+                }
+                TermTarget::SshPanel => {
+                    if let Some(tab) = ws.ssh_active_tab_mut() {
+                        tab.model.scroll_to_bottom();
+                    }
+                }
+            }
+            let bytes = if bracketed {
                 let mut b = b"\x1b[200~".to_vec();
                 b.extend_from_slice(text.as_bytes());
                 b.extend_from_slice(b"\x1b[201~");
@@ -4173,7 +4237,10 @@ impl App {
             } else {
                 text.into_bytes()
             };
-            ws.send_input(io, bytes);
+            match target {
+                TermTarget::Shared => ws.send_input(io, bytes),
+                TermTarget::SshPanel => ws.ssh_send_input(io, bytes),
+            }
         });
     }
 
