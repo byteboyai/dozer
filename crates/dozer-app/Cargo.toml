@@ -65,6 +65,12 @@ gleisbau = "0.7"
 git2 = "0.21"
 notify = "8"
 russh = "0.62.5"
+# SFTP 客户端(阶段 3):在 russh channel 上跑 SFTP 子系统,查过 docs.rs
+# 确认 2.4.0 的公开 API(SftpSession::new(stream)/read_dir/read/write/
+# create_dir)与本项目 russh 0.62 线可以直接搭配(russh_sftp::client::
+# SftpSession::new 只要求 stream 满足 AsyncRead+AsyncWrite+Unpin+Send+
+# 'static,不绑定具体 russh 版本)。
+russh-sftp = "2.4"
 # url：数据库面板"直接粘贴连接 URI"解析用(已是 workspace 传递依赖,无新增编译物)。
 url = "2"
 # sysinfo：footbar 系统信息条(CPU/RAM/网络/磁盘)的统一数据源。
