@@ -60,10 +60,11 @@ impl WorkspaceState {
         self.name_editing.is_some()
     }
 
-    /// 供内核 `Workspace::blur_inputs` 调用——点击输入框外时取消名称编辑
-    /// (不保存半输入)。
-    pub fn cancel_name_edit(&mut self) {
-        self.name_editing = None;
+    /// 供内核 `App::blur_inputs` 调用——失焦时取出当前编辑中的名称缓冲。
+    /// 返回 `Some(raw)` 时由内核发起 daemon 改名(改动且非空才真正发请求,
+    /// 见 `App::blur_inputs`);`None` 表示未处于编辑态,无需处理。
+    pub fn take_name_edit(&mut self) -> Option<String> {
+        self.name_editing.take()
     }
 
     /// 供内核 `Workspace::blur_inputs` 调用——失焦时把当前编辑态直接写盘

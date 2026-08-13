@@ -472,10 +472,13 @@ impl WorkspaceState {
         self.name_editing.is_some()
     }
 
-    /// 供内核 `Workspace::blur_inputs` 调用——点击输入框外时取消名称编辑
-    /// (不保存半输入)。
-    pub fn cancel_name_edit(&mut self) {
-        self.name_editing = None;
+    /// 供内核 `App::blur_inputs` 调用——失焦时取出当前编辑中的名称缓冲。
+    /// 返回 `Some(raw)` 时由内核发起 daemon 改名(改动且非空才真正发请求,
+    /// 见 `App::blur_inputs`);`None` 表示未处于编辑态。行为与描述字段的
+    /// "失焦写盘"对齐——不再像早期版本那样直接丢弃半输入(那会导致"改名
+    /// 无法保存"的观感)。
+    pub fn take_name_edit(&mut self) -> Option<String> {
+        self.name_editing.take()
     }
 }
 ```
@@ -873,13 +876,52 @@ Message::Project(msg) => {
 .. })` 的闭包写法;两种写法在这个文件里都存在,选哪种取决于该分支是否已经在
 用 `with_project`——这两条 `Message::Project` 分支现状是内联的,保持内联。)
 
-- [ ] **Step 8: `Workspace::blur_inputs` 改调用**
+- [ ] **Step 8: `App::blur_inputs` 改成"失焦保存"名称**
 
-`self.project_panel.cancel_title_edit();` 改成:
+名称编辑不在 `Workspace::blur_inputs` 里丢弃(早期版本调用
+`cancel_name_edit()` 直接清空,导致点开别处就丢改名——已被修复)。改由
+`App::blur_inputs` 取出缓冲并发起 daemon 改名:
+
+`Workspace::blur_inputs` 里**删除** `self.project_panel.cancel_name_edit();`
+这一行(名称缓冲交由上层处理);`App::blur_inputs` 改为:
 
 ```rust
-self.project_panel.cancel_name_edit();
+pub fn blur_inputs(&mut self) {
+    let Some(ws) = self.active_workspace_mut() else {
+        return;
+    };
+    // 先取出名称编辑缓冲,再交给 `Workspace::blur_inputs` 清其它编辑态,
+    // 避免顺序问题丢失半输入。
+    let pending_name = ws.project_panel.take_name_edit();
+    let project = ws.project.clone();
+    ws.blur_inputs();
+    if let (Some(p), Some(raw)) = (project, pending_name) {
+        let name = raw.trim().to_string();
+        let project_id = p.id;
+        let current_name = p.name.clone();
+        if !name.is_empty() && name != current_name {
+            let client = self.client.clone();
+            let handle = self.handle.clone();
+            let proxy = self.proxy.clone();
+            let emit = move |m: project::Message| {
+                let _ = proxy.send_event(Message::Project(m));
+            };
+            handle.spawn(async move {
+                let result = client
+                    .rename_project(project_id, &name)
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|opt| opt.ok_or_else(|| "项目不存在".to_string()));
+                emit(project::Message::NameRenamed(project_id, result));
+            });
+        }
+    }
+}
 ```
+
+> 注意:`Workspace::blur_inputs` 仍保留描述字段的 `submit_description_edit_on_blur`
+> (本地文件写盘、无需网络),只把名称那一行去掉——名称改名走 daemon 往返,
+> 必须在持有 `client`/`handle`/`proxy` 的 `App` 层 spawn。
 
 - [ ] **Step 9: `main.rs` 键盘路由链改名**
 
@@ -1959,7 +2001,9 @@ impl WorkspaceState {
         }
     }
 
-    // worktrees/name_editing_is_some/cancel_name_edit 三个既有访问器不变。
+    // worktrees/name_editing_is_some/take_name_edit 三个既有访问器不变
+    // (take_name_edit 取代早期的 cancel_name_edit:失焦时取缓冲交 App 层保存,
+    // 不再丢弃半输入)。
 }
 ```
 

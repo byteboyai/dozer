@@ -1572,7 +1572,8 @@ impl Workspace {
         self.acceptance.clear_comment_editing();
         self.files.cancel_tree_edit();
         self.files.cancel_search_edit();
-        self.project_panel.cancel_name_edit();
+        // 名称编辑不在失焦时丢弃——改由 `App::blur_inputs` 取出缓冲并发起
+        // daemon 改名(改动且非空才发请求),与描述字段"失焦写盘"行为对齐。
         if let Some(project) = self.project.as_ref() {
             self.project_panel
                 .submit_description_edit_on_blur(std::path::Path::new(&project.path));

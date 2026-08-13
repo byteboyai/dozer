@@ -275,6 +275,36 @@ pub enum WorkspaceSlot {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ShellLayout {
+    /// 上次退出时的窗口逻辑尺寸(宽,高)。`main.rs` 建窗时读它决定初始
+    /// `with_inner_size`,取代写死的 `theme::geometry::initial_window_size()`；`App::
+    /// persist_window_size_on_exit` 在 `WindowEvent::CloseRequested` 时
+    /// 写回。跟其余字段一样走 `#[serde(default)]`,老 `layout.json` 缺这
+    /// 两个字段时退化成 `theme::geometry::initial_window_size()`,不影响其余已存的偏好。
+    ///
+    /// 左右面板区的宽度/分割比例(`left_width` 与四个 split)已迁进每项目
+    /// `PanelLayout`(见 `PanelDims`/`panel_layouts.json`),`ShellLayout`
+    /// 不再持有——它们是 per-project 偏好,切项目要各自换,放这里会全局
+    /// 共享(见切换项目 bug)。只有窗口尺寸是全局的,留在这里。
+    pub window_width: f32,
+    pub window_height: f32,
+}
+
+impl Default for ShellLayout {
+    fn default() -> Self {
+        Self {
+            window_width: theme::geometry::initial_window_size().0,
+            window_height: theme::geometry::initial_window_size().1,
+        }
+    }
+}
+
+/// 左右面板区各维度尺寸(每项目一份)。原来是 `ShellLayout` 的字段(全局共享),
+/// 迁进 `PanelDims` 后挂在每项目 `PanelLayout` 上,按项目 id 记到
+/// `panel_layouts.json`。`left_width` 是左面板区宽度;四个 split 是各配对视图
+/// 内部的分割比例。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PanelDims {
     pub left_width: f32,
     /// 文件列表配对:项目树占左面板区宽度的比例，文件预览拿剩下的。
     pub files_split: f32,
@@ -284,26 +314,25 @@ pub struct ShellLayout {
     pub agent_split: f32,
     /// 对话配对:对话列表占右面板区宽度的比例，对话审阅拿剩下的。
     pub conversations_split: f32,
-    /// 上次退出时的窗口逻辑尺寸(宽,高)。`main.rs` 建窗时读它决定初始
-    /// `with_inner_size`,取代写死的 `theme::geometry::initial_window_size()`；`App::
-    /// persist_window_size_on_exit` 在 `WindowEvent::CloseRequested` 时
-    /// 写回。跟其余字段一样走 `#[serde(default)]`,老 `layout.json` 缺这
-    /// 两个字段时退化成 `theme::geometry::initial_window_size()`,不影响其余已存的偏好。
-    pub window_width: f32,
-    pub window_height: f32,
 }
 
-impl Default for ShellLayout {
+/// 每项目尺寸的默认值(数值来源统一从这取,迁走的 `ShellLayout::default()`
+/// 就是这组)。作为 `PanelDims::default()`。
+/// 四个 split 用同一个 `default_split_ratio()`:所有左右双栏 zone(文件/项目/
+/// Agent/对话)的初始宽度分配统一。
+fn default_panel_dims() -> PanelDims {
+    PanelDims {
+        left_width: 640.0,
+        files_split: theme::geometry::default_split_ratio(),
+        project_split: theme::geometry::default_split_ratio(),
+        agent_split: theme::geometry::default_split_ratio(),
+        conversations_split: theme::geometry::default_split_ratio(),
+    }
+}
+
+impl Default for PanelDims {
     fn default() -> Self {
-        Self {
-            left_width: 640.0,
-            files_split: 0.35,
-            project_split: 0.5,
-            agent_split: 0.4,
-            conversations_split: 0.4,
-            window_width: theme::geometry::initial_window_size().0,
-            window_height: theme::geometry::initial_window_size().1,
-        }
+        default_panel_dims()
     }
 }
 
@@ -319,6 +348,10 @@ pub(crate) struct PanelLayout {
     pub right_view: RightView,
     pub left_collapsed: bool,
     pub right_collapsed: bool,
+    /// 本项目的面板区尺寸(左宽 + 四个 split)。`#[serde(default)]` 对老
+    /// `panel_layouts.json` 缺尺寸字段时补 `PanelDims::default()`;是否用
+    /// 全局旧值/12% 回填见 `panel_layouts::load_from`。
+    pub dims: PanelDims,
 }
 
 impl Default for PanelLayout {
@@ -328,39 +361,18 @@ impl Default for PanelLayout {
             right_view: RightView::Agent,
             left_collapsed: false,
             right_collapsed: false,
+            dims: PanelDims::default(),
         }
     }
 }
 
 /// 把从磁盘读回来的 `ShellLayout` 夹进合法范围(`layout::load_from` 调用)。
-/// 三个 split 用与拖拽同一对上下界:比例恰为 0.0/1.0 时 `split_portions`
-/// 会给出 `FillPortion(0)`,那一块在 flex 里拿不到任何宽度、整块消失;
-/// `left_width` 只保下限(上限依赖窗口宽,由渲染/几何时刻的
-/// `clamp_left_width` 负责,不在这里写死)。`window_width`/`window_height`
-/// 同样只夹下限(`theme::geometry::min_window_width()`/`theme::geometry::min_window_height()`,建窗时还有
-/// `with_min_inner_size` 兜底),非法值(非有限数、缺字段的 0.0)退化成
+/// 迁走面板尺寸后只剩窗口尺寸:夹下限(`theme::geometry::min_window_width()`/
+/// `theme::geometry::min_window_height()`,建窗时还有 `with_min_inner_size`
+/// 兜底),非法值(非有限数、缺字段的 0.0)退化成
 /// `theme::geometry::initial_window_size()`。
 pub fn sanitize_shell_layout(l: ShellLayout) -> ShellLayout {
-    let clamp_split = |v: f32| {
-        if v.is_finite() {
-            v.clamp(
-                theme::geometry::min_split_ratio(),
-                theme::geometry::max_split_ratio(),
-            )
-        } else {
-            ShellLayout::default().files_split
-        }
-    };
     ShellLayout {
-        left_width: if l.left_width.is_finite() {
-            l.left_width.max(theme::geometry::min_zone_width())
-        } else {
-            ShellLayout::default().left_width
-        },
-        files_split: clamp_split(l.files_split),
-        project_split: clamp_split(l.project_split),
-        agent_split: clamp_split(l.agent_split),
-        conversations_split: clamp_split(l.conversations_split),
         window_width: if l.window_width.is_finite() && l.window_width > 0.0 {
             l.window_width.max(theme::geometry::min_window_width())
         } else {
@@ -371,6 +383,35 @@ pub fn sanitize_shell_layout(l: ShellLayout) -> ShellLayout {
         } else {
             theme::geometry::initial_window_size().1
         },
+    }
+}
+
+/// 把从磁盘读回来(或首次默认算出)的面板区尺寸夹进合法范围(`panel_layouts::
+/// load_from` 与每项目 adopt 调用)。四个 split 用与拖拽同一对上下界:比例恰为
+/// 0.0/1.0 时 `split_portions` 会给出 `FillPortion(0)`,那一块在 flex 里拿不到
+/// 任何宽度、整块消失;`left_width` 只保下限(上限依赖窗口宽,由渲染/几何时刻
+/// 的 `clamp_left_width` 负责,不在这里写死)。
+pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
+    let clamp_split = |v: f32| {
+        if v.is_finite() {
+            v.clamp(
+                theme::geometry::min_split_ratio(),
+                theme::geometry::max_split_ratio(),
+            )
+        } else {
+            PanelDims::default().files_split
+        }
+    };
+    PanelDims {
+        left_width: if d.left_width.is_finite() {
+            d.left_width.max(theme::geometry::min_zone_width())
+        } else {
+            PanelDims::default().left_width
+        },
+        files_split: clamp_split(d.files_split),
+        project_split: clamp_split(d.project_split),
+        agent_split: clamp_split(d.agent_split),
+        conversations_split: clamp_split(d.conversations_split),
     }
 }
 
@@ -414,6 +455,9 @@ pub struct TabDrag {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ShellState {
     pub layout: ShellLayout,
+    /// 当前活跃项目面板区尺寸(左宽 + 四个 split)。每项目一份,由
+    /// `App::adopt_panel_layout` 切项目时灌入,`apply_column_drag` 拖拽后写回。
+    pub dims: PanelDims,
     pub left_view: LeftView,
     pub left_collapsed: bool,
     pub right_view: RightView,
@@ -462,7 +506,7 @@ pub(crate) fn left_zone_width(window_width: f32, state: &ShellState) -> f32 {
     } else if state.right_collapsed {
         zones_width(window_width)
     } else {
-        clamp_left_width(window_width, state.layout.left_width)
+        clamp_left_width(window_width, state.dims.left_width)
     }
 }
 
@@ -484,6 +528,16 @@ fn pair_content_width(zone_width: f32) -> f32 {
     (zone_width - theme::geometry::divider_width()).max(0.0)
 }
 
+/// 配对视图内部"列表侧"与"内容侧"的宽度,按 `split`(列表侧占比)从
+/// `pair_w` 分出。四个左右双栏 zone(左:文件/项目,右:Agent/对话)统一走
+/// 这一份公式:`split` 恒代表列表侧占比,内容侧拿剩下的 `1 - split`。
+/// 渲染/几何/预览 bounds 三侧都要共用,不许各写各的 `pair_w * split` /
+/// `pair_w * (1.0 - split)`,否则一处改动、别处漂移(见 `pair_content_width`
+/// 同条原则)。
+fn pair_list_content_width(pair_w: f32, split: f32) -> (f32, f32) {
+    (pair_w * split, pair_w * (1.0 - split))
+}
+
 /// 拖拽某条分隔线到窗口逻辑 x 坐标 `logical_x` 后的新 `ShellLayout`。
 /// `LeftPairSplit`/`RightPairSplit` 写哪个 split 字段取决于当前那一侧的
 /// 视图选择(比如右侧当前是"对话"就写 `conversations_split`，不是
@@ -493,49 +547,49 @@ pub(crate) fn apply_column_drag(
     divider: Divider,
     window_width: f32,
     logical_x: f32,
-) -> ShellLayout {
+) -> PanelDims {
     match divider {
         Divider::LeftRight => {
             let new_left =
                 clamp_left_width(window_width, logical_x - theme::geometry::icon_rail_width());
-            ShellLayout {
+            PanelDims {
                 left_width: new_left,
-                ..state.layout
+                ..state.dims
             }
         }
         Divider::LeftPairSplit => {
             let pair_w = pair_content_width(left_zone_width(window_width, &state));
             if pair_w <= 0.0 {
-                return state.layout;
+                return state.dims;
             }
             let ratio = ((logical_x - theme::geometry::icon_rail_width()) / pair_w).clamp(
                 theme::geometry::min_split_ratio(),
                 theme::geometry::max_split_ratio(),
             );
-            ShellLayout {
+            PanelDims {
                 files_split: ratio,
-                ..state.layout
+                ..state.dims
             }
         }
         Divider::ProjectSplit => {
             let pair_w = pair_content_width(left_zone_width(window_width, &state));
             if pair_w <= 0.0 {
-                return state.layout;
+                return state.dims;
             }
             let ratio = ((logical_x - theme::geometry::icon_rail_width()) / pair_w).clamp(
                 theme::geometry::min_split_ratio(),
                 theme::geometry::max_split_ratio(),
             );
-            ShellLayout {
+            PanelDims {
                 project_split: ratio,
-                ..state.layout
+                ..state.dims
             }
         }
         Divider::RightPairSplit => {
             let right_w = right_zone_width(window_width, &state);
             let pair_w = pair_content_width(right_w);
             if pair_w <= 0.0 {
-                return state.layout;
+                return state.dims;
             }
             let right_x0 = window_width - theme::geometry::icon_rail_width() - right_w;
             // `ratio` 是"配对里渲染在左边那块"的宽度占比(拖拽点左侧的宽度
@@ -548,18 +602,18 @@ pub(crate) fn apply_column_drag(
                 theme::geometry::max_split_ratio(),
             );
             match state.right_view {
-                RightView::Agent => ShellLayout {
+                RightView::Agent => PanelDims {
                     agent_split: 1.0 - ratio,
-                    ..state.layout
+                    ..state.dims
                 },
-                RightView::Conversations => ShellLayout {
+                RightView::Conversations => PanelDims {
                     conversations_split: 1.0 - ratio,
-                    ..state.layout
+                    ..state.dims
                 },
                 // 用量统计是单栏（不分割）,没有自己的 split 权重。
-                RightView::Usage => state.layout,
+                RightView::Usage => state.dims,
                 // 验收面板同用量统计是单栏,不分割。
-                RightView::Acceptance => state.layout,
+                RightView::Acceptance => state.dims,
             }
         }
     }
@@ -627,8 +681,7 @@ pub fn preview_content_bounds(
                 let y = y0 + theme::geometry::preview_chrome_top_px();
                 let h = (avail_h - theme::geometry::preview_chrome_top_px() - 8.0).max(0.0);
                 let pair_w = pair_content_width(avail_w);
-                let list_w = pair_w * state.layout.files_split;
-                let content_w = pair_w * (1.0 - state.layout.files_split);
+                let (list_w, content_w) = pair_list_content_width(pair_w, state.dims.files_split);
                 let x = x0 + list_w + theme::geometry::divider_width() + 8.0;
                 let w = (content_w - 16.0).max(0.0);
                 (x, y, w, h)
@@ -651,8 +704,7 @@ pub fn preview_content_bounds(
                 let y = y0 + theme::geometry::preview_chrome_top_px();
                 let h = (avail_h - theme::geometry::preview_chrome_top_px() - 8.0).max(0.0);
                 let pair_w = pair_content_width(avail_w);
-                let list_w = pair_w * state.layout.project_split;
-                let content_w = pair_w * (1.0 - state.layout.project_split);
+                let (list_w, content_w) = pair_list_content_width(pair_w, state.dims.project_split);
                 let x = x0 + list_w + theme::geometry::divider_width() + 8.0;
                 let w = (content_w - 16.0).max(0.0);
                 (x, y, w, h)
@@ -681,8 +733,7 @@ pub fn preview_content_bounds(
             let y = y_top(theme::geometry::preview_chrome_top_px());
             let h = h_for(y);
             let pair_w = pair_content_width(left_w);
-            let list_w = pair_w * state.layout.files_split;
-            let content_w = pair_w * (1.0 - state.layout.files_split);
+            let (list_w, content_w) = pair_list_content_width(pair_w, state.dims.files_split);
             let x = theme::geometry::icon_rail_width()
                 + list_w
                 + theme::geometry::divider_width()
@@ -708,8 +759,7 @@ pub fn preview_content_bounds(
             let y = y_top(theme::geometry::preview_chrome_top_px());
             let h = h_for(y);
             let pair_w = pair_content_width(left_w);
-            let list_w = pair_w * state.layout.project_split;
-            let content_w = pair_w * (1.0 - state.layout.project_split);
+            let (list_w, content_w) = pair_list_content_width(pair_w, state.dims.project_split);
             let x = theme::geometry::icon_rail_width()
                 + list_w
                 + theme::geometry::divider_width()
@@ -764,7 +814,7 @@ pub fn left_files_tree_bounds(
         let avail_h =
             (maximized_box_height(window_height) - theme::geometry::status_bar_height()).max(0.0);
         let pair_w = pair_content_width(avail_w);
-        let list_w = pair_w * state.layout.files_split;
+        let (list_w, _content_w) = pair_list_content_width(pair_w, state.dims.files_split);
         let x = x0 + m.left + p.padding.left;
         let w = (list_w - p.padding.left - p.padding.right).max(0.0);
         let y = y_top + m.top + p.padding.top + theme::geometry::tree_chrome_top_px();
@@ -779,7 +829,7 @@ pub fn left_files_tree_bounds(
         return (x, y, w, h);
     }
     let left_w = left_zone_width(window_width, state);
-    let list_w = pair_content_width(left_w) * state.layout.files_split;
+    let (list_w, _) = pair_list_content_width(pair_content_width(left_w), state.dims.files_split);
     let x = theme::geometry::icon_rail_width() + m.left + p.padding.left;
     let w = (list_w - p.padding.left - p.padding.right).max(0.0);
     let y_pane = theme::geometry::top_bar_height() + m.top;
@@ -808,7 +858,8 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
         let (x0, avail_w) = maximized_box_x_range(window_width);
         return match state.left_view {
             LeftView::Files => {
-                let list_w = pair_content_width(avail_w) * state.layout.files_split;
+                let (list_w, _) =
+                    pair_list_content_width(pair_content_width(avail_w), state.dims.files_split);
                 let start = x0 + list_w + theme::geometry::divider_width();
                 let end = x0 + avail_w;
                 x >= start && x < end
@@ -824,7 +875,8 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
             LeftView::Todo => false,
             // Project 面板右配对(项目预览)是 Files 同款预览列,按 `project_split` 算。
             LeftView::Project => {
-                let list_w = pair_content_width(avail_w) * state.layout.project_split;
+                let (list_w, _) =
+                    pair_list_content_width(pair_content_width(avail_w), state.dims.project_split);
                 let start = x0 + list_w + theme::geometry::divider_width();
                 let end = x0 + avail_w;
                 x >= start && x < end
@@ -838,7 +890,8 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
     let left_w = left_zone_width(window_width, state);
     match state.left_view {
         LeftView::Files => {
-            let list_w = pair_content_width(left_w) * state.layout.files_split;
+            let (list_w, _) =
+                pair_list_content_width(pair_content_width(left_w), state.dims.files_split);
             let start =
                 theme::geometry::icon_rail_width() + list_w + theme::geometry::divider_width();
             let end = theme::geometry::icon_rail_width() + left_w;
@@ -855,7 +908,8 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
         LeftView::Todo => false,
         // Project 面板右配对(项目预览)是 Files 同款预览列,按 `project_split` 算。
         LeftView::Project => {
-            let list_w = pair_content_width(left_w) * state.layout.project_split;
+            let (list_w, _) =
+                pair_list_content_width(pair_content_width(left_w), state.dims.project_split);
             let start =
                 theme::geometry::icon_rail_width() + list_w + theme::geometry::divider_width();
             let end = theme::geometry::icon_rail_width() + left_w;
@@ -962,7 +1016,8 @@ pub fn terminal_pane_pixel_size(
     }
     if state.maximized == Some(MaximizedPane::Right) {
         let (_x0, avail_w) = maximized_box_x_range(window_width);
-        let content_w = pair_content_width(avail_w) * (1.0 - state.layout.agent_split);
+        let (_list_w, content_w) =
+            pair_list_content_width(pair_content_width(avail_w), state.dims.agent_split);
         let pane_width = (content_w - theme::geometry::chrome_width_px()).max(0.0);
         // `theme::geometry::status_bar_height()` 是终端 pane 自带的底栏(`terminal_status_bar`,
         // 不是窗口级状态栏),放大态一样在盒子里,照扣。
@@ -973,7 +1028,8 @@ pub fn terminal_pane_pixel_size(
         return (pane_width, pane_height);
     }
     let right_w = right_zone_width(window_width, state);
-    let content_w = pair_content_width(right_w) * (1.0 - state.layout.agent_split);
+    let (_list_w, content_w) =
+        pair_list_content_width(pair_content_width(right_w), state.dims.agent_split);
     let pane_width = (content_w - theme::geometry::chrome_width_px()).max(0.0);
     // `right_zone` 上下 margin:终端是 iced 布局(自动 inset),但其 PTY 网格
     // 尺寸靠这里算,必须同步扣掉上下 margin,否则字符网格比实际渲染区高。
@@ -1351,11 +1407,14 @@ pub struct App {
     /// 节奏带跑免疫"这条约定对全部三个周期性关注点(闪烁/悬停动画/
     /// Todo 轮询)都显式成立,不留一个"靠巧合安全"的例外。
     last_todo_poll_at: std::time::Instant,
-    /// 图标栏+左右面板区宽度/分割状态;启动时 `layout::load()` 读盘作
-    /// 起始值,拖拽结束(`ColumnDragEnd`)写盘。只存几何(宽度/分割比例/
-    /// 窗口尺寸),**不存**左右视图选择与收起态——那些是**每个项目各自**的
-    /// 偏好,见 `panel_layouts`。
+    /// 全局窗口尺寸;启动时 `layout::load()` 读盘作起始值,退出前写盘。
+    /// 只存窗口尺寸——左右面板区的宽度/分割比例(**每个项目各自**的偏好)
+    /// 已迁进每项目 `dims`(见 `panel_layouts`),不放在这里。
     shell_layout: ShellLayout,
+    /// 当前活跃项目的面板区尺寸(左宽 + 四个 split)活值。切项目前经
+    /// `current_panel_layout` 回填进 `PanelLayout.dims` stash,切过去由
+    /// `adopt_panel_layout` 灌回来。拖拽(`ColumnDragEnd`)写回这份。
+    dims: PanelDims,
     /// 每个项目各自的面板布局(左右视图选择 + 收起态),按项目 id 索引;
     /// 启动时从 `panel_layouts::load()` 读回,切换/改面板时写回。当前正
     /// 显示的项目的布局由 `left_view`/`right_view`/`left_collapsed`/
@@ -1669,6 +1728,7 @@ impl App {
             left_collapsed: PanelLayout::default().left_collapsed,
             right_collapsed: PanelLayout::default().right_collapsed,
             shell_layout,
+            dims: PanelDims::default(),
             panel_layouts,
             maximized: None,
             active_zone: Some(ZoneSide::Right),
@@ -2187,9 +2247,38 @@ impl App {
     }
 
     /// 点击输入框外时退出所有自绘输入的编辑态(验收反馈:失焦回正常态)。
+    /// 项目名称编辑走"失焦保存":取出半输入缓冲,改动且非空时发起 daemon
+    /// 改名(与回车提交同一路径),未改动/空名则直接丢弃编辑框,与描述字段
+    /// "失焦写盘"行为对齐——修复之前失焦把改名直接丢弃、看起来"无法保存"。
     pub fn blur_inputs(&mut self) {
-        if let Some(ws) = self.active_workspace_mut() {
-            ws.blur_inputs();
+        let Some(ws) = self.active_workspace_mut() else {
+            return;
+        };
+        // 先取出名称编辑缓冲,再交给 `Workspace::blur_inputs` 清其它编辑态,
+        // 避免顺序问题丢失半输入。
+        let pending_name = ws.project_panel.take_name_edit();
+        let project = ws.project.clone();
+        ws.blur_inputs();
+        if let (Some(p), Some(raw)) = (project, pending_name) {
+            let name = raw.trim().to_string();
+            let project_id = p.id;
+            let current_name = p.name.clone();
+            if !name.is_empty() && name != current_name {
+                let client = self.client.clone();
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                let emit = move |m: project::Message| {
+                    let _ = proxy.send_event(Message::Project(m));
+                };
+                handle.spawn(async move {
+                    let result = client
+                        .rename_project(project_id, &name)
+                        .await
+                        .map_err(|e| e.to_string())
+                        .and_then(|opt| opt.ok_or_else(|| "项目不存在".to_string()));
+                    emit(project::Message::NameRenamed(project_id, result));
+                });
+            }
         }
     }
 
@@ -2212,6 +2301,7 @@ impl App {
             right_view: self.right_view,
             left_collapsed: self.left_collapsed,
             right_collapsed: self.right_collapsed,
+            dims: self.dims,
         }
     }
 
@@ -2234,6 +2324,7 @@ impl App {
         self.right_view = pl.right_view;
         self.left_collapsed = pl.left_collapsed;
         self.right_collapsed = pl.right_collapsed;
+        self.dims = pl.dims;
     }
 
     /// 把整份 `panel_layouts`(所有项目的面板布局)异步写盘。
@@ -2333,12 +2424,12 @@ impl App {
         }
     }
 
-    /// 左面板区当前**有效**宽度:持久化宽按当前窗口宽夹取(见
+    /// 左面板区当前**有效**宽度:每项目持久化宽按当前窗口宽夹取(见
     /// `clamp_left_width`)。渲染侧(`left_panel_area`)必须用这个值,而不是
-    /// 直接读 `shell_layout.left_width`——几何侧(`left_zone_width`)走的是
+    /// 直接读 `self.dims.left_width`——几何侧(`left_zone_width`)走的是
     /// 同一个 `clamp_left_width`,两边只有共用同一份夹取才不会漂移。
     fn effective_left_width(&self) -> f32 {
-        clamp_left_width(self.window_size.0, self.shell_layout.left_width)
+        clamp_left_width(self.window_size.0, self.dims.left_width)
     }
 
     /// 终端 pane 此刻是否真的呈现在用户眼前(判定见自由函数
@@ -2352,6 +2443,7 @@ impl App {
     pub fn shell_state(&self) -> ShellState {
         ShellState {
             layout: self.shell_layout,
+            dims: self.dims,
             left_view: self.left_view,
             left_collapsed: self.left_collapsed,
             right_view: self.right_view,
@@ -2516,7 +2608,8 @@ impl App {
         let cell_w = pane_w / self.cols.max(1) as f32;
         let line_h = pane_h / self.rows.max(1) as f32;
         let right_w = right_zone_width(window_w, &state);
-        let list_w = pair_content_width(right_w) * state.layout.agent_split;
+        let (list_w, _) =
+            pair_list_content_width(pair_content_width(right_w), state.dims.agent_split);
         let x0 = window_w - theme::geometry::icon_rail_width() - right_w
             + list_w
             + theme::geometry::divider_width()
@@ -2838,7 +2931,7 @@ impl App {
             } => {
                 if let Some(divider) = self.dragging {
                     let state = self.shell_state();
-                    self.shell_layout = apply_column_drag(state, divider, window_width, logical_x);
+                    self.dims = apply_column_drag(state, divider, window_width, logical_x);
                 }
             }
             Message::ColumnDragEnd => {
@@ -5817,7 +5910,7 @@ pub(crate) fn zone_pane_border(zone: theme::region::RegionStyle, corner: PaneCor
 /// `zones_width`(否则整行会缩到"两条图标栏+一条分隔线"那么宽,右图标栏
 /// 跑到窗口中间去);两侧都收起时由本区出一个 `Fill` 空白把窗口撑满;
 /// 常规态用 `Workspace::effective_left_width()`——**不是**直接读持久化的
-/// `shell_layout.left_width`。持久化宽可能大过当前窗口容得下的范围(用户
+/// `dims.left_width`。持久化宽可能大过当前窗口容得下的范围(用户
 /// 在大窗口拖宽后把窗口缩小),那样这条 `Length::Fixed` 会在 flex 第一趟
 /// 把可用空间吃光,唯一 `Fill` 的右面板区拿到 0 宽(Fix round 2 Critical #1)。
 ///
@@ -5855,144 +5948,143 @@ fn left_panel_area<'a>(
     } else {
         (PaneCorner::Left, PaneCorner::Right, PaneCorner::All)
     };
-    let inner: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = match app
-        .left_view
-    {
-        LeftView::Files => {
-            let (list_portion, content_portion) = split_portions(app.shell_layout.files_split);
-            let list_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-                if ws.project.is_some() {
-                    files::view(
-                        &ws.files,
-                        Length::FillPortion(list_portion),
-                        zone_pane_border(zone, lc),
-                        app.hover_progress(HoverId::FilesSearchSubmit),
-                        app.hover_progress(HoverId::FilesDotfiles),
-                        app.hover_progress(HoverId::FilesBranchSwitch),
-                    )
-                    .map(Message::Files)
-                } else {
-                    no_project_placeholder(
+    let inner: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        match app.left_view {
+            LeftView::Files => {
+                let (list_portion, content_portion) = split_portions(app.dims.files_split);
+                let list_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+                    if ws.project.is_some() {
+                        files::view(
+                            &ws.files,
+                            Length::FillPortion(list_portion),
+                            zone_pane_border(zone, lc),
+                            app.hover_progress(HoverId::FilesSearchSubmit),
+                            app.hover_progress(HoverId::FilesDotfiles),
+                            app.hover_progress(HoverId::FilesBranchSwitch),
+                        )
+                        .map(Message::Files)
+                    } else {
+                        no_project_placeholder(
+                            ws,
+                            Length::FillPortion(list_portion),
+                            zone_pane_border(zone, lc),
+                        )
+                    };
+                row![
+                    list_pane,
+                    divider_bar(
+                        Divider::LeftPairSplit,
+                        theme::region::project_pane()
+                            .background
+                            .unwrap_or(theme::color::BG),
+                        theme::region::preview_pane()
+                            .background
+                            .unwrap_or(theme::color::BG),
+                    ),
+                    preview_pane(
+                        app,
                         ws,
+                        Length::FillPortion(content_portion),
+                        zone_pane_border(zone, rc)
+                    ),
+                ]
+                .width(Length::Fill)
+                .into()
+            }
+            LeftView::GitLog => {
+                git_log::view(&app.git_log, ws.project_panel.worktrees()).map(Message::GitLog)
+            }
+            LeftView::Todo => {
+                let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
+                    return column![].into();
+                };
+                let tabs: Vec<todo::SessionTabSummary> = ws
+                    .tabs
+                    .iter()
+                    .map(|t| todo::SessionTabSummary {
+                        session_id: t.info.id.clone(),
+                        title: tab_title(t.agent, t.cwd.as_deref(), &t.info.name),
+                        alive: t.alive,
+                    })
+                    .collect();
+                let project_path = ws
+                    .project
+                    .as_ref()
+                    .map(|p| std::path::PathBuf::from(&p.path));
+                todo::view(
+                    &app.todo,
+                    &ws.todo,
+                    project_id,
+                    &tabs,
+                    project_path.as_deref(),
+                    Length::Fill,
+                    zone_pane_border(zone, ac),
+                )
+                .map(Message::Todo)
+            }
+            LeftView::Project => {
+                let (list_portion, content_portion) = split_portions(app.dims.project_split);
+                let info_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+                    project::view(
+                        &ws.project_panel,
+                        ws.project.as_ref(),
                         Length::FillPortion(list_portion),
                         zone_pane_border(zone, lc),
                     )
-                };
-            row![
-                list_pane,
-                divider_bar(
-                    Divider::LeftPairSplit,
-                    theme::region::project_pane()
-                        .background
-                        .unwrap_or(theme::color::BG),
-                    theme::region::preview_pane()
-                        .background
-                        .unwrap_or(theme::color::BG),
-                ),
-                preview_pane(
-                    app,
-                    ws,
-                    Length::FillPortion(content_portion),
-                    zone_pane_border(zone, rc)
-                ),
-            ]
-            .width(Length::Fill)
-            .into()
-        }
-        LeftView::GitLog => {
-            git_log::view(&app.git_log, ws.project_panel.worktrees()).map(Message::GitLog)
-        }
-        LeftView::Todo => {
-            let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
-                return column![].into();
-            };
-            let tabs: Vec<todo::SessionTabSummary> = ws
-                .tabs
-                .iter()
-                .map(|t| todo::SessionTabSummary {
-                    session_id: t.info.id.clone(),
-                    title: tab_title(t.agent, t.cwd.as_deref(), &t.info.name),
-                    alive: t.alive,
-                })
-                .collect();
-            let project_path = ws
-                .project
-                .as_ref()
-                .map(|p| std::path::PathBuf::from(&p.path));
-            todo::view(
-                &app.todo,
-                &ws.todo,
-                project_id,
-                &tabs,
-                project_path.as_deref(),
-                Length::Fill,
-                zone_pane_border(zone, ac),
-            )
-            .map(Message::Todo)
-        }
-        LeftView::Project => {
-            let (list_portion, content_portion) = split_portions(app.shell_layout.project_split);
-            let info_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-                project::view(
-                    &ws.project_panel,
-                    ws.project.as_ref(),
-                    Length::FillPortion(list_portion),
-                    zone_pane_border(zone, lc),
+                    .map(Message::Project);
+                row![
+                    info_pane,
+                    divider_bar(
+                        Divider::ProjectSplit,
+                        theme::region::project_pane()
+                            .background
+                            .unwrap_or(theme::color::BG),
+                        theme::region::preview_pane()
+                            .background
+                            .unwrap_or(theme::color::BG),
+                    ),
+                    project_preview_pane(
+                        app,
+                        ws,
+                        Length::FillPortion(content_portion),
+                        zone_pane_border(zone, rc)
+                    ),
+                ]
+                .width(Length::Fill)
+                .into()
+            }
+            LeftView::Database => {
+                // 数据库面板需要项目已打开才能读写 `.dozer/database.json`。
+                if ws.project.is_none() {
+                    return column![].into();
+                }
+                database::view(
+                    &app.database,
+                    &ws.database,
+                    Length::Fill,
+                    zone_pane_border(zone, ac),
+                    app.hover_progress(HoverId::DatabaseSchemaBack),
                 )
-                .map(Message::Project);
-            row![
-                info_pane,
-                divider_bar(
-                    Divider::ProjectSplit,
-                    theme::region::project_pane()
-                        .background
-                        .unwrap_or(theme::color::BG),
-                    theme::region::preview_pane()
-                        .background
-                        .unwrap_or(theme::color::BG),
-                ),
-                project_preview_pane(
-                    app,
-                    ws,
-                    Length::FillPortion(content_portion),
-                    zone_pane_border(zone, rc)
-                ),
-            ]
-            .width(Length::Fill)
-            .into()
-        }
-        LeftView::Database => {
-            // 数据库面板需要项目已打开才能读写 `.dozer/database.json`。
-            if ws.project.is_none() {
-                return column![].into();
+                .map(Message::Database)
             }
-            database::view(
-                &app.database,
-                &ws.database,
+            LeftView::Ssh => {
+                // 同 Files/Database 面板:`ws.project.is_none()` 是 Stub→Loaded
+                // 促成期间的占位态,这时不该渲染出一个看似可点、实际上
+                // `Message::Ssh` 分发会被内核静默吞掉(无 project 时直接
+                // return)的"＋新增主机"按钮。
+                if ws.project.is_none() {
+                    return column![].into();
+                }
+                ssh::view(&ws.ssh, Length::Fill, zone_pane_border(zone, ac)).map(Message::Ssh)
+            }
+            LeftView::Web => browser::view(
+                &ws.browser,
+                ws.project.as_ref().map(|p| p.id),
                 Length::Fill,
                 zone_pane_border(zone, ac),
-                app.hover_progress(HoverId::DatabaseSchemaBack),
             )
-            .map(Message::Database)
-        }
-        LeftView::Ssh => {
-            // 同 Files/Database 面板:`ws.project.is_none()` 是 Stub→Loaded
-            // 促成期间的占位态,这时不该渲染出一个看似可点、实际上
-            // `Message::Ssh` 分发会被内核静默吞掉(无 project 时直接
-            // return)的"＋新增主机"按钮。
-            if ws.project.is_none() {
-                return column![].into();
-            }
-            ssh::view(&ws.ssh, Length::Fill, zone_pane_border(zone, ac)).map(Message::Ssh)
-        }
-        LeftView::Web => browser::view(
-            &ws.browser,
-            ws.project.as_ref().map(|p| p.id),
-            Length::Fill,
-            zone_pane_border(zone, ac),
-        )
-        .map(Message::Browser),
-    };
+            .map(Message::Browser),
+        };
     if maximized {
         return inner;
     }
@@ -6074,7 +6166,7 @@ fn right_panel_area<'a>(
     let inner: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         match app.right_view {
             RightView::Agent => {
-                let (list_portion, content_portion) = split_portions(app.shell_layout.agent_split);
+                let (list_portion, content_portion) = split_portions(app.dims.agent_split);
                 row![
                     terminal_pane(
                         app,
@@ -6102,8 +6194,7 @@ fn right_panel_area<'a>(
                 .into()
             }
             RightView::Conversations => {
-                let (list_portion, content_portion) =
-                    split_portions(app.shell_layout.conversations_split);
+                let (list_portion, content_portion) = split_portions(app.dims.conversations_split);
                 row![
                     review_content_pane(
                         ws,
@@ -7079,6 +7170,7 @@ mod tests {
     fn test_state() -> ShellState {
         ShellState {
             layout: ShellLayout::default(),
+            dims: PanelDims::default(),
             left_view: LeftView::Files,
             left_collapsed: false,
             right_view: RightView::Agent,
@@ -7092,7 +7184,7 @@ mod tests {
         // 左面板区 640 宽,项目树占 0.35(=224),预览内容区在其右侧(过分隔线)。
         let state = test_state();
         let (x, y, w, h) = preview_content_bounds(1440.0, 900.0, &state);
-        let list_w = state.layout.left_width * state.layout.files_split;
+        let list_w = state.dims.left_width * state.dims.files_split;
         let col_start =
             theme::geometry::icon_rail_width() + list_w + theme::geometry::divider_width();
         assert!(x >= col_start && x < col_start + 16.0, "x={x}");
@@ -7266,7 +7358,7 @@ mod tests {
     #[test]
     fn left_zone_width_reclamped_when_window_narrower_than_persisted_width() {
         let state = test_state();
-        assert_eq!(state.layout.left_width, 640.0, "前提:默认持久化宽 640");
+        assert_eq!(state.dims.left_width, 640.0, "前提:默认持久化宽 640");
 
         assert_eq!(clamp_left_width(720.0, 640.0), 320.0);
         assert_eq!(left_zone_width(720.0, &state), 320.0);
@@ -7288,10 +7380,7 @@ mod tests {
 
         // 夹取是**渲染/几何时刻**的临时行为:不回写持久化值,窗口再拉宽
         // 时用户原来偏好的 640 自动复原。
-        assert_eq!(
-            state.layout.left_width, 640.0,
-            "夹取不得改写 ShellLayout 里的持久化宽"
-        );
+        assert_eq!(state.dims.left_width, 640.0, "夹取不得改写各项目持久化宽");
     }
 
     /// 极窄窗口(比 `theme::geometry::min_window_width()` 还窄,例如外部强制 resize)下也不 panic,
@@ -7390,14 +7479,14 @@ mod tests {
     /// Fix round 2 #6a:放大终端时 PTY 网格必须按 `maximize_overlay` 实际
     /// 渲染的金色描边盒子重算,不能停在放大前的尺寸(否则只放大了外框)。
     ///
-    /// 具体数字(1440x900,`agent_split`=0.4):
+    /// 具体数字(1440x900,`agent_split`=默认统一 split 0.35):
     /// avail_w = 1440 - 2*44 - 2*40 = 1272,pair_w = 1272 - 8 = 1264,
-    /// 终端占 1-0.4 → 1264*0.6 = 758.4,减 `theme::geometry::chrome_width_px()`(16) = 742.4;
+    /// 终端占 1-0.35 → 1264*0.65 = 821.6,减 `theme::geometry::chrome_width_px()`(16) = 805.6;
     /// 盒子高 = 900 - 40(顶栏) - 2*40 = 780,再减 pane 自带底栏 26
     /// (`theme::geometry::status_bar_height()`)与 `theme::geometry::chrome_height_px()`(50) = 704。
     /// 对照平时:zones_width = 1440-2*44-8=1344,right_w = 1344 - 640 = 704,pair = 696,
-    /// 696*0.6 = 417.6,减 16 = 401.6;高 = 900 - 40 - 26 - 50 - right_zone 上下 margin(各 6) = 772。
-    /// 换成网格(CELL_WIDTH=8.4,LINE_HEIGHT_PX=16.8 即 14*1.2):放大后 88x41,平时 47x45。
+    /// 696*0.65 = 452.4,减 16 = 436.4;高 = 900 - 40 - 26 - 50 - right_zone 上下 margin = 778。
+    /// 换成网格(CELL_WIDTH=8.4,LINE_HEIGHT_PX=16.8 即 14*1.2):放大后 95x41,平时 51x46。
     #[test]
     fn terminal_pane_pixel_size_right_maximized_matches_overlay_box() {
         let maxed = ShellState {
@@ -7405,17 +7494,17 @@ mod tests {
             ..test_state()
         };
         let (w, h) = terminal_pane_pixel_size(1440.0, 900.0, &maxed);
-        assert!((w - 742.4).abs() < 0.1, "w={w}");
+        assert!((w - 805.6).abs() < 0.1, "w={w}");
         assert!((h - 704.0).abs() < 0.1, "h={h}");
 
         let normal = terminal_pane_pixel_size(1440.0, 900.0, &test_state());
-        assert!((normal.0 - 401.6).abs() < 0.1, "平时 w={}", normal.0);
-        assert!((normal.1 - 772.0).abs() < 0.1, "平时 h={}", normal.1);
+        assert!((normal.0 - 436.4).abs() < 0.1, "平时 w={}", normal.0);
+        assert!((normal.1 - 778.0).abs() < 0.1, "平时 h={}", normal.1);
         assert_ne!((w, h), normal, "放大态几何必须和平时不同");
         assert!(w > normal.0, "放大后终端必须真的更宽(网格跟着变宽)");
 
-        assert_eq!(crate::term_view::grid_size(w, h), (88, 41));
-        assert_eq!(crate::term_view::grid_size(normal.0, normal.1), (47, 45));
+        assert_eq!(crate::term_view::grid_size(w, h), (95, 41));
+        assert_eq!(crate::term_view::grid_size(normal.0, normal.1), (51, 46));
 
         // 左侧放大不改变右面板区几何(右半只是被遮罩盖住)。
         let left_maxed = ShellState {
@@ -7450,9 +7539,9 @@ mod tests {
             assert_eq!(terminal_pane_pixel_size(1440.0, 900.0, &for_grid), shown);
         }
 
-        // 具体网格:1440x900 下应是 47x45(已扣 right_zone 上下 margin),不是兜底的 80x24。
+        // 具体网格:1440x900 下应是 51x46(已扣 right_zone 上下 margin),不是兜底的 80x24。
         let (cols, rows) = crate::term_view::grid_size(shown.0, shown.1);
-        assert_eq!((cols, rows), (47, 45));
+        assert_eq!((cols, rows), (51, 46));
         assert_ne!(
             (cols as u16, rows as u16),
             (DEFAULT_COLS, DEFAULT_ROWS),
@@ -7472,35 +7561,40 @@ mod tests {
         assert!(!g.right_collapsed);
     }
 
-    /// 可选项:磁盘上的布局值不一定出自本程序(手改 layout.json/别的版本)。
-    /// split 恰为 0.0/1.0 时 `split_portions` 会给出 `FillPortion(0)`,那一块
-    /// 在 flex 里拿不到任何宽度、整块消失,所以读盘时先夹一遍。
+    /// 可选项:磁盘上的面板尺寸值不一定出自本程序(手改 panel_layouts.json/
+    /// 别的版本)。split 恰为 0.0/1.0 时 `split_portions` 会给出 `FillPortion(0)`,
+    /// 那一块在 flex 里拿不到任何宽度、整块消失,所以读盘时先夹一遍。
     #[test]
-    fn sanitize_shell_layout_clamps_foreign_values() {
-        let poisoned = ShellLayout {
+    fn sanitize_panel_dims_clamps_foreign_values() {
+        let poisoned = PanelDims {
             left_width: 10.0,
             files_split: 0.0,
             agent_split: 1.0,
             conversations_split: f32::NAN,
-            ..ShellLayout::default()
+            ..PanelDims::default()
         };
-        let s = sanitize_shell_layout(poisoned);
+        let s = sanitize_panel_dims(poisoned);
         assert_eq!(s.left_width, theme::geometry::min_zone_width());
         assert_eq!(s.files_split, theme::geometry::min_split_ratio());
         assert_eq!(s.agent_split, theme::geometry::max_split_ratio());
-        assert_eq!(s.conversations_split, ShellLayout::default().files_split);
+        assert_eq!(s.conversations_split, PanelDims::default().files_split);
         // 夹过之后 FillPortion 两侧都非 0(那一块不会凭空消失)。
-        for split in [s.files_split, s.agent_split, s.conversations_split] {
+        for split in [
+            s.files_split,
+            s.project_split,
+            s.agent_split,
+            s.conversations_split,
+        ] {
             let (list, content) = split_portions(split);
             assert!(list > 0 && content > 0, "split={split}");
         }
         // 合法值原样保留。
-        let sane = ShellLayout {
+        let sane = PanelDims {
             left_width: 500.0,
             files_split: 0.35,
-            ..ShellLayout::default()
+            ..PanelDims::default()
         };
-        assert_eq!(sanitize_shell_layout(sane), sane);
+        assert_eq!(sanitize_panel_dims(sane), sane);
     }
 
     /// `window_width`/`window_height` 的夹取单独测:老 `layout.json` 缺这两
@@ -7512,7 +7606,6 @@ mod tests {
         let missing_fields = ShellLayout {
             window_width: 0.0,
             window_height: 0.0,
-            ..ShellLayout::default()
         };
         let s = sanitize_shell_layout(missing_fields);
         assert_eq!(s.window_width, theme::geometry::initial_window_size().0);
@@ -7521,7 +7614,6 @@ mod tests {
         let poisoned = ShellLayout {
             window_width: -100.0,
             window_height: f32::NAN,
-            ..ShellLayout::default()
         };
         let s = sanitize_shell_layout(poisoned);
         assert_eq!(s.window_width, theme::geometry::initial_window_size().0);
@@ -7530,7 +7622,6 @@ mod tests {
         let too_small = ShellLayout {
             window_width: 10.0,
             window_height: 10.0,
-            ..ShellLayout::default()
         };
         let s = sanitize_shell_layout(too_small);
         assert_eq!(s.window_width, theme::geometry::min_window_width());
@@ -7539,7 +7630,6 @@ mod tests {
         let legit = ShellLayout {
             window_width: 1800.0,
             window_height: 1100.0,
-            ..ShellLayout::default()
         };
         assert_eq!(sanitize_shell_layout(legit), legit);
     }
@@ -7724,7 +7814,7 @@ mod tests {
         };
         assert_eq!(
             apply_column_drag(left_gone, Divider::LeftPairSplit, 1440.0, 500.0),
-            left_gone.layout
+            left_gone.dims
         );
         let right_gone = ShellState {
             right_collapsed: true,
@@ -7732,7 +7822,7 @@ mod tests {
         };
         assert_eq!(
             apply_column_drag(right_gone, Divider::RightPairSplit, 1440.0, 1000.0),
-            right_gone.layout
+            right_gone.dims
         );
     }
 
@@ -7744,7 +7834,7 @@ mod tests {
         let l = apply_column_drag(agent, Divider::RightPairSplit, 1440.0, 696.0 + 344.0);
         assert!((l.agent_split - 0.5).abs() < 0.001, "{}", l.agent_split);
         assert_eq!(
-            l.conversations_split, agent.layout.conversations_split,
+            l.conversations_split, agent.dims.conversations_split,
             "不该串写另一配对的比例"
         );
 
@@ -7763,7 +7853,7 @@ mod tests {
             "{}",
             l.conversations_split
         );
-        assert_eq!(l.agent_split, conversations.layout.agent_split);
+        assert_eq!(l.agent_split, conversations.dims.agent_split);
     }
 
     /// 中点(0.5)拖到哪都是 0.5,取反前后数值一样,不能证明真的取反了。
