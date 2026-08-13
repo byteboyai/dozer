@@ -639,6 +639,54 @@ pub fn view<'a>(
         .into()
 }
 
+/// 底部快速新建栏，结构对齐 `project.rs::project_footer_bar`(1px BORDER
+/// 分隔线 + `padding([6, 8])`)。List/Kanban 两视图共用。
+fn todo_footer_bar<'a>(
+    add_draft: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let add_row = row![
+        icons::view(
+            icons::IconKind::SquarePlus,
+            crate::theme::icon_size::row(),
+            theme::color::GOLD
+        ),
+        text_input("Initiate new task protocol..", add_draft)
+            .on_input(Message::AddInputChanged)
+            .on_submit(Message::AddSubmit)
+            .size(theme::font::body())
+            .width(Length::Fill)
+            .style(
+                |_t: &iced_widget::Theme, _s| iced_widget::text_input::Style {
+                    background: theme::color::BG.into(),
+                    border: Border {
+                        color: Color::TRANSPARENT,
+                        width: 0.0,
+                        radius: 0.0.into(),
+                    },
+                    icon: theme::color::GOLD,
+                    placeholder: theme::color::DIM,
+                    value: theme::color::CREAM,
+                    selection: theme::color::GOLD,
+                },
+            ),
+    ]
+    .spacing(8)
+    .align_y(iced_widget::core::alignment::Vertical::Center);
+
+    let top_line = container(iced_widget::Space::new())
+        .width(Length::Fill)
+        .height(Length::Fixed(1.0))
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::color::BORDER.into()),
+            ..container::Style::default()
+        });
+
+    container(column![top_line, add_row].spacing(4))
+        .width(Length::Fill)
+        .padding([6, 8])
+        .into()
+}
+
 /// 列表视图主体：搜索栏 + 编号行列表 + 底部新增输入。
 fn todo_list_view<'a>(
     app_state: &'a AppState,
@@ -722,53 +770,10 @@ fn todo_list_view<'a>(
         }
     }
 
-    let add_row = row![
-        icons::view(
-            icons::IconKind::SquarePlus,
-            crate::theme::icon_size::row(),
-            theme::color::GOLD
-        ),
-        text_input("Initiate new task protocol..", &ws_state.add_draft)
-            .on_input(Message::AddInputChanged)
-            .on_submit(Message::AddSubmit)
-            .size(theme::font::body())
-            .width(Length::Fill)
-            .style(
-                |_t: &iced_widget::Theme, _s| iced_widget::text_input::Style {
-                    background: theme::color::BG.into(),
-                    border: Border {
-                        color: Color::TRANSPARENT,
-                        width: 0.0,
-                        radius: 0.0.into(),
-                    },
-                    icon: theme::color::GOLD,
-                    placeholder: theme::color::DIM,
-                    value: theme::color::CREAM,
-                    selection: theme::color::GOLD,
-                },
-            ),
-    ]
-    .spacing(8)
-    .padding([10, 20])
-    .align_y(iced_widget::core::alignment::Vertical::Center);
-
-    let divider = container(iced_widget::Space::new())
-        .width(Length::Fill)
-        .height(Length::Fixed(1.0))
-        .style(|_t: &iced_widget::Theme| container::Style {
-            border: Border {
-                color: theme::color::BORDER,
-                width: 1.0,
-                radius: 0.0.into(),
-            },
-            ..container::Style::default()
-        });
-
     column![
         search,
         scrollable(list).height(Length::Fill),
-        divider,
-        add_row,
+        todo_footer_bar(&ws_state.add_draft),
     ]
     .height(Length::Fill)
     .into()
