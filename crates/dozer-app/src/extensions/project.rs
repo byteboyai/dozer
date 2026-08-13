@@ -9,6 +9,7 @@ use crate::{icons, theme};
 use dozer_core::protocol::ProjectInfo;
 use iced_widget::core::{Border, Element, Length};
 use iced_widget::{button, column, container, row, text};
+use std::path::PathBuf;
 
 /// 挂在每个 Workspace 上的项目信息面板状态。
 #[derive(Default)]
@@ -29,6 +30,8 @@ pub struct WorkspaceState {
     description_editing: Option<iced_widget::text_editor::Content>,
     /// 文档/Agent 记忆虚拟链接。
     links: links::LinksState,
+    /// 已展开状态目录 → 其子项列表(就地展开/收起)。
+    expanded_link_dirs: std::collections::HashMap<PathBuf, Vec<links::DirRow>>,
     error: Option<String>,
 }
 
@@ -100,6 +103,26 @@ pub enum Message {
     /// 生产代码构造它,故 `#[allow(dead_code)]`。
     #[allow(dead_code)]
     DescriptionEditSubmit,
+    LinkAdd {
+        target: links::LinkTarget,
+        path: PathBuf,
+        kind: links::LinkKind,
+    },
+    LinkRemove {
+        target: links::LinkTarget,
+        index: usize,
+    },
+    LinkDirToggle {
+        /// 保留在消息签名里(与 `LinkAdd`/`LinkRemove` 对齐);本期展开/收起
+        /// 只按 `path` 操作,还没按 `target` 分流,故 `#[allow(dead_code)]`。
+        #[allow(dead_code)]
+        target: links::LinkTarget,
+        path: PathBuf,
+    },
+    /// 内核拦截处理,见 `files::Message::OpenFile` 文档同款写法。
+    OpenLink(PathBuf),
+    PickFile(links::LinkTarget),
+    PickDir(links::LinkTarget),
 }
 
 /// 处理全部消息——本模块不触碰终端会话域,没有需要内核拦截、`update` 里
@@ -200,6 +223,47 @@ pub fn update(
                     ws_state.description_editing = Some(content); // 保留编辑态允许重试
                 }
             }
+        }
+        Message::LinkAdd { target, path, kind } => {
+            let already_present = ws_state.links.list(target).iter().any(|e| e.path == path);
+            if !already_present {
+                ws_state
+                    .links
+                    .list_mut(target)
+                    .push(links::LinkEntry { path, kind });
+                match links::save(repo_path, &ws_state.links) {
+                    Ok(()) => ws_state.error = None,
+                    Err(e) => {
+                        ws_state.links.list_mut(target).pop();
+                        ws_state.error = Some(format!("保存失败: {e}"));
+                    }
+                }
+            }
+        }
+        Message::LinkRemove { target, index } => {
+            let list = ws_state.links.list_mut(target);
+            if index >= list.len() {
+                return;
+            }
+            let removed = list.remove(index);
+            if let Err(e) = links::save(repo_path, &ws_state.links) {
+                ws_state.links.list_mut(target).insert(index, removed);
+                ws_state.error = Some(format!("保存失败: {e}"));
+            } else {
+                ws_state.error = None;
+            }
+        }
+        Message::LinkDirToggle { path, .. } => {
+            if ws_state.expanded_link_dirs.remove(&path).is_none() {
+                let rows = links::read_dir_row(&path);
+                ws_state.expanded_link_dirs.insert(path, rows);
+            }
+        }
+        Message::OpenLink(_) => {
+            unreachable!("由内核拦截处理,见 files::Message::OpenFile 文档")
+        }
+        Message::PickFile(_) | Message::PickDir(_) => {
+            unreachable!("由内核拦截处理,见 files::Message::OpenFile 文档")
         }
     }
 }
@@ -397,6 +461,19 @@ pub fn view<'a>(
         );
     }
 
+    content = content.push(links_section(
+        "项目文档",
+        links::LinkTarget::Docs,
+        &ws_state.links,
+        &ws_state.expanded_link_dirs,
+    ));
+    content = content.push(links_section(
+        "Agent 记忆",
+        links::LinkTarget::Memory,
+        &ws_state.links,
+        &ws_state.expanded_link_dirs,
+    ));
+
     if let Some(err) = &ws_state.error {
         content = content.push(
             text(format!("⚠ {err}"))
@@ -416,6 +493,124 @@ pub fn view<'a>(
             },
         )
         .into()
+}
+
+fn links_section<'a>(
+    title: &'static str,
+    target: links::LinkTarget,
+    links_state: &'a links::LinksState,
+    expanded: &'a std::collections::HashMap<PathBuf, Vec<links::DirRow>>,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let mut col = column![].spacing(6);
+    col = col.push(
+        row![
+            text(title)
+                .size(theme::font::label())
+                .color(theme::color::DIM),
+            iced_widget::space::horizontal(),
+            button(
+                text("+文件")
+                    .size(theme::font::caption())
+                    .color(theme::color::DIM)
+            )
+            .on_press(Message::PickFile(target))
+            .style(|_t, _s| iced_widget::button::Style {
+                background: None,
+                text_color: theme::color::DIM,
+                ..iced_widget::button::Style::default()
+            }),
+            button(
+                text("+目录")
+                    .size(theme::font::caption())
+                    .color(theme::color::DIM)
+            )
+            .on_press(Message::PickDir(target))
+            .style(|_t, _s| iced_widget::button::Style {
+                background: None,
+                text_color: theme::color::DIM,
+                ..iced_widget::button::Style::default()
+            }),
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center),
+    );
+
+    for (i, entry) in links_state.list(target).iter().enumerate() {
+        let name = entry
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| entry.path.to_string_lossy().into_owned());
+        let row_icon = if entry.kind == links::LinkKind::Dir {
+            icons::IconKind::Folder
+        } else {
+            icons::icon_for_file(&name)
+        };
+        let click_msg = if entry.kind == links::LinkKind::Dir {
+            Message::LinkDirToggle {
+                target,
+                path: entry.path.clone(),
+            }
+        } else {
+            Message::OpenLink(entry.path.clone())
+        };
+        col = col.push(
+            row![
+                button(
+                    row![
+                        icons::view(row_icon, crate::theme::icon_size::row(), theme::color::DIM),
+                        text(name)
+                            .size(theme::font::body())
+                            .color(theme::color::BODY),
+                    ]
+                    .spacing(6)
+                    .align_y(iced_widget::core::Alignment::Center)
+                )
+                .on_press(click_msg)
+                .style(|_t, _s| iced_widget::button::Style {
+                    background: None,
+                    text_color: theme::color::BODY,
+                    ..iced_widget::button::Style::default()
+                }),
+                iced_widget::space::horizontal(),
+                button(text("×").size(theme::font::body()).color(theme::color::DIM))
+                    .on_press(Message::LinkRemove { target, index: i })
+                    .style(|_t, _s| iced_widget::button::Style {
+                        background: None,
+                        text_color: theme::color::DIM,
+                        ..iced_widget::button::Style::default()
+                    }),
+            ]
+            .spacing(6)
+            .align_y(iced_widget::core::Alignment::Center),
+        );
+        if entry.kind == links::LinkKind::Dir
+            && let Some(rows) = expanded.get(&entry.path)
+        {
+            for row_entry in rows {
+                col = col.push(
+                    row![
+                        iced_widget::space::Space::new().width(Length::Fixed(20.0)),
+                        icons::view(
+                            if row_entry.is_dir {
+                                icons::IconKind::Folder
+                            } else {
+                                icons::icon_for_file(&row_entry.name)
+                            },
+                            crate::theme::icon_size::row(),
+                            theme::color::DIM
+                        ),
+                        text(row_entry.name.clone())
+                            .size(theme::font::caption())
+                            .color(theme::color::DIM),
+                    ]
+                    .spacing(6)
+                    .align_y(iced_widget::core::Alignment::Center),
+                );
+            }
+        }
+    }
+    col.into()
 }
 
 #[cfg(test)]
@@ -704,5 +899,123 @@ mod tests {
         assert!(ws.description_editing.is_none());
         assert!(ws.description.is_none());
         assert!(crate::project_meta::load_description(dir.path()).is_none());
+    }
+
+    #[test]
+    fn link_add_appends_and_writes_disk() {
+        let mut ws = new_ws();
+        let repo = tempfile::tempdir().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::LinkAdd {
+                target: links::LinkTarget::Docs,
+                path: PathBuf::from("/repo/README.md"),
+                kind: links::LinkKind::File,
+            },
+            1,
+            "名字",
+            repo.path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert_eq!(ws.links.docs.len(), 1);
+        let loaded = links::load(repo.path()).unwrap();
+        assert_eq!(loaded.docs.len(), 1);
+    }
+
+    #[test]
+    fn link_add_dedupes_existing_path() {
+        let mut ws = new_ws();
+        ws.links.docs.push(links::LinkEntry {
+            path: PathBuf::from("/repo/README.md"),
+            kind: links::LinkKind::File,
+        });
+        let repo = tempfile::tempdir().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::LinkAdd {
+                target: links::LinkTarget::Docs,
+                path: PathBuf::from("/repo/README.md"),
+                kind: links::LinkKind::File,
+            },
+            1,
+            "名字",
+            repo.path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert_eq!(ws.links.docs.len(), 1);
+    }
+
+    #[test]
+    fn link_remove_deletes_and_writes_disk() {
+        let mut ws = new_ws();
+        ws.links.memory.push(links::LinkEntry {
+            path: PathBuf::from("/home/.claude/memory"),
+            kind: links::LinkKind::Dir,
+        });
+        let repo = tempfile::tempdir().unwrap();
+        links::save(repo.path(), &ws.links).unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::LinkRemove {
+                target: links::LinkTarget::Memory,
+                index: 0,
+            },
+            1,
+            "名字",
+            repo.path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert!(ws.links.memory.is_empty());
+        assert!(links::load(repo.path()).unwrap().memory.is_empty());
+    }
+
+    #[test]
+    fn link_dir_toggle_expands_then_collapses() {
+        let mut ws = new_ws();
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repo.path().join("docs")).unwrap();
+        std::fs::write(repo.path().join("docs").join("a.md"), "").unwrap();
+        let docs_path = repo.path().join("docs");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::LinkDirToggle {
+                target: links::LinkTarget::Docs,
+                path: docs_path.clone(),
+            },
+            1,
+            "名字",
+            repo.path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert_eq!(
+            ws.expanded_link_dirs.get(&docs_path).map(|r| r.len()),
+            Some(1)
+        );
+        update(
+            &mut ws,
+            Message::LinkDirToggle {
+                target: links::LinkTarget::Docs,
+                path: docs_path.clone(),
+            },
+            1,
+            "名字",
+            repo.path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert!(!ws.expanded_link_dirs.contains_key(&docs_path));
     }
 }

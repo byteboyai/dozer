@@ -1007,14 +1007,20 @@ pub enum Message {
     Search(search::Message),
     /// 终端 pane 像素尺寸变化换算出的新网格尺寸；对所有 tab 生效
     /// （包括当前不可见的），保证切换 tab 时尺寸已经是最新的。
-    PaneResized { cols: u16, rows: u16 },
+    PaneResized {
+        cols: u16,
+        rows: u16,
+    },
     /// 按下某条分隔线,记录"正在拖哪条"(main.rs 后续 CursorMoved 靠这个
     /// 状态决定要不要继续转发拖拽)。构造方为 `divider_bar` 的 `on_press`。
     ColumnDragStart(Divider),
     /// 拖拽中:当前窗口逻辑宽 + 光标逻辑 x(main.rs 换算好传入,`update()`
     /// 统一算+夹取,不与 main.rs 分摊裁剪逻辑)。构造方为 main.rs 的
     /// `CursorMoved` 续传。
-    ColumnDrag { window_width: f32, logical_x: f32 },
+    ColumnDrag {
+        window_width: f32,
+        logical_x: f32,
+    },
     /// 松开左键,结束拖拽并触发写盘。构造方为 main.rs 的
     /// `MouseInput{Released}` 分支。
     ColumnDragEnd,
@@ -1023,7 +1029,10 @@ pub enum Message {
     /// `MouseArea::on_move`(仅在 `tab_drag` 命中本组时挂载)。按住页签＝
     /// 准备拖的来源,由各选中处理(`SelectTab`/`PreviewSelectTab`/
     /// `ProjectTabSwitch` 及浏览器 `SelectTab`)在按住瞬间把 `tab_drag` 置位。
-    TabDragMove { group: TabGroup, index: usize },
+    TabDragMove {
+        group: TabGroup,
+        index: usize,
+    },
     /// 松开左键,结束页签拖拽。构造方为 main.rs 的 `MouseInput{Released}`
     /// 分支;项目页签组顺带把新顺序写盘。
     TabDragEnd,
@@ -1070,9 +1079,17 @@ pub enum Message {
     PreviewTabScroll(bool),
     /// 终端左键按下：在视口格 `(col, row)` 起新选区（`right` = 按点在
     /// 格子右半）。
-    TermSelStart { col: usize, row: usize, right: bool },
+    TermSelStart {
+        col: usize,
+        row: usize,
+        right: bool,
+    },
     /// 终端拖拽：选区末端更新到视口格 `(col, row)`。
-    TermSelUpdate { col: usize, row: usize, right: bool },
+    TermSelUpdate {
+        col: usize,
+        row: usize,
+        right: bool,
+    },
     /// ⌘V 粘贴剪贴板文本：按会话的 bracketed paste 模式决定是否包裹
     /// `ESC[200~`/`ESC[201~` 后写入 daemon。
     TermPaste(String),
@@ -1109,7 +1126,10 @@ pub enum Message {
     /// 预览 tab 右键菜单:在 `preview_pane` 某 tab 上右键打开,携带 tab 下标
     /// 与该文件是否可编辑(仅文本类文件,决定菜单"编辑"项是否出现)。定位
     /// 坐标复用 `files.last_right_click`(main.rs 右键时写入)。
-    PreviewTabContextMenu { idx: usize, editable: bool },
+    PreviewTabContextMenu {
+        idx: usize,
+        editable: bool,
+    },
     /// 预览 tab 右键菜单关闭(点遮罩 / 按 Esc)。
     PreviewTabContextMenuClose,
     /// 浏览器面板的全部消息,内核只转发不解读——见
@@ -1127,6 +1147,10 @@ pub enum Message {
     /// 显式关闭一个页签,才结束该项目下的会话"。整条就地改写路径连同
     /// `retarget_active_slot` 已随之删除,不留第二条会杀会话的打开入口。
     ProjectTabPickFolder,
+    /// "+文件"/"+目录":main.rs 弹 rfd 模态选完后回送
+    /// `project::Message::LinkAdd`。
+    ProjectLinkPickFile(project::links::LinkTarget),
+    ProjectLinkPickDir(project::links::LinkTarget),
     /// 项目页签:把某路径作为**新页签**打开(不动任何已存在页签的内容)。
     ProjectTabOpen(PathBuf),
     /// 项目页签:`ProjectTabOpen` 异步完成(daemon upsert 结果 + 最近列表)。
@@ -2833,6 +2857,9 @@ impl App {
             Message::Browser(msg) => self.browser_message(msg),
             Message::ProjectSelect(id) => self.project_select(id),
             Message::ProjectTabPickFolder => {} // 副作用在 main.rs(rfd 文件夹选择)
+            // rfd 弹窗在 main.rs 里同步处理,选中后转成 project::Message::LinkAdd
+            // 再回送到这里;这两条顶层消息本身不需要 App::update 处理任何东西。
+            Message::ProjectLinkPickFile(_) | Message::ProjectLinkPickDir(_) => {}
             Message::ProjectTabOpen(path) => {
                 let client = self.client.clone();
                 let proxy = self.proxy.clone();
@@ -2959,6 +2986,15 @@ impl App {
                     &handle,
                     emit,
                 );
+            }
+            Message::Project(project::Message::OpenLink(path)) => {
+                self.update(Message::PreviewOpenPath(path));
+            }
+            Message::Project(project::Message::PickFile(target)) => {
+                self.update(Message::ProjectLinkPickFile(target));
+            }
+            Message::Project(project::Message::PickDir(target)) => {
+                self.update(Message::ProjectLinkPickDir(target));
             }
             Message::Project(msg) => {
                 let Some(project_id) = self.active_project_id else {

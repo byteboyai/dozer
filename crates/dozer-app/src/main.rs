@@ -1182,6 +1182,26 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         app.update(Message::ProjectTabOpen(dir));
                     }
                 }
+                Message::ProjectLinkPickFile(target) => {
+                    if let Some(path) = rfd::FileDialog::new().pick_file() {
+                        app.update(Message::Project(extensions::project::Message::LinkAdd {
+                            target,
+                            path,
+                            kind: extensions::project::links::LinkKind::File,
+                        }));
+                        window.request_redraw();
+                    }
+                }
+                Message::ProjectLinkPickDir(target) => {
+                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                        app.update(Message::Project(extensions::project::Message::LinkAdd {
+                            target,
+                            path,
+                            kind: extensions::project::links::LinkKind::Dir,
+                        }));
+                        window.request_redraw();
+                    }
+                }
                 Message::Files(extensions::files::Message::CopyPath(path, kind)) => {
                     let root = app.active_project_path().unwrap_or_else(|| path.clone());
                     let s = crate::project::path_string(kind, &path, &root);
