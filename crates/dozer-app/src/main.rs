@@ -880,22 +880,15 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
-            // 浏览器地址栏 / 验收意见 / 项目树行内编辑态 / 项目标题编辑 /
-            // 文件树搜索框 / 右键"搜索"弹窗查询框:键盘直达自绘输入(不经
-            // keymap、不进 PTY)。文件预览面板已不再有地址栏。
+            // 浏览器地址栏 / 验收意见 / 项目树行内编辑态 / 文件树搜索框 /
+            // 右键"搜索"弹窗查询框:键盘直达自绘输入(不经 keymap、不进 PTY)。
+            // 文件预览面板已不再有地址栏。
             let to_browser = app.browser_addr_editing();
             let to_comment = app.acceptance_comment_editing();
             let to_tree_edit = app.tree_editing();
-            let to_project_title = app.project_title_editing();
             let to_search = app.search_editing();
             let to_search_popup = app.search_popup_editing();
-            if to_browser
-                || to_comment
-                || to_tree_edit
-                || to_project_title
-                || to_search
-                || to_search_popup
-            {
+            if to_browser || to_comment || to_tree_edit || to_search || to_search_popup {
                 let addr_event = match event {
                     WindowEvent::KeyboardInput {
                         event,
@@ -923,9 +916,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 };
                 if let Some(ev) = addr_event {
                     // 优先级:右键"搜索"弹窗查询框 > 浏览器地址栏 > 验收意见 >
-                    // 项目树编辑 > 项目信息面板标题 > 文件树搜索框(多者同真时
-                    // 罕见,谁先建的编辑态谁优先没有实际冲突场景,这个顺序只是一
-                    // 个确定性兜底)。
+                    // 项目树编辑 > 文件树搜索框(多者同真时罕见,谁先建的编辑态
+                    // 谁优先没有实际冲突场景,这个顺序只是一个确定性兜底)。
                     let message = if to_search_popup {
                         Message::Search(extensions::search::Message::QueryEvent(ev))
                     } else if to_browser {
@@ -934,8 +926,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         Message::Acceptance(extensions::acceptance::Message::CommentEvent(ev))
                     } else if to_tree_edit {
                         Message::Files(extensions::files::Message::EditEvent(ev))
-                    } else if to_project_title {
-                        Message::Project(extensions::project::Message::TitleEditEvent(ev))
                     } else {
                         Message::Files(extensions::files::Message::SearchEvent(ev))
                     };

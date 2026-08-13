@@ -436,7 +436,7 @@ impl Workspace {
 
         let files = files::WorkspaceState::new(FileTree::new(PathBuf::from(&project.path)));
         let repo_path = PathBuf::from(&project.path);
-        let project_panel = project::WorkspaceState::new(project::load_goal(&repo_path));
+        let project_panel = project::WorkspaceState::default();
 
         let mut ws = Self {
             tabs,
@@ -560,8 +560,7 @@ impl Workspace {
     /// GUI。同步构造 + 恒有 `project` 是这条不变式的落地方式。
     pub(crate) fn loading_for_project(project: ProjectInfo) -> Self {
         let files = files::WorkspaceState::new(FileTree::new(PathBuf::from(&project.path)));
-        let project_panel =
-            project::WorkspaceState::new(project::load_goal(Path::new(&project.path)));
+        let project_panel = project::WorkspaceState::default();
         Self {
             project: Some(project),
             files,
@@ -913,7 +912,7 @@ impl Workspace {
         self.usage = usage::WorkspaceState::default();
         let project_id = project.id;
         let repo_path = PathBuf::from(&project.path);
-        self.project_panel = project::WorkspaceState::new(project::load_goal(&repo_path));
+        self.project_panel = project::WorkspaceState::default();
         self.project = Some(project);
         self.ensure_project_terminal(io);
         self.restore_preview_state();
@@ -1487,9 +1486,6 @@ impl Workspace {
     }
 
     /// 项目信息面板标题是否处于自绘编辑态(main.rs 键盘路由用)。
-    pub fn project_title_editing(&self) -> bool {
-        self.project_panel.title_editing_is_some()
-    }
 
     /// 当前项目根路径(供 main.rs 算相对路径用;未打开项目时 None)。
     pub fn active_project_path(&self) -> Option<PathBuf> {
@@ -1509,7 +1505,6 @@ impl Workspace {
         self.acceptance.clear_comment_editing();
         self.files.cancel_tree_edit();
         self.files.cancel_search_edit();
-        self.project_panel.cancel_title_edit();
     }
 
     /// 协议闭包共享的文件白名单句柄.

@@ -2005,12 +2005,6 @@ impl App {
             .is_some_and(|ws| ws.search_popup_editing())
     }
 
-    /// 项目信息面板标题是否处于自绘编辑态(main.rs 键盘路由用)。
-    pub fn project_title_editing(&self) -> bool {
-        self.active_workspace()
-            .is_some_and(|ws| ws.project_title_editing())
-    }
-
     /// 当前项目根路径(供 main.rs 算相对路径用;未打开项目时 None)。
     pub fn active_project_path(&self) -> Option<PathBuf> {
         self.active_workspace()?.active_project_path()
@@ -2930,11 +2924,7 @@ impl App {
                 let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
                     return;
                 };
-                let Some(project) = ws.project.as_ref() else {
-                    return;
-                };
-                let repo_path = Path::new(&project.path).to_path_buf();
-                project::update(&mut ws.project_panel, msg, project_id, &repo_path);
+                project::update(&mut ws.project_panel, msg, project_id);
             }
             Message::Project(msg) => {
                 let Some(project_id) = self.active_project_id else {
@@ -2943,11 +2933,7 @@ impl App {
                 let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
                     return;
                 };
-                let Some(project) = ws.project.as_ref() else {
-                    return;
-                };
-                let repo_path = Path::new(&project.path).to_path_buf();
-                project::update(&mut ws.project_panel, msg, project_id, &repo_path);
+                project::update(&mut ws.project_panel, msg, project_id);
             }
             Message::Ssh(ssh::Message::TestConnectionResult(project_id, host_id, result)) => {
                 self.ssh_test_connection_result(project_id, host_id, result)
