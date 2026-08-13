@@ -308,6 +308,9 @@ pub struct Workspace {
     /// SSH 面板当前显示哪个 tab——身份寻址(不是下标),因为 tab 会被
     /// 用户关闭导致下标漂移。`None` = 没有任何 SSH 终端 tab 打开。
     pub(crate) ssh_active: Option<(String, ssh::SshTabKind)>,
+    /// SFTP tab 状态(阶段 3),按 host_id 去重——同一主机同时只有一个
+    /// SFTP tab 有意义(见 spec 的既有论证)。
+    pub(crate) sftp_tabs: HashMap<String, ssh::sftp::SftpTabState>,
     /// 预览域状态机(P1d).
     pub(crate) preview: PreviewPane,
     /// Project 面板右配对的预览状态机——独立的 `PreviewPane` 实例,与
@@ -545,6 +548,7 @@ impl Workspace {
             ssh_out_pending: HashMap::new(),
             ssh_tabs: Vec::new(),
             ssh_active: None,
+            sftp_tabs: HashMap::new(),
             preview: PreviewPane::default(),
             project_preview: PreviewPane::default(),
             preview_error: None,
@@ -1124,10 +1128,13 @@ impl Workspace {
     /// 原有 `ssh_active` 不变,不是清空——镜像其它"目标已消失"场景的
     /// 既有容错口径)。
     pub(crate) fn select_ssh_tab(&mut self, host_id: String, kind: ssh::SshTabKind) {
-        let exists = self
-            .ssh_tabs
-            .iter()
-            .any(|t| t.info.id.strip_prefix("ssh:") == Some(host_id.as_str()));
+        let exists = match kind {
+            ssh::SshTabKind::Terminal => self
+                .ssh_tabs
+                .iter()
+                .any(|t| t.info.id.strip_prefix("ssh:") == Some(host_id.as_str())),
+            ssh::SshTabKind::Sftp => self.sftp_tabs.contains_key(&host_id),
+        };
         if exists {
             self.ssh_active = Some((host_id, kind));
         }
@@ -1508,6 +1515,107 @@ impl Workspace {
 
         self.pending.insert(tab_id, jh);
         self.ssh_out_pending.insert(tab_id, tx_out);
+    }
+
+    /// 打开一个 SFTP tab:建立独立 SSH 连接 + SFTP 子系统,起一个持有
+    /// 连接、监听命令通道的异步任务(镜像 `spawn_ssh_tab` 的整体结构)。
+    pub(crate) fn spawn_sftp_tab(&mut self, io: &ShellIo, host_id: String) {
+        let Some(host) = self.ssh.hosts().iter().find(|h| h.id == host_id).cloned() else {
+            return;
+        };
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        let project_id = project.id;
+        let project_root = std::path::PathBuf::from(&project.path);
+        let password = ssh::keyring_password(project_id, &host_id);
+        let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel::<ssh::sftp::SftpCmd>();
+        let proxy = io.proxy.clone();
+
+        // 先在本地(同步)插入一个占位 tab 状态,连接结果异步回填——
+        // 这样"点文件传输图标"能立刻看到一个 tab 出现(带 loading 态),
+        // 不用等 10 秒握手超时才有任何 UI 反馈。
+        self.sftp_tabs.insert(
+            host_id.clone(),
+            ssh::sftp::SftpTabState::new(host_id.clone(), project_root, "~".to_string()),
+        );
+
+        let host_id_for_task = host_id.clone();
+        io.handle.spawn(async move {
+            let handshake_result = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                ssh::sftp::open_sftp_session(&host, password),
+            )
+            .await;
+            let (handle, sftp) = match handshake_result {
+                Ok(Ok(pair)) => pair,
+                Ok(Err(e)) => {
+                    let _ = proxy.send_event(Message::Ssh(ssh::Message::Sftp(
+                        ssh::sftp::Message::Connected(host_id_for_task, Err(e.to_string())),
+                    )));
+                    return;
+                }
+                Err(_) => {
+                    let _ = proxy.send_event(Message::Ssh(ssh::Message::Sftp(
+                        ssh::sftp::Message::Connected(
+                            host_id_for_task,
+                            Err("连接超时(10 秒)".to_string()),
+                        ),
+                    )));
+                    return;
+                }
+            };
+            let _ = proxy.send_event(Message::Ssh(ssh::Message::Sftp(
+                ssh::sftp::Message::Connected(host_id_for_task.clone(), Ok(())),
+            )));
+            // `handle` 必须留在这个任务作用域内到循环结束——同阶段 2
+            // 终端连接的既有约束,理由一样(不能提前析构掉 SSH 连接本身)。
+            let _handle_keepalive = handle;
+            while let Some(cmd) = cmd_rx.recv().await {
+                match cmd {
+                    ssh::sftp::SftpCmd::ReadDir(dir) => {
+                        let result = sftp
+                            .read_dir(dir.clone())
+                            .await
+                            .map(|read_dir| {
+                                read_dir
+                                    .map(|e| ssh::sftp::RemoteEntry {
+                                        path: e.path(),
+                                        name: e.file_name(),
+                                        is_dir: e.file_type().is_dir(),
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .map_err(|e| e.to_string());
+                        let _ = proxy.send_event(Message::Ssh(ssh::Message::Sftp(
+                            ssh::sftp::Message::RemoteDirLoaded(
+                                host_id_for_task.clone(),
+                                dir,
+                                result,
+                            ),
+                        )));
+                    }
+                    ssh::sftp::SftpCmd::Upload { local, remote_dir } => {
+                        let result = ssh::sftp::upload(&sftp, &local, &remote_dir).await;
+                        let _ = proxy.send_event(Message::Ssh(ssh::Message::Sftp(
+                            ssh::sftp::Message::TransferResult(host_id_for_task.clone(), result),
+                        )));
+                    }
+                    ssh::sftp::SftpCmd::Download { remote, local_dir } => {
+                        let result = ssh::sftp::download(&sftp, &remote, &local_dir).await;
+                        let _ = proxy.send_event(Message::Ssh(ssh::Message::Sftp(
+                            ssh::sftp::Message::TransferResult(host_id_for_task.clone(), result),
+                        )));
+                    }
+                }
+            }
+            // cmd_tx 全部 drop(tab 被关闭)→ 循环退出 → handle/sftp 析构 →
+            // 连接关闭。
+        });
+
+        if let Some(state) = self.sftp_tabs.get_mut(&host_id) {
+            state.cmd_tx = Some(cmd_tx);
+        }
     }
 
     /// 只取 `cols`/`rows`(不取整个 `&ShellIo`)——`EventLoopProxy` 在单测
