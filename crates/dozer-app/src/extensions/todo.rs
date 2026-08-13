@@ -617,7 +617,7 @@ pub fn view<'a>(
     let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         match ws_state.view_mode {
             TodoViewMode::List => todo_list_view(app_state, ws_state, project_id, &states, tabs),
-            TodoViewMode::Kanban => todo_kanban_placeholder(&states, ws_state),
+            TodoViewMode::Kanban => todo_kanban_view(app_state, ws_state, project_id, &states, tabs),
             TodoViewMode::Markdown => todo_markdown_view(project_path),
         };
 
@@ -687,29 +687,18 @@ fn todo_footer_bar<'a>(
         .into()
 }
 
-/// 列表视图主体：搜索栏 + 编号行列表 + 底部新增输入。
-fn todo_list_view<'a>(
-    app_state: &'a AppState,
-    ws_state: &'a WorkspaceState,
-    project_id: i64,
-    states: &[TodoState],
-    tabs: &[SessionTabSummary],
+/// 顶部搜索框，List/Kanban 两视图共用同一份 `ws_state.search` 状态——切
+/// tab 不清空搜索词(对应 spec"List/Kanban 共用同一份搜索状态"要求)。
+fn todo_search_bar<'a>(
+    search: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let visible_idx = filter_todos(&ws_state.items, states, ws_state.filter, &ws_state.search);
-
-    let existing_tabs: Vec<(&str, String)> = tabs
-        .iter()
-        .filter(|t| t.alive)
-        .map(|t| (t.session_id.as_str(), t.title.clone()))
-        .collect();
-
-    let search = row![
+    row![
         icons::view(
             icons::IconKind::Search,
             crate::theme::icon_size::row(),
             theme::color::DIM
         ),
-        text_input("Search List parameters...", &ws_state.search)
+        text_input("Search List parameters...", search)
             .on_input(Message::SearchChanged)
             .size(theme::font::body())
             .width(Length::Fill)
@@ -726,7 +715,27 @@ fn todo_list_view<'a>(
     ]
     .spacing(8)
     .padding([12, 20])
-    .align_y(iced_widget::core::alignment::Vertical::Center);
+    .align_y(iced_widget::core::alignment::Vertical::Center)
+    .into()
+}
+
+/// 列表视图主体：搜索栏 + 编号行列表 + 底部新增输入。
+fn todo_list_view<'a>(
+    app_state: &'a AppState,
+    ws_state: &'a WorkspaceState,
+    project_id: i64,
+    states: &[TodoState],
+    tabs: &[SessionTabSummary],
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let visible_idx = filter_todos(&ws_state.items, states, ws_state.filter, &ws_state.search);
+
+    let existing_tabs: Vec<(&str, String)> = tabs
+        .iter()
+        .filter(|t| t.alive)
+        .map(|t| (t.session_id.as_str(), t.title.clone()))
+        .collect();
+
+    let search = todo_search_bar(&ws_state.search);
 
     let mut list = column![].spacing(8).padding([0, 20]);
     if visible_idx.is_empty() {
@@ -779,61 +788,70 @@ fn todo_list_view<'a>(
     .into()
 }
 
-/// 看板占位：三列（待办/进行中/完成）各列标题 + 该状态任务标题卡片，纯展示。
-fn todo_kanban_placeholder<'a>(
-    states: &[TodoState],
+/// 看板视图主体：与 `todo_list_view` 共用同一份 `search`/`filter` 状态和
+/// `todo_footer_bar`，唯一区别是卡片排布方式——单列自适应换行网格(类 CSS
+/// flex-wrap，用 `iced_aw::widget::Wrap` 实现)而不是纵向单列堆叠。不做
+/// 跨列拖拽(非目标，见 spec)。
+fn todo_kanban_view<'a>(
+    app_state: &'a AppState,
     ws_state: &'a WorkspaceState,
+    project_id: i64,
+    states: &[TodoState],
+    tabs: &[SessionTabSummary],
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let columns = [
-        (TodoFilter::Pending, "待办"),
-        (TodoFilter::InProgress, "进行中"),
-        (TodoFilter::Done, "完成"),
-    ];
-    let mut cols = row![].spacing(12).padding([12, 20]);
-    for (filter, title) in columns {
-        let mut col = column![].spacing(8).width(Length::Fill);
-        col = col.push(
-            text(title)
-                .size(theme::font::subtitle())
-                .color(theme::color::CREAM),
-        );
-        let mut any = false;
-        for (i, item) in ws_state.items.iter().enumerate() {
-            if states[i]
-                == match filter {
-                    TodoFilter::Pending => TodoState::Pending,
-                    TodoFilter::InProgress => TodoState::InProgress,
-                    TodoFilter::Done => TodoState::Done,
-                    TodoFilter::All => continue,
-                }
-            {
-                any = true;
-                col = col.push(
-                    container(
-                        text(item.text.clone())
-                            .size(theme::font::body())
-                            .color(theme::color::CREAM)
-                            .width(Length::Fill),
-                    )
-                    .padding([10, 12])
-                    .style(|_t: &iced_widget::Theme| container::Style {
-                        background: Some(theme::color::CARD.into()),
-                        border: Border {
-                            color: theme::color::BORDER,
-                            width: 1.0,
-                            radius: 6.0.into(),
-                        },
-                        ..container::Style::default()
-                    }),
-                );
+    let visible_idx = filter_todos(&ws_state.items, states, ws_state.filter, &ws_state.search);
+
+    let existing_tabs: Vec<(&str, String)> = tabs
+        .iter()
+        .filter(|t| t.alive)
+        .map(|t| (t.session_id.as_str(), t.title.clone()))
+        .collect();
+
+    let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        if visible_idx.is_empty() {
+            container(
+                text("没有匹配的任务")
+                    .size(theme::font::body())
+                    .color(theme::color::DIM),
+            )
+            .padding([20, 20])
+            .into()
+        } else {
+            let mut cards = Vec::with_capacity(visible_idx.len());
+            for (display_no, &idx) in visible_idx.iter().enumerate() {
+                let item = &ws_state.items[idx];
+                let key = todo_line_key(&item.text);
+                let meta = app_state.meta_for(project_id, key);
+                let dispatch = meta.and_then(|m| m.dispatch.as_ref());
+                let card = container(todo_card(
+                    display_no + 1,
+                    idx,
+                    item,
+                    states[idx],
+                    meta,
+                    dispatch,
+                    ws_state.selected_row == Some(idx),
+                    ws_state.dispatch_open == Some(idx),
+                    ws_state.state_pill_open == Some(idx),
+                    &existing_tabs,
+                ))
+                .width(Length::Fixed(280.0));
+                cards.push(card.into());
             }
-        }
-        if !any {
-            col = col.push(text("—").size(theme::font::body()).color(theme::color::DIM));
-        }
-        cols = cols.push(col);
-    }
-    scrollable(cols).height(Length::Fill).into()
+            iced_aw::widget::Wrap::with_elements(cards)
+                .spacing(12.0)
+                .line_spacing(12.0)
+                .padding([12, 20])
+                .into()
+        };
+
+    column![
+        todo_search_bar(&ws_state.search),
+        scrollable(body).height(Length::Fill),
+        todo_footer_bar(&ws_state.add_draft),
+    ]
+    .height(Length::Fill)
+    .into()
 }
 
 /// MARKDOWN 占位：只读展示 `.dozer/todo.md` 原始源码。
