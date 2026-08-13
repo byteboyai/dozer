@@ -1485,7 +1485,10 @@ impl Workspace {
         self.search.query_editing()
     }
 
-    /// 项目信息面板标题是否处于自绘编辑态(main.rs 键盘路由用)。
+    /// 项目信息面板名称是否处于自绘编辑态(main.rs 键盘路由用)。
+    pub fn project_name_editing(&self) -> bool {
+        self.project_panel.name_editing_is_some()
+    }
 
     /// 当前项目根路径(供 main.rs 算相对路径用;未打开项目时 None)。
     pub fn active_project_path(&self) -> Option<PathBuf> {
@@ -1505,6 +1508,7 @@ impl Workspace {
         self.acceptance.clear_comment_editing();
         self.files.cancel_tree_edit();
         self.files.cancel_search_edit();
+        self.project_panel.cancel_name_edit();
     }
 
     /// 协议闭包共享的文件白名单句柄.

@@ -1,10 +1,11 @@
 //! 项目信息(Project)面板:项目名、git 分支/脏标、验收次数。阶段 1 扩展化
 //! 重构项目,设计见 `docs/superpowers/specs/2026-08-13-project-info-pane-v2-design.md`。
 use crate::delivery::WorktreeInfo;
+use crate::workspace::AddrEvent;
 use crate::{icons, theme};
 use dozer_core::protocol::ProjectInfo;
 use iced_widget::core::{Border, Element, Length};
-use iced_widget::{column, container, row, text};
+use iced_widget::{button, column, container, row, text};
 
 /// 挂在每个 Workspace 上的项目信息面板状态。
 #[derive(Default)]
@@ -13,6 +14,8 @@ pub struct WorkspaceState {
     dirty: bool,
     worktrees: Vec<WorktreeInfo>,
     project_acceptance_count: Option<u64>,
+    /// 项目名称行内编辑态(None=未在编辑)。
+    name_editing: Option<String>,
     error: Option<String>,
 }
 
@@ -23,21 +26,46 @@ impl WorkspaceState {
     pub fn worktrees(&self) -> &[WorktreeInfo] {
         &self.worktrees
     }
+
+    /// 供内核 main.rs 键盘路由判断"项目名称是否在自绘编辑态"。
+    pub fn name_editing_is_some(&self) -> bool {
+        self.name_editing.is_some()
+    }
+
+    /// 供内核 `Workspace::blur_inputs` 调用——点击输入框外时取消名称编辑
+    /// (不保存半输入)。
+    pub fn cancel_name_edit(&mut self) {
+        self.name_editing = None;
+    }
 }
 
 /// 组合 git 刷新结果里跟 Project 有关的部分(`branch`/`dirty`/`worktrees`)、
-/// 验收次数。`GitRefreshed`/`AcceptanceCountLoaded` 由内核分发,带
-/// `project_id`,走 `with_project`。
+/// 验收次数、daemon 改名结果。`GitRefreshed`/`AcceptanceCountLoaded`/
+/// `NameRenamed` 由内核分发,带 `project_id`,走 `with_project`;其余是用户
+/// 交互消息。
 #[derive(Debug, Clone)]
 pub enum Message {
     GitRefreshed(i64, Option<String>, bool, Vec<WorktreeInfo>),
     AcceptanceCountLoaded(i64, Option<u64>),
+    /// daemon 改名结果。带 `project_id`,走 `with_project` 路由。
+    NameRenamed(i64, Result<dozer_core::protocol::ProjectInfo, String>),
+    NameEditStart,
+    NameEditEvent(AddrEvent),
 }
 
 /// 处理全部消息——本模块不触碰终端会话域,没有需要内核拦截、`update` 里
-/// `unreachable!` 的消息(不像 Files/Acceptance),全部同步完成,不需要
+/// `unreachable!` 的消息(不像 Files/Acceptance);改名需要 daemon 往返,走
 /// `handle`/`emit`。
-pub fn update(ws_state: &mut WorkspaceState, msg: Message, _project_id: i64) {
+#[allow(clippy::too_many_arguments)]
+pub fn update(
+    ws_state: &mut WorkspaceState,
+    msg: Message,
+    project_id: i64,
+    current_name: &str,
+    client: &dozer_client::Client,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) {
     match msg {
         Message::GitRefreshed(_, branch, dirty, worktrees) => {
             ws_state.branch = branch;
@@ -47,6 +75,52 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message, _project_id: i64) {
         Message::AcceptanceCountLoaded(_, n) => {
             ws_state.project_acceptance_count = n;
         }
+        Message::NameEditStart => {
+            ws_state.name_editing = Some(current_name.to_string());
+        }
+        Message::NameEditEvent(ev) => match ev {
+            AddrEvent::Text(s) => {
+                if let Some(buf) = &mut ws_state.name_editing {
+                    buf.push_str(&s);
+                }
+            }
+            AddrEvent::Backspace => {
+                if let Some(buf) = &mut ws_state.name_editing {
+                    buf.pop();
+                }
+            }
+            AddrEvent::Cancel => ws_state.name_editing = None,
+            AddrEvent::Submit => {
+                let Some(raw) = ws_state.name_editing.clone() else {
+                    return;
+                };
+                let name = raw.trim().to_string();
+                if name.is_empty() || name == current_name {
+                    // 空名或未改动:直接关闭编辑框,不发请求。
+                    ws_state.name_editing = None;
+                    return;
+                }
+                let client = client.clone();
+                handle.spawn(async move {
+                    let result = client
+                        .rename_project(project_id, &name)
+                        .await
+                        .map_err(|e| e.to_string())
+                        .and_then(|opt| opt.ok_or_else(|| "项目不存在".to_string()));
+                    emit(Message::NameRenamed(project_id, result));
+                });
+            }
+        },
+        Message::NameRenamed(_, result) => match result {
+            Ok(_) => {
+                ws_state.name_editing = None;
+                ws_state.error = None;
+            }
+            Err(e) => {
+                ws_state.error = Some(format!("改名失败: {e}"));
+                // 保留编辑态原始输入,允许重试。
+            }
+        },
     }
 }
 
@@ -83,11 +157,39 @@ pub fn view<'a>(
         "项目",
     ));
 
-    content = content.push(
-        text(p.name.clone())
-            .size(theme::font::title())
-            .color(theme::color::CREAM),
-    );
+    let name_row: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        if let Some(buf) = &ws_state.name_editing {
+            container(
+                text(format!("{buf}▏"))
+                    .size(theme::font::title())
+                    .color(theme::color::CREAM),
+            )
+            .padding([2, 4])
+            .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+                background: Some(theme::color::CARD.into()),
+                border: Border {
+                    color: theme::color::CREAM,
+                    width: 1.0,
+                    radius: 2.0.into(),
+                },
+                ..iced_widget::container::Style::default()
+            })
+            .into()
+        } else {
+            button(
+                text(p.name.clone())
+                    .size(theme::font::title())
+                    .color(theme::color::CREAM),
+            )
+            .on_press(Message::NameEditStart)
+            .style(|_t, _s| iced_widget::button::Style {
+                background: None,
+                text_color: theme::color::CREAM,
+                ..iced_widget::button::Style::default()
+            })
+            .into()
+        };
+    content = content.push(name_row);
 
     let label = project_branch_label(ws_state.branch.as_deref(), ws_state.dirty);
     let bcolor = if ws_state.dirty {
@@ -116,6 +218,14 @@ pub fn view<'a>(
         );
     }
 
+    if let Some(err) = &ws_state.error {
+        content = content.push(
+            text(format!("⚠ {err}"))
+                .size(theme::font::label())
+                .color(theme::color::RED),
+        );
+    }
+
     container(content)
         .width(width)
         .height(Length::Fill)
@@ -137,13 +247,22 @@ mod tests {
         WorkspaceState::default()
     }
 
+    fn test_client() -> dozer_client::Client {
+        dozer_client::Client::new(std::path::PathBuf::from("/tmp/dozer-project-test.sock"))
+    }
+
     #[test]
     fn git_refreshed_updates_three_fields() {
         let mut ws = new_ws();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         update(
             &mut ws,
             Message::GitRefreshed(1, Some("main".to_string()), true, vec![]),
             1,
+            "名字",
+            &test_client(),
+            rt.handle(),
+            |_| {},
         );
         assert_eq!(ws.branch.as_deref(), Some("main"));
         assert!(ws.dirty);
@@ -153,7 +272,16 @@ mod tests {
     #[test]
     fn acceptance_count_loaded_sets_field() {
         let mut ws = new_ws();
-        update(&mut ws, Message::AcceptanceCountLoaded(1, Some(3)), 1);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::AcceptanceCountLoaded(1, Some(3)),
+            1,
+            "名字",
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
         assert_eq!(ws.project_acceptance_count, Some(3));
     }
 
@@ -162,5 +290,90 @@ mod tests {
         assert_eq!(project_branch_label(Some("main"), false), "main");
         assert_eq!(project_branch_label(Some("main"), true), "main*");
         assert_eq!(project_branch_label(None, false), "—");
+    }
+
+    #[test]
+    fn name_edit_start_prefills_current_name() {
+        let mut ws = new_ws();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::NameEditStart,
+            1,
+            "旧名字",
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert_eq!(ws.name_editing.as_deref(), Some("旧名字"));
+    }
+
+    #[test]
+    fn name_edit_submit_same_name_closes_without_request() {
+        let mut ws = new_ws();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::NameEditStart,
+            1,
+            "同名",
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        update(
+            &mut ws,
+            Message::NameEditEvent(AddrEvent::Submit),
+            1,
+            "同名",
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert!(ws.name_editing.is_none());
+    }
+
+    #[test]
+    fn name_renamed_ok_clears_editing_state() {
+        let mut ws = new_ws();
+        ws.name_editing = Some("新名字".into());
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let project = dozer_core::protocol::ProjectInfo {
+            id: 1,
+            path: "/repo".into(),
+            name: "新名字".into(),
+            last_active_ms: 0,
+            created_ms: 0,
+            updated_ms: 0,
+        };
+        update(
+            &mut ws,
+            Message::NameRenamed(1, Ok(project)),
+            1,
+            "旧名字",
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert!(ws.name_editing.is_none());
+        assert!(ws.error.is_none());
+    }
+
+    #[test]
+    fn name_renamed_err_keeps_editing_state_and_sets_error() {
+        let mut ws = new_ws();
+        ws.name_editing = Some("新名字".into());
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::NameRenamed(1, Err("连接失败".into())),
+            1,
+            "旧名字",
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert_eq!(ws.name_editing.as_deref(), Some("新名字"));
+        assert!(ws.error.is_some());
     }
 }
