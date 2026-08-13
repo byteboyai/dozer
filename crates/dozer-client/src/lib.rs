@@ -162,6 +162,20 @@ impl Client {
         }
     }
 
+    pub async fn rename_project(&self, id: i64, name: &str) -> Result<Option<ProjectInfo>> {
+        match self
+            .roundtrip(&Request::RenameProject {
+                id,
+                name: name.into(),
+            })
+            .await?
+        {
+            Reply::Project { project } => Ok(project),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
     pub async fn list_projects(&self) -> Result<Vec<ProjectInfo>> {
         match self.roundtrip(&Request::ListProjects).await? {
             Reply::Projects { projects } => Ok(projects),
