@@ -917,6 +917,9 @@ impl Workspace {
         self.project = Some(project);
         self.ensure_project_terminal(io);
         self.restore_preview_state();
+        // 启动就把"恢复出来的东西"（或 `None`）推一次:dozerd 可能比 GUI
+        // 活得久,上次会话留下的缓存值不该在新会话里冒充当前上下文。
+        self.spawn_preview_context_push(io);
         spawn_project_git_refresh(project_id, repo_path, io);
         self.spawn_conversations_refresh(io);
         self.spawn_acceptance_count_refresh(io);
