@@ -2186,6 +2186,18 @@ impl App {
         }
     }
 
+    /// Ctrl ± / 重置缩放后,把全局 scale 变化同步到所有已打开的原生编辑器
+    /// (预览 tab + 编辑弹层),使其字号随终端/图标一起缩放——否则编辑器字号
+    /// 冻结在打开时刻(见 `preview::dozer_editor_font_metrics` 注释)。
+    fn resync_editor_font_metrics(&mut self) {
+        let ids: Vec<i64> = self.projects.keys().copied().collect();
+        for pid in ids {
+            if let Some(ws) = loaded_workspace_mut(&mut self.projects, pid) {
+                ws.resync_editor_font_metrics();
+            }
+        }
+    }
+
     /// 左面板区当前**有效**宽度:持久化宽按当前窗口宽夹取(见
     /// `clamp_left_width`)。渲染侧(`left_panel_area`)必须用这个值,而不是
     /// 直接读 `shell_layout.left_width`——几何侧(`left_zone_width`)走的是
@@ -2988,17 +3000,20 @@ impl App {
                 crate::theme::icon_size::zoom_by(UI_ZOOM_STEP);
                 crate::theme::icon_size::persist_scale();
                 self.sync_terminal_grid();
+                self.resync_editor_font_metrics();
                 self.pending_preview_zoom = true;
             }
             Message::ZoomOut => {
                 crate::theme::icon_size::zoom_by(1.0 / UI_ZOOM_STEP);
                 crate::theme::icon_size::persist_scale();
                 self.sync_terminal_grid();
+                self.resync_editor_font_metrics();
                 self.pending_preview_zoom = true;
             }
             Message::ZoomReset => {
                 crate::theme::icon_size::reset_scale();
                 self.sync_terminal_grid();
+                self.resync_editor_font_metrics();
                 self.pending_preview_zoom = true;
             }
             // WebViewFocused 只在 main.rs 的 dispatch 里设 pending_focus,

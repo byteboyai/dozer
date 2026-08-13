@@ -1384,6 +1384,15 @@ impl Workspace {
             .is_some_and(|t| t.editor.is_some())
     }
 
+    /// Ctrl ± / 重置缩放后,重算所有原生编辑器(编辑弹层 + 各预览 tab)的排版,
+    /// 使其随全局 scale 一起放大缩小。见 `preview::dozer_editor_font_metrics`。
+    pub(crate) fn resync_editor_font_metrics(&mut self) {
+        if let Some(session) = self.edit_session.as_mut() {
+            crate::preview::dozer_editor_font_metrics(&mut session.editor);
+        }
+        self.preview.resync_editor_font_metrics();
+    }
+
     /// 当前激活浏览器 tab 的 webview id,语义同 `active_preview_webview_id`,
     /// 查独立的 `self.browser`。
     pub fn active_browser_webview_id(&self) -> Option<usize> {

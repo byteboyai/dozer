@@ -165,6 +165,17 @@ impl PreviewPane {
         self.active
     }
 
+    /// Ctrl ± / 重置缩放后,把全局 scale 变化反映到所有原生预览 tab 的编辑器
+    /// 排版(字号/行高/布局),否则编辑器字号冻结在打开时刻,不随终端/图标一起
+    /// 放大缩小(见 `dozer_editor_font_metrics` 注释里的既定意图)。
+    pub fn resync_editor_font_metrics(&mut self) {
+        for tab in self.tabs.iter_mut() {
+            if let Some(editor) = tab.editor.as_mut() {
+                dozer_editor_font_metrics(editor);
+            }
+        }
+    }
+
     pub fn open_path(&mut self, path: PathBuf) -> usize {
         // 同一文件已开则切过去,不重复开 tab（验收反馈）。
         if let Some((idx, tab)) = self
