@@ -156,6 +156,24 @@ impl ProjectStore {
         let rows = stmt.query_map([], row_to_project)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
+
+    /// 按 id 改名。`id` 不存在时返回 `Err`（不做静默 no-op）。
+    pub fn rename(&self, id: i64, name: &str) -> Result<ProjectInfo> {
+        let conn = self.conn.lock().expect("db lock");
+        let affected = conn.execute(
+            "UPDATE projects SET name = ?1 WHERE id = ?2",
+            rusqlite::params![name, id],
+        )?;
+        if affected == 0 {
+            anyhow::bail!("项目 id={id} 不存在");
+        }
+        conn.query_row(
+            "SELECT id, path, name, last_active_ms, created_ms FROM projects WHERE id = ?1",
+            [id],
+            row_to_project,
+        )
+        .map_err(Into::into)
+    }
 }
 
 fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<ProjectInfo> {
@@ -210,5 +228,26 @@ mod tests {
         let store = ProjectStore::new(&dir.path().join("t.db")).unwrap();
         assert_eq!(store.open("/a/b/proj").unwrap().name, "proj");
         assert_eq!(store.open("/").unwrap().name, "/");
+    }
+
+    #[test]
+    fn rename_updates_name_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ProjectStore::new(&dir.path().join("t.db")).unwrap();
+        let p = store.open("/repo/a").unwrap();
+
+        let renamed = store.rename(p.id, "新名字").unwrap();
+        assert_eq!(renamed.id, p.id);
+        assert_eq!(renamed.name, "新名字");
+
+        let list = store.list().unwrap();
+        assert_eq!(list[0].name, "新名字");
+    }
+
+    #[test]
+    fn rename_missing_id_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ProjectStore::new(&dir.path().join("t.db")).unwrap();
+        assert!(store.rename(999, "x").is_err());
     }
 }

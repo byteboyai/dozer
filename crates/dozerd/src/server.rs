@@ -196,6 +196,17 @@ async fn handle_conn(
                             Ok(projects) => Reply::Projects { projects },
                             Err(e) => Reply::Error { message: format!("列项目失败: {e}") },
                         },
+                        Request::RenameProject { id, name } => {
+                            let trimmed = name.trim();
+                            if trimmed.is_empty() {
+                                Reply::Error { message: "名称不能为空".into() }
+                            } else {
+                                match projects.rename(id, trimmed) {
+                                    Ok(p) => Reply::Project { project: Some(p) },
+                                    Err(e) => Reply::Error { message: format!("改名失败: {e}") },
+                                }
+                            }
+                        }
                         Request::GetAcceptanceCount { repo } => match store.count_for_repo(&repo) {
                             Ok(count) => Reply::AcceptanceCount { count },
                             Err(e) => Reply::Error { message: format!("验收计数失败: {e}") },
