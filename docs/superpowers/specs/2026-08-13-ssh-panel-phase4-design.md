@@ -387,15 +387,18 @@ row![
 
 ```rust
 pub(crate) fn ssh_terminal_visible(state: &ShellState) -> bool {
-    state.left_view == LeftView::Ssh
-        && state.maximized != Some(MaximizedPane::Right)
-        && ws.ssh_active.is_some() // 有 tab 打开且是 Terminal 种类才算可见
+    state.left_view == LeftView::Ssh && state.maximized != Some(MaximizedPane::Right)
 }
 ```
 
-(具体签名/参数写计划阶段对齐 `terminal_visible` 的既有形状——它接收
-`&ShellState` 还是需要额外传 `&Workspace` 来读 `ssh_active`,取决于
-`ShellState` 现有字段覆盖到什么程度,写计划阶段核实。)
+纯 `&ShellState` 函数,不需要额外传 `&Workspace`——跟既有
+`terminal_visible()` 一样,只判定"这块面板此刻有没有被别的东西遮住/
+切走",不判定"有没有真的打开一个 tab"(没打开 tab 时,`ws.
+ssh_active_tab_mut()` 天然返回 `None`,写入操作静默跳过,不需要在可见性
+门控这一层重复判断)。`MaximizedPane::Right` 对应"SSH 面板所在的左侧被
+放大态遮住"——两侧角色与既有 `terminal_visible()` 的 `MaximizedPane::
+Left` 判断正好对调(终端在右、被"左侧放大"遮住;SSH 面板在左、被"右侧
+放大"遮住)。
 
 ### 7. 焦点:新增 `ssh_term_focused`,与 `term_focused` 并存互斥
 
@@ -409,32 +412,28 @@ pub(crate) fn ssh_terminal_visible(state: &ShellState) -> bool {
 否则(现状)→ 走 `TermTarget::Shared` 路径"分叉,取代现在单一的
 `terminal_visible()` 判断。
 
-### 8. PTY 网格尺寸:`resize_ssh_tabs` 独立于 `resize_all`
+### 8. PTY 网格尺寸:v1 复用共享全局网格,不做独立像素测量
 
-`Workspace::resize_all`(`workspace.rs:1461-`)现在对 `self.tabs` 里**所有**
-tab(含当前不可见的)套用同一个 `(cols, rows)`,尺寸来源是右侧共享终端
-pane 的像素测量(`terminal_pane_pixel_size`,`app.rs:1009`)。SSH 面板
-内嵌终端渲染在**不同尺寸**的左侧区域,不能被这套逻辑覆盖,否则字符网格
-跟实际画布大小对不上。新增:
+写计划阶段核实 `terminal_pane_pixel_size`(`app.rs:1009-1045`)后发现:
+右侧终端 pane 的像素尺寸换算本身相当复杂(要扣 chrome/状态栏/margin,
+还要区分放大态,函数注释里带着"Fix round 2/3"级别的历史踩坑记录),要
+给 SSH 面板内嵌终端区镜像一份同等精度的独立测量+独立 `PaneResized`
+事件链路,是这个中型改造里最重的一块,且与本文档的核心目标(终端不再
+跳走,渲染在 SSH 面板自己的 tab 条里)相比,收益(网格像素级贴合)不成
+比例。
 
-```rust
-/// 镜像 resize_all,操作对象是 ssh_tabs,尺寸来源是 SSH 面板内嵌终端区
-/// 的像素测量(新增一个类似 terminal_pane_pixel_size 的测量函数,或者
-/// 复用同一个函数、传入 SSH 面板区域的几何参数——写计划阶段核实
-/// 现有测量函数是否已经足够通用,不需要整个抄一份)。
-pub(crate) fn resize_ssh_tabs(&mut self, io: &ShellIo, cols: u16, rows: u16) {
-    for tab in &mut self.ssh_tabs {
-        tab.model.resize(cols, rows);
-        if !tab.alive { continue; }
-        if let TabBackend::Ssh { out } = &tab.backend {
-            let _ = out.send(SshOut::Resize { cols, rows });
-        }
-    }
-}
-```
-
-触发点:SSH 面板内嵌终端区域的 `PaneResized`-类事件(新增,镜像现有
-`PaneResized` 处理右侧终端 pane 尺寸变化的既有分支)。
+**v1 决定**:SSH 面板内嵌终端复用与右侧共享终端条**同一个**全局
+`(cols, rows)`(`App.cols`/`App.rows`,由 `pane_resized()` 统一维护,
+`app.rs:4170-4187`)——`Workspace::resize_all` 目前已经对 `self.tabs`
+里所有 tab(含不可见的)套用这同一份网格,阶段 4 只需要让 `ssh_tabs`
+里的 tab **也**吃到同一次 `resize_all` 调用(把 `resize_all` 的遍历
+范围从"只有 `self.tabs`"扩展成"`self.tabs` 和 `self.ssh_tabs` 都过一遍",
+不新增独立的 `resize_ssh_tabs`/独立测量函数/独立 `PaneResized` 事件)。
+代价:SSH 面板内嵌终端区域如果实际像素宽高与右侧终端 pane 明显不同,
+字符网格可能不是像素级贴满(多余留白或轻微溢出,由 `Canvas` 的
+`Length::Fill` 兜底,不会崩溃或裁切出乱码)。这是一个已知的、有意接受
+的 v1 局限,不是缺陷——独立像素级测量作为后续可选的打磨项,不在本阶段
+范围内。
 
 ### 9. `Message` 变更汇总
 
@@ -513,8 +512,9 @@ no-op,两种都不会崩,倾向前者见"目标"第 5 条)。
   测试连接按钮都在;"+添加主机"在侧栏最下面;点终端图标在 SSH 面板
   自己的 tab 条开一个新 tab,焦点不跳到右侧;同时把右侧切到 Agent 视图、
   左侧切到 SSH 视图,两个终端能各自独立接收键盘输入、互不干扰;关闭
-  SSH 面板的 tab 后 `ssh_active` 正确切换或清空;缩放 SSH 面板宽度,内嵌
-  终端网格尺寸跟着变,不影响右侧共享终端条的网格。
+  SSH 面板的 tab 后 `ssh_active` 正确切换或清空;拖动窗口大小,SSH 面板
+  内嵌终端和右侧共享终端条的字符网格同步跟着变(v1 共用同一份全局
+  `(cols, rows)`,见"架构与数据流"第 8 节)。
 
 ## 依赖变更
 
