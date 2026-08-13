@@ -21,12 +21,28 @@ pub struct WorkspaceState {
     remote_url: Option<String>,
     /// 磁盘占用字节数(排除构建产物)。None=尚未算出来。
     disk_usage_bytes: Option<u64>,
+    /// 项目描述(`.dozer/description.md` 内容)。None=尚未写入。
+    description: Option<String>,
     /// 项目名称行内编辑态(None=未在编辑)。
     name_editing: Option<String>,
+    /// 文档/Agent 记忆虚拟链接。
+    links: links::LinksState,
     error: Option<String>,
 }
 
 impl WorkspaceState {
+    /// 打开一个新项目时构造。`description`/`links` 由调用方在构造之前分别
+    /// 调 `project_meta::load_description`/`links::load_or_discover` 拿到
+    /// (同现有 `files::WorkspaceState::new(FileTree::new(..))` 那种"调用方
+    /// 先算好再传入"的既有模式)。
+    pub fn new(description: Option<String>, links: links::LinksState) -> Self {
+        Self {
+            description,
+            links,
+            ..Self::default()
+        }
+    }
+
     /// 供内核 `worktree_strip`(Git Log 视图外层装饰,不属于
     /// `extensions::git_log`)读取——`worktrees` 数据来自组合 git 刷新,但
     /// 消费方是 Git Log 视图,归属判断见设计文档"关键语义确认"。

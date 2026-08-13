@@ -436,7 +436,10 @@ impl Workspace {
 
         let files = files::WorkspaceState::new(FileTree::new(PathBuf::from(&project.path)));
         let repo_path = PathBuf::from(&project.path);
-        let project_panel = project::WorkspaceState::default();
+        let project_panel = project::WorkspaceState::new(
+            crate::project_meta::load_description(&repo_path),
+            project::links::load_or_discover(&repo_path),
+        );
 
         let mut ws = Self {
             tabs,
@@ -561,7 +564,11 @@ impl Workspace {
     /// GUI。同步构造 + 恒有 `project` 是这条不变式的落地方式。
     pub(crate) fn loading_for_project(project: ProjectInfo) -> Self {
         let files = files::WorkspaceState::new(FileTree::new(PathBuf::from(&project.path)));
-        let project_panel = project::WorkspaceState::default();
+        let repo_path = std::path::Path::new(&project.path);
+        let project_panel = project::WorkspaceState::new(
+            crate::project_meta::load_description(repo_path),
+            project::links::load_or_discover(repo_path),
+        );
         Self {
             project: Some(project),
             files,
@@ -913,7 +920,10 @@ impl Workspace {
         self.usage = usage::WorkspaceState::default();
         let project_id = project.id;
         let repo_path = PathBuf::from(&project.path);
-        self.project_panel = project::WorkspaceState::default();
+        self.project_panel = project::WorkspaceState::new(
+            crate::project_meta::load_description(&repo_path),
+            project::links::load_or_discover(&repo_path),
+        );
         self.project = Some(project);
         self.ensure_project_terminal(io);
         self.restore_preview_state();
