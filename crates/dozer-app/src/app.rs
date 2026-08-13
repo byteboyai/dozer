@@ -1125,20 +1125,14 @@ pub enum Message {
     Search(search::Message),
     /// 终端 pane 像素尺寸变化换算出的新网格尺寸；对所有 tab 生效
     /// （包括当前不可见的），保证切换 tab 时尺寸已经是最新的。
-    PaneResized {
-        cols: u16,
-        rows: u16,
-    },
+    PaneResized { cols: u16, rows: u16 },
     /// 按下某条分隔线,记录"正在拖哪条"(main.rs 后续 CursorMoved 靠这个
     /// 状态决定要不要继续转发拖拽)。构造方为 `divider_bar` 的 `on_press`。
     ColumnDragStart(Divider),
     /// 拖拽中:当前窗口逻辑宽 + 光标逻辑 x(main.rs 换算好传入,`update()`
     /// 统一算+夹取,不与 main.rs 分摊裁剪逻辑)。构造方为 main.rs 的
     /// `CursorMoved` 续传。
-    ColumnDrag {
-        window_width: f32,
-        logical_x: f32,
-    },
+    ColumnDrag { window_width: f32, logical_x: f32 },
     /// 松开左键,结束拖拽并触发写盘。构造方为 main.rs 的
     /// `MouseInput{Released}` 分支。
     ColumnDragEnd,
@@ -1147,10 +1141,7 @@ pub enum Message {
     /// `MouseArea::on_move`(仅在 `tab_drag` 命中本组时挂载)。按住页签＝
     /// 准备拖的来源,由各选中处理(`SelectTab`/`PreviewSelectTab`/
     /// `ProjectTabSwitch` 及浏览器 `SelectTab`)在按住瞬间把 `tab_drag` 置位。
-    TabDragMove {
-        group: TabGroup,
-        index: usize,
-    },
+    TabDragMove { group: TabGroup, index: usize },
     /// 松开左键,结束页签拖拽。构造方为 main.rs 的 `MouseInput{Released}`
     /// 分支;项目页签组顺带把新顺序写盘。
     TabDragEnd,
@@ -1197,17 +1188,9 @@ pub enum Message {
     PreviewTabScroll(bool),
     /// 终端左键按下：在视口格 `(col, row)` 起新选区（`right` = 按点在
     /// 格子右半）。
-    TermSelStart {
-        col: usize,
-        row: usize,
-        right: bool,
-    },
+    TermSelStart { col: usize, row: usize, right: bool },
     /// 终端拖拽：选区末端更新到视口格 `(col, row)`。
-    TermSelUpdate {
-        col: usize,
-        row: usize,
-        right: bool,
-    },
+    TermSelUpdate { col: usize, row: usize, right: bool },
     /// ⌘V 粘贴剪贴板文本：按会话的 bracketed paste 模式决定是否包裹
     /// `ESC[200~`/`ESC[201~` 后写入 daemon。
     TermPaste(String),
@@ -1244,10 +1227,7 @@ pub enum Message {
     /// 预览 tab 右键菜单:在 `preview_pane` 某 tab 上右键打开,携带 tab 下标
     /// 与该文件是否可编辑(仅文本类文件,决定菜单"编辑"项是否出现)。定位
     /// 坐标复用 `files.last_right_click`(main.rs 右键时写入)。
-    PreviewTabContextMenu {
-        idx: usize,
-        editable: bool,
-    },
+    PreviewTabContextMenu { idx: usize, editable: bool },
     /// 预览 tab 右键菜单关闭(点遮罩 / 按 Esc)。
     PreviewTabContextMenuClose,
     /// Project 面板右配对预览:打开本地文件为新 tab,语义同 `PreviewOpenPath`。
@@ -1268,10 +1248,7 @@ pub enum Message {
     /// `PreviewEditOpenByTab`。
     ProjectPreviewEditOpenByTab(usize),
     /// Project 面板右配对预览 tab 右键菜单,语义同 `PreviewTabContextMenu`。
-    ProjectPreviewTabContextMenu {
-        idx: usize,
-        editable: bool,
-    },
+    ProjectPreviewTabContextMenu { idx: usize, editable: bool },
     /// Project 面板右配对预览 tab 右键菜单关闭。
     ProjectPreviewTabContextMenuClose,
     /// 浏览器面板的全部消息,内核只转发不解读——见
@@ -1289,10 +1266,11 @@ pub enum Message {
     /// 显式关闭一个页签,才结束该项目下的会话"。整条就地改写路径连同
     /// `retarget_active_slot` 已随之删除,不留第二条会杀会话的打开入口。
     ProjectTabPickFolder,
-    /// "+文件"/"+目录":main.rs 弹 rfd 模态选完后回送
-    /// `project::Message::LinkAdd`。
-    ProjectLinkPickFile(project::links::LinkTarget),
-    ProjectLinkPickDir(project::links::LinkTarget),
+    /// 单颗"＋"按钮:main.rs 弹 rfd 模态(根目录在项目根),选完后按
+    /// `is_dir()` 判 `LinkKind` 回送 `project::Message::LinkAdd`。
+    ProjectLinkPick(project::links::LinkTarget),
+    /// Project 面板链接行右键菜单关闭(点遮罩 / 按 Esc)。
+    ProjectLinkContextMenuClose,
     /// 项目页签:把某路径作为**新页签**打开(不动任何已存在页签的内容)。
     ProjectTabOpen(PathBuf),
     /// 项目页签:`ProjectTabOpen` 异步完成(daemon upsert 结果 + 最近列表)。
@@ -1374,6 +1352,16 @@ struct PreviewTabMenu {
     y: f32,
     idx: usize,
     editable: bool,
+}
+
+/// Project 面板「项目文档 / Agent 记忆」虚拟链接行的右键菜单浮层状态:
+/// 定位坐标(屏幕空间,复用 `files` 右键落点)+ 目标区 + 下标。删除动作回
+/// `project::Message::LinkRemove`。见 `project::links_section`。
+struct ProjectLinkMenu {
+    x: f32,
+    y: f32,
+    target: project::links::LinkTarget,
+    index: usize,
 }
 
 pub struct App {
@@ -1466,6 +1454,9 @@ pub struct App {
     /// Project 面板右配对预览 tab 的右键菜单浮层状态,语义同
     /// `preview_tab_menu`,定位坐标同样复用 `files.last_right_click`。
     project_preview_tab_menu: Option<PreviewTabMenu>,
+    /// Project 面板「项目文档 / Agent 记忆」链接行的右键菜单浮层状态,坐标
+    /// 同样复用 `files.last_right_click`。
+    project_link_menu: Option<ProjectLinkMenu>,
 
     /// 并行打开的项目页签:project id → 该项目的完整/占位状态。
     projects: HashMap<i64, WorkspaceSlot>,
@@ -1741,6 +1732,7 @@ impl App {
             files: files::AppState::default(),
             preview_tab_menu: None,
             project_preview_tab_menu: None,
+            project_link_menu: None,
             projects: HashMap::new(),
             project_order: Vec::new(),
             active_project_id: None,
@@ -2486,6 +2478,7 @@ impl App {
         self.files.context_menu_is_some()
             || self.preview_tab_menu.is_some()
             || self.project_preview_tab_menu.is_some()
+            || self.project_link_menu.is_some()
     }
 
     /// 预览 tab 右键菜单是否打开(main.rs Esc 键路由用)。
@@ -2496,6 +2489,24 @@ impl App {
     /// Project 面板右配对预览 tab 右键菜单是否打开(main.rs Esc 键路由用)。
     pub fn project_preview_tab_context_menu_open(&self) -> bool {
         self.project_preview_tab_menu.is_some()
+    }
+
+    /// Project 面板链接行右键菜单是否打开(main.rs Esc 键路由用)。
+    pub fn project_link_context_menu_open(&self) -> bool {
+        self.project_link_menu.is_some()
+    }
+
+    /// 打开 Project 面板「项目文档 / Agent 记忆」链接行的删除右键菜单。与
+    /// 文件树右键菜单互斥(坐标复用 `files.last_right_click`)。
+    fn project_link_context_menu(&mut self, target: project::links::LinkTarget, index: usize) {
+        let (x, y) = self.files.last_right_click();
+        self.files.close_context_menu();
+        self.project_link_menu = Some(ProjectLinkMenu {
+            x,
+            y,
+            target,
+            index,
+        });
     }
 
     /// Agent 选择菜单是否打开(main.rs Esc 键路由用)。
@@ -3134,8 +3145,11 @@ impl App {
             Message::ProjectSelect(id) => self.project_select(id),
             Message::ProjectTabPickFolder => {} // 副作用在 main.rs(rfd 文件夹选择)
             // rfd 弹窗在 main.rs 里同步处理,选中后转成 project::Message::LinkAdd
-            // 再回送到这里;这两条顶层消息本身不需要 App::update 处理任何东西。
-            Message::ProjectLinkPickFile(_) | Message::ProjectLinkPickDir(_) => {}
+            // 再回送到这里;这条顶层消息本身不需要 App::update 处理任何东西。
+            Message::ProjectLinkPick(_) => {}
+            Message::ProjectLinkContextMenuClose => {
+                self.project_link_menu = None;
+            }
             Message::ProjectTabOpen(path) => {
                 let client = self.client.clone();
                 let proxy = self.proxy.clone();
@@ -3268,11 +3282,19 @@ impl App {
                 // 不冲进 Files 预览——两条预览各自独立,互相不打扰。
                 self.update(Message::ProjectPreviewOpenPath(path));
             }
-            Message::Project(project::Message::PickFile(target)) => {
-                self.update(Message::ProjectLinkPickFile(target));
+            Message::Project(project::Message::Pick(target)) => {
+                self.update(Message::ProjectLinkPick(target));
             }
-            Message::Project(project::Message::PickDir(target)) => {
-                self.update(Message::ProjectLinkPickDir(target));
+            Message::Project(project::Message::LinkContextMenu { target, index }) => {
+                self.project_link_context_menu(target, index);
+            }
+            Message::Project(project::Message::LinkRemove { target, index }) => {
+                // 删除来自行内右键菜单:落 `LinkRemove` 时把菜单浮层一并收起。
+                self.project_link_menu = None;
+                self.update(Message::Project(project::Message::LinkRemove {
+                    target,
+                    index,
+                }));
             }
             Message::Project(msg) => {
                 let Some(project_id) = self.active_project_id else {
@@ -4637,6 +4659,47 @@ impl App {
             .into()
     }
 
+    /// Project 面板链接行右键菜单浮层:当前只含"删除"。定位坐标复用
+    /// `files.last_right_click`(main.rs 任意右键都会先写入),"删除"回
+    /// `project::Message::LinkRemove`。
+    fn project_link_context_menu_popup<'a>(
+        &self,
+    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+        let menu = match &self.project_link_menu {
+            Some(m) => m,
+            None => return column![].into(),
+        };
+        let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
+            vec![Self::preview_menu_item(
+                Some(icons::IconKind::Trash),
+                "删除",
+                Message::Project(project::Message::LinkRemove {
+                    target: menu.target,
+                    index: menu.index,
+                }),
+            )];
+
+        let region = theme::region::context_menu();
+        let list = container(column(items).spacing(region.gap))
+            .width(Length::Shrink)
+            .padding(region.padding)
+            .style(move |_t: &iced_widget::Theme| container::Style {
+                background: region.background.map(Into::into),
+                border: region.border.unwrap_or_default(),
+                ..container::Style::default()
+            });
+        container(list)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(Padding {
+                top: menu.y,
+                left: menu.x,
+                right: 0.0,
+                bottom: 0.0,
+            })
+            .into()
+    }
+
     /// 预览 tab 右键菜单单项(图标可选 + 文字按钮)。hover/pressed 切到
     /// `TAB_HOVER` 背景,与文件树右键菜单 `menu_item` 同款。
     fn preview_menu_item<'a>(
@@ -4848,6 +4911,17 @@ impl App {
             )
             .on_press(Message::ProjectPreviewTabContextMenuClose);
             stack![base, dismiss, self.project_preview_tab_context_menu_popup()]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else if self.project_link_menu.is_some() {
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::ProjectLinkContextMenuClose);
+            stack![base, dismiss, self.project_link_context_menu_popup()]
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()

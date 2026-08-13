@@ -761,6 +761,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     app.update(Message::PreviewTabContextMenuClose);
                 } else if app.project_preview_tab_context_menu_open() {
                     app.update(Message::ProjectPreviewTabContextMenuClose);
+                } else if app.project_link_context_menu_open() {
+                    app.update(Message::ProjectLinkContextMenuClose);
                 } else {
                     app.update(Message::Files(extensions::files::Message::ContextMenuClose));
                 }
@@ -1188,22 +1190,26 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         app.update(Message::ProjectTabOpen(dir));
                     }
                 }
-                Message::ProjectLinkPickFile(target) => {
-                    if let Some(path) = rfd::FileDialog::new().pick_file() {
+                Message::ProjectLinkPick(target) => {
+                    // 单颗"＋"入口:打开根目录在项目根的文件浏览器,选中后按
+                    // 实际类型(`is_dir()`)判定虚拟链接是该当文件还是目录,再回
+                    // 送 `LinkAdd` 落盘。
+                    let start_dir = app
+                        .active_project_path()
+                        .or_else(|| std::env::current_dir().ok());
+                    let picked = rfd::FileDialog::new()
+                        .set_directory(start_dir.unwrap_or_default())
+                        .pick_file();
+                    if let Some(path) = picked {
+                        let kind = if path.is_dir() {
+                            extensions::project::links::LinkKind::Dir
+                        } else {
+                            extensions::project::links::LinkKind::File
+                        };
                         app.update(Message::Project(extensions::project::Message::LinkAdd {
                             target,
                             path,
-                            kind: extensions::project::links::LinkKind::File,
-                        }));
-                        window.request_redraw();
-                    }
-                }
-                Message::ProjectLinkPickDir(target) => {
-                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                        app.update(Message::Project(extensions::project::Message::LinkAdd {
-                            target,
-                            path,
-                            kind: extensions::project::links::LinkKind::Dir,
+                            kind,
                         }));
                         window.request_redraw();
                     }

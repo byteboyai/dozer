@@ -66,14 +66,20 @@ pub fn save(repo: &Path, state: &LinksState) -> std::io::Result<()> {
 }
 
 const DOC_FILE_PREFIXES: [&str; 4] = ["readme", "changelog", "contributing", "license"];
-const DOC_EXACT_FILES: [&str; 2] = ["claude.md", "agents.md"];
 const DOC_DIR_NAMES: [&str; 4] = ["docs", "doc", "design", "documentation"];
 
+/// Agent 记忆自动搜集的**项目根目录内**文件(忽略大小写精确匹配)。这些是
+/// agent 写在仓库里的指令/记忆文件,不算项目文档,归到 Agent 记忆区。
+const MEMORY_FILE_NAMES: [&str; 3] = ["claude.md", "codebudy.md", "agents.md"];
+
+/// Agent 记忆自动搜集的**项目根目录内**目录(忽略大小写精确匹配)。
+const MEMORY_DIR_NAMES: [&str; 3] = [".claude", ".codebudy", ".cursor"];
+
 /// 首次发现:根目录直接子项(不递归)。文件名(忽略大小写)以
-/// `readme`/`changelog`/`contributing`/`license` 开头,或精确匹配
-/// `claude.md`/`agents.md`(指令文件,归到文档而非"记忆"),或目录名(忽略
-/// 大小写)精确匹配 `docs`/`doc`/`design`/`documentation`。结果顺序:文件在
-/// 前、目录在后,组内按名排序。
+/// `readme`/`changelog`/`contributing`/`license` 开头,或目录名(忽略大小写)
+/// 精确匹配 `docs`/`doc`/`design`/`documentation`。agent 指令文件
+/// (claude.md/codebudy.md/agents.md)不属于文档,归到 Agent 记忆(见
+/// `discover_memory`)。结果顺序:文件在前、目录在后,组内按名排序。
 pub fn discover_docs(repo: &Path) -> Vec<LinkEntry> {
     let Ok(rd) = std::fs::read_dir(repo) else {
         return Vec::new();
@@ -88,9 +94,7 @@ pub fn discover_docs(repo: &Path) -> Vec<LinkEntry> {
             if DOC_DIR_NAMES.contains(&lower.as_str()) {
                 dirs.push((name, entry.path()));
             }
-        } else if DOC_FILE_PREFIXES.iter().any(|p| lower.starts_with(p))
-            || DOC_EXACT_FILES.contains(&lower.as_str())
-        {
+        } else if DOC_FILE_PREFIXES.iter().any(|p| lower.starts_with(p)) {
             files.push((name, entry.path()));
         }
     }
@@ -109,29 +113,63 @@ pub fn discover_docs(repo: &Path) -> Vec<LinkEntry> {
         .collect()
 }
 
-/// 首次发现:`claude_project_dir/memory`、`codebuddy_project_dir`、
-/// `opencode_project_dir` 三个目录,存在的才收进结果(不存在的静默跳过,不
-/// 算错误)。Claude 是唯一有"结构化记忆子目录"这个明确约定的(跟本仓
-/// auto-memory 系统同款),Codebuddy/Opencode 用各自的项目存储根目录代替
-/// ——语义上更接近"历史会话"而非严格"记忆",但这是目前唯一已知的路径规则。
+/// 首次发现,分两块:
+///
+/// 1. **项目根目录内**的 agent 指令/记忆文件与目录——文件精确匹配
+///    `claude.md`/`codebudy.md`/`agents.md`,目录精确匹配
+///    `.claude`/`.codebudy`/`.cursor`(均忽略大小写)。
+/// 2. **仓库外**的三个 agent 存储目录:`claude_project_dir/memory`、
+///    `codebuddy_project_dir`、`opencode_project_dir`,存在的才收进结果(不存在
+///    的静默跳过,不算错误)。
+///
+/// 结果顺序:仓库外目录在前,随后项目根文件、项目根目录,组内按名排序。
 pub fn discover_memory(repo: &Path) -> Vec<LinkEntry> {
     discover_memory_in(&crate::conversation::home_dir(), repo)
 }
 
 fn discover_memory_in(home: &Path, repo: &Path) -> Vec<LinkEntry> {
-    let candidates = [
+    let mut entries: Vec<LinkEntry> = Vec::new();
+
+    let home_candidates = [
         crate::conversation::claude_project_dir_in(home, repo).join("memory"),
         crate::conversation::codebuddy_project_dir_in(home, repo),
         crate::conversation::opencode_project_dir_in(home, repo),
     ];
-    candidates
-        .into_iter()
-        .filter(|p| p.is_dir())
-        .map(|path| LinkEntry {
+    for path in home_candidates.into_iter().filter(|p| p.is_dir()) {
+        entries.push(LinkEntry {
             path,
             kind: LinkKind::Dir,
-        })
-        .collect()
+        });
+    }
+
+    if let Ok(rd) = std::fs::read_dir(repo) {
+        let mut files: Vec<(String, PathBuf)> = Vec::new();
+        let mut dirs: Vec<(String, PathBuf)> = Vec::new();
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let lower = name.to_lowercase();
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if is_dir {
+                if MEMORY_DIR_NAMES.contains(&lower.as_str()) {
+                    dirs.push((name, entry.path()));
+                }
+            } else if MEMORY_FILE_NAMES.contains(&lower.as_str()) {
+                files.push((name, entry.path()));
+            }
+        }
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        dirs.sort_by(|a, b| a.0.cmp(&b.0));
+        entries.extend(files.into_iter().map(|(_, path)| LinkEntry {
+            path,
+            kind: LinkKind::File,
+        }));
+        entries.extend(dirs.into_iter().map(|(_, path)| LinkEntry {
+            path,
+            kind: LinkKind::Dir,
+        }));
+    }
+
+    entries
 }
 
 /// `load` 返回 `None`(文件不存在,首次打开)时跑两个 `discover_*` 拼出初始
@@ -226,12 +264,13 @@ mod tests {
     }
 
     #[test]
-    fn discover_docs_matches_claude_and_agents_md() {
+    fn discover_docs_excludes_agent_instruction_files() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("CLAUDE.md"), "").unwrap();
         std::fs::write(dir.path().join("AGENTS.md"), "").unwrap();
-        let found = discover_docs(dir.path());
-        assert_eq!(found.len(), 2);
+        std::fs::write(dir.path().join("CODEBUDY.md"), "").unwrap();
+        // agent 指令文件不属于项目文档,文档发现不应捡到任何一个。
+        assert!(discover_docs(dir.path()).is_empty());
     }
 
     #[test]
@@ -264,10 +303,38 @@ mod tests {
     }
 
     #[test]
+    fn discover_memory_finds_project_root_agent_files_and_dirs() {
+        let home = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::write(repo.path().join("CLAUDE.md"), "").unwrap();
+        std::fs::write(repo.path().join("codebudy.md"), "").unwrap();
+        std::fs::write(repo.path().join("AGENTS.md"), "").unwrap();
+        std::fs::create_dir(repo.path().join(".claude")).unwrap();
+        std::fs::create_dir(repo.path().join(".codebudy")).unwrap();
+        std::fs::create_dir(repo.path().join(".cursor")).unwrap();
+        let found = discover_memory_in(home.path(), repo.path());
+        // 3 个文件 + 3 个目录
+        assert_eq!(found.len(), 6);
+        // 文件在前、目录在后,组内按名排序。
+        assert_eq!(found[0].path, repo.path().join("AGENTS.md"));
+        assert_eq!(found[0].kind, LinkKind::File);
+        assert_eq!(found[1].path, repo.path().join("CLAUDE.md"));
+        assert_eq!(found[1].kind, LinkKind::File);
+        assert_eq!(found[2].path, repo.path().join("codebudy.md"));
+        assert_eq!(found[2].kind, LinkKind::File);
+        assert_eq!(found[3].path, repo.path().join(".claude"));
+        assert_eq!(found[3].kind, LinkKind::Dir);
+        assert_eq!(found[4].path, repo.path().join(".codebudy"));
+        assert_eq!(found[4].kind, LinkKind::Dir);
+        assert_eq!(found[5].path, repo.path().join(".cursor"));
+        assert_eq!(found[5].kind, LinkKind::Dir);
+    }
+
+    #[test]
     fn discover_memory_none_when_nothing_exists() {
         let home = tempfile::tempdir().unwrap();
-        let repo = PathBuf::from("/repo/y");
-        assert!(discover_memory_in(home.path(), &repo).is_empty());
+        let repo = tempfile::tempdir().unwrap();
+        assert!(discover_memory_in(home.path(), repo.path()).is_empty());
     }
 
     #[test]
