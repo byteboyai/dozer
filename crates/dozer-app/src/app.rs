@@ -3424,10 +3424,39 @@ impl App {
             // Workspace` 整体,`ssh::update` 只拿得到 `&mut ws.ssh`)——
             // 拦截在通配 `Message::Ssh(msg)` 之前,直接调 `Workspace::
             // spawn_ssh_tab`。
-            Message::Ssh(ssh::Message::OpenTerminal(host_id)) => {
+            Message::Ssh(ssh::Message::OpenSshTab(host_id, ssh::SshTabKind::Terminal)) => {
                 self.with_focused_project(|ws, io| {
-                    ws.ssh.record_reopen_after_trust(host_id.clone());
-                    ws.spawn_ssh_tab(io, host_id);
+                    // 已经开着这台主机的终端 tab 就直接切过去,不重新握手
+                    // 连一遍(阶段 3 SFTP 决定"每个 tab 独立新建连接",但
+                    // 终端 tab 本来就是"一台主机一条常驻连接",重复点
+                    // "终端"图标应该是切换焦点而不是叠加新连接)。
+                    let already_open = ws
+                        .ssh_tabs
+                        .iter()
+                        .any(|t| t.info.id.strip_prefix("ssh:") == Some(host_id.as_str()));
+                    if already_open {
+                        ws.select_ssh_tab(host_id, ssh::SshTabKind::Terminal);
+                    } else {
+                        ws.ssh.record_reopen_after_trust(host_id.clone());
+                        ws.spawn_ssh_tab(io, host_id);
+                    }
+                });
+            }
+            // Sftp 种类阶段 4 不处理内容(阶段 3 再接),但仍要吃掉这条
+            // 消息、不让它落进下面的通配分支(通配分支会把它转发给
+            // ssh::update,那边的穷尽匹配分支是空 no-op,效果上等价,
+            // 但显式吃掉更清楚地表达"阶段 4 有意不处理"这件事)。
+            Message::Ssh(ssh::Message::OpenSshTab(_, ssh::SshTabKind::Sftp)) => {}
+            Message::Ssh(ssh::Message::CloseSshTab(host_id, kind)) => {
+                self.with_focused_project(|ws, io| {
+                    if kind == ssh::SshTabKind::Terminal {
+                        ws.close_ssh_tab(io, &host_id, kind);
+                    }
+                });
+            }
+            Message::Ssh(ssh::Message::SelectSshTab(host_id, kind)) => {
+                self.with_focused_project(|ws, _io| {
+                    ws.select_ssh_tab(host_id, kind);
                 });
             }
             // 终端连接失败:先做内核层面的清理(pending/ssh_out_pending
@@ -6203,6 +6232,7 @@ fn left_panel_area<'a>(
                 let tabs: Vec<todo::SessionTabSummary> = ws
                     .tabs
                     .iter()
+                    .chain(ws.ssh_tabs.iter())
                     .map(|t| todo::SessionTabSummary {
                         session_id: t.info.id.clone(),
                         title: tab_title(t.agent, t.cwd.as_deref(), &t.info.name),
