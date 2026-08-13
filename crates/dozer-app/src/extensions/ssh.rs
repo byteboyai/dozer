@@ -4,8 +4,8 @@
 //! SSH 终端(阶段 2)/SFTP(阶段 3)留后续,见
 //! `docs/superpowers/specs/2026-08-08-ssh-panel-phase1-design.md`。
 
-use crate::theme;
 use crate::icons;
+use crate::theme;
 use iced_widget::core::Element;
 use iced_widget::{button, column, container, row, text, text_input};
 use serde::{Deserialize, Serialize};
@@ -623,7 +623,8 @@ fn host_card<'a>(
             crate::theme::icon_size::row() + 10.0,
             /* interactive */ true,
             on_select,
-            /* on_hover */ move |hovered| {
+            /* on_hover */
+            move |hovered| {
                 Message::HoverAction(if hovered {
                     Some((host.id.clone(), idx))
                 } else {
@@ -657,18 +658,22 @@ fn host_card<'a>(
     .spacing(6);
     if matches!(status, TestStatus::UnknownHostKey { .. }) {
         actions = actions.push(
-            button(text("信任并重试").size(theme::font::caption()).color(theme::color::GOLD))
-                .on_press(Message::TrustHostKey(host.id.clone()))
-                .padding([4, 8])
-                .style(|_t: &iced_widget::Theme, _s| button::Style {
-                    background: None,
-                    border: iced_widget::core::Border {
-                        color: theme::color::GOLD,
-                        width: 1.0,
-                        radius: 6.0.into(),
-                    },
-                    ..button::Style::default()
-                }),
+            button(
+                text("信任并重试")
+                    .size(theme::font::caption())
+                    .color(theme::color::GOLD),
+            )
+            .on_press(Message::TrustHostKey(host.id.clone()))
+            .padding([4, 8])
+            .style(|_t: &iced_widget::Theme, _s| button::Style {
+                background: None,
+                border: iced_widget::core::Border {
+                    color: theme::color::GOLD,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..button::Style::default()
+            }),
         );
     }
 
@@ -711,23 +716,25 @@ fn radio_dot<'a>(
     let dot = container(iced_widget::Space::new())
         .width(iced_widget::core::Length::Fixed(10.0))
         .height(iced_widget::core::Length::Fixed(10.0))
-        .style(move |_t: &iced_widget::Theme| iced_widget::container::Style {
-            background: if selected {
-                Some(theme::color::GOLD.into())
-            } else {
-                None
-            },
-            border: iced_widget::core::Border {
-                color: if selected {
-                    theme::color::GOLD
+        .style(
+            move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                background: if selected {
+                    Some(theme::color::GOLD.into())
                 } else {
-                    theme::color::BORDER
+                    None
                 },
-                width: 1.5,
-                radius: 5.0.into(),
+                border: iced_widget::core::Border {
+                    color: if selected {
+                        theme::color::GOLD
+                    } else {
+                        theme::color::BORDER
+                    },
+                    width: 1.5,
+                    radius: 5.0.into(),
+                },
+                ..iced_widget::container::Style::default()
             },
-            ..iced_widget::container::Style::default()
-        });
+        );
     let ring = container(dot)
         .width(iced_widget::core::Length::Fixed(16.0))
         .height(iced_widget::core::Length::Fixed(16.0))
@@ -736,7 +743,9 @@ fn radio_dot<'a>(
     iced_widget::MouseArea::new(
         row![
             ring,
-            text(label).size(theme::font::body()).color(theme::color::CREAM),
+            text(label)
+                .size(theme::font::body())
+                .color(theme::color::CREAM),
         ]
         .spacing(6)
         .align_y(iced_widget::core::alignment::Vertical::Center),
@@ -764,8 +773,16 @@ fn host_form<'a>(
             .on_input(Message::DraftUsernameChanged)
             .size(theme::font::body()),
         row![
-            radio_dot("密码", !draft.use_private_key, Message::DraftAuthMethodToggled(false)),
-            radio_dot("私钥", draft.use_private_key, Message::DraftAuthMethodToggled(true)),
+            radio_dot(
+                "密码",
+                !draft.use_private_key,
+                Message::DraftAuthMethodToggled(false)
+            ),
+            radio_dot(
+                "私钥",
+                draft.use_private_key,
+                Message::DraftAuthMethodToggled(true)
+            ),
         ]
         .spacing(20),
     ]
@@ -808,15 +825,21 @@ fn host_form<'a>(
             })
     };
 
-    let mut buttons = row![text_btn("测试连接", theme::color::CREAM, Message::TestConnection(
-        draft.id.clone().unwrap_or_default(),
-    ))]
+    let mut buttons = row![text_btn(
+        "测试连接",
+        theme::color::CREAM,
+        Message::TestConnection(draft.id.clone().unwrap_or_default(),)
+    )]
     .spacing(6);
     // 新建主机(没有 id)时"测试连接"点了也是 no-op(TestConnection 在
     // ws_state.hosts 里查不到这个空字符串 id,直接 return——见
     // ssh::update 的既有实现),"删除"按钮干脆不渲染,没有可删的对象。
     if let Some(id) = &draft.id {
-        buttons = buttons.push(text_btn("删除", theme::color::RED, Message::DeleteHost(id.clone())));
+        buttons = buttons.push(text_btn(
+            "删除",
+            theme::color::RED,
+            Message::DeleteHost(id.clone()),
+        ));
     }
     buttons = buttons.push(text_btn("保存", theme::color::GOLD, Message::DraftSave));
     buttons = buttons.push(text_btn("取消", theme::color::DIM, Message::DraftCancel));
@@ -836,14 +859,20 @@ fn host_form<'a>(
         TestStatus::Err(e) => (format!("✗ {e}"), theme::color::RED),
     };
     if !status_text.is_empty() {
-        col = col.push(text(status_text).size(theme::font::caption_sm()).color(status_color));
+        col = col.push(
+            text(status_text)
+                .size(theme::font::caption_sm())
+                .color(status_color),
+        );
     }
     if matches!(status, TestStatus::UnknownHostKey { .. })
         && let Some(id) = &draft.id
     {
-        col = col.push(
-            text_btn("信任并重试", theme::color::GOLD, Message::TrustHostKey(id.clone())),
-        );
+        col = col.push(text_btn(
+            "信任并重试",
+            theme::color::GOLD,
+            Message::TrustHostKey(id.clone()),
+        ));
     }
 
     container(col)
@@ -866,9 +895,10 @@ pub fn view<'a>(
     width: iced_widget::core::Length,
     outer: iced_widget::core::Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let mut col = column![
-        crate::homespace::home_panel_head(crate::icons::IconKind::Server, "主机")
-    ]
+    let mut col = column![crate::homespace::home_panel_head(
+        crate::icons::IconKind::Server,
+        "主机"
+    )]
     .spacing(12);
 
     if ws_state.hosts().is_empty() {
@@ -879,7 +909,11 @@ pub fn view<'a>(
         );
     } else {
         for h in ws_state.hosts() {
-            col = col.push(host_card(h, ws_state.test_status(&h.id), ws_state.hover_action()));
+            col = col.push(host_card(
+                h,
+                ws_state.test_status(&h.id),
+                ws_state.hover_action(),
+            ));
         }
     }
 
@@ -893,19 +927,23 @@ pub fn view<'a>(
     }
 
     col = col.push(
-        button(text("＋添加").size(theme::font::body()).color(theme::color::GOLD))
-            .on_press(Message::AddHostStart)
-            .padding([8, 16])
-            .style(|_t: &iced_widget::Theme, _s| button::Style {
-                background: Some(theme::color::BG.into()),
-                border: iced_widget::core::Border {
-                    color: theme::color::GOLD,
-                    width: 1.0,
-                    radius: 6.0.into(),
-                },
-                text_color: theme::color::GOLD,
-                ..button::Style::default()
-            }),
+        button(
+            text("＋添加")
+                .size(theme::font::body())
+                .color(theme::color::GOLD),
+        )
+        .on_press(Message::AddHostStart)
+        .padding([8, 16])
+        .style(|_t: &iced_widget::Theme, _s| button::Style {
+            background: Some(theme::color::BG.into()),
+            border: iced_widget::core::Border {
+                color: theme::color::GOLD,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            text_color: theme::color::GOLD,
+            ..button::Style::default()
+        }),
     );
 
     container(col.padding(16))

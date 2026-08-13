@@ -1262,9 +1262,19 @@ pub enum Message {
     PreviewTabScroll(bool),
     /// 终端左键按下：在视口格 `(col, row)` 起新选区（`right` = 按点在
     /// 格子右半）。
-    TermSelStart { target: TermTarget, col: usize, row: usize, right: bool },
+    TermSelStart {
+        target: TermTarget,
+        col: usize,
+        row: usize,
+        right: bool,
+    },
     /// 终端拖拽：选区末端更新到视口格 `(col, row)`。
-    TermSelUpdate { target: TermTarget, col: usize, row: usize, right: bool },
+    TermSelUpdate {
+        target: TermTarget,
+        col: usize,
+        row: usize,
+        right: bool,
+    },
     /// ⌘V 粘贴剪贴板文本：按会话的 bracketed paste 模式决定是否包裹
     /// `ESC[200~`/`ESC[201~` 后写入 daemon。
     TermPaste(TermTarget, String),
@@ -3109,7 +3119,12 @@ impl App {
                     }
                 });
             }
-            Message::TermSelStart { target, col, row, right } => {
+            Message::TermSelStart {
+                target,
+                col,
+                row,
+                right,
+            } => {
                 self.with_focused_project(|ws, _io| {
                     let tab = match target {
                         TermTarget::Shared => ws.tabs.get_mut(ws.active),
@@ -3120,7 +3135,12 @@ impl App {
                     }
                 });
             }
-            Message::TermSelUpdate { target, col, row, right } => {
+            Message::TermSelUpdate {
+                target,
+                col,
+                row,
+                right,
+            } => {
                 self.with_focused_project(|ws, _io| {
                     let tab = match target {
                         TermTarget::Shared => ws.tabs.get_mut(ws.active),
@@ -4284,16 +4304,15 @@ impl App {
         self.with_focused_project(move |ws, io| {
             let bracketed = match target {
                 TermTarget::Shared => ws.tabs.get(ws.active).map(|t| t.model.bracketed_paste()),
-                TermTarget::SshPanel => {
-                    ws.ssh_tabs
-                        .iter()
-                        .find(|t| {
-                            ws.ssh_active.as_ref().is_some_and(|(h, _)| {
-                                t.info.id.strip_prefix("ssh:") == Some(h.as_str())
-                            })
+                TermTarget::SshPanel => ws
+                    .ssh_tabs
+                    .iter()
+                    .find(|t| {
+                        ws.ssh_active.as_ref().is_some_and(|(h, _)| {
+                            t.info.id.strip_prefix("ssh:") == Some(h.as_str())
                         })
-                        .map(|t| t.model.bracketed_paste())
-                }
+                    })
+                    .map(|t| t.model.bracketed_paste()),
             };
             let Some(bracketed) = bracketed else {
                 return;
@@ -6345,9 +6364,12 @@ fn left_panel_area<'a>(
                     return column![].into();
                 }
                 let (list_portion, content_portion) = split_portions(app.dims.ssh_split);
-                let list_pane =
-                    ssh::view(&ws.ssh, Length::FillPortion(list_portion), zone_pane_border(zone, lc))
-                        .map(Message::Ssh);
+                let list_pane = ssh::view(
+                    &ws.ssh,
+                    Length::FillPortion(list_portion),
+                    zone_pane_border(zone, lc),
+                )
+                .map(Message::Ssh);
                 row![
                     list_pane,
                     divider_bar(
@@ -7152,14 +7174,23 @@ fn ssh_tab_bar<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut bar = row![].spacing(2);
     for tab in &ws.ssh_tabs {
-        let host_id = tab.info.id.strip_prefix("ssh:").unwrap_or(&tab.info.id).to_string();
+        let host_id = tab
+            .info
+            .id
+            .strip_prefix("ssh:")
+            .unwrap_or(&tab.info.id)
+            .to_string();
         let is_active = ws
             .ssh_active
             .as_ref()
             .is_some_and(|(h, k)| h == &host_id && *k == ssh::SshTabKind::Terminal);
         let label = tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name);
         let content = row![
-            icons::view(icons::IconKind::Terminal, crate::theme::icon_size::row(), theme::color::DIM),
+            icons::view(
+                icons::IconKind::Terminal,
+                crate::theme::icon_size::row(),
+                theme::color::DIM
+            ),
             text(label).size(theme::font::caption()),
         ]
         .spacing(6)
@@ -7169,12 +7200,22 @@ fn ssh_tab_bar<'a>(
             crate::theme::icon_size::row(),
             theme::color::DIM,
             /* close_interactive */ true,
-            Message::Ssh(ssh::Message::SelectSshTab(host_id.clone(), ssh::SshTabKind::Terminal)),
-            Message::Ssh(ssh::Message::CloseSshTab(host_id.clone(), ssh::SshTabKind::Terminal)),
+            Message::Ssh(ssh::Message::SelectSshTab(
+                host_id.clone(),
+                ssh::SshTabKind::Terminal,
+            )),
+            Message::Ssh(ssh::Message::CloseSshTab(
+                host_id.clone(),
+                ssh::SshTabKind::Terminal,
+            )),
             |_hover| Message::Noop, // 同 host_card 的 hover 处理,写计划阶段核实是否需要真实 HoverId 接线
             |_hover| Message::Noop,
         );
-        let bg = if is_active { theme::color::CARD } else { theme::color::BG };
+        let bg = if is_active {
+            theme::color::CARD
+        } else {
+            theme::color::BG
+        };
         bar = bar.push(
             container(row![select, close].align_y(iced_widget::core::Alignment::Center))
                 .padding([6, 10])
@@ -7206,8 +7247,7 @@ fn ssh_terminal_pane<'a>(
             &tab.model,
             keyboard_term_target(app.left_view, app.active_zone) == TermTarget::SshPanel,
             TermTarget::SshPanel,
-        )
-        .into(),
+        ),
         None => container(
             text("点主机卡片的终端/文件传输图标开始")
                 .size(theme::font::body())

@@ -273,10 +273,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
                             .and_capture(),
                     );
                 }
-                Some(
-                    canvas::Action::publish(Message::TermScroll(self.target, lines))
-                        .and_capture(),
-                )
+                Some(canvas::Action::publish(Message::TermScroll(self.target, lines)).and_capture())
             }
             mouse::Event::ButtonPressed(mouse::Button::Left) => {
                 let pos = cursor.position_in(bounds)?;
@@ -423,10 +420,14 @@ pub fn view(
     focused: bool,
     target: crate::app::TermTarget,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    Canvas::new(TermCanvas { model, focused, target })
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+    Canvas::new(TermCanvas {
+        model,
+        focused,
+        target,
+    })
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
 }
 
 #[cfg(test)]

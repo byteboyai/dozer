@@ -829,7 +829,7 @@ impl Workspace {
     /// 换成 `ssh_tabs`/`ssh_active`。
     pub(crate) fn ssh_send_input(&self, io: &ShellIo, bytes: Vec<u8>) {
         let _ = io; // ssh_tabs 里只会是 TabBackend::Ssh,不需要 io.client/handle,
-                    // 保留参数是为了和 send_input 签名对齐、调用方不用分叉判断
+        // 保留参数是为了和 send_input 签名对齐、调用方不用分叉判断
         let Some((host_id, _kind)) = self.ssh_active.as_ref() else {
             return;
         };
@@ -1108,18 +1108,15 @@ impl Workspace {
         // kill_for_ssh_backend 测试)。
         let _ = io;
         if self.ssh_active.as_ref().map(|(h, k)| (h.as_str(), *k)) == Some((host_id, kind)) {
-            self.ssh_active = self
-                .ssh_tabs
-                .first()
-                .map(|t| {
-                    let h = t
-                        .info
-                        .id
-                        .strip_prefix("ssh:")
-                        .unwrap_or(&t.info.id)
-                        .to_string();
-                    (h, ssh::SshTabKind::Terminal)
-                });
+            self.ssh_active = self.ssh_tabs.first().map(|t| {
+                let h = t
+                    .info
+                    .id
+                    .strip_prefix("ssh:")
+                    .unwrap_or(&t.info.id)
+                    .to_string();
+                (h, ssh::SshTabKind::Terminal)
+            });
         }
     }
 
