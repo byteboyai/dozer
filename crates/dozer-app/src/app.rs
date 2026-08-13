@@ -5613,6 +5613,10 @@ fn left_panel_area<'a>(
     // worktree 速览条("本工作区：xxx" + 其它 worktree 切换)现在由 `git_log::view`
     // 自己渲染在文件夹路径下方,不再在这里额外包一层,避免盖在面板标题上方。
     let zone_body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> = inner;
+    // 聚焦态外框:本 zone 拿到焦点(= `active_zone`)时描 GOLD 边,否则沿用
+    // region 的默认(无描边)外框。半径保持与默认外框一致。
+    let left_focused = app.active_zone == Some(ZoneSide::Left);
+    let base_border = region.border.unwrap_or_default();
     let zone_box = container(zone_body)
         .width(Length::Fill)
         .height(Length::Fill)
@@ -5620,7 +5624,15 @@ fn left_panel_area<'a>(
         .clip(true)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
-            border: region.border.unwrap_or_default(),
+            border: if left_focused {
+                Border {
+                    color: theme::color::GOLD,
+                    width: 2.0,
+                    radius: base_border.radius,
+                }
+            } else {
+                base_border
+            },
             ..container::Style::default()
         });
     // 四向 margin:把整块外边框从顶栏/窗口底/图标栏/对侧分隔条各推开一段,
@@ -5745,6 +5757,10 @@ fn right_panel_area<'a>(
         return inner;
     }
     let region = zone;
+    // 聚焦态外框:本 zone 拿到焦点(= `active_zone`)时描 GOLD 边,否则沿用
+    // region 的默认(无描边)外框。半径保持与默认外框一致。
+    let right_focused = app.active_zone == Some(ZoneSide::Right);
+    let base_border = region.border.unwrap_or_default();
     let zone_box = container(inner)
         .width(Length::Fill)
         .height(Length::Fill)
@@ -5752,7 +5768,15 @@ fn right_panel_area<'a>(
         .clip(true)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
-            border: region.border.unwrap_or_default(),
+            border: if right_focused {
+                Border {
+                    color: theme::color::GOLD,
+                    width: 2.0,
+                    radius: base_border.radius,
+                }
+            } else {
+                base_border
+            },
             ..container::Style::default()
         });
     // 四向 margin:同 `left_panel_area`,左右 margin 来自 `right_zone` 配置
