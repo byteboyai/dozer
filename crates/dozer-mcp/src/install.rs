@@ -12,7 +12,14 @@ fn exe_path() -> String {
 
 /// Claude/Codebuddy 共用：`{"mcpServers": {"dozer": {...}}}`。
 fn run_at_claude_like(path: &Path, install: bool) -> i32 {
-    let text = std::fs::read_to_string(path).unwrap_or_else(|_| "{}".into());
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".into(),
+        Err(e) => {
+            eprintln!("读 {} 失败: {e}", path.display());
+            return 1;
+        }
+    };
     let mut root: serde_json::Value = match serde_json::from_str(&text) {
         Ok(v) => v,
         Err(e) => {
@@ -49,13 +56,20 @@ fn run_at_claude_like(path: &Path, install: bool) -> i32 {
 
 /// Codex：`[mcp_servers.dozer]` TOML 表。
 fn run_at_codex(path: &Path, install: bool) -> i32 {
-    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            eprintln!("读 {} 失败: {e}", path.display());
+            return 1;
+        }
+    };
     let mut root: toml::Value = if text.trim().is_empty() {
         toml::Value::Table(Default::default())
     } else {
-        // 注意：toml 0.9.12 的 `Value: FromStr` 实现有 bug，对任何非空文档
-        // （哪怕只有 `a = 1`）都会报 "unexpected content, expected nothing"；
-        // `toml::from_str::<Value>` 走的是另一条正常路径，两者本应等价。
+        // 注意：`toml::Value` 的 `FromStr`（`.parse()`）解析的是单个裸值
+        // 字面量，不是完整文档；要解析完整 TOML 文档得用
+        // `toml::from_str::<Value>`——两者不是等价的，这里选后者。
         match toml::from_str::<toml::Value>(&text) {
             Ok(v) => v,
             Err(e) => {
@@ -98,7 +112,14 @@ fn run_at_codex(path: &Path, install: bool) -> i32 {
 
 /// OpenCode：`{"mcp": {"dozer": {"type":"local","command":[...],"enabled":true}}}`。
 fn run_at_opencode(path: &Path, install: bool) -> i32 {
-    let text = std::fs::read_to_string(path).unwrap_or_else(|_| "{}".into());
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".into(),
+        Err(e) => {
+            eprintln!("读 {} 失败: {e}", path.display());
+            return 1;
+        }
+    };
     let mut root: serde_json::Value = match serde_json::from_str(&text) {
         Ok(v) => v,
         Err(e) => {
@@ -244,9 +265,8 @@ mod tests {
         assert_eq!(run_at_codex(&path, true), 0);
         assert_eq!(run_at_codex(&path, true), 0);
         let text = std::fs::read_to_string(&path).unwrap();
-        // `toml::Value` 的 `FromStr` 在 toml 0.9.12 里对非空文档会误报
-        // "unexpected content"（见 run_at_codex 里的注释），这里改用
-        // `toml::from_str` 走正常路径。
+        // `.parse()`（`Value: FromStr`）解析的是裸值字面量而非完整文档，
+        // 见 run_at_codex 里的注释；这里同样改用 `toml::from_str`。
         let root: toml::Value = toml::from_str(&text).unwrap();
         let servers = root["mcp_servers"].as_table().unwrap();
         assert_eq!(servers.len(), 1);
@@ -265,5 +285,35 @@ mod tests {
         assert_eq!(servers.len(), 1);
         assert_eq!(servers["dozer"]["type"], "local");
         assert_eq!(servers["dozer"]["command"][1], "serve");
+    }
+
+    /// 读一个存在但不是文件（这里用目录代替）的路径，在所有平台上都会产生
+    /// 非 `NotFound` 的 I/O 错误，用来验证"读失败（非文件不存在）应拒绝
+    /// 写入"而不是把它当空配置误覆盖。
+    #[test]
+    fn install_claude_refuses_to_write_when_read_fails_non_notfound() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+        std::fs::create_dir(&path).unwrap();
+        assert_eq!(run_at_claude_like(&path, true), 1);
+        assert!(path.is_dir(), "读失败时不应把目录路径覆盖成文件");
+    }
+
+    #[test]
+    fn install_codex_refuses_to_write_when_read_fails_non_notfound() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::create_dir(&path).unwrap();
+        assert_eq!(run_at_codex(&path, true), 1);
+        assert!(path.is_dir(), "读失败时不应把目录路径覆盖成文件");
+    }
+
+    #[test]
+    fn install_opencode_refuses_to_write_when_read_fails_non_notfound() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.json");
+        std::fs::create_dir(&path).unwrap();
+        assert_eq!(run_at_opencode(&path, true), 1);
+        assert!(path.is_dir(), "读失败时不应把目录路径覆盖成文件");
     }
 }
