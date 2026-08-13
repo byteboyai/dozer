@@ -2,8 +2,8 @@ use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use dozer_core::protocol::{
-    AgentKind, AgentState, BookmarkInfo, BookmarkScope, ProjectInfo, Reply, Request, SessionInfo,
-    decode_line, encode_line,
+    AgentKind, AgentState, BookmarkInfo, BookmarkScope, PreviewContext, ProjectInfo, Reply,
+    Request, SessionInfo, decode_line, encode_line,
 };
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -214,6 +214,33 @@ impl Client {
             .await?
         {
             Reply::Bookmarks { bookmarks } => Ok(bookmarks),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn update_preview_context(
+        &self,
+        project_id: i64,
+        context: Option<PreviewContext>,
+    ) -> Result<()> {
+        match self
+            .roundtrip(&Request::UpdatePreviewContext {
+                project_id,
+                context,
+            })
+            .await?
+        {
+            Reply::Ok => Ok(()),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn get_preview_context(&self, project_id: i64) -> Result<Option<PreviewContext>> {
+        match self
+            .roundtrip(&Request::GetPreviewContext { project_id })
+            .await?
+        {
+            Reply::PreviewContext { context } => Ok(context),
             other => bail!("意外应答: {other:?}"),
         }
     }

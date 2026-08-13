@@ -1,5 +1,6 @@
 pub mod acceptance;
 pub mod bookmarks;
+pub mod preview_context;
 pub mod projects;
 pub mod registry;
 pub mod ring;

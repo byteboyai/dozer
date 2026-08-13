@@ -1,0 +1,31 @@
+[package]
+name = "dozer-mcp"
+version = "0.1.0"
+edition.workspace = true
+
+[lib]
+name = "dozer_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dozer-mcp"
+path = "src/main.rs"
+
+[dependencies]
+dozer-core = { path = "../dozer-core" }
+dozer-client = { path = "../dozer-client" }
+anyhow.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rmcp = { version = "3.1.2", features = ["server", "macros", "transport-io"] }
+schemars = "1"
+# 格式保留式 TOML 编辑：改 `~/.codex/config.toml` 时不能吃掉用户的注释。
+toml_edit = "0.25"
+
+[dev-dependencies]
+dozerd = { path = "../dozerd" }
+tempfile = "3"
+# 只在测试里用：断言写出来的文件内容时用普通解析器读一遍更省事。
+toml = "0.9"
+uuid.workspace = true

@@ -46,6 +46,22 @@ impl AgentKind {
     }
 }
 
+/// 预览面板当前上下文：文件路径 + 光标/选区（1-indexed，见 spec
+/// "1-indexed 行列" 一节）。无选区时 `start == end` 为光标位置。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PreviewContext {
+    pub path: String,
+    pub start_line: u32,
+    pub start_col: u32,
+    pub end_line: u32,
+    pub end_col: u32,
+    pub has_selection: bool,
+    /// 这份上下文被推送时的 Unix 纪元毫秒。没有它的话，一个陈旧的缓存值
+    /// （GUI 已退出但 dozerd 还活着、或用户几小时没碰过预览面板）和刚刚
+    /// 更新的值长得一模一样，调 MCP tool 的 agent 无从判断新鲜度。
+    pub updated_at_ms: u64,
+}
+
 /// 项目（甲方资产域的根；P1g）。id 为 dozerd SQLite 主键。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectInfo {
@@ -188,6 +204,17 @@ pub enum Request {
     ListBookmarks {
         project_id: Option<i64>,
     },
+    /// `dozer-app` 预览面板变化时推送最新上下文；`context: None` 表示当前
+    /// 无活动文本预览。`dozerd` 侧纯内存缓存，同一 `project_id` 后写覆盖
+    /// 前写。
+    UpdatePreviewContext {
+        project_id: i64,
+        context: Option<PreviewContext>,
+    },
+    /// `dozer-mcp` 按需查询某项目当前的预览上下文。
+    GetPreviewContext {
+        project_id: i64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -244,6 +271,11 @@ pub enum Reply {
     /// 收藏夹列表。
     Bookmarks {
         bookmarks: Vec<BookmarkInfo>,
+    },
+    /// `GetPreviewContext` 的应答；`context: None` 表示当前无活动文本预览
+    /// 或该 `project_id` 从未收到过推送。
+    PreviewContext {
+        context: Option<PreviewContext>,
     },
 }
 
@@ -610,5 +642,39 @@ mod tests {
             AgentKind::V8agent
         );
         assert_eq!(AgentKind::V8agent.label(), "v8agent");
+    }
+
+    #[test]
+    fn preview_context_round_trips() {
+        let ctx = PreviewContext {
+            path: "/repo/src/main.rs".into(),
+            start_line: 12,
+            start_col: 3,
+            end_line: 14,
+            end_col: 1,
+            has_selection: true,
+            updated_at_ms: 1_700_000_000_000,
+        };
+        let req = Request::UpdatePreviewContext {
+            project_id: 7,
+            context: Some(ctx.clone()),
+        };
+        let line = encode_line(&req);
+        assert_eq!(decode_line::<Request>(&line).unwrap(), req);
+
+        let req_none = Request::UpdatePreviewContext {
+            project_id: 7,
+            context: None,
+        };
+        let line = encode_line(&req_none);
+        assert_eq!(decode_line::<Request>(&line).unwrap(), req_none);
+
+        let get = Request::GetPreviewContext { project_id: 7 };
+        let line = encode_line(&get);
+        assert_eq!(decode_line::<Request>(&line).unwrap(), get);
+
+        let reply = Reply::PreviewContext { context: Some(ctx) };
+        let line = encode_line(&reply);
+        assert_eq!(decode_line::<Reply>(&line).unwrap(), reply);
     }
 }

@@ -2626,6 +2626,18 @@ impl CodeEditor {
         self.cursors.primary_position()
     }
 
+    /// 当前主光标是否存在选区(拖选/Shift+方向键产生)。
+    pub fn has_selection(&self) -> bool {
+        self.cursors.primary().has_selection()
+    }
+
+    /// 当前主光标的选区范围,`((start_line, start_col), (end_line, end_col))`,
+    /// 0-indexed。无选区时返回 `None`——区分"无选区"与"光标位置"是调用方
+    /// (`dozer-app`)的职责,这里只做纯透传。
+    pub fn selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
+        self.cursors.primary().selection_range()
+    }
+
     /// Returns the maximum content width across all lines, in pixels.
     ///
     /// Used to size the horizontal scrollbar when `wrap_enabled = false`.
@@ -3661,5 +3673,20 @@ mod tests {
         // Collapsed state is preserved but produces no hidden lines while off.
         editor.collapsed_folds.insert(0);
         assert!(editor.hidden_lines_set().is_empty());
+    }
+
+    #[test]
+    fn has_selection_and_selection_range_report_none_by_default() {
+        let editor = CodeEditor::new("fn main() {}", "rs");
+        assert!(!editor.has_selection());
+        assert_eq!(editor.selection_range(), None);
+    }
+
+    #[test]
+    fn has_selection_and_selection_range_after_set_cursor() {
+        let mut editor = CodeEditor::new("fn main() {\n    let x = 1;\n}", "rs");
+        let _ = editor.set_cursor(1, 4);
+        assert!(!editor.has_selection());
+        assert_eq!(editor.cursor_position(), (1, 4));
     }
 }

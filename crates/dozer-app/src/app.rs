@@ -2322,8 +2322,11 @@ impl App {
         tab_id: usize,
         event: iced_code_editor::Message,
     ) -> iced_winit::runtime::Task<iced_code_editor::Message> {
+        let io = self.shell_io();
         if let Some(ws) = self.active_workspace_mut() {
-            ws.preview_tab_editor_event(tab_id, event)
+            let task = ws.preview_tab_editor_event(tab_id, event);
+            ws.spawn_preview_context_push(&io);
+            task
         } else {
             iced_winit::runtime::Task::none()
         }
@@ -2770,6 +2773,7 @@ impl App {
                     // 关 tab 后位置全变，旧 first 可能越界——归零防御（P1L T5）。
                     ws.preview_tab_first = 0;
                     ws.spawn_preview_state_save(io);
+                    ws.spawn_preview_context_push(io);
                 });
             }
             Message::PreviewEditOpen(idx) => {
@@ -3922,6 +3926,7 @@ impl App {
             // 新 tab 落在末尾，滚回最左让它可见（P1L T5）。
             ws.preview_tab_first = 0;
             ws.spawn_preview_state_save(io);
+            ws.spawn_preview_context_push(io);
         });
     }
 
@@ -3933,6 +3938,7 @@ impl App {
         self.with_focused_project(|ws, io| {
             ws.preview.select(idx);
             ws.spawn_preview_state_save(io);
+            ws.spawn_preview_context_push(io);
         });
         if arming {
             self.tab_drag = Some(TabDrag {
