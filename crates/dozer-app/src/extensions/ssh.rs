@@ -5,6 +5,7 @@
 //! `docs/superpowers/specs/2026-08-08-ssh-panel-phase1-design.md`。
 
 use crate::theme;
+use crate::icons;
 use iced_widget::core::Element;
 use iced_widget::{button, column, container, row, text, text_input};
 use serde::{Deserialize, Serialize};
@@ -90,6 +91,12 @@ pub struct WorkspaceState {
     /// 意图,顶多导致"该开终端却重新测试连接"这种安全的降级,不会误开
     /// 错主机的终端或者崩溃(设计文档 §6 的论证)。
     reopen_after_trust: Option<String>,
+    /// 主机卡片上当前鼠标悬停的图标按钮——`(host_id, 按钮位)`。按钮位
+    /// 约定:`0`=文件传输、`1`=终端、`2`=设置(见 `host_card`)。悬停
+    /// 状态存这里而不是 `App::hover_anims`,因为 `host_card` 是挂在
+    /// `WorkspaceState` 上的纯函数,读不到 `&App`;卡片按钮只需"进/出"
+    /// 二态高亮即可,不需要侧栏 rail 那种带渐变时长的动画。
+    hover_action: Option<(String, u8)>,
 }
 
 impl WorkspaceState {
@@ -101,6 +108,11 @@ impl WorkspaceState {
     }
     pub fn test_status(&self, host_id: &str) -> &TestStatus {
         self.test_status.get(host_id).unwrap_or(&TestStatus::Idle)
+    }
+    /// 主机卡片当前悬停的图标按钮(`(host_id, 按钮位)`),给 `view()` 传进
+    /// `host_card` 算每颗按钮的高亮。
+    pub(crate) fn hover_action(&self) -> &Option<(String, u8)> {
+        &self.hover_action
     }
     /// 记"点了终端按钮的这台主机,如果接下来撞上未知 host key,信任后要
     /// 自动重开终端"(内核 `App::update` 的 `OpenSshTab` 拦截分支调用;
@@ -337,6 +349,10 @@ pub enum Message {
     /// 切换 SSH 面板当前显示哪个 tab(点 tab 条里非当前的一个)。同上,
     /// 内核拦截(需要 `&mut Workspace` 设 `ssh_active`)。
     SelectSshTab(String, SshTabKind),
+    /// 主机卡片图标按钮的鼠标悬停进/出:更新 `ws_state.hover_action`,
+    /// 驱动卡片上对应按钮的 DIM→GOLD 高亮。图标按钮的 `on_enter`/`on_exit`
+    /// 事件由 `icons::icon_button_entry` 接好,这里只落状态。
+    HoverAction(Option<(String, u8)>),
     /// 终端连接失败的异步结果,带 `project_id`(异步结果不能假设聚焦
     /// 项目没变,同 `TestConnectionResult`)。同上,内核在 `ssh::update`
     /// 之前会先做 `pending`/`ssh_out_pending` 清理,这里只负责落卡片
@@ -355,6 +371,7 @@ pub fn update(
 ) {
     match msg {
         Message::AddHostStart => ws_state.editing = Some(SshHostDraft::default()),
+        Message::HoverAction(v) => ws_state.hover_action = v,
         Message::EditHostStart(id) => {
             if let Some(h) = ws_state.hosts.iter().find(|h| h.id == id) {
                 let (use_private_key, key_path) = match &h.auth {
@@ -587,35 +604,74 @@ fn set_draft(ws_state: &mut WorkspaceState, f: impl FnOnce(&mut SshHostDraft)) {
 fn host_card<'a>(
     host: &'a SshHost,
     status: &'a TestStatus,
+    hover_action: &'a Option<(String, u8)>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let auth_label = match &host.auth {
-        AuthMethod::Password => "密码".to_string(),
-        AuthMethod::PrivateKey { key_path } => format!("私钥: {key_path}"),
+    // 卡片上三个图标按钮的悬停高亮:只有"正在 hover 的那颗"是满 GOLD,
+    // 其余 DIM。按钮位约定:0=文件传输、1=终端、2=设置。
+    let is_hover = |idx: u8| {
+        hover_action
+            .as_ref()
+            .is_some_and(|(h, i)| h == &host.id && *i == idx)
     };
-    let (status_text, status_color) = match status {
-        TestStatus::Idle => (String::new(), theme::color::DIM),
-        TestStatus::Testing => ("测试中…".to_string(), theme::color::DIM),
-        TestStatus::Ok => ("✓ 连接成功".to_string(), theme::color::GREEN),
-        TestStatus::UnknownHostKey { fingerprint } => {
-            (format!("⚠ 未知主机,指纹 {fingerprint}"), theme::color::GOLD)
-        }
-        TestStatus::KeyChanged { fingerprint } => (
-            format!("✗ 主机指纹已变化({fingerprint}),拒绝连接"),
-            theme::color::RED,
-        ),
-        TestStatus::Err(e) => (format!("✗ {e}"), theme::color::RED),
+    let icon_btn = |kind: icons::IconKind, on_select: Message, tooltip: &'a str, idx: u8| {
+        crate::icons::icon_button_entry(
+            kind,
+            crate::theme::icon_size::row(),
+            /* active */ false,
+            /* hover_t */ if is_hover(idx) { 1.0 } else { 0.0 },
+            /* card */ true,
+            crate::theme::icon_size::row() + 10.0,
+            /* interactive */ true,
+            on_select,
+            /* on_hover */ move |hovered| {
+                Message::HoverAction(if hovered {
+                    Some((host.id.clone(), idx))
+                } else {
+                    None
+                })
+            },
+            tooltip,
+        )
     };
+
     let mut actions = row![
-        button(text("测试连接")).on_press(Message::TestConnection(host.id.clone())),
-        button(text("终端")).on_press(Message::OpenSshTab(host.id.clone(), SshTabKind::Terminal)),
-        button(text("编辑")).on_press(Message::EditHostStart(host.id.clone())),
-        button(text("删除")).on_press(Message::DeleteHost(host.id.clone())),
+        icon_btn(
+            crate::icons::IconKind::FolderSync,
+            Message::OpenSshTab(host.id.clone(), SshTabKind::Sftp),
+            "文件传输",
+            0,
+        ),
+        icon_btn(
+            crate::icons::IconKind::Terminal,
+            Message::OpenSshTab(host.id.clone(), SshTabKind::Terminal),
+            "终端",
+            1,
+        ),
+        icon_btn(
+            crate::icons::IconKind::Settings,
+            Message::EditHostStart(host.id.clone()),
+            "设置",
+            2,
+        ),
     ]
-    .spacing(8);
+    .spacing(6);
     if matches!(status, TestStatus::UnknownHostKey { .. }) {
-        actions = actions
-            .push(button(text("信任并重试")).on_press(Message::TrustHostKey(host.id.clone())));
+        actions = actions.push(
+            button(text("信任并重试").size(theme::font::caption()).color(theme::color::GOLD))
+                .on_press(Message::TrustHostKey(host.id.clone()))
+                .padding([4, 8])
+                .style(|_t: &iced_widget::Theme, _s| button::Style {
+                    background: None,
+                    border: iced_widget::core::Border {
+                        color: theme::color::GOLD,
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..button::Style::default()
+                }),
+        );
     }
+
     container(
         column![
             row![
@@ -627,15 +683,9 @@ fn host_card<'a>(
                     .color(theme::color::DIM),
             ]
             .spacing(8),
-            text(auth_label)
-                .size(theme::font::caption_sm())
-                .color(theme::color::DIM),
             actions,
-            text(status_text)
-                .size(theme::font::caption_sm())
-                .color(status_color),
         ]
-        .spacing(6),
+        .spacing(8),
     )
     .padding(10)
     .width(iced_widget::core::Length::Fill)
@@ -752,7 +802,7 @@ pub fn view<'a>(
         );
     } else {
         for h in ws_state.hosts() {
-            col = col.push(host_card(h, ws_state.test_status(&h.id)));
+            col = col.push(host_card(h, ws_state.test_status(&h.id), ws_state.hover_action()));
         }
     }
 
