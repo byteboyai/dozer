@@ -185,6 +185,12 @@ pub enum Request {
     },
     /// 列出所有项目（按活跃时间倒序）。
     ListProjects,
+    /// 项目改名。`id` 不存在或 `name` trim 后为空 → `Reply::Error`。成功复用
+    /// `Reply::Project { project: Some(更新后的项目) }`。
+    RenameProject {
+        id: i64,
+        name: String,
+    },
     /// 取某仓库的验收次数（项目卡"N 次验收"用）。
     GetAcceptanceCount {
         repo: String,
@@ -392,6 +398,18 @@ mod tests {
         assert_eq!(
             decode_line::<Reply>(encode_line(&reply).trim()).unwrap(),
             reply
+        );
+    }
+
+    #[test]
+    fn rename_project_request_roundtrips() {
+        let req = Request::RenameProject {
+            id: 1,
+            name: "新名字".into(),
+        };
+        assert_eq!(
+            decode_line::<Request>(encode_line(&req).trim()).unwrap(),
+            req
         );
     }
 
