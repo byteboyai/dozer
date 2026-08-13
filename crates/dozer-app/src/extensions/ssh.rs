@@ -11,6 +11,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// SSH 面板自己 tab 条上的 tab 种类。同一台主机可以同时开一个 `Terminal`
+/// tab 和(阶段 3 起)一个 `Sftp` tab,两者独立存在、独立连接——`(host_id,
+/// SshTabKind)` 是一个 SSH 面板 tab 的完整身份。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SshTabKind {
+    Terminal,
+    Sftp,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AuthMethod {
     Password,
@@ -94,7 +103,7 @@ impl WorkspaceState {
         self.test_status.get(host_id).unwrap_or(&TestStatus::Idle)
     }
     /// 记"点了终端按钮的这台主机,如果接下来撞上未知 host key,信任后要
-    /// 自动重开终端"(内核 `App::update` 的 `OpenTerminal` 拦截分支调用;
+    /// 自动重开终端"(内核 `App::update` 的 `OpenSshTab` 拦截分支调用;
     /// 字段本身私有,不能让内核直接赋值)。
     pub(crate) fn record_reopen_after_trust(&mut self, host_id: String) {
         self.reopen_after_trust = Some(host_id);
@@ -108,7 +117,7 @@ impl WorkspaceState {
 pub(crate) fn pick_retry_message(reopen: &mut Option<String>, id: &str) -> Message {
     if reopen.as_deref() == Some(id) {
         *reopen = None;
-        Message::OpenTerminal(id.to_string())
+        Message::OpenSshTab(id.to_string(), SshTabKind::Terminal)
     } else {
         Message::TestConnection(id.to_string())
     }
@@ -318,12 +327,16 @@ pub enum Message {
     /// 用户确认信任某台主机的 host key:写入 known_hosts,然后重新发起
     /// 一次 `TestConnection`。
     TrustHostKey(String),
-    /// 点主机卡片"终端":内核 `App::update` 里有专门的拦截分支(见
-    /// `workspace.rs`),真正的 tab 创建逻辑在那边的 `Workspace::
-    /// spawn_ssh_tab`——这个变体在 `ssh::update` 自己的 `match` 里只是
-    /// 穷尽匹配需要,不会真的走到这里(内核在通配 `Message::Ssh(msg)`
-    /// 之前就拦截了)。
-    OpenTerminal(String),
+    /// 点主机卡片"终端"/"文件传输"图标:内核 `App::update` 里有专门的
+    /// 拦截分支(见 `workspace.rs`),真正的 tab 创建逻辑在那边——这个
+    /// 变体在 `ssh::update` 自己的 `match` 里只是穷尽匹配需要,不会真的
+    /// 走到这里(内核在通配 `Message::Ssh(msg)` 之前就拦截了)。
+    OpenSshTab(String, SshTabKind),
+    /// 关闭 SSH 面板某个 tab(点 tab 条的 ✕)。同上,内核拦截。
+    CloseSshTab(String, SshTabKind),
+    /// 切换 SSH 面板当前显示哪个 tab(点 tab 条里非当前的一个)。同上,
+    /// 内核拦截(需要 `&mut Workspace` 设 `ssh_active`)。
+    SelectSshTab(String, SshTabKind),
     /// 终端连接失败的异步结果,带 `project_id`(异步结果不能假设聚焦
     /// 项目没变,同 `TestConnectionResult`)。同上,内核在 `ssh::update`
     /// 之前会先做 `pending`/`ssh_out_pending` 清理,这里只负责落卡片
@@ -532,21 +545,21 @@ pub fn update(
             // 写完 known_hosts,按"是不是上次点终端撞未知 key 的那台主机"
             // 决定重开终端还是重新测试连接(设计文档 §6)。
             //
-            // `OpenTerminal` 不能走下面 `update(ws_state, ..)` 这条本地递归
+            // `OpenSshTab` 不能走下面 `update(ws_state, ..)` 这条本地递归
             // 调用——`update` 只有 `&mut WorkspaceState`,够不到
             // `spawn_ssh_tab` 需要的 `&mut Workspace`,递归调用只会落进
-            // `ssh::update` 自己那个空转的 `OpenTerminal(_) => {}` 分支,
+            // `ssh::update` 自己那个空转的 `OpenSshTab(..) => {}` 分支,
             // 终端永远不会真的打开(而且此时 `pending_unknown_keys` 已经
             // 被上面 `remove` 清空,再点一次"信任并重试"也无法重试)。必须
             // 走 `emit` 把消息送回事件循环,才能命中内核 `App::update` 里
             // 那条专门调 `Workspace::spawn_ssh_tab` 的拦截分支。
             let retry = pick_retry_message(&mut ws_state.reopen_after_trust, &id);
             match retry {
-                Message::OpenTerminal(_) => emit(retry),
+                Message::OpenSshTab(..) => emit(retry),
                 other => update(ws_state, other, project_id, repo_path, handle, emit),
             }
         }
-        Message::OpenTerminal(_) => {
+        Message::OpenSshTab(..) | Message::CloseSshTab(..) | Message::SelectSshTab(..) => {
             // 内核 `App::update` 在通配 `Message::Ssh(msg)` 之前拦截,
             // 这里理论上到不了;写出来只是为了 `match` 穷尽。
         }
@@ -594,7 +607,7 @@ fn host_card<'a>(
     };
     let mut actions = row![
         button(text("测试连接")).on_press(Message::TestConnection(host.id.clone())),
-        button(text("终端")).on_press(Message::OpenTerminal(host.id.clone())),
+        button(text("终端")).on_press(Message::OpenSshTab(host.id.clone(), SshTabKind::Terminal)),
         button(text("编辑")).on_press(Message::EditHostStart(host.id.clone())),
         button(text("删除")).on_press(Message::DeleteHost(host.id.clone())),
     ]
@@ -829,7 +842,7 @@ mod tests {
         // id 命中 → 重开终端并清槽位。
         assert!(matches!(
             pick_retry_message(&mut reopen, "A"),
-            Message::OpenTerminal(_)
+            Message::OpenSshTab(_, SshTabKind::Terminal)
         ));
         assert_eq!(reopen, None);
         // 槽位清空后(id 不再匹配),信任别的/同一台都应落回测试连接。
