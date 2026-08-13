@@ -3510,10 +3510,10 @@ impl App {
                             == Some((host_id.as_str(), ssh::SshTabKind::Sftp))
                         {
                             ws.ssh_active = None; // 简化处理:关掉 SFTP tab 后不自动
-                                                   // 切到其它 tab,和终端 tab 关闭后的
-                                                   // "切到剩下第一个"逻辑不强行统一,
-                                                   // 因为 ssh_tabs/sftp_tabs 是两个不同
-                                                   // 集合,统一切换逻辑收益不大,YAGNI。
+                            // 切到其它 tab,和终端 tab 关闭后的
+                            // "切到剩下第一个"逻辑不强行统一,
+                            // 因为 ssh_tabs/sftp_tabs 是两个不同
+                            // 集合,统一切换逻辑收益不大,YAGNI。
                         }
                     }
                 });
@@ -7260,6 +7260,43 @@ fn ssh_tab_bar<'a>(
             move |h| Message::Hover(HoverId::SshTabClose(ssh_tab_hover_key(&close_hover_id)), h),
         ));
     }
+    // SFTP tab(阶段 3):`sftp_tabs` 按 host_id 去重,渲染形状跟终端 tab
+    // 一致(复用 `panel_tab`/`tab_core`),只是图标用 FolderSync、标题用主机名。
+    for (host_id, state) in &ws.sftp_tabs {
+        let is_active = ws.ssh_active.as_ref() == Some(&(host_id.clone(), ssh::SshTabKind::Sftp));
+        let label = ws
+            .ssh
+            .hosts()
+            .iter()
+            .find(|h| &h.id == host_id)
+            .map(|h| h.name.clone())
+            .unwrap_or_else(|| host_id.clone());
+        let key = ssh_tab_hover_key(host_id);
+        let title_hover_t = app.hover_progress(HoverId::SshTabItem(key));
+        let close_hover_t = app.hover_progress(HoverId::SshTabClose(key));
+        let icon = icons::view(
+            icons::IconKind::FolderSync,
+            crate::theme::icon_size::row(),
+            theme::color::DIM,
+        );
+        let select_id = host_id.clone();
+        let close_id = host_id.clone();
+        let title_hover_id = host_id.clone();
+        let close_hover_id = host_id.clone();
+        bar = bar.push(panel_tab(
+            label,
+            is_active,
+            title_hover_t,
+            close_hover_t,
+            Some(icon),
+            None,
+            Message::Ssh(ssh::Message::SelectSshTab(select_id, ssh::SshTabKind::Sftp)),
+            Message::Ssh(ssh::Message::CloseSshTab(close_id, ssh::SshTabKind::Sftp)),
+            move |h| Message::Hover(HoverId::SshTabItem(ssh_tab_hover_key(&title_hover_id)), h),
+            move |h| Message::Hover(HoverId::SshTabClose(ssh_tab_hover_key(&close_hover_id)), h),
+        ));
+        let _ = state;
+    }
     bar.into()
 }
 
@@ -7272,25 +7309,31 @@ fn ssh_terminal_pane<'a>(
     width: Length,
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let active_tab = ws.ssh_active.as_ref().and_then(|(host_id, _kind)| {
-        ws.ssh_tabs
-            .iter()
-            .find(|t| t.info.id.strip_prefix("ssh:") == Some(host_id.as_str()))
-    });
-    let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = match active_tab {
-        Some(tab) => term_view::view(
-            &tab.model,
-            keyboard_term_target(app.left_view, app.active_zone) == TermTarget::SshPanel,
-            TermTarget::SshPanel,
-        ),
-        None => container(
-            text("点主机卡片的终端/文件传输图标开始")
-                .size(theme::font::body())
-                .color(theme::color::DIM),
-        )
-        .padding(20)
-        .into(),
-    };
+    let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        match ws.ssh_active.as_ref() {
+            Some((host_id, ssh::SshTabKind::Terminal)) => {
+                let tab = ws
+                    .ssh_tabs
+                    .iter()
+                    .find(|t| t.info.id.strip_prefix("ssh:") == Some(host_id.as_str()));
+                match tab {
+                    Some(tab) => term_view::view(
+                        &tab.model,
+                        keyboard_term_target(app.left_view, app.active_zone)
+                            == TermTarget::SshPanel,
+                        TermTarget::SshPanel,
+                    ),
+                    None => ssh_empty_state(),
+                }
+            }
+            Some((host_id, ssh::SshTabKind::Sftp)) => match ws.sftp_tabs.get(host_id) {
+                Some(state) => {
+                    ssh::sftp::sftp_pane_view(state).map(|m| Message::Ssh(ssh::Message::Sftp(m)))
+                }
+                None => ssh_empty_state(),
+            },
+            None => ssh_empty_state(),
+        };
     container(column![ssh_tab_bar(app, ws), body].height(Length::Fill))
         .width(width)
         .style(move |_t: &iced_widget::Theme| container::Style {
@@ -7299,6 +7342,16 @@ fn ssh_terminal_pane<'a>(
             ..container::Style::default()
         })
         .into()
+}
+
+fn ssh_empty_state<'a>() -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    container(
+        text("点主机卡片的终端/文件传输图标开始")
+            .size(theme::font::body())
+            .color(theme::color::DIM),
+    )
+    .padding(20)
+    .into()
 }
 
 fn active_tab_view<'a>(

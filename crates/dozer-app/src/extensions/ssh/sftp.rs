@@ -197,7 +197,11 @@ pub enum Message {
     LocalToggle(String /* host_id */, std::path::PathBuf),
     LocalSelect(String /* host_id */, std::path::PathBuf),
     RemoteToggle(String /* host_id */, String /* remote dir */),
-    RemoteDirLoaded(String /* host_id */, String /* dir */, Result<Vec<RemoteEntry>, String>),
+    RemoteDirLoaded(
+        String, /* host_id */
+        String, /* dir */
+        Result<Vec<RemoteEntry>, String>,
+    ),
     RemoteSelect(String /* host_id */, String /* remote path */),
     Upload(String /* host_id */),
     Download(String /* host_id */),
@@ -359,7 +363,9 @@ pub(crate) async fn upload(
             .map(|n| n.to_string_lossy().into_owned())
             .ok_or_else(|| "无效的本地路径".to_string())?;
         let target_dir = remote_join(remote_dir, &name);
-        sftp.create_dir(&target_dir).await.map_err(|e| e.to_string())?;
+        sftp.create_dir(&target_dir)
+            .await
+            .map_err(|e| e.to_string())?;
         let entries = std::fs::read_dir(local).map_err(|e| e.to_string())?;
         for entry in entries {
             let entry = entry.map_err(|e| e.to_string())?;
@@ -373,9 +379,7 @@ pub(crate) async fn upload(
             .ok_or_else(|| "无效的本地路径".to_string())?;
         let target = remote_join(remote_dir, &name);
         let bytes = std::fs::read(local).map_err(|e| e.to_string())?;
-        sftp.write(target, &bytes)
-            .await
-            .map_err(|e| e.to_string())
+        sftp.write(target, &bytes).await.map_err(|e| e.to_string())
     }
 }
 
@@ -401,6 +405,109 @@ pub(crate) async fn download(
         let bytes = sftp.read(remote).await.map_err(|e| e.to_string())?;
         std::fs::write(local_dir.join(name), bytes).map_err(|e| e.to_string())
     }
+}
+
+/// 精简版行渲染:展开箭头 + 文件夹/文件图标 + 名称。不带 git 状态染色/
+/// 重命名编辑态/右键菜单(那些是 Files 面板自己的功能),本地/远程两侧
+/// 共用同一份实现。`on_toggle`(仅目录行触发)/`on_select` 由调用方
+/// 传入,决定发的是 `Local*` 还是 `Remote*` 消息。
+fn tree_column<'a>(
+    title: &'a str,
+    rows: Vec<crate::project::TreeRow>,
+    selected: Option<&std::path::Path>,
+    on_toggle: impl Fn(std::path::PathBuf) -> Message + 'a,
+    on_select: impl Fn(std::path::PathBuf) -> Message + 'a,
+) -> iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    use iced_widget::{MouseArea, column, container, row, text};
+    let mut col = column![
+        text(title)
+            .size(crate::theme::font::subtitle())
+            .color(crate::theme::color::CREAM)
+    ]
+    .spacing(4);
+    for r in rows {
+        let indent = "  ".repeat(r.depth);
+        let icon = if r.is_dir {
+            if r.expanded {
+                crate::icons::IconKind::FolderOpen
+            } else {
+                crate::icons::IconKind::Folder
+            }
+        } else {
+            crate::icons::IconKind::FileGeneric
+        };
+        let is_selected = selected == Some(r.path.as_path());
+        let path_for_toggle = r.path.clone();
+        let path_for_select = r.path.clone();
+        let label = row![
+            text(indent),
+            crate::icons::view(
+                icon,
+                crate::theme::icon_size::row(),
+                crate::theme::color::DIM
+            ),
+            text(r.name.clone())
+                .size(crate::theme::font::body())
+                .color(if is_selected {
+                    crate::theme::color::CREAM
+                } else {
+                    crate::theme::color::DIM
+                }),
+        ]
+        .spacing(4)
+        .align_y(iced_widget::core::alignment::Vertical::Center);
+        let row_el: iced_widget::core::Element<
+            'a,
+            Message,
+            iced_widget::Theme,
+            iced_renderer::Renderer,
+        > = MouseArea::new(container(label).width(iced_widget::core::Length::Fill))
+            .on_press(if r.is_dir {
+                on_toggle(path_for_toggle)
+            } else {
+                on_select(path_for_select)
+            })
+            .into();
+        col = col.push(row_el);
+    }
+    container(col)
+        .padding(8)
+        .width(iced_widget::core::Length::FillPortion(1))
+        .into()
+}
+
+/// SFTP tab 主视图:左右两栏文件树(本地项目 / 远程主机)。
+pub fn sftp_pane_view<'a>(
+    state: &'a SftpTabState,
+) -> iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    use iced_widget::row;
+    let local_rows = state.local_tree.visible_rows();
+    let remote_rows = state.remote_tree.visible_rows();
+    let host_id = state.host_id.clone();
+    let host_id2 = state.host_id.clone();
+    row![
+        tree_column(
+            "本地机器项目文件树",
+            local_rows,
+            state.selected_local.as_deref(),
+            move |p| Message::LocalToggle(host_id.clone(), p),
+            move |p| Message::LocalSelect(host_id2.clone(), p),
+        ),
+        tree_column(
+            "远程主机文件树",
+            remote_rows,
+            state.selected_remote.as_deref().map(std::path::Path::new),
+            {
+                let h = state.host_id.clone();
+                move |p| Message::RemoteToggle(h.clone(), p.to_string_lossy().into_owned())
+            },
+            {
+                let h = state.host_id.clone();
+                move |p| Message::RemoteSelect(h.clone(), p.to_string_lossy().into_owned())
+            },
+        ),
+    ]
+    .into()
 }
 
 #[cfg(test)]
@@ -499,7 +606,10 @@ mod tests {
 
     #[test]
     fn remote_join_trailing_slash() {
-        assert_eq!(remote_join("/home/user/", "file.txt"), "/home/user/file.txt");
+        assert_eq!(
+            remote_join("/home/user/", "file.txt"),
+            "/home/user/file.txt"
+        );
     }
 
     #[test]
