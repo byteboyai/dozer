@@ -617,7 +617,10 @@ impl Workspace {
     }
 
     pub(crate) fn tab_by_id_mut(&mut self, tab_id: usize) -> Option<&mut SessionTab> {
-        self.tabs.iter_mut().find(|t| t.tab_id == tab_id)
+        self.tabs
+            .iter_mut()
+            .find(|t| t.tab_id == tab_id)
+            .or_else(|| self.ssh_tabs.iter_mut().find(|t| t.tab_id == tab_id))
     }
 
     /// 打开预览编辑弹层:按 tab 下标取路径读盘。下标越界或该 tab 不是
@@ -811,10 +814,54 @@ impl Workspace {
         }
     }
 
+    /// SSH 面板当前显示的 tab(`ssh_active` 指向的那个),可变引用。
+    /// 镜像 `ws.tabs.get_mut(ws.active)` 的既有用法,用于"敲键盘/滚动
+    /// 前先处理一下当前终端状态"(回底/清选区)这类场景。
+    pub(crate) fn ssh_active_tab_mut(&mut self) -> Option<&mut SessionTab> {
+        let (host_id, _kind) = self.ssh_active.as_ref()?;
+        let host_id = host_id.clone();
+        self.ssh_tabs
+            .iter_mut()
+            .find(|t| t.info.id.strip_prefix("ssh:") == Some(host_id.as_str()))
+    }
+
+    /// 把字节写进 SSH 面板当前显示的 tab。镜像 `send_input`,操作对象
+    /// 换成 `ssh_tabs`/`ssh_active`。
+    pub(crate) fn ssh_send_input(&self, io: &ShellIo, bytes: Vec<u8>) {
+        let _ = io; // ssh_tabs 里只会是 TabBackend::Ssh,不需要 io.client/handle,
+                    // 保留参数是为了和 send_input 签名对齐、调用方不用分叉判断
+        let Some((host_id, _kind)) = self.ssh_active.as_ref() else {
+            return;
+        };
+        let Some(tab) = self
+            .ssh_tabs
+            .iter()
+            .find(|t| t.info.id.strip_prefix("ssh:") == Some(host_id.as_str()))
+        else {
+            return;
+        };
+        if !tab.alive {
+            return;
+        }
+        match &tab.backend {
+            TabBackend::Daemon => {
+                debug_assert!(false, "ssh_tabs 里不应该出现 TabBackend::Daemon");
+            }
+            TabBackend::Ssh { out } => {
+                let _ = out.send(SshOut::Data(bytes));
+            }
+        }
+    }
+
     /// 把 `text` 当输入写进已存活的 `session_id` 对应 tab。派发目标可能在
     /// 选择弹层打开期间被用户关掉（tab 已不在 `self.tabs` 里）——静默跳过。
     pub(crate) fn dispatch_todo_to_existing(&self, io: &ShellIo, session_id: &str, text: &str) {
-        let Some(tab) = self.tabs.iter().find(|t| t.info.id == session_id) else {
+        let Some(tab) = self
+            .tabs
+            .iter()
+            .find(|t| t.info.id == session_id)
+            .or_else(|| self.ssh_tabs.iter().find(|t| t.info.id == session_id))
+        else {
             return;
         };
         if !tab.alive {
@@ -1040,6 +1087,53 @@ impl Workspace {
         }
         // 关 tab 后位置全变，旧 first 可能越界——归零防御（P1L T5）。
         self.term_tab_first = 0;
+    }
+
+    /// 关闭 SSH 面板某个 tab(镜像 `close_tab` 的中断转发任务/kill 逻辑,
+    /// 按身份而不是下标寻址)。关的正好是当前显示的 tab 时,切到剩下
+    /// tab 里的第一个,没有剩下的就清空 `ssh_active`。
+    pub(crate) fn close_ssh_tab(&mut self, io: &ShellIo, host_id: &str, kind: ssh::SshTabKind) {
+        let Some(idx) = self
+            .ssh_tabs
+            .iter()
+            .position(|t| t.info.id.strip_prefix("ssh:") == Some(host_id))
+        else {
+            return;
+        };
+        let tab = self.ssh_tabs.remove(idx);
+        tab.forwarder.abort();
+        // SSH 后端不需要 kill——drop `out`(tx)后 spawn_ssh_tab 的泵循环
+        // `rx_out.recv() => None` 分支自然退出,同 close_tab 现有对
+        // TabBackend::Ssh 的既有处理口径(见 close_tab_skips_daemon_
+        // kill_for_ssh_backend 测试)。
+        let _ = io;
+        if self.ssh_active.as_ref().map(|(h, k)| (h.as_str(), *k)) == Some((host_id, kind)) {
+            self.ssh_active = self
+                .ssh_tabs
+                .first()
+                .map(|t| {
+                    let h = t
+                        .info
+                        .id
+                        .strip_prefix("ssh:")
+                        .unwrap_or(&t.info.id)
+                        .to_string();
+                    (h, ssh::SshTabKind::Terminal)
+                });
+        }
+    }
+
+    /// 切换 SSH 面板当前显示哪个 tab。目标 tab 不存在时 no-op(保持
+    /// 原有 `ssh_active` 不变,不是清空——镜像其它"目标已消失"场景的
+    /// 既有容错口径)。
+    pub(crate) fn select_ssh_tab(&mut self, host_id: String, kind: ssh::SshTabKind) {
+        let exists = self
+            .ssh_tabs
+            .iter()
+            .any(|t| t.info.id.strip_prefix("ssh:") == Some(host_id.as_str()));
+        if exists {
+            self.ssh_active = Some((host_id, kind));
+        }
     }
 
     /// 拖拽换位:把 `from` 处的终端 tab 移到 `to`,并同步 `active`。`tab_id`
