@@ -488,7 +488,14 @@ pub fn update(
             set_done(ws_state, app_state, idx, project_id, project_path, target);
         }
         Message::SetDone(idx, target_done) => {
-            set_done(ws_state, app_state, idx, project_id, project_path, target_done);
+            set_done(
+                ws_state,
+                app_state,
+                idx,
+                project_id,
+                project_path,
+                target_done,
+            );
             ws_state.state_pill_open = None;
         }
         Message::StatePillOpen(idx) => ws_state.state_pill_open = Some(idx),
@@ -614,12 +621,13 @@ pub fn view<'a>(
 
     // ---- 右栏：tab 段 + 视图主体 ----
     let tabs_bar = todo_view_tabs(ws_state.view_mode);
-    let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        match ws_state.view_mode {
-            TodoViewMode::List => todo_list_view(app_state, ws_state, project_id, &states, tabs),
-            TodoViewMode::Kanban => todo_kanban_view(app_state, ws_state, project_id, &states, tabs),
-            TodoViewMode::Markdown => todo_markdown_view(project_path),
-        };
+    let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = match ws_state
+        .view_mode
+    {
+        TodoViewMode::List => todo_list_view(app_state, ws_state, project_id, &states, tabs),
+        TodoViewMode::Kanban => todo_kanban_view(app_state, ws_state, project_id, &states, tabs),
+        TodoViewMode::Markdown => todo_markdown_view(project_path),
+    };
 
     let content = column![
         header,
@@ -913,7 +921,9 @@ fn todo_card<'a>(
                     crate::theme::icon_size::row(),
                     theme::color::DIM
                 ),
-                text(date_label).size(theme::font::caption()).color(theme::color::DIM),
+                text(date_label)
+                    .size(theme::font::caption())
+                    .color(theme::color::DIM),
             ]
             .spacing(4)
             .align_y(iced_widget::core::alignment::Vertical::Center),
@@ -1008,7 +1018,9 @@ fn todo_card<'a>(
         .align_y(iced_widget::core::alignment::Vertical::Center);
 
     // ---- 底部行：派发按钮(仅待办未派发) + 状态 pill ----
-    let mut bottom = row![].spacing(8).align_y(iced_widget::core::alignment::Vertical::Center);
+    let mut bottom = row![]
+        .spacing(8)
+        .align_y(iced_widget::core::alignment::Vertical::Center);
     if state == TodoState::Pending && dispatch.is_none() {
         let dispatch_btn = button(icons::view(
             icons::IconKind::BotMessageSquare,
@@ -1141,12 +1153,7 @@ fn state_pill(
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let (label, border_color, text_color, bg) = match state {
         TodoState::Pending => ("待办", theme::color::BORDER, theme::color::DIM, None),
-        TodoState::InProgress => (
-            "进行中",
-            theme::color::GREEN,
-            theme::color::GREEN,
-            None,
-        ),
+        TodoState::InProgress => ("进行中", theme::color::GREEN, theme::color::GREEN, None),
         TodoState::Done => (
             "已完成",
             theme::color::GREEN,
@@ -1730,7 +1737,13 @@ mod tests {
         let (_dir, root) = project_dir_with_todo("- [ ] 任务A\n");
         let mut ws_state = ws_with_item("任务A", false);
         let mut app_state = AppState::default();
-        update(&mut ws_state, &mut app_state, Message::SetDone(0, true), 1, &root);
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::SetDone(0, true),
+            1,
+            &root,
+        );
         assert!(ws_state.items[0].done);
         let key = todo_line_key("任务A");
         assert!(app_state.meta_for(1, key).unwrap().completed_at.is_some());
@@ -1746,7 +1759,13 @@ mod tests {
         let (_dir, root) = project_dir_with_todo("- [ ] 任务A\n");
         let mut ws_state = ws_with_item("任务A", false);
         let mut app_state = AppState::default();
-        update(&mut ws_state, &mut app_state, Message::SetDone(0, false), 1, &root);
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::SetDone(0, false),
+            1,
+            &root,
+        );
         assert!(!ws_state.items[0].done);
         let key = todo_line_key("任务A");
         assert!(
@@ -1763,7 +1782,13 @@ mod tests {
         let mut ws_state = ws_with_item("任务A", true);
         let mut app_state = AppState::default();
         app_state.set_completed_at(1, "任务A", true);
-        update(&mut ws_state, &mut app_state, Message::SetDone(0, false), 1, &root);
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::SetDone(0, false),
+            1,
+            &root,
+        );
         assert!(!ws_state.items[0].done);
         let key = todo_line_key("任务A");
         assert!(app_state.meta_for(1, key).unwrap().completed_at.is_none());

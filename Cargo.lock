@@ -1756,6 +1756,7 @@ dependencies = [
  "grep-regex",
  "grep-searcher",
  "iced-code-editor",
+ "iced_aw",
  "iced_renderer",
  "iced_wgpu",
  "iced_widget",
