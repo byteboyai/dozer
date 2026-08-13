@@ -224,7 +224,10 @@ impl Client {
         context: Option<PreviewContext>,
     ) -> Result<()> {
         match self
-            .roundtrip(&Request::UpdatePreviewContext { project_id, context })
+            .roundtrip(&Request::UpdatePreviewContext {
+                project_id,
+                context,
+            })
             .await?
         {
             Reply::Ok => Ok(()),
