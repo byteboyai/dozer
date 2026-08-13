@@ -110,6 +110,15 @@ pub fn max_split_ratio() -> f32 {
     GEOMETRY.max_split_ratio
 }
 
+/// 左右双栏 zone 的统一"列表侧"默认占比——文件树↔文件预览、项目信息↔项目
+/// 预览、Agent 列表↔终端、对话列表↔审阅四个配对共用同一个首次默认值(0.35,
+/// 与文件树那份"合适"的分割一致),让所有双栏 zone 的初始宽度分配保持统一。
+/// 用户手动拖拽后以各自存档的 split 为准(见 `apply_column_drag`),此处只在
+/// 无存档的首次默认时生效。
+pub fn default_split_ratio() -> f32 {
+    0.35
+}
+
 /// 建窗时的初始窗口逻辑尺寸——仅在从未持久化过窗口尺寸(`layout.json`
 /// 不存在/`window_width`/`window_height` 缺字段)时用作兜底,正常情况下
 /// `main.rs` 建窗读的是 `App::window_size_pref()`(优先取上次退出前存的

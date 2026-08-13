@@ -380,33 +380,35 @@ pub fn branch(repo: &Path) -> Option<String> {
     head.shorthand().ok().map(str::to_string)
 }
 
-/// `git remote get-url origin`;没有 origin 时退化取 `git remote -v` 第一条
-/// 记录的 fetch URL;完全没有 remote 或非 git 目录 → `None`。
-pub fn remote_url(repo: &Path) -> Option<String> {
-    let out = Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(repo)
-        .output()
-        .ok()?;
-    if out.status.success() {
-        let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if !url.is_empty() {
-            return Some(url);
-        }
-    }
-    let out = Command::new("git")
+/// 返回仓库**全部** remote 的 fetch URL(去重,保持 `git remote -v`
+/// 出现顺序)。`git remote -v` 每行形如 `origin  https://x.git (fetch)`,
+/// 只取 `(fetch)` 方向避免 `(push)` 重复;完全没有 remote / 非 git 目录
+/// → 空 `Vec`(语义上即"未设置")。
+pub fn remote_url(repo: &Path) -> Vec<String> {
+    let Ok(out) = Command::new("git")
         .args(["remote", "-v"])
         .current_dir(repo)
         .output()
-        .ok()?;
+    else {
+        return Vec::new();
+    };
     if !out.status.success() {
-        return None;
+        return Vec::new();
     }
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .map(|s| s.to_string())
+    let mut seen = std::collections::HashSet::new();
+    let mut urls = Vec::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        if !line.contains("(fetch)") {
+            continue;
+        }
+        let Some(url) = line.split_whitespace().nth(1) else {
+            continue;
+        };
+        if seen.insert(url.to_string()) {
+            urls.push(url.to_string());
+        }
+    }
+    urls
 }
 
 /// 所有本地分支名(按 refs/heads 前缀,short 名)。非 git 仓库返回 None;
@@ -1094,7 +1096,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             remote_url(dir.path()),
-            Some("https://example.com/x.git".to_string())
+            vec!["https://example.com/x.git".to_string()]
         );
     }
 
@@ -1113,7 +1115,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             remote_url(dir.path()),
-            Some("https://example.com/y.git".to_string())
+            vec!["https://example.com/y.git".to_string()]
         );
     }
 
@@ -1125,12 +1127,12 @@ mod tests {
             .current_dir(dir.path())
             .output()
             .unwrap();
-        assert_eq!(remote_url(dir.path()), None);
+        assert_eq!(remote_url(dir.path()), Vec::<String>::new());
     }
 
     #[test]
     fn remote_url_none_for_non_git_dir() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(remote_url(dir.path()), None);
+        assert_eq!(remote_url(dir.path()), Vec::<String>::new());
     }
 }

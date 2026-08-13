@@ -24,6 +24,11 @@ pub enum IconKind {
     /// 文件树根目录头部图标(Lucide folder-open-dot:展开的文件夹 + 右上圆点,
     /// 醒目标识项目根)。
     FolderOpenDot,
+    /// 项目信息面板「项目根目录」图标(Lucide folder-dot:文件夹 + 中心圆点)。
+    FolderDot,
+    /// 项目信息面板「Git 远程仓库」图标(Lucide folder-root:文件夹 + 中心
+    /// 圆点 + 向下树根,表示仓库根)。
+    FolderRoot,
     /// 文件树底部 git 分支栏图标(Lucide folder-git-2:文件夹 + git 分支/网络,
     /// 表示当前项目在 git 仓库内)。
     FolderGit2,
@@ -133,6 +138,8 @@ impl IconKind {
             IconKind::Folder => include_bytes!("../assets/icons/folder.svg"),
             IconKind::FolderOpen => include_bytes!("../assets/icons/folder-open.svg"),
             IconKind::FolderOpenDot => include_bytes!("../assets/icons/folder-open-dot.svg"),
+            IconKind::FolderDot => include_bytes!("../assets/icons/folder-dot.svg"),
+            IconKind::FolderRoot => include_bytes!("../assets/icons/folder-root.svg"),
             IconKind::FolderGit2 => include_bytes!("../assets/icons/folder-git-2.svg"),
             IconKind::FolderMinus => include_bytes!("../assets/icons/folder-minus.svg"),
             IconKind::FolderTree => include_bytes!("../assets/icons/folder-tree.svg"),

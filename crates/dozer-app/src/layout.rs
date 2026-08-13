@@ -60,62 +60,39 @@ mod tests {
     }
 
     /// 手改过/别的版本写的 layout.json:缺字段靠 `#[serde(default)]` 补齐
-    /// (不再整份读失败把用户攒的宽度全重置),越界的比例/宽度靠
-    /// `sanitize_shell_layout` 夹回合法范围(0.0 比例会让配对里一块
-    /// `FillPortion(0)` 整块消失)。
+    /// (不再整份读失败把用户攒的宽度全重置);窗口尺寸非法值靠
+    /// `sanitize_shell_layout` 夹回合法范围。`ShellLayout` 迁走面板尺寸后
+    /// 只剩窗口尺寸,老 layout.json 里可能还带着 `left_width`/`files_split`
+    /// 等已迁移走的字段,serde 忽略未知字段、缺字段补默认,不应整份失败。
     #[test]
-    fn load_from_foreign_json_fills_defaults_and_sanitizes() {
+    fn load_from_foreign_json_fills_defaults_and_sanitizes_window_size() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("layout.json");
-        // 只有部分字段,且 files_split 越界为 0.0。
-        std::fs::write(&path, r#"{"left_width": 12.0, "files_split": 0.0}"#).unwrap();
+        // 老文件带已迁移走的尺寸字段 + 越界的 window_width(0)。
+        std::fs::write(
+            &path,
+            r#"{"left_width": 12.0, "files_split": 0.0, "window_width": 0.0}"#,
+        )
+        .unwrap();
         let l = load_from(&path);
-        assert_eq!(l.left_width, 320.0, "低于最小区宽应被垫到 MIN_ZONE_WIDTH");
-        assert_eq!(l.files_split, 0.2, "0.0 应被夹到 MIN_SPLIT_RATIO");
-        // 缺的字段取默认值,而不是整份回退默认(left_width 保住了读到的值路径)。
-        assert_eq!(l.agent_split, ShellLayout::default().agent_split);
-        // 老 layout.json 里可能还带着已迁移走的 left_view 等字段,serde 忽略
-        // 未知字段,不应让整体反序列化失败(几何仍在)。
-        assert_eq!(
-            l.conversations_split,
-            ShellLayout::default().conversations_split
-        );
+        let (init_w, init_h) = crate::theme::geometry::initial_window_size();
+        assert_eq!(l.window_width, init_w, "0 窗口宽应退化成初始尺寸");
+        assert_eq!(l.window_height, init_h);
+        // 已迁移走的字段在 `ShellLayout` 里已不存在,反序列化应直接忽略。
     }
 
     #[test]
     fn shell_layout_default_has_sane_values() {
         let l = ShellLayout::default();
-        assert!(l.left_width > 0.0);
-        assert!((0.0..=1.0).contains(&l.files_split));
-        assert!((0.0..=1.0).contains(&l.agent_split));
-        assert!((0.0..=1.0).contains(&l.conversations_split));
+        assert!(l.window_width >= crate::theme::geometry::min_window_width());
+        assert!(l.window_height > 0.0);
     }
 
     #[test]
-    fn shell_layout_save_then_load_round_trips() {
+    fn shell_layout_save_then_load_round_trips_window_size() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested").join("shell_layout.json");
         let layout = ShellLayout {
-            left_width: 500.0,
-            files_split: 0.4,
-            agent_split: 0.35,
-            conversations_split: 0.45,
-            ..ShellLayout::default()
-        };
-        save_to(&path, &layout).unwrap();
-        assert_eq!(load_from(&path), layout);
-    }
-
-    #[test]
-    fn shell_layout_persists_geometry_and_window_size() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("shell_layout.json");
-        let layout = ShellLayout {
-            left_width: 500.0,
-            files_split: 0.4,
-            project_split: 0.5,
-            agent_split: 0.35,
-            conversations_split: 0.45,
             window_width: 1600.0,
             window_height: 1000.0,
         };
@@ -130,7 +107,6 @@ mod tests {
         let layout = ShellLayout {
             window_width: 1800.0,
             window_height: 1100.0,
-            ..ShellLayout::default()
         };
         save_to(&path, &layout).unwrap();
         assert_eq!(load_from(&path), layout);
