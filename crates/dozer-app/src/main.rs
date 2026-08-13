@@ -759,6 +759,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 // 预览 tab 右键菜单与文件树右键菜单互斥——关掉当前开着的那个。
                 if app.preview_tab_context_menu_open() {
                     app.update(Message::PreviewTabContextMenuClose);
+                } else if app.project_preview_tab_context_menu_open() {
+                    app.update(Message::ProjectPreviewTabContextMenuClose);
                 } else {
                     app.update(Message::Files(extensions::files::Message::ContextMenuClose));
                 }
@@ -1170,7 +1172,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     window.request_redraw();
                 }
                 Message::PreviewEditorEvent(tab_id, event) => {
-                    Self::run_preview_tab_editor_task(app, clipboard, tab_id, event);
+                    Self::run_preview_tab_editor_task(app, clipboard, tab_id, event, false);
+                    window.request_redraw();
+                }
+                Message::ProjectPreviewEditorEvent(tab_id, event) => {
+                    Self::run_preview_tab_editor_task(app, clipboard, tab_id, event, true);
                     window.request_redraw();
                 }
                 // 顶栏"＋"与项目栏"打开项目…"共用的唯一打开入口:rfd 模态选中
@@ -1278,11 +1284,15 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         /// 同 `run_editor_task`,但把消息转发给某个原生预览 tab(按 `tab_id`)而不是
         /// 编辑弹层的单一 `edit_session`。两个函数体基本重复——保持"预览/编辑分层"
         /// 这条既定决策(见设计文档),不引入一个把两种目标都塞进同一签名的抽象。
+        /// `project` 为 true 时路由到 Project 面板右配对预览
+        /// (`ProjectPreviewEditOpenByTab`/`app.project_preview_tab_editor_event`),
+        /// 否则走 Files 预览那套。
         fn run_preview_tab_editor_task(
             app: &mut App,
             clipboard: &mut Clipboard,
             tab_id: usize,
             event: iced_code_editor::Message,
+            project: bool,
         ) {
             use iced_winit::futures::futures::stream::StreamExt;
             let mut queue = std::collections::VecDeque::new();
@@ -1291,10 +1301,18 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 // 只读预览的右键"编辑"项:不入编辑器(编辑器是只读的,内部也没有
                 // 对应处理),直接转成本体消息打开该 tab 的编辑浮层。
                 if let iced_code_editor::Message::OpenInEditor = ev {
-                    app.update(Message::PreviewEditOpenByTab(tab_id));
+                    if project {
+                        app.update(Message::ProjectPreviewEditOpenByTab(tab_id));
+                    } else {
+                        app.update(Message::PreviewEditOpenByTab(tab_id));
+                    }
                     continue;
                 }
-                let t = app.preview_tab_editor_event(tab_id, ev);
+                let t = if project {
+                    app.project_preview_tab_editor_event(tab_id, ev)
+                } else {
+                    app.preview_tab_editor_event(tab_id, ev)
+                };
                 let Some(stream) = task::into_stream(t) else {
                     continue;
                 };
