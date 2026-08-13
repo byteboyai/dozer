@@ -1,6 +1,6 @@
 [package]
 name = "dozer-app"
-version = "0.4.5"
+version = "0.4.6"
 edition.workspace = true
 
 [[bin]]
@@ -34,6 +34,7 @@ winit = "0.30"
 raw-window-handle = "0.6"
 objc2 = "0.6"
 objc2-app-kit = "0.3"
+objc2-foundation = "0.3"
 futures = { version = "0.3", features = ["thread-pool"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true

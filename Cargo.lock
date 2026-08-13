@@ -1743,7 +1743,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "dozer-app"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -1766,6 +1766,7 @@ dependencies = [
  "notify",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "png 0.17.16",
  "raw-window-handle",
  "rfd",
@@ -4937,6 +4938,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3e0adef53c21f888deb4fa59fc59f7eb17404926ee8a6f59f5df0fd7f9f3272"
 dependencies = [
  "bitflags 2.13.0",
+ "block2 0.6.2",
+ "libc",
  "objc2 0.6.4",
  "objc2-core-foundation",
 ]

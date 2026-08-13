@@ -194,6 +194,42 @@ fn install_topbar_drag_guard(window: &winit::window::Window) {
         tracing::warn!("挂 mouseDownCanMoveWindow 覆写失败(selector 可能已存在于该类)");
     }
 }
+
+/// macOS 专有：单个"＋"入口要能同时选择**文件**和**目录**（项目文档 /
+/// Agent 记忆都能挂任意路径）。rfd 的 `pick_file`/`pick_folder` 各自只允许
+/// 一种（`NSOpenPanel` 内部硬编码 `canChooseFiles`/`canChooseDirectories` 二
+/// 选一），所以这里直接用 objc2 构造 `NSOpenPanel`，把两个开关都打开，让用
+/// 户既能选中文件也能选中文件夹；选中结果按原路径上的 `is_dir()` 判定虚拟链
+/// 接类别。只在 macOS 编译——其它平台回退到 rfd 的 `pick_file`（见调用处）。
+#[cfg(target_os = "macos")]
+fn pick_file_or_dir(start_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    use objc2::rc::autoreleasepool;
+    use objc2_app_kit::{NSModalResponseOK, NSOpenPanel};
+    use objc2_foundation::{NSString, NSURL};
+
+    autoreleasepool(|_| {
+        // `Message::ProjectLinkPick` 在 winit 事件循环（macOS 主线程）里同步
+        // 处理，此处必然持有主线程标记，可直接同步 runModal。
+        let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
+        let panel = NSOpenPanel::openPanel(mtm);
+        // 同时放行文件和目录；保持单选的既有行为（对应 rfd 的 `pick_file`）。
+        panel.setCanChooseFiles(true);
+        panel.setCanChooseDirectories(true);
+        panel.setAllowsMultipleSelection(false);
+        if !start_dir.as_os_str().is_empty() {
+            let dir = NSString::from_str(&start_dir.to_string_lossy());
+            panel.setDirectoryURL(Some(&NSURL::fileURLWithPath(&dir)));
+        }
+        if panel.runModal() != NSModalResponseOK {
+            return None;
+        }
+        // 单选面板：取第一个 URL 的路径。
+        let url = panel.URLs().firstObject()?;
+        let path = url.path()?;
+        Some(std::path::PathBuf::from(path.to_string()))
+    })
+}
+
 use std::time::Duration;
 
 use iced_wgpu::graphics::{Shell, Viewport};
@@ -1193,13 +1229,19 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 Message::ProjectLinkPick(target) => {
                     // 单颗"＋"入口:打开根目录在项目根的文件浏览器,选中后按
                     // 实际类型(`is_dir()`)判定虚拟链接是该当文件还是目录,再回
-                    // 送 `LinkAdd` 落盘。
+                    // 送 `LinkAdd` 落盘。macOS 用原生 `NSOpenPanel` 同时放行
+                    // 文件与目录;其它平台 rfd 无"文件+文件夹"双兼容开关,回退
+                    // 到 rfd 的 `pick_file`(仍有 `path.is_dir()` 分支兜底)。
                     let start_dir = app
                         .active_project_path()
-                        .or_else(|| std::env::current_dir().ok());
-                    let picked = rfd::FileDialog::new()
-                        .set_directory(start_dir.unwrap_or_default())
-                        .pick_file();
+                        .or_else(|| std::env::current_dir().ok())
+                        .unwrap_or_default();
+
+                    #[cfg(target_os = "macos")]
+                    let picked = pick_file_or_dir(&start_dir);
+                    #[cfg(not(target_os = "macos"))]
+                    let picked = rfd::FileDialog::new().set_directory(&start_dir).pick_file();
+
                     if let Some(path) = picked {
                         let kind = if path.is_dir() {
                             extensions::project::links::LinkKind::Dir
