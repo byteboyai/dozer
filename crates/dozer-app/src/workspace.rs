@@ -1574,23 +1574,39 @@ impl Workspace {
         let client = io.client.clone();
         let handle = io.handle.clone();
         for tab in &mut self.tabs {
-            tab.model.resize(cols, rows);
-            if !tab.alive {
-                continue;
+            Self::resize_one(tab, &client, &handle, cols, rows);
+        }
+        for tab in &mut self.ssh_tabs {
+            Self::resize_one(tab, &client, &handle, cols, rows);
+        }
+    }
+
+    /// 单个 tab 的尺寸同步:本地改模型 + 远端 resize。被 `resize_all` 对
+    /// `tabs`/`ssh_tabs` 各调一遍(两个字段分开遍历避免"同时可变借用
+    /// self 两个字段"的借用冲突)。
+    fn resize_one(
+        tab: &mut SessionTab,
+        client: &Client,
+        handle: &tokio::runtime::Handle,
+        cols: u16,
+        rows: u16,
+    ) {
+        tab.model.resize(cols, rows);
+        if !tab.alive {
+            return;
+        }
+        match &tab.backend {
+            TabBackend::Daemon => {
+                let client = client.clone();
+                let id = tab.info.id.clone();
+                handle.spawn(async move {
+                    if let Err(e) = client.resize(&id, cols, rows).await {
+                        tracing::warn!("同步终端尺寸到 daemon 失败: {e}");
+                    }
+                });
             }
-            match &tab.backend {
-                TabBackend::Daemon => {
-                    let client = client.clone();
-                    let id = tab.info.id.clone();
-                    handle.spawn(async move {
-                        if let Err(e) = client.resize(&id, cols, rows).await {
-                            tracing::warn!("同步终端尺寸到 daemon 失败: {e}");
-                        }
-                    });
-                }
-                TabBackend::Ssh { out } => {
-                    let _ = out.send(SshOut::Resize { cols, rows });
-                }
+            TabBackend::Ssh { out } => {
+                let _ = out.send(SshOut::Resize { cols, rows });
             }
         }
     }
@@ -3328,6 +3344,25 @@ mod tests {
         // 有真实 daemon,不适合跑完整 `close_tab`,重点断言这个分支判断
         // 本身:SSH backend 不该触发 daemon kill。
         assert!(!matches!(tab.backend, TabBackend::Daemon));
+    }
+
+    #[test]
+    fn resize_one_resizes_ssh_tab_model() {
+        // `resize_all` 对 `tabs`/`ssh_tabs` 各跑一遍 `resize_one`；这里直接测
+        // 那个被复用的核心逻辑(它不碰 `ShellIo`,单测不用构造 winit
+        // `EventLoopProxy`)——构造一个 SSH backend 的假 tab,断言 resize 后
+        // 网格尺寸跟着变了。
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut tab = make_test_tab(&rt, "ssh:h1", dozer_core::protocol::AgentKind::Unknown);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        tab.backend = TabBackend::Ssh { out: tx };
+        let before = tab.model.grid_dims();
+        let client = dozer_client::Client::new(std::path::PathBuf::from(
+            "/tmp/dozer-resize-test-nonexistent.sock",
+        ));
+        Workspace::resize_one(&mut tab, &client, rt.handle(), 100, 40);
+        let after = tab.model.grid_dims();
+        assert_ne!(before, after, "ssh_tab 的网格尺寸应随 resize 变化");
     }
 
     #[test]
