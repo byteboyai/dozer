@@ -417,6 +417,7 @@ fn tree_column<'a>(
     selected: Option<&std::path::Path>,
     on_toggle: impl Fn(std::path::PathBuf) -> Message + 'a,
     on_select: impl Fn(std::path::PathBuf) -> Message + 'a,
+    on_context: impl Fn(String) -> Message + 'a,
 ) -> iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     use iced_widget::{MouseArea, column, container, row, text};
     let mut col = column![
@@ -439,6 +440,7 @@ fn tree_column<'a>(
         let is_selected = selected == Some(r.path.as_path());
         let path_for_toggle = r.path.clone();
         let path_for_select = r.path.clone();
+        let path_for_context = r.path.to_string_lossy().into_owned();
         let label = row![
             text(indent),
             crate::icons::view(
@@ -467,6 +469,7 @@ fn tree_column<'a>(
             } else {
                 on_select(path_for_select)
             })
+            .on_right_press(on_context(path_for_context))
             .into();
         col = col.push(row_el);
     }
@@ -480,34 +483,163 @@ fn tree_column<'a>(
 pub fn sftp_pane_view<'a>(
     state: &'a SftpTabState,
 ) -> iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    use iced_widget::row;
+    use iced_widget::{MouseArea, column, container, row, stack};
     let local_rows = state.local_tree.visible_rows();
     let remote_rows = state.remote_tree.visible_rows();
     let host_id = state.host_id.clone();
     let host_id2 = state.host_id.clone();
-    row![
-        tree_column(
-            "本地机器项目文件树",
-            local_rows,
-            state.selected_local.as_deref(),
-            move |p| Message::LocalToggle(host_id.clone(), p),
-            move |p| Message::LocalSelect(host_id2.clone(), p),
-        ),
-        tree_column(
-            "远程主机文件树",
-            remote_rows,
-            state.selected_remote.as_deref().map(std::path::Path::new),
-            {
-                let h = state.host_id.clone();
-                move |p| Message::RemoteToggle(h.clone(), p.to_string_lossy().into_owned())
+    let base: iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        row![
+            tree_column(
+                "本地机器项目文件树",
+                local_rows,
+                state.selected_local.as_deref(),
+                move |p| Message::LocalToggle(host_id.clone(), p),
+                move |p| Message::LocalSelect(host_id2.clone(), p),
+                {
+                    let h = state.host_id.clone();
+                    move |path| Message::ContextMenuOpen {
+                        host_id: h.clone(),
+                        is_local: true,
+                        path,
+                    }
+                },
+            ),
+            tree_column(
+                "远程主机文件树",
+                remote_rows,
+                state.selected_remote.as_deref().map(std::path::Path::new),
+                {
+                    let h = state.host_id.clone();
+                    move |p| Message::RemoteToggle(h.clone(), p.to_string_lossy().into_owned())
+                },
+                {
+                    let h = state.host_id.clone();
+                    move |p| Message::RemoteSelect(h.clone(), p.to_string_lossy().into_owned())
+                },
+                {
+                    let h = state.host_id.clone();
+                    move |path| Message::ContextMenuOpen {
+                        host_id: h.clone(),
+                        is_local: false,
+                        path,
+                    }
+                },
+            ),
+        ]
+        .into();
+
+    if state.context_menu.is_none() {
+        return base;
+    }
+
+    // 右键菜单开着:垫一层全尺寸透明 MouseArea 承接"点菜单外任何地方收起"
+    // (与 Files 面板 `App::view` 的 dismiss 层同款约定),上面再叠菜单本体。
+    let dismiss: iced_widget::core::Element<
+        'a,
+        Message,
+        iced_widget::Theme,
+        iced_renderer::Renderer,
+    > = MouseArea::new(
+        container(column![])
+            .width(iced_widget::core::Length::Fill)
+            .height(iced_widget::core::Length::Fill),
+    )
+    .on_press(Message::ContextMenuClose)
+    .into();
+    let popup: iced_widget::core::Element<
+        'a,
+        Message,
+        iced_widget::Theme,
+        iced_renderer::Renderer,
+    > = sftp_context_menu(state);
+
+    stack![base, dismiss, popup]
+        .width(iced_widget::core::Length::Fill)
+        .height(iced_widget::core::Length::Fill)
+        .into()
+}
+
+/// 右键菜单浮层:按 `context_menu` 的 `is_local` 决定只出现"上传"(本地行)
+/// 或"下载"(远程行)——不渲染无意义的禁用态(见 plan 的 UI 简化决定)。
+/// 菜单本身固定叠在面板左上角,不追光标像素定位(v1 简化,够用即可)。
+/// 样式就地照抄 `files::menu_item` 的按钮 / `context_menu_popup` 的表面
+/// 风格(CARD 底 + BORDER 边),consistency 优先于再造共享 helper。
+fn sftp_context_menu<'a>(
+    state: &'a SftpTabState,
+) -> iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    use iced_widget::{button, column, container, row, text};
+    let Some((is_local, _path)) = &state.context_menu else {
+        return container(column![]).into();
+    };
+    let host_id = state.host_id.clone();
+    let (icon, label, msg) = if *is_local {
+        (
+            crate::icons::IconKind::ChevronUp,
+            "上传",
+            Message::Upload(host_id),
+        )
+    } else {
+        (
+            crate::icons::IconKind::ChevronDown,
+            "下载",
+            Message::Download(host_id),
+        )
+    };
+    let item: iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        button(
+            row![
+                crate::icons::view(
+                    icon,
+                    crate::theme::icon_size::row(),
+                    crate::theme::color::CREAM
+                ),
+                text(label).size(crate::theme::font::body()),
+            ]
+            .spacing(crate::theme::geometry::menu_gap())
+            .align_y(iced_widget::core::alignment::Vertical::Center),
+        )
+        .on_press(msg)
+        .width(iced_widget::core::Length::Fixed(
+            crate::theme::geometry::menu_item_width(),
+        ))
+        .padding([
+            crate::theme::geometry::menu_pad_v(),
+            crate::theme::geometry::menu_pad_h(),
+        ])
+        .style(|_t, s| {
+            let base = button::Style {
+                background: None,
+                text_color: crate::theme::color::CREAM,
+                ..button::Style::default()
+            };
+            match s {
+                button::Status::Hovered | button::Status::Pressed => button::Style {
+                    background: Some(crate::theme::color::TAB_HOVER.into()),
+                    text_color: crate::theme::color::CREAM,
+                    border: iced_widget::core::Border {
+                        color: iced_widget::core::Color::TRANSPARENT,
+                        width: 0.0,
+                        radius: 4.0.into(),
+                    },
+                    ..base
+                },
+                _ => base,
+            }
+        })
+        .into();
+    container(column![item].spacing(1))
+        .padding(4)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(crate::theme::color::CARD.into()),
+            border: iced_widget::core::Border {
+                color: crate::theme::color::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
             },
-            {
-                let h = state.host_id.clone();
-                move |p| Message::RemoteSelect(h.clone(), p.to_string_lossy().into_owned())
-            },
-        ),
-    ]
-    .into()
+            ..container::Style::default()
+        })
+        .into()
 }
 
 #[cfg(test)]
