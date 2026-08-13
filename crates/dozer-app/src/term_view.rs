@@ -209,6 +209,7 @@ fn encode_wheel_report(up: bool, col: usize, row: usize, sgr: bool) -> Vec<u8> {
 struct TermCanvas<'a> {
     model: &'a TerminalModel,
     focused: bool,
+    target: crate::app::TermTarget,
 }
 
 /// canvas 内部交互状态：滚轮余量累积 + 拖选进行中标记。
@@ -267,9 +268,15 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
                     for _ in 0..lines.unsigned_abs() {
                         bytes.extend(encode_wheel_report(up, col, row, sgr));
                     }
-                    return Some(canvas::Action::publish(Message::TermInput(bytes)).and_capture());
+                    return Some(
+                        canvas::Action::publish(Message::TermInput(self.target, bytes))
+                            .and_capture(),
+                    );
                 }
-                Some(canvas::Action::publish(Message::TermScroll(lines)).and_capture())
+                Some(
+                    canvas::Action::publish(Message::TermScroll(self.target, lines))
+                        .and_capture(),
+                )
             }
             mouse::Event::ButtonPressed(mouse::Button::Left) => {
                 let pos = cursor.position_in(bounds)?;
@@ -277,8 +284,13 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
                 let (cols, rows) = self.model.grid_dims();
                 let (col, row, right) = cell_at(pos, cols, rows);
                 Some(
-                    canvas::Action::publish(Message::TermSelStart { col, row, right })
-                        .and_capture(),
+                    canvas::Action::publish(Message::TermSelStart {
+                        target: self.target,
+                        col,
+                        row,
+                        right,
+                    })
+                    .and_capture(),
                 )
             }
             mouse::Event::CursorMoved { .. } if state.dragging => {
@@ -289,6 +301,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
                 let (cols, rows) = self.model.grid_dims();
                 let (col, row, right) = cell_at(rel, cols, rows);
                 Some(canvas::Action::publish(Message::TermSelUpdate {
+                    target: self.target,
                     col,
                     row,
                     right,
@@ -408,8 +421,9 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
 pub fn view(
     model: &TerminalModel,
     focused: bool,
+    target: crate::app::TermTarget,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    Canvas::new(TermCanvas { model, focused })
+    Canvas::new(TermCanvas { model, focused, target })
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
