@@ -132,6 +132,10 @@ pub enum Message {
     /// 单颗"＋"按钮:由内核 rfd 弹 OS 文件浏览器(根目录在项目根),选中的
     /// 文件/目录由内核判 `is_dir()` 定 `LinkKind`,再回送 `LinkAdd`。
     Pick(links::LinkTarget),
+    /// footer-bar「修复项目」按钮(UI 占位,逻辑后续接入)。
+    RepairProject,
+    /// footer-bar「删除项目」按钮(UI 占位,逻辑后续接入)。
+    DeleteProject,
 }
 
 /// 处理全部消息——本模块不触碰终端会话域,没有需要内核拦截、`update` 里
@@ -277,6 +281,9 @@ pub fn update(
         Message::LinkContextMenu { .. } => {
             unreachable!("由内核拦截处理,见 files::Message::ContextMenuOpen 文档")
         }
+        // footer-bar 占位按钮:逻辑后续接入,暂不做任何处理。
+        Message::RepairProject => {}
+        Message::DeleteProject => {}
     }
 }
 
@@ -335,7 +342,7 @@ pub fn view<'a>(
             .into();
     };
 
-    let mut content = column![].spacing(12).padding(14).width(Length::Fill);
+    let mut content = column![].spacing(12).padding(14).width(Length::Fill).height(Length::Fill);
 
     content = content.push(crate::homespace::home_panel_head(
         icons::IconKind::Briefcase,
@@ -541,7 +548,13 @@ pub fn view<'a>(
         );
     }
 
-    container(content)
+    let body = column![
+        content,
+        project_footer_bar(),
+    ]
+    .spacing(0);
+
+    container(body)
         .width(width)
         .height(Length::Fill)
         .style(
@@ -551,6 +564,72 @@ pub fn view<'a>(
                 ..iced_widget::container::Style::default()
             },
         )
+        .into()
+}
+
+/// 项目信息面板底部 footer-bar,结构与文件树面板的 `git_footer_bar` 一致:
+/// 1px `BORDER` 分隔线 + `padding([6, 8])` 容器。当前放「修复项目 / 删除项目」
+/// 两个并排圆角按钮,行为仅为 UI 占位(`RepairProject` / `DeleteProject`),
+/// 实际逻辑后续接入。
+fn project_footer_bar(
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let repair = button(
+        text("修复项目")
+            .size(theme::font::label())
+            .color(theme::color::CREAM),
+    )
+    .on_press(Message::RepairProject)
+    .width(Length::Fill)
+    .padding([6, 8])
+    .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+        background: Some(theme::color::BG.into()),
+        border: Border {
+            color: theme::color::BORDER,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        text_color: theme::color::CREAM,
+        ..iced_widget::button::Style::default()
+    });
+
+    let delete = button(
+        text("删除项目")
+            .size(theme::font::label())
+            .color(theme::color::RED),
+    )
+    .on_press(Message::DeleteProject)
+    .width(Length::Fill)
+    .padding([6, 8])
+    .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+        background: Some(theme::color::BG.into()),
+        border: Border {
+            color: theme::color::RED,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        text_color: theme::color::RED,
+        ..iced_widget::button::Style::default()
+    });
+
+    let bar = row![repair, delete]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center);
+
+    let top_line = container(iced_widget::Space::new())
+        .width(Length::Fill)
+        .height(Length::Fixed(1.0))
+        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+            background: Some(theme::color::BORDER.into()),
+            ..iced_widget::container::Style::default()
+        });
+
+    container(column![top_line, bar].spacing(4))
+        .width(Length::Fill)
+        .padding([6, 8])
+        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+            background: None,
+            ..iced_widget::container::Style::default()
+        })
         .into()
 }
 
