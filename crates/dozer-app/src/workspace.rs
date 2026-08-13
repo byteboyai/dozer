@@ -1588,7 +1588,11 @@ impl Workspace {
                             })
                             .map_err(|e| e.to_string());
                         let _ = proxy.send_event(Message::Ssh(ssh::Message::Sftp(
-                            ssh::sftp::Message::RemoteDirLoaded(host_id_for_task.clone(), dir, result),
+                            ssh::sftp::Message::RemoteDirLoaded(
+                                host_id_for_task.clone(),
+                                dir,
+                                result,
+                            ),
                         )));
                     }
                     ssh::sftp::SftpCmd::Upload { local, remote_dir } => {

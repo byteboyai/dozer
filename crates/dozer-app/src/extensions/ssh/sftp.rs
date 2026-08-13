@@ -415,6 +415,7 @@ fn tree_column<'a>(
     title: &'a str,
     rows: Vec<crate::project::TreeRow>,
     selected: Option<&std::path::Path>,
+    error_for: impl Fn(&str) -> Option<String> + 'a,
     on_toggle: impl Fn(std::path::PathBuf) -> Message + 'a,
     on_select: impl Fn(std::path::PathBuf) -> Message + 'a,
     on_context: impl Fn(String) -> Message + 'a,
@@ -441,23 +442,39 @@ fn tree_column<'a>(
         let path_for_toggle = r.path.clone();
         let path_for_select = r.path.clone();
         let path_for_context = r.path.to_string_lossy().into_owned();
-        let label = row![
+        // 展开但读取失败的目录:行尾缀一个红色 ⚠ 提示文案(`errors`),让
+        // 用户看清"不是加载中、是真读不出来",而不是无限转圈(plan Task 9
+        // Step 5 的验收条目)。本地树没有这套状态,`error_for` 恒返回 None。
+        let dir_err = if r.is_dir {
+            error_for(&path_for_context)
+        } else {
+            None
+        };
+        let name_el = text(r.name.clone())
+            .size(crate::theme::font::body())
+            .color(if is_selected {
+                crate::theme::color::CREAM
+            } else {
+                crate::theme::color::DIM
+            });
+        let mut label = row![
             text(indent),
             crate::icons::view(
                 icon,
                 crate::theme::icon_size::row(),
                 crate::theme::color::DIM
             ),
-            text(r.name.clone())
-                .size(crate::theme::font::body())
-                .color(if is_selected {
-                    crate::theme::color::CREAM
-                } else {
-                    crate::theme::color::DIM
-                }),
+            name_el,
         ]
         .spacing(4)
         .align_y(iced_widget::core::alignment::Vertical::Center);
+        if let Some(err) = dir_err {
+            label = label.push(
+                text(format!("⚠ {err}"))
+                    .size(crate::theme::font::caption())
+                    .color(crate::theme::color::RED),
+            );
+        }
         let row_el: iced_widget::core::Element<
             'a,
             Message,
@@ -494,6 +511,7 @@ pub fn sftp_pane_view<'a>(
                 "本地机器项目文件树",
                 local_rows,
                 state.selected_local.as_deref(),
+                |_p| None,
                 move |p| Message::LocalToggle(host_id.clone(), p),
                 move |p| Message::LocalSelect(host_id2.clone(), p),
                 {
@@ -509,6 +527,7 @@ pub fn sftp_pane_view<'a>(
                 "远程主机文件树",
                 remote_rows,
                 state.selected_remote.as_deref().map(std::path::Path::new),
+                |p| state.remote_tree.error_for(p).map(str::to_string),
                 {
                     let h = state.host_id.clone();
                     move |p| Message::RemoteToggle(h.clone(), p.to_string_lossy().into_owned())

@@ -592,7 +592,9 @@ pub fn update(
                 other => update(ws_state, other, project_id, repo_path, handle, emit),
             }
         }
-        Message::OpenSshTab(..) | Message::CloseSshTab(..) | Message::SelectSshTab(..)
+        Message::OpenSshTab(..)
+        | Message::CloseSshTab(..)
+        | Message::SelectSshTab(..)
         | Message::Sftp(..) => {
             // 内核 `App::update` 在通配 `Message::Ssh(msg)` 之前拦截,
             // 这里理论上到不了;写出来只是为了 `match` 穷尽。

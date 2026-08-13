@@ -342,7 +342,11 @@ pub fn view<'a>(
             .into();
     };
 
-    let mut content = column![].spacing(12).padding(14).width(Length::Fill).height(Length::Fill);
+    let mut content = column![]
+        .spacing(12)
+        .padding(14)
+        .width(Length::Fill)
+        .height(Length::Fill);
 
     content = content.push(crate::homespace::home_panel_head(
         icons::IconKind::Briefcase,
@@ -548,11 +552,7 @@ pub fn view<'a>(
         );
     }
 
-    let body = column![
-        content,
-        project_footer_bar(),
-    ]
-    .spacing(0);
+    let body = column![content, project_footer_bar(),].spacing(0);
 
     container(body)
         .width(width)
@@ -571,8 +571,7 @@ pub fn view<'a>(
 /// 1px `BORDER` 分隔线 + `padding([6, 8])` 容器。当前放「修复项目 / 删除项目」
 /// 两个并排圆角按钮,行为仅为 UI 占位(`RepairProject` / `DeleteProject`),
 /// 实际逻辑后续接入。
-fn project_footer_bar(
-) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+fn project_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let repair = button(
         text("修复项目")
             .size(theme::font::label())
