@@ -25,6 +25,8 @@ pub struct WorkspaceState {
     description: Option<String>,
     /// 项目名称行内编辑态(None=未在编辑)。
     name_editing: Option<String>,
+    /// 项目描述编辑态(None=未在编辑)。采用 iced 原生 `text_editor::Content`。
+    description_editing: Option<iced_widget::text_editor::Content>,
     /// 文档/Agent 记忆虚拟链接。
     links: links::LinksState,
     error: Option<String>,
@@ -60,6 +62,21 @@ impl WorkspaceState {
     pub fn cancel_name_edit(&mut self) {
         self.name_editing = None;
     }
+
+    /// 供内核 `Workspace::blur_inputs` 调用——失焦时把当前编辑态直接写盘
+    /// (描述保存不需要网络往返,不用等 `Message` 走一圈)。
+    pub fn submit_description_edit_on_blur(&mut self, repo_path: &std::path::Path) {
+        let Some(content) = self.description_editing.take() else {
+            return;
+        };
+        let text = content.text().trim().to_string();
+        if crate::project_meta::write_description(repo_path, &text).is_ok() {
+            self.description = if text.is_empty() { None } else { Some(text) };
+        }
+        // 写失败这里不重试(失焦场景不适合弹错误态阻塞用户),下次进入面板
+        // 仍能看到 `description` 字段的旧值,不会丢用户输入太久——这是已知
+        // 的简化,写盘失败几率很低(权限问题会在其它写操作里更早暴露)。
+    }
 }
 
 /// 组合 git 刷新结果里跟 Project 有关的部分(`branch`/`dirty`/`worktrees`/
@@ -76,6 +93,13 @@ pub enum Message {
     NameRenamed(i64, Result<dozer_core::protocol::ProjectInfo, String>),
     NameEditStart,
     NameEditEvent(AddrEvent),
+    DescriptionEditStart,
+    DescriptionEditAction(iced_widget::text_editor::Action),
+    /// 预留:当前描述靠 `submit_description_edit_on_blur` 直接写盘(见该文档
+    /// 注释),这个变体/`update` 分支留给以后可能加的显式"保存"按钮,现在还没
+    /// 生产代码构造它,故 `#[allow(dead_code)]`。
+    #[allow(dead_code)]
+    DescriptionEditSubmit,
 }
 
 /// 处理全部消息——本模块不触碰终端会话域,没有需要内核拦截、`update` 里
@@ -87,6 +111,7 @@ pub fn update(
     msg: Message,
     project_id: i64,
     current_name: &str,
+    repo_path: &std::path::Path,
     client: &dozer_client::Client,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
@@ -150,6 +175,32 @@ pub fn update(
                 // 保留编辑态原始输入,允许重试。
             }
         },
+        Message::DescriptionEditStart => {
+            let initial = ws_state.description.clone().unwrap_or_default();
+            ws_state.description_editing =
+                Some(iced_widget::text_editor::Content::with_text(&initial));
+        }
+        Message::DescriptionEditAction(action) => {
+            if let Some(content) = &mut ws_state.description_editing {
+                content.perform(action);
+            }
+        }
+        Message::DescriptionEditSubmit => {
+            let Some(content) = ws_state.description_editing.take() else {
+                return;
+            };
+            let text = content.text().trim().to_string();
+            match crate::project_meta::write_description(repo_path, &text) {
+                Ok(()) => {
+                    ws_state.description = if text.is_empty() { None } else { Some(text) };
+                    ws_state.error = None;
+                }
+                Err(e) => {
+                    ws_state.error = Some(format!("保存失败: {e}"));
+                    ws_state.description_editing = Some(content); // 保留编辑态允许重试
+                }
+            }
+        }
     }
 }
 
@@ -258,6 +309,34 @@ pub fn view<'a>(
         };
     content = content.push(name_row);
 
+    let description_block: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        if let Some(editing) = &ws_state.description_editing {
+            iced_widget::text_editor(editing)
+                .placeholder("项目描述信息…")
+                .on_action(Message::DescriptionEditAction)
+                .height(Length::Fixed(72.0))
+                .into()
+        } else {
+            let label = ws_state
+                .description
+                .clone()
+                .unwrap_or_else(|| "点击添加项目描述…".to_string());
+            let color = if ws_state.description.is_some() {
+                theme::color::BODY
+            } else {
+                theme::color::DIM
+            };
+            button(text(label).size(theme::font::body()).color(color))
+                .on_press(Message::DescriptionEditStart)
+                .style(|_t, _s| iced_widget::button::Style {
+                    background: None,
+                    text_color: theme::color::BODY,
+                    ..iced_widget::button::Style::default()
+                })
+                .into()
+        };
+    content = content.push(description_block);
+
     let label = project_branch_label(ws_state.branch.as_deref(), ws_state.dirty);
     let bcolor = if ws_state.dirty {
         theme::color::GOLD
@@ -347,6 +426,12 @@ mod tests {
         WorkspaceState::default()
     }
 
+    fn test_repo_path() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("dozer-project-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     fn test_client() -> dozer_client::Client {
         dozer_client::Client::new(std::path::PathBuf::from("/tmp/dozer-project-test.sock"))
     }
@@ -366,6 +451,7 @@ mod tests {
             ),
             1,
             "名字",
+            &test_repo_path(),
             &test_client(),
             rt.handle(),
             |_| {},
@@ -385,6 +471,7 @@ mod tests {
             Message::AcceptanceCountLoaded(1, Some(3)),
             1,
             "名字",
+            &test_repo_path(),
             &test_client(),
             rt.handle(),
             |_| {},
@@ -408,6 +495,7 @@ mod tests {
             Message::NameEditStart,
             1,
             "旧名字",
+            &test_repo_path(),
             &test_client(),
             rt.handle(),
             |_| {},
@@ -424,6 +512,7 @@ mod tests {
             Message::NameEditStart,
             1,
             "同名",
+            &test_repo_path(),
             &test_client(),
             rt.handle(),
             |_| {},
@@ -433,6 +522,7 @@ mod tests {
             Message::NameEditEvent(AddrEvent::Submit),
             1,
             "同名",
+            &test_repo_path(),
             &test_client(),
             rt.handle(),
             |_| {},
@@ -458,6 +548,7 @@ mod tests {
             Message::NameRenamed(1, Ok(project)),
             1,
             "旧名字",
+            &test_repo_path(),
             &test_client(),
             rt.handle(),
             |_| {},
@@ -476,6 +567,7 @@ mod tests {
             Message::NameRenamed(1, Err("连接失败".into())),
             1,
             "旧名字",
+            &test_repo_path(),
             &test_client(),
             rt.handle(),
             |_| {},
@@ -511,10 +603,106 @@ mod tests {
             Message::DiskUsageLoaded(1, 12345),
             1,
             "名字",
+            &test_repo_path(),
             &test_client(),
             rt.handle(),
             |_| {},
         );
         assert_eq!(ws.disk_usage_bytes, Some(12345));
+    }
+
+    #[test]
+    fn description_edit_start_prefills_from_field() {
+        let mut ws = new_ws();
+        ws.description = Some("已有描述".to_string());
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::DescriptionEditStart,
+            1,
+            "名字",
+            &test_repo_path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        let content = ws.description_editing.expect("进入编辑态");
+        assert_eq!(content.text(), "已有描述");
+    }
+
+    #[test]
+    fn description_edit_submit_writes_to_disk_and_clears_editing() {
+        let mut ws = new_ws();
+        let dir = tempfile::tempdir().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let action = iced_widget::text_editor::Action::Edit(iced_widget::text_editor::Edit::Paste(
+            std::sync::Arc::new("新描述内容".to_string()),
+        ));
+        update(
+            &mut ws,
+            Message::DescriptionEditStart,
+            1,
+            "名字",
+            dir.path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        update(
+            &mut ws,
+            Message::DescriptionEditAction(action),
+            1,
+            "名字",
+            dir.path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        update(
+            &mut ws,
+            Message::DescriptionEditSubmit,
+            1,
+            "名字",
+            dir.path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert!(ws.description_editing.is_none());
+        assert_eq!(ws.description.as_deref(), Some("新描述内容"));
+        let on_disk = crate::project_meta::load_description(dir.path());
+        assert_eq!(on_disk.as_deref(), Some("新描述内容"));
+    }
+
+    #[test]
+    fn description_edit_submit_empty_clears_field_and_file() {
+        let mut ws = new_ws();
+        let dir = tempfile::tempdir().unwrap();
+        crate::project_meta::write_description(dir.path(), "旧描述").unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::DescriptionEditStart,
+            1,
+            "名字",
+            dir.path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        // 清空编辑内容:直接提交空编辑器。
+        update(
+            &mut ws,
+            Message::DescriptionEditSubmit,
+            1,
+            "名字",
+            dir.path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert!(ws.description_editing.is_none());
+        assert!(ws.description.is_none());
+        assert!(crate::project_meta::load_description(dir.path()).is_none());
     }
 }

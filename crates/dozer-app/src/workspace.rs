@@ -1521,6 +1521,10 @@ impl Workspace {
         self.files.cancel_tree_edit();
         self.files.cancel_search_edit();
         self.project_panel.cancel_name_edit();
+        if let Some(project) = self.project.as_ref() {
+            self.project_panel
+                .submit_description_edit_on_blur(std::path::Path::new(&project.path));
+        }
     }
 
     /// 协议闭包共享的文件白名单句柄.

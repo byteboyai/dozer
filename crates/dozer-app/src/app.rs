@@ -2936,6 +2936,7 @@ impl App {
                     return;
                 };
                 let current_name = project.name.clone();
+                let repo_path = std::path::PathBuf::from(&project.path);
                 // `NameRenamed(Ok(updated))` 要把顶栏项目页签等读的 `ws.project`
                 // 缓存一并更新——这是这个面板第一次出现需要内核介入(而不是纯
                 // 委托给 `project::update`)的消息。
@@ -2953,6 +2954,7 @@ impl App {
                     msg,
                     project_id,
                     &current_name,
+                    &repo_path,
                     &client,
                     &handle,
                     emit,
@@ -2969,6 +2971,7 @@ impl App {
                     return;
                 };
                 let current_name = project.name.clone();
+                let repo_path = std::path::PathBuf::from(&project.path);
                 let client = self.client.clone();
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
@@ -2980,6 +2983,7 @@ impl App {
                     msg,
                     project_id,
                     &current_name,
+                    &repo_path,
                     &client,
                     &handle,
                     emit,
