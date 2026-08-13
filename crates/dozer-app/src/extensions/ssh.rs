@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// 阶段 3:SFTP 文件传输(数据模型 + 连接生命周期 + 消息路由 + 渲染)。
+/// 独立子模块避免 `ssh.rs` 继续膨胀(镜像 `extensions/project/links.rs`)。
+pub mod sftp;
+
 /// SSH 面板自己 tab 条上的 tab 种类。同一台主机可以同时开一个 `Terminal`
 /// tab 和(阶段 3 起)一个 `Sftp` tab,两者独立存在、独立连接——`(host_id,
 /// SshTabKind)` 是一个 SSH 面板 tab 的完整身份。
