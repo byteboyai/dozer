@@ -22,19 +22,34 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PACKAGING_DIR="$ROOT_DIR/crates/dozer-app/packaging/macos"
 APP_NAME="Dozer AI Coder"
 BIN_NAME="dozer"
+DAEMON_BIN_NAME="dozerd"
 
-# Ask cargo for the built executable's actual path via JSON output, rather
+# Ask cargo for the built executables' actual paths via JSON output, rather
 # than guessing target/<profile> vs target/<triple>/<profile> (this machine's
 # ~/.cargo/config.toml pins a default --target, which changes the layout).
+# dozerd must ship alongside dozer: dozer's daemon auto-spawn looks for it
+# next to its own executable (crates/dozer-app/src/main.rs spawn_dozerd()).
+BUILD_JSON=$(
+  cargo build "${CARGO_PROFILE_FLAG[@]}" -p dozer-app -p dozerd --message-format=json
+)
+
 BIN_PATH=$(
-  cargo build "${CARGO_PROFILE_FLAG[@]}" -p dozer-app --message-format=json \
-    | jq -r --arg bin "$BIN_NAME" \
-        'select(.reason=="compiler-artifact" and .target.name==$bin and .executable != null) | .executable' \
+  echo "$BUILD_JSON" | jq -r --arg bin "$BIN_NAME" \
+    'select(.reason=="compiler-artifact" and .target.name==$bin and .executable != null) | .executable' \
+    | tail -n 1
+)
+DAEMON_BIN_PATH=$(
+  echo "$BUILD_JSON" | jq -r --arg bin "$DAEMON_BIN_NAME" \
+    'select(.reason=="compiler-artifact" and .target.name==$bin and .executable != null) | .executable' \
     | tail -n 1
 )
 
 if [ -z "$BIN_PATH" ] || [ ! -x "$BIN_PATH" ]; then
   echo "error: could not locate built '$BIN_NAME' executable" >&2
+  exit 1
+fi
+if [ -z "$DAEMON_BIN_PATH" ] || [ ! -x "$DAEMON_BIN_PATH" ]; then
+  echo "error: could not locate built '$DAEMON_BIN_NAME' executable" >&2
   exit 1
 fi
 
@@ -45,6 +60,7 @@ rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 
 cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/$BIN_NAME"
+cp "$DAEMON_BIN_PATH" "$APP_DIR/Contents/MacOS/$DAEMON_BIN_NAME"
 cp "$PACKAGING_DIR/Info.plist" "$APP_DIR/Contents/Info.plist"
 cp "$PACKAGING_DIR/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
 
