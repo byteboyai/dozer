@@ -641,10 +641,7 @@ fn links_section<'a>(
             ..iced_widget::button::Style::default()
         });
         col = col.push(
-            MouseArea::new(row_btn).on_right_press(Message::LinkContextMenu {
-                target,
-                index: i,
-            }),
+            MouseArea::new(row_btn).on_right_press(Message::LinkContextMenu { target, index: i }),
         );
         if entry.kind == links::LinkKind::Dir
             && let Some(rows) = expanded.get(&entry.path)
