@@ -701,39 +701,75 @@ fn host_card<'a>(
     .into()
 }
 
+/// 单选圆点:选中态 `GOLD` 实心 + `GOLD` 描边,未选中态空心 `BORDER`
+/// 描边。iced 没有原生 radio 部件,手绘一个圆形 `container` + `MouseArea`。
+fn radio_dot<'a>(
+    label: &'a str,
+    selected: bool,
+    on_select: Message,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let dot = container(iced_widget::Space::new())
+        .width(iced_widget::core::Length::Fixed(10.0))
+        .height(iced_widget::core::Length::Fixed(10.0))
+        .style(move |_t: &iced_widget::Theme| iced_widget::container::Style {
+            background: if selected {
+                Some(theme::color::GOLD.into())
+            } else {
+                None
+            },
+            border: iced_widget::core::Border {
+                color: if selected {
+                    theme::color::GOLD
+                } else {
+                    theme::color::BORDER
+                },
+                width: 1.5,
+                radius: 5.0.into(),
+            },
+            ..iced_widget::container::Style::default()
+        });
+    let ring = container(dot)
+        .width(iced_widget::core::Length::Fixed(16.0))
+        .height(iced_widget::core::Length::Fixed(16.0))
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center);
+    iced_widget::MouseArea::new(
+        row![
+            ring,
+            text(label).size(theme::font::body()).color(theme::color::CREAM),
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::alignment::Vertical::Center),
+    )
+    .interaction(iced_widget::core::mouse::Interaction::Pointer)
+    .on_press(on_select)
+    .into()
+}
+
 fn host_form<'a>(
     draft: &'a SshHostDraft,
+    status: &'a TestStatus,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![
-        text_input("名字", &draft.name)
+        text_input("主机名称", &draft.name)
             .on_input(Message::DraftNameChanged)
             .size(theme::font::body()),
-        text_input("host", &draft.host)
+        text_input("Host", &draft.host)
             .on_input(Message::DraftHostChanged)
             .size(theme::font::body()),
-        text_input("port(默认 22)", &draft.port)
+        text_input("port(22)", &draft.port)
             .on_input(Message::DraftPortChanged)
             .size(theme::font::body()),
-        text_input("username", &draft.username)
+        text_input("user name", &draft.username)
             .on_input(Message::DraftUsernameChanged)
             .size(theme::font::body()),
         row![
-            button(text(if draft.use_private_key {
-                "● 私钥"
-            } else {
-                "○ 私钥"
-            }))
-            .on_press(Message::DraftAuthMethodToggled(true)),
-            button(text(if !draft.use_private_key {
-                "● 密码"
-            } else {
-                "○ 密码"
-            }))
-            .on_press(Message::DraftAuthMethodToggled(false)),
+            radio_dot("密码", !draft.use_private_key, Message::DraftAuthMethodToggled(false)),
+            radio_dot("私钥", draft.use_private_key, Message::DraftAuthMethodToggled(true)),
         ]
-        .spacing(8),
+        .spacing(20),
     ]
-    .spacing(8);
+    .spacing(10);
 
     if draft.use_private_key {
         col = col.push(
@@ -756,13 +792,59 @@ fn host_form<'a>(
         );
     }
 
-    col = col.push(
-        row![
-            button(text("保存")).on_press(Message::DraftSave),
-            button(text("取消")).on_press(Message::DraftCancel),
-        ]
-        .spacing(8),
-    );
+    let text_btn = |label: &'a str, color: iced_widget::core::Color, msg: Message| {
+        button(text(label).size(theme::font::label()).color(color))
+            .on_press(msg)
+            .padding([6, 12])
+            .style(move |_t: &iced_widget::Theme, _s| button::Style {
+                background: Some(theme::color::BG.into()),
+                border: iced_widget::core::Border {
+                    color,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                text_color: color,
+                ..button::Style::default()
+            })
+    };
+
+    let mut buttons = row![text_btn("测试连接", theme::color::CREAM, Message::TestConnection(
+        draft.id.clone().unwrap_or_default(),
+    ))]
+    .spacing(6);
+    // 新建主机(没有 id)时"测试连接"点了也是 no-op(TestConnection 在
+    // ws_state.hosts 里查不到这个空字符串 id,直接 return——见
+    // ssh::update 的既有实现),"删除"按钮干脆不渲染,没有可删的对象。
+    if let Some(id) = &draft.id {
+        buttons = buttons.push(text_btn("删除", theme::color::RED, Message::DeleteHost(id.clone())));
+    }
+    buttons = buttons.push(text_btn("保存", theme::color::GOLD, Message::DraftSave));
+    buttons = buttons.push(text_btn("取消", theme::color::DIM, Message::DraftCancel));
+    col = col.push(buttons);
+
+    let (status_text, status_color) = match status {
+        TestStatus::Idle => (String::new(), theme::color::DIM),
+        TestStatus::Testing => ("测试中…".to_string(), theme::color::DIM),
+        TestStatus::Ok => ("✓ 连接成功".to_string(), theme::color::GREEN),
+        TestStatus::UnknownHostKey { fingerprint } => {
+            (format!("⚠ 未知主机,指纹 {fingerprint}"), theme::color::GOLD)
+        }
+        TestStatus::KeyChanged { fingerprint } => (
+            format!("✗ 主机指纹已变化({fingerprint}),拒绝连接"),
+            theme::color::RED,
+        ),
+        TestStatus::Err(e) => (format!("✗ {e}"), theme::color::RED),
+    };
+    if !status_text.is_empty() {
+        col = col.push(text(status_text).size(theme::font::caption_sm()).color(status_color));
+    }
+    if matches!(status, TestStatus::UnknownHostKey { .. })
+        && let Some(id) = &draft.id
+    {
+        col = col.push(
+            text_btn("信任并重试", theme::color::GOLD, Message::TrustHostKey(id.clone())),
+        );
+    }
 
     container(col)
         .padding(12)
@@ -791,7 +873,12 @@ pub fn view<'a>(
     .spacing(12);
 
     if let Some(draft) = ws_state.editing() {
-        col = col.push(host_form(draft));
+        let status = draft
+            .id
+            .as_deref()
+            .map(|id| ws_state.test_status(id))
+            .unwrap_or(&TestStatus::Idle);
+        col = col.push(host_form(draft, status));
     }
 
     if ws_state.hosts().is_empty() {
