@@ -867,19 +867,9 @@ pub fn view<'a>(
     outer: iced_widget::core::Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![
-        crate::homespace::home_panel_head(crate::icons::IconKind::Server, "主机"),
-        button(text("＋新增主机")).on_press(Message::AddHostStart),
+        crate::homespace::home_panel_head(crate::icons::IconKind::Server, "主机")
     ]
     .spacing(12);
-
-    if let Some(draft) = ws_state.editing() {
-        let status = draft
-            .id
-            .as_deref()
-            .map(|id| ws_state.test_status(id))
-            .unwrap_or(&TestStatus::Idle);
-        col = col.push(host_form(draft, status));
-    }
 
     if ws_state.hosts().is_empty() {
         col = col.push(
@@ -892,6 +882,31 @@ pub fn view<'a>(
             col = col.push(host_card(h, ws_state.test_status(&h.id), ws_state.hover_action()));
         }
     }
+
+    if let Some(draft) = ws_state.editing() {
+        let status = draft
+            .id
+            .as_deref()
+            .map(|id| ws_state.test_status(id))
+            .unwrap_or(&TestStatus::Idle);
+        col = col.push(host_form(draft, status));
+    }
+
+    col = col.push(
+        button(text("＋添加").size(theme::font::body()).color(theme::color::GOLD))
+            .on_press(Message::AddHostStart)
+            .padding([8, 16])
+            .style(|_t: &iced_widget::Theme, _s| button::Style {
+                background: Some(theme::color::BG.into()),
+                border: iced_widget::core::Border {
+                    color: theme::color::GOLD,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                text_color: theme::color::GOLD,
+                ..button::Style::default()
+            }),
+    );
 
     container(col.padding(16))
         .width(width)
