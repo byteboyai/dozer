@@ -19,10 +19,6 @@ fn project_key(cwd: &Path) -> String {
     cwd.to_string_lossy().replace('/', "-")
 }
 
-fn home_dir() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()))
-}
-
 /// 三个 agent 的存储目录都是 `<home>/<agent_root>/projects/<cwd 换算的 key>`
 /// 这一形状；`home` 显式传入而不是内部读 `HOME` 环境变量，好让测试不用碰
 /// 进程全局状态就能验证目录拼接逻辑（`HOME` 是跨线程共享的，`cargo test`
@@ -33,21 +29,40 @@ fn project_dir_in(home: &Path, agent_root: &str, cwd: &Path) -> PathBuf {
         .join(project_key(cwd))
 }
 
+pub(crate) fn home_dir() -> PathBuf {
+    PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()))
+}
+
 /// cwd → Claude 存储目录：`~/.claude/projects/<cwd 中 '/' 换 '-'>`。
 pub fn claude_project_dir(cwd: &Path) -> PathBuf {
-    project_dir_in(&home_dir(), ".claude", cwd)
+    claude_project_dir_in(&home_dir(), cwd)
+}
+
+/// cwd → Claude 存储目录,`home` 显式传入(测试用,不碰 `HOME` 环境变量)。
+pub fn claude_project_dir_in(home: &Path, cwd: &Path) -> PathBuf {
+    project_dir_in(home, ".claude", cwd)
 }
 
 /// cwd → CodeBuddy 存储目录：`~/.codebuddy/projects/<cwd 中 '/' 换 '-'>`
 /// （spec §1：与 Claude 的目录结构平行）。
 pub fn codebuddy_project_dir(cwd: &Path) -> PathBuf {
-    project_dir_in(&home_dir(), ".codebuddy", cwd)
+    codebuddy_project_dir_in(&home_dir(), cwd)
+}
+
+/// cwd → CodeBuddy 存储目录,`home` 显式传入(测试用)。
+pub fn codebuddy_project_dir_in(home: &Path, cwd: &Path) -> PathBuf {
+    project_dir_in(home, ".codebuddy", cwd)
 }
 
 /// cwd → dozer 自己为 OpenCode 代写的 transcript 目录（OpenCode 本身没有
 /// JSONL 落盘，dozer-hook 按 Claude 格式代写；spec §5.3）。
 pub fn opencode_project_dir(cwd: &Path) -> PathBuf {
-    project_dir_in(&home_dir(), ".dozer/agents/opencode", cwd)
+    opencode_project_dir_in(&home_dir(), cwd)
+}
+
+/// cwd → OpenCode 代写目录,`home` 显式传入(测试用)。
+pub fn opencode_project_dir_in(home: &Path, cwd: &Path) -> PathBuf {
+    project_dir_in(home, ".dozer/agents/opencode", cwd)
 }
 
 /// transcript 首段 → 首句人类发言。按 agent 分派——Claude/Opencode/Kilo/

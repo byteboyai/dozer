@@ -1,5 +1,8 @@
 //! 项目信息(Project)面板:项目名、git 分支/脏标、验收次数。阶段 1 扩展化
 //! 重构项目,设计见 `docs/superpowers/specs/2026-08-13-project-info-pane-v2-design.md`。
+
+pub mod links;
+
 use crate::delivery::WorktreeInfo;
 use crate::workspace::AddrEvent;
 use crate::{icons, theme};
