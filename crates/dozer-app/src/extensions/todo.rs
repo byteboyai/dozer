@@ -680,7 +680,7 @@ fn todo_list_view<'a>(
     .padding([12, 20])
     .align_y(iced_widget::core::alignment::Vertical::Center);
 
-    let mut list = column![].spacing(2);
+    let mut list = column![].spacing(8).padding([0, 20]);
     if visible_idx.is_empty() {
         list = list.push(
             container(
@@ -705,7 +705,7 @@ fn todo_list_view<'a>(
             match row {
                 Some(r) => list = list.push(r),
                 None => {
-                    list = list.push(todo_row(
+                    list = list.push(todo_card(
                         display_no + 1,
                         idx,
                         item,
@@ -714,6 +714,7 @@ fn todo_list_view<'a>(
                         dispatch,
                         ws_state.selected_row == Some(idx),
                         ws_state.dispatch_open == Some(idx),
+                        ws_state.state_pill_open == Some(idx),
                         &existing_tabs,
                     ));
                 }
@@ -848,10 +849,12 @@ fn todo_markdown_view<'a>(
     scrollable(body).height(Length::Fill).into()
 }
 
-/// 一条 Todo 任务行：左侧序号 + 勾选框 + 可点击选中的标题 + 右侧状态徽章
-/// （进行中=EXECUTING、完成=SUCCESS_MM-DD、待办=计划日期/派发按钮）。选中
-/// 态加金边左条 + CARD 底色（对齐截图 04 行高亮）。派发选择层叠在行下方。
-fn todo_row<'a>(
+/// 统一卡片组件：List/Kanban 共用同一套边框卡片视觉，取代原来的
+/// `todo_row`(扁平高亮行)。结构自上而下：编号 + 日期徽章 → checkbox +
+/// 任务文字 → 派发按钮(仅待办未派发时) + 状态 pill。选中态左侧加 3px
+/// 金色竖条(对齐原 `todo_row` 的 `accent` 处理)。
+#[allow(clippy::too_many_arguments)]
+fn todo_card<'a>(
     number: usize,
     idx: usize,
     item: &'a TodoItem,
@@ -860,9 +863,52 @@ fn todo_row<'a>(
     dispatch: Option<&'a DispatchRecord>,
     selected: bool,
     dispatch_open: bool,
+    state_pill_open: bool,
     existing_tabs: &'a [(&'a str, String)],
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let done = item.done;
+
+    // ---- 顶部行：编号 + 日期徽章 ----
+    let number_text = text(format!("#{number:03}"))
+        .size(theme::font::caption())
+        .color(theme::color::DIM);
+
+    let date_label = match state {
+        TodoState::Done => meta
+            .and_then(|m| m.completed_at)
+            .map(format_todo_month_day)
+            .unwrap_or_else(|| "-".to_string()),
+        _ => meta
+            .and_then(|m| m.plan_date.clone())
+            .unwrap_or_else(|| "-".to_string()),
+    };
+    let date_badge: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        MouseArea::new(
+            row![
+                icons::view(
+                    icons::IconKind::History,
+                    crate::theme::icon_size::row(),
+                    theme::color::DIM
+                ),
+                text(date_label).size(theme::font::caption()).color(theme::color::DIM),
+            ]
+            .spacing(4)
+            .align_y(iced_widget::core::alignment::Vertical::Center),
+        )
+        .interaction(mouse::Interaction::Pointer)
+        .on_press(Message::PlanDateEditStart(idx))
+        .into();
+
+    let top_row = row![
+        number_text,
+        iced_widget::space::Space::new()
+            .width(Length::Fill)
+            .height(Length::Shrink),
+        date_badge,
+    ]
+    .align_y(iced_widget::core::alignment::Vertical::Center);
+
+    // ---- 中部：checkbox + 任务文字（勾选/删除线处理与原 todo_row 一致）----
     let box_color = if done {
         theme::color::BORDER
     } else {
@@ -928,133 +974,49 @@ fn todo_row<'a>(
             .color(label_color)
             .into()
     };
-
-    // 点击标题切换选中高亮（再点同一行取消）。
     let label_area: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> =
         MouseArea::new(container(label).width(Length::Fill))
             .interaction(mouse::Interaction::Pointer)
             .on_press(Message::RowSelect(if selected { None } else { Some(idx) }))
             .into();
 
-    let number_text = text(format!("{number:02}"))
-        .size(theme::font::caption())
-        .color(theme::color::DIM);
+    let body_row = row![checkbox, label_area]
+        .spacing(10)
+        .align_y(iced_widget::core::alignment::Vertical::Center);
 
-    let trailing: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        match state {
-            TodoState::Pending => {
-                if let Some(d) = meta.and_then(|m| m.plan_date.as_deref()) {
-                    // 计划日期 pill（橙/金，截图里"明天/10月12日"那种红橙色）。
-                    button(
-                        text(format!("计划 {d}"))
-                            .size(theme::font::caption())
-                            .color(theme::color::ORANGE),
-                    )
-                    .on_press(Message::PlanDateEditStart(idx))
-                    .padding(0)
-                    .style(|_t: &iced_widget::Theme, _s| button::Style {
-                        background: None,
-                        text_color: theme::color::ORANGE,
-                        ..button::Style::default()
-                    })
-                    .into()
-                } else {
-                    button(
-                        row![
-                            icons::view(
-                                icons::IconKind::SquarePlus,
-                                crate::theme::icon_size::row(),
-                                theme::color::GOLD
-                            ),
-                            text("派发")
-                                .size(theme::font::caption())
-                                .color(theme::color::GOLD),
-                        ]
-                        .spacing(4)
-                        .align_y(iced_widget::core::alignment::Vertical::Center),
-                    )
-                    .on_press(Message::DispatchOpen(idx))
-                    .padding([5, 10])
-                    .style(|_t: &iced_widget::Theme, _s| button::Style {
-                        background: None,
-                        text_color: theme::color::GOLD,
-                        border: Border {
-                            color: theme::color::BORDER,
-                            width: 1.0,
-                            radius: 6.0.into(),
-                        },
-                        ..button::Style::default()
-                    })
-                    .into()
-                }
-            }
-            TodoState::InProgress => {
-                // EXECUTING 徽章：agent 头像圆 + 绿点指示 + 文字。
-                let initial = dispatch
-                    .and_then(|d| d.session_id.chars().next())
-                    .map(|c| c.to_uppercase().to_string())
-                    .unwrap_or_else(|| "A".to_string());
-                let avatar = container(
-                    text(initial)
-                        .size(theme::font::caption_sm())
-                        .color(theme::color::CREAM),
-                )
-                .width(Length::Fixed(20.0))
-                .height(Length::Fixed(20.0))
-                .align_x(iced_widget::core::alignment::Horizontal::Center)
-                .align_y(iced_widget::core::alignment::Vertical::Center)
-                .style(|_t: &iced_widget::Theme| container::Style {
-                    background: Some(theme::color::CYAN.into()),
-                    border: Border {
-                        radius: 10.0.into(),
-                        ..Border::default()
-                    },
-                    ..container::Style::default()
-                });
-                row![
-                    avatar,
-                    container(iced_widget::Space::new())
-                        .width(Length::Fixed(7.0))
-                        .height(Length::Fixed(7.0))
-                        .style(|_t: &iced_widget::Theme| container::Style {
-                            background: Some(theme::color::GREEN.into()),
-                            border: Border {
-                                radius: 4.0.into(),
-                                ..Border::default()
-                            },
-                            ..container::Style::default()
-                        }),
-                    text("EXECUTING")
-                        .size(theme::font::caption())
-                        .color(theme::color::GREEN),
-                ]
-                .spacing(6)
-                .align_y(iced_widget::core::alignment::Vertical::Center)
-                .into()
-            }
-            TodoState::Done => {
-                // SUCCESS_MM-DD 徽章。
-                let mmdd = meta
-                    .and_then(|m| m.completed_at)
-                    .map(format_todo_month_day)
-                    .unwrap_or_else(|| "——".to_string());
-                row![
-                    icons::view(
-                        icons::IconKind::BadgeCheck,
-                        crate::theme::icon_size::row(),
-                        theme::color::GREEN
-                    ),
-                    text(format!("SUCCESS_{mmdd}"))
-                        .size(theme::font::caption())
-                        .color(theme::color::GREEN),
-                ]
-                .spacing(5)
-                .align_y(iced_widget::core::alignment::Vertical::Center)
-                .into()
-            }
-        };
+    // ---- 底部行：派发按钮(仅待办未派发) + 状态 pill ----
+    let mut bottom = row![].spacing(8).align_y(iced_widget::core::alignment::Vertical::Center);
+    if state == TodoState::Pending && dispatch.is_none() {
+        let dispatch_btn = button(icons::view(
+            icons::IconKind::BotMessageSquare,
+            crate::theme::icon_size::row(),
+            theme::color::GOLD,
+        ))
+        .on_press(Message::DispatchOpen(idx))
+        .padding(6)
+        .style(|_t: &iced_widget::Theme, _s| button::Style {
+            background: None,
+            border: Border {
+                color: theme::color::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..button::Style::default()
+        });
+        bottom = bottom.push(dispatch_btn);
+    }
+    bottom = bottom.push(state_pill(idx, state));
 
-    let accent = container(iced_widget::Space::new())
+    let bottom_row = row![
+        iced_widget::space::Space::new()
+            .width(Length::Fill)
+            .height(Length::Shrink),
+        bottom,
+    ];
+
+    let card_body = column![top_row, body_row, bottom_row].spacing(8);
+
+    let accent = container(iced_widget::space::Space::new())
         .width(Length::Fixed(3.0))
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
@@ -1066,31 +1028,28 @@ fn todo_row<'a>(
             ..container::Style::default()
         });
 
-    let base: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        row![accent, number_text, checkbox, label_area, trailing,]
-            .spacing(10)
-            .align_y(iced_widget::core::alignment::Vertical::Center)
-            .padding([10, 20])
-            .into();
+    let inner = row![accent, container(card_body).padding(10).width(Length::Fill)].spacing(0);
 
-    let wrapped: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        if dispatch_open {
-            column![base, todo_dispatch_popup(idx, existing_tabs)].into()
-        } else {
-            base
-        };
-
-    container(wrapped)
+    let card = container(inner)
         .width(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
-            background: if selected {
-                Some(theme::color::CARD.into())
-            } else {
-                None
+            background: Some(theme::color::CARD.into()),
+            border: Border {
+                color: theme::color::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
             },
             ..container::Style::default()
-        })
-        .into()
+        });
+
+    let mut stacked = column![card];
+    if dispatch_open {
+        stacked = stacked.push(todo_dispatch_popup(idx, existing_tabs));
+    }
+    if state_pill_open {
+        stacked = stacked.push(state_pill_menu(idx));
+    }
+    stacked.into()
 }
 
 /// Todo 派发选择层：列出当前项目存活的 agent tab + 一个"新建"入口，样式
@@ -1148,6 +1107,82 @@ fn todo_dispatch_popup<'a>(
             ..container::Style::default()
         })
         .into()
+}
+
+/// 状态 pill：三态统一成同一种紧凑圆角形状，文字/颜色随 `state` 变。
+/// `Pending`/`Done` 可点击(发 `StatePillOpen`，弹出二选一菜单)；
+/// `InProgress` 是推导值，不接受直接设置，pill 只读展示，不挂 `on_press`。
+fn state_pill(
+    idx: usize,
+    state: TodoState,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let (label, border_color, text_color, bg) = match state {
+        TodoState::Pending => ("待办", theme::color::BORDER, theme::color::DIM, None),
+        TodoState::InProgress => (
+            "进行中",
+            theme::color::GREEN,
+            theme::color::GREEN,
+            None,
+        ),
+        TodoState::Done => (
+            "已完成",
+            theme::color::GREEN,
+            theme::color::BG,
+            Some(theme::color::GREEN),
+        ),
+    };
+    let mut btn = button(text(label).size(theme::font::caption()).color(text_color))
+        .padding([4, 10])
+        .style(move |_t: &iced_widget::Theme, _s| button::Style {
+            background: bg.map(Into::into),
+            text_color,
+            border: Border {
+                color: border_color,
+                width: 1.0,
+                radius: 10.0.into(),
+            },
+            ..button::Style::default()
+        });
+    if state != TodoState::InProgress {
+        btn = btn.on_press(Message::StatePillOpen(idx));
+    }
+    btn.into()
+}
+
+/// pill 菜单：待办/已完成 二选一，选中发 `SetDone(idx, 目标值)`。样式镜像
+/// 现有 `todo_dispatch_popup`(CARD 底 + BORDER 描边)。
+fn state_pill_menu(
+    idx: usize,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let option = |label: &'static str, target_done: bool, color: Color| {
+        button(text(label).size(theme::font::body()).color(color))
+            .on_press(Message::SetDone(idx, target_done))
+            .width(Length::Fill)
+            .padding([6, 12])
+            .style(move |_t: &iced_widget::Theme, _s| button::Style {
+                background: None,
+                text_color: color,
+                ..button::Style::default()
+            })
+    };
+    container(
+        column![
+            option("待办", false, theme::color::DIM),
+            option("已完成", true, theme::color::GREEN),
+        ]
+        .spacing(2),
+    )
+    .padding(6)
+    .style(|_t: &iced_widget::Theme| container::Style {
+        background: Some(theme::color::CARD.into()),
+        border: Border {
+            color: theme::color::BORDER,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..container::Style::default()
+    })
+    .into()
 }
 
 /// 计划时间内联编辑态：任务文本 + 一个 `text_input`，回车提交。
