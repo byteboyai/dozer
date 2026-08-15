@@ -1705,6 +1705,29 @@ pub(crate) fn restore_open_tabs(
     (order, active)
 }
 
+/// 项目信息面板切入时的 README 自动生成(纯函数,方便单测):项目根目录
+/// 已有 `README.md` 就**不碰**(返回 `None`);没有则用项目名当一级标题、
+/// `.dozer/description.md` 的描述(`load_description`,无描述则省略)生成一
+/// 份。成功创建返回 `Some(readme 路径)`,写入失败返回 `None`(绝不拿空文件
+/// 占预览,也绝不让面板切入失败)。
+///
+/// 描述固定读磁盘权威来源,不用 `WorkspaceState.description` 缓存字段——
+/// 那可能滞后于磁盘,而 README 一旦生成就固化,必须用写入时的真实描述。
+fn ensure_project_readme(repo: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    let readme = repo.join("README.md");
+    if readme.exists() {
+        return None;
+    }
+    let description = crate::project_meta::load_description(repo);
+    let mut content = format!("# {}\n\n", name);
+    if let Some(desc) = description {
+        content.push_str(&desc);
+        content.push('\n');
+    }
+    std::fs::write(&readme, content).ok()?;
+    Some(readme)
+}
+
 impl App {
     /// 启动序列成功路径:建好外壳态,再把上次退出时开着的**整份**项目页签
     /// 集合恢复出来。
@@ -4453,6 +4476,13 @@ impl App {
                 }
             });
         }
+        // 项目信息面板：切入时若项目根目录没有 `README.md`，就用项目名 +
+        // 描述(`.dozer/description.md`)生成一份，并自动在右侧配套预览窗打
+        // 开这份新生成的 README(只在新生成时打开——已存在 README 时不重复
+        // 生成也不抢占预览)。语义同 Todo/Database/SSH 的"切换时动作"。
+        if self.left_view == LeftView::Project {
+            self.ensure_project_readme_and_reveal();
+        }
         // SSH 面板：切入即从磁盘重读一次 `.dozer/ssh_hosts.json`，语义
         // 同 Todo 面板(切换本身触发重读,停留期间的同步靠别的机制)。
         if self.left_view == LeftView::Ssh {
@@ -4573,6 +4603,25 @@ impl App {
             // 新 tab 落在末尾,滚回最左让它可见(同 Files 预览)。
             ws.project_preview_tab_first = 0;
         });
+    }
+
+    /// 项目信息面板切入时调用:若项目根目录没有 `README.md`,就用当前项目
+    /// 名 + 描述(`.dozer/description.md`,权威来源直读,不用可能过期的面板
+    /// 缓存字段)生成一份,并在右侧配套预览窗打开这份新生成的 README。
+    ///
+    /// 只有"本来没有、这次新生成"才自动打开;已存在 README 时既不重写也
+    /// 不抢占预览(用户可能正开着别的文件)。写失败时静默返回,不打开——
+    /// 绝不拿一个空文件去占预览,也绝不让面板切入失败。
+    fn ensure_project_readme_and_reveal(&mut self) {
+        let Some(project) = self.active_workspace().and_then(|ws| ws.project.clone()) else {
+            return;
+        };
+        let Some(readme) =
+            ensure_project_readme(&std::path::PathBuf::from(&project.path), &project.name)
+        else {
+            return;
+        };
+        self.project_preview_open_path(readme);
     }
 
     fn project_preview_select_tab(&mut self, idx: usize) {
@@ -8399,5 +8448,49 @@ mod tests {
             "左侧(审阅)占 1/4 时,右侧(对话列表)该占 3/4,实得 {}",
             l.conversations_split
         );
+    }
+
+    // ---- README 自动生成 ---- //
+
+    /// 没有 README、没写描述:只生成一个"标题+空行"的最小文档,带项目名。
+    #[test]
+    fn readme_created_from_name_without_description() {
+        let dir = tempfile::tempdir().unwrap();
+        let created = ensure_project_readme(dir.path(), "我的项目").unwrap();
+        assert_eq!(created, dir.path().join("README.md"));
+        let body = std::fs::read_to_string(&created).unwrap();
+        assert!(body.starts_with("# 我的项目\n\n"), "实际: {body:?}");
+    }
+
+    /// 带有 `.dozer/description.md`:一级标题用项目名,正文接描述。
+    #[test]
+    fn readme_embeds_description_from_dozer_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::project_meta::write_description(dir.path(), "这是一段中文描述").unwrap();
+        let created = ensure_project_readme(dir.path(), "Demo").unwrap();
+        let body = std::fs::read_to_string(&created).unwrap();
+        assert_eq!(body, "# Demo\n\n这是一段中文描述\n");
+    }
+
+    /// 已存在 README:绝不重写、绝不覆盖用户已有内容。
+    #[test]
+    fn readme_exists_is_left_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("README.md");
+        std::fs::write(&existing, "用户手写的内容\n").unwrap();
+        assert_eq!(ensure_project_readme(dir.path(), "D"), None);
+        assert_eq!(
+            std::fs::read_to_string(&existing).unwrap(),
+            "用户手写的内容\n"
+        );
+    }
+
+    /// 目标是文件而非目录时的拒绝语义,等价于 repo 根不可写/不可用。
+    #[test]
+    fn readme_missing_on_unwritable_root_returns_none() {
+        let file_as_repo = tempfile::tempdir().unwrap();
+        let repo_path = file_as_repo.path().join("not_a_dir");
+        std::fs::write(&repo_path, "我是文件").unwrap();
+        assert_eq!(ensure_project_readme(&repo_path, "D"), None);
     }
 }
