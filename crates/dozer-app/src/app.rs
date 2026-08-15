@@ -1705,27 +1705,35 @@ pub(crate) fn restore_open_tabs(
     (order, active)
 }
 
-/// 项目信息面板切入时的 README 自动生成(纯函数,方便单测):项目根目录
-/// 已有 `README.md` 就**不碰**(返回 `None`);没有则用项目名当一级标题、
-/// `.dozer/description.md` 的描述(`load_description`,无描述则省略)生成一
-/// 份。成功创建返回 `Some(readme 路径)`,写入失败返回 `None`(绝不拿空文件
-/// 占预览,也绝不让面板切入失败)。
+/// 项目信息面板切入时的 README 保障(纯函数,方便单测):保证项目根目录有
+/// 一份可读的 `README.md`。已有就**原样保留不重写**(返回其路径);没有则
+/// 用项目名当一级标题、`.dozer/description.md` 的描述(`load_description`,
+/// 无描述则省略)生成一份再返回路径。
+///
+/// 只有 README 最终存在且可读时才返回 `Some(readme 路径)`;创建失败(目录
+/// 不可写等)返回 `None`——绝不拿一个空文件或半截文件去占预览,也绝不让面
+/// 板切入失败。
 ///
 /// 描述固定读磁盘权威来源,不用 `WorkspaceState.description` 缓存字段——
 /// 那可能滞后于磁盘,而 README 一旦生成就固化,必须用写入时的真实描述。
 fn ensure_project_readme(repo: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
     let readme = repo.join("README.md");
-    if readme.exists() {
-        return None;
+    if !readme.exists() {
+        let description = crate::project_meta::load_description(repo);
+        let mut content = format!("# {}\n\n", name);
+        if let Some(desc) = description {
+            content.push_str(&desc);
+            content.push('\n');
+        }
+        std::fs::write(&readme, content).ok()?;
     }
-    let description = crate::project_meta::load_description(repo);
-    let mut content = format!("# {}\n\n", name);
-    if let Some(desc) = description {
-        content.push_str(&desc);
-        content.push('\n');
+    // 已存在 → 跳过写入原样返回;刚生成 → 写入成功才走到这。最终都以"文件
+    // 确实可读"为准——存在但读不了(如权限)就回 `None`,不拿去打开。
+    if std::fs::read_to_string(&readme).is_ok() {
+        Some(readme)
+    } else {
+        None
     }
-    std::fs::write(&readme, content).ok()?;
-    Some(readme)
 }
 
 impl App {
@@ -4605,12 +4613,11 @@ impl App {
         });
     }
 
-    /// 项目信息面板切入时调用:若项目根目录没有 `README.md`,就用当前项目
-    /// 名 + 描述(`.dozer/description.md`,权威来源直读,不用可能过期的面板
-    /// 缓存字段)生成一份,并在右侧配套预览窗打开这份新生成的 README。
+    /// 项目信息面板切入时调用:确保项目根目录有一份 `README.md`(没有就按
+    /// 项目名 + 描述生成,已有则原样保留),然后**一律**在右侧配套预览窗打
+    /// 开这份 README(首次切进来就让它展示项目文档)。
     ///
-    /// 只有"本来没有、这次新生成"才自动打开;已存在 README 时既不重写也
-    /// 不抢占预览(用户可能正开着别的文件)。写失败时静默返回,不打开——
+    /// 打开/生成依赖同一份"可读"保障——README 创建失败或不可读时静默返回,
     /// 绝不拿一个空文件去占预览,也绝不让面板切入失败。
     fn ensure_project_readme_and_reveal(&mut self) {
         let Some(project) = self.active_workspace().and_then(|ws| ws.project.clone()) else {
@@ -8472,13 +8479,17 @@ mod tests {
         assert_eq!(body, "# Demo\n\n这是一段中文描述\n");
     }
 
-    /// 已存在 README:绝不重写、绝不覆盖用户已有内容。
+    /// 已存在 README:直接返回它的路径(送到预览窗去展示),绝不重写、绝不
+    /// 覆盖用户已有内容。
     #[test]
     fn readme_exists_is_left_untouched() {
         let dir = tempfile::tempdir().unwrap();
         let existing = dir.path().join("README.md");
         std::fs::write(&existing, "用户手写的内容\n").unwrap();
-        assert_eq!(ensure_project_readme(dir.path(), "D"), None);
+        assert_eq!(
+            ensure_project_readme(dir.path(), "D"),
+            Some(existing.clone())
+        );
         assert_eq!(
             std::fs::read_to_string(&existing).unwrap(),
             "用户手写的内容\n"
