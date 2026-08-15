@@ -70,7 +70,10 @@ pub enum IconKind {
     GitBranch,
     /// Todo 面板 rail 图标(Lucide list-todo)。
     ListTodo,
-    /// Todo 面板"进行中"分类 + EXECUTING 徽章(Lucide play)。
+    /// Todo 面板"进行中"分类 + EXECUTING 徽章(Lucide play)。分类图标统一
+    /// 换成 `CircleSmall` 后本变体暂无调用点,资源保留(YAGNI,不新增 filled
+    /// 变体),等以后需要单独强调"进行中"语义时复用。
+    #[allow(dead_code)]
     Play,
     /// 项目信息面板 rail 图标(Lucide briefcase)。
     Briefcase,

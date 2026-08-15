@@ -146,13 +146,12 @@ pub enum TodoFilter {
     Done,
 }
 
-/// Todo 面板右区的三种展示形态(对应截图顶部 列表 / 看板 / MARKDOWN 三
-/// 个 tab)。`List` 完整实现;`Kanban`/`Markdown` 当前为占位视图(见 design)。
+/// Todo 面板右区的两种展示形态(对应截图顶部 列表 / MARKDOWN 两个 tab)。
+/// `List` 完整实现;`Markdown` 为只读占位视图(见 design)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TodoViewMode {
     #[default]
     List,
-    Kanban,
     Markdown,
 }
 
@@ -572,7 +571,7 @@ pub fn update(
 /// "侧栏 + 内容区，中间一条可拖拽分隔线"两栏模式，不再是单个面板内部一个
 /// `row![sidebar, body]`)——调用方(`app.rs` 的 `LeftView::Todo` 分支)负责
 /// 拼 `row![sidebar_pane, divider_bar(Divider::TodoSplit, ..), content_pane]`。
-/// 左栏：面板头 + 分类导航。右栏：列表/看板/MARKDOWN 视图切换 tab + 视图
+/// 左栏：面板头 + 分类导航。右栏：列表/MARKDOWN 视图切换 tab + 视图
 /// 主体。
 #[allow(clippy::too_many_arguments)]
 pub fn view<'a>(
@@ -648,15 +647,13 @@ pub fn view<'a>(
 
     // ---- 右栏 pane：tab 段 + 视图主体 ----
     let tabs_bar = todo_view_tabs(ws_state.view_mode);
-    let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = match ws_state
-        .view_mode
-    {
-        TodoViewMode::List => todo_list_view(app_state, ws_state, project_id, &states, tabs),
-        TodoViewMode::Kanban => todo_kanban_view(app_state, ws_state, project_id, &states, tabs),
-        TodoViewMode::Markdown => todo_markdown_view(project_path),
-    };
+    let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        match ws_state.view_mode {
+            TodoViewMode::List => todo_list_view(app_state, ws_state, project_id, &states, tabs),
+            TodoViewMode::Markdown => todo_markdown_view(project_path),
+        };
     let content_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        container(column![tabs_bar, body].height(Length::Fill))
+        container(column![tabs_bar, crate::app::tab_divider(), body].height(Length::Fill))
             .width(content_width)
             .height(Length::Fill)
             .style(move |_t: &iced_widget::Theme| container::Style {
@@ -670,7 +667,7 @@ pub fn view<'a>(
 }
 
 /// 底部快速新建栏，结构对齐 `project.rs::project_footer_bar`(1px BORDER
-/// 分隔线 + `padding([6, 8])`)。List/Kanban 两视图共用。
+/// 分隔线 + `padding([6, 8])`)。列表视图使用。
 fn todo_footer_bar<'a>(
     add_draft: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -717,8 +714,8 @@ fn todo_footer_bar<'a>(
         .into()
 }
 
-/// 顶部搜索框，List/Kanban 两视图共用同一份 `ws_state.search` 状态——切
-/// tab 不清空搜索词(对应 spec"List/Kanban 共用同一份搜索状态"要求)。
+/// 顶部搜索框，列表视图使用的 `ws_state.search` 状态——切 tab 不清空搜索词
+/// (对应 spec"切换视图共用同一份搜索状态"要求)。
 fn todo_search_bar<'a>(
     search: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -818,82 +815,6 @@ fn todo_list_view<'a>(
     .into()
 }
 
-/// 看板视图主体：与 `todo_list_view` 共用同一份 `search`/`filter` 状态和
-/// `todo_footer_bar`，唯一区别是卡片排布方式——单列自适应换行网格(类 CSS
-/// flex-wrap，用 `iced_aw::widget::Wrap` 实现)而不是纵向单列堆叠。不做
-/// 跨列拖拽(非目标，见 spec)。
-fn todo_kanban_view<'a>(
-    app_state: &'a AppState,
-    ws_state: &'a WorkspaceState,
-    project_id: i64,
-    states: &[TodoState],
-    tabs: &[SessionTabSummary],
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let visible_idx = filter_todos(&ws_state.items, states, ws_state.filter, &ws_state.search);
-
-    let existing_tabs: Vec<(&str, String)> = tabs
-        .iter()
-        .filter(|t| t.alive)
-        .map(|t| (t.session_id.as_str(), t.title.clone()))
-        .collect();
-
-    let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        if visible_idx.is_empty() {
-            container(
-                text("没有匹配的任务")
-                    .size(theme::font::body())
-                    .color(theme::color::DIM),
-            )
-            .padding([20, 20])
-            .into()
-        } else {
-            let mut cards = Vec::with_capacity(visible_idx.len());
-            for (display_no, &idx) in visible_idx.iter().enumerate() {
-                let item = &ws_state.items[idx];
-                let key = todo_line_key(&item.text);
-                let meta = app_state.meta_for(project_id, key);
-                let dispatch = meta.and_then(|m| m.dispatch.as_ref());
-                // 计划日期编辑态跟列表视图共用同一个 ws_state.editing_plan_date
-                // 字段——看板也要在对应卡片这里换成编辑行，否则切到列表视图
-                // 才会看到编辑框，看板本身点了日期徽章却什么反应都没有。
-                let content: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-                    if let Some((editing_idx, draft)) = &ws_state.editing_plan_date
-                        && *editing_idx == idx
-                    {
-                        todo_plan_date_edit_row(item, draft)
-                    } else {
-                        todo_card(
-                            display_no + 1,
-                            idx,
-                            item,
-                            states[idx],
-                            meta,
-                            dispatch,
-                            ws_state.selected_row == Some(idx),
-                            ws_state.dispatch_open == Some(idx),
-                            ws_state.state_pill_open == Some(idx),
-                            &existing_tabs,
-                        )
-                    };
-                let card = container(content).width(Length::Fixed(280.0));
-                cards.push(card.into());
-            }
-            iced_aw::widget::Wrap::with_elements(cards)
-                .spacing(12.0)
-                .line_spacing(12.0)
-                .padding([12, 20])
-                .into()
-        };
-
-    column![
-        todo_search_bar(&ws_state.search),
-        scrollable(body).height(Length::Fill),
-        todo_footer_bar(&ws_state.add_draft),
-    ]
-    .height(Length::Fill)
-    .into()
-}
-
 /// MARKDOWN 占位：只读展示 `.dozer/todo.md` 原始源码。
 fn todo_markdown_view<'a>(
     project_path: Option<&Path>,
@@ -912,7 +833,7 @@ fn todo_markdown_view<'a>(
     scrollable(body).height(Length::Fill).into()
 }
 
-/// 统一卡片组件：List/Kanban 共用同一套边框卡片视觉，取代原来的
+/// 统一卡片组件：列表视图使用的边框卡片视觉，取代原来的
 /// `todo_row`(扁平高亮行)。结构自上而下：编号 + 日期徽章 → checkbox +
 /// 任务文字 → 派发按钮(仅待办未派发时) + 状态 pill。选中态左侧加 3px
 /// 金色竖条(对齐原 `todo_row` 的 `accent` 处理)。
@@ -1276,10 +1197,10 @@ fn todo_category_button<'a>(
     current: TodoFilter,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let (icon, label) = match filter {
-        TodoFilter::All => (icons::IconKind::ListTodo, "全部任务"),
-        TodoFilter::Pending => (icons::IconKind::SquarePlus, "待办任务"),
-        TodoFilter::InProgress => (icons::IconKind::Play, "进行中任务"),
-        TodoFilter::Done => (icons::IconKind::BadgeCheck, "已完成任务"),
+        TodoFilter::All => (icons::IconKind::CircleSmall, "全部任务"),
+        TodoFilter::Pending => (icons::IconKind::CircleSmall, "待办任务"),
+        TodoFilter::InProgress => (icons::IconKind::CircleSmall, "进行中任务"),
+        TodoFilter::Done => (icons::IconKind::CircleSmall, "已完成任务"),
     };
     let active = filter == current;
     let fg = if active {
@@ -1337,7 +1258,7 @@ fn todo_category_button<'a>(
     .into()
 }
 
-/// 右区顶部 tab 段：列表 / 看板 / MARKDOWN。视觉对齐全应用统一的"标准 tab"
+/// 右区顶部 tab 段：列表 / MARKDOWN。视觉对齐全应用统一的"标准 tab"
 /// 样式(`app::panel_tab` 的选中态：`CARD` 底 + `BORDER` 1px 描边 + 6 圆角，
 /// 项目页签/终端会话 tab 都是这一套)，不再是这个面板自己发明的下划线
 /// 样式。点击 → `ViewModeSet`。
@@ -1349,12 +1270,6 @@ fn todo_view_tabs<'a>(
             icons::IconKind::ListTodo,
             "列表",
             TodoViewMode::List,
-            current
-        ),
-        todo_tab(
-            icons::IconKind::LayoutList,
-            "看板",
-            TodoViewMode::Kanban,
             current
         ),
         todo_tab(

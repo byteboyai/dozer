@@ -320,7 +320,7 @@ pub struct PanelDims {
     pub project_split: f32,
     /// SSH 面板"主机列表 | 内嵌终端"两栏的分屏比例,镜像 `project_split`。
     pub ssh_split: f32,
-    /// Todo 面板配对:分类导航占左面板区宽度的比例，列表/看板/MARKDOWN 内容
+    /// Todo 面板配对:分类导航占左面板区宽度的比例，列表/MARKDOWN 内容
     /// (右配对)拿剩下的。
     pub todo_split: f32,
     /// Agent配对:Agent列表占右面板区宽度的比例，终端拿剩下的。
@@ -442,7 +442,7 @@ pub enum Divider {
     ProjectSplit,
     /// SSH 面板内部的分隔线:左边主机列表、右边内嵌终端。
     SshSplit,
-    /// Todo 面板内部的配对分隔线:左边分类导航、右边列表/看板/MARKDOWN 内容。
+    /// Todo 面板内部的配对分隔线:左边分类导航、右边列表/MARKDOWN 内容。
     TodoSplit,
     RightPairSplit,
 }
@@ -2648,6 +2648,16 @@ impl App {
             target,
             index,
         });
+        // 右击即选中该行:从对应链接列表取下标项路径,标记到
+        // `project_panel.selected_link`(参考文件树 `ContextMenuOpen` 同时选中)。
+        if let Some(path) = self
+            .active_workspace()
+            .and_then(|ws| ws.project_panel.link_path_at(target, index))
+        {
+            self.with_focused_project(|ws, _io| {
+                ws.project_panel.set_selected_link(path);
+            });
+        }
     }
 
     /// Agent 选择菜单是否打开(main.rs Esc 键路由用)。
@@ -4645,6 +4655,7 @@ impl App {
                 return;
             }
             ws.project_preview_error = None;
+            ws.project_panel.set_selected_link(path.clone());
             ws.allowed_files
                 .lock()
                 .expect("allowed_files 锁")

@@ -33,6 +33,11 @@ pub struct WorkspaceState {
     links: links::LinksState,
     /// 已展开状态目录 → 其子项列表(就地展开/收起)。
     expanded_link_dirs: std::collections::HashMap<PathBuf, Vec<links::DirRow>>,
+    /// 链接区(项目文档 / Agent 记忆)当前选中项路径。单击文件(`OpenLink`)/
+    /// 目录(`LinkDirToggle`)/展开子项、右击行(`LinkContextMenu`)都会选中,
+    /// 用来整行高亮——参考文件树 `files::WorkspaceState::tree_selected`。
+    /// `None`=无选中(新开项目默认)。
+    selected_link: Option<PathBuf>,
     error: Option<String>,
 }
 
@@ -66,6 +71,19 @@ impl WorkspaceState {
     /// 见 `App::blur_inputs`);`None` 表示未处于编辑态,无需处理。
     pub fn take_name_edit(&mut self) -> Option<String> {
         self.name_editing.take()
+    }
+
+    /// 供内核 `project_preview_open_path`/`project_link_context_menu` 调用——
+    /// 打开链接预览 / 打开删除右键菜单的同时把该路径标记为「选中」行(参考
+    /// 文件树 `files::WorkspaceState::set_tree_selected`)。
+    pub fn set_selected_link(&mut self, path: PathBuf) {
+        self.selected_link = Some(path);
+    }
+
+    /// 供内核 `project_link_context_menu` 解析右击行的路径(按区 + 下标),
+    /// 用于把该行标记为「选中」。返回 `None` 表示下标越界(菜单本就不该弹)。
+    pub fn link_path_at(&self, target: links::LinkTarget, index: usize) -> Option<PathBuf> {
+        self.links.list(target).get(index).map(|e| e.path.clone())
     }
 
     /// 供内核 `Workspace::blur_inputs` 调用——失焦时把当前编辑态直接写盘
@@ -129,6 +147,15 @@ pub enum Message {
     },
     /// 内核拦截处理,见 `files::Message::OpenFile` 文档同款写法。
     OpenLink(PathBuf),
+    /// 仅选中(不展开、不打开):用于「项目文档 / Agent 记忆」里已展开目录的
+    /// 子目录项——它们是只读单层展示,单击只高亮、不触发二次展开(展开已在
+    /// 父级目录 `LinkDirToggle` 完成)。进 `update` 直接写 `selected_link`。
+    LinkSelect {
+        /// 保留在签名里与 `LinkDirToggle` 对齐;本期选中只按 `path`,未分流。
+        #[allow(dead_code)]
+        target: links::LinkTarget,
+        path: PathBuf,
+    },
     /// 单颗"＋"按钮:由内核 rfd 弹 OS 文件浏览器(根目录在项目根),选中的
     /// 文件/目录由内核判 `is_dir()` 定 `LinkKind`,再回送 `LinkAdd`。
     Pick(links::LinkTarget),
@@ -267,10 +294,14 @@ pub fn update(
             }
         }
         Message::LinkDirToggle { path, .. } => {
+            ws_state.selected_link = Some(path.clone());
             if ws_state.expanded_link_dirs.remove(&path).is_none() {
                 let rows = links::read_dir_row(&path);
                 ws_state.expanded_link_dirs.insert(path, rows);
             }
+        }
+        Message::LinkSelect { path, .. } => {
+            ws_state.selected_link = Some(path);
         }
         Message::OpenLink(_) => {
             unreachable!("由内核拦截处理,见 files::Message::OpenFile 文档")
@@ -342,7 +373,11 @@ pub fn view<'a>(
             .into();
     };
 
-    let mut content = column![].spacing(12).padding(14).width(Length::Fill).height(Length::Fill);
+    let mut content = column![]
+        .spacing(12)
+        .padding(14)
+        .width(Length::Fill)
+        .height(Length::Fill);
 
     content = content.push(crate::homespace::home_panel_head(
         icons::IconKind::Briefcase,
@@ -532,12 +567,14 @@ pub fn view<'a>(
         links::LinkTarget::Docs,
         &ws_state.links,
         &ws_state.expanded_link_dirs,
+        &ws_state.selected_link,
     ));
     content = content.push(links_section(
         "Agent 记忆",
         links::LinkTarget::Memory,
         &ws_state.links,
         &ws_state.expanded_link_dirs,
+        &ws_state.selected_link,
     ));
 
     if let Some(err) = &ws_state.error {
@@ -548,11 +585,7 @@ pub fn view<'a>(
         );
     }
 
-    let body = column![
-        content,
-        project_footer_bar(),
-    ]
-    .spacing(0);
+    let body = column![content, project_footer_bar(),].spacing(0);
 
     container(body)
         .width(width)
@@ -571,8 +604,7 @@ pub fn view<'a>(
 /// 1px `BORDER` 分隔线 + `padding([6, 8])` 容器。当前放「修复项目 / 删除项目」
 /// 两个并排圆角按钮,行为仅为 UI 占位(`RepairProject` / `DeleteProject`),
 /// 实际逻辑后续接入。
-fn project_footer_bar(
-) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+fn project_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let repair = button(
         text("修复项目")
             .size(theme::font::label())
@@ -654,6 +686,7 @@ fn links_section<'a>(
     target: links::LinkTarget,
     links_state: &'a links::LinksState,
     expanded: &'a std::collections::HashMap<PathBuf, Vec<links::DirRow>>,
+    selected_link: &'a Option<PathBuf>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![].spacing(6);
     col = col.push(
@@ -703,6 +736,7 @@ fn links_section<'a>(
             Message::OpenLink(entry.path.clone())
         };
         // 删除改由右键菜单(`LinkContextMenu`)触发,行内不再挂 × 按钮。
+        let is_selected = selected_link.as_deref() == Some(entry.path.as_path());
         let row_btn = button(
             row![
                 icons::view(row_icon, crate::theme::icon_size::row(), theme::color::DIM),
@@ -714,8 +748,12 @@ fn links_section<'a>(
             .align_y(iced_widget::core::Alignment::Center),
         )
         .on_press(click_msg)
-        .style(|_t, _s| iced_widget::button::Style {
-            background: None,
+        .style(move |_t, _s| iced_widget::button::Style {
+            background: if is_selected {
+                Some(theme::color::CARD.into())
+            } else {
+                None
+            },
             text_color: theme::color::BODY,
             ..iced_widget::button::Style::default()
         });
@@ -726,7 +764,19 @@ fn links_section<'a>(
             && let Some(rows) = expanded.get(&entry.path)
         {
             for row_entry in rows {
-                col = col.push(
+                // 展开子项同样可点选(参考文件树每行都可选中):文件→打开预览,
+                // 目录→仅选中(只读单层,不二次展开);单击即高亮。
+                let child_path = row_entry.path.clone();
+                let child_click = if row_entry.is_dir {
+                    Message::LinkSelect {
+                        target,
+                        path: child_path.clone(),
+                    }
+                } else {
+                    Message::OpenLink(child_path.clone())
+                };
+                let child_is_selected = selected_link.as_deref() == Some(child_path.as_path());
+                let child_btn = button(
                     row![
                         iced_widget::space::Space::new().width(Length::Fixed(20.0)),
                         icons::view(
@@ -744,7 +794,18 @@ fn links_section<'a>(
                     ]
                     .spacing(6)
                     .align_y(iced_widget::core::Alignment::Center),
-                );
+                )
+                .on_press(child_click)
+                .style(move |_t, _s| iced_widget::button::Style {
+                    background: if child_is_selected {
+                        Some(theme::color::CARD.into())
+                    } else {
+                        None
+                    },
+                    text_color: theme::color::DIM,
+                    ..iced_widget::button::Style::default()
+                });
+                col = col.push(child_btn);
             }
         }
     }
@@ -1148,5 +1209,51 @@ mod tests {
             |_| {},
         );
         assert!(!ws.expanded_link_dirs.contains_key(&docs_path));
+    }
+
+    #[test]
+    fn link_dir_toggle_selects_the_entry() {
+        let mut ws = new_ws();
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repo.path().join("docs")).unwrap();
+        let docs_path = repo.path().join("docs");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::LinkDirToggle {
+                target: links::LinkTarget::Docs,
+                path: docs_path.clone(),
+            },
+            1,
+            "名字",
+            repo.path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert_eq!(ws.selected_link.as_deref(), Some(docs_path.as_path()));
+    }
+
+    #[test]
+    fn link_select_only_marks_selection_without_expanding() {
+        let mut ws = new_ws();
+        let repo = tempfile::tempdir().unwrap();
+        let child = repo.path().join("docs").join("sub");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::LinkSelect {
+                target: links::LinkTarget::Docs,
+                path: child.clone(),
+            },
+            1,
+            "名字",
+            repo.path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert_eq!(ws.selected_link.as_deref(), Some(child.as_path()));
+        assert!(ws.expanded_link_dirs.is_empty());
     }
 }
