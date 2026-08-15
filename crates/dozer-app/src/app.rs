@@ -3444,7 +3444,12 @@ impl App {
                 self.update(Message::ProjectPreviewOpenPath(path));
             }
             Message::Project(project::Message::Pick(target)) => {
-                self.update(Message::ProjectLinkPick(target));
+                // 文件/目录选择器依赖 macOS 主线程原生能力(rfd/NSOpenPanel 模态,
+                // 见 main.rs `pick_file_or_dir`),必须由 main.rs 的 winit 事件循环
+                // 里 `dispatch` 拦截同步执行。这里只用代理把这条消息回灌回事件循环
+                // ——不能 `self.update(Message::ProjectLinkPick(..))` 直调:那是同步
+                // 递归,只会命中 `App::update` 里那格 no-op,绝不会触发文件选择弹窗。
+                let _ = self.proxy.send_event(Message::ProjectLinkPick(target));
             }
             Message::Project(project::Message::LinkContextMenu { target, index }) => {
                 self.project_link_context_menu(target, index);
