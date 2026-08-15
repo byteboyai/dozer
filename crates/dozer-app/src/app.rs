@@ -3455,12 +3455,39 @@ impl App {
                 self.project_link_context_menu(target, index);
             }
             Message::Project(project::Message::LinkRemove { target, index }) => {
-                // 删除来自行内右键菜单:落 `LinkRemove` 时把菜单浮层一并收起。
+                // 删除来自行内右键菜单:落 `LinkRemove` 时把菜单浮层一并收起,
+                // 然后委托 `project::update` 真正执行删除(含越界校验与保存失败
+                // 回滚,见 `project.rs` 的 `Message::LinkRemove`)。不能
+                // `self.update(同一条 LinkRemove)` 直调——那会命中本分支自身
+                // 再次匹配 `LinkRemove`,无限递归爆栈。
                 self.project_link_menu = None;
-                self.update(Message::Project(project::Message::LinkRemove {
-                    target,
-                    index,
-                }));
+                let Some(project_id) = self.active_project_id else {
+                    return;
+                };
+                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+                    return;
+                };
+                let Some(project) = ws.project.as_ref() else {
+                    return;
+                };
+                let current_name = project.name.clone();
+                let repo_path = std::path::PathBuf::from(&project.path);
+                let client = self.client.clone();
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                let emit = move |m| {
+                    let _ = proxy.send_event(Message::Project(m));
+                };
+                project::update(
+                    &mut ws.project_panel,
+                    project::Message::LinkRemove { target, index },
+                    project_id,
+                    &current_name,
+                    &repo_path,
+                    &client,
+                    &handle,
+                    emit,
+                );
             }
             Message::Project(msg) => {
                 let Some(project_id) = self.active_project_id else {
