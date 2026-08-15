@@ -1204,6 +1204,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             ) {
                 *pending_focus = Some(FocusIntent::Browser);
                 *current_focus = FocusIntent::Browser;
+                // 没经过鼠标点击的 `blur_inputs()`,原生预览编辑器不会自己
+                // 让出焦点——见 `App::blur_preview_editors` 的说明。
+                app.blur_preview_editors();
             } else if matches!(
                 message,
                 Message::SelectTab(_)
@@ -1212,6 +1215,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             ) {
                 *pending_focus = Some(FocusIntent::Terminal);
                 *current_focus = FocusIntent::Terminal;
+                app.blur_preview_editors();
             } else if matches!(message, Message::WebViewFocused) {
                 // 子 webview 上的 mousedown winit 收不到,JS 经 IPC 发来这条
                 // 消息——按当前 `left_view` 判断归预览池还是浏览器池。
@@ -1223,6 +1227,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 };
                 *pending_focus = Some(intent);
                 *current_focus = intent;
+                // `WebViewFocused` 恒是某个 wry webview 收到了焦点(原生
+                // `iced-code-editor` tab 走的是另一条渲染路径,不会发这条
+                // 消息)——不管 `intent` 落在 Preview 还是 Browser,收到焦点
+                // 的都不是原生编辑器,它该让出焦点。
+                app.blur_preview_editors();
             }
             match message {
                 // `iced-code-editor` 的内部消息:编辑器产生的 `iced::Task`(剪贴板

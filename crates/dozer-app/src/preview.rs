@@ -292,6 +292,20 @@ impl PreviewPane {
             .and_then(|t| t.editor.as_mut())
     }
 
+    /// 点击预览列以外的地方时调用:`iced-code-editor` 不会自己在别处获得
+    /// 焦点时让出焦点(vendor README 明文要求宿主显式调用
+    /// `lose_focus()`),不叫的话光标/闪烁/IME 状态会一直赖在最后一个打开
+    /// 的 tab 上,哪怕键盘输入其实已经转到了终端/其它输入框。所有 tab 的
+    /// editor 全部无条件调用一遍——多数本来就没在 focus(`CodeEditor` 内部
+    /// 靠一个进程级 `FOCUSED_EDITOR_ID` 判断"我是不是那一个",`lose_focus`
+    /// 对没在 focus 的实例是没有可观察副作用的空操作),不用先判断哪个才是
+    /// 真正持有焦点的那个。
+    pub fn blur_all_editors(&mut self) {
+        for tab in self.tabs.iter_mut().filter_map(|t| t.editor.as_mut()) {
+            tab.lose_focus();
+        }
+    }
+
     /// 编辑保存后调用:按 `PreviewTab.id` 找到对应 tab,推进 reload。原生
     /// (有 `editor`)tab 直接读盘重建编辑器实例(`bump_reload` 路径),wry
     /// tab 走 `reload_nonce` 计数(驱动 `desired_webviews()` 换 URL)。未知
@@ -609,6 +623,40 @@ mod tests {
         );
 
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn blur_all_editors_clears_canvas_focus_on_native_tabs() {
+        // vendor README:`iced-code-editor` 不会自己在别处获得焦点时让出
+        // 焦点,必须宿主显式调 `lose_focus()`——这里验证 `blur_all_editors`
+        // 真的调用到了,而不是接口对了但没接线。
+        let path =
+            std::env::temp_dir().join(format!("preview_blur_test_{}.rs", std::process::id()));
+        std::fs::write(&path, "fn main() {}").unwrap();
+
+        let mut p = PreviewPane::default();
+        p.open_path(path.clone());
+        assert!(
+            p.tabs()[0].editor.as_ref().unwrap().has_canvas_focus(),
+            "打开原生 tab 时已 dispatch CanvasFocusGained,应处于 focus 态"
+        );
+
+        p.blur_all_editors();
+        assert!(
+            !p.tabs()[0].editor.as_ref().unwrap().has_canvas_focus(),
+            "点击预览列以外应让原生 editor 失去 canvas focus"
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn blur_all_editors_is_noop_on_webview_tabs() {
+        // .png 走 wry,没有 editor——确认对这类 tab 是安全的空操作,不 panic。
+        let mut p = PreviewPane::default();
+        p.open_path(PathBuf::from("/tmp/blur_test.png"));
+        assert!(p.tabs()[0].editor.is_none());
+        p.blur_all_editors(); // 不应 panic
     }
 
     #[test]

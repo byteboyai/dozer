@@ -1823,6 +1823,24 @@ impl Workspace {
             self.project_panel
                 .submit_description_edit_on_blur(std::path::Path::new(&project.path));
         }
+        self.blur_preview_editors();
+    }
+
+    /// `iced-code-editor` 不会自己在别处获得焦点时让出焦点(vendor README
+    /// 明文要求宿主显式调用 `lose_focus()`),否则光标闪烁/IME 状态会一直
+    /// 赖在最后打开的编辑器上,即使键盘输入其实已经转到了终端/其它输入框。
+    /// 两个独立 `PreviewPane`(Files 预览、Project 面板配对预览)+ 编辑
+    /// 弹层各自的 editor 都要清。独立于 `blur_inputs` 之外单独暴露:
+    /// `main.rs` 里还有一条不经过鼠标点击、纯靠消息把 `current_focus` 拨
+    /// 离 `FocusIntent::Preview` 的路径(切终端 tab/新会话落成/选中
+    /// agent),那条路径不该顺带触发 `blur_inputs` 里其它自绘输入的失焦
+    /// 逻辑(地址栏取消/树编辑取消等语义不搭)。
+    pub fn blur_preview_editors(&mut self) {
+        self.preview.blur_all_editors();
+        self.project_preview.blur_all_editors();
+        if let Some(session) = self.edit_session.as_mut() {
+            session.editor.lose_focus();
+        }
     }
 
     /// 协议闭包共享的文件白名单句柄.

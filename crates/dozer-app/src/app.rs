@@ -2393,6 +2393,16 @@ impl App {
         }
     }
 
+    /// 键盘焦点被消息(非鼠标点击)拨离预览列时调用——`main.rs` 里切终端
+    /// tab/新会话落成/选中 agent 都走这条路径,不经过 `WindowEvent::
+    /// MouseInput` 那次 `blur_inputs()`,原生预览编辑器不会自己让出焦点
+    /// （见 `Workspace::blur_preview_editors` 的说明），得单独补一次。
+    pub fn blur_preview_editors(&mut self) {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.blur_preview_editors();
+        }
+    }
+
     /// 把几何状态(宽度/分割比例/窗口尺寸,**不含**左右视图选择与收起态——
     /// 那些按项目分,见 `panel_layouts`)写盘。图标切换/收起要立即持久化几何,
     /// 不能只靠 `ColumnDragEnd` 顺带存(用户可能从没拖过分隔线)。

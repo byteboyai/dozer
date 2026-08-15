@@ -1627,6 +1627,28 @@ impl CodeEditor {
         FOCUSED_EDITOR_ID.load(Ordering::Relaxed) == self.editor_id
     }
 
+    /// Checks if this editor's canvas currently has input focus.
+    ///
+    /// Unlike [`is_focused`](Self::is_focused) (which only checks whether
+    /// this instance is the process-wide "active" editor id), this reflects
+    /// the actual cursor-blink/keyboard-capture state toggled by
+    /// [`lose_focus`](Self::lose_focus) and canvas click handling. Vendored
+    /// by Dozer specifically so a host can assert `lose_focus()` actually
+    /// took effect (there was previously no public way to observe this).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.lose_focus();
+    /// assert!(!editor.has_canvas_focus());
+    /// ```
+    pub fn has_canvas_focus(&self) -> bool {
+        self.has_canvas_focus
+    }
+
     /// Resets the editor with new content.
     ///
     /// This method replaces the buffer content and resets all editor state
