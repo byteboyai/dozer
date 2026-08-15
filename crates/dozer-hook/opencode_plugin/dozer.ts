@@ -22,17 +22,16 @@ import {
   onSessionDeleted,
   type SessionState,
   type TranslatedEvent,
-} from "./dozer-lib/dozer-translate"
+} from "./dozer-translate"
 
 const HOOK_BIN_PLACEHOLDER = "__DOZER_HOOK_BIN_PATH__"
 const hookBin = process.env.DOZER_HOOK_BIN || HOOK_BIN_PLACEHOLDER
 
-// 已知局限（design §5.3"同一 opencode 进程内多 session 切换的精确区分"
-// 已记在案的同一类缺口的具体表现）：这个 Map 只在 `session.created` 分
-// 支里填充。用户如果恢复（resume）一个不是在本 opencode 进程里新建的
-// 会话，所有其它事件分支都会因为 map miss 直接 return，导致该会话整个
-// 生命周期一条事件都不转发给 dozer-hook——不是"切换不精确"，是完全不可
-// 见。修这个需要设计恢复态 cwd 的方案，不在这版范围内，先留注释别忘。
+// `session.created` 是这个 Map 的常规填充路径，但用户 resume/continue
+// 一个不是在本 opencode 进程里新建的会话时不会有 `session.created`——这
+// 种情况下 `resolveState`（见下）会用 `client.session.get` 兜底补建，
+// 不再让整段会话生命周期不可见（history：这里曾经只信 session.created，
+// 见 git blame）。
 const sessions = new Map<string, SessionState>()
 
 // sessionID -> 已知的"用户消息" messageID 集合。`message.part.updated`
@@ -53,6 +52,31 @@ function stateFor(sessionID: string, cwd: string): SessionState {
   return s
 }
 
+// 给非 `session.created` 分支用的兜底查找：Map 里没有就查一次 opencode
+// 的会话详情，补建 state。`client.session.get` 返回的 `Session` 跟
+// `session.created` 事件里的 `info` 是同一个类型（两者共享
+// `@opencode-ai/sdk` 的 `Session`），所以 `parentID` 过滤规则可以照抄
+// `session.created` 分支——子/subagent 会话依然绝不能被建 state（否则
+// 它自己的 session.idle 会被误当根会话的 Stop 转发出去，见文件顶部
+// `session.created` 分支的同款注释）。会话已被删除/查询失败：跟历史行为
+// 一致，静默丢弃，不是这次要补的缺口。
+async function resolveState(
+  client: { session: { get: (opts: { path: { id: string } }) => Promise<{ data?: { directory: string; parentID?: string } }> } },
+  sessionID: string | undefined
+): Promise<SessionState | undefined> {
+  if (!sessionID) return undefined
+  const existing = sessions.get(sessionID)
+  if (existing) return existing
+  try {
+    const res = await client.session.get({ path: { id: sessionID } })
+    const info = res?.data
+    if (!info || info.parentID) return undefined
+    return stateFor(sessionID, info.directory)
+  } catch {
+    return undefined
+  }
+}
+
 // `$` 是 opencode 插件传入的 Bun shell 标签函数，故意不精确标类型——
 // 这个文件不接入 tsc 检查（见 plan Global Constraints），标注是给人看的
 // 文档，不是类型安全保证。
@@ -70,7 +94,7 @@ async function emit($: any, translated: TranslatedEvent | null): Promise<void> {
   await $`echo ${stdin} | ${hookBin} opencode ${translated.event}`.quiet()
 }
 
-export const DozerPlugin: Plugin = async ({ $ }) => {
+export const DozerPlugin: Plugin = async ({ $, client }) => {
   return {
     event: async ({ event }: { event: { type: string; properties?: Record<string, any> } }) => {
       try {
@@ -89,7 +113,7 @@ export const DozerPlugin: Plugin = async ({ $ }) => {
           }
           case "session.idle": {
             const sessionID = event.properties?.sessionID
-            const state = sessionID ? sessions.get(sessionID) : undefined
+            const state = await resolveState(client, sessionID)
             if (!state) return
             await emit($, onSessionIdle(state))
             return
@@ -99,6 +123,10 @@ export const DozerPlugin: Plugin = async ({ $ }) => {
             // 是 `{ info: Session }`，sessionID 走 `info.id`；同时保留对
             // 顶层 `sessionID` 的兜底，防止运行时/SDK 版本差异。
             const sessionID = event.properties?.info?.id ?? event.properties?.sessionID
+            // 这个分支不能用 `resolveState` 兜底：会话此刻已经被删了，
+            // `client.session.get` 大概率打空（404），永远建不出 state。
+            // 一个从未被本进程见过就已经删除的会话，本来就没有意义可发
+            // SessionEnd——跟历史行为一致，静默丢弃。
             const state = sessionID ? sessions.get(sessionID) : undefined
             if (!state) return
             await emit($, onSessionDeleted(state))
@@ -111,7 +139,7 @@ export const DozerPlugin: Plugin = async ({ $ }) => {
             // 同上：`part.updated` 的 properties 实测是 `{ part, delta?
             // }`，sessionID 走 `part.sessionID`；顶层 `sessionID` 兜底。
             const sessionID = part?.sessionID ?? event.properties?.sessionID
-            const state = sessionID ? sessions.get(sessionID) : undefined
+            const state = await resolveState(client, sessionID)
             if (!state || !part) return
             if (part.type === "tool") {
               await emit($, onToolPartUpdated(state, part))
@@ -162,7 +190,7 @@ export const DozerPlugin: Plugin = async ({ $ }) => {
           }
           ids.add(messageID)
         }
-        const state = sessions.get(sessionID)
+        const state = await resolveState(client, sessionID)
         if (!state) return
         await emit($, onUserMessage(state, output.parts ?? []))
       } catch {

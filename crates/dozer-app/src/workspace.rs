@@ -1310,8 +1310,15 @@ impl Workspace {
 
         let client = io.client.clone();
         let proxy = io.proxy.clone();
+        let hook_agent = match launch {
+            PickerLaunch::Agent(Some(agent)) => Some(agent),
+            _ => None,
+        };
 
         let jh = io.handle.spawn(async move {
+            if let Some(agent) = hook_agent {
+                let _ = tokio::task::spawn_blocking(move || ensure_hook_installed(agent)).await;
+            }
             let info = match client
                 .create("shell", &shell, &[], &cwd, cols, rows, project_id)
                 .await
@@ -2928,6 +2935,54 @@ pub(crate) fn agent_cli_command(agent: AgentKind) -> Option<&'static str> {
     }
 }
 
+/// 已接入 `dozer-hook` 安装器的 agent 集合。刻意穷尽 match 而不是拿
+/// `agent.label()` 当 catch-all 参数：`install::settings_path_for` 对未识别
+/// 的 agent 名一律落回 Claude 的 `settings.json`路径，如果不显式排除
+/// Kilo/V8agent(纯 GUI 占位，没有真实 hook 支持)，误调用会把
+/// "kilo"/"v8agent" 的 hook 命令写进 Claude 的 settings.json，顶掉真正的
+/// claude hook 条目。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HookInstallTarget {
+    Settings,
+    Opencode,
+}
+
+pub(crate) fn hook_install_target(agent: AgentKind) -> Option<HookInstallTarget> {
+    match agent {
+        AgentKind::Claude | AgentKind::Codebuddy | AgentKind::Codex | AgentKind::Qoder => {
+            Some(HookInstallTarget::Settings)
+        }
+        AgentKind::Opencode => Some(HookInstallTarget::Opencode),
+        AgentKind::Unknown | AgentKind::Kilo | AgentKind::V8agent => None,
+    }
+}
+
+/// 新开 agent 会话前静默注册该 agent 的 hook（幂等、恒静默——同
+/// `dozer-hook install` 自身"绝不因失败拖慢/打断会话"的错误处理哲学）。
+/// 在此之前 hook 注册是一步用户必须自己发现并手动执行的 CLI 命令
+/// （`dozer-hook install <agent>`），Claude 之外的 agent 几乎没人知道要
+/// 跑它，于是 Agent 面板里 name/status 永远停在 `Unknown`/`Idle`。阻塞
+/// 文件 I/O，调用方须包一层 `spawn_blocking`。
+fn ensure_hook_installed(agent: AgentKind) {
+    match hook_install_target(agent) {
+        Some(HookInstallTarget::Settings) => {
+            let label = agent.label();
+            let _ = dozer_hook::install::run_at(
+                &dozer_hook::install::settings_path_for(label),
+                label,
+                true,
+            );
+        }
+        Some(HookInstallTarget::Opencode) => {
+            let _ = dozer_hook::opencode_install::run_at(
+                &dozer_hook::opencode_install::plugins_dir(),
+                true,
+            );
+        }
+        None => {}
+    }
+}
+
 /// picker 选择项 → attach 成功后自动键入 PTY 的初始命令。`Agent(Some(a))`
 /// 复用 `agent_cli_command`(键入 agent CLI);`Agent(None)` 不键入(纯 Shell);
 /// `Git` 键入 `git status`——新开的 shell 已在项目根,直接看仓库状态。
@@ -3607,6 +3662,81 @@ mod tests {
             picker_launch_command(PickerLaunch::Git),
             Some("git status".to_string())
         );
+    }
+
+    #[test]
+    fn hook_install_target_covers_only_agents_wired_up_in_dozer_hook() {
+        // Claude/CodeBuddy/Codex/Qoder 都走 `install::run_at` 的 JSON settings
+        // 补丁机制。
+        for agent in [
+            AgentKind::Claude,
+            AgentKind::Codebuddy,
+            AgentKind::Codex,
+            AgentKind::Qoder,
+        ] {
+            assert_eq!(
+                hook_install_target(agent),
+                Some(HookInstallTarget::Settings),
+                "{agent:?}"
+            );
+        }
+        assert_eq!(
+            hook_install_target(AgentKind::Opencode),
+            Some(HookInstallTarget::Opencode)
+        );
+        // Kilo/V8agent 在 `dozer-hook::install::settings_path_for` 里没有专属
+        // 分支，会落回 Claude 的 settings.json 路径——绝不能对它们调用安装
+        // 逻辑，否则会把 "kilo"/"v8agent" 的 hook 命令误写进 Claude 的配置，
+        // 顶掉真正的 claude hook 条目。Unknown 同理，从不该触发安装。
+        for agent in [AgentKind::Kilo, AgentKind::V8agent, AgentKind::Unknown] {
+            assert_eq!(hook_install_target(agent), None, "{agent:?}");
+        }
+    }
+
+    #[test]
+    fn ensure_hook_installed_writes_codebuddy_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        unsafe { std::env::set_var("DOZER_CODEBUDDY_SETTINGS", path.to_str().unwrap()) };
+        ensure_hook_installed(AgentKind::Codebuddy);
+        unsafe { std::env::remove_var("DOZER_CODEBUDDY_SETTINGS") };
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let cmd = root["hooks"]["Stop"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(cmd.contains(" codebuddy "), "{cmd}");
+    }
+
+    #[test]
+    fn ensure_hook_installed_writes_opencode_plugin() {
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("DOZER_OPENCODE_PLUGIN_DIR", dir.path().to_str().unwrap()) };
+        ensure_hook_installed(AgentKind::Opencode);
+        unsafe { std::env::remove_var("DOZER_OPENCODE_PLUGIN_DIR") };
+        assert!(dir.path().join("dozer.ts").exists());
+        assert!(
+            dir.path()
+                .join("dozer-lib")
+                .join("dozer-translate.ts")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn ensure_hook_installed_is_noop_for_kilo_v8agent_and_unknown() {
+        // 回归 hook_install_target 的排除名单：这三者不该产生任何文件写入。
+        // 用 Claude 的 settings 路径当探针——如果实现退化成 catch-all 调用
+        // `install::run_at`，这里会意外产生一个把 "kilo" 写进去的
+        // settings.json。
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        unsafe { std::env::set_var("DOZER_CLAUDE_SETTINGS", path.to_str().unwrap()) };
+        for agent in [AgentKind::Kilo, AgentKind::V8agent, AgentKind::Unknown] {
+            ensure_hook_installed(agent);
+        }
+        unsafe { std::env::remove_var("DOZER_CLAUDE_SETTINGS") };
+        assert!(!path.exists(), "Kilo/V8agent/Unknown 不该写任何 hook 配置");
     }
 
     fn write_temp_file(name: &str, content: &str) -> (tempfile::TempDir, PathBuf) {

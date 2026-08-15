@@ -1757,13 +1757,14 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "dozer-app"
-version = "0.4.8"
+version = "0.4.9"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
  "arboard",
  "dozer-client",
  "dozer-core",
+ "dozer-hook",
  "futures",
  "git2",
  "gleisbau",

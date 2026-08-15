@@ -26,6 +26,13 @@ use std::path::{Path, PathBuf};
 const DOZER_TS_TEMPLATE: &str = include_str!("../opencode_plugin/dozer.ts");
 const TRANSLATE_TS: &str = include_str!("../opencode_plugin/dozer-translate.ts");
 const HOOK_BIN_PLACEHOLDER: &str = "__DOZER_HOOK_BIN_PATH__";
+// 源码树里 `dozer.ts` 从平铺的 `./dozer-translate` 导入（跟
+// `dozer-translate.test.ts` 同目录，`bun test` 能直接跑，也是这次改动的
+// 点——之前这个导入路径写死指向 `./dozer-lib/dozer-translate`，只有装机
+// 后才存在的子目录，源码树里跑不起来，没法直接测）。装机时才改写成子目录
+// 路径，产出文件不变。
+const TRANSLATE_IMPORT_SRC: &str = "\"./dozer-translate\"";
+const TRANSLATE_IMPORT_INSTALLED: &str = "\"./dozer-lib/dozer-translate\"";
 
 /// 插件目录路径，`DOZER_OPENCODE_PLUGIN_DIR` 覆盖用于测试（跟
 /// `install.rs` 的 `DOZER_CLAUDE_SETTINGS`/`DOZER_CODEBUDDY_SETTINGS`
@@ -62,7 +69,9 @@ pub fn run_at(dir: &Path, install: bool) -> i32 {
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| "dozer-hook".into());
         let escaped_exe = escape_ts_string_literal(&exe);
-        let dozer_ts = DOZER_TS_TEMPLATE.replace(HOOK_BIN_PLACEHOLDER, &escaped_exe);
+        let dozer_ts = DOZER_TS_TEMPLATE
+            .replace(HOOK_BIN_PLACEHOLDER, &escaped_exe)
+            .replace(TRANSLATE_IMPORT_SRC, TRANSLATE_IMPORT_INSTALLED);
         if let Err(e) = std::fs::write(dir.join("dozer.ts"), dozer_ts) {
             eprintln!("写 dozer.ts 失败: {e}");
             return 1;
@@ -136,6 +145,26 @@ mod tests {
         assert!(
             dozer_ts.contains("./dozer-lib/dozer-translate"),
             "dozer.ts 的 import 路径必须指向子目录"
+        );
+    }
+
+    #[test]
+    fn install_rewrites_source_tree_import_path_not_leaves_both() {
+        // 源码树里 `dozer.ts` 平铺 import `./dozer-translate`（这样
+        // `bun test` 能在源码树直接跑，不必装机）；装机产物必须整体替换成
+        // 子目录路径，不能两个 import 语句都留着（重复导入/语法错误）。
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(run_at(dir.path(), true), 0);
+        let dozer_ts = std::fs::read_to_string(dir.path().join("dozer.ts")).unwrap();
+        assert_eq!(
+            dozer_ts.matches(TRANSLATE_IMPORT_SRC).count(),
+            0,
+            "平铺的源码树 import 路径必须被整体替换掉，不能留在装机产物里"
+        );
+        assert_eq!(
+            dozer_ts.matches(TRANSLATE_IMPORT_INSTALLED).count(),
+            1,
+            "import 语句只能出现一次，装机后必须是子目录那个版本"
         );
     }
 

@@ -1,11 +1,10 @@
 mod codebuddy;
 mod codex;
-mod install;
 mod opencode;
-mod opencode_install;
 mod qoder;
 
 use dozer_core::protocol::{AgentKind, Request, encode_line};
+use dozer_hook::{install, opencode_install};
 use std::io::{Read, Write};
 use std::time::Duration;
 
