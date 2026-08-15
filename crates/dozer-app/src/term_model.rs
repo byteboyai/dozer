@@ -312,6 +312,20 @@ impl TerminalModel {
         (point.column.0, point.line.0 as usize)
     }
 
+    /// 真实终端光标是否可见（DECTCEM，`CSI ?25h` 开 / `CSI ?25l` 关）。
+    /// 全屏重绘型 TUI（实测 CodeBuddy CLI 2.132.0）经常整段会话只在启动
+    /// 时发一次 `?25l`、此后再也不发 `?25h`——它们自己在文本内容里用反相
+    /// （`CSI 7m`/`CSI 27m`）画一个"假光标"字符，真实光标被晾在原地（每
+    /// 帧一堆相对移动/清行序列扫过后落在的任意位置，跟视觉上的假光标毫
+    /// 无关系）。`cursor()` 只读 `grid().cursor.point`、不看这个 mode，
+    /// 于是会在这类 TUI 上把真实光标的陈旧坐标当成有效位置画出一个额外的
+    /// 光标块——正是这次要修的 bug。对照实测：Claude Code 每轮重绘都以
+    /// `?25h` 收尾，把真实光标移到正确位置后再显示，从不用反相假光标，
+    /// 所以同样的绘制逻辑在它身上不出这个问题。
+    pub fn cursor_visible(&self) -> bool {
+        self.term.mode().contains(TermMode::SHOW_CURSOR)
+    }
+
     /// 是否处于 application cursor mode（DECCKM，`CSI ?1h` 开启 /
     /// `CSI ?1l` 关闭）。shell 行编辑器（readline/zle 等）常用它来把方向
     /// 键从 CSI 序列（`\x1b[A`）切换成 SS3 序列（`\x1bOA`），
@@ -385,6 +399,39 @@ mod tests {
         assert!(t.mouse_report_mode());
         let _ = t.feed(b"\x1b[?1000l");
         assert!(!t.mouse_report_mode());
+    }
+
+    #[test]
+    fn cursor_visible_on_by_default() {
+        let t = TerminalModel::new(40, 10);
+        assert!(t.cursor_visible());
+    }
+
+    #[test]
+    fn cursor_visible_reflects_dectcem_hide_show() {
+        let mut t = TerminalModel::new(40, 10);
+        let _ = t.feed(b"\x1b[?25l");
+        assert!(!t.cursor_visible());
+        let _ = t.feed(b"\x1b[?25h");
+        assert!(t.cursor_visible());
+    }
+
+    #[test]
+    fn cursor_visible_stays_off_through_codebuddy_style_redraw() {
+        // 实测 CodeBuddy CLI 2.132.0（pty 抓包）：启动时发一次 `?25l`，
+        // 此后整段会话（含打字回显）再也不发 `?25h`——靠反相
+        // （`CSI 7m`/`CSI 27m`）在文本里画自己的假光标。中间一大段相对
+        // 光标移动 + 清行（`nA`/`2K`）是它的整帧重绘套路，节选自抓包，
+        // 验证这些操作不会意外把 SHOW_CURSOR 拨回 true。
+        let mut t = TerminalModel::new(100, 30);
+        let _ = t.feed(b"\x1b[?25l\x1b[?25l");
+        let _ = t.feed(
+            b"\x1b[9A\r\x1b[2K\x1b[38;2;184;191;197m> \x1b[39mhello world\x1b[7m \x1b[27m\x1b[9B",
+        );
+        let _ = t.feed(
+            b"\r\x1b[7A\r\x1b[2K  \x1b[38;2;184;191;197m\xe2\x86\x90 for agents\x1b[39m\x1b[7B",
+        );
+        assert!(!t.cursor_visible());
     }
 
     #[test]

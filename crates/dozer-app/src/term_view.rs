@@ -348,10 +348,17 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
         }
 
         // 光标覆盖层（画在文本之上）。回看历史（display_offset > 0）时
-        // 光标在视口之外，不画。`cursor()` 直接取自 `Term` 网格，坐标是
-        // 活动区视口坐标；防御性判界只为杜绝 cast 环绕的极端值。
+        // 光标在视口之外，不画；程序自己关掉了真实光标（DECTCEM `?25l`）
+        // 也不画——全屏重绘型 TUI（实测 CodeBuddy CLI）常年不发 `?25h`，
+        // 自己在文本里用反相画一个假光标，这时 `cursor()` 读到的坐标只是
+        // 一堆重绘期间相对移动/清行序列扫过后随便落下的陈旧位置，跟视觉
+        // 上的假光标毫无关系，画出来就是一个游离在别处的多余色块（Claude
+        // Code 每轮重绘都以 `?25h` 收尾，光标坐标随时有效，不受影响）。
+        // `cursor()` 直接取自 `Term` 网格，坐标是活动区视口坐标；防御性
+        // 判界只为杜绝 cast 环绕的极端值。
         let offset = self.model.display_offset();
         if offset == 0
+            && self.model.cursor_visible()
             && let Some(cell) = lines.get(cursor_row).and_then(|r| r.get(cursor_col))
         {
             let x = cursor_col as f32 * cell_width();
