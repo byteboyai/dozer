@@ -3119,6 +3119,26 @@ pub(crate) fn dot_color(state: AgentState, alive: bool) -> Color {
     }
 }
 
+/// `claude-sonnet-5` → `Sonnet 5`:去掉 `claude-` 前缀,按 `-` 分词、每
+/// 词首字母大写、空格拼接。不以 `claude-` 开头的原样返回(不确定形状,
+/// 不强行摘,避免拍出乱码;不维护会过期的型号对照表)。
+pub(crate) fn format_model_label(raw: &str) -> String {
+    match raw.strip_prefix("claude-") {
+        Some(rest) => rest
+            .split('-')
+            .map(|w| {
+                let mut chars = w.chars();
+                match chars.next() {
+                    Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
+                    None => String::new(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+        None => raw.to_string(),
+    }
+}
+
 /// agent → 对话列表圆点颜色。避开 `theme::color::GOLD`(甲方动作专属色,
 /// CLAUDE.md 明文规定,不能被 agent 分类语义借用)。
 pub(crate) fn agent_dot_color(agent: AgentKind) -> Color {
@@ -3524,6 +3544,19 @@ mod tests {
         assert_eq!(agent_state_label(AgentState::AwaitingInput), "待输入");
         assert_eq!(agent_state_label(AgentState::TurnEnded), "回合毕");
         assert_eq!(agent_state_label(AgentState::Idle), "空闲");
+    }
+
+    #[test]
+    fn format_model_label_strips_claude_prefix_and_titlecases() {
+        assert_eq!(format_model_label("claude-sonnet-5"), "Sonnet 5");
+        assert_eq!(format_model_label("claude-opus-5"), "Opus 5");
+        assert_eq!(format_model_label("claude-haiku-4-5"), "Haiku 4 5");
+    }
+
+    #[test]
+    fn format_model_label_unknown_shape_returns_verbatim() {
+        assert_eq!(format_model_label("gpt-4"), "gpt-4");
+        assert_eq!(format_model_label(""), "");
     }
 
     fn make_test_tab(rt: &tokio::runtime::Runtime, id: &str, agent: AgentKind) -> SessionTab {
