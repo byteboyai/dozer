@@ -61,6 +61,16 @@ impl WorkspaceState {
         &self.worktrees
     }
 
+    /// 项目级分支名(Project 面板/Agent 卡片工作区行共用读口)。
+    pub(crate) fn branch(&self) -> Option<&str> {
+        self.branch.as_deref()
+    }
+
+    /// 项目级脏标(同上)。
+    pub(crate) fn dirty(&self) -> bool {
+        self.dirty
+    }
+
     /// 供内核 main.rs 键盘路由判断"项目名称是否在自绘编辑态"。
     pub fn name_editing_is_some(&self) -> bool {
         self.name_editing.is_some()
@@ -854,6 +864,24 @@ mod tests {
         assert!(ws.dirty);
         assert_eq!(ws.worktrees().len(), 0);
         assert_eq!(ws.remote_url.as_slice(), ["https://x.git"]);
+    }
+
+    #[test]
+    fn branch_and_dirty_accessors_read_current_state() {
+        let mut ws = new_ws();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::GitRefreshed(1, Some("main".to_string()), true, vec![], vec![]),
+            1,
+            "名字",
+            &test_repo_path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert_eq!(ws.branch(), Some("main"));
+        assert!(ws.dirty());
     }
 
     #[test]
