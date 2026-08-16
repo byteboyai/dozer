@@ -188,6 +188,38 @@ pub fn parse_transcript(agent: AgentKind, jsonl: &str) -> Vec<ReviewEntry> {
     }
 }
 
+/// 从 transcript 尾部提取最后一次出现的 model id / permissionMode(后
+/// 出现的覆盖先出现的,只关心最新值)。`permissionMode` 在
+/// `user`/`assistant`/`permission-mode` 三种行的顶层都会出现,统一按
+/// 顶层键取,不区分行类型。解析失败的行跳过,不中断整体扫描(同
+/// `parse_claude_shaped_jsonl` 的既有容错口径)。不像 `parse_transcript`
+/// 那样建 `ReviewEntry` 列表,只回两个标量,给 Agent 卡片的实时刷新用
+/// (每次 hook 事件都会重跑一次,故意做得比 `parse_transcript` 轻)。
+pub fn latest_model_and_mode(jsonl: &str) -> (Option<String>, Option<String>) {
+    let mut model = None;
+    let mut mode = None;
+    for line in jsonl.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if let Some(m) = v
+            .get("message")
+            .and_then(|m| m.get("model"))
+            .and_then(|s| s.as_str())
+        {
+            model = Some(m.to_string());
+        }
+        if let Some(pm) = v.get("permissionMode").and_then(|s| s.as_str()) {
+            mode = Some(pm.to_string());
+        }
+    }
+    (model, mode)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,5 +412,29 @@ mod tests {
              而不是空白审阅面板"
         );
         assert_eq!(unknown_entries.len(), 2);
+    }
+
+    #[test]
+    fn latest_model_and_mode_picks_last_occurrence() {
+        let jsonl = r#"
+{"type":"user","message":{"role":"user","content":"改一下 README"},"permissionMode":"plan"}
+{"type":"assistant","message":{"role":"assistant","content":[],"model":"claude-sonnet-5"}}
+{"type":"permission-mode","permissionMode":"auto"}
+{"type":"assistant","message":{"role":"assistant","content":[],"model":"claude-opus-5"}}
+"#;
+        let (model, mode) = latest_model_and_mode(jsonl);
+        assert_eq!(model.as_deref(), Some("claude-opus-5"));
+        assert_eq!(mode.as_deref(), Some("auto"));
+    }
+
+    #[test]
+    fn latest_model_and_mode_skips_noise_and_bad_lines() {
+        let jsonl = "{\"type\":\"mode\",\"mode\":\"normal\"}\n不是 json 的坏行\n{\"type\":\"attachment\",\"attachment\":{}}\n";
+        assert_eq!(latest_model_and_mode(jsonl), (None, None));
+    }
+
+    #[test]
+    fn latest_model_and_mode_empty_input_yields_none() {
+        assert_eq!(latest_model_and_mode(""), (None, None));
     }
 }
