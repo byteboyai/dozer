@@ -23,14 +23,20 @@ PACKAGING_DIR="$ROOT_DIR/crates/dozer-app/packaging/macos"
 APP_NAME="Dozer AI Coder"
 BIN_NAME="dozer"
 DAEMON_BIN_NAME="dozerd"
+HOOK_BIN_NAME="dozer-hook"
 
 # Ask cargo for the built executables' actual paths via JSON output, rather
 # than guessing target/<profile> vs target/<triple>/<profile> (this machine's
 # ~/.cargo/config.toml pins a default --target, which changes the layout).
 # dozerd must ship alongside dozer: dozer's daemon auto-spawn looks for it
 # next to its own executable (crates/dozer-app/src/main.rs spawn_dozerd()).
+# dozer-hook must ship alongside dozer too: agent hook auto-registration
+# (crates/dozer-app/src/workspace.rs ensure_hook_installed()) writes hook
+# commands that point at a "dozer-hook" binary sibling to dozer's own
+# executable — if it's missing from the bundle, every registered hook fails
+# with "no such file or directory" (2026-08 incident).
 BUILD_JSON=$(
-  cargo build "${CARGO_PROFILE_FLAG[@]}" -p dozer-app -p dozerd --message-format=json
+  cargo build "${CARGO_PROFILE_FLAG[@]}" -p dozer-app -p dozerd -p dozer-hook --message-format=json
 )
 
 BIN_PATH=$(
@@ -43,6 +49,11 @@ DAEMON_BIN_PATH=$(
     'select(.reason=="compiler-artifact" and .target.name==$bin and .executable != null) | .executable' \
     | tail -n 1
 )
+HOOK_BIN_PATH=$(
+  echo "$BUILD_JSON" | jq -r --arg bin "$HOOK_BIN_NAME" \
+    'select(.reason=="compiler-artifact" and .target.name==$bin and .executable != null) | .executable' \
+    | tail -n 1
+)
 
 if [ -z "$BIN_PATH" ] || [ ! -x "$BIN_PATH" ]; then
   echo "error: could not locate built '$BIN_NAME' executable" >&2
@@ -50,6 +61,10 @@ if [ -z "$BIN_PATH" ] || [ ! -x "$BIN_PATH" ]; then
 fi
 if [ -z "$DAEMON_BIN_PATH" ] || [ ! -x "$DAEMON_BIN_PATH" ]; then
   echo "error: could not locate built '$DAEMON_BIN_NAME' executable" >&2
+  exit 1
+fi
+if [ -z "$HOOK_BIN_PATH" ] || [ ! -x "$HOOK_BIN_PATH" ]; then
+  echo "error: could not locate built '$HOOK_BIN_NAME' executable" >&2
   exit 1
 fi
 
@@ -61,6 +76,7 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 
 cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/$BIN_NAME"
 cp "$DAEMON_BIN_PATH" "$APP_DIR/Contents/MacOS/$DAEMON_BIN_NAME"
+cp "$HOOK_BIN_PATH" "$APP_DIR/Contents/MacOS/$HOOK_BIN_NAME"
 cp "$PACKAGING_DIR/Info.plist" "$APP_DIR/Contents/Info.plist"
 cp "$PACKAGING_DIR/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
 

@@ -54,7 +54,21 @@ fn escape_ts_string_literal(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// CLI 场景（`dozer-hook install opencode`）用：调用方就是 `dozer-hook`
+/// 自身，`current_exe()` 天然指向正确的二进制。GUI 场景（`dozer-app` 在
+/// agent 启动时静默自动注册）不能走这条路——见 `run_at_with_exe`。
 pub fn run_at(dir: &Path, install: bool) -> i32 {
+    let exe = std::env::current_exe()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "dozer-hook".into());
+    run_at_with_exe(dir, install, &exe)
+}
+
+/// `run_at` 的可测试内核：exe 路径由调用方显式传入。`dozer-app` 在自己
+/// 进程内直接调用这层——沿用 `current_exe()` 会把 `dozer.ts` 里 spawn 的
+/// 二进制写成 `dozer-app` 自己的可执行文件路径，而不是 `dozer-hook` 的
+/// （跟 `install::run_at_with_exe` 同一个根因，同一次线上事故）。
+pub fn run_at_with_exe(dir: &Path, install: bool, exe: &str) -> i32 {
     if install {
         if let Err(e) = std::fs::create_dir_all(dir) {
             eprintln!("建目录失败: {e}");
@@ -65,10 +79,7 @@ pub fn run_at(dir: &Path, install: bool) -> i32 {
             eprintln!("建目录失败: {e}");
             return 1;
         }
-        let exe = std::env::current_exe()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| "dozer-hook".into());
-        let escaped_exe = escape_ts_string_literal(&exe);
+        let escaped_exe = escape_ts_string_literal(exe);
         let dozer_ts = DOZER_TS_TEMPLATE
             .replace(HOOK_BIN_PLACEHOLDER, &escaped_exe)
             .replace(TRANSLATE_IMPORT_SRC, TRANSLATE_IMPORT_INSTALLED);
@@ -122,6 +133,16 @@ mod tests {
             std::fs::read_to_string(dir.path().join("dozer-lib").join("dozer-translate.ts"))
                 .unwrap();
         assert!(translate_ts.contains("onSessionCreated"));
+    }
+
+    #[test]
+    fn run_at_with_exe_uses_the_passed_exe_not_current_exe() {
+        // ensure_hook_installed（dozer-app）调这层是为了绕开 current_exe()
+        // 在跨进程场景下拿错二进制的问题——这里直接断言传参优先。
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(run_at_with_exe(dir.path(), true, "/opt/dozer-hook"), 0);
+        let dozer_ts = std::fs::read_to_string(dir.path().join("dozer.ts")).unwrap();
+        assert!(dozer_ts.contains("/opt/dozer-hook"), "{dozer_ts}");
     }
 
     #[test]

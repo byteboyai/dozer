@@ -66,7 +66,34 @@ fn entry_is_dozer(entry: &Value) -> bool {
         .unwrap_or(false)
 }
 
+/// CLI 场景（`dozer-hook install <agent>`）用：调用方就是 `dozer-hook`
+/// 自身，`current_exe()` 天然指向正确的二进制。GUI 场景（`dozer-app` 在
+/// agent 启动时静默自动注册）不能走这条路——见 `run_at_with_exe`。
 pub fn run_at(path: &Path, agent: &str, install: bool) -> i32 {
+    let exe = std::env::current_exe()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "dozer-hook".into());
+    run_at_with_exe(path, agent, install, &exe)
+}
+
+/// 单引号包住 exe 路径，防止路径里的空格被 hook 命令的执行方（Claude
+/// Code/CodeBuddy 等按空白切分/走 shell 解释这个 command 字符串）当成参数
+/// 分隔符截断——`Dozer AI Coder.app` 这个 bundle 名本身就带空格，是这次
+/// 要修的线上事故的根因（写进去的路径在空格处断开，被截成
+/// `/Applications/Dozer`，报 `no such file or directory`）。单引号内部若
+/// 本身含单引号，用 `'\''` 转义（跟 `keymap.rs` 现成的同款手法一致）。
+fn shell_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// `run_at` 的可测试内核：exe 路径由调用方显式传入，而不是隐式读
+/// `current_exe()`——`dozer-app` 在自己进程内直接调用这层（省掉 spawn
+/// 一个子进程的开销），如果沿用 `current_exe()` 会拿到 `dozer-app` 自己
+/// 的可执行文件路径而不是 `dozer-hook` 的，写出一条指向错误二进制、且
+/// 因为不含 "dozer-hook" 子串而被 `entry_is_dozer` 认不出、每次都重复
+/// 追加的 hook 命令（2026-08 线上事故：`~/.claude/settings.json` 里同一个
+/// 事件堆出 3-4 条重复且指向 `dozer` GUI 二进制的坏 hook）。
+pub fn run_at_with_exe(path: &Path, agent: &str, install: bool, exe: &str) -> i32 {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".into(),
@@ -82,9 +109,7 @@ pub fn run_at(path: &Path, agent: &str, install: bool) -> i32 {
             return 1;
         }
     };
-    let exe = std::env::current_exe()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "dozer-hook".into());
+    let exe = shell_single_quote(exe);
 
     let Some(obj) = root.as_object_mut() else {
         eprintln!("{} 顶层不是对象，拒绝写入", path.display());
@@ -162,6 +187,40 @@ mod tests {
             assert!(cmd.contains(" claude "), "{cmd}: 应携带 agent 标识");
             assert!(cmd.ends_with(ev), "{cmd}");
         }
+    }
+
+    #[test]
+    fn run_at_with_exe_quotes_paths_containing_spaces() {
+        // 回归线上事故：`/Applications/Dozer AI Coder.app/.../dozer-hook`
+        // 这类带空格的安装路径，如果不加引号拼进 command 字符串，会被 hook
+        // 的执行方在空格处截断成 `/Applications/Dozer`，报
+        // "no such file or directory"。
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let exe = "/Applications/Dozer AI Coder.app/Contents/MacOS/dozer-hook";
+        assert_eq!(run_at_with_exe(&path, "claude", true, exe), 0);
+        let root = read(&path);
+        let cmd = root["hooks"]["Stop"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            cmd,
+            "'/Applications/Dozer AI Coder.app/Contents/MacOS/dozer-hook' claude Stop"
+        );
+    }
+
+    #[test]
+    fn run_at_with_exe_uses_the_passed_exe_not_current_exe() {
+        // ensure_hook_installed（dozer-app）调这层是为了绕开 current_exe()
+        // 在跨进程场景下拿错二进制的问题——这里直接断言传参优先。
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        assert_eq!(run_at_with_exe(&path, "claude", true, "/opt/dozer-hook"), 0);
+        let root = read(&path);
+        let cmd = root["hooks"]["Stop"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert_eq!(cmd, "'/opt/dozer-hook' claude Stop");
     }
 
     #[test]
