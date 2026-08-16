@@ -1011,11 +1011,14 @@ impl Workspace {
     }
 
     /// hook 事件驱动的"卡片元信息"刷新(仿 `spawn_review_load` 的写法):
-    /// model/permissionMode(仅 Claude,从 transcript 尾部轻量提取,见
+    /// model/permissionMode(Claude 与 Unknown——后者是老装 hook 上报的
+    /// "还不知道具体是哪家",但 transcript 仍是 Claude 形状,见
     /// `transcript::latest_model_and_mode`)+ 工作区覆盖(仅当该 session
-    /// 的 cwd 偏离项目根目录时才查;常见情形直接复用 `project_panel` 的
-    /// 项目级缓存,这里不产生任何 IO)。两者都不需要时直接返回,不起
-    /// 异步任务。
+    /// 的 cwd 偏离项目根目录——即不在 `project_root` 路径前缀下——时才
+    /// 查;常见情形直接复用 `project_panel` 的项目级缓存,这里不产生任何
+    /// IO)。两者都不需要时不起异步任务,但仍同步发一条全 `None` 的
+    /// `AgentCardRefreshed`,确保 `workspace_override` 之类的残留覆盖能被
+    /// 清掉(见 `apply_agent_card_refresh`)。
     pub(crate) fn spawn_agent_card_refresh(
         &self,
         io: &ShellIo,
@@ -1031,6 +1034,14 @@ impl Workspace {
         let (needs_model_mode, needs_workspace) =
             agent_card_refresh_plan(agent, &cwd, project_root.as_deref());
         if !needs_model_mode && !needs_workspace {
+            // cwd 未偏离项目根、且非 Claude/Unknown:没有 model/mode 要提取,
+            // workspace 也肯定是"未偏离"(None)——不需要起 IO/async 任务,
+            // 同步把这个明确值发出去即可,顺便清掉可能残留的
+            // workspace_override(见 apply_agent_card_refresh 的无条件覆盖
+            // 注释)。
+            let _ = io.proxy.send_event(Message::AgentCardRefreshed(
+                project_id, tab_id, None, None, None,
+            ));
             return;
         }
         let proxy = io.proxy.clone();
@@ -1959,16 +1970,29 @@ pub(crate) fn agent_card_refresh_plan(
     cwd: &Path,
     project_root: Option<&Path>,
 ) -> (bool, bool) {
-    let needs_model_mode = agent == AgentKind::Claude;
-    let needs_workspace = project_root != Some(cwd);
+    // Unknown 同样走 Claude 形状的 transcript 解析(见 transcript.rs 里
+    // parse_transcript 对 Unknown 的既有处理和注释——老装 hook 上报的
+    // Unknown agent 不该因为这道门禁又变回"空白卡片"这同一类 bug)。
+    let needs_model_mode = matches!(agent, AgentKind::Claude | AgentKind::Unknown);
+    // 精确相等太脆弱——cd 进项目根的任意子目录都会被判定成"偏离",既多做
+    // 一次不必要的 git 查询,也是 Finding 1 那个 bug 更容易被触发的原因之
+    // 一。改成路径前缀包含关系:cwd 是 project_root 的子路径就算"未偏离"。
+    let needs_workspace = match project_root {
+        Some(root) => !cwd.starts_with(root),
+        None => true,
+    };
     (needs_model_mode, needs_workspace)
 }
 
-/// `Message::AgentCardRefreshed` 落地:在 `tabs` 里找 `tab_id`,`None`
-/// 字段表示这次没有新值,不覆盖已有值(每次刷新只重新扫描"当前"
-/// transcript 内容,理论上不会无中生有变回 `None`,这里的保护针对
-/// transcript 读取失败等异常情形,不让卡片从"有值"闪回"无值")。tab
-/// 不存在(已关闭)时整体 no-op,不 panic。只依赖 `&mut [SessionTab]`
+/// `Message::AgentCardRefreshed` 落地:在 `tabs` 里找 `tab_id`。
+/// `llm_model`/`mode` 的 `None` 表示这次没有新值,不覆盖已有值(每次刷新
+/// 只重新扫描"当前" transcript 内容,理论上不会无中生有变回 `None`,这里
+/// 的保护针对 transcript 读取失败等异常情形,不让卡片从"有值"闪回
+/// "无值")。`workspace` 语义不同——它的 `None` 是上游
+/// `spawn_agent_card_refresh`/`agent_card_refresh_plan` 给出的明确信号
+/// "cwd 未偏离项目根",必须无条件覆盖(含清空 `Some` → `None`),否则
+/// session 一旦偏离过一次项目根,`workspace_override` 就再也清不掉了。
+/// tab 不存在(已关闭)时整体 no-op,不 panic。只依赖 `&mut [SessionTab]`
 /// 不依赖整个 `Workspace`,同 `group_tabs_by_agent` 的既有写法,方便
 /// 直接单测。
 pub(crate) fn apply_agent_card_refresh(
@@ -1987,9 +2011,13 @@ pub(crate) fn apply_agent_card_refresh(
     if mode.is_some() {
         tab.permission_mode = mode;
     }
-    if workspace.is_some() {
-        tab.workspace_override = workspace;
-    }
+    // workspace 不走"只在 Some 时覆盖"这条——上游 spawn_agent_card_refresh
+    // 现在保证 None 在这里永远是明确语义("cwd 未偏离项目根,该清空覆盖"),
+    // 不是"这次没查、保留原值"，跟 llm_model/mode 的 None 语义不同(那两个
+    // 的 None 才是"没查到新值,保留旧值")。无条件覆盖——修复此前
+    // workspace_override 一旦被设置过就再也清不掉的 bug:session 只要偏离
+    // 过一次项目根,就算 cd 回去了,卡片工作区行也会永远停在旧快照上。
+    tab.workspace_override = workspace;
 }
 
 /// 异步跑一次组合 git 查询(分支/脏/文件状态/worktree),完成后分发成两条
@@ -3488,10 +3516,25 @@ mod tests {
             (true, true),
             "Claude + cwd 偏离项目根:两者都做"
         );
+        assert_eq!(
+            agent_card_refresh_plan(
+                dozer_core::protocol::AgentKind::Unknown,
+                &root,
+                Some(&root)
+            ),
+            (true, false),
+            "Finding 2: Unknown + cwd 等于项目根:也要按 Claude 形状做 model/mode 提取"
+        );
+        let subdir = PathBuf::from("/repo").join("crates").join("dozer-app");
+        assert_eq!(
+            agent_card_refresh_plan(dozer_core::protocol::AgentKind::Claude, &subdir, Some(&root)),
+            (true, false),
+            "Finding 3: cwd 是 project_root 的子目录,不算偏离,不应触发 needs_workspace"
+        );
     }
 
     #[test]
-    fn apply_agent_card_refresh_sets_fields_only_when_some() {
+    fn apply_agent_card_refresh_llm_and_mode_keep_last_value_when_none() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let mut tabs = vec![make_test_tab(&rt, "a", AgentKind::Claude)];
         tabs[0].tab_id = 7;
@@ -3516,6 +3559,28 @@ mod tests {
         // 未知 tab_id:整体 no-op,不 panic。
         apply_agent_card_refresh(&mut tabs, 999, Some("x".to_string()), None, None);
         assert_eq!(tabs[0].llm_model.as_deref(), Some("claude-sonnet-5"));
+    }
+
+    #[test]
+    fn apply_agent_card_refresh_workspace_always_overwrites_including_clear() {
+        // Finding 1 回归测试:workspace_override 曾经"只在 Some 时覆盖",
+        // 导致 session 一旦偏离过项目根就再也清不掉覆盖(cd 回项目根后卡片
+        // 工作区行永远停在旧仓库快照)。workspace 字段跟 llm_model/mode
+        // 语义不同——None 是明确的"清空"信号,不是"没查、保留原值"。
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut tabs = vec![make_test_tab(&rt, "a", AgentKind::Claude)];
+        tabs[0].tab_id = 7;
+
+        let diverged = WorkspaceGitInfo {
+            branch: Some("feature/x".to_string()),
+            dirty: true,
+        };
+        apply_agent_card_refresh(&mut tabs, 7, None, None, Some(diverged.clone()));
+        assert_eq!(tabs[0].workspace_override, Some(diverged));
+
+        // cwd 回到项目根:workspace 传 None,必须真的清空,不是保留旧覆盖。
+        apply_agent_card_refresh(&mut tabs, 7, None, None, None);
+        assert_eq!(tabs[0].workspace_override, None);
     }
 
     #[test]
