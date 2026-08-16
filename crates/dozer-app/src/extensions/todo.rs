@@ -10,9 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::workspace::AddrEvent;
 use crate::{icons, theme};
 use iced_widget::core::{Border, Color, Element, Length, mouse};
-use iced_widget::{
-    MouseArea, button, column, container, rich_text, row, scrollable, span, text, text_input,
-};
+use iced_widget::{MouseArea, button, column, container, rich_text, row, scrollable, span, text};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TodoItem {
@@ -322,6 +320,10 @@ pub struct WorkspaceState {
     items: Vec<TodoItem>,
     mtime: Option<std::time::SystemTime>,
     add_draft: String,
+    /// 新增任务框是否处于自绘编辑态。本 app 每帧重建界面,原生 `text_input`
+    /// 留不住焦点、也不参与 main.rs 的键盘路由裁决,不加这个标记的话打字
+    /// 会同时漏进已聚焦的终端(agent 输入),见 `todo_footer_bar`。
+    add_editing: bool,
     filter: TodoFilter,
     view_mode: TodoViewMode,
     selected_row: Option<usize>,
@@ -399,6 +401,30 @@ impl WorkspaceState {
     /// 失焦退出搜索编辑态(`Workspace::blur_inputs` 用):草稿保留。
     pub fn cancel_search_edit(&mut self) {
         self.search_editing = false;
+    }
+
+    /// 新增任务框是否处于自绘编辑态(main.rs 键盘路由用)。
+    pub fn add_editing(&self) -> bool {
+        self.add_editing
+    }
+
+    /// 失焦退出新增任务编辑态(`Workspace::blur_inputs` 用):草稿保留,
+    /// 与搜索框同款——半输入的任务文字不该因为点了别处就丢。
+    pub fn cancel_add_edit(&mut self) {
+        self.add_editing = false;
+    }
+
+    /// 计划时间行内编辑态是否打开(main.rs 键盘路由用)。
+    pub fn plan_date_editing(&self) -> bool {
+        self.editing_plan_date.is_some()
+    }
+
+    /// 失焦退出计划时间编辑态(`Workspace::blur_inputs` 用):直接丢弃
+    /// 半输入。`editing_plan_date` 是点日期徽章才弹出的一次性行内编辑,
+    /// 不是常驻输入框,行为对齐项目树重命名(`cancel_tree_edit`)而不是
+    /// 搜索框。
+    pub fn cancel_plan_date_edit(&mut self) {
+        self.editing_plan_date = None;
     }
 
     /// 是否正在拖拽排序(main.rs 鼠标释放路由 + about_to_wait 持续重绘用)。
@@ -497,8 +523,13 @@ pub struct SessionTabSummary {
 #[derive(Debug, Clone)]
 pub enum Message {
     Toggle(usize),
-    AddInputChanged(String),
-    AddSubmit,
+    /// 点新增任务框进入自绘编辑态(`add_editing = true`),后续按键经
+    /// main.rs 路由成 `AddEvent`,不再漏进终端(同 `SearchEditStart`)。
+    AddEditStart,
+    /// 编辑态下的按键:文本/退格改草稿,`AddrEvent::Submit` 落盘新任务
+    /// (无独立"提交按钮"入口——新增任务只有回车这一条提交路径,不像
+    /// 搜索框还有个放大镜按钮,故没有单独的 `AddSubmit` 消息)。
+    AddEvent(AddrEvent),
     FilterSet(TodoFilter),
     ViewModeSet(TodoViewMode),
     RowSelect(Option<usize>),
@@ -523,8 +554,10 @@ pub enum Message {
     DispatchToExisting(usize, String),
     DispatchNew(usize, crate::workspace::PickerLaunch),
     PlanDateEditStart(usize),
-    PlanDateChanged(String),
-    PlanDateSubmit,
+    /// 编辑态下的按键:文本/退格改草稿,`AddrEvent::Submit` 落盘计划
+    /// 时间,`AddrEvent::Cancel` 清空编辑态(同 `AddEvent`,回车是唯一
+    /// 提交路径,没有单独的 `PlanDateSubmit` 消息)。
+    PlanDateEvent(AddrEvent),
     /// pill 菜单选中"待办"/"已完成"时发出，`bool` 是**目标** `done` 值
     /// (显式设置，不是翻转)。当前 `done` 已经等于目标值时视为 no-op，
     /// 不重复写盘——见 `set_done()` 的实现注释。
@@ -594,8 +627,43 @@ fn set_done(
     }
 }
 
-/// 处理除 `DispatchToExisting`/`DispatchNew` 之外的 10 条消息,统一接收
-/// 两块状态——`Toggle`/`PlanDateEditStart`/`PlanDateSubmit` 需要读写
+/// `AddEvent(Submit)` 的写盘逻辑:把草稿追加成新任务行,空白草稿
+/// (trim 后)no-op。
+fn commit_add_task(ws_state: &mut WorkspaceState, project_path: &std::path::Path) {
+    let text = ws_state.add_draft.trim().to_string();
+    if text.is_empty() {
+        return;
+    }
+    let path = todo_path(project_path);
+    let content = std::fs::read_to_string(&path).unwrap_or_default();
+    let new_content = append_todo_item(&content, &text);
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        tracing::warn!("创建 .dozer 目录失败: {e}");
+        return;
+    }
+    if let Err(e) = std::fs::write(&path, &new_content) {
+        tracing::warn!("写入 todo.md 失败: {e}");
+        return;
+    }
+    ws_state.add_draft.clear();
+    reload_from_disk(ws_state, project_path);
+}
+
+/// `PlanDateEvent(Submit)` 的写盘逻辑:把草稿落成 `AppState` 里的计划
+/// 时间元数据,并退出编辑态。
+fn commit_plan_date(ws_state: &mut WorkspaceState, app_state: &mut AppState, project_id: i64) {
+    if let Some((idx, draft)) = ws_state.editing_plan_date.clone()
+        && let Some(text) = ws_state.items.get(idx).map(|item| item.text.clone())
+    {
+        app_state.set_plan_date(project_id, &text, draft);
+    }
+    ws_state.editing_plan_date = None;
+}
+
+/// 处理除 `DispatchToExisting`/`DispatchNew` 之外的消息,统一接收两块
+/// 状态——`Toggle`/`PlanDateEditStart`/`PlanDateEvent` 需要读写
 /// `AppState`(不只是 Git Log/浏览器试点里"只有派发类消息碰跨领域状态"
 /// 那么简单,写计划前重新核对现有代码才发现这点)。
 pub fn update(
@@ -626,27 +694,21 @@ pub fn update(
         }
         Message::StatePillOpen(idx) => ws_state.state_pill_open = Some(idx),
         Message::StatePillClose => ws_state.state_pill_open = None,
-        Message::AddInputChanged(s) => ws_state.add_draft = s,
-        Message::AddSubmit => {
-            let text = ws_state.add_draft.trim().to_string();
-            if text.is_empty() {
+        Message::AddEditStart => ws_state.add_editing = true,
+        Message::AddEvent(ev) => {
+            // 编辑态之外(失焦)的 `AddEvent` 一律忽略,避免草稿被污染
+            // (同 `SearchEvent` 的既有约定)。
+            if !ws_state.add_editing {
                 return;
             }
-            let path = todo_path(project_path);
-            let content = std::fs::read_to_string(&path).unwrap_or_default();
-            let new_content = append_todo_item(&content, &text);
-            if let Some(parent) = path.parent()
-                && let Err(e) = std::fs::create_dir_all(parent)
-            {
-                tracing::warn!("创建 .dozer 目录失败: {e}");
-                return;
+            match ev {
+                AddrEvent::Text(s) => ws_state.add_draft.push_str(&s),
+                AddrEvent::Backspace => {
+                    ws_state.add_draft.pop();
+                }
+                AddrEvent::Cancel => ws_state.add_editing = false,
+                AddrEvent::Submit => commit_add_task(ws_state, project_path),
             }
-            if let Err(e) = std::fs::write(&path, &new_content) {
-                tracing::warn!("写入 todo.md 失败: {e}");
-                return;
-            }
-            ws_state.add_draft.clear();
-            reload_from_disk(ws_state, project_path);
         }
         Message::FilterSet(f) => ws_state.filter = f,
         Message::ViewModeSet(m) => ws_state.view_mode = m,
@@ -758,18 +820,25 @@ pub fn update(
                 .unwrap_or_default();
             ws_state.editing_plan_date = Some((idx, existing));
         }
-        Message::PlanDateChanged(s) => {
-            if let Some((_, draft)) = ws_state.editing_plan_date.as_mut() {
-                *draft = s;
+        Message::PlanDateEvent(ev) => {
+            // 编辑态之外(已提交/已取消)的 `PlanDateEvent` 一律忽略。
+            if ws_state.editing_plan_date.is_none() {
+                return;
             }
-        }
-        Message::PlanDateSubmit => {
-            if let Some((idx, draft)) = ws_state.editing_plan_date.clone()
-                && let Some(text) = ws_state.items.get(idx).map(|item| item.text.clone())
-            {
-                app_state.set_plan_date(project_id, &text, draft);
+            match ev {
+                AddrEvent::Text(s) => {
+                    if let Some((_, draft)) = ws_state.editing_plan_date.as_mut() {
+                        draft.push_str(&s);
+                    }
+                }
+                AddrEvent::Backspace => {
+                    if let Some((_, draft)) = ws_state.editing_plan_date.as_mut() {
+                        draft.pop();
+                    }
+                }
+                AddrEvent::Cancel => ws_state.editing_plan_date = None,
+                AddrEvent::Submit => commit_plan_date(ws_state, app_state, project_id),
             }
-            ws_state.editing_plan_date = None;
         }
         Message::DispatchToExisting(..) | Message::DispatchNew(..) => {
             unreachable!(
@@ -880,38 +949,54 @@ pub fn view<'a>(
 }
 
 /// 底部快速新建栏，结构对齐 `project.rs::project_footer_bar`(1px BORDER
-/// 分隔线 + `padding([6, 8])`)。列表视图使用。
+/// 分隔线 + `padding([6, 8])`)。列表视图使用。自绘输入(键盘走 main.rs
+/// 拦截层路由成 `AddEvent`,不用原生 `text_input`——本 app 每帧重建界面,
+/// 原生输入留不住焦点也不参与键盘路由裁决,打字会同时漏进已聚焦的终端,
+/// 见 `todo_search_bar` 同款说明)。整体是 `button`,点击(`AddEditStart`)
+/// 进编辑态。
 fn todo_footer_bar<'a>(
     add_draft: &'a str,
+    editing: bool,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let add_row = row![
-        icons::view(
-            icons::IconKind::SquarePlus,
-            crate::theme::icon_size::row(),
-            theme::color::GOLD
-        ),
-        text_input("Initiate new task protocol..", add_draft)
-            .on_input(Message::AddInputChanged)
-            .on_submit(Message::AddSubmit)
-            .size(theme::font::body())
-            .width(Length::Fill)
-            .style(
-                |_t: &iced_widget::Theme, _s| iced_widget::text_input::Style {
-                    background: theme::color::BG.into(),
-                    border: Border {
-                        color: Color::TRANSPARENT,
-                        width: 0.0,
-                        radius: 0.0.into(),
-                    },
-                    icon: theme::color::GOLD,
-                    placeholder: theme::color::DIM,
-                    value: theme::color::CREAM,
-                    selection: theme::color::GOLD,
-                },
+    let field: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        if add_draft.is_empty() && !editing {
+            text("Initiate new task protocol..")
+                .size(theme::font::body())
+                .color(theme::color::DIM)
+                .into()
+        } else {
+            let caret = if editing { "▏" } else { "" };
+            text(format!("{add_draft}{caret}"))
+                .size(theme::font::body())
+                .color(theme::color::CREAM)
+                .into()
+        };
+
+    let add_row = button(
+        row![
+            icons::view(
+                icons::IconKind::SquarePlus,
+                crate::theme::icon_size::row(),
+                theme::color::GOLD
             ),
-    ]
-    .spacing(8)
-    .align_y(iced_widget::core::alignment::Vertical::Center);
+            field,
+        ]
+        .spacing(8)
+        .align_y(iced_widget::core::alignment::Vertical::Center),
+    )
+    .on_press(Message::AddEditStart)
+    .width(Length::Fill)
+    .padding(0)
+    .style(move |_t: &iced_widget::Theme, _s| button::Style {
+        background: Some(theme::color::BG.into()),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 0.0.into(),
+        },
+        text_color: theme::color::CREAM,
+        ..button::Style::default()
+    });
 
     let top_line = container(iced_widget::Space::new())
         .width(Length::Fill)
@@ -1097,7 +1182,7 @@ fn todo_list_view<'a>(
     column![
         search,
         scrollable(list).height(Length::Fill),
-        todo_footer_bar(&ws_state.add_draft),
+        todo_footer_bar(&ws_state.add_draft, ws_state.add_editing),
     ]
     .height(Length::Fill)
     .into()
@@ -1467,20 +1552,39 @@ fn state_pill_menu(
     .into()
 }
 
-/// 计划时间内联编辑态：任务文本 + 一个 `text_input`，回车提交。
+/// 计划时间内联编辑态：任务文本 + 一个自绘输入框，回车提交。自绘原因同
+/// `todo_footer_bar`(原生 `text_input` 不参与 main.rs 键盘路由裁决,打字
+/// 会漏进终端);键盘走 main.rs 拦截层路由成 `PlanDateEvent`。这行只在
+/// `editing_plan_date` 命中时才会被渲染出来,不需要额外的点击进入态。
 fn todo_plan_date_edit_row<'a>(
     item: &'a TodoItem,
     draft: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let field = if draft.is_empty() {
+        text("计划时间，如 08-10")
+            .size(theme::font::caption())
+            .color(theme::color::DIM)
+    } else {
+        text(format!("{draft}▏"))
+            .size(theme::font::caption())
+            .color(theme::color::CREAM)
+    };
     row![
         text(item.text.clone())
             .size(theme::font::body())
             .color(theme::color::CREAM),
-        text_input("计划时间，如 08-10", draft)
-            .on_input(Message::PlanDateChanged)
-            .on_submit(Message::PlanDateSubmit)
-            .size(theme::font::caption())
-            .width(Length::Fixed(140.0)),
+        container(field)
+            .width(Length::Fixed(140.0))
+            .padding([2, 6])
+            .style(|_t: &iced_widget::Theme| container::Style {
+                background: Some(theme::color::CARD.into()),
+                border: Border {
+                    color: theme::color::GOLD,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..container::Style::default()
+            }),
     ]
     .spacing(10)
     .align_y(iced_widget::core::alignment::Vertical::Center)
@@ -2158,10 +2262,17 @@ mod tests {
         let (_dir, root) = project_dir_with_todo("# Todo\n");
         let mut ws_state = WorkspaceState {
             add_draft: "新任务".to_string(),
+            add_editing: true,
             ..WorkspaceState::default()
         };
         let mut app_state = AppState::default();
-        update(&mut ws_state, &mut app_state, Message::AddSubmit, 1, &root);
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::AddEvent(AddrEvent::Submit),
+            1,
+            &root,
+        );
         assert!(ws_state.add_draft.is_empty());
         assert_eq!(ws_state.items.len(), 1);
         assert_eq!(ws_state.items[0].text, "新任务");
@@ -2170,10 +2281,67 @@ mod tests {
     #[test]
     fn update_add_submit_empty_draft_is_noop() {
         let (_dir, root) = project_dir_with_todo("# Todo\n");
+        let mut ws_state = WorkspaceState {
+            add_editing: true,
+            ..WorkspaceState::default()
+        };
+        let mut app_state = AppState::default();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::AddEvent(AddrEvent::Submit),
+            1,
+            &root,
+        );
+        assert!(ws_state.items.is_empty());
+    }
+
+    #[test]
+    fn update_add_event_ignored_outside_editing() {
+        let (_dir, root) = project_dir_with_todo("# Todo\n");
         let mut ws_state = WorkspaceState::default();
         let mut app_state = AppState::default();
-        update(&mut ws_state, &mut app_state, Message::AddSubmit, 1, &root);
-        assert!(ws_state.items.is_empty());
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::AddEvent(AddrEvent::Text("x".to_string())),
+            1,
+            &root,
+        );
+        assert!(ws_state.add_draft.is_empty());
+    }
+
+    #[test]
+    fn update_add_edit_start_then_event_builds_draft_and_submits() {
+        let (_dir, root) = project_dir_with_todo("# Todo\n");
+        let mut ws_state = WorkspaceState::default();
+        let mut app_state = AppState::default();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::AddEditStart,
+            1,
+            &root,
+        );
+        assert!(ws_state.add_editing());
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::AddEvent(AddrEvent::Text("新任务".to_string())),
+            1,
+            &root,
+        );
+        assert_eq!(ws_state.add_draft, "新任务");
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::AddEvent(AddrEvent::Submit),
+            1,
+            &root,
+        );
+        assert!(ws_state.add_draft.is_empty());
+        assert_eq!(ws_state.items.len(), 1);
+        assert_eq!(ws_state.items[0].text, "新任务");
     }
 
     #[test]
@@ -2299,7 +2467,57 @@ mod tests {
         update(
             &mut ws_state,
             &mut app_state,
-            Message::PlanDateSubmit,
+            Message::PlanDateEvent(AddrEvent::Submit),
+            1,
+            &root,
+        );
+        assert!(ws_state.editing_plan_date.is_none());
+        let key = todo_line_key("任务A");
+        assert_eq!(
+            app_state.meta_for(1, key).unwrap().plan_date.as_deref(),
+            Some("08-10")
+        );
+    }
+
+    #[test]
+    fn update_plan_date_event_ignored_without_editing_state() {
+        let (_dir, root) = project_dir_with_todo("# Todo\n");
+        let mut ws_state = ws_with_item("任务A", false);
+        let mut app_state = AppState::default();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::PlanDateEvent(AddrEvent::Text("0".to_string())),
+            1,
+            &root,
+        );
+        assert!(ws_state.editing_plan_date.is_none());
+    }
+
+    #[test]
+    fn update_plan_date_event_builds_draft_and_submits() {
+        let (_dir, root) = project_dir_with_todo("# Todo\n");
+        let mut ws_state = ws_with_item("任务A", false);
+        let mut app_state = AppState::default();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::PlanDateEditStart(0),
+            1,
+            &root,
+        );
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::PlanDateEvent(AddrEvent::Text("08-10".to_string())),
+            1,
+            &root,
+        );
+        assert_eq!(ws_state.editing_plan_date, Some((0, "08-10".to_string())));
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::PlanDateEvent(AddrEvent::Submit),
             1,
             &root,
         );

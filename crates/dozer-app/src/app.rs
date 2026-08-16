@@ -2376,6 +2376,18 @@ impl App {
             .is_some_and(|ws| ws.todo.search_editing())
     }
 
+    /// Todo 面板新增任务框是否处于自绘编辑态(main.rs 键盘路由用)。
+    pub fn todo_add_editing(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.todo.add_editing())
+    }
+
+    /// Todo 面板计划时间行内编辑态是否打开(main.rs 键盘路由用)。
+    pub fn todo_plan_date_editing(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.todo.plan_date_editing())
+    }
+
     /// 是否正在拖拽 Todo 任务排序(main.rs 鼠标释放路由 + about_to_wait
     /// 持续重绘用;同 `dragging_tab` 那套)。
     pub fn todo_dragging(&self) -> bool {
