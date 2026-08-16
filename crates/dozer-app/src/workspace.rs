@@ -1010,6 +1010,58 @@ impl Workspace {
         });
     }
 
+    /// hook 事件驱动的"卡片元信息"刷新(仿 `spawn_review_load` 的写法):
+    /// model/permissionMode(仅 Claude,从 transcript 尾部轻量提取,见
+    /// `transcript::latest_model_and_mode`)+ 工作区覆盖(仅当该 session
+    /// 的 cwd 偏离项目根目录时才查;常见情形直接复用 `project_panel` 的
+    /// 项目级缓存,这里不产生任何 IO)。两者都不需要时直接返回,不起
+    /// 异步任务。
+    pub(crate) fn spawn_agent_card_refresh(
+        &self,
+        io: &ShellIo,
+        tab_id: usize,
+        agent: AgentKind,
+        transcript_path: Option<String>,
+        cwd: PathBuf,
+        project_root: Option<PathBuf>,
+    ) {
+        let Some(project_id) = self.project_id() else {
+            return;
+        };
+        let (needs_model_mode, needs_workspace) =
+            agent_card_refresh_plan(agent, &cwd, project_root.as_deref());
+        if !needs_model_mode && !needs_workspace {
+            return;
+        }
+        let proxy = io.proxy.clone();
+        io.handle.spawn(async move {
+            let (llm_model, mode, workspace) = tokio::task::spawn_blocking(move || {
+                let (llm_model, mode) = if needs_model_mode {
+                    transcript_path
+                        .and_then(|p| std::fs::read_to_string(p).ok())
+                        .map(|s| transcript::latest_model_and_mode(&s))
+                        .unwrap_or((None, None))
+                } else {
+                    (None, None)
+                };
+                let workspace = if needs_workspace {
+                    delivery::repo_root(&cwd).map(|repo| WorkspaceGitInfo {
+                        branch: delivery::branch(&repo),
+                        dirty: delivery::is_dirty(&repo),
+                    })
+                } else {
+                    None
+                };
+                (llm_model, mode, workspace)
+            })
+            .await
+            .unwrap_or((None, None, None));
+            let _ = proxy.send_event(Message::AgentCardRefreshed(
+                project_id, tab_id, llm_model, mode, workspace,
+            ));
+        });
+    }
+
     /// 项目切换清理：关掉所有终端 tab（=结束会话，同 CloseTab 语义）与
     /// 所有预览 tab，给新项目一个干净起点（P1g 验收反馈）。webview 池由
     /// main.rs 的 sync_previews 依据空的期望清单自动销毁。
@@ -1897,6 +1949,19 @@ impl Workspace {
             .map(|t| t.model.app_cursor_mode())
             .unwrap_or(false)
     }
+}
+
+/// 决定这次 hook 事件驱动的卡片刷新要不要做 model/mode 提取、要不要
+/// 单独查一次工作区 git 信息。抽成纯函数只为可测——
+/// `Workspace::spawn_agent_card_refresh` 里直接调用,不重复判断逻辑。
+pub(crate) fn agent_card_refresh_plan(
+    agent: AgentKind,
+    cwd: &Path,
+    project_root: Option<&Path>,
+) -> (bool, bool) {
+    let needs_model_mode = agent == AgentKind::Claude;
+    let needs_workspace = project_root != Some(cwd);
+    (needs_model_mode, needs_workspace)
 }
 
 /// 异步跑一次组合 git 查询(分支/脏/文件状态/worktree),完成后分发成两条
@@ -3307,6 +3372,45 @@ pub(crate) async fn forward_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_card_refresh_plan_decides_by_agent_and_cwd() {
+        let root = PathBuf::from("/repo");
+        let elsewhere = PathBuf::from("/elsewhere");
+
+        assert_eq!(
+            agent_card_refresh_plan(dozer_core::protocol::AgentKind::Claude, &root, Some(&root)),
+            (true, false),
+            "Claude + cwd 等于项目根:只做 model/mode"
+        );
+        assert_eq!(
+            agent_card_refresh_plan(
+                dozer_core::protocol::AgentKind::Codebuddy,
+                &root,
+                Some(&root)
+            ),
+            (false, false),
+            "非 Claude + cwd 等于项目根:两者都不做"
+        );
+        assert_eq!(
+            agent_card_refresh_plan(
+                dozer_core::protocol::AgentKind::Codebuddy,
+                &elsewhere,
+                Some(&root)
+            ),
+            (false, true),
+            "非 Claude + cwd 偏离项目根:只做工作区"
+        );
+        assert_eq!(
+            agent_card_refresh_plan(
+                dozer_core::protocol::AgentKind::Claude,
+                &elsewhere,
+                Some(&root)
+            ),
+            (true, true),
+            "Claude + cwd 偏离项目根:两者都做"
+        );
+    }
 
     #[test]
     fn preview_context_from_cursor_only_uses_1_indexed_point_range() {
