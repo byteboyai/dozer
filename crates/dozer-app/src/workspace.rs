@@ -204,6 +204,13 @@ pub enum TabBackend {
     Ssh { out: mpsc::UnboundedSender<SshOut> },
 }
 
+/// 单个会话的工作区展示态,来自 `delivery::branch`/`delivery::is_dirty`。
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct WorkspaceGitInfo {
+    pub branch: Option<String>,
+    pub dirty: bool,
+}
+
 /// 一个 tab 对应一个 daemon 会话。
 pub struct SessionTab {
     pub info: SessionInfo,
@@ -228,6 +235,17 @@ pub struct SessionTab {
     pub delivery_pending: bool,
     /// 上一次 TurnEnded 时的 HEAD（无沉淀 ref 时的比对基线）。
     pub last_turn_head: Option<String>,
+    /// 最近一次 hook 事件后从 transcript 尾部提取的模型 id(原始,未美化;
+    /// 渲染时经 `format_model_label`)。仅 `agent == AgentKind::Claude` 会
+    /// 被填充,其余 agent 恒 `None`。不叫 `model`——上面已有一个
+    /// `model: TerminalModel` 字段是终端显示缓冲区,同名会编译报错。
+    pub llm_model: Option<String>,
+    /// 同上,来自 transcript 顶层 `permissionMode`(如 `auto`/`plan`)。
+    pub permission_mode: Option<String>,
+    /// 工作区分支/脏标覆盖:仅当这个会话的 `effective_cwd()` 偏离项目根
+    /// 目录时才会被填充;为 `None` 时渲染层直接读 `ws.project_panel` 的
+    /// 项目级缓存(见 `Workspace::spawn_agent_card_refresh`)。
+    pub workspace_override: Option<WorkspaceGitInfo>,
     /// 稳定 id，`Message::TermOutput`/`SessionExited` 用它路由，不受
     /// tab 增删导致的 vec 位置变化影响。
     pub(crate) tab_id: usize,
@@ -448,6 +466,9 @@ impl Workspace {
                 last_exit: None,
                 delivery_pending: false,
                 last_turn_head: None,
+                llm_model: None,
+                permission_mode: None,
+                workspace_override: None,
                 backend: TabBackend::Daemon,
             });
             if let Some(t) = tabs.last_mut() {
@@ -1657,6 +1678,9 @@ impl Workspace {
             last_exit: None,
             delivery_pending: false,
             last_turn_head: None,
+            llm_model: None,
+            permission_mode: None,
+            workspace_override: None,
             backend: match ssh_backend {
                 Some(out) => TabBackend::Ssh { out },
                 None => TabBackend::Daemon,
@@ -3583,10 +3607,22 @@ mod tests {
             last_exit: None,
             delivery_pending: false,
             last_turn_head: None,
+            llm_model: None,
+            permission_mode: None,
+            workspace_override: None,
             tab_id: 0,
             forwarder: rt.spawn(async {}),
             backend: TabBackend::Daemon,
         }
+    }
+
+    #[test]
+    fn new_session_tab_fields_default_to_none() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let tab = make_test_tab(&rt, "s1", dozer_core::protocol::AgentKind::Claude);
+        assert_eq!(tab.llm_model, None);
+        assert_eq!(tab.permission_mode, None);
+        assert_eq!(tab.workspace_override, None);
     }
 
     #[test]
