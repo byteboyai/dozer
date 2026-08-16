@@ -1973,7 +1973,15 @@ pub(crate) fn agent_card_refresh_plan(
     // Unknown 同样走 Claude 形状的 transcript 解析(见 transcript.rs 里
     // parse_transcript 对 Unknown 的既有处理和注释——老装 hook 上报的
     // Unknown agent 不该因为这道门禁又变回"空白卡片"这同一类 bug)。
-    let needs_model_mode = matches!(agent, AgentKind::Claude | AgentKind::Unknown);
+    // Codebuddy 有独立 schema,但 latest_model_and_mode 已经兼认它的
+    // providerData.model 字段(mode 恒 None——transcript 没有 permissionMode
+    // 等价字段,卡片 Mode 行因此天然不渲染,不是 bug)。Opencode/Kilo 等其余
+    // agent 暂不在这道门禁里:dozer-hook 的 translate 层目前不往合成
+    // transcript 里写 model/mode 信息,加了也读不到值,留到那边补上后再开。
+    let needs_model_mode = matches!(
+        agent,
+        AgentKind::Claude | AgentKind::Unknown | AgentKind::Codebuddy
+    );
     // 精确相等太脆弱——cd 进项目根的任意子目录都会被判定成"偏离",既多做
     // 一次不必要的 git 查询,也是 Finding 1 那个 bug 更容易被触发的原因之
     // 一。改成路径前缀包含关系:cwd 是 project_root 的子路径就算"未偏离"。
@@ -3491,21 +3499,31 @@ mod tests {
         );
         assert_eq!(
             agent_card_refresh_plan(
-                dozer_core::protocol::AgentKind::Codebuddy,
+                dozer_core::protocol::AgentKind::Opencode,
                 &root,
                 Some(&root)
             ),
             (false, false),
-            "非 Claude + cwd 等于项目根:两者都不做"
+            "非 Claude/Unknown/Codebuddy(如 Opencode) + cwd 等于项目根:两者都不做"
         );
         assert_eq!(
             agent_card_refresh_plan(
-                dozer_core::protocol::AgentKind::Codebuddy,
+                dozer_core::protocol::AgentKind::Opencode,
                 &elsewhere,
                 Some(&root)
             ),
             (false, true),
-            "非 Claude + cwd 偏离项目根:只做工作区"
+            "非 Claude/Unknown/Codebuddy + cwd 偏离项目根:只做工作区"
+        );
+        assert_eq!(
+            agent_card_refresh_plan(
+                dozer_core::protocol::AgentKind::Codebuddy,
+                &root,
+                Some(&root)
+            ),
+            (true, false),
+            "Codebuddy + cwd 等于项目根:也要做(只提 LLM,mode 恒 None——\
+             transcript 没有 permissionMode 等价字段,见 latest_model_and_mode)"
         );
         assert_eq!(
             agent_card_refresh_plan(
@@ -3517,17 +3535,17 @@ mod tests {
             "Claude + cwd 偏离项目根:两者都做"
         );
         assert_eq!(
-            agent_card_refresh_plan(
-                dozer_core::protocol::AgentKind::Unknown,
-                &root,
-                Some(&root)
-            ),
+            agent_card_refresh_plan(dozer_core::protocol::AgentKind::Unknown, &root, Some(&root)),
             (true, false),
             "Finding 2: Unknown + cwd 等于项目根:也要按 Claude 形状做 model/mode 提取"
         );
         let subdir = PathBuf::from("/repo").join("crates").join("dozer-app");
         assert_eq!(
-            agent_card_refresh_plan(dozer_core::protocol::AgentKind::Claude, &subdir, Some(&root)),
+            agent_card_refresh_plan(
+                dozer_core::protocol::AgentKind::Claude,
+                &subdir,
+                Some(&root)
+            ),
             (true, false),
             "Finding 3: cwd 是 project_root 的子目录,不算偏离,不应触发 needs_workspace"
         );

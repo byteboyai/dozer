@@ -189,9 +189,14 @@ pub fn parse_transcript(agent: AgentKind, jsonl: &str) -> Vec<ReviewEntry> {
 }
 
 /// 从 transcript 尾部提取最后一次出现的 model id / permissionMode(后
-/// 出现的覆盖先出现的,只关心最新值)。`permissionMode` 在
-/// `user`/`assistant`/`permission-mode` 三种行的顶层都会出现,统一按
-/// 顶层键取,不区分行类型。解析失败的行跳过,不中断整体扫描(同
+/// 出现的覆盖先出现的,只关心最新值)。model 兼认两种互斥的行形状:
+/// Claude(`message.model`)和 Codebuddy(顶层 `providerData.model`,字段名
+/// 核对自 `crates/dozer-hook/fixtures/codebuddy-transcript-sample.jsonl`
+/// 真实样本)——同一份 transcript 只会是其中一种形状,两条路径共存不冲突,
+/// 不需要按 `agent` 分派。`permissionMode` 只有 Claude 形状(`user`/
+/// `assistant`/`permission-mode` 三种行的顶层)才有,Codebuddy 没有等价
+/// 字段,不提取,`mode` 对 Codebuddy 恒 `None`(Agent 卡片视图据此不渲染
+/// Mode 行,不是 bug)。解析失败的行跳过,不中断整体扫描(同
 /// `parse_claude_shaped_jsonl` 的既有容错口径)。不像 `parse_transcript`
 /// 那样建 `ReviewEntry` 列表,只回两个标量,给 Agent 卡片的实时刷新用
 /// (每次 hook 事件都会重跑一次,故意做得比 `parse_transcript` 轻)。
@@ -206,11 +211,15 @@ pub fn latest_model_and_mode(jsonl: &str) -> (Option<String>, Option<String>) {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if let Some(m) = v
+        let claude_model = v
             .get("message")
             .and_then(|m| m.get("model"))
-            .and_then(|s| s.as_str())
-        {
+            .and_then(|s| s.as_str());
+        let codebuddy_model = v
+            .get("providerData")
+            .and_then(|p| p.get("model"))
+            .and_then(|s| s.as_str());
+        if let Some(m) = claude_model.or(codebuddy_model) {
             model = Some(m.to_string());
         }
         if let Some(pm) = v.get("permissionMode").and_then(|s| s.as_str()) {
@@ -436,5 +445,36 @@ mod tests {
     #[test]
     fn latest_model_and_mode_empty_input_yields_none() {
         assert_eq!(latest_model_and_mode(""), (None, None));
+    }
+
+    #[test]
+    fn latest_model_and_mode_reads_codebuddy_provider_data_model() {
+        // Codebuddy 形状(顶层 providerData.model,不是 message.model)——真实
+        // 字段名/路径核对自 crates/dozer-hook/fixtures/
+        // codebuddy-transcript-sample.jsonl。Codebuddy 没有 permissionMode
+        // 等价字段,mode 应保持 None。
+        let jsonl = concat!(
+            "{\"type\":\"message\",\"role\":\"user\",\"content\":[]}\n",
+            "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[],",
+            "\"providerData\":{\"model\":\"glm-5.2\",\"requestModelId\":\"glm-5.2\"}}\n",
+        );
+        let (model, mode) = latest_model_and_mode(jsonl);
+        assert_eq!(model.as_deref(), Some("glm-5.2"));
+        assert_eq!(mode, None);
+    }
+
+    #[test]
+    fn latest_model_and_mode_last_occurrence_across_mixed_shapes() {
+        // message.model(Claude 形状)和 providerData.model(Codebuddy 形状)
+        // 互斥,不会同一行出现——但函数本身不按 agent 分派,这里验证两种
+        // 形状各自都命中时仍按"最后出现覆盖"处理(同一份 transcript 实际
+        // 只会是其中一种形状,这个用例只是确认两条提取路径互不干扰)。
+        let jsonl = concat!(
+            "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-sonnet-5\"}}\n",
+            "{\"type\":\"message\",\"role\":\"assistant\",",
+            "\"providerData\":{\"model\":\"glm-5.2\"}}\n",
+        );
+        let (model, _mode) = latest_model_and_mode(jsonl);
+        assert_eq!(model.as_deref(), Some("glm-5.2"));
     }
 }
