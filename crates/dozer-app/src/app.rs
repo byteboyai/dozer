@@ -1227,6 +1227,11 @@ pub enum Message {
     /// 松开左键,结束页签拖拽。构造方为 main.rs 的 `MouseInput{Released}`
     /// 分支;项目页签组顺带把新顺序写盘。
     TabDragEnd,
+    /// Todo 面板拖拽排序结束:松开左键,把新顺序写盘。构造方为 main.rs 的
+    /// `MouseInput{Released}` 分支,同 `TabDragEnd`(页签拖拽)那套。拖拽中
+    /// 的 `DragMove` 由卡片外层 `MouseArea::on_move` 直接发 `Todo::DragMove`
+    /// (走 `Message::Todo` 通道),不需要顶层变体——这里只收尾。
+    TodoDragEnd,
     /// 点击左图标栏某图标:已是当前视图则切换收起态,否则切到该视图并展开。
     LeftIconSelect(LeftView),
     /// 同上,右图标栏。
@@ -2323,6 +2328,13 @@ impl App {
             .is_some_and(|ws| ws.todo.search_editing())
     }
 
+    /// 是否正在拖拽 Todo 任务排序(main.rs 鼠标释放路由 + about_to_wait
+    /// 持续重绘用;同 `dragging_tab` 那套)。
+    pub fn todo_dragging(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.todo.drag_active())
+    }
+
     /// 当前项目根路径(供 main.rs 算相对路径用;未打开项目时 None)。
     pub fn active_project_path(&self) -> Option<PathBuf> {
         self.active_workspace()?.active_project_path()
@@ -3119,6 +3131,9 @@ impl App {
             }
             Message::TabDragEnd => {
                 self.end_tab_drag();
+            }
+            Message::TodoDragEnd => {
+                self.todo_message(todo::Message::DragEnd);
             }
             Message::LeftIconSelect(v) => self.left_icon_select(v),
             Message::RightIconSelect(v) => self.right_icon_select(v),

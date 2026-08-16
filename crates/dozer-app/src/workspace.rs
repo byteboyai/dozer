@@ -1818,6 +1818,7 @@ impl Workspace {
         self.files.cancel_tree_edit();
         self.files.cancel_search_edit();
         self.todo.cancel_search_edit();
+        self.todo.cancel_drag();
         // 名称编辑不在失焦时丢弃——改由 `App::blur_inputs` 取出缓冲并发起
         // daemon 改名(改动且非空才发请求),与描述字段"失焦写盘"行为对齐。
         if let Some(project) = self.project.as_ref() {

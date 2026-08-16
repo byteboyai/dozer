@@ -98,12 +98,17 @@ pub fn append_todo_item(content: &str, text: &str) -> String {
     out
 }
 
-/// 把第 `pending_index` 个待办行(按文件里待办行的出现次序,0-based)与相邻
-/// 待办行交换(`dir` = -1 上移,+1 下移;越界即视为 no-op 返回 `None`)。
-/// 已完成行被整体推到待办行"之后"——即"待办在前、已完成自动沉底",且各自
-/// 保持原相对次序。非 checkbox 行(标题/正文/空行)位置完全不动,只动
-/// checkbox 行的先后。返回重建后的全文;`None` 表示越界 no-op。
-pub fn move_pending_task(content: &str, pending_index: usize, dir: isize) -> Option<String> {
+/// 把"待办块"里第 `from` 个待办行(按文件里待办行的出现次序,0-based)移动
+/// 到第 `to` 个待办位(任意合法 rank,不必相邻)。已完成行保持原位置、整体
+/// 仍在待办之后(视图再沉底);非 checkbox 行(标题/正文/空行)位置完全不动,
+/// 只动 checkbox 待办行的先后。返回重建后的全文;`from`/`to` 越界或相等
+/// 返回 `None`。这是鼠标拖拽排序的落盘内核——拖拽在 `DragEnd` 时只调
+/// 一次,把整段拖拽累积成的 source→target 一次性落到 `.dozer/todo.md`,
+/// 拖拽过程中不碰文件(视图层靠 item-index 置换即时反馈)。
+pub fn move_pending_to(content: &str, from: usize, to: usize) -> Option<String> {
+    if from == to {
+        return None;
+    }
     let lines: Vec<&str> = content.lines().collect();
     // 标记每行的类别,并收集待办行原文(保持文件次序)。
     let mut kinds: Vec<Option<bool>> = Vec::with_capacity(lines.len());
@@ -119,12 +124,12 @@ pub fn move_pending_task(content: &str, pending_index: usize, dir: isize) -> Opt
             kinds.push(None);
         }
     }
-    let target = pending_index as isize + dir;
-    if pending_index >= pending_lines.len() || target < 0 || target as usize >= pending_lines.len()
-    {
+    if from >= pending_lines.len() || to >= pending_lines.len() {
         return None;
     }
-    pending_lines.swap(pending_index, target as usize);
+    // 把 from 处的待办行搬到 to 位:先摘下,再插回(中间行整体顺移)。
+    let moved = pending_lines.remove(from);
+    pending_lines.insert(to, moved);
     // 重建:遍历原行,checkbox 行按"待办块(新序)+ 已完成块(原序)"填充,
     // 非 checkbox 行原样保留。已完成行用原文(line)。
     let mut out = String::with_capacity(content.len());
@@ -199,6 +204,21 @@ pub enum TodoViewMode {
     #[default]
     List,
     Markdown,
+}
+
+/// 鼠标拖拽排序进行态:只记被拖起的待办任务和当前光标悬停到的目标待办,
+/// 都用 `items` 里的下标(item-index)表示,**不**用"待办块"相对 rank。
+/// 好处是过滤/搜索视图下也成立——展示置换在 `todo_list_view` 里直接对
+/// 可见待办子序列(按 item-index)做,只有松手写盘时才把两端 item-index
+/// 折算成文件里的待办 rank 交给 `move_pending_to`(见 `DragEnd`)。
+/// `target_idx == usize::MAX` 表示"拖到待办块末尾(已完成之前)"——光标
+/// 悬停到已完成卡片时取这个值。`source_idx == target_idx` 即还没真的
+/// 移动过(纯点击),`DragEnd` 时不会写盘。已完成任务永远不参与拖拽:
+/// `source_idx` 只能来自待办,悬停已完成只改变 `target_idx`(夹到末尾)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TodoDrag {
+    pub source_idx: usize,
+    pub target_idx: usize,
 }
 
 /// 纯前端过滤：状态相等匹配 + 关键字对 `TodoItem.text` 做大小写不敏感
@@ -321,6 +341,10 @@ pub struct WorkspaceState {
     /// 状态 pill 菜单展开态(卡片下标)，`None` = 未展开。跟 `dispatch_open`
     /// 同一种"同时只能有一个"模型，不做多卡片同时展开。
     state_pill_open: Option<usize>,
+    /// 鼠标拖拽排序进行态(`None` = 没在拖)。见 `TodoDrag`。视图层据此对
+    /// 待办子序列做展示置换并改光标为抓取态；落盘只在 `DragEnd` 时一次性
+    /// 发生。已完成任务不可拖动(见 `RowSelect`/`DragMove` 的不变量)。
+    drag: Option<TodoDrag>,
 }
 
 impl WorkspaceState {
@@ -375,6 +399,16 @@ impl WorkspaceState {
     /// 失焦退出搜索编辑态(`Workspace::blur_inputs` 用):草稿保留。
     pub fn cancel_search_edit(&mut self) {
         self.search_editing = false;
+    }
+
+    /// 是否正在拖拽排序(main.rs 鼠标释放路由 + about_to_wait 持续重绘用)。
+    pub fn drag_active(&self) -> bool {
+        self.drag.is_some()
+    }
+
+    /// 取消进行中的拖拽排序(失焦/切面板时清状态,避免卡在拖拽中间)。
+    pub fn cancel_drag(&mut self) {
+        self.drag = None;
     }
 
     /// 草稿落成为生效的 `search` 过滤词;保留编辑态(便于连续改词)。
@@ -475,10 +509,15 @@ pub enum Message {
     SearchEvent(AddrEvent),
     /// 回车 / 点右侧搜索按钮:把草稿落成生效的 `search` 过滤词。
     SearchSubmit,
-    /// 待办行上移/下移:`idx` 是任务在 `items` 里的下标,`dir` = -1 上移/
-    /// +1 下移;落盘时把待办行相对相邻待办行交换,已完成行自动沉底。已完成
-    /// 任务(或越界)是 no-op——已完成不可拖动排序。
-    MovePending(usize, isize),
+    /// 光标移动到了第 `idx` 个任务卡片上(由 `todo_card` 外层的
+    /// `MouseArea::on_move` 构造)。若当前正在拖拽待办,更新目标位
+    /// `target_idx`(悬停到已完成卡片时夹到待办块末尾,见 `update`)。
+    /// 只有"正在拖"时才生效,纯悬停不会动任何东西。
+    DragMove(usize),
+    /// 松开左键,结束拖拽并把新顺序写盘(`move_pending_to` + reload)。
+    /// 构造方为 main.rs 的 `MouseInput{Released}` 分支(同 `TabDragEnd`)。
+    /// `source_idx == target_idx`(没真移动过)是 no-op,不写盘。
+    DragEnd,
     DispatchOpen(usize),
     DispatchClose,
     DispatchToExisting(usize, String),
@@ -611,7 +650,24 @@ pub fn update(
         }
         Message::FilterSet(f) => ws_state.filter = f,
         Message::ViewModeSet(m) => ws_state.view_mode = m,
-        Message::RowSelect(idx) => ws_state.selected_row = idx,
+        Message::RowSelect(idx) => {
+            ws_state.selected_row = idx;
+            // 待办卡片被按下即"准备拖":记下它的 item-index 作为拖拽源。
+            // 已完成不参与拖拽(只有待办才进 `drag`)。注意这跟选中态是两件
+            // 独立的事——纯点击(不移动)也会落到这里,但松手时
+            // source==target 不写盘,只是正常选中切换(同 `TabDragMove`
+            // 的"按住=准备拖,移动才换位"语义)。
+            if let Some(i) = idx {
+                if let Some(item) = ws_state.items.get(i) {
+                    if !item.done {
+                        ws_state.drag = Some(TodoDrag {
+                            source_idx: i,
+                            target_idx: i,
+                        });
+                    }
+                }
+            }
+        }
         Message::SearchEditStart => ws_state.search_editing = true,
         Message::SearchEvent(ev) => {
             // 编辑态之外(失焦)的 `SearchEvent` 一律忽略,避免草稿被污染。
@@ -631,32 +687,63 @@ pub fn update(
             ws_state.commit_search();
             ws_state.search_editing = false;
         }
-        Message::MovePending(idx, dir) => {
-            // 已完成任务不可拖动排序;越界也 no-op。
-            let Some(item) = ws_state.items.get(idx) else {
+        Message::DragMove(over_idx) => {
+            // 只有"正在拖"才生效;纯悬停不会动任何东西。
+            let Some(drag) = ws_state.drag else {
                 return;
             };
-            if item.done {
+            // 悬停到待办卡片 → 目标取该卡片 item-index;悬停到已完成卡片
+            // → 目标夹到待办块末尾(usize::MAX 哨兵,`DragEnd` 时折算成
+            // 最后一个待办 rank)。已完成不可被拖到(只会改变落点)。
+            let target = match ws_state.items.get(over_idx) {
+                Some(it) if !it.done => over_idx,
+                _ => usize::MAX,
+            };
+            if target != drag.target_idx {
+                ws_state.drag = Some(TodoDrag {
+                    source_idx: drag.source_idx,
+                    target_idx: target,
+                });
+            }
+        }
+        Message::DragEnd => {
+            let Some(drag) = ws_state.drag.take() else {
+                return;
+            };
+            if drag.source_idx == drag.target_idx {
+                return; // 没真移动过(纯点击),no-op
+            }
+            // 把两端的 item-index 折算成文件里的待办 rank(只在写盘时算一次)。
+            let total_pending = ws_state.items.iter().filter(|it| !it.done).count();
+            let pending_rank = |items: &[TodoItem], idx: usize| -> Option<usize> {
+                items
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, it)| !it.done)
+                    .position(|(i, _)| i == idx)
+            };
+            let Some(source_rank) = pending_rank(&ws_state.items, drag.source_idx) else {
+                return;
+            };
+            let target_rank = if drag.target_idx == usize::MAX {
+                total_pending.saturating_sub(1)
+            } else {
+                match pending_rank(&ws_state.items, drag.target_idx) {
+                    Some(r) => r,
+                    None => total_pending.saturating_sub(1),
+                }
+            };
+            if source_rank == target_rank {
                 return;
             }
-            // 算出该任务在"待办块"里的相对下标(文件里待办行的出现次序)。
-            let pending_index = ws_state
-                .items
-                .iter()
-                .enumerate()
-                .filter(|(_, it)| !it.done)
-                .position(|(i, _)| i == idx);
-            let Some(pending_index) = pending_index else {
-                return;
-            };
             let path = todo_path(project_path);
             let Ok(content) = std::fs::read_to_string(&path) else {
                 return;
             };
-            if let Some(new_content) = move_pending_task(&content, pending_index, dir) {
-                if std::fs::write(&path, new_content).is_ok() {
-                    reload_from_disk(ws_state, project_path);
-                }
+            if let Some(new_content) = move_pending_to(&content, source_rank, target_rank)
+                && std::fs::write(&path, new_content).is_ok()
+            {
+                reload_from_disk(ws_state, project_path);
             }
         }
         Message::DispatchOpen(idx) => ws_state.dispatch_open = Some(idx),
@@ -945,24 +1032,41 @@ fn todo_list_view<'a>(
                 pending_idx.push(i);
             }
         }
-        let ordered: Vec<usize> = pending_idx.iter().chain(done_idx.iter()).copied().collect();
-        // 待办在全体 items 里的相对下标,用于决定上下按钮是否可用。
-        let total_pending = ws_state.items.iter().filter(|it| !it.done).count();
+        // 拖拽进行中:把可见待办子序列按 `TodoDrag` 做纯展示置换(在
+        // item-index 空间,过滤/搜索视图下也成立),让被拖的卡片实时跟到
+        // 光标目标位。落盘不在这里发生(`DragEnd` 才写),所以只是视觉反馈。
+        let pending_ordered: Vec<usize> = match ws_state.drag {
+            Some(drag) if drag.source_idx != drag.target_idx => {
+                let mut pend = pending_idx.clone();
+                if drag.target_idx == usize::MAX {
+                    // 拖到待办块末尾:把源挪到末尾。
+                    if let Some(pos) = pend.iter().position(|&x| x == drag.source_idx) {
+                        let item = pend.remove(pos);
+                        pend.push(item);
+                    }
+                } else if let (Some(from), Some(to)) = (
+                    pend.iter().position(|&x| x == drag.source_idx),
+                    pend.iter().position(|&x| x == drag.target_idx),
+                ) && from != to
+                {
+                    let item = pend.remove(from);
+                    pend.insert(to, item);
+                }
+                pend
+            }
+            _ => pending_idx,
+        };
+        let ordered: Vec<usize> = pending_ordered
+            .iter()
+            .chain(done_idx.iter())
+            .copied()
+            .collect();
+        let grabbing = ws_state.drag.is_some();
         for (display_no, &idx) in ordered.iter().enumerate() {
             let item = &ws_state.items[idx];
             let key = todo_line_key(&item.text);
             let meta = app_state.meta_for(project_id, key);
             let dispatch = meta.and_then(|m| m.dispatch.as_ref());
-            let pending_rank = ws_state
-                .items
-                .iter()
-                .enumerate()
-                .filter(|(_, it)| !it.done)
-                .position(|(i, _)| i == idx);
-            let (can_up, can_down) = match pending_rank {
-                Some(rank) => (rank > 0, rank + 1 < total_pending),
-                None => (false, false),
-            };
             let mut row = None;
             if let Some((editing_idx, draft)) = &ws_state.editing_plan_date
                 && *editing_idx == idx
@@ -983,8 +1087,7 @@ fn todo_list_view<'a>(
                         ws_state.dispatch_open == Some(idx),
                         ws_state.state_pill_open == Some(idx),
                         &existing_tabs,
-                        can_up,
-                        can_down,
+                        grabbing,
                     ));
                 }
             }
@@ -1034,8 +1137,7 @@ fn todo_card<'a>(
     dispatch_open: bool,
     state_pill_open: bool,
     existing_tabs: &'a [(&'a str, String)],
-    can_move_up: bool,
-    can_move_down: bool,
+    grabbing: bool,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let done = item.done;
 
@@ -1072,66 +1174,12 @@ fn todo_card<'a>(
         .on_press(Message::PlanDateEditStart(idx))
         .into();
 
-    let up_btn = button(text("↑").size(theme::font::body()).color(if can_move_up {
-        theme::color::CREAM
-    } else {
-        theme::color::BORDER
-    }))
-    .on_press_maybe(if can_move_up {
-        Some(Message::MovePending(idx, -1))
-    } else {
-        None
-    })
-    .padding([2, 6])
-    .style(move |_t: &iced_widget::Theme, _s| button::Style {
-        background: None,
-        border: Border {
-            color: theme::color::BORDER,
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        text_color: theme::color::CREAM,
-        ..button::Style::default()
-    });
-    let down_btn = button(text("↓").size(theme::font::body()).color(if can_move_down {
-        theme::color::CREAM
-    } else {
-        theme::color::BORDER
-    }))
-    .on_press_maybe(if can_move_down {
-        Some(Message::MovePending(idx, 1))
-    } else {
-        None
-    })
-    .padding([2, 6])
-    .style(move |_t: &iced_widget::Theme, _s| button::Style {
-        background: None,
-        border: Border {
-            color: theme::color::BORDER,
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        text_color: theme::color::CREAM,
-        ..button::Style::default()
-    });
-    // 上移/下移只对非已完成任务出现——已完成自动沉底、不可拖动排序。
-    let move_btns: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> = if done
-    {
-        iced_widget::space::Space::new()
-            .width(Length::Shrink)
-            .height(Length::Shrink)
-            .into()
-    } else {
-        row![up_btn, down_btn].spacing(2).into()
-    };
-
     let top_row = row![
         number_text,
         iced_widget::space::Space::new()
             .width(Length::Fill)
             .height(Length::Shrink),
         date_badge,
-        move_btns,
     ]
     .align_y(iced_widget::core::alignment::Vertical::Center)
     .spacing(6);
@@ -1279,7 +1327,16 @@ fn todo_card<'a>(
     if state_pill_open {
         stacked = stacked.push(state_pill_menu(idx));
     }
-    stacked.into()
+    // 拖拽换位感应层:只补一个 `on_move`(光标移动过本卡就发 `DragMove`),
+    // 子按钮(勾选/派发/pill)照常各自吞"按下"事件——同 `tab_drag_surface`
+    // 的那套。按下=准备拖由 `RowSelect` 置位,这里 `on_move` 只认"正在拖"
+    // 的时刻(`DragMove` 内部 no-op 检查)。拖拽中整张卡显示抓取光标。
+    let area = MouseArea::new(stacked).on_move(move |_| Message::DragMove(idx));
+    if grabbing {
+        area.interaction(mouse::Interaction::Grabbing).into()
+    } else {
+        area.into()
+    }
 }
 
 /// Todo 派发选择层：列出当前项目存活的 agent tab + 一个"新建"入口，样式
@@ -1656,12 +1713,12 @@ mod tests {
     }
 
     #[test]
-    fn move_pending_task_reorders_pending_only_done_kept_in_place() {
-        // 待办 A、已完成 X、待办 B(混排);把第 0 个待办(A)下移应与第 1 个
-        // 待办(B)交换——只动待办之间的相对次序,已完成 X 留在原位(列表
-        // 视图再把它沉到最底,见 `todo_list_view` 的 pending/done 分区)。
+    fn move_pending_to_reorders_pending_only_done_kept_in_place() {
+        // 待办 A、已完成 X、待办 B(混排);把第 0 个待办(A)移到第 1 位应与
+        // 第 1 个待办(B)交换——只动待办之间的相对次序,已完成 X 留在原位
+        // (列表视图再把它沉到最底,见 `todo_list_view` 的 pending/done 分区)。
         let md = "- [ ] A\n- [x] X\n- [ ] B\n";
-        let moved = move_pending_task(md, 0, 1).expect("应可下移");
+        let moved = move_pending_to(md, 0, 1).expect("应可下移");
         assert_eq!(moved, "- [ ] B\n- [x] X\n- [ ] A\n");
         // 视图层分区后展示次序应为 B、A(待办)、X(已完成沉底)。
         let items = parse_todo(&moved);
@@ -1679,16 +1736,17 @@ mod tests {
         assert_eq!(done, vec!["X"]);
         // 非 checkbox 行(标题/正文)位置不动。
         let md2 = "# 标题\n\n- [ ] A\n正文\n- [x] X\n- [ ] B\n";
-        let moved2 = move_pending_task(md2, 1, -1).expect("应可上移");
+        let moved2 = move_pending_to(md2, 1, 0).expect("应可上移");
         assert_eq!(moved2, "# 标题\n\n- [ ] B\n正文\n- [x] X\n- [ ] A\n");
     }
 
     #[test]
-    fn move_pending_task_out_of_range_is_noop() {
+    fn move_pending_to_out_of_range_is_noop() {
         let md = "- [ ] A\n- [ ] B\n";
-        assert!(move_pending_task(md, 0, -1).is_none()); // 已在顶,上移越界
-        assert!(move_pending_task(md, 1, 1).is_none()); // 已在底,下移越界
-        assert!(move_pending_task(md, 5, 1).is_none()); // 下标越界
+        assert!(move_pending_to(md, 0, 0).is_none()); // from==to,no-op
+        assert!(move_pending_to(md, 0, 5).is_none()); // to 越界(已在顶上移)
+        assert!(move_pending_to(md, 1, 2).is_none()); // to 越界(已在底下移)
+        assert!(move_pending_to(md, 5, 0).is_none()); // from 越界
     }
 
     #[test]
@@ -2012,6 +2070,67 @@ mod tests {
         );
         let content = std::fs::read_to_string(todo_path(&root)).unwrap();
         assert_eq!(content, "- [ ] 任务A\n", "no-op 不该改动磁盘文件");
+    }
+
+    #[test]
+    fn update_drag_end_reorders_pending_in_file() {
+        // 待办 A、B、C;把 A(下标 0)拖到 C 的位置(下标 2),`DragEnd` 应把
+        // 待办块重排成 B、C、A 并写盘。已完成行不参与(这里没有)。
+        let (_dir, root) = project_dir_with_todo("- [ ] A\n- [ ] B\n- [ ] C\n");
+        let mut ws_state = WorkspaceState {
+            items: vec![
+                TodoItem {
+                    text: "A".into(),
+                    done: false,
+                },
+                TodoItem {
+                    text: "B".into(),
+                    done: false,
+                },
+                TodoItem {
+                    text: "C".into(),
+                    done: false,
+                },
+            ],
+            ..WorkspaceState::default()
+        };
+        let mut app_state = AppState::default();
+        ws_state.drag = Some(TodoDrag {
+            source_idx: 0,
+            target_idx: 2,
+        });
+        update(&mut ws_state, &mut app_state, Message::DragEnd, 1, &root);
+        let content = std::fs::read_to_string(todo_path(&root)).unwrap();
+        assert_eq!(content, "- [ ] B\n- [ ] C\n- [ ] A\n");
+        assert!(ws_state.drag.is_none(), "DragEnd 应清掉拖拽态");
+    }
+
+    #[test]
+    fn update_drag_end_noop_when_not_moved() {
+        // 光标没真移动过(source==target),`DragEnd` 是 no-op,不碰磁盘文件。
+        let (_dir, root) = project_dir_with_todo("- [ ] A\n- [ ] B\n");
+        let mut ws_state = WorkspaceState {
+            items: vec![
+                TodoItem {
+                    text: "A".into(),
+                    done: false,
+                },
+                TodoItem {
+                    text: "B".into(),
+                    done: false,
+                },
+            ],
+            ..WorkspaceState::default()
+        };
+        let mut app_state = AppState::default();
+        ws_state.drag = Some(TodoDrag {
+            source_idx: 0,
+            target_idx: 0,
+        });
+        update(&mut ws_state, &mut app_state, Message::DragEnd, 1, &root);
+        let content = std::fs::read_to_string(todo_path(&root)).unwrap();
+        assert_eq!(content, "- [ ] A\n- [ ] B\n", "没移动不该改文件");
+        assert!(ws_state.drag.is_none());
     }
 
     #[test]

@@ -268,6 +268,10 @@ const HOVER_ANIM_INTERVAL: Duration = Duration::from_millis(16);
 /// `pub(crate)`——`App::poll_todo_if_visible` 也要用它把自己限速到这个
 /// 节奏(同 `BLINK_INTERVAL` 的处理,理由见该常量文档)。
 pub(crate) const TODO_POLL_INTERVAL: Duration = Duration::from_millis(1000);
+/// 拖拽排序(页签/Todo)进行中的重绘节奏:约 60fps,保证拖动时卡片实时
+/// 跟手。拖拽本身靠 `on_move` 改状态,但本循环是事件驱动重绘,没有这个
+/// 持续唤醒,拖动过程中屏幕不会更新,只有松手那一刻才重绘。
+pub(crate) const DRAG_REDRAW_INTERVAL: Duration = Duration::from_millis(16);
 
 /// 清空一帧到给定背景色，不再绘制 spike 阶段的示例三角形
 /// （spike B 的 `scene.rs`/wgsl shader 已随本任务删除）。
@@ -719,6 +723,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     ..
                 } if app.dragging_tab().is_some() => {
                     app.update(Message::TabDragEnd);
+                    window.request_redraw();
+                }
+                // Todo 面板拖拽排序同理:左键松开即结束并把新顺序写盘(换位
+                // 是靠被拖过卡片的 `on_move` 驱动的,这里只负责收尾)。
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: winit::event::MouseButton::Left,
+                    ..
+                } if app.todo_dragging() => {
+                    app.update(Message::TodoDragEnd);
                     window.request_redraw();
                 }
                 // 外部 OS 文件拖拽进入窗口:进入即置拖拽标记,之后每个
@@ -1534,10 +1548,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         /// 这里只负责"下次什么时候唤醒",不负责"唤醒后该不该真的做事")。
         fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
             if let Self::Ready { app, .. } = self {
-                let wakes: [(bool, Duration); 3] = [
+                let wakes: [(bool, Duration); 4] = [
                     (app.any_hover_anim_active(), HOVER_ANIM_INTERVAL),
                     (app.any_blinking(), BLINK_INTERVAL),
                     (app.todo_panel_visible(), TODO_POLL_INTERVAL),
+                    (
+                        app.todo_dragging() || app.dragging_tab().is_some(),
+                        DRAG_REDRAW_INTERVAL,
+                    ),
                 ];
                 if let Some(interval) = wakes
                     .into_iter()
