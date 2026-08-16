@@ -1199,6 +1199,16 @@ pub enum Message {
     AgentStateChanged(ProjectId, usize, AgentKind, AgentState, Option<String>),
     /// TurnEnded 触发的交付检测结果（tab_id, 是否有待验收交付）。
     DeliveryChecked(ProjectId, usize, bool),
+    /// hook 事件驱动的 Agent 卡片元信息刷新结果(tab_id, LLM 型号,
+    /// permission mode,工作区分支/脏标覆盖)。`None` 字段表示这次没有
+    /// 新值,落地时不覆盖已有值(见 `workspace::apply_agent_card_refresh`)。
+    AgentCardRefreshed(
+        ProjectId,
+        usize,
+        Option<String>,
+        Option<String>,
+        Option<crate::workspace::WorkspaceGitInfo>,
+    ),
     /// 验收面板的全部消息,内核只转发不解读——见
     /// `extensions::acceptance::Message`。
     Acceptance(acceptance::Message),
@@ -3023,6 +3033,17 @@ impl App {
             Message::DeliveryChecked(project_id, tab_id, pending) => {
                 self.delivery_checked(project_id, tab_id, pending)
             }
+            Message::AgentCardRefreshed(project_id, tab_id, llm_model, mode, workspace) => {
+                self.with_project(project_id, |ws, _io| {
+                    crate::workspace::apply_agent_card_refresh(
+                        &mut ws.tabs,
+                        tab_id,
+                        llm_model,
+                        mode,
+                        workspace,
+                    );
+                });
+            }
             Message::Acceptance(acceptance::Message::Open(tab_id)) => self.acceptance_open(tab_id),
             Message::Acceptance(acceptance::Message::Reject) => self.acceptance_reject(),
             Message::Acceptance(
@@ -4844,6 +4865,14 @@ impl App {
         self.with_project(project_id, |ws, io| {
             // 当前项目路径先取出（下面要 &mut 借 tab，冲突）；重锚:项目优先。
             let active_repo = ws.project.as_ref().map(|p| PathBuf::from(&p.path));
+            // 卡片刷新要传的数据在这里先摘出来（`Option` 同时充当"tab 是否
+            // 存在"的哨兵）：`tab`（来自 `ws.tab_by_id_mut`）借的是整个
+            // `ws`，下面 TurnEnded 分支还要再用 `tab`，中间插一句
+            // `ws.spawn_agent_card_refresh`（借 `&ws`）会跟这个 `&mut ws`
+            // 借用重叠、过不了借用检查；摘成局部变量、挪到这个 `if let`
+            // 块结束、`tab` 借用已经释放之后再调用，规避这个冲突,语义不变
+            // (仍然是"tab 存在就必调用一次,不进 TurnEnded 条件分支")。
+            let mut card_refresh_args: Option<(Option<String>, PathBuf)> = None;
             if let Some(tab) = ws.tab_by_id_mut(tab_id) {
                 tab.agent_state = state;
                 tab.agent = agent;
@@ -4851,6 +4880,7 @@ impl App {
                     tab.transcript_path = Some(tp);
                 }
                 tracing::info!(tab_id, ?state, "agent 状态变更");
+                card_refresh_args = Some((tab.transcript_path.clone(), tab.effective_cwd()));
                 if state == AgentState::TurnEnded {
                     // git 检测不许在 UI 线程跑：丢 tokio,结果经 proxy 回来
                     let cwd = effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
@@ -4890,6 +4920,16 @@ impl App {
                         }
                     });
                 }
+            }
+            if let Some((transcript_path, cwd)) = card_refresh_args {
+                ws.spawn_agent_card_refresh(
+                    io,
+                    tab_id,
+                    agent,
+                    transcript_path,
+                    cwd,
+                    active_repo.clone(),
+                );
             }
             // 审阅 tab 若开着且属本会话,回合结束重解析 transcript（P1i）。
             if state == AgentState::TurnEnded

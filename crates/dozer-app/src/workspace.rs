@@ -1964,6 +1964,34 @@ pub(crate) fn agent_card_refresh_plan(
     (needs_model_mode, needs_workspace)
 }
 
+/// `Message::AgentCardRefreshed` 落地:在 `tabs` 里找 `tab_id`,`None`
+/// 字段表示这次没有新值,不覆盖已有值(每次刷新只重新扫描"当前"
+/// transcript 内容,理论上不会无中生有变回 `None`,这里的保护针对
+/// transcript 读取失败等异常情形,不让卡片从"有值"闪回"无值")。tab
+/// 不存在(已关闭)时整体 no-op,不 panic。只依赖 `&mut [SessionTab]`
+/// 不依赖整个 `Workspace`,同 `group_tabs_by_agent` 的既有写法,方便
+/// 直接单测。
+pub(crate) fn apply_agent_card_refresh(
+    tabs: &mut [SessionTab],
+    tab_id: usize,
+    llm_model: Option<String>,
+    mode: Option<String>,
+    workspace: Option<WorkspaceGitInfo>,
+) {
+    let Some(tab) = tabs.iter_mut().find(|t| t.tab_id == tab_id) else {
+        return;
+    };
+    if llm_model.is_some() {
+        tab.llm_model = llm_model;
+    }
+    if mode.is_some() {
+        tab.permission_mode = mode;
+    }
+    if workspace.is_some() {
+        tab.workspace_override = workspace;
+    }
+}
+
 /// 异步跑一次组合 git 查询(分支/脏/文件状态/worktree),完成后分发成两条
 /// 独立消息:`Files(StatusesRefreshed)` 只带文件级状态,`Project(GitRefreshed)`
 /// 带分支/脏/worktree。两个 extension 互不知道对方存在,内核是唯一知道
@@ -3410,6 +3438,34 @@ mod tests {
             (true, true),
             "Claude + cwd 偏离项目根:两者都做"
         );
+    }
+
+    #[test]
+    fn apply_agent_card_refresh_sets_fields_only_when_some() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut tabs = vec![make_test_tab(&rt, "a", AgentKind::Claude)];
+        tabs[0].tab_id = 7;
+
+        apply_agent_card_refresh(
+            &mut tabs,
+            7,
+            Some("claude-sonnet-5".to_string()),
+            Some("auto".to_string()),
+            None,
+        );
+        assert_eq!(tabs[0].llm_model.as_deref(), Some("claude-sonnet-5"));
+        assert_eq!(tabs[0].permission_mode.as_deref(), Some("auto"));
+        assert_eq!(tabs[0].workspace_override, None);
+
+        // 第二次刷新 model/mode 都是 None(比如那次 transcript 读取
+        // 失败):不应该把已经拿到的值抹掉。
+        apply_agent_card_refresh(&mut tabs, 7, None, None, None);
+        assert_eq!(tabs[0].llm_model.as_deref(), Some("claude-sonnet-5"));
+        assert_eq!(tabs[0].permission_mode.as_deref(), Some("auto"));
+
+        // 未知 tab_id:整体 no-op,不 panic。
+        apply_agent_card_refresh(&mut tabs, 999, Some("x".to_string()), None, None);
+        assert_eq!(tabs[0].llm_model.as_deref(), Some("claude-sonnet-5"));
     }
 
     #[test]
