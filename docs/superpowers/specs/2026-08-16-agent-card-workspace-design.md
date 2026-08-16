@@ -34,8 +34,10 @@ brainstorming 过程中查证到两处关键事实:
    `AgentKind::Claude` 且已解析到值时显示,否则整行不渲染)→ Mode 行(同上
    条件)→ 工作区行(分支名 + 脏标,所有 agent 都显示,非 git 项目显示
    `—`)→ 状态点 + 状态文字。分组标题(`claude(1)`)保留。
-2. `SessionTab` 新增 `model: Option<String>`、`permission_mode:
-   Option<String>` 两个字段,来源是 transcript 尾部轻量提取(新函数
+2. `SessionTab` 新增 `llm_model: Option<String>`、`permission_mode:
+   Option<String>` 两个字段(**不叫 `model`**——`SessionTab` 已有一个
+   `model: TerminalModel` 字段是终端显示缓冲区,同名会直接编译报错,写计划
+   时必须用 `llm_model` 这个名字),来源是 transcript 尾部轻量提取(新函数
    `transcript::latest_model_and_mode`),只在 `agent == AgentKind::Claude`
    时才会被填充,其余 agent 恒 `None`(卡片对应行不渲染)。
 3. 工作区分支名 + 脏标:默认复用 `ws.project_panel` 已有的项目级 git 缓存
@@ -43,7 +45,7 @@ brainstorming 过程中查证到两处关键事实:
    仅当某个 session 的 `effective_cwd()` 偏离项目根目录(用户在该会话的
    shell 里 `cd` 过)时,才为这个 session 单独查一次,存进 `SessionTab`
    新增的 `workspace_override: Option<WorkspaceGitInfo>` 字段。
-4. 上述三项(model/mode/workspace_override)的刷新时机统一挂在
+4. 上述三项(llm_model/mode/workspace_override)的刷新时机统一挂在
    `App::agent_state_changed` 里,每次 hook 事件都触发一次(不止
    `TurnEnded`),复用现有 hook 推送链路,不新建轮询或文件 tail 机制。
 5. model id 的展示美化:`claude-sonnet-5` → `Sonnet 5`(去 `claude-` 前缀,
@@ -142,11 +144,12 @@ pub(crate) fn format_model_label(raw: &str) -> String {
 
 ```rust
 pub struct SessionTab {
-    // ...既有字段...
+    // ...既有字段(含已存在的 `model: TerminalModel`——终端显示缓冲区,
+    // 与下面这个新字段是两回事,故新字段不能叫 `model`)...
     /// 最近一次 hook 事件后从 transcript 尾部提取的模型 id(原始,未美化;
     /// 渲染时经 `format_model_label`)。仅 `agent == AgentKind::Claude` 会
     /// 被填充,其余 agent 恒 `None`。
-    pub model: Option<String>,
+    pub llm_model: Option<String>,
     /// 同上,来自 transcript 顶层 `permissionMode`。
     pub permission_mode: Option<String>,
     /// 工作区分支/脏标覆盖:仅当这个会话的 `effective_cwd()` 偏离项目根
@@ -207,8 +210,8 @@ pub(crate) fn spawn_agent_card_refresh(
     }
     let proxy = io.proxy.clone();
     io.handle.spawn(async move {
-        let (model, mode, workspace) = tokio::task::spawn_blocking(move || {
-            let (model, mode) = if needs_model_mode {
+        let (llm_model, mode, workspace) = tokio::task::spawn_blocking(move || {
+            let (llm_model, mode) = if needs_model_mode {
                 transcript_path
                     .and_then(|p| std::fs::read_to_string(p).ok())
                     .map(|s| transcript::latest_model_and_mode(&s))
@@ -224,12 +227,12 @@ pub(crate) fn spawn_agent_card_refresh(
             } else {
                 None
             };
-            (model, mode, workspace)
+            (llm_model, mode, workspace)
         })
         .await
         .unwrap_or((None, None, None));
         let _ = proxy.send_event(Message::AgentCardRefreshed(
-            project_id, tab_id, model, mode, workspace,
+            project_id, tab_id, llm_model, mode, workspace,
         ));
     });
 }
@@ -250,7 +253,7 @@ pub(crate) fn spawn_agent_card_refresh(
 AgentCardRefreshed(
     ProjectId,
     usize, /* tab_id */
-    Option<String>, /* model */
+    Option<String>, /* llm_model */
     Option<String>, /* mode */
     Option<WorkspaceGitInfo>, /* workspace override */
 ),
@@ -259,11 +262,11 @@ AgentCardRefreshed(
 路由(`App::update`,`with_project` 既有模式):
 
 ```rust
-Message::AgentCardRefreshed(project_id, tab_id, model, mode, workspace) => {
+Message::AgentCardRefreshed(project_id, tab_id, llm_model, mode, workspace) => {
     self.with_project(project_id, |ws, _io| {
         if let Some(tab) = ws.tab_by_id_mut(tab_id) {
-            if model.is_some() {
-                tab.model = model;
+            if llm_model.is_some() {
+                tab.llm_model = llm_model;
             }
             if mode.is_some() {
                 tab.permission_mode = mode;
@@ -312,8 +315,8 @@ pub(crate) fn agent_card(
     ]
     .spacing(4);
 
-    if let Some(model) = &tab.model {
-        lines = lines.push(labeled_row("LLM", &format_model_label(model)));
+    if let Some(llm_model) = &tab.llm_model {
+        lines = lines.push(labeled_row("LLM", &format_model_label(llm_model)));
     }
     if let Some(mode) = &tab.permission_mode {
         lines = lines.push(labeled_row("Mode", mode));
@@ -370,7 +373,7 @@ pub(crate) fn agent_card(
 ## 错误处理
 
 - transcript 文件读取失败(路径失效/权限问题):`spawn_agent_card_refresh`
-  内 `.ok()` 吞掉,`model`/`mode` 保持 `None`,不报错、不重试(等下一次
+  内 `.ok()` 吞掉,`llm_model`/`mode` 保持 `None`,不报错、不重试(等下一次
   hook 事件自然重试)。
 - transcript 内容存在但没有任何 `permissionMode`/`message.model`(极早期
   session,第一个 hook 事件之前):`latest_model_and_mode` 返回
@@ -388,7 +391,7 @@ pub(crate) fn agent_card(
 ## 测试策略
 
 - `transcript::latest_model_and_mode`:
-  - 只有 `user`/`assistant` 混合行,能分别抓到最新 `model`(仅 assistant
+  - 只有 `user`/`assistant` 混合行,能分别抓到最新 `model` id(仅 assistant
     行)和最新 `permissionMode`(user/assistant 行都可能带)。
   - 独立 `type:"permission-mode"` 行也能被抓到 `permissionMode`。
   - 同一字段出现多次,取最后一次(不是第一次)。
