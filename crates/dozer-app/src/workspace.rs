@@ -2295,7 +2295,7 @@ pub(crate) fn agent_list_pane<'a>(
                 .size(theme::font::caption())
                 .color(theme::color::DIM)));
             for idx in idxs {
-                content = content.push(agent_list_row(ws, idx));
+                content = content.push(agent_card(ws, idx));
             }
         }
     }
@@ -2311,45 +2311,95 @@ pub(crate) fn agent_list_pane<'a>(
         .into()
 }
 
-/// Agent 面板里单条会话行:状态点(`dot_color`)+ 状态文字
-/// (`agent_state_label`)+ 会话名(`tab_title`),整行可点选中该 tab
-/// (`idx == ws.active` 时 `theme::color::CARD` 背景高亮,同项目树选中行的手法,
-/// 见 `workspace.rs` 里 `is_selected` 那段)。
-pub(crate) fn agent_list_row(
+/// Agent 面板里单条会话卡片:agent 名 → LLM 行(仅 Claude 且已解析到值
+/// 时显示)→ Mode 行(同上条件)→ 工作区行(分支名 + 脏标,所有 agent
+/// 都显示)→ 状态点 + 状态文字。整卡可点选中该 tab(`idx == ws.active`
+/// 时 `theme::color::CARD` 背景高亮,同项目树选中行的手法)。
+pub(crate) fn agent_card(
     ws: &Workspace,
     idx: usize,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let tab = &ws.tabs[idx];
     let active = idx == ws.active;
-    let row_el = row![
-        text("●")
-            .size(theme::font::caption())
-            .color(dot_color(tab.agent_state, tab.alive)),
-        lh(text(agent_state_label(tab.agent_state))
-            .size(theme::font::caption_sm())
-            .color(theme::color::DIM)),
-        lh(
-            text(tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name))
-                .size(theme::font::body())
-                .color(theme::color::CREAM)
-        ),
+
+    let mut lines = column![
+        text(tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name))
+            .size(theme::font::body())
+            .color(theme::color::CREAM),
     ]
-    .spacing(6)
-    .align_y(iced_widget::core::Alignment::Center);
-    button(row_el)
+    .spacing(4);
+
+    if let Some(llm_model) = &tab.llm_model {
+        lines = lines.push(labeled_row("LLM", &format_model_label(llm_model)));
+    }
+    if let Some(mode) = &tab.permission_mode {
+        lines = lines.push(labeled_row("Mode", mode));
+    }
+
+    let (branch, dirty) = match &tab.workspace_override {
+        Some(w) => (w.branch.as_deref(), w.dirty),
+        None => (ws.project_panel.branch(), ws.project_panel.dirty()),
+    };
+    lines = lines.push(workspace_row(branch, dirty));
+
+    lines = lines.push(
+        row![
+            text("●")
+                .size(theme::font::caption())
+                .color(dot_color(tab.agent_state, tab.alive)),
+            text(agent_state_label(tab.agent_state))
+                .size(theme::font::caption_sm())
+                .color(theme::color::DIM),
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center),
+    );
+
+    button(container(lines).padding(10))
         .on_press(Message::SelectTab(idx))
         .width(Length::Fill)
-        .padding(6)
         .style(move |_t, _s| button::Style {
             background: if active {
                 Some(theme::color::CARD.into())
             } else {
                 None
             },
+            border: Border {
+                color: theme::color::BORDER,
+                width: 1.0,
+                radius: 8.0.into(),
+            },
             text_color: theme::color::CREAM,
             ..button::Style::default()
         })
         .into()
+}
+
+/// `label: value` 一行 caption 文字,LLM/Mode/工作区三行共用。
+fn labeled_row(
+    label: &str,
+    value: &str,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    text(format!("{label}: {value}"))
+        .size(theme::font::caption())
+        .color(theme::color::DIM)
+        .into()
+}
+
+/// 工作区行:无分支(非 git 项目)显示 `—`;有未提交改动时分支名后缀
+/// `(Uncommitted)`——跟 `extensions/files.rs` 里分支切换菜单当前分支带
+/// 脏标时的既有文案(`n.push_str("(Uncommitted)")`,见该文件约第 1409
+/// 行)保持同一措辞,不新造一套脏标文案。
+fn workspace_row(
+    branch: Option<&str>,
+    dirty: bool,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let value = match branch {
+        Some(b) if dirty => format!("{b}(Uncommitted)"),
+        Some(b) => b.to_string(),
+        None => "—".to_string(),
+    };
+    labeled_row("工作区", &value)
 }
 
 /// Agent 面板头部"＋"按钮:点击切换 `agent_picker_open`,弹出 agent
