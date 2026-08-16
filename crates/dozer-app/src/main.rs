@@ -953,12 +953,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             let to_project_name = app.project_name_editing();
             let to_search = app.search_editing();
             let to_search_popup = app.search_popup_editing();
+            let to_todo_search = app.todo_search_editing();
             if to_browser
                 || to_comment
                 || to_tree_edit
                 || to_project_name
                 || to_search
                 || to_search_popup
+                || to_todo_search
             {
                 let addr_event = match event {
                     WindowEvent::KeyboardInput {
@@ -987,9 +989,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 };
                 if let Some(ev) = addr_event {
                     // 优先级:右键"搜索"弹窗查询框 > 浏览器地址栏 > 验收意见 >
-                    // 项目树编辑 > 项目名称编辑 > 文件树搜索框(多者同真时罕见,
-                    // 谁先建的编辑态谁优先没有实际冲突场景,这个顺序只是一个
-                    // 确定性兜底)。
+                    // 项目树编辑 > 项目名称编辑 > 文件树搜索框 > Todo 面板搜索框
+                    // (多者同真时罕见,谁先建的编辑态谁优先没有实际冲突场景,
+                    // 这个顺序只是一个确定性兜底)。
                     let message = if to_search_popup {
                         Message::Search(extensions::search::Message::QueryEvent(ev))
                     } else if to_browser {
@@ -1000,8 +1002,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         Message::Files(extensions::files::Message::EditEvent(ev))
                     } else if to_project_name {
                         Message::Project(extensions::project::Message::NameEditEvent(ev))
-                    } else {
+                    } else if to_search {
                         Message::Files(extensions::files::Message::SearchEvent(ev))
+                    } else {
+                        Message::Todo(extensions::todo::Message::SearchEvent(ev))
                     };
                     app.update(message);
                     window.request_redraw();

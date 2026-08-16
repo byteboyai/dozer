@@ -7,6 +7,7 @@
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
+use crate::workspace::AddrEvent;
 use crate::{icons, theme};
 use iced_widget::core::{Border, Color, Element, Length, mouse};
 use iced_widget::{
@@ -95,6 +96,51 @@ pub fn append_todo_item(content: &str, text: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+/// 把第 `pending_index` 个待办行(按文件里待办行的出现次序,0-based)与相邻
+/// 待办行交换(`dir` = -1 上移,+1 下移;越界即视为 no-op 返回 `None`)。
+/// 已完成行被整体推到待办行"之后"——即"待办在前、已完成自动沉底",且各自
+/// 保持原相对次序。非 checkbox 行(标题/正文/空行)位置完全不动,只动
+/// checkbox 行的先后。返回重建后的全文;`None` 表示越界 no-op。
+pub fn move_pending_task(content: &str, pending_index: usize, dir: isize) -> Option<String> {
+    let lines: Vec<&str> = content.lines().collect();
+    // 标记每行的类别,并收集待办行原文(保持文件次序)。
+    let mut kinds: Vec<Option<bool>> = Vec::with_capacity(lines.len());
+    let mut pending_lines: Vec<String> = Vec::new();
+    for line in &lines {
+        let t = line.trim_start();
+        if t.starts_with("- [ ]") {
+            kinds.push(Some(true));
+            pending_lines.push(line.to_string());
+        } else if t.starts_with("- [x]") {
+            kinds.push(Some(false));
+        } else {
+            kinds.push(None);
+        }
+    }
+    let target = pending_index as isize + dir;
+    if pending_index >= pending_lines.len() || target < 0 || target as usize >= pending_lines.len()
+    {
+        return None;
+    }
+    pending_lines.swap(pending_index, target as usize);
+    // 重建:遍历原行,checkbox 行按"待办块(新序)+ 已完成块(原序)"填充,
+    // 非 checkbox 行原样保留。已完成行用原文(line)。
+    let mut out = String::with_capacity(content.len());
+    let mut pi = 0usize;
+    for (i, line) in lines.iter().enumerate() {
+        match kinds[i] {
+            None => out.push_str(line),
+            Some(true) => {
+                out.push_str(&pending_lines[pi]);
+                pi += 1;
+            }
+            Some(false) => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    Some(out)
 }
 
 /// 派发记录/计划时间/完成时间在 GUI 本地 sidecar 里用这个 key 关联到
@@ -259,7 +305,16 @@ pub struct WorkspaceState {
     filter: TodoFilter,
     view_mode: TodoViewMode,
     selected_row: Option<usize>,
+    /// 已生效的搜索关键词(列表过滤用)。打字期间只改草稿 `search_draft`,
+    /// 回车/点右侧搜索按钮才落成这里(与文件树搜索 `search_query` 同款
+    /// "草稿→提交"模型——本 app 的 iced 界面每帧重建、原生 `text_input`
+    /// 留不住焦点,搜索必须用自绘输入 + main.rs 键盘拦截路由,见 design)。
     search: String,
+    /// 搜索框编辑态草稿。`search_editing` 为真时按键经 main.rs 路由成
+    /// `SearchEvent`,只动草稿,不重新过滤;回车/点搜索按钮才提交。
+    search_draft: String,
+    /// 搜索框是否处于自绘编辑态(main.rs 键盘路由用)。
+    search_editing: bool,
     dispatch_open: Option<usize>,
     pending_dispatch: std::collections::HashMap<usize, String>,
     editing_plan_date: Option<(usize, String)>,
@@ -310,6 +365,21 @@ impl WorkspaceState {
     /// 重读(`App::poll_todo_if_visible`)。`None` = 还没读过,或文件不存在。
     pub fn mtime(&self) -> Option<std::time::SystemTime> {
         self.mtime
+    }
+
+    /// 搜索框是否处于自绘编辑态(main.rs 键盘路由用)。
+    pub fn search_editing(&self) -> bool {
+        self.search_editing
+    }
+
+    /// 失焦退出搜索编辑态(`Workspace::blur_inputs` 用):草稿保留。
+    pub fn cancel_search_edit(&mut self) {
+        self.search_editing = false;
+    }
+
+    /// 草稿落成为生效的 `search` 过滤词;保留编辑态(便于连续改词)。
+    pub fn commit_search(&mut self) {
+        self.search = self.search_draft.clone();
     }
 }
 
@@ -398,7 +468,17 @@ pub enum Message {
     FilterSet(TodoFilter),
     ViewModeSet(TodoViewMode),
     RowSelect(Option<usize>),
-    SearchChanged(String),
+    /// 点搜索框进入自绘编辑态(`search_editing = true`),后续按键经 main.rs
+    /// 路由成 `SearchEvent`,不再漏进终端。
+    SearchEditStart,
+    /// 编辑态下的按键:只动草稿 `search_draft`,不重新过滤(需提交)。
+    SearchEvent(AddrEvent),
+    /// 回车 / 点右侧搜索按钮:把草稿落成生效的 `search` 过滤词。
+    SearchSubmit,
+    /// 待办行上移/下移:`idx` 是任务在 `items` 里的下标,`dir` = -1 上移/
+    /// +1 下移;落盘时把待办行相对相邻待办行交换,已完成行自动沉底。已完成
+    /// 任务(或越界)是 no-op——已完成不可拖动排序。
+    MovePending(usize, isize),
     DispatchOpen(usize),
     DispatchClose,
     DispatchToExisting(usize, String),
@@ -532,7 +612,53 @@ pub fn update(
         Message::FilterSet(f) => ws_state.filter = f,
         Message::ViewModeSet(m) => ws_state.view_mode = m,
         Message::RowSelect(idx) => ws_state.selected_row = idx,
-        Message::SearchChanged(s) => ws_state.search = s,
+        Message::SearchEditStart => ws_state.search_editing = true,
+        Message::SearchEvent(ev) => {
+            // 编辑态之外(失焦)的 `SearchEvent` 一律忽略,避免草稿被污染。
+            if !ws_state.search_editing {
+                return;
+            }
+            match ev {
+                AddrEvent::Text(s) => ws_state.search_draft.push_str(&s),
+                AddrEvent::Backspace => {
+                    ws_state.search_draft.pop();
+                }
+                AddrEvent::Cancel => ws_state.search_editing = false,
+                AddrEvent::Submit => ws_state.commit_search(),
+            }
+        }
+        Message::SearchSubmit => {
+            ws_state.commit_search();
+            ws_state.search_editing = false;
+        }
+        Message::MovePending(idx, dir) => {
+            // 已完成任务不可拖动排序;越界也 no-op。
+            let Some(item) = ws_state.items.get(idx) else {
+                return;
+            };
+            if item.done {
+                return;
+            }
+            // 算出该任务在"待办块"里的相对下标(文件里待办行的出现次序)。
+            let pending_index = ws_state
+                .items
+                .iter()
+                .enumerate()
+                .filter(|(_, it)| !it.done)
+                .position(|(i, _)| i == idx);
+            let Some(pending_index) = pending_index else {
+                return;
+            };
+            let path = todo_path(project_path);
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                return;
+            };
+            if let Some(new_content) = move_pending_task(&content, pending_index, dir) {
+                if std::fs::write(&path, new_content).is_ok() {
+                    reload_from_disk(ws_state, project_path);
+                }
+            }
+        }
         Message::DispatchOpen(idx) => ws_state.dispatch_open = Some(idx),
         Message::DispatchClose => ws_state.dispatch_open = None,
         Message::PlanDateEditStart(idx) => {
@@ -714,36 +840,65 @@ fn todo_footer_bar<'a>(
         .into()
 }
 
-/// 顶部搜索框，列表视图使用的 `ws_state.search` 状态——切 tab 不清空搜索词
-/// (对应 spec"切换视图共用同一份搜索状态"要求)。
+/// 顶部搜索框:自绘输入(键盘走 main.rs 拦截层路由成 `SearchEvent`,不用
+/// iced 原生 `text_input`——本 app 每帧重建界面,原生输入留不住焦点,打字
+/// 会漏进已聚焦的终端)。左侧是输入框本体(点 `SearchEditStart` 进编辑态),
+/// 右侧是提交按钮(回车 / 点它把草稿落成生效的 `search` 过滤词)。编辑态/
+/// 已过滤时整框 GOLD 边框表示焦点归属 / 当前被搜索词收窄。
 fn todo_search_bar<'a>(
-    search: &'a str,
+    draft: &'a str,
+    editing: bool,
+    active: bool,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    row![
-        icons::view(
-            icons::IconKind::Search,
-            crate::theme::icon_size::row(),
-            theme::color::DIM
-        ),
-        text_input("Search List parameters...", search)
-            .on_input(Message::SearchChanged)
+    let body = if draft.is_empty() && !editing {
+        text("搜索任务…")
             .size(theme::font::body())
-            .width(Length::Fill)
-            .style(
-                |_t: &iced_widget::Theme, _s| iced_widget::text_input::Style {
-                    background: theme::color::BG.into(),
-                    border: Border::default(),
-                    icon: theme::color::DIM,
-                    placeholder: theme::color::DIM,
-                    value: theme::color::CREAM,
-                    selection: theme::color::GOLD,
-                }
-            ),
-    ]
-    .spacing(8)
-    .padding([12, 20])
-    .align_y(iced_widget::core::alignment::Vertical::Center)
-    .into()
+            .color(theme::color::DIM)
+    } else {
+        let caret = if editing { "▏" } else { "" };
+        text(format!("{draft}{caret}"))
+            .size(theme::font::body())
+            .color(theme::color::CREAM)
+    };
+    let box_btn = button(body)
+        .on_press(Message::SearchEditStart)
+        .width(Length::Fill)
+        .padding([6, 8])
+        .style(move |_t: &iced_widget::Theme, _s| button::Style {
+            background: Some(theme::color::BG.into()),
+            border: Border {
+                color: if editing || active {
+                    theme::color::GOLD
+                } else {
+                    theme::color::BORDER
+                },
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            text_color: theme::color::CREAM,
+            ..button::Style::default()
+        });
+    let submit = button(icons::view(
+        icons::IconKind::Search,
+        crate::theme::icon_size::row(),
+        theme::color::GOLD,
+    ))
+    .on_press(Message::SearchSubmit)
+    .padding(6)
+    .style(|_t, _s| button::Style {
+        background: Some(theme::color::BG.into()),
+        border: Border {
+            color: theme::color::BORDER,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        text_color: theme::color::GOLD,
+        ..button::Style::default()
+    });
+    row![box_btn, submit]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center)
+        .into()
 }
 
 /// 列表视图主体：搜索栏 + 编号行列表 + 底部新增输入。
@@ -762,7 +917,11 @@ fn todo_list_view<'a>(
         .map(|t| (t.session_id.as_str(), t.title.clone()))
         .collect();
 
-    let search = todo_search_bar(&ws_state.search);
+    let search = todo_search_bar(
+        &ws_state.search_draft,
+        ws_state.search_editing,
+        !ws_state.search.is_empty(),
+    );
 
     let mut list = column![].spacing(8).padding([0, 20]);
     if visible_idx.is_empty() {
@@ -775,11 +934,35 @@ fn todo_list_view<'a>(
             .padding([20, 20]),
         );
     } else {
-        for (display_no, &idx) in visible_idx.iter().enumerate() {
+        // 待办在前、已完成沉底:把 `visible_idx` 拆成两段,各自保持原(items)
+        // 次序后拼接。与落盘时"待办块 + 已完成块"的归一化一致。
+        let mut pending_idx: Vec<usize> = Vec::new();
+        let mut done_idx: Vec<usize> = Vec::new();
+        for &i in &visible_idx {
+            if ws_state.items[i].done {
+                done_idx.push(i);
+            } else {
+                pending_idx.push(i);
+            }
+        }
+        let ordered: Vec<usize> = pending_idx.iter().chain(done_idx.iter()).copied().collect();
+        // 待办在全体 items 里的相对下标,用于决定上下按钮是否可用。
+        let total_pending = ws_state.items.iter().filter(|it| !it.done).count();
+        for (display_no, &idx) in ordered.iter().enumerate() {
             let item = &ws_state.items[idx];
             let key = todo_line_key(&item.text);
             let meta = app_state.meta_for(project_id, key);
             let dispatch = meta.and_then(|m| m.dispatch.as_ref());
+            let pending_rank = ws_state
+                .items
+                .iter()
+                .enumerate()
+                .filter(|(_, it)| !it.done)
+                .position(|(i, _)| i == idx);
+            let (can_up, can_down) = match pending_rank {
+                Some(rank) => (rank > 0, rank + 1 < total_pending),
+                None => (false, false),
+            };
             let mut row = None;
             if let Some((editing_idx, draft)) = &ws_state.editing_plan_date
                 && *editing_idx == idx
@@ -800,6 +983,8 @@ fn todo_list_view<'a>(
                         ws_state.dispatch_open == Some(idx),
                         ws_state.state_pill_open == Some(idx),
                         &existing_tabs,
+                        can_up,
+                        can_down,
                     ));
                 }
             }
@@ -849,6 +1034,8 @@ fn todo_card<'a>(
     dispatch_open: bool,
     state_pill_open: bool,
     existing_tabs: &'a [(&'a str, String)],
+    can_move_up: bool,
+    can_move_down: bool,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let done = item.done;
 
@@ -885,14 +1072,69 @@ fn todo_card<'a>(
         .on_press(Message::PlanDateEditStart(idx))
         .into();
 
+    let up_btn = button(text("↑").size(theme::font::body()).color(if can_move_up {
+        theme::color::CREAM
+    } else {
+        theme::color::BORDER
+    }))
+    .on_press_maybe(if can_move_up {
+        Some(Message::MovePending(idx, -1))
+    } else {
+        None
+    })
+    .padding([2, 6])
+    .style(move |_t: &iced_widget::Theme, _s| button::Style {
+        background: None,
+        border: Border {
+            color: theme::color::BORDER,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        text_color: theme::color::CREAM,
+        ..button::Style::default()
+    });
+    let down_btn = button(text("↓").size(theme::font::body()).color(if can_move_down {
+        theme::color::CREAM
+    } else {
+        theme::color::BORDER
+    }))
+    .on_press_maybe(if can_move_down {
+        Some(Message::MovePending(idx, 1))
+    } else {
+        None
+    })
+    .padding([2, 6])
+    .style(move |_t: &iced_widget::Theme, _s| button::Style {
+        background: None,
+        border: Border {
+            color: theme::color::BORDER,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        text_color: theme::color::CREAM,
+        ..button::Style::default()
+    });
+    // 上移/下移只对非已完成任务出现——已完成自动沉底、不可拖动排序。
+    let move_btns: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> = if done
+    {
+        iced_widget::space::Space::new()
+            .width(Length::Shrink)
+            .height(Length::Shrink)
+            .into()
+    } else {
+        row![up_btn, down_btn].spacing(2).into()
+    };
+
     let top_row = row![
         number_text,
         iced_widget::space::Space::new()
             .width(Length::Fill)
             .height(Length::Shrink),
         date_badge,
+        move_btns,
     ]
-    .align_y(iced_widget::core::alignment::Vertical::Center);
+    .align_y(iced_widget::core::alignment::Vertical::Center)
+    .spacing(6);
 
     // ---- 中部：checkbox + 任务文字（勾选/删除线处理与原 todo_row 一致）----
     let box_color = if done {
@@ -1414,6 +1656,42 @@ mod tests {
     }
 
     #[test]
+    fn move_pending_task_reorders_pending_only_done_kept_in_place() {
+        // 待办 A、已完成 X、待办 B(混排);把第 0 个待办(A)下移应与第 1 个
+        // 待办(B)交换——只动待办之间的相对次序,已完成 X 留在原位(列表
+        // 视图再把它沉到最底,见 `todo_list_view` 的 pending/done 分区)。
+        let md = "- [ ] A\n- [x] X\n- [ ] B\n";
+        let moved = move_pending_task(md, 0, 1).expect("应可下移");
+        assert_eq!(moved, "- [ ] B\n- [x] X\n- [ ] A\n");
+        // 视图层分区后展示次序应为 B、A(待办)、X(已完成沉底)。
+        let items = parse_todo(&moved);
+        let pending: Vec<&str> = items
+            .iter()
+            .filter(|it| !it.done)
+            .map(|it| it.text.as_str())
+            .collect();
+        let done: Vec<&str> = items
+            .iter()
+            .filter(|it| it.done)
+            .map(|it| it.text.as_str())
+            .collect();
+        assert_eq!(pending, vec!["B", "A"]);
+        assert_eq!(done, vec!["X"]);
+        // 非 checkbox 行(标题/正文)位置不动。
+        let md2 = "# 标题\n\n- [ ] A\n正文\n- [x] X\n- [ ] B\n";
+        let moved2 = move_pending_task(md2, 1, -1).expect("应可上移");
+        assert_eq!(moved2, "# 标题\n\n- [ ] B\n正文\n- [x] X\n- [ ] A\n");
+    }
+
+    #[test]
+    fn move_pending_task_out_of_range_is_noop() {
+        let md = "- [ ] A\n- [ ] B\n";
+        assert!(move_pending_task(md, 0, -1).is_none()); // 已在顶,上移越界
+        assert!(move_pending_task(md, 1, 1).is_none()); // 已在底,下移越界
+        assert!(move_pending_task(md, 5, 1).is_none()); // 下标越界
+    }
+
+    #[test]
     fn ignores_non_checkbox_lines_and_blank_file() {
         let md = "# Todo\n\n正文说明，不是任务。\n- 普通列表项也不算\n  - [ ] 缩进的不算一级\n";
         assert_eq!(parse_todo(md), Vec::new());
@@ -1795,7 +2073,21 @@ mod tests {
         update(
             &mut ws_state,
             &mut app_state,
-            Message::SearchChanged("关键字".to_string()),
+            Message::SearchEditStart,
+            1,
+            &root,
+        );
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::SearchEvent(AddrEvent::Text("关键字".to_string())),
+            1,
+            &root,
+        );
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::SearchSubmit,
             1,
             &root,
         );

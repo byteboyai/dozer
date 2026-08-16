@@ -2317,6 +2317,12 @@ impl App {
             .is_some_and(|ws| ws.project_name_editing())
     }
 
+    /// Todo 面板搜索框是否处于自绘编辑态(main.rs 键盘路由用)。
+    pub fn todo_search_editing(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.todo.search_editing())
+    }
+
     /// 当前项目根路径(供 main.rs 算相对路径用;未打开项目时 None)。
     pub fn active_project_path(&self) -> Option<PathBuf> {
         self.active_workspace()?.active_project_path()

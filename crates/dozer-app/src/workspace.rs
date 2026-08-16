@@ -1817,6 +1817,7 @@ impl Workspace {
         self.acceptance.clear_comment_editing();
         self.files.cancel_tree_edit();
         self.files.cancel_search_edit();
+        self.todo.cancel_search_edit();
         // 名称编辑不在失焦时丢弃——改由 `App::blur_inputs` 取出缓冲并发起
         // daemon 改名(改动且非空才发请求),与描述字段"失焦写盘"行为对齐。
         if let Some(project) = self.project.as_ref() {
@@ -2975,29 +2976,55 @@ pub(crate) fn hook_install_target(agent: AgentKind) -> Option<HookInstallTarget>
     }
 }
 
+/// `exe` 所在目录下名为 `dozer-hook` 的同级二进制路径（跟
+/// `main.rs::spawn_dozerd` 定位同级 `dozerd` 的手法一致——发行版把
+/// `dozer-hook` 跟 `dozer`/`dozerd` 一起装进同一个 `Contents/MacOS/`）。
+/// 抽成纯函数只是为了能不依赖 `current_exe()` 直接单测。
+fn dozer_hook_binary_path(exe: &Path) -> PathBuf {
+    match exe.parent() {
+        Some(dir) => dir.join("dozer-hook"),
+        None => PathBuf::from("dozer-hook"),
+    }
+}
+
 /// 新开 agent 会话前静默注册该 agent 的 hook（幂等、恒静默——同
 /// `dozer-hook install` 自身"绝不因失败拖慢/打断会话"的错误处理哲学）。
 /// 在此之前 hook 注册是一步用户必须自己发现并手动执行的 CLI 命令
 /// （`dozer-hook install <agent>`），Claude 之外的 agent 几乎没人知道要
 /// 跑它，于是 Agent 面板里 name/status 永远停在 `Unknown`/`Idle`。阻塞
 /// 文件 I/O，调用方须包一层 `spawn_blocking`。
+///
+/// 必须用 `run_at_with_exe`/`opencode_install::run_at_with_exe` 显式传入
+/// exe 路径，不能调不带 `_with_exe` 的版本：那两个版本内部读
+/// `std::env::current_exe()`，在这里（`dozer-app` 进程内直接函数调用，
+/// 不是 spawn 一个独立的 `dozer-hook` 子进程）会拿到 `dozer-app` 自己的
+/// 可执行文件路径，写出一条指向错误二进制的 hook 命令——2026-08 线上
+/// 事故：`~/.claude/settings.json` 堆出重复的坏 hook，agent 名字/光标
+/// 状态全靠 `dozer-hook` 转发的事件才能更新，全断了。
 fn ensure_hook_installed(agent: AgentKind) {
-    match hook_install_target(agent) {
-        Some(HookInstallTarget::Settings) => {
+    let Some(target) = hook_install_target(agent) else {
+        return;
+    };
+    let exe =
+        dozer_hook_binary_path(&std::env::current_exe().unwrap_or_else(|_| PathBuf::from("dozer")));
+    let exe = exe.to_string_lossy();
+    match target {
+        HookInstallTarget::Settings => {
             let label = agent.label();
-            let _ = dozer_hook::install::run_at(
+            let _ = dozer_hook::install::run_at_with_exe(
                 &dozer_hook::install::settings_path_for(label),
                 label,
                 true,
+                &exe,
             );
         }
-        Some(HookInstallTarget::Opencode) => {
-            let _ = dozer_hook::opencode_install::run_at(
+        HookInstallTarget::Opencode => {
+            let _ = dozer_hook::opencode_install::run_at_with_exe(
                 &dozer_hook::opencode_install::plugins_dir(),
                 true,
+                &exe,
             );
         }
-        None => {}
     }
 }
 
@@ -3712,6 +3739,16 @@ mod tests {
     }
 
     #[test]
+    fn dozer_hook_binary_path_is_sibling_of_exe() {
+        assert_eq!(
+            dozer_hook_binary_path(Path::new(
+                "/Applications/Dozer AI Coder.app/Contents/MacOS/dozer"
+            )),
+            PathBuf::from("/Applications/Dozer AI Coder.app/Contents/MacOS/dozer-hook")
+        );
+    }
+
+    #[test]
     fn ensure_hook_installed_writes_codebuddy_settings() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
@@ -3724,6 +3761,13 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(cmd.contains(" codebuddy "), "{cmd}");
+        // 回归线上事故：命令必须指向 `dozer-hook`（sibling 于当前进程的
+        // exe），不能是调用方自己（测试进程本身，路径里带 "deps/"，不含
+        // "dozer-hook"）——否则 `entry_is_dozer` 认不出，每次都重复追加。
+        assert!(
+            cmd.contains("dozer-hook") || cmd.contains("dozer_hook"),
+            "{cmd}: 必须指向 dozer-hook 二进制，不能是 dozer-app 自己"
+        );
     }
 
     #[test]
