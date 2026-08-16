@@ -1117,6 +1117,41 @@ pub fn terminal_pane_pixel_size(
     (pane_width, pane_height)
 }
 
+/// 窗口整体逻辑像素尺寸 → SSH 面板内嵌终端 pane 的可用像素尺寸。
+///
+/// 与 `terminal_pane_pixel_size`(右侧共享终端)不同,SSH 终端挂在**左面板区**:
+/// 左栏`主机列表 | 内嵌终端`配对里,终端拿 `pair_content_width(left_w) *
+/// (1 - ssh_split)`(镜像 `left_panel_area` 里 `ssh::view` 的 `FillPortion`
+/// 布局与 `Divider::SshSplit` 拖拽,几何只此一份真源)。它的网格必须按这块
+/// pane 的实际宽度换算,否则 SSH 终端会沿用共享终端的列数,窗口/分隔条一
+/// 拖动就跟不上、字符折行错乱。
+///
+/// 左面板区收起时返回零尺寸(此时 SSH 终端不可见,调用方不 resize)。
+pub fn ssh_terminal_pane_pixel_size(
+    window_width: f32,
+    window_height: f32,
+    state: &ShellState,
+) -> (f32, f32) {
+    let left_w = left_zone_width(window_width, state);
+    if left_w <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let pair_w = pair_content_width(left_w);
+    let (_list_w, content_w) = pair_list_content_width(pair_w, state.dims.ssh_split);
+    let pane_width = (content_w - theme::geometry::chrome_width_px()).max(0.0);
+    // `chrome_height_px()`(tab 栏 + padding + spacing 的估算)与
+    // `terminal_pane_pixel_size` 同源;SSH 终端没有 `terminal_status_bar`,
+    // 不像共享终端那样额外扣状态栏高。
+    let m = theme::region::left_zone().margin;
+    let pane_height = (window_height
+        - theme::geometry::top_bar_height()
+        - theme::geometry::chrome_height_px()
+        - m.top
+        - m.bottom)
+        .max(0.0);
+    (pane_width, pane_height)
+}
+
 /// 一批**异步结果**消息共同的首个字段:它们归属哪个项目。
 ///
 /// 为什么必须显式带上、不能"投给当时聚焦的那个项目"(P2a Task 7 fix round 1
@@ -1207,7 +1242,14 @@ pub enum Message {
     Search(search::Message),
     /// 终端 pane 像素尺寸变化换算出的新网格尺寸；对所有 tab 生效
     /// （包括当前不可见的），保证切换 tab 时尺寸已经是最新的。
-    PaneResized { cols: u16, rows: u16 },
+    /// 共享终端 pane 与 SSH 面板内嵌终端并行重算:两个 pane 几何不同,
+    /// 必须带着各自的网格一起下发,否则 SSH 终端会沿用共享终端的列数。
+    PaneResized {
+        cols: u16,
+        rows: u16,
+        ssh_cols: u16,
+        ssh_rows: u16,
+    },
     /// 按下某条分隔线,记录"正在拖哪条"(main.rs 后续 CursorMoved 靠这个
     /// 状态决定要不要继续转发拖拽)。构造方为 `divider_bar` 的 `on_press`。
     ColumnDragStart(Divider),
@@ -1469,6 +1511,10 @@ pub struct App {
     /// 尺寸,保证新会话从一开始就跟 pane 实际大小匹配。
     cols: u16,
     rows: u16,
+    /// SSH 面板内嵌终端的网格尺寸,与 `cols/rows`(共享终端)分开记——两个
+    /// pane 几何不同,`PaneResized` 各带一份,无法互相替代。
+    ssh_cols: u16,
+    ssh_rows: u16,
     /// daemon 连接失败,或某次会话操作失败时的错误文案。整个程序共享
     /// 一份:daemon 连不连得上不是某个项目自己的状态。
     pub(crate) daemon_error: Option<String>,
@@ -1834,6 +1880,8 @@ impl App {
             proxy,
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
+            ssh_cols: DEFAULT_COLS,
+            ssh_rows: DEFAULT_ROWS,
             daemon_error,
             blink_on: true,
             last_blink_at: std::time::Instant::now(),
@@ -2545,17 +2593,49 @@ impl App {
     /// 重开 app 后会一直卡在 `DEFAULT_COLS`×`DEFAULT_ROWS`(80×24),直到用户
     /// 偶然拖一下窗口才纠正(Fix round 2 #6)。假想状态用 `ShellState`
     /// 的字段覆盖表达,不另写一套宽度公式,避免两份几何漂移。
+    /// 按当前窗口尺寸+外壳状态重算终端网格并同步给所有 tab / daemon。
+    ///
+    /// 用于换算共享终端的是"右侧展开且显示 Agent 配对"这个假想状态,而不是
+    /// 当前真实状态:终端此刻可能不可见(右侧收起 / 右视图是对话),但它的
+    /// PTY 网格仍应按"被显示时占多大"来定——否则上次退出前停在对话视图的
+    /// 会话,重开 app 后会一直卡在 `DEFAULT_COLS`×`DEFAULT_ROWS`(80×24),
+    /// 直到用户偶然拖一下窗口才纠正(Fix round 2 #6)。假想状态用
+    /// `ShellState` 的字段覆盖表达,不另写一套宽度公式,避免两份几何漂移。
     fn sync_terminal_grid(&mut self) {
         let (w, h) = self.window_size;
         let shown = terminal_grid_state(self.shell_state());
         let (pane_w, pane_h) = terminal_pane_pixel_size(w, h, &shown);
         let (cols, rows) = crate::term_view::grid_size(pane_w, pane_h);
-        if cols > 0 && rows > 0 {
-            self.update(Message::PaneResized {
-                cols: cols as u16,
-                rows: rows as u16,
-            });
-        }
+        // SSH 面板内嵌终端挂在左面板区,几何与共享终端完全不同,由
+        // `ssh_terminal_pane_pixel_size` 按左栏 `主机列表|终端` 配对换算一份
+        // 独立网格——否则 SSH 终端永远套用共享终端的列数,窗口/分隔条一动
+        // 宽度就跟不上宿主面板(见该函数注释)。
+        let (ssh_pane_w, ssh_pane_h) = ssh_terminal_pane_pixel_size(w, h, &self.shell_state());
+        let (ssh_cols, ssh_rows) = crate::term_view::grid_size(ssh_pane_w, ssh_pane_h);
+        // 共享终端与 SSH 终端各自只在当前可见时才有可测量的 pane。某个 pane
+        // 此刻不可换算(右侧收起 / 左面板区收起)时,它的终端可能仍挂在后台
+        // (SSH tab 跨左视图常驻),这时沿用上一次跟踪的网格、发一个等值尺寸
+        // 给 `PaneResized`——`pane_resized` 内部去重,套用后网格保持正确。
+        let shared_ok = cols > 0 && rows > 0;
+        let ssh_ok = ssh_cols > 0 && ssh_rows > 0;
+        let cols = if shared_ok { cols } else { self.cols as usize };
+        let rows = if shared_ok { rows } else { self.rows as usize };
+        let ssh_cols = if ssh_ok {
+            ssh_cols
+        } else {
+            self.ssh_cols as usize
+        };
+        let ssh_rows = if ssh_ok {
+            ssh_rows
+        } else {
+            self.ssh_rows as usize
+        };
+        self.update(Message::PaneResized {
+            cols: cols as u16,
+            rows: rows as u16,
+            ssh_cols: ssh_cols as u16,
+            ssh_rows: ssh_rows as u16,
+        });
     }
 
     /// Ctrl ± / 重置缩放后,把全局 scale 变化同步到所有已打开的原生编辑器
@@ -3109,7 +3189,12 @@ impl App {
                     self.todo.record_dispatch(project_id, &text, session_id);
                 }
             }
-            Message::PaneResized { cols, rows } => self.pane_resized(cols, rows),
+            Message::PaneResized {
+                cols,
+                rows,
+                ssh_cols,
+                ssh_rows,
+            } => self.pane_resized(cols, rows, ssh_cols, ssh_rows),
             Message::ColumnDragStart(divider) => {
                 self.dragging = Some(divider);
             }
@@ -3577,6 +3662,11 @@ impl App {
             // 拦截在通配 `Message::Ssh(msg)` 之前,直接调 `Workspace::
             // spawn_ssh_tab`。
             Message::Ssh(ssh::Message::OpenSshTab(host_id, ssh::SshTabKind::Terminal)) => {
+                // 新 SSH 终端从一开始就用 SSH 面板自己的网格(不是共享终端的
+                // 列数)——在闭包里再借 `self` 会与 `with_focused_project` 的
+                // `&mut self` 冲突,先取到局变量。
+                let ssh_cols = self.ssh_cols;
+                let ssh_rows = self.ssh_rows;
                 self.with_focused_project(|ws, io| {
                     // 已经开着这台主机的终端 tab 就直接切过去,不重新握手
                     // 连一遍(阶段 3 SFTP 决定"每个 tab 独立新建连接",但
@@ -3590,7 +3680,7 @@ impl App {
                         ws.select_ssh_tab(host_id, ssh::SshTabKind::Terminal);
                     } else {
                         ws.ssh.record_reopen_after_trust(host_id.clone());
-                        ws.spawn_ssh_tab(io, host_id);
+                        ws.spawn_ssh_tab(io, host_id, ssh_cols, ssh_rows);
                     }
                 });
             }
@@ -3897,8 +3987,9 @@ impl App {
         // 建的,得按当前窗口几何纠正一次。这里**不能**指望
         // `sync_terminal_grid`:它算出来的网格与 `self.cols/rows` 相同
         // 时 `PaneResized` 会原地返回(去重),于是这份新装配的
-        // `Workspace` 会一直停在 80×24。直接对它自己 resize 一次。
-        ws.resize_all(&io, io.cols, io.rows);
+        // `Workspace` 会一直停在 80×24。直接对它自己 resize 一次——
+        // 共享与 SSH 两个 pane 各按自己跟踪的网格分别纠正。
+        ws.resize_all(&io, io.cols, io.rows, self.ssh_cols, self.ssh_rows);
         self.projects
             .insert(id, WorkspaceSlot::Loaded(Box::new(ws)));
     }
@@ -4499,21 +4590,30 @@ impl App {
         }
     }
 
-    fn pane_resized(&mut self, cols: u16, rows: u16) {
-        if cols == 0 || rows == 0 || (cols, rows) == (self.cols, self.rows) {
+    fn pane_resized(&mut self, cols: u16, rows: u16, ssh_cols: u16, ssh_rows: u16) {
+        if cols == 0 || rows == 0 {
+            return;
+        }
+        // 共享与 SSH 两个网格各自带独立去重:任一真变了都要往 dev 文件里
+        // propagate,不能因为共享网格没动就跳掉 SSH 网格的同步。
+        let shared_changed = (cols, rows) != (self.cols, self.rows);
+        let ssh_changed = (ssh_cols, ssh_rows) != (self.ssh_cols, self.ssh_rows);
+        if !shared_changed && !ssh_changed {
             return;
         }
         self.cols = cols;
         self.rows = rows;
+        self.ssh_cols = ssh_cols;
+        self.ssh_rows = ssh_rows;
         let io = self.shell_io();
-        // 终端网格是窗口级的:并行打开的每个项目各有一套终端 tab,
-        // 但它们共用同一块终端 pane。只改当前项目的话,切回后台项目
-        // 会看到一个停在旧网格、和 pane 对不上的画面,直到用户偶然
-        // 再拖一次窗口才纠正——所以这里对所有已加载项目一起改
-        // (`Stub` 还没有任何 tab,促成时自然按当时的 `io.cols/rows`)。
+        // 终端网格是窗口级的:并行打开的每个项目各有一套终端 tab,但它们
+        // 共用同一批 pane。只改当前项目的话,切回后台项目会看到一个停在
+        // 旧网格、和 pane 对不上的画面,直到用户偶然再拖一次窗口才纠正——
+        // 所以这里对所有已加载项目一起改(`Stub` 还没有任何 tab,促成时
+        // 自然按当时的 `io.cols/rows`)。共享/SSH 各自带独立网格下发。
         for slot in self.projects.values_mut() {
             if let WorkspaceSlot::Loaded(ws) = slot {
-                ws.resize_all(&io, cols, rows);
+                ws.resize_all(&io, cols, rows, ssh_cols, ssh_rows);
             }
         }
     }
@@ -7979,6 +8079,67 @@ mod tests {
         assert_eq!(
             terminal_pane_pixel_size(1440.0, 900.0, &conversations),
             (0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn ssh_terminal_pane_matches_left_content_panel_width() {
+        // SSH 终端挂在左面板区 `主机列表|终端` 配对的内容侧:宽 = 左区内容
+        // 宽 × (1 - ssh_split),再扣左右 chrome。必须跟渲染侧 `left_panel_area`
+        // 的 `row![list(FillPortion), divider, content(FillPortion)]` 布局对得上,
+        // 否则终端列数套的是共享终端的,拉分隔条就跟不上宿主面板。
+        let state = test_state();
+        let (w, _h) = ssh_terminal_pane_pixel_size(1440.0, 900.0, &state);
+        let left_w = left_zone_width(1440.0, &state);
+        let pair_w = pair_content_width(left_w);
+        let (_list_w, content_w) = pair_list_content_width(pair_w, state.dims.ssh_split);
+        let expected = content_w - theme::geometry::chrome_width_px();
+        assert!(
+            (w - expected).abs() < 0.01,
+            "SSH 终端 pane 宽必须等于左栏内容侧宽减 chrome: w={w}, expected={expected}"
+        );
+        assert!(
+            w > 0.0 && w < left_w,
+            "SSH 终端应占左区一部分宽度、且小于整块左区: w={w}, left_w={left_w}"
+        );
+        // 隔板越往终端一侧拖(ssh_split 越大),终端越窄——网格必须跟着变。
+        let mut tall = state;
+        tall.dims.ssh_split = 0.8;
+        let (w_tall, _) = ssh_terminal_pane_pixel_size(1440.0, 900.0, &tall);
+        assert!(
+            w_tall < w,
+            "ssh_split 增大后 SSH 终端 pane 应变窄: w_tall={w_tall}, w={w}"
+        );
+    }
+
+    #[test]
+    fn ssh_terminal_pane_height_excludes_top_bar_and_chrome_without_status_bar() {
+        // SSH 终端没有 `terminal_status_bar`,高度只扣顶栏 + chrome + 左区
+        // 上下 margin(不像共享终端那样再额外扣状态栏高)。
+        let state = test_state();
+        let (_, h) = ssh_terminal_pane_pixel_size(1440.0, 900.0, &state);
+        let m = theme::region::left_zone().margin;
+        let expected = 900.0
+            - theme::geometry::top_bar_height()
+            - theme::geometry::chrome_height_px()
+            - m.top
+            - m.bottom;
+        assert!(
+            (h - expected).abs() < 0.01,
+            "SSH 终端 pane 高度:{h}, expected:{expected}"
+        );
+    }
+
+    #[test]
+    fn ssh_terminal_pane_zero_when_left_collapsed() {
+        let collapsed = ShellState {
+            left_collapsed: true,
+            ..test_state()
+        };
+        assert_eq!(
+            ssh_terminal_pane_pixel_size(1440.0, 900.0, &collapsed),
+            (0.0, 0.0),
+            "左面板区收起时 SSH 终端不可见,应返回零尺寸"
         );
     }
 

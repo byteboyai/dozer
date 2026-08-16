@@ -1367,7 +1367,7 @@ impl Workspace {
     /// request_pty/request_shell,成功后进入读写泵循环。10 秒超时罩住
     /// "握手到 channel 就绪"这一段(同阶段 1 `test_connection` 的超时
     /// 口径,泵循环本身不设超时——那是长连接,超时语义不适用)。
-    pub(crate) fn spawn_ssh_tab(&mut self, io: &ShellIo, host_id: String) {
+    pub(crate) fn spawn_ssh_tab(&mut self, io: &ShellIo, host_id: String, cols: u16, rows: u16) {
         if self.loading {
             return; // 同 spawn_new_tab:促成中的占位不建会话
         }
@@ -1378,7 +1378,6 @@ impl Workspace {
             return;
         };
         let project_id = project.id;
-        let (cols, rows) = (io.cols, io.rows);
         let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
 
@@ -1682,19 +1681,31 @@ impl Workspace {
         }
     }
 
-    /// 终端 pane 尺寸变化：换算出的新网格套用到本项目的所有 tab（含当前
-    /// 不可见的），并把新尺寸同步给 daemon 侧存活的会话。
+    /// 终端 pane 尺寸变化:换算出的新网格套用到本项目的所有 tab,并把新
+    /// 尺寸同步给远端侧存活的会话。
+    ///
+    /// 共享终端与 SSH 面板内嵌终端是两个独立 pane,几何不同,故各自带一
+    /// 份网格:`cols/rows` 配共享 tab(`self.tabs`),`ssh_cols/ssh_rows` 配
+    /// SSH tab(`self.ssh_tabs`)——SSH 终端必须按左面板区自己的宽度换算,
+    /// 否则沿用共享终端的列数,字符折行对不上宿主面板。
     ///
     /// "网格真的变了吗"这道闸门在调用方 `App::update` 的 `PaneResized`
-    /// 分支上——`cols`/`rows` 是外壳态（整个窗口一份），比对基准不在这里。
-    pub(crate) fn resize_all(&mut self, io: &ShellIo, cols: u16, rows: u16) {
+    /// 分支上——这里是外壳态运算结果的落地,不做二次比对。
+    pub(crate) fn resize_all(
+        &mut self,
+        io: &ShellIo,
+        cols: u16,
+        rows: u16,
+        ssh_cols: u16,
+        ssh_rows: u16,
+    ) {
         let client = io.client.clone();
         let handle = io.handle.clone();
         for tab in &mut self.tabs {
             Self::resize_one(tab, &client, &handle, cols, rows);
         }
         for tab in &mut self.ssh_tabs {
-            Self::resize_one(tab, &client, &handle, cols, rows);
+            Self::resize_one(tab, &client, &handle, ssh_cols, ssh_rows);
         }
     }
 
