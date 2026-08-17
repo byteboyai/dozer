@@ -528,6 +528,9 @@ pub struct ShellState {
     pub left_collapsed: bool,
     pub right_view: RightView,
     pub right_collapsed: bool,
+    /// 浏览器收藏夹侧栏是否展开——`preview_content_bounds` 的
+    /// `LeftView::Web` 分支据此决定网页 webview 要不要让出侧栏宽度。
+    pub browser_bookmarks_open: bool,
     /// 当前放大态。`preview_content_bounds`/`is_in_preview_column`/
     /// `terminal_pane_pixel_size` 靠这个字段才能感知"这块内容其实被放大
     /// 遮罩盖住了/放大到了整个 maximize 区域"——没有它,离屏 webview 摆位、
@@ -895,12 +898,21 @@ pub fn preview_content_bounds(
             let w = (content_w - 16.0 - m.left - m.right).max(0.0);
             (x, y, w, h)
         }
-        // 浏览器(Web)是单栏,左图标栏右侧 + 左 margin + 8 起,占满左面板区。
+        // 浏览器(Web):收藏夹侧栏关闭时单栏占满左面板区;打开时网页内容
+        // 让出右侧收藏夹侧栏的宽度(纯 iced 渲染,不挂 webview,几何计算
+        // 不用管它)。
         LeftView::Web => {
             let y = y_top(theme::geometry::browser_chrome_top_px());
             let h = h_for(y);
             let x = theme::geometry::icon_rail_width() + 8.0 + m.left;
-            let w = (left_w - 16.0 - m.left - m.right).max(0.0);
+            let w = if state.browser_bookmarks_open {
+                let pair_w = pair_content_width(left_w);
+                let (_bookmarks_w, content_w) =
+                    pair_list_content_width(pair_w, 1.0 - state.dims.browser_bookmarks_split);
+                (content_w - 16.0 - m.left - m.right).max(0.0)
+            } else {
+                (left_w - 16.0 - m.left - m.right).max(0.0)
+            };
             (x, y, w, h)
         }
         LeftView::GitLog => (0.0, 0.0, 0.0, 0.0),
@@ -2856,6 +2868,10 @@ impl App {
             left_collapsed: self.left_collapsed,
             right_view: self.right_view,
             right_collapsed: self.right_collapsed,
+            browser_bookmarks_open: self
+                .active_workspace()
+                .map(|ws| ws.browser.bookmarks_open())
+                .unwrap_or(false),
             maximized: self.maximized,
         }
     }
@@ -8311,6 +8327,7 @@ mod tests {
             left_collapsed: false,
             right_view: RightView::Agent,
             right_collapsed: false,
+            browser_bookmarks_open: false,
             maximized: None,
         }
     }
@@ -8345,6 +8362,31 @@ mod tests {
         let left_w = left_zone_width(1440.0, &state);
         assert_eq!(x, theme::geometry::icon_rail_width() + 8.0 + m.left);
         assert_eq!(w, left_w - 16.0 - m.left - m.right);
+    }
+
+    #[test]
+    fn preview_content_bounds_web_view_shrinks_when_bookmarks_open() {
+        let closed = ShellState {
+            left_view: LeftView::Web,
+            browser_bookmarks_open: false,
+            ..test_state()
+        };
+        let open = ShellState {
+            left_view: LeftView::Web,
+            browser_bookmarks_open: true,
+            ..test_state()
+        };
+        let (_, _, w_closed, _) = preview_content_bounds(1440.0, 900.0, &closed);
+        let (x_open, y_open, w_open, h_open) = preview_content_bounds(1440.0, 900.0, &open);
+        assert!(
+            w_open < w_closed,
+            "收藏夹打开时网页内容应该让出侧栏宽度: w_open={w_open} w_closed={w_closed}"
+        );
+        // x/y/h 不受收藏夹开关影响——网页内容起点、高度不变,只是变窄。
+        let (x_closed, y_closed, _, h_closed) = preview_content_bounds(1440.0, 900.0, &closed);
+        assert_eq!(x_open, x_closed);
+        assert_eq!(y_open, y_closed);
+        assert_eq!(h_open, h_closed);
     }
 
     #[test]

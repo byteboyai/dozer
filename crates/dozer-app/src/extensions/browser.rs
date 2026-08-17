@@ -843,6 +843,13 @@ impl State {
         self.tabs.addr_editing()
     }
 
+    /// 收藏夹侧栏当前是否展开——`app.rs::App::shell_state()` 读这个填
+    /// `ShellState::browser_bookmarks_open`,几何计算据此决定网页 webview
+    /// 是否要让出侧栏宽度。
+    pub fn bookmarks_open(&self) -> bool {
+        self.bookmarks_open
+    }
+
     /// 取消地址栏编辑(内核 `App::blur_inputs` 用)。
     pub fn addr_cancel(&mut self) {
         self.tabs.addr_cancel();
