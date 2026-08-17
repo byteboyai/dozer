@@ -149,6 +149,24 @@ pub fn is_editable_extension(path: &std::path::Path) -> bool {
     )
 }
 
+/// 默认预览要不要走 flyfish 渲染而不是原生只读代码编辑器:目前只有
+/// .md/.markdown——flyfish 内置的 markdown 渲染器能出标题/粗体/列表/代码块
+/// 排版效果(GitHub 风格 `.markdown-body`),原生编辑器只能给纯文本+语法
+/// 高亮,看不出排版。跟 `is_editable_extension` 是两个独立的判定:后者仍对
+/// .md 返回 `true`,右键"编辑"照常能打开可写的原生编辑器
+/// (`preview_edit_open_for` 独立读盘建 editor,不依赖这个 tab 当前是不是
+/// 走 webview),只是**默认预览**换成渲染效果。
+fn prefers_rendered_preview(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
+        "md" | "markdown"
+    )
+}
+
 #[derive(Default)]
 pub struct PreviewPane {
     tabs: Vec<PreviewTab>,
@@ -199,7 +217,9 @@ impl PreviewPane {
         let id = self.next_id;
         self.next_id += 1;
         let editor = match &kind {
-            TabKind::File(path) if is_editable_extension(path) => {
+            TabKind::File(path)
+                if is_editable_extension(path) && !prefers_rendered_preview(path) =>
+            {
                 read_and_build_native_editor(path).ok()
             }
             _ => None,
@@ -694,6 +714,37 @@ mod tests {
 
         std::fs::remove_file(&rs_path).ok();
         std::fs::remove_file(&png_path).ok();
+    }
+
+    #[test]
+    fn markdown_renders_via_webview_but_stays_editable() {
+        // .md 是白名单扩展名(`is_editable_extension` 仍为 true,右键"编辑"
+        // 照常出现),但默认预览要走 flyfish 的 markdown 渲染器而不是原生
+        // 只读代码编辑器——跟 .png 这类天然不可编辑的类型走 wry 的原因不同,
+        // 这里是"能编辑但默认展示渲染效果",两个判定必须独立验证。
+        let dir = std::env::temp_dir();
+        let md_path = dir.join(format!("preview_markdown_test_{}.md", std::process::id()));
+        std::fs::write(&md_path, "# hello\n\nworld").unwrap();
+
+        let mut p = PreviewPane::default();
+        p.open_path(md_path.clone());
+
+        assert!(
+            p.tabs()[0].editor.is_none(),
+            ".md 默认预览应走 flyfish 渲染,不建原生只读 editor"
+        );
+        assert!(
+            is_editable_extension(&md_path),
+            ".md 仍应保留可编辑属性,右键“编辑”入口不受影响"
+        );
+        let specs = p.desired_webviews();
+        assert_eq!(specs.len(), 1, ".md 现在应进 wry 期望清单");
+        assert!(
+            specs[0].url.contains("&ln=1"),
+            "&ln=1 仍按 is_editable_extension 挂上,flyfish 对非文本渲染器会忽略该 option"
+        );
+
+        std::fs::remove_file(&md_path).ok();
     }
 
     #[test]
