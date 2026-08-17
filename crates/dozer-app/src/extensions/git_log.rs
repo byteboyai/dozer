@@ -255,6 +255,16 @@ pub enum Message {
     SnapshotLoaded(PathBuf, usize, Result<GitLogSnapshot, String>),
     /// 点文件列表某一行,选中它(右下面板据此展示该文件的 diff)。
     SelectFile(String),
+    /// 展开左侧面板底部的分支切换下拉(首次展开时内核顺带异步查一次
+    /// `delivery::local_branches`)。
+    BranchPickerOpen,
+    BranchPickerClose,
+    /// 内核异步查完本地分支列表后落地(仓库路径核对一致才接受)。
+    BranchesLoaded(PathBuf, Vec<String>),
+    /// 点某个分支——内核截获处理(同 `LoadMore`/`ProjectTabOpen` 的既有
+    /// 例外模式),不会转发到 `update`(见其 `unreachable!` 分支)。
+    BranchSwitch(String),
+    BranchSwitchDone(Result<(), String>),
 }
 
 /// Git Log 面板的全部状态。现在挂在 `App`(不按项目分,见设计文档"非
@@ -274,6 +284,13 @@ pub struct State {
     pending: Option<(PathBuf, usize)>,
     /// "加载更多"发起前记下的选中提交,新快照落地后据此还原选中态。
     restore_after_load: Option<git2::Oid>,
+    /// 面板底部分支下拉是否展开。
+    branch_picker_open: bool,
+    /// 当前仓库的本地分支列表(`delivery::local_branches` 结果缓存,内核在
+    /// `BranchPickerOpen` 首次展开时异步查一次)。
+    branches: Vec<String>,
+    /// 分支切换请求进行中(禁用下拉交互、显示"切换中…")。
+    branch_switch_pending: bool,
 }
 
 impl State {
@@ -393,6 +410,36 @@ pub fn update(
             unreachable!(
                 "ProjectTabOpen 由内核在 Message::GitLog 分支里直接处理(切到对应 worktree),不会转发到这里"
             )
+        }
+        Message::BranchPickerOpen => {
+            state.branch_picker_open = true;
+            None
+        }
+        Message::BranchPickerClose => {
+            state.branch_picker_open = false;
+            None
+        }
+        Message::BranchesLoaded(repo_path, branches) => {
+            let matches =
+                state.cache.as_ref().map(|c| c.repo_path()) == Some(repo_path.as_path());
+            if matches {
+                state.branches = branches;
+            }
+            None
+        }
+        Message::BranchSwitch(_) => {
+            unreachable!(
+                "BranchSwitch 由内核在 Message::GitLog 分支里直接处理(需要仓库路径 + 真实 checkout IO),不会转发到这里"
+            )
+        }
+        Message::BranchSwitchDone(result) => {
+            state.branch_picker_open = false;
+            state.branch_switch_pending = false;
+            match result {
+                Ok(()) => state.error = None,
+                Err(e) => state.error = Some(e),
+            }
+            None
         }
     }
 }
@@ -1317,6 +1364,80 @@ mod tests {
             state.selected_file, None,
             "切 commit 时应先清空旧的 selected_file(等新 detail 落地才重选)"
         );
+    }
+
+    #[tokio::test]
+    async fn branch_picker_open_and_close_toggle_flag() {
+        let mut state = State::default();
+        let handle = tokio::runtime::Handle::current();
+        update(&mut state, Message::BranchPickerOpen, &handle, |_| {});
+        assert!(state.branch_picker_open);
+        update(&mut state, Message::BranchPickerClose, &handle, |_| {});
+        assert!(!state.branch_picker_open);
+    }
+
+    #[tokio::test]
+    async fn branches_loaded_lands_when_repo_path_matches_cache() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let mut state = State {
+            cache: Some(snapshot_at(&repo_path, 10)),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::BranchesLoaded(repo_path, vec!["main".to_string(), "dev".to_string()]),
+            &handle,
+            |_| {},
+        );
+        assert_eq!(state.branches, vec!["main".to_string(), "dev".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn branches_loaded_discarded_when_repo_path_mismatches() {
+        let mut state = State {
+            cache: Some(snapshot_at(Path::new("/tmp/a"), 10)),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::BranchesLoaded(PathBuf::from("/tmp/b"), vec!["main".to_string()]),
+            &handle,
+            |_| {},
+        );
+        assert!(state.branches.is_empty(), "仓库路径对不上,不该落地");
+    }
+
+    #[tokio::test]
+    async fn branch_switch_done_ok_clears_pending_and_closes_picker() {
+        let mut state = State {
+            branch_picker_open: true,
+            branch_switch_pending: true,
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(&mut state, Message::BranchSwitchDone(Ok(())), &handle, |_| {});
+        assert!(!state.branch_picker_open);
+        assert!(!state.branch_switch_pending);
+        assert!(state.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn branch_switch_done_err_sets_error_and_clears_pending() {
+        let mut state = State {
+            branch_switch_pending: true,
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::BranchSwitchDone(Err("checkout 失败".to_string())),
+            &handle,
+            |_| {},
+        );
+        assert!(!state.branch_switch_pending);
+        assert_eq!(state.error.as_deref(), Some("checkout 失败"));
     }
 
     #[tokio::test]
