@@ -220,7 +220,9 @@ Option<i64>, width: Length, outer: Border)`,不接收 `PanelDims`。而
 `browser_bookmarks_split` 存在 `App`/`Workspace` 层的 `PanelDims` 里,`browser::
 State` 自己不持有。需要给 `view()` 新增一个参数 `bookmarks_split: f32`,调用处
 (`app.rs` 里渲染 `LeftView::Web` 的地方,与 `preview_pane`/`project_pane` 等同
-级)从 `ws.dims.browser_bookmarks_split` 取值传进去——这与 `agent_list_pane`/
+级)从 `app.dims.browser_bookmarks_split` 取值传进去(`PanelDims` 挂在 `App`
+上,不是 `Workspace`——同一函数里 `files_split`/`agent_split` 等既有 split 字段
+都是 `app.dims.xxx_split` 这个访问路径,照抄)——这与 `agent_list_pane`/
 `conversation_list_pane` 等函数接收 `Length::FillPortion` 而非自己算分割比例是
 同一套惯例,照抄即可,不是新模式。
 
