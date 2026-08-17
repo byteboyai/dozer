@@ -3215,6 +3215,7 @@ impl App {
                     {
                         match result {
                             Ok(entries) => {
+                                rv.ai_markdown = crate::workspace::parse_review_markdown(&entries);
                                 rv.entries = entries;
                                 rv.error = None;
                             }
@@ -5247,6 +5248,7 @@ impl App {
                 entries: Vec::new(),
                 error: None,
                 expanded: std::collections::HashSet::new(),
+                ai_markdown: Vec::new(),
             });
             ws.spawn_review_load(io, source, path_s, agent);
         });

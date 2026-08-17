@@ -61,9 +61,11 @@ use crate::transcript::{self, ReviewEntry};
 use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 use iced_code_editor::{CodeEditor, Message as EditorMessage};
+use iced_widget::core::font::Font;
 use iced_widget::core::mouse;
-use iced_widget::core::text::LineHeight;
+use iced_widget::core::text::{Highlight, LineHeight};
 use iced_widget::core::{Border, Color, Element, Length, Padding};
+use iced_widget::markdown;
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
 use std::collections::{HashMap, HashSet};
@@ -169,6 +171,126 @@ pub struct ReviewView {
     pub error: Option<String>,
     /// 展开了过程区的 AI 回合下标（entries 中的位置）。
     pub expanded: std::collections::HashSet<usize>,
+    /// 与 `entries` 等长、下标对齐的预解析 markdown——非 `AiTurn` 条目对应
+    /// 位置放一份空 `Content`(构造代价可忽略)。只在 `entries` 落定时
+    /// (`ReviewLoaded`)解析一次，`view()` 只管渲染，不重复 parse。
+    pub ai_markdown: Vec<markdown::Content>,
+}
+
+/// `ReviewLoaded` 落 `entries` 时配套生成 `ai_markdown`：下标对齐,
+/// `AiTurn` 解析正文，其余位置放空 `Content` 占位。
+pub(crate) fn parse_review_markdown(entries: &[ReviewEntry]) -> Vec<markdown::Content> {
+    entries
+        .iter()
+        .map(|e| match e {
+            ReviewEntry::AiTurn { text, .. } => markdown::Content::parse(text),
+            ReviewEntry::Human { .. } => markdown::Content::new(),
+        })
+        .collect()
+}
+
+/// 对话审阅 AI 回合的 markdown 渲染样式:配色对齐 ByteBoy2077(链接/内联
+/// 代码走青色 `CYAN`,内联代码背景用卡片色 `CARD`),基础字号跟原先纯文本
+/// 渲染时的 `theme::font::subtitle()` 对齐,避免换 markdown 之后正文突然
+/// 变大变小。段落/标题本身的前景色不在 `markdown::Style` 的可控范围内
+/// (该结构只暴露链接色与内联代码色),交给 iced 默认主题决定。
+fn review_markdown_settings() -> markdown::Settings {
+    markdown::Settings::with_text_size(
+        theme::font::subtitle(),
+        markdown::Style {
+            font: Font::default(),
+            inline_code_highlight: Highlight {
+                background: theme::color::CARD.into(),
+                border: Border {
+                    color: theme::color::BORDER,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+            },
+            // 内联代码高亮的背景/边框是叠在文字上的装饰,不占额外排版
+            // 宽度——padding 调大过(4px)会让高亮框直接吃掉两侧词间的
+            // 空格,视觉上文字贴着框边。iced 官方文档示例给的默认值是
+            // 左右各 1px,这里跟它对齐,不要再调大。
+            inline_code_padding: Padding {
+                top: 0.0,
+                right: 1.0,
+                bottom: 0.0,
+                left: 1.0,
+            },
+            inline_code_color: theme::color::CYAN,
+            inline_code_font: Font::MONOSPACE,
+            code_block_font: Font::MONOSPACE,
+            link_color: theme::color::CYAN,
+        },
+    )
+}
+
+/// `markdown::view` 默认给的段落/标题 `rich_text` 不带行高,回落到 iced
+/// 默认值——这个环境下 CJK 字形的默认行高偏紧,长段落换行后上下行会视觉
+/// 重叠(同 `lh()` 要处理的问题,见其文档)。iced 的 markdown 模块没开放
+/// 行高参数,只能自己实现 `Viewer` 重做 paragraph/heading 这两处,其余
+/// (列表/代码块/引用等)吃 trait 默认实现,照旧转发到官方版本。
+struct ReviewMarkdownViewer;
+
+impl<'a> markdown::Viewer<'a, Message, iced_widget::Theme, iced_renderer::Renderer>
+    for ReviewMarkdownViewer
+{
+    fn on_link_click(url: markdown::Uri) -> Message {
+        Message::Browser(browser::Message::OpenUrl(url))
+    }
+
+    fn paragraph(
+        &self,
+        settings: markdown::Settings,
+        text: &markdown::Text,
+    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+        iced_widget::rich_text(text.spans(settings.style))
+            .size(settings.text_size)
+            .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
+            .on_link_click(Self::on_link_click)
+            .color(theme::color::BODY)
+            .into()
+    }
+
+    fn heading(
+        &self,
+        settings: markdown::Settings,
+        level: &'a markdown::HeadingLevel,
+        text: &'a markdown::Text,
+        index: usize,
+    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+        let markdown::Settings {
+            h1_size,
+            h2_size,
+            h3_size,
+            h4_size,
+            h5_size,
+            h6_size,
+            text_size,
+            ..
+        } = settings;
+        container(
+            iced_widget::rich_text(text.spans(settings.style))
+                .on_link_click(Self::on_link_click)
+                .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
+                .color(theme::color::CREAM)
+                .size(match level {
+                    markdown::HeadingLevel::H1 => h1_size,
+                    markdown::HeadingLevel::H2 => h2_size,
+                    markdown::HeadingLevel::H3 => h3_size,
+                    markdown::HeadingLevel::H4 => h4_size,
+                    markdown::HeadingLevel::H5 => h5_size,
+                    markdown::HeadingLevel::H6 => h6_size,
+                }),
+        )
+        .padding(Padding {
+            top: if index > 0 { text_size.0 / 2.0 } else { 0.0 },
+            right: 0.0,
+            bottom: 0.0,
+            left: 0.0,
+        })
+        .into()
+    }
 }
 
 /// 预览编辑弹层的进行中会话(全局至多一个;弹层是应用级模态)。
@@ -2174,9 +2296,11 @@ pub(crate) fn review_content<'a>(
                 thinking,
             } => {
                 if !body.is_empty() {
-                    content = content.push(lh(text(body.clone())
-                        .size(theme::font::subtitle())
-                        .color(theme::color::BODY)));
+                    content = content.push(markdown::view_with(
+                        rv.ai_markdown[i].items(),
+                        review_markdown_settings(),
+                        &ReviewMarkdownViewer,
+                    ));
                 }
                 let expanded = rv.expanded.contains(&i);
                 let glyph = if expanded { "▾ " } else { "▸ " };
@@ -2257,6 +2381,7 @@ pub(crate) fn conversation_list_pane(
     let mut ordered: Vec<&ConversationMeta> = ws.conversations.iter().collect();
     ordered.sort_by_key(|c| conversation::is_current_conversation(&c.path, &opens) as u8);
     ordered.reverse();
+    let mut cards = column![].spacing(region.gap);
     for c in ordered {
         let current = conversation::is_current_conversation(&c.path, &opens);
         let sub = if current {
@@ -2305,8 +2430,17 @@ pub(crate) fn conversation_list_pane(
             },
             ..button::Style::default()
         });
-        content = content.push(card);
+        cards = cards.push(card);
     }
+    content = content.push(
+        Scrollable::new(cards)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .direction(scrollable::Direction::Vertical(
+                crate::scrollbar::scrollbar(),
+            ))
+            .style(|_t, _s| crate::scrollbar::scrollbar_style()),
+    );
 
     container(content.padding(region.padding))
         .width(width)
@@ -2649,7 +2783,16 @@ pub(crate) fn review_content_pane(
     let mut content = column![].spacing(region.gap);
 
     if ws.review.is_some() {
-        content = review_content(content, ws);
+        let body = review_content(column![].spacing(region.gap), ws);
+        content = content.push(
+            Scrollable::new(body)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .direction(scrollable::Direction::Vertical(
+                    crate::scrollbar::scrollbar(),
+                ))
+                .style(|_t, _s| crate::scrollbar::scrollbar_style()),
+        );
     } else {
         content = content.push(
             container(lh(text("暂无审阅内容——点击左侧对话列表中的对话开始审阅")
