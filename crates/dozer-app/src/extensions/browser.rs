@@ -1225,16 +1225,21 @@ fn star_menu_popup(
         .into()
 }
 
-/// 一组收藏条目:标题(点击新开 tab)+ `×` 删除按钮,风格照抄 tab 关闭
-/// 按钮。
+/// 一组收藏条目:文件夹图标 + 标题(点击新开 tab)+ `×` 删除按钮,风格照抄
+/// tab 关闭按钮。条目在文件夹标题下缩进一级,呼应收藏夹"文件夹树"视觉。
 fn bookmark_group<'a>(
     title: &'static str,
     items: &[&'a BookmarkInfo],
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let mut col = column![lh(text(title)
-        .size(theme::font::subtitle())
-        .color(theme::color::DIM))]
-    .spacing(2);
+    let header = row![
+        icons::view(icons::IconKind::Folder, icon_size::row(), theme::color::DIM),
+        lh(text(title)
+            .size(theme::font::subtitle())
+            .color(theme::color::DIM)),
+    ]
+    .spacing(4)
+    .align_y(iced_widget::core::Alignment::Center);
+    let mut col = column![header].spacing(2);
     for b in items {
         let open = button(lh(text(b.title.clone())
             .size(theme::font::body())
@@ -1256,18 +1261,26 @@ fn bookmark_group<'a>(
             ..button::Style::default()
         });
         col = col.push(
-            row![open, remove]
-                .spacing(4)
-                .align_y(iced_widget::core::Alignment::Center),
+            row![
+                iced_widget::Space::new().width(Length::Fixed(16.0)),
+                row![open, remove]
+                    .spacing(4)
+                    .align_y(iced_widget::core::Alignment::Center),
+            ]
+            .width(Length::Fill),
         );
     }
     col.into()
 }
 
-/// 收藏夹下拉面板:分"全局收藏"/"本项目收藏"两组,都为空时显示占位文案。
+/// 收藏夹侧栏:分"全局收藏"/"本项目收藏"两组文件夹分组,都为空时显示占位
+/// 文案。`width` 由调用方按配对布局里侧栏那一份宽度的 flex 权重传入,侧栏
+/// 背景用列表侧一致的 `theme::color::BG`(结构性常驻侧栏,不再是盖在下方的
+/// 浮层卡片)。
 fn bookmarks_panel(
     state: &State,
     project_id: Option<i64>,
+    width: Length,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let global: Vec<&BookmarkInfo> = state
         .bookmarks
@@ -1294,14 +1307,10 @@ fn bookmarks_panel(
 
     container(col)
         .padding(6)
-        .width(Length::Fill)
+        .width(width)
+        .height(Length::Fill)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::CARD.into()),
-            border: Border {
-                color: theme::color::BORDER,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
+            background: Some(theme::color::BG.into()),
             ..container::Style::default()
         })
         .into()
@@ -1421,7 +1430,7 @@ pub fn view(
         content = content.push(star_menu_popup(state, project_id));
     }
     if state.bookmarks_open {
-        content = content.push(bookmarks_panel(state, project_id));
+        content = content.push(bookmarks_panel(state, project_id, Length::Fill));
     }
 
     if let Some(err) = &state.error {
