@@ -339,6 +339,11 @@ pub struct PanelDims {
     pub agent_split: f32,
     /// 对话配对:对话列表占右面板区宽度的比例，对话审阅拿剩下的。
     pub conversations_split: f32,
+    /// 浏览器面板配对:网页内容占左面板区宽度的比例,收藏夹侧栏(右)拿剩下
+    /// 的。与其余 split 字段语义相反(内容占比而非列表占比)——浏览器是
+    /// "内容在左、收藏夹侧栏在右"的唯一左面板区配对,详见 spec 第 1 节命名
+    /// 理由。
+    pub browser_bookmarks_split: f32,
 }
 
 /// 每项目尺寸的默认值(数值来源统一从这取,迁走的 `ShellLayout::default()`
@@ -356,6 +361,7 @@ fn default_panel_dims() -> PanelDims {
         git_log_file_diff_split: theme::geometry::default_split_ratio(),
         agent_split: theme::geometry::default_split_ratio(),
         conversations_split: theme::geometry::default_split_ratio(),
+        browser_bookmarks_split: theme::geometry::default_split_ratio(),
     }
 }
 
@@ -445,6 +451,7 @@ pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
         git_log_file_diff_split: clamp_split(d.git_log_file_diff_split),
         agent_split: clamp_split(d.agent_split),
         conversations_split: clamp_split(d.conversations_split),
+        browser_bookmarks_split: clamp_split(d.browser_bookmarks_split),
     }
 }
 
@@ -8792,6 +8799,35 @@ mod tests {
         };
         let sanitized = sanitize_panel_dims(dims);
         assert_eq!(sanitized.git_log_split, PanelDims::default().files_split);
+    }
+
+    #[test]
+    fn default_panel_dims_includes_browser_bookmarks_split() {
+        let dims = PanelDims::default();
+        assert_eq!(
+            dims.browser_bookmarks_split,
+            theme::geometry::default_split_ratio()
+        );
+    }
+
+    #[test]
+    fn sanitize_panel_dims_clamps_browser_bookmarks_split() {
+        let dims = PanelDims {
+            browser_bookmarks_split: 5.0,
+            ..PanelDims::default()
+        };
+        let sanitized = sanitize_panel_dims(dims);
+        assert!(sanitized.browser_bookmarks_split <= theme::geometry::max_split_ratio());
+
+        let dims = PanelDims {
+            browser_bookmarks_split: f32::NAN,
+            ..PanelDims::default()
+        };
+        let sanitized = sanitize_panel_dims(dims);
+        assert_eq!(
+            sanitized.browser_bookmarks_split,
+            PanelDims::default().files_split
+        );
     }
 
     #[test]
