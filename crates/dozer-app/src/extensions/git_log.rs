@@ -279,6 +279,8 @@ pub enum Message {
     ProjectTabOpen(PathBuf),
     DetailLoaded(PathBuf, git2::Oid, Result<CommitDetail, String>),
     SnapshotLoaded(PathBuf, usize, Result<GitLogSnapshot, String>),
+    /// 点文件列表某一行,选中它(右下面板据此展示该文件的 diff)。
+    SelectFile(String),
 }
 
 /// Git Log 面板的全部状态。现在挂在 `App`(不按项目分,见设计文档"非
@@ -290,6 +292,9 @@ pub struct State {
     error: Option<String>,
     selected: Option<git2::Oid>,
     detail: Option<Result<CommitDetail, String>>,
+    /// 右上文件列表当前选中的文件路径(`CommitDetail.files[].path`)。切
+    /// commit 时先清空,新 `detail` 落地后预选第一个改动文件。
+    selected_file: Option<String>,
     /// 最近一次派发的 `build` 请求 (repo_path, max_count)——落地时核对
     /// 还对不对得上"现在真正需要的",不对就丢弃。
     pending: Option<(PathBuf, usize)>,
@@ -357,6 +362,7 @@ pub fn update(
         Message::SelectCommit(oid) => {
             state.selected = Some(oid);
             state.detail = None;
+            state.selected_file = None;
             let repo_path = state.cache.as_ref().map(|c| c.repo_path().to_path_buf())?;
             handle.spawn(async move {
                 let repo_path2 = repo_path.clone();
@@ -367,11 +373,19 @@ pub fn update(
             });
             None
         }
+        Message::SelectFile(path) => {
+            state.selected_file = Some(path);
+            None
+        }
         Message::DetailLoaded(repo_path, oid, result) => {
             let still_current = state.cache.as_ref().map(|c| c.repo_path())
                 == Some(repo_path.as_path())
                 && state.selected == Some(oid);
             if still_current {
+                state.selected_file = match &result {
+                    Ok(detail) => detail.files.first().map(|f| f.path.clone()),
+                    Err(_) => None,
+                };
                 state.detail = Some(result);
             }
             // 否则:项目已切换,或用户点了别的提交——这份结果过期了,丢弃。
@@ -1247,6 +1261,99 @@ mod tests {
             |_| {},
         );
         assert!(state.detail.is_none(), "选中的提交对不上,结果应被丢弃");
+    }
+
+    #[tokio::test]
+    async fn select_file_sets_selected_file() {
+        let mut state = State::default();
+        let handle = tokio::runtime::Handle::current();
+        let result = update(
+            &mut state,
+            Message::SelectFile("src/main.rs".to_string()),
+            &handle,
+            |_| {},
+        );
+        assert_eq!(state.selected_file.as_deref(), Some("src/main.rs"));
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn detail_loaded_preselects_first_file() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let oid = git2::Oid::from_bytes(&[10; 20]).unwrap();
+        let mut state = State {
+            cache: Some(snapshot_at(&repo_path, 10)),
+            selected: Some(oid),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        let detail = CommitDetail {
+            files: vec![
+                DiffFileEntry {
+                    path: "a.rs".to_string(),
+                    status: git2::Delta::Modified,
+                    patch: "+x".to_string(),
+                    truncated: false,
+                },
+                DiffFileEntry {
+                    path: "b.rs".to_string(),
+                    status: git2::Delta::Added,
+                    patch: "+y".to_string(),
+                    truncated: false,
+                },
+            ],
+        };
+        update(
+            &mut state,
+            Message::DetailLoaded(repo_path, oid, Ok(detail)),
+            &handle,
+            |_| {},
+        );
+        assert_eq!(
+            state.selected_file.as_deref(),
+            Some("a.rs"),
+            "detail 落地后应预选第一个改动文件"
+        );
+    }
+
+    #[tokio::test]
+    async fn detail_loaded_with_no_files_clears_selected_file() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let oid = git2::Oid::from_bytes(&[11; 20]).unwrap();
+        let mut state = State {
+            cache: Some(snapshot_at(&repo_path, 10)),
+            selected: Some(oid),
+            selected_file: Some("stale.rs".to_string()),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::DetailLoaded(repo_path, oid, Ok(CommitDetail { files: Vec::new() })),
+            &handle,
+            |_| {},
+        );
+        assert_eq!(
+            state.selected_file, None,
+            "无改动文件时应清空 selected_file,不留旧值"
+        );
+    }
+
+    #[tokio::test]
+    async fn select_commit_clears_selected_file() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let mut state = State {
+            cache: Some(snapshot_at(&repo_path, 10)),
+            selected_file: Some("old.rs".to_string()),
+            ..State::default()
+        };
+        let oid = git2::Oid::from_bytes(&[12; 20]).unwrap();
+        let handle = tokio::runtime::Handle::current();
+        update(&mut state, Message::SelectCommit(oid), &handle, |_| {});
+        assert_eq!(
+            state.selected_file, None,
+            "切 commit 时应先清空旧的 selected_file(等新 detail 落地才重选)"
+        );
     }
 
     #[tokio::test]
