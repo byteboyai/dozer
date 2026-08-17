@@ -228,11 +228,11 @@ impl HoverAnim {
     }
 }
 
-/// 页签标题 tooltip 的悬停触发延迟:进入页签并持续悬停满 3s 才弹出标题全称,
+/// 页签标题 tooltip 的悬停触发延迟:进入页签并持续悬停满 2s 才弹出标题全称,
 /// 避免短暂停留就弹气泡打扰。计时起点记在 `App::hover_tooltip_starts`,由
-/// `Message::Hover` 进入/离开驱动;main.rs 的自驱 redraw 负责在满 3s 那一刻
+/// `Message::Hover` 进入/离开驱动;main.rs 的自驱 redraw 负责在满 2s 那一刻
 /// 重绘出气泡(见 `next_tooltip_wake`)。
-pub(crate) const HOVER_TOOLTIP_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
+pub(crate) const HOVER_TOOLTIP_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// 顶层级页面：工作区(默认,左右面板区+页签) / 首页落地页(点顶栏 Dozer 进入)。
 /// 默认 `Workspace`——程序启动照常进工作区,Home 是用户主动点击 Dozer 才进。
@@ -2191,7 +2191,7 @@ impl App {
     /// `advance_hover_anims` 循环把它指数逼近（见 `HoverAnim`）。
     pub fn set_hover(&mut self, id: HoverId, hovered: bool) {
         self.hover_anims.entry(id).or_default().set(hovered);
-        // 标题 tooltip 计时:进入即记起点,离开即清(计时满 3s 由视图层
+        // 标题 tooltip 计时:进入即记起点,离开即清(计时满 2s 由视图层
         // `hover_tooltip_ready` 判断,本函数只负责起止)。
         if hovered {
             self.hover_tooltip_starts
@@ -2242,8 +2242,8 @@ impl App {
             .is_some_and(|start| start.elapsed() >= HOVER_TOOLTIP_DELAY)
     }
 
-    /// 距下一个 tooltip 计时满 3s 的最短剩余时间:main.rs 据此排下次唤醒,做到
-    /// "恰好满 3s 才重绘",不空转也不延迟。浏览器面板页签的计时一并纳入。
+    /// 距下一个 tooltip 计时满 2s 的最短剩余时间:main.rs 据此排下次唤醒,做到
+    /// "恰好满 2s 才重绘",不空转也不延迟。浏览器面板页签的计时一并纳入。
     pub fn next_tooltip_wake(&self) -> Option<std::time::Duration> {
         let mut next = self
             .hover_tooltip_starts
@@ -6210,7 +6210,7 @@ fn project_tab_item<'a>(
         })
         .into();
     // 顶栏页签在屏幕顶部,tooltip 用 `Bottom` 弹在页签下方,免出屏。仅当
-    // 悬停满 3s(`show_tooltip`)才显示标题全称。
+    // 悬停满 2s(`show_tooltip`)才显示标题全称。
     controlled_tooltip(el, name, tooltip::Position::Bottom, show_tooltip)
 }
 
@@ -7288,7 +7288,7 @@ pub(crate) fn tab_drag_surface(
 /// `browser::Message`，保证三处渲染完全一致。`hover_t`/`close_hover_t` 是
 /// 调用方动画源给的插值进度(0..=1)；`prefix` 承载终端状态点(标题左侧)，
 /// `suffix` 承载预览编辑图标(标题右侧、关闭按钮前，仍是独立可点元素)。
-/// `show_tooltip` 由调用方按"悬停满 3s"算好(`App::hover_tooltip_ready` /
+/// `show_tooltip` 由调用方按"悬停满 2s"算好(`App::hover_tooltip_ready` /
 /// `browser::State::hover_tooltip_ready`)，满则包一层 tooltip 显示标题全称。
 // 共享的 panel tab 渲染器,被终端/预览/browser 三处复用;参数多是刻意保留的
 // 单一职责接口(标题/激活态/两组 hover 进度与回调/前后缀/tooltip 开关),拆
@@ -7335,7 +7335,7 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
         )
         // 标题超宽不补省略号、也不换行,直接裁掉溢出(见 CODEBUDDY 需求):
         // iced `Text` 默认 `Wrapping::None`,`clip` 把越界部分藏起,视觉上即
-        // "隐藏"。满 3s 悬停后由外层 `controlled_tooltip` 弹出全称。
+        // "隐藏"。满 2s 悬停后由外层 `controlled_tooltip` 弹出全称。
         .width(Length::Shrink)
         .max_width(title_max)
         .clip(true),
@@ -7411,7 +7411,7 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
         })
         .into();
     // 面板页签在屏幕底部,tooltip 用 `Top` 弹在页签上方,免出屏。仅当悬停
-    // 满 3s(`show_tooltip`)才显示标题全称(见 `App::hover_tooltip_ready`)。
+    // 满 2s(`show_tooltip`)才显示标题全称(见 `App::hover_tooltip_ready`)。
     controlled_tooltip(el, title, tooltip::Position::Top, show_tooltip)
 }
 
@@ -7427,8 +7427,8 @@ const PANEL_TAB_PAD_Y: f32 = 1.0;
 
 /// 受控 tooltip:iced 0.14 的 `Tooltip` 没有"延迟显示"开关(它一悬停就弹),
 /// 所以这里不靠 `Tooltip` 自带的 hover 检测,而是**仅在 `show` 为真时才把
-/// `content` 包进 `Tooltip`**——调用方按"悬停满 3s"算好 `show`(见
-/// `App::hover_tooltip_ready` / `browser::State::hover_tooltip_ready`),满 3s
+/// `content` 包进 `Tooltip`**——调用方按"悬停满 2s"算好 `show`(见
+/// `App::hover_tooltip_ready` / `browser::State::hover_tooltip_ready`),满 2s
 /// 那一刻视图层才挂载 `Tooltip`,气泡随即弹出;离开即 `show` 为假,直接返回
 /// 裸 `content`,气泡消失。`position` 由调用方按页签位置定(顶栏页签用
 /// `Bottom`、底部面板页签用 `Top`,免得气泡出屏)。`label` 收 `String`(拥有
@@ -7444,7 +7444,7 @@ where
     M: Clone + 'a,
     R: iced_widget::core::text::Renderer + 'a,
 {
-    // 未悬停满 3s:不包 tooltip,直接返回裸内容,避免一悬停就弹气泡打扰。
+    // 未悬停满 2s:不包 tooltip,直接返回裸内容,避免一悬停就弹气泡打扰。
     if !show {
         return content;
     }

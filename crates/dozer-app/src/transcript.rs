@@ -200,15 +200,17 @@ pub fn parse_transcript(agent: AgentKind, jsonl: &str) -> Vec<ReviewEntry> {
 /// `parse_claude_shaped_jsonl` 的既有容错口径)。不像 `parse_transcript`
 /// 那样建 `ReviewEntry` 列表,只回三个标量,给 Agent 卡片的实时刷新用
 /// (每次 hook 事件都会重跑一次,故意做得比 `parse_transcript` 轻)。
-/// 第三个标量 `activity` 是同一次扫描里顺带提取的"最后一句活动摘要"
+/// 第三个标量 `activity` 是同一次扫描里顺带提取的"最后一句人类发言"
 /// (Agent 卡片"当前工作内容"的兜底数据源,见 `workspace.rs::agent_card`
 /// ——优先用 Todo 派发记录的任务标题,拿不到才落到这里),不新开一次
 /// 读取:两者读的是同一份 transcript,分两次扫描纯属浪费 IO。`activity`
-/// 识别 Claude 形状(`type:"user"`,`message.content` 是字符串;
-/// `type:"assistant"`,`message.content` 数组里 `type:"text"` 块拼接)和
-/// CodeBuddy 形状(`type:"message"`+`role`,`content[].type:
-/// "input_text"/"output_text"`)的人类发言/AI 回复文本,取最后一条、截到
-/// 60 字符——卡片一行放不下长句,截断比换行/溢出更可控,不需要精确到字。
+/// **只认人类发言,不认 AI 回复**(用户实测反馈:两者都认时,回合结束
+/// 后"最后一行"常是 AI 的收尾总结,看不出这一轮到底在做什么——人类的
+/// 原始请求比 AI 的总结更能说明"当前在干什么")。识别 Claude 形状
+/// (`type:"user"`,`message.content` 是字符串)和 CodeBuddy 形状
+/// (`type:"message"`+`role:"user"`,`content[].type:"input_text"`)的
+/// 人类发言文本,取最后一条、截到 60 字符——卡片一行放不下长句,截断
+/// 比换行/溢出更可控,不需要精确到字。
 pub fn latest_model_mode_and_activity(
     jsonl: &str,
 ) -> (Option<String>, Option<String>, Option<String>) {
@@ -246,6 +248,10 @@ pub fn latest_model_mode_and_activity(
 
 /// 单行 → 这行代表的人类发言/AI 回复文本(工具结果/快照噪音/识别不出
 /// 的行形状一律 `None`,不当错误)。
+/// 只认人类发言,不认 AI 回复——"当前工作内容"要展示的是人类发起的
+/// 那句话(用户实测反馈:之前两种行都认,导致回合结束后"最后一行"常常
+/// 是 AI 的收尾总结,看不出这一轮到底在做什么;人类的原始请求比 AI 的
+/// 总结更能说明"当前在干什么")。
 fn extract_line_activity(v: &Value) -> Option<String> {
     match v.get("type").and_then(|t| t.as_str()) {
         Some("user") => v
@@ -253,22 +259,13 @@ fn extract_line_activity(v: &Value) -> Option<String> {
             .and_then(|m| m.get("content"))
             .and_then(|c| c.as_str())
             .map(str::to_string),
-        Some("assistant") => {
-            let blocks = v
-                .get("message")
-                .and_then(|m| m.get("content"))
-                .and_then(|c| c.as_array())?;
-            join_text_blocks(blocks, "text")
-        }
         Some("message") => {
             let role = v.get("role").and_then(|r| r.as_str())?;
-            let kind = match role {
-                "user" => "input_text",
-                "assistant" => "output_text",
-                _ => return None,
-            };
+            if role != "user" {
+                return None;
+            }
             let blocks = v.get("content").and_then(|c| c.as_array())?;
-            join_text_blocks(blocks, kind)
+            join_text_blocks(blocks, "input_text")
         }
         _ => None,
     }
@@ -552,14 +549,21 @@ mod tests {
     }
 
     #[test]
-    fn activity_picks_last_human_or_ai_text_claude_shaped() {
+    fn activity_picks_last_human_message_not_ai_reply_claude_shaped() {
+        // 人类发一句 → AI 回一句总结 → 人类再发一句:activity 应该是最后
+        // 那句人类发言,即使 AI 的总结在 transcript 里排在它前面。
         let jsonl = concat!(
             "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"改一下 README\"}}\n",
             "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"好的，我来改\"}]}}\n",
             "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"再加一段安装说明\"}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"已加完，任务结束\"}]}}\n",
         );
         let (_model, _mode, activity) = latest_model_mode_and_activity(jsonl);
-        assert_eq!(activity.as_deref(), Some("再加一段安装说明"));
+        assert_eq!(
+            activity.as_deref(),
+            Some("再加一段安装说明"),
+            "AI 的收尾总结不该盖掉人类的原始请求"
+        );
     }
 
     #[test]
@@ -575,13 +579,17 @@ mod tests {
     }
 
     #[test]
-    fn activity_reads_codebuddy_shaped_last_message() {
+    fn activity_reads_codebuddy_shaped_last_human_message() {
         let jsonl = concat!(
             "{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"修一下光标问题\"}]}\n",
             "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"已定位到问题\"}]}\n",
         );
         let (_model, _mode, activity) = latest_model_mode_and_activity(jsonl);
-        assert_eq!(activity.as_deref(), Some("已定位到问题"));
+        assert_eq!(
+            activity.as_deref(),
+            Some("修一下光标问题"),
+            "CodeBuddy 形状同样只认人类发言,不认 AI 回复"
+        );
     }
 
     #[test]

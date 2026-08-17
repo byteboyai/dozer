@@ -822,7 +822,7 @@ pub struct State {
     /// tab 标题/关闭按钮的 hover 进度,键 `(tab 序号, 是否关闭按钮)`。
     hover: HashMap<(usize, bool), TabHover>,
     /// 页签标题 tooltip 的悬停计时起点:键为 tab 序号(关闭按钮不计,只认
-    /// 页签整体悬停)。进入页签记 `Instant::now()`,离开即清除;悬停满 3s
+    /// 页签整体悬停)。进入页签记 `Instant::now()`,离开即清除;悬停满 2s
     /// 后视图层据此弹标题全称 tooltip(见 `hover_tooltip_ready`)。与顶栏/
     /// 终端页签的计时分开存(`App::hover_tooltip_starts`),因为浏览器面板
     /// 走自己这套 hover 状态机(`hover` 而非全局 `HoverId`)。
@@ -885,7 +885,7 @@ impl State {
         self.hover.values().any(TabHover::active)
     }
 
-    /// 维护某页签的 tooltip 悬停计时:进入记起点、离开清除(满 3s 由
+    /// 维护某页签的 tooltip 悬停计时:进入记起点、离开清除(满 2s 由
     /// `hover_tooltip_ready` 判断)。与 `hover` 动画进度同源触发,但计时是
     /// 独立的一份(见 `tooltip_starts` 字段注释)。
     pub(crate) fn set_tab_tooltip(&mut self, idx: usize, hovered: bool) {
@@ -896,7 +896,7 @@ impl State {
         }
     }
 
-    /// 某页签悬停是否已持续满 `HOVER_TOOLTIP_DELAY`(3s):满则视图层弹标题
+    /// 某页签悬停是否已持续满 `HOVER_TOOLTIP_DELAY`(2s):满则视图层弹标题
     /// 全称 tooltip(见 `panel_tab` 的 `show_tooltip` 参数)。
     pub(crate) fn hover_tooltip_ready(&self, idx: usize) -> bool {
         self.tooltip_starts
@@ -904,8 +904,8 @@ impl State {
             .is_some_and(|start| start.elapsed() >= crate::app::HOVER_TOOLTIP_DELAY)
     }
 
-    /// 距下一个 tooltip 计时满 3s 的最短剩余时间——内核 `App::next_tooltip_wake`
-    /// 据此排下次唤醒,做到"恰好满 3s 才重绘"。
+    /// 距下一个 tooltip 计时满 2s 的最短剩余时间——内核 `App::next_tooltip_wake`
+    /// 据此排下次唤醒,做到"恰好满 2s 才重绘"。
     pub(crate) fn next_tooltip_wake(&self) -> Option<std::time::Duration> {
         self.tooltip_starts
             .values()
@@ -1004,7 +1004,7 @@ pub fn update(
         }
         Message::Hover(idx, is_close, hovered) => {
             state.hover.entry((idx, is_close)).or_default().set(hovered);
-            // 标题 tooltip 计时:进入即记起点、离开即清(满 3s 由
+            // 标题 tooltip 计时:进入即记起点、离开即清(满 2s 由
             // `hover_tooltip_ready` 判断,与关闭按钮的 hover 无关,只认页签
             // 整体悬停)。
             state.set_tab_tooltip(idx, hovered);

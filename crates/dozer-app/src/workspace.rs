@@ -2501,9 +2501,10 @@ pub(crate) fn agent_card<'a>(
         .into()
 }
 
-/// "当前工作内容"(有就显示,没有就省略)+ 工作区(分支名 + 脏标,所有
+/// "当前工作内容"(有就显示,没有就省略)+ 工作区(`@分支名` + 脏标,所有
 /// agent 都显示)合并一行、不换行,work_content 排在工作区前面(卡片
-/// 改版要求)。工作区文案规则不变:无分支(非 git 项目)显示 `—`;有
+/// 改版要求)。工作区不再用"工作区:"文字标签,前缀改成 `@`——跟卡片其余
+/// 行的极简风格对齐。分支名规则不变:无分支(非 git 项目)显示 `—`;有
 /// 未提交改动时分支名后缀 `(Uncommitted)`——跟 `extensions/files.rs`
 /// 里分支切换菜单当前分支带脏标时的既有文案(`n.push_str("(Uncommitted)")`,
 /// 见该文件约第 1409 行)保持同一措辞,不新造一套脏标文案。
@@ -2518,8 +2519,8 @@ fn work_content_and_workspace_row(
         None => "—".to_string(),
     };
     let value = match work_content {
-        Some(w) => format!("{w}  工作区: {workspace_value}"),
-        None => format!("工作区: {workspace_value}"),
+        Some(w) => format!("{w}  @{workspace_value}"),
+        None => format!("@{workspace_value}"),
     };
     text(value)
         .size(theme::font::caption())
