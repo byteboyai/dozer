@@ -1645,7 +1645,10 @@ impl Workspace {
         // 不用等 10 秒握手超时才有任何 UI 反馈。
         self.sftp_tabs.insert(
             host_id.clone(),
-            ssh::sftp::SftpTabState::new(host_id.clone(), project_root, "~".to_string()),
+            // 占位 root 传空字符串:握手前不知道远程用户的真实 home 路径,
+            // 真实路径要等 `canonicalize(".")` 解析出来才通过 `Connected`
+            // 回填(`ssh::sftp::RemoteTree::set_root`)。
+            ssh::sftp::SftpTabState::new(host_id.clone(), project_root, String::new()),
         );
 
         let host_id_for_task = host_id.clone();
@@ -1673,8 +1676,14 @@ impl Workspace {
                     return;
                 }
             };
+            // `"~"` 是 shell 语义,SFTP 协议的 `opendir`/`realpath` 不做
+            // tilde 展开——之前直接拿字面 `"~"` 当 root 发 readdir,服务端
+            // 当成真实文件名去找,几乎总是 "No such file",导致远程文件树
+            // 读不出来。改用 `canonicalize(".")`(SFTP REALPATH 请求)问
+            // 服务端要真实的 home 绝对路径。
+            let root_result = sftp.canonicalize(".").await.map_err(|e| e.to_string());
             let _ = proxy.send_event(Message::Ssh(ssh::Message::Sftp(
-                ssh::sftp::Message::Connected(host_id_for_task.clone(), Ok(())),
+                ssh::sftp::Message::Connected(host_id_for_task.clone(), root_result),
             )));
             // `handle` 必须留在这个任务作用域内到循环结束——同阶段 2
             // 终端连接的既有约束,理由一样(不能提前析构掉 SSH 连接本身)。

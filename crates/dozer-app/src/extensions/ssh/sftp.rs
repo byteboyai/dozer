@@ -36,6 +36,19 @@ impl RemoteTree {
         &self.root
     }
 
+    /// 用连接建立后 SFTP `canonicalize(".")` 解析出的真实远程 home 目录
+    /// 替换构造时的占位 root(构造时还没握手,不知道远程用户的真实 home
+    /// 路径;之前误用字面 `"~"` 当 root——SFTP 协议的 `opendir`/`realpath`
+    /// 不做 shell 语义的 tilde 展开,服务端会原样当文件名去找,几乎总是
+    /// "No such file"导致远程文件树读不出来)。同时把占位 root 的展开态
+    /// 迁到新 root 上,不然树看起来像"收起"的。
+    pub fn set_root(&mut self, root: String) {
+        if self.expanded.remove(&self.root) {
+            self.expanded.insert(root.clone());
+        }
+        self.root = root;
+    }
+
     /// 展开/收起某个远程目录。已展开 → 收起(返回 `None`,不需要重新
     /// 请求)。未展开且缓存里没有 → 展开并返回 `Some(path)`(调用方据此
     /// 发起一次异步 `readdir`)。未展开但已有缓存(比如收起后再展开)
@@ -191,9 +204,15 @@ impl SftpTabState {
 /// SFTP tab 之间"猜"消息属于哪一个。
 #[derive(Debug, Clone)]
 pub enum Message {
-    /// 异步连接结果。`Ok` 时触发一次根目录 `readdir`;`Err` 落 `status`
-    /// 错误文案。
-    Connected(String /* host_id */, Result<(), String>),
+    /// 异步连接结果。`Ok` 携带 `canonicalize(".")` 解析出的远程 home
+    /// 绝对路径,用它替换构造时的占位 root 再触发一次根目录
+    /// `readdir`;`Err` 落 `status` 错误文案(握手失败或 canonicalize
+    /// 本身失败都走这条,后者复用同一条错误展示路径,不值得单独分错误
+    /// 类型)。
+    Connected(
+        String, /* host_id */
+        Result<String /* remote home 绝对路径 */, String>,
+    ),
     LocalToggle(String /* host_id */, std::path::PathBuf),
     LocalSelect(String /* host_id */, std::path::PathBuf),
     RemoteToggle(String /* host_id */, String /* remote dir */),
@@ -230,10 +249,12 @@ pub(crate) fn route(
             match result {
                 // 连接建好后,cmd_tx 已经由 spawn_sftp_tab 结尾同步设置好
                 // (它在异步任务 spawn 之后立刻做的,不需要等 Connected
-                // 消息才设置)。这里只需要触发一次根目录 readdir。
-                Ok(()) => {
+                // 消息才设置)。用解析出的真实 home 路径替换占位 root,
+                // 再触发一次根目录 readdir。
+                Ok(remote_home) => {
+                    state.remote_tree.set_root(remote_home.clone());
                     if let Some(tx) = &state.cmd_tx {
-                        let _ = tx.send(SftpCmd::ReadDir(state.remote_tree.root().to_string()));
+                        let _ = tx.send(SftpCmd::ReadDir(remote_home));
                     }
                 }
                 Err(e) => {
@@ -500,53 +521,73 @@ fn tree_column<'a>(
 pub fn sftp_pane_view<'a>(
     state: &'a SftpTabState,
 ) -> iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    use iced_widget::{MouseArea, column, container, row, stack};
+    use iced_widget::{MouseArea, column, container, row, stack, text};
     let local_rows = state.local_tree.visible_rows();
     let remote_rows = state.remote_tree.visible_rows();
     let host_id = state.host_id.clone();
     let host_id2 = state.host_id.clone();
+    let trees: iced_widget::core::Element<
+        'a,
+        Message,
+        iced_widget::Theme,
+        iced_renderer::Renderer,
+    > = row![
+        tree_column(
+            "本地机器项目文件树",
+            local_rows,
+            state.selected_local.as_deref(),
+            |_p| None,
+            move |p| Message::LocalToggle(host_id.clone(), p),
+            move |p| Message::LocalSelect(host_id2.clone(), p),
+            {
+                let h = state.host_id.clone();
+                move |path| Message::ContextMenuOpen {
+                    host_id: h.clone(),
+                    is_local: true,
+                    path,
+                }
+            },
+        ),
+        tree_column(
+            "远程主机文件树",
+            remote_rows,
+            state.selected_remote.as_deref().map(std::path::Path::new),
+            |p| state.remote_tree.error_for(p).map(str::to_string),
+            {
+                let h = state.host_id.clone();
+                move |p| Message::RemoteToggle(h.clone(), p.to_string_lossy().into_owned())
+            },
+            {
+                let h = state.host_id.clone();
+                move |p| Message::RemoteSelect(h.clone(), p.to_string_lossy().into_owned())
+            },
+            {
+                let h = state.host_id.clone();
+                move |path| Message::ContextMenuOpen {
+                    host_id: h.clone(),
+                    is_local: false,
+                    path,
+                }
+            },
+        ),
+    ]
+    .into();
+
+    // 连接失败 / 上传下载进度的文案(`state.status`)之前一直只写不读,
+    // 用户建连出错时树是空的又没有任何提示,跟"读不出来但看着像没做"
+    // 长得一模一样。补一条状态条:错误红字、进度态用普通文字。
+    let mut base_col = column![].spacing(6);
+    if let Some((msg, is_err)) = &state.status {
+        base_col = base_col.push(text(msg.clone()).size(crate::theme::font::caption()).color(
+            if *is_err {
+                crate::theme::color::RED
+            } else {
+                crate::theme::color::DIM
+            },
+        ));
+    }
     let base: iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        row![
-            tree_column(
-                "本地机器项目文件树",
-                local_rows,
-                state.selected_local.as_deref(),
-                |_p| None,
-                move |p| Message::LocalToggle(host_id.clone(), p),
-                move |p| Message::LocalSelect(host_id2.clone(), p),
-                {
-                    let h = state.host_id.clone();
-                    move |path| Message::ContextMenuOpen {
-                        host_id: h.clone(),
-                        is_local: true,
-                        path,
-                    }
-                },
-            ),
-            tree_column(
-                "远程主机文件树",
-                remote_rows,
-                state.selected_remote.as_deref().map(std::path::Path::new),
-                |p| state.remote_tree.error_for(p).map(str::to_string),
-                {
-                    let h = state.host_id.clone();
-                    move |p| Message::RemoteToggle(h.clone(), p.to_string_lossy().into_owned())
-                },
-                {
-                    let h = state.host_id.clone();
-                    move |p| Message::RemoteSelect(h.clone(), p.to_string_lossy().into_owned())
-                },
-                {
-                    let h = state.host_id.clone();
-                    move |path| Message::ContextMenuOpen {
-                        host_id: h.clone(),
-                        is_local: false,
-                        path,
-                    }
-                },
-            ),
-        ]
-        .into();
+        base_col.push(trees).into();
 
     if state.context_menu.is_none() {
         return base;
@@ -677,6 +718,29 @@ mod tests {
     fn toggle_expands_and_requests_on_first_open() {
         let mut tree = RemoteTree::new("/root");
         assert_eq!(tree.toggle("/root"), Some("/root".to_string()));
+    }
+
+    #[test]
+    fn set_root_migrates_expanded_state_to_new_root() {
+        // 占位 root("")在构造时已展开(`SftpTabState::new` 的既有行为);
+        // `Connected` 解析出真实 home 路径后调用 `set_root`,展开态要
+        // 跟着迁到新 root 上,否则树在换根后看起来像被收起了。
+        let mut tree = RemoteTree::new("");
+        tree.toggle("");
+        assert_eq!(tree.root(), "");
+        tree.set_root("/home/alice".to_string());
+        assert_eq!(tree.root(), "/home/alice");
+        // 换根后对新 root 再 toggle 应该是"收起"(说明它确实处于展开态),
+        // 不是"首次展开"(那样会返回 `Some` 触发一次多余的 readdir)。
+        assert_eq!(tree.toggle("/home/alice"), None);
+    }
+
+    #[test]
+    fn set_root_on_unexpanded_placeholder_does_not_force_expand() {
+        let mut tree = RemoteTree::new("");
+        tree.set_root("/home/alice".to_string());
+        assert_eq!(tree.root(), "/home/alice");
+        assert_eq!(tree.toggle("/home/alice"), Some("/home/alice".to_string()));
     }
 
     #[test]
