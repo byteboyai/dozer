@@ -19,6 +19,18 @@ fn project_key(cwd: &Path) -> String {
     cwd.to_string_lossy().replace('/', "-")
 }
 
+/// CodeBuddy 自己的目录命名规则跟 Claude 不一样：Claude 把开头的 `/` 也一并
+/// 换成 `-`（留下开头一个 `-`），CodeBuddy 是先去掉开头 `/` 再替换剩余的
+/// `/`（不留开头 `-`）——实测 `~/.codebuddy/projects/` 下的真实目录名（如
+/// `Users-chrischiang-Projects-CoralProjects-byteboy-dozer`）核实，之前跟
+/// Claude 共用 `project_key` 拼出待开头 `-` 的路径，磁盘上根本不存在该目录，
+/// 导致 CodeBuddy 历史对话恒为空。
+fn codebuddy_project_key(cwd: &Path) -> String {
+    cwd.to_string_lossy()
+        .trim_start_matches('/')
+        .replace('/', "-")
+}
+
 /// 三个 agent 的存储目录都是 `<home>/<agent_root>/projects/<cwd 换算的 key>`
 /// 这一形状；`home` 显式传入而不是内部读 `HOME` 环境变量，好让测试不用碰
 /// 进程全局状态就能验证目录拼接逻辑（`HOME` 是跨线程共享的，`cargo test`
@@ -43,15 +55,18 @@ pub fn claude_project_dir_in(home: &Path, cwd: &Path) -> PathBuf {
     project_dir_in(home, ".claude", cwd)
 }
 
-/// cwd → CodeBuddy 存储目录：`~/.codebuddy/projects/<cwd 中 '/' 换 '-'>`
-/// （spec §1：与 Claude 的目录结构平行）。
+/// cwd → CodeBuddy 存储目录：`~/.codebuddy/projects/<cwd 去掉开头 '/' 后
+/// 剩余 '/' 换 '-'>`——目录形状跟 Claude 平行，但换算规则不同（见
+/// `codebuddy_project_key` 注释）。
 pub fn codebuddy_project_dir(cwd: &Path) -> PathBuf {
     codebuddy_project_dir_in(&home_dir(), cwd)
 }
 
 /// cwd → CodeBuddy 存储目录,`home` 显式传入(测试用)。
 pub fn codebuddy_project_dir_in(home: &Path, cwd: &Path) -> PathBuf {
-    project_dir_in(home, ".codebuddy", cwd)
+    home.join(".codebuddy")
+        .join("projects")
+        .join(codebuddy_project_key(cwd))
 }
 
 /// cwd → dozer 自己为 OpenCode 代写的 transcript 目录（OpenCode 本身没有
@@ -281,8 +296,10 @@ mod tests {
 
     #[test]
     fn codebuddy_dir_uses_codebuddy_root() {
+        // 不带开头 '-'——跟 Claude 的换算规则不同,见 `codebuddy_project_key`
+        // 注释与实测的真实 `~/.codebuddy/projects/` 目录名。
         let d = codebuddy_project_dir(std::path::Path::new("/a/b/c"));
-        assert!(d.to_string_lossy().ends_with("/.codebuddy/projects/-a-b-c"));
+        assert!(d.to_string_lossy().ends_with("/.codebuddy/projects/a-b-c"));
     }
 
     #[test]
