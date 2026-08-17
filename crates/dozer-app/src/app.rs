@@ -1355,10 +1355,7 @@ pub enum Message {
     /// `horizontal_divider_bar` 的 `on_press`。
     RowDragStart(RowDivider),
     /// 纵向拖拽中:当前窗口逻辑高 + 光标逻辑 y(main.rs 换算好传入)。
-    RowDrag {
-        window_height: f32,
-        logical_y: f32,
-    },
+    RowDrag { window_height: f32, logical_y: f32 },
     /// 松开左键,结束纵向拖拽并触发写盘。
     RowDragEnd,
     /// 拖拽中,光标进入了 `group` 组的第 `index` 个 tab 上空——拖起的源项
@@ -3632,14 +3629,90 @@ impl App {
                 self.update(Message::ProjectTabOpen(p));
             }
             Message::GitLog(git_log::Message::LoadMore) => self.git_log_load_more(),
-            Message::GitLog(msg) => {
+            Message::GitLog(git_log::Message::ColumnDragStart) => {
+                // Git Log 三栏布局里左右分割线开始拖拽——扩展发不了 app 级
+                // 拖拽消息,由内核代发。
+                self.update(Message::ColumnDragStart(Divider::GitLogSplit));
+            }
+            Message::GitLog(git_log::Message::RowDragStart) => {
+                self.update(Message::RowDragStart(RowDivider::GitLogFileDiffSplit));
+            }
+            Message::GitLog(git_log::Message::BranchPickerOpen) => {
+                // 先把"展开"这个状态位落地(纯状态机部分仍走 update,不跳过),
+                // 首次展开且还没缓存过分支列表时,顺带异步查一次本地分支。
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
                 let emit = move |m| {
                     let _ = proxy.send_event(Message::GitLog(m));
                 };
-                if let Some(next) = git_log::update(&mut self.git_log, msg, &handle, emit) {
+                let needs_fetch = self.git_log.branches_is_empty();
+                git_log::update(
+                    &mut self.git_log,
+                    git_log::Message::BranchPickerOpen,
+                    &handle,
+                    emit.clone(),
+                );
+                if needs_fetch
+                    && let Some(repo_path) = self
+                        .active_workspace()
+                        .and_then(|ws| ws.active_project_path())
+                {
+                    self.handle.spawn(async move {
+                        let repo_path2 = repo_path.clone();
+                        let branches = tokio::task::spawn_blocking(move || {
+                            crate::delivery::local_branches(&repo_path2).unwrap_or_default()
+                        })
+                        .await
+                        .unwrap_or_default();
+                        emit(git_log::Message::BranchesLoaded(repo_path, branches));
+                    });
+                }
+            }
+            Message::GitLog(git_log::Message::BranchSwitch(name)) => {
+                let Some(repo_path) = self
+                    .active_workspace()
+                    .and_then(|ws| ws.active_project_path())
+                else {
+                    return;
+                };
+                self.git_log.set_branch_switch_pending(true);
+                let proxy = self.proxy.clone();
+                self.handle.spawn(async move {
+                    let repo_path2 = repo_path.clone();
+                    let result = tokio::task::spawn_blocking(move || {
+                        crate::delivery::checkout_branch(&repo_path2, &name)
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+                    let _ = proxy
+                        .send_event(Message::GitLog(git_log::Message::BranchSwitchDone(result)));
+                });
+            }
+            Message::GitLog(msg) => {
+                // 分支切换成功后(checkout 改了 HEAD/工作区),commit 列表要重拉。
+                let is_branch_switch_success =
+                    matches!(&msg, git_log::Message::BranchSwitchDone(Ok(())));
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                let emit = move |m| {
+                    let _ = proxy.send_event(Message::GitLog(m));
+                };
+                if let Some(next) = git_log::update(&mut self.git_log, msg, &handle, emit.clone()) {
                     self.update(Message::GitLog(next));
+                }
+                if is_branch_switch_success
+                    && let Some(repo_path) = self
+                        .active_workspace()
+                        .and_then(|ws| ws.active_project_path())
+                {
+                    let max_count = self.git_log.cache_max_count();
+                    git_log::request_refresh(
+                        &mut self.git_log,
+                        repo_path,
+                        max_count,
+                        &handle,
+                        emit,
+                    );
                 }
             }
             Message::Files(files::Message::CopyPath(path, kind)) => {
@@ -5443,7 +5516,12 @@ impl App {
             column![
                 row![
                     left_panel_area(self, ws, false),
-                    divider_bar(Divider::LeftRight, theme::color::BG, theme::color::BG),
+                    divider_bar(
+                        Divider::LeftRight,
+                        theme::color::BG,
+                        theme::color::BG,
+                        Message::ColumnDragStart(Divider::LeftRight),
+                    ),
                     right_panel_area(self, ws, false),
                 ]
                 .height(Length::Fill),
@@ -6689,6 +6767,7 @@ fn left_panel_area<'a>(
                         theme::region::preview_pane()
                             .background
                             .unwrap_or(theme::color::BG),
+                        Message::ColumnDragStart(Divider::LeftPairSplit),
                     ),
                     preview_pane(
                         app,
@@ -6700,9 +6779,13 @@ fn left_panel_area<'a>(
                 .width(Length::Fill)
                 .into()
             }
-            LeftView::GitLog => {
-                git_log::view(&app.git_log, ws.project_panel.worktrees()).map(Message::GitLog)
-            }
+            LeftView::GitLog => git_log::view(
+                &app.git_log,
+                ws.project_panel.worktrees(),
+                app.dims.git_log_split,
+                app.dims.git_log_file_diff_split,
+            )
+            .map(Message::GitLog),
             LeftView::Todo => {
                 let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
                     return column![].into();
@@ -6743,6 +6826,7 @@ fn left_panel_area<'a>(
                         theme::region::preview_pane()
                             .background
                             .unwrap_or(theme::color::BG),
+                        Message::ColumnDragStart(Divider::TodoSplit),
                     ),
                     content_pane.map(Message::Todo),
                 ]
@@ -6769,6 +6853,7 @@ fn left_panel_area<'a>(
                         theme::region::preview_pane()
                             .background
                             .unwrap_or(theme::color::BG),
+                        Message::ColumnDragStart(Divider::ProjectSplit),
                     ),
                     project_preview_pane(
                         app,
@@ -6819,6 +6904,7 @@ fn left_panel_area<'a>(
                         theme::region::preview_pane()
                             .background
                             .unwrap_or(theme::color::BG),
+                        Message::ColumnDragStart(Divider::SshSplit),
                     ),
                     ssh_terminal_pane(
                         app,
@@ -6935,6 +7021,7 @@ fn right_panel_area<'a>(
                         theme::region::agent_list_pane()
                             .background
                             .unwrap_or(theme::color::BG),
+                        Message::ColumnDragStart(Divider::RightPairSplit),
                     ),
                     agent_list_pane(
                         app,
@@ -6962,6 +7049,7 @@ fn right_panel_area<'a>(
                         theme::region::conversation_list_pane()
                             .background
                             .unwrap_or(theme::color::BG),
+                        Message::ColumnDragStart(Divider::RightPairSplit),
                     ),
                     conversation_list_pane(
                         ws,
@@ -7164,50 +7252,50 @@ fn terminal_pane<'a>(
 /// `Divider::LeftRight` 不画那条 2px 竖线、也不填色——它两侧各自套了
 /// `theme::region::left_zone()`/`right_zone()` 的整体外框,这条 8px 缝是故意
 /// 空出来给两侧 zone 圆角边框各自收边的,不能填成某侧 pane 色。
-fn divider_bar<'a>(
+pub(crate) fn divider_bar<'a, M: Clone + 'a>(
     divider: Divider,
     left_bg: Color,
     right_bg: Color,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    on_drag: M,
+) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
     let show_line = !matches!(divider, Divider::LeftRight);
-    if !show_line {
-        let gap = iced_widget::Space::new()
+    let body: Element<'_, M, iced_widget::Theme, iced_renderer::Renderer> = if !show_line {
+        iced_widget::Space::new()
             .width(Length::Fixed(theme::geometry::divider_width()))
-            .height(Length::Fill);
-        return MouseArea::new(gap)
-            .interaction(mouse::Interaction::ResizingColumn)
-            .on_press(Message::ColumnDragStart(divider))
-            .into();
-    }
-    let line_w = 2.0_f32;
-    let side_w = (theme::geometry::divider_width() - line_w) / 2.0;
-    let left_side = container(iced_widget::Space::new())
-        .width(Length::Fixed(side_w))
-        .height(Length::Fill)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(left_bg.into()),
-            ..container::Style::default()
-        });
-    let right_side = container(iced_widget::Space::new())
-        .width(Length::Fixed(side_w))
-        .height(Length::Fill)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(right_bg.into()),
-            ..container::Style::default()
-        });
-    let line = container(iced_widget::Space::new())
-        .width(Length::Fixed(line_w))
-        .height(Length::Fill)
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::BORDER.into()),
-            ..container::Style::default()
-        });
-    let row = row![left_side, line, right_side]
-        .width(Length::Fixed(theme::geometry::divider_width()))
-        .height(Length::Fill);
-    MouseArea::new(row)
+            .height(Length::Fill)
+            .into()
+    } else {
+        let line_w = 2.0_f32;
+        let side_w = (theme::geometry::divider_width() - line_w) / 2.0;
+        let left_side = container(iced_widget::Space::new())
+            .width(Length::Fixed(side_w))
+            .height(Length::Fill)
+            .style(move |_t: &iced_widget::Theme| container::Style {
+                background: Some(left_bg.into()),
+                ..container::Style::default()
+            });
+        let right_side = container(iced_widget::Space::new())
+            .width(Length::Fixed(side_w))
+            .height(Length::Fill)
+            .style(move |_t: &iced_widget::Theme| container::Style {
+                background: Some(right_bg.into()),
+                ..container::Style::default()
+            });
+        let line = container(iced_widget::Space::new())
+            .width(Length::Fixed(line_w))
+            .height(Length::Fill)
+            .style(|_t: &iced_widget::Theme| container::Style {
+                background: Some(theme::color::BORDER.into()),
+                ..container::Style::default()
+            });
+        row![left_side, line, right_side]
+            .width(Length::Fixed(theme::geometry::divider_width()))
+            .height(Length::Fill)
+            .into()
+    };
+    MouseArea::new(body)
         .interaction(mouse::Interaction::ResizingColumn)
-        .on_press(Message::ColumnDragStart(divider))
+        .on_press(on_drag)
         .into()
 }
 
@@ -7215,11 +7303,11 @@ fn divider_bar<'a>(
 /// `width`↔`height` 互换,鼠标样式 `ResizingRow`(对应横向的
 /// `ResizingColumn`)。目前只有 Git Log 面板右侧"文件列表 | diff 内容"这条
 /// 纵向拖拽线用它。粗细复用 `theme::geometry::divider_width()`,与横向一致。
-fn horizontal_divider_bar<'a>(
-    divider: RowDivider,
+pub(crate) fn horizontal_divider_bar<'a, M: Clone + 'a>(
     top_bg: Color,
     bottom_bg: Color,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    on_drag: M,
+) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
     let line_h = 2.0_f32;
     let side_h = (theme::geometry::divider_width() - line_h) / 2.0;
     let top_side = container(iced_widget::Space::new())
@@ -7248,7 +7336,7 @@ fn horizontal_divider_bar<'a>(
         .width(Length::Fill);
     MouseArea::new(col)
         .interaction(mouse::Interaction::ResizingRow)
-        .on_press(Message::RowDragStart(divider))
+        .on_press(on_drag)
         .into()
 }
 
@@ -8672,12 +8760,7 @@ mod tests {
         let window_height = 1000.0;
 
         // 光标在窗口中间——应该落在合法比例区间内。
-        let mid = apply_row_drag(
-            state,
-            RowDivider::GitLogFileDiffSplit,
-            window_height,
-            500.0,
-        );
+        let mid = apply_row_drag(state, RowDivider::GitLogFileDiffSplit, window_height, 500.0);
         assert!(mid.git_log_file_diff_split >= theme::geometry::min_split_ratio());
         assert!(mid.git_log_file_diff_split <= theme::geometry::max_split_ratio());
 
@@ -8711,9 +8794,7 @@ mod tests {
             ..PanelDims::default()
         };
         let sanitized = sanitize_panel_dims(dims);
-        assert!(
-            sanitized.git_log_file_diff_split >= theme::geometry::min_split_ratio()
-        );
+        assert!(sanitized.git_log_file_diff_split >= theme::geometry::min_split_ratio());
     }
 
     /// `window_width`/`window_height` 的夹取单独测:老 `layout.json` 缺这两

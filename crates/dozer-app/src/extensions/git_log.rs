@@ -39,26 +39,18 @@ pub enum RefKind {
 /// `CommitDetail` 上同理由的注释)。
 #[derive(Debug, Clone)]
 pub struct CommitRow {
-    column: usize,
-    color_idx: usize,
     short_sha: String,
     summary: String,
-    /// 父 commit 的 (row, column, color_idx),用于画连线;可能落在
-    /// `max_count` 截断范围之外——那种父 commit 不出现在 `rows` 里,
-    /// 此处已被过滤掉。
-    parents: Vec<(usize, usize, usize)>,
     /// 指向这个 commit 的分支/tag(可能为空)。
     refs: Vec<RefLabel>,
-    /// 这个 commit 的完整 40 位 oid,选中详情(Task 2)用——`short_sha` 只
-    /// 够显示,不够拿去 `git2::Repository::find_commit`。
+    /// 这个 commit 的完整 40 位 oid,选中详情用——`short_sha` 只够显示,
+    /// 不够拿去 `git2::Repository::find_commit`。
     oid: git2::Oid,
     /// author time,Unix 秒——commit 列表行展示用(见 `format_commit_time`)。
     time: i64,
-    /// `parents.len() >= 2`(注意这是原始 git parent 数,不是 `parents` 字段
-    /// 那个已经按 `max_count` 窗口过滤过的 `Vec`——根提交/单亲提交的行数
-    /// 一定一致,只有"父提交恰好被窗口截断掉"的边界情形两者可能不同,这里
-    /// 用真实 git parent 数,保证语义是"这个 commit 本身是不是合并提交",
-    /// 跟窗口大小无关)。
+    /// 这是不是合并提交(真实 git parent 数 `>= 2`)。见 spec §6——2026-08-17
+    /// 重构后 commit 列表不再画分支拓扑,合并提交只靠这个 bool + `git-merge`
+    /// 图标区分,不需要 `column`/`color_idx`/`parents` 那套布局字段。
     is_merge: bool,
 }
 
@@ -67,8 +59,7 @@ pub struct CommitRow {
 pub struct GitLogSnapshot {
     repo_path: PathBuf,
     rows: Vec<CommitRow>,
-    max_column: usize,
-    /// 当前 HEAD 所在的本地分支名(detached HEAD 时为 `None`)——图上给这
+    /// 当前 HEAD 所在的本地分支名(detached HEAD 时为 `None`)——列表里给这
     /// 个分支的标签加个 `→` 前缀区分"这是我现在checkout的那条"。
     head_branch: Option<String>,
     /// 这份快照实际请求的 `max_count`("加载更多"算下一次请求值用)。
@@ -131,22 +122,11 @@ pub fn build(repo_path: &Path, max_count: usize) -> Result<GitLogSnapshot, Strin
 
     let head_branch = graph.head.is_branch.then(|| graph.head.name.clone());
 
-    let mut max_column = 0usize;
     let rows = graph
         .tracks
         .commits
         .iter()
         .map(|commit| {
-            let b_idx = commit
-                .branch_trace
-                .ok_or_else(|| "commit 缺少 branch_trace".to_string())?;
-            let column = graph
-                .layout
-                .track_visual(b_idx)
-                .and_then(|v| v.column)
-                .unwrap_or(0);
-            max_column = max_column.max(column);
-            let color_idx = b_idx.index();
             let git_commit = graph
                 .commit(commit.oid)
                 .map_err(|e| e.message().to_string())?;
@@ -158,21 +138,6 @@ pub fn build(repo_path: &Path, max_count: usize) -> Result<GitLogSnapshot, Strin
                 .flatten()
                 .unwrap_or("")
                 .to_string();
-            let parents = commit
-                .parents
-                .iter()
-                .filter_map(|poid| {
-                    let p_idx = *graph.tracks.indices.get(poid)?;
-                    let p_commit = graph.tracks.commits.get(p_idx)?;
-                    let p_b_idx = p_commit.branch_trace?;
-                    let p_column = graph
-                        .layout
-                        .track_visual(p_b_idx)
-                        .and_then(|v| v.column)
-                        .unwrap_or(0);
-                    Some((p_idx, p_column, p_b_idx.index()))
-                })
-                .collect();
             let refs = graph
                 .labels
                 .get_labels(&commit.oid)
@@ -197,11 +162,8 @@ pub fn build(repo_path: &Path, max_count: usize) -> Result<GitLogSnapshot, Strin
             let time = git_commit.time().seconds();
             let is_merge = git_commit.parent_count() >= 2;
             Ok(CommitRow {
-                column,
-                color_idx,
                 short_sha,
                 summary,
-                parents,
                 refs,
                 oid: commit.oid,
                 time,
@@ -213,7 +175,6 @@ pub fn build(repo_path: &Path, max_count: usize) -> Result<GitLogSnapshot, Strin
     Ok(GitLogSnapshot {
         repo_path: repo_path.to_path_buf(),
         rows,
-        max_column,
         head_branch,
         max_count,
     })
@@ -269,6 +230,13 @@ pub enum Message {
     /// 例外模式),不会转发到 `update`(见其 `unreachable!` 分支)。
     BranchSwitch(String),
     BranchSwitchDone(Result<(), String>),
+    /// 三栏布局里左右分割线开始拖拽——内核截获,转成 app 级
+    /// `ColumnDragStart(GitLogSplit)`(分割线拖拽是 app 级 PanelDims 状态,
+    /// 扩展自己发不了 app::Message,靠这条例外消息让内核代发)。
+    ColumnDragStart,
+    /// 三栏布局里右侧上下分割线开始拖拽——内核截获,转成 app 级
+    /// `RowDragStart(GitLogFileDiffSplit)`。
+    RowDragStart,
 }
 
 /// Git Log 面板的全部状态。现在挂在 `App`(不按项目分,见设计文档"非
@@ -337,6 +305,18 @@ impl State {
     /// 那条路径)。
     pub fn set_restore_after_load(&mut self, oid: Option<git2::Oid>) {
         self.restore_after_load = oid;
+    }
+
+    /// 分支列表是否还没查过(`BranchPickerOpen` 首次展开时,内核据此判断
+    /// 要不要发起异步查询——避免每次展开都重新查一遍)。
+    pub fn branches_is_empty(&self) -> bool {
+        self.branches.is_empty()
+    }
+
+    /// 设置"分支切换请求进行中"标记(内核在 `BranchSwitch` 截获时置位,落地
+    /// `BranchSwitchDone` 时由 `update()` 清)。
+    pub(crate) fn set_branch_switch_pending(&mut self, pending: bool) {
+        self.branch_switch_pending = pending;
     }
 }
 
@@ -424,8 +404,7 @@ pub fn update(
             None
         }
         Message::BranchesLoaded(repo_path, branches) => {
-            let matches =
-                state.cache.as_ref().map(|c| c.repo_path()) == Some(repo_path.as_path());
+            let matches = state.cache.as_ref().map(|c| c.repo_path()) == Some(repo_path.as_path());
             if matches {
                 state.branches = branches;
             }
@@ -444,6 +423,11 @@ pub fn update(
                 Err(e) => state.error = Some(e),
             }
             None
+        }
+        Message::ColumnDragStart | Message::RowDragStart => {
+            unreachable!(
+                "ColumnDragStart/RowDragStart 由内核在 Message::GitLog 分支里直接处理(转成 app 级拖拽消息),不会转发到这里"
+            )
         }
     }
 }
@@ -692,7 +676,10 @@ fn commit_list_view<'a>(
             .on_press(Message::SelectCommit(row.oid));
         list = list.push(area);
     }
-    scrollable(list).width(Length::Fill).height(Length::Fill).into()
+    scrollable(list)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
 }
 
 /// 右上文件列表:选中 commit 改动的每个文件一行(状态字符 + 路径),点击
@@ -705,9 +692,11 @@ fn file_list_view<'a>(
         Err(err) => container(text(format!("详情加载失败: {err}")).color(theme::color::RED))
             .padding(8)
             .into(),
-        Ok(detail) if detail.files.is_empty() => container(text("无文件改动").color(theme::color::DIM))
-            .padding(8)
-            .into(),
+        Ok(detail) if detail.files.is_empty() => {
+            container(text("无文件改动").color(theme::color::DIM))
+                .padding(8)
+                .into()
+        }
         Ok(detail) => {
             let mut list = column![].spacing(2);
             for f in &detail.files {
@@ -735,36 +724,34 @@ fn file_list_view<'a>(
                         },
                         ..container::Style::default()
                     });
-                let inner = row![accent, container(line).padding([2, 8]).width(Length::Fill)].spacing(0);
+                let inner =
+                    row![accent, container(line).padding([2, 8]).width(Length::Fill)].spacing(0);
                 let area = iced_widget::MouseArea::new(inner)
                     .interaction(iced_widget::core::mouse::Interaction::Pointer)
                     .on_press(Message::SelectFile(f.path.clone()));
                 list = list.push(area);
             }
-            scrollable(list).width(Length::Fill).height(Length::Fill).into()
+            scrollable(list)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
         }
     }
 }
 
-/// 渲染整块提交图面板:有数据画 Canvas,出错画错误文案,两者皆无(比如
-/// 尚未打开项目)画空状态提示。纯函数——不碰 `App`/`Workspace` 内部状态,
-/// 调用方(`workspace.rs`)负责取数据、决定何时重建缓存、维护选中态。
+/// 渲染整块 Git Log 面板(三栏:左 commit 列表 | 右上文件列表 / 右下 diff
+/// 内容,两条分割线都可拖拽)。纯函数——不碰 `App`/`Workspace` 内部状态,
+/// 两条 split 比例由内核(`app.rs`)持有并传进来(与 Todo/Project 面板"内核
+/// 传 split 值进来"的既有模式一致)。
 pub fn view<'a>(
     state: &'a State,
     worktrees: &'a [WorktreeInfo],
+    git_log_split: f32,
+    git_log_file_diff_split: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let error = state.error.as_deref();
-    if let Some(err) = error {
-        return container(
-            column![
-                crate::homespace::home_panel_head(crate::icons::IconKind::GitGraph, "Git"),
-                text(format!("git log 读取失败: {err}")).color(theme::color::RED),
-            ]
-            .spacing(8)
-            .padding(12),
-        )
-        .into();
-    }
+    let head = crate::homespace::home_panel_head(crate::icons::IconKind::GitGraph, "Git");
+
     let loading = state.pending.is_some();
     let Some(snapshot) = state.cache.as_ref() else {
         let text_content = if loading {
@@ -773,54 +760,31 @@ pub fn view<'a>(
             "未打开项目"
         };
         return container(
-            column![
-                crate::homespace::home_panel_head(crate::icons::IconKind::GitGraph, "Git"),
-                text(text_content).color(theme::color::DIM),
-            ]
-            .spacing(8)
-            .padding(12),
+            column![head, text(text_content).color(theme::color::DIM)]
+                .spacing(8)
+                .padding(12),
         )
         .into();
     };
-    let selected = state.selected;
-    let detail = state.detail.as_ref();
     if snapshot.rows.is_empty() {
         return container(
-            column![
-                crate::homespace::home_panel_head(crate::icons::IconKind::GitGraph, "Git"),
-                text("没有可显示的提交").color(theme::color::DIM),
-            ]
-            .spacing(8)
-            .padding(12),
+            column![head, text("没有可显示的提交").color(theme::color::DIM)]
+                .spacing(8)
+                .padding(12),
         )
         .into();
     }
-    let height = ROW_HEIGHT * snapshot.rows.len() as f32;
-    let head_branch = snapshot.head_branch.as_deref();
-    let canvas: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        Canvas::new(GitLogCanvas {
-            snapshot,
-            selected,
-            head_branch,
-        })
-        .width(Length::Fill)
-        .height(Length::Fixed(height))
-        .into();
-    let mut header = row![
-        text(snapshot.repo_path.display().to_string())
-            .size(theme::font::caption())
-            .color(theme::color::DIM)
-    ];
-    // 已经有旧快照在画的时候(引用变化重建/加载更多)又发起了新一轮异步
-    // 加载——旧图先留着不闪空,但得给个文案说明"正在换新",不然用户会
-    // 疑惑点了"加载更多"怎么行数没变。
-    if loading {
-        header = header.push(
-            text("刷新中…")
+
+    let head_branch = snapshot.head_branch();
+    let mut left = column![head, worktree_strip(worktrees)].spacing(8);
+    if let Some(err) = error {
+        left = left.push(
+            text(format!("git log 读取失败: {err}"))
                 .size(theme::font::caption())
-                .color(theme::color::DIM),
+                .color(theme::color::RED),
         );
     }
+    left = left.push(commit_list_view(snapshot, state.selected, head_branch));
     let load_more = iced_widget::button(
         text("加载更多提交 (+200)")
             .size(theme::font::caption())
@@ -828,36 +792,50 @@ pub fn view<'a>(
     )
     .on_press_maybe((!loading).then_some(Message::LoadMore))
     .padding([4, 12]);
-    let graph_body = column![canvas, load_more];
-    let graph = scrollable(graph_body)
-        .width(Length::Fill)
-        .height(Length::Fill);
-    if let Some(detail_res) = detail {
-        let detail_panel = detail_view(snapshot, selected, detail_res);
-        column![
-            crate::homespace::home_panel_head(crate::icons::IconKind::GitGraph, "Git"),
-            header,
-            worktree_strip(worktrees),
-            row![graph, detail_panel],
-        ]
-        .spacing(8)
-        .padding(12)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
-    } else {
-        column![
-            crate::homespace::home_panel_head(crate::icons::IconKind::GitGraph, "Git"),
-            header,
-            worktree_strip(worktrees),
-            graph,
-        ]
-        .spacing(8)
-        .padding(12)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
-    }
+    left = left.push(load_more);
+    left = left.push(branch_toggle_button(state, head_branch));
+    let left_with_picker = iced_widget::stack![
+        container(left).width(Length::Fill).height(Length::Fill),
+        branch_picker_view(state, head_branch),
+    ];
+
+    let (list_portion, content_portion) = crate::workspace::split_portions(git_log_split);
+    let right: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        if let Some(detail) = state.detail.as_ref() {
+            let (top_portion, bottom_portion) =
+                crate::workspace::split_portions(git_log_file_diff_split);
+            column![
+                container(file_list_view(detail, state.selected_file.as_deref()))
+                    .height(Length::FillPortion(top_portion)),
+                crate::app::horizontal_divider_bar(
+                    theme::color::BG,
+                    theme::color::BG,
+                    Message::RowDragStart,
+                ),
+                container(diff_pane_view(detail, state.selected_file.as_deref()))
+                    .height(Length::FillPortion(bottom_portion)),
+            ]
+            .height(Length::Fill)
+            .into()
+        } else {
+            container(text("选择一个提交查看改动").color(theme::color::DIM))
+                .padding(12)
+                .into()
+        };
+
+    row![
+        container(left_with_picker).width(Length::FillPortion(list_portion)),
+        crate::app::divider_bar(
+            crate::app::Divider::GitLogSplit,
+            theme::color::BG,
+            theme::color::BG,
+            Message::ColumnDragStart,
+        ),
+        container(right).width(Length::FillPortion(content_portion)),
+    ]
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
 }
 
 /// 右下 diff 内容面板:`selected_file` 对应文件的 patch,逐行染色(复用
@@ -901,7 +879,10 @@ fn diff_pane_view<'a>(
                 .color(theme::color::DIM),
         );
     }
-    scrollable(content).width(Length::Fill).height(Length::Fill).into()
+    scrollable(content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
 }
 
 /// 左侧面板底部固定展示:当前分支名 + 展开箭头,点击发
@@ -918,7 +899,9 @@ fn branch_toggle_button<'a>(
     };
     iced_widget::button(
         row![
-            text(label).size(theme::font::body()).color(theme::color::CREAM),
+            text(label)
+                .size(theme::font::body())
+                .color(theme::color::CREAM),
             iced_widget::Space::new().width(Length::Fill),
             crate::icons::view(
                 crate::icons::IconKind::ChevronDown,
@@ -970,27 +953,26 @@ fn branch_picker_view<'a>(
         } else {
             theme::color::CREAM
         };
-        let row_btn = iced_widget::button(
-            text(name.clone())
-                .size(theme::font::body())
-                .color(color),
-        )
-        .width(Length::Fill)
-        .padding([6, 10])
-        .style(move |_t: &iced_widget::Theme, s: iced_widget::button::Status| {
-            let base = iced_widget::button::Style {
-                background: None,
-                text_color: color,
-                ..iced_widget::button::Style::default()
-            };
-            match s {
-                iced_widget::button::Status::Hovered => iced_widget::button::Style {
-                    background: Some(theme::color::TAB_HOVER.into()),
-                    ..base
-                },
-                _ => base,
-            }
-        });
+        let row_btn =
+            iced_widget::button(text(name.clone()).size(theme::font::body()).color(color))
+                .width(Length::Fill)
+                .padding([6, 10])
+                .style(
+                    move |_t: &iced_widget::Theme, s: iced_widget::button::Status| {
+                        let base = iced_widget::button::Style {
+                            background: None,
+                            text_color: color,
+                            ..iced_widget::button::Style::default()
+                        };
+                        match s {
+                            iced_widget::button::Status::Hovered => iced_widget::button::Style {
+                                background: Some(theme::color::TAB_HOVER.into()),
+                                ..base
+                            },
+                            _ => base,
+                        }
+                    },
+                );
         let row_btn = if state.branch_switch_pending || is_current {
             row_btn
         } else {
@@ -1071,9 +1053,9 @@ mod tests {
     use super::*;
 
     /// spike 验证核心问题:`gleisbau` 能否对 Dozer 自己这个真实、有分叉/合并
-    /// 历史的仓库跑出合理的布局数据。跑 `cargo test -p dozer-app git_log::tests
-    /// -- --nocapture` 看打印的前 20 行,人工核对 column/parents 是否符合直觉
-    /// (主线一列到底,feature 分支另开列,merge commit 有多个 parent 边)。
+    /// 历史的仓库跑出合理的 commit 列表 + refs 标签 + is_merge 标记。跑
+    /// `cargo test -p dozer-app git_log::tests -- --nocapture` 看打印的前 20
+    /// 行,人工核对 sha/refs/summary 是否符合直觉。
     #[test]
     fn build_against_real_repo() {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1084,24 +1066,18 @@ mod tests {
             build(repo_root, DEFAULT_MAX_COMMITS).expect("gleisbau 应能解析 dozer 自己的仓库");
 
         assert!(!snapshot.rows.is_empty(), "真实仓库应至少有一个 commit");
-        assert!(
-            snapshot.max_column < 50,
-            "正常仓库的分支列数不该失控般大: {}",
-            snapshot.max_column
-        );
 
         for (row_idx, row) in snapshot.rows.iter().take(20).enumerate() {
             println!(
-                "row={row_idx} col={} color={} sha={} parents={:?} summary={:?}",
-                row.column, row.color_idx, row.short_sha, row.parents, row.summary
+                "row={row_idx} sha={} merge={} summary={:?}",
+                row.short_sha, row.is_merge, row.summary
             );
         }
 
-        // merge commit(有 ≥2 个 parent)理应至少出现一次——Dozer 仓库历史里
-        // 确实有过 merge(如 2429d15),不是纯线性历史;若这条断了,说明布局
-        // 丢了合并边,数据链路没走通。
+        // merge commit 理应至少出现一次——Dozer 仓库历史里确实有过 merge
+        // (如 2429d15),不是纯线性历史。
         assert!(
-            snapshot.rows.iter().any(|r| r.parents.len() >= 2),
+            snapshot.rows.iter().any(|r| r.is_merge),
             "200 个 commit 窗口内应能看到至少一个 merge"
         );
     }
@@ -1136,7 +1112,9 @@ mod tests {
         );
         let repo = git2::Repository::open(repo_root).expect("应能打开 dozer 自己的仓库");
         for row in &snapshot.rows {
-            let commit = repo.find_commit(row.oid).expect("snapshot 里的 oid 应能查到");
+            let commit = repo
+                .find_commit(row.oid)
+                .expect("snapshot 里的 oid 应能查到");
             assert_eq!(
                 row.is_merge,
                 commit.parent_count() >= 2,
@@ -1184,7 +1162,7 @@ mod tests {
         // 走得更远,不应该导致已经算出来的部分变形)。
         for (a, b) in small.rows.iter().zip(bigger.rows.iter()) {
             assert_eq!(a.short_sha, b.short_sha);
-            assert_eq!(a.column, b.column);
+            assert_eq!(a.is_merge, b.is_merge);
         }
     }
 
@@ -1295,7 +1273,6 @@ mod tests {
         GitLogSnapshot {
             repo_path: repo_path.to_path_buf(),
             rows: Vec::new(),
-            max_column: 0,
             head_branch: None,
             max_count,
         }
@@ -1539,7 +1516,12 @@ mod tests {
             ..State::default()
         };
         let handle = tokio::runtime::Handle::current();
-        update(&mut state, Message::BranchSwitchDone(Ok(())), &handle, |_| {});
+        update(
+            &mut state,
+            Message::BranchSwitchDone(Ok(())),
+            &handle,
+            |_| {},
+        );
         assert!(!state.branch_picker_open);
         assert!(!state.branch_switch_pending);
         assert!(state.error.is_none());

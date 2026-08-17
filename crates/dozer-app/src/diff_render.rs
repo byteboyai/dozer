@@ -49,7 +49,8 @@ mod tests {
     // `Element`。真正的视觉效果靠人工验收(见 spec 测试策略)。
     #[test]
     fn colored_diff_lines_does_not_panic_on_various_inputs() {
-        let _: Element<'_, (), iced_widget::Theme, iced_renderer::Renderer> = colored_diff_lines("");
+        let _: Element<'_, (), iced_widget::Theme, iced_renderer::Renderer> =
+            colored_diff_lines("");
         let _: Element<'_, (), iced_widget::Theme, iced_renderer::Renderer> =
             colored_diff_lines("+added line\n-removed line\n context line\n");
         let _: Element<'_, (), iced_widget::Theme, iced_renderer::Renderer> =
