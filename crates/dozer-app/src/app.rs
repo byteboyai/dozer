@@ -469,6 +469,11 @@ pub enum Divider {
     TodoSplit,
     /// Git Log 面板内部左右分隔线:左边 commit 列表,右边文件列表+diff。
     GitLogSplit,
+    /// 浏览器面板内部分割线:左边网页内容,右边收藏夹侧栏。与其余左面板区
+    /// 分割线不同的是配对顺序反了(内容在左、列表在右),所以
+    /// `apply_column_drag` 这条分支直接写 `ratio`(拖拽点左侧占比 = 内容占
+    /// 比),不需要像 `RightPairSplit` 那样取反。
+    BrowserBookmarksSplit,
     RightPairSplit,
 }
 
@@ -685,6 +690,20 @@ pub(crate) fn apply_column_drag(
             );
             PanelDims {
                 git_log_split: ratio,
+                ..state.dims
+            }
+        }
+        Divider::BrowserBookmarksSplit => {
+            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            if pair_w <= 0.0 {
+                return state.dims;
+            }
+            let ratio = ((logical_x - theme::geometry::icon_rail_width()) / pair_w).clamp(
+                theme::geometry::min_split_ratio(),
+                theme::geometry::max_split_ratio(),
+            );
+            PanelDims {
+                browser_bookmarks_split: ratio,
                 ..state.dims
             }
         }
@@ -8782,6 +8801,32 @@ mod tests {
         let result = apply_column_drag(state, Divider::GitLogSplit, window_width, 300.0);
         assert!(result.git_log_split >= theme::geometry::min_split_ratio());
         assert!(result.git_log_split <= theme::geometry::max_split_ratio());
+    }
+
+    #[test]
+    fn apply_column_drag_updates_browser_bookmarks_split_ratio() {
+        let state = test_state();
+        let window_width = 1600.0;
+        // 拖拽点在左面板区靠右侧,网页内容(拖拽点左侧)占比应偏大。
+        let result = apply_column_drag(state, Divider::BrowserBookmarksSplit, window_width, 500.0);
+        assert!(result.browser_bookmarks_split >= theme::geometry::min_split_ratio());
+        assert!(result.browser_bookmarks_split <= theme::geometry::max_split_ratio());
+    }
+
+    #[test]
+    fn apply_column_drag_browser_bookmarks_split_direction_matches_content_side() {
+        // 方向性回归:拖拽点越靠右,网页内容(左侧)占比应该越大——
+        // browser_bookmarks_split 存的是内容占比,不是收藏夹占比。
+        let state = test_state();
+        let window_width = 1600.0;
+        let near = apply_column_drag(state, Divider::BrowserBookmarksSplit, window_width, 100.0);
+        let far = apply_column_drag(state, Divider::BrowserBookmarksSplit, window_width, 500.0);
+        assert!(
+            far.browser_bookmarks_split > near.browser_bookmarks_split,
+            "near={} far={}",
+            near.browser_bookmarks_split,
+            far.browser_bookmarks_split
+        );
     }
 
     #[test]
