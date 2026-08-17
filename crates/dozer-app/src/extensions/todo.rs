@@ -1187,8 +1187,8 @@ fn todo_resize_handle<'a>() -> Element<'a, Message, iced_widget::Theme, iced_ren
 
 /// 底部快速新建栏。结构对齐 `project.rs::project_footer_bar`(1px BORDER
 /// 分隔线),但左右间距对齐任务卡片的 20px、输入框加高到约 3 行文字,**提交
-/// 按钮嵌在输入框边框内**(右侧、无独立边框,只是框里一枚 circle-arrow-up
-/// 图标——视觉上按钮"在输入框内")。框顶还有一道可向上拖的 8px 手柄
+/// 按钮嵌在输入框边框内**(右下方、无独立边框,只是框里一枚 circle-arrow-up
+/// 图标——视觉上按钮"在输入框内",且始终贴输入框右下角)。框顶还有一道可向上拖的 8px 手柄
 /// (`todo_resize_handle`),拉高输入框(高度落在 `WorkspaceState::
 /// add_input_height`)。自绘输入(键盘走 main.rs 拦截层路由成 `AddEvent`,
 /// 不用原生 `text_input`——本 app 每帧重建界面,原生输入留不住焦点也不
@@ -1238,12 +1238,24 @@ fn todo_footer_bar<'a>(
     // 输入框本体:单个带边框的容器,把"文字区 + 提交按钮"一起包进边框内。
     // 整框包一层 `MouseArea`——点框内(非提交按钮处)进编辑态;提交按钮是
     // 内层 widget,会先截获自己的点击。高度可经顶部手柄拖拽放大。
+    // 内部一行两格:左格文字(占满高度、靠顶左对齐)、右格提交按钮(占满高度、
+    // 靠底)——按钮因此钉在输入框**右下方**,框变高时文字留顶、按钮贴底,
+    // 两者占对角,低高度下也不互相挤占。
     let input_box: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         MouseArea::new(
             container(
-                row![field, submit]
-                    .spacing(8)
-                    .align_y(iced_widget::core::alignment::Vertical::Center),
+                row![
+                    container(field)
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .align_y(iced_widget::core::alignment::Vertical::Top)
+                        .align_x(iced_widget::core::alignment::Horizontal::Left),
+                    container(submit)
+                        .height(Length::Fill)
+                        .align_y(iced_widget::core::alignment::Vertical::Bottom),
+                ]
+                .width(Length::Fill)
+                .height(Length::Fill),
             )
             .width(Length::Fill)
             .height(Length::Fixed(ws_state.add_input_height()))
