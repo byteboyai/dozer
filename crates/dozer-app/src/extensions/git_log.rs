@@ -78,6 +78,14 @@ pub struct CommitRow {
     /// 这个 commit 的完整 40 位 oid,选中详情(Task 2)用——`short_sha` 只
     /// 够显示,不够拿去 `git2::Repository::find_commit`。
     oid: git2::Oid,
+    /// author time,Unix 秒——commit 列表行展示用(见 `format_commit_time`)。
+    time: i64,
+    /// `parents.len() >= 2`(注意这是原始 git parent 数,不是 `parents` 字段
+    /// 那个已经按 `max_count` 窗口过滤过的 `Vec`——根提交/单亲提交的行数
+    /// 一定一致,只有"父提交恰好被窗口截断掉"的边界情形两者可能不同,这里
+    /// 用真实 git parent 数,保证语义是"这个 commit 本身是不是合并提交",
+    /// 跟窗口大小无关)。
+    is_merge: bool,
 }
 
 /// 派生 `Debug + Clone`,理由同 [`CommitRow`]。
@@ -208,6 +216,8 @@ pub fn build(repo_path: &Path, max_count: usize) -> Result<GitLogSnapshot, Strin
                         .collect()
                 })
                 .unwrap_or_default();
+            let time = git_commit.time().seconds();
+            let is_merge = git_commit.parent_count() >= 2;
             Ok(CommitRow {
                 column,
                 color_idx,
@@ -216,6 +226,8 @@ pub fn build(repo_path: &Path, max_count: usize) -> Result<GitLogSnapshot, Strin
                 parents,
                 refs,
                 oid: commit.oid,
+                time,
+                is_merge,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -913,6 +925,46 @@ mod tests {
             snapshot.rows.iter().any(|r| r.parents.len() >= 2),
             "200 个 commit 窗口内应能看到至少一个 merge"
         );
+    }
+
+    #[test]
+    fn build_populates_time_and_is_merge() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("crates/dozer-app 应有两层上级目录到仓库根");
+        let snapshot =
+            build(repo_root, DEFAULT_MAX_COMMITS).expect("gleisbau 应能解析 dozer 自己的仓库");
+
+        // 每一行的 time 都应该是合理的正数(Unix 秒,仓库不可能早于 2020 年)。
+        let epoch_2020 = 1_577_836_800_i64;
+        for row in &snapshot.rows {
+            assert!(
+                row.time > epoch_2020,
+                "commit time 应晚于 2020-01-01: {}",
+                row.time
+            );
+        }
+
+        // Dozer 仓库历史里确实有过 merge(如 2429d15),is_merge 应该跟
+        // 真实的 git parent 数一致(不能拿 `parents.len()` 比——那是按
+        // `max_count` 窗口过滤后的 Vec,父提交恰好被窗口截断时两者会不一致,
+        // 见 `CommitRow::is_merge` 字段注释)。
+        let has_merge_row = snapshot.rows.iter().any(|r| r.is_merge);
+        assert!(
+            has_merge_row,
+            "200 个 commit 窗口内应能看到至少一个 is_merge=true 的行"
+        );
+        let repo = git2::Repository::open(repo_root).expect("应能打开 dozer 自己的仓库");
+        for row in &snapshot.rows {
+            let commit = repo.find_commit(row.oid).expect("snapshot 里的 oid 应能查到");
+            assert_eq!(
+                row.is_merge,
+                commit.parent_count() >= 2,
+                "is_merge 应与真实 git parent 数一致: {}",
+                row.short_sha
+            );
+        }
     }
 
     #[test]
