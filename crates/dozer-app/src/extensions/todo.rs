@@ -338,11 +338,20 @@ pub struct WorkspaceState {
     /// 搜索框是否处于自绘编辑态(main.rs 键盘路由用)。
     search_editing: bool,
     dispatch_open: Option<usize>,
-    pending_dispatch: std::collections::HashMap<usize, String>,
-    editing_plan_date: Option<(usize, String)>,
-    /// 状态 pill 菜单展开态(卡片下标)，`None` = 未展开。跟 `dispatch_open`
-    /// 同一种"同时只能有一个"模型，不做多卡片同时展开。
-    state_pill_open: Option<usize>,
+    /// 日历日期选择器展开态(卡片下标),`None` = 未展开。跟 `dispatch_open`
+    /// 同一种"同时只能有一个"模型。
+    calendar_open: Option<usize>,
+    /// 日历当前展示的 (年, 月)。打开时初始化成当前月,上一月/下一月导航
+    /// 只改这个视图态,不落盘。
+    calendar_view: (i32, u32),
+    /// 任务内容行内编辑态(卡片下标, 草稿)。点卡片任务文字进入,
+    /// `ContentEvent(Submit)` 落盘改写任务文字。
+    editing_content: Option<(usize, String)>,
+    /// MARKDOWN 视图是否处于整文件编辑态(main.rs 键盘路由用)。
+    markdown_editing: bool,
+    /// MARKDOWN 编辑草稿:进入编辑态时从 `.dozer/todo.md` 全文载入,失焦
+    /// 写盘、Esc 丢弃。
+    markdown_draft: String,
     /// 鼠标拖拽排序进行态(`None` = 没在拖)。见 `TodoDrag`。视图层据此对
     /// 待办子序列做展示置换并改光标为抓取态；落盘只在 `DragEnd` 时一次性
     /// 发生。已完成任务不可拖动(见 `RowSelect`/`DragMove` 的不变量)。
@@ -355,23 +364,14 @@ impl WorkspaceState {
         self.dispatch_open.is_some()
     }
 
-    /// 状态 pill 菜单是否打开(内核 `App::todo_state_pill_open` 键盘 Esc
-    /// 关闭用,同 `dispatch_popup_open` 的既有模式——菜单打开后除了选中
-    /// 一个选项之外没有别的关闭入口会把用户逼着做一次未必想要的状态
-    /// 变更,Esc 必须能单独退出)。
-    pub fn state_pill_menu_open(&self) -> bool {
-        self.state_pill_open.is_some()
+    /// 日历日期选择器是否打开(内核 `App::todo_calendar_open` 键盘 Esc
+    /// 关闭用,同 `dispatch_popup_open` 的既有模式)。
+    pub fn calendar_popup_open(&self) -> bool {
+        self.calendar_open.is_some()
     }
 
-    /// "派发到新建"发起时记的 `tab_id → 任务文本` 映射,内核在
-    /// `Message::TabAttached` 落地时用真正的 `session_id` 消费掉这条,
-    /// 补记派发记录。未知 `tab_id` 返回 `None`,是 no-op。
-    pub fn take_pending_dispatch(&mut self, tab_id: usize) -> Option<String> {
-        self.pending_dispatch.remove(&tab_id)
-    }
-
-    /// 只读当前已解析的任务列表,给内核派发(`DispatchToExisting`/`Dispatch
-    /// `New`)时按下标取任务文本用。
+    /// 只读当前已解析的任务列表,给内核派发(`DispatchToExisting`)时按
+    /// 下标取任务文本用。
     pub fn items(&self) -> &[TodoItem] {
         &self.items
     }
@@ -401,15 +401,14 @@ impl WorkspaceState {
             .map(|item| item.text.as_str())
     }
 
-    /// 关闭派发选择层(选中目标/新建后,或 Esc)。
+    /// 关闭派发选择层(选中目标后,或 Esc)。
     pub fn close_dispatch_popup(&mut self) {
         self.dispatch_open = None;
     }
 
-    /// "派发到新建"发起时记一笔 `tab_id → text`,等 `on_tab_attached` 落地
-    /// 时用真正的 `session_id` 补派发记录。
-    pub fn insert_pending_dispatch(&mut self, tab_id: usize, text: String) {
-        self.pending_dispatch.insert(tab_id, text);
+    /// 关闭日历选择器(选中日期后,或 Esc / 点外部)。
+    pub fn close_calendar_popup(&mut self) {
+        self.calendar_open = None;
     }
 
     /// 上次成功读取时 `.dozer/todo.md` 的 mtime,轮询靠比较它决定要不要
@@ -439,17 +438,37 @@ impl WorkspaceState {
         self.add_editing = false;
     }
 
-    /// 计划时间行内编辑态是否打开(main.rs 键盘路由用)。
-    pub fn plan_date_editing(&self) -> bool {
-        self.editing_plan_date.is_some()
+    /// 任务内容行内编辑态是否打开(main.rs 键盘路由用)。
+    pub fn content_editing(&self) -> bool {
+        self.editing_content.is_some()
     }
 
-    /// 失焦退出计划时间编辑态(`Workspace::blur_inputs` 用):直接丢弃
-    /// 半输入。`editing_plan_date` 是点日期徽章才弹出的一次性行内编辑,
-    /// 不是常驻输入框,行为对齐项目树重命名(`cancel_tree_edit`)而不是
-    /// 搜索框。
-    pub fn cancel_plan_date_edit(&mut self) {
-        self.editing_plan_date = None;
+    /// 失焦退出任务内容编辑态(`Workspace::blur_inputs` 用):直接丢弃半输入。
+    /// 内容编辑是点卡片文字才弹出的一次性行内编辑,行为对齐项目树重命名
+    /// (`cancel_tree_edit`)而不是搜索框。
+    pub fn cancel_content_edit(&mut self) {
+        self.editing_content = None;
+    }
+
+    /// MARKDOWN 视图是否处于整文件编辑态(main.rs 键盘路由用)。
+    pub fn markdown_editing(&self) -> bool {
+        self.markdown_editing
+    }
+
+    /// 失焦退出 MARKDOWN 编辑态(`Workspace::blur_inputs` 用):把草稿写回
+    /// `.dozer/todo.md` 并刷新列表(整文件编辑没有"回车提交",失焦即提交;
+    /// Esc 才是丢弃,见 `MarkdownEvent(Cancel)`)。
+    pub fn cancel_markdown_edit(&mut self, project_path: &std::path::Path) {
+        if !self.markdown_editing {
+            return;
+        }
+        self.markdown_editing = false;
+        let path = todo_path(project_path);
+        if let Err(e) = std::fs::write(&path, &self.markdown_draft) {
+            tracing::warn!("写入 todo.md 失败: {e}");
+            return;
+        }
+        reload_from_disk(self, project_path);
     }
 
     /// 是否正在拖拽排序(main.rs 鼠标释放路由 + about_to_wait 持续重绘用)。
@@ -541,7 +560,7 @@ pub struct SessionTabSummary {
     pub alive: bool,
 }
 
-/// Todo 面板自己的消息类型。`DispatchToExisting`/`DispatchNew` 涉及终端
+/// Todo 面板自己的消息类型。`DispatchToExisting` 涉及终端
 /// 会话读写,内核在到达 `update` 之前就会拦截处理,不会真的传进
 /// `update`——传进来会 `unreachable!`(同 Git Log 试点 `LoadMore` 的
 /// 处理方式)。
@@ -551,10 +570,11 @@ pub enum Message {
     /// 点新增任务框进入自绘编辑态(`add_editing = true`),后续按键经
     /// main.rs 路由成 `AddEvent`,不再漏进终端(同 `SearchEditStart`)。
     AddEditStart,
-    /// 编辑态下的按键:文本/退格改草稿,`AddrEvent::Submit` 落盘新任务
-    /// (无独立"提交按钮"入口——新增任务只有回车这一条提交路径,不像
-    /// 搜索框还有个放大镜按钮,故没有单独的 `AddSubmit` 消息)。
+    /// 编辑态下的按键:文本/退格改草稿,`AddrEvent::Submit` 落盘新任务。
     AddEvent(AddrEvent),
+    /// 点新增任务框右侧 circle-arrow-up 提交按钮:把草稿落盘成新任务
+    /// (与回车 `AddEvent(Submit)` 共用 `commit_add_task` 一条路径)。
+    AddSubmit,
     FilterSet(TodoFilter),
     ViewModeSet(TodoViewMode),
     RowSelect(Option<usize>),
@@ -577,20 +597,25 @@ pub enum Message {
     DispatchOpen(usize),
     DispatchClose,
     DispatchToExisting(usize, String),
-    DispatchNew(usize, crate::workspace::PickerLaunch),
-    PlanDateEditStart(usize),
-    /// 编辑态下的按键:文本/退格改草稿,`AddrEvent::Submit` 落盘计划
-    /// 时间,`AddrEvent::Cancel` 清空编辑态(同 `AddEvent`,回车是唯一
-    /// 提交路径,没有单独的 `PlanDateSubmit` 消息)。
-    PlanDateEvent(AddrEvent),
-    /// pill 菜单选中"待办"/"已完成"时发出，`bool` 是**目标** `done` 值
-    /// (显式设置，不是翻转)。当前 `done` 已经等于目标值时视为 no-op，
-    /// 不重复写盘——见 `set_done()` 的实现注释。
-    SetDone(usize, bool),
-    /// 展开某张卡片的状态 pill 菜单(待办/已完成 二选一)。
-    StatePillOpen(usize),
-    /// 收起状态 pill 菜单(选中某项后，或点击外部)。
-    StatePillClose,
+    /// 点卡片计划日期徽章 → 弹出日历日期选择器(取代原来的行内文本编辑)。
+    CalendarOpen(usize),
+    /// 关闭日历选择器(Esc / 点外部 / 选中日期后)。
+    CalendarClose,
+    /// 日历上一月 / 下一月导航。
+    CalendarPrevMonth,
+    CalendarNextMonth,
+    /// 日历里选中某一天,`day` 是 "MM-DD" 文本(与 `plan_date` 存储格式一致)。
+    CalendarPick(usize, String),
+    /// 点卡片任务文字 → 进入内容行内编辑态(`editing_content` 置位)。
+    ContentEditStart(usize),
+    /// 内容编辑态下的按键:`Submit` 落盘改写任务文字,`Cancel` 丢弃退出。
+    ContentEvent(AddrEvent),
+    /// 点 MARKDOWN 视图主体 → 进入整文件编辑态(`markdown_editing` 置位)。
+    MarkdownEditStart,
+    /// MARKDOWN 编辑态下的按键:`Text`(含回车翻成的 `"\n"`)/`Backspace`
+    /// 改草稿,`Cancel` 丢弃退出;提交走失焦 `cancel_markdown_edit` 写盘
+    /// (回车是换行不是提交——main.rs 把回车翻成 `Text("\n")`)。
+    MarkdownEvent(AddrEvent),
 }
 
 /// 重读 `.dozer/todo.md`,刷新 `items`/`mtime`。文件不存在/读失败按空
@@ -603,11 +628,9 @@ pub fn reload_from_disk(ws_state: &mut WorkspaceState, project_path: &std::path:
     ws_state.items = parse_todo(&md);
 }
 
-/// `Toggle`/`SetDone` 共用的写盘逻辑：把任务行的 `[ ]`/`[x]` 改成
+/// `Toggle` 的写盘逻辑：把任务行的 `[ ]`/`[x]` 改成
 /// `target_done` 对应的目标值(不是翻转)。`item.done == target_done` 时
-/// 直接 no-op 返回，不读写文件、不碰 `completed_at`——这是"进行中"态点
-/// pill 菜单"待办"选项时的关键行为：`done` 本来就是 `false`，不应该因为
-/// 用户点了这个选项就产生任何副作用。
+/// 直接 no-op 返回,不读写文件、不碰 `completed_at`。
 fn set_done(
     ws_state: &mut WorkspaceState,
     app_state: &mut AppState,
@@ -676,19 +699,103 @@ fn commit_add_task(ws_state: &mut WorkspaceState, project_path: &std::path::Path
     reload_from_disk(ws_state, project_path);
 }
 
-/// `PlanDateEvent(Submit)` 的写盘逻辑:把草稿落成 `AppState` 里的计划
-/// 时间元数据,并退出编辑态。
-fn commit_plan_date(ws_state: &mut WorkspaceState, app_state: &mut AppState, project_id: i64) {
-    if let Some((idx, draft)) = ws_state.editing_plan_date.clone()
-        && let Some(text) = ws_state.items.get(idx).map(|item| item.text.clone())
-    {
-        app_state.set_plan_date(project_id, &text, draft);
+/// `ContentEvent(Submit)` 的写盘逻辑:把草稿改写进 `.dozer/todo.md` 里对应
+/// 的任务行(文本变了才写),并刷新列表。空白草稿(trim 后)丢弃不写。
+fn commit_content_edit(ws_state: &mut WorkspaceState, project_path: &std::path::Path) {
+    let Some((idx, draft)) = ws_state.editing_content.clone() else {
+        return;
+    };
+    let new_text = draft.trim().to_string();
+    if new_text.is_empty() {
+        ws_state.editing_content = None;
+        return;
     }
-    ws_state.editing_plan_date = None;
+    let Some(item) = ws_state.items.get(idx) else {
+        ws_state.editing_content = None;
+        return;
+    };
+    if item.text == new_text {
+        ws_state.editing_content = None;
+        return;
+    }
+    let old_line = format!("- [{}] {}", if item.done { "x" } else { " " }, item.text);
+    let new_line = format!("- [{}] {}", if item.done { "x" } else { " " }, new_text);
+    let path = todo_path(project_path);
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        ws_state.editing_content = None;
+        return;
+    };
+    match replace_todo_line(&content, &old_line, &new_line) {
+        Some(new_content) => {
+            if let Err(e) = std::fs::write(&path, &new_content) {
+                tracing::warn!("写入 todo.md 失败: {e}");
+            }
+        }
+        None => {
+            // 冲突:文件已经变了,放弃这次写入,直接重读展示最新状态。
+        }
+    }
+    ws_state.editing_content = None;
+    reload_from_disk(ws_state, project_path);
 }
 
-/// 处理除 `DispatchToExisting`/`DispatchNew` 之外的消息,统一接收两块
-/// 状态——`Toggle`/`PlanDateEditStart`/`PlanDateEvent` 需要读写
+/// 本地时区无关的"今天" (年, 月, 日),用 `SystemTime::now()` 的 UTC 秒数
+/// 经 `civil_from_days` 换算。只用于日历默认停在当前月,时区偏差一天内无感。
+fn today_ymd() -> (i32, u32, u32) {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let days = (secs / 86400) as i64;
+    let (y, m, d) = civil_from_days(days);
+    (y as i32, m, d)
+}
+
+/// 解析 "MM-DD"(允许 `8-3` 这种缺前导零写法,兼容用户手敲的计划日期),
+/// 返回 (月, 日);解析失败返回 `None`。
+fn parse_month_day(s: &str) -> Option<(u32, u32)> {
+    let (mm, dd) = s.split_once('-')?;
+    let m: u32 = mm.trim().parse().ok()?;
+    let d: u32 = dd.trim().parse().ok()?;
+    (1..=12).contains(&m).then_some((m, d))
+}
+
+/// `civil_from_days` 的逆运算:把 (年, 月, 日) 换算回"自 1970-01-01 的天数",
+/// 给日历算"某月 1 号是星期几"和"某月有多少天"用。只覆盖 1970..=2100,
+/// 与 `civil_from_days` 同范围。
+fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
+    let y = y as i64;
+    let m = m as i64;
+    let d = d as i64;
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+/// 某年某月有多少天。
+fn days_in_month(y: i32, m: u32) -> u32 {
+    match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+            if leap { 29 } else { 28 }
+        }
+        _ => 0,
+    }
+}
+
+/// 某年某月 1 号是星期几:0 = 周日,1 = 周一 … 6 = 周六(1970-01-01 是周四)。
+fn first_weekday_of_month(y: i32, m: u32) -> u32 {
+    (days_from_civil(y, m, 1) + 4).rem_euclid(7) as u32
+}
+
+/// 处理除 `DispatchToExisting` 之外的消息,统一接收两块
+/// 状态——`Toggle`/`CalendarPick`/`ContentEvent` 需要读写
 /// `AppState`(不只是 Git Log/浏览器试点里"只有派发类消息碰跨领域状态"
 /// 那么简单,写计划前重新核对现有代码才发现这点)。
 pub fn update(
@@ -706,19 +813,6 @@ pub fn update(
             let target = !item.done;
             set_done(ws_state, app_state, idx, project_id, project_path, target);
         }
-        Message::SetDone(idx, target_done) => {
-            set_done(
-                ws_state,
-                app_state,
-                idx,
-                project_id,
-                project_path,
-                target_done,
-            );
-            ws_state.state_pill_open = None;
-        }
-        Message::StatePillOpen(idx) => ws_state.state_pill_open = Some(idx),
-        Message::StatePillClose => ws_state.state_pill_open = None,
         Message::AddEditStart => ws_state.add_editing = true,
         Message::AddEvent(ev) => {
             // 编辑态之外(失焦)的 `AddEvent` 一律忽略,避免草稿被污染
@@ -735,6 +829,7 @@ pub fn update(
                 AddrEvent::Submit => commit_add_task(ws_state, project_path),
             }
         }
+        Message::AddSubmit => commit_add_task(ws_state, project_path),
         Message::FilterSet(f) => ws_state.filter = f,
         Message::ViewModeSet(m) => ws_state.view_mode = m,
         Message::RowSelect(idx) => {
@@ -831,43 +926,106 @@ pub fn update(
                 && std::fs::write(&path, new_content).is_ok()
             {
                 reload_from_disk(ws_state, project_path);
+                // 拖拽完成后保持被拖任务选中:重排后它位于待办块第 `target_rank`
+                // 位(`move_pending_to` 把源从 `source_rank` 摘出插到
+                // `target_rank`,落点恒为该 rank),按重载后的 `items` 找回它的
+                // 新 item-index 更新 `selected_row`。选中的是"被拖的那条"而
+                // 不是它挪走后占住源位/目标位的邻居。
+                ws_state.selected_row = ws_state
+                    .items
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, it)| !it.done)
+                    .nth(target_rank)
+                    .map(|(i, _)| i);
             }
         }
         Message::DispatchOpen(idx) => ws_state.dispatch_open = Some(idx),
         Message::DispatchClose => ws_state.dispatch_open = None,
-        Message::PlanDateEditStart(idx) => {
-            let existing = ws_state
+        Message::CalendarOpen(idx) => {
+            // 打开日历:默认停在"当前月",若任务已有计划日期且能解析成 MM-DD,
+            // 则把视图拨到该月(年份取当前年——plan_date 只有月日,无年份)。
+            let (now_y, now_m, _) = today_ymd();
+            let (y, m) = ws_state
                 .items
                 .get(idx)
-                .map(|item| todo_line_key(&item.text))
-                .and_then(|key| app_state.meta_for(project_id, key))
-                .and_then(|m| m.plan_date.clone())
-                .unwrap_or_default();
-            ws_state.editing_plan_date = Some((idx, existing));
+                .and_then(|item| {
+                    let key = todo_line_key(&item.text);
+                    app_state
+                        .meta_for(project_id, key)
+                        .and_then(|m| m.plan_date.clone())
+                })
+                .and_then(|s| parse_month_day(&s))
+                .map(|(mm, _)| (now_y, mm))
+                .unwrap_or((now_y, now_m));
+            ws_state.calendar_open = Some(idx);
+            ws_state.calendar_view = (y, m);
         }
-        Message::PlanDateEvent(ev) => {
-            // 编辑态之外(已提交/已取消)的 `PlanDateEvent` 一律忽略。
-            if ws_state.editing_plan_date.is_none() {
+        Message::CalendarClose => ws_state.close_calendar_popup(),
+        Message::CalendarPrevMonth => {
+            let (y, m) = ws_state.calendar_view;
+            ws_state.calendar_view = if m == 1 { (y - 1, 12) } else { (y, m - 1) };
+        }
+        Message::CalendarNextMonth => {
+            let (y, m) = ws_state.calendar_view;
+            ws_state.calendar_view = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
+        }
+        Message::CalendarPick(idx, day) => {
+            if let Some(text) = ws_state.items.get(idx).map(|item| item.text.clone()) {
+                app_state.set_plan_date(project_id, &text, day);
+            }
+            ws_state.close_calendar_popup();
+        }
+        Message::ContentEditStart(idx) => {
+            if let Some(item) = ws_state.items.get(idx) {
+                ws_state.editing_content = Some((idx, item.text.clone()));
+            }
+        }
+        Message::ContentEvent(ev) => {
+            // 编辑态之外(失焦)的 `ContentEvent` 一律忽略,避免草稿被污染。
+            if ws_state.editing_content.is_none() {
                 return;
             }
             match ev {
                 AddrEvent::Text(s) => {
-                    if let Some((_, draft)) = ws_state.editing_plan_date.as_mut() {
+                    if let Some((_, draft)) = ws_state.editing_content.as_mut() {
                         draft.push_str(&s);
                     }
                 }
                 AddrEvent::Backspace => {
-                    if let Some((_, draft)) = ws_state.editing_plan_date.as_mut() {
+                    if let Some((_, draft)) = ws_state.editing_content.as_mut() {
                         draft.pop();
                     }
                 }
-                AddrEvent::Cancel => ws_state.editing_plan_date = None,
-                AddrEvent::Submit => commit_plan_date(ws_state, app_state, project_id),
+                AddrEvent::Cancel => ws_state.editing_content = None,
+                AddrEvent::Submit => commit_content_edit(ws_state, project_path),
             }
         }
-        Message::DispatchToExisting(..) | Message::DispatchNew(..) => {
+        Message::MarkdownEditStart => {
+            let path = todo_path(project_path);
+            ws_state.markdown_draft = std::fs::read_to_string(&path).unwrap_or_default();
+            ws_state.markdown_editing = true;
+        }
+        Message::MarkdownEvent(ev) => {
+            if !ws_state.markdown_editing {
+                return;
+            }
+            match ev {
+                AddrEvent::Text(s) => ws_state.markdown_draft.push_str(&s),
+                AddrEvent::Backspace => {
+                    ws_state.markdown_draft.pop();
+                }
+                // 回车在 main.rs 已被翻成 `Text("\n")`(多行文本换行),这里
+                // `Submit` 只兜底(理论不到),同样当换行处理。
+                AddrEvent::Submit => ws_state.markdown_draft.push('\n'),
+                AddrEvent::Cancel => {
+                    ws_state.markdown_editing = false;
+                }
+            }
+        }
+        Message::DispatchToExisting(..) => {
             unreachable!(
-                "DispatchToExisting/DispatchNew 由内核在 Message::Todo 分支里直接处理\
+                "DispatchToExisting 由内核在 Message::Todo 分支里直接处理\
                  (需要终端会话读写能力),不会转发到这里"
             )
         }
@@ -957,7 +1115,7 @@ pub fn view<'a>(
     let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         match ws_state.view_mode {
             TodoViewMode::List => todo_list_view(app_state, ws_state, project_id, &states, tabs),
-            TodoViewMode::Markdown => todo_markdown_view(project_path),
+            TodoViewMode::Markdown => todo_markdown_view(project_path, ws_state),
         };
     let content_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         container(column![tabs_bar, crate::app::tab_divider(), body].height(Length::Fill))
@@ -973,12 +1131,12 @@ pub fn view<'a>(
     (sidebar_pane, content_pane)
 }
 
-/// 底部快速新建栏，结构对齐 `project.rs::project_footer_bar`(1px BORDER
-/// 分隔线 + `padding([6, 8])`)。列表视图使用。自绘输入(键盘走 main.rs
-/// 拦截层路由成 `AddEvent`,不用原生 `text_input`——本 app 每帧重建界面,
-/// 原生输入留不住焦点也不参与键盘路由裁决,打字会同时漏进已聚焦的终端,
-/// 见 `todo_search_bar` 同款说明)。整体是 `button`,点击(`AddEditStart`)
-/// 进编辑态。
+/// 底部快速新建栏。结构对齐 `project.rs::project_footer_bar`(1px BORDER
+/// 分隔线),但左右间距对齐任务卡片的 20px、输入框加高到约 3 行文字,右侧
+/// 是 circle-arrow-up 提交按钮(回车 / 点它把草稿落盘成新任务)。自绘输入
+/// (键盘走 main.rs 拦截层路由成 `AddEvent`,不用原生 `text_input`——本 app
+/// 每帧重建界面,原生输入留不住焦点也不参与键盘路由裁决,打字会同时漏进
+/// 已聚焦的终端,见 `todo_search_bar` 同款说明)。
 fn todo_footer_bar<'a>(
     add_draft: &'a str,
     editing: bool,
@@ -997,29 +1155,48 @@ fn todo_footer_bar<'a>(
                 .into()
         };
 
-    let add_row = button(
-        row![
-            icons::view(
-                icons::IconKind::SquarePlus,
-                crate::theme::icon_size::row(),
-                theme::color::GOLD
-            ),
-            field,
-        ]
-        .spacing(8)
-        .align_y(iced_widget::core::alignment::Vertical::Center),
+    // 输入框本体:点击进编辑态,高度约 3 行正文,文字靠顶左对齐。
+    let input = button(
+        container(field)
+            .width(Length::Fill)
+            .align_x(iced_widget::core::alignment::Horizontal::Left),
     )
     .on_press(Message::AddEditStart)
     .width(Length::Fill)
-    .padding(0)
+    .height(Length::Fixed(56.0))
+    .padding([10, 12])
     .style(move |_t: &iced_widget::Theme, _s| button::Style {
         background: Some(theme::color::BG.into()),
         border: Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: 0.0.into(),
+            color: if editing {
+                theme::color::GOLD
+            } else {
+                theme::color::BORDER
+            },
+            width: 1.0,
+            radius: 4.0.into(),
         },
         text_color: theme::color::CREAM,
+        ..button::Style::default()
+    });
+
+    // 提交按钮:circle-arrow-up,回车或点它提交(同 `AddEvent(Submit)` 一条
+    // 落盘路径)。
+    let submit = button(icons::view(
+        icons::IconKind::CircleArrowUp,
+        crate::theme::icon_size::row(),
+        theme::color::GOLD,
+    ))
+    .on_press(Message::AddSubmit)
+    .padding(6)
+    .style(|_t, _s| button::Style {
+        background: Some(theme::color::BG.into()),
+        border: Border {
+            color: theme::color::BORDER,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        text_color: theme::color::GOLD,
         ..button::Style::default()
     });
 
@@ -1031,10 +1208,18 @@ fn todo_footer_bar<'a>(
             ..container::Style::default()
         });
 
-    container(column![top_line, add_row].spacing(4))
-        .width(Length::Fill)
-        .padding([6, 8])
-        .into()
+    container(
+        column![
+            top_line,
+            row![input, submit]
+                .spacing(8)
+                .align_y(iced_widget::core::alignment::Vertical::Center)
+        ]
+        .spacing(8),
+    )
+    .width(Length::Fill)
+    .padding([8, 20])
+    .into()
 }
 
 /// 顶部搜索框:自绘输入(键盘走 main.rs 拦截层路由成 `SearchEvent`,不用
@@ -1211,32 +1396,75 @@ fn todo_list_view<'a>(
 
     column![
         search,
-        scrollable(list).height(Length::Fill),
+        // 任务列表滚动条对齐全应用统一滚动条规范(几何 + 外观,见
+        // `crate::scrollbar`),不再是 iced 默认滚动条。
+        scrollable(list)
+            .height(Length::Fill)
+            .direction(scrollable::Direction::Vertical(
+                crate::scrollbar::scrollbar(),
+            ))
+            .style(|_t, _s| crate::scrollbar::scrollbar_style()),
         todo_footer_bar(&ws_state.add_draft, ws_state.add_editing),
     ]
     .height(Length::Fill)
     .into()
 }
 
-/// MARKDOWN 占位：只读展示 `.dozer/todo.md` 原始源码。
+/// MARKDOWN 视图:整文件编辑 `.dozer/todo.md`。未编辑时展示当前源码,
+/// 点击主体进入编辑态(`MarkdownEditStart`);编辑态下按键经 main.rs 路由成
+/// `MarkdownEvent`(回车=换行),失焦写盘(`cancel_markdown_edit`)、Esc 丢弃。
+/// 自绘输入原因同 `todo_search_bar`(原生 `text_input` 留不住焦点、不参与
+/// main.rs 键盘路由裁决)。
 fn todo_markdown_view<'a>(
     project_path: Option<&Path>,
+    ws_state: &'a WorkspaceState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let src = project_path
-        .map(todo_path)
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .unwrap_or_else(|| "# 暂无 .dozer/todo.md".to_string());
-    let body = container(
-        text(src)
-            .size(theme::font::body())
-            .color(theme::color::CREAM),
+    let content: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        if ws_state.markdown_editing {
+            let caret = "▏";
+            if ws_state.markdown_draft.is_empty() {
+                text(caret)
+                    .size(theme::font::body())
+                    .color(theme::color::DIM)
+                    .into()
+            } else {
+                text(format!("{}{caret}", ws_state.markdown_draft))
+                    .size(theme::font::body())
+                    .color(theme::color::CREAM)
+                    .into()
+            }
+        } else {
+            let src = project_path
+                .map(todo_path)
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .unwrap_or_else(|| "# 暂无 .dozer/todo.md".to_string());
+            text(src)
+                .size(theme::font::body())
+                .color(theme::color::CREAM)
+                .into()
+        };
+
+    let body = container(content).padding([12, 20]).width(Length::Fill);
+
+    // MARKDOWN 视图滚动条同样对齐全应用统一滚动条规范。
+    let area = MouseArea::new(
+        scrollable(body)
+            .height(Length::Fill)
+            .direction(scrollable::Direction::Vertical(
+                crate::scrollbar::scrollbar(),
+            ))
+            .style(|_t, _s| crate::scrollbar::scrollbar_style()),
     )
-    .padding([12, 20])
-    .width(Length::Fill);
-    scrollable(body).height(Length::Fill).into()
+    .interaction(mouse::Interaction::Pointer);
+    if ws_state.markdown_editing {
+        // 编辑态下点主体不重载草稿(避免把刚打的字冲掉),纯 no-op。
+        area.into()
+    } else {
+        area.on_press(Message::MarkdownEditStart).into()
+    }
 }
 
-/// `todo_list_view` 单行的渲染分派:计划时间编辑态 → `todo_plan_date_edit_row`,
+/// `todo_list_view` 单行的渲染分派:内容编辑态 → `todo_content_edit_row`,
 /// 否则 → `todo_card`。从 `todo_list_view` 的循环体里拆出来,好让 pending/
 /// done 两段各自的 `for` 循环别重复这段查表+分支逻辑。
 #[allow(clippy::too_many_arguments)]
@@ -1260,10 +1488,10 @@ fn todo_list_row<'a, 'b>(
     let key = todo_line_key(&item.text);
     let meta = app_state.meta_for(project_id, key);
     let dispatch = meta.and_then(|m| m.dispatch.as_ref());
-    if let Some((editing_idx, draft)) = &ws_state.editing_plan_date
+    if let Some((editing_idx, draft)) = &ws_state.editing_content
         && *editing_idx == idx
     {
-        return todo_plan_date_edit_row(item, draft);
+        return todo_content_edit_row(draft);
     }
     todo_card(
         number,
@@ -1274,7 +1502,8 @@ fn todo_list_row<'a, 'b>(
         dispatch,
         ws_state.selected_row == Some(idx),
         ws_state.dispatch_open == Some(idx),
-        ws_state.state_pill_open == Some(idx),
+        ws_state.calendar_open == Some(idx),
+        ws_state.calendar_view,
         existing_tabs,
         grabbing,
         is_drag_source,
@@ -1302,9 +1531,9 @@ fn drag_insert_indicator() -> Element<'static, Message, iced_widget::Theme, iced
 }
 
 /// 统一卡片组件：列表视图使用的边框卡片视觉，取代原来的
-/// `todo_row`(扁平高亮行)。结构自上而下：编号 + 日期徽章 → checkbox +
-/// 任务文字 → 派发按钮(仅待办未派发时) + 状态 pill。选中态左侧加 3px
-/// 金色竖条(对齐原 `todo_row` 的 `accent` 处理)。
+/// `todo_row`(扁平高亮行)。结构自上而下：编号 + 日期徽章(calendar 图标 →
+/// 日历选择器)+ 状态静态文字 → checkbox + 任务文字(点文字进入内容编辑)
+/// → Assign 按钮(仅待办未派发时)。选中态左侧加 3px 金色竖条。
 #[allow(clippy::too_many_arguments)]
 fn todo_card<'a, 'b>(
     number: usize,
@@ -1315,7 +1544,8 @@ fn todo_card<'a, 'b>(
     dispatch: Option<&'a DispatchRecord>,
     selected: bool,
     dispatch_open: bool,
-    state_pill_open: bool,
+    calendar_open: bool,
+    calendar_view: (i32, u32),
     // 独立生命周期 `'b`,不绑定到返回值的 `'static`:`todo_card` 返回
     // `Element<'static>`(内部已把 `existing_tabs` 的数据 clone 出来,不持有
     // 任何借用),调用方传进来的 `existing_tabs` 常是 `todo_list_view` 里构造的
@@ -1327,7 +1557,7 @@ fn todo_card<'a, 'b>(
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let done = item.done;
 
-    // ---- 顶部行：编号 + 日期徽章 ----
+    // ---- 顶部行：编号 + 日期徽章(calendar 图标 → 日历选择器)+ 状态文字 ----
     let number_text = text(format!("#{number:03}"))
         .size(theme::font::caption())
         .color(theme::color::DIM);
@@ -1345,7 +1575,7 @@ fn todo_card<'a, 'b>(
         MouseArea::new(
             row![
                 icons::view(
-                    icons::IconKind::History,
+                    icons::IconKind::Calendar,
                     crate::theme::icon_size::row(),
                     theme::color::DIM
                 ),
@@ -1357,8 +1587,12 @@ fn todo_card<'a, 'b>(
             .align_y(iced_widget::core::alignment::Vertical::Center),
         )
         .interaction(mouse::Interaction::Pointer)
-        .on_press(Message::PlanDateEditStart(idx))
+        .on_press(Message::CalendarOpen(idx))
         .into();
+
+    // 状态:静态文字(不再是可点击 pill),颜色随三态走——待办=青、进行中=金、
+    // 完成=灰。位置从底部右对齐移到顶部行、紧跟日期徽章之后。
+    let status_label = state_label(state);
 
     let top_row = row![
         number_text,
@@ -1366,9 +1600,10 @@ fn todo_card<'a, 'b>(
             .width(Length::Fill)
             .height(Length::Shrink),
         date_badge,
+        status_label,
     ]
     .align_y(iced_widget::core::alignment::Vertical::Center)
-    .spacing(6);
+    .spacing(8);
 
     // ---- 中部：checkbox + 任务文字（勾选/删除线处理与原 todo_row 一致）----
     let box_color = if done {
@@ -1436,28 +1671,30 @@ fn todo_card<'a, 'b>(
             .color(label_color)
             .into()
     };
+    // 点任务文字 → 进入内容行内编辑态(取代原来的"选中"——选中/拖拽仍由卡片
+    // 外层的 `RowSelect` 承担,点文字只负责编辑)。
     let label_area: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> =
         MouseArea::new(container(label).width(Length::Fill))
             .interaction(mouse::Interaction::Pointer)
-            .on_press(Message::RowSelect(if selected { None } else { Some(idx) }))
+            .on_press(Message::ContentEditStart(idx))
             .into();
 
     let body_row = row![checkbox, label_area]
         .spacing(10)
         .align_y(iced_widget::core::alignment::Vertical::Center);
 
-    // ---- 底部行：派发按钮(仅待办未派发) + 状态 pill ----
+    // ---- 底部行：Assign 文本按钮(仅待办未派发) ----
     let mut bottom = row![]
         .spacing(8)
         .align_y(iced_widget::core::alignment::Vertical::Center);
     if state == TodoState::Pending && dispatch.is_none() {
-        let dispatch_btn = button(icons::view(
-            icons::IconKind::BotMessageSquare,
-            crate::theme::icon_size::row(),
-            theme::color::GOLD,
-        ))
+        let assign_btn = button(
+            text("Assign")
+                .size(theme::font::caption())
+                .color(theme::color::GOLD),
+        )
         .on_press(Message::DispatchOpen(idx))
-        .padding(6)
+        .padding([5, 10])
         .style(|_t: &iced_widget::Theme, _s| button::Style {
             background: None,
             border: Border {
@@ -1465,11 +1702,11 @@ fn todo_card<'a, 'b>(
                 width: 1.0,
                 radius: 6.0.into(),
             },
+            text_color: theme::color::GOLD,
             ..button::Style::default()
         });
-        bottom = bottom.push(dispatch_btn);
+        bottom = bottom.push(assign_btn);
     }
-    bottom = bottom.push(state_pill(idx, state));
 
     let bottom_row = row![
         iced_widget::space::Space::new()
@@ -1521,14 +1758,20 @@ fn todo_card<'a, 'b>(
     if dispatch_open {
         stacked = stacked.push(todo_dispatch_popup(idx, existing_tabs));
     }
-    if state_pill_open {
-        stacked = stacked.push(state_pill_menu(idx));
+    if calendar_open {
+        stacked = stacked.push(todo_calendar_popup(
+            idx,
+            calendar_view,
+            meta.and_then(|m| m.plan_date.clone()),
+        ));
     }
-    // 拖拽换位感应层:只补一个 `on_move`(光标移动过本卡就发 `DragMove`),
-    // 子按钮(勾选/派发/pill)照常各自吞"按下"事件——同 `tab_drag_surface`
-    // 的那套。按下=准备拖由 `RowSelect` 置位,这里 `on_move` 只认"正在拖"
-    // 的时刻(`DragMove` 内部 no-op 检查)。拖拽中整张卡显示抓取光标。
-    let area = MouseArea::new(stacked).on_move(move |_| Message::DragMove(idx));
+    // 拖拽换位感应层:补 `on_move`(光标移动过本卡就发 `DragMove`)+
+    // `on_press`(`RowSelect` 选中并武装拖拽——点文字/勾选/日期/Assign 这些
+    // 子元素各自吞掉自己的"按下",只有落在卡片空白处才走到这里)。拖拽中
+    // 整张卡显示抓取光标。
+    let area = MouseArea::new(stacked)
+        .on_move(move |_| Message::DragMove(idx))
+        .on_press(Message::RowSelect(if selected { None } else { Some(idx) }));
     if grabbing {
         area.interaction(mouse::Interaction::Grabbing).into()
     } else {
@@ -1536,9 +1779,9 @@ fn todo_card<'a, 'b>(
     }
 }
 
-/// Todo 派发选择层：列出当前项目存活的 agent tab + 一个"新建"入口，样式
-/// 对齐 `agent_picker_popup`（CARD 底 + BORDER 描边）。挂在触发它的那一行
-/// 下方，不需要额外的坐标计算。
+/// Todo 派发选择层：列出当前项目存活的 agent tab(不再提供"新建 agent 会话"
+/// 入口——见 2026-08-17 优化),样式对齐 `agent_picker_popup`(CARD 底 +
+/// BORDER 描边)。挂在触发它的那一行下方,不需要额外的坐标计算。
 fn todo_dispatch_popup<'b>(
     idx: usize,
     existing_tabs: &'b [(&'b str, String)],
@@ -1561,24 +1804,6 @@ fn todo_dispatch_popup<'b>(
             }),
         );
     }
-    col = col.push(
-        button(
-            text("新建 agent 会话…")
-                .size(theme::font::body())
-                .color(theme::color::GOLD),
-        )
-        .on_press(Message::DispatchNew(
-            idx,
-            crate::workspace::PickerLaunch::Agent(None),
-        ))
-        .width(Length::Fill)
-        .padding([6, 12])
-        .style(|_t: &iced_widget::Theme, _s| button::Style {
-            background: None,
-            text_color: theme::color::GOLD,
-            ..button::Style::default()
-        }),
-    );
     container(col)
         .padding(6)
         .style(|_t: &iced_widget::Theme| container::Style {
@@ -1593,100 +1818,170 @@ fn todo_dispatch_popup<'b>(
         .into()
 }
 
-/// 状态 pill：三态统一成同一种紧凑圆角形状，文字/颜色随 `state` 变。
-/// `Pending`/`Done` 可点击(发 `StatePillOpen`，弹出二选一菜单)；
-/// `InProgress` 是推导值，不接受直接设置，pill 只读展示，不挂 `on_press`。
-fn state_pill(
-    idx: usize,
+/// 状态静态文字：三态只显示彩色文字,没有按钮/菜单行为(状态不再可点击切换,
+/// 只能靠 checkbox 勾选翻转)。颜色:待办=青 `CYAN`、进行中=金 `GOLD`、
+/// 完成=灰 `DIM`。
+fn state_label(
     state: TodoState,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let (label, border_color, text_color, bg) = match state {
-        TodoState::Pending => ("待办", theme::color::BORDER, theme::color::DIM, None),
-        TodoState::InProgress => ("进行中", theme::color::GREEN, theme::color::GREEN, None),
-        TodoState::Done => (
-            "已完成",
-            theme::color::GREEN,
-            theme::color::BG,
-            Some(theme::color::GREEN),
-        ),
+    let (label, color) = match state {
+        TodoState::Pending => ("待办", theme::color::CYAN),
+        TodoState::InProgress => ("进行中", theme::color::GOLD),
+        TodoState::Done => ("已完成", theme::color::DIM),
     };
-    let mut btn = button(text(label).size(theme::font::caption()).color(text_color))
-        .padding([4, 10])
-        .style(move |_t: &iced_widget::Theme, _s| button::Style {
-            background: bg.map(Into::into),
-            text_color,
-            border: Border {
-                color: border_color,
-                width: 1.0,
-                radius: 10.0.into(),
-            },
-            ..button::Style::default()
-        });
-    if state != TodoState::InProgress {
-        btn = btn.on_press(Message::StatePillOpen(idx));
-    }
-    btn.into()
+    text(label).size(theme::font::caption()).color(color).into()
 }
 
-/// pill 菜单：待办/已完成 二选一，选中发 `SetDone(idx, 目标值)`。样式镜像
-/// 现有 `todo_dispatch_popup`(CARD 底 + BORDER 描边)。
-fn state_pill_menu(
+/// 日历日期选择器：点卡片日期徽章弹出,展示 `calendar_view` 那个月,上一月/
+/// 下一月导航,点某天把 `plan_date` 写成 "MM-DD" 并关闭。样式对齐
+/// `todo_dispatch_popup`(CARD 底 + BORDER 描边)。
+fn todo_calendar_popup(
     idx: usize,
+    view: (i32, u32),
+    selected: Option<String>,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let option = |label: &'static str, target_done: bool, color: Color| {
-        button(text(label).size(theme::font::body()).color(color))
-            .on_press(Message::SetDone(idx, target_done))
-            .width(Length::Fill)
-            .padding([6, 12])
-            .style(move |_t: &iced_widget::Theme, _s| button::Style {
-                background: None,
-                text_color: color,
-                ..button::Style::default()
-            })
+    let (y, m) = view;
+    let first_wd = first_weekday_of_month(y, m);
+    let dim = days_in_month(y, m);
+    let selected_md = selected.as_deref().and_then(parse_month_day);
+
+    let nav_style = |_t: &iced_widget::Theme, _s| button::Style {
+        background: None,
+        text_color: theme::color::CREAM,
+        ..button::Style::default()
     };
-    container(
-        column![
-            option("待办", false, theme::color::DIM),
-            option("已完成", true, theme::color::GREEN),
-        ]
-        .spacing(2),
+    let prev = button(
+        text("‹")
+            .size(theme::font::body())
+            .color(theme::color::CREAM),
     )
-    .padding(6)
-    .style(|_t: &iced_widget::Theme| container::Style {
-        background: Some(theme::color::CARD.into()),
-        border: Border {
-            color: theme::color::BORDER,
-            width: 1.0,
-            radius: 6.0.into(),
-        },
-        ..container::Style::default()
-    })
-    .into()
+    .on_press(Message::CalendarPrevMonth)
+    .padding([2, 8])
+    .style(nav_style);
+    let next = button(
+        text("›")
+            .size(theme::font::body())
+            .color(theme::color::CREAM),
+    )
+    .on_press(Message::CalendarNextMonth)
+    .padding([2, 8])
+    .style(nav_style);
+    let title = text(format!("{y}-{m:02}"))
+        .size(theme::font::caption())
+        .color(theme::color::CREAM);
+    let header = row![prev, title, next]
+        .spacing(6)
+        .align_y(iced_widget::core::alignment::Vertical::Center);
+
+    let weekday_labels = ["日", "一", "二", "三", "四", "五", "六"];
+    let mut weekday_row = row![].spacing(0);
+    for w in weekday_labels {
+        weekday_row = weekday_row.push(
+            container(
+                text(w)
+                    .size(theme::font::caption())
+                    .color(theme::color::DIM),
+            )
+            .width(Length::Fixed(28.0))
+            .center_x(Length::Fill),
+        );
+    }
+
+    let mut rows = column![].spacing(2);
+    let mut day: u32 = 1;
+    'outer: for r in 0..6u32 {
+        let mut row_el = row![].spacing(0);
+        for c in 0..7u32 {
+            let cell = r * 7 + c;
+            if cell < first_wd || day > dim {
+                row_el = row_el.push(
+                    container(iced_widget::space::Space::new())
+                        .width(Length::Fixed(28.0))
+                        .height(Length::Fixed(24.0)),
+                );
+            } else {
+                let d = day;
+                let is_sel = selected_md == Some((m, d));
+                let cell_btn = button(text(format!("{d}")).size(theme::font::caption()).color(
+                    if is_sel {
+                        theme::color::GOLD
+                    } else {
+                        theme::color::CREAM
+                    },
+                ))
+                .on_press(Message::CalendarPick(idx, format!("{m:02}-{d:02}")))
+                .width(Length::Fixed(28.0))
+                .height(Length::Fixed(24.0))
+                .padding(0)
+                .style(move |_t: &iced_widget::Theme, _s| button::Style {
+                    background: if is_sel {
+                        Some(theme::color::CARD.into())
+                    } else {
+                        None
+                    },
+                    border: Border {
+                        color: if is_sel {
+                            theme::color::GOLD
+                        } else {
+                            Color::TRANSPARENT
+                        },
+                        width: if is_sel { 1.0 } else { 0.0 },
+                        radius: 4.0.into(),
+                    },
+                    text_color: if is_sel {
+                        theme::color::GOLD
+                    } else {
+                        theme::color::CREAM
+                    },
+                    ..button::Style::default()
+                });
+                row_el = row_el.push(cell_btn);
+                day += 1;
+                if day > dim {
+                    rows = rows.push(row_el);
+                    break 'outer;
+                }
+            }
+        }
+        rows = rows.push(row_el);
+    }
+
+    container(column![header, weekday_row, rows].spacing(4))
+        .padding(8)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::color::CARD.into()),
+            border: Border {
+                color: theme::color::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
 }
 
-/// 计划时间内联编辑态：任务文本 + 一个自绘输入框，回车提交。自绘原因同
-/// `todo_footer_bar`(原生 `text_input` 不参与 main.rs 键盘路由裁决,打字
-/// 会漏进终端);键盘走 main.rs 拦截层路由成 `PlanDateEvent`。这行只在
-/// `editing_plan_date` 命中时才会被渲染出来,不需要额外的点击进入态。
-fn todo_plan_date_edit_row<'a>(
-    item: &'a TodoItem,
+/// 任务内容行内编辑态：checkbox 占位 + 一个自绘输入框，回车提交。自绘原因
+/// 同 `todo_footer_bar`(原生 `text_input` 不参与 main.rs 键盘路由裁决,打字
+/// 会漏进终端);键盘走 main.rs 拦截层路由成 `ContentEvent`。这行只在
+/// `editing_content` 命中时才会被渲染出来,不需要额外的点击进入态。
+fn todo_content_edit_row<'a>(
     draft: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let field = if draft.is_empty() {
-        text("计划时间，如 08-10")
-            .size(theme::font::caption())
+        text("任务内容…")
+            .size(theme::font::body())
             .color(theme::color::DIM)
     } else {
         text(format!("{draft}▏"))
-            .size(theme::font::caption())
+            .size(theme::font::body())
             .color(theme::color::CREAM)
     };
     row![
-        text(item.text.clone())
-            .size(theme::font::body())
-            .color(theme::color::CREAM),
+        container(iced_widget::space::Space::new())
+            .width(Length::Fixed(18.0))
+            .height(Length::Fixed(18.0)),
         container(field)
-            .width(Length::Fixed(140.0))
+            .width(Length::Fill)
             .padding([2, 6])
             .style(|_t: &iced_widget::Theme| container::Style {
                 background: Some(theme::color::CARD.into()),
@@ -2245,50 +2540,6 @@ mod tests {
     }
 
     #[test]
-    fn update_set_done_pending_to_done_writes_and_stamps_completed_at() {
-        let (_dir, root) = project_dir_with_todo("- [ ] 任务A\n");
-        let mut ws_state = ws_with_item("任务A", false);
-        let mut app_state = AppState::default();
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::SetDone(0, true),
-            1,
-            &root,
-        );
-        assert!(ws_state.items[0].done);
-        let key = todo_line_key("任务A");
-        assert!(app_state.meta_for(1, key).unwrap().completed_at.is_some());
-        let content = std::fs::read_to_string(todo_path(&root)).unwrap();
-        assert!(content.contains("- [x] 任务A"));
-    }
-
-    #[test]
-    fn update_set_done_noop_when_already_target_value() {
-        // 模拟"进行中"态点"待办"：done 已经是 false，SetDone(idx, false)
-        // 必须整个是 no-op(不读写文件、不碰 completed_at)，否则会把还在
-        // 执行的任务误标记。
-        let (_dir, root) = project_dir_with_todo("- [ ] 任务A\n");
-        let mut ws_state = ws_with_item("任务A", false);
-        let mut app_state = AppState::default();
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::SetDone(0, false),
-            1,
-            &root,
-        );
-        assert!(!ws_state.items[0].done);
-        let key = todo_line_key("任务A");
-        assert!(
-            app_state.meta_for(1, key).is_none(),
-            "no-op 不该写 completed_at"
-        );
-        let content = std::fs::read_to_string(todo_path(&root)).unwrap();
-        assert_eq!(content, "- [ ] 任务A\n", "no-op 不该改动磁盘文件");
-    }
-
-    #[test]
     fn update_drag_end_reorders_pending_in_file() {
         // 待办 A、B、C;把 A(下标 0)拖到 C 的位置(下标 2),`DragEnd` 应把
         // 待办块重排成 B、C、A 并写盘。已完成行不参与(这里没有)。
@@ -2322,6 +2573,83 @@ mod tests {
     }
 
     #[test]
+    fn update_drag_end_keeps_dragged_task_selected() {
+        // 拖拽完成后被拖的任务要保持选中:把 A(下标 0)拖到 C 的位置(下标 2),
+        // 重排成 B、C、A 后 `selected_row` 应指向 A 的新下标 2,而不是它挪走后
+        // 占住源位的那条 B(下标 0)。
+        let (_dir, root) = project_dir_with_todo("- [ ] A\n- [ ] B\n- [ ] C\n");
+        let mut ws_state = WorkspaceState {
+            items: vec![
+                TodoItem {
+                    text: "A".into(),
+                    done: false,
+                },
+                TodoItem {
+                    text: "B".into(),
+                    done: false,
+                },
+                TodoItem {
+                    text: "C".into(),
+                    done: false,
+                },
+            ],
+            ..WorkspaceState::default()
+        };
+        let mut app_state = AppState::default();
+        ws_state.drag = Some(TodoDrag {
+            source_idx: 0,
+            target_idx: 2,
+        });
+        update(&mut ws_state, &mut app_state, Message::DragEnd, 1, &root);
+        assert_eq!(
+            ws_state.selected_row,
+            Some(2),
+            "被拖的 A 应选中,其新 item-index 是 2"
+        );
+        assert_eq!(ws_state.items[2].text, "A");
+    }
+
+    #[test]
+    fn update_drag_end_keeps_selected_when_dragged_to_pending_end() {
+        // 拖到待办块末尾(`target_idx == usize::MAX`,悬停已完成卡片):被拖的
+        // A 应落到最后一个待办位,并保持选中。
+        let (_dir, root) = project_dir_with_todo("- [ ] A\n- [ ] B\n- [ ] C\n- [x] D\n");
+        let mut ws_state = WorkspaceState {
+            items: vec![
+                TodoItem {
+                    text: "A".into(),
+                    done: false,
+                },
+                TodoItem {
+                    text: "B".into(),
+                    done: false,
+                },
+                TodoItem {
+                    text: "C".into(),
+                    done: false,
+                },
+                TodoItem {
+                    text: "D".into(),
+                    done: true,
+                },
+            ],
+            ..WorkspaceState::default()
+        };
+        let mut app_state = AppState::default();
+        ws_state.drag = Some(TodoDrag {
+            source_idx: 0,
+            target_idx: usize::MAX,
+        });
+        update(&mut ws_state, &mut app_state, Message::DragEnd, 1, &root);
+        assert_eq!(
+            ws_state.selected_row,
+            Some(2),
+            "拖到待办块末尾后 A 位于最后一个待办位(下标 2)"
+        );
+        assert_eq!(ws_state.items[2].text, "A");
+    }
+
+    #[test]
     fn update_drag_end_noop_when_not_moved() {
         // 光标没真移动过(source==target),`DragEnd` 是 no-op,不碰磁盘文件。
         let (_dir, root) = project_dir_with_todo("- [ ] A\n- [ ] B\n");
@@ -2347,26 +2675,6 @@ mod tests {
         let content = std::fs::read_to_string(todo_path(&root)).unwrap();
         assert_eq!(content, "- [ ] A\n- [ ] B\n", "没移动不该改文件");
         assert!(ws_state.drag.is_none());
-    }
-
-    #[test]
-    fn update_set_done_done_to_pending_clears_completed_at() {
-        let (_dir, root) = project_dir_with_todo("- [x] 任务A\n");
-        let mut ws_state = ws_with_item("任务A", true);
-        let mut app_state = AppState::default();
-        app_state.set_completed_at(1, "任务A", true);
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::SetDone(0, false),
-            1,
-            &root,
-        );
-        assert!(!ws_state.items[0].done);
-        let key = todo_line_key("任务A");
-        assert!(app_state.meta_for(1, key).unwrap().completed_at.is_none());
-        let content = std::fs::read_to_string(todo_path(&root)).unwrap();
-        assert!(content.contains("- [ ] 任务A"));
     }
 
     #[test]
@@ -2517,131 +2825,6 @@ mod tests {
     }
 
     #[test]
-    fn update_state_pill_open_and_close_toggle_field() {
-        let (_dir, root) = project_dir_with_todo("# Todo\n");
-        let mut ws_state = WorkspaceState::default();
-        let mut app_state = AppState::default();
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::StatePillOpen(3),
-            1,
-            &root,
-        );
-        assert_eq!(ws_state.state_pill_open, Some(3));
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::StatePillClose,
-            1,
-            &root,
-        );
-        assert_eq!(ws_state.state_pill_open, None);
-    }
-
-    #[test]
-    fn update_plan_date_edit_start_prefills_from_app_state() {
-        let (_dir, root) = project_dir_with_todo("# Todo\n");
-        let mut ws_state = ws_with_item("任务A", false);
-        let mut app_state = AppState::default();
-        app_state.set_plan_date(1, "任务A", "08-10".to_string());
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::PlanDateEditStart(0),
-            1,
-            &root,
-        );
-        assert_eq!(ws_state.editing_plan_date, Some((0, "08-10".to_string())));
-    }
-
-    #[test]
-    fn update_plan_date_edit_start_no_existing_value_prefills_empty() {
-        let (_dir, root) = project_dir_with_todo("# Todo\n");
-        let mut ws_state = ws_with_item("任务A", false);
-        let mut app_state = AppState::default();
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::PlanDateEditStart(0),
-            1,
-            &root,
-        );
-        assert_eq!(ws_state.editing_plan_date, Some((0, String::new())));
-    }
-
-    #[test]
-    fn update_plan_date_submit_writes_app_state_and_clears_editing() {
-        let (_dir, root) = project_dir_with_todo("# Todo\n");
-        let mut ws_state = ws_with_item("任务A", false);
-        ws_state.editing_plan_date = Some((0, "08-10".to_string()));
-        let mut app_state = AppState::default();
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::PlanDateEvent(AddrEvent::Submit),
-            1,
-            &root,
-        );
-        assert!(ws_state.editing_plan_date.is_none());
-        let key = todo_line_key("任务A");
-        assert_eq!(
-            app_state.meta_for(1, key).unwrap().plan_date.as_deref(),
-            Some("08-10")
-        );
-    }
-
-    #[test]
-    fn update_plan_date_event_ignored_without_editing_state() {
-        let (_dir, root) = project_dir_with_todo("# Todo\n");
-        let mut ws_state = ws_with_item("任务A", false);
-        let mut app_state = AppState::default();
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::PlanDateEvent(AddrEvent::Text("0".to_string())),
-            1,
-            &root,
-        );
-        assert!(ws_state.editing_plan_date.is_none());
-    }
-
-    #[test]
-    fn update_plan_date_event_builds_draft_and_submits() {
-        let (_dir, root) = project_dir_with_todo("# Todo\n");
-        let mut ws_state = ws_with_item("任务A", false);
-        let mut app_state = AppState::default();
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::PlanDateEditStart(0),
-            1,
-            &root,
-        );
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::PlanDateEvent(AddrEvent::Text("08-10".to_string())),
-            1,
-            &root,
-        );
-        assert_eq!(ws_state.editing_plan_date, Some((0, "08-10".to_string())));
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::PlanDateEvent(AddrEvent::Submit),
-            1,
-            &root,
-        );
-        assert!(ws_state.editing_plan_date.is_none());
-        let key = todo_line_key("任务A");
-        assert_eq!(
-            app_state.meta_for(1, key).unwrap().plan_date.as_deref(),
-            Some("08-10")
-        );
-    }
-
-    #[test]
     fn app_state_record_dispatch_then_meta_for_finds_it() {
         let mut app_state = AppState::default();
         app_state.record_dispatch(1, "任务A", "sess-1".to_string());
@@ -2693,10 +2876,146 @@ mod tests {
     }
 
     #[test]
-    fn take_pending_dispatch_removes_and_returns_once() {
-        let mut ws_state = WorkspaceState::default();
-        ws_state.pending_dispatch.insert(7, "任务A".to_string());
-        assert_eq!(ws_state.take_pending_dispatch(7), Some("任务A".to_string()));
-        assert_eq!(ws_state.take_pending_dispatch(7), None, "取过一次就没了");
+    fn calendar_parse_month_day_accepts_mm_dd_and_rejects_bad_input() {
+        assert_eq!(parse_month_day("08-10"), Some((8, 10)));
+        assert_eq!(parse_month_day("8-3"), Some((8, 3)));
+        assert_eq!(parse_month_day("13-01"), None, "月份越界");
+        assert_eq!(parse_month_day("abc"), None);
+        assert_eq!(parse_month_day("08"), None);
+    }
+
+    #[test]
+    fn calendar_days_in_month_handles_leap_years() {
+        assert_eq!(days_in_month(2024, 2), 29, "闰年 2 月 29 天");
+        assert_eq!(days_in_month(2023, 2), 28, "平年 2 月 28 天");
+        assert_eq!(days_in_month(2023, 4), 30);
+        assert_eq!(days_in_month(2023, 1), 31);
+    }
+
+    #[test]
+    fn calendar_first_weekday_of_1970_jan_is_thursday() {
+        // 1970-01-01 是周四(0=周日 … 4=周四)。
+        assert_eq!(first_weekday_of_month(1970, 1), 4);
+    }
+
+    #[test]
+    fn calendar_days_from_civil_round_trips() {
+        for (y, m, d) in [
+            (1970, 1, 1),
+            (2000, 2, 29),
+            (2024, 3, 1),
+            (2026, 8, 17),
+            (2099, 12, 31),
+        ] {
+            let (yy, mm, dd) = civil_from_days(days_from_civil(y, m, d));
+            assert_eq!((y as i64, m, d), (yy, mm, dd));
+        }
+    }
+
+    #[test]
+    fn update_content_edit_submit_rewrites_line() {
+        let (_dir, root) = project_dir_with_todo("- [ ] 旧任务\n- [ ] 其它\n");
+        let mut ws_state = WorkspaceState {
+            items: vec![
+                TodoItem {
+                    text: "旧任务".into(),
+                    done: false,
+                },
+                TodoItem {
+                    text: "其它".into(),
+                    done: false,
+                },
+            ],
+            ..WorkspaceState::default()
+        };
+        let mut app_state = AppState::default();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::ContentEditStart(0),
+            1,
+            &root,
+        );
+        assert!(ws_state.content_editing());
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::ContentEvent(AddrEvent::Text("新".to_string())),
+            1,
+            &root,
+        );
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::ContentEvent(AddrEvent::Submit),
+            1,
+            &root,
+        );
+        assert!(!ws_state.content_editing());
+        let content = std::fs::read_to_string(todo_path(&root)).unwrap();
+        assert!(
+            content.contains("- [ ] 旧任务新\n"),
+            "内容应改写: {content}"
+        );
+        assert_eq!(ws_state.items[0].text, "旧任务新");
+    }
+
+    #[test]
+    fn update_content_edit_cancel_discards() {
+        let (_dir, root) = project_dir_with_todo("- [ ] 旧任务\n");
+        let mut ws_state = ws_with_item("旧任务", false);
+        let mut app_state = AppState::default();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::ContentEditStart(0),
+            1,
+            &root,
+        );
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::ContentEvent(AddrEvent::Text("x".to_string())),
+            1,
+            &root,
+        );
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::ContentEvent(AddrEvent::Cancel),
+            1,
+            &root,
+        );
+        assert!(!ws_state.content_editing());
+        let content = std::fs::read_to_string(todo_path(&root)).unwrap();
+        assert_eq!(content, "- [ ] 旧任务\n", "取消不该改动文件");
+    }
+
+    #[test]
+    fn update_calendar_pick_writes_plan_date() {
+        let (_dir, root) = project_dir_with_todo("- [ ] 任务A\n");
+        let mut ws_state = ws_with_item("任务A", false);
+        let mut app_state = AppState::default();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::CalendarOpen(0),
+            1,
+            &root,
+        );
+        assert!(ws_state.calendar_popup_open());
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::CalendarPick(0, "08-10".to_string()),
+            1,
+            &root,
+        );
+        assert!(!ws_state.calendar_popup_open(), "选中日期后关闭日历");
+        let key = todo_line_key("任务A");
+        assert_eq!(
+            app_state.meta_for(1, key).unwrap().plan_date.as_deref(),
+            Some("08-10")
+        );
     }
 }

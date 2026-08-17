@@ -1955,13 +1955,17 @@ impl Workspace {
         self.files.cancel_search_edit();
         self.todo.cancel_search_edit();
         self.todo.cancel_add_edit();
-        self.todo.cancel_plan_date_edit();
+        self.todo.cancel_content_edit();
         self.todo.cancel_drag();
         // 名称编辑不在失焦时丢弃——改由 `App::blur_inputs` 取出缓冲并发起
         // daemon 改名(改动且非空才发请求),与描述字段"失焦写盘"行为对齐。
         if let Some(project) = self.project.as_ref() {
             self.project_panel
                 .submit_description_edit_on_blur(std::path::Path::new(&project.path));
+            // MARKDOWN 整文件编辑在失焦时写盘(回车是换行、没有独立提交,
+            // 失焦即提交);Esc 才是丢弃,见 `MarkdownEvent(Cancel)`。
+            self.todo
+                .cancel_markdown_edit(std::path::Path::new(&project.path));
         }
         self.blur_preview_editors();
     }

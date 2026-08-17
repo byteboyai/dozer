@@ -854,10 +854,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
-            // Todo 状态 pill 菜单打开时,Esc 同样优先关掉弹出层,口径同上面
-            // 的 Todo 派发选择层——菜单里只有"待办"/"已完成"两个会真的
-            // 改任务状态的选项,没有 Esc 的话手滑点开就只能被迫选一个。
-            if app.todo_state_pill_open()
+            // Todo 日历日期选择器打开时,Esc 同样优先关掉弹出层,口径同上面
+            // 的 Todo 派发选择层。
+            if app.todo_calendar_open()
                 && let WindowEvent::KeyboardInput {
                     event,
                     is_synthetic: false,
@@ -867,7 +866,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 && event.logical_key
                     == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
             {
-                app.update(Message::Todo(extensions::todo::Message::StatePillClose));
+                app.update(Message::Todo(extensions::todo::Message::CalendarClose));
                 window.request_redraw();
                 return;
             }
@@ -960,8 +959,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
             // 浏览器地址栏 / 验收意见 / 项目树行内编辑态 / 项目名称编辑 /
             // 文件树搜索框 / 右键"搜索"弹窗查询框 / Todo 搜索框、新增任务框、
-            // 计划时间编辑:键盘直达自绘输入(不经 keymap、不进 PTY)。文件
-            // 预览面板已不再有地址栏。
+            // 任务内容编辑、MARKDOWN 整文件编辑:键盘直达自绘输入(不经 keymap、
+            // 不进 PTY)。文件预览面板已不再有地址栏。
             let to_browser = app.browser_addr_editing();
             let to_comment = app.acceptance_comment_editing();
             let to_tree_edit = app.tree_editing();
@@ -970,7 +969,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             let to_search_popup = app.search_popup_editing();
             let to_todo_search = app.todo_search_editing();
             let to_todo_add = app.todo_add_editing();
-            let to_todo_plan_date = app.todo_plan_date_editing();
+            let to_todo_content = app.todo_content_editing();
+            let to_todo_markdown = app.todo_markdown_editing();
             if to_browser
                 || to_comment
                 || to_tree_edit
@@ -979,7 +979,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 || to_search_popup
                 || to_todo_search
                 || to_todo_add
-                || to_todo_plan_date
+                || to_todo_content
+                || to_todo_markdown
             {
                 let addr_event = match event {
                     WindowEvent::KeyboardInput {
@@ -996,7 +997,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             Key::Named(NamedKey::Backspace) => {
                                 Some(workspace::AddrEvent::Backspace)
                             }
-                            Key::Named(NamedKey::Enter) => Some(workspace::AddrEvent::Submit),
+                            // MARKDOWN 整文件编辑里回车是换行(多行文本),其它
+                            // 单行自绘输入回车才是提交。
+                            Key::Named(NamedKey::Enter) => Some(if to_todo_markdown {
+                                workspace::AddrEvent::Text("\n".into())
+                            } else {
+                                workspace::AddrEvent::Submit
+                            }),
                             Key::Named(NamedKey::Escape) => Some(workspace::AddrEvent::Cancel),
                             _ => None,
                         }
@@ -1009,9 +1016,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 if let Some(ev) = addr_event {
                     // 优先级:右键"搜索"弹窗查询框 > 浏览器地址栏 > 验收意见 >
                     // 项目树编辑 > 项目名称编辑 > 文件树搜索框 > Todo 面板搜索框
-                    // > Todo 新增任务框 > Todo 计划时间编辑(多者同真时罕见,
-                    // 谁先建的编辑态谁优先没有实际冲突场景,这个顺序只是一个
-                    // 确定性兜底)。
+                    // > Todo 新增任务框 > Todo 任务内容编辑 > Todo MARKDOWN 编辑
+                    // (多者同真时罕见,谁先建的编辑态谁优先没有实际冲突场景,
+                    // 这个顺序只是一个确定性兜底)。
                     let message = if to_search_popup {
                         Message::Search(extensions::search::Message::QueryEvent(ev))
                     } else if to_browser {
@@ -1028,8 +1035,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         Message::Todo(extensions::todo::Message::SearchEvent(ev))
                     } else if to_todo_add {
                         Message::Todo(extensions::todo::Message::AddEvent(ev))
+                    } else if to_todo_content {
+                        Message::Todo(extensions::todo::Message::ContentEvent(ev))
                     } else {
-                        Message::Todo(extensions::todo::Message::PlanDateEvent(ev))
+                        Message::Todo(extensions::todo::Message::MarkdownEvent(ev))
                     };
                     app.update(message);
                     window.request_redraw();

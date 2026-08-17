@@ -2470,10 +2470,16 @@ impl App {
             .is_some_and(|ws| ws.todo.add_editing())
     }
 
-    /// Todo 面板计划时间行内编辑态是否打开(main.rs 键盘路由用)。
-    pub fn todo_plan_date_editing(&self) -> bool {
+    /// Todo 面板任务内容行内编辑态是否打开(main.rs 键盘路由用)。
+    pub fn todo_content_editing(&self) -> bool {
         self.active_workspace()
-            .is_some_and(|ws| ws.todo.plan_date_editing())
+            .is_some_and(|ws| ws.todo.content_editing())
+    }
+
+    /// Todo 面板 MARKDOWN 视图是否处于整文件编辑态(main.rs 键盘路由用)。
+    pub fn todo_markdown_editing(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.todo.markdown_editing())
     }
 
     /// 是否正在拖拽 Todo 任务排序(main.rs 鼠标释放路由 + about_to_wait
@@ -2872,11 +2878,11 @@ impl App {
             .unwrap_or(false)
     }
 
-    /// Todo 状态 pill 菜单是否打开(给 main.rs 的 Esc 关闭用,同
+    /// Todo 日历日期选择器是否打开(给 main.rs 的 Esc 关闭用,同
     /// `todo_dispatch_open` 的既有模式)。
-    pub fn todo_state_pill_open(&self) -> bool {
+    pub fn todo_calendar_open(&self) -> bool {
         self.active_workspace()
-            .map(|ws| ws.todo.state_pill_menu_open())
+            .map(|ws| ws.todo.calendar_popup_open())
             .unwrap_or(false)
     }
 
@@ -3240,9 +3246,6 @@ impl App {
             Message::Todo(todo::Message::DispatchToExisting(idx, session_id)) => {
                 self.todo_dispatch_to_existing(idx, session_id)
             }
-            Message::Todo(todo::Message::DispatchNew(idx, launch)) => {
-                self.todo_dispatch_new(idx, launch)
-            }
             // 数据库连接测试的异步结果带显式 `project_id`——用户可能在等待
             // 期间切走了项目页签,必须按自带 id 路由,不能用当前聚焦项目
             // (同 `TabAttached`/`ProjectSlotLoaded` 那批异步消息的约定,见设计
@@ -3295,19 +3298,9 @@ impl App {
                 });
             }
             Message::TabAttached(project_id, tab_id, info, snapshot) => {
-                let session_id = info.id.clone();
                 self.with_project(project_id, move |ws, io| {
                     ws.on_tab_attached(io.cols, io.rows, tab_id, info, snapshot)
                 });
-                // 若是从 Todo 面板"派发到新建"建的 tab,补记派发记录——此时才
-                // 第一次知道真正的 `session_id`。`TabAttached` 是异步结果消息,
-                // 必须按自带的 `project_id` 路由(同 `on_tab_attached` 那一步),
-                // 不能用 `active_workspace_mut()`(当前聚焦项目可能已经切走)。
-                if let Some(text) = loaded_workspace_mut(&mut self.projects, project_id)
-                    .and_then(|ws| ws.todo.take_pending_dispatch(tab_id))
-                {
-                    self.todo.record_dispatch(project_id, &text, session_id);
-                }
             }
             Message::PaneResized {
                 cols,
@@ -4471,22 +4464,6 @@ impl App {
             ws.dispatch_todo_to_existing(io, &session_id, &text);
         });
         self.todo.record_dispatch(project_id, &text, session_id);
-    }
-
-    fn todo_dispatch_new(&mut self, idx: usize, launch: crate::workspace::PickerLaunch) {
-        let text = self
-            .active_workspace()
-            .and_then(|ws| ws.todo.items().get(idx))
-            .map(|item| item.text.clone());
-        let Some(text) = text else {
-            return;
-        };
-        self.with_focused_project(|ws, io| {
-            ws.todo.close_dispatch_popup();
-            if let Some(tab_id) = ws.spawn_new_tab(io, launch, Some(text.clone())) {
-                ws.todo.insert_pending_dispatch(tab_id, text);
-            }
-        });
     }
 
     fn todo_message(&mut self, msg: todo::Message) {

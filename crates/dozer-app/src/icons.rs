@@ -132,6 +132,10 @@ pub enum IconKind {
     /// SSH 主机卡片"文件传输"按钮 + SFTP tab 前缀图标(Lucide
     /// folder-sync)。
     FolderSync,
+    /// Todo 卡片计划日期徽章图标(Lucide calendar):点击弹出日历日期选择器。
+    Calendar,
+    /// Todo 新增任务框右侧提交按钮图标(Lucide circle-arrow-up)。
+    CircleArrowUp,
 }
 
 impl IconKind {
@@ -199,6 +203,8 @@ impl IconKind {
             IconKind::FolderSearch => include_bytes!("../assets/icons/folder-search.svg"),
             IconKind::CircleSmall => include_bytes!("../assets/icons/circle-small.svg"),
             IconKind::FolderSync => include_bytes!("../assets/icons/folder-sync.svg"),
+            IconKind::Calendar => include_bytes!("../assets/icons/calendar.svg"),
+            IconKind::CircleArrowUp => include_bytes!("../assets/icons/circle-arrow-up.svg"),
         }
     }
 }
