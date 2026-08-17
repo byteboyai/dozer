@@ -887,6 +887,39 @@ fn status_glyph(status: git2::Delta) -> &'static str {
     }
 }
 
+/// commit 时间戳格式化,`YYYY-MM-DD HH:MM:SS`。不引入 `chrono`——用标准库
+/// 手工做民用历换算(Howard Hinnant 的 `civil_from_days`,与 `todo.rs` 里
+/// 那份同源)。展示的是 UTC(不依赖本地时区,也不引入时区库——commit 列表
+/// 的时间戳是纯展示态,UTC 足够)。
+fn format_commit_time(unix_secs: i64) -> String {
+    let secs = unix_secs.max(0) as u64;
+    let days = (secs / 86_400) as i64;
+    let secs_of_day = secs % 86_400;
+    let (h, m, s) = (
+        secs_of_day / 3600,
+        (secs_of_day / 60) % 60,
+        secs_of_day % 60,
+    );
+    let (y, mo, d) = civil_from_days(days);
+    format!("{y:04}-{mo:02}-{d:02} {h:02}:{m:02}:{s:02}")
+}
+
+/// Howard Hinnant 的 `civil_from_days` 算法:Unix epoch 起的天数 → (年, 月, 日)。
+/// 范围覆盖 1970..=2100,足够 commit 时间戳用。与 `todo.rs` 的同名函数同源
+/// (那个是模块私有,不便跨模块复用,这里照抄一份)。
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1100,6 +1133,16 @@ mod tests {
         );
         // 空 refs(一般提交)返回空串。
         assert_eq!(ref_labels_text(&[], Some("main")), "");
+    }
+
+    #[test]
+    fn format_commit_time_matches_expected_layout() {
+        // 2026-08-17 09:22:31 UTC(固定输入 → 固定输出;实现是 UTC,无时区歧义)。
+        assert_eq!(format_commit_time(1_786_958_551), "2026-08-17 09:22:31");
+        // epoch 0 边界。
+        assert_eq!(format_commit_time(0), "1970-01-01 00:00:00");
+        // 负数夹到 epoch。
+        assert_eq!(format_commit_time(-5), "1970-01-01 00:00:00");
     }
 
     fn snapshot_at(repo_path: &Path, max_count: usize) -> GitLogSnapshot {
