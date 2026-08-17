@@ -644,6 +644,57 @@ fn commit_list_view<'a>(
     scrollable(list).width(Length::Fill).height(Length::Fill).into()
 }
 
+/// 右上文件列表:选中 commit 改动的每个文件一行(状态字符 + 路径),点击
+/// 发 `Message::SelectFile`,选中态同 `commit_list_view` 的左侧金色竖条。
+fn file_list_view<'a>(
+    detail: &'a Result<CommitDetail, String>,
+    selected_file: Option<&'a str>,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    match detail {
+        Err(err) => container(text(format!("详情加载失败: {err}")).color(theme::color::RED))
+            .padding(8)
+            .into(),
+        Ok(detail) if detail.files.is_empty() => container(text("无文件改动").color(theme::color::DIM))
+            .padding(8)
+            .into(),
+        Ok(detail) => {
+            let mut list = column![].spacing(2);
+            for f in &detail.files {
+                let is_selected = selected_file == Some(f.path.as_str());
+                let color = match f.status {
+                    git2::Delta::Added => theme::color::GREEN,
+                    git2::Delta::Deleted => theme::color::RED,
+                    _ => theme::color::CYAN,
+                };
+                let line = row![
+                    text(status_glyph(f.status)).color(color).width(18),
+                    text(f.path.clone())
+                        .size(theme::font::caption())
+                        .color(theme::color::CREAM),
+                ]
+                .spacing(4);
+                let accent = container(iced_widget::Space::new())
+                    .width(Length::Fixed(3.0))
+                    .height(Length::Fill)
+                    .style(move |_t: &iced_widget::Theme| container::Style {
+                        background: if is_selected {
+                            Some(theme::color::GOLD.into())
+                        } else {
+                            None
+                        },
+                        ..container::Style::default()
+                    });
+                let inner = row![accent, container(line).padding([2, 8]).width(Length::Fill)].spacing(0);
+                let area = iced_widget::MouseArea::new(inner)
+                    .interaction(iced_widget::core::mouse::Interaction::Pointer)
+                    .on_press(Message::SelectFile(f.path.clone()));
+                list = list.push(area);
+            }
+            scrollable(list).width(Length::Fill).height(Length::Fill).into()
+        }
+    }
+}
+
 /// 渲染整块提交图面板:有数据画 Canvas,出错画错误文案,两者皆无(比如
 /// 尚未打开项目)画空状态提示。纯函数——不碰 `App`/`Workspace` 内部状态,
 /// 调用方(`workspace.rs`)负责取数据、决定何时重建缓存、维护选中态。
