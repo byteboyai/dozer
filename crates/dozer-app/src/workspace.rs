@@ -2425,7 +2425,11 @@ pub(crate) fn agent_card(
     );
 
     button(container(lines).padding(10))
-        .on_press(Message::SelectTab(idx))
+        // 不是左侧 tab 栏本身,发 `SelectTabNoDrag` 而不是 `SelectTab`——
+        // 后者会顺带武装左侧 tab 栏的拖拽状态机,导致点这张卡片后只要
+        // 光标划过 tab 栏就被误判成"正在拖 tab"而错误换位(见
+        // `Message::SelectTab` 文档,2026-08-17 修的真实 bug)。
+        .on_press(Message::SelectTabNoDrag(idx))
         .width(Length::Fill)
         .style(move |_t, _s| button::Style {
             background: if active {

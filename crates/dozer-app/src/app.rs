@@ -1223,8 +1223,18 @@ pub enum Message {
     /// 点对话列表某条 → 审阅该对话（当前会话用 Session 源以便回合刷新,历史用 File）。
     ConversationOpen(PathBuf),
     /// 切换当前显示的 tab（这里的 `usize` 是 vec 位置——用户点击的是
-    /// "屏幕上第几个 tab"，跟稳定 id 是两回事）。
+    /// "屏幕上第几个 tab"，跟稳定 id 是两回事）。**仅限左侧终端 tab 栏本身
+    /// 的按钮**发这条消息——`select_tab()` 顺带把 `tab_drag` 武装成"这一
+    /// 页签正被按住",随后光标划过 tab 栏任意条目就会触发换位
+    /// (`tab_drag_move`)。任何不是 tab 栏本身、但也想"选中某个 tab"的地方
+    /// (比如 Agent 面板右侧卡片列表)必须发 `SelectTabNoDrag`,否则会在
+    /// 无关点击后意外武装拖拽状态机,松手前只要划过 tab 栏就会错误换位
+    /// (2026-08-17 修的一个真实 bug)。
     SelectTab(usize),
+    /// 语义同 `SelectTab`(选中 + 路由键盘焦点),但**不武装拖拽状态机**。
+    /// 给"不是 tab 栏本身、但也要切换 tab"的调用方用(目前只有 Agent 面板
+    /// 右侧卡片列表 `agent_card`)。
+    SelectTabNoDrag(usize),
     /// 关闭 tab = 结束会话：中断转发任务并 kill daemon 侧会话（P1e 验收
     /// 反馈裁决：重开 app 只恢复"关 app 时还开着"的 tab，已关的不还魂）。
     /// "会话存活"保的是关 app/崩溃不掉会话——退 app 才是 detach。
@@ -3128,6 +3138,7 @@ impl App {
             Message::ConversationOpen(path) => self.conversation_open(path),
 
             Message::SelectTab(idx) => self.select_tab(idx),
+            Message::SelectTabNoDrag(idx) => self.select_tab_no_drag(idx),
             Message::CloseTab(idx) => {
                 self.with_focused_project(|ws, io| {
                     ws.close_tab(io, idx);
@@ -4608,11 +4619,8 @@ impl App {
         // 按下页签＝选中＋准备被拖走:选中仍是唯一的语义,但顺带记下
         // "这一页签正被按住",随后鼠标划过其它页签时 `on_move` 触发
         // `TabDragMove` 完成换位;松开时 main.rs `TabDragEnd` 收尾。
-        self.with_focused_project(|ws, _io| {
-            if idx < ws.tabs.len() {
-                ws.active = idx;
-            }
-        });
+        // 只应该被 tab 栏本身的按钮调用——见 `Message::SelectTab` 文档。
+        self.select_tab_no_drag(idx);
         if let Some(ws) = self.active_workspace()
             && idx < ws.tabs.len()
         {
@@ -4621,6 +4629,16 @@ impl App {
                 source: idx,
             });
         }
+    }
+
+    /// `select_tab` 去掉"武装拖拽状态机"那部分,给非 tab 栏的调用方
+    /// (Agent 面板右侧卡片列表)用——见 `Message::SelectTabNoDrag` 文档。
+    fn select_tab_no_drag(&mut self, idx: usize) {
+        self.with_focused_project(|ws, _io| {
+            if idx < ws.tabs.len() {
+                ws.active = idx;
+            }
+        });
     }
 
     fn pane_resized(&mut self, cols: u16, rows: u16, ssh_cols: u16, ssh_rows: u16) {
