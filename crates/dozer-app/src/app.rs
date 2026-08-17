@@ -3668,6 +3668,9 @@ impl App {
                 // 浏览器 tab 脱的换位:光标扫过 `idx` 页签 → 走共同换位逻辑。
                 self.tab_drag_move(TabGroup::Browser, idx);
             }
+            Message::Browser(browser::Message::ColumnDragStart) => {
+                self.update(Message::ColumnDragStart(Divider::BrowserBookmarksSplit));
+            }
             Message::Browser(msg) => self.browser_message(msg),
             Message::ProjectSelect(id) => self.project_select(id),
             Message::ProjectTabPickFolder => {} // 副作用在 main.rs(rfd 文件夹选择)
@@ -7001,6 +7004,7 @@ fn left_panel_area<'a>(
             LeftView::Web => browser::view(
                 &ws.browser,
                 ws.project.as_ref().map(|p| p.id),
+                app.dims.browser_bookmarks_split,
                 Length::Fill,
                 zone_pane_border(zone, ac),
             )

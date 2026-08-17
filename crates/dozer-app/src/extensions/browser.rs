@@ -11,7 +11,7 @@
 use crate::app::{panel_tab, tab_arrow_button, tab_divider, tab_window};
 use crate::preview::WebviewSpec;
 use crate::theme::icon_size;
-use crate::workspace::{lh, preview_tab_display_width};
+use crate::workspace::{lh, preview_tab_display_width, split_portions};
 use crate::{icons, theme};
 use dozer_client::Client;
 use dozer_core::protocol::{BookmarkInfo, BookmarkScope};
@@ -780,6 +780,10 @@ pub enum Message {
     /// 按钮, 最后 bool = 进入/离开)。浏览器面板有独立 `State`,无法复用顶栏
     /// 全局 `App::hover_progress`,自己维护一套进度机(见 `State::hover`)。
     Hover(usize, bool, bool),
+    /// 收藏夹侧栏分割线开始拖:扩展发不了 app 级拖拽消息,由内核代发,见
+    /// `App::update` 里 `Message::Browser(Message::ColumnDragStart)` 分支
+    /// (同 `extensions::git_log::Message::ColumnDragStart` 的处理方式)。
+    ColumnDragStart,
 }
 
 /// 浏览器面板的全部状态。挂在每个 `Workspace` 上(不像 Git Log 挂在
@@ -1099,6 +1103,13 @@ pub fn update(
             }
             request_bookmarks_refresh(project_id, client, handle, emit);
         }
+        Message::ColumnDragStart => {
+            debug_assert!(
+                false,
+                "ColumnDragStart 由内核在 Message::Browser 分支里直接处理\
+                 (转成 app 级拖拽消息),不会转发到这里"
+            );
+        }
     }
 }
 
@@ -1322,6 +1333,7 @@ fn bookmarks_panel(
 pub fn view(
     state: &State,
     project_id: Option<i64>,
+    bookmarks_split: f32,
     width: Length,
     outer: Border,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -1429,25 +1441,47 @@ pub fn view(
     if state.star_menu_open {
         content = content.push(star_menu_popup(state, project_id));
     }
-    if state.bookmarks_open {
-        content = content.push(bookmarks_panel(state, project_id, Length::Fill));
-    }
-
     if let Some(err) = &state.error {
         content = content.push(lh(text(format!("⚠ {err}"))
             .size(theme::font::body())
             .color(theme::color::RED)));
     }
 
-    if state.tabs.tabs().is_empty() {
-        content = content.push(
+    let body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        if state.tabs.tabs().is_empty() {
             container(lh(text("暂无网页——在地址栏输入网址")
                 .size(theme::font::subtitle())
                 .color(theme::color::DIM)))
             .width(Length::Fill)
-            .height(Length::Fill),
-        );
-    }
+            .height(Length::Fill)
+            .into()
+        } else {
+            // 真实网页由 wry webview 叠加渲染,这里只需要一块透明占位
+            // (不能有不透明背景,否则会盖住 webview)。
+            iced_widget::Space::new()
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        };
+
+    content = content.push(if state.bookmarks_open {
+        let bg = region.background.unwrap_or(theme::color::BG);
+        let (list_portion, content_portion) = split_portions(1.0 - bookmarks_split);
+        row![
+            container(body).width(Length::FillPortion(content_portion)),
+            crate::app::divider_bar(
+                crate::app::Divider::BrowserBookmarksSplit,
+                bg,
+                bg,
+                Message::ColumnDragStart,
+            ),
+            bookmarks_panel(state, project_id, Length::FillPortion(list_portion)),
+        ]
+        .height(Length::Fill)
+        .into()
+    } else {
+        body
+    });
 
     container(content.padding(region.padding))
         .width(width)
