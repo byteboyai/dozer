@@ -3,6 +3,7 @@ mod assets;
 mod clipboard_image;
 mod conversation;
 mod delivery;
+mod diff_render;
 mod extensions;
 mod fonts;
 mod git_watch;

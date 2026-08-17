@@ -8,7 +8,6 @@ use crate::goal::Goal;
 use crate::theme;
 use crate::workspace::AddrEvent;
 use dozer_client::Client;
-use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Element, Length};
 use iced_widget::{button, column, container, row, text};
 use std::collections::{HashMap, HashSet};
@@ -486,8 +485,9 @@ pub fn view<'a>(
         .into()
 }
 
-/// 手风琴展开的 diff 内容:`Ok(patch)` 按行首字符 `+`/`-`/` ` 分三色渲染,
-/// `Err(e)` 显示红字,`None`(还没加载完)显示"加载中…"。
+/// 手风琴展开的 diff 内容:`Ok(patch)` 交给共享的逐行染色渲染
+/// (`diff_render::colored_diff_lines`,`+`/`-`/上下文三色),`Err(e)` 显示红字,
+/// `None`(还没加载完)显示"加载中…"。
 fn diff_view<'a>(
     diff: Option<&'a Result<String, String>>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -500,31 +500,7 @@ fn diff_view<'a>(
             .size(theme::font::caption())
             .color(theme::color::RED)
             .into(),
-        Some(Ok(patch)) => {
-            let mut col = column![].spacing(0).padding([4, 12]);
-            for line in patch.lines() {
-                let color = if line.starts_with('+') {
-                    theme::color::GREEN
-                } else if line.starts_with('-') {
-                    theme::color::RED
-                } else {
-                    theme::color::DIM
-                };
-                col = col.push(
-                    text(line.to_string())
-                        .size(theme::font::caption_sm())
-                        .color(color)
-                        .font(iced_widget::core::Font::MONOSPACE)
-                        .line_height(LineHeight::Relative(1.3)),
-                );
-            }
-            container(col)
-                .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-                    background: Some(theme::color::TERM_BG.into()),
-                    ..iced_widget::container::Style::default()
-                })
-                .into()
-        }
+        Some(Ok(patch)) => crate::diff_render::colored_diff_lines(patch),
     }
 }
 
