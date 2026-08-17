@@ -7591,6 +7591,7 @@ fn ssh_terminal_pane<'a>(
     width: Length,
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let region = theme::region::terminal_pane();
     let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         match ws.ssh_active.as_ref() {
             Some((host_id, ssh::SshTabKind::Terminal)) => {
@@ -7616,14 +7617,19 @@ fn ssh_terminal_pane<'a>(
             },
             None => ssh_empty_state(),
         };
-    container(column![ssh_tab_bar(app, ws), body].height(Length::Fill))
-        .width(width)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::BG.into()),
-            border: outer,
-            ..container::Style::default()
-        })
-        .into()
+    container(
+        column![ssh_tab_bar(app, ws), tab_divider(), body]
+            .spacing(region.gap)
+            .height(Length::Fill),
+    )
+    .width(width)
+    .padding(region.padding)
+    .style(move |_t: &iced_widget::Theme| container::Style {
+        background: region.background.map(Into::into),
+        border: outer,
+        ..container::Style::default()
+    })
+    .into()
 }
 
 fn ssh_empty_state<'a>() -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {

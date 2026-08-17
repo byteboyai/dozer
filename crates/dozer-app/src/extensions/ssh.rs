@@ -7,7 +7,7 @@
 use crate::icons;
 use crate::theme;
 use iced_widget::core::Element;
-use iced_widget::{button, column, container, row, text, text_input};
+use iced_widget::{MouseArea, button, column, container, row, stack, text, text_input};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -96,11 +96,20 @@ pub struct WorkspaceState {
     /// 错主机的终端或者崩溃(设计文档 §6 的论证)。
     reopen_after_trust: Option<String>,
     /// 主机卡片上当前鼠标悬停的图标按钮——`(host_id, 按钮位)`。按钮位
-    /// 约定:`0`=文件传输、`1`=终端、`2`=设置(见 `host_card`)。悬停
+    /// 约定:`0`=文件传输、`1`=终端、`2`=设置、`3`=删除(见 `host_card`)。悬停
     /// 状态存这里而不是 `App::hover_anims`,因为 `host_card` 是挂在
     /// `WorkspaceState` 上的纯函数,读不到 `&App`;卡片按钮只需"进/出"
     /// 二态高亮即可,不需要侧栏 rail 那种带渐变时长的动画。
     hover_action: Option<(String, u8)>,
+    /// 已登录过主机的操作系统(发行版)信息——`(host_id, "ubuntu 22.04.5
+    /// LTS")`。只有在主机登录(终端/SFTP 建连成功)后才填充,展示在主机
+    /// 卡片名字后面: `cndb (ubuntu 22.04.5 LTS)`。不落盘:跨会话启动时
+    /// 主机需要重新登录才会重新采集。
+    os_info: HashMap<String, String>,
+    /// 正在等用户确认删除的那台主机 `host_id`。`Some` 时主机面板顶部覆盖
+    /// 一层确认对话框(注意点删除垃圾桶图标只是把 id 记到这里,真正删记录
+    /// 要等用户确认后 `DeleteHost` 才执行)。`None` = 没有待确认的删除。
+    delete_confirm: Option<String>,
 }
 
 impl WorkspaceState {
@@ -123,6 +132,25 @@ impl WorkspaceState {
     /// 字段本身私有,不能让内核直接赋值)。
     pub(crate) fn record_reopen_after_trust(&mut self, host_id: String) {
         self.reopen_after_trust = Some(host_id);
+    }
+    /// 主机登录后采集到的操作系统(发行版)信息。`None` = 还没登录过
+    /// (或登录后采集失败),卡片不展示 OS 段。
+    pub fn os_info(&self, host_id: &str) -> Option<&str> {
+        self.os_info.get(host_id).map(String::as_str)
+    }
+    /// 正在等确认删除的主机 `host_id`(`None` = 没有)。给 `view()` 判是否
+    /// 覆盖确认对话框。
+    pub fn delete_confirm(&self) -> Option<&str> {
+        self.delete_confirm.as_deref()
+    }
+    /// 记"用户点了垃圾桶,想删这台主机"——只记待确认态,真正删除要等
+    /// 确认框里的确认按钮(走 `Message::DeleteHost`)。
+    pub(crate) fn request_delete(&mut self, host_id: String) {
+        self.delete_confirm = Some(host_id);
+    }
+    /// 取消删除确认(点对话框外的遮罩/取消按钮),清掉待确认态。
+    pub(crate) fn cancel_delete(&mut self) {
+        self.delete_confirm = None;
     }
 }
 
@@ -318,6 +346,53 @@ async fn test_connection(host: SshHost, password: Option<String>) -> Result<(), 
     Ok(())
 }
 
+/// 在一条已建好的连接(`handle`)上开一个临时 session channel,执行
+/// `cat /etc/os-release`,从输出里解析出操作系统发行版字符串(优先
+/// `PRETTY_NAME`)。在主机"登录成功"之后调用 —— `Workspace::spawn_ssh_tab`
+/// 的终端任务持有活的 `handle`,内联调用它采集 OS 后 `emit FetchOsResult`。
+///
+/// 返回值是 `Result<String, String>`(只留错误文案),让调用方不需要把
+/// `russh::Error`/IO 错误全部带出去 —— 采集失败只是一条"不展示 OS 段"
+/// 的降级,不值得为它撑起一套错误类型。
+pub(crate) async fn fetch_os_info(
+    handle: &russh::client::Handle<TestHandler>,
+) -> Result<String, String> {
+    let mut channel = handle
+        .channel_open_session()
+        .await
+        .map_err(|e| e.to_string())?;
+    channel
+        .exec(true, "cat /etc/os-release")
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut buf = String::new();
+    loop {
+        match channel.wait().await {
+            Some(russh::ChannelMsg::Data { data }) => {
+                buf.push_str(&String::from_utf8_lossy(&data));
+            }
+            Some(russh::ChannelMsg::Eof) | Some(russh::ChannelMsg::Close) | None => break,
+            Some(_) => continue,
+        }
+    }
+    // `PRETTY_NAME="Ubuntu 22.04.5 LTS"` → `Ubuntu 22.04.5 LTS`。找不到
+    // (非 systemd 发行版也可能没有该字段)就退化成提取 `NAME`/`VERSION`
+    // 拼起来;两者都缺才报错。
+    let parse = |key: &str| -> Option<String> {
+        buf.lines()
+            .find_map(|l| l.strip_prefix(key))
+            .map(|v| v.trim_matches('"').trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    if let Some(p) = parse("PRETTY_NAME=") {
+        return Ok(p);
+    }
+    if let (Some(name), Some(version)) = (parse("NAME="), parse("VERSION=")) {
+        return Ok(format!("{name} {version}"));
+    }
+    Err("无法识别操作系统".to_string())
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     AddHostStart,
@@ -331,6 +406,12 @@ pub enum Message {
     DraftPasswordChanged(String),
     DraftSave,
     DraftCancel,
+    /// 点主机卡片垃圾桶图标:进入"待确认删除"态(把 host_id 记进
+    /// `delete_confirm`,面板顶部弹确认对话框,此时还没删任何东西)。
+    DeleteHostRequest(String),
+    /// 关闭删除确认对话框而不删除(点遮罩或取消按钮)。
+    DeleteHostCancel,
+    /// 用户确认删除:真正从 `hosts` 里移除记录并清理附属状态/磁盘。
     DeleteHost(String),
     TestConnection(String),
     /// 异步测试结果。带 `project_id`,理由同数据库面板(异步结果不能假设
@@ -368,6 +449,13 @@ pub enum Message {
     /// 状态(与 `TestConnectionResult`/`UnknownKeyDetected`/`KeyChanged`
     /// 共用同一列卡片状态,不新增第二列)。
     TerminalConnectFailed(i64, String, usize, String),
+    /// 主机登录成功后采集操作系统信息(`cat /etc/os-release` 的
+    /// `PRETTY_NAME`)的异步结果。采集在 `Workspace::spawn_ssh_tab`/
+    /// SFTP 建连成功后的异步任务里内联做(那里持有活的 `handle`),
+    /// 完成后经 `emit` 送回这条消息落卡片状态。携带 `project_id`(同
+    /// `TestConnectionResult` 的理由)+ `host_id` + 发行版字符串
+    /// (`ubuntu 22.04.5 LTS`)。`Err` 时卡片保持不展示 OS 段。
+    FetchOsResult(i64, String, Result<String, String>),
     /// SFTP tab 内部交互,嵌套消息(见 `sftp::Message`)。内核按 host_id
     /// 路由到对应 `ws.sftp_tabs` 条目,不会转发到这个模块自己的
     /// `update()`(同 `OpenSshTab`/`CloseSshTab` 的既有拦截模式——大部分
@@ -455,10 +543,17 @@ pub fn update(
             }
         }
         Message::DraftCancel => ws_state.editing = None,
+        Message::DeleteHostRequest(id) => ws_state.request_delete(id),
+        Message::DeleteHostCancel => ws_state.cancel_delete(),
         Message::DeleteHost(id) => {
             ws_state.hosts.retain(|h| h.id != id);
             ws_state.test_status.remove(&id);
             ws_state.pending_unknown_keys.remove(&id);
+            // 这台已经被删了,确认对话框也该一起收起来(id 匹配才清,避免
+            // 清掉用户刚点开的、针对另一台主机的待确认态)。
+            if ws_state.delete_confirm.as_deref() == Some(id.as_str()) {
+                ws_state.delete_confirm = None;
+            }
             if let Ok(entry) = keyring_entry(project_id, &id) {
                 let _ = entry.delete_credential();
             }
@@ -611,6 +706,14 @@ pub fn update(
             }
             ws_state.test_status.insert(host_id, TestStatus::Err(err));
         }
+        Message::FetchOsResult(_project_id, host_id, result) => {
+            // 只在成功时写入——失败保持"不展示 OS 段"。不因后来的失败
+            // 覆盖掉已采集到的成功结果(主机可能开过终端、也开过 SFTP,
+            // 采集发生的顺序不定)。
+            if let Ok(os) = result {
+                ws_state.os_info.insert(host_id, os);
+            }
+        }
     }
 }
 
@@ -624,9 +727,10 @@ fn host_card<'a>(
     host: &'a SshHost,
     status: &'a TestStatus,
     hover_action: &'a Option<(String, u8)>,
+    os_info: Option<&'a str>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 卡片上三个图标按钮的悬停高亮:只有"正在 hover 的那颗"是满 GOLD,
-    // 其余 DIM。按钮位约定:0=文件传输、1=终端、2=设置。
+    // 其余 DIM。按钮位约定:0=文件传输、1=终端、2=设置、3=删除。
     let is_hover = |idx: u8| {
         hover_action
             .as_ref()
@@ -673,6 +777,12 @@ fn host_card<'a>(
             "设置",
             2,
         ),
+        icon_btn(
+            crate::icons::IconKind::Trash,
+            Message::DeleteHostRequest(host.id.clone()),
+            "删除",
+            3,
+        ),
     ]
     .spacing(6);
     if matches!(status, TestStatus::UnknownHostKey { .. }) {
@@ -696,20 +806,31 @@ fn host_card<'a>(
         );
     }
 
+    // 名字 + 操作系统信息(已登录过的主机展示 `名 (发行版)`),连接信息
+    // `user@host:port` 换行放在名字下面(原先与名字同行)。操作按钮整组
+    // 右对齐贴卡片右缘,左边留白占满给文本区。
+    let name = match os_info {
+        Some(os) => format!("{} ({os})", host.name),
+        None => host.name.clone(),
+    };
+    let info_column = column![
+        text(name)
+            .size(theme::font::body())
+            .color(theme::color::CREAM),
+        text(format!("{}@{}:{}", host.username, host.host, host.port))
+            .size(theme::font::caption_sm())
+            .color(theme::color::DIM),
+    ]
+    .spacing(2)
+    .align_x(iced_widget::core::alignment::Horizontal::Left);
+
     container(
-        column![
-            row![
-                text(host.name.clone())
-                    .size(theme::font::body())
-                    .color(theme::color::CREAM),
-                text(format!("{}@{}:{}", host.username, host.host, host.port))
-                    .size(theme::font::caption_sm())
-                    .color(theme::color::DIM),
-            ]
-            .spacing(8),
-            actions,
+        row![
+            container(info_column).width(iced_widget::core::Length::Fill),
+            container(actions).align_y(iced_widget::core::alignment::Vertical::Center),
         ]
-        .spacing(8),
+        .spacing(8)
+        .align_y(iced_widget::core::alignment::Vertical::Center),
     )
     .padding(10)
     .width(iced_widget::core::Length::Fill)
@@ -778,17 +899,40 @@ fn host_form<'a>(
     draft: &'a SshHostDraft,
     status: &'a TestStatus,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    // 表单输入框统一底色 `#12202a`(CARD),深于一层的表单容器(容器本身
+    // 无底色,靠 GOLD 描边 + 外层 BG 衬托出层级)。
+    let input_style = |_t: &iced_widget::Theme,
+                       _s: iced_widget::text_input::Status|
+     -> iced_widget::text_input::Style {
+        iced_widget::text_input::Style {
+            background: theme::color::CARD.into(),
+            border: iced_widget::core::Border {
+                color: theme::color::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            icon: theme::color::DIM,
+            placeholder: theme::color::DIM,
+            value: theme::color::CREAM,
+            selection: theme::color::GOLD,
+        }
+    };
+
     let mut col = column![
         text_input("主机名称", &draft.name)
+            .style(input_style)
             .on_input(Message::DraftNameChanged)
             .size(theme::font::body()),
         text_input("Host", &draft.host)
+            .style(input_style)
             .on_input(Message::DraftHostChanged)
             .size(theme::font::body()),
         text_input("port(22)", &draft.port)
+            .style(input_style)
             .on_input(Message::DraftPortChanged)
             .size(theme::font::body()),
         text_input("user name", &draft.username)
+            .style(input_style)
             .on_input(Message::DraftUsernameChanged)
             .size(theme::font::body()),
         row![
@@ -810,12 +954,14 @@ fn host_form<'a>(
     if draft.use_private_key {
         col = col.push(
             text_input("私钥文件路径,如 ~/.ssh/id_ed25519", &draft.key_path)
+                .style(input_style)
                 .on_input(Message::DraftKeyPathChanged)
                 .size(theme::font::body()),
         );
         col = col.push(
             text_input("私钥口令(留空则不修改/无口令)", &draft.password)
                 .secure(true)
+                .style(input_style)
                 .on_input(Message::DraftPasswordChanged)
                 .size(theme::font::body()),
         );
@@ -823,6 +969,7 @@ fn host_form<'a>(
         col = col.push(
             text_input("password(留空则不修改)", &draft.password)
                 .secure(true)
+                .style(input_style)
                 .on_input(Message::DraftPasswordChanged)
                 .size(theme::font::body()),
         );
@@ -844,7 +991,9 @@ fn host_form<'a>(
             })
     };
 
-    let mut buttons = row![text_btn(
+    // 按钮分两组:"测试连接"靠左;保存/取消(以及编辑态才有的删除)靠右,
+    // 中间用 `Fill` 空位把两组顶到卡片两端。
+    let left = row![text_btn(
         "测试连接",
         theme::color::CREAM,
         Message::TestConnection(draft.id.clone().unwrap_or_default(),)
@@ -853,15 +1002,23 @@ fn host_form<'a>(
     // 新建主机(没有 id)时"测试连接"点了也是 no-op(TestConnection 在
     // ws_state.hosts 里查不到这个空字符串 id,直接 return——见
     // ssh::update 的既有实现),"删除"按钮干脆不渲染,没有可删的对象。
+    let mut right = row![].spacing(6);
     if let Some(id) = &draft.id {
-        buttons = buttons.push(text_btn(
+        right = right.push(text_btn(
             "删除",
             theme::color::RED,
             Message::DeleteHost(id.clone()),
         ));
     }
-    buttons = buttons.push(text_btn("保存", theme::color::GOLD, Message::DraftSave));
-    buttons = buttons.push(text_btn("取消", theme::color::DIM, Message::DraftCancel));
+    right = right.push(text_btn("保存", theme::color::CREAM, Message::DraftSave));
+    right = right.push(text_btn("取消", theme::color::DIM, Message::DraftCancel));
+    let buttons = row![
+        left,
+        iced_widget::Space::new().width(iced_widget::core::Length::Fill),
+        right,
+    ]
+    .spacing(6)
+    .align_y(iced_widget::core::alignment::Vertical::Center);
     col = col.push(buttons);
 
     let (status_text, status_color) = match status {
@@ -898,7 +1055,7 @@ fn host_form<'a>(
         .padding(12)
         .width(iced_widget::core::Length::Fill)
         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-            background: Some(theme::color::CARD.into()),
+            background: None,
             border: iced_widget::core::Border {
                 color: theme::color::GOLD,
                 width: 1.0,
@@ -918,7 +1075,8 @@ pub fn view<'a>(
         crate::icons::IconKind::Server,
         "主机"
     )]
-    .spacing(12);
+    .spacing(12)
+    .padding(16);
 
     if ws_state.hosts().is_empty() {
         col = col.push(
@@ -932,6 +1090,7 @@ pub fn view<'a>(
                 h,
                 ws_state.test_status(&h.id),
                 ws_state.hover_action(),
+                ws_state.os_info(&h.id),
             ));
         }
     }
@@ -945,27 +1104,9 @@ pub fn view<'a>(
         col = col.push(host_form(draft, status));
     }
 
-    col = col.push(
-        button(
-            text("＋添加")
-                .size(theme::font::body())
-                .color(theme::color::GOLD),
-        )
-        .on_press(Message::AddHostStart)
-        .padding([8, 16])
-        .style(|_t: &iced_widget::Theme, _s| button::Style {
-            background: Some(theme::color::BG.into()),
-            border: iced_widget::core::Border {
-                color: theme::color::GOLD,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            text_color: theme::color::GOLD,
-            ..button::Style::default()
-        }),
-    );
+    let body = column![col, ssh_footer_bar()].spacing(0);
 
-    container(col.padding(16))
+    let base = container(body)
         .width(width)
         .height(iced_widget::core::Length::Fill)
         .style(
@@ -974,7 +1115,148 @@ pub fn view<'a>(
                 border: outer,
                 ..iced_widget::container::Style::default()
             },
+        );
+
+    // 有"待确认删除的主机"时,在面板上叠一层半透明遮罩 + 确认对话框;
+    // 点遮罩(或对话框的取消)回 `DeleteHostCancel` 收起,确认才真删。
+    if let Some(host_id) = ws_state.delete_confirm() {
+        let dismiss = MouseArea::new(
+            container(column![])
+                .width(iced_widget::core::Length::Fill)
+                .height(iced_widget::core::Length::Fill)
+                .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+                    background: Some(theme::color::SCRIM.into()),
+                    ..iced_widget::container::Style::default()
+                }),
         )
+        .on_press(Message::DeleteHostCancel);
+        return stack![base, dismiss, delete_confirm_popup(ws_state, host_id)]
+            .width(width)
+            .height(iced_widget::core::Length::Fill)
+            .into();
+    }
+
+    base.into()
+}
+
+/// 删除主机的确认对话框:居中卡片,列出要删的主机名,确认(红)才执行
+/// `DeleteHost`,取消/遮罩只清待确认态。视觉参照文件树面板的
+/// `delete_confirm_popup`(CARD 底 + 圆角描边 + 取消/确认两个圆角按钮)。
+fn delete_confirm_popup<'a>(
+    ws_state: &'a WorkspaceState,
+    host_id: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let name = ws_state
+        .hosts()
+        .iter()
+        .find(|h| h.id == host_id)
+        .map(|h| h.name.as_str())
+        .unwrap_or(host_id);
+    let cancel = button(
+        text("取消")
+            .size(theme::font::body())
+            .color(theme::color::CREAM),
+    )
+    .on_press(Message::DeleteHostCancel)
+    .padding([6, 12])
+    .style(|_t: &iced_widget::Theme, _s| button::Style {
+        background: Some(theme::color::CARD.into()),
+        text_color: theme::color::CREAM,
+        border: iced_widget::core::Border {
+            color: theme::color::BORDER,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..button::Style::default()
+    });
+    let confirm = button(
+        text("删除")
+            .size(theme::font::body())
+            .color(theme::color::RED),
+    )
+    .on_press(Message::DeleteHost(host_id.to_string()))
+    .padding([6, 12])
+    .style(|_t: &iced_widget::Theme, _s| button::Style {
+        background: Some(theme::color::CARD.into()),
+        text_color: theme::color::RED,
+        border: iced_widget::core::Border {
+            color: theme::color::RED,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..button::Style::default()
+    });
+
+    let dialog = container(
+        column![
+            text(format!("删除主机 \"{name}\"?"))
+                .size(theme::font::subtitle())
+                .color(theme::color::CREAM),
+            text("这会永久删除这台主机的连接记录。")
+                .size(theme::font::label())
+                .color(theme::color::DIM),
+            row![cancel, confirm].spacing(8),
+        ]
+        .spacing(8),
+    )
+    .padding(16)
+    .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+        background: Some(theme::color::CARD.into()),
+        border: iced_widget::core::Border {
+            color: theme::color::BORDER,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..iced_widget::container::Style::default()
+    });
+
+    container(dialog)
+        .width(iced_widget::core::Length::Fill)
+        .height(iced_widget::core::Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .into()
+}
+
+/// 主机面板底部 footer-bar:1px `BORDER` 分隔线 + `padding([6, 8])` 容器,
+/// 结构与项目面板的 `project_footer_bar` / 文件树面板的 `git_footer_bar`
+/// 一致。当前放「＋添加」单个按钮,底部固定,不随主机列表滚动。
+fn ssh_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let add_btn = button(
+        text("＋添加")
+            .size(theme::font::body())
+            .color(theme::color::GOLD),
+    )
+    .on_press(Message::AddHostStart)
+    .padding([8, 16])
+    .style(|_t: &iced_widget::Theme, _s| button::Style {
+        background: Some(theme::color::BG.into()),
+        border: iced_widget::core::Border {
+            color: theme::color::GOLD,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        text_color: theme::color::GOLD,
+        ..button::Style::default()
+    });
+
+    let bar = row![add_btn].align_y(iced_widget::core::Alignment::Center);
+
+    let top_line = container(iced_widget::Space::new())
+        .width(iced_widget::core::Length::Fill)
+        .height(iced_widget::core::Length::Fixed(1.0))
+        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+            background: Some(theme::color::BORDER.into()),
+            ..iced_widget::container::Style::default()
+        });
+
+    container(column![top_line, bar].spacing(4))
+        .width(iced_widget::core::Length::Fill)
+        .padding([6, 8])
+        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+            background: None,
+            ..iced_widget::container::Style::default()
+        })
         .into()
 }
 

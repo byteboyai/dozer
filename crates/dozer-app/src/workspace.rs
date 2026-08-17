@@ -1570,6 +1570,24 @@ impl Workspace {
                 return;
             }
 
+            // 主机已登录:在同一个连接上开一个临时 session channel 采集
+            // 操作系统信息(`cat /etc/os-release`),结果经 `FetchOsResult`
+            // 落到主机卡片名字后面。与 shell 泵循环并行不冲突(SSH 连接
+            // 支持多 channel),5 秒超时罩住慢命令,采集失败只是"卡片不
+            // 展示 OS 段",不影响终端本身。
+            let os_host_id = host_id.clone();
+            let os_task = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                ssh::fetch_os_info(&handle),
+            )
+            .await
+            .unwrap_or_else(|_| Err("采集操作系统超时".to_string()));
+            let _ = proxy.send_event(Message::Ssh(ssh::Message::FetchOsResult(
+                project_id,
+                os_host_id,
+                os_task,
+            )));
+
             loop {
                 tokio::select! {
                     msg = read_half.wait() => match msg {
