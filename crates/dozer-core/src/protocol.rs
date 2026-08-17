@@ -34,7 +34,7 @@ impl AgentKind {
     /// Constraints）。
     pub fn label(&self) -> &'static str {
         match self {
-            AgentKind::Unknown => "未知",
+            AgentKind::Unknown => "shell",
             AgentKind::Claude => "claude",
             AgentKind::Codebuddy => "codebuddy",
             AgentKind::Opencode => "opencode",
@@ -555,7 +555,7 @@ mod tests {
 
     #[test]
     fn agent_kind_label_matches_variant() {
-        assert_eq!(AgentKind::Unknown.label(), "未知");
+        assert_eq!(AgentKind::Unknown.label(), "shell");
         assert_eq!(AgentKind::Claude.label(), "claude");
         assert_eq!(AgentKind::Codebuddy.label(), "codebuddy");
         assert_eq!(AgentKind::Opencode.label(), "opencode");
