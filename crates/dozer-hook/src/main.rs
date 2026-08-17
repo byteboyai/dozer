@@ -117,7 +117,10 @@ fn forward(agent: AgentKind, event_arg: Option<&str>) {
                 serde_json::Value::String(path.to_string_lossy().into_owned()),
             );
         }
-        if let Some(line) = data.get("transcript_line").filter(|v| !v.is_null()).cloned()
+        if let Some(line) = data
+            .get("transcript_line")
+            .filter(|v| !v.is_null())
+            .cloned()
             && let Err(e) = opencode::append_transcript_line(&cwd, &session_id, &line)
         {
             eprintln!("opencode transcript 落盘失败（已忽略，不影响转发）: {e}");
