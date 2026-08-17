@@ -3659,12 +3659,15 @@ impl App {
                 {
                     self.handle.spawn(async move {
                         let repo_path2 = repo_path.clone();
-                        let branches = tokio::task::spawn_blocking(move || {
-                            crate::delivery::local_branches(&repo_path2).unwrap_or_default()
+                        let (branches, dirty) = tokio::task::spawn_blocking(move || {
+                            let branches =
+                                crate::delivery::local_branches(&repo_path2).unwrap_or_default();
+                            let dirty = crate::delivery::is_dirty(&repo_path2);
+                            (branches, dirty)
                         })
                         .await
                         .unwrap_or_default();
-                        emit(git_log::Message::BranchesLoaded(repo_path, branches));
+                        emit(git_log::Message::BranchesLoaded(repo_path, branches, dirty));
                     });
                 }
             }

@@ -224,8 +224,9 @@ pub enum Message {
     /// `delivery::local_branches`)。
     BranchPickerOpen,
     BranchPickerClose,
-    /// 内核异步查完本地分支列表后落地(仓库路径核对一致才接受)。
-    BranchesLoaded(PathBuf, Vec<String>),
+    /// 内核异步查完本地分支列表 + 工作区 dirty 状态后落地(仓库路径核对
+    /// 一致才接受)。`bool` = 工作区是否有未提交改动(`delivery::is_dirty`)。
+    BranchesLoaded(PathBuf, Vec<String>, bool),
     /// 点某个分支——内核截获处理(同 `LoadMore`/`ProjectTabOpen` 的既有
     /// 例外模式),不会转发到 `update`(见其 `unreachable!` 分支)。
     BranchSwitch(String),
@@ -261,6 +262,10 @@ pub struct State {
     /// 当前仓库的本地分支列表(`delivery::local_branches` 结果缓存,内核在
     /// `BranchPickerOpen` 首次展开时异步查一次)。
     branches: Vec<String>,
+    /// 当前仓库工作区是否有未提交改动(`delivery::is_dirty` 结果,随
+    /// `BranchesLoaded` 一起落地)。dirty 时锁定除当前分支外的其余分支,
+    /// 语义跟 `files.rs::branch_picker_popup` 的 dirty-lock 一致。
+    dirty: bool,
     /// 分支切换请求进行中(禁用下拉交互、显示"切换中…")。
     branch_switch_pending: bool,
 }
@@ -403,10 +408,11 @@ pub fn update(
             state.branch_picker_open = false;
             None
         }
-        Message::BranchesLoaded(repo_path, branches) => {
+        Message::BranchesLoaded(repo_path, branches, dirty) => {
             let matches = state.cache.as_ref().map(|c| c.repo_path()) == Some(repo_path.as_path());
             if matches {
                 state.branches = branches;
+                state.dirty = dirty;
             }
             None
         }
@@ -939,6 +945,13 @@ fn branch_picker_view<'a>(
         return iced_widget::Space::new().into();
     }
     let mut list = column![].spacing(2).width(Length::Fill);
+    if state.branch_switch_pending {
+        list = list.push(
+            text("切换中…")
+                .size(theme::font::body())
+                .color(theme::color::DIM),
+        );
+    }
     if state.branches.is_empty() {
         list = list.push(
             text("暂无本地分支")
@@ -946,34 +959,46 @@ fn branch_picker_view<'a>(
                 .color(theme::color::DIM),
         );
     }
+    // dirty(有未提交改动)时锁定除当前分支外的其余分支;切换请求进行中时
+    // 全部锁定——跟 `branch_toggle_button` 的 `branch_switch_pending` 禁用
+    // 语义一致。
     for name in &state.branches {
         let is_current = Some(name.as_str()) == head_branch;
+        let locked = state.branch_switch_pending || (state.dirty && !is_current);
         let color = if is_current {
             theme::color::GOLD
+        } else if locked {
+            theme::color::DIM
         } else {
             theme::color::CREAM
         };
-        let row_btn =
-            iced_widget::button(text(name.clone()).size(theme::font::body()).color(color))
-                .width(Length::Fill)
-                .padding([6, 10])
-                .style(
-                    move |_t: &iced_widget::Theme, s: iced_widget::button::Status| {
-                        let base = iced_widget::button::Style {
-                            background: None,
-                            text_color: color,
-                            ..iced_widget::button::Style::default()
-                        };
-                        match s {
-                            iced_widget::button::Status::Hovered => iced_widget::button::Style {
+        let label = if is_current && state.dirty {
+            format!("{name} (Uncommitted)")
+        } else {
+            name.clone()
+        };
+        let row_btn = iced_widget::button(text(label).size(theme::font::body()).color(color))
+            .width(Length::Fill)
+            .padding([6, 10])
+            .style(
+                move |_t: &iced_widget::Theme, s: iced_widget::button::Status| {
+                    let base = iced_widget::button::Style {
+                        background: None,
+                        text_color: color,
+                        ..iced_widget::button::Style::default()
+                    };
+                    match s {
+                        iced_widget::button::Status::Hovered if !locked => {
+                            iced_widget::button::Style {
                                 background: Some(theme::color::TAB_HOVER.into()),
                                 ..base
-                            },
-                            _ => base,
+                            }
                         }
-                    },
-                );
-        let row_btn = if state.branch_switch_pending || is_current {
+                        _ => base,
+                    }
+                },
+            );
+        let row_btn = if locked || is_current {
             row_btn
         } else {
             row_btn.on_press(Message::BranchSwitch(name.clone()))
@@ -1485,11 +1510,12 @@ mod tests {
         let handle = tokio::runtime::Handle::current();
         update(
             &mut state,
-            Message::BranchesLoaded(repo_path, vec!["main".to_string(), "dev".to_string()]),
+            Message::BranchesLoaded(repo_path, vec!["main".to_string(), "dev".to_string()], true),
             &handle,
             |_| {},
         );
         assert_eq!(state.branches, vec!["main".to_string(), "dev".to_string()]);
+        assert!(state.dirty, "dirty 标记应随分支列表一起落地");
     }
 
     #[tokio::test]
@@ -1501,11 +1527,12 @@ mod tests {
         let handle = tokio::runtime::Handle::current();
         update(
             &mut state,
-            Message::BranchesLoaded(PathBuf::from("/tmp/b"), vec!["main".to_string()]),
+            Message::BranchesLoaded(PathBuf::from("/tmp/b"), vec!["main".to_string()], true),
             &handle,
             |_| {},
         );
         assert!(state.branches.is_empty(), "仓库路径对不上,不该落地");
+        assert!(!state.dirty, "仓库路径对不上,dirty 也不该落地");
     }
 
     #[tokio::test]

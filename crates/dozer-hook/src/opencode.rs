@@ -25,11 +25,10 @@ fn home_dir() -> PathBuf {
 }
 
 /// cwd + dozer session id → 这次会话代写的 transcript 文件路径。
-/// 当前 crate 内只有 `append_transcript_line` 间接用到路径（走 `_in` 变体），
-/// 保留这个公开入口是给 spec §5.3 契约和未来调用方/调试用的——dozer-hook
-/// 是 bin crate，"pub" 只对兄弟模块有意义，没有外部消费者，所以这里
-/// 显式 `#[expect(dead_code)]` 而不是删掉。
-#[expect(dead_code)]
+/// `main.rs::forward` 用它把这个路径写回 hook 上报给 dozerd 的
+/// `data.transcript_path` 字段——OpenCode 插件自己发来的 payload 里没有
+/// 这个字段(2026-08-17 之前的缺口,见该调用点注释),没有这次调用会一直
+/// 是死代码。
 pub fn transcript_path(cwd: &str, session_id: &str) -> PathBuf {
     transcript_path_in(&home_dir(), cwd, session_id)
 }
