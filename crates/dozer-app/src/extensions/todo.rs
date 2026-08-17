@@ -7,6 +7,7 @@
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
+use crate::app::{App, HoverId};
 use crate::workspace::AddrEvent;
 use crate::{icons, theme};
 use iced_widget::core::{Border, Color, Element, Length, mouse};
@@ -639,6 +640,10 @@ pub enum Message {
     /// 改草稿,`Cancel` 丢弃退出;提交走失焦 `cancel_markdown_edit` 写盘
     /// (回车是换行不是提交——main.rs 把回车翻成 `Text("\n")`)。
     MarkdownEvent(AddrEvent),
+    /// 悬停某张任务卡(由 `todo_card` 外层的 `MouseArea::on_enter/on_exit`
+    /// 构造),转交内核的悬停动画表(`app.rs::set_hover`),与全应用其它卡片
+    /// 用同一套 hover 机制。
+    Hover(HoverId, bool),
 }
 
 /// 重读 `.dozer/todo.md`,刷新 `items`/`mtime`。文件不存在/读失败按空
@@ -829,6 +834,8 @@ pub fn update(
     project_path: &std::path::Path,
 ) {
     match msg {
+        // 卡片悬停由内核 `App::update` 拦截转发到 `set_hover`,不会到这。
+        Message::Hover(_, _) => {}
         Message::Toggle(idx) => {
             let Some(item) = ws_state.items.get(idx) else {
                 return;
@@ -1067,6 +1074,7 @@ pub fn update(
 #[allow(clippy::too_many_arguments)]
 pub fn view<'a>(
     app_state: &'a AppState,
+    app: &App,
     ws_state: &'a WorkspaceState,
     project_id: i64,
     tabs: &[SessionTabSummary],
@@ -1138,11 +1146,12 @@ pub fn view<'a>(
 
     // ---- 右栏 pane：tab 段 + 视图主体 ----
     let tabs_bar = todo_view_tabs(ws_state.view_mode);
-    let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        match ws_state.view_mode {
-            TodoViewMode::List => todo_list_view(app_state, ws_state, project_id, &states, tabs),
-            TodoViewMode::Markdown => todo_markdown_view(project_path, ws_state),
-        };
+    let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = match ws_state
+        .view_mode
+    {
+        TodoViewMode::List => todo_list_view(app_state, app, ws_state, project_id, &states, tabs),
+        TodoViewMode::Markdown => todo_markdown_view(project_path, ws_state),
+    };
     let content_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         container(column![tabs_bar, crate::app::tab_divider(), body].height(Length::Fill))
             .width(content_width)
@@ -1355,6 +1364,7 @@ fn todo_search_bar<'a>(
 /// 列表视图主体：搜索栏 + 编号行列表 + 底部新增输入。
 fn todo_list_view<'a>(
     app_state: &'a AppState,
+    app: &App,
     ws_state: &'a WorkspaceState,
     project_id: i64,
     states: &[TodoState],
@@ -1435,6 +1445,7 @@ fn todo_list_view<'a>(
             }
             list = list.push(todo_list_row(
                 app_state,
+                app,
                 ws_state,
                 project_id,
                 states,
@@ -1451,6 +1462,7 @@ fn todo_list_view<'a>(
         for (i, &idx) in done_idx.iter().enumerate() {
             list = list.push(todo_list_row(
                 app_state,
+                app,
                 ws_state,
                 project_id,
                 states,
@@ -1539,6 +1551,7 @@ fn todo_markdown_view<'a>(
 #[allow(clippy::too_many_arguments)]
 fn todo_list_row<'a, 'b>(
     app_state: &'a AppState,
+    app: &App,
     ws_state: &'a WorkspaceState,
     project_id: i64,
     states: &[TodoState],
@@ -1557,6 +1570,7 @@ fn todo_list_row<'a, 'b>(
     let key = todo_line_key(&item.text);
     let meta = app_state.meta_for(project_id, key);
     let dispatch = meta.and_then(|m| m.dispatch.as_ref());
+    let hovered = app.hover_progress(HoverId::TodoCard(idx)) > 0.0;
     if let Some((editing_idx, draft)) = &ws_state.editing_content
         && *editing_idx == idx
     {
@@ -1576,6 +1590,7 @@ fn todo_list_row<'a, 'b>(
         existing_tabs,
         grabbing,
         is_drag_source,
+        hovered,
     )
 }
 
@@ -1602,7 +1617,8 @@ fn drag_insert_indicator() -> Element<'static, Message, iced_widget::Theme, iced
 /// 统一卡片组件：列表视图使用的边框卡片视觉，取代原来的
 /// `todo_row`(扁平高亮行)。结构自上而下：编号 + 日期徽章(calendar 图标 →
 /// 日历选择器)+ 状态静态文字 → checkbox + 任务文字(点文字进入内容编辑)
-/// → Assign 按钮(仅待办未派发时)。选中态左侧加 3px 金色竖条。
+/// → Assign 按钮(仅待办未派发时)。选中/一般/hover 三态走统一卡片样式
+/// (选中=金边、hover=金边+填充、一般态=描边)。
 #[allow(clippy::too_many_arguments)]
 fn todo_card<'a, 'b>(
     number: usize,
@@ -1623,6 +1639,7 @@ fn todo_card<'a, 'b>(
     existing_tabs: &'b [(&'b str, String)],
     grabbing: bool,
     is_drag_source: bool,
+    hovered: bool,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let done = item.done;
 
@@ -1786,41 +1803,29 @@ fn todo_card<'a, 'b>(
 
     let card_body = column![top_row, body_row, bottom_row].spacing(8);
 
-    let accent = container(iced_widget::space::Space::new())
-        .width(Length::Fixed(3.0))
-        .height(Length::Fill)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: if selected {
-                Some(theme::color::GOLD.into())
-            } else {
-                None
-            },
-            ..container::Style::default()
-        });
-
-    let inner = row![accent, container(card_body).padding(10).width(Length::Fill)].spacing(0);
+    // 统一卡片样式:选中=金边(无背景)、hover=金边+填充、一般态=描边(无
+    // 背景)——与 Agent 卡片三态对齐,不再用左侧 3px 金竖条表示选中。
+    let inner = container(card_body).padding(10).width(Length::Fill);
 
     let card = container(inner)
         .width(Length::Fill)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::CARD.into()),
+        .style(move |_t: &iced_widget::Theme| {
             // 正在被拖起的那张卡片描边变金、加粗——跟"插入指示线"配合给
             // 出"这张卡片被拿起来了/会落在指示线那里"的反馈,不再靠其它
             // 卡片瞬间跳位来表达换位(见 `todo_list_view` 的改版说明)。
-            border: if is_drag_source {
-                Border {
-                    color: theme::color::GOLD,
-                    width: 1.5,
-                    radius: 6.0.into(),
+            if is_drag_source {
+                container::Style {
+                    background: Some(theme::color::CARD.into()),
+                    border: Border {
+                        color: theme::color::GOLD,
+                        width: 1.5,
+                        radius: crate::theme::cards::CARD_RADIUS.into(),
+                    },
+                    ..container::Style::default()
                 }
             } else {
-                Border {
-                    color: theme::color::BORDER,
-                    width: 1.0,
-                    radius: 6.0.into(),
-                }
-            },
-            ..container::Style::default()
+                crate::theme::cards::container_card(selected, hovered, theme::color::CARD)
+            }
         });
 
     let mut stacked = column![card];
@@ -1840,6 +1845,8 @@ fn todo_card<'a, 'b>(
     // 整张卡显示抓取光标。
     let area = MouseArea::new(stacked)
         .on_move(move |_| Message::DragMove(idx))
+        .on_enter(Message::Hover(HoverId::TodoCard(idx), true))
+        .on_exit(Message::Hover(HoverId::TodoCard(idx), false))
         .on_press(Message::RowSelect(if selected { None } else { Some(idx) }));
     if grabbing {
         area.interaction(mouse::Interaction::Grabbing).into()

@@ -191,6 +191,25 @@ pub enum HoverId {
     /// 数据库面板 schema 树"返回"按钮(`ChevronLeft`):静止 DIM,hover 过渡
     /// 到 GOLD(见 `extensions/database.rs`)。
     DatabaseSchemaBack,
+    /// Todo 面板单个任务卡(按下标区分):hover 时填充 `CARD` 背景 + 金色描边
+    /// (见 `extensions::todo::todo_card`,统一卡片样式)。
+    TodoCard(usize),
+    /// Git Log 面板 commit 列表某行(按下标区分):hover 时填充 `CARD` 背景 +
+    /// 金色描边(见 `extensions::git_log::commit_list_view`,统一卡片样式)。
+    Commit(usize),
+    /// Git Log 面板改动文件列表某行(按下标区分):hover 时填充 `CARD` 背景 +
+    /// 金色描边(见 `extensions::git_log::file_list_view`,统一卡片样式)。
+    GitFile(usize),
+    /// 主机面板单个主机卡(按 host_id 哈希区分,`HoverId` 整体 `Copy` 不能
+    /// 塞 `String`,同 `SshTabItem` 的精度取舍):hover 时填充 `CARD` 背景 +
+    /// 金色描边(见 `extensions::ssh::host_card`,统一卡片样式)。
+    HostCard(u64),
+    /// 首页"最近的文件"卡某行(按下标区分):hover 时填充 `CARD` 背景 + 金色
+    /// 描边(见 `homespace::home_recent_files_card`,统一卡片样式)。
+    RecentFile(usize),
+    /// 首页"最近的对话"卡某行(按下标区分):hover 时填充 `CARD` 背景 + 金色
+    /// 描边(见 `homespace::home_recent_conversations_card`,统一卡片样式)。
+    RecentConversation(usize),
 }
 
 /// 一个可平滑过渡的 hover 动画状态机。iced 0.14 无内置动画 API,这套自驱
@@ -3330,7 +3349,10 @@ impl App {
                 self.set_hover(id, hovered);
             }
             Message::Database(msg) => self.database_message(msg),
-            Message::Todo(msg) => self.todo_message(msg),
+            Message::Todo(msg) => match msg {
+                todo::Message::Hover(id, h) => self.set_hover(id, h),
+                other => self.todo_message(other),
+            },
             // 文件树右键"搜索"弹窗:`SearchResults` 带 `project_id`,异步结果
             // 按所属项目路由(用户可能已切走);其余交互投当前聚焦项目。
             Message::Search(search::Message::SearchResults(project_id, result)) => {
@@ -3720,6 +3742,10 @@ impl App {
                 });
             }
             Message::GitLog(msg) => {
+                if let git_log::Message::Hover(id, h) = msg {
+                    self.set_hover(id, h);
+                    return;
+                }
                 // 分支切换成功后(checkout 改了 HEAD/工作区),commit 列表要重拉。
                 let is_branch_switch_success =
                     matches!(&msg, git_log::Message::BranchSwitchDone(Ok(())));
@@ -4011,6 +4037,10 @@ impl App {
                 self.ssh_terminal_connect_failed(project_id, host_id, tab_id, err)
             }
             Message::Ssh(msg) => {
+                if let ssh::Message::Hover(id, h) = msg {
+                    self.set_hover(id, h);
+                    return;
+                }
                 self.with_focused_project(|ws, io| {
                     let Some(project) = ws.project.as_ref() else {
                         return;
@@ -6820,6 +6850,7 @@ fn left_panel_area<'a>(
                 .into()
             }
             LeftView::GitLog => git_log::view(
+                app,
                 &app.git_log,
                 ws.project_panel.worktrees(),
                 app.dims.git_log_split,
@@ -6847,6 +6878,7 @@ fn left_panel_area<'a>(
                 let (list_portion, content_portion) = split_portions(app.dims.todo_split);
                 let (sidebar_pane, content_pane) = todo::view(
                     &app.todo,
+                    app,
                     &ws.todo,
                     project_id,
                     &tabs,
@@ -6929,6 +6961,7 @@ fn left_panel_area<'a>(
                 }
                 let (list_portion, content_portion) = split_portions(app.dims.ssh_split);
                 let list_pane = ssh::view(
+                    app,
                     &ws.ssh,
                     Length::FillPortion(list_portion),
                     zone_pane_border(zone, lc),
@@ -7786,7 +7819,7 @@ fn tab_item(
 /// `derive(Copy)`,`String` 不是 `Copy`,退化成 `u64`,同 `todo_line_key`
 /// 的既有精度取舍——碰撞在同一台主机的 tab hover 高亮场景下不构成实际
 /// 风险)。
-fn ssh_tab_hover_key(host_id: &str) -> u64 {
+pub(crate) fn ssh_tab_hover_key(host_id: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     host_id.hash(&mut hasher);

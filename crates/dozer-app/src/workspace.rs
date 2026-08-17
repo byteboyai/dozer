@@ -2421,20 +2421,10 @@ pub(crate) fn conversation_list_pane(
         .on_press(Message::ConversationOpen(c.path.clone()))
         .width(Length::Fill)
         .padding(10)
-        .style(move |_t, _s| button::Style {
-            background: Some(theme::color::CARD.into()),
-            text_color: theme::color::CREAM,
-            border: Border {
-                color: if current {
-                    theme::color::GOLD
-                } else {
-                    theme::color::BORDER
-                },
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..button::Style::default()
-        });
+        .style(crate::theme::cards::button_card(
+            current,
+            theme::color::CARD,
+        ));
         cards = cards.push(card);
     }
     content = content.push(
@@ -2513,9 +2503,20 @@ pub(crate) fn agent_list_pane<'a>(
             .color(theme::color::DIM)));
     } else {
         for (agent, idxs) in group_tabs_by_agent(&ws.tabs) {
-            content = content.push(lh(text(format!("{}（{}）", agent.label(), idxs.len()))
-                .size(theme::font::caption())
-                .color(theme::color::DIM)));
+            content = content.push(
+                row![
+                    icons::view(
+                        agent_icon(agent),
+                        crate::theme::icon_size::row(),
+                        agent_dot_color(agent),
+                    ),
+                    lh(text(format!("{}（{}）", agent.label(), idxs.len()))
+                        .size(theme::font::caption())
+                        .color(theme::color::DIM)),
+                ]
+                .align_y(iced_widget::core::alignment::Vertical::Center)
+                .spacing(8),
+            );
             for idx in idxs {
                 content = content.push(agent_card(app, ws, idx));
             }
@@ -2538,8 +2539,8 @@ pub(crate) fn agent_list_pane<'a>(
 /// 工作内容"(优先 Todo 派发的任务标题,拿不到就用 transcript 最后活动
 /// 摘要兜底,都没有就省略)紧跟工作区文案(分支名+脏标),同一行不换行
 /// (卡片改版要求,work_content 在前);3) 状态点 + 状态文字。整卡可点
-/// 选中该 tab(`idx == ws.active` 时 `theme::color::CARD` 背景高亮,同
-/// 项目树选中行的手法)。`app` 只用来读 `todo::AppState`(派发记录反查
+/// 选中该 tab(`idx == ws.active` 时金色边框高亮、无背景;hover 时显示
+/// `CARD` 背景 + 金色边框)。`app` 只用来读 `todo::AppState`(派发记录反查
 /// 要跨 `App`/`Workspace` 两边的状态,`agent_card` 原先读不到 `App`,
 /// 调用链上唯一多穿一层的地方)。
 pub(crate) fn agent_card<'a>(
@@ -2619,20 +2620,7 @@ pub(crate) fn agent_card<'a>(
         // `Message::SelectTab` 文档,2026-08-17 修的真实 bug)。
         .on_press(Message::SelectTabNoDrag(idx))
         .width(Length::Fill)
-        .style(move |_t, _s| button::Style {
-            background: if active {
-                Some(theme::color::CARD.into())
-            } else {
-                None
-            },
-            border: Border {
-                color: theme::color::BORDER,
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            text_color: theme::color::CREAM,
-            ..button::Style::default()
-        })
+        .style(crate::theme::cards::button_card(active, theme::color::CARD))
         .into()
 }
 

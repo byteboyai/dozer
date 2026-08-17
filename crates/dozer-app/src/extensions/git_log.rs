@@ -6,11 +6,12 @@
 //! 只验证数据链路是否走得通,不追求 curve/fork 的像素级还原:每条 track
 //! 画一根直线,commit 是线上的一个圆点,父子关系用直线连接(不是贝塞尔)。
 //! 验证通过、决定转正时,再补动画/交互/性能优化。
+use crate::app::{App, HoverId};
 use crate::delivery::WorktreeInfo;
 use crate::theme;
 use iced_widget::core::alignment;
 use iced_widget::core::{Border, Element, Font, Length};
-use iced_widget::{column, container, row, scrollable, text};
+use iced_widget::{MouseArea, column, container, row, scrollable, text};
 use std::path::{Path, PathBuf};
 
 /// 首次打开面板拉多少个 commit——够看出分叉/合并的形状,又不至于让
@@ -238,6 +239,10 @@ pub enum Message {
     /// 三栏布局里右侧上下分割线开始拖拽——内核截获,转成 app 级
     /// `RowDragStart(GitLogFileDiffSplit)`。
     RowDragStart,
+    /// 卡片(commit 行 / diff 文件行)的鼠标悬停进/出:内核 `App::update`
+    /// 里拦截,转成 `Message::Hover(HoverId, bool)` 驱动统一的卡片
+    /// 悬停动画,不会转发到 `update`。
+    Hover(HoverId, bool),
 }
 
 /// Git Log 面板的全部状态。现在挂在 `App`(不按项目分,见设计文档"非
@@ -339,6 +344,8 @@ pub fn update(
     emit: impl Fn(Message) + Send + 'static,
 ) -> Option<Message> {
     match msg {
+        // 卡片悬停由内核 `App::update` 拦截转发到 `set_hover`,不会到这。
+        Message::Hover(_, _) => None,
         Message::SelectCommit(oid) => {
             state.selected = Some(oid);
             state.detail = None;
@@ -628,12 +635,13 @@ fn ref_labels_text(refs: &[RefLabel], head_branch: Option<&str>) -> String {
 /// refs 标签 + summary,整行可点选中(`Message::SelectCommit`),选中态
 /// 左侧金色竖条高亮(对齐 Todo/Files 面板既有选中行视觉语言)。
 fn commit_list_view<'a>(
+    app: &App,
     snapshot: &'a GitLogSnapshot,
     selected: Option<git2::Oid>,
     head_branch: Option<&'a str>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut list = column![].spacing(2);
-    for row in &snapshot.rows {
+    for (i, row) in snapshot.rows.iter().enumerate() {
         let is_selected = selected == Some(row.oid);
         let icon_kind = if row.is_merge {
             crate::icons::IconKind::GitMerge
@@ -665,20 +673,18 @@ fn commit_list_view<'a>(
                 .size(theme::font::caption())
                 .color(theme::color::CREAM),
         );
-        let accent = container(iced_widget::Space::new())
-            .width(Length::Fixed(3.0))
-            .height(Length::Fill)
-            .style(move |_t: &iced_widget::Theme| container::Style {
-                background: if is_selected {
-                    Some(theme::color::GOLD.into())
-                } else {
-                    None
-                },
-                ..container::Style::default()
-            });
-        let inner = row![accent, container(line).padding([4, 8]).width(Length::Fill)].spacing(0);
-        let area = iced_widget::MouseArea::new(inner)
+        // 统一卡片样式:选中/一般/hover 三态(选中=金边、hover=金边+填充、
+        // 一般态=描边),不再用左侧 3px 金竖条表示选中。
+        let hovered = app.hover_progress(HoverId::Commit(i)) > 0.0;
+        let inner = container(line).padding([4, 8]).width(Length::Fill).style(
+            move |_t: &iced_widget::Theme| {
+                crate::theme::cards::container_card(is_selected, hovered, theme::color::CARD)
+            },
+        );
+        let area = MouseArea::new(inner)
             .interaction(iced_widget::core::mouse::Interaction::Pointer)
+            .on_enter(Message::Hover(HoverId::Commit(i), true))
+            .on_exit(Message::Hover(HoverId::Commit(i), false))
             .on_press(Message::SelectCommit(row.oid));
         list = list.push(area);
     }
@@ -689,8 +695,10 @@ fn commit_list_view<'a>(
 }
 
 /// 右上文件列表:选中 commit 改动的每个文件一行(状态字符 + 路径),点击
-/// 发 `Message::SelectFile`,选中态同 `commit_list_view` 的左侧金色竖条。
+/// 发 `Message::SelectFile`,选中态同 `commit_list_view` 的金边(统一卡片样式:
+/// 选中=金边、hover=金边+填充、一般态=描边)。
 fn file_list_view<'a>(
+    app: &App,
     detail: &'a Result<CommitDetail, String>,
     selected_file: Option<&'a str>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -705,7 +713,7 @@ fn file_list_view<'a>(
         }
         Ok(detail) => {
             let mut list = column![].spacing(2);
-            for f in &detail.files {
+            for (i, f) in detail.files.iter().enumerate() {
                 let is_selected = selected_file == Some(f.path.as_str());
                 let color = match f.status {
                     git2::Delta::Added => theme::color::GREEN,
@@ -719,21 +727,22 @@ fn file_list_view<'a>(
                         .color(theme::color::CREAM),
                 ]
                 .spacing(4);
-                let accent = container(iced_widget::Space::new())
-                    .width(Length::Fixed(3.0))
-                    .height(Length::Fill)
-                    .style(move |_t: &iced_widget::Theme| container::Style {
-                        background: if is_selected {
-                            Some(theme::color::GOLD.into())
-                        } else {
-                            None
-                        },
-                        ..container::Style::default()
-                    });
-                let inner =
-                    row![accent, container(line).padding([2, 8]).width(Length::Fill)].spacing(0);
-                let area = iced_widget::MouseArea::new(inner)
+                // 统一卡片样式:选中/一般/hover 三态(选中=金边、hover=金边+填充、
+                // 一般态=描边),不再用左侧 3px 金竖条表示选中。
+                let hovered = app.hover_progress(HoverId::GitFile(i)) > 0.0;
+                let inner = container(line).padding([2, 8]).width(Length::Fill).style(
+                    move |_t: &iced_widget::Theme| {
+                        crate::theme::cards::container_card(
+                            is_selected,
+                            hovered,
+                            theme::color::CARD,
+                        )
+                    },
+                );
+                let area = MouseArea::new(inner)
                     .interaction(iced_widget::core::mouse::Interaction::Pointer)
+                    .on_enter(Message::Hover(HoverId::GitFile(i), true))
+                    .on_exit(Message::Hover(HoverId::GitFile(i), false))
                     .on_press(Message::SelectFile(f.path.clone()));
                 list = list.push(area);
             }
@@ -750,6 +759,7 @@ fn file_list_view<'a>(
 /// 两条 split 比例由内核(`app.rs`)持有并传进来(与 Todo/Project 面板"内核
 /// 传 split 值进来"的既有模式一致)。
 pub fn view<'a>(
+    app: &App,
     state: &'a State,
     worktrees: &'a [WorktreeInfo],
     git_log_split: f32,
@@ -790,7 +800,7 @@ pub fn view<'a>(
                 .color(theme::color::RED),
         );
     }
-    left = left.push(commit_list_view(snapshot, state.selected, head_branch));
+    left = left.push(commit_list_view(app, snapshot, state.selected, head_branch));
     let load_more = iced_widget::button(
         text("加载更多提交 (+200)")
             .size(theme::font::caption())
@@ -811,7 +821,7 @@ pub fn view<'a>(
             let (top_portion, bottom_portion) =
                 crate::workspace::split_portions(git_log_file_diff_split);
             column![
-                container(file_list_view(detail, state.selected_file.as_deref()))
+                container(file_list_view(app, detail, state.selected_file.as_deref()))
                     .height(Length::FillPortion(top_portion)),
                 crate::app::horizontal_divider_bar(
                     theme::color::BG,

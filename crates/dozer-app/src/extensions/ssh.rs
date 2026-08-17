@@ -4,6 +4,7 @@
 //! SSH 终端(阶段 2)/SFTP(阶段 3)留后续,见
 //! `docs/superpowers/specs/2026-08-08-ssh-panel-phase1-design.md`。
 
+use crate::app::{App, HoverId, ssh_tab_hover_key};
 use crate::icons;
 use crate::theme;
 use iced_widget::core::Element;
@@ -463,6 +464,10 @@ pub enum Message {
     /// 要么需要直接改 `ws.sftp_tabs`,`ssh::update` 只有 `&mut ws.ssh`
     /// 够不到)。
     Sftp(sftp::Message),
+    /// 主机卡片的鼠标悬停进/出:内核 `App::update` 里拦截,转成
+    /// `Message::Hover(HoverId, bool)` 驱动统一的卡片悬停动画,不会
+    /// 转发到 `update`。
+    Hover(HoverId, bool),
 }
 
 pub fn update(
@@ -474,6 +479,8 @@ pub fn update(
     emit: impl Fn(Message) + Send + 'static,
 ) {
     match msg {
+        // 卡片悬停由内核 `App::update` 拦截转发到 `set_hover`,不会到这。
+        Message::Hover(_, _) => {}
         Message::AddHostStart => ws_state.editing = Some(SshHostDraft::default()),
         Message::HoverAction(v) => ws_state.hover_action = v,
         Message::EditHostStart(id) => {
@@ -728,6 +735,7 @@ fn host_card<'a>(
     status: &'a TestStatus,
     hover_action: &'a Option<(String, u8)>,
     os_info: Option<&'a str>,
+    hovered: bool,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 卡片上三个图标按钮的悬停高亮:只有"正在 hover 的那颗"是满 GOLD,
     // 其余 DIM。按钮位约定:0=文件传输、1=终端、2=设置、3=删除。
@@ -824,7 +832,7 @@ fn host_card<'a>(
     .spacing(2)
     .align_x(iced_widget::core::alignment::Horizontal::Left);
 
-    container(
+    let card = container(
         row![
             container(info_column).width(iced_widget::core::Length::Fill),
             container(actions).align_y(iced_widget::core::alignment::Vertical::Center),
@@ -834,16 +842,19 @@ fn host_card<'a>(
     )
     .padding(10)
     .width(iced_widget::core::Length::Fill)
-    .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-        background: Some(theme::color::CARD.into()),
-        border: iced_widget::core::Border {
-            color: theme::color::BORDER,
-            width: 1.0,
-            radius: 8.0.into(),
-        },
-        ..iced_widget::container::Style::default()
-    })
-    .into()
+    .style(move |_t: &iced_widget::Theme| {
+        crate::theme::cards::container_card(false, hovered, theme::color::CARD)
+    });
+    MouseArea::new(card)
+        .on_enter(Message::Hover(
+            HoverId::HostCard(ssh_tab_hover_key(&host.id)),
+            true,
+        ))
+        .on_exit(Message::Hover(
+            HoverId::HostCard(ssh_tab_hover_key(&host.id)),
+            false,
+        ))
+        .into()
 }
 
 /// 单选圆点:选中态 `GOLD` 实心 + `GOLD` 描边,未选中态空心 `BORDER`
@@ -1067,6 +1078,7 @@ fn host_form<'a>(
 }
 
 pub fn view<'a>(
+    app: &App,
     ws_state: &'a WorkspaceState,
     width: iced_widget::core::Length,
     outer: iced_widget::core::Border,
@@ -1086,11 +1098,13 @@ pub fn view<'a>(
         );
     } else {
         for h in ws_state.hosts() {
+            let hovered = app.hover_progress(HoverId::HostCard(ssh_tab_hover_key(&h.id))) > 0.0;
             col = col.push(host_card(
                 h,
                 ws_state.test_status(&h.id),
                 ws_state.hover_action(),
                 ws_state.os_info(&h.id),
+                hovered,
             ));
         }
     }

@@ -408,16 +408,7 @@ fn home_project_list_view(
             .on_press(Message::ProjectSelect(p.id))
             .width(Length::Fill)
             .padding(10)
-            .style(|_t: &iced_widget::Theme, _s| button::Style {
-                background: Some(theme::homespace_color::card_bg().into()),
-                text_color: theme::homespace_color::cream(),
-                border: Border {
-                    color: theme::homespace_color::border(),
-                    width: 1.0,
-                    radius: 8.0.into(),
-                },
-                ..button::Style::default()
-            });
+            .style(crate::theme::cards::button_card(false, theme::color::CARD));
             list = list.push(card);
         }
         col = col.push(
@@ -519,7 +510,7 @@ fn home_recent_files_card(
                 .color(theme::homespace_color::dim()),
         );
     } else {
-        for f in &app.home_recent_files {
+        for (i, f) in app.home_recent_files.iter().enumerate() {
             let filename = f
                 .path
                 .file_name()
@@ -547,17 +538,16 @@ fn home_recent_files_card(
             ]
             .spacing(8)
             .align_y(iced_widget::core::Alignment::Center);
-            col = col.push(container(row_el).padding(10).width(Length::Fill).style(
-                |_t: &iced_widget::Theme| container::Style {
-                    background: Some(theme::homespace_color::card_bg().into()),
-                    border: Border {
-                        color: theme::homespace_color::border(),
-                        width: 1.0,
-                        radius: 8.0.into(),
+            let hovered = app.hover_progress(HoverId::RecentFile(i)) > 0.0;
+            col = col.push(
+                MouseArea::new(container(row_el).padding(10).width(Length::Fill).style(
+                    move |_t: &iced_widget::Theme| {
+                        crate::theme::cards::container_card(false, hovered, theme::color::CARD)
                     },
-                    ..container::Style::default()
-                },
-            ));
+                ))
+                .on_enter(Message::Hover(HoverId::RecentFile(i), true))
+                .on_exit(Message::Hover(HoverId::RecentFile(i), false)),
+            );
         }
     }
 
@@ -592,36 +582,35 @@ fn home_recent_conversations_card(
                 .color(theme::homespace_color::dim()),
         );
     } else {
-        for c in &app.home_recent_conversations {
+        for (i, c) in app.home_recent_conversations.iter().enumerate() {
             let sub = format!(
                 "{} · {} · {}",
                 c.project_name,
                 c.meta.agent.label(),
                 relative_time_text(c.meta.modified_ms, now_ms)
             );
+            let hovered = app.hover_progress(HoverId::RecentConversation(i)) > 0.0;
             col = col.push(
-                container(
-                    column![
-                        lh(text(c.meta.title.clone())
-                            .size(theme::homespace_font::body())
-                            .color(theme::homespace_color::cream())),
-                        lh(text(sub)
-                            .size(theme::homespace_font::caption_sm())
-                            .color(theme::homespace_color::dim())),
-                    ]
-                    .spacing(4),
+                MouseArea::new(
+                    container(
+                        column![
+                            lh(text(c.meta.title.clone())
+                                .size(theme::homespace_font::body())
+                                .color(theme::homespace_color::cream())),
+                            lh(text(sub)
+                                .size(theme::homespace_font::caption_sm())
+                                .color(theme::homespace_color::dim())),
+                        ]
+                        .spacing(4),
+                    )
+                    .padding(10)
+                    .width(Length::Fill)
+                    .style(move |_t: &iced_widget::Theme| {
+                        crate::theme::cards::container_card(false, hovered, theme::color::CARD)
+                    }),
                 )
-                .padding(10)
-                .width(Length::Fill)
-                .style(|_t: &iced_widget::Theme| container::Style {
-                    background: Some(theme::homespace_color::card_bg().into()),
-                    border: Border {
-                        color: theme::homespace_color::border(),
-                        width: 1.0,
-                        radius: 8.0.into(),
-                    },
-                    ..container::Style::default()
-                }),
+                .on_enter(Message::Hover(HoverId::RecentConversation(i), true))
+                .on_exit(Message::Hover(HoverId::RecentConversation(i), false)),
             );
         }
     }

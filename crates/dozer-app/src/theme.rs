@@ -4,6 +4,7 @@
 //! 内嵌同一份 `assets/theme/workspace.json`,各自只解析自己关心的顶层
 //! 字段;`terminal_font` 内嵌 `assets/theme/terminal.json`。
 
+pub mod cards;
 pub mod color;
 pub mod font;
 pub mod geometry;
