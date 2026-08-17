@@ -809,67 +809,48 @@ pub fn view<'a>(
     }
 }
 
-/// 选中提交右侧的详情子面板:文件列表(状态色点 + 路径)+ 聚焦文件的
-/// unified diff。不内聚滚动,交给外层 `column` 撑;文件列表自滚动。
-/// 纯函数:选中态、详情结果都由上层 `view` 传进来。
-fn detail_view<'a>(
-    _snapshot: &GitLogSnapshot,
-    _selected: Option<git2::Oid>,
-    result: &'a Result<CommitDetail, String>,
+/// 右下 diff 内容面板:`selected_file` 对应文件的 patch,逐行染色(复用
+/// `diff_render::colored_diff_lines`)。找不到该路径(比如换 commit 那一瞬间
+/// `selected_file` 还没跟上新 `detail`)或未选中任何文件时展示占位文案,
+/// 不 panic。
+fn diff_pane_view<'a>(
+    detail: &'a Result<CommitDetail, String>,
+    selected_file: Option<&'a str>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> = match result {
-        Err(err) => container(text(format!("详情加载失败: {err}")).color(theme::color::RED))
-            .padding(8)
-            .into(),
-        Ok(detail) if detail.files.is_empty() => {
-            container(text("无文件改动").color(theme::color::DIM))
-                .padding(8)
-                .into()
-        }
-        Ok(detail) => {
-            let list = detail.files.iter().fold(column![].spacing(10), |acc, f| {
-                let color = match f.status {
-                    git2::Delta::Added => theme::color::GREEN,
-                    git2::Delta::Deleted => theme::color::RED,
-                    // 修改/重命名/复制等其余状态是纯分类展示,不是甲方动作,
-                    // 不能借用 `theme::color::GOLD`(CLAUDE.md 硬性裁决)。
-                    _ => theme::color::CYAN,
-                };
-                let header = row![
-                    text(status_glyph(f.status)).color(color).width(18),
-                    text(&f.path)
-                        .size(theme::font::caption())
-                        .color(theme::color::CREAM),
-                ]
-                .spacing(4)
-                .padding([2, 8]);
-                let acc = acc.push(header);
-                if f.patch.is_empty() {
-                    acc
-                } else {
-                    acc.push(
-                        text(f.patch.clone())
-                            .size(theme::font::caption())
-                            .color(theme::color::BODY)
-                            .font(Font::MONOSPACE),
-                    )
-                }
-            });
-            scrollable(list)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
-        }
+    let Ok(detail) = detail else {
+        // 错误态已经在 file_list_view 里展示过一次,这里不重复展示错误
+        // 文案,给个中性占位即可。
+        return container(iced_widget::Space::new()).into();
     };
-    container(body)
-        .width(Length::Fixed(DETAIL_WIDTH))
-        .height(Length::Fill)
-        .padding(8)
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(crate::theme::region::background().into()),
-            ..container::Style::default()
-        })
-        .into()
+    let Some(path) = selected_file else {
+        return container(text("未选中文件").color(theme::color::DIM))
+            .padding(8)
+            .into();
+    };
+    let Some(entry) = detail.files.iter().find(|f| f.path == path) else {
+        return container(text("未选中文件").color(theme::color::DIM))
+            .padding(8)
+            .into();
+    };
+    let mut content = column![
+        text(entry.path.clone())
+            .size(theme::font::caption())
+            .color(theme::color::DIM)
+    ]
+    .spacing(4);
+    if entry.patch.is_empty() {
+        content = content.push(text("(无 diff 内容)").color(theme::color::DIM));
+    } else {
+        content = content.push(crate::diff_render::colored_diff_lines(&entry.patch));
+    }
+    if entry.truncated {
+        content = content.push(
+            text("… diff 过长,已截断显示")
+                .size(theme::font::caption_sm())
+                .color(theme::color::DIM),
+        );
+    }
+    scrollable(content).width(Length::Fill).height(Length::Fill).into()
 }
 
 fn status_glyph(status: git2::Delta) -> &'static str {
