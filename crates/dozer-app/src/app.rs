@@ -330,6 +330,9 @@ pub struct PanelDims {
     /// Todo 面板配对:分类导航占左面板区宽度的比例，列表/MARKDOWN 内容
     /// (右配对)拿剩下的。
     pub todo_split: f32,
+    /// Git Log 面板配对:commit 列表占左面板区宽度的比例,右侧(文件列表+diff)
+    /// 拿剩下的。
+    pub git_log_split: f32,
     /// Agent配对:Agent列表占右面板区宽度的比例，终端拿剩下的。
     pub agent_split: f32,
     /// 对话配对:对话列表占右面板区宽度的比例，对话审阅拿剩下的。
@@ -347,6 +350,7 @@ fn default_panel_dims() -> PanelDims {
         project_split: theme::geometry::default_split_ratio(),
         ssh_split: theme::geometry::default_split_ratio(),
         todo_split: theme::geometry::default_split_ratio(),
+        git_log_split: theme::geometry::default_split_ratio(),
         agent_split: theme::geometry::default_split_ratio(),
         conversations_split: theme::geometry::default_split_ratio(),
     }
@@ -434,6 +438,7 @@ pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
         project_split: clamp_split(d.project_split),
         ssh_split: clamp_split(d.ssh_split),
         todo_split: clamp_split(d.todo_split),
+        git_log_split: clamp_split(d.git_log_split),
         agent_split: clamp_split(d.agent_split),
         conversations_split: clamp_split(d.conversations_split),
     }
@@ -451,6 +456,8 @@ pub enum Divider {
     SshSplit,
     /// Todo 面板内部的配对分隔线:左边分类导航、右边列表/MARKDOWN 内容。
     TodoSplit,
+    /// Git Log 面板内部左右分隔线:左边 commit 列表,右边文件列表+diff。
+    GitLogSplit,
     RightPairSplit,
 }
 
@@ -638,6 +645,20 @@ pub(crate) fn apply_column_drag(
             );
             PanelDims {
                 todo_split: ratio,
+                ..state.dims
+            }
+        }
+        Divider::GitLogSplit => {
+            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            if pair_w <= 0.0 {
+                return state.dims;
+            }
+            let ratio = ((logical_x - theme::geometry::icon_rail_width()) / pair_w).clamp(
+                theme::geometry::min_split_ratio(),
+                theme::geometry::max_split_ratio(),
+            );
+            PanelDims {
+                git_log_split: ratio,
                 ..state.dims
             }
         }
@@ -1548,22 +1569,11 @@ pub struct App {
     /// daemon 连接失败,或某次会话操作失败时的错误文案。整个程序共享
     /// 一份:daemon 连不连得上不是某个项目自己的状态。
     pub(crate) daemon_error: Option<String>,
-    /// tab 前状态点的闪烁相位(true=亮/false=暗)。由 main.rs 的定时唤醒
-    /// 每拍翻转(见 `toggle_blink`/`any_blinking`)。
-    blink_on: bool,
-    /// 上次真正翻转 `blink_on` 的时刻,`toggle_blink` 据此把自己限速到
-    /// `BLINK_INTERVAL` 一拍——main.rs 的定时唤醒并不专属闪烁:悬停动画
-    /// 期间(`HOVER_ANIM_INTERVAL`=16ms)会把唤醒频率提到闪烁本该的 450ms
-    /// 的近 30 倍,若 `toggle_blink` 对"被叫到"照单全收,状态点就会跟着
-    /// hover 的那份高频唤醒一起快速明灭,观感是"悬停 icon 按钮,别处的点
-    /// 跟着闪"。
-    last_blink_at: std::time::Instant,
-    /// 上次真正执行 Todo 面板磁盘轮询(`poll_todo_if_visible`)的时刻,
-    /// 用法与 `last_blink_at` 一致:按 `TODO_POLL_INTERVAL` 自限速,未到
-    /// 点的调用直接 no-op。现在靠 mtime 检查已经安全(没变化就早退,见
-    /// 该方法文档),这里补上限速是为了让"周期性函数自己对被更快唤醒
-    /// 节奏带跑免疫"这条约定对全部三个周期性关注点(闪烁/悬停动画/
-    /// Todo 轮询)都显式成立,不留一个"靠巧合安全"的例外。
+    /// 上次真正执行 Todo 面板磁盘轮询(`poll_todo_if_visible`)的时刻:
+    /// 按 `TODO_POLL_INTERVAL` 自限速,未到点的调用直接 no-op。现在靠
+    /// mtime 检查已经安全(没变化就早退,见该方法文档),这里补上限速是为了
+    /// 让"周期性函数自己对被更快唤醒节奏带跑免疫"这条约定对周期性关注点
+    /// (悬停动画/Todo 轮询)都显式成立,不留一个"靠巧合安全"的例外。
     last_todo_poll_at: std::time::Instant,
     /// 全局窗口尺寸;启动时 `layout::load()` 读盘作起始值,退出前写盘。
     /// 只存窗口尺寸——左右面板区的宽度/分割比例(**每个项目各自**的偏好)
@@ -1928,8 +1938,6 @@ impl App {
             ssh_cols: DEFAULT_COLS,
             ssh_rows: DEFAULT_ROWS,
             daemon_error,
-            blink_on: true,
-            last_blink_at: std::time::Instant::now(),
             last_todo_poll_at: std::time::Instant::now(),
             left_view: PanelLayout::default().left_view,
             right_view: PanelLayout::default().right_view,
@@ -2130,7 +2138,7 @@ impl App {
     }
 
     /// 当前是否"正看着"某个项目的 Todo 面板——轮询是否要继续排下一拍
-    /// 唤醒的判断条件（`main.rs::about_to_wait`），跟 `any_blinking`/
+    /// 唤醒的判断条件（`main.rs::about_to_wait`），跟
     /// `any_hover_anim_active` 同一层级。
     pub fn todo_panel_visible(&self) -> bool {
         self.left_view == LeftView::Todo && self.active_workspace().is_some()
@@ -2141,8 +2149,7 @@ impl App {
     /// 变了才重读+reparse（`todo::reload_from_disk` 内部也会再 stat 一次
     /// mtime，多一次系统调用换取它保持独立可复用）。按 `last_todo_poll_at`
     /// 自限速到 `TODO_POLL_INTERVAL`——悬停动画等更快节奏把唤醒带密时
-    /// 不会跟着高频重复 `stat`(2026-08-12 解耦重构,同 `toggle_blink` 的
-    /// 处理)。
+    /// 不会跟着高频重复 `stat`(2026-08-12 解耦重构)。
     pub fn poll_todo_if_visible(&mut self) {
         if !self.todo_panel_visible() {
             return;
@@ -2163,28 +2170,6 @@ impl App {
         if current != ws.todo.mtime() {
             todo::reload_from_disk(&mut ws.todo, std::path::Path::new(&project.path));
         }
-    }
-
-    /// 是否有 tab 处于"工作中"——决定 main.rs 是否需要定时唤醒来驱动状态点
-    /// 闪烁。任一并行项目里有在跑的会话就得继续闪(页签上也要显示状态点)。
-    pub fn any_blinking(&self) -> bool {
-        self.projects.values().any(|slot| match slot {
-            WorkspaceSlot::Loaded(ws) => ws.any_blinking(),
-            WorkspaceSlot::Stub { .. } => false,
-        })
-    }
-
-    /// 翻转闪烁相位；由 main.rs 的定时唤醒每拍调用,但唤醒节奏不专属闪烁
-    /// (悬停动画期间会被提到 16ms 一拍),这里按 `last_blink_at` 自己限速
-    /// 到 `BLINK_INTERVAL`,未到点的调用直接是 no-op——否则悬停 icon 按钮
-    /// 时别处的状态点会跟着高频唤醒一起快速明灭。
-    pub fn toggle_blink(&mut self) {
-        let now = std::time::Instant::now();
-        if now.duration_since(self.last_blink_at) < crate::BLINK_INTERVAL {
-            return;
-        }
-        self.blink_on = !self.blink_on;
-        self.last_blink_at = now;
     }
 
     /// 设置某按钮的悬停目标（`true`=进入,`false`=离开）；动画由
@@ -5821,8 +5806,8 @@ fn project_tab_entries(app: &App) -> Vec<ProjectTabEntry> {
 struct ProjectTabEntry {
     id: i64,
     name: String,
-    /// `(颜色, 是否闪烁)`;`None` = 不画状态点。
-    dot: Option<(Color, bool)>,
+    /// 状态点颜色;`None` = 不画状态点。
+    dot: Option<Color>,
 }
 
 /// 顶栏项目页签行:固定默认宽 + 拥挤时均分收窄的页签 + 紧跟最后一片页签之后的"＋"。
@@ -5844,7 +5829,6 @@ fn project_tabs_row(
     let active_project_id = (app.current_page == AppPage::Workspace)
         .then_some(app.active_project_id)
         .flatten();
-    let blink_on = app.blink_on;
     let entries = project_tab_entries(app);
     let n = entries.len();
 
@@ -5880,7 +5864,6 @@ fn project_tabs_row(
                 entry.name.clone(),
                 entry.dot,
                 active,
-                blink_on,
                 close_hover_t,
                 title_hover_t,
                 app.hover_tooltip_ready(HoverId::ProjectTabItem(entry.id)),
@@ -5973,9 +5956,8 @@ fn project_tabs_row(
 fn project_tab_item<'a>(
     id: i64,
     name: String,
-    dot: Option<(Color, bool)>,
+    dot: Option<Color>,
     active: bool,
-    blink_on: bool,
     close_hover_t: f32,
     title_hover_t: f32,
     show_tooltip: bool,
@@ -5999,13 +5981,7 @@ fn project_tab_item<'a>(
     let mut label = row![]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
-    if let Some((color, blinking)) = dot {
-        // 工作中且处于暗相位:点点压到近乎透明,与终端 tab 同一套"呼吸"。
-        let color = if blinking && !blink_on {
-            Color { a: 0.15, ..color }
-        } else {
-            color
-        };
+    if let Some(color) = dot {
         label = label.push(text("●").size(theme::font::caption_sm()).color(color));
     }
     label = label.push(
@@ -6192,8 +6168,8 @@ fn project_tab_item<'a>(
 }
 
 /// 一个项目页签的后台活动指示点:取该项目所有**存活**会话里最值得关注的
-/// 那个状态。返回 `(颜色, 是否闪烁)`;`None` = 没有存活会话,不画点。
-fn project_tab_dot(ws: &Workspace) -> Option<(Color, bool)> {
+/// 那个状态。返回状态点颜色;`None` = 没有存活会话,不画点。
+fn project_tab_dot(ws: &Workspace) -> Option<Color> {
     let alive: Vec<AgentState> = ws
         .tabs
         .iter()
@@ -6205,7 +6181,7 @@ fn project_tab_dot(ws: &Workspace) -> Option<(Color, bool)> {
 
 /// 上面那个的纯逻辑内核(可单测:构造 `Workspace` 需要 daemon + EventLoop,
 /// headless 测试里造不出来,与本文件既有约定一致)。
-pub(crate) fn project_dot(alive_states: &[AgentState]) -> Option<(Color, bool)> {
+pub(crate) fn project_dot(alive_states: &[AgentState]) -> Option<Color> {
     winning_agent_state(alive_states).map(agent_state_dot)
 }
 
@@ -6228,13 +6204,10 @@ fn winning_agent_state(alive_states: &[AgentState]) -> Option<AgentState> {
     .find(|candidate| alive_states.contains(candidate))
 }
 
-/// 胜出状态 → `(颜色, 是否闪烁)`。颜色不另造一套表,直接问既有 `dot_color`
-/// ——页签点与 tab 点讲的是同一种语言,两份颜色表迟早会漂。
-fn agent_state_dot(state: AgentState) -> (Color, bool) {
-    (
-        dot_color(state, true),
-        state == AgentState::Running, // 只有"在跑"才闪
-    )
+/// 胜出状态 → 颜色。不另造一套表,直接问既有 `dot_color`——页签点与 tab
+/// 点讲的是同一种语言,两份颜色表迟早会漂。
+fn agent_state_dot(state: AgentState) -> Color {
+    dot_color(state, true)
 }
 
 /// 启动恢复时给每个 `Stub` 页签算后台活动状态:从 daemon 一次性吐出的全量
@@ -7467,7 +7440,6 @@ fn tab_bar<'a>(
                     idx,
                     tab,
                     idx == ws.active,
-                    app.blink_on,
                     title_hover_t,
                     close_hover_t,
                     app.hover_tooltip_ready(HoverId::TermTabItem(idx)),
@@ -7537,25 +7509,18 @@ pub(crate) fn tab_window(
 
 /// 单个 tab：状态点（颜色见 `dot_color`）+ 名称的选中按钮，紧跟一个关闭
 /// 按钮（点击 = detach，见 `Message::CloseTab` 的文档）。状态不再用文字
-/// 胶囊表达，全部收敛到点点的颜色与闪烁（goal.md）：工作中(Running)的
-/// 点点随 `blink_on` 一明一暗地闪，其余状态常亮。
+/// 胶囊表达，全部收敛到点点的颜色（goal.md）：各状态各自固定配色，常亮，
+/// 不再有闪烁动画。
 fn tab_item(
     idx: usize,
     tab: &SessionTab,
     active: bool,
-    blink_on: bool,
     title_hover_t: f32,
     close_hover_t: f32,
     show_tooltip: bool,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let working = tab.alive && tab.agent_state == AgentState::Running;
-    let mut color = dot_color(tab.agent_state, tab.alive);
-    // 工作中且处于暗相位：把点点压到近乎透明，形成"呼吸"般的闪烁。
-    // 闪烁相位是全局的（main.rs 定时翻转），因此失焦的工作 tab 也照闪。
-    if working && !blink_on {
-        color = Color { a: 0.15, ..color };
-    }
-    // 状态点作 `panel_tab` 的 prefix（颜色/呼吸逻辑不变）。
+    let color = dot_color(tab.agent_state, tab.alive);
+    // 状态点作 `panel_tab` 的 prefix。
     let dot = text("●").size(theme::font::caption_sm()).color(color);
 
     panel_tab(
@@ -8036,26 +8001,27 @@ mod tests {
         assert_eq!(order, vec![1]);
     }
 
-    /// 页签指示点的优先级:金 > 紫 > 绿闪 > 绿常亮 > 不画点。
+    /// 页签指示点的优先级:金 > 红 > 绿 > 青 > 不画点。各状态固定配色,
+    /// 不再有闪烁区分。
     #[test]
     fn project_dot_color_priority() {
         use dozer_core::protocol::AgentState::*;
 
         assert_eq!(project_dot(&[]), None, "无存活会话不画点");
-        assert_eq!(project_dot(&[Idle]), Some((theme::color::GREEN, false)));
+        assert_eq!(project_dot(&[Idle]), Some(theme::color::CYAN));
         assert_eq!(
             project_dot(&[Idle, Running]),
-            Some((theme::color::GREEN, true)),
-            "有会话在跑 → 同为绿但要闪,靠闪烁与空闲区分"
+            Some(theme::color::GREEN),
+            "有会话在跑 → 运行优先于空闲"
         );
         assert_eq!(
             project_dot(&[Idle, Running, AwaitingInput]),
-            Some((theme::color::PURPLE, false)),
+            Some(theme::color::RED),
             "待输入优先于运行/空闲"
         );
         assert_eq!(
             project_dot(&[Idle, Running, AwaitingInput, TurnEnded]),
-            Some((theme::color::GOLD, false)),
+            Some(theme::color::GOLD),
             "回合结束(该甲方出手了)优先级最高"
         );
         // 顺序无关:优先级看的是状态集合,不是 tab 的先后。
@@ -8555,6 +8521,32 @@ mod tests {
             ..PanelDims::default()
         };
         assert_eq!(sanitize_panel_dims(sane), sane);
+    }
+
+    #[test]
+    fn apply_column_drag_updates_git_log_split_ratio() {
+        let state = test_state();
+        let window_width = 1600.0;
+        let result = apply_column_drag(state, Divider::GitLogSplit, window_width, 300.0);
+        assert!(result.git_log_split >= theme::geometry::min_split_ratio());
+        assert!(result.git_log_split <= theme::geometry::max_split_ratio());
+    }
+
+    #[test]
+    fn sanitize_panel_dims_clamps_git_log_split() {
+        let dims = PanelDims {
+            git_log_split: 5.0,
+            ..PanelDims::default()
+        };
+        let sanitized = sanitize_panel_dims(dims);
+        assert!(sanitized.git_log_split <= theme::geometry::max_split_ratio());
+
+        let dims = PanelDims {
+            git_log_split: f32::NAN,
+            ..PanelDims::default()
+        };
+        let sanitized = sanitize_panel_dims(dims);
+        assert_eq!(sanitized.git_log_split, PanelDims::default().files_split);
     }
 
     /// `window_width`/`window_height` 的夹取单独测:老 `layout.json` 缺这两
