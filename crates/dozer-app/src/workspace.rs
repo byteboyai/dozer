@@ -2131,12 +2131,17 @@ pub(crate) fn agent_card_refresh_plan(
     // Unknown agent 不该因为这道门禁又变回"空白卡片"这同一类 bug)。
     // Codebuddy 有独立 schema,但 latest_model_mode_and_activity 已经兼认它的
     // providerData.model 字段(mode 恒 None——transcript 没有 permissionMode
-    // 等价字段,卡片 Mode 行因此天然不渲染,不是 bug)。Opencode/Kilo 等其余
-    // agent 暂不在这道门禁里:dozer-hook 的 translate 层目前不往合成
-    // transcript 里写 model/mode 信息,加了也读不到值,留到那边补上后再开。
+    // 等价字段,卡片 Mode 行因此天然不渲染,不是 bug)。Opencode 的合成
+    // transcript 是 Claude 形状,dozer-hook 插件(dozer-translate.ts::
+    // onUserMessage)已经把 chat.message hook 拿到的 model(`{providerID,
+    // modelID}`,spike 实测两个字段都有)格式化成 `"providerID/modelID"`
+    // 写进 `message.model`,同一条 `latest_model_mode_and_activity` 路径
+    // 直接读得到,不需要单独分支。mode 恒 None(OpenCode 没有
+    // permissionMode 等价字段,同 Codebuddy)。Kilo 等其余 agent 仍不在这道
+    // 门禁里:它们的合成 transcript 还没有 model 字段,加了也读不到值。
     let needs_model_mode = matches!(
         agent,
-        AgentKind::Claude | AgentKind::Unknown | AgentKind::Codebuddy
+        AgentKind::Claude | AgentKind::Unknown | AgentKind::Codebuddy | AgentKind::Opencode
     );
     // "当前工作内容"兜底摘要的门禁比 model/mode 宽——只要 transcript
     // schema 能被 `parse_transcript` 解出人类/AI 文本就值得读(Opencode/
@@ -3734,9 +3739,10 @@ mod tests {
                 &root,
                 Some(&root)
             ),
-            (false, true, false),
-            "非 Claude/Unknown/Codebuddy(如 Opencode) + cwd 等于项目根:不做 model/mode,\
-             但 activity 门槛更宽,Opencode 合成 transcript 是 Claude 形状仍要做"
+            (true, true, false),
+            "Opencode + cwd 等于项目根:dozer-hook 插件已经把 model 写进合成 \
+             transcript(见 dozer-translate.ts::onUserMessage),model/mode \
+             门也跟 Claude 一样打开;不做工作区"
         );
         assert_eq!(
             agent_card_refresh_plan(
@@ -3744,8 +3750,8 @@ mod tests {
                 &elsewhere,
                 Some(&root)
             ),
-            (false, true, true),
-            "非 Claude/Unknown/Codebuddy + cwd 偏离项目根:activity + 工作区"
+            (true, true, true),
+            "Opencode + cwd 偏离项目根:model/mode + activity + 工作区"
         );
         assert_eq!(
             agent_card_refresh_plan(

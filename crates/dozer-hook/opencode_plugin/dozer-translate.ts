@@ -19,6 +19,10 @@ export interface TranscriptLine {
   message: {
     role: "user" | "assistant"
     content: string | Array<Record<string, unknown>>
+    /** `"providerID/modelID"`——Dozer 侧 `latest_model_mode_and_activity`
+     * 认 `message.model` 这个字段名(Claude 真实 transcript 的原生形状),
+     * 不看 `type`/`role`，同一路径直接复用，不需要 Dozer 那边加分支。 */
+    model?: string
   }
 }
 
@@ -75,10 +79,17 @@ export function onSessionCreated(
  * `chat.message` hook，`role === "user"` 分支。`parts` 里 `type:"text"`
  * 的文本按出现顺序拼接成 prompt 原文，写成 Claude 形状的 user transcript
  * 行。
+ *
+ * `model`（可选）来自同一个 hook 的 `output.message.model`
+ * （`{providerID, modelID}`，spike 实测两个字段都在——见
+ * docs/superpowers/specs/2026-07-31-opencode-plugin-spike-findings.md
+ * §Step 3），调用方（`dozer.ts`）已经格式化成 `"providerID/modelID"` 字符
+ * 串传进来，这里只管原样写进 `message.model`，不做二次解析。
  */
 export function onUserMessage(
   state: SessionState,
-  parts: Array<{ type: string; text?: string }>
+  parts: Array<{ type: string; text?: string }>,
+  model?: string
 ): TranslatedEvent {
   const text = parts
     .filter((p) => p.type === "text" && typeof p.text === "string")
@@ -89,7 +100,9 @@ export function onUserMessage(
     cwd: state.cwd,
     transcriptLine: {
       type: "user",
-      message: { role: "user", content: text },
+      message: model
+        ? { role: "user", content: text, model }
+        : { role: "user", content: text },
     },
   }
 }

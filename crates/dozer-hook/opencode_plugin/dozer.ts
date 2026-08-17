@@ -166,11 +166,20 @@ export const DozerPlugin: Plugin = async ({ $, client }) => {
     // dist/index.d.ts`，对应实测运行时 opencode 1.18.11）：
     // `{ sessionID: string; messageID?: string; ... }`。`output.message`
     // 是 `UserMessage`，有保证非空的 `id`/`sessionID`/`role` 字段，用作
-    // `input.messageID` 缺失时的兜底。
+    // `input.messageID` 缺失时的兜底。`model` 字段（spike 实测，见
+    // docs/superpowers/specs/2026-07-31-opencode-plugin-spike-findings.md
+    // §Step 3）在 user 角色的消息上也带着，代表这条消息将由哪个模型处理——
+    // 格式化成 `"providerID/modelID"` 传给 `onUserMessage`，写进 Dozer 侧
+    // agent 卡片认得的 `message.model` 字段。
     "chat.message": async (
       input: { sessionID?: string; messageID?: string },
       output: {
-        message?: { sessionID?: string; role?: string; id?: string }
+        message?: {
+          sessionID?: string
+          role?: string
+          id?: string
+          model?: { providerID?: string; modelID?: string }
+        }
         parts?: Array<{ type: string; text?: string }>
       }
     ) => {
@@ -192,7 +201,12 @@ export const DozerPlugin: Plugin = async ({ $, client }) => {
         }
         const state = await resolveState(client, sessionID)
         if (!state) return
-        await emit($, onUserMessage(state, output.parts ?? []))
+        const rawModel = output?.message?.model
+        const model =
+          rawModel?.providerID && rawModel?.modelID
+            ? `${rawModel.providerID}/${rawModel.modelID}`
+            : undefined
+        await emit($, onUserMessage(state, output.parts ?? [], model))
       } catch {
         // 同上。
       }

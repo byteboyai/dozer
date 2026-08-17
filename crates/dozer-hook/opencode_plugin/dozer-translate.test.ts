@@ -51,6 +51,29 @@ describe("onUserMessage", () => {
       },
     })
   })
+
+  test("带 model 时写进 message.model（providerID/modelID 格式）", () => {
+    const state = createSessionState("/private/tmp")
+    const result = onUserMessage(
+      state,
+      [{ type: "text", text: "你好" }],
+      "litellm/deepseek-v3"
+    )
+    expect(result).toEqual({
+      event: "UserPromptSubmit",
+      cwd: "/private/tmp",
+      transcriptLine: {
+        type: "user",
+        message: { role: "user", content: "你好", model: "litellm/deepseek-v3" },
+      },
+    })
+  })
+
+  test("不带 model 时 message 里不出现 model 字段（不写 undefined）", () => {
+    const state = createSessionState("/private/tmp")
+    const result = onUserMessage(state, [{ type: "text", text: "你好" }])
+    expect(result?.transcriptLine?.message).not.toHaveProperty("model")
+  })
 })
 
 describe("onToolPartUpdated", () => {

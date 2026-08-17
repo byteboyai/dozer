@@ -147,4 +147,29 @@ describe("resume gap: 未经本进程 session.created 的会话", () => {
     expect(calls.length).toBe(1)
     expect(calls[0].values[2]).toBe("UserPromptSubmit")
   })
+
+  test("chat.message 的 output.message.model 格式化成 providerID/modelID 写进 transcript 行", async () => {
+    const { $, calls } = makeShellStub()
+    const { client } = makeClientStub({
+      ses_resumed_4: { directory: "/private/tmp/proj" },
+    })
+    const plugin = await loadPlugin($, client)
+
+    await plugin["chat.message"]!(
+      { sessionID: "ses_resumed_4", messageID: "msg_2" },
+      {
+        message: {
+          sessionID: "ses_resumed_4",
+          role: "user",
+          id: "msg_2",
+          model: { providerID: "litellm", modelID: "deepseek-v3" },
+        },
+        parts: [{ type: "text", text: "hi" }],
+      }
+    )
+
+    expect(calls.length).toBe(1)
+    const stdin = JSON.parse(calls[0].values[0])
+    expect(stdin.transcript_line.message.model).toBe("litellm/deepseek-v3")
+  })
 })
