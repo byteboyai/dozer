@@ -1617,7 +1617,7 @@ fn drag_insert_indicator() -> Element<'static, Message, iced_widget::Theme, iced
 /// 统一卡片组件：列表视图使用的边框卡片视觉，取代原来的
 /// `todo_row`(扁平高亮行)。结构自上而下：编号 + 日期徽章(calendar 图标 →
 /// 日历选择器)+ 状态静态文字 → checkbox + 任务文字(点文字进入内容编辑)
-/// → Assign 按钮(仅待办未派发时)。选中/一般/hover 三态走统一卡片样式
+/// → 指派文本按钮(仅待办未派发时)。选中/一般/hover 三态走统一卡片样式
 /// (选中=金边、hover=金边+填充、一般态=描边)。
 #[allow(clippy::too_many_arguments)]
 fn todo_card<'a, 'b>(
@@ -1769,25 +1769,20 @@ fn todo_card<'a, 'b>(
         .spacing(10)
         .align_y(iced_widget::core::alignment::Vertical::Center);
 
-    // ---- 底部行：Assign 文本按钮(仅待办未派发) ----
+    // ---- 底部行：指派文本按钮(仅待办未派发) ----
     let mut bottom = row![]
         .spacing(8)
         .align_y(iced_widget::core::alignment::Vertical::Center);
     if state == TodoState::Pending && dispatch.is_none() {
         let assign_btn = button(
-            text("Assign")
+            text("指派")
                 .size(theme::font::caption())
                 .color(theme::color::GOLD),
         )
         .on_press(Message::DispatchOpen(idx))
-        .padding([5, 10])
+        .padding([4, 6])
         .style(|_t: &iced_widget::Theme, _s| button::Style {
             background: None,
-            border: Border {
-                color: theme::color::BORDER,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
             text_color: theme::color::GOLD,
             ..button::Style::default()
         });
@@ -1840,7 +1835,7 @@ fn todo_card<'a, 'b>(
         ));
     }
     // 拖拽换位感应层:补 `on_move`(光标移动过本卡就发 `DragMove`)+
-    // `on_press`(`RowSelect` 选中并武装拖拽——点文字/勾选/日期/Assign 这些
+    // `on_press`(`RowSelect` 选中并武装拖拽——点文字/勾选/日期/指派 这些
     // 子元素各自吞掉自己的"按下",只有落在卡片空白处才走到这里)。拖拽中
     // 整张卡显示抓取光标。
     let area = MouseArea::new(stacked)
