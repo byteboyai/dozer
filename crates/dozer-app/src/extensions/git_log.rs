@@ -9,7 +9,7 @@
 use crate::delivery::WorktreeInfo;
 use crate::theme;
 use iced_widget::core::alignment;
-use iced_widget::core::{Element, Font, Length};
+use iced_widget::core::{Border, Element, Font, Length};
 use iced_widget::{column, container, row, scrollable, text};
 use std::path::{Path, PathBuf};
 
@@ -82,6 +82,10 @@ impl GitLogSnapshot {
 
     pub fn max_count(&self) -> usize {
         self.max_count
+    }
+
+    pub fn head_branch(&self) -> Option<&str> {
+        self.head_branch.as_deref()
     }
 }
 
@@ -898,6 +902,124 @@ fn diff_pane_view<'a>(
         );
     }
     scrollable(content).width(Length::Fill).height(Length::Fill).into()
+}
+
+/// 左侧面板底部固定展示:当前分支名 + 展开箭头,点击发
+/// `Message::BranchPickerOpen`/`BranchPickerClose`(按当前展开态二选一)。
+fn branch_toggle_button<'a>(
+    state: &'a State,
+    head_branch: Option<&'a str>,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let label = head_branch.unwrap_or("(无分支)");
+    let msg = if state.branch_picker_open {
+        Message::BranchPickerClose
+    } else {
+        Message::BranchPickerOpen
+    };
+    iced_widget::button(
+        row![
+            text(label).size(theme::font::body()).color(theme::color::CREAM),
+            iced_widget::Space::new().width(Length::Fill),
+            crate::icons::view(
+                crate::icons::IconKind::ChevronDown,
+                crate::theme::icon_size::row(),
+                theme::color::DIM
+            ),
+        ]
+        .align_y(alignment::Vertical::Center),
+    )
+    .width(Length::Fill)
+    .padding([6, 10])
+    .on_press_maybe((!state.branch_switch_pending).then_some(msg))
+    .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+        background: None,
+        text_color: theme::color::CREAM,
+        border: Border {
+            color: theme::color::BORDER,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..iced_widget::button::Style::default()
+    })
+    .into()
+}
+
+/// 分支下拉展开层:局部 `stack!`(不是 window-wide overlay,只覆盖左侧
+/// Git 面板范围),视觉风格照抄 `files.rs::branch_picker_popup`(CARD 底/
+/// BORDER 描边/当前分支 GOLD 高亮),但状态完全独立(不读 `files::
+/// WorkspaceState`)。`branch_switch_pending` 时全部禁用并显示"切换中…"。
+fn branch_picker_view<'a>(
+    state: &'a State,
+    head_branch: Option<&'a str>,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    if !state.branch_picker_open {
+        return iced_widget::Space::new().into();
+    }
+    let mut list = column![].spacing(2).width(Length::Fill);
+    if state.branches.is_empty() {
+        list = list.push(
+            text("暂无本地分支")
+                .size(theme::font::body())
+                .color(theme::color::DIM),
+        );
+    }
+    for name in &state.branches {
+        let is_current = Some(name.as_str()) == head_branch;
+        let color = if is_current {
+            theme::color::GOLD
+        } else {
+            theme::color::CREAM
+        };
+        let row_btn = iced_widget::button(
+            text(name.clone())
+                .size(theme::font::body())
+                .color(color),
+        )
+        .width(Length::Fill)
+        .padding([6, 10])
+        .style(move |_t: &iced_widget::Theme, s: iced_widget::button::Status| {
+            let base = iced_widget::button::Style {
+                background: None,
+                text_color: color,
+                ..iced_widget::button::Style::default()
+            };
+            match s {
+                iced_widget::button::Status::Hovered => iced_widget::button::Style {
+                    background: Some(theme::color::TAB_HOVER.into()),
+                    ..base
+                },
+                _ => base,
+            }
+        });
+        let row_btn = if state.branch_switch_pending || is_current {
+            row_btn
+        } else {
+            row_btn.on_press(Message::BranchSwitch(name.clone()))
+        };
+        list = list.push(row_btn);
+    }
+    let panel = container(list)
+        .padding(8)
+        .width(Length::Fill)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::color::CARD.into()),
+            border: Border {
+                color: theme::color::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        });
+    let dismiss = iced_widget::MouseArea::new(
+        iced_widget::Space::new()
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .on_press(Message::BranchPickerClose);
+    iced_widget::stack![dismiss, panel]
+        .width(Length::Fill)
+        .height(Length::Shrink)
+        .into()
 }
 
 fn status_glyph(status: git2::Delta) -> &'static str {
