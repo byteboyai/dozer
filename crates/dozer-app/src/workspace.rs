@@ -2347,10 +2347,11 @@ pub(crate) fn agent_list_pane<'a>(
         .into()
 }
 
-/// Agent 面板里单条会话卡片:agent 名 → LLM 行(仅 Claude 且已解析到值
-/// 时显示)→ Mode 行(同上条件)→ 工作区行(分支名 + 脏标,所有 agent
-/// 都显示)→ 状态点 + 状态文字。整卡可点选中该 tab(`idx == ws.active`
-/// 时 `theme::color::CARD` 背景高亮,同项目树选中行的手法)。
+/// Agent 面板里单条会话卡片:agent 名 → LLM/Mode 合并行(`model, mode`,
+/// 只要有一项能读到就显示,两项都没有则整行隐藏)→ 工作区行(分支名 +
+/// 脏标,所有 agent 都显示)→ 状态点 + 状态文字。整卡可点选中该 tab
+/// (`idx == ws.active` 时 `theme::color::CARD` 背景高亮,同项目树选中
+/// 行的手法)。
 pub(crate) fn agent_card(
     ws: &Workspace,
     idx: usize,
@@ -2359,17 +2360,31 @@ pub(crate) fn agent_card(
     let active = idx == ws.active;
 
     let mut lines = column![
-        text(tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name))
-            .size(theme::font::body())
-            .color(theme::color::CREAM),
+        row![
+            icons::view(
+                agent_icon(tab.agent),
+                crate::theme::icon_size::row(),
+                agent_dot_color(tab.agent),
+            ),
+            text(tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name))
+                .size(theme::font::body())
+                .color(theme::color::CREAM),
+        ]
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .spacing(8),
     ]
     .spacing(4);
 
-    if let Some(llm_model) = &tab.llm_model {
-        lines = lines.push(labeled_row("LLM", &format_model_label(llm_model)));
-    }
-    if let Some(mode) = &tab.permission_mode {
-        lines = lines.push(labeled_row("Mode", mode));
+    let model_label = tab.llm_model.as_deref().map(format_model_label);
+    let mode_label = tab.permission_mode.as_deref();
+    let llm_mode_value = match (&model_label, mode_label) {
+        (Some(m), Some(mo)) => Some(format!("{m}, {mo}")),
+        (Some(m), None) => Some(m.clone()),
+        (None, Some(mo)) => Some(mo.to_string()),
+        (None, None) => None,
+    };
+    if let Some(value) = llm_mode_value {
+        lines = lines.push(labeled_row("LLM", &value));
     }
 
     let (branch, dirty) = match &tab.workspace_override {
