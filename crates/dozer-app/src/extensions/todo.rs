@@ -324,6 +324,11 @@ pub struct WorkspaceState {
     /// 留不住焦点、也不参与 main.rs 的键盘路由裁决,不加这个标记的话打字
     /// 会同时漏进已聚焦的终端(agent 输入),见 `todo_footer_bar`。
     add_editing: bool,
+    /// 新增任务框高度(逻辑像素)。框顶的拖拽手柄向上拉时由 app 层换算写回
+    /// (见 `app.rs::RowDrag` 的 `TodoAddGrow` 分支),0 表示"未拖过、用默认
+    /// 高",视图侧一律 `max(ADD_INPUT_MIN_HEIGHT)` 兜底——这样 `#[derive(
+    /// Default)]` 给的 0 也不会渲染成 0 高框。
+    add_input_height: f32,
     filter: TodoFilter,
     view_mode: TodoViewMode,
     selected_row: Option<usize>,
@@ -436,6 +441,18 @@ impl WorkspaceState {
     /// 与搜索框同款——半输入的任务文字不该因为点了别处就丢。
     pub fn cancel_add_edit(&mut self) {
         self.add_editing = false;
+    }
+
+    /// 新增任务框有效高度:0(默认/未拖过)按最小高兜底,避免每帧重建时
+    /// 渲染成 0 高框。见 `add_input_height` 字段注释。
+    pub fn add_input_height(&self) -> f32 {
+        self.add_input_height.max(ADD_INPUT_MIN_HEIGHT)
+    }
+
+    /// 拖拽置高(`app.rs::RowDrag` 的 `TodoAddGrow` 分支写回),钳到
+    /// `[ADD_INPUT_MIN_HEIGHT, ADD_INPUT_MAX_HEIGHT]`。
+    pub fn set_add_input_height(&mut self, h: f32) {
+        self.add_input_height = h.clamp(ADD_INPUT_MIN_HEIGHT, ADD_INPUT_MAX_HEIGHT);
     }
 
     /// 任务内容行内编辑态是否打开(main.rs 键盘路由用)。
@@ -575,6 +592,12 @@ pub enum Message {
     /// 点新增任务框右侧 circle-arrow-up 提交按钮:把草稿落盘成新任务
     /// (与回车 `AddEvent(Submit)` 共用 `commit_add_task` 一条路径)。
     AddSubmit,
+    /// 点新增任务框顶部的拖拽手柄:只在 app 层接管(`todo_message` 里置
+    /// `dragging_row = TodoAddGrow`),真正的高度换算发生在 `app.rs::update`
+    /// 的 `RowDrag` 分支——和 `Divider`/`RowDivider` 那套拖拽同构,只是目标
+    /// 状态落在 `WorkspaceState::add_input_height` 而非 `PanelDims`。`todo::
+    /// update` 收不到这条(早退),这里仍给个 no-op arm 保持 match 穷尽。
+    AddResizeStart,
     FilterSet(TodoFilter),
     ViewModeSet(TodoViewMode),
     RowSelect(Option<usize>),
@@ -830,6 +853,9 @@ pub fn update(
             }
         }
         Message::AddSubmit => commit_add_task(ws_state, project_path),
+        // 高度拖拽在 app 层 `todo_message` 已早退,不会到这里;保留 arm 仅
+        // 为 match 穷尽。
+        Message::AddResizeStart => {}
         Message::FilterSet(f) => ws_state.filter = f,
         Message::ViewModeSet(m) => ws_state.view_mode = m,
         Message::RowSelect(idx) => {
@@ -1131,16 +1157,48 @@ pub fn view<'a>(
     (sidebar_pane, content_pane)
 }
 
+/// 新增任务框高度上/下限(逻辑像素)。下限即默认高(约 3 行正文);上限让
+/// 列表区至少留出约 140px,且 `app.rs::RowDrag` 的 `TodoAddGrow` 分支会再
+/// 按窗口高夹一道,这里给的是硬上限(窗口极矮时由那里兜底)。
+pub const ADD_INPUT_MIN_HEIGHT: f32 = 56.0;
+pub const ADD_INPUT_MAX_HEIGHT: f32 = 400.0;
+
+/// 顶部宽 8px 的细窄拖拽手柄:把光标变 `ResizingRow`,按下经
+/// `Message::AddResizeStart` 交给 app 层接管高度换算。视觉上只是顶边框上
+/// 一道 1px 亮线(像输入框可被向上拉起的"抓手"),平时几乎隐形,拖拽时靠
+/// 光标变化提示可拖。
+fn todo_resize_handle<'a>() -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let grip = container(iced_widget::Space::new())
+        .width(Length::Fill)
+        .height(Length::Fixed(1.0))
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::color::BORDER.into()),
+            ..container::Style::default()
+        });
+    MouseArea::new(
+        container(column![grip].spacing(0))
+            .width(Length::Fill)
+            .height(Length::Fixed(8.0)),
+    )
+    .interaction(mouse::Interaction::ResizingRow)
+    .on_press(Message::AddResizeStart)
+    .into()
+}
+
 /// 底部快速新建栏。结构对齐 `project.rs::project_footer_bar`(1px BORDER
-/// 分隔线),但左右间距对齐任务卡片的 20px、输入框加高到约 3 行文字,右侧
-/// 是 circle-arrow-up 提交按钮(回车 / 点它把草稿落盘成新任务)。自绘输入
-/// (键盘走 main.rs 拦截层路由成 `AddEvent`,不用原生 `text_input`——本 app
-/// 每帧重建界面,原生输入留不住焦点也不参与键盘路由裁决,打字会同时漏进
-/// 已聚焦的终端,见 `todo_search_bar` 同款说明)。
+/// 分隔线),但左右间距对齐任务卡片的 20px、输入框加高到约 3 行文字,**提交
+/// 按钮嵌在输入框边框内**(右侧、无独立边框,只是框里一枚 circle-arrow-up
+/// 图标——视觉上按钮"在输入框内")。框顶还有一道可向上拖的 8px 手柄
+/// (`todo_resize_handle`),拉高输入框(高度落在 `WorkspaceState::
+/// add_input_height`)。自绘输入(键盘走 main.rs 拦截层路由成 `AddEvent`,
+/// 不用原生 `text_input`——本 app 每帧重建界面,原生输入留不住焦点也不
+/// 参与键盘路由裁决,打字会同时漏进已聚焦的终端,见 `todo_search_bar`
+/// 同款说明)。
 fn todo_footer_bar<'a>(
-    add_draft: &'a str,
-    editing: bool,
+    ws_state: &'a WorkspaceState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let editing = ws_state.add_editing;
+    let add_draft = &ws_state.add_draft;
     let field: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         if add_draft.is_empty() && !editing {
             text("Initiate new task protocol..")
@@ -1155,33 +1213,10 @@ fn todo_footer_bar<'a>(
                 .into()
         };
 
-    // 输入框本体:点击进编辑态,高度约 3 行正文,文字靠顶左对齐。
-    let input = button(
-        container(field)
-            .width(Length::Fill)
-            .align_x(iced_widget::core::alignment::Horizontal::Left),
-    )
-    .on_press(Message::AddEditStart)
-    .width(Length::Fill)
-    .height(Length::Fixed(56.0))
-    .padding([10, 12])
-    .style(move |_t: &iced_widget::Theme, _s| button::Style {
-        background: Some(theme::color::BG.into()),
-        border: Border {
-            color: if editing {
-                theme::color::GOLD
-            } else {
-                theme::color::BORDER
-            },
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        text_color: theme::color::CREAM,
-        ..button::Style::default()
-    });
-
-    // 提交按钮:circle-arrow-up,回车或点它提交(同 `AddEvent(Submit)` 一条
-    // 落盘路径)。
+    // 提交按钮:circle-arrow-up,嵌在输入框右边框内、无独立边框(视觉上"在
+    // 框里"),回车或点它提交(同 `AddEvent(Submit)` 一条落盘路径)。它是
+    // 输入框 `MouseArea` 内层真正的 `button`,会自己吃掉点击,不会触发外
+    // 层 `AddEditStart`。
     let submit = button(icons::view(
         icons::IconKind::CircleArrowUp,
         crate::theme::icon_size::row(),
@@ -1190,15 +1225,45 @@ fn todo_footer_bar<'a>(
     .on_press(Message::AddSubmit)
     .padding(6)
     .style(|_t, _s| button::Style {
-        background: Some(theme::color::BG.into()),
+        background: None,
         border: Border {
             color: theme::color::BORDER,
-            width: 1.0,
+            width: 0.0,
             radius: 4.0.into(),
         },
         text_color: theme::color::GOLD,
         ..button::Style::default()
     });
+
+    // 输入框本体:单个带边框的容器,把"文字区 + 提交按钮"一起包进边框内。
+    // 整框包一层 `MouseArea`——点框内(非提交按钮处)进编辑态;提交按钮是
+    // 内层 widget,会先截获自己的点击。高度可经顶部手柄拖拽放大。
+    let input_box: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        MouseArea::new(
+            container(
+                row![field, submit]
+                    .spacing(8)
+                    .align_y(iced_widget::core::alignment::Vertical::Center),
+            )
+            .width(Length::Fill)
+            .height(Length::Fixed(ws_state.add_input_height()))
+            .padding([10, 12])
+            .style(move |_t: &iced_widget::Theme| container::Style {
+                background: Some(theme::color::BG.into()),
+                border: Border {
+                    color: if editing {
+                        theme::color::GOLD
+                    } else {
+                        theme::color::BORDER
+                    },
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..container::Style::default()
+            }),
+        )
+        .on_press(Message::AddEditStart)
+        .into();
 
     let top_line = container(iced_widget::Space::new())
         .width(Length::Fill)
@@ -1208,18 +1273,10 @@ fn todo_footer_bar<'a>(
             ..container::Style::default()
         });
 
-    container(
-        column![
-            top_line,
-            row![input, submit]
-                .spacing(8)
-                .align_y(iced_widget::core::alignment::Vertical::Center)
-        ]
-        .spacing(8),
-    )
-    .width(Length::Fill)
-    .padding([8, 20])
-    .into()
+    container(column![top_line, todo_resize_handle(), input_box,].spacing(4))
+        .width(Length::Fill)
+        .padding([8, 20])
+        .into()
 }
 
 /// 顶部搜索框:自绘输入(键盘走 main.rs 拦截层路由成 `SearchEvent`,不用
@@ -1404,7 +1461,7 @@ fn todo_list_view<'a>(
                 crate::scrollbar::scrollbar(),
             ))
             .style(|_t, _s| crate::scrollbar::scrollbar_style()),
-        todo_footer_bar(&ws_state.add_draft, ws_state.add_editing),
+        todo_footer_bar(ws_state),
     ]
     .height(Length::Fill)
     .into()

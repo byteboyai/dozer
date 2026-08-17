@@ -472,6 +472,12 @@ pub enum Divider {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RowDivider {
     GitLogFileDiffSplit,
+    /// Todo 面板底部"新增任务框"的顶边框拖拽手柄:向上拉放大输入框高度,
+    /// 高度换算出来的像素值写回 `WorkspaceState::add_input_height`(不是
+    /// `PanelDims`——它是每项目的工作树状态,不是全局布局)。基线 = 框底
+    /// = 左面板区底 = 顶栏之下、footbar 之上的整段,即
+    /// `window_height - footbar_height`;高度 = 基线 - 光标 y。
+    TodoAddGrow,
 }
 
 /// 参与拖拽换位的四种 tab 组：顶栏项目页签、终端会话页签、预览页签、浏览器
@@ -733,6 +739,10 @@ pub(crate) fn apply_row_drag(
                 ..state.dims
             }
         }
+        // `TodoAddGrow` 的高度换算不走这套 `PanelDims`(它落在 `ws.todo`),
+        // 由 `update` 的 `RowDrag` 分支单独处理。`apply_row_drag` 只会被
+        // `GitLogFileDiffSplit` 调用,这里给个兜底。
+        RowDivider::TodoAddGrow => state.dims,
     }
 }
 
@@ -3373,8 +3383,25 @@ impl App {
                 logical_y,
             } => {
                 if let Some(divider) = self.dragging_row {
-                    let state = self.shell_state();
-                    self.dims = apply_row_drag(state, divider, window_height, logical_y);
+                    match divider {
+                        RowDivider::GitLogFileDiffSplit => {
+                            let state = self.shell_state();
+                            self.dims = apply_row_drag(state, divider, window_height, logical_y);
+                        }
+                        // 新增任务框高度:基线 = 框底 = 左面板区底 =
+                        // `window_height - footbar_height`(顶栏在 `base`
+                        // 之上,不参与);高度 = 基线 - 光标 y,向上拉变高。
+                        // 上限再夹一道,避免列表区被压没(留约 140px)。
+                        RowDivider::TodoAddGrow => {
+                            let baseline = window_height - theme::geometry::footbar_height();
+                            let max_h = (baseline - theme::geometry::top_bar_height() - 140.0)
+                                .max(todo::ADD_INPUT_MIN_HEIGHT);
+                            let h = (baseline - logical_y).clamp(todo::ADD_INPUT_MIN_HEIGHT, max_h);
+                            if let Some(ws) = self.active_workspace_mut() {
+                                ws.todo.set_add_input_height(h);
+                            }
+                        }
+                    }
                 }
             }
             Message::RowDragEnd => {
@@ -4603,6 +4630,14 @@ impl App {
     }
 
     fn todo_message(&mut self, msg: todo::Message) {
+        // 新增任务框高度拖拽:只在 app 层接管,置 `dragging_row`,后续
+        // `CursorMoved` → `RowDrag` 由 `update` 统一换算高度写回
+        // `ws.todo`(见 `RowDrag` 的 `TodoAddGrow` 分支)。这条不到
+        // `todo::update`(那里有 no-op arm 保持 match 穷尽)。
+        if let todo::Message::AddResizeStart = msg {
+            self.dragging_row = Some(RowDivider::TodoAddGrow);
+            return;
+        }
         let Some(project_id) = self.active_project_id else {
             return;
         };
