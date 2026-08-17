@@ -8,9 +8,8 @@
 //! 验证通过、决定转正时,再补动画/交互/性能优化。
 use crate::delivery::WorktreeInfo;
 use crate::theme;
-use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::alignment;
-use iced_widget::core::{Color, Element, Font, Length, Pixels, Point, Rectangle, Vector};
+use iced_widget::core::{Element, Font, Length};
 use iced_widget::{column, container, row, scrollable, text};
 use std::path::{Path, PathBuf};
 
@@ -20,31 +19,6 @@ use std::path::{Path, PathBuf};
 /// revwalk",没有增量/游标接口,重算是唯一选项——见 build() 文档)。
 pub const DEFAULT_MAX_COMMITS: usize = 200;
 pub const LOAD_MORE_STEP: usize = 200;
-
-const ROW_HEIGHT: f32 = 22.0;
-const COL_WIDTH: f32 = 14.0;
-const DOT_RADIUS: f32 = 3.5;
-const LEFT_MARGIN: f32 = 12.0;
-const TEXT_GAP: f32 = 12.0;
-const LINE_WIDTH: f32 = 1.6;
-/// 选中提交详情子面板的宽度(px)。面板本身是 `Length::Fill` 高度、固定在
-/// canvas 右侧,宽度固定以免挤压提交图。要放得下每个文件的 unified diff
-/// 文本(等宽字体,常见改动行 60-80 列),比只放文件列表时的宽度宽一截。
-const DETAIL_WIDTH: f32 = 460.0;
-
-/// 与主题色轮换配色的 track 调色板——不用 gleisbau 自带的 CSS 颜色名,
-/// 省掉一个颜色名解析器,顺便让图和 ByteBoy2077 主题保持一致。
-const TRACK_COLORS: [Color; 5] = [
-    theme::color::CYAN,
-    theme::color::GREEN,
-    theme::color::GOLD,
-    theme::color::PURPLE,
-    theme::color::RED,
-];
-
-fn track_color(color_idx: usize) -> Color {
-    TRACK_COLORS[color_idx % TRACK_COLORS.len()]
-}
 
 /// 一个 commit 指向的引用(分支/远程分支/tag),供图上显示彩色标签。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -590,111 +564,6 @@ pub fn commit_detail(repo_path: &Path, oid: git2::Oid) -> Result<CommitDetail, S
     Ok(CommitDetail { files })
 }
 
-struct GitLogCanvas<'a> {
-    snapshot: &'a GitLogSnapshot,
-    selected: Option<git2::Oid>,
-    head_branch: Option<&'a str>,
-}
-
-fn row_center(row: usize, column: usize) -> Point {
-    Point::new(
-        LEFT_MARGIN + column as f32 * COL_WIDTH,
-        ROW_HEIGHT * 0.5 + row as f32 * ROW_HEIGHT,
-    )
-}
-
-impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for GitLogCanvas<'_> {
-    type State = ();
-
-    fn update(
-        &self,
-        _state: &mut Self::State,
-        event: &iced_widget::core::Event,
-        bounds: Rectangle,
-        cursor: iced_widget::core::mouse::Cursor,
-    ) -> Option<canvas::Action<Message>> {
-        let iced_widget::core::Event::Mouse(iced_widget::core::mouse::Event::ButtonPressed(
-            iced_widget::core::mouse::Button::Left,
-        )) = event
-        else {
-            return None;
-        };
-        let pos = cursor.position_in(bounds)?;
-        if pos.x < 0.0 || pos.y < 0.0 {
-            return None;
-        }
-        let row_idx = (pos.y / ROW_HEIGHT) as usize;
-        let row = self.snapshot.rows.get(row_idx)?;
-        Some(canvas::Action::publish(Message::SelectCommit(row.oid)).and_capture())
-    }
-
-    fn draw(
-        &self,
-        _state: &Self::State,
-        renderer: &iced_renderer::Renderer,
-        _theme: &iced_widget::Theme,
-        bounds: Rectangle,
-        _cursor: iced_widget::core::mouse::Cursor,
-    ) -> Vec<canvas::Geometry<iced_renderer::Renderer>> {
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
-        let text_x = LEFT_MARGIN + (self.snapshot.max_column + 1) as f32 * COL_WIDTH + TEXT_GAP;
-
-        // 先画连线,commit 圆点和文字盖在上面。
-        for (row_idx, commit) in self.snapshot.rows.iter().enumerate() {
-            let from = row_center(row_idx, commit.column);
-            for &(p_row, p_col, p_color_idx) in &commit.parents {
-                let to = row_center(p_row, p_col);
-                let path = canvas::Path::line(from, to);
-                frame.stroke(
-                    &path,
-                    canvas::Stroke::default()
-                        .with_color(track_color(p_color_idx))
-                        .with_width(LINE_WIDTH),
-                );
-            }
-        }
-
-        for (row_idx, commit) in self.snapshot.rows.iter().enumerate() {
-            let center = row_center(row_idx, commit.column);
-            let color = track_color(commit.color_idx);
-            if self.selected == Some(commit.oid) {
-                frame.stroke(
-                    &canvas::Path::circle(center, DOT_RADIUS + 2.5),
-                    canvas::Stroke::default()
-                        .with_color(theme::color::GOLD)
-                        .with_width(1.5),
-                );
-            }
-            frame.fill(&canvas::Path::circle(center, DOT_RADIUS), color);
-
-            let refs_prefix = ref_labels_text(&commit.refs, self.head_branch);
-
-            frame.with_save(|frame| {
-                frame.translate(Vector::new(
-                    text_x,
-                    row_idx as f32 * ROW_HEIGHT + ROW_HEIGHT * 0.5,
-                ));
-                let content = if refs_prefix.is_empty() {
-                    format!("{}  {}", commit.short_sha, commit.summary)
-                } else {
-                    format!("{}  {}  {}", commit.short_sha, refs_prefix, commit.summary)
-                };
-                frame.fill_text(canvas::Text {
-                    content,
-                    position: Point::ORIGIN,
-                    color: theme::color::CREAM,
-                    size: Pixels(theme::font::body() as f32),
-                    align_y: alignment::Vertical::Center,
-                    font: Font::MONOSPACE,
-                    ..canvas::Text::default()
-                });
-            });
-        }
-
-        vec![frame.into_geometry()]
-    }
-}
-
 /// 把一行 commit 的 `refs` 拼成形如 `[main][origin/main]` 的前缀文本;当前
 /// HEAD 所在的本地分支加 `→` 标记(`[→main]`)。空 `refs` 返回空字符串。
 /// 不在这里上色——canvas 文本整体只有一个 `Color`,没法给子串单独上色,
@@ -711,6 +580,68 @@ fn ref_labels_text(refs: &[RefLabel], head_branch: Option<&str>) -> String {
         })
         .collect::<Vec<_>>()
         .join("")
+}
+
+/// commit 线性列表(替代原 Canvas 拓扑图,2026-08-17 重构——见 spec
+/// "架构与数据流"第 6 节)。每行:图标(普通/合并)+ short_sha + 时间戳 +
+/// refs 标签 + summary,整行可点选中(`Message::SelectCommit`),选中态
+/// 左侧金色竖条高亮(对齐 Todo/Files 面板既有选中行视觉语言)。
+fn commit_list_view<'a>(
+    snapshot: &'a GitLogSnapshot,
+    selected: Option<git2::Oid>,
+    head_branch: Option<&'a str>,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let mut list = column![].spacing(2);
+    for row in &snapshot.rows {
+        let is_selected = selected == Some(row.oid);
+        let icon_kind = if row.is_merge {
+            crate::icons::IconKind::GitMerge
+        } else {
+            crate::icons::IconKind::GitCommitVertical
+        };
+        let refs_prefix = ref_labels_text(&row.refs, head_branch);
+        let mut line = row![
+            crate::icons::view(icon_kind, crate::theme::icon_size::row(), theme::color::DIM),
+            text(row.short_sha.clone())
+                .size(theme::font::caption())
+                .color(theme::color::DIM)
+                .font(Font::MONOSPACE),
+            text(format_commit_time(row.time))
+                .size(theme::font::caption_sm())
+                .color(theme::color::DIM),
+        ]
+        .spacing(8)
+        .align_y(alignment::Vertical::Center);
+        if !refs_prefix.is_empty() {
+            line = line.push(
+                text(refs_prefix)
+                    .size(theme::font::caption_sm())
+                    .color(theme::color::CYAN),
+            );
+        }
+        line = line.push(
+            text(row.summary.clone())
+                .size(theme::font::caption())
+                .color(theme::color::CREAM),
+        );
+        let accent = container(iced_widget::Space::new())
+            .width(Length::Fixed(3.0))
+            .height(Length::Fill)
+            .style(move |_t: &iced_widget::Theme| container::Style {
+                background: if is_selected {
+                    Some(theme::color::GOLD.into())
+                } else {
+                    None
+                },
+                ..container::Style::default()
+            });
+        let inner = row![accent, container(line).padding([4, 8]).width(Length::Fill)].spacing(0);
+        let area = iced_widget::MouseArea::new(inner)
+            .interaction(iced_widget::core::mouse::Interaction::Pointer)
+            .on_press(Message::SelectCommit(row.oid));
+        list = list.push(area);
+    }
+    scrollable(list).width(Length::Fill).height(Length::Fill).into()
 }
 
 /// 渲染整块提交图面板:有数据画 Canvas,出错画错误文案,两者皆无(比如
