@@ -8,9 +8,8 @@
 //! 验证通过、决定转正时,再补动画/交互/性能优化。
 use crate::delivery::WorktreeInfo;
 use crate::theme;
-use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::alignment;
-use iced_widget::core::{Color, Element, Font, Length, Pixels, Point, Rectangle, Vector};
+use iced_widget::core::{Border, Element, Font, Length};
 use iced_widget::{column, container, row, scrollable, text};
 use std::path::{Path, PathBuf};
 
@@ -20,31 +19,6 @@ use std::path::{Path, PathBuf};
 /// revwalk",没有增量/游标接口,重算是唯一选项——见 build() 文档)。
 pub const DEFAULT_MAX_COMMITS: usize = 200;
 pub const LOAD_MORE_STEP: usize = 200;
-
-const ROW_HEIGHT: f32 = 22.0;
-const COL_WIDTH: f32 = 14.0;
-const DOT_RADIUS: f32 = 3.5;
-const LEFT_MARGIN: f32 = 12.0;
-const TEXT_GAP: f32 = 12.0;
-const LINE_WIDTH: f32 = 1.6;
-/// 选中提交详情子面板的宽度(px)。面板本身是 `Length::Fill` 高度、固定在
-/// canvas 右侧,宽度固定以免挤压提交图。要放得下每个文件的 unified diff
-/// 文本(等宽字体,常见改动行 60-80 列),比只放文件列表时的宽度宽一截。
-const DETAIL_WIDTH: f32 = 460.0;
-
-/// 与主题色轮换配色的 track 调色板——不用 gleisbau 自带的 CSS 颜色名,
-/// 省掉一个颜色名解析器,顺便让图和 ByteBoy2077 主题保持一致。
-const TRACK_COLORS: [Color; 5] = [
-    theme::color::CYAN,
-    theme::color::GREEN,
-    theme::color::GOLD,
-    theme::color::PURPLE,
-    theme::color::RED,
-];
-
-fn track_color(color_idx: usize) -> Color {
-    TRACK_COLORS[color_idx % TRACK_COLORS.len()]
-}
 
 /// 一个 commit 指向的引用(分支/远程分支/tag),供图上显示彩色标签。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,19 +39,19 @@ pub enum RefKind {
 /// `CommitDetail` 上同理由的注释)。
 #[derive(Debug, Clone)]
 pub struct CommitRow {
-    column: usize,
-    color_idx: usize,
     short_sha: String,
     summary: String,
-    /// 父 commit 的 (row, column, color_idx),用于画连线;可能落在
-    /// `max_count` 截断范围之外——那种父 commit 不出现在 `rows` 里,
-    /// 此处已被过滤掉。
-    parents: Vec<(usize, usize, usize)>,
     /// 指向这个 commit 的分支/tag(可能为空)。
     refs: Vec<RefLabel>,
-    /// 这个 commit 的完整 40 位 oid,选中详情(Task 2)用——`short_sha` 只
-    /// 够显示,不够拿去 `git2::Repository::find_commit`。
+    /// 这个 commit 的完整 40 位 oid,选中详情用——`short_sha` 只够显示,
+    /// 不够拿去 `git2::Repository::find_commit`。
     oid: git2::Oid,
+    /// author time,Unix 秒——commit 列表行展示用(见 `format_commit_time`)。
+    time: i64,
+    /// 这是不是合并提交(真实 git parent 数 `>= 2`)。见 spec §6——2026-08-17
+    /// 重构后 commit 列表不再画分支拓扑,合并提交只靠这个 bool + `git-merge`
+    /// 图标区分,不需要 `column`/`color_idx`/`parents` 那套布局字段。
+    is_merge: bool,
 }
 
 /// 派生 `Debug + Clone`,理由同 [`CommitRow`]。
@@ -85,8 +59,7 @@ pub struct CommitRow {
 pub struct GitLogSnapshot {
     repo_path: PathBuf,
     rows: Vec<CommitRow>,
-    max_column: usize,
-    /// 当前 HEAD 所在的本地分支名(detached HEAD 时为 `None`)——图上给这
+    /// 当前 HEAD 所在的本地分支名(detached HEAD 时为 `None`)——列表里给这
     /// 个分支的标签加个 `→` 前缀区分"这是我现在checkout的那条"。
     head_branch: Option<String>,
     /// 这份快照实际请求的 `max_count`("加载更多"算下一次请求值用)。
@@ -100,6 +73,10 @@ impl GitLogSnapshot {
 
     pub fn max_count(&self) -> usize {
         self.max_count
+    }
+
+    pub fn head_branch(&self) -> Option<&str> {
+        self.head_branch.as_deref()
     }
 }
 
@@ -145,22 +122,11 @@ pub fn build(repo_path: &Path, max_count: usize) -> Result<GitLogSnapshot, Strin
 
     let head_branch = graph.head.is_branch.then(|| graph.head.name.clone());
 
-    let mut max_column = 0usize;
     let rows = graph
         .tracks
         .commits
         .iter()
         .map(|commit| {
-            let b_idx = commit
-                .branch_trace
-                .ok_or_else(|| "commit 缺少 branch_trace".to_string())?;
-            let column = graph
-                .layout
-                .track_visual(b_idx)
-                .and_then(|v| v.column)
-                .unwrap_or(0);
-            max_column = max_column.max(column);
-            let color_idx = b_idx.index();
             let git_commit = graph
                 .commit(commit.oid)
                 .map_err(|e| e.message().to_string())?;
@@ -172,21 +138,6 @@ pub fn build(repo_path: &Path, max_count: usize) -> Result<GitLogSnapshot, Strin
                 .flatten()
                 .unwrap_or("")
                 .to_string();
-            let parents = commit
-                .parents
-                .iter()
-                .filter_map(|poid| {
-                    let p_idx = *graph.tracks.indices.get(poid)?;
-                    let p_commit = graph.tracks.commits.get(p_idx)?;
-                    let p_b_idx = p_commit.branch_trace?;
-                    let p_column = graph
-                        .layout
-                        .track_visual(p_b_idx)
-                        .and_then(|v| v.column)
-                        .unwrap_or(0);
-                    Some((p_idx, p_column, p_b_idx.index()))
-                })
-                .collect();
             let refs = graph
                 .labels
                 .get_labels(&commit.oid)
@@ -208,14 +159,15 @@ pub fn build(repo_path: &Path, max_count: usize) -> Result<GitLogSnapshot, Strin
                         .collect()
                 })
                 .unwrap_or_default();
+            let time = git_commit.time().seconds();
+            let is_merge = git_commit.parent_count() >= 2;
             Ok(CommitRow {
-                column,
-                color_idx,
                 short_sha,
                 summary,
-                parents,
                 refs,
                 oid: commit.oid,
+                time,
+                is_merge,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -223,7 +175,6 @@ pub fn build(repo_path: &Path, max_count: usize) -> Result<GitLogSnapshot, Strin
     Ok(GitLogSnapshot {
         repo_path: repo_path.to_path_buf(),
         rows,
-        max_column,
         head_branch,
         max_count,
     })
@@ -267,6 +218,26 @@ pub enum Message {
     ProjectTabOpen(PathBuf),
     DetailLoaded(PathBuf, git2::Oid, Result<CommitDetail, String>),
     SnapshotLoaded(PathBuf, usize, Result<GitLogSnapshot, String>),
+    /// 点文件列表某一行,选中它(右下面板据此展示该文件的 diff)。
+    SelectFile(String),
+    /// 展开左侧面板底部的分支切换下拉(首次展开时内核顺带异步查一次
+    /// `delivery::local_branches`)。
+    BranchPickerOpen,
+    BranchPickerClose,
+    /// 内核异步查完本地分支列表 + 工作区 dirty 状态后落地(仓库路径核对
+    /// 一致才接受)。`bool` = 工作区是否有未提交改动(`delivery::is_dirty`)。
+    BranchesLoaded(PathBuf, Vec<String>, bool),
+    /// 点某个分支——内核截获处理(同 `LoadMore`/`ProjectTabOpen` 的既有
+    /// 例外模式),不会转发到 `update`(见其 `unreachable!` 分支)。
+    BranchSwitch(String),
+    BranchSwitchDone(Result<(), String>),
+    /// 三栏布局里左右分割线开始拖拽——内核截获,转成 app 级
+    /// `ColumnDragStart(GitLogSplit)`(分割线拖拽是 app 级 PanelDims 状态,
+    /// 扩展自己发不了 app::Message,靠这条例外消息让内核代发)。
+    ColumnDragStart,
+    /// 三栏布局里右侧上下分割线开始拖拽——内核截获,转成 app 级
+    /// `RowDragStart(GitLogFileDiffSplit)`。
+    RowDragStart,
 }
 
 /// Git Log 面板的全部状态。现在挂在 `App`(不按项目分,见设计文档"非
@@ -278,11 +249,25 @@ pub struct State {
     error: Option<String>,
     selected: Option<git2::Oid>,
     detail: Option<Result<CommitDetail, String>>,
+    /// 右上文件列表当前选中的文件路径(`CommitDetail.files[].path`)。切
+    /// commit 时先清空,新 `detail` 落地后预选第一个改动文件。
+    selected_file: Option<String>,
     /// 最近一次派发的 `build` 请求 (repo_path, max_count)——落地时核对
     /// 还对不对得上"现在真正需要的",不对就丢弃。
     pending: Option<(PathBuf, usize)>,
     /// "加载更多"发起前记下的选中提交,新快照落地后据此还原选中态。
     restore_after_load: Option<git2::Oid>,
+    /// 面板底部分支下拉是否展开。
+    branch_picker_open: bool,
+    /// 当前仓库的本地分支列表(`delivery::local_branches` 结果缓存,内核在
+    /// `BranchPickerOpen` 首次展开时异步查一次)。
+    branches: Vec<String>,
+    /// 当前仓库工作区是否有未提交改动(`delivery::is_dirty` 结果,随
+    /// `BranchesLoaded` 一起落地)。dirty 时锁定除当前分支外的其余分支,
+    /// 语义跟 `files.rs::branch_picker_popup` 的 dirty-lock 一致。
+    dirty: bool,
+    /// 分支切换请求进行中(禁用下拉交互、显示"切换中…")。
+    branch_switch_pending: bool,
 }
 
 impl State {
@@ -326,6 +311,18 @@ impl State {
     pub fn set_restore_after_load(&mut self, oid: Option<git2::Oid>) {
         self.restore_after_load = oid;
     }
+
+    /// 分支列表是否还没查过(`BranchPickerOpen` 首次展开时,内核据此判断
+    /// 要不要发起异步查询——避免每次展开都重新查一遍)。
+    pub fn branches_is_empty(&self) -> bool {
+        self.branches.is_empty()
+    }
+
+    /// 设置"分支切换请求进行中"标记(内核在 `BranchSwitch` 截获时置位,落地
+    /// `BranchSwitchDone` 时由 `update()` 清)。
+    pub(crate) fn set_branch_switch_pending(&mut self, pending: bool) {
+        self.branch_switch_pending = pending;
+    }
 }
 
 /// 处理 `SelectCommit`/`DetailLoaded`/`SnapshotLoaded` 三种消息。
@@ -345,6 +342,7 @@ pub fn update(
         Message::SelectCommit(oid) => {
             state.selected = Some(oid);
             state.detail = None;
+            state.selected_file = None;
             let repo_path = state.cache.as_ref().map(|c| c.repo_path().to_path_buf())?;
             handle.spawn(async move {
                 let repo_path2 = repo_path.clone();
@@ -355,11 +353,19 @@ pub fn update(
             });
             None
         }
+        Message::SelectFile(path) => {
+            state.selected_file = Some(path);
+            None
+        }
         Message::DetailLoaded(repo_path, oid, result) => {
             let still_current = state.cache.as_ref().map(|c| c.repo_path())
                 == Some(repo_path.as_path())
                 && state.selected == Some(oid);
             if still_current {
+                state.selected_file = match &result {
+                    Ok(detail) => detail.files.first().map(|f| f.path.clone()),
+                    Err(_) => None,
+                };
                 state.detail = Some(result);
             }
             // 否则:项目已切换,或用户点了别的提交——这份结果过期了,丢弃。
@@ -392,6 +398,41 @@ pub fn update(
         Message::ProjectTabOpen(_) => {
             unreachable!(
                 "ProjectTabOpen 由内核在 Message::GitLog 分支里直接处理(切到对应 worktree),不会转发到这里"
+            )
+        }
+        Message::BranchPickerOpen => {
+            state.branch_picker_open = true;
+            None
+        }
+        Message::BranchPickerClose => {
+            state.branch_picker_open = false;
+            None
+        }
+        Message::BranchesLoaded(repo_path, branches, dirty) => {
+            let matches = state.cache.as_ref().map(|c| c.repo_path()) == Some(repo_path.as_path());
+            if matches {
+                state.branches = branches;
+                state.dirty = dirty;
+            }
+            None
+        }
+        Message::BranchSwitch(_) => {
+            unreachable!(
+                "BranchSwitch 由内核在 Message::GitLog 分支里直接处理(需要仓库路径 + 真实 checkout IO),不会转发到这里"
+            )
+        }
+        Message::BranchSwitchDone(result) => {
+            state.branch_picker_open = false;
+            state.branch_switch_pending = false;
+            match result {
+                Ok(()) => state.error = None,
+                Err(e) => state.error = Some(e),
+            }
+            None
+        }
+        Message::ColumnDragStart | Message::RowDragStart => {
+            unreachable!(
+                "ColumnDragStart/RowDragStart 由内核在 Message::GitLog 分支里直接处理(转成 app 级拖拽消息),不会转发到这里"
             )
         }
     }
@@ -564,111 +605,6 @@ pub fn commit_detail(repo_path: &Path, oid: git2::Oid) -> Result<CommitDetail, S
     Ok(CommitDetail { files })
 }
 
-struct GitLogCanvas<'a> {
-    snapshot: &'a GitLogSnapshot,
-    selected: Option<git2::Oid>,
-    head_branch: Option<&'a str>,
-}
-
-fn row_center(row: usize, column: usize) -> Point {
-    Point::new(
-        LEFT_MARGIN + column as f32 * COL_WIDTH,
-        ROW_HEIGHT * 0.5 + row as f32 * ROW_HEIGHT,
-    )
-}
-
-impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for GitLogCanvas<'_> {
-    type State = ();
-
-    fn update(
-        &self,
-        _state: &mut Self::State,
-        event: &iced_widget::core::Event,
-        bounds: Rectangle,
-        cursor: iced_widget::core::mouse::Cursor,
-    ) -> Option<canvas::Action<Message>> {
-        let iced_widget::core::Event::Mouse(iced_widget::core::mouse::Event::ButtonPressed(
-            iced_widget::core::mouse::Button::Left,
-        )) = event
-        else {
-            return None;
-        };
-        let pos = cursor.position_in(bounds)?;
-        if pos.x < 0.0 || pos.y < 0.0 {
-            return None;
-        }
-        let row_idx = (pos.y / ROW_HEIGHT) as usize;
-        let row = self.snapshot.rows.get(row_idx)?;
-        Some(canvas::Action::publish(Message::SelectCommit(row.oid)).and_capture())
-    }
-
-    fn draw(
-        &self,
-        _state: &Self::State,
-        renderer: &iced_renderer::Renderer,
-        _theme: &iced_widget::Theme,
-        bounds: Rectangle,
-        _cursor: iced_widget::core::mouse::Cursor,
-    ) -> Vec<canvas::Geometry<iced_renderer::Renderer>> {
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
-        let text_x = LEFT_MARGIN + (self.snapshot.max_column + 1) as f32 * COL_WIDTH + TEXT_GAP;
-
-        // 先画连线,commit 圆点和文字盖在上面。
-        for (row_idx, commit) in self.snapshot.rows.iter().enumerate() {
-            let from = row_center(row_idx, commit.column);
-            for &(p_row, p_col, p_color_idx) in &commit.parents {
-                let to = row_center(p_row, p_col);
-                let path = canvas::Path::line(from, to);
-                frame.stroke(
-                    &path,
-                    canvas::Stroke::default()
-                        .with_color(track_color(p_color_idx))
-                        .with_width(LINE_WIDTH),
-                );
-            }
-        }
-
-        for (row_idx, commit) in self.snapshot.rows.iter().enumerate() {
-            let center = row_center(row_idx, commit.column);
-            let color = track_color(commit.color_idx);
-            if self.selected == Some(commit.oid) {
-                frame.stroke(
-                    &canvas::Path::circle(center, DOT_RADIUS + 2.5),
-                    canvas::Stroke::default()
-                        .with_color(theme::color::GOLD)
-                        .with_width(1.5),
-                );
-            }
-            frame.fill(&canvas::Path::circle(center, DOT_RADIUS), color);
-
-            let refs_prefix = ref_labels_text(&commit.refs, self.head_branch);
-
-            frame.with_save(|frame| {
-                frame.translate(Vector::new(
-                    text_x,
-                    row_idx as f32 * ROW_HEIGHT + ROW_HEIGHT * 0.5,
-                ));
-                let content = if refs_prefix.is_empty() {
-                    format!("{}  {}", commit.short_sha, commit.summary)
-                } else {
-                    format!("{}  {}  {}", commit.short_sha, refs_prefix, commit.summary)
-                };
-                frame.fill_text(canvas::Text {
-                    content,
-                    position: Point::ORIGIN,
-                    color: theme::color::CREAM,
-                    size: Pixels(theme::font::body() as f32),
-                    align_y: alignment::Vertical::Center,
-                    font: Font::MONOSPACE,
-                    ..canvas::Text::default()
-                });
-            });
-        }
-
-        vec![frame.into_geometry()]
-    }
-}
-
 /// 把一行 commit 的 `refs` 拼成形如 `[main][origin/main]` 的前缀文本;当前
 /// HEAD 所在的本地分支加 `→` 标记(`[→main]`)。空 `refs` 返回空字符串。
 /// 不在这里上色——canvas 文本整体只有一个 `Color`,没法给子串单独上色,
@@ -687,129 +623,78 @@ fn ref_labels_text(refs: &[RefLabel], head_branch: Option<&str>) -> String {
         .join("")
 }
 
-/// 渲染整块提交图面板:有数据画 Canvas,出错画错误文案,两者皆无(比如
-/// 尚未打开项目)画空状态提示。纯函数——不碰 `App`/`Workspace` 内部状态,
-/// 调用方(`workspace.rs`)负责取数据、决定何时重建缓存、维护选中态。
-pub fn view<'a>(
-    state: &'a State,
-    worktrees: &'a [WorktreeInfo],
+/// commit 线性列表(替代原 Canvas 拓扑图,2026-08-17 重构——见 spec
+/// "架构与数据流"第 6 节)。每行:图标(普通/合并)+ short_sha + 时间戳 +
+/// refs 标签 + summary,整行可点选中(`Message::SelectCommit`),选中态
+/// 左侧金色竖条高亮(对齐 Todo/Files 面板既有选中行视觉语言)。
+fn commit_list_view<'a>(
+    snapshot: &'a GitLogSnapshot,
+    selected: Option<git2::Oid>,
+    head_branch: Option<&'a str>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let error = state.error.as_deref();
-    if let Some(err) = error {
-        return container(
-            column![
-                crate::homespace::home_panel_head(crate::icons::IconKind::GitGraph, "Git"),
-                text(format!("git log 读取失败: {err}")).color(theme::color::RED),
-            ]
-            .spacing(8)
-            .padding(12),
-        )
-        .into();
-    }
-    let loading = state.pending.is_some();
-    let Some(snapshot) = state.cache.as_ref() else {
-        let text_content = if loading {
-            "加载中…"
+    let mut list = column![].spacing(2);
+    for row in &snapshot.rows {
+        let is_selected = selected == Some(row.oid);
+        let icon_kind = if row.is_merge {
+            crate::icons::IconKind::GitMerge
         } else {
-            "未打开项目"
+            crate::icons::IconKind::GitCommitVertical
         };
-        return container(
-            column![
-                crate::homespace::home_panel_head(crate::icons::IconKind::GitGraph, "Git"),
-                text(text_content).color(theme::color::DIM),
-            ]
-            .spacing(8)
-            .padding(12),
-        )
-        .into();
-    };
-    let selected = state.selected;
-    let detail = state.detail.as_ref();
-    if snapshot.rows.is_empty() {
-        return container(
-            column![
-                crate::homespace::home_panel_head(crate::icons::IconKind::GitGraph, "Git"),
-                text("没有可显示的提交").color(theme::color::DIM),
-            ]
-            .spacing(8)
-            .padding(12),
-        )
-        .into();
-    }
-    let height = ROW_HEIGHT * snapshot.rows.len() as f32;
-    let head_branch = snapshot.head_branch.as_deref();
-    let canvas: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        Canvas::new(GitLogCanvas {
-            snapshot,
-            selected,
-            head_branch,
-        })
-        .width(Length::Fill)
-        .height(Length::Fixed(height))
-        .into();
-    let mut header = row![
-        text(snapshot.repo_path.display().to_string())
-            .size(theme::font::caption())
-            .color(theme::color::DIM)
-    ];
-    // 已经有旧快照在画的时候(引用变化重建/加载更多)又发起了新一轮异步
-    // 加载——旧图先留着不闪空,但得给个文案说明"正在换新",不然用户会
-    // 疑惑点了"加载更多"怎么行数没变。
-    if loading {
-        header = header.push(
-            text("刷新中…")
+        let refs_prefix = ref_labels_text(&row.refs, head_branch);
+        let mut line = row![
+            crate::icons::view(icon_kind, crate::theme::icon_size::row(), theme::color::DIM),
+            text(row.short_sha.clone())
                 .size(theme::font::caption())
+                .color(theme::color::DIM)
+                .font(Font::MONOSPACE),
+            text(format_commit_time(row.time))
+                .size(theme::font::caption_sm())
                 .color(theme::color::DIM),
+        ]
+        .spacing(8)
+        .align_y(alignment::Vertical::Center);
+        if !refs_prefix.is_empty() {
+            line = line.push(
+                text(refs_prefix)
+                    .size(theme::font::caption_sm())
+                    .color(theme::color::CYAN),
+            );
+        }
+        line = line.push(
+            text(row.summary.clone())
+                .size(theme::font::caption())
+                .color(theme::color::CREAM),
         );
+        let accent = container(iced_widget::Space::new())
+            .width(Length::Fixed(3.0))
+            .height(Length::Fill)
+            .style(move |_t: &iced_widget::Theme| container::Style {
+                background: if is_selected {
+                    Some(theme::color::GOLD.into())
+                } else {
+                    None
+                },
+                ..container::Style::default()
+            });
+        let inner = row![accent, container(line).padding([4, 8]).width(Length::Fill)].spacing(0);
+        let area = iced_widget::MouseArea::new(inner)
+            .interaction(iced_widget::core::mouse::Interaction::Pointer)
+            .on_press(Message::SelectCommit(row.oid));
+        list = list.push(area);
     }
-    let load_more = iced_widget::button(
-        text("加载更多提交 (+200)")
-            .size(theme::font::caption())
-            .color(theme::color::CREAM),
-    )
-    .on_press_maybe((!loading).then_some(Message::LoadMore))
-    .padding([4, 12]);
-    let graph_body = column![canvas, load_more];
-    let graph = scrollable(graph_body)
-        .width(Length::Fill)
-        .height(Length::Fill);
-    if let Some(detail_res) = detail {
-        let detail_panel = detail_view(snapshot, selected, detail_res);
-        column![
-            crate::homespace::home_panel_head(crate::icons::IconKind::GitGraph, "Git"),
-            header,
-            worktree_strip(worktrees),
-            row![graph, detail_panel],
-        ]
-        .spacing(8)
-        .padding(12)
+    scrollable(list)
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
-    } else {
-        column![
-            crate::homespace::home_panel_head(crate::icons::IconKind::GitGraph, "Git"),
-            header,
-            worktree_strip(worktrees),
-            graph,
-        ]
-        .spacing(8)
-        .padding(12)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
-    }
 }
 
-/// 选中提交右侧的详情子面板:文件列表(状态色点 + 路径)+ 聚焦文件的
-/// unified diff。不内聚滚动,交给外层 `column` 撑;文件列表自滚动。
-/// 纯函数:选中态、详情结果都由上层 `view` 传进来。
-fn detail_view<'a>(
-    _snapshot: &GitLogSnapshot,
-    _selected: Option<git2::Oid>,
-    result: &'a Result<CommitDetail, String>,
+/// 右上文件列表:选中 commit 改动的每个文件一行(状态字符 + 路径),点击
+/// 发 `Message::SelectFile`,选中态同 `commit_list_view` 的左侧金色竖条。
+fn file_list_view<'a>(
+    detail: &'a Result<CommitDetail, String>,
+    selected_file: Option<&'a str>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> = match result {
+    match detail {
         Err(err) => container(text(format!("详情加载失败: {err}")).color(theme::color::RED))
             .padding(8)
             .into(),
@@ -819,48 +704,328 @@ fn detail_view<'a>(
                 .into()
         }
         Ok(detail) => {
-            let list = detail.files.iter().fold(column![].spacing(10), |acc, f| {
+            let mut list = column![].spacing(2);
+            for f in &detail.files {
+                let is_selected = selected_file == Some(f.path.as_str());
                 let color = match f.status {
                     git2::Delta::Added => theme::color::GREEN,
                     git2::Delta::Deleted => theme::color::RED,
-                    // 修改/重命名/复制等其余状态是纯分类展示,不是甲方动作,
-                    // 不能借用 `theme::color::GOLD`(CLAUDE.md 硬性裁决)。
                     _ => theme::color::CYAN,
                 };
-                let header = row![
+                let line = row![
                     text(status_glyph(f.status)).color(color).width(18),
-                    text(&f.path)
+                    text(f.path.clone())
                         .size(theme::font::caption())
                         .color(theme::color::CREAM),
                 ]
-                .spacing(4)
-                .padding([2, 8]);
-                let acc = acc.push(header);
-                if f.patch.is_empty() {
-                    acc
-                } else {
-                    acc.push(
-                        text(f.patch.clone())
-                            .size(theme::font::caption())
-                            .color(theme::color::BODY)
-                            .font(Font::MONOSPACE),
-                    )
-                }
-            });
+                .spacing(4);
+                let accent = container(iced_widget::Space::new())
+                    .width(Length::Fixed(3.0))
+                    .height(Length::Fill)
+                    .style(move |_t: &iced_widget::Theme| container::Style {
+                        background: if is_selected {
+                            Some(theme::color::GOLD.into())
+                        } else {
+                            None
+                        },
+                        ..container::Style::default()
+                    });
+                let inner =
+                    row![accent, container(line).padding([2, 8]).width(Length::Fill)].spacing(0);
+                let area = iced_widget::MouseArea::new(inner)
+                    .interaction(iced_widget::core::mouse::Interaction::Pointer)
+                    .on_press(Message::SelectFile(f.path.clone()));
+                list = list.push(area);
+            }
             scrollable(list)
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
         }
+    }
+}
+
+/// 渲染整块 Git Log 面板(三栏:左 commit 列表 | 右上文件列表 / 右下 diff
+/// 内容,两条分割线都可拖拽)。纯函数——不碰 `App`/`Workspace` 内部状态,
+/// 两条 split 比例由内核(`app.rs`)持有并传进来(与 Todo/Project 面板"内核
+/// 传 split 值进来"的既有模式一致)。
+pub fn view<'a>(
+    state: &'a State,
+    worktrees: &'a [WorktreeInfo],
+    git_log_split: f32,
+    git_log_file_diff_split: f32,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let error = state.error.as_deref();
+    let head = crate::homespace::home_panel_head(crate::icons::IconKind::GitGraph, "Git");
+
+    let loading = state.pending.is_some();
+    let Some(snapshot) = state.cache.as_ref() else {
+        let text_content = if loading {
+            "加载中…"
+        } else {
+            "未打开项目"
+        };
+        return container(
+            column![head, text(text_content).color(theme::color::DIM)]
+                .spacing(8)
+                .padding(12),
+        )
+        .into();
     };
-    container(body)
-        .width(Length::Fixed(DETAIL_WIDTH))
+    if snapshot.rows.is_empty() {
+        return container(
+            column![head, text("没有可显示的提交").color(theme::color::DIM)]
+                .spacing(8)
+                .padding(12),
+        )
+        .into();
+    }
+
+    let head_branch = snapshot.head_branch();
+    let mut left = column![head, worktree_strip(worktrees)].spacing(8);
+    if let Some(err) = error {
+        left = left.push(
+            text(format!("git log 读取失败: {err}"))
+                .size(theme::font::caption())
+                .color(theme::color::RED),
+        );
+    }
+    left = left.push(commit_list_view(snapshot, state.selected, head_branch));
+    let load_more = iced_widget::button(
+        text("加载更多提交 (+200)")
+            .size(theme::font::caption())
+            .color(theme::color::CREAM),
+    )
+    .on_press_maybe((!loading).then_some(Message::LoadMore))
+    .padding([4, 12]);
+    left = left.push(load_more);
+    left = left.push(branch_toggle_button(state, head_branch));
+    let left_with_picker = iced_widget::stack![
+        container(left).width(Length::Fill).height(Length::Fill),
+        branch_picker_view(state, head_branch),
+    ];
+
+    let (list_portion, content_portion) = crate::workspace::split_portions(git_log_split);
+    let right: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        if let Some(detail) = state.detail.as_ref() {
+            let (top_portion, bottom_portion) =
+                crate::workspace::split_portions(git_log_file_diff_split);
+            column![
+                container(file_list_view(detail, state.selected_file.as_deref()))
+                    .height(Length::FillPortion(top_portion)),
+                crate::app::horizontal_divider_bar(
+                    theme::color::BG,
+                    theme::color::BG,
+                    Message::RowDragStart,
+                ),
+                container(diff_pane_view(detail, state.selected_file.as_deref()))
+                    .height(Length::FillPortion(bottom_portion)),
+            ]
+            .height(Length::Fill)
+            .into()
+        } else {
+            container(text("选择一个提交查看改动").color(theme::color::DIM))
+                .padding(12)
+                .into()
+        };
+
+    row![
+        container(left_with_picker).width(Length::FillPortion(list_portion)),
+        crate::app::divider_bar(
+            crate::app::Divider::GitLogSplit,
+            theme::color::BG,
+            theme::color::BG,
+            Message::ColumnDragStart,
+        ),
+        container(right).width(Length::FillPortion(content_portion)),
+    ]
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
+}
+
+/// 右下 diff 内容面板:`selected_file` 对应文件的 patch,逐行染色(复用
+/// `diff_render::colored_diff_lines`)。找不到该路径(比如换 commit 那一瞬间
+/// `selected_file` 还没跟上新 `detail`)或未选中任何文件时展示占位文案,
+/// 不 panic。
+fn diff_pane_view<'a>(
+    detail: &'a Result<CommitDetail, String>,
+    selected_file: Option<&'a str>,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let Ok(detail) = detail else {
+        // 错误态已经在 file_list_view 里展示过一次,这里不重复展示错误
+        // 文案,给个中性占位即可。
+        return container(iced_widget::Space::new()).into();
+    };
+    let Some(path) = selected_file else {
+        return container(text("未选中文件").color(theme::color::DIM))
+            .padding(8)
+            .into();
+    };
+    let Some(entry) = detail.files.iter().find(|f| f.path == path) else {
+        return container(text("未选中文件").color(theme::color::DIM))
+            .padding(8)
+            .into();
+    };
+    let mut content = column![
+        text(entry.path.clone())
+            .size(theme::font::caption())
+            .color(theme::color::DIM)
+    ]
+    .spacing(4);
+    if entry.patch.is_empty() {
+        content = content.push(text("(无 diff 内容)").color(theme::color::DIM));
+    } else {
+        content = content.push(crate::diff_render::colored_diff_lines(&entry.patch));
+    }
+    if entry.truncated {
+        content = content.push(
+            text("… diff 过长,已截断显示")
+                .size(theme::font::caption_sm())
+                .color(theme::color::DIM),
+        );
+    }
+    scrollable(content)
+        .width(Length::Fill)
         .height(Length::Fill)
+        .into()
+}
+
+/// 左侧面板底部固定展示:当前分支名 + 展开箭头,点击发
+/// `Message::BranchPickerOpen`/`BranchPickerClose`(按当前展开态二选一)。
+fn branch_toggle_button<'a>(
+    state: &'a State,
+    head_branch: Option<&'a str>,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let label = head_branch.unwrap_or("(无分支)");
+    let msg = if state.branch_picker_open {
+        Message::BranchPickerClose
+    } else {
+        Message::BranchPickerOpen
+    };
+    iced_widget::button(
+        row![
+            text(label)
+                .size(theme::font::body())
+                .color(theme::color::CREAM),
+            iced_widget::Space::new().width(Length::Fill),
+            crate::icons::view(
+                crate::icons::IconKind::ChevronDown,
+                crate::theme::icon_size::row(),
+                theme::color::DIM
+            ),
+        ]
+        .align_y(alignment::Vertical::Center),
+    )
+    .width(Length::Fill)
+    .padding([6, 10])
+    .on_press_maybe((!state.branch_switch_pending).then_some(msg))
+    .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+        background: None,
+        text_color: theme::color::CREAM,
+        border: Border {
+            color: theme::color::BORDER,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..iced_widget::button::Style::default()
+    })
+    .into()
+}
+
+/// 分支下拉展开层:局部 `stack!`(不是 window-wide overlay,只覆盖左侧
+/// Git 面板范围),视觉风格照抄 `files.rs::branch_picker_popup`(CARD 底/
+/// BORDER 描边/当前分支 GOLD 高亮),但状态完全独立(不读 `files::
+/// WorkspaceState`)。`branch_switch_pending` 时全部禁用并显示"切换中…"。
+fn branch_picker_view<'a>(
+    state: &'a State,
+    head_branch: Option<&'a str>,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    if !state.branch_picker_open {
+        return iced_widget::Space::new().into();
+    }
+    let mut list = column![].spacing(2).width(Length::Fill);
+    if state.branch_switch_pending {
+        list = list.push(
+            text("切换中…")
+                .size(theme::font::body())
+                .color(theme::color::DIM),
+        );
+    }
+    if state.branches.is_empty() {
+        list = list.push(
+            text("暂无本地分支")
+                .size(theme::font::body())
+                .color(theme::color::DIM),
+        );
+    }
+    // dirty(有未提交改动)时锁定除当前分支外的其余分支;切换请求进行中时
+    // 全部锁定——跟 `branch_toggle_button` 的 `branch_switch_pending` 禁用
+    // 语义一致。
+    for name in &state.branches {
+        let is_current = Some(name.as_str()) == head_branch;
+        let locked = state.branch_switch_pending || (state.dirty && !is_current);
+        let color = if is_current {
+            theme::color::GOLD
+        } else if locked {
+            theme::color::DIM
+        } else {
+            theme::color::CREAM
+        };
+        let label = if is_current && state.dirty {
+            format!("{name} (Uncommitted)")
+        } else {
+            name.clone()
+        };
+        let row_btn = iced_widget::button(text(label).size(theme::font::body()).color(color))
+            .width(Length::Fill)
+            .padding([6, 10])
+            .style(
+                move |_t: &iced_widget::Theme, s: iced_widget::button::Status| {
+                    let base = iced_widget::button::Style {
+                        background: None,
+                        text_color: color,
+                        ..iced_widget::button::Style::default()
+                    };
+                    match s {
+                        iced_widget::button::Status::Hovered if !locked => {
+                            iced_widget::button::Style {
+                                background: Some(theme::color::TAB_HOVER.into()),
+                                ..base
+                            }
+                        }
+                        _ => base,
+                    }
+                },
+            );
+        let row_btn = if locked || is_current {
+            row_btn
+        } else {
+            row_btn.on_press(Message::BranchSwitch(name.clone()))
+        };
+        list = list.push(row_btn);
+    }
+    let panel = container(list)
         .padding(8)
+        .width(Length::Fill)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(crate::theme::region::background().into()),
+            background: Some(theme::color::CARD.into()),
+            border: Border {
+                color: theme::color::BORDER,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
             ..container::Style::default()
-        })
+        });
+    let dismiss = iced_widget::MouseArea::new(
+        iced_widget::Space::new()
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .on_press(Message::BranchPickerClose);
+    iced_widget::stack![dismiss, panel]
+        .width(Length::Fill)
+        .height(Length::Shrink)
         .into()
 }
 
@@ -875,14 +1040,47 @@ fn status_glyph(status: git2::Delta) -> &'static str {
     }
 }
 
+/// commit 时间戳格式化,`YYYY-MM-DD HH:MM:SS`。不引入 `chrono`——用标准库
+/// 手工做民用历换算(Howard Hinnant 的 `civil_from_days`,与 `todo.rs` 里
+/// 那份同源)。展示的是 UTC(不依赖本地时区,也不引入时区库——commit 列表
+/// 的时间戳是纯展示态,UTC 足够)。
+fn format_commit_time(unix_secs: i64) -> String {
+    let secs = unix_secs.max(0) as u64;
+    let days = (secs / 86_400) as i64;
+    let secs_of_day = secs % 86_400;
+    let (h, m, s) = (
+        secs_of_day / 3600,
+        (secs_of_day / 60) % 60,
+        secs_of_day % 60,
+    );
+    let (y, mo, d) = civil_from_days(days);
+    format!("{y:04}-{mo:02}-{d:02} {h:02}:{m:02}:{s:02}")
+}
+
+/// Howard Hinnant 的 `civil_from_days` 算法:Unix epoch 起的天数 → (年, 月, 日)。
+/// 范围覆盖 1970..=2100,足够 commit 时间戳用。与 `todo.rs` 的同名函数同源
+/// (那个是模块私有,不便跨模块复用,这里照抄一份)。
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// spike 验证核心问题:`gleisbau` 能否对 Dozer 自己这个真实、有分叉/合并
-    /// 历史的仓库跑出合理的布局数据。跑 `cargo test -p dozer-app git_log::tests
-    /// -- --nocapture` 看打印的前 20 行,人工核对 column/parents 是否符合直觉
-    /// (主线一列到底,feature 分支另开列,merge commit 有多个 parent 边)。
+    /// 历史的仓库跑出合理的 commit 列表 + refs 标签 + is_merge 标记。跑
+    /// `cargo test -p dozer-app git_log::tests -- --nocapture` 看打印的前 20
+    /// 行,人工核对 sha/refs/summary 是否符合直觉。
     #[test]
     fn build_against_real_repo() {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -893,26 +1091,62 @@ mod tests {
             build(repo_root, DEFAULT_MAX_COMMITS).expect("gleisbau 应能解析 dozer 自己的仓库");
 
         assert!(!snapshot.rows.is_empty(), "真实仓库应至少有一个 commit");
-        assert!(
-            snapshot.max_column < 50,
-            "正常仓库的分支列数不该失控般大: {}",
-            snapshot.max_column
-        );
 
         for (row_idx, row) in snapshot.rows.iter().take(20).enumerate() {
             println!(
-                "row={row_idx} col={} color={} sha={} parents={:?} summary={:?}",
-                row.column, row.color_idx, row.short_sha, row.parents, row.summary
+                "row={row_idx} sha={} merge={} summary={:?}",
+                row.short_sha, row.is_merge, row.summary
             );
         }
 
-        // merge commit(有 ≥2 个 parent)理应至少出现一次——Dozer 仓库历史里
-        // 确实有过 merge(如 2429d15),不是纯线性历史;若这条断了,说明布局
-        // 丢了合并边,数据链路没走通。
+        // merge commit 理应至少出现一次——Dozer 仓库历史里确实有过 merge
+        // (如 2429d15),不是纯线性历史。
         assert!(
-            snapshot.rows.iter().any(|r| r.parents.len() >= 2),
+            snapshot.rows.iter().any(|r| r.is_merge),
             "200 个 commit 窗口内应能看到至少一个 merge"
         );
+    }
+
+    #[test]
+    fn build_populates_time_and_is_merge() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("crates/dozer-app 应有两层上级目录到仓库根");
+        let snapshot =
+            build(repo_root, DEFAULT_MAX_COMMITS).expect("gleisbau 应能解析 dozer 自己的仓库");
+
+        // 每一行的 time 都应该是合理的正数(Unix 秒,仓库不可能早于 2020 年)。
+        let epoch_2020 = 1_577_836_800_i64;
+        for row in &snapshot.rows {
+            assert!(
+                row.time > epoch_2020,
+                "commit time 应晚于 2020-01-01: {}",
+                row.time
+            );
+        }
+
+        // Dozer 仓库历史里确实有过 merge(如 2429d15),is_merge 应该跟
+        // 真实的 git parent 数一致(不能拿 `parents.len()` 比——那是按
+        // `max_count` 窗口过滤后的 Vec,父提交恰好被窗口截断时两者会不一致,
+        // 见 `CommitRow::is_merge` 字段注释)。
+        let has_merge_row = snapshot.rows.iter().any(|r| r.is_merge);
+        assert!(
+            has_merge_row,
+            "200 个 commit 窗口内应能看到至少一个 is_merge=true 的行"
+        );
+        let repo = git2::Repository::open(repo_root).expect("应能打开 dozer 自己的仓库");
+        for row in &snapshot.rows {
+            let commit = repo
+                .find_commit(row.oid)
+                .expect("snapshot 里的 oid 应能查到");
+            assert_eq!(
+                row.is_merge,
+                commit.parent_count() >= 2,
+                "is_merge 应与真实 git parent 数一致: {}",
+                row.short_sha
+            );
+        }
     }
 
     #[test]
@@ -953,7 +1187,7 @@ mod tests {
         // 走得更远,不应该导致已经算出来的部分变形)。
         for (a, b) in small.rows.iter().zip(bigger.rows.iter()) {
             assert_eq!(a.short_sha, b.short_sha);
-            assert_eq!(a.column, b.column);
+            assert_eq!(a.is_merge, b.is_merge);
         }
     }
 
@@ -1050,11 +1284,20 @@ mod tests {
         assert_eq!(ref_labels_text(&[], Some("main")), "");
     }
 
+    #[test]
+    fn format_commit_time_matches_expected_layout() {
+        // 2026-08-17 09:22:31 UTC(固定输入 → 固定输出;实现是 UTC,无时区歧义)。
+        assert_eq!(format_commit_time(1_786_958_551), "2026-08-17 09:22:31");
+        // epoch 0 边界。
+        assert_eq!(format_commit_time(0), "1970-01-01 00:00:00");
+        // 负数夹到 epoch。
+        assert_eq!(format_commit_time(-5), "1970-01-01 00:00:00");
+    }
+
     fn snapshot_at(repo_path: &Path, max_count: usize) -> GitLogSnapshot {
         GitLogSnapshot {
             repo_path: repo_path.to_path_buf(),
             rows: Vec::new(),
-            max_column: 0,
             head_branch: None,
             max_count,
         }
@@ -1152,6 +1395,180 @@ mod tests {
             |_| {},
         );
         assert!(state.detail.is_none(), "选中的提交对不上,结果应被丢弃");
+    }
+
+    #[tokio::test]
+    async fn select_file_sets_selected_file() {
+        let mut state = State::default();
+        let handle = tokio::runtime::Handle::current();
+        let result = update(
+            &mut state,
+            Message::SelectFile("src/main.rs".to_string()),
+            &handle,
+            |_| {},
+        );
+        assert_eq!(state.selected_file.as_deref(), Some("src/main.rs"));
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn detail_loaded_preselects_first_file() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let oid = git2::Oid::from_bytes(&[10; 20]).unwrap();
+        let mut state = State {
+            cache: Some(snapshot_at(&repo_path, 10)),
+            selected: Some(oid),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        let detail = CommitDetail {
+            files: vec![
+                DiffFileEntry {
+                    path: "a.rs".to_string(),
+                    status: git2::Delta::Modified,
+                    patch: "+x".to_string(),
+                    truncated: false,
+                },
+                DiffFileEntry {
+                    path: "b.rs".to_string(),
+                    status: git2::Delta::Added,
+                    patch: "+y".to_string(),
+                    truncated: false,
+                },
+            ],
+        };
+        update(
+            &mut state,
+            Message::DetailLoaded(repo_path, oid, Ok(detail)),
+            &handle,
+            |_| {},
+        );
+        assert_eq!(
+            state.selected_file.as_deref(),
+            Some("a.rs"),
+            "detail 落地后应预选第一个改动文件"
+        );
+    }
+
+    #[tokio::test]
+    async fn detail_loaded_with_no_files_clears_selected_file() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let oid = git2::Oid::from_bytes(&[11; 20]).unwrap();
+        let mut state = State {
+            cache: Some(snapshot_at(&repo_path, 10)),
+            selected: Some(oid),
+            selected_file: Some("stale.rs".to_string()),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::DetailLoaded(repo_path, oid, Ok(CommitDetail { files: Vec::new() })),
+            &handle,
+            |_| {},
+        );
+        assert_eq!(
+            state.selected_file, None,
+            "无改动文件时应清空 selected_file,不留旧值"
+        );
+    }
+
+    #[tokio::test]
+    async fn select_commit_clears_selected_file() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let mut state = State {
+            cache: Some(snapshot_at(&repo_path, 10)),
+            selected_file: Some("old.rs".to_string()),
+            ..State::default()
+        };
+        let oid = git2::Oid::from_bytes(&[12; 20]).unwrap();
+        let handle = tokio::runtime::Handle::current();
+        update(&mut state, Message::SelectCommit(oid), &handle, |_| {});
+        assert_eq!(
+            state.selected_file, None,
+            "切 commit 时应先清空旧的 selected_file(等新 detail 落地才重选)"
+        );
+    }
+
+    #[tokio::test]
+    async fn branch_picker_open_and_close_toggle_flag() {
+        let mut state = State::default();
+        let handle = tokio::runtime::Handle::current();
+        update(&mut state, Message::BranchPickerOpen, &handle, |_| {});
+        assert!(state.branch_picker_open);
+        update(&mut state, Message::BranchPickerClose, &handle, |_| {});
+        assert!(!state.branch_picker_open);
+    }
+
+    #[tokio::test]
+    async fn branches_loaded_lands_when_repo_path_matches_cache() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let mut state = State {
+            cache: Some(snapshot_at(&repo_path, 10)),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::BranchesLoaded(repo_path, vec!["main".to_string(), "dev".to_string()], true),
+            &handle,
+            |_| {},
+        );
+        assert_eq!(state.branches, vec!["main".to_string(), "dev".to_string()]);
+        assert!(state.dirty, "dirty 标记应随分支列表一起落地");
+    }
+
+    #[tokio::test]
+    async fn branches_loaded_discarded_when_repo_path_mismatches() {
+        let mut state = State {
+            cache: Some(snapshot_at(Path::new("/tmp/a"), 10)),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::BranchesLoaded(PathBuf::from("/tmp/b"), vec!["main".to_string()], true),
+            &handle,
+            |_| {},
+        );
+        assert!(state.branches.is_empty(), "仓库路径对不上,不该落地");
+        assert!(!state.dirty, "仓库路径对不上,dirty 也不该落地");
+    }
+
+    #[tokio::test]
+    async fn branch_switch_done_ok_clears_pending_and_closes_picker() {
+        let mut state = State {
+            branch_picker_open: true,
+            branch_switch_pending: true,
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::BranchSwitchDone(Ok(())),
+            &handle,
+            |_| {},
+        );
+        assert!(!state.branch_picker_open);
+        assert!(!state.branch_switch_pending);
+        assert!(state.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn branch_switch_done_err_sets_error_and_clears_pending() {
+        let mut state = State {
+            branch_switch_pending: true,
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::BranchSwitchDone(Err("checkout 失败".to_string())),
+            &handle,
+            |_| {},
+        );
+        assert!(!state.branch_switch_pending);
+        assert_eq!(state.error.as_deref(), Some("checkout 失败"));
     }
 
     #[tokio::test]

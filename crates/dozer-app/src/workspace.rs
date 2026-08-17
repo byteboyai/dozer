@@ -632,14 +632,6 @@ impl Workspace {
         }
     }
 
-    /// 是否有 tab 处于"工作中"(agent Running 且存活)——决定 main.rs 是否
-    /// 需要定时唤醒来驱动状态点闪烁；无则回到 `ControlFlow::Wait` 省电。
-    pub fn any_blinking(&self) -> bool {
-        self.tabs
-            .iter()
-            .any(|t| t.alive && t.agent_state == AgentState::Running)
-    }
-
     /// 当前激活 tab 的选区文本（⌘C 复制用）。
     pub fn active_selection_text(&self) -> Option<String> {
         self.tabs
@@ -3411,8 +3403,9 @@ pub(crate) fn dot_color(state: AgentState, alive: bool) -> Color {
         return theme::color::DIM;
     }
     match state {
-        AgentState::Idle | AgentState::Running => theme::color::GREEN,
-        AgentState::AwaitingInput => theme::color::PURPLE,
+        AgentState::Idle => theme::color::CYAN,
+        AgentState::Running => theme::color::GREEN,
+        AgentState::AwaitingInput => theme::color::RED,
         AgentState::TurnEnded => theme::color::GOLD,
     }
 }
@@ -3942,10 +3935,11 @@ mod tests {
         use dozer_core::protocol::AgentState::*;
         // 死会话恒为灰，不论 agent 状态。
         assert_eq!(dot_color(Running, false), theme::color::DIM, "死会话灰点");
-        // 存活：空闲/运行同绿（运行靠闪烁区分），待输入紫、回合毕金。
-        assert_eq!(dot_color(Idle, true), theme::color::GREEN);
+        // 存活：空闲青、运行绿、待输入红、回合毕金——各状态独立配色，不再
+        // 靠闪烁区分空闲/运行(闪烁动画已取消)。
+        assert_eq!(dot_color(Idle, true), theme::color::CYAN);
         assert_eq!(dot_color(Running, true), theme::color::GREEN);
-        assert_eq!(dot_color(AwaitingInput, true), theme::color::PURPLE);
+        assert_eq!(dot_color(AwaitingInput, true), theme::color::RED);
         assert_eq!(dot_color(TurnEnded, true), theme::color::GOLD);
     }
 

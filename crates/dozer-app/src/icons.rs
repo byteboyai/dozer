@@ -68,6 +68,8 @@ pub enum IconKind {
     RefreshCw,
     SquarePlus,
     GitBranch,
+    /// Git Log 面板 commit 列表"普通提交"图标(Lucide git-commit-vertical)。
+    GitCommitVertical,
     /// Todo 面板 rail 图标(Lucide list-todo)。
     ListTodo,
     /// Todo 面板"进行中"分类 + EXECUTING 徽章(Lucide play)。分类图标统一
@@ -125,6 +127,8 @@ pub enum IconKind {
     SquareTerminal,
     /// git-log 面板 rail 图标(Lucide git-graph:节点 + 连线的图形化历史)。
     GitGraph,
+    /// Git Log 面板 commit 列表"合并提交"图标(Lucide git-merge)。
+    GitMerge,
     /// 文件树搜索框的搜索按钮图标(Lucide folder-search:文件夹 + 放大镜)。
     FolderSearch,
     /// 项目信息面板小节标题前的占位图标(Lucide circle-small:小圆点)。
@@ -177,6 +181,9 @@ impl IconKind {
             IconKind::RefreshCw => include_bytes!("../assets/icons/refresh-cw.svg"),
             IconKind::SquarePlus => include_bytes!("../assets/icons/square-plus.svg"),
             IconKind::GitBranch => include_bytes!("../assets/icons/git-branch.svg"),
+            IconKind::GitCommitVertical => {
+                include_bytes!("../assets/icons/git-commit-vertical.svg")
+            }
             IconKind::ListTodo => include_bytes!("../assets/icons/list-todo.svg"),
             IconKind::Play => include_bytes!("../assets/icons/play.svg"),
             IconKind::Briefcase => include_bytes!("../assets/icons/briefcase.svg"),
@@ -200,6 +207,7 @@ impl IconKind {
             IconKind::SquareRadical => include_bytes!("../assets/icons/square-radical.svg"),
             IconKind::SquareTerminal => include_bytes!("../assets/icons/square-terminal.svg"),
             IconKind::GitGraph => include_bytes!("../assets/icons/git-graph.svg"),
+            IconKind::GitMerge => include_bytes!("../assets/icons/git-merge.svg"),
             IconKind::FolderSearch => include_bytes!("../assets/icons/folder-search.svg"),
             IconKind::CircleSmall => include_bytes!("../assets/icons/circle-small.svg"),
             IconKind::FolderSync => include_bytes!("../assets/icons/folder-sync.svg"),

@@ -3,6 +3,7 @@ mod assets;
 mod clipboard_image;
 mod conversation;
 mod delivery;
+mod diff_render;
 mod extensions;
 mod fonts;
 mod git_watch;
@@ -256,17 +257,12 @@ use winit::{
 
 use std::sync::Arc;
 
-/// tab 状态点闪烁的半周期：每 450ms 翻一次相位（≈1.1Hz 一明一暗）。
-/// 仅当有 tab 处于工作态时才据此定时唤醒，空闲仍是 `ControlFlow::Wait`。
-/// `pub(crate)`——`App::toggle_blink` 也要用它把自己限速到这个节奏,不能
-/// 只让 main.rs 单边靠调用频率保证(唤醒节奏会被悬停动画等其它需求提速)。
-pub(crate) const BLINK_INTERVAL: Duration = Duration::from_millis(450);
 /// 所有按钮悬停动画的帧间隔:约 60fps。配合 `App::advance_hover_anims`
 /// 的指数逼近(每拍残余 50%),约 80ms 收敛,给出跟手的 ease-out 过渡。
 const HOVER_ANIM_INTERVAL: Duration = Duration::from_millis(16);
 /// Todo 面板可见时轮询 `.dozer/todo.md` 的间隔,兼顾响应与省电。
 /// `pub(crate)`——`App::poll_todo_if_visible` 也要用它把自己限速到这个
-/// 节奏(同 `BLINK_INTERVAL` 的处理,理由见该常量文档)。
+/// 节奏。
 pub(crate) const TODO_POLL_INTERVAL: Duration = Duration::from_millis(1000);
 /// 拖拽排序(页签/Todo)进行中的重绘节奏:约 60fps,保证拖动时卡片实时
 /// 跟手。拖拽本身靠 `on_move` 改状态,但本循环是事件驱动重绘,没有这个
@@ -637,6 +633,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             logical_x,
                         });
                     }
+                    // 纵向(上下)拖拽同理:按窗口逻辑高换算 cursor y。
+                    if app.dragging_row().is_some() {
+                        let scale = window.scale_factor();
+                        let logical_y = (cursor_phys.y / scale) as f32;
+                        let window_height = (window.inner_size().height as f64 / scale) as f32;
+                        app.update(Message::RowDrag {
+                            window_height,
+                            logical_y,
+                        });
+                    }
                     // 悬停(未拖拽)也要请求重绘:分隔线的 resize 光标走
                     // MouseArea::interaction → mouse_interaction() → RedrawRequested
                     // 里的 window.set_cursor(icon) 这条既有管线(main.rs:808-816
@@ -713,6 +719,15 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     ..
                 } if app.dragging_divider().is_some() => {
                     app.update(Message::ColumnDragEnd);
+                    window.request_redraw();
+                }
+                // 纵向拖拽松开左键同理。
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: winit::event::MouseButton::Left,
+                    ..
+                } if app.dragging_row().is_some() => {
+                    app.update(Message::RowDragEnd);
                     window.request_redraw();
                 }
                 // 页签拖拽换位同理:左键松开即结束(不需要位置续传,CursorMoved
@@ -1535,9 +1550,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
     }
 
     impl winit::application::ApplicationHandler<Message> for Runner {
-        /// 闪烁定时器到点（`ControlFlow::WaitUntil` 触发的
-        /// `ResumeTimeReached`）：翻转全局闪烁相位并请求重绘。相位是全局
-        /// 的，所有工作态 tab（含失焦的）在同一帧一起明灭。
+        /// 定时器到点（`ControlFlow::WaitUntil` 触发的
+        /// `ResumeTimeReached`）：驱动周期性关注点（Todo 轮询/悬停动画）。
         fn new_events(
             &mut self,
             _event_loop: &winit::event_loop::ActiveEventLoop,
@@ -1546,7 +1560,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             if let winit::event::StartCause::ResumeTimeReached { .. } = cause
                 && let Self::Ready { app, window, .. } = self
             {
-                app.toggle_blink();
                 // Todo 面板可见时轮询磁盘上的 `.dozer/todo.md`,agent 或用户
                 // 在编辑器中改完文件,面板能自动跟上。
                 app.poll_todo_if_visible();
@@ -1560,9 +1573,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             }
         }
 
-        /// 每轮事件处理完后决定下次唤醒时机:三个周期性关注点(状态点
-        /// 闪烁/按钮悬停动画/Todo 面板轮询)各自的"是否需要唤醒"+"需要
-        /// 多快"列在一起,取激活项里最小的 interval——新增第 4 个周期性
+        /// 每轮事件处理完后决定下次唤醒时机:各个周期性关注点(按钮悬停
+        /// 动画/Todo 面板轮询/拖拽重绘/页签 tooltip 计时)各自的"是否需要
+        /// 唤醒"+"需要多快"列在一起,取激活项里最小的 interval——新增周期性
         /// 关注点只需要在这个列表里加一行,不用碰其它分支(2026-08-12
         /// 解耦重构:每个关注点自己的函数各自按自己的 `last_*_at` 限速,
         /// 这里只负责"下次什么时候唤醒",不负责"唤醒后该不该真的做事")。
@@ -1572,9 +1585,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 // 唤醒,满 3s 那一刻靠 `next_tooltip_wake` 算出的剩余时间精确
                 // 重绘出气泡;满 3s 后 `next_tooltip_wake` 返回 None,不再空转。
                 let next_tip = app.next_tooltip_wake();
-                let wakes: [(bool, Duration); 5] = [
+                let wakes: [(bool, Duration); 4] = [
                     (app.any_hover_anim_active(), HOVER_ANIM_INTERVAL),
-                    (app.any_blinking(), BLINK_INTERVAL),
                     (app.todo_panel_visible(), TODO_POLL_INTERVAL),
                     (
                         app.todo_dragging() || app.dragging_tab().is_some(),

@@ -57,6 +57,20 @@ pub async fn serve(
     }
 }
 
+/// hook 上报的 `data.transcript_path` 字段里,值得拿去覆盖会话当前 transcript
+/// 路径的那部分:字段缺失、或值是空字符串,都不算——CodeBuddy 的
+/// `Notification` 事件(如 auth_success)原生 payload 就是空字符串 `""`
+/// 而不是缺失字段(实测见
+/// `docs/superpowers/specs/2026-07-31-codebuddy-spike-findings.md` 第 44
+/// 行)。之前不过滤空串,会让这类事件无条件覆盖掉此前已经坐实的正确路径,
+/// 导致 Agent 卡片的 LLM/当前工作内容此后一直读一个空路径、优雅降级成空白
+/// (2026-08-17 修的真实 bug)。
+pub fn extract_transcript_path(data: &serde_json::Value) -> Option<&str> {
+    data.get("transcript_path")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+}
+
 /// spec P1e D6：hook 事件名 → 四态映射；未知事件不改状态。
 pub fn agent_state_for(event: &str) -> Option<dozer_core::protocol::AgentState> {
     use dozer_core::protocol::AgentState::*;
@@ -149,9 +163,7 @@ async fn handle_conn(
                                 }
                                 Some(s) => {
                                     s.set_agent(agent);
-                                    if let Some(tp) =
-                                        data.get("transcript_path").and_then(|v| v.as_str())
-                                    {
+                                    if let Some(tp) = extract_transcript_path(&data) {
                                         s.set_transcript_path(tp);
                                     }
                                     match agent_state_for(&event) {
@@ -316,5 +328,28 @@ mod tests {
         assert_eq!(agent_state_for("SessionStart"), Some(Idle));
         assert_eq!(agent_state_for("SessionEnd"), Some(Idle));
         assert_eq!(agent_state_for("SomethingNew"), None);
+    }
+
+    #[test]
+    fn extract_transcript_path_ignores_empty_string() {
+        // CodeBuddy 的 Notification 事件原生 payload 就是这个空串形状
+        // (不是缺字段)。
+        let data = serde_json::json!({"transcript_path": ""});
+        assert_eq!(extract_transcript_path(&data), None);
+    }
+
+    #[test]
+    fn extract_transcript_path_ignores_missing_field() {
+        let data = serde_json::json!({"cwd": "/tmp"});
+        assert_eq!(extract_transcript_path(&data), None);
+    }
+
+    #[test]
+    fn extract_transcript_path_returns_nonempty_value() {
+        let data = serde_json::json!({"transcript_path": "/home/u/.claude/projects/x/y.jsonl"});
+        assert_eq!(
+            extract_transcript_path(&data),
+            Some("/home/u/.claude/projects/x/y.jsonl")
+        );
     }
 }

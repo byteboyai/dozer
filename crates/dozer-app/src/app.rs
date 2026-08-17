@@ -330,6 +330,11 @@ pub struct PanelDims {
     /// Todo 面板配对:分类导航占左面板区宽度的比例，列表/MARKDOWN 内容
     /// (右配对)拿剩下的。
     pub todo_split: f32,
+    /// Git Log 面板配对:commit 列表占左面板区宽度的比例,右侧(文件列表+diff)
+    /// 拿剩下的。
+    pub git_log_split: f32,
+    /// Git Log 面板右侧配对:文件列表占右侧区域高度的比例,diff 内容拿剩下的。
+    pub git_log_file_diff_split: f32,
     /// Agent配对:Agent列表占右面板区宽度的比例，终端拿剩下的。
     pub agent_split: f32,
     /// 对话配对:对话列表占右面板区宽度的比例，对话审阅拿剩下的。
@@ -347,6 +352,8 @@ fn default_panel_dims() -> PanelDims {
         project_split: theme::geometry::default_split_ratio(),
         ssh_split: theme::geometry::default_split_ratio(),
         todo_split: theme::geometry::default_split_ratio(),
+        git_log_split: theme::geometry::default_split_ratio(),
+        git_log_file_diff_split: theme::geometry::default_split_ratio(),
         agent_split: theme::geometry::default_split_ratio(),
         conversations_split: theme::geometry::default_split_ratio(),
     }
@@ -434,6 +441,8 @@ pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
         project_split: clamp_split(d.project_split),
         ssh_split: clamp_split(d.ssh_split),
         todo_split: clamp_split(d.todo_split),
+        git_log_split: clamp_split(d.git_log_split),
+        git_log_file_diff_split: clamp_split(d.git_log_file_diff_split),
         agent_split: clamp_split(d.agent_split),
         conversations_split: clamp_split(d.conversations_split),
     }
@@ -451,7 +460,18 @@ pub enum Divider {
     SshSplit,
     /// Todo 面板内部的配对分隔线:左边分类导航、右边列表/MARKDOWN 内容。
     TodoSplit,
+    /// Git Log 面板内部左右分隔线:左边 commit 列表,右边文件列表+diff。
+    GitLogSplit,
     RightPairSplit,
+}
+
+/// 纵向(上下)可拖拽分割线——目前只有 Git Log 面板右侧"文件列表 | diff
+/// 内容"这一条,单独开一个枚举而不是塞进 `Divider`(横向语义不同,`Divider`
+/// 现有变体全部是左右分割,`apply_column_drag`/`Message::ColumnDrag` 的
+/// 几何计算全部基于 `logical_x`,混进去会让那个函数的语义变得模糊)。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RowDivider {
+    GitLogFileDiffSplit,
 }
 
 /// 参与拖拽换位的四种 tab 组：顶栏项目页签、终端会话页签、预览页签、浏览器
@@ -641,6 +661,20 @@ pub(crate) fn apply_column_drag(
                 ..state.dims
             }
         }
+        Divider::GitLogSplit => {
+            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            if pair_w <= 0.0 {
+                return state.dims;
+            }
+            let ratio = ((logical_x - theme::geometry::icon_rail_width()) / pair_w).clamp(
+                theme::geometry::min_split_ratio(),
+                theme::geometry::max_split_ratio(),
+            );
+            PanelDims {
+                git_log_split: ratio,
+                ..state.dims
+            }
+        }
         Divider::RightPairSplit => {
             let right_w = right_zone_width(window_width, &state);
             let pair_w = pair_content_width(right_w);
@@ -670,6 +704,33 @@ pub(crate) fn apply_column_drag(
                 RightView::Usage => state.dims,
                 // 验收面板同用量统计是单栏,不分割。
                 RightView::Acceptance => state.dims,
+            }
+        }
+    }
+}
+
+/// `apply_column_drag` 的纵向镜像:按 `logical_y`/`window_height` 算比例。
+/// "可用高度"用近似估算(粗略减去顶栏/footbar 这类固定装饰高度)——Git Log
+/// 面板内部标题/worktree 条的精确高度不在这里计算,内核不关心面板内部布局
+/// 细节,只提供窗口级的粗略换算;像素级对齐精度不足时人工验收阶段允许
+/// 后续单独调整这个估算值。
+pub(crate) fn apply_row_drag(
+    state: ShellState,
+    divider: RowDivider,
+    window_height: f32,
+    logical_y: f32,
+) -> PanelDims {
+    match divider {
+        RowDivider::GitLogFileDiffSplit => {
+            let usable_height =
+                (window_height - theme::geometry::status_bar_height() * 2.0).max(1.0);
+            let ratio = (logical_y / usable_height).clamp(
+                theme::geometry::min_split_ratio(),
+                theme::geometry::max_split_ratio(),
+            );
+            PanelDims {
+                git_log_file_diff_split: ratio,
+                ..state.dims
             }
         }
     }
@@ -1290,6 +1351,13 @@ pub enum Message {
     /// 松开左键,结束拖拽并触发写盘。构造方为 main.rs 的
     /// `MouseInput{Released}` 分支。
     ColumnDragEnd,
+    /// 按下某条纵向(上下)分隔线,记录"正在拖哪条"。构造方为
+    /// `horizontal_divider_bar` 的 `on_press`。
+    RowDragStart(RowDivider),
+    /// 纵向拖拽中:当前窗口逻辑高 + 光标逻辑 y(main.rs 换算好传入)。
+    RowDrag { window_height: f32, logical_y: f32 },
+    /// 松开左键,结束纵向拖拽并触发写盘。
+    RowDragEnd,
     /// 拖拽中,光标进入了 `group` 组的第 `index` 个 tab 上空——拖起的源项
     /// 应移动到这个目标位(换位)。构造方为该组每个 tab 顶层的
     /// `MouseArea::on_move`(仅在 `tab_drag` 命中本组时挂载)。按住页签＝
@@ -1548,22 +1616,11 @@ pub struct App {
     /// daemon 连接失败,或某次会话操作失败时的错误文案。整个程序共享
     /// 一份:daemon 连不连得上不是某个项目自己的状态。
     pub(crate) daemon_error: Option<String>,
-    /// tab 前状态点的闪烁相位(true=亮/false=暗)。由 main.rs 的定时唤醒
-    /// 每拍翻转(见 `toggle_blink`/`any_blinking`)。
-    blink_on: bool,
-    /// 上次真正翻转 `blink_on` 的时刻,`toggle_blink` 据此把自己限速到
-    /// `BLINK_INTERVAL` 一拍——main.rs 的定时唤醒并不专属闪烁:悬停动画
-    /// 期间(`HOVER_ANIM_INTERVAL`=16ms)会把唤醒频率提到闪烁本该的 450ms
-    /// 的近 30 倍,若 `toggle_blink` 对"被叫到"照单全收,状态点就会跟着
-    /// hover 的那份高频唤醒一起快速明灭,观感是"悬停 icon 按钮,别处的点
-    /// 跟着闪"。
-    last_blink_at: std::time::Instant,
-    /// 上次真正执行 Todo 面板磁盘轮询(`poll_todo_if_visible`)的时刻,
-    /// 用法与 `last_blink_at` 一致:按 `TODO_POLL_INTERVAL` 自限速,未到
-    /// 点的调用直接 no-op。现在靠 mtime 检查已经安全(没变化就早退,见
-    /// 该方法文档),这里补上限速是为了让"周期性函数自己对被更快唤醒
-    /// 节奏带跑免疫"这条约定对全部三个周期性关注点(闪烁/悬停动画/
-    /// Todo 轮询)都显式成立,不留一个"靠巧合安全"的例外。
+    /// 上次真正执行 Todo 面板磁盘轮询(`poll_todo_if_visible`)的时刻:
+    /// 按 `TODO_POLL_INTERVAL` 自限速,未到点的调用直接 no-op。现在靠
+    /// mtime 检查已经安全(没变化就早退,见该方法文档),这里补上限速是为了
+    /// 让"周期性函数自己对被更快唤醒节奏带跑免疫"这条约定对周期性关注点
+    /// (悬停动画/Todo 轮询)都显式成立,不留一个"靠巧合安全"的例外。
     last_todo_poll_at: std::time::Instant,
     /// 全局窗口尺寸;启动时 `layout::load()` 读盘作起始值,退出前写盘。
     /// 只存窗口尺寸——左右面板区的宽度/分割比例(**每个项目各自**的偏好)
@@ -1620,6 +1677,8 @@ pub struct App {
     window_size: (f32, f32),
     /// 正在拖拽的分隔线;`None` 表示未在拖拽。
     dragging: Option<Divider>,
+    /// 正在拖拽的纵向(上下)分隔线;`None` 表示未在拖拽。
+    dragging_row: Option<RowDivider>,
     /// 正在拖拽的页签(换位);`None` 表示未在拖拽页签。与 `dragging` 分隔线
     /// 互斥(一次左键拖拽只能是一件事)。
     tab_drag: Option<TabDrag>,
@@ -1928,8 +1987,6 @@ impl App {
             ssh_cols: DEFAULT_COLS,
             ssh_rows: DEFAULT_ROWS,
             daemon_error,
-            blink_on: true,
-            last_blink_at: std::time::Instant::now(),
             last_todo_poll_at: std::time::Instant::now(),
             left_view: PanelLayout::default().left_view,
             right_view: PanelLayout::default().right_view,
@@ -1946,6 +2003,7 @@ impl App {
             pending_preview_zoom: false,
             window_size: theme::geometry::initial_window_size(),
             dragging: None,
+            dragging_row: None,
             tab_drag: None,
             files: files::AppState::default(),
             preview_tab_menu: None,
@@ -2130,7 +2188,7 @@ impl App {
     }
 
     /// 当前是否"正看着"某个项目的 Todo 面板——轮询是否要继续排下一拍
-    /// 唤醒的判断条件（`main.rs::about_to_wait`），跟 `any_blinking`/
+    /// 唤醒的判断条件（`main.rs::about_to_wait`），跟
     /// `any_hover_anim_active` 同一层级。
     pub fn todo_panel_visible(&self) -> bool {
         self.left_view == LeftView::Todo && self.active_workspace().is_some()
@@ -2141,8 +2199,7 @@ impl App {
     /// 变了才重读+reparse（`todo::reload_from_disk` 内部也会再 stat 一次
     /// mtime，多一次系统调用换取它保持独立可复用）。按 `last_todo_poll_at`
     /// 自限速到 `TODO_POLL_INTERVAL`——悬停动画等更快节奏把唤醒带密时
-    /// 不会跟着高频重复 `stat`(2026-08-12 解耦重构,同 `toggle_blink` 的
-    /// 处理)。
+    /// 不会跟着高频重复 `stat`(2026-08-12 解耦重构)。
     pub fn poll_todo_if_visible(&mut self) {
         if !self.todo_panel_visible() {
             return;
@@ -2163,28 +2220,6 @@ impl App {
         if current != ws.todo.mtime() {
             todo::reload_from_disk(&mut ws.todo, std::path::Path::new(&project.path));
         }
-    }
-
-    /// 是否有 tab 处于"工作中"——决定 main.rs 是否需要定时唤醒来驱动状态点
-    /// 闪烁。任一并行项目里有在跑的会话就得继续闪(页签上也要显示状态点)。
-    pub fn any_blinking(&self) -> bool {
-        self.projects.values().any(|slot| match slot {
-            WorkspaceSlot::Loaded(ws) => ws.any_blinking(),
-            WorkspaceSlot::Stub { .. } => false,
-        })
-    }
-
-    /// 翻转闪烁相位；由 main.rs 的定时唤醒每拍调用,但唤醒节奏不专属闪烁
-    /// (悬停动画期间会被提到 16ms 一拍),这里按 `last_blink_at` 自己限速
-    /// 到 `BLINK_INTERVAL`,未到点的调用直接是 no-op——否则悬停 icon 按钮
-    /// 时别处的状态点会跟着高频唤醒一起快速明灭。
-    pub fn toggle_blink(&mut self) {
-        let now = std::time::Instant::now();
-        if now.duration_since(self.last_blink_at) < crate::BLINK_INTERVAL {
-            return;
-        }
-        self.blink_on = !self.blink_on;
-        self.last_blink_at = now;
     }
 
     /// 设置某按钮的悬停目标（`true`=进入,`false`=离开）；动画由
@@ -2795,6 +2830,12 @@ impl App {
         self.dragging
     }
 
+    /// 当前正在拖拽的纵向分隔线(main.rs 拖拽追踪用,调用方同
+    /// `dragging_divider`)。
+    pub fn dragging_row(&self) -> Option<RowDivider> {
+        self.dragging_row
+    }
+
     /// 当前正在拖拽的页签(main.rs 拖拽追踪用,调用方同 `dragging_divider`)。
     pub fn dragging_tab(&self) -> Option<TabDrag> {
         self.tab_drag
@@ -3324,6 +3365,22 @@ impl App {
                 self.dragging = None;
                 self.on_shell_layout_changed();
             }
+            Message::RowDragStart(divider) => {
+                self.dragging_row = Some(divider);
+            }
+            Message::RowDrag {
+                window_height,
+                logical_y,
+            } => {
+                if let Some(divider) = self.dragging_row {
+                    let state = self.shell_state();
+                    self.dims = apply_row_drag(state, divider, window_height, logical_y);
+                }
+            }
+            Message::RowDragEnd => {
+                self.dragging_row = None;
+                self.on_shell_layout_changed();
+            }
             Message::TabDragMove { group, index } => {
                 self.tab_drag_move(group, index);
             }
@@ -3572,14 +3629,93 @@ impl App {
                 self.update(Message::ProjectTabOpen(p));
             }
             Message::GitLog(git_log::Message::LoadMore) => self.git_log_load_more(),
-            Message::GitLog(msg) => {
+            Message::GitLog(git_log::Message::ColumnDragStart) => {
+                // Git Log 三栏布局里左右分割线开始拖拽——扩展发不了 app 级
+                // 拖拽消息,由内核代发。
+                self.update(Message::ColumnDragStart(Divider::GitLogSplit));
+            }
+            Message::GitLog(git_log::Message::RowDragStart) => {
+                self.update(Message::RowDragStart(RowDivider::GitLogFileDiffSplit));
+            }
+            Message::GitLog(git_log::Message::BranchPickerOpen) => {
+                // 先把"展开"这个状态位落地(纯状态机部分仍走 update,不跳过),
+                // 首次展开且还没缓存过分支列表时,顺带异步查一次本地分支。
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
                 let emit = move |m| {
                     let _ = proxy.send_event(Message::GitLog(m));
                 };
-                if let Some(next) = git_log::update(&mut self.git_log, msg, &handle, emit) {
+                let needs_fetch = self.git_log.branches_is_empty();
+                git_log::update(
+                    &mut self.git_log,
+                    git_log::Message::BranchPickerOpen,
+                    &handle,
+                    emit.clone(),
+                );
+                if needs_fetch
+                    && let Some(repo_path) = self
+                        .active_workspace()
+                        .and_then(|ws| ws.active_project_path())
+                {
+                    self.handle.spawn(async move {
+                        let repo_path2 = repo_path.clone();
+                        let (branches, dirty) = tokio::task::spawn_blocking(move || {
+                            let branches =
+                                crate::delivery::local_branches(&repo_path2).unwrap_or_default();
+                            let dirty = crate::delivery::is_dirty(&repo_path2);
+                            (branches, dirty)
+                        })
+                        .await
+                        .unwrap_or_default();
+                        emit(git_log::Message::BranchesLoaded(repo_path, branches, dirty));
+                    });
+                }
+            }
+            Message::GitLog(git_log::Message::BranchSwitch(name)) => {
+                let Some(repo_path) = self
+                    .active_workspace()
+                    .and_then(|ws| ws.active_project_path())
+                else {
+                    return;
+                };
+                self.git_log.set_branch_switch_pending(true);
+                let proxy = self.proxy.clone();
+                self.handle.spawn(async move {
+                    let repo_path2 = repo_path.clone();
+                    let result = tokio::task::spawn_blocking(move || {
+                        crate::delivery::checkout_branch(&repo_path2, &name)
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+                    let _ = proxy
+                        .send_event(Message::GitLog(git_log::Message::BranchSwitchDone(result)));
+                });
+            }
+            Message::GitLog(msg) => {
+                // 分支切换成功后(checkout 改了 HEAD/工作区),commit 列表要重拉。
+                let is_branch_switch_success =
+                    matches!(&msg, git_log::Message::BranchSwitchDone(Ok(())));
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                let emit = move |m| {
+                    let _ = proxy.send_event(Message::GitLog(m));
+                };
+                if let Some(next) = git_log::update(&mut self.git_log, msg, &handle, emit.clone()) {
                     self.update(Message::GitLog(next));
+                }
+                if is_branch_switch_success
+                    && let Some(repo_path) = self
+                        .active_workspace()
+                        .and_then(|ws| ws.active_project_path())
+                {
+                    let max_count = self.git_log.cache_max_count();
+                    git_log::request_refresh(
+                        &mut self.git_log,
+                        repo_path,
+                        max_count,
+                        &handle,
+                        emit,
+                    );
                 }
             }
             Message::Files(files::Message::CopyPath(path, kind)) => {
@@ -5383,7 +5519,12 @@ impl App {
             column![
                 row![
                     left_panel_area(self, ws, false),
-                    divider_bar(Divider::LeftRight, theme::color::BG, theme::color::BG),
+                    divider_bar(
+                        Divider::LeftRight,
+                        theme::color::BG,
+                        theme::color::BG,
+                        Message::ColumnDragStart(Divider::LeftRight),
+                    ),
                     right_panel_area(self, ws, false),
                 ]
                 .height(Length::Fill),
@@ -5821,8 +5962,8 @@ fn project_tab_entries(app: &App) -> Vec<ProjectTabEntry> {
 struct ProjectTabEntry {
     id: i64,
     name: String,
-    /// `(颜色, 是否闪烁)`;`None` = 不画状态点。
-    dot: Option<(Color, bool)>,
+    /// 状态点颜色;`None` = 不画状态点。
+    dot: Option<Color>,
 }
 
 /// 顶栏项目页签行:固定默认宽 + 拥挤时均分收窄的页签 + 紧跟最后一片页签之后的"＋"。
@@ -5844,7 +5985,6 @@ fn project_tabs_row(
     let active_project_id = (app.current_page == AppPage::Workspace)
         .then_some(app.active_project_id)
         .flatten();
-    let blink_on = app.blink_on;
     let entries = project_tab_entries(app);
     let n = entries.len();
 
@@ -5880,7 +6020,6 @@ fn project_tabs_row(
                 entry.name.clone(),
                 entry.dot,
                 active,
-                blink_on,
                 close_hover_t,
                 title_hover_t,
                 app.hover_tooltip_ready(HoverId::ProjectTabItem(entry.id)),
@@ -5973,9 +6112,8 @@ fn project_tabs_row(
 fn project_tab_item<'a>(
     id: i64,
     name: String,
-    dot: Option<(Color, bool)>,
+    dot: Option<Color>,
     active: bool,
-    blink_on: bool,
     close_hover_t: f32,
     title_hover_t: f32,
     show_tooltip: bool,
@@ -5999,13 +6137,7 @@ fn project_tab_item<'a>(
     let mut label = row![]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
-    if let Some((color, blinking)) = dot {
-        // 工作中且处于暗相位:点点压到近乎透明,与终端 tab 同一套"呼吸"。
-        let color = if blinking && !blink_on {
-            Color { a: 0.15, ..color }
-        } else {
-            color
-        };
+    if let Some(color) = dot {
         label = label.push(text("●").size(theme::font::caption_sm()).color(color));
     }
     label = label.push(
@@ -6192,8 +6324,8 @@ fn project_tab_item<'a>(
 }
 
 /// 一个项目页签的后台活动指示点:取该项目所有**存活**会话里最值得关注的
-/// 那个状态。返回 `(颜色, 是否闪烁)`;`None` = 没有存活会话,不画点。
-fn project_tab_dot(ws: &Workspace) -> Option<(Color, bool)> {
+/// 那个状态。返回状态点颜色;`None` = 没有存活会话,不画点。
+fn project_tab_dot(ws: &Workspace) -> Option<Color> {
     let alive: Vec<AgentState> = ws
         .tabs
         .iter()
@@ -6205,12 +6337,12 @@ fn project_tab_dot(ws: &Workspace) -> Option<(Color, bool)> {
 
 /// 上面那个的纯逻辑内核(可单测:构造 `Workspace` 需要 daemon + EventLoop,
 /// headless 测试里造不出来,与本文件既有约定一致)。
-pub(crate) fn project_dot(alive_states: &[AgentState]) -> Option<(Color, bool)> {
+pub(crate) fn project_dot(alive_states: &[AgentState]) -> Option<Color> {
     winning_agent_state(alive_states).map(agent_state_dot)
 }
 
-/// 一组存活会话状态里"最值得关注"的那个(设计文档 §6 的优先级):
-/// TurnEnded(该甲方出手了)> AwaitingInput(agent 在等人)> Running(还在跑)
+/// 一组存活会话状态里"最值得关注"的那个(2026-08-17 用户重新定案的优先级):
+/// AwaitingInput(agent 在等你)> Running(还在跑)> TurnEnded(该你出手了)
 /// > Idle > 无存活会话(`None`,不画点)。
 ///
 /// 与 [`agent_state_dot`] 分家是为了让 `Stub` 页签也能用:启动恢复时那些还没
@@ -6219,22 +6351,19 @@ pub(crate) fn project_dot(alive_states: &[AgentState]) -> Option<(Color, bool)> 
 /// (最终审查 Required Fix #5)。
 fn winning_agent_state(alive_states: &[AgentState]) -> Option<AgentState> {
     [
-        AgentState::TurnEnded,
         AgentState::AwaitingInput,
         AgentState::Running,
+        AgentState::TurnEnded,
         AgentState::Idle,
     ]
     .into_iter()
     .find(|candidate| alive_states.contains(candidate))
 }
 
-/// 胜出状态 → `(颜色, 是否闪烁)`。颜色不另造一套表,直接问既有 `dot_color`
-/// ——页签点与 tab 点讲的是同一种语言,两份颜色表迟早会漂。
-fn agent_state_dot(state: AgentState) -> (Color, bool) {
-    (
-        dot_color(state, true),
-        state == AgentState::Running, // 只有"在跑"才闪
-    )
+/// 胜出状态 → 颜色。不另造一套表,直接问既有 `dot_color`——页签点与 tab
+/// 点讲的是同一种语言,两份颜色表迟早会漂。
+fn agent_state_dot(state: AgentState) -> Color {
+    dot_color(state, true)
 }
 
 /// 启动恢复时给每个 `Stub` 页签算后台活动状态:从 daemon 一次性吐出的全量
@@ -6641,6 +6770,7 @@ fn left_panel_area<'a>(
                         theme::region::preview_pane()
                             .background
                             .unwrap_or(theme::color::BG),
+                        Message::ColumnDragStart(Divider::LeftPairSplit),
                     ),
                     preview_pane(
                         app,
@@ -6652,9 +6782,13 @@ fn left_panel_area<'a>(
                 .width(Length::Fill)
                 .into()
             }
-            LeftView::GitLog => {
-                git_log::view(&app.git_log, ws.project_panel.worktrees()).map(Message::GitLog)
-            }
+            LeftView::GitLog => git_log::view(
+                &app.git_log,
+                ws.project_panel.worktrees(),
+                app.dims.git_log_split,
+                app.dims.git_log_file_diff_split,
+            )
+            .map(Message::GitLog),
             LeftView::Todo => {
                 let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
                     return column![].into();
@@ -6695,6 +6829,7 @@ fn left_panel_area<'a>(
                         theme::region::preview_pane()
                             .background
                             .unwrap_or(theme::color::BG),
+                        Message::ColumnDragStart(Divider::TodoSplit),
                     ),
                     content_pane.map(Message::Todo),
                 ]
@@ -6721,6 +6856,7 @@ fn left_panel_area<'a>(
                         theme::region::preview_pane()
                             .background
                             .unwrap_or(theme::color::BG),
+                        Message::ColumnDragStart(Divider::ProjectSplit),
                     ),
                     project_preview_pane(
                         app,
@@ -6771,6 +6907,7 @@ fn left_panel_area<'a>(
                         theme::region::preview_pane()
                             .background
                             .unwrap_or(theme::color::BG),
+                        Message::ColumnDragStart(Divider::SshSplit),
                     ),
                     ssh_terminal_pane(
                         app,
@@ -6887,6 +7024,7 @@ fn right_panel_area<'a>(
                         theme::region::agent_list_pane()
                             .background
                             .unwrap_or(theme::color::BG),
+                        Message::ColumnDragStart(Divider::RightPairSplit),
                     ),
                     agent_list_pane(
                         app,
@@ -6914,6 +7052,7 @@ fn right_panel_area<'a>(
                         theme::region::conversation_list_pane()
                             .background
                             .unwrap_or(theme::color::BG),
+                        Message::ColumnDragStart(Divider::RightPairSplit),
                     ),
                     conversation_list_pane(
                         ws,
@@ -7116,50 +7255,91 @@ fn terminal_pane<'a>(
 /// `Divider::LeftRight` 不画那条 2px 竖线、也不填色——它两侧各自套了
 /// `theme::region::left_zone()`/`right_zone()` 的整体外框,这条 8px 缝是故意
 /// 空出来给两侧 zone 圆角边框各自收边的,不能填成某侧 pane 色。
-fn divider_bar<'a>(
+pub(crate) fn divider_bar<'a, M: Clone + 'a>(
     divider: Divider,
     left_bg: Color,
     right_bg: Color,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    on_drag: M,
+) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
     let show_line = !matches!(divider, Divider::LeftRight);
-    if !show_line {
-        let gap = iced_widget::Space::new()
+    let body: Element<'_, M, iced_widget::Theme, iced_renderer::Renderer> = if !show_line {
+        iced_widget::Space::new()
             .width(Length::Fixed(theme::geometry::divider_width()))
-            .height(Length::Fill);
-        return MouseArea::new(gap)
-            .interaction(mouse::Interaction::ResizingColumn)
-            .on_press(Message::ColumnDragStart(divider))
-            .into();
-    }
-    let line_w = 2.0_f32;
-    let side_w = (theme::geometry::divider_width() - line_w) / 2.0;
-    let left_side = container(iced_widget::Space::new())
-        .width(Length::Fixed(side_w))
-        .height(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    } else {
+        let line_w = 2.0_f32;
+        let side_w = (theme::geometry::divider_width() - line_w) / 2.0;
+        let left_side = container(iced_widget::Space::new())
+            .width(Length::Fixed(side_w))
+            .height(Length::Fill)
+            .style(move |_t: &iced_widget::Theme| container::Style {
+                background: Some(left_bg.into()),
+                ..container::Style::default()
+            });
+        let right_side = container(iced_widget::Space::new())
+            .width(Length::Fixed(side_w))
+            .height(Length::Fill)
+            .style(move |_t: &iced_widget::Theme| container::Style {
+                background: Some(right_bg.into()),
+                ..container::Style::default()
+            });
+        let line = container(iced_widget::Space::new())
+            .width(Length::Fixed(line_w))
+            .height(Length::Fill)
+            .style(|_t: &iced_widget::Theme| container::Style {
+                background: Some(theme::color::BORDER.into()),
+                ..container::Style::default()
+            });
+        row![left_side, line, right_side]
+            .width(Length::Fixed(theme::geometry::divider_width()))
+            .height(Length::Fill)
+            .into()
+    };
+    MouseArea::new(body)
+        .interaction(mouse::Interaction::ResizingColumn)
+        .on_press(on_drag)
+        .into()
+}
+
+/// `divider_bar` 的纵向(上下)镜像:一条水平分割线,`row!`→`column!`、
+/// `width`↔`height` 互换,鼠标样式 `ResizingRow`(对应横向的
+/// `ResizingColumn`)。目前只有 Git Log 面板右侧"文件列表 | diff 内容"这条
+/// 纵向拖拽线用它。粗细复用 `theme::geometry::divider_width()`,与横向一致。
+pub(crate) fn horizontal_divider_bar<'a, M: Clone + 'a>(
+    top_bg: Color,
+    bottom_bg: Color,
+    on_drag: M,
+) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
+    let line_h = 2.0_f32;
+    let side_h = (theme::geometry::divider_width() - line_h) / 2.0;
+    let top_side = container(iced_widget::Space::new())
+        .height(Length::Fixed(side_h))
+        .width(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(left_bg.into()),
+            background: Some(top_bg.into()),
             ..container::Style::default()
         });
-    let right_side = container(iced_widget::Space::new())
-        .width(Length::Fixed(side_w))
-        .height(Length::Fill)
+    let bottom_side = container(iced_widget::Space::new())
+        .height(Length::Fixed(side_h))
+        .width(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(right_bg.into()),
+            background: Some(bottom_bg.into()),
             ..container::Style::default()
         });
     let line = container(iced_widget::Space::new())
-        .width(Length::Fixed(line_w))
-        .height(Length::Fill)
+        .height(Length::Fixed(line_h))
+        .width(Length::Fill)
         .style(|_t: &iced_widget::Theme| container::Style {
             background: Some(theme::color::BORDER.into()),
             ..container::Style::default()
         });
-    let row = row![left_side, line, right_side]
-        .width(Length::Fixed(theme::geometry::divider_width()))
-        .height(Length::Fill);
-    MouseArea::new(row)
-        .interaction(mouse::Interaction::ResizingColumn)
-        .on_press(Message::ColumnDragStart(divider))
+    let col = column![top_side, line, bottom_side]
+        .height(Length::Fixed(theme::geometry::divider_width()))
+        .width(Length::Fill);
+    MouseArea::new(col)
+        .interaction(mouse::Interaction::ResizingRow)
+        .on_press(on_drag)
         .into()
 }
 
@@ -7467,7 +7647,6 @@ fn tab_bar<'a>(
                     idx,
                     tab,
                     idx == ws.active,
-                    app.blink_on,
                     title_hover_t,
                     close_hover_t,
                     app.hover_tooltip_ready(HoverId::TermTabItem(idx)),
@@ -7537,25 +7716,18 @@ pub(crate) fn tab_window(
 
 /// 单个 tab：状态点（颜色见 `dot_color`）+ 名称的选中按钮，紧跟一个关闭
 /// 按钮（点击 = detach，见 `Message::CloseTab` 的文档）。状态不再用文字
-/// 胶囊表达，全部收敛到点点的颜色与闪烁（goal.md）：工作中(Running)的
-/// 点点随 `blink_on` 一明一暗地闪，其余状态常亮。
+/// 胶囊表达，全部收敛到点点的颜色（goal.md）：各状态各自固定配色，常亮，
+/// 不再有闪烁动画。
 fn tab_item(
     idx: usize,
     tab: &SessionTab,
     active: bool,
-    blink_on: bool,
     title_hover_t: f32,
     close_hover_t: f32,
     show_tooltip: bool,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let working = tab.alive && tab.agent_state == AgentState::Running;
-    let mut color = dot_color(tab.agent_state, tab.alive);
-    // 工作中且处于暗相位：把点点压到近乎透明，形成"呼吸"般的闪烁。
-    // 闪烁相位是全局的（main.rs 定时翻转），因此失焦的工作 tab 也照闪。
-    if working && !blink_on {
-        color = Color { a: 0.15, ..color };
-    }
-    // 状态点作 `panel_tab` 的 prefix（颜色/呼吸逻辑不变）。
+    let color = dot_color(tab.agent_state, tab.alive);
+    // 状态点作 `panel_tab` 的 prefix。
     let dot = text("●").size(theme::font::caption_sm()).color(color);
 
     panel_tab(
@@ -8036,27 +8208,29 @@ mod tests {
         assert_eq!(order, vec![1]);
     }
 
-    /// 页签指示点的优先级:金 > 紫 > 绿闪 > 绿常亮 > 不画点。
+    /// 页签指示点的优先级(2026-08-17 重新定案):红(AwaitingInput,agent 在
+    /// 等你)> 绿(Running,还在跑)> 金(TurnEnded,该你出手了)> 青(Idle)
+    /// > 不画点。各状态固定配色,不再有闪烁区分。
     #[test]
     fn project_dot_color_priority() {
         use dozer_core::protocol::AgentState::*;
 
         assert_eq!(project_dot(&[]), None, "无存活会话不画点");
-        assert_eq!(project_dot(&[Idle]), Some((theme::color::GREEN, false)));
+        assert_eq!(project_dot(&[Idle]), Some(theme::color::CYAN));
         assert_eq!(
-            project_dot(&[Idle, Running]),
-            Some((theme::color::GREEN, true)),
-            "有会话在跑 → 同为绿但要闪,靠闪烁与空闲区分"
+            project_dot(&[Idle, TurnEnded]),
+            Some(theme::color::GOLD),
+            "回合结束优先于空闲"
         );
         assert_eq!(
-            project_dot(&[Idle, Running, AwaitingInput]),
-            Some((theme::color::PURPLE, false)),
-            "待输入优先于运行/空闲"
+            project_dot(&[Idle, TurnEnded, Running]),
+            Some(theme::color::GREEN),
+            "还在跑优先于回合结束/空闲"
         );
         assert_eq!(
-            project_dot(&[Idle, Running, AwaitingInput, TurnEnded]),
-            Some((theme::color::GOLD, false)),
-            "回合结束(该甲方出手了)优先级最高"
+            project_dot(&[Idle, TurnEnded, Running, AwaitingInput]),
+            Some(theme::color::RED),
+            "agent 在等你优先级最高"
         );
         // 顺序无关:优先级看的是状态集合,不是 tab 的先后。
         assert_eq!(
@@ -8555,6 +8729,75 @@ mod tests {
             ..PanelDims::default()
         };
         assert_eq!(sanitize_panel_dims(sane), sane);
+    }
+
+    #[test]
+    fn apply_column_drag_updates_git_log_split_ratio() {
+        let state = test_state();
+        let window_width = 1600.0;
+        let result = apply_column_drag(state, Divider::GitLogSplit, window_width, 300.0);
+        assert!(result.git_log_split >= theme::geometry::min_split_ratio());
+        assert!(result.git_log_split <= theme::geometry::max_split_ratio());
+    }
+
+    #[test]
+    fn sanitize_panel_dims_clamps_git_log_split() {
+        let dims = PanelDims {
+            git_log_split: 5.0,
+            ..PanelDims::default()
+        };
+        let sanitized = sanitize_panel_dims(dims);
+        assert!(sanitized.git_log_split <= theme::geometry::max_split_ratio());
+
+        let dims = PanelDims {
+            git_log_split: f32::NAN,
+            ..PanelDims::default()
+        };
+        let sanitized = sanitize_panel_dims(dims);
+        assert_eq!(sanitized.git_log_split, PanelDims::default().files_split);
+    }
+
+    #[test]
+    fn apply_row_drag_clamps_ratio_within_valid_range() {
+        let state = test_state();
+        let window_height = 1000.0;
+
+        // 光标在窗口中间——应该落在合法比例区间内。
+        let mid = apply_row_drag(state, RowDivider::GitLogFileDiffSplit, window_height, 500.0);
+        assert!(mid.git_log_file_diff_split >= theme::geometry::min_split_ratio());
+        assert!(mid.git_log_file_diff_split <= theme::geometry::max_split_ratio());
+
+        // 光标远超窗口顶部/底部——应该被 clamp,不产生非法比例。
+        let top = apply_row_drag(
+            state,
+            RowDivider::GitLogFileDiffSplit,
+            window_height,
+            -500.0,
+        );
+        assert_eq!(
+            top.git_log_file_diff_split,
+            theme::geometry::min_split_ratio()
+        );
+        let bottom = apply_row_drag(
+            state,
+            RowDivider::GitLogFileDiffSplit,
+            window_height,
+            5000.0,
+        );
+        assert_eq!(
+            bottom.git_log_file_diff_split,
+            theme::geometry::max_split_ratio()
+        );
+    }
+
+    #[test]
+    fn sanitize_panel_dims_clamps_git_log_file_diff_split() {
+        let dims = PanelDims {
+            git_log_file_diff_split: -1.0,
+            ..PanelDims::default()
+        };
+        let sanitized = sanitize_panel_dims(dims);
+        assert!(sanitized.git_log_file_diff_split >= theme::geometry::min_split_ratio());
     }
 
     /// `window_width`/`window_height` 的夹取单独测:老 `layout.json` 缺这两

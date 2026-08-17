@@ -85,7 +85,7 @@ fn forward(agent: AgentKind, event_arg: Option<&str>) {
     };
     let mut input = String::new();
     let _ = std::io::stdin().read_to_string(&mut input);
-    let data = serde_json::from_str(&input).unwrap_or(serde_json::Value::Null);
+    let mut data = serde_json::from_str(&input).unwrap_or(serde_json::Value::Null);
     let event_arg = event_arg.or_else(|| data.get("hook_event_name").and_then(|v| v.as_str()));
     let Some(event) = resolve_event(agent, event_arg) else {
         return; // 该事件按翻译表规则被丢弃（如 CodeBuddy 的 Subagent* 事件）
@@ -95,10 +95,31 @@ fn forward(agent: AgentKind, event_arg: Option<&str>) {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     if agent == AgentKind::Opencode
-        && let Some(line) = data.get("transcript_line").filter(|v| !v.is_null())
+        && let Some(cwd) = data.get("cwd").and_then(|v| v.as_str()).map(str::to_string)
     {
-        let cwd = data.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
-        if let Err(e) = opencode::append_transcript_line(cwd, &session_id, line) {
+        // OpenCode 插件(`opencode_plugin/dozer.ts::emit`)发来的 stdin 只有
+        // `{cwd, transcript_line}` 两个字段,从不带 `transcript_path`——跟
+        // Claude/CodeBuddy 原生 hook payload 自带这个字段的形状不一样。
+        // dozerd 只认 `data.transcript_path`(见 dozerd
+        // `server::extract_transcript_path`),不补上的话 dozerd 永远存不下
+        // OpenCode 会话的 transcript 路径,Agent 卡片的 LLM/当前工作内容
+        // 因此恒读不到内容(2026-08-17 修的真实 bug——不是最近的回归,是
+        // 多 agent 落地时"代写 transcript"和"上报路径"两步一直没打通)。
+        // 这里代写的路径(`opencode::transcript_path`)跟
+        // `append_transcript_line` 实际落盘的路径是同一套算法,保证两者
+        // 一致;不管这次事件有没有带 `transcript_line`,只要有 `cwd` 就
+        // 补上路径——session 生命周期类事件(没有 transcript_line)一样
+        // 需要路径,好让 Agent 卡片在任意状态变化时都能读到内容。
+        let path = opencode::transcript_path(&cwd, &session_id);
+        if let Some(obj) = data.as_object_mut() {
+            obj.insert(
+                "transcript_path".to_string(),
+                serde_json::Value::String(path.to_string_lossy().into_owned()),
+            );
+        }
+        if let Some(line) = data.get("transcript_line").filter(|v| !v.is_null()).cloned()
+            && let Err(e) = opencode::append_transcript_line(&cwd, &session_id, &line)
+        {
             eprintln!("opencode transcript 落盘失败（已忽略，不影响转发）: {e}");
         }
     }
