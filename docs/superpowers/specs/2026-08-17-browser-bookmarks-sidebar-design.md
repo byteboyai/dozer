@@ -162,9 +162,61 @@ LeftView::Web => {
 变**——收藏夹侧栏在放大态下不可用(见"交互细节补充"),webview 继续占满整条放大
 盒子。
 
-### 4. `browser::view` 内容区改配对布局
+### 4. `browser::Message::ColumnDragStart` + 内核转发(拖拽消息跨扩展边界)
 
-现状(`view()` 尾部,`app.rs` 之外的 `browser.rs:1403-1434`):
+`divider_bar` 需要一个 `on_drag` 消息,在拖拽开始时发给内核触发
+`Message::ColumnDragStart(Divider)`——但拖拽这条分割线的 `row!` 要建在
+`browser::view()` 内部(见下一节,原因是 tab 栏/地址栏要整行贯通、只有下方内
+容区分栏,不能套用 Files/Project/Ssh 那种"整个配对由 app.rs 拼两个 pane"的旧
+模式)。`browser::view()` 的返回类型是 `Element<'_, browser::Message, ..>`,
+`Message::ColumnDragStart` 是内核 `crate::app::Message` 的变体,两者类型不同,
+扩展没法直接把内核消息塞进自己的 `Element` 里。
+
+这个问题 `extensions::git_log`(今天刚落地的三栏布局,`crates/dozer-app/src/
+extensions/git_log.rs`)已经有现成解法,直接照抄:扩展自己的 `Message` 加一个
+**没有内核语义、纯粹用来转发**的变体,扩展的 `update()` 对它是 no-op,真正的
+处理在内核拦截层完成:
+
+```rust
+// browser.rs 的 Message enum 新增:
+pub enum Message {
+    // ...既有变体...
+    /// 收藏夹侧栏分割线开始拖:扩展发不了 app 级拖拽消息,由内核代发,
+    /// 见 `App::update` 里 `Message::Browser(Message::ColumnDragStart)`
+    /// 分支(同 `git_log::Message::ColumnDragStart` 的处理方式)。
+    ColumnDragStart,
+}
+```
+
+`browser::update()` 里加一条 no-op arm(镜像 `git_log.rs:433-436` 的
+`Message::ColumnDragStart | Message::RowDragStart => { debug_assert!(...) }`
+写法):
+
+```rust
+Message::ColumnDragStart => {
+    debug_assert!(
+        false,
+        "ColumnDragStart 由内核在 Message::Browser 分支里直接处理(转成 \
+         app 级拖拽消息),不会转发到这里"
+    );
+}
+```
+
+`app.rs::App::update()` 顶层 `match` 里,在现有 `Message::Browser(browser::
+Message::BookmarksLoaded(..)) => ..`/`BookmarksMutated(..) => ..`/
+`DragHover(..) => ..` 那几条特化分支旁边(**必须在** `Message::Browser(msg) =>
+self.browser_message(msg)` 这条兜底分支**之前**,`match` 按顺序取第一个匹配)
+新增一条,镜像 `git_log.rs` 那条:
+
+```rust
+Message::Browser(browser::Message::ColumnDragStart) => {
+    self.update(Message::ColumnDragStart(Divider::BrowserBookmarksSplit));
+}
+```
+
+### 5. `browser::view` 内容区改配对布局
+
+现状(`view()` 尾部,`browser.rs:1403-1434`):
 
 ```rust
 let addr_row = row![addr, star_button(...), bookmarks_toggle_button(...)]...;
@@ -178,58 +230,111 @@ container(content.padding(region.padding))...
 改成:tab 栏 + 分隔线 + 地址栏依旧整行贯通、不参与分栏;`star_menu_popup` 位置
 不变(它是从星标按钮弹出的浮层,与收藏夹侧栏是两回事,互不影响);**收藏夹侧栏
 本身**从"push 进 `content` 列"改成包一层 `row![内容占位区, divider_bar, 收藏
-夹侧栏]`,作为 `content` 列的最后一个元素,`Length::Fill` 撑满剩余高度:
+夹侧栏]`,作为 `content` 列的最后一个元素,`Length::Fill` 撑满剩余高度。`view()`
+签名新增一个参数 `bookmarks_split: f32`(调用处从 `app.dims.
+browser_bookmarks_split` 取值传入,`PanelDims` 挂在 `App` 上不是
+`Workspace`;与 `git_log::view()` 接收 `git_log_split: f32`/`git_log_file_diff_
+split: f32` 作为普通参数是同一套模式,照抄):
 
 ```rust
-let mut content = column![tab_bar, tab_divider(), addr_row].spacing(region.gap);
-if state.star_menu_open {
-    content = content.push(star_menu_popup(state, project_id));
+pub fn view(
+    state: &State,
+    project_id: Option<i64>,
+    bookmarks_split: f32,
+    width: Length,
+    outer: Border,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    // ...tab_bar/addr_row 构造不变...
+    let mut content = column![tab_bar, tab_divider(), addr_row].spacing(region.gap);
+    if state.star_menu_open {
+        content = content.push(star_menu_popup(state, project_id));
+    }
+    if let Some(err) = &state.error { /* 不变,push 错误文案 */ }
+
+    let body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        if state.tabs.tabs().is_empty() {
+            // 现状的"暂无网页"占位——不参与分栏,收藏夹开着也照样在整条
+            // 内容区居中显示(空态下没有网页内容可让,分栏没有意义)。
+            container(lh(text("暂无网页——在地址栏输入网址")
+                .size(theme::font::subtitle())
+                .color(theme::color::DIM)))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        } else {
+            // 真实网页由 wry webview 叠加渲染,这里只需要一块透明占位
+            // (不能有不透明背景,否则会盖住 webview——同 `preview.rs`
+            // 里 webview 占位区的既有约定)。
+            iced_widget::Space::new()
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        };
+
+    content = content.push(if state.bookmarks_open {
+        // `split_portions(split)` 返回 `(list, content)` 且入参是"list
+        // 占比",`bookmarks_split` 存的是内容占比,传 `1.0 -
+        // bookmarks_split` 换算成侧栏(list)占比喂给它。
+        let (list_portion, content_portion) =
+            crate::app::split_portions(1.0 - bookmarks_split);
+        row![
+            container(body).width(Length::FillPortion(content_portion)),
+            crate::app::divider_bar(
+                crate::app::Divider::BrowserBookmarksSplit,
+                theme::color::BG,
+                theme::color::BG,
+                Message::ColumnDragStart,
+            ),
+            bookmarks_panel(state, project_id, Length::FillPortion(list_portion)),
+        ]
+        .height(Length::Fill)
+        .into()
+    } else {
+        body
+    });
+
+    container(content.padding(region.padding))
+        .width(width)
+        .height(Length::Fill)
+        .style(move |_theme: &iced_widget::Theme| container::Style {
+            background: region.background.map(Into::into),
+            border: outer,
+            ..container::Style::default()
+        })
+        .into()
 }
-if let Some(err) = &state.error { /* 不变 */ }
-
-let body: Element<_> = if state.tabs.tabs().is_empty() {
-    // 现状的"暂无网页"占位——不参与分栏,收藏夹开着也照样在整条内容区
-    // 居中显示(空态下没有网页内容可让,分栏没有意义)。
-    container(lh(text("暂无网页——在地址栏输入网址")...))
-        .width(Length::Fill).height(Length::Fill).into()
-} else {
-    // 真实网页由 wry webview 叠加渲染,这里只需要一块透明占位(不能有
-    // 不透明背景,否则会盖住 webview——同 `preview.rs` 里 webview 占位区
-    // 的既有约定)。
-    iced_widget::Space::new().width(Length::Fill).height(Length::Fill).into()
-};
-
-content = content.push(if state.bookmarks_open {
-    // `bookmarks_split` 是新增的函数参数(内容占比,语义同
-    // `PanelDims::browser_bookmarks_split`),见下方"跨层传参"。
-    // `split_portions(split)` 返回 `(list, content)` 且入参是"list 占比",
-    // 这里传 `1.0 - bookmarks_split` 换算成侧栏占比喂给它。
-    let (list_portion, content_portion) = workspace::split_portions(1.0 - bookmarks_split);
-    row![
-        container(body).width(Length::FillPortion(content_portion)),
-        divider_bar(Divider::BrowserBookmarksSplit, ..., ..., Message::ColumnDragStart(...)),
-        bookmarks_side_panel(state, project_id).width(Length::FillPortion(list_portion)),
-    ].height(Length::Fill).into()
-} else {
-    body
-});
 ```
 
-**跨层传参问题**:`browser::view()` 目前的签名是 `view(state: &State, project_id:
-Option<i64>, width: Length, outer: Border)`,不接收 `PanelDims`。而
-`browser_bookmarks_split` 存在 `App`/`Workspace` 层的 `PanelDims` 里,`browser::
-State` 自己不持有。需要给 `view()` 新增一个参数 `bookmarks_split: f32`,调用处
-(`app.rs` 里渲染 `LeftView::Web` 的地方,与 `preview_pane`/`project_pane` 等同
-级)从 `app.dims.browser_bookmarks_split` 取值传进去(`PanelDims` 挂在 `App`
-上,不是 `Workspace`——同一函数里 `files_split`/`agent_split` 等既有 split 字段
-都是 `app.dims.xxx_split` 这个访问路径,照抄)——这与 `agent_list_pane`/
-`conversation_list_pane` 等函数接收 `Length::FillPortion` 而非自己算分割比例是
-同一套惯例,照抄即可,不是新模式。
+`split_portions` 目前定义在 `workspace.rs`(`pub(crate) fn split_portions`)—— 
+`git_log.rs` 用的是它自己内部同名的私有实现还是复用 `workspace::
+split_portions`,实现时核查一遍,若两边已经各写一份就保持现状(不做跨模块合
+并,不属于本次重构范围),若 `workspace::split_portions` 本来就是
+`pub(crate)` 可跨模块访问,直接 `use` 它,不要在 `browser.rs` 里再抄一份。
+
+调用处(`app.rs` 渲染 `LeftView::Web` 的地方,`app.rs:6959`)补上新参数:
+
+```rust
+LeftView::Web => browser::view(
+    &ws.browser,
+    ws.project.as_ref().map(|p| p.id),
+    app.dims.browser_bookmarks_split,
+    Length::Fill,
+    zone_pane_border(zone, ac),
+)
+.map(Message::Browser),
+```
 
 `divider_bar` 的具体调用参数(背景色两端、`Message::ColumnDragStart`)照抄
 `RightPairSplit`/`ProjectSplit` 那几处的写法,不再展开。
 
-### 5. `bookmark_group` 改文件夹图标分组
+### 6. `bookmark_group`/`bookmarks_panel` 改文件夹图标分组 + 接收显式宽度
+
+`bookmarks_panel(state, project_id)` 现状签名不接收宽度,内部硬编码
+`.width(Length::Fill)`;上一节的调用处需要用 `Length::FillPortion(list_portion)`
+撑满配对里的侧栏那一份宽度,签名要改成 `bookmarks_panel(state: &State,
+project_id: Option<i64>, width: Length) -> Element<'_, Message, ..>`,内部把
+`.width(Length::Fill)` 换成 `.width(width)`——与 `conversation_list_pane`/
+`agent_list_pane` 接收 `width: Length` 参数是同一套惯例。
 
 现状标题是纯文字 `lh(text(title)...)`。改成图标 + 文字一行,复用
 `icons::view`(与 `agent_list_pane`/`home_panel_head` 同款图标绘制方式),图标
