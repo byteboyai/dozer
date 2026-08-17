@@ -245,6 +245,7 @@ fn home_right_zone(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
     let inner = browser::view(
         &app.home_browser,
         None,
+        theme::geometry::default_split_ratio(),
         Length::Fill,
         zone_pane_border(zone, PaneCorner::All),
     )

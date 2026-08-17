@@ -49,6 +49,10 @@ fn legacy_global_dims(layout_path: &Path) -> PanelDims {
                 .get("conversations_split")
                 .and_then(num)
                 .unwrap_or_default(),
+            browser_bookmarks_split: v
+                .get("browser_bookmarks_split")
+                .and_then(num)
+                .unwrap_or(crate::theme::geometry::default_split_ratio()),
         })
         .unwrap_or_default()
 }

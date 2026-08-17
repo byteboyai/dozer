@@ -11,7 +11,7 @@
 use crate::app::{panel_tab, tab_arrow_button, tab_divider, tab_window};
 use crate::preview::WebviewSpec;
 use crate::theme::icon_size;
-use crate::workspace::{lh, preview_tab_display_width};
+use crate::workspace::{lh, preview_tab_display_width, split_portions};
 use crate::{icons, theme};
 use dozer_client::Client;
 use dozer_core::protocol::{BookmarkInfo, BookmarkScope};
@@ -780,6 +780,10 @@ pub enum Message {
     /// 按钮, 最后 bool = 进入/离开)。浏览器面板有独立 `State`,无法复用顶栏
     /// 全局 `App::hover_progress`,自己维护一套进度机(见 `State::hover`)。
     Hover(usize, bool, bool),
+    /// 收藏夹侧栏分割线开始拖:扩展发不了 app 级拖拽消息,由内核代发,见
+    /// `App::update` 里 `Message::Browser(Message::ColumnDragStart)` 分支
+    /// (同 `extensions::git_log::Message::ColumnDragStart` 的处理方式)。
+    ColumnDragStart,
 }
 
 /// 浏览器面板的全部状态。挂在每个 `Workspace` 上(不像 Git Log 挂在
@@ -841,6 +845,13 @@ impl State {
     /// 地址栏是否在编辑态(内核 `App::browser_addr_editing` 键盘路由用)。
     pub fn addr_editing(&self) -> bool {
         self.tabs.addr_editing()
+    }
+
+    /// 收藏夹侧栏当前是否展开——`app.rs::App::shell_state()` 读这个填
+    /// `ShellState::browser_bookmarks_open`,几何计算据此决定网页 webview
+    /// 是否要让出侧栏宽度。
+    pub fn bookmarks_open(&self) -> bool {
+        self.bookmarks_open
     }
 
     /// 取消地址栏编辑(内核 `App::blur_inputs` 用)。
@@ -1092,6 +1103,13 @@ pub fn update(
             }
             request_bookmarks_refresh(project_id, client, handle, emit);
         }
+        Message::ColumnDragStart => {
+            debug_assert!(
+                false,
+                "ColumnDragStart 由内核在 Message::Browser 分支里直接处理\
+                 (转成 app 级拖拽消息),不会转发到这里"
+            );
+        }
     }
 }
 
@@ -1218,16 +1236,21 @@ fn star_menu_popup(
         .into()
 }
 
-/// 一组收藏条目:标题(点击新开 tab)+ `×` 删除按钮,风格照抄 tab 关闭
-/// 按钮。
+/// 一组收藏条目:文件夹图标 + 标题(点击新开 tab)+ `×` 删除按钮,风格照抄
+/// tab 关闭按钮。条目在文件夹标题下缩进一级,呼应收藏夹"文件夹树"视觉。
 fn bookmark_group<'a>(
     title: &'static str,
     items: &[&'a BookmarkInfo],
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let mut col = column![lh(text(title)
-        .size(theme::font::subtitle())
-        .color(theme::color::DIM))]
-    .spacing(2);
+    let header = row![
+        icons::view(icons::IconKind::Folder, icon_size::row(), theme::color::DIM),
+        lh(text(title)
+            .size(theme::font::subtitle())
+            .color(theme::color::DIM)),
+    ]
+    .spacing(4)
+    .align_y(iced_widget::core::Alignment::Center);
+    let mut col = column![header].spacing(2);
     for b in items {
         let open = button(lh(text(b.title.clone())
             .size(theme::font::body())
@@ -1249,18 +1272,26 @@ fn bookmark_group<'a>(
             ..button::Style::default()
         });
         col = col.push(
-            row![open, remove]
-                .spacing(4)
-                .align_y(iced_widget::core::Alignment::Center),
+            row![
+                iced_widget::Space::new().width(Length::Fixed(16.0)),
+                row![open, remove]
+                    .spacing(4)
+                    .align_y(iced_widget::core::Alignment::Center),
+            ]
+            .width(Length::Fill),
         );
     }
     col.into()
 }
 
-/// 收藏夹下拉面板:分"全局收藏"/"本项目收藏"两组,都为空时显示占位文案。
+/// 收藏夹侧栏:分"全局收藏"/"本项目收藏"两组文件夹分组,都为空时显示占位
+/// 文案。`width` 由调用方按配对布局里侧栏那一份宽度的 flex 权重传入,侧栏
+/// 背景用列表侧一致的 `theme::color::BG`(结构性常驻侧栏,不再是盖在下方的
+/// 浮层卡片)。
 fn bookmarks_panel(
     state: &State,
     project_id: Option<i64>,
+    width: Length,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let global: Vec<&BookmarkInfo> = state
         .bookmarks
@@ -1287,14 +1318,10 @@ fn bookmarks_panel(
 
     container(col)
         .padding(6)
-        .width(Length::Fill)
+        .width(width)
+        .height(Length::Fill)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::CARD.into()),
-            border: Border {
-                color: theme::color::BORDER,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
+            background: Some(theme::color::BG.into()),
             ..container::Style::default()
         })
         .into()
@@ -1306,6 +1333,7 @@ fn bookmarks_panel(
 pub fn view(
     state: &State,
     project_id: Option<i64>,
+    bookmarks_split: f32,
     width: Length,
     outer: Border,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -1413,25 +1441,47 @@ pub fn view(
     if state.star_menu_open {
         content = content.push(star_menu_popup(state, project_id));
     }
-    if state.bookmarks_open {
-        content = content.push(bookmarks_panel(state, project_id));
-    }
-
     if let Some(err) = &state.error {
         content = content.push(lh(text(format!("⚠ {err}"))
             .size(theme::font::body())
             .color(theme::color::RED)));
     }
 
-    if state.tabs.tabs().is_empty() {
-        content = content.push(
+    let body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        if state.tabs.tabs().is_empty() {
             container(lh(text("暂无网页——在地址栏输入网址")
                 .size(theme::font::subtitle())
                 .color(theme::color::DIM)))
             .width(Length::Fill)
-            .height(Length::Fill),
-        );
-    }
+            .height(Length::Fill)
+            .into()
+        } else {
+            // 真实网页由 wry webview 叠加渲染,这里只需要一块透明占位
+            // (不能有不透明背景,否则会盖住 webview)。
+            iced_widget::Space::new()
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        };
+
+    content = content.push(if state.bookmarks_open {
+        let bg = region.background.unwrap_or(theme::color::BG);
+        let (list_portion, content_portion) = split_portions(1.0 - bookmarks_split);
+        row![
+            container(body).width(Length::FillPortion(content_portion)),
+            crate::app::divider_bar(
+                crate::app::Divider::BrowserBookmarksSplit,
+                bg,
+                bg,
+                Message::ColumnDragStart,
+            ),
+            bookmarks_panel(state, project_id, Length::FillPortion(list_portion)),
+        ]
+        .height(Length::Fill)
+        .into()
+    } else {
+        body
+    });
 
     container(content.padding(region.padding))
         .width(width)

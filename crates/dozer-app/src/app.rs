@@ -358,6 +358,11 @@ pub struct PanelDims {
     pub agent_split: f32,
     /// 对话配对:对话列表占右面板区宽度的比例，对话审阅拿剩下的。
     pub conversations_split: f32,
+    /// 浏览器面板配对:网页内容占左面板区宽度的比例,收藏夹侧栏(右)拿剩下
+    /// 的。与其余 split 字段语义相反(内容占比而非列表占比)——浏览器是
+    /// "内容在左、收藏夹侧栏在右"的唯一左面板区配对,详见 spec 第 1 节命名
+    /// 理由。
+    pub browser_bookmarks_split: f32,
 }
 
 /// 每项目尺寸的默认值(数值来源统一从这取,迁走的 `ShellLayout::default()`
@@ -375,6 +380,7 @@ fn default_panel_dims() -> PanelDims {
         git_log_file_diff_split: theme::geometry::default_split_ratio(),
         agent_split: theme::geometry::default_split_ratio(),
         conversations_split: theme::geometry::default_split_ratio(),
+        browser_bookmarks_split: theme::geometry::default_split_ratio(),
     }
 }
 
@@ -464,6 +470,7 @@ pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
         git_log_file_diff_split: clamp_split(d.git_log_file_diff_split),
         agent_split: clamp_split(d.agent_split),
         conversations_split: clamp_split(d.conversations_split),
+        browser_bookmarks_split: clamp_split(d.browser_bookmarks_split),
     }
 }
 
@@ -481,6 +488,11 @@ pub enum Divider {
     TodoSplit,
     /// Git Log 面板内部左右分隔线:左边 commit 列表,右边文件列表+diff。
     GitLogSplit,
+    /// 浏览器面板内部分割线:左边网页内容,右边收藏夹侧栏。与其余左面板区
+    /// 分割线不同的是配对顺序反了(内容在左、列表在右),所以
+    /// `apply_column_drag` 这条分支直接写 `ratio`(拖拽点左侧占比 = 内容占
+    /// 比),不需要像 `RightPairSplit` 那样取反。
+    BrowserBookmarksSplit,
     RightPairSplit,
 }
 
@@ -535,6 +547,9 @@ pub struct ShellState {
     pub left_collapsed: bool,
     pub right_view: RightView,
     pub right_collapsed: bool,
+    /// 浏览器收藏夹侧栏是否展开——`preview_content_bounds` 的
+    /// `LeftView::Web` 分支据此决定网页 webview 要不要让出侧栏宽度。
+    pub browser_bookmarks_open: bool,
     /// 当前放大态。`preview_content_bounds`/`is_in_preview_column`/
     /// `terminal_pane_pixel_size` 靠这个字段才能感知"这块内容其实被放大
     /// 遮罩盖住了/放大到了整个 maximize 区域"——没有它,离屏 webview 摆位、
@@ -697,6 +712,20 @@ pub(crate) fn apply_column_drag(
             );
             PanelDims {
                 git_log_split: ratio,
+                ..state.dims
+            }
+        }
+        Divider::BrowserBookmarksSplit => {
+            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            if pair_w <= 0.0 {
+                return state.dims;
+            }
+            let ratio = ((logical_x - theme::geometry::icon_rail_width()) / pair_w).clamp(
+                theme::geometry::min_split_ratio(),
+                theme::geometry::max_split_ratio(),
+            );
+            PanelDims {
+                browser_bookmarks_split: ratio,
                 ..state.dims
             }
         }
@@ -888,12 +917,21 @@ pub fn preview_content_bounds(
             let w = (content_w - 16.0 - m.left - m.right).max(0.0);
             (x, y, w, h)
         }
-        // 浏览器(Web)是单栏,左图标栏右侧 + 左 margin + 8 起,占满左面板区。
+        // 浏览器(Web):收藏夹侧栏关闭时单栏占满左面板区;打开时网页内容
+        // 让出右侧收藏夹侧栏的宽度(纯 iced 渲染,不挂 webview,几何计算
+        // 不用管它)。
         LeftView::Web => {
             let y = y_top(theme::geometry::browser_chrome_top_px());
             let h = h_for(y);
             let x = theme::geometry::icon_rail_width() + 8.0 + m.left;
-            let w = (left_w - 16.0 - m.left - m.right).max(0.0);
+            let w = if state.browser_bookmarks_open {
+                let pair_w = pair_content_width(left_w);
+                let (_bookmarks_w, content_w) =
+                    pair_list_content_width(pair_w, 1.0 - state.dims.browser_bookmarks_split);
+                (content_w - 16.0 - m.left - m.right).max(0.0)
+            } else {
+                (left_w - 16.0 - m.left - m.right).max(0.0)
+            };
             (x, y, w, h)
         }
         LeftView::GitLog => (0.0, 0.0, 0.0, 0.0),
@@ -2849,6 +2887,10 @@ impl App {
             left_collapsed: self.left_collapsed,
             right_view: self.right_view,
             right_collapsed: self.right_collapsed,
+            browser_bookmarks_open: self
+                .active_workspace()
+                .map(|ws| ws.browser.bookmarks_open())
+                .unwrap_or(false),
             maximized: self.maximized,
         }
     }
@@ -3647,6 +3689,9 @@ impl App {
             Message::Browser(browser::Message::DragHover(idx)) => {
                 // 浏览器 tab 脱的换位:光标扫过 `idx` 页签 → 走共同换位逻辑。
                 self.tab_drag_move(TabGroup::Browser, idx);
+            }
+            Message::Browser(browser::Message::ColumnDragStart) => {
+                self.update(Message::ColumnDragStart(Divider::BrowserBookmarksSplit));
             }
             Message::Browser(msg) => self.browser_message(msg),
             Message::ProjectSelect(id) => self.project_select(id),
@@ -6992,6 +7037,7 @@ fn left_panel_area<'a>(
             LeftView::Web => browser::view(
                 &ws.browser,
                 ws.project.as_ref().map(|p| p.id),
+                app.dims.browser_bookmarks_split,
                 Length::Fill,
                 zone_pane_border(zone, ac),
             )
@@ -8318,6 +8364,7 @@ mod tests {
             left_collapsed: false,
             right_view: RightView::Agent,
             right_collapsed: false,
+            browser_bookmarks_open: false,
             maximized: None,
         }
     }
@@ -8352,6 +8399,31 @@ mod tests {
         let left_w = left_zone_width(1440.0, &state);
         assert_eq!(x, theme::geometry::icon_rail_width() + 8.0 + m.left);
         assert_eq!(w, left_w - 16.0 - m.left - m.right);
+    }
+
+    #[test]
+    fn preview_content_bounds_web_view_shrinks_when_bookmarks_open() {
+        let closed = ShellState {
+            left_view: LeftView::Web,
+            browser_bookmarks_open: false,
+            ..test_state()
+        };
+        let open = ShellState {
+            left_view: LeftView::Web,
+            browser_bookmarks_open: true,
+            ..test_state()
+        };
+        let (_, _, w_closed, _) = preview_content_bounds(1440.0, 900.0, &closed);
+        let (x_open, y_open, w_open, h_open) = preview_content_bounds(1440.0, 900.0, &open);
+        assert!(
+            w_open < w_closed,
+            "收藏夹打开时网页内容应该让出侧栏宽度: w_open={w_open} w_closed={w_closed}"
+        );
+        // x/y/h 不受收藏夹开关影响——网页内容起点、高度不变,只是变窄。
+        let (x_closed, y_closed, _, h_closed) = preview_content_bounds(1440.0, 900.0, &closed);
+        assert_eq!(x_open, x_closed);
+        assert_eq!(y_open, y_closed);
+        assert_eq!(h_open, h_closed);
     }
 
     #[test]
@@ -8811,6 +8883,32 @@ mod tests {
     }
 
     #[test]
+    fn apply_column_drag_updates_browser_bookmarks_split_ratio() {
+        let state = test_state();
+        let window_width = 1600.0;
+        // 拖拽点在左面板区靠右侧,网页内容(拖拽点左侧)占比应偏大。
+        let result = apply_column_drag(state, Divider::BrowserBookmarksSplit, window_width, 500.0);
+        assert!(result.browser_bookmarks_split >= theme::geometry::min_split_ratio());
+        assert!(result.browser_bookmarks_split <= theme::geometry::max_split_ratio());
+    }
+
+    #[test]
+    fn apply_column_drag_browser_bookmarks_split_direction_matches_content_side() {
+        // 方向性回归:拖拽点越靠右,网页内容(左侧)占比应该越大——
+        // browser_bookmarks_split 存的是内容占比,不是收藏夹占比。
+        let state = test_state();
+        let window_width = 1600.0;
+        let near = apply_column_drag(state, Divider::BrowserBookmarksSplit, window_width, 100.0);
+        let far = apply_column_drag(state, Divider::BrowserBookmarksSplit, window_width, 500.0);
+        assert!(
+            far.browser_bookmarks_split > near.browser_bookmarks_split,
+            "near={} far={}",
+            near.browser_bookmarks_split,
+            far.browser_bookmarks_split
+        );
+    }
+
+    #[test]
     fn sanitize_panel_dims_clamps_git_log_split() {
         let dims = PanelDims {
             git_log_split: 5.0,
@@ -8825,6 +8923,35 @@ mod tests {
         };
         let sanitized = sanitize_panel_dims(dims);
         assert_eq!(sanitized.git_log_split, PanelDims::default().files_split);
+    }
+
+    #[test]
+    fn default_panel_dims_includes_browser_bookmarks_split() {
+        let dims = PanelDims::default();
+        assert_eq!(
+            dims.browser_bookmarks_split,
+            theme::geometry::default_split_ratio()
+        );
+    }
+
+    #[test]
+    fn sanitize_panel_dims_clamps_browser_bookmarks_split() {
+        let dims = PanelDims {
+            browser_bookmarks_split: 5.0,
+            ..PanelDims::default()
+        };
+        let sanitized = sanitize_panel_dims(dims);
+        assert!(sanitized.browser_bookmarks_split <= theme::geometry::max_split_ratio());
+
+        let dims = PanelDims {
+            browser_bookmarks_split: f32::NAN,
+            ..PanelDims::default()
+        };
+        let sanitized = sanitize_panel_dims(dims);
+        assert_eq!(
+            sanitized.browser_bookmarks_split,
+            PanelDims::default().files_split
+        );
     }
 
     #[test]
