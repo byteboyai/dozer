@@ -633,6 +633,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             logical_x,
                         });
                     }
+                    // 纵向(上下)拖拽同理:按窗口逻辑高换算 cursor y。
+                    if app.dragging_row().is_some() {
+                        let scale = window.scale_factor();
+                        let logical_y = (cursor_phys.y / scale) as f32;
+                        let window_height = (window.inner_size().height as f64 / scale) as f32;
+                        app.update(Message::RowDrag {
+                            window_height,
+                            logical_y,
+                        });
+                    }
                     // 悬停(未拖拽)也要请求重绘:分隔线的 resize 光标走
                     // MouseArea::interaction → mouse_interaction() → RedrawRequested
                     // 里的 window.set_cursor(icon) 这条既有管线(main.rs:808-816
@@ -709,6 +719,15 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     ..
                 } if app.dragging_divider().is_some() => {
                     app.update(Message::ColumnDragEnd);
+                    window.request_redraw();
+                }
+                // 纵向拖拽松开左键同理。
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: winit::event::MouseButton::Left,
+                    ..
+                } if app.dragging_row().is_some() => {
+                    app.update(Message::RowDragEnd);
                     window.request_redraw();
                 }
                 // 页签拖拽换位同理:左键松开即结束(不需要位置续传,CursorMoved

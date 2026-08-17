@@ -40,6 +40,10 @@ fn legacy_global_dims(layout_path: &Path) -> PanelDims {
                 .unwrap_or(crate::theme::geometry::default_split_ratio()),
             todo_split: v.get("todo_split").and_then(num).unwrap_or_default(),
             git_log_split: v.get("git_log_split").and_then(num).unwrap_or_default(),
+            git_log_file_diff_split: v
+                .get("git_log_file_diff_split")
+                .and_then(num)
+                .unwrap_or_default(),
             agent_split: v.get("agent_split").and_then(num).unwrap_or_default(),
             conversations_split: v
                 .get("conversations_split")

@@ -333,6 +333,8 @@ pub struct PanelDims {
     /// Git Log 面板配对:commit 列表占左面板区宽度的比例,右侧(文件列表+diff)
     /// 拿剩下的。
     pub git_log_split: f32,
+    /// Git Log 面板右侧配对:文件列表占右侧区域高度的比例,diff 内容拿剩下的。
+    pub git_log_file_diff_split: f32,
     /// Agent配对:Agent列表占右面板区宽度的比例，终端拿剩下的。
     pub agent_split: f32,
     /// 对话配对:对话列表占右面板区宽度的比例，对话审阅拿剩下的。
@@ -351,6 +353,7 @@ fn default_panel_dims() -> PanelDims {
         ssh_split: theme::geometry::default_split_ratio(),
         todo_split: theme::geometry::default_split_ratio(),
         git_log_split: theme::geometry::default_split_ratio(),
+        git_log_file_diff_split: theme::geometry::default_split_ratio(),
         agent_split: theme::geometry::default_split_ratio(),
         conversations_split: theme::geometry::default_split_ratio(),
     }
@@ -439,6 +442,7 @@ pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
         ssh_split: clamp_split(d.ssh_split),
         todo_split: clamp_split(d.todo_split),
         git_log_split: clamp_split(d.git_log_split),
+        git_log_file_diff_split: clamp_split(d.git_log_file_diff_split),
         agent_split: clamp_split(d.agent_split),
         conversations_split: clamp_split(d.conversations_split),
     }
@@ -459,6 +463,15 @@ pub enum Divider {
     /// Git Log 面板内部左右分隔线:左边 commit 列表,右边文件列表+diff。
     GitLogSplit,
     RightPairSplit,
+}
+
+/// 纵向(上下)可拖拽分割线——目前只有 Git Log 面板右侧"文件列表 | diff
+/// 内容"这一条,单独开一个枚举而不是塞进 `Divider`(横向语义不同,`Divider`
+/// 现有变体全部是左右分割,`apply_column_drag`/`Message::ColumnDrag` 的
+/// 几何计算全部基于 `logical_x`,混进去会让那个函数的语义变得模糊)。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RowDivider {
+    GitLogFileDiffSplit,
 }
 
 /// 参与拖拽换位的四种 tab 组：顶栏项目页签、终端会话页签、预览页签、浏览器
@@ -691,6 +704,33 @@ pub(crate) fn apply_column_drag(
                 RightView::Usage => state.dims,
                 // 验收面板同用量统计是单栏,不分割。
                 RightView::Acceptance => state.dims,
+            }
+        }
+    }
+}
+
+/// `apply_column_drag` 的纵向镜像:按 `logical_y`/`window_height` 算比例。
+/// "可用高度"用近似估算(粗略减去顶栏/footbar 这类固定装饰高度)——Git Log
+/// 面板内部标题/worktree 条的精确高度不在这里计算,内核不关心面板内部布局
+/// 细节,只提供窗口级的粗略换算;像素级对齐精度不足时人工验收阶段允许
+/// 后续单独调整这个估算值。
+pub(crate) fn apply_row_drag(
+    state: ShellState,
+    divider: RowDivider,
+    window_height: f32,
+    logical_y: f32,
+) -> PanelDims {
+    match divider {
+        RowDivider::GitLogFileDiffSplit => {
+            let usable_height =
+                (window_height - theme::geometry::status_bar_height() * 2.0).max(1.0);
+            let ratio = (logical_y / usable_height).clamp(
+                theme::geometry::min_split_ratio(),
+                theme::geometry::max_split_ratio(),
+            );
+            PanelDims {
+                git_log_file_diff_split: ratio,
+                ..state.dims
             }
         }
     }
@@ -1311,6 +1351,16 @@ pub enum Message {
     /// 松开左键,结束拖拽并触发写盘。构造方为 main.rs 的
     /// `MouseInput{Released}` 分支。
     ColumnDragEnd,
+    /// 按下某条纵向(上下)分隔线,记录"正在拖哪条"。构造方为
+    /// `horizontal_divider_bar` 的 `on_press`。
+    RowDragStart(RowDivider),
+    /// 纵向拖拽中:当前窗口逻辑高 + 光标逻辑 y(main.rs 换算好传入)。
+    RowDrag {
+        window_height: f32,
+        logical_y: f32,
+    },
+    /// 松开左键,结束纵向拖拽并触发写盘。
+    RowDragEnd,
     /// 拖拽中,光标进入了 `group` 组的第 `index` 个 tab 上空——拖起的源项
     /// 应移动到这个目标位(换位)。构造方为该组每个 tab 顶层的
     /// `MouseArea::on_move`(仅在 `tab_drag` 命中本组时挂载)。按住页签＝
@@ -1630,6 +1680,8 @@ pub struct App {
     window_size: (f32, f32),
     /// 正在拖拽的分隔线;`None` 表示未在拖拽。
     dragging: Option<Divider>,
+    /// 正在拖拽的纵向(上下)分隔线;`None` 表示未在拖拽。
+    dragging_row: Option<RowDivider>,
     /// 正在拖拽的页签(换位);`None` 表示未在拖拽页签。与 `dragging` 分隔线
     /// 互斥(一次左键拖拽只能是一件事)。
     tab_drag: Option<TabDrag>,
@@ -1954,6 +2006,7 @@ impl App {
             pending_preview_zoom: false,
             window_size: theme::geometry::initial_window_size(),
             dragging: None,
+            dragging_row: None,
             tab_drag: None,
             files: files::AppState::default(),
             preview_tab_menu: None,
@@ -2780,6 +2833,12 @@ impl App {
         self.dragging
     }
 
+    /// 当前正在拖拽的纵向分隔线(main.rs 拖拽追踪用,调用方同
+    /// `dragging_divider`)。
+    pub fn dragging_row(&self) -> Option<RowDivider> {
+        self.dragging_row
+    }
+
     /// 当前正在拖拽的页签(main.rs 拖拽追踪用,调用方同 `dragging_divider`)。
     pub fn dragging_tab(&self) -> Option<TabDrag> {
         self.tab_drag
@@ -3307,6 +3366,22 @@ impl App {
             }
             Message::ColumnDragEnd => {
                 self.dragging = None;
+                self.on_shell_layout_changed();
+            }
+            Message::RowDragStart(divider) => {
+                self.dragging_row = Some(divider);
+            }
+            Message::RowDrag {
+                window_height,
+                logical_y,
+            } => {
+                if let Some(divider) = self.dragging_row {
+                    let state = self.shell_state();
+                    self.dims = apply_row_drag(state, divider, window_height, logical_y);
+                }
+            }
+            Message::RowDragEnd => {
+                self.dragging_row = None;
                 self.on_shell_layout_changed();
             }
             Message::TabDragMove { group, index } => {
@@ -6185,8 +6260,8 @@ pub(crate) fn project_dot(alive_states: &[AgentState]) -> Option<Color> {
     winning_agent_state(alive_states).map(agent_state_dot)
 }
 
-/// 一组存活会话状态里"最值得关注"的那个(设计文档 §6 的优先级):
-/// TurnEnded(该甲方出手了)> AwaitingInput(agent 在等人)> Running(还在跑)
+/// 一组存活会话状态里"最值得关注"的那个(2026-08-17 用户重新定案的优先级):
+/// AwaitingInput(agent 在等你)> Running(还在跑)> TurnEnded(该你出手了)
 /// > Idle > 无存活会话(`None`,不画点)。
 ///
 /// 与 [`agent_state_dot`] 分家是为了让 `Stub` 页签也能用:启动恢复时那些还没
@@ -6195,9 +6270,9 @@ pub(crate) fn project_dot(alive_states: &[AgentState]) -> Option<Color> {
 /// (最终审查 Required Fix #5)。
 fn winning_agent_state(alive_states: &[AgentState]) -> Option<AgentState> {
     [
-        AgentState::TurnEnded,
         AgentState::AwaitingInput,
         AgentState::Running,
+        AgentState::TurnEnded,
         AgentState::Idle,
     ]
     .into_iter()
@@ -7136,6 +7211,47 @@ fn divider_bar<'a>(
         .into()
 }
 
+/// `divider_bar` 的纵向(上下)镜像:一条水平分割线,`row!`→`column!`、
+/// `width`↔`height` 互换,鼠标样式 `ResizingRow`(对应横向的
+/// `ResizingColumn`)。目前只有 Git Log 面板右侧"文件列表 | diff 内容"这条
+/// 纵向拖拽线用它。粗细复用 `theme::geometry::divider_width()`,与横向一致。
+fn horizontal_divider_bar<'a>(
+    divider: RowDivider,
+    top_bg: Color,
+    bottom_bg: Color,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let line_h = 2.0_f32;
+    let side_h = (theme::geometry::divider_width() - line_h) / 2.0;
+    let top_side = container(iced_widget::Space::new())
+        .height(Length::Fixed(side_h))
+        .width(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(top_bg.into()),
+            ..container::Style::default()
+        });
+    let bottom_side = container(iced_widget::Space::new())
+        .height(Length::Fixed(side_h))
+        .width(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(bottom_bg.into()),
+            ..container::Style::default()
+        });
+    let line = container(iced_widget::Space::new())
+        .height(Length::Fixed(line_h))
+        .width(Length::Fill)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::color::BORDER.into()),
+            ..container::Style::default()
+        });
+    let col = column![top_side, line, bottom_side]
+        .height(Length::Fixed(theme::geometry::divider_width()))
+        .width(Length::Fill);
+    MouseArea::new(col)
+        .interaction(mouse::Interaction::ResizingRow)
+        .on_press(Message::RowDragStart(divider))
+        .into()
+}
+
 /// 箭头翻页按钮：ChevronLeft / ChevronRight，可用时 GOLD，hover 显 CARD 圆角底，到头时 DIM 且不可点。
 pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
     icon: icons::IconKind,
@@ -8001,8 +8117,9 @@ mod tests {
         assert_eq!(order, vec![1]);
     }
 
-    /// 页签指示点的优先级:金 > 红 > 绿 > 青 > 不画点。各状态固定配色,
-    /// 不再有闪烁区分。
+    /// 页签指示点的优先级(2026-08-17 重新定案):红(AwaitingInput,agent 在
+    /// 等你)> 绿(Running,还在跑)> 金(TurnEnded,该你出手了)> 青(Idle)
+    /// > 不画点。各状态固定配色,不再有闪烁区分。
     #[test]
     fn project_dot_color_priority() {
         use dozer_core::protocol::AgentState::*;
@@ -8010,19 +8127,19 @@ mod tests {
         assert_eq!(project_dot(&[]), None, "无存活会话不画点");
         assert_eq!(project_dot(&[Idle]), Some(theme::color::CYAN));
         assert_eq!(
-            project_dot(&[Idle, Running]),
-            Some(theme::color::GREEN),
-            "有会话在跑 → 运行优先于空闲"
-        );
-        assert_eq!(
-            project_dot(&[Idle, Running, AwaitingInput]),
-            Some(theme::color::RED),
-            "待输入优先于运行/空闲"
-        );
-        assert_eq!(
-            project_dot(&[Idle, Running, AwaitingInput, TurnEnded]),
+            project_dot(&[Idle, TurnEnded]),
             Some(theme::color::GOLD),
-            "回合结束(该甲方出手了)优先级最高"
+            "回合结束优先于空闲"
+        );
+        assert_eq!(
+            project_dot(&[Idle, TurnEnded, Running]),
+            Some(theme::color::GREEN),
+            "还在跑优先于回合结束/空闲"
+        );
+        assert_eq!(
+            project_dot(&[Idle, TurnEnded, Running, AwaitingInput]),
+            Some(theme::color::RED),
+            "agent 在等你优先级最高"
         );
         // 顺序无关:优先级看的是状态集合,不是 tab 的先后。
         assert_eq!(
@@ -8547,6 +8664,56 @@ mod tests {
         };
         let sanitized = sanitize_panel_dims(dims);
         assert_eq!(sanitized.git_log_split, PanelDims::default().files_split);
+    }
+
+    #[test]
+    fn apply_row_drag_clamps_ratio_within_valid_range() {
+        let state = test_state();
+        let window_height = 1000.0;
+
+        // 光标在窗口中间——应该落在合法比例区间内。
+        let mid = apply_row_drag(
+            state,
+            RowDivider::GitLogFileDiffSplit,
+            window_height,
+            500.0,
+        );
+        assert!(mid.git_log_file_diff_split >= theme::geometry::min_split_ratio());
+        assert!(mid.git_log_file_diff_split <= theme::geometry::max_split_ratio());
+
+        // 光标远超窗口顶部/底部——应该被 clamp,不产生非法比例。
+        let top = apply_row_drag(
+            state,
+            RowDivider::GitLogFileDiffSplit,
+            window_height,
+            -500.0,
+        );
+        assert_eq!(
+            top.git_log_file_diff_split,
+            theme::geometry::min_split_ratio()
+        );
+        let bottom = apply_row_drag(
+            state,
+            RowDivider::GitLogFileDiffSplit,
+            window_height,
+            5000.0,
+        );
+        assert_eq!(
+            bottom.git_log_file_diff_split,
+            theme::geometry::max_split_ratio()
+        );
+    }
+
+    #[test]
+    fn sanitize_panel_dims_clamps_git_log_file_diff_split() {
+        let dims = PanelDims {
+            git_log_file_diff_split: -1.0,
+            ..PanelDims::default()
+        };
+        let sanitized = sanitize_panel_dims(dims);
+        assert!(
+            sanitized.git_log_file_diff_split >= theme::geometry::min_split_ratio()
+        );
     }
 
     /// `window_width`/`window_height` 的夹取单独测:老 `layout.json` 缺这两
