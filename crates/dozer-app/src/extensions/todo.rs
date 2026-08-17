@@ -1306,7 +1306,7 @@ fn drag_insert_indicator() -> Element<'static, Message, iced_widget::Theme, iced
 /// 任务文字 → 派发按钮(仅待办未派发时) + 状态 pill。选中态左侧加 3px
 /// 金色竖条(对齐原 `todo_row` 的 `accent` 处理)。
 #[allow(clippy::too_many_arguments)]
-fn todo_card<'a>(
+fn todo_card<'a, 'b>(
     number: usize,
     idx: usize,
     item: &'a TodoItem,
@@ -1316,7 +1316,12 @@ fn todo_card<'a>(
     selected: bool,
     dispatch_open: bool,
     state_pill_open: bool,
-    existing_tabs: &'a [(&'a str, String)],
+    // 独立生命周期 `'b`,不绑定到返回值的 `'static`:`todo_card` 返回
+    // `Element<'static>`(内部已把 `existing_tabs` 的数据 clone 出来,不持有
+    // 任何借用),调用方传进来的 `existing_tabs` 常是 `todo_list_view` 里构造的
+    // 短命局部 `Vec`,跟 `'a` 混在一起会逼编译器把这个短生命周期错误地传染
+    // 给整个返回值(见 E0515)。
+    existing_tabs: &'b [(&'b str, String)],
     grabbing: bool,
     is_drag_source: bool,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -1534,9 +1539,9 @@ fn todo_card<'a>(
 /// Todo 派发选择层：列出当前项目存活的 agent tab + 一个"新建"入口，样式
 /// 对齐 `agent_picker_popup`（CARD 底 + BORDER 描边）。挂在触发它的那一行
 /// 下方，不需要额外的坐标计算。
-fn todo_dispatch_popup<'a>(
+fn todo_dispatch_popup<'b>(
     idx: usize,
-    existing_tabs: &'a [(&'a str, String)],
+    existing_tabs: &'b [(&'b str, String)],
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![].spacing(2);
     for (session_id, title) in existing_tabs {

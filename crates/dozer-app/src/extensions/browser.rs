@@ -821,6 +821,12 @@ pub struct State {
     star_menu_open: bool,
     /// tab 标题/关闭按钮的 hover 进度,键 `(tab 序号, 是否关闭按钮)`。
     hover: HashMap<(usize, bool), TabHover>,
+    /// 页签标题 tooltip 的悬停计时起点:键为 tab 序号(关闭按钮不计,只认
+    /// 页签整体悬停)。进入页签记 `Instant::now()`,离开即清除;悬停满 3s
+    /// 后视图层据此弹标题全称 tooltip(见 `hover_tooltip_ready`)。与顶栏/
+    /// 终端页签的计时分开存(`App::hover_tooltip_starts`),因为浏览器面板
+    /// 走自己这套 hover 状态机(`hover` 而非全局 `HoverId`)。
+    tooltip_starts: HashMap<usize, std::time::Instant>,
 }
 
 impl State {
@@ -877,6 +883,34 @@ impl State {
     /// `App::any_hover_anim_active` 据此决定是否继续排下一拍定时唤醒。
     pub fn any_hover_active(&self) -> bool {
         self.hover.values().any(TabHover::active)
+    }
+
+    /// 维护某页签的 tooltip 悬停计时:进入记起点、离开清除(满 3s 由
+    /// `hover_tooltip_ready` 判断)。与 `hover` 动画进度同源触发,但计时是
+    /// 独立的一份(见 `tooltip_starts` 字段注释)。
+    pub(crate) fn set_tab_tooltip(&mut self, idx: usize, hovered: bool) {
+        if hovered {
+            self.tooltip_starts.insert(idx, std::time::Instant::now());
+        } else {
+            self.tooltip_starts.remove(&idx);
+        }
+    }
+
+    /// 某页签悬停是否已持续满 `HOVER_TOOLTIP_DELAY`(3s):满则视图层弹标题
+    /// 全称 tooltip(见 `panel_tab` 的 `show_tooltip` 参数)。
+    pub(crate) fn hover_tooltip_ready(&self, idx: usize) -> bool {
+        self.tooltip_starts
+            .get(&idx)
+            .is_some_and(|start| start.elapsed() >= crate::app::HOVER_TOOLTIP_DELAY)
+    }
+
+    /// 距下一个 tooltip 计时满 3s 的最短剩余时间——内核 `App::next_tooltip_wake`
+    /// 据此排下次唤醒,做到"恰好满 3s 才重绘"。
+    pub(crate) fn next_tooltip_wake(&self) -> Option<std::time::Duration> {
+        self.tooltip_starts
+            .values()
+            .filter_map(|start| crate::app::HOVER_TOOLTIP_DELAY.checked_sub(start.elapsed()))
+            .min()
     }
 
     /// 取某 tab 标题(idx, is_close=false)或关闭按钮(idx, is_close=true)的
@@ -970,6 +1004,10 @@ pub fn update(
         }
         Message::Hover(idx, is_close, hovered) => {
             state.hover.entry((idx, is_close)).or_default().set(hovered);
+            // 标题 tooltip 计时:进入即记起点、离开即清(满 3s 由
+            // `hover_tooltip_ready` 判断,与关闭按钮的 hover 无关,只认页签
+            // 整体悬停)。
+            state.set_tab_tooltip(idx, hovered);
         }
         Message::AddrClick => {
             state.error = None;
@@ -1304,6 +1342,7 @@ pub fn view(
                 None,
                 Message::SelectTab(idx),
                 Message::CloseTab(idx),
+                state.hover_tooltip_ready(idx),
                 move |h| Message::Hover(idx, false, h),
                 move |h| Message::Hover(idx, true, h),
             );

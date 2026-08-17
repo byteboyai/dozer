@@ -49,6 +49,7 @@ use iced_widget::core::border::Radius;
 use iced_widget::core::font::Weight;
 use iced_widget::core::mouse;
 use iced_widget::core::{Border, Color, Element, Font, Length, Padding};
+use iced_widget::tooltip::{self, Position, Tooltip};
 use iced_widget::{MouseArea, button, column, container, responsive, row, stack, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
 use serde::{Deserialize, Serialize};
@@ -226,6 +227,12 @@ impl HoverAnim {
         self.progress
     }
 }
+
+/// 页签标题 tooltip 的悬停触发延迟:进入页签并持续悬停满 3s 才弹出标题全称,
+/// 避免短暂停留就弹气泡打扰。计时起点记在 `App::hover_tooltip_starts`,由
+/// `Message::Hover` 进入/离开驱动;main.rs 的自驱 redraw 负责在满 3s 那一刻
+/// 重绘出气泡(见 `next_tooltip_wake`)。
+pub(crate) const HOVER_TOOLTIP_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// 顶层级页面：工作区(默认,左右面板区+页签) / 首页落地页(点顶栏 Dozer 进入)。
 /// 默认 `Workspace`——程序启动照常进工作区,Home 是用户主动点击 Dozer 才进。
@@ -1591,6 +1598,13 @@ pub struct App {
     /// 把图标/背景颜色在 idle↔hover 间 ease-out 过渡。进度由 main.rs 的定时
     /// 唤醒经 `advance_hover_anims` 指数逼近各自 `target`(见 `HoverAnim`)。
     hover_anims: std::collections::HashMap<HoverId, HoverAnim>,
+    /// 页签标题 tooltip 的悬停计时起点:key 复用 `HoverId`(与 `hover_anims`
+    /// 同源),进入页签记 `Instant::now()`,离开即清除。悬停满
+    /// `HOVER_TOOLTIP_DELAY` 后视图层据此弹出标题全称 tooltip(见
+    /// `hover_tooltip_ready`)。浏览器面板的页签走自己那套 hover 状态机,
+    /// 计时另存于 `browser::State::tooltip_starts`,本表只覆盖顶栏页签与
+    /// 终端/预览/SSH 面板页签。
+    hover_tooltip_starts: std::collections::HashMap<HoverId, std::time::Instant>,
     /// 双击顶栏空白处待处理标记,见 `Message::TopBarDoubleClick`/
     /// `take_pending_zoom_toggle`。`App` 不持有 `winit::window::Window`
     /// 句柄,真正切换最大化态由 main.rs 轮询这个标记后调用。
@@ -1927,6 +1941,7 @@ impl App {
             maximized: None,
             active_zone: Some(ZoneSide::Right),
             hover_anims: std::collections::HashMap::new(),
+            hover_tooltip_starts: std::collections::HashMap::new(),
             pending_zoom_toggle: false,
             pending_preview_zoom: false,
             window_size: theme::geometry::initial_window_size(),
@@ -2176,6 +2191,14 @@ impl App {
     /// `advance_hover_anims` 循环把它指数逼近（见 `HoverAnim`）。
     pub fn set_hover(&mut self, id: HoverId, hovered: bool) {
         self.hover_anims.entry(id).or_default().set(hovered);
+        // 标题 tooltip 计时:进入即记起点,离开即清(计时满 3s 由视图层
+        // `hover_tooltip_ready` 判断,本函数只负责起止)。
+        if hovered {
+            self.hover_tooltip_starts
+                .insert(id, std::time::Instant::now());
+        } else {
+            self.hover_tooltip_starts.remove(&id);
+        }
     }
 
     /// 推进所有按钮的悬停动画一拍（约 60fps 一拍，由 main.rs 的定时唤醒
@@ -2209,6 +2232,40 @@ impl App {
     /// 某按钮当前悬停动画进度(0..=1)，给视图层做颜色插值。
     pub fn hover_progress(&self, id: HoverId) -> f32 {
         self.hover_anims.get(&id).map(HoverAnim::t).unwrap_or(0.0)
+    }
+
+    /// 某页签悬停是否已持续满 `HOVER_TOOLTIP_DELAY`:满则应在视图层弹出标题
+    /// 全称 tooltip(`controlled_tooltip` 据此驱动 `Tooltip::show`)。
+    pub fn hover_tooltip_ready(&self, id: HoverId) -> bool {
+        self.hover_tooltip_starts
+            .get(&id)
+            .is_some_and(|start| start.elapsed() >= HOVER_TOOLTIP_DELAY)
+    }
+
+    /// 距下一个 tooltip 计时满 3s 的最短剩余时间:main.rs 据此排下次唤醒,做到
+    /// "恰好满 3s 才重绘",不空转也不延迟。浏览器面板页签的计时一并纳入。
+    pub fn next_tooltip_wake(&self) -> Option<std::time::Duration> {
+        let mut next = self
+            .hover_tooltip_starts
+            .values()
+            .filter_map(|start| HOVER_TOOLTIP_DELAY.checked_sub(start.elapsed()))
+            .min();
+        let browser_next = self
+            .home_browser
+            .next_tooltip_wake()
+            .into_iter()
+            .chain(self.projects.values().filter_map(|s| match s {
+                WorkspaceSlot::Loaded(ws) => ws.browser.next_tooltip_wake(),
+                _ => None,
+            }))
+            .min();
+        next = match (next, browser_next) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
+        next
     }
 
     /// 拖拽换位:把当前拖起的源项(`self.tab_drag.source`)移到 `group` 组的
@@ -5849,6 +5906,7 @@ fn project_tabs_row(
                 blink_on,
                 close_hover_t,
                 title_hover_t,
+                app.hover_tooltip_ready(HoverId::ProjectTabItem(entry.id)),
             );
             // 固定宽:少页签时为默认宽,挤时为均分窄宽(Chrome 式收窄)。
             let cell = container(item).width(Length::Fixed(per_tab));
@@ -5934,6 +5992,7 @@ fn project_tabs_row(
 
 /// 单个项目页签:状态点(可选)+ 项目名的切换按钮 + 关闭按钮。结构与终端
 /// `tab_item` 一致(两个平级按钮包在一个 container 里,不做按钮套按钮)。
+#[allow(clippy::too_many_arguments)]
 fn project_tab_item<'a>(
     id: i64,
     name: String,
@@ -5942,6 +6001,7 @@ fn project_tab_item<'a>(
     blink_on: bool,
     close_hover_t: f32,
     title_hover_t: f32,
+    show_tooltip: bool,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 页签背景圆角半径参考 Dozer 按钮(圆角正方形)的边长 `sq`,但实际背景高
     // 用更高的 `tab_h`——页签贴底(见 `project_tabs_row` 的 `align_y(End)`)、
@@ -5972,7 +6032,7 @@ fn project_tab_item<'a>(
         label = label.push(text("●").size(theme::font::caption_sm()).color(color));
     }
     label = label.push(
-        text(name)
+        text(name.clone())
             .font(top_bar_font())
             .size(theme::font::body())
             .color(if active {
@@ -6124,7 +6184,7 @@ fn project_tab_item<'a>(
     // 这里的 `align_y` 对贴底本身不起作用(那层在 `project_tabs_row` 的
     // `container(...).align_y(End)` 完成),留着只是 iced `container` 布局
     // 惯例、无空间可分配时是无操作。
-    container(inner)
+    let el: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = container(inner)
         .height(Length::Fixed(tab_h))
         .width(Length::Fill)
         .align_y(iced_widget::core::alignment::Vertical::Center)
@@ -6148,7 +6208,10 @@ fn project_tab_item<'a>(
                 container::Style::default()
             }
         })
-        .into()
+        .into();
+    // 顶栏页签在屏幕顶部,tooltip 用 `Bottom` 弹在页签下方,免出屏。仅当
+    // 悬停满 3s(`show_tooltip`)才显示标题全称。
+    controlled_tooltip(el, name, tooltip::Position::Bottom, show_tooltip)
 }
 
 /// 一个项目页签的后台活动指示点:取该项目所有**存活**会话里最值得关注的
@@ -7216,7 +7279,8 @@ pub(crate) fn tab_drag_surface(
 /// 页签：标题 `body()`(13px) + `top_bar_font()`，静止 `DIM`、hover 动画
 /// `DIM→金`；关闭 `×` 静止 `DIM`、hover `DIM→金`、24×24 命中框；未选中
 /// hover 显 `TAB_HOVER` 胶囊背景（radius 8）。tab 宽度随标题适配
-/// (`Length::Shrink`)，超过 `PANEL_TAB_MAX_W` 时标题省略号截断。激活态外观
+/// (`Length::Shrink`)，超过 `PANEL_TAB_MAX_W` 时标题超宽部分直接隐藏
+/// (不换行、不补省略号，靠 `clip` 裁掉溢出，见 CODEBUDDY 需求)。激活态外观
 /// (CREAM 标题 + CARD 实底 + 1px 边框)由本函数统一绘制，未选中态额外画
 /// hover 细节。
 ///
@@ -7224,10 +7288,11 @@ pub(crate) fn tab_drag_surface(
 /// `browser::Message`，保证三处渲染完全一致。`hover_t`/`close_hover_t` 是
 /// 调用方动画源给的插值进度(0..=1)；`prefix` 承载终端状态点(标题左侧)，
 /// `suffix` 承载预览编辑图标(标题右侧、关闭按钮前，仍是独立可点元素)。
-/// (iced 0.14 的 `Text` 无原生省略号，截断靠 `fit_title` 手动补 `…`。)
+/// `show_tooltip` 由调用方按"悬停满 3s"算好(`App::hover_tooltip_ready` /
+/// `browser::State::hover_tooltip_ready`)，满则包一层 tooltip 显示标题全称。
 // 共享的 panel tab 渲染器,被终端/预览/browser 三处复用;参数多是刻意保留的
-// 单一职责接口(标题/激活态/两组 hover 进度与回调/前后缀),拆结构体反而要
-// 引入 `Box<dyn Fn>`,得不偿失。
+// 单一职责接口(标题/激活态/两组 hover 进度与回调/前后缀/tooltip 开关),拆
+// 结构体反而要引入 `Box<dyn Fn>`,得不偿失。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn panel_tab<'a, M: Clone + 'a>(
     title: String,
@@ -7238,6 +7303,7 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
     suffix: Option<Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>>,
     on_select: M,
     on_close: M,
+    show_tooltip: bool,
     title_hover: impl Fn(bool) -> M + 'a,
     close_hover: impl Fn(bool) -> M + 'a,
 ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
@@ -7262,12 +7328,14 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
     }
     title_row = title_row.push(
         container(
-            text(fit_title(&title, title_max))
+            text(title.clone())
                 .font(top_bar_font())
                 .size(theme::font::body())
                 .color(title_color),
         )
-        // 随标题长度适配,超宽则截到 title_max 并靠 `fit_title` 补省略号。
+        // 标题超宽不补省略号、也不换行,直接裁掉溢出(见 CODEBUDDY 需求):
+        // iced `Text` 默认 `Wrapping::None`,`clip` 把越界部分藏起,视觉上即
+        // "隐藏"。满 3s 悬停后由外层 `controlled_tooltip` 弹出全称。
         .width(Length::Shrink)
         .max_width(title_max)
         .clip(true),
@@ -7301,7 +7369,7 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
         tab_row = tab_row.push(s);
     }
     tab_row = tab_row.push(close);
-    container(tab_row)
+    let el: Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> = container(tab_row)
         .padding(Padding {
             top: PANEL_TAB_PAD_Y,
             right: PANEL_TAB_PAD_X,
@@ -7341,12 +7409,15 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
                 container::Style::default()
             }
         })
-        .into()
+        .into();
+    // 面板页签在屏幕底部,tooltip 用 `Top` 弹在页签上方,免出屏。仅当悬停
+    // 满 3s(`show_tooltip`)才显示标题全称(见 `App::hover_tooltip_ready`)。
+    controlled_tooltip(el, title, tooltip::Position::Top, show_tooltip)
 }
 
-/// 面板 tab 统一上限宽（对齐顶栏 `project_tab_max_width`）。标题超宽时省略号
-/// 截断,正常情况下 tab 宽度随标题适配。导出给 `workspace.rs`/`browser.rs`
-/// 的翻页宽度估算共用,避免各处硬编码 160。
+/// 面板 tab 统一上限宽（对齐顶栏 `project_tab_max_width`）。标题超宽时直接
+/// 隐藏溢出(不换行、不省略号),正常情况下 tab 宽度随标题适配。导出给
+/// `workspace.rs`/`browser.rs` 的翻页宽度估算共用,避免各处硬编码 160。
 pub(crate) const PANEL_TAB_MAX_W: f32 = 160.0;
 /// 面板 tab 内边距:横向留白给 hover 胶囊,纵向收紧以缩小高度。左侧单独
 /// 放大(原先与右侧同为 4,标题贴左缘太紧),右侧维持贴近关闭按钮的窄距。
@@ -7354,24 +7425,34 @@ const PANEL_TAB_PAD_LEFT: f32 = 10.0;
 const PANEL_TAB_PAD_X: f32 = 4.0;
 const PANEL_TAB_PAD_Y: f32 = 1.0;
 
-/// 按 `max_w` 把标题裁到能放下的长度,截掉的部分用 `…` 替代(iced 0.14 的
-/// `Text` 无原生省略号)。粗估每字符宽:CJK 全宽 16、其余半宽 8,留 8px 给
-/// `…` 自身。估偏只会让省略号早/晚一个字符,不影响布局。
-fn fit_title(title: &str, max_w: f32) -> String {
-    const ELLIPSIS_W: f32 = 8.0;
-    let mut out = String::new();
-    let mut used: f32 = 0.0;
-    for c in title.chars() {
-        let w = if (c as u32) > 0x2E80 { 16.0 } else { 8.0 };
-        // 放不下当前字(且还需为 `…` 留位)就截断并补省略号。
-        if used + w > max_w - ELLIPSIS_W {
-            out.push('…');
-            break;
-        }
-        out.push(c);
-        used += w;
+/// 受控 tooltip:iced 0.14 的 `Tooltip` 没有"延迟显示"开关(它一悬停就弹),
+/// 所以这里不靠 `Tooltip` 自带的 hover 检测,而是**仅在 `show` 为真时才把
+/// `content` 包进 `Tooltip`**——调用方按"悬停满 3s"算好 `show`(见
+/// `App::hover_tooltip_ready` / `browser::State::hover_tooltip_ready`),满 3s
+/// 那一刻视图层才挂载 `Tooltip`,气泡随即弹出;离开即 `show` 为假,直接返回
+/// 裸 `content`,气泡消失。`position` 由调用方按页签位置定(顶栏页签用
+/// `Bottom`、底部面板页签用 `Top`,免得气泡出屏)。`label` 收 `String`(拥有
+/// 所有权),使气泡 `Element` 寿命不受调用方局部借用牵制,`Tooltip` 才能正常
+/// 把它当 overlay 渲染。
+fn controlled_tooltip<'a, M, R>(
+    content: Element<'a, M, iced_widget::Theme, R>,
+    label: String,
+    position: Position,
+    show: bool,
+) -> Element<'a, M, iced_widget::Theme, R>
+where
+    M: Clone + 'a,
+    R: iced_widget::core::text::Renderer + 'a,
+{
+    // 未悬停满 3s:不包 tooltip,直接返回裸内容,避免一悬停就弹气泡打扰。
+    if !show {
+        return content;
     }
-    out
+    let bubble = container(text(label).size(12).color(theme::color::CREAM)).padding([5, 9]);
+    Tooltip::new(content, bubble, position)
+        .gap(4)
+        .style(icons::tooltip_bubble_style())
+        .into()
 }
 
 /// tab 栏：两侧箭头翻页(到头变灰) + 每会话一个按钮(状态点 + 名称 + 关闭
@@ -7412,6 +7493,7 @@ fn tab_bar<'a>(
                     app.blink_on,
                     title_hover_t,
                     close_hover_t,
+                    app.hover_tooltip_ready(HoverId::TermTabItem(idx)),
                 ),
                 TabGroup::Terminal,
                 idx,
@@ -7487,6 +7569,7 @@ fn tab_item(
     blink_on: bool,
     title_hover_t: f32,
     close_hover_t: f32,
+    show_tooltip: bool,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let working = tab.alive && tab.agent_state == AgentState::Running;
     let mut color = dot_color(tab.agent_state, tab.alive);
@@ -7507,6 +7590,7 @@ fn tab_item(
         None,
         Message::SelectTab(idx),
         Message::CloseTab(idx),
+        show_tooltip,
         move |h| Message::Hover(HoverId::TermTabItem(idx), h),
         move |h| Message::Hover(HoverId::TermTabClose(idx), h),
     )
@@ -7575,6 +7659,7 @@ fn ssh_tab_bar<'a>(
                 close_id,
                 ssh::SshTabKind::Terminal,
             )),
+            app.hover_tooltip_ready(HoverId::SshTabItem(key)),
             move |h| Message::Hover(HoverId::SshTabItem(ssh_tab_hover_key(&title_hover_id)), h),
             move |h| Message::Hover(HoverId::SshTabClose(ssh_tab_hover_key(&close_hover_id)), h),
         ));
@@ -7611,6 +7696,7 @@ fn ssh_tab_bar<'a>(
             None,
             Message::Ssh(ssh::Message::SelectSshTab(select_id, ssh::SshTabKind::Sftp)),
             Message::Ssh(ssh::Message::CloseSshTab(close_id, ssh::SshTabKind::Sftp)),
+            app.hover_tooltip_ready(HoverId::SshTabItem(key)),
             move |h| Message::Hover(HoverId::SshTabItem(ssh_tab_hover_key(&title_hover_id)), h),
             move |h| Message::Hover(HoverId::SshTabClose(ssh_tab_hover_key(&close_hover_id)), h),
         ));

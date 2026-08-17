@@ -1559,13 +1559,21 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         /// 这里只负责"下次什么时候唤醒",不负责"唤醒后该不该真的做事")。
         fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
             if let Self::Ready { app, .. } = self {
-                let wakes: [(bool, Duration); 4] = [
+                // 页签标题 tooltip 的 3s 悬停计时:还没满 3s 的页签需要继续排
+                // 唤醒,满 3s 那一刻靠 `next_tooltip_wake` 算出的剩余时间精确
+                // 重绘出气泡;满 3s 后 `next_tooltip_wake` 返回 None,不再空转。
+                let next_tip = app.next_tooltip_wake();
+                let wakes: [(bool, Duration); 5] = [
                     (app.any_hover_anim_active(), HOVER_ANIM_INTERVAL),
                     (app.any_blinking(), BLINK_INTERVAL),
                     (app.todo_panel_visible(), TODO_POLL_INTERVAL),
                     (
                         app.todo_dragging() || app.dragging_tab().is_some(),
                         DRAG_REDRAW_INTERVAL,
+                    ),
+                    (
+                        next_tip.is_some(),
+                        next_tip.unwrap_or(crate::app::HOVER_TOOLTIP_DELAY),
                     ),
                 ];
                 if let Some(interval) = wakes

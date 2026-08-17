@@ -2933,6 +2933,7 @@ fn preview_pane_for<'a>(
                 None,
                 select_msg(idx),
                 close_msg(idx),
+                app.hover_tooltip_ready(item_hover(idx)),
                 move |h| Message::Hover(item_hover(idx), h),
                 move |h| Message::Hover(close_hover(idx), h),
             );
