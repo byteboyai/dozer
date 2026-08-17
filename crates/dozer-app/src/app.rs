@@ -1200,11 +1200,14 @@ pub enum Message {
     /// TurnEnded 触发的交付检测结果（tab_id, 是否有待验收交付）。
     DeliveryChecked(ProjectId, usize, bool),
     /// hook 事件驱动的 Agent 卡片元信息刷新结果(tab_id, LLM 型号,
-    /// permission mode,工作区分支/脏标覆盖)。`None` 字段表示这次没有
-    /// 新值,落地时不覆盖已有值(见 `workspace::apply_agent_card_refresh`)。
+    /// permission mode,transcript 最后活动摘要(兜底"当前工作内容",见
+    /// `workspace::agent_card`),工作区分支/脏标覆盖)。`None` 字段表示
+    /// 这次没有新值,落地时不覆盖已有值(见
+    /// `workspace::apply_agent_card_refresh`)。
     AgentCardRefreshed(
         ProjectId,
         usize,
+        Option<String>,
         Option<String>,
         Option<String>,
         Option<crate::workspace::WorkspaceGitInfo>,
@@ -1808,6 +1811,14 @@ fn ensure_project_readme(repo: &std::path::Path, name: &str) -> Option<std::path
 }
 
 impl App {
+    /// `todo::AppState`(派发记录等)只读访问——`agent_card` 挂在
+    /// `workspace.rs`,读不到 `App` 私有字段,需要这个跨模块 accessor 才能
+    /// 反查"这个 tab 是不是某条 Todo 任务派发出来的"(见
+    /// `todo::WorkspaceState::task_title_for_session`)。
+    pub(crate) fn todo_meta(&self) -> &todo::AppState {
+        &self.todo
+    }
+
     /// 启动序列成功路径:建好外壳态,再把上次退出时开着的**整份**项目页签
     /// 集合恢复出来。
     ///
@@ -3043,13 +3054,21 @@ impl App {
             Message::DeliveryChecked(project_id, tab_id, pending) => {
                 self.delivery_checked(project_id, tab_id, pending)
             }
-            Message::AgentCardRefreshed(project_id, tab_id, llm_model, mode, workspace) => {
+            Message::AgentCardRefreshed(
+                project_id,
+                tab_id,
+                llm_model,
+                mode,
+                activity,
+                workspace,
+            ) => {
                 self.with_project(project_id, |ws, _io| {
                     crate::workspace::apply_agent_card_refresh(
                         &mut ws.tabs,
                         tab_id,
                         llm_model,
                         mode,
+                        activity,
                         workspace,
                     );
                 });

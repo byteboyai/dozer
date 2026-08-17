@@ -376,6 +376,31 @@ impl WorkspaceState {
         &self.items
     }
 
+    /// 反查:这个 `session_id` 是不是某条 Todo 任务派发出来的会话,是的话
+    /// 返回该任务原文——给 Agent 卡片"当前工作内容"当主选数据源用
+    /// (`agent_card`)。`TodoTaskMeta` 只存哈希后的 `todo_line_key`,不存
+    /// 原文,所以要拿着内存里的 `items` 逐条算 key 去 `app_meta` 里核对
+    /// `dispatch.session_id`,O(n) 扫描,n 是任务条数(通常几十条以内,
+    /// 每帧调一次不构成性能问题,不值得为它单独建反向索引)。没有任何
+    /// 任务派发到这个 session(手动开的终端/agent)时返回 `None`,调用方
+    /// 按既定口径 fallback 到 transcript 最后活动摘要。
+    pub fn task_title_for_session<'a>(
+        &'a self,
+        app_meta: &AppState,
+        project_id: i64,
+        session_id: &str,
+    ) -> Option<&'a str> {
+        self.items
+            .iter()
+            .find(|item| {
+                app_meta
+                    .meta_for(project_id, todo_line_key(&item.text))
+                    .and_then(|m| m.dispatch.as_ref())
+                    .is_some_and(|d| d.session_id == session_id)
+            })
+            .map(|item| item.text.as_str())
+    }
+
     /// 关闭派发选择层(选中目标/新建后,或 Esc)。
     pub fn close_dispatch_popup(&mut self) {
         self.dispatch_open = None;
@@ -1089,11 +1114,16 @@ fn todo_list_view<'a>(
         .map(|t| (t.session_id.as_str(), t.title.clone()))
         .collect();
 
-    let search = todo_search_bar(
+    // 搜索框的水平/垂直间距对齐任务卡片的间距规格(卡片列表 `list` 是
+    // `spacing(8)` + `padding([0, 20])`):左右 20、上下 8,不再贴边顶到
+    // tab 分隔线与首张卡片。
+    let search = container(todo_search_bar(
         &ws_state.search_draft,
         ws_state.search_editing,
         !ws_state.search.is_empty(),
-    );
+    ))
+    .padding([8, 20])
+    .width(Length::Fill);
 
     let mut list = column![].spacing(8).padding([0, 20]);
     if visible_idx.is_empty() {
@@ -1117,65 +1147,65 @@ fn todo_list_view<'a>(
                 pending_idx.push(i);
             }
         }
-        // 拖拽进行中:把可见待办子序列按 `TodoDrag` 做纯展示置换(在
-        // item-index 空间,过滤/搜索视图下也成立),让被拖的卡片实时跟到
-        // 光标目标位。落盘不在这里发生(`DragEnd` 才写),所以只是视觉反馈。
-        let pending_ordered: Vec<usize> = match ws_state.drag {
+        // 拖拽进行中不再对 pending_idx 做展示置换——之前"每帧按新顺序
+        // remove+insert 整个重排"会让被拖卡片之外的其它卡片瞬间跳位,
+        // 没有任何过渡帧(用户反馈"动画不够流畅"的根因)。改成更常见的
+        // "源卡片原位高亮 + 插入指示线"模式:待办子序列渲染顺序全程不变,
+        // 被拖的那张卡片本身描边变金(`is_drag_source`),目标位置前插一条
+        // 细的金色指示线提示"松手会落在这里"。真正的换位只在 `DragEnd`
+        // 落盘时一次性发生,视觉上不再有中间态的"其它卡片被顶开"。
+        let drag_source_idx = ws_state.drag.map(|d| d.source_idx);
+        // 指示线该出现在 pending 子序列的哪个展示位置之前:target_idx 对应
+        // 的卡片当前在 pending_idx 里的下标(`usize::MAX` 哨兵表示插到
+        // pending 块末尾,单独用 insert_at_end 标记,不落进这个 Option)。
+        // source_idx == target_idx(还没真的移动过)时不显示指示线,跟换位
+        // 逻辑本身"没移动不写盘"的既有语义对齐。
+        let (insert_before, insert_at_end) = match ws_state.drag {
             Some(drag) if drag.source_idx != drag.target_idx => {
-                let mut pend = pending_idx.clone();
                 if drag.target_idx == usize::MAX {
-                    // 拖到待办块末尾:把源挪到末尾。
-                    if let Some(pos) = pend.iter().position(|&x| x == drag.source_idx) {
-                        let item = pend.remove(pos);
-                        pend.push(item);
-                    }
-                } else if let (Some(from), Some(to)) = (
-                    pend.iter().position(|&x| x == drag.source_idx),
-                    pend.iter().position(|&x| x == drag.target_idx),
-                ) && from != to
-                {
-                    let item = pend.remove(from);
-                    pend.insert(to, item);
+                    (None, true)
+                } else {
+                    (
+                        pending_idx.iter().position(|&x| x == drag.target_idx),
+                        false,
+                    )
                 }
-                pend
             }
-            _ => pending_idx,
+            _ => (None, false),
         };
-        let ordered: Vec<usize> = pending_ordered
-            .iter()
-            .chain(done_idx.iter())
-            .copied()
-            .collect();
         let grabbing = ws_state.drag.is_some();
-        for (display_no, &idx) in ordered.iter().enumerate() {
-            let item = &ws_state.items[idx];
-            let key = todo_line_key(&item.text);
-            let meta = app_state.meta_for(project_id, key);
-            let dispatch = meta.and_then(|m| m.dispatch.as_ref());
-            let mut row = None;
-            if let Some((editing_idx, draft)) = &ws_state.editing_plan_date
-                && *editing_idx == idx
-            {
-                row = Some(todo_plan_date_edit_row(item, draft));
+        let pending_len = pending_idx.len();
+        for (display_no, &idx) in pending_idx.iter().enumerate() {
+            if insert_before == Some(display_no) {
+                list = list.push(drag_insert_indicator());
             }
-            match row {
-                Some(r) => list = list.push(r),
-                None => {
-                    list = list.push(todo_card(
-                        display_no + 1,
-                        idx,
-                        item,
-                        states[idx],
-                        meta,
-                        dispatch,
-                        ws_state.selected_row == Some(idx),
-                        ws_state.dispatch_open == Some(idx),
-                        ws_state.state_pill_open == Some(idx),
-                        &existing_tabs,
-                        grabbing,
-                    ));
-                }
-            }
+            list = list.push(todo_list_row(
+                app_state,
+                ws_state,
+                project_id,
+                states,
+                &existing_tabs,
+                display_no + 1,
+                idx,
+                grabbing,
+                drag_source_idx == Some(idx),
+            ));
+        }
+        if insert_at_end || insert_before == Some(pending_len) {
+            list = list.push(drag_insert_indicator());
+        }
+        for (i, &idx) in done_idx.iter().enumerate() {
+            list = list.push(todo_list_row(
+                app_state,
+                ws_state,
+                project_id,
+                states,
+                &existing_tabs,
+                pending_len + i + 1,
+                idx,
+                grabbing,
+                false,
+            ));
         }
     }
 
@@ -1206,6 +1236,71 @@ fn todo_markdown_view<'a>(
     scrollable(body).height(Length::Fill).into()
 }
 
+/// `todo_list_view` 单行的渲染分派:计划时间编辑态 → `todo_plan_date_edit_row`,
+/// 否则 → `todo_card`。从 `todo_list_view` 的循环体里拆出来,好让 pending/
+/// done 两段各自的 `for` 循环别重复这段查表+分支逻辑。
+#[allow(clippy::too_many_arguments)]
+fn todo_list_row<'a, 'b>(
+    app_state: &'a AppState,
+    ws_state: &'a WorkspaceState,
+    project_id: i64,
+    states: &[TodoState],
+    // 独立生命周期 `'b`,不绑定到返回值的 `'a`:`todo_card` 分支返回
+    // `Element<'static, ..>`(内部已经把要用的数据 clone 出来,不持有
+    // 任何借用),调用方传进来的 `existing_tabs` 常是函数体内构造的短命
+    // 局部 `Vec`,跟 `'a` 混在一起会逼编译器把这个短生命周期错误地传染
+    // 给整个返回值。
+    existing_tabs: &'b [(&'b str, String)],
+    number: usize,
+    idx: usize,
+    grabbing: bool,
+    is_drag_source: bool,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let item = &ws_state.items[idx];
+    let key = todo_line_key(&item.text);
+    let meta = app_state.meta_for(project_id, key);
+    let dispatch = meta.and_then(|m| m.dispatch.as_ref());
+    if let Some((editing_idx, draft)) = &ws_state.editing_plan_date
+        && *editing_idx == idx
+    {
+        return todo_plan_date_edit_row(item, draft);
+    }
+    todo_card(
+        number,
+        idx,
+        item,
+        states[idx],
+        meta,
+        dispatch,
+        ws_state.selected_row == Some(idx),
+        ws_state.dispatch_open == Some(idx),
+        ws_state.state_pill_open == Some(idx),
+        existing_tabs,
+        grabbing,
+        is_drag_source,
+    )
+}
+
+/// 拖拽换位的"插入指示线":一条细的金色横条,插在"松手会落到这里"的
+/// 展示位置——取代之前逐帧重排其它卡片的做法(见 `todo_list_view`)。
+/// 高度和左右 padding 跟卡片间距(`spacing(8)`)对齐,视觉上像卡片之间
+/// 多出的一道缝被点亮,而不是新插了一整行。
+fn drag_insert_indicator() -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer>
+{
+    container(iced_widget::space::Space::new())
+        .width(Length::Fill)
+        .height(Length::Fixed(3.0))
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::color::GOLD.into()),
+            border: Border {
+                radius: 2.0.into(),
+                ..Border::default()
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
 /// 统一卡片组件：列表视图使用的边框卡片视觉，取代原来的
 /// `todo_row`(扁平高亮行)。结构自上而下：编号 + 日期徽章 → checkbox +
 /// 任务文字 → 派发按钮(仅待办未派发时) + 状态 pill。选中态左侧加 3px
@@ -1223,6 +1318,7 @@ fn todo_card<'a>(
     state_pill_open: bool,
     existing_tabs: &'a [(&'a str, String)],
     grabbing: bool,
+    is_drag_source: bool,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let done = item.done;
 
@@ -1397,10 +1493,21 @@ fn todo_card<'a>(
         .width(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: Some(theme::color::CARD.into()),
-            border: Border {
-                color: theme::color::BORDER,
-                width: 1.0,
-                radius: 6.0.into(),
+            // 正在被拖起的那张卡片描边变金、加粗——跟"插入指示线"配合给
+            // 出"这张卡片被拿起来了/会落在指示线那里"的反馈,不再靠其它
+            // 卡片瞬间跳位来表达换位(见 `todo_list_view` 的改版说明)。
+            border: if is_drag_source {
+                Border {
+                    color: theme::color::GOLD,
+                    width: 1.5,
+                    radius: 6.0.into(),
+                }
+            } else {
+                Border {
+                    color: theme::color::BORDER,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                }
             },
             ..container::Style::default()
         });
@@ -2536,6 +2643,48 @@ mod tests {
         let key = todo_line_key("任务A");
         let meta = app_state.meta_for(1, key).unwrap();
         assert_eq!(meta.dispatch.as_ref().unwrap().session_id, "sess-1");
+    }
+
+    #[test]
+    fn task_title_for_session_finds_dispatched_task() {
+        let ws_state = ws_with_item("修复登录 bug", false);
+        let mut app_meta = AppState::default();
+        app_meta.record_dispatch(1, "修复登录 bug", "sess-1".to_string());
+
+        assert_eq!(
+            ws_state.task_title_for_session(&app_meta, 1, "sess-1"),
+            Some("修复登录 bug")
+        );
+    }
+
+    #[test]
+    fn task_title_for_session_none_when_no_dispatch_matches() {
+        let ws_state = ws_with_item("修复登录 bug", false);
+        let app_meta = AppState::default();
+        // 没有任何派发记录:手动开的终端/agent 应该拿不到任务标题,
+        // 调用方据此 fallback 到 transcript 最后活动摘要。
+        assert_eq!(
+            ws_state.task_title_for_session(&app_meta, 1, "sess-1"),
+            None
+        );
+    }
+
+    #[test]
+    fn task_title_for_session_ignores_other_project_or_session() {
+        let ws_state = ws_with_item("修复登录 bug", false);
+        let mut app_meta = AppState::default();
+        app_meta.record_dispatch(1, "修复登录 bug", "sess-1".to_string());
+
+        assert_eq!(
+            ws_state.task_title_for_session(&app_meta, 2, "sess-1"),
+            None,
+            "同一份派发记录挂在别的 project_id 下不该命中"
+        );
+        assert_eq!(
+            ws_state.task_title_for_session(&app_meta, 1, "sess-2"),
+            None,
+            "session_id 对不上不该命中"
+        );
     }
 
     #[test]

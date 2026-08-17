@@ -198,11 +198,23 @@ pub fn parse_transcript(agent: AgentKind, jsonl: &str) -> Vec<ReviewEntry> {
 /// 字段,不提取,`mode` 对 Codebuddy 恒 `None`(Agent 卡片视图据此不渲染
 /// Mode 行,不是 bug)。解析失败的行跳过,不中断整体扫描(同
 /// `parse_claude_shaped_jsonl` 的既有容错口径)。不像 `parse_transcript`
-/// 那样建 `ReviewEntry` 列表,只回两个标量,给 Agent 卡片的实时刷新用
+/// 那样建 `ReviewEntry` 列表,只回三个标量,给 Agent 卡片的实时刷新用
 /// (每次 hook 事件都会重跑一次,故意做得比 `parse_transcript` 轻)。
-pub fn latest_model_and_mode(jsonl: &str) -> (Option<String>, Option<String>) {
+/// 第三个标量 `activity` 是同一次扫描里顺带提取的"最后一句活动摘要"
+/// (Agent 卡片"当前工作内容"的兜底数据源,见 `workspace.rs::agent_card`
+/// ——优先用 Todo 派发记录的任务标题,拿不到才落到这里),不新开一次
+/// 读取:两者读的是同一份 transcript,分两次扫描纯属浪费 IO。`activity`
+/// 识别 Claude 形状(`type:"user"`,`message.content` 是字符串;
+/// `type:"assistant"`,`message.content` 数组里 `type:"text"` 块拼接)和
+/// CodeBuddy 形状(`type:"message"`+`role`,`content[].type:
+/// "input_text"/"output_text"`)的人类发言/AI 回复文本,取最后一条、截到
+/// 60 字符——卡片一行放不下长句,截断比换行/溢出更可控,不需要精确到字。
+pub fn latest_model_mode_and_activity(
+    jsonl: &str,
+) -> (Option<String>, Option<String>, Option<String>) {
     let mut model = None;
     let mut mode = None;
+    let mut activity = None;
     for line in jsonl.lines() {
         let line = line.trim();
         if line.is_empty() {
@@ -225,8 +237,67 @@ pub fn latest_model_and_mode(jsonl: &str) -> (Option<String>, Option<String>) {
         if let Some(pm) = v.get("permissionMode").and_then(|s| s.as_str()) {
             mode = Some(pm.to_string());
         }
+        if let Some(text) = extract_line_activity(&v) {
+            activity = Some(truncate_activity(&text));
+        }
     }
-    (model, mode)
+    (model, mode, activity)
+}
+
+/// 单行 → 这行代表的人类发言/AI 回复文本(工具结果/快照噪音/识别不出
+/// 的行形状一律 `None`,不当错误)。
+fn extract_line_activity(v: &Value) -> Option<String> {
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("user") => v
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .map(str::to_string),
+        Some("assistant") => {
+            let blocks = v
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_array())?;
+            join_text_blocks(blocks, "text")
+        }
+        Some("message") => {
+            let role = v.get("role").and_then(|r| r.as_str())?;
+            let kind = match role {
+                "user" => "input_text",
+                "assistant" => "output_text",
+                _ => return None,
+            };
+            let blocks = v.get("content").and_then(|c| c.as_array())?;
+            join_text_blocks(blocks, kind)
+        }
+        _ => None,
+    }
+}
+
+fn join_text_blocks(blocks: &[Value], kind: &str) -> Option<String> {
+    let mut text = String::new();
+    for b in blocks {
+        if b.get("type").and_then(|t| t.as_str()) == Some(kind)
+            && let Some(t) = b.get("text").and_then(|t| t.as_str())
+        {
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(t);
+        }
+    }
+    if text.is_empty() { None } else { Some(text) }
+}
+
+/// 截到首行、最多 60 字符,超长补 `…`。
+fn truncate_activity(text: &str) -> String {
+    let first_line = text.lines().next().unwrap_or(text).trim();
+    let truncated: String = first_line.chars().take(60).collect();
+    if first_line.chars().count() > 60 {
+        format!("{truncated}…")
+    } else {
+        truncated
+    }
 }
 
 #[cfg(test)]
@@ -431,7 +502,7 @@ mod tests {
 {"type":"permission-mode","permissionMode":"auto"}
 {"type":"assistant","message":{"role":"assistant","content":[],"model":"claude-opus-5"}}
 "#;
-        let (model, mode) = latest_model_and_mode(jsonl);
+        let (model, mode, _activity) = latest_model_mode_and_activity(jsonl);
         assert_eq!(model.as_deref(), Some("claude-opus-5"));
         assert_eq!(mode.as_deref(), Some("auto"));
     }
@@ -439,12 +510,14 @@ mod tests {
     #[test]
     fn latest_model_and_mode_skips_noise_and_bad_lines() {
         let jsonl = "{\"type\":\"mode\",\"mode\":\"normal\"}\n不是 json 的坏行\n{\"type\":\"attachment\",\"attachment\":{}}\n";
-        assert_eq!(latest_model_and_mode(jsonl), (None, None));
+        let (model, mode, _activity) = latest_model_mode_and_activity(jsonl);
+        assert_eq!((model, mode), (None, None));
     }
 
     #[test]
     fn latest_model_and_mode_empty_input_yields_none() {
-        assert_eq!(latest_model_and_mode(""), (None, None));
+        let (model, mode, activity) = latest_model_mode_and_activity("");
+        assert_eq!((model, mode, activity), (None, None, None));
     }
 
     #[test]
@@ -458,7 +531,7 @@ mod tests {
             "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[],",
             "\"providerData\":{\"model\":\"glm-5.2\",\"requestModelId\":\"glm-5.2\"}}\n",
         );
-        let (model, mode) = latest_model_and_mode(jsonl);
+        let (model, mode, _activity) = latest_model_mode_and_activity(jsonl);
         assert_eq!(model.as_deref(), Some("glm-5.2"));
         assert_eq!(mode, None);
     }
@@ -474,7 +547,59 @@ mod tests {
             "{\"type\":\"message\",\"role\":\"assistant\",",
             "\"providerData\":{\"model\":\"glm-5.2\"}}\n",
         );
-        let (model, _mode) = latest_model_and_mode(jsonl);
+        let (model, _mode, _activity) = latest_model_mode_and_activity(jsonl);
         assert_eq!(model.as_deref(), Some("glm-5.2"));
+    }
+
+    #[test]
+    fn activity_picks_last_human_or_ai_text_claude_shaped() {
+        let jsonl = concat!(
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"改一下 README\"}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"好的，我来改\"}]}}\n",
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"再加一段安装说明\"}}\n",
+        );
+        let (_model, _mode, activity) = latest_model_mode_and_activity(jsonl);
+        assert_eq!(activity.as_deref(), Some("再加一段安装说明"));
+    }
+
+    #[test]
+    fn activity_ignores_tool_result_content_arrays() {
+        // content 是数组(工具结果)而不是字符串的 user 行不算"人类发言",
+        // 不该被当成 activity 摘要。
+        let jsonl = concat!(
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"写个测试\"}}\n",
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"content\":\"ok\"}]}}\n",
+        );
+        let (_model, _mode, activity) = latest_model_mode_and_activity(jsonl);
+        assert_eq!(activity.as_deref(), Some("写个测试"));
+    }
+
+    #[test]
+    fn activity_reads_codebuddy_shaped_last_message() {
+        let jsonl = concat!(
+            "{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"修一下光标问题\"}]}\n",
+            "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"已定位到问题\"}]}\n",
+        );
+        let (_model, _mode, activity) = latest_model_mode_and_activity(jsonl);
+        assert_eq!(activity.as_deref(), Some("已定位到问题"));
+    }
+
+    #[test]
+    fn activity_truncates_long_first_line_to_60_chars() {
+        let long = "a".repeat(80);
+        let jsonl = format!(
+            "{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"{long}\"}}}}\n"
+        );
+        let (_model, _mode, activity) = latest_model_mode_and_activity(&jsonl);
+        let got = activity.expect("should extract activity");
+        assert_eq!(got.chars().count(), 61, "60 字符 + 省略号");
+        assert!(got.ends_with('…'));
+    }
+
+    #[test]
+    fn activity_none_when_transcript_has_no_recognizable_message() {
+        let jsonl = "{\"type\":\"attachment\",\"attachment\":{}}\n";
+        let (_model, _mode, activity) = latest_model_mode_and_activity(jsonl);
+        assert_eq!(activity, None);
     }
 }

@@ -242,6 +242,11 @@ pub struct SessionTab {
     pub llm_model: Option<String>,
     /// 同上,来自 transcript 顶层 `permissionMode`(如 `auto`/`plan`)。
     pub permission_mode: Option<String>,
+    /// 同上,从 transcript 尾部提取的最后一句人类发言/AI 回复摘要(截到
+    /// 60 字符)。Agent 卡片"当前工作内容"的兜底数据源——优先用 Todo
+    /// 派发记录的任务标题(`todo::WorkspaceState::task_title_for_session`),
+    /// 拿不到才落到这个字段(见 `agent_card`)。
+    pub last_activity: Option<String>,
     /// 工作区分支/脏标覆盖:仅当这个会话的 `effective_cwd()` 偏离项目根
     /// 目录时才会被填充;为 `None` 时渲染层直接读 `ws.project_panel` 的
     /// 项目级缓存(见 `Workspace::spawn_agent_card_refresh`)。
@@ -468,6 +473,7 @@ impl Workspace {
                 last_turn_head: None,
                 llm_model: None,
                 permission_mode: None,
+                last_activity: None,
                 workspace_override: None,
                 backend: TabBackend::Daemon,
             });
@@ -1013,7 +1019,7 @@ impl Workspace {
     /// hook 事件驱动的"卡片元信息"刷新(仿 `spawn_review_load` 的写法):
     /// model/permissionMode(Claude 与 Unknown——后者是老装 hook 上报的
     /// "还不知道具体是哪家",但 transcript 仍是 Claude 形状,见
-    /// `transcript::latest_model_and_mode`)+ 工作区覆盖(仅当该 session
+    /// `transcript::latest_model_mode_and_activity`)+ 工作区覆盖(仅当该 session
     /// 的 cwd 偏离项目根目录——即不在 `project_root` 路径前缀下——时才
     /// 查;常见情形直接复用 `project_panel` 的项目级缓存,这里不产生任何
     /// IO)。两者都不需要时不起异步任务,但仍同步发一条全 `None` 的
@@ -1031,29 +1037,33 @@ impl Workspace {
         let Some(project_id) = self.project_id() else {
             return;
         };
-        let (needs_model_mode, needs_workspace) =
+        let (needs_model_mode, needs_activity, needs_workspace) =
             agent_card_refresh_plan(agent, &cwd, project_root.as_deref());
-        if !needs_model_mode && !needs_workspace {
-            // cwd 未偏离项目根、且非 Claude/Unknown:没有 model/mode 要提取,
-            // workspace 也肯定是"未偏离"(None)——不需要起 IO/async 任务,
-            // 同步把这个明确值发出去即可,顺便清掉可能残留的
-            // workspace_override(见 apply_agent_card_refresh 的无条件覆盖
-            // 注释)。
+        if !needs_model_mode && !needs_activity && !needs_workspace {
+            // cwd 未偏离项目根、且这个 agent 没有可提取的 model/mode/activity:
+            // 不需要起 IO/async 任务,同步把这个明确值发出去即可,顺便清掉
+            // 可能残留的 workspace_override(见 apply_agent_card_refresh 的
+            // 无条件覆盖注释)。
             let _ = io.proxy.send_event(Message::AgentCardRefreshed(
-                project_id, tab_id, None, None, None,
+                project_id, tab_id, None, None, None, None,
             ));
             return;
         }
         let proxy = io.proxy.clone();
         io.handle.spawn(async move {
-            let (llm_model, mode, workspace) = tokio::task::spawn_blocking(move || {
-                let (llm_model, mode) = if needs_model_mode {
-                    transcript_path
+            let (llm_model, mode, activity, workspace) = tokio::task::spawn_blocking(move || {
+                let (llm_model, mode, activity) = if needs_model_mode || needs_activity {
+                    let (m, mo, a) = transcript_path
                         .and_then(|p| std::fs::read_to_string(p).ok())
-                        .map(|s| transcript::latest_model_and_mode(&s))
-                        .unwrap_or((None, None))
+                        .map(|s| transcript::latest_model_mode_and_activity(&s))
+                        .unwrap_or((None, None, None));
+                    (
+                        if needs_model_mode { m } else { None },
+                        if needs_model_mode { mo } else { None },
+                        if needs_activity { a } else { None },
+                    )
                 } else {
-                    (None, None)
+                    (None, None, None)
                 };
                 let workspace = if needs_workspace {
                     delivery::repo_root(&cwd).map(|repo| WorkspaceGitInfo {
@@ -1063,12 +1073,12 @@ impl Workspace {
                 } else {
                     None
                 };
-                (llm_model, mode, workspace)
+                (llm_model, mode, activity, workspace)
             })
             .await
-            .unwrap_or((None, None, None));
+            .unwrap_or((None, None, None, None));
             let _ = proxy.send_event(Message::AgentCardRefreshed(
-                project_id, tab_id, llm_model, mode, workspace,
+                project_id, tab_id, llm_model, mode, activity, workspace,
             ));
         });
     }
@@ -1770,6 +1780,7 @@ impl Workspace {
             last_turn_head: None,
             llm_model: None,
             permission_mode: None,
+            last_activity: None,
             workspace_override: None,
             backend: match ssh_backend {
                 Some(out) => TabBackend::Ssh { out },
@@ -1996,11 +2007,11 @@ pub(crate) fn agent_card_refresh_plan(
     agent: AgentKind,
     cwd: &Path,
     project_root: Option<&Path>,
-) -> (bool, bool) {
+) -> (bool, bool, bool) {
     // Unknown 同样走 Claude 形状的 transcript 解析(见 transcript.rs 里
     // parse_transcript 对 Unknown 的既有处理和注释——老装 hook 上报的
     // Unknown agent 不该因为这道门禁又变回"空白卡片"这同一类 bug)。
-    // Codebuddy 有独立 schema,但 latest_model_and_mode 已经兼认它的
+    // Codebuddy 有独立 schema,但 latest_model_mode_and_activity 已经兼认它的
     // providerData.model 字段(mode 恒 None——transcript 没有 permissionMode
     // 等价字段,卡片 Mode 行因此天然不渲染,不是 bug)。Opencode/Kilo 等其余
     // agent 暂不在这道门禁里:dozer-hook 的 translate 层目前不往合成
@@ -2009,6 +2020,15 @@ pub(crate) fn agent_card_refresh_plan(
         agent,
         AgentKind::Claude | AgentKind::Unknown | AgentKind::Codebuddy
     );
+    // "当前工作内容"兜底摘要的门禁比 model/mode 宽——只要 transcript
+    // schema 能被 `parse_transcript` 解出人类/AI 文本就值得读(Opencode/
+    // Kilo 的合成 transcript 是 Claude 形状,真有内容,只是没写 model/mode
+    // 字段而已);Codex/Qoder/V8agent 目前 `parse_transcript` 恒回空,读了
+    // 也提取不出东西,不值得为它们打开这道门。
+    let needs_activity = !matches!(
+        agent,
+        AgentKind::Codex | AgentKind::Qoder | AgentKind::V8agent
+    );
     // 精确相等太脆弱——cd 进项目根的任意子目录都会被判定成"偏离",既多做
     // 一次不必要的 git 查询,也是 Finding 1 那个 bug 更容易被触发的原因之
     // 一。改成路径前缀包含关系:cwd 是 project_root 的子路径就算"未偏离"。
@@ -2016,7 +2036,7 @@ pub(crate) fn agent_card_refresh_plan(
         Some(root) => !cwd.starts_with(root),
         None => true,
     };
-    (needs_model_mode, needs_workspace)
+    (needs_model_mode, needs_activity, needs_workspace)
 }
 
 /// `Message::AgentCardRefreshed` 落地:在 `tabs` 里找 `tab_id`。
@@ -2035,6 +2055,7 @@ pub(crate) fn apply_agent_card_refresh(
     tab_id: usize,
     llm_model: Option<String>,
     mode: Option<String>,
+    activity: Option<String>,
     workspace: Option<WorkspaceGitInfo>,
 ) {
     let Some(tab) = tabs.iter_mut().find(|t| t.tab_id == tab_id) else {
@@ -2045,6 +2066,9 @@ pub(crate) fn apply_agent_card_refresh(
     }
     if mode.is_some() {
         tab.permission_mode = mode;
+    }
+    if activity.is_some() {
+        tab.last_activity = activity;
     }
     // workspace 不走"只在 Some 时覆盖"这条——上游 spawn_agent_card_refresh
     // 现在保证 None 在这里永远是明确语义("cwd 未偏离项目根,该清空覆盖"),
@@ -2358,7 +2382,7 @@ pub(crate) fn agent_list_pane<'a>(
                 .size(theme::font::caption())
                 .color(theme::color::DIM)));
             for idx in idxs {
-                content = content.push(agent_card(ws, idx));
+                content = content.push(agent_card(app, ws, idx));
             }
         }
     }
@@ -2374,33 +2398,22 @@ pub(crate) fn agent_list_pane<'a>(
         .into()
 }
 
-/// Agent 面板里单条会话卡片:agent 名 → LLM/Mode 合并行(`model, mode`,
-/// 只要有一项能读到就显示,两项都没有则整行隐藏)→ 工作区行(分支名 +
-/// 脏标,所有 agent 都显示)→ 状态点 + 状态文字。整卡可点选中该 tab
-/// (`idx == ws.active` 时 `theme::color::CARD` 背景高亮,同项目树选中
-/// 行的手法)。
-pub(crate) fn agent_card(
-    ws: &Workspace,
+/// Agent 面板里单条会话卡片,三行:1) 图标 + agent 名(+ `(model, mode)`,
+/// 只要有一项能读到就跟名字拼一起,两项都没有就只显示名字);2) "当前
+/// 工作内容"(优先 Todo 派发的任务标题,拿不到就用 transcript 最后活动
+/// 摘要兜底,都没有就省略)紧跟工作区文案(分支名+脏标),同一行不换行
+/// (卡片改版要求,work_content 在前);3) 状态点 + 状态文字。整卡可点
+/// 选中该 tab(`idx == ws.active` 时 `theme::color::CARD` 背景高亮,同
+/// 项目树选中行的手法)。`app` 只用来读 `todo::AppState`(派发记录反查
+/// 要跨 `App`/`Workspace` 两边的状态,`agent_card` 原先读不到 `App`,
+/// 调用链上唯一多穿一层的地方)。
+pub(crate) fn agent_card<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
     idx: usize,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let tab = &ws.tabs[idx];
     let active = idx == ws.active;
-
-    let mut lines = column![
-        row![
-            icons::view(
-                agent_icon(tab.agent),
-                crate::theme::icon_size::row(),
-                agent_dot_color(tab.agent),
-            ),
-            text(tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name))
-                .size(theme::font::body())
-                .color(theme::color::CREAM),
-        ]
-        .align_y(iced_widget::core::alignment::Vertical::Center)
-        .spacing(8),
-    ]
-    .spacing(4);
 
     let model_label = tab.llm_model.as_deref().map(format_model_label);
     let mode_label = tab.permission_mode.as_deref();
@@ -2410,15 +2423,46 @@ pub(crate) fn agent_card(
         (None, Some(mo)) => Some(mo.to_string()),
         (None, None) => None,
     };
-    if let Some(value) = llm_mode_value {
-        lines = lines.push(labeled_row("LLM", &value));
-    }
+    let title = tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name);
+    let title_text = match &llm_mode_value {
+        Some(v) => format!("{title} ({v})"),
+        None => title,
+    };
+
+    let mut lines = column![
+        row![
+            icons::view(
+                agent_icon(tab.agent),
+                crate::theme::icon_size::row(),
+                agent_dot_color(tab.agent),
+            ),
+            text(title_text)
+                .size(theme::font::body())
+                .color(theme::color::CREAM),
+        ]
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .spacing(8),
+    ]
+    .spacing(4);
+
+    let work_content = ws
+        .project_id()
+        .and_then(|project_id| {
+            ws.todo
+                .task_title_for_session(app.todo_meta(), project_id, &tab.info.id)
+        })
+        .map(str::to_string)
+        .or_else(|| tab.last_activity.clone());
 
     let (branch, dirty) = match &tab.workspace_override {
         Some(w) => (w.branch.as_deref(), w.dirty),
         None => (ws.project_panel.branch(), ws.project_panel.dirty()),
     };
-    lines = lines.push(workspace_row(branch, dirty));
+    lines = lines.push(work_content_and_workspace_row(
+        work_content.as_deref(),
+        branch,
+        dirty,
+    ));
 
     lines = lines.push(
         row![
@@ -2457,31 +2501,30 @@ pub(crate) fn agent_card(
         .into()
 }
 
-/// `label: value` 一行 caption 文字,LLM/Mode/工作区三行共用。
-fn labeled_row(
-    label: &str,
-    value: &str,
-) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    text(format!("{label}: {value}"))
-        .size(theme::font::caption())
-        .color(theme::color::DIM)
-        .into()
-}
-
-/// 工作区行:无分支(非 git 项目)显示 `—`;有未提交改动时分支名后缀
-/// `(Uncommitted)`——跟 `extensions/files.rs` 里分支切换菜单当前分支带
-/// 脏标时的既有文案(`n.push_str("(Uncommitted)")`,见该文件约第 1409
-/// 行)保持同一措辞,不新造一套脏标文案。
-fn workspace_row(
+/// "当前工作内容"(有就显示,没有就省略)+ 工作区(分支名 + 脏标,所有
+/// agent 都显示)合并一行、不换行,work_content 排在工作区前面(卡片
+/// 改版要求)。工作区文案规则不变:无分支(非 git 项目)显示 `—`;有
+/// 未提交改动时分支名后缀 `(Uncommitted)`——跟 `extensions/files.rs`
+/// 里分支切换菜单当前分支带脏标时的既有文案(`n.push_str("(Uncommitted)")`,
+/// 见该文件约第 1409 行)保持同一措辞,不新造一套脏标文案。
+fn work_content_and_workspace_row(
+    work_content: Option<&str>,
     branch: Option<&str>,
     dirty: bool,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let value = match branch {
+    let workspace_value = match branch {
         Some(b) if dirty => format!("{b}(Uncommitted)"),
         Some(b) => b.to_string(),
         None => "—".to_string(),
     };
-    labeled_row("工作区", &value)
+    let value = match work_content {
+        Some(w) => format!("{w}  工作区: {workspace_value}"),
+        None => format!("工作区: {workspace_value}"),
+    };
+    text(value)
+        .size(theme::font::caption())
+        .color(theme::color::DIM)
+        .into()
 }
 
 /// Agent 面板头部"＋"按钮:点击切换 `agent_picker_open`,弹出 agent
@@ -3540,8 +3583,8 @@ mod tests {
 
         assert_eq!(
             agent_card_refresh_plan(dozer_core::protocol::AgentKind::Claude, &root, Some(&root)),
-            (true, false),
-            "Claude + cwd 等于项目根:只做 model/mode"
+            (true, true, false),
+            "Claude + cwd 等于项目根:model/mode + activity,不做工作区"
         );
         assert_eq!(
             agent_card_refresh_plan(
@@ -3549,8 +3592,9 @@ mod tests {
                 &root,
                 Some(&root)
             ),
-            (false, false),
-            "非 Claude/Unknown/Codebuddy(如 Opencode) + cwd 等于项目根:两者都不做"
+            (false, true, false),
+            "非 Claude/Unknown/Codebuddy(如 Opencode) + cwd 等于项目根:不做 model/mode,\
+             但 activity 门槛更宽,Opencode 合成 transcript 是 Claude 形状仍要做"
         );
         assert_eq!(
             agent_card_refresh_plan(
@@ -3558,8 +3602,8 @@ mod tests {
                 &elsewhere,
                 Some(&root)
             ),
-            (false, true),
-            "非 Claude/Unknown/Codebuddy + cwd 偏离项目根:只做工作区"
+            (false, true, true),
+            "非 Claude/Unknown/Codebuddy + cwd 偏离项目根:activity + 工作区"
         );
         assert_eq!(
             agent_card_refresh_plan(
@@ -3567,9 +3611,9 @@ mod tests {
                 &root,
                 Some(&root)
             ),
-            (true, false),
+            (true, true, false),
             "Codebuddy + cwd 等于项目根:也要做(只提 LLM,mode 恒 None——\
-             transcript 没有 permissionMode 等价字段,见 latest_model_and_mode)"
+             transcript 没有 permissionMode 等价字段,见 latest_model_mode_and_activity)"
         );
         assert_eq!(
             agent_card_refresh_plan(
@@ -3577,12 +3621,12 @@ mod tests {
                 &elsewhere,
                 Some(&root)
             ),
-            (true, true),
-            "Claude + cwd 偏离项目根:两者都做"
+            (true, true, true),
+            "Claude + cwd 偏离项目根:三者都做"
         );
         assert_eq!(
             agent_card_refresh_plan(dozer_core::protocol::AgentKind::Unknown, &root, Some(&root)),
-            (true, false),
+            (true, true, false),
             "Finding 2: Unknown + cwd 等于项目根:也要按 Claude 形状做 model/mode 提取"
         );
         let subdir = PathBuf::from("/repo").join("crates").join("dozer-app");
@@ -3592,8 +3636,14 @@ mod tests {
                 &subdir,
                 Some(&root)
             ),
-            (true, false),
+            (true, true, false),
             "Finding 3: cwd 是 project_root 的子目录,不算偏离,不应触发 needs_workspace"
+        );
+        assert_eq!(
+            agent_card_refresh_plan(dozer_core::protocol::AgentKind::Codex, &root, Some(&root)),
+            (false, false, false),
+            "Codex 的 transcript 恒解不出内容(parse_transcript 空 Vec),\
+             model/mode/activity 都不值得读"
         );
     }
 
@@ -3609,6 +3659,7 @@ mod tests {
             Some("claude-sonnet-5".to_string()),
             Some("auto".to_string()),
             None,
+            None,
         );
         assert_eq!(tabs[0].llm_model.as_deref(), Some("claude-sonnet-5"));
         assert_eq!(tabs[0].permission_mode.as_deref(), Some("auto"));
@@ -3616,12 +3667,12 @@ mod tests {
 
         // 第二次刷新 model/mode 都是 None(比如那次 transcript 读取
         // 失败):不应该把已经拿到的值抹掉。
-        apply_agent_card_refresh(&mut tabs, 7, None, None, None);
+        apply_agent_card_refresh(&mut tabs, 7, None, None, None, None);
         assert_eq!(tabs[0].llm_model.as_deref(), Some("claude-sonnet-5"));
         assert_eq!(tabs[0].permission_mode.as_deref(), Some("auto"));
 
         // 未知 tab_id:整体 no-op,不 panic。
-        apply_agent_card_refresh(&mut tabs, 999, Some("x".to_string()), None, None);
+        apply_agent_card_refresh(&mut tabs, 999, Some("x".to_string()), None, None, None);
         assert_eq!(tabs[0].llm_model.as_deref(), Some("claude-sonnet-5"));
     }
 
@@ -3639,11 +3690,11 @@ mod tests {
             branch: Some("feature/x".to_string()),
             dirty: true,
         };
-        apply_agent_card_refresh(&mut tabs, 7, None, None, Some(diverged.clone()));
+        apply_agent_card_refresh(&mut tabs, 7, None, None, None, Some(diverged.clone()));
         assert_eq!(tabs[0].workspace_override, Some(diverged));
 
         // cwd 回到项目根:workspace 传 None,必须真的清空,不是保留旧覆盖。
-        apply_agent_card_refresh(&mut tabs, 7, None, None, None);
+        apply_agent_card_refresh(&mut tabs, 7, None, None, None, None);
         assert_eq!(tabs[0].workspace_override, None);
     }
 
@@ -3948,6 +3999,7 @@ mod tests {
             last_turn_head: None,
             llm_model: None,
             permission_mode: None,
+            last_activity: None,
             workspace_override: None,
             tab_id: 0,
             forwarder: rt.spawn(async {}),
