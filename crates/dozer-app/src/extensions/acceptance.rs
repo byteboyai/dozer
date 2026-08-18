@@ -305,7 +305,7 @@ pub fn view<'a>(
         return container(
             text("没有待验收的交付——完成一轮 agent 会话后,点这个图标就能看到")
                 .size(theme::font::subtitle())
-                .color(theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
         )
         .width(width)
         .height(Length::Fill)
@@ -319,7 +319,7 @@ pub fn view<'a>(
         content = content.push(
             text(format!("✓ 已沉淀 v{n}"))
                 .size(theme::font::title())
-                .color(theme::color::GOLD),
+                .color(byteui::theme::color::current().gold),
         );
         return container(content).width(width).height(Length::Fill).into();
     }
@@ -329,7 +329,7 @@ pub fn view<'a>(
             content = content.push(
                 text(g.title.clone())
                     .size(theme::font::title())
-                    .color(theme::color::CREAM),
+                    .color(byteui::theme::color::current().cream),
             );
             for (i, c) in g.criteria.iter().enumerate() {
                 let checked = session.checked.get(i).copied().unwrap_or(false);
@@ -338,15 +338,15 @@ pub fn view<'a>(
                         text(format!("{} {c}", if checked { "✓" } else { "○" }))
                             .size(theme::font::body())
                             .color(if checked {
-                                theme::color::GOLD
+                                byteui::theme::color::current().gold
                             } else {
-                                theme::color::BODY
+                                byteui::theme::color::current().body
                             }),
                     )
                     .on_press(Message::Toggle(i))
                     .style(|_t, _s| button::Style {
                         background: None,
-                        text_color: theme::color::BODY,
+                        text_color: byteui::theme::color::current().body,
                         ..button::Style::default()
                     }),
                 );
@@ -356,7 +356,7 @@ pub fn view<'a>(
             content = content.push(
                 text("未定标——先在仓库写 .dozer/goal.md（首行目标,\n- [ ] 列表为标准）")
                     .size(theme::font::body())
-                    .color(theme::color::DIM),
+                    .color(byteui::theme::color::current().dim),
             );
         }
     }
@@ -364,7 +364,7 @@ pub fn view<'a>(
     content = content.push(
         text("变更文件")
             .size(theme::font::body())
-            .color(theme::color::DIM),
+            .color(byteui::theme::color::current().dim),
     );
     for (i, fc) in session.changes.iter().enumerate() {
         let line = match (fc.added, fc.removed) {
@@ -375,13 +375,13 @@ pub fn view<'a>(
             button(
                 text(line)
                     .size(theme::font::body())
-                    .color(theme::color::CYAN),
+                    .color(byteui::theme::color::current().cyan),
             )
             .on_press(Message::ToggleDiff(i))
             .width(Length::Fill)
             .style(|_t, _s| button::Style {
                 background: None,
-                text_color: theme::color::CYAN,
+                text_color: byteui::theme::color::current().cyan,
                 ..button::Style::default()
             }),
         );
@@ -403,21 +403,21 @@ pub fn view<'a>(
             text(comment_text)
                 .size(theme::font::body())
                 .color(if editing {
-                    theme::color::CREAM
+                    byteui::theme::color::current().cream
                 } else {
-                    theme::color::DIM
+                    byteui::theme::color::current().dim
                 }),
         )
         .on_press(Message::CommentClick)
         .width(Length::Fill)
         .style(move |_t, _s| button::Style {
-            background: Some(theme::color::TERM_BG.into()),
-            text_color: theme::color::CREAM,
+            background: Some(byteui::theme::color::current().term_bg.into()),
+            text_color: byteui::theme::color::current().cream,
             border: Border {
                 color: if editing {
-                    theme::color::GOLD
+                    byteui::theme::color::current().gold
                 } else {
-                    theme::color::BORDER
+                    byteui::theme::color::current().border
                 },
                 width: 1.0,
                 radius: 2.0.into(),
@@ -431,14 +431,14 @@ pub fn view<'a>(
             button(
                 text("通过·沉淀")
                     .size(theme::font::body())
-                    .color(theme::color::BG)
+                    .color(byteui::theme::color::current().bg)
             )
             .on_press(Message::Accept)
             .style(|_t, _s| button::Style {
-                background: Some(theme::color::GOLD.into()),
-                text_color: theme::color::BG,
+                background: Some(byteui::theme::color::current().gold.into()),
+                text_color: byteui::theme::color::current().bg,
                 border: Border {
-                    color: theme::color::GOLD,
+                    color: byteui::theme::color::current().gold,
                     width: 1.0,
                     radius: 2.0.into()
                 },
@@ -447,14 +447,14 @@ pub fn view<'a>(
             button(
                 text("打回并注回")
                     .size(theme::font::body())
-                    .color(theme::color::RED)
+                    .color(byteui::theme::color::current().red)
             )
             .on_press(Message::Reject)
             .style(|_t, _s| button::Style {
                 background: None,
-                text_color: theme::color::RED,
+                text_color: byteui::theme::color::current().red,
                 border: Border {
-                    color: theme::color::RED,
+                    color: byteui::theme::color::current().red,
                     width: 1.0,
                     radius: 2.0.into()
                 },
@@ -468,7 +468,7 @@ pub fn view<'a>(
         content = content.push(
             text(format!("⚠ {err}"))
                 .size(theme::font::body())
-                .color(theme::color::RED),
+                .color(byteui::theme::color::current().red),
         );
     }
 
@@ -494,11 +494,11 @@ fn diff_view<'a>(
     match diff {
         None => text("加载中…")
             .size(theme::font::caption())
-            .color(theme::color::DIM)
+            .color(byteui::theme::color::current().dim)
             .into(),
         Some(Err(e)) => text(format!("⚠ {e}"))
             .size(theme::font::caption())
-            .color(theme::color::RED)
+            .color(byteui::theme::color::current().red)
             .into(),
         Some(Ok(patch)) => crate::diff_render::colored_diff_lines(patch),
     }
