@@ -5574,14 +5574,14 @@ impl App {
             let mut hint_col = column![
                 text("未打开任何项目——点顶栏的 ＋ 打开一个")
                     .size(theme::font::subtitle())
-                    .color(theme::color::DIM)
+                    .color(byteui::theme::color::current().dim)
             ]
             .spacing(8);
             if let Some(err) = &self.daemon_error {
                 hint_col = hint_col.push(
                     text(format!("⚠ {err}"))
                         .size(theme::font::body())
-                        .color(theme::color::RED),
+                        .color(byteui::theme::color::current().red),
                 );
             }
             let hint = container(hint_col.padding(16))
@@ -5606,8 +5606,8 @@ impl App {
                     left_panel_area(self, ws, false),
                     divider_bar(
                         Divider::LeftRight,
-                        theme::color::BG,
-                        theme::color::BG,
+                        byteui::theme::color::current().bg,
+                        byteui::theme::color::current().bg,
                         Message::ColumnDragStart(Divider::LeftRight),
                     ),
                     right_panel_area(self, ws, false),
@@ -5853,9 +5853,9 @@ fn dozer_home_tab<'a>(
     // 与项目页签一致);未选中态静止 DIM,hover 时随 `title_hover_t` 平滑过渡
     // 到金(同一套悬停动画,见 `HoverId::HomeTab`)。
     let title_color = if active {
-        theme::color::GOLD
+        byteui::theme::color::current().gold
     } else {
-        theme::color::mix(theme::color::DIM, theme::color::GOLD, title_hover_t)
+        byteui::theme::color::mix(byteui::theme::color::current().dim, byteui::theme::color::current().gold, title_hover_t)
     };
 
     // `height(Fill)` + `align_y(Center)` 缺一不可:与 `project_tab_item` 同一处
@@ -5898,7 +5898,7 @@ fn dozer_home_tab<'a>(
                 ..button::Style::default()
             };
             if !active && let button::Status::Hovered = s {
-                st.background = Some(theme::color::TAB_HOVER.into());
+                st.background = Some(byteui::theme::color::current().tab_hover.into());
                 st.border = Border {
                     radius: 8.0.into(),
                     ..Border::default()
@@ -5924,7 +5924,7 @@ fn dozer_home_tab<'a>(
                     .width(Length::Fill)
                     .height(Length::Fixed(1.0))
                     .style(|_t: &iced_widget::Theme| container::Style {
-                        background: Some(theme::color::TAB_ACTIVE_BORDER.into()),
+                        background: Some(byteui::theme::color::current().tab_active_border.into()),
                         ..container::Style::default()
                     }),
             )
@@ -5943,7 +5943,7 @@ fn dozer_home_tab<'a>(
         .style(move |_t: &iced_widget::Theme| {
             if active {
                 container::Style {
-                    background: Some(theme::color::TAB_ACTIVE_BG.into()),
+                    background: Some(byteui::theme::color::current().tab_active_bg.into()),
                     border: Border {
                         radius: Radius {
                             top_left: 8.0,
@@ -5991,9 +5991,9 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_renderer:
     // on_press——没有对应 Message 变体可派发。
     // 图标颜色:SVG 颜色构建时定死,hover 态平滑过渡到金(见 `HoverId`/
     // `App::hover_progress`——与光标闪烁同款自驱 redraw 动画)。
-    let settings_color = theme::color::mix(
-        theme::color::DIM,
-        theme::color::GOLD,
+    let settings_color = byteui::theme::color::mix(
+        byteui::theme::color::current().dim,
+        byteui::theme::color::current().gold,
         app.hover_progress(HoverId::Topbar(TopbarButton::Settings)),
     );
     right = right.push(
@@ -6172,7 +6172,7 @@ fn project_tabs_row(
                             .width(Length::Fixed(1.0))
                             .height(Length::Fixed(sep_h))
                             .style(|_t: &iced_widget::Theme| container::Style {
-                                background: Some(theme::color::BORDER.into()),
+                                background: Some(byteui::theme::color::current().border.into()),
                                 ..container::Style::default()
                             }),
                     );
@@ -6182,9 +6182,9 @@ fn project_tabs_row(
 
         // 图标颜色:SVG 构建时定死、不吃 `button::Status`,hover 态平滑过渡到
         // 金(见 `HoverId`/`App::hover_progress`)。
-        let add_color = theme::color::mix(
-            theme::color::DIM,
-            theme::color::GOLD,
+        let add_color = byteui::theme::color::mix(
+            byteui::theme::color::current().dim,
+            byteui::theme::color::current().gold,
             app.hover_progress(HoverId::Topbar(TopbarButton::AddProject)),
         );
         let add = MouseArea::new(
@@ -6270,10 +6270,10 @@ fn project_tab_item<'a>(
             .size(theme::font::body())
             .color(if active {
                 // 选中态标题恒为金 `#F2D94E`(甲方动作专属色)。
-                theme::color::GOLD
+                byteui::theme::color::current().gold
             } else {
                 // 未选中态:静止 DIM,hover 时平滑过渡到金(见 `ProjectTabItem`)。
-                theme::color::mix(theme::color::DIM, theme::color::GOLD, title_hover_t)
+                byteui::theme::color::mix(byteui::theme::color::current().dim, byteui::theme::color::current().gold, title_hover_t)
             }),
     );
     // 标签行撑满并裁剪:页签被 `FillPortion` 压窄时长名在此截断(Chrome 式
@@ -6307,7 +6307,7 @@ fn project_tab_item<'a>(
     // 已经在上方算好(`let hovered = hover > 0.001;`),就是原来关闭按钮挂
     // `on_press` 的判定条件,直接复用。宽高原来靠 `MouseArea` 里的 `container`
     // 撑(Fill + Fixed(tab_h)),`MouseArea` 自身不认宽高,照抄内容尺寸。
-    let close_base = theme::color::mix(theme::color::DIM, theme::color::GOLD, close_hover_t);
+    let close_base = byteui::theme::color::mix(byteui::theme::color::current().dim, byteui::theme::color::current().gold, close_hover_t);
     let close_color = Color {
         a: hover,
         ..close_base
@@ -6350,7 +6350,7 @@ fn project_tab_item<'a>(
                 Some(
                     Color {
                         a: hover,
-                        ..theme::color::TAB_HOVER
+                        ..byteui::theme::color::current().tab_hover
                     }
                     .into(),
                 )
@@ -6397,7 +6397,7 @@ fn project_tab_item<'a>(
                     .width(Length::Fill)
                     .height(Length::Fixed(1.0))
                     .style(|_t: &iced_widget::Theme| container::Style {
-                        background: Some(theme::color::TAB_ACTIVE_BORDER.into()),
+                        background: Some(byteui::theme::color::current().tab_active_border.into()),
                         ..container::Style::default()
                     }),
             )
@@ -6425,7 +6425,7 @@ fn project_tab_item<'a>(
         .style(move |_t: &iced_widget::Theme| {
             if active {
                 container::Style {
-                    background: Some(theme::color::TAB_ACTIVE_BG.into()),
+                    background: Some(byteui::theme::color::current().tab_active_bg.into()),
                     // 仅左上/右上圆角,底部 1px 强调线由 inner 承载(见上)。
                     border: Border {
                         radius: Radius {
@@ -6521,9 +6521,9 @@ pub(crate) fn rail_icon_button<'a>(
     // 构建时定死、不吃 `button::Status`,所以 hover 进度靠 `hover_t` 参数从
     // App 算进来。
     let color = if active {
-        theme::color::GOLD
+        byteui::theme::color::current().gold
     } else {
-        theme::color::mix(theme::color::DIM, theme::color::GOLD, hover_t)
+        byteui::theme::color::mix(byteui::theme::color::current().dim, byteui::theme::color::current().gold, hover_t)
     };
     let inner = container(icons::view(icon, crate::theme::icon_size::rail(), color))
         .width(Length::Fill)
@@ -6547,10 +6547,10 @@ pub(crate) fn rail_icon_button<'a>(
             // 圆角正方形背景常驻(`CARD`);金色外框只在选中态出现,hover
             // 不放金框——所以样式完全由 `active` 决定,与交互态无关。
             button::Style {
-                background: Some(theme::color::CARD.into()),
+                background: Some(byteui::theme::color::current().card.into()),
                 border: Border {
                     color: if active {
-                        theme::color::GOLD
+                        byteui::theme::color::current().gold
                     } else {
                         Color::TRANSPARENT
                     },
@@ -6748,7 +6748,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
                             .width(Length::Fixed(8.0))
                             .height(Length::Fixed(8.0))
                             .style(|_t: &iced_widget::Theme| container::Style {
-                                background: Some(theme::color::GOLD.into()),
+                                background: Some(byteui::theme::color::current().gold.into()),
                                 border: Border {
                                     radius: 4.0.into(),
                                     ..Border::default()
@@ -6890,10 +6890,10 @@ fn left_panel_area<'a>(
                         Divider::LeftPairSplit,
                         theme::region::project_pane()
                             .background
-                            .unwrap_or(theme::color::BG),
+                            .unwrap_or(byteui::theme::color::current().bg),
                         theme::region::preview_pane()
                             .background
-                            .unwrap_or(theme::color::BG),
+                            .unwrap_or(byteui::theme::color::current().bg),
                         Message::ColumnDragStart(Divider::LeftPairSplit),
                     ),
                     preview_pane(
@@ -6941,10 +6941,10 @@ fn left_panel_area<'a>(
                         Divider::TodoSplit,
                         theme::region::project_pane()
                             .background
-                            .unwrap_or(theme::color::BG),
+                            .unwrap_or(byteui::theme::color::current().bg),
                         theme::region::preview_pane()
                             .background
-                            .unwrap_or(theme::color::BG),
+                            .unwrap_or(byteui::theme::color::current().bg),
                         Message::ColumnDragStart(Divider::TodoSplit),
                     ),
                     content_pane.map(Message::Todo),
@@ -6968,10 +6968,10 @@ fn left_panel_area<'a>(
                         Divider::ProjectSplit,
                         theme::region::project_pane()
                             .background
-                            .unwrap_or(theme::color::BG),
+                            .unwrap_or(byteui::theme::color::current().bg),
                         theme::region::preview_pane()
                             .background
-                            .unwrap_or(theme::color::BG),
+                            .unwrap_or(byteui::theme::color::current().bg),
                         Message::ColumnDragStart(Divider::ProjectSplit),
                     ),
                     project_preview_pane(
@@ -7020,10 +7020,10 @@ fn left_panel_area<'a>(
                         Divider::SshSplit,
                         theme::region::project_pane()
                             .background
-                            .unwrap_or(theme::color::BG),
+                            .unwrap_or(byteui::theme::color::current().bg),
                         theme::region::preview_pane()
                             .background
-                            .unwrap_or(theme::color::BG),
+                            .unwrap_or(byteui::theme::color::current().bg),
                         Message::ColumnDragStart(Divider::SshSplit),
                     ),
                     ssh_terminal_pane(
@@ -7065,7 +7065,7 @@ fn left_panel_area<'a>(
             background: region.background.map(Into::into),
             border: if left_focused {
                 Border {
-                    color: theme::color::GOLD,
+                    color: byteui::theme::color::current().gold,
                     width: 2.0,
                     radius: base_border.radius,
                 }
@@ -7138,10 +7138,10 @@ fn right_panel_area<'a>(
                         Divider::RightPairSplit,
                         theme::region::terminal_pane()
                             .background
-                            .unwrap_or(theme::color::BG),
+                            .unwrap_or(byteui::theme::color::current().bg),
                         theme::region::agent_list_pane()
                             .background
-                            .unwrap_or(theme::color::BG),
+                            .unwrap_or(byteui::theme::color::current().bg),
                         Message::ColumnDragStart(Divider::RightPairSplit),
                     ),
                     agent_list_pane(
@@ -7166,10 +7166,10 @@ fn right_panel_area<'a>(
                         Divider::RightPairSplit,
                         theme::region::review_content_pane()
                             .background
-                            .unwrap_or(theme::color::BG),
+                            .unwrap_or(byteui::theme::color::current().bg),
                         theme::region::conversation_list_pane()
                             .background
-                            .unwrap_or(theme::color::BG),
+                            .unwrap_or(byteui::theme::color::current().bg),
                         Message::ColumnDragStart(Divider::RightPairSplit),
                     ),
                     conversation_list_pane(
@@ -7210,7 +7210,7 @@ fn right_panel_area<'a>(
             background: region.background.map(Into::into),
             border: if right_focused {
                 Border {
-                    color: theme::color::GOLD,
+                    color: byteui::theme::color::current().gold,
                     width: 2.0,
                     radius: base_border.radius,
                 }
@@ -7320,7 +7320,7 @@ fn terminal_pane<'a>(
         content = content.push(
             text(format!("⚠ {err}"))
                 .size(theme::font::body())
-                .color(theme::color::RED),
+                .color(byteui::theme::color::current().red),
         );
     }
 
@@ -7331,7 +7331,7 @@ fn terminal_pane<'a>(
         content = content.push(
             text(format!("exit {code}"))
                 .size(theme::font::label())
-                .color(theme::color::RED),
+                .color(byteui::theme::color::current().red),
         );
     }
 
@@ -7406,7 +7406,7 @@ pub(crate) fn divider_bar<'a, M: Clone + 'a>(
             .width(Length::Fixed(line_w))
             .height(Length::Fill)
             .style(|_t: &iced_widget::Theme| container::Style {
-                background: Some(theme::color::BORDER.into()),
+                background: Some(byteui::theme::color::current().border.into()),
                 ..container::Style::default()
             });
         row![left_side, line, right_side]
@@ -7449,7 +7449,7 @@ pub(crate) fn horizontal_divider_bar<'a, M: Clone + 'a>(
         .height(Length::Fixed(line_h))
         .width(Length::Fill)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::BORDER.into()),
+            background: Some(byteui::theme::color::current().border.into()),
             ..container::Style::default()
         });
     let col = column![top_side, line, bottom_side]
@@ -7470,9 +7470,9 @@ pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
     // 激活(可点)态用 `#dcc9a3`(同顶栏选中页签描边 `TAB_ACTIVE_BORDER`),
     // 静止不再用金;hover 再跳到金 `#F2D94E` 提亮。
     let color = if enabled {
-        theme::color::TAB_ACTIVE_BORDER
+        byteui::theme::color::current().tab_active_border
     } else {
-        theme::color::DIM
+        byteui::theme::color::current().dim
     };
     let mut btn = button(icons::view(
         icon,
@@ -7497,8 +7497,8 @@ pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
         }
         match status {
             button::Status::Hovered | button::Status::Pressed => button::Style {
-                background: Some(theme::color::CARD.into()),
-                text_color: theme::color::GOLD,
+                background: Some(byteui::theme::color::current().card.into()),
+                text_color: byteui::theme::color::current().gold,
                 border: Border {
                     color: Color::TRANSPARENT,
                     width: 1.0,
@@ -7522,7 +7522,7 @@ pub(crate) fn tab_divider<'a, M: 'a>() -> Element<'a, M, iced_widget::Theme, ice
         .width(Length::Fill)
         .height(Length::Fixed(1.0))
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::BORDER.into()),
+            background: Some(byteui::theme::color::current().border.into()),
             ..container::Style::default()
         })
         .into()
@@ -7589,10 +7589,10 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
     // 标题区域最大宽 = 整 tab 上限 - 左右 padding - 与关闭按钮的间距 - 关闭按钮。
     let title_max = PANEL_TAB_MAX_W - PANEL_TAB_PAD_LEFT - PANEL_TAB_PAD_X - 2.0 - close_sz;
     let title_color = if active {
-        theme::color::CREAM
+        byteui::theme::color::current().cream
     } else {
         // 未选中态:静止 DIM,hover 时平滑过渡到金(与顶栏页签同一套动画)。
-        theme::color::mix(theme::color::DIM, theme::color::GOLD, hover_t)
+        byteui::theme::color::mix(byteui::theme::color::current().dim, byteui::theme::color::current().gold, hover_t)
     };
 
     let mut title_row = row![]
@@ -7621,7 +7621,7 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
     // 成同一个共享内核)。四个现有参数 title_hover/close_hover/on_select/
     // on_close 与 tab_core 的 on_select_hover/on_close_hover/on_select/
     // on_close 逐个对应,直接透传。
-    let close_base = theme::color::mix(theme::color::DIM, theme::color::GOLD, close_hover_t);
+    let close_base = byteui::theme::color::mix(byteui::theme::color::current().dim, byteui::theme::color::current().gold, close_hover_t);
     let close_color = Color {
         a: hover,
         ..close_base
@@ -7656,9 +7656,9 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
         .style(move |_t: &iced_widget::Theme| {
             if active {
                 container::Style {
-                    background: Some(theme::color::CARD.into()),
+                    background: Some(byteui::theme::color::current().card.into()),
                     border: Border {
-                        color: theme::color::BORDER,
+                        color: byteui::theme::color::current().border,
                         width: 1.0,
                         radius: 6.0.into(),
                     },
@@ -7670,7 +7670,7 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
                     background: Some(
                         Color {
                             a: hover,
-                            ..theme::color::TAB_HOVER
+                            ..byteui::theme::color::current().tab_hover
                         }
                         .into(),
                     ),
@@ -7723,7 +7723,7 @@ where
     if !show {
         return content;
     }
-    let bubble = container(text(label).size(12).color(theme::color::CREAM)).padding([5, 9]);
+    let bubble = container(text(label).size(12).color(byteui::theme::color::current().cream)).padding([5, 9]);
     Tooltip::new(content, bubble, position)
         .gap(4)
         .style(icons::tooltip_bubble_style())
@@ -7905,7 +7905,7 @@ fn ssh_tab_bar<'a>(
         let icon = icons::view(
             icons::IconKind::Terminal,
             crate::theme::icon_size::row(),
-            theme::color::DIM,
+            byteui::theme::color::current().dim,
         );
         let select_id = host_id.clone();
         let close_id = host_id.clone();
@@ -7948,7 +7948,7 @@ fn ssh_tab_bar<'a>(
         let icon = icons::view(
             icons::IconKind::FolderSync,
             crate::theme::icon_size::row(),
-            theme::color::DIM,
+            byteui::theme::color::current().dim,
         );
         let select_id = host_id.clone();
         let close_id = host_id.clone();
@@ -8026,7 +8026,7 @@ fn ssh_empty_state<'a>() -> Element<'a, Message, iced_widget::Theme, iced_render
     container(
         text("点主机卡片的终端/文件传输图标开始")
             .size(theme::font::body())
-            .color(theme::color::DIM),
+            .color(byteui::theme::color::current().dim),
     )
     .padding(20)
     .into()
@@ -8045,7 +8045,7 @@ fn active_tab_view<'a>(
         None => container(
             text("暂无会话——到 Agent 面板点「＋」")
                 .size(theme::font::subtitle())
-                .color(theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
         )
         .width(Length::Fill)
         .height(Length::Fill)
@@ -8334,20 +8334,20 @@ mod tests {
         use dozer_core::protocol::AgentState::*;
 
         assert_eq!(project_dot(&[]), None, "无存活会话不画点");
-        assert_eq!(project_dot(&[Idle]), Some(theme::color::CYAN));
+        assert_eq!(project_dot(&[Idle]), Some(byteui::theme::color::current().cyan));
         assert_eq!(
             project_dot(&[Idle, TurnEnded]),
-            Some(theme::color::GOLD),
+            Some(byteui::theme::color::current().gold),
             "回合结束优先于空闲"
         );
         assert_eq!(
             project_dot(&[Idle, TurnEnded, Running]),
-            Some(theme::color::GREEN),
+            Some(byteui::theme::color::current().green),
             "还在跑优先于回合结束/空闲"
         );
         assert_eq!(
             project_dot(&[Idle, TurnEnded, Running, AwaitingInput]),
-            Some(theme::color::RED),
+            Some(byteui::theme::color::current().red),
             "agent 在等你优先级最高"
         );
         // 顺序无关:优先级看的是状态集合,不是 tab 的先后。
