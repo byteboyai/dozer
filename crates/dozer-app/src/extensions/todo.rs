@@ -1954,15 +1954,26 @@ fn todo_card<'a>(
         )
         .on_press(Message::DispatchOpen(idx))
         .padding([6, 8])
-        .style(|_t: &iced_widget::Theme, _s| button::Style {
-            background: Some(theme::color::BG.into()),
-            border: Border {
-                color: theme::color::BORDER,
-                width: 1.0,
-                radius: 4.0.into(),
-            },
-            text_color: theme::color::CREAM,
-            ..button::Style::default()
+        .style(|_t: &iced_widget::Theme, s: button::Status| {
+            let hovered = matches!(s, button::Status::Hovered);
+            button::Style {
+                background: if hovered {
+                    Some(theme::color::TAB_HOVER.into())
+                } else {
+                    Some(theme::color::BG.into())
+                },
+                border: Border {
+                    color: if hovered {
+                        theme::color::GOLD
+                    } else {
+                        theme::color::BORDER
+                    },
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                text_color: theme::color::CREAM,
+                ..button::Style::default()
+            }
         });
         bottom = bottom.push(assign_btn);
     }
@@ -2055,7 +2066,7 @@ pub fn todo_dispatch_overlay<'a>(
                 crate::theme::icon_size::row(),
                 theme::color::CREAM,
             );
-            crate::menu::item_row_fill(
+            crate::menu::item_row(
                 Some(icon),
                 title.clone(),
                 theme::color::CREAM,
