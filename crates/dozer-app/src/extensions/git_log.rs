@@ -651,7 +651,11 @@ fn commit_list_view<'a>(
         let refs_prefix = ref_labels_text(&row.refs, head_branch);
         // 上行:图标 + short_sha + 时间戳 + refs 标签
         let mut head_line = row![
-            byteui::interaction::icons::view(icon_kind, crate::theme::icon_size::row(), theme::color::DIM),
+            byteui::interaction::icons::view(
+                icon_kind,
+                crate::theme::icon_size::row(),
+                theme::color::DIM
+            ),
             text(row.short_sha.clone())
                 .size(theme::font::caption())
                 .color(theme::color::DIM)
@@ -771,7 +775,8 @@ pub fn view<'a>(
     // 的分隔线与内容容器统一按同一水平 inset 排布,避免 Git 面板自己另起
     // 一套 → 0 的 padding 与文件树/项目面板(8)错位。
     let pad = theme::region::project_pane().padding;
-    let head = crate::homespace::home_panel_head(byteui::interaction::icons::IconKind::GitGraph, "Git");
+    let head =
+        crate::homespace::home_panel_head(byteui::interaction::icons::IconKind::GitGraph, "Git");
 
     let loading = state.pending.is_some();
     let Some(snapshot) = state.cache.as_ref() else {

@@ -397,7 +397,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
             let rows = lines.len() as f32;
             let total = history + rows;
             let h = bounds.height;
-            // 复用全应用统一滚动条配置(见 `crate::scrollbar`):轨道宽度
+            // 复用全应用统一滚动条配置(见 `byteui::interaction::scrollbar`):轨道宽度
             // `scrollbar_width`,滑块(thumb)宽度 `scrollbar_thumb_width` 并居
             // 中,滑块颜色甲方金 `#dcc9a3`(`theme::color::TAB_ACTIVE_BORDER`)。
             let bar_w = theme::geometry::scrollbar_width();

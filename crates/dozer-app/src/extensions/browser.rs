@@ -10,9 +10,9 @@
 
 use crate::app::{panel_tab, tab_arrow_button, tab_divider, tab_window};
 use crate::preview::WebviewSpec;
+use crate::theme;
 use crate::theme::icon_size;
 use crate::workspace::{lh, preview_tab_display_width, split_portions};
-use crate::theme;
 use byteui::interaction::icons;
 use dozer_client::Client;
 use dozer_core::protocol::{BookmarkInfo, BookmarkScope};

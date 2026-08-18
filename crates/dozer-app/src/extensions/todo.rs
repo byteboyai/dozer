@@ -8,8 +8,8 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use crate::app::{App, HoverId};
-use crate::workspace::{AddrEvent, Workspace, agent_icon, tab_title};
 use crate::theme;
+use crate::workspace::{AddrEvent, Workspace, agent_icon, tab_title};
 use byteui::interaction::icons;
 use dozer_core::protocol::AgentKind;
 use iced_widget::core::{Border, Color, Element, Length, Padding, mouse};
@@ -1662,7 +1662,7 @@ fn todo_list_view<'a>(
     column![
         search,
         // 任务列表滚动条对齐全应用统一滚动条规范(几何 + 外观,见
-        // `crate::scrollbar`),不再是 iced 默认滚动条。`.id` 是新增任务后
+        // `byteui::interaction::scrollbar`),不再是 iced 默认滚动条。`.id` 是新增任务后
         // "滚回顶部使新任务可见"的定位锚点(main.rs `interface.operate`
         // 拿这个 Id 发 `scrollable::scroll_to`,见 `App::take_todo_scroll_to_top`)。
         scrollable(list)

@@ -5,8 +5,8 @@
 //! `docs/superpowers/specs/2026-08-08-ssh-panel-phase1-design.md`。
 
 use crate::app::{App, HoverId, ssh_tab_hover_key};
-use byteui::interaction::icons;
 use crate::theme;
+use byteui::interaction::icons;
 use iced_widget::core::Element;
 use iced_widget::{MouseArea, button, column, container, row, stack, text, text_input};
 use serde::{Deserialize, Serialize};

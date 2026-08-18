@@ -48,8 +48,6 @@ use crate::extensions::usage;
 use crate::git_watch;
 use crate::homespace::home_panel_head;
 use crate::homespace::home_panel_head_with_actions;
-use byteui::interaction::icons;
-use byteui::interaction::icons::IconKind;
 use crate::osc::{OscEvent, OscScanner};
 use crate::preview::{PreviewPane, TabKind, is_editable_extension};
 use crate::preview_state;
@@ -58,6 +56,8 @@ use crate::term_model::TerminalModel;
 use crate::theme;
 use crate::theme::terminal_font;
 use crate::transcript::{self, ReviewEntry};
+use byteui::interaction::icons;
+use byteui::interaction::icons::IconKind;
 use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 use iced_code_editor::{CodeEditor, Message as EditorMessage};
@@ -2611,7 +2611,10 @@ pub(crate) fn agent_card<'a>(
         // `Message::SelectTab` 文档,2026-08-17 修的真实 bug)。
         .on_press(Message::SelectTabNoDrag(idx))
         .width(Length::Fill)
-        .style(byteui::interaction::cards::button_card(active, theme::color::CARD))
+        .style(byteui::interaction::cards::button_card(
+            active,
+            theme::color::CARD,
+        ))
         .into()
 }
 

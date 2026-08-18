@@ -26,12 +26,10 @@ use crate::extensions::todo;
 use crate::extensions::usage;
 use crate::git_watch;
 use crate::homespace::{self, HomeRecentConversation, HomeRecentFile, load_home_recents};
-use byteui::interaction::icons;
 use crate::layout;
 use crate::open_projects;
 use crate::panel_layouts;
 use crate::preview::WebviewSpec;
-use byteui::interaction::tabs;
 use crate::term_view;
 use crate::theme;
 use crate::transcript::ReviewEntry;
@@ -43,6 +41,8 @@ use crate::workspace::{
     review_content_pane, review_should_refresh_on_turn, spawn_disk_usage_refresh,
     spawn_project_git_refresh, split_portions, tab_display_width, tab_title, terminal_status_bar,
 };
+use byteui::interaction::icons;
+use byteui::interaction::tabs;
 use dozer_client::Client;
 use dozer_core::protocol::{AgentKind, AgentState, BookmarkInfo, ProjectInfo, SessionInfo};
 use iced_widget::core::border::Radius;
