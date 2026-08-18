@@ -385,7 +385,7 @@ pub fn view<'a>(
 
     let mut content = column![]
         .spacing(12)
-        .padding(14)
+        .padding(8)
         .width(Length::Fill)
         .height(Length::Fill);
 

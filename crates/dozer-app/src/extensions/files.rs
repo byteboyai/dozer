@@ -1320,7 +1320,7 @@ fn git_footer_bar(
 
     container(content)
         .width(Length::Fill)
-        .padding([6, 8])
+        .padding([6, 0])
         .style(|_t: &iced_widget::Theme| container::Style {
             background: None,
             ..container::Style::default()

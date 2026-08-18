@@ -1088,7 +1088,7 @@ pub fn view<'a>(
         "主机"
     )]
     .spacing(12)
-    .padding(16);
+    .padding(8);
 
     if ws_state.hosts().is_empty() {
         col = col.push(
