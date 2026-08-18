@@ -423,13 +423,13 @@ pub fn view<'a>(
         content = content.push(
             text("统计中…")
                 .size(theme::font::body())
-                .color(theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
         );
     } else if rows.is_empty() {
         content = content.push(
             text("这个项目还没有 agent 对话记录")
                 .size(theme::font::body())
-                .color(theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
         );
     } else {
         let usages: Vec<ConversationUsage> = rows.iter().map(|(_, u)| u.clone()).collect();
@@ -450,7 +450,7 @@ pub fn view<'a>(
         .height(Length::Fill)
         .style(
             move |_t: &iced_widget::Theme| iced_widget::container::Style {
-                background: Some(theme::color::PANEL.into()),
+                background: Some(byteui::theme::color::current().panel.into()),
                 border: outer,
                 ..iced_widget::container::Style::default()
             },
@@ -469,7 +469,7 @@ fn summary_card(
         column![
             text(label)
                 .size(theme::font::caption())
-                .color(theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
             text(value)
                 .size(15.0)
                 .color(color)
@@ -480,28 +480,28 @@ fn summary_card(
     }
 
     let row = iced_widget::row![
-        stat("轮次", totals.turns.to_string(), theme::color::CREAM),
+        stat("轮次", totals.turns.to_string(), byteui::theme::color::current().cream),
         stat(
             "工具调用(改动)",
             format!("{} ({})", totals.tool_calls, totals.mutating_tool_calls),
-            theme::color::CREAM
+            byteui::theme::color::current().cream
         ),
         stat(
             "触达文件",
             totals.files_touched.to_string(),
-            theme::color::CREAM
+            byteui::theme::color::current().cream
         ),
-        stat("input", totals.tokens_in.to_string(), theme::color::CYAN),
-        stat("output", totals.tokens_out.to_string(), theme::color::CYAN),
+        stat("input", totals.tokens_in.to_string(), byteui::theme::color::current().cyan),
+        stat("output", totals.tokens_out.to_string(), byteui::theme::color::current().cyan),
         stat(
             "cache 读",
             totals.tokens_cache_read.to_string(),
-            theme::color::CYAN
+            byteui::theme::color::current().cyan
         ),
         stat(
             "cache 写",
             totals.tokens_cache_write.to_string(),
-            theme::color::CYAN
+            byteui::theme::color::current().cyan
         ),
     ]
     .spacing(24);
@@ -510,14 +510,14 @@ fn summary_card(
         column![
             text(format!("项目汇总 · {} 会话", totals.conversation_count))
                 .size(theme::font::caption())
-                .color(theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
             row,
         ]
         .spacing(10),
     )
     .padding(12)
     .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-        background: Some(theme::color::CARD.into()),
+        background: Some(byteui::theme::color::current().card.into()),
         border: Border {
             radius: 10.0.into(),
             ..Border::default()
@@ -546,14 +546,14 @@ fn usage_row<'a>(
         column![
             text(meta.title.clone())
                 .size(theme::font::body())
-                .color(theme::color::CREAM),
+                .color(byteui::theme::color::current().cream),
             text(activity)
                 .size(theme::font::caption_sm())
-                .color(theme::color::DIM)
+                .color(byteui::theme::color::current().dim)
                 .font(iced_widget::core::Font::MONOSPACE),
             text(tokens)
                 .size(theme::font::caption_sm())
-                .color(theme::color::CYAN)
+                .color(byteui::theme::color::current().cyan)
                 .font(iced_widget::core::Font::MONOSPACE),
         ]
         .spacing(4),
@@ -561,7 +561,7 @@ fn usage_row<'a>(
     .width(Length::Fill)
     .padding(10)
     .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-        background: Some(theme::color::CARD.into()),
+        background: Some(byteui::theme::color::current().card.into()),
         border: Border {
             radius: 10.0.into(),
             ..Border::default()
@@ -591,7 +591,7 @@ fn grouped_list<'a>(
                     .color(crate::workspace::agent_dot_color(agent)),
                 text(format!("{} 会话 · {} tokens", idxs.len(), group_tokens))
                     .size(theme::font::caption())
-                    .color(theme::color::DIM),
+                    .color(byteui::theme::color::current().dim),
             ]
             .spacing(8),
         );
@@ -652,9 +652,9 @@ fn bar_chart(
         let scale = BAR_MAX_HEIGHT / max_total as f32;
         // 自底向上固定顺序:Claude 贴基线(直角)→ CodeBuddy → OpenCode 顶部(圆角)。
         let stack = column![
-            bar_segment(d.opencode as f32 * scale, theme::color::GREEN, true),
-            bar_segment(d.codebuddy as f32 * scale, theme::color::PURPLE, false),
-            bar_segment(d.claude as f32 * scale, theme::color::CYAN, false),
+            bar_segment(d.opencode as f32 * scale, byteui::theme::color::current().green, true),
+            bar_segment(d.codebuddy as f32 * scale, byteui::theme::color::current().purple, false),
+            bar_segment(d.claude as f32 * scale, byteui::theme::color::current().cyan, false),
         ]
         .spacing(2);
 
@@ -663,7 +663,7 @@ fn bar_chart(
                 column![
                     text(format_token_short(total))
                         .size(8.0)
-                        .color(theme::color::DIM)
+                        .color(byteui::theme::color::current().dim)
                         .font(iced_widget::core::Font::MONOSPACE),
                     stack,
                 ]
@@ -674,7 +674,7 @@ fn bar_chart(
             .align_y(iced_widget::core::alignment::Vertical::Bottom),
             text(d.label.clone())
                 .size(8.0)
-                .color(theme::color::DIM)
+                .color(byteui::theme::color::current().dim)
                 .font(iced_widget::core::Font::MONOSPACE),
         ]
         .spacing(4)
@@ -789,7 +789,7 @@ fn chart_legend(
                     format_token_short(*value)
                 ))
                 .size(theme::font::caption_sm())
-                .color(theme::color::DIM)
+                .color(byteui::theme::color::current().dim)
                 .font(iced_widget::core::Font::MONOSPACE),
             ]
             .spacing(6)
