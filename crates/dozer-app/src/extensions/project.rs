@@ -400,14 +400,14 @@ pub fn view<'a>(
             container(
                 text(format!("{buf}▏"))
                     .size(theme::font::title())
-                    .color(theme::color::CREAM),
+                    .color(byteui::theme::color::current().cream),
             )
             .padding([8, 12])
             .width(Length::Fill)
             .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-                background: Some(theme::color::CARD.into()),
+                background: Some(byteui::theme::color::current().card.into()),
                 border: Border {
-                    color: theme::color::GOLD,
+                    color: byteui::theme::color::current().gold,
                     width: 1.5,
                     radius: 8.0.into(),
                 },
@@ -418,12 +418,12 @@ pub fn view<'a>(
             button(
                 text(p.name.clone())
                     .size(theme::font::title())
-                    .color(theme::color::CREAM),
+                    .color(byteui::theme::color::current().cream),
             )
             .on_press(Message::NameEditStart)
             .style(|_t, _s| iced_widget::button::Style {
                 background: None,
-                text_color: theme::color::CREAM,
+                text_color: byteui::theme::color::current().cream,
                 ..iced_widget::button::Style::default()
             })
             .into()
@@ -437,15 +437,15 @@ pub fn view<'a>(
                 .on_action(Message::DescriptionEditAction)
                 .height(Length::Fixed(96.0))
                 .style(|_t, _s| iced_widget::text_editor::Style {
-                    background: theme::color::CARD.into(),
+                    background: byteui::theme::color::current().card.into(),
                     border: Border {
-                        color: theme::color::GOLD,
+                        color: byteui::theme::color::current().gold,
                         width: 1.5,
                         radius: 8.0.into(),
                     },
-                    placeholder: theme::color::DIM,
-                    value: theme::color::CREAM,
-                    selection: theme::color::GOLD,
+                    placeholder: byteui::theme::color::current().dim,
+                    value: byteui::theme::color::current().cream,
+                    selection: byteui::theme::color::current().gold,
                 })
                 .into()
         } else {
@@ -454,21 +454,21 @@ pub fn view<'a>(
                 .clone()
                 .unwrap_or_else(|| "点击添加项目描述…".to_string());
             let color = if ws_state.description.is_some() {
-                theme::color::BODY
+                byteui::theme::color::current().body
             } else {
-                theme::color::DIM
+                byteui::theme::color::current().dim
             };
             button(text(label).size(theme::font::body()).color(color))
                 .on_press(Message::DescriptionEditStart)
                 .padding([10, 12])
                 .width(Length::Fill)
                 .style(|_t, _s| iced_widget::button::Style {
-                    background: Some(theme::color::DESC_BG.into()),
+                    background: Some(byteui::theme::color::current().desc_bg.into()),
                     border: Border {
                         radius: 8.0.into(),
                         ..Default::default()
                     },
-                    text_color: theme::color::BODY,
+                    text_color: byteui::theme::color::current().body,
                     ..iced_widget::button::Style::default()
                 })
                 .into()
@@ -479,7 +479,7 @@ pub fn view<'a>(
         content = content.push(
             text(format!("{n} 次验收"))
                 .size(theme::font::caption())
-                .color(theme::color::GOLD),
+                .color(byteui::theme::color::current().gold),
         );
     }
 
@@ -492,11 +492,11 @@ pub fn view<'a>(
             icons::view(
                 icons::IconKind::CircleSmall,
                 crate::theme::icon_size::row(),
-                theme::color::CREAM
+                byteui::theme::color::current().cream
             ),
             text(usage_label)
                 .size(theme::font::label())
-                .color(theme::color::CREAM),
+                .color(byteui::theme::color::current().cream),
         ]
         .spacing(6)
         .align_y(iced_widget::core::Alignment::Center),
@@ -512,11 +512,11 @@ pub fn view<'a>(
                 icons::view(
                     icons::IconKind::FolderDot,
                     crate::theme::icon_size::row(),
-                    theme::color::DIM
+                    byteui::theme::color::current().dim
                 ),
                 text("项目根目录")
                     .size(theme::font::label())
-                    .color(theme::color::DIM),
+                    .color(byteui::theme::color::current().dim),
             ]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center),
@@ -528,7 +528,7 @@ pub fn view<'a>(
             iced_widget::Space::new().width(Length::Fixed(value_indent)),
             text(shorten_path(&p.path))
                 .size(theme::font::caption())
-                .color(theme::color::BODY),
+                .color(byteui::theme::color::current().body),
         ]
         .align_y(iced_widget::core::Alignment::Center),
     );
@@ -538,11 +538,11 @@ pub fn view<'a>(
                 icons::view(
                     icons::IconKind::FolderRoot,
                     crate::theme::icon_size::row(),
-                    theme::color::DIM
+                    byteui::theme::color::current().dim
                 ),
                 text("Git 远程仓库")
                     .size(theme::font::label())
-                    .color(theme::color::DIM),
+                    .color(byteui::theme::color::current().dim),
             ]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center),
@@ -555,7 +555,7 @@ pub fn view<'a>(
                 iced_widget::Space::new().width(Length::Fixed(value_indent)),
                 text("未设置")
                     .size(theme::font::caption())
-                    .color(theme::color::DIM),
+                    .color(byteui::theme::color::current().dim),
             ]
             .align_y(iced_widget::core::Alignment::Center),
         );
@@ -566,7 +566,7 @@ pub fn view<'a>(
                     iced_widget::Space::new().width(Length::Fixed(value_indent)),
                     text(url.clone())
                         .size(theme::font::caption())
-                        .color(theme::color::BODY),
+                        .color(byteui::theme::color::current().body),
                 ]
                 .align_y(iced_widget::core::Alignment::Center),
             );
@@ -592,7 +592,7 @@ pub fn view<'a>(
         content = content.push(
             text(format!("⚠ {err}"))
                 .size(theme::font::label())
-                .color(theme::color::RED),
+                .color(byteui::theme::color::current().red),
         );
     }
 
@@ -603,7 +603,7 @@ pub fn view<'a>(
         .height(Length::Fill)
         .style(
             move |_t: &iced_widget::Theme| iced_widget::container::Style {
-                background: Some(theme::color::PANEL.into()),
+                background: Some(byteui::theme::color::current().panel.into()),
                 border: outer,
                 ..iced_widget::container::Style::default()
             },
@@ -619,38 +619,38 @@ fn project_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_re
     let repair = button(
         text("修复项目")
             .size(theme::font::label())
-            .color(theme::color::CREAM),
+            .color(byteui::theme::color::current().cream),
     )
     .on_press(Message::RepairProject)
     .width(Length::Fill)
     .padding([6, 8])
     .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
-        background: Some(theme::color::BG.into()),
+        background: Some(byteui::theme::color::current().bg.into()),
         border: Border {
-            color: theme::color::BORDER,
+            color: byteui::theme::color::current().border,
             width: 1.0,
             radius: 4.0.into(),
         },
-        text_color: theme::color::CREAM,
+        text_color: byteui::theme::color::current().cream,
         ..iced_widget::button::Style::default()
     });
 
     let delete = button(
         text("删除项目")
             .size(theme::font::label())
-            .color(theme::color::RED),
+            .color(byteui::theme::color::current().red),
     )
     .on_press(Message::DeleteProject)
     .width(Length::Fill)
     .padding([6, 8])
     .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
-        background: Some(theme::color::BG.into()),
+        background: Some(byteui::theme::color::current().bg.into()),
         border: Border {
-            color: theme::color::RED,
+            color: byteui::theme::color::current().red,
             width: 1.0,
             radius: 4.0.into(),
         },
-        text_color: theme::color::RED,
+        text_color: byteui::theme::color::current().red,
         ..iced_widget::button::Style::default()
     });
 
@@ -662,7 +662,7 @@ fn project_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_re
         .width(Length::Fill)
         .height(Length::Fixed(1.0))
         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-            background: Some(theme::color::BORDER.into()),
+            background: Some(byteui::theme::color::current().border.into()),
             ..iced_widget::container::Style::default()
         });
 
@@ -705,21 +705,21 @@ fn links_section<'a>(
             icons::view(
                 icons::IconKind::CircleSmall,
                 crate::theme::icon_size::row(),
-                theme::color::CREAM
+                byteui::theme::color::current().cream
             ),
             text(title)
                 .size(theme::font::label())
-                .color(theme::color::CREAM),
+                .color(byteui::theme::color::current().cream),
             iced_widget::space::horizontal(),
             button(
                 text("+")
                     .size(theme::font::label())
-                    .color(theme::color::DIM)
+                    .color(byteui::theme::color::current().dim)
             )
             .on_press(Message::Pick(target))
             .style(|_t, _s| iced_widget::button::Style {
                 background: None,
-                text_color: theme::color::DIM,
+                text_color: byteui::theme::color::current().dim,
                 ..iced_widget::button::Style::default()
             }),
         ]
@@ -750,10 +750,10 @@ fn links_section<'a>(
         let is_selected = selected_link.as_deref() == Some(entry.path.as_path());
         let row_btn = button(
             row![
-                icons::view(row_icon, crate::theme::icon_size::row(), theme::color::DIM),
+                icons::view(row_icon, crate::theme::icon_size::row(), byteui::theme::color::current().dim),
                 text(name)
                     .size(theme::font::body())
-                    .color(theme::color::BODY),
+                    .color(byteui::theme::color::current().body),
             ]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center),
@@ -761,11 +761,11 @@ fn links_section<'a>(
         .on_press(click_msg)
         .style(move |_t, _s| iced_widget::button::Style {
             background: if is_selected {
-                Some(theme::color::CARD.into())
+                Some(byteui::theme::color::current().card.into())
             } else {
                 None
             },
-            text_color: theme::color::BODY,
+            text_color: byteui::theme::color::current().body,
             ..iced_widget::button::Style::default()
         });
         col = col.push(
@@ -797,11 +797,11 @@ fn links_section<'a>(
                                 icons::icon_for_file(&row_entry.name)
                             },
                             crate::theme::icon_size::row(),
-                            theme::color::DIM
+                            byteui::theme::color::current().dim
                         ),
                         text(row_entry.name.clone())
                             .size(theme::font::caption())
-                            .color(theme::color::DIM),
+                            .color(byteui::theme::color::current().dim),
                     ]
                     .spacing(6)
                     .align_y(iced_widget::core::Alignment::Center),
@@ -809,11 +809,11 @@ fn links_section<'a>(
                 .on_press(child_click)
                 .style(move |_t, _s| iced_widget::button::Style {
                     background: if child_is_selected {
-                        Some(theme::color::CARD.into())
+                        Some(byteui::theme::color::current().card.into())
                     } else {
                         None
                     },
-                    text_color: theme::color::DIM,
+                    text_color: byteui::theme::color::current().dim,
                     ..iced_widget::button::Style::default()
                 });
                 col = col.push(child_btn);
