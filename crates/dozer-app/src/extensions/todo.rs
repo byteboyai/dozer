@@ -1260,7 +1260,7 @@ pub fn view<'a>(
         .width(sidebar_width)
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::BG.into()),
+            background: Some(byteui::theme::color::current().bg.into()),
             border: sidebar_outer,
             ..container::Style::default()
         })
@@ -1278,7 +1278,7 @@ pub fn view<'a>(
             .width(content_width)
             .height(Length::Fill)
             .style(move |_t: &iced_widget::Theme| container::Style {
-                background: Some(theme::color::BG.into()),
+                background: Some(byteui::theme::color::current().bg.into()),
                 border: content_outer,
                 ..container::Style::default()
             })
@@ -1302,7 +1302,7 @@ fn todo_resize_handle<'a>() -> Element<'a, Message, iced_widget::Theme, iced_ren
         .width(Length::Fill)
         .height(Length::Fixed(1.0))
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::BORDER.into()),
+            background: Some(byteui::theme::color::current().border.into()),
             ..container::Style::default()
         });
     MouseArea::new(
@@ -1333,13 +1333,13 @@ fn todo_footer_bar<'a>(
         if add_draft.is_empty() && !editing {
             text("Initiate new task protocol..")
                 .size(theme::font::body())
-                .color(theme::color::DIM)
+                .color(byteui::theme::color::current().dim)
                 .into()
         } else {
             let caret = if editing { "▏" } else { "" };
             text(format!("{add_draft}{caret}"))
                 .size(theme::font::body())
-                .color(theme::color::CREAM)
+                .color(byteui::theme::color::current().cream)
                 .into()
         };
 
@@ -1350,18 +1350,18 @@ fn todo_footer_bar<'a>(
     let submit = button(icons::view(
         icons::IconKind::CircleArrowUp,
         crate::theme::icon_size::row(),
-        theme::color::GOLD,
+        byteui::theme::color::current().gold,
     ))
     .on_press(Message::AddSubmit)
     .padding(6)
     .style(|_t, _s| button::Style {
         background: None,
         border: Border {
-            color: theme::color::BORDER,
+            color: byteui::theme::color::current().border,
             width: 0.0,
             radius: 4.0.into(),
         },
-        text_color: theme::color::GOLD,
+        text_color: byteui::theme::color::current().gold,
         ..button::Style::default()
     });
 
@@ -1391,12 +1391,12 @@ fn todo_footer_bar<'a>(
             .height(Length::Fixed(ws_state.add_input_height()))
             .padding([10, 12])
             .style(move |_t: &iced_widget::Theme| container::Style {
-                background: Some(theme::color::BG.into()),
+                background: Some(byteui::theme::color::current().bg.into()),
                 border: Border {
                     color: if editing {
-                        theme::color::GOLD
+                        byteui::theme::color::current().gold
                     } else {
-                        theme::color::BORDER
+                        byteui::theme::color::current().border
                     },
                     width: 1.0,
                     radius: 4.0.into(),
@@ -1411,7 +1411,7 @@ fn todo_footer_bar<'a>(
         .width(Length::Fill)
         .height(Length::Fixed(1.0))
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::BORDER.into()),
+            background: Some(byteui::theme::color::current().border.into()),
             ..container::Style::default()
         });
 
@@ -1433,18 +1433,18 @@ fn todo_clear_footer_bar<'a>(
     let count = ws_state.items.len();
     let label = text(format!("{count} 个任务"))
         .size(theme::font::label())
-        .color(theme::color::DIM);
+        .color(byteui::theme::color::current().dim);
 
     let clear = button(
         row![
             icons::view(
                 icons::IconKind::Trash,
                 crate::theme::icon_size::row(),
-                theme::color::CREAM,
+                byteui::theme::color::current().cream,
             ),
             text("清空列表")
                 .size(theme::font::label())
-                .color(theme::color::CREAM),
+                .color(byteui::theme::color::current().cream),
         ]
         .spacing(6)
         .align_y(iced_widget::core::Alignment::Center),
@@ -1452,13 +1452,13 @@ fn todo_clear_footer_bar<'a>(
     .on_press(Message::ClearList)
     .padding([4, 8])
     .style(|_t: &iced_widget::Theme, _s| button::Style {
-        background: Some(theme::color::BG.into()),
+        background: Some(byteui::theme::color::current().bg.into()),
         border: Border {
-            color: theme::color::BORDER,
+            color: byteui::theme::color::current().border,
             width: 1.0,
             radius: 4.0.into(),
         },
-        text_color: theme::color::CREAM,
+        text_color: byteui::theme::color::current().cream,
         ..button::Style::default()
     });
 
@@ -1466,7 +1466,7 @@ fn todo_clear_footer_bar<'a>(
         icons::view(
             icons::IconKind::ListTodo,
             crate::theme::icon_size::row(),
-            theme::color::CREAM,
+            byteui::theme::color::current().cream,
         ),
         label,
         space::horizontal(),
@@ -1479,7 +1479,7 @@ fn todo_clear_footer_bar<'a>(
         .width(Length::Fill)
         .height(Length::Fixed(1.0))
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::BORDER.into()),
+            background: Some(byteui::theme::color::current().border.into()),
             ..container::Style::default()
         });
 
@@ -1506,46 +1506,46 @@ fn todo_search_bar<'a>(
     let body = if draft.is_empty() && !editing {
         text("搜索任务…")
             .size(theme::font::body())
-            .color(theme::color::DIM)
+            .color(byteui::theme::color::current().dim)
     } else {
         let caret = if editing { "▏" } else { "" };
         text(format!("{draft}{caret}"))
             .size(theme::font::body())
-            .color(theme::color::CREAM)
+            .color(byteui::theme::color::current().cream)
     };
     let box_btn = button(body)
         .on_press(Message::SearchEditStart)
         .width(Length::Fill)
         .padding([6, 8])
         .style(move |_t: &iced_widget::Theme, _s| button::Style {
-            background: Some(theme::color::BG.into()),
+            background: Some(byteui::theme::color::current().bg.into()),
             border: Border {
                 color: if editing || active {
-                    theme::color::GOLD
+                    byteui::theme::color::current().gold
                 } else {
-                    theme::color::BORDER
+                    byteui::theme::color::current().border
                 },
                 width: 1.0,
                 radius: 4.0.into(),
             },
-            text_color: theme::color::CREAM,
+            text_color: byteui::theme::color::current().cream,
             ..button::Style::default()
         });
     let submit = button(icons::view(
         icons::IconKind::Search,
         crate::theme::icon_size::row(),
-        theme::color::GOLD,
+        byteui::theme::color::current().gold,
     ))
     .on_press(Message::SearchSubmit)
     .padding(6)
     .style(|_t, _s| button::Style {
-        background: Some(theme::color::BG.into()),
+        background: Some(byteui::theme::color::current().bg.into()),
         border: Border {
-            color: theme::color::BORDER,
+            color: byteui::theme::color::current().border,
             width: 1.0,
             radius: 4.0.into(),
         },
-        text_color: theme::color::GOLD,
+        text_color: byteui::theme::color::current().gold,
         ..button::Style::default()
     });
     row![box_btn, submit]
@@ -1581,7 +1581,7 @@ fn todo_list_view<'a>(
             container(
                 text("没有匹配的任务")
                     .size(theme::font::body())
-                    .color(theme::color::DIM),
+                    .color(byteui::theme::color::current().dim),
             )
             .padding([20, 20]),
         );
@@ -1693,12 +1693,12 @@ fn todo_markdown_view<'a>(
             if ws_state.markdown_draft.is_empty() {
                 text(caret)
                     .size(theme::font::body())
-                    .color(theme::color::DIM)
+                    .color(byteui::theme::color::current().dim)
                     .into()
             } else {
                 text(format!("{}{caret}", ws_state.markdown_draft))
                     .size(theme::font::body())
-                    .color(theme::color::CREAM)
+                    .color(byteui::theme::color::current().cream)
                     .into()
             }
         } else {
@@ -1708,7 +1708,7 @@ fn todo_markdown_view<'a>(
                 .unwrap_or_else(|| "# 暂无 .dozer/todo.md".to_string());
             text(src)
                 .size(theme::font::body())
-                .color(theme::color::CREAM)
+                .color(byteui::theme::color::current().cream)
                 .into()
         };
 
@@ -1787,7 +1787,7 @@ fn drag_insert_indicator() -> Element<'static, Message, iced_widget::Theme, iced
         .width(Length::Fill)
         .height(Length::Fixed(3.0))
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::GOLD.into()),
+            background: Some(byteui::theme::color::current().gold.into()),
             border: Border {
                 radius: 2.0.into(),
                 ..Border::default()
@@ -1821,7 +1821,7 @@ fn todo_card<'a>(
     // ---- 顶部行：编号 + 日期徽章(calendar 图标 → 日历选择器)+ 状态文字 ----
     let number_text = text(format!("#{number:03}"))
         .size(theme::font::caption())
-        .color(theme::color::DIM);
+        .color(byteui::theme::color::current().dim);
 
     let date_label = match state {
         TodoState::Done => meta
@@ -1838,11 +1838,11 @@ fn todo_card<'a>(
                 icons::view(
                     icons::IconKind::Calendar,
                     crate::theme::icon_size::row(),
-                    theme::color::DIM
+                    byteui::theme::color::current().dim
                 ),
                 text(date_label)
                     .size(theme::font::caption())
-                    .color(theme::color::DIM),
+                    .color(byteui::theme::color::current().dim),
             ]
             .spacing(4)
             .align_y(iced_widget::core::alignment::Vertical::Center),
@@ -1857,7 +1857,7 @@ fn todo_card<'a>(
 
     let status_sep = text(" - ")
         .size(theme::font::caption())
-        .color(theme::color::DIM);
+        .color(byteui::theme::color::current().dim);
 
     let top_row = row![
         number_text,
@@ -1873,15 +1873,15 @@ fn todo_card<'a>(
 
     // ---- 中部：checkbox + 任务文字（勾选/删除线处理与原 todo_row 一致）----
     let box_color = if done {
-        theme::color::BORDER
+        byteui::theme::color::current().border
     } else {
-        theme::color::DIM
+        byteui::theme::color::current().dim
     };
     let checkbox = button(
         container(if done {
             text("✓")
                 .size(theme::font::caption())
-                .color(theme::color::DIM)
+                .color(byteui::theme::color::current().dim)
                 .into()
         } else {
             Element::from(iced_widget::space::Space::new())
@@ -1892,7 +1892,7 @@ fn todo_card<'a>(
         .align_y(iced_widget::core::alignment::Vertical::Center)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: if done {
-                Some(theme::color::BORDER.into())
+                Some(byteui::theme::color::current().border.into())
             } else {
                 None
             },
@@ -1908,14 +1908,14 @@ fn todo_card<'a>(
     .padding(0)
     .style(|_t: &iced_widget::Theme, _s| button::Style {
         background: None,
-        text_color: theme::color::CREAM,
+        text_color: byteui::theme::color::current().cream,
         ..button::Style::default()
     });
 
     let label_color = if done {
-        theme::color::DIM
+        byteui::theme::color::current().dim
     } else {
-        theme::color::CREAM
+        byteui::theme::color::current().cream
     };
     let label: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> = if done {
         let rich: iced_widget::text::Rich<
@@ -1947,11 +1947,11 @@ fn todo_card<'a>(
             let field = if draft.is_empty() {
                 text("任务内容…")
                     .size(theme::font::body())
-                    .color(theme::color::DIM)
+                    .color(byteui::theme::color::current().dim)
             } else {
                 text(format!("{draft}▏"))
                     .size(theme::font::body())
-                    .color(theme::color::CREAM)
+                    .color(byteui::theme::color::current().cream)
             };
             container(field)
                 .width(Length::Fill)
@@ -1959,7 +1959,7 @@ fn todo_card<'a>(
                 .style(|_t: &iced_widget::Theme| container::Style {
                     background: None,
                     border: Border {
-                        color: theme::color::BORDER,
+                        color: byteui::theme::color::current().border,
                         width: 1.0,
                         radius: 4.0.into(),
                     },
@@ -1990,11 +1990,11 @@ fn todo_card<'a>(
             row![
                 text("指派")
                     .size(theme::font::label())
-                    .color(theme::color::CREAM),
+                    .color(byteui::theme::color::current().cream),
                 icons::view(
                     icons::IconKind::ChevronRight,
                     crate::theme::icon_size::row(),
-                    theme::color::CREAM,
+                    byteui::theme::color::current().cream,
                 ),
             ]
             .spacing(4)
@@ -2006,20 +2006,20 @@ fn todo_card<'a>(
             let hovered = matches!(s, button::Status::Hovered);
             button::Style {
                 background: if hovered {
-                    Some(theme::color::TAB_HOVER.into())
+                    Some(byteui::theme::color::current().tab_hover.into())
                 } else {
-                    Some(theme::color::BG.into())
+                    Some(byteui::theme::color::current().bg.into())
                 },
                 border: Border {
                     color: if hovered {
-                        theme::color::GOLD
+                        byteui::theme::color::current().gold
                     } else {
-                        theme::color::BORDER
+                        byteui::theme::color::current().border
                     },
                     width: 1.0,
                     radius: 4.0.into(),
                 },
-                text_color: theme::color::CREAM,
+                text_color: byteui::theme::color::current().cream,
                 ..button::Style::default()
             }
         });
@@ -2047,16 +2047,16 @@ fn todo_card<'a>(
             // 卡片瞬间跳位来表达换位(见 `todo_list_view` 的改版说明)。
             if is_drag_source {
                 container::Style {
-                    background: Some(theme::color::CARD.into()),
+                    background: Some(byteui::theme::color::current().card.into()),
                     border: Border {
-                        color: theme::color::GOLD,
+                        color: byteui::theme::color::current().gold,
                         width: 1.5,
                         radius: byteui::interaction::cards::CARD_RADIUS.into(),
                     },
                     ..container::Style::default()
                 }
             } else {
-                byteui::interaction::cards::container_card(selected, hovered, theme::color::CARD)
+                byteui::interaction::cards::container_card(selected, hovered, byteui::theme::color::current().card)
             }
         });
 
@@ -2112,12 +2112,12 @@ pub fn todo_dispatch_overlay<'a>(
             let icon = icons::view(
                 agent_icon(*agent),
                 crate::theme::icon_size::row(),
-                theme::color::CREAM,
+                byteui::theme::color::current().cream,
             );
             crate::menu::item_row(
                 Some(icon),
                 title.clone(),
-                theme::color::CREAM,
+                byteui::theme::color::current().cream,
                 Some(Message::DispatchToExisting(idx, session_id.clone())),
             )
         })
@@ -2154,9 +2154,9 @@ fn state_label(
     state: TodoState,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let (label, color) = match state {
-        TodoState::Pending => ("待办", theme::color::CYAN),
-        TodoState::InProgress => ("进行中", theme::color::GOLD),
-        TodoState::Done => ("已完成", theme::color::DIM),
+        TodoState::Pending => ("待办", byteui::theme::color::current().cyan),
+        TodoState::InProgress => ("进行中", byteui::theme::color::current().gold),
+        TodoState::Done => ("已完成", byteui::theme::color::current().dim),
     };
     text(label).size(theme::font::caption()).color(color).into()
 }
@@ -2185,13 +2185,13 @@ fn todo_calendar_popup(
 
     let nav_style = |_t: &iced_widget::Theme, _s| button::Style {
         background: None,
-        text_color: theme::color::CREAM,
+        text_color: byteui::theme::color::current().cream,
         ..button::Style::default()
     };
     let prev = button(
         text("‹")
             .size(theme::font::body())
-            .color(theme::color::CREAM),
+            .color(byteui::theme::color::current().cream),
     )
     .on_press(Message::CalendarPrevMonth)
     .padding([2, 8])
@@ -2199,14 +2199,14 @@ fn todo_calendar_popup(
     let next = button(
         text("›")
             .size(theme::font::body())
-            .color(theme::color::CREAM),
+            .color(byteui::theme::color::current().cream),
     )
     .on_press(Message::CalendarNextMonth)
     .padding([2, 8])
     .style(nav_style);
     let title = text(format!("{y}-{m:02}"))
         .size(theme::font::caption())
-        .color(theme::color::CREAM);
+        .color(byteui::theme::color::current().cream);
     let header = row![prev, title, next]
         .spacing(6)
         .align_y(iced_widget::core::alignment::Vertical::Center);
@@ -2218,7 +2218,7 @@ fn todo_calendar_popup(
             container(
                 text(w)
                     .size(theme::font::caption())
-                    .color(theme::color::DIM),
+                    .color(byteui::theme::color::current().dim),
             )
             .width(Length::Fixed(28.0))
             .center_x(Length::Fill),
@@ -2242,9 +2242,9 @@ fn todo_calendar_popup(
                 let is_sel = selected_md == Some((m, d));
                 let cell_btn = button(text(format!("{d}")).size(theme::font::caption()).color(
                     if is_sel {
-                        theme::color::GOLD
+                        byteui::theme::color::current().gold
                     } else {
-                        theme::color::CREAM
+                        byteui::theme::color::current().cream
                     },
                 ))
                 .on_press(Message::CalendarPick(idx, format!("{m:02}-{d:02}")))
@@ -2253,13 +2253,13 @@ fn todo_calendar_popup(
                 .padding(0)
                 .style(move |_t: &iced_widget::Theme, _s| button::Style {
                     background: if is_sel {
-                        Some(theme::color::CARD.into())
+                        Some(byteui::theme::color::current().card.into())
                     } else {
                         None
                     },
                     border: Border {
                         color: if is_sel {
-                            theme::color::GOLD
+                            byteui::theme::color::current().gold
                         } else {
                             Color::TRANSPARENT
                         },
@@ -2267,9 +2267,9 @@ fn todo_calendar_popup(
                         radius: 4.0.into(),
                     },
                     text_color: if is_sel {
-                        theme::color::GOLD
+                        byteui::theme::color::current().gold
                     } else {
-                        theme::color::CREAM
+                        byteui::theme::color::current().cream
                     },
                     ..button::Style::default()
                 });
@@ -2288,9 +2288,9 @@ fn todo_calendar_popup(
         .width(Length::Shrink)
         .padding(8)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::CARD.into()),
+            background: Some(byteui::theme::color::current().card.into()),
             border: Border {
-                color: theme::color::BORDER,
+                color: byteui::theme::color::current().border,
                 width: 1.0,
                 radius: 6.0.into(),
             },
@@ -2362,9 +2362,9 @@ fn todo_category_button<'a>(
     };
     let active = filter == current;
     let fg = if active {
-        theme::color::CREAM
+        byteui::theme::color::current().cream
     } else {
-        theme::color::DIM
+        byteui::theme::color::current().dim
     };
     button(
         row![
@@ -2372,9 +2372,9 @@ fn todo_category_button<'a>(
                 icon,
                 crate::theme::icon_size::row(),
                 if active {
-                    theme::color::GOLD
+                    byteui::theme::color::current().gold
                 } else {
-                    theme::color::DIM
+                    byteui::theme::color::current().dim
                 }
             ),
             text(label).size(theme::font::body()).color(fg),
@@ -2384,9 +2384,9 @@ fn todo_category_button<'a>(
             text(format!("{count}"))
                 .size(theme::font::caption())
                 .color(if active {
-                    theme::color::GOLD
+                    byteui::theme::color::current().gold
                 } else {
-                    theme::color::DIM
+                    byteui::theme::color::current().dim
                 }),
         ]
         .spacing(8)
@@ -2397,14 +2397,14 @@ fn todo_category_button<'a>(
     .padding([8, 10])
     .style(move |_t: &iced_widget::Theme, _s| button::Style {
         background: if active {
-            Some(theme::color::CARD.into())
+            Some(byteui::theme::color::current().card.into())
         } else {
             None
         },
         text_color: fg,
         border: Border {
             color: if active {
-                theme::color::GOLD
+                byteui::theme::color::current().gold
             } else {
                 Color::TRANSPARENT
             },
@@ -2456,14 +2456,14 @@ fn todo_tab<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let active = mode == current;
     let fg = if active {
-        theme::color::CREAM
+        byteui::theme::color::current().cream
     } else {
-        theme::color::DIM
+        byteui::theme::color::current().dim
     };
     let icon_color = if active {
-        theme::color::GOLD
+        byteui::theme::color::current().gold
     } else {
-        theme::color::DIM
+        byteui::theme::color::current().dim
     };
     button(
         row![
@@ -2477,14 +2477,14 @@ fn todo_tab<'a>(
     .padding([6, 12])
     .style(move |_t: &iced_widget::Theme, _s| button::Style {
         background: if active {
-            Some(theme::color::CARD.into())
+            Some(byteui::theme::color::current().card.into())
         } else {
             None
         },
         text_color: fg,
         border: Border {
             color: if active {
-                theme::color::BORDER
+                byteui::theme::color::current().border
             } else {
                 Color::TRANSPARENT
             },
