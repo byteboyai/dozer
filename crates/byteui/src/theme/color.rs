@@ -57,7 +57,12 @@ impl ColorTokens {
             magenta: c(0xFF, 0x6E, 0xC7),
             blue: c(0x4D, 0x8C, 0xFF),
             lime: c(0xA3, 0xE6, 0x35),
-            scrim: Color { r: 0.0, g: 0.0, b: 0.0, a: 0.55 },
+            scrim: Color {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.55,
+            },
             tab_active_border: c(0xDC, 0xC9, 0xA3),
             tab_active_bg: c(0x15, 0x26, 0x30),
             tab_hover: c(0x15, 0x26, 0x30),

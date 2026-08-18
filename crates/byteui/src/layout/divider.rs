@@ -3,8 +3,8 @@
 use iced_widget::core::Element;
 use iced_widget::rule::{self, FillMode};
 
-pub fn horizontal<'a, Message: 'a>(
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+pub fn horizontal<'a, Message: 'a>()
+-> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     rule::horizontal(1.0)
         .style(|_theme: &iced_widget::Theme| rule::Style {
             color: crate::theme::color::current().border,
@@ -15,8 +15,8 @@ pub fn horizontal<'a, Message: 'a>(
         .into()
 }
 
-pub fn vertical<'a, Message: 'a>() -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>
-{
+pub fn vertical<'a, Message: 'a>()
+-> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     rule::vertical(1.0)
         .style(|_theme: &iced_widget::Theme| rule::Style {
             color: crate::theme::color::current().border,

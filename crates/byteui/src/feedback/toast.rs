@@ -5,7 +5,7 @@
 //! 提示的地方调 `push`,决定把 `view(&queue)` 结果叠在哪一层。
 
 use iced_widget::core::{Border, Element};
-use iced_widget::{container, Column};
+use iced_widget::{Column, container};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

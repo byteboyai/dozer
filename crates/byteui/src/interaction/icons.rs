@@ -175,7 +175,9 @@ impl IconKind {
             IconKind::Bot => include_bytes!("../../assets/icons/bot.svg"),
             IconKind::Brain => include_bytes!("../../assets/icons/brain.svg"),
             IconKind::MessageSquare => include_bytes!("../../assets/icons/message-square.svg"),
-            IconKind::BotMessageSquare => include_bytes!("../../assets/icons/bot-message-square.svg"),
+            IconKind::BotMessageSquare => {
+                include_bytes!("../../assets/icons/bot-message-square.svg")
+            }
             IconKind::Maximize => include_bytes!("../../assets/icons/maximize-2.svg"),
             IconKind::Home => include_bytes!("../../assets/icons/home.svg"),
             IconKind::RefreshCw => include_bytes!("../../assets/icons/refresh-cw.svg"),
@@ -287,11 +289,7 @@ pub fn icon_button_entry<'a, M: Clone + 'a>(
             // hover 不放金框——所以样式完全由 `active`/`card` 决定,与
             // 交互态无关。
             button::Style {
-                background: if card {
-                    Some(colors.card.into())
-                } else {
-                    None
-                },
+                background: if card { Some(colors.card.into()) } else { None },
                 border: Border {
                     color: if active {
                         colors.gold
@@ -344,8 +342,12 @@ pub fn with_tooltip<'a, M: Clone + 'a, R: iced_widget::core::text::Renderer + 'a
     content: impl Into<Element<'a, M, iced_widget::Theme, R>> + 'a,
     label: &'a str,
 ) -> Element<'a, M, iced_widget::Theme, R> {
-    let bubble =
-        container(text(label).size(12).color(crate::theme::color::current().cream)).padding([5, 9]);
+    let bubble = container(
+        text(label)
+            .size(12)
+            .color(crate::theme::color::current().cream),
+    )
+    .padding([5, 9]);
     Tooltip::new(content, bubble, tooltip::Position::Bottom)
         .gap(3)
         .style(tooltip_bubble_style())

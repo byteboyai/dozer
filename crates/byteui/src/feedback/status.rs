@@ -30,7 +30,9 @@ pub fn view<'a, Message: 'a>(
     let dot_color = kind.color(&colors);
     row![
         container(text("●").size(8).color(dot_color)),
-        text(label).size(crate::theme::font::body()).color(colors.cream),
+        text(label)
+            .size(crate::theme::font::body())
+            .color(colors.cream),
     ]
     .spacing(6)
     .align_y(iced_widget::core::alignment::Vertical::Center)

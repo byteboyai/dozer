@@ -18,7 +18,11 @@ pub fn view<'a, Message: Clone + 'a>(
                 Status::Active { is_toggled: true } | Status::Hovered { is_toggled: true }
             );
             toggler::Style {
-                background: if on { colors.gold.into() } else { colors.border.into() },
+                background: if on {
+                    colors.gold.into()
+                } else {
+                    colors.border.into()
+                },
                 background_border_width: 0.0,
                 background_border_color: iced_widget::core::Color::TRANSPARENT,
                 foreground: colors.cream.into(),
