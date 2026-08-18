@@ -3,3 +3,4 @@
 //! 分类与组件名——查对应 amis 文档页面即可理解组件的大致职责边界。
 
 pub mod theme;
+pub mod interaction;
