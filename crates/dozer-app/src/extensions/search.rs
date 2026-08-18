@@ -224,12 +224,12 @@ fn query_box(
     let body = if ws.query.is_empty() && !ws.query_editing {
         text("搜索内容…")
             .size(theme::font::body())
-            .color(theme::color::DIM)
+            .color(byteui::theme::color::current().dim)
     } else {
         let caret = if ws.query_editing { "▏" } else { "" };
         text(format!("{}{}", ws.query, caret))
             .size(theme::font::body())
-            .color(theme::color::CREAM)
+            .color(byteui::theme::color::current().cream)
     };
     let active = ws.query_editing || ws.running;
     button(body)
@@ -237,17 +237,17 @@ fn query_box(
         .width(Length::Fill)
         .padding([6, 8])
         .style(move |_t: &iced_widget::Theme, _s| button::Style {
-            background: Some(theme::color::BG.into()),
+            background: Some(byteui::theme::color::current().bg.into()),
             border: Border {
                 color: if active {
-                    theme::color::GOLD
+                    byteui::theme::color::current().gold
                 } else {
-                    theme::color::BORDER
+                    byteui::theme::color::current().border
                 },
                 width: 1.0,
                 radius: 4.0.into(),
             },
-            text_color: theme::color::CREAM,
+            text_color: byteui::theme::color::current().cream,
             ..button::Style::default()
         })
         .into()
@@ -273,14 +273,14 @@ fn results_list<'a>(
         col = col.push(
             text(rel.display().to_string())
                 .size(theme::font::label())
-                .color(theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
         );
         for hit in hits {
             col = col.push(
                 button(
                     text(format!(":{}: {}", hit.line_no, hit.line_text))
                         .size(theme::font::body())
-                        .color(theme::color::CREAM),
+                        .color(byteui::theme::color::current().cream),
                 )
                 .on_press(Message::Pick(hit.clone()))
                 .width(Length::Fill)
@@ -288,13 +288,13 @@ fn results_list<'a>(
                 .style(|_t: &iced_widget::Theme, s| {
                     let bg = match s {
                         button::Status::Hovered | button::Status::Pressed => {
-                            theme::color::TAB_HOVER
+                            byteui::theme::color::current().tab_hover
                         }
-                        _ => theme::color::BG,
+                        _ => byteui::theme::color::current().bg,
                     };
                     button::Style {
                         background: Some(bg.into()),
-                        text_color: theme::color::CREAM,
+                        text_color: byteui::theme::color::current().cream,
                         border: Border {
                             color: Color::TRANSPARENT,
                             width: 0.0,
@@ -337,18 +337,18 @@ pub fn search_modal<'a>(
     let title_row = row![
         text(scope_label)
             .size(theme::font::subtitle())
-            .color(theme::color::CREAM),
+            .color(byteui::theme::color::current().cream),
         iced_widget::space::horizontal(),
         button(
             text("×")
                 .size(theme::font::subtitle())
-                .color(theme::color::DIM)
+                .color(byteui::theme::color::current().dim)
         )
         .on_press(Message::SearchClose)
         .padding(0)
         .style(|_t: &iced_widget::Theme, _s| button::Style {
             background: None,
-            text_color: theme::color::DIM,
+            text_color: byteui::theme::color::current().dim,
             ..button::Style::default()
         }),
     ]
@@ -357,15 +357,15 @@ pub fn search_modal<'a>(
     let submit_btn = button(
         text(if ws.running { "搜索中…" } else { "搜索" })
             .size(theme::font::body())
-            .color(theme::color::CREAM),
+            .color(byteui::theme::color::current().cream),
     )
     .on_press(Message::QuerySubmit)
     .padding([6, 12])
     .style(|_t: &iced_widget::Theme, _s| button::Style {
-        background: Some(theme::color::CARD.into()),
-        text_color: theme::color::CREAM,
+        background: Some(byteui::theme::color::current().card.into()),
+        text_color: byteui::theme::color::current().cream,
         border: Border {
-            color: theme::color::CREAM,
+            color: byteui::theme::color::current().cream,
             width: 1.0,
             radius: 4.0.into(),
         },
@@ -385,7 +385,7 @@ pub fn search_modal<'a>(
         body = body.push(
             text("无匹配")
                 .size(theme::font::body())
-                .color(theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
         );
     } else if !ws.results.is_empty() {
         body = body.push(results_list(ws, project_root));
@@ -394,7 +394,7 @@ pub fn search_modal<'a>(
         body = body.push(
             text(format!("⚠ {err}"))
                 .size(theme::font::body())
-                .color(theme::color::RED),
+                .color(byteui::theme::color::current().red),
         );
     }
 
@@ -403,9 +403,9 @@ pub fn search_modal<'a>(
         .height(Length::Shrink)
         .max_height(640.0)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::CARD.into()),
+            background: Some(byteui::theme::color::current().card.into()),
             border: Border {
-                color: theme::color::BORDER,
+                color: byteui::theme::color::current().border,
                 width: 1.0,
                 radius: 6.0.into(),
             },
@@ -421,7 +421,7 @@ pub fn search_modal<'a>(
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_t: &iced_widget::Theme| container::Style {
-                background: Some(theme::color::SCRIM.into()),
+                background: Some(byteui::theme::color::current().scrim.into()),
                 ..container::Style::default()
             }),
     )
