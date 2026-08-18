@@ -939,7 +939,7 @@ pub fn view<'a>(
             .unwrap_or_else(|| root.display().to_string());
         // 根目录名称颜色跟着 git 状态走(与树行同款 `tree_state_color`),
         // 图标恒为灰(`DIM`),不再用 CREAM 高亮。
-        let root_state = delivery::dir_status(&root.to_path_buf(), &ws_state.git_statuses)
+        let root_state = delivery::dir_status(root, &ws_state.git_statuses)
             .unwrap_or(delivery::TreeState::Unchanged);
         let root_color = tree_state_color(root_state);
         let root_header = container(
@@ -1367,18 +1367,17 @@ pub fn branch_picker_popup(
         .is_some();
     // dirty → 除当前分支外的其余分支全部置灰禁用。
     let lock_others = is_dirty;
-    let region = theme::region::context_menu();
-    let mut list = column![].spacing(region.gap).width(Length::Shrink);
+    // 面板项/间隔统一走 `crate::menu`(样式基准即文件树右键菜单)。
+    let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
+        Vec::new();
     if ws_state.git_branches.is_empty() {
-        list = list.push(
+        items.push(
             text("暂无本地分支")
                 .size(theme::font::body())
-                .color(theme::color::DIM),
+                .color(theme::color::DIM)
+                .into(),
         );
     }
-    let pad_v = crate::theme::geometry::menu_pad_v();
-    let pad_h = crate::theme::geometry::menu_pad_h();
-    let gap = crate::theme::geometry::menu_gap();
     for name in &ws_state.git_branches {
         let is_current = Some(name.as_str()) == current;
         // 当前分支 GOLD 高亮 + 指示点;其余分支:dirty 锁定时 DIM 置灰,否则
@@ -1392,74 +1391,29 @@ pub fn branch_picker_popup(
         };
         let indicator: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
             if is_current {
-                iced_widget::text::Text::new("● ")
-                    .size(theme::font::body())
-                    .color(color)
-                    .into()
+                text("● ").size(theme::font::body()).color(color).into()
             } else {
                 iced_widget::space::Space::new()
                     .width(Length::Fixed(18.0))
                     .into()
             };
-        let row_btn = button(
-            row![
-                indicator,
-                text({
-                    let mut n = name.clone();
-                    if is_current && is_dirty {
-                        n.push_str("(Uncommitted)");
-                    }
-                    n
-                })
-                .size(theme::font::body())
-                .color(color),
-            ]
-            .spacing(gap)
-            .align_y(iced_widget::core::Alignment::Center),
-        )
-        .width(Length::Fixed(crate::theme::geometry::menu_item_width()))
-        .padding([pad_v, pad_h])
-        .style(move |_t: &iced_widget::Theme, s: button::Status| {
-            let base = button::Style {
-                background: None,
-                text_color: color,
-                ..button::Style::default()
-            };
-            // 置灰禁用项不响应 hover,始终透出容器底(同右键菜单"粘贴"禁用态)。
-            if lock_others && !is_current {
-                return base;
+        let label = {
+            let mut n = name.clone();
+            if is_current && is_dirty {
+                n.push_str("(Uncommitted)");
             }
-            match s {
-                button::Status::Hovered | button::Status::Pressed => button::Style {
-                    background: Some(theme::color::TAB_HOVER.into()),
-                    text_color: color,
-                    border: Border {
-                        color: Color::TRANSPARENT,
-                        width: 0.0,
-                        radius: 4.0.into(),
-                    },
-                    ..base
-                },
-                _ => base,
-            }
-        });
-        // dirty 锁定时,非当前分支不可点(不挂 `on_press`)。
-        let enabled = is_current || !lock_others;
-        let row_btn = if enabled {
-            row_btn.on_press(Message::BranchSwitch(name.clone()))
-        } else {
-            row_btn
+            n
         };
-        list = list.push(row_btn);
+        items.push(crate::menu::item_row(
+            Some(indicator),
+            label,
+            color,
+            // dirty 锁定时,非当前分支不可点(不挂 `on_press`)。
+            (is_current || !lock_others).then(|| Message::BranchSwitch(name.clone())),
+        ));
     }
-    let list = container(list)
-        .width(Length::Shrink)
-        .padding(region.padding)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: region.background.map(Into::into),
-            border: region.border.unwrap_or_default(),
-            ..container::Style::default()
-        });
+    let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        crate::menu::shell(items, Length::Shrink);
 
     // 把下拉框钉到 git 底栏正上方:左缘对齐文件面板(左图标栏 + project_pane
     // 左 padding),底缘对齐 git 底栏顶部(footbar 高 + project_pane 底 padding
@@ -1551,61 +1505,6 @@ fn search_box_widget(
         .into()
 }
 
-/// 右键菜单一项:图标(可选)+文字按钮。默认底色透出容器背景,hover/pressed
-/// 切到 `TAB_HOVER`(同顶栏/面板 tab 的 hover 背景 `#152630`);按下即
-/// `Pressed` 仍走同款背景,让按住期间有视觉反馈。文本保持 CREAM(在
-/// `TAB_HOVER` 深底上可读,与 tab hover 文字色一致)。图标颜色在创建时烘焙,
-/// 无法随 hover 切换——保持 CREAM(同文字色,差异不显著,避免过度工程去
-/// 重写 `icons::view` 的颜色级联)。
-///
-/// `icon` 传 `None` 时只渲染文字(用于"复制绝对路径/相对路径"这类不需要
-/// 图标的条目),文字起始 x 与有图标项的图标起始 x 对齐。
-fn menu_item<'a>(
-    icon: Option<icons::IconKind>,
-    label: &'static str,
-    msg: Message,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let content = match icon {
-        Some(icon) => row![
-            icons::view(icon, crate::theme::icon_size::row(), theme::color::CREAM),
-            text(label).size(theme::font::body()),
-        ],
-        None => row![text(label).size(theme::font::body())],
-    };
-    button(
-        content
-            .spacing(crate::theme::geometry::menu_gap())
-            .align_y(iced_widget::core::Alignment::Center),
-    )
-    .on_press(msg)
-    .width(Length::Fixed(crate::theme::geometry::menu_item_width()))
-    .padding([
-        crate::theme::geometry::menu_pad_v(),
-        crate::theme::geometry::menu_pad_h(),
-    ])
-    .style(|_t, s| {
-        let base = button::Style {
-            background: None,
-            text_color: theme::color::CREAM,
-            ..button::Style::default()
-        };
-        match s {
-            button::Status::Hovered | button::Status::Pressed => button::Style {
-                background: Some(theme::color::TAB_HOVER.into()),
-                text_color: theme::color::CREAM,
-                border: Border {
-                    color: Color::TRANSPARENT,
-                    width: 0.0,
-                    radius: 4.0.into(),
-                },
-                ..base
-            },
-            _ => base,
-        }
-    })
-    .into()
-}
-
 /// 右键菜单浮层本体:纵向按钮列表,`container` 用 `Padding{top,left,..}`
 /// 手算定位到点击坐标——`Stack` 各层共享同一份 bounds,不像原生系统菜单
 /// 那样自带绝对定位,这是本仓一贯的手算像素定位风格(`ime_cursor_area`/
@@ -1634,26 +1533,26 @@ pub fn context_menu_popup<'a>(
         .unwrap_or(false);
     // "搜索"恒置顶(对目录=全文搜该目录,对文件=搜该文件),与其余项用一条
     // 分隔线隔开。
-    items.push(menu_item(
+    items.push(crate::menu::item::<Message>(
         Some(icons::IconKind::Search),
         "搜索",
         Message::OpenSearch(menu.target.clone(), menu.is_dir),
     ));
     push_sep(&mut items);
     if menu.is_dir {
-        items.push(menu_item(
+        items.push(crate::menu::item::<Message>(
             Some(icons::IconKind::FilePlus),
             "新建文件",
             Message::NewFile(menu.target.clone()),
         ));
-        items.push(menu_item(
+        items.push(crate::menu::item::<Message>(
             Some(icons::IconKind::FolderPlus),
             "新建文件夹",
             Message::NewFolder(menu.target.clone()),
         ));
     }
     push_sep(&mut items);
-    items.push(menu_item(
+    items.push(crate::menu::item::<Message>(
         Some(icons::IconKind::Copy),
         "复制",
         Message::Copy(menu.target.clone(), menu.is_dir),
@@ -1662,82 +1561,55 @@ pub fn context_menu_popup<'a>(
         let has_clipboard = ws_state.tree_clipboard.is_some();
         let paste_msg = Message::Paste(menu.target.clone());
         items.push(if has_clipboard {
-            menu_item(Some(icons::IconKind::ClipboardPaste), "粘贴", paste_msg)
+            crate::menu::item::<Message>(Some(icons::IconKind::ClipboardPaste), "粘贴", paste_msg)
         } else {
             // 剪贴槽为空:置灰且不挂 on_press,真正不可点(同 P1L tab 箭头
             // "到头变灰"的既有处理口径,不是视觉变灰但仍能点)。背景透明
             // 透出容器底,不要 hover 高亮——保持视觉一致的"灰且不可点"。
-            // 文字不挂显式 color,让 button style 的 text_color(DIM)接管,
-            // 与 `menu_item` 让 text_color 接管 hover 切白的处理同源。
-            button(
-                row![
-                    icons::view(
-                        icons::IconKind::ClipboardPaste,
-                        crate::theme::icon_size::row(),
-                        theme::color::DIM
-                    ),
-                    text("粘贴").size(theme::font::body()),
-                ]
-                .spacing(crate::theme::geometry::menu_gap())
-                .align_y(iced_widget::core::Alignment::Center),
+            crate::menu::item_locked::<Message>(
+                Some(icons::IconKind::ClipboardPaste),
+                "粘贴",
+                theme::color::DIM,
             )
-            .width(Length::Fixed(crate::theme::geometry::menu_item_width()))
-            .padding([
-                crate::theme::geometry::menu_pad_v(),
-                crate::theme::geometry::menu_pad_h(),
-            ])
-            .style(|_t, _s| button::Style {
-                background: None,
-                text_color: theme::color::DIM,
-                ..button::Style::default()
-            })
-            .into()
         });
     }
     // 项目根不可删除/重命名:从菜单隐去这两项(其余目录均可)。
     if !is_root {
-        items.push(menu_item(
+        items.push(crate::menu::item::<Message>(
             Some(icons::IconKind::Trash),
             "删除",
             Message::DeleteRequest(menu.target.clone(), menu.is_dir),
         ));
-        items.push(menu_item(
+        items.push(crate::menu::item::<Message>(
             Some(icons::IconKind::Rename),
             "重命名",
             Message::RenameStart(menu.target.clone()),
         ));
     }
     push_sep(&mut items);
-    items.push(menu_item(
+    items.push(crate::menu::item::<Message>(
         None,
         "复制绝对路径",
         Message::CopyPath(menu.target.clone(), crate::project::PathKind::Absolute),
     ));
-    items.push(menu_item(
+    items.push(crate::menu::item::<Message>(
         None,
         "复制相对路径",
         Message::CopyPath(menu.target.clone(), crate::project::PathKind::Relative),
     ));
-    items.push(menu_item(
+    items.push(crate::menu::item::<Message>(
         Some(icons::IconKind::FolderOpen),
         "在 Finder 中打开",
         Message::RevealInFinder(menu.target.clone()),
     ));
-    items.push(menu_item(
+    items.push(crate::menu::item::<Message>(
         Some(icons::IconKind::RefreshCw),
         "从磁盘重新加载",
         Message::ReloadFromDisk,
     ));
 
-    let region = theme::region::context_menu();
-    let list = container(column(items).spacing(region.gap))
-        .width(Length::Shrink)
-        .padding(region.padding)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: region.background.map(Into::into),
-            border: region.border.unwrap_or_default(),
-            ..container::Style::default()
-        });
+    let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        crate::menu::shell(items, Length::Shrink);
 
     container(list)
         .width(Length::Fill)
@@ -1754,15 +1626,9 @@ pub fn context_menu_popup<'a>(
 /// 菜单项之间的细分隔线:1px BORDER 高度,左右各留一点内边距,与 macOS
 /// 系统菜单分组线同款。列项之间由 `column.spacing` 控间距,分隔线本身不
 /// 再额外加 padding。
-fn menu_separator<'a>() -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    container(iced_widget::Space::new())
-        .width(Length::Fixed(crate::theme::geometry::menu_item_width()))
-        .height(Length::Fixed(1.0))
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::BORDER.into()),
-            ..container::Style::default()
-        })
-        .into()
+pub(crate) fn menu_separator<'a>()
+-> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    crate::menu::separator::<Message>()
 }
 
 /// 删除确认框:居中浮层,显示目标文件名 + 确认/取消两个按钮。

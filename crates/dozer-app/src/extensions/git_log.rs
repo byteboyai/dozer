@@ -766,6 +766,10 @@ pub fn view<'a>(
     git_log_file_diff_split: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let error = state.error.as_deref();
+    // 面板内边距对齐文件树面板(`project_pane` region):header/body/footer
+    // 的分隔线与内容容器统一按同一水平 inset 排布,避免 Git 面板自己另起
+    // 一套 → 0 的 padding 与文件树/项目面板(8)错位。
+    let pad = theme::region::project_pane().padding;
     let head = crate::homespace::home_panel_head(crate::icons::IconKind::GitGraph, "Git");
 
     let loading = state.pending.is_some();
@@ -778,7 +782,7 @@ pub fn view<'a>(
         return container(
             column![head, text(text_content).color(theme::color::DIM)]
                 .spacing(8)
-                .padding(12),
+                .padding(pad),
         )
         .into();
     };
@@ -786,7 +790,7 @@ pub fn view<'a>(
         return container(
             column![head, text("没有可显示的提交").color(theme::color::DIM)]
                 .spacing(8)
-                .padding(12),
+                .padding(pad),
         )
         .into();
     }
@@ -851,6 +855,7 @@ pub fn view<'a>(
     ]
     .width(Length::Fill)
     .height(Length::Fill)
+    .padding(pad)
     .into()
 }
 
@@ -954,24 +959,29 @@ fn branch_picker_view<'a>(
     if !state.branch_picker_open {
         return iced_widget::Space::new().into();
     }
-    let mut list = column![].spacing(2).width(Length::Fill);
+    // 分支下拉里出现的纯文字态(切换中/暂无分支)不套按钮,直接进 items。
+    let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
+        Vec::new();
     if state.branch_switch_pending {
-        list = list.push(
+        items.push(
             text("切换中…")
                 .size(theme::font::body())
-                .color(theme::color::DIM),
+                .color(theme::color::DIM)
+                .into(),
         );
     }
     if state.branches.is_empty() {
-        list = list.push(
+        items.push(
             text("暂无本地分支")
                 .size(theme::font::body())
-                .color(theme::color::DIM),
+                .color(theme::color::DIM)
+                .into(),
         );
     }
     // dirty(有未提交改动)时锁定除当前分支外的其余分支;切换请求进行中时
     // 全部锁定——跟 `branch_toggle_button` 的 `branch_switch_pending` 禁用
-    // 语义一致。
+    // 语义一致。单项统一走 `crate::menu::item_row_fill`:同一套 hover/
+    // 锁定样式,但整行撑满 Git 面板宽度(窄面板里好用)。
     for name in &state.branches {
         let is_current = Some(name.as_str()) == head_branch;
         let locked = state.branch_switch_pending || (state.dirty && !is_current);
@@ -987,46 +997,16 @@ fn branch_picker_view<'a>(
         } else {
             name.clone()
         };
-        let row_btn = iced_widget::button(text(label).size(theme::font::body()).color(color))
-            .width(Length::Fill)
-            .padding([6, 10])
-            .style(
-                move |_t: &iced_widget::Theme, s: iced_widget::button::Status| {
-                    let base = iced_widget::button::Style {
-                        background: None,
-                        text_color: color,
-                        ..iced_widget::button::Style::default()
-                    };
-                    match s {
-                        iced_widget::button::Status::Hovered if !locked => {
-                            iced_widget::button::Style {
-                                background: Some(theme::color::TAB_HOVER.into()),
-                                ..base
-                            }
-                        }
-                        _ => base,
-                    }
-                },
-            );
-        let row_btn = if locked || is_current {
-            row_btn
-        } else {
-            row_btn.on_press(Message::BranchSwitch(name.clone()))
-        };
-        list = list.push(row_btn);
+        items.push(crate::menu::item_row_fill(
+            None,
+            label,
+            color,
+            (!locked && !is_current).then(|| Message::BranchSwitch(name.clone())),
+        ));
     }
-    let panel = container(list)
-        .padding(8)
-        .width(Length::Fill)
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::CARD.into()),
-            border: Border {
-                color: theme::color::BORDER,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..container::Style::default()
-        });
+    // 面板壳走 `crate::menu::shell`(context_menu 表面 = 文件树右键菜单基准)。
+    let panel: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        crate::menu::shell(items, Length::Fill);
     let dismiss = iced_widget::MouseArea::new(
         iced_widget::Space::new()
             .width(Length::Fill)

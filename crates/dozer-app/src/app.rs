@@ -1742,6 +1742,10 @@ pub struct App {
     /// 当前窗口逻辑尺寸(宽,高)。由 main.rs 建窗口/`WindowEvent::Resized`
     /// 时经 `set_window_size` 写入。
     window_size: (f32, f32),
+    /// 最近一次 `CursorMoved` 的光标逻辑坐标(宽,高),由 main.rs 每帧更新。
+    /// Todo 日历浮层用它当弹出锚点(点日历按钮时光标就在按钮上,等价于"按钮
+    /// 旁边"),镜像 `files.last_right_click` 的坐标复用套路。
+    pub(crate) last_cursor: (f32, f32),
     /// 正在拖拽的分隔线;`None` 表示未在拖拽。
     dragging: Option<Divider>,
     /// 正在拖拽的纵向(上下)分隔线;`None` 表示未在拖拽。
@@ -2069,6 +2073,7 @@ impl App {
             pending_zoom_toggle: false,
             pending_preview_zoom: false,
             window_size: theme::geometry::initial_window_size(),
+            last_cursor: (0.0, 0.0),
             dragging: None,
             dragging_row: None,
             tab_drag: None,
@@ -4732,6 +4737,15 @@ impl App {
             return;
         };
         let project_path = std::path::PathBuf::from(&project.path);
+        // 点日历按钮时的光标逻辑坐标,作为窗口级 overlay 的弹出锚点——先
+        // 记下再交给 `todo::update` 展开(它只管 `calendar_open`/`calendar_view`)。
+        if matches!(msg, todo::Message::CalendarOpen(_)) {
+            ws.todo.set_calendar_anchor(self.last_cursor);
+        }
+        // 点"指派"按钮时的光标逻辑坐标,作为派发选择层 overlay 的弹出锚点。
+        if matches!(msg, todo::Message::DispatchOpen(_)) {
+            ws.todo.set_dispatch_anchor(self.last_cursor);
+        }
         todo::update(&mut ws.todo, app_todo, msg, project_id, &project_path);
     }
 
@@ -5399,26 +5413,23 @@ impl App {
             Vec::new();
         // 仅可编辑文本文件显示"编辑"(见 `is_editable_extension`)。
         if menu.editable {
-            items.push(Self::preview_menu_item(
+            items.push(crate::menu::item::<Message>(
                 Some(icons::IconKind::Rename),
                 "编辑",
                 Message::PreviewEditOpen(menu.idx),
             ));
         }
-        items.push(Self::preview_menu_item(
+        items.push(crate::menu::item::<Message>(
             None,
             "关闭",
             Message::PreviewCloseTab(menu.idx),
         ));
 
-        let region = theme::region::context_menu();
-        let list = container(column(items).spacing(region.gap))
-            .padding(region.padding)
-            .style(move |_t: &iced_widget::Theme| container::Style {
-                background: region.background.map(Into::into),
-                border: region.border.unwrap_or_default(),
-                ..container::Style::default()
-            });
+        let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+            crate::menu::shell(
+                items,
+                Length::Fixed(crate::theme::geometry::menu_item_width()),
+            );
         // 文件预览的 webview 只铺在 tab 栏**下方**的内容区(这就是 tab 栏本身
         // 始终以 iced 显示、不被 webview 盖住的原因)。右键菜单若向下弹会压到
         // webview、被原生子视图挡住;故改为**向上弹**——以光标为底边、向上展开,
@@ -5453,26 +5464,23 @@ impl App {
         let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
             Vec::new();
         if menu.editable {
-            items.push(Self::preview_menu_item(
+            items.push(crate::menu::item::<Message>(
                 Some(icons::IconKind::Rename),
                 "编辑",
                 Message::ProjectPreviewEditOpen(menu.idx),
             ));
         }
-        items.push(Self::preview_menu_item(
+        items.push(crate::menu::item::<Message>(
             None,
             "关闭",
             Message::ProjectPreviewCloseTab(menu.idx),
         ));
 
-        let region = theme::region::context_menu();
-        let list = container(column(items).spacing(region.gap))
-            .padding(region.padding)
-            .style(move |_t: &iced_widget::Theme| container::Style {
-                background: region.background.map(Into::into),
-                border: region.border.unwrap_or_default(),
-                ..container::Style::default()
-            });
+        let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+            crate::menu::shell(
+                items,
+                Length::Fixed(crate::theme::geometry::menu_item_width()),
+            );
         let window_h = self.window_size.1;
         let bottom = (window_h - menu.y).max(0.0);
         container(list)
@@ -5499,7 +5507,7 @@ impl App {
             None => return column![].into(),
         };
         let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
-            vec![Self::preview_menu_item(
+            vec![crate::menu::item::<Message>(
                 Some(icons::IconKind::Trash),
                 "删除",
                 Message::Project(project::Message::LinkRemove {
@@ -5508,15 +5516,8 @@ impl App {
                 }),
             )];
 
-        let region = theme::region::context_menu();
-        let list = container(column(items).spacing(region.gap))
-            .width(Length::Shrink)
-            .padding(region.padding)
-            .style(move |_t: &iced_widget::Theme| container::Style {
-                background: region.background.map(Into::into),
-                border: region.border.unwrap_or_default(),
-                ..container::Style::default()
-            });
+        let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+            crate::menu::shell(items, Length::Shrink);
         container(list)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -5527,54 +5528,6 @@ impl App {
                 bottom: 0.0,
             })
             .into()
-    }
-
-    /// 预览 tab 右键菜单单项(图标可选 + 文字按钮)。hover/pressed 切到
-    /// `TAB_HOVER` 背景,与文件树右键菜单 `menu_item` 同款。
-    fn preview_menu_item<'a>(
-        icon: Option<icons::IconKind>,
-        label: &'static str,
-        msg: Message,
-    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-        let content = match icon {
-            Some(icon) => row![
-                icons::view(icon, crate::theme::icon_size::row(), theme::color::CREAM),
-                text(label).size(theme::font::body()),
-            ],
-            None => row![text(label).size(theme::font::body())],
-        };
-        button(
-            content
-                .spacing(crate::theme::geometry::menu_gap())
-                .align_y(iced_widget::core::Alignment::Center),
-        )
-        .on_press(msg)
-        .width(Length::Fixed(crate::theme::geometry::menu_item_width()))
-        .padding([
-            crate::theme::geometry::menu_pad_v(),
-            crate::theme::geometry::menu_pad_h(),
-        ])
-        .style(|_t, s| {
-            let base = button::Style {
-                background: None,
-                text_color: theme::color::CREAM,
-                ..button::Style::default()
-            };
-            match s {
-                button::Status::Hovered | button::Status::Pressed => button::Style {
-                    background: Some(theme::color::TAB_HOVER.into()),
-                    text_color: theme::color::CREAM,
-                    border: Border {
-                        color: Color::TRANSPARENT,
-                        width: 0.0,
-                        radius: 4.0.into(),
-                    },
-                    ..base
-                },
-                _ => base,
-            }
-        })
-        .into()
     }
 
     pub fn view(
@@ -5770,6 +5723,45 @@ impl App {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
+        } else if ws.todo.calendar_popup_open() {
+            // 日历浮层:窗口级 overlay。点弹层外任意处经 dismiss 收起(与右键
+            // 菜单/分支切换同款约定),弹层本体定位到点击按钮时的光标锚点。
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::Todo(todo::Message::CalendarClose));
+            match todo::todo_calendar_overlay(&self.todo, ws, self.window_size) {
+                Some(popup) => stack![base, dismiss, popup.map(Message::Todo)]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+                None => stack![base, dismiss]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+            }
+        } else if ws.todo.dispatch_popup_open() {
+            // 派发选择层:窗口级 overlay。点弹层外任意处经 dismiss 收起(与
+            // 右键菜单/分支切换同款约定),弹层本体列出可指派的 agent(带图标),
+            // 定位到点击"指派"按钮时的光标锚点。
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::Todo(todo::Message::DispatchClose));
+            match todo::todo_dispatch_overlay(ws, self.window_size) {
+                Some(popup) => stack![base, dismiss, popup.map(Message::Todo)]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+                None => stack![base, dismiss]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+            }
         } else {
             // 始终用 `Stack` 作根,与上面两个分支(删确认弹窗 / 右键菜单)保持一致:
             // 右键菜单开关会把根 widget 类型在 `Column`(`base.into()`)与 `Stack`
@@ -6906,16 +6898,6 @@ fn left_panel_area<'a>(
                 let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
                     return column![].into();
                 };
-                let tabs: Vec<todo::SessionTabSummary> = ws
-                    .tabs
-                    .iter()
-                    .chain(ws.ssh_tabs.iter())
-                    .map(|t| todo::SessionTabSummary {
-                        session_id: t.info.id.clone(),
-                        title: tab_title(t.agent, t.cwd.as_deref(), &t.info.name),
-                        alive: t.alive,
-                    })
-                    .collect();
                 let project_path = ws
                     .project
                     .as_ref()
@@ -6925,8 +6907,8 @@ fn left_panel_area<'a>(
                     &app.todo,
                     app,
                     &ws.todo,
+                    ws,
                     project_id,
-                    &tabs,
                     project_path.as_deref(),
                     Length::FillPortion(list_portion),
                     zone_pane_border(zone, lc),

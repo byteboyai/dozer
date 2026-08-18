@@ -8,10 +8,13 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use crate::app::{App, HoverId};
-use crate::workspace::AddrEvent;
+use crate::workspace::{AddrEvent, Workspace, agent_icon, tab_title};
 use crate::{icons, theme};
-use iced_widget::core::{Border, Color, Element, Length, mouse};
-use iced_widget::{MouseArea, button, column, container, rich_text, row, scrollable, span, text};
+use dozer_core::protocol::AgentKind;
+use iced_widget::core::{Border, Color, Element, Length, Padding, mouse};
+use iced_widget::{
+    MouseArea, button, column, container, rich_text, row, scrollable, space, span, text,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TodoItem {
@@ -344,12 +347,18 @@ pub struct WorkspaceState {
     /// 搜索框是否处于自绘编辑态(main.rs 键盘路由用)。
     search_editing: bool,
     dispatch_open: Option<usize>,
+    /// 派发选择层浮层弹出锚点(逻辑像素,取点击"指派"按钮时的光标位置)。
+    /// 窗口级 overlay 靠它定位到按钮旁边;关闭时清空。
+    dispatch_anchor: Option<(f32, f32)>,
     /// 日历日期选择器展开态(卡片下标),`None` = 未展开。跟 `dispatch_open`
     /// 同一种"同时只能有一个"模型。
     calendar_open: Option<usize>,
     /// 日历当前展示的 (年, 月)。打开时初始化成当前月,上一月/下一月导航
     /// 只改这个视图态,不落盘。
     calendar_view: (i32, u32),
+    /// 日历浮层弹出锚点(逻辑像素,取点击日历按钮时的光标位置)。窗口级
+    /// overlay 靠它定位到按钮旁边;关闭时清空。
+    calendar_anchor: Option<(f32, f32)>,
     /// 任务内容行内编辑态(卡片下标, 草稿)。点卡片任务文字进入,
     /// `ContentEvent(Submit)` 落盘改写任务文字。
     editing_content: Option<(usize, String)>,
@@ -410,11 +419,25 @@ impl WorkspaceState {
     /// 关闭派发选择层(选中目标后,或 Esc)。
     pub fn close_dispatch_popup(&mut self) {
         self.dispatch_open = None;
+        self.dispatch_anchor = None;
+    }
+
+    /// 记录派发选择层浮层弹出锚点(点击"指派"按钮时的光标逻辑坐标),供
+    /// 窗口级 overlay 定位用。`app.rs::todo_message` 在 `DispatchOpen` 时写入。
+    pub fn set_dispatch_anchor(&mut self, anchor: (f32, f32)) {
+        self.dispatch_anchor = Some(anchor);
     }
 
     /// 关闭日历选择器(选中日期后,或 Esc / 点外部)。
     pub fn close_calendar_popup(&mut self) {
         self.calendar_open = None;
+        self.calendar_anchor = None;
+    }
+
+    /// 记录日历浮层弹出锚点(点击按钮时的光标逻辑坐标),供窗口级 overlay
+    /// 定位用。`app.rs::todo_message` 在 `CalendarOpen` 时写入。
+    pub fn set_calendar_anchor(&mut self, anchor: (f32, f32)) {
+        self.calendar_anchor = Some(anchor);
     }
 
     /// 上次成功读取时 `.dozer/todo.md` 的 mtime,轮询靠比较它决定要不要
@@ -570,14 +593,6 @@ impl AppState {
     }
 }
 
-/// `view` 渲染派发相关 UI 需要的终端会话摘要,由内核从 `ws.tabs` 摘出来
-/// 传入——`extensions::todo` 不知道 `SessionTab` 这个终端领域的类型。
-pub struct SessionTabSummary {
-    pub session_id: String,
-    pub title: String,
-    pub alive: bool,
-}
-
 /// Todo 面板自己的消息类型。`DispatchToExisting` 涉及终端
 /// 会话读写,内核在到达 `update` 之前就会拦截处理,不会真的传进
 /// `update`——传进来会 `unreachable!`(同 Git Log 试点 `LoadMore` 的
@@ -644,6 +659,9 @@ pub enum Message {
     /// 构造),转交内核的悬停动画表(`app.rs::set_hover`),与全应用其它卡片
     /// 用同一套 hover 机制。
     Hover(HoverId, bool),
+    /// 点 footbar 的"清空列表"按钮。**功能尚未实现**:`update` 里是
+    /// no-op,仅占位——UI 已就位,后续接入清空逻辑时在此落地。
+    ClearList,
 }
 
 /// 重读 `.dozer/todo.md`,刷新 `items`/`mtime`。文件不存在/读失败按空
@@ -836,6 +854,8 @@ pub fn update(
     match msg {
         // 卡片悬停由内核 `App::update` 拦截转发到 `set_hover`,不会到这。
         Message::Hover(_, _) => {}
+        // footbar"清空列表"按钮:功能尚未实现,仅占位。
+        Message::ClearList => {}
         Message::Toggle(idx) => {
             let Some(item) = ws_state.items.get(idx) else {
                 return;
@@ -872,15 +892,14 @@ pub fn update(
             // 独立的事——纯点击(不移动)也会落到这里,但松手时
             // source==target 不写盘,只是正常选中切换(同 `TabDragMove`
             // 的"按住=准备拖,移动才换位"语义)。
-            if let Some(i) = idx {
-                if let Some(item) = ws_state.items.get(i) {
-                    if !item.done {
-                        ws_state.drag = Some(TodoDrag {
-                            source_idx: i,
-                            target_idx: i,
-                        });
-                    }
-                }
+            if let Some(i) = idx
+                && let Some(item) = ws_state.items.get(i)
+                && !item.done
+            {
+                ws_state.drag = Some(TodoDrag {
+                    source_idx: i,
+                    target_idx: i,
+                });
             }
         }
         Message::SearchEditStart => ws_state.search_editing = true,
@@ -1076,8 +1095,8 @@ pub fn view<'a>(
     app_state: &'a AppState,
     app: &App,
     ws_state: &'a WorkspaceState,
+    ws: &Workspace,
     project_id: i64,
-    tabs: &[SessionTabSummary],
     project_path: Option<&Path>,
     sidebar_width: Length,
     sidebar_outer: Border,
@@ -1104,7 +1123,12 @@ pub fn view<'a>(
                 .meta_for(project_id, key)
                 .and_then(|m| m.dispatch.as_ref());
             let target_alive = dispatch
-                .map(|d| tabs.iter().any(|t| t.session_id == d.session_id && t.alive))
+                .map(|d| {
+                    ws.tabs
+                        .iter()
+                        .chain(ws.ssh_tabs.iter())
+                        .any(|t| t.alive && t.info.id == d.session_id)
+                })
                 .unwrap_or(false);
             todo_display_state(item, dispatch, target_alive)
         })
@@ -1146,12 +1170,11 @@ pub fn view<'a>(
 
     // ---- 右栏 pane：tab 段 + 视图主体 ----
     let tabs_bar = todo_view_tabs(ws_state.view_mode);
-    let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = match ws_state
-        .view_mode
-    {
-        TodoViewMode::List => todo_list_view(app_state, app, ws_state, project_id, &states, tabs),
-        TodoViewMode::Markdown => todo_markdown_view(project_path, ws_state),
-    };
+    let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        match ws_state.view_mode {
+            TodoViewMode::List => todo_list_view(app_state, app, ws_state, project_id, &states),
+            TodoViewMode::Markdown => todo_markdown_view(project_path, ws_state),
+        };
     let content_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         container(column![tabs_bar, crate::app::tab_divider(), body].height(Length::Fill))
             .width(content_width)
@@ -1300,6 +1323,76 @@ fn todo_footer_bar<'a>(
         .into()
 }
 
+/// 面板最底栏(位于"新增任务"输入框之下):左侧任务计数,右侧"清空列表"
+/// 按钮。样式对齐 `files.rs` 的 `git_footer_bar`(顶部分隔线 + 左图标/文案
+/// + 右侧操作按钮)。**清空功能尚未实现**:`清空列表` 走 `Message::ClearList`,
+/// 在 `update` 里是 no-op,这里只负责把 UI 摆出来。
+fn todo_clear_footer_bar<'a>(
+    ws_state: &'a WorkspaceState,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let count = ws_state.items.len();
+    let label = text(format!("{count} 个任务"))
+        .size(theme::font::label())
+        .color(theme::color::DIM);
+
+    let clear = button(
+        row![
+            icons::view(
+                icons::IconKind::Trash,
+                crate::theme::icon_size::row(),
+                theme::color::CREAM,
+            ),
+            text("清空列表")
+                .size(theme::font::label())
+                .color(theme::color::CREAM),
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center),
+    )
+    .on_press(Message::ClearList)
+    .padding([4, 8])
+    .style(|_t: &iced_widget::Theme, _s| button::Style {
+        background: Some(theme::color::BG.into()),
+        border: Border {
+            color: theme::color::BORDER,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        text_color: theme::color::CREAM,
+        ..button::Style::default()
+    });
+
+    let bar = row![
+        icons::view(
+            icons::IconKind::ListTodo,
+            crate::theme::icon_size::row(),
+            theme::color::CREAM,
+        ),
+        label,
+        space::horizontal(),
+        clear,
+    ]
+    .spacing(6)
+    .align_y(iced_widget::core::Alignment::Center);
+
+    let top_line = container(iced_widget::Space::new())
+        .width(Length::Fill)
+        .height(Length::Fixed(1.0))
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::color::BORDER.into()),
+            ..container::Style::default()
+        });
+
+    container(column![top_line, bar].spacing(4))
+        .width(Length::Fill)
+        .padding([6, 0])
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: None,
+            ..container::Style::default()
+        })
+        .into()
+}
+
 /// 顶部搜索框:自绘输入(键盘走 main.rs 拦截层路由成 `SearchEvent`,不用
 /// iced 原生 `text_input`——本 app 每帧重建界面,原生输入留不住焦点,打字
 /// 会漏进已聚焦的终端)。左侧是输入框本体(点 `SearchEditStart` 进编辑态),
@@ -1368,15 +1461,8 @@ fn todo_list_view<'a>(
     ws_state: &'a WorkspaceState,
     project_id: i64,
     states: &[TodoState],
-    tabs: &[SessionTabSummary],
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let visible_idx = filter_todos(&ws_state.items, states, ws_state.filter, &ws_state.search);
-
-    let existing_tabs: Vec<(&str, String)> = tabs
-        .iter()
-        .filter(|t| t.alive)
-        .map(|t| (t.session_id.as_str(), t.title.clone()))
-        .collect();
 
     // 搜索框的水平/垂直间距对齐任务卡片的间距规格(卡片列表 `list` 是
     // `spacing(8)` + `padding([0, 20])`):左右 20、上下 8,不再贴边顶到
@@ -1449,7 +1535,6 @@ fn todo_list_view<'a>(
                 ws_state,
                 project_id,
                 states,
-                &existing_tabs,
                 display_no + 1,
                 idx,
                 grabbing,
@@ -1466,7 +1551,6 @@ fn todo_list_view<'a>(
                 ws_state,
                 project_id,
                 states,
-                &existing_tabs,
                 pending_len + i + 1,
                 idx,
                 grabbing,
@@ -1486,6 +1570,7 @@ fn todo_list_view<'a>(
             ))
             .style(|_t, _s| crate::scrollbar::scrollbar_style()),
         todo_footer_bar(ws_state),
+        todo_clear_footer_bar(ws_state),
     ]
     .height(Length::Fill)
     .into()
@@ -1549,18 +1634,12 @@ fn todo_markdown_view<'a>(
 /// 否则 → `todo_card`。从 `todo_list_view` 的循环体里拆出来,好让 pending/
 /// done 两段各自的 `for` 循环别重复这段查表+分支逻辑。
 #[allow(clippy::too_many_arguments)]
-fn todo_list_row<'a, 'b>(
+fn todo_list_row<'a>(
     app_state: &'a AppState,
     app: &App,
     ws_state: &'a WorkspaceState,
     project_id: i64,
     states: &[TodoState],
-    // 独立生命周期 `'b`,不绑定到返回值的 `'a`:`todo_card` 分支返回
-    // `Element<'static, ..>`(内部已经把要用的数据 clone 出来,不持有
-    // 任何借用),调用方传进来的 `existing_tabs` 常是函数体内构造的短命
-    // 局部 `Vec`,跟 `'a` 混在一起会逼编译器把这个短生命周期错误地传染
-    // 给整个返回值。
-    existing_tabs: &'b [(&'b str, String)],
     number: usize,
     idx: usize,
     grabbing: bool,
@@ -1584,10 +1663,6 @@ fn todo_list_row<'a, 'b>(
         meta,
         dispatch,
         ws_state.selected_row == Some(idx),
-        ws_state.dispatch_open == Some(idx),
-        ws_state.calendar_open == Some(idx),
-        ws_state.calendar_view,
-        existing_tabs,
         grabbing,
         is_drag_source,
         hovered,
@@ -1615,12 +1690,12 @@ fn drag_insert_indicator() -> Element<'static, Message, iced_widget::Theme, iced
 }
 
 /// 统一卡片组件：列表视图使用的边框卡片视觉，取代原来的
-/// `todo_row`(扁平高亮行)。结构自上而下：编号 + 日期徽章(calendar 图标 →
-/// 日历选择器)+ 状态静态文字 → checkbox + 任务文字(点文字进入内容编辑)
-/// → 指派文本按钮(仅待办未派发时)。选中/一般/hover 三态走统一卡片样式
-/// (选中=金边、hover=金边+填充、一般态=描边)。
+/// `todo_row`(扁平高亮行)。结构自上而下：编号 + 状态(`#002 - 待办` 形式,
+/// 状态紧跟序号)+ 日期徽章(calendar 图标 → 日历选择器)→ checkbox + 任务文字
+/// (点文字进入内容编辑)→ 指派文本按钮(仅待办未派发时)。选中/一般/hover 三态
+/// 走统一卡片样式(选中=金边、hover=金边+填充、一般态=描边)。
 #[allow(clippy::too_many_arguments)]
-fn todo_card<'a, 'b>(
+fn todo_card<'a>(
     number: usize,
     idx: usize,
     item: &'a TodoItem,
@@ -1628,15 +1703,6 @@ fn todo_card<'a, 'b>(
     meta: Option<&'a TodoTaskMeta>,
     dispatch: Option<&'a DispatchRecord>,
     selected: bool,
-    dispatch_open: bool,
-    calendar_open: bool,
-    calendar_view: (i32, u32),
-    // 独立生命周期 `'b`,不绑定到返回值的 `'static`:`todo_card` 返回
-    // `Element<'static>`(内部已把 `existing_tabs` 的数据 clone 出来,不持有
-    // 任何借用),调用方传进来的 `existing_tabs` 常是 `todo_list_view` 里构造的
-    // 短命局部 `Vec`,跟 `'a` 混在一起会逼编译器把这个短生命周期错误地传染
-    // 给整个返回值(见 E0515)。
-    existing_tabs: &'b [(&'b str, String)],
     grabbing: bool,
     is_drag_source: bool,
     hovered: bool,
@@ -1677,16 +1743,21 @@ fn todo_card<'a, 'b>(
         .into();
 
     // 状态:静态文字(不再是可点击 pill),颜色随三态走——待办=青、进行中=金、
-    // 完成=灰。位置从底部右对齐移到顶部行、紧跟日期徽章之后。
+    // 完成=灰。紧跟在序号之后(如 `#002 - 待办`),日期徽章仍居右。
     let status_label = state_label(state);
+
+    let status_sep = text(" - ")
+        .size(theme::font::caption())
+        .color(theme::color::DIM);
 
     let top_row = row![
         number_text,
+        status_sep,
+        status_label,
         iced_widget::space::Space::new()
             .width(Length::Fill)
             .height(Length::Shrink),
         date_badge,
-        status_label,
     ]
     .align_y(iced_widget::core::alignment::Vertical::Center)
     .spacing(8);
@@ -1774,16 +1845,34 @@ fn todo_card<'a, 'b>(
         .spacing(8)
         .align_y(iced_widget::core::alignment::Vertical::Center);
     if state == TodoState::Pending && dispatch.is_none() {
+        // 样式对齐 `project.rs::project_footer_bar` 的「修复项目」按钮:
+        // BG 底 + 1px BORDER 描边 + 圆角 4 + CREAM 文字,label 字号 + 内边距
+        // [6,8]。文字后跟 ChevronRight 图标,提示点击会弹出可指派的 agent
+        // 列表(窗口级 overlay)。
         let assign_btn = button(
-            text("指派")
-                .size(theme::font::caption())
-                .color(theme::color::GOLD),
+            row![
+                text("指派")
+                    .size(theme::font::label())
+                    .color(theme::color::CREAM),
+                icons::view(
+                    icons::IconKind::ChevronRight,
+                    crate::theme::icon_size::row(),
+                    theme::color::CREAM,
+                ),
+            ]
+            .spacing(4)
+            .align_y(iced_widget::core::alignment::Vertical::Center),
         )
         .on_press(Message::DispatchOpen(idx))
-        .padding([4, 6])
+        .padding([6, 8])
         .style(|_t: &iced_widget::Theme, _s| button::Style {
-            background: None,
-            text_color: theme::color::GOLD,
+            background: Some(theme::color::BG.into()),
+            border: Border {
+                color: theme::color::BORDER,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            text_color: theme::color::CREAM,
             ..button::Style::default()
         });
         bottom = bottom.push(assign_btn);
@@ -1823,17 +1912,7 @@ fn todo_card<'a, 'b>(
             }
         });
 
-    let mut stacked = column![card];
-    if dispatch_open {
-        stacked = stacked.push(todo_dispatch_popup(idx, existing_tabs));
-    }
-    if calendar_open {
-        stacked = stacked.push(todo_calendar_popup(
-            idx,
-            calendar_view,
-            meta.and_then(|m| m.plan_date.clone()),
-        ));
-    }
+    let stacked = column![card];
     // 拖拽换位感应层:补 `on_move`(光标移动过本卡就发 `DragMove`)+
     // `on_press`(`RowSelect` 选中并武装拖拽——点文字/勾选/日期/指派 这些
     // 子元素各自吞掉自己的"按下",只有落在卡片空白处才走到这里)。拖拽中
@@ -1850,43 +1929,74 @@ fn todo_card<'a, 'b>(
     }
 }
 
-/// Todo 派发选择层：列出当前项目存活的 agent tab(不再提供"新建 agent 会话"
-/// 入口——见 2026-08-17 优化),样式对齐 `agent_picker_popup`(CARD 底 +
-/// BORDER 描边)。挂在触发它的那一行下方,不需要额外的坐标计算。
-fn todo_dispatch_popup<'b>(
-    idx: usize,
-    existing_tabs: &'b [(&'b str, String)],
-) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let mut col = column![].spacing(2);
-    for (session_id, title) in existing_tabs {
-        col = col.push(
-            button(
-                text(title.clone())
-                    .size(theme::font::body())
-                    .color(theme::color::CREAM),
+/// Todo 派发选择层(窗口级 overlay 版):列出当前项目存活的 agent tab(不再
+/// 提供"新建 agent 会话"入口——见 2026-08-17 优化),每个条目前带该 agent
+/// 的品牌图标。样式统一走 `crate::menu::item_row_fill` + `menu::shell`(基准
+/// 即文件树右键菜单),定位靠 `dispatch_anchor`(点"指派"按钮时的光标,等价于
+/// "按钮旁边")。返回 `None` 表示没有可弹的层(`dispatch_open` 为真但锚点缺失,
+/// 理论上不会到——调用方降级为只铺 dismiss 收起层)。
+pub fn todo_dispatch_overlay<'a>(
+    ws: &Workspace,
+    window_size: (f32, f32),
+) -> Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> {
+    let ws_state = &ws.todo;
+    let idx = ws_state.dispatch_open?;
+    let anchor = ws_state.dispatch_anchor?;
+    // 当前项目存活的终端/SSH 会话都是可派发目标;session_id 与展示标题沿用
+    // `app.rs` 原 `SessionTabSummary` 的算法(`info.id` + `tab_title`)。
+    let tabs: Vec<(String, AgentKind, String)> = ws
+        .tabs
+        .iter()
+        .chain(ws.ssh_tabs.iter())
+        .filter(|t| t.alive)
+        .map(|t| {
+            (
+                t.info.id.clone(),
+                t.agent,
+                tab_title(t.agent, t.cwd.as_deref(), &t.info.name),
             )
-            .on_press(Message::DispatchToExisting(idx, session_id.to_string()))
-            .width(Length::Fill)
-            .padding([6, 12])
-            .style(|_t: &iced_widget::Theme, _s| button::Style {
-                background: None,
-                text_color: theme::color::CREAM,
-                ..button::Style::default()
-            }),
-        );
-    }
-    container(col)
-        .padding(6)
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::CARD.into()),
-            border: Border {
-                color: theme::color::BORDER,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..container::Style::default()
         })
-        .into()
+        .collect();
+
+    let items: Vec<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> = tabs
+        .iter()
+        .map(|(session_id, agent, title)| {
+            let icon = icons::view(
+                agent_icon(*agent),
+                crate::theme::icon_size::row(),
+                theme::color::CREAM,
+            );
+            crate::menu::item_row_fill(
+                Some(icon),
+                title.clone(),
+                theme::color::CREAM,
+                Some(Message::DispatchToExisting(idx, session_id.clone())),
+            )
+        })
+        .collect();
+    let popup = crate::menu::shell(items, Length::Shrink);
+
+    // 全窗口容器 + padding 把弹层推到锚点;窗口边界钳制,避免超出右下。
+    let (ax, ay) = anchor;
+    let window_w = window_size.0;
+    let window_h = window_size.1;
+    // 菜单估算尺寸:常宽约 220(图标 + 文字 + 内边距)、高约每项 28 + 内边距。
+    let pop_w = 224.0_f32;
+    let pop_h = 240.0_f32;
+    let x = ax.min((window_w - pop_w).max(0.0));
+    let y = ay.min((window_h - pop_h).max(0.0));
+    Some(
+        container(popup)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(Padding {
+                top: y,
+                left: x,
+                right: 0.0,
+                bottom: 0.0,
+            })
+            .into(),
+    )
 }
 
 /// 状态静态文字：三态只显示彩色文字,没有按钮/菜单行为(状态不再可点击切换,
@@ -1905,7 +2015,7 @@ fn state_label(
 
 /// 日历日期选择器：点卡片日期徽章弹出,展示 `calendar_view` 那个月,上一月/
 /// 下一月导航,点某天把 `plan_date` 写成 "MM-DD" 并关闭。样式对齐
-/// `todo_dispatch_popup`(CARD 底 + BORDER 描边)。
+/// `todo_dispatch_overlay`(CARD 底 + BORDER 描边)。
 fn todo_calendar_popup(
     idx: usize,
     view: (i32, u32),
@@ -1914,7 +2024,16 @@ fn todo_calendar_popup(
     let (y, m) = view;
     let first_wd = first_weekday_of_month(y, m);
     let dim = days_in_month(y, m);
-    let selected_md = selected.as_deref().and_then(parse_month_day);
+    // 没有 plan_date 时默认高亮"今天"(仅当当前视图月就是当前月);有
+    // plan_date 则高亮那天的 MM-DD。满足"弹出时默认选中当天日期"。
+    let selected_md = selected.as_deref().and_then(parse_month_day).or_else(|| {
+        let (ty, tm, td) = today_ymd();
+        if tm == m && ty == y {
+            Some((tm, td))
+        } else {
+            None
+        }
+    });
 
     let nav_style = |_t: &iced_widget::Theme, _s| button::Style {
         background: None,
@@ -2029,6 +2148,54 @@ fn todo_calendar_popup(
             ..container::Style::default()
         })
         .into()
+}
+
+/// Todo 日历日期选择器的窗口级 overlay 版本:不再挂在卡片下方,而是铺在
+/// 整张窗口之上、定位到点击按钮时的光标锚点(像右键菜单一样出现在按钮旁
+/// 边)。返回 `None` 表示没有可弹的日历(`calendar_open` 为真但锚点/项目
+/// 缺失,理论上不会到——调用方降级为只铺 dismiss 收起层,避免卡在打开态)。
+///
+/// `app_state` 取 plan_date、`window_size` 用于边界钳制——二者都是 `App`
+/// 的私有字段,不能让本模块直接碰 `App`,沿用 `todo::update`/`view` 把
+/// `app_state` 当参数传进来的约定。
+pub fn todo_calendar_overlay<'a>(
+    app_state: &AppState,
+    ws: &Workspace,
+    window_size: (f32, f32),
+) -> Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> {
+    let ws_state = &ws.todo;
+    let idx = ws_state.calendar_open?;
+    let anchor = ws_state.calendar_anchor?;
+    let project_id = ws.project.as_ref()?.id;
+    let item = ws_state.items.get(idx)?;
+    let key = todo_line_key(&item.text);
+    let selected = app_state
+        .meta_for(project_id, key)
+        .and_then(|m| m.plan_date.clone());
+    let popup = todo_calendar_popup(idx, ws_state.calendar_view, selected);
+
+    // 全窗口容器 + padding 把弹层推到锚点;窗口边界钳制,避免日历超出右下。
+    let (ax, ay) = anchor;
+    let window_w = window_size.0;
+    let window_h = window_size.1;
+    // 日历估算尺寸:7 列 × 28px + 内边距(8×2)≈ 212 宽;标题 + 星期行 + 6
+    // 行 × 24px + 间距 + 内边距 ≈ 240 高。
+    let pop_w = 216.0_f32;
+    let pop_h = 240.0_f32;
+    let x = ax.min((window_w - pop_w).max(0.0));
+    let y = ay.min((window_h - pop_h).max(0.0));
+    Some(
+        container(popup)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(Padding {
+                top: y,
+                left: x,
+                right: 0.0,
+                bottom: 0.0,
+            })
+            .into(),
+    )
 }
 
 /// 任务内容行内编辑态：checkbox 占位 + 一个自绘输入框，回车提交。自绘原因

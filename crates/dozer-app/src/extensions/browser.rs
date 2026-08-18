@@ -1168,22 +1168,12 @@ fn star_button(
 }
 
 /// tab 栏"收藏夹"下拉面板触发按钮,颜色恒定(不像星标那样带收藏状态)。
+/// 样式统一走 `crate::menu::item_row_fill`(整行撑满所属面板宽)。
 fn bookmark_menu_row(
     label: String,
     msg: Message,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    button(lh(text(label)
-        .size(theme::font::body())
-        .color(theme::color::CREAM)))
-    .on_press(msg)
-    .width(Length::Fill)
-    .padding([6, 12])
-    .style(|_t: &iced_widget::Theme, _s| button::Style {
-        background: None,
-        text_color: theme::color::CREAM,
-        ..button::Style::default()
-    })
-    .into()
+    crate::menu::item_row_fill(None, label, theme::color::CREAM, Some(msg))
 }
 
 /// 星标小菜单:未收藏显示"加入…",已收藏显示"移出…"(打勾态)。
@@ -1201,17 +1191,17 @@ fn star_menu_popup(
     };
     let status = bookmark_status(&state.bookmarks, &url, project_id);
 
-    let mut col = column![match status.global {
-        Some(id) => bookmark_menu_row("移出全局收藏".to_string(), Message::BookmarkRemove(id)),
-        None => bookmark_menu_row(
-            "加入全局收藏".to_string(),
-            Message::BookmarkAdd(BookmarkScope::Global)
-        ),
-    }]
-    .spacing(2);
+    let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
+        vec![match status.global {
+            Some(id) => bookmark_menu_row("移出全局收藏".to_string(), Message::BookmarkRemove(id)),
+            None => bookmark_menu_row(
+                "加入全局收藏".to_string(),
+                Message::BookmarkAdd(BookmarkScope::Global),
+            ),
+        }];
 
     if project_id.is_some() {
-        col = col.push(match status.project {
+        items.push(match status.project {
             Some(id) => {
                 bookmark_menu_row("移出本项目收藏".to_string(), Message::BookmarkRemove(id))
             }
@@ -1222,18 +1212,7 @@ fn star_menu_popup(
         });
     }
 
-    container(col)
-        .padding(6)
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::CARD.into()),
-            border: Border {
-                color: theme::color::BORDER,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..container::Style::default()
-        })
-        .into()
+    crate::menu::shell(items, Length::Fill)
 }
 
 /// 一组收藏条目:文件夹图标 + 标题(点击新开 tab)+ `×` 删除按钮,风格照抄

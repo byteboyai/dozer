@@ -12,6 +12,7 @@ mod homespace;
 mod icons;
 mod keymap;
 mod layout;
+mod menu;
 mod open_projects;
 mod osc;
 mod panel_layouts;
@@ -599,6 +600,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             match event {
                 WindowEvent::CursorMoved { position, .. } => {
                     *cursor_phys = *position;
+                    // 记录光标逻辑坐标供 Todo 日历浮层当弹出锚点(点日历按钮
+                    // 时光标正好在按钮上,等价"按钮旁边"),镜像右键菜单用的
+                    // `last_right_click` 套路。
+                    let scale = window.scale_factor();
+                    app.last_cursor = (
+                        (cursor_phys.x / scale) as f32,
+                        (cursor_phys.y / scale) as f32,
+                    );
                     // 外部文件拖拽悬停:实时 re-hit-test 文件树目录行,把
                     // 命中结果作为 `FileDragHover` 刷给 `drag_hover`,驱动
                     // 目录行整行金色高亮(用户要求的"拖拽时实时高亮")。命中

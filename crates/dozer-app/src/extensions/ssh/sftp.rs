@@ -623,12 +623,11 @@ pub fn sftp_pane_view<'a>(
 /// 右键菜单浮层:按 `context_menu` 的 `is_local` 决定只出现"上传"(本地行)
 /// 或"下载"(远程行)——不渲染无意义的禁用态(见 plan 的 UI 简化决定)。
 /// 菜单本身固定叠在面板左上角,不追光标像素定位(v1 简化,够用即可)。
-/// 样式就地照抄 `files::menu_item` 的按钮 / `context_menu_popup` 的表面
-/// 风格(CARD 底 + BORDER 边),consistency 优先于再造共享 helper。
+/// 表面/单项样式统一走 `crate::menu`(基准即文件树右键菜单)。
 fn sftp_context_menu<'a>(
     state: &'a SftpTabState,
 ) -> iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    use iced_widget::{button, column, container, row, text};
+    use iced_widget::{column, container};
     let Some((is_local, _path)) = &state.context_menu else {
         return container(column![]).into();
     };
@@ -647,59 +646,11 @@ fn sftp_context_menu<'a>(
         )
     };
     let item: iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        button(
-            row![
-                crate::icons::view(
-                    icon,
-                    crate::theme::icon_size::row(),
-                    crate::theme::color::CREAM
-                ),
-                text(label).size(crate::theme::font::body()),
-            ]
-            .spacing(crate::theme::geometry::menu_gap())
-            .align_y(iced_widget::core::alignment::Vertical::Center),
-        )
-        .on_press(msg)
-        .width(iced_widget::core::Length::Fixed(
-            crate::theme::geometry::menu_item_width(),
-        ))
-        .padding([
-            crate::theme::geometry::menu_pad_v(),
-            crate::theme::geometry::menu_pad_h(),
-        ])
-        .style(|_t, s| {
-            let base = button::Style {
-                background: None,
-                text_color: crate::theme::color::CREAM,
-                ..button::Style::default()
-            };
-            match s {
-                button::Status::Hovered | button::Status::Pressed => button::Style {
-                    background: Some(crate::theme::color::TAB_HOVER.into()),
-                    text_color: crate::theme::color::CREAM,
-                    border: iced_widget::core::Border {
-                        color: iced_widget::core::Color::TRANSPARENT,
-                        width: 0.0,
-                        radius: 4.0.into(),
-                    },
-                    ..base
-                },
-                _ => base,
-            }
-        })
-        .into();
-    container(column![item].spacing(1))
-        .padding(4)
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(crate::theme::color::CARD.into()),
-            border: iced_widget::core::Border {
-                color: crate::theme::color::BORDER,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..container::Style::default()
-        })
-        .into()
+        crate::menu::item(Some(icon), label, msg);
+    crate::menu::shell(
+        vec![item],
+        iced_widget::core::Length::Fixed(crate::theme::geometry::menu_item_width()),
+    )
 }
 
 #[cfg(test)]

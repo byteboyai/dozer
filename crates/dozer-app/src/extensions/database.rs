@@ -1187,45 +1187,28 @@ async fn test_connection(source: DataSource, password: Option<String>) -> Result
 fn drivers_popup<'a>(
     app_state: &'a AppState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let mut col = column![
+    // 首行是分区标题(纯文字、不套按钮),随后每行一个 checkbox 前置位的菜单
+    // 项(启用的打 ✓)。单项/外壳统一走 `crate::menu`,表面即文件树右键菜单。
+    let mut items: Vec<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> = vec![
         text("已启用的驱动")
             .size(crate::theme::font::caption())
             .color(crate::theme::color::DIM)
-    ]
-    .spacing(8);
+            .into(),
+    ];
     for driver in DriverKind::ALL {
         let enabled = app_state.is_enabled(driver);
-        col = col.push(
-            button(
-                row![
-                    text(if enabled { "✓" } else { " " }).size(crate::theme::font::body()),
-                    text(driver.label())
-                        .size(crate::theme::font::body())
-                        .color(crate::theme::color::CREAM),
-                ]
-                .spacing(8),
-            )
-            .on_press(Message::ToggleDriver(driver))
-            .width(iced_widget::core::Length::Fill)
-            .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
-                background: Some(crate::theme::color::CARD.into()),
-                ..iced_widget::button::Style::default()
-            }),
-        );
+        let checkbox: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+            text(if enabled { "✓" } else { " " })
+                .size(crate::theme::font::body())
+                .into();
+        items.push(crate::menu::item_row_fill(
+            Some(checkbox),
+            driver.label(),
+            crate::theme::color::CREAM,
+            Some(Message::ToggleDriver(driver)),
+        ));
     }
-    container(col)
-        .padding(12)
-        .width(iced_widget::core::Length::Fixed(220.0))
-        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-            background: Some(crate::theme::color::CARD.into()),
-            border: iced_widget::core::Border {
-                color: crate::theme::color::BORDER,
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..iced_widget::container::Style::default()
-        })
-        .into()
+    crate::menu::shell(items, iced_widget::core::Length::Fixed(220.0))
 }
 
 /// 单条数据源卡片:名称 + 驱动 + 连接摘要 + 测试/编辑/删除按钮 + 测试状态。

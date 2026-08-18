@@ -2566,18 +2566,9 @@ pub(crate) fn agent_card<'a>(
     };
 
     let mut lines = column![
-        row![
-            icons::view(
-                agent_icon(tab.agent),
-                crate::theme::icon_size::row(),
-                agent_dot_color(tab.agent),
-            ),
-            text(title_text)
-                .size(theme::font::body())
-                .color(theme::color::CREAM),
-        ]
-        .align_y(iced_widget::core::alignment::Vertical::Center)
-        .spacing(8),
+        text(title_text)
+            .size(theme::font::body())
+            .color(theme::color::CREAM),
     ]
     .spacing(4);
 
@@ -2706,44 +2697,32 @@ pub(crate) fn agent_picker_popup(
         ("纯 Shell", PickerLaunch::Agent(None)),
         ("Git Shell", PickerLaunch::Git),
     ];
-    let mut col = column![].spacing(2);
+    // 单项统一走 `crate::menu::item_row`:图标沿用各 agent 代表色,文字保持
+    // CREAM;hover/锁定语义、常宽、padding 同文件树右键菜单基准。
+    let mut list: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
+        Vec::new();
     for (label, agent) in items {
         let (icon, icon_color) = match agent {
             PickerLaunch::Agent(Some(kind)) => (agent_icon(kind), agent_dot_color(kind)),
             PickerLaunch::Agent(None) => (IconKind::Terminal, theme::color::CREAM),
             PickerLaunch::Git => (IconKind::GitBranch, theme::color::CREAM),
         };
-        let content = row![
-            icons::view(icon, crate::theme::icon_size::row(), icon_color),
-            text(label)
-                .size(theme::font::body())
-                .color(theme::color::CREAM),
-        ]
-        .align_y(iced_widget::core::alignment::Vertical::Center)
-        .spacing(8);
-        col = col.push(
-            button(content)
-                .on_press(Message::AgentPickerSelect(agent))
-                .width(Length::Fixed(160.0))
-                .padding([6, 12])
-                .style(|_t, _s| button::Style {
-                    background: Some(theme::color::CARD.into()),
-                    text_color: theme::color::CREAM,
-                    ..button::Style::default()
-                }),
-        );
+        list.push(crate::menu::item_row(
+            Some(icons::view(
+                icon,
+                crate::theme::icon_size::row(),
+                icon_color,
+            )),
+            label,
+            theme::color::CREAM,
+            Some(Message::AgentPickerSelect(agent)),
+        ));
     }
-    let list = container(col)
-        .padding(6)
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::CARD.into()),
-            border: Border {
-                color: theme::color::BORDER,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..container::Style::default()
-        });
+    let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        crate::menu::shell(
+            list,
+            Length::Fixed(crate::theme::geometry::menu_item_width()),
+        );
     // 右上角固定偏移:48px 避开顶栏,16px 避开窗口右边缘。这是估算值,
     // 不是像素级对齐"＋"按钮(spec 明确"不算点击坐标")——Task 4 最后
     // 一步的人工验收里如果视觉上偏得明显,回来调这两个数字即可,不影响
