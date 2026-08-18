@@ -132,12 +132,12 @@ impl Tabs {
         self.addr_buffer.clear();
     }
 
-    /// 提交解析:`Ok(Some(url))` = 有效网址(无 scheme 自动补 `http://`);
+    /// 提交解析:`Ok(Some(url))` = 有效网址(裸域名自动补 `https://`);
     /// `Ok(None)` = 空输入,no-op;`Err(message)` = 本地路径(以 `/` 或
     /// `~/` 开头),浏览器不支持,`message` 是"浏览器不支持打开本地文件"
-    /// 这条文案。解析规则原样照抄现有 `PreviewPane::addr_submit`/
-    /// `AddrTarget` 那段逻辑,只是把"返回 `AddrTarget::File` 交给调用方
-    /// 判断"改成直接在这里判定并通过 `Result` 表达。
+    /// 这条文案。带 `://` 的完整 URL(如 `https://x.com`)和单冒号 scheme
+    /// (如 `about:blank`/`data:`/`mailto:`)都原样保留,只有既无 `://` 也
+    /// 无 scheme 的裸输入(域名/IP/`host:port`)才补 `https://`。
     pub fn addr_submit(&mut self) -> Result<Option<String>, String> {
         self.addr_editing = false;
         let input = std::mem::take(&mut self.addr_buffer);
@@ -148,10 +148,10 @@ impl Tabs {
         if input.starts_with('/') || input.starts_with("~/") {
             return Err("浏览器不支持打开本地文件".to_string());
         }
-        if input.contains("://") {
+        if input.contains("://") || has_explicit_scheme(input) {
             return Ok(Some(input.to_string()));
         }
-        Ok(Some(format!("http://{input}")))
+        Ok(Some(format!("https://{input}")))
     }
 
     /// 当前激活 tab 的 webview id(浏览器 tab 恒为 webview,不像
@@ -174,6 +174,37 @@ impl Tabs {
             })
             .collect()
     }
+}
+
+/// 判定 `input` 是否已带 URI scheme(单冒号形式,如 `about:blank`/`data:`/
+/// `mailto:`)。scheme 名必须是 `[a-zA-Z]` 开头、由 `[a-zA-Z0-9+.-]` 组成;
+/// `localhost:3000`/`baidu.com:8080` 这类 `host:port` 不判为 scheme(冒号
+/// 后面紧跟的是纯数字端口)。带 `://` 的完整 URL 由调用方 `contains("://")`
+/// 单独判定,不经过这里。
+fn has_explicit_scheme(input: &str) -> bool {
+    let Some(colon) = input.find(':') else {
+        return false;
+    };
+    let scheme = &input[..colon];
+    if scheme.is_empty()
+        || !scheme
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic())
+    {
+        return false;
+    }
+    if !scheme
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '.' || c == '-')
+    {
+        return false;
+    }
+    // 冒号后内容非空、且第一个字符不是数字才认作 scheme:`about:blank` ->
+    // "blank";`localhost:3000` -> "3000" 是端口(可能再跟 `/path`),
+    // 回落成"裸输入补 https://"。
+    let rest = &input[colon + 1..];
+    !rest.is_empty() && !rest.chars().next().is_some_and(|c| c.is_ascii_digit())
 }
 
 #[cfg(test)]
@@ -210,8 +241,12 @@ mod tests {
         t.addr_begin();
         assert!(t.addr_editing());
         t.addr_text("localhost:3000/x");
-        assert_eq!(t.addr_submit(), Ok(Some("http://localhost:3000/x".into())));
+        assert_eq!(t.addr_submit(), Ok(Some("https://localhost:3000/x".into())));
         assert!(!t.addr_editing());
+
+        t.addr_begin();
+        t.addr_text("baidu.com");
+        assert_eq!(t.addr_submit(), Ok(Some("https://baidu.com".into())));
 
         t.addr_begin();
         t.addr_text("https://example.com");
@@ -236,6 +271,23 @@ mod tests {
         t.addr_text("x");
         t.addr_cancel();
         assert!(!t.addr_editing());
+    }
+
+    #[test]
+    fn addr_submit_keeps_explicit_schemes_and_prepends_https() {
+        let mut t = Tabs::default();
+
+        // 单冒号特殊 scheme 原样保留,不补 https://。
+        for scheme_url in ["about:blank", "data:text/html,hi", "mailto:a@b.com"] {
+            t.addr_begin();
+            t.addr_text(scheme_url);
+            assert_eq!(t.addr_submit(), Ok(Some(scheme_url.into())));
+        }
+
+        // host:port 不是 scheme,应补 https://。
+        t.addr_begin();
+        t.addr_text("example.com:8080");
+        assert_eq!(t.addr_submit(), Ok(Some("https://example.com:8080".into())));
     }
 
     #[test]
