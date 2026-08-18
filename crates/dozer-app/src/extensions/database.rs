@@ -1192,7 +1192,7 @@ fn drivers_popup<'a>(
     let mut items: Vec<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> = vec![
         text("已启用的驱动")
             .size(crate::theme::font::caption())
-            .color(crate::theme::color::DIM)
+            .color(byteui::theme::color::current().dim)
             .into(),
     ];
     for driver in DriverKind::ALL {
@@ -1204,7 +1204,7 @@ fn drivers_popup<'a>(
         items.push(crate::menu::item_row_fill(
             Some(checkbox),
             driver.label(),
-            crate::theme::color::CREAM,
+            byteui::theme::color::current().cream,
             Some(Message::ToggleDriver(driver)),
         ));
     }
@@ -1223,9 +1223,9 @@ fn source_card<'a>(
         TestStatus::Err(e) => format!("✗ {e}"),
     };
     let status_color = match status {
-        TestStatus::Ok => crate::theme::color::GREEN,
-        TestStatus::Err(_) => crate::theme::color::RED,
-        _ => crate::theme::color::DIM,
+        TestStatus::Ok => byteui::theme::color::current().green,
+        TestStatus::Err(_) => byteui::theme::color::current().red,
+        _ => byteui::theme::color::current().dim,
     };
     let summary = match source.driver {
         DriverKind::Sqlite => source.database.clone().unwrap_or_default(),
@@ -1247,15 +1247,15 @@ fn source_card<'a>(
             row![
                 text(source.name.clone())
                     .size(crate::theme::font::body())
-                    .color(crate::theme::color::CREAM),
+                    .color(byteui::theme::color::current().cream),
                 text(source.driver.label())
                     .size(crate::theme::font::caption_sm())
-                    .color(crate::theme::color::DIM),
+                    .color(byteui::theme::color::current().dim),
             ]
             .spacing(8),
             text(summary)
                 .size(crate::theme::font::caption_sm())
-                .color(crate::theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
             {
                 let mut btns = row![
                     button(text("测试连接")).on_press(Message::TestConnection(source.id.clone()))
@@ -1281,9 +1281,9 @@ fn source_card<'a>(
     .padding(10)
     .width(iced_widget::core::Length::Fill)
     .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-        background: Some(crate::theme::color::CARD.into()),
+        background: Some(byteui::theme::color::current().card.into()),
         border: iced_widget::core::Border {
-            color: crate::theme::color::BORDER,
+            color: byteui::theme::color::current().border,
             width: 1.0,
             radius: 8.0.into(),
         },
@@ -1319,9 +1319,9 @@ fn source_form<'a>(
                     move |_t: &iced_widget::Theme, _s| iced_widget::button::Style {
                         background: Some(
                             if is_current {
-                                crate::theme::color::GOLD
+                                byteui::theme::color::current().gold
                             } else {
-                                crate::theme::color::CARD
+                                byteui::theme::color::current().card
                             }
                             .into(),
                         ),
@@ -1391,9 +1391,9 @@ fn source_form<'a>(
         .padding(12)
         .width(iced_widget::core::Length::Fill)
         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-            background: Some(crate::theme::color::CARD.into()),
+            background: Some(byteui::theme::color::current().card.into()),
             border: iced_widget::core::Border {
-                color: crate::theme::color::GOLD,
+                color: byteui::theme::color::current().gold,
                 width: 1.0,
                 radius: 8.0.into(),
             },
@@ -1437,7 +1437,7 @@ pub fn view<'a>(
         col = col.push(
             text("还没有数据源")
                 .size(crate::theme::font::body())
-                .color(crate::theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
         );
     } else {
         for source in ws_state.sources() {
@@ -1450,7 +1450,7 @@ pub fn view<'a>(
         .height(iced_widget::core::Length::Fill)
         .style(
             move |_t: &iced_widget::Theme| iced_widget::container::Style {
-                background: Some(crate::theme::color::BG.into()),
+                background: Some(byteui::theme::color::current().bg.into()),
                 border: outer,
                 ..iced_widget::container::Style::default()
             },
@@ -1484,10 +1484,10 @@ fn schema_tree_view<'a>(
         back_button,
         text(source.name.clone())
             .size(crate::theme::font::subtitle())
-            .color(crate::theme::color::CREAM),
+            .color(byteui::theme::color::current().cream),
         text(source.driver.label())
             .size(crate::theme::font::caption_sm())
-            .color(crate::theme::color::DIM),
+            .color(byteui::theme::color::current().dim),
         iced_widget::space::horizontal(),
         button(text("刷新")).on_press(Message::SchemaRefresh(source.id.clone())),
     ]
@@ -1501,7 +1501,7 @@ fn schema_tree_view<'a>(
         col = col.push(
             text("刷新中…")
                 .size(crate::theme::font::caption_sm())
-                .color(crate::theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
         );
     }
     if let Some(e) = st.tables_error()
@@ -1511,7 +1511,7 @@ fn schema_tree_view<'a>(
         col = col.push(
             text(format!("刷新失败:{e}"))
                 .size(crate::theme::font::caption_sm())
-                .color(crate::theme::color::RED),
+                .color(byteui::theme::color::current().red),
         );
     }
 
@@ -1519,14 +1519,14 @@ fn schema_tree_view<'a>(
         col = col.push(
             text("加载中…")
                 .size(crate::theme::font::body())
-                .color(crate::theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
         );
     } else if st.tables().is_empty() {
         if let Some(e) = st.tables_error() {
             col = col.push(
                 text(format!("✗ {e}"))
                     .size(crate::theme::font::body())
-                    .color(crate::theme::color::RED),
+                    .color(byteui::theme::color::current().red),
             );
             col =
                 col.push(button(text("重试")).on_press(Message::SchemaRefresh(source.id.clone())));
@@ -1534,7 +1534,7 @@ fn schema_tree_view<'a>(
             col = col.push(
                 text("该库没有表或视图")
                     .size(crate::theme::font::body())
-                    .color(crate::theme::color::DIM),
+                    .color(byteui::theme::color::current().dim),
             );
         }
     } else {
@@ -1556,7 +1556,7 @@ fn schema_tree_view<'a>(
         .height(iced_widget::core::Length::Fill)
         .style(
             move |_t: &iced_widget::Theme| iced_widget::container::Style {
-                background: Some(crate::theme::color::BG.into()),
+                background: Some(byteui::theme::color::current().bg.into()),
                 border: outer,
                 ..iced_widget::container::Style::default()
             },
@@ -1588,16 +1588,16 @@ fn schema_tree_row<'a>(
                     icons::view(
                         chevron,
                         crate::theme::icon_size::chevron(),
-                        crate::theme::color::DIM
+                        byteui::theme::color::current().dim
                     ),
                     icons::view(
                         folder,
                         crate::theme::icon_size::row(),
-                        crate::theme::color::DIM
+                        byteui::theme::color::current().dim
                     ),
                     text(name.to_string())
                         .size(crate::workspace::tree_row_font_size())
-                        .color(crate::theme::color::CREAM),
+                        .color(byteui::theme::color::current().cream),
                 ]
                 .spacing(crate::theme::icon_size::tree_row_gap())
                 .align_y(iced_widget::core::Alignment::Center),
@@ -1627,16 +1627,16 @@ fn schema_tree_row<'a>(
                     icons::view(
                         chevron,
                         crate::theme::icon_size::chevron(),
-                        crate::theme::color::DIM
+                        byteui::theme::color::current().dim
                     ),
                     icons::view(
                         icon,
                         crate::theme::icon_size::row(),
-                        crate::theme::color::DIM
+                        byteui::theme::color::current().dim
                     ),
                     text(t.name.clone())
                         .size(crate::workspace::tree_row_font_size())
-                        .color(crate::theme::color::CREAM),
+                        .color(byteui::theme::color::current().cream),
                 ]
                 .spacing(crate::theme::icon_size::tree_row_gap())
                 .align_y(iced_widget::core::Alignment::Center),
@@ -1656,9 +1656,9 @@ fn schema_tree_row<'a>(
         SchemaRowKind::Column(c) => {
             // 可空性用颜色深浅表达:非空 CREAM、可空 BODY(不加 "NOT NULL" 文本)
             let name_color = if c.nullable {
-                crate::theme::color::BODY
+                byteui::theme::color::current().body
             } else {
-                crate::theme::color::CREAM
+                byteui::theme::color::current().cream
             };
             row![
                 indent,
@@ -1675,7 +1675,7 @@ fn schema_tree_row<'a>(
                     .color(name_color),
                 text(c.type_name.clone())
                     .size(crate::theme::font::caption_sm())
-                    .color(crate::theme::color::DIM),
+                    .color(byteui::theme::color::current().dim),
             ]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center)
@@ -1693,7 +1693,7 @@ fn schema_tree_row<'a>(
                 .height(Length::Shrink),
             text("加载列中…")
                 .size(crate::workspace::tree_row_font_size())
-                .color(crate::theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
         ]
         .spacing(6)
         .align_y(iced_widget::core::Alignment::Center)
@@ -1710,10 +1710,10 @@ fn schema_tree_row<'a>(
                 .height(Length::Shrink),
             text(format!("列加载失败:{e}"))
                 .size(crate::workspace::tree_row_font_size())
-                .color(crate::theme::color::RED),
+                .color(byteui::theme::color::current().red),
             text("(收起再展开可重试)")
                 .size(crate::theme::font::caption_sm())
-                .color(crate::theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
         ]
         .spacing(6)
         .align_y(iced_widget::core::Alignment::Center)
