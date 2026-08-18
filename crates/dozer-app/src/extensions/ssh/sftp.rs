@@ -445,7 +445,7 @@ fn tree_column<'a>(
     let mut col = column![
         text(title)
             .size(crate::theme::font::subtitle())
-            .color(crate::theme::color::CREAM)
+            .color(byteui::theme::color::current().cream)
     ]
     .spacing(4);
     for r in rows {
@@ -474,16 +474,16 @@ fn tree_column<'a>(
         let name_el = text(r.name.clone())
             .size(crate::theme::font::body())
             .color(if is_selected {
-                crate::theme::color::CREAM
+                byteui::theme::color::current().cream
             } else {
-                crate::theme::color::DIM
+                byteui::theme::color::current().dim
             });
         let mut label = row![
             text(indent),
             byteui::interaction::icons::view(
                 icon,
                 crate::theme::icon_size::row(),
-                crate::theme::color::DIM
+                byteui::theme::color::current().dim
             ),
             name_el,
         ]
@@ -493,7 +493,7 @@ fn tree_column<'a>(
             label = label.push(
                 text(format!("⚠ {err}"))
                     .size(crate::theme::font::caption())
-                    .color(crate::theme::color::RED),
+                    .color(byteui::theme::color::current().red),
             );
         }
         let row_el: iced_widget::core::Element<
@@ -580,9 +580,9 @@ pub fn sftp_pane_view<'a>(
     if let Some((msg, is_err)) = &state.status {
         base_col = base_col.push(text(msg.clone()).size(crate::theme::font::caption()).color(
             if *is_err {
-                crate::theme::color::RED
+                byteui::theme::color::current().red
             } else {
-                crate::theme::color::DIM
+                byteui::theme::color::current().dim
             },
         ));
     }
