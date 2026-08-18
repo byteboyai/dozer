@@ -1238,21 +1238,32 @@ pub fn view<'a>(
         ),
     ];
 
-    // ---- 左栏 pane：header + 分类导航 ----
+    // ---- 左栏 pane：header + 分类导航 + 底部「任务计数 / 清空列表」栏 ----
+    // 原 content pane 右下角的 `todo_clear_footer_bar` 整体迁到左栏:分类导航
+    // 之下、靠底。计数(左)与「清空列表」(右)不再堆在内容区右下方,改由左栏
+    // 底部统一呈现——内容区底部只留「新增任务」输入框。
     let mut nav = column![].spacing(4).padding([12, 8]);
     for (filter, count) in counts {
         nav = nav.push(todo_category_button(filter, count, ws_state.filter));
     }
     let sidebar_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        container(column![header, nav].height(Length::Fill))
-            .width(sidebar_width)
-            .height(Length::Fill)
-            .style(move |_t: &iced_widget::Theme| container::Style {
-                background: Some(theme::color::BG.into()),
-                border: sidebar_outer,
-                ..container::Style::default()
-            })
-            .into();
+        container(
+            column![
+                header,
+                nav,
+                space::Space::new().height(Length::Fill),
+                todo_clear_footer_bar(ws_state),
+            ]
+            .height(Length::Fill),
+        )
+        .width(sidebar_width)
+        .height(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::color::BG.into()),
+            border: sidebar_outer,
+            ..container::Style::default()
+        })
+        .into();
 
     // ---- 右栏 pane：tab 段 + 视图主体 ----
     let tabs_bar = todo_view_tabs(ws_state.view_mode);
@@ -1409,10 +1420,12 @@ fn todo_footer_bar<'a>(
         .into()
 }
 
-/// 面板最底栏(位于"新增任务"输入框之下):左侧任务计数,右侧"清空列表"
-/// 按钮。样式对齐 `files.rs` 的 `git_footer_bar`(顶部分隔线 + 左图标/文案
-/// + 右侧操作按钮)。**清空功能尚未实现**:`清空列表` 走 `Message::ClearList`,
-/// 在 `update` 里是 no-op,这里只负责把 UI 摆出来。
+/// 左栏底部栏(位于分类导航之下、靠底):左侧任务计数,右侧"清空列表"
+/// 按钮。已从 content pane 右下角迁到左栏(见 `view`),与分类按钮的逐项
+/// 计数形成"总览 + 分项"呼应。样式对齐 `files.rs` 的 `git_footer_bar`
+/// (顶部分隔线 + 左图标/文案 + 右侧操作按钮)。**清空功能尚未实现**:
+/// `清空列表` 走 `Message::ClearList`,在 `update` 里是 no-op,这里只负责
+/// 把 UI 摆出来。
 fn todo_clear_footer_bar<'a>(
     ws_state: &'a WorkspaceState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -1659,7 +1672,6 @@ fn todo_list_view<'a>(
             ))
             .style(|_t, _s| crate::scrollbar::scrollbar_style()),
         todo_footer_bar(ws_state),
-        todo_clear_footer_bar(ws_state),
     ]
     .height(Length::Fill)
     .into()

@@ -814,31 +814,26 @@ fn host_card<'a>(
         );
     }
 
-    // 名字 + 操作系统信息(已登录过的主机展示 `名 (发行版)`),连接信息
-    // `user@host:port` 换行放在名字下面(原先与名字同行)。操作按钮整组
-    // 右对齐贴卡片右缘,左边留白占满给文本区。
+    // 主机卡片三行:①名字(已登录过的主机展示 `名 (发行版)`)②连接信息
+    // `user@host:port` ③操作图标按钮整组右对齐。
     let name = match os_info {
         Some(os) => format!("{} ({os})", host.name),
         None => host.name.clone(),
     };
-    let info_column = column![
-        text(name)
-            .size(theme::font::body())
-            .color(theme::color::CREAM),
-        text(format!("{}@{}:{}", host.username, host.host, host.port))
-            .size(theme::font::caption_sm())
-            .color(theme::color::DIM),
-    ]
-    .spacing(2)
-    .align_x(iced_widget::core::alignment::Horizontal::Left);
-
     let card = container(
-        row![
-            container(info_column).width(iced_widget::core::Length::Fill),
-            container(actions).align_y(iced_widget::core::alignment::Vertical::Center),
+        column![
+            text(name)
+                .size(theme::font::body())
+                .color(theme::color::CREAM),
+            text(format!("{}@{}:{}", host.username, host.host, host.port))
+                .size(theme::font::caption_sm())
+                .color(theme::color::DIM),
+            container(actions)
+                .width(iced_widget::core::Length::Fill)
+                .align_x(iced_widget::core::alignment::Horizontal::Right),
         ]
-        .spacing(8)
-        .align_y(iced_widget::core::alignment::Vertical::Center),
+        .spacing(6)
+        .align_x(iced_widget::core::alignment::Horizontal::Left),
     )
     .padding(10)
     .width(iced_widget::core::Length::Fill)

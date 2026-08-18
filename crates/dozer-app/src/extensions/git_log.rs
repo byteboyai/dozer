@@ -631,9 +631,9 @@ fn ref_labels_text(refs: &[RefLabel], head_branch: Option<&str>) -> String {
 }
 
 /// commit 线性列表(替代原 Canvas 拓扑图,2026-08-17 重构——见 spec
-/// "架构与数据流"第 6 节)。每行:图标(普通/合并)+ short_sha + 时间戳 +
-/// refs 标签 + summary,整行可点选中(`Message::SelectCommit`),选中态
-/// 左侧金色竖条高亮(对齐 Todo/Files 面板既有选中行视觉语言)。
+/// "架构与数据流"第 6 节)。每行上下两行:上行图标(普通/合并)+ short_sha +
+/// 时间戳 + refs 标签;下行 summary。整行可点选中(`Message::SelectCommit`),
+/// 选中态统一卡片样式(对齐 Todo/Files 面板既有选中行视觉语言)。
 fn commit_list_view<'a>(
     app: &App,
     snapshot: &'a GitLogSnapshot,
@@ -649,7 +649,8 @@ fn commit_list_view<'a>(
             crate::icons::IconKind::GitCommitVertical
         };
         let refs_prefix = ref_labels_text(&row.refs, head_branch);
-        let mut line = row![
+        // 上行:图标 + short_sha + 时间戳 + refs 标签
+        let mut head_line = row![
             crate::icons::view(icon_kind, crate::theme::icon_size::row(), theme::color::DIM),
             text(row.short_sha.clone())
                 .size(theme::font::caption())
@@ -662,17 +663,17 @@ fn commit_list_view<'a>(
         .spacing(8)
         .align_y(alignment::Vertical::Center);
         if !refs_prefix.is_empty() {
-            line = line.push(
+            head_line = head_line.push(
                 text(refs_prefix)
                     .size(theme::font::caption_sm())
                     .color(theme::color::CYAN),
             );
         }
-        line = line.push(
-            text(row.summary.clone())
-                .size(theme::font::caption())
-                .color(theme::color::CREAM),
-        );
+        // 下行:summary 主体
+        let summary_line = text(row.summary.clone())
+            .size(theme::font::caption())
+            .color(theme::color::CREAM);
+        let line = column![head_line, summary_line].spacing(2);
         // 统一卡片样式:选中/一般/hover 三态(选中=金边、hover=金边+填充、
         // 一般态=描边),不再用左侧 3px 金竖条表示选中。
         let hovered = app.hover_progress(HoverId::Commit(i)) > 0.0;
