@@ -2226,6 +2226,7 @@ fn todo_calendar_popup(
     }
 
     container(column![header, weekday_row, rows].spacing(4))
+        .width(Length::Shrink)
         .padding(8)
         .style(|_t: &iced_widget::Theme| container::Style {
             background: Some(theme::color::CARD.into()),
