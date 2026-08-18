@@ -1259,6 +1259,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 pending_focus,
                 current_focus,
                 clipboard,
+                browser_webviews,
                 ..
             } = self
             else {
@@ -1384,6 +1385,27 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     *current_focus = FocusIntent::Preview;
                     app.update(Message::PreviewOpenPath(hit.path));
                     window.request_redraw();
+                }
+                // 浏览器后退/前进/刷新:webview 句柄只在 main.rs 的浏览器池里,
+                // 浏览器 `State` 摸不到——在这里对激活 webview 直接执行历史
+                // 导航/刷新。wry 0.55 没暴露 `go_back`/`go_forward`,后退/前进
+                // 用 `window.history` JS 兜底;刷新走原生 `reload()`。
+                Message::Browser(extensions::browser::Message::Nav(action)) => {
+                    if let Some(id) = app.active_browser_webview_id()
+                        && let Some((view, _)) = browser_webviews.get_mut(&id)
+                    {
+                        match action {
+                            extensions::browser::NavAction::Back => {
+                                let _ = view.evaluate_script("window.history.back()");
+                            }
+                            extensions::browser::NavAction::Forward => {
+                                let _ = view.evaluate_script("window.history.forward()");
+                            }
+                            extensions::browser::NavAction::Refresh => {
+                                let _ = view.reload();
+                            }
+                        }
+                    }
                 }
                 other => app.update(other),
             }

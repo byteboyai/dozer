@@ -807,6 +807,17 @@ fn optimistic_remove(bookmarks: &mut Vec<BookmarkInfo>, id: i64) {
     bookmarks.retain(|b| b.id != id);
 }
 
+/// 浏览器导航动作(后退/前进/刷新)。实际导航由 main.rs 的 `dispatch`
+/// 拦截 `Message::Nav` 后对激活 webview 的 `wry::WebView` 句柄执行(句柄
+/// 在 main.rs 的 `browser_webviews` 池里,浏览器 `State` 摸不到);这里
+/// 只是纯语义枚举,不带任何状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NavAction {
+    Back,
+    Forward,
+    Refresh,
+}
+
 /// 浏览器面板自己的消息类型——内核(`workspace.rs`)只认一个包装变体
 /// `Message::Browser(extensions::browser::Message)`,这个模块本身不
 /// import 顶层 `Message`。`AddrEvent` 是地址栏/验收意见框/项目树行内
@@ -817,6 +828,9 @@ pub enum Message {
     OpenUrl(String),
     SelectTab(usize),
     CloseTab(usize),
+    /// 后退/前进/刷新按钮。`browser::update` 里是 no-op,真正的 webview
+    /// 导航由 main.rs `dispatch` 拦截执行(见 `NavAction`)。
+    Nav(NavAction),
     /// 拖拽换位:光标扫过页签 `idx` 时由 tab 的 `MouseArea::on_move` 发出,
     /// `App::update` 翻译成 `TabDragMove`(浏览器组在这里完成换位)。
     DragHover(usize),
@@ -1035,11 +1049,30 @@ impl State {
             .map(|h| h.progress)
             .unwrap_or(0.0)
     }
+
+    /// 后退/前进/刷新三颗导航按钮的 hover 进度,各自独立哨兵键
+    /// `(NAV_*_KEY, false)`,与真实 tab 序号和星标/收藏夹键都不冲突。
+    pub(crate) fn nav_hover(&self, action: NavAction) -> f32 {
+        let key = match action {
+            NavAction::Back => NAV_BACK_KEY,
+            NavAction::Forward => NAV_FORWARD_KEY,
+            NavAction::Refresh => NAV_REFRESH_KEY,
+        };
+        self.hover
+            .get(&(key, false))
+            .map(|h| h.progress)
+            .unwrap_or(0.0)
+    }
 }
 
 /// 浏览器面板"星标/收藏夹"两个工具栏按钮的 hover 哨兵键——真实 tab 序号
 /// 从 0 递增,不可能等于 `usize::MAX`,用它作键不与 tab 冲突。
 const STAR_HOVER_KEY: usize = usize::MAX;
+/// 后退/前进/刷新三颗导航按钮的 hover 哨兵键,依次紧挨 `STAR_HOVER_KEY`
+/// 往下排,同样远离真实 tab 序号空间。
+const NAV_BACK_KEY: usize = usize::MAX - 1;
+const NAV_FORWARD_KEY: usize = usize::MAX - 2;
+const NAV_REFRESH_KEY: usize = usize::MAX - 3;
 
 /// 处理浏览器面板的全部消息。`project_id` 由内核每次调用时从
 /// `ws.project.as_ref().map(|p| p.id)` 现取传入(`State` 本身不存这个,
@@ -1062,6 +1095,9 @@ pub fn update(
         }
         Message::SelectTab(idx) => state.tabs.select(idx),
         Message::DragHover(_) => {} // 拖拽换位在 `App::update` 翻译后处理,不落到这里
+        // 导航按钮:真正的 webview 历史导航/刷新由 main.rs `dispatch` 拦截
+        // `Message::Browser(Nav(..))` 执行,这里不碰状态(no-op)。
+        Message::Nav(_) => {}
         Message::CloseTab(idx) => {
             state.tabs.close(idx);
             state.tab_first = 0;
@@ -1183,6 +1219,33 @@ pub fn request_bookmarks_refresh(
             .unwrap_or_default();
         emit(Message::BookmarksLoaded(project_id, bookmarks));
     });
+}
+
+/// 地址栏后退/前进/刷新导航按钮。复用统一 icon 按钮规范
+/// (`icon_button_entry`),静止 DIM、hover 平滑过渡到 GOLD,与同行星标/
+/// 收藏夹按钮观感一致。点击发 `Message::Nav(action)`,真正的 webview
+/// 历史导航/刷新由 main.rs `dispatch` 拦截执行。
+fn nav_button(
+    state: &State,
+    action: NavAction,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let (kind, tooltip, key) = match action {
+        NavAction::Back => (icons::IconKind::CircleArrowLeft, "后退", NAV_BACK_KEY),
+        NavAction::Forward => (icons::IconKind::CircleArrowRight, "前进", NAV_FORWARD_KEY),
+        NavAction::Refresh => (icons::IconKind::RotateCw, "刷新", NAV_REFRESH_KEY),
+    };
+    icons::icon_button_entry(
+        kind,
+        icon_size::row(),
+        false,
+        state.nav_hover(action),
+        false,
+        theme::geometry::tab_button_size(),
+        true,
+        Message::Nav(action),
+        move |hovered| Message::Hover(key, false, hovered),
+        tooltip,
+    )
 }
 
 /// 地址栏星标:当前 URL 在全局/本项目任一边已收藏则 GOLD 实心,否则
@@ -1470,6 +1533,9 @@ pub fn view(
     });
 
     let addr_row = row![
+        nav_button(state, NavAction::Back),
+        nav_button(state, NavAction::Forward),
+        nav_button(state, NavAction::Refresh),
         addr,
         star_button(state, project_id),
         bookmarks_toggle_button(state)

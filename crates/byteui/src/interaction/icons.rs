@@ -140,6 +140,12 @@ pub enum IconKind {
     Calendar,
     /// Todo 新增任务框右侧提交按钮图标(Lucide circle-arrow-up)。
     CircleArrowUp,
+    /// 浏览器面板"后退"导航按钮图标(Lucide circle-arrow-left)。
+    CircleArrowLeft,
+    /// 浏览器面板"前进"导航按钮图标(Lucide circle-arrow-right)。
+    CircleArrowRight,
+    /// 浏览器面板"刷新"导航按钮图标(Lucide rotate-cw)。
+    RotateCw,
 }
 
 impl IconKind {
@@ -215,6 +221,11 @@ impl IconKind {
             IconKind::FolderSync => include_bytes!("../../assets/icons/folder-sync.svg"),
             IconKind::Calendar => include_bytes!("../../assets/icons/calendar.svg"),
             IconKind::CircleArrowUp => include_bytes!("../../assets/icons/circle-arrow-up.svg"),
+            IconKind::CircleArrowLeft => include_bytes!("../../assets/icons/circle-arrow-left.svg"),
+            IconKind::CircleArrowRight => {
+                include_bytes!("../../assets/icons/circle-arrow-right.svg")
+            }
+            IconKind::RotateCw => include_bytes!("../../assets/icons/rotate-cw.svg"),
         }
     }
 }
