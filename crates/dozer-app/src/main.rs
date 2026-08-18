@@ -1046,6 +1046,45 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             }
 
             if to_self_drawn_input {
+                // 方向键 / Home / End:仅 Todo 自绘输入支持光标移动(新增任务框、
+                // 任务内容编辑、搜索框)。其它自绘输入(地址栏/验收意见/树编辑等)
+                // 暂不支持,方向键按原行为被吞掉、不进终端。必须在下面的
+                // `AddrEvent` 路由之前拦截,否则会落到 `_ => None` 被吃掉而
+                // 没机会进光标移动分支。
+                if let WindowEvent::KeyboardInput {
+                    event: ke,
+                    is_synthetic: false,
+                    ..
+                } = event
+                    && ke.state == ElementState::Pressed
+                {
+                    use winit::keyboard::{Key, NamedKey};
+                    let dir = match &ke.logical_key {
+                        Key::Named(NamedKey::ArrowLeft) => Some(extensions::todo::CursorDir::Left),
+                        Key::Named(NamedKey::ArrowRight) => {
+                            Some(extensions::todo::CursorDir::Right)
+                        }
+                        Key::Named(NamedKey::Home) => Some(extensions::todo::CursorDir::Home),
+                        Key::Named(NamedKey::End) => Some(extensions::todo::CursorDir::End),
+                        _ => None,
+                    };
+                    if let Some(dir) = dir {
+                        let msg = if to_todo_add {
+                            Message::Todo(extensions::todo::Message::AddCursorMove(dir))
+                        } else if to_todo_content {
+                            Message::Todo(extensions::todo::Message::ContentCursorMove(dir))
+                        } else if to_todo_search {
+                            Message::Todo(extensions::todo::Message::SearchCursorMove(dir))
+                        } else {
+                            // 其它自绘输入不支持方向键移动,按原行为吞掉。
+                            return;
+                        };
+                        app.update(msg);
+                        window.request_redraw();
+                        return;
+                    }
+                }
+
                 let addr_event = match event {
                     WindowEvent::KeyboardInput {
                         event,
@@ -1256,6 +1295,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             let Self::Ready {
                 app,
                 window,
+                cursor_phys,
                 pending_focus,
                 current_focus,
                 clipboard,
@@ -1405,6 +1445,31 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 let _ = view.reload();
                             }
                         }
+                    }
+                }
+                // 新增任务框点击:进编辑态后,按鼠标落点把光标定位到对应字符
+                // (自绘输入没原生光标,全靠 `add_field_id` 记录的屏幕 bounds)。
+                Message::Todo(extensions::todo::Message::AddEditStart) => {
+                    app.update(Message::Todo(extensions::todo::Message::AddEditStart));
+                    if let Some(bounds) = extensions::todo::take_add_field_bounds() {
+                        let scale = window.scale_factor();
+                        let local_x = ((cursor_phys.x / scale) as f32 - bounds.x).max(0.0);
+                        app.update(Message::Todo(extensions::todo::Message::AddCursorAt(local_x)));
+                    }
+                }
+                // 任务内容编辑框点击:仅在"重击已处于编辑态的字段"时按落点定位
+                // (首击进入编辑态光标落行尾,字段 bounds 未必已记录,避免错位)。
+                Message::Todo(extensions::todo::Message::ContentEditStart(idx)) => {
+                    let was_editing = app.todo_content_editing();
+                    app.update(Message::Todo(extensions::todo::Message::ContentEditStart(idx)));
+                    if was_editing
+                        && let Some(bounds) = extensions::todo::take_content_field_bounds()
+                    {
+                        let scale = window.scale_factor();
+                        let local_x = ((cursor_phys.x / scale) as f32 - bounds.x).max(0.0);
+                        app.update(Message::Todo(extensions::todo::Message::ContentCursorAt(
+                            local_x,
+                        )));
                     }
                 }
                 other => app.update(other),
@@ -1987,6 +2052,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                         },
                                     );
                                     interface.operate(renderer, &mut op);
+                                }
+
+                                // 记录 Todo 自绘输入字段的屏幕 bounds,供鼠标点击
+                                // 定位光标(见 `extensions::todo::CaptureFieldBounds`)。
+                                // 只在 Todo 左栏可见时跑,避免无谓遍历整棵 widget 树。
+                                if matches!(app.left_view(), crate::app::LeftView::Todo) {
+                                    interface.operate(
+                                        renderer,
+                                        &mut extensions::todo::CaptureFieldBounds,
+                                    );
                                 }
 
                                 // Update the mouse cursor

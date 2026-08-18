@@ -12,7 +12,8 @@ use crate::theme;
 use crate::workspace::{AddrEvent, Workspace, agent_icon, tab_title};
 use byteui::interaction::icons;
 use dozer_core::protocol::AgentKind;
-use iced_widget::core::{Border, Color, Element, Length, Padding, mouse};
+use iced_widget::core::widget::{Id, Operation};
+use iced_widget::core::{Border, Color, Element, Length, Padding, Rectangle, mouse};
 use iced_widget::{
     MouseArea, button, column, container, rich_text, row, scrollable, space, span, text,
 };
@@ -345,6 +346,10 @@ pub struct WorkspaceState {
     items: Vec<TodoItem>,
     mtime: Option<std::time::SystemTime>,
     add_draft: String,
+    /// 新增任务框草稿的光标位置(字符下标,非字节)。自绘输入没有原生光标,
+    /// 方向键/鼠标点击都靠这个下标重定位,渲染时把草稿从光标处劈成两段、
+    /// 中间塞 `▏` 当光标。`add_draft` 为空时恒为 0。
+    add_cursor: usize,
     /// 新增任务框是否处于自绘编辑态。本 app 每帧重建界面,原生 `text_input`
     /// 留不住焦点、也不参与 main.rs 的键盘路由裁决,不加这个标记的话打字
     /// 会同时漏进已聚焦的终端(agent 输入),见 `todo_footer_bar`。
@@ -376,6 +381,8 @@ pub struct WorkspaceState {
     /// 搜索框编辑态草稿。`search_editing` 为真时按键经 main.rs 路由成
     /// `SearchEvent`,只动草稿,不重新过滤;回车/点搜索按钮才提交。
     search_draft: String,
+    /// 搜索框草稿的光标位置(字符下标,见 `add_cursor` 注释)。
+    search_cursor: usize,
     /// 搜索框是否处于自绘编辑态(main.rs 键盘路由用)。
     search_editing: bool,
     dispatch_open: Option<usize>,
@@ -394,6 +401,8 @@ pub struct WorkspaceState {
     /// 任务内容行内编辑态(卡片下标, 草稿)。点卡片任务文字进入,
     /// `ContentEvent(Submit)` 落盘改写任务文字。
     editing_content: Option<(usize, String)>,
+    /// 任务内容行内编辑草稿的光标位置(字符下标,见 `add_cursor` 注释)。
+    content_cursor: usize,
     /// MARKDOWN 视图是否处于整文件编辑态(main.rs 键盘路由用)。
     markdown_editing: bool,
     /// MARKDOWN 编辑草稿:进入编辑态时从 `.dozer/todo.md` 全文载入,失焦
@@ -565,6 +574,14 @@ impl WorkspaceState {
         self.editing_content = None;
     }
 
+    /// 失焦退出任务内容编辑态并**写盘保存**(与回车 `ContentEvent(Submit)` 同
+    /// 一条 `commit_content_edit` 落盘路径):改动且非空才写,否则丢弃。
+    /// `Workspace::blur_inputs` 走这条,让"点别处"也等价于"按回车提交",
+    /// 不丢用户刚改的任务文字(见用户反馈:内容编辑失焦应保存)。
+    pub fn commit_content_edit(&mut self, project_path: &std::path::Path) {
+        commit_content_edit(self, project_path);
+    }
+
     /// MARKDOWN 视图是否处于整文件编辑态(main.rs 键盘路由用)。
     pub fn markdown_editing(&self) -> bool {
         self.markdown_editing
@@ -671,6 +688,19 @@ impl AppState {
 /// 会话读写,内核在到达 `update` 之前就会拦截处理,不会真的传进
 /// `update`——传进来会 `unreachable!`(同 Git Log 试点 `LoadMore` 的
 /// 处理方式)。
+/// 自绘输入的光标移动方向(main.rs 把方向键/Home/End 翻成这个,经
+/// `AddCursorMove`/`SearchCursorMove`/`ContentCursorMove` 路由进来)。自绘
+/// 输入没有原生光标,方向键移动靠这里携带的方向重定位字符下标。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CursorDir {
+    Left,
+    Right,
+    /// 行首(Home)。
+    Home,
+    /// 行尾(End)。
+    End,
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     Toggle(usize),
@@ -682,6 +712,12 @@ pub enum Message {
     /// 点新增任务框右侧 circle-arrow-up 提交按钮:把草稿落盘成新任务
     /// (与回车 `AddEvent(Submit)` 共用 `commit_add_task` 一条路径)。
     AddSubmit,
+    /// 方向键/Home/End 移动新增任务框草稿光标(字符下标)。main.rs 把键盘
+    /// 方向键翻成 `CursorDir` 经此路由,自绘输入没原生光标,全靠这个。
+    AddCursorMove(CursorDir),
+    /// 鼠标点击新增任务框:把字段内局部点击 x(逻辑像素)折算成字符下标,
+    /// 定位光标(见 `CursorDir` 同款的"自绘输入没原生光标"背景)。
+    AddCursorAt(f32),
     /// 点新增任务框顶部的拖拽手柄:只在 app 层接管(`todo_message` 里置
     /// `dragging_row = TodoAddGrow`),真正的高度换算发生在 `app.rs::update`
     /// 的 `RowDrag` 分支——和 `Divider`/`RowDivider` 那套拖拽同构,只是目标
@@ -698,6 +734,8 @@ pub enum Message {
     SearchEvent(AddrEvent),
     /// 回车 / 点右侧搜索按钮:把草稿落成生效的 `search` 过滤词。
     SearchSubmit,
+    /// 方向键/Home/End 移动搜索框草稿光标(字符下标),见 `AddCursorMove`。
+    SearchCursorMove(CursorDir),
     /// 光标移动到了第 `idx` 个任务卡片上(由 `todo_card` 外层的
     /// `MouseArea::on_move` 构造)。若当前正在拖拽待办,更新目标位
     /// `target_idx`(悬停到已完成卡片时夹到待办块末尾,见 `update`)。
@@ -723,6 +761,11 @@ pub enum Message {
     ContentEditStart(usize),
     /// 内容编辑态下的按键:`Submit` 落盘改写任务文字,`Cancel` 丢弃退出。
     ContentEvent(AddrEvent),
+    /// 方向键/Home/End 移动任务内容编辑草稿光标(字符下标),见 `AddCursorMove`。
+    ContentCursorMove(CursorDir),
+    /// 鼠标点击任务内容编辑框:把字段内局部点击 x(逻辑像素)折算成字符下标,
+    /// 定位光标,见 `AddCursorAt`。
+    ContentCursorAt(f32),
     /// 点 MARKDOWN 视图主体 → 进入整文件编辑态(`markdown_editing` 置位)。
     MarkdownEditStart,
     /// MARKDOWN 编辑态下的按键:`Text`(含回车翻成的 `"\n"`)/`Backspace`
@@ -795,6 +838,123 @@ fn set_done(
     }
 }
 
+/// 字符下标 → 字节下标;`cursor` 越界时回落到串尾(防御性,避免越界 panic)。
+fn char_to_byte(s: &str, cursor: usize) -> usize {
+    s.char_indices()
+        .nth(cursor)
+        .map(|(b, _)| b)
+        .unwrap_or_else(|| s.len())
+}
+
+/// 在 `s` 的字符下标 `cursor` 处插入 `ins`,并把 `cursor` 前移插入的字符数。
+/// 自绘输入没有原生光标,插入必须落在光标处而非强行 `push_str` 到行尾。
+fn insert_at_cursor(s: &mut String, cursor: &mut usize, ins: &str) {
+    if ins.is_empty() {
+        return;
+    }
+    let byte = char_to_byte(s, *cursor);
+    s.insert_str(byte, ins);
+    *cursor += ins.chars().count();
+}
+
+/// 删除 `cursor` 前一个字符;已在行首时 no-op。返回是否真的删了字符。
+fn delete_before_cursor(s: &mut String, cursor: &mut usize) -> bool {
+    if *cursor == 0 {
+        return false;
+    }
+    let rem = *cursor - 1;
+    let start = char_to_byte(s, rem);
+    let end = char_to_byte(s, *cursor);
+    s.drain(start..end);
+    *cursor = rem;
+    true
+}
+
+/// 按方向键移动 `cursor`(字符下标)。`Left`/`Right` 单步、`Home`/`End` 跳
+/// 行首/行尾。光标恒夹在 `[0, len]`,不会越界。
+fn move_cursor_in(s: &str, cursor: &mut usize, dir: CursorDir) {
+    let len = s.chars().count();
+    let c = *cursor as isize;
+    *cursor = match dir {
+        CursorDir::Left => c.saturating_sub(1),
+        CursorDir::Right => (c + 1).min(len as isize),
+        CursorDir::Home => 0,
+        CursorDir::End => len as isize,
+    }
+    .clamp(0, len as isize) as usize;
+}
+
+/// 把草稿从字符下标 `cursor` 处劈开,中间塞 `▏` 当光标,供自绘输入渲染。
+/// 光标越界时回落到串尾(`char_to_byte` 的防御性兜底)。
+fn draft_with_caret(draft: &str, cursor: usize) -> String {
+    let byte = char_to_byte(draft, cursor);
+    let (before, after) = draft.split_at(byte);
+    format!("{before}▏{after}")
+}
+
+/// 自绘输入字段的 `widget::Id`:main.rs 每帧 `interface.operate` 记录其屏幕
+/// `bounds`,鼠标点击时把全局光标 x 折算成字段内局部 x,再映射成字符下标
+/// (自绘输入没原生光标,点击定位全靠这个)。
+pub fn add_field_id() -> Id {
+    Id::new("todo-add-field")
+}
+pub fn content_field_id() -> Id {
+    Id::new("todo-content-field")
+}
+
+/// 每帧 `interface.operate` 把字段屏幕 bounds 写进来,鼠标点击时读取。
+static ADD_FIELD_BOUNDS: std::sync::LazyLock<std::sync::Mutex<Option<Rectangle>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+static CONTENT_FIELD_BOUNDS: std::sync::LazyLock<std::sync::Mutex<Option<Rectangle>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+/// 取走字段屏幕 bounds(消费式克隆),鼠标点击定位光标用。
+pub fn take_add_field_bounds() -> Option<Rectangle> {
+    *ADD_FIELD_BOUNDS.lock().unwrap()
+}
+pub fn take_content_field_bounds() -> Option<Rectangle> {
+    *CONTENT_FIELD_BOUNDS.lock().unwrap()
+}
+
+/// 每帧 `interface.operate` 跑一遍,把命中 `add_field_id`/`content_field_id`
+/// 的字段屏幕 `bounds` 记进 `static`,供鼠标点击把全局光标 x 折算成字段内
+/// 局部 x、再映射成字符下标。
+pub struct CaptureFieldBounds;
+impl Operation<()> for CaptureFieldBounds {
+    fn custom(&mut self, id: Option<&Id>, bounds: Rectangle, _state: &mut dyn std::any::Any) {
+        match id {
+            Some(id) if *id == add_field_id() => {
+                *ADD_FIELD_BOUNDS.lock().unwrap() = Some(bounds);
+            }
+            Some(id) if *id == content_field_id() => {
+                *CONTENT_FIELD_BOUNDS.lock().unwrap() = Some(bounds);
+            }
+            _ => {}
+        }
+    }
+
+    fn traverse(
+        &mut self,
+        _: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a)),
+    ) {
+    }
+}
+
+/// 把字段内的局部点击 x(逻辑像素)折算成字符下标,供鼠标点击定位光标。
+/// 近似:ASCII 字符宽 `font_size*0.6`、CJK 宽 `font_size`(等宽假设);点击落在
+/// 某字符中线以左就插入它前面。越界夹到 `[0, len]`。
+fn cursor_from_x(draft: &str, local_x: f32, font_size: f32) -> usize {
+    let mut x = 0.0f32;
+    for (i, ch) in draft.chars().enumerate() {
+        let w = if ch.is_ascii() { font_size * 0.6 } else { font_size };
+        if local_x <= x + w / 2.0 {
+            return i;
+        }
+        x += w;
+    }
+    draft.chars().count()
+}
+
 /// `AddEvent(Submit)` 的写盘逻辑:把草稿追加成新任务行,空白草稿
 /// (trim 后)no-op。
 fn commit_add_task(ws_state: &mut WorkspaceState, project_path: &std::path::Path) {
@@ -816,6 +976,7 @@ fn commit_add_task(ws_state: &mut WorkspaceState, project_path: &std::path::Path
         return;
     }
     ws_state.add_draft.clear();
+    ws_state.add_cursor = 0;
     reload_from_disk(ws_state, project_path);
     // 新任务置顶落盘后:选中并滚动到列表顶部,保持 2 秒的选中态提示用户
     // "这条就是刚加的"。
@@ -953,13 +1114,28 @@ pub fn update(
                 return;
             }
             match ev {
-                AddrEvent::Text(s) => ws_state.add_draft.push_str(&s),
+                AddrEvent::Text(s) => {
+                    insert_at_cursor(&mut ws_state.add_draft, &mut ws_state.add_cursor, &s)
+                }
                 AddrEvent::Backspace => {
-                    ws_state.add_draft.pop();
+                    delete_before_cursor(&mut ws_state.add_draft, &mut ws_state.add_cursor);
                 }
                 AddrEvent::Cancel => ws_state.add_editing = false,
                 AddrEvent::Submit => commit_add_task(ws_state, project_path),
             }
+        }
+        Message::AddCursorMove(dir) => {
+            if !ws_state.add_editing {
+                return;
+            }
+            move_cursor_in(&ws_state.add_draft, &mut ws_state.add_cursor, dir);
+        }
+        Message::AddCursorAt(local_x) => {
+            if !ws_state.add_editing {
+                return;
+            }
+            ws_state.add_cursor =
+                cursor_from_x(&ws_state.add_draft, local_x, theme::font::body() as f32);
         }
         Message::AddSubmit => commit_add_task(ws_state, project_path),
         // 高度拖拽在 app 层 `todo_message` 已早退,不会到这里;保留 arm 仅
@@ -996,13 +1172,21 @@ pub fn update(
                 return;
             }
             match ev {
-                AddrEvent::Text(s) => ws_state.search_draft.push_str(&s),
+                AddrEvent::Text(s) => {
+                    insert_at_cursor(&mut ws_state.search_draft, &mut ws_state.search_cursor, &s)
+                }
                 AddrEvent::Backspace => {
-                    ws_state.search_draft.pop();
+                    delete_before_cursor(&mut ws_state.search_draft, &mut ws_state.search_cursor);
                 }
                 AddrEvent::Cancel => ws_state.search_editing = false,
                 AddrEvent::Submit => ws_state.commit_search(),
             }
+        }
+        Message::SearchCursorMove(dir) => {
+            if !ws_state.search_editing {
+                return;
+            }
+            move_cursor_in(&ws_state.search_draft, &mut ws_state.search_cursor, dir);
         }
         Message::SearchSubmit => {
             ws_state.commit_search();
@@ -1116,8 +1300,19 @@ pub fn update(
             ws_state.close_calendar_popup();
         }
         Message::ContentEditStart(idx) => {
+            // 已经在编辑同一张卡:保持草稿与光标(重击只用于鼠标定位,不重置,
+            // 否则点一下就把刚改了一半的文字丢掉)。
+            if ws_state
+                .editing_content
+                .as_ref()
+                .is_some_and(|(eidx, _)| *eidx == idx)
+            {
+                return;
+            }
             if let Some(item) = ws_state.items.get(idx) {
                 ws_state.editing_content = Some((idx, item.text.clone()));
+                // 光标落到行尾(与新增任务框进入编辑态一致)。
+                ws_state.content_cursor = item.text.chars().count();
             }
         }
         Message::ContentEvent(ev) => {
@@ -1128,16 +1323,33 @@ pub fn update(
             match ev {
                 AddrEvent::Text(s) => {
                     if let Some((_, draft)) = ws_state.editing_content.as_mut() {
-                        draft.push_str(&s);
+                        insert_at_cursor(draft, &mut ws_state.content_cursor, &s);
                     }
                 }
                 AddrEvent::Backspace => {
                     if let Some((_, draft)) = ws_state.editing_content.as_mut() {
-                        draft.pop();
+                        delete_before_cursor(draft, &mut ws_state.content_cursor);
                     }
                 }
                 AddrEvent::Cancel => ws_state.editing_content = None,
                 AddrEvent::Submit => commit_content_edit(ws_state, project_path),
+            }
+        }
+        Message::ContentCursorMove(dir) => {
+            if ws_state.editing_content.is_none() {
+                return;
+            }
+            if let Some((_, draft)) = &ws_state.editing_content {
+                move_cursor_in(draft, &mut ws_state.content_cursor, dir);
+            }
+        }
+        Message::ContentCursorAt(local_x) => {
+            if ws_state.editing_content.is_none() {
+                return;
+            }
+            if let Some((_, draft)) = &ws_state.editing_content {
+                ws_state.content_cursor =
+                    cursor_from_x(draft, local_x, theme::font::body() as f32);
             }
         }
         Message::MarkdownEditStart => {
@@ -1194,11 +1406,14 @@ pub fn view<'a>(
     Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
 ) {
     // ---- header（挂在左栏，同 Project/Files 面板"头在列表侧"的既有惯例） ----
+    // 内边距对齐文件树面板(body 用 `project_pane` region 的 `padding` 把头
+    // 及其自带分割线整体内缩):不再用 `[20,20]` 额外撑高头部、也不让分割线
+    // 被大 padding 顶下去,与文件面板头部高度/分割线位置一致。
     let header = container(crate::homespace::home_panel_head(
         icons::IconKind::ListTodo,
         "Todo",
     ))
-    .padding([20, 20]);
+    .padding(theme::region::project_pane().padding);
 
     // ---- 状态推导（一次算好，侧栏计数 + 列表渲染共用） ----
     let states: Vec<TodoState> = ws_state
@@ -1336,8 +1551,14 @@ fn todo_footer_bar<'a>(
                 .color(byteui::theme::color::current().dim)
                 .into()
         } else {
-            let caret = if editing { "▏" } else { "" };
-            text(format!("{add_draft}{caret}"))
+            // 编辑态下按光标位置劈开草稿、中间塞 `▏` 当光标(方向键/鼠标
+            // 移动的就是 `add_cursor`);非编辑态只静态显示草稿。
+            let shown = if editing {
+                draft_with_caret(add_draft, ws_state.add_cursor)
+            } else {
+                add_draft.clone()
+            };
+            text(shown)
                 .size(theme::font::body())
                 .color(byteui::theme::color::current().cream)
                 .into()
@@ -1379,7 +1600,8 @@ fn todo_footer_bar<'a>(
                         .width(Length::Fill)
                         .height(Length::Fill)
                         .align_y(iced_widget::core::alignment::Vertical::Top)
-                        .align_x(iced_widget::core::alignment::Horizontal::Left),
+                        .align_x(iced_widget::core::alignment::Horizontal::Left)
+                        .id(add_field_id()),
                     container(submit)
                         .height(Length::Fill)
                         .align_y(iced_widget::core::alignment::Vertical::Bottom),
@@ -1482,14 +1704,19 @@ fn todo_search_bar<'a>(
     draft: &'a str,
     editing: bool,
     active: bool,
+    cursor: usize,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let body = if draft.is_empty() && !editing {
         text("搜索任务…")
             .size(theme::font::body())
             .color(byteui::theme::color::current().dim)
-    } else {
-        let caret = if editing { "▏" } else { "" };
-        text(format!("{draft}{caret}"))
+        } else {
+            let shown = if editing {
+                draft_with_caret(draft, cursor)
+            } else {
+                draft.to_string()
+            };
+            text(shown)
             .size(theme::font::body())
             .color(byteui::theme::color::current().cream)
     };
@@ -1551,6 +1778,7 @@ fn todo_list_view<'a>(
         &ws_state.search_draft,
         ws_state.search_editing,
         !ws_state.search.is_empty(),
+        ws_state.search_cursor,
     ))
     .padding([8, 20])
     .width(Length::Fill);
@@ -1754,6 +1982,7 @@ fn todo_list_row<'a>(
         is_drag_source,
         hovered,
         editing_draft,
+        ws_state.content_cursor,
     )
 }
 
@@ -1795,6 +2024,7 @@ fn todo_card<'a>(
     is_drag_source: bool,
     hovered: bool,
     editing_draft: Option<&'a str>,
+    content_cursor: usize,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let done = item.done;
 
@@ -1929,13 +2159,14 @@ fn todo_card<'a>(
                     .size(theme::font::body())
                     .color(byteui::theme::color::current().dim)
             } else {
-                text(format!("{draft}▏"))
+                text(draft_with_caret(draft, content_cursor))
                     .size(theme::font::body())
                     .color(byteui::theme::color::current().cream)
             };
             container(field)
                 .width(Length::Fill)
                 .padding([2, 4])
+                .id(content_field_id())
                 .style(|_t: &iced_widget::Theme| container::Style {
                     background: None,
                     border: Border {

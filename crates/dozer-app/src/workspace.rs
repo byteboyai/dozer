@@ -2069,17 +2069,21 @@ impl Workspace {
         self.files.cancel_search_edit();
         self.todo.cancel_search_edit();
         self.todo.cancel_add_edit();
-        self.todo.cancel_content_edit();
         self.todo.cancel_drag();
         // 名称编辑不在失焦时丢弃——改由 `App::blur_inputs` 取出缓冲并发起
         // daemon 改名(改动且非空才发请求),与描述字段"失焦写盘"行为对齐。
         if let Some(project) = self.project.as_ref() {
-            self.project_panel
-                .submit_description_edit_on_blur(std::path::Path::new(&project.path));
+            let path = std::path::Path::new(&project.path);
+            self.project_panel.submit_description_edit_on_blur(path);
+            // 任务内容行内编辑失焦即保存(与回车提交同款),不丢用户刚改的
+            // 文字;无 project 时退回丢弃,避免半输入滞留(见用户反馈)。
+            self.todo.commit_content_edit(path);
             // MARKDOWN 整文件编辑在失焦时写盘(回车是换行、没有独立提交,
             // 失焦即提交);Esc 才是丢弃,见 `MarkdownEvent(Cancel)`。
-            self.todo
-                .cancel_markdown_edit(std::path::Path::new(&project.path));
+            self.todo.cancel_markdown_edit(path);
+        } else {
+            // 没打开项目时内容编辑无法落盘,退回丢弃,避免编辑态卡住。
+            self.todo.cancel_content_edit();
         }
         self.blur_preview_editors();
     }

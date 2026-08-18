@@ -454,23 +454,11 @@ pub fn update(
 fn worktree_strip<'a>(
     worktrees: &'a [WorktreeInfo],
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let current = worktrees.iter().find(|w| w.is_current);
     let others = worktrees
         .iter()
         .filter(|w| !w.is_current)
         .collect::<Vec<_>>();
     let mut chips: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = vec![];
-    if let Some(c) = current {
-        chips.push(
-            text(format!(
-                "本工作区:{}",
-                c.branch.as_deref().unwrap_or("(无分支)")
-            ))
-            .size(theme::font::caption())
-            .color(byteui::theme::color::current().cyan)
-            .into(),
-        );
-    }
     for o in others {
         let label = match (&o.branch, o.missing) {
             (Some(b), true) => format!("{b} (缺失)"),
@@ -673,15 +661,27 @@ fn commit_list_view<'a>(
                     .color(byteui::theme::color::current().cyan),
             );
         }
-        // 下行:summary 主体
-        let summary_line = text(row.summary.clone())
-            .size(theme::font::caption())
-            .color(byteui::theme::color::current().cream);
-        let line = column![head_line, summary_line].spacing(2);
+        // 下行:summary 主体——左缩进到与 commit id(short_sha)对齐:跳过
+        // 上行图标宽度 + 图标与 sha 之间的 `spacing(8)`。
+        let comment_indent = crate::theme::icon_size::row() + 8.0;
+        let summary_line = container(
+            text(row.summary.clone())
+                .size(theme::font::caption())
+                .color(byteui::theme::color::current().cream),
+        )
+        .padding(iced_widget::core::Padding {
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: comment_indent,
+        });
+        let line = column![head_line, summary_line].spacing(4);
         // 统一卡片样式:选中/一般/hover 三态(选中=金边、hover=金边+填充、
-        // 一般态=描边),不再用左侧 3px 金竖条表示选中。
+        // 一般态=描边),不再用左侧 3px 金竖条表示选中。内部间距与卡片内边距
+        // 对齐 Agent 面板的 agent 卡片(`workspace.rs::agent_card`:行距 4、
+        // `padding(10)`),避免 commit 卡片内部过挤。
         let hovered = app.hover_progress(HoverId::Commit(i)) > 0.0;
-        let inner = container(line).padding([4, 8]).width(Length::Fill).style(
+        let inner = container(line).padding(10).width(Length::Fill).style(
             move |_t: &iced_widget::Theme| {
                 byteui::interaction::cards::container_card(
                     is_selected,
@@ -713,12 +713,18 @@ fn file_list_view<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     match detail {
         Err(err) => container(
-            text(format!("详情加载失败: {err}")).color(byteui::theme::color::current().red),
+            text(format!("详情加载失败: {err}"))
+                .size(theme::font::caption())
+                .color(byteui::theme::color::current().red),
         )
         .padding(8)
         .into(),
         Ok(detail) if detail.files.is_empty() => {
-            container(text("无文件改动").color(byteui::theme::color::current().dim))
+            container(
+            text("无文件改动")
+                .size(theme::font::caption())
+                .color(byteui::theme::color::current().dim),
+        )
                 .padding(8)
                 .into()
         }
@@ -732,7 +738,10 @@ fn file_list_view<'a>(
                     _ => byteui::theme::color::current().cyan,
                 };
                 let line = row![
-                    text(status_glyph(f.status)).color(color).width(18),
+                    text(status_glyph(f.status))
+                        .size(theme::font::caption())
+                        .color(color)
+                        .width(18),
                     text(f.path.clone())
                         .size(theme::font::caption())
                         .color(byteui::theme::color::current().cream),
@@ -794,7 +803,9 @@ pub fn view<'a>(
         return container(
             column![
                 head,
-                text(text_content).color(byteui::theme::color::current().dim)
+                text(text_content)
+                    .size(theme::font::caption())
+                    .color(byteui::theme::color::current().dim)
             ]
             .spacing(8)
             .padding(pad),
@@ -805,7 +816,9 @@ pub fn view<'a>(
         return container(
             column![
                 head,
-                text("没有可显示的提交").color(byteui::theme::color::current().dim)
+                text("没有可显示的提交")
+                    .size(theme::font::caption())
+                    .color(byteui::theme::color::current().dim)
             ]
             .spacing(8)
             .padding(pad),
@@ -814,7 +827,12 @@ pub fn view<'a>(
     }
 
     let head_branch = snapshot.head_branch();
-    let mut left = column![head, worktree_strip(worktrees)].spacing(8);
+    // 顶部不再显示"本工作区:<分支>"(与 footbar 的分支名重复);仅当存在
+    // 其它(关联)工作树时才把切换条挂上,避免单工作树时凭空多一条间隙。
+    let mut left = column![head].spacing(8);
+    if worktrees.iter().any(|w| !w.is_current) {
+        left = left.push(worktree_strip(worktrees));
+    }
     if let Some(err) = error {
         left = left.push(
             text(format!("git log 读取失败: {err}"))
@@ -848,7 +866,11 @@ pub fn view<'a>(
             .height(Length::Fill)
             .into()
         } else {
-            container(text("选择一个提交查看改动").color(byteui::theme::color::current().dim))
+            container(
+            text("选择一个提交查看改动")
+                .size(theme::font::caption())
+                .color(byteui::theme::color::current().dim),
+        )
                 .padding(12)
                 .into()
         };
@@ -883,12 +905,20 @@ fn diff_pane_view<'a>(
         return container(iced_widget::Space::new()).into();
     };
     let Some(path) = selected_file else {
-        return container(text("未选中文件").color(byteui::theme::color::current().dim))
+        return container(
+            text("未选中文件")
+                .size(theme::font::caption())
+                .color(byteui::theme::color::current().dim),
+        )
             .padding(8)
             .into();
     };
     let Some(entry) = detail.files.iter().find(|f| f.path == path) else {
-        return container(text("未选中文件").color(byteui::theme::color::current().dim))
+        return container(
+            text("未选中文件")
+                .size(theme::font::caption())
+                .color(byteui::theme::color::current().dim),
+        )
             .padding(8)
             .into();
     };
@@ -899,7 +929,11 @@ fn diff_pane_view<'a>(
     ]
     .spacing(4);
     if entry.patch.is_empty() {
-        content = content.push(text("(无 diff 内容)").color(byteui::theme::color::current().dim));
+        content = content.push(
+            text("(无 diff 内容)")
+                .size(theme::font::caption())
+                .color(byteui::theme::color::current().dim),
+        );
     } else {
         content = content.push(crate::diff_render::colored_diff_lines(&entry.patch));
     }
@@ -1068,15 +1102,25 @@ fn branch_picker_view<'a>(
     // 面板壳走 `crate::menu::shell`(context_menu 表面 = 文件树右键菜单基准)。
     let panel: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
         crate::menu::shell(items, Length::Fill);
+    // 下拉层锚定在左侧面板底部、footbar 正上方:全高 stack 铺一层透明
+    // `dismiss` 用于"点外关闭",面板用 `Space::Fill` 顶到最底,从 footbar
+    // 上方弹出(与文件树 `branch_picker_popup` 钉在 git 底栏上方的语义一致,
+    // 而非 `height(Shrink)` 时浮到面板顶部)。
     let dismiss = iced_widget::MouseArea::new(
         iced_widget::Space::new()
             .width(Length::Fill)
             .height(Length::Fill),
     )
     .on_press(Message::BranchPickerClose);
-    iced_widget::stack![dismiss, panel]
+    let positioned = column![
+        iced_widget::Space::new().height(Length::Fill),
+        panel,
+    ]
+    .width(Length::Fill)
+    .height(Length::Fill);
+    iced_widget::stack![dismiss, positioned]
         .width(Length::Fill)
-        .height(Length::Shrink)
+        .height(Length::Fill)
         .into()
 }
 

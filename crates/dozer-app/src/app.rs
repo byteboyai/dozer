@@ -2589,6 +2589,12 @@ impl App {
             .is_some_and(|ws| ws.todo.markdown_editing())
     }
 
+    /// 当前左栏显示哪个面板(main.rs 每帧 `interface.operate` 捕获 Todo 自绘
+    /// 输入字段 bounds 时用来判断是否要遍历,避免无谓开销)。
+    pub fn left_view(&self) -> LeftView {
+        self.left_view
+    }
+
     /// 是否正在拖拽 Todo 任务排序(main.rs 鼠标释放路由 + about_to_wait
     /// 持续重绘用;同 `dragging_tab` 那套)。
     pub fn todo_dragging(&self) -> bool {
