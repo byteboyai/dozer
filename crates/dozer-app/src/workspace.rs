@@ -48,8 +48,8 @@ use crate::extensions::usage;
 use crate::git_watch;
 use crate::homespace::home_panel_head;
 use crate::homespace::home_panel_head_with_actions;
-use crate::icons;
-use crate::icons::IconKind;
+use byteui::interaction::icons;
+use byteui::interaction::icons::IconKind;
 use crate::osc::{OscEvent, OscScanner};
 use crate::preview::{PreviewPane, TabKind, is_editable_extension};
 use crate::preview_state;
@@ -2421,7 +2421,7 @@ pub(crate) fn conversation_list_pane(
         .on_press(Message::ConversationOpen(c.path.clone()))
         .width(Length::Fill)
         .padding(10)
-        .style(crate::theme::cards::button_card(
+        .style(byteui::interaction::cards::button_card(
             current,
             theme::color::CARD,
         ));
@@ -2432,9 +2432,9 @@ pub(crate) fn conversation_list_pane(
             .width(Length::Fill)
             .height(Length::Fill)
             .direction(scrollable::Direction::Vertical(
-                crate::scrollbar::scrollbar(),
+                byteui::interaction::scrollbar::scrollbar(),
             ))
-            .style(|_t, _s| crate::scrollbar::scrollbar_style()),
+            .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
     );
 
     container(content.padding(region.padding))
@@ -2611,7 +2611,7 @@ pub(crate) fn agent_card<'a>(
         // `Message::SelectTab` 文档,2026-08-17 修的真实 bug)。
         .on_press(Message::SelectTabNoDrag(idx))
         .width(Length::Fill)
-        .style(crate::theme::cards::button_card(active, theme::color::CARD))
+        .style(byteui::interaction::cards::button_card(active, theme::color::CARD))
         .into()
 }
 
@@ -2761,9 +2761,9 @@ pub(crate) fn review_content_pane(
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .direction(scrollable::Direction::Vertical(
-                    crate::scrollbar::scrollbar(),
+                    byteui::interaction::scrollbar::scrollbar(),
                 ))
-                .style(|_t, _s| crate::scrollbar::scrollbar_style()),
+                .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
         );
     } else {
         content = content.push(
@@ -2849,9 +2849,9 @@ pub(crate) fn no_project_placeholder<'a>(
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .direction(scrollable::Direction::Vertical(
-                    crate::scrollbar::scrollbar()
+                    byteui::interaction::scrollbar::scrollbar()
                 ))
-                .style(|_t, _s| crate::scrollbar::scrollbar_style()),
+                .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
         ]
         .spacing(region.gap),
     )

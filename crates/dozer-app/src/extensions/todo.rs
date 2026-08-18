@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 
 use crate::app::{App, HoverId};
 use crate::workspace::{AddrEvent, Workspace, agent_icon, tab_title};
-use crate::{icons, theme};
+use crate::theme;
+use byteui::interaction::icons;
 use dozer_core::protocol::AgentKind;
 use iced_widget::core::{Border, Color, Element, Length, Padding, mouse};
 use iced_widget::{
@@ -1668,9 +1669,9 @@ fn todo_list_view<'a>(
             .id(iced_widget::Id::new(TODO_LIST_SCROLL_ID))
             .height(Length::Fill)
             .direction(scrollable::Direction::Vertical(
-                crate::scrollbar::scrollbar(),
+                byteui::interaction::scrollbar::scrollbar(),
             ))
-            .style(|_t, _s| crate::scrollbar::scrollbar_style()),
+            .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
         todo_footer_bar(ws_state),
     ]
     .height(Length::Fill)
@@ -1718,9 +1719,9 @@ fn todo_markdown_view<'a>(
         scrollable(body)
             .height(Length::Fill)
             .direction(scrollable::Direction::Vertical(
-                crate::scrollbar::scrollbar(),
+                byteui::interaction::scrollbar::scrollbar(),
             ))
-            .style(|_t, _s| crate::scrollbar::scrollbar_style()),
+            .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
     )
     .interaction(mouse::Interaction::Pointer);
     if ws_state.markdown_editing {
@@ -2050,12 +2051,12 @@ fn todo_card<'a>(
                     border: Border {
                         color: theme::color::GOLD,
                         width: 1.5,
-                        radius: crate::theme::cards::CARD_RADIUS.into(),
+                        radius: byteui::interaction::cards::CARD_RADIUS.into(),
                     },
                     ..container::Style::default()
                 }
             } else {
-                crate::theme::cards::container_card(selected, hovered, theme::color::CARD)
+                byteui::interaction::cards::container_card(selected, hovered, theme::color::CARD)
             }
         });
 

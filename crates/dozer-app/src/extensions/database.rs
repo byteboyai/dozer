@@ -6,7 +6,7 @@
 //! 阶段,见
 //! `docs/superpowers/specs/2026-08-08-database-panel-phase1-design.md`。
 
-use crate::icons;
+use byteui::interaction::icons;
 use iced_widget::core::{Border, Element, Length};
 use iced_widget::{button, column, container, row, scrollable, text, text_input};
 use serde::{Deserialize, Serialize};
@@ -1545,9 +1545,9 @@ fn schema_tree_view<'a>(
         col = col.push(
             scrollable(tree)
                 .direction(scrollable::Direction::Vertical(
-                    crate::scrollbar::scrollbar(),
+                    byteui::interaction::scrollbar::scrollbar(),
                 ))
-                .style(|_t, _s| crate::scrollbar::scrollbar_style()),
+                .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
         );
     }
 
