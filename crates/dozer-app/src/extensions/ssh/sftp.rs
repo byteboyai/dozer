@@ -452,12 +452,12 @@ fn tree_column<'a>(
         let indent = "  ".repeat(r.depth);
         let icon = if r.is_dir {
             if r.expanded {
-                crate::icons::IconKind::FolderOpen
+                byteui::interaction::icons::IconKind::FolderOpen
             } else {
-                crate::icons::IconKind::Folder
+                byteui::interaction::icons::IconKind::Folder
             }
         } else {
-            crate::icons::IconKind::FileGeneric
+            byteui::interaction::icons::IconKind::FileGeneric
         };
         let is_selected = selected == Some(r.path.as_path());
         let path_for_toggle = r.path.clone();
@@ -480,7 +480,7 @@ fn tree_column<'a>(
             });
         let mut label = row![
             text(indent),
-            crate::icons::view(
+            byteui::interaction::icons::view(
                 icon,
                 crate::theme::icon_size::row(),
                 crate::theme::color::DIM
@@ -634,13 +634,13 @@ fn sftp_context_menu<'a>(
     let host_id = state.host_id.clone();
     let (icon, label, msg) = if *is_local {
         (
-            crate::icons::IconKind::ChevronUp,
+            byteui::interaction::icons::IconKind::ChevronUp,
             "上传",
             Message::Upload(host_id),
         )
     } else {
         (
-            crate::icons::IconKind::ChevronDown,
+            byteui::interaction::icons::IconKind::ChevronDown,
             "下载",
             Message::Download(host_id),
         )

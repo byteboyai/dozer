@@ -7,8 +7,8 @@
 
 use crate::conversation::ConversationMeta;
 use crate::homespace::home_panel_head;
-use crate::icons;
 use crate::theme;
+use byteui::interaction::icons;
 use dozer_core::protocol::AgentKind;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::{Border, Color, Element, Length, Radians, Rectangle};

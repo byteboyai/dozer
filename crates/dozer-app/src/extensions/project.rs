@@ -4,8 +4,9 @@
 pub mod links;
 
 use crate::delivery::WorktreeInfo;
+use crate::theme;
 use crate::workspace::AddrEvent;
-use crate::{icons, theme};
+use byteui::interaction::icons;
 use dozer_core::protocol::ProjectInfo;
 use iced_widget::core::{Border, Element, Length};
 use iced_widget::{MouseArea, button, column, container, row, text};

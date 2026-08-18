@@ -5,8 +5,8 @@
 //! `docs/superpowers/specs/2026-08-08-ssh-panel-phase1-design.md`。
 
 use crate::app::{App, HoverId, ssh_tab_hover_key};
-use crate::icons;
 use crate::theme;
+use byteui::interaction::icons;
 use iced_widget::core::Element;
 use iced_widget::{MouseArea, button, column, container, row, stack, text, text_input};
 use serde::{Deserialize, Serialize};
@@ -745,7 +745,7 @@ fn host_card<'a>(
             .is_some_and(|(h, i)| h == &host.id && *i == idx)
     };
     let icon_btn = |kind: icons::IconKind, on_select: Message, tooltip: &'a str, idx: u8| {
-        crate::icons::icon_button_entry(
+        byteui::interaction::icons::icon_button_entry(
             kind,
             crate::theme::icon_size::row(),
             /* active */ false,
@@ -768,25 +768,25 @@ fn host_card<'a>(
 
     let mut actions = row![
         icon_btn(
-            crate::icons::IconKind::FolderSync,
+            byteui::interaction::icons::IconKind::FolderSync,
             Message::OpenSshTab(host.id.clone(), SshTabKind::Sftp),
             "文件传输",
             0,
         ),
         icon_btn(
-            crate::icons::IconKind::Terminal,
+            byteui::interaction::icons::IconKind::Terminal,
             Message::OpenSshTab(host.id.clone(), SshTabKind::Terminal),
             "终端",
             1,
         ),
         icon_btn(
-            crate::icons::IconKind::Settings,
+            byteui::interaction::icons::IconKind::Settings,
             Message::EditHostStart(host.id.clone()),
             "设置",
             2,
         ),
         icon_btn(
-            crate::icons::IconKind::Trash,
+            byteui::interaction::icons::IconKind::Trash,
             Message::DeleteHostRequest(host.id.clone()),
             "删除",
             3,
@@ -838,7 +838,7 @@ fn host_card<'a>(
     .padding(10)
     .width(iced_widget::core::Length::Fill)
     .style(move |_t: &iced_widget::Theme| {
-        crate::theme::cards::container_card(false, hovered, theme::color::CARD)
+        byteui::interaction::cards::container_card(false, hovered, theme::color::CARD)
     });
     MouseArea::new(card)
         .on_enter(Message::Hover(
@@ -1079,7 +1079,7 @@ pub fn view<'a>(
     outer: iced_widget::core::Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![crate::homespace::home_panel_head(
-        crate::icons::IconKind::Server,
+        byteui::interaction::icons::IconKind::Server,
         "主机"
     )]
     .spacing(12)

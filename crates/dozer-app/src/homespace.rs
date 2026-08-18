@@ -11,9 +11,9 @@ use crate::app::{
 use crate::conversation::{self, ConversationMeta};
 use crate::delivery;
 use crate::extensions::browser;
-use crate::icons;
 use crate::theme;
 use crate::workspace::{lh, relative_time_text};
+use byteui::interaction::icons;
 use dozer_core::protocol::ProjectInfo;
 use iced_widget::core::{Border, Color, Element, Length, Padding};
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
@@ -409,7 +409,10 @@ fn home_project_list_view(
             .on_press(Message::ProjectSelect(p.id))
             .width(Length::Fill)
             .padding(10)
-            .style(crate::theme::cards::button_card(false, theme::color::CARD));
+            .style(byteui::interaction::cards::button_card(
+                false,
+                theme::color::CARD,
+            ));
             list = list.push(card);
         }
         col = col.push(
@@ -417,9 +420,9 @@ fn home_project_list_view(
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .direction(scrollable::Direction::Vertical(
-                    crate::scrollbar::scrollbar(),
+                    byteui::interaction::scrollbar::scrollbar(),
                 ))
-                .style(|_t, _s| crate::scrollbar::scrollbar_style()),
+                .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
         );
     }
 
@@ -543,7 +546,11 @@ fn home_recent_files_card(
             col = col.push(
                 MouseArea::new(container(row_el).padding(10).width(Length::Fill).style(
                     move |_t: &iced_widget::Theme| {
-                        crate::theme::cards::container_card(false, hovered, theme::color::CARD)
+                        byteui::interaction::cards::container_card(
+                            false,
+                            hovered,
+                            theme::color::CARD,
+                        )
                     },
                 ))
                 .on_enter(Message::Hover(HoverId::RecentFile(i), true))
@@ -607,7 +614,11 @@ fn home_recent_conversations_card(
                     .padding(10)
                     .width(Length::Fill)
                     .style(move |_t: &iced_widget::Theme| {
-                        crate::theme::cards::container_card(false, hovered, theme::color::CARD)
+                        byteui::interaction::cards::container_card(
+                            false,
+                            hovered,
+                            theme::color::CARD,
+                        )
                     }),
                 )
                 .on_enter(Message::Hover(HoverId::RecentConversation(i), true))

@@ -5,7 +5,8 @@ use crate::delivery::FileGitStatus;
 use crate::project::{FileTree, PathKind, TreeRow};
 use crate::theme::terminal_font;
 use crate::workspace::AddrEvent;
-use crate::{delivery, icons, theme};
+use crate::{delivery, theme};
+use byteui::interaction::icons;
 use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Color, Element, Length, Padding};
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
@@ -1135,10 +1136,10 @@ pub fn view<'a>(
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .direction(scrollable::Direction::Vertical(
-                    crate::scrollbar::scrollbar()
+                    byteui::interaction::scrollbar::scrollbar()
                 ))
                 .on_scroll(|viewport| { Message::TreeScroll(viewport.absolute_offset().y) })
-                .style(|_t, _s| crate::scrollbar::scrollbar_style()),
+                .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
             git_footer_bar(ws_state, branch_hover_t),
         ]
         .spacing(region.gap),

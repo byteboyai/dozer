@@ -4,10 +4,10 @@
 //! App 级状态(挂 `App.footbar`,不挂 `Workspace`——跨所有项目页签共享)。
 //! 设计见 `docs/superpowers/specs/2026-08-09-footbar-system-info-design.md`。
 
-use crate::icons;
 use crate::theme;
 use crate::theme::icon_size;
 use crate::workspace::ShellIo;
+use byteui::interaction::icons;
 use iced_widget::core::{Alignment, Element, Length};
 use iced_widget::{Space, container, row, text};
 use std::path::PathBuf;

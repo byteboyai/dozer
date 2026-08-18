@@ -19,7 +19,8 @@
 //! 所有原语对消息类型 `Msg` 泛型化,任何面板的 `Message` 都能直接复用,
 //! 不再为每个面板各写一份 `menu_item`。
 
-use crate::{icons, theme};
+use crate::theme;
+use byteui::interaction::icons;
 use iced_widget::core::{Border, Color, Element, Length};
 use iced_widget::{button, column, container, row, text};
 
