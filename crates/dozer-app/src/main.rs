@@ -1590,6 +1590,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 // Todo 面板可见时轮询磁盘上的 `.dozer/todo.md`,agent 或用户
                 // 在编辑器中改完文件,面板能自动跟上。
                 app.poll_todo_if_visible();
+                // 新增任务闪光倒计时:到点且用户未手动改选就自动清除选中高亮
+                // (每次都调,内部按 `until` 自己短路,不再显式判断 `flash_active`)。
+                app.advance_todo_flash();
                 // 按钮悬停动画:有动画进行中才逐拍推进,全部收敛后本拍不再改
                 // 状态(`any_hover_anim_active` 为 false 时 `about_to_wait` 不会再
                 // 排下一拍,自然停下)。
@@ -1612,7 +1615,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 // 唤醒,满 3s 那一刻靠 `next_tooltip_wake` 算出的剩余时间精确
                 // 重绘出气泡;满 3s 后 `next_tooltip_wake` 返回 None,不再空转。
                 let next_tip = app.next_tooltip_wake();
-                let wakes: [(bool, Duration); 4] = [
+                // 新增任务闪光计时:按剩余时间精确排一次"恰好 2s 才清除高亮"
+                // 的唤醒,到期后 `next_todo_flash_wake` 返回 None 自然停下。
+                let next_flash = app.next_todo_flash_wake();
+                let wakes: [(bool, Duration); 5] = [
                     (app.any_hover_anim_active(), HOVER_ANIM_INTERVAL),
                     (app.todo_panel_visible(), TODO_POLL_INTERVAL),
                     (
@@ -1622,6 +1628,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     (
                         next_tip.is_some(),
                         next_tip.unwrap_or(crate::app::HOVER_TOOLTIP_DELAY),
+                    ),
+                    (
+                        next_flash.is_some(),
+                        next_flash.unwrap_or(crate::extensions::todo::ADD_SELECT_HIGHLIGHT),
                     ),
                 ];
                 if let Some(interval) = wakes
@@ -1922,6 +1932,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // Submit the clear pass
                                 queue.submit([encoder.finish()]);
 
+                                // 消费"Todo 列表滚回顶部"一次性位(必须在
+                                // `UserInterface::build` 之前取走,因为构建会借走
+                                // `app` 的不可变引用,后面就不能再可变借用了)。
+                                let scroll_pending = app.take_todo_scroll_to_top();
+
                                 // Draw iced on top
                                 let mut interface = UserInterface::build(
                                     app.view(),
@@ -1939,6 +1954,21 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     clipboard,
                                     &mut Vec::new(),
                                 );
+
+                                // 新增任务置顶后把 Todo 列表滚回顶部,让新任务
+                                // 可见(一次性位,消费即复位)。
+                                if scroll_pending {
+                                    let mut op = iced_winit::core::widget::operation::scrollable::scroll_to::<()>(
+                                        iced_winit::core::widget::Id::new(
+                                            crate::extensions::todo::TODO_LIST_SCROLL_ID,
+                                        ),
+                                        iced_winit::core::widget::operation::scrollable::AbsoluteOffset::<Option<f32>> {
+                                            x: Some(0.0),
+                                            y: Some(0.0),
+                                        },
+                                    );
+                                    interface.operate(renderer, &mut op);
+                                }
 
                                 // Update the mouse cursor
                                 if let user_interface::State::Updated {

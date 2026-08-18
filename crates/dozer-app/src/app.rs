@@ -2596,6 +2596,26 @@ impl App {
             .is_some_and(|ws| ws.todo.drag_active())
     }
 
+    /// 距新增闪光自动清除的剩余时间:main.rs 据此排下次唤醒,恰好到点重绘
+    /// 一次清除高亮(同 `next_tooltip_wake` 的定时范式)。
+    pub fn next_todo_flash_wake(&self) -> Option<std::time::Duration> {
+        self.active_workspace()?.todo.next_flash_wake()
+    }
+
+    /// 推进新增闪光倒计时(每帧 `new_events` 调用):到点且用户未手动改选则
+    /// 自动清除选中高亮。
+    pub fn advance_todo_flash(&mut self) {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.todo.advance_flash();
+        }
+    }
+
+    /// 取走"Todo 列表滚回顶部"的一次性滚动位(main.rs 渲染循环消费)。
+    pub fn take_todo_scroll_to_top(&mut self) -> bool {
+        self.active_workspace_mut()
+            .is_some_and(|ws| ws.todo.take_scroll_to_top())
+    }
+
     /// 当前项目根路径(供 main.rs 算相对路径用;未打开项目时 None)。
     pub fn active_project_path(&self) -> Option<PathBuf> {
         self.active_workspace()?.active_project_path()

@@ -72,16 +72,17 @@ pub fn replace_todo_line(content: &str, old_line: &str, new_line: &str) -> Optio
     found.then_some(out)
 }
 
-/// 在最后一个 `- [ ]`/`- [x]` 行之后追加一条新任务；纯追加不依赖"找到
-/// 匹配行"，冲突面比 `replace_todo_line` 小。文件里一条任务都没有时，
-/// 追加在文件末尾（保留原有内容，末尾补一个换行再接新行，避免跟最后
-/// 一行内容粘连）。
-pub fn append_todo_item(content: &str, text: &str) -> String {
+/// 在第一个 `- [ ]`/`- [x]` checkbox 行之前插入一条新任务：新任务"置顶"到
+/// 任务列表顶部（待办块最前），符合"新增即置顶 + 列表顶部可见"的交互。
+/// 文件里一条任务都没有时，插入在文件末尾（保留原有内容，末尾补一个换行
+/// 再接新行，避免跟最后一行内容粘连）；headline 等非 checkbox 行保持在
+/// 新任务之前（不挤到标题上面去）。
+pub fn prepend_todo_item(content: &str, text: &str) -> String {
     let lines: Vec<&str> = content.lines().collect();
-    let last_item_idx = lines
+    let first_item_idx = lines
         .iter()
-        .rposition(|l| l.trim_start().starts_with("- [ ]") || l.trim_start().starts_with("- [x]"));
-    let insert_at = last_item_idx.map(|i| i + 1).unwrap_or(lines.len());
+        .position(|l| l.trim_start().starts_with("- [ ]") || l.trim_start().starts_with("- [x]"));
+    let insert_at = first_item_idx.unwrap_or(lines.len());
     let mut out = String::with_capacity(content.len() + text.len() + 8);
     for (i, line) in lines.iter().enumerate() {
         if i == insert_at {
@@ -223,6 +224,25 @@ pub struct TodoDrag {
     pub target_idx: usize,
 }
 
+/// 新增任务后"置顶 + 选中保持"的计时记录:`idx` 是新增后那条任务在
+/// `items` 里的下标,`until` 是自动清除其 `selected_row` 高亮的时刻
+/// (`t + ADD_SELECT_HIGHLIGHT`)。`next_flash_wake`/`advance_flash` 据此
+/// 恰好到点清除,不空转也不永远选中。
+#[derive(Debug, Clone, Copy)]
+struct Flash {
+    idx: usize,
+    until: std::time::Instant,
+}
+
+/// 新增任务后卡片选中高亮保持的时长。之后 `selected_row` 自动清除,
+/// 除非用户在这期间已经手动点了别的卡片(见 `RowSelect` 里对 `flash`
+/// 的清除)。
+pub(crate) const ADD_SELECT_HIGHLIGHT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Todo 列表滚动容器的 `scrollable::Id`:main.rs 在新增任务置顶后据此发
+/// `scrollable::scroll_to` 滚回顶部(`App::take_todo_scroll_to_top`),
+/// 让新任务在列表顶部可见。取值只要在整棵 widget 树里唯一即可。
+pub const TODO_LIST_SCROLL_ID: &str = "todo-list";
 /// 纯前端过滤：状态相等匹配 + 关键字对 `TodoItem.text` 做大小写不敏感
 /// 的子串匹配（空 `query` 不过滤）。作用在"已经解析+推导好状态"的
 /// 内存列表上，不碰文件、不碰 sidecar（design 第 7 节）。
@@ -336,6 +356,17 @@ pub struct WorkspaceState {
     filter: TodoFilter,
     view_mode: TodoViewMode,
     selected_row: Option<usize>,
+    /// 新增任务后"置顶 + 选中保持 2 秒"的计时态。`Some(Flash)` 表示刚新增
+    /// 了一条任务,其卡片的 `selected_row` 高亮要在 `flash.until` 时刻自动
+    /// 清除;期间的挂起唤醒由 `next_flash_wake` 驱动(main.rs 据此排下次
+    /// 重绘,见 `App::advance_flash`)。用户手动点了其它卡片会清除本字段,
+    /// 不再让 2 秒倒计时去抢用户的主动选中。
+    flash: Option<Flash>,
+    /// 新增任务后请求"下滑列表到底/置顶"的一次性滚动位标记。新增置顶后
+    /// 让列表滚回顶部使新任务可见;由 main.rs 在下一帧 `interface.operate`
+    /// 消耗(见 `App::take_todo_scroll_to_top`),置位后一直为 `true` 直到
+    /// 被取走,避免主事件循环与渲染循环的帧序差异漏掉这次滚动。
+    scroll_to_top: bool,
     /// 已生效的搜索关键词(列表过滤用)。打字期间只改草稿 `search_draft`,
     /// 回车/点右侧搜索按钮才落成这里(与文件树搜索 `search_query` 同款
     /// "草稿→提交"模型——本 app 的 iced 界面每帧重建、原生 `text_input`
@@ -383,6 +414,48 @@ impl WorkspaceState {
     /// 关闭用,同 `dispatch_popup_open` 的既有模式)。
     pub fn calendar_popup_open(&self) -> bool {
         self.calendar_open.is_some()
+    }
+
+    /// 开场新增任务选中闪光:`selected_row` 置为新增后的下标并保持
+    /// `ADD_SELECT_HIGHLIGHT`;同时置滚动位,让列表滚回顶部使新任务可见。
+    /// `scroll_to_top` 由 main.rs 下一帧 `interface.operate` 消费(一次性)。
+    fn start_flash(&mut self, idx: usize) {
+        self.selected_row = Some(idx);
+        self.flash = Some(Flash {
+            idx,
+            until: std::time::Instant::now() + ADD_SELECT_HIGHLIGHT,
+        });
+        self.scroll_to_top = true;
+    }
+
+    /// 距新增闪光自动清除的剩余时间:main.rs 据此排下次唤醒,做到"恰好 2s
+    /// 才重绘一次清除高亮",不空转也不延迟(同 `App::next_tooltip_wake` 的
+    /// 定时范式)。未在闪光或已到点返回 `None`。
+    pub fn next_flash_wake(&self) -> Option<std::time::Duration> {
+        self.flash
+            .and_then(|f| ADD_SELECT_HIGHLIGHT.checked_sub(f.until.elapsed()))
+    }
+
+    /// 推进闪光倒计时:到点且用户尚未手动改选就清除 `selected_row` 高亮,
+    /// 同时熄灭闪光。每帧由 main.rs `new_events` 调用(见 `App::advance_flash`)。
+    pub fn advance_flash(&mut self) {
+        let Some(flash) = self.flash else {
+            return;
+        };
+        if flash.until <= std::time::Instant::now() {
+            if self.selected_row == Some(flash.idx) {
+                self.selected_row = None;
+            }
+            self.flash = None;
+        }
+    }
+
+    /// 取走"滚回列表顶部"的一次性滚动位并复位(供 main.rs 渲染循环在
+    /// `interface.operate` 前查询)。返回 `true` 表示本帧应执行一次滚动。
+    pub fn take_scroll_to_top(&mut self) -> bool {
+        let pending = self.scroll_to_top;
+        self.scroll_to_top = false;
+        pending
     }
 
     /// 只读当前已解析的任务列表,给内核派发(`DispatchToExisting`)时按
@@ -730,7 +803,7 @@ fn commit_add_task(ws_state: &mut WorkspaceState, project_path: &std::path::Path
     }
     let path = todo_path(project_path);
     let content = std::fs::read_to_string(&path).unwrap_or_default();
-    let new_content = append_todo_item(&content, &text);
+    let new_content = prepend_todo_item(&content, &text);
     if let Some(parent) = path.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
@@ -743,6 +816,14 @@ fn commit_add_task(ws_state: &mut WorkspaceState, project_path: &std::path::Path
     }
     ws_state.add_draft.clear();
     reload_from_disk(ws_state, project_path);
+    // 新任务置顶落盘后:选中并滚动到列表顶部,保持 2 秒的选中态提示用户
+    // "这条就是刚加的"。
+    let flash_idx = ws_state
+        .items
+        .iter()
+        .position(|item| item.text == text)
+        .unwrap_or(0);
+    ws_state.start_flash(flash_idx);
 }
 
 /// `ContentEvent(Submit)` 的写盘逻辑:把草稿改写进 `.dozer/todo.md` 里对应
@@ -887,6 +968,11 @@ pub fn update(
         Message::ViewModeSet(m) => ws_state.view_mode = m,
         Message::RowSelect(idx) => {
             ws_state.selected_row = idx;
+            // 用户手动选中(点卡片空白处)会打断"新增闪光":否则 2 秒计时到点
+            // 会把用户刚主动选的卡片又自动取消选中。`take_scroll_to_top` 未定
+            // 时用户主动点才会走到这里,新增闪光阶段不处理(见 `Message::Toggle`
+            // 之上对闪光来源的约定)。
+            ws_state.flash = None;
             // 待办卡片被按下即"准备拖":记下它的 item-index 作为拖拽源。
             // 已完成不参与拖拽(只有待办才进 `drag`)。注意这跟选中态是两件
             // 独立的事——纯点击(不移动)也会落到这里,但松手时
@@ -1562,8 +1648,11 @@ fn todo_list_view<'a>(
     column![
         search,
         // 任务列表滚动条对齐全应用统一滚动条规范(几何 + 外观,见
-        // `crate::scrollbar`),不再是 iced 默认滚动条。
+        // `crate::scrollbar`),不再是 iced 默认滚动条。`.id` 是新增任务后
+        // "滚回顶部使新任务可见"的定位锚点(main.rs `interface.operate`
+        // 拿这个 Id 发 `scrollable::scroll_to`,见 `App::take_todo_scroll_to_top`)。
         scrollable(list)
+            .id(iced_widget::Id::new(TODO_LIST_SCROLL_ID))
             .height(Length::Fill)
             .direction(scrollable::Direction::Vertical(
                 crate::scrollbar::scrollbar(),
@@ -2527,20 +2616,29 @@ mod tests {
     }
 
     #[test]
-    fn append_todo_item_to_empty_list() {
+    fn prepend_todo_item_to_empty_list() {
         let content = "# Todo\n";
         assert_eq!(
-            append_todo_item(content, "新任务"),
+            prepend_todo_item(content, "新任务"),
             "# Todo\n- [ ] 新任务\n"
         );
     }
 
     #[test]
-    fn append_todo_item_after_last_existing_item() {
+    fn prepend_todo_item_before_first_existing_item() {
         let content = "# Todo\n\n- [ ] 任务A\n- [x] 任务B\n";
         assert_eq!(
-            append_todo_item(content, "任务C"),
-            "# Todo\n\n- [ ] 任务A\n- [x] 任务B\n- [ ] 任务C\n"
+            prepend_todo_item(content, "任务C"),
+            "# Todo\n\n- [ ] 任务C\n- [ ] 任务A\n- [x] 任务B\n"
+        );
+    }
+
+    #[test]
+    fn prepend_todo_item_keeps_headline_above() {
+        let content = "# Todo\n正文行\n- [ ] 任务A\n";
+        assert_eq!(
+            prepend_todo_item(content, "任务B"),
+            "# Todo\n正文行\n- [ ] 任务B\n- [ ] 任务A\n"
         );
     }
 
@@ -2916,7 +3014,7 @@ mod tests {
     }
 
     #[test]
-    fn update_add_submit_appends_and_clears_draft() {
+    fn update_add_submit_prepends_and_clears_draft() {
         let (_dir, root) = project_dir_with_todo("# Todo\n");
         let mut ws_state = WorkspaceState {
             add_draft: "新任务".to_string(),
@@ -2934,6 +3032,67 @@ mod tests {
         assert!(ws_state.add_draft.is_empty());
         assert_eq!(ws_state.items.len(), 1);
         assert_eq!(ws_state.items[0].text, "新任务");
+        // 新增后应置顶闪光:卡片保持选中、滚动位被武装(等 main.rs 消费)。
+        assert_eq!(ws_state.selected_row, Some(0));
+        assert!(ws_state.flash.is_some());
+        assert!(ws_state.take_scroll_to_top());
+        // 取走后滚动位复位,重启闪光倒计时(未到点前不立即清除)。
+        assert!(!ws_state.take_scroll_to_top());
+        assert!(ws_state.next_flash_wake().is_some());
+    }
+
+    #[test]
+    fn flash_clears_selection_after_expiry() {
+        let mut ws_state = WorkspaceState::default();
+        ws_state.start_flash(2);
+        assert_eq!(ws_state.selected_row, Some(2));
+        // 未到点:advance 不应清除。
+        ws_state.advance_flash();
+        assert_eq!(ws_state.selected_row, Some(2));
+        assert!(ws_state.next_flash_wake().is_some());
+        // 把闪光计时拨到过去,模拟 2s 已过。
+        ws_state.flash = Some(Flash {
+            idx: 2,
+            until: std::time::Instant::now() - std::time::Duration::from_millis(1),
+        });
+        ws_state.advance_flash();
+        assert_eq!(ws_state.selected_row, None);
+        assert!(ws_state.next_flash_wake().is_none());
+    }
+
+    #[test]
+    fn flash_does_not_clear_user_changed_selection() {
+        let mut ws_state = WorkspaceState::default();
+        ws_state.start_flash(2);
+        // 用户在闪光期间手动选了别的卡片(或取消):到点不再抢回/清除。
+        ws_state.selected_row = Some(5);
+        ws_state.flash = Some(Flash {
+            idx: 2,
+            until: std::time::Instant::now() - std::time::Duration::from_millis(1),
+        });
+        ws_state.advance_flash();
+        assert_eq!(ws_state.selected_row, Some(5));
+        assert!(ws_state.next_flash_wake().is_none());
+    }
+
+    #[test]
+    fn row_select_clears_flash() {
+        let (_dir, root) = project_dir_with_todo("# Todo\n");
+        let mut ws_state = WorkspaceState::default();
+        // 先模拟一次新增闪光。
+        ws_state.start_flash(0);
+        assert!(ws_state.next_flash_wake().is_some());
+        let mut app_state = AppState::default();
+        // 用户随后手动点卡片空白处选中:应立即熄灭闪光,不再让 2s 倒计时
+        // 干扰用户主动选中。
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::RowSelect(Some(0)),
+            1,
+            &root,
+        );
+        assert!(ws_state.next_flash_wake().is_none());
     }
 
     #[test]
