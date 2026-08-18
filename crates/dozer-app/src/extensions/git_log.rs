@@ -467,7 +467,7 @@ fn worktree_strip<'a>(
                 c.branch.as_deref().unwrap_or("(无分支)")
             ))
             .size(theme::font::caption())
-            .color(theme::color::CYAN)
+            .color(byteui::theme::color::current().cyan)
             .into(),
         );
     }
@@ -483,7 +483,7 @@ fn worktree_strip<'a>(
             chips.push(
                 text(label)
                     .size(theme::font::caption())
-                    .color(theme::color::DIM)
+                    .color(byteui::theme::color::current().dim)
                     .into(),
             );
         } else {
@@ -491,13 +491,13 @@ fn worktree_strip<'a>(
                 iced_widget::button(
                     text(label)
                         .size(theme::font::caption())
-                        .color(theme::color::GOLD),
+                        .color(byteui::theme::color::current().gold),
                 )
                 .on_press(Message::ProjectTabOpen(o.path.clone()))
                 .padding(0)
                 .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
                     background: None,
-                    text_color: theme::color::GOLD,
+                    text_color: byteui::theme::color::current().gold,
                     ..iced_widget::button::Style::default()
                 })
                 .into(),
@@ -654,15 +654,15 @@ fn commit_list_view<'a>(
             byteui::interaction::icons::view(
                 icon_kind,
                 crate::theme::icon_size::row(),
-                theme::color::DIM
+                byteui::theme::color::current().dim
             ),
             text(row.short_sha.clone())
                 .size(theme::font::caption())
-                .color(theme::color::DIM)
+                .color(byteui::theme::color::current().dim)
                 .font(Font::MONOSPACE),
             text(format_commit_time(row.time))
                 .size(theme::font::caption_sm())
-                .color(theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
         ]
         .spacing(8)
         .align_y(alignment::Vertical::Center);
@@ -670,20 +670,24 @@ fn commit_list_view<'a>(
             head_line = head_line.push(
                 text(refs_prefix)
                     .size(theme::font::caption_sm())
-                    .color(theme::color::CYAN),
+                    .color(byteui::theme::color::current().cyan),
             );
         }
         // 下行:summary 主体
         let summary_line = text(row.summary.clone())
             .size(theme::font::caption())
-            .color(theme::color::CREAM);
+            .color(byteui::theme::color::current().cream);
         let line = column![head_line, summary_line].spacing(2);
         // 统一卡片样式:选中/一般/hover 三态(选中=金边、hover=金边+填充、
         // 一般态=描边),不再用左侧 3px 金竖条表示选中。
         let hovered = app.hover_progress(HoverId::Commit(i)) > 0.0;
         let inner = container(line).padding([4, 8]).width(Length::Fill).style(
             move |_t: &iced_widget::Theme| {
-                byteui::interaction::cards::container_card(is_selected, hovered, theme::color::CARD)
+                byteui::interaction::cards::container_card(
+                    is_selected,
+                    hovered,
+                    byteui::theme::color::current().card,
+                )
             },
         );
         let area = MouseArea::new(inner)
@@ -708,11 +712,13 @@ fn file_list_view<'a>(
     selected_file: Option<&'a str>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     match detail {
-        Err(err) => container(text(format!("详情加载失败: {err}")).color(theme::color::RED))
-            .padding(8)
-            .into(),
+        Err(err) => container(
+            text(format!("详情加载失败: {err}")).color(byteui::theme::color::current().red),
+        )
+        .padding(8)
+        .into(),
         Ok(detail) if detail.files.is_empty() => {
-            container(text("无文件改动").color(theme::color::DIM))
+            container(text("无文件改动").color(byteui::theme::color::current().dim))
                 .padding(8)
                 .into()
         }
@@ -721,15 +727,15 @@ fn file_list_view<'a>(
             for (i, f) in detail.files.iter().enumerate() {
                 let is_selected = selected_file == Some(f.path.as_str());
                 let color = match f.status {
-                    git2::Delta::Added => theme::color::GREEN,
-                    git2::Delta::Deleted => theme::color::RED,
-                    _ => theme::color::CYAN,
+                    git2::Delta::Added => byteui::theme::color::current().green,
+                    git2::Delta::Deleted => byteui::theme::color::current().red,
+                    _ => byteui::theme::color::current().cyan,
                 };
                 let line = row![
                     text(status_glyph(f.status)).color(color).width(18),
                     text(f.path.clone())
                         .size(theme::font::caption())
-                        .color(theme::color::CREAM),
+                        .color(byteui::theme::color::current().cream),
                 ]
                 .spacing(4);
                 // 统一卡片样式:选中/一般/hover 三态(选中=金边、hover=金边+填充、
@@ -740,7 +746,7 @@ fn file_list_view<'a>(
                         byteui::interaction::cards::container_card(
                             is_selected,
                             hovered,
-                            theme::color::CARD,
+                            byteui::theme::color::current().card,
                         )
                     },
                 );
@@ -786,17 +792,23 @@ pub fn view<'a>(
             "未打开项目"
         };
         return container(
-            column![head, text(text_content).color(theme::color::DIM)]
-                .spacing(8)
-                .padding(pad),
+            column![
+                head,
+                text(text_content).color(byteui::theme::color::current().dim)
+            ]
+            .spacing(8)
+            .padding(pad),
         )
         .into();
     };
     if snapshot.rows.is_empty() {
         return container(
-            column![head, text("没有可显示的提交").color(theme::color::DIM)]
-                .spacing(8)
-                .padding(pad),
+            column![
+                head,
+                text("没有可显示的提交").color(byteui::theme::color::current().dim)
+            ]
+            .spacing(8)
+            .padding(pad),
         )
         .into();
     }
@@ -807,14 +819,14 @@ pub fn view<'a>(
         left = left.push(
             text(format!("git log 读取失败: {err}"))
                 .size(theme::font::caption())
-                .color(theme::color::RED),
+                .color(byteui::theme::color::current().red),
         );
     }
     left = left.push(commit_list_view(app, snapshot, state.selected, head_branch));
     let load_more = iced_widget::button(
         text("加载更多提交 (+200)")
             .size(theme::font::caption())
-            .color(theme::color::CREAM),
+            .color(byteui::theme::color::current().cream),
     )
     .on_press_maybe((!loading).then_some(Message::LoadMore))
     .padding([4, 12]);
@@ -834,8 +846,8 @@ pub fn view<'a>(
                 container(file_list_view(app, detail, state.selected_file.as_deref()))
                     .height(Length::FillPortion(top_portion)),
                 crate::app::horizontal_divider_bar(
-                    theme::color::BG,
-                    theme::color::BG,
+                    byteui::theme::color::current().bg,
+                    byteui::theme::color::current().bg,
                     Message::RowDragStart,
                 ),
                 container(diff_pane_view(detail, state.selected_file.as_deref()))
@@ -844,7 +856,7 @@ pub fn view<'a>(
             .height(Length::Fill)
             .into()
         } else {
-            container(text("选择一个提交查看改动").color(theme::color::DIM))
+            container(text("选择一个提交查看改动").color(byteui::theme::color::current().dim))
                 .padding(12)
                 .into()
         };
@@ -853,8 +865,8 @@ pub fn view<'a>(
         container(left_with_picker).width(Length::FillPortion(list_portion)),
         crate::app::divider_bar(
             crate::app::Divider::GitLogSplit,
-            theme::color::BG,
-            theme::color::BG,
+            byteui::theme::color::current().bg,
+            byteui::theme::color::current().bg,
             Message::ColumnDragStart,
         ),
         container(right).width(Length::FillPortion(content_portion)),
@@ -879,23 +891,23 @@ fn diff_pane_view<'a>(
         return container(iced_widget::Space::new()).into();
     };
     let Some(path) = selected_file else {
-        return container(text("未选中文件").color(theme::color::DIM))
+        return container(text("未选中文件").color(byteui::theme::color::current().dim))
             .padding(8)
             .into();
     };
     let Some(entry) = detail.files.iter().find(|f| f.path == path) else {
-        return container(text("未选中文件").color(theme::color::DIM))
+        return container(text("未选中文件").color(byteui::theme::color::current().dim))
             .padding(8)
             .into();
     };
     let mut content = column![
         text(entry.path.clone())
             .size(theme::font::caption())
-            .color(theme::color::DIM)
+            .color(byteui::theme::color::current().dim)
     ]
     .spacing(4);
     if entry.patch.is_empty() {
-        content = content.push(text("(无 diff 内容)").color(theme::color::DIM));
+        content = content.push(text("(无 diff 内容)").color(byteui::theme::color::current().dim));
     } else {
         content = content.push(crate::diff_render::colored_diff_lines(&entry.patch));
     }
@@ -903,7 +915,7 @@ fn diff_pane_view<'a>(
         content = content.push(
             text("… diff 过长,已截断显示")
                 .size(theme::font::caption_sm())
-                .color(theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
         );
     }
     scrollable(content)
@@ -928,12 +940,12 @@ fn branch_toggle_button<'a>(
         row![
             text(label)
                 .size(theme::font::body())
-                .color(theme::color::CREAM),
+                .color(byteui::theme::color::current().cream),
             iced_widget::Space::new().width(Length::Fill),
             byteui::interaction::icons::view(
                 byteui::interaction::icons::IconKind::ChevronDown,
                 crate::theme::icon_size::row(),
-                theme::color::DIM
+                byteui::theme::color::current().dim
             ),
         ]
         .align_y(alignment::Vertical::Center),
@@ -943,9 +955,9 @@ fn branch_toggle_button<'a>(
     .on_press_maybe((!state.branch_switch_pending).then_some(msg))
     .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
         background: None,
-        text_color: theme::color::CREAM,
+        text_color: byteui::theme::color::current().cream,
         border: Border {
-            color: theme::color::BORDER,
+            color: byteui::theme::color::current().border,
             width: 1.0,
             radius: 6.0.into(),
         },
@@ -972,7 +984,7 @@ fn branch_picker_view<'a>(
         items.push(
             text("切换中…")
                 .size(theme::font::body())
-                .color(theme::color::DIM)
+                .color(byteui::theme::color::current().dim)
                 .into(),
         );
     }
@@ -980,7 +992,7 @@ fn branch_picker_view<'a>(
         items.push(
             text("暂无本地分支")
                 .size(theme::font::body())
-                .color(theme::color::DIM)
+                .color(byteui::theme::color::current().dim)
                 .into(),
         );
     }
@@ -992,11 +1004,11 @@ fn branch_picker_view<'a>(
         let is_current = Some(name.as_str()) == head_branch;
         let locked = state.branch_switch_pending || (state.dirty && !is_current);
         let color = if is_current {
-            theme::color::GOLD
+            byteui::theme::color::current().gold
         } else if locked {
-            theme::color::DIM
+            byteui::theme::color::current().dim
         } else {
-            theme::color::CREAM
+            byteui::theme::color::current().cream
         };
         let label = if is_current && state.dirty {
             format!("{name} (Uncommitted)")

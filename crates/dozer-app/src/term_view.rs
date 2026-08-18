@@ -339,7 +339,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
                         run_size,
                         Color {
                             a: 0.25,
-                            ..theme::color::CYAN
+                            ..byteui::theme::color::current().cyan
                         },
                     );
                 }
@@ -368,7 +368,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
                 frame.fill_rectangle(
                     Point::new(x, y),
                     Size::new(box_w, line_height_px()),
-                    theme::color::CREAM,
+                    byteui::theme::color::current().cream,
                 );
                 if cell.ch != ' ' {
                     fill_cell_text(
@@ -376,7 +376,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
                         cell.ch.to_string(),
                         x,
                         y,
-                        theme::color::TERM_BG,
+                        byteui::theme::color::current().term_bg,
                         cell_font(cell.bold),
                     );
                 }
@@ -384,7 +384,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
                 frame.stroke(
                     &canvas::Path::rectangle(Point::new(x, y), Size::new(box_w, line_height_px())),
                     canvas::Stroke::default()
-                        .with_color(theme::color::CREAM)
+                        .with_color(byteui::theme::color::current().cream)
                         .with_width(1.0),
                 );
             }
@@ -399,7 +399,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
             let h = bounds.height;
             // 复用全应用统一滚动条配置(见 `byteui::interaction::scrollbar`):轨道宽度
             // `scrollbar_width`,滑块(thumb)宽度 `scrollbar_thumb_width` 并居
-            // 中,滑块颜色甲方金 `#dcc9a3`(`theme::color::TAB_ACTIVE_BORDER`)。
+            // 中,滑块颜色甲方金 `#dcc9a3`(`byteui::theme::color::current().tab_active_border`)。
             let bar_w = theme::geometry::scrollbar_width();
             let thumb_w = theme::geometry::scrollbar_thumb_width();
             let track_x = bounds.width - bar_w;
@@ -408,12 +408,12 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
             frame.fill_rectangle(
                 Point::new(track_x, 0.0),
                 Size::new(bar_w, h),
-                theme::color::BORDER,
+                byteui::theme::color::current().border,
             );
             frame.fill_rectangle(
                 Point::new(track_x + (bar_w - thumb_w) / 2.0, thumb_top),
                 Size::new(thumb_w, thumb_h),
-                theme::color::TAB_ACTIVE_BORDER,
+                byteui::theme::color::current().tab_active_border,
             );
         }
 

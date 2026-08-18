@@ -411,7 +411,7 @@ fn home_project_list_view(
             .padding(10)
             .style(byteui::interaction::cards::button_card(
                 false,
-                theme::color::CARD,
+                byteui::theme::color::current().card,
             ));
             list = list.push(card);
         }
@@ -549,7 +549,7 @@ fn home_recent_files_card(
                         byteui::interaction::cards::container_card(
                             false,
                             hovered,
-                            theme::color::CARD,
+                            byteui::theme::color::current().card,
                         )
                     },
                 ))
@@ -617,7 +617,7 @@ fn home_recent_conversations_card(
                         byteui::interaction::cards::container_card(
                             false,
                             hovered,
-                            theme::color::CARD,
+                            byteui::theme::color::current().card,
                         )
                     }),
                 )

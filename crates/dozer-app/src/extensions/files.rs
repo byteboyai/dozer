@@ -948,7 +948,7 @@ pub fn view<'a>(
                 icons::view(
                     icons::IconKind::FolderOpenDot,
                     crate::theme::icon_size::row(),
-                    theme::color::DIM
+                    byteui::theme::color::current().dim
                 ),
                 text(name).size(theme::font::body()).color(root_color),
             ]
@@ -969,7 +969,7 @@ pub fn view<'a>(
         header = header.push(
             text(format!("⚠ {err}"))
                 .size(theme::font::label())
-                .color(theme::color::RED),
+                .color(byteui::theme::color::current().red),
         );
     }
     if let Some(tree) = &ws_state.file_tree {
@@ -1027,9 +1027,13 @@ pub fn view<'a>(
                         icons::view(
                             chevron,
                             crate::theme::icon_size::chevron(),
-                            theme::color::DIM
+                            byteui::theme::color::current().dim
                         ),
-                        icons::view(folder, crate::theme::icon_size::row(), theme::color::DIM),
+                        icons::view(
+                            folder,
+                            crate::theme::icon_size::row(),
+                            byteui::theme::color::current().dim
+                        ),
                     ]
                     .spacing(crate::theme::icon_size::tree_row_gap())
                     .align_y(iced_widget::core::Alignment::Center)
@@ -1045,7 +1049,7 @@ pub fn view<'a>(
                         icons::view(
                             icons::icon_for_file(&row.name),
                             crate::theme::icon_size::row(),
-                            theme::color::DIM
+                            byteui::theme::color::current().dim
                         ),
                     ]
                     .spacing(0)
@@ -1083,14 +1087,14 @@ pub fn view<'a>(
                 .width(Length::Fill)
                 .style(move |_t, _s| button::Style {
                     background: if is_selected {
-                        Some(theme::color::CARD.into())
+                        Some(byteui::theme::color::current().card.into())
                     } else {
                         None
                     },
-                    text_color: theme::color::BODY,
+                    text_color: byteui::theme::color::current().body,
                     border: if is_drop_target {
                         Border {
-                            color: theme::color::GOLD,
+                            color: byteui::theme::color::current().gold,
                             width: 1.0,
                             radius: 6.0.into(),
                         }
@@ -1167,14 +1171,14 @@ fn tree_edit_row(
         text(format!("{indent}{buffer}▏"))
             .size(crate::workspace::tree_row_font_size())
             .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
-            .color(theme::color::CREAM),
+            .color(byteui::theme::color::current().cream),
     )
     .width(Length::Fill)
     .padding([2, 4])
     .style(|_t: &iced_widget::Theme| container::Style {
-        background: Some(theme::color::CARD.into()),
+        background: Some(byteui::theme::color::current().card.into()),
         border: Border {
-            color: theme::color::CREAM,
+            color: byteui::theme::color::current().cream,
             width: 1.0,
             radius: 2.0.into(),
         },
@@ -1202,7 +1206,7 @@ fn git_footer_bar(
             icons::IconKind::GitBranch,
             text("加载仓库信息…")
                 .size(theme::font::label())
-                .color(theme::color::CREAM)
+                .color(byteui::theme::color::current().cream)
                 .into(),
             None,
         )
@@ -1223,7 +1227,7 @@ fn git_footer_bar(
         let label_color = if let Some(st) = dirty_state {
             tree_state_color(st)
         } else {
-            theme::color::CREAM
+            byteui::theme::color::current().cream
         };
         let switch = icons::icon_button_entry(
             if ws_state.branch_picker_open {
@@ -1256,11 +1260,11 @@ fn git_footer_bar(
                 icons::view(
                     icons::IconKind::FolderMinus,
                     crate::theme::icon_size::row(),
-                    theme::color::CREAM
+                    byteui::theme::color::current().cream
                 ),
                 text("新建Git仓库")
                     .size(theme::font::label())
-                    .color(theme::color::CREAM),
+                    .color(byteui::theme::color::current().cream),
             ]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center),
@@ -1268,27 +1272,31 @@ fn git_footer_bar(
         .on_press(Message::GitInit)
         .padding([4, 8])
         .style(|_t: &iced_widget::Theme, _s| button::Style {
-            background: Some(theme::color::BG.into()),
+            background: Some(byteui::theme::color::current().bg.into()),
             border: Border {
-                color: theme::color::BORDER,
+                color: byteui::theme::color::current().border,
                 width: 1.0,
                 radius: 4.0.into(),
             },
-            text_color: theme::color::CREAM,
+            text_color: byteui::theme::color::current().cream,
             ..button::Style::default()
         });
         (
             icons::IconKind::FolderMinus,
             text("未受Git保护")
                 .size(theme::font::label())
-                .color(theme::color::CREAM)
+                .color(byteui::theme::color::current().cream)
                 .into(),
             Some(init.into()),
         )
     };
 
     let bar = row![
-        icons::view(icon, crate::theme::icon_size::row(), theme::color::CREAM),
+        icons::view(
+            icon,
+            crate::theme::icon_size::row(),
+            byteui::theme::color::current().cream
+        ),
         label,
         iced_widget::space::horizontal(),
         if let Some(btn) = action {
@@ -1306,7 +1314,7 @@ fn git_footer_bar(
         .width(Length::Fill)
         .height(Length::Fixed(1.0))
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::BORDER.into()),
+            background: Some(byteui::theme::color::current().border.into()),
             ..container::Style::default()
         });
 
@@ -1315,7 +1323,7 @@ fn git_footer_bar(
         content = content.push(
             text(format!("⚠ {err}"))
                 .size(theme::font::label())
-                .color(theme::color::RED),
+                .color(byteui::theme::color::current().red),
         );
     }
 
@@ -1375,7 +1383,7 @@ pub fn branch_picker_popup(
         items.push(
             text("暂无本地分支")
                 .size(theme::font::body())
-                .color(theme::color::DIM)
+                .color(byteui::theme::color::current().dim)
                 .into(),
         );
     }
@@ -1384,11 +1392,11 @@ pub fn branch_picker_popup(
         // 当前分支 GOLD 高亮 + 指示点;其余分支:dirty 锁定时 DIM 置灰,否则
         // 常规 CREAM(同上下文菜单项文字)。
         let color = if is_current {
-            theme::color::GOLD
+            byteui::theme::color::current().gold
         } else if lock_others {
-            theme::color::DIM
+            byteui::theme::color::current().dim
         } else {
-            theme::color::CREAM
+            byteui::theme::color::current().cream
         };
         let indicator: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
             if is_current {
@@ -1477,12 +1485,12 @@ fn search_box_widget(
     let body = if draft.is_empty() && !editing {
         text("搜索目录…")
             .size(theme::font::body())
-            .color(theme::color::DIM)
+            .color(byteui::theme::color::current().dim)
     } else {
         let caret = if editing { "▏" } else { "" };
         text(format!("{draft}{caret}"))
             .size(theme::font::body())
-            .color(theme::color::CREAM)
+            .color(byteui::theme::color::current().cream)
     };
 
     button(body)
@@ -1490,17 +1498,17 @@ fn search_box_widget(
         .width(Length::Fill)
         .padding([6, 8])
         .style(move |_t: &iced_widget::Theme, _s| button::Style {
-            background: Some(theme::color::BG.into()),
+            background: Some(byteui::theme::color::current().bg.into()),
             border: Border {
                 color: if editing || active {
-                    theme::color::GOLD
+                    byteui::theme::color::current().gold
                 } else {
-                    theme::color::BORDER
+                    byteui::theme::color::current().border
                 },
                 width: 1.0,
                 radius: 4.0.into(),
             },
-            text_color: theme::color::CREAM,
+            text_color: byteui::theme::color::current().cream,
             ..button::Style::default()
         })
         .into()
@@ -1570,7 +1578,7 @@ pub fn context_menu_popup<'a>(
             crate::menu::item_locked::<Message>(
                 Some(icons::IconKind::ClipboardPaste),
                 "粘贴",
-                theme::color::DIM,
+                byteui::theme::color::current().dim,
             )
         });
     }
@@ -1648,23 +1656,23 @@ pub fn delete_confirm_popup(
         column![
             text(format!("删除{kind} \"{name}\"?"))
                 .size(theme::font::subtitle())
-                .color(theme::color::CREAM),
+                .color(byteui::theme::color::current().cream),
             text("会移入系统回收站,可从回收站找回。")
                 .size(theme::font::label())
-                .color(theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
             row![
                 button(
                     text("取消")
                         .size(theme::font::body())
-                        .color(theme::color::CREAM)
+                        .color(byteui::theme::color::current().cream)
                 )
                 .on_press(Message::DeleteCancel)
                 .padding([6, 12])
                 .style(|_t, _s| button::Style {
-                    background: Some(theme::color::CARD.into()),
-                    text_color: theme::color::CREAM,
+                    background: Some(byteui::theme::color::current().card.into()),
+                    text_color: byteui::theme::color::current().cream,
                     border: Border {
-                        color: theme::color::BORDER,
+                        color: byteui::theme::color::current().border,
                         width: 1.0,
                         radius: 4.0.into()
                     },
@@ -1673,15 +1681,15 @@ pub fn delete_confirm_popup(
                 button(
                     text("删除")
                         .size(theme::font::body())
-                        .color(theme::color::RED)
+                        .color(byteui::theme::color::current().red)
                 )
                 .on_press(Message::DeleteConfirm)
                 .padding([6, 12])
                 .style(|_t, _s| button::Style {
-                    background: Some(theme::color::CARD.into()),
-                    text_color: theme::color::RED,
+                    background: Some(byteui::theme::color::current().card.into()),
+                    text_color: byteui::theme::color::current().red,
                     border: Border {
-                        color: theme::color::RED,
+                        color: byteui::theme::color::current().red,
                         width: 1.0,
                         radius: 4.0.into()
                     },
@@ -1694,9 +1702,9 @@ pub fn delete_confirm_popup(
     )
     .padding(16)
     .style(|_t: &iced_widget::Theme| container::Style {
-        background: Some(theme::color::CARD.into()),
+        background: Some(byteui::theme::color::current().card.into()),
         border: Border {
-            color: theme::color::BORDER,
+            color: byteui::theme::color::current().border,
             width: 1.0,
             radius: 6.0.into(),
         },
@@ -1717,11 +1725,11 @@ pub fn delete_confirm_popup(
 /// `IGNORED`。无改动(状态为 `None`)由调用方给灰色 `BODY`。
 fn tree_state_color(state: delivery::TreeState) -> iced_widget::core::Color {
     match state {
-        delivery::TreeState::Untracked => theme::color::RED,
-        delivery::TreeState::StagedNew => theme::color::GREEN,
-        delivery::TreeState::Modified => theme::color::CYAN,
-        delivery::TreeState::Unchanged => theme::color::BODY,
-        delivery::TreeState::Ignored => theme::color::IGNORED,
+        delivery::TreeState::Untracked => byteui::theme::color::current().red,
+        delivery::TreeState::StagedNew => byteui::theme::color::current().green,
+        delivery::TreeState::Modified => byteui::theme::color::current().cyan,
+        delivery::TreeState::Unchanged => byteui::theme::color::current().body,
+        delivery::TreeState::Ignored => byteui::theme::color::current().ignored,
     }
 }
 
@@ -1812,23 +1820,23 @@ mod tests {
     fn tree_state_colors() {
         assert_eq!(
             tree_state_color(delivery::TreeState::Untracked),
-            theme::color::RED
+            byteui::theme::color::current().red
         );
         assert_eq!(
             tree_state_color(delivery::TreeState::StagedNew),
-            theme::color::GREEN
+            byteui::theme::color::current().green
         );
         assert_eq!(
             tree_state_color(delivery::TreeState::Modified),
-            theme::color::CYAN
+            byteui::theme::color::current().cyan
         );
         assert_eq!(
             tree_state_color(delivery::TreeState::Unchanged),
-            theme::color::BODY
+            byteui::theme::color::current().body
         );
         assert_eq!(
             tree_state_color(delivery::TreeState::Ignored),
-            theme::color::IGNORED
+            byteui::theme::color::current().ignored
         );
     }
 

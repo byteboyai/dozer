@@ -18,7 +18,6 @@
 //!
 //! `resolve_region` 会把每个区域的 `padding`/`gap` 乘过全局 scale，因此
 //! 改 `icon_size::scale()` 时区域内部间距也等比放大，与图标/字号同步。
-use super::color;
 use super::icon_size;
 use iced_widget::core::{Border, Color, Padding};
 use serde::Deserialize;
@@ -162,20 +161,20 @@ pub(crate) fn resolve_color(name: &str) -> Color {
         return parse_hex_color(name);
     }
     match name {
-        "BG" => color::BG,
-        "PANEL" => color::PANEL,
-        "TERM_BG" => color::TERM_BG,
-        "CARD" => color::CARD,
-        "BORDER" => color::BORDER,
-        "CREAM" => color::CREAM,
-        "BODY" => color::BODY,
-        "DIM" => color::DIM,
-        "GOLD" => color::GOLD,
-        "CYAN" => color::CYAN,
-        "GREEN" => color::GREEN,
-        "PURPLE" => color::PURPLE,
-        "RED" => color::RED,
-        "SCRIM" => color::SCRIM,
+        "BG" => byteui::theme::color::current().bg,
+        "PANEL" => byteui::theme::color::current().panel,
+        "TERM_BG" => byteui::theme::color::current().term_bg,
+        "CARD" => byteui::theme::color::current().card,
+        "BORDER" => byteui::theme::color::current().border,
+        "CREAM" => byteui::theme::color::current().cream,
+        "BODY" => byteui::theme::color::current().body,
+        "DIM" => byteui::theme::color::current().dim,
+        "GOLD" => byteui::theme::color::current().gold,
+        "CYAN" => byteui::theme::color::current().cyan,
+        "GREEN" => byteui::theme::color::current().green,
+        "PURPLE" => byteui::theme::color::current().purple,
+        "RED" => byteui::theme::color::current().red,
+        "SCRIM" => byteui::theme::color::current().scrim,
         other => panic!("workspace.json: 未知颜色令牌 \"{other}\""),
     }
 }
@@ -373,7 +372,7 @@ mod tests {
     #[test]
     fn preview_pane_matches_pre_migration_literals() {
         let s = preview_pane();
-        assert_eq!(s.background, Some(color::PANEL));
+        assert_eq!(s.background, Some(byteui::theme::color::current().panel));
         assert!(s.border.is_none());
         assert_eq!(s.padding, Padding::from(8.0));
         assert_eq!(s.gap, 4.0);
@@ -385,9 +384,9 @@ mod tests {
     #[test]
     fn top_bar_matches_figma_design() {
         let s = top_bar();
-        assert_eq!(s.background, Some(color::BG));
+        assert_eq!(s.background, Some(byteui::theme::color::current().bg));
         let border = s.border.expect("top_bar 应有底部分隔线(设计稿 border-b)");
-        assert_eq!(border.color, color::BORDER);
+        assert_eq!(border.color, byteui::theme::color::current().border);
         assert_eq!(border.width, 1.0);
         // left=78:统一工具栏改造后,原生红黄绿交通灯叠在 top_bar 左侧,
         // 这段留白给交通灯让位,不是设计稿本身的数值(设计稿假设交通灯是
@@ -407,7 +406,7 @@ mod tests {
     #[test]
     fn left_icon_rail_matches_pre_migration_literals() {
         let s = left_icon_rail();
-        assert_eq!(s.background, Some(color::PANEL));
+        assert_eq!(s.background, Some(byteui::theme::color::current().panel));
         assert!(s.border.is_none());
         assert_eq!(
             s.padding,
@@ -424,9 +423,9 @@ mod tests {
     #[test]
     fn status_bar_matches_pre_migration_literals() {
         let s = status_bar();
-        assert_eq!(s.background, Some(color::PANEL));
+        assert_eq!(s.background, Some(byteui::theme::color::current().panel));
         let border = s.border.expect("status_bar 应有上边线");
-        assert_eq!(border.color, color::BORDER);
+        assert_eq!(border.color, byteui::theme::color::current().border);
         assert_eq!(border.width, 1.0);
         assert_eq!(s.padding, Padding::from([0.0, 8.0]));
     }
@@ -434,9 +433,9 @@ mod tests {
     #[test]
     fn maximize_overlay_matches_pre_migration_literals() {
         let s = maximize_overlay();
-        assert_eq!(s.scrim_background, color::SCRIM);
+        assert_eq!(s.scrim_background, byteui::theme::color::current().scrim);
         assert_eq!(s.scrim_padding, 40.0);
-        assert_eq!(s.border.color, color::GOLD);
+        assert_eq!(s.border.color, byteui::theme::color::current().gold);
         assert_eq!(s.border.width, 1.5);
         assert_eq!(s.border.radius, 10.0.into());
     }
@@ -446,9 +445,9 @@ mod tests {
         let s = context_menu();
         // 背景统一为 `#0a0e16`(与其它面板一致),不再用 CARD 叠 alpha 的
         // 半透明观感。
-        assert_eq!(s.background, Some(color::BG));
+        assert_eq!(s.background, Some(byteui::theme::color::current().bg));
         let border = s.border.expect("context_menu 应有边框");
-        assert_eq!(border.color, color::BORDER);
+        assert_eq!(border.color, byteui::theme::color::current().border);
         assert_eq!(border.width, 1.0);
         assert_eq!(border.radius, 10.0.into());
         assert_eq!(s.padding, Padding::from(6.0));
@@ -461,9 +460,9 @@ mod tests {
         // 左右面板区整体用圆角背景浮起:背景填充 BG 色(与内层面板一致),
         // 描边宽为 0 但带圆角(用 0 宽描边保留"无描边"观感,仅让背景走圆角),
         // 四向 margin 做悬浮留白。
-        assert_eq!(s.background, Some(color::BG));
+        assert_eq!(s.background, Some(byteui::theme::color::current().bg));
         let border = s.border.expect("left_zone 应有圆角边框(宽 0)");
-        assert_eq!(border.color, color::BORDER);
+        assert_eq!(border.color, byteui::theme::color::current().border);
         assert_eq!(border.width, 0.0);
         assert_eq!(border.radius, 8.0.into());
         assert_eq!(s.padding, Padding::from(1.0));
@@ -472,9 +471,9 @@ mod tests {
     #[test]
     fn right_zone_matches_config() {
         let s = right_zone();
-        assert_eq!(s.background, Some(color::BG));
+        assert_eq!(s.background, Some(byteui::theme::color::current().bg));
         let border = s.border.expect("right_zone 应有圆角边框(宽 0)");
-        assert_eq!(border.color, color::BORDER);
+        assert_eq!(border.color, byteui::theme::color::current().border);
         assert_eq!(border.width, 0.0);
         assert_eq!(border.radius, 8.0.into());
         assert_eq!(s.padding, Padding::from(1.0));
@@ -488,8 +487,11 @@ mod tests {
 
     #[test]
     fn hex_color_matches_equivalent_token() {
-        assert_eq!(resolve_color("#0a0e16"), color::BG);
-        assert_eq!(resolve_color("#12202a"), color::CARD);
+        assert_eq!(resolve_color("#0a0e16"), byteui::theme::color::current().bg);
+        assert_eq!(
+            resolve_color("#12202a"),
+            byteui::theme::color::current().card
+        );
     }
 
     #[test]

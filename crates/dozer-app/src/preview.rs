@@ -355,14 +355,14 @@ impl PreviewPane {
 /// 不在此处使用。语法高亮的 token 颜色由 `dozer_syntax_theme` 单独接管。
 pub(crate) fn dozer_editor_style() -> iced_code_editor::theme::Style {
     use iced_widget::core::Color;
-    let bg = theme::color::BG;
-    let cyan = theme::color::CYAN;
+    let bg = byteui::theme::color::current().bg;
+    let cyan = byteui::theme::color::current().cyan;
     iced_code_editor::theme::Style {
         background: bg,
-        text_color: theme::color::CREAM,
-        gutter_background: theme::color::TERM_BG,
-        gutter_border: theme::color::BORDER,
-        line_number_color: theme::color::DIM,
+        text_color: byteui::theme::color::current().cream,
+        gutter_background: byteui::theme::color::current().term_bg,
+        gutter_border: byteui::theme::color::current().border,
+        line_number_color: byteui::theme::color::current().dim,
         scrollbar: iced_code_editor::theme::ScrollbarStyle {
             // 与中央 `scrollbar.rs` 同一套几何/配色:轨道透明无描边、thumb 用
             // `TAB_ACTIVE_BORDER`(#dcc9a3)胶囊,半径 = thumb宽/2。hover 时
@@ -370,10 +370,10 @@ pub(crate) fn dozer_editor_style() -> iced_code_editor::theme::Style {
             rail_width: theme::geometry::scrollbar_width(),
             thumb_width: theme::geometry::scrollbar_thumb_width(),
             thumb_radius: theme::geometry::scrollbar_thumb_width() / 2.0,
-            thumb_color: theme::color::TAB_ACTIVE_BORDER,
-            thumb_hover_color: theme::color::mix(
-                theme::color::TAB_ACTIVE_BORDER,
-                theme::color::CREAM,
+            thumb_color: byteui::theme::color::current().tab_active_border,
+            thumb_hover_color: byteui::theme::color::mix(
+                byteui::theme::color::current().tab_active_border,
+                byteui::theme::color::current().cream,
                 0.35,
             ),
             thumb_border: iced_widget::core::Border::default(),
@@ -387,12 +387,12 @@ pub(crate) fn dozer_editor_style() -> iced_code_editor::theme::Style {
             b: cyan.b,
             a: 0.10,
         },
-        whitespace_color: theme::color::DIM,
+        whitespace_color: byteui::theme::color::current().dim,
         context_menu: iced_code_editor::theme::ContextMenuStyle {
             // 与文件树/分支切换右键菜单同一套 `context_menu` 区域令牌:
             // bg `#0a0e16` 实底 + `#1c3440` 1px 描边圆角 10 + 内边距 6、列距 2。
             background: bg,
-            border_color: theme::color::BORDER,
+            border_color: byteui::theme::color::current().border,
             border_width: 1.0,
             border_radius: 10.0,
             // Dozer 的右键菜单不投影(region 无 shadow),这里清掉编辑器默认阴影。
@@ -403,13 +403,13 @@ pub(crate) fn dozer_editor_style() -> iced_code_editor::theme::Style {
             // 空间,不裁剪 ⇧⌘Z 这类长快捷键。取 `context_menu_width`(180)。
             menu_width: theme::geometry::context_menu_width(),
             item_radius: 4.0,
-            item_hover_background: theme::color::TAB_HOVER,
-            item_text_color: theme::color::CREAM,
-            item_disabled_text_color: theme::color::DIM,
+            item_hover_background: byteui::theme::color::current().tab_hover,
+            item_text_color: byteui::theme::color::current().cream,
+            item_disabled_text_color: byteui::theme::color::current().dim,
             item_padding_h: theme::geometry::menu_pad_h(),
             item_padding_v: theme::geometry::menu_pad_v(),
             item_gap: theme::geometry::menu_gap(),
-            separator_color: theme::color::BORDER,
+            separator_color: byteui::theme::color::current().border,
         },
     }
 }
@@ -873,8 +873,8 @@ mod tests {
     #[test]
     fn dozer_editor_context_menu_matches_byteboy_style() {
         let m = dozer_editor_style().context_menu;
-        assert_eq!(m.background, theme::color::BG);
-        assert_eq!(m.border_color, theme::color::BORDER);
+        assert_eq!(m.background, byteui::theme::color::current().bg);
+        assert_eq!(m.border_color, byteui::theme::color::current().border);
         assert_eq!(m.border_width, 1.0);
         assert_eq!(m.border_radius, 10.0);
         assert_eq!(m.shadow, iced_widget::core::Shadow::default());
@@ -882,13 +882,19 @@ mod tests {
         assert_eq!(m.gap, 2.0);
         assert_eq!(m.menu_width, theme::geometry::context_menu_width());
         assert_eq!(m.item_radius, 4.0);
-        assert_eq!(m.item_hover_background, theme::color::TAB_HOVER);
-        assert_eq!(m.item_text_color, theme::color::CREAM);
-        assert_eq!(m.item_disabled_text_color, theme::color::DIM);
+        assert_eq!(
+            m.item_hover_background,
+            byteui::theme::color::current().tab_hover
+        );
+        assert_eq!(m.item_text_color, byteui::theme::color::current().cream);
+        assert_eq!(
+            m.item_disabled_text_color,
+            byteui::theme::color::current().dim
+        );
         assert_eq!(m.item_padding_h, theme::geometry::menu_pad_h());
         assert_eq!(m.item_padding_v, theme::geometry::menu_pad_v());
         assert_eq!(m.item_gap, theme::geometry::menu_gap());
-        assert_eq!(m.separator_color, theme::color::BORDER);
+        assert_eq!(m.separator_color, byteui::theme::color::current().border);
     }
 
     /// 防漂移锚:编辑器排版指标必须和终端同源——字号 `terminal_font::size()`
@@ -979,7 +985,10 @@ mod tests {
             s.thumb_radius,
             theme::geometry::scrollbar_thumb_width() / 2.0
         );
-        assert_eq!(s.thumb_color, theme::color::TAB_ACTIVE_BORDER);
+        assert_eq!(
+            s.thumb_color,
+            byteui::theme::color::current().tab_active_border
+        );
         assert_eq!(s.track_background, None);
         assert_eq!(
             s.track_border,

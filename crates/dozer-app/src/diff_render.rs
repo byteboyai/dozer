@@ -18,11 +18,11 @@ pub fn colored_diff_lines<'a, M: 'a>(
     let mut col = column![].spacing(0).padding([4, 12]);
     for line in patch.lines() {
         let color = if line.starts_with('+') {
-            theme::color::GREEN
+            byteui::theme::color::current().green
         } else if line.starts_with('-') {
-            theme::color::RED
+            byteui::theme::color::current().red
         } else {
-            theme::color::DIM
+            byteui::theme::color::current().dim
         };
         col = col.push(
             text(line.to_string())
@@ -34,7 +34,7 @@ pub fn colored_diff_lines<'a, M: 'a>(
     }
     container(col)
         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-            background: Some(theme::color::TERM_BG.into()),
+            background: Some(byteui::theme::color::current().term_bg.into()),
             ..iced_widget::container::Style::default()
         })
         .into()

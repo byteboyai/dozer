@@ -200,9 +200,9 @@ fn review_markdown_settings() -> markdown::Settings {
         markdown::Style {
             font: Font::default(),
             inline_code_highlight: Highlight {
-                background: theme::color::CARD.into(),
+                background: byteui::theme::color::current().card.into(),
                 border: Border {
-                    color: theme::color::BORDER,
+                    color: byteui::theme::color::current().border,
                     width: 1.0,
                     radius: 4.0.into(),
                 },
@@ -217,10 +217,10 @@ fn review_markdown_settings() -> markdown::Settings {
                 bottom: 0.0,
                 left: 1.0,
             },
-            inline_code_color: theme::color::CYAN,
+            inline_code_color: byteui::theme::color::current().cyan,
             inline_code_font: Font::MONOSPACE,
             code_block_font: Font::MONOSPACE,
-            link_color: theme::color::CYAN,
+            link_color: byteui::theme::color::current().cyan,
         },
     )
 }
@@ -248,7 +248,7 @@ impl<'a> markdown::Viewer<'a, Message, iced_widget::Theme, iced_renderer::Render
             .size(settings.text_size)
             .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
             .on_link_click(Self::on_link_click)
-            .color(theme::color::BODY)
+            .color(byteui::theme::color::current().body)
             .into()
     }
 
@@ -273,7 +273,7 @@ impl<'a> markdown::Viewer<'a, Message, iced_widget::Theme, iced_renderer::Render
             iced_widget::rich_text(text.spans(settings.style))
                 .on_link_click(Self::on_link_click)
                 .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
-                .color(theme::color::CREAM)
+                .color(byteui::theme::color::current().cream)
                 .size(match level {
                     markdown::HeadingLevel::H1 => h1_size,
                     markdown::HeadingLevel::H2 => h2_size,
@@ -2253,7 +2253,7 @@ pub(crate) fn spawn_disk_usage_refresh(project_id: i64, repo_path: PathBuf, io: 
 }
 
 /// `[会话已结束]` 尾行标记：CREAM 字 / CARD 底。颜色值直接镜像
-/// `theme::color::CREAM` / `theme::color::CARD`——`TerminalModel` 只吃 ANSI truecolor
+/// `byteui::theme::color::current().cream` / `byteui::theme::color::current().card`——`TerminalModel` 只吃 ANSI truecolor
 /// 转义序列，认不出 `iced::Color`，这里手工写死 RGB 常量；本任务范围
 /// 不含 `theme.rs`，若那边颜色改动，这两个常量需要手动同步。
 pub(crate) fn exited_marker() -> Vec<u8> {
@@ -2280,20 +2280,20 @@ pub(crate) fn review_content<'a>(
         return content.push(
             text(format!("⚠ {err}"))
                 .size(theme::font::subtitle())
-                .color(theme::color::RED),
+                .color(byteui::theme::color::current().red),
         );
     }
     if rv.entries.is_empty() {
         return content.push(lh(text("暂无对话")
             .size(theme::font::subtitle())
-            .color(theme::color::DIM)));
+            .color(byteui::theme::color::current().dim)));
     }
     for (i, e) in rv.entries.iter().enumerate() {
         match e {
             ReviewEntry::Human { text: t } => {
                 content = content.push(lh(text(format!("▎{t}"))
                     .size(theme::font::title())
-                    .color(theme::color::CREAM)));
+                    .color(byteui::theme::color::current().cream)));
             }
             ReviewEntry::AiTurn {
                 text: body,
@@ -2315,11 +2315,11 @@ pub(crate) fn review_content<'a>(
                         ai_turn_summary(tools.len(), *thinking)
                     ))
                     .size(theme::font::body())
-                    .color(theme::color::DIM)))
+                    .color(byteui::theme::color::current().dim)))
                     .on_press(Message::ReviewToggle(i))
                     .style(|_t, _s| button::Style {
                         background: None,
-                        text_color: theme::color::DIM,
+                        text_color: byteui::theme::color::current().dim,
                         ..button::Style::default()
                     }),
                 );
@@ -2327,12 +2327,12 @@ pub(crate) fn review_content<'a>(
                     if *thinking {
                         content = content.push(lh(text("  · 思考(略)")
                             .size(theme::font::label())
-                            .color(theme::color::DIM)));
+                            .color(byteui::theme::color::current().dim)));
                     }
                     for tool in tools {
                         content = content.push(lh(text(format!("  · {tool}"))
                             .size(theme::font::body())
-                            .color(theme::color::CYAN)));
+                            .color(byteui::theme::color::current().cyan)));
                     }
                 }
             }
@@ -2364,11 +2364,11 @@ pub(crate) fn conversation_list_pane(
         row![
             lh(text("会话")
                 .size(theme::font::caption())
-                .color(theme::color::DIM)),
+                .color(byteui::theme::color::current().dim)),
             lh(
                 text(format!("{} 条 · {} 活跃", ws.conversations.len(), active_n))
                     .size(theme::font::caption())
-                    .color(theme::color::DIM)
+                    .color(byteui::theme::color::current().dim)
             ),
         ]
         .spacing(6),
@@ -2376,7 +2376,7 @@ pub(crate) fn conversation_list_pane(
     if ws.conversations.is_empty() {
         content = content.push(lh(text("暂无对话记录")
             .size(theme::font::body())
-            .color(theme::color::DIM)));
+            .color(byteui::theme::color::current().dim)));
     }
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2398,9 +2398,9 @@ pub(crate) fn conversation_list_pane(
             conversation_sub(c.agent.label(), c.modified_ms, c.size_bytes, now_ms)
         };
         let sub_color = if current {
-            theme::color::GREEN
+            byteui::theme::color::current().green
         } else {
-            theme::color::DIM
+            byteui::theme::color::current().dim
         };
         let card = button(
             column![
@@ -2410,7 +2410,7 @@ pub(crate) fn conversation_list_pane(
                         .color(agent_dot_color(c.agent)),
                     lh(text(c.title.clone())
                         .size(theme::font::body())
-                        .color(theme::color::CREAM)),
+                        .color(byteui::theme::color::current().cream)),
                 ]
                 .spacing(6)
                 .align_y(iced_widget::core::Alignment::Center),
@@ -2423,7 +2423,7 @@ pub(crate) fn conversation_list_pane(
         .padding(10)
         .style(byteui::interaction::cards::button_card(
             current,
-            theme::color::CARD,
+            byteui::theme::color::current().card,
         ));
         cards = cards.push(card);
     }
@@ -2500,7 +2500,7 @@ pub(crate) fn agent_list_pane<'a>(
     if ws.tabs.is_empty() {
         content = content.push(lh(text("暂无会话")
             .size(theme::font::body())
-            .color(theme::color::DIM)));
+            .color(byteui::theme::color::current().dim)));
     } else {
         for (agent, idxs) in group_tabs_by_agent(&ws.tabs) {
             content = content.push(
@@ -2512,7 +2512,7 @@ pub(crate) fn agent_list_pane<'a>(
                     ),
                     lh(text(format!("{}（{}）", agent.label(), idxs.len()))
                         .size(theme::font::caption())
-                        .color(theme::color::DIM)),
+                        .color(byteui::theme::color::current().dim)),
                 ]
                 .align_y(iced_widget::core::alignment::Vertical::Center)
                 .spacing(8),
@@ -2568,7 +2568,7 @@ pub(crate) fn agent_card<'a>(
     let mut lines = column![
         text(title_text)
             .size(theme::font::body())
-            .color(theme::color::CREAM),
+            .color(byteui::theme::color::current().cream),
     ]
     .spacing(4);
 
@@ -2598,7 +2598,7 @@ pub(crate) fn agent_card<'a>(
                 .color(dot_color(tab.agent_state, tab.alive)),
             text(agent_state_label(tab.agent_state))
                 .size(theme::font::caption_sm())
-                .color(theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
         ]
         .spacing(6)
         .align_y(iced_widget::core::Alignment::Center),
@@ -2613,7 +2613,7 @@ pub(crate) fn agent_card<'a>(
         .width(Length::Fill)
         .style(byteui::interaction::cards::button_card(
             active,
-            theme::color::CARD,
+            byteui::theme::color::current().card,
         ))
         .into()
 }
@@ -2641,7 +2641,7 @@ fn work_content_and_workspace_row(
     };
     text(value)
         .size(theme::font::caption())
-        .color(theme::color::DIM)
+        .color(byteui::theme::color::current().dim)
         .into()
 }
 
@@ -2652,9 +2652,9 @@ fn work_content_and_workspace_row(
 pub(crate) fn agent_picker_toggle_button<'a>(
     app: &App,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let color = theme::color::mix(
-        theme::color::DIM,
-        theme::color::GOLD,
+    let color = byteui::theme::color::mix(
+        byteui::theme::color::current().dim,
+        byteui::theme::color::current().gold,
         app.hover_progress(HoverId::AgentPickerToggle),
     );
     let add = MouseArea::new(
@@ -2707,8 +2707,10 @@ pub(crate) fn agent_picker_popup(
     for (label, agent) in items {
         let (icon, icon_color) = match agent {
             PickerLaunch::Agent(Some(kind)) => (agent_icon(kind), agent_dot_color(kind)),
-            PickerLaunch::Agent(None) => (IconKind::Terminal, theme::color::CREAM),
-            PickerLaunch::Git => (IconKind::GitBranch, theme::color::CREAM),
+            PickerLaunch::Agent(None) => {
+                (IconKind::Terminal, byteui::theme::color::current().cream)
+            }
+            PickerLaunch::Git => (IconKind::GitBranch, byteui::theme::color::current().cream),
         };
         list.push(crate::menu::item_row(
             Some(icons::view(
@@ -2717,7 +2719,7 @@ pub(crate) fn agent_picker_popup(
                 icon_color,
             )),
             label,
-            theme::color::CREAM,
+            byteui::theme::color::current().cream,
             Some(Message::AgentPickerSelect(agent)),
         ));
     }
@@ -2772,7 +2774,7 @@ pub(crate) fn review_content_pane(
         content = content.push(
             container(lh(text("暂无审阅内容——点击左侧对话列表中的对话开始审阅")
                 .size(theme::font::subtitle())
-                .color(theme::color::DIM)))
+                .color(byteui::theme::color::current().dim)))
             .width(Length::Fill)
             .height(Length::Fill),
         );
@@ -2828,19 +2830,19 @@ pub(crate) fn no_project_placeholder<'a>(
     header = header.push(
         text("未打开项目")
             .size(theme::font::body())
-            .color(theme::color::DIM),
+            .color(byteui::theme::color::current().dim),
     );
     for p in &ws.recent_projects {
         header = header.push(
             button(
                 text(p.name.clone())
                     .size(theme::font::body())
-                    .color(theme::color::CREAM),
+                    .color(byteui::theme::color::current().cream),
             )
             .on_press(Message::ProjectSelect(p.id))
             .style(|_t, _s| button::Style {
                 background: None,
-                text_color: theme::color::CREAM,
+                text_color: byteui::theme::color::current().cream,
                 ..button::Style::default()
             }),
         );
@@ -2879,29 +2881,29 @@ pub(crate) fn terminal_status_bar(
             agent_state_label(t.agent_state),
             dot_color(t.agent_state, t.alive),
         ),
-        None => ("空闲", theme::color::DIM),
+        None => ("空闲", byteui::theme::color::current().dim),
     };
     let resume = ws.tabs.get(ws.active).map(|t| t.alive).unwrap_or(false);
     let line = row![
         text("●").size(theme::font::dot_sm()).color(dot),
         text(label)
             .size(theme::font::caption())
-            .color(theme::color::BODY),
+            .color(byteui::theme::color::current().body),
         text("·")
             .size(theme::font::caption())
-            .color(theme::color::DIM),
+            .color(byteui::theme::color::current().dim),
         text(format!("resume {}", if resume { "✓" } else { "—" }))
             .size(theme::font::caption())
-            .color(theme::color::BODY),
+            .color(byteui::theme::color::current().body),
         text("·")
             .size(theme::font::caption())
-            .color(theme::color::DIM),
+            .color(byteui::theme::color::current().dim),
         text(match ws.tabs.get(ws.active).map(|t| &t.backend) {
             Some(TabBackend::Ssh { .. }) => "SSH 直连 · 断连不可恢复",
             _ => "dozerd 持有 · 断连可恢复",
         })
         .size(theme::font::caption())
-        .color(theme::color::DIM),
+        .color(byteui::theme::color::current().dim),
     ]
     .spacing(6);
     status_bar_container(line, outer)
@@ -3082,14 +3084,14 @@ fn preview_pane_for<'a>(
     if let Some(err) = error {
         content = content.push(lh(text(format!("⚠ {err}"))
             .size(theme::font::body())
-            .color(theme::color::RED)));
+            .color(byteui::theme::color::current().red)));
     }
 
     if preview.tabs().is_empty() {
         content = content.push(
             container(lh(text("暂无预览——在左侧文件树选择文件")
                 .size(theme::font::subtitle())
-                .color(theme::color::DIM)))
+                .color(byteui::theme::color::current().dim)))
             .width(Length::Fill)
             .height(Length::Fill),
         );
@@ -3140,18 +3142,18 @@ pub(crate) fn edit_modal(
     let title_row = row![
         text(name)
             .size(theme::font::subtitle())
-            .color(theme::color::CREAM),
+            .color(byteui::theme::color::current().cream),
         iced_widget::space::horizontal(),
         button(
             text("×")
                 .size(theme::font::subtitle())
-                .color(theme::color::DIM)
+                .color(byteui::theme::color::current().dim)
         )
         .on_press(Message::PreviewEditCloseRequest)
         .padding(0)
         .style(|_t, _s| button::Style {
             background: None,
-            text_color: theme::color::DIM,
+            text_color: byteui::theme::color::current().dim,
             ..button::Style::default()
         }),
     ]
@@ -3170,22 +3172,22 @@ pub(crate) fn edit_modal(
         body = body.push(
             text(format!("⚠ {err}"))
                 .size(theme::font::body())
-                .color(theme::color::RED),
+                .color(byteui::theme::color::current().red),
         );
     }
 
     let close_btn = button(
         text("关闭")
             .size(theme::font::body())
-            .color(theme::color::CREAM),
+            .color(byteui::theme::color::current().cream),
     )
     .on_press(Message::PreviewEditCloseRequest)
     .padding([6, 12])
     .style(|_t, _s| button::Style {
-        background: Some(theme::color::CARD.into()),
-        text_color: theme::color::CREAM,
+        background: Some(byteui::theme::color::current().card.into()),
+        text_color: byteui::theme::color::current().cream,
         border: Border {
-            color: theme::color::BORDER,
+            color: byteui::theme::color::current().border,
             width: 1.0,
             radius: 4.0.into(),
         },
@@ -3194,15 +3196,15 @@ pub(crate) fn edit_modal(
     let save_btn = button(
         text("保存")
             .size(theme::font::body())
-            .color(theme::color::CREAM),
+            .color(byteui::theme::color::current().cream),
     )
     .on_press(Message::PreviewEditSave)
     .padding([6, 12])
     .style(|_t, _s| button::Style {
-        background: Some(theme::color::CARD.into()),
-        text_color: theme::color::CREAM,
+        background: Some(byteui::theme::color::current().card.into()),
+        text_color: byteui::theme::color::current().cream,
         border: Border {
-            color: theme::color::CREAM,
+            color: byteui::theme::color::current().cream,
             width: 1.0,
             radius: 4.0.into(),
         },
@@ -3214,9 +3216,9 @@ pub(crate) fn edit_modal(
         .width(Length::Fill)
         .height(Length::Fill)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::CARD.into()),
+            background: Some(byteui::theme::color::current().card.into()),
             border: Border {
-                color: theme::color::BORDER,
+                color: byteui::theme::color::current().border,
                 width: 1.0,
                 radius: 6.0.into(),
             },
@@ -3228,7 +3230,7 @@ pub(crate) fn edit_modal(
         .width(Length::Fill)
         .height(Length::Fill)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::SCRIM.into()),
+            background: Some(byteui::theme::color::current().scrim.into()),
             ..container::Style::default()
         })
         .into()
@@ -3242,23 +3244,23 @@ pub(crate) fn edit_discard_confirm_popup<'a>()
         column![
             text("放弃未保存的改动?")
                 .size(theme::font::subtitle())
-                .color(theme::color::CREAM),
+                .color(byteui::theme::color::current().cream),
             text("关闭后这次编辑不会被保存。")
                 .size(theme::font::label())
-                .color(theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
             row![
                 button(
                     text("取消")
                         .size(theme::font::body())
-                        .color(theme::color::CREAM)
+                        .color(byteui::theme::color::current().cream)
                 )
                 .on_press(Message::PreviewEditConfirmCancel)
                 .padding([6, 12])
                 .style(|_t, _s| button::Style {
-                    background: Some(theme::color::CARD.into()),
-                    text_color: theme::color::CREAM,
+                    background: Some(byteui::theme::color::current().card.into()),
+                    text_color: byteui::theme::color::current().cream,
                     border: Border {
-                        color: theme::color::BORDER,
+                        color: byteui::theme::color::current().border,
                         width: 1.0,
                         radius: 4.0.into(),
                     },
@@ -3267,15 +3269,15 @@ pub(crate) fn edit_discard_confirm_popup<'a>()
                 button(
                     text("放弃改动")
                         .size(theme::font::body())
-                        .color(theme::color::RED)
+                        .color(byteui::theme::color::current().red)
                 )
                 .on_press(Message::PreviewEditConfirmDiscard)
                 .padding([6, 12])
                 .style(|_t, _s| button::Style {
-                    background: Some(theme::color::CARD.into()),
-                    text_color: theme::color::RED,
+                    background: Some(byteui::theme::color::current().card.into()),
+                    text_color: byteui::theme::color::current().red,
                     border: Border {
-                        color: theme::color::RED,
+                        color: byteui::theme::color::current().red,
                         width: 1.0,
                         radius: 4.0.into(),
                     },
@@ -3288,9 +3290,9 @@ pub(crate) fn edit_discard_confirm_popup<'a>()
     )
     .padding(16)
     .style(|_t: &iced_widget::Theme| container::Style {
-        background: Some(theme::color::CARD.into()),
+        background: Some(byteui::theme::color::current().card.into()),
         border: Border {
-            color: theme::color::BORDER,
+            color: byteui::theme::color::current().border,
             width: 1.0,
             radius: 6.0.into(),
         },
@@ -3518,13 +3520,13 @@ pub(crate) fn agent_state_label(state: AgentState) -> &'static str {
 /// 与空闲态同为绿，靠 `tab_item` 里的闪烁区分（工作中才闪）。
 pub(crate) fn dot_color(state: AgentState, alive: bool) -> Color {
     if !alive {
-        return theme::color::DIM;
+        return byteui::theme::color::current().dim;
     }
     match state {
-        AgentState::Idle => theme::color::CYAN,
-        AgentState::Running => theme::color::GREEN,
-        AgentState::AwaitingInput => theme::color::RED,
-        AgentState::TurnEnded => theme::color::GOLD,
+        AgentState::Idle => byteui::theme::color::current().cyan,
+        AgentState::Running => byteui::theme::color::current().green,
+        AgentState::AwaitingInput => byteui::theme::color::current().red,
+        AgentState::TurnEnded => byteui::theme::color::current().gold,
     }
 }
 
@@ -3548,18 +3550,18 @@ pub(crate) fn format_model_label(raw: &str) -> String {
     }
 }
 
-/// agent → 对话列表圆点颜色。避开 `theme::color::GOLD`(甲方动作专属色,
+/// agent → 对话列表圆点颜色。避开 `byteui::theme::color::current().gold`(甲方动作专属色,
 /// CLAUDE.md 明文规定,不能被 agent 分类语义借用)。
 pub(crate) fn agent_dot_color(agent: AgentKind) -> Color {
     match agent {
-        AgentKind::Claude => theme::color::CYAN,
-        AgentKind::Codebuddy => theme::color::PURPLE,
-        AgentKind::Opencode => theme::color::GREEN,
-        AgentKind::Codex => theme::color::ORANGE,
-        AgentKind::Qoder => theme::color::MAGENTA,
-        AgentKind::Kilo => theme::color::BLUE,
-        AgentKind::V8agent => theme::color::LIME,
-        AgentKind::Unknown => theme::color::DIM,
+        AgentKind::Claude => byteui::theme::color::current().cyan,
+        AgentKind::Codebuddy => byteui::theme::color::current().purple,
+        AgentKind::Opencode => byteui::theme::color::current().green,
+        AgentKind::Codex => byteui::theme::color::current().orange,
+        AgentKind::Qoder => byteui::theme::color::current().magenta,
+        AgentKind::Kilo => byteui::theme::color::current().blue,
+        AgentKind::V8agent => byteui::theme::color::current().lime,
+        AgentKind::Unknown => byteui::theme::color::current().dim,
     }
 }
 
@@ -4053,13 +4055,26 @@ mod tests {
     fn dot_color_states() {
         use dozer_core::protocol::AgentState::*;
         // 死会话恒为灰，不论 agent 状态。
-        assert_eq!(dot_color(Running, false), theme::color::DIM, "死会话灰点");
+        assert_eq!(
+            dot_color(Running, false),
+            byteui::theme::color::current().dim,
+            "死会话灰点"
+        );
         // 存活：空闲青、运行绿、待输入红、回合毕金——各状态独立配色，不再
         // 靠闪烁区分空闲/运行(闪烁动画已取消)。
-        assert_eq!(dot_color(Idle, true), theme::color::CYAN);
-        assert_eq!(dot_color(Running, true), theme::color::GREEN);
-        assert_eq!(dot_color(AwaitingInput, true), theme::color::RED);
-        assert_eq!(dot_color(TurnEnded, true), theme::color::GOLD);
+        assert_eq!(dot_color(Idle, true), byteui::theme::color::current().cyan);
+        assert_eq!(
+            dot_color(Running, true),
+            byteui::theme::color::current().green
+        );
+        assert_eq!(
+            dot_color(AwaitingInput, true),
+            byteui::theme::color::current().red
+        );
+        assert_eq!(
+            dot_color(TurnEnded, true),
+            byteui::theme::color::current().gold
+        );
     }
 
     #[test]
@@ -4215,21 +4230,21 @@ mod tests {
     #[test]
     fn agent_dot_color_maps_each_kind_and_avoids_gold() {
         let cases = [
-            (AgentKind::Claude, theme::color::CYAN),
-            (AgentKind::Codebuddy, theme::color::PURPLE),
-            (AgentKind::Opencode, theme::color::GREEN),
-            (AgentKind::Codex, theme::color::ORANGE),
-            (AgentKind::Qoder, theme::color::MAGENTA),
-            (AgentKind::Kilo, theme::color::BLUE),
-            (AgentKind::V8agent, theme::color::LIME),
-            (AgentKind::Unknown, theme::color::DIM),
+            (AgentKind::Claude, byteui::theme::color::current().cyan),
+            (AgentKind::Codebuddy, byteui::theme::color::current().purple),
+            (AgentKind::Opencode, byteui::theme::color::current().green),
+            (AgentKind::Codex, byteui::theme::color::current().orange),
+            (AgentKind::Qoder, byteui::theme::color::current().magenta),
+            (AgentKind::Kilo, byteui::theme::color::current().blue),
+            (AgentKind::V8agent, byteui::theme::color::current().lime),
+            (AgentKind::Unknown, byteui::theme::color::current().dim),
         ];
         for (agent, expected) in cases {
             let color = agent_dot_color(agent);
             assert_eq!(color, expected, "{agent:?}");
             assert_ne!(
                 color,
-                theme::color::GOLD,
+                byteui::theme::color::current().gold,
                 "{agent:?} 的对话列表圆点色不能是 GOLD(甲方动作专属,CLAUDE.md 明文规定)"
             );
         }

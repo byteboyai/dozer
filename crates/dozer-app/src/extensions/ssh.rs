@@ -798,14 +798,14 @@ fn host_card<'a>(
             button(
                 text("信任并重试")
                     .size(theme::font::caption())
-                    .color(theme::color::GOLD),
+                    .color(byteui::theme::color::current().gold),
             )
             .on_press(Message::TrustHostKey(host.id.clone()))
             .padding([4, 8])
             .style(|_t: &iced_widget::Theme, _s| button::Style {
                 background: None,
                 border: iced_widget::core::Border {
-                    color: theme::color::GOLD,
+                    color: byteui::theme::color::current().gold,
                     width: 1.0,
                     radius: 6.0.into(),
                 },
@@ -824,10 +824,10 @@ fn host_card<'a>(
         column![
             text(name)
                 .size(theme::font::body())
-                .color(theme::color::CREAM),
+                .color(byteui::theme::color::current().cream),
             text(format!("{}@{}:{}", host.username, host.host, host.port))
                 .size(theme::font::caption_sm())
-                .color(theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
             container(actions)
                 .width(iced_widget::core::Length::Fill)
                 .align_x(iced_widget::core::alignment::Horizontal::Right),
@@ -838,7 +838,11 @@ fn host_card<'a>(
     .padding(10)
     .width(iced_widget::core::Length::Fill)
     .style(move |_t: &iced_widget::Theme| {
-        byteui::interaction::cards::container_card(false, hovered, theme::color::CARD)
+        byteui::interaction::cards::container_card(
+            false,
+            hovered,
+            byteui::theme::color::current().card,
+        )
     });
     MouseArea::new(card)
         .on_enter(Message::Hover(
@@ -865,15 +869,15 @@ fn radio_dot<'a>(
         .style(
             move |_t: &iced_widget::Theme| iced_widget::container::Style {
                 background: if selected {
-                    Some(theme::color::GOLD.into())
+                    Some(byteui::theme::color::current().gold.into())
                 } else {
                     None
                 },
                 border: iced_widget::core::Border {
                     color: if selected {
-                        theme::color::GOLD
+                        byteui::theme::color::current().gold
                     } else {
-                        theme::color::BORDER
+                        byteui::theme::color::current().border
                     },
                     width: 1.5,
                     radius: 5.0.into(),
@@ -891,7 +895,7 @@ fn radio_dot<'a>(
             ring,
             text(label)
                 .size(theme::font::body())
-                .color(theme::color::CREAM),
+                .color(byteui::theme::color::current().cream),
         ]
         .spacing(6)
         .align_y(iced_widget::core::alignment::Vertical::Center),
@@ -911,16 +915,16 @@ fn host_form<'a>(
                        _s: iced_widget::text_input::Status|
      -> iced_widget::text_input::Style {
         iced_widget::text_input::Style {
-            background: theme::color::CARD.into(),
+            background: byteui::theme::color::current().card.into(),
             border: iced_widget::core::Border {
-                color: theme::color::BORDER,
+                color: byteui::theme::color::current().border,
                 width: 1.0,
                 radius: 6.0.into(),
             },
-            icon: theme::color::DIM,
-            placeholder: theme::color::DIM,
-            value: theme::color::CREAM,
-            selection: theme::color::GOLD,
+            icon: byteui::theme::color::current().dim,
+            placeholder: byteui::theme::color::current().dim,
+            value: byteui::theme::color::current().cream,
+            selection: byteui::theme::color::current().gold,
         }
     };
 
@@ -986,7 +990,7 @@ fn host_form<'a>(
             .on_press(msg)
             .padding([6, 12])
             .style(move |_t: &iced_widget::Theme, _s| button::Style {
-                background: Some(theme::color::BG.into()),
+                background: Some(byteui::theme::color::current().bg.into()),
                 border: iced_widget::core::Border {
                     color,
                     width: 1.0,
@@ -1001,7 +1005,7 @@ fn host_form<'a>(
     // 中间用 `Fill` 空位把两组顶到卡片两端。
     let left = row![text_btn(
         "测试连接",
-        theme::color::CREAM,
+        byteui::theme::color::current().cream,
         Message::TestConnection(draft.id.clone().unwrap_or_default(),)
     )]
     .spacing(6);
@@ -1012,12 +1016,20 @@ fn host_form<'a>(
     if let Some(id) = &draft.id {
         right = right.push(text_btn(
             "删除",
-            theme::color::RED,
+            byteui::theme::color::current().red,
             Message::DeleteHost(id.clone()),
         ));
     }
-    right = right.push(text_btn("保存", theme::color::CREAM, Message::DraftSave));
-    right = right.push(text_btn("取消", theme::color::DIM, Message::DraftCancel));
+    right = right.push(text_btn(
+        "保存",
+        byteui::theme::color::current().cream,
+        Message::DraftSave,
+    ));
+    right = right.push(text_btn(
+        "取消",
+        byteui::theme::color::current().dim,
+        Message::DraftCancel,
+    ));
     let buttons = row![
         left,
         iced_widget::Space::new().width(iced_widget::core::Length::Fill),
@@ -1028,17 +1040,21 @@ fn host_form<'a>(
     col = col.push(buttons);
 
     let (status_text, status_color) = match status {
-        TestStatus::Idle => (String::new(), theme::color::DIM),
-        TestStatus::Testing => ("测试中…".to_string(), theme::color::DIM),
-        TestStatus::Ok => ("✓ 连接成功".to_string(), theme::color::GREEN),
-        TestStatus::UnknownHostKey { fingerprint } => {
-            (format!("⚠ 未知主机,指纹 {fingerprint}"), theme::color::GOLD)
-        }
+        TestStatus::Idle => (String::new(), byteui::theme::color::current().dim),
+        TestStatus::Testing => ("测试中…".to_string(), byteui::theme::color::current().dim),
+        TestStatus::Ok => (
+            "✓ 连接成功".to_string(),
+            byteui::theme::color::current().green,
+        ),
+        TestStatus::UnknownHostKey { fingerprint } => (
+            format!("⚠ 未知主机,指纹 {fingerprint}"),
+            byteui::theme::color::current().gold,
+        ),
         TestStatus::KeyChanged { fingerprint } => (
             format!("✗ 主机指纹已变化({fingerprint}),拒绝连接"),
-            theme::color::RED,
+            byteui::theme::color::current().red,
         ),
-        TestStatus::Err(e) => (format!("✗ {e}"), theme::color::RED),
+        TestStatus::Err(e) => (format!("✗ {e}"), byteui::theme::color::current().red),
     };
     if !status_text.is_empty() {
         col = col.push(
@@ -1052,7 +1068,7 @@ fn host_form<'a>(
     {
         col = col.push(text_btn(
             "信任并重试",
-            theme::color::GOLD,
+            byteui::theme::color::current().gold,
             Message::TrustHostKey(id.clone()),
         ));
     }
@@ -1063,7 +1079,7 @@ fn host_form<'a>(
         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
             background: None,
             border: iced_widget::core::Border {
-                color: theme::color::GOLD,
+                color: byteui::theme::color::current().gold,
                 width: 1.0,
                 radius: 8.0.into(),
             },
@@ -1089,7 +1105,7 @@ pub fn view<'a>(
         col = col.push(
             text("还没有主机")
                 .size(theme::font::body())
-                .color(theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
         );
     } else {
         for h in ws_state.hosts() {
@@ -1120,7 +1136,7 @@ pub fn view<'a>(
         .height(iced_widget::core::Length::Fill)
         .style(
             move |_t: &iced_widget::Theme| iced_widget::container::Style {
-                background: Some(theme::color::BG.into()),
+                background: Some(byteui::theme::color::current().bg.into()),
                 border: outer,
                 ..iced_widget::container::Style::default()
             },
@@ -1134,7 +1150,7 @@ pub fn view<'a>(
                 .width(iced_widget::core::Length::Fill)
                 .height(iced_widget::core::Length::Fill)
                 .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-                    background: Some(theme::color::SCRIM.into()),
+                    background: Some(byteui::theme::color::current().scrim.into()),
                     ..iced_widget::container::Style::default()
                 }),
         )
@@ -1164,15 +1180,15 @@ fn delete_confirm_popup<'a>(
     let cancel = button(
         text("取消")
             .size(theme::font::body())
-            .color(theme::color::CREAM),
+            .color(byteui::theme::color::current().cream),
     )
     .on_press(Message::DeleteHostCancel)
     .padding([6, 12])
     .style(|_t: &iced_widget::Theme, _s| button::Style {
-        background: Some(theme::color::CARD.into()),
-        text_color: theme::color::CREAM,
+        background: Some(byteui::theme::color::current().card.into()),
+        text_color: byteui::theme::color::current().cream,
         border: iced_widget::core::Border {
-            color: theme::color::BORDER,
+            color: byteui::theme::color::current().border,
             width: 1.0,
             radius: 4.0.into(),
         },
@@ -1181,15 +1197,15 @@ fn delete_confirm_popup<'a>(
     let confirm = button(
         text("删除")
             .size(theme::font::body())
-            .color(theme::color::RED),
+            .color(byteui::theme::color::current().red),
     )
     .on_press(Message::DeleteHost(host_id.to_string()))
     .padding([6, 12])
     .style(|_t: &iced_widget::Theme, _s| button::Style {
-        background: Some(theme::color::CARD.into()),
-        text_color: theme::color::RED,
+        background: Some(byteui::theme::color::current().card.into()),
+        text_color: byteui::theme::color::current().red,
         border: iced_widget::core::Border {
-            color: theme::color::RED,
+            color: byteui::theme::color::current().red,
             width: 1.0,
             radius: 4.0.into(),
         },
@@ -1200,19 +1216,19 @@ fn delete_confirm_popup<'a>(
         column![
             text(format!("删除主机 \"{name}\"?"))
                 .size(theme::font::subtitle())
-                .color(theme::color::CREAM),
+                .color(byteui::theme::color::current().cream),
             text("这会永久删除这台主机的连接记录。")
                 .size(theme::font::label())
-                .color(theme::color::DIM),
+                .color(byteui::theme::color::current().dim),
             row![cancel, confirm].spacing(8),
         ]
         .spacing(8),
     )
     .padding(16)
     .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-        background: Some(theme::color::CARD.into()),
+        background: Some(byteui::theme::color::current().card.into()),
         border: iced_widget::core::Border {
-            color: theme::color::BORDER,
+            color: byteui::theme::color::current().border,
             width: 1.0,
             radius: 6.0.into(),
         },
@@ -1234,18 +1250,18 @@ fn ssh_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_render
     let add_btn = button(
         text("＋添加")
             .size(theme::font::body())
-            .color(theme::color::GOLD),
+            .color(byteui::theme::color::current().gold),
     )
     .on_press(Message::AddHostStart)
     .padding([8, 16])
     .style(|_t: &iced_widget::Theme, _s| button::Style {
-        background: Some(theme::color::BG.into()),
+        background: Some(byteui::theme::color::current().bg.into()),
         border: iced_widget::core::Border {
-            color: theme::color::GOLD,
+            color: byteui::theme::color::current().gold,
             width: 1.0,
             radius: 6.0.into(),
         },
-        text_color: theme::color::GOLD,
+        text_color: byteui::theme::color::current().gold,
         ..button::Style::default()
     });
 
@@ -1255,7 +1271,7 @@ fn ssh_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_render
         .width(iced_widget::core::Length::Fill)
         .height(iced_widget::core::Length::Fixed(1.0))
         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-            background: Some(theme::color::BORDER.into()),
+            background: Some(byteui::theme::color::current().border.into()),
             ..iced_widget::container::Style::default()
         });
 

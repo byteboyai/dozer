@@ -99,7 +99,7 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_r
         Lead::Icon,
         text(format!("Proxy  {}", s.proxy.as_deref().unwrap_or("OFF")))
             .size(theme::font::caption_sm())
-            .color(theme::color::BG)
+            .color(byteui::theme::color::current().bg)
             .into(),
     ));
     // 网速段:排在代理段之后,前导 `｜`,纯展示。
@@ -111,7 +111,7 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_r
             format_speed(s.net_up_bps)
         ))
         .size(theme::font::caption_sm())
-        .color(theme::color::BG)
+        .color(byteui::theme::color::current().bg)
         .into(),
     ));
 
@@ -127,13 +127,13 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_r
                 Lead::Pipe => parts.push(
                     text("｜")
                         .size(theme::font::caption_sm())
-                        .color(theme::color::BG)
+                        .color(byteui::theme::color::current().bg)
                         .into(),
                 ),
                 Lead::Icon => parts.push(icons::view(
                     icons::IconKind::SquareRadical,
                     icon_size::row(),
-                    theme::color::BG,
+                    byteui::theme::color::current().bg,
                 )),
             }
         }
@@ -143,12 +143,12 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_r
     // 布局:系统信息(CPU/RAM/SSD/HDD/网速/Proxy)**靠左**,Dozer 应用名称与
     // 版本**靠右**——中间用 `Space::with_width(Length::Fill)` 撑开。footbar
     // 背景用窗口根背景色(`#dcc9a3`,theme::region::background),文字/图标
-    // 用深色 `#0a0e16`(theme::color::BG)浮在奶油背景上。CPU 段前缀图标
+    // 用深色 `#0a0e16`(byteui::theme::color::current().bg)浮在奶油背景上。CPU 段前缀图标
     // (Lucide square-activity)同色同对齐。
     let cpu_icon = icons::view(
         icons::IconKind::SquareActivity,
         icon_size::row(),
-        theme::color::BG,
+        byteui::theme::color::current().bg,
     );
 
     let left = row![cpu_icon]
@@ -164,11 +164,11 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_r
     let app_icon = icons::view(
         icons::IconKind::SquareTerminal,
         icon_size::row(),
-        theme::color::BG,
+        byteui::theme::color::current().bg,
     );
     let app_name = text("Dozer AI Coder")
         .size(theme::font::caption_sm())
-        .color(theme::color::BG);
+        .color(byteui::theme::color::current().bg);
     let app_version = text(format!("v{}", env!("CARGO_PKG_VERSION")))
         .size(theme::font::caption_sm())
         .color(iced_widget::core::Color::from_rgb8(0xFF, 0x6E, 0x6E));
@@ -201,12 +201,12 @@ fn metric_row(
     let value_color = if percent > 75.0 {
         iced_widget::core::Color::from_rgb8(0xFF, 0x6E, 0x6E)
     } else {
-        theme::color::BG
+        byteui::theme::color::current().bg
     };
     row![
         text(prefix)
             .size(theme::font::caption_sm())
-            .color(theme::color::BG),
+            .color(byteui::theme::color::current().bg),
         text(format!("  {:.0}%", percent))
             .size(theme::font::caption_sm())
             .color(value_color),
