@@ -1407,34 +1407,23 @@ fn todo_footer_bar<'a>(
         .on_press(Message::AddEditStart)
         .into();
 
-    let top_line = container(iced_widget::Space::new())
-        .width(Length::Fill)
-        .height(Length::Fixed(1.0))
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(byteui::theme::color::current().border.into()),
-            ..container::Style::default()
-        });
-
-    container(column![top_line, todo_resize_handle(), input_box,].spacing(4))
+    // 输入框自身已带 1px 边框,作为与列表区之间的唯一分割线;不再额外画
+    // 一道 `top_line`,避免输入框上方出现两条并列分割线。
+    container(column![todo_resize_handle(), input_box,].spacing(4))
         .width(Length::Fill)
         .padding([8, 20])
         .into()
 }
 
-/// 左栏底部栏(位于分类导航之下、靠底):左侧任务计数,右侧"清空列表"
-/// 按钮。已从 content pane 右下角迁到左栏(见 `view`),与分类按钮的逐项
-/// 计数形成"总览 + 分项"呼应。样式对齐 `files.rs` 的 `git_footer_bar`
+/// 左栏底部栏(位于分类导航之下、靠底):仅右侧"清空列表"按钮,不再展示
+/// 左侧任务计数与图标。已从 content pane 右下角迁到左栏(见 `view`)。样式
+/// 对齐 `files.rs` 的 `git_footer_bar`
 /// (顶部分隔线 + 左图标/文案 + 右侧操作按钮)。**清空功能尚未实现**:
 /// `清空列表` 走 `Message::ClearList`,在 `update` 里是 no-op,这里只负责
 /// 把 UI 摆出来。
 fn todo_clear_footer_bar<'a>(
     ws_state: &'a WorkspaceState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let count = ws_state.items.len();
-    let label = text(format!("{count} 个任务"))
-        .size(theme::font::label())
-        .color(byteui::theme::color::current().dim);
-
     let clear = button(
         row![
             icons::view(
@@ -1462,18 +1451,9 @@ fn todo_clear_footer_bar<'a>(
         ..button::Style::default()
     });
 
-    let bar = row![
-        icons::view(
-            icons::IconKind::ListTodo,
-            crate::theme::icon_size::row(),
-            byteui::theme::color::current().cream,
-        ),
-        label,
-        space::horizontal(),
-        clear,
-    ]
-    .spacing(6)
-    .align_y(iced_widget::core::Alignment::Center);
+    let bar = row![space::horizontal(), clear]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center);
 
     let top_line = container(iced_widget::Space::new())
         .width(Length::Fill)

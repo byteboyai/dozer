@@ -640,7 +640,7 @@ fn commit_list_view<'a>(
     selected: Option<git2::Oid>,
     head_branch: Option<&'a str>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let mut list = column![].spacing(2);
+    let mut list = column![].spacing(8);
     for (i, row) in snapshot.rows.iter().enumerate() {
         let is_selected = selected == Some(row.oid);
         let icon_kind = if row.is_merge {
@@ -823,15 +823,7 @@ pub fn view<'a>(
         );
     }
     left = left.push(commit_list_view(app, snapshot, state.selected, head_branch));
-    let load_more = iced_widget::button(
-        text("加载更多提交 (+200)")
-            .size(theme::font::caption())
-            .color(byteui::theme::color::current().cream),
-    )
-    .on_press_maybe((!loading).then_some(Message::LoadMore))
-    .padding([4, 12]);
-    left = left.push(load_more);
-    left = left.push(branch_toggle_button(state, head_branch));
+    left = left.push(git_panel_footer_bar(state, head_branch, loading));
     let left_with_picker = iced_widget::stack![
         container(left).width(Length::Fill).height(Length::Fill),
         branch_picker_view(state, head_branch),
@@ -925,45 +917,96 @@ fn diff_pane_view<'a>(
 }
 
 /// 左侧面板底部固定展示:当前分支名 + 展开箭头,点击发
-/// `Message::BranchPickerOpen`/`BranchPickerClose`(按当前展开态二选一)。
-fn branch_toggle_button<'a>(
+/// 左侧面板底部 footbar:完全照抄文件树面板的 `git_footer_bar` 结构——顶部
+/// 一条 1px 分隔线 + 一行(左:`GitBranch` 图标 + 当前分支名;右:加载更多 +
+/// 分支切换 chevron),`spacing(6)`、`align_y(Center)`、外层 `padding([6,0])`、
+/// 背景透明。分支切换走 `BranchPickerOpen`/`BranchPickerClose`;下拉层仍是
+/// 左侧面板局部 `stack!`(`branch_picker_view`)。
+fn git_panel_footer_bar<'a>(
     state: &'a State,
     head_branch: Option<&'a str>,
+    loading: bool,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let label = head_branch.unwrap_or("(无分支)");
-    let msg = if state.branch_picker_open {
-        Message::BranchPickerClose
-    } else {
-        Message::BranchPickerOpen
-    };
-    iced_widget::button(
-        row![
-            text(label)
-                .size(theme::font::body())
-                .color(byteui::theme::color::current().cream),
-            iced_widget::Space::new().width(Length::Fill),
-            byteui::interaction::icons::view(
-                byteui::interaction::icons::IconKind::ChevronDown,
-                crate::theme::icon_size::row(),
-                byteui::theme::color::current().dim
-            ),
-        ]
-        .align_y(alignment::Vertical::Center),
+    let branch_label = text(head_branch.unwrap_or("(无分支)"))
+        .size(theme::font::label())
+        .color(byteui::theme::color::current().cream);
+
+    let switch = iced_widget::button(byteui::interaction::icons::view(
+        if state.branch_picker_open {
+            byteui::interaction::icons::IconKind::ChevronUp
+        } else {
+            byteui::interaction::icons::IconKind::ChevronDown
+        },
+        crate::theme::icon_size::row(),
+        byteui::theme::color::current().cream,
+    ))
+    .on_press_maybe(
+        (!state.branch_switch_pending).then_some(if state.branch_picker_open {
+            Message::BranchPickerClose
+        } else {
+            Message::BranchPickerOpen
+        }),
     )
-    .width(Length::Fill)
-    .padding([6, 10])
-    .on_press_maybe((!state.branch_switch_pending).then_some(msg))
+    .padding(6)
     .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
         background: None,
         text_color: byteui::theme::color::current().cream,
         border: Border {
             color: byteui::theme::color::current().border,
-            width: 1.0,
-            radius: 6.0.into(),
+            width: 0.0,
+            radius: 4.0.into(),
         },
         ..iced_widget::button::Style::default()
-    })
-    .into()
+    });
+
+    let load_more = iced_widget::button(
+        text("加载更多提交 (+200)")
+            .size(theme::font::label())
+            .color(byteui::theme::color::current().cream),
+    )
+    .on_press_maybe((!loading).then_some(Message::LoadMore))
+    .padding([4, 10])
+    .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+        background: Some(byteui::theme::color::current().bg.into()),
+        text_color: byteui::theme::color::current().cream,
+        border: Border {
+            color: byteui::theme::color::current().border,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..iced_widget::button::Style::default()
+    });
+
+    let bar = row![
+        byteui::interaction::icons::view(
+            byteui::interaction::icons::IconKind::GitBranch,
+            crate::theme::icon_size::row(),
+            byteui::theme::color::current().cream,
+        ),
+        branch_label,
+        iced_widget::space::horizontal(),
+        load_more,
+        switch,
+    ]
+    .spacing(6)
+    .align_y(alignment::Vertical::Center);
+
+    let top_line = container(iced_widget::Space::new())
+        .width(Length::Fill)
+        .height(Length::Fixed(1.0))
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(byteui::theme::color::current().border.into()),
+            ..container::Style::default()
+        });
+
+    container(column![top_line, bar].spacing(4))
+        .width(Length::Fill)
+        .padding([6, 0])
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: None,
+            ..container::Style::default()
+        })
+        .into()
 }
 
 /// 分支下拉展开层:局部 `stack!`(不是 window-wide overlay,只覆盖左侧
@@ -997,7 +1040,7 @@ fn branch_picker_view<'a>(
         );
     }
     // dirty(有未提交改动)时锁定除当前分支外的其余分支;切换请求进行中时
-    // 全部锁定——跟 `branch_toggle_button` 的 `branch_switch_pending` 禁用
+    // 全部锁定——跟 `git_panel_footer_bar` 的 `branch_switch_pending` 禁用
     // 语义一致。单项统一走 `crate::menu::item_row_fill`:同一套 hover/
     // 锁定样式,但整行撑满 Git 面板宽度(窄面板里好用)。
     for name in &state.branches {
