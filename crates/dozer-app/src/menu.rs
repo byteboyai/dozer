@@ -35,9 +35,9 @@ pub fn item<'a, Msg: 'a + Clone>(
     msg: Msg,
 ) -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {
     item_row(
-        icon_leading(icon, theme::color::CREAM),
+        icon_leading(icon, byteui::theme::color::current().cream),
         label,
-        theme::color::CREAM,
+        byteui::theme::color::current().cream,
         Some(msg),
     )
 }
@@ -111,7 +111,7 @@ pub fn separator<'a, Msg: 'a>() -> Element<'a, Msg, iced_widget::Theme, iced_ren
         .width(Length::Fixed(crate::theme::geometry::menu_item_width()))
         .height(Length::Fixed(1.0))
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::BORDER.into()),
+            background: Some(byteui::theme::color::current().border.into()),
             ..container::Style::default()
         })
         .into()
@@ -167,7 +167,7 @@ fn menu_button<'a, Msg: 'a + Clone>(
                 matches!(s, button::Status::Hovered) || matches!(s, button::Status::Pressed);
             if enabled && hovered {
                 button::Style {
-                    background: Some(theme::color::TAB_HOVER.into()),
+                    background: Some(byteui::theme::color::current().tab_hover.into()),
                     text_color: base_color,
                     border: Border {
                         color: Color::TRANSPARENT,
