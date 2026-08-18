@@ -1174,7 +1174,7 @@ fn bookmark_menu_row(
     label: String,
     msg: Message,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    crate::menu::item_row_fill(None, label, theme::color::CREAM, Some(msg))
+    crate::menu::item_row_fill(None, label, byteui::theme::color::current().cream, Some(msg))
 }
 
 /// 星标小菜单:未收藏显示"加入…",已收藏显示"移出…"(打勾态)。
@@ -1223,10 +1223,10 @@ fn bookmark_group<'a>(
     items: &[&'a BookmarkInfo],
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let header = row![
-        icons::view(icons::IconKind::Folder, icon_size::row(), theme::color::DIM),
+        icons::view(icons::IconKind::Folder, icon_size::row(), byteui::theme::color::current().dim),
         lh(text(title)
             .size(theme::font::subtitle())
-            .color(theme::color::DIM)),
+            .color(byteui::theme::color::current().dim)),
     ]
     .spacing(4)
     .align_y(iced_widget::core::Alignment::Center);
@@ -1234,21 +1234,21 @@ fn bookmark_group<'a>(
     for b in items {
         let open = button(lh(text(b.title.clone())
             .size(theme::font::body())
-            .color(theme::color::CREAM)))
+            .color(byteui::theme::color::current().cream)))
         .on_press(Message::OpenUrl(b.url.clone()))
         .width(Length::Fill)
         .style(|_t: &iced_widget::Theme, _s| button::Style {
             background: None,
-            text_color: theme::color::CREAM,
+            text_color: byteui::theme::color::current().cream,
             ..button::Style::default()
         });
         let remove = button(lh(text("×")
             .size(theme::font::body())
-            .color(theme::color::DIM)))
+            .color(byteui::theme::color::current().dim)))
         .on_press(Message::BookmarkRemove(b.id))
         .style(|_t: &iced_widget::Theme, _s| button::Style {
             background: None,
-            text_color: theme::color::DIM,
+            text_color: byteui::theme::color::current().dim,
             ..button::Style::default()
         });
         col = col.push(
@@ -1266,7 +1266,7 @@ fn bookmark_group<'a>(
 
 /// 收藏夹侧栏:分"全局收藏"/"本项目收藏"两组文件夹分组,都为空时显示占位
 /// 文案。`width` 由调用方按配对布局里侧栏那一份宽度的 flex 权重传入,侧栏
-/// 背景用列表侧一致的 `theme::color::BG`(结构性常驻侧栏,不再是盖在下方的
+/// 背景用列表侧一致的 `byteui::theme::color::current().bg`(结构性常驻侧栏,不再是盖在下方的
 /// 浮层卡片)。
 fn bookmarks_panel(
     state: &State,
@@ -1293,7 +1293,7 @@ fn bookmarks_panel(
     if both_empty {
         col = col.push(lh(text("暂无收藏")
             .size(theme::font::subtitle())
-            .color(theme::color::DIM)));
+            .color(byteui::theme::color::current().dim)));
     }
 
     container(col)
@@ -1301,7 +1301,7 @@ fn bookmarks_panel(
         .width(width)
         .height(Length::Fill)
         .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::color::BG.into()),
+            background: Some(byteui::theme::color::current().bg.into()),
             ..container::Style::default()
         })
         .into()
@@ -1386,21 +1386,21 @@ pub fn view(
     };
     let addr = button(lh(text(addr_text).size(theme::font::body()).color(
         if editing {
-            theme::color::CREAM
+            byteui::theme::color::current().cream
         } else {
-            theme::color::DIM
+            byteui::theme::color::current().dim
         },
     )))
     .on_press(Message::AddrClick)
     .width(Length::Fill)
     .style(move |_t, _s| button::Style {
-        background: Some(theme::color::TERM_BG.into()),
-        text_color: theme::color::CREAM,
+        background: Some(byteui::theme::color::current().term_bg.into()),
+        text_color: byteui::theme::color::current().cream,
         border: Border {
             color: if editing {
-                theme::color::GOLD
+                byteui::theme::color::current().gold
             } else {
-                theme::color::BORDER
+                byteui::theme::color::current().border
             },
             width: 1.0,
             radius: 2.0.into(),
@@ -1424,14 +1424,14 @@ pub fn view(
     if let Some(err) = &state.error {
         content = content.push(lh(text(format!("⚠ {err}"))
             .size(theme::font::body())
-            .color(theme::color::RED)));
+            .color(byteui::theme::color::current().red)));
     }
 
     let body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
         if state.tabs.tabs().is_empty() {
             container(lh(text("暂无网页——在地址栏输入网址")
                 .size(theme::font::subtitle())
-                .color(theme::color::DIM)))
+                .color(byteui::theme::color::current().dim)))
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
@@ -1445,7 +1445,7 @@ pub fn view(
         };
 
     content = content.push(if state.bookmarks_open {
-        let bg = region.background.unwrap_or(theme::color::BG);
+        let bg = region.background.unwrap_or(byteui::theme::color::current().bg);
         let (list_portion, content_portion) = split_portions(1.0 - bookmarks_split);
         row![
             container(body).width(Length::FillPortion(content_portion)),
