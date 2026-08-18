@@ -1773,6 +1773,7 @@ dependencies = [
  "alacritty_terminal",
  "anyhow",
  "arboard",
+ "byteui",
  "dozer-client",
  "dozer-core",
  "dozer-hook",
