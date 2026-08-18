@@ -927,8 +927,68 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
+            // 浏览器地址栏 / 验收意见 / 项目树行内编辑态 / 项目名称编辑 /
+            // 文件树搜索框 / 右键"搜索"弹窗查询框 / Todo 搜索框、新增任务框、
+            // 任务内容编辑、MARKDOWN 整文件编辑:键盘直达自绘输入(不经 keymap、
+            // 不进 PTY)。文件预览面板已不再有地址栏。提到 ⌘ 组合键判断之前,
+            // 因为 ⌘V 粘贴也要认这套聚焦态(见下方 fix)。
+            let to_browser = app.browser_addr_editing();
+            let to_comment = app.acceptance_comment_editing();
+            let to_tree_edit = app.tree_editing();
+            let to_project_name = app.project_name_editing();
+            let to_search = app.search_editing();
+            let to_search_popup = app.search_popup_editing();
+            let to_todo_search = app.todo_search_editing();
+            let to_todo_add = app.todo_add_editing();
+            let to_todo_content = app.todo_content_editing();
+            let to_todo_markdown = app.todo_markdown_editing();
+            let to_self_drawn_input = to_browser
+                || to_comment
+                || to_tree_edit
+                || to_project_name
+                || to_search
+                || to_search_popup
+                || to_todo_search
+                || to_todo_add
+                || to_todo_content
+                || to_todo_markdown;
+            // 优先级:右键"搜索"弹窗查询框 > 浏览器地址栏 > 验收意见 > 项目树
+            // 编辑 > 项目名称编辑 > 文件树搜索框 > Todo 面板搜索框 > Todo
+            // 新增任务框 > Todo 任务内容编辑 > Todo MARKDOWN 编辑(多者同真时
+            // 罕见,谁先建的编辑态谁优先没有实际冲突场景,这个顺序只是一个
+            // 确定性兜底)。⌘V 粘贴与逐字符输入共用这条链,保证两条路径落进
+            // 同一个自绘输入。
+            let addr_message = |ev: workspace::AddrEvent| -> Message {
+                if to_search_popup {
+                    Message::Search(extensions::search::Message::QueryEvent(ev))
+                } else if to_browser {
+                    Message::Browser(extensions::browser::Message::AddrEvent(ev))
+                } else if to_comment {
+                    Message::Acceptance(extensions::acceptance::Message::CommentEvent(ev))
+                } else if to_tree_edit {
+                    Message::Files(extensions::files::Message::EditEvent(ev))
+                } else if to_project_name {
+                    Message::Project(extensions::project::Message::NameEditEvent(ev))
+                } else if to_search {
+                    Message::Files(extensions::files::Message::SearchEvent(ev))
+                } else if to_todo_search {
+                    Message::Todo(extensions::todo::Message::SearchEvent(ev))
+                } else if to_todo_add {
+                    Message::Todo(extensions::todo::Message::AddEvent(ev))
+                } else if to_todo_content {
+                    Message::Todo(extensions::todo::Message::ContentEvent(ev))
+                } else {
+                    Message::Todo(extensions::todo::Message::MarkdownEvent(ev))
+                }
+            };
+
             // ⌘ 组合键是应用级快捷键，一律不进 PTY（此前 ⌘C 会把裸 "c"
-            // 漏写进终端）。⌘C 复制当前选区；⌘V 粘贴剪贴板。
+            // 漏写进终端）。⌘C 复制当前选区；⌘V 粘贴剪贴板——但若某个自绘
+            // 输入正聚焦（如 Todo 新增任务框），粘贴要落进那个输入而不是
+            // 终端：此前这里跳过了 `to_self_drawn_input` 判断，直接
+            // `TermPaste` 到终端，导致在自绘输入里粘贴文字会跑进正在运行的
+            // agent 终端（用户实测反馈，2026-08-18；逐字符输入不受影响，
+            // 因为那条路径本就在这道判断之后）。
             if modifiers.super_key() {
                 if let WindowEvent::KeyboardInput {
                     event,
@@ -948,16 +1008,23 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             if let Some(text) =
                                 clipboard.read(iced_winit::core::clipboard::Kind::Standard)
                             {
-                                let target = app.keyboard_term_target();
-                                app.update(Message::TermPaste(target, text));
+                                if to_self_drawn_input {
+                                    app.update(addr_message(workspace::AddrEvent::Text(text)));
+                                } else {
+                                    let target = app.keyboard_term_target();
+                                    app.update(Message::TermPaste(target, text));
+                                }
                                 window.request_redraw();
-                            } else if let Some(path) =
-                                clipboard_image::read_pasteboard_image_as_temp_file()
+                            } else if !to_self_drawn_input
+                                && let Some(path) =
+                                    clipboard_image::read_pasteboard_image_as_temp_file()
                             {
                                 // 剪贴板没有文本表示(纯截图),iced 的
                                 // Clipboard::read 只认字符串,取不到图片
                                 // 字节。落临时 PNG,粘贴文件路径——claude
-                                // 等 CLI 会把路径识别成图片附件加载。
+                                // 等 CLI 会把路径识别成图片附件加载。自绘
+                                // 输入不需要这条(它们不接收图片附件),
+                                // `to_self_drawn_input` 时保持原样不处理。
                                 let target = app.keyboard_term_target();
                                 app.update(Message::TermPaste(
                                     target,
@@ -972,31 +1039,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
-            // 浏览器地址栏 / 验收意见 / 项目树行内编辑态 / 项目名称编辑 /
-            // 文件树搜索框 / 右键"搜索"弹窗查询框 / Todo 搜索框、新增任务框、
-            // 任务内容编辑、MARKDOWN 整文件编辑:键盘直达自绘输入(不经 keymap、
-            // 不进 PTY)。文件预览面板已不再有地址栏。
-            let to_browser = app.browser_addr_editing();
-            let to_comment = app.acceptance_comment_editing();
-            let to_tree_edit = app.tree_editing();
-            let to_project_name = app.project_name_editing();
-            let to_search = app.search_editing();
-            let to_search_popup = app.search_popup_editing();
-            let to_todo_search = app.todo_search_editing();
-            let to_todo_add = app.todo_add_editing();
-            let to_todo_content = app.todo_content_editing();
-            let to_todo_markdown = app.todo_markdown_editing();
-            if to_browser
-                || to_comment
-                || to_tree_edit
-                || to_project_name
-                || to_search
-                || to_search_popup
-                || to_todo_search
-                || to_todo_add
-                || to_todo_content
-                || to_todo_markdown
-            {
+            if to_self_drawn_input {
                 let addr_event = match event {
                     WindowEvent::KeyboardInput {
                         event,
@@ -1029,33 +1072,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     _ => None,
                 };
                 if let Some(ev) = addr_event {
-                    // 优先级:右键"搜索"弹窗查询框 > 浏览器地址栏 > 验收意见 >
-                    // 项目树编辑 > 项目名称编辑 > 文件树搜索框 > Todo 面板搜索框
-                    // > Todo 新增任务框 > Todo 任务内容编辑 > Todo MARKDOWN 编辑
-                    // (多者同真时罕见,谁先建的编辑态谁优先没有实际冲突场景,
-                    // 这个顺序只是一个确定性兜底)。
-                    let message = if to_search_popup {
-                        Message::Search(extensions::search::Message::QueryEvent(ev))
-                    } else if to_browser {
-                        Message::Browser(extensions::browser::Message::AddrEvent(ev))
-                    } else if to_comment {
-                        Message::Acceptance(extensions::acceptance::Message::CommentEvent(ev))
-                    } else if to_tree_edit {
-                        Message::Files(extensions::files::Message::EditEvent(ev))
-                    } else if to_project_name {
-                        Message::Project(extensions::project::Message::NameEditEvent(ev))
-                    } else if to_search {
-                        Message::Files(extensions::files::Message::SearchEvent(ev))
-                    } else if to_todo_search {
-                        Message::Todo(extensions::todo::Message::SearchEvent(ev))
-                    } else if to_todo_add {
-                        Message::Todo(extensions::todo::Message::AddEvent(ev))
-                    } else if to_todo_content {
-                        Message::Todo(extensions::todo::Message::ContentEvent(ev))
-                    } else {
-                        Message::Todo(extensions::todo::Message::MarkdownEvent(ev))
-                    };
-                    app.update(message);
+                    app.update(addr_message(ev));
                     window.request_redraw();
                 }
                 return;
@@ -1113,6 +1130,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
             if let Some(bytes) = bytes {
                 let target = app.keyboard_term_target();
+                tracing::warn!(?target, ?bytes, "DEBUG term input fallback fired");
                 app.update(Message::TermInput(target, bytes));
                 window.request_redraw();
             }
