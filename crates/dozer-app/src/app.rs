@@ -5855,7 +5855,11 @@ fn dozer_home_tab<'a>(
     let title_color = if active {
         byteui::theme::color::current().gold
     } else {
-        byteui::theme::color::mix(byteui::theme::color::current().dim, byteui::theme::color::current().gold, title_hover_t)
+        byteui::theme::color::mix(
+            byteui::theme::color::current().dim,
+            byteui::theme::color::current().gold,
+            title_hover_t,
+        )
     };
 
     // `height(Fill)` + `align_y(Center)` 缺一不可:与 `project_tab_item` 同一处
@@ -6273,7 +6277,11 @@ fn project_tab_item<'a>(
                 byteui::theme::color::current().gold
             } else {
                 // 未选中态:静止 DIM,hover 时平滑过渡到金(见 `ProjectTabItem`)。
-                byteui::theme::color::mix(byteui::theme::color::current().dim, byteui::theme::color::current().gold, title_hover_t)
+                byteui::theme::color::mix(
+                    byteui::theme::color::current().dim,
+                    byteui::theme::color::current().gold,
+                    title_hover_t,
+                )
             }),
     );
     // 标签行撑满并裁剪:页签被 `FillPortion` 压窄时长名在此截断(Chrome 式
@@ -6307,7 +6315,11 @@ fn project_tab_item<'a>(
     // 已经在上方算好(`let hovered = hover > 0.001;`),就是原来关闭按钮挂
     // `on_press` 的判定条件,直接复用。宽高原来靠 `MouseArea` 里的 `container`
     // 撑(Fill + Fixed(tab_h)),`MouseArea` 自身不认宽高,照抄内容尺寸。
-    let close_base = byteui::theme::color::mix(byteui::theme::color::current().dim, byteui::theme::color::current().gold, close_hover_t);
+    let close_base = byteui::theme::color::mix(
+        byteui::theme::color::current().dim,
+        byteui::theme::color::current().gold,
+        close_hover_t,
+    );
     let close_color = Color {
         a: hover,
         ..close_base
@@ -6523,7 +6535,11 @@ pub(crate) fn rail_icon_button<'a>(
     let color = if active {
         byteui::theme::color::current().gold
     } else {
-        byteui::theme::color::mix(byteui::theme::color::current().dim, byteui::theme::color::current().gold, hover_t)
+        byteui::theme::color::mix(
+            byteui::theme::color::current().dim,
+            byteui::theme::color::current().gold,
+            hover_t,
+        )
     };
     let inner = container(icons::view(icon, crate::theme::icon_size::rail(), color))
         .width(Length::Fill)
@@ -7592,7 +7608,11 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
         byteui::theme::color::current().cream
     } else {
         // 未选中态:静止 DIM,hover 时平滑过渡到金(与顶栏页签同一套动画)。
-        byteui::theme::color::mix(byteui::theme::color::current().dim, byteui::theme::color::current().gold, hover_t)
+        byteui::theme::color::mix(
+            byteui::theme::color::current().dim,
+            byteui::theme::color::current().gold,
+            hover_t,
+        )
     };
 
     let mut title_row = row![]
@@ -7621,7 +7641,11 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
     // 成同一个共享内核)。四个现有参数 title_hover/close_hover/on_select/
     // on_close 与 tab_core 的 on_select_hover/on_close_hover/on_select/
     // on_close 逐个对应,直接透传。
-    let close_base = byteui::theme::color::mix(byteui::theme::color::current().dim, byteui::theme::color::current().gold, close_hover_t);
+    let close_base = byteui::theme::color::mix(
+        byteui::theme::color::current().dim,
+        byteui::theme::color::current().gold,
+        close_hover_t,
+    );
     let close_color = Color {
         a: hover,
         ..close_base
@@ -7723,7 +7747,12 @@ where
     if !show {
         return content;
     }
-    let bubble = container(text(label).size(12).color(byteui::theme::color::current().cream)).padding([5, 9]);
+    let bubble = container(
+        text(label)
+            .size(12)
+            .color(byteui::theme::color::current().cream),
+    )
+    .padding([5, 9]);
     Tooltip::new(content, bubble, position)
         .gap(4)
         .style(icons::tooltip_bubble_style())
@@ -8334,7 +8363,10 @@ mod tests {
         use dozer_core::protocol::AgentState::*;
 
         assert_eq!(project_dot(&[]), None, "无存活会话不画点");
-        assert_eq!(project_dot(&[Idle]), Some(byteui::theme::color::current().cyan));
+        assert_eq!(
+            project_dot(&[Idle]),
+            Some(byteui::theme::color::current().cyan)
+        );
         assert_eq!(
             project_dot(&[Idle, TurnEnded]),
             Some(byteui::theme::color::current().gold),

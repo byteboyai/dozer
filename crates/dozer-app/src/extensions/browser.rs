@@ -1174,7 +1174,12 @@ fn bookmark_menu_row(
     label: String,
     msg: Message,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    crate::menu::item_row_fill(None, label, byteui::theme::color::current().cream, Some(msg))
+    crate::menu::item_row_fill(
+        None,
+        label,
+        byteui::theme::color::current().cream,
+        Some(msg),
+    )
 }
 
 /// 星标小菜单:未收藏显示"加入…",已收藏显示"移出…"(打勾态)。
@@ -1223,7 +1228,11 @@ fn bookmark_group<'a>(
     items: &[&'a BookmarkInfo],
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let header = row![
-        icons::view(icons::IconKind::Folder, icon_size::row(), byteui::theme::color::current().dim),
+        icons::view(
+            icons::IconKind::Folder,
+            icon_size::row(),
+            byteui::theme::color::current().dim
+        ),
         lh(text(title)
             .size(theme::font::subtitle())
             .color(byteui::theme::color::current().dim)),
@@ -1445,7 +1454,9 @@ pub fn view(
         };
 
     content = content.push(if state.bookmarks_open {
-        let bg = region.background.unwrap_or(byteui::theme::color::current().bg);
+        let bg = region
+            .background
+            .unwrap_or(byteui::theme::color::current().bg);
         let (list_portion, content_portion) = split_portions(1.0 - bookmarks_split);
         row![
             container(body).width(Length::FillPortion(content_portion)),

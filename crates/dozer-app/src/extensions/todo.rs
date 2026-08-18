@@ -2056,7 +2056,11 @@ fn todo_card<'a>(
                     ..container::Style::default()
                 }
             } else {
-                byteui::interaction::cards::container_card(selected, hovered, byteui::theme::color::current().card)
+                byteui::interaction::cards::container_card(
+                    selected,
+                    hovered,
+                    byteui::theme::color::current().card,
+                )
             }
         });
 

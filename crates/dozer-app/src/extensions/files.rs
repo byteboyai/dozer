@@ -1029,7 +1029,11 @@ pub fn view<'a>(
                             crate::theme::icon_size::chevron(),
                             byteui::theme::color::current().dim
                         ),
-                        icons::view(folder, crate::theme::icon_size::row(), byteui::theme::color::current().dim),
+                        icons::view(
+                            folder,
+                            crate::theme::icon_size::row(),
+                            byteui::theme::color::current().dim
+                        ),
                     ]
                     .spacing(crate::theme::icon_size::tree_row_gap())
                     .align_y(iced_widget::core::Alignment::Center)
@@ -1288,7 +1292,11 @@ fn git_footer_bar(
     };
 
     let bar = row![
-        icons::view(icon, crate::theme::icon_size::row(), byteui::theme::color::current().cream),
+        icons::view(
+            icon,
+            crate::theme::icon_size::row(),
+            byteui::theme::color::current().cream
+        ),
         label,
         iced_widget::space::horizontal(),
         if let Some(btn) = action {

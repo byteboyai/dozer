@@ -2707,7 +2707,9 @@ pub(crate) fn agent_picker_popup(
     for (label, agent) in items {
         let (icon, icon_color) = match agent {
             PickerLaunch::Agent(Some(kind)) => (agent_icon(kind), agent_dot_color(kind)),
-            PickerLaunch::Agent(None) => (IconKind::Terminal, byteui::theme::color::current().cream),
+            PickerLaunch::Agent(None) => {
+                (IconKind::Terminal, byteui::theme::color::current().cream)
+            }
             PickerLaunch::Git => (IconKind::GitBranch, byteui::theme::color::current().cream),
         };
         list.push(crate::menu::item_row(
@@ -4053,13 +4055,26 @@ mod tests {
     fn dot_color_states() {
         use dozer_core::protocol::AgentState::*;
         // 死会话恒为灰，不论 agent 状态。
-        assert_eq!(dot_color(Running, false), byteui::theme::color::current().dim, "死会话灰点");
+        assert_eq!(
+            dot_color(Running, false),
+            byteui::theme::color::current().dim,
+            "死会话灰点"
+        );
         // 存活：空闲青、运行绿、待输入红、回合毕金——各状态独立配色，不再
         // 靠闪烁区分空闲/运行(闪烁动画已取消)。
         assert_eq!(dot_color(Idle, true), byteui::theme::color::current().cyan);
-        assert_eq!(dot_color(Running, true), byteui::theme::color::current().green);
-        assert_eq!(dot_color(AwaitingInput, true), byteui::theme::color::current().red);
-        assert_eq!(dot_color(TurnEnded, true), byteui::theme::color::current().gold);
+        assert_eq!(
+            dot_color(Running, true),
+            byteui::theme::color::current().green
+        );
+        assert_eq!(
+            dot_color(AwaitingInput, true),
+            byteui::theme::color::current().red
+        );
+        assert_eq!(
+            dot_color(TurnEnded, true),
+            byteui::theme::color::current().gold
+        );
     }
 
     #[test]

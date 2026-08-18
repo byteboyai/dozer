@@ -838,7 +838,11 @@ fn host_card<'a>(
     .padding(10)
     .width(iced_widget::core::Length::Fill)
     .style(move |_t: &iced_widget::Theme| {
-        byteui::interaction::cards::container_card(false, hovered, byteui::theme::color::current().card)
+        byteui::interaction::cards::container_card(
+            false,
+            hovered,
+            byteui::theme::color::current().card,
+        )
     });
     MouseArea::new(card)
         .on_enter(Message::Hover(
@@ -1016,8 +1020,16 @@ fn host_form<'a>(
             Message::DeleteHost(id.clone()),
         ));
     }
-    right = right.push(text_btn("保存", byteui::theme::color::current().cream, Message::DraftSave));
-    right = right.push(text_btn("取消", byteui::theme::color::current().dim, Message::DraftCancel));
+    right = right.push(text_btn(
+        "保存",
+        byteui::theme::color::current().cream,
+        Message::DraftSave,
+    ));
+    right = right.push(text_btn(
+        "取消",
+        byteui::theme::color::current().dim,
+        Message::DraftCancel,
+    ));
     let buttons = row![
         left,
         iced_widget::Space::new().width(iced_widget::core::Length::Fill),
@@ -1030,10 +1042,14 @@ fn host_form<'a>(
     let (status_text, status_color) = match status {
         TestStatus::Idle => (String::new(), byteui::theme::color::current().dim),
         TestStatus::Testing => ("测试中…".to_string(), byteui::theme::color::current().dim),
-        TestStatus::Ok => ("✓ 连接成功".to_string(), byteui::theme::color::current().green),
-        TestStatus::UnknownHostKey { fingerprint } => {
-            (format!("⚠ 未知主机,指纹 {fingerprint}"), byteui::theme::color::current().gold)
-        }
+        TestStatus::Ok => (
+            "✓ 连接成功".to_string(),
+            byteui::theme::color::current().green,
+        ),
+        TestStatus::UnknownHostKey { fingerprint } => (
+            format!("⚠ 未知主机,指纹 {fingerprint}"),
+            byteui::theme::color::current().gold,
+        ),
         TestStatus::KeyChanged { fingerprint } => (
             format!("✗ 主机指纹已变化({fingerprint}),拒绝连接"),
             byteui::theme::color::current().red,

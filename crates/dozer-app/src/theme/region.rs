@@ -488,7 +488,10 @@ mod tests {
     #[test]
     fn hex_color_matches_equivalent_token() {
         assert_eq!(resolve_color("#0a0e16"), byteui::theme::color::current().bg);
-        assert_eq!(resolve_color("#12202a"), byteui::theme::color::current().card);
+        assert_eq!(
+            resolve_color("#12202a"),
+            byteui::theme::color::current().card
+        );
     }
 
     #[test]

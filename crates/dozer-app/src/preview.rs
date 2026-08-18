@@ -882,9 +882,15 @@ mod tests {
         assert_eq!(m.gap, 2.0);
         assert_eq!(m.menu_width, theme::geometry::context_menu_width());
         assert_eq!(m.item_radius, 4.0);
-        assert_eq!(m.item_hover_background, byteui::theme::color::current().tab_hover);
+        assert_eq!(
+            m.item_hover_background,
+            byteui::theme::color::current().tab_hover
+        );
         assert_eq!(m.item_text_color, byteui::theme::color::current().cream);
-        assert_eq!(m.item_disabled_text_color, byteui::theme::color::current().dim);
+        assert_eq!(
+            m.item_disabled_text_color,
+            byteui::theme::color::current().dim
+        );
         assert_eq!(m.item_padding_h, theme::geometry::menu_pad_h());
         assert_eq!(m.item_padding_v, theme::geometry::menu_pad_v());
         assert_eq!(m.item_gap, theme::geometry::menu_gap());
@@ -979,7 +985,10 @@ mod tests {
             s.thumb_radius,
             theme::geometry::scrollbar_thumb_width() / 2.0
         );
-        assert_eq!(s.thumb_color, byteui::theme::color::current().tab_active_border);
+        assert_eq!(
+            s.thumb_color,
+            byteui::theme::color::current().tab_active_border
+        );
         assert_eq!(s.track_background, None);
         assert_eq!(
             s.track_border,

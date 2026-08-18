@@ -480,7 +480,11 @@ fn summary_card(
     }
 
     let row = iced_widget::row![
-        stat("轮次", totals.turns.to_string(), byteui::theme::color::current().cream),
+        stat(
+            "轮次",
+            totals.turns.to_string(),
+            byteui::theme::color::current().cream
+        ),
         stat(
             "工具调用(改动)",
             format!("{} ({})", totals.tool_calls, totals.mutating_tool_calls),
@@ -491,8 +495,16 @@ fn summary_card(
             totals.files_touched.to_string(),
             byteui::theme::color::current().cream
         ),
-        stat("input", totals.tokens_in.to_string(), byteui::theme::color::current().cyan),
-        stat("output", totals.tokens_out.to_string(), byteui::theme::color::current().cyan),
+        stat(
+            "input",
+            totals.tokens_in.to_string(),
+            byteui::theme::color::current().cyan
+        ),
+        stat(
+            "output",
+            totals.tokens_out.to_string(),
+            byteui::theme::color::current().cyan
+        ),
         stat(
             "cache 读",
             totals.tokens_cache_read.to_string(),
@@ -652,9 +664,21 @@ fn bar_chart(
         let scale = BAR_MAX_HEIGHT / max_total as f32;
         // 自底向上固定顺序:Claude 贴基线(直角)→ CodeBuddy → OpenCode 顶部(圆角)。
         let stack = column![
-            bar_segment(d.opencode as f32 * scale, byteui::theme::color::current().green, true),
-            bar_segment(d.codebuddy as f32 * scale, byteui::theme::color::current().purple, false),
-            bar_segment(d.claude as f32 * scale, byteui::theme::color::current().cyan, false),
+            bar_segment(
+                d.opencode as f32 * scale,
+                byteui::theme::color::current().green,
+                true
+            ),
+            bar_segment(
+                d.codebuddy as f32 * scale,
+                byteui::theme::color::current().purple,
+                false
+            ),
+            bar_segment(
+                d.claude as f32 * scale,
+                byteui::theme::color::current().cyan,
+                false
+            ),
         ]
         .spacing(2);
 

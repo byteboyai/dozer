@@ -750,7 +750,11 @@ fn links_section<'a>(
         let is_selected = selected_link.as_deref() == Some(entry.path.as_path());
         let row_btn = button(
             row![
-                icons::view(row_icon, crate::theme::icon_size::row(), byteui::theme::color::current().dim),
+                icons::view(
+                    row_icon,
+                    crate::theme::icon_size::row(),
+                    byteui::theme::color::current().dim
+                ),
                 text(name)
                     .size(theme::font::body())
                     .color(byteui::theme::color::current().body),

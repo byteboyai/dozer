@@ -683,7 +683,11 @@ fn commit_list_view<'a>(
         let hovered = app.hover_progress(HoverId::Commit(i)) > 0.0;
         let inner = container(line).padding([4, 8]).width(Length::Fill).style(
             move |_t: &iced_widget::Theme| {
-                byteui::interaction::cards::container_card(is_selected, hovered, byteui::theme::color::current().card)
+                byteui::interaction::cards::container_card(
+                    is_selected,
+                    hovered,
+                    byteui::theme::color::current().card,
+                )
             },
         );
         let area = MouseArea::new(inner)
@@ -708,9 +712,11 @@ fn file_list_view<'a>(
     selected_file: Option<&'a str>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     match detail {
-        Err(err) => container(text(format!("详情加载失败: {err}")).color(byteui::theme::color::current().red))
-            .padding(8)
-            .into(),
+        Err(err) => container(
+            text(format!("详情加载失败: {err}")).color(byteui::theme::color::current().red),
+        )
+        .padding(8)
+        .into(),
         Ok(detail) if detail.files.is_empty() => {
             container(text("无文件改动").color(byteui::theme::color::current().dim))
                 .padding(8)
@@ -786,17 +792,23 @@ pub fn view<'a>(
             "未打开项目"
         };
         return container(
-            column![head, text(text_content).color(byteui::theme::color::current().dim)]
-                .spacing(8)
-                .padding(pad),
+            column![
+                head,
+                text(text_content).color(byteui::theme::color::current().dim)
+            ]
+            .spacing(8)
+            .padding(pad),
         )
         .into();
     };
     if snapshot.rows.is_empty() {
         return container(
-            column![head, text("没有可显示的提交").color(byteui::theme::color::current().dim)]
-                .spacing(8)
-                .padding(pad),
+            column![
+                head,
+                text("没有可显示的提交").color(byteui::theme::color::current().dim)
+            ]
+            .spacing(8)
+            .padding(pad),
         )
         .into();
     }
