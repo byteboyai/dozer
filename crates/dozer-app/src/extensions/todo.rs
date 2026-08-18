@@ -1739,11 +1739,16 @@ fn todo_list_row<'a>(
     let meta = app_state.meta_for(project_id, key);
     let dispatch = meta.and_then(|m| m.dispatch.as_ref());
     let hovered = app.hover_progress(HoverId::TodoCard(idx)) > 0.0;
-    if let Some((editing_idx, draft)) = &ws_state.editing_content
+    // 内容编辑态:不再把整张卡替换成独立的编辑行,而是把 `editing_draft` 传进
+    // `todo_card`,由卡片原地保留边框/背景、只把内容文字换成带 BORDER 描边的
+    // 输入框(见 `todo_card` 内 `label_area` 的分支)。
+    let editing_draft = if let Some((editing_idx, draft)) = &ws_state.editing_content
         && *editing_idx == idx
     {
-        return todo_content_edit_row(draft);
-    }
+        Some(draft.as_str())
+    } else {
+        None
+    };
     todo_card(
         number,
         idx,
@@ -1755,6 +1760,7 @@ fn todo_list_row<'a>(
         grabbing,
         is_drag_source,
         hovered,
+        editing_draft,
     )
 }
 
@@ -1795,6 +1801,7 @@ fn todo_card<'a>(
     grabbing: bool,
     is_drag_source: bool,
     hovered: bool,
+    editing_draft: Option<&'a str>,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let done = item.done;
 
@@ -1918,12 +1925,40 @@ fn todo_card<'a>(
             .into()
     };
     // 点任务文字 → 进入内容行内编辑态(取代原来的"选中"——选中/拖拽仍由卡片
-    // 外层的 `RowSelect` 承担,点文字只负责编辑)。
+    // 外层的 `RowSelect` 承担,点文字只负责编辑)。编辑态下只把内容文字原地换成
+    // 自绘输入框:卡片边框/背景/勾选/日期/指派全部保持原样,输入框尺寸对齐原
+    // 内容(同字号 body + 同宽 Fill),仅加 #1c3440(=BORDER)描边、不另设背景
+    // (透出卡片底),避免整卡被替换成另一个带金边的大框。
     let label_area: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        MouseArea::new(container(label).width(Length::Fill))
-            .interaction(mouse::Interaction::Pointer)
-            .on_press(Message::ContentEditStart(idx))
-            .into();
+        if let Some(draft) = editing_draft {
+            let field = if draft.is_empty() {
+                text("任务内容…")
+                    .size(theme::font::body())
+                    .color(theme::color::DIM)
+            } else {
+                text(format!("{draft}▏"))
+                    .size(theme::font::body())
+                    .color(theme::color::CREAM)
+            };
+            container(field)
+                .width(Length::Fill)
+                .padding([2, 4])
+                .style(|_t: &iced_widget::Theme| container::Style {
+                    background: None,
+                    border: Border {
+                        color: theme::color::BORDER,
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    ..container::Style::default()
+                })
+                .into()
+        } else {
+            MouseArea::new(container(label).width(Length::Fill))
+                .interaction(mouse::Interaction::Pointer)
+                .on_press(Message::ContentEditStart(idx))
+                .into()
+        };
 
     let body_row = row![checkbox, label_area]
         .spacing(10)
@@ -2297,45 +2332,6 @@ pub fn todo_calendar_overlay<'a>(
             })
             .into(),
     )
-}
-
-/// 任务内容行内编辑态：checkbox 占位 + 一个自绘输入框，回车提交。自绘原因
-/// 同 `todo_footer_bar`(原生 `text_input` 不参与 main.rs 键盘路由裁决,打字
-/// 会漏进终端);键盘走 main.rs 拦截层路由成 `ContentEvent`。这行只在
-/// `editing_content` 命中时才会被渲染出来,不需要额外的点击进入态。
-fn todo_content_edit_row<'a>(
-    draft: &'a str,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let field = if draft.is_empty() {
-        text("任务内容…")
-            .size(theme::font::body())
-            .color(theme::color::DIM)
-    } else {
-        text(format!("{draft}▏"))
-            .size(theme::font::body())
-            .color(theme::color::CREAM)
-    };
-    row![
-        container(iced_widget::space::Space::new())
-            .width(Length::Fixed(18.0))
-            .height(Length::Fixed(18.0)),
-        container(field)
-            .width(Length::Fill)
-            .padding([2, 6])
-            .style(|_t: &iced_widget::Theme| container::Style {
-                background: Some(theme::color::CARD.into()),
-                border: Border {
-                    color: theme::color::GOLD,
-                    width: 1.0,
-                    radius: 4.0.into(),
-                },
-                ..container::Style::default()
-            }),
-    ]
-    .spacing(10)
-    .align_y(iced_widget::core::alignment::Vertical::Center)
-    .padding([10, 20])
-    .into()
 }
 
 /// 左栏分类导航项（= 原 filter 段，竖排）：图标 + 标签 + 右侧计数，选中态
