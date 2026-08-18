@@ -2,8 +2,9 @@
 //! 组件命名对齐 amis(<https://baidu.github.io/amis/zh-CN/components>)的
 //! 分类与组件名——查对应 amis 文档页面即可理解组件的大致职责边界。
 
-pub mod theme;
+pub mod data;
+pub mod feedback;
+pub mod form;
 pub mod interaction;
 pub mod layout;
-pub mod form;
-pub mod feedback;
+pub mod theme;
