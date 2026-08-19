@@ -37,7 +37,7 @@ fn legacy_global_dims(layout_path: &Path) -> PanelDims {
             ssh_split: v
                 .get("ssh_split")
                 .and_then(num)
-                .unwrap_or(crate::theme::geometry::default_split_ratio()),
+                .unwrap_or(byteui::theme::geometry::default_split_ratio()),
             todo_split: v.get("todo_split").and_then(num).unwrap_or_default(),
             git_log_split: v.get("git_log_split").and_then(num).unwrap_or_default(),
             git_log_file_diff_split: v
@@ -52,7 +52,7 @@ fn legacy_global_dims(layout_path: &Path) -> PanelDims {
             browser_bookmarks_split: v
                 .get("browser_bookmarks_split")
                 .and_then(num)
-                .unwrap_or(crate::theme::geometry::default_split_ratio()),
+                .unwrap_or(byteui::theme::geometry::default_split_ratio()),
         })
         .unwrap_or_default()
 }
