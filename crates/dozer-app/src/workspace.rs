@@ -191,12 +191,12 @@ pub(crate) fn parse_review_markdown(entries: &[ReviewEntry]) -> Vec<markdown::Co
 
 /// 对话审阅 AI 回合的 markdown 渲染样式:配色对齐 ByteBoy2077(链接/内联
 /// 代码走青色 `CYAN`,内联代码背景用卡片色 `CARD`),基础字号跟原先纯文本
-/// 渲染时的 `theme::font::subtitle()` 对齐,避免换 markdown 之后正文突然
+/// 渲染时的 `byteui::theme::font::subtitle()` 对齐,避免换 markdown 之后正文突然
 /// 变大变小。段落/标题本身的前景色不在 `markdown::Style` 的可控范围内
 /// (该结构只暴露链接色与内联代码色),交给 iced 默认主题决定。
 fn review_markdown_settings() -> markdown::Settings {
     markdown::Settings::with_text_size(
-        theme::font::subtitle(),
+        byteui::theme::font::subtitle(),
         markdown::Style {
             font: Font::default(),
             inline_code_highlight: Highlight {
@@ -2283,20 +2283,20 @@ pub(crate) fn review_content<'a>(
     if let Some(err) = &rv.error {
         return content.push(
             text(format!("⚠ {err}"))
-                .size(theme::font::subtitle())
+                .size(byteui::theme::font::subtitle())
                 .color(byteui::theme::color::current().red),
         );
     }
     if rv.entries.is_empty() {
         return content.push(lh(text("暂无对话")
-            .size(theme::font::subtitle())
+            .size(byteui::theme::font::subtitle())
             .color(byteui::theme::color::current().dim)));
     }
     for (i, e) in rv.entries.iter().enumerate() {
         match e {
             ReviewEntry::Human { text: t } => {
                 content = content.push(lh(text(format!("▎{t}"))
-                    .size(theme::font::title())
+                    .size(byteui::theme::font::title())
                     .color(byteui::theme::color::current().cream)));
             }
             ReviewEntry::AiTurn {
@@ -2318,7 +2318,7 @@ pub(crate) fn review_content<'a>(
                         "{glyph}{}",
                         ai_turn_summary(tools.len(), *thinking)
                     ))
-                    .size(theme::font::body())
+                    .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().dim)))
                     .on_press(Message::ReviewToggle(i))
                     .style(|_t, _s| button::Style {
@@ -2330,12 +2330,12 @@ pub(crate) fn review_content<'a>(
                 if expanded {
                     if *thinking {
                         content = content.push(lh(text("  · 思考(略)")
-                            .size(theme::font::label())
+                            .size(byteui::theme::font::label())
                             .color(byteui::theme::color::current().dim)));
                     }
                     for tool in tools {
                         content = content.push(lh(text(format!("  · {tool}"))
-                            .size(theme::font::body())
+                            .size(byteui::theme::font::body())
                             .color(byteui::theme::color::current().cyan)));
                     }
                 }
@@ -2367,11 +2367,11 @@ pub(crate) fn conversation_list_pane(
     content = content.push(
         row![
             lh(text("会话")
-                .size(theme::font::caption())
+                .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().dim)),
             lh(
                 text(format!("{} 条 · {} 活跃", ws.conversations.len(), active_n))
-                    .size(theme::font::caption())
+                    .size(byteui::theme::font::caption())
                     .color(byteui::theme::color::current().dim)
             ),
         ]
@@ -2379,7 +2379,7 @@ pub(crate) fn conversation_list_pane(
     );
     if ws.conversations.is_empty() {
         content = content.push(lh(text("暂无对话记录")
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().dim)));
     }
     let now_ms = std::time::SystemTime::now()
@@ -2410,15 +2410,15 @@ pub(crate) fn conversation_list_pane(
             column![
                 row![
                     text("●")
-                        .size(theme::font::caption())
+                        .size(byteui::theme::font::caption())
                         .color(agent_dot_color(c.agent)),
                     lh(text(c.title.clone())
-                        .size(theme::font::body())
+                        .size(byteui::theme::font::body())
                         .color(byteui::theme::color::current().cream)),
                 ]
                 .spacing(6)
                 .align_y(iced_widget::core::Alignment::Center),
-                lh(text(sub).size(theme::font::caption_sm()).color(sub_color)),
+                lh(text(sub).size(byteui::theme::font::caption_sm()).color(sub_color)),
             ]
             .spacing(4),
         )
@@ -2503,7 +2503,7 @@ pub(crate) fn agent_list_pane<'a>(
 
     if ws.tabs.is_empty() {
         content = content.push(lh(text("暂无会话")
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().dim)));
     } else {
         for (agent, idxs) in group_tabs_by_agent(&ws.tabs) {
@@ -2515,7 +2515,7 @@ pub(crate) fn agent_list_pane<'a>(
                         agent_dot_color(agent),
                     ),
                     lh(text(format!("{}（{}）", agent.label(), idxs.len()))
-                        .size(theme::font::caption())
+                        .size(byteui::theme::font::caption())
                         .color(byteui::theme::color::current().dim)),
                 ]
                 .align_y(iced_widget::core::alignment::Vertical::Center)
@@ -2571,7 +2571,7 @@ pub(crate) fn agent_card<'a>(
 
     let mut lines = column![
         text(title_text)
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().cream),
     ]
     .spacing(4);
@@ -2598,10 +2598,10 @@ pub(crate) fn agent_card<'a>(
     lines = lines.push(
         row![
             text("●")
-                .size(theme::font::caption())
+                .size(byteui::theme::font::caption())
                 .color(dot_color(tab.agent_state, tab.alive)),
             text(agent_state_label(tab.agent_state))
-                .size(theme::font::caption_sm())
+                .size(byteui::theme::font::caption_sm())
                 .color(byteui::theme::color::current().dim),
         ]
         .spacing(6)
@@ -2644,7 +2644,7 @@ fn work_content_and_workspace_row(
         None => format!("@{workspace_value}"),
     };
     text(value)
-        .size(theme::font::caption())
+        .size(byteui::theme::font::caption())
         .color(byteui::theme::color::current().dim)
         .into()
 }
@@ -2730,7 +2730,7 @@ pub(crate) fn agent_picker_popup(
     let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
         crate::menu::shell(
             list,
-            Length::Fixed(crate::theme::geometry::menu_item_width()),
+            Length::Fixed(byteui::theme::geometry::menu_item_width()),
         );
     // 右上角固定偏移:48px 避开顶栏,16px 避开窗口右边缘。这是估算值,
     // 不是像素级对齐"＋"按钮(spec 明确"不算点击坐标")——Task 4 最后
@@ -2777,7 +2777,7 @@ pub(crate) fn review_content_pane(
     } else {
         content = content.push(
             container(lh(text("暂无审阅内容——点击左侧对话列表中的对话开始审阅")
-                .size(theme::font::subtitle())
+                .size(byteui::theme::font::subtitle())
                 .color(byteui::theme::color::current().dim)))
             .width(Length::Fill)
             .height(Length::Fill),
@@ -2833,14 +2833,14 @@ pub(crate) fn no_project_placeholder<'a>(
     let tree_col = column![].spacing(region.gap);
     header = header.push(
         text("未打开项目")
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().dim),
     );
     for p in &ws.recent_projects {
         header = header.push(
             button(
                 text(p.name.clone())
-                    .size(theme::font::body())
+                    .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().cream),
             )
             .on_press(Message::ProjectSelect(p.id))
@@ -2889,24 +2889,24 @@ pub(crate) fn terminal_status_bar(
     };
     let resume = ws.tabs.get(ws.active).map(|t| t.alive).unwrap_or(false);
     let line = row![
-        text("●").size(theme::font::dot_sm()).color(dot),
+        text("●").size(byteui::theme::font::dot_sm()).color(dot),
         text(label)
-            .size(theme::font::caption())
+            .size(byteui::theme::font::caption())
             .color(byteui::theme::color::current().body),
         text("·")
-            .size(theme::font::caption())
+            .size(byteui::theme::font::caption())
             .color(byteui::theme::color::current().dim),
         text(format!("resume {}", if resume { "✓" } else { "—" }))
-            .size(theme::font::caption())
+            .size(byteui::theme::font::caption())
             .color(byteui::theme::color::current().body),
         text("·")
-            .size(theme::font::caption())
+            .size(byteui::theme::font::caption())
             .color(byteui::theme::color::current().dim),
         text(match ws.tabs.get(ws.active).map(|t| &t.backend) {
             Some(TabBackend::Ssh { .. }) => "SSH 直连 · 断连不可恢复",
             _ => "dozerd 持有 · 断连可恢复",
         })
-        .size(theme::font::caption())
+        .size(byteui::theme::font::caption())
         .color(byteui::theme::color::current().dim),
     ]
     .spacing(6);
@@ -2926,7 +2926,7 @@ pub(crate) fn status_bar_container<'a, Msg: 'a>(
     let base = region.border.unwrap_or_default();
     container(inner)
         .width(Length::Fill)
-        .height(Length::Fixed(theme::geometry::status_bar_height()))
+        .height(Length::Fixed(byteui::theme::geometry::status_bar_height()))
         .padding(region.padding)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
@@ -3031,7 +3031,7 @@ fn preview_pane_for<'a>(
         .map(|t| preview_tab_display_width(&t.title))
         .collect();
     let (first, can_left, can_right) =
-        tab_window(&widths, 4.0, theme::geometry::tab_bar_avail_px(), tab_first);
+        tab_window(&widths, 4.0, byteui::theme::geometry::tab_bar_avail_px(), tab_first);
 
     let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = preview
         .tabs()
@@ -3087,14 +3087,14 @@ fn preview_pane_for<'a>(
 
     if let Some(err) = error {
         content = content.push(lh(text(format!("⚠ {err}"))
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().red)));
     }
 
     if preview.tabs().is_empty() {
         content = content.push(
             container(lh(text("暂无预览——在左侧文件树选择文件")
-                .size(theme::font::subtitle())
+                .size(byteui::theme::font::subtitle())
                 .color(byteui::theme::color::current().dim)))
             .width(Length::Fill)
             .height(Length::Fill),
@@ -3145,12 +3145,12 @@ pub(crate) fn edit_modal(
 
     let title_row = row![
         text(name)
-            .size(theme::font::subtitle())
+            .size(byteui::theme::font::subtitle())
             .color(byteui::theme::color::current().cream),
         iced_widget::space::horizontal(),
         button(
             text("×")
-                .size(theme::font::subtitle())
+                .size(byteui::theme::font::subtitle())
                 .color(byteui::theme::color::current().dim)
         )
         .on_press(Message::PreviewEditCloseRequest)
@@ -3175,14 +3175,14 @@ pub(crate) fn edit_modal(
     if let Some(err) = &session.error {
         body = body.push(
             text(format!("⚠ {err}"))
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().red),
         );
     }
 
     let close_btn = button(
         text("关闭")
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().cream),
     )
     .on_press(Message::PreviewEditCloseRequest)
@@ -3199,7 +3199,7 @@ pub(crate) fn edit_modal(
     });
     let save_btn = button(
         text("保存")
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().cream),
     )
     .on_press(Message::PreviewEditSave)
@@ -3247,15 +3247,15 @@ pub(crate) fn edit_discard_confirm_popup<'a>()
     let dialog = container(
         column![
             text("放弃未保存的改动?")
-                .size(theme::font::subtitle())
+                .size(byteui::theme::font::subtitle())
                 .color(byteui::theme::color::current().cream),
             text("关闭后这次编辑不会被保存。")
-                .size(theme::font::label())
+                .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().dim),
             row![
                 button(
                     text("取消")
-                        .size(theme::font::body())
+                        .size(byteui::theme::font::body())
                         .color(byteui::theme::color::current().cream)
                 )
                 .on_press(Message::PreviewEditConfirmCancel)
@@ -3272,7 +3272,7 @@ pub(crate) fn edit_discard_confirm_popup<'a>()
                 }),
                 button(
                     text("放弃改动")
-                        .size(theme::font::body())
+                        .size(byteui::theme::font::body())
                         .color(byteui::theme::color::current().red)
                 )
                 .on_press(Message::PreviewEditConfirmDiscard)
@@ -3908,17 +3908,17 @@ mod tests {
         // chrome 高度分道,不能再共用同一个值——否则文件预览顶上会露一截
         // 再也画不出东西的空白。
         assert_eq!(
-            theme::geometry::preview_chrome_top_px(),
+            byteui::theme::geometry::preview_chrome_top_px(),
             38.0,
             "文件预览 chrome 顶应为去地址栏后的 38(8 内边距 + 30 tab 栏)"
         );
         assert_eq!(
-            theme::geometry::browser_chrome_top_px(),
+            byteui::theme::geometry::browser_chrome_top_px(),
             72.0,
             "浏览器 chrome 顶应为 72(8 内边距 + 30 tab 栏 + 4 spacing + 30 地址栏)"
         );
         assert_eq!(
-            theme::geometry::chrome_height_px(),
+            byteui::theme::geometry::chrome_height_px(),
             50.0,
             "终端 chrome 高应为去 header 后的 50"
         );
