@@ -7192,6 +7192,7 @@ fn left_panel_area<'a>(
                 app.dims.browser_bookmarks_split,
                 Length::Fill,
                 zone_pane_border(zone, ac),
+                app.panel_mirrored(PanelKind::Web),
             )
             .map(Message::Browser),
             _ => unreachable!(
