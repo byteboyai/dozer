@@ -10,7 +10,6 @@
 //!
 //! 解析失败(格式错误、缺字段)直接 panic:开发期配置错误,不是需要
 //! 优雅降级的运行时数据(同 `chrome_style.rs`/`workspace_font.rs` 的定位)。
-use super::icon_size;
 use serde::Deserialize;
 use std::sync::LazyLock;
 
@@ -87,7 +86,7 @@ static GEOMETRY: LazyLock<Geometry> = LazyLock::new(|| load(RAW));
 /// 图标栏固定宽度(逻辑像素)，左右各一条。已含全局 scale——`rail_button_size`
 /// 同步缩放，否则放大后按钮会撑破图标栏。
 pub fn icon_rail_width() -> f32 {
-    GEOMETRY.icon_rail_width * icon_size::scale()
+    GEOMETRY.icon_rail_width * byteui::theme::icon_size::scale()
 }
 
 /// 每条分隔线的命中区/渲染宽度(逻辑像素)。视觉线本身 2px,居中于此区间内。
@@ -135,7 +134,7 @@ pub fn initial_window_size() -> (f32, f32) {
 /// 有严格几何推导。已含全局 scale——顶栏/状态栏等高随 `scale` 变高时,
 /// 这个下限也得跟着涨,否则窗口缩不到比放大后的 chrome 更小而被钳死。
 pub fn min_window_height() -> f32 {
-    GEOMETRY.min_window_height * icon_size::scale()
+    GEOMETRY.min_window_height * byteui::theme::icon_size::scale()
 }
 
 /// 窗口最小内尺寸(逻辑像素,宽)。按"两条图标栏 + 那条恒在的 LeftRight
@@ -152,42 +151,42 @@ pub fn min_window_width() -> f32 {
 
 /// 顶栏固定高（逻辑像素）。与 `top_bar` 容器高度同源，勿各写各的。已含全局 scale。
 pub fn top_bar_height() -> f32 {
-    GEOMETRY.top_bar_height * icon_size::scale()
+    GEOMETRY.top_bar_height * byteui::theme::icon_size::scale()
 }
 
 /// 顶栏项目页签的"默认/合适宽"(逻辑像素),已含全局 scale。少数页签时每片固定
 /// 用这个宽;页签多到塞不下时才由 `project_tabs_row` 均分收窄。见
 /// `project_tab_max_width` 字段注释。
 pub fn project_tab_max_width() -> f32 {
-    GEOMETRY.project_tab_max_width * icon_size::scale()
+    GEOMETRY.project_tab_max_width * byteui::theme::icon_size::scale()
 }
 
 /// 顶栏页签行最右"＋"按钮的估算宽(逻辑像素),已含全局 scale。仅用于在布局期
 /// 从页签可用宽里预留"＋"的位置,估偏只影响开始收窄的临界点,不影响正确性。
 pub fn project_tab_add_button_width() -> f32 {
-    GEOMETRY.project_tab_add_button_width * icon_size::scale()
+    GEOMETRY.project_tab_add_button_width * byteui::theme::icon_size::scale()
 }
 
 /// 统一滚动条(轨道)宽度(逻辑像素),已含全局 scale。各面板共用,收窄一致。
 pub fn scrollbar_width() -> f32 {
-    10.0 * icon_size::scale()
+    10.0 * byteui::theme::icon_size::scale()
 }
 
 /// 统一滚动条滑块(thumb)宽度(逻辑像素),已含全局 scale。同时作为滑块圆角
 /// 半径的基准,让滑块呈细窄的胶囊形;各面板共用,收窄一致。
 pub fn scrollbar_thumb_width() -> f32 {
-    4.0 * icon_size::scale()
+    4.0 * byteui::theme::icon_size::scale()
 }
 
 /// 单条状态栏固定高（逻辑像素）。与 `status_bar_container` 同源。已含全局 scale。
 pub fn status_bar_height() -> f32 {
-    GEOMETRY.status_bar_height * icon_size::scale()
+    GEOMETRY.status_bar_height * byteui::theme::icon_size::scale()
 }
 
 /// 底部 footbar 系统信息条高度（逻辑像素）。与 in-pane status bar 解耦，
 /// 单独更矮更紧凑（见 `footbar.rs`）。已含全局 scale。
 pub fn footbar_height() -> f32 {
-    GEOMETRY.footbar_height * icon_size::scale()
+    GEOMETRY.footbar_height * byteui::theme::icon_size::scale()
 }
 
 /// 右键菜单浮层的最坏情形(目录:9 项)外接宽/高（逻辑像素）,main.rs 在
@@ -198,11 +197,11 @@ pub fn footbar_height() -> f32 {
 /// 不必像素级精确,留够余量保证任何一项都可点即可。文件菜单项更少,用
 /// 目录的最坏值同时覆盖两种情况更简单。
 pub fn context_menu_width() -> f32 {
-    GEOMETRY.context_menu_width * icon_size::scale()
+    GEOMETRY.context_menu_width * byteui::theme::icon_size::scale()
 }
 
 pub fn context_menu_height() -> f32 {
-    GEOMETRY.context_menu_height * icon_size::scale()
+    GEOMETRY.context_menu_height * byteui::theme::icon_size::scale()
 }
 
 /// 终端栏内"非网格"开销的近似值：左右 padding、表头行、tab 栏行、
@@ -212,18 +211,18 @@ pub fn context_menu_height() -> f32 {
 /// 已含全局 scale——顶栏/状态栏等高随 `scale` 变高时,这份开销估算也要
 /// 跟着涨,否则终端网格会按偏小的 chrome 估算,顶部被栏体吃掉几行。
 pub fn chrome_width_px() -> f32 {
-    GEOMETRY.chrome_width_px * icon_size::scale()
+    GEOMETRY.chrome_width_px * byteui::theme::icon_size::scale()
 }
 
 pub fn chrome_height_px() -> f32 {
-    GEOMETRY.chrome_height_px * icon_size::scale()
+    GEOMETRY.chrome_height_px * byteui::theme::icon_size::scale()
 }
 
 /// 文件预览分支(`LeftView::Files`)内容区上方的 chrome 高度:pane 上内
 /// 边距 8 + tab 栏 30。地址栏已去(文件只走项目树打开),`column` 里只剩
 /// tab 栏一个子项,不再有子项间 spacing。已含全局 scale。
 pub fn preview_chrome_top_px() -> f32 {
-    GEOMETRY.preview_chrome_top_px * icon_size::scale()
+    GEOMETRY.preview_chrome_top_px * byteui::theme::icon_size::scale()
 }
 
 /// 浏览器分支(`LeftView::Web`)内容区上方的 chrome 高度:pane 上内边距 8
@@ -231,7 +230,7 @@ pub fn preview_chrome_top_px() -> f32 {
 ///
 /// 已含全局 scale。
 pub fn browser_chrome_top_px() -> f32 {
-    GEOMETRY.browser_chrome_top_px * icon_size::scale()
+    GEOMETRY.browser_chrome_top_px * byteui::theme::icon_size::scale()
 }
 
 /// `maximize_overlay` 里 dim 背景到金色描边盒子的内边距(逻辑像素)。
@@ -260,43 +259,43 @@ pub fn tab_bar_avail_px() -> f32 {
 
 /// 左/右图标栏按钮方形命中区边长，已含全局 scale。
 pub fn rail_button_size() -> f32 {
-    GEOMETRY.rail_button_size * icon_size::scale()
+    GEOMETRY.rail_button_size * byteui::theme::icon_size::scale()
 }
 
 /// 顶栏页签翻页箭头按钮方形命中区边长，已含全局 scale。
 pub fn tab_button_size() -> f32 {
-    GEOMETRY.tab_button_size * icon_size::scale()
+    GEOMETRY.tab_button_size * byteui::theme::icon_size::scale()
 }
 
 /// 翻页箭头（`tab_arrow_button`）专属方形命中区边长，已含全局 scale。比
 /// `tab_button_size` 小，配合更小的 `tab_arrow` 字形让 `<`/`>` 横向留白更窄。
 pub fn tab_arrow_button_size() -> f32 {
-    GEOMETRY.tab_arrow_button_size * icon_size::scale()
+    GEOMETRY.tab_arrow_button_size * byteui::theme::icon_size::scale()
 }
 
 /// 右键菜单项固定宽，已含全局 scale（与 `context_menu_width` 同步缩放）。
 pub fn menu_item_width() -> f32 {
-    GEOMETRY.menu_item_width * icon_size::scale()
+    GEOMETRY.menu_item_width * byteui::theme::icon_size::scale()
 }
 
 /// 菜单项内"图标↔文字"间距，已含全局 scale。
 pub fn menu_gap() -> f32 {
-    GEOMETRY.menu_gap * icon_size::scale()
+    GEOMETRY.menu_gap * byteui::theme::icon_size::scale()
 }
 
 /// 菜单项上下内边距，已含全局 scale。
 pub fn menu_pad_v() -> f32 {
-    GEOMETRY.menu_pad_v * icon_size::scale()
+    GEOMETRY.menu_pad_v * byteui::theme::icon_size::scale()
 }
 
 /// 菜单项左右内边距，已含全局 scale。
 pub fn menu_pad_h() -> f32 {
-    GEOMETRY.menu_pad_h * icon_size::scale()
+    GEOMETRY.menu_pad_h * byteui::theme::icon_size::scale()
 }
 
 /// H0 项目中心左栏固定宽（逻辑像素），已含全局 scale。
 pub fn h0_sidebar_width() -> f32 {
-    GEOMETRY.h0_sidebar_width * icon_size::scale()
+    GEOMETRY.h0_sidebar_width * byteui::theme::icon_size::scale()
 }
 
 /// 文件树目录行的高度（逻辑像素）：行内文字按 `tree_row_font_size` ×
@@ -319,7 +318,7 @@ pub fn tree_row_h() -> f32 {
 /// 落在行间死区内，不影响相邻行判定。
 pub fn tree_chrome_top_px() -> f32 {
     let region = crate::theme::region::project_pane();
-    let row = crate::theme::icon_size::row();
+    let row = byteui::theme::icon_size::row();
     // 面板头：`column![head_row, 分割线].spacing(8)`，高度 = max(图标, 标题文字) + 8 + 1。
     let head_row_h = row.max(crate::theme::font::subtitle() as f32 * 1.2);
     let head_h = head_row_h + 8.0 + 1.0;
@@ -337,7 +336,7 @@ pub fn tree_chrome_bottom_px() -> f32 {
     let region = crate::theme::region::project_pane();
     // git 脚注栏：分割线 1 + 行内间距 4 + 一行内容（内容高度取分支切换按钮
     // 的 `row()+12`，与工具栏 box 按钮同高）+ 容器 `[6,8]` 内边距。
-    let footer_bar_h = 1.0 + 4.0 + (crate::theme::icon_size::row() + 12.0) + 12.0;
+    let footer_bar_h = 1.0 + 4.0 + (byteui::theme::icon_size::row() + 12.0) + 12.0;
     region.padding.bottom + region.gap + footer_bar_h
 }
 
