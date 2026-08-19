@@ -6959,6 +6959,58 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
         .into()
 }
 
+/// 面板 → (图标, 图标栏 tooltip 文案)。11 个 `PanelKind` variant 逐一
+/// 对应,顺序与 `PanelKind` 定义顺序一致,不代表渲染顺序(渲染顺序看
+/// `RailLayout`)。
+fn panel_meta(kind: PanelKind) -> (icons::IconKind, &'static str) {
+    match kind {
+        PanelKind::Files => (icons::IconKind::FolderTree, "文件"),
+        PanelKind::GitLog => (icons::IconKind::GitGraph, "Git 提交"),
+        PanelKind::Todo => (icons::IconKind::ListTodo, "待办"),
+        PanelKind::Project => (icons::IconKind::Briefcase, "项目"),
+        PanelKind::Database => (icons::IconKind::Database, "数据库"),
+        PanelKind::Ssh => (icons::IconKind::Server, "SSH 主机"),
+        PanelKind::Web => (icons::IconKind::Globe, "浏览器"),
+        PanelKind::Agent => (icons::IconKind::Brain, "代理"),
+        PanelKind::Conversations => (icons::IconKind::BotMessageSquare, "对话"),
+        PanelKind::Usage => (icons::IconKind::BarChart3, "用量"),
+        PanelKind::Acceptance => (icons::IconKind::BadgeCheck, "验收"),
+    }
+}
+
+/// 面板专属的按钮徽标装饰(目前只有验收面板有:当前激活 tab 有待处理
+/// 交付时,右上角叠一个金色小圆点)。其余 10 个面板返回 `None`。
+fn panel_badge(
+    app: &App,
+    kind: PanelKind,
+) -> Option<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> {
+    if kind != PanelKind::Acceptance {
+        return None;
+    }
+    let pending = app
+        .active_workspace()
+        .and_then(|ws| ws.tabs.get(ws.active))
+        .map(|t| t.delivery_pending)
+        .unwrap_or(false);
+    if !pending {
+        return None;
+    }
+    Some(
+        container(iced_widget::Space::new())
+            .width(Length::Fixed(8.0))
+            .height(Length::Fixed(8.0))
+            .style(|_t: &iced_widget::Theme| container::Style {
+                background: Some(byteui::theme::color::current().gold.into()),
+                border: Border {
+                    radius: 4.0.into(),
+                    ..Border::default()
+                },
+                ..container::Style::default()
+            })
+            .into(),
+    )
+}
+
 /// 面板区里某块 pane 在外框圆角处要收圆的外角:`Left`/`Right` 配对视图里
 /// 左 pane 收左侧、右 pane 收右侧;`All` 是 Web 单 pane 收全部四角;`None`
 /// 不收(放大态下 pane 直接撑满放大盒子,外框由金色浮层负责,方角才对)。
