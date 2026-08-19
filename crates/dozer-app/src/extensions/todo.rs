@@ -1688,9 +1688,18 @@ fn todo_clear_footer_bar<'a>(
             ..container::Style::default()
         });
 
+    // 顶部分割线左右内缩对齐面板 header 的分割线(`home_panel_head` 被
+    // `project_pane().padding` 整体内缩),否则底部 footbar 分割线会比头部
+    // 的更长、两端对齐不上。竖直 6px 间距沿用原 `[6,0]` 的观感。
+    let pp = theme::region::project_pane().padding;
     container(column![top_line, bar].spacing(4))
         .width(Length::Fill)
-        .padding([6, 0])
+        .padding(Padding {
+            top: 6.0,
+            right: pp.right,
+            bottom: 6.0,
+            left: pp.left,
+        })
         .style(|_t: &iced_widget::Theme| container::Style {
             background: None,
             ..container::Style::default()

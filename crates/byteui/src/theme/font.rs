@@ -1,96 +1,110 @@
-//! 工作区（UI 控件）字号 token 化：`workspace.rs` 里散落的
-//! `text(...).size(N)` 字面量收敛成 8 个具名 token，编译期内嵌
-//! `assets/theme/workspace.json` 的 `font_sizes` 节点，启动时解析一次。
-//! `workspace.json` 同时也是 `chrome_style.rs` 的数据源（`regions` 节点）
-//! ——两个模块各自只解析自己关心的顶层字段，互不干扰。
-//!
-//! 与 `terminal_font.rs`（管终端 pane 的等宽字体，`terminal.json`）和
-//! `chrome_style.rs`（管区域外层容器的背景/边框/间距）职责严格分离——
-//! 这里只管控件内部文字字号，不越界。解析失败（格式错误、缺字段）直接
-//! panic：开发期配置错误，不是需要优雅降级的运行时数据（同
-//! `chrome_style.rs` 的定位）。
+//! 工作区（UI 控件）字号 token 化：`ByteBoy2077` 是编译期默认值，
+//! `set_theme` 可在运行时整体替换成另一份产品的取值（同 `theme::color`
+//! 的模式）——组件内部一律读 `current()`，不直接引用 `byteboy2077()`。
 //!
 //! 每个 accessor 返回的字号都乘过 `icon_size::scale()`（全局缩放因子），
 //! 因此改 `scale` 即整体缩放全部控件文字，与图标尺寸同步。
-use super::icon_size;
 use serde::Deserialize;
-use std::sync::LazyLock;
+use std::sync::RwLock;
 
-const RAW: &str = include_str!("../../assets/theme/workspace.json");
-
-#[derive(Deserialize)]
-struct WorkspaceFonts {
-    dot_sm: u32,
-    caption_sm: u32,
-    caption: u32,
-    label: u32,
-    body: u32,
-    subtitle: u32,
-    title: u32,
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct FontTokens {
+    pub dot_sm: u32,
+    pub caption_sm: u32,
+    pub caption: u32,
+    pub label: u32,
+    pub body: u32,
+    pub subtitle: u32,
+    pub title: u32,
 }
 
-/// `workspace.json` 顶层结构里本模块只关心的部分——`regions` 节点是
-/// `chrome_style.rs` 的地盘，这里不声明，serde 默认忽略未知字段。
-#[derive(Deserialize)]
-struct RawWorkspaceFile {
-    font_sizes: WorkspaceFonts,
+impl FontTokens {
+    /// 逐一对应 `dozer-app` 当前 `assets/theme/workspace.json` 的
+    /// `font_sizes` 节点，仅作未显式 `set_theme()` 时的兜底默认值。
+    pub const fn byteboy2077() -> Self {
+        Self {
+            dot_sm: 10,
+            caption_sm: 11,
+            caption: 12,
+            label: 13,
+            body: 14,
+            subtitle: 15,
+            title: 16,
+        }
+    }
 }
 
-fn load(raw: &str) -> WorkspaceFonts {
-    let file: RawWorkspaceFile =
-        serde_json::from_str(raw).expect("workspace.json 格式错误(解析失败,font_sizes 节点)");
-    file.font_sizes
+static CURRENT: RwLock<FontTokens> = RwLock::new(FontTokens::byteboy2077());
+
+/// 当前生效的字号 token（默认 ByteBoy2077）。
+pub fn current() -> FontTokens {
+    *CURRENT.read().expect("byteui font RwLock poisoned")
 }
 
-static SIZES: LazyLock<WorkspaceFonts> = LazyLock::new(|| load(RAW));
+/// 整体替换当前字号 token——供调用方（如 `dozer-app::theme::init()`）在
+/// 启动时用自己的 `workspace.json` 覆盖默认值。
+pub fn set_theme(tokens: FontTokens) {
+    *CURRENT.write().expect("byteui font RwLock poisoned") = tokens;
+}
 
 pub fn dot_sm() -> u32 {
-    scale(SIZES.dot_sm)
+    scale(current().dot_sm)
 }
 pub fn caption_sm() -> u32 {
-    scale(SIZES.caption_sm)
+    scale(current().caption_sm)
 }
 pub fn caption() -> u32 {
-    scale(SIZES.caption)
+    scale(current().caption)
 }
 pub fn label() -> u32 {
-    scale(SIZES.label)
+    scale(current().label)
 }
 pub fn body() -> u32 {
-    scale(SIZES.body)
+    scale(current().body)
 }
 pub fn subtitle() -> u32 {
-    scale(SIZES.subtitle)
+    scale(current().subtitle)
 }
 pub fn title() -> u32 {
-    scale(SIZES.title)
+    scale(current().title)
 }
 
 /// 把设计基准字号按全局 scale 折算成实际像素字号（四舍五入）。
 fn scale(base: u32) -> u32 {
-    ((base as f32) * icon_size::scale()).round() as u32
+    ((base as f32) * super::icon_size::scale()).round() as u32
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// 防漂移锚:8 个 token 的解析结果必须和 workspace.json 字面量一致。
-    /// 基准已抬到 14px(body=14)以对齐终端字号,层级比例保持不变。
+    /// 防漂移锚：`byteboy2077()` 的每个字段值必须和 `dozer-app` 当前
+    /// `assets/theme/workspace.json` 的 `font_sizes` 字面量一致。
     #[test]
-    fn tokens_match_pre_migration_literals() {
-        assert_eq!(dot_sm(), 10);
-        assert_eq!(caption_sm(), 11);
-        assert_eq!(caption(), 12);
-        assert_eq!(label(), 13);
-        assert_eq!(body(), 14);
-        assert_eq!(subtitle(), 15);
-        assert_eq!(title(), 16);
+    fn byteboy2077_matches_dozer_app_baseline() {
+        let t = FontTokens::byteboy2077();
+        assert_eq!(t.dot_sm, 10);
+        assert_eq!(t.caption_sm, 11);
+        assert_eq!(t.caption, 12);
+        assert_eq!(t.label, 13);
+        assert_eq!(t.body, 14);
+        assert_eq!(t.subtitle, 15);
+        assert_eq!(t.title, 16);
     }
 
     #[test]
-    #[should_panic(expected = "workspace.json 格式错误")]
-    fn malformed_json_panics() {
-        load(r#"{"font_sizes": {"dot_xs": 8}}"#);
+    fn current_defaults_to_byteboy2077() {
+        let c = current();
+        assert_eq!(c.body, FontTokens::byteboy2077().body);
+    }
+
+    #[test]
+    fn set_theme_replaces_current_and_is_visible_globally() {
+        let mut custom = FontTokens::byteboy2077();
+        custom.body = 99;
+        set_theme(custom);
+        assert_eq!(current().body, 99);
+        // 复原，避免污染同进程里跑在本测试之后的其它测试。
+        set_theme(FontTokens::byteboy2077());
     }
 }

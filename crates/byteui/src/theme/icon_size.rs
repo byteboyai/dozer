@@ -1,20 +1,20 @@
-//! 图标尺寸 token 化：`workspace.rs` 里散落的 `icons::view(kind, N.0, ...)`
-//! 字面量收敛成具名 token + 一个全局 `scale`，编译期内嵌
-//! `assets/theme/workspace.json` 的 `icon_sizes` 节点，启动时解析一次。
-//! 与 `workspace_font.rs`(字号) / `chrome_style.rs`(区域样式) 职责分离——
-//! 这里只管控件内部图标的"设计基准尺寸"与"整体缩放因子"，不越界。
+//! 图标尺寸 token 化：`ByteBoy2077` 是编译期默认值，`set_theme` 可在
+//! 运行时整体替换成另一份产品的取值（同 `theme::color`/`theme::font`/
+//! `theme::geometry` 的模式）——组件内部一律读 `current()`，不直接引用
+//! `byteboy2077()`。这里只管控件内部图标的"设计基准尺寸"，不越界。
 //!
 //! 本模块所有尺寸 accessor（`rail`/`row`/`chevron`/`tree_row_gap`）返回的值
 //! 都已乘过 `scale()`，因此改 `scale` 即整体缩放全部图标与图标相关间距
 //! （一个旋钮控制全局）；`icons::view` 是纯渲染入口，不再二次乘 scale。
-//! 改 `rail/row/chevron/tree_row_gap` 则只调某类位置的相对大小。解析失败
-//! （格式错误、缺字段）直接 panic：开发期配置错误，不是需要优雅降级的
-//! 运行时数据（同 `workspace_font.rs` 定位）。
+//! 改 `rail/row/chevron/tree_row_gap` 则只调某类位置的相对大小。
 //!
-//! `scale()` 是**运行时可变**的：启动默认值取 `workspace.json` 的
-//! `icon_sizes.scale`，可被环境变量 `DOZER_ICON_SCALE` 覆盖；运行时由
-//! `set_scale` / `zoom_by`（Ctrl + / Ctrl - 快捷键入口）改写，下一帧布局
-//! 即按新值重排——所有 accessor 每帧都实时读 `scale()`，不缓存缩放结果。
+//! `scale()` 是**运行时可变**的：启动默认值取 `IconSizeTokens.scale`
+//! （见下方 `current().scale`），可被环境变量 `DOZER_ICON_SCALE` 覆盖；
+//! 运行时由 `set_scale` / `zoom_by`（Ctrl + / Ctrl - 快捷键入口）改写，
+//! 下一帧布局即按新值重排——所有 accessor 每帧都实时读 `scale()`，不
+//! 缓存缩放结果。**这套运行时缩放机制和 `IconSizeTokens`（静态设计基准
+//! 尺寸）是两回事，不要混淆**：`set_theme` 换的是"设计基准值"，
+//! `set_scale`/`zoom_by` 改的是"运行时倍数"，两者独立正交。
 //!
 //! 改过的 scale 需要**跨重启保留**：用户在会话里放大/缩小后退出，下次重开
 //! 应回到退出时的 scale。`init_scale`/`persist_scale`/`reset_scale` 都改吃
@@ -22,79 +22,91 @@
 //! 变量 `DOZER_ICON_SCALE` 是显式覆盖，优先级高于落盘值（见 `init_scale`）。
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::sync::LazyLock;
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-const RAW: &str = include_str!("../../assets/theme/workspace.json");
-
-#[derive(Deserialize)]
-struct IconSizes {
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct IconSizeTokens {
     /// 主导航图标栏按钮(左/右 rail)与顶栏设置齿轮：16x16。
-    rail: f32,
+    pub rail: f32,
     /// 文件树行 / 右键菜单项 / tab 箭头 / 最大化按钮等：14x14。
-    row: f32,
+    pub row: f32,
     /// 文件树展开/收起箭头：12x12（比同行文件图标略小）。
-    chevron: f32,
-    /// 面板 tab 栏翻页箭头（`<` / `>`）：10x10，比文件树 chevron 略小，
-    /// 让翻页箭头在密集的 tab 行里更精致、不抢标题视觉。
-    tab_arrow: f32,
-    /// 顶栏 "Dozer Home" tab 的品牌图标(house)：12x12，比 rail 略小以让
-    /// 字标更聚焦。
-    home: f32,
+    pub chevron: f32,
+    /// 面板 tab 栏翻页箭头（`<` / `>`）：10x10，比文件树 chevron 略小。
+    pub tab_arrow: f32,
+    /// 顶栏 "Dozer Home" tab 的品牌图标(house)：12x12。
+    pub home: f32,
     /// 文件树行内"箭头↔图标"之间的间距（设计基准 2px）。
-    tree_row_gap: f32,
-    /// 全局缩放因子：1.0 = 设计基准；调到 1.5 即全部图标放大 50%。
-    scale: f32,
+    pub tree_row_gap: f32,
+    /// 设计基准缩放因子：1.0 = 设计基准；作为 `base_scale()` 的兜底值，
+    /// 和运行时可变的 `CURRENT_SCALE` 是两回事。
+    pub scale: f32,
 }
 
-/// `workspace.json` 顶层结构里本模块只关心的部分——`regions` / `font_sizes`
-/// / `geometry` 节点是别处地盘，这里不声明，serde 默认忽略未知字段。
-#[derive(Deserialize)]
-struct RawWorkspaceFile {
-    icon_sizes: IconSizes,
+impl IconSizeTokens {
+    /// 逐一对应 `dozer-app` 当前 `assets/theme/workspace.json` 的
+    /// `icon_sizes` 节点，仅作未显式 `set_theme()` 时的兜底默认值。
+    pub const fn byteboy2077() -> Self {
+        Self {
+            rail: 16.0,
+            row: 14.0,
+            chevron: 12.0,
+            tab_arrow: 9.0,
+            home: 12.0,
+            tree_row_gap: 2.0,
+            scale: 1.0,
+        }
+    }
 }
 
-fn load(raw: &str) -> IconSizes {
-    let file: RawWorkspaceFile =
-        serde_json::from_str(raw).expect("workspace.json 格式错误(解析失败,icon_sizes 节点)");
-    file.icon_sizes
+static CURRENT: RwLock<IconSizeTokens> = RwLock::new(IconSizeTokens::byteboy2077());
+
+/// 当前生效的图标尺寸 token（默认 ByteBoy2077）。
+pub fn current() -> IconSizeTokens {
+    *CURRENT.read().expect("byteui icon_size RwLock poisoned")
 }
 
-static SIZES: LazyLock<IconSizes> = LazyLock::new(|| load(RAW));
+/// 整体替换当前图标尺寸 token——供调用方（如 `dozer-app::theme::init()`）
+/// 在启动时用自己的 `workspace.json` 覆盖默认值。**不影响**运行时缩放
+/// 倍数（`CURRENT_SCALE`），那是独立机制，见模块文档。
+pub fn set_theme(tokens: IconSizeTokens) {
+    *CURRENT.write().expect("byteui icon_size RwLock poisoned") = tokens;
+}
 
 pub fn rail() -> f32 {
-    SIZES.rail * scale()
+    current().rail * scale()
 }
 pub fn row() -> f32 {
-    SIZES.row * scale()
+    current().row * scale()
 }
 pub fn chevron() -> f32 {
-    SIZES.chevron * scale()
+    current().chevron * scale()
 }
-/// 面板 tab 栏翻页箭头（`<` / `>`）尺寸，已含全局 scale。比文件树
-/// `chevron` 略小。
+/// 面板 tab 栏翻页箭头（`<` / `>`）尺寸，已含全局 scale。
 pub fn tab_arrow() -> f32 {
-    SIZES.tab_arrow * scale()
+    current().tab_arrow * scale()
 }
 /// 顶栏 "Dozer Home" tab 品牌图标尺寸，已含全局 scale。
 pub fn home() -> f32 {
-    SIZES.home * scale()
+    current().home * scale()
 }
 /// 文件树行内"箭头↔图标"间距，已含全局 scale。
 pub fn tree_row_gap() -> f32 {
-    SIZES.tree_row_gap * scale()
+    current().tree_row_gap * scale()
 }
+
 /// 全局缩放因子的运行时当前值（逻辑像素倍数）。`u32::MAX` 是哨兵，表示
-/// "尚未被运行时改写"，此时回落到 `SIZES.scale`（JSON/环境变量基准值）。
+/// "尚未被运行时改写"，此时回落到 `current().scale`（token 基准值）。
 static CURRENT_SCALE: AtomicU32 = AtomicU32::new(u32::MAX);
 
-/// 启动基准 scale：`DOZER_ICON_SCALE` 环境变量优先，否则用 JSON 的 `scale`。
+/// 启动基准 scale：`DOZER_ICON_SCALE` 环境变量优先，否则用 token 的 `scale`。
 fn base_scale() -> f32 {
     std::env::var("DOZER_ICON_SCALE")
         .ok()
         .and_then(|v| v.parse::<f32>().ok())
         .filter(|&v| v > 0.0)
-        .unwrap_or(SIZES.scale)
+        .unwrap_or(current().scale)
 }
 
 /// 全局缩放因子：所有 token accessor 都会乘它，因此改这一个值即整体缩放
@@ -122,11 +134,11 @@ pub fn zoom_by(factor: f32) {
 }
 
 /// 还原到启动基准 scale（Ctrl+1 入口）：清空运行时改写，
-/// 让 `scale()` 回落到 `base_scale()`（`DOZER_ICON_SCALE` 或 JSON `scale`）；
+/// 让 `scale()` 回落到 `base_scale()`（`DOZER_ICON_SCALE` 或 token `scale`）；
 /// 同时把落盘值复位成出厂默认，使"还原"在下次重启后依然生效。
 pub fn reset_scale(path: &Path) {
     CURRENT_SCALE.store(u32::MAX, Ordering::Relaxed);
-    save_persisted_scale(path, SIZES.scale);
+    save_persisted_scale(path, current().scale);
 }
 
 /// 启动时把上次退出前落盘的 scale 读回并应用为当前值,调用方传入落盘路径
@@ -192,21 +204,43 @@ pub const SCALE_MAX: f32 = 3.0;
 mod tests {
     use super::*;
 
-    /// 防漂移锚:3 个 token + scale 的解析结果必须和改动前 workspace.rs 里
-    /// 的字面量完全一致——纯代码搬家,数值不该变。
+    /// 防漂移锚：`byteboy2077()` 的每个字段值必须和 `dozer-app` 当前
+    /// `assets/theme/workspace.json` 的 `icon_sizes` 字面量一致。
     #[test]
-    fn tokens_match_pre_migration_literals() {
+    fn byteboy2077_matches_dozer_app_baseline() {
+        let t = IconSizeTokens::byteboy2077();
+        assert_eq!(t.rail, 16.0);
+        assert_eq!(t.row, 14.0);
+        assert_eq!(t.chevron, 12.0);
+        assert_eq!(t.tab_arrow, 9.0);
+        assert_eq!(t.home, 12.0);
+        assert_eq!(t.tree_row_gap, 2.0);
+        assert_eq!(t.scale, 1.0);
+    }
+
+    #[test]
+    fn current_defaults_to_byteboy2077() {
+        assert_eq!(current().rail, IconSizeTokens::byteboy2077().rail);
+    }
+
+    #[test]
+    fn set_theme_replaces_current_and_is_visible_globally() {
+        let mut custom = IconSizeTokens::byteboy2077();
+        custom.rail = 999.0;
+        set_theme(custom);
+        assert_eq!(current().rail, 999.0);
+        // 复原，避免污染同进程里跑在本测试之后的其它测试。
+        set_theme(IconSizeTokens::byteboy2077());
+    }
+
+    #[test]
+    fn accessors_reflect_current_at_default_scale() {
+        set_theme(IconSizeTokens::byteboy2077());
+        CURRENT_SCALE.store(u32::MAX, Ordering::Relaxed);
         assert_eq!(rail(), 16.0);
         assert_eq!(row(), 14.0);
         assert_eq!(chevron(), 12.0);
         assert_eq!(tab_arrow(), 9.0);
-        assert_eq!(scale(), 1.0);
-    }
-
-    #[test]
-    #[should_panic(expected = "workspace.json 格式错误")]
-    fn malformed_json_panics() {
-        load(r#"{"icon_sizes": {"rail": 16.0}}"#);
     }
 
     /// 落盘 round-trip：写出去的值读回来和写的一致，且会夹进合法范围。
@@ -253,7 +287,6 @@ mod tests {
     /// 并落盘复位成出厂默认。两者都吃显式临时路径，不再碰用户真实配置目录。
     #[test]
     fn init_applies_persisted_and_reset_clears_it() {
-        // 显式覆盖下 `init_scale` 会跳过落盘值，此时本测试路径不适用。
         if std::env::var("DOZER_ICON_SCALE").is_ok() {
             return;
         }
@@ -263,8 +296,8 @@ mod tests {
             assert_eq!(scale(), 2.0);
 
             reset_scale(path);
-            assert_eq!(scale(), SIZES.scale);
-            assert_eq!(load_from(path), Some(SIZES.scale));
+            assert_eq!(scale(), current().scale);
+            assert_eq!(load_from(path), Some(current().scale));
         });
     }
 }

@@ -369,7 +369,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
     fonts::load_embedded_fonts();
     fonts::sanitize_font_db();
 
-    // 把上次退出前存盘的 UI scale 读回，确保首帧几何/布局按退出时的缩放排布
+    // 先建立 token 基准值：把 workspace.json 灌进 byteui 三个 token 模块
+    // （font/geometry/icon_size），取代其编译期内置默认值。
+    crate::theme::init();
+    // 再把上次退出前存盘的 UI scale 读回，确保首帧几何/布局按退出时的缩放排布
     // （Ctrl +/- 改过的 scale 由 `icon_size::persist_scale` 在每次缩放后落盘）。
     byteui::theme::icon_size::init_scale(&crate::theme::ui_scale_path());
 
