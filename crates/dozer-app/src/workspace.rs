@@ -31,8 +31,8 @@
 //!   收到后调用 `app.update(..)` 并请求重绘。反方向（UI → tokio）
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
 use crate::app::{
-    App, DEFAULT_COLS, DEFAULT_ROWS, HoverId, Message, ProjectId, panel_tab, tab_arrow_button,
-    tab_divider, tab_window,
+    App, DEFAULT_COLS, DEFAULT_ROWS, HoverId, Message, PROJECT_PREVIEW_ID_OFFSET, PanelKind,
+    ProjectId, panel_tab, tab_arrow_button, tab_divider, tab_window,
 };
 use crate::conversation::{self, ConversationMeta};
 use crate::delivery::{self};
@@ -1989,30 +1989,67 @@ impl Workspace {
         self.acceptance.comment_editing()
     }
 
-    /// 当前激活预览 tab 若是 webview(文件/网页)则返回其 id,供 main.rs
-    /// 焦点路由取句柄;验收 tab/无 tab 返回 None。
-    pub fn active_preview_webview_id(&self) -> Option<usize> {
-        self.preview.active_webview_id()
+    /// `kind` 是 `is_in_preview_column` 命中的面板(`Files` 或
+    /// `Project`)。此前硬编码只查 `self.preview`(Files)——`Project`
+    /// 面板的预览 webview 点击后一直拿不到键盘焦点(⌘C 复制不了),
+    /// 这是这次 Stage 4b 才第一次让它变得可测、可发现的一个独立预存
+    /// bug,不是拖拽换栏引入的新问题。`Project` 分支的 id 要加
+    /// `PROJECT_PREVIEW_ID_OFFSET`,因为 `webviews` 共享池里它的 key
+    /// 已经加了这个偏移(见 `preview_desired`)。
+    pub fn active_preview_webview_id(&self, kind: PanelKind) -> Option<usize> {
+        match kind {
+            PanelKind::Project => self
+                .project_preview
+                .active_webview_id()
+                .map(|id| id + PROJECT_PREVIEW_ID_OFFSET),
+            _ => self.preview.active_webview_id(),
+        }
     }
 
-    /// 当前激活预览 tab 是否走原生渲染(有 `editor`)。main.rs 键盘路由用:
-    /// 原生预览 tab 跟编辑弹层(`edit_session_open`)一样,需要在按键分发链
-    /// 里提前放行,让键盘事件走 iced 正常管线直达 `CodeEditor`,不落进
-    /// 终端/⌘ 快捷键那些手工转发分支。
-    pub fn active_preview_tab_has_native_editor(&self) -> bool {
-        self.preview
-            .tabs()
-            .get(self.preview.active_idx())
+    /// 当前哪个预览面板有活跃 webview。`Files`/`Project` 各自带独立的
+    /// `PreviewPane`,`active_preview_webview_id` 是按 `kind` 定向查询的;
+    /// 这里在**不携带面板信息**的汇聚信号(如 `WebViewFocused`)需要反推
+    /// "刚聚焦的是哪个池"时用:两个面板都有 webview 时按顺序返回
+    /// `Files`(左栏预览通常是文件,优先级高),都没有返回 `None`。
+    pub fn active_preview_panel_kind(&self) -> Option<PanelKind> {
+        if self.preview.active_webview_id().is_some() {
+            Some(PanelKind::Files)
+        } else if self.project_preview.active_webview_id().is_some() {
+            Some(PanelKind::Project)
+        } else {
+            None
+        }
+    }
+
+    /// `kind` 是当前 `FocusIntent::Preview` 携带的面板(`Files` 或
+    /// `Project`)——当前激活预览 tab 是否走原生渲染(有 `editor`)。
+    /// main.rs 键盘路由用:原生预览 tab 跟编辑弹层(`edit_session_open`)
+    /// 一样,需要在按键分发链里提前放行,让键盘事件走 iced 正常管线直达
+    /// `CodeEditor`,不落进终端/⌘ 快捷键那些手工转发分支。此前硬编码只查
+    /// `self.preview`(Files)——`Project` 预览面板里打开的原生编辑器 tab
+    /// 收不到键盘输入,是这次 Stage 4b 审阅时发现的独立预存 bug,和
+    /// `active_preview_webview_id` 此前只查 `ws.preview` 是同一类问题。
+    pub fn active_preview_tab_has_native_editor(&self, kind: PanelKind) -> bool {
+        let pane = match kind {
+            PanelKind::Project => &self.project_preview,
+            _ => &self.preview,
+        };
+        pane.tabs()
+            .get(pane.active_idx())
             .is_some_and(|t| t.editor.is_some())
     }
 
-    /// Ctrl ± / 重置缩放后,重算所有原生编辑器(编辑弹层 + 各预览 tab)的排版,
-    /// 使其随全局 scale 一起放大缩小。见 `preview::dozer_editor_font_metrics`。
+    /// Ctrl ± / 重置缩放后,重算所有原生编辑器(编辑弹层 + Files/Project
+    /// 两个独立预览面板各自的 tab)的排版,使其随全局 scale 一起放大缩小。
+    /// 见 `preview::dozer_editor_font_metrics`。此前只重算 `self.preview`
+    /// (Files)——`Project` 预览面板里的原生编辑器字号一直冻结在打开时刻,
+    /// 不随全局缩放联动,是同一类"Project 那半支被漏查"的预存 bug。
     pub(crate) fn resync_editor_font_metrics(&mut self) {
         if let Some(session) = self.edit_session.as_mut() {
             crate::preview::dozer_editor_font_metrics(&mut session.editor);
         }
         self.preview.resync_editor_font_metrics();
+        self.project_preview.resync_editor_font_metrics();
     }
 
     /// 当前激活浏览器 tab 的 webview id,语义同 `active_preview_webview_id`,
@@ -4428,20 +4465,65 @@ mod tests {
         let (_dir_png, png_path) = write_temp_file("a.png", "");
         let mut ws = Workspace::empty_for_project_placeholder();
         assert!(
-            !ws.active_preview_tab_has_native_editor(),
+            !ws.active_preview_tab_has_native_editor(PanelKind::Files),
             "没有 tab 时应为 false"
         );
 
         ws.preview.open_path(rs_path);
         assert!(
-            ws.active_preview_tab_has_native_editor(),
+            ws.active_preview_tab_has_native_editor(PanelKind::Files),
             ".rs 是白名单扩展名,应走原生渲染"
         );
 
         ws.preview.open_path(png_path);
         assert!(
-            !ws.active_preview_tab_has_native_editor(),
+            !ws.active_preview_tab_has_native_editor(PanelKind::Files),
             "切到 .png 后激活 tab 应走 wry,不是原生"
+        );
+    }
+
+    #[test]
+    fn active_preview_tab_has_native_editor_checks_project_preview_independently() {
+        let (_dir_rs, rs_path) = write_temp_file("a.rs", "fn main() {}");
+        let mut ws = Workspace::empty_for_project_placeholder();
+        assert!(
+            !ws.active_preview_tab_has_native_editor(PanelKind::Project),
+            "project_preview 没有 tab 时应为 false"
+        );
+
+        ws.project_preview.open_path(rs_path);
+        assert!(
+            ws.active_preview_tab_has_native_editor(PanelKind::Project),
+            "Project 预览面板里的 .rs tab 也应走原生渲染,不是恒查 Files 那个 PreviewPane"
+        );
+        assert!(
+            !ws.active_preview_tab_has_native_editor(PanelKind::Files),
+            "Files 预览面板本身没开 tab,不该被 Project 那边的状态影响"
+        );
+    }
+
+    #[test]
+    fn resync_editor_font_metrics_updates_project_preview_editor_too() {
+        let (_dir_rs, rs_path) = write_temp_file("a.rs", "fn main() {}");
+        let mut ws = Workspace::empty_for_project_placeholder();
+        let id = ws.project_preview.open_path(rs_path);
+
+        // 手动改到一个和 `dozer_editor_font_metrics` 期望值不同的字号,
+        // 模拟"缩放前遗留的旧字号",resync 后应该被覆盖成当前 scale 对应
+        // 的值——此前只 resync `self.preview`(Files),`project_preview`
+        // 这边永远不会被这个断言覆盖到。
+        ws.project_preview
+            .editor_mut(id)
+            .expect("刚打开的 .rs tab 应该是原生编辑器")
+            .set_font_size(1.0, false);
+
+        ws.resync_editor_font_metrics();
+
+        let expected = terminal_font::size() * byteui::theme::icon_size::scale();
+        assert_eq!(
+            ws.project_preview.editor_mut(id).unwrap().font_size(),
+            expected,
+            "Project 预览面板的原生编辑器字号也应该跟着全局缩放同步"
         );
     }
 

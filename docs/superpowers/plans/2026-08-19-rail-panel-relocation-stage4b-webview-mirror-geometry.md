@@ -102,7 +102,7 @@
 这一步先只做签名重构,不改变任何实际行为——两个调用处目前都只有一个
 `bounds` 值,这里先把它 `zip` 进每条 spec,行为与改动前逐位一致。
 
-- [ ] **Step 1: 改写 `sync_webview_pool` 签名与内部两处 `bounds` 用法**
+- [x] **Step 1: 改写 `sync_webview_pool` 签名与内部两处 `bounds` 用法**
 
 找到(`main.rs` 约 477 行起):
 
@@ -192,7 +192,7 @@
 (`bounds` 现在是 for 循环里的局部绑定,类型不变,函数体其余部分照常
 能编译通过)。
 
-- [ ] **Step 2: 改写两个调用处,先用现有单个 `bounds` 包成 `vec![(...);
+- [x] **Step 2: 改写两个调用处,先用现有单个 `bounds` 包成 `vec![(...);
   N]` 形式**(行为暂不变,只是类型对齐——Task 3 会再改成真正的双侧
   独立 bounds)
 
@@ -266,13 +266,13 @@
             );
 ```
 
-- [ ] **Step 3: 编译**
+- [x] **Step 3: 编译**
 
 Run: `cargo build -p dozer-app --bin dozer`
 Expected: 编译成功(`preview_content_bounds`/`preview_desired`/
 `browser_desired` 的签名这个 Task 还没动,行为与改动前完全一致)。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git branch --show-current
@@ -306,7 +306,7 @@ git commit -m "refactor(dozer-app): sync_webview_pool 改为每条 spec 自带�
   (f32, f32)`、`fn maximized_box_x_range(window_width: f32) -> (f32,
   f32)`(两侧共用,不需要 side 参数)。
 
-- [ ] **Step 1: 改写 `preview_content_bounds` → `preview_content_bounds_for`**
+- [x] **Step 1: 改写 `preview_content_bounds` → `preview_content_bounds_for`**
 
 找到整个函数(约 1080-1221 行),把函数签名和两处 `match state.left_view`
 改成按 `side` 取实际面板类型再分派。放大态部分:
@@ -423,7 +423,7 @@ git commit -m "refactor(dozer-app): sync_webview_pool 改为每条 spec 自带�
 已经设计好、这次沿用其定义不变)——本 Task 的 Step 2 先补上这个函数
 定义,再继续改非放大态分支。**
 
-- [ ] **Step 2: 补 `pair_columns` 辅助函数(放在 `pair_list_content_width`**
+- [x] **Step 2: 补 `pair_columns` 辅助函数(放在 `pair_list_content_width`**
 附近)
 
 ```rust
@@ -490,7 +490,7 @@ mod pair_columns_tests {
 }
 ```
 
-- [ ] **Step 3: 改写非放大态分支 + 函数签名/开头**
+- [x] **Step 3: 改写非放大态分支 + 函数签名/开头**
 
 找到函数开头与非放大态部分(约 1080-1090、1148-1220 行):
 
@@ -630,7 +630,7 @@ pub fn preview_content_bounds_for(
 `pair_x0_and_width`,两侧通用)取代)——不要在这个分支里保留任何
 `icon_rail_width()` 字面量,那是左栏专属基准,右栏场景下位置会算错。**
 
-- [ ] **Step 3.5: 临时打通 `main.rs` 里还没删的两处旧调用(保证这个 Task
+- [x] **Step 3.5: 临时打通 `main.rs` 里还没删的两处旧调用(保证这个 Task
   结束时仍能编译——真正删掉这两处现算逻辑是 Task 3 的事)**
 
 `main.rs` 里 `webviews`/`browser_webviews` 两处 `sync_webview_pool`
@@ -659,9 +659,9 @@ pub fn preview_content_bounds_for(
 矩形——那时 `Side::Left` 这个临时写法自然消失,不需要现在纠结"这样
 写右栏对不对",Task 3 之前它本来就只服务左栏。**
 
-- [ ] 编译确认:`cargo build -p dozer-app --bin dozer` 通过。
+- [x] 编译确认:`cargo build -p dozer-app --bin dozer` 通过。
 
-- [ ] **Step 4: 同样手法改写 `left_files_tree_bounds` → `left_files_tree_bounds_for`**
+- [x] **Step 4: 同样手法改写 `left_files_tree_bounds` → `left_files_tree_bounds_for`**
 
 （Files 专属,只关心配对里的 list 列而非 content 列）找到整个函数(约
 1242-1290 行),签名加 `side: Side` 参数,内部改成:
@@ -751,7 +751,7 @@ pub fn left_files_tree_bounds_for(
 之后的值(扣过分隔线的配对内容宽)——上面直接用,不要再包一层
 `pair_content_width`,否则宽度多扣一次分隔线。**
 
-- [ ] **Step 4.5: 修第三个调用点——`ime_cursor_area`**
+- [x] **Step 4.5: 修第三个调用点——`ime_cursor_area`**
 
 `preview_content_bounds` 除了 `main.rs` 两处、测试若干处,还有一处
 **容易漏改**的调用:`ime_cursor_area`(约 3484-3489 行),给 IME 候选窗
@@ -794,7 +794,7 @@ pub fn left_files_tree_bounds_for(
 保证的只是"按面板实际所在侧算,不再死用左栏公式"这一层,不是让这个
 近似变精确。**
 
-- [ ] **Step 4.6: 修第四个调用点——`files_drop_target`(Finder 外部拖拽命中)**
+- [x] **Step 4.6: 修第四个调用点——`files_drop_target`(Finder 外部拖拽命中)**
 
 `left_files_tree_bounds` 还有一处调用点在 `files_drop_target`(约
 2420-2437 行)——这是从 Finder 往文件树拖文件时,判断"落在哪一行"的
@@ -853,7 +853,7 @@ pub fn left_files_tree_bounds_for(
 从 Finder 拖文件进树会全部失效(函数直接返回 `None`),不是"位置算错"
 这种轻问题,是"功能完全不可用"。**
 
-- [ ] **Step 5: 迁移现有测试到新签名**
+- [x] **Step 5: 迁移现有测试到新签名**
 
 `app.rs` 里所有引用旧 `preview_content_bounds(window_width,
 window_height, &state)`(3 参数)/`left_files_tree_bounds(...)` 的测试
@@ -864,12 +864,12 @@ window_height, &state)`(3 参数)/`left_files_tree_bounds(...)` 的测试
 ——这批测试验证的是几何公式本身,不是"哪一侧",迁移后应该原样通过,
 不需要改断言内容,只改调用签名)。`left_files_tree_bounds` 同理。
 
-- [ ] **Step 6: 编译 + 测试**
+- [x] **Step 6: 编译 + 测试**
 
 Run: `cargo build -p dozer-app --bin dozer && cargo test -p dozer-app --bin dozer preview_content_bounds && cargo test -p dozer-app --bin dozer left_files_tree_bounds && cargo test -p dozer-app --bin dozer pair_columns`
 Expected: 编译成功,全部通过(迁移前的测试断言数值不变)。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git branch --show-current
@@ -896,7 +896,7 @@ git commit -m "feat(dozer-app): preview_content_bounds/left_files_tree_bounds �
   之前只有 id/url/visible,不带几何;现在几何要按各自命中的 side 现算,
   所以这两个函数需要能拿到窗口尺寸)。
 
-- [ ] **Step 1: 引入 id 偏移常量**
+- [x] **Step 1: 引入 id 偏移常量**
 
 在 `preview_desired` 附近(app.rs 约 3512 行前)加:
 
@@ -912,7 +912,7 @@ git commit -m "feat(dozer-app): preview_content_bounds/left_files_tree_bounds �
 const PROJECT_PREVIEW_ID_OFFSET: usize = 1_000_000;
 ```
 
-- [ ] **Step 2: 改写 `preview_desired`**
+- [x] **Step 2: 改写 `preview_desired`**
 
 找到(app.rs 约 3517-3554 行):
 
@@ -993,7 +993,7 @@ const PROJECT_PREVIEW_ID_OFFSET: usize = 1_000_000;
     }
 ```
 
-- [ ] **Step 3: 改写 `browser_desired`**
+- [x] **Step 3: 改写 `browser_desired`**
 
 找到(app.rs 约 3558-3572 行):
 
@@ -1052,7 +1052,7 @@ const PROJECT_PREVIEW_ID_OFFSET: usize = 1_000_000;
     }
 ```
 
-- [ ] **Step 4: main.rs 两处调用点改成用新签名的返回值直接喂
+- [x] **Step 4: main.rs 两处调用点改成用新签名的返回值直接喂
   `sync_webview_pool`,不再单独算一次 `bounds` 传进去**
 
 找到 Task 1 Step 2 里已经改过的两处调用(约 1253-1290 行)。现在
@@ -1119,13 +1119,13 @@ const PROJECT_PREVIEW_ID_OFFSET: usize = 1_000_000;
 `bounds` 在 `if` 分支里提前算好一次、闭包按值捕获,不依赖 `Rect` 是否
 `Clone`,应该能直接编译通过。**
 
-- [ ] **Step 5: 编译**
+- [x] **Step 5: 编译**
 
 Run: `cargo build -p dozer-app --bin dozer`
 Expected: 编译成功。若 Step 4 的 `wry::Rect` clone 问题触发编译错误,
 按 Step 4 备注的方案改用元组传递,不要引入新依赖。
 
-- [ ] **Step 6: 新增并发测试**
+- [x] **Step 6: 新增并发测试**
 
 在 `preview_desired`/`pair_columns_tests` 附近追加:
 
@@ -1159,12 +1159,12 @@ Project`、`ws.preview.open_path(...)`、`ws.project_preview.open_path(...)`
 补齐 Step 6 里那条最小常量测试即可,不要为了这一个端到端断言现造一整套
 `Workspace` 构造脚手架——超出这个 Task 的必要范围。）
 
-- [ ] **Step 7: 测试**
+- [x] **Step 7: 测试**
 
 Run: `cargo test -p dozer-app --bin dozer preview_desired`
 Expected: 全部通过。
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git branch --show-current
@@ -1186,7 +1186,7 @@ git commit -m "feat(dozer-app): preview_desired/browser_desired 改为双侧独�
   种类,`None` = 未命中任何预览列)。
 - Consumes: Task 3 的 `PROJECT_PREVIEW_ID_OFFSET`。
 
-- [ ] **Step 1: 改写 `is_in_preview_column`**
+- [x] **Step 1: 改写 `is_in_preview_column`**
 
 找到整个函数(约 1297-1383 行,含放大态与非放大态两段 `match
 state.left_view`),改成扫两侧、按各侧当前面板判断,命中则返回
@@ -1270,7 +1270,7 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> Op
 精确切分——延续现状,不在这个 Task 里额外补精确,原函数就是这么处理
 的)。**
 
-- [ ] **Step 2: 迁移现有测试**(`is_in_preview_column_false_for_...`
+- [x] **Step 2: 迁移现有测试**(`is_in_preview_column_false_for_...`
   等,约 8979-9042、9607-9623 行)——返回值从 `bool` 改成
   `Option<PanelKind>`,断言从 `assert!(is_in_preview_column(...))`/
   `assert!(!is_in_preview_column(...))` 改成 `assert!(is_in_preview_column(...)
@@ -1279,7 +1279,7 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> Op
   的姊妹测试)额外断言 `assert_eq!(is_in_preview_column(...),
   Some(PanelKind::Files))` 之类,不只判断 `is_some()`。
 
-- [ ] **Step 3: `active_preview_webview_id` 补上 `ws.project_preview` 分支
+- [x] **Step 3: `active_preview_webview_id` 补上 `ws.project_preview` 分支
   (审阅时发现的独立预存 bug,借这次改造顺带修掉)**
 
 找到(`workspace.rs` 约 1994-1996 行):
@@ -1326,7 +1326,7 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> Op
 看现有 `workspace.rs` 对 `app.rs` 常量的既有引用手法照做,不新开一套
 可见性规则。）
 
-- [ ] **Step 4: `main.rs` 焦点路由改用 `Option<PanelKind>`**
+- [x] **Step 4: `main.rs` 焦点路由改用 `Option<PanelKind>`**
 
 `FocusIntent` 枚举(约 469-473 行)加载体:
 
@@ -1392,12 +1392,12 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> Op
                 },
 ```
 
-- [ ] **Step 5: 编译**
+- [x] **Step 5: 编译**
 
 Run: `cargo build -p dozer-app --bin dozer`
 Expected: 编译成功。
 
-- [ ] **Step 6: 测试**
+- [x] **Step 6: 测试**
 
 Run: `cargo test -p dozer-app --bin dozer is_in_preview_column && cargo test -p dozer-app --bin dozer active_preview_webview_id`
 Expected: 全部通过(既有测试若原来只覆盖 `Files`,可补一条 `Project`
@@ -1405,7 +1405,7 @@ Expected: 全部通过(既有测试若原来只覆盖 `Files`,可补一条 `Proj
 `active_preview_webview_id(PanelKind::Project)` 返回偏移后 id 的测试,
 验证 Step 3 修的老 bug 确实修好)。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git branch --show-current
@@ -1424,7 +1424,7 @@ git commit -m "fix(dozer-app): is_in_preview_column 返回命中面板 + 修正 
 `list_rendered_first` 已经在那个 Stage 写好,直接复用)。这部分不受
 Task 1-4 的"并发双侧"改动影响——一条分割线只服务一个具体面板实例。
 
-- [ ] **Step 1: 改写 `Divider::LeftPairSplit`(Files)**
+- [x] **Step 1: 改写 `Divider::LeftPairSplit`(Files)**
 
 找到(约 863-876 行):
 
@@ -1471,10 +1471,10 @@ Task 1-4 的"并发双侧"改动影响——一条分割线只服务一个具体
         }
 ```
 
-- [ ] **Step 2: 同样改写 `Divider::ProjectSplit`**(`PanelKind::Files`/
+- [x] **Step 2: 同样改写 `Divider::ProjectSplit`**(`PanelKind::Files`/
   `files_split` 换成 `PanelKind::Project`/`project_split`,其余结构不变)
 
-- [ ] **Step 3: 改写 `Divider::BrowserBookmarksSplit`**
+- [x] **Step 3: 改写 `Divider::BrowserBookmarksSplit`**
 
 找到(约 954-967 行):
 
@@ -1529,15 +1529,15 @@ Task 1-4 的"并发双侧"改动影响——一条分割线只服务一个具体
 收藏夹拖拽方向錯亂,实现后务必在 Task 6 的 GUI 核对里手动验证这个分支,
 不要只信编译通过。**
 
-- [ ] **Step 4: 追加测试**(同 Stage 4a 的 near/far 方向性手法,三个
+- [x] **Step 4: 追加测试**(同 Stage 4a 的 near/far 方向性手法,三个
   Divider 各来一组默认栏防回归 + 镜像态方向验证,共 6 条)
 
-- [ ] **Step 5: 编译 + 测试**
+- [x] **Step 5: 编译 + 测试**
 
 Run: `cargo build -p dozer-app --bin dozer && cargo test -p dozer-app --bin dozer apply_column_drag`
 Expected: 编译成功,全部通过。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git branch --show-current
@@ -1555,12 +1555,12 @@ git commit -m "feat(dozer-app): apply_column_drag 的 Files/Project/Web 分支�
 **Interfaces:**
 - Consumes: Task 1-5 已完成,以及 Stage 1-4a 全部已合并
 
-- [ ] **Step 1: 全量编译 + 测试**
+- [x] **Step 1: 全量编译 + 测试**
 
 Run: `cargo build -p dozer-app --bin dozer && cargo test -p dozer-app --bin dozer`
 Expected: 编译成功;测试全部通过。
 
-- [ ] **Step 2: clippy + fmt**
+- [x] **Step 2: clippy + fmt**
 
 Run: `cargo clippy -p dozer-app --all-targets -- -D warnings && cargo fmt -p dozer-app -- --check`
 Expected: 无新增警告(已知基线:`ws_state` 未使用、`format_todo_time`/

@@ -758,6 +758,89 @@ fn pair_list_content_width(pair_w: f32, split: f32) -> (f32, f32) {
     (pair_w * split, pair_w * (1.0 - split))
 }
 
+/// 配对视图内 list/content 两列相对**所在 zone/盒子内容区左边界**的
+/// 横向偏移与宽度(不含 zone/盒子自己的 x0——调用方自己加)。`mirrored`
+/// = false 时 list 在前(x=0)、content 在后(x=list_w+divider_width);
+/// `mirrored` = true 时反过来。`preview_content_bounds_for`/
+/// `left_files_tree_bounds_for`/`is_in_preview_column` 三个函数(webview
+/// 矩形、文件树命中、焦点路由)都靠这一份算,不许各写各的偏移公式。
+struct PairColumns {
+    list_x: f32,
+    list_w: f32,
+    content_x: f32,
+    content_w: f32,
+}
+
+fn pair_columns(pair_w: f32, split: f32, mirrored: bool) -> PairColumns {
+    let (list_w, content_w) = pair_list_content_width(pair_w, split);
+    let divider = byteui::theme::geometry::divider_width();
+    if mirrored {
+        PairColumns {
+            content_x: 0.0,
+            content_w,
+            list_x: content_w + divider,
+            list_w,
+        }
+    } else {
+        PairColumns {
+            list_x: 0.0,
+            list_w,
+            content_x: list_w + divider,
+            content_w,
+        }
+    }
+}
+
+#[cfg(test)]
+mod pair_columns_tests {
+    use super::*;
+
+    #[test]
+    fn not_mirrored_puts_list_first() {
+        let c = pair_columns(600.0, 0.4, false);
+        assert_eq!(c.list_x, 0.0);
+        assert!(c.content_x > c.list_x + c.list_w);
+    }
+
+    #[test]
+    fn mirrored_puts_content_first() {
+        let c = pair_columns(600.0, 0.4, true);
+        assert_eq!(c.content_x, 0.0);
+        assert!(c.list_x > c.content_x + c.content_w);
+    }
+
+    #[test]
+    fn list_and_content_widths_sum_to_pair_width_regardless_of_mirror() {
+        let pair_w = 600.0;
+        let a = pair_columns(pair_w, 0.4, false);
+        let b = pair_columns(pair_w, 0.4, true);
+        assert!((a.list_w + a.content_w - pair_w).abs() < 0.01);
+        assert_eq!(a.list_w, b.list_w);
+        assert_eq!(a.content_w, b.content_w);
+    }
+}
+
+/// `Files`/`Project` 两个 webview 面板在左右两侧同时活跃时,id 空间必须
+/// 靠 `PROJECT_PREVIEW_ID_OFFSET` 隔离(否则 `ws.preview` 与
+/// `ws.project_preview` 各自 `next_id` 从 0 起数,同进一个池会撞)。Task 3
+/// 引入的核心不变量,拆开单测锁住。
+#[cfg(test)]
+mod preview_desired_concurrent_tests {
+    use super::*;
+
+    #[test]
+    #[allow(clippy::eq_op, clippy::assertions_on_constants, clippy::identity_op)]
+    fn project_id_offset_keeps_ids_disjoint_from_files() {
+        assert!(PROJECT_PREVIEW_ID_OFFSET > 0);
+        let project_id = 0 + PROJECT_PREVIEW_ID_OFFSET;
+        assert_ne!(project_id, 0usize);
+        assert!(
+            PROJECT_PREVIEW_ID_OFFSET > 100_000,
+            "off量级应远超真实 tab 数,才不会反向撞回 ws.preview 的 id"
+        );
+    }
+}
+
 /// 图标栏拖拽"移动到 `side` 栏第 `to` 位"的纯逻辑核心:不依赖 `App` 的
 /// 其他字段,抽成自由函数以便单元测试直接构造 `RailLayout` 验证(同 Stage 3
 /// `panel_mirrored_in` 的做法的理由——`App` 需要 `Client`/事件循环钩子,
@@ -861,28 +944,42 @@ pub(crate) fn apply_column_drag(
             }
         }
         Divider::LeftPairSplit => {
-            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            let side = state.layout.rail_layout.side_of(PanelKind::Files);
+            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let ratio = ((logical_x - byteui::theme::geometry::icon_rail_width()) / pair_w).clamp(
+            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
                 byteui::theme::geometry::min_split_ratio(),
                 byteui::theme::geometry::max_split_ratio(),
             );
+            let mirrored = side != PanelKind::Files.default_side();
+            let ratio = if list_rendered_first(true, mirrored) {
+                raw_ratio
+            } else {
+                1.0 - raw_ratio
+            };
             PanelDims {
                 files_split: ratio,
                 ..state.dims
             }
         }
         Divider::ProjectSplit => {
-            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            let side = state.layout.rail_layout.side_of(PanelKind::Project);
+            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let ratio = ((logical_x - byteui::theme::geometry::icon_rail_width()) / pair_w).clamp(
+            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
                 byteui::theme::geometry::min_split_ratio(),
                 byteui::theme::geometry::max_split_ratio(),
             );
+            let mirrored = side != PanelKind::Project.default_side();
+            let ratio = if list_rendered_first(true, mirrored) {
+                raw_ratio
+            } else {
+                1.0 - raw_ratio
+            };
             PanelDims {
                 project_split: ratio,
                 ..state.dims
@@ -952,14 +1049,26 @@ pub(crate) fn apply_column_drag(
             }
         }
         Divider::BrowserBookmarksSplit => {
-            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            let side = state.layout.rail_layout.side_of(PanelKind::Web);
+            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let ratio = ((logical_x - byteui::theme::geometry::icon_rail_width()) / pair_w).clamp(
+            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
                 byteui::theme::geometry::min_split_ratio(),
                 byteui::theme::geometry::max_split_ratio(),
             );
+            let mirrored = side != PanelKind::Web.default_side();
+            // browser_bookmarks_split 存的是"内容占比"(Web 唯一反着命名
+            // 的字段),content 默认渲染在前,所以这里 `list_rendered_first`
+            // 的 `default_list_first` 参数传 `false`(不是 `true`)——
+            // "list" 这个泛化概念在 Web 这里对应收藏夹侧栏,不是内容。
+            // 翻转方向和 Files/Project 相反,写反会收藏夹拖拽方向错乱。
+            let ratio = if list_rendered_first(false, mirrored) {
+                1.0 - raw_ratio
+            } else {
+                raw_ratio
+            };
             PanelDims {
                 browser_bookmarks_split: ratio,
                 ..state.dims
@@ -1044,7 +1153,7 @@ pub(crate) fn apply_row_drag(
 /// 之间,`bordered` 再铺满其内边距之内),所以这一份公式两侧共用:三层留白
 /// 累加 = 图标栏宽 + `maximize_overlay` 里 dim_bg 的内边距——`bordered`
 /// 容器本身无内边距、宽度铺满,所以到这里为止。
-/// `preview_content_bounds`/`is_in_preview_column`/`terminal_pane_pixel_size`
+/// `preview_content_bounds_for`/`is_in_preview_column`/`terminal_pane_pixel_size`
 /// 都靠它换算放大态几何,不能各写各的字面量,否则和 `maximize_overlay`
 /// 实际渲染的画面对不上。
 fn maximized_box_x_range(window_width: f32) -> (f32, f32) {
@@ -1068,48 +1177,71 @@ fn maximized_box_height(window_height: f32) -> f32 {
     .max(0.0)
 }
 
-/// 窗口逻辑尺寸 → 左侧文件预览内容区矩形(逻辑像素 x/y/w/h)，供
-/// main.rs 摆放 wry webview 用。左侧收起时返回零尺寸矩形。
+/// 窗口逻辑尺寸 → `side` 这一侧当前活跃 webview 面板(如果有)的内容区
+/// 矩形(逻辑像素 x/y/w/h),供 main.rs 摆放 wry webview 用。`side` 这一
+/// 侧收起、或不是 webview 面板(GitLog/Todo/Database/Ssh/Agent/
+/// Conversations/Usage/Acceptance)时返回零尺寸矩形。
 ///
-/// 放大态(Task 5):右侧被放大时左侧内容被 `maximize_overlay` 的变暗遮罩
-/// 整片盖住——但 wry webview 是原生子视图,不听 iced 的绘制顺序摆布,会
-/// 无视遮罩径直叠在最上面,必须用零尺寸矩形把它真正藏起来(与
-/// `left_collapsed` 分支同一手法)。左侧被放大时,矩形要按
-/// `maximize_overlay` 实际渲染的更大盒子重新换算,不能再用平时的
-/// `left_zone_width`。
-pub fn preview_content_bounds(
+/// 放大态:另一侧被放大时这一侧内容被 `maximize_overlay` 的变暗遮罩整片
+/// 盖住——但 wry webview 是原生子视图,不听 iced 的绘制顺序摆布,会无视
+/// 遮罩径直叠在最上面,必须用零尺寸矩形把它真正藏起来(与 `collapsed`
+/// 分支同一手法)。这一侧被放大时,矩形要按 `maximize_overlay` 实际渲染
+/// 的更大盒子重新换算,不能再用平时的 zone 宽度公式。
+///
+/// 2026-08-19 Stage 4a 审阅后修订:此前隐式假设"任一时刻至多一个 webview
+/// 面板活跃、只服务左栏",在 `Files` 留左栏、`Project` 挪右栏这类一步
+/// 拖拽即可达到的状态下会漏掉右栏那一个——现在两侧各自独立算,`main.rs`
+/// 对左右两侧各调一次。
+pub fn preview_content_bounds_for(
+    side: Side,
     window_width: f32,
     window_height: f32,
     state: &ShellState,
 ) -> (f32, f32, f32, f32) {
-    if state.left_collapsed {
+    let collapsed = match side {
+        Side::Left => state.left_collapsed,
+        Side::Right => state.right_collapsed,
+    };
+    if collapsed {
         return (0.0, 0.0, 0.0, 0.0);
     }
-    if state.maximized == Some(MaximizedPane::Right) {
-        return (0.0, 0.0, 0.0, 0.0);
-    }
-    // 两分支 chrome 高度不同(浏览器仍有地址栏,文件预览已去掉),必须各用
-    // 各的常量——共用一个会在文件预览顶上留出一截再也画不出东西的空白
-    // (webview 摆位比实际渲染的 tab 栏低了一整个地址栏的高度)。
-    if state.maximized == Some(MaximizedPane::Left) {
+    let kind = match side {
+        Side::Left => state.left_view,
+        Side::Right => state.right_view,
+    };
+    let mirrored = state.layout.rail_layout.side_of(kind) != kind.default_side();
+    if let Some(maximized) = state.maximized {
         let (x0, avail_w) = maximized_box_x_range(window_width);
         let y0 = byteui::theme::geometry::top_bar_height()
             + byteui::theme::geometry::maximize_overlay_padding();
-        // 同样扣掉 footbar 高度,让放大态 webview 底部也不戳到 footbar。
+        // 放大的是另一侧:这一侧内容被变暗遮罩整片盖住,原生 wry 子视图
+        // 不听 iced 绘制顺序,必须用零尺寸矩形真正藏起来(同 `collapsed`
+        // 分支同一手法)。
+        let showing_side = match maximized {
+            MaximizedPane::Left => Side::Left,
+            MaximizedPane::Right => Side::Right,
+        };
+        if side != showing_side {
+            return (0.0, 0.0, 0.0, 0.0);
+        }
+        // 两分支 chrome 高度不同(浏览器仍有地址栏,文件预览已去掉),必须
+        // 各用各的常量——共用一个会在文件预览顶上留出一截再也画不出东西
+        // 的空白(webview 摆位比实际渲染的 tab 栏低了一整个地址栏的高度)。
         let avail_h = (maximized_box_height(window_height)
             - byteui::theme::geometry::status_bar_height())
         .max(0.0);
-        return match state.left_view {
+        return match kind {
             PanelKind::Files => {
                 let y = y0 + byteui::theme::geometry::preview_chrome_top_px();
                 let h = (avail_h - byteui::theme::geometry::preview_chrome_top_px() - 8.0).max(0.0);
                 let pair_w = pair_content_width(avail_w);
-                let (list_w, content_w) = pair_list_content_width(pair_w, state.dims.files_split);
-                let x = x0 + list_w + byteui::theme::geometry::divider_width() + 8.0;
-                let w = (content_w - 16.0).max(0.0);
+                let cols = pair_columns(pair_w, state.dims.files_split, mirrored);
+                let x = x0 + cols.content_x + 8.0;
+                let w = (cols.content_w - 16.0).max(0.0);
                 (x, y, w, h)
             }
-            // 浏览器(Web)是单栏(无配对),放大态占满整条放大盒子。
+            // 浏览器(Web)是单栏(无配对),放大态占满整条放大盒子,side
+            // 不影响它的矩形——但仍需先过上面的 `side != showing_side` 判断。
             PanelKind::Web => {
                 let y = y0 + byteui::theme::geometry::browser_chrome_top_px();
                 let h = (avail_h - byteui::theme::geometry::browser_chrome_top_px() - 8.0).max(0.0);
@@ -1118,75 +1250,94 @@ pub fn preview_content_bounds(
                 (x, y, w, h)
             }
             // Git 提交图是原生 Canvas 绘制,不挂 webview 子视图。
-            PanelKind::GitLog => (0.0, 0.0, 0.0, 0.0),
+            PanelKind::GitLog
             // Todo 面板同 GitLog,纯 iced 绘制,不挂 webview 子视图。
-            PanelKind::Todo => (0.0, 0.0, 0.0, 0.0),
-            // Project 面板的右配对(项目预览)是 Files 同款预览 chrome,按
-            // `project_split` 算出右配对那条 webview 的矩形。
+            | PanelKind::Todo => (0.0, 0.0, 0.0, 0.0),
             PanelKind::Project => {
                 let y = y0 + byteui::theme::geometry::preview_chrome_top_px();
                 let h = (avail_h - byteui::theme::geometry::preview_chrome_top_px() - 8.0).max(0.0);
                 let pair_w = pair_content_width(avail_w);
-                let (list_w, content_w) = pair_list_content_width(pair_w, state.dims.project_split);
-                let x = x0 + list_w + byteui::theme::geometry::divider_width() + 8.0;
-                let w = (content_w - 16.0).max(0.0);
+                let cols = pair_columns(pair_w, state.dims.project_split, mirrored);
+                let x = x0 + cols.content_x + 8.0;
+                let w = (cols.content_w - 16.0).max(0.0);
                 (x, y, w, h)
             }
-            // Database 面板同 Project,纯 iced 绘制,不挂 webview 子视图。
-            PanelKind::Database => (0.0, 0.0, 0.0, 0.0),
-            // SSH 面板同 Project,纯 iced 绘制,阶段 1 不挂 webview 子视图。
-            PanelKind::Ssh => (0.0, 0.0, 0.0, 0.0),
-            // Stage 4a 跨栏拖拽后 `left_view` 可以是右栏面板(Agent/
-            // Conversations/Usage/Acceptance)——它们纯 iced 绘制、右侧没有
-            // webview,左区无 webview 可摆,返回空矩形。代理案归 Stage 4b。
-            PanelKind::Agent
+            // Database/Ssh/Todo/GitLog 纯 iced 绘制,不挂 webview 子视图;
+            // Agent/Conversations/Usage/Acceptance 同理——任一侧放大只要
+            // 显示的是这几种,都没有 webview 可摆。
+            PanelKind::Database
+            | PanelKind::Ssh
+            | PanelKind::Agent
             | PanelKind::Conversations
             | PanelKind::Usage
             | PanelKind::Acceptance => (0.0, 0.0, 0.0, 0.0),
         };
     }
-    let left_w = left_zone_width(window_width, state);
-    // `left_zone` 的上下 margin:webview 必须跟着 inset,否则会戳出外边框
-    // (原生子视图不听 iced 布局,逐像素靠这里算)。左右 margin 同样要算进去,
-    // 否则去掉外边框后 webview 会戳出新增的左侧留白。
-    let m = theme::region::left_zone().margin;
+    let (zone_x0, zone_w) = pair_x0_and_width(side, window_width, state);
+    // `left_zone`/`right_zone` 的上下 margin:webview 必须跟着 inset,否则
+    // 会戳出外边框(原生子视图不听 iced 布局,逐像素靠这里算)。左右 margin
+    // 同样要算进去,否则去掉外边框后 webview 会戳出新增的留白。
+    let m = match side {
+        Side::Left => theme::region::left_zone().margin,
+        Side::Right => theme::region::right_zone().margin,
+    };
     let y_top =
         |chrome_top: f32| -> f32 { byteui::theme::geometry::top_bar_height() + m.top + chrome_top };
     // 底部扣 footbar(`extensions::footbar::view` 的固定高度
     // = `byteui::theme::geometry::status_bar_height()`)——wry webview 不听 iced
     // 布局,若不扣会把 footbar 文字盖在底下。不留额外 8px 间隙,让
-    // webview 底部紧贴 footbar 顶部(只留 left_zone 的下 margin)。
+    // webview 底部紧贴 footbar 顶部(只留 zone 的下 margin)。
     let h_for = |y: f32| -> f32 {
         (window_height - y - m.bottom - byteui::theme::geometry::status_bar_height()).max(0.0)
     };
-    match state.left_view {
+    match kind {
         PanelKind::Files => {
             let y = y_top(byteui::theme::geometry::preview_chrome_top_px());
             let h = h_for(y);
-            let pair_w = pair_content_width(left_w);
-            let (list_w, content_w) = pair_list_content_width(pair_w, state.dims.files_split);
-            let x = byteui::theme::geometry::icon_rail_width()
-                + list_w
-                + byteui::theme::geometry::divider_width()
-                + 8.0
-                + m.left;
-            let w = (content_w - 16.0 - m.left - m.right).max(0.0);
+            let cols = pair_columns(zone_w, state.dims.files_split, mirrored);
+            let x = zone_x0 + cols.content_x + 8.0 + m.left;
+            let w = (cols.content_w - 16.0 - m.left - m.right).max(0.0);
             (x, y, w, h)
         }
-        // 浏览器(Web):收藏夹侧栏关闭时单栏占满左面板区;打开时网页内容
-        // 让出右侧收藏夹侧栏的宽度(纯 iced 渲染,不挂 webview,几何计算
-        // 不用管它)。
+        // 浏览器(Web):收藏夹侧栏关闭时单栏占满该侧面板区;打开时网页内容
+        // 让出收藏夹侧栏的宽度。收藏夹在"内容"前面还是后面同样按
+        // `mirrored` 决定(`split` 参数传 "收藏夹占比" = `1.0 -
+        // browser_bookmarks_split`,因为该字段存的是内容占比,和其余 split
+        // 字段"存列表侧占比"的语义相反)。
+        // Web 单栏没有配对,占用**整条**左/右面板区宽——不是 `pair_x0_and_width`
+        // 返回的 `zone_w`(扣过中间分隔线的配对宽),要用原始区宽。
         PanelKind::Web => {
             let y = y_top(byteui::theme::geometry::browser_chrome_top_px());
             let h = h_for(y);
-            let x = byteui::theme::geometry::icon_rail_width() + 8.0 + m.left;
-            let w = if state.browser_bookmarks_open {
-                let pair_w = pair_content_width(left_w);
-                let (_bookmarks_w, content_w) =
-                    pair_list_content_width(pair_w, 1.0 - state.dims.browser_bookmarks_split);
-                (content_w - 16.0 - m.left - m.right).max(0.0)
+            let zone_raw_w = match side {
+                Side::Left => left_zone_width(window_width, state),
+                Side::Right => right_zone_width(window_width, state),
+            };
+            let (x, w) = if state.browser_bookmarks_open {
+                // `pair_columns` 内建约定是"mirrored=false 时 list 先渲染",
+                // 但 `browser.rs::view` 对 Web 用的是相反约定("mirror=false
+                // 时 content 先渲染",见 `if mirror { row![bookmarks, divider,
+                // content] } else { row![content, divider, bookmarks] }")——
+                // 这里的 `mirrored` 要取反再传给 `pair_columns`,否则
+                // `cols.content_x` 会算成跟实际渲染顺序相反的那一侧,mirrored
+                // 态下 webview 会摆到收藏夹底下而不是收藏夹之后。宽度这半支
+                // 同时要用 `pair_content_width(zone_raw_w)`(扣过中间分隔线)
+                // 而不是裸的 `zone_raw_w`——iced 的 `FillPortion` 就是在扣掉
+                // 固定宽分隔线之后才按权重分剩余空间的(见 `split_portions`
+                // 文档注释),否则 webview 宽度会比实际渲染的内容列宽出一条
+                // 分隔线的量,右边界戳出内容列。
+                let cols = pair_columns(
+                    pair_content_width(zone_raw_w),
+                    1.0 - state.dims.browser_bookmarks_split,
+                    !mirrored,
+                );
+                let x = zone_x0 + cols.content_x + 8.0 + m.left;
+                let w = (cols.content_w - 16.0 - m.left - m.right).max(0.0);
+                (x, w)
             } else {
-                (left_w - 16.0 - m.left - m.right).max(0.0)
+                let x = zone_x0 + 8.0 + m.left;
+                let w = (zone_raw_w - 16.0 - m.left - m.right).max(0.0);
+                (x, w)
             };
             (x, y, w, h)
         }
@@ -1198,62 +1349,70 @@ pub fn preview_content_bounds(
         PanelKind::Project => {
             let y = y_top(byteui::theme::geometry::preview_chrome_top_px());
             let h = h_for(y);
-            let pair_w = pair_content_width(left_w);
-            let (list_w, content_w) = pair_list_content_width(pair_w, state.dims.project_split);
-            let x = byteui::theme::geometry::icon_rail_width()
-                + list_w
-                + byteui::theme::geometry::divider_width()
-                + 8.0
-                + m.left;
-            let w = (content_w - 16.0 - m.left - m.right).max(0.0);
+            let cols = pair_columns(zone_w, state.dims.project_split, mirrored);
+            let x = zone_x0 + cols.content_x + 8.0 + m.left;
+            let w = (cols.content_w - 16.0 - m.left - m.right).max(0.0);
             (x, y, w, h)
         }
         // Database 面板同 Project,纯 iced 绘制,不挂 webview 子视图。
         PanelKind::Database => (0.0, 0.0, 0.0, 0.0),
         // SSH 面板同 Project,纯 iced 绘制,阶段 1 不挂 webview 子视图。
         PanelKind::Ssh => (0.0, 0.0, 0.0, 0.0),
-        // Stage 4a 跨栏拖拽:左视图可为右栏面板,右栏面板纯 iced 绘制、
-        // 左区无 webview 可摆,装空矩形。
+        // Stage 4a 跨栏拖拽:该侧视图可为另一栏面板,纯 iced 绘制、该侧
+        // 无 webview 可摆,装空矩形。
         PanelKind::Agent | PanelKind::Conversations | PanelKind::Usage | PanelKind::Acceptance => {
             (0.0, 0.0, 0.0, 0.0)
         }
     }
 }
 
-/// 左侧文件树的**目录列表 Scrollable** 在窗口坐标系里的矩形（上/左/宽/高，
-/// 逻辑像素），供 main.rs 做外部文件拖拽命中测试。返回的矩形只覆盖列表
-/// 视口本身——命中测试据此把窗口 Y 换算成 `tree_scroll` 偏移下的"可见行
-/// 序号"，再推出那行是不是目录。
+/// `side` 这一侧文件树的**目录列表 Scrollable** 在窗口坐标系里的矩形
+/// (上/左/宽/高,逻辑像素),供 main.rs 做外部文件拖拽命中测试。返回的
+/// 矩形只覆盖列表视口本身——命中测试据此把窗口 Y 换算成 `tree_scroll`
+/// 偏移下的"可见行序号",再推出那行是不是目录。
 ///
-/// 与 `preview_content_bounds` 同源（外层）但其目标是**配对里左侧那一栏**
-/// （树），不是右侧的 webview 列，所以横向起点去掉了分隔线+8px、纵向起点
-/// 换用 `tree_chrome_top_px`（面板头+搜索/工具栏），底部扣 `git 脚注栏`
-/// 而非 footbar 专用常量。表单汇总：
+/// 与 `preview_content_bounds_for` 同源(外层)但其目标是**配对里 list 那一
+/// 栏**(树),不是 webview 的 content 列,所以横向起点用 `pair_columns`
+/// 的 `list_x`(mirrored 时在 content 之后)、纵向起点换用
+/// `tree_chrome_top_px`(面板头+搜索/工具栏),底部扣 `git 脚注栏` 而非
+/// footbar 专用常量。
 ///
-/// - 外层：左栏位于 `icon_rail_width + m.left`，纵向从 `top_bar_height +
-///   m.top` 起、到 `window_height - m.bottom - status_bar_height` 止；
-///   栏宽 = `pair_content_width(left_w) * files_split`。
-/// - 内层：`project_pane().padding` 给容器留内边距；`tree_chrome_top_px()`
-///   盖掉上方（面板头+搜索行+两段间距），`tree_chrome_bottom_px()` 盖掉
-///   下方（git 脚注栏+间距+下内边距）。
-///
-/// 不可命中（左侧收起 / 右侧放大 / 不在文件树视图）时返回零尺寸矩形。
-/// 放大态左侧(`MaximizedPane::Left`)按 `maximize_overlay` 的实际盒子换算。
-pub fn left_files_tree_bounds(
+/// 不可命中(该侧收起 / 不是 Files / 放大的是另一侧)时返回零尺寸矩形。
+/// 该侧被放大(`MaximizedPane` 对应该侧)按 `maximize_overlay` 的实际盒子
+/// 换算。
+pub fn left_files_tree_bounds_for(
+    side: Side,
     window_width: f32,
     window_height: f32,
     state: &ShellState,
 ) -> (f32, f32, f32, f32) {
     let zero = || (0.0, 0.0, 0.0, 0.0);
-    if state.left_collapsed || state.left_view != PanelKind::Files {
+    let kind = match side {
+        Side::Left => state.left_view,
+        Side::Right => state.right_view,
+    };
+    let collapsed = match side {
+        Side::Left => state.left_collapsed,
+        Side::Right => state.right_collapsed,
+    };
+    if collapsed || kind != PanelKind::Files {
         return zero();
     }
-    let m = theme::region::left_zone().margin;
+    let m = match side {
+        Side::Left => theme::region::left_zone().margin,
+        Side::Right => theme::region::right_zone().margin,
+    };
     let p = theme::region::project_pane();
-    if state.maximized == Some(MaximizedPane::Right) {
-        return zero();
-    }
-    if state.maximized == Some(MaximizedPane::Left) {
+    let mirrored =
+        state.layout.rail_layout.side_of(PanelKind::Files) != PanelKind::Files.default_side();
+    if let Some(maximized) = state.maximized {
+        let showing_side = match maximized {
+            MaximizedPane::Left => Side::Left,
+            MaximizedPane::Right => Side::Right,
+        };
+        if side != showing_side {
+            return zero();
+        }
         let (x0, avail_w) = maximized_box_x_range(window_width);
         let y_top = byteui::theme::geometry::top_bar_height()
             + byteui::theme::geometry::maximize_overlay_padding();
@@ -1261,9 +1420,13 @@ pub fn left_files_tree_bounds(
             - byteui::theme::geometry::status_bar_height())
         .max(0.0);
         let pair_w = pair_content_width(avail_w);
-        let (list_w, _content_w) = pair_list_content_width(pair_w, state.dims.files_split);
-        let x = x0 + m.left + p.padding.left;
-        let w = (list_w - p.padding.left - p.padding.right).max(0.0);
+        let cols = pair_columns(pair_w, state.dims.files_split, mirrored);
+        let x = if mirrored {
+            x0 + cols.list_x + byteui::theme::geometry::divider_width() + m.left + p.padding.left
+        } else {
+            x0 + cols.list_x + m.left + p.padding.left
+        };
+        let w = (cols.list_w - p.padding.left - p.padding.right).max(0.0);
         let y = y_top + m.top + p.padding.top + theme::geometry::tree_chrome_top_px();
         let h = (avail_h
             - m.top
@@ -1275,10 +1438,17 @@ pub fn left_files_tree_bounds(
         .max(0.0);
         return (x, y, w, h);
     }
-    let left_w = left_zone_width(window_width, state);
-    let (list_w, _) = pair_list_content_width(pair_content_width(left_w), state.dims.files_split);
-    let x = byteui::theme::geometry::icon_rail_width() + m.left + p.padding.left;
-    let w = (list_w - p.padding.left - p.padding.right).max(0.0);
+    // `pair_x0_and_width` 返回的第二个值已经是 `pair_content_width(...)`
+    // 之后的值(扣过分隔线的配对内容宽)——直接用作 `pair_columns` 的
+    // `pair_w`,不要再包一层 `pair_content_width`,否则宽度多扣一次分隔线。
+    let (zone_x0, zone_w) = pair_x0_and_width(side, window_width, state);
+    let cols = pair_columns(zone_w, state.dims.files_split, mirrored);
+    let x = if mirrored {
+        zone_x0 + cols.list_x + byteui::theme::geometry::divider_width() + m.left + p.padding.left
+    } else {
+        zone_x0 + cols.list_x + m.left + p.padding.left
+    };
+    let w = (cols.list_w - p.padding.left - p.padding.right).max(0.0);
     let y_pane = byteui::theme::geometry::top_bar_height() + m.top;
     let y = y_pane + p.padding.top + theme::geometry::tree_chrome_top_px();
     let h = ((window_height - m.bottom - byteui::theme::geometry::status_bar_height())
@@ -1294,92 +1464,83 @@ pub fn left_files_tree_bounds(
 ///
 /// 放大态(Task 5):右侧被放大时左侧内容不可见,恒不落在预览列;左侧被
 /// 放大时按 `maximize_overlay` 实际渲染的更大盒子重新换算横向范围。
-pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bool {
-    if state.left_collapsed {
-        return false;
-    }
-    if state.maximized == Some(MaximizedPane::Right) {
-        return false;
-    }
-    if state.maximized == Some(MaximizedPane::Left) {
-        let (x0, avail_w) = maximized_box_x_range(window_width);
-        return match state.left_view {
-            PanelKind::Files => {
-                let (list_w, _) =
-                    pair_list_content_width(pair_content_width(avail_w), state.dims.files_split);
-                let start = x0 + list_w + byteui::theme::geometry::divider_width();
-                let end = x0 + avail_w;
-                x >= start && x < end
-            }
-            // 浏览器(Web)是单栏,放大态占满整条放大盒子横向范围。
-            PanelKind::Web => {
-                let start = x0;
-                let end = start + avail_w;
-                x >= start && x < end
-            }
-            PanelKind::GitLog => false,
-            // Todo 面板纯 iced 绘制,无 webview,永不落在预览列。
-            PanelKind::Todo => false,
-            // Project 面板右配对(项目预览)是 Files 同款预览列,按 `project_split` 算。
-            PanelKind::Project => {
-                let (list_w, _) =
-                    pair_list_content_width(pair_content_width(avail_w), state.dims.project_split);
-                let start = x0 + list_w + byteui::theme::geometry::divider_width();
-                let end = x0 + avail_w;
-                x >= start && x < end
-            }
-            // Database 面板同 Project,纯 iced 绘制,永无 webview。
-            PanelKind::Database => false,
-            // SSH 面板同 Project,纯 iced 绘制,永无 webview。
-            PanelKind::Ssh => false,
-            // Stage 4a 跨栏拖拽:左视图可为右栏面板,右栏面板无 webview,
-            // 永不落在预览列。
-            PanelKind::Agent
-            | PanelKind::Conversations
-            | PanelKind::Usage
-            | PanelKind::Acceptance => false,
+/// 逻辑 x 是否落在某一侧的预览列内,是则返回命中的面板种类;焦点路由
+/// (`main.rs`)据此决定把键盘交给哪个 webview 池(`Web` → 浏览器池,
+/// `Files`/`Project` → 预览池)、以及 `active_preview_webview_id` 该查
+/// `ws.preview` 还是 `ws.project_preview`。
+///
+/// 2026-08-19 Stage 4a 审阅后修订:此前只查 `state.left_view`,`Project`
+/// 挪到右栏后点击其预览列不会被识别;现在左右两侧各自独立判断。
+///
+/// `Web` 分支保留原有近似(整个 zone 都算预览列,不细分收藏夹展开时的
+/// 精确切分——延续现状)。
+pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> Option<PanelKind> {
+    for side in [Side::Left, Side::Right] {
+        let collapsed = match side {
+            Side::Left => state.left_collapsed,
+            Side::Right => state.right_collapsed,
         };
+        if collapsed {
+            continue;
+        }
+        let kind = match side {
+            Side::Left => state.left_view,
+            Side::Right => state.right_view,
+        };
+        if let Some(maximized) = state.maximized {
+            let showing_side = match maximized {
+                MaximizedPane::Left => Side::Left,
+                MaximizedPane::Right => Side::Right,
+            };
+            if side != showing_side {
+                continue;
+            }
+            let (x0, avail_w) = maximized_box_x_range(window_width);
+            let mirrored = state.layout.rail_layout.side_of(kind) != kind.default_side();
+            let hit = match kind {
+                PanelKind::Files => {
+                    let cols = pair_columns(
+                        pair_content_width(avail_w),
+                        state.dims.files_split,
+                        mirrored,
+                    );
+                    x >= x0 + cols.content_x && x < x0 + cols.content_x + cols.content_w
+                }
+                PanelKind::Web => x >= x0 && x < x0 + avail_w,
+                PanelKind::Project => {
+                    let cols = pair_columns(
+                        pair_content_width(avail_w),
+                        state.dims.project_split,
+                        mirrored,
+                    );
+                    x >= x0 + cols.content_x && x < x0 + cols.content_x + cols.content_w
+                }
+                _ => false,
+            };
+            if hit {
+                return Some(kind);
+            }
+            continue;
+        }
+        let (zone_x0, zone_w) = pair_x0_and_width(side, window_width, state);
+        let mirrored = state.layout.rail_layout.side_of(kind) != kind.default_side();
+        let hit = match kind {
+            PanelKind::Files => {
+                let cols = pair_columns(zone_w, state.dims.files_split, mirrored);
+                x >= zone_x0 + cols.content_x && x < zone_x0 + cols.content_x + cols.content_w
+            }
+            PanelKind::Web => x >= zone_x0 && x < zone_x0 + zone_w,
+            PanelKind::Project => {
+                let cols = pair_columns(zone_w, state.dims.project_split, mirrored);
+                x >= zone_x0 + cols.content_x && x < zone_x0 + cols.content_x + cols.content_w
+            }
+            _ => false,
+        };
+        if hit {
+            return Some(kind);
+        }
     }
-    let left_w = left_zone_width(window_width, state);
-    match state.left_view {
-        PanelKind::Files => {
-            let (list_w, _) =
-                pair_list_content_width(pair_content_width(left_w), state.dims.files_split);
-            let start = byteui::theme::geometry::icon_rail_width()
-                + list_w
-                + byteui::theme::geometry::divider_width();
-            let end = byteui::theme::geometry::icon_rail_width() + left_w;
-            x >= start && x < end
-        }
-        // 浏览器(Web)是单栏,占满整条左面板区横向范围。
-        PanelKind::Web => {
-            let start = byteui::theme::geometry::icon_rail_width();
-            let end = start + left_w;
-            x >= start && x < end
-        }
-        PanelKind::GitLog => false,
-        // Todo 面板纯 iced 绘制,无 webview,永不落在预览列。
-        PanelKind::Todo => false,
-        // Project 面板右配对(项目预览)是 Files 同款预览列,按 `project_split` 算。
-        PanelKind::Project => {
-            let (list_w, _) =
-                pair_list_content_width(pair_content_width(left_w), state.dims.project_split);
-            let start = byteui::theme::geometry::icon_rail_width()
-                + list_w
-                + byteui::theme::geometry::divider_width();
-            let end = byteui::theme::geometry::icon_rail_width() + left_w;
-            x >= start && x < end
-        }
-        // Database 面板同 Project,纯 iced 绘制,永无 webview。
-        PanelKind::Database => false,
-        // SSH 面板同 Project,纯 iced 绘制,永无 webview。
-        PanelKind::Ssh => false,
-        // Stage 4a 跨栏拖拽:左视图可为右栏面板,右栏面板无 webview,
-        // 永不落在预览列。
-        PanelKind::Agent | PanelKind::Conversations | PanelKind::Usage | PanelKind::Acceptance => {
-            false
-        }
-    }
+    None
 }
 
 /// 逻辑 x 落在哪一侧面板区(整区,不分区内具体是哪个 pane)。左键点击
@@ -2241,6 +2402,16 @@ fn ensure_project_readme(repo: &std::path::Path, name: &str) -> Option<std::path
     }
 }
 
+/// `ws.preview`(Files)与 `ws.project_preview`(Project)是两个独立
+/// `PreviewPane`,各自 `next_id` 从 0 起数——两者的 webview 一旦同时
+/// 进同一个 `webviews` 池(`Files` 在左栏、`Project` 在右栏同时活跃时
+/// 就会发生),原始 id 会撞(两边都可能是 0/1/2...)。给 `Project` 那
+/// 一侧的 id 统一加这个偏移,`ws.preview` 侧不动——量级远超真实 tab
+/// 数(几十个封顶),不会反向撞回 `ws.preview` 的 id 区间。main.rs 里
+/// 任何按 id 反查 `ws.project_preview` webview(`active_preview_webview_id`
+/// 的 Project 分支)都要用同一个偏移量加/减,两处不同步会导致查错池。
+pub(crate) const PROJECT_PREVIEW_ID_OFFSET: usize = 1_000_000;
+
 impl App {
     /// `todo::AppState`(派发记录等)只读访问——`agent_card` 挂在
     /// `workspace.rs`,读不到 `App` 私有字段,需要这个跨模块 accessor 才能
@@ -2417,8 +2588,8 @@ impl App {
     /// `CursorMoved`/`DroppedFile` 上调用它——只要不在文件树目录行上就返回
     /// `None`（此时拖入按现状落给终端）。
     ///
-    /// 不做任何像素布局复制：文件树列的矩形由 [`left_files_tree_bounds`]
-    /// 按 `preview_content_bounds` 同源的谱系换算，可见行集合从当前项目
+    /// 不做任何像素布局复制：文件树列的矩形由 [`left_files_tree_bounds_for`]
+    /// 按 `preview_content_bounds_for` 同源的谱系换算，可见行集合从当前项目
     /// `WorkspaceState` 现取现算，二者与渲染侧 `files::view` 同源。
     pub fn files_drop_target(
         &self,
@@ -2427,11 +2598,24 @@ impl App {
         x: f32,
         y: f32,
     ) -> Option<PathBuf> {
-        if self.left_collapsed || self.left_view != PanelKind::Files {
+        let side = self
+            .shell_state()
+            .layout
+            .rail_layout
+            .side_of(PanelKind::Files);
+        let kind = match side {
+            Side::Left => self.left_view,
+            Side::Right => self.right_view,
+        };
+        let collapsed = match side {
+            Side::Left => self.left_collapsed,
+            Side::Right => self.right_collapsed,
+        };
+        if collapsed || kind != PanelKind::Files {
             return None;
         }
         let ws = self.active_workspace()?;
-        let bounds = left_files_tree_bounds(window_w, window_h, &self.shell_state());
+        let bounds = left_files_tree_bounds_for(side, window_w, window_h, &self.shell_state());
         let rows = ws.files.visible_tree_rows();
         files::tree_drop_target(x, y, bounds, ws.files.tree_scroll(), &rows)
     }
@@ -2933,9 +3117,19 @@ impl App {
             .is_some_and(|ws| ws.active_app_cursor_mode())
     }
 
-    /// 当前激活预览 tab 的 webview id(main.rs 焦点路由用)。
-    pub fn active_preview_webview_id(&self) -> Option<usize> {
-        self.active_workspace()?.active_preview_webview_id()
+    /// `kind` 是 `is_in_preview_column` 命中的面板(`Files` 或 `Project`),
+    /// 据此查 `ws.preview`(Files)还是 `ws.project_preview`(Project)——后者
+    /// 的 id 已加 `PROJECT_PREVIEW_ID_OFFSET`(见 workspace.rs 同名方法)。
+    /// main.rs 焦点路由取句柄用。
+    pub fn active_preview_webview_id(&self, kind: PanelKind) -> Option<usize> {
+        self.active_workspace()?.active_preview_webview_id(kind)
+    }
+
+    /// 当前哪个预览面板有活跃 webview(`Files`/`Project`/`None`),
+    /// 语义见 workspace.rs 同名方法。`WebViewFocused` 这种不携带面板
+    /// 信息的信号需要反推池身份时用。
+    pub fn active_preview_panel_kind(&self) -> Option<PanelKind> {
+        self.active_workspace()?.active_preview_panel_kind()
     }
 
     /// 当前激活浏览器 tab 的 webview id,语义同 `active_preview_webview_id`。
@@ -3410,9 +3604,9 @@ impl App {
     /// 那道闸门的道理——但原生预览不是模态弹层,还要求键盘焦点确实在预览列
     /// (`current_focus == FocusIntent::Preview`),否则用户正在打字给终端时,
     /// 只因为预览列背景里开着一个原生 tab 就会把按键错误地拦下来。
-    pub fn active_preview_tab_has_native_editor(&self) -> bool {
+    pub fn active_preview_tab_has_native_editor(&self, kind: PanelKind) -> bool {
         self.active_workspace()
-            .map(|ws| ws.active_preview_tab_has_native_editor())
+            .map(|ws| ws.active_preview_tab_has_native_editor(kind))
             .unwrap_or(false)
     }
 
@@ -3483,8 +3677,14 @@ impl App {
     /// 光标——单元格尺寸由 pane 像素 ÷ 网格推出,不依赖字号常量。
     pub fn ime_cursor_area(&self, window_w: f32, window_h: f32) -> (f32, f32, f32) {
         let state = self.shell_state();
-        if self.browser_addr_editing() || self.acceptance_comment_editing() {
-            let (bx, by, _bw, _bh) = preview_content_bounds(window_w, window_h, &state);
+        if self.browser_addr_editing() {
+            let side = state.layout.rail_layout.side_of(PanelKind::Web);
+            let (bx, by, _bw, _bh) = preview_content_bounds_for(side, window_w, window_h, &state);
+            return (bx + 4.0, by, 20.0);
+        }
+        if self.acceptance_comment_editing() {
+            let side = state.layout.rail_layout.side_of(PanelKind::Acceptance);
+            let (bx, by, _bw, _bh) = preview_content_bounds_for(side, window_w, window_h, &state);
             return (bx + 4.0, by, 20.0);
         }
         let (pane_w, pane_h) = terminal_pane_pixel_size(window_w, window_h, &state);
@@ -3509,66 +3709,90 @@ impl App {
         (x, y, line_h)
     }
 
-    /// 当前应存在的 webview 清单(main.rs 差集同步)。不在文件视图时整体
-    /// 清空:`preview_pane` 此刻根本不在屏上,若不清空,其原生 wry 子视图会
-    /// 无视 iced 绘制顺序,径直叠在浏览器视图之上(与 `browser_desired` 互斥
-    /// 同理)。webview 池是窗口级的,所以只认当前聚焦项目的清单——后台项目
-    /// 的预览 tab 不该把自己的原生子视图画到别人的界面上。
-    pub fn preview_desired(&self) -> Vec<WebviewSpec> {
-        // 进首页(Dozer Home)时,预览区根本不在屏上——原生 wry 子视图无视
-        // iced 绘制顺序,若不主动清空,会径直叠在 homespace 页面之上。
-        // 与 `browser_desired`(app.rs:1896 已对 Home 重定向到 `home_browser`)
-        // 保持一致:首页时不返回任何文件预览 webview,让 main.rs 的差集同步
-        // 把残留的那个销毁掉。
+    /// 当前应存在的"文件/项目预览"webview 清单(main.rs 差集同步用),
+    /// 每条自带按其所在侧算好的矩形。左右两侧各自独立判断——`Files` 在
+    /// 左栏、`Project` 在右栏可以同时非空(见 spec"webview 面板的镜像
+    /// bounds(2026-08-19 Stage 4a 审阅后修订)"一节)。不在文件视图时
+    /// 该侧整体不产出;进首页时两侧都不产出(原因见旧版注释:首页时
+    /// 预览区根本不在屏上)。
+    pub fn preview_desired(
+        &self,
+        window_width: f32,
+        window_height: f32,
+    ) -> Vec<(WebviewSpec, (f32, f32, f32, f32))> {
         if self.current_page == AppPage::Home {
-            return Vec::new();
-        }
-        if !matches!(self.left_view, PanelKind::Files | PanelKind::Project) {
             return Vec::new();
         }
         let Some(ws) = self.active_workspace() else {
             return Vec::new();
         };
-        // Files 预览取 `ws.preview`,Project 面板右配对取 `ws.project_preview`——
-        // 两者都是"预览区",复用同一支几何/可见性逻辑,只是状态源不同。
-        let specs = match self.left_view {
-            PanelKind::Files => ws.preview.desired_webviews(),
-            PanelKind::Project => ws.project_preview.desired_webviews(),
-            _ => Vec::new(),
-        };
-        // 编辑弹层开着时,应用级模态盖住了预览区,原生 wry 子视图不听 iced
-        // 绘制顺序摆布,必须显式 visible=false 才能真正藏起来。
-        // (预览 tab 右键菜单不藏 webview——它向上弹出,落在 tab 栏上方的
-        // iced 区域,根本不压到下方 webview,见 `preview_tab_context_menu_popup`。)
-        if ws.edit_session.is_some() {
-            specs
-                .into_iter()
-                .map(|mut s| {
+        let edit_open = ws.edit_session.is_some();
+        let mut out = Vec::new();
+        for side in [Side::Left, Side::Right] {
+            let kind = match side {
+                Side::Left => self.left_view,
+                Side::Right => self.right_view,
+            };
+            let (specs, id_offset): (Vec<WebviewSpec>, usize) = match kind {
+                PanelKind::Files => (ws.preview.desired_webviews(), 0),
+                PanelKind::Project => (
+                    ws.project_preview.desired_webviews(),
+                    PROJECT_PREVIEW_ID_OFFSET,
+                ),
+                _ => continue,
+            };
+            let bounds =
+                preview_content_bounds_for(side, window_width, window_height, &self.shell_state());
+            out.extend(specs.into_iter().map(|mut s| {
+                s.id += id_offset;
+                // 编辑弹层开着时,应用级模态盖住了预览区,原生 wry 子视图
+                // 不听 iced 绘制顺序摆布,必须显式 visible=false 才能真正
+                // 藏起来。
+                if edit_open {
                     s.visible = false;
-                    s
-                })
-                .collect()
-        } else {
-            specs
+                }
+                (s, bounds)
+            }));
         }
+        out
     }
 
     /// 浏览器域的 webview 清单,语义同 `preview_desired`,查独立的
-    /// `Workspace::browser`,且只在左视图为 `Web`(非首页)或首页时非空。
-    pub fn browser_desired(&self) -> Vec<WebviewSpec> {
+    /// `Workspace::browser`。首页时矩形留空(main.rs 用 `home_browser_bounds`
+    /// 单独覆盖,见调用处),工作区内按 `Web` 当前所在侧现算矩形。
+    pub fn browser_desired(
+        &self,
+        window_width: f32,
+        window_height: f32,
+    ) -> Vec<(WebviewSpec, (f32, f32, f32, f32))> {
         // 首页右栏恒为全局浏览器(`home_browser`),与 `left_view` 无关——
         // 进首页就让它成为浏览器 webview 池的唯一来源,否则默认 URL 的 tab
         // 建了却永远等不到 webview(见 `sync_webview_pool`)。
         if self.current_page == AppPage::Home {
-            return self.home_browser.desired_webviews();
+            return self
+                .home_browser
+                .desired_webviews()
+                .into_iter()
+                .map(|s| (s, (0.0, 0.0, 0.0, 0.0)))
+                .collect();
         }
-        if self.left_view != PanelKind::Web {
+        let side = if self.left_view == PanelKind::Web {
+            Side::Left
+        } else if self.right_view == PanelKind::Web {
+            Side::Right
+        } else {
             return Vec::new();
-        }
-        match self.active_workspace() {
-            Some(ws) => ws.browser.desired_webviews(),
-            None => Vec::new(),
-        }
+        };
+        let Some(ws) = self.active_workspace() else {
+            return Vec::new();
+        };
+        let bounds =
+            preview_content_bounds_for(side, window_width, window_height, &self.shell_state());
+        ws.browser
+            .desired_webviews()
+            .into_iter()
+            .map(|s| (s, bounds))
+            .collect()
     }
 
     /// 保证 `git_log` 状态跟得上"现在应该看哪个项目"——`git_log: State`
@@ -8847,7 +9071,7 @@ mod tests {
     fn preview_content_bounds_is_inside_left_content_column() {
         // 左面板区 640 宽,项目树占 0.35(=224),预览内容区在其右侧(过分隔线)。
         let state = test_state();
-        let (x, y, w, h) = preview_content_bounds(1440.0, 900.0, &state);
+        let (x, y, w, h) = preview_content_bounds_for(Side::Left, 1440.0, 900.0, &state);
         let list_w = state.dims.left_width * state.dims.files_split;
         let col_start = byteui::theme::geometry::icon_rail_width()
             + list_w
@@ -8869,7 +9093,7 @@ mod tests {
             left_view: PanelKind::Web,
             ..test_state()
         };
-        let (x, _, w, _) = preview_content_bounds(1440.0, 900.0, &state);
+        let (x, _, w, _) = preview_content_bounds_for(Side::Left, 1440.0, 900.0, &state);
         let m = theme::region::left_zone().margin;
         let left_w = left_zone_width(1440.0, &state);
         assert_eq!(x, byteui::theme::geometry::icon_rail_width() + 8.0 + m.left);
@@ -8888,17 +9112,64 @@ mod tests {
             browser_bookmarks_open: true,
             ..test_state()
         };
-        let (_, _, w_closed, _) = preview_content_bounds(1440.0, 900.0, &closed);
-        let (x_open, y_open, w_open, h_open) = preview_content_bounds(1440.0, 900.0, &open);
+        let (_, _, w_closed, _) = preview_content_bounds_for(Side::Left, 1440.0, 900.0, &closed);
+        let (x_open, y_open, w_open, h_open) =
+            preview_content_bounds_for(Side::Left, 1440.0, 900.0, &open);
         assert!(
             w_open < w_closed,
             "收藏夹打开时网页内容应该让出侧栏宽度: w_open={w_open} w_closed={w_closed}"
         );
         // x/y/h 不受收藏夹开关影响——网页内容起点、高度不变,只是变窄。
-        let (x_closed, y_closed, _, h_closed) = preview_content_bounds(1440.0, 900.0, &closed);
+        let (x_closed, y_closed, _, h_closed) =
+            preview_content_bounds_for(Side::Left, 1440.0, 900.0, &closed);
         assert_eq!(x_open, x_closed);
         assert_eq!(y_open, y_closed);
         assert_eq!(h_open, h_closed);
+    }
+
+    /// Stage 4b 审阅后修复:`Web` 被拖到非默认栏(镜像态)且收藏夹展开时,
+    /// iced 实际渲染顺序反过来(收藏夹先、内容后,见 `browser.rs::view`
+    /// 的 `if mirror { row![bookmarks, divider, content] }`)——webview 的
+    /// `x` 必须跟着挪到收藏夹之后,不能再固定在 zone 左边界;宽度也必须
+    /// 用 `pair_content_width` 扣过分隔线的宽度,否则和 iced 的
+    /// `FillPortion` 实际布局对不上。
+    #[test]
+    fn preview_content_bounds_web_view_mirrored_bookmarks_content_follows_render_order() {
+        let mut state = ShellState {
+            browser_bookmarks_open: true,
+            ..test_state()
+        };
+        state
+            .layout
+            .rail_layout
+            .left
+            .retain(|&k| k != PanelKind::Web);
+        state.layout.rail_layout.right.push(PanelKind::Web);
+        state.right_view = PanelKind::Web;
+
+        let window_width = 1600.0;
+        let (x, _, w, _) = preview_content_bounds_for(Side::Right, window_width, 900.0, &state);
+        let (zone_x0, zone_w) = pair_x0_and_width(Side::Right, window_width, &state);
+        let raw_zone_w = right_zone_width(window_width, &state);
+
+        // 镜像态下 content 是 pair 里第二个元素(收藏夹先),x 应该落在
+        // 收藏夹列 + 分隔线之后,不是 zone 左边界。
+        assert!(
+            x > zone_x0 + 8.0,
+            "镜像态 content 在收藏夹之后,x 应该比 zone 左边界更靠右: x={x} zone_x0={zone_x0}"
+        );
+        // 宽度按扣过分隔线的 pair 宽分配,不能用裸 zone 宽——否则右边界会
+        // 戳出 iced 实际渲染的内容列。content 列右边界(相对 zone_x0)按
+        // 构造应恰好等于裸区宽(list_w + divider + content_w = raw_zone_w),
+        // 即 webview 右边界不应超出这一侧面板区的实际右边界。
+        assert!(
+            zone_w < raw_zone_w,
+            "pair_x0_and_width 返回的应是扣过分隔线的宽度,测试前提不成立"
+        );
+        assert!(
+            x + w <= zone_x0 + raw_zone_w + 0.5,
+            "webview 右边界不应超出这一侧面板区的实际右边界: x={x} w={w} zone_x0={zone_x0} raw_zone_w={raw_zone_w}"
+        );
     }
 
     #[test]
@@ -8908,7 +9179,7 @@ mod tests {
             ..test_state()
         };
         assert_eq!(
-            preview_content_bounds(1440.0, 900.0, &state),
+            preview_content_bounds_for(Side::Left, 1440.0, 900.0, &state),
             (0.0, 0.0, 0.0, 0.0)
         );
     }
@@ -8923,7 +9194,7 @@ mod tests {
             ..test_state()
         };
         assert_eq!(
-            preview_content_bounds(1440.0, 900.0, &state),
+            preview_content_bounds_for(Side::Left, 1440.0, 900.0, &state),
             (0.0, 0.0, 0.0, 0.0)
         );
     }
@@ -8943,13 +9214,13 @@ mod tests {
             maximized: Some(MaximizedPane::Left),
             ..test_state()
         };
-        let (x, y, w, h) = preview_content_bounds(1440.0, 900.0, &state);
+        let (x, y, w, h) = preview_content_bounds_for(Side::Left, 1440.0, 900.0, &state);
         assert!((x - 542.4).abs() < 0.1, "x={x}");
         assert!((y - 118.0).abs() < 0.1, "y={y}");
         assert!((w - 805.6).abs() < 0.1, "w={w}");
         assert!((h - 708.0).abs() < 0.1, "h={h}");
         // 明显区别于平时(非放大)的几何——不能巧合碰上同一个值。
-        let normal = preview_content_bounds(1440.0, 900.0, &test_state());
+        let normal = preview_content_bounds_for(Side::Left, 1440.0, 900.0, &test_state());
         assert_ne!((x, y, w, h), normal, "放大态几何必须和平时不同");
     }
 
@@ -8962,7 +9233,7 @@ mod tests {
             maximized: Some(MaximizedPane::Left),
             ..test_state()
         };
-        let (x, _, w, _) = preview_content_bounds(1440.0, 900.0, &state);
+        let (x, _, w, _) = preview_content_bounds_for(Side::Left, 1440.0, 900.0, &state);
         assert!((x - 92.0).abs() < 0.1, "x={x}");
         assert!((w - 1256.0).abs() < 0.1, "w={w}");
     }
@@ -8976,19 +9247,22 @@ mod tests {
             maximized: Some(MaximizedPane::Right),
             ..test_state()
         };
-        assert!(!is_in_preview_column(500.0, 1440.0, &right_max));
+        assert!(is_in_preview_column(500.0, 1440.0, &right_max).is_none());
 
         let left_max = ShellState {
             maximized: Some(MaximizedPane::Left),
             ..test_state()
         };
         assert!(
-            !is_in_preview_column(500.0, 1440.0, &left_max),
+            is_in_preview_column(500.0, 1440.0, &left_max).is_none(),
             "500 在平时的预览列内,但放大盒子的列起点在 534.4 之后"
         );
-        assert!(is_in_preview_column(600.0, 1440.0, &left_max));
-        assert!(is_in_preview_column(1300.0, 1440.0, &left_max));
-        assert!(!is_in_preview_column(1400.0, 1440.0, &left_max));
+        assert_eq!(
+            is_in_preview_column(600.0, 1440.0, &left_max),
+            Some(PanelKind::Files)
+        );
+        assert!(is_in_preview_column(1300.0, 1440.0, &left_max).is_some());
+        assert!(is_in_preview_column(1400.0, 1440.0, &left_max).is_none());
     }
 
     /// Stage 4a 跨栏拖拽:右栏面板被拖到左栏后成了 `left_view`。它们纯 iced
@@ -9007,7 +9281,7 @@ mod tests {
                 ..test_state()
             };
             assert_eq!(
-                preview_content_bounds(1440.0, 900.0, &state),
+                preview_content_bounds_for(Side::Left, 1440.0, 900.0, &state),
                 (0.0, 0.0, 0.0, 0.0),
                 "左视图是右栏面板 {kind:?} 时应返回空矩形"
             );
@@ -9017,7 +9291,7 @@ mod tests {
                 ..test_state()
             };
             assert_eq!(
-                preview_content_bounds(1440.0, 900.0, &left_max),
+                preview_content_bounds_for(Side::Left, 1440.0, 900.0, &left_max),
                 (0.0, 0.0, 0.0, 0.0),
                 "放大态下左视图是右栏面板 {kind:?} 时同样应返回空矩形"
             );
@@ -9039,7 +9313,7 @@ mod tests {
                 ..test_state()
             };
             assert!(
-                !is_in_preview_column(500.0, 1440.0, &state),
+                is_in_preview_column(500.0, 1440.0, &state).is_none(),
                 "左视图是右栏面板 {kind:?} 时永不落在预览列"
             );
         }
@@ -9595,7 +9869,7 @@ mod tests {
     #[test]
     fn preview_content_bounds_never_negative() {
         let state = test_state();
-        let (_, _, w, h) = preview_content_bounds(100.0, 50.0, &state);
+        let (_, _, w, h) = preview_content_bounds_for(Side::Left, 100.0, 50.0, &state);
         assert!(w >= 0.0 && h >= 0.0);
     }
 
@@ -9604,14 +9878,28 @@ mod tests {
         // 窗口宽 1440:左图标栏 44 + 左面板区 640(项目树 0.35=224 + 分隔线 8)。
         // 预览内容列 = [273.2, 684)。
         let state = test_state();
-        assert!(!is_in_preview_column(100.0, 1440.0, &state), "落在项目树列");
         assert!(
+            is_in_preview_column(100.0, 1440.0, &state).is_none(),
+            "落在项目树列"
+        );
+        assert_eq!(
             is_in_preview_column(273.2, 1440.0, &state),
+            Some(PanelKind::Files),
             "预览列左边界(过配对分隔线)"
         );
-        assert!(is_in_preview_column(500.0, 1440.0, &state), "预览列内");
-        assert!(!is_in_preview_column(700.0, 1440.0, &state), "已进右面板区");
-        assert!(!is_in_preview_column(1200.0, 1440.0, &state), "右面板区内");
+        assert_eq!(
+            is_in_preview_column(500.0, 1440.0, &state),
+            Some(PanelKind::Files),
+            "预览列内"
+        );
+        assert!(
+            is_in_preview_column(700.0, 1440.0, &state).is_none(),
+            "已进右面板区"
+        );
+        assert!(
+            is_in_preview_column(1200.0, 1440.0, &state).is_none(),
+            "右面板区内"
+        );
     }
 
     #[test]
@@ -9620,7 +9908,59 @@ mod tests {
             left_collapsed: true,
             ..test_state()
         };
-        assert!(!is_in_preview_column(300.0, 1440.0, &state));
+        assert!(is_in_preview_column(300.0, 1440.0, &state).is_none());
+    }
+
+    /// Stage 4b:Project 面板拖到右栏(镜像态)后,`is_in_preview_column`
+    /// 必须在右栏命中 `PanelKind::Project`——修正老实现只看 `left_view`、
+    /// 右栏 Project 预览 webview 点击永远进不了预览池(拿不到键盘焦点)的
+    /// 跨栏 bug。镜像态 content 渲染在配对最左(`content_x == 0`),命中区是
+    /// `[x0, x0 + content_w)`。
+    #[test]
+    fn is_in_preview_column_returns_project_when_project_on_right() {
+        let state = ShellState {
+            layout: ShellLayout {
+                rail_layout: RailLayout {
+                    // Project 从默认左栏挪到右栏(11 个面板不重不漏),
+                    // 保持 `side_of` 不变式——Project 只出现在右栏。
+                    left: vec![
+                        PanelKind::Todo,
+                        PanelKind::Files,
+                        PanelKind::GitLog,
+                        PanelKind::Database,
+                        PanelKind::Ssh,
+                        PanelKind::Web,
+                    ],
+                    right: vec![
+                        PanelKind::Project,
+                        PanelKind::Agent,
+                        PanelKind::Conversations,
+                        PanelKind::Usage,
+                        PanelKind::Acceptance,
+                    ],
+                },
+                ..ShellLayout::default()
+            },
+            right_view: PanelKind::Project,
+            ..test_state()
+        };
+        let (x0, w) = pair_x0_and_width(Side::Right, 1440.0, &state);
+        let cols = pair_columns(pair_content_width(w), state.dims.project_split, true);
+        let inside = x0 + 10.0;
+        assert!(
+            inside < x0 + cols.content_w,
+            "测试点必须落在右栏镜像 Project 的预览列内(inside={inside},x0={x0},content_w={})",
+            cols.content_w
+        );
+        assert_eq!(
+            is_in_preview_column(inside, 1440.0, &state),
+            Some(PanelKind::Project)
+        );
+        let list_side = x0 + cols.content_w + 10.0;
+        assert!(
+            is_in_preview_column(list_side, 1440.0, &state).is_none(),
+            "列表侧(内容右侧)不算预览列"
+        );
     }
 
     #[test]
@@ -10226,6 +10566,146 @@ mod tests {
                 "镜像态下方向应反转:near={} far={}",
                 near.git_log_split,
                 far.git_log_split
+            );
+        }
+    }
+
+    /// `apply_column_drag` 里 `LeftPairSplit`(Files)/`ProjectSplit`/
+    /// `BrowserBookmarksSplit` 三个本 Stage 改过 base 的分支的 side+镜像
+    /// 感知测试(此前硬编码 `left_zone_width` + `icon_rail_width()`,Project
+    /// /Web 挪到右栏后拖拽方向直接错乱)。Files/Project 默认"列表在前",
+    /// Web 默认"内容在前"且 `browser_bookmarks_split` 存内容占比——方向翻转
+    /// 的判定彼此相反,分开写清楚。
+    mod apply_column_drag_files_project_web_mirror_tests {
+        use super::*;
+
+        fn right_x0_inside(window_width: f32, state: &ShellState) -> f32 {
+            window_width
+                - byteui::theme::geometry::icon_rail_width()
+                - right_zone_width(window_width, state)
+        }
+
+        fn relocate_to_right(state: &mut ShellState, kind: PanelKind) {
+            state.layout.rail_layout.left.retain(|&k| k != kind);
+            state.layout.rail_layout.right.push(kind);
+        }
+
+        #[test]
+        fn files_split_direction_on_default_side_matches_pre_migration_behavior() {
+            let state = test_state();
+            let window_width = 1600.0;
+            let near =
+                apply_column_drag(state.clone(), Divider::LeftPairSplit, window_width, 300.0);
+            let far = apply_column_drag(state, Divider::LeftPairSplit, window_width, 500.0);
+            assert!(
+                far.files_split > near.files_split,
+                "near={} far={}",
+                near.files_split,
+                far.files_split
+            );
+        }
+
+        #[test]
+        fn files_split_direction_flips_when_relocated_to_right_side() {
+            let mut state = test_state();
+            relocate_to_right(&mut state, PanelKind::Files);
+            let window_width = 1600.0;
+            let x0 = right_x0_inside(window_width, &state);
+            let near = apply_column_drag(
+                state.clone(),
+                Divider::LeftPairSplit,
+                window_width,
+                x0 + 50.0,
+            );
+            let far = apply_column_drag(state, Divider::LeftPairSplit, window_width, x0 + 250.0);
+            assert!(
+                far.files_split < near.files_split,
+                "镜像态下方向应反转:near={} far={}",
+                near.files_split,
+                far.files_split
+            );
+        }
+
+        #[test]
+        fn project_split_direction_on_default_side_matches_pre_migration_behavior() {
+            let state = test_state();
+            let window_width = 1600.0;
+            let near = apply_column_drag(state.clone(), Divider::ProjectSplit, window_width, 300.0);
+            let far = apply_column_drag(state, Divider::ProjectSplit, window_width, 500.0);
+            assert!(
+                far.project_split > near.project_split,
+                "near={} far={}",
+                near.project_split,
+                far.project_split
+            );
+        }
+
+        #[test]
+        fn project_split_direction_flips_when_relocated_to_right_side() {
+            let mut state = test_state();
+            relocate_to_right(&mut state, PanelKind::Project);
+            let window_width = 1600.0;
+            let x0 = right_x0_inside(window_width, &state);
+            let near = apply_column_drag(
+                state.clone(),
+                Divider::ProjectSplit,
+                window_width,
+                x0 + 50.0,
+            );
+            let far = apply_column_drag(state, Divider::ProjectSplit, window_width, x0 + 250.0);
+            assert!(
+                far.project_split < near.project_split,
+                "镜像态下方向应反转:near={} far={}",
+                near.project_split,
+                far.project_split
+            );
+        }
+
+        #[test]
+        fn browser_bookmarks_split_direction_on_default_side_matches_pre_migration_behavior() {
+            // Web 默认"内容在前"且字段存内容占比:默认栏(左)下拖拽点越靠右,
+            // 内容占比越大(与既有 `browser_bookmarks_split_direction_matches_content_side`
+            // 一致的方向锚)。
+            let state = test_state();
+            let window_width = 1600.0;
+            let near = apply_column_drag(
+                state.clone(),
+                Divider::BrowserBookmarksSplit,
+                window_width,
+                100.0,
+            );
+            let far = apply_column_drag(state, Divider::BrowserBookmarksSplit, window_width, 500.0);
+            assert!(
+                far.browser_bookmarks_split > near.browser_bookmarks_split,
+                "near={} far={}",
+                near.browser_bookmarks_split,
+                far.browser_bookmarks_split
+            );
+        }
+
+        #[test]
+        fn browser_bookmarks_split_direction_flips_when_relocated_to_right_side() {
+            let mut state = test_state();
+            relocate_to_right(&mut state, PanelKind::Web);
+            let window_width = 1600.0;
+            let x0 = right_x0_inside(window_width, &state);
+            let near = apply_column_drag(
+                state.clone(),
+                Divider::BrowserBookmarksSplit,
+                window_width,
+                x0 + 50.0,
+            );
+            let far = apply_column_drag(
+                state,
+                Divider::BrowserBookmarksSplit,
+                window_width,
+                x0 + 250.0,
+            );
+            assert!(
+                far.browser_bookmarks_split < near.browser_bookmarks_split,
+                "镜像态下方向应反转:near={} far={}",
+                near.browser_bookmarks_split,
+                far.browser_bookmarks_split
             );
         }
     }
