@@ -4,7 +4,7 @@
 //! `dozer_core::paths::config_dir()/layout.json`）；`load_from`/`save_to`
 //! 接收显式路径，供单测指向临时文件，不碰用户真实配置目录。
 
-use crate::app::{ShellLayout, sanitize_shell_layout};
+use crate::app::{RailLayout, ShellLayout, sanitize_shell_layout};
 use std::path::{Path, PathBuf};
 
 pub fn default_path() -> PathBuf {
@@ -65,8 +65,7 @@ mod tests {
     /// 只剩窗口尺寸,老 layout.json 里可能还带着 `left_width`/`files_split`
     /// 等已迁移走的字段,serde 忽略未知字段、缺字段补默认,不应整份失败。
     #[test]
-    fn load_from_foreign_json_fills_defaults_and_sanitizes_window_size() {
-        let dir = tempfile::tempdir().unwrap();
+    fn load_from_foreign_json_fills_defaults_and_sanitizes_window_size() {        let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("layout.json");
         // 老文件带已迁移走的尺寸字段 + 越界的 window_width(0)。
         std::fs::write(
@@ -95,6 +94,7 @@ mod tests {
         let layout = ShellLayout {
             window_width: 1600.0,
             window_height: 1000.0,
+            ..ShellLayout::default()
         };
         save_to(&path, &layout).unwrap();
         assert_eq!(load_from(&path), layout);
@@ -107,6 +107,7 @@ mod tests {
         let layout = ShellLayout {
             window_width: 1800.0,
             window_height: 1100.0,
+            ..ShellLayout::default()
         };
         save_to(&path, &layout).unwrap();
         assert_eq!(load_from(&path), layout);
@@ -124,5 +125,16 @@ mod tests {
         let (init_w, init_h) = byteui::theme::geometry::initial_window_size();
         assert_eq!(l.window_width, init_w);
         assert_eq!(l.window_height, init_h);
+    }
+
+    /// 手改/损坏的 `rail_layout`(任一侧为空)→ `sanitize_shell_layout` 里
+    /// 的 `sanitize_rail_layout` 整个回落 `RailLayout::default()`。
+    #[test]
+    fn corrupted_rail_layout_falls_back_to_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layout.json");
+        std::fs::write(&path, r#"{"rail_layout": {"left": [], "right": ["Agent"]}}"#).unwrap();
+        let loaded = load_from(&path);
+        assert_eq!(loaded.rail_layout, RailLayout::default());
     }
 }

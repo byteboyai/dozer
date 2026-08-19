@@ -309,6 +309,63 @@ pub enum WorkspaceSlot {
 /// `#[serde(default)]`:今后加字段时,老 `layout.json` 里缺的字段用
 /// `Default` 补齐,而不是整份反序列化失败 → `unwrap_or_default()` 把用户
 /// 攒下来的宽度/比例全部重置。
+/// 图标栏方向:左栏或右栏。用作 `RailLayout` 的访问器参数,以及后续拖拽
+/// (Stage 4)的方向来源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
+}
+
+/// 每个面板当前挂在哪条图标栏、栏内什么顺序——图标栏拖拽换栏(Stage 4)
+/// 的唯一真相源。这个 Stage 只负责定义类型 + 持久化,渲染/交互还没有
+/// 任何地方读它(那是 Stage 2/4 的范围),所以此刻它的值必然等于
+/// `default()`,不会有别的取值出现。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RailLayout {
+    pub left: Vec<PanelKind>,
+    pub right: Vec<PanelKind>,
+}
+
+impl RailLayout {
+    pub fn side(&self, side: Side) -> &Vec<PanelKind> {
+        match side {
+            Side::Left => &self.left,
+            Side::Right => &self.right,
+        }
+    }
+
+    pub fn side_mut(&mut self, side: Side) -> &mut Vec<PanelKind> {
+        match side {
+            Side::Left => &mut self.left,
+            Side::Right => &mut self.right,
+        }
+    }
+}
+
+impl Default for RailLayout {
+    fn default() -> Self {
+        Self {
+            left: vec![
+                PanelKind::Project,
+                PanelKind::Todo,
+                PanelKind::Files,
+                PanelKind::GitLog,
+                PanelKind::Database,
+                PanelKind::Ssh,
+                PanelKind::Web,
+            ],
+            right: vec![
+                PanelKind::Agent,
+                PanelKind::Conversations,
+                PanelKind::Usage,
+                PanelKind::Acceptance,
+            ],
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ShellLayout {
@@ -324,6 +381,10 @@ pub struct ShellLayout {
     /// 共享(见切换项目 bug)。只有窗口尺寸是全局的,留在这里。
     pub window_width: f32,
     pub window_height: f32,
+    /// 每条图标栏当前有哪些面板、栏内顺序(拖拽换栏的唯一真相源,Stage 4
+    /// 才真正读写;这个 Stage 只定义 + 持久化,值永远是 `default()`)。
+    #[serde(default)]
+    pub rail_layout: RailLayout,
 }
 
 impl Default for ShellLayout {
@@ -331,6 +392,7 @@ impl Default for ShellLayout {
         Self {
             window_width: byteui::theme::geometry::initial_window_size().0,
             window_height: byteui::theme::geometry::initial_window_size().1,
+            rail_layout: RailLayout::default(),
         }
     }
 }
@@ -428,6 +490,9 @@ impl Default for PanelLayout {
 /// `byteui::theme::geometry::min_window_height()`,建窗时还有 `with_min_inner_size`
 /// 兜底),非法值(非有限数、缺字段的 0.0)退化成
 /// `byteui::theme::geometry::initial_window_size()`。
+///
+/// `rail_layout` 走 `sanitize_rail_layout`:任何坏数据(任一栏为空、两侧合计
+/// 不是恰 11 个不重复面板)回落 `RailLayout::default()`。
 pub fn sanitize_shell_layout(l: ShellLayout) -> ShellLayout {
     ShellLayout {
         window_width: if l.window_width.is_finite() && l.window_width > 0.0 {
@@ -442,7 +507,25 @@ pub fn sanitize_shell_layout(l: ShellLayout) -> ShellLayout {
         } else {
             byteui::theme::geometry::initial_window_size().1
         },
+        rail_layout: sanitize_rail_layout(l.rail_layout),
     }
+}
+
+/// `RailLayout` 的消毒:任一栏为空,或两侧合计不是恰 11 个不重复的
+/// `PanelKind`(手改/版本不一致导致的坏数据),整个回落 `default()`。
+/// 不做部分修复——缺一个面板就补在默认栏这种中间态比"直接用默认值"
+/// 更难排查。
+fn sanitize_rail_layout(rail: RailLayout) -> RailLayout {
+    if rail.left.is_empty() || rail.right.is_empty() {
+        return RailLayout::default();
+    }
+    let mut all: Vec<_> = rail.left.iter().chain(rail.right.iter()).collect();
+    all.sort_by_key(|k| format!("{k:?}"));
+    all.dedup();
+    if all.len() != 11 || rail.left.len() + rail.right.len() != 11 {
+        return RailLayout::default();
+    }
+    rail
 }
 
 /// 把从磁盘读回来(或首次默认算出)的面板区尺寸夹进合法范围(`panel_layouts::
@@ -9071,6 +9154,7 @@ mod tests {
         let missing_fields = ShellLayout {
             window_width: 0.0,
             window_height: 0.0,
+            ..ShellLayout::default()
         };
         let s = sanitize_shell_layout(missing_fields);
         assert_eq!(
@@ -9085,6 +9169,7 @@ mod tests {
         let poisoned = ShellLayout {
             window_width: -100.0,
             window_height: f32::NAN,
+            ..ShellLayout::default()
         };
         let s = sanitize_shell_layout(poisoned);
         assert_eq!(
@@ -9099,6 +9184,7 @@ mod tests {
         let too_small = ShellLayout {
             window_width: 10.0,
             window_height: 10.0,
+            ..ShellLayout::default()
         };
         let s = sanitize_shell_layout(too_small);
         assert_eq!(s.window_width, byteui::theme::geometry::min_window_width());
@@ -9110,6 +9196,7 @@ mod tests {
         let legit = ShellLayout {
             window_width: 1800.0,
             window_height: 1100.0,
+            ..ShellLayout::default()
         };
         assert_eq!(sanitize_shell_layout(legit), legit);
     }
@@ -9419,5 +9506,55 @@ mod tests {
         let repo_path = file_as_repo.path().join("not_a_dir");
         std::fs::write(&repo_path, "我是文件").unwrap();
         assert_eq!(ensure_project_readme(&repo_path, "D"), None);
+    }
+
+    /// `RailLayout::default()` 把 11 个面板不重不漏分到左右两栏,
+    /// 与现状 7/4 分组逐一对应(防漂移锚)。
+    #[test]
+    fn rail_layout_default_covers_all_panels_without_duplicates() {
+        let rail = RailLayout::default();
+        assert_eq!(rail.left.len(), 7);
+        assert_eq!(rail.right.len(), 4);
+        let mut all: Vec<_> = rail.left.iter().chain(rail.right.iter()).collect();
+        all.sort_by_key(|k| format!("{k:?}"));
+        all.dedup();
+        assert_eq!(all.len(), 11, "11 个面板不重不漏分到左右两栏");
+    }
+
+    #[test]
+    fn rail_layout_side_accessors_map_correctly() {
+        let rail = RailLayout::default();
+        assert_eq!(rail.side(Side::Left), &rail.left);
+        assert_eq!(rail.side(Side::Right), &rail.right);
+    }
+
+    /// `sanitize_rail_layout` 对坏数据回落默认:任一栏为空、面板重复、
+    /// 面板数不是 11——任一情形都不做部分修复。
+    #[test]
+    fn sanitize_rail_layout_falls_back_to_default_on_bad_data() {
+        // 左侧为空。
+        let empty_left = RailLayout {
+            left: vec![],
+            right: vec![PanelKind::Agent],
+        };
+        assert_eq!(sanitize_rail_layout(empty_left), RailLayout::default());
+
+        // 面板数不是 11。
+        let too_few = RailLayout {
+            left: vec![PanelKind::Files],
+            right: vec![PanelKind::Agent],
+        };
+        assert_eq!(sanitize_rail_layout(too_few), RailLayout::default());
+
+        // 面板重复(缺一个面板 + 重复另一个,合计仍 11 但去重后不足)。
+        let dup = RailLayout {
+            left: vec![PanelKind::Files; 7],
+            right: vec![PanelKind::Agent; 4],
+        };
+        assert_eq!(sanitize_rail_layout(dup), RailLayout::default());
+
+        // 合法数据原样保留。
+        let legit = RailLayout::default();
+        assert_eq!(sanitize_rail_layout(legit), legit);
     }
 }
