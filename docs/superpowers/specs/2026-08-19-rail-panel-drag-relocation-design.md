@@ -56,14 +56,19 @@ webview,webview 的像素级摆位(`x, y, w, h`)是按"以左图标栏宽度为�
      下一个面板(不能是空——见下方规则)。
    - 移动结果落盘(`layout.json`)。
 5. **内部左右镜像规则**(适用于 8 个有"横向两栏"内部布局的面板——见下方
-   完整清单与豁免清单):面板不论渲染在左栏还是右栏,内部两栏的**语义**
-   (比如"列表"、"预览")不变,但**渲染顺序**按面板当前所在的栏镜像:
-   默认栏(即 `RailLayout` 默认值里该面板原本所在的栏,`Files`/
-   `Project`/`Todo`/`Ssh`/`GitLog`/`Web` 默认在左,`Agent`/
-   `Conversations` 默认在右)渲染成"语义左项先出、语义右项后出";移到
-   非默认栏后反过来。`PanelDims` 里对应的 split 比例字段(如
-   `files_split`)语义不变(依然是"语义左项占比"),只是画的时候换了
-   谁先谁后。
+   完整清单与豁免清单):**规则是"面板当前不在默认栏时,把该面板现有
+   `row!` 的两个子元素渲染顺序整体反过来",不依赖任何"哪个子元素是
+   语义上的列表/内容"这类命名假设**——摸底 Stage 3 时发现 8 个面板里
+   6 个(`Files`/`GitLog`/`Todo`/`Project`/`Ssh`/`Web`)默认是"列表在前
+   (渲染在左)、内容在后(渲染在右)",但 `Agent`/`Conversations` 两个
+   默认恰好反过来("内容在前/渲染在左、列表在后/渲染在右"——原有代码
+   注释明确写"两个配对都是内容侧渲染在左、列表侧渲染在右"),不是笔误,
+   是这两个面板原有设计就选了和其余 6 个不同的默认顺序。所以镜像规则
+   统一表述成"反转当前 `row!` 顺序",不表述成"列表永远排在语义左侧"
+   ——后者对 `Agent`/`Conversations` 是错的。`PanelDims` 里对应的 split
+   比例字段(如 `files_split`)语义不变,只是画的时候两个子元素谁先谁后
+   会跟着 `row!` 顺序一起换,调用方要把 portion 值和它现在对应的那个
+   子元素配对传对,不能笔误配反。
 6. 3 个 webview 面板(`Files`/`Project`/`Web`)新增镜像版 webview
    bounds 函数,在该面板当前 docked 在右栏时启用,保证 webview 像素位置
    跟纯 iced 部分的镜像布局对齐。
@@ -94,7 +99,7 @@ webview,webview 的像素级摆位(`x, y, w, h`)是按"以左图标栏宽度为�
 
 ### 面板清单与内部布局分类
 
-| `PanelKind` | 默认栏 | 内部两栏(横向)? | 语义左项 / 语义右项 | webview? |
+| `PanelKind` | 默认栏 | 内部两栏(横向)? | 默认渲染顺序(第一项/第二项) | webview? |
 |---|---|---|---|---|
 | `Files` | 左 | 是(`files_split`) | 项目树 / 文件预览 | **是** |
 | `GitLog` | 左 | 是(`git_log_split`,外层)| commit 列表 / [文件列表+diff] | 否 |
@@ -102,9 +107,9 @@ webview,webview 的像素级摆位(`x, y, w, h`)是按"以左图标栏宽度为�
 | `Project` | 左 | 是(`project_split`) | 项目信息 / 项目预览 | **是** |
 | `Database` | 左 | 否(单栏) | — | 否 |
 | `Ssh` | 左 | 是(`ssh_split`) | 主机列表 / 内嵌终端 | 否 |
-| `Web` | 左 | 是(`browser_bookmarks_split`,**语义反向**——见下) | 网页内容 / 收藏夹侧栏 | **是** |
-| `Agent` | 右 | 是(`agent_split`) | Agent 列表 / 终端 | 否 |
-| `Conversations` | 右 | 是(`conversations_split`) | 对话列表 / 对话审阅 | 否 |
+| `Web` | 左 | 是(`browser_bookmarks_split`,仅 `bookmarks_open` 时才有两栏,收起时单栏、镜像是 no-op) | 网页内容 / 收藏夹侧栏 | **是** |
+| `Agent` | 右 | 是(`agent_split`) | **终端 / Agent 列表**(注意:内容在前,和上面 6 个"列表在前"相反,原有设计如此) | 否 |
+| `Conversations` | 右 | 是(`conversations_split`) | **对话审阅 / 对话列表**(同上,内容在前) | 否 |
 | `Usage` | 右 | 否(单栏) | — | 否 |
 | `Acceptance` | 右 | 否(单栏) | — | 否 |
 
