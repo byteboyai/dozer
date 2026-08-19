@@ -420,7 +420,7 @@ pub(crate) fn dozer_editor_style() -> iced_code_editor::theme::Style {
 /// 字距不做处理:编辑器与终端都走 cosmic-text 默认字距,天然一致,显式
 /// 加宽反而会引入第二套数据源。
 pub(crate) fn dozer_editor_font_metrics(editor: &mut iced_code_editor::CodeEditor) {
-    let scale = theme::icon_size::scale();
+    let scale = byteui::theme::icon_size::scale();
     let font_size = theme::terminal_font::size() * scale;
     editor.set_font_size(font_size, false);
     let line_height = font_size * theme::terminal_font::line_height_factor();
@@ -902,7 +902,7 @@ mod tests {
     /// 像素(行号区/折叠列/字形内边距)取 vendored 编辑器公开默认再乘 scale。
     #[test]
     fn dozer_editor_font_metrics_match_terminal() {
-        let scale = theme::icon_size::scale();
+        let scale = byteui::theme::icon_size::scale();
         let mut editor = iced_code_editor::CodeEditor::new("abc", "rs");
         dozer_editor_font_metrics(&mut editor);
 
