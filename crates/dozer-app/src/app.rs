@@ -961,28 +961,33 @@ pub(crate) fn apply_column_drag(
             }
         }
         Divider::RightPairSplit => {
-            let right_w = right_zone_width(window_width, &state);
-            let pair_w = pair_content_width(right_w);
+            let kind = state.right_view; // Agent 或 Conversations
+            let side = state.layout.rail_layout.side_of(kind);
+            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let right_x0 = window_width - byteui::theme::geometry::icon_rail_width() - right_w;
-            // `ratio` 是"配对里渲染在左边那块"的宽度占比(拖拽点左侧的宽度
-            // 除以配对总宽)——这块现在是终端/审阅,不是 agent_split/
-            // conversations_split 存的"列表侧(Agent 列表/对话列表)占比"。
-            // 两者互补(列表侧渲染在右边),所以要写 1.0-ratio,不能直接写
-            // ratio,否则拖拽方向会反(见 `right_panel_area` 顶部注释)。
-            let ratio = ((logical_x - right_x0) / pair_w).clamp(
+            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
                 byteui::theme::geometry::min_split_ratio(),
                 byteui::theme::geometry::max_split_ratio(),
             );
-            match state.right_view {
+            let mirrored = side != kind.default_side();
+            // Agent/Conversations 默认"内容在前"(default_list_first = false),
+            // 和 Task 5 三个面板相反。默认栏(`mirrored = false`)下
+            // `list_rendered_first(false, false) = false`,走 `1.0 - raw_ratio`
+            // 这条分支,和改造前的固定行为逐字节一致(防回归)。
+            let ratio = if list_rendered_first(false, mirrored) {
+                raw_ratio
+            } else {
+                1.0 - raw_ratio
+            };
+            match kind {
                 PanelKind::Agent => PanelDims {
-                    agent_split: 1.0 - ratio,
+                    agent_split: ratio,
                     ..state.dims
                 },
                 PanelKind::Conversations => PanelDims {
-                    conversations_split: 1.0 - ratio,
+                    conversations_split: ratio,
                     ..state.dims
                 },
                 // 用量统计是单栏（不分割）,没有自己的 split 权重。
@@ -990,9 +995,8 @@ pub(crate) fn apply_column_drag(
                 // 验收面板同用量统计是单栏,不分割。
                 PanelKind::Acceptance => state.dims,
                 _ => unreachable!(
-                    "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
-                     state.right_view 不会取到左侧面板——Stage 4 加拖拽后\
-                     这里要重新设计,不能再用 unreachable"
+                    "RightPairSplit 只会在 state.right_view 是 Agent/Conversations/\
+                     Usage/Acceptance 之一时出现——Stage 1 遗留的兜底,这里维持"
                 ),
             }
         }
@@ -10128,6 +10132,128 @@ mod tests {
                 "镜像态下方向应反转:near={} far={}",
                 near.git_log_split,
                 far.git_log_split
+            );
+        }
+    }
+
+    /// `apply_column_drag` 里 `RightPairSplit`(Agent/Conversations)的
+    /// side+镜像感知改造测试。默认在右栏、默认"内容在前"——默认栏下拖拽点
+    /// 越靠右,内容占比越大、列表占比越*小*;挪到左栏后镜像成"列表在前",
+    /// 方向反转。
+    mod apply_column_drag_right_pair_mirror_tests {
+        use super::*;
+
+        #[test]
+        fn agent_split_direction_on_default_side_matches_pre_migration_behavior() {
+            let state = test_state(); // right_view 已经是 Agent
+            let window_width = 1600.0;
+            let right_x0 = window_width - byteui::theme::geometry::icon_rail_width()
+                - right_zone_width(window_width, &state);
+            let near = apply_column_drag(
+                state.clone(),
+                Divider::RightPairSplit,
+                window_width,
+                right_x0 + 50.0,
+            );
+            let far = apply_column_drag(
+                state,
+                Divider::RightPairSplit,
+                window_width,
+                right_x0 + 250.0,
+            );
+            assert!(
+                far.agent_split < near.agent_split,
+                "near={} far={}",
+                near.agent_split,
+                far.agent_split
+            );
+        }
+
+        #[test]
+        fn agent_split_direction_flips_when_relocated_to_left_side() {
+            let mut state = test_state();
+            state
+                .layout
+                .rail_layout
+                .right
+                .retain(|&k| k != PanelKind::Agent);
+            state.layout.rail_layout.left.push(PanelKind::Agent);
+            let window_width = 1600.0;
+            let near = apply_column_drag(
+                state.clone(),
+                Divider::RightPairSplit,
+                window_width,
+                byteui::theme::geometry::icon_rail_width() + 50.0,
+            );
+            let far = apply_column_drag(
+                state,
+                Divider::RightPairSplit,
+                window_width,
+                byteui::theme::geometry::icon_rail_width() + 250.0,
+            );
+            assert!(
+                far.agent_split > near.agent_split,
+                "镜像态下方向应反转:near={} far={}",
+                near.agent_split,
+                far.agent_split
+            );
+        }
+
+        #[test]
+        fn conversations_split_direction_on_default_side_matches_pre_migration_behavior() {
+            let mut state = test_state();
+            state.right_view = PanelKind::Conversations;
+            let window_width = 1600.0;
+            let right_x0 = window_width - byteui::theme::geometry::icon_rail_width()
+                - right_zone_width(window_width, &state);
+            let near = apply_column_drag(
+                state.clone(),
+                Divider::RightPairSplit,
+                window_width,
+                right_x0 + 50.0,
+            );
+            let far = apply_column_drag(
+                state,
+                Divider::RightPairSplit,
+                window_width,
+                right_x0 + 250.0,
+            );
+            assert!(
+                far.conversations_split < near.conversations_split,
+                "near={} far={}",
+                near.conversations_split,
+                far.conversations_split
+            );
+        }
+
+        #[test]
+        fn conversations_split_direction_flips_when_relocated_to_left_side() {
+            let mut state = test_state();
+            state.right_view = PanelKind::Conversations;
+            state
+                .layout
+                .rail_layout
+                .right
+                .retain(|&k| k != PanelKind::Conversations);
+            state.layout.rail_layout.left.push(PanelKind::Conversations);
+            let window_width = 1600.0;
+            let near = apply_column_drag(
+                state.clone(),
+                Divider::RightPairSplit,
+                window_width,
+                byteui::theme::geometry::icon_rail_width() + 50.0,
+            );
+            let far = apply_column_drag(
+                state,
+                Divider::RightPairSplit,
+                window_width,
+                byteui::theme::geometry::icon_rail_width() + 250.0,
+            );
+            assert!(
+                far.conversations_split > near.conversations_split,
+                "镜像态下方向应反转:near={} far={}",
+                near.conversations_split,
+                far.conversations_split
             );
         }
     }
