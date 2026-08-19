@@ -85,7 +85,7 @@ pub enum LeftView {
 }
 
 /// 右侧面板区当前显示哪个视图：Agent(Agent列表+终端配对) / 对话(对话列表+
-/// 对话审阅配对) / 用量 / 验收。浏览器已移回左栏(见 `LeftView::Web`)。
+/// 对话审阅配对) / 用量 / 验收。浏览器已移回左栏(见 `PanelKind::Web`)。
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum RightView {
     Agent,
@@ -496,8 +496,8 @@ pub(crate) struct PanelLayout {
 impl Default for PanelLayout {
     fn default() -> Self {
         Self {
-            left_view: LeftView::Files,
-            right_view: RightView::Agent,
+            left_view: PanelKind::Files,
+            right_view: PanelKind::Agent,
             left_collapsed: false,
             right_collapsed: false,
             dims: PanelDims::default(),
@@ -656,7 +656,7 @@ pub struct ShellState {
     pub right_view: PanelKind,
     pub right_collapsed: bool,
     /// 浏览器收藏夹侧栏是否展开——`preview_content_bounds` 的
-    /// `LeftView::Web` 分支据此决定网页 webview 要不要让出侧栏宽度。
+    /// `PanelKind::Web` 分支据此决定网页 webview 要不要让出侧栏宽度。
     pub browser_bookmarks_open: bool,
     /// 当前放大态。`preview_content_bounds`/`is_in_preview_column`/
     /// `terminal_pane_pixel_size` 靠这个字段才能感知"这块内容其实被放大
@@ -858,18 +858,23 @@ pub(crate) fn apply_column_drag(
                 byteui::theme::geometry::max_split_ratio(),
             );
             match state.right_view {
-                RightView::Agent => PanelDims {
+                PanelKind::Agent => PanelDims {
                     agent_split: 1.0 - ratio,
                     ..state.dims
                 },
-                RightView::Conversations => PanelDims {
+                PanelKind::Conversations => PanelDims {
                     conversations_split: 1.0 - ratio,
                     ..state.dims
                 },
                 // 用量统计是单栏（不分割）,没有自己的 split 权重。
-                RightView::Usage => state.dims,
+                PanelKind::Usage => state.dims,
                 // 验收面板同用量统计是单栏,不分割。
-                RightView::Acceptance => state.dims,
+                PanelKind::Acceptance => state.dims,
+                _ => unreachable!(
+                    "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
+                     state.right_view 不会取到左侧面板——Stage 4 加拖拽后\
+                     这里要重新设计,不能再用 unreachable"
+                ),
             }
         }
     }
@@ -967,7 +972,7 @@ pub fn preview_content_bounds(
             - byteui::theme::geometry::status_bar_height())
         .max(0.0);
         return match state.left_view {
-            LeftView::Files => {
+            PanelKind::Files => {
                 let y = y0 + byteui::theme::geometry::preview_chrome_top_px();
                 let h = (avail_h - byteui::theme::geometry::preview_chrome_top_px() - 8.0).max(0.0);
                 let pair_w = pair_content_width(avail_w);
@@ -977,7 +982,7 @@ pub fn preview_content_bounds(
                 (x, y, w, h)
             }
             // 浏览器(Web)是单栏(无配对),放大态占满整条放大盒子。
-            LeftView::Web => {
+            PanelKind::Web => {
                 let y = y0 + byteui::theme::geometry::browser_chrome_top_px();
                 let h = (avail_h - byteui::theme::geometry::browser_chrome_top_px() - 8.0).max(0.0);
                 let x = x0 + 8.0;
@@ -985,12 +990,12 @@ pub fn preview_content_bounds(
                 (x, y, w, h)
             }
             // Git 提交图是原生 Canvas 绘制,不挂 webview 子视图。
-            LeftView::GitLog => (0.0, 0.0, 0.0, 0.0),
+            PanelKind::GitLog => (0.0, 0.0, 0.0, 0.0),
             // Todo 面板同 GitLog,纯 iced 绘制,不挂 webview 子视图。
-            LeftView::Todo => (0.0, 0.0, 0.0, 0.0),
+            PanelKind::Todo => (0.0, 0.0, 0.0, 0.0),
             // Project 面板的右配对(项目预览)是 Files 同款预览 chrome,按
             // `project_split` 算出右配对那条 webview 的矩形。
-            LeftView::Project => {
+            PanelKind::Project => {
                 let y = y0 + byteui::theme::geometry::preview_chrome_top_px();
                 let h = (avail_h - byteui::theme::geometry::preview_chrome_top_px() - 8.0).max(0.0);
                 let pair_w = pair_content_width(avail_w);
@@ -1000,9 +1005,14 @@ pub fn preview_content_bounds(
                 (x, y, w, h)
             }
             // Database 面板同 Project,纯 iced 绘制,不挂 webview 子视图。
-            LeftView::Database => (0.0, 0.0, 0.0, 0.0),
+            PanelKind::Database => (0.0, 0.0, 0.0, 0.0),
             // SSH 面板同 Project,纯 iced 绘制,阶段 1 不挂 webview 子视图。
-            LeftView::Ssh => (0.0, 0.0, 0.0, 0.0),
+            PanelKind::Ssh => (0.0, 0.0, 0.0, 0.0),
+            _ => unreachable!(
+                "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
+                 state.left_view 不会取到右侧面板——Stage 4 加拖拽后\
+                 这里要重新设计,不能再用 unreachable"
+            ),
         };
     }
     let left_w = left_zone_width(window_width, state);
@@ -1020,7 +1030,7 @@ pub fn preview_content_bounds(
         (window_height - y - m.bottom - byteui::theme::geometry::status_bar_height()).max(0.0)
     };
     match state.left_view {
-        LeftView::Files => {
+        PanelKind::Files => {
             let y = y_top(byteui::theme::geometry::preview_chrome_top_px());
             let h = h_for(y);
             let pair_w = pair_content_width(left_w);
@@ -1036,7 +1046,7 @@ pub fn preview_content_bounds(
         // 浏览器(Web):收藏夹侧栏关闭时单栏占满左面板区;打开时网页内容
         // 让出右侧收藏夹侧栏的宽度(纯 iced 渲染,不挂 webview,几何计算
         // 不用管它)。
-        LeftView::Web => {
+        PanelKind::Web => {
             let y = y_top(byteui::theme::geometry::browser_chrome_top_px());
             let h = h_for(y);
             let x = byteui::theme::geometry::icon_rail_width() + 8.0 + m.left;
@@ -1050,12 +1060,12 @@ pub fn preview_content_bounds(
             };
             (x, y, w, h)
         }
-        LeftView::GitLog => (0.0, 0.0, 0.0, 0.0),
+        PanelKind::GitLog => (0.0, 0.0, 0.0, 0.0),
         // Todo 面板同 GitLog,纯 iced 绘制,不挂 webview 子视图。
-        LeftView::Todo => (0.0, 0.0, 0.0, 0.0),
+        PanelKind::Todo => (0.0, 0.0, 0.0, 0.0),
         // Project 面板右配对(项目预览)是 Files 同款预览 chrome,按
         // `project_split` 算出右配对那条 webview 矩形。
-        LeftView::Project => {
+        PanelKind::Project => {
             let y = y_top(byteui::theme::geometry::preview_chrome_top_px());
             let h = h_for(y);
             let pair_w = pair_content_width(left_w);
@@ -1069,9 +1079,14 @@ pub fn preview_content_bounds(
             (x, y, w, h)
         }
         // Database 面板同 Project,纯 iced 绘制,不挂 webview 子视图。
-        LeftView::Database => (0.0, 0.0, 0.0, 0.0),
+        PanelKind::Database => (0.0, 0.0, 0.0, 0.0),
         // SSH 面板同 Project,纯 iced 绘制,阶段 1 不挂 webview 子视图。
-        LeftView::Ssh => (0.0, 0.0, 0.0, 0.0),
+        PanelKind::Ssh => (0.0, 0.0, 0.0, 0.0),
+        _ => unreachable!(
+            "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
+             state.left_view 不会取到右侧面板——Stage 4 加拖拽后\
+             这里要重新设计,不能再用 unreachable"
+        ),
     }
 }
 
@@ -1100,7 +1115,7 @@ pub fn left_files_tree_bounds(
     state: &ShellState,
 ) -> (f32, f32, f32, f32) {
     let zero = || (0.0, 0.0, 0.0, 0.0);
-    if state.left_collapsed || state.left_view != LeftView::Files {
+    if state.left_collapsed || state.left_view != PanelKind::Files {
         return zero();
     }
     let m = theme::region::left_zone().margin;
@@ -1159,7 +1174,7 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
     if state.maximized == Some(MaximizedPane::Left) {
         let (x0, avail_w) = maximized_box_x_range(window_width);
         return match state.left_view {
-            LeftView::Files => {
+            PanelKind::Files => {
                 let (list_w, _) =
                     pair_list_content_width(pair_content_width(avail_w), state.dims.files_split);
                 let start = x0 + list_w + byteui::theme::geometry::divider_width();
@@ -1167,16 +1182,16 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
                 x >= start && x < end
             }
             // 浏览器(Web)是单栏,放大态占满整条放大盒子横向范围。
-            LeftView::Web => {
+            PanelKind::Web => {
                 let start = x0;
                 let end = start + avail_w;
                 x >= start && x < end
             }
-            LeftView::GitLog => false,
+            PanelKind::GitLog => false,
             // Todo 面板纯 iced 绘制,无 webview,永不落在预览列。
-            LeftView::Todo => false,
+            PanelKind::Todo => false,
             // Project 面板右配对(项目预览)是 Files 同款预览列,按 `project_split` 算。
-            LeftView::Project => {
+            PanelKind::Project => {
                 let (list_w, _) =
                     pair_list_content_width(pair_content_width(avail_w), state.dims.project_split);
                 let start = x0 + list_w + byteui::theme::geometry::divider_width();
@@ -1184,14 +1199,19 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
                 x >= start && x < end
             }
             // Database 面板同 Project,纯 iced 绘制,永无 webview。
-            LeftView::Database => false,
+            PanelKind::Database => false,
             // SSH 面板同 Project,纯 iced 绘制,永无 webview。
-            LeftView::Ssh => false,
+            PanelKind::Ssh => false,
+            _ => unreachable!(
+                "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
+                 state.left_view 不会取到右侧面板——Stage 4 加拖拽后\
+                 这里要重新设计,不能再用 unreachable"
+            ),
         };
     }
     let left_w = left_zone_width(window_width, state);
     match state.left_view {
-        LeftView::Files => {
+        PanelKind::Files => {
             let (list_w, _) =
                 pair_list_content_width(pair_content_width(left_w), state.dims.files_split);
             let start = byteui::theme::geometry::icon_rail_width()
@@ -1201,16 +1221,16 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
             x >= start && x < end
         }
         // 浏览器(Web)是单栏,占满整条左面板区横向范围。
-        LeftView::Web => {
+        PanelKind::Web => {
             let start = byteui::theme::geometry::icon_rail_width();
             let end = start + left_w;
             x >= start && x < end
         }
-        LeftView::GitLog => false,
+        PanelKind::GitLog => false,
         // Todo 面板纯 iced 绘制,无 webview,永不落在预览列。
-        LeftView::Todo => false,
+        PanelKind::Todo => false,
         // Project 面板右配对(项目预览)是 Files 同款预览列,按 `project_split` 算。
-        LeftView::Project => {
+        PanelKind::Project => {
             let (list_w, _) =
                 pair_list_content_width(pair_content_width(left_w), state.dims.project_split);
             let start = byteui::theme::geometry::icon_rail_width()
@@ -1220,9 +1240,14 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
             x >= start && x < end
         }
         // Database 面板同 Project,纯 iced 绘制,永无 webview。
-        LeftView::Database => false,
+        PanelKind::Database => false,
         // SSH 面板同 Project,纯 iced 绘制,永无 webview。
-        LeftView::Ssh => false,
+        PanelKind::Ssh => false,
+        _ => unreachable!(
+            "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
+             state.left_view 不会取到右侧面板——Stage 4 加拖拽后\
+             这里要重新设计,不能再用 unreachable"
+        ),
     }
 }
 
@@ -1272,7 +1297,7 @@ pub fn zone_at_x(x: f32, window_width: f32, state: &ShellState) -> Option<ZoneSi
 /// 在旧四栏布局里不存在(终端恒在屏上),是新外壳带出来的新风险
 /// (Fix round 2 #3)。放大的正是右侧时终端**是**可见的(只是更大),算可见。
 pub(crate) fn terminal_visible(state: &ShellState) -> bool {
-    state.right_view == RightView::Agent
+    state.right_view == PanelKind::Agent
         && !state.right_collapsed
         && state.maximized != Some(MaximizedPane::Left)
 }
@@ -1282,7 +1307,7 @@ pub(crate) fn terminal_visible(state: &ShellState) -> bool {
 /// (角色与 `terminal_visible` 的 `MaximizedPane::Left` 判断对调:终端在
 /// 右、被左侧放大遮住;SSH 面板在左、被右侧放大遮住)。
 pub(crate) fn ssh_terminal_visible(state: &ShellState) -> bool {
-    state.left_view == LeftView::Ssh && state.maximized != Some(MaximizedPane::Right)
+    state.left_view == PanelKind::Ssh && state.maximized != Some(MaximizedPane::Right)
 }
 
 /// 键盘/粘贴事件此刻该写给右侧共享终端条还是 SSH 面板自己的内嵌终端。
@@ -1294,7 +1319,7 @@ pub(crate) fn keyboard_term_target(
     left_view: PanelKind,
     active_zone: Option<ZoneSide>,
 ) -> TermTarget {
-    if left_view == LeftView::Ssh && active_zone == Some(ZoneSide::Left) {
+    if left_view == PanelKind::Ssh && active_zone == Some(ZoneSide::Left) {
         TermTarget::SshPanel
     } else {
         TermTarget::Shared
@@ -1317,10 +1342,10 @@ pub(crate) fn terminal_grid_state(state: ShellState) -> ShellState {
     // (Fix round 3,scoped re-review 发现)。
     let maximized = state
         .maximized
-        .filter(|m| *m != MaximizedPane::Right || state.right_view == RightView::Agent);
+        .filter(|m| *m != MaximizedPane::Right || state.right_view == PanelKind::Agent);
     ShellState {
         right_collapsed: false,
-        right_view: RightView::Agent,
+        right_view: PanelKind::Agent,
         maximized,
         ..state
     }
@@ -1340,7 +1365,7 @@ pub fn terminal_pane_pixel_size(
     window_height: f32,
     state: &ShellState,
 ) -> (f32, f32) {
-    if state.right_collapsed || state.right_view != RightView::Agent {
+    if state.right_collapsed || state.right_view != PanelKind::Agent {
         return (0.0, 0.0);
     }
     if state.maximized == Some(MaximizedPane::Right) {
@@ -2260,7 +2285,7 @@ impl App {
         x: f32,
         y: f32,
     ) -> Option<PathBuf> {
-        if self.left_collapsed || self.left_view != LeftView::Files {
+        if self.left_collapsed || self.left_view != PanelKind::Files {
             return None;
         }
         let ws = self.active_workspace()?;
@@ -2384,7 +2409,7 @@ impl App {
     /// 唤醒的判断条件（`main.rs::about_to_wait`），跟
     /// `any_hover_anim_active` 同一层级。
     pub fn todo_panel_visible(&self) -> bool {
-        self.left_view == LeftView::Todo && self.active_workspace().is_some()
+        self.left_view == PanelKind::Todo && self.active_workspace().is_some()
     }
 
     /// `main.rs` 定时唤醒调用：只在 `todo_panel_visible()` 时才真的
@@ -2721,7 +2746,7 @@ impl App {
 
     /// 当前左栏显示哪个面板(main.rs 每帧 `interface.operate` 捕获 Todo 自绘
     /// 输入字段 bounds 时用来判断是否要遍历,避免无谓开销)。
-    pub fn left_view(&self) -> LeftView {
+    pub fn left_view(&self) -> PanelKind {
         self.left_view
     }
 
@@ -3287,7 +3312,7 @@ impl App {
         if self.current_page == AppPage::Home {
             return Vec::new();
         }
-        if !matches!(self.left_view, LeftView::Files | LeftView::Project) {
+        if !matches!(self.left_view, PanelKind::Files | PanelKind::Project) {
             return Vec::new();
         }
         let Some(ws) = self.active_workspace() else {
@@ -3296,8 +3321,8 @@ impl App {
         // Files 预览取 `ws.preview`,Project 面板右配对取 `ws.project_preview`——
         // 两者都是"预览区",复用同一支几何/可见性逻辑,只是状态源不同。
         let specs = match self.left_view {
-            LeftView::Files => ws.preview.desired_webviews(),
-            LeftView::Project => ws.project_preview.desired_webviews(),
+            PanelKind::Files => ws.preview.desired_webviews(),
+            PanelKind::Project => ws.project_preview.desired_webviews(),
             _ => Vec::new(),
         };
         // 编辑弹层开着时,应用级模态盖住了预览区,原生 wry 子视图不听 iced
@@ -3326,7 +3351,7 @@ impl App {
         if self.current_page == AppPage::Home {
             return self.home_browser.desired_webviews();
         }
-        if self.left_view != LeftView::Web {
+        if self.left_view != PanelKind::Web {
             return Vec::new();
         }
         match self.active_workspace() {
@@ -3342,7 +3367,7 @@ impl App {
     /// 会停在上一个项目不动,而同一面板里的 worktree 速览条(`ws.files
     /// .worktrees()` 是按项目取的)却已经跳到新项目——两者对不上。缓存已经是当前项目的
     /// 路径就不动(避免每次切页签都重算一遍),路径不一致就重建,没有项目
-    /// 就清空。只在 `left_view == LeftView::GitLog` 时调用才有意义。
+    /// 就清空。只在 `left_view == PanelKind::GitLog` 时调用才有意义。
     fn sync_git_log_to_active_project(&mut self) {
         let path = self
             .active_workspace()
@@ -4398,7 +4423,7 @@ impl App {
         // 页签走(见 `sync_git_log_to_active_project` 文档),不补这一
         // 下切页签会让提交图停在上一个项目,跟同一面板里已经按新项目
         // 刷新的 worktree 速览条对不上。
-        if self.left_view == LeftView::GitLog {
+        if self.left_view == PanelKind::GitLog {
             self.sync_git_log_to_active_project();
         }
         // 清放大态后必须重算终端网格。`PaneResized` 那条分支只在**窗口
@@ -5156,12 +5181,12 @@ impl App {
         // 切进 Git 提交图视图时,若缓存为空或不属于当前项目,同步跑
         // 一次 `gleisbau` 布局。失败/未打开项目都落成文案,交给
         // `git_log::view` 画出来,不 panic、不静默吞掉。
-        if self.left_view == LeftView::GitLog {
+        if self.left_view == PanelKind::GitLog {
             self.sync_git_log_to_active_project();
         }
         // Todo 面板：切入即从磁盘重读一次 `.dozer/todo.md`，保证切进来
         // 立刻是最新内容（轮询只负责"停留期间"的同步，切换本身不算）。
-        if self.left_view == LeftView::Todo {
+        if self.left_view == PanelKind::Todo {
             self.with_focused_project(|ws, _io| {
                 if let Some(project) = ws.project.as_ref() {
                     todo::reload_from_disk(&mut ws.todo, std::path::Path::new(&project.path));
@@ -5170,7 +5195,7 @@ impl App {
         }
         // 数据库面板：切入即从磁盘重读一次 `.dozer/database.json`，
         // 保证切进来立刻是最新内容(同 Todo 面板的切换时语义)。
-        if self.left_view == LeftView::Database {
+        if self.left_view == PanelKind::Database {
             self.with_focused_project(|ws, _io| {
                 if let Some(project) = ws.project.as_ref() {
                     database::reload_from_disk(
@@ -5184,12 +5209,12 @@ impl App {
         // 描述(`.dozer/description.md`)生成一份，并自动在右侧配套预览窗打
         // 开这份新生成的 README(只在新生成时打开——已存在 README 时不重复
         // 生成也不抢占预览)。语义同 Todo/Database/SSH 的"切换时动作"。
-        if self.left_view == LeftView::Project {
+        if self.left_view == PanelKind::Project {
             self.ensure_project_readme_and_reveal();
         }
         // SSH 面板：切入即从磁盘重读一次 `.dozer/ssh_hosts.json`，语义
         // 同 Todo 面板(切换本身触发重读,停留期间的同步靠别的机制)。
-        if self.left_view == LeftView::Ssh {
+        if self.left_view == PanelKind::Ssh {
             self.with_focused_project(|ws, _io| {
                 if let Some(project) = ws.project.as_ref() {
                     ssh::reload_from_disk(&mut ws.ssh, std::path::Path::new(&project.path));
@@ -5215,12 +5240,12 @@ impl App {
         } else {
             self.right_view = v;
             self.right_collapsed = false;
-            if v == RightView::Usage {
+            if v == PanelKind::Usage {
                 self.with_focused_project(|ws, io| {
                     ws.usage.set_loading(true);
                     ws.spawn_usage_refresh(io);
                 });
-            } else if v == RightView::Acceptance {
+            } else if v == PanelKind::Acceptance {
                 let tab_id = self
                     .active_workspace()
                     .and_then(|ws| ws.tabs.get(ws.active))
@@ -6731,12 +6756,12 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
         icons::icon_button_entry(
             icons::IconKind::Briefcase,
             byteui::theme::icon_size::rail(),
-            app.left_view == LeftView::Project && left_open,
+            app.left_view == PanelKind::Project && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftProject)),
             true,
             byteui::theme::geometry::rail_button_size(),
             true,
-            Message::LeftIconSelect(LeftView::Project),
+            Message::LeftIconSelect(PanelKind::Project),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftProject), hovered),
             "项目",
         ),
@@ -6745,12 +6770,12 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
         icons::icon_button_entry(
             icons::IconKind::ListTodo,
             byteui::theme::icon_size::rail(),
-            app.left_view == LeftView::Todo && left_open,
+            app.left_view == PanelKind::Todo && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftTodo)),
             true,
             byteui::theme::geometry::rail_button_size(),
             true,
-            Message::LeftIconSelect(LeftView::Todo),
+            Message::LeftIconSelect(PanelKind::Todo),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftTodo), hovered),
             "待办",
         ),
@@ -6758,12 +6783,12 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
         icons::icon_button_entry(
             icons::IconKind::FolderTree,
             byteui::theme::icon_size::rail(),
-            app.left_view == LeftView::Files && left_open,
+            app.left_view == PanelKind::Files && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftFiles)),
             true,
             byteui::theme::geometry::rail_button_size(),
             true,
-            Message::LeftIconSelect(LeftView::Files),
+            Message::LeftIconSelect(PanelKind::Files),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftFiles), hovered),
             "文件",
         ),
@@ -6771,12 +6796,12 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
         icons::icon_button_entry(
             icons::IconKind::GitGraph,
             byteui::theme::icon_size::rail(),
-            app.left_view == LeftView::GitLog && left_open,
+            app.left_view == PanelKind::GitLog && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftGit)),
             true,
             byteui::theme::geometry::rail_button_size(),
             true,
-            Message::LeftIconSelect(LeftView::GitLog),
+            Message::LeftIconSelect(PanelKind::GitLog),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftGit), hovered),
             "Git 提交",
         ),
@@ -6784,12 +6809,12 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
         icons::icon_button_entry(
             icons::IconKind::Database,
             byteui::theme::icon_size::rail(),
-            app.left_view == LeftView::Database && left_open,
+            app.left_view == PanelKind::Database && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftDatabase)),
             true,
             byteui::theme::geometry::rail_button_size(),
             true,
-            Message::LeftIconSelect(LeftView::Database),
+            Message::LeftIconSelect(PanelKind::Database),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftDatabase), hovered),
             "数据库",
         ),
@@ -6797,12 +6822,12 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
         icons::icon_button_entry(
             icons::IconKind::Server,
             byteui::theme::icon_size::rail(),
-            app.left_view == LeftView::Ssh && left_open,
+            app.left_view == PanelKind::Ssh && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftSsh)),
             true,
             byteui::theme::geometry::rail_button_size(),
             true,
-            Message::LeftIconSelect(LeftView::Ssh),
+            Message::LeftIconSelect(PanelKind::Ssh),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftSsh), hovered),
             "SSH 主机",
         ),
@@ -6810,12 +6835,12 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
         icons::icon_button_entry(
             icons::IconKind::Globe,
             byteui::theme::icon_size::rail(),
-            app.left_view == LeftView::Web && left_open,
+            app.left_view == PanelKind::Web && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftWeb)),
             true,
             byteui::theme::geometry::rail_button_size(),
             true,
-            Message::LeftIconSelect(LeftView::Web),
+            Message::LeftIconSelect(PanelKind::Web),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftWeb), hovered),
             "浏览器",
         ),
@@ -6843,36 +6868,36 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
         icons::icon_button_entry(
             icons::IconKind::Brain,
             byteui::theme::icon_size::rail(),
-            app.right_view == RightView::Agent && right_open,
+            app.right_view == PanelKind::Agent && right_open,
             app.hover_progress(HoverId::Rail(RailButton::RightAgent)),
             true,
             byteui::theme::geometry::rail_button_size(),
             true,
-            Message::RightIconSelect(RightView::Agent),
+            Message::RightIconSelect(PanelKind::Agent),
             |hovered| Message::Hover(HoverId::Rail(RailButton::RightAgent), hovered),
             "代理",
         ),
         icons::icon_button_entry(
             icons::IconKind::BotMessageSquare,
             byteui::theme::icon_size::rail(),
-            app.right_view == RightView::Conversations && right_open,
+            app.right_view == PanelKind::Conversations && right_open,
             app.hover_progress(HoverId::Rail(RailButton::RightConversations)),
             true,
             byteui::theme::geometry::rail_button_size(),
             true,
-            Message::RightIconSelect(RightView::Conversations),
+            Message::RightIconSelect(PanelKind::Conversations),
             |hovered| Message::Hover(HoverId::Rail(RailButton::RightConversations), hovered),
             "对话",
         ),
         icons::icon_button_entry(
             icons::IconKind::BarChart3,
             byteui::theme::icon_size::rail(),
-            app.right_view == RightView::Usage && right_open,
+            app.right_view == PanelKind::Usage && right_open,
             app.hover_progress(HoverId::Rail(RailButton::RightUsage)),
             true,
             byteui::theme::geometry::rail_button_size(),
             true,
-            Message::RightIconSelect(RightView::Usage),
+            Message::RightIconSelect(PanelKind::Usage),
             |hovered| Message::Hover(HoverId::Rail(RailButton::RightUsage), hovered),
             "用量",
         ),
@@ -6886,12 +6911,12 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
                 icons::icon_button_entry(
                     icons::IconKind::BadgeCheck,
                     byteui::theme::icon_size::rail(),
-                    app.right_view == RightView::Acceptance && right_open,
+                    app.right_view == PanelKind::Acceptance && right_open,
                     app.hover_progress(HoverId::Rail(RailButton::RightAcceptance)),
                     true,
                     byteui::theme::geometry::rail_button_size(),
                     true,
-                    Message::RightIconSelect(RightView::Acceptance),
+                    Message::RightIconSelect(PanelKind::Acceptance),
                     |hovered| Message::Hover(HoverId::Rail(RailButton::RightAcceptance), hovered),
                     "验收",
                 );
@@ -7019,7 +7044,7 @@ fn left_panel_area<'a>(
     };
     let inner: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         match app.left_view {
-            LeftView::Files => {
+            PanelKind::Files => {
                 let (list_portion, content_portion) = split_portions(app.dims.files_split);
                 let list_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
                     if ws.project.is_some() {
@@ -7061,7 +7086,7 @@ fn left_panel_area<'a>(
                 .width(Length::Fill)
                 .into()
             }
-            LeftView::GitLog => git_log::view(
+            PanelKind::GitLog => git_log::view(
                 app,
                 &app.git_log,
                 ws.project_panel.worktrees(),
@@ -7069,7 +7094,7 @@ fn left_panel_area<'a>(
                 app.dims.git_log_file_diff_split,
             )
             .map(Message::GitLog),
-            LeftView::Todo => {
+            PanelKind::Todo => {
                 let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
                     return column![].into();
                 };
@@ -7107,7 +7132,7 @@ fn left_panel_area<'a>(
                 .width(Length::Fill)
                 .into()
             }
-            LeftView::Project => {
+            PanelKind::Project => {
                 let (list_portion, content_portion) = split_portions(app.dims.project_split);
                 let info_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
                     project::view(
@@ -7139,7 +7164,7 @@ fn left_panel_area<'a>(
                 .width(Length::Fill)
                 .into()
             }
-            LeftView::Database => {
+            PanelKind::Database => {
                 // 数据库面板需要项目已打开才能读写 `.dozer/database.json`。
                 if ws.project.is_none() {
                     return column![].into();
@@ -7153,7 +7178,7 @@ fn left_panel_area<'a>(
                 )
                 .map(Message::Database)
             }
-            LeftView::Ssh => {
+            PanelKind::Ssh => {
                 // 同 Files/Database 面板:`ws.project.is_none()` 是 Stub→Loaded
                 // 促成期间的占位态,这时不该渲染出一个看似可点、实际上
                 // `Message::Ssh` 分发会被内核静默吞掉(无 project 时直接
@@ -7191,7 +7216,7 @@ fn left_panel_area<'a>(
                 .width(Length::Fill)
                 .into()
             }
-            LeftView::Web => browser::view(
+            PanelKind::Web => browser::view(
                 &ws.browser,
                 ws.project.as_ref().map(|p| p.id),
                 app.dims.browser_bookmarks_split,
@@ -7199,6 +7224,11 @@ fn left_panel_area<'a>(
                 zone_pane_border(zone, ac),
             )
             .map(Message::Browser),
+            _ => unreachable!(
+                "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
+                 app.left_view 不会取到右侧面板——Stage 4 加拖拽后\
+                 这里要重新设计,不能再用 unreachable"
+            ),
         };
     if maximized {
         return inner;
@@ -7280,7 +7310,7 @@ fn right_panel_area<'a>(
     };
     let inner: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         match app.right_view {
-            RightView::Agent => {
+            PanelKind::Agent => {
                 let (list_portion, content_portion) = split_portions(app.dims.agent_split);
                 row![
                     terminal_pane(
@@ -7309,7 +7339,7 @@ fn right_panel_area<'a>(
                 .width(Length::Fill)
                 .into()
             }
-            RightView::Conversations => {
+            PanelKind::Conversations => {
                 let (list_portion, content_portion) = split_portions(app.dims.conversations_split);
                 row![
                     review_content_pane(
@@ -7336,17 +7366,22 @@ fn right_panel_area<'a>(
                 .width(Length::Fill)
                 .into()
             }
-            RightView::Usage => usage::view(
+            PanelKind::Usage => usage::view(
                 &ws.usage,
                 Length::Fill,
                 zone_pane_border(zone, ac),
                 app.hover_progress(HoverId::UsageRefresh),
             )
             .map(Message::Usage),
-            RightView::Acceptance => {
+            PanelKind::Acceptance => {
                 acceptance::view(&ws.acceptance, Length::Fill, zone_pane_border(zone, ac))
                     .map(Message::Acceptance)
             }
+            _ => unreachable!(
+                "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
+                 app.right_view 不会取到左侧面板——Stage 4 加拖拽后\
+                 这里要重新设计,不能再用 unreachable"
+            ),
         };
     if maximized {
         return inner;
@@ -8527,9 +8562,9 @@ mod tests {
         ShellState {
             layout: ShellLayout::default(),
             dims: PanelDims::default(),
-            left_view: LeftView::Files,
+            left_view: PanelKind::Files,
             left_collapsed: false,
-            right_view: RightView::Agent,
+            right_view: PanelKind::Agent,
             right_collapsed: false,
             browser_bookmarks_open: false,
             maximized: None,
@@ -8559,7 +8594,7 @@ mod tests {
         // Web 视图(左栏最底部 Globe 按钮)没有配对,预览内容区从图标栏右侧起
         // 占满左面板区。
         let state = ShellState {
-            left_view: LeftView::Web,
+            left_view: PanelKind::Web,
             ..test_state()
         };
         let (x, _, w, _) = preview_content_bounds(1440.0, 900.0, &state);
@@ -8572,12 +8607,12 @@ mod tests {
     #[test]
     fn preview_content_bounds_web_view_shrinks_when_bookmarks_open() {
         let closed = ShellState {
-            left_view: LeftView::Web,
+            left_view: PanelKind::Web,
             browser_bookmarks_open: false,
             ..test_state()
         };
         let open = ShellState {
-            left_view: LeftView::Web,
+            left_view: PanelKind::Web,
             browser_bookmarks_open: true,
             ..test_state()
         };
@@ -8651,7 +8686,7 @@ mod tests {
     #[test]
     fn preview_content_bounds_left_maximized_web_spans_whole_overlay_box() {
         let state = ShellState {
-            left_view: LeftView::Web,
+            left_view: PanelKind::Web,
             maximized: Some(MaximizedPane::Left),
             ..test_state()
         };
@@ -8715,7 +8750,7 @@ mod tests {
             (0.0, 0.0)
         );
         let conversations = ShellState {
-            right_view: RightView::Conversations,
+            right_view: PanelKind::Conversations,
             ..test_state()
         };
         assert_eq!(
@@ -8862,7 +8897,7 @@ mod tests {
         );
         assert!(
             !terminal_visible(&ShellState {
-                right_view: RightView::Conversations,
+                right_view: PanelKind::Conversations,
                 ..test_state()
             }),
             "右视图切到对话:终端不在屏上"
@@ -8898,7 +8933,7 @@ mod tests {
     #[test]
     fn terminal_grid_state_ignores_maximized_review_not_terminal() {
         let review_maximized = ShellState {
-            right_view: RightView::Conversations,
+            right_view: PanelKind::Conversations,
             maximized: Some(MaximizedPane::Right),
             ..test_state()
         };
@@ -8909,7 +8944,7 @@ mod tests {
         );
 
         let terminal_maximized = ShellState {
-            right_view: RightView::Agent,
+            right_view: PanelKind::Agent,
             maximized: Some(MaximizedPane::Right),
             ..test_state()
         };
@@ -8968,7 +9003,7 @@ mod tests {
 
         for hidden in [
             ShellState {
-                right_view: RightView::Conversations,
+                right_view: PanelKind::Conversations,
                 ..test_state()
             },
             ShellState {
@@ -9429,7 +9464,7 @@ mod tests {
         );
 
         let conversations = ShellState {
-            right_view: RightView::Conversations,
+            right_view: PanelKind::Conversations,
             ..test_state()
         };
         let l = apply_column_drag(
@@ -9464,7 +9499,7 @@ mod tests {
         );
 
         let conversations = ShellState {
-            right_view: RightView::Conversations,
+            right_view: PanelKind::Conversations,
             ..test_state()
         };
         let l = apply_column_drag(
