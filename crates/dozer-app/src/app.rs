@@ -6290,11 +6290,7 @@ fn project_tab_item<'a>(
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
     if let Some(color) = dot {
-        label = label.push(
-            text("●")
-                .size(byteui::theme::font::caption_sm())
-                .color(color),
-        );
+        label = label.push(byteui::feedback::status::dot(color));
     }
     label = label.push(
         text(name.clone())
@@ -7563,14 +7559,7 @@ pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
 /// tab 栏下方的 1px 分割线。
 pub(crate) fn tab_divider<'a, M: 'a>() -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>
 {
-    container(iced_widget::Space::new())
-        .width(Length::Fill)
-        .height(Length::Fixed(1.0))
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(byteui::theme::color::current().border.into()),
-            ..container::Style::default()
-        })
-        .into()
+    byteui::layout::divider::horizontal()
 }
 
 /// 给一块 tab 内容包上"拖拽换位"的感应层:内容本身仍是原来的交互(点标题
@@ -7904,16 +7893,14 @@ fn tab_item(
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let color = dot_color(tab.agent_state, tab.alive);
     // 状态点作 `panel_tab` 的 prefix。
-    let dot = text("●")
-        .size(byteui::theme::font::caption_sm())
-        .color(color);
+    let dot = byteui::feedback::status::dot(color);
 
     panel_tab(
         tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
         active,
         title_hover_t,
         close_hover_t,
-        Some(dot.into()),
+        Some(dot),
         None,
         Message::SelectTab(idx),
         Message::CloseTab(idx),

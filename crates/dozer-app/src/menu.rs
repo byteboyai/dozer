@@ -119,13 +119,8 @@ fn icon_leading<'a, Msg: 'a>(
 /// 菜单项之间的细分隔线:1px `BORDER` 高度,宽同菜单常宽(与 macOS 系统菜单
 /// 分组线同款)。
 pub fn separator<'a, Msg: 'a>() -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {
-    container(iced_widget::Space::new())
+    container(byteui::layout::divider::horizontal())
         .width(Length::Fixed(byteui::theme::geometry::menu_item_width()))
-        .height(Length::Fixed(1.0))
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(byteui::theme::color::current().border.into()),
-            ..container::Style::default()
-        })
         .into()
 }
 

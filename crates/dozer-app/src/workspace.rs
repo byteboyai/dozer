@@ -2409,9 +2409,7 @@ pub(crate) fn conversation_list_pane(
         let card = button(
             column![
                 row![
-                    text("●")
-                        .size(byteui::theme::font::caption())
-                        .color(agent_dot_color(c.agent)),
+                    byteui::feedback::status::dot(agent_dot_color(c.agent)),
                     lh(text(c.title.clone())
                         .size(byteui::theme::font::body())
                         .color(byteui::theme::color::current().cream)),
@@ -2599,9 +2597,7 @@ pub(crate) fn agent_card<'a>(
 
     lines = lines.push(
         row![
-            text("●")
-                .size(byteui::theme::font::caption())
-                .color(dot_color(tab.agent_state, tab.alive)),
+            byteui::feedback::status::dot(dot_color(tab.agent_state, tab.alive)),
             text(agent_state_label(tab.agent_state))
                 .size(byteui::theme::font::caption_sm())
                 .color(byteui::theme::color::current().dim),
@@ -2891,7 +2887,7 @@ pub(crate) fn terminal_status_bar(
     };
     let resume = ws.tabs.get(ws.active).map(|t| t.alive).unwrap_or(false);
     let line = row![
-        text("●").size(byteui::theme::font::dot_sm()).color(dot),
+        byteui::feedback::status::dot(dot),
         text(label)
             .size(byteui::theme::font::caption())
             .color(byteui::theme::color::current().body),
