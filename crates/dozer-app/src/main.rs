@@ -69,7 +69,7 @@ fn center_traffic_lights(window: &winit::window::Window) {
     static BASELINE_MAXIMIZED: OnceLock<[f64; 3]> = OnceLock::new();
 
     const BAND_HEIGHT: f32 = 28.0;
-    let offset = (theme::geometry::top_bar_height() - BAND_HEIGHT) / 2.0;
+    let offset = (byteui::theme::geometry::top_bar_height() - BAND_HEIGHT) / 2.0;
     if offset <= 0.0 {
         return;
     }
@@ -679,8 +679,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     let logical_size = window.inner_size();
                     let window_w = (logical_size.width as f64 / scale) as f32;
                     let window_h = (logical_size.height as f64 / scale) as f32;
-                    let x = x.min((window_w - theme::geometry::context_menu_width()).max(0.0));
-                    let y = y.min((window_h - theme::geometry::context_menu_height()).max(0.0));
+                    let x = x.min((window_w - byteui::theme::geometry::context_menu_width()).max(0.0));
+                    let y = y.min((window_h - byteui::theme::geometry::context_menu_height()).max(0.0));
                     app.update(Message::Files(extensions::files::Message::RightClickAt {
                         x,
                         y,
@@ -1262,18 +1262,18 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         /// right_zone 的 margin、顶栏/footbar 高度与浏览器地址栏高度。原生
         /// 子视图不听 iced 布局,逐像素算(同 `preview_content_bounds` 的思路)。
         fn home_browser_bounds(window_width: f32, window_height: f32) -> wry::Rect {
-            let rail = theme::geometry::icon_rail_width();
-            let sidebar = theme::geometry::h0_sidebar_width();
-            let divider = theme::geometry::divider_width();
-            let chrome = theme::geometry::browser_chrome_top_px();
+            let rail = byteui::theme::geometry::icon_rail_width();
+            let sidebar = byteui::theme::geometry::h0_sidebar_width();
+            let divider = byteui::theme::geometry::divider_width();
+            let chrome = byteui::theme::geometry::browser_chrome_top_px();
             let m = theme::region::right_zone().margin;
             let x = rail + sidebar + divider + m.left + 8.0;
             let w =
                 (window_width - rail - sidebar - divider - rail - m.left - m.right - 16.0).max(0.0);
-            let y = theme::geometry::top_bar_height() + m.top + chrome;
+            let y = byteui::theme::geometry::top_bar_height() + m.top + chrome;
             let h = (window_height
-                - theme::geometry::top_bar_height()
-                - theme::geometry::status_bar_height()
+                - byteui::theme::geometry::top_bar_height()
+                - byteui::theme::geometry::status_bar_height()
                 - m.top
                 - m.bottom
                 - chrome
@@ -1754,8 +1754,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // `clamp_left_width`(持久化宽可能远大于这个最小
                                 // 宽),这里只是把最坏情形挡在外面。
                                 .with_min_inner_size(LogicalSize::new(
-                                    theme::geometry::min_window_width(),
-                                    theme::geometry::min_window_height(),
+                                    byteui::theme::geometry::min_window_width(),
+                                    byteui::theme::geometry::min_window_height(),
                                 ))
                                 // 统一工具栏:标题栏背景透明 + 不画标题文字 + 内容
                                 // 视图延伸到标题栏区域下面,三者必须同时打开——少
