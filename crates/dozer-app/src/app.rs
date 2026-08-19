@@ -1313,16 +1313,31 @@ pub fn preview_content_bounds_for(
                 Side::Left => left_zone_width(window_width, state),
                 Side::Right => right_zone_width(window_width, state),
             };
-            let x = zone_x0 + 8.0 + m.left;
-            let w = if state.browser_bookmarks_open {
+            let (x, w) = if state.browser_bookmarks_open {
+                // `pair_columns` 内建约定是"mirrored=false 时 list 先渲染",
+                // 但 `browser.rs::view` 对 Web 用的是相反约定("mirror=false
+                // 时 content 先渲染",见 `if mirror { row![bookmarks, divider,
+                // content] } else { row![content, divider, bookmarks] }")——
+                // 这里的 `mirrored` 要取反再传给 `pair_columns`,否则
+                // `cols.content_x` 会算成跟实际渲染顺序相反的那一侧,mirrored
+                // 态下 webview 会摆到收藏夹底下而不是收藏夹之后。宽度这半支
+                // 同时要用 `pair_content_width(zone_raw_w)`(扣过中间分隔线)
+                // 而不是裸的 `zone_raw_w`——iced 的 `FillPortion` 就是在扣掉
+                // 固定宽分隔线之后才按权重分剩余空间的(见 `split_portions`
+                // 文档注释),否则 webview 宽度会比实际渲染的内容列宽出一条
+                // 分隔线的量,右边界戳出内容列。
                 let cols = pair_columns(
-                    zone_raw_w,
+                    pair_content_width(zone_raw_w),
                     1.0 - state.dims.browser_bookmarks_split,
-                    mirrored,
+                    !mirrored,
                 );
-                (cols.content_w - 16.0 - m.left - m.right).max(0.0)
+                let x = zone_x0 + cols.content_x + 8.0 + m.left;
+                let w = (cols.content_w - 16.0 - m.left - m.right).max(0.0);
+                (x, w)
             } else {
-                (zone_raw_w - 16.0 - m.left - m.right).max(0.0)
+                let x = zone_x0 + 8.0 + m.left;
+                let w = (zone_raw_w - 16.0 - m.left - m.right).max(0.0);
+                (x, w)
             };
             (x, y, w, h)
         }
@@ -3589,9 +3604,9 @@ impl App {
     /// 那道闸门的道理——但原生预览不是模态弹层,还要求键盘焦点确实在预览列
     /// (`current_focus == FocusIntent::Preview`),否则用户正在打字给终端时,
     /// 只因为预览列背景里开着一个原生 tab 就会把按键错误地拦下来。
-    pub fn active_preview_tab_has_native_editor(&self) -> bool {
+    pub fn active_preview_tab_has_native_editor(&self, kind: PanelKind) -> bool {
         self.active_workspace()
-            .map(|ws| ws.active_preview_tab_has_native_editor())
+            .map(|ws| ws.active_preview_tab_has_native_editor(kind))
             .unwrap_or(false)
     }
 
@@ -9110,6 +9125,51 @@ mod tests {
         assert_eq!(x_open, x_closed);
         assert_eq!(y_open, y_closed);
         assert_eq!(h_open, h_closed);
+    }
+
+    /// Stage 4b 审阅后修复:`Web` 被拖到非默认栏(镜像态)且收藏夹展开时,
+    /// iced 实际渲染顺序反过来(收藏夹先、内容后,见 `browser.rs::view`
+    /// 的 `if mirror { row![bookmarks, divider, content] }`)——webview 的
+    /// `x` 必须跟着挪到收藏夹之后,不能再固定在 zone 左边界;宽度也必须
+    /// 用 `pair_content_width` 扣过分隔线的宽度,否则和 iced 的
+    /// `FillPortion` 实际布局对不上。
+    #[test]
+    fn preview_content_bounds_web_view_mirrored_bookmarks_content_follows_render_order() {
+        let mut state = ShellState {
+            browser_bookmarks_open: true,
+            ..test_state()
+        };
+        state
+            .layout
+            .rail_layout
+            .left
+            .retain(|&k| k != PanelKind::Web);
+        state.layout.rail_layout.right.push(PanelKind::Web);
+        state.right_view = PanelKind::Web;
+
+        let window_width = 1600.0;
+        let (x, _, w, _) = preview_content_bounds_for(Side::Right, window_width, 900.0, &state);
+        let (zone_x0, zone_w) = pair_x0_and_width(Side::Right, window_width, &state);
+        let raw_zone_w = right_zone_width(window_width, &state);
+
+        // 镜像态下 content 是 pair 里第二个元素(收藏夹先),x 应该落在
+        // 收藏夹列 + 分隔线之后,不是 zone 左边界。
+        assert!(
+            x > zone_x0 + 8.0,
+            "镜像态 content 在收藏夹之后,x 应该比 zone 左边界更靠右: x={x} zone_x0={zone_x0}"
+        );
+        // 宽度按扣过分隔线的 pair 宽分配,不能用裸 zone 宽——否则右边界会
+        // 戳出 iced 实际渲染的内容列。content 列右边界(相对 zone_x0)按
+        // 构造应恰好等于裸区宽(list_w + divider + content_w = raw_zone_w),
+        // 即 webview 右边界不应超出这一侧面板区的实际右边界。
+        assert!(
+            zone_w < raw_zone_w,
+            "pair_x0_and_width 返回的应是扣过分隔线的宽度,测试前提不成立"
+        );
+        assert!(
+            x + w <= zone_x0 + raw_zone_w + 0.5,
+            "webview 右边界不应超出这一侧面板区的实际右边界: x={x} w={w} zone_x0={zone_x0} raw_zone_w={raw_zone_w}"
+        );
     }
 
     #[test]

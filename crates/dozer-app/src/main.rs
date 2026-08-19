@@ -961,9 +961,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             // 转发分支。多了 `current_focus == Preview` 这层判断是因为原生
             // 预览不是模态弹层:用户切去终端敲字时,背景里开着的原生预览
             // tab 不该继续偷键盘(不加这层判断会把这类按键错误地拦在这里,
-            // 而不是送进终端)。
-            if app.active_preview_tab_has_native_editor()
-                && matches!(*current_focus, FocusIntent::Preview(_))
+            // 而不是送进终端)。`current_focus` 携带的 `PanelKind` 决定查
+            // `Files` 还是 `Project` 那个 `PreviewPane`——此前恒查 Files,
+            // Project 预览面板里的原生编辑器 tab 一直收不到键盘。
+            if let FocusIntent::Preview(kind) = *current_focus
+                && app.active_preview_tab_has_native_editor(kind)
             {
                 return;
             }
