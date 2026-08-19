@@ -7281,32 +7281,51 @@ fn right_panel_area<'a>(
         match app.right_view {
             PanelKind::Agent => {
                 let (list_portion, content_portion) = split_portions(app.dims.agent_split);
-                row![
-                    terminal_pane(
-                        app,
-                        ws,
-                        Length::FillPortion(content_portion),
-                        zone_pane_border(zone, lc)
-                    ),
-                    divider_bar(
-                        Divider::RightPairSplit,
-                        theme::region::terminal_pane()
-                            .background
-                            .unwrap_or(byteui::theme::color::current().bg),
-                        theme::region::agent_list_pane()
-                            .background
-                            .unwrap_or(byteui::theme::color::current().bg),
-                        Message::ColumnDragStart(Divider::RightPairSplit),
-                    ),
-                    agent_list_pane(
-                        app,
-                        ws,
-                        Length::FillPortion(list_portion),
-                        zone_pane_border(zone, rc)
-                    ),
-                ]
-                .width(Length::Fill)
-                .into()
+                let terminal = terminal_pane(
+                    app,
+                    ws,
+                    Length::FillPortion(content_portion),
+                    zone_pane_border(zone, lc),
+                );
+                let list = agent_list_pane(
+                    app,
+                    ws,
+                    Length::FillPortion(list_portion),
+                    zone_pane_border(zone, rc),
+                );
+                let terminal_bg = theme::region::terminal_pane()
+                    .background
+                    .unwrap_or(byteui::theme::color::current().bg);
+                let list_bg = theme::region::agent_list_pane()
+                    .background
+                    .unwrap_or(byteui::theme::color::current().bg);
+                if app.panel_mirrored(PanelKind::Agent) {
+                    row![
+                        list,
+                        divider_bar(
+                            Divider::RightPairSplit,
+                            list_bg,
+                            terminal_bg,
+                            Message::ColumnDragStart(Divider::RightPairSplit),
+                        ),
+                        terminal,
+                    ]
+                    .width(Length::Fill)
+                    .into()
+                } else {
+                    row![
+                        terminal,
+                        divider_bar(
+                            Divider::RightPairSplit,
+                            terminal_bg,
+                            list_bg,
+                            Message::ColumnDragStart(Divider::RightPairSplit),
+                        ),
+                        list,
+                    ]
+                    .width(Length::Fill)
+                    .into()
+                }
             }
             PanelKind::Conversations => {
                 let (list_portion, content_portion) = split_portions(app.dims.conversations_split);
