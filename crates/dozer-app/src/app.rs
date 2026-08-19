@@ -7029,22 +7029,41 @@ fn left_panel_area<'a>(
                     Length::FillPortion(content_portion),
                     zone_pane_border(zone, rc),
                 );
-                row![
-                    sidebar_pane.map(Message::Todo),
-                    divider_bar(
-                        Divider::TodoSplit,
-                        theme::region::project_pane()
-                            .background
-                            .unwrap_or(byteui::theme::color::current().bg),
-                        theme::region::preview_pane()
-                            .background
-                            .unwrap_or(byteui::theme::color::current().bg),
-                        Message::ColumnDragStart(Divider::TodoSplit),
-                    ),
-                    content_pane.map(Message::Todo),
-                ]
-                .width(Length::Fill)
-                .into()
+                let sidebar = sidebar_pane.map(Message::Todo);
+                let content = content_pane.map(Message::Todo);
+                let sidebar_bg = theme::region::project_pane()
+                    .background
+                    .unwrap_or(byteui::theme::color::current().bg);
+                let content_bg = theme::region::preview_pane()
+                    .background
+                    .unwrap_or(byteui::theme::color::current().bg);
+                if app.panel_mirrored(PanelKind::Todo) {
+                    row![
+                        content,
+                        divider_bar(
+                            Divider::TodoSplit,
+                            content_bg,
+                            sidebar_bg,
+                            Message::ColumnDragStart(Divider::TodoSplit),
+                        ),
+                        sidebar,
+                    ]
+                    .width(Length::Fill)
+                    .into()
+                } else {
+                    row![
+                        sidebar,
+                        divider_bar(
+                            Divider::TodoSplit,
+                            sidebar_bg,
+                            content_bg,
+                            Message::ColumnDragStart(Divider::TodoSplit),
+                        ),
+                        content,
+                    ]
+                    .width(Length::Fill)
+                    .into()
+                }
             }
             PanelKind::Project => {
                 let (list_portion, content_portion) = split_portions(app.dims.project_split);
