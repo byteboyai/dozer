@@ -42,6 +42,10 @@ pub enum RefKind {
 pub struct CommitRow {
     short_sha: String,
     summary: String,
+    /// commit 作者名(`git_commit.author().name()`),commit 列表行用它替代
+    /// 原先展示的 `short_sha`(用户需求:把 commit id 改为 commit user)。
+    /// 极少数取不到作者名的 commit 为 `None`,列表回退显示 `short_sha`。
+    author: Option<String>,
     /// 指向这个 commit 的分支/tag(可能为空)。
     refs: Vec<RefLabel>,
     /// 这个 commit 的完整 40 位 oid,选中详情用——`short_sha` 只够显示,
@@ -162,9 +166,11 @@ pub fn build(repo_path: &Path, max_count: usize) -> Result<GitLogSnapshot, Strin
                 .unwrap_or_default();
             let time = git_commit.time().seconds();
             let is_merge = git_commit.parent_count() >= 2;
+            let author = git_commit.author().name().ok().map(|n| n.to_string());
             Ok(CommitRow {
                 short_sha,
                 summary,
+                author,
                 refs,
                 oid: commit.oid,
                 time,
@@ -637,14 +643,18 @@ fn commit_list_view<'a>(
             byteui::interaction::icons::IconKind::GitCommitVertical
         };
         let refs_prefix = ref_labels_text(&row.refs, head_branch);
-        // 上行:图标 + short_sha + 时间戳 + refs 标签
+        // 上行:图标 + 作者名(无作者名回退 short_sha)+ 时间戳 + refs 标签
+        let author_or_id = row
+            .author
+            .clone()
+            .unwrap_or_else(|| row.short_sha.clone());
         let mut head_line = row![
             byteui::interaction::icons::view(
                 icon_kind,
                 byteui::theme::icon_size::row(),
                 byteui::theme::color::current().dim
             ),
-            text(row.short_sha.clone())
+            text(author_or_id)
                 .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().dim)
                 .font(Font::MONOSPACE),
@@ -698,6 +708,9 @@ fn commit_list_view<'a>(
         list = list.push(area);
     }
     scrollable(list)
+        .direction(scrollable::Direction::Vertical(
+            byteui::interaction::scrollbar::scrollbar(),
+        ))
         .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style())
         .width(Length::Fill)
         .height(Length::Fill)
@@ -766,6 +779,9 @@ fn file_list_view<'a>(
                 list = list.push(area);
             }
             scrollable(list)
+                .direction(scrollable::Direction::Vertical(
+                    byteui::interaction::scrollbar::scrollbar(),
+                ))
                 .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style())
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -945,6 +961,9 @@ fn diff_pane_view<'a>(
         );
     }
     scrollable(content)
+        .direction(scrollable::Direction::Vertical(
+            byteui::interaction::scrollbar::scrollbar(),
+        ))
         .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style())
         .width(Length::Fill)
         .height(Length::Fill)
