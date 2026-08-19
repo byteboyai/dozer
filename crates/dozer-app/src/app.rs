@@ -803,6 +803,37 @@ fn rail_cross_apply(
     Some(kind)
 }
 
+/// 给定面板当前所在栏(不是默认栏,是"当前"——`RailLayout` 实时查),
+/// 算出这条分割线要用哪个 zone 的横向基准(x0)与可分配宽度。左栏基准是
+/// `icon_rail_width()`(从窗口左沿量),右栏基准是"窗口宽 - 右图标栏宽 -
+/// 右区宽"(从窗口左沿量到右区左边界,同现有 `RightPairSplit` 分支已经
+/// 在用的 `right_x0` 算法,这里把它提出来给两侧共用)。
+fn pair_x0_and_width(side: Side, window_width: f32, state: &ShellState) -> (f32, f32) {
+    match side {
+        Side::Left => (
+            byteui::theme::geometry::icon_rail_width(),
+            pair_content_width(left_zone_width(window_width, state)),
+        ),
+        Side::Right => {
+            let right_w = right_zone_width(window_width, state);
+            (
+                window_width - byteui::theme::geometry::icon_rail_width() - right_w,
+                pair_content_width(right_w),
+            )
+        }
+    }
+}
+
+/// 给定面板默认(未镜像)态下"列表侧是否渲染在前(pair 内第一个元素,
+/// 几何上更靠左)"与当前是否处于镜像态,算出"列表侧现在是否渲染在前"。
+/// `apply_column_drag` 算出的 `ratio` 恒是"pair 内第一个元素的宽度占比"
+/// (鼠标左侧的宽度 / pair 总宽)——只有列表侧现在确实渲染在前时,
+/// `ratio` 才能直接当"列表侧占比"写回 split 字段;渲染在后时要写
+/// `1.0 - ratio`。
+fn list_rendered_first(default_list_first: bool, mirrored: bool) -> bool {
+    default_list_first != mirrored
+}
+
 /// 拖拽某条分隔线到窗口逻辑 x 坐标 `logical_x` 后的新 `ShellLayout`。
 /// `LeftPairSplit`/`RightPairSplit` 写哪个 split 字段取决于当前那一侧的
 /// 视图选择(比如右侧当前是"对话"就写 `conversations_split`，不是
@@ -853,42 +884,63 @@ pub(crate) fn apply_column_drag(
             }
         }
         Divider::SshSplit => {
-            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            let side = state.layout.rail_layout.side_of(PanelKind::Ssh);
+            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let ratio = ((logical_x - byteui::theme::geometry::icon_rail_width()) / pair_w).clamp(
+            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
                 byteui::theme::geometry::min_split_ratio(),
                 byteui::theme::geometry::max_split_ratio(),
             );
+            let mirrored = side != PanelKind::Ssh.default_side();
+            let ratio = if list_rendered_first(true, mirrored) {
+                raw_ratio
+            } else {
+                1.0 - raw_ratio
+            };
             PanelDims {
                 ssh_split: ratio,
                 ..state.dims
             }
         }
         Divider::TodoSplit => {
-            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            let side = state.layout.rail_layout.side_of(PanelKind::Todo);
+            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let ratio = ((logical_x - byteui::theme::geometry::icon_rail_width()) / pair_w).clamp(
+            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
                 byteui::theme::geometry::min_split_ratio(),
                 byteui::theme::geometry::max_split_ratio(),
             );
+            let mirrored = side != PanelKind::Todo.default_side();
+            let ratio = if list_rendered_first(true, mirrored) {
+                raw_ratio
+            } else {
+                1.0 - raw_ratio
+            };
             PanelDims {
                 todo_split: ratio,
                 ..state.dims
             }
         }
         Divider::GitLogSplit => {
-            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            let side = state.layout.rail_layout.side_of(PanelKind::GitLog);
+            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let ratio = ((logical_x - byteui::theme::geometry::icon_rail_width()) / pair_w).clamp(
+            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
                 byteui::theme::geometry::min_split_ratio(),
                 byteui::theme::geometry::max_split_ratio(),
             );
+            let mirrored = side != PanelKind::GitLog.default_side();
+            let ratio = if list_rendered_first(true, mirrored) {
+                raw_ratio
+            } else {
+                1.0 - raw_ratio
+            };
             PanelDims {
                 git_log_split: ratio,
                 ..state.dims
@@ -9968,6 +10020,115 @@ mod tests {
             rail_drag_move_into(&mut rail, &mut drag, Side::Left, 0); // 移回源栏,index 未变
             assert_eq!(drag.pending_cross_side, None, "移回源栏取消跨栏悬停");
             assert_eq!(rail, before, "整个过程没有搬移,RailLayout 不变");
+        }
+    }
+
+    /// `apply_column_drag` 里 Ssh/Todo/GitLog 三个左栏默认面板的 side+镜像
+    /// 感知改造测试。默认栏(左)下方向应与改造前固定行为逐字节一致(防回归
+    /// 锚);挪到右栏后方向要反转(镜像态下"列表在后")。用 near/far 方向性
+    /// 比较,不手算精确数值(同既有
+    /// `apply_column_drag_browser_bookmarks_split_direction_matches_content_side`)。
+    mod apply_column_drag_ssh_todo_gitlog_mirror_tests {
+        use super::*;
+
+        fn right_x0_inside(window_width: f32, state: &ShellState) -> f32 {
+            window_width - byteui::theme::geometry::icon_rail_width()
+                - right_zone_width(window_width, state)
+        }
+
+        fn relocate_to_right(state: &mut ShellState, kind: PanelKind) {
+            state.layout.rail_layout.left.retain(|&k| k != kind);
+            state.layout.rail_layout.right.push(kind);
+        }
+
+        #[test]
+        fn ssh_split_direction_on_default_side_matches_pre_migration_behavior() {
+            let state = test_state();
+            let window_width = 1600.0;
+            let near = apply_column_drag(state.clone(), Divider::SshSplit, window_width, 300.0);
+            let far = apply_column_drag(state, Divider::SshSplit, window_width, 500.0);
+            assert!(
+                far.ssh_split > near.ssh_split,
+                "near={} far={}",
+                near.ssh_split,
+                far.ssh_split
+            );
+        }
+
+        #[test]
+        fn ssh_split_direction_flips_when_relocated_to_right_side() {
+            let mut state = test_state();
+            relocate_to_right(&mut state, PanelKind::Ssh);
+            let window_width = 1600.0;
+            let x0 = right_x0_inside(window_width, &state);
+            let near = apply_column_drag(state.clone(), Divider::SshSplit, window_width, x0 + 50.0);
+            let far = apply_column_drag(state, Divider::SshSplit, window_width, x0 + 250.0);
+            assert!(
+                far.ssh_split < near.ssh_split,
+                "镜像态下方向应反转:near={} far={}",
+                near.ssh_split,
+                far.ssh_split
+            );
+        }
+
+        #[test]
+        fn todo_split_direction_on_default_side_matches_pre_migration_behavior() {
+            let state = test_state();
+            let window_width = 1600.0;
+            let near = apply_column_drag(state.clone(), Divider::TodoSplit, window_width, 300.0);
+            let far = apply_column_drag(state, Divider::TodoSplit, window_width, 500.0);
+            assert!(
+                far.todo_split > near.todo_split,
+                "near={} far={}",
+                near.todo_split,
+                far.todo_split
+            );
+        }
+
+        #[test]
+        fn todo_split_direction_flips_when_relocated_to_right_side() {
+            let mut state = test_state();
+            relocate_to_right(&mut state, PanelKind::Todo);
+            let window_width = 1600.0;
+            let x0 = right_x0_inside(window_width, &state);
+            let near = apply_column_drag(state.clone(), Divider::TodoSplit, window_width, x0 + 50.0);
+            let far = apply_column_drag(state, Divider::TodoSplit, window_width, x0 + 250.0);
+            assert!(
+                far.todo_split < near.todo_split,
+                "镜像态下方向应反转:near={} far={}",
+                near.todo_split,
+                far.todo_split
+            );
+        }
+
+        #[test]
+        fn git_log_split_direction_on_default_side_matches_pre_migration_behavior() {
+            let state = test_state();
+            let window_width = 1600.0;
+            let near = apply_column_drag(state.clone(), Divider::GitLogSplit, window_width, 300.0);
+            let far = apply_column_drag(state, Divider::GitLogSplit, window_width, 500.0);
+            assert!(
+                far.git_log_split > near.git_log_split,
+                "near={} far={}",
+                near.git_log_split,
+                far.git_log_split
+            );
+        }
+
+        #[test]
+        fn git_log_split_direction_flips_when_relocated_to_right_side() {
+            let mut state = test_state();
+            relocate_to_right(&mut state, PanelKind::GitLog);
+            let window_width = 1600.0;
+            let x0 = right_x0_inside(window_width, &state);
+            let near = apply_column_drag(state.clone(), Divider::GitLogSplit, window_width, x0 + 50.0);
+            let far = apply_column_drag(state, Divider::GitLogSplit, window_width, x0 + 250.0);
+            assert!(
+                far.git_log_split < near.git_log_split,
+                "镜像态下方向应反转:near={} far={}",
+                near.git_log_split,
+                far.git_log_split
+            );
         }
     }
 }
