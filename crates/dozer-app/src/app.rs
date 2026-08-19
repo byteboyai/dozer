@@ -6933,7 +6933,7 @@ fn icon_rail(
         Side::Right => (app.right_view, !app.right_collapsed),
     };
     let mut content = column![].spacing(region.gap).padding(region.padding);
-    for &kind in app.shell_layout.rail_layout.side(side) {
+    for (idx, &kind) in app.shell_layout.rail_layout.side(side).iter().enumerate() {
         let (icon, tooltip) = panel_meta(kind);
         let base: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
             icons::icon_button_entry(
@@ -6952,7 +6952,7 @@ fn icon_rail(
             Some(badge) => stack![base, badge].into(),
             None => base,
         };
-        content = content.push(entry);
+        content = content.push(rail_drag_surface(entry, side, idx));
     }
     container(content)
         .width(Length::Fixed(byteui::theme::geometry::icon_rail_width()))
@@ -7905,6 +7905,22 @@ pub(crate) fn tab_drag_surface(
         return area.into();
     }
     area.into()
+}
+
+/// 给一个图标栏按钮包上"拖拽换栏/换位"的感应层,手法同 `tab_drag_surface`
+/// ——内容本身仍是原来的交互(点击选中在内部,见 `panel_select` 已经在
+/// `Message::PanelSelect` 处理里武装拖拽态),外层只补 `on_move`:光标
+/// 移动到这个按钮上时,若正在拖拽(`App::dragging_rail()`),上报
+/// `RailDragMove { side, index }`。`rail_drag_move` 只在 `rail_drag` 命中时
+/// 才做同栏重排 / 记跨栏悬停,所以没在拖拽时这条 `on_move` 是无害的 no-op。
+fn rail_drag_surface(
+    content: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>,
+    side: Side,
+    index: usize,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    MouseArea::new(content)
+        .on_move(move |_| Message::RailDragMove { side, index })
+        .into()
 }
 
 /// 面板内 tab（终端 / 预览 / 浏览器三处共用）的渲染器，样式对齐顶栏未选中
