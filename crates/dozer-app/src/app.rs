@@ -944,28 +944,42 @@ pub(crate) fn apply_column_drag(
             }
         }
         Divider::LeftPairSplit => {
-            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            let side = state.layout.rail_layout.side_of(PanelKind::Files);
+            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let ratio = ((logical_x - byteui::theme::geometry::icon_rail_width()) / pair_w).clamp(
+            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
                 byteui::theme::geometry::min_split_ratio(),
                 byteui::theme::geometry::max_split_ratio(),
             );
+            let mirrored = side != PanelKind::Files.default_side();
+            let ratio = if list_rendered_first(true, mirrored) {
+                raw_ratio
+            } else {
+                1.0 - raw_ratio
+            };
             PanelDims {
                 files_split: ratio,
                 ..state.dims
             }
         }
         Divider::ProjectSplit => {
-            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            let side = state.layout.rail_layout.side_of(PanelKind::Project);
+            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let ratio = ((logical_x - byteui::theme::geometry::icon_rail_width()) / pair_w).clamp(
+            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
                 byteui::theme::geometry::min_split_ratio(),
                 byteui::theme::geometry::max_split_ratio(),
             );
+            let mirrored = side != PanelKind::Project.default_side();
+            let ratio = if list_rendered_first(true, mirrored) {
+                raw_ratio
+            } else {
+                1.0 - raw_ratio
+            };
             PanelDims {
                 project_split: ratio,
                 ..state.dims
@@ -1035,14 +1049,26 @@ pub(crate) fn apply_column_drag(
             }
         }
         Divider::BrowserBookmarksSplit => {
-            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            let side = state.layout.rail_layout.side_of(PanelKind::Web);
+            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let ratio = ((logical_x - byteui::theme::geometry::icon_rail_width()) / pair_w).clamp(
+            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
                 byteui::theme::geometry::min_split_ratio(),
                 byteui::theme::geometry::max_split_ratio(),
             );
+            let mirrored = side != PanelKind::Web.default_side();
+            // browser_bookmarks_split 存的是"内容占比"(Web 唯一反着命名
+            // 的字段),content 默认渲染在前,所以这里 `list_rendered_first`
+            // 的 `default_list_first` 参数传 `false`(不是 `true`)——
+            // "list" 这个泛化概念在 Web 这里对应收藏夹侧栏,不是内容。
+            // 翻转方向和 Files/Project 相反,写反会收藏夹拖拽方向错乱。
+            let ratio = if list_rendered_first(false, mirrored) {
+                1.0 - raw_ratio
+            } else {
+                raw_ratio
+            };
             PanelDims {
                 browser_bookmarks_split: ratio,
                 ..state.dims
@@ -10480,6 +10506,146 @@ mod tests {
                 "镜像态下方向应反转:near={} far={}",
                 near.git_log_split,
                 far.git_log_split
+            );
+        }
+    }
+
+    /// `apply_column_drag` 里 `LeftPairSplit`(Files)/`ProjectSplit`/
+    /// `BrowserBookmarksSplit` 三个本 Stage 改过 base 的分支的 side+镜像
+    /// 感知测试(此前硬编码 `left_zone_width` + `icon_rail_width()`,Project
+    /// /Web 挪到右栏后拖拽方向直接错乱)。Files/Project 默认"列表在前",
+    /// Web 默认"内容在前"且 `browser_bookmarks_split` 存内容占比——方向翻转
+    /// 的判定彼此相反,分开写清楚。
+    mod apply_column_drag_files_project_web_mirror_tests {
+        use super::*;
+
+        fn right_x0_inside(window_width: f32, state: &ShellState) -> f32 {
+            window_width
+                - byteui::theme::geometry::icon_rail_width()
+                - right_zone_width(window_width, state)
+        }
+
+        fn relocate_to_right(state: &mut ShellState, kind: PanelKind) {
+            state.layout.rail_layout.left.retain(|&k| k != kind);
+            state.layout.rail_layout.right.push(kind);
+        }
+
+        #[test]
+        fn files_split_direction_on_default_side_matches_pre_migration_behavior() {
+            let state = test_state();
+            let window_width = 1600.0;
+            let near =
+                apply_column_drag(state.clone(), Divider::LeftPairSplit, window_width, 300.0);
+            let far = apply_column_drag(state, Divider::LeftPairSplit, window_width, 500.0);
+            assert!(
+                far.files_split > near.files_split,
+                "near={} far={}",
+                near.files_split,
+                far.files_split
+            );
+        }
+
+        #[test]
+        fn files_split_direction_flips_when_relocated_to_right_side() {
+            let mut state = test_state();
+            relocate_to_right(&mut state, PanelKind::Files);
+            let window_width = 1600.0;
+            let x0 = right_x0_inside(window_width, &state);
+            let near = apply_column_drag(
+                state.clone(),
+                Divider::LeftPairSplit,
+                window_width,
+                x0 + 50.0,
+            );
+            let far = apply_column_drag(state, Divider::LeftPairSplit, window_width, x0 + 250.0);
+            assert!(
+                far.files_split < near.files_split,
+                "镜像态下方向应反转:near={} far={}",
+                near.files_split,
+                far.files_split
+            );
+        }
+
+        #[test]
+        fn project_split_direction_on_default_side_matches_pre_migration_behavior() {
+            let state = test_state();
+            let window_width = 1600.0;
+            let near = apply_column_drag(state.clone(), Divider::ProjectSplit, window_width, 300.0);
+            let far = apply_column_drag(state, Divider::ProjectSplit, window_width, 500.0);
+            assert!(
+                far.project_split > near.project_split,
+                "near={} far={}",
+                near.project_split,
+                far.project_split
+            );
+        }
+
+        #[test]
+        fn project_split_direction_flips_when_relocated_to_right_side() {
+            let mut state = test_state();
+            relocate_to_right(&mut state, PanelKind::Project);
+            let window_width = 1600.0;
+            let x0 = right_x0_inside(window_width, &state);
+            let near = apply_column_drag(
+                state.clone(),
+                Divider::ProjectSplit,
+                window_width,
+                x0 + 50.0,
+            );
+            let far = apply_column_drag(state, Divider::ProjectSplit, window_width, x0 + 250.0);
+            assert!(
+                far.project_split < near.project_split,
+                "镜像态下方向应反转:near={} far={}",
+                near.project_split,
+                far.project_split
+            );
+        }
+
+        #[test]
+        fn browser_bookmarks_split_direction_on_default_side_matches_pre_migration_behavior() {
+            // Web 默认"内容在前"且字段存内容占比:默认栏(左)下拖拽点越靠右,
+            // 内容占比越大(与既有 `browser_bookmarks_split_direction_matches_content_side`
+            // 一致的方向锚)。
+            let state = test_state();
+            let window_width = 1600.0;
+            let near = apply_column_drag(
+                state.clone(),
+                Divider::BrowserBookmarksSplit,
+                window_width,
+                100.0,
+            );
+            let far = apply_column_drag(state, Divider::BrowserBookmarksSplit, window_width, 500.0);
+            assert!(
+                far.browser_bookmarks_split > near.browser_bookmarks_split,
+                "near={} far={}",
+                near.browser_bookmarks_split,
+                far.browser_bookmarks_split
+            );
+        }
+
+        #[test]
+        fn browser_bookmarks_split_direction_flips_when_relocated_to_right_side() {
+            let mut state = test_state();
+            relocate_to_right(&mut state, PanelKind::Web);
+            let window_width = 1600.0;
+            let x0 = right_x0_inside(window_width, &state);
+            let near = apply_column_drag(
+                state.clone(),
+                Divider::BrowserBookmarksSplit,
+                window_width,
+                x0 + 50.0,
+            );
+            let far = apply_column_drag(
+                state,
+                Divider::BrowserBookmarksSplit,
+                window_width,
+                x0 + 250.0,
+            );
+            assert!(
+                far.browser_bookmarks_split < near.browser_bookmarks_split,
+                "镜像态下方向应反转:near={} far={}",
+                near.browser_bookmarks_split,
+                far.browser_bookmarks_split
             );
         }
     }
