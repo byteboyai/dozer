@@ -371,7 +371,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
     // 把上次退出前存盘的 UI scale 读回，确保首帧几何/布局按退出时的缩放排布
     // （Ctrl +/- 改过的 scale 由 `icon_size::persist_scale` 在每次缩放后落盘）。
-    crate::theme::icon_size::init_scale();
+    byteui::theme::icon_size::init_scale(&crate::theme::ui_scale_path());
 
     // 注册 sqlx `Any` 驱动的具体实现(Postgres/MySQL/SQLite),必须在第一次
     // `sqlx::AnyPool::connect` 之前跑一次(数据库面板连接测试用)。
@@ -494,7 +494,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         *loaded_url = spec.url.clone();
                         // 导航会重置 WKWebView 的 pageZoom,重建后把当前
                         // 全局 UI 缩放补回去,否则预览字号会跳回 100%。
-                        let _ = view.zoom(crate::theme::icon_size::scale() as f64);
+                        let _ = view.zoom(byteui::theme::icon_size::scale() as f64);
                     }
                     let _ = view.set_bounds(bounds);
                     let _ = view.set_visible(spec.visible);
@@ -547,7 +547,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             // 新 webview 按当前全局 UI 缩放初始化,使预览字号
                             // 跟着 ⌘/Ctrl +/- 一起缩放(`WebView::zoom` 在
                             // macOS 11+ 走 WKWebView 的 pageZoom)。
-                            let _ = view.zoom(crate::theme::icon_size::scale() as f64);
+                            let _ = view.zoom(byteui::theme::icon_size::scale() as f64);
                             pool.insert(spec.id, (view, spec.url.clone()));
                         }
                         Err(e) => tracing::error!("创建预览 webview 失败: {e}"),
@@ -1649,7 +1649,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             // 浏览器 webview(新建的 webview 已在 `sync_webview_pool` 里按
             // 当前 scale 初始化,这里只补"已存在"这一增量)。
             if app.take_pending_preview_zoom() {
-                let scale = crate::theme::icon_size::scale() as f64;
+                let scale = byteui::theme::icon_size::scale() as f64;
                 for (view, _) in webviews.values() {
                     let _ = view.zoom(scale);
                 }
