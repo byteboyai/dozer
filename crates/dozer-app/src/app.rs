@@ -6960,27 +6960,45 @@ fn left_panel_area<'a>(
                             zone_pane_border(zone, lc),
                         )
                     };
-                row![
-                    list_pane,
-                    divider_bar(
-                        Divider::LeftPairSplit,
-                        theme::region::project_pane()
-                            .background
-                            .unwrap_or(byteui::theme::color::current().bg),
-                        theme::region::preview_pane()
-                            .background
-                            .unwrap_or(byteui::theme::color::current().bg),
-                        Message::ColumnDragStart(Divider::LeftPairSplit),
-                    ),
-                    preview_pane(
-                        app,
-                        ws,
-                        Length::FillPortion(content_portion),
-                        zone_pane_border(zone, rc)
-                    ),
-                ]
-                .width(Length::Fill)
-                .into()
+                let preview = preview_pane(
+                    app,
+                    ws,
+                    Length::FillPortion(content_portion),
+                    zone_pane_border(zone, rc),
+                );
+                let list_bg = theme::region::project_pane()
+                    .background
+                    .unwrap_or(byteui::theme::color::current().bg);
+                let preview_bg = theme::region::preview_pane()
+                    .background
+                    .unwrap_or(byteui::theme::color::current().bg);
+                if app.panel_mirrored(PanelKind::Files) {
+                    row![
+                        preview,
+                        divider_bar(
+                            Divider::LeftPairSplit,
+                            preview_bg,
+                            list_bg,
+                            Message::ColumnDragStart(Divider::LeftPairSplit),
+                        ),
+                        list_pane,
+                    ]
+                    .width(Length::Fill)
+                    .into()
+                } else {
+                    row![
+                        list_pane,
+                        divider_bar(
+                            Divider::LeftPairSplit,
+                            list_bg,
+                            preview_bg,
+                            Message::ColumnDragStart(Divider::LeftPairSplit),
+                        ),
+                        preview,
+                    ]
+                    .width(Length::Fill)
+                    .into()
+                }
             }
             PanelKind::GitLog => git_log::view(
                 app,
