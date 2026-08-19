@@ -143,7 +143,10 @@ pub fn default_split_ratio() -> f32 {
 
 /// 建窗时的初始窗口逻辑尺寸——仅在从未持久化过窗口尺寸时用作兜底。
 pub fn initial_window_size() -> (f32, f32) {
-    (current().initial_window_width, current().initial_window_height)
+    (
+        current().initial_window_width,
+        current().initial_window_height,
+    )
 }
 
 /// 高度最小值。已含全局 scale。
@@ -330,7 +333,10 @@ mod tests {
     #[test]
     fn current_defaults_to_byteboy2077() {
         let c = current();
-        assert_eq!(c.icon_rail_width, GeometryTokens::byteboy2077().icon_rail_width);
+        assert_eq!(
+            c.icon_rail_width,
+            GeometryTokens::byteboy2077().icon_rail_width
+        );
     }
 
     #[test]
