@@ -1191,7 +1191,7 @@ fn drivers_popup<'a>(
     // 项(启用的打 ✓)。单项/外壳统一走 `crate::menu`,表面即文件树右键菜单。
     let mut items: Vec<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> = vec![
         text("已启用的驱动")
-            .size(crate::theme::font::caption())
+            .size(byteui::theme::font::caption())
             .color(byteui::theme::color::current().dim)
             .into(),
     ];
@@ -1199,7 +1199,7 @@ fn drivers_popup<'a>(
         let enabled = app_state.is_enabled(driver);
         let checkbox: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
             text(if enabled { "✓" } else { " " })
-                .size(crate::theme::font::body())
+                .size(byteui::theme::font::body())
                 .into();
         items.push(crate::menu::item_row_fill(
             Some(checkbox),
@@ -1246,15 +1246,15 @@ fn source_card<'a>(
         column![
             row![
                 text(source.name.clone())
-                    .size(crate::theme::font::body())
+                    .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().cream),
                 text(source.driver.label())
-                    .size(crate::theme::font::caption_sm())
+                    .size(byteui::theme::font::caption_sm())
                     .color(byteui::theme::color::current().dim),
             ]
             .spacing(8),
             text(summary)
-                .size(crate::theme::font::caption_sm())
+                .size(byteui::theme::font::caption_sm())
                 .color(byteui::theme::color::current().dim),
             {
                 let mut btns = row![
@@ -1273,7 +1273,7 @@ fn source_card<'a>(
                 .push(button(text("删除")).on_press(Message::DeleteSource(source.id.clone())))
             },
             text(status_text)
-                .size(crate::theme::font::caption_sm())
+                .size(byteui::theme::font::caption_sm())
                 .color(status_color),
         ]
         .spacing(6),
@@ -1335,13 +1335,13 @@ fn source_form<'a>(
     col = col.push(
         text_input("名字", &draft.name)
             .on_input(Message::DraftNameChanged)
-            .size(crate::theme::font::body()),
+            .size(byteui::theme::font::body()),
     );
     if draft.driver == DriverKind::Sqlite {
         col = col.push(
             text_input("文件路径", &draft.database)
                 .on_input(Message::DraftDatabaseChanged)
-                .size(crate::theme::font::body()),
+                .size(byteui::theme::font::body()),
         );
     } else {
         col = col.push(
@@ -1350,33 +1350,33 @@ fn source_form<'a>(
                 &draft.uri,
             )
             .on_input(Message::DraftUriChanged)
-            .size(crate::theme::font::body()),
+            .size(byteui::theme::font::body()),
         );
         col = col.push(
             text_input("host", &draft.host)
                 .on_input(Message::DraftHostChanged)
-                .size(crate::theme::font::body()),
+                .size(byteui::theme::font::body()),
         );
         col = col.push(
             text_input("port", &draft.port)
                 .on_input(Message::DraftPortChanged)
-                .size(crate::theme::font::body()),
+                .size(byteui::theme::font::body()),
         );
         col = col.push(
             text_input("database", &draft.database)
                 .on_input(Message::DraftDatabaseChanged)
-                .size(crate::theme::font::body()),
+                .size(byteui::theme::font::body()),
         );
         col = col.push(
             text_input("username", &draft.username)
                 .on_input(Message::DraftUsernameChanged)
-                .size(crate::theme::font::body()),
+                .size(byteui::theme::font::body()),
         );
         col = col.push(
             text_input("password(留空则不修改)", &draft.password)
                 .secure(true)
                 .on_input(Message::DraftPasswordChanged)
-                .size(crate::theme::font::body()),
+                .size(byteui::theme::font::body()),
         );
     }
     col = col.push(
@@ -1436,7 +1436,7 @@ pub fn view<'a>(
     if ws_state.sources().is_empty() {
         col = col.push(
             text("还没有数据源")
-                .size(crate::theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim),
         );
     } else {
@@ -1483,10 +1483,10 @@ fn schema_tree_view<'a>(
     let header = row![
         back_button,
         text(source.name.clone())
-            .size(crate::theme::font::subtitle())
+            .size(byteui::theme::font::subtitle())
             .color(byteui::theme::color::current().cream),
         text(source.driver.label())
-            .size(crate::theme::font::caption_sm())
+            .size(byteui::theme::font::caption_sm())
             .color(byteui::theme::color::current().dim),
         iced_widget::space::horizontal(),
         button(text("刷新")).on_press(Message::SchemaRefresh(source.id.clone())),
@@ -1500,7 +1500,7 @@ fn schema_tree_view<'a>(
     if st.loading_tables() && !st.tables().is_empty() {
         col = col.push(
             text("刷新中…")
-                .size(crate::theme::font::caption_sm())
+                .size(byteui::theme::font::caption_sm())
                 .color(byteui::theme::color::current().dim),
         );
     }
@@ -1510,7 +1510,7 @@ fn schema_tree_view<'a>(
         // 有旧快照:树保留,一行红字说明刷新失败
         col = col.push(
             text(format!("刷新失败:{e}"))
-                .size(crate::theme::font::caption_sm())
+                .size(byteui::theme::font::caption_sm())
                 .color(byteui::theme::color::current().red),
         );
     }
@@ -1518,14 +1518,14 @@ fn schema_tree_view<'a>(
     if st.loading_tables() && st.tables().is_empty() {
         col = col.push(
             text("加载中…")
-                .size(crate::theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim),
         );
     } else if st.tables().is_empty() {
         if let Some(e) = st.tables_error() {
             col = col.push(
                 text(format!("✗ {e}"))
-                    .size(crate::theme::font::body())
+                    .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().red),
             );
             col =
@@ -1533,7 +1533,7 @@ fn schema_tree_view<'a>(
         } else {
             col = col.push(
                 text("该库没有表或视图")
-                    .size(crate::theme::font::body())
+                    .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().dim),
             );
         }
@@ -1674,7 +1674,7 @@ fn schema_tree_row<'a>(
                     .size(crate::workspace::tree_row_font_size())
                     .color(name_color),
                 text(c.type_name.clone())
-                    .size(crate::theme::font::caption_sm())
+                    .size(byteui::theme::font::caption_sm())
                     .color(byteui::theme::color::current().dim),
             ]
             .spacing(6)
@@ -1712,7 +1712,7 @@ fn schema_tree_row<'a>(
                 .size(crate::workspace::tree_row_font_size())
                 .color(byteui::theme::color::current().red),
             text("(收起再展开可重试)")
-                .size(crate::theme::font::caption_sm())
+                .size(byteui::theme::font::caption_sm())
                 .color(byteui::theme::color::current().dim),
         ]
         .spacing(6)
