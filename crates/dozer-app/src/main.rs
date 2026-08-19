@@ -473,21 +473,24 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
     }
 
     /// `sync_previews` 的差集同步逻辑,预览池/浏览器池共用同一套算法,
-    /// 各自传各自的 `pool`/`specs`,互不干扰。
+    /// 各自传各自的 `pool`/`specs`,互不干扰。每条 spec 自带各自的矩形
+    /// (不再是整批共用一个)——支持两个不同的 webview 面板(如 `Files` 在
+    /// 左栏、`Project` 在右栏)同时出现在同一个池里,各自摆在各自的位置。
+    /// 见 spec "webview 面板的镜像 bounds(2026-08-19 Stage 4a 审阅后修订)"
+    /// 一节。
     fn sync_webview_pool(
         window: &winit::window::Window,
         pool: &mut std::collections::HashMap<usize, (wry::WebView, String)>,
-        specs: Vec<preview::WebviewSpec>,
-        bounds: wry::Rect,
+        specs: Vec<(preview::WebviewSpec, wry::Rect)>,
         allowed_files: std::sync::Arc<
             std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
         >,
         proxy: winit::event_loop::EventLoopProxy<Message>,
     ) {
-        let desired_ids: std::collections::HashSet<usize> = specs.iter().map(|s| s.id).collect();
+        let desired_ids: std::collections::HashSet<usize> = specs.iter().map(|(s, _)| s.id).collect();
         pool.retain(|id, _| desired_ids.contains(id));
 
-        for spec in specs {
+        for (spec, bounds) in specs {
             match pool.get_mut(&spec.id) {
                 Some((view, loaded_url)) => {
                     if *loaded_url != spec.url {
@@ -1259,8 +1262,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             sync_webview_pool(
                 window.as_ref(),
                 webviews,
-                app.preview_desired(),
-                bounds,
+                app.preview_desired()
+                    .into_iter()
+                    .map(|s| (s, bounds))
+                    .collect(),
                 app.allowed_files(),
                 proxy.clone(),
             );
@@ -1283,8 +1288,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             sync_webview_pool(
                 window.as_ref(),
                 browser_webviews,
-                app.browser_desired(),
-                browser_bounds,
+                app.browser_desired()
+                    .into_iter()
+                    .map(|s| (s, browser_bounds))
+                    .collect(),
                 app.allowed_files(),
                 proxy.clone(),
             );
