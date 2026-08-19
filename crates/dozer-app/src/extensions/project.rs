@@ -4,7 +4,6 @@
 pub mod links;
 
 use crate::delivery::WorktreeInfo;
-use crate::theme;
 use crate::workspace::AddrEvent;
 use byteui::interaction::icons;
 use dozer_core::protocol::ProjectInfo;

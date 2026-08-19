@@ -5,7 +5,6 @@
 //! `docs/superpowers/specs/2026-08-08-acceptance-pane-design.md`。
 use crate::delivery::FileChange;
 use crate::goal::Goal;
-use crate::theme;
 use crate::workspace::AddrEvent;
 use dozer_client::Client;
 use iced_widget::core::{Border, Element, Length};

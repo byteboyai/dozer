@@ -4,7 +4,6 @@
 //! `docs/superpowers/specs/2026-08-17-git-log-panel-three-pane-redesign-design.md`
 //! 第 8 节)。
 
-use crate::theme;
 use iced_widget::core::{Element, Font};
 use iced_widget::{column, container, text};
 

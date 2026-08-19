@@ -3,7 +3,6 @@
 //! 索引/后台预扫描，见
 //! `docs/superpowers/specs/2026-08-12-tree-search-in-context-menu-design.md`。
 
-use crate::theme;
 use grep_searcher::{Searcher, SearcherBuilder, Sink, SinkMatch};
 use iced_widget::core::{Border, Color, Element, Length};
 use iced_widget::{MouseArea, button, column, container, row, scrollable, stack, text};
