@@ -223,12 +223,12 @@ fn query_box(
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let body = if ws.query.is_empty() && !ws.query_editing {
         text("搜索内容…")
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().dim)
     } else {
         let caret = if ws.query_editing { "▏" } else { "" };
         text(format!("{}{}", ws.query, caret))
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().cream)
     };
     let active = ws.query_editing || ws.running;
@@ -272,14 +272,14 @@ fn results_list<'a>(
         let rel = rel_to_root(Path::new(path_str), project_root);
         col = col.push(
             text(rel.display().to_string())
-                .size(theme::font::label())
+                .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().dim),
         );
         for hit in hits {
             col = col.push(
                 button(
                     text(format!(":{}: {}", hit.line_no, hit.line_text))
-                        .size(theme::font::body())
+                        .size(byteui::theme::font::body())
                         .color(byteui::theme::color::current().cream),
                 )
                 .on_press(Message::Pick(hit.clone()))
@@ -336,12 +336,12 @@ pub fn search_modal<'a>(
 
     let title_row = row![
         text(scope_label)
-            .size(theme::font::subtitle())
+            .size(byteui::theme::font::subtitle())
             .color(byteui::theme::color::current().cream),
         iced_widget::space::horizontal(),
         button(
             text("×")
-                .size(theme::font::subtitle())
+                .size(byteui::theme::font::subtitle())
                 .color(byteui::theme::color::current().dim)
         )
         .on_press(Message::SearchClose)
@@ -356,7 +356,7 @@ pub fn search_modal<'a>(
 
     let submit_btn = button(
         text(if ws.running { "搜索中…" } else { "搜索" })
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().cream),
     )
     .on_press(Message::QuerySubmit)
@@ -384,7 +384,7 @@ pub fn search_modal<'a>(
     if ws.has_searched && ws.results.is_empty() && ws.error.is_none() {
         body = body.push(
             text("无匹配")
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim),
         );
     } else if !ws.results.is_empty() {
@@ -393,7 +393,7 @@ pub fn search_modal<'a>(
     if let Some(err) = &ws.error {
         body = body.push(
             text(format!("⚠ {err}"))
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().red),
         );
     }
