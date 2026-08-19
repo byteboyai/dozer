@@ -5,6 +5,14 @@
 //! 字段;`terminal_font` 内嵌 `assets/theme/terminal.json`。颜色 token 已
 //! 迁移到 `byteui::theme::color`,本地不再有 `color` 子模块。
 
+use std::path::PathBuf;
+
+/// `byteui::theme::icon_size` 的 `init_scale`/`persist_scale`/`reset_scale`
+/// 需要调用方传入落盘路径(`byteui` 不内置 Dozer 专属路径约定)。
+pub(crate) fn ui_scale_path() -> PathBuf {
+    dozer_core::paths::config_dir().join("ui_scale.json")
+}
+
 pub mod font;
 pub mod geometry;
 pub mod homespace_color;
