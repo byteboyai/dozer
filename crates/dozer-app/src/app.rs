@@ -6290,11 +6290,7 @@ fn project_tab_item<'a>(
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
     if let Some(color) = dot {
-        label = label.push(
-            text("●")
-                .size(byteui::theme::font::caption_sm())
-                .color(color),
-        );
+        label = label.push(byteui::feedback::status::dot(color));
     }
     label = label.push(
         text(name.clone())
@@ -7897,16 +7893,14 @@ fn tab_item(
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let color = dot_color(tab.agent_state, tab.alive);
     // 状态点作 `panel_tab` 的 prefix。
-    let dot = text("●")
-        .size(byteui::theme::font::caption_sm())
-        .color(color);
+    let dot = byteui::feedback::status::dot(color);
 
     panel_tab(
         tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
         active,
         title_hover_t,
         close_hover_t,
-        Some(dot.into()),
+        Some(dot),
         None,
         Message::SelectTab(idx),
         Message::CloseTab(idx),
