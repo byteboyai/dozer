@@ -7145,27 +7145,45 @@ fn left_panel_area<'a>(
                     zone_pane_border(zone, lc),
                 )
                 .map(Message::Ssh);
-                row![
-                    list_pane,
-                    divider_bar(
-                        Divider::SshSplit,
-                        theme::region::project_pane()
-                            .background
-                            .unwrap_or(byteui::theme::color::current().bg),
-                        theme::region::preview_pane()
-                            .background
-                            .unwrap_or(byteui::theme::color::current().bg),
-                        Message::ColumnDragStart(Divider::SshSplit),
-                    ),
-                    ssh_terminal_pane(
-                        app,
-                        ws,
-                        Length::FillPortion(content_portion),
-                        zone_pane_border(zone, rc)
-                    ),
-                ]
-                .width(Length::Fill)
-                .into()
+                let terminal = ssh_terminal_pane(
+                    app,
+                    ws,
+                    Length::FillPortion(content_portion),
+                    zone_pane_border(zone, rc),
+                );
+                let list_bg = theme::region::project_pane()
+                    .background
+                    .unwrap_or(byteui::theme::color::current().bg);
+                let terminal_bg = theme::region::preview_pane()
+                    .background
+                    .unwrap_or(byteui::theme::color::current().bg);
+                if app.panel_mirrored(PanelKind::Ssh) {
+                    row![
+                        terminal,
+                        divider_bar(
+                            Divider::SshSplit,
+                            terminal_bg,
+                            list_bg,
+                            Message::ColumnDragStart(Divider::SshSplit),
+                        ),
+                        list_pane,
+                    ]
+                    .width(Length::Fill)
+                    .into()
+                } else {
+                    row![
+                        list_pane,
+                        divider_bar(
+                            Divider::SshSplit,
+                            list_bg,
+                            terminal_bg,
+                            Message::ColumnDragStart(Divider::SshSplit),
+                        ),
+                        terminal,
+                    ]
+                    .width(Length::Fill)
+                    .into()
+                }
             }
             PanelKind::Web => browser::view(
                 &ws.browser,
