@@ -11,7 +11,6 @@
 use crate::app::{panel_tab, tab_arrow_button, tab_divider, tab_window};
 use crate::preview::WebviewSpec;
 use crate::theme;
-use crate::theme::icon_size;
 use crate::workspace::{lh, preview_tab_display_width, split_portions};
 use byteui::interaction::icons;
 use dozer_client::Client;
@@ -1236,7 +1235,7 @@ fn nav_button(
     };
     icons::icon_button_entry(
         kind,
-        icon_size::row(),
+        byteui::theme::icon_size::row(),
         false,
         state.nav_hover(action),
         false,
@@ -1271,7 +1270,7 @@ fn star_button(
     // (active=true)。hover 动画走浏览器自己的 `State` 进度机(哨兵键)。
     icons::icon_button_entry(
         icons::IconKind::Star,
-        icon_size::row(),
+        byteui::theme::icon_size::row(),
         starred,
         state.star_hover(),
         false,
@@ -1345,7 +1344,7 @@ fn bookmark_group<'a>(
     let header = row![
         icons::view(
             icons::IconKind::Folder,
-            icon_size::row(),
+            byteui::theme::icon_size::row(),
             byteui::theme::color::current().dim
         ),
         lh(text(title)
@@ -1611,7 +1610,7 @@ fn bookmarks_toggle_button(
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     icons::icon_button_entry(
         icons::IconKind::Bookmark,
-        icon_size::row(),
+        byteui::theme::icon_size::row(),
         false,
         state.bookmark_hover(),
         false,
