@@ -33,7 +33,7 @@ impl WorkspaceState {
         self.loading
     }
 
-    /// 供内核 `RightIconSelect(PanelKind::Usage)` 分支调用——切到面板时
+    /// 供内核 `PanelSelect(PanelKind::Usage)` 分支调用——切到面板时
     /// 立即标记"统计中",不等 `spawn_refresh` 的异步结果落地才置真。
     pub fn set_loading(&mut self, loading: bool) {
         self.loading = loading;
@@ -359,7 +359,7 @@ pub fn update(
 }
 
 /// 异步扫描项目全部 agent transcript 并逐个解析用量。内核在
-/// `RightIconSelect(PanelKind::Usage)` 分支(切到面板首次刷新)与
+/// `PanelSelect(PanelKind::Usage)` 分支(切到面板首次刷新)与
 /// `update` 处理 `Refresh`(手动点刷新按钮)两处调用。现有
 /// `Workspace::spawn_usage_refresh` 的搬家版本,逻辑不变(读失败的会话
 /// 整条跳过、不计入汇总)。

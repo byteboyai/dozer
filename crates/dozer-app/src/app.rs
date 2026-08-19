@@ -1572,10 +1572,9 @@ pub enum Message {
     /// 的 `DragMove` 由卡片外层 `MouseArea::on_move` 直接发 `Todo::DragMove`
     /// (走 `Message::Todo` 通道),不需要顶层变体——这里只收尾。
     TodoDragEnd,
-    /// 点击左图标栏某图标:已是当前视图则切换收起态,否则切到该视图并展开。
-    LeftIconSelect(PanelKind),
-    /// 同上,右图标栏。
-    RightIconSelect(PanelKind),
+    /// 图标栏点击选中某个面板——不区分左右栏,`panel_select` 内部按
+    /// `RailLayout::side_of` 查它当前挂在哪条栏。
+    PanelSelect(PanelKind),
     /// 图标栏按钮 hover 进入/离开:进入带 `Some(id)`,离开带 `None`,
     /// 任意按钮的 hover 进入/离开:带按钮标识 `HoverId` 与 `true`/`false`,
     /// 驱动该按钮图标/背景/边框颜色的平滑过渡动画(见 `App::set_hover`/
@@ -1717,7 +1716,7 @@ pub enum Message {
     /// 最近的对话两份列表;D4)。
     HomeRecentsLoaded(Vec<HomeRecentFile>, Vec<HomeRecentConversation>),
     /// 首页左图标栏:切换 `HomeLeftView`(项目列表/Recents)。首页没有
-    /// collapse 概念,恒有一个 pane 显示,不像工作区 `LeftIconSelect` 那样
+    /// collapse 概念,恒有一个 pane 显示,不像工作区 `PanelSelect` 那样
     /// 需要处理"点已选中图标收起面板区"的分支。
     HomeLeftIconSelect(homespace::HomeLeftView),
     /// 首页右图标栏:切换 `HomeRightView`(目前只有 Browser)。
@@ -3352,7 +3351,7 @@ impl App {
 
     /// 保证 `git_log` 状态跟得上"现在应该看哪个项目"——`git_log: State`
     /// 是 `App` 级字段,不是每个项目各自一份(不像 `Workspace.files`),
-    /// 所以面板打开时(`LeftIconSelect`)和切项目页签时(`ProjectTabSwitch`)
+    /// 所以面板打开时(`PanelSelect`)和切项目页签时(`ProjectTabSwitch`)
     /// 都得调这个方法对齐一次,否则 Git Log 面板开着的状态下切页签,提交图
     /// 会停在上一个项目不动,而同一面板里的 worktree 速览条(`ws.files
     /// .worktrees()` 是按项目取的)却已经跳到新项目——两者对不上。缓存已经是当前项目的
@@ -3660,8 +3659,7 @@ impl App {
             Message::TodoDragEnd => {
                 self.todo_message(todo::Message::DragEnd);
             }
-            Message::LeftIconSelect(v) => self.left_icon_select(v),
-            Message::RightIconSelect(v) => self.right_icon_select(v),
+            Message::PanelSelect(v) => self.panel_select(v),
             Message::Hover(id, h) => {
                 self.set_hover(id, h);
             }
@@ -5156,60 +5154,85 @@ impl App {
         }
     }
 
-    fn left_icon_select(&mut self, v: PanelKind) {
-        if self.left_view == v {
-            // 点的是已选中(激活)的图标:应退回未选中并收起左面板区。
-            // 但若右面板区也已经收起了,左就是最后一个还开着的 zone,
-            // 不能关——保持展开、图标维持选中态(什么都不做)。
-            if !self.right_collapsed {
-                self.left_collapsed = !self.left_collapsed;
+    fn panel_select(&mut self, kind: PanelKind) {
+        let side = self.shell_layout.rail_layout.side_of(kind);
+        // 点当前已激活的图标:退回未选中并收起对应面板区;但若对侧面板区
+        // 也已收起,当前侧就是最后一个还开着的 zone,不能关(两侧对称)。
+        let switched = match side {
+            Side::Left => {
+                if self.left_view == kind {
+                    if !self.right_collapsed {
+                        self.left_collapsed = !self.left_collapsed;
+                    }
+                    false
+                } else {
+                    self.left_view = kind;
+                    self.left_collapsed = false;
+                    true
+                }
             }
-        } else {
-            self.left_view = v;
-            self.left_collapsed = false;
-        }
-        // 切进 Git 提交图视图时,若缓存为空或不属于当前项目,同步跑
-        // 一次 `gleisbau` 布局。失败/未打开项目都落成文案,交给
-        // `git_log::view` 画出来,不 panic、不静默吞掉。
-        if self.left_view == PanelKind::GitLog {
-            self.sync_git_log_to_active_project();
-        }
-        // Todo 面板：切入即从磁盘重读一次 `.dozer/todo.md`，保证切进来
-        // 立刻是最新内容（轮询只负责"停留期间"的同步，切换本身不算）。
-        if self.left_view == PanelKind::Todo {
-            self.with_focused_project(|ws, _io| {
-                if let Some(project) = ws.project.as_ref() {
-                    todo::reload_from_disk(&mut ws.todo, std::path::Path::new(&project.path));
+            Side::Right => {
+                if self.right_view == kind {
+                    if !self.left_collapsed {
+                        self.right_collapsed = !self.right_collapsed;
+                    }
+                    false
+                } else {
+                    self.right_view = kind;
+                    self.right_collapsed = false;
+                    true
                 }
-            });
-        }
-        // 数据库面板：切入即从磁盘重读一次 `.dozer/database.json`，
-        // 保证切进来立刻是最新内容(同 Todo 面板的切换时语义)。
-        if self.left_view == PanelKind::Database {
-            self.with_focused_project(|ws, _io| {
-                if let Some(project) = ws.project.as_ref() {
-                    database::reload_from_disk(
-                        &mut ws.database,
-                        std::path::Path::new(&project.path),
-                    );
+            }
+        };
+        // 面板专属的"切入时动作"。原左栏处理器把 GitLog/Todo/
+        // Database/Project/Ssh 的触发放在 if/else 之后的无条件
+        // `if self.left_view == PanelKind::X` 里——收起/展开当前激活的特殊
+        // 面板也会跑一遍;原右栏处理器把 Usage/Acceptance 放在 else(真正
+        // 切换)分支里——只有切换时才触发。为保持逐像素零差异,左侧面板恒
+        // 触发、右侧面板仅在真正切换时触发(默认布局下它们恰好按这个分侧;
+        // Stage 4 拖拽换栏后这里再按 `rail_layout.side_of` 重新对齐各面板
+        // 的触发语义)。
+        let fire = match side {
+            Side::Left => true,
+            Side::Right => switched,
+        };
+        if fire {
+            match kind {
+                PanelKind::GitLog => self.sync_git_log_to_active_project(),
+                PanelKind::Todo => self.with_focused_project(|ws, _io| {
+                    if let Some(project) = ws.project.as_ref() {
+                        todo::reload_from_disk(&mut ws.todo, std::path::Path::new(&project.path));
+                    }
+                }),
+                PanelKind::Database => self.with_focused_project(|ws, _io| {
+                    if let Some(project) = ws.project.as_ref() {
+                        database::reload_from_disk(
+                            &mut ws.database,
+                            std::path::Path::new(&project.path),
+                        );
+                    }
+                }),
+                PanelKind::Project => self.ensure_project_readme_and_reveal(),
+                PanelKind::Ssh => self.with_focused_project(|ws, _io| {
+                    if let Some(project) = ws.project.as_ref() {
+                        ssh::reload_from_disk(&mut ws.ssh, std::path::Path::new(&project.path));
+                    }
+                }),
+                PanelKind::Usage => self.with_focused_project(|ws, io| {
+                    ws.usage.set_loading(true);
+                    ws.spawn_usage_refresh(io);
+                }),
+                PanelKind::Acceptance => {
+                    let tab_id = self
+                        .active_workspace()
+                        .and_then(|ws| ws.tabs.get(ws.active))
+                        .map(|t| t.tab_id);
+                    if let Some(tab_id) = tab_id {
+                        self.update(Message::Acceptance(acceptance::Message::Open(tab_id)));
+                    }
                 }
-            });
-        }
-        // 项目信息面板：切入时若项目根目录没有 `README.md`，就用项目名 +
-        // 描述(`.dozer/description.md`)生成一份，并自动在右侧配套预览窗打
-        // 开这份新生成的 README(只在新生成时打开——已存在 README 时不重复
-        // 生成也不抢占预览)。语义同 Todo/Database/SSH 的"切换时动作"。
-        if self.left_view == PanelKind::Project {
-            self.ensure_project_readme_and_reveal();
-        }
-        // SSH 面板：切入即从磁盘重读一次 `.dozer/ssh_hosts.json`，语义
-        // 同 Todo 面板(切换本身触发重读,停留期间的同步靠别的机制)。
-        if self.left_view == PanelKind::Ssh {
-            self.with_focused_project(|ws, _io| {
-                if let Some(project) = ws.project.as_ref() {
-                    ssh::reload_from_disk(&mut ws.ssh, std::path::Path::new(&project.path));
-                }
-            });
+                PanelKind::Files | PanelKind::Web | PanelKind::Agent | PanelKind::Conversations => {}
+            }
         }
         // 图标栏点击一律退出放大态。放大态浮层不拦图标栏上的点击
         // (遮罩两侧垫的是无交互 Space,点击穿到下层图标按钮),所以
@@ -5221,34 +5244,6 @@ impl App {
         self.on_shell_layout_changed();
     }
 
-    fn right_icon_select(&mut self, v: PanelKind) {
-        if self.right_view == v {
-            // 同上,对称:右是最后开着的 zone 时不收起。
-            if !self.left_collapsed {
-                self.right_collapsed = !self.right_collapsed;
-            }
-        } else {
-            self.right_view = v;
-            self.right_collapsed = false;
-            if v == PanelKind::Usage {
-                self.with_focused_project(|ws, io| {
-                    ws.usage.set_loading(true);
-                    ws.spawn_usage_refresh(io);
-                });
-            } else if v == PanelKind::Acceptance {
-                let tab_id = self
-                    .active_workspace()
-                    .and_then(|ws| ws.tabs.get(ws.active))
-                    .map(|t| t.tab_id);
-                if let Some(tab_id) = tab_id {
-                    self.update(Message::Acceptance(acceptance::Message::Open(tab_id)));
-                }
-            }
-        }
-        // 同 LeftIconSelect(Fix round 2 #2)。
-        self.maximized = None;
-        self.on_shell_layout_changed();
-    }
 
     fn top_bar_home(&mut self) {
         self.current_page = AppPage::Home;
@@ -6743,7 +6738,7 @@ fn icon_rail(app: &App, side: Side) -> Element<'_, Message, iced_widget::Theme, 
     };
     // 视觉"选中"= 该视图激活 **且**对应面板区展开。点已选中的图标会收起
     // 面板区,此时图标要退回未选中态,所以 `active` 得带上 `!collapsed`
-    // ——语义同原 `left_icon_rail`/`right_icon_rail`。
+    // ——语义同拆分前的两条原图标栏函数。
     let (active_kind, open) = match side {
         Side::Left => (app.left_view, !app.left_collapsed),
         Side::Right => (app.right_view, !app.right_collapsed),
@@ -6751,10 +6746,6 @@ fn icon_rail(app: &App, side: Side) -> Element<'_, Message, iced_widget::Theme, 
     let mut content = column![].spacing(region.gap).padding(region.padding);
     for &kind in app.shell_layout.rail_layout.side(side) {
         let (icon, tooltip) = panel_meta(kind);
-        let select_message = match side {
-            Side::Left => Message::LeftIconSelect(kind),
-            Side::Right => Message::RightIconSelect(kind),
-        };
         let base: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
             icons::icon_button_entry(
                 icon,
@@ -6764,7 +6755,7 @@ fn icon_rail(app: &App, side: Side) -> Element<'_, Message, iced_widget::Theme, 
                 true,
                 byteui::theme::geometry::rail_button_size(),
                 true,
-                select_message,
+                Message::PanelSelect(kind),
                 move |hovered| Message::Hover(HoverId::Rail(RailButton::Panel(kind)), hovered),
                 tooltip,
             );
@@ -6893,7 +6884,7 @@ pub(crate) fn zone_pane_border(zone: theme::region::RegionStyle, corner: PaneCor
 /// 停在平时拖拽出来的 `left_width` 那么宽。放大态下 `left_collapsed` 仍可能
 /// 为真(旧注释断言"恒为 false"是错的:放大浮层不拦图标栏点击,先放大再点
 /// 图标收起本侧是可达路径),此时上面那条收起分支返回空元素;`maximized`
-/// 会被 `LeftIconSelect`/`RightIconSelect` 无条件清掉,所以这个组合不会
+/// 会被 `PanelSelect` 无条件清掉,所以这个组合不会
 /// 停留超过一帧(Fix round 2 #2)。
 /// 非放大态下,左1(项目树/Web)+左2(预览)两栏被视觉框成一个整体,套
 /// `theme::region::left_zone()` 的外框(四向 margin 做悬浮留白,无描边)。
