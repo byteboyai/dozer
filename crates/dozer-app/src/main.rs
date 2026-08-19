@@ -522,7 +522,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         // winit 收不到 `Released`,靠这条 IPC 结束拖拽
                         // (`WebViewMouseUp`)。
                         .with_initialization_script(
-                            "document.addEventListener('mousedown',function(){window.ipc.postMessage('focus')},true);document.addEventListener('mouseup',function(){window.ipc.postMessage('mouseup')},true);document.addEventListener('keydown',function(e){if(e.ctrlKey){var k=e.key;if(k==='+'||k==='='){e.preventDefault();window.ipc.postMessage('zoom_in');}else if(k==='-'){e.preventDefault();window.ipc.postMessage('zoom_out');}else if(k==='1'){e.preventDefault();window.ipc.postMessage('zoom_reset');}}},true);"
+                            "document.addEventListener('mousedown',function(){window.ipc.postMessage('focus')},true);document.addEventListener('mouseup',function(){window.ipc.postMessage('mouseup')},true);document.addEventListener('keydown',function(e){if(e.ctrlKey){var c=e.code,k=e.key;if(c==='Equal'||k==='+'||k==='='){e.preventDefault();window.ipc.postMessage('zoom_in');}else if(c==='Minus'||k==='-'){e.preventDefault();window.ipc.postMessage('zoom_out');}else if(c==='Digit1'||k==='1'){e.preventDefault();window.ipc.postMessage('zoom_reset');}}},true);"
                         )
                         .with_ipc_handler(move |_req| {
                             match _req.body().as_str() {

@@ -1543,13 +1543,14 @@ fn todo_resize_handle<'a>() -> Element<'a, Message, iced_widget::Theme, iced_ren
 /// 参与键盘路由裁决,打字会同时漏进已聚焦的终端,见 `todo_search_bar`
 /// 同款说明)。
 fn todo_footer_bar<'a>(
+    app: &App,
     ws_state: &'a WorkspaceState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let editing = ws_state.add_editing;
     let add_draft = &ws_state.add_draft;
     let field: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         if add_draft.is_empty() && !editing {
-            text("Initiate new task protocol..")
+            text("添加新任务")
                 .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim)
                 .into()
@@ -1571,23 +1572,36 @@ fn todo_footer_bar<'a>(
     // 框里"),回车或点它提交(同 `AddEvent(Submit)` 一条落盘路径)。它是
     // 输入框 `MouseArea` 内层真正的 `button`,会自己吃掉点击,不会触发外
     // 层 `AddEditStart`。
-    let submit = button(icons::view(
-        icons::IconKind::CircleArrowUp,
-        byteui::theme::icon_size::row(),
+    //
+    // 图标配色对齐其它 icon 按钮(agent 面板"＋"、文件树搜索等):静止
+    // DIM、hover 平滑过渡到 GOLD,由 `HoverId::TodoAddSubmit` + 外层
+    // `MouseArea` 驱动同一套悬停动画(不再是恒 GOLD 的硬编码)。
+    let submit_color = byteui::theme::color::mix(
+        byteui::theme::color::current().dim,
         byteui::theme::color::current().gold,
-    ))
-    .on_press(Message::AddSubmit)
-    .padding(6)
-    .style(|_t, _s| button::Style {
-        background: None,
-        border: Border {
-            color: byteui::theme::color::current().border,
-            width: 0.0,
-            radius: 4.0.into(),
-        },
-        text_color: byteui::theme::color::current().gold,
-        ..button::Style::default()
-    });
+        app.hover_progress(HoverId::TodoAddSubmit),
+    );
+    let submit = MouseArea::new(
+        button(icons::view(
+            icons::IconKind::CircleArrowUp,
+            byteui::theme::icon_size::row(),
+            submit_color,
+        ))
+        .on_press(Message::AddSubmit)
+        .padding(6)
+        .style(move |_t, _s| button::Style {
+            background: None,
+            border: Border {
+                color: byteui::theme::color::current().border,
+                width: 0.0,
+                radius: 4.0.into(),
+            },
+            text_color: submit_color,
+            ..button::Style::default()
+        }),
+    )
+    .on_enter(Message::Hover(HoverId::TodoAddSubmit, true))
+    .on_exit(Message::Hover(HoverId::TodoAddSubmit, false));
 
     // 输入框本体:单个带边框的容器,把"文字区 + 提交按钮"一起包进边框内。
     // 整框包一层 `MouseArea`——点框内(非提交按钮处)进编辑态;提交按钮是
@@ -1892,7 +1906,7 @@ fn todo_list_view<'a>(
                 byteui::interaction::scrollbar::scrollbar(),
             ))
             .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
-        todo_footer_bar(ws_state),
+        todo_footer_bar(app, ws_state),
     ]
     .height(Length::Fill)
     .into()
@@ -1971,7 +1985,7 @@ fn todo_list_row<'a>(
     let key = todo_line_key(&item.text);
     let meta = app_state.meta_for(project_id, key);
     let dispatch = meta.and_then(|m| m.dispatch.as_ref());
-    let hovered = app.hover_progress(HoverId::TodoCard(idx)) > 0.0;
+    let hovered = app.hover_target(HoverId::TodoCard(idx));
     // 内容编辑态:不再把整张卡替换成独立的编辑行,而是把 `editing_draft` 传进
     // `todo_card`,由卡片原地保留边框/背景、只把内容文字换成带 BORDER 描边的
     // 输入框(见 `todo_card` 内 `label_area` 的分支)。
@@ -2134,10 +2148,13 @@ fn todo_card<'a>(
         ..button::Style::default()
     });
 
+    // 任务内容文字:未完成用主题 `body`(#9AB4C4,与正文层级一致,不再用
+    // 奶油色高亮整句),已完成保持 `dim` + 删除线。进入内容编辑态时文字
+    // 仍走奶油色(见 `label_area` 编辑分支),这里只负责非编辑态静态内容。
     let label_color = if done {
         byteui::theme::color::current().dim
     } else {
-        byteui::theme::color::current().cream
+        byteui::theme::color::current().body
     };
     let label: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> = if done {
         let rich: iced_widget::text::Rich<

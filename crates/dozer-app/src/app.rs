@@ -194,6 +194,9 @@ pub enum HoverId {
     /// Todo 面板单个任务卡(按下标区分):hover 时填充 `CARD` 背景 + 金色描边
     /// (见 `extensions::todo::todo_card`,统一卡片样式)。
     TodoCard(usize),
+    /// Todo 面板底部"新增任务"输入框内的提交按钮(`CircleArrowUp`):静止
+    /// DIM,hover 平滑过渡到 GOLD(见 `extensions::todo::todo_footer_bar`)。
+    TodoAddSubmit,
     /// Git Log 面板 commit 列表某行(按下标区分):hover 时填充 `CARD` 背景 +
     /// 金色描边(见 `extensions::git_log::commit_list_view`,统一卡片样式)。
     Commit(usize),
@@ -2354,6 +2357,15 @@ impl App {
     /// 某按钮当前悬停动画进度(0..=1)，给视图层做颜色插值。
     pub fn hover_progress(&self, id: HoverId) -> f32 {
         self.hover_anims.get(&id).map(HoverAnim::t).unwrap_or(0.0)
+    }
+
+    /// 某元素当前是否处于 hover **目标态**(0/1,不做平滑插值)。卡片填充/描边
+    /// 这类二元视觉用这个:与 `button` 卡的原生 `button::Status::Hovered` 同
+    /// 语义(瞬时切换),不像 `hover_progress` 那样带 ease-out 淡入淡出——图标
+    /// 颜色过渡需要平滑,卡片背景/边框切换需要干脆,避免 hover 离开后边框还
+    /// 拖着淡出一段(观感像"动画停了一下")。
+    pub fn hover_target(&self, id: HoverId) -> bool {
+        self.hover_anims.get(&id).map(|a| a.target > 0.5).unwrap_or(false)
     }
 
     /// 某页签悬停是否已持续满 `HOVER_TOOLTIP_DELAY`:满则应在视图层弹出标题
