@@ -85,6 +85,19 @@ pub enum PanelKind {
     Acceptance,
 }
 
+impl PanelKind {
+    /// 面板默认挂在哪条栏——`RailLayout::default()`、以及镜像判断
+    /// ("是否偏离了默认栏")共用这一份真相,不要在两处各写一份可能
+    /// 不同步的列表。
+    pub fn default_side(self) -> Side {
+        match self {
+            Self::Files | Self::GitLog | Self::Todo | Self::Project | Self::Database
+            | Self::Ssh | Self::Web => Side::Left,
+            Self::Agent | Self::Conversations | Self::Usage | Self::Acceptance => Side::Right,
+        }
+    }
+}
+
 /// 四个图标栏按钮的标识,用于追踪 hover 态(图标颜色在 hover 时需变金,
 /// 而 SVG 颜色在构建时就定死、不随 `button::Status` 变化,所以得在 App
 /// 里记一个 hovered 目标,改色时按它重算)。
@@ -341,6 +354,14 @@ impl RailLayout {
             )
         }
     }
+}
+
+/// 面板当前是否偏离了默认栏(`side_of(kind) != default_side()`)。抽成
+/// 自由函数单纯是为了让单元测试不必构造一个完整 `App`(它需要 `Client`/
+/// 事件循环钩子)——逻辑本身和 `App::panel_mirrored` 完全一致,后者只是
+/// 把自己的 `rail_layout` 喂进来。
+fn panel_mirrored_in(rail: &RailLayout, kind: PanelKind) -> bool {
+    rail.side_of(kind) != kind.default_side()
 }
 
 impl Default for RailLayout {
@@ -5237,6 +5258,15 @@ impl App {
         self.on_shell_layout_changed();
     }
 
+    /// 该面板当前是否偏离了默认栏——8 个有内部两栏布局的面板据此决定
+    /// 渲染顺序要不要反转。这个 Stage 结束时 `RailLayout` 只可能是
+    /// `default()`,所以这个函数在正常运行时恒返回 `false`;它的分支
+    /// 靠单元测试直接构造非默认 `RailLayout` 来触发验证,不依赖 GUI
+    /// 能不能拖拽出这个状态(Stage 4 才有拖拽)。
+    pub(crate) fn panel_mirrored(&self, kind: PanelKind) -> bool {
+        panel_mirrored_in(&self.shell_layout.rail_layout, kind)
+    }
+
     fn top_bar_home(&mut self) {
         self.current_page = AppPage::Home;
         self.home_recents_loaded = false;
@@ -9442,6 +9472,47 @@ mod tests {
         let repo_path = file_as_repo.path().join("not_a_dir");
         std::fs::write(&repo_path, "我是文件").unwrap();
         assert_eq!(ensure_project_readme(&repo_path, "D"), None);
+    }
+
+    /// `PanelKind::default_side()` 与 `RailLayout::default()` 的分组一致——
+    /// 两处共用同一份真相,防止一处改了另一处漂移。
+    #[test]
+    fn default_side_matches_rail_layout_default() {
+        let rail = RailLayout::default();
+        for &kind in rail.left.iter() {
+            assert_eq!(kind.default_side(), Side::Left, "{kind:?}");
+        }
+        for &kind in rail.right.iter() {
+            assert_eq!(kind.default_side(), Side::Right, "{kind:?}");
+        }
+    }
+
+    /// 默认布局下每个面板都不判为镜像。
+    #[test]
+    fn panel_mirrored_false_when_rail_layout_is_default() {
+        let rail = RailLayout::default();
+        for kind in [
+            PanelKind::Files,
+            PanelKind::GitLog,
+            PanelKind::Todo,
+            PanelKind::Project,
+            PanelKind::Ssh,
+            PanelKind::Web,
+            PanelKind::Agent,
+            PanelKind::Conversations,
+        ] {
+            assert!(!panel_mirrored_in(&rail, kind), "{kind:?} 不应该在默认布局下判定为镜像");
+        }
+    }
+
+    /// 手动把 `Files` 挪到右侧栏后,仅它判为镜像,其它面板不受影响。
+    #[test]
+    fn panel_mirrored_true_when_manually_relocated() {
+        let mut rail = RailLayout::default();
+        rail.left.retain(|&k| k != PanelKind::Files);
+        rail.right.push(PanelKind::Files);
+        assert!(panel_mirrored_in(&rail, PanelKind::Files));
+        assert!(!panel_mirrored_in(&rail, PanelKind::Todo), "没挪的面板不受影响");
     }
 
     /// `RailLayout::default()` 把 11 个面板不重不漏分到左右两栏,
