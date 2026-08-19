@@ -444,7 +444,7 @@ fn tree_column<'a>(
     use iced_widget::{MouseArea, column, container, row, text};
     let mut col = column![
         text(title)
-            .size(crate::theme::font::subtitle())
+            .size(byteui::theme::font::subtitle())
             .color(byteui::theme::color::current().cream)
     ]
     .spacing(4);
@@ -472,7 +472,7 @@ fn tree_column<'a>(
             None
         };
         let name_el = text(r.name.clone())
-            .size(crate::theme::font::body())
+            .size(byteui::theme::font::body())
             .color(if is_selected {
                 byteui::theme::color::current().cream
             } else {
@@ -492,7 +492,7 @@ fn tree_column<'a>(
         if let Some(err) = dir_err {
             label = label.push(
                 text(format!("⚠ {err}"))
-                    .size(crate::theme::font::caption())
+                    .size(byteui::theme::font::caption())
                     .color(byteui::theme::color::current().red),
             );
         }
@@ -578,7 +578,7 @@ pub fn sftp_pane_view<'a>(
     // 长得一模一样。补一条状态条:错误红字、进度态用普通文字。
     let mut base_col = column![].spacing(6);
     if let Some((msg, is_err)) = &state.status {
-        base_col = base_col.push(text(msg.clone()).size(crate::theme::font::caption()).color(
+        base_col = base_col.push(text(msg.clone()).size(byteui::theme::font::caption()).color(
             if *is_err {
                 byteui::theme::color::current().red
             } else {
@@ -649,7 +649,7 @@ fn sftp_context_menu<'a>(
         crate::menu::item(Some(icon), label, msg);
     crate::menu::shell(
         vec![item],
-        iced_widget::core::Length::Fixed(crate::theme::geometry::menu_item_width()),
+        iced_widget::core::Length::Fixed(byteui::theme::geometry::menu_item_width()),
     )
 }
 
