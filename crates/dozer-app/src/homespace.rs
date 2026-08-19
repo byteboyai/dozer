@@ -296,7 +296,7 @@ where
     Message: 'a,
 {
     let head_row = row![
-        icons::view(icon, crate::theme::icon_size::row(), PANEL_HEAD_ACCENT,),
+        icons::view(icon, byteui::theme::icon_size::row(), PANEL_HEAD_ACCENT,),
         text(title)
             .size(theme::homespace_font::subtitle())
             .color(PANEL_HEAD_ACCENT),
@@ -353,7 +353,7 @@ fn home_project_list_view(
             row![
                 icons::view(
                     icons::IconKind::Search,
-                    crate::theme::icon_size::row(),
+                    byteui::theme::icon_size::row(),
                     theme::homespace_color::dim()
                 ),
                 text("搜索项目…")
@@ -523,7 +523,7 @@ fn home_recent_files_card(
             let row_el = row![
                 icons::view(
                     icons::icon_for_file(&filename),
-                    crate::theme::icon_size::row(),
+                    byteui::theme::icon_size::row(),
                     theme::homespace_color::dim()
                 ),
                 column![
