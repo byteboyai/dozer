@@ -646,6 +646,19 @@ pub struct TabDrag {
     pub source: usize,
 }
 
+/// 正在进行的图标栏面板拖拽(同栏重排 / 跨栏移动)。语义、生命周期管理
+/// 手法照抄 `TabDrag`,但不复用它——`TabDrag`/`TabGroup` 是"同组内换位",
+/// 图标栏这次还要支持"跨栏移动",合并进同一个类型会让校验逻辑变复杂。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RailDrag {
+    pub source_side: Side,
+    pub source_index: usize,
+    /// 悬停到另一栏时记录目标位置;`RailDragEnd` 才真正提交搬移,悬停
+    /// 期间不搬、不落盘。悬停回源栏(或还没悬停到任何另一栏位置)时是
+    /// `None`。
+    pub pending_cross_side: Option<(Side, usize)>,
+}
+
 /// 主界面当前几何状态的只读快照(main.rs 拖拽追踪/离屏几何计算用途,
 /// `Copy` 类型直接按值传递)。取代旧 `PanelLayout` 单独传递的做法——
 /// 新几何公式(webview bounds/焦点路由/IME 光标)都依赖"当前是哪个视图、
@@ -739,6 +752,55 @@ fn pair_content_width(zone_width: f32) -> f32 {
 /// 同条原则)。
 fn pair_list_content_width(pair_w: f32, split: f32) -> (f32, f32) {
     (pair_w * split, pair_w * (1.0 - split))
+}
+
+/// 图标栏拖拽"移动到 `side` 栏第 `to` 位"的纯逻辑核心:不依赖 `App` 的
+/// 其他字段,抽成自由函数以便单元测试直接构造 `RailLayout` 验证(同 Stage 3
+/// `panel_mirrored_in` 的做法的理由——`App` 需要 `Client`/事件循环钩子,
+/// 构造成本高)。
+///
+/// 同栏(*`drag.source_side == side`*):立即重排(`Vec::remove`+`insert`),
+/// 并把 `drag.source_index` 更新为新的源位置、清掉任何跨栏悬停残留。跨栏:
+/// 只记 `drag.pending_cross_side`,具体搬移留给 `rail_cross_apply`/`App::
+/// `end_rail_drag` 统一提交——避免每帧 `CursorMoved` 都触发一次 `Vec` 搬移
+/// 和后续的布局存盘。
+fn rail_drag_move_into(rail: &mut RailLayout, drag: &mut RailDrag, side: Side, to: usize) {
+    if drag.source_side == side {
+        // 光标回到源栏:不再悬停另一栏,先取消可能残留的跨栏悬停目标,
+        // 再做同栏内重排。语义上"悬停回源栏"就撤销了"将要跨栏"的意图。
+        drag.pending_cross_side = None;
+        let panels = rail.side_mut(side);
+        let from = drag.source_index;
+        if from == to || from >= panels.len() || to >= panels.len() {
+            return;
+        }
+        let kind = panels.remove(from);
+        panels.insert(to, kind);
+        drag.source_index = to;
+    } else {
+        drag.pending_cross_side = Some((side, to));
+    }
+}
+
+/// 跨栏移动的“真正落地”纯逻辑:把 `source_side` 第 `source_index` 个面板
+/// 搬到 `target_side` 第 `target_index` 位,返回被移动的面板;源栏只剩这一个
+/// 时(搬走会清空,不支持“栏清空”,见 spec 非目标)或源下标越界时返回
+/// `None`、`rail` 不被改动。目标下标越界时 clamp 到末尾。
+fn rail_cross_apply(
+    rail: &mut RailLayout,
+    source_side: Side,
+    source_index: usize,
+    target_side: Side,
+    target_index: usize,
+) -> Option<PanelKind> {
+    let source_panels = rail.side(source_side);
+    if source_side == target_side || source_panels.len() <= 1 || source_index >= source_panels.len() {
+        return None;
+    }
+    let kind = rail.side_mut(source_side).remove(source_index);
+    let target_index = target_index.min(rail.side(target_side).len());
+    rail.side_mut(target_side).insert(target_index, kind);
+    Some(kind)
 }
 
 /// 拖拽某条分隔线到窗口逻辑 x 坐标 `logical_x` 后的新 `ShellLayout`。
@@ -1903,6 +1965,9 @@ pub struct App {
     /// 正在拖拽的页签(换位);`None` 表示未在拖拽页签。与 `dragging` 分隔线
     /// 互斥(一次左键拖拽只能是一件事)。
     tab_drag: Option<TabDrag>,
+    /// 正在进行的图标栏面板拖拽(同栏重排/跨栏移动);`None` 表示未在拖拽。
+    /// 与 `tab_drag`/`dragging` 互斥(一次左键拖拽只能是一件事)。
+    rail_drag: Option<RailDrag>,
     /// Files 面板右键菜单浮层状态——见 `extensions::files::AppState`。
     files: files::AppState,
     /// 文件预览 tab 右键菜单浮层状态(屏幕空间单例,不随项目切换各自保留);
@@ -2227,6 +2292,7 @@ impl App {
             dragging: None,
             dragging_row: None,
             tab_drag: None,
+            rail_drag: None,
             files: files::AppState::default(),
             preview_tab_menu: None,
             project_preview_tab_menu: None,
@@ -3108,6 +3174,67 @@ impl App {
     /// 当前是否正按住 `group` 组的页签(渲染侧据此把光标改成"抓取"把手)。
     pub fn dragging_group(&self, group: TabGroup) -> bool {
         self.tab_drag.is_some_and(|d| d.group == group)
+    }
+
+    /// 图标栏按钮拖拽悬停到 `side` 栏的第 `to` 个位置。同栏内是重排
+    /// (立即生效,`Vec::remove`+`insert`);跨栏只记悬停目标,交给
+    /// `end_rail_drag` 统一提交——避免每帧 `CursorMoved` 都触发一次
+    /// `Vec` 搬移和后续的布局存盘。
+    fn rail_drag_move(&mut self, side: Side, to: usize) {
+        let Some(mut drag) = self.rail_drag else {
+            return;
+        };
+        rail_drag_move_into(
+            &mut self.shell_layout.rail_layout,
+            &mut drag,
+            side,
+            to,
+        );
+        self.rail_drag = Some(drag);
+    }
+
+    /// 结束图标栏拖拽:若悬停过另一栏,提交跨栏移动;否则(纯同栏重排,
+    /// 或跨栏悬停后又移回源栏)不做搬移,只清拖拽态。跨栏移动会导致源栏
+    /// 清空时整体 no-op(不支持"栏清空",见 spec 非目标)——这种情况下
+    /// `RailLayout` 不变,不落盘。
+    fn end_rail_drag(&mut self) {
+        let Some(drag) = self.rail_drag.take() else {
+            return;
+        };
+        let Some((target_side, target_index)) = drag.pending_cross_side else {
+            return;
+        };
+        let Some(kind) = rail_cross_apply(
+            &mut self.shell_layout.rail_layout,
+            drag.source_side,
+            drag.source_index,
+            target_side,
+            target_index,
+        ) else {
+            // 源栏只剩这一个面板,搬走会清空——挡住,状态已经在上面
+            // `take()` 时清空,这里直接返回即可,`RailLayout` 未改动。
+            return;
+        };
+        // 被移动面板成为目标栏新 active,跟随"移动后在按钮所在一侧打开
+        // 面板"的要求。跨栏移动结束后统一走 `on_shell_layout_changed`
+        // (存盘 + 重算网格)。
+        match target_side {
+            Side::Left => {
+                self.left_view = kind;
+                self.left_collapsed = false;
+            }
+            Side::Right => {
+                self.right_view = kind;
+                self.right_collapsed = false;
+            }
+        }
+        self.on_shell_layout_changed();
+    }
+
+    /// 当前是否正按住某个图标栏按钮(渲染侧据此把光标改成"抓取"把手,
+    /// 同 `dragging_group` 对 `TabDrag` 的用法)。
+    pub fn dragging_rail(&self) -> bool {
+        self.rail_drag.is_some()
     }
 
     /// 结束页签拖拽:清掉拖拽态,若是项目页签组还把新顺序写盘。松开左键的
@@ -9696,5 +9823,103 @@ mod tests {
         // 合法数据原样保留。
         let legit = RailLayout::default();
         assert_eq!(sanitize_rail_layout(legit.clone()), legit);
+    }
+
+    /// `RailDrag` 拖拽逻辑的纯核心测试。`App` 没有 `Default` 实现、也无可
+    /// 复用的测试构造 helper(构造成本高),所以 `rail_drag_move`/`end_rail_drag`
+    /// 的纯逻辑被抽成 `rail_drag_move_into`/`rail_cross_apply` 两个自由函数,
+    /// 这里直接构造 `RailLayout` 验证(同 `panel_mirrored_in` 的理由)。
+    mod rail_drag_tests {
+        use super::*;
+
+        /// 同栏内把第一个图标拖到第三个位置:该面板移动、其余相对顺序不变,
+        /// 且不产生跨栏悬停残留。
+        #[test]
+        fn same_side_reorder_moves_kind() {
+            let mut rail = RailLayout::default();
+            let mut drag = RailDrag {
+                source_side: Side::Left,
+                source_index: 0,
+                pending_cross_side: None,
+            };
+            let original_left = rail.left.clone();
+            rail_drag_move_into(&mut rail, &mut drag, Side::Left, 2);
+            assert_eq!(rail.left[2], original_left[0], "源项应落到目标位");
+            assert_eq!(rail.left[0], original_left[1], "源项前面整体右移一位落到首位");
+            assert_eq!(rail.left[1], original_left[2], "源项之后续到第二位");
+            assert_eq!(rail.left[3], original_left[3], "目标位之后顺序不变");
+            assert_eq!(drag.source_index, 2, "重排后源下标应更新到新位置");
+            assert_eq!(drag.pending_cross_side, None, "同栏重排不设跨栏悬停");
+        }
+
+        /// 同栏重排放到同一个位置(或越界/no-op)不应移动任何面板。
+        #[test]
+        fn same_side_reorder_to_same_index_is_noop() {
+            let mut rail = RailLayout::default();
+            let original = rail.clone();
+            let mut drag = RailDrag {
+                source_side: Side::Left,
+                source_index: 0,
+                pending_cross_side: None,
+            };
+            rail_drag_move_into(&mut rail, &mut drag, Side::Left, 0);
+            assert_eq!(rail, original, "拖到同一位置是 no-op,RailLayout 不变");
+        }
+
+        /// 跨栏移动:被移动面板搬到目标栏,并从源栏消失(`rail_cross_apply`
+        /// 返回被移动的面板,App 侧据此把目标栏设为它 active)。
+        #[test]
+        fn cross_side_move_relocates_panel() {
+            let mut rail = RailLayout::default();
+            let kind = rail.left[0];
+            let applied = rail_cross_apply(&mut rail, Side::Left, 0, Side::Right, 0);
+            assert_eq!(applied, Some(kind));
+            assert!(!rail.left.contains(&kind), "源栏应不再含被移动面板");
+            assert!(rail.right.contains(&kind), "目标栏应含被移动面板");
+        }
+
+        /// 源栏只剩 1 个面板时禁止搬走(不支持"栏清空"),`RailLayout` 不变。
+        #[test]
+        fn cross_side_move_is_noop_when_source_side_would_become_empty() {
+            let mut rail = RailLayout::default();
+            while rail.right.len() > 1 {
+                let kind = rail.right.remove(0);
+                rail.left.push(kind);
+            }
+            let before = rail.clone();
+            let applied = rail_cross_apply(&mut rail, Side::Right, 0, Side::Left, 0);
+            assert_eq!(applied, None, "源栏只剩 1 个时应返回 None,不搬走");
+            assert_eq!(rail, before, "搬移被挡下,RailLayout 不变");
+            assert_eq!(rail.right.len(), 1, "右栏保留最后 1 个");
+        }
+
+        /// 源下标越界(传入了过期的拖拽源下标)应安全 no-op。
+        #[test]
+        fn cross_side_move_with_stale_source_index_is_noop() {
+            let mut rail = RailLayout::default();
+            let before = rail.clone();
+            let applied = rail_cross_apply(&mut rail, Side::Left, 999, Side::Right, 0);
+            assert_eq!(applied, None);
+            assert_eq!(rail, before);
+        }
+
+        /// 跨栏悬停后,把光标移回源栏(同一位置,index 没变)应取消这条
+        /// 悬停——`pending_cross_side` 回到 `None`,`end_rail_drag` 看见
+        /// `None` 时不做搬移。
+        #[test]
+        fn hovering_back_to_source_side_cancels_the_pending_cross_move() {
+            let mut rail = RailLayout::default();
+            let before = rail.clone();
+            let mut drag = RailDrag {
+                source_side: Side::Left,
+                source_index: 0,
+                pending_cross_side: None,
+            };
+            rail_drag_move_into(&mut rail, &mut drag, Side::Right, 0); // 悬停到对侧
+            assert_eq!(drag.pending_cross_side, Some((Side::Right, 0)));
+            rail_drag_move_into(&mut rail, &mut drag, Side::Left, 0); // 移回源栏,index 未变
+            assert_eq!(drag.pending_cross_side, None, "移回源栏取消跨栏悬停");
+            assert_eq!(rail, before, "整个过程没有搬移,RailLayout 不变");
+        }
     }
 }
