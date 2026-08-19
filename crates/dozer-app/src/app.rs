@@ -7109,6 +7109,393 @@ pub(crate) fn zone_pane_border(zone: theme::region::RegionStyle, corner: PaneCor
     }
 }
 
+/// 渲染"某一种面板"的内容——`left_panel_area`/`right_panel_area` 共用。
+///
+/// Stage 4a 给图标栏面板加了跨栏拖拽后,`left_view` 可以是原先挂右栏的
+/// `Agent`/`Conversations`/`Usage`/`Acceptance`,`right_view` 也可以是原先
+/// 挂左栏的 `Files`/`GitLog`/`Todo`/`Project`/`Database`/`Ssh`/`Web`——
+/// 之前两侧各自 `match` 里那行 `_ => unreachable!("Stage 1 ... 面板还固定
+/// 在各自原侧")` 已经不成立,再碰到跨栏后的对侧面板会在渲染期直接 abort
+/// (GUI 拖拽核对抓到的崩溃)。
+///
+/// 所以把"渲染一个面板"抽到这里做穷尽 `match`。每个分支只依赖
+/// `zone`(外框主题与内部分割线配色)和 `lc/rc/ac`(pane 圆角朝向),由两侧
+/// 各自传入自己那一侧的主题——除此之外同一面板在左/右栏渲染完全一致
+/// (内部分割线用的 `Divider` variant 是面板固有属性,和挂哪条栏无关;
+/// `panel_mirrored(kind)` 已经按当前实际所在栏算出是否镜像、自行翻转
+/// `row!` 顺序)。各面板分割线的几何(`apply_column_drag`)已经由
+/// Task 5/6 做成 side+镜像感知,这里只需正确渲染,无需再按左/右分支。
+fn panel_body<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
+    kind: PanelKind,
+    zone: theme::region::RegionStyle,
+    lc: PaneCorner,
+    rc: PaneCorner,
+    ac: PaneCorner,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    match kind {
+        PanelKind::Files => {
+            let (list_portion, content_portion) = split_portions(app.dims.files_split);
+            let list_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+                if ws.project.is_some() {
+                    files::view(
+                        &ws.files,
+                        Length::FillPortion(list_portion),
+                        zone_pane_border(zone, lc),
+                        app.hover_progress(HoverId::FilesSearchSubmit),
+                        app.hover_progress(HoverId::FilesDotfiles),
+                        app.hover_progress(HoverId::FilesBranchSwitch),
+                    )
+                    .map(Message::Files)
+                } else {
+                    no_project_placeholder(
+                        ws,
+                        Length::FillPortion(list_portion),
+                        zone_pane_border(zone, lc),
+                    )
+                };
+            let preview = preview_pane(
+                app,
+                ws,
+                Length::FillPortion(content_portion),
+                zone_pane_border(zone, rc),
+            );
+            let list_bg = theme::region::project_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            let preview_bg = theme::region::preview_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            if app.panel_mirrored(PanelKind::Files) {
+                row![
+                    preview,
+                    divider_bar(
+                        Divider::LeftPairSplit,
+                        preview_bg,
+                        list_bg,
+                        Message::ColumnDragStart(Divider::LeftPairSplit),
+                    ),
+                    list_pane,
+                ]
+                .width(Length::Fill)
+                .into()
+            } else {
+                row![
+                    list_pane,
+                    divider_bar(
+                        Divider::LeftPairSplit,
+                        list_bg,
+                        preview_bg,
+                        Message::ColumnDragStart(Divider::LeftPairSplit),
+                    ),
+                    preview,
+                ]
+                .width(Length::Fill)
+                .into()
+            }
+        }
+        PanelKind::GitLog => git_log::view(
+            app,
+            &app.git_log,
+            ws.project_panel.worktrees(),
+            app.dims.git_log_split,
+            app.dims.git_log_file_diff_split,
+            app.panel_mirrored(PanelKind::GitLog),
+        )
+        .map(Message::GitLog),
+        PanelKind::Todo => {
+            let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
+                return column![].into();
+            };
+            let project_path = ws
+                .project
+                .as_ref()
+                .map(|p| std::path::PathBuf::from(&p.path));
+            let (list_portion, content_portion) = split_portions(app.dims.todo_split);
+            let (sidebar_pane, content_pane) = todo::view(
+                &app.todo,
+                app,
+                &ws.todo,
+                ws,
+                project_id,
+                project_path.as_deref(),
+                Length::FillPortion(list_portion),
+                zone_pane_border(zone, lc),
+                Length::FillPortion(content_portion),
+                zone_pane_border(zone, rc),
+            );
+            let sidebar = sidebar_pane.map(Message::Todo);
+            let content = content_pane.map(Message::Todo);
+            let sidebar_bg = theme::region::project_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            let content_bg = theme::region::preview_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            if app.panel_mirrored(PanelKind::Todo) {
+                row![
+                    content,
+                    divider_bar(
+                        Divider::TodoSplit,
+                        content_bg,
+                        sidebar_bg,
+                        Message::ColumnDragStart(Divider::TodoSplit),
+                    ),
+                    sidebar,
+                ]
+                .width(Length::Fill)
+                .into()
+            } else {
+                row![
+                    sidebar,
+                    divider_bar(
+                        Divider::TodoSplit,
+                        sidebar_bg,
+                        content_bg,
+                        Message::ColumnDragStart(Divider::TodoSplit),
+                    ),
+                    content,
+                ]
+                .width(Length::Fill)
+                .into()
+            }
+        }
+        PanelKind::Project => {
+            let (list_portion, content_portion) = split_portions(app.dims.project_split);
+            let info_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+                project::view(
+                    &ws.project_panel,
+                    ws.project.as_ref(),
+                    Length::FillPortion(list_portion),
+                    zone_pane_border(zone, lc),
+                )
+                .map(Message::Project);
+            let preview = project_preview_pane(
+                app,
+                ws,
+                Length::FillPortion(content_portion),
+                zone_pane_border(zone, rc),
+            );
+            let info_bg = theme::region::project_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            let preview_bg = theme::region::preview_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            if app.panel_mirrored(PanelKind::Project) {
+                row![
+                    preview,
+                    divider_bar(
+                        Divider::ProjectSplit,
+                        preview_bg,
+                        info_bg,
+                        Message::ColumnDragStart(Divider::ProjectSplit),
+                    ),
+                    info_pane,
+                ]
+                .width(Length::Fill)
+                .into()
+            } else {
+                row![
+                    info_pane,
+                    divider_bar(
+                        Divider::ProjectSplit,
+                        info_bg,
+                        preview_bg,
+                        Message::ColumnDragStart(Divider::ProjectSplit),
+                    ),
+                    preview,
+                ]
+                .width(Length::Fill)
+                .into()
+            }
+        }
+        PanelKind::Database => {
+            // 数据库面板需要项目已打开才能读写 `.dozer/database.json`。
+            if ws.project.is_none() {
+                return column![].into();
+            }
+            database::view(
+                &app.database,
+                &ws.database,
+                Length::Fill,
+                zone_pane_border(zone, ac),
+                app.hover_progress(HoverId::DatabaseSchemaBack),
+            )
+            .map(Message::Database)
+        }
+        PanelKind::Ssh => {
+            // 同 Files/Database 面板:`ws.project.is_none()` 是 Stub→Loaded
+            // 促成期间的占位态。
+            if ws.project.is_none() {
+                return column![].into();
+            }
+            let (list_portion, content_portion) = split_portions(app.dims.ssh_split);
+            let list_pane = ssh::view(
+                app,
+                &ws.ssh,
+                Length::FillPortion(list_portion),
+                zone_pane_border(zone, lc),
+            )
+            .map(Message::Ssh);
+            let terminal = ssh_terminal_pane(
+                app,
+                ws,
+                Length::FillPortion(content_portion),
+                zone_pane_border(zone, rc),
+            );
+            let list_bg = theme::region::project_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            let terminal_bg = theme::region::preview_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            if app.panel_mirrored(PanelKind::Ssh) {
+                row![
+                    terminal,
+                    divider_bar(
+                        Divider::SshSplit,
+                        terminal_bg,
+                        list_bg,
+                        Message::ColumnDragStart(Divider::SshSplit),
+                    ),
+                    list_pane,
+                ]
+                .width(Length::Fill)
+                .into()
+            } else {
+                row![
+                    list_pane,
+                    divider_bar(
+                        Divider::SshSplit,
+                        list_bg,
+                        terminal_bg,
+                        Message::ColumnDragStart(Divider::SshSplit),
+                    ),
+                    terminal,
+                ]
+                .width(Length::Fill)
+                .into()
+            }
+        }
+        PanelKind::Web => browser::view(
+            &ws.browser,
+            ws.project.as_ref().map(|p| p.id),
+            app.dims.browser_bookmarks_split,
+            Length::Fill,
+            zone_pane_border(zone, ac),
+            app.panel_mirrored(PanelKind::Web),
+        )
+        .map(Message::Browser),
+        PanelKind::Agent => {
+            let (list_portion, content_portion) = split_portions(app.dims.agent_split);
+            let terminal = terminal_pane(
+                app,
+                ws,
+                Length::FillPortion(content_portion),
+                zone_pane_border(zone, lc),
+            );
+            let list = agent_list_pane(
+                app,
+                ws,
+                Length::FillPortion(list_portion),
+                zone_pane_border(zone, rc),
+            );
+            let terminal_bg = theme::region::terminal_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            let list_bg = theme::region::agent_list_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            if app.panel_mirrored(PanelKind::Agent) {
+                row![
+                    list,
+                    divider_bar(
+                        Divider::RightPairSplit,
+                        list_bg,
+                        terminal_bg,
+                        Message::ColumnDragStart(Divider::RightPairSplit),
+                    ),
+                    terminal,
+                ]
+                .width(Length::Fill)
+                .into()
+            } else {
+                row![
+                    terminal,
+                    divider_bar(
+                        Divider::RightPairSplit,
+                        terminal_bg,
+                        list_bg,
+                        Message::ColumnDragStart(Divider::RightPairSplit),
+                    ),
+                    list,
+                ]
+                .width(Length::Fill)
+                .into()
+            }
+        }
+        PanelKind::Conversations => {
+            let (list_portion, content_portion) = split_portions(app.dims.conversations_split);
+            let review = review_content_pane(
+                ws,
+                Length::FillPortion(content_portion),
+                zone_pane_border(zone, lc),
+            );
+            let list = conversation_list_pane(
+                ws,
+                Length::FillPortion(list_portion),
+                zone_pane_border(zone, rc),
+            );
+            let review_bg = theme::region::review_content_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            let list_bg = theme::region::conversation_list_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            if app.panel_mirrored(PanelKind::Conversations) {
+                row![
+                    list,
+                    divider_bar(
+                        Divider::RightPairSplit,
+                        list_bg,
+                        review_bg,
+                        Message::ColumnDragStart(Divider::RightPairSplit),
+                    ),
+                    review,
+                ]
+                .width(Length::Fill)
+                .into()
+            } else {
+                row![
+                    review,
+                    divider_bar(
+                        Divider::RightPairSplit,
+                        review_bg,
+                        list_bg,
+                        Message::ColumnDragStart(Divider::RightPairSplit),
+                    ),
+                    list,
+                ]
+                .width(Length::Fill)
+                .into()
+            }
+        }
+        PanelKind::Usage => usage::view(
+            &ws.usage,
+            Length::Fill,
+            zone_pane_border(zone, ac),
+            app.hover_progress(HoverId::UsageRefresh),
+        )
+        .map(Message::Usage),
+        PanelKind::Acceptance => {
+            acceptance::view(&ws.acceptance, Length::Fill, zone_pane_border(zone, ac))
+                .map(Message::Acceptance)
+        }
+    }
+}
+
 /// 左面板区:按当前左视图组合"项目树+文件预览"配对或单个 Web 预览面板;
 /// 收起时渲染成空元素(不占宽度)。
 ///
@@ -7154,269 +7541,7 @@ fn left_panel_area<'a>(
     } else {
         (PaneCorner::Left, PaneCorner::Right, PaneCorner::All)
     };
-    let inner: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        match app.left_view {
-            PanelKind::Files => {
-                let (list_portion, content_portion) = split_portions(app.dims.files_split);
-                let list_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-                    if ws.project.is_some() {
-                        files::view(
-                            &ws.files,
-                            Length::FillPortion(list_portion),
-                            zone_pane_border(zone, lc),
-                            app.hover_progress(HoverId::FilesSearchSubmit),
-                            app.hover_progress(HoverId::FilesDotfiles),
-                            app.hover_progress(HoverId::FilesBranchSwitch),
-                        )
-                        .map(Message::Files)
-                    } else {
-                        no_project_placeholder(
-                            ws,
-                            Length::FillPortion(list_portion),
-                            zone_pane_border(zone, lc),
-                        )
-                    };
-                let preview = preview_pane(
-                    app,
-                    ws,
-                    Length::FillPortion(content_portion),
-                    zone_pane_border(zone, rc),
-                );
-                let list_bg = theme::region::project_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                let preview_bg = theme::region::preview_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                if app.panel_mirrored(PanelKind::Files) {
-                    row![
-                        preview,
-                        divider_bar(
-                            Divider::LeftPairSplit,
-                            preview_bg,
-                            list_bg,
-                            Message::ColumnDragStart(Divider::LeftPairSplit),
-                        ),
-                        list_pane,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                } else {
-                    row![
-                        list_pane,
-                        divider_bar(
-                            Divider::LeftPairSplit,
-                            list_bg,
-                            preview_bg,
-                            Message::ColumnDragStart(Divider::LeftPairSplit),
-                        ),
-                        preview,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                }
-            }
-            PanelKind::GitLog => git_log::view(
-                app,
-                &app.git_log,
-                ws.project_panel.worktrees(),
-                app.dims.git_log_split,
-                app.dims.git_log_file_diff_split,
-                app.panel_mirrored(PanelKind::GitLog),
-            )
-            .map(Message::GitLog),
-            PanelKind::Todo => {
-                let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
-                    return column![].into();
-                };
-                let project_path = ws
-                    .project
-                    .as_ref()
-                    .map(|p| std::path::PathBuf::from(&p.path));
-                let (list_portion, content_portion) = split_portions(app.dims.todo_split);
-                let (sidebar_pane, content_pane) = todo::view(
-                    &app.todo,
-                    app,
-                    &ws.todo,
-                    ws,
-                    project_id,
-                    project_path.as_deref(),
-                    Length::FillPortion(list_portion),
-                    zone_pane_border(zone, lc),
-                    Length::FillPortion(content_portion),
-                    zone_pane_border(zone, rc),
-                );
-                let sidebar = sidebar_pane.map(Message::Todo);
-                let content = content_pane.map(Message::Todo);
-                let sidebar_bg = theme::region::project_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                let content_bg = theme::region::preview_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                if app.panel_mirrored(PanelKind::Todo) {
-                    row![
-                        content,
-                        divider_bar(
-                            Divider::TodoSplit,
-                            content_bg,
-                            sidebar_bg,
-                            Message::ColumnDragStart(Divider::TodoSplit),
-                        ),
-                        sidebar,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                } else {
-                    row![
-                        sidebar,
-                        divider_bar(
-                            Divider::TodoSplit,
-                            sidebar_bg,
-                            content_bg,
-                            Message::ColumnDragStart(Divider::TodoSplit),
-                        ),
-                        content,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                }
-            }
-            PanelKind::Project => {
-                let (list_portion, content_portion) = split_portions(app.dims.project_split);
-                let info_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-                    project::view(
-                        &ws.project_panel,
-                        ws.project.as_ref(),
-                        Length::FillPortion(list_portion),
-                        zone_pane_border(zone, lc),
-                    )
-                    .map(Message::Project);
-                let preview = project_preview_pane(
-                    app,
-                    ws,
-                    Length::FillPortion(content_portion),
-                    zone_pane_border(zone, rc),
-                );
-                let info_bg = theme::region::project_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                let preview_bg = theme::region::preview_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                if app.panel_mirrored(PanelKind::Project) {
-                    row![
-                        preview,
-                        divider_bar(
-                            Divider::ProjectSplit,
-                            preview_bg,
-                            info_bg,
-                            Message::ColumnDragStart(Divider::ProjectSplit),
-                        ),
-                        info_pane,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                } else {
-                    row![
-                        info_pane,
-                        divider_bar(
-                            Divider::ProjectSplit,
-                            info_bg,
-                            preview_bg,
-                            Message::ColumnDragStart(Divider::ProjectSplit),
-                        ),
-                        preview,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                }
-            }
-            PanelKind::Database => {
-                // 数据库面板需要项目已打开才能读写 `.dozer/database.json`。
-                if ws.project.is_none() {
-                    return column![].into();
-                }
-                database::view(
-                    &app.database,
-                    &ws.database,
-                    Length::Fill,
-                    zone_pane_border(zone, ac),
-                    app.hover_progress(HoverId::DatabaseSchemaBack),
-                )
-                .map(Message::Database)
-            }
-            PanelKind::Ssh => {
-                // 同 Files/Database 面板:`ws.project.is_none()` 是 Stub→Loaded
-                // 促成期间的占位态,这时不该渲染出一个看似可点、实际上
-                // `Message::Ssh` 分发会被内核静默吞掉(无 project 时直接
-                // return)的"＋新增主机"按钮。
-                if ws.project.is_none() {
-                    return column![].into();
-                }
-                let (list_portion, content_portion) = split_portions(app.dims.ssh_split);
-                let list_pane = ssh::view(
-                    app,
-                    &ws.ssh,
-                    Length::FillPortion(list_portion),
-                    zone_pane_border(zone, lc),
-                )
-                .map(Message::Ssh);
-                let terminal = ssh_terminal_pane(
-                    app,
-                    ws,
-                    Length::FillPortion(content_portion),
-                    zone_pane_border(zone, rc),
-                );
-                let list_bg = theme::region::project_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                let terminal_bg = theme::region::preview_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                if app.panel_mirrored(PanelKind::Ssh) {
-                    row![
-                        terminal,
-                        divider_bar(
-                            Divider::SshSplit,
-                            terminal_bg,
-                            list_bg,
-                            Message::ColumnDragStart(Divider::SshSplit),
-                        ),
-                        list_pane,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                } else {
-                    row![
-                        list_pane,
-                        divider_bar(
-                            Divider::SshSplit,
-                            list_bg,
-                            terminal_bg,
-                            Message::ColumnDragStart(Divider::SshSplit),
-                        ),
-                        terminal,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                }
-            }
-            PanelKind::Web => browser::view(
-                &ws.browser,
-                ws.project.as_ref().map(|p| p.id),
-                app.dims.browser_bookmarks_split,
-                Length::Fill,
-                zone_pane_border(zone, ac),
-                app.panel_mirrored(PanelKind::Web),
-            )
-            .map(Message::Browser),
-            _ => unreachable!(
-                "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
-                 app.left_view 不会取到右侧面板——Stage 4 加拖拽后\
-                 这里要重新设计,不能再用 unreachable"
-            ),
-        };
+    let inner = panel_body(app, ws, app.left_view, zone, lc, rc, ac);
     if maximized {
         return inner;
     }
@@ -7495,119 +7620,7 @@ fn right_panel_area<'a>(
     } else {
         (PaneCorner::Left, PaneCorner::Right, PaneCorner::All)
     };
-    let inner: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        match app.right_view {
-            PanelKind::Agent => {
-                let (list_portion, content_portion) = split_portions(app.dims.agent_split);
-                let terminal = terminal_pane(
-                    app,
-                    ws,
-                    Length::FillPortion(content_portion),
-                    zone_pane_border(zone, lc),
-                );
-                let list = agent_list_pane(
-                    app,
-                    ws,
-                    Length::FillPortion(list_portion),
-                    zone_pane_border(zone, rc),
-                );
-                let terminal_bg = theme::region::terminal_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                let list_bg = theme::region::agent_list_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                if app.panel_mirrored(PanelKind::Agent) {
-                    row![
-                        list,
-                        divider_bar(
-                            Divider::RightPairSplit,
-                            list_bg,
-                            terminal_bg,
-                            Message::ColumnDragStart(Divider::RightPairSplit),
-                        ),
-                        terminal,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                } else {
-                    row![
-                        terminal,
-                        divider_bar(
-                            Divider::RightPairSplit,
-                            terminal_bg,
-                            list_bg,
-                            Message::ColumnDragStart(Divider::RightPairSplit),
-                        ),
-                        list,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                }
-            }
-            PanelKind::Conversations => {
-                let (list_portion, content_portion) = split_portions(app.dims.conversations_split);
-                let review = review_content_pane(
-                    ws,
-                    Length::FillPortion(content_portion),
-                    zone_pane_border(zone, lc),
-                );
-                let list = conversation_list_pane(
-                    ws,
-                    Length::FillPortion(list_portion),
-                    zone_pane_border(zone, rc),
-                );
-                let review_bg = theme::region::review_content_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                let list_bg = theme::region::conversation_list_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                if app.panel_mirrored(PanelKind::Conversations) {
-                    row![
-                        list,
-                        divider_bar(
-                            Divider::RightPairSplit,
-                            list_bg,
-                            review_bg,
-                            Message::ColumnDragStart(Divider::RightPairSplit),
-                        ),
-                        review,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                } else {
-                    row![
-                        review,
-                        divider_bar(
-                            Divider::RightPairSplit,
-                            review_bg,
-                            list_bg,
-                            Message::ColumnDragStart(Divider::RightPairSplit),
-                        ),
-                        list,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                }
-            }
-            PanelKind::Usage => usage::view(
-                &ws.usage,
-                Length::Fill,
-                zone_pane_border(zone, ac),
-                app.hover_progress(HoverId::UsageRefresh),
-            )
-            .map(Message::Usage),
-            PanelKind::Acceptance => {
-                acceptance::view(&ws.acceptance, Length::Fill, zone_pane_border(zone, ac))
-                    .map(Message::Acceptance)
-            }
-            _ => unreachable!(
-                "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
-                 app.right_view 不会取到左侧面板——Stage 4 加拖拽后\
-                 这里要重新设计,不能再用 unreachable"
-            ),
-        };
+    let inner = panel_body(app, ws, app.right_view, zone, lc, rc, ac);
     if maximized {
         return inner;
     }
