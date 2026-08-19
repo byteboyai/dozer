@@ -249,6 +249,7 @@ fn home_right_zone(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
         byteui::theme::geometry::default_split_ratio(),
         Length::Fill,
         zone_pane_border(zone, PaneCorner::All),
+        false,
     )
     .map(Message::HomeBrowser);
     let zone_box = container(inner)

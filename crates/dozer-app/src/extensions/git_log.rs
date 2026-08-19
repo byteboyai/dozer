@@ -800,6 +800,7 @@ pub fn view<'a>(
     worktrees: &'a [WorktreeInfo],
     git_log_split: f32,
     git_log_file_diff_split: f32,
+    mirror: bool,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let error = state.error.as_deref();
     // 面板内边距对齐文件树面板(`project_pane` region):header/body/footer
@@ -891,20 +892,23 @@ pub fn view<'a>(
             .into()
         };
 
-    row![
-        container(left_with_picker).width(Length::FillPortion(list_portion)),
-        crate::app::divider_bar(
-            crate::app::Divider::GitLogSplit,
-            byteui::theme::color::current().bg,
-            byteui::theme::color::current().bg,
-            Message::ColumnDragStart,
-        ),
-        container(right).width(Length::FillPortion(content_portion)),
-    ]
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .padding(pad)
-    .into()
+    let left_box = container(left_with_picker).width(Length::FillPortion(list_portion));
+    let right_box = container(right).width(Length::FillPortion(content_portion));
+    let divider = crate::app::divider_bar(
+        crate::app::Divider::GitLogSplit,
+        byteui::theme::color::current().bg,
+        byteui::theme::color::current().bg,
+        Message::ColumnDragStart,
+    );
+    let body = if mirror {
+        row![right_box, divider, left_box]
+    } else {
+        row![left_box, divider, right_box]
+    };
+    body.width(Length::Fill)
+        .height(Length::Fill)
+        .padding(pad)
+        .into()
 }
 
 /// 右下 diff 内容面板:`selected_file` 对应文件的 patch,逐行染色(复用

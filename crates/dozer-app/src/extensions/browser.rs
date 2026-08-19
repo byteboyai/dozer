@@ -1439,6 +1439,7 @@ pub fn view(
     bookmarks_split: f32,
     width: Length,
     outer: Border,
+    mirror: bool,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::browser_pane();
     let widths: Vec<f32> = state
@@ -1575,16 +1576,19 @@ pub fn view(
             .background
             .unwrap_or(byteui::theme::color::current().bg);
         let (list_portion, content_portion) = split_portions(1.0 - bookmarks_split);
-        row![
-            container(body).width(Length::FillPortion(content_portion)),
-            crate::app::divider_bar(
-                crate::app::Divider::BrowserBookmarksSplit,
-                bg,
-                bg,
-                Message::ColumnDragStart,
-            ),
-            bookmarks_panel(state, project_id, Length::FillPortion(list_portion)),
-        ]
+        let content_box = container(body).width(Length::FillPortion(content_portion));
+        let bookmarks_box = bookmarks_panel(state, project_id, Length::FillPortion(list_portion));
+        let divider = crate::app::divider_bar(
+            crate::app::Divider::BrowserBookmarksSplit,
+            bg,
+            bg,
+            Message::ColumnDragStart,
+        );
+        if mirror {
+            row![bookmarks_box, divider, content_box]
+        } else {
+            row![content_box, divider, bookmarks_box]
+        }
         .height(Length::Fill)
         .into()
     } else {
