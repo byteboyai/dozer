@@ -1135,7 +1135,7 @@ pub fn update(
                 return;
             }
             ws_state.add_cursor =
-                cursor_from_x(&ws_state.add_draft, local_x, theme::font::body() as f32);
+                cursor_from_x(&ws_state.add_draft, local_x, byteui::theme::font::body() as f32);
         }
         Message::AddSubmit => commit_add_task(ws_state, project_path),
         // 高度拖拽在 app 层 `todo_message` 已早退,不会到这里;保留 arm 仅
@@ -1349,7 +1349,7 @@ pub fn update(
             }
             if let Some((_, draft)) = &ws_state.editing_content {
                 ws_state.content_cursor =
-                    cursor_from_x(draft, local_x, theme::font::body() as f32);
+                    cursor_from_x(draft, local_x, byteui::theme::font::body() as f32);
             }
         }
         Message::MarkdownEditStart => {
@@ -1547,7 +1547,7 @@ fn todo_footer_bar<'a>(
     let field: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         if add_draft.is_empty() && !editing {
             text("Initiate new task protocol..")
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim)
                 .into()
         } else {
@@ -1559,7 +1559,7 @@ fn todo_footer_bar<'a>(
                 add_draft.clone()
             };
             text(shown)
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().cream)
                 .into()
         };
@@ -1654,7 +1654,7 @@ fn todo_clear_footer_bar<'a>(
                 byteui::theme::color::current().cream,
             ),
             text("清空列表")
-                .size(theme::font::label())
+                .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().cream),
         ]
         .spacing(6)
@@ -1708,7 +1708,7 @@ fn todo_search_bar<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let body = if draft.is_empty() && !editing {
         text("搜索任务…")
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().dim)
         } else {
             let shown = if editing {
@@ -1717,7 +1717,7 @@ fn todo_search_bar<'a>(
                 draft.to_string()
             };
             text(shown)
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().cream)
     };
     let box_btn = button(body)
@@ -1788,7 +1788,7 @@ fn todo_list_view<'a>(
         list = list.push(
             container(
                 text("没有匹配的任务")
-                    .size(theme::font::body())
+                    .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().dim),
             )
             .padding([20, 20]),
@@ -1900,12 +1900,12 @@ fn todo_markdown_view<'a>(
             let caret = "▏";
             if ws_state.markdown_draft.is_empty() {
                 text(caret)
-                    .size(theme::font::body())
+                    .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().dim)
                     .into()
             } else {
                 text(format!("{}{caret}", ws_state.markdown_draft))
-                    .size(theme::font::body())
+                    .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().cream)
                     .into()
             }
@@ -1915,7 +1915,7 @@ fn todo_markdown_view<'a>(
                 .and_then(|p| std::fs::read_to_string(p).ok())
                 .unwrap_or_else(|| "# 暂无 .dozer/todo.md".to_string());
             text(src)
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().cream)
                 .into()
         };
@@ -2030,7 +2030,7 @@ fn todo_card<'a>(
 
     // ---- 顶部行：编号 + 日期徽章(calendar 图标 → 日历选择器)+ 状态文字 ----
     let number_text = text(format!("#{number:03}"))
-        .size(theme::font::caption())
+        .size(byteui::theme::font::caption())
         .color(byteui::theme::color::current().dim);
 
     let date_label = match state {
@@ -2051,7 +2051,7 @@ fn todo_card<'a>(
                     byteui::theme::color::current().dim
                 ),
                 text(date_label)
-                    .size(theme::font::caption())
+                    .size(byteui::theme::font::caption())
                     .color(byteui::theme::color::current().dim),
             ]
             .spacing(4)
@@ -2066,7 +2066,7 @@ fn todo_card<'a>(
     let status_label = state_label(state);
 
     let status_sep = text(" - ")
-        .size(theme::font::caption())
+        .size(byteui::theme::font::caption())
         .color(byteui::theme::color::current().dim);
 
     let top_row = row![
@@ -2090,7 +2090,7 @@ fn todo_card<'a>(
     let checkbox = button(
         container(if done {
             text("✓")
-                .size(theme::font::caption())
+                .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().dim)
                 .into()
         } else {
@@ -2136,14 +2136,14 @@ fn todo_card<'a>(
             iced_renderer::Renderer,
         > = rich_text![
             span(item.text.clone())
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(label_color)
                 .strikethrough(true)
         ];
         rich.into()
     } else {
         text(item.text.clone())
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(label_color)
             .into()
     };
@@ -2156,11 +2156,11 @@ fn todo_card<'a>(
         if let Some(draft) = editing_draft {
             let field = if draft.is_empty() {
                 text("任务内容…")
-                    .size(theme::font::body())
+                    .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().dim)
             } else {
                 text(draft_with_caret(draft, content_cursor))
-                    .size(theme::font::body())
+                    .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().cream)
             };
             container(field)
@@ -2200,7 +2200,7 @@ fn todo_card<'a>(
         let assign_btn = button(
             row![
                 text("指派")
-                    .size(theme::font::label())
+                    .size(byteui::theme::font::label())
                     .color(byteui::theme::color::current().cream),
                 icons::view(
                     icons::IconKind::ChevronRight,
@@ -2373,7 +2373,7 @@ fn state_label(
         TodoState::InProgress => ("进行中", byteui::theme::color::current().gold),
         TodoState::Done => ("已完成", byteui::theme::color::current().dim),
     };
-    text(label).size(theme::font::caption()).color(color).into()
+    text(label).size(byteui::theme::font::caption()).color(color).into()
 }
 
 /// 日历日期选择器：点卡片日期徽章弹出,展示 `calendar_view` 那个月,上一月/
@@ -2405,7 +2405,7 @@ fn todo_calendar_popup(
     };
     let prev = button(
         text("‹")
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().cream),
     )
     .on_press(Message::CalendarPrevMonth)
@@ -2413,14 +2413,14 @@ fn todo_calendar_popup(
     .style(nav_style);
     let next = button(
         text("›")
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().cream),
     )
     .on_press(Message::CalendarNextMonth)
     .padding([2, 8])
     .style(nav_style);
     let title = text(format!("{y}-{m:02}"))
-        .size(theme::font::caption())
+        .size(byteui::theme::font::caption())
         .color(byteui::theme::color::current().cream);
     let header = row![prev, title, next]
         .spacing(6)
@@ -2432,7 +2432,7 @@ fn todo_calendar_popup(
         weekday_row = weekday_row.push(
             container(
                 text(w)
-                    .size(theme::font::caption())
+                    .size(byteui::theme::font::caption())
                     .color(byteui::theme::color::current().dim),
             )
             .width(Length::Fixed(28.0))
@@ -2455,7 +2455,7 @@ fn todo_calendar_popup(
             } else {
                 let d = day;
                 let is_sel = selected_md == Some((m, d));
-                let cell_btn = button(text(format!("{d}")).size(theme::font::caption()).color(
+                let cell_btn = button(text(format!("{d}")).size(byteui::theme::font::caption()).color(
                     if is_sel {
                         byteui::theme::color::current().gold
                     } else {
@@ -2592,12 +2592,12 @@ fn todo_category_button<'a>(
                     byteui::theme::color::current().dim
                 }
             ),
-            text(label).size(theme::font::body()).color(fg),
+            text(label).size(byteui::theme::font::body()).color(fg),
             iced_widget::space::Space::new()
                 .width(Length::Fill)
                 .height(Length::Shrink),
             text(format!("{count}"))
-                .size(theme::font::caption())
+                .size(byteui::theme::font::caption())
                 .color(if active {
                     byteui::theme::color::current().gold
                 } else {
@@ -2683,7 +2683,7 @@ fn todo_tab<'a>(
     button(
         row![
             icons::view(icon, byteui::theme::icon_size::row(), icon_color),
-            text(label).size(theme::font::caption()).color(fg),
+            text(label).size(byteui::theme::font::caption()).color(fg),
         ]
         .spacing(6)
         .align_y(iced_widget::core::alignment::Vertical::Center),
