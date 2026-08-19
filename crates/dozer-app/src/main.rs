@@ -519,14 +519,32 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         // winit 收不到 `Released`,靠这条 IPC 结束拖拽
                         // (`WebViewMouseUp`)。
                         .with_initialization_script(
-                            "document.addEventListener('mousedown',function(){window.ipc.postMessage('focus')},true);document.addEventListener('mouseup',function(){window.ipc.postMessage('mouseup')},true);"
+                            "document.addEventListener('mousedown',function(){window.ipc.postMessage('focus')},true);document.addEventListener('mouseup',function(){window.ipc.postMessage('mouseup')},true);document.addEventListener('keydown',function(e){if(e.ctrlKey){var k=e.key;if(k==='+'||k==='='){e.preventDefault();window.ipc.postMessage('zoom_in');}else if(k==='-'){e.preventDefault();window.ipc.postMessage('zoom_out');}else if(k==='1'){e.preventDefault();window.ipc.postMessage('zoom_reset');}}},true);"
                         )
                         .with_ipc_handler(move |_req| {
-                            if _req.body() == "mouseup" {
-                                let _ = ipc_proxy.send_event(Message::WebViewMouseUp);
-                                return;
+                            match _req.body().as_str() {
+                                "mouseup" => {
+                                    let _ = ipc_proxy.send_event(Message::WebViewMouseUp);
+                                }
+                                // 子 webview 抢到键盘焦点(首次点击后 WKWebView
+                                // 成为 first responder)时,Ctrl++/-/1 这类全局缩放
+                                // 快捷键不会再回到 winit,会被 webview 自己吃掉。
+                                // 这里在 keydown 捕获阶段拦下这几个组合键、转发给
+                                // 宿主走 `icon_size::zoom_by`,使首页/预览/浏览器
+                                // 各种 webview 聚焦态下缩放都和终端/自绘面板一致。
+                                "zoom_in" => {
+                                    let _ = ipc_proxy.send_event(Message::ZoomIn);
+                                }
+                                "zoom_out" => {
+                                    let _ = ipc_proxy.send_event(Message::ZoomOut);
+                                }
+                                "zoom_reset" => {
+                                    let _ = ipc_proxy.send_event(Message::ZoomReset);
+                                }
+                                _ => {
+                                    let _ = ipc_proxy.send_event(Message::WebViewFocused);
+                                }
                             }
-                            let _ = ipc_proxy.send_event(Message::WebViewFocused);
                         })
                         .with_custom_protocol("dozer".into(), move |_id, request| {
                             let allowed = allowed.lock().expect("allowed_files 锁");
