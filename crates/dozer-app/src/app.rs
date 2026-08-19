@@ -646,6 +646,23 @@ pub struct TabDrag {
     pub source: usize,
 }
 
+/// 正在进行的图标栏面板拖拽(同栏重排 / 跨栏移动)。语义、生命周期管理
+/// 手法照抄 `TabDrag`,但不复用它——`TabDrag`/`TabGroup` 是"同组内换位",
+/// 图标栏这次还要支持"跨栏移动",合并进同一个类型会让校验逻辑变复杂。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RailDrag {
+    pub source_side: Side,
+    pub source_index: usize,
+    /// 拖拽开始时 `source_index` 的原始值,不在拖拽期间随同栏重排更新。
+    /// `end_rail_drag` 用它判断纯同栏重排是否真的发生过(优先级重排会
+    /// 推高 `source_index`,未发生则保持原值),决定要不要把新顺序落盘。
+    pub origin_index: usize,
+    /// 悬停到另一栏时记录目标位置;`RailDragEnd` 才真正提交搬移,悬停
+    /// 期间不搬、不落盘。悬停回源栏(或还没悬停到任何另一栏位置)时是
+    /// `None`。
+    pub pending_cross_side: Option<(Side, usize)>,
+}
+
 /// 主界面当前几何状态的只读快照(main.rs 拖拽追踪/离屏几何计算用途,
 /// `Copy` 类型直接按值传递)。取代旧 `PanelLayout` 单独传递的做法——
 /// 新几何公式(webview bounds/焦点路由/IME 光标)都依赖"当前是哪个视图、
@@ -741,6 +758,87 @@ fn pair_list_content_width(pair_w: f32, split: f32) -> (f32, f32) {
     (pair_w * split, pair_w * (1.0 - split))
 }
 
+/// 图标栏拖拽"移动到 `side` 栏第 `to` 位"的纯逻辑核心:不依赖 `App` 的
+/// 其他字段,抽成自由函数以便单元测试直接构造 `RailLayout` 验证(同 Stage 3
+/// `panel_mirrored_in` 的做法的理由——`App` 需要 `Client`/事件循环钩子,
+/// 构造成本高)。
+///
+/// 同栏(*`drag.source_side == side`*):立即重排(`Vec::remove`+`insert`),
+/// 并把 `drag.source_index` 更新为新的源位置、清掉任何跨栏悬停残留。跨栏:
+/// 只记 `drag.pending_cross_side`,具体搬移留给 `rail_cross_apply`/`App::
+/// `end_rail_drag` 统一提交——避免每帧 `CursorMoved` 都触发一次 `Vec` 搬移
+/// 和后续的布局存盘。
+fn rail_drag_move_into(rail: &mut RailLayout, drag: &mut RailDrag, side: Side, to: usize) {
+    if drag.source_side == side {
+        // 光标回到源栏:不再悬停另一栏,先取消可能残留的跨栏悬停目标,
+        // 再做同栏内重排。语义上"悬停回源栏"就撤销了"将要跨栏"的意图。
+        drag.pending_cross_side = None;
+        let panels = rail.side_mut(side);
+        let from = drag.source_index;
+        if from == to || from >= panels.len() || to >= panels.len() {
+            return;
+        }
+        let kind = panels.remove(from);
+        panels.insert(to, kind);
+        drag.source_index = to;
+    } else {
+        drag.pending_cross_side = Some((side, to));
+    }
+}
+
+/// 跨栏移动的“真正落地”纯逻辑:把 `source_side` 第 `source_index` 个面板
+/// 搬到 `target_side` 第 `target_index` 位,返回被移动的面板;源栏只剩这一个
+/// 时(搬走会清空,不支持“栏清空”,见 spec 非目标)或源下标越界时返回
+/// `None`、`rail` 不被改动。目标下标越界时 clamp 到末尾。
+fn rail_cross_apply(
+    rail: &mut RailLayout,
+    source_side: Side,
+    source_index: usize,
+    target_side: Side,
+    target_index: usize,
+) -> Option<PanelKind> {
+    let source_panels = rail.side(source_side);
+    if source_side == target_side || source_panels.len() <= 1 || source_index >= source_panels.len()
+    {
+        return None;
+    }
+    let kind = rail.side_mut(source_side).remove(source_index);
+    let target_index = target_index.min(rail.side(target_side).len());
+    rail.side_mut(target_side).insert(target_index, kind);
+    Some(kind)
+}
+
+/// 给定面板当前所在栏(不是默认栏,是"当前"——`RailLayout` 实时查),
+/// 算出这条分割线要用哪个 zone 的横向基准(x0)与可分配宽度。左栏基准是
+/// `icon_rail_width()`(从窗口左沿量),右栏基准是"窗口宽 - 右图标栏宽 -
+/// 右区宽"(从窗口左沿量到右区左边界,同现有 `RightPairSplit` 分支已经
+/// 在用的 `right_x0` 算法,这里把它提出来给两侧共用)。
+fn pair_x0_and_width(side: Side, window_width: f32, state: &ShellState) -> (f32, f32) {
+    match side {
+        Side::Left => (
+            byteui::theme::geometry::icon_rail_width(),
+            pair_content_width(left_zone_width(window_width, state)),
+        ),
+        Side::Right => {
+            let right_w = right_zone_width(window_width, state);
+            (
+                window_width - byteui::theme::geometry::icon_rail_width() - right_w,
+                pair_content_width(right_w),
+            )
+        }
+    }
+}
+
+/// 给定面板默认(未镜像)态下"列表侧是否渲染在前(pair 内第一个元素,
+/// 几何上更靠左)"与当前是否处于镜像态,算出"列表侧现在是否渲染在前"。
+/// `apply_column_drag` 算出的 `ratio` 恒是"pair 内第一个元素的宽度占比"
+/// (鼠标左侧的宽度 / pair 总宽)——只有列表侧现在确实渲染在前时,
+/// `ratio` 才能直接当"列表侧占比"写回 split 字段;渲染在后时要写
+/// `1.0 - ratio`。
+fn list_rendered_first(default_list_first: bool, mirrored: bool) -> bool {
+    default_list_first != mirrored
+}
+
 /// 拖拽某条分隔线到窗口逻辑 x 坐标 `logical_x` 后的新 `ShellLayout`。
 /// `LeftPairSplit`/`RightPairSplit` 写哪个 split 字段取决于当前那一侧的
 /// 视图选择(比如右侧当前是"对话"就写 `conversations_split`，不是
@@ -791,42 +889,63 @@ pub(crate) fn apply_column_drag(
             }
         }
         Divider::SshSplit => {
-            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            let side = state.layout.rail_layout.side_of(PanelKind::Ssh);
+            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let ratio = ((logical_x - byteui::theme::geometry::icon_rail_width()) / pair_w).clamp(
+            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
                 byteui::theme::geometry::min_split_ratio(),
                 byteui::theme::geometry::max_split_ratio(),
             );
+            let mirrored = side != PanelKind::Ssh.default_side();
+            let ratio = if list_rendered_first(true, mirrored) {
+                raw_ratio
+            } else {
+                1.0 - raw_ratio
+            };
             PanelDims {
                 ssh_split: ratio,
                 ..state.dims
             }
         }
         Divider::TodoSplit => {
-            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            let side = state.layout.rail_layout.side_of(PanelKind::Todo);
+            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let ratio = ((logical_x - byteui::theme::geometry::icon_rail_width()) / pair_w).clamp(
+            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
                 byteui::theme::geometry::min_split_ratio(),
                 byteui::theme::geometry::max_split_ratio(),
             );
+            let mirrored = side != PanelKind::Todo.default_side();
+            let ratio = if list_rendered_first(true, mirrored) {
+                raw_ratio
+            } else {
+                1.0 - raw_ratio
+            };
             PanelDims {
                 todo_split: ratio,
                 ..state.dims
             }
         }
         Divider::GitLogSplit => {
-            let pair_w = pair_content_width(left_zone_width(window_width, &state));
+            let side = state.layout.rail_layout.side_of(PanelKind::GitLog);
+            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let ratio = ((logical_x - byteui::theme::geometry::icon_rail_width()) / pair_w).clamp(
+            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
                 byteui::theme::geometry::min_split_ratio(),
                 byteui::theme::geometry::max_split_ratio(),
             );
+            let mirrored = side != PanelKind::GitLog.default_side();
+            let ratio = if list_rendered_first(true, mirrored) {
+                raw_ratio
+            } else {
+                1.0 - raw_ratio
+            };
             PanelDims {
                 git_log_split: ratio,
                 ..state.dims
@@ -847,28 +966,33 @@ pub(crate) fn apply_column_drag(
             }
         }
         Divider::RightPairSplit => {
-            let right_w = right_zone_width(window_width, &state);
-            let pair_w = pair_content_width(right_w);
+            let kind = state.right_view; // Agent 或 Conversations
+            let side = state.layout.rail_layout.side_of(kind);
+            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let right_x0 = window_width - byteui::theme::geometry::icon_rail_width() - right_w;
-            // `ratio` 是"配对里渲染在左边那块"的宽度占比(拖拽点左侧的宽度
-            // 除以配对总宽)——这块现在是终端/审阅,不是 agent_split/
-            // conversations_split 存的"列表侧(Agent 列表/对话列表)占比"。
-            // 两者互补(列表侧渲染在右边),所以要写 1.0-ratio,不能直接写
-            // ratio,否则拖拽方向会反(见 `right_panel_area` 顶部注释)。
-            let ratio = ((logical_x - right_x0) / pair_w).clamp(
+            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
                 byteui::theme::geometry::min_split_ratio(),
                 byteui::theme::geometry::max_split_ratio(),
             );
-            match state.right_view {
+            let mirrored = side != kind.default_side();
+            // Agent/Conversations 默认"内容在前"(default_list_first = false),
+            // 和 Task 5 三个面板相反。默认栏(`mirrored = false`)下
+            // `list_rendered_first(false, false) = false`,走 `1.0 - raw_ratio`
+            // 这条分支,和改造前的固定行为逐字节一致(防回归)。
+            let ratio = if list_rendered_first(false, mirrored) {
+                raw_ratio
+            } else {
+                1.0 - raw_ratio
+            };
+            match kind {
                 PanelKind::Agent => PanelDims {
-                    agent_split: 1.0 - ratio,
+                    agent_split: ratio,
                     ..state.dims
                 },
                 PanelKind::Conversations => PanelDims {
-                    conversations_split: 1.0 - ratio,
+                    conversations_split: ratio,
                     ..state.dims
                 },
                 // 用量统计是单栏（不分割）,没有自己的 split 权重。
@@ -876,9 +1000,8 @@ pub(crate) fn apply_column_drag(
                 // 验收面板同用量统计是单栏,不分割。
                 PanelKind::Acceptance => state.dims,
                 _ => unreachable!(
-                    "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
-                     state.right_view 不会取到左侧面板——Stage 4 加拖拽后\
-                     这里要重新设计,不能再用 unreachable"
+                    "RightPairSplit 只会在 state.right_view 是 Agent/Conversations/\
+                     Usage/Acceptance 之一时出现——Stage 1 遗留的兜底,这里维持"
                 ),
             }
         }
@@ -1013,11 +1136,13 @@ pub fn preview_content_bounds(
             PanelKind::Database => (0.0, 0.0, 0.0, 0.0),
             // SSH 面板同 Project,纯 iced 绘制,阶段 1 不挂 webview 子视图。
             PanelKind::Ssh => (0.0, 0.0, 0.0, 0.0),
-            _ => unreachable!(
-                "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
-                 state.left_view 不会取到右侧面板——Stage 4 加拖拽后\
-                 这里要重新设计,不能再用 unreachable"
-            ),
+            // Stage 4a 跨栏拖拽后 `left_view` 可以是右栏面板(Agent/
+            // Conversations/Usage/Acceptance)——它们纯 iced 绘制、右侧没有
+            // webview,左区无 webview 可摆,返回空矩形。代理案归 Stage 4b。
+            PanelKind::Agent
+            | PanelKind::Conversations
+            | PanelKind::Usage
+            | PanelKind::Acceptance => (0.0, 0.0, 0.0, 0.0),
         };
     }
     let left_w = left_zone_width(window_width, state);
@@ -1087,11 +1212,11 @@ pub fn preview_content_bounds(
         PanelKind::Database => (0.0, 0.0, 0.0, 0.0),
         // SSH 面板同 Project,纯 iced 绘制,阶段 1 不挂 webview 子视图。
         PanelKind::Ssh => (0.0, 0.0, 0.0, 0.0),
-        _ => unreachable!(
-            "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
-             state.left_view 不会取到右侧面板——Stage 4 加拖拽后\
-             这里要重新设计,不能再用 unreachable"
-        ),
+        // Stage 4a 跨栏拖拽:左视图可为右栏面板,右栏面板纯 iced 绘制、
+        // 左区无 webview 可摆,装空矩形。
+        PanelKind::Agent | PanelKind::Conversations | PanelKind::Usage | PanelKind::Acceptance => {
+            (0.0, 0.0, 0.0, 0.0)
+        }
     }
 }
 
@@ -1207,11 +1332,12 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
             PanelKind::Database => false,
             // SSH 面板同 Project,纯 iced 绘制,永无 webview。
             PanelKind::Ssh => false,
-            _ => unreachable!(
-                "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
-                 state.left_view 不会取到右侧面板——Stage 4 加拖拽后\
-                 这里要重新设计,不能再用 unreachable"
-            ),
+            // Stage 4a 跨栏拖拽:左视图可为右栏面板,右栏面板无 webview,
+            // 永不落在预览列。
+            PanelKind::Agent
+            | PanelKind::Conversations
+            | PanelKind::Usage
+            | PanelKind::Acceptance => false,
         };
     }
     let left_w = left_zone_width(window_width, state);
@@ -1248,11 +1374,11 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
         PanelKind::Database => false,
         // SSH 面板同 Project,纯 iced 绘制,永无 webview。
         PanelKind::Ssh => false,
-        _ => unreachable!(
-            "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
-             state.left_view 不会取到右侧面板——Stage 4 加拖拽后\
-             这里要重新设计,不能再用 unreachable"
-        ),
+        // Stage 4a 跨栏拖拽:左视图可为右栏面板,右栏面板无 webview,
+        // 永不落在预览列。
+        PanelKind::Agent | PanelKind::Conversations | PanelKind::Usage | PanelKind::Acceptance => {
+            false
+        }
     }
 }
 
@@ -1585,6 +1711,14 @@ pub enum Message {
     /// 松开左键,结束页签拖拽。构造方为 main.rs 的 `MouseInput{Released}`
     /// 分支;项目页签组顺带把新顺序写盘。
     TabDragEnd,
+    /// 图标栏面板拖拽,光标进入了 `side` 栏第 `index` 个位置——同栏内是
+    /// 重排,跨栏是记录悬停目标。构造方为该栏每个按钮顶层的
+    /// `MouseArea::on_move`(仅在 `rail_drag` 命中时挂载)。按住图标＝准备
+    /// 拖的来源由 `panel_select` 在按住瞬间武装(`self.rail_drag` 置位)。
+    RailDragMove { side: Side, index: usize },
+    /// 松开左键,结束图标栏面板拖拽。构造方为 main.rs 的
+    /// `MouseInput{Released}` 分支;跨栏移动此时才提交并写盘。
+    RailDragEnd,
     /// Todo 面板拖拽排序结束:松开左键,把新顺序写盘。构造方为 main.rs 的
     /// `MouseInput{Released}` 分支,同 `TabDragEnd`(页签拖拽)那套。拖拽中
     /// 的 `DragMove` 由卡片外层 `MouseArea::on_move` 直接发 `Todo::DragMove`
@@ -1903,6 +2037,9 @@ pub struct App {
     /// 正在拖拽的页签(换位);`None` 表示未在拖拽页签。与 `dragging` 分隔线
     /// 互斥(一次左键拖拽只能是一件事)。
     tab_drag: Option<TabDrag>,
+    /// 正在进行的图标栏面板拖拽(同栏重排/跨栏移动);`None` 表示未在拖拽。
+    /// 与 `tab_drag`/`dragging` 互斥(一次左键拖拽只能是一件事)。
+    rail_drag: Option<RailDrag>,
     /// Files 面板右键菜单浮层状态——见 `extensions::files::AppState`。
     files: files::AppState,
     /// 文件预览 tab 右键菜单浮层状态(屏幕空间单例,不随项目切换各自保留);
@@ -2227,6 +2364,7 @@ impl App {
             dragging: None,
             dragging_row: None,
             tab_drag: None,
+            rail_drag: None,
             files: files::AppState::default(),
             preview_tab_menu: None,
             project_preview_tab_menu: None,
@@ -3110,6 +3248,72 @@ impl App {
         self.tab_drag.is_some_and(|d| d.group == group)
     }
 
+    /// 图标栏按钮拖拽悬停到 `side` 栏的第 `to` 个位置。同栏内是重排
+    /// (立即生效,`Vec::remove`+`insert`);跨栏只记悬停目标,交给
+    /// `end_rail_drag` 统一提交——避免每帧 `CursorMoved` 都触发一次
+    /// `Vec` 搬移和后续的布局存盘。
+    fn rail_drag_move(&mut self, side: Side, to: usize) {
+        let Some(mut drag) = self.rail_drag else {
+            return;
+        };
+        rail_drag_move_into(&mut self.shell_layout.rail_layout, &mut drag, side, to);
+        self.rail_drag = Some(drag);
+    }
+
+    /// 结束图标栏拖拽:松手即"锁定"——
+    ///
+    /// - 纯同栏重排(悬停目标期间 `rail_drag_move` 已把 `rail_layout` 实时
+    ///   改到位,这里只有清空拖拽态;`source_index != origin_index` 说明真
+    ///   发生了重排,据此把新顺序落盘)。
+    /// - 跨栏悬停过另一栏:提交跨栏移动并落盘。
+    /// - 两者皆无(按住后原地松开):只清拖拽态,不动布局、不落盘。
+    ///
+    /// 无论如何拖拽态都在此终止(`take()`),松手后不会再被任何残留的
+    /// `RailDragMove` 驱动。
+    fn end_rail_drag(&mut self) {
+        let Some(drag) = self.rail_drag.take() else {
+            return;
+        };
+        let Some((target_side, target_index)) = drag.pending_cross_side else {
+            // 纯同栏重排路径:若真重排过(源下标偏离起始值),把新顺序落盘。
+            if drag.source_index != drag.origin_index {
+                self.on_shell_layout_changed();
+            }
+            return;
+        };
+        let Some(kind) = rail_cross_apply(
+            &mut self.shell_layout.rail_layout,
+            drag.source_side,
+            drag.source_index,
+            target_side,
+            target_index,
+        ) else {
+            // 源栏只剩这一个面板,搬走会清空——挡住,状态已经在上面
+            // `take()` 时清空,这里直接返回即可,`RailLayout` 未改动。
+            return;
+        };
+        // 被移动面板成为目标栏新 active,跟随"移动后在按钮所在一侧打开
+        // 面板"的要求。跨栏移动结束后统一走 `on_shell_layout_changed`
+        // (存盘 + 重算网格)。
+        match target_side {
+            Side::Left => {
+                self.left_view = kind;
+                self.left_collapsed = false;
+            }
+            Side::Right => {
+                self.right_view = kind;
+                self.right_collapsed = false;
+            }
+        }
+        self.on_shell_layout_changed();
+    }
+
+    /// 当前是否正按住某个图标栏按钮(渲染侧据此把光标改成"抓取"把手,
+    /// 同 `dragging_group` 对 `TabDrag` 的用法)。
+    pub fn dragging_rail(&self) -> bool {
+        self.rail_drag.is_some()
+    }
+
     /// 结束页签拖拽:清掉拖拽态,若是项目页签组还把新顺序写盘。松开左键的
     /// 两条路径都会走到这里——winit 的 `MouseInput{Released}`(`TabDragEnd`)
     /// 与子 webview 上 JS 上报的 `mouseup`(`WebViewMouseUp`)——保证拖拽态
@@ -3673,6 +3877,12 @@ impl App {
             }
             Message::TabDragEnd => {
                 self.end_tab_drag();
+            }
+            Message::RailDragMove { side, index } => {
+                self.rail_drag_move(side, index);
+            }
+            Message::RailDragEnd => {
+                self.end_rail_drag();
             }
             Message::TodoDragEnd => {
                 self.todo_message(todo::Message::DragEnd);
@@ -5174,6 +5384,25 @@ impl App {
 
     fn panel_select(&mut self, kind: PanelKind) {
         let side = self.shell_layout.rail_layout.side_of(kind);
+        // 武装拖拽态:按住图标＝准备拖(同 `TabDrag` 的"按下即武装"手法)。
+        // 同栏重排 / 跨栏移动都是靠渲染层挂在图标上的 `on_move` 驱动
+        // (`Message::RailDragMove`),`MouseMotion` 期间逐帧上报；这里只记下
+        // "从哪栏的哪个位置开始拖"。`RailLayout` 的不变式(sanitize 已保证
+        // 11 个面板不重不漏分到两栏)确保 `kind` 一定能在 `side_of` 返回的
+        // 那一栏里被 `position` 找到。
+        let source_index = self
+            .shell_layout
+            .rail_layout
+            .side(side)
+            .iter()
+            .position(|&k| k == kind)
+            .expect("kind 应该在 side_of 返回的那一侧里,sanitize 已保证不变式");
+        self.rail_drag = Some(RailDrag {
+            source_side: side,
+            source_index,
+            origin_index: source_index,
+            pending_cross_side: None,
+        });
         // 点当前已激活的图标:退回未选中并收起对应面板区;但若对侧面板区
         // 也已收起,当前侧就是最后一个还开着的 zone,不能关(两侧对称)。
         let switched = match side {
@@ -6774,7 +7003,7 @@ fn icon_rail(
         Side::Right => (app.right_view, !app.right_collapsed),
     };
     let mut content = column![].spacing(region.gap).padding(region.padding);
-    for &kind in app.shell_layout.rail_layout.side(side) {
+    for (idx, &kind) in app.shell_layout.rail_layout.side(side).iter().enumerate() {
         let (icon, tooltip) = panel_meta(kind);
         let base: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
             icons::icon_button_entry(
@@ -6793,7 +7022,7 @@ fn icon_rail(
             Some(badge) => stack![base, badge].into(),
             None => base,
         };
-        content = content.push(entry);
+        content = content.push(rail_drag_surface(entry, side, idx));
     }
     container(content)
         .width(Length::Fixed(byteui::theme::geometry::icon_rail_width()))
@@ -6898,6 +7127,393 @@ pub(crate) fn zone_pane_border(zone: theme::region::RegionStyle, corner: PaneCor
     }
 }
 
+/// 渲染"某一种面板"的内容——`left_panel_area`/`right_panel_area` 共用。
+///
+/// Stage 4a 给图标栏面板加了跨栏拖拽后,`left_view` 可以是原先挂右栏的
+/// `Agent`/`Conversations`/`Usage`/`Acceptance`,`right_view` 也可以是原先
+/// 挂左栏的 `Files`/`GitLog`/`Todo`/`Project`/`Database`/`Ssh`/`Web`——
+/// 之前两侧各自 `match` 里那行 `_ => unreachable!("Stage 1 ... 面板还固定
+/// 在各自原侧")` 已经不成立,再碰到跨栏后的对侧面板会在渲染期直接 abort
+/// (GUI 拖拽核对抓到的崩溃)。
+///
+/// 所以把"渲染一个面板"抽到这里做穷尽 `match`。每个分支只依赖
+/// `zone`(外框主题与内部分割线配色)和 `lc/rc/ac`(pane 圆角朝向),由两侧
+/// 各自传入自己那一侧的主题——除此之外同一面板在左/右栏渲染完全一致
+/// (内部分割线用的 `Divider` variant 是面板固有属性,和挂哪条栏无关;
+/// `panel_mirrored(kind)` 已经按当前实际所在栏算出是否镜像、自行翻转
+/// `row!` 顺序)。各面板分割线的几何(`apply_column_drag`)已经由
+/// Task 5/6 做成 side+镜像感知,这里只需正确渲染,无需再按左/右分支。
+fn panel_body<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
+    kind: PanelKind,
+    zone: theme::region::RegionStyle,
+    lc: PaneCorner,
+    rc: PaneCorner,
+    ac: PaneCorner,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    match kind {
+        PanelKind::Files => {
+            let (list_portion, content_portion) = split_portions(app.dims.files_split);
+            let list_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+                if ws.project.is_some() {
+                    files::view(
+                        &ws.files,
+                        Length::FillPortion(list_portion),
+                        zone_pane_border(zone, lc),
+                        app.hover_progress(HoverId::FilesSearchSubmit),
+                        app.hover_progress(HoverId::FilesDotfiles),
+                        app.hover_progress(HoverId::FilesBranchSwitch),
+                    )
+                    .map(Message::Files)
+                } else {
+                    no_project_placeholder(
+                        ws,
+                        Length::FillPortion(list_portion),
+                        zone_pane_border(zone, lc),
+                    )
+                };
+            let preview = preview_pane(
+                app,
+                ws,
+                Length::FillPortion(content_portion),
+                zone_pane_border(zone, rc),
+            );
+            let list_bg = theme::region::project_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            let preview_bg = theme::region::preview_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            if app.panel_mirrored(PanelKind::Files) {
+                row![
+                    preview,
+                    divider_bar(
+                        Divider::LeftPairSplit,
+                        preview_bg,
+                        list_bg,
+                        Message::ColumnDragStart(Divider::LeftPairSplit),
+                    ),
+                    list_pane,
+                ]
+                .width(Length::Fill)
+                .into()
+            } else {
+                row![
+                    list_pane,
+                    divider_bar(
+                        Divider::LeftPairSplit,
+                        list_bg,
+                        preview_bg,
+                        Message::ColumnDragStart(Divider::LeftPairSplit),
+                    ),
+                    preview,
+                ]
+                .width(Length::Fill)
+                .into()
+            }
+        }
+        PanelKind::GitLog => git_log::view(
+            app,
+            &app.git_log,
+            ws.project_panel.worktrees(),
+            app.dims.git_log_split,
+            app.dims.git_log_file_diff_split,
+            app.panel_mirrored(PanelKind::GitLog),
+        )
+        .map(Message::GitLog),
+        PanelKind::Todo => {
+            let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
+                return column![].into();
+            };
+            let project_path = ws
+                .project
+                .as_ref()
+                .map(|p| std::path::PathBuf::from(&p.path));
+            let (list_portion, content_portion) = split_portions(app.dims.todo_split);
+            let (sidebar_pane, content_pane) = todo::view(
+                &app.todo,
+                app,
+                &ws.todo,
+                ws,
+                project_id,
+                project_path.as_deref(),
+                Length::FillPortion(list_portion),
+                zone_pane_border(zone, lc),
+                Length::FillPortion(content_portion),
+                zone_pane_border(zone, rc),
+            );
+            let sidebar = sidebar_pane.map(Message::Todo);
+            let content = content_pane.map(Message::Todo);
+            let sidebar_bg = theme::region::project_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            let content_bg = theme::region::preview_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            if app.panel_mirrored(PanelKind::Todo) {
+                row![
+                    content,
+                    divider_bar(
+                        Divider::TodoSplit,
+                        content_bg,
+                        sidebar_bg,
+                        Message::ColumnDragStart(Divider::TodoSplit),
+                    ),
+                    sidebar,
+                ]
+                .width(Length::Fill)
+                .into()
+            } else {
+                row![
+                    sidebar,
+                    divider_bar(
+                        Divider::TodoSplit,
+                        sidebar_bg,
+                        content_bg,
+                        Message::ColumnDragStart(Divider::TodoSplit),
+                    ),
+                    content,
+                ]
+                .width(Length::Fill)
+                .into()
+            }
+        }
+        PanelKind::Project => {
+            let (list_portion, content_portion) = split_portions(app.dims.project_split);
+            let info_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+                project::view(
+                    &ws.project_panel,
+                    ws.project.as_ref(),
+                    Length::FillPortion(list_portion),
+                    zone_pane_border(zone, lc),
+                )
+                .map(Message::Project);
+            let preview = project_preview_pane(
+                app,
+                ws,
+                Length::FillPortion(content_portion),
+                zone_pane_border(zone, rc),
+            );
+            let info_bg = theme::region::project_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            let preview_bg = theme::region::preview_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            if app.panel_mirrored(PanelKind::Project) {
+                row![
+                    preview,
+                    divider_bar(
+                        Divider::ProjectSplit,
+                        preview_bg,
+                        info_bg,
+                        Message::ColumnDragStart(Divider::ProjectSplit),
+                    ),
+                    info_pane,
+                ]
+                .width(Length::Fill)
+                .into()
+            } else {
+                row![
+                    info_pane,
+                    divider_bar(
+                        Divider::ProjectSplit,
+                        info_bg,
+                        preview_bg,
+                        Message::ColumnDragStart(Divider::ProjectSplit),
+                    ),
+                    preview,
+                ]
+                .width(Length::Fill)
+                .into()
+            }
+        }
+        PanelKind::Database => {
+            // 数据库面板需要项目已打开才能读写 `.dozer/database.json`。
+            if ws.project.is_none() {
+                return column![].into();
+            }
+            database::view(
+                &app.database,
+                &ws.database,
+                Length::Fill,
+                zone_pane_border(zone, ac),
+                app.hover_progress(HoverId::DatabaseSchemaBack),
+            )
+            .map(Message::Database)
+        }
+        PanelKind::Ssh => {
+            // 同 Files/Database 面板:`ws.project.is_none()` 是 Stub→Loaded
+            // 促成期间的占位态。
+            if ws.project.is_none() {
+                return column![].into();
+            }
+            let (list_portion, content_portion) = split_portions(app.dims.ssh_split);
+            let list_pane = ssh::view(
+                app,
+                &ws.ssh,
+                Length::FillPortion(list_portion),
+                zone_pane_border(zone, lc),
+            )
+            .map(Message::Ssh);
+            let terminal = ssh_terminal_pane(
+                app,
+                ws,
+                Length::FillPortion(content_portion),
+                zone_pane_border(zone, rc),
+            );
+            let list_bg = theme::region::project_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            let terminal_bg = theme::region::preview_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            if app.panel_mirrored(PanelKind::Ssh) {
+                row![
+                    terminal,
+                    divider_bar(
+                        Divider::SshSplit,
+                        terminal_bg,
+                        list_bg,
+                        Message::ColumnDragStart(Divider::SshSplit),
+                    ),
+                    list_pane,
+                ]
+                .width(Length::Fill)
+                .into()
+            } else {
+                row![
+                    list_pane,
+                    divider_bar(
+                        Divider::SshSplit,
+                        list_bg,
+                        terminal_bg,
+                        Message::ColumnDragStart(Divider::SshSplit),
+                    ),
+                    terminal,
+                ]
+                .width(Length::Fill)
+                .into()
+            }
+        }
+        PanelKind::Web => browser::view(
+            &ws.browser,
+            ws.project.as_ref().map(|p| p.id),
+            app.dims.browser_bookmarks_split,
+            Length::Fill,
+            zone_pane_border(zone, ac),
+            app.panel_mirrored(PanelKind::Web),
+        )
+        .map(Message::Browser),
+        PanelKind::Agent => {
+            let (list_portion, content_portion) = split_portions(app.dims.agent_split);
+            let terminal = terminal_pane(
+                app,
+                ws,
+                Length::FillPortion(content_portion),
+                zone_pane_border(zone, lc),
+            );
+            let list = agent_list_pane(
+                app,
+                ws,
+                Length::FillPortion(list_portion),
+                zone_pane_border(zone, rc),
+            );
+            let terminal_bg = theme::region::terminal_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            let list_bg = theme::region::agent_list_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            if app.panel_mirrored(PanelKind::Agent) {
+                row![
+                    list,
+                    divider_bar(
+                        Divider::RightPairSplit,
+                        list_bg,
+                        terminal_bg,
+                        Message::ColumnDragStart(Divider::RightPairSplit),
+                    ),
+                    terminal,
+                ]
+                .width(Length::Fill)
+                .into()
+            } else {
+                row![
+                    terminal,
+                    divider_bar(
+                        Divider::RightPairSplit,
+                        terminal_bg,
+                        list_bg,
+                        Message::ColumnDragStart(Divider::RightPairSplit),
+                    ),
+                    list,
+                ]
+                .width(Length::Fill)
+                .into()
+            }
+        }
+        PanelKind::Conversations => {
+            let (list_portion, content_portion) = split_portions(app.dims.conversations_split);
+            let review = review_content_pane(
+                ws,
+                Length::FillPortion(content_portion),
+                zone_pane_border(zone, lc),
+            );
+            let list = conversation_list_pane(
+                ws,
+                Length::FillPortion(list_portion),
+                zone_pane_border(zone, rc),
+            );
+            let review_bg = theme::region::review_content_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            let list_bg = theme::region::conversation_list_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            if app.panel_mirrored(PanelKind::Conversations) {
+                row![
+                    list,
+                    divider_bar(
+                        Divider::RightPairSplit,
+                        list_bg,
+                        review_bg,
+                        Message::ColumnDragStart(Divider::RightPairSplit),
+                    ),
+                    review,
+                ]
+                .width(Length::Fill)
+                .into()
+            } else {
+                row![
+                    review,
+                    divider_bar(
+                        Divider::RightPairSplit,
+                        review_bg,
+                        list_bg,
+                        Message::ColumnDragStart(Divider::RightPairSplit),
+                    ),
+                    list,
+                ]
+                .width(Length::Fill)
+                .into()
+            }
+        }
+        PanelKind::Usage => usage::view(
+            &ws.usage,
+            Length::Fill,
+            zone_pane_border(zone, ac),
+            app.hover_progress(HoverId::UsageRefresh),
+        )
+        .map(Message::Usage),
+        PanelKind::Acceptance => {
+            acceptance::view(&ws.acceptance, Length::Fill, zone_pane_border(zone, ac))
+                .map(Message::Acceptance)
+        }
+    }
+}
+
 /// 左面板区:按当前左视图组合"项目树+文件预览"配对或单个 Web 预览面板;
 /// 收起时渲染成空元素(不占宽度)。
 ///
@@ -6943,269 +7559,7 @@ fn left_panel_area<'a>(
     } else {
         (PaneCorner::Left, PaneCorner::Right, PaneCorner::All)
     };
-    let inner: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        match app.left_view {
-            PanelKind::Files => {
-                let (list_portion, content_portion) = split_portions(app.dims.files_split);
-                let list_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-                    if ws.project.is_some() {
-                        files::view(
-                            &ws.files,
-                            Length::FillPortion(list_portion),
-                            zone_pane_border(zone, lc),
-                            app.hover_progress(HoverId::FilesSearchSubmit),
-                            app.hover_progress(HoverId::FilesDotfiles),
-                            app.hover_progress(HoverId::FilesBranchSwitch),
-                        )
-                        .map(Message::Files)
-                    } else {
-                        no_project_placeholder(
-                            ws,
-                            Length::FillPortion(list_portion),
-                            zone_pane_border(zone, lc),
-                        )
-                    };
-                let preview = preview_pane(
-                    app,
-                    ws,
-                    Length::FillPortion(content_portion),
-                    zone_pane_border(zone, rc),
-                );
-                let list_bg = theme::region::project_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                let preview_bg = theme::region::preview_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                if app.panel_mirrored(PanelKind::Files) {
-                    row![
-                        preview,
-                        divider_bar(
-                            Divider::LeftPairSplit,
-                            preview_bg,
-                            list_bg,
-                            Message::ColumnDragStart(Divider::LeftPairSplit),
-                        ),
-                        list_pane,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                } else {
-                    row![
-                        list_pane,
-                        divider_bar(
-                            Divider::LeftPairSplit,
-                            list_bg,
-                            preview_bg,
-                            Message::ColumnDragStart(Divider::LeftPairSplit),
-                        ),
-                        preview,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                }
-            }
-            PanelKind::GitLog => git_log::view(
-                app,
-                &app.git_log,
-                ws.project_panel.worktrees(),
-                app.dims.git_log_split,
-                app.dims.git_log_file_diff_split,
-                app.panel_mirrored(PanelKind::GitLog),
-            )
-            .map(Message::GitLog),
-            PanelKind::Todo => {
-                let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
-                    return column![].into();
-                };
-                let project_path = ws
-                    .project
-                    .as_ref()
-                    .map(|p| std::path::PathBuf::from(&p.path));
-                let (list_portion, content_portion) = split_portions(app.dims.todo_split);
-                let (sidebar_pane, content_pane) = todo::view(
-                    &app.todo,
-                    app,
-                    &ws.todo,
-                    ws,
-                    project_id,
-                    project_path.as_deref(),
-                    Length::FillPortion(list_portion),
-                    zone_pane_border(zone, lc),
-                    Length::FillPortion(content_portion),
-                    zone_pane_border(zone, rc),
-                );
-                let sidebar = sidebar_pane.map(Message::Todo);
-                let content = content_pane.map(Message::Todo);
-                let sidebar_bg = theme::region::project_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                let content_bg = theme::region::preview_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                if app.panel_mirrored(PanelKind::Todo) {
-                    row![
-                        content,
-                        divider_bar(
-                            Divider::TodoSplit,
-                            content_bg,
-                            sidebar_bg,
-                            Message::ColumnDragStart(Divider::TodoSplit),
-                        ),
-                        sidebar,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                } else {
-                    row![
-                        sidebar,
-                        divider_bar(
-                            Divider::TodoSplit,
-                            sidebar_bg,
-                            content_bg,
-                            Message::ColumnDragStart(Divider::TodoSplit),
-                        ),
-                        content,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                }
-            }
-            PanelKind::Project => {
-                let (list_portion, content_portion) = split_portions(app.dims.project_split);
-                let info_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-                    project::view(
-                        &ws.project_panel,
-                        ws.project.as_ref(),
-                        Length::FillPortion(list_portion),
-                        zone_pane_border(zone, lc),
-                    )
-                    .map(Message::Project);
-                let preview = project_preview_pane(
-                    app,
-                    ws,
-                    Length::FillPortion(content_portion),
-                    zone_pane_border(zone, rc),
-                );
-                let info_bg = theme::region::project_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                let preview_bg = theme::region::preview_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                if app.panel_mirrored(PanelKind::Project) {
-                    row![
-                        preview,
-                        divider_bar(
-                            Divider::ProjectSplit,
-                            preview_bg,
-                            info_bg,
-                            Message::ColumnDragStart(Divider::ProjectSplit),
-                        ),
-                        info_pane,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                } else {
-                    row![
-                        info_pane,
-                        divider_bar(
-                            Divider::ProjectSplit,
-                            info_bg,
-                            preview_bg,
-                            Message::ColumnDragStart(Divider::ProjectSplit),
-                        ),
-                        preview,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                }
-            }
-            PanelKind::Database => {
-                // 数据库面板需要项目已打开才能读写 `.dozer/database.json`。
-                if ws.project.is_none() {
-                    return column![].into();
-                }
-                database::view(
-                    &app.database,
-                    &ws.database,
-                    Length::Fill,
-                    zone_pane_border(zone, ac),
-                    app.hover_progress(HoverId::DatabaseSchemaBack),
-                )
-                .map(Message::Database)
-            }
-            PanelKind::Ssh => {
-                // 同 Files/Database 面板:`ws.project.is_none()` 是 Stub→Loaded
-                // 促成期间的占位态,这时不该渲染出一个看似可点、实际上
-                // `Message::Ssh` 分发会被内核静默吞掉(无 project 时直接
-                // return)的"＋新增主机"按钮。
-                if ws.project.is_none() {
-                    return column![].into();
-                }
-                let (list_portion, content_portion) = split_portions(app.dims.ssh_split);
-                let list_pane = ssh::view(
-                    app,
-                    &ws.ssh,
-                    Length::FillPortion(list_portion),
-                    zone_pane_border(zone, lc),
-                )
-                .map(Message::Ssh);
-                let terminal = ssh_terminal_pane(
-                    app,
-                    ws,
-                    Length::FillPortion(content_portion),
-                    zone_pane_border(zone, rc),
-                );
-                let list_bg = theme::region::project_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                let terminal_bg = theme::region::preview_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                if app.panel_mirrored(PanelKind::Ssh) {
-                    row![
-                        terminal,
-                        divider_bar(
-                            Divider::SshSplit,
-                            terminal_bg,
-                            list_bg,
-                            Message::ColumnDragStart(Divider::SshSplit),
-                        ),
-                        list_pane,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                } else {
-                    row![
-                        list_pane,
-                        divider_bar(
-                            Divider::SshSplit,
-                            list_bg,
-                            terminal_bg,
-                            Message::ColumnDragStart(Divider::SshSplit),
-                        ),
-                        terminal,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                }
-            }
-            PanelKind::Web => browser::view(
-                &ws.browser,
-                ws.project.as_ref().map(|p| p.id),
-                app.dims.browser_bookmarks_split,
-                Length::Fill,
-                zone_pane_border(zone, ac),
-                app.panel_mirrored(PanelKind::Web),
-            )
-            .map(Message::Browser),
-            _ => unreachable!(
-                "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
-                 app.left_view 不会取到右侧面板——Stage 4 加拖拽后\
-                 这里要重新设计,不能再用 unreachable"
-            ),
-        };
+    let inner = panel_body(app, ws, app.left_view, zone, lc, rc, ac);
     if maximized {
         return inner;
     }
@@ -7284,119 +7638,7 @@ fn right_panel_area<'a>(
     } else {
         (PaneCorner::Left, PaneCorner::Right, PaneCorner::All)
     };
-    let inner: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        match app.right_view {
-            PanelKind::Agent => {
-                let (list_portion, content_portion) = split_portions(app.dims.agent_split);
-                let terminal = terminal_pane(
-                    app,
-                    ws,
-                    Length::FillPortion(content_portion),
-                    zone_pane_border(zone, lc),
-                );
-                let list = agent_list_pane(
-                    app,
-                    ws,
-                    Length::FillPortion(list_portion),
-                    zone_pane_border(zone, rc),
-                );
-                let terminal_bg = theme::region::terminal_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                let list_bg = theme::region::agent_list_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                if app.panel_mirrored(PanelKind::Agent) {
-                    row![
-                        list,
-                        divider_bar(
-                            Divider::RightPairSplit,
-                            list_bg,
-                            terminal_bg,
-                            Message::ColumnDragStart(Divider::RightPairSplit),
-                        ),
-                        terminal,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                } else {
-                    row![
-                        terminal,
-                        divider_bar(
-                            Divider::RightPairSplit,
-                            terminal_bg,
-                            list_bg,
-                            Message::ColumnDragStart(Divider::RightPairSplit),
-                        ),
-                        list,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                }
-            }
-            PanelKind::Conversations => {
-                let (list_portion, content_portion) = split_portions(app.dims.conversations_split);
-                let review = review_content_pane(
-                    ws,
-                    Length::FillPortion(content_portion),
-                    zone_pane_border(zone, lc),
-                );
-                let list = conversation_list_pane(
-                    ws,
-                    Length::FillPortion(list_portion),
-                    zone_pane_border(zone, rc),
-                );
-                let review_bg = theme::region::review_content_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                let list_bg = theme::region::conversation_list_pane()
-                    .background
-                    .unwrap_or(byteui::theme::color::current().bg);
-                if app.panel_mirrored(PanelKind::Conversations) {
-                    row![
-                        list,
-                        divider_bar(
-                            Divider::RightPairSplit,
-                            list_bg,
-                            review_bg,
-                            Message::ColumnDragStart(Divider::RightPairSplit),
-                        ),
-                        review,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                } else {
-                    row![
-                        review,
-                        divider_bar(
-                            Divider::RightPairSplit,
-                            review_bg,
-                            list_bg,
-                            Message::ColumnDragStart(Divider::RightPairSplit),
-                        ),
-                        list,
-                    ]
-                    .width(Length::Fill)
-                    .into()
-                }
-            }
-            PanelKind::Usage => usage::view(
-                &ws.usage,
-                Length::Fill,
-                zone_pane_border(zone, ac),
-                app.hover_progress(HoverId::UsageRefresh),
-            )
-            .map(Message::Usage),
-            PanelKind::Acceptance => {
-                acceptance::view(&ws.acceptance, Length::Fill, zone_pane_border(zone, ac))
-                    .map(Message::Acceptance)
-            }
-            _ => unreachable!(
-                "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
-                 app.right_view 不会取到左侧面板——Stage 4 加拖拽后\
-                 这里要重新设计,不能再用 unreachable"
-            ),
-        };
+    let inner = panel_body(app, ws, app.right_view, zone, lc, rc, ac);
     if maximized {
         return inner;
     }
@@ -7746,6 +7988,22 @@ pub(crate) fn tab_drag_surface(
         return area.into();
     }
     area.into()
+}
+
+/// 给一个图标栏按钮包上"拖拽换栏/换位"的感应层,手法同 `tab_drag_surface`
+/// ——内容本身仍是原来的交互(点击选中在内部,见 `panel_select` 已经在
+/// `Message::PanelSelect` 处理里武装拖拽态),外层只补 `on_move`:光标
+/// 移动到这个按钮上时,若正在拖拽(`App::dragging_rail()`),上报
+/// `RailDragMove { side, index }`。`rail_drag_move` 只在 `rail_drag` 命中时
+/// 才做同栏重排 / 记跨栏悬停,所以没在拖拽时这条 `on_move` 是无害的 no-op。
+fn rail_drag_surface(
+    content: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>,
+    side: Side,
+    index: usize,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    MouseArea::new(content)
+        .on_move(move |_| Message::RailDragMove { side, index })
+        .into()
 }
 
 /// 面板内 tab（终端 / 预览 / 浏览器三处共用）的渲染器，样式对齐顶栏未选中
@@ -8733,6 +8991,60 @@ mod tests {
         assert!(!is_in_preview_column(1400.0, 1440.0, &left_max));
     }
 
+    /// Stage 4a 跨栏拖拽:右栏面板被拖到左栏后成了 `left_view`。它们纯 iced
+    /// 绘制、左区没有 webview 可摆,`preview_content_bounds` 必须返回空矩形
+    /// 而不是命中 `_ => unreachable!`(GUI 拖拽核对抓到的崩溃)。
+    #[test]
+    fn preview_content_bounds_bare_for_right_panel_on_left() {
+        for kind in [
+            PanelKind::Agent,
+            PanelKind::Conversations,
+            PanelKind::Usage,
+            PanelKind::Acceptance,
+        ] {
+            let state = ShellState {
+                left_view: kind,
+                ..test_state()
+            };
+            assert_eq!(
+                preview_content_bounds(1440.0, 900.0, &state),
+                (0.0, 0.0, 0.0, 0.0),
+                "左视图是右栏面板 {kind:?} 时应返回空矩形"
+            );
+            let left_max = ShellState {
+                left_view: kind,
+                maximized: Some(MaximizedPane::Left),
+                ..test_state()
+            };
+            assert_eq!(
+                preview_content_bounds(1440.0, 900.0, &left_max),
+                (0.0, 0.0, 0.0, 0.0),
+                "放大态下左视图是右栏面板 {kind:?} 时同样应返回空矩形"
+            );
+        }
+    }
+
+    /// Stage 4a 跨栏拖拽:右栏面板当左视图时永不落在预览列(`is_in_preview_column`
+    /// 不得命中 `_ => unreachable!`)。
+    #[test]
+    fn is_in_preview_column_false_for_right_panel_on_left() {
+        for kind in [
+            PanelKind::Agent,
+            PanelKind::Conversations,
+            PanelKind::Usage,
+            PanelKind::Acceptance,
+        ] {
+            let state = ShellState {
+                left_view: kind,
+                ..test_state()
+            };
+            assert!(
+                !is_in_preview_column(500.0, 1440.0, &state),
+                "左视图是右栏面板 {kind:?} 时永不落在预览列"
+            );
+        }
+    }
+
     #[test]
     fn terminal_pane_height_excludes_top_and_status_bars() {
         let state = test_state();
@@ -9696,5 +10008,349 @@ mod tests {
         // 合法数据原样保留。
         let legit = RailLayout::default();
         assert_eq!(sanitize_rail_layout(legit.clone()), legit);
+    }
+
+    /// `RailDrag` 拖拽逻辑的纯核心测试。`App` 没有 `Default` 实现、也无可
+    /// 复用的测试构造 helper(构造成本高),所以 `rail_drag_move`/`end_rail_drag`
+    /// 的纯逻辑被抽成 `rail_drag_move_into`/`rail_cross_apply` 两个自由函数,
+    /// 这里直接构造 `RailLayout` 验证(同 `panel_mirrored_in` 的理由)。
+    mod rail_drag_tests {
+        use super::*;
+
+        /// 同栏内把第一个图标拖到第三个位置:该面板移动、其余相对顺序不变,
+        /// 且不产生跨栏悬停残留。
+        #[test]
+        fn same_side_reorder_moves_kind() {
+            let mut rail = RailLayout::default();
+            let mut drag = RailDrag {
+                source_side: Side::Left,
+                source_index: 0,
+                origin_index: 0,
+                pending_cross_side: None,
+            };
+            let original_left = rail.left.clone();
+            rail_drag_move_into(&mut rail, &mut drag, Side::Left, 2);
+            assert_eq!(rail.left[2], original_left[0], "源项应落到目标位");
+            assert_eq!(
+                rail.left[0], original_left[1],
+                "源项前面整体右移一位落到首位"
+            );
+            assert_eq!(rail.left[1], original_left[2], "源项之后续到第二位");
+            assert_eq!(rail.left[3], original_left[3], "目标位之后顺序不变");
+            assert_eq!(drag.source_index, 2, "重排后源下标应更新到新位置");
+            assert_eq!(
+                drag.origin_index, 0,
+                "起始位应锁定不变,供 end_rail_drag 判断重排是否发生"
+            );
+            assert_eq!(drag.pending_cross_side, None, "同栏重排不设跨栏悬停");
+        }
+
+        /// 同栏重排放到同一个位置(或越界/no-op)不应移动任何面板。
+        #[test]
+        fn same_side_reorder_to_same_index_is_noop() {
+            let mut rail = RailLayout::default();
+            let original = rail.clone();
+            let mut drag = RailDrag {
+                source_side: Side::Left,
+                source_index: 0,
+                origin_index: 0,
+                pending_cross_side: None,
+            };
+            rail_drag_move_into(&mut rail, &mut drag, Side::Left, 0);
+            assert_eq!(rail, original, "拖到同一位置是 no-op,RailLayout 不变");
+        }
+
+        /// 跨栏移动:被移动面板搬到目标栏,并从源栏消失(`rail_cross_apply`
+        /// 返回被移动的面板,App 侧据此把目标栏设为它 active)。
+        #[test]
+        fn cross_side_move_relocates_panel() {
+            let mut rail = RailLayout::default();
+            let kind = rail.left[0];
+            let applied = rail_cross_apply(&mut rail, Side::Left, 0, Side::Right, 0);
+            assert_eq!(applied, Some(kind));
+            assert!(!rail.left.contains(&kind), "源栏应不再含被移动面板");
+            assert!(rail.right.contains(&kind), "目标栏应含被移动面板");
+        }
+
+        /// 源栏只剩 1 个面板时禁止搬走(不支持"栏清空"),`RailLayout` 不变。
+        #[test]
+        fn cross_side_move_is_noop_when_source_side_would_become_empty() {
+            let mut rail = RailLayout::default();
+            while rail.right.len() > 1 {
+                let kind = rail.right.remove(0);
+                rail.left.push(kind);
+            }
+            let before = rail.clone();
+            let applied = rail_cross_apply(&mut rail, Side::Right, 0, Side::Left, 0);
+            assert_eq!(applied, None, "源栏只剩 1 个时应返回 None,不搬走");
+            assert_eq!(rail, before, "搬移被挡下,RailLayout 不变");
+            assert_eq!(rail.right.len(), 1, "右栏保留最后 1 个");
+        }
+
+        /// 源下标越界(传入了过期的拖拽源下标)应安全 no-op。
+        #[test]
+        fn cross_side_move_with_stale_source_index_is_noop() {
+            let mut rail = RailLayout::default();
+            let before = rail.clone();
+            let applied = rail_cross_apply(&mut rail, Side::Left, 999, Side::Right, 0);
+            assert_eq!(applied, None);
+            assert_eq!(rail, before);
+        }
+
+        /// 跨栏悬停后,把光标移回源栏(同一位置,index 没变)应取消这条
+        /// 悬停——`pending_cross_side` 回到 `None`,`end_rail_drag` 看见
+        /// `None` 时不做搬移。
+        #[test]
+        fn hovering_back_to_source_side_cancels_the_pending_cross_move() {
+            let mut rail = RailLayout::default();
+            let before = rail.clone();
+            let mut drag = RailDrag {
+                source_side: Side::Left,
+                source_index: 0,
+                origin_index: 0,
+                pending_cross_side: None,
+            };
+            rail_drag_move_into(&mut rail, &mut drag, Side::Right, 0); // 悬停到对侧
+            assert_eq!(drag.pending_cross_side, Some((Side::Right, 0)));
+            rail_drag_move_into(&mut rail, &mut drag, Side::Left, 0); // 移回源栏,index 未变
+            assert_eq!(drag.pending_cross_side, None, "移回源栏取消跨栏悬停");
+            assert_eq!(rail, before, "整个过程没有搬移,RailLayout 不变");
+        }
+    }
+
+    /// `apply_column_drag` 里 Ssh/Todo/GitLog 三个左栏默认面板的 side+镜像
+    /// 感知改造测试。默认栏(左)下方向应与改造前固定行为逐字节一致(防回归
+    /// 锚);挪到右栏后方向要反转(镜像态下"列表在后")。用 near/far 方向性
+    /// 比较,不手算精确数值(同既有
+    /// `apply_column_drag_browser_bookmarks_split_direction_matches_content_side`)。
+    mod apply_column_drag_ssh_todo_gitlog_mirror_tests {
+        use super::*;
+
+        fn right_x0_inside(window_width: f32, state: &ShellState) -> f32 {
+            window_width
+                - byteui::theme::geometry::icon_rail_width()
+                - right_zone_width(window_width, state)
+        }
+
+        fn relocate_to_right(state: &mut ShellState, kind: PanelKind) {
+            state.layout.rail_layout.left.retain(|&k| k != kind);
+            state.layout.rail_layout.right.push(kind);
+        }
+
+        #[test]
+        fn ssh_split_direction_on_default_side_matches_pre_migration_behavior() {
+            let state = test_state();
+            let window_width = 1600.0;
+            let near = apply_column_drag(state.clone(), Divider::SshSplit, window_width, 300.0);
+            let far = apply_column_drag(state, Divider::SshSplit, window_width, 500.0);
+            assert!(
+                far.ssh_split > near.ssh_split,
+                "near={} far={}",
+                near.ssh_split,
+                far.ssh_split
+            );
+        }
+
+        #[test]
+        fn ssh_split_direction_flips_when_relocated_to_right_side() {
+            let mut state = test_state();
+            relocate_to_right(&mut state, PanelKind::Ssh);
+            let window_width = 1600.0;
+            let x0 = right_x0_inside(window_width, &state);
+            let near = apply_column_drag(state.clone(), Divider::SshSplit, window_width, x0 + 50.0);
+            let far = apply_column_drag(state, Divider::SshSplit, window_width, x0 + 250.0);
+            assert!(
+                far.ssh_split < near.ssh_split,
+                "镜像态下方向应反转:near={} far={}",
+                near.ssh_split,
+                far.ssh_split
+            );
+        }
+
+        #[test]
+        fn todo_split_direction_on_default_side_matches_pre_migration_behavior() {
+            let state = test_state();
+            let window_width = 1600.0;
+            let near = apply_column_drag(state.clone(), Divider::TodoSplit, window_width, 300.0);
+            let far = apply_column_drag(state, Divider::TodoSplit, window_width, 500.0);
+            assert!(
+                far.todo_split > near.todo_split,
+                "near={} far={}",
+                near.todo_split,
+                far.todo_split
+            );
+        }
+
+        #[test]
+        fn todo_split_direction_flips_when_relocated_to_right_side() {
+            let mut state = test_state();
+            relocate_to_right(&mut state, PanelKind::Todo);
+            let window_width = 1600.0;
+            let x0 = right_x0_inside(window_width, &state);
+            let near =
+                apply_column_drag(state.clone(), Divider::TodoSplit, window_width, x0 + 50.0);
+            let far = apply_column_drag(state, Divider::TodoSplit, window_width, x0 + 250.0);
+            assert!(
+                far.todo_split < near.todo_split,
+                "镜像态下方向应反转:near={} far={}",
+                near.todo_split,
+                far.todo_split
+            );
+        }
+
+        #[test]
+        fn git_log_split_direction_on_default_side_matches_pre_migration_behavior() {
+            let state = test_state();
+            let window_width = 1600.0;
+            let near = apply_column_drag(state.clone(), Divider::GitLogSplit, window_width, 300.0);
+            let far = apply_column_drag(state, Divider::GitLogSplit, window_width, 500.0);
+            assert!(
+                far.git_log_split > near.git_log_split,
+                "near={} far={}",
+                near.git_log_split,
+                far.git_log_split
+            );
+        }
+
+        #[test]
+        fn git_log_split_direction_flips_when_relocated_to_right_side() {
+            let mut state = test_state();
+            relocate_to_right(&mut state, PanelKind::GitLog);
+            let window_width = 1600.0;
+            let x0 = right_x0_inside(window_width, &state);
+            let near =
+                apply_column_drag(state.clone(), Divider::GitLogSplit, window_width, x0 + 50.0);
+            let far = apply_column_drag(state, Divider::GitLogSplit, window_width, x0 + 250.0);
+            assert!(
+                far.git_log_split < near.git_log_split,
+                "镜像态下方向应反转:near={} far={}",
+                near.git_log_split,
+                far.git_log_split
+            );
+        }
+    }
+
+    /// `apply_column_drag` 里 `RightPairSplit`(Agent/Conversations)的
+    /// side+镜像感知改造测试。默认在右栏、默认"内容在前"——默认栏下拖拽点
+    /// 越靠右,内容占比越大、列表占比越*小*;挪到左栏后镜像成"列表在前",
+    /// 方向反转。
+    mod apply_column_drag_right_pair_mirror_tests {
+        use super::*;
+
+        #[test]
+        fn agent_split_direction_on_default_side_matches_pre_migration_behavior() {
+            let state = test_state(); // right_view 已经是 Agent
+            let window_width = 1600.0;
+            let right_x0 = window_width
+                - byteui::theme::geometry::icon_rail_width()
+                - right_zone_width(window_width, &state);
+            let near = apply_column_drag(
+                state.clone(),
+                Divider::RightPairSplit,
+                window_width,
+                right_x0 + 50.0,
+            );
+            let far = apply_column_drag(
+                state,
+                Divider::RightPairSplit,
+                window_width,
+                right_x0 + 250.0,
+            );
+            assert!(
+                far.agent_split < near.agent_split,
+                "near={} far={}",
+                near.agent_split,
+                far.agent_split
+            );
+        }
+
+        #[test]
+        fn agent_split_direction_flips_when_relocated_to_left_side() {
+            let mut state = test_state();
+            state
+                .layout
+                .rail_layout
+                .right
+                .retain(|&k| k != PanelKind::Agent);
+            state.layout.rail_layout.left.push(PanelKind::Agent);
+            let window_width = 1600.0;
+            let near = apply_column_drag(
+                state.clone(),
+                Divider::RightPairSplit,
+                window_width,
+                byteui::theme::geometry::icon_rail_width() + 50.0,
+            );
+            let far = apply_column_drag(
+                state,
+                Divider::RightPairSplit,
+                window_width,
+                byteui::theme::geometry::icon_rail_width() + 250.0,
+            );
+            assert!(
+                far.agent_split > near.agent_split,
+                "镜像态下方向应反转:near={} far={}",
+                near.agent_split,
+                far.agent_split
+            );
+        }
+
+        #[test]
+        fn conversations_split_direction_on_default_side_matches_pre_migration_behavior() {
+            let mut state = test_state();
+            state.right_view = PanelKind::Conversations;
+            let window_width = 1600.0;
+            let right_x0 = window_width
+                - byteui::theme::geometry::icon_rail_width()
+                - right_zone_width(window_width, &state);
+            let near = apply_column_drag(
+                state.clone(),
+                Divider::RightPairSplit,
+                window_width,
+                right_x0 + 50.0,
+            );
+            let far = apply_column_drag(
+                state,
+                Divider::RightPairSplit,
+                window_width,
+                right_x0 + 250.0,
+            );
+            assert!(
+                far.conversations_split < near.conversations_split,
+                "near={} far={}",
+                near.conversations_split,
+                far.conversations_split
+            );
+        }
+
+        #[test]
+        fn conversations_split_direction_flips_when_relocated_to_left_side() {
+            let mut state = test_state();
+            state.right_view = PanelKind::Conversations;
+            state
+                .layout
+                .rail_layout
+                .right
+                .retain(|&k| k != PanelKind::Conversations);
+            state.layout.rail_layout.left.push(PanelKind::Conversations);
+            let window_width = 1600.0;
+            let near = apply_column_drag(
+                state.clone(),
+                Divider::RightPairSplit,
+                window_width,
+                byteui::theme::geometry::icon_rail_width() + 50.0,
+            );
+            let far = apply_column_drag(
+                state,
+                Divider::RightPairSplit,
+                window_width,
+                byteui::theme::geometry::icon_rail_width() + 250.0,
+            );
+            assert!(
+                far.conversations_split > near.conversations_split,
+                "镜像态下方向应反转:near={} far={}",
+                near.conversations_split,
+                far.conversations_split
+            );
+        }
     }
 }

@@ -769,6 +769,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     app.update(Message::TabDragEnd);
                     window.request_redraw();
                 }
+                // 图标栏拖拽换栏同理:左键松开即结束,换栏/换位是靠被拖
+                // 过按钮的 on_move 驱动的,这里只负责收尾。
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: winit::event::MouseButton::Left,
+                    ..
+                } if app.dragging_rail() => {
+                    app.update(Message::RailDragEnd);
+                    window.request_redraw();
+                }
                 // Todo 面板拖拽排序同理:左键松开即结束并把新顺序写盘(换位
                 // 是靠被拖过卡片的 `on_move` 驱动的,这里只负责收尾)。
                 WindowEvent::MouseInput {
