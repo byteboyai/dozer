@@ -90,19 +90,7 @@ pub enum PanelKind {
 /// 里记一个 hovered 目标,改色时按它重算)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RailButton {
-    LeftFiles,
-    LeftGit,
-    LeftTodo,
-    LeftProject,
-    LeftDatabase,
-    /// SSH 主机面板入口。
-    LeftSsh,
-    /// 浏览器面板入口(左图标栏最底部 Globe 按钮)。
-    LeftWeb,
-    RightAgent,
-    RightConversations,
-    RightUsage,
-    RightAcceptance,
+    Panel(PanelKind),
     /// 首页左栏"项目列表" pane 图标。
     HomeProjectList,
     /// 首页左栏"Recents" pane 图标。
@@ -302,12 +290,6 @@ pub enum WorkspaceSlot {
 /// 攒下来的宽度/比例全部重置。
 /// 图标栏方向:左栏或右栏。用作 `RailLayout` 的访问器参数,以及后续拖拽
 /// (Stage 4)的方向来源。
-///
-/// 这个 Stage 只定义数据模型、不接任何消费者(渲染在 Stage 2、拖拽在
-/// Stage 4),所以 clippy 会把 `Side` 当 dead code 报——先用
-/// `#[allow(dead_code)]` 压住,等 Stage 2 的图标栏渲染遍历 `RailLayout`
-/// 时这个量自然会活过来,届时删掉这个 allow。
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
     Left,
@@ -326,9 +308,7 @@ pub struct RailLayout {
 }
 
 impl RailLayout {
-    // 同 `Side`:本 Stage 无二进制调用者(访问器参数类型 Side 已经定义了,
-    // 方法留作 Stage 2/4 遍历 `RailLayout` 时用),clippy dead_code 先压住。
-    #[allow(dead_code)]
+    /// 返回某一侧图标栏当前挂载的面板列表(渲染顺序)。
     pub fn side(&self, side: Side) -> &Vec<PanelKind> {
         match side {
             Side::Left => &self.left,
@@ -341,6 +321,24 @@ impl RailLayout {
         match side {
             Side::Left => &mut self.left,
             Side::Right => &mut self.right,
+        }
+    }
+
+    /// 给定面板,反查它当前挂在哪条栏。`RailLayout` 的不变式(见
+    /// `sanitize_rail_layout`)保证 11 个面板不重不漏分布在两条栏,
+    /// 所以这里的 `expect` 不会在合法状态下触发——`RailLayout` 一旦
+    /// 通不过消毒就已经在 `layout::load_from` 里回落 `default()` 了,
+    /// 不会带着"某个面板哪条栏都不在"的坏数据流到这里。
+    pub fn side_of(&self, kind: PanelKind) -> Side {
+        if self.left.contains(&kind) {
+            Side::Left
+        } else if self.right.contains(&kind) {
+            Side::Right
+        } else {
+            unreachable!(
+                "RailLayout 不变式被破坏:{kind:?} 不在任何一条栏——\
+                 sanitize_rail_layout 应该已经挡掉这种坏数据"
+            )
         }
     }
 }
@@ -1566,10 +1564,9 @@ pub enum Message {
     /// 的 `DragMove` 由卡片外层 `MouseArea::on_move` 直接发 `Todo::DragMove`
     /// (走 `Message::Todo` 通道),不需要顶层变体——这里只收尾。
     TodoDragEnd,
-    /// 点击左图标栏某图标:已是当前视图则切换收起态,否则切到该视图并展开。
-    LeftIconSelect(PanelKind),
-    /// 同上,右图标栏。
-    RightIconSelect(PanelKind),
+    /// 图标栏点击选中某个面板——不区分左右栏,`panel_select` 内部按
+    /// `RailLayout::side_of` 查它当前挂在哪条栏。
+    PanelSelect(PanelKind),
     /// 图标栏按钮 hover 进入/离开:进入带 `Some(id)`,离开带 `None`,
     /// 任意按钮的 hover 进入/离开:带按钮标识 `HoverId` 与 `true`/`false`,
     /// 驱动该按钮图标/背景/边框颜色的平滑过渡动画(见 `App::set_hover`/
@@ -1711,7 +1708,7 @@ pub enum Message {
     /// 最近的对话两份列表;D4)。
     HomeRecentsLoaded(Vec<HomeRecentFile>, Vec<HomeRecentConversation>),
     /// 首页左图标栏:切换 `HomeLeftView`(项目列表/Recents)。首页没有
-    /// collapse 概念,恒有一个 pane 显示,不像工作区 `LeftIconSelect` 那样
+    /// collapse 概念,恒有一个 pane 显示,不像工作区 `PanelSelect` 那样
     /// 需要处理"点已选中图标收起面板区"的分支。
     HomeLeftIconSelect(homespace::HomeLeftView),
     /// 首页右图标栏:切换 `HomeRightView`(目前只有 Browser)。
@@ -3346,7 +3343,7 @@ impl App {
 
     /// 保证 `git_log` 状态跟得上"现在应该看哪个项目"——`git_log: State`
     /// 是 `App` 级字段,不是每个项目各自一份(不像 `Workspace.files`),
-    /// 所以面板打开时(`LeftIconSelect`)和切项目页签时(`ProjectTabSwitch`)
+    /// 所以面板打开时(`PanelSelect`)和切项目页签时(`ProjectTabSwitch`)
     /// 都得调这个方法对齐一次,否则 Git Log 面板开着的状态下切页签,提交图
     /// 会停在上一个项目不动,而同一面板里的 worktree 速览条(`ws.files
     /// .worktrees()` 是按项目取的)却已经跳到新项目——两者对不上。缓存已经是当前项目的
@@ -3654,8 +3651,7 @@ impl App {
             Message::TodoDragEnd => {
                 self.todo_message(todo::Message::DragEnd);
             }
-            Message::LeftIconSelect(v) => self.left_icon_select(v),
-            Message::RightIconSelect(v) => self.right_icon_select(v),
+            Message::PanelSelect(v) => self.panel_select(v),
             Message::Hover(id, h) => {
                 self.set_hover(id, h);
             }
@@ -5150,60 +5146,86 @@ impl App {
         }
     }
 
-    fn left_icon_select(&mut self, v: PanelKind) {
-        if self.left_view == v {
-            // 点的是已选中(激活)的图标:应退回未选中并收起左面板区。
-            // 但若右面板区也已经收起了,左就是最后一个还开着的 zone,
-            // 不能关——保持展开、图标维持选中态(什么都不做)。
-            if !self.right_collapsed {
-                self.left_collapsed = !self.left_collapsed;
+    fn panel_select(&mut self, kind: PanelKind) {
+        let side = self.shell_layout.rail_layout.side_of(kind);
+        // 点当前已激活的图标:退回未选中并收起对应面板区;但若对侧面板区
+        // 也已收起,当前侧就是最后一个还开着的 zone,不能关(两侧对称)。
+        let switched = match side {
+            Side::Left => {
+                if self.left_view == kind {
+                    if !self.right_collapsed {
+                        self.left_collapsed = !self.left_collapsed;
+                    }
+                    false
+                } else {
+                    self.left_view = kind;
+                    self.left_collapsed = false;
+                    true
+                }
             }
-        } else {
-            self.left_view = v;
-            self.left_collapsed = false;
-        }
-        // 切进 Git 提交图视图时,若缓存为空或不属于当前项目,同步跑
-        // 一次 `gleisbau` 布局。失败/未打开项目都落成文案,交给
-        // `git_log::view` 画出来,不 panic、不静默吞掉。
-        if self.left_view == PanelKind::GitLog {
-            self.sync_git_log_to_active_project();
-        }
-        // Todo 面板：切入即从磁盘重读一次 `.dozer/todo.md`，保证切进来
-        // 立刻是最新内容（轮询只负责"停留期间"的同步，切换本身不算）。
-        if self.left_view == PanelKind::Todo {
-            self.with_focused_project(|ws, _io| {
-                if let Some(project) = ws.project.as_ref() {
-                    todo::reload_from_disk(&mut ws.todo, std::path::Path::new(&project.path));
+            Side::Right => {
+                if self.right_view == kind {
+                    if !self.left_collapsed {
+                        self.right_collapsed = !self.right_collapsed;
+                    }
+                    false
+                } else {
+                    self.right_view = kind;
+                    self.right_collapsed = false;
+                    true
                 }
-            });
-        }
-        // 数据库面板：切入即从磁盘重读一次 `.dozer/database.json`，
-        // 保证切进来立刻是最新内容(同 Todo 面板的切换时语义)。
-        if self.left_view == PanelKind::Database {
-            self.with_focused_project(|ws, _io| {
-                if let Some(project) = ws.project.as_ref() {
-                    database::reload_from_disk(
-                        &mut ws.database,
-                        std::path::Path::new(&project.path),
-                    );
+            }
+        };
+        // 面板专属的"切入时动作"。原左栏处理器把 GitLog/Todo/
+        // Database/Project/Ssh 的触发放在 if/else 之后的无条件
+        // `if self.left_view == PanelKind::X` 里——收起/展开当前激活的特殊
+        // 面板也会跑一遍;原右栏处理器把 Usage/Acceptance 放在 else(真正
+        // 切换)分支里——只有切换时才触发。为保持逐像素零差异,左侧面板恒
+        // 触发、右侧面板仅在真正切换时触发(默认布局下它们恰好按这个分侧;
+        // Stage 4 拖拽换栏后这里再按 `rail_layout.side_of` 重新对齐各面板
+        // 的触发语义)。
+        let fire = match side {
+            Side::Left => true,
+            Side::Right => switched,
+        };
+        if fire {
+            match kind {
+                PanelKind::GitLog => self.sync_git_log_to_active_project(),
+                PanelKind::Todo => self.with_focused_project(|ws, _io| {
+                    if let Some(project) = ws.project.as_ref() {
+                        todo::reload_from_disk(&mut ws.todo, std::path::Path::new(&project.path));
+                    }
+                }),
+                PanelKind::Database => self.with_focused_project(|ws, _io| {
+                    if let Some(project) = ws.project.as_ref() {
+                        database::reload_from_disk(
+                            &mut ws.database,
+                            std::path::Path::new(&project.path),
+                        );
+                    }
+                }),
+                PanelKind::Project => self.ensure_project_readme_and_reveal(),
+                PanelKind::Ssh => self.with_focused_project(|ws, _io| {
+                    if let Some(project) = ws.project.as_ref() {
+                        ssh::reload_from_disk(&mut ws.ssh, std::path::Path::new(&project.path));
+                    }
+                }),
+                PanelKind::Usage => self.with_focused_project(|ws, io| {
+                    ws.usage.set_loading(true);
+                    ws.spawn_usage_refresh(io);
+                }),
+                PanelKind::Acceptance => {
+                    let tab_id = self
+                        .active_workspace()
+                        .and_then(|ws| ws.tabs.get(ws.active))
+                        .map(|t| t.tab_id);
+                    if let Some(tab_id) = tab_id {
+                        self.update(Message::Acceptance(acceptance::Message::Open(tab_id)));
+                    }
                 }
-            });
-        }
-        // 项目信息面板：切入时若项目根目录没有 `README.md`，就用项目名 +
-        // 描述(`.dozer/description.md`)生成一份，并自动在右侧配套预览窗打
-        // 开这份新生成的 README(只在新生成时打开——已存在 README 时不重复
-        // 生成也不抢占预览)。语义同 Todo/Database/SSH 的"切换时动作"。
-        if self.left_view == PanelKind::Project {
-            self.ensure_project_readme_and_reveal();
-        }
-        // SSH 面板：切入即从磁盘重读一次 `.dozer/ssh_hosts.json`，语义
-        // 同 Todo 面板(切换本身触发重读,停留期间的同步靠别的机制)。
-        if self.left_view == PanelKind::Ssh {
-            self.with_focused_project(|ws, _io| {
-                if let Some(project) = ws.project.as_ref() {
-                    ssh::reload_from_disk(&mut ws.ssh, std::path::Path::new(&project.path));
+                PanelKind::Files | PanelKind::Web | PanelKind::Agent | PanelKind::Conversations => {
                 }
-            });
+            }
         }
         // 图标栏点击一律退出放大态。放大态浮层不拦图标栏上的点击
         // (遮罩两侧垫的是无交互 Space,点击穿到下层图标按钮),所以
@@ -5211,35 +5233,6 @@ impl App {
         // 就会留下一个空的金色描边浮层,只能点变暗区才能脱身
         // (Fix round 2 #2)。切换本侧显示什么内容时,放大态本也不该
         // 存活,无条件清最简单也最不容易出意外。
-        self.maximized = None;
-        self.on_shell_layout_changed();
-    }
-
-    fn right_icon_select(&mut self, v: PanelKind) {
-        if self.right_view == v {
-            // 同上,对称:右是最后开着的 zone 时不收起。
-            if !self.left_collapsed {
-                self.right_collapsed = !self.right_collapsed;
-            }
-        } else {
-            self.right_view = v;
-            self.right_collapsed = false;
-            if v == PanelKind::Usage {
-                self.with_focused_project(|ws, io| {
-                    ws.usage.set_loading(true);
-                    ws.spawn_usage_refresh(io);
-                });
-            } else if v == PanelKind::Acceptance {
-                let tab_id = self
-                    .active_workspace()
-                    .and_then(|ws| ws.tabs.get(ws.active))
-                    .map(|t| t.tab_id);
-                if let Some(tab_id) = tab_id {
-                    self.update(Message::Acceptance(acceptance::Message::Open(tab_id)));
-                }
-            }
-        }
-        // 同 LeftIconSelect(Fix round 2 #2)。
         self.maximized = None;
         self.on_shell_layout_changed();
     }
@@ -5747,7 +5740,7 @@ impl App {
         // 手动 `.width(Length::Shrink)` 会让 flex 第三阶段(fill 分配)不再
         // 执行,右图标栏就会缩到窗口中间——不要在不理解这个前提的情况下改写。
         let body = row![
-            left_icon_rail(self),
+            icon_rail(self, Side::Left),
             column![
                 row![
                     left_panel_area(self, ws, false),
@@ -5763,7 +5756,7 @@ impl App {
                 footbar::view(&self.footbar).map(Message::Footbar),
             ]
             .width(Length::Fill),
-            right_icon_rail(self),
+            icon_rail(self, Side::Right),
         ];
         let base = column![top, body];
 
@@ -6727,111 +6720,46 @@ pub(crate) fn rail_icon_button<'a>(
     icons::with_tooltip(content, tooltip)
 }
 
-/// 左图标栏:文件列表 / Web 两个图标,点已激活的那个即收起左面板区。
-fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let region = theme::region::left_icon_rail();
-    // 视觉"选中"= 该视图激活 **且**左面板区展开。点已选中的图标会收起面板区,
-    // 此时图标要退回未选中态(见 `LeftIconSelect`),所以 `active` 得带上
-    // `!left_collapsed`。
-    let left_open = !app.left_collapsed;
-    let content = column![
-        // Project 信息面板入口：项目名 / git 分支+脏标 / 验收次数 / 可编辑目标。
-        // 置顶(用户 2026-08-11 指定)。
-        icons::icon_button_entry(
-            icons::IconKind::Briefcase,
-            byteui::theme::icon_size::rail(),
-            app.left_view == PanelKind::Project && left_open,
-            app.hover_progress(HoverId::Rail(RailButton::LeftProject)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::LeftIconSelect(PanelKind::Project),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftProject), hovered),
-            "项目",
-        ),
-        // Todo 面板入口：`.dozer/todo.md` 任务列表。第二顺位(用户 2026-08-11
-        // 指定)。
-        icons::icon_button_entry(
-            icons::IconKind::ListTodo,
-            byteui::theme::icon_size::rail(),
-            app.left_view == PanelKind::Todo && left_open,
-            app.hover_progress(HoverId::Rail(RailButton::LeftTodo)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::LeftIconSelect(PanelKind::Todo),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftTodo), hovered),
-            "待办",
-        ),
-        // 文件列表入口：项目树 + 文件预览配对。
-        icons::icon_button_entry(
-            icons::IconKind::FolderTree,
-            byteui::theme::icon_size::rail(),
-            app.left_view == PanelKind::Files && left_open,
-            app.hover_progress(HoverId::Rail(RailButton::LeftFiles)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::LeftIconSelect(PanelKind::Files),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftFiles), hovered),
-            "文件",
-        ),
-        // spike(2026-08-06):Git 提交图入口,验证 gleisbau 库可行性用。
-        icons::icon_button_entry(
-            icons::IconKind::GitGraph,
-            byteui::theme::icon_size::rail(),
-            app.left_view == PanelKind::GitLog && left_open,
-            app.hover_progress(HoverId::Rail(RailButton::LeftGit)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::LeftIconSelect(PanelKind::GitLog),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftGit), hovered),
-            "Git 提交",
-        ),
-        // 数据库面板入口:数据源管理 + 连接测试。
-        icons::icon_button_entry(
-            icons::IconKind::Database,
-            byteui::theme::icon_size::rail(),
-            app.left_view == PanelKind::Database && left_open,
-            app.hover_progress(HoverId::Rail(RailButton::LeftDatabase)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::LeftIconSelect(PanelKind::Database),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftDatabase), hovered),
-            "数据库",
-        ),
-        // SSH 主机面板入口。
-        icons::icon_button_entry(
-            icons::IconKind::Server,
-            byteui::theme::icon_size::rail(),
-            app.left_view == PanelKind::Ssh && left_open,
-            app.hover_progress(HoverId::Rail(RailButton::LeftSsh)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::LeftIconSelect(PanelKind::Ssh),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftSsh), hovered),
-            "SSH 主机",
-        ),
-        // 浏览器面板入口:左图标栏最底部 Globe 按钮(2026-08-11 从右栏移回)。
-        icons::icon_button_entry(
-            icons::IconKind::Globe,
-            byteui::theme::icon_size::rail(),
-            app.left_view == PanelKind::Web && left_open,
-            app.hover_progress(HoverId::Rail(RailButton::LeftWeb)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::LeftIconSelect(PanelKind::Web),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftWeb), hovered),
-            "浏览器",
-        ),
-    ]
-    .spacing(region.gap)
-    .padding(region.padding);
-
+/// 图标栏:按 `app.shell_layout.rail_layout.side(side)` 的顺序遍历渲染。
+/// 左右两条栏共用这一份实现——差异(区域样式、选中态取哪个
+/// `*_view`/`*_collapsed` 字段判断)通过 `side` 参数分派。
+fn icon_rail(
+    app: &App,
+    side: Side,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let region = match side {
+        Side::Left => theme::region::left_icon_rail(),
+        Side::Right => theme::region::right_icon_rail(),
+    };
+    // 视觉"选中"= 该视图激活 **且**对应面板区展开。点已选中的图标会收起
+    // 面板区,此时图标要退回未选中态,所以 `active` 得带上 `!collapsed`
+    // ——语义同拆分前的两条原图标栏函数。
+    let (active_kind, open) = match side {
+        Side::Left => (app.left_view, !app.left_collapsed),
+        Side::Right => (app.right_view, !app.right_collapsed),
+    };
+    let mut content = column![].spacing(region.gap).padding(region.padding);
+    for &kind in app.shell_layout.rail_layout.side(side) {
+        let (icon, tooltip) = panel_meta(kind);
+        let base: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+            icons::icon_button_entry(
+                icon,
+                byteui::theme::icon_size::rail(),
+                kind == active_kind && open,
+                app.hover_progress(HoverId::Rail(RailButton::Panel(kind))),
+                true,
+                byteui::theme::geometry::rail_button_size(),
+                true,
+                Message::PanelSelect(kind),
+                move |hovered| Message::Hover(HoverId::Rail(RailButton::Panel(kind)), hovered),
+                tooltip,
+            );
+        let entry = match panel_badge(app, kind) {
+            Some(badge) => stack![base, badge].into(),
+            None => base,
+        };
+        content = content.push(entry);
+    }
     container(content)
         .width(Length::Fixed(byteui::theme::geometry::icon_rail_width()))
         .height(Length::Fill)
@@ -6843,102 +6771,56 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
         .into()
 }
 
-/// 右图标栏:Agent / 对话两个图标,语义同 `left_icon_rail`。
-fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let region = theme::region::right_icon_rail();
-    // 同 `left_icon_rail`:视觉"选中"需右面板区展开。
-    let right_open = !app.right_collapsed;
-    let content = column![
-        icons::icon_button_entry(
-            icons::IconKind::Brain,
-            byteui::theme::icon_size::rail(),
-            app.right_view == PanelKind::Agent && right_open,
-            app.hover_progress(HoverId::Rail(RailButton::RightAgent)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::RightIconSelect(PanelKind::Agent),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::RightAgent), hovered),
-            "代理",
-        ),
-        icons::icon_button_entry(
-            icons::IconKind::BotMessageSquare,
-            byteui::theme::icon_size::rail(),
-            app.right_view == PanelKind::Conversations && right_open,
-            app.hover_progress(HoverId::Rail(RailButton::RightConversations)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::RightIconSelect(PanelKind::Conversations),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::RightConversations), hovered),
-            "对话",
-        ),
-        icons::icon_button_entry(
-            icons::IconKind::BarChart3,
-            byteui::theme::icon_size::rail(),
-            app.right_view == PanelKind::Usage && right_open,
-            app.hover_progress(HoverId::Rail(RailButton::RightUsage)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::RightIconSelect(PanelKind::Usage),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::RightUsage), hovered),
-            "用量",
-        ),
-        {
-            let pending = app
-                .active_workspace()
-                .and_then(|ws| ws.tabs.get(ws.active))
-                .map(|t| t.delivery_pending)
-                .unwrap_or(false);
-            let base: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-                icons::icon_button_entry(
-                    icons::IconKind::BadgeCheck,
-                    byteui::theme::icon_size::rail(),
-                    app.right_view == PanelKind::Acceptance && right_open,
-                    app.hover_progress(HoverId::Rail(RailButton::RightAcceptance)),
-                    true,
-                    byteui::theme::geometry::rail_button_size(),
-                    true,
-                    Message::RightIconSelect(PanelKind::Acceptance),
-                    |hovered| Message::Hover(HoverId::Rail(RailButton::RightAcceptance), hovered),
-                    "验收",
-                );
-            if pending {
-                let badge: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-                    stack![
-                        base,
-                        container(iced_widget::Space::new())
-                            .width(Length::Fixed(8.0))
-                            .height(Length::Fixed(8.0))
-                            .style(|_t: &iced_widget::Theme| container::Style {
-                                background: Some(byteui::theme::color::current().gold.into()),
-                                border: Border {
-                                    radius: 4.0.into(),
-                                    ..Border::default()
-                                },
-                                ..container::Style::default()
-                            }),
-                    ]
-                    .into();
-                badge
-            } else {
-                base
-            }
-        },
-    ]
-    .spacing(region.gap)
-    .padding(region.padding);
+/// 面板 → (图标, 图标栏 tooltip 文案)。11 个 `PanelKind` variant 逐一
+/// 对应,顺序与 `PanelKind` 定义顺序一致,不代表渲染顺序(渲染顺序看
+/// `RailLayout`)。
+fn panel_meta(kind: PanelKind) -> (icons::IconKind, &'static str) {
+    match kind {
+        PanelKind::Files => (icons::IconKind::FolderTree, "文件"),
+        PanelKind::GitLog => (icons::IconKind::GitGraph, "Git 提交"),
+        PanelKind::Todo => (icons::IconKind::ListTodo, "待办"),
+        PanelKind::Project => (icons::IconKind::Briefcase, "项目"),
+        PanelKind::Database => (icons::IconKind::Database, "数据库"),
+        PanelKind::Ssh => (icons::IconKind::Server, "SSH 主机"),
+        PanelKind::Web => (icons::IconKind::Globe, "浏览器"),
+        PanelKind::Agent => (icons::IconKind::Brain, "代理"),
+        PanelKind::Conversations => (icons::IconKind::BotMessageSquare, "对话"),
+        PanelKind::Usage => (icons::IconKind::BarChart3, "用量"),
+        PanelKind::Acceptance => (icons::IconKind::BadgeCheck, "验收"),
+    }
+}
 
-    container(content)
-        .width(Length::Fixed(byteui::theme::geometry::icon_rail_width()))
-        .height(Length::Fill)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: region.background.map(Into::into),
-            border: region.border.unwrap_or_default(),
-            ..container::Style::default()
-        })
-        .into()
+/// 面板专属的按钮徽标装饰(目前只有验收面板有:当前激活 tab 有待处理
+/// 交付时,右上角叠一个金色小圆点)。其余 10 个面板返回 `None`。
+fn panel_badge(
+    app: &App,
+    kind: PanelKind,
+) -> Option<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> {
+    if kind != PanelKind::Acceptance {
+        return None;
+    }
+    let pending = app
+        .active_workspace()
+        .and_then(|ws| ws.tabs.get(ws.active))
+        .map(|t| t.delivery_pending)
+        .unwrap_or(false);
+    if !pending {
+        return None;
+    }
+    Some(
+        container(iced_widget::Space::new())
+            .width(Length::Fixed(8.0))
+            .height(Length::Fixed(8.0))
+            .style(|_t: &iced_widget::Theme| container::Style {
+                background: Some(byteui::theme::color::current().gold.into()),
+                border: Border {
+                    radius: 4.0.into(),
+                    ..Border::default()
+                },
+                ..container::Style::default()
+            })
+            .into(),
+    )
 }
 
 /// 面板区里某块 pane 在外框圆角处要收圆的外角:`Left`/`Right` 配对视图里
@@ -6997,7 +6879,7 @@ pub(crate) fn zone_pane_border(zone: theme::region::RegionStyle, corner: PaneCor
 /// 停在平时拖拽出来的 `left_width` 那么宽。放大态下 `left_collapsed` 仍可能
 /// 为真(旧注释断言"恒为 false"是错的:放大浮层不拦图标栏点击,先放大再点
 /// 图标收起本侧是可达路径),此时上面那条收起分支返回空元素;`maximized`
-/// 会被 `LeftIconSelect`/`RightIconSelect` 无条件清掉,所以这个组合不会
+/// 会被 `PanelSelect` 无条件清掉,所以这个组合不会
 /// 停留超过一帧(Fix round 2 #2)。
 /// 非放大态下,左1(项目树/Web)+左2(预览)两栏被视觉框成一个整体,套
 /// `theme::region::left_zone()` 的外框(四向 margin 做悬浮留白,无描边)。
@@ -9580,6 +9462,15 @@ mod tests {
         let rail = RailLayout::default();
         assert_eq!(rail.side(Side::Left), &rail.left);
         assert_eq!(rail.side(Side::Right), &rail.right);
+    }
+
+    #[test]
+    fn side_of_finds_every_default_panel() {
+        let rail = RailLayout::default();
+        assert_eq!(rail.side_of(PanelKind::Files), Side::Left);
+        assert_eq!(rail.side_of(PanelKind::Web), Side::Left);
+        assert_eq!(rail.side_of(PanelKind::Agent), Side::Right);
+        assert_eq!(rail.side_of(PanelKind::Acceptance), Side::Right);
     }
 
     /// `sanitize_rail_layout` 对坏数据回落默认:任一栏为空、面板重复、
