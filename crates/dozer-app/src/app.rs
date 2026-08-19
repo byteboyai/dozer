@@ -90,19 +90,7 @@ pub enum PanelKind {
 /// 里记一个 hovered 目标,改色时按它重算)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RailButton {
-    LeftFiles,
-    LeftGit,
-    LeftTodo,
-    LeftProject,
-    LeftDatabase,
-    /// SSH 主机面板入口。
-    LeftSsh,
-    /// 浏览器面板入口(左图标栏最底部 Globe 按钮)。
-    LeftWeb,
-    RightAgent,
-    RightConversations,
-    RightUsage,
-    RightAcceptance,
+    Panel(PanelKind),
     /// 首页左栏"项目列表" pane 图标。
     HomeProjectList,
     /// 首页左栏"Recents" pane 图标。
@@ -5765,7 +5753,7 @@ impl App {
         // 手动 `.width(Length::Shrink)` 会让 flex 第三阶段(fill 分配)不再
         // 执行,右图标栏就会缩到窗口中间——不要在不理解这个前提的情况下改写。
         let body = row![
-            left_icon_rail(self),
+            icon_rail(self, Side::Left),
             column![
                 row![
                     left_panel_area(self, ws, false),
@@ -5781,7 +5769,7 @@ impl App {
                 footbar::view(&self.footbar).map(Message::Footbar),
             ]
             .width(Length::Fill),
-            right_icon_rail(self),
+            icon_rail(self, Side::Right),
         ];
         let base = column![top, body];
 
@@ -6745,209 +6733,47 @@ pub(crate) fn rail_icon_button<'a>(
     icons::with_tooltip(content, tooltip)
 }
 
-/// 左图标栏:文件列表 / Web 两个图标,点已激活的那个即收起左面板区。
-fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let region = theme::region::left_icon_rail();
-    // 视觉"选中"= 该视图激活 **且**左面板区展开。点已选中的图标会收起面板区,
-    // 此时图标要退回未选中态(见 `LeftIconSelect`),所以 `active` 得带上
-    // `!left_collapsed`。
-    let left_open = !app.left_collapsed;
-    let content = column![
-        // Project 信息面板入口：项目名 / git 分支+脏标 / 验收次数 / 可编辑目标。
-        // 置顶(用户 2026-08-11 指定)。
-        icons::icon_button_entry(
-            icons::IconKind::Briefcase,
-            byteui::theme::icon_size::rail(),
-            app.left_view == PanelKind::Project && left_open,
-            app.hover_progress(HoverId::Rail(RailButton::LeftProject)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::LeftIconSelect(PanelKind::Project),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftProject), hovered),
-            "项目",
-        ),
-        // Todo 面板入口：`.dozer/todo.md` 任务列表。第二顺位(用户 2026-08-11
-        // 指定)。
-        icons::icon_button_entry(
-            icons::IconKind::ListTodo,
-            byteui::theme::icon_size::rail(),
-            app.left_view == PanelKind::Todo && left_open,
-            app.hover_progress(HoverId::Rail(RailButton::LeftTodo)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::LeftIconSelect(PanelKind::Todo),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftTodo), hovered),
-            "待办",
-        ),
-        // 文件列表入口：项目树 + 文件预览配对。
-        icons::icon_button_entry(
-            icons::IconKind::FolderTree,
-            byteui::theme::icon_size::rail(),
-            app.left_view == PanelKind::Files && left_open,
-            app.hover_progress(HoverId::Rail(RailButton::LeftFiles)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::LeftIconSelect(PanelKind::Files),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftFiles), hovered),
-            "文件",
-        ),
-        // spike(2026-08-06):Git 提交图入口,验证 gleisbau 库可行性用。
-        icons::icon_button_entry(
-            icons::IconKind::GitGraph,
-            byteui::theme::icon_size::rail(),
-            app.left_view == PanelKind::GitLog && left_open,
-            app.hover_progress(HoverId::Rail(RailButton::LeftGit)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::LeftIconSelect(PanelKind::GitLog),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftGit), hovered),
-            "Git 提交",
-        ),
-        // 数据库面板入口:数据源管理 + 连接测试。
-        icons::icon_button_entry(
-            icons::IconKind::Database,
-            byteui::theme::icon_size::rail(),
-            app.left_view == PanelKind::Database && left_open,
-            app.hover_progress(HoverId::Rail(RailButton::LeftDatabase)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::LeftIconSelect(PanelKind::Database),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftDatabase), hovered),
-            "数据库",
-        ),
-        // SSH 主机面板入口。
-        icons::icon_button_entry(
-            icons::IconKind::Server,
-            byteui::theme::icon_size::rail(),
-            app.left_view == PanelKind::Ssh && left_open,
-            app.hover_progress(HoverId::Rail(RailButton::LeftSsh)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::LeftIconSelect(PanelKind::Ssh),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftSsh), hovered),
-            "SSH 主机",
-        ),
-        // 浏览器面板入口:左图标栏最底部 Globe 按钮(2026-08-11 从右栏移回)。
-        icons::icon_button_entry(
-            icons::IconKind::Globe,
-            byteui::theme::icon_size::rail(),
-            app.left_view == PanelKind::Web && left_open,
-            app.hover_progress(HoverId::Rail(RailButton::LeftWeb)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::LeftIconSelect(PanelKind::Web),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::LeftWeb), hovered),
-            "浏览器",
-        ),
-    ]
-    .spacing(region.gap)
-    .padding(region.padding);
-
-    container(content)
-        .width(Length::Fixed(byteui::theme::geometry::icon_rail_width()))
-        .height(Length::Fill)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: region.background.map(Into::into),
-            border: region.border.unwrap_or_default(),
-            ..container::Style::default()
-        })
-        .into()
-}
-
-/// 右图标栏:Agent / 对话两个图标,语义同 `left_icon_rail`。
-fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let region = theme::region::right_icon_rail();
-    // 同 `left_icon_rail`:视觉"选中"需右面板区展开。
-    let right_open = !app.right_collapsed;
-    let content = column![
-        icons::icon_button_entry(
-            icons::IconKind::Brain,
-            byteui::theme::icon_size::rail(),
-            app.right_view == PanelKind::Agent && right_open,
-            app.hover_progress(HoverId::Rail(RailButton::RightAgent)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::RightIconSelect(PanelKind::Agent),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::RightAgent), hovered),
-            "代理",
-        ),
-        icons::icon_button_entry(
-            icons::IconKind::BotMessageSquare,
-            byteui::theme::icon_size::rail(),
-            app.right_view == PanelKind::Conversations && right_open,
-            app.hover_progress(HoverId::Rail(RailButton::RightConversations)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::RightIconSelect(PanelKind::Conversations),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::RightConversations), hovered),
-            "对话",
-        ),
-        icons::icon_button_entry(
-            icons::IconKind::BarChart3,
-            byteui::theme::icon_size::rail(),
-            app.right_view == PanelKind::Usage && right_open,
-            app.hover_progress(HoverId::Rail(RailButton::RightUsage)),
-            true,
-            byteui::theme::geometry::rail_button_size(),
-            true,
-            Message::RightIconSelect(PanelKind::Usage),
-            |hovered| Message::Hover(HoverId::Rail(RailButton::RightUsage), hovered),
-            "用量",
-        ),
-        {
-            let pending = app
-                .active_workspace()
-                .and_then(|ws| ws.tabs.get(ws.active))
-                .map(|t| t.delivery_pending)
-                .unwrap_or(false);
-            let base: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-                icons::icon_button_entry(
-                    icons::IconKind::BadgeCheck,
-                    byteui::theme::icon_size::rail(),
-                    app.right_view == PanelKind::Acceptance && right_open,
-                    app.hover_progress(HoverId::Rail(RailButton::RightAcceptance)),
-                    true,
-                    byteui::theme::geometry::rail_button_size(),
-                    true,
-                    Message::RightIconSelect(PanelKind::Acceptance),
-                    |hovered| Message::Hover(HoverId::Rail(RailButton::RightAcceptance), hovered),
-                    "验收",
-                );
-            if pending {
-                let badge: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-                    stack![
-                        base,
-                        container(iced_widget::Space::new())
-                            .width(Length::Fixed(8.0))
-                            .height(Length::Fixed(8.0))
-                            .style(|_t: &iced_widget::Theme| container::Style {
-                                background: Some(byteui::theme::color::current().gold.into()),
-                                border: Border {
-                                    radius: 4.0.into(),
-                                    ..Border::default()
-                                },
-                                ..container::Style::default()
-                            }),
-                    ]
-                    .into();
-                badge
-            } else {
-                base
-            }
-        },
-    ]
-    .spacing(region.gap)
-    .padding(region.padding);
-
+/// 图标栏:按 `app.shell_layout.rail_layout.side(side)` 的顺序遍历渲染。
+/// 左右两条栏共用这一份实现——差异(区域样式、选中态取哪个
+/// `*_view`/`*_collapsed` 字段判断)通过 `side` 参数分派。
+fn icon_rail(app: &App, side: Side) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let region = match side {
+        Side::Left => theme::region::left_icon_rail(),
+        Side::Right => theme::region::right_icon_rail(),
+    };
+    // 视觉"选中"= 该视图激活 **且**对应面板区展开。点已选中的图标会收起
+    // 面板区,此时图标要退回未选中态,所以 `active` 得带上 `!collapsed`
+    // ——语义同原 `left_icon_rail`/`right_icon_rail`。
+    let (active_kind, open) = match side {
+        Side::Left => (app.left_view, !app.left_collapsed),
+        Side::Right => (app.right_view, !app.right_collapsed),
+    };
+    let mut content = column![].spacing(region.gap).padding(region.padding);
+    for &kind in app.shell_layout.rail_layout.side(side) {
+        let (icon, tooltip) = panel_meta(kind);
+        let select_message = match side {
+            Side::Left => Message::LeftIconSelect(kind),
+            Side::Right => Message::RightIconSelect(kind),
+        };
+        let base: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+            icons::icon_button_entry(
+                icon,
+                byteui::theme::icon_size::rail(),
+                kind == active_kind && open,
+                app.hover_progress(HoverId::Rail(RailButton::Panel(kind))),
+                true,
+                byteui::theme::geometry::rail_button_size(),
+                true,
+                select_message,
+                move |hovered| Message::Hover(HoverId::Rail(RailButton::Panel(kind)), hovered),
+                tooltip,
+            );
+        let entry = match panel_badge(app, kind) {
+            Some(badge) => stack![base, badge].into(),
+            None => base,
+        };
+        content = content.push(entry);
+    }
     container(content)
         .width(Length::Fixed(byteui::theme::geometry::icon_rail_width()))
         .height(Length::Fill)
