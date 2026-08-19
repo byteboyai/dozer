@@ -7075,27 +7075,45 @@ fn left_panel_area<'a>(
                         zone_pane_border(zone, lc),
                     )
                     .map(Message::Project);
-                row![
-                    info_pane,
-                    divider_bar(
-                        Divider::ProjectSplit,
-                        theme::region::project_pane()
-                            .background
-                            .unwrap_or(byteui::theme::color::current().bg),
-                        theme::region::preview_pane()
-                            .background
-                            .unwrap_or(byteui::theme::color::current().bg),
-                        Message::ColumnDragStart(Divider::ProjectSplit),
-                    ),
-                    project_preview_pane(
-                        app,
-                        ws,
-                        Length::FillPortion(content_portion),
-                        zone_pane_border(zone, rc)
-                    ),
-                ]
-                .width(Length::Fill)
-                .into()
+                let preview = project_preview_pane(
+                    app,
+                    ws,
+                    Length::FillPortion(content_portion),
+                    zone_pane_border(zone, rc),
+                );
+                let info_bg = theme::region::project_pane()
+                    .background
+                    .unwrap_or(byteui::theme::color::current().bg);
+                let preview_bg = theme::region::preview_pane()
+                    .background
+                    .unwrap_or(byteui::theme::color::current().bg);
+                if app.panel_mirrored(PanelKind::Project) {
+                    row![
+                        preview,
+                        divider_bar(
+                            Divider::ProjectSplit,
+                            preview_bg,
+                            info_bg,
+                            Message::ColumnDragStart(Divider::ProjectSplit),
+                        ),
+                        info_pane,
+                    ]
+                    .width(Length::Fill)
+                    .into()
+                } else {
+                    row![
+                        info_pane,
+                        divider_bar(
+                            Divider::ProjectSplit,
+                            info_bg,
+                            preview_bg,
+                            Message::ColumnDragStart(Divider::ProjectSplit),
+                        ),
+                        preview,
+                    ]
+                    .width(Length::Fill)
+                    .into()
+                }
             }
             PanelKind::Database => {
                 // 数据库面板需要项目已打开才能读写 `.dozer/database.json`。
