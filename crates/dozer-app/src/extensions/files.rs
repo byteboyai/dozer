@@ -880,10 +880,10 @@ pub fn view<'a>(
         ws_state.search_editing,
         search_active,
     );
-    let box_len = crate::theme::icon_size::row() + 12.0;
+    let box_len = byteui::theme::icon_size::row() + 12.0;
     let search_button = icons::icon_button_entry(
         icons::IconKind::FolderSearch,
-        crate::theme::icon_size::row(),
+        byteui::theme::icon_size::row(),
         false,
         search_hover_t,
         true,
@@ -909,7 +909,7 @@ pub fn view<'a>(
         } else {
             icons::IconKind::EyeOff
         },
-        crate::theme::icon_size::row(),
+        byteui::theme::icon_size::row(),
         false,
         dotfiles_hover_t,
         true,
@@ -947,7 +947,7 @@ pub fn view<'a>(
             row![
                 icons::view(
                     icons::IconKind::FolderOpenDot,
-                    crate::theme::icon_size::row(),
+                    byteui::theme::icon_size::row(),
                     byteui::theme::color::current().dim
                 ),
                 text(name).size(theme::font::body()).color(root_color),
@@ -1026,29 +1026,29 @@ pub fn view<'a>(
                     row![
                         icons::view(
                             chevron,
-                            crate::theme::icon_size::chevron(),
+                            byteui::theme::icon_size::chevron(),
                             byteui::theme::color::current().dim
                         ),
                         icons::view(
                             folder,
-                            crate::theme::icon_size::row(),
+                            byteui::theme::icon_size::row(),
                             byteui::theme::color::current().dim
                         ),
                     ]
-                    .spacing(crate::theme::icon_size::tree_row_gap())
+                    .spacing(byteui::theme::icon_size::tree_row_gap())
                     .align_y(iced_widget::core::Alignment::Center)
                     .into()
                 } else {
                     row![
                         iced_widget::space::Space::new()
                             .width(Length::Fixed(
-                                crate::theme::icon_size::chevron()
-                                    + crate::theme::icon_size::tree_row_gap(),
+                                byteui::theme::icon_size::chevron()
+                                    + byteui::theme::icon_size::tree_row_gap(),
                             ))
                             .height(Length::Shrink),
                         icons::view(
                             icons::icon_for_file(&row.name),
-                            crate::theme::icon_size::row(),
+                            byteui::theme::icon_size::row(),
                             byteui::theme::color::current().dim
                         ),
                     ]
@@ -1196,7 +1196,7 @@ fn git_footer_bar(
     ws_state: &WorkspaceState,
     branch_hover_t: f32,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let box_len = crate::theme::icon_size::row() + 12.0;
+    let box_len = byteui::theme::icon_size::row() + 12.0;
     let (icon, label, action): (
         icons::IconKind,
         Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>,
@@ -1235,7 +1235,7 @@ fn git_footer_bar(
             } else {
                 icons::IconKind::ChevronDown
             },
-            crate::theme::icon_size::row(),
+            byteui::theme::icon_size::row(),
             false,
             branch_hover_t,
             false,
@@ -1259,7 +1259,7 @@ fn git_footer_bar(
             row![
                 icons::view(
                     icons::IconKind::FolderMinus,
-                    crate::theme::icon_size::row(),
+                    byteui::theme::icon_size::row(),
                     byteui::theme::color::current().cream
                 ),
                 text("新建Git仓库")
@@ -1294,7 +1294,7 @@ fn git_footer_bar(
     let bar = row![
         icons::view(
             icon,
-            crate::theme::icon_size::row(),
+            byteui::theme::icon_size::row(),
             byteui::theme::color::current().cream
         ),
         label,
@@ -1303,7 +1303,7 @@ fn git_footer_bar(
             btn
         } else {
             iced_widget::space::Space::new()
-                .height(Length::Fixed(crate::theme::icon_size::row() + 8.0))
+                .height(Length::Fixed(byteui::theme::icon_size::row() + 8.0))
                 .into()
         },
     ]
@@ -1457,7 +1457,7 @@ fn branch_picker_popup_offset(ws_state: &WorkspaceState) -> (f32, f32) {
     // spacing 4 + 可能的 git_error 一行;project_pane gap 计入把下拉钉紧底栏。
     let git_bar_top_line = 1.0;
     let git_bar_vpad = 6.0 * 2.0;
-    let bar_h = crate::theme::icon_size::row() + 12.0;
+    let bar_h = byteui::theme::icon_size::row() + 12.0;
     let error_line = if ws_state.git_error.is_some() {
         18.0
     } else {
