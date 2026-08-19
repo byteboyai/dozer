@@ -794,7 +794,8 @@ fn rail_cross_apply(
     target_index: usize,
 ) -> Option<PanelKind> {
     let source_panels = rail.side(source_side);
-    if source_side == target_side || source_panels.len() <= 1 || source_index >= source_panels.len() {
+    if source_side == target_side || source_panels.len() <= 1 || source_index >= source_panels.len()
+    {
         return None;
     }
     let kind = rail.side_mut(source_side).remove(source_index);
@@ -3248,12 +3249,7 @@ impl App {
         let Some(mut drag) = self.rail_drag else {
             return;
         };
-        rail_drag_move_into(
-            &mut self.shell_layout.rail_layout,
-            &mut drag,
-            side,
-            to,
-        );
+        rail_drag_move_into(&mut self.shell_layout.rail_layout, &mut drag, side, to);
         self.rail_drag = Some(drag);
     }
 
@@ -9949,7 +9945,10 @@ mod tests {
             let original_left = rail.left.clone();
             rail_drag_move_into(&mut rail, &mut drag, Side::Left, 2);
             assert_eq!(rail.left[2], original_left[0], "源项应落到目标位");
-            assert_eq!(rail.left[0], original_left[1], "源项前面整体右移一位落到首位");
+            assert_eq!(
+                rail.left[0], original_left[1],
+                "源项前面整体右移一位落到首位"
+            );
             assert_eq!(rail.left[1], original_left[2], "源项之后续到第二位");
             assert_eq!(rail.left[3], original_left[3], "目标位之后顺序不变");
             assert_eq!(drag.source_index, 2, "重排后源下标应更新到新位置");
@@ -10036,7 +10035,8 @@ mod tests {
         use super::*;
 
         fn right_x0_inside(window_width: f32, state: &ShellState) -> f32 {
-            window_width - byteui::theme::geometry::icon_rail_width()
+            window_width
+                - byteui::theme::geometry::icon_rail_width()
                 - right_zone_width(window_width, state)
         }
 
@@ -10095,7 +10095,8 @@ mod tests {
             relocate_to_right(&mut state, PanelKind::Todo);
             let window_width = 1600.0;
             let x0 = right_x0_inside(window_width, &state);
-            let near = apply_column_drag(state.clone(), Divider::TodoSplit, window_width, x0 + 50.0);
+            let near =
+                apply_column_drag(state.clone(), Divider::TodoSplit, window_width, x0 + 50.0);
             let far = apply_column_drag(state, Divider::TodoSplit, window_width, x0 + 250.0);
             assert!(
                 far.todo_split < near.todo_split,
@@ -10125,7 +10126,8 @@ mod tests {
             relocate_to_right(&mut state, PanelKind::GitLog);
             let window_width = 1600.0;
             let x0 = right_x0_inside(window_width, &state);
-            let near = apply_column_drag(state.clone(), Divider::GitLogSplit, window_width, x0 + 50.0);
+            let near =
+                apply_column_drag(state.clone(), Divider::GitLogSplit, window_width, x0 + 50.0);
             let far = apply_column_drag(state, Divider::GitLogSplit, window_width, x0 + 250.0);
             assert!(
                 far.git_log_split < near.git_log_split,
@@ -10147,7 +10149,8 @@ mod tests {
         fn agent_split_direction_on_default_side_matches_pre_migration_behavior() {
             let state = test_state(); // right_view 已经是 Agent
             let window_width = 1600.0;
-            let right_x0 = window_width - byteui::theme::geometry::icon_rail_width()
+            let right_x0 = window_width
+                - byteui::theme::geometry::icon_rail_width()
                 - right_zone_width(window_width, &state);
             let near = apply_column_drag(
                 state.clone(),
@@ -10204,7 +10207,8 @@ mod tests {
             let mut state = test_state();
             state.right_view = PanelKind::Conversations;
             let window_width = 1600.0;
-            let right_x0 = window_width - byteui::theme::geometry::icon_rail_width()
+            let right_x0 = window_width
+                - byteui::theme::geometry::icon_rail_width()
                 - right_zone_width(window_width, &state);
             let near = apply_column_drag(
                 state.clone(),
