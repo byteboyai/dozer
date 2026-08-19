@@ -10,9 +10,8 @@
 //! panic：开发期配置错误，不是需要优雅降级的运行时数据（同
 //! `chrome_style.rs` 的定位）。
 //!
-//! 每个 accessor 返回的字号都乘过 `icon_size::scale()`（全局缩放因子），
+//! 每个 accessor 返回的字号都乘过 `byteui::theme::icon_size::scale()`（全局缩放因子），
 //! 因此改 `scale` 即整体缩放全部控件文字，与图标尺寸同步。
-use super::icon_size;
 use serde::Deserialize;
 use std::sync::LazyLock;
 
@@ -68,7 +67,7 @@ pub fn title() -> u32 {
 
 /// 把设计基准字号按全局 scale 折算成实际像素字号（四舍五入）。
 fn scale(base: u32) -> u32 {
-    ((base as f32) * icon_size::scale()).round() as u32
+    ((base as f32) * byteui::theme::icon_size::scale()).round() as u32
 }
 
 #[cfg(test)]
