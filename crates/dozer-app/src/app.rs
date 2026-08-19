@@ -7328,31 +7328,51 @@ fn right_panel_area<'a>(
                 }
             }
             PanelKind::Conversations => {
-                let (list_portion, content_portion) = split_portions(app.dims.conversations_split);
-                row![
-                    review_content_pane(
-                        ws,
-                        Length::FillPortion(content_portion),
-                        zone_pane_border(zone, lc)
-                    ),
-                    divider_bar(
-                        Divider::RightPairSplit,
-                        theme::region::review_content_pane()
-                            .background
-                            .unwrap_or(byteui::theme::color::current().bg),
-                        theme::region::conversation_list_pane()
-                            .background
-                            .unwrap_or(byteui::theme::color::current().bg),
-                        Message::ColumnDragStart(Divider::RightPairSplit),
-                    ),
-                    conversation_list_pane(
-                        ws,
-                        Length::FillPortion(list_portion),
-                        zone_pane_border(zone, rc)
-                    ),
-                ]
-                .width(Length::Fill)
-                .into()
+                let (list_portion, content_portion) =
+                    split_portions(app.dims.conversations_split);
+                let review = review_content_pane(
+                    ws,
+                    Length::FillPortion(content_portion),
+                    zone_pane_border(zone, lc),
+                );
+                let list = conversation_list_pane(
+                    ws,
+                    Length::FillPortion(list_portion),
+                    zone_pane_border(zone, rc),
+                );
+                let review_bg = theme::region::review_content_pane()
+                    .background
+                    .unwrap_or(byteui::theme::color::current().bg);
+                let list_bg = theme::region::conversation_list_pane()
+                    .background
+                    .unwrap_or(byteui::theme::color::current().bg);
+                if app.panel_mirrored(PanelKind::Conversations) {
+                    row![
+                        list,
+                        divider_bar(
+                            Divider::RightPairSplit,
+                            list_bg,
+                            review_bg,
+                            Message::ColumnDragStart(Divider::RightPairSplit),
+                        ),
+                        review,
+                    ]
+                    .width(Length::Fill)
+                    .into()
+                } else {
+                    row![
+                        review,
+                        divider_bar(
+                            Divider::RightPairSplit,
+                            review_bg,
+                            list_bg,
+                            Message::ColumnDragStart(Divider::RightPairSplit),
+                        ),
+                        list,
+                    ]
+                    .width(Length::Fill)
+                    .into()
+                }
             }
             PanelKind::Usage => usage::view(
                 &ws.usage,
