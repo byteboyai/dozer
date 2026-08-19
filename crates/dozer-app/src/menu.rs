@@ -65,15 +65,15 @@ pub fn item_row<'a, Msg: 'a + Clone>(
     let content = match leading {
         Some(leading) => row![
             leading,
-            text(label.into()).size(theme::font::body()).color(color)
+            text(label.into()).size(byteui::theme::font::body()).color(color)
         ],
-        None => row![text(label.into()).size(theme::font::body()).color(color)],
+        None => row![text(label.into()).size(byteui::theme::font::body()).color(color)],
     };
     menu_button(
         content,
         color,
         msg,
-        Length::Fixed(crate::theme::geometry::menu_item_width()),
+        Length::Fixed(byteui::theme::geometry::menu_item_width()),
     )
 }
 
@@ -89,9 +89,9 @@ pub fn item_row_fill<'a, Msg: 'a + Clone>(
     let content = match leading {
         Some(leading) => row![
             leading,
-            text(label.into()).size(theme::font::body()).color(color)
+            text(label.into()).size(byteui::theme::font::body()).color(color)
         ],
-        None => row![text(label.into()).size(theme::font::body()).color(color)],
+        None => row![text(label.into()).size(byteui::theme::font::body()).color(color)],
     };
     menu_button(content, color, msg, Length::Fill)
 }
@@ -108,7 +108,7 @@ fn icon_leading<'a, Msg: 'a>(
 /// 分组线同款)。
 pub fn separator<'a, Msg: 'a>() -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {
     container(iced_widget::Space::new())
-        .width(Length::Fixed(crate::theme::geometry::menu_item_width()))
+        .width(Length::Fixed(byteui::theme::geometry::menu_item_width()))
         .height(Length::Fixed(1.0))
         .style(|_t: &iced_widget::Theme| container::Style {
             background: Some(byteui::theme::color::current().border.into()),
@@ -148,14 +148,14 @@ fn menu_button<'a, Msg: 'a + Clone>(
     width: Length,
 ) -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {
     let content = content
-        .spacing(crate::theme::geometry::menu_gap())
+        .spacing(byteui::theme::geometry::menu_gap())
         .align_y(iced_widget::core::Alignment::Center);
     let enabled = msg.is_some();
     let btn = button(content)
         .width(width)
         .padding([
-            crate::theme::geometry::menu_pad_v(),
-            crate::theme::geometry::menu_pad_h(),
+            byteui::theme::geometry::menu_pad_v(),
+            byteui::theme::geometry::menu_pad_h(),
         ])
         .style(move |_t: &iced_widget::Theme, s: button::Status| {
             let base = button::Style {
