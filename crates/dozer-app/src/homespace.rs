@@ -276,8 +276,9 @@ fn home_right_zone(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
 }
 
 /// 首页左栏"项目列表" pane(`HomeLeftView::ProjectList`):搜索框占位(D7)、
-/// 最近项目卡(取 `app.recent_projects` 前 5 条,D2/D3)、"更多项目"占位(D7)、
-/// "＋新增项目"(复用 `Message::ProjectTabPickFolder`)。不画品牌行——顶栏
+/// 最近项目卡(取 `app.recent_projects` 按 `updated_ms` 排序后分页,首屏
+/// 5 条、"更多..."逐页展开)、"＋新增项目"(复用 `Message::ProjectTabPickFolder`)。
+/// 不画品牌行——顶栏
 /// 本身已有 `dozer_home_tab` 品牌页签,这里重复画属于视觉冗余。
 /// 通用面板标题组件:图标 + 标题(金色 `subtitle` 字号),标题底部一条 1px
 /// panel 标题与图标用的强调色(暖金 `#dcc9a3`)——刻意区别于甲方动作专属的
@@ -340,6 +341,22 @@ where
     home_panel_head_with_actions(icon, title, None)
 }
 
+/// 首页"项目列表" pane 一页显示的条数。首屏 1 页,点"更多..."页数递增、
+/// 显示 `pages * PROJECT_PAGE_SIZE` 条。
+const PROJECT_PAGE_SIZE: usize = 5;
+
+/// 首页"项目列表" pane 的核心分页切片:把 `projects` 先按 `updated_ms`
+/// (最后更新时间,git 感知)倒序排好,再取前 `pages * PROJECT_PAGE_SIZE` 条。
+/// 抽成纯函数是为了 headless 单测;视图只负责把返回值画出来。排序字段刻意用
+/// `updated_ms` 而非 daemon `list_projects()` 默认的 `last_active_ms`,对应
+/// 产品需求"项目按最后更新时间排序"。
+fn paginate_recent_projects(projects: &[ProjectInfo], pages: usize) -> Vec<ProjectInfo> {
+    let mut sorted = projects.to_vec();
+    sorted.sort_by_key(|p| std::cmp::Reverse(p.updated_ms));
+    sorted.truncate(pages.saturating_mul(PROJECT_PAGE_SIZE));
+    sorted
+}
+
 /// `app.recent_projects` 为空时画"还没有项目"兜底文案,不崩(spec §4)。
 fn home_project_list_view(
     app: &App,
@@ -385,8 +402,11 @@ fn home_project_list_view(
                 .color(theme::homespace_color::dim()),
         );
     } else {
+        let visible = paginate_recent_projects(&app.recent_projects, app.home_project_pages);
+        let more_remain = visible.len() < app.recent_projects.len();
+
         let mut list = column![].spacing(8);
-        for p in app.recent_projects.iter().take(5) {
+        for p in &visible {
             let card = button(
                 column![
                     lh(text(p.name.clone())
@@ -417,6 +437,35 @@ fn home_project_list_view(
             ));
             list = list.push(card);
         }
+
+        // 还有更多项目时,在最后一张卡下面左右居中的"更多..."翻页按钮;点它
+        // 再展开下一页(见 `Message::HomeMoreProjects`)。全部显示完就消失。
+        if more_remain {
+            list = list.push(
+                container(
+                    button(
+                        text("更多...")
+                            .size(theme::homespace_font::caption())
+                            .color(theme::homespace_color::cream()),
+                    )
+                    .on_press(Message::HomeMoreProjects)
+                    .padding([6, 22])
+                    .style(|_t: &iced_widget::Theme, _s| button::Style {
+                        background: Some(theme::homespace_color::card_bg().into()),
+                        border: Border {
+                            color: theme::homespace_color::border(),
+                            width: 1.0,
+                            radius: 6.0.into(),
+                        },
+                        text_color: theme::homespace_color::cream(),
+                        ..button::Style::default()
+                    }),
+                )
+                .width(Length::Fill)
+                .align_x(iced_widget::core::Alignment::Center),
+            );
+        }
+
         col = col.push(
             Scrollable::new(list)
                 .width(Length::Fill)
@@ -427,17 +476,6 @@ fn home_project_list_view(
                 .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
         );
     }
-
-    // "更多项目":视觉占位,不接线——对应的"全部项目列表"视图现在不存在,
-    // 属于后续增量(D7)。
-    col = col.push(
-        container(
-            text("更多项目")
-                .size(theme::homespace_font::caption())
-                .color(theme::homespace_color::dim()),
-        )
-        .padding([6, 0]),
-    );
 
     col = col.push(
         button(
@@ -767,5 +805,48 @@ mod tests {
             4,
             "跨项目合并后只取前 4 条(对齐 Figma 卡片行数)"
         );
+    }
+
+    fn project(id: i64, name: &str, updated_ms: u64) -> ProjectInfo {
+        ProjectInfo {
+            id,
+            path: format!("/tmp/{name}"),
+            name: name.into(),
+            last_active_ms: 0,
+            created_ms: 0,
+            updated_ms,
+        }
+    }
+
+    #[test]
+    fn paginate_recent_projects_sorts_by_updated_ms_desc() {
+        // 输入乱序 + last_active_ms 全 0,唯一排序依据是 updated_ms。
+        let projects = vec![
+            project(1, "old", 100),
+            project(2, "newest", 300),
+            project(3, "mid", 200),
+        ];
+        let page = paginate_recent_projects(&projects, 1);
+        let names: Vec<&str> = page.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["newest", "mid", "old"]);
+    }
+
+    #[test]
+    fn paginate_recent_projects_truncates_to_page_size() {
+        let projects: Vec<ProjectInfo> = (1..=12)
+            .map(|i| project(i, &format!("p{i}"), i as u64))
+            .collect();
+        assert_eq!(paginate_recent_projects(&projects, 1).len(), 5);
+        assert_eq!(paginate_recent_projects(&projects, 2).len(), 10);
+        // 第 3 页显示到 15 条的上限,但只有 12 个项目 → 返回全部 12 个。
+        assert_eq!(paginate_recent_projects(&projects, 3).len(), 12);
+        // 页数远大于所需也不越界(仍是 12)。
+        assert_eq!(paginate_recent_projects(&projects, 99).len(), 12);
+    }
+
+    #[test]
+    fn paginate_recent_projects_empty_input_yields_empty() {
+        assert!(paginate_recent_projects(&[], 1).is_empty());
+        assert!(paginate_recent_projects(&[], 5).is_empty());
     }
 }
