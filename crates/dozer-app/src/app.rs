@@ -7563,14 +7563,7 @@ pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
 /// tab 栏下方的 1px 分割线。
 pub(crate) fn tab_divider<'a, M: 'a>() -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>
 {
-    container(iced_widget::Space::new())
-        .width(Length::Fill)
-        .height(Length::Fixed(1.0))
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(byteui::theme::color::current().border.into()),
-            ..container::Style::default()
-        })
-        .into()
+    byteui::layout::divider::horizontal()
 }
 
 /// 给一块 tab 内容包上"拖拽换位"的感应层:内容本身仍是原来的交互(点标题
