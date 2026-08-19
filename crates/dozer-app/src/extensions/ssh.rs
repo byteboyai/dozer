@@ -797,7 +797,7 @@ fn host_card<'a>(
         actions = actions.push(
             button(
                 text("信任并重试")
-                    .size(theme::font::caption())
+                    .size(byteui::theme::font::caption())
                     .color(byteui::theme::color::current().gold),
             )
             .on_press(Message::TrustHostKey(host.id.clone()))
@@ -823,10 +823,10 @@ fn host_card<'a>(
     let card = container(
         column![
             text(name)
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().cream),
             text(format!("{}@{}:{}", host.username, host.host, host.port))
-                .size(theme::font::caption_sm())
+                .size(byteui::theme::font::caption_sm())
                 .color(byteui::theme::color::current().dim),
             container(actions)
                 .width(iced_widget::core::Length::Fill)
@@ -894,7 +894,7 @@ fn radio_dot<'a>(
         row![
             ring,
             text(label)
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().cream),
         ]
         .spacing(6)
@@ -932,19 +932,19 @@ fn host_form<'a>(
         text_input("主机名称", &draft.name)
             .style(input_style)
             .on_input(Message::DraftNameChanged)
-            .size(theme::font::body()),
+            .size(byteui::theme::font::body()),
         text_input("Host", &draft.host)
             .style(input_style)
             .on_input(Message::DraftHostChanged)
-            .size(theme::font::body()),
+            .size(byteui::theme::font::body()),
         text_input("port(22)", &draft.port)
             .style(input_style)
             .on_input(Message::DraftPortChanged)
-            .size(theme::font::body()),
+            .size(byteui::theme::font::body()),
         text_input("user name", &draft.username)
             .style(input_style)
             .on_input(Message::DraftUsernameChanged)
-            .size(theme::font::body()),
+            .size(byteui::theme::font::body()),
         row![
             radio_dot(
                 "密码",
@@ -966,14 +966,14 @@ fn host_form<'a>(
             text_input("私钥文件路径,如 ~/.ssh/id_ed25519", &draft.key_path)
                 .style(input_style)
                 .on_input(Message::DraftKeyPathChanged)
-                .size(theme::font::body()),
+                .size(byteui::theme::font::body()),
         );
         col = col.push(
             text_input("私钥口令(留空则不修改/无口令)", &draft.password)
                 .secure(true)
                 .style(input_style)
                 .on_input(Message::DraftPasswordChanged)
-                .size(theme::font::body()),
+                .size(byteui::theme::font::body()),
         );
     } else {
         col = col.push(
@@ -981,12 +981,12 @@ fn host_form<'a>(
                 .secure(true)
                 .style(input_style)
                 .on_input(Message::DraftPasswordChanged)
-                .size(theme::font::body()),
+                .size(byteui::theme::font::body()),
         );
     }
 
     let text_btn = |label: &'a str, color: iced_widget::core::Color, msg: Message| {
-        button(text(label).size(theme::font::label()).color(color))
+        button(text(label).size(byteui::theme::font::label()).color(color))
             .on_press(msg)
             .padding([6, 12])
             .style(move |_t: &iced_widget::Theme, _s| button::Style {
@@ -1059,7 +1059,7 @@ fn host_form<'a>(
     if !status_text.is_empty() {
         col = col.push(
             text(status_text)
-                .size(theme::font::caption_sm())
+                .size(byteui::theme::font::caption_sm())
                 .color(status_color),
         );
     }
@@ -1104,7 +1104,7 @@ pub fn view<'a>(
     if ws_state.hosts().is_empty() {
         col = col.push(
             text("还没有主机")
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim),
         );
     } else {
@@ -1179,7 +1179,7 @@ fn delete_confirm_popup<'a>(
         .unwrap_or(host_id);
     let cancel = button(
         text("取消")
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().cream),
     )
     .on_press(Message::DeleteHostCancel)
@@ -1196,7 +1196,7 @@ fn delete_confirm_popup<'a>(
     });
     let confirm = button(
         text("删除")
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().red),
     )
     .on_press(Message::DeleteHost(host_id.to_string()))
@@ -1215,10 +1215,10 @@ fn delete_confirm_popup<'a>(
     let dialog = container(
         column![
             text(format!("删除主机 \"{name}\"?"))
-                .size(theme::font::subtitle())
+                .size(byteui::theme::font::subtitle())
                 .color(byteui::theme::color::current().cream),
             text("这会永久删除这台主机的连接记录。")
-                .size(theme::font::label())
+                .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().dim),
             row![cancel, confirm].spacing(8),
         ]
@@ -1249,7 +1249,7 @@ fn delete_confirm_popup<'a>(
 fn ssh_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let add_btn = button(
         text("＋添加")
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().gold),
     )
     .on_press(Message::AddHostStart)
