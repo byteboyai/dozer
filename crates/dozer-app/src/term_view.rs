@@ -399,8 +399,8 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
             // 复用全应用统一滚动条配置(见 `byteui::interaction::scrollbar`):轨道宽度
             // `scrollbar_width`,滑块(thumb)宽度 `scrollbar_thumb_width` 并居
             // 中,滑块颜色甲方金 `#dcc9a3`(`byteui::theme::color::current().tab_active_border`)。
-            let bar_w = theme::geometry::scrollbar_width();
-            let thumb_w = theme::geometry::scrollbar_thumb_width();
+            let bar_w = byteui::theme::geometry::scrollbar_width();
+            let thumb_w = byteui::theme::geometry::scrollbar_thumb_width();
             let track_x = bounds.width - bar_w;
             let thumb_h = (rows / total * h).max(12.0);
             let thumb_top = ((history - offset as f32) / total * h).min(h - thumb_h);
