@@ -653,6 +653,10 @@ pub struct TabDrag {
 pub struct RailDrag {
     pub source_side: Side,
     pub source_index: usize,
+    /// 拖拽开始时 `source_index` 的原始值,不在拖拽期间随同栏重排更新。
+    /// `end_rail_drag` 用它判断纯同栏重排是否真的发生过(优先级重排会
+    /// 推高 `source_index`,未发生则保持原值),决定要不要把新顺序落盘。
+    pub origin_index: usize,
     /// 悬停到另一栏时记录目标位置;`RailDragEnd` 才真正提交搬移,悬停
     /// 期间不搬、不落盘。悬停回源栏(或还没悬停到任何另一栏位置)时是
     /// `None`。
@@ -1132,11 +1136,13 @@ pub fn preview_content_bounds(
             PanelKind::Database => (0.0, 0.0, 0.0, 0.0),
             // SSH 面板同 Project,纯 iced 绘制,阶段 1 不挂 webview 子视图。
             PanelKind::Ssh => (0.0, 0.0, 0.0, 0.0),
-            _ => unreachable!(
-                "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
-                 state.left_view 不会取到右侧面板——Stage 4 加拖拽后\
-                 这里要重新设计,不能再用 unreachable"
-            ),
+            // Stage 4a 跨栏拖拽后 `left_view` 可以是右栏面板(Agent/
+            // Conversations/Usage/Acceptance)——它们纯 iced 绘制、右侧没有
+            // webview,左区无 webview 可摆,返回空矩形。代理案归 Stage 4b。
+            PanelKind::Agent
+            | PanelKind::Conversations
+            | PanelKind::Usage
+            | PanelKind::Acceptance => (0.0, 0.0, 0.0, 0.0),
         };
     }
     let left_w = left_zone_width(window_width, state);
@@ -1206,11 +1212,11 @@ pub fn preview_content_bounds(
         PanelKind::Database => (0.0, 0.0, 0.0, 0.0),
         // SSH 面板同 Project,纯 iced 绘制,阶段 1 不挂 webview 子视图。
         PanelKind::Ssh => (0.0, 0.0, 0.0, 0.0),
-        _ => unreachable!(
-            "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
-             state.left_view 不会取到右侧面板——Stage 4 加拖拽后\
-             这里要重新设计,不能再用 unreachable"
-        ),
+        // Stage 4a 跨栏拖拽:左视图可为右栏面板,右栏面板纯 iced 绘制、
+        // 左区无 webview 可摆,装空矩形。
+        PanelKind::Agent | PanelKind::Conversations | PanelKind::Usage | PanelKind::Acceptance => {
+            (0.0, 0.0, 0.0, 0.0)
+        }
     }
 }
 
@@ -1326,11 +1332,12 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
             PanelKind::Database => false,
             // SSH 面板同 Project,纯 iced 绘制,永无 webview。
             PanelKind::Ssh => false,
-            _ => unreachable!(
-                "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
-                 state.left_view 不会取到右侧面板——Stage 4 加拖拽后\
-                 这里要重新设计,不能再用 unreachable"
-            ),
+            // Stage 4a 跨栏拖拽:左视图可为右栏面板,右栏面板无 webview,
+            // 永不落在预览列。
+            PanelKind::Agent
+            | PanelKind::Conversations
+            | PanelKind::Usage
+            | PanelKind::Acceptance => false,
         };
     }
     let left_w = left_zone_width(window_width, state);
@@ -1367,11 +1374,11 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
         PanelKind::Database => false,
         // SSH 面板同 Project,纯 iced 绘制,永无 webview。
         PanelKind::Ssh => false,
-        _ => unreachable!(
-            "Stage 1(数据模型统一)阶段面板还固定在各自原侧,\
-             state.left_view 不会取到右侧面板——Stage 4 加拖拽后\
-             这里要重新设计,不能再用 unreachable"
-        ),
+        // Stage 4a 跨栏拖拽:左视图可为右栏面板,右栏面板无 webview,
+        // 永不落在预览列。
+        PanelKind::Agent | PanelKind::Conversations | PanelKind::Usage | PanelKind::Acceptance => {
+            false
+        }
     }
 }
 
@@ -3253,15 +3260,25 @@ impl App {
         self.rail_drag = Some(drag);
     }
 
-    /// 结束图标栏拖拽:若悬停过另一栏,提交跨栏移动;否则(纯同栏重排,
-    /// 或跨栏悬停后又移回源栏)不做搬移,只清拖拽态。跨栏移动会导致源栏
-    /// 清空时整体 no-op(不支持"栏清空",见 spec 非目标)——这种情况下
-    /// `RailLayout` 不变,不落盘。
+    /// 结束图标栏拖拽:松手即"锁定"——
+    ///
+    /// - 纯同栏重排(悬停目标期间 `rail_drag_move` 已把 `rail_layout` 实时
+    ///   改到位,这里只有清空拖拽态;`source_index != origin_index` 说明真
+    ///   发生了重排,据此把新顺序落盘)。
+    /// - 跨栏悬停过另一栏:提交跨栏移动并落盘。
+    /// - 两者皆无(按住后原地松开):只清拖拽态,不动布局、不落盘。
+    ///
+    /// 无论如何拖拽态都在此终止(`take()`),松手后不会再被任何残留的
+    /// `RailDragMove` 驱动。
     fn end_rail_drag(&mut self) {
         let Some(drag) = self.rail_drag.take() else {
             return;
         };
         let Some((target_side, target_index)) = drag.pending_cross_side else {
+            // 纯同栏重排路径:若真重排过(源下标偏离起始值),把新顺序落盘。
+            if drag.source_index != drag.origin_index {
+                self.on_shell_layout_changed();
+            }
             return;
         };
         let Some(kind) = rail_cross_apply(
@@ -5383,6 +5400,7 @@ impl App {
         self.rail_drag = Some(RailDrag {
             source_side: side,
             source_index,
+            origin_index: source_index,
             pending_cross_side: None,
         });
         // 点当前已激活的图标:退回未选中并收起对应面板区;但若对侧面板区
@@ -8973,6 +8991,60 @@ mod tests {
         assert!(!is_in_preview_column(1400.0, 1440.0, &left_max));
     }
 
+    /// Stage 4a 跨栏拖拽:右栏面板被拖到左栏后成了 `left_view`。它们纯 iced
+    /// 绘制、左区没有 webview 可摆,`preview_content_bounds` 必须返回空矩形
+    /// 而不是命中 `_ => unreachable!`(GUI 拖拽核对抓到的崩溃)。
+    #[test]
+    fn preview_content_bounds_bare_for_right_panel_on_left() {
+        for kind in [
+            PanelKind::Agent,
+            PanelKind::Conversations,
+            PanelKind::Usage,
+            PanelKind::Acceptance,
+        ] {
+            let state = ShellState {
+                left_view: kind,
+                ..test_state()
+            };
+            assert_eq!(
+                preview_content_bounds(1440.0, 900.0, &state),
+                (0.0, 0.0, 0.0, 0.0),
+                "左视图是右栏面板 {kind:?} 时应返回空矩形"
+            );
+            let left_max = ShellState {
+                left_view: kind,
+                maximized: Some(MaximizedPane::Left),
+                ..test_state()
+            };
+            assert_eq!(
+                preview_content_bounds(1440.0, 900.0, &left_max),
+                (0.0, 0.0, 0.0, 0.0),
+                "放大态下左视图是右栏面板 {kind:?} 时同样应返回空矩形"
+            );
+        }
+    }
+
+    /// Stage 4a 跨栏拖拽:右栏面板当左视图时永不落在预览列(`is_in_preview_column`
+    /// 不得命中 `_ => unreachable!`)。
+    #[test]
+    fn is_in_preview_column_false_for_right_panel_on_left() {
+        for kind in [
+            PanelKind::Agent,
+            PanelKind::Conversations,
+            PanelKind::Usage,
+            PanelKind::Acceptance,
+        ] {
+            let state = ShellState {
+                left_view: kind,
+                ..test_state()
+            };
+            assert!(
+                !is_in_preview_column(500.0, 1440.0, &state),
+                "左视图是右栏面板 {kind:?} 时永不落在预览列"
+            );
+        }
+    }
+
     #[test]
     fn terminal_pane_height_excludes_top_and_status_bars() {
         let state = test_state();
@@ -9953,6 +10025,7 @@ mod tests {
             let mut drag = RailDrag {
                 source_side: Side::Left,
                 source_index: 0,
+                origin_index: 0,
                 pending_cross_side: None,
             };
             let original_left = rail.left.clone();
@@ -9965,6 +10038,10 @@ mod tests {
             assert_eq!(rail.left[1], original_left[2], "源项之后续到第二位");
             assert_eq!(rail.left[3], original_left[3], "目标位之后顺序不变");
             assert_eq!(drag.source_index, 2, "重排后源下标应更新到新位置");
+            assert_eq!(
+                drag.origin_index, 0,
+                "起始位应锁定不变,供 end_rail_drag 判断重排是否发生"
+            );
             assert_eq!(drag.pending_cross_side, None, "同栏重排不设跨栏悬停");
         }
 
@@ -9976,6 +10053,7 @@ mod tests {
             let mut drag = RailDrag {
                 source_side: Side::Left,
                 source_index: 0,
+                origin_index: 0,
                 pending_cross_side: None,
             };
             rail_drag_move_into(&mut rail, &mut drag, Side::Left, 0);
@@ -10029,6 +10107,7 @@ mod tests {
             let mut drag = RailDrag {
                 source_side: Side::Left,
                 source_index: 0,
+                origin_index: 0,
                 pending_cross_side: None,
             };
             rail_drag_move_into(&mut rail, &mut drag, Side::Right, 0); // 悬停到对侧
