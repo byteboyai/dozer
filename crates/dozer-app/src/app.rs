@@ -7006,6 +7006,7 @@ fn left_panel_area<'a>(
                 ws.project_panel.worktrees(),
                 app.dims.git_log_split,
                 app.dims.git_log_file_diff_split,
+                app.panel_mirrored(PanelKind::GitLog),
             )
             .map(Message::GitLog),
             PanelKind::Todo => {
