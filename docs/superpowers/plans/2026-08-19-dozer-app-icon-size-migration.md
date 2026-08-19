@@ -670,16 +670,31 @@ git commit -m "refactor(dozer-app): footbar.rs 迁移 theme::icon_size 到 byteu
 
 ---
 
-### Task 13: 迁移 `theme/geometry.rs`(形态 A,2 处)
+### Task 13: 迁移 `theme/geometry.rs`(形态 A + 形态 C 混合,25 处 + 删 `use`)
 
 **Files:**
 - Modify: `crates/dozer-app/src/theme/geometry.rs`
 
 **Interfaces:**
-- Consumes: `byteui::theme::icon_size::row`(用于 `tree_chrome_top_px`/`tree_chrome_bottom_px` 内部,这两个函数留在本地,不属于这次迁移范围,只是内部依赖改指向)
-- Produces: `geometry.rs` 里通过 `crate::theme::icon_size::` 完整路径引用的 2 处改指向 `byteui`
+- Consumes: `byteui::theme::icon_size::{row, ...}`
+- Produces: `geometry.rs` 内部不再引用本地 `theme::icon_size`,不再有
+  `use super::icon_size;`(`geometry.rs` 文件本身、自己的 32+3 个 accessor
+  函数——含 `tree_row_h`/`tree_chrome_top_px`/`tree_chrome_bottom_px`——
+  不受影响,仍留在 `dozer-app` 本地,这次只改它们内部对 `icon_size` 的
+  依赖指向)
 
-- [ ] **Step 1: 应用形态 A 批量规则**
+**这个文件比其余 20 个文件多一步**:它同时存在两种引用形态——
+`tree_chrome_top_px`/`tree_chrome_bottom_px` 内部用的是 2 处
+`crate::theme::icon_size::row(` 完整路径(形态 A),文件里另外 32 个基础
+accessor(`icon_rail_width`/`divider_width`/… 等,`geometry.rs` 自己的
+公开函数,不是这次迁移对象,但**它们的实现内部**)用的是 23 处裸
+`icon_size::rail(`/`row(`/`scale(` 等(形态 C,经 `use super::icon_size;`
+引入)。**这 23 处如果不改,Task 23 删除本地 `theme/icon_size.rs` 后
+`geometry.rs` 会编译不过**——`use super::icon_size;` 指向的模块已经不存在
+了。两组引用都要在本 Task 处理掉,不能像 Task 21(`font.rs`)那样只处理
+一种形态。
+
+- [ ] **Step 1: 先套形态 A 规则(处理 2 处完整路径引用)**
 
 ```bash
 sed -i '' \
@@ -695,31 +710,51 @@ sed -i '' \
   crates/dozer-app/src/theme/geometry.rs
 ```
 
-**注意**:这一步只处理 `geometry.rs` 里 2 处 `crate::theme::icon_size::`
-完整路径引用(`tree_chrome_top_px`/`tree_chrome_bottom_px` 内部)。文件顶部
-`use super::icon_size;` 引入的裸 `icon_size::` 引用(该文件内 32 个基础
-accessor 用的那些)**不在这次改动范围**——那些函数本身属于下一个迁移子
-项目(`font`+`geometry`),这次不碰,`use super::icon_size;` 也保留不删。
+- [ ] **Step 2: 再套形态 C 规则(处理 23 处裸引用)**
 
-- [ ] **Step 2: 确认改动范围正确**
+**顺序不能反**:必须先跑 Step 1 再跑 Step 2。如果先跑形态 C 规则,
+`crate::theme::icon_size::row(` 里的 `icon_size::row(` 子串会被提前命中,
+产出 `crate::theme::byteui::theme::icon_size::row(` 这种错误的双重替换,
+之后 Step 1 的形态 A 规则也不会再匹配(前缀已经变了),不会自动纠正。
 
-Run: `grep -n "crate::theme::icon_size::" crates/dozer-app/src/theme/geometry.rs`
-Expected: 无输出(2 处已全部改成 `byteui::theme::icon_size::`)
+```bash
+sed -i '' \
+  -e 's/icon_size::rail(/byteui::theme::icon_size::rail(/g' \
+  -e 's/icon_size::row(/byteui::theme::icon_size::row(/g' \
+  -e 's/icon_size::chevron(/byteui::theme::icon_size::chevron(/g' \
+  -e 's/icon_size::tab_arrow(/byteui::theme::icon_size::tab_arrow(/g' \
+  -e 's/icon_size::home(/byteui::theme::icon_size::home(/g' \
+  -e 's/icon_size::tree_row_gap(/byteui::theme::icon_size::tree_row_gap(/g' \
+  -e 's/icon_size::scale(/byteui::theme::icon_size::scale(/g' \
+  -e 's/icon_size::set_scale(/byteui::theme::icon_size::set_scale(/g' \
+  -e 's/icon_size::zoom_by(/byteui::theme::icon_size::zoom_by(/g' \
+  crates/dozer-app/src/theme/geometry.rs
+```
 
-Run: `grep -c "^use super::icon_size;" crates/dozer-app/src/theme/geometry.rs`
-Expected: `1`(这行必须还在,`geometry.rs` 自己的 32 个 accessor 还依赖它)
+- [ ] **Step 3: 删除不再需要的 `use super::icon_size;`**
 
-- [ ] **Step 3: 编译验证**
+`crates/dozer-app/src/theme/geometry.rs` 里删除这一行:
+
+```rust
+use super::icon_size;
+```
+
+- [ ] **Step 4: 确认无残留**
+
+Run: `grep -n "^use super::icon_size\|[^:]icon_size::[a-z]" crates/dozer-app/src/theme/geometry.rs | grep -v byteui`
+Expected: 无输出
+
+- [ ] **Step 5: 编译验证**
 
 Run: `cargo build -p dozer-app --bin dozer`
-Expected: 编译成功
+Expected: 编译成功(如果报 unused import,说明 Step 3 没删干净)
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git branch --show-current
 git add crates/dozer-app/src/theme/geometry.rs
-git commit -m "refactor(dozer-app): geometry.rs 内部 icon_size 完整路径引用迁移到 byteui"
+git commit -m "refactor(dozer-app): geometry.rs 内部 icon_size 引用迁移到 byteui"
 ```
 
 ---
