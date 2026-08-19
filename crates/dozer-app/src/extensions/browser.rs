@@ -1239,7 +1239,7 @@ fn nav_button(
         false,
         state.nav_hover(action),
         false,
-        theme::geometry::tab_button_size(),
+        byteui::theme::geometry::tab_button_size(),
         true,
         Message::Nav(action),
         move |hovered| Message::Hover(key, false, hovered),
@@ -1274,7 +1274,7 @@ fn star_button(
         starred,
         state.star_hover(),
         false,
-        theme::geometry::tab_button_size(),
+        byteui::theme::geometry::tab_button_size(),
         url.is_some(),
         Message::StarClick,
         |hovered| Message::Hover(STAR_HOVER_KEY, false, hovered),
@@ -1348,7 +1348,7 @@ fn bookmark_group<'a>(
             byteui::theme::color::current().dim
         ),
         lh(text(title)
-            .size(theme::font::subtitle())
+            .size(byteui::theme::font::subtitle())
             .color(byteui::theme::color::current().dim)),
     ]
     .spacing(4)
@@ -1356,7 +1356,7 @@ fn bookmark_group<'a>(
     let mut col = column![header].spacing(2);
     for b in items {
         let open = button(lh(text(b.title.clone())
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().cream)))
         .on_press(Message::OpenUrl(b.url.clone()))
         .width(Length::Fill)
@@ -1366,7 +1366,7 @@ fn bookmark_group<'a>(
             ..button::Style::default()
         });
         let remove = button(lh(text("×")
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().dim)))
         .on_press(Message::BookmarkRemove(b.id))
         .style(|_t: &iced_widget::Theme, _s| button::Style {
@@ -1415,7 +1415,7 @@ fn bookmarks_panel(
     }
     if both_empty {
         col = col.push(lh(text("暂无收藏")
-            .size(theme::font::subtitle())
+            .size(byteui::theme::font::subtitle())
             .color(byteui::theme::color::current().dim)));
     }
 
@@ -1450,7 +1450,7 @@ pub fn view(
     let (first, can_left, can_right) = tab_window(
         &widths,
         4.0,
-        theme::geometry::tab_bar_avail_px(),
+        byteui::theme::geometry::tab_bar_avail_px(),
         state.tab_first,
     );
 
@@ -1507,7 +1507,7 @@ pub fn view(
     } else {
         "输入网址".to_string()
     };
-    let addr = button(lh(text(addr_text).size(theme::font::body()).color(
+    let addr = button(lh(text(addr_text).size(byteui::theme::font::body()).color(
         if editing {
             byteui::theme::color::current().cream
         } else {
@@ -1549,14 +1549,14 @@ pub fn view(
     }
     if let Some(err) = &state.error {
         content = content.push(lh(text(format!("⚠ {err}"))
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().red)));
     }
 
     let body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
         if state.tabs.tabs().is_empty() {
             container(lh(text("暂无网页——在地址栏输入网址")
-                .size(theme::font::subtitle())
+                .size(byteui::theme::font::subtitle())
                 .color(byteui::theme::color::current().dim)))
             .width(Length::Fill)
             .height(Length::Fill)
@@ -1614,7 +1614,7 @@ fn bookmarks_toggle_button(
         false,
         state.bookmark_hover(),
         false,
-        theme::geometry::tab_button_size(),
+        byteui::theme::geometry::tab_button_size(),
         true,
         Message::BookmarksToggle,
         |hovered| Message::Hover(STAR_HOVER_KEY, true, hovered),

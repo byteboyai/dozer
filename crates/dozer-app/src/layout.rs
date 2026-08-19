@@ -75,7 +75,7 @@ mod tests {
         )
         .unwrap();
         let l = load_from(&path);
-        let (init_w, init_h) = crate::theme::geometry::initial_window_size();
+        let (init_w, init_h) = byteui::theme::geometry::initial_window_size();
         assert_eq!(l.window_width, init_w, "0 窗口宽应退化成初始尺寸");
         assert_eq!(l.window_height, init_h);
         // 已迁移走的字段在 `ShellLayout` 里已不存在,反序列化应直接忽略。
@@ -84,7 +84,7 @@ mod tests {
     #[test]
     fn shell_layout_default_has_sane_values() {
         let l = ShellLayout::default();
-        assert!(l.window_width >= crate::theme::geometry::min_window_width());
+        assert!(l.window_width >= byteui::theme::geometry::min_window_width());
         assert!(l.window_height > 0.0);
     }
 
@@ -121,7 +121,7 @@ mod tests {
         let path = dir.path().join("layout.json");
         std::fs::write(&path, r#"{"left_width": 500.0}"#).unwrap();
         let l = load_from(&path);
-        let (init_w, init_h) = crate::theme::geometry::initial_window_size();
+        let (init_w, init_h) = byteui::theme::geometry::initial_window_size();
         assert_eq!(l.window_width, init_w);
         assert_eq!(l.window_height, init_h);
     }

@@ -5,7 +5,6 @@
 //! `docs/superpowers/specs/2026-08-08-acceptance-pane-design.md`。
 use crate::delivery::FileChange;
 use crate::goal::Goal;
-use crate::theme;
 use crate::workspace::AddrEvent;
 use dozer_client::Client;
 use iced_widget::core::{Border, Element, Length};
@@ -304,7 +303,7 @@ pub fn view<'a>(
     let Some(session) = ws_state.session() else {
         return container(
             text("没有待验收的交付——完成一轮 agent 会话后,点这个图标就能看到")
-                .size(theme::font::subtitle())
+                .size(byteui::theme::font::subtitle())
                 .color(byteui::theme::color::current().dim),
         )
         .width(width)
@@ -318,7 +317,7 @@ pub fn view<'a>(
     if let Some(n) = session.accepted_version {
         content = content.push(
             text(format!("✓ 已沉淀 v{n}"))
-                .size(theme::font::title())
+                .size(byteui::theme::font::title())
                 .color(byteui::theme::color::current().gold),
         );
         return container(content).width(width).height(Length::Fill).into();
@@ -328,7 +327,7 @@ pub fn view<'a>(
         Some(g) => {
             content = content.push(
                 text(g.title.clone())
-                    .size(theme::font::title())
+                    .size(byteui::theme::font::title())
                     .color(byteui::theme::color::current().cream),
             );
             for (i, c) in g.criteria.iter().enumerate() {
@@ -336,7 +335,7 @@ pub fn view<'a>(
                 content = content.push(
                     button(
                         text(format!("{} {c}", if checked { "✓" } else { "○" }))
-                            .size(theme::font::body())
+                            .size(byteui::theme::font::body())
                             .color(if checked {
                                 byteui::theme::color::current().gold
                             } else {
@@ -355,7 +354,7 @@ pub fn view<'a>(
         None => {
             content = content.push(
                 text("未定标——先在仓库写 .dozer/goal.md（首行目标,\n- [ ] 列表为标准）")
-                    .size(theme::font::body())
+                    .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().dim),
             );
         }
@@ -363,7 +362,7 @@ pub fn view<'a>(
 
     content = content.push(
         text("变更文件")
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().dim),
     );
     for (i, fc) in session.changes.iter().enumerate() {
@@ -374,7 +373,7 @@ pub fn view<'a>(
         content = content.push(
             button(
                 text(line)
-                    .size(theme::font::body())
+                    .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().cyan),
             )
             .on_press(Message::ToggleDiff(i))
@@ -401,7 +400,7 @@ pub fn view<'a>(
     content = content.push(
         button(
             text(comment_text)
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(if editing {
                     byteui::theme::color::current().cream
                 } else {
@@ -430,7 +429,7 @@ pub fn view<'a>(
         row![
             button(
                 text("通过·沉淀")
-                    .size(theme::font::body())
+                    .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().bg)
             )
             .on_press(Message::Accept)
@@ -446,7 +445,7 @@ pub fn view<'a>(
             }),
             button(
                 text("打回并注回")
-                    .size(theme::font::body())
+                    .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().red)
             )
             .on_press(Message::Reject)
@@ -467,7 +466,7 @@ pub fn view<'a>(
     if let Some(err) = &session.error {
         content = content.push(
             text(format!("⚠ {err}"))
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().red),
         );
     }
@@ -493,11 +492,11 @@ fn diff_view<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     match diff {
         None => text("加载中…")
-            .size(theme::font::caption())
+            .size(byteui::theme::font::caption())
             .color(byteui::theme::color::current().dim)
             .into(),
         Some(Err(e)) => text(format!("⚠ {e}"))
-            .size(theme::font::caption())
+            .size(byteui::theme::font::caption())
             .color(byteui::theme::color::current().red)
             .into(),
         Some(Ok(patch)) => crate::diff_render::colored_diff_lines(patch),

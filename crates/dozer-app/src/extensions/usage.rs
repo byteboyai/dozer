@@ -7,7 +7,6 @@
 
 use crate::conversation::ConversationMeta;
 use crate::homespace::home_panel_head;
-use crate::theme;
 use byteui::interaction::icons;
 use dozer_core::protocol::AgentKind;
 use iced_widget::canvas::{self, Canvas};
@@ -408,7 +407,7 @@ pub fn view<'a>(
         false,
         refresh_hover_t,
         false,
-        crate::theme::geometry::rail_button_size(),
+        byteui::theme::geometry::rail_button_size(),
         true,
         Message::Refresh,
         Message::Hover,
@@ -422,13 +421,13 @@ pub fn view<'a>(
     if loading {
         content = content.push(
             text("统计中…")
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim),
         );
     } else if rows.is_empty() {
         content = content.push(
             text("这个项目还没有 agent 对话记录")
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim),
         );
     } else {
@@ -468,7 +467,7 @@ fn summary_card(
     ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
         column![
             text(label)
-                .size(theme::font::caption())
+                .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().dim),
             text(value)
                 .size(15.0)
@@ -521,7 +520,7 @@ fn summary_card(
     container(
         column![
             text(format!("项目汇总 · {} 会话", totals.conversation_count))
-                .size(theme::font::caption())
+                .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().dim),
             row,
         ]
@@ -557,14 +556,14 @@ fn usage_row<'a>(
     container(
         column![
             text(meta.title.clone())
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().cream),
             text(activity)
-                .size(theme::font::caption_sm())
+                .size(byteui::theme::font::caption_sm())
                 .color(byteui::theme::color::current().dim)
                 .font(iced_widget::core::Font::MONOSPACE),
             text(tokens)
-                .size(theme::font::caption_sm())
+                .size(byteui::theme::font::caption_sm())
                 .color(byteui::theme::color::current().cyan)
                 .font(iced_widget::core::Font::MONOSPACE),
         ]
@@ -599,10 +598,10 @@ fn grouped_list<'a>(
         col = col.push(
             iced_widget::row![
                 text(agent.label())
-                    .size(theme::font::caption())
+                    .size(byteui::theme::font::caption())
                     .color(crate::workspace::agent_dot_color(agent)),
                 text(format!("{} 会话 · {} tokens", idxs.len(), group_tokens))
-                    .size(theme::font::caption())
+                    .size(byteui::theme::font::caption())
                     .color(byteui::theme::color::current().dim),
             ]
             .spacing(8),
@@ -812,7 +811,7 @@ fn chart_legend(
                     pct,
                     format_token_short(*value)
                 ))
-                .size(theme::font::caption_sm())
+                .size(byteui::theme::font::caption_sm())
                 .color(byteui::theme::color::current().dim)
                 .font(iced_widget::core::Font::MONOSPACE),
             ]

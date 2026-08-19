@@ -470,7 +470,7 @@ fn worktree_strip<'a>(
             // 目录已经不在磁盘上,没有可切换的目标——保留纯展示文案。
             chips.push(
                 text(label)
-                    .size(theme::font::caption())
+                    .size(byteui::theme::font::caption())
                     .color(byteui::theme::color::current().dim)
                     .into(),
             );
@@ -478,7 +478,7 @@ fn worktree_strip<'a>(
             chips.push(
                 iced_widget::button(
                     text(label)
-                        .size(theme::font::caption())
+                        .size(byteui::theme::font::caption())
                         .color(byteui::theme::color::current().gold),
                 )
                 .on_press(Message::ProjectTabOpen(o.path.clone()))
@@ -645,11 +645,11 @@ fn commit_list_view<'a>(
                 byteui::theme::color::current().dim
             ),
             text(row.short_sha.clone())
-                .size(theme::font::caption())
+                .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().dim)
                 .font(Font::MONOSPACE),
             text(format_commit_time(row.time))
-                .size(theme::font::caption_sm())
+                .size(byteui::theme::font::caption_sm())
                 .color(byteui::theme::color::current().dim),
         ]
         .spacing(8)
@@ -657,7 +657,7 @@ fn commit_list_view<'a>(
         if !refs_prefix.is_empty() {
             head_line = head_line.push(
                 text(refs_prefix)
-                    .size(theme::font::caption_sm())
+                    .size(byteui::theme::font::caption_sm())
                     .color(byteui::theme::color::current().cyan),
             );
         }
@@ -666,7 +666,7 @@ fn commit_list_view<'a>(
         let comment_indent = byteui::theme::icon_size::row() + 8.0;
         let summary_line = container(
             text(row.summary.clone())
-                .size(theme::font::caption())
+                .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().cream),
         )
         .padding(iced_widget::core::Padding {
@@ -714,20 +714,18 @@ fn file_list_view<'a>(
     match detail {
         Err(err) => container(
             text(format!("详情加载失败: {err}"))
-                .size(theme::font::caption())
+                .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().red),
         )
         .padding(8)
         .into(),
-        Ok(detail) if detail.files.is_empty() => {
-            container(
+        Ok(detail) if detail.files.is_empty() => container(
             text("无文件改动")
-                .size(theme::font::caption())
+                .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().dim),
         )
-                .padding(8)
-                .into()
-        }
+        .padding(8)
+        .into(),
         Ok(detail) => {
             let mut list = column![].spacing(2);
             for (i, f) in detail.files.iter().enumerate() {
@@ -739,11 +737,11 @@ fn file_list_view<'a>(
                 };
                 let line = row![
                     text(status_glyph(f.status))
-                        .size(theme::font::caption())
+                        .size(byteui::theme::font::caption())
                         .color(color)
                         .width(18),
                     text(f.path.clone())
-                        .size(theme::font::caption())
+                        .size(byteui::theme::font::caption())
                         .color(byteui::theme::color::current().cream),
                 ]
                 .spacing(4);
@@ -804,7 +802,7 @@ pub fn view<'a>(
             column![
                 head,
                 text(text_content)
-                    .size(theme::font::caption())
+                    .size(byteui::theme::font::caption())
                     .color(byteui::theme::color::current().dim)
             ]
             .spacing(8)
@@ -817,7 +815,7 @@ pub fn view<'a>(
             column![
                 head,
                 text("没有可显示的提交")
-                    .size(theme::font::caption())
+                    .size(byteui::theme::font::caption())
                     .color(byteui::theme::color::current().dim)
             ]
             .spacing(8)
@@ -836,7 +834,7 @@ pub fn view<'a>(
     if let Some(err) = error {
         left = left.push(
             text(format!("git log 读取失败: {err}"))
-                .size(theme::font::caption())
+                .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().red),
         );
     }
@@ -867,12 +865,12 @@ pub fn view<'a>(
             .into()
         } else {
             container(
-            text("选择一个提交查看改动")
-                .size(theme::font::caption())
-                .color(byteui::theme::color::current().dim),
-        )
-                .padding(12)
-                .into()
+                text("选择一个提交查看改动")
+                    .size(byteui::theme::font::caption())
+                    .color(byteui::theme::color::current().dim),
+            )
+            .padding(12)
+            .into()
         };
 
     row![
@@ -907,31 +905,31 @@ fn diff_pane_view<'a>(
     let Some(path) = selected_file else {
         return container(
             text("未选中文件")
-                .size(theme::font::caption())
+                .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().dim),
         )
-            .padding(8)
-            .into();
+        .padding(8)
+        .into();
     };
     let Some(entry) = detail.files.iter().find(|f| f.path == path) else {
         return container(
             text("未选中文件")
-                .size(theme::font::caption())
+                .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().dim),
         )
-            .padding(8)
-            .into();
+        .padding(8)
+        .into();
     };
     let mut content = column![
         text(entry.path.clone())
-            .size(theme::font::caption())
+            .size(byteui::theme::font::caption())
             .color(byteui::theme::color::current().dim)
     ]
     .spacing(4);
     if entry.patch.is_empty() {
         content = content.push(
             text("(无 diff 内容)")
-                .size(theme::font::caption())
+                .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().dim),
         );
     } else {
@@ -940,7 +938,7 @@ fn diff_pane_view<'a>(
     if entry.truncated {
         content = content.push(
             text("… diff 过长,已截断显示")
-                .size(theme::font::caption_sm())
+                .size(byteui::theme::font::caption_sm())
                 .color(byteui::theme::color::current().dim),
         );
     }
@@ -962,7 +960,7 @@ fn git_panel_footer_bar<'a>(
     loading: bool,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let branch_label = text(head_branch.unwrap_or("(无分支)"))
-        .size(theme::font::label())
+        .size(byteui::theme::font::label())
         .color(byteui::theme::color::current().cream);
 
     let switch = iced_widget::button(byteui::interaction::icons::view(
@@ -995,7 +993,7 @@ fn git_panel_footer_bar<'a>(
 
     let load_more = iced_widget::button(
         text("加载更多提交 (+200)")
-            .size(theme::font::label())
+            .size(byteui::theme::font::label())
             .color(byteui::theme::color::current().cream),
     )
     .on_press_maybe((!loading).then_some(Message::LoadMore))
@@ -1060,7 +1058,7 @@ fn branch_picker_view<'a>(
     if state.branch_switch_pending {
         items.push(
             text("切换中…")
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim)
                 .into(),
         );
@@ -1068,7 +1066,7 @@ fn branch_picker_view<'a>(
     if state.branches.is_empty() {
         items.push(
             text("暂无本地分支")
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim)
                 .into(),
         );
@@ -1112,12 +1110,9 @@ fn branch_picker_view<'a>(
             .height(Length::Fill),
     )
     .on_press(Message::BranchPickerClose);
-    let positioned = column![
-        iced_widget::Space::new().height(Length::Fill),
-        panel,
-    ]
-    .width(Length::Fill)
-    .height(Length::Fill);
+    let positioned = column![iced_widget::Space::new().height(Length::Fill), panel,]
+        .width(Length::Fill)
+        .height(Length::Fill);
     iced_widget::stack![dismiss, positioned]
         .width(Length::Fill)
         .height(Length::Fill)

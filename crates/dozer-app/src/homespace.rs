@@ -115,7 +115,7 @@ pub(crate) fn home_page<'a>(
 /// 效果与之一致,只是去掉了 `MouseArea`/`on_press`。
 fn home_divider<'a>() -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     iced_widget::Space::new()
-        .width(Length::Fixed(theme::geometry::divider_width()))
+        .width(Length::Fixed(byteui::theme::geometry::divider_width()))
         .height(Length::Fill)
         .into()
 }
@@ -160,7 +160,7 @@ fn home_left_icon_rail(
     .padding(region.padding);
 
     container(content)
-        .width(Length::Fixed(theme::geometry::icon_rail_width()))
+        .width(Length::Fixed(byteui::theme::geometry::icon_rail_width()))
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
@@ -193,7 +193,7 @@ fn home_right_icon_rail(
     .padding(region.padding);
 
     container(content)
-        .width(Length::Fixed(theme::geometry::icon_rail_width()))
+        .width(Length::Fixed(byteui::theme::geometry::icon_rail_width()))
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
@@ -227,7 +227,7 @@ fn home_left_zone(
         });
     let m = zone.margin;
     container(zone_box)
-        .width(Length::Fixed(theme::geometry::h0_sidebar_width()))
+        .width(Length::Fixed(byteui::theme::geometry::h0_sidebar_width()))
         .height(Length::Fill)
         .padding(Padding {
             top: m.top,
@@ -245,7 +245,7 @@ fn home_right_zone(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
     let inner = browser::view(
         &app.home_browser,
         None,
-        theme::geometry::default_split_ratio(),
+        byteui::theme::geometry::default_split_ratio(),
         Length::Fill,
         zone_pane_border(zone, PaneCorner::All),
     )

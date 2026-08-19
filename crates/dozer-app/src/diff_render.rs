@@ -4,7 +4,6 @@
 //! `docs/superpowers/specs/2026-08-17-git-log-panel-three-pane-redesign-design.md`
 //! 第 8 节)。
 
-use crate::theme;
 use iced_widget::core::{Element, Font};
 use iced_widget::{column, container, text};
 
@@ -26,7 +25,7 @@ pub fn colored_diff_lines<'a, M: 'a>(
         };
         col = col.push(
             text(line.to_string())
-                .size(theme::font::caption_sm())
+                .size(byteui::theme::font::caption_sm())
                 .color(color)
                 .font(Font::MONOSPACE)
                 .line_height(iced_widget::core::text::LineHeight::Relative(1.3)),

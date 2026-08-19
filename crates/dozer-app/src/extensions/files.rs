@@ -950,7 +950,9 @@ pub fn view<'a>(
                     byteui::theme::icon_size::row(),
                     byteui::theme::color::current().dim
                 ),
-                text(name).size(theme::font::body()).color(root_color),
+                text(name)
+                    .size(byteui::theme::font::body())
+                    .color(root_color),
             ]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center),
@@ -968,7 +970,7 @@ pub fn view<'a>(
     if let Some(err) = &ws_state.tree_error {
         header = header.push(
             text(format!("⚠ {err}"))
-                .size(theme::font::label())
+                .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().red),
         );
     }
@@ -1205,7 +1207,7 @@ fn git_footer_bar(
         (
             icons::IconKind::GitBranch,
             text("加载仓库信息…")
-                .size(theme::font::label())
+                .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().cream)
                 .into(),
             None,
@@ -1248,7 +1250,7 @@ fn git_footer_bar(
         (
             icons::IconKind::FolderGit2,
             text(branch_name)
-                .size(theme::font::label())
+                .size(byteui::theme::font::label())
                 .color(label_color)
                 .into(),
             Some(switch),
@@ -1263,7 +1265,7 @@ fn git_footer_bar(
                     byteui::theme::color::current().cream
                 ),
                 text("新建Git仓库")
-                    .size(theme::font::label())
+                    .size(byteui::theme::font::label())
                     .color(byteui::theme::color::current().cream),
             ]
             .spacing(6)
@@ -1284,7 +1286,7 @@ fn git_footer_bar(
         (
             icons::IconKind::FolderMinus,
             text("未受Git保护")
-                .size(theme::font::label())
+                .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().cream)
                 .into(),
             Some(init.into()),
@@ -1322,7 +1324,7 @@ fn git_footer_bar(
     if let Some(err) = &ws_state.git_error {
         content = content.push(
             text(format!("⚠ {err}"))
-                .size(theme::font::label())
+                .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().red),
         );
     }
@@ -1382,7 +1384,7 @@ pub fn branch_picker_popup(
     if ws_state.git_branches.is_empty() {
         items.push(
             text("暂无本地分支")
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim)
                 .into(),
         );
@@ -1400,7 +1402,10 @@ pub fn branch_picker_popup(
         };
         let indicator: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
             if is_current {
-                text("● ").size(theme::font::body()).color(color).into()
+                text("● ")
+                    .size(byteui::theme::font::body())
+                    .color(color)
+                    .into()
             } else {
                 iced_widget::space::Space::new()
                     .width(Length::Fixed(18.0))
@@ -1450,7 +1455,7 @@ pub fn branch_picker_popup(
 /// 底缘=footbar 高 + project_pane 底 padding + git 底栏高。二者都吃全局 scale,
 /// 随主题/缩放联动,不写死像素。
 fn branch_picker_popup_offset(ws_state: &WorkspaceState) -> (f32, f32) {
-    let rail = crate::theme::geometry::icon_rail_width();
+    let rail = byteui::theme::geometry::icon_rail_width();
     let pane = theme::region::project_pane();
     let left = rail + pane.padding.left;
     // git 底栏高度:顶部分隔 1px + 栏内容(icon_box + 上下 padding 6) + 栏间
@@ -1465,7 +1470,7 @@ fn branch_picker_popup_offset(ws_state: &WorkspaceState) -> (f32, f32) {
     };
     let git_bar_h = git_bar_top_line + bar_h + git_bar_vpad + 4.0 + error_line;
     let bottom =
-        crate::theme::geometry::footbar_height() + pane.padding.bottom + git_bar_h + pane.gap;
+        byteui::theme::geometry::footbar_height() + pane.padding.bottom + git_bar_h + pane.gap;
     (left, bottom)
 }
 
@@ -1484,12 +1489,12 @@ fn search_box_widget(
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let body = if draft.is_empty() && !editing {
         text("搜索目录…")
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().dim)
     } else {
         let caret = if editing { "▏" } else { "" };
         text(format!("{draft}{caret}"))
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().cream)
     };
 
@@ -1655,15 +1660,15 @@ pub fn delete_confirm_popup(
     let dialog = container(
         column![
             text(format!("删除{kind} \"{name}\"?"))
-                .size(theme::font::subtitle())
+                .size(byteui::theme::font::subtitle())
                 .color(byteui::theme::color::current().cream),
             text("会移入系统回收站,可从回收站找回。")
-                .size(theme::font::label())
+                .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().dim),
             row![
                 button(
                     text("取消")
-                        .size(theme::font::body())
+                        .size(byteui::theme::font::body())
                         .color(byteui::theme::color::current().cream)
                 )
                 .on_press(Message::DeleteCancel)
@@ -1680,7 +1685,7 @@ pub fn delete_confirm_popup(
                 }),
                 button(
                     text("删除")
-                        .size(theme::font::body())
+                        .size(byteui::theme::font::body())
                         .color(byteui::theme::color::current().red)
                 )
                 .on_press(Message::DeleteConfirm)

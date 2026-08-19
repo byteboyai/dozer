@@ -59,7 +59,7 @@ pub fn update(state: &mut AppState, msg: Message) {
 /// footbar 主入口。被 `App::view` 在根 `column!` 末尾调用,`.map(Message::Footbar)`
 /// 转成顶层消息。无项目依赖、无交互——纯展示条,外层容器背景/对齐沿用
 /// `theme::region::status_bar()`,但字号用更小的 `caption_sm()`、高度用
-/// 独立的 `theme::geometry::footbar_height()`(比 in-pane status_bar 更矮更紧凑,
+/// 独立的 `byteui::theme::geometry::footbar_height()`(比 in-pane status_bar 更矮更紧凑,
 /// 不与 `status_bar_height()` 共用,避免改 footbar 时连坐 in-pane status bar)。
 pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::status_bar();
@@ -97,7 +97,7 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_r
     segs.push((
         Lead::Icon,
         text(format!("Proxy  {}", s.proxy.as_deref().unwrap_or("OFF")))
-            .size(theme::font::caption_sm())
+            .size(byteui::theme::font::caption_sm())
             .color(byteui::theme::color::current().bg)
             .into(),
     ));
@@ -109,7 +109,7 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_r
             format_speed(s.net_down_bps),
             format_speed(s.net_up_bps)
         ))
-        .size(theme::font::caption_sm())
+        .size(byteui::theme::font::caption_sm())
         .color(byteui::theme::color::current().bg)
         .into(),
     ));
@@ -125,7 +125,7 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_r
                 Lead::None => {}
                 Lead::Pipe => parts.push(
                     text("｜")
-                        .size(theme::font::caption_sm())
+                        .size(byteui::theme::font::caption_sm())
                         .color(byteui::theme::color::current().bg)
                         .into(),
                 ),
@@ -166,10 +166,10 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_r
         byteui::theme::color::current().bg,
     );
     let app_name = text("Dozer AI Coder")
-        .size(theme::font::caption_sm())
+        .size(byteui::theme::font::caption_sm())
         .color(byteui::theme::color::current().bg);
     let app_version = text(format!("v{}", env!("CARGO_PKG_VERSION")))
-        .size(theme::font::caption_sm())
+        .size(byteui::theme::font::caption_sm())
         .color(iced_widget::core::Color::from_rgb8(0xFF, 0x6E, 0x6E));
     let right = row![app_icon, app_name, app_version]
         .spacing(6)
@@ -181,7 +181,7 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_r
 
     container(content)
         .width(Length::Fill)
-        .height(Length::Fixed(theme::geometry::footbar_height()))
+        .height(Length::Fixed(byteui::theme::geometry::footbar_height()))
         .padding(region.padding)
         .align_y(Alignment::Center)
         .style(move |_t: &iced_widget::Theme| container::Style {
@@ -204,10 +204,10 @@ fn metric_row(
     };
     row![
         text(prefix)
-            .size(theme::font::caption_sm())
+            .size(byteui::theme::font::caption_sm())
             .color(byteui::theme::color::current().bg),
         text(format!("  {:.0}%", percent))
-            .size(theme::font::caption_sm())
+            .size(byteui::theme::font::caption_sm())
             .color(value_color),
     ]
     .align_y(Alignment::Center)
