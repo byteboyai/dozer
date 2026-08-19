@@ -310,10 +310,10 @@ pub enum WorkspaceSlot {
 #[serde(default)]
 pub struct ShellLayout {
     /// 上次退出时的窗口逻辑尺寸(宽,高)。`main.rs` 建窗时读它决定初始
-    /// `with_inner_size`,取代写死的 `theme::geometry::initial_window_size()`；`App::
+    /// `with_inner_size`,取代写死的 `byteui::theme::geometry::initial_window_size()`；`App::
     /// persist_window_size_on_exit` 在 `WindowEvent::CloseRequested` 时
     /// 写回。跟其余字段一样走 `#[serde(default)]`,老 `layout.json` 缺这
-    /// 两个字段时退化成 `theme::geometry::initial_window_size()`,不影响其余已存的偏好。
+    /// 两个字段时退化成 `byteui::theme::geometry::initial_window_size()`,不影响其余已存的偏好。
     ///
     /// 左右面板区的宽度/分割比例(`left_width` 与四个 split)已迁进每项目
     /// `PanelLayout`(见 `PanelDims`/`panel_layouts.json`),`ShellLayout`
@@ -326,8 +326,8 @@ pub struct ShellLayout {
 impl Default for ShellLayout {
     fn default() -> Self {
         Self {
-            window_width: theme::geometry::initial_window_size().0,
-            window_height: theme::geometry::initial_window_size().1,
+            window_width: byteui::theme::geometry::initial_window_size().0,
+            window_height: byteui::theme::geometry::initial_window_size().1,
         }
     }
 }
@@ -372,15 +372,15 @@ pub struct PanelDims {
 fn default_panel_dims() -> PanelDims {
     PanelDims {
         left_width: 640.0,
-        files_split: theme::geometry::default_split_ratio(),
-        project_split: theme::geometry::default_split_ratio(),
-        ssh_split: theme::geometry::default_split_ratio(),
-        todo_split: theme::geometry::default_split_ratio(),
-        git_log_split: theme::geometry::default_split_ratio(),
-        git_log_file_diff_split: theme::geometry::default_split_ratio(),
-        agent_split: theme::geometry::default_split_ratio(),
-        conversations_split: theme::geometry::default_split_ratio(),
-        browser_bookmarks_split: theme::geometry::default_split_ratio(),
+        files_split: byteui::theme::geometry::default_split_ratio(),
+        project_split: byteui::theme::geometry::default_split_ratio(),
+        ssh_split: byteui::theme::geometry::default_split_ratio(),
+        todo_split: byteui::theme::geometry::default_split_ratio(),
+        git_log_split: byteui::theme::geometry::default_split_ratio(),
+        git_log_file_diff_split: byteui::theme::geometry::default_split_ratio(),
+        agent_split: byteui::theme::geometry::default_split_ratio(),
+        conversations_split: byteui::theme::geometry::default_split_ratio(),
+        browser_bookmarks_split: byteui::theme::geometry::default_split_ratio(),
     }
 }
 
@@ -421,21 +421,21 @@ impl Default for PanelLayout {
 }
 
 /// 把从磁盘读回来的 `ShellLayout` 夹进合法范围(`layout::load_from` 调用)。
-/// 迁走面板尺寸后只剩窗口尺寸:夹下限(`theme::geometry::min_window_width()`/
-/// `theme::geometry::min_window_height()`,建窗时还有 `with_min_inner_size`
+/// 迁走面板尺寸后只剩窗口尺寸:夹下限(`byteui::theme::geometry::min_window_width()`/
+/// `byteui::theme::geometry::min_window_height()`,建窗时还有 `with_min_inner_size`
 /// 兜底),非法值(非有限数、缺字段的 0.0)退化成
-/// `theme::geometry::initial_window_size()`。
+/// `byteui::theme::geometry::initial_window_size()`。
 pub fn sanitize_shell_layout(l: ShellLayout) -> ShellLayout {
     ShellLayout {
         window_width: if l.window_width.is_finite() && l.window_width > 0.0 {
-            l.window_width.max(theme::geometry::min_window_width())
+            l.window_width.max(byteui::theme::geometry::min_window_width())
         } else {
-            theme::geometry::initial_window_size().0
+            byteui::theme::geometry::initial_window_size().0
         },
         window_height: if l.window_height.is_finite() && l.window_height > 0.0 {
-            l.window_height.max(theme::geometry::min_window_height())
+            l.window_height.max(byteui::theme::geometry::min_window_height())
         } else {
-            theme::geometry::initial_window_size().1
+            byteui::theme::geometry::initial_window_size().1
         },
     }
 }
@@ -449,8 +449,8 @@ pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
     let clamp_split = |v: f32| {
         if v.is_finite() {
             v.clamp(
-                theme::geometry::min_split_ratio(),
-                theme::geometry::max_split_ratio(),
+                byteui::theme::geometry::min_split_ratio(),
+                byteui::theme::geometry::max_split_ratio(),
             )
         } else {
             PanelDims::default().files_split
@@ -458,7 +458,7 @@ pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
     };
     PanelDims {
         left_width: if d.left_width.is_finite() {
-            d.left_width.max(theme::geometry::min_zone_width())
+            d.left_width.max(byteui::theme::geometry::min_zone_width())
         } else {
             PanelDims::default().left_width
         },
@@ -563,13 +563,13 @@ pub struct ShellState {
 /// 保留拖拽手柄)，所以这 8px 恒扣，不看收起态——早先版本只在两侧都可见时
 /// 扣，导致收起一侧后几何比实际渲染宽 8px 且原点左偏 8px。
 pub(crate) fn zones_width(window_width: f32) -> f32 {
-    (window_width - 2.0 * theme::geometry::icon_rail_width() - theme::geometry::divider_width())
+    (window_width - 2.0 * byteui::theme::geometry::icon_rail_width() - byteui::theme::geometry::divider_width())
         .max(0.0)
 }
 
 /// 把持久化的 `left_width` 夹进"当前窗口宽度下合法"的区间:下限
-/// `theme::geometry::min_zone_width()`,上限"给右面板区也留够 `theme::geometry::min_zone_width()`"。窗口窄到
-/// 上界低于下界时用 `.max(theme::geometry::min_zone_width())` 把上界垫平,`clamp` 恒不 panic。
+/// `byteui::theme::geometry::min_zone_width()`,上限"给右面板区也留够 `byteui::theme::geometry::min_zone_width()`"。窗口窄到
+/// 上界低于下界时用 `.max(byteui::theme::geometry::min_zone_width())` 把上界垫平,`clamp` 恒不 panic。
 ///
 /// 这是**唯一**一处 left_width 的夹取:渲染侧(`left_panel_area` 经
 /// `Workspace::effective_left_width`)、几何侧(`left_zone_width` → webview
@@ -580,9 +580,9 @@ pub(crate) fn zones_width(window_width: f32) -> f32 {
 /// 凭空消失(Fix round 2 Critical #1)。夹取只发生在渲染/几何时刻,不回写
 /// `ShellLayout`,窗口再拉宽时用户原来偏好的宽度自动复原。
 pub(crate) fn clamp_left_width(window_width: f32, left_width: f32) -> f32 {
-    let upper = (zones_width(window_width) - theme::geometry::min_zone_width())
-        .max(theme::geometry::min_zone_width());
-    left_width.clamp(theme::geometry::min_zone_width(), upper)
+    let upper = (zones_width(window_width) - byteui::theme::geometry::min_zone_width())
+        .max(byteui::theme::geometry::min_zone_width());
+    left_width.clamp(byteui::theme::geometry::min_zone_width(), upper)
 }
 
 /// 左面板区当前实际宽度(逻辑像素)：收起时 0；对侧收起时独占 `zones_width`
@@ -613,7 +613,7 @@ pub(crate) fn right_zone_width(window_width: f32, state: &ShellState) -> f32 {
 /// 宽的分隔线之后才按比例分剩余空间的，所以比例的分母必须是这个值，不是
 /// 区宽本身。
 fn pair_content_width(zone_width: f32) -> f32 {
-    (zone_width - theme::geometry::divider_width()).max(0.0)
+    (zone_width - byteui::theme::geometry::divider_width()).max(0.0)
 }
 
 /// 配对视图内部"列表侧"与"内容侧"的宽度,按 `split`(列表侧占比)从
@@ -639,7 +639,7 @@ pub(crate) fn apply_column_drag(
     match divider {
         Divider::LeftRight => {
             let new_left =
-                clamp_left_width(window_width, logical_x - theme::geometry::icon_rail_width());
+                clamp_left_width(window_width, logical_x - byteui::theme::geometry::icon_rail_width());
             PanelDims {
                 left_width: new_left,
                 ..state.dims
@@ -650,9 +650,9 @@ pub(crate) fn apply_column_drag(
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let ratio = ((logical_x - theme::geometry::icon_rail_width()) / pair_w).clamp(
-                theme::geometry::min_split_ratio(),
-                theme::geometry::max_split_ratio(),
+            let ratio = ((logical_x - byteui::theme::geometry::icon_rail_width()) / pair_w).clamp(
+                byteui::theme::geometry::min_split_ratio(),
+                byteui::theme::geometry::max_split_ratio(),
             );
             PanelDims {
                 files_split: ratio,
@@ -664,9 +664,9 @@ pub(crate) fn apply_column_drag(
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let ratio = ((logical_x - theme::geometry::icon_rail_width()) / pair_w).clamp(
-                theme::geometry::min_split_ratio(),
-                theme::geometry::max_split_ratio(),
+            let ratio = ((logical_x - byteui::theme::geometry::icon_rail_width()) / pair_w).clamp(
+                byteui::theme::geometry::min_split_ratio(),
+                byteui::theme::geometry::max_split_ratio(),
             );
             PanelDims {
                 project_split: ratio,
@@ -678,9 +678,9 @@ pub(crate) fn apply_column_drag(
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let ratio = ((logical_x - theme::geometry::icon_rail_width()) / pair_w).clamp(
-                theme::geometry::min_split_ratio(),
-                theme::geometry::max_split_ratio(),
+            let ratio = ((logical_x - byteui::theme::geometry::icon_rail_width()) / pair_w).clamp(
+                byteui::theme::geometry::min_split_ratio(),
+                byteui::theme::geometry::max_split_ratio(),
             );
             PanelDims {
                 ssh_split: ratio,
@@ -692,9 +692,9 @@ pub(crate) fn apply_column_drag(
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let ratio = ((logical_x - theme::geometry::icon_rail_width()) / pair_w).clamp(
-                theme::geometry::min_split_ratio(),
-                theme::geometry::max_split_ratio(),
+            let ratio = ((logical_x - byteui::theme::geometry::icon_rail_width()) / pair_w).clamp(
+                byteui::theme::geometry::min_split_ratio(),
+                byteui::theme::geometry::max_split_ratio(),
             );
             PanelDims {
                 todo_split: ratio,
@@ -706,9 +706,9 @@ pub(crate) fn apply_column_drag(
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let ratio = ((logical_x - theme::geometry::icon_rail_width()) / pair_w).clamp(
-                theme::geometry::min_split_ratio(),
-                theme::geometry::max_split_ratio(),
+            let ratio = ((logical_x - byteui::theme::geometry::icon_rail_width()) / pair_w).clamp(
+                byteui::theme::geometry::min_split_ratio(),
+                byteui::theme::geometry::max_split_ratio(),
             );
             PanelDims {
                 git_log_split: ratio,
@@ -720,9 +720,9 @@ pub(crate) fn apply_column_drag(
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let ratio = ((logical_x - theme::geometry::icon_rail_width()) / pair_w).clamp(
-                theme::geometry::min_split_ratio(),
-                theme::geometry::max_split_ratio(),
+            let ratio = ((logical_x - byteui::theme::geometry::icon_rail_width()) / pair_w).clamp(
+                byteui::theme::geometry::min_split_ratio(),
+                byteui::theme::geometry::max_split_ratio(),
             );
             PanelDims {
                 browser_bookmarks_split: ratio,
@@ -735,15 +735,15 @@ pub(crate) fn apply_column_drag(
             if pair_w <= 0.0 {
                 return state.dims;
             }
-            let right_x0 = window_width - theme::geometry::icon_rail_width() - right_w;
+            let right_x0 = window_width - byteui::theme::geometry::icon_rail_width() - right_w;
             // `ratio` 是"配对里渲染在左边那块"的宽度占比(拖拽点左侧的宽度
             // 除以配对总宽)——这块现在是终端/审阅,不是 agent_split/
             // conversations_split 存的"列表侧(Agent 列表/对话列表)占比"。
             // 两者互补(列表侧渲染在右边),所以要写 1.0-ratio,不能直接写
             // ratio,否则拖拽方向会反(见 `right_panel_area` 顶部注释)。
             let ratio = ((logical_x - right_x0) / pair_w).clamp(
-                theme::geometry::min_split_ratio(),
-                theme::geometry::max_split_ratio(),
+                byteui::theme::geometry::min_split_ratio(),
+                byteui::theme::geometry::max_split_ratio(),
             );
             match state.right_view {
                 RightView::Agent => PanelDims {
@@ -777,10 +777,10 @@ pub(crate) fn apply_row_drag(
     match divider {
         RowDivider::GitLogFileDiffSplit => {
             let usable_height =
-                (window_height - theme::geometry::status_bar_height() * 2.0).max(1.0);
+                (window_height - byteui::theme::geometry::status_bar_height() * 2.0).max(1.0);
             let ratio = (logical_y / usable_height).clamp(
-                theme::geometry::min_split_ratio(),
-                theme::geometry::max_split_ratio(),
+                byteui::theme::geometry::min_split_ratio(),
+                byteui::theme::geometry::max_split_ratio(),
             );
             PanelDims {
                 git_log_file_diff_split: ratio,
@@ -803,22 +803,22 @@ pub(crate) fn apply_row_drag(
 /// 都靠它换算放大态几何,不能各写各的字面量,否则和 `maximize_overlay`
 /// 实际渲染的画面对不上。
 fn maximized_box_x_range(window_width: f32) -> (f32, f32) {
-    let x0 = theme::geometry::icon_rail_width() + theme::geometry::maximize_overlay_padding();
+    let x0 = byteui::theme::geometry::icon_rail_width() + byteui::theme::geometry::maximize_overlay_padding();
     let avail_w = (window_width
-        - 2.0 * theme::geometry::icon_rail_width()
-        - 2.0 * theme::geometry::maximize_overlay_padding())
+        - 2.0 * byteui::theme::geometry::icon_rail_width()
+        - 2.0 * byteui::theme::geometry::maximize_overlay_padding())
     .max(0.0);
     (x0, avail_w)
 }
 
 /// 放大态金色描边盒子的纵向可用高度(逻辑像素)。`maximize_overlay` 顶部
-/// 垫了一条 `theme::geometry::top_bar_height()` 高的 Space 把遮罩钉在顶栏之下,盒子上下各留
-/// `theme::geometry::maximize_overlay_padding()`;遮罩铺到窗口底边(状态栏也被盖住),所以这里
-/// **不**扣 `theme::geometry::status_bar_height()`——与 `preview_content_bounds` 放大分支同源。
+/// 垫了一条 `byteui::theme::geometry::top_bar_height()` 高的 Space 把遮罩钉在顶栏之下,盒子上下各留
+/// `byteui::theme::geometry::maximize_overlay_padding()`;遮罩铺到窗口底边(状态栏也被盖住),所以这里
+/// **不**扣 `byteui::theme::geometry::status_bar_height()`——与 `preview_content_bounds` 放大分支同源。
 fn maximized_box_height(window_height: f32) -> f32 {
     (window_height
-        - theme::geometry::top_bar_height()
-        - 2.0 * theme::geometry::maximize_overlay_padding())
+        - byteui::theme::geometry::top_bar_height()
+        - 2.0 * byteui::theme::geometry::maximize_overlay_padding())
     .max(0.0)
 }
 
@@ -847,24 +847,24 @@ pub fn preview_content_bounds(
     // (webview 摆位比实际渲染的 tab 栏低了一整个地址栏的高度)。
     if state.maximized == Some(MaximizedPane::Left) {
         let (x0, avail_w) = maximized_box_x_range(window_width);
-        let y0 = theme::geometry::top_bar_height() + theme::geometry::maximize_overlay_padding();
+        let y0 = byteui::theme::geometry::top_bar_height() + byteui::theme::geometry::maximize_overlay_padding();
         // 同样扣掉 footbar 高度,让放大态 webview 底部也不戳到 footbar。
         let avail_h =
-            (maximized_box_height(window_height) - theme::geometry::status_bar_height()).max(0.0);
+            (maximized_box_height(window_height) - byteui::theme::geometry::status_bar_height()).max(0.0);
         return match state.left_view {
             LeftView::Files => {
-                let y = y0 + theme::geometry::preview_chrome_top_px();
-                let h = (avail_h - theme::geometry::preview_chrome_top_px() - 8.0).max(0.0);
+                let y = y0 + byteui::theme::geometry::preview_chrome_top_px();
+                let h = (avail_h - byteui::theme::geometry::preview_chrome_top_px() - 8.0).max(0.0);
                 let pair_w = pair_content_width(avail_w);
                 let (list_w, content_w) = pair_list_content_width(pair_w, state.dims.files_split);
-                let x = x0 + list_w + theme::geometry::divider_width() + 8.0;
+                let x = x0 + list_w + byteui::theme::geometry::divider_width() + 8.0;
                 let w = (content_w - 16.0).max(0.0);
                 (x, y, w, h)
             }
             // 浏览器(Web)是单栏(无配对),放大态占满整条放大盒子。
             LeftView::Web => {
-                let y = y0 + theme::geometry::browser_chrome_top_px();
-                let h = (avail_h - theme::geometry::browser_chrome_top_px() - 8.0).max(0.0);
+                let y = y0 + byteui::theme::geometry::browser_chrome_top_px();
+                let h = (avail_h - byteui::theme::geometry::browser_chrome_top_px() - 8.0).max(0.0);
                 let x = x0 + 8.0;
                 let w = (avail_w - 16.0).max(0.0);
                 (x, y, w, h)
@@ -876,11 +876,11 @@ pub fn preview_content_bounds(
             // Project 面板的右配对(项目预览)是 Files 同款预览 chrome,按
             // `project_split` 算出右配对那条 webview 的矩形。
             LeftView::Project => {
-                let y = y0 + theme::geometry::preview_chrome_top_px();
-                let h = (avail_h - theme::geometry::preview_chrome_top_px() - 8.0).max(0.0);
+                let y = y0 + byteui::theme::geometry::preview_chrome_top_px();
+                let h = (avail_h - byteui::theme::geometry::preview_chrome_top_px() - 8.0).max(0.0);
                 let pair_w = pair_content_width(avail_w);
                 let (list_w, content_w) = pair_list_content_width(pair_w, state.dims.project_split);
-                let x = x0 + list_w + theme::geometry::divider_width() + 8.0;
+                let x = x0 + list_w + byteui::theme::geometry::divider_width() + 8.0;
                 let w = (content_w - 16.0).max(0.0);
                 (x, y, w, h)
             }
@@ -895,23 +895,23 @@ pub fn preview_content_bounds(
     // (原生子视图不听 iced 布局,逐像素靠这里算)。左右 margin 同样要算进去,
     // 否则去掉外边框后 webview 会戳出新增的左侧留白。
     let m = theme::region::left_zone().margin;
-    let y_top = |chrome_top: f32| -> f32 { theme::geometry::top_bar_height() + m.top + chrome_top };
+    let y_top = |chrome_top: f32| -> f32 { byteui::theme::geometry::top_bar_height() + m.top + chrome_top };
     // 底部扣 footbar(`extensions::footbar::view` 的固定高度
-    // = `theme::geometry::status_bar_height()`)——wry webview 不听 iced
+    // = `byteui::theme::geometry::status_bar_height()`)——wry webview 不听 iced
     // 布局,若不扣会把 footbar 文字盖在底下。不留额外 8px 间隙,让
     // webview 底部紧贴 footbar 顶部(只留 left_zone 的下 margin)。
     let h_for = |y: f32| -> f32 {
-        (window_height - y - m.bottom - theme::geometry::status_bar_height()).max(0.0)
+        (window_height - y - m.bottom - byteui::theme::geometry::status_bar_height()).max(0.0)
     };
     match state.left_view {
         LeftView::Files => {
-            let y = y_top(theme::geometry::preview_chrome_top_px());
+            let y = y_top(byteui::theme::geometry::preview_chrome_top_px());
             let h = h_for(y);
             let pair_w = pair_content_width(left_w);
             let (list_w, content_w) = pair_list_content_width(pair_w, state.dims.files_split);
-            let x = theme::geometry::icon_rail_width()
+            let x = byteui::theme::geometry::icon_rail_width()
                 + list_w
-                + theme::geometry::divider_width()
+                + byteui::theme::geometry::divider_width()
                 + 8.0
                 + m.left;
             let w = (content_w - 16.0 - m.left - m.right).max(0.0);
@@ -921,9 +921,9 @@ pub fn preview_content_bounds(
         // 让出右侧收藏夹侧栏的宽度(纯 iced 渲染,不挂 webview,几何计算
         // 不用管它)。
         LeftView::Web => {
-            let y = y_top(theme::geometry::browser_chrome_top_px());
+            let y = y_top(byteui::theme::geometry::browser_chrome_top_px());
             let h = h_for(y);
-            let x = theme::geometry::icon_rail_width() + 8.0 + m.left;
+            let x = byteui::theme::geometry::icon_rail_width() + 8.0 + m.left;
             let w = if state.browser_bookmarks_open {
                 let pair_w = pair_content_width(left_w);
                 let (_bookmarks_w, content_w) =
@@ -940,13 +940,13 @@ pub fn preview_content_bounds(
         // Project 面板右配对(项目预览)是 Files 同款预览 chrome,按
         // `project_split` 算出右配对那条 webview 矩形。
         LeftView::Project => {
-            let y = y_top(theme::geometry::preview_chrome_top_px());
+            let y = y_top(byteui::theme::geometry::preview_chrome_top_px());
             let h = h_for(y);
             let pair_w = pair_content_width(left_w);
             let (list_w, content_w) = pair_list_content_width(pair_w, state.dims.project_split);
-            let x = theme::geometry::icon_rail_width()
+            let x = byteui::theme::geometry::icon_rail_width()
                 + list_w
-                + theme::geometry::divider_width()
+                + byteui::theme::geometry::divider_width()
                 + 8.0
                 + m.left;
             let w = (content_w - 16.0 - m.left - m.right).max(0.0);
@@ -994,9 +994,9 @@ pub fn left_files_tree_bounds(
     }
     if state.maximized == Some(MaximizedPane::Left) {
         let (x0, avail_w) = maximized_box_x_range(window_width);
-        let y_top = theme::geometry::top_bar_height() + theme::geometry::maximize_overlay_padding();
+        let y_top = byteui::theme::geometry::top_bar_height() + byteui::theme::geometry::maximize_overlay_padding();
         let avail_h =
-            (maximized_box_height(window_height) - theme::geometry::status_bar_height()).max(0.0);
+            (maximized_box_height(window_height) - byteui::theme::geometry::status_bar_height()).max(0.0);
         let pair_w = pair_content_width(avail_w);
         let (list_w, _content_w) = pair_list_content_width(pair_w, state.dims.files_split);
         let x = x0 + m.left + p.padding.left;
@@ -1014,11 +1014,11 @@ pub fn left_files_tree_bounds(
     }
     let left_w = left_zone_width(window_width, state);
     let (list_w, _) = pair_list_content_width(pair_content_width(left_w), state.dims.files_split);
-    let x = theme::geometry::icon_rail_width() + m.left + p.padding.left;
+    let x = byteui::theme::geometry::icon_rail_width() + m.left + p.padding.left;
     let w = (list_w - p.padding.left - p.padding.right).max(0.0);
-    let y_pane = theme::geometry::top_bar_height() + m.top;
+    let y_pane = byteui::theme::geometry::top_bar_height() + m.top;
     let y = y_pane + p.padding.top + theme::geometry::tree_chrome_top_px();
-    let h = ((window_height - m.bottom - theme::geometry::status_bar_height())
+    let h = ((window_height - m.bottom - byteui::theme::geometry::status_bar_height())
         - (y_pane + p.padding.top + theme::geometry::tree_chrome_top_px())
         - p.padding.bottom
         - theme::geometry::tree_chrome_bottom_px())
@@ -1044,7 +1044,7 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
             LeftView::Files => {
                 let (list_w, _) =
                     pair_list_content_width(pair_content_width(avail_w), state.dims.files_split);
-                let start = x0 + list_w + theme::geometry::divider_width();
+                let start = x0 + list_w + byteui::theme::geometry::divider_width();
                 let end = x0 + avail_w;
                 x >= start && x < end
             }
@@ -1061,7 +1061,7 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
             LeftView::Project => {
                 let (list_w, _) =
                     pair_list_content_width(pair_content_width(avail_w), state.dims.project_split);
-                let start = x0 + list_w + theme::geometry::divider_width();
+                let start = x0 + list_w + byteui::theme::geometry::divider_width();
                 let end = x0 + avail_w;
                 x >= start && x < end
             }
@@ -1077,13 +1077,13 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
             let (list_w, _) =
                 pair_list_content_width(pair_content_width(left_w), state.dims.files_split);
             let start =
-                theme::geometry::icon_rail_width() + list_w + theme::geometry::divider_width();
-            let end = theme::geometry::icon_rail_width() + left_w;
+                byteui::theme::geometry::icon_rail_width() + list_w + byteui::theme::geometry::divider_width();
+            let end = byteui::theme::geometry::icon_rail_width() + left_w;
             x >= start && x < end
         }
         // 浏览器(Web)是单栏,占满整条左面板区横向范围。
         LeftView::Web => {
-            let start = theme::geometry::icon_rail_width();
+            let start = byteui::theme::geometry::icon_rail_width();
             let end = start + left_w;
             x >= start && x < end
         }
@@ -1095,8 +1095,8 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
             let (list_w, _) =
                 pair_list_content_width(pair_content_width(left_w), state.dims.project_split);
             let start =
-                theme::geometry::icon_rail_width() + list_w + theme::geometry::divider_width();
-            let end = theme::geometry::icon_rail_width() + left_w;
+                byteui::theme::geometry::icon_rail_width() + list_w + byteui::theme::geometry::divider_width();
+            let end = byteui::theme::geometry::icon_rail_width() + left_w;
             x >= start && x < end
         }
         // Database 面板同 Project,纯 iced 绘制,永无 webview。
@@ -1108,7 +1108,7 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
 
 /// 逻辑 x 落在哪一侧面板区(整区,不分区内具体是哪个 pane)。左键点击
 /// 落点决定当前"聚焦"哪一侧,驱动 `left_zone`/`right_zone` 外边框的高亮态
-/// (见 [`ZoneSide`])。落在图标栏本身(两侧各 `theme::geometry::icon_rail_width()` 宽)或
+/// (见 [`ZoneSide`])。落在图标栏本身(两侧各 `byteui::theme::geometry::icon_rail_width()` 宽)或
 /// 某侧收起而点在了"不存在的那一侧"时不算数,返回 `None`(调用方应保持
 /// 点击前的聚焦态不变,而不是清空)。
 ///
@@ -1116,8 +1116,8 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bo
 /// `maximize_overlay` 渲染时两条图标栏原样露在外面,和非放大态同一
 /// 横向范围,所以图标栏判定不用跟着改。
 pub fn zone_at_x(x: f32, window_width: f32, state: &ShellState) -> Option<ZoneSide> {
-    if x < theme::geometry::icon_rail_width()
-        || x > window_width - theme::geometry::icon_rail_width()
+    if x < byteui::theme::geometry::icon_rail_width()
+        || x > window_width - byteui::theme::geometry::icon_rail_width()
     {
         return None;
     }
@@ -1137,7 +1137,7 @@ pub fn zone_at_x(x: f32, window_width: f32, state: &ShellState) -> Option<ZoneSi
     if state.right_collapsed {
         return Some(ZoneSide::Left);
     }
-    let boundary = theme::geometry::icon_rail_width() + left_zone_width(window_width, state);
+    let boundary = byteui::theme::geometry::icon_rail_width() + left_zone_width(window_width, state);
     Some(if x < boundary {
         ZoneSide::Left
     } else {
@@ -1226,26 +1226,26 @@ pub fn terminal_pane_pixel_size(
         let (_x0, avail_w) = maximized_box_x_range(window_width);
         let (_list_w, content_w) =
             pair_list_content_width(pair_content_width(avail_w), state.dims.agent_split);
-        let pane_width = (content_w - theme::geometry::chrome_width_px()).max(0.0);
-        // `theme::geometry::status_bar_height()` 是终端 pane 自带的底栏(`terminal_status_bar`,
+        let pane_width = (content_w - byteui::theme::geometry::chrome_width_px()).max(0.0);
+        // `byteui::theme::geometry::status_bar_height()` 是终端 pane 自带的底栏(`terminal_status_bar`,
         // 不是窗口级状态栏),放大态一样在盒子里,照扣。
         let pane_height = (maximized_box_height(window_height)
-            - theme::geometry::status_bar_height()
-            - theme::geometry::chrome_height_px())
+            - byteui::theme::geometry::status_bar_height()
+            - byteui::theme::geometry::chrome_height_px())
         .max(0.0);
         return (pane_width, pane_height);
     }
     let right_w = right_zone_width(window_width, state);
     let (_list_w, content_w) =
         pair_list_content_width(pair_content_width(right_w), state.dims.agent_split);
-    let pane_width = (content_w - theme::geometry::chrome_width_px()).max(0.0);
+    let pane_width = (content_w - byteui::theme::geometry::chrome_width_px()).max(0.0);
     // `right_zone` 上下 margin:终端是 iced 布局(自动 inset),但其 PTY 网格
     // 尺寸靠这里算,必须同步扣掉上下 margin,否则字符网格比实际渲染区高。
     let m = theme::region::right_zone().margin;
     let pane_height = (window_height
-        - theme::geometry::top_bar_height()
-        - theme::geometry::status_bar_height()
-        - theme::geometry::chrome_height_px()
+        - byteui::theme::geometry::top_bar_height()
+        - byteui::theme::geometry::status_bar_height()
+        - byteui::theme::geometry::chrome_height_px()
         - m.top
         - m.bottom)
         .max(0.0);
@@ -1273,14 +1273,14 @@ pub fn ssh_terminal_pane_pixel_size(
     }
     let pair_w = pair_content_width(left_w);
     let (_list_w, content_w) = pair_list_content_width(pair_w, state.dims.ssh_split);
-    let pane_width = (content_w - theme::geometry::chrome_width_px()).max(0.0);
+    let pane_width = (content_w - byteui::theme::geometry::chrome_width_px()).max(0.0);
     // `chrome_height_px()`(tab 栏 + padding + spacing 的估算)与
     // `terminal_pane_pixel_size` 同源;SSH 终端没有 `terminal_status_bar`,
     // 不像共享终端那样额外扣状态栏高。
     let m = theme::region::left_zone().margin;
     let pane_height = (window_height
-        - theme::geometry::top_bar_height()
-        - theme::geometry::chrome_height_px()
+        - byteui::theme::geometry::top_bar_height()
+        - byteui::theme::geometry::chrome_height_px()
         - m.top
         - m.bottom)
         .max(0.0);
@@ -2072,7 +2072,7 @@ impl App {
             hover_tooltip_starts: std::collections::HashMap::new(),
             pending_zoom_toggle: false,
             pending_preview_zoom: false,
-            window_size: theme::geometry::initial_window_size(),
+            window_size: byteui::theme::geometry::initial_window_size(),
             last_cursor: (0.0, 0.0),
             dragging: None,
             dragging_row: None,
@@ -2802,7 +2802,7 @@ impl App {
     /// 建窗时用的初始窗口尺寸偏好:优先用上次退出前持久化的
     /// `shell_layout.window_width/height`(已经过 `sanitize_shell_layout`
     /// 夹取),`layout.json` 不存在/读不到时 `layout::load()` 本身已经退化
-    /// 成 `ShellLayout::default()`,即 `theme::geometry::initial_window_size()`,这里不用再
+    /// 成 `ShellLayout::default()`,即 `byteui::theme::geometry::initial_window_size()`,这里不用再
     /// 单独处理"没存过"的分支。
     pub fn window_size_pref(&self) -> (f32, f32) {
         (
@@ -3127,12 +3127,12 @@ impl App {
         let right_w = right_zone_width(window_w, &state);
         let (list_w, _) =
             pair_list_content_width(pair_content_width(right_w), state.dims.agent_split);
-        let x0 = window_w - theme::geometry::icon_rail_width() - right_w
+        let x0 = window_w - byteui::theme::geometry::icon_rail_width() - right_w
             + list_w
-            + theme::geometry::divider_width()
+            + byteui::theme::geometry::divider_width()
             + 8.0;
         // 终端网格上方 chrome:顶栏 44 + 上 padding 8 + tab 栏 30 + spacing 4(header 已去,P1L #4)
-        let y0 = theme::geometry::top_bar_height() + 8.0 + 30.0 + 4.0;
+        let y0 = byteui::theme::geometry::top_bar_height() + 8.0 + 30.0 + 4.0;
         let (col, row) = self
             .active_workspace()
             .and_then(|ws| ws.tabs.get(ws.active))
@@ -3489,8 +3489,8 @@ impl App {
                         // 之上,不参与);高度 = 基线 - 光标 y,向上拉变高。
                         // 上限再夹一道,避免列表区被压没(留约 140px)。
                         RowDivider::TodoAddGrow => {
-                            let baseline = window_height - theme::geometry::footbar_height();
-                            let max_h = (baseline - theme::geometry::top_bar_height() - 140.0)
+                            let baseline = window_height - byteui::theme::geometry::footbar_height();
+                            let max_h = (baseline - byteui::theme::geometry::top_bar_height() - 140.0)
                                 .max(todo::ADD_INPUT_MIN_HEIGHT);
                             let h = (baseline - logical_y).clamp(todo::ADD_INPUT_MIN_HEIGHT, max_h);
                             if let Some(ws) = self.active_workspace_mut() {
@@ -5454,7 +5454,7 @@ impl App {
         let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
             crate::menu::shell(
                 items,
-                Length::Fixed(crate::theme::geometry::menu_item_width()),
+                Length::Fixed(byteui::theme::geometry::menu_item_width()),
             );
         // 文件预览的 webview 只铺在 tab 栏**下方**的内容区(这就是 tab 栏本身
         // 始终以 iced 显示、不被 webview 盖住的原因)。右键菜单若向下弹会压到
@@ -5505,7 +5505,7 @@ impl App {
         let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
             crate::menu::shell(
                 items,
-                Length::Fixed(crate::theme::geometry::menu_item_width()),
+                Length::Fixed(byteui::theme::geometry::menu_item_width()),
             );
         let window_h = self.window_size.1;
         let bottom = (window_h - menu.y).max(0.0);
@@ -5579,14 +5579,14 @@ impl App {
             // Required Fix #1)。
             let mut hint_col = column![
                 text("未打开任何项目——点顶栏的 ＋ 打开一个")
-                    .size(theme::font::subtitle())
+                    .size(byteui::theme::font::subtitle())
                     .color(byteui::theme::color::current().dim)
             ]
             .spacing(8);
             if let Some(err) = &self.daemon_error {
                 hint_col = hint_col.push(
                     text(format!("⚠ {err}"))
-                        .size(theme::font::body())
+                        .size(byteui::theme::font::body())
                         .color(byteui::theme::color::current().red),
                 );
             }
@@ -5853,7 +5853,7 @@ fn dozer_home_tab<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 与 `project_tab_item` 用同一份高度公式,保证两者视觉同高、顶边对齐。
     let sq = byteui::theme::icon_size::rail() + 14.0;
-    let tab_h = (theme::geometry::top_bar_height() + sq) / 2.0;
+    let tab_h = (byteui::theme::geometry::top_bar_height() + sq) / 2.0;
 
     // 标题(图标 + "Dozer" 文字)颜色:选中态恒为金 `#F2D94E`(甲方动作专属色,
     // 与项目页签一致);未选中态静止 DIM,hover 时随 `title_hover_t` 平滑过渡
@@ -5882,7 +5882,7 @@ fn dozer_home_tab<'a>(
             ),
             text("Dozer")
                 .font(top_bar_font())
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(title_color),
         ]
         .spacing(6)
@@ -6035,7 +6035,7 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_renderer:
     let bar = row![title, tabs, right]
         .spacing(region.gap)
         .padding(region.padding)
-        .height(Length::Fixed(theme::geometry::top_bar_height()))
+        .height(Length::Fixed(byteui::theme::geometry::top_bar_height()))
         .align_y(iced_widget::core::Alignment::Center);
 
     // 双击顶栏空白处缩放窗口(原生标题栏没了之后,系统"双击标题栏缩放"
@@ -6053,7 +6053,7 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_renderer:
 
     container(stack![background, bar])
         .width(Length::Fill)
-        .height(Length::Fixed(theme::geometry::top_bar_height()))
+        .height(Length::Fixed(byteui::theme::geometry::top_bar_height()))
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
             border: region.border.unwrap_or_default(),
@@ -6124,11 +6124,11 @@ fn project_tabs_row(
 
     // `responsive` 在每轮布局把页签区可用宽交给闭包,闭包据此算每片宽。
     responsive(move |size| {
-        let gap = theme::geometry::project_tab_gap();
-        let default_w = theme::geometry::project_tab_max_width();
+        let gap = byteui::theme::geometry::project_tab_gap();
+        let default_w = byteui::theme::geometry::project_tab_max_width();
         // 预留"＋"按钮与其紧跟最后一片页签的 gap(页签内部还有 n-1 道 gap),
         // 避免页签在拥挤时压到"＋"上。
-        let reserved = theme::geometry::project_tab_add_button_width() + (n as f32 + 1.0) * gap;
+        let reserved = byteui::theme::geometry::project_tab_add_button_width() + (n as f32 + 1.0) * gap;
         let avail = (size.width - reserved).max(0.0);
         // 每片目标宽:少页签用默认宽(固定);多到塞不下默认宽才均分收窄。
         let per_tab = if n == 0 {
@@ -6144,7 +6144,7 @@ fn project_tabs_row(
             .align_y(iced_widget::core::Alignment::Center)
             .width(Length::Shrink); // 固定宽,不撑满;右侧留白把"＋"顶到最右
         // 分割竖线高度:顶栏高的约 45%,在行内 `align_y(Center)` 自然垂直居中。
-        let sep_h = theme::geometry::top_bar_height() * 0.45;
+        let sep_h = byteui::theme::geometry::top_bar_height() * 0.45;
         for (i, entry) in entries.iter().enumerate() {
             let active = active_project_id == Some(entry.id);
             let close_hover_t = app.hover_progress(HoverId::ProjectTabClose(entry.id));
@@ -6260,9 +6260,9 @@ fn project_tab_item<'a>(
     // 必须把高度补到 `(top_bar_height+sq)/2`,贴底后顶部留白才恰好等于
     // Dozer 按钮那份 `(top_bar_height-sq)/2`。
     let sq = byteui::theme::icon_size::rail() + 14.0;
-    let tab_h = (theme::geometry::top_bar_height() + sq) / 2.0;
+    let tab_h = (byteui::theme::geometry::top_bar_height() + sq) / 2.0;
     // 关闭按钮用与顶栏其它图标按钮(tab 箭头 / 最大化)同尺寸的方形命中区。
-    let close_sz = crate::theme::geometry::tab_button_size();
+    let close_sz = byteui::theme::geometry::tab_button_size();
     // 组合 hover:鼠标悬停标题或关闭按钮任一,都应让胶囊背景浮现、× 显形。
     // 不能只依赖 select 按钮的 `button::Status::Hovered`——× 叠在 select 之上,
     // 悬停 × 时底层 select 拿不到 `Hovered`,胶囊会凭空消失。
@@ -6272,12 +6272,12 @@ fn project_tab_item<'a>(
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
     if let Some(color) = dot {
-        label = label.push(text("●").size(theme::font::caption_sm()).color(color));
+        label = label.push(text("●").size(byteui::theme::font::caption_sm()).color(color));
     }
     label = label.push(
         text(name.clone())
             .font(top_bar_font())
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(if active {
                 // 选中态标题恒为金 `#F2D94E`(甲方动作专属色)。
                 byteui::theme::color::current().gold
@@ -6562,8 +6562,8 @@ pub(crate) fn rail_icon_button<'a>(
 
     let content: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = button(inner)
         .on_press(msg)
-        .width(Length::Fixed(crate::theme::geometry::rail_button_size()))
-        .height(Length::Fixed(crate::theme::geometry::rail_button_size()))
+        .width(Length::Fixed(byteui::theme::geometry::rail_button_size()))
+        .height(Length::Fixed(byteui::theme::geometry::rail_button_size()))
         .padding(0)
         .style(move |_t: &iced_widget::Theme, _status: button::Status| {
             // 圆角正方形背景常驻(`CARD`);金色外框只在选中态出现,hover
@@ -6601,7 +6601,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
             app.left_view == LeftView::Project && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftProject)),
             true,
-            crate::theme::geometry::rail_button_size(),
+            byteui::theme::geometry::rail_button_size(),
             true,
             Message::LeftIconSelect(LeftView::Project),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftProject), hovered),
@@ -6615,7 +6615,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
             app.left_view == LeftView::Todo && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftTodo)),
             true,
-            crate::theme::geometry::rail_button_size(),
+            byteui::theme::geometry::rail_button_size(),
             true,
             Message::LeftIconSelect(LeftView::Todo),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftTodo), hovered),
@@ -6628,7 +6628,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
             app.left_view == LeftView::Files && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftFiles)),
             true,
-            crate::theme::geometry::rail_button_size(),
+            byteui::theme::geometry::rail_button_size(),
             true,
             Message::LeftIconSelect(LeftView::Files),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftFiles), hovered),
@@ -6641,7 +6641,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
             app.left_view == LeftView::GitLog && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftGit)),
             true,
-            crate::theme::geometry::rail_button_size(),
+            byteui::theme::geometry::rail_button_size(),
             true,
             Message::LeftIconSelect(LeftView::GitLog),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftGit), hovered),
@@ -6654,7 +6654,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
             app.left_view == LeftView::Database && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftDatabase)),
             true,
-            crate::theme::geometry::rail_button_size(),
+            byteui::theme::geometry::rail_button_size(),
             true,
             Message::LeftIconSelect(LeftView::Database),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftDatabase), hovered),
@@ -6667,7 +6667,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
             app.left_view == LeftView::Ssh && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftSsh)),
             true,
-            crate::theme::geometry::rail_button_size(),
+            byteui::theme::geometry::rail_button_size(),
             true,
             Message::LeftIconSelect(LeftView::Ssh),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftSsh), hovered),
@@ -6680,7 +6680,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
             app.left_view == LeftView::Web && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftWeb)),
             true,
-            crate::theme::geometry::rail_button_size(),
+            byteui::theme::geometry::rail_button_size(),
             true,
             Message::LeftIconSelect(LeftView::Web),
             |hovered| Message::Hover(HoverId::Rail(RailButton::LeftWeb), hovered),
@@ -6691,7 +6691,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
     .padding(region.padding);
 
     container(content)
-        .width(Length::Fixed(theme::geometry::icon_rail_width()))
+        .width(Length::Fixed(byteui::theme::geometry::icon_rail_width()))
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
@@ -6713,7 +6713,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
             app.right_view == RightView::Agent && right_open,
             app.hover_progress(HoverId::Rail(RailButton::RightAgent)),
             true,
-            crate::theme::geometry::rail_button_size(),
+            byteui::theme::geometry::rail_button_size(),
             true,
             Message::RightIconSelect(RightView::Agent),
             |hovered| Message::Hover(HoverId::Rail(RailButton::RightAgent), hovered),
@@ -6725,7 +6725,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
             app.right_view == RightView::Conversations && right_open,
             app.hover_progress(HoverId::Rail(RailButton::RightConversations)),
             true,
-            crate::theme::geometry::rail_button_size(),
+            byteui::theme::geometry::rail_button_size(),
             true,
             Message::RightIconSelect(RightView::Conversations),
             |hovered| Message::Hover(HoverId::Rail(RailButton::RightConversations), hovered),
@@ -6737,7 +6737,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
             app.right_view == RightView::Usage && right_open,
             app.hover_progress(HoverId::Rail(RailButton::RightUsage)),
             true,
-            crate::theme::geometry::rail_button_size(),
+            byteui::theme::geometry::rail_button_size(),
             true,
             Message::RightIconSelect(RightView::Usage),
             |hovered| Message::Hover(HoverId::Rail(RailButton::RightUsage), hovered),
@@ -6756,7 +6756,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
                     app.right_view == RightView::Acceptance && right_open,
                     app.hover_progress(HoverId::Rail(RailButton::RightAcceptance)),
                     true,
-                    crate::theme::geometry::rail_button_size(),
+                    byteui::theme::geometry::rail_button_size(),
                     true,
                     Message::RightIconSelect(RightView::Acceptance),
                     |hovered| Message::Hover(HoverId::Rail(RailButton::RightAcceptance), hovered),
@@ -6789,7 +6789,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
     .padding(region.padding);
 
     container(content)
-        .width(Length::Fixed(theme::geometry::icon_rail_width()))
+        .width(Length::Fixed(byteui::theme::geometry::icon_rail_width()))
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
@@ -7308,19 +7308,19 @@ fn maximize_overlay<'a>(
     )
     .on_press(Message::MaximizeClose);
 
-    // 顶部垫一条透明的 `theme::geometry::top_bar_height()` 高 Space,把变暗遮罩钉在顶栏
+    // 顶部垫一条透明的 `byteui::theme::geometry::top_bar_height()` 高 Space,把变暗遮罩钉在顶栏
     // 之下——`base = column![top, body]` 里顶栏和内容区就是这么分的,
     // 这里镜像同一结构,让变暗区域精确对齐 `body` 的渲染范围,不覆盖顶栏
     // (Important:此前没有这条 Space,遮罩会盖住整个窗口高度,连顶栏的
     // 项目 tab 等控件都会被染黑)。
     column![
-        iced_widget::space::Space::new().height(Length::Fixed(theme::geometry::top_bar_height())),
+        iced_widget::space::Space::new().height(Length::Fixed(byteui::theme::geometry::top_bar_height())),
         row![
             iced_widget::space::Space::new()
-                .width(Length::Fixed(theme::geometry::icon_rail_width())),
+                .width(Length::Fixed(byteui::theme::geometry::icon_rail_width())),
             dim_bg,
             iced_widget::space::Space::new()
-                .width(Length::Fixed(theme::geometry::icon_rail_width())),
+                .width(Length::Fixed(byteui::theme::geometry::icon_rail_width())),
         ],
     ]
     .width(Length::Fill)
@@ -7341,7 +7341,7 @@ fn terminal_pane<'a>(
     if let Some(err) = &app.daemon_error {
         content = content.push(
             text(format!("⚠ {err}"))
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().red),
         );
     }
@@ -7352,7 +7352,7 @@ fn terminal_pane<'a>(
     {
         content = content.push(
             text(format!("exit {code}"))
-                .size(theme::font::label())
+                .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().red),
         );
     }
@@ -7379,7 +7379,7 @@ fn terminal_pane<'a>(
         .into()
 }
 
-/// 分隔线:命中区 `theme::geometry::divider_width()` 宽、`Length::Fill` 高,
+/// 分隔线:命中区 `byteui::theme::geometry::divider_width()` 宽、`Length::Fill` 高,
 /// 中间一条 2px BORDER 竖线。悬停变 resize 光标走 `MouseArea::interaction` →
 /// iced 既有的 `mouse_interaction` → `window.set_cursor` 管线(main.rs:808-816
 /// 已有),不必另起一套光标代码。`on_press` 只发起拖拽状态,不指望 `MouseArea`
@@ -7404,12 +7404,12 @@ pub(crate) fn divider_bar<'a, M: Clone + 'a>(
     let show_line = !matches!(divider, Divider::LeftRight);
     let body: Element<'_, M, iced_widget::Theme, iced_renderer::Renderer> = if !show_line {
         iced_widget::Space::new()
-            .width(Length::Fixed(theme::geometry::divider_width()))
+            .width(Length::Fixed(byteui::theme::geometry::divider_width()))
             .height(Length::Fill)
             .into()
     } else {
         let line_w = 2.0_f32;
-        let side_w = (theme::geometry::divider_width() - line_w) / 2.0;
+        let side_w = (byteui::theme::geometry::divider_width() - line_w) / 2.0;
         let left_side = container(iced_widget::Space::new())
             .width(Length::Fixed(side_w))
             .height(Length::Fill)
@@ -7432,7 +7432,7 @@ pub(crate) fn divider_bar<'a, M: Clone + 'a>(
                 ..container::Style::default()
             });
         row![left_side, line, right_side]
-            .width(Length::Fixed(theme::geometry::divider_width()))
+            .width(Length::Fixed(byteui::theme::geometry::divider_width()))
             .height(Length::Fill)
             .into()
     };
@@ -7445,14 +7445,14 @@ pub(crate) fn divider_bar<'a, M: Clone + 'a>(
 /// `divider_bar` 的纵向(上下)镜像:一条水平分割线,`row!`→`column!`、
 /// `width`↔`height` 互换,鼠标样式 `ResizingRow`(对应横向的
 /// `ResizingColumn`)。目前只有 Git Log 面板右侧"文件列表 | diff 内容"这条
-/// 纵向拖拽线用它。粗细复用 `theme::geometry::divider_width()`,与横向一致。
+/// 纵向拖拽线用它。粗细复用 `byteui::theme::geometry::divider_width()`,与横向一致。
 pub(crate) fn horizontal_divider_bar<'a, M: Clone + 'a>(
     top_bg: Color,
     bottom_bg: Color,
     on_drag: M,
 ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
     let line_h = 2.0_f32;
-    let side_h = (theme::geometry::divider_width() - line_h) / 2.0;
+    let side_h = (byteui::theme::geometry::divider_width() - line_h) / 2.0;
     let top_side = container(iced_widget::Space::new())
         .height(Length::Fixed(side_h))
         .width(Length::Fill)
@@ -7475,7 +7475,7 @@ pub(crate) fn horizontal_divider_bar<'a, M: Clone + 'a>(
             ..container::Style::default()
         });
     let col = column![top_side, line, bottom_side]
-        .height(Length::Fixed(theme::geometry::divider_width()))
+        .height(Length::Fixed(byteui::theme::geometry::divider_width()))
         .width(Length::Fill);
     MouseArea::new(col)
         .interaction(mouse::Interaction::ResizingRow)
@@ -7502,10 +7502,10 @@ pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
         color,
     ))
     .width(Length::Fixed(
-        crate::theme::geometry::tab_arrow_button_size(),
+        byteui::theme::geometry::tab_arrow_button_size(),
     ))
     .height(Length::Fixed(
-        crate::theme::geometry::tab_arrow_button_size(),
+        byteui::theme::geometry::tab_arrow_button_size(),
     ))
     .padding(0)
     .style(move |_theme, status| {
@@ -7604,7 +7604,7 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
     title_hover: impl Fn(bool) -> M + 'a,
     close_hover: impl Fn(bool) -> M + 'a,
 ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
-    let close_sz = crate::theme::geometry::tab_button_size();
+    let close_sz = byteui::theme::geometry::tab_button_size();
     // 组合 hover:悬停标题或 × 任一,胶囊背景都浮现、× 显形。
     let hover = hover_t.max(close_hover_t).clamp(0.0, 1.0);
     let hovered = hover > 0.001;
@@ -7631,7 +7631,7 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
         container(
             text(title.clone())
                 .font(top_bar_font())
-                .size(theme::font::body())
+                .size(byteui::theme::font::body())
                 .color(title_color),
         )
         // 标题超宽不补省略号、也不换行,直接裁掉溢出(见 CODEBUDDY 需求):
@@ -7782,7 +7782,7 @@ fn tab_bar<'a>(
     let (first, can_left, can_right) = tab_window(
         &widths,
         4.0,
-        theme::geometry::tab_bar_avail_px(),
+        byteui::theme::geometry::tab_bar_avail_px(),
         ws.term_tab_first,
     );
 
@@ -7881,7 +7881,7 @@ fn tab_item(
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let color = dot_color(tab.agent_state, tab.alive);
     // 状态点作 `panel_tab` 的 prefix。
-    let dot = text("●").size(theme::font::caption_sm()).color(color);
+    let dot = text("●").size(byteui::theme::font::caption_sm()).color(color);
 
     panel_tab(
         tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
@@ -8060,7 +8060,7 @@ fn ssh_terminal_pane<'a>(
 fn ssh_empty_state<'a>() -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     container(
         text("点主机卡片的终端/文件传输图标开始")
-            .size(theme::font::body())
+            .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().dim),
     )
     .padding(20)
@@ -8079,7 +8079,7 @@ fn active_tab_view<'a>(
         ),
         None => container(
             text("暂无会话——到 Agent 面板点「＋」")
-                .size(theme::font::subtitle())
+                .size(byteui::theme::font::subtitle())
                 .color(byteui::theme::color::current().dim),
         )
         .width(Length::Fill)
@@ -8416,7 +8416,7 @@ mod tests {
         let (x, y, w, h) = preview_content_bounds(1440.0, 900.0, &state);
         let list_w = state.dims.left_width * state.dims.files_split;
         let col_start =
-            theme::geometry::icon_rail_width() + list_w + theme::geometry::divider_width();
+            byteui::theme::geometry::icon_rail_width() + list_w + byteui::theme::geometry::divider_width();
         assert!(x >= col_start && x < col_start + 16.0, "x={x}");
         assert!((380.0..=420.0).contains(&w), "w={w}");
         assert!(
@@ -8437,7 +8437,7 @@ mod tests {
         let (x, _, w, _) = preview_content_bounds(1440.0, 900.0, &state);
         let m = theme::region::left_zone().margin;
         let left_w = left_zone_width(1440.0, &state);
-        assert_eq!(x, theme::geometry::icon_rail_width() + 8.0 + m.left);
+        assert_eq!(x, byteui::theme::geometry::icon_rail_width() + 8.0 + m.left);
         assert_eq!(w, left_w - 16.0 - m.left - m.right);
     }
 
@@ -8496,10 +8496,10 @@ mod tests {
     /// Fix round 1 Critical:左侧被放大(Files 配对)时,webview 矩形必须
     /// 按 `maximize_overlay` 实际渲染的更大盒子换算,不能再用平时的
     /// `left_zone_width`(640)。用具体数字核对,不只看"落在范围内"：
-    /// x0=theme::geometry::icon_rail_width()(44)+theme::geometry::maximize_overlay_padding()(40)=84,
+    /// x0=byteui::theme::geometry::icon_rail_width()(44)+byteui::theme::geometry::maximize_overlay_padding()(40)=84,
     /// avail_w=1440-2*44-2*40=1272,pair_w=1272-8=1264,
     /// list_w=1264*0.35=442.4,x=84+442.4+8+8=542.4,w=1264*0.65-16=805.6;
-    /// y0=theme::geometry::top_bar_height()(40)+40=80,y=80+38(theme::geometry::preview_chrome_top_px(),地址栏已去)=118,
+    /// y0=byteui::theme::geometry::top_bar_height()(40)+40=80,y=80+38(byteui::theme::geometry::preview_chrome_top_px(),地址栏已去)=118,
     /// avail_h=900-40-80=780 - status_bar_height()(26,扣 footbar)=754,
     /// h=754-38-8=708。
     #[test]
@@ -8560,13 +8560,13 @@ mod tests {
     fn terminal_pane_height_excludes_top_and_status_bars() {
         let state = test_state();
         let (_, h_with) = terminal_pane_pixel_size(1440.0, 900.0, &state);
-        let only_chrome = 900.0 - theme::geometry::chrome_height_px();
+        let only_chrome = 900.0 - byteui::theme::geometry::chrome_height_px();
         let m = theme::region::right_zone().margin;
         assert!(
             (only_chrome
                 - h_with
-                - (theme::geometry::top_bar_height()
-                    + theme::geometry::status_bar_height()
+                - (byteui::theme::geometry::top_bar_height()
+                    + byteui::theme::geometry::status_bar_height()
                     + m.top
                     + m.bottom))
                 .abs()
@@ -8607,7 +8607,7 @@ mod tests {
         let left_w = left_zone_width(1440.0, &state);
         let pair_w = pair_content_width(left_w);
         let (_list_w, content_w) = pair_list_content_width(pair_w, state.dims.ssh_split);
-        let expected = content_w - theme::geometry::chrome_width_px();
+        let expected = content_w - byteui::theme::geometry::chrome_width_px();
         assert!(
             (w - expected).abs() < 0.01,
             "SSH 终端 pane 宽必须等于左栏内容侧宽减 chrome: w={w}, expected={expected}"
@@ -8634,8 +8634,8 @@ mod tests {
         let (_, h) = ssh_terminal_pane_pixel_size(1440.0, 900.0, &state);
         let m = theme::region::left_zone().margin;
         let expected = 900.0
-            - theme::geometry::top_bar_height()
-            - theme::geometry::chrome_height_px()
+            - byteui::theme::geometry::top_bar_height()
+            - byteui::theme::geometry::chrome_height_px()
             - m.top
             - m.bottom;
         assert!(
@@ -8662,7 +8662,7 @@ mod tests {
     ///
     /// 具体数字(窗口逻辑宽 720——1440pt 屏上把窗口贴半屏就是这个宽度):
     /// `zones_width(720)` = 720 - 2*44(图标栏) - 8(LeftRight 分隔线) = 624;
-    /// 上界 = max(624 - 320(theme::geometry::min_zone_width()), 320) = 320;
+    /// 上界 = max(624 - 320(byteui::theme::geometry::min_zone_width()), 320) = 320;
     /// 默认 `left_width`=640 夹取后 = 320,右面板区 = 624 - 320 = 304(>0)。
     ///
     /// 修复前的 flex 追账(iced_core flex.rs `resolve` 第一趟按顺序给
@@ -8699,26 +8699,26 @@ mod tests {
         assert_eq!(state.dims.left_width, 640.0, "夹取不得改写各项目持久化宽");
     }
 
-    /// 极窄窗口(比 `theme::geometry::min_window_width()` 还窄,例如外部强制 resize)下也不 panic,
+    /// 极窄窗口(比 `byteui::theme::geometry::min_window_width()` 还窄,例如外部强制 resize)下也不 panic,
     /// 且左区宽不会超过 `zones_width` 本身。
     #[test]
     fn clamp_left_width_survives_absurdly_narrow_window() {
         assert_eq!(
             clamp_left_width(200.0, 640.0),
-            theme::geometry::min_zone_width()
+            byteui::theme::geometry::min_zone_width()
         );
         assert_eq!(
             clamp_left_width(0.0, 640.0),
-            theme::geometry::min_zone_width()
+            byteui::theme::geometry::min_zone_width()
         );
-        // 最小窗口宽恰好能让两侧都拿到 theme::geometry::min_zone_width()。
+        // 最小窗口宽恰好能让两侧都拿到 byteui::theme::geometry::min_zone_width()。
         assert_eq!(
-            clamp_left_width(theme::geometry::min_window_width(), 640.0),
-            theme::geometry::min_zone_width()
+            clamp_left_width(byteui::theme::geometry::min_window_width(), 640.0),
+            byteui::theme::geometry::min_zone_width()
         );
         assert!(
-            (zones_width(theme::geometry::min_window_width())
-                - 2.0 * theme::geometry::min_zone_width())
+            (zones_width(byteui::theme::geometry::min_window_width())
+                - 2.0 * byteui::theme::geometry::min_zone_width())
             .abs()
                 < 0.01
         );
@@ -8797,9 +8797,9 @@ mod tests {
     ///
     /// 具体数字(1440x900,`agent_split`=默认统一 split 0.35):
     /// avail_w = 1440 - 2*44 - 2*40 = 1272,pair_w = 1272 - 8 = 1264,
-    /// 终端占 1-0.35 → 1264*0.65 = 821.6,减 `theme::geometry::chrome_width_px()`(16) = 805.6;
+    /// 终端占 1-0.35 → 1264*0.65 = 821.6,减 `byteui::theme::geometry::chrome_width_px()`(16) = 805.6;
     /// 盒子高 = 900 - 40(顶栏) - 2*40 = 780,再减 pane 自带底栏 26
-    /// (`theme::geometry::status_bar_height()`)与 `theme::geometry::chrome_height_px()`(50) = 704。
+    /// (`byteui::theme::geometry::status_bar_height()`)与 `byteui::theme::geometry::chrome_height_px()`(50) = 704。
     /// 对照平时:zones_width = 1440-2*44-8=1344,right_w = 1344 - 640 = 704,pair = 696,
     /// 696*0.65 = 452.4,减 16 = 436.4;高 = 900 - 40 - 26 - 50 - right_zone 上下 margin = 778。
     /// 换成网格(CELL_WIDTH=8.4,LINE_HEIGHT_PX=16.8 即 14*1.2):放大后 95x41,平时 51x46。
@@ -8890,9 +8890,9 @@ mod tests {
             ..PanelDims::default()
         };
         let s = sanitize_panel_dims(poisoned);
-        assert_eq!(s.left_width, theme::geometry::min_zone_width());
-        assert_eq!(s.files_split, theme::geometry::min_split_ratio());
-        assert_eq!(s.agent_split, theme::geometry::max_split_ratio());
+        assert_eq!(s.left_width, byteui::theme::geometry::min_zone_width());
+        assert_eq!(s.files_split, byteui::theme::geometry::min_split_ratio());
+        assert_eq!(s.agent_split, byteui::theme::geometry::max_split_ratio());
         assert_eq!(s.conversations_split, PanelDims::default().files_split);
         // 夹过之后 FillPortion 两侧都非 0(那一块不会凭空消失)。
         for split in [
@@ -8918,8 +8918,8 @@ mod tests {
         let state = test_state();
         let window_width = 1600.0;
         let result = apply_column_drag(state, Divider::GitLogSplit, window_width, 300.0);
-        assert!(result.git_log_split >= theme::geometry::min_split_ratio());
-        assert!(result.git_log_split <= theme::geometry::max_split_ratio());
+        assert!(result.git_log_split >= byteui::theme::geometry::min_split_ratio());
+        assert!(result.git_log_split <= byteui::theme::geometry::max_split_ratio());
     }
 
     #[test]
@@ -8928,8 +8928,8 @@ mod tests {
         let window_width = 1600.0;
         // 拖拽点在左面板区靠右侧,网页内容(拖拽点左侧)占比应偏大。
         let result = apply_column_drag(state, Divider::BrowserBookmarksSplit, window_width, 500.0);
-        assert!(result.browser_bookmarks_split >= theme::geometry::min_split_ratio());
-        assert!(result.browser_bookmarks_split <= theme::geometry::max_split_ratio());
+        assert!(result.browser_bookmarks_split >= byteui::theme::geometry::min_split_ratio());
+        assert!(result.browser_bookmarks_split <= byteui::theme::geometry::max_split_ratio());
     }
 
     #[test]
@@ -8955,7 +8955,7 @@ mod tests {
             ..PanelDims::default()
         };
         let sanitized = sanitize_panel_dims(dims);
-        assert!(sanitized.git_log_split <= theme::geometry::max_split_ratio());
+        assert!(sanitized.git_log_split <= byteui::theme::geometry::max_split_ratio());
 
         let dims = PanelDims {
             git_log_split: f32::NAN,
@@ -8970,7 +8970,7 @@ mod tests {
         let dims = PanelDims::default();
         assert_eq!(
             dims.browser_bookmarks_split,
-            theme::geometry::default_split_ratio()
+            byteui::theme::geometry::default_split_ratio()
         );
     }
 
@@ -8981,7 +8981,7 @@ mod tests {
             ..PanelDims::default()
         };
         let sanitized = sanitize_panel_dims(dims);
-        assert!(sanitized.browser_bookmarks_split <= theme::geometry::max_split_ratio());
+        assert!(sanitized.browser_bookmarks_split <= byteui::theme::geometry::max_split_ratio());
 
         let dims = PanelDims {
             browser_bookmarks_split: f32::NAN,
@@ -9001,8 +9001,8 @@ mod tests {
 
         // 光标在窗口中间——应该落在合法比例区间内。
         let mid = apply_row_drag(state, RowDivider::GitLogFileDiffSplit, window_height, 500.0);
-        assert!(mid.git_log_file_diff_split >= theme::geometry::min_split_ratio());
-        assert!(mid.git_log_file_diff_split <= theme::geometry::max_split_ratio());
+        assert!(mid.git_log_file_diff_split >= byteui::theme::geometry::min_split_ratio());
+        assert!(mid.git_log_file_diff_split <= byteui::theme::geometry::max_split_ratio());
 
         // 光标远超窗口顶部/底部——应该被 clamp,不产生非法比例。
         let top = apply_row_drag(
@@ -9013,7 +9013,7 @@ mod tests {
         );
         assert_eq!(
             top.git_log_file_diff_split,
-            theme::geometry::min_split_ratio()
+            byteui::theme::geometry::min_split_ratio()
         );
         let bottom = apply_row_drag(
             state,
@@ -9023,7 +9023,7 @@ mod tests {
         );
         assert_eq!(
             bottom.git_log_file_diff_split,
-            theme::geometry::max_split_ratio()
+            byteui::theme::geometry::max_split_ratio()
         );
     }
 
@@ -9034,12 +9034,12 @@ mod tests {
             ..PanelDims::default()
         };
         let sanitized = sanitize_panel_dims(dims);
-        assert!(sanitized.git_log_file_diff_split >= theme::geometry::min_split_ratio());
+        assert!(sanitized.git_log_file_diff_split >= byteui::theme::geometry::min_split_ratio());
     }
 
     /// `window_width`/`window_height` 的夹取单独测:老 `layout.json` 缺这两
     /// 个字段时 serde 补 0.0(不是 `f32::NAN`,判断要用 `> 0.0` 而不能只查
-    /// `is_finite`),负数/NAN 同样要落回 `theme::geometry::initial_window_size()`;合法但过小
+    /// `is_finite`),负数/NAN 同样要落回 `byteui::theme::geometry::initial_window_size()`;合法但过小
     /// 的值只夹下限,不整个重置。
     #[test]
     fn sanitize_shell_layout_clamps_window_size() {
@@ -9048,24 +9048,24 @@ mod tests {
             window_height: 0.0,
         };
         let s = sanitize_shell_layout(missing_fields);
-        assert_eq!(s.window_width, theme::geometry::initial_window_size().0);
-        assert_eq!(s.window_height, theme::geometry::initial_window_size().1);
+        assert_eq!(s.window_width, byteui::theme::geometry::initial_window_size().0);
+        assert_eq!(s.window_height, byteui::theme::geometry::initial_window_size().1);
 
         let poisoned = ShellLayout {
             window_width: -100.0,
             window_height: f32::NAN,
         };
         let s = sanitize_shell_layout(poisoned);
-        assert_eq!(s.window_width, theme::geometry::initial_window_size().0);
-        assert_eq!(s.window_height, theme::geometry::initial_window_size().1);
+        assert_eq!(s.window_width, byteui::theme::geometry::initial_window_size().0);
+        assert_eq!(s.window_height, byteui::theme::geometry::initial_window_size().1);
 
         let too_small = ShellLayout {
             window_width: 10.0,
             window_height: 10.0,
         };
         let s = sanitize_shell_layout(too_small);
-        assert_eq!(s.window_width, theme::geometry::min_window_width());
-        assert_eq!(s.window_height, theme::geometry::min_window_height());
+        assert_eq!(s.window_width, byteui::theme::geometry::min_window_width());
+        assert_eq!(s.window_height, byteui::theme::geometry::min_window_height());
 
         let legit = ShellLayout {
             window_width: 1800.0,
@@ -9193,25 +9193,25 @@ mod tests {
     fn clamp_left_width_within_bounds() {
         let state = test_state();
         let l = apply_column_drag(state, Divider::LeftRight, 1440.0, 500.0);
-        assert_eq!(l.left_width, 500.0 - theme::geometry::icon_rail_width());
+        assert_eq!(l.left_width, 500.0 - byteui::theme::geometry::icon_rail_width());
     }
 
     #[test]
     fn clamp_left_width_to_minimum() {
         let state = test_state();
         let l = apply_column_drag(state, Divider::LeftRight, 1440.0, 10.0);
-        assert_eq!(l.left_width, theme::geometry::min_zone_width());
+        assert_eq!(l.left_width, byteui::theme::geometry::min_zone_width());
     }
 
     #[test]
     fn clamp_left_width_to_maximum_keeps_right_zone_alive() {
-        // 拖到最右也要给右面板区留 theme::geometry::min_zone_width()。
+        // 拖到最右也要给右面板区留 byteui::theme::geometry::min_zone_width()。
         let state = test_state();
         let l = apply_column_drag(state, Divider::LeftRight, 1440.0, 1430.0);
         let expected = 1440.0
-            - 2.0 * theme::geometry::icon_rail_width()
-            - theme::geometry::divider_width()
-            - theme::geometry::min_zone_width();
+            - 2.0 * byteui::theme::geometry::icon_rail_width()
+            - byteui::theme::geometry::divider_width()
+            - byteui::theme::geometry::min_zone_width();
         assert_eq!(l.left_width, expected);
     }
 
@@ -9220,7 +9220,7 @@ mod tests {
         // 窗口窄到上界低于下界时,`.max(下限)` 把上界垫平,恒不 panic。
         let state = test_state();
         let l = apply_column_drag(state, Divider::LeftRight, 700.0, 650.0);
-        assert_eq!(l.left_width, theme::geometry::min_zone_width());
+        assert_eq!(l.left_width, byteui::theme::geometry::min_zone_width());
     }
 
     #[test]
@@ -9231,7 +9231,7 @@ mod tests {
             state,
             Divider::LeftPairSplit,
             1440.0,
-            theme::geometry::icon_rail_width() + 316.0,
+            byteui::theme::geometry::icon_rail_width() + 316.0,
         );
         assert!((l.files_split - 0.5).abs() < 0.001, "{}", l.files_split);
     }
@@ -9240,9 +9240,9 @@ mod tests {
     fn clamp_files_split_to_range() {
         let state = test_state();
         let l = apply_column_drag(state, Divider::LeftPairSplit, 1440.0, 10.0);
-        assert_eq!(l.files_split, theme::geometry::min_split_ratio());
+        assert_eq!(l.files_split, byteui::theme::geometry::min_split_ratio());
         let l = apply_column_drag(state, Divider::LeftPairSplit, 1440.0, 5000.0);
-        assert_eq!(l.files_split, theme::geometry::max_split_ratio());
+        assert_eq!(l.files_split, byteui::theme::geometry::max_split_ratio());
     }
 
     #[test]
