@@ -404,7 +404,7 @@ pub fn view<'a>(
     // 操作按钮布局)。刷新按钮走统一 icon 按钮规范:DIM→GOLD hover,无选中态。
     let refresh = icons::icon_button_entry(
         icons::IconKind::RefreshCw,
-        crate::theme::icon_size::row(),
+        byteui::theme::icon_size::row(),
         false,
         refresh_hover_t,
         false,
