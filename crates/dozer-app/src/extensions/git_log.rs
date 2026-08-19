@@ -644,10 +644,7 @@ fn commit_list_view<'a>(
         };
         let refs_prefix = ref_labels_text(&row.refs, head_branch);
         // 上行:图标 + 作者名(无作者名回退 short_sha)+ 时间戳 + refs 标签
-        let author_or_id = row
-            .author
-            .clone()
-            .unwrap_or_else(|| row.short_sha.clone());
+        let author_or_id = row.author.clone().unwrap_or_else(|| row.short_sha.clone());
         let mut head_line = row![
             byteui::interaction::icons::view(
                 icon_kind,
