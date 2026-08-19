@@ -679,8 +679,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     let logical_size = window.inner_size();
                     let window_w = (logical_size.width as f64 / scale) as f32;
                     let window_h = (logical_size.height as f64 / scale) as f32;
-                    let x = x.min((window_w - byteui::theme::geometry::context_menu_width()).max(0.0));
-                    let y = y.min((window_h - byteui::theme::geometry::context_menu_height()).max(0.0));
+                    let x =
+                        x.min((window_w - byteui::theme::geometry::context_menu_width()).max(0.0));
+                    let y =
+                        y.min((window_h - byteui::theme::geometry::context_menu_height()).max(0.0));
                     app.update(Message::Files(extensions::files::Message::RightClickAt {
                         x,
                         y,
@@ -1454,14 +1456,18 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     if let Some(bounds) = extensions::todo::take_add_field_bounds() {
                         let scale = window.scale_factor();
                         let local_x = ((cursor_phys.x / scale) as f32 - bounds.x).max(0.0);
-                        app.update(Message::Todo(extensions::todo::Message::AddCursorAt(local_x)));
+                        app.update(Message::Todo(extensions::todo::Message::AddCursorAt(
+                            local_x,
+                        )));
                     }
                 }
                 // 任务内容编辑框点击:仅在"重击已处于编辑态的字段"时按落点定位
                 // (首击进入编辑态光标落行尾,字段 bounds 未必已记录,避免错位)。
                 Message::Todo(extensions::todo::Message::ContentEditStart(idx)) => {
                     let was_editing = app.todo_content_editing();
-                    app.update(Message::Todo(extensions::todo::Message::ContentEditStart(idx)));
+                    app.update(Message::Todo(extensions::todo::Message::ContentEditStart(
+                        idx,
+                    )));
                     if was_editing
                         && let Some(bounds) = extensions::todo::take_content_field_bounds()
                     {

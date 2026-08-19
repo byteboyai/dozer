@@ -2418,7 +2418,9 @@ pub(crate) fn conversation_list_pane(
                 ]
                 .spacing(6)
                 .align_y(iced_widget::core::Alignment::Center),
-                lh(text(sub).size(byteui::theme::font::caption_sm()).color(sub_color)),
+                lh(text(sub)
+                    .size(byteui::theme::font::caption_sm())
+                    .color(sub_color)),
             ]
             .spacing(4),
         )
@@ -3030,8 +3032,12 @@ fn preview_pane_for<'a>(
         .iter()
         .map(|t| preview_tab_display_width(&t.title))
         .collect();
-    let (first, can_left, can_right) =
-        tab_window(&widths, 4.0, byteui::theme::geometry::tab_bar_avail_px(), tab_first);
+    let (first, can_left, can_right) = tab_window(
+        &widths,
+        4.0,
+        byteui::theme::geometry::tab_bar_avail_px(),
+        tab_first,
+    );
 
     let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = preview
         .tabs()

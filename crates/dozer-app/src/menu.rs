@@ -65,9 +65,15 @@ pub fn item_row<'a, Msg: 'a + Clone>(
     let content = match leading {
         Some(leading) => row![
             leading,
-            text(label.into()).size(byteui::theme::font::body()).color(color)
+            text(label.into())
+                .size(byteui::theme::font::body())
+                .color(color)
         ],
-        None => row![text(label.into()).size(byteui::theme::font::body()).color(color)],
+        None => row![
+            text(label.into())
+                .size(byteui::theme::font::body())
+                .color(color)
+        ],
     };
     menu_button(
         content,
@@ -89,9 +95,15 @@ pub fn item_row_fill<'a, Msg: 'a + Clone>(
     let content = match leading {
         Some(leading) => row![
             leading,
-            text(label.into()).size(byteui::theme::font::body()).color(color)
+            text(label.into())
+                .size(byteui::theme::font::body())
+                .color(color)
         ],
-        None => row![text(label.into()).size(byteui::theme::font::body()).color(color)],
+        None => row![
+            text(label.into())
+                .size(byteui::theme::font::body())
+                .color(color)
+        ],
     };
     menu_button(content, color, msg, Length::Fill)
 }

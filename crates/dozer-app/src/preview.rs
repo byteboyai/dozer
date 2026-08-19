@@ -980,7 +980,10 @@ mod tests {
     fn dozer_editor_scrollbar_matches_byteboy_style() {
         let s = dozer_editor_style().scrollbar;
         assert_eq!(s.rail_width, byteui::theme::geometry::scrollbar_width());
-        assert_eq!(s.thumb_width, byteui::theme::geometry::scrollbar_thumb_width());
+        assert_eq!(
+            s.thumb_width,
+            byteui::theme::geometry::scrollbar_thumb_width()
+        );
         assert_eq!(
             s.thumb_radius,
             byteui::theme::geometry::scrollbar_thumb_width() / 2.0

@@ -719,15 +719,13 @@ fn file_list_view<'a>(
         )
         .padding(8)
         .into(),
-        Ok(detail) if detail.files.is_empty() => {
-            container(
+        Ok(detail) if detail.files.is_empty() => container(
             text("无文件改动")
                 .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().dim),
         )
-                .padding(8)
-                .into()
-        }
+        .padding(8)
+        .into(),
         Ok(detail) => {
             let mut list = column![].spacing(2);
             for (i, f) in detail.files.iter().enumerate() {
@@ -867,12 +865,12 @@ pub fn view<'a>(
             .into()
         } else {
             container(
-            text("选择一个提交查看改动")
-                .size(byteui::theme::font::caption())
-                .color(byteui::theme::color::current().dim),
-        )
-                .padding(12)
-                .into()
+                text("选择一个提交查看改动")
+                    .size(byteui::theme::font::caption())
+                    .color(byteui::theme::color::current().dim),
+            )
+            .padding(12)
+            .into()
         };
 
     row![
@@ -910,8 +908,8 @@ fn diff_pane_view<'a>(
                 .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().dim),
         )
-            .padding(8)
-            .into();
+        .padding(8)
+        .into();
     };
     let Some(entry) = detail.files.iter().find(|f| f.path == path) else {
         return container(
@@ -919,8 +917,8 @@ fn diff_pane_view<'a>(
                 .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().dim),
         )
-            .padding(8)
-            .into();
+        .padding(8)
+        .into();
     };
     let mut content = column![
         text(entry.path.clone())
@@ -1112,12 +1110,9 @@ fn branch_picker_view<'a>(
             .height(Length::Fill),
     )
     .on_press(Message::BranchPickerClose);
-    let positioned = column![
-        iced_widget::Space::new().height(Length::Fill),
-        panel,
-    ]
-    .width(Length::Fill)
-    .height(Length::Fill);
+    let positioned = column![iced_widget::Space::new().height(Length::Fill), panel,]
+        .width(Length::Fill)
+        .height(Length::Fill);
     iced_widget::stack![dismiss, positioned]
         .width(Length::Fill)
         .height(Length::Fill)

@@ -950,7 +950,9 @@ pub fn view<'a>(
                     byteui::theme::icon_size::row(),
                     byteui::theme::color::current().dim
                 ),
-                text(name).size(byteui::theme::font::body()).color(root_color),
+                text(name)
+                    .size(byteui::theme::font::body())
+                    .color(root_color),
             ]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center),
@@ -1400,7 +1402,10 @@ pub fn branch_picker_popup(
         };
         let indicator: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
             if is_current {
-                text("● ").size(byteui::theme::font::body()).color(color).into()
+                text("● ")
+                    .size(byteui::theme::font::body())
+                    .color(color)
+                    .into()
             } else {
                 iced_widget::space::Space::new()
                     .width(Length::Fixed(18.0))

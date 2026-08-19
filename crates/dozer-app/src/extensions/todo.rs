@@ -933,11 +933,7 @@ impl Operation<()> for CaptureFieldBounds {
         }
     }
 
-    fn traverse(
-        &mut self,
-        _: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a)),
-    ) {
-    }
+    fn traverse(&mut self, _: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {}
 }
 
 /// 把字段内的局部点击 x(逻辑像素)折算成字符下标,供鼠标点击定位光标。
@@ -946,7 +942,11 @@ impl Operation<()> for CaptureFieldBounds {
 fn cursor_from_x(draft: &str, local_x: f32, font_size: f32) -> usize {
     let mut x = 0.0f32;
     for (i, ch) in draft.chars().enumerate() {
-        let w = if ch.is_ascii() { font_size * 0.6 } else { font_size };
+        let w = if ch.is_ascii() {
+            font_size * 0.6
+        } else {
+            font_size
+        };
         if local_x <= x + w / 2.0 {
             return i;
         }
@@ -1134,8 +1134,11 @@ pub fn update(
             if !ws_state.add_editing {
                 return;
             }
-            ws_state.add_cursor =
-                cursor_from_x(&ws_state.add_draft, local_x, byteui::theme::font::body() as f32);
+            ws_state.add_cursor = cursor_from_x(
+                &ws_state.add_draft,
+                local_x,
+                byteui::theme::font::body() as f32,
+            );
         }
         Message::AddSubmit => commit_add_task(ws_state, project_path),
         // 高度拖拽在 app 层 `todo_message` 已早退,不会到这里;保留 arm 仅
@@ -1710,13 +1713,13 @@ fn todo_search_bar<'a>(
         text("搜索任务…")
             .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().dim)
+    } else {
+        let shown = if editing {
+            draft_with_caret(draft, cursor)
         } else {
-            let shown = if editing {
-                draft_with_caret(draft, cursor)
-            } else {
-                draft.to_string()
-            };
-            text(shown)
+            draft.to_string()
+        };
+        text(shown)
             .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().cream)
     };
@@ -2373,7 +2376,10 @@ fn state_label(
         TodoState::InProgress => ("进行中", byteui::theme::color::current().gold),
         TodoState::Done => ("已完成", byteui::theme::color::current().dim),
     };
-    text(label).size(byteui::theme::font::caption()).color(color).into()
+    text(label)
+        .size(byteui::theme::font::caption())
+        .color(color)
+        .into()
 }
 
 /// 日历日期选择器：点卡片日期徽章弹出,展示 `calendar_view` 那个月,上一月/
@@ -2455,13 +2461,15 @@ fn todo_calendar_popup(
             } else {
                 let d = day;
                 let is_sel = selected_md == Some((m, d));
-                let cell_btn = button(text(format!("{d}")).size(byteui::theme::font::caption()).color(
-                    if is_sel {
-                        byteui::theme::color::current().gold
-                    } else {
-                        byteui::theme::color::current().cream
-                    },
-                ))
+                let cell_btn = button(
+                    text(format!("{d}"))
+                        .size(byteui::theme::font::caption())
+                        .color(if is_sel {
+                            byteui::theme::color::current().gold
+                        } else {
+                            byteui::theme::color::current().cream
+                        }),
+                )
                 .on_press(Message::CalendarPick(idx, format!("{m:02}-{d:02}")))
                 .width(Length::Fixed(28.0))
                 .height(Length::Fixed(24.0))
