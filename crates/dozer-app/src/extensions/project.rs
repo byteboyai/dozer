@@ -367,7 +367,7 @@ pub fn dir_size_excluding(root: &std::path::Path, exclude: &[&str]) -> u64 {
 }
 
 /// 面板主入口(单栏,不与任何其它面板配对——同 GitLog/Usage)。`project` 为
-/// `None` 时内核不会真正走到这里(`left_panel_area` 对 `LeftView::Project`
+/// `None` 时内核不会真正走到这里(`left_panel_area` 对 `PanelKind::Project`
 /// 无条件调用本函数,但 `App::view()` 顶层只在有聚焦项目时才会渲染到这个
 /// 分支),这里仍保留一次防御性判断,风格对齐 Files 试点。
 pub fn view<'a>(

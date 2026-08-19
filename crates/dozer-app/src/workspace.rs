@@ -487,7 +487,7 @@ pub struct Workspace {
     pub(crate) conversations: Vec<ConversationMeta>,
     /// 当前项目的 agent 用量统计（会话粒度；扫描+解析全量 transcript，比
     /// `conversations` 贵得多,所以不像它那样跟着 `DeliveryChecked` 自动
-    /// 刷新——只在切到 `RightView::Usage` 或点手动刷新按钮时才重新扫
+    /// 刷新——只在切到 Usage 面板或点手动刷新按钮时才重新扫
     /// （spec 非目标"不做实时更新"）。
     /// Usage 面板 per-project 状态——见 `extensions::usage::WorkspaceState`。
     pub(crate) usage: usage::WorkspaceState,
@@ -522,7 +522,7 @@ pub struct Workspace {
     /// SSH 面板 per-project 状态——见 `extensions::ssh::WorkspaceState`。
     pub(crate) ssh: ssh::WorkspaceState,
     /// 文件树右键"搜索"弹窗 per-project 状态——见
-    /// `extensions::search::WorkspaceState`。瞬态弹窗,不挂 LeftView。
+    /// `extensions::search::WorkspaceState`。瞬态弹窗,不挂左侧图标栏。
     pub(crate) search: search::WorkspaceState,
     /// 这份 `Workspace` 是否只是 `Stub` → `Loaded` 促成期间的"加载中"占位
     /// (见 [`Workspace::loading_for_project`])。占位有正确的 `project`/文件树,
@@ -1051,7 +1051,7 @@ impl Workspace {
     /// 异步扫当前项目的全部 transcript 并逐个解析用量 → `Usage(Loaded)`。
     /// 比 `spawn_conversations_refresh` 贵得多(要读整份文件内容，不只是
     /// 文件头)，所以不接入它那条"回合结束自动刷新"的调用链——只在
-    /// `RightIconSelect(RightView::Usage)` 或手动刷新按钮时触发。
+    /// 切到 Usage 面板(右图标栏)或手动刷新按钮时触发。
     pub(crate) fn spawn_usage_refresh(&self, io: &ShellIo) {
         let Some(p) = &self.project else {
             return;
@@ -2817,7 +2817,7 @@ pub(crate) fn lh<'a>(
     t.line_height(LineHeight::Relative(terminal_font::line_height_factor()))
 }
 
-/// `LeftView::Files` 在没有打开项目时的占位:"未打开项目"提示 + 最近项目
+/// `PanelKind::Files` 在没有打开项目时的占位:"未打开项目"提示 + 最近项目
 /// 列表(点击即打开)。这是一个项目切换器,不是文件树的一部分,`files` 模块
 /// 不认识 `ws.recent_projects`/`Message::ProjectSelect` 这些核心概念,留在
 /// 内核(现有 `project_pane` 的 `None` 分支的搬家版本,渲染结构原样保留)。

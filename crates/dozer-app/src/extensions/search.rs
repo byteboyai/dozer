@@ -1,5 +1,5 @@
 //! 文件树右键"搜索"弹窗：作用域(目录子树/单文件)内的全文内容搜索。瞬态弹窗，
-//! 不挂 `LeftView`/左侧图标栏，形制参考文件编辑弹层 `edit_modal`。不做搜索历史/
+//! 不挂左侧图标栏，形制参考文件编辑弹层 `edit_modal`。不做搜索历史/
 //! 索引/后台预扫描，见
 //! `docs/superpowers/specs/2026-08-12-tree-search-in-context-menu-design.md`。
 

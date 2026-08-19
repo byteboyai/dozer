@@ -43,6 +43,7 @@ fn save_to(path: &Path, layout: &ShellLayout) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::RailLayout;
 
     #[test]
     fn load_from_missing_file_returns_default() {
@@ -95,6 +96,7 @@ mod tests {
         let layout = ShellLayout {
             window_width: 1600.0,
             window_height: 1000.0,
+            ..ShellLayout::default()
         };
         save_to(&path, &layout).unwrap();
         assert_eq!(load_from(&path), layout);
@@ -107,6 +109,7 @@ mod tests {
         let layout = ShellLayout {
             window_width: 1800.0,
             window_height: 1100.0,
+            ..ShellLayout::default()
         };
         save_to(&path, &layout).unwrap();
         assert_eq!(load_from(&path), layout);
@@ -124,5 +127,20 @@ mod tests {
         let (init_w, init_h) = byteui::theme::geometry::initial_window_size();
         assert_eq!(l.window_width, init_w);
         assert_eq!(l.window_height, init_h);
+    }
+
+    /// 手改/损坏的 `rail_layout`(任一侧为空)→ `sanitize_shell_layout` 里
+    /// 的 `sanitize_rail_layout` 整个回落 `RailLayout::default()`。
+    #[test]
+    fn corrupted_rail_layout_falls_back_to_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layout.json");
+        std::fs::write(
+            &path,
+            r#"{"rail_layout": {"left": [], "right": ["Agent"]}}"#,
+        )
+        .unwrap();
+        let loaded = load_from(&path);
+        assert_eq!(loaded.rail_layout, RailLayout::default());
     }
 }
