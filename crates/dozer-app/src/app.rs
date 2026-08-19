@@ -1605,6 +1605,10 @@ pub enum Message {
     /// collapse 概念,恒有一个 pane 显示,不像工作区 `LeftIconSelect` 那样
     /// 需要处理"点已选中图标收起面板区"的分支。
     HomeLeftIconSelect(homespace::HomeLeftView),
+    /// 首页"项目列表" pane:点"更多..."再展开 5 个项目。纯面板内状态变更,
+    /// 无 IO;只有还有更多项目时才渲染那颗按钮(见
+    /// `homespace::home_project_list_view`)。
+    HomeMoreProjects,
     /// 首页右图标栏:切换 `HomeRightView`(目前只有 Browser)。
     HomeRightIconSelect(homespace::HomeRightView),
     /// 首页全局浏览器面板的全部消息,内核只转发不解读——见
@@ -1808,6 +1812,11 @@ pub struct App {
     /// `Message::TopBarHome` 进首页都重置为默认值——见
     /// `homespace::HomeLeftView`。
     pub(crate) home_left_view: homespace::HomeLeftView,
+    /// 首页"项目列表" pane 已经展开的项目页数(点一次"更多..." +1)。首屏
+    /// 只显示前 `PAGE_SIZE`(5)个,翻页后显示 `pages * 5` 个。不持久化,每次
+    /// `Message::TopBarHome` 进首页重置回 1——与 `home_left_view` 同套
+    /// "进首页即重置"语义;别的 pane(Recents)不读它。
+    pub(crate) home_project_pages: usize,
     /// 首页右栏当前显示哪个 pane(目前只有 Browser)。语义同上。
     pub(crate) home_right_view: homespace::HomeRightView,
     /// 首页全局浏览器面板状态,不挂在任何 `Workspace` 上;`view`/`update`
@@ -2108,6 +2117,7 @@ impl App {
             home_recent_conversations: Vec::new(),
             home_recents_loaded: false,
             home_left_view: homespace::HomeLeftView::default(),
+            home_project_pages: 1,
             home_right_view: homespace::HomeRightView::default(),
             home_browser: browser::State::with_initial_url("https://byteboy.ai"),
             git_log: git_log::State::default(),
@@ -3563,6 +3573,7 @@ impl App {
             Message::HomeLeftIconSelect(v) => {
                 self.home_left_view = v;
             }
+            Message::HomeMoreProjects => self.home_project_pages += 1,
             Message::HomeRightIconSelect(v) => {
                 self.home_right_view = v;
             }
@@ -5136,6 +5147,7 @@ impl App {
         self.current_page = AppPage::Home;
         self.home_recents_loaded = false;
         self.home_left_view = homespace::HomeLeftView::default();
+        self.home_project_pages = 1;
         self.home_right_view = homespace::HomeRightView::default();
         let projects: Vec<ProjectInfo> = self.recent_projects.iter().take(5).cloned().collect();
         let proxy = self.proxy.clone();
