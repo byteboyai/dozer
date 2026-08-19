@@ -5223,7 +5223,8 @@ impl App {
                         self.update(Message::Acceptance(acceptance::Message::Open(tab_id)));
                     }
                 }
-                PanelKind::Files | PanelKind::Web | PanelKind::Agent | PanelKind::Conversations => {}
+                PanelKind::Files | PanelKind::Web | PanelKind::Agent | PanelKind::Conversations => {
+                }
             }
         }
         // 图标栏点击一律退出放大态。放大态浮层不拦图标栏上的点击
@@ -5235,7 +5236,6 @@ impl App {
         self.maximized = None;
         self.on_shell_layout_changed();
     }
-
 
     fn top_bar_home(&mut self) {
         self.current_page = AppPage::Home;
@@ -6723,7 +6723,10 @@ pub(crate) fn rail_icon_button<'a>(
 /// 图标栏:按 `app.shell_layout.rail_layout.side(side)` 的顺序遍历渲染。
 /// 左右两条栏共用这一份实现——差异(区域样式、选中态取哪个
 /// `*_view`/`*_collapsed` 字段判断)通过 `side` 参数分派。
-fn icon_rail(app: &App, side: Side) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+fn icon_rail(
+    app: &App,
+    side: Side,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = match side {
         Side::Left => theme::region::left_icon_rail(),
         Side::Right => theme::region::right_icon_rail(),
