@@ -66,7 +66,8 @@ mod tests {
     /// 只剩窗口尺寸,老 layout.json 里可能还带着 `left_width`/`files_split`
     /// 等已迁移走的字段,serde 忽略未知字段、缺字段补默认,不应整份失败。
     #[test]
-    fn load_from_foreign_json_fills_defaults_and_sanitizes_window_size() {        let dir = tempfile::tempdir().unwrap();
+    fn load_from_foreign_json_fills_defaults_and_sanitizes_window_size() {
+        let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("layout.json");
         // 老文件带已迁移走的尺寸字段 + 越界的 window_width(0)。
         std::fs::write(
@@ -134,7 +135,11 @@ mod tests {
     fn corrupted_rail_layout_falls_back_to_default() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("layout.json");
-        std::fs::write(&path, r#"{"rail_layout": {"left": [], "right": ["Agent"]}}"#).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"rail_layout": {"left": [], "right": ["Agent"]}}"#,
+        )
+        .unwrap();
         let loaded = load_from(&path);
         assert_eq!(loaded.rail_layout, RailLayout::default());
     }

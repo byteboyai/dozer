@@ -65,40 +65,11 @@ pub(crate) const DEFAULT_COLS: u16 = 80;
 
 pub(crate) const DEFAULT_ROWS: u16 = 24;
 
-/// 左侧面板区当前显示哪个视图：文件列表(项目树+文件预览配对) /
-/// Git 提交图(单面板;spike(2026-08-06) 验证 `gleisbau` 库可行性用) / Todo
-/// (单面板;`.dozer/todo.md` 任务列表) / 浏览器(Web 单面板,左图标栏最底部
-/// 的 Globe 按钮切换;2026-08-11 曾短暂迁至右栏,同日按用户
-/// 要求移回左栏)。
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum LeftView {
-    Files,
-    GitLog,
-    Todo,
-    Project,
-    Database,
-    /// SSH 远程主机面板(Lucide server)。阶段 1:主机连接管理 + 认证 +
-    /// 连接测试(含 host key 验证)。
-    Ssh,
-    /// 浏览器(Web)单面板:左图标栏最底部的 Globe 按钮切换。
-    Web,
-}
-
-/// 右侧面板区当前显示哪个视图：Agent(Agent列表+终端配对) / 对话(对话列表+
-/// 对话审阅配对) / 用量 / 验收。浏览器已移回左栏(见 `PanelKind::Web`)。
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum RightView {
-    Agent,
-    Conversations,
-    Usage,
-    Acceptance,
-}
-
-/// `LeftView`(7)+ `RightView`(4)的合并类型——workspace 图标栏拖拽
-/// 换栏功能(见 `2026-08-19-rail-panel-drag-relocation-design.md`)的
-/// 统一面板标识。Stage 1(这次)只做类型定义,`left_view`/`right_view`
-/// 等字段还没退型完成前,`LeftView`/`RightView` 两个旧类型仍并存
-/// (Task 7 删除)。variant 名字逐一沿用旧枚举,不改名。
+/// 工作区 11 个面板的统一标识——workspace 图标栏拖拽换栏功能
+/// (见 `2026-08-19-rail-panel-drag-relocation-design.md`)的面板类型。
+/// 由原左栏(7)+ 右栏(4)两个枚举合并而来,variant 名字逐一沿用,
+/// 不改名。Stage 1(这次)只做了类型统一 + 数据模型,渲染/交互仍各自
+/// 按 `left_view`/`right_view` 字段走(Stage 2/4 才遍历 `RailLayout`)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PanelKind {
     Files,
@@ -331,6 +302,12 @@ pub enum WorkspaceSlot {
 /// 攒下来的宽度/比例全部重置。
 /// 图标栏方向:左栏或右栏。用作 `RailLayout` 的访问器参数,以及后续拖拽
 /// (Stage 4)的方向来源。
+///
+/// 这个 Stage 只定义数据模型、不接任何消费者(渲染在 Stage 2、拖拽在
+/// Stage 4),所以 clippy 会把 `Side` 当 dead code 报——先用
+/// `#[allow(dead_code)]` 压住,等 Stage 2 的图标栏渲染遍历 `RailLayout`
+/// 时这个量自然会活过来,届时删掉这个 allow。
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
     Left,
@@ -349,6 +326,9 @@ pub struct RailLayout {
 }
 
 impl RailLayout {
+    // 同 `Side`:本 Stage 无二进制调用者(访问器参数类型 Side 已经定义了,
+    // 方法留作 Stage 2/4 遍历 `RailLayout` 时用),clippy dead_code 先压住。
+    #[allow(dead_code)]
     pub fn side(&self, side: Side) -> &Vec<PanelKind> {
         match side {
             Side::Left => &self.left,
@@ -356,6 +336,7 @@ impl RailLayout {
         }
     }
 
+    #[allow(dead_code)]
     pub fn side_mut(&mut self, side: Side) -> &mut Vec<PanelKind> {
         match side {
             Side::Left => &mut self.left,
@@ -2493,7 +2474,10 @@ impl App {
     /// 颜色过渡需要平滑,卡片背景/边框切换需要干脆,避免 hover 离开后边框还
     /// 拖着淡出一段(观感像"动画停了一下")。
     pub fn hover_target(&self, id: HoverId) -> bool {
-        self.hover_anims.get(&id).map(|a| a.target > 0.5).unwrap_or(false)
+        self.hover_anims
+            .get(&id)
+            .map(|a| a.target > 0.5)
+            .unwrap_or(false)
     }
 
     /// 某页签悬停是否已持续满 `HOVER_TOOLTIP_DELAY`:满则应在视图层弹出标题
@@ -9101,7 +9085,12 @@ mod tests {
         // browser_bookmarks_split 存的是内容占比,不是收藏夹占比。
         let state = test_state();
         let window_width = 1600.0;
-        let near = apply_column_drag(state, Divider::BrowserBookmarksSplit, window_width, 100.0);
+        let near = apply_column_drag(
+            state.clone(),
+            Divider::BrowserBookmarksSplit,
+            window_width,
+            100.0,
+        );
         let far = apply_column_drag(state, Divider::BrowserBookmarksSplit, window_width, 500.0);
         assert!(
             far.browser_bookmarks_split > near.browser_bookmarks_split,
@@ -9163,13 +9152,18 @@ mod tests {
         let window_height = 1000.0;
 
         // 光标在窗口中间——应该落在合法比例区间内。
-        let mid = apply_row_drag(state, RowDivider::GitLogFileDiffSplit, window_height, 500.0);
+        let mid = apply_row_drag(
+            state.clone(),
+            RowDivider::GitLogFileDiffSplit,
+            window_height,
+            500.0,
+        );
         assert!(mid.git_log_file_diff_split >= byteui::theme::geometry::min_split_ratio());
         assert!(mid.git_log_file_diff_split <= byteui::theme::geometry::max_split_ratio());
 
         // 光标远超窗口顶部/底部——应该被 clamp,不产生非法比例。
         let top = apply_row_drag(
-            state,
+            state.clone(),
             RowDivider::GitLogFileDiffSplit,
             window_height,
             -500.0,
@@ -9253,7 +9247,7 @@ mod tests {
             window_height: 1100.0,
             ..ShellLayout::default()
         };
-        assert_eq!(sanitize_shell_layout(legit), legit);
+        assert_eq!(sanitize_shell_layout(legit.clone()), legit);
     }
 
     #[test]
@@ -9424,7 +9418,7 @@ mod tests {
     #[test]
     fn clamp_files_split_to_range() {
         let state = test_state();
-        let l = apply_column_drag(state, Divider::LeftPairSplit, 1440.0, 10.0);
+        let l = apply_column_drag(state.clone(), Divider::LeftPairSplit, 1440.0, 10.0);
         assert_eq!(l.files_split, byteui::theme::geometry::min_split_ratio());
         let l = apply_column_drag(state, Divider::LeftPairSplit, 1440.0, 5000.0);
         assert_eq!(l.files_split, byteui::theme::geometry::max_split_ratio());
@@ -9438,7 +9432,7 @@ mod tests {
             ..test_state()
         };
         assert_eq!(
-            apply_column_drag(left_gone, Divider::LeftPairSplit, 1440.0, 500.0),
+            apply_column_drag(left_gone.clone(), Divider::LeftPairSplit, 1440.0, 500.0),
             left_gone.dims
         );
         let right_gone = ShellState {
@@ -9446,7 +9440,7 @@ mod tests {
             ..test_state()
         };
         assert_eq!(
-            apply_column_drag(right_gone, Divider::RightPairSplit, 1440.0, 1000.0),
+            apply_column_drag(right_gone.clone(), Divider::RightPairSplit, 1440.0, 1000.0),
             right_gone.dims
         );
     }
@@ -9456,7 +9450,12 @@ mod tests {
         // 右面板区宽 = 1440 - 2*44 - 640 - 8 = 704,左边缘 x = 1440-44-704 = 692;
         // 配对内容宽 = 704-8=696,其中点 348 处拖动(692+348=1040)→ 0.5。
         let agent = test_state();
-        let l = apply_column_drag(agent, Divider::RightPairSplit, 1440.0, 696.0 + 344.0);
+        let l = apply_column_drag(
+            agent.clone(),
+            Divider::RightPairSplit,
+            1440.0,
+            696.0 + 344.0,
+        );
         assert!((l.agent_split - 0.5).abs() < 0.001, "{}", l.agent_split);
         assert_eq!(
             l.conversations_split, agent.dims.conversations_split,
@@ -9468,7 +9467,7 @@ mod tests {
             ..test_state()
         };
         let l = apply_column_drag(
-            conversations,
+            conversations.clone(),
             Divider::RightPairSplit,
             1440.0,
             696.0 + 344.0,
@@ -9610,6 +9609,6 @@ mod tests {
 
         // 合法数据原样保留。
         let legit = RailLayout::default();
-        assert_eq!(sanitize_rail_layout(legit), legit);
+        assert_eq!(sanitize_rail_layout(legit.clone()), legit);
     }
 }

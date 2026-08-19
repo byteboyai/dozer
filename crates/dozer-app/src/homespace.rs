@@ -19,8 +19,9 @@ use iced_widget::core::{Border, Color, Element, Length, Padding};
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use std::path::PathBuf;
 
-/// 首页左栏当前显示哪个 pane。语义、命名对齐工作区 `LeftView`,但这是独立
-/// 枚举——首页导航态不与工作区共用,也不持久化(每次 `Message::TopBarHome`
+/// 首页左栏当前显示哪个 pane。语义、命名对齐工作区面板(原 `HomeLeftView`/
+/// `HomeRightView` 各自独立,不与工作区共用),但这是首页专属枚举——首页
+/// 导航态不持续化(每次 `Message::TopBarHome`
 /// 进首页都重置为默认值,见 `workspace.rs` 对应处理器)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum HomeLeftView {

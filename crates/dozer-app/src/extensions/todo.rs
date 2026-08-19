@@ -1388,7 +1388,7 @@ pub fn update(
 
 /// Todo 面板渲染成两个独立的边框 pane(镜像 Files/Project 面板已有的
 /// "侧栏 + 内容区，中间一条可拖拽分隔线"两栏模式，不再是单个面板内部一个
-/// `row![sidebar, body]`)——调用方(`app.rs` 的 `LeftView::Todo` 分支)负责
+/// `row![sidebar, body]`)——调用方(`app.rs` 的 `PanelKind::Todo` 分支)负责
 /// 拼 `row![sidebar_pane, divider_bar(Divider::TodoSplit, ..), content_pane]`。
 /// 左栏：面板头 + 分类导航。右栏：列表/MARKDOWN 视图切换 tab + 视图
 /// 主体。
