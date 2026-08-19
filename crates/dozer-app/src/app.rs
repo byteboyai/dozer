@@ -94,6 +94,26 @@ pub enum RightView {
     Acceptance,
 }
 
+/// `LeftView`(7)+ `RightView`(4)的合并类型——workspace 图标栏拖拽
+/// 换栏功能(见 `2026-08-19-rail-panel-drag-relocation-design.md`)的
+/// 统一面板标识。Stage 1(这次)只做类型定义,`left_view`/`right_view`
+/// 等字段还没退型完成前,`LeftView`/`RightView` 两个旧类型仍并存
+/// (Task 7 删除)。variant 名字逐一沿用旧枚举,不改名。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PanelKind {
+    Files,
+    GitLog,
+    Todo,
+    Project,
+    Database,
+    Ssh,
+    Web,
+    Agent,
+    Conversations,
+    Usage,
+    Acceptance,
+}
+
 /// 四个图标栏按钮的标识,用于追踪 hover 态(图标颜色在 hover 时需变金,
 /// 而 SVG 颜色在构建时就定死、不随 `button::Status` 变化,所以得在 App
 /// 里记一个 hovered 目标,改色时按它重算)。
@@ -366,7 +386,7 @@ impl Default for RailLayout {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ShellLayout {
     /// 上次退出时的窗口逻辑尺寸(宽,高)。`main.rs` 建窗时读它决定初始
@@ -625,7 +645,7 @@ pub struct TabDrag {
 /// `Copy` 类型直接按值传递)。取代旧 `PanelLayout` 单独传递的做法——
 /// 新几何公式(webview bounds/焦点路由/IME 光标)都依赖"当前是哪个视图、
 /// 是否收起"，不能只靠宽高数字算，所以把这些也打包进来。
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ShellState {
     pub layout: ShellLayout,
     /// 当前活跃项目面板区尺寸(左宽 + 四个 split)。每项目一份,由
@@ -2822,7 +2842,7 @@ impl App {
     /// 那些按项目分,见 `panel_layouts`)写盘。图标切换/收起要立即持久化几何,
     /// 不能只靠 `ColumnDragEnd` 顺带存(用户可能从没拖过分隔线)。
     fn spawn_shell_layout_save(&mut self) {
-        let layout = self.shell_layout;
+        let layout = self.shell_layout.clone();
         self.handle.spawn(async move {
             if let Err(e) = layout::save(&layout) {
                 tracing::warn!("外壳布局写盘失败: {e}");
@@ -3018,11 +3038,11 @@ impl App {
         ssh_terminal_visible(&self.shell_state())
     }
 
-    /// 当前外壳几何状态快照(main.rs 拖拽追踪/离屏几何计算用;`Copy`
-    /// 类型直接按值返回)。
+    /// 当前外壳几何状态快照(main.rs 拖拽追踪/离屏几何计算用;`Clone`
+    /// 类型,按值返回快照)。
     pub fn shell_state(&self) -> ShellState {
         ShellState {
-            layout: self.shell_layout,
+            layout: self.shell_layout.clone(),
             dims: self.dims,
             left_view: self.left_view,
             left_collapsed: self.left_collapsed,
