@@ -31,8 +31,8 @@
 //!   收到后调用 `app.update(..)` 并请求重绘。反方向（UI → tokio）
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
 use crate::app::{
-    App, DEFAULT_COLS, DEFAULT_ROWS, HoverId, Message, ProjectId, panel_tab, tab_arrow_button,
-    tab_divider, tab_window,
+    App, DEFAULT_COLS, DEFAULT_ROWS, HoverId, Message, PROJECT_PREVIEW_ID_OFFSET, PanelKind,
+    ProjectId, panel_tab, tab_arrow_button, tab_divider, tab_window,
 };
 use crate::conversation::{self, ConversationMeta};
 use crate::delivery::{self};
@@ -1989,10 +1989,36 @@ impl Workspace {
         self.acceptance.comment_editing()
     }
 
-    /// 当前激活预览 tab 若是 webview(文件/网页)则返回其 id,供 main.rs
-    /// 焦点路由取句柄;验收 tab/无 tab 返回 None。
-    pub fn active_preview_webview_id(&self) -> Option<usize> {
-        self.preview.active_webview_id()
+    /// `kind` 是 `is_in_preview_column` 命中的面板(`Files` 或
+    /// `Project`)。此前硬编码只查 `self.preview`(Files)——`Project`
+    /// 面板的预览 webview 点击后一直拿不到键盘焦点(⌘C 复制不了),
+    /// 这是这次 Stage 4b 才第一次让它变得可测、可发现的一个独立预存
+    /// bug,不是拖拽换栏引入的新问题。`Project` 分支的 id 要加
+    /// `PROJECT_PREVIEW_ID_OFFSET`,因为 `webviews` 共享池里它的 key
+    /// 已经加了这个偏移(见 `preview_desired`)。
+    pub fn active_preview_webview_id(&self, kind: PanelKind) -> Option<usize> {
+        match kind {
+            PanelKind::Project => self
+                .project_preview
+                .active_webview_id()
+                .map(|id| id + PROJECT_PREVIEW_ID_OFFSET),
+            _ => self.preview.active_webview_id(),
+        }
+    }
+
+    /// 当前哪个预览面板有活跃 webview。`Files`/`Project` 各自带独立的
+    /// `PreviewPane`,`active_preview_webview_id` 是按 `kind` 定向查询的;
+    /// 这里在**不携带面板信息**的汇聚信号(如 `WebViewFocused`)需要反推
+    /// "刚聚焦的是哪个池"时用:两个面板都有 webview 时按顺序返回
+    /// `Files`(左栏预览通常是文件,优先级高),都没有返回 `None`。
+    pub fn active_preview_panel_kind(&self) -> Option<PanelKind> {
+        if self.preview.active_webview_id().is_some() {
+            Some(PanelKind::Files)
+        } else if self.project_preview.active_webview_id().is_some() {
+            Some(PanelKind::Project)
+        } else {
+            None
+        }
     }
 
     /// 当前激活预览 tab 是否走原生渲染(有 `editor`)。main.rs 键盘路由用:

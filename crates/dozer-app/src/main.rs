@@ -467,7 +467,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
     /// ⌘C 走原生复制)或窗口(终端)。
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum FocusIntent {
-        Preview,
+        Preview(PanelKind),
         Browser,
         Terminal,
     }
@@ -731,16 +731,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     // 覆盖整个面板区,不区分区内具体哪个 pane)。
                     app.set_active_zone(logical_x, logical_w);
                     let state = app.shell_state();
-                    // 文件预览与浏览器现在都在左面板区(前者 `Files`、后者
-                    // `Web`),落在左预览列时按当前左视图区分交给哪个 webview 池。
-                    let intent = if app::is_in_preview_column(logical_x, logical_w, &state) {
-                        if state.left_view == PanelKind::Web {
-                            FocusIntent::Browser
-                        } else {
-                            FocusIntent::Preview
-                        }
-                    } else {
-                        FocusIntent::Terminal
+                    // 文件预览与浏览器分别挂在 `Files`/`Project`/`Web` 面板上,
+                    // 可能已拖到任一栏:`is_in_preview_column` 返回命中的面板,
+                    // 据此区分交给哪个 webview 池(浏览器池 vs 预览池)。
+                    let intent = match app::is_in_preview_column(logical_x, logical_w, &state) {
+                        Some(PanelKind::Web) => FocusIntent::Browser,
+                        Some(kind) => FocusIntent::Preview(kind),
+                        None => FocusIntent::Terminal,
                     };
                     *pending_focus = Some(intent);
                     *current_focus = intent;
@@ -965,7 +962,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             // 预览不是模态弹层:用户切去终端敲字时,背景里开着的原生预览
             // tab 不该继续偷键盘(不加这层判断会把这类按键错误地拦在这里,
             // 而不是送进终端)。
-            if app.active_preview_tab_has_native_editor() && *current_focus == FocusIntent::Preview
+            if app.active_preview_tab_has_native_editor()
+                && matches!(*current_focus, FocusIntent::Preview(_))
             {
                 return;
             }
@@ -1363,8 +1361,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 message,
                 Message::PreviewOpenPath(_) | Message::PreviewSelectTab(_)
             ) {
-                *pending_focus = Some(FocusIntent::Preview);
-                *current_focus = FocusIntent::Preview;
+                *pending_focus = Some(FocusIntent::Preview(PanelKind::Files));
+                *current_focus = FocusIntent::Preview(PanelKind::Files);
+            } else if matches!(
+                message,
+                Message::ProjectPreviewOpenPath(_) | Message::ProjectPreviewSelectTab(_)
+            ) {
+                *pending_focus = Some(FocusIntent::Preview(PanelKind::Project));
+                *current_focus = FocusIntent::Preview(PanelKind::Project);
             } else if matches!(
                 message,
                 Message::Browser(extensions::browser::Message::OpenUrl(_))
@@ -1387,13 +1391,22 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 app.blur_preview_editors();
             } else if matches!(message, Message::WebViewFocused) {
                 // 子 webview 上的 mousedown winit 收不到,JS 经 IPC 发来这条
-                // 消息——按当前 `left_view` 判断归预览池还是浏览器池。
+                // 消息。它不携带面板信息(预览池/浏览器池共用同一 IPC 代理),
+                // 只能从状态反推:先看左/右栏哪个面板是 `Web`(→ 浏览器池),
+                // 否则落到预览池——`Files` 预览 webview 在左栏、`Project`
+                // 预览 webview 在右栏可各自独立存在,需要 `is_in_preview_column`
+                // 那样按侧判断,但这里没有鼠标坐标,只能用
+                // `active_preview_panel_kind()`(见其注释:双面板同时活跃时
+                // 优先 `Files`)。
                 let state = app.shell_state();
-                let intent = if state.left_view == PanelKind::Web {
-                    FocusIntent::Browser
-                } else {
-                    FocusIntent::Preview
-                };
+                let intent =
+                    if state.left_view == PanelKind::Web || state.right_view == PanelKind::Web {
+                        FocusIntent::Browser
+                    } else if let Some(kind) = app.active_preview_panel_kind() {
+                        FocusIntent::Preview(kind)
+                    } else {
+                        FocusIntent::Terminal
+                    };
                 *pending_focus = Some(intent);
                 *current_focus = intent;
                 // `WebViewFocused` 恒是某个 wry webview 收到了焦点(原生
@@ -1472,8 +1485,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 // 其它弹层互斥清理口径)。
                 Message::Search(extensions::search::Message::Pick(hit)) => {
                     app.update(Message::Search(extensions::search::Message::SearchClose));
-                    *pending_focus = Some(FocusIntent::Preview);
-                    *current_focus = FocusIntent::Preview;
+                    *pending_focus = Some(FocusIntent::Preview(PanelKind::Files));
+                    *current_focus = FocusIntent::Preview(PanelKind::Files);
                     app.update(Message::PreviewOpenPath(hit.path));
                     window.request_redraw();
                 }
@@ -1657,7 +1670,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             };
             match pending_focus.take() {
-                Some(FocusIntent::Preview) => match app.active_preview_webview_id() {
+                Some(FocusIntent::Preview(kind)) => match app.active_preview_webview_id(kind) {
                     Some(id) => {
                         if let Some((view, _)) = webviews.get(&id) {
                             let _ = view.focus(); // 返回 Result,忽略

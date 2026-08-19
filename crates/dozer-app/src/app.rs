@@ -831,11 +831,11 @@ mod preview_desired_concurrent_tests {
     #[test]
     #[allow(clippy::eq_op, clippy::assertions_on_constants, clippy::identity_op)]
     fn project_id_offset_keeps_ids_disjoint_from_files() {
-        assert!(App::PROJECT_PREVIEW_ID_OFFSET > 0);
-        let project_id = 0 + App::PROJECT_PREVIEW_ID_OFFSET;
+        assert!(PROJECT_PREVIEW_ID_OFFSET > 0);
+        let project_id = 0 + PROJECT_PREVIEW_ID_OFFSET;
         assert_ne!(project_id, 0usize);
         assert!(
-            App::PROJECT_PREVIEW_ID_OFFSET > 100_000,
+            PROJECT_PREVIEW_ID_OFFSET > 100_000,
             "off量级应远超真实 tab 数,才不会反向撞回 ws.preview 的 id"
         );
     }
@@ -1423,92 +1423,83 @@ pub fn left_files_tree_bounds_for(
 ///
 /// 放大态(Task 5):右侧被放大时左侧内容不可见,恒不落在预览列;左侧被
 /// 放大时按 `maximize_overlay` 实际渲染的更大盒子重新换算横向范围。
-pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> bool {
-    if state.left_collapsed {
-        return false;
-    }
-    if state.maximized == Some(MaximizedPane::Right) {
-        return false;
-    }
-    if state.maximized == Some(MaximizedPane::Left) {
-        let (x0, avail_w) = maximized_box_x_range(window_width);
-        return match state.left_view {
-            PanelKind::Files => {
-                let (list_w, _) =
-                    pair_list_content_width(pair_content_width(avail_w), state.dims.files_split);
-                let start = x0 + list_w + byteui::theme::geometry::divider_width();
-                let end = x0 + avail_w;
-                x >= start && x < end
-            }
-            // 浏览器(Web)是单栏,放大态占满整条放大盒子横向范围。
-            PanelKind::Web => {
-                let start = x0;
-                let end = start + avail_w;
-                x >= start && x < end
-            }
-            PanelKind::GitLog => false,
-            // Todo 面板纯 iced 绘制,无 webview,永不落在预览列。
-            PanelKind::Todo => false,
-            // Project 面板右配对(项目预览)是 Files 同款预览列,按 `project_split` 算。
-            PanelKind::Project => {
-                let (list_w, _) =
-                    pair_list_content_width(pair_content_width(avail_w), state.dims.project_split);
-                let start = x0 + list_w + byteui::theme::geometry::divider_width();
-                let end = x0 + avail_w;
-                x >= start && x < end
-            }
-            // Database 面板同 Project,纯 iced 绘制,永无 webview。
-            PanelKind::Database => false,
-            // SSH 面板同 Project,纯 iced 绘制,永无 webview。
-            PanelKind::Ssh => false,
-            // Stage 4a 跨栏拖拽:左视图可为右栏面板,右栏面板无 webview,
-            // 永不落在预览列。
-            PanelKind::Agent
-            | PanelKind::Conversations
-            | PanelKind::Usage
-            | PanelKind::Acceptance => false,
+/// 逻辑 x 是否落在某一侧的预览列内,是则返回命中的面板种类;焦点路由
+/// (`main.rs`)据此决定把键盘交给哪个 webview 池(`Web` → 浏览器池,
+/// `Files`/`Project` → 预览池)、以及 `active_preview_webview_id` 该查
+/// `ws.preview` 还是 `ws.project_preview`。
+///
+/// 2026-08-19 Stage 4a 审阅后修订:此前只查 `state.left_view`,`Project`
+/// 挪到右栏后点击其预览列不会被识别;现在左右两侧各自独立判断。
+///
+/// `Web` 分支保留原有近似(整个 zone 都算预览列,不细分收藏夹展开时的
+/// 精确切分——延续现状)。
+pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> Option<PanelKind> {
+    for side in [Side::Left, Side::Right] {
+        let collapsed = match side {
+            Side::Left => state.left_collapsed,
+            Side::Right => state.right_collapsed,
         };
+        if collapsed {
+            continue;
+        }
+        let kind = match side {
+            Side::Left => state.left_view,
+            Side::Right => state.right_view,
+        };
+        if let Some(maximized) = state.maximized {
+            let showing_side = match maximized {
+                MaximizedPane::Left => Side::Left,
+                MaximizedPane::Right => Side::Right,
+            };
+            if side != showing_side {
+                continue;
+            }
+            let (x0, avail_w) = maximized_box_x_range(window_width);
+            let mirrored = state.layout.rail_layout.side_of(kind) != kind.default_side();
+            let hit = match kind {
+                PanelKind::Files => {
+                    let cols = pair_columns(
+                        pair_content_width(avail_w),
+                        state.dims.files_split,
+                        mirrored,
+                    );
+                    x >= x0 + cols.content_x && x < x0 + cols.content_x + cols.content_w
+                }
+                PanelKind::Web => x >= x0 && x < x0 + avail_w,
+                PanelKind::Project => {
+                    let cols = pair_columns(
+                        pair_content_width(avail_w),
+                        state.dims.project_split,
+                        mirrored,
+                    );
+                    x >= x0 + cols.content_x && x < x0 + cols.content_x + cols.content_w
+                }
+                _ => false,
+            };
+            if hit {
+                return Some(kind);
+            }
+            continue;
+        }
+        let (zone_x0, zone_w) = pair_x0_and_width(side, window_width, state);
+        let mirrored = state.layout.rail_layout.side_of(kind) != kind.default_side();
+        let hit = match kind {
+            PanelKind::Files => {
+                let cols = pair_columns(zone_w, state.dims.files_split, mirrored);
+                x >= zone_x0 + cols.content_x && x < zone_x0 + cols.content_x + cols.content_w
+            }
+            PanelKind::Web => x >= zone_x0 && x < zone_x0 + zone_w,
+            PanelKind::Project => {
+                let cols = pair_columns(zone_w, state.dims.project_split, mirrored);
+                x >= zone_x0 + cols.content_x && x < zone_x0 + cols.content_x + cols.content_w
+            }
+            _ => false,
+        };
+        if hit {
+            return Some(kind);
+        }
     }
-    let left_w = left_zone_width(window_width, state);
-    match state.left_view {
-        PanelKind::Files => {
-            let (list_w, _) =
-                pair_list_content_width(pair_content_width(left_w), state.dims.files_split);
-            let start = byteui::theme::geometry::icon_rail_width()
-                + list_w
-                + byteui::theme::geometry::divider_width();
-            let end = byteui::theme::geometry::icon_rail_width() + left_w;
-            x >= start && x < end
-        }
-        // 浏览器(Web)是单栏,占满整条左面板区横向范围。
-        PanelKind::Web => {
-            let start = byteui::theme::geometry::icon_rail_width();
-            let end = start + left_w;
-            x >= start && x < end
-        }
-        PanelKind::GitLog => false,
-        // Todo 面板纯 iced 绘制,无 webview,永不落在预览列。
-        PanelKind::Todo => false,
-        // Project 面板右配对(项目预览)是 Files 同款预览列,按 `project_split` 算。
-        PanelKind::Project => {
-            let (list_w, _) =
-                pair_list_content_width(pair_content_width(left_w), state.dims.project_split);
-            let start = byteui::theme::geometry::icon_rail_width()
-                + list_w
-                + byteui::theme::geometry::divider_width();
-            let end = byteui::theme::geometry::icon_rail_width() + left_w;
-            x >= start && x < end
-        }
-        // Database 面板同 Project,纯 iced 绘制,永无 webview。
-        PanelKind::Database => false,
-        // SSH 面板同 Project,纯 iced 绘制,永无 webview。
-        PanelKind::Ssh => false,
-        // Stage 4a 跨栏拖拽:左视图可为右栏面板,右栏面板无 webview,
-        // 永不落在预览列。
-        PanelKind::Agent | PanelKind::Conversations | PanelKind::Usage | PanelKind::Acceptance => {
-            false
-        }
-    }
+    None
 }
 
 /// 逻辑 x 落在哪一侧面板区(整区,不分区内具体是哪个 pane)。左键点击
@@ -2370,6 +2361,16 @@ fn ensure_project_readme(repo: &std::path::Path, name: &str) -> Option<std::path
     }
 }
 
+/// `ws.preview`(Files)与 `ws.project_preview`(Project)是两个独立
+/// `PreviewPane`,各自 `next_id` 从 0 起数——两者的 webview 一旦同时
+/// 进同一个 `webviews` 池(`Files` 在左栏、`Project` 在右栏同时活跃时
+/// 就会发生),原始 id 会撞(两边都可能是 0/1/2...)。给 `Project` 那
+/// 一侧的 id 统一加这个偏移,`ws.preview` 侧不动——量级远超真实 tab
+/// 数(几十个封顶),不会反向撞回 `ws.preview` 的 id 区间。main.rs 里
+/// 任何按 id 反查 `ws.project_preview` webview(`active_preview_webview_id`
+/// 的 Project 分支)都要用同一个偏移量加/减,两处不同步会导致查错池。
+pub(crate) const PROJECT_PREVIEW_ID_OFFSET: usize = 1_000_000;
+
 impl App {
     /// `todo::AppState`(派发记录等)只读访问——`agent_card` 挂在
     /// `workspace.rs`,读不到 `App` 私有字段,需要这个跨模块 accessor 才能
@@ -3075,9 +3076,19 @@ impl App {
             .is_some_and(|ws| ws.active_app_cursor_mode())
     }
 
-    /// 当前激活预览 tab 的 webview id(main.rs 焦点路由用)。
-    pub fn active_preview_webview_id(&self) -> Option<usize> {
-        self.active_workspace()?.active_preview_webview_id()
+    /// `kind` 是 `is_in_preview_column` 命中的面板(`Files` 或 `Project`),
+    /// 据此查 `ws.preview`(Files)还是 `ws.project_preview`(Project)——后者
+    /// 的 id 已加 `PROJECT_PREVIEW_ID_OFFSET`(见 workspace.rs 同名方法)。
+    /// main.rs 焦点路由取句柄用。
+    pub fn active_preview_webview_id(&self, kind: PanelKind) -> Option<usize> {
+        self.active_workspace()?.active_preview_webview_id(kind)
+    }
+
+    /// 当前哪个预览面板有活跃 webview(`Files`/`Project`/`None`),
+    /// 语义见 workspace.rs 同名方法。`WebViewFocused` 这种不携带面板
+    /// 信息的信号需要反推池身份时用。
+    pub fn active_preview_panel_kind(&self) -> Option<PanelKind> {
+        self.active_workspace()?.active_preview_panel_kind()
     }
 
     /// 当前激活浏览器 tab 的 webview id,语义同 `active_preview_webview_id`。
@@ -3657,21 +3668,6 @@ impl App {
         (x, y, line_h)
     }
 
-    /// 当前应存在的 webview 清单(main.rs 差集同步)。不在文件视图时整体
-    /// 清空:`preview_pane` 此刻根本不在屏上,若不清空,其原生 wry 子视图会
-    /// 无视 iced 绘制顺序,径直叠在浏览器视图之上(与 `browser_desired` 互斥
-    /// 同理)。webview 池是窗口级的,所以只认当前聚焦项目的清单——后台项目
-    /// 的预览 tab 不该把自己的原生子视图画到别人的界面上。
-    /// `ws.preview`(Files)与 `ws.project_preview`(Project)是两个独立
-    /// `PreviewPane`,各自 `next_id` 从 0 起数——两者的 webview 一旦同时
-    /// 进同一个 `webviews` 池(`Files` 在左栏、`Project` 在右栏同时活跃时
-    /// 就会发生),原始 id 会撞(两边都可能是 0/1/2...)。给 `Project` 那
-    /// 一侧的 id 统一加这个偏移,`ws.preview` 侧不动——量级远超真实 tab
-    /// 数(几十个封顶),不会反向撞回 `ws.preview` 的 id 区间。main.rs 里
-    /// 任何按 id 反查 `ws.project_preview` webview(`active_preview_webview_id`
-    /// 的 Project 分支)都要用同一个偏移量加/减,两处不同步会导致查错池。
-    const PROJECT_PREVIEW_ID_OFFSET: usize = 1_000_000;
-
     /// 当前应存在的"文件/项目预览"webview 清单(main.rs 差集同步用),
     /// 每条自带按其所在侧算好的矩形。左右两侧各自独立判断——`Files` 在
     /// 左栏、`Project` 在右栏可以同时非空(见 spec"webview 面板的镜像
@@ -3700,7 +3696,7 @@ impl App {
                 PanelKind::Files => (ws.preview.desired_webviews(), 0),
                 PanelKind::Project => (
                     ws.project_preview.desired_webviews(),
-                    Self::PROJECT_PREVIEW_ID_OFFSET,
+                    PROJECT_PREVIEW_ID_OFFSET,
                 ),
                 _ => continue,
             };
@@ -9165,19 +9161,22 @@ mod tests {
             maximized: Some(MaximizedPane::Right),
             ..test_state()
         };
-        assert!(!is_in_preview_column(500.0, 1440.0, &right_max));
+        assert!(is_in_preview_column(500.0, 1440.0, &right_max).is_none());
 
         let left_max = ShellState {
             maximized: Some(MaximizedPane::Left),
             ..test_state()
         };
         assert!(
-            !is_in_preview_column(500.0, 1440.0, &left_max),
+            is_in_preview_column(500.0, 1440.0, &left_max).is_none(),
             "500 在平时的预览列内,但放大盒子的列起点在 534.4 之后"
         );
-        assert!(is_in_preview_column(600.0, 1440.0, &left_max));
-        assert!(is_in_preview_column(1300.0, 1440.0, &left_max));
-        assert!(!is_in_preview_column(1400.0, 1440.0, &left_max));
+        assert_eq!(
+            is_in_preview_column(600.0, 1440.0, &left_max),
+            Some(PanelKind::Files)
+        );
+        assert!(is_in_preview_column(1300.0, 1440.0, &left_max).is_some());
+        assert!(is_in_preview_column(1400.0, 1440.0, &left_max).is_none());
     }
 
     /// Stage 4a 跨栏拖拽:右栏面板被拖到左栏后成了 `left_view`。它们纯 iced
@@ -9228,7 +9227,7 @@ mod tests {
                 ..test_state()
             };
             assert!(
-                !is_in_preview_column(500.0, 1440.0, &state),
+                is_in_preview_column(500.0, 1440.0, &state).is_none(),
                 "左视图是右栏面板 {kind:?} 时永不落在预览列"
             );
         }
@@ -9793,14 +9792,28 @@ mod tests {
         // 窗口宽 1440:左图标栏 44 + 左面板区 640(项目树 0.35=224 + 分隔线 8)。
         // 预览内容列 = [273.2, 684)。
         let state = test_state();
-        assert!(!is_in_preview_column(100.0, 1440.0, &state), "落在项目树列");
         assert!(
+            is_in_preview_column(100.0, 1440.0, &state).is_none(),
+            "落在项目树列"
+        );
+        assert_eq!(
             is_in_preview_column(273.2, 1440.0, &state),
+            Some(PanelKind::Files),
             "预览列左边界(过配对分隔线)"
         );
-        assert!(is_in_preview_column(500.0, 1440.0, &state), "预览列内");
-        assert!(!is_in_preview_column(700.0, 1440.0, &state), "已进右面板区");
-        assert!(!is_in_preview_column(1200.0, 1440.0, &state), "右面板区内");
+        assert_eq!(
+            is_in_preview_column(500.0, 1440.0, &state),
+            Some(PanelKind::Files),
+            "预览列内"
+        );
+        assert!(
+            is_in_preview_column(700.0, 1440.0, &state).is_none(),
+            "已进右面板区"
+        );
+        assert!(
+            is_in_preview_column(1200.0, 1440.0, &state).is_none(),
+            "右面板区内"
+        );
     }
 
     #[test]
@@ -9809,7 +9822,59 @@ mod tests {
             left_collapsed: true,
             ..test_state()
         };
-        assert!(!is_in_preview_column(300.0, 1440.0, &state));
+        assert!(is_in_preview_column(300.0, 1440.0, &state).is_none());
+    }
+
+    /// Stage 4b:Project 面板拖到右栏(镜像态)后,`is_in_preview_column`
+    /// 必须在右栏命中 `PanelKind::Project`——修正老实现只看 `left_view`、
+    /// 右栏 Project 预览 webview 点击永远进不了预览池(拿不到键盘焦点)的
+    /// 跨栏 bug。镜像态 content 渲染在配对最左(`content_x == 0`),命中区是
+    /// `[x0, x0 + content_w)`。
+    #[test]
+    fn is_in_preview_column_returns_project_when_project_on_right() {
+        let state = ShellState {
+            layout: ShellLayout {
+                rail_layout: RailLayout {
+                    // Project 从默认左栏挪到右栏(11 个面板不重不漏),
+                    // 保持 `side_of` 不变式——Project 只出现在右栏。
+                    left: vec![
+                        PanelKind::Todo,
+                        PanelKind::Files,
+                        PanelKind::GitLog,
+                        PanelKind::Database,
+                        PanelKind::Ssh,
+                        PanelKind::Web,
+                    ],
+                    right: vec![
+                        PanelKind::Project,
+                        PanelKind::Agent,
+                        PanelKind::Conversations,
+                        PanelKind::Usage,
+                        PanelKind::Acceptance,
+                    ],
+                },
+                ..ShellLayout::default()
+            },
+            right_view: PanelKind::Project,
+            ..test_state()
+        };
+        let (x0, w) = pair_x0_and_width(Side::Right, 1440.0, &state);
+        let cols = pair_columns(pair_content_width(w), state.dims.project_split, true);
+        let inside = x0 + 10.0;
+        assert!(
+            inside < x0 + cols.content_w,
+            "测试点必须落在右栏镜像 Project 的预览列内(inside={inside},x0={x0},content_w={})",
+            cols.content_w
+        );
+        assert_eq!(
+            is_in_preview_column(inside, 1440.0, &state),
+            Some(PanelKind::Project)
+        );
+        let list_side = x0 + cols.content_w + 10.0;
+        assert!(
+            is_in_preview_column(list_side, 1440.0, &state).is_none(),
+            "列表侧(内容右侧)不算预览列"
+        );
     }
 
     #[test]
