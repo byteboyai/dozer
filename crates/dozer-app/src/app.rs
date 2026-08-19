@@ -290,12 +290,6 @@ pub enum WorkspaceSlot {
 /// 攒下来的宽度/比例全部重置。
 /// 图标栏方向:左栏或右栏。用作 `RailLayout` 的访问器参数,以及后续拖拽
 /// (Stage 4)的方向来源。
-///
-/// 这个 Stage 只定义数据模型、不接任何消费者(渲染在 Stage 2、拖拽在
-/// Stage 4),所以 clippy 会把 `Side` 当 dead code 报——先用
-/// `#[allow(dead_code)]` 压住,等 Stage 2 的图标栏渲染遍历 `RailLayout`
-/// 时这个量自然会活过来,届时删掉这个 allow。
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
     Left,
@@ -314,9 +308,7 @@ pub struct RailLayout {
 }
 
 impl RailLayout {
-    // 同 `Side`:本 Stage 无二进制调用者(访问器参数类型 Side 已经定义了,
-    // 方法留作 Stage 2/4 遍历 `RailLayout` 时用),clippy dead_code 先压住。
-    #[allow(dead_code)]
+    /// 返回某一侧图标栏当前挂载的面板列表(渲染顺序)。
     pub fn side(&self, side: Side) -> &Vec<PanelKind> {
         match side {
             Side::Left => &self.left,
