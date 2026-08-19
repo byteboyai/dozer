@@ -107,7 +107,7 @@ fn read_and_build_native_editor(
     editor.set_theme(dozer_editor_style());
     editor.set_syntax_theme(dozer_syntax_theme());
     editor.set_font(crate::fonts::code_font());
-    editor.set_font_size(theme::font::body() as f32, false);
+    editor.set_font_size(byteui::theme::font::body() as f32, false);
     // 打开即夺焦点(同 `preview_edit_open` 的编辑弹层),键盘事件无需先点击
     // 一次即可直达编辑器——否则新开的原生预览 tab 得先点一下才能用方向键
     // 滚动/移动光标。
@@ -367,9 +367,9 @@ pub(crate) fn dozer_editor_style() -> iced_code_editor::theme::Style {
             // 与中央 `scrollbar.rs` 同一套几何/配色:轨道透明无描边、thumb 用
             // `TAB_ACTIVE_BORDER`(#dcc9a3)胶囊,半径 = thumb宽/2。hover 时
             // 朝奶油 `#FFE5B4` 提亮一档,便于在编辑器内看清可拖拽。
-            rail_width: theme::geometry::scrollbar_width(),
-            thumb_width: theme::geometry::scrollbar_thumb_width(),
-            thumb_radius: theme::geometry::scrollbar_thumb_width() / 2.0,
+            rail_width: byteui::theme::geometry::scrollbar_width(),
+            thumb_width: byteui::theme::geometry::scrollbar_thumb_width(),
+            thumb_radius: byteui::theme::geometry::scrollbar_thumb_width() / 2.0,
             thumb_color: byteui::theme::color::current().tab_active_border,
             thumb_hover_color: byteui::theme::color::mix(
                 byteui::theme::color::current().tab_active_border,
@@ -401,14 +401,14 @@ pub(crate) fn dozer_editor_style() -> iced_code_editor::theme::Style {
             gap: 2.0,
             // 固定宽:比文件树菜单项(160)略宽,给"操作名 + 快捷键"两列都留足
             // 空间,不裁剪 ⇧⌘Z 这类长快捷键。取 `context_menu_width`(180)。
-            menu_width: theme::geometry::context_menu_width(),
+            menu_width: byteui::theme::geometry::context_menu_width(),
             item_radius: 4.0,
             item_hover_background: byteui::theme::color::current().tab_hover,
             item_text_color: byteui::theme::color::current().cream,
             item_disabled_text_color: byteui::theme::color::current().dim,
-            item_padding_h: theme::geometry::menu_pad_h(),
-            item_padding_v: theme::geometry::menu_pad_v(),
-            item_gap: theme::geometry::menu_gap(),
+            item_padding_h: byteui::theme::geometry::menu_pad_h(),
+            item_padding_v: byteui::theme::geometry::menu_pad_v(),
+            item_gap: byteui::theme::geometry::menu_gap(),
             separator_color: byteui::theme::color::current().border,
         },
     }
@@ -880,7 +880,7 @@ mod tests {
         assert_eq!(m.shadow, iced_widget::core::Shadow::default());
         assert_eq!(m.padding, 6.0);
         assert_eq!(m.gap, 2.0);
-        assert_eq!(m.menu_width, theme::geometry::context_menu_width());
+        assert_eq!(m.menu_width, byteui::theme::geometry::context_menu_width());
         assert_eq!(m.item_radius, 4.0);
         assert_eq!(
             m.item_hover_background,
@@ -891,9 +891,9 @@ mod tests {
             m.item_disabled_text_color,
             byteui::theme::color::current().dim
         );
-        assert_eq!(m.item_padding_h, theme::geometry::menu_pad_h());
-        assert_eq!(m.item_padding_v, theme::geometry::menu_pad_v());
-        assert_eq!(m.item_gap, theme::geometry::menu_gap());
+        assert_eq!(m.item_padding_h, byteui::theme::geometry::menu_pad_h());
+        assert_eq!(m.item_padding_v, byteui::theme::geometry::menu_pad_v());
+        assert_eq!(m.item_gap, byteui::theme::geometry::menu_gap());
         assert_eq!(m.separator_color, byteui::theme::color::current().border);
     }
 
@@ -979,11 +979,11 @@ mod tests {
     #[test]
     fn dozer_editor_scrollbar_matches_byteboy_style() {
         let s = dozer_editor_style().scrollbar;
-        assert_eq!(s.rail_width, theme::geometry::scrollbar_width());
-        assert_eq!(s.thumb_width, theme::geometry::scrollbar_thumb_width());
+        assert_eq!(s.rail_width, byteui::theme::geometry::scrollbar_width());
+        assert_eq!(s.thumb_width, byteui::theme::geometry::scrollbar_thumb_width());
         assert_eq!(
             s.thumb_radius,
-            theme::geometry::scrollbar_thumb_width() / 2.0
+            byteui::theme::geometry::scrollbar_thumb_width() / 2.0
         );
         assert_eq!(
             s.thumb_color,
