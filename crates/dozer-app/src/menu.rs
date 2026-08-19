@@ -101,7 +101,7 @@ fn icon_leading<'a, Msg: 'a>(
     icon: Option<icons::IconKind>,
     color: Color,
 ) -> Option<Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer>> {
-    icon.map(|icon| icons::view(icon, crate::theme::icon_size::row(), color))
+    icon.map(|icon| icons::view(icon, byteui::theme::icon_size::row(), color))
 }
 
 /// 菜单项之间的细分隔线:1px `BORDER` 高度,宽同菜单常宽(与 macOS 系统菜单
