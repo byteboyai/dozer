@@ -1466,10 +1466,10 @@ fn schema_tree_view<'a>(
     outer: Border,
     schema_back_hover_t: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let box_len = crate::theme::icon_size::row() + 12.0;
+    let box_len = byteui::theme::icon_size::row() + 12.0;
     let back_button = icons::icon_button_entry(
         icons::IconKind::ChevronLeft,
-        crate::theme::icon_size::row(),
+        byteui::theme::icon_size::row(),
         false,
         schema_back_hover_t,
         false,
@@ -1587,19 +1587,19 @@ fn schema_tree_row<'a>(
                     indent,
                     icons::view(
                         chevron,
-                        crate::theme::icon_size::chevron(),
+                        byteui::theme::icon_size::chevron(),
                         byteui::theme::color::current().dim
                     ),
                     icons::view(
                         folder,
-                        crate::theme::icon_size::row(),
+                        byteui::theme::icon_size::row(),
                         byteui::theme::color::current().dim
                     ),
                     text(name.to_string())
                         .size(crate::workspace::tree_row_font_size())
                         .color(byteui::theme::color::current().cream),
                 ]
-                .spacing(crate::theme::icon_size::tree_row_gap())
+                .spacing(byteui::theme::icon_size::tree_row_gap())
                 .align_y(iced_widget::core::Alignment::Center),
             )
             .on_press(Message::ToggleSchema(name.to_string()))
@@ -1626,19 +1626,19 @@ fn schema_tree_row<'a>(
                     indent,
                     icons::view(
                         chevron,
-                        crate::theme::icon_size::chevron(),
+                        byteui::theme::icon_size::chevron(),
                         byteui::theme::color::current().dim
                     ),
                     icons::view(
                         icon,
-                        crate::theme::icon_size::row(),
+                        byteui::theme::icon_size::row(),
                         byteui::theme::color::current().dim
                     ),
                     text(t.name.clone())
                         .size(crate::workspace::tree_row_font_size())
                         .color(byteui::theme::color::current().cream),
                 ]
-                .spacing(crate::theme::icon_size::tree_row_gap())
+                .spacing(byteui::theme::icon_size::tree_row_gap())
                 .align_y(iced_widget::core::Alignment::Center),
             )
             .on_press(Message::ToggleTable {
@@ -1664,10 +1664,10 @@ fn schema_tree_row<'a>(
                 indent,
                 iced_widget::space::Space::new()
                     .width(Length::Fixed(
-                        crate::theme::icon_size::chevron()
-                            + crate::theme::icon_size::tree_row_gap()
-                            + crate::theme::icon_size::row()
-                            + crate::theme::icon_size::tree_row_gap(),
+                        byteui::theme::icon_size::chevron()
+                            + byteui::theme::icon_size::tree_row_gap()
+                            + byteui::theme::icon_size::row()
+                            + byteui::theme::icon_size::tree_row_gap(),
                     ))
                     .height(Length::Shrink),
                 text(c.name.clone())
@@ -1685,10 +1685,10 @@ fn schema_tree_row<'a>(
             indent,
             iced_widget::space::Space::new()
                 .width(Length::Fixed(
-                    crate::theme::icon_size::chevron()
-                        + crate::theme::icon_size::tree_row_gap()
-                        + crate::theme::icon_size::row()
-                        + crate::theme::icon_size::tree_row_gap(),
+                    byteui::theme::icon_size::chevron()
+                        + byteui::theme::icon_size::tree_row_gap()
+                        + byteui::theme::icon_size::row()
+                        + byteui::theme::icon_size::tree_row_gap(),
                 ))
                 .height(Length::Shrink),
             text("加载列中…")
@@ -1702,10 +1702,10 @@ fn schema_tree_row<'a>(
             indent,
             iced_widget::space::Space::new()
                 .width(Length::Fixed(
-                    crate::theme::icon_size::chevron()
-                        + crate::theme::icon_size::tree_row_gap()
-                        + crate::theme::icon_size::row()
-                        + crate::theme::icon_size::tree_row_gap(),
+                    byteui::theme::icon_size::chevron()
+                        + byteui::theme::icon_size::tree_row_gap()
+                        + byteui::theme::icon_size::row()
+                        + byteui::theme::icon_size::tree_row_gap(),
                 ))
                 .height(Length::Shrink),
             text(format!("列加载失败:{e}"))

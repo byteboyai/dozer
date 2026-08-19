@@ -491,7 +491,7 @@ pub fn view<'a>(
         row![
             icons::view(
                 icons::IconKind::CircleSmall,
-                crate::theme::icon_size::row(),
+                byteui::theme::icon_size::row(),
                 byteui::theme::color::current().cream
             ),
             text(usage_label)
@@ -505,13 +505,13 @@ pub fn view<'a>(
     // 「项目文档」下的文件树项都包在 iced button 里,button 默认左内边距 10px;
     // 为与之左对齐,标签行统一左缩 10px,值文本缩进到与文件树文件名同列。
     let tree_indent = 10.0;
-    let value_indent = tree_indent + crate::theme::icon_size::row() + 6.0;
+    let value_indent = tree_indent + byteui::theme::icon_size::row() + 6.0;
     content = content.push(
         container(
             row![
                 icons::view(
                     icons::IconKind::FolderDot,
-                    crate::theme::icon_size::row(),
+                    byteui::theme::icon_size::row(),
                     byteui::theme::color::current().dim
                 ),
                 text("项目根目录")
@@ -537,7 +537,7 @@ pub fn view<'a>(
             row![
                 icons::view(
                     icons::IconKind::FolderRoot,
-                    crate::theme::icon_size::row(),
+                    byteui::theme::icon_size::row(),
                     byteui::theme::color::current().dim
                 ),
                 text("Git 远程仓库")
@@ -704,7 +704,7 @@ fn links_section<'a>(
         row![
             icons::view(
                 icons::IconKind::CircleSmall,
-                crate::theme::icon_size::row(),
+                byteui::theme::icon_size::row(),
                 byteui::theme::color::current().cream
             ),
             text(title)
@@ -752,7 +752,7 @@ fn links_section<'a>(
             row![
                 icons::view(
                     row_icon,
-                    crate::theme::icon_size::row(),
+                    byteui::theme::icon_size::row(),
                     byteui::theme::color::current().dim
                 ),
                 text(name)
@@ -800,7 +800,7 @@ fn links_section<'a>(
                             } else {
                                 icons::icon_for_file(&row_entry.name)
                             },
-                            crate::theme::icon_size::row(),
+                            byteui::theme::icon_size::row(),
                             byteui::theme::color::current().dim
                         ),
                         text(row_entry.name.clone())

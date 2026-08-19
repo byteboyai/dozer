@@ -747,11 +747,11 @@ fn host_card<'a>(
     let icon_btn = |kind: icons::IconKind, on_select: Message, tooltip: &'a str, idx: u8| {
         byteui::interaction::icons::icon_button_entry(
             kind,
-            crate::theme::icon_size::row(),
+            byteui::theme::icon_size::row(),
             /* active */ false,
             /* hover_t */ if is_hover(idx) { 1.0 } else { 0.0 },
             /* card */ true,
-            crate::theme::icon_size::row() + 10.0,
+            byteui::theme::icon_size::row() + 10.0,
             /* interactive */ true,
             on_select,
             /* on_hover */

@@ -17,8 +17,7 @@
 //! 等交互态样式(如 `rail_icon_button`)不在这里,留在 Rust 代码里。
 //!
 //! `resolve_region` 会把每个区域的 `padding`/`gap` 乘过全局 scale，因此
-//! 改 `icon_size::scale()` 时区域内部间距也等比放大，与图标/字号同步。
-use super::icon_size;
+//! 改 `byteui::theme::icon_size::scale()` 时区域内部间距也等比放大，与图标/字号同步。
 use iced_widget::core::{Border, Color, Padding};
 use serde::Deserialize;
 use std::sync::LazyLock;
@@ -210,11 +209,11 @@ fn resolve_region(r: RawRegion) -> RegionStyle {
     }
 }
 
-/// 把区域样式按当前全局 scale 折算：padding 四边与 gap 都乘 `icon_size::scale()`。
+/// 把区域样式按当前全局 scale 折算：padding 四边与 gap 都乘 `byteui::theme::icon_size::scale()`。
 /// 在**每个 accessor** 调用时执行（不经 `REGIONS` 缓存），这样运行时改
 /// `scale`（Ctrl +/-）时区域内部间距能跟着重排，而不是冻结在启动时刻。
 fn scaled_region(r: RegionStyle) -> RegionStyle {
-    let s = icon_size::scale();
+    let s = byteui::theme::icon_size::scale();
     let mut padding = r.padding;
     padding.top *= s;
     padding.right *= s;
@@ -234,9 +233,9 @@ fn scaled_region(r: RegionStyle) -> RegionStyle {
 }
 
 /// 放大态浮层样式按当前全局 scale 折算：scrim 内边距与金色描边盒的
-/// 线宽/圆角都乘 `icon_size::scale()`（同 `scaled_region`，逐 accessor 应用）。
+/// 线宽/圆角都乘 `byteui::theme::icon_size::scale()`（同 `scaled_region`，逐 accessor 应用）。
 fn scaled_overlay(r: MaximizeOverlayStyle) -> MaximizeOverlayStyle {
-    let s = icon_size::scale();
+    let s = byteui::theme::icon_size::scale();
     MaximizeOverlayStyle {
         scrim_background: r.scrim_background,
         scrim_padding: r.scrim_padding * s,

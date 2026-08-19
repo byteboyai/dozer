@@ -2511,7 +2511,7 @@ pub(crate) fn agent_list_pane<'a>(
                 row![
                     icons::view(
                         agent_icon(agent),
-                        crate::theme::icon_size::row(),
+                        byteui::theme::icon_size::row(),
                         agent_dot_color(agent),
                     ),
                     lh(text(format!("{}（{}）", agent.label(), idxs.len()))
@@ -2664,7 +2664,7 @@ pub(crate) fn agent_picker_toggle_button<'a>(
     let add = MouseArea::new(
         button(icons::view(
             icons::IconKind::SquarePlus,
-            crate::theme::icon_size::row(),
+            byteui::theme::icon_size::row(),
             color,
         ))
         .on_press(Message::AgentPickerToggle)
@@ -2719,7 +2719,7 @@ pub(crate) fn agent_picker_popup(
         list.push(crate::menu::item_row(
             Some(icons::view(
                 icon,
-                crate::theme::icon_size::row(),
+                byteui::theme::icon_size::row(),
                 icon_color,
             )),
             label,
@@ -2807,7 +2807,7 @@ pub(crate) fn split_portions(split: f32) -> (u16, u16) {
 /// scale），配合下面的 `LineHeight::Relative(line_height_factor)` 让每行行高
 /// 等于终端行距，目录/文件列表不再比终端稀疏。
 pub(crate) fn tree_row_font_size() -> f32 {
-    terminal_font::size() * crate::theme::icon_size::scale()
+    terminal_font::size() * byteui::theme::icon_size::scale()
 }
 
 /// 统一行高：把一段文字的行高设为终端行高

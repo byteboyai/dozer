@@ -23,7 +23,6 @@
 use crate::app::Message;
 use crate::term_model::{Cell, TerminalModel};
 use crate::theme;
-use crate::theme::icon_size;
 use crate::theme::terminal_font;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::font::Weight;
@@ -37,7 +36,7 @@ use iced_widget::core::{
 /// 终端字符与图标/控件一起放大，而不是卡在设计基准 14px。grid 换算与
 /// 实际绘制都走这里，二者始终一致。
 fn font_size() -> f32 {
-    terminal_font::size() * icon_size::scale()
+    terminal_font::size() * byteui::theme::icon_size::scale()
 }
 /// 等宽字体单元格宽度 ≈ 0.6em（`font_size()` 驱动，含 scale）。
 fn cell_width() -> f32 {

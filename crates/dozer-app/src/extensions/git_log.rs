@@ -641,7 +641,7 @@ fn commit_list_view<'a>(
         let mut head_line = row![
             byteui::interaction::icons::view(
                 icon_kind,
-                crate::theme::icon_size::row(),
+                byteui::theme::icon_size::row(),
                 byteui::theme::color::current().dim
             ),
             text(row.short_sha.clone())
@@ -663,7 +663,7 @@ fn commit_list_view<'a>(
         }
         // 下行:summary 主体——左缩进到与 commit id(short_sha)对齐:跳过
         // 上行图标宽度 + 图标与 sha 之间的 `spacing(8)`。
-        let comment_indent = crate::theme::icon_size::row() + 8.0;
+        let comment_indent = byteui::theme::icon_size::row() + 8.0;
         let summary_line = container(
             text(row.summary.clone())
                 .size(theme::font::caption())
@@ -971,7 +971,7 @@ fn git_panel_footer_bar<'a>(
         } else {
             byteui::interaction::icons::IconKind::ChevronDown
         },
-        crate::theme::icon_size::row(),
+        byteui::theme::icon_size::row(),
         byteui::theme::color::current().cream,
     ))
     .on_press_maybe(
@@ -1014,7 +1014,7 @@ fn git_panel_footer_bar<'a>(
     let bar = row![
         byteui::interaction::icons::view(
             byteui::interaction::icons::IconKind::GitBranch,
-            crate::theme::icon_size::row(),
+            byteui::theme::icon_size::row(),
             byteui::theme::color::current().cream,
         ),
         branch_label,

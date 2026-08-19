@@ -482,7 +482,7 @@ fn tree_column<'a>(
             text(indent),
             byteui::interaction::icons::view(
                 icon,
-                crate::theme::icon_size::row(),
+                byteui::theme::icon_size::row(),
                 byteui::theme::color::current().dim
             ),
             name_el,

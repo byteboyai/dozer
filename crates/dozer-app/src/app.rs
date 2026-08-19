@@ -4137,21 +4137,21 @@ impl App {
                 footbar::update(&mut self.footbar, msg);
             }
             Message::ZoomIn => {
-                crate::theme::icon_size::zoom_by(UI_ZOOM_STEP);
-                crate::theme::icon_size::persist_scale();
+                byteui::theme::icon_size::zoom_by(UI_ZOOM_STEP);
+                byteui::theme::icon_size::persist_scale(&crate::theme::ui_scale_path());
                 self.sync_terminal_grid();
                 self.resync_editor_font_metrics();
                 self.pending_preview_zoom = true;
             }
             Message::ZoomOut => {
-                crate::theme::icon_size::zoom_by(1.0 / UI_ZOOM_STEP);
-                crate::theme::icon_size::persist_scale();
+                byteui::theme::icon_size::zoom_by(1.0 / UI_ZOOM_STEP);
+                byteui::theme::icon_size::persist_scale(&crate::theme::ui_scale_path());
                 self.sync_terminal_grid();
                 self.resync_editor_font_metrics();
                 self.pending_preview_zoom = true;
             }
             Message::ZoomReset => {
-                crate::theme::icon_size::reset_scale();
+                byteui::theme::icon_size::reset_scale(&crate::theme::ui_scale_path());
                 self.sync_terminal_grid();
                 self.resync_editor_font_metrics();
                 self.pending_preview_zoom = true;
@@ -5852,7 +5852,7 @@ fn dozer_home_tab<'a>(
     title_hover_t: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 与 `project_tab_item` 用同一份高度公式,保证两者视觉同高、顶边对齐。
-    let sq = crate::theme::icon_size::rail() + 14.0;
+    let sq = byteui::theme::icon_size::rail() + 14.0;
     let tab_h = (theme::geometry::top_bar_height() + sq) / 2.0;
 
     // 标题(图标 + "Dozer" 文字)颜色:选中态恒为金 `#F2D94E`(甲方动作专属色,
@@ -5877,7 +5877,7 @@ fn dozer_home_tab<'a>(
         row![
             icons::view(
                 icons::IconKind::Home,
-                crate::theme::icon_size::home(),
+                byteui::theme::icon_size::home(),
                 title_color
             ),
             text("Dozer")
@@ -6010,7 +6010,7 @@ fn top_bar(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_renderer:
         MouseArea::new(
             container(icons::view(
                 icons::IconKind::Settings,
-                crate::theme::icon_size::rail(),
+                byteui::theme::icon_size::rail(),
                 settings_color,
             ))
             .padding(Padding {
@@ -6200,7 +6200,7 @@ fn project_tabs_row(
         let add = MouseArea::new(
             button(icons::view(
                 icons::IconKind::SquarePlus,
-                crate::theme::icon_size::row(),
+                byteui::theme::icon_size::row(),
                 add_color,
             ))
             .on_press(Message::ProjectTabPickFolder)
@@ -6259,7 +6259,7 @@ fn project_tab_item<'a>(
     // 页签背景就不能也用 `sq` 这个高度贴底(那样顶边会比 Dozer 的更低),
     // 必须把高度补到 `(top_bar_height+sq)/2`,贴底后顶部留白才恰好等于
     // Dozer 按钮那份 `(top_bar_height-sq)/2`。
-    let sq = crate::theme::icon_size::rail() + 14.0;
+    let sq = byteui::theme::icon_size::rail() + 14.0;
     let tab_h = (theme::geometry::top_bar_height() + sq) / 2.0;
     // 关闭按钮用与顶栏其它图标按钮(tab 箭头 / 最大化)同尺寸的方形命中区。
     let close_sz = crate::theme::geometry::tab_button_size();
@@ -6547,7 +6547,7 @@ pub(crate) fn rail_icon_button<'a>(
             hover_t,
         )
     };
-    let inner = container(icons::view(icon, crate::theme::icon_size::rail(), color))
+    let inner = container(icons::view(icon, byteui::theme::icon_size::rail(), color))
         .width(Length::Fill)
         .height(Length::Fill)
         .align_x(iced_widget::core::alignment::Horizontal::Center)
@@ -6597,7 +6597,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
         // 置顶(用户 2026-08-11 指定)。
         icons::icon_button_entry(
             icons::IconKind::Briefcase,
-            crate::theme::icon_size::rail(),
+            byteui::theme::icon_size::rail(),
             app.left_view == LeftView::Project && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftProject)),
             true,
@@ -6611,7 +6611,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
         // 指定)。
         icons::icon_button_entry(
             icons::IconKind::ListTodo,
-            crate::theme::icon_size::rail(),
+            byteui::theme::icon_size::rail(),
             app.left_view == LeftView::Todo && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftTodo)),
             true,
@@ -6624,7 +6624,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
         // 文件列表入口：项目树 + 文件预览配对。
         icons::icon_button_entry(
             icons::IconKind::FolderTree,
-            crate::theme::icon_size::rail(),
+            byteui::theme::icon_size::rail(),
             app.left_view == LeftView::Files && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftFiles)),
             true,
@@ -6637,7 +6637,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
         // spike(2026-08-06):Git 提交图入口,验证 gleisbau 库可行性用。
         icons::icon_button_entry(
             icons::IconKind::GitGraph,
-            crate::theme::icon_size::rail(),
+            byteui::theme::icon_size::rail(),
             app.left_view == LeftView::GitLog && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftGit)),
             true,
@@ -6650,7 +6650,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
         // 数据库面板入口:数据源管理 + 连接测试。
         icons::icon_button_entry(
             icons::IconKind::Database,
-            crate::theme::icon_size::rail(),
+            byteui::theme::icon_size::rail(),
             app.left_view == LeftView::Database && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftDatabase)),
             true,
@@ -6663,7 +6663,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
         // SSH 主机面板入口。
         icons::icon_button_entry(
             icons::IconKind::Server,
-            crate::theme::icon_size::rail(),
+            byteui::theme::icon_size::rail(),
             app.left_view == LeftView::Ssh && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftSsh)),
             true,
@@ -6676,7 +6676,7 @@ fn left_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_re
         // 浏览器面板入口:左图标栏最底部 Globe 按钮(2026-08-11 从右栏移回)。
         icons::icon_button_entry(
             icons::IconKind::Globe,
-            crate::theme::icon_size::rail(),
+            byteui::theme::icon_size::rail(),
             app.left_view == LeftView::Web && left_open,
             app.hover_progress(HoverId::Rail(RailButton::LeftWeb)),
             true,
@@ -6709,7 +6709,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
     let content = column![
         icons::icon_button_entry(
             icons::IconKind::Brain,
-            crate::theme::icon_size::rail(),
+            byteui::theme::icon_size::rail(),
             app.right_view == RightView::Agent && right_open,
             app.hover_progress(HoverId::Rail(RailButton::RightAgent)),
             true,
@@ -6721,7 +6721,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
         ),
         icons::icon_button_entry(
             icons::IconKind::BotMessageSquare,
-            crate::theme::icon_size::rail(),
+            byteui::theme::icon_size::rail(),
             app.right_view == RightView::Conversations && right_open,
             app.hover_progress(HoverId::Rail(RailButton::RightConversations)),
             true,
@@ -6733,7 +6733,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
         ),
         icons::icon_button_entry(
             icons::IconKind::BarChart3,
-            crate::theme::icon_size::rail(),
+            byteui::theme::icon_size::rail(),
             app.right_view == RightView::Usage && right_open,
             app.hover_progress(HoverId::Rail(RailButton::RightUsage)),
             true,
@@ -6752,7 +6752,7 @@ fn right_icon_rail(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
             let base: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
                 icons::icon_button_entry(
                     icons::IconKind::BadgeCheck,
-                    crate::theme::icon_size::rail(),
+                    byteui::theme::icon_size::rail(),
                     app.right_view == RightView::Acceptance && right_open,
                     app.hover_progress(HoverId::Rail(RailButton::RightAcceptance)),
                     true,
@@ -7498,7 +7498,7 @@ pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
     };
     let mut btn = button(icons::view(
         icon,
-        crate::theme::icon_size::tab_arrow(),
+        byteui::theme::icon_size::tab_arrow(),
         color,
     ))
     .width(Length::Fixed(
@@ -7939,7 +7939,7 @@ fn ssh_tab_bar<'a>(
         let close_hover_t = app.hover_progress(HoverId::SshTabClose(key));
         let icon = icons::view(
             icons::IconKind::Terminal,
-            crate::theme::icon_size::row(),
+            byteui::theme::icon_size::row(),
             byteui::theme::color::current().dim,
         );
         let select_id = host_id.clone();
@@ -7982,7 +7982,7 @@ fn ssh_tab_bar<'a>(
         let close_hover_t = app.hover_progress(HoverId::SshTabClose(key));
         let icon = icons::view(
             icons::IconKind::FolderSync,
-            crate::theme::icon_size::row(),
+            byteui::theme::icon_size::row(),
             byteui::theme::color::current().dim,
         );
         let select_id = host_id.clone();

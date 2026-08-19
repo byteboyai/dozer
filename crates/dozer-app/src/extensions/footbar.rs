@@ -5,7 +5,6 @@
 //! 设计见 `docs/superpowers/specs/2026-08-09-footbar-system-info-design.md`。
 
 use crate::theme;
-use crate::theme::icon_size;
 use crate::workspace::ShellIo;
 use byteui::interaction::icons;
 use iced_widget::core::{Alignment, Element, Length};
@@ -132,7 +131,7 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_r
                 ),
                 Lead::Icon => parts.push(icons::view(
                     icons::IconKind::SquareRadical,
-                    icon_size::row(),
+                    byteui::theme::icon_size::row(),
                     byteui::theme::color::current().bg,
                 )),
             }
@@ -147,7 +146,7 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_r
     // (Lucide square-activity)同色同对齐。
     let cpu_icon = icons::view(
         icons::IconKind::SquareActivity,
-        icon_size::row(),
+        byteui::theme::icon_size::row(),
         byteui::theme::color::current().bg,
     );
 
@@ -163,7 +162,7 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_r
     // `#4D8CFF` 作明确区分——在奶油底上清晰可读且与左侧系统信息拉开层级。
     let app_icon = icons::view(
         icons::IconKind::SquareTerminal,
-        icon_size::row(),
+        byteui::theme::icon_size::row(),
         byteui::theme::color::current().bg,
     );
     let app_name = text("Dozer AI Coder")
