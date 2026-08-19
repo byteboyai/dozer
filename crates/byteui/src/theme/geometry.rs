@@ -18,7 +18,7 @@ pub struct GeometryTokens {
     pub initial_window_height: f32,
     pub min_window_height: f32,
     pub top_bar_height: f32,
-    /// 顶栏项目页签的"默认/合适宽"(设计基准 200,已含全局 scale)。少数页签时
+    /// 顶栏项目页签的"默认/合适宽"(已含全局 scale)。少数页签时
     /// 每片统一用这个宽(固定,左对齐不撑爆);页签多到塞不下这个宽时,
     /// `project_tabs_row` 按可用宽均分把它收窄到低于此值。它既是默认宽也是上限宽。
     pub project_tab_max_width: f32,
@@ -74,7 +74,7 @@ impl GeometryTokens {
             initial_window_height: 900.0,
             min_window_height: 480.0,
             top_bar_height: 40.0,
-            project_tab_max_width: 140.0,
+            project_tab_max_width: 160.0,
             project_tab_add_button_width: 36.0,
             status_bar_height: 26.0,
             footbar_height: 22.0,
@@ -309,7 +309,7 @@ mod tests {
         assert_eq!(t.browser_chrome_top_px, 72.0);
         assert_eq!(t.maximize_overlay_padding, 40.0);
         assert_eq!(t.project_tab_gap, 4.0);
-        assert_eq!(t.project_tab_max_width, 140.0);
+        assert_eq!(t.project_tab_max_width, 160.0);
         assert_eq!(t.tab_bar_avail_px, 360.0);
         assert_eq!(t.rail_button_size, 32.0);
         assert_eq!(t.tab_button_size, 24.0);
