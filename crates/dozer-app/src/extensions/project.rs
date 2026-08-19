@@ -399,7 +399,7 @@ pub fn view<'a>(
         if let Some(buf) = &ws_state.name_editing {
             container(
                 text(format!("{buf}▏"))
-                    .size(theme::font::title())
+                    .size(byteui::theme::font::title())
                     .color(byteui::theme::color::current().cream),
             )
             .padding([8, 12])
@@ -417,7 +417,7 @@ pub fn view<'a>(
         } else {
             button(
                 text(p.name.clone())
-                    .size(theme::font::title())
+                    .size(byteui::theme::font::title())
                     .color(byteui::theme::color::current().cream),
             )
             .on_press(Message::NameEditStart)
@@ -458,7 +458,7 @@ pub fn view<'a>(
             } else {
                 byteui::theme::color::current().dim
             };
-            button(text(label).size(theme::font::body()).color(color))
+            button(text(label).size(byteui::theme::font::body()).color(color))
                 .on_press(Message::DescriptionEditStart)
                 .padding([10, 12])
                 .width(Length::Fill)
@@ -478,7 +478,7 @@ pub fn view<'a>(
     if let Some(n) = ws_state.project_acceptance_count.filter(|n| *n > 0) {
         content = content.push(
             text(format!("{n} 次验收"))
-                .size(theme::font::caption())
+                .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().gold),
         );
     }
@@ -495,7 +495,7 @@ pub fn view<'a>(
                 byteui::theme::color::current().cream
             ),
             text(usage_label)
-                .size(theme::font::label())
+                .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().cream),
         ]
         .spacing(6)
@@ -515,7 +515,7 @@ pub fn view<'a>(
                     byteui::theme::color::current().dim
                 ),
                 text("项目根目录")
-                    .size(theme::font::label())
+                    .size(byteui::theme::font::label())
                     .color(byteui::theme::color::current().dim),
             ]
             .spacing(6)
@@ -527,7 +527,7 @@ pub fn view<'a>(
         row![
             iced_widget::Space::new().width(Length::Fixed(value_indent)),
             text(shorten_path(&p.path))
-                .size(theme::font::caption())
+                .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().body),
         ]
         .align_y(iced_widget::core::Alignment::Center),
@@ -541,7 +541,7 @@ pub fn view<'a>(
                     byteui::theme::color::current().dim
                 ),
                 text("Git 远程仓库")
-                    .size(theme::font::label())
+                    .size(byteui::theme::font::label())
                     .color(byteui::theme::color::current().dim),
             ]
             .spacing(6)
@@ -554,7 +554,7 @@ pub fn view<'a>(
             row![
                 iced_widget::Space::new().width(Length::Fixed(value_indent)),
                 text("未设置")
-                    .size(theme::font::caption())
+                    .size(byteui::theme::font::caption())
                     .color(byteui::theme::color::current().dim),
             ]
             .align_y(iced_widget::core::Alignment::Center),
@@ -565,7 +565,7 @@ pub fn view<'a>(
                 row![
                     iced_widget::Space::new().width(Length::Fixed(value_indent)),
                     text(url.clone())
-                        .size(theme::font::caption())
+                        .size(byteui::theme::font::caption())
                         .color(byteui::theme::color::current().body),
                 ]
                 .align_y(iced_widget::core::Alignment::Center),
@@ -591,7 +591,7 @@ pub fn view<'a>(
     if let Some(err) = &ws_state.error {
         content = content.push(
             text(format!("⚠ {err}"))
-                .size(theme::font::label())
+                .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().red),
         );
     }
@@ -618,7 +618,7 @@ pub fn view<'a>(
 fn project_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let repair = button(
         text("修复项目")
-            .size(theme::font::label())
+            .size(byteui::theme::font::label())
             .color(byteui::theme::color::current().cream),
     )
     .on_press(Message::RepairProject)
@@ -637,7 +637,7 @@ fn project_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_re
 
     let delete = button(
         text("删除项目")
-            .size(theme::font::label())
+            .size(byteui::theme::font::label())
             .color(byteui::theme::color::current().red),
     )
     .on_press(Message::DeleteProject)
@@ -708,12 +708,12 @@ fn links_section<'a>(
                 byteui::theme::color::current().cream
             ),
             text(title)
-                .size(theme::font::label())
+                .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().cream),
             iced_widget::space::horizontal(),
             button(
                 text("+")
-                    .size(theme::font::label())
+                    .size(byteui::theme::font::label())
                     .color(byteui::theme::color::current().dim)
             )
             .on_press(Message::Pick(target))
@@ -756,7 +756,7 @@ fn links_section<'a>(
                     byteui::theme::color::current().dim
                 ),
                 text(name)
-                    .size(theme::font::body())
+                    .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().body),
             ]
             .spacing(6)
@@ -804,7 +804,7 @@ fn links_section<'a>(
                             byteui::theme::color::current().dim
                         ),
                         text(row_entry.name.clone())
-                            .size(theme::font::caption())
+                            .size(byteui::theme::font::caption())
                             .color(byteui::theme::color::current().dim),
                     ]
                     .spacing(6)
