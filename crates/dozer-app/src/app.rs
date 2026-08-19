@@ -39,7 +39,7 @@ use crate::workspace::{
     edit_discard_confirm_popup, edit_modal, effective_project_repo, exited_marker,
     fetch_project_restore, no_project_placeholder, preview_pane, project_preview_pane,
     review_content_pane, review_should_refresh_on_turn, spawn_disk_usage_refresh,
-    spawn_project_git_refresh, split_portions, tab_display_width, tab_title, terminal_status_bar,
+    spawn_project_git_refresh, split_portions, tab_display_width, tab_title,
 };
 use byteui::interaction::icons;
 use byteui::interaction::tabs;
@@ -194,6 +194,10 @@ pub enum HoverId {
     /// Todo 面板底部"新增任务"输入框内的提交按钮(`CircleArrowUp`):静止
     /// DIM,hover 平滑过渡到 GOLD(见 `extensions::todo::todo_footer_bar`)。
     TodoAddSubmit,
+    /// Todo 面板顶部"搜索任务"输入框内的提交按钮(`Search`):静止 DIM,
+    /// hover 平滑过渡到 GOLD,同 `TodoAddSubmit` 的处理方式(见
+    /// `extensions::todo::todo_search_bar`)。
+    TodoSearchSubmit,
     /// Git Log 面板 commit 列表某行(按下标区分):hover 时填充 `CARD` 背景 +
     /// 金色描边(见 `extensions::git_log::commit_list_view`,统一卡片样式)。
     Commit(usize),
@@ -247,6 +251,44 @@ impl HoverAnim {
     }
 }
 
+/// 图标栏按钮的动画槽位状态机:`current` 是本帧渲染用的浮点槽位号(在
+/// `rail_layout` 里的下标,逼近 `target` 中),`side` 记录上一次逼近所在的
+/// 栏——同栏内 `target` 变化(重排让位)时正常指数逼近,平滑滑动;`side`
+/// 本身变化(跨栏移动)时说明这是两条完全不同的物理列,`current`/`target`
+/// 数值上的"接近"没有几何意义,`retarget` 直接 snap 到新 `target`,不生成
+/// 滑动动画。逼近手法与 `HoverAnim` 同源,只是目标值域从"0..=1 悬停进度"
+/// 换成"任意非负槽位号"。
+#[derive(Debug, Clone, Copy)]
+struct RailSlotAnim {
+    current: f32,
+    side: Side,
+}
+
+impl RailSlotAnim {
+    /// 把这个按钮的目标槽位设成 `(side, target)`,必要时朝它逼近一拍。
+    /// `side` 与上次不同(跨栏移动)时直接 snap,不留一帧"跨列插值"的
+    /// 视觉噪音。
+    fn retarget(&mut self, side: Side, target: f32) {
+        if self.side != side {
+            self.side = side;
+            self.current = target;
+            return;
+        }
+        let next = self.current + (target - self.current) * 0.5;
+        self.current = if (next - target).abs() < 0.02 {
+            target
+        } else {
+            next
+        };
+    }
+    /// 动画是否仍在进行中(某按钮的槽位还没收敛到目标)。调用方需要先把
+    /// `target` 通过 `retarget` 写入才能得到有意义的结果——这个方法只读
+    /// 当前状态,不推进。
+    fn active(&self, target: f32) -> bool {
+        (self.current - target).abs() > 0.005
+    }
+}
+
 /// 页签标题 tooltip 的悬停触发延迟:进入页签并持续悬停满 2s 才弹出标题全称,
 /// 避免短暂停留就弹气泡打扰。计时起点记在 `App::hover_tooltip_starts`,由
 /// `Message::Hover` 进入/离开驱动;main.rs 的自驱 redraw 负责在满 2s 那一刻
@@ -285,14 +327,17 @@ pub enum ZoneSide {
 pub enum WorkspaceSlot {
     Stub {
         info: ProjectInfo,
-        /// 该项目在**启动恢复那一刻**的后台活动状态(见 [`stub_activity`])。
-        /// `None` = 那时没有存活会话,不画指示点。
+        /// 该项目在**启动恢复那一刻**的后台活动指示点颜色(见
+        /// [`stub_activity`],内核与 `Loaded` 页签共用的 [`project_dot`])。
+        /// `None` = 那时没有存活会话,不画指示点。存成算好的颜色而不是裸
+        /// `AgentState`,是因为"死会话"(纯 shell/git shell/Unknown agent)
+        /// 那个灰点不是任何一个 `AgentState` 变体能表达的。
         ///
         /// 这份快照之后不会再更新——`Stub` 没有任何会话事件流,真正的实时
         /// 指示点要等它被促成成 `Loaded`。写成"restart 时已知"而不是空白,
         /// 是因为重启后**所有**后台页签都是 `Stub`,指示点全空等于整个功能
         /// 在最常见的场景下不工作(最终审查 Required Fix #5)。
-        activity: Option<AgentState>,
+        activity: Option<Color>,
     },
     Loaded(Box<Workspace>),
 }
@@ -1822,6 +1867,10 @@ pub enum Message {
     /// agent 选择菜单:选中一项(`Agent(None)` = 纯 Shell,`Agent(Some(a))`
     /// = 新建会话后自动键入该 agent 的 CLI 名字,`Git` = 项目根开 git shell)。
     AgentPickerSelect(PickerLaunch),
+    /// 顶栏"＋新增项目"按钮:开/关最近项目选择菜单。
+    ProjectAddMenuToggle,
+    /// 最近项目选择菜单:点击菜单外/Esc,关闭不做任何事。
+    ProjectAddMenuClose,
     /// 新建会话完成 attach（tab_id、`SessionInfo`、初始快照）。
     /// 启动时的恢复走同步的 `bootstrap`，不需要过一次消息循环。
     TabAttached(ProjectId, usize, SessionInfo, Vec<u8>),
@@ -2178,10 +2227,23 @@ pub struct App {
     /// 计时另存于 `browser::State::tooltip_starts`,本表只覆盖顶栏页签与
     /// 终端/预览/SSH 面板页签。
     hover_tooltip_starts: std::collections::HashMap<HoverId, std::time::Instant>,
+    /// 图标栏拖拽换位/换栏时,每个面板按钮的动画槽位状态机——同栏重排让
+    /// 让位的相邻按钮平滑滑动到新槽位,而不是瞬间跳变。key 为
+    /// `PanelKind`,与 `hover_anims` 同款自驱 redraw 节奏(`advance_hover_anims`
+    /// 顺带推进,见 `RailSlotAnim`)。跨栏移动的目标侧与来源侧是两条完全
+    /// 不同的物理列,不追求跨列平滑滑动,该面板在新一侧直接按新槽位
+    /// snap(`RailSlotAnim::retarget` 检测到侧变化即重置,不生成动画)。
+    rail_slot_anims: std::collections::HashMap<PanelKind, RailSlotAnim>,
     /// 双击顶栏空白处待处理标记,见 `Message::TopBarDoubleClick`/
     /// `take_pending_zoom_toggle`。`App` 不持有 `winit::window::Window`
     /// 句柄,真正切换最大化态由 main.rs 轮询这个标记后调用。
     pending_zoom_toggle: bool,
+    /// 顶栏"＋新增项目"按钮的最近项目选择菜单是否打开(见
+    /// `Message::ProjectAddMenuToggle`/`project_add_menu_popup`)。挂在
+    /// `App` 而不是某个 `Workspace` 上——这个按钮本身就在顶栏、不属于任何
+    /// 单个项目,与 `ws.agent_picker_open`(Agent 面板"＋",项目内状态)是
+    /// 两个不同归属层级的同类开关。
+    project_add_menu_open: bool,
     /// 全局 UI 缩放(⌘/Ctrl +/-)改变后,预览/浏览器 webview 的
     /// `WebView::zoom` 也要同步——但 `App` 不持有 webview 句柄,只能
     /// 置这个标记,由 main.rs 轮询 `take_pending_preview_zoom` 后逐个
@@ -2537,7 +2599,9 @@ impl App {
             active_zone: Some(ZoneSide::Right),
             hover_anims: std::collections::HashMap::new(),
             hover_tooltip_starts: std::collections::HashMap::new(),
+            rail_slot_anims: std::collections::HashMap::new(),
             pending_zoom_toggle: false,
+            project_add_menu_open: false,
             pending_preview_zoom: false,
             window_size: byteui::theme::geometry::initial_window_size(),
             last_cursor: (0.0, 0.0),
@@ -2805,6 +2869,7 @@ impl App {
                 ws.browser.advance_hover_anims();
             }
         }
+        self.advance_rail_slot_anims();
     }
 
     /// 是否还有按钮的悬停动画在进行中（任一进度未到目标）。
@@ -2816,6 +2881,56 @@ impl App {
                 .projects
                 .values()
                 .any(|s| matches!(s, WorkspaceSlot::Loaded(ws) if ws.browser.any_hover_active()))
+            || self.any_rail_slot_anim_active()
+    }
+
+    /// 推进图标栏按钮的槽位动画一拍——两侧各自按 `rail_layout` 当前顺序
+    /// 现算每个面板的目标槽位号,`RailSlotAnim::retarget` 朝它逼近。折进
+    /// `advance_hover_anims` 同一个调用点,复用同一套 60fps 自驱 redraw
+    /// 节奏,不需要 main.rs 另开一条唤醒源。
+    fn advance_rail_slot_anims(&mut self) {
+        for side in [Side::Left, Side::Right] {
+            for (idx, &kind) in self.shell_layout.rail_layout.side(side).iter().enumerate() {
+                let target = idx as f32;
+                self.rail_slot_anims
+                    .entry(kind)
+                    .or_insert(RailSlotAnim {
+                        current: target,
+                        side,
+                    })
+                    .retarget(side, target);
+            }
+        }
+    }
+
+    /// 是否还有图标栏按钮的槽位动画在进行中。
+    fn any_rail_slot_anim_active(&self) -> bool {
+        [Side::Left, Side::Right].into_iter().any(|side| {
+            self.shell_layout
+                .rail_layout
+                .side(side)
+                .iter()
+                .enumerate()
+                .any(|(idx, &kind)| {
+                    self.rail_slot_anims
+                        .get(&kind)
+                        .is_some_and(|a| a.side == side && a.active(idx as f32))
+                })
+        })
+    }
+
+    /// `kind` 在 `side` 栏当前应渲染的动画槽位号(浮点,逼近中的
+    /// `rail_layout` 下标)。渲染层据此算按钮的 y 偏移,取代直接用
+    /// `rail_layout` 下标瞬间跳变。没有动画记录(刚出现在这一侧,还没被
+    /// `advance_rail_slot_anims` 追上)或记录的 `side` 跟当前不符(刚跨栏
+    /// 落地那一帧)时,直接返回目标槽位号本身,不插值。
+    fn rail_slot_position(&self, side: Side, kind: PanelKind, target_idx: usize) -> f32 {
+        let target = target_idx as f32;
+        self.rail_slot_anims
+            .get(&kind)
+            .filter(|a| a.side == side)
+            .map(|a| a.current)
+            .unwrap_or(target)
     }
 
     /// 某按钮当前悬停动画进度(0..=1)，给视图层做颜色插值。
@@ -3584,6 +3699,11 @@ impl App {
             .unwrap_or(false)
     }
 
+    /// 顶栏新增项目菜单是否打开(main.rs Esc 键路由用)。
+    pub fn project_add_menu_open(&self) -> bool {
+        self.project_add_menu_open
+    }
+
     /// Todo 派发选择层是否打开(给 main.rs 的 Esc 关闭用)。
     pub fn todo_dispatch_open(&self) -> bool {
         self.active_workspace()
@@ -3987,6 +4107,12 @@ impl App {
                     ws.spawn_new_tab(io, agent, None);
                 });
             }
+            Message::ProjectAddMenuToggle => {
+                self.project_add_menu_open = !self.project_add_menu_open;
+            }
+            Message::ProjectAddMenuClose => {
+                self.project_add_menu_open = false;
+            }
             Message::Todo(todo::Message::DispatchToExisting(idx, session_id)) => {
                 self.todo_dispatch_to_existing(idx, session_id)
             }
@@ -4334,7 +4460,11 @@ impl App {
             }
             Message::Browser(msg) => self.browser_message(msg),
             Message::ProjectSelect(id) => self.project_select(id),
-            Message::ProjectTabPickFolder => {} // 副作用在 main.rs(rfd 文件夹选择)
+            Message::ProjectTabPickFolder => {
+                // 副作用在 main.rs(rfd 文件夹选择);从新增项目菜单触发时顺带
+                // 关掉菜单,同 `project_select` 的处理口径。
+                self.project_add_menu_open = false;
+            }
             // rfd 弹窗在 main.rs 里同步处理,选中后转成 project::Message::LinkAdd
             // 再回送到这里;这条顶层消息本身不需要 App::update 处理任何东西。
             Message::ProjectLinkPick(_) => {}
@@ -4774,6 +4904,9 @@ impl App {
     }
 
     fn project_select(&mut self, id: i64) {
+        // 从新增项目菜单点选时顺带关掉菜单(菜单本来就该在选中后消失);
+        // 从其它入口(首页最近项目卡片)调用时这里恒为 false,no-op。
+        self.project_add_menu_open = false;
         // 切项目不再通知 daemon:"活跃项目"是 GUI 侧的概念了(P2a
         // Task 1-3 删掉了 SetActiveProject)。
         //
@@ -6383,6 +6516,17 @@ impl App {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
+        } else if self.project_add_menu_open {
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::ProjectAddMenuClose);
+            stack![base, dismiss, project_add_menu_popup(self)]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
         } else if ws.todo.calendar_popup_open() {
             // 日历浮层:窗口级 overlay。点弹层外任意处经 dismiss 收起(与右键
             // 菜单/分支切换同款约定),弹层本体定位到点击按钮时的光标锚点。
@@ -6711,7 +6855,7 @@ fn project_tab_entries(app: &App) -> Vec<ProjectTabEntry> {
             WorkspaceSlot::Stub { info, activity } => ProjectTabEntry {
                 id,
                 name: info.name.clone(),
-                dot: activity.map(agent_state_dot),
+                dot: *activity,
             },
             WorkspaceSlot::Loaded(ws) => ProjectTabEntry {
                 id,
@@ -6838,7 +6982,7 @@ fn project_tabs_row(
                 byteui::theme::icon_size::row(),
                 add_color,
             ))
-            .on_press(Message::ProjectTabPickFolder)
+            .on_press(Message::ProjectAddMenuToggle)
             .padding([6, 8])
             .style(move |_t: &iced_widget::Theme, _s| button::Style {
                 background: None,
@@ -6873,6 +7017,66 @@ fn project_tabs_row(
         .into()
     })
     .into()
+}
+
+/// 顶栏"＋新增项目"按钮的最近项目选择菜单:与 homespace 项目列表同源
+/// (`app.recent_projects`,按 `updated_ms` 降序——同
+/// `homespace::paginate_recent_projects` 的排序口径,这里不分页,一次
+/// 列全),已经开着页签的项目从列表里去掉(点了也只是切过去,不如干脆
+/// 不列,少一次无意义点击)。列表下面跟一条分隔线 + "新建项目"项
+/// (`Message::ProjectTabPickFolder`,同顶栏按钮原有功能——rfd 文件夹
+/// 选择),菜单项列表为空时不画多余的孤立分隔线。样式走 `crate::menu`
+/// 标准右键菜单原语(同文件树右键菜单基准),开关手法同
+/// `workspace::agent_picker_popup`:bool 开关 + 固定 padding 近似摆位在
+/// "＋"按钮下方,不算像素坐标(这颗按钮的 x 随已开页签数量浮动,不像
+/// agent_picker 的按钮位置固定,更没必要精确算)。
+fn project_add_menu_popup(
+    app: &App,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    if !app.project_add_menu_open {
+        return column![].into();
+    }
+    let mut projects: Vec<&ProjectInfo> = app
+        .recent_projects
+        .iter()
+        .filter(|p| !app.projects.contains_key(&p.id))
+        .collect();
+    projects.sort_by_key(|p| std::cmp::Reverse(p.updated_ms));
+
+    let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
+        projects
+            .into_iter()
+            .map(|p| {
+                crate::menu::item::<Message>(None, p.name.clone(), Message::ProjectSelect(p.id))
+            })
+            .collect();
+    if !items.is_empty() {
+        items.push(crate::menu::separator());
+    }
+    items.push(crate::menu::item::<Message>(
+        Some(icons::IconKind::SquarePlus),
+        "新建项目",
+        Message::ProjectTabPickFolder,
+    ));
+
+    let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        crate::menu::shell(
+            items,
+            Length::Fixed(byteui::theme::geometry::menu_item_width()),
+        );
+
+    container(list)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Left)
+        .align_y(iced_widget::core::alignment::Vertical::Top)
+        .padding(Padding {
+            top: byteui::theme::geometry::top_bar_height(),
+            left: 12.0,
+            right: 0.0,
+            bottom: 0.0,
+        })
+        .into()
 }
 
 /// 单个项目页签:状态点(可选)+ 项目名的切换按钮 + 关闭按钮。结构与终端
@@ -7103,19 +7307,38 @@ fn project_tab_item<'a>(
 /// 一个项目页签的后台活动指示点:取该项目所有**存活**会话里最值得关注的
 /// 那个状态。返回状态点颜色;`None` = 没有存活会话,不画点。
 fn project_tab_dot(ws: &Workspace) -> Option<Color> {
-    let alive: Vec<AgentState> = ws
+    let alive: Vec<(AgentState, AgentKind)> = ws
         .tabs
         .iter()
         .filter(|t| t.alive)
-        .map(|t| t.agent_state)
+        .map(|t| (t.agent_state, t.agent))
         .collect();
     project_dot(&alive)
 }
 
 /// 上面那个的纯逻辑内核(可单测:构造 `Workspace` 需要 daemon + EventLoop,
-/// headless 测试里造不出来,与本文件既有约定一致)。
-pub(crate) fn project_dot(alive_states: &[AgentState]) -> Option<Color> {
-    winning_agent_state(alive_states).map(agent_state_dot)
+/// headless 测试里造不出来,与本文件既有约定一致)。`agent == Unknown` 的
+/// 会话(纯 shell/git shell/hook 还没上报过——`SessionInfo::agent` 文档:
+/// "首个 hook 事件到达前恒 Unknown")不参与正常优先级竞争,它们的
+/// `AgentState` 只是从未被真实 hook 改写过的默认值,不代表真实"空闲"——
+/// 混进竞争会让纯 shell 页签显示成跟真实 agent 完成一轮工作同款的
+/// cyan"空闲"点,分不清"agent 真空下来了"和"这压根不是 agent 会话"。
+/// 若项目里**还有**真实 agent 存活,优先级/颜色照旧只看那些;若存活会话
+/// **全是** Unknown,显示"死会话"灰点(不是"没有点"——用户仍要看得出这个
+/// 项目有存活会话,只是状态不可知)。
+pub(crate) fn project_dot(alive: &[(AgentState, AgentKind)]) -> Option<Color> {
+    let real_states: Vec<AgentState> = alive
+        .iter()
+        .filter(|(_, agent)| *agent != AgentKind::Unknown)
+        .map(|(state, _)| *state)
+        .collect();
+    if let Some(state) = winning_agent_state(&real_states) {
+        return Some(agent_state_dot(state));
+    }
+    if alive.iter().any(|(_, agent)| *agent == AgentKind::Unknown) {
+        return Some(byteui::theme::color::current().dim);
+    }
+    None
 }
 
 /// 一组存活会话状态里"最值得关注"的那个(2026-08-17 用户重新定案的优先级):
@@ -7151,13 +7374,13 @@ fn agent_state_dot(state: AgentState) -> Color {
 /// 项目有没有在动"这个整套功能存在的核心理由(设计文档 §6),在最常见的
 /// "刚打开 app"场景下完全不工作。这里只额外花一次 `list()` 往返、不促成任何
 /// `Workspace`,懒加载照旧(最终审查 Required Fix #5)。
-fn stub_activity(sessions: &[SessionInfo], project_id: i64) -> Option<AgentState> {
-    let alive: Vec<AgentState> = sessions
+fn stub_activity(sessions: &[SessionInfo], project_id: i64) -> Option<Color> {
+    let alive: Vec<(AgentState, AgentKind)> = sessions
         .iter()
         .filter(|s| s.alive && s.project_id == Some(project_id))
-        .map(|s| s.agent_state)
+        .map(|s| (s.agent_state, s.agent))
         .collect();
-    winning_agent_state(&alive)
+    project_dot(&alive)
 }
 
 /// 单个图标栏按钮：圆角正方形背景常驻,hover 图标变金(无金框),选中图标
@@ -7238,9 +7461,22 @@ fn icon_rail(
         Side::Left => (app.left_view, !app.left_collapsed),
         Side::Right => (app.right_view, !app.right_collapsed),
     };
-    let mut content = column![].spacing(region.gap).padding(region.padding);
+    // 每个按钮各占一个绝对定位的 `stack!` 图层,纵向偏移按
+    // `App::rail_slot_position` 算出的动画槽位号换算像素——取代原先的
+    // `column!`(严格按 `rail_layout` 下标顺序摆、换位瞬间跳变),让同栏
+    // 拖拽重排时让位的相邻按钮能平滑滑动到新槽位,而不是硬切。
+    let button_size = byteui::theme::geometry::rail_button_size();
+    let step = button_size + region.gap;
+    let mut layers = Vec::new();
     for (idx, &kind) in app.shell_layout.rail_layout.side(side).iter().enumerate() {
         let (icon, tooltip) = panel_meta(kind);
+        // `interactive: false`——按下选中不走这里内层的
+        // `iced_widget::button::on_press`(松手才触发,时机不对,见
+        // `rail_drag_surface` 的注释),改由外层 `rail_drag_surface` 的
+        // `MouseArea::on_press` 接管,`on_select` 参数这里只是占位不会被
+        // 内部真正接线,原样传 `Message::PanelSelect(kind)` 保持调用方
+        // 语义一致。视觉(选中金框/hover 渐变)不受 `interactive` 影响,
+        // 只有交互接线这一步被跳过。
         let base: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
             icons::icon_button_entry(
                 icon,
@@ -7248,8 +7484,8 @@ fn icon_rail(
                 kind == active_kind && open,
                 app.hover_progress(HoverId::Rail(RailButton::Panel(kind))),
                 true,
-                byteui::theme::geometry::rail_button_size(),
-                true,
+                button_size,
+                false,
                 Message::PanelSelect(kind),
                 move |hovered| Message::Hover(HoverId::Rail(RailButton::Panel(kind)), hovered),
                 tooltip,
@@ -7258,8 +7494,29 @@ fn icon_rail(
             Some(badge) => stack![base, badge].into(),
             None => base,
         };
-        content = content.push(rail_drag_surface(entry, side, idx));
+        let y = region.padding.top + app.rail_slot_position(side, kind, idx) * step;
+        let positioned = container(rail_drag_surface(
+            entry,
+            side,
+            idx,
+            app.dragging_rail(),
+            Message::PanelSelect(kind),
+        ))
+        .padding(Padding {
+            top: y,
+            left: region.padding.left,
+            right: region.padding.right,
+            bottom: 0.0,
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Left)
+        .align_y(iced_widget::core::alignment::Vertical::Top);
+        layers.push(positioned.into());
     }
+    let content = iced_widget::Stack::with_children(layers)
+        .width(Length::Fill)
+        .height(Length::Fill);
     container(content)
         .width(Length::Fixed(byteui::theme::geometry::icon_rail_width()))
         .height(Length::Fill)
@@ -8031,13 +8288,10 @@ fn terminal_pane<'a>(
             ..container::Style::default()
         });
 
-    // 底栏(`terminal_status_bar`)是贴在 `body` 下方的独立元素,同
-    // `project_status_bar` 一样需要 `outer` 的圆角半径收底角,否则左下角
-    // 顶出小尖角。
-    container(column![body, terminal_status_bar(ws, outer)])
-        .width(width)
-        .height(Length::Fill)
-        .into()
+    // 底部状态栏(agent 态/resume/dozerd 持有说明)已按要求去掉——`body`
+    // 自己的 `style` 已经用 `outer` 收了圆角(含底角),不需要额外元素
+    // 补底角,直接就是这块 pane 的全部内容。
+    container(body).width(width).height(Length::Fill).into()
 }
 
 /// 分隔线:命中区 `byteui::theme::geometry::divider_width()` 宽、`Length::Fill` 高,
@@ -8226,20 +8480,50 @@ pub(crate) fn tab_drag_surface(
     area.into()
 }
 
-/// 给一个图标栏按钮包上"拖拽换栏/换位"的感应层,手法同 `tab_drag_surface`
-/// ——内容本身仍是原来的交互(点击选中在内部,见 `panel_select` 已经在
-/// `Message::PanelSelect` 处理里武装拖拽态),外层只补 `on_move`:光标
-/// 移动到这个按钮上时,若正在拖拽(`App::dragging_rail()`),上报
-/// `RailDragMove { side, index }`。`rail_drag_move` 只在 `rail_drag` 命中时
-/// 才做同栏重排 / 记跨栏悬停,所以没在拖拽时这条 `on_move` 是无害的 no-op。
+/// 给一个图标栏按钮包上"拖拽换栏/换位"的感应层,手法同 `tab_core::select`
+/// (`MouseArea::on_press`)——**这一层现在是按钮唯一的选中/拖拽入口**,
+/// 调用方必须给内层 `icon_button_entry` 传 `interactive: false`(见本函数
+/// 内部注释解释为什么不能像 `tab_drag_surface` 那样"内容自己接
+/// on_press、外层只补 on_move")。`on_move`:光标移动到这个按钮上时,若
+/// 正在拖拽(`App::dragging_rail()`),上报 `RailDragMove { side, index }`。
+/// `rail_drag_move` 只在 `rail_drag` 命中时才做同栏重排 / 记跨栏悬停,
+/// 所以没在拖拽时这条 `on_move` 是无害的 no-op。`armed`(调用方传
+/// `app.dragging_rail()`,同 `tab_drag_surface` 的 `armed` 用法)为真时
+/// 把光标切成"抓取"手型,给出"确实按住在拖"的视觉反馈,而不是悄无声息
+/// 就换了位。
 fn rail_drag_surface(
     content: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>,
     side: Side,
     index: usize,
+    armed: bool,
+    on_select: Message,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    MouseArea::new(content)
-        .on_move(move |_| Message::RailDragMove { side, index })
-        .into()
+    // `on_press` 挂在这一层(而不是靠内层 `icon_button_entry` 自带的
+    // `iced_widget::button::on_press`)是这个函数存在的**核心原因**,不是
+    // 随手选的写法:`iced_widget::button` 的 `on_press` 实际在
+    // `ButtonReleased` 且松手时光标仍在按钮范围内才触发("点击"语义,
+    // 允许按下后拖出范围松手来取消)——`tab_core::select` 用
+    // `MouseArea::on_press`(`ButtonPressed` 即触发,`mousedown 即选中+
+    // 备拖` 见其模块文档)才是这里真正要的语义:必须在**按下瞬间**就把
+    // `rail_drag` 武装好,才能让紧随其后的 `RailDragMove`(拖拽期间的
+    // `CursorMoved`)有意义。若继续走内层 `button::on_press`,武装动作会
+    // 推迟到松手那一刻才发生,而 `main.rs` 的
+    // `WindowEvent::MouseInput{Released}` 收尾检查(`RailDragEnd`)在这次
+    // 事件分发里跑在它前面,看到的还是"未武装",什么也不清——`rail_drag`
+    // 会一直悬空到下次点击,期间任何鼠标移动(不按键)都会被误判成
+    // 拖拽换位。调用方必须给内层 `icon_button_entry` 传 `interactive:
+    // false`,不接 `button::on_press`,否则内层 `button` 会先一步捕获
+    // `ButtonPressed`,这一层的 `on_press` 永远收不到事件(iced 的
+    // widget `update()` 先递归子级、子级 `capture_event()` 后父级直接
+    // 提前返回)。
+    let area = MouseArea::new(content)
+        .on_press(on_select)
+        .on_move(move |_| Message::RailDragMove { side, index });
+    if armed {
+        let area = area.interaction(mouse::Interaction::Grabbing);
+        return area.into();
+    }
+    area.into()
 }
 
 /// 面板内 tab（终端 / 预览 / 浏览器三处共用）的渲染器，样式对齐顶栏未选中
@@ -9034,34 +9318,71 @@ mod tests {
     /// 页签指示点的优先级(2026-08-17 重新定案):红(AwaitingInput,agent 在
     /// 等你)> 绿(Running,还在跑)> 金(TurnEnded,该你出手了)> 青(Idle)
     /// > 不画点。各状态固定配色,不再有闪烁区分。
+    ///
+    /// 用 `AgentKind::Claude` 代表真实 agent,与下面
+    /// `project_dot_unknown_agent_*` 系列(Unknown agent 的死会话灰点)分开测。
     #[test]
     fn project_dot_color_priority() {
+        use dozer_core::protocol::AgentKind::Claude;
         use dozer_core::protocol::AgentState::*;
 
         assert_eq!(project_dot(&[]), None, "无存活会话不画点");
         assert_eq!(
-            project_dot(&[Idle]),
+            project_dot(&[(Idle, Claude)]),
             Some(byteui::theme::color::current().cyan)
         );
         assert_eq!(
-            project_dot(&[Idle, TurnEnded]),
+            project_dot(&[(Idle, Claude), (TurnEnded, Claude)]),
             Some(byteui::theme::color::current().gold),
             "回合结束优先于空闲"
         );
         assert_eq!(
-            project_dot(&[Idle, TurnEnded, Running]),
+            project_dot(&[(Idle, Claude), (TurnEnded, Claude), (Running, Claude)]),
             Some(byteui::theme::color::current().green),
             "还在跑优先于回合结束/空闲"
         );
         assert_eq!(
-            project_dot(&[Idle, TurnEnded, Running, AwaitingInput]),
+            project_dot(&[
+                (Idle, Claude),
+                (TurnEnded, Claude),
+                (Running, Claude),
+                (AwaitingInput, Claude)
+            ]),
             Some(byteui::theme::color::current().red),
             "agent 在等你优先级最高"
         );
         // 顺序无关:优先级看的是状态集合,不是 tab 的先后。
         assert_eq!(
-            project_dot(&[TurnEnded, Idle]),
-            project_dot(&[Idle, TurnEnded])
+            project_dot(&[(TurnEnded, Claude), (Idle, Claude)]),
+            project_dot(&[(Idle, Claude), (TurnEnded, Claude)])
+        );
+    }
+
+    /// Unknown agent(纯 shell/git shell/hook 还没上报过)不该显示成跟真实
+    /// agent 完成一轮工作同款的 cyan"空闲"——应该显示灰色"死会话"点。
+    #[test]
+    fn project_dot_unknown_agent_shows_dead_session_gray_not_idle_cyan() {
+        use dozer_core::protocol::AgentKind::Unknown;
+        use dozer_core::protocol::AgentState::Idle;
+
+        assert_eq!(
+            project_dot(&[(Idle, Unknown)]),
+            Some(byteui::theme::color::current().dim),
+            "只有纯 shell/git shell 存活时应显示死会话灰点,不是空闲青点"
+        );
+    }
+
+    /// 项目里同时有真实 agent 和纯 shell 存活时,真实 agent 的状态照旧
+    /// 优先决定颜色——Unknown 会话不参与竞争,也不会把真实状态"拉低"。
+    #[test]
+    fn project_dot_real_agent_wins_over_unknown_when_both_alive() {
+        use dozer_core::protocol::AgentKind::{Claude, Unknown};
+        use dozer_core::protocol::AgentState::{Idle, Running};
+
+        assert_eq!(
+            project_dot(&[(Idle, Unknown), (Running, Claude)]),
+            Some(byteui::theme::color::current().green),
+            "真实 agent 在跑,应该显示绿点,不受纯 shell 的 Idle 干扰"
         );
     }
 
@@ -10467,6 +10788,68 @@ mod tests {
             rail_drag_move_into(&mut rail, &mut drag, Side::Left, 0); // 移回源栏,index 未变
             assert_eq!(drag.pending_cross_side, None, "移回源栏取消跨栏悬停");
             assert_eq!(rail, before, "整个过程没有搬移,RailLayout 不变");
+        }
+    }
+
+    /// 图标栏拖拽换位/换栏动画状态机(`RailSlotAnim`)的独立测试——不需要
+    /// 构造 `App`(本文件里其余需要真实交互状态的测试都靠自由函数直接测,
+    /// `App::new` 依赖 tokio handle/事件代理,构造成本高,这里同样绕开)。
+    mod rail_slot_anim_tests {
+        use super::*;
+
+        #[test]
+        fn retarget_same_side_eases_toward_target_without_snapping_immediately() {
+            let mut a = RailSlotAnim {
+                current: 0.0,
+                side: Side::Left,
+            };
+            a.retarget(Side::Left, 3.0);
+            assert!(
+                a.current > 0.0 && a.current < 3.0,
+                "第一拍应该只逼近一部分,不是瞬间跳到目标: current={}",
+                a.current
+            );
+            assert!(a.active(3.0), "还没收敛,应算作动画进行中");
+        }
+
+        #[test]
+        fn retarget_same_side_converges_and_snaps_after_enough_ticks() {
+            let mut a = RailSlotAnim {
+                current: 0.0,
+                side: Side::Left,
+            };
+            for _ in 0..50 {
+                a.retarget(Side::Left, 3.0);
+            }
+            assert_eq!(a.current, 3.0, "足够多拍之后应该 snap 到目标,不留残余误差");
+            assert!(!a.active(3.0), "已收敛,不应再算作动画进行中");
+        }
+
+        #[test]
+        fn retarget_side_change_snaps_immediately_no_interpolation() {
+            // 模拟"面板从左栏第 2 位跨栏落到右栏第 0 位":`current=2.0` 是
+            // 左栏坐标系下的槽位号,对右栏这条完全不同的物理列没有几何
+            // 意义,不能继续朝新 `target` 插值(会产生一帧"从左栏槽位2滑到
+            // 右栏槽位0"的错乱动画),必须直接 snap。
+            let mut a = RailSlotAnim {
+                current: 2.0,
+                side: Side::Left,
+            };
+            a.retarget(Side::Right, 0.0);
+            assert_eq!(a.current, 0.0, "跨栏应直接 snap 到新目标,不插值");
+            assert_eq!(a.side, Side::Right, "记录的 side 应更新为新栏");
+            assert!(!a.active(0.0), "snap 后应立即视为已收敛");
+        }
+
+        #[test]
+        fn retarget_target_unchanged_stays_converged() {
+            let mut a = RailSlotAnim {
+                current: 2.0,
+                side: Side::Left,
+            };
+            a.retarget(Side::Left, 2.0);
+            assert_eq!(a.current, 2.0);
+            assert!(!a.active(2.0), "目标未变时不应产生动画");
         }
     }
 

@@ -1723,10 +1723,13 @@ fn todo_clear_footer_bar<'a>(
 
 /// 顶部搜索框:自绘输入(键盘走 main.rs 拦截层路由成 `SearchEvent`,不用
 /// iced 原生 `text_input`——本 app 每帧重建界面,原生输入留不住焦点,打字
-/// 会漏进已聚焦的终端)。左侧是输入框本体(点 `SearchEditStart` 进编辑态),
-/// 右侧是提交按钮(回车 / 点它把草稿落成生效的 `search` 过滤词)。编辑态/
-/// 已过滤时整框 GOLD 边框表示焦点归属 / 当前被搜索词收窄。
+/// 会漏进已聚焦的终端)。**提交按钮嵌在输入框边框内**(右侧、无独立边框,
+/// 只是框里一枚 Search 图标),处理方式对齐 `todo_footer_bar` 的新增任务
+/// 输入框:整框一个 `MouseArea`(点非按钮处进编辑态 `SearchEditStart`),
+/// 按钮是框内层真正的 `button`,自己先吃掉点击,不会触发外层编辑态。
+/// 编辑态/已过滤时整框 GOLD 边框表示焦点归属 / 当前被搜索词收窄。
 fn todo_search_bar<'a>(
+    app: &App,
     draft: &'a str,
     editing: bool,
     active: bool,
@@ -1746,11 +1749,55 @@ fn todo_search_bar<'a>(
             .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().cream)
     };
-    let box_btn = button(body)
-        .on_press(Message::SearchEditStart)
+
+    // 提交按钮:同 `todo_footer_bar` 提交按钮的手法——静止 DIM、hover 平滑
+    // 过渡到 GOLD,由 `HoverId::TodoSearchSubmit` + 外层 `MouseArea` 驱动。
+    let submit_color = byteui::theme::color::mix(
+        byteui::theme::color::current().dim,
+        byteui::theme::color::current().gold,
+        app.hover_progress(HoverId::TodoSearchSubmit),
+    );
+    let submit = MouseArea::new(
+        button(icons::view(
+            icons::IconKind::Search,
+            byteui::theme::icon_size::row(),
+            submit_color,
+        ))
+        .on_press(Message::SearchSubmit)
+        .padding(6)
+        .style(move |_t, _s| button::Style {
+            background: None,
+            border: Border {
+                color: byteui::theme::color::current().border,
+                width: 0.0,
+                radius: 4.0.into(),
+            },
+            text_color: submit_color,
+            ..button::Style::default()
+        }),
+    )
+    .on_enter(Message::Hover(HoverId::TodoSearchSubmit, true))
+    .on_exit(Message::Hover(HoverId::TodoSearchSubmit, false));
+
+    // 输入框本体:单个带边框的容器,把"文字区 + 提交按钮"一起包进边框内,
+    // 一行两格:左格文字(占满宽高、垂直居中靠左),右格提交按钮(垂直居中)
+    // ——搜索框只有一行,不像新增任务框需要"文字顶/按钮底"分对角。
+    MouseArea::new(
+        container(
+            row![
+                container(body)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_y(iced_widget::core::alignment::Vertical::Center)
+                    .align_x(iced_widget::core::alignment::Horizontal::Left),
+                container(submit).align_y(iced_widget::core::alignment::Vertical::Center),
+            ]
+            .width(Length::Fill)
+            .align_y(iced_widget::core::Alignment::Center),
+        )
         .width(Length::Fill)
         .padding([6, 8])
-        .style(move |_t: &iced_widget::Theme, _s| button::Style {
+        .style(move |_t: &iced_widget::Theme| container::Style {
             background: Some(byteui::theme::color::current().bg.into()),
             border: Border {
                 color: if editing || active {
@@ -1761,30 +1808,11 @@ fn todo_search_bar<'a>(
                 width: 1.0,
                 radius: 4.0.into(),
             },
-            text_color: byteui::theme::color::current().cream,
-            ..button::Style::default()
-        });
-    let submit = button(icons::view(
-        icons::IconKind::Search,
-        byteui::theme::icon_size::row(),
-        byteui::theme::color::current().gold,
-    ))
-    .on_press(Message::SearchSubmit)
-    .padding(6)
-    .style(|_t, _s| button::Style {
-        background: Some(byteui::theme::color::current().bg.into()),
-        border: Border {
-            color: byteui::theme::color::current().border,
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        text_color: byteui::theme::color::current().gold,
-        ..button::Style::default()
-    });
-    row![box_btn, submit]
-        .spacing(6)
-        .align_y(iced_widget::core::Alignment::Center)
-        .into()
+            ..container::Style::default()
+        }),
+    )
+    .on_press(Message::SearchEditStart)
+    .into()
 }
 
 /// 列表视图主体：搜索栏 + 编号行列表 + 底部新增输入。
@@ -1801,6 +1829,7 @@ fn todo_list_view<'a>(
     // `spacing(8)` + `padding([0, 20])`):左右 20、上下 8,不再贴边顶到
     // tab 分隔线与首张卡片。
     let search = container(todo_search_bar(
+        app,
         &ws_state.search_draft,
         ws_state.search_editing,
         !ws_state.search.is_empty(),

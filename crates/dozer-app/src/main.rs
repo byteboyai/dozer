@@ -892,6 +892,23 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
+            // 顶栏新增项目菜单打开时,Esc 同样优先关菜单,口径同上面的
+            // agent 选择菜单。
+            if app.project_add_menu_open()
+                && let WindowEvent::KeyboardInput {
+                    event,
+                    is_synthetic: false,
+                    ..
+                } = event
+                && event.state == ElementState::Pressed
+                && event.logical_key
+                    == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+            {
+                app.update(Message::ProjectAddMenuClose);
+                window.request_redraw();
+                return;
+            }
+
             // Todo 派发选择层打开时,Esc 同样优先关掉弹出层,口径同上面的
             // agent 选择菜单。
             if app.todo_dispatch_open()
