@@ -698,6 +698,7 @@ fn commit_list_view<'a>(
         list = list.push(area);
     }
     scrollable(list)
+        .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style())
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
@@ -765,6 +766,7 @@ fn file_list_view<'a>(
                 list = list.push(area);
             }
             scrollable(list)
+                .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style())
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
@@ -943,6 +945,7 @@ fn diff_pane_view<'a>(
         );
     }
     scrollable(content)
+        .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style())
         .width(Length::Fill)
         .height(Length::Fill)
         .into()

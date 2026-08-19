@@ -57,11 +57,12 @@ mod tests {
     use super::*;
 
     /// 防漂移锚:默认 scale=1 时,字号必须和 homespace.json 字面量一致。
+    /// 基准已抬到 14px(body=14)以对齐终端字号,层级比例保持不变。
     #[test]
     fn sizes_match_config_literals_at_default_scale() {
-        assert_eq!(caption(), 11);
-        assert_eq!(caption_sm(), 10);
-        assert_eq!(body(), 13);
-        assert_eq!(subtitle(), 14);
+        assert_eq!(caption(), 12);
+        assert_eq!(caption_sm(), 11);
+        assert_eq!(body(), 14);
+        assert_eq!(subtitle(), 15);
     }
 }

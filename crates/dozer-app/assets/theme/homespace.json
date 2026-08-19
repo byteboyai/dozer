@@ -8,9 +8,9 @@
     "border": "BORDER"
   },
   "font_sizes": {
-    "caption": 11,
-    "caption_sm": 10,
-    "body": 13,
-    "subtitle": 14
+    "caption": 12,
+    "caption_sm": 11,
+    "body": 14,
+    "subtitle": 15
   }
 }

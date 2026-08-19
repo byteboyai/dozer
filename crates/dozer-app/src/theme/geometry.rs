@@ -62,9 +62,10 @@ mod tests {
     fn tree_geometry_matches_composition() {
         let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
         assert!(near(tree_row_h(), 16.8)); // 14 × 1.2
-        // tree_chrome_top = pad8 + (max(14,14*1.2)+9) + gap2 + (max(13*1.2+12+2, 26)+12) + gap2
-        //                = 8 + (16.8+9) + 2 + (29.6+12) + 2 = 79.4
-        assert!(near(tree_chrome_top_px(), 8.0 + 25.8 + 2.0 + 41.6 + 2.0));
+        // tree_chrome_top = pad8 + (max(14,15*1.2)+9) + gap2 + (max(14*1.2+12+2, 26)+12) + gap2
+        //                = 8 + (18.0+9) + 2 + (30.8+12) + 2 = 81.8
+        // 字号基准抬到 14px(subtitle 15/body 14)后,head_h 与 header_h 各 +1.8/+1.2。
+        assert!(near(tree_chrome_top_px(), 8.0 + 27.0 + 2.0 + 42.8 + 2.0));
         // tree_chrome_bottom = pad8 + gap2 + footer(1+4+(14+12)+12) = 8+2+43
         assert!(near(tree_chrome_bottom_px(), 8.0 + 2.0 + 43.0));
     }

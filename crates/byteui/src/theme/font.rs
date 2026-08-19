@@ -75,17 +75,17 @@ fn scale(base: u32) -> u32 {
 mod tests {
     use super::*;
 
-    /// 防漂移锚:8 个 token 的解析结果必须和改动前 workspace.rs 里的
-    /// 字面量完全一致——纯代码搬家,数值不该变。
+    /// 防漂移锚:8 个 token 的解析结果必须和 workspace.json 字面量一致。
+    /// 基准已抬到 14px(body=14)以对齐终端字号,层级比例保持不变。
     #[test]
     fn tokens_match_pre_migration_literals() {
-        assert_eq!(dot_sm(), 9);
-        assert_eq!(caption_sm(), 10);
-        assert_eq!(caption(), 11);
-        assert_eq!(label(), 12);
-        assert_eq!(body(), 13);
-        assert_eq!(subtitle(), 14);
-        assert_eq!(title(), 15);
+        assert_eq!(dot_sm(), 10);
+        assert_eq!(caption_sm(), 11);
+        assert_eq!(caption(), 12);
+        assert_eq!(label(), 13);
+        assert_eq!(body(), 14);
+        assert_eq!(subtitle(), 15);
+        assert_eq!(title(), 16);
     }
 
     #[test]
