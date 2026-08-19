@@ -104,7 +104,7 @@ fn save_to(path: &Path, map: &HashMap<i64, PanelLayout>) -> std::io::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{LeftView, PanelDims, RightView};
+    use crate::app::{PanelDims, PanelKind};
 
     #[test]
     fn load_from_missing_file_returns_empty() {
@@ -131,8 +131,8 @@ mod tests {
         map.insert(
             1,
             PanelLayout {
-                left_view: LeftView::Project,
-                right_view: RightView::Acceptance,
+                left_view: PanelKind::Project,
+                right_view: PanelKind::Acceptance,
                 left_collapsed: true,
                 right_collapsed: false,
                 dims: PanelDims::default(),
@@ -141,8 +141,8 @@ mod tests {
         map.insert(
             2,
             PanelLayout {
-                left_view: LeftView::Files,
-                right_view: RightView::Agent,
+                left_view: PanelKind::Files,
+                right_view: PanelKind::Agent,
                 left_collapsed: false,
                 right_collapsed: true,
                 dims: PanelDims::default(),
@@ -161,8 +161,8 @@ mod tests {
         map.insert(
             1,
             PanelLayout {
-                left_view: LeftView::Project,
-                right_view: RightView::Acceptance,
+                left_view: PanelKind::Project,
+                right_view: PanelKind::Acceptance,
                 left_collapsed: true,
                 right_collapsed: false,
                 dims: PanelDims::default(),
