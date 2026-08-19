@@ -343,6 +343,24 @@ impl RailLayout {
             Side::Right => &mut self.right,
         }
     }
+
+    /// 给定面板,反查它当前挂在哪条栏。`RailLayout` 的不变式(见
+    /// `sanitize_rail_layout`)保证 11 个面板不重不漏分布在两条栏,
+    /// 所以这里的 `expect` 不会在合法状态下触发——`RailLayout` 一旦
+    /// 通不过消毒就已经在 `layout::load_from` 里回落 `default()` 了,
+    /// 不会带着"某个面板哪条栏都不在"的坏数据流到这里。
+    pub fn side_of(&self, kind: PanelKind) -> Side {
+        if self.left.contains(&kind) {
+            Side::Left
+        } else if self.right.contains(&kind) {
+            Side::Right
+        } else {
+            unreachable!(
+                "RailLayout 不变式被破坏:{kind:?} 不在任何一条栏——\
+                 sanitize_rail_layout 应该已经挡掉这种坏数据"
+            )
+        }
+    }
 }
 
 impl Default for RailLayout {
@@ -9580,6 +9598,15 @@ mod tests {
         let rail = RailLayout::default();
         assert_eq!(rail.side(Side::Left), &rail.left);
         assert_eq!(rail.side(Side::Right), &rail.right);
+    }
+
+    #[test]
+    fn side_of_finds_every_default_panel() {
+        let rail = RailLayout::default();
+        assert_eq!(rail.side_of(PanelKind::Files), Side::Left);
+        assert_eq!(rail.side_of(PanelKind::Web), Side::Left);
+        assert_eq!(rail.side_of(PanelKind::Agent), Side::Right);
+        assert_eq!(rail.side_of(PanelKind::Acceptance), Side::Right);
     }
 
     /// `sanitize_rail_layout` 对坏数据回落默认:任一栏为空、面板重复、
