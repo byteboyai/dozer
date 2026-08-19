@@ -820,6 +820,27 @@ mod pair_columns_tests {
     }
 }
 
+/// `Files`/`Project` 两个 webview 面板在左右两侧同时活跃时,id 空间必须
+/// 靠 `PROJECT_PREVIEW_ID_OFFSET` 隔离(否则 `ws.preview` 与
+/// `ws.project_preview` 各自 `next_id` 从 0 起数,同进一个池会撞)。Task 3
+/// 引入的核心不变量,拆开单测锁住。
+#[cfg(test)]
+mod preview_desired_concurrent_tests {
+    use super::*;
+
+    #[test]
+    #[allow(clippy::eq_op, clippy::assertions_on_constants, clippy::identity_op)]
+    fn project_id_offset_keeps_ids_disjoint_from_files() {
+        assert!(App::PROJECT_PREVIEW_ID_OFFSET > 0);
+        let project_id = 0 + App::PROJECT_PREVIEW_ID_OFFSET;
+        assert_ne!(project_id, 0usize);
+        assert!(
+            App::PROJECT_PREVIEW_ID_OFFSET > 100_000,
+            "off量级应远超真实 tab 数,才不会反向撞回 ws.preview 的 id"
+        );
+    }
+}
+
 /// 图标栏拖拽"移动到 `side` 栏第 `to` 位"的纯逻辑核心:不依赖 `App` 的
 /// 其他字段,抽成自由函数以便单元测试直接构造 `RailLayout` 验证(同 Stage 3
 /// `panel_mirrored_in` 的做法的理由——`App` 需要 `Client`/事件循环钩子,
@@ -3641,61 +3662,100 @@ impl App {
     /// 无视 iced 绘制顺序,径直叠在浏览器视图之上(与 `browser_desired` 互斥
     /// 同理)。webview 池是窗口级的,所以只认当前聚焦项目的清单——后台项目
     /// 的预览 tab 不该把自己的原生子视图画到别人的界面上。
-    pub fn preview_desired(&self) -> Vec<WebviewSpec> {
-        // 进首页(Dozer Home)时,预览区根本不在屏上——原生 wry 子视图无视
-        // iced 绘制顺序,若不主动清空,会径直叠在 homespace 页面之上。
-        // 与 `browser_desired`(app.rs:1896 已对 Home 重定向到 `home_browser`)
-        // 保持一致:首页时不返回任何文件预览 webview,让 main.rs 的差集同步
-        // 把残留的那个销毁掉。
+    /// `ws.preview`(Files)与 `ws.project_preview`(Project)是两个独立
+    /// `PreviewPane`,各自 `next_id` 从 0 起数——两者的 webview 一旦同时
+    /// 进同一个 `webviews` 池(`Files` 在左栏、`Project` 在右栏同时活跃时
+    /// 就会发生),原始 id 会撞(两边都可能是 0/1/2...)。给 `Project` 那
+    /// 一侧的 id 统一加这个偏移,`ws.preview` 侧不动——量级远超真实 tab
+    /// 数(几十个封顶),不会反向撞回 `ws.preview` 的 id 区间。main.rs 里
+    /// 任何按 id 反查 `ws.project_preview` webview(`active_preview_webview_id`
+    /// 的 Project 分支)都要用同一个偏移量加/减,两处不同步会导致查错池。
+    const PROJECT_PREVIEW_ID_OFFSET: usize = 1_000_000;
+
+    /// 当前应存在的"文件/项目预览"webview 清单(main.rs 差集同步用),
+    /// 每条自带按其所在侧算好的矩形。左右两侧各自独立判断——`Files` 在
+    /// 左栏、`Project` 在右栏可以同时非空(见 spec"webview 面板的镜像
+    /// bounds(2026-08-19 Stage 4a 审阅后修订)"一节)。不在文件视图时
+    /// 该侧整体不产出;进首页时两侧都不产出(原因见旧版注释:首页时
+    /// 预览区根本不在屏上)。
+    pub fn preview_desired(
+        &self,
+        window_width: f32,
+        window_height: f32,
+    ) -> Vec<(WebviewSpec, (f32, f32, f32, f32))> {
         if self.current_page == AppPage::Home {
-            return Vec::new();
-        }
-        if !matches!(self.left_view, PanelKind::Files | PanelKind::Project) {
             return Vec::new();
         }
         let Some(ws) = self.active_workspace() else {
             return Vec::new();
         };
-        // Files 预览取 `ws.preview`,Project 面板右配对取 `ws.project_preview`——
-        // 两者都是"预览区",复用同一支几何/可见性逻辑,只是状态源不同。
-        let specs = match self.left_view {
-            PanelKind::Files => ws.preview.desired_webviews(),
-            PanelKind::Project => ws.project_preview.desired_webviews(),
-            _ => Vec::new(),
-        };
-        // 编辑弹层开着时,应用级模态盖住了预览区,原生 wry 子视图不听 iced
-        // 绘制顺序摆布,必须显式 visible=false 才能真正藏起来。
-        // (预览 tab 右键菜单不藏 webview——它向上弹出,落在 tab 栏上方的
-        // iced 区域,根本不压到下方 webview,见 `preview_tab_context_menu_popup`。)
-        if ws.edit_session.is_some() {
-            specs
-                .into_iter()
-                .map(|mut s| {
+        let edit_open = ws.edit_session.is_some();
+        let mut out = Vec::new();
+        for side in [Side::Left, Side::Right] {
+            let kind = match side {
+                Side::Left => self.left_view,
+                Side::Right => self.right_view,
+            };
+            let (specs, id_offset): (Vec<WebviewSpec>, usize) = match kind {
+                PanelKind::Files => (ws.preview.desired_webviews(), 0),
+                PanelKind::Project => (
+                    ws.project_preview.desired_webviews(),
+                    Self::PROJECT_PREVIEW_ID_OFFSET,
+                ),
+                _ => continue,
+            };
+            let bounds =
+                preview_content_bounds_for(side, window_width, window_height, &self.shell_state());
+            out.extend(specs.into_iter().map(|mut s| {
+                s.id += id_offset;
+                // 编辑弹层开着时,应用级模态盖住了预览区,原生 wry 子视图
+                // 不听 iced 绘制顺序摆布,必须显式 visible=false 才能真正
+                // 藏起来。
+                if edit_open {
                     s.visible = false;
-                    s
-                })
-                .collect()
-        } else {
-            specs
+                }
+                (s, bounds)
+            }));
         }
+        out
     }
 
     /// 浏览器域的 webview 清单,语义同 `preview_desired`,查独立的
-    /// `Workspace::browser`,且只在左视图为 `Web`(非首页)或首页时非空。
-    pub fn browser_desired(&self) -> Vec<WebviewSpec> {
+    /// `Workspace::browser`。首页时矩形留空(main.rs 用 `home_browser_bounds`
+    /// 单独覆盖,见调用处),工作区内按 `Web` 当前所在侧现算矩形。
+    pub fn browser_desired(
+        &self,
+        window_width: f32,
+        window_height: f32,
+    ) -> Vec<(WebviewSpec, (f32, f32, f32, f32))> {
         // 首页右栏恒为全局浏览器(`home_browser`),与 `left_view` 无关——
         // 进首页就让它成为浏览器 webview 池的唯一来源,否则默认 URL 的 tab
         // 建了却永远等不到 webview(见 `sync_webview_pool`)。
         if self.current_page == AppPage::Home {
-            return self.home_browser.desired_webviews();
+            return self
+                .home_browser
+                .desired_webviews()
+                .into_iter()
+                .map(|s| (s, (0.0, 0.0, 0.0, 0.0)))
+                .collect();
         }
-        if self.left_view != PanelKind::Web {
+        let side = if self.left_view == PanelKind::Web {
+            Side::Left
+        } else if self.right_view == PanelKind::Web {
+            Side::Right
+        } else {
             return Vec::new();
-        }
-        match self.active_workspace() {
-            Some(ws) => ws.browser.desired_webviews(),
-            None => Vec::new(),
-        }
+        };
+        let Some(ws) = self.active_workspace() else {
+            return Vec::new();
+        };
+        let bounds =
+            preview_content_bounds_for(side, window_width, window_height, &self.shell_state());
+        ws.browser
+            .desired_webviews()
+            .into_iter()
+            .map(|s| (s, bounds))
+            .collect()
     }
 
     /// 保证 `git_log` 状态跟得上"现在应该看哪个项目"——`git_log: State`

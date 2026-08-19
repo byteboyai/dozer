@@ -1253,54 +1253,56 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             // 但预览区窄、菜单定宽,几乎任何右键都会让菜单探进预览区,
             // 表现成"预览要么整体消失要么必须在最顶层"。已按要求退回原状:
             // webview 照常显示,右键菜单会被它盖住。
-            let (x, y, w, h) = app::preview_content_bounds_for(
-                app::Side::Left,
-                logical_w,
-                logical_h,
-                &app.shell_state(),
-            );
-            let bounds = wry::Rect {
-                position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
-                size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
-            };
-
+            // `preview_desired` 已经按左右两侧各自算好矩形,直接喂给
+            // `sync_webview_pool`(`Files`/`Project` 可分居两侧同时活跃)。
             sync_webview_pool(
                 window.as_ref(),
                 webviews,
-                app.preview_desired()
+                app.preview_desired(logical_w, logical_h)
                     .into_iter()
-                    .map(|s| (s, bounds))
-                    .collect(),
+                    .map(|(s, (x, y, w, h))| {
+                        (
+                            s,
+                            wry::Rect {
+                                position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
+                                size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>(),
                 app.allowed_files(),
                 proxy.clone(),
             );
             // 首页右栏浏览器(`home_browser`)占的是右面板区,不是工作区的左
             // 面板预览区,所以单独算一套边界(见 `home_browser_bounds`);工作区
             // 浏览器 2026-08-11 曾短暂迁到右面板,同日已按用户要求移回左面板区
-            // (`PanelKind::Web`),与文件预览共用 `preview_content_bounds`。
-            let browser_bounds = if app.is_home() {
-                Self::home_browser_bounds(logical_w, logical_h)
+            // (`PanelKind::Web`)。`browser_desired` 非首页时已按 `Web` 所在侧
+            // 算好矩形;首页分支带的是占位 `(0,0,0,0)`,这里用 `home_browser_bounds`
+            // 整体覆盖。
+            let browser_specs: Vec<(preview::WebviewSpec, wry::Rect)> = if app.is_home() {
+                let bounds = Self::home_browser_bounds(logical_w, logical_h);
+                app.browser_desired(logical_w, logical_h)
+                    .into_iter()
+                    .map(|(s, _)| (s, bounds))
+                    .collect()
             } else {
-                // 浏览器已移回左面板区(`PanelKind::Web`),与文件预览共用同一套
-                // 左侧几何(见 `preview_content_bounds` 的 `PanelKind::Web` 分支)。
-                let (x, y, w, h) = app::preview_content_bounds_for(
-                    app::Side::Left,
-                    logical_w,
-                    logical_h,
-                    &app.shell_state(),
-                );
-                wry::Rect {
-                    position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
-                    size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
-                }
+                app.browser_desired(logical_w, logical_h)
+                    .into_iter()
+                    .map(|(s, (x, y, w, h))| {
+                        (
+                            s,
+                            wry::Rect {
+                                position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
+                                size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
+                            },
+                        )
+                    })
+                    .collect()
             };
             sync_webview_pool(
                 window.as_ref(),
                 browser_webviews,
-                app.browser_desired()
-                    .into_iter()
-                    .map(|s| (s, browser_bounds))
-                    .collect(),
+                browser_specs,
                 app.allowed_files(),
                 proxy.clone(),
             );
