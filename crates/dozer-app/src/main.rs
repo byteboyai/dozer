@@ -487,7 +487,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         >,
         proxy: winit::event_loop::EventLoopProxy<Message>,
     ) {
-        let desired_ids: std::collections::HashSet<usize> = specs.iter().map(|(s, _)| s.id).collect();
+        let desired_ids: std::collections::HashSet<usize> =
+            specs.iter().map(|(s, _)| s.id).collect();
         pool.retain(|id, _| desired_ids.contains(id));
 
         for (spec, bounds) in specs {
@@ -1252,8 +1253,12 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             // 但预览区窄、菜单定宽,几乎任何右键都会让菜单探进预览区,
             // 表现成"预览要么整体消失要么必须在最顶层"。已按要求退回原状:
             // webview 照常显示,右键菜单会被它盖住。
-            let (x, y, w, h) =
-                app::preview_content_bounds(logical_w, logical_h, &app.shell_state());
+            let (x, y, w, h) = app::preview_content_bounds_for(
+                app::Side::Left,
+                logical_w,
+                logical_h,
+                &app.shell_state(),
+            );
             let bounds = wry::Rect {
                 position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
                 size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
@@ -1278,8 +1283,12 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             } else {
                 // 浏览器已移回左面板区(`PanelKind::Web`),与文件预览共用同一套
                 // 左侧几何(见 `preview_content_bounds` 的 `PanelKind::Web` 分支)。
-                let (x, y, w, h) =
-                    app::preview_content_bounds(logical_w, logical_h, &app.shell_state());
+                let (x, y, w, h) = app::preview_content_bounds_for(
+                    app::Side::Left,
+                    logical_w,
+                    logical_h,
+                    &app.shell_state(),
+                );
                 wry::Rect {
                     position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
                     size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
