@@ -5,9 +5,8 @@
 //! ——两个模块各自只解析自己关心的顶层字段,互不干扰。
 //!
 //! 与 `font.rs`(管工作区控件字号)职责分离——这里只管首页控件内部文字
-//! 字号。每个 accessor 返回的字号都乘过 `icon_size::scale()`(全局缩放因子),
+//! 字号。每个 accessor 返回的字号都乘过 `byteui::theme::icon_size::scale()`(全局缩放因子),
 //! 因此改 `scale` 即整体缩放首页文字,与图标尺寸同步。
-use super::icon_size;
 use serde::Deserialize;
 use std::sync::LazyLock;
 
@@ -37,7 +36,7 @@ fn load(raw: &str) -> HomespaceFonts {
 static SIZES: LazyLock<HomespaceFonts> = LazyLock::new(|| load(RAW));
 
 fn scale(v: u32) -> u32 {
-    ((v as f32) * icon_size::scale()).round() as u32
+    ((v as f32) * byteui::theme::icon_size::scale()).round() as u32
 }
 
 pub fn caption() -> u32 {
