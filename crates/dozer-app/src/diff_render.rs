@@ -8,7 +8,8 @@ use iced_widget::core::{Element, Font};
 use iced_widget::{column, container, text};
 
 /// `patch` 逐行染色:`+` 开头 GREEN、`-` 开头 RED、其余(上下文行/文件头)
-/// DIM,等宽字体、`caption_sm()` 字号、`TERM_BG` 背景容器包裹。空字符串
+/// DIM,等宽字体、`body()` 字号(14px,与终端 git diff 一致)、`TERM_BG` 背景
+/// 容器包裹。空字符串
 /// 渲染成空的 `column`(不特判——调用方决定"空 patch 时是否要显示占位文案",
 /// 这个函数只管染色,不管空态提示)。
 pub fn colored_diff_lines<'a, M: 'a>(
@@ -25,7 +26,7 @@ pub fn colored_diff_lines<'a, M: 'a>(
         };
         col = col.push(
             text(line.to_string())
-                .size(byteui::theme::font::caption_sm())
+                .size(byteui::theme::font::body())
                 .color(color)
                 .font(Font::MONOSPACE)
                 .line_height(iced_widget::core::text::LineHeight::Relative(1.3)),

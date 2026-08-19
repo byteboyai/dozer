@@ -655,7 +655,7 @@ fn commit_list_view<'a>(
                 byteui::theme::color::current().dim
             ),
             text(author_or_id)
-                .size(byteui::theme::font::caption())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim)
                 .font(Font::MONOSPACE),
             text(format_commit_time(row.time))
@@ -676,7 +676,7 @@ fn commit_list_view<'a>(
         let comment_indent = byteui::theme::icon_size::row() + 8.0;
         let summary_line = container(
             text(row.summary.clone())
-                .size(byteui::theme::font::caption())
+                .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().cream),
         )
         .padding(iced_widget::core::Padding {
@@ -751,11 +751,11 @@ fn file_list_view<'a>(
                 };
                 let line = row![
                     text(status_glyph(f.status))
-                        .size(byteui::theme::font::caption())
+                        .size(byteui::theme::font::body())
                         .color(color)
                         .width(18),
                     text(f.path.clone())
-                        .size(byteui::theme::font::caption())
+                        .size(byteui::theme::font::body())
                         .color(byteui::theme::color::current().cream),
                 ]
                 .spacing(4);
