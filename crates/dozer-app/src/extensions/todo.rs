@@ -1570,7 +1570,7 @@ fn todo_footer_bar<'a>(
     // 层 `AddEditStart`。
     let submit = button(icons::view(
         icons::IconKind::CircleArrowUp,
-        crate::theme::icon_size::row(),
+        byteui::theme::icon_size::row(),
         byteui::theme::color::current().gold,
     ))
     .on_press(Message::AddSubmit)
@@ -1650,7 +1650,7 @@ fn todo_clear_footer_bar<'a>(
         row![
             icons::view(
                 icons::IconKind::Trash,
-                crate::theme::icon_size::row(),
+                byteui::theme::icon_size::row(),
                 byteui::theme::color::current().cream,
             ),
             text("清空列表")
@@ -1740,7 +1740,7 @@ fn todo_search_bar<'a>(
         });
     let submit = button(icons::view(
         icons::IconKind::Search,
-        crate::theme::icon_size::row(),
+        byteui::theme::icon_size::row(),
         byteui::theme::color::current().gold,
     ))
     .on_press(Message::SearchSubmit)
@@ -2047,7 +2047,7 @@ fn todo_card<'a>(
             row![
                 icons::view(
                     icons::IconKind::Calendar,
-                    crate::theme::icon_size::row(),
+                    byteui::theme::icon_size::row(),
                     byteui::theme::color::current().dim
                 ),
                 text(date_label)
@@ -2204,7 +2204,7 @@ fn todo_card<'a>(
                     .color(byteui::theme::color::current().cream),
                 icons::view(
                     icons::IconKind::ChevronRight,
-                    crate::theme::icon_size::row(),
+                    byteui::theme::icon_size::row(),
                     byteui::theme::color::current().cream,
                 ),
             ]
@@ -2326,7 +2326,7 @@ pub fn todo_dispatch_overlay<'a>(
         .map(|(session_id, agent, title)| {
             let icon = icons::view(
                 agent_icon(*agent),
-                crate::theme::icon_size::row(),
+                byteui::theme::icon_size::row(),
                 byteui::theme::color::current().cream,
             );
             crate::menu::item_row(
@@ -2585,7 +2585,7 @@ fn todo_category_button<'a>(
         row![
             icons::view(
                 icon,
-                crate::theme::icon_size::row(),
+                byteui::theme::icon_size::row(),
                 if active {
                     byteui::theme::color::current().gold
                 } else {
@@ -2682,7 +2682,7 @@ fn todo_tab<'a>(
     };
     button(
         row![
-            icons::view(icon, crate::theme::icon_size::row(), icon_color),
+            icons::view(icon, byteui::theme::icon_size::row(), icon_color),
             text(label).size(theme::font::caption()).color(fg),
         ]
         .spacing(6)
