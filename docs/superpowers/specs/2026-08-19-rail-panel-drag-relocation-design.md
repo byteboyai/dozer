@@ -335,17 +335,69 @@ fn rail_drag_move(&mut self, side: Side, to: usize) {
 `RightIconSelect` 各自的"已选中再点则收起栏"逻辑处理对应侧的
 `*_active`/`*_collapsed`。
 
-### webview 面板的镜像 bounds
+### webview 面板的镜像 bounds(2026-08-19 Stage 4a 审阅后修订)
 
-`Files`/`Project`/`Web` 三个面板各自新增一个 `*_bounds_right` 版本几何
-函数,与现有 `*_bounds`(隐式只服务左栏)并列,内部把"以
-`icon_rail_width()` 为左基准向右偏移"换成"以
-`window_width - icon_rail_width()` 为右基准向左偏移",宽度计算方向
-相应镜像(原来 `content_w` 从左边界量,镜像版从右边界量)。调用处
-(`preview_content_bounds` 等函数)在入口按"该面板当前 docked 在哪栏"
-分派到两个版本之一,不改变各自内部对`pair_list_content_width`等既有
-辅助函数的调用方式(那些函数只关心"这一片矩形多宽",不关心矩形挂在
-窗口哪一侧,可以直接复用)。
+**本节在 Stage 4a 合并、review 阶段发现原表述基于一个错误前提而修订。**
+原表述假设"任意时刻至多一个 webview 面板处于活跃态,只是它可能挂在左栏
+或右栏之一",因此设想"`preview_content_bounds` 等函数入口按该面板当前
+docked 在哪栏分派到左/右两版几何函数之一"就够了。这个前提是错的:
+`Files`/`Project`/`Web` 三者的**默认栏都是左栏**,而 `left_view`/
+`right_view` 是两侧各自独立的"当前选中面板"状态——拖拽只搬某一个面板的
+图标,不connect 到另一个面板。用户只需一步操作(比如把 `Project` 拖到
+右栏,`Files` 留在左栏不动)就能让 `Files`(左栏活跃)与 `Project`(右栏
+活跃)**同时**都是活跃的 webview 面板——这不是边界情况,是这个功能最
+自然的第一个用例之一(左右对照查看两个预览)。
+
+现有实现的问题不只是"缺一个镜像分支",而是架构上只能表达"同一时刻至多
+一个 webview 矩形":`preview_desired`/`browser_desired` 只查
+`self.left_view`;`main.rs` 里 `sync_webview_pool` 的 `bounds: wry::Rect`
+是单个值,均匀套用到传入的整批 `specs` 上;`ws.preview`/
+`ws.project_preview` 是两个独立 `PreviewPane`,各自 `next_id` 从 0
+起数,一旦两者的 `desired_webviews()` 同时进同一个 `webviews` 池,id
+会撞(两者都可能产出 `id=0`)。`is_in_preview_column` 同样只查
+`state.left_view == PanelKind::Web` 来决定点击落在预览列时该把焦点
+交给 Browser 池还是 Preview 池,不看点击到底落在哪一侧、命中的又是
+哪个面板。`MaximizedPane::Right` 分支目前直接返回零矩形——右栏放大态下
+即使 `right_view` 是 webview 面板(拖拽后可达),现状也不会算出任何
+矩形,原因和上面同源。
+
+**修订后的设计(Stage 4b 落地此节):**
+
+1. `PreviewPane` 的 id 空间不再假设"全局唯一"——`ws.project_preview` 产出
+   的 `WebviewSpec.id` 在进入共享的 `webviews` 池前统一加一个固定偏移量
+   (如 `1_000_000`,tab 数量级不可能触达),使其与 `ws.preview` 的 id
+   空间不相交。`ws.preview` 侧不加偏移(向后兼容现有持久化/测试里对
+   "id=0 是第一个文件 tab" 的隐式假设)。
+2. `sync_webview_pool` 的 `bounds` 参数从"整批共用一个 `wry::Rect`"改成
+   "每条 `WebviewSpec` 各自带自己的矩形"——签名从
+   `(specs: Vec<WebviewSpec>, bounds: wry::Rect)` 改成
+   `specs: Vec<(WebviewSpec, wry::Rect)>`,内部逐条用 `spec.1` 而不是
+   共享的 `bounds`。
+3. `preview_desired`/`browser_desired` 改为**各自独立扫左右两侧**:对
+   `Side::Left`/`Side::Right` 各查一次"这一侧当前选中的面板是不是
+   Files/Project(/Web)",是则取该面板的 `desired_webviews()`、配上
+   按该侧算出的矩形,两侧结果拼接返回同一个 `Vec<(WebviewSpec,
+   (f32,f32,f32,f32))>`——两侧都命中时两组都在,互不覆盖;只一侧命中时
+   等价于现状;都不命中时空。
+4. `preview_content_bounds`/`left_files_tree_bounds` 改成显式接受
+   `side: Side` 参数,内部按"这一侧当前是哪个 `PanelKind`"分派,不再
+   隐式假设只服务左栏。非放大态复用 Stage 4a 已有的 `pair_x0_and_width`
+   (已经是 side 参数化的)；放大态的盒子本身(`maximized_box_x_range`/
+   `maximized_box_height`)左右对称、两侧共用同一个盒子,不需要 side
+   参数,但**需要看 `MaximizedPane::Left` 还是 `::Right` 来决定这个盒子
+   里放的是 `left_view` 还是 `right_view`**——`MaximizedPane::Right`
+   分支要补上和 `::Left` 分支对称的按面板类型分派,不能再直接返回零矩形。
+5. `is_in_preview_column` 返回值从 `bool` 改成 `Option<PanelKind>`(命中
+   的是哪个面板,未命中为 `None`)——同样两侧都要查(先查点击落在左栏
+   还是右栏的横向范围内,再查该侧是否命中预览列)。调用处
+   (`main.rs` 左键按下的焦点路由)不再用 `state.left_view ==
+   PanelKind::Web` 判断 Browser/Preview,改成直接匹配返回的
+   `Option<PanelKind>`:`Some(PanelKind::Web) → Browser`、
+   `Some(_) → Preview`、`None → Terminal`。
+6. 8 个非 webview 面板的镜像渲染顺序(Stage 3)与非 webview 分割线拖拽
+   (Stage 4a)不受本节修订影响——它们从一开始就是"每侧各画各的、互不
+   依赖"，只有 webview 相关的这几个函数因为共享单一矩形/单一 id 空间/
+   单一 `left_view` 判断而需要这次修订。
 
 ## 错误处理
 
@@ -375,10 +427,14 @@ fn rail_drag_move(&mut self, side: Side, to: usize) {
    - 跨栏移动会导致源栏清空:no-op,拖拽状态清空但 `RailLayout` 不变。
 4. 8 个有内部横向两栏布局的面板,各自补一个"镜像后语义左右项渲染顺序
    互换,split 比例数值不变"的单测(结构化断言,不追求像素级 UI 快照)。
-5. `Files`/`Project`/`Web` 三个 webview 面板的 `*_bounds_right` 与
-   `*_bounds`(现有)在"镜像输入"下应该产出镜像输出的性质测试(例如
-   固定窗口宽度下,左栏版本的 `x` 与右栏版本的 `x + w` 应该关于窗口
-   中轴对称——不追求逐像素相等,只验证镜像关系成立)。
+5. `Files`/`Project`/`Web` 三个 webview 面板的 side-参数化几何函数在
+   "镜像输入"下应该产出镜像输出的性质测试(例如固定窗口宽度下,
+   `side=Left` 的 `x` 与 `side=Right` 的 `x + w` 应该关于窗口中轴
+   对称——不追求逐像素相等,只验证镜像关系成立);另补一组
+   `preview_desired`/`browser_desired` 在"`Files` 活跃于左栏同时
+   `Project` 活跃于右栏"这一并发场景下的测试:两组 `WebviewSpec` 都
+   应该出现在返回值里、id 不相撞、各自矩形落在各自那一侧、互不覆盖
+   (见"webview 面板的镜像 bounds"节 2026-08-19 修订)。
 6. `cargo build -p dozer-app --bin dozer`、`cargo test -p dozer-app
    --bin dozer`、`cargo clippy --all-targets -- -D warnings`、
    `cargo fmt -- --check`。
@@ -392,6 +448,10 @@ fn rail_drag_move(&mut self, side: Side, to: usize) {
      叠在项目树上或悬空的情况)。
    - 拖 `Web`(浏览器)到右栏,验证网页 webview 位置正确、收藏夹侧栏
      跟着镜像。
+   - 只拖 `Project` 到右栏、`Files` 留在左栏不动(或反过来):验证左右
+     两侧的 webview **同时**正确显示,互不覆盖、互不清空对方,点击任一
+     侧都能正确把键盘焦点交给对应的 webview。放大右栏(此时 `right_view`
+     是 webview 面板)同样要验证矩形正确,不是空白。
    - 同栏内拖拽重排两个图标顺序,验证顺序生效且不影响 `active`。
    - 尝试把某一栏拖到只剩 0 个(比如右栏 4 个依次全拖到左栏),验证
      最后一次拖动被正确挡住(右栏保留最后 1 个,不清空)。
