@@ -483,8 +483,8 @@ impl Default for PanelDims {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct PanelLayout {
-    pub left_view: LeftView,
-    pub right_view: RightView,
+    pub left_view: PanelKind,
+    pub right_view: PanelKind,
     pub left_collapsed: bool,
     pub right_collapsed: bool,
     /// 本项目的面板区尺寸(左宽 + 四个 split)。`#[serde(default)]` 对老
@@ -651,9 +651,9 @@ pub struct ShellState {
     /// 当前活跃项目面板区尺寸(左宽 + 四个 split)。每项目一份,由
     /// `App::adopt_panel_layout` 切项目时灌入,`apply_column_drag` 拖拽后写回。
     pub dims: PanelDims,
-    pub left_view: LeftView,
+    pub left_view: PanelKind,
     pub left_collapsed: bool,
-    pub right_view: RightView,
+    pub right_view: PanelKind,
     pub right_collapsed: bool,
     /// 浏览器收藏夹侧栏是否展开——`preview_content_bounds` 的
     /// `LeftView::Web` 分支据此决定网页 webview 要不要让出侧栏宽度。
@@ -1291,7 +1291,7 @@ pub(crate) fn ssh_terminal_visible(state: &ShellState) -> bool {
 /// SSH 面板在左侧且左侧是当前聚焦区时走 SSH 面板,否则走现状的共享
 /// 终端条(不需要新增专门的终端焦点状态)。
 pub(crate) fn keyboard_term_target(
-    left_view: LeftView,
+    left_view: PanelKind,
     active_zone: Option<ZoneSide>,
 ) -> TermTarget {
     if left_view == LeftView::Ssh && active_zone == Some(ZoneSide::Left) {
@@ -1561,9 +1561,9 @@ pub enum Message {
     /// (走 `Message::Todo` 通道),不需要顶层变体——这里只收尾。
     TodoDragEnd,
     /// 点击左图标栏某图标:已是当前视图则切换收起态,否则切到该视图并展开。
-    LeftIconSelect(LeftView),
+    LeftIconSelect(PanelKind),
     /// 同上,右图标栏。
-    RightIconSelect(RightView),
+    RightIconSelect(PanelKind),
     /// 图标栏按钮 hover 进入/离开:进入带 `Some(id)`,离开带 `None`,
     /// 任意按钮的 hover 进入/离开:带按钮标识 `HoverId` 与 `true`/`false`,
     /// 驱动该按钮图标/背景/边框颜色的平滑过渡动画(见 `App::set_hover`/
@@ -1825,9 +1825,9 @@ pub struct App {
     /// 切过去再 `adopt` 出来,别的项目那份绝不被当前项目盖掉。
     panel_layouts: HashMap<i64, PanelLayout>,
     /// 左面板区当前显示的配对视图(左图标栏点击切换)。
-    left_view: LeftView,
+    left_view: PanelKind,
     /// 右面板区当前显示的配对视图(右图标栏点击切换)。
-    right_view: RightView,
+    right_view: PanelKind,
     /// 左面板区是否折叠(再点一次当前已激活的图标即收起)。
     left_collapsed: bool,
     /// 右面板区是否折叠,语义同 `left_collapsed`。
@@ -5141,7 +5141,7 @@ impl App {
         }
     }
 
-    fn left_icon_select(&mut self, v: LeftView) {
+    fn left_icon_select(&mut self, v: PanelKind) {
         if self.left_view == v {
             // 点的是已选中(激活)的图标:应退回未选中并收起左面板区。
             // 但若右面板区也已经收起了,左就是最后一个还开着的 zone,
@@ -5206,7 +5206,7 @@ impl App {
         self.on_shell_layout_changed();
     }
 
-    fn right_icon_select(&mut self, v: RightView) {
+    fn right_icon_select(&mut self, v: PanelKind) {
         if self.right_view == v {
             // 同上,对称:右是最后开着的 zone 时不收起。
             if !self.left_collapsed {
