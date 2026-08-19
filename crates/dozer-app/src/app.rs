@@ -91,8 +91,13 @@ impl PanelKind {
     /// 不同步的列表。
     pub fn default_side(self) -> Side {
         match self {
-            Self::Files | Self::GitLog | Self::Todo | Self::Project | Self::Database
-            | Self::Ssh | Self::Web => Side::Left,
+            Self::Files
+            | Self::GitLog
+            | Self::Todo
+            | Self::Project
+            | Self::Database
+            | Self::Ssh
+            | Self::Web => Side::Left,
             Self::Agent | Self::Conversations | Self::Usage | Self::Acceptance => Side::Right,
         }
     }
@@ -7330,8 +7335,7 @@ fn right_panel_area<'a>(
                 }
             }
             PanelKind::Conversations => {
-                let (list_portion, content_portion) =
-                    split_portions(app.dims.conversations_split);
+                let (list_portion, content_portion) = split_portions(app.dims.conversations_split);
                 let review = review_content_pane(
                     ws,
                     Length::FillPortion(content_portion),
@@ -9615,7 +9619,10 @@ mod tests {
             PanelKind::Agent,
             PanelKind::Conversations,
         ] {
-            assert!(!panel_mirrored_in(&rail, kind), "{kind:?} 不应该在默认布局下判定为镜像");
+            assert!(
+                !panel_mirrored_in(&rail, kind),
+                "{kind:?} 不应该在默认布局下判定为镜像"
+            );
         }
     }
 
@@ -9626,7 +9633,10 @@ mod tests {
         rail.left.retain(|&k| k != PanelKind::Files);
         rail.right.push(PanelKind::Files);
         assert!(panel_mirrored_in(&rail, PanelKind::Files));
-        assert!(!panel_mirrored_in(&rail, PanelKind::Todo), "没挪的面板不受影响");
+        assert!(
+            !panel_mirrored_in(&rail, PanelKind::Todo),
+            "没挪的面板不受影响"
+        );
     }
 
     /// `RailLayout::default()` 把 11 个面板不重不漏分到左右两栏,
