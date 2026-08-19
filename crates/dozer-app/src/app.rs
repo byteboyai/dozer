@@ -1647,6 +1647,14 @@ pub enum Message {
     /// 松开左键,结束页签拖拽。构造方为 main.rs 的 `MouseInput{Released}`
     /// 分支;项目页签组顺带把新顺序写盘。
     TabDragEnd,
+    /// 图标栏面板拖拽,光标进入了 `side` 栏第 `index` 个位置——同栏内是
+    /// 重排,跨栏是记录悬停目标。构造方为该栏每个按钮顶层的
+    /// `MouseArea::on_move`(仅在 `rail_drag` 命中时挂载)。按住图标＝准备
+    /// 拖的来源由 `panel_select` 在按住瞬间武装(`self.rail_drag` 置位)。
+    RailDragMove { side: Side, index: usize },
+    /// 松开左键,结束图标栏面板拖拽。构造方为 main.rs 的
+    /// `MouseInput{Released}` 分支;跨栏移动此时才提交并写盘。
+    RailDragEnd,
     /// Todo 面板拖拽排序结束:松开左键,把新顺序写盘。构造方为 main.rs 的
     /// `MouseInput{Released}` 分支,同 `TabDragEnd`(页签拖拽)那套。拖拽中
     /// 的 `DragMove` 由卡片外层 `MouseArea::on_move` 直接发 `Todo::DragMove`
@@ -3801,6 +3809,12 @@ impl App {
             Message::TabDragEnd => {
                 self.end_tab_drag();
             }
+            Message::RailDragMove { side, index } => {
+                self.rail_drag_move(side, index);
+            }
+            Message::RailDragEnd => {
+                self.end_rail_drag();
+            }
             Message::TodoDragEnd => {
                 self.todo_message(todo::Message::DragEnd);
             }
@@ -5301,6 +5315,24 @@ impl App {
 
     fn panel_select(&mut self, kind: PanelKind) {
         let side = self.shell_layout.rail_layout.side_of(kind);
+        // 武装拖拽态:按住图标＝准备拖(同 `TabDrag` 的"按下即武装"手法)。
+        // 同栏重排 / 跨栏移动都是靠渲染层挂在图标上的 `on_move` 驱动
+        // (`Message::RailDragMove`),`MouseMotion` 期间逐帧上报；这里只记下
+        // "从哪栏的哪个位置开始拖"。`RailLayout` 的不变式(sanitize 已保证
+        // 11 个面板不重不漏分到两栏)确保 `kind` 一定能在 `side_of` 返回的
+        // 那一栏里被 `position` 找到。
+        let source_index = self
+            .shell_layout
+            .rail_layout
+            .side(side)
+            .iter()
+            .position(|&k| k == kind)
+            .expect("kind 应该在 side_of 返回的那一侧里,sanitize 已保证不变式");
+        self.rail_drag = Some(RailDrag {
+            source_side: side,
+            source_index,
+            pending_cross_side: None,
+        });
         // 点当前已激活的图标:退回未选中并收起对应面板区;但若对侧面板区
         // 也已收起,当前侧就是最后一个还开着的 zone,不能关(两侧对称)。
         let switched = match side {
