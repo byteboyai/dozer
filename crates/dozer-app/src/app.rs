@@ -6673,13 +6673,23 @@ impl App {
             stack![base].into()
         };
 
-        if let Some(which) = self.maximized {
-            stack![popped, maximize_overlay(self, ws, which)]
+        let with_maximize: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+            if let Some(which) = self.maximized {
+                stack![popped, maximize_overlay(self, ws, which)]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
+            } else {
+                popped
+            };
+
+        if self.dragging_rail() {
+            stack![with_maximize, rail_drag_ghost(self)]
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
         } else {
-            popped
+            with_maximize
         }
     }
 }
@@ -9125,10 +9135,76 @@ fn ssh_terminal_pane<'a>(
     .padding(region.padding)
     .style(move |_t: &iced_widget::Theme| container::Style {
         background: region.background.map(Into::into),
-        border: outer,
+        border: region.border.unwrap_or_default(),
         ..container::Style::default()
     })
     .into()
+}
+
+/// 图标栏拖拽期间跟随光标的幽灵图标——视觉语言对齐 OS 拖文件夹:一个
+/// 圆角方卡(同 `icon_button_entry` 选中态的 CARD 底 + 金框),里面是被
+/// 拖面板的图标,整体以光标为中心悬浮。没有任何交互(不接 `MouseArea`/
+/// `on_press`),纯展示——不会挡住底下 `rail_drag_surface` 的 `on_move`/
+/// `on_press`(iced 里非交互 widget 天然不参与命中测试,同本文件
+/// `stack![base, badge]` 徽标叠在按钮上不挡点击的既有先例)。
+///
+/// 定位手法同 `project_add_menu_popup`:整窗 `Length::Fill` 容器 + 用
+/// `padding` 把内容推到目标坐标,这次坐标是每帧都在变的 `App::last_cursor`
+/// 而不是开菜单那一刻的定格快照,所以幽灵图标才会真的"跟手"——
+/// `last_cursor` 本来就在每次 `CursorMoved` 里更新,main.rs 也已经在每次
+/// `CursorMoved` 后无条件 `window.request_redraw()`(见其注释"悬停也要
+/// 请求重绘"),这两点凑在一起,`rail_drag_ghost` 不需要任何额外的重绘
+/// 触发就能逐帧跟手。
+///
+/// 拖拽未在进行,或(理论不会发生的防御性分支)拖拽中但下标越界拿不到
+/// 面板种类时,返回空占位——不画任何东西。
+fn rail_drag_ghost(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    if !app.dragging_rail() {
+        return column![].into();
+    }
+    let Some(kind) = app.dragged_panel_kind() else {
+        return column![].into();
+    };
+    let (icon, _tooltip) = panel_meta(kind);
+    let size = byteui::theme::geometry::rail_button_size();
+    let colors = byteui::theme::color::current();
+
+    let ghost = container(icons::view(
+        icon,
+        byteui::theme::icon_size::rail(),
+        colors.gold,
+    ))
+    .width(Length::Fixed(size))
+    .height(Length::Fixed(size))
+    .align_x(iced_widget::core::alignment::Horizontal::Center)
+    .align_y(iced_widget::core::alignment::Vertical::Center)
+    .style(move |_t: &iced_widget::Theme| container::Style {
+        background: Some(colors.card.into()),
+        border: Border {
+            color: colors.gold,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        ..container::Style::default()
+    });
+
+    // 幽灵图标以光标为中心(减半个按钮边长做偏移),并钳制在窗口范围内
+    // ——防止贴着窗口边缘拖拽时图标一半画到窗口外。
+    let (cx, cy) = app.last_cursor;
+    let (window_w, window_h) = app.window_size;
+    let x = (cx - size / 2.0).clamp(0.0, (window_w - size).max(0.0));
+    let y = (cy - size / 2.0).clamp(0.0, (window_h - size).max(0.0));
+
+    container(ghost)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(Padding {
+            top: y,
+            left: x,
+            right: 0.0,
+            bottom: 0.0,
+        })
+        .into()
 }
 
 fn ssh_empty_state<'a>() -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
