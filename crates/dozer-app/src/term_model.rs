@@ -66,6 +66,11 @@ pub struct Cell {
     pub spacer: bool,
     /// 处于鼠标选区内：渲染层画选区底色。
     pub selected: bool,
+    /// 反相显示（`CSI 7m`/`27m`，DECSCNM 之外最常见的用法是全屏重绘型
+    /// TUI 自己在文本里画"假光标"——见 `cursor_visible` 文档 CodeBuddy
+    /// CLI 的例子）。`fg`/`bg` 这里仍是原始未交换的值,交没交换由渲染层
+    /// 按这个标记决定,模型层不假设渲染层的默认背景色是什么。
+    pub inverse: bool,
 }
 
 /// `Term::new`/`Term::resize` 需要的最小尺寸描述。滚屏历史（scrollback）
@@ -298,6 +303,7 @@ impl TerminalModel {
                             spacer,
                             selected: selection
                                 .is_some_and(|r| r.contains(Point::new(grid_line, Column(col)))),
+                            inverse: cell.flags.contains(Flags::INVERSE),
                         }
                     })
                     .collect()

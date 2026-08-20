@@ -16,7 +16,9 @@
 //! - 宽字符（CJK）独立成 run、占 2 格绘制盒——字形 advance 与网格假设的
 //!   偏差被"每个宽字符重新定位"吞掉，不会累积；
 //! - 宽字符 spacer 格与无背景空白格不产生字形（空白格同时切断 run，
-//!   保证 run 内文本列数与网格列数一致）。
+//!   保证 run 内文本列数与网格列数一致）——但反相格(`CSI 7m`)例外，即使
+//!   是空格也要画填色块，全屏重绘型 TUI（实测 CodeBuddy CLI）常用反相
+//!   空格当自绘"假光标"，见 [`effective_colors`]。
 //!
 //! 光标最后画：先补一块实心格（focused：CREAM 底 + TERM_BG 字；未聚焦：
 //! CREAM 描边），覆盖在 run 字形之上，天然处理"光标落在任意 run 中间"。
@@ -116,26 +118,49 @@ struct Run {
     wide: bool,
 }
 
+/// RGB 三元组，配 [`Run::bg`] 这类"可能没有显式背景"的字段用。
+type Rgb = (u8, u8, u8);
+
+/// 反相格（`cell.inverse`，`CSI 7m`）的实际绘制色:前后景对调。原始
+/// `bg` 为空(默认背景,渲染时本该"不填色、露出面板底色")在反相后必须
+/// 变成实打实的前景填色,所以要拿 `term_bg`(面板默认背景的具体 RGB)
+/// 顶上——不能继续留 `None`,`None` 在 `Run` 里的含义是"这格不填底色",
+/// 反相格恰恰相反,一定要填。
+fn effective_colors(cell: &Cell, term_bg: Rgb) -> (Rgb, Option<Rgb>) {
+    if cell.inverse {
+        (cell.bg.unwrap_or(term_bg), Some(cell.fg))
+    } else {
+        (cell.fg, cell.bg)
+    }
+}
+
 /// 单行 cell 序列 → 绘制 run 序列。切分规则见模块注释；选区内的空白格
-/// 不跳过（要画选区底色），`selected` 变化处切断 run。
-fn layout_runs(row: &[Cell]) -> Vec<Run> {
+/// 不跳过（要画选区底色），`selected` 变化处切断 run。`term_bg` 是面板
+/// 默认背景色,给反相格(`cell.inverse`)换算实际前景色用——全屏重绘型
+/// TUI(实测 CodeBuddy CLI)常年关闭真实光标、自己在文本里放一个反相
+/// 空格当"假光标"块,不处理反相会导致这个格子被当成普通空白格跳过,
+/// 假光标整个不可见(验收反馈:CodeBuddy 光标不显示,根因)。
+fn layout_runs(row: &[Cell], term_bg: (u8, u8, u8)) -> Vec<Run> {
     let mut runs: Vec<Run> = Vec::new();
     let mut col = 0;
     while col < row.len() {
         let cell = &row[col];
-        // spacer 由宽字符本体的 2 格绘制盒覆盖；选区外的无背景空白格画
-        // 不出任何东西——两者都跳过（后者顺带切断了 run 的连续性）。
-        if cell.spacer || (cell.ch == ' ' && cell.bg.is_none() && !cell.selected) {
+        // spacer 由宽字符本体的 2 格绘制盒覆盖；选区外的无背景、非反相
+        // 空白格画不出任何东西——两者都跳过（后者顺带切断了 run 的连续
+        // 性）。反相空白格必须继续往下走 wide/普通分支画出填色块,不能
+        // 跟着一起被跳过。
+        if cell.spacer || (cell.ch == ' ' && cell.bg.is_none() && !cell.selected && !cell.inverse) {
             col += 1;
             continue;
         }
         if cell.wide {
+            let (fg, bg) = effective_colors(cell, term_bg);
             runs.push(Run {
                 col,
                 cells: 2,
                 text: cell.ch.to_string(),
-                fg: cell.fg,
-                bg: cell.bg,
+                fg,
+                bg,
                 bold: cell.bold,
                 selected: cell.selected,
                 wide: true,
@@ -143,13 +168,18 @@ fn layout_runs(row: &[Cell]) -> Vec<Run> {
             col += 2; // 本体 + spacer
             continue;
         }
-        let style = (cell.fg, cell.bg, cell.bold, cell.selected);
+        let (fg0, bg0) = effective_colors(cell, term_bg);
+        let style = (fg0, bg0, cell.bold, cell.selected);
         let start = col;
         let mut text = String::new();
         while col < row.len() {
             let c = &row[col];
-            let blank = c.ch == ' ' && c.bg.is_none() && !c.selected;
-            if c.wide || c.spacer || blank || (c.fg, c.bg, c.bold, c.selected) != style {
+            let blank = c.ch == ' ' && c.bg.is_none() && !c.selected && !c.inverse;
+            let c_style = {
+                let (fg, bg) = effective_colors(c, term_bg);
+                (fg, bg, c.bold, c.selected)
+            };
+            if c.wide || c.spacer || blank || c_style != style {
                 break;
             }
             text.push(c.ch);
@@ -324,10 +354,12 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         let lines = self.model.visible_lines();
         let (cursor_col, cursor_row) = self.model.cursor();
+        let [tbr, tbg, tbb, _] = byteui::theme::color::current().term_bg.into_rgba8();
+        let term_bg = (tbr, tbg, tbb);
 
         for (row_idx, row) in lines.iter().enumerate() {
             let y = row_idx as f32 * line_height_px();
-            for run in layout_runs(row) {
+            for run in layout_runs(row, term_bg) {
                 let x = run.col as f32 * cell_width();
                 let run_size = Size::new(run.cells as f32 * cell_width(), line_height_px());
                 if let Some(bg) = run.bg {
@@ -408,7 +440,9 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
             let y = cursor_row as f32 * line_height_px();
             let mut x = cursor_col as f32 * cell_width();
             for ch in text.chars() {
-                let cols = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
+                let cols = unicode_width::UnicodeWidthChar::width(ch)
+                    .unwrap_or(1)
+                    .max(1);
                 let box_w = cols as f32 * cell_width();
                 frame.fill_rectangle(
                     Point::new(x, y),
@@ -490,6 +524,10 @@ pub fn view<'a>(
 mod tests {
     use super::*;
 
+    /// 测试用面板默认背景——除反相相关测试外,具体数值无所谓,固定一个
+    /// 好认的值方便断言。
+    const TEST_TERM_BG: (u8, u8, u8) = (8, 20, 29);
+
     fn row_of(input: &[u8], cols: u16) -> Vec<Cell> {
         let mut t = TerminalModel::new(cols, 4);
         let _ = t.feed(input);
@@ -503,7 +541,7 @@ mod tests {
         t.selection_start(1, 0, false);
         t.selection_update(3, 0, true); // 选中 bcd
         let row = t.visible_lines().remove(0);
-        let runs = layout_runs(&row);
+        let runs = layout_runs(&row, TEST_TERM_BG);
         let shape: Vec<_> = runs
             .iter()
             .map(|r| (r.col, r.text.as_str(), r.selected))
@@ -521,7 +559,7 @@ mod tests {
         t.selection_start(0, 0, false);
         t.selection_update(2, 0, true); // 选中 "a b"，中间空格也要高亮
         let row = t.visible_lines().remove(0);
-        let runs = layout_runs(&row);
+        let runs = layout_runs(&row, TEST_TERM_BG);
         assert_eq!(runs.len(), 1);
         assert_eq!(
             (runs[0].col, runs[0].text.as_str(), runs[0].selected),
@@ -583,9 +621,9 @@ mod tests {
     fn wide_flag_distinguishes_cjk_run_from_same_cell_count_ascii_run() {
         // "ab" 是两个窄字符合并的 run，cells 也是 2——不能靠 cells==2 判断
         // 宽字符（见 `Run::wide` 字段注释），必须显式 flag。
-        let ascii = &layout_runs(&row_of(b"ab", 40))[0];
+        let ascii = &layout_runs(&row_of(b"ab", 40), TEST_TERM_BG)[0];
         assert_eq!((ascii.cells, ascii.wide), (2, false));
-        let cjk = &layout_runs(&row_of("你".as_bytes(), 40))[0];
+        let cjk = &layout_runs(&row_of("你".as_bytes(), 40), TEST_TERM_BG)[0];
         assert_eq!((cjk.cells, cjk.wide), (2, true));
     }
 
@@ -599,7 +637,7 @@ mod tests {
 
     #[test]
     fn ascii_same_style_merges_into_one_run() {
-        let runs = layout_runs(&row_of(b"hello", 40));
+        let runs = layout_runs(&row_of(b"hello", 40), TEST_TERM_BG);
         assert_eq!(runs.len(), 1);
         assert_eq!(
             (runs[0].col, runs[0].cells, runs[0].text.as_str()),
@@ -609,7 +647,7 @@ mod tests {
 
     #[test]
     fn wide_char_gets_own_two_cell_run_and_spacer_is_skipped() {
-        let runs = layout_runs(&row_of("ab你cd".as_bytes(), 40));
+        let runs = layout_runs(&row_of("ab你cd".as_bytes(), 40), TEST_TERM_BG);
         let shape: Vec<_> = runs
             .iter()
             .map(|r| (r.col, r.cells, r.text.as_str()))
@@ -619,7 +657,7 @@ mod tests {
 
     #[test]
     fn style_change_splits_runs() {
-        let runs = layout_runs(&row_of(b"a\x1b[31mb", 40));
+        let runs = layout_runs(&row_of(b"a\x1b[31mb", 40), TEST_TERM_BG);
         assert_eq!(runs.len(), 2);
         assert_eq!((runs[0].col, runs[0].text.as_str()), (0, "a"));
         assert_eq!((runs[1].col, runs[1].text.as_str()), (1, "b"));
@@ -628,16 +666,38 @@ mod tests {
 
     #[test]
     fn bare_blank_cells_are_skipped_and_break_runs() {
-        let runs = layout_runs(&row_of(b"a  b", 40));
+        let runs = layout_runs(&row_of(b"a  b", 40), TEST_TERM_BG);
         let shape: Vec<_> = runs.iter().map(|r| (r.col, r.text.as_str())).collect();
         assert_eq!(shape, vec![(0, "a"), (3, "b")]);
     }
 
     #[test]
     fn blank_cells_with_background_are_kept() {
-        let runs = layout_runs(&row_of(b"\x1b[41m x", 40));
+        let runs = layout_runs(&row_of(b"\x1b[41m x", 40), TEST_TERM_BG);
         assert_eq!(runs.len(), 1);
         assert_eq!((runs[0].col, runs[0].text.as_str()), (0, " x"));
         assert!(runs[0].bg.is_some());
+    }
+
+    #[test]
+    fn inverse_bare_space_is_not_skipped_and_gets_filled_background() {
+        // 反相空格(全屏重绘型 TUI 常见的"假光标"画法,实测 CodeBuddy CLI)
+        // 不能被当成普通无背景空白格跳过——不然假光标整个不可见,正是这次
+        // 要修的验收反馈根因。
+        let runs = layout_runs(&row_of(b"\x1b[7m x", 40), TEST_TERM_BG);
+        assert_eq!(runs.len(), 1);
+        assert_eq!((runs[0].col, runs[0].text.as_str()), (0, " x"));
+        assert!(runs[0].bg.is_some());
+    }
+
+    #[test]
+    fn inverse_cell_swaps_fg_and_bg_falling_back_to_term_bg() {
+        // 反相格默认背景(未显式设过 bg)要换算成 `term_bg` 才能当新前景色
+        // 用——不能继续留 `None`(那是"不填色"的意思，反相格恰恰要填)；
+        // 新背景色固定是原本的前景色(终端默认前景 `(0x9A, 0xB4, 0xC4)`)。
+        let runs = layout_runs(&row_of(b"\x1b[7mA", 40), TEST_TERM_BG);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].fg, TEST_TERM_BG);
+        assert_eq!(runs[0].bg, Some((0x9A, 0xB4, 0xC4)));
     }
 }

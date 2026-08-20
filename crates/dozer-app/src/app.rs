@@ -4115,7 +4115,11 @@ impl App {
             .as_deref()
             .map(|s| {
                 s.chars()
-                    .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(1).max(1))
+                    .map(|c| {
+                        unicode_width::UnicodeWidthChar::width(c)
+                            .unwrap_or(1)
+                            .max(1)
+                    })
                     .sum()
             })
             .unwrap_or(0);
@@ -9523,7 +9527,8 @@ fn active_tab_view<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     match ws.tabs.get(ws.active) {
         Some(tab) => {
-            let focused = keyboard_term_target(app.left_view, app.active_zone) == TermTarget::Shared;
+            let focused =
+                keyboard_term_target(app.left_view, app.active_zone) == TermTarget::Shared;
             term_view::view(
                 &tab.model,
                 focused,
