@@ -3235,9 +3235,21 @@ impl App {
             .is_some_and(|ws| ws.acceptance_comment_editing())
     }
 
-    /// 项目树是否处于行内编辑态(main.rs 键盘路由用)。
-    pub fn tree_editing(&self) -> bool {
-        self.active_workspace().is_some_and(|ws| ws.tree_editing())
+    /// 项目树行内编辑框是否持有 iced 真实焦点(main.rs 键盘路由用)。为真时
+    /// 按键放行给标准 iced 事件管线,交真正的 text_input 自己处理。
+    pub fn tree_edit_focused(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.tree_edit_focused())
+    }
+
+    /// 每帧渲染循环调用:把 `extensions::files::CaptureTreeEditFocus` 问到的
+    /// 真实焦点态写进当前工作区(`main.rs` 键盘路由随后读
+    /// `tree_edit_focused` 消费)。焦点从真变假时清空树内编辑态(点别处退出
+    /// 重命名/新建)。
+    pub fn set_tree_edit_focused(&mut self, focused: bool) {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.files.set_tree_edit_focused(focused);
+        }
     }
 
     /// 文件树搜索框是否持有 iced 真实焦点(main.rs 键盘路由用)。为真时按键

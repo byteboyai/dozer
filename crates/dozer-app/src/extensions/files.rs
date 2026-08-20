@@ -4,7 +4,6 @@
 use crate::delivery::FileGitStatus;
 use crate::project::{FileTree, PathKind, TreeRow};
 use crate::theme::terminal_font;
-use crate::workspace::AddrEvent;
 use crate::{delivery, theme};
 use byteui::interaction::icons;
 use iced_widget::core::text::LineHeight;
@@ -54,6 +53,16 @@ pub struct WorkspaceState {
     tree_error: Option<String>,
     tree_delete_confirm: Option<(PathBuf, bool)>,
     tree_edit: Option<TreeEdit>,
+    /// 项目树行内编辑框是否持有 iced 内部真实焦点,每帧由 `CaptureTreeEditFocus`
+    /// 写入。
+    tree_edit_focused_flag: bool,
+    /// 一次性标记:`tree_edit` 刚从 `None` 变成 `Some`(新建/重命名刚
+    /// 触发)时置真,main.rs 渲染循环取走后用 `operation::focusable::
+    /// focus` 强制聚焦真正的 `text_input`——右键菜单点"重命名"/"新建
+    /// 文件"这类触发点击落在别的控件上,新出现的输入框不会自动拿到
+    /// iced 焦点,需要这一下程序化聚焦(同 `todo::scroll_to_top` 的既有
+    /// 一次性位手法)。
+    tree_edit_focus_pending: bool,
     /// 搜索框里正在键入的草稿文本(尚未提交时不影响树)。
     tree_search: String,
     /// 已提交的搜索关键字:仅当提交(敲回车/点搜索按钮)后用它过滤树。
@@ -149,7 +158,12 @@ pub enum Message {
     NewFolder(PathBuf),
     RenameStart(PathBuf),
     ReloadFromDisk,
-    EditEvent(AddrEvent),
+    /// 项目树行内编辑框草稿变化(iced `text_input::on_input`,每次给全量
+    /// 当前字符串)。
+    EditInput(String),
+    /// 回车 / 失焦(由 `set_tree_edit_focused` 的边缘触发,不经过消息):
+    /// 提交改名/新建。
+    EditSubmit,
     /// 搜索框草稿变化(iced `text_input::on_input`,每次按键给全量当前
     /// 字符串,不是逐字符追加)。只进草稿,不触发过滤——同现状,过滤词由
     /// `SearchSubmit` 落定。
@@ -248,6 +262,39 @@ impl Operation<()> for CaptureSearchFocus {
     }
 }
 
+/// 项目树行内编辑框稳定的 iced widget id。同一时刻 `tree_edit` 只可能是
+/// `Some` 一份(新建/重命名互斥,不会有两个编辑框同时存在),固定 id 够用,
+/// 不需要按行号/路径动态生成。
+pub fn tree_edit_field_id() -> Id {
+    Id::new("files-tree-edit-box")
+}
+
+static TREE_EDIT_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
+
+/// 读走(非消费)项目树编辑框上一帧是否持有 iced 内部真实焦点,同
+/// `take_search_focused` 的桥接手法。
+pub fn take_tree_edit_focused() -> bool {
+    *TREE_EDIT_FOCUSED.lock().unwrap()
+}
+
+/// 每帧 `interface.operate()` 跑一遍,把 `tree_edit_field_id()` 命中的
+/// `text_input` 当前是否持有 iced 焦点写进 `TREE_EDIT_FOCUSED`。`traverse`
+/// 必须调用传入的 `operate` 闭包才能继续递归子节点(见 `CaptureSearchFocus`
+/// 的文档)。
+pub struct CaptureTreeEditFocus;
+impl Operation<()> for CaptureTreeEditFocus {
+    fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
+        if id == Some(&tree_edit_field_id()) {
+            *TREE_EDIT_FOCUSED.lock().unwrap() = state.is_focused();
+        }
+    }
+
+    fn traverse(&mut self, operate: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {
+        operate(self);
+    }
+}
+
 impl WorkspaceState {
     /// 打开一个新项目时构造(现有 `Workspace::from_restore` 里
     /// `file_tree: Some(FileTree::new(..))` 那一步的搬家版本)。
@@ -277,11 +324,30 @@ impl WorkspaceState {
         self.tree_delete_confirm.is_some()
     }
 
-    /// 供内核 `Workspace::blur_inputs`(点击输入框外时退出所有自绘输入的
-    /// 编辑态)调用——原逻辑直接 `self.tree_edit = None`,字段私有化后改走
-    /// 这个访问器。
-    pub fn cancel_tree_edit(&mut self) {
-        self.tree_edit = None;
+    /// 项目树行内编辑框是否持有 iced 真实焦点(main.rs 键盘路由用)。
+    /// **不是**应用层手动置位的镜像——每帧渲染循环里 `CaptureTreeEditFocus`
+    /// 问一遍 iced 真相后立刻写进这里(`set_tree_edit_focused`)。
+    pub fn tree_edit_focused(&self) -> bool {
+        self.tree_edit_focused_flag
+    }
+
+    /// 每帧渲染循环读走 `CaptureTreeEditFocus` 查到的真实焦点态后写进来。
+    /// 焦点从真变假(刚失去焦点)时清空 `tree_edit`——项目树重命名/新建
+    /// 是"点别处就该退出"的一次性行内编辑,不像搜索框那样希望保留草稿
+    /// (现状既有行为,`cancel_tree_edit` 原本就是这个语义,只是触发时机
+    /// 从"点击外部"改成"真实焦点丢失")。
+    pub fn set_tree_edit_focused(&mut self, focused: bool) {
+        if self.tree_edit_focused_flag && !focused {
+            self.tree_edit = None;
+        }
+        self.tree_edit_focused_flag = focused;
+    }
+
+    /// 读走(消费式)一次性聚焦标记。main.rs 在 `UserInterface::build`
+    /// 之前调用(此时还能自由 `&mut app`),同 `todo::take_scroll_to_top`
+    /// 的既有调用时机。
+    pub fn take_tree_edit_focus_pending(&mut self) -> bool {
+        std::mem::take(&mut self.tree_edit_focus_pending)
     }
 
     /// 搜索框草稿、生效词保留,退出后仍作为盒子里的已输入文本继续显示。
@@ -299,12 +365,6 @@ impl WorkspaceState {
     /// 分支切换弹层是否展开(`App::view()` 顶层互斥浮层判断链用)。
     pub fn branch_picker_is_open(&self) -> bool {
         self.branch_picker_open
-    }
-
-    /// 供内核 `Workspace::tree_editing`(main.rs 键盘路由用,判断项目树是否
-    /// 处于行内编辑态)调用。
-    pub fn tree_edit_is_some(&self) -> bool {
-        self.tree_edit.is_some()
     }
 
     /// 供内核 `Message::PreviewOpenPath` 处理器调用——打开预览的同时把该
@@ -365,6 +425,7 @@ impl WorkspaceState {
             mode,
             buffer: String::new(),
         });
+        self.tree_edit_focus_pending = true;
     }
 
     /// 行内编辑框回车提交(现有 `Workspace::submit_tree_edit` 的搬家版本:
@@ -724,19 +785,16 @@ pub fn update(
                 mode: TreeEditMode::Rename(path),
                 buffer: name,
             });
+            ws_state.tree_edit_focus_pending = true;
         }
-        Message::EditEvent(ev) => {
+        Message::EditInput(s) => {
             let Some(edit) = &mut ws_state.tree_edit else {
                 return;
             };
-            match ev {
-                AddrEvent::Text(s) => edit.buffer.push_str(&s),
-                AddrEvent::Backspace => {
-                    edit.buffer.pop();
-                }
-                AddrEvent::Cancel => ws_state.tree_edit = None,
-                AddrEvent::Submit => ws_state.submit_tree_edit(project_id, handle, emit),
-            }
+            edit.buffer = s;
+        }
+        Message::EditSubmit => {
+            ws_state.submit_tree_edit(project_id, handle, emit);
         }
         Message::CopyPath(..) => {
             unreachable!("由内核拦截处理,见 files::Message::CopyPath 文档")
@@ -1194,29 +1252,33 @@ pub fn view<'a>(
     container(body).width(width).height(Length::Fill).into()
 }
 
-/// 行内编辑框(新建/重命名共用):自绘输入,尾缀 "▏" 模拟光标,与地址栏/
-/// 验收意见框同款风格(键盘走 main.rs 拦截层,不用 iced 原生 text_input)。
+/// 行内编辑框(新建/重命名共用):真正的 iced `text_input`(`bare: false` 由
+/// `byteui::form::input_text` 自己画卡片背景 + 聚焦金框描边)。缩进不再用
+/// 等宽空格字符模拟,**改用外层容器真正的左内边距**——旧版把缩进拼进文本
+/// 内容,新版用 `Padding::left` 让编辑框整体右移,视觉跟树层级绑定对齐。
 fn tree_edit_row(
     depth: usize,
     buffer: &str,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let indent = "  ".repeat(depth);
-    container(
-        text(format!("{indent}{buffer}▏"))
-            .size(crate::workspace::tree_row_font_size())
-            .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
-            .color(byteui::theme::color::current().cream),
-    )
+    // 每级缩进逻辑像素:原自绘版每级用两个全角空格字符,换算成像素 =
+    // `tree_row_font_size() * 0.6`(ASCII 字符宽经验值,同
+    // `extensions::todo::cursor_from_x` 的换算口径)* 2(原来每级两个空格)。
+    // 数字来源见 Stage 5 计划 Task 1 Step 8 的说明,不是随手拍脑袋的魔法值。
+    let indent_px = depth as f32 * crate::workspace::tree_row_font_size() * 0.6 * 2.0;
+    container(byteui::form::input_text::view(
+        "",
+        buffer,
+        false,
+        Some(tree_edit_field_id()),
+        false,
+        Some(Message::EditSubmit),
+        false,
+        Message::EditInput,
+    ))
     .width(Length::Fill)
-    .padding([2, 4])
-    .style(|_t: &iced_widget::Theme| container::Style {
-        background: Some(byteui::theme::color::current().card.into()),
-        border: Border {
-            color: byteui::theme::color::current().cream,
-            width: 1.0,
-            radius: 2.0.into(),
-        },
-        ..container::Style::default()
+    .padding(Padding {
+        left: indent_px,
+        ..Padding::default()
     })
     .into()
 }
@@ -2135,7 +2197,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn edit_event_text_and_backspace_mutate_buffer() {
+    async fn edit_input_replaces_whole_buffer() {
         let dir = tempfile::tempdir().unwrap();
         let mut ws_state = ws_with_tree(dir.path().to_path_buf());
         let mut app_state = AppState::default();
@@ -2148,30 +2210,41 @@ mod tests {
         update(
             &mut ws_state,
             &mut app_state,
-            Message::EditEvent(AddrEvent::Text("ab".to_string())),
+            Message::EditInput("ab".to_string()),
             1,
             &handle,
             |_| {},
         );
         assert_eq!(ws_state.tree_edit.as_ref().unwrap().buffer, "ab");
+        // iced text_input 每次 on_input 给全量当前字符串,不是逐字符追加。
         update(
             &mut ws_state,
             &mut app_state,
-            Message::EditEvent(AddrEvent::Backspace),
+            Message::EditInput("a".to_string()),
             1,
             &handle,
             |_| {},
         );
         assert_eq!(ws_state.tree_edit.as_ref().unwrap().buffer, "a");
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::EditEvent(AddrEvent::Cancel),
-            1,
-            &handle,
-            |_| {},
-        );
+    }
+
+    #[test]
+    fn set_tree_edit_focused_clears_edit_on_focus_loss() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        ws_state.tree_edit = Some(TreeEdit {
+            parent_dir: dir.path().to_path_buf(),
+            mode: TreeEditMode::NewFile,
+            buffer: "ab".to_string(),
+        });
+        // 先置真:进入聚焦态,编辑框保留。
+        ws_state.set_tree_edit_focused(true);
+        assert!(ws_state.tree_edit.is_some());
+        assert!(ws_state.tree_edit_focused());
+        // 焦点从真变假:清理行内编辑态(点别处退出重命名/新建)。
+        ws_state.set_tree_edit_focused(false);
         assert!(ws_state.tree_edit.is_none());
+        assert!(!ws_state.tree_edit_focused());
     }
 
     #[tokio::test]
@@ -2188,7 +2261,7 @@ mod tests {
         update(
             &mut ws_state,
             &mut app_state,
-            Message::EditEvent(AddrEvent::Submit),
+            Message::EditSubmit,
             1,
             &handle,
             |_| panic!("空名字不该发起任何异步操作"),
@@ -2213,7 +2286,7 @@ mod tests {
         update(
             &mut ws_state,
             &mut app_state,
-            Message::EditEvent(AddrEvent::Submit),
+            Message::EditSubmit,
             1,
             &handle,
             |_| panic!("名字非法时不该发起任何异步操作"),
@@ -2240,7 +2313,7 @@ mod tests {
         update(
             &mut ws_state,
             &mut app_state,
-            Message::EditEvent(AddrEvent::Submit),
+            Message::EditSubmit,
             1,
             &handle,
             |_| panic!("已存在同名项时不该发起任何异步操作"),

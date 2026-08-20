@@ -1038,6 +1038,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 || app.browser_addr_focused()
                 || app.todo_search_focused()
                 || app.todo_add_focused()
+                || app.tree_edit_focused()
                 || app.home_project_search_focused()
                 || app.ssh_form_open()
                 || app.database_form_open()
@@ -1045,39 +1046,35 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
-            // 验收意见 / 项目树行内编辑态 / 项目名称编辑 / 右键"搜索"弹窗
+            // 验收意见 / 项目名称编辑 / 右键"搜索"弹窗
             // 查询框 / Todo 任务内容编辑 / Todo MARKDOWN 整文件编辑:键盘
             // 直达自绘输入(不经 keymap、不进 PTY)。文件预览面板已不再有
-            // 地址栏;文件树搜索框/浏览器地址栏/Todo 面板搜索框、新增任务框/
-            // 首页项目搜索框均已迁移 iced 原生控件,走上面那道独立的原生
-            // 放行闸门,不再在此列。提到 ⌘ 组合键判断之前,因为 ⌘V 粘贴也要
-            // 认这套聚焦态(见下方 fix)。
+            // 地址栏;文件树搜索框/项目树行内编辑框/浏览器地址栏/Todo 面板
+            // 搜索框、新增任务框/首页项目搜索框均已迁移 iced 原生控件,走
+            // 上面那道独立的原生放行闸门,不再在此列。提到 ⌘ 组合键判断之前,
+            // 因为 ⌘V 粘贴也要认这套聚焦态(见下方 fix)。
             let to_comment = app.acceptance_comment_editing();
-            let to_tree_edit = app.tree_editing();
             let to_project_name = app.project_name_editing();
             let to_search_popup = app.search_popup_editing();
             let to_todo_content = app.todo_content_editing();
             let to_todo_markdown = app.todo_markdown_editing();
             let to_self_drawn_input = to_comment
-                || to_tree_edit
                 || to_project_name
                 || to_search_popup
                 || to_todo_content
                 || to_todo_markdown;
-            // 优先级:右键"搜索"弹窗查询框 > 验收意见 > 项目树编辑 > 项目
-            // 名称编辑 > Todo 任务内容编辑 > Todo MARKDOWN 整文件编辑(文件树
-            // 搜索框、浏览器地址栏、Todo 面板搜索框/新增任务框、首页项目
-            // 搜索框均已迁 iced 原生 text_input/text_editor,走上面新增的
-            // 独立放行闸门,不再在此列;多者同真时罕见,谁先建的编辑态谁
-            // 优先没有实际冲突场景,这个顺序只是一个确定性兜底)。
+            // 优先级:右键"搜索"弹窗查询框 > 验收意见 > 项目名称编辑 >
+            // Todo 任务内容编辑 > Todo MARKDOWN 整文件编辑(文件树
+            // 搜索框、项目树行内编辑框、浏览器地址栏、Todo 面板搜索框/新增
+            // 任务框、首页项目搜索框均已迁 iced 原生 text_input/text_editor,
+            // 走上面新增的独立放行闸门,不再在此列;多者同真时罕见,谁先建的
+            // 编辑态谁优先没有实际冲突场景,这个顺序只是一个确定性兜底)。
             // ⌘V 粘贴与逐字符输入共用这条链,保证两条路径落进同一个自绘输入。
             let addr_message = |ev: workspace::AddrEvent| -> Message {
                 if to_search_popup {
                     Message::Search(extensions::search::Message::QueryEvent(ev))
                 } else if to_comment {
                     Message::Acceptance(extensions::acceptance::Message::CommentEvent(ev))
-                } else if to_tree_edit {
-                    Message::Files(extensions::files::Message::EditEvent(ev))
                 } else if to_project_name {
                     Message::Project(extensions::project::Message::NameEditEvent(ev))
                 } else if to_todo_content {
@@ -2147,6 +2144,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // `app` 的不可变引用,后面就不能再可变借用了)。
                                 let scroll_pending = app.take_todo_scroll_to_top();
 
+                                // 同理,消费"项目树行内编辑刚触发、需要程序化聚焦"
+                                // 一次性位(右键菜单点"重命名"/"新建文件"这类触发
+                                // 点击落在别的控件上,真 `text_input` 下一帧才出现、
+                                // 不会自己拿焦点,必须在这里强制 `focus` 一下)。
+                                let tree_edit_focus_pending = app
+                                    .active_workspace_mut()
+                                    .is_some_and(|ws| ws.take_tree_edit_focus_pending());
+
                                 // Draw iced on top
                                 let mut interface = UserInterface::build(
                                     app.view(),
@@ -2177,6 +2182,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                             y: Some(0.0),
                                         },
                                     );
+                                    interface.operate(renderer, &mut op);
+                                }
+
+                                // 项目树行内编辑刚触发时程序化聚焦真正的
+                                // `text_input`(一次性位,消费即复位)。
+                                if tree_edit_focus_pending {
+                                    let mut op =
+                                        iced_widget::core::widget::operation::focusable::focus::<()>(
+                                            extensions::files::tree_edit_field_id(),
+                                        );
                                     interface.operate(renderer, &mut op);
                                 }
 
@@ -2211,6 +2226,19 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                             &mut extensions::files::CaptureSearchFocus,
                                         );
                                         extensions::files::take_search_focused()
+                                    } else {
+                                        false
+                                    };
+
+                                // 项目树行内编辑框(Stage 5)同款每帧真实焦点查询:
+                                // 与 Files 搜索框完全同构。只在 Files 左栏可见时跑。
+                                let tree_edit_focused =
+                                    if matches!(app.left_view(), crate::app::PanelKind::Files) {
+                                        interface.operate(
+                                            renderer,
+                                            &mut extensions::files::CaptureTreeEditFocus,
+                                        );
+                                        extensions::files::take_tree_edit_focused()
                                     } else {
                                         false
                                     };
@@ -2317,6 +2345,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 app.set_todo_search_focused(todo_search_focused);
                                 app.set_todo_add_focused(todo_add_focused);
                                 app.set_home_project_search_focused(home_search_focused);
+                                app.set_tree_edit_focused(tree_edit_focused);
 
                                 // 同上,浏览器地址栏的真实焦点态现在才写回工作区
                                 // (供下一帧键盘路由 `browser_addr_focused` 消费)。

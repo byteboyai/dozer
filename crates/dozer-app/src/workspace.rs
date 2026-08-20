@@ -2069,10 +2069,18 @@ impl Workspace {
         self.browser.active_webview_id()
     }
 
-    /// 项目树是否处于行内编辑态(main.rs 键盘路由用,同款
-    /// `browser_addr_focused()`/`acceptance_comment_editing()`)。
-    pub fn tree_editing(&self) -> bool {
-        self.files.tree_edit_is_some()
+    /// 项目树行内编辑框是否持有 iced 真实焦点(main.rs 键盘路由用,每帧由
+    /// `CaptureTreeEditFocus` 查询后经 `set_tree_edit_focused` 写入)。
+    pub fn tree_edit_focused(&self) -> bool {
+        self.files.tree_edit_focused()
+    }
+
+    /// 读走(消费式)项目树行内编辑的一次性程序化聚焦标记(新建/重命名刚
+    /// 触发时置位,text_input 下一帧才出现、不会自己拿焦点)。main.rs 在
+    /// `UserInterface::build` 之前调用,为真则用 `operation::focusable::
+    /// focus` 强制聚焦真 `text_input`。
+    pub fn take_tree_edit_focus_pending(&mut self) -> bool {
+        self.files.take_tree_edit_focus_pending()
     }
 
     /// 文件树搜索框是否持有 iced 真实焦点(main.rs 键盘路由用):为真时按键
@@ -2125,7 +2133,6 @@ impl Workspace {
     /// 见 view() 里的 stack dismiss 层),这里重复清是死代码。
     pub fn blur_inputs(&mut self) {
         self.acceptance.clear_comment_editing();
-        self.files.cancel_tree_edit();
         self.todo.cancel_drag();
         // 名称编辑不在失焦时丢弃——改由 `App::blur_inputs` 取出缓冲并发起
         // daemon 改名(改动且非空才发请求),与描述字段"失焦写盘"行为对齐。
