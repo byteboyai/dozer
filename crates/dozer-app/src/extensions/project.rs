@@ -95,13 +95,6 @@ impl WorkspaceState {
         std::mem::take(&mut self.name_edit_focus_pending)
     }
 
-    /// 供内核 `App::blur_inputs` 调用——失焦时取出当前编辑中的名称缓冲。
-    /// 返回 `Some(raw)` 时由内核发起 daemon 改名(改动且非空才真正发请求,
-    /// 见 `App::blur_inputs`);`None` 表示未处于编辑态,无需处理。
-    pub fn take_name_edit(&mut self) -> Option<String> {
-        self.name_editing.take()
-    }
-
     /// 供内核 `project_preview_open_path`/`project_link_context_menu` 调用——
     /// 打开链接预览 / 打开删除右键菜单的同时把该路径标记为「选中」行(参考
     /// 文件树 `files::WorkspaceState::set_tree_selected`)。

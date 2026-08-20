@@ -650,8 +650,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             };
 
             // 光标位置跟踪 + 点击焦点路由（验收反馈 2/失焦回正常态）:
-            // 任一左键点击先退出所有自绘输入编辑态(点回输入框会被 iced
-            // 随后的 AddrClick/CommentClick 重新进入);再按落点决定键盘归谁。
+            // 任一左键点击先退出剩余自绘输入编辑态;再按落点决定键盘归谁。
             match event {
                 WindowEvent::CursorMoved { position, .. } => {
                     *cursor_phys = *position;
@@ -858,9 +857,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 }
                 _ => {}
             }
-            // 右键"搜索"弹窗打开时,Esc 优先:查询框编辑态先退编辑态(按第二次
-            // 才整个关弹窗),非编辑态直接关弹窗。不放靠后位置以免被终端当
-            // 普通按键消费掉。
+            // 右键"搜索"弹窗打开时,Esc 优先:任何时候直接关整个弹窗(迁移到
+            // 原生 text_input 后查询框聚焦态由 iced 自己管,不再有"编辑态"
+            // 这个中间态,不再区分先退编辑态再关弹窗的两级行为)。不放靠后
+            // 位置以免被终端当普通按键消费掉。
             if app.search_popup_open()
                 && let WindowEvent::KeyboardInput {
                     event,
@@ -871,13 +871,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 && event.logical_key
                     == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
             {
-                if app.search_popup_editing() {
-                    app.update(Message::Search(extensions::search::Message::QueryEvent(
-                        workspace::AddrEvent::Cancel,
-                    )));
-                } else {
-                    app.update(Message::Search(extensions::search::Message::SearchClose));
-                }
+                app.update(Message::Search(extensions::search::Message::SearchClose));
                 window.request_redraw();
                 return;
             }
@@ -1042,40 +1036,29 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 || app.home_project_search_focused()
                 || app.ssh_form_open()
                 || app.database_form_open()
+                || app.comment_focused()
+                || app.project_name_focused()
+                || app.query_focused()
             {
                 return;
             }
 
-            // 验收意见 / 项目名称编辑 / 右键"搜索"弹窗
-            // 查询框 / Todo MARKDOWN 整文件编辑:键盘
-            // 直达自绘输入(不经 keymap、不进 PTY)。文件预览面板已不再有
-            // 地址栏;文件树搜索框/项目树行内编辑框/浏览器地址栏/Todo 面板
-            // 搜索框、新增任务框、任务内容编辑框/首页项目搜索框均已迁移 iced
-            // 原生控件,走上面那道独立的原生放行闸门,不再在此列。提到 ⌘ 组合
-            // 键判断之前,因为 ⌘V 粘贴也要认这套聚焦态(见下方 fix)。
-            let to_comment = app.acceptance_comment_editing();
-            let to_project_name = app.project_name_editing();
-            let to_search_popup = app.search_popup_editing();
+            // Todo MARKDOWN 整文件编辑:键盘直达自绘输入(不经 keymap、不
+            // 进 PTY)。验收意见/项目名称编辑/右键"搜索"弹窗查询框均已迁移
+            // iced 原生 text_input,走上面那道独立的原生放行闸门,不再在此列;
+            // 文件预览面板已不再有地址栏;文件树搜索框/项目树行内编辑框/浏览器
+            // 地址栏/Todo 面板搜索框、新增任务框、任务内容编辑框/首页项目搜索框
+            // 均已迁移 iced 原生控件,走上面那道独立的原生放行闸门,不再在此列。
+            // 提到 ⌘ 组合键判断之前,因为 ⌘V 粘贴也要认这套聚焦态(见下方 fix)。
             let to_todo_markdown = app.todo_markdown_editing();
-            let to_self_drawn_input =
-                to_comment || to_project_name || to_search_popup || to_todo_markdown;
-            // 优先级:右键"搜索"弹窗查询框 > 验收意见 > 项目名称编辑 >
-            // Todo MARKDOWN 整文件编辑(文件树
-            // 搜索框、项目树行内编辑框、浏览器地址栏、Todo 面板搜索框/新增
-            // 任务框/任务内容编辑框、首页项目搜索框均已迁 iced 原生 text_input/
-            // text_editor,走上面新增的独立放行闸门,不再在此列;多者同真时罕见,
-            // 谁先建的编辑态谁优先没有实际冲突场景,这个顺序只是一个确定性兜底)。
+            let to_self_drawn_input = to_todo_markdown;
+            // 优先级:Todo MARKDOWN 整文件编辑(文件树搜索框、项目树行内编辑框、
+            // 浏览器地址栏、Todo 面板搜索框/新增任务框/任务内容编辑框、首页项目
+            // 搜索框、验收意见、项目名称、右键搜索弹窗都已迁 iced 原生
+            // text_input/text_editor,走上面新增的独立放行闸门,不再在此列)。
             // ⌘V 粘贴与逐字符输入共用这条链,保证两条路径落进同一个自绘输入。
             let addr_message = |ev: workspace::AddrEvent| -> Message {
-                if to_search_popup {
-                    Message::Search(extensions::search::Message::QueryEvent(ev))
-                } else if to_comment {
-                    Message::Acceptance(extensions::acceptance::Message::CommentEvent(ev))
-                } else if to_project_name {
-                    Message::Project(extensions::project::Message::NameEditEvent(ev))
-                } else {
-                    Message::Todo(extensions::todo::Message::MarkdownEvent(ev))
-                }
+                Message::Todo(extensions::todo::Message::MarkdownEvent(ev))
             };
 
             // ⌘ 组合键是应用级快捷键，一律不进 PTY（此前 ⌘C 会把裸 "c"
@@ -2102,6 +2085,17 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     .active_workspace_mut()
                                     .is_some_and(|ws| ws.take_content_edit_focus_pending());
 
+                                // 同理,消费 项目名称编辑/右键搜索 弹窗查询框两个
+                                // 一次性聚焦位(触发点击落在旧的 button/MouseArea
+                                // 上,真 `text_input` 本帧才出现、不会自己拿焦点;
+                                // 验收意见框常驻可见、点击即原生聚焦,不需要这机制)。
+                                let name_edit_focus_pending = app
+                                    .active_workspace_mut()
+                                    .is_some_and(|ws| ws.take_name_edit_focus_pending());
+                                let query_focus_pending = app
+                                    .active_workspace_mut()
+                                    .is_some_and(|ws| ws.take_query_focus_pending());
+
                                 // Draw iced on top
                                 let mut interface = UserInterface::build(
                                     app.view(),
@@ -2151,6 +2145,23 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     let mut op =
                                         iced_widget::core::widget::operation::focusable::focus::<()>(
                                             extensions::todo::content_field_id(),
+                                        );
+                                    interface.operate(renderer, &mut op);
+                                }
+
+                                // 项目名称编辑 / 右键搜索弹窗查询框刚触发时程序化聚焦
+                                // 真正的 `text_input`(一次性位,消费即复位)。
+                                if name_edit_focus_pending {
+                                    let mut op =
+                                        iced_widget::core::widget::operation::focusable::focus::<()>(
+                                            extensions::project::name_field_id(),
+                                        );
+                                    interface.operate(renderer, &mut op);
+                                }
+                                if query_focus_pending {
+                                    let mut op =
+                                        iced_widget::core::widget::operation::focusable::focus::<()>(
+                                            extensions::search::query_field_id(),
                                         );
                                     interface.operate(renderer, &mut op);
                                 }
@@ -2267,6 +2278,44 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     false
                                 };
 
+                                // 验收意见框(Stage 6):同款每帧查真实焦点态。
+                                let comment_focused =
+                                    if matches!(app.left_view(), crate::app::PanelKind::Acceptance)
+                                    {
+                                        interface.operate(
+                                            renderer,
+                                            &mut extensions::acceptance::CaptureCommentFocus,
+                                        );
+                                        extensions::acceptance::take_comment_focused()
+                                    } else {
+                                        false
+                                    };
+
+                                // 项目名称编辑框(Stage 6):渲染在 `PanelKind::
+                                // Project`,同款每帧查真实焦点态。
+                                let name_edit_focused =
+                                    if matches!(app.left_view(), crate::app::PanelKind::Project) {
+                                        interface.operate(
+                                            renderer,
+                                            &mut extensions::project::CaptureNameEditFocus,
+                                        );
+                                        extensions::project::take_name_edit_focused()
+                                    } else {
+                                        false
+                                    };
+
+                                // 右键搜索弹窗查询框(Stage 6):全局浮层,不挂靠
+                                // 任何 `left_view`,gating 条件用 `search_popup_open`。
+                                let query_focused = if app.search_popup_open() {
+                                    interface.operate(
+                                        renderer,
+                                        &mut extensions::search::CaptureQueryFocus,
+                                    );
+                                    extensions::search::take_query_focused()
+                                } else {
+                                    false
+                                };
+
                                 // Update the mouse cursor
                                 if let user_interface::State::Updated {
                                     mouse_interaction, ..
@@ -2312,6 +2361,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 app.set_home_project_search_focused(home_search_focused);
                                 app.set_tree_edit_focused(tree_edit_focused);
                                 app.set_todo_content_focused(content_edit_focused);
+                                app.set_comment_focused(comment_focused);
+                                app.set_project_name_focused(name_edit_focused);
+                                app.set_query_focused(query_focused);
 
                                 // 同上,浏览器地址栏的真实焦点态现在才写回工作区
                                 // (供下一帧键盘路由 `browser_addr_focused` 消费)。

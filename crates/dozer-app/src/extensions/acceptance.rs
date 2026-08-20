@@ -36,14 +36,6 @@ impl WorkspaceState {
         }
     }
 
-    /// 读走(消费式)一次性聚焦标记,同 `files::take_tree_edit_focus_pending`
-    /// 的既有手法。
-    pub fn take_comment_focus_pending(&mut self) -> bool {
-        self.session
-            .as_mut()
-            .is_some_and(|s| std::mem::take(&mut s.comment_focus_pending))
-    }
-
     /// 供内核 `Open` 拦截处理后落地新会话——不经过 `Message::Loaded`,
     /// 因为 `Loaded` 本身就是通过 `update` 落地的(见 `update` 的
     /// `Loaded` 分支)。这个方法留给测试/未来直接构造场景用,`update`
@@ -116,10 +108,6 @@ pub struct AcceptanceSession {
     comment: String,
     /// 意见框是否持有 iced 内部真实焦点,每帧由 `CaptureCommentFocus` 写入。
     comment_focused: bool,
-    /// 一次性标记:点意见框(`CommentClick`)刚触发编辑时置真,main.rs 渲染
-    /// 循环取走后用 `operation::focusable::focus` 强制聚焦——点击落在旧的
-    /// 自绘 `button` 上,不是新出现的 `text_input` 本身,不会自动带焦点。
-    comment_focus_pending: bool,
     error: Option<String>,
     accepted_version: Option<u32>,
 }
@@ -146,9 +134,6 @@ pub enum Message {
     Toggle(usize),
     ToggleDiff(usize),
     DiffLoaded(i64, usize, Result<String, String>),
-    /// 点意见框进入编辑态(`comment_focus_pending` 置位,main.rs 据此程序
-    /// 化聚焦)。
-    CommentClick,
     /// 意见框草稿变化(iced `text_input::on_input`,每次给全量当前字符串)。
     CommentInput(String),
     Accept,
@@ -181,7 +166,6 @@ pub fn update(
                 diffs: HashMap::new(),
                 comment: String::new(),
                 comment_focused: false,
-                comment_focus_pending: false,
                 error: None,
                 accepted_version: None,
             });
@@ -221,11 +205,6 @@ pub fn update(
         Message::DiffLoaded(_, i, result) => {
             if let Some(session) = &mut ws_state.session {
                 session.diffs.insert(i, result);
-            }
-        }
-        Message::CommentClick => {
-            if let Some(session) = &mut ws_state.session {
-                session.comment_focus_pending = true;
             }
         }
         Message::CommentInput(s) => {
@@ -569,7 +548,6 @@ mod tests {
             diffs: HashMap::new(),
             comment: String::new(),
             comment_focused: false,
-            comment_focus_pending: false,
             error: None,
             accepted_version: None,
         }

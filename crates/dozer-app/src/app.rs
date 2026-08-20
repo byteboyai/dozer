@@ -3229,10 +3229,18 @@ impl App {
         }
     }
 
-    /// 验收意见输入是否在编辑态（main.rs 键盘路由用）。
-    pub fn acceptance_comment_editing(&self) -> bool {
+    /// 验收意见框是否持有 iced 真实焦点(main.rs 原生放行闸门用)。
+    pub fn comment_focused(&self) -> bool {
         self.active_workspace()
-            .is_some_and(|ws| ws.acceptance_comment_editing())
+            .is_some_and(|ws| ws.comment_focused())
+    }
+
+    /// 每帧渲染循环读走 `CaptureCommentFocus` 查到的真实焦点态后写进当前
+    /// 工作区(main.rs 键盘路由随后读 `comment_focused` 消费)。
+    pub fn set_comment_focused(&mut self, focused: bool) {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.acceptance.set_comment_focused(focused);
+        }
     }
 
     /// 项目树行内编辑框是否持有 iced 真实焦点(main.rs 键盘路由用)。为真时
@@ -3285,16 +3293,55 @@ impl App {
             .is_some_and(|ws| ws.search_popup_open())
     }
 
-    /// 右键文件树"搜索"弹窗查询框是否处于编辑态(main.rs 键盘路由用)。
-    pub fn search_popup_editing(&self) -> bool {
-        self.active_workspace()
-            .is_some_and(|ws| ws.search_popup_editing())
+    /// 右键文件树"搜索"弹窗查询框是否持有 iced 真实焦点(main.rs 原生放行
+    /// 闸门用)。
+    pub fn query_focused(&self) -> bool {
+        self.active_workspace().is_some_and(|ws| ws.query_focused())
     }
 
-    /// 项目信息面板名称是否处于自绘编辑态(main.rs 键盘路由用)。
-    pub fn project_name_editing(&self) -> bool {
+    /// 每帧渲染循环读走 `CaptureQueryFocus` 查到的真实焦点态后写进当前
+    /// 工作区。
+    pub fn set_query_focused(&mut self, focused: bool) {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.search.set_query_focused(focused);
+        }
+    }
+
+    /// 项目信息面板名称编辑框是否持有 iced 真实焦点(main.rs 原生放行闸门用)。
+    pub fn project_name_focused(&self) -> bool {
         self.active_workspace()
-            .is_some_and(|ws| ws.project_name_editing())
+            .is_some_and(|ws| ws.name_edit_focused())
+    }
+
+    /// 每帧渲染循环调用:把 `CaptureNameEditFocus` 问到的真实焦点态写进
+    /// 当前工作区,并在"焦点从真变假"的那一刻做落盘判断(同 `App::
+    /// set_todo_content_focused` 的既有手法,`submit_name_edit` 走这条
+    /// 而不是重新手写一份 `rename_project` 调用)。
+    pub fn set_project_name_focused(&mut self, focused: bool) {
+        let client = self.client.clone();
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        let Some(ws) = self.active_workspace_mut() else {
+            return;
+        };
+        let was_focused = ws.name_edit_focused();
+        if was_focused
+            && !focused
+            && let Some(project) = ws.project.clone()
+        {
+            let emit = move |m: project::Message| {
+                let _ = proxy.send_event(Message::Project(m));
+            };
+            project::submit_name_edit(
+                &mut ws.project_panel,
+                project.id,
+                &project.name,
+                client,
+                &handle,
+                emit,
+            );
+        }
+        ws.project_panel.set_name_edit_focused_flag(focused);
     }
 
     /// Todo 面板搜索框是否持有 iced 真实焦点(main.rs 键盘路由用)。
@@ -3461,39 +3508,14 @@ impl App {
     }
 
     /// 点击输入框外时退出所有自绘输入的编辑态(验收反馈:失焦回正常态)。
-    /// 项目名称编辑走"失焦保存":取出半输入缓冲,改动且非空时发起 daemon
-    /// 改名(与回车提交同一路径),未改动/空名则直接丢弃编辑框,与描述字段
-    /// "失焦写盘"行为对齐——修复之前失焦把改名直接丢弃、看起来"无法保存"。
+    /// 项目名称编辑的"失焦保存"已搬进 `set_project_name_focused` 的边缘触发
+    /// (与回车提交共用 `extensions::project::submit_name_edit`),这里只交
+    /// 给 `Workspace::blur_inputs` 清其它编辑态。
     pub fn blur_inputs(&mut self) {
         let Some(ws) = self.active_workspace_mut() else {
             return;
         };
-        // 先取出名称编辑缓冲,再交给 `Workspace::blur_inputs` 清其它编辑态,
-        // 避免顺序问题丢失半输入。
-        let pending_name = ws.project_panel.take_name_edit();
-        let project = ws.project.clone();
         ws.blur_inputs();
-        if let (Some(p), Some(raw)) = (project, pending_name) {
-            let name = raw.trim().to_string();
-            let project_id = p.id;
-            let current_name = p.name.clone();
-            if !name.is_empty() && name != current_name {
-                let client = self.client.clone();
-                let handle = self.handle.clone();
-                let proxy = self.proxy.clone();
-                let emit = move |m: project::Message| {
-                    let _ = proxy.send_event(Message::Project(m));
-                };
-                handle.spawn(async move {
-                    let result = client
-                        .rename_project(project_id, &name)
-                        .await
-                        .map_err(|e| e.to_string())
-                        .and_then(|opt| opt.ok_or_else(|| "项目不存在".to_string()));
-                    emit(project::Message::NameRenamed(project_id, result));
-                });
-            }
-        }
     }
 
     /// 键盘焦点被消息(非鼠标点击)拨离预览列时调用——`main.rs` 里切终端
@@ -4040,11 +4062,6 @@ impl App {
     /// 字号常量。
     pub fn ime_cursor_area(&self, window_w: f32, window_h: f32) -> (f32, f32, f32) {
         let state = self.shell_state();
-        if self.acceptance_comment_editing() {
-            let side = state.layout.rail_layout.side_of(PanelKind::Acceptance);
-            let (bx, by, _bw, _bh) = preview_content_bounds_for(side, window_w, window_h, &state);
-            return (bx + 4.0, by, 20.0);
-        }
         let (pane_w, pane_h) = terminal_pane_pixel_size(window_w, window_h, &state);
         let cell_w = pane_w / self.cols.max(1) as f32;
         let line_h = pane_h / self.rows.max(1) as f32;

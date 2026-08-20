@@ -1995,9 +1995,9 @@ impl Workspace {
         self.browser.addr_focused()
     }
 
-    /// 验收意见输入是否在编辑态（main.rs 键盘路由用）。
-    pub fn acceptance_comment_editing(&self) -> bool {
-        self.acceptance.comment_editing()
+    /// 验收意见框是否持有 iced 真实焦点(main.rs 原生放行闸门用)。
+    pub fn comment_focused(&self) -> bool {
+        self.acceptance.comment_focused()
     }
 
     /// `kind` 是 `is_in_preview_column` 命中的面板(`Files` 或
@@ -2117,15 +2117,25 @@ impl Workspace {
         self.search.is_open()
     }
 
-    /// 右键文件树"搜索"弹窗查询框是否处于自绘编辑态(main.rs 键盘路由用):
-    /// 为真时按键路由成 `search::Message::QueryChanged`,不再喂 PTY。
-    pub fn search_popup_editing(&self) -> bool {
-        self.search.query_editing()
+    /// 右键文件树"搜索"弹窗查询框是否持有 iced 真实焦点(main.rs 原生放行
+    /// 闸门用)。
+    pub fn query_focused(&self) -> bool {
+        self.search.query_focused()
     }
 
-    /// 项目信息面板名称是否处于自绘编辑态(main.rs 键盘路由用)。
-    pub fn project_name_editing(&self) -> bool {
-        self.project_panel.name_editing_is_some()
+    /// 读走(消费式)搜索弹窗查询框的一次性聚焦标记。
+    pub fn take_query_focus_pending(&mut self) -> bool {
+        self.search.take_query_focus_pending()
+    }
+
+    /// 项目信息面板名称编辑框是否持有 iced 真实焦点(main.rs 原生放行闸门用)。
+    pub fn name_edit_focused(&self) -> bool {
+        self.project_panel.name_edit_focused()
+    }
+
+    /// 读走(消费式)项目名称编辑框的一次性聚焦标记。
+    pub fn take_name_edit_focus_pending(&mut self) -> bool {
+        self.project_panel.take_name_edit_focus_pending()
     }
 
     /// 当前项目根路径(供 main.rs 算相对路径用;未打开项目时 None)。
@@ -2140,7 +2150,6 @@ impl Workspace {
     /// 清:它已经有专门的外点 dismiss 遮罩(`files::Message::ContextMenuClose`,
     /// 见 view() 里的 stack dismiss 层),这里重复清是死代码。
     pub fn blur_inputs(&mut self) {
-        self.acceptance.clear_comment_editing();
         self.todo.cancel_drag();
         // 名称编辑不在失焦时丢弃——改由 `App::blur_inputs` 取出缓冲并发起
         // daemon 改名(改动且非空才发请求),与描述字段"失焦写盘"行为对齐。
