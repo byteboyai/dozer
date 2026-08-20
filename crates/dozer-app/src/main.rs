@@ -19,6 +19,7 @@ mod preview;
 mod preview_state;
 mod project;
 mod project_meta;
+mod search_box;
 mod term_model;
 mod term_view;
 mod theme;
@@ -1002,6 +1003,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             let to_todo_add = app.todo_add_editing();
             let to_todo_content = app.todo_content_editing();
             let to_todo_markdown = app.todo_markdown_editing();
+            let to_home_project_search = app.home_project_search_editing();
             let to_self_drawn_input = to_browser
                 || to_comment
                 || to_tree_edit
@@ -1011,13 +1013,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 || to_todo_search
                 || to_todo_add
                 || to_todo_content
-                || to_todo_markdown;
+                || to_todo_markdown
+                || to_home_project_search;
             // 优先级:右键"搜索"弹窗查询框 > 浏览器地址栏 > 验收意见 > 项目树
             // 编辑 > 项目名称编辑 > 文件树搜索框 > Todo 面板搜索框 > Todo
-            // 新增任务框 > Todo 任务内容编辑 > Todo MARKDOWN 编辑(多者同真时
-            // 罕见,谁先建的编辑态谁优先没有实际冲突场景,这个顺序只是一个
-            // 确定性兜底)。⌘V 粘贴与逐字符输入共用这条链,保证两条路径落进
-            // 同一个自绘输入。
+            // 新增任务框 > Todo 任务内容编辑 > Todo MARKDOWN 编辑 > 首页项目
+            // 搜索框(多者同真时罕见,谁先建的编辑态谁优先没有实际冲突场景,
+            // 这个顺序只是一个确定性兜底——首页项目搜索框排最后是因为它跟
+            // 前面所有工作区内的编辑态天然互斥,不可能同时为真,顺序对它
+            // 没有实际影响)。⌘V 粘贴与逐字符输入共用这条链,保证两条路径
+            // 落进同一个自绘输入。
             let addr_message = |ev: workspace::AddrEvent| -> Message {
                 if to_search_popup {
                     Message::Search(extensions::search::Message::QueryEvent(ev))
@@ -1037,8 +1042,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     Message::Todo(extensions::todo::Message::AddEvent(ev))
                 } else if to_todo_content {
                     Message::Todo(extensions::todo::Message::ContentEvent(ev))
-                } else {
+                } else if to_todo_markdown {
                     Message::Todo(extensions::todo::Message::MarkdownEvent(ev))
+                } else {
+                    Message::HomeProjectSearchEvent(ev)
                 }
             };
 
@@ -1100,11 +1107,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             }
 
             if to_self_drawn_input {
-                // 方向键 / Home / End:仅 Todo 自绘输入支持光标移动(新增任务框、
-                // 任务内容编辑、搜索框)。其它自绘输入(地址栏/验收意见/树编辑等)
-                // 暂不支持,方向键按原行为被吞掉、不进终端。必须在下面的
-                // `AddrEvent` 路由之前拦截,否则会落到 `_ => None` 被吃掉而
-                // 没机会进光标移动分支。
+                // 方向键 / Home / End:仅 Todo 自绘输入(新增任务框、任务内容
+                // 编辑、搜索框)与首页项目搜索框支持光标移动。其它自绘输入
+                // (地址栏/验收意见/树编辑等)暂不支持,方向键按原行为被吞掉、
+                // 不进终端。必须在下面的 `AddrEvent` 路由之前拦截,否则会落到
+                // `_ => None` 被吃掉而没机会进光标移动分支。
                 if let WindowEvent::KeyboardInput {
                     event: ke,
                     is_synthetic: false,
@@ -1129,6 +1136,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             Message::Todo(extensions::todo::Message::ContentCursorMove(dir))
                         } else if to_todo_search {
                             Message::Todo(extensions::todo::Message::SearchCursorMove(dir))
+                        } else if to_home_project_search {
+                            Message::HomeProjectSearchCursorMove(dir)
                         } else {
                             // 其它自绘输入不支持方向键移动,按原行为吞掉。
                             return;

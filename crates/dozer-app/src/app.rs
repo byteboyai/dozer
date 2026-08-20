@@ -30,11 +30,12 @@ use crate::layout;
 use crate::open_projects;
 use crate::panel_layouts;
 use crate::preview::WebviewSpec;
+use crate::search_box::{self, delete_before_cursor, insert_at_cursor, move_cursor_in};
 use crate::term_view;
 use crate::theme;
 use crate::transcript::ReviewEntry;
 use crate::workspace::{
-    PickerLaunch, RestorePayload, ReviewSource, ReviewView, SessionTab, ShellIo, SshOut,
+    AddrEvent, PickerLaunch, RestorePayload, ReviewSource, ReviewView, SessionTab, ShellIo, SshOut,
     TabBackend, Workspace, agent_list_pane, agent_picker_popup, conversation_list_pane, dot_color,
     edit_discard_confirm_popup, edit_modal, effective_project_repo, exited_marker,
     fetch_project_restore, no_project_placeholder, preview_pane, project_preview_pane,
@@ -198,9 +199,18 @@ pub enum HoverId {
     /// hover 平滑过渡到 GOLD,同 `TodoAddSubmit` 的处理方式(见
     /// `extensions::todo::todo_search_bar`)。
     TodoSearchSubmit,
+    /// 首页项目列表搜索框内的提交按钮(`Search`),处理方式同
+    /// `TodoSearchSubmit`(见 `homespace::home_project_list_view`)。
+    HomeProjectSearchSubmit,
+    /// 首页项目列表"更多..."翻页图标按钮(`Ellipsis`):静止 DIM,hover
+    /// 平滑过渡到 GOLD,处理方式同 `HomeProjectSearchSubmit`。
+    HomeProjectMore,
     /// Git Log 面板 commit 列表某行(按下标区分):hover 时填充 `CARD` 背景 +
     /// 金色描边(见 `extensions::git_log::commit_list_view`,统一卡片样式)。
     Commit(usize),
+    /// Git Log 面板 commit 列表末尾"更多"翻页图标按钮,处理方式同
+    /// `HomeProjectMore`(见 `extensions::git_log::commit_list_view`)。
+    CommitListMore,
     /// Git Log 面板改动文件列表某行(按下标区分):hover 时填充 `CARD` 背景 +
     /// 金色描边(见 `extensions::git_log::file_list_view`,统一卡片样式)。
     GitFile(usize),
@@ -2085,6 +2095,17 @@ pub enum Message {
     /// 无 IO;只有还有更多项目时才渲染那颗按钮(见
     /// `homespace::home_project_list_view`)。
     HomeMoreProjects,
+    /// 点首页项目列表搜索框进入自绘编辑态,后续按键经 main.rs 路由成
+    /// `HomeProjectSearchEvent`,不再漏进终端(同 `todo::SearchEditStart`)。
+    HomeProjectSearchEditStart,
+    /// 自绘输入的文本/退格/取消/回车事件,`home_project_search_editing`
+    /// 为真时才生效(同 `todo::SearchEvent`)。
+    HomeProjectSearchEvent(AddrEvent),
+    /// 方向键/Home/End 移动搜索框草稿光标(字符下标)。
+    HomeProjectSearchCursorMove(search_box::CursorDir),
+    /// 回车 / 点搜索按钮:把草稿落成生效的 `home_project_search` 过滤词,
+    /// 同时把翻页重置回第 1 页(过滤后结果变少,停在旧页码没有意义)。
+    HomeProjectSearchSubmit,
     /// 首页右图标栏:切换 `HomeRightView`(目前只有 Browser)。
     HomeRightIconSelect(homespace::HomeRightView),
     /// 首页全局浏览器面板的全部消息,内核只转发不解读——见
@@ -2244,6 +2265,11 @@ pub struct App {
     /// 单个项目,与 `ws.agent_picker_open`(Agent 面板"＋",项目内状态)是
     /// 两个不同归属层级的同类开关。
     project_add_menu_open: bool,
+    /// 打开菜单那一刻的光标逻辑坐标,菜单弹出锚点——"＋"按钮的 x 随已开
+    /// 页签数量浮动(`project_tabs_row` 页签 `Shrink` 宽、"＋"紧跟最后一片
+    /// 页签之后),没有固定 padding 能蒙对,改用 `todo::set_calendar_anchor`
+    /// /`set_dispatch_anchor` 同款"记下点击时的 `App::last_cursor`"手法。
+    project_add_menu_anchor: (f32, f32),
     /// 全局 UI 缩放(⌘/Ctrl +/-)改变后,预览/浏览器 webview 的
     /// `WebView::zoom` 也要同步——但 `App` 不持有 webview 句柄,只能
     /// 置这个标记,由 main.rs 轮询 `take_pending_preview_zoom` 后逐个
@@ -2309,6 +2335,16 @@ pub struct App {
     /// `Message::TopBarHome` 进首页重置回 1——与 `home_left_view` 同套
     /// "进首页即重置"语义;别的 pane(Recents)不读它。
     pub(crate) home_project_pages: usize,
+    /// 首页"项目列表"搜索框已提交生效的过滤词(空串 = 不过滤)。不持久化,
+    /// 与 `home_project_pages` 同套"进首页即重置"语义。
+    pub(crate) home_project_search: String,
+    /// 搜索框编辑态草稿——同 `todo::search_draft`,打字期间只改草稿,
+    /// 回车/点搜索按钮才落成 `home_project_search`。
+    pub(crate) home_project_search_draft: String,
+    /// 搜索框是否处于自绘编辑态(main.rs 键盘路由用)。
+    pub(crate) home_project_search_editing: bool,
+    /// 搜索框草稿的光标位置(字符下标)。
+    pub(crate) home_project_search_cursor: usize,
     /// 首页右栏当前显示哪个 pane(目前只有 Browser)。语义同上。
     pub(crate) home_right_view: homespace::HomeRightView,
     /// 首页全局浏览器面板状态,不挂在任何 `Workspace` 上;`view`/`update`
@@ -2602,6 +2638,7 @@ impl App {
             rail_slot_anims: std::collections::HashMap::new(),
             pending_zoom_toggle: false,
             project_add_menu_open: false,
+            project_add_menu_anchor: (0.0, 0.0),
             pending_preview_zoom: false,
             window_size: byteui::theme::geometry::initial_window_size(),
             last_cursor: (0.0, 0.0),
@@ -2623,6 +2660,10 @@ impl App {
             home_recents_loaded: false,
             home_left_view: homespace::HomeLeftView::default(),
             home_project_pages: 1,
+            home_project_search: String::new(),
+            home_project_search_draft: String::new(),
+            home_project_search_editing: false,
+            home_project_search_cursor: 0,
             home_right_view: homespace::HomeRightView::default(),
             home_browser: browser::State::with_initial_url("https://byteboy.ai"),
             git_log: git_log::State::default(),
@@ -3178,6 +3219,18 @@ impl App {
     pub fn todo_search_editing(&self) -> bool {
         self.active_workspace()
             .is_some_and(|ws| ws.todo.search_editing())
+    }
+
+    /// 首页项目列表搜索框是否处于自绘编辑态(main.rs 键盘路由用)。
+    pub fn home_project_search_editing(&self) -> bool {
+        self.home_project_search_editing
+    }
+
+    /// 搜索框草稿落成为生效的 `home_project_search` 过滤词,并把翻页
+    /// 重置回第 1 页(同 `todo::WorkspaceState::commit_search`)。
+    fn commit_home_project_search(&mut self) {
+        self.home_project_search = self.home_project_search_draft.clone();
+        self.home_project_pages = 1;
     }
 
     /// Todo 面板新增任务框是否处于自绘编辑态(main.rs 键盘路由用)。
@@ -4109,6 +4162,11 @@ impl App {
             }
             Message::ProjectAddMenuToggle => {
                 self.project_add_menu_open = !self.project_add_menu_open;
+                if self.project_add_menu_open {
+                    // 点"＋"时的光标逻辑坐标,作为菜单弹出锚点——同
+                    // `todo::set_calendar_anchor`/`set_dispatch_anchor` 手法。
+                    self.project_add_menu_anchor = self.last_cursor;
+                }
             }
             Message::ProjectAddMenuClose => {
                 self.project_add_menu_open = false;
@@ -4268,6 +4326,45 @@ impl App {
                 self.home_left_view = v;
             }
             Message::HomeMoreProjects => self.home_project_pages += 1,
+            Message::HomeProjectSearchEditStart => {
+                self.home_project_search_editing = true;
+            }
+            Message::HomeProjectSearchEvent(ev) => {
+                // 编辑态之外(失焦)的事件一律忽略,避免草稿被污染(同
+                // `todo::Message::SearchEvent` 的既有约定)。
+                if !self.home_project_search_editing {
+                    return;
+                }
+                match ev {
+                    AddrEvent::Text(s) => insert_at_cursor(
+                        &mut self.home_project_search_draft,
+                        &mut self.home_project_search_cursor,
+                        &s,
+                    ),
+                    AddrEvent::Backspace => {
+                        delete_before_cursor(
+                            &mut self.home_project_search_draft,
+                            &mut self.home_project_search_cursor,
+                        );
+                    }
+                    AddrEvent::Cancel => self.home_project_search_editing = false,
+                    AddrEvent::Submit => self.commit_home_project_search(),
+                }
+            }
+            Message::HomeProjectSearchCursorMove(dir) => {
+                if !self.home_project_search_editing {
+                    return;
+                }
+                move_cursor_in(
+                    &self.home_project_search_draft,
+                    &mut self.home_project_search_cursor,
+                    dir,
+                );
+            }
+            Message::HomeProjectSearchSubmit => {
+                self.commit_home_project_search();
+                self.home_project_search_editing = false;
+            }
             Message::HomeRightIconSelect(v) => {
                 self.home_right_view = v;
             }
@@ -4492,7 +4589,6 @@ impl App {
                 // worktree 条带里点其它 worktree,转成内核的切项目消息。
                 self.update(Message::ProjectTabOpen(p));
             }
-            Message::GitLog(git_log::Message::LoadMore) => self.git_log_load_more(),
             Message::GitLog(git_log::Message::ColumnDragStart) => {
                 // Git Log 三栏布局里左右分割线开始拖拽——扩展发不了 app 级
                 // 拖拽消息,由内核代发。
@@ -5874,6 +5970,10 @@ impl App {
         self.home_recents_loaded = false;
         self.home_left_view = homespace::HomeLeftView::default();
         self.home_project_pages = 1;
+        self.home_project_search.clear();
+        self.home_project_search_draft.clear();
+        self.home_project_search_editing = false;
+        self.home_project_search_cursor = 0;
         self.home_right_view = homespace::HomeRightView::default();
         let projects: Vec<ProjectInfo> = self.recent_projects.iter().take(5).cloned().collect();
         let proxy = self.proxy.clone();
@@ -6155,28 +6255,6 @@ impl App {
                 emit,
             );
         });
-    }
-
-    fn git_log_load_more(&mut self) {
-        let Some(path) = self
-            .active_workspace()
-            .and_then(|ws| ws.active_project_path())
-        else {
-            return;
-        };
-        let next = self.git_log.next_load_more_count();
-        // `request_refresh` 内部会把 `selected` 清空,所以必须在调用它之前
-        // 先读出来,落地新快照后(`update()` 处理 `SnapshotLoaded` 那支)才能
-        // 据此还原选中态——镜像现有 `Message::GitLogLoadMore` 分支"先记
-        // selected,刷新,再把 restore_after_load 设回去"的顺序。
-        let selected = self.git_log.selected();
-        let handle = self.handle.clone();
-        let proxy = self.proxy.clone();
-        let emit = move |m| {
-            let _ = proxy.send_event(Message::GitLog(m));
-        };
-        git_log::request_refresh(&mut self.git_log, path, next, &handle, emit);
-        self.git_log.set_restore_after_load(selected);
     }
 
     fn files_project_message(&mut self, project_id: i64, msg: files::Message) {
@@ -7026,10 +7104,16 @@ fn project_tabs_row(
 /// 不列,少一次无意义点击)。列表下面跟一条分隔线 + "新建项目"项
 /// (`Message::ProjectTabPickFolder`,同顶栏按钮原有功能——rfd 文件夹
 /// 选择),菜单项列表为空时不画多余的孤立分隔线。样式走 `crate::menu`
-/// 标准右键菜单原语(同文件树右键菜单基准),开关手法同
-/// `workspace::agent_picker_popup`:bool 开关 + 固定 padding 近似摆位在
-/// "＋"按钮下方,不算像素坐标(这颗按钮的 x 随已开页签数量浮动,不像
-/// agent_picker 的按钮位置固定,更没必要精确算)。
+/// 标准右键菜单原语(同文件树右键菜单基准)。
+///
+/// 定位:"＋"按钮自己的 x 随已开页签数量浮动(`project_tabs_row` 里页签
+/// 是 `Shrink` 宽、"＋"紧跟在最后一片页签之后),不像 `agent_picker_popup`
+/// 那样能靠一个固定 padding 蒙对(试过左对齐、右对齐两版固定 padding,
+/// 页签数量一变都会跑偏)。改用 `todo::set_calendar_anchor`/
+/// `set_dispatch_anchor` 同款手法:开菜单那一刻的 `App::last_cursor`
+/// (点击"＋"时的光标逻辑坐标)记进 `project_add_menu_anchor`,菜单锚定
+/// 在那个真实坐标上,跟窗口边界钳制一次防止超出右/下边缘(同
+/// `todo_calendar_overlay`)。
 fn project_add_menu_popup(
     app: &App,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -7059,20 +7143,37 @@ fn project_add_menu_popup(
         Message::ProjectTabPickFolder,
     ));
 
+    let row_count = items.len();
     let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
         crate::menu::shell(
             items,
             Length::Fixed(byteui::theme::geometry::menu_item_width()),
         );
 
+    // 全窗口容器 + padding 把弹层推到锚点,窗口边界钳制,手法同
+    // `todo_calendar_overlay`。菜单宽是固定值(`menu_item_width`);高是
+    // 估算——单行高 ≈ 上下 padding + 正文字号(粗估行高,不追求精确到
+    // 像素,与日历弹层"估算尺寸"同一个容忍度),行数含分隔线当一整行算
+    // (分隔线矮很多,整体估算偏大一点点,钳制会稍微保守但不会算少导致
+    // 真的超出窗口)。
+    let (ax, ay) = app.project_add_menu_anchor;
+    let (window_w, window_h) = app.window_size;
+    let pop_w = byteui::theme::geometry::menu_item_width();
+    let region = theme::region::context_menu();
+    let item_h = region.padding.top + region.padding.bottom + byteui::theme::font::body() as f32;
+    let pop_h = region.padding.top
+        + region.padding.bottom
+        + row_count as f32 * item_h
+        + (row_count.saturating_sub(1)) as f32 * region.gap;
+    let x = ax.min((window_w - pop_w).max(0.0));
+    let y = ay.min((window_h - pop_h).max(0.0));
+
     container(list)
         .width(Length::Fill)
         .height(Length::Fill)
-        .align_x(iced_widget::core::alignment::Horizontal::Left)
-        .align_y(iced_widget::core::alignment::Vertical::Top)
         .padding(Padding {
-            top: byteui::theme::geometry::top_bar_height(),
-            left: 12.0,
+            top: y,
+            left: x,
             right: 0.0,
             bottom: 0.0,
         })

@@ -357,6 +357,21 @@ fn paginate_recent_projects(projects: &[ProjectInfo], pages: usize) -> Vec<Proje
     sorted
 }
 
+/// 首页项目列表搜索框已提交的过滤词 → 匹配的项目子集(名称大小写不敏感
+/// 包含匹配)。`query` 为空串时不过滤,原样返回全量——抽成纯函数同
+/// `paginate_recent_projects` 一样是为了 headless 单测。
+fn filter_projects_by_search(projects: &[ProjectInfo], query: &str) -> Vec<ProjectInfo> {
+    if query.is_empty() {
+        return projects.to_vec();
+    }
+    let needle = query.to_lowercase();
+    projects
+        .iter()
+        .filter(|p| p.name.to_lowercase().contains(&needle))
+        .cloned()
+        .collect()
+}
+
 /// `app.recent_projects` 为空时画"还没有项目"兜底文案,不崩(spec §4)。
 fn home_project_list_view(
     app: &App,
@@ -366,34 +381,33 @@ fn home_project_list_view(
 
     col = col.push(home_panel_head(icons::IconKind::LayoutList, "项目"));
 
-    // 搜索框:视觉占位,不接线(D7；precedent:顶栏 ⌘K 搜索框同款"先视觉后接线")。
-    col = col.push(
-        container(
-            row![
-                icons::view(
-                    icons::IconKind::Search,
-                    byteui::theme::icon_size::row(),
-                    theme::homespace_color::dim()
-                ),
-                text("搜索项目…")
-                    .size(theme::homespace_font::body())
-                    .color(theme::homespace_color::dim()),
-            ]
-            .spacing(8)
-            .align_y(iced_widget::core::Alignment::Center),
-        )
-        .padding([6, 10])
-        .width(Length::Fill)
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::homespace_color::card_bg().into()),
-            border: Border {
-                color: theme::homespace_color::border(),
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..container::Style::default()
-        }),
-    );
+    // 搜索框:接 `crate::search_box` 共享组件(D7 从"先视觉后接线"落地为
+    // 真正可用),颜色取首页自己独立配置的调色板(`theme::homespace_color`,
+    // 与工作区 `byteui::theme::color` 分开维护),不是工作区那一套。
+    col = col.push(crate::search_box::view(
+        &app.home_project_search_draft,
+        app.home_project_search_editing,
+        !app.home_project_search.is_empty(),
+        app.home_project_search_cursor,
+        "搜索项目…",
+        theme::homespace_font::body(),
+        byteui::theme::icon_size::row(),
+        crate::search_box::SearchBoxColors {
+            bg: theme::homespace_color::card_bg(),
+            border: theme::homespace_color::border(),
+            active: theme::homespace_color::gold(),
+            text: theme::homespace_color::cream(),
+            dim: theme::homespace_color::dim(),
+        },
+        app.hover_progress(HoverId::HomeProjectSearchSubmit),
+        Message::HomeProjectSearchEditStart,
+        Message::HomeProjectSearchSubmit,
+        |hovered| Message::Hover(HoverId::HomeProjectSearchSubmit, hovered),
+    ));
+
+    // 按已提交的搜索词过滤,过滤后再分页——"更多..."按钮/页数据此按过滤后
+    // 的结果集算,不是全量 `recent_projects`。
+    let filtered = filter_projects_by_search(&app.recent_projects, &app.home_project_search);
 
     if app.recent_projects.is_empty() {
         col = col.push(
@@ -401,9 +415,15 @@ fn home_project_list_view(
                 .size(theme::homespace_font::body())
                 .color(theme::homespace_color::dim()),
         );
+    } else if filtered.is_empty() {
+        col = col.push(
+            text("没有匹配的项目")
+                .size(theme::homespace_font::body())
+                .color(theme::homespace_color::dim()),
+        );
     } else {
-        let visible = paginate_recent_projects(&app.recent_projects, app.home_project_pages);
-        let more_remain = visible.len() < app.recent_projects.len();
+        let visible = paginate_recent_projects(&filtered, app.home_project_pages);
+        let more_remain = visible.len() < filtered.len();
 
         let mut list = column![].spacing(8);
         for p in &visible {
@@ -438,31 +458,35 @@ fn home_project_list_view(
             list = list.push(card);
         }
 
-        // 还有更多项目时,在最后一张卡下面左右居中的"更多..."翻页按钮;点它
-        // 再展开下一页(见 `Message::HomeMoreProjects`)。全部显示完就消失。
+        // 还有更多项目时,在最后一张卡下面左右居中的"更多..."翻页图标按钮
+        // (Lucide ellipsis,无外边框/背景);点它再展开下一页(见
+        // `Message::HomeMoreProjects`)。全部显示完就消失。
         if more_remain {
+            let more_color = byteui::theme::color::mix(
+                theme::homespace_color::dim(),
+                theme::homespace_color::gold(),
+                app.hover_progress(HoverId::HomeProjectMore),
+            );
+            let more_button = MouseArea::new(
+                button(icons::view(
+                    icons::IconKind::Ellipsis,
+                    byteui::theme::icon_size::row(),
+                    more_color,
+                ))
+                .on_press(Message::HomeMoreProjects)
+                .padding(6)
+                .style(move |_t: &iced_widget::Theme, _s| button::Style {
+                    background: None,
+                    text_color: more_color,
+                    ..button::Style::default()
+                }),
+            )
+            .on_enter(Message::Hover(HoverId::HomeProjectMore, true))
+            .on_exit(Message::Hover(HoverId::HomeProjectMore, false));
             list = list.push(
-                container(
-                    button(
-                        text("更多...")
-                            .size(theme::homespace_font::caption())
-                            .color(theme::homespace_color::cream()),
-                    )
-                    .on_press(Message::HomeMoreProjects)
-                    .padding([6, 22])
-                    .style(|_t: &iced_widget::Theme, _s| button::Style {
-                        background: Some(theme::homespace_color::card_bg().into()),
-                        border: Border {
-                            color: theme::homespace_color::border(),
-                            width: 1.0,
-                            radius: 6.0.into(),
-                        },
-                        text_color: theme::homespace_color::cream(),
-                        ..button::Style::default()
-                    }),
-                )
-                .width(Length::Fill)
-                .align_x(iced_widget::core::Alignment::Center),
+                container(more_button)
+                    .width(Length::Fill)
+                    .align_x(iced_widget::core::Alignment::Center),
             );
         }
 
@@ -848,5 +872,34 @@ mod tests {
     fn paginate_recent_projects_empty_input_yields_empty() {
         assert!(paginate_recent_projects(&[], 1).is_empty());
         assert!(paginate_recent_projects(&[], 5).is_empty());
+    }
+
+    #[test]
+    fn filter_projects_by_search_empty_query_returns_all() {
+        let projects = vec![project(1, "byteboy", 100), project(2, "dozer", 200)];
+        let filtered = filter_projects_by_search(&projects, "");
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn filter_projects_by_search_matches_case_insensitive_substring() {
+        let projects = vec![
+            project(1, "ByteBoy", 100),
+            project(2, "dozer", 200),
+            project(3, "anrong_fincalc", 300),
+        ];
+        let filtered = filter_projects_by_search(&projects, "byte");
+        let names: Vec<&str> = filtered.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["ByteBoy"],
+            "大小写不敏感,只匹配名称包含子串的项目"
+        );
+    }
+
+    #[test]
+    fn filter_projects_by_search_no_match_yields_empty() {
+        let projects = vec![project(1, "byteboy", 100)];
+        assert!(filter_projects_by_search(&projects, "nonexistent").is_empty());
     }
 }

@@ -43,6 +43,9 @@ pub enum IconKind {
     FileImage,
     FileGeneric,
     Search,
+    /// 三个横排小圆点(Lucide ellipsis),homespace 项目列表"更多..."翻页
+    /// 图标按钮用。
+    Ellipsis,
     Settings,
     FilePlus,
     FolderPlus,
@@ -170,6 +173,7 @@ impl IconKind {
             IconKind::FileImage => include_bytes!("../../assets/icons/file-image.svg"),
             IconKind::FileGeneric => include_bytes!("../../assets/icons/file.svg"),
             IconKind::Search => include_bytes!("../../assets/icons/search.svg"),
+            IconKind::Ellipsis => include_bytes!("../../assets/icons/ellipsis.svg"),
             IconKind::Settings => include_bytes!("../../assets/icons/settings.svg"),
             IconKind::FilePlus => include_bytes!("../../assets/icons/file-plus.svg"),
             IconKind::FolderPlus => include_bytes!("../../assets/icons/folder-plus.svg"),

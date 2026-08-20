@@ -15,11 +15,16 @@ use iced_widget::{MouseArea, column, container, row, scrollable, text};
 use std::path::{Path, PathBuf};
 
 /// 首次打开面板拉多少个 commit——够看出分叉/合并的形状,又不至于让
-/// revwalk + 分支归属分析在大仓库上明显卡顿。"加载更多"每次在当前基础上
-/// 加这么多再整份重算(gleisbau 的 API 是"从头按 max_count 走一遍
-/// revwalk",没有增量/游标接口,重算是唯一选项——见 build() 文档)。
+/// revwalk + 分支归属分析在大仓库上明显卡顿(gleisbau 的 API 是"从头按
+/// max_count 走一遍 revwalk",没有增量/游标接口——见 build() 文档)。这是
+/// 面板能看到的 commit 总数上限,不再提供"问 git 要更多"的入口(2026-08-20
+/// 移除,见 `COMMIT_PAGE_SIZE` 之下)。
 pub const DEFAULT_MAX_COMMITS: usize = 200;
-pub const LOAD_MORE_STEP: usize = 200;
+
+/// commit 列表一页显示的条数(客户端分页,不触发 git 重新 revwalk——同
+/// `homespace::PROJECT_PAGE_SIZE` 的"更多..."翻页手法,只是在已经拉到的
+/// `DEFAULT_MAX_COMMITS` 缓存里逐页展开)。
+const COMMIT_PAGE_SIZE: usize = 20;
 
 /// 一个 commit 指向的引用(分支/远程分支/tag),供图上显示彩色标签。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,7 +72,7 @@ pub struct GitLogSnapshot {
     /// 当前 HEAD 所在的本地分支名(detached HEAD 时为 `None`)——列表里给这
     /// 个分支的标签加个 `→` 前缀区分"这是我现在checkout的那条"。
     head_branch: Option<String>,
-    /// 这份快照实际请求的 `max_count`("加载更多"算下一次请求值用)。
+    /// 这份快照实际请求的 `max_count`。
     max_count: usize,
 }
 
@@ -114,8 +119,6 @@ fn default_settings() -> Result<gleisbau::settings::Settings, String> {
 /// 阻塞的(revwalk + 分支归属分析在提交/分支数量大时可到秒级),调用方
 /// (`workspace.rs` 的 `App::spawn_git_log_refresh`)必须扔进
 /// `tokio::task::spawn_blocking`,不能直接摆在 UI 线程的 `update()` 里跑。
-/// gleisbau 没有增量/游标 API,"加载更多"就是拿更大的 `max_count` 再整份
-/// 跑一遍,见 [`LOAD_MORE_STEP`]。
 pub fn build(repo_path: &Path, max_count: usize) -> Result<GitLogSnapshot, String> {
     let repository = gleisbau::get_repo(repo_path, false).map_err(|e| e.message().to_string())?;
     let settings = std::rc::Rc::new(default_settings()?);
@@ -218,7 +221,9 @@ pub struct CommitDetail {
 #[derive(Debug, Clone)]
 pub enum Message {
     SelectCommit(git2::Oid),
-    LoadMore,
+    /// commit 列表客户端翻页"更多"图标按钮:只在已缓存的 `cache` 里往下
+    /// 多展开一页(`COMMIT_PAGE_SIZE` 条),不问 git 要新数据。
+    CommitListMore,
     /// 点 worktree 条带里的其它 worktree,切过去。内核(`app.rs`)在
     /// `Message::GitLog` 分发里拦截,转成 `Message::ProjectTabOpen`,
     /// 不会转发到 `update`(见其 `unreachable!` 分支)。
@@ -234,8 +239,8 @@ pub enum Message {
     /// 内核异步查完本地分支列表 + 工作区 dirty 状态后落地(仓库路径核对
     /// 一致才接受)。`bool` = 工作区是否有未提交改动(`delivery::is_dirty`)。
     BranchesLoaded(PathBuf, Vec<String>, bool),
-    /// 点某个分支——内核截获处理(同 `LoadMore`/`ProjectTabOpen` 的既有
-    /// 例外模式),不会转发到 `update`(见其 `unreachable!` 分支)。
+    /// 点某个分支——内核截获处理(同 `ProjectTabOpen` 的既有例外模式),
+    /// 不会转发到 `update`(见其 `unreachable!` 分支)。
     BranchSwitch(String),
     BranchSwitchDone(Result<(), String>),
     /// 三栏布局里左右分割线开始拖拽——内核截获,转成 app 级
@@ -266,8 +271,6 @@ pub struct State {
     /// 最近一次派发的 `build` 请求 (repo_path, max_count)——落地时核对
     /// 还对不对得上"现在真正需要的",不对就丢弃。
     pending: Option<(PathBuf, usize)>,
-    /// "加载更多"发起前记下的选中提交,新快照落地后据此还原选中态。
-    restore_after_load: Option<git2::Oid>,
     /// 面板底部分支下拉是否展开。
     branch_picker_open: bool,
     /// 当前仓库的本地分支列表(`delivery::local_branches` 结果缓存,内核在
@@ -279,22 +282,23 @@ pub struct State {
     dirty: bool,
     /// 分支切换请求进行中(禁用下拉交互、显示"切换中…")。
     branch_switch_pending: bool,
+    /// commit 列表客户端分页已经点开的"更多"次数(0 = 只显示第一页
+    /// `COMMIT_PAGE_SIZE` 条)。`#[derive(Default)]` 落到 0,天然就是
+    /// "第一页",不需要额外的构造器初始化(同 `commit_visible_count` 的
+    /// "+1 折算"注释)。
+    pages: usize,
 }
 
 impl State {
-    /// "加载更多"按钮下一个请求的 `max_count`:有缓存则在当前基础上
-    /// `+ LOAD_MORE_STEP`,否则回落 `DEFAULT_MAX_COMMITS`。
-    pub fn next_load_more_count(&self) -> usize {
-        self.cache
-            .as_ref()
-            .map(|c| c.max_count() + LOAD_MORE_STEP)
-            .unwrap_or(DEFAULT_MAX_COMMITS)
+    /// commit 列表当前应该显示到第几条(客户端分页,见 `COMMIT_PAGE_SIZE`
+    /// 上方注释)。`pages` 是"点过几次'更多'"(0-based),`+1` 折算成
+    /// "当前共几页"再乘页大小。
+    pub fn commit_visible_count(&self) -> usize {
+        (self.pages + 1) * COMMIT_PAGE_SIZE
     }
 
     /// 当前缓存的 `max_count`(无缓存则回落 `DEFAULT_MAX_COMMITS`)——用于
-    /// "内容不变、只是要重新拉一遍"的场景(`.git` 引用变化触发的重建),
-    /// 跟"加载更多"要的 `next_load_more_count()`(会 `+LOAD_MORE_STEP`)
-    /// 是两回事,内核代码里不要混用。
+    /// "内容不变、只是要重新拉一遍"的场景(`.git` 引用变化触发的重建)。
     pub fn cache_max_count(&self) -> usize {
         self.cache
             .as_ref()
@@ -306,21 +310,6 @@ impl State {
     /// "缓存是不是已经属于当前聚焦项目",不用时不重建。
     pub fn cache_repo_path(&self) -> Option<&Path> {
         self.cache.as_ref().map(|c| c.repo_path())
-    }
-
-    /// 当前选中的提交(`None` = 未选中)。内核发起"加载更多"前需要先读一次
-    /// 这个值——`request_refresh` 会把它清空,内核得自己先存一份,请求
-    /// 落地后再用 `set_restore_after_load` 传回来。
-    pub fn selected(&self) -> Option<git2::Oid> {
-        self.selected
-    }
-
-    /// `request_refresh` 落地新快照之前,内核用这个把"发起刷新前选中的
-    /// 提交"记下来,新快照真正落地(`SnapshotLoaded` 处理完)时
-    /// `update()` 会据此还原选中态(见其返回值 `Some(Message::SelectCommit)`
-    /// 那条路径)。
-    pub fn set_restore_after_load(&mut self, oid: Option<git2::Oid>) {
-        self.restore_after_load = oid;
     }
 
     /// 分支列表是否还没查过(`BranchPickerOpen` 首次展开时,内核据此判断
@@ -337,12 +326,6 @@ impl State {
 }
 
 /// 处理 `SelectCommit`/`DetailLoaded`/`SnapshotLoaded` 三种消息。
-/// `LoadMore` 需要内核才知道的"当前聚焦项目路径",不在这里处理——传进来
-/// 会直接 panic,调用方(`workspace.rs`)必须在转发前先拦掉这一种(见
-/// 设计文档"内核转发不是无差别盲转"）。
-///
-/// 返回值:`Some(next)` = 这次处理还产生了一条要递归分发的后续消息(目前
-/// 只有 `SnapshotLoaded` 落地后恢复选中提交这一种情况)。
 pub fn update(
     state: &mut State,
     msg: Message,
@@ -401,12 +384,11 @@ pub fn update(
                     state.error = Some(err);
                 }
             }
-            state.restore_after_load.take().map(Message::SelectCommit)
+            None
         }
-        Message::LoadMore => {
-            unreachable!(
-                "LoadMore 由内核在 Message::GitLog 分支里直接处理(需要仓库路径),不会转发到这里"
-            )
+        Message::CommitListMore => {
+            state.pages += 1;
+            None
         }
         Message::ProjectTabOpen(_) => {
             unreachable!(
@@ -513,9 +495,9 @@ fn worktree_strip<'a>(
     .into()
 }
 
-/// 异步重建 Git Log 快照,`max_count` 由调用方决定(打开面板/引用变化用
-/// `DEFAULT_MAX_COMMITS`,"加载更多"用 `State::next_load_more_count()`)。
-/// 现有 `App::spawn_git_log_refresh` 的搬家版本,行为不变。
+/// 异步重建 Git Log 快照,`max_count` 由调用方决定(通常是
+/// `DEFAULT_MAX_COMMITS`)。现有 `App::spawn_git_log_refresh` 的搬家版本,
+/// 行为不变。
 pub fn request_refresh(
     state: &mut State,
     repo_path: PathBuf,
@@ -525,7 +507,6 @@ pub fn request_refresh(
 ) {
     state.selected = None;
     state.detail = None;
-    state.restore_after_load = None;
     state.pending = Some((repo_path.clone(), max_count));
     handle.spawn(async move {
         let repo_path2 = repo_path.clone();
@@ -628,14 +609,21 @@ fn ref_labels_text(refs: &[RefLabel], head_branch: Option<&str>) -> String {
 /// "架构与数据流"第 6 节)。每行上下两行:上行图标(普通/合并)+ short_sha +
 /// 时间戳 + refs 标签;下行 summary。整行可点选中(`Message::SelectCommit`),
 /// 选中态统一卡片样式(对齐 Todo/Files 面板既有选中行视觉语言)。
+///
+/// `visible_count`(`State::commit_visible_count`)客户端分页:只画前
+/// `visible_count` 条,画不完时列表末尾补一个"更多"图标按钮(同
+/// `homespace::home_project_list_view` 的处理方式)——不是把整个已缓存的
+/// `snapshot.rows`(最多到 `DEFAULT_MAX_COMMITS`)一次性全画出来,大仓库
+/// 几百条 commit 一次性铺开会让这块 `scrollable` 明显变沉。
 fn commit_list_view<'a>(
     app: &App,
     snapshot: &'a GitLogSnapshot,
     selected: Option<git2::Oid>,
     head_branch: Option<&'a str>,
+    visible_count: usize,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut list = column![].spacing(8);
-    for (i, row) in snapshot.rows.iter().enumerate() {
+    for (i, row) in snapshot.rows.iter().enumerate().take(visible_count) {
         let is_selected = selected == Some(row.oid);
         let icon_kind = if row.is_merge {
             byteui::interaction::icons::IconKind::GitMerge
@@ -703,6 +691,39 @@ fn commit_list_view<'a>(
             .on_exit(Message::Hover(HoverId::Commit(i), false))
             .on_press(Message::SelectCommit(row.oid));
         list = list.push(area);
+    }
+    // 还有没画出来的 commit 时,在列表末尾加一个居中的"更多"图标按钮
+    // (Lucide ellipsis,无外边框/背景,hover DIM→GOLD)——点它翻下一页
+    // (`Message::CommitListMore`,纯客户端状态,不问 git 要新数据)。
+    if snapshot.rows.len() > visible_count {
+        let more_color = byteui::theme::color::mix(
+            byteui::theme::color::current().dim,
+            byteui::theme::color::current().gold,
+            app.hover_progress(HoverId::CommitListMore),
+        );
+        let more_button = MouseArea::new(
+            iced_widget::button(byteui::interaction::icons::view(
+                byteui::interaction::icons::IconKind::Ellipsis,
+                byteui::theme::icon_size::row(),
+                more_color,
+            ))
+            .on_press(Message::CommitListMore)
+            .padding(6)
+            .style(
+                move |_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+                    background: None,
+                    text_color: more_color,
+                    ..iced_widget::button::Style::default()
+                },
+            ),
+        )
+        .on_enter(Message::Hover(HoverId::CommitListMore, true))
+        .on_exit(Message::Hover(HoverId::CommitListMore, false));
+        list = list.push(
+            container(more_button)
+                .width(Length::Fill)
+                .align_x(alignment::Horizontal::Center),
+        );
     }
     scrollable(list)
         .direction(scrollable::Direction::Vertical(
@@ -854,8 +875,14 @@ pub fn view<'a>(
                 .color(byteui::theme::color::current().red),
         );
     }
-    left = left.push(commit_list_view(app, snapshot, state.selected, head_branch));
-    left = left.push(git_panel_footer_bar(state, head_branch, loading));
+    left = left.push(commit_list_view(
+        app,
+        snapshot,
+        state.selected,
+        head_branch,
+        state.commit_visible_count(),
+    ));
+    left = left.push(git_panel_footer_bar(state, head_branch));
     let left_with_picker = iced_widget::stack![
         container(left).width(Length::Fill).height(Length::Fill),
         branch_picker_view(state, head_branch),
@@ -971,16 +998,14 @@ fn diff_pane_view<'a>(
         .into()
 }
 
-/// 左侧面板底部固定展示:当前分支名 + 展开箭头,点击发
 /// 左侧面板底部 footbar:完全照抄文件树面板的 `git_footer_bar` 结构——顶部
-/// 一条 1px 分隔线 + 一行(左:`GitBranch` 图标 + 当前分支名;右:加载更多 +
-/// 分支切换 chevron),`spacing(6)`、`align_y(Center)`、外层 `padding([6,0])`、
-/// 背景透明。分支切换走 `BranchPickerOpen`/`BranchPickerClose`;下拉层仍是
-/// 左侧面板局部 `stack!`(`branch_picker_view`)。
+/// 一条 1px 分隔线 + 一行(左:`GitBranch` 图标 + 当前分支名;右:分支切换
+/// chevron),`spacing(6)`、`align_y(Center)`、外层 `padding([6,0])`、背景
+/// 透明。分支切换走 `BranchPickerOpen`/`BranchPickerClose`;下拉层仍是左侧
+/// 面板局部 `stack!`(`branch_picker_view`)。
 fn git_panel_footer_bar<'a>(
     state: &'a State,
     head_branch: Option<&'a str>,
-    loading: bool,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let branch_label = text(head_branch.unwrap_or("(无分支)"))
         .size(byteui::theme::font::label())
@@ -1014,24 +1039,6 @@ fn git_panel_footer_bar<'a>(
         ..iced_widget::button::Style::default()
     });
 
-    let load_more = iced_widget::button(
-        text("加载更多提交 (+200)")
-            .size(byteui::theme::font::label())
-            .color(byteui::theme::color::current().cream),
-    )
-    .on_press_maybe((!loading).then_some(Message::LoadMore))
-    .padding([4, 10])
-    .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
-        background: Some(byteui::theme::color::current().bg.into()),
-        text_color: byteui::theme::color::current().cream,
-        border: Border {
-            color: byteui::theme::color::current().border,
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        ..iced_widget::button::Style::default()
-    });
-
     let bar = row![
         byteui::interaction::icons::view(
             byteui::interaction::icons::IconKind::GitBranch,
@@ -1040,7 +1047,6 @@ fn git_panel_footer_bar<'a>(
         ),
         branch_label,
         iced_widget::space::horizontal(),
-        load_more,
         switch,
     ]
     .spacing(6)
@@ -1701,10 +1707,7 @@ mod tests {
         assert!(state.cache.is_some());
         assert!(state.error.is_none());
         assert!(state.pending.is_none());
-        assert!(
-            result.is_none(),
-            "restore_after_load 为 None 时不该产生后续消息"
-        );
+        assert!(result.is_none());
     }
 
     #[tokio::test]
@@ -1744,56 +1747,29 @@ mod tests {
         assert_eq!(state.error.as_deref(), Some("boom"));
     }
 
-    #[tokio::test]
-    async fn snapshot_loaded_returns_select_commit_when_restore_after_load_set() {
-        let repo_path = PathBuf::from("/tmp/repo");
-        let oid = git2::Oid::from_bytes(&[7; 20]).unwrap();
-        let mut state = State {
-            pending: Some((repo_path.clone(), 10)),
-            restore_after_load: Some(oid),
-            ..State::default()
-        };
-        let handle = tokio::runtime::Handle::current();
-        let result = update(
-            &mut state,
-            Message::SnapshotLoaded(repo_path.clone(), 10, Ok(snapshot_at(&repo_path, 10))),
-            &handle,
-            |_| {},
-        );
-        match result {
-            Some(Message::SelectCommit(got)) => assert_eq!(got, oid),
-            other => panic!("期望 Some(SelectCommit(oid)),实际 {other:?}"),
-        }
-        assert!(state.restore_after_load.is_none(), "取用后应清空");
-    }
-
     #[test]
-    fn next_load_more_count_with_cache_adds_step() {
-        let state = State {
-            cache: Some(snapshot_at(Path::new("/tmp/repo"), 200)),
-            ..State::default()
-        };
-        assert_eq!(state.next_load_more_count(), 200 + LOAD_MORE_STEP);
-    }
-
-    #[test]
-    fn next_load_more_count_without_cache_falls_back_to_default() {
-        let state = State::default();
-        assert_eq!(state.next_load_more_count(), DEFAULT_MAX_COMMITS);
-    }
-
-    #[test]
-    fn cache_max_count_reflects_current_cache_without_adding_step() {
+    fn cache_max_count_reflects_current_cache() {
         let with_cache = State {
             cache: Some(snapshot_at(Path::new("/tmp/repo"), 37)),
             ..State::default()
         };
-        assert_eq!(
-            with_cache.cache_max_count(),
-            37,
-            "不该像 next_load_more_count 那样 +LOAD_MORE_STEP"
-        );
+        assert_eq!(with_cache.cache_max_count(), 37);
         assert_eq!(State::default().cache_max_count(), DEFAULT_MAX_COMMITS);
+    }
+
+    #[test]
+    fn commit_visible_count_starts_at_one_page() {
+        assert_eq!(State::default().commit_visible_count(), COMMIT_PAGE_SIZE);
+    }
+
+    #[tokio::test]
+    async fn commit_list_more_advances_one_page_per_click() {
+        let mut state = State::default();
+        let handle = tokio::runtime::Handle::current();
+        assert!(update(&mut state, Message::CommitListMore, &handle, |_| {}).is_none());
+        assert_eq!(state.commit_visible_count(), 2 * COMMIT_PAGE_SIZE);
+        assert!(update(&mut state, Message::CommitListMore, &handle, |_| {}).is_none());
+        assert_eq!(state.commit_visible_count(), 3 * COMMIT_PAGE_SIZE);
     }
 
     #[test]
@@ -1807,33 +1783,18 @@ mod tests {
         assert_eq!(State::default().cache_repo_path(), None);
     }
 
-    #[test]
-    fn selected_and_set_restore_after_load_roundtrip() {
-        let mut state = State::default();
-        assert_eq!(state.selected(), None);
-        let oid = git2::Oid::from_bytes(&[9; 20]).unwrap();
-        state.selected = Some(oid);
-        assert_eq!(state.selected(), Some(oid));
-        state.set_restore_after_load(Some(oid));
-        assert_eq!(state.restore_after_load, Some(oid));
-        state.set_restore_after_load(None);
-        assert_eq!(state.restore_after_load, None);
-    }
-
     #[tokio::test]
     async fn request_refresh_resets_selection_and_records_pending() {
         let repo_path = PathBuf::from("/tmp/repo");
         let mut state = State {
             selected: Some(git2::Oid::from_bytes(&[8; 20]).unwrap()),
             detail: Some(Ok(CommitDetail { files: Vec::new() })),
-            restore_after_load: Some(git2::Oid::from_bytes(&[8; 20]).unwrap()),
             ..State::default()
         };
         let handle = tokio::runtime::Handle::current();
         request_refresh(&mut state, repo_path.clone(), 50, &handle, |_| {});
         assert!(state.selected.is_none());
         assert!(state.detail.is_none());
-        assert!(state.restore_after_load.is_none());
         assert_eq!(state.pending, Some((repo_path, 50)));
     }
 }

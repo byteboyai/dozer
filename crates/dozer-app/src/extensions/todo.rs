@@ -8,6 +8,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use crate::app::{App, HoverId};
+use crate::search_box::{delete_before_cursor, draft_with_caret, insert_at_cursor, move_cursor_in};
 use crate::theme;
 use crate::workspace::{AddrEvent, Workspace, agent_icon, tab_title};
 use byteui::interaction::icons;
@@ -690,16 +691,11 @@ impl AppState {
 /// 处理方式)。
 /// 自绘输入的光标移动方向(main.rs 把方向键/Home/End 翻成这个,经
 /// `AddCursorMove`/`SearchCursorMove`/`ContentCursorMove` 路由进来)。自绘
-/// 输入没有原生光标,方向键移动靠这里携带的方向重定位字符下标。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CursorDir {
-    Left,
-    Right,
-    /// 行首(Home)。
-    Home,
-    /// 行尾(End)。
-    End,
-}
+/// 输入没有原生光标,方向键移动靠这里携带的方向重定位字符下标。定义与
+/// `insert_at_cursor`/`delete_before_cursor`/`move_cursor_in`/
+/// `char_to_byte`/`draft_with_caret` 一起挪到了 `crate::search_box`
+/// (抽共享搜索框组件时一并搬出——纯字符串/下标操作,不是 todo 专属)。
+pub use crate::search_box::CursorDir;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -838,59 +834,9 @@ fn set_done(
     }
 }
 
-/// 字符下标 → 字节下标;`cursor` 越界时回落到串尾(防御性,避免越界 panic)。
-fn char_to_byte(s: &str, cursor: usize) -> usize {
-    s.char_indices()
-        .nth(cursor)
-        .map(|(b, _)| b)
-        .unwrap_or_else(|| s.len())
-}
-
-/// 在 `s` 的字符下标 `cursor` 处插入 `ins`,并把 `cursor` 前移插入的字符数。
-/// 自绘输入没有原生光标,插入必须落在光标处而非强行 `push_str` 到行尾。
-fn insert_at_cursor(s: &mut String, cursor: &mut usize, ins: &str) {
-    if ins.is_empty() {
-        return;
-    }
-    let byte = char_to_byte(s, *cursor);
-    s.insert_str(byte, ins);
-    *cursor += ins.chars().count();
-}
-
-/// 删除 `cursor` 前一个字符;已在行首时 no-op。返回是否真的删了字符。
-fn delete_before_cursor(s: &mut String, cursor: &mut usize) -> bool {
-    if *cursor == 0 {
-        return false;
-    }
-    let rem = *cursor - 1;
-    let start = char_to_byte(s, rem);
-    let end = char_to_byte(s, *cursor);
-    s.drain(start..end);
-    *cursor = rem;
-    true
-}
-
-/// 按方向键移动 `cursor`(字符下标)。`Left`/`Right` 单步、`Home`/`End` 跳
-/// 行首/行尾。光标恒夹在 `[0, len]`,不会越界。
-fn move_cursor_in(s: &str, cursor: &mut usize, dir: CursorDir) {
-    let len = s.chars().count();
-    let c = *cursor as isize;
-    *cursor = match dir {
-        CursorDir::Left => c.saturating_sub(1),
-        CursorDir::Right => (c + 1).min(len as isize),
-        CursorDir::Home => 0,
-        CursorDir::End => len as isize,
-    }
-    .clamp(0, len as isize) as usize;
-}
-
-/// 把草稿从字符下标 `cursor` 处劈开,中间塞 `▏` 当光标,供自绘输入渲染。
-/// 光标越界时回落到串尾(`char_to_byte` 的防御性兜底)。
-fn draft_with_caret(draft: &str, cursor: usize) -> String {
-    let byte = char_to_byte(draft, cursor);
-    let (before, after) = draft.split_at(byte);
-    format!("{before}▏{after}")
-}
+// `char_to_byte`/`insert_at_cursor`/`delete_before_cursor`/`move_cursor_in`/
+// `draft_with_caret` 挪到了 `crate::search_box`(见上面 `CursorDir` 的
+// `pub use` 注释),这里通过 `use` 引入,调用方式不变。
 
 /// 自绘输入字段的 `widget::Id`:main.rs 每帧 `interface.operate` 记录其屏幕
 /// `bounds`,鼠标点击时把全局光标 x 折算成字段内局部 x,再映射成字符下标
@@ -1721,13 +1667,12 @@ fn todo_clear_footer_bar<'a>(
         .into()
 }
 
-/// 顶部搜索框:自绘输入(键盘走 main.rs 拦截层路由成 `SearchEvent`,不用
-/// iced 原生 `text_input`——本 app 每帧重建界面,原生输入留不住焦点,打字
-/// 会漏进已聚焦的终端)。**提交按钮嵌在输入框边框内**(右侧、无独立边框,
-/// 只是框里一枚 Search 图标),处理方式对齐 `todo_footer_bar` 的新增任务
-/// 输入框:整框一个 `MouseArea`(点非按钮处进编辑态 `SearchEditStart`),
-/// 按钮是框内层真正的 `button`,自己先吃掉点击,不会触发外层编辑态。
-/// 编辑态/已过滤时整框 GOLD 边框表示焦点归属 / 当前被搜索词收窄。
+/// 顶部搜索框:委托给共享的 `crate::search_box::view`(键盘仍走 main.rs
+/// 拦截层路由成 `SearchEvent`——组件本身不接管键盘,只管渲染)。颜色取
+/// 工作区标准调色板(`byteui::theme::color`);hover 进度用
+/// `HoverId::TodoSearchSubmit` + `App::hover_progress` 现算,组件本身
+/// 不认识 `HoverId`,只接收算好的 `f32`(同 `icons::icon_button_entry`
+/// 的既有接线约定)。
 fn todo_search_bar<'a>(
     app: &App,
     draft: &'a str,
@@ -1735,84 +1680,27 @@ fn todo_search_bar<'a>(
     active: bool,
     cursor: usize,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let body = if draft.is_empty() && !editing {
-        text("搜索任务…")
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().dim)
-    } else {
-        let shown = if editing {
-            draft_with_caret(draft, cursor)
-        } else {
-            draft.to_string()
-        };
-        text(shown)
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().cream)
-    };
-
-    // 提交按钮:同 `todo_footer_bar` 提交按钮的手法——静止 DIM、hover 平滑
-    // 过渡到 GOLD,由 `HoverId::TodoSearchSubmit` + 外层 `MouseArea` 驱动。
-    let submit_color = byteui::theme::color::mix(
-        byteui::theme::color::current().dim,
-        byteui::theme::color::current().gold,
+    let colors = byteui::theme::color::current();
+    crate::search_box::view(
+        draft,
+        editing,
+        active,
+        cursor,
+        "搜索任务…",
+        byteui::theme::font::body(),
+        byteui::theme::icon_size::row(),
+        crate::search_box::SearchBoxColors {
+            bg: colors.bg,
+            border: colors.border,
+            active: colors.gold,
+            text: colors.cream,
+            dim: colors.dim,
+        },
         app.hover_progress(HoverId::TodoSearchSubmit),
-    );
-    let submit = MouseArea::new(
-        button(icons::view(
-            icons::IconKind::Search,
-            byteui::theme::icon_size::row(),
-            submit_color,
-        ))
-        .on_press(Message::SearchSubmit)
-        .padding(6)
-        .style(move |_t, _s| button::Style {
-            background: None,
-            border: Border {
-                color: byteui::theme::color::current().border,
-                width: 0.0,
-                radius: 4.0.into(),
-            },
-            text_color: submit_color,
-            ..button::Style::default()
-        }),
+        Message::SearchEditStart,
+        Message::SearchSubmit,
+        |hovered| Message::Hover(HoverId::TodoSearchSubmit, hovered),
     )
-    .on_enter(Message::Hover(HoverId::TodoSearchSubmit, true))
-    .on_exit(Message::Hover(HoverId::TodoSearchSubmit, false));
-
-    // 输入框本体:单个带边框的容器,把"文字区 + 提交按钮"一起包进边框内,
-    // 一行两格:左格文字(占满宽高、垂直居中靠左),右格提交按钮(垂直居中)
-    // ——搜索框只有一行,不像新增任务框需要"文字顶/按钮底"分对角。
-    MouseArea::new(
-        container(
-            row![
-                container(body)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .align_y(iced_widget::core::alignment::Vertical::Center)
-                    .align_x(iced_widget::core::alignment::Horizontal::Left),
-                container(submit).align_y(iced_widget::core::alignment::Vertical::Center),
-            ]
-            .width(Length::Fill)
-            .align_y(iced_widget::core::Alignment::Center),
-        )
-        .width(Length::Fill)
-        .padding([6, 8])
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(byteui::theme::color::current().bg.into()),
-            border: Border {
-                color: if editing || active {
-                    byteui::theme::color::current().gold
-                } else {
-                    byteui::theme::color::current().border
-                },
-                width: 1.0,
-                radius: 4.0.into(),
-            },
-            ..container::Style::default()
-        }),
-    )
-    .on_press(Message::SearchEditStart)
-    .into()
 }
 
 /// 列表视图主体：搜索栏 + 编号行列表 + 底部新增输入。
