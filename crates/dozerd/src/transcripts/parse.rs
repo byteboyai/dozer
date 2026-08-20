@@ -186,6 +186,94 @@ fn parse_claude_shaped_chunk(
     out
 }
 
+fn join_codebuddy_text_blocks(blocks: &[Value], kind: &str) -> String {
+    let mut text = String::new();
+    for b in blocks {
+        if b.get("type").and_then(|t| t.as_str()) == Some(kind)
+            && let Some(t) = b.get("text").and_then(|t| t.as_str())
+        {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(t);
+        }
+    }
+    text
+}
+
+fn parse_codebuddy_shaped_chunk(
+    text: &str,
+    conversation_id: &str,
+    starting_turn_index: i64,
+) -> Vec<ParsedTurn> {
+    let mut out = Vec::new();
+    let mut turn_index = starting_turn_index;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) != Some("message") {
+            continue;
+        }
+        let Some(blocks) = v.get("content").and_then(|c| c.as_array()) else {
+            continue;
+        };
+        let ts = v.get("timestamp").and_then(|t| t.as_u64());
+        let message_key = v
+            .get("id")
+            .and_then(|i| i.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| fallback_key(conversation_id, turn_index));
+        let usage = v.get("providerData").and_then(|p| p.get("usage"));
+        let tokens_in = usage
+            .and_then(|u| u.get("inputTokens"))
+            .and_then(|n| n.as_u64())
+            .unwrap_or(0);
+        let tokens_out = usage
+            .and_then(|u| u.get("outputTokens"))
+            .and_then(|n| n.as_u64())
+            .unwrap_or(0);
+        match v.get("role").and_then(|r| r.as_str()) {
+            Some("user") => {
+                let content = join_codebuddy_text_blocks(blocks, "input_text");
+                if content.is_empty() {
+                    continue;
+                }
+                out.push(ParsedTurn {
+                    message_key,
+                    role: "human".into(),
+                    content,
+                    ts,
+                    tokens_in,
+                    tokens_out,
+                    raw_json: line.to_string(),
+                    ..Default::default()
+                });
+                turn_index += 1;
+            }
+            Some("assistant") => {
+                out.push(ParsedTurn {
+                    message_key,
+                    role: "ai".into(),
+                    content: join_codebuddy_text_blocks(blocks, "output_text"),
+                    ts,
+                    tokens_in,
+                    tokens_out,
+                    raw_json: line.to_string(),
+                    ..Default::default()
+                });
+                turn_index += 1;
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// 按 agent 分派解析一段(必为完整行)transcript 文本。`starting_turn_index`
 /// 是这段文本第一条产出的 `ParsedTurn` 应该编到的 `turn_index`(调用方从
 /// `conversations`/`conversation_turns` 已有数据算出,续接编号,不重置)。
@@ -199,9 +287,10 @@ pub fn parse_chunk(
         AgentKind::Claude | AgentKind::Opencode | AgentKind::Kilo | AgentKind::Unknown => {
             parse_claude_shaped_chunk(text, conversation_id, starting_turn_index)
         }
-        AgentKind::Codebuddy | AgentKind::Codex | AgentKind::Qoder | AgentKind::V8agent => {
-            Vec::new()
+        AgentKind::Codebuddy => {
+            parse_codebuddy_shaped_chunk(text, conversation_id, starting_turn_index)
         }
+        AgentKind::Codex | AgentKind::Qoder | AgentKind::V8agent => Vec::new(),
     }
 }
 
@@ -269,5 +358,56 @@ mod tests {
         assert_eq!(last_complete_line_boundary("a\nb"), 2);
         assert_eq!(last_complete_line_boundary("no newline yet"), 0);
         assert_eq!(last_complete_line_boundary(""), 0);
+    }
+
+    #[test]
+    fn codebuddy_parses_real_fixture_sample_with_usage() {
+        let text = include_str!("../../../dozer-hook/fixtures/codebuddy-transcript-sample.jsonl");
+        let turns = parse_chunk(AgentKind::Codebuddy, text, "conv1", 0);
+        assert_eq!(turns.len(), 2, "1 用户消息 + 1 assistant 消息;快照行跳过");
+        assert_eq!(turns[0].role, "human");
+        assert_eq!(turns[0].content, "reply with exactly one word: hello");
+        assert_eq!(turns[1].role, "ai");
+        assert_eq!(turns[1].content, "hello");
+        // fixture 里两条消息 id 不同,取到即视为通过(不用本机真实 fixture
+        // 猜数值);关键是不再退化成 fallback_key。
+        assert_ne!(turns[0].message_key, "conv1:0");
+        assert_ne!(turns[1].message_key, "conv1:1");
+        assert!(turns[0].ts.is_some());
+    }
+
+    #[test]
+    fn codebuddy_joins_multiple_text_blocks_and_skips_snapshot() {
+        let text = concat!(
+            "{\"id\":\"m1\",\"type\":\"message\",\"role\":\"user\",\"content\":",
+            "[{\"type\":\"input_text\",\"text\":\"第一段\"},",
+            "{\"type\":\"input_text\",\"text\":\"第二段\"}]}\n",
+            "{\"id\":\"m2\",\"type\":\"message\",\"role\":\"assistant\",\"content\":",
+            "[{\"type\":\"output_text\",\"text\":\"回复一\"}]}\n",
+            "{\"id\":\"m3\",\"type\":\"file-history-snapshot\"}\n",
+        );
+        let turns = parse_chunk(AgentKind::Codebuddy, text, "conv1", 0);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].content, "第一段\n第二段");
+        assert_eq!(turns[0].message_key, "m1");
+        assert_eq!(turns[1].content, "回复一");
+        assert_eq!(turns[1].message_key, "m2");
+    }
+
+    #[test]
+    fn codebuddy_usage_and_tool_fields_stay_zero() {
+        // CodeBuddy fixture 里没见过 tool_use 形状消息,不臆测其结构——
+        // tool_calls/mutating_tool_calls/files_touched 恒零/空(同原
+        // dozer-app usage.rs::parse_codebuddy_shaped_usage 的既有口径)。
+        let text = concat!(
+            "{\"id\":\"m1\",\"type\":\"message\",\"role\":\"assistant\",",
+            "\"content\":[{\"type\":\"output_text\",\"text\":\"x\"}],",
+            "\"providerData\":{\"usage\":{\"inputTokens\":5,\"outputTokens\":7}}}\n",
+        );
+        let turns = parse_chunk(AgentKind::Codebuddy, text, "conv1", 0);
+        assert_eq!(turns[0].tokens_in, 5);
+        assert_eq!(turns[0].tokens_out, 7);
+        assert_eq!(turns[0].tool_calls, 0);
+        assert!(turns[0].files_touched.is_empty());
     }
 }
