@@ -4,6 +4,7 @@ use iced_widget::core::widget;
 use iced_widget::core::{Border, Element};
 use iced_widget::text_input::{self, Status};
 
+#[allow(clippy::too_many_arguments)]
 pub fn view<'a, Message: Clone + 'a>(
     placeholder: &str,
     value: &str,
@@ -11,6 +12,7 @@ pub fn view<'a, Message: Clone + 'a>(
     id: Option<widget::Id>,
     highlight: bool,
     on_submit: Option<Message>,
+    bare: bool,
     on_input: impl Fn(String) -> Message + 'a,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let input = iced_widget::text_input(placeholder, value)
@@ -28,6 +30,20 @@ pub fn view<'a, Message: Clone + 'a>(
         .style(move |_theme: &iced_widget::Theme, status: Status| {
             let colors = crate::theme::color::current();
             let focused = matches!(status, Status::Focused { .. });
+            if bare {
+                return text_input::Style {
+                    background: iced_widget::core::Color::TRANSPARENT.into(),
+                    border: Border {
+                        color: iced_widget::core::Color::TRANSPARENT,
+                        width: 0.0,
+                        radius: 0.0.into(),
+                    },
+                    icon: colors.dim,
+                    placeholder: colors.dim,
+                    value: colors.cream,
+                    selection: crate::theme::color::mix(colors.gold, colors.card, 0.6),
+                };
+            }
             text_input::Style {
                 background: colors.card.into(),
                 border: Border {

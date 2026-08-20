@@ -1339,6 +1339,7 @@ fn source_form<'a>(
         None,
         false,
         None,
+        false,
         Message::DraftNameChanged,
     ));
     if draft.driver == DriverKind::Sqlite {
@@ -1349,6 +1350,7 @@ fn source_form<'a>(
             None,
             false,
             None,
+            false,
             Message::DraftDatabaseChanged,
         ));
     } else {
@@ -1359,6 +1361,7 @@ fn source_form<'a>(
             None,
             false,
             None,
+            false,
             Message::DraftUriChanged,
         ));
         col = col.push(byteui::form::input_text::view(
@@ -1368,6 +1371,7 @@ fn source_form<'a>(
             None,
             false,
             None,
+            false,
             Message::DraftHostChanged,
         ));
         col = col.push(byteui::form::input_text::view(
@@ -1377,6 +1381,7 @@ fn source_form<'a>(
             None,
             false,
             None,
+            false,
             Message::DraftPortChanged,
         ));
         col = col.push(byteui::form::input_text::view(
@@ -1386,6 +1391,7 @@ fn source_form<'a>(
             None,
             false,
             None,
+            false,
             Message::DraftDatabaseChanged,
         ));
         col = col.push(byteui::form::input_text::view(
@@ -1395,6 +1401,7 @@ fn source_form<'a>(
             None,
             false,
             None,
+            false,
             Message::DraftUsernameChanged,
         ));
         col = col.push(byteui::form::input_text::view(
@@ -1404,6 +1411,7 @@ fn source_form<'a>(
             None,
             false,
             None,
+            false,
             Message::DraftPasswordChanged,
         ));
     }

@@ -917,6 +917,7 @@ fn host_form<'a>(
             None,
             false,
             None,
+            false,
             Message::DraftNameChanged,
         ),
         byteui::form::input_text::view(
@@ -926,6 +927,7 @@ fn host_form<'a>(
             None,
             false,
             None,
+            false,
             Message::DraftHostChanged,
         ),
         byteui::form::input_text::view(
@@ -935,6 +937,7 @@ fn host_form<'a>(
             None,
             false,
             None,
+            false,
             Message::DraftPortChanged,
         ),
         byteui::form::input_text::view(
@@ -944,6 +947,7 @@ fn host_form<'a>(
             None,
             false,
             None,
+            false,
             Message::DraftUsernameChanged,
         ),
         row![
@@ -970,6 +974,7 @@ fn host_form<'a>(
             None,
             false,
             None,
+            false,
             Message::DraftKeyPathChanged,
         ));
         col = col.push(byteui::form::input_text::view(
@@ -979,6 +984,7 @@ fn host_form<'a>(
             None,
             false,
             None,
+            false,
             Message::DraftPasswordChanged,
         ));
     } else {
@@ -989,6 +995,7 @@ fn host_form<'a>(
             None,
             false,
             None,
+            false,
             Message::DraftPasswordChanged,
         ));
     }

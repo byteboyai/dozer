@@ -21,7 +21,16 @@ mod tests {
     fn all_form_components_construct_without_panic() {
         let _ = checkbox::view("label", false, Msg::Toggled);
         let _ = switch::view("label", true, Msg::Toggled);
-        let _ = input_text::view("placeholder", "value", false, None, false, None, Msg::Input);
+        let _ = input_text::view(
+            "placeholder",
+            "value",
+            false,
+            None,
+            false,
+            None,
+            false,
+            Msg::Input,
+        );
         let options: &[&str] = &["a", "b"];
         let _ = select::view(options, Some(&"a"), Msg::Selected);
         let content = iced_widget::text_editor::Content::new();

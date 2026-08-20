@@ -907,6 +907,7 @@ pub fn view<'a>(
         Some(search_field_id()),
         search_active,
         Some(Message::SearchSubmit),
+        false,
         Message::SearchInput,
     );
     let box_len = byteui::theme::icon_size::row() + 12.0;
