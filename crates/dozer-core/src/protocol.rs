@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use std::collections::BTreeSet;
 
 /// agent 会话状态（hook 事件驱动的四态机；spec P1e D6）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -44,6 +45,45 @@ impl AgentKind {
             AgentKind::V8agent => "v8agent",
         }
     }
+}
+
+/// 单个历史会话(=一份 agent transcript 文件)的索引摘要;由 dozerd 的
+/// `TranscriptStore` 摄取落库维护(spec 2026-08-20)。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConversationSummary {
+    pub conversation_id: String,
+    pub agent: AgentKind,
+    pub file_path: String,
+    pub title: String,
+    pub first_ts: u64,
+    pub last_ts: u64,
+    pub turn_count: u32,
+}
+
+/// 会话内一个回合(人类发言 / AI 回复)的明细;`role` 恒为 `"human"` 或
+/// `"ai"`(不用枚举是为了跟 sqlite 存储列直接对应,减一层转换)。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TurnRecord {
+    pub turn_index: i64,
+    pub role: String,
+    pub content: String,
+    pub tools_summary: Vec<String>,
+    pub thinking: bool,
+    pub ts: Option<u64>,
+}
+
+/// 单个会话的用量统计(token/工具调用/改动文件),已按 `message_key` 做过
+/// fork/resume 去重(spec"用量去重"一节)。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UsagePayload {
+    pub turns: u32,
+    pub tool_calls: u32,
+    pub mutating_tool_calls: u32,
+    pub files_touched: BTreeSet<String>,
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub tokens_cache_read: u64,
+    pub tokens_cache_write: u64,
 }
 
 /// 预览面板当前上下文：文件路径 + 光标/选区（1-indexed，见 spec
@@ -167,6 +207,25 @@ pub enum Request {
         ts_ms: u64,
         data: serde_json::Value,
     },
+    /// 列出某 cwd 下的历史对话(跨 Claude/CodeBuddy/OpenCode 三家合并;
+    /// `agent` 非空时只查该家)。spec 2026-08-20。
+    ListConversations {
+        cwd: String,
+        agent: Option<AgentKind>,
+        limit: u32,
+        offset: u32,
+    },
+    /// 单个会话的回合明细,keyset 分页(`after_turn_index=-1` 表示从头)。
+    GetConversationTurns {
+        conversation_id: String,
+        after_turn_index: i64,
+        limit: u32,
+    },
+    /// 某 cwd 下按会话分组的用量统计。
+    GetUsageSummary {
+        cwd: String,
+        since_ts: Option<u64>,
+    },
     /// 验收通过的结构性记录（spec P1f D5）；acceptor 由 daemon 侧补 "user"。
     RecordAcceptance {
         repo: String,
@@ -278,6 +337,19 @@ pub enum Reply {
     Bookmarks {
         bookmarks: Vec<BookmarkInfo>,
     },
+    /// `ListConversations` 应答。
+    Conversations {
+        conversations: Vec<ConversationSummary>,
+    },
+    /// `GetConversationTurns` 应答。
+    ConversationTurns {
+        conversation_id: String,
+        turns: Vec<TurnRecord>,
+    },
+    /// `GetUsageSummary` 应答。
+    UsageSummary {
+        rows: Vec<(ConversationSummary, UsagePayload)>,
+    },
     /// `GetPreviewContext` 的应答；`context: None` 表示当前无活动文本预览
     /// 或该 `project_id` 从未收到过推送。
     PreviewContext {
@@ -298,6 +370,85 @@ pub fn decode_line<T: DeserializeOwned>(line: &str) -> anyhow::Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conversation_protocol_types_roundtrip() {
+        let req = Request::ListConversations {
+            cwd: "/proj".into(),
+            agent: Some(AgentKind::Claude),
+            limit: 50,
+            offset: 0,
+        };
+        let line = encode_line(&req);
+        let back: Request = decode_line(&line).unwrap();
+        assert_eq!(req, back);
+
+        let turns_req = Request::GetConversationTurns {
+            conversation_id: "abc".into(),
+            after_turn_index: -1,
+            limit: 100,
+        };
+        let line = encode_line(&turns_req);
+        let back: Request = decode_line(&line).unwrap();
+        assert_eq!(turns_req, back);
+
+        let usage_req = Request::GetUsageSummary {
+            cwd: "/proj".into(),
+            since_ts: None,
+        };
+        let line = encode_line(&usage_req);
+        let back: Request = decode_line(&line).unwrap();
+        assert_eq!(usage_req, back);
+
+        let summary = ConversationSummary {
+            conversation_id: "abc".into(),
+            agent: AgentKind::Claude,
+            file_path: "/h/.claude/projects/x/abc.jsonl".into(),
+            title: "标题".into(),
+            first_ts: 1,
+            last_ts: 2,
+            turn_count: 3,
+        };
+        let turn = TurnRecord {
+            turn_index: 0,
+            role: "human".into(),
+            content: "你好".into(),
+            tools_summary: vec!["Edit README.md".into()],
+            thinking: true,
+            ts: Some(42),
+        };
+        let usage = UsagePayload {
+            turns: 2,
+            tool_calls: 1,
+            mutating_tool_calls: 1,
+            files_touched: std::collections::BTreeSet::from(["README.md".to_string()]),
+            tokens_in: 10,
+            tokens_out: 20,
+            tokens_cache_read: 0,
+            tokens_cache_write: 0,
+        };
+        let reply = Reply::UsageSummary {
+            rows: vec![(summary.clone(), usage)],
+        };
+        let line = encode_line(&reply);
+        let back: Reply = decode_line(&line).unwrap();
+        assert_eq!(reply, back);
+
+        let reply2 = Reply::ConversationTurns {
+            conversation_id: "abc".into(),
+            turns: vec![turn],
+        };
+        let line = encode_line(&reply2);
+        let back2: Reply = decode_line(&line).unwrap();
+        assert_eq!(reply2, back2);
+
+        let reply3 = Reply::Conversations {
+            conversations: vec![summary],
+        };
+        let line = encode_line(&reply3);
+        let back3: Reply = decode_line(&line).unwrap();
+        assert_eq!(reply3, back3);
+    }
 
     #[test]
     fn request_roundtrips_as_single_json_line() {
