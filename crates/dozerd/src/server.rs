@@ -74,6 +74,24 @@ pub fn extract_transcript_path(data: &serde_json::Value) -> Option<&str> {
         .filter(|s| !s.is_empty())
 }
 
+/// hook 事件带 `transcript_path` 时触发一次增量摄取。同步执行(不额外
+/// spawn 一个 task)——`ingest_session` 内部是"读几行新增内容+写 sqlite",
+/// 单会话单文件量级下是毫秒级操作,没必要为它另起异步任务增加复杂度;
+/// 摄取失败只记 warn,不影响本次 hook 事件其余处理(设置 agent/状态仍然
+/// 照常进行)。
+fn maybe_ingest_from_hook_data(
+    transcripts: &crate::transcripts::TranscriptStore,
+    agent: dozer_core::protocol::AgentKind,
+    data: &serde_json::Value,
+) {
+    let Some(path) = extract_transcript_path(data) else {
+        return;
+    };
+    if let Err(e) = transcripts.ingest_session(agent, std::path::Path::new(path)) {
+        tracing::warn!(error = %e, %path, "hook 触发的对话摄取失败");
+    }
+}
+
 /// spec P1e D6：hook 事件名 → 四态映射；未知事件不改状态。
 pub fn agent_state_for(event: &str) -> Option<dozer_core::protocol::AgentState> {
     use dozer_core::protocol::AgentState::*;
@@ -174,6 +192,7 @@ async fn handle_conn(
                                         Some(state) => s.set_agent_state(state, &event, ts_ms),
                                         None => tracing::debug!(%event, "未知 hook 事件，不改状态"),
                                     }
+                                    maybe_ingest_from_hook_data(&transcripts, agent, &data);
                                 }
                             }
                             Reply::Ok
@@ -390,5 +409,26 @@ mod tests {
                 crate::server::serve(socket, registry, store, projects, bookmarks, transcripts);
             std::mem::drop(fut);
         }
+    }
+
+    #[test]
+    fn hook_event_with_transcript_path_triggers_ingest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let transcripts = std::sync::Arc::new(
+            crate::transcripts::TranscriptStore::open(&tmp.path().join("t.db")).unwrap(),
+        );
+        let file = tmp.path().join("s1.jsonl");
+        std::fs::write(
+            &file,
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"你好\"}}\n",
+        )
+        .unwrap();
+        let data = serde_json::json!({"transcript_path": file.to_string_lossy()});
+
+        maybe_ingest_from_hook_data(&transcripts, dozer_core::protocol::AgentKind::Claude, &data);
+
+        let turns = transcripts.get_conversation_turns("s1", -1, 10).unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].content, "你好");
     }
 }
