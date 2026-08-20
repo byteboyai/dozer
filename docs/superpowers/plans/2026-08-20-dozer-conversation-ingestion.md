@@ -2193,7 +2193,7 @@ git commit -m "feat(dozerd): 待命态转换触发摄取兜底"
 **Interfaces:**
 - Consumes: Task 5 的 `transcripts::scan::discover_all_transcript_files`;Task 6 的 `TranscriptStore::ingest_session`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 回填逻辑本身是"遍历 + 调用已测试过的 `ingest_session`",没有新的分支逻辑需要单测——直接抽成一个可单测的小函数:
 
@@ -2250,7 +2250,7 @@ mod tests {
 Run: `cargo test -p dozerd backfill`
 Expected: 编译失败(`backfill` 模块不存在,`lib.rs` 没挂)。
 
-- [ ] **Step 3: 挂模块 + main.rs 接线**
+- [x] **Step 3: 挂模块 + main.rs 接线**
 
 `crates/dozerd/src/lib.rs` 新增 `pub mod backfill;`。
 
@@ -2264,12 +2264,12 @@ Expected: 编译失败(`backfill` 模块不存在,`lib.rs` 没挂)。
     }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozerd backfill`
 Expected: PASS(2 个测试)
 
-- [ ] **Step 5: 全量校验 + 提交**
+- [x] **Step 5: 全量校验 + 提交**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd && cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -- --check`
 
