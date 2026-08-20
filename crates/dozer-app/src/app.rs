@@ -3213,16 +3213,28 @@ impl App {
         self.active_workspace()?.active_selection_text()
     }
 
-    /// 浏览器地址栏是否持有 iced 真实焦点(main.rs 据此路由键盘)。
+    /// 浏览器地址栏是否持有 iced 真实焦点(main.rs 据此路由键盘)。首页
+    /// (`is_home()`)展示的是 `home_browser`(全局浏览器,`App` 级独立
+    /// 实例,不属于任何 `Workspace`),跟工作区里打开的 `ws.browser` 是
+    /// 两个不同的地址栏——两者共用同一个 `addr_field_id()`(不会同时渲染,
+    /// 不会冲突),但读写目标必须按当前在首页还是工作区分流,否则首页地址栏
+    /// 的焦点态永远查不到(`active_workspace()` 在首页上恒为 `None`)。
     pub fn browser_addr_focused(&self) -> bool {
+        if self.is_home() {
+            return self.home_browser.addr_focused();
+        }
         self.active_workspace()
             .is_some_and(|ws| ws.browser_addr_focused())
     }
 
     /// 每帧渲染循环调用:把 `extensions::browser::CaptureAddrFocus` 问到
-    /// 的真实焦点态写进当前工作区(`main.rs` 键盘路由随后读
-    /// `browser_addr_focused` 消费)。
+    /// 的真实焦点态写进正确的浏览器实例(首页 `home_browser` 或当前工作区
+    /// `ws.browser`,见 `browser_addr_focused` 的说明)。
     pub fn set_browser_addr_focused(&mut self, focused: bool) {
+        if self.is_home() {
+            self.home_browser.set_addr_focused(focused);
+            return;
+        }
         if let Some(ws) = self.active_workspace_mut() {
             ws.browser.set_addr_focused(focused);
         }

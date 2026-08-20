@@ -2240,10 +2240,19 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // 浏览器地址栏(Stage 3)同款每帧真实焦点查询:
                                 // 与 Files 搜索框完全同构。`PanelKind::Web` 是浏览器
                                 // 面板对应的 left_view 取值(同 FocusIntent::Browser
-                                // 分支查 PanelKind::Web 的既有用法)。同样只把结果存
-                                // 进局部量,写回 app 要等 `interface` 释放借用之后。
+                                // 分支查 PanelKind::Web 的既有用法)。首页
+                                // (`is_home()`)恒渲染全局浏览器 `home_browser`,是跟
+                                // 工作区 `ws.browser` 独立的另一个实例,`active_
+                                // workspace()` 在首页上恒为 `None`——两种情况都要跑
+                                // 这个查询,否则首页地址栏永远探测不到焦点(代码审阅
+                                // 时发现的既有缺口,读写目标的分流在 `App::
+                                // browser_addr_focused`/`set_browser_addr_focused`
+                                // 里做,这里只负责查询)。同样只把结果存进局部量,
+                                // 写回 app 要等 `interface` 释放借用之后。
                                 let browser_addr_focused =
-                                    if matches!(app.left_view(), crate::app::PanelKind::Web) {
+                                    if matches!(app.left_view(), crate::app::PanelKind::Web)
+                                        || app.is_home()
+                                    {
                                         interface.operate(
                                             renderer,
                                             &mut extensions::browser::CaptureAddrFocus,
