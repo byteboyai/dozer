@@ -910,13 +910,26 @@ fn host_form<'a>(
     status: &'a TestStatus,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![
-        byteui::form::input_text::view("主机名称", &draft.name, false, Message::DraftNameChanged),
-        byteui::form::input_text::view("Host", &draft.host, false, Message::DraftHostChanged),
-        byteui::form::input_text::view("port(22)", &draft.port, false, Message::DraftPortChanged),
+        byteui::form::input_text::view(
+            "主机名称",
+            &draft.name,
+            false,
+            None,
+            Message::DraftNameChanged,
+        ),
+        byteui::form::input_text::view("Host", &draft.host, false, None, Message::DraftHostChanged),
+        byteui::form::input_text::view(
+            "port(22)",
+            &draft.port,
+            false,
+            None,
+            Message::DraftPortChanged,
+        ),
         byteui::form::input_text::view(
             "user name",
             &draft.username,
             false,
+            None,
             Message::DraftUsernameChanged,
         ),
         row![
@@ -940,12 +953,14 @@ fn host_form<'a>(
             "私钥文件路径,如 ~/.ssh/id_ed25519",
             &draft.key_path,
             false,
+            None,
             Message::DraftKeyPathChanged,
         ));
         col = col.push(byteui::form::input_text::view(
             "私钥口令(留空则不修改/无口令)",
             &draft.password,
             true,
+            None,
             Message::DraftPasswordChanged,
         ));
     } else {
@@ -953,6 +968,7 @@ fn host_form<'a>(
             "password(留空则不修改)",
             &draft.password,
             true,
+            None,
             Message::DraftPasswordChanged,
         ));
     }
