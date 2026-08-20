@@ -2753,7 +2753,7 @@ git commit -m "refactor(dozer-app): spawn_conversations_refresh/spawn_review_loa
 - Consumes: Task 14 的 `Client::get_usage_summary`;Task 15 的 `ConversationMeta::from_summary`。
 - Produces: `ConversationUsage` 新增 `From<&dozer_core::protocol::UsagePayload> for ConversationUsage`;删除 `parse_usage`/`parse_claude_shaped_usage`/`parse_codebuddy_shaped_usage`/`MUTATING_TOOLS`(已迁到 `dozerd::transcripts::parse`)。`aggregate`/`group_usage_by_agent`/`daily_totals_by_agent`/`agent_token_share` 四个纯聚合函数**不改**(它们只吃内存里的 `Vec<(ConversationMeta, ConversationUsage)>`,跟数据来源无关)。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```rust
     #[test]
@@ -2780,12 +2780,12 @@ git commit -m "refactor(dozer-app): spawn_conversations_refresh/spawn_review_loa
     }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cargo test -p dozer-app usage::tests::conversation_usage_from_payload_maps_all_fields`
 Expected: 编译失败(`From` 实现不存在)。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 删除 `parse_usage`、`parse_claude_shaped_usage`、`parse_codebuddy_shaped_usage`、`MUTATING_TOOLS` 常量(及顶部不再需要的 `use serde_json::Value;`,若删完这四个函数后该 `use` 变成未使用,一并删掉)。
 
@@ -2840,12 +2840,12 @@ pub fn spawn_refresh(
 
 签名从 `(project_id, project_path, handle, emit)` 变成多了一个 `client: &dozer_client::Client` 形参——同步更新调用方(在 `crate::app.rs`/`workspace.rs` 里搜 `usage::spawn_refresh(` 的调用点,补上 `&io.client` 或等价的 `Client` 引用实参;具体调用点数量以 `grep -rn "usage::spawn_refresh(" crates/dozer-app/src/` 实测为准,可能不止一处——`Message::Refresh` 处理分支和初始加载各一处)。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozer-app usage::`
 Expected: PASS
 
-- [ ] **Step 5: 编译验证 + 提交**
+- [x] **Step 5: 编译验证 + 提交**
 
 Run: `cargo build -p dozer-app 2>&1 | grep -c "error\[" || true`(错误数量应比 Task 17 结束时更少)
 
