@@ -19,7 +19,10 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
     let store = Arc::new(dozerd::acceptance::AcceptanceStore::open(&db).unwrap());
     let projects = Arc::new(dozerd::projects::ProjectStore::new(&db).unwrap());
     let bookmarks = Arc::new(dozerd::bookmarks::BookmarkStore::new(&db).unwrap());
-    tokio::spawn(async move { dozerd::server::serve(&s, r, store, projects, bookmarks).await });
+    let transcripts = Arc::new(dozerd::transcripts::TranscriptStore::open(&db).unwrap());
+    tokio::spawn(async move {
+        dozerd::server::serve(&s, r, store, projects, bookmarks, transcripts).await
+    });
     for _ in 0..100 {
         if sock.exists() {
             break;
@@ -207,4 +210,27 @@ async fn preview_context_push_and_query_round_trips() {
     // 推 None 清空。
     c.update_preview_context(1, None).await.unwrap();
     assert_eq!(c.get_preview_context(1).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn list_conversations_and_usage_roundtrip_against_real_daemon() {
+    let (sock, _registry, _guard) = start_daemon().await;
+    let client = Client::new(sock);
+    let conversations = client
+        .list_conversations("/no/such/project", None, 10, 0)
+        .await
+        .unwrap();
+    assert!(conversations.is_empty());
+
+    let turns = client
+        .get_conversation_turns("no-such-id", -1, 10)
+        .await
+        .unwrap();
+    assert!(turns.is_empty());
+
+    let usage = client
+        .get_usage_summary("/no/such/project", None)
+        .await
+        .unwrap();
+    assert!(usage.is_empty());
 }

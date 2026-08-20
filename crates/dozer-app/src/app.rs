@@ -3454,6 +3454,20 @@ impl App {
         let pl = self.panel_layouts.get(&id).copied().unwrap_or_default();
         self.left_view = pl.left_view;
         self.right_view = pl.right_view;
+        // 磁盘数据可能来自 `end_rail_drag` 修复前写入的坏状态:两侧
+        // active view 撞成同一个 `kind`,渲染时同一面板画两遍,复现过
+        // wgpu StagingBelt "still mapped" panic(2026-08-20 崩溃排查)。
+        // 落盘数据不可信,载入时兜底一次。
+        if self.right_view == self.left_view {
+            self.right_view = self
+                .shell_layout
+                .rail_layout
+                .side(Side::Right)
+                .iter()
+                .find(|k| **k != self.left_view)
+                .copied()
+                .unwrap_or(self.right_view);
+        }
         self.left_collapsed = pl.left_collapsed;
         self.right_collapsed = pl.right_collapsed;
         self.dims = pl.dims;
@@ -3698,6 +3712,25 @@ impl App {
             // `take()` 时清空,这里直接返回即可,`RailLayout` 未改动。
             return;
         };
+        // 面板搬走后,若源栏原本正显示的就是它,那个 active view 就悬空了
+        // ——不补救的话会跟目标栏同时显示同一个 `kind`,两侧渲染出重复的
+        // 面板实例(重复的 widget id/图片纹理请求),曾在拖回来回几次后
+        // 稳定复现 wgpu `StagingBelt` "still mapped" panic(见
+        // 2026-08-20 崩溃排查)。源栏移除后必然还剩至少一个面板(`rail_
+        // cross_apply` 不允许栏清空),落到它现在的第一个面板上。
+        let source_view = match drag.source_side {
+            Side::Left => &mut self.left_view,
+            Side::Right => &mut self.right_view,
+        };
+        if *source_view == kind {
+            *source_view = *self
+                .shell_layout
+                .rail_layout
+                .side(drag.source_side)
+                .first()
+                .expect("rail_cross_apply 保证源栏搬空前至少剩一个面板");
+        }
+
         // 被移动面板成为目标栏新 active,跟随"移动后在按钮所在一侧打开
         // 面板"的要求。跨栏移动结束后统一走 `on_shell_layout_changed`
         // (存盘 + 重算网格)。
@@ -4166,7 +4199,15 @@ impl App {
                     let emit = move |m| {
                         let _ = proxy.send_event(Message::Usage(m));
                     };
-                    usage::update(&mut ws.usage, msg, project_id, project_path, &handle, emit);
+                    usage::update(
+                        &mut ws.usage,
+                        msg,
+                        project_id,
+                        project_path,
+                        &io.client,
+                        &handle,
+                        emit,
+                    );
                 });
             }
             Message::Usage(msg @ usage::Message::Hover(_)) => {
@@ -4185,7 +4226,15 @@ impl App {
                     let emit = move |m| {
                         let _ = proxy.send_event(Message::Usage(m));
                     };
-                    usage::update(&mut ws.usage, msg, project_id, project_path, &handle, emit);
+                    usage::update(
+                        &mut ws.usage,
+                        msg,
+                        project_id,
+                        project_path,
+                        &io.client,
+                        &handle,
+                        emit,
+                    );
                 });
             }
             Message::ConversationOpen(path) => self.conversation_open(path),
@@ -6031,11 +6080,10 @@ impl App {
         self.home_project_search_cursor = 0;
         self.home_right_view = homespace::HomeRightView::default();
         let projects: Vec<ProjectInfo> = self.recent_projects.iter().take(5).cloned().collect();
+        let client = self.client.clone();
         let proxy = self.proxy.clone();
         self.handle.spawn(async move {
-            let (files, convs) = tokio::task::spawn_blocking(move || load_home_recents(&projects))
-                .await
-                .unwrap_or_default();
+            let (files, convs) = load_home_recents(&client, &projects).await;
             let _ = proxy.send_event(Message::HomeRecentsLoaded(files, convs));
         });
     }

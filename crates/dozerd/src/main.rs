@@ -44,7 +44,15 @@ async fn main() -> Result<()> {
     let bookmarks = Arc::new(dozerd::bookmarks::BookmarkStore::new(
         &dozer_core::paths::state_dir().join("dozer.db"),
     )?);
-    let serve = dozerd::server::serve(&socket, registry, store, projects, bookmarks);
+    let transcripts = Arc::new(dozerd::transcripts::TranscriptStore::open(
+        &dozer_core::paths::state_dir().join("dozer.db"),
+    )?);
+    {
+        let files = dozerd::transcripts::scan::discover_all_transcript_files();
+        tracing::info!(count = files.len(), "启动回填:发现历史 transcript 文件");
+        dozerd::backfill::backfill_all(&transcripts, files);
+    }
+    let serve = dozerd::server::serve(&socket, registry, store, projects, bookmarks, transcripts);
     tokio::select! {
         r = serve => r?,
         _ = tokio::signal::ctrl_c() => {

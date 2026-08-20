@@ -1029,21 +1029,24 @@ impl Workspace {
         }
     }
 
-    /// 异步扫当前项目的对话目录 → ConversationsRefreshed（GUI 侧 spawn_blocking；P1j）。
+    /// 异步查当前项目的对话列表 → ConversationsRefreshed（改走 dozerd，P1j 起）。
     pub(crate) fn spawn_conversations_refresh(&self, io: &ShellIo) {
-        let Some(p) = &self.project else {
+        let Some(project) = self.project.as_ref() else {
             return;
         };
-        let project_id = p.id;
-        let cwd = PathBuf::from(&p.path);
-        let cwd_for_log = cwd.clone();
+        let project_id = project.id;
+        let cwd = PathBuf::from(&project.path);
+        let client = io.client.clone();
         let proxy = io.proxy.clone();
         io.handle.spawn(async move {
-            let list =
-                tokio::task::spawn_blocking(move || conversation::list_all_conversations(&cwd))
-                    .await
-                    .unwrap_or_default();
-            tracing::debug!(n = list.len(), cwd = %cwd_for_log.display(), "对话列表扫描完成");
+            let list: Vec<crate::conversation::ConversationMeta> = client
+                .list_conversations(&cwd.to_string_lossy(), None, 500, 0)
+                .await
+                .unwrap_or_default()
+                .iter()
+                .map(crate::conversation::ConversationMeta::from_summary)
+                .collect();
+            tracing::debug!(n = list.len(), cwd = %cwd.display(), "对话列表查询完成");
             let _ = proxy.send_event(Message::ConversationsRefreshed(project_id, list));
         });
     }
@@ -1062,7 +1065,7 @@ impl Workspace {
         let emit = move |m| {
             let _ = proxy.send_event(Message::Usage(m));
         };
-        usage::spawn_refresh(project_id, project_path, &io.handle, emit);
+        usage::spawn_refresh(project_id, project_path, &io.client, &io.handle, emit);
     }
 
     /// 异步取当前项目验收次数 → AcceptanceCountLoaded（项目卡副行）。
@@ -1106,26 +1109,32 @@ impl Workspace {
             .collect()
     }
 
-    /// 异步读 transcript + 解析 → ReviewLoaded（GUI 侧 spawn_blocking；P1i/P1j/P2b 按源）。
+    /// 异步查回合明细 → ReviewLoaded（改走 dozerd；P1i/P1j/P2b 按源）。
     pub(crate) fn spawn_review_load(
         &self,
         io: &ShellIo,
         source: ReviewSource,
         path: String,
-        agent: AgentKind,
+        _agent: AgentKind,
     ) {
-        let Some(project_id) = self.project_id() else {
+        let Some(project) = self.project.as_ref() else {
             return;
         };
+        let project_id = project.id;
+        let client = io.client.clone();
         let proxy = io.proxy.clone();
+        // conversation_id 是文件名(不含扩展名)——与 dozerd 摄取时的派生
+        // 规则一致(见 TranscriptStore::ingest_session)。
+        let conversation_id = std::path::Path::new(&path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
         io.handle.spawn(async move {
-            let result = tokio::task::spawn_blocking(move || {
-                std::fs::read_to_string(&path)
-                    .map(|s| transcript::parse_transcript(agent, &s))
-                    .map_err(|e| format!("无法读取会话记录: {e}"))
-            })
-            .await
-            .unwrap_or_else(|e| Err(format!("解析任务失败: {e}")));
+            let result = client
+                .get_conversation_turns(&conversation_id, -1, 10_000)
+                .await
+                .map(|turns| crate::transcript::review_entries_from_turns(&turns))
+                .map_err(|e| e.to_string());
             let _ = proxy.send_event(Message::ReviewLoaded(project_id, source, result));
         });
     }
@@ -2433,10 +2442,10 @@ pub(crate) fn conversation_list_pane(
         let sub = if current {
             format!(
                 "● 当前 · {}",
-                conversation_sub(c.agent.label(), c.modified_ms, c.size_bytes, now_ms)
+                conversation_sub(c.agent.label(), c.modified_ms, now_ms)
             )
         } else {
-            conversation_sub(c.agent.label(), c.modified_ms, c.size_bytes, now_ms)
+            conversation_sub(c.agent.label(), c.modified_ms, now_ms)
         };
         let sub_color = if current {
             byteui::theme::color::current().green
@@ -3303,19 +3312,9 @@ pub(crate) fn relative_time_text(modified_ms: u64, now_ms: u64) -> String {
 }
 
 /// 对话副行文案：`<agent> · <相对时间> · <规模>`（P1j）。
-pub(crate) fn conversation_sub(
-    agent: &str,
-    modified_ms: u64,
-    size_bytes: u64,
-    now_ms: u64,
-) -> String {
+pub(crate) fn conversation_sub(agent: &str, modified_ms: u64, now_ms: u64) -> String {
     let when = relative_time_text(modified_ms, now_ms);
-    let size = if size_bytes >= 1024 * 1024 {
-        format!("{:.1}MB", size_bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{}KB", (size_bytes / 1024).max(1))
-    };
-    format!("{agent} · {when} · {size}")
+    format!("{agent} · {when}")
 }
 
 /// AI 回合折叠行文案（P1i）：过程 = thinking + N 工具。
@@ -3926,11 +3925,8 @@ mod tests {
 
     #[test]
     fn conversation_sub_line_format() {
-        let s = conversation_sub("claude", 1000, 78 * 1024, 1000);
-        assert!(s.starts_with("claude · "), "含 agent 前缀: {s}");
-        assert!(s.ends_with("· 78KB"), "含规模: {s}");
-        let s2 = conversation_sub("claude", 1000, 8 * 1024 * 1024, 1000);
-        assert!(s2.ends_with("· 8.0MB"), "MB 规模: {s2}");
+        let s = conversation_sub("claude", 1000, 1000);
+        assert_eq!(s, "claude · 刚刚", "agent + 相对时间，不再含文件大小");
     }
 
     #[test]

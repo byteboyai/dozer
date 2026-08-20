@@ -1,0 +1,264 @@
+1. 进程存活架构:两边选了完全不同的范式,且各有代价
+
+  kooky 是单进程模型,没有真正的后台 daemon。
+  LibghosttyEngine.swift 里 PTY 是 libghostty 在
+  kooky.app 自己进程内 fork
+  出来的子进程;SurfaceTeardownCoordinator.swift 证实关
+  tab / 退出 app 时会主动 SIGHUP→SIGKILL
+  终止进程组。"关窗口不掉会话"这句话在 kooky 里只对"切换
+  workspace"成立(隐藏但不销毁),对"退出
+  app"不成立——退出等于杀光所有 PTY,重开是靠
+  Persistence.swift 存的 cwd/agent
+  元数据重新拉起全新进程,不是重连旧进程。
+
+  Dozer 的 dozerd 是真正独立于 GUI 进程的会话持有者,这是
+  code-level 验证成立的架构优势:dozerd/src/session.rs
+  起独立 PTY + 1MiB 环形缓冲(ring.rs)+
+  tokio::broadcast;GUI 退出不会杀 dozerd(main.rs:307
+  只在探测不到 UDS 时被动拉起,没有任何代码在 dozer-app
+  退出时反向 kill 它)。这个"关 GUI 会话仍在跑"是 kooky
+  架构上做不到、Dozer 真正做到的一点。
+
+  但代价也是真实的:dozerd 没有 launchd
+  常驻注册,没有崩溃自愈,纯靠"下次开 GUI
+  探测不到就重拉"维持存活假象,不是正规 daemon
+  该有的系统级保障——所以"会话存活"这个卖点目前是"比
+  kooky 强"但"没有做到工程上该有的严谨程度"。
+
+    2. Agent
+  识别机制:两边其实同源设计,覆盖广度是真正的差距点
+
+  架构上惊人地相似——都是"agent hook 机制主动上报 + 极简
+  wrapper 转发",不是解析终端字节流或轮询进程树猜状态。这
+  不是巧合,Dozer 技术选型文档里明确写"学
+  KookyHook"。crates/dozer-hook/src/main.rs 的设计(读
+  stdin JSON、经 env 变量识别会话、单向写
+  UDS、故意不等应答)和 kooky HookServer.swift
+  的模式(unix socket、PreToolUse/Stop/Notification
+  映射到状态)几乎是同一套思路的两次独立实现。
+
+  需要纠正我上一轮的说法:Dozer 不是"只支持 Claude
+  Code"。protocol.rs:20-29 的 AgentKind 已有 7
+  个变体,crates/dozer-hook 下
+  codebuddy.rs/codex.rs/qoder.rs/opencode.rs
+  各自有独立事件映射表和单测。但真实接线程度不均:5 个
+  agent(Claude/Codebuddy/Codex/Qoder/Opencode)有真实
+  hook 安装,Kilo/V8agent 是 workspace.rs:3362-3364
+  注释明确承认的"纯 GUI 占位,没有真实 hook
+  支持"——选了会出现在 picker 里但不会有状态感知,这是伪功
+  能,用户点了会以为支持了实际没有。
+
+  跨 agent 会话历史对比更悬殊:kooky 有 13
+  个真实存储格式适配器(含 SQLite 的 opencode/kiro);Dozer
+  的 transcript 层(transcript.rs)目前只有 2 种
+  schema(Claude、CodeBuddy)真正解析,Codex/Qoder
+  分支显式返回空数组,代码注释坦承"在 spike 产出 fixture
+  前,不产出数据是唯一诚实的行为"。这块广度差距是真实且量
+  级明显的。
+
+    3. 终端渲染引擎:kooky 有实测证据,Dozer 这块我没能验证
+
+  kooky LibghosttyEngine.swift(2208 行)是直接 FFI 调
+  libghostty C API、CADisplayLink 驱动 vsync、支持 120Hz
+  ProMotion、AppKit/SwiftUI 混合桥接(PaneTreeHost.swift
+  里"workspace 级用 AppKit 持久挂载 + isHidden
+  切换、pane 内部用 SwiftUI"这套混合方案是为了绕开纯
+  SwiftUI 分屏动画卡顿踩过的坑,注释里写了"C2 hybrid
+  boundary"是之前 revert 过一版全 AppKit 方案后的产物)——
+  这是打磨过至少两轮架构迭代的成熟渲染层。
+
+  Dozer 这次派的 Explore
+  任务没有覆盖终端网格渲染(alacritty_terminal
+  集成)这块的实现深度,我不确定实际成熟度,不该瞎猜——这是
+  本次调研的一个空白,如果你想知道可以再挖一轮。
+
+  4. 代码规模分布:kooky 模块化 vs Dozer
+  巨石化,这是能看出来的真实工程风险
+
+  总行数
+  kooky: 34,466(Sources)
+  Dozer: 54,461(crates)
+  ────────────────────────────────────────
+  最大文件
+  kooky: KookySettingsUI.swift 3,030 行
+  Dozer: dozer-app/app.rs 11,494 行
+  ────────────────────────────────────────
+  单文件占比
+  kooky: 最大文件占全仓 ~9%
+  Dozer: app.rs 占全仓 21%,dozer-app 一个 crate 占 85%
+  ────────────────────────────────────────
+  复杂度分布
+  kooky: 分散在 5-6 个关注点清晰的大文件(渲染 FFI/shell
+  集成/workspace 状态/设置 UI/pane 视图)
+  Dozer: 高度集中在单一 iced update 大 match 里
+
+  这是本次调研里对 Dozer 最实打实的一条批评:app.rs
+  11,494 行、workspace.rs 4,615 行,而
+  dozerd(真正的治理后端)只有 1,899
+  行、dozer-core(协议层)只有 746
+  行。产品定位说自己是"治理与验收层",但代码复杂度 85%
+  堆在 GUI
+  进程的一个巨型消息路由文件里,后端相对单薄——这跟"agent
+  中立、判断力外化"的定位有点错位,更像"一个带验收功能的
+  重终端 GUI",而不是一个独立、可审计的治理内核。
+
+   5. 测试:数字接近,但"真"的程度不同
+
+  - kooky:890 个 XCTest,抽查确认全部注入
+  InMemoryPersistence +
+  假引擎(TestEngine.swift),零覆盖真实 libghostty
+  FFI/PTY/渲染路径——2208
+  行的渲染引擎核心代码没有专门测试文件,纯靠人工验证。
+  - Dozer:836 个测试,cargo test --workspace
+  实测全绿;抽查 session.rs 的测试是真的 spawn
+  /bin/sh//bin/zsh 起真实 PTY、轮询真实输出(不是
+  mock),protocol.rs 大量测试老协议帧的向前兼容降级路径。
+
+  两边都是"业务逻辑层测得扎实",但 Dozer
+  在会话/协议这一层的测试比 kooky 更贴近真实行为,kooky
+  则完全没测过渲染引擎本身。这点上 Dozer
+  测试策略反而更硬核一些,虽然总量略少。
+   6. 挖出的一个具体功能缺口,值得你知道
+
+  crates/dozer-app/src/goal.rs::write_goal 被 clippy
+  标为死代码——验收标准的"编辑"路径目前没有从任何 GUI
+  入口调用过,只在测试里用到。对照规格 §7 里 S0b
+  页"定义目标与验收标准(关口一:无标准不派活)"的设计,这意
+  味着"改标准"这个动作很可能还没真正接线到界面上,目前
+  Goal 更像"读 .dozer/goal.md 展示",不是"甲方在 App
+  里编辑标准"。这是验收闭环故事里一个还没兑现的环节,值得
+  你去确认一下 S0b 页面实际能不能编辑标准。
+
+  结论(修正版)
+
+  - Dozer
+  在会话存活这一条规格核心承诺上,代码证据支持它确实比
+  kooky 架构更优(daemon
+  真分离),但缺乏系统级常驻保障,是半成品的"更优"。
+  - Dozer 的多 agent 覆盖比 README
+  表面暗示的更广(不是"只有 Claude"),但比 kooky
+  窄得多,且有两个纯 UI 占位的伪支持项需要留意。
+  - Dozer 代码里几乎没有靠 TODO 掩盖缺口,反而习惯用长注
+  释坦承"为什么现在不做",工程诚实度这点值得肯定,但
+  app.rs 巨石化和 goal 编辑未接线这两条是需要正视的真实
+  债务,不是"细节待打磨"。
+
+  可扩展面板体系(extensions/)
+
+  做实了的部分:
+  - "面板间只能消息通信、不能耦合"这条内部原则在代码层面
+  真的站得住——11 个面板(acceptance/browser/database/file
+  s/footbar/git_log/project/search/ssh/todo/usage,共
+  ~18,590 行)之间 0 处互相 import,各自的
+  State/AppState/WorkspaceState
+  类型全部私有独立,不是共享一个大 struct
+  让人越界互相摸对方字段。
+  - 挑的两个最大面板(database.rs 2432 行、todo.rs 3605
+  行)都是真实功能,不是空转骨架:database.rs 真的用
+  sqlx::AnyPool 连 Postgres/MySQL/SQLite,密码走系统
+  keyring 不落明文;todo.rs 真的读写磁盘上的
+  TODO.md,还手撸了一套无第三方库的日历计算做日期选择器。
+
+  没做实的部分:
+  1. 没有统一 trait 约束——全仓搜不到 trait
+  Extension/trait Panel,纯靠"每个模块都叫 State/Message/
+  update/view"这种命名约定人工遵守,footbar.rs/git_log.rs
+  甚至没有独立 AppState。这意味着编译器不会替你保证新面
+  板"该有的接口都有",全靠 code review。
+  2. "单一 state
+  参数"这条设计初衷已经被现实打破——git_log/footbar
+  是纯净的单 state 参数,但 todo/files/database 的
+  update() 都是 (ws_state, app_state, msg, ...) 双状态签
+  名,代码注释自己承认"写计划时才发现例外比想象的多"。
+  3. 注册新面板的成本被低估了——面板自己的业务逻辑确实独
+  立成文件、互不牵连,但要把面板"接进"UI
+  骨架(图标栏、标题映射、view 分发、副作用钩子)得散落到
+  app.rs 里 6-8 处不同位置,PanelKind 这一个枚举在
+  app.rs+workspace.rs 里被引用 200
+  次、每加一个成员就触发一圈非穷尽 match 报错。这跟"轻量
+  可插拔"的理想状态有差距,更准确的说法是"业务逻辑解耦,UI
+  骨架挂载没解耦"。
+  4. app.rs 11,494
+  行是这套体系最大的隐患信号——面板越加越多,胶水层只会越
+  堆越厚,这个文件迟早会成为团队协作和排错的瓶颈。
+
+  byteui 库
+
+  核心层是真的贯穿性基础设施,不是花架子:
+  - theme::color/font/geometry/icon_size 在 dozer-app
+  里被引用 1353 次(color::current() 单项就 652
+  次),icon_button_entry/tab_core 也有 40+ 处实际调用。
+  - icon_button_entry 的参数(active/dim/hover_t/card/int
+  eractive)每一个都能在调用点对应到真实差异化需求(比如
+  interactive:false 是从"无 URL 时收藏星标不可点"这个真
+  实场景反哺进来的),不是随手堆样式常量。
+  - 依赖方向干净:byteui 的 Cargo.toml 不反向依赖任何
+  dozer crate,icon_button_entry/tab_core 用泛型 M: Clone
+  代表消息类型——理论上可以拆出去给别的 iced
+  项目用,不是名义分 crate 实际耦合死。
+
+  虚高的部分:
+  - form/(checkbox/input_text/select/switch)和
+  data/(card/list/property)模块在 dozer-app
+  里零调用,layout/ 下 flex/panel/wrapper
+  也基本零调用(只有 divider 用了 2
+  次)。这些是"写了单测、但没在真实 UI
+  里验证过"的超前建设,不能算作已兑现的复用价值。
+  - 历史遗留手写 MouseArea 还有 53
+  处,但抽查下来绝大多数有正当理由(拖拽手柄、透明遮罩关闭
+  弹窗)且留了注释说明为什么不能用统一组件;只找到 1
+  处(todo.rs:1530 提交按钮)结构上跟 icon_button_entry
+  几乎一样却没走统一入口,规模很小,不构成系统性问题。
+  - icon_button_entry/tab_core 本身因为返回
+  iced::Element
+  没法做等值断言,没有直接单测,只能靠人工/视觉回归——这是
+  iced widget 的通病,不算设计缺陷,但确实是覆盖盲区。
+
+    一句话评价
+
+  两块东西都是"真做了,但没做到理想终态":extensions
+  体系兑现了"面板间不耦合"这条硬约束,但代价转嫁成了
+  app.rs 这个越来越肥的胶水层,且缺编译期接口保证;byteui
+  的 token/交互内核层是真正被验证过的基础设施,但
+  form/data 这两个模块目前还是空中楼阁,复用性也只在
+  dozer-app
+  一个消费者身上验证过,谈不上"独立组件库"级别的成熟度。
+
+  Dozer 的 dozer-mcp:确实刚起步,但起步的方向和质量值得说
+
+  规模摆在这:整个 crate 778 行,其中 server.rs 只有 110
+  行,main.rs 26 行——真正的 MCP server 逻辑加起来不到 140
+  行。反而 install.rs(428 行)比 server
+  本体还大,因为它干的是"把自己注册进
+  Claude/Codex/OpenCode 三种外部 CLI agent 的 MCP
+  配置文件"这件事(run_at_claude_like/run_at_codex/run_at
+  _opencode,install.rs:14/81/123)——目前这个 crate
+  花的功夫更多在"怎么把自己接进外部
+  agent",而不是"暴露多少能力"。
+
+  目前只暴露 1 个
+  tool:get_preview_context(server.rs:33-67),作用是让外部
+  agent 查"用户现在在 Dozer 预览面板里看哪个文件、光标/
+  选区在哪"。仅此一个。CLAUDE.md 里对这个 crate
+  的定性是"面向外部 CLI agent 的只读 MCP stdio
+  server"——"只读"是明确的设计约束,不是能力不足的借口式说
+  法,即这东西现在的设计意图就是单向暴露"用户在看什么"这
+  一类上下文,不打算做成通用工具调用桥。
+
+  但这一个 tool 做得不糙,能看出工程习惯延续:
+  - fetch_context()(server.rs:73-90)和 #[tool]
+  包装方法分离,注释直接写明是为了让测试(tests/get_previe
+  w_context.rs,196 行真实集成测试)能绕开 MCP
+  协议包装直接测裸逻辑——跟之前在 dozerd/transcript.rs
+  里看到的"写清楚为什么这么设计"的注释习惯是一致的,不是
+  这个 crate 独有的偶然。
+  - session→project 的解析每次调用都现查
+  dozerd,不缓存,注释说明理由:"dozerd 可能比这个长驻的
+  MCP 进程活得更久/重启过,调用方得自己判断陈旧"——这跟第
+  一轮里发现的"dozerd 独立于 GUI
+  进程存活"是同一个架构现实的自然延伸,说明这个设计不是拍
+  脑袋,是对既有架构事实的正确反应。
+  - serve_requires_session_id.rs 测试专门守"没有
+  DOZER_SESSION_ID
+  环境变量就不该跑起来"这条边界——防止这个 server 被脱离
+  Dozer 会话上下文误用。

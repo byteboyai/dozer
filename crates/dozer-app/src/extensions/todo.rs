@@ -1594,7 +1594,7 @@ fn todo_footer_bar<'a>(
 /// `清空列表` 走 `Message::ClearList`,在 `update` 里是 no-op,这里只负责
 /// 把 UI 摆出来。
 fn todo_clear_footer_bar<'a>(
-    ws_state: &'a WorkspaceState,
+    _ws_state: &'a WorkspaceState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let clear = button(
         row![
@@ -2647,23 +2647,6 @@ fn todo_tab<'a>(
         ..button::Style::default()
     })
     .into()
-}
-
-/// `SystemTime` → "MM-DD HH:MM"(UTC)。不引 `chrono`,用 civil-from-days
-/// 算法(Howard Hinnant)手推公历年月日,再拼 HH:MM。只用于"完成于"这种
-/// 粗粒度提示,UTC 而非本地时区,不追求夏令时/时区严格正确。
-fn format_todo_time(t: std::time::SystemTime) -> String {
-    let secs = t
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    // days = 秒数 → 自 1970-01-01 的整数日;`secs` 已经是 `u64`(1970 前会被
-    // 上面的 `unwrap_or_default()` 夹到 0),这里不会是负数。
-    let days = (secs / 86400) as i64;
-    let rem = secs % 86400;
-    let (hour, minute) = (rem / 3600, (rem % 3600) / 60);
-    let (_y, m, d) = civil_from_days(days);
-    format!("{:02}-{:02} {:02}:{:02}", m, d, hour, minute)
 }
 
 /// `SystemTime` → "MM-DD"（SUCCESS 徽章用，只取月日）。

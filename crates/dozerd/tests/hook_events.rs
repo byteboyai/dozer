@@ -37,6 +37,7 @@ async fn hook_event_reaches_attached_client_and_list() {
                 test_store(),
                 test_projects(),
                 test_bookmarks(),
+                test_transcripts(),
             )
             .await
         }
@@ -162,15 +163,19 @@ async fn record_acceptance_persists() {
     let store = Arc::new(dozerd::acceptance::AcceptanceStore::open(&db).unwrap());
     let projects = Arc::new(dozerd::projects::ProjectStore::new(&db).unwrap());
     let bookmarks = Arc::new(dozerd::bookmarks::BookmarkStore::new(&db).unwrap());
+    let transcripts = Arc::new(dozerd::transcripts::TranscriptStore::open(&db).unwrap());
     tokio::spawn({
-        let (sock, registry, store, projects, bookmarks) = (
+        let (sock, registry, store, projects, bookmarks, transcripts) = (
             sock.clone(),
             registry.clone(),
             store.clone(),
             projects.clone(),
             bookmarks.clone(),
+            transcripts.clone(),
         );
-        async move { dozerd::server::serve(&sock, registry, store, projects, bookmarks).await }
+        async move {
+            dozerd::server::serve(&sock, registry, store, projects, bookmarks, transcripts).await
+        }
     });
     for _ in 0..100 {
         if sock.exists() {
@@ -210,6 +215,12 @@ fn test_bookmarks() -> std::sync::Arc<dozerd::bookmarks::BookmarkStore> {
     std::sync::Arc::new(dozerd::bookmarks::BookmarkStore::new(&db).unwrap())
 }
 
+/// 每次调用建独立临时库的对话/用量摄取存储（测试用；serve 需要）。
+fn test_transcripts() -> std::sync::Arc<dozerd::transcripts::TranscriptStore> {
+    let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
+    std::sync::Arc::new(dozerd::transcripts::TranscriptStore::open(&db).unwrap())
+}
+
 #[tokio::test]
 async fn project_open_and_list_roundtrip() {
     let sock = std::env::temp_dir().join(format!("dozerd-proj-{}.sock", uuid::Uuid::new_v4()));
@@ -218,15 +229,19 @@ async fn project_open_and_list_roundtrip() {
     let store = Arc::new(dozerd::acceptance::AcceptanceStore::open(&db).unwrap());
     let projects = Arc::new(dozerd::projects::ProjectStore::new(&db).unwrap());
     let bookmarks = Arc::new(dozerd::bookmarks::BookmarkStore::new(&db).unwrap());
+    let transcripts = Arc::new(dozerd::transcripts::TranscriptStore::open(&db).unwrap());
     tokio::spawn({
-        let (sock, registry, store, projects, bookmarks) = (
+        let (sock, registry, store, projects, bookmarks, transcripts) = (
             sock.clone(),
             registry.clone(),
             store.clone(),
             projects.clone(),
             bookmarks.clone(),
+            transcripts.clone(),
         );
-        async move { dozerd::server::serve(&sock, registry, store, projects, bookmarks).await }
+        async move {
+            dozerd::server::serve(&sock, registry, store, projects, bookmarks, transcripts).await
+        }
     });
     for _ in 0..100 {
         if sock.exists() {

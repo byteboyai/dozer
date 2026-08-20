@@ -64,6 +64,7 @@ async fn session_survives_client_disconnect() {
                 test_store(),
                 test_projects(),
                 test_bookmarks(),
+                test_transcripts(),
             )
             .await
         }
@@ -193,6 +194,7 @@ async fn unknown_session_returns_error_reply() {
                 test_store(),
                 test_projects(),
                 test_bookmarks(),
+                test_transcripts(),
             )
             .await
         }
@@ -232,6 +234,7 @@ async fn attach_delivers_marker_exactly_once() {
                 test_store(),
                 test_projects(),
                 test_bookmarks(),
+                test_transcripts(),
             )
             .await
         }
@@ -307,6 +310,7 @@ async fn attach_from_offset_resumes_within_window() {
                 test_store(),
                 test_projects(),
                 test_bookmarks(),
+                test_transcripts(),
             )
             .await
         }
@@ -411,6 +415,7 @@ async fn attach_stream_offset_invariant_under_load() {
                 test_store(),
                 test_projects(),
                 test_bookmarks(),
+                test_transcripts(),
             )
             .await
         }
@@ -502,6 +507,7 @@ async fn attach_from_offset_out_of_window_falls_back_to_full_snapshot() {
                 test_store(),
                 test_projects(),
                 test_bookmarks(),
+                test_transcripts(),
             )
             .await
         }
@@ -576,4 +582,10 @@ fn test_projects() -> std::sync::Arc<dozerd::projects::ProjectStore> {
 fn test_bookmarks() -> std::sync::Arc<dozerd::bookmarks::BookmarkStore> {
     let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
     std::sync::Arc::new(dozerd::bookmarks::BookmarkStore::new(&db).unwrap())
+}
+
+/// 每次调用建独立临时库的对话/用量摄取存储（测试用；serve 需要）。
+fn test_transcripts() -> std::sync::Arc<dozerd::transcripts::TranscriptStore> {
+    let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
+    std::sync::Arc::new(dozerd::transcripts::TranscriptStore::open(&db).unwrap())
 }

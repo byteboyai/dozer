@@ -1,4 +1,5 @@
 pub mod acceptance;
+pub mod backfill;
 pub mod bookmarks;
 pub mod preview_context;
 pub mod projects;
@@ -7,3 +8,4 @@ pub mod ring;
 pub mod server;
 pub mod session;
 pub mod shell_integration;
+pub mod transcripts;

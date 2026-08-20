@@ -17,6 +17,7 @@ pub async fn serve(
     store: Arc<crate::acceptance::AcceptanceStore>,
     projects: Arc<crate::projects::ProjectStore>,
     bookmarks: Arc<crate::bookmarks::BookmarkStore>,
+    transcripts: Arc<crate::transcripts::TranscriptStore>,
 ) -> Result<()> {
     let preview_contexts = Arc::new(PreviewContextStore::new());
     if socket.exists() {
@@ -40,6 +41,7 @@ pub async fn serve(
         let projects = projects.clone();
         let bookmarks = bookmarks.clone();
         let preview_contexts = preview_contexts.clone();
+        let transcripts = transcripts.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_conn(
                 stream,
@@ -48,6 +50,7 @@ pub async fn serve(
                 projects,
                 bookmarks,
                 preview_contexts,
+                transcripts,
             )
             .await
             {
@@ -71,6 +74,47 @@ pub fn extract_transcript_path(data: &serde_json::Value) -> Option<&str> {
         .filter(|s| !s.is_empty())
 }
 
+/// hook 事件带 `transcript_path` 时触发一次增量摄取。同步执行(不额外
+/// spawn 一个 task)——`ingest_session` 内部是"读几行新增内容+写 sqlite",
+/// 单会话单文件量级下是毫秒级操作,没必要为它另起异步任务增加复杂度;
+/// 摄取失败只记 warn,不影响本次 hook 事件其余处理(设置 agent/状态仍然
+/// 照常进行)。
+fn maybe_ingest_from_hook_data(
+    transcripts: &crate::transcripts::TranscriptStore,
+    agent: dozer_core::protocol::AgentKind,
+    data: &serde_json::Value,
+) {
+    let Some(path) = extract_transcript_path(data) else {
+        return;
+    };
+    if let Err(e) = transcripts.ingest_session(agent, std::path::Path::new(path)) {
+        tracing::warn!(error = %e, %path, "hook 触发的对话摄取失败");
+    }
+}
+
+/// 会话状态转入 `Idle`/`AwaitingInput` 时的兜底摄取——替代定时轮询,
+/// 复用现有状态机,只在"这一刻状态真的变了"才触发,同态重复事件不重复
+/// 摄取(避免每次 hook 事件都无谓地读一次文件)。
+fn maybe_ingest_on_state_transition(
+    transcripts: &crate::transcripts::TranscriptStore,
+    agent: dozer_core::protocol::AgentKind,
+    old_state: dozer_core::protocol::AgentState,
+    new_state: dozer_core::protocol::AgentState,
+    transcript_path: Option<&str>,
+) {
+    use dozer_core::protocol::AgentState::{AwaitingInput, Idle};
+    if old_state == new_state {
+        return;
+    }
+    if !matches!(new_state, Idle | AwaitingInput) {
+        return;
+    }
+    let Some(path) = transcript_path else { return };
+    if let Err(e) = transcripts.ingest_session(agent, std::path::Path::new(path)) {
+        tracing::warn!(error = %e, %path, "待命态兜底摄取失败");
+    }
+}
+
 /// spec P1e D6：hook 事件名 → 四态映射；未知事件不改状态。
 pub fn agent_state_for(event: &str) -> Option<dozer_core::protocol::AgentState> {
     use dozer_core::protocol::AgentState::*;
@@ -90,6 +134,7 @@ async fn handle_conn(
     projects: Arc<crate::projects::ProjectStore>,
     bookmarks: Arc<crate::bookmarks::BookmarkStore>,
     preview_contexts: Arc<PreviewContextStore>,
+    transcripts: Arc<crate::transcripts::TranscriptStore>,
 ) -> Result<()> {
     let (r, mut w) = stream.into_split();
     let mut lines = BufReader::new(r).lines();
@@ -167,9 +212,21 @@ async fn handle_conn(
                                         s.set_transcript_path(tp);
                                     }
                                     match agent_state_for(&event) {
-                                        Some(state) => s.set_agent_state(state, &event, ts_ms),
+                                        Some(state) => {
+                                            let old_state = s.info().agent_state;
+                                            s.set_agent_state(state, &event, ts_ms);
+                                            let tp = s.info().transcript_path;
+                                            maybe_ingest_on_state_transition(
+                                                &transcripts,
+                                                agent,
+                                                old_state,
+                                                state,
+                                                tp.as_deref(),
+                                            );
+                                        }
                                         None => tracing::debug!(%event, "未知 hook 事件，不改状态"),
                                     }
+                                    maybe_ingest_from_hook_data(&transcripts, agent, &data);
                                 }
                             }
                             Reply::Ok
@@ -255,6 +312,24 @@ async fn handle_conn(
                         Request::GetPreviewContext { project_id } => Reply::PreviewContext {
                             context: preview_contexts.get(project_id),
                         },
+                        Request::ListConversations { cwd, agent, limit, offset } => {
+                            match transcripts.list_conversations(&cwd, agent, limit, offset) {
+                                Ok(conversations) => Reply::Conversations { conversations },
+                                Err(e) => Reply::Error { message: format!("列对话失败: {e}") },
+                            }
+                        }
+                        Request::GetConversationTurns { conversation_id, after_turn_index, limit } => {
+                            match transcripts.get_conversation_turns(&conversation_id, after_turn_index, limit) {
+                                Ok(turns) => Reply::ConversationTurns { conversation_id, turns },
+                                Err(e) => Reply::Error { message: format!("查询回合失败: {e}") },
+                            }
+                        }
+                        Request::GetUsageSummary { cwd, since_ts } => {
+                            match transcripts.get_usage_summary(&cwd, since_ts) {
+                                Ok(rows) => Reply::UsageSummary { rows },
+                                Err(e) => Reply::Error { message: format!("查询用量失败: {e}") },
+                            }
+                        }
                     },
                 };
                 w.write_all(encode_line(&reply).as_bytes()).await?;
@@ -350,6 +425,100 @@ mod tests {
         assert_eq!(
             extract_transcript_path(&data),
             Some("/home/u/.claude/projects/x/y.jsonl")
+        );
+    }
+
+    #[test]
+    fn transcript_store_field_compiles_into_serve_signature() {
+        // 编译期检查:确认 `serve` 函数签名接受 `Arc<TranscriptStore>`。
+        fn _assert_signature(
+            socket: &std::path::Path,
+            registry: std::sync::Arc<crate::registry::SessionRegistry>,
+            store: std::sync::Arc<crate::acceptance::AcceptanceStore>,
+            projects: std::sync::Arc<crate::projects::ProjectStore>,
+            bookmarks: std::sync::Arc<crate::bookmarks::BookmarkStore>,
+            transcripts: std::sync::Arc<crate::transcripts::TranscriptStore>,
+        ) {
+            let fut =
+                crate::server::serve(socket, registry, store, projects, bookmarks, transcripts);
+            std::mem::drop(fut);
+        }
+    }
+
+    #[test]
+    fn hook_event_with_transcript_path_triggers_ingest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let transcripts = std::sync::Arc::new(
+            crate::transcripts::TranscriptStore::open(&tmp.path().join("t.db")).unwrap(),
+        );
+        let file = tmp.path().join("s1.jsonl");
+        std::fs::write(
+            &file,
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"你好\"}}\n",
+        )
+        .unwrap();
+        let data = serde_json::json!({"transcript_path": file.to_string_lossy()});
+
+        maybe_ingest_from_hook_data(&transcripts, dozer_core::protocol::AgentKind::Claude, &data);
+
+        let turns = transcripts.get_conversation_turns("s1", -1, 10).unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].content, "你好");
+    }
+
+    #[test]
+    fn idle_state_transition_triggers_ingest_backstop() {
+        use dozer_core::protocol::AgentState;
+        let tmp = tempfile::tempdir().unwrap();
+        let transcripts = std::sync::Arc::new(
+            crate::transcripts::TranscriptStore::open(&tmp.path().join("t.db")).unwrap(),
+        );
+        let file = tmp.path().join("s1.jsonl");
+        std::fs::write(
+            &file,
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"待命态触发\"}}\n",
+        )
+        .unwrap();
+
+        maybe_ingest_on_state_transition(
+            &transcripts,
+            dozer_core::protocol::AgentKind::Claude,
+            AgentState::Running,
+            AgentState::AwaitingInput,
+            Some(file.to_string_lossy().as_ref()),
+        );
+
+        let turns = transcripts.get_conversation_turns("s1", -1, 10).unwrap();
+        assert_eq!(turns.len(), 1);
+    }
+
+    #[test]
+    fn same_state_repeat_does_not_trigger_ingest() {
+        use dozer_core::protocol::AgentState;
+        let tmp = tempfile::tempdir().unwrap();
+        let transcripts = std::sync::Arc::new(
+            crate::transcripts::TranscriptStore::open(&tmp.path().join("t.db")).unwrap(),
+        );
+        let file = tmp.path().join("s1.jsonl");
+        std::fs::write(
+            &file,
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"x\"}}\n",
+        )
+        .unwrap();
+
+        maybe_ingest_on_state_transition(
+            &transcripts,
+            dozer_core::protocol::AgentKind::Claude,
+            AgentState::Idle,
+            AgentState::Idle,
+            Some(file.to_string_lossy().as_ref()),
+        );
+        assert!(
+            transcripts
+                .get_conversation_turns("s1", -1, 10)
+                .unwrap()
+                .is_empty(),
+            "同态重复不该触发摄取"
         );
     }
 }

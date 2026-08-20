@@ -33,7 +33,7 @@
 - Produces: `Request::ListConversations { cwd: String, agent: Option<AgentKind>, limit: u32, offset: u32 }`、`Request::GetConversationTurns { conversation_id: String, after_turn_index: i64, limit: u32 }`、`Request::GetUsageSummary { cwd: String, since_ts: Option<u64> }`。
 - Produces: `Reply::Conversations { conversations: Vec<ConversationSummary> }`、`Reply::ConversationTurns { conversation_id: String, turns: Vec<TurnRecord> }`、`Reply::UsageSummary { rows: Vec<(ConversationSummary, UsagePayload)> }`。
 
-- [ ] **Step 1: 写失败测试(round-trip 序列化)**
+- [x] **Step 1: 写失败测试(round-trip 序列化)**
 
 在 `crates/dozer-core/src/protocol.rs` 的 `#[cfg(test)] mod tests` 里新增:
 
@@ -118,12 +118,12 @@
     }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cargo test -p dozer-core conversation_protocol_types_roundtrip`
 Expected: 编译失败(类型/variant 不存在)。
 
-- [ ] **Step 3: 新增类型与 variant**
+- [x] **Step 3: 新增类型与 variant**
 
 在 `AgentKind` 定义之后(`protocol.rs` 第 30 行之后)新增:
 
@@ -212,12 +212,12 @@ pub struct UsagePayload {
     },
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozer-core conversation_protocol_types_roundtrip`
 Expected: PASS
 
-- [ ] **Step 5: 全量校验 + 提交**
+- [x] **Step 5: 全量校验 + 提交**
 
 Run: `cargo build -p dozer-core && cargo test -p dozer-core && cargo clippy -p dozer-core --all-targets -- -D warnings && cargo fmt -- --check`
 
@@ -239,7 +239,7 @@ git commit -m "feat(dozer-core): 新增对话摄取管线协议类型与 Request
 
 这些函数是从 `crates/dozer-app/src/conversation.rs` 原样搬来(逻辑不变,只改可见性为 `pub`),供 `dozerd`(摄取扫描)和 `dozer-app`(`links.rs::discover_memory`,与摄取无关的另一用途)共用,避免两边各存一份、行为漂移。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 创建 `crates/dozer-core/src/agent_paths.rs`:
 
@@ -326,16 +326,16 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 挂进 crate**
+- [x] **Step 2: 挂进 crate**
 
 在 `crates/dozer-core/src/lib.rs` 新增一行 `pub mod agent_paths;`(找现有 `pub mod paths;` 之类的行,紧跟其后添加)。
 
-- [ ] **Step 3: 运行测试确认通过**
+- [x] **Step 3: 运行测试确认通过**
 
 Run: `cargo test -p dozer-core agent_paths`
 Expected: PASS(3 个测试)
 
-- [ ] **Step 4: 全量校验 + 提交**
+- [x] **Step 4: 全量校验 + 提交**
 
 Run: `cargo build -p dozer-core && cargo test -p dozer-core && cargo clippy -p dozer-core --all-targets -- -D warnings && cargo fmt -- --check`
 
@@ -358,7 +358,7 @@ git commit -m "feat(dozer-core): 新增 agent_paths 模块,供 dozerd/dozer-app 
 
 `message_key` 取 Claude 每行顶层的 `uuid` 字段(Claude Code 会话 JSONL 的标准字段,每行一个事件都带 `uuid`/`parentUuid`);取不到时退化为 `"{conversation_id}:{turn_index}"`(spec 已定的退化规则)。**实现前请先用 `head -3 ~/.claude/projects/*/*.jsonl`(任选一份本机真实存在的 Claude 会话文件)确认 `uuid` 字段确实存在于每行顶层**——如果实测字段名不同,把下面 Step 3 里 `v.get("uuid")` 换成实测的正确字段名,不要保留错误假设;单测里已经覆盖了"字段不存在时退化"这条路径,即使字段名一开始就没猜对,行为也不会 panic,只是白白丢了去重能力,发现后改一行字段名即可。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 创建 `crates/dozerd/src/transcripts/parse.rs`:
 
@@ -639,7 +639,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cargo test -p dozerd transcripts::parse`
 Expected: 编译失败(`crates/dozerd/src/transcripts/` 目录/`lib.rs` 里还没挂 `transcripts` mod)。
@@ -654,12 +654,12 @@ pub mod transcripts {
 
 (Task 6 会把这行换成正式的三文件 `mod.rs`/`parse.rs`/`scan.rs` 结构,这里先用内联 `pub mod` 让本 Task 可独立验证。)
 
-- [ ] **Step 3: 运行测试确认通过**
+- [x] **Step 3: 运行测试确认通过**
 
 Run: `cargo test -p dozerd transcripts::parse`
 Expected: PASS(5 个测试)。**如果 `parses_human_and_ai_turn_with_usage_and_tools` 因为真实 Claude JSONL 里 `uuid` 字段名/位置跟假设不同而需要调整解析代码,现在用本机真实文件核对一次再继续。**
 
-- [ ] **Step 4: 全量校验 + 提交**
+- [x] **Step 4: 全量校验 + 提交**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd && cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -- --check`
 
@@ -681,7 +681,7 @@ git commit -m "feat(dozerd): 新增 transcripts::parse——Claude 形状增量�
 
 CodeBuddy 每行顶层有稳定的 `id` 字段(已用 `crates/dozer-hook/fixtures/codebuddy-transcript-sample.jsonl` 实测确认,见该 fixture 第 1/2/3 行的 `id` 字段),`message_key` 直接取它,不需要退化。`timestamp` 字段同样是顶层数字(epoch ms,已实测确认)。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `parse.rs` 的 `#[cfg(test)] mod tests` 里新增:
 
@@ -738,12 +738,12 @@ CodeBuddy 每行顶层有稳定的 `id` 字段(已用 `crates/dozer-hook/fixture
     }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cargo test -p dozerd transcripts::parse::codebuddy`
 Expected: FAIL(`turns.len()` 断言失败,因为分派还是返回空)。
 
-- [ ] **Step 3: 实现 CodeBuddy 分支**
+- [x] **Step 3: 实现 CodeBuddy 分支**
 
 在 `parse.rs` 里,`parse_claude_shaped_chunk` 函数之后新增:
 
@@ -858,12 +858,12 @@ pub fn parse_chunk(
 }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozerd transcripts::parse`
 Expected: PASS(全部 8 个测试)
 
-- [ ] **Step 5: 全量校验 + 提交**
+- [x] **Step 5: 全量校验 + 提交**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd && cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -- --check`
 
@@ -883,7 +883,7 @@ git commit -m "feat(dozerd): transcripts::parse 补齐 CodeBuddy 形状解析"
 **Interfaces:**
 - Produces: `discover_all_transcript_files() -> Vec<(AgentKind, PathBuf)>`——扫描三家 agent 的 `<home>/<agent_root>/projects/*/*.jsonl`,返回 `(agent, 文件路径)` 扁平列表,供 `dozerd` 启动回填用。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 创建 `crates/dozerd/src/transcripts/scan.rs`:
 
@@ -968,7 +968,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 挂进 crate(正式三文件结构)**
+- [x] **Step 2: 挂进 crate(正式三文件结构)**
 
 把 `crates/dozerd/src/lib.rs` 里 Task 3 加的临时内联 `pub mod transcripts { pub mod parse; }` 删掉,新建 `crates/dozerd/src/transcripts/mod.rs`:
 
@@ -987,12 +987,12 @@ pub mod transcripts;
 
 (跟 `pub mod acceptance;`/`pub mod bookmarks;` 等现有模块声明同级、同风格。)
 
-- [ ] **Step 3: 运行测试确认通过**
+- [x] **Step 3: 运行测试确认通过**
 
 Run: `cargo test -p dozerd transcripts::scan`
 Expected: PASS(2 个测试);同时确认 Task 3/4 的 `transcripts::parse` 测试仍然全绿(`cargo test -p dozerd transcripts::`)。
 
-- [ ] **Step 4: 全量校验 + 提交**
+- [x] **Step 4: 全量校验 + 提交**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd && cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -- --check`
 
@@ -1014,7 +1014,7 @@ git commit -m "feat(dozerd): 新增 transcripts::scan——启动回填用的目
 
 这是本计划风险最集中的 Task——增量读取(半行不消费)、截断检测、`(conversation_id, message_key)` upsert。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `crates/dozerd/src/transcripts/mod.rs` 追加(紧跟 `pub mod parse; pub mod scan;` 之后):
 
@@ -1202,12 +1202,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cargo test -p dozerd transcripts::tests`
 Expected: 编译失败(`ingest_session`/`get_conversation_turns` 还不存在)。
 
-- [ ] **Step 3: 实现 `ingest_session`(先内联一个最小 `get_conversation_turns` 供测试用,完整版见 Task 8)**
+- [x] **Step 3: 实现 `ingest_session`(先内联一个最小 `get_conversation_turns` 供测试用,完整版见 Task 8)**
 
 在 `impl TranscriptStore` 块内(`open` 方法之后)新增:
 
@@ -1389,12 +1389,12 @@ Expected: 编译失败(`ingest_session`/`get_conversation_turns` 还不存在)�
 
 在文件顶部把 `#[allow(dead_code)]` 之类的告警抑制不需要加——`agent_from_str` 目前尚未被调用(留给 Task 7/8 用),先允许 clippy 报 `dead_code` 警告并在下一 Task 消掉;若本 Task 单独跑 `clippy -- -D warnings` 会因 `agent_from_str` 未使用而失败,**在本 Task 结尾临时给它加 `#[allow(dead_code)]`,Task 7 用到后删掉这个 allow**。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozerd transcripts::tests`
 Expected: PASS(3 个测试)
 
-- [ ] **Step 5: 全量校验 + 提交**
+- [x] **Step 5: 全量校验 + 提交**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd && cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -- --check`
 
@@ -1416,7 +1416,7 @@ git commit -m "feat(dozerd): TranscriptStore 表结构 + ingest_session 增量�
 
 `cwd` → 该项目在各 agent 下的存储目录(`dir` 列的值),用 `dozer_core::agent_paths` 现算,不做"目录名倒推 cwd"这种有损逆运算(spec 设计决定,见计划撰写时的讨论)。`agent` 非空时只查该家对应的一个目录;为空时三家都查、结果按 `last_ts` 倒序合并。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `mod.rs` 的 `#[cfg(test)] mod tests` 里新增:
 
@@ -1488,7 +1488,7 @@ git commit -m "feat(dozerd): TranscriptStore 表结构 + ingest_session 增量�
 Run: `cargo test -p dozerd transcripts::tests::list_conversations`
 Expected: 编译失败(`list_conversations_in` 不存在)。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 在 `impl TranscriptStore` 块内新增(`ingest_session` 之后):
 
@@ -1566,12 +1566,12 @@ Expected: 编译失败(`list_conversations_in` 不存在)。
 
 删掉 Task 6 结尾给 `agent_from_str` 加的 `#[allow(dead_code)]`(现在用上了)。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozerd transcripts::tests`
 Expected: PASS(全部测试,包括之前的)
 
-- [ ] **Step 5: 全量校验 + 提交**
+- [x] **Step 5: 全量校验 + 提交**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd && cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -- --check`
 
@@ -1590,7 +1590,7 @@ git commit -m "feat(dozerd): TranscriptStore::list_conversations"
 **Interfaces:**
 - Produces: 替换 Task 6 的临时 `get_conversation_turns`,签名不变,新增 `after_turn_index`/`limit` 真正生效。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `mod.rs` 测试模块新增:
 
@@ -1621,12 +1621,12 @@ git commit -m "feat(dozerd): TranscriptStore::list_conversations"
     }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cargo test -p dozerd transcripts::tests::get_conversation_turns_paginates_by_keyset`
 Expected: FAIL(临时实现忽略了 `after_turn_index`/`limit`,一次性返回全部 5 条)。
 
-- [ ] **Step 3: 替换实现**
+- [x] **Step 3: 替换实现**
 
 把 Task 6 里的临时 `get_conversation_turns` 方法体换成:
 
@@ -1659,12 +1659,12 @@ Expected: FAIL(临时实现忽略了 `after_turn_index`/`limit`,一次性返回�
     }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozerd transcripts::tests`
 Expected: PASS(全部测试)
 
-- [ ] **Step 5: 全量校验 + 提交**
+- [x] **Step 5: 全量校验 + 提交**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd && cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -- --check`
 
@@ -1687,7 +1687,7 @@ git commit -m "feat(dozerd): get_conversation_turns 改为真正的 keyset 分�
 
 **平局判定**:启动回填(Task 13)会在很短时间内连续摄取一大批历史文件,多个会话拿到的 `first_ts`(=首次摄取时的 `now_ms()`)完全相同是常态,不是罕见边界——单用 `MIN(first_ts)` 判所有权在平局时会让多个会话同时"自认为"是所有者,导致同一条 `message_key` 被重复计入而不是漏计(比只算一次更糟)。所有权判定必须在 `first_ts` 相等时有确定性的次级排序键,下面的实现用 `first_ts` 拼 `conversation_id` 的字符串联合键(`printf('%020lld|', first_ts) || conversation_id`)做 `MIN`,保证任何时候只有唯一一个会话胜出。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```rust
     #[test]
@@ -1765,12 +1765,12 @@ git commit -m "feat(dozerd): get_conversation_turns 改为真正的 keyset 分�
     }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cargo test -p dozerd transcripts::tests::get_usage_summary_dedupes`
 Expected: 编译失败(`get_usage_summary_in` 不存在)。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 ```rust
     pub fn get_usage_summary(
@@ -1845,12 +1845,12 @@ Expected: 编译失败(`get_usage_summary_in` 不存在)。
     }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozerd transcripts::tests`
 Expected: PASS(全部测试)
 
-- [ ] **Step 5: 全量校验 + 提交**
+- [x] **Step 5: 全量校验 + 提交**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd && cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -- --check`
 
@@ -1873,7 +1873,7 @@ git commit -m "feat(dozerd): get_usage_summary——message_key 全局去重(最
 
 本 Task 先只接线"查询"路径,不接摄取触发(留 Task 11/12)。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `crates/dozerd/src/server.rs` 的 `#[cfg(test)] mod tests`(若没有则新增)里加一个纯函数级测试,验证 `serve` 签名可用即可——实际的端到端 UDS 测试留给 `dozer-client` 那边的 `against_real_daemon.rs`(Task 15 会补)。这里先写一个编译期占位测试确认新字段能正确传递:
 
@@ -1899,7 +1899,7 @@ git commit -m "feat(dozerd): get_usage_summary——message_key 全局去重(最
 Run: `cargo test -p dozerd transcript_store_field_compiles_into_serve_signature`
 Expected: 编译失败(`serve` 还没有 `transcripts` 形参)。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 在 `crates/dozerd/src/server.rs`:
 
@@ -1938,12 +1938,12 @@ Expected: 编译失败(`serve` 还没有 `transcripts` 形参)。
 
 `serve(...)` 调用点补上 `transcripts` 实参(紧跟 `bookmarks` 之后)。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd`
 Expected: PASS
 
-- [ ] **Step 5: 全量校验 + 提交**
+- [x] **Step 5: 全量校验 + 提交**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd && cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -- --check`
 
@@ -1962,7 +1962,7 @@ git commit -m "feat(dozerd): server 接线 TranscriptStore,处理三个查询 Re
 **Interfaces:**
 - Consumes: Task 10 已接线的 `transcripts` 参数;`extract_transcript_path`(既有函数)。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `server.rs` 测试模块新增(需要构造一个真实的 sqlite 临时库 + fixture 文件,验证 `Request::HookEvent` 处理后触发了摄取)。先看现有 `handle_conn`/`serve` 测试是怎么搭 harness 的(若已有类似"发一个 Request 到内存 pipe,断言 Reply"的测试模式,复用它);若没有端到端 harness,改为对"HookEvent 分支触发摄取"这一段抽出的小函数单独测试:
 
@@ -1994,7 +1994,7 @@ git commit -m "feat(dozerd): server 接线 TranscriptStore,处理三个查询 Re
 Run: `cargo test -p dozerd hook_event_with_transcript_path_triggers_ingest`
 Expected: 编译失败(`maybe_ingest_from_hook_data` 不存在)。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 在 `server.rs` 里 `extract_transcript_path` 函数之后新增:
 
@@ -2024,12 +2024,12 @@ fn maybe_ingest_from_hook_data(
                                     maybe_ingest_from_hook_data(&transcripts, agent, &data);
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozerd hook_event_with_transcript_path_triggers_ingest`
 Expected: PASS
 
-- [ ] **Step 5: 全量校验 + 提交**
+- [x] **Step 5: 全量校验 + 提交**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd && cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -- --check`
 
@@ -2050,7 +2050,7 @@ git commit -m "feat(dozerd): hook 事件带 transcript_path 时触发增量摄�
 
 在 `agent_state_for(&event)` 算出新状态之前先读一次该 session 当前的 `agent_state`,若新状态是 `Idle`/`AwaitingInput` 且与旧状态不同(真正发生了状态转换,不是同一状态的重复事件),且该 session 已知 `transcript_path`,则额外触发一次摄取(补上 hook 事件本身可能没带 `transcript_path` 或文件当时还没写完整的情况)。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```rust
     #[test]
@@ -2109,7 +2109,7 @@ git commit -m "feat(dozerd): hook 事件带 transcript_path 时触发增量摄�
 Run: `cargo test -p dozerd maybe_ingest_on_state_transition`
 Expected: 编译失败(函数不存在)。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 在 `server.rs` 里 `maybe_ingest_from_hook_data` 之后新增:
 
@@ -2169,12 +2169,12 @@ fn maybe_ingest_on_state_transition(
 
 (这段紧跟在 Task 11 加的 `maybe_ingest_from_hook_data(&transcripts, agent, &data);` 之后——两次触发都保留:一次是 hook data 自带的路径快通道,一次是状态转换兜底,二者用的是同一个 `ingest_session`,同文件重复调用天然因为 cursor 推进而是廉价 no-op,不用额外去重。)
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozerd transcripts_or_ingest` (或直接 `cargo test -p dozerd`)
 Expected: PASS(全部)
 
-- [ ] **Step 5: 全量校验 + 提交**
+- [x] **Step 5: 全量校验 + 提交**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd && cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -- --check`
 
@@ -2193,7 +2193,7 @@ git commit -m "feat(dozerd): 待命态转换触发摄取兜底"
 **Interfaces:**
 - Consumes: Task 5 的 `transcripts::scan::discover_all_transcript_files`;Task 6 的 `TranscriptStore::ingest_session`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 回填逻辑本身是"遍历 + 调用已测试过的 `ingest_session`",没有新的分支逻辑需要单测——直接抽成一个可单测的小函数:
 
@@ -2250,7 +2250,7 @@ mod tests {
 Run: `cargo test -p dozerd backfill`
 Expected: 编译失败(`backfill` 模块不存在,`lib.rs` 没挂)。
 
-- [ ] **Step 3: 挂模块 + main.rs 接线**
+- [x] **Step 3: 挂模块 + main.rs 接线**
 
 `crates/dozerd/src/lib.rs` 新增 `pub mod backfill;`。
 
@@ -2264,12 +2264,12 @@ Expected: 编译失败(`backfill` 模块不存在,`lib.rs` 没挂)。
     }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozerd backfill`
 Expected: PASS(2 个测试)
 
-- [ ] **Step 5: 全量校验 + 提交**
+- [x] **Step 5: 全量校验 + 提交**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd && cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -- --check`
 
@@ -2289,7 +2289,7 @@ git commit -m "feat(dozerd): 启动时历史 transcript 全量回填"
 - Consumes: Task 1 的协议类型。
 - Produces: `Client::list_conversations(&self, cwd: &str, agent: Option<AgentKind>, limit: u32, offset: u32) -> Result<Vec<ConversationSummary>>`、`Client::get_conversation_turns(&self, conversation_id: &str, after_turn_index: i64, limit: u32) -> Result<Vec<TurnRecord>>`、`Client::get_usage_summary(&self, cwd: &str, since_ts: Option<u64>) -> Result<Vec<(ConversationSummary, UsagePayload)>>`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `crates/dozer-client/tests/against_real_daemon.rs` 需要一个真实跑起来的 `dozerd` 进程(现有测试文件的既定模式,直接照抄现有一个测试函数的 harness 搭建方式,如 `list_projects` 或 `list_bookmarks` 对应的测试,新增):
 
@@ -2325,7 +2325,7 @@ async fn list_conversations_and_usage_roundtrip_against_real_daemon() {
 Run: `cargo test -p dozer-client --test against_real_daemon list_conversations_and_usage_roundtrip`
 Expected: 编译失败(`Client` 上三个方法不存在)。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 在 `crates/dozer-client/src/lib.rs` 顶部 `use` 里给 `ConversationSummary`/`TurnRecord`/`UsagePayload` 补上导入(加进现有 `use dozer_core::protocol::{...}` 那一行的花括号列表)。在 `list_bookmarks` 方法之后新增:
 
@@ -2388,12 +2388,12 @@ Expected: 编译失败(`Client` 上三个方法不存在)。
     }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozer-client --test against_real_daemon list_conversations_and_usage_roundtrip`
 Expected: PASS
 
-- [ ] **Step 5: 全量校验 + 提交**
+- [x] **Step 5: 全量校验 + 提交**
 
 Run: `cargo build -p dozer-client && cargo test -p dozer-client && cargo clippy -p dozer-client --all-targets -- -D warnings && cargo fmt -- --check`
 
@@ -2416,7 +2416,7 @@ git commit -m "feat(dozer-client): 新增 list_conversations/get_conversation_tu
 
 `size_bytes` 字段确认全仓库无渲染消费(仅字段定义/构造出现),这次顺手去掉,避免 `ConversationSummary` 也要背一个没人用的字段(YAGNI)。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `conversation.rs` 的 `#[cfg(test)] mod tests` 里新增(其余测试本 Task 会删掉,因为它们测的是即将删除的函数):
 
@@ -2447,12 +2447,12 @@ git commit -m "feat(dozer-client): 新增 list_conversations/get_conversation_tu
     }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cargo test -p dozer-app conversation::tests::from_summary_maps_fields`
 Expected: 编译失败(`from_summary` 不存在)。
 
-- [ ] **Step 3: 瘦身 `conversation.rs`**
+- [x] **Step 3: 瘦身 `conversation.rs`**
 
 把整个文件替换成:
 
@@ -2528,7 +2528,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: 改 `links.rs` 的导入与调用**
+- [x] **Step 4: 改 `links.rs` 的导入与调用**
 
 在 `crates/dozer-app/src/extensions/project/links.rs` 第 127 行附近,把:
 
@@ -2544,12 +2544,12 @@ dozer_core::agent_paths::home_dir()
 
 第 134-136 行的 `claude_project_dir_in(home, repo)`/`codebuddy_project_dir_in(home, repo)`/`opencode_project_dir_in(home, repo)` 三处调用改成 `dozer_core::agent_paths::claude_project_dir_in(home, repo)` 等(加前缀,或在文件顶部新增 `use dozer_core::agent_paths::{claude_project_dir_in, codebuddy_project_dir_in, opencode_project_dir_in};` 后保持函数名不变——任选一种,和文件里其余 `use` 风格保持一致)。第 297 行测试代码里的调用同步修改。
 
-- [ ] **Step 5: 运行测试确认通过**
+- [x] **Step 5: 运行测试确认通过**
 
 Run: `cargo test -p dozer-app conversation::`
 Expected: PASS(2 个测试)。此时 `cargo build -p dozer-app` 预期还会因为 `app.rs`/`workspace.rs`/`homespace.rs`/`extensions/usage.rs` 里仍在调用已删除的 `list_all_conversations`/`conversation_title` 等函数而**编译失败**——这是预期的,Task 16-19 会逐个修完。本 Task 到此为止,不要求整个 `dozer-app` 能编译通过。
 
-- [ ] **Step 6: 提交(允许 dozer-app 暂时编译失败,后续 Task 修完)**
+- [x] **Step 6: 提交(允许 dozer-app 暂时编译失败,后续 Task 修完)**
 
 ```bash
 git add crates/dozer-app/src/conversation.rs crates/dozer-app/src/extensions/project/links.rs
@@ -2569,7 +2569,7 @@ dozer-app 整体编译不通过，这是本次拆分的预期中间状态。"
 **Interfaces:**
 - Produces: 保留 `ReviewEntry`、`latest_model_mode_and_activity`(及其私有辅助函数)不变;新增 `review_entries_from_turns(turns: &[dozer_core::protocol::TurnRecord]) -> Vec<ReviewEntry>`;删除 `parse_transcript`/`parse_claude_shaped_jsonl`/`parse_codebuddy_shaped_jsonl`/`join_codebuddy_text_blocks`/`tool_summary`(已在 Task 3/4 迁到 `dozerd::transcripts::parse`)。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `transcript.rs` 的测试模块里新增:
 
@@ -2609,12 +2609,12 @@ dozer-app 整体编译不通过，这是本次拆分的预期中间状态。"
     }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cargo test -p dozer-app transcript::tests::review_entries_from_turns_maps_role_and_tools`
 Expected: 编译失败(函数不存在)。
 
-- [ ] **Step 3: 删除已迁移函数 + 新增转换函数**
+- [x] **Step 3: 删除已迁移函数 + 新增转换函数**
 
 删除 `tool_summary`、`parse_claude_shaped_jsonl`、`parse_codebuddy_shaped_jsonl`、`join_codebuddy_text_blocks`、`parse_transcript` 五个函数(及其专属测试:`parses_human_and_ai_turn_skipping_noise`、`empty_and_all_noise_yield_nothing`、`opencode_reuses_claude_shaped_parser`、`kilo_reuses_claude_shaped_parser`、`codex_and_qoder_yield_empty_until_schema_confirmed`、`codebuddy_parses_real_fixture_sample`、`codebuddy_joins_multiple_text_blocks_and_skips_other_kinds`、`codebuddy_user_row_without_input_text_block_yields_no_human_entry`、`codebuddy_empty_and_all_noise_yield_nothing`、`unknown_falls_back_to_claude_shaped_parser`——这些逻辑已经在 Task 3/4 的 `dozerd::transcripts::parse` 里有等价覆盖)。
 
@@ -2644,12 +2644,12 @@ pub fn review_entries_from_turns(turns: &[TurnRecord]) -> Vec<ReviewEntry> {
 }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozer-app transcript::`
 Expected: PASS(`review_entries_from_turns` 测试 + 保留下来的 `latest_model_mode_and_activity` 系列测试全绿)
 
-- [ ] **Step 5: 提交(dozer-app 整体仍可能因 workspace.rs/usage.rs/homespace.rs 未改而编译失败,预期中)**
+- [x] **Step 5: 提交(dozer-app 整体仍可能因 workspace.rs/usage.rs/homespace.rs 未改而编译失败,预期中)**
 
 ```bash
 git add crates/dozer-app/src/transcript.rs
@@ -2668,18 +2668,18 @@ git commit -m "refactor(dozer-app): transcript.rs 瘦身,parse_transcript 迁至
 
 `spawn_conversations_refresh`(1032-1049行)、`spawn_review_load`(1109-1131行)是本 Task 唯一要改的两个函数——按调研报告已确认的既有异步范式(`browser.rs::request_bookmarks_refresh` 那种 `io.client.clone()` + `handle.spawn` + `proxy.send_event`)改写,函数签名/调用方(`app.rs`/`workspace.rs` 里 `ws.spawn_conversations_refresh(io)`/`ws.spawn_review_load(io, ...)` 的调用点)**不变**,只改函数体内部。
 
-- [ ] **Step 1: 读现状,确认函数体**
+- [x] **Step 1: 读现状,确认函数体**
 
 先读 `crates/dozer-app/src/workspace.rs:1032-1049` 和 `:1109-1131` 的准确当前内容(调研报告给的是大致行号,执行前用 `grep -n "fn spawn_conversations_refresh\|fn spawn_review_load" crates/dozer-app/src/workspace.rs` 定位精确行号,再 `Read` 这两段的完整现状),因为这是要改的既有代码,不是新写。
 
-- [ ] **Step 2: 写失败测试(集成层面难以单测异步 IO,改为验证转换逻辑的纯函数测试已在 Task 15/16 覆盖;本 Task 用编译作为主要验证手段,另加一个"排序仍是 mtime 倒序"的纯函数测试防回归)**
+- [x] **Step 2: 写失败测试(集成层面难以单测异步 IO,改为验证转换逻辑的纯函数测试已在 Task 15/16 覆盖;本 Task 用编译作为主要验证手段,另加一个"排序仍是 mtime 倒序"的纯函数测试防回归)**
 
 若 `workspace.rs` 现有测试模块里有类似"排序断言"的测试,在其旁新增(否则跳过本 Step,直接进入实现,靠 Step 4 的 `cargo build` 作为主要校验——`spawn_conversations_refresh`/`spawn_review_load` 本身是"发一个异步 IO 请求+回填消息"的胶水代码,过去也没有对它们的单元测试,只有集成校验,不强行为胶水代码补测试);改动完成后运行:
 
 Run: `cargo build -p dozer-app 2>&1 | grep -A5 "spawn_conversations_refresh\|spawn_review_load"`
 Expected: 目前的构建错误(如果先只改 `conversation.rs`/`transcript.rs` 而没改这两个函数,会报"找不到 `conversation::list_all_conversations`"之类的错误)——这一步只是确认当前失败原因确实是这两个函数,不是别的问题。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 把 `spawn_conversations_refresh` 函数体换成(签名不变,假设原签名是 `pub fn spawn_conversations_refresh(&self, io: &ShellIo)` 或类似形式——**以 Step 1 读到的真实签名为准,只替换函数体**):
 
@@ -2730,12 +2730,12 @@ Expected: 目前的构建错误(如果先只改 `conversation.rs`/`transcript.rs
 
 `limit: 10_000` 是"一次性拿全部回合"的临时上限(keyset 分页机制已就位,但 `review_content` 渲染函数目前假设 `rv.entries` 是完整列表,分页加载 UI 不在本计划范围——单个会话超过 1 万回合极其罕见,这个上限足够,真遇到再另开计划加"加载更多")。
 
-- [ ] **Step 4: 编译验证**
+- [x] **Step 4: 编译验证**
 
 Run: `cargo build -p dozer-app 2>&1 | grep -c "error\[" || true`
 Expected: 错误数量比 Task 16 结束时减少(`spawn_conversations_refresh`/`spawn_review_load` 相关错误消失;`usage.rs`/`homespace.rs` 相关错误预期仍在,留给 Task 18/19)。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add crates/dozer-app/src/workspace.rs
@@ -2753,7 +2753,7 @@ git commit -m "refactor(dozer-app): spawn_conversations_refresh/spawn_review_loa
 - Consumes: Task 14 的 `Client::get_usage_summary`;Task 15 的 `ConversationMeta::from_summary`。
 - Produces: `ConversationUsage` 新增 `From<&dozer_core::protocol::UsagePayload> for ConversationUsage`;删除 `parse_usage`/`parse_claude_shaped_usage`/`parse_codebuddy_shaped_usage`/`MUTATING_TOOLS`(已迁到 `dozerd::transcripts::parse`)。`aggregate`/`group_usage_by_agent`/`daily_totals_by_agent`/`agent_token_share` 四个纯聚合函数**不改**(它们只吃内存里的 `Vec<(ConversationMeta, ConversationUsage)>`,跟数据来源无关)。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```rust
     #[test]
@@ -2780,12 +2780,12 @@ git commit -m "refactor(dozer-app): spawn_conversations_refresh/spawn_review_loa
     }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cargo test -p dozer-app usage::tests::conversation_usage_from_payload_maps_all_fields`
 Expected: 编译失败(`From` 实现不存在)。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 删除 `parse_usage`、`parse_claude_shaped_usage`、`parse_codebuddy_shaped_usage`、`MUTATING_TOOLS` 常量(及顶部不再需要的 `use serde_json::Value;`,若删完这四个函数后该 `use` 变成未使用,一并删掉)。
 
@@ -2840,12 +2840,12 @@ pub fn spawn_refresh(
 
 签名从 `(project_id, project_path, handle, emit)` 变成多了一个 `client: &dozer_client::Client` 形参——同步更新调用方(在 `crate::app.rs`/`workspace.rs` 里搜 `usage::spawn_refresh(` 的调用点,补上 `&io.client` 或等价的 `Client` 引用实参;具体调用点数量以 `grep -rn "usage::spawn_refresh(" crates/dozer-app/src/` 实测为准,可能不止一处——`Message::Refresh` 处理分支和初始加载各一处)。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozer-app usage::`
 Expected: PASS
 
-- [ ] **Step 5: 编译验证 + 提交**
+- [x] **Step 5: 编译验证 + 提交**
 
 Run: `cargo build -p dozer-app 2>&1 | grep -c "error\[" || true`(错误数量应比 Task 17 结束时更少)
 
@@ -2866,16 +2866,16 @@ git commit -m "refactor(dozer-app): usage::spawn_refresh 改走 dozer_client::Cl
 
 `load_home_recents`(727-764行)原本对每个最近项目调一次 `conversation::list_all_conversations(&cwd)`(本地直读三个目录);改成对每个最近项目调一次 `client.list_conversations(&cwd, None, ...)`。
 
-- [ ] **Step 1: 读现状**
+- [x] **Step 1: 读现状**
 
 `grep -n "fn load_home_recents" crates/dozer-app/src/homespace.rs` 定位精确行号,`Read` 该函数完整现状(含它在哪个 `spawn_blocking`/`handle.spawn` 里被调用,调用方怎么拿到 `Client`)。
 
-- [ ] **Step 2: 编译作为验证手段(胶水代码,同 Task 17 Step 2 理由,不强行补单元测试)**
+- [x] **Step 2: 编译作为验证手段(胶水代码,同 Task 17 Step 2 理由,不强行补单元测试)**
 
 Run: `cargo build -p dozer-app 2>&1 | grep -A5 "load_home_recents\|conversation::list_all_conversations"`
 Expected: 当前因 `conversation::list_all_conversations` 已删除而报错。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 把函数体里 `for meta in conversation::list_all_conversations(&cwd)` 这段(原本跑在 `spawn_blocking` 里,因为是同步文件 IO)改成走 `client.list_conversations(&cwd_str, None, 500, 0).await`(异步 IO,不再需要包 `spawn_blocking`——如果外层整个函数原本就是 `async move { ... }` 包在 `handle.spawn` 里,直接把内层 `tokio::task::spawn_blocking(move || { ... }).await` 这一层去掉,改成直接 `.await` 调用;`meta` 换成先拿 `ConversationSummary` 再 `ConversationMeta::from_summary` 转换)。具体改法示例(以调研报告给出的 727-764 行区间为参照,**实际改动以 Step 1 读到的真实代码结构为准**):
 
@@ -2911,12 +2911,12 @@ let recents = all;
 
 `client` 需要在函数签名/调用处能拿到(同 `usage.rs::spawn_refresh` 一样补一个 `&dozer_client::Client` 形参,调用方补实参)。
 
-- [ ] **Step 4: 编译验证**
+- [x] **Step 4: 编译验证**
 
 Run: `cargo build -p dozer-app 2>&1 | tee /tmp/build.log; grep -c "error\[" /tmp/build.log || true`
 Expected: 0(整个 `dozer-app` 现在应该能完整编译通过——这是本轮 dozer-app 侧改造的最后一个函数)。
 
-- [ ] **Step 5: 全量测试 + 提交**
+- [x] **Step 5: 全量测试 + 提交**
 
 Run: `cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets -- -D warnings && cargo fmt -- --check`
 
@@ -2933,7 +2933,7 @@ git commit -m "refactor(dozer-app): load_home_recents 改走 dozer_client::Clien
 
 **Interfaces:** 无。
 
-- [ ] **Step 1: 全 workspace 构建与测试**
+- [x] **Step 1: 全 workspace 构建与测试**
 
 ```bash
 cargo build

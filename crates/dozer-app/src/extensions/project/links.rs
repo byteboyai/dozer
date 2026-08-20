@@ -124,16 +124,16 @@ pub fn discover_docs(repo: &Path) -> Vec<LinkEntry> {
 ///
 /// 结果顺序:仓库外目录在前,随后项目根文件、项目根目录,组内按名排序。
 pub fn discover_memory(repo: &Path) -> Vec<LinkEntry> {
-    discover_memory_in(&crate::conversation::home_dir(), repo)
+    discover_memory_in(&dozer_core::agent_paths::home_dir(), repo)
 }
 
 fn discover_memory_in(home: &Path, repo: &Path) -> Vec<LinkEntry> {
     let mut entries: Vec<LinkEntry> = Vec::new();
 
     let home_candidates = [
-        crate::conversation::claude_project_dir_in(home, repo).join("memory"),
-        crate::conversation::codebuddy_project_dir_in(home, repo),
-        crate::conversation::opencode_project_dir_in(home, repo),
+        dozer_core::agent_paths::claude_project_dir_in(home, repo).join("memory"),
+        dozer_core::agent_paths::codebuddy_project_dir_in(home, repo),
+        dozer_core::agent_paths::opencode_project_dir_in(home, repo),
     ];
     for path in home_candidates.into_iter().filter(|p| p.is_dir()) {
         entries.push(LinkEntry {
@@ -294,7 +294,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let repo = PathBuf::from("/repo/x");
         let claude_memory =
-            crate::conversation::claude_project_dir_in(home.path(), &repo).join("memory");
+            dozer_core::agent_paths::claude_project_dir_in(home.path(), &repo).join("memory");
         std::fs::create_dir_all(&claude_memory).unwrap();
         let found = discover_memory_in(home.path(), &repo);
         assert_eq!(found.len(), 1);
