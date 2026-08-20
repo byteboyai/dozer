@@ -1687,7 +1687,7 @@ git commit -m "feat(dozerd): get_conversation_turns 改为真正的 keyset 分�
 
 **平局判定**:启动回填(Task 13)会在很短时间内连续摄取一大批历史文件,多个会话拿到的 `first_ts`(=首次摄取时的 `now_ms()`)完全相同是常态,不是罕见边界——单用 `MIN(first_ts)` 判所有权在平局时会让多个会话同时"自认为"是所有者,导致同一条 `message_key` 被重复计入而不是漏计(比只算一次更糟)。所有权判定必须在 `first_ts` 相等时有确定性的次级排序键,下面的实现用 `first_ts` 拼 `conversation_id` 的字符串联合键(`printf('%020lld|', first_ts) || conversation_id`)做 `MIN`,保证任何时候只有唯一一个会话胜出。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```rust
     #[test]
@@ -1765,12 +1765,12 @@ git commit -m "feat(dozerd): get_conversation_turns 改为真正的 keyset 分�
     }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cargo test -p dozerd transcripts::tests::get_usage_summary_dedupes`
 Expected: 编译失败(`get_usage_summary_in` 不存在)。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 ```rust
     pub fn get_usage_summary(
@@ -1845,12 +1845,12 @@ Expected: 编译失败(`get_usage_summary_in` 不存在)。
     }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozerd transcripts::tests`
 Expected: PASS(全部测试)
 
-- [ ] **Step 5: 全量校验 + 提交**
+- [x] **Step 5: 全量校验 + 提交**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd && cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -- --check`
 
