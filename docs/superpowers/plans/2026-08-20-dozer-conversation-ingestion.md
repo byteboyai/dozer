@@ -2416,7 +2416,7 @@ git commit -m "feat(dozer-client): 新增 list_conversations/get_conversation_tu
 
 `size_bytes` 字段确认全仓库无渲染消费(仅字段定义/构造出现),这次顺手去掉,避免 `ConversationSummary` 也要背一个没人用的字段(YAGNI)。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `conversation.rs` 的 `#[cfg(test)] mod tests` 里新增(其余测试本 Task 会删掉,因为它们测的是即将删除的函数):
 
@@ -2447,12 +2447,12 @@ git commit -m "feat(dozer-client): 新增 list_conversations/get_conversation_tu
     }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cargo test -p dozer-app conversation::tests::from_summary_maps_fields`
 Expected: 编译失败(`from_summary` 不存在)。
 
-- [ ] **Step 3: 瘦身 `conversation.rs`**
+- [x] **Step 3: 瘦身 `conversation.rs`**
 
 把整个文件替换成:
 
@@ -2528,7 +2528,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: 改 `links.rs` 的导入与调用**
+- [x] **Step 4: 改 `links.rs` 的导入与调用**
 
 在 `crates/dozer-app/src/extensions/project/links.rs` 第 127 行附近,把:
 
@@ -2544,12 +2544,12 @@ dozer_core::agent_paths::home_dir()
 
 第 134-136 行的 `claude_project_dir_in(home, repo)`/`codebuddy_project_dir_in(home, repo)`/`opencode_project_dir_in(home, repo)` 三处调用改成 `dozer_core::agent_paths::claude_project_dir_in(home, repo)` 等(加前缀,或在文件顶部新增 `use dozer_core::agent_paths::{claude_project_dir_in, codebuddy_project_dir_in, opencode_project_dir_in};` 后保持函数名不变——任选一种,和文件里其余 `use` 风格保持一致)。第 297 行测试代码里的调用同步修改。
 
-- [ ] **Step 5: 运行测试确认通过**
+- [x] **Step 5: 运行测试确认通过**
 
 Run: `cargo test -p dozer-app conversation::`
 Expected: PASS(2 个测试)。此时 `cargo build -p dozer-app` 预期还会因为 `app.rs`/`workspace.rs`/`homespace.rs`/`extensions/usage.rs` 里仍在调用已删除的 `list_all_conversations`/`conversation_title` 等函数而**编译失败**——这是预期的,Task 16-19 会逐个修完。本 Task 到此为止,不要求整个 `dozer-app` 能编译通过。
 
-- [ ] **Step 6: 提交(允许 dozer-app 暂时编译失败,后续 Task 修完)**
+- [x] **Step 6: 提交(允许 dozer-app 暂时编译失败,后续 Task 修完)**
 
 ```bash
 git add crates/dozer-app/src/conversation.rs crates/dozer-app/src/extensions/project/links.rs
