@@ -885,6 +885,7 @@ pub fn view<'a>(
         icons::IconKind::FolderSearch,
         byteui::theme::icon_size::row(),
         false,
+        false,
         search_hover_t,
         true,
         box_len,
@@ -910,6 +911,7 @@ pub fn view<'a>(
             icons::IconKind::EyeOff
         },
         byteui::theme::icon_size::row(),
+        false,
         false,
         dotfiles_hover_t,
         true,
@@ -1238,6 +1240,7 @@ fn git_footer_bar(
                 icons::IconKind::ChevronDown
             },
             byteui::theme::icon_size::row(),
+            false,
             false,
             branch_hover_t,
             false,

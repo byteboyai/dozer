@@ -750,6 +750,7 @@ fn host_card<'a>(
             kind,
             byteui::theme::icon_size::row(),
             /* active */ false,
+            /* dim */ false,
             /* hover_t */ if is_hover(idx) { 1.0 } else { 0.0 },
             /* card */ true,
             byteui::theme::icon_size::row() + 10.0,

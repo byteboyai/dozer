@@ -1199,6 +1199,7 @@ fn nav_button(
         kind,
         byteui::theme::icon_size::row(),
         false,
+        false,
         state.nav_hover(action),
         false,
         byteui::theme::geometry::tab_button_size(),
@@ -1234,6 +1235,7 @@ fn star_button(
         icons::IconKind::Star,
         byteui::theme::icon_size::row(),
         starred,
+        false,
         state.star_hover(),
         false,
         byteui::theme::geometry::tab_button_size(),
@@ -1560,6 +1562,7 @@ fn bookmarks_toggle_button(
     icons::icon_button_entry(
         icons::IconKind::Bookmark,
         byteui::theme::icon_size::row(),
+        false,
         false,
         state.bookmark_hover(),
         false,

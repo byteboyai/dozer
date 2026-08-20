@@ -261,11 +261,30 @@ pub fn view<'a, Message: 'a>(
 /// 圆角方底,图标恒为 GOLD 或随 hover 从 DIM 平滑过渡到 GOLD,`active` 时
 /// 加 1px 金框(未选中无边框),方形命中区取 `rail_button_size()`——迁移
 /// rail 的 11 个按钮外观与迁移前完全一致(见实现计划 2026-08-12)。
+/// 图标栏按住拖拽期间,源位置图标"变淡"的透明度系数——同色但整体透明度
+/// 砍到 40%,视觉语言对齐 OS 拖文件夹时源图标半透明的既有认知。
+const DRAG_DIM_ALPHA: f32 = 0.4;
+
+/// `dim` 为真时把 `color` 的透明度砍到 `DRAG_DIM_ALPHA`,否则原样返回。
+/// 纯颜色计算,不碰渲染——供 `icon_button_entry` 内部给图标色/卡片底色/
+/// 选中框色统一套用,拖拽一结束(`dim` 变回 `false`)颜色立即恢复。
+fn dimmed(color: Color, dim: bool) -> Color {
+    if dim {
+        Color {
+            a: color.a * DRAG_DIM_ALPHA,
+            ..color
+        }
+    } else {
+        color
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn icon_button_entry<'a, M: Clone + 'a>(
     kind: IconKind,
     size: f32,
     active: bool,
+    dim: bool,
     hover_t: f32,
     card: bool,
     button_size: f32,
@@ -278,11 +297,14 @@ pub fn icon_button_entry<'a, M: Clone + 'a>(
     // 定死、不吃 `button::Status`,所以 hover 进度靠 `hover_t` 参数从调用方
     // 算进来)。
     let colors = crate::theme::color::current();
-    let color = if active {
-        colors.gold
-    } else {
-        crate::theme::color::mix(colors.dim, colors.gold, hover_t)
-    };
+    let color = dimmed(
+        if active {
+            colors.gold
+        } else {
+            crate::theme::color::mix(colors.dim, colors.gold, hover_t)
+        },
+        dim,
+    );
     let inner = container(view(kind, size, color))
         .width(Length::Fill)
         .height(Length::Fill)
@@ -304,13 +326,20 @@ pub fn icon_button_entry<'a, M: Clone + 'a>(
             // hover 不放金框——所以样式完全由 `active`/`card` 决定,与
             // 交互态无关。
             button::Style {
-                background: if card { Some(colors.card.into()) } else { None },
+                background: if card {
+                    Some(dimmed(colors.card, dim).into())
+                } else {
+                    None
+                },
                 border: Border {
-                    color: if active {
-                        colors.gold
-                    } else {
-                        Color::TRANSPARENT
-                    },
+                    color: dimmed(
+                        if active {
+                            colors.gold
+                        } else {
+                            Color::TRANSPARENT
+                        },
+                        dim,
+                    ),
                     ..base_border
                 },
                 ..button::Style::default()
@@ -428,5 +457,19 @@ mod tests {
         assert_eq!(icon_for_file("LICENSE"), IconKind::FileGeneric);
         assert_eq!(icon_for_file("Makefile"), IconKind::FileGeneric);
         assert_eq!(icon_for_file("data.xyz"), IconKind::FileGeneric);
+    }
+
+    #[test]
+    fn dimmed_scales_alpha_when_true() {
+        let c = Color::from_rgb(1.0, 0.5, 0.2);
+        let d = dimmed(c, true);
+        assert_eq!(d.a, DRAG_DIM_ALPHA);
+        assert_eq!((d.r, d.g, d.b), (c.r, c.g, c.b), "只改透明度,不改色相");
+    }
+
+    #[test]
+    fn dimmed_passthrough_when_false() {
+        let c = Color::from_rgb(1.0, 0.5, 0.2);
+        assert_eq!(dimmed(c, false), c);
     }
 }

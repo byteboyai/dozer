@@ -1471,6 +1471,7 @@ fn schema_tree_view<'a>(
         icons::IconKind::ChevronLeft,
         byteui::theme::icon_size::row(),
         false,
+        false,
         schema_back_hover_t,
         false,
         box_len,

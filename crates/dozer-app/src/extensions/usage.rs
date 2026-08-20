@@ -405,6 +405,7 @@ pub fn view<'a>(
         icons::IconKind::RefreshCw,
         byteui::theme::icon_size::row(),
         false,
+        false,
         refresh_hover_t,
         false,
         byteui::theme::geometry::rail_button_size(),
