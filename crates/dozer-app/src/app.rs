@@ -4130,7 +4130,15 @@ impl App {
                     let emit = move |m| {
                         let _ = proxy.send_event(Message::Usage(m));
                     };
-                    usage::update(&mut ws.usage, msg, project_id, project_path, &handle, emit);
+                    usage::update(
+                        &mut ws.usage,
+                        msg,
+                        project_id,
+                        project_path,
+                        &io.client,
+                        &handle,
+                        emit,
+                    );
                 });
             }
             Message::Usage(msg @ usage::Message::Hover(_)) => {
@@ -4149,7 +4157,15 @@ impl App {
                     let emit = move |m| {
                         let _ = proxy.send_event(Message::Usage(m));
                     };
-                    usage::update(&mut ws.usage, msg, project_id, project_path, &handle, emit);
+                    usage::update(
+                        &mut ws.usage,
+                        msg,
+                        project_id,
+                        project_path,
+                        &io.client,
+                        &handle,
+                        emit,
+                    );
                 });
             }
             Message::ConversationOpen(path) => self.conversation_open(path),

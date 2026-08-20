@@ -1065,7 +1065,7 @@ impl Workspace {
         let emit = move |m| {
             let _ = proxy.send_event(Message::Usage(m));
         };
-        usage::spawn_refresh(project_id, project_path, &io.handle, emit);
+        usage::spawn_refresh(project_id, project_path, &io.client, &io.handle, emit);
     }
 
     /// 异步取当前项目验收次数 → AcceptanceCountLoaded（项目卡副行）。
