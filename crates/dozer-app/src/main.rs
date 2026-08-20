@@ -1036,6 +1036,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             // text_input 自己内置的粘贴处理。
             if app.files_search_focused()
                 || app.todo_search_focused()
+                || app.todo_add_focused()
                 || app.ssh_form_open()
                 || app.database_form_open()
             {
@@ -1052,7 +1053,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             let to_tree_edit = app.tree_editing();
             let to_project_name = app.project_name_editing();
             let to_search_popup = app.search_popup_editing();
-            let to_todo_add = app.todo_add_editing();
             let to_todo_content = app.todo_content_editing();
             let to_todo_markdown = app.todo_markdown_editing();
             let to_home_project_search = app.home_project_search_editing();
@@ -1061,14 +1061,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 || to_tree_edit
                 || to_project_name
                 || to_search_popup
-                || to_todo_add
                 || to_todo_content
                 || to_todo_markdown
                 || to_home_project_search;
             // 优先级:右键"搜索"弹窗查询框 > 浏览器地址栏 > 验收意见 > 项目树
-            // 编辑 > 项目名称编辑 > Todo 新增任务框 > Todo 任务内容编辑 > Todo
-            // MARKDOWN 编辑 > 首页项目搜索框(文件树搜索框、Todo 面板搜索框
-            // 已迁 iced 原生 text_input,走上面新增的独立放行闸门,不再在此列;
+            // 编辑 > 项目名称编辑 > Todo 任务内容编辑 > Todo
+            // MARKDOWN 编辑 > 首页项目搜索框(文件树搜索框、Todo 面板搜索框、
+            // 新增任务框已迁 iced 原生 text_input/text_editor,走上面新增的
+            // 独立放行闸门,不再在此列;
             // 多者同真时罕见,谁先建的编辑态谁优先没有实际冲突场景,这个顺序
             // 只是一个确定性兜底——首页项目搜索框排最后是因为它跟前面所有
             // 工作区内的编辑态天然互斥,不可能同时为真,顺序对它没有实际影响)。
@@ -1084,8 +1084,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     Message::Files(extensions::files::Message::EditEvent(ev))
                 } else if to_project_name {
                     Message::Project(extensions::project::Message::NameEditEvent(ev))
-                } else if to_todo_add {
-                    Message::Todo(extensions::todo::Message::AddEvent(ev))
                 } else if to_todo_content {
                     Message::Todo(extensions::todo::Message::ContentEvent(ev))
                 } else if to_todo_markdown {
@@ -1176,9 +1174,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         _ => None,
                     };
                     if let Some(dir) = dir {
-                        let msg = if to_todo_add {
-                            Message::Todo(extensions::todo::Message::AddCursorMove(dir))
-                        } else if to_todo_content {
+                        let msg = if to_todo_content {
                             Message::Todo(extensions::todo::Message::ContentCursorMove(dir))
                         } else if to_home_project_search {
                             Message::HomeProjectSearchCursorMove(dir)
@@ -1588,18 +1584,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         }
                     }
                 }
-                // 新增任务框点击:进编辑态后,按鼠标落点把光标定位到对应字符
-                // (自绘输入没原生光标,全靠 `add_field_id` 记录的屏幕 bounds)。
-                Message::Todo(extensions::todo::Message::AddEditStart) => {
-                    app.update(Message::Todo(extensions::todo::Message::AddEditStart));
-                    if let Some(bounds) = extensions::todo::take_add_field_bounds() {
-                        let scale = window.scale_factor();
-                        let local_x = ((cursor_phys.x / scale) as f32 - bounds.x).max(0.0);
-                        app.update(Message::Todo(extensions::todo::Message::AddCursorAt(
-                            local_x,
-                        )));
-                    }
-                }
+                // 新增任务框已迁 iced 原生 `text_editor`(Stage 4),点击命中
+                // 区域内由组件自身接管聚焦与光标定位,不再有 `AddEditStart`/
+                // `AddCursorAt` 自绘换算分支。
                 // 任务内容编辑框点击:仅在"重击已处于编辑态的字段"时按落点定位
                 // (首击进入编辑态光标落行尾,字段 bounds 未必已记录,避免错位)。
                 Message::Todo(extensions::todo::Message::ContentEditStart(idx)) => {
@@ -2247,6 +2234,18 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                         false
                                     };
 
+                                // Todo 添加框(Stage 4):同款每帧查真实焦点态。
+                                let todo_add_focused =
+                                    if matches!(app.left_view(), crate::app::PanelKind::Todo) {
+                                        interface.operate(
+                                            renderer,
+                                            &mut extensions::todo::CaptureAddFocus,
+                                        );
+                                        extensions::todo::take_add_focused()
+                                    } else {
+                                        false
+                                    };
+
                                 // Update the mouse cursor
                                 if let user_interface::State::Updated {
                                     mouse_interaction, ..
@@ -2288,6 +2287,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // 即使值没变也幂等,无副作用。
                                 app.set_files_search_focused(files_focused);
                                 app.set_todo_search_focused(todo_search_focused);
+                                app.set_todo_add_focused(todo_add_focused);
 
                                 // 关闭掉 `iced_graphics` 的 `web-colors` 后(见根
                                 // Cargo.toml 的 `[patch]`: 阻断 umbrella `iced`

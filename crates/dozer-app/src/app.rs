@@ -3299,10 +3299,19 @@ impl App {
         self.home_project_pages = 1;
     }
 
-    /// Todo 面板新增任务框是否处于自绘编辑态(main.rs 键盘路由用)。
-    pub fn todo_add_editing(&self) -> bool {
+    /// Todo 面板新增任务框是否持有 iced 真实焦点(main.rs 键盘路由用)。
+    pub fn todo_add_focused(&self) -> bool {
         self.active_workspace()
-            .is_some_and(|ws| ws.todo.add_editing())
+            .is_some_and(|ws| ws.todo.add_focused())
+    }
+
+    /// 每帧渲染循环调用:把 `extensions::todo::CaptureAddFocus` 问到的真实
+    /// 焦点态写进当前工作区的 Todo(`main.rs` 键盘路由随后读
+    /// `todo_add_focused` 消费)。
+    pub fn set_todo_add_focused(&mut self, focused: bool) {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.todo.set_add_focused(focused);
+        }
     }
 
     /// Todo 面板任务内容行内编辑态是否打开(main.rs 键盘路由用)。
