@@ -1962,7 +1962,7 @@ git commit -m "feat(dozerd): server 接线 TranscriptStore,处理三个查询 Re
 **Interfaces:**
 - Consumes: Task 10 已接线的 `transcripts` 参数;`extract_transcript_path`(既有函数)。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `server.rs` 测试模块新增(需要构造一个真实的 sqlite 临时库 + fixture 文件,验证 `Request::HookEvent` 处理后触发了摄取)。先看现有 `handle_conn`/`serve` 测试是怎么搭 harness 的(若已有类似"发一个 Request 到内存 pipe,断言 Reply"的测试模式,复用它);若没有端到端 harness,改为对"HookEvent 分支触发摄取"这一段抽出的小函数单独测试:
 
@@ -1994,7 +1994,7 @@ git commit -m "feat(dozerd): server 接线 TranscriptStore,处理三个查询 Re
 Run: `cargo test -p dozerd hook_event_with_transcript_path_triggers_ingest`
 Expected: 编译失败(`maybe_ingest_from_hook_data` 不存在)。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 在 `server.rs` 里 `extract_transcript_path` 函数之后新增:
 
@@ -2024,12 +2024,12 @@ fn maybe_ingest_from_hook_data(
                                     maybe_ingest_from_hook_data(&transcripts, agent, &data);
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozerd hook_event_with_transcript_path_triggers_ingest`
 Expected: PASS
 
-- [ ] **Step 5: 全量校验 + 提交**
+- [x] **Step 5: 全量校验 + 提交**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd && cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -- --check`
 
