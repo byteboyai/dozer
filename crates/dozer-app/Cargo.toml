@@ -72,6 +72,10 @@ russh = "0.62.5"
 russh-sftp = "2.4"
 # url：数据库面板"直接粘贴连接 URI"解析用(已是 workspace 传递依赖,无新增编译物)。
 url = "2"
+# IME 组字预览(preedit)渲染时按字符实际显示宽度(CJK 占 2 格)定位,
+# 已是传递依赖(cosmic-text/alacritty_terminal 链上),这里直接依赖用其
+# 公开 API,不引入新版本解析。
+unicode-width = "0.2"
 # sysinfo：footbar 系统信息条(CPU/RAM/网络/磁盘)的统一数据源。
 # 版本与 crates/legacy-boy 一致,workspace Cargo.lock 已热,不引入新版本解析。
 sysinfo = "0.32"

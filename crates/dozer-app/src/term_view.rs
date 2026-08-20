@@ -208,6 +208,9 @@ struct TermCanvas<'a> {
     model: &'a TerminalModel,
     focused: bool,
     target: crate::app::TermTarget,
+    /// IME 组字预览(未提交):有值时画在光标位置(带下划线),不写进
+    /// `model`——真正的 PTY 网格只由 `Ime::Commit` 驱动。
+    preedit: Option<&'a str>,
 }
 
 /// canvas 内部交互状态：滚轮余量累积 + 拖选进行中标记。
@@ -355,8 +358,10 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
         // `cursor()` 直接取自 `Term` 网格，坐标是活动区视口坐标；防御性
         // 判界只为杜绝 cast 环绕的极端值。
         let offset = self.model.display_offset();
+        let preedit = self.preedit.filter(|s| !s.is_empty());
         if offset == 0
             && self.model.cursor_visible()
+            && preedit.is_none()
             && let Some(cell) = lines.get(cursor_row).and_then(|r| r.get(cursor_col))
         {
             let x = cursor_col as f32 * cell_width();
@@ -385,6 +390,48 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
                         .with_color(byteui::theme::color::current().cream)
                         .with_width(1.0),
                 );
+            }
+        }
+
+        // IME 组字预览:代替普通光标块,在光标位置逐字画出正在输入(尚未
+        // 提交)的字符 + 底部下划线,与一般文本编辑器的组字反馈一致——
+        // 否则 PTY 在提交前收不到任何字节,终端光标(`model.cursor()`)会
+        // 整段组字期间原地不动,用户看不到自己在打什么字。宽字符(CJK)按
+        // `unicode_width` 占 2 格,窄字符占 1 格,逐字推进 x,不依赖网格
+        // 是否已有对应的真实格子(组字预览可能比当前行剩余列更宽,直接
+        // 画出界不做换行——按 P1L 一贯的"先简单实现"取舍,真出现这么长
+        // 的组字串已经是极端输入法场景)。
+        if offset == 0
+            && self.focused
+            && let Some(text) = preedit
+        {
+            let y = cursor_row as f32 * line_height_px();
+            let mut x = cursor_col as f32 * cell_width();
+            for ch in text.chars() {
+                let cols = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
+                let box_w = cols as f32 * cell_width();
+                frame.fill_rectangle(
+                    Point::new(x, y),
+                    Size::new(box_w, line_height_px()),
+                    Color {
+                        a: 0.25,
+                        ..byteui::theme::color::current().cream
+                    },
+                );
+                fill_cell_text(
+                    &mut frame,
+                    ch.to_string(),
+                    x,
+                    y,
+                    byteui::theme::color::current().cream,
+                    cell_font(false),
+                );
+                frame.fill_rectangle(
+                    Point::new(x, y + line_height_px() - 2.0),
+                    Size::new(box_w, 1.5),
+                    byteui::theme::color::current().cream,
+                );
+                x += box_w;
             }
         }
 
@@ -419,16 +466,20 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
     }
 }
 
-/// 渲染整块终端网格。
-pub fn view(
-    model: &TerminalModel,
+/// 渲染整块终端网格。`preedit` 只在 `focused` 的那个 pane 传 `Some`——
+/// 调用方按 `App::keyboard_term_target()` 是否等于自己的 `target` 判断
+/// (与 `focused` 用的同一个比较,不重复烘焙一套判断)。
+pub fn view<'a>(
+    model: &'a TerminalModel,
     focused: bool,
     target: crate::app::TermTarget,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    preedit: Option<&'a str>,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     Canvas::new(TermCanvas {
         model,
         focused,
         target,
+        preedit,
     })
     .width(Length::Fill)
     .height(Length::Fill)

@@ -1809,6 +1809,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "trash",
+ "unicode-width",
  "url",
  "uuid",
  "winit",

@@ -1846,6 +1846,9 @@ pub enum Message {
     /// 当前激活 tab 对应的 daemon 会话（`client.write`）——不再本地
     /// echo，回显完全走 PTY 真实回路（daemon → attach 流 → `TermOutput`）。
     TermInput(TermTarget, Vec<u8>),
+    /// IME 组字预览(未提交):`None` 表示组字结束/取消,清空预览。不发字节
+    /// 给 PTY——只是渲染层叠加,`term_view` 画在光标位置(见其 `draw`)。
+    TermImePreedit(TermTarget, Option<String>),
     /// attach 事件流转发来的输出字节，`usize` 是 tab 的稳定 id
     /// （`SessionTab::tab_id`，不是 vec 位置——关闭 tab 会移动位置，
     /// 但 id 不变，事件流路由必须认 id）。首字段的项目归属见 [`ProjectId`]
@@ -2229,6 +2232,12 @@ pub struct App {
     /// pane 几何不同,`PaneResized` 各带一份,无法互相替代。
     ssh_cols: u16,
     ssh_rows: u16,
+    /// 当前终端 IME 组字预览(未提交,`Ime::Preedit` 驱动):不进 PTY,只在
+    /// `term_view::draw` 里叠一层带下划线的预览文字。`Ime::Commit`/组字
+    /// 取消(空 preedit)时清空。只对 `App::keyboard_term_target()` 当前
+    /// 指向的那个终端 pane 生效(见两处 `term_view::view` 调用处按
+    /// `focused` 决定是否传入)。
+    term_ime_preedit: Option<String>,
     /// daemon 连接失败,或某次会话操作失败时的错误文案。整个程序共享
     /// 一份:daemon 连不连得上不是某个项目自己的状态。
     pub(crate) daemon_error: Option<String>,
@@ -2652,6 +2661,7 @@ impl App {
             rows: DEFAULT_ROWS,
             ssh_cols: DEFAULT_COLS,
             ssh_rows: DEFAULT_ROWS,
+            term_ime_preedit: None,
             daemon_error,
             last_todo_poll_at: std::time::Instant::now(),
             left_view: PanelLayout::default().left_view,
@@ -3633,6 +3643,12 @@ impl App {
         crate::app::keyboard_term_target(self.left_view, self.active_zone)
     }
 
+    /// 当前终端 IME 组字预览文本(`term_view` 渲染 + `ime_cursor_area` 算
+    /// 候选窗位置共用同一份状态)。
+    pub(crate) fn term_ime_preedit(&self) -> Option<&str> {
+        self.term_ime_preedit.as_deref()
+    }
+
     /// 建窗时用的初始窗口尺寸偏好:优先用上次退出前持久化的
     /// `shell_layout.window_width/height`(已经过 `sanitize_shell_layout`
     /// 夹取),`layout.json` 不存在/读不到时 `layout::load()` 本身已经退化
@@ -4056,12 +4072,24 @@ impl App {
     }
 
     /// 当前文本光标的窗口逻辑坐标 `(x, y_底, 行高)`,给 main.rs 设 IME
-    /// 候选窗位置(让选词窗落在光标右下,而非窗口左上)。意见框编辑态用预览
-    /// 列上部近似(地址栏已迁移 iced 原生 text_input,IME 位置由 iced 自己
-    /// 算准);否则用终端光标——单元格尺寸由 pane 像素 ÷ 网格推出,不依赖
-    /// 字号常量。
+    /// 候选窗位置(让选词窗落在光标右下,而非窗口左上)。地址栏/意见框编辑
+    /// 态用预览列上部近似(这套手写的低层 iced_winit 事件循环不经过
+    /// iced_winit::program::State,UserInterface::update 回传的 input_method
+    /// 字段在 main.rs 里被丢弃,iced 并不会替我们自动算准原生 text_input
+    /// 的 IME 位置,不能假设"迁移到 text_input 后位置自动正确");否则用
+    /// 终端光标——单元格尺寸由 pane 像素 ÷ 网格推出,不依赖字号常量。
     pub fn ime_cursor_area(&self, window_w: f32, window_h: f32) -> (f32, f32, f32) {
         let state = self.shell_state();
+        if self.browser_addr_focused() {
+            let side = state.layout.rail_layout.side_of(PanelKind::Web);
+            let (bx, by, _bw, _bh) = preview_content_bounds_for(side, window_w, window_h, &state);
+            return (bx + 4.0, by, 20.0);
+        }
+        if self.comment_focused() {
+            let side = state.layout.rail_layout.side_of(PanelKind::Acceptance);
+            let (bx, by, _bw, _bh) = preview_content_bounds_for(side, window_w, window_h, &state);
+            return (bx + 4.0, by, 20.0);
+        }
         let (pane_w, pane_h) = terminal_pane_pixel_size(window_w, window_h, &state);
         let cell_w = pane_w / self.cols.max(1) as f32;
         let line_h = pane_h / self.rows.max(1) as f32;
@@ -4079,7 +4107,19 @@ impl App {
             .and_then(|ws| ws.tabs.get(ws.active))
             .map(|t| t.model.cursor())
             .unwrap_or((0, 0));
-        let x = x0 + col as f32 * cell_w;
+        // 组字预览期间 PTY 收不到字节,`model.cursor()` 原地不动——候选窗
+        // 要跟着预览文字的末尾走(与 `term_view` 画预览的落点算法一致),
+        // 否则用户敲得越多,候选窗越是钉在组字开始前的旧光标位置不跟手。
+        let preedit_cols: usize = self
+            .term_ime_preedit
+            .as_deref()
+            .map(|s| {
+                s.chars()
+                    .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(1).max(1))
+                    .sum()
+            })
+            .unwrap_or(0);
+        let x = x0 + (col + preedit_cols) as f32 * cell_w;
         let y = y0 + (row as f32 + 1.0) * line_h; // 光标格底部,候选窗落其下方
         (x, y, line_h)
     }
@@ -4207,6 +4247,11 @@ impl App {
     pub fn update(&mut self, message: Message) {
         match message {
             Message::TermInput(target, bytes) => self.term_input(target, bytes),
+            Message::TermImePreedit(target, text) => {
+                if target == self.keyboard_term_target() {
+                    self.term_ime_preedit = text;
+                }
+            }
             Message::TermOutput(project_id, tab_id, bytes) => {
                 self.term_output(project_id, tab_id, bytes)
             }
@@ -9346,12 +9391,16 @@ fn ssh_terminal_pane<'a>(
                     .iter()
                     .find(|t| t.info.id.strip_prefix("ssh:") == Some(host_id.as_str()));
                 match tab {
-                    Some(tab) => term_view::view(
-                        &tab.model,
-                        keyboard_term_target(app.left_view, app.active_zone)
-                            == TermTarget::SshPanel,
-                        TermTarget::SshPanel,
-                    ),
+                    Some(tab) => {
+                        let focused = keyboard_term_target(app.left_view, app.active_zone)
+                            == TermTarget::SshPanel;
+                        term_view::view(
+                            &tab.model,
+                            focused,
+                            TermTarget::SshPanel,
+                            focused.then(|| app.term_ime_preedit()).flatten(),
+                        )
+                    }
                     None => ssh_empty_state(),
                 }
             }
@@ -9462,11 +9511,15 @@ fn active_tab_view<'a>(
     ws: &'a Workspace,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     match ws.tabs.get(ws.active) {
-        Some(tab) => term_view::view(
-            &tab.model,
-            keyboard_term_target(app.left_view, app.active_zone) == TermTarget::Shared,
-            TermTarget::Shared,
-        ),
+        Some(tab) => {
+            let focused = keyboard_term_target(app.left_view, app.active_zone) == TermTarget::Shared;
+            term_view::view(
+                &tab.model,
+                focused,
+                TermTarget::Shared,
+                focused.then(|| app.term_ime_preedit()).flatten(),
+            )
+        }
         None => container(
             text("暂无会话——到 Agent 面板点「＋」")
                 .size(byteui::theme::font::subtitle())

@@ -1157,6 +1157,24 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
+            // IME 组字预览(尚未提交):不发字节给 PTY,只更新一份渲染态给
+            // `term_view` 在光标处画预览文字(见 `Message::TermImePreedit`
+            // 文档)。空字符串表示组字结束/取消,清空预览。上面的原生
+            // text_input 放行闸门已经把这类字段的 Ime 事件挡在了本函数
+            // 之外(它们各自走 iced 标准事件管线自己处理 IME),这里能
+            // 到达的都是终端目标。
+            if let WindowEvent::Ime(Ime::Preedit(text, _range)) = event {
+                let target = app.keyboard_term_target();
+                let preedit = if text.is_empty() {
+                    None
+                } else {
+                    Some(text.clone())
+                };
+                app.update(Message::TermImePreedit(target, preedit));
+                window.request_redraw();
+                return;
+            }
+
             // Ctrl + / Ctrl - 全局 UI 缩放:与 ⌘ 应用快捷键同级拦截,不进 PTY。
             // 同时接受 `=`/`+`(Ctrl+= 通常需 Shift,逻辑键可能是 "=" 或 "+"),
             // 覆盖不同键盘布局。
@@ -1211,6 +1229,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 let target = app.keyboard_term_target();
                 tracing::warn!(?target, ?bytes, "DEBUG term input fallback fired");
                 app.update(Message::TermInput(target, bytes));
+                // 提交即组字结束:清掉预览态,避免上一段预览文字残留在
+                // 光标位置(下一次 `Ime::Preedit` 到来前的空窗期)。
+                if matches!(event, WindowEvent::Ime(Ime::Commit(_))) {
+                    app.update(Message::TermImePreedit(target, None));
+                }
                 window.request_redraw();
             }
         }
