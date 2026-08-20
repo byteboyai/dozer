@@ -15,7 +15,9 @@ use crate::workspace::{lh, split_portions};
 use byteui::interaction::icons;
 use dozer_client::Client;
 use dozer_core::protocol::{BookmarkInfo, BookmarkScope};
-use iced_widget::core::{Border, Element, Length};
+use iced_widget::core::widget::operation::Focusable;
+use iced_widget::core::widget::{Id, Operation};
+use iced_widget::core::{Border, Element, Length, Rectangle};
 use iced_widget::{MouseArea, button, column, container, row, text};
 use std::collections::HashMap;
 
@@ -32,7 +34,11 @@ pub struct Tabs {
     tabs: Vec<BrowserTab>,
     active: usize,
     next_id: usize,
-    addr_editing: bool,
+    /// 地址栏是否持有 iced 内部真实焦点。**不是**应用层手动置位的镜像——
+    /// 每帧渲染循环里 `CaptureAddrFocus` 问一遍 iced 真相后立刻写进这里
+    /// (`set_addr_focused`),`main.rs` 键盘路由读它决定要不要把事件放行
+    /// 给标准 iced 管线。
+    addr_focused: bool,
     addr_buffer: String,
 }
 
@@ -111,45 +117,45 @@ impl Tabs {
         }
     }
 
-    pub fn addr_editing(&self) -> bool {
-        self.addr_editing
+    /// 地址栏是否持有 iced 真实焦点(main.rs 键盘路由用)。
+    pub fn addr_focused(&self) -> bool {
+        self.addr_focused
     }
 
     pub fn addr_buffer(&self) -> &str {
         &self.addr_buffer
     }
 
-    /// 进入地址栏编辑:预填当前激活 tab 的 URL(浏览器 tab 恒为网页,不像
-    /// `PreviewPane::addr_begin` 还要 match `TabKind`)。空标签页(`about:blank`)
-    /// 没有可编辑的网址,预填会把 `about:blank` 带进输入框、再被后续键入
-    /// 拼成 `about:blankhttp://x.com` 这类垃圾——遇到空标签就当空输入处理,
-    /// 让用户直接打新地址。
-    pub fn addr_begin(&mut self) {
-        self.addr_editing = true;
-        self.addr_buffer = self
-            .tabs
-            .get(self.active)
-            .map(|t| {
-                if t.url.is_empty() || t.url == "about:blank" {
-                    String::new()
-                } else {
-                    t.url.clone()
-                }
-            })
-            .unwrap_or_default();
+    /// `iced_widget::text_input::on_input` 每次给全量当前字符串。
+    pub fn set_addr_buffer(&mut self, s: String) {
+        self.addr_buffer = s;
     }
 
-    pub fn addr_text(&mut self, s: &str) {
-        self.addr_buffer.push_str(s);
-    }
-
-    pub fn addr_backspace(&mut self) {
-        self.addr_buffer.pop();
-    }
-
-    pub fn addr_cancel(&mut self) {
-        self.addr_editing = false;
-        self.addr_buffer.clear();
+    /// 每帧渲染循环读走 `CaptureAddrFocus` 查到的真实焦点态后写进来。焦点
+    /// 从假变真(刚获得焦点)时预填当前激活 tab 的网址——浏览器 tab 恒为
+    /// 网页,不像 `PreviewPane::addr_begin` 还要 match `TabKind`。空标签页
+    /// (`about:blank`)没有可编辑的网址,预填会把 `about:blank` 带进输入框、
+    /// 再被后续键入拼成 `about:blankhttp://x.com` 这类垃圾——遇到空标签就
+    /// 当空输入处理,让用户直接打新地址。焦点从真变假(刚失去焦点)时清空
+    /// 草稿——不聚焦的地址栏恒显示占位符"输入网址",不回显当前网址(现状
+    /// 既有行为,不是本次新增)。
+    pub fn set_addr_focused(&mut self, focused: bool) {
+        if !self.addr_focused && focused {
+            self.addr_buffer = self
+                .tabs
+                .get(self.active)
+                .map(|t| {
+                    if t.url.is_empty() || t.url == "about:blank" {
+                        String::new()
+                    } else {
+                        t.url.clone()
+                    }
+                })
+                .unwrap_or_default();
+        } else if self.addr_focused && !focused {
+            self.addr_buffer.clear();
+        }
+        self.addr_focused = focused;
     }
 
     /// 提交解析:`Ok(Some(url))` = 有效网址(裸域名自动补 `https://`);
@@ -157,9 +163,10 @@ impl Tabs {
     /// `~/` 开头),浏览器不支持,`message` 是"浏览器不支持打开本地文件"
     /// 这条文案。带 `://` 的完整 URL(如 `https://x.com`)和单冒号 scheme
     /// (如 `about:blank`/`data:`/`mailto:`)都原样保留,只有既无 `://` 也
-    /// 无 scheme 的裸输入(域名/IP/`host:port`)才补 `https://`。
+    /// 无 scheme 的裸输入(域名/IP/`host:port`)才补 `https://`。**不**自动
+    /// 失焦(同 Files 搜索框 Stage 2 的决定,Enter 提交后光标仍留在输入框
+    /// 里,是记录在案的小行为变化,不是遗漏)。
     pub fn addr_submit(&mut self) -> Result<Option<String>, String> {
-        self.addr_editing = false;
         let input = std::mem::take(&mut self.addr_buffer);
         let input = input.trim();
         if input.is_empty() {
@@ -193,6 +200,44 @@ impl Tabs {
                 visible: idx == self.active,
             })
             .collect()
+    }
+}
+
+/// 地址栏稳定的 iced widget id:`view()` 里 `.id()` 挂给真正的
+/// `text_input`,`CaptureAddrFocus` 每帧靠它在 widget 树里认出这一个(同
+/// `extensions::files::search_field_id` 的既有手法)。
+pub fn addr_field_id() -> Id {
+    Id::new("browser-addr-box")
+}
+
+static ADDR_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
+
+/// 读走(非消费)地址栏上一帧是否持有 iced 内部真实焦点。`main.rs` 渲染
+/// 循环每帧跑完 `CaptureAddrFocus` 后立刻调用本函数,把结果塞进当前
+/// `Workspace`(`State::set_addr_focused`)——`static` 只是临时桥接(同
+/// `extensions::files::take_search_focused` 的既有手法)。
+pub fn take_addr_focused() -> bool {
+    *ADDR_FOCUSED.lock().unwrap()
+}
+
+/// 每帧 `interface.operate()` 跑一遍,把 `addr_field_id()` 命中的
+/// `text_input` 当前是否持有 iced 焦点写进 `ADDR_FOCUSED`。`traverse`
+/// **必须**调用传入的 `operate` 闭包才会继续递归子节点——地址栏嵌在
+/// `row!`/`container!` 里,空 `traverse` 会导致 `Row`/`Column` 的
+/// `operate()` 直接跳过子节点,`focusable()` 永远不会被触达(见
+/// `extensions::files::CaptureSearchFocus` 修复过的同款 Critical bug,
+/// commit `b8281cd`,这次从一开始就不能再犯)。
+pub struct CaptureAddrFocus;
+impl Operation<()> for CaptureAddrFocus {
+    fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
+        if id == Some(&addr_field_id()) {
+            *ADDR_FOCUSED.lock().unwrap() = state.is_focused();
+        }
+    }
+
+    fn traverse(&mut self, operate: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {
+        operate(self);
     }
 }
 
@@ -256,41 +301,39 @@ mod tests {
     }
 
     #[test]
-    fn addr_edit_and_submit_parses_url_and_rejects_local_paths() {
+    fn addr_focus_and_submit_parses_url_and_rejects_local_paths() {
         let mut t = Tabs::default();
-        t.addr_begin();
-        assert!(t.addr_editing());
-        t.addr_text("localhost:3000/x");
+        t.set_addr_focused(true);
+        assert!(t.addr_focused());
+        t.set_addr_buffer("localhost:3000/x".to_string());
         assert_eq!(t.addr_submit(), Ok(Some("https://localhost:3000/x".into())));
-        assert!(!t.addr_editing());
 
-        t.addr_begin();
-        t.addr_text("baidu.com");
+        t.set_addr_focused(true);
+        t.set_addr_buffer("baidu.com".to_string());
         assert_eq!(t.addr_submit(), Ok(Some("https://baidu.com".into())));
 
-        t.addr_begin();
-        t.addr_text("https://example.com");
+        t.set_addr_focused(true);
+        t.set_addr_buffer("https://example.com".to_string());
         assert_eq!(t.addr_submit(), Ok(Some("https://example.com".into())));
 
-        t.addr_begin();
-        t.addr_text("/tmp/x");
+        t.set_addr_focused(true);
+        t.set_addr_buffer("/tmp/x".to_string());
         assert_eq!(t.addr_submit(), Err("浏览器不支持打开本地文件".to_string()));
 
-        t.addr_begin();
-        t.addr_text("~/x");
+        t.set_addr_focused(true);
+        t.set_addr_buffer("~/x".to_string());
         assert_eq!(t.addr_submit(), Err("浏览器不支持打开本地文件".to_string()));
 
-        t.addr_begin();
-        t.addr_text("abc");
-        t.addr_backspace();
-        t.addr_backspace();
-        t.addr_backspace();
+        t.set_addr_focused(true);
+        t.set_addr_buffer("".to_string());
         assert_eq!(t.addr_submit(), Ok(None), "空输入不产生动作");
 
-        t.addr_begin();
-        t.addr_text("x");
-        t.addr_cancel();
-        assert!(!t.addr_editing());
+        // 失焦清空草稿,不影响下一次聚焦时重新预填。
+        t.set_addr_focused(true);
+        t.set_addr_buffer("x".to_string());
+        t.set_addr_focused(false);
+        assert_eq!(t.addr_buffer(), "");
+        assert!(!t.addr_focused());
     }
 
     #[test]
@@ -299,23 +342,36 @@ mod tests {
 
         // 单冒号特殊 scheme 原样保留,不补 https://。
         for scheme_url in ["about:blank", "data:text/html,hi", "mailto:a@b.com"] {
-            t.addr_begin();
-            t.addr_text(scheme_url);
+            t.set_addr_focused(true);
+            t.set_addr_buffer(scheme_url.to_string());
             assert_eq!(t.addr_submit(), Ok(Some(scheme_url.into())));
         }
 
         // host:port 不是 scheme,应补 https://。
-        t.addr_begin();
-        t.addr_text("example.com:8080");
+        t.set_addr_focused(true);
+        t.set_addr_buffer("example.com:8080".to_string());
         assert_eq!(t.addr_submit(), Ok(Some("https://example.com:8080".into())));
     }
 
     #[test]
-    fn addr_begin_prefills_current_tab_url() {
+    fn set_addr_focused_true_prefills_current_tab_url() {
         let mut t = Tabs::default();
         t.open_url("http://a.com".into());
-        t.addr_begin();
+        t.set_addr_focused(true);
         assert_eq!(t.addr_buffer(), "http://a.com");
+    }
+
+    #[test]
+    fn set_addr_focused_true_on_blank_tab_prefills_empty() {
+        let mut t = Tabs::default();
+        // 默认带一个 about:blank 标签页。
+        t.set_addr_focused(true);
+        assert_eq!(t.addr_buffer(), "", "about:blank 不预填,避免拼出垃圾");
+    }
+
+    #[test]
+    fn addr_field_id_is_stable_across_calls() {
+        assert_eq!(addr_field_id(), addr_field_id());
     }
 
     #[test]
@@ -545,13 +601,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_addr_event_submit_ok_recurses_into_open_url() {
+    async fn update_addr_submit_ok_recurses_into_open_url() {
         let mut state = State::default();
         let handle = tokio::runtime::Handle::current();
         let client = client_for_test();
         update(
             &mut state,
-            Message::AddrClick,
+            Message::AddrInput("http://a.com".to_string()),
             Some(1),
             &client,
             &handle,
@@ -559,15 +615,7 @@ mod tests {
         );
         update(
             &mut state,
-            Message::AddrEvent(crate::workspace::AddrEvent::Text("http://a.com".into())),
-            Some(1),
-            &client,
-            &handle,
-            |_| {},
-        );
-        update(
-            &mut state,
-            Message::AddrEvent(crate::workspace::AddrEvent::Submit),
+            Message::AddrSubmit,
             Some(1),
             &client,
             &handle,
@@ -582,13 +630,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_addr_event_submit_local_path_sets_error_without_opening_tab() {
+    async fn update_addr_submit_local_path_sets_error_without_opening_tab() {
         let mut state = State::default();
         let handle = tokio::runtime::Handle::current();
         let client = client_for_test();
         update(
             &mut state,
-            Message::AddrClick,
+            Message::AddrInput("/tmp/x".to_string()),
             Some(1),
             &client,
             &handle,
@@ -596,15 +644,7 @@ mod tests {
         );
         update(
             &mut state,
-            Message::AddrEvent(crate::workspace::AddrEvent::Text("/tmp/x".into())),
-            Some(1),
-            &client,
-            &handle,
-            |_| {},
-        );
-        update(
-            &mut state,
-            Message::AddrEvent(crate::workspace::AddrEvent::Submit),
+            Message::AddrSubmit,
             Some(1),
             &client,
             &handle,
@@ -784,15 +824,15 @@ mod tests {
     #[test]
     fn state_accessors_delegate_to_tabs() {
         let mut state = State::default();
-        assert!(!state.addr_editing());
+        assert!(!state.addr_focused());
         // 默认带一个 about:blank 标签页,它就是激活 tab
         assert_eq!(state.active_webview_id(), Some(0));
         assert_eq!(state.desired_webviews().len(), 1);
         state.tabs.open_url("http://a.com".into());
-        state.tabs.addr_begin();
-        assert!(state.addr_editing());
-        state.addr_cancel();
-        assert!(!state.addr_editing());
+        state.set_addr_focused(true);
+        assert!(state.addr_focused());
+        state.set_addr_focused(false);
+        assert!(!state.addr_focused());
         // 新开的 a.com 成为激活 tab,空标签仍在列表里
         assert_eq!(state.active_webview_id(), Some(1));
         assert_eq!(state.desired_webviews().len(), 2);
@@ -881,9 +921,9 @@ pub enum NavAction {
 
 /// 浏览器面板自己的消息类型——内核(`workspace.rs`)只认一个包装变体
 /// `Message::Browser(extensions::browser::Message)`,这个模块本身不
-/// import 顶层 `Message`。`AddrEvent` 是地址栏/验收意见框/项目树行内
-/// 编辑三处共用的通用文本输入事件类型,定义在 `crate::workspace`,这里
-/// 直接引用,不复制。
+/// import 顶层 `Message`。`AddrEvent` 是验收意见框/项目树行内编辑两处
+/// 共用的通用文本输入事件类型,定义在 `crate::workspace`,这里直接引用,
+/// 不复制。
 #[derive(Debug, Clone)]
 pub enum Message {
     OpenUrl(String),
@@ -899,8 +939,10 @@ pub enum Message {
     /// 拖拽换位:光标扫过页签 `idx` 时由 tab 的 `MouseArea::on_move` 发出,
     /// `App::update` 翻译成 `TabDragMove`(浏览器组在这里完成换位)。
     DragHover(usize),
-    AddrClick,
-    AddrEvent(crate::workspace::AddrEvent),
+    /// 地址栏草稿变化(iced `text_input::on_input`,每次按键给全量当前
+    /// 字符串)。
+    AddrInput(String),
+    AddrSubmit,
     StarClick,
     BookmarkAdd(BookmarkScope),
     BookmarkRemove(i64),
@@ -989,9 +1031,10 @@ impl State {
         s
     }
 
-    /// 地址栏是否在编辑态(内核 `App::browser_addr_editing` 键盘路由用)。
-    pub fn addr_editing(&self) -> bool {
-        self.tabs.addr_editing()
+    /// 地址栏是否持有 iced 真实焦点(内核 `App::browser_addr_focused` 键盘
+    /// 路由用)。
+    pub fn addr_focused(&self) -> bool {
+        self.tabs.addr_focused()
     }
 
     /// 收藏夹侧栏当前是否展开——`app.rs::App::shell_state()` 读这个填
@@ -1001,9 +1044,14 @@ impl State {
         self.bookmarks_open
     }
 
-    /// 取消地址栏编辑(内核 `App::blur_inputs` 用)。
-    pub fn addr_cancel(&mut self) {
-        self.tabs.addr_cancel();
+    /// 每帧渲染循环调用:把 `CaptureAddrFocus` 问到的真实焦点态写进来;
+    /// 焦点从假变真时顺带清掉上一次提交失败留下的错误提示(同旧版
+    /// `AddrClick` 里的 `state.error = None`)。
+    pub fn set_addr_focused(&mut self, focused: bool) {
+        if !self.tabs.addr_focused() && focused {
+            self.error = None;
+        }
+        self.tabs.set_addr_focused(focused);
     }
 
     /// 当前激活 tab 的 webview id(内核 `App::active_browser_webview_id`
@@ -1199,26 +1247,18 @@ pub fn update(
             // 整体悬停)。
             state.set_tab_tooltip(idx, hovered);
         }
-        Message::AddrClick => {
-            state.error = None;
-            state.tabs.addr_begin();
-        }
-        Message::AddrEvent(ev) => match ev {
-            crate::workspace::AddrEvent::Text(s) => state.tabs.addr_text(&s),
-            crate::workspace::AddrEvent::Backspace => state.tabs.addr_backspace(),
-            crate::workspace::AddrEvent::Cancel => state.tabs.addr_cancel(),
-            crate::workspace::AddrEvent::Submit => match state.tabs.addr_submit() {
-                Ok(Some(url)) => update(
-                    state,
-                    Message::OpenUrl(url),
-                    project_id,
-                    client,
-                    handle,
-                    emit,
-                ),
-                Ok(None) => {}
-                Err(message) => state.error = Some(message),
-            },
+        Message::AddrInput(s) => state.tabs.set_addr_buffer(s),
+        Message::AddrSubmit => match state.tabs.addr_submit() {
+            Ok(Some(url)) => update(
+                state,
+                Message::OpenUrl(url),
+                project_id,
+                client,
+                handle,
+                emit,
+            ),
+            Ok(None) => {}
+            Err(message) => state.error = Some(message),
         },
         Message::StarClick => {
             state.error = None;
@@ -1580,60 +1620,58 @@ pub fn view(
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
 
-    let editing = state.addr_editing();
-    let addr_text = if editing {
-        format!("{}▏", state.tabs.addr_buffer())
-    } else {
-        "输入网址".to_string()
-    };
-    let addr_body = lh(text(addr_text)
-        .size(byteui::theme::font::body())
-        .color(if editing {
-            byteui::theme::color::current().cream
-        } else {
-            byteui::theme::color::current().dim
-        }));
+    let editing = state.addr_focused();
+    let addr_input = byteui::form::input_text::view(
+        "输入网址",
+        state.tabs.addr_buffer(),
+        false,
+        Some(addr_field_id()),
+        false,
+        Some(Message::AddrSubmit),
+        true,
+        Message::AddrInput,
+    );
 
     // 地址栏本体:单个带边框的容器,把"网址文字 + 收藏夹按钮"一起包进边框
-    // 内(复用 todo 新增输入框 / `crate::search_box` 的布局模式)。整框包
-    // 一层 `MouseArea`——点框内(非按钮处)进地址编辑态;收藏夹按钮是内层
-    // widget,会先截获自己的点击(开/关收藏夹面板)。框高由收藏按钮的方形
-    // 尺寸撑起,文字垂直居中,视觉上按钮嵌在地址栏右侧。
+    // 内(复用 todo 新增输入框 / `crate::search_box` 的布局模式)。不再需要
+    // 外层 `MouseArea`/`AddrClick`——`text_input` 是真控件,点击命中范围内
+    // 就由 iced 标准鼠标管线自己处理聚焦,不需要应用层代理点击(唯一影响:
+    // 点击胶囊的 4px padding 空白处不再能进编辑态,只有点在输入框自身范围
+    // 内才行,判定为可接受的小回归,见本计划 Global Constraints)。收藏夹
+    // 按钮是内层 widget,自己截获点击(开/关收藏夹面板)。框高由收藏按钮的
+    // 方形尺寸撑起,文字垂直居中,视觉上按钮嵌在地址栏右侧。
     let content_h = byteui::theme::geometry::tab_button_size();
-    let addr_box = MouseArea::new(
-        container(
-            row![
-                container(addr_body)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .align_y(iced_widget::core::alignment::Vertical::Center)
-                    .align_x(iced_widget::core::alignment::Horizontal::Left),
-                container(bookmarks_toggle_button(state))
-                    .height(Length::Fill)
-                    .align_y(iced_widget::core::alignment::Vertical::Center),
-            ]
-            .width(Length::Fill)
-            .height(Length::Fixed(content_h))
-            .align_y(iced_widget::core::Alignment::Center),
-        )
+    let addr_box = container(
+        row![
+            container(addr_input)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_y(iced_widget::core::alignment::Vertical::Center)
+                .align_x(iced_widget::core::alignment::Horizontal::Left),
+            container(bookmarks_toggle_button(state))
+                .height(Length::Fill)
+                .align_y(iced_widget::core::alignment::Vertical::Center),
+        ]
         .width(Length::Fill)
-        .height(Length::Fixed(content_h + 8.0))
-        .padding([4, 8])
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(byteui::theme::color::current().term_bg.into()),
-            border: Border {
-                color: if editing {
-                    byteui::theme::color::current().gold
-                } else {
-                    byteui::theme::color::current().border
-                },
-                width: 1.0,
-                radius: 2.0.into(),
-            },
-            ..container::Style::default()
-        }),
+        .height(Length::Fixed(content_h))
+        .align_y(iced_widget::core::Alignment::Center),
     )
-    .on_press(Message::AddrClick);
+    .width(Length::Fill)
+    .height(Length::Fixed(content_h + 8.0))
+    .padding([4, 8])
+    .style(move |_t: &iced_widget::Theme| container::Style {
+        background: Some(byteui::theme::color::current().term_bg.into()),
+        border: Border {
+            color: if editing {
+                byteui::theme::color::current().gold
+            } else {
+                byteui::theme::color::current().border
+            },
+            width: 1.0,
+            radius: 2.0.into(),
+        },
+        ..container::Style::default()
+    });
 
     // 后退/前进/刷新三颗导航按钮紧凑成组(组内间距 0,比下方整体 4 更紧),
     // 再与地址栏/收藏等拉开到 4,突出"导航簇"的视觉聚合。
