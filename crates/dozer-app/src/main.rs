@@ -487,6 +487,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
         >,
         proxy: winit::event_loop::EventLoopProxy<Message>,
+        report_title: bool,
     ) {
         let desired_ids: std::collections::HashSet<usize> =
             specs.iter().map(|(s, _)| s.id).collect();
@@ -511,6 +512,23 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     let allowed = std::sync::Arc::clone(&allowed_files);
                     let root = assets::assets_root();
                     let ipc_proxy = proxy.clone();
+                    let webview_id = spec.id;
+                    // 常驻注入脚本:焦点/拖拽/缩放三件套(所有 webview);浏览器
+                    // 面板(`report_title`)额外附一段"页面标题回报":把
+                    // `window.__dozer_webview` 记成本 webview 的 id,页面
+                    // DOMContentLoaded 与 `document.title` 变化(MutationObserver)
+                    // 时经 IPC 发 `title:<id>:<title>`,让 tab 标题在页面加载
+                    // 完成后从 URL 切换到 HTML `<title>`。预览 webview 不掺和。
+                    let mut script = String::from(
+                        "document.addEventListener('mousedown',function(){window.ipc.postMessage('focus')},true);document.addEventListener('mouseup',function(){window.ipc.postMessage('mouseup')},true);document.addEventListener('keydown',function(e){if(e.ctrlKey){var c=e.code,k=e.key;if(c==='Equal'||k==='+'||k==='='){e.preventDefault();window.ipc.postMessage('zoom_in');}else if(c==='Minus'||k==='-'){e.preventDefault();window.ipc.postMessage('zoom_out');}else if(c==='Digit1'||k==='1'){e.preventDefault();window.ipc.postMessage('zoom_reset');}}},true);",
+                    );
+                    if report_title {
+                        script.push_str("window.__dozer_webview=");
+                        script.push_str(webview_id.to_string().as_str());
+                        script.push_str(
+                            ";function _dt(){window.ipc.postMessage('title:'+String(__dozer_webview)+':'+document.title)}if(document.readyState==='complete'){_dt()}else{document.addEventListener('DOMContentLoaded',_dt)}new MutationObserver(_dt).observe(document.documentElement||document,{childList:true,subtree:true,attributeFilter:['title']});",
+                        );
+                    }
                     let built = wry::WebViewBuilder::new()
                         .with_url(&spec.url)
                         .with_bounds(bounds)
@@ -526,11 +544,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         // 顺带监听 mouseup:页签拖拽拖进 webview 后在这里松开,
                         // winit 收不到 `Released`,靠这条 IPC 结束拖拽
                         // (`WebViewMouseUp`)。
-                        .with_initialization_script(
-                            "document.addEventListener('mousedown',function(){window.ipc.postMessage('focus')},true);document.addEventListener('mouseup',function(){window.ipc.postMessage('mouseup')},true);document.addEventListener('keydown',function(e){if(e.ctrlKey){var c=e.code,k=e.key;if(c==='Equal'||k==='+'||k==='='){e.preventDefault();window.ipc.postMessage('zoom_in');}else if(c==='Minus'||k==='-'){e.preventDefault();window.ipc.postMessage('zoom_out');}else if(c==='Digit1'||k==='1'){e.preventDefault();window.ipc.postMessage('zoom_reset');}}},true);"
-                        )
+                        .with_initialization_script(script)
                         .with_ipc_handler(move |_req| {
-                            match _req.body().as_str() {
+                            let body = _req.body().as_str();
+                            match body {
                                 "mouseup" => {
                                     let _ = ipc_proxy.send_event(Message::WebViewMouseUp);
                                 }
@@ -548,6 +565,22 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 }
                                 "zoom_reset" => {
                                     let _ = ipc_proxy.send_event(Message::ZoomReset);
+                                }
+                                // 浏览器面板报回页面 HTML 标题:`title:<id>:<title>`。
+                                // `splitn(2, ':')` 只拆第一个冒号,标题里再带冒号
+                                // 也不被误拆。空标题页面仍发,由 `browser::update`
+                                // 的空标题守卫决定不覆盖 URL 标题。
+                                title_msg if title_msg.starts_with("title:") => {
+                                    let rest = &title_msg["title:".len()..];
+                                    let mut it = rest.splitn(2, ':');
+                                    if let (Some(id_s), Some(title)) = (it.next(), it.next())
+                                        && let Ok(id) = id_s.parse::<usize>()
+                                    {
+                                        let _ = ipc_proxy.send_event(Message::BrowserTitle(
+                                            id,
+                                            title.to_string(),
+                                        ));
+                                    }
                                 }
                                 _ => {
                                     let _ = ipc_proxy.send_event(Message::WebViewFocused);
@@ -1298,6 +1331,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     .collect::<Vec<_>>(),
                 app.allowed_files(),
                 proxy.clone(),
+                // 预览 webview 不需要回报页面标题,只有浏览器面板要。
+                false,
             );
             // 首页右栏浏览器(`home_browser`)占的是右面板区,不是工作区的左
             // 面板预览区,所以单独算一套边界(见 `home_browser_bounds`);工作区
@@ -1331,6 +1366,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 browser_specs,
                 app.allowed_files(),
                 proxy.clone(),
+                // 浏览器面板 webview 注入页面标题回报,tab 加载完成后标题
+                // 从 URL 切到 HTML `<title>`。
+                true,
             );
         }
 

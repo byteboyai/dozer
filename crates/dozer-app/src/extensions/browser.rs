@@ -70,6 +70,18 @@ impl Tabs {
         }
     }
 
+    /// 按 webview/tab id 更新 tab 标题——页面加载完成后覆写 `open_url`
+    /// 初建的 URL 标题。空标题(`about:blank` 等未设 title 的页面)保持
+    /// 原 URL 标题不变,未知 id 是 no-op。
+    pub fn apply_title(&mut self, id: usize, title: String) {
+        if title.trim().is_empty() {
+            return;
+        }
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+            tab.title = title;
+        }
+    }
+
     pub fn close(&mut self, idx: usize) {
         if idx >= self.tabs.len() {
             return;
@@ -307,6 +319,23 @@ mod tests {
     }
 
     #[test]
+    fn apply_title_replaces_url_title_with_html_title_once_loaded() {
+        let mut t = Tabs::default();
+        // `open_url` 初建的标题是 URL 的 host。
+        let id = t.open_url("https://example.com/foo".into());
+        assert_eq!(t.tabs()[0].title, "example.com");
+        // 页面加载完成后,HTML `<title>` 覆盖 URL 标题。
+        t.apply_title(id, "Example · Official Site".into());
+        assert_eq!(t.tabs()[0].title, "Example · Official Site");
+        // 空标题(`about:blank` 等未设 `<title>` 的页面)保持 URL 标题。
+        t.apply_title(id, "   ".into());
+        assert_eq!(t.tabs()[0].title, "Example · Official Site");
+        // 未知 id 是 no-op。
+        t.apply_title(999, "Ghost".into());
+        assert_eq!(t.tabs()[0].title, "Example · Official Site");
+    }
+
+    #[test]
     fn active_webview_id_tracks_active_tab() {
         let mut t = Tabs::default();
         assert_eq!(t.active_webview_id(), None, "无 tab 时没有 webview");
@@ -478,6 +507,41 @@ mod tests {
         );
         assert!(state.error.is_none());
         assert_eq!(state.tabs.tabs().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn update_title_loaded_applies_html_title() {
+        let mut state = State {
+            tabs: Tabs::default(),
+            error: None,
+            bookmarks: Vec::new(),
+            bookmarks_open: false,
+            star_menu_open: false,
+            hover: Default::default(),
+            tooltip_starts: Default::default(),
+        };
+        let id = state.tabs.open_url("https://example.com".into());
+        let handle = tokio::runtime::Handle::current();
+        let client = client_for_test();
+        update(
+            &mut state,
+            Message::TitleLoaded(id, "Example Home".into()),
+            Some(1),
+            &client,
+            &handle,
+            |_| {},
+        );
+        assert_eq!(state.tabs.tabs()[0].title, "Example Home");
+        // 空标题不覆盖 URL 标题。
+        update(
+            &mut state,
+            Message::TitleLoaded(id, "".into()),
+            Some(1),
+            &client,
+            &handle,
+            |_| {},
+        );
+        assert_eq!(state.tabs.tabs()[0].title, "Example Home");
     }
 
     #[tokio::test]
@@ -823,6 +887,10 @@ pub enum NavAction {
 #[derive(Debug, Clone)]
 pub enum Message {
     OpenUrl(String),
+    /// 页面加载完成后,渲染进程经 IPC 报回 HTML `document.title`(`id` 是
+    /// webview/tab id,`title` 是页面标题)——覆盖 `open_url` 初建的 URL 标题。
+    /// `about:blank` 等空标题页面不覆盖(见 `Tabs::apply_title` 的空标题守卫)。
+    TitleLoaded(usize, String),
     SelectTab(usize),
     CloseTab(usize),
     /// 后退/前进/刷新按钮。`browser::update` 里是 no-op,真正的 webview
@@ -1115,6 +1183,7 @@ pub fn update(
             state.error = None;
             state.tabs.open_url(url);
         }
+        Message::TitleLoaded(id, title) => state.tabs.apply_title(id, title),
         Message::SelectTab(idx) => state.tabs.select(idx),
         Message::DragHover(_) => {} // 拖拽换位在 `App::update` 翻译后处理,不落到这里
         // 导航按钮:真正的 webview 历史导航/刷新由 main.rs `dispatch` 拦截
