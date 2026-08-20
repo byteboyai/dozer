@@ -2083,6 +2083,14 @@ impl Workspace {
         self.files.take_tree_edit_focus_pending()
     }
 
+    /// 读走(消费式)Todo 任务内容编辑的一次性程序化聚焦标记(点卡片文字进入
+    /// 编辑态时置位,text_input 下一帧才出现、不会自己拿焦点)。main.rs 在
+    /// `UserInterface::build` 之前调用,为真则用 `operation::focusable::
+    /// focus` 强制聚焦真 `text_input`。
+    pub fn take_content_edit_focus_pending(&mut self) -> bool {
+        self.todo.take_content_edit_focus_pending()
+    }
+
     /// 文件树搜索框是否持有 iced 真实焦点(main.rs 键盘路由用):为真时按键
     /// 放行给标准 iced 事件管线,交真正的 text_input 自己处理。
     pub fn files_search_focused(&self) -> bool {
@@ -2139,16 +2147,13 @@ impl Workspace {
         if let Some(project) = self.project.as_ref() {
             let path = std::path::Path::new(&project.path);
             self.project_panel.submit_description_edit_on_blur(path);
-            // 任务内容行内编辑失焦即保存(与回车提交同款),不丢用户刚改的
-            // 文字;无 project 时退回丢弃,避免半输入滞留(见用户反馈)。
-            self.todo.commit_content_edit(path);
             // MARKDOWN 整文件编辑在失焦时写盘(回车是换行、没有独立提交,
             // 失焦即提交);Esc 才是丢弃,见 `MarkdownEvent(Cancel)`。
             self.todo.cancel_markdown_edit(path);
-        } else {
-            // 没打开项目时内容编辑无法落盘,退回丢弃,避免编辑态卡住。
-            self.todo.cancel_content_edit();
         }
+        // 任务内容行内编辑的失焦落盘/丢弃判断已经从 `blur_inputs` 搬走——
+        // 改由 `App::set_todo_content_focused` 的边缘触发(`CaptureContentEditFocus`
+        // 每帧查到的真实焦点从真变假那一刻)承担,见该方法的文档。
         self.blur_preview_editors();
     }
 

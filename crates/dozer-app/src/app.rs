@@ -3345,10 +3345,30 @@ impl App {
         }
     }
 
-    /// Todo 面板任务内容行内编辑态是否打开(main.rs 键盘路由用)。
-    pub fn todo_content_editing(&self) -> bool {
+    /// Todo 任务内容编辑框是否持有 iced 真实焦点(main.rs 键盘路由用)。
+    pub fn todo_content_focused(&self) -> bool {
         self.active_workspace()
-            .is_some_and(|ws| ws.todo.content_editing())
+            .is_some_and(|ws| ws.todo.content_edit_focused())
+    }
+
+    /// 每帧渲染循环调用:把 `CaptureContentEditFocus` 问到的真实焦点态
+    /// 写进当前工作区的 Todo,并在"焦点从真变假"的那一刻做落盘判断
+    /// (同 `Workspace::blur_inputs` 原先的"有项目就 commit、没项目就
+    /// cancel"逻辑,只是触发时机从"点击别处"改成"真实焦点丢失")。
+    pub fn set_todo_content_focused(&mut self, focused: bool) {
+        let Some(ws) = self.active_workspace_mut() else {
+            return;
+        };
+        let was_focused = ws.todo.content_edit_focused();
+        if was_focused && !focused {
+            if let Some(project) = ws.project.as_ref() {
+                let path = std::path::PathBuf::from(&project.path);
+                ws.todo.commit_content_edit(&path);
+            } else {
+                ws.todo.cancel_content_edit();
+            }
+        }
+        ws.todo.set_content_edit_focused_flag(focused);
     }
 
     /// Todo 面板 MARKDOWN 视图是否处于整文件编辑态(main.rs 键盘路由用)。

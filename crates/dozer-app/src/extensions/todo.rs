@@ -8,7 +8,6 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use crate::app::{App, HoverId};
-use crate::search_box::{delete_before_cursor, draft_with_caret, insert_at_cursor, move_cursor_in};
 use crate::theme;
 use crate::workspace::{AddrEvent, Workspace, agent_icon, tab_title};
 use byteui::interaction::icons;
@@ -398,11 +397,18 @@ pub struct WorkspaceState {
     /// 日历浮层弹出锚点(逻辑像素,取点击日历按钮时的光标位置)。窗口级
     /// overlay 靠它定位到按钮旁边;关闭时清空。
     calendar_anchor: Option<(f32, f32)>,
-    /// 任务内容行内编辑态(卡片下标, 草稿)。点卡片任务文字进入,
-    /// `ContentEvent(Submit)` 落盘改写任务文字。
+    /// 任务内容行内编辑态(卡片下标, 草稿)。点卡片任务文字进入,失焦或
+    /// 回车落盘改写任务文字(`commit_content_edit`)。
     editing_content: Option<(usize, String)>,
-    /// 任务内容行内编辑草稿的光标位置(字符下标,见 `add_cursor` 注释)。
-    content_cursor: usize,
+    /// 任务内容编辑框是否持有 iced 内部真实焦点,每帧由
+    /// `CaptureContentEditFocus` 写入。
+    content_edit_focused: bool,
+    /// 一次性标记:`editing_content` 刚从 `None` 变成 `Some`(点卡片文字
+    /// 刚触发编辑)时置真,main.rs 渲染循环取走后用 `operation::
+    /// focusable::focus` 强制聚焦(同 `files::tree_edit_focus_pending`
+    /// 的既有手法——点卡片文字这个点击落在旧的文字 `MouseArea` 上,不是
+    /// 新出现的 `text_input` 本身,不会自动带焦点)。
+    content_edit_focus_pending: bool,
     /// MARKDOWN 视图是否处于整文件编辑态(main.rs 键盘路由用)。
     markdown_editing: bool,
     /// MARKDOWN 编辑草稿:进入编辑态时从 `.dozer/todo.md` 全文载入,失焦
@@ -562,22 +568,38 @@ impl WorkspaceState {
         self.add_input_height = h.clamp(ADD_INPUT_MIN_HEIGHT, ADD_INPUT_MAX_HEIGHT);
     }
 
-    /// 任务内容行内编辑态是否打开(main.rs 键盘路由用)。
-    pub fn content_editing(&self) -> bool {
-        self.editing_content.is_some()
+    /// 任务内容编辑框是否持有 iced 真实焦点(main.rs 键盘路由用)。
+    pub fn content_edit_focused(&self) -> bool {
+        self.content_edit_focused
     }
 
-    /// 失焦退出任务内容编辑态(`Workspace::blur_inputs` 用):直接丢弃半输入。
-    /// 内容编辑是点卡片文字才弹出的一次性行内编辑,行为对齐项目树重命名
-    /// (`cancel_tree_edit`)而不是搜索框。
+    /// 每帧渲染循环读走 `CaptureContentEditFocus` 查到的真实焦点态后写
+    /// 进来。**只更新焦点镜像标记,不做落盘/丢弃判断**——是否该落盘取决
+    /// 于"有没有打开的项目",`WorkspaceState` 自己拿不到 `project_path`,
+    /// 这个判断在 `App::set_todo_content_focused` 里做(见 main.rs 接线
+    /// 部分)。
+    pub fn set_content_edit_focused_flag(&mut self, focused: bool) {
+        self.content_edit_focused = focused;
+    }
+
+    /// 读走(消费式)一次性聚焦标记,同 `files::take_tree_edit_focus_pending`
+    /// 的既有手法。
+    pub fn take_content_edit_focus_pending(&mut self) -> bool {
+        std::mem::take(&mut self.content_edit_focus_pending)
+    }
+
+    /// 失焦退出任务内容编辑态(`App::set_todo_content_focused` 无项目时用):
+    /// 直接丢弃半输入。内容编辑是点卡片文字才弹出的一次性行内编辑,行为对齐
+    /// 项目树重命名(`cancel_tree_edit`)而不是搜索框。
     pub fn cancel_content_edit(&mut self) {
         self.editing_content = None;
     }
 
-    /// 失焦退出任务内容编辑态并**写盘保存**(与回车 `ContentEvent(Submit)` 同
-    /// 一条 `commit_content_edit` 落盘路径):改动且非空才写,否则丢弃。
-    /// `Workspace::blur_inputs` 走这条,让"点别处"也等价于"按回车提交",
-    /// 不丢用户刚改的任务文字(见用户反馈:内容编辑失焦应保存)。
+    /// 失焦退出任务内容编辑态并**写盘保存**(与回车 `ContentSubmit` 同一条
+    /// `commit_content_edit` 落盘路径):改动且非空才写,否则丢弃。
+    /// `App::set_todo_content_focused` 在真实焦点从真变假那一刻走这条,让
+    /// "点别处"也等价于"按回车提交",不丢用户刚改的任务文字(见用户反馈:
+    /// 内容编辑失焦应保存)。
     pub fn commit_content_edit(&mut self, project_path: &std::path::Path) {
         commit_content_edit(self, project_path);
     }
@@ -718,15 +740,6 @@ impl AppState {
 /// 会话读写,内核在到达 `update` 之前就会拦截处理,不会真的传进
 /// `update`——传进来会 `unreachable!`(同 Git Log 试点 `LoadMore` 的
 /// 处理方式)。
-/// 自绘输入的光标移动方向(main.rs 把方向键/Home/End 翻成这个,经
-/// `ContentCursorMove` 路由进来——Todo 搜索框、添加框已迁真 `text_input`/
-/// `text_editor`,由原生管线管光标)。自绘
-/// 输入没有原生光标,方向键移动靠这里携带的方向重定位字符下标。定义与
-/// `insert_at_cursor`/`delete_before_cursor`/`move_cursor_in`/
-/// `char_to_byte`/`draft_with_caret` 一起挪到了 `crate::search_box`
-/// (抽共享搜索框组件时一并搬出——纯字符串/下标操作,不是 todo 专属)。
-pub use crate::search_box::CursorDir;
-
 #[derive(Debug, Clone)]
 pub enum Message {
     Toggle(usize),
@@ -773,17 +786,14 @@ pub enum Message {
     CalendarNextMonth,
     /// 日历里选中某一天,`day` 是 "MM-DD" 文本(与 `plan_date` 存储格式一致)。
     CalendarPick(usize, String),
-    /// 点卡片任务文字 → 进入内容行内编辑态(`editing_content` 置位)。
+    /// 点卡片任务文字 → 进入内容行内编辑态(`editing_content` 置位 +
+    /// `content_edit_focus_pending` 置位,main.rs 据此程序化聚焦)。
     ContentEditStart(usize),
-    /// 内容编辑态下的按键:`Submit` 落盘改写任务文字,`Cancel` 丢弃退出。
-    ContentEvent(AddrEvent),
-    /// 方向键/Home/End 移动任务内容编辑草稿光标(字符下标)。内容编辑仍是
-    /// 自绘输入(本计划只迁「搜索框/添加框」,任务内容编辑不迁),方向键靠
-    /// main.rs 翻成 `CursorDir` 经此路由。
-    ContentCursorMove(CursorDir),
-    /// 鼠标点击任务内容编辑框:把字段内局部点击 x(逻辑像素)折算成字符下标,
-    /// 定位光标(自绘输入没原生光标,靠 `content_field_id` 边界换算)。
-    ContentCursorAt(f32),
+    /// 内容编辑框草稿变化(iced `text_input::on_input`)。
+    ContentInput(String),
+    /// 回车提交:落盘改写任务文字(与失焦落盘共用 `commit_content_edit`
+    /// 一条路径)。
+    ContentSubmit,
     /// 点 MARKDOWN 视图主体 → 进入整文件编辑态(`markdown_editing` 置位)。
     MarkdownEditStart,
     /// MARKDOWN 编辑态下的按键:`Text`(含回车翻成的 `"\n"`)/`Backspace`
@@ -856,18 +866,11 @@ fn set_done(
     }
 }
 
-// `char_to_byte`/`insert_at_cursor`/`delete_before_cursor`/`move_cursor_in`/
-// `draft_with_caret` 挪到了 `crate::search_box`(见上面 `CursorDir` 的
-// `pub use` 注释),这里通过 `use` 引入,调用方式不变。
-
-/// `widget::Id`:main.rs 每帧 `interface.operate` 记录其屏幕
-/// `bounds`,鼠标点击时把全局光标 x 折算成字段内局部 x,再映射成字符下标
-/// (自绘输入没原生光标,点击定位全靠这个)。
-///
-/// `add_field_id` 原先是容器 id(挂 `container(field)` 上,由
-/// `CaptureFieldBounds` 捕获 bounds);添加框迁真 `text_editor` 后,id 转挂
-/// 到 `text_editor` 上,由 `text_editor::operate()` 的 `focusable` 钩子
-/// 汇报焦点,不再走 `container`/bounds。
+/// 任务内容编辑/添加框的真 `text_input`/`text_editor` 的 `widget::Id`。
+/// `add_field_id` 由 `CaptureAddFocus` 的 `focusable` 钩子匹配真实焦点态
+/// (见 `CaptureAddFocus`);`content_field_id` 挂任务内容编辑框的真
+/// `text_input` 上,由 `CaptureContentEditFocus` 匹配,供键盘路由问焦点、
+/// 鼠标点击与 `ContentEditStart` 触发后的一帧程序化聚焦使用。
 pub fn add_field_id() -> Id {
     Id::new("todo-add-field")
 }
@@ -876,31 +879,24 @@ pub fn content_field_id() -> Id {
 }
 
 /// 每帧 `interface.operate` 把字段屏幕 bounds 写进来,鼠标点击时读取。
-static CONTENT_FIELD_BOUNDS: std::sync::LazyLock<std::sync::Mutex<Option<Rectangle>>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+static CONTENT_EDIT_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
 
-/// 取走字段屏幕 bounds(消费式克隆),鼠标点击定位光标用。
-pub fn take_content_field_bounds() -> Option<Rectangle> {
-    *CONTENT_FIELD_BOUNDS.lock().unwrap()
+/// 读走(非消费)任务内容编辑框上一帧是否持有 iced 内部真实焦点,同
+/// `files::take_tree_edit_focused` 的桥接手法。
+pub fn take_content_edit_focused() -> bool {
+    *CONTENT_EDIT_FOCUSED.lock().unwrap()
 }
 
-/// 每帧 `interface.operate` 跑一遍,把命中 `content_field_id`
-/// 的字段屏幕 `bounds` 记进 `static`,供鼠标点击把全局光标 x 折算成字段内
-/// 局部 x、再映射成字符下标。id 挂在 `container(field)` 上
-/// (`iced_widget::container::Container::operate()`,`container.rs`),容器
-/// 汇报自己走的是 `operation.container(id, bounds)` 这个钩子,不是
-/// `operation.custom(..)`——之前误用 `custom` 导致这两个 bounds 从未被真正
-/// 写入过(`take_content_field_bounds` 恒 `None`,
-/// main.rs 里"按点击落点定位光标"的分支从未执行过)。`traverse` 也必须调用
-/// 传入的 `operate` 闭包才会继续递归子节点——`Row`/`Column` 等容器的
-/// `operate()` 实现把子节点遍历整个包在 `operation.traverse(&mut |op| {..})`
-/// 里,空实现会导致嵌在 `row!`/`column!` 里的容器整个被跳过(同
-/// `extensions::files::CaptureSearchFocus` 修复过的同款问题)。
-pub struct CaptureFieldBounds;
-impl Operation<()> for CaptureFieldBounds {
-    fn container(&mut self, id: Option<&Id>, bounds: Rectangle) {
-        if *id.unwrap_or(&content_field_id()) == content_field_id() {
-            *CONTENT_FIELD_BOUNDS.lock().unwrap() = Some(bounds);
+/// 每帧 `interface.operate()` 跑一遍,把命中 `content_field_id` 的真
+/// `text_input` 当前是否持有 iced 焦点写进 `CONTENT_EDIT_FOCUSED`。
+/// `traverse` 必须调用传入的 `operate` 闭包才能继续递归子节点(同
+/// `extensions::files::CaptureSearchFocus` 修复过的容器跳过问题)。
+pub struct CaptureContentEditFocus;
+impl Operation<()> for CaptureContentEditFocus {
+    fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
+        if id == Some(&content_field_id()) {
+            *CONTENT_EDIT_FOCUSED.lock().unwrap() = state.is_focused();
         }
     }
 
@@ -930,25 +926,6 @@ impl Operation<()> for CaptureAddFocus {
     fn traverse(&mut self, operate: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {
         operate(self);
     }
-}
-
-/// 把字段内的局部点击 x(逻辑像素)折算成字符下标,供鼠标点击定位光标。
-/// 近似:ASCII 字符宽 `font_size*0.6`、CJK 宽 `font_size`(等宽假设);点击落在
-/// 某字符中线以左就插入它前面。越界夹到 `[0, len]`。
-fn cursor_from_x(draft: &str, local_x: f32, font_size: f32) -> usize {
-    let mut x = 0.0f32;
-    for (i, ch) in draft.chars().enumerate() {
-        let w = if ch.is_ascii() {
-            font_size * 0.6
-        } else {
-            font_size
-        };
-        if local_x <= x + w / 2.0 {
-            return i;
-        }
-        x += w;
-    }
-    draft.chars().count()
 }
 
 /// `AddEvent(Submit)` 的写盘逻辑:把草稿追加成新任务行,空白草稿
@@ -984,7 +961,7 @@ fn commit_add_task(ws_state: &mut WorkspaceState, project_path: &std::path::Path
     ws_state.start_flash(flash_idx);
 }
 
-/// `ContentEvent(Submit)` 的写盘逻辑:把草稿改写进 `.dozer/todo.md` 里对应
+/// `ContentSubmit` 的写盘逻辑:把草稿改写进 `.dozer/todo.md` 里对应
 /// 的任务行(文本变了才写),并刷新列表。空白草稿(trim 后)丢弃不写。
 fn commit_content_edit(ws_state: &mut WorkspaceState, project_path: &std::path::Path) {
     let Some((idx, draft)) = ws_state.editing_content.clone() else {
@@ -1080,7 +1057,7 @@ fn first_weekday_of_month(y: i32, m: u32) -> u32 {
 }
 
 /// 处理除 `DispatchToExisting` 之外的消息,统一接收两块
-/// 状态——`Toggle`/`CalendarPick`/`ContentEvent` 需要读写
+/// 状态——`Toggle`/`CalendarPick`/`ContentSubmit` 需要读写
 /// `AppState`(不只是 Git Log/浏览器试点里"只有派发类消息碰跨领域状态"
 /// 那么简单,写计划前重新核对现有代码才发现这点)。
 pub fn update(
@@ -1241,8 +1218,8 @@ pub fn update(
             ws_state.close_calendar_popup();
         }
         Message::ContentEditStart(idx) => {
-            // 已经在编辑同一张卡:保持草稿与光标(重击只用于鼠标定位,不重置,
-            // 否则点一下就把刚改了一半的文字丢掉)。
+            // 已经在编辑同一张卡:保持草稿(重击只用于鼠标定位,不重置,
+            // 否则点一下就把刚改了一半的文字丢掉)。新卡进入编辑态则重置草稿。
             if ws_state
                 .editing_content
                 .as_ref()
@@ -1252,47 +1229,17 @@ pub fn update(
             }
             if let Some(item) = ws_state.items.get(idx) {
                 ws_state.editing_content = Some((idx, item.text.clone()));
-                // 光标落到行尾(与新增任务框进入编辑态一致)。
-                ws_state.content_cursor = item.text.chars().count();
+            }
+            // 点卡片文字这个点击落在旧的文字 `MouseArea` 上,真 `text_input`
+            // 下一帧才出现、不会自己拿聚焦,置位一次性聚焦标记。
+            ws_state.content_edit_focus_pending = true;
+        }
+        Message::ContentInput(s) => {
+            if let Some((_, draft)) = ws_state.editing_content.as_mut() {
+                *draft = s;
             }
         }
-        Message::ContentEvent(ev) => {
-            // 编辑态之外(失焦)的 `ContentEvent` 一律忽略,避免草稿被污染。
-            if ws_state.editing_content.is_none() {
-                return;
-            }
-            match ev {
-                AddrEvent::Text(s) => {
-                    if let Some((_, draft)) = ws_state.editing_content.as_mut() {
-                        insert_at_cursor(draft, &mut ws_state.content_cursor, &s);
-                    }
-                }
-                AddrEvent::Backspace => {
-                    if let Some((_, draft)) = ws_state.editing_content.as_mut() {
-                        delete_before_cursor(draft, &mut ws_state.content_cursor);
-                    }
-                }
-                AddrEvent::Cancel => ws_state.editing_content = None,
-                AddrEvent::Submit => commit_content_edit(ws_state, project_path),
-            }
-        }
-        Message::ContentCursorMove(dir) => {
-            if ws_state.editing_content.is_none() {
-                return;
-            }
-            if let Some((_, draft)) = &ws_state.editing_content {
-                move_cursor_in(draft, &mut ws_state.content_cursor, dir);
-            }
-        }
-        Message::ContentCursorAt(local_x) => {
-            if ws_state.editing_content.is_none() {
-                return;
-            }
-            if let Some((_, draft)) = &ws_state.editing_content {
-                ws_state.content_cursor =
-                    cursor_from_x(draft, local_x, byteui::theme::font::body() as f32);
-            }
-        }
+        Message::ContentSubmit => commit_content_edit(ws_state, project_path),
         Message::MarkdownEditStart => {
             let path = todo_path(project_path);
             ws_state.markdown_draft = std::fs::read_to_string(&path).unwrap_or_default();
@@ -1869,7 +1816,6 @@ fn todo_list_row<'a>(
         is_drag_source,
         hovered,
         editing_draft,
-        ws_state.content_cursor,
     )
 }
 
@@ -1911,8 +1857,7 @@ fn todo_card<'a>(
     is_drag_source: bool,
     hovered: bool,
     editing_draft: Option<&'a str>,
-    content_cursor: usize,
-) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let done = item.done;
 
     // ---- 顶部行：编号 + 日期徽章(calendar 图标 → 日历选择器)+ 状态文字 ----
@@ -2042,31 +1987,34 @@ fn todo_card<'a>(
     // 自绘输入框:卡片边框/背景/勾选/日期/指派全部保持原样,输入框尺寸对齐原
     // 内容(同字号 body + 同宽 Fill),仅加 #1c3440(=BORDER)描边、不另设背景
     // (透出卡片底),避免整卡被替换成另一个带金边的大框。
-    let label_area: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> =
+    let label_area: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         if let Some(draft) = editing_draft {
-            let field = if draft.is_empty() {
-                text("任务内容…")
-                    .size(byteui::theme::font::body())
-                    .color(byteui::theme::color::current().dim)
-            } else {
-                text(draft_with_caret(draft, content_cursor))
-                    .size(byteui::theme::font::body())
-                    .color(byteui::theme::color::current().cream)
-            };
-            container(field)
-                .width(Length::Fill)
-                .padding([10, 12])
-                .id(content_field_id())
-                .style(|_t: &iced_widget::Theme| container::Style {
-                    background: None,
-                    border: Border {
-                        color: byteui::theme::color::current().border,
-                        width: 1.0,
-                        radius: 4.0.into(),
-                    },
-                    ..container::Style::default()
-                })
-                .into()
+            // 真正的 iced `text_input`(`bare: true` 不画自身背景/描边,把外框
+            // 交回下面这个外层 `container` 复刻旧版"只有描边、不透底"的观感)。
+            // `content_field_id` 从旧版 `container` 挪到真 `text_input` 上,
+            // `CaptureContentEditFocus` 的 `focusable` 钩子才能认出它。
+            container(byteui::form::input_text::view(
+                "任务内容…",
+                draft,
+                false,
+                Some(content_field_id()),
+                false,
+                Some(Message::ContentSubmit),
+                true,
+                Message::ContentInput,
+            ))
+            .width(Length::Fill)
+            .padding([10, 12])
+            .style(|_t: &iced_widget::Theme| container::Style {
+                background: None,
+                border: Border {
+                    color: byteui::theme::color::current().border,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..container::Style::default()
+            })
+            .into()
         } else {
             MouseArea::new(container(label).width(Length::Fill))
                 .interaction(mouse::Interaction::Pointer)
@@ -3411,28 +3359,27 @@ mod tests {
             1,
             &root,
         );
-        assert!(ws_state.content_editing());
+        assert!(ws_state.editing_content.is_some());
+        // `ContentInput` 直接替换整个缓冲(原生 `text_input` 语义),不再有
+        // `ContentEvent(Text)` 的"在光标处插入"。
         update(
             &mut ws_state,
             &mut app_state,
-            Message::ContentEvent(AddrEvent::Text("新".to_string())),
+            Message::ContentInput("新".to_string()),
             1,
             &root,
         );
         update(
             &mut ws_state,
             &mut app_state,
-            Message::ContentEvent(AddrEvent::Submit),
+            Message::ContentSubmit,
             1,
             &root,
         );
-        assert!(!ws_state.content_editing());
+        assert!(ws_state.editing_content.is_none());
         let content = std::fs::read_to_string(todo_path(&root)).unwrap();
-        assert!(
-            content.contains("- [ ] 旧任务新\n"),
-            "内容应改写: {content}"
-        );
-        assert_eq!(ws_state.items[0].text, "旧任务新");
+        assert!(content.contains("- [ ] 新\n"), "内容应改写: {content}");
+        assert_eq!(ws_state.items[0].text, "新");
     }
 
     #[test]
@@ -3450,18 +3397,14 @@ mod tests {
         update(
             &mut ws_state,
             &mut app_state,
-            Message::ContentEvent(AddrEvent::Text("x".to_string())),
+            Message::ContentInput("x".to_string()),
             1,
             &root,
         );
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::ContentEvent(AddrEvent::Cancel),
-            1,
-            &root,
-        );
-        assert!(!ws_state.content_editing());
+        // 原生 `text_input` 没有 `Cancel` 消息:丢弃半输入走"失焦清空"路径
+        // (没有打开项目时 `App::set_todo_content_focused` 调 `cancel_content_edit`)。
+        ws_state.cancel_content_edit();
+        assert!(ws_state.editing_content.is_none());
         let content = std::fs::read_to_string(todo_path(&root)).unwrap();
         assert_eq!(content, "- [ ] 旧任务\n", "取消不该改动文件");
     }
