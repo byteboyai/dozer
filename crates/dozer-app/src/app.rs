@@ -9092,9 +9092,11 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
 pub(crate) const PANEL_TAB_MAX_W: f32 = 160.0;
 /// 面板 tab 内边距:横向留白给 hover 胶囊,纵向收紧以缩小高度。左侧单独
 /// 放大(原先与右侧同为 4,标题贴左缘太紧),右侧维持贴近关闭按钮的窄距。
+/// 上下 `PANEL_TAB_PAD_Y` 从 1 收到 0(验收反馈:tab 栏分割线要跟左栏
+/// header 分割线对齐,tab 栏整体降 2px 更贴近 header 那侧的基线)。
 const PANEL_TAB_PAD_LEFT: f32 = 10.0;
 const PANEL_TAB_PAD_X: f32 = 4.0;
-const PANEL_TAB_PAD_Y: f32 = 1.0;
+const PANEL_TAB_PAD_Y: f32 = 0.0;
 
 /// 受控 tooltip:iced 0.14 的 `Tooltip` 没有"延迟显示"开关(它一悬停就弹),
 /// 所以这里不靠 `Tooltip` 自带的 hover 检测,而是**仅在 `show` 为真时才把

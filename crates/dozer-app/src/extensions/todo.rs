@@ -2496,7 +2496,9 @@ fn todo_view_tabs<'a>(
         ),
     ]
     .spacing(4)
-    .padding([8, 20])
+    // 上下从 8 收到 4(验收反馈:这里不是 `panel_tab`,是独立实现的视图
+    // 切换 tab,原高度比左栏 header 分割线低了近 8px,对不齐)。
+    .padding([4, 20])
     .align_y(iced_widget::core::alignment::Vertical::Center)
     .into()
 }

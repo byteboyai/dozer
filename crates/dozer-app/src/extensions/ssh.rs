@@ -1154,9 +1154,13 @@ pub fn view<'a>(
     // 在面板最下方——footer-bar 不随主机列表滚动,始终可见(见 `ssh_footer_bar`)。
     let body = column![head, scroll, ssh_footer_bar()].spacing(0);
 
+    // 外层补 `project_pane` 同款 padding(此前完全没有,导致标题贴顶,
+    // 分割线比 Files/Project/Todo 左栏高了近 10px,跟隔壁终端 pane 的
+    // tab 栏分割线对不齐,见验收反馈)。
     let base = container(body)
         .width(width)
         .height(iced_widget::core::Length::Fill)
+        .padding(crate::theme::region::project_pane().padding)
         .style(
             move |_t: &iced_widget::Theme| iced_widget::container::Style {
                 background: Some(byteui::theme::color::current().bg.into()),
