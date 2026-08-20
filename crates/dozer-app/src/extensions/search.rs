@@ -4,7 +4,9 @@
 //! `docs/superpowers/specs/2026-08-12-tree-search-in-context-menu-design.md`。
 
 use grep_searcher::{Searcher, SearcherBuilder, Sink, SinkMatch};
-use iced_widget::core::{Border, Color, Element, Length};
+use iced_widget::core::widget::operation::Focusable;
+use iced_widget::core::widget::{Id, Operation};
+use iced_widget::core::{Border, Color, Element, Length, Rectangle};
 use iced_widget::{MouseArea, button, column, container, row, scrollable, stack, text};
 use std::path::{Path, PathBuf};
 
@@ -107,7 +109,13 @@ pub struct WorkspaceState {
     open: bool,
     scope: Option<Scope>,
     query: String,
-    query_editing: bool,
+    /// 查询框是否持有 iced 内部真实焦点,每帧由 `CaptureQueryFocus` 写入。
+    query_focused: bool,
+    /// 一次性标记:弹窗打开(`open()`)时置真——不再等用户点一下查询框才
+    /// 进编辑态,打开即自动聚焦,省掉这次迁移前就存在的多余一次点击
+    /// (原版 `QueryEditing(true)` 需要额外点击触发,见本计划 Architecture
+    /// 一节的说明)。
+    query_focus_pending: bool,
     running: bool,
     results: Vec<(String, Vec<SearchHit>)>,
     has_searched: bool,
@@ -118,8 +126,49 @@ impl WorkspaceState {
     pub fn is_open(&self) -> bool {
         self.open
     }
-    pub fn query_editing(&self) -> bool {
-        self.query_editing
+    /// 查询框是否持有 iced 真实焦点(main.rs 键盘路由用)。
+    pub fn query_focused(&self) -> bool {
+        self.query_focused
+    }
+
+    /// 每帧渲染循环读走 `CaptureQueryFocus` 查到的真实焦点态后写进来。
+    pub fn set_query_focused(&mut self, focused: bool) {
+        self.query_focused = focused;
+    }
+
+    /// 读走(消费式)一次性聚焦标记。
+    pub fn take_query_focus_pending(&mut self) -> bool {
+        std::mem::take(&mut self.query_focus_pending)
+    }
+}
+
+/// 查询框真 `text_input` 的 `widget::Id`,供 `CaptureQueryFocus` 匹配
+/// 真实焦点态、main.rs 程序化聚焦与键盘路由查询。
+pub fn query_field_id() -> Id {
+    Id::new("search-query-box")
+}
+
+static QUERY_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
+
+/// 读走(非消费)上一帧捕获到的查询框真 `text_input` 焦点态。
+pub fn take_query_focused() -> bool {
+    *QUERY_FOCUSED.lock().unwrap()
+}
+
+/// 每帧 `interface.operate()` 跑一遍,把命中 `query_field_id` 的真
+/// `text_input` 是否持有 iced 焦点写进 `QUERY_FOCUSED`。`traverse`
+/// 必须调用传入闭包(见 [[dozer-operation-traverse-noop-bug]])。
+pub struct CaptureQueryFocus;
+impl Operation<()> for CaptureQueryFocus {
+    fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
+        if id == Some(&query_field_id()) {
+            *QUERY_FOCUSED.lock().unwrap() = state.is_focused();
+        }
+    }
+
+    fn traverse(&mut self, operate: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {
+        operate(self);
     }
 }
 
@@ -128,12 +177,8 @@ impl WorkspaceState {
 pub enum Message {
     SearchOpen(Scope),
     SearchClose,
-    /// 自绘查询框的按键事件(main.rs 拦截层在编辑态下路由进来,同
-    /// `files::Message::SearchEvent` 的口径)。
-    QueryEvent(crate::workspace::AddrEvent),
-    /// 自绘输入框进入/离开编辑态(main.rs 据此决定是否把按键路由成
-    /// `QueryEvent` 而不是下钻到 PTY)。
-    QueryEditing(bool),
+    /// 查询框草稿变化(iced `text_input::on_input`)。
+    QueryInput(String),
     /// 回车 / 点"搜索"→ 启动异步搜索。
     QuerySubmit,
     /// 异步结果回灌。带 `project_id`,理由同数据库/SSH面板(异步结果不能假设
@@ -151,6 +196,9 @@ pub fn open(ws: &mut WorkspaceState, scope: Scope) {
     ws.has_searched = false;
     ws.results.clear();
     ws.error = None;
+    // 弹窗一打开就把查询框标记为"待聚焦",main.rs 渲染循环据此程序化聚焦
+    // ——省掉迁移前"开了弹窗还要点一下查询框才能打字"的多余一步。
+    ws.query_focus_pending = true;
 }
 
 pub fn update(
@@ -163,25 +211,7 @@ pub fn update(
     match msg {
         Message::SearchOpen(scope) => open(ws, scope),
         Message::SearchClose => ws.open = false,
-        Message::QueryEvent(ev) => {
-            // 只在查询框编辑态处理按键(点击盒子进入编辑态后,main.rs 才把
-            // 按键路由成这个变体);未进入时收到属异常,直接忽略。
-            if !ws.query_editing {
-                return;
-            }
-            match ev {
-                crate::workspace::AddrEvent::Text(s) => ws.query.push_str(&s),
-                crate::workspace::AddrEvent::Backspace => {
-                    ws.query.pop();
-                }
-                crate::workspace::AddrEvent::Cancel => ws.query_editing = false,
-                crate::workspace::AddrEvent::Submit => {
-                    ws.query_editing = false;
-                    update(ws, Message::QuerySubmit, project_id, handle, emit);
-                }
-            }
-        }
-        Message::QueryEditing(b) => ws.query_editing = b,
+        Message::QueryInput(s) => ws.query = s,
         Message::QuerySubmit => {
             let Some(scope) = ws.scope.clone() else {
                 return;
@@ -209,47 +239,27 @@ pub fn update(
                 Err(e) => ws.error = Some(e),
             }
         }
-        // `Pick` 由内核拦截映射为预览打开,不进这里;`QueryEditing` 由 view 的
-        // 输入框 toggle 事件驱动(见 `search_modal`),不在 update 里落地。
+        // `Pick` 由内核拦截映射为预览打开,不进这里。
         Message::Pick(_) => {}
     }
 }
 
-/// 自绘查询输入框(同 files 顶栏搜索框/树内行编辑):编辑态显示草稿 + "▏"光标,
-/// 非编辑态显示已提交关键字或占位提示。点击进入编辑态发 `QueryEditing(true)`。
+/// 查询框(真正的 iced `text_input`,经由 `byteui::form::input_text::view` 渲染)。
+/// 弹窗一打开就自动聚焦(见 `open()` 置位的一次性聚焦标记)。
 fn query_box(
     ws: &WorkspaceState,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let body = if ws.query.is_empty() && !ws.query_editing {
-        text("搜索内容…")
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().dim)
-    } else {
-        let caret = if ws.query_editing { "▏" } else { "" };
-        text(format!("{}{}", ws.query, caret))
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().cream)
-    };
-    let active = ws.query_editing || ws.running;
-    button(body)
-        .on_press(Message::QueryEditing(true))
-        .width(Length::Fill)
-        .padding([6, 8])
-        .style(move |_t: &iced_widget::Theme, _s| button::Style {
-            background: Some(byteui::theme::color::current().bg.into()),
-            border: Border {
-                color: if active {
-                    byteui::theme::color::current().gold
-                } else {
-                    byteui::theme::color::current().border
-                },
-                width: 1.0,
-                radius: 4.0.into(),
-            },
-            text_color: byteui::theme::color::current().cream,
-            ..button::Style::default()
-        })
-        .into()
+    let active = ws.query_focused() || ws.running;
+    byteui::form::input_text::view(
+        "搜索内容…",
+        &ws.query,
+        false,
+        Some(query_field_id()),
+        active,
+        Some(Message::QuerySubmit),
+        false,
+        Message::QueryInput,
+    )
 }
 
 /// 把绝对路径裁成相对项目根的展示路径;`project_root` 取不到(理论上只有没开
@@ -514,5 +524,40 @@ mod tests {
         let hits = search_scope(&Scope::File(f), "needle").unwrap();
         assert_eq!(hits.len(), 1);
         assert!(hits[0].0.ends_with("a.txt"));
+    }
+
+    #[test]
+    fn open_sets_query_focus_pending() {
+        let mut ws = WorkspaceState::default();
+        assert!(!ws.is_open());
+        let scope = Scope::Dir("/tmp".into());
+        open(&mut ws, scope);
+        assert!(ws.is_open());
+        assert!(
+            ws.query_focus_pending,
+            "弹窗一打开就应置查询框的待聚焦标记(打开即自动聚焦)"
+        );
+    }
+
+    #[test]
+    fn query_input_messages_replace_query() {
+        let mut ws = WorkspaceState::default();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::QueryInput("hello".into()),
+            1,
+            rt.handle(),
+            |_| {},
+        );
+        assert_eq!(ws.query, "hello");
+        update(
+            &mut ws,
+            Message::QueryInput("world".into()),
+            1,
+            rt.handle(),
+            |_| {},
+        );
+        assert_eq!(ws.query, "world", "每次给全量,不是追加");
     }
 }
