@@ -30,7 +30,6 @@ fn agent_to_str(a: AgentKind) -> &'static str {
     }
 }
 
-#[allow(dead_code)] // Task 7 用到后删掉
 fn agent_from_str(s: &str) -> AgentKind {
     match s {
         "claude" => AgentKind::Claude,
@@ -267,6 +266,97 @@ impl TranscriptStore {
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
+
+    /// 生产入口,内部用 `dozer_core::agent_paths::home_dir()`。
+    pub fn list_conversations(
+        &self,
+        cwd: &str,
+        agent: Option<AgentKind>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<dozer_core::protocol::ConversationSummary>> {
+        self.list_conversations_in(
+            &dozer_core::agent_paths::home_dir(),
+            cwd,
+            agent,
+            limit,
+            offset,
+        )
+    }
+
+    /// `home` 显式传入版本,测试用。
+    pub fn list_conversations_in(
+        &self,
+        home: &Path,
+        cwd: &str,
+        agent: Option<AgentKind>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<dozer_core::protocol::ConversationSummary>> {
+        use dozer_core::agent_paths::{
+            claude_project_dir_in, codebuddy_project_dir_in, opencode_project_dir_in,
+        };
+        let cwd_path = Path::new(cwd);
+        let candidate_dirs: Vec<(AgentKind, String)> = match agent {
+            Some(a) => {
+                let dir = match a {
+                    AgentKind::Claude => claude_project_dir_in(home, cwd_path),
+                    AgentKind::Codebuddy => codebuddy_project_dir_in(home, cwd_path),
+                    AgentKind::Opencode => opencode_project_dir_in(home, cwd_path),
+                    _ => return Ok(Vec::new()),
+                };
+                vec![(a, dir.to_string_lossy().into_owned())]
+            }
+            None => vec![
+                (
+                    AgentKind::Claude,
+                    claude_project_dir_in(home, cwd_path)
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+                (
+                    AgentKind::Codebuddy,
+                    codebuddy_project_dir_in(home, cwd_path)
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+                (
+                    AgentKind::Opencode,
+                    opencode_project_dir_in(home, cwd_path)
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+            ],
+        };
+
+        let conn = self.conn.lock().expect("db lock");
+        let mut out = Vec::new();
+        for (_, dir) in &candidate_dirs {
+            let mut stmt = conn.prepare(
+                "SELECT conversation_id, agent_kind, file_path, title, first_ts, last_ts, turn_count
+                 FROM conversations WHERE dir = ?1 ORDER BY last_ts DESC",
+            )?;
+            let rows = stmt.query_map([dir], |row| {
+                let agent_kind: String = row.get(1)?;
+                Ok(dozer_core::protocol::ConversationSummary {
+                    conversation_id: row.get(0)?,
+                    agent: agent_from_str(&agent_kind),
+                    file_path: row.get(2)?,
+                    title: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                    first_ts: row.get(4)?,
+                    last_ts: row.get(5)?,
+                    turn_count: row.get(6)?,
+                })
+            })?;
+            for r in rows {
+                out.push(r?);
+            }
+        }
+        out.sort_by_key(|c| std::cmp::Reverse(c.last_ts));
+        let start = (offset as usize).min(out.len());
+        let end = (start + limit as usize).min(out.len());
+        Ok(out[start..end].to_vec())
+    }
 }
 
 #[cfg(test)]
@@ -366,5 +456,66 @@ mod tests {
         // 清理"策略保留,不删除。
         let u1 = turns.iter().find(|t| t.content.contains("一(改过)"));
         assert!(u1.is_some(), "截断后重新解析应该覆盖 u1 的内容");
+    }
+
+    #[test]
+    fn list_conversations_merges_three_agents_sorted_by_last_ts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let cwd = std::path::Path::new("/proj");
+        let claude_dir = dozer_core::agent_paths::claude_project_dir_in(home.path(), cwd);
+        let codebuddy_dir = dozer_core::agent_paths::codebuddy_project_dir_in(home.path(), cwd);
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::create_dir_all(&codebuddy_dir).unwrap();
+        let f1 = fixture(
+            &claude_dir,
+            "a.jsonl",
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"claude 对话\"}}\n",
+        );
+        let f2 = fixture(
+            &codebuddy_dir,
+            "b.jsonl",
+            "{\"id\":\"m1\",\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"codebuddy 对话\"}]}\n",
+        );
+        store.ingest_session(AgentKind::Claude, &f1).unwrap();
+        store.ingest_session(AgentKind::Codebuddy, &f2).unwrap();
+
+        let list = store
+            .list_conversations_in(home.path(), "/proj", None, 10, 0)
+            .unwrap();
+        assert_eq!(list.len(), 2);
+        assert!(list.iter().any(|c| c.agent == AgentKind::Claude));
+        assert!(list.iter().any(|c| c.agent == AgentKind::Codebuddy));
+
+        let claude_only = store
+            .list_conversations_in(home.path(), "/proj", Some(AgentKind::Claude), 10, 0)
+            .unwrap();
+        assert_eq!(claude_only.len(), 1);
+        assert_eq!(claude_only[0].agent, AgentKind::Claude);
+    }
+
+    #[test]
+    fn list_conversations_respects_limit_and_offset() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let cwd = std::path::Path::new("/proj");
+        let claude_dir = dozer_core::agent_paths::claude_project_dir_in(home.path(), cwd);
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        for i in 0..3 {
+            let f = fixture(
+                &claude_dir,
+                &format!("s{i}.jsonl"),
+                &format!(
+                    "{{\"type\":\"user\",\"uuid\":\"u{i}\",\"message\":{{\"role\":\"user\",\"content\":\"第{i}条\"}}}}\n"
+                ),
+            );
+            store.ingest_session(AgentKind::Claude, &f).unwrap();
+        }
+        let page = store
+            .list_conversations_in(home.path(), "/proj", None, 2, 0)
+            .unwrap();
+        assert_eq!(page.len(), 2);
     }
 }
