@@ -2866,16 +2866,16 @@ git commit -m "refactor(dozer-app): usage::spawn_refresh 改走 dozer_client::Cl
 
 `load_home_recents`(727-764行)原本对每个最近项目调一次 `conversation::list_all_conversations(&cwd)`(本地直读三个目录);改成对每个最近项目调一次 `client.list_conversations(&cwd, None, ...)`。
 
-- [ ] **Step 1: 读现状**
+- [x] **Step 1: 读现状**
 
 `grep -n "fn load_home_recents" crates/dozer-app/src/homespace.rs` 定位精确行号,`Read` 该函数完整现状(含它在哪个 `spawn_blocking`/`handle.spawn` 里被调用,调用方怎么拿到 `Client`)。
 
-- [ ] **Step 2: 编译作为验证手段(胶水代码,同 Task 17 Step 2 理由,不强行补单元测试)**
+- [x] **Step 2: 编译作为验证手段(胶水代码,同 Task 17 Step 2 理由,不强行补单元测试)**
 
 Run: `cargo build -p dozer-app 2>&1 | grep -A5 "load_home_recents\|conversation::list_all_conversations"`
 Expected: 当前因 `conversation::list_all_conversations` 已删除而报错。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 把函数体里 `for meta in conversation::list_all_conversations(&cwd)` 这段(原本跑在 `spawn_blocking` 里,因为是同步文件 IO)改成走 `client.list_conversations(&cwd_str, None, 500, 0).await`(异步 IO,不再需要包 `spawn_blocking`——如果外层整个函数原本就是 `async move { ... }` 包在 `handle.spawn` 里,直接把内层 `tokio::task::spawn_blocking(move || { ... }).await` 这一层去掉,改成直接 `.await` 调用;`meta` 换成先拿 `ConversationSummary` 再 `ConversationMeta::from_summary` 转换)。具体改法示例(以调研报告给出的 727-764 行区间为参照,**实际改动以 Step 1 读到的真实代码结构为准**):
 
@@ -2911,12 +2911,12 @@ let recents = all;
 
 `client` 需要在函数签名/调用处能拿到(同 `usage.rs::spawn_refresh` 一样补一个 `&dozer_client::Client` 形参,调用方补实参)。
 
-- [ ] **Step 4: 编译验证**
+- [x] **Step 4: 编译验证**
 
 Run: `cargo build -p dozer-app 2>&1 | tee /tmp/build.log; grep -c "error\[" /tmp/build.log || true`
 Expected: 0(整个 `dozer-app` 现在应该能完整编译通过——这是本轮 dozer-app 侧改造的最后一个函数)。
 
-- [ ] **Step 5: 全量测试 + 提交**
+- [x] **Step 5: 全量测试 + 提交**
 
 Run: `cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets -- -D warnings && cargo fmt -- --check`
 
