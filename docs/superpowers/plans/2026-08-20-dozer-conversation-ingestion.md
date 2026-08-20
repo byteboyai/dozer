@@ -2569,7 +2569,7 @@ dozer-app 整体编译不通过，这是本次拆分的预期中间状态。"
 **Interfaces:**
 - Produces: 保留 `ReviewEntry`、`latest_model_mode_and_activity`(及其私有辅助函数)不变;新增 `review_entries_from_turns(turns: &[dozer_core::protocol::TurnRecord]) -> Vec<ReviewEntry>`;删除 `parse_transcript`/`parse_claude_shaped_jsonl`/`parse_codebuddy_shaped_jsonl`/`join_codebuddy_text_blocks`/`tool_summary`(已在 Task 3/4 迁到 `dozerd::transcripts::parse`)。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `transcript.rs` 的测试模块里新增:
 
@@ -2609,12 +2609,12 @@ dozer-app 整体编译不通过，这是本次拆分的预期中间状态。"
     }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cargo test -p dozer-app transcript::tests::review_entries_from_turns_maps_role_and_tools`
 Expected: 编译失败(函数不存在)。
 
-- [ ] **Step 3: 删除已迁移函数 + 新增转换函数**
+- [x] **Step 3: 删除已迁移函数 + 新增转换函数**
 
 删除 `tool_summary`、`parse_claude_shaped_jsonl`、`parse_codebuddy_shaped_jsonl`、`join_codebuddy_text_blocks`、`parse_transcript` 五个函数(及其专属测试:`parses_human_and_ai_turn_skipping_noise`、`empty_and_all_noise_yield_nothing`、`opencode_reuses_claude_shaped_parser`、`kilo_reuses_claude_shaped_parser`、`codex_and_qoder_yield_empty_until_schema_confirmed`、`codebuddy_parses_real_fixture_sample`、`codebuddy_joins_multiple_text_blocks_and_skips_other_kinds`、`codebuddy_user_row_without_input_text_block_yields_no_human_entry`、`codebuddy_empty_and_all_noise_yield_nothing`、`unknown_falls_back_to_claude_shaped_parser`——这些逻辑已经在 Task 3/4 的 `dozerd::transcripts::parse` 里有等价覆盖)。
 
@@ -2644,12 +2644,12 @@ pub fn review_entries_from_turns(turns: &[TurnRecord]) -> Vec<ReviewEntry> {
 }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozer-app transcript::`
 Expected: PASS(`review_entries_from_turns` 测试 + 保留下来的 `latest_model_mode_and_activity` 系列测试全绿)
 
-- [ ] **Step 5: 提交(dozer-app 整体仍可能因 workspace.rs/usage.rs/homespace.rs 未改而编译失败,预期中)**
+- [x] **Step 5: 提交(dozer-app 整体仍可能因 workspace.rs/usage.rs/homespace.rs 未改而编译失败,预期中)**
 
 ```bash
 git add crates/dozer-app/src/transcript.rs
