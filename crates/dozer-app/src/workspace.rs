@@ -1029,21 +1029,24 @@ impl Workspace {
         }
     }
 
-    /// 异步扫当前项目的对话目录 → ConversationsRefreshed（GUI 侧 spawn_blocking；P1j）。
+    /// 异步查当前项目的对话列表 → ConversationsRefreshed（改走 dozerd，P1j 起）。
     pub(crate) fn spawn_conversations_refresh(&self, io: &ShellIo) {
-        let Some(p) = &self.project else {
+        let Some(project) = self.project.as_ref() else {
             return;
         };
-        let project_id = p.id;
-        let cwd = PathBuf::from(&p.path);
-        let cwd_for_log = cwd.clone();
+        let project_id = project.id;
+        let cwd = PathBuf::from(&project.path);
+        let client = io.client.clone();
         let proxy = io.proxy.clone();
         io.handle.spawn(async move {
-            let list =
-                tokio::task::spawn_blocking(move || conversation::list_all_conversations(&cwd))
-                    .await
-                    .unwrap_or_default();
-            tracing::debug!(n = list.len(), cwd = %cwd_for_log.display(), "对话列表扫描完成");
+            let list: Vec<crate::conversation::ConversationMeta> = client
+                .list_conversations(&cwd.to_string_lossy(), None, 500, 0)
+                .await
+                .unwrap_or_default()
+                .iter()
+                .map(crate::conversation::ConversationMeta::from_summary)
+                .collect();
+            tracing::debug!(n = list.len(), cwd = %cwd.display(), "对话列表查询完成");
             let _ = proxy.send_event(Message::ConversationsRefreshed(project_id, list));
         });
     }
@@ -1106,26 +1109,32 @@ impl Workspace {
             .collect()
     }
 
-    /// 异步读 transcript + 解析 → ReviewLoaded（GUI 侧 spawn_blocking；P1i/P1j/P2b 按源）。
+    /// 异步查回合明细 → ReviewLoaded（改走 dozerd；P1i/P1j/P2b 按源）。
     pub(crate) fn spawn_review_load(
         &self,
         io: &ShellIo,
         source: ReviewSource,
         path: String,
-        agent: AgentKind,
+        _agent: AgentKind,
     ) {
-        let Some(project_id) = self.project_id() else {
+        let Some(project) = self.project.as_ref() else {
             return;
         };
+        let project_id = project.id;
+        let client = io.client.clone();
         let proxy = io.proxy.clone();
+        // conversation_id 是文件名(不含扩展名)——与 dozerd 摄取时的派生
+        // 规则一致(见 TranscriptStore::ingest_session)。
+        let conversation_id = std::path::Path::new(&path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
         io.handle.spawn(async move {
-            let result = tokio::task::spawn_blocking(move || {
-                std::fs::read_to_string(&path)
-                    .map(|s| transcript::parse_transcript(agent, &s))
-                    .map_err(|e| format!("无法读取会话记录: {e}"))
-            })
-            .await
-            .unwrap_or_else(|e| Err(format!("解析任务失败: {e}")));
+            let result = client
+                .get_conversation_turns(&conversation_id, -1, 10_000)
+                .await
+                .map(|turns| crate::transcript::review_entries_from_turns(&turns))
+                .map_err(|e| e.to_string());
             let _ = proxy.send_event(Message::ReviewLoaded(project_id, source, result));
         });
     }
