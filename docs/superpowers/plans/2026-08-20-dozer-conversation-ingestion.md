@@ -2933,7 +2933,7 @@ git commit -m "refactor(dozer-app): load_home_recents 改走 dozer_client::Clien
 
 **Interfaces:** 无。
 
-- [ ] **Step 1: 全 workspace 构建与测试**
+- [x] **Step 1: 全 workspace 构建与测试**
 
 ```bash
 cargo build
