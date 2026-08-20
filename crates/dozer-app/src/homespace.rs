@@ -8,7 +8,7 @@
 use crate::app::{
     App, HoverId, Message, PaneCorner, RailButton, rail_icon_button, zone_pane_border,
 };
-use crate::conversation::{self, ConversationMeta};
+use crate::conversation::ConversationMeta;
 use crate::delivery;
 use crate::extensions::browser;
 use crate::theme;
@@ -717,47 +717,60 @@ fn home_recent_conversations_card(
 
 /// D4 纯 IO 内核：对给定项目列表分别取"最近改动的文件"(git 改动/未跟踪 +
 /// fs mtime)与"最近的对话"(三个 agent 来源已聚合、按 mtime 倒序)，跨项目
-/// 合并后各自按时间倒序，取前 4 条 / 前 3 条(对齐 Figma 卡片行数)。
-///
-/// 必须在 `spawn_blocking` 里跑，不能在 UI 线程直呼——内部既有阻塞 git
-/// 子进程调用，也有阻塞文件系统调用。签名固定(`&[ProjectInfo]` 输入，两个
-/// `Vec` 输出)方便 headless 单测：不需要 daemon 连接或 winit `EventLoopProxy`。
-/// `pub(crate)`——`workspace.rs` 的 `Message::TopBarHome` 处理器在
-/// `spawn_blocking` 闭包里直接调用它。
-pub(crate) fn load_home_recents(
+/// 必须在异步上下文里跑——内部既有阻塞 git 子进程调用（走 `spawn_blocking`），
+/// 也有走 `dozer_client` 的异步会话查询。签名固定
+/// (`&Client` + `&[ProjectInfo]` 输入，两个 `Vec` 输出)方便 headless 单测。
+/// `pub(crate)`——`app.rs` 的 `top_bar_home` 在 `handle.spawn` 的 `async move`
+/// 里直接 `.await` 它。
+pub(crate) async fn load_home_recents(
+    client: &dozer_client::Client,
     projects: &[ProjectInfo],
 ) -> (Vec<HomeRecentFile>, Vec<HomeRecentConversation>) {
-    let mut files: Vec<HomeRecentFile> = Vec::new();
+    let projects_owned = projects.to_vec();
+    let files = tokio::task::spawn_blocking(move || {
+        let mut files: Vec<HomeRecentFile> = Vec::new();
+        for p in &projects_owned {
+            let cwd = PathBuf::from(&p.path);
+            if let Some(repo) = delivery::repo_root(&cwd) {
+                for (path, _status) in delivery::file_statuses(&repo) {
+                    let Ok(meta) = std::fs::metadata(&path) else {
+                        continue; // 路径已在磁盘消失(用户手动删了),静默跳过(spec §4)
+                    };
+                    let modified_ms = meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    files.push(HomeRecentFile {
+                        path,
+                        project_name: p.name.clone(),
+                        modified_ms,
+                    });
+                }
+            }
+        }
+        files
+    })
+    .await
+    .unwrap_or_default();
+    let mut files = files;
+    files.sort_by_key(|f| std::cmp::Reverse(f.modified_ms));
+    files.truncate(4);
+
     let mut convs: Vec<HomeRecentConversation> = Vec::new();
     for p in projects {
         let cwd = PathBuf::from(&p.path);
-        if let Some(repo) = delivery::repo_root(&cwd) {
-            for (path, _status) in delivery::file_statuses(&repo) {
-                let Ok(meta) = std::fs::metadata(&path) else {
-                    continue; // 路径已在磁盘消失(用户手动删了),静默跳过(spec §4)
-                };
-                let modified_ms = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0);
-                files.push(HomeRecentFile {
-                    path,
+        let cwd_str = cwd.to_string_lossy().into_owned();
+        if let Ok(summaries) = client.list_conversations(&cwd_str, None, 50, 0).await {
+            for s in summaries {
+                convs.push(HomeRecentConversation {
                     project_name: p.name.clone(),
-                    modified_ms,
+                    meta: ConversationMeta::from_summary(&s),
                 });
             }
         }
-        for meta in conversation::list_all_conversations(&cwd) {
-            convs.push(HomeRecentConversation {
-                project_name: p.name.clone(),
-                meta,
-            });
-        }
     }
-    files.sort_by_key(|f| std::cmp::Reverse(f.modified_ms));
-    files.truncate(4);
     convs.sort_by_key(|c| std::cmp::Reverse(c.meta.modified_ms));
     convs.truncate(3);
     (files, convs)
@@ -777,15 +790,19 @@ mod tests {
         assert_eq!(HomeRightView::default(), HomeRightView::Browser);
     }
 
-    #[test]
-    fn load_home_recents_empty_input_returns_empty_vecs() {
-        let (files, convs) = load_home_recents(&[]);
+    fn client_for_test() -> dozer_client::Client {
+        dozer_client::Client::new(std::path::PathBuf::from("/tmp/dz-home-rec-test.sock"))
+    }
+
+    #[tokio::test]
+    async fn load_home_recents_empty_input_returns_empty_vecs() {
+        let (files, convs) = load_home_recents(&client_for_test(), &[]).await;
         assert!(files.is_empty());
         assert!(convs.is_empty());
     }
 
-    #[test]
-    fn load_home_recents_merges_and_sorts_across_projects() {
+    #[tokio::test]
+    async fn load_home_recents_merges_and_sorts_across_projects() {
         let proj_a = tempfile::tempdir().unwrap();
         std::process::Command::new("git")
             .args(["init", "-q"])
@@ -815,15 +832,15 @@ mod tests {
             },
         ];
 
-        let (files, convs) = load_home_recents(&projects);
+        let (files, convs) = load_home_recents(&client_for_test(), &projects).await;
         assert_eq!(files.len(), 1, "只有项目 A(git repo)贡献一条改动文件");
         assert_eq!(files[0].project_name, "proj-a");
         assert!(files[0].path.ends_with("a.txt"));
-        assert!(convs.is_empty(), "两个项目都没有可达的 agent 对话目录");
+        assert!(convs.is_empty(), "两个项目都没有 daemon 返回的会话");
     }
 
-    #[test]
-    fn load_home_recents_truncates_files_to_top_4() {
+    #[tokio::test]
+    async fn load_home_recents_truncates_files_to_top_4() {
         let proj = tempfile::tempdir().unwrap();
         std::process::Command::new("git")
             .args(["init", "-q"])
@@ -841,7 +858,7 @@ mod tests {
             created_ms: 0,
             updated_ms: 0,
         }];
-        let (files, _convs) = load_home_recents(&projects);
+        let (files, _convs) = load_home_recents(&client_for_test(), &projects).await;
         assert_eq!(
             files.len(),
             4,

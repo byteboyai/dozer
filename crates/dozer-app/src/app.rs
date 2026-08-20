@@ -6010,11 +6010,10 @@ impl App {
         self.home_project_search_cursor = 0;
         self.home_right_view = homespace::HomeRightView::default();
         let projects: Vec<ProjectInfo> = self.recent_projects.iter().take(5).cloned().collect();
+        let client = self.client.clone();
         let proxy = self.proxy.clone();
         self.handle.spawn(async move {
-            let (files, convs) = tokio::task::spawn_blocking(move || load_home_recents(&projects))
-                .await
-                .unwrap_or_default();
+            let (files, convs) = load_home_recents(&client, &projects).await;
             let _ = proxy.send_event(Message::HomeRecentsLoaded(files, convs));
         });
     }

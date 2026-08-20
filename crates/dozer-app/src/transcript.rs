@@ -175,9 +175,18 @@ mod tests {
         ];
         let entries = review_entries_from_turns(&turns);
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0], ReviewEntry::Human { text: "你好".into() });
+        assert_eq!(
+            entries[0],
+            ReviewEntry::Human {
+                text: "你好".into()
+            }
+        );
         match &entries[1] {
-            ReviewEntry::AiTurn { text, tools, thinking } => {
+            ReviewEntry::AiTurn {
+                text,
+                tools,
+                thinking,
+            } => {
                 assert_eq!(text, "回复");
                 assert_eq!(tools, &vec!["Edit README.md".to_string()]);
                 assert!(*thinking);
