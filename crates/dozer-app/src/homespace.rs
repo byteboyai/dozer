@@ -71,24 +71,9 @@ pub(crate) fn home_page<'a>(
 
     // 图标栏要贯穿到页面最底部(覆盖 footbar 上方),因此 footbar 放进中间
     // 列、与三栏面板同行,左右图标栏作为本 row 的兄弟节点一起吃到 Fill 高度。
-    // footbar 最左嵌「＋新增项目」按钮(甲方动作,奶油色)——按钮容器与
-    // footbar 同底色(theme::region::background)、同高,拼成一条连续的底栏。
-    let footbar = row![
-        container(home_new_project_button())
-            .height(Length::Fixed(byteui::theme::geometry::footbar_height()))
-            .align_y(iced_widget::core::Alignment::Center)
-            .padding(Padding {
-                top: 0.0,
-                right: 4.0,
-                bottom: 0.0,
-                left: 12.0,
-            })
-            .style(move |_t: &iced_widget::Theme| container::Style {
-                background: Some(theme::region::background().into()),
-                ..container::Style::default()
-            }),
-        crate::extensions::footbar::view(footbar_state).map(Message::Footbar),
-    ];
+    // 「＋新增项目」按钮已移到"项目列表"面板的 panel footbar(见
+    // `home_project_list_view`),这里只保留全局状态 footbar。
+    let footbar = row![crate::extensions::footbar::view(footbar_state).map(Message::Footbar),];
     let body = row![
         home_left_icon_rail(app),
         column![
@@ -295,8 +280,8 @@ fn home_right_zone(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
 
 /// 首页左栏"项目列表" pane(`HomeLeftView::ProjectList`):搜索框占位(D7)、
 /// 最近项目卡(取 `app.recent_projects` 按 `updated_ms` 排序后分页,首屏
-/// 5 条、"更多..."逐页展开)。"＋新增项目"按钮不在这里——已移到页面底部
-/// footbar 最左端(`home_new_project_button`)。不画品牌行——顶栏
+/// 5 条、"更多..."逐页展开)。"＋新增项目"按钮放在本面板的 panel footbar
+/// 底部(`home_new_project_button`),不在页面全局 footbar。不画品牌行——顶栏
 /// 本身已有 `dozer_home_tab` 品牌页签,这里重复画属于视觉冗余。
 /// 通用面板标题组件:图标 + 标题(金色 `subtitle` 字号),标题底部一条 1px
 /// panel 标题与图标用的强调色(暖金 `#dcc9a3`)——刻意区别于甲方动作专属的
@@ -427,18 +412,37 @@ fn home_project_list_view(
     // 的结果集算,不是全量 `recent_projects`。
     let filtered = filter_projects_by_search(&app.recent_projects, &app.home_project_search);
 
+    // 面板底部 panel footbar:放「＋新增项目」按钮(甲方动作),钉在面板最下方。
+    // 空列表 / 搜索无结果时也照样显示,空态下用垂直 filler 把按钮顶到面板底。
+    let panel_footbar: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        container(home_new_project_button())
+            .width(Length::Fill)
+            .height(Length::Fixed(byteui::theme::geometry::footbar_height()))
+            .align_y(iced_widget::core::Alignment::Center)
+            .style(|_t: &iced_widget::Theme| container::Style {
+                border: Border {
+                    color: theme::homespace_color::border(),
+                    width: 1.0,
+                    radius: 0.0.into(),
+                },
+                ..container::Style::default()
+            })
+            .into();
+
     if app.recent_projects.is_empty() {
         col = col.push(
             text("还没有项目")
                 .size(theme::homespace_font::body())
                 .color(theme::homespace_color::dim()),
         );
+        col = col.push(iced_widget::Space::new().height(Length::Fill));
     } else if filtered.is_empty() {
         col = col.push(
             text("没有匹配的项目")
                 .size(theme::homespace_font::body())
                 .color(theme::homespace_color::dim()),
         );
+        col = col.push(iced_widget::Space::new().height(Length::Fill));
     } else {
         let visible = paginate_recent_projects(&filtered, app.home_project_pages);
         let more_remain = visible.len() < filtered.len();
@@ -514,6 +518,8 @@ fn home_project_list_view(
                 .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
         );
     }
+
+    col = col.push(panel_footbar);
 
     // 与外边框保持标准内边距:外层 `zone_box` 只留 1px 圆角裁切余量,内容
     // 若直接贴边会顶到圆角边框,因此这里补一层标准面板内距(与 project_pane

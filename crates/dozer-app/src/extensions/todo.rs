@@ -1451,10 +1451,11 @@ pub fn view<'a>(
     (sidebar_pane, content_pane)
 }
 
-/// 新增任务框高度上/下限(逻辑像素)。下限即默认高(约 3 行正文);上限让
-/// 列表区至少留出约 140px,且 `app.rs::RowDrag` 的 `TodoAddGrow` 分支会再
-/// 按窗口高夹一道,这里给的是硬上限(窗口极矮时由那里兜底)。
-pub const ADD_INPUT_MIN_HEIGHT: f32 = 56.0;
+/// 新增任务框高度上/下限(逻辑像素)。下限即默认高(约 5 行正文,保证多行
+/// 任务内容可见);上限让列表区至少留出约 140px,且 `app.rs::RowDrag` 的
+/// `TodoAddGrow` 分支会再按窗口高夹一道,这里给的是硬上限(窗口极矮时由
+/// 那里兜底)。
+pub const ADD_INPUT_MIN_HEIGHT: f32 = 120.0;
 pub const ADD_INPUT_MAX_HEIGHT: f32 = 400.0;
 
 /// 顶部宽 8px 的细窄拖拽手柄:把光标变 `ResizingRow`,按下经
@@ -2098,7 +2099,7 @@ fn todo_card<'a>(
             };
             container(field)
                 .width(Length::Fill)
-                .padding([6, 8])
+                .padding([10, 12])
                 .id(content_field_id())
                 .style(|_t: &iced_widget::Theme| container::Style {
                     background: None,
