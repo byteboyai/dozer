@@ -2073,10 +2073,10 @@ impl Workspace {
         self.files.tree_edit_is_some()
     }
 
-    /// 文件树搜索框是否处于自绘编辑态(main.rs 键盘路由用):为真时按键改
-    /// 路由成 `files::Message::SearchEvent`,不再喂 PTY。
-    pub fn search_editing(&self) -> bool {
-        self.files.search_editing()
+    /// 文件树搜索框是否持有 iced 真实焦点(main.rs 键盘路由用):为真时按键
+    /// 放行给标准 iced 事件管线,交真正的 text_input 自己处理。
+    pub fn files_search_focused(&self) -> bool {
+        self.files.search_focused()
     }
 
     /// 右键文件树"搜索"弹窗是否打开(main.rs 键盘路由/App view 浮层用)。
@@ -2112,7 +2112,6 @@ impl Workspace {
         }
         self.acceptance.clear_comment_editing();
         self.files.cancel_tree_edit();
-        self.files.cancel_search_edit();
         self.todo.cancel_search_edit();
         self.todo.cancel_add_edit();
         self.todo.cancel_drag();

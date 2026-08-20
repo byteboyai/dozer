@@ -1021,6 +1021,18 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
+            // Files 搜索框(Stage 2,唯一已迁移到 iced 原生 text_input 的
+            // 字段):不再手工路由成 `SearchEvent`,命中就直接放行给标准
+            // iced 事件转换管线,交真正的 text_input 自己处理光标/选区/
+            // IME(同上面 Preview 原生编辑器那道闸门的手法)。必须放在下面
+            // `to_self_drawn_input` 判断之前——未来某个自绘面板与它同时报
+            // "编辑态为真"时,不能让自绘分支抢先吞掉按键;也必须在 ⌘ 组合键
+            // 判断(下方 `modifiers.super_key()` 分支)之前,否则 ⌘V 粘贴会
+            // 被错误地转发进终端而不是交给 text_input 自己内置的粘贴处理。
+            if app.files_search_focused() {
+                return;
+            }
+
             // 浏览器地址栏 / 验收意见 / 项目树行内编辑态 / 项目名称编辑 /
             // 文件树搜索框 / 右键"搜索"弹窗查询框 / Todo 搜索框、新增任务框、
             // 任务内容编辑、MARKDOWN 整文件编辑:键盘直达自绘输入(不经 keymap、
@@ -1030,7 +1042,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             let to_comment = app.acceptance_comment_editing();
             let to_tree_edit = app.tree_editing();
             let to_project_name = app.project_name_editing();
-            let to_search = app.search_editing();
             let to_search_popup = app.search_popup_editing();
             let to_todo_search = app.todo_search_editing();
             let to_todo_add = app.todo_add_editing();
@@ -1041,7 +1052,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 || to_comment
                 || to_tree_edit
                 || to_project_name
-                || to_search
                 || to_search_popup
                 || to_todo_search
                 || to_todo_add
@@ -1049,13 +1059,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 || to_todo_markdown
                 || to_home_project_search;
             // 优先级:右键"搜索"弹窗查询框 > 浏览器地址栏 > 验收意见 > 项目树
-            // 编辑 > 项目名称编辑 > 文件树搜索框 > Todo 面板搜索框 > Todo
-            // 新增任务框 > Todo 任务内容编辑 > Todo MARKDOWN 编辑 > 首页项目
-            // 搜索框(多者同真时罕见,谁先建的编辑态谁优先没有实际冲突场景,
-            // 这个顺序只是一个确定性兜底——首页项目搜索框排最后是因为它跟
-            // 前面所有工作区内的编辑态天然互斥,不可能同时为真,顺序对它
-            // 没有实际影响)。⌘V 粘贴与逐字符输入共用这条链,保证两条路径
-            // 落进同一个自绘输入。
+            // 编辑 > 项目名称编辑 > Todo 面板搜索框 > Todo 新增任务框 > Todo
+            // 任务内容编辑 > Todo MARKDOWN 编辑 > 首页项目搜索框(文件树搜索框
+            // 已迁 iced 原生 text_input,走上面新增的独立放行闸门,不再在此列;
+            // 多者同真时罕见,谁先建的编辑态谁优先没有实际冲突场景,这个顺序
+            // 只是一个确定性兜底——首页项目搜索框排最后是因为它跟前面所有
+            // 工作区内的编辑态天然互斥,不可能同时为真,顺序对它没有实际影响)。
+            // ⌘V 粘贴与逐字符输入共用这条链,保证两条路径落进同一个自绘输入。
             let addr_message = |ev: workspace::AddrEvent| -> Message {
                 if to_search_popup {
                     Message::Search(extensions::search::Message::QueryEvent(ev))
@@ -1067,8 +1077,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     Message::Files(extensions::files::Message::EditEvent(ev))
                 } else if to_project_name {
                     Message::Project(extensions::project::Message::NameEditEvent(ev))
-                } else if to_search {
-                    Message::Files(extensions::files::Message::SearchEvent(ev))
                 } else if to_todo_search {
                     Message::Todo(extensions::todo::Message::SearchEvent(ev))
                 } else if to_todo_add {
@@ -2198,6 +2206,31 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     );
                                 }
 
+                                // Files 搜索框(Stage 2,唯一已迁移到 iced
+                                // 原生 text_input 的字段)每帧查一遍真实
+                                // 焦点态——旧版靠 `SearchEditStart` 手动
+                                // 置位的 bool 已随迁移废弃,main.rs 键盘
+                                // 路由改成"每帧问 iced 真相"而不是自己维护
+                                // 一份可能脱节的镜像。切走 Files 左栏时显式
+                                // 记 false,避免残留上一次的 true(Files 不
+                                // 可见时 view() 里没有这个 text_input,
+                                // CaptureSearchFocus 找不到匹配 id,不会自己
+                                // 覆盖成 false)。只把结果存进局部量,真正写
+                                // 回 `app` 要等 `interface` 释放对 `app` 的
+                                // 不可变借用之后(见下方 `into_cache` 之后),
+                                // 否则这里借用 `app.view()` 建出的 `interface`
+                                // 还活着,不能同时再可变借用 `app`。
+                                let files_focused =
+                                    if matches!(app.left_view(), crate::app::PanelKind::Files) {
+                                        interface.operate(
+                                            renderer,
+                                            &mut extensions::files::CaptureSearchFocus,
+                                        );
+                                        extensions::files::take_search_focused()
+                                    } else {
+                                        false
+                                    };
+
                                 // Update the mouse cursor
                                 if let user_interface::State::Updated {
                                     mouse_interaction, ..
@@ -2231,6 +2264,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     *cursor,
                                 );
                                 *cache = interface.into_cache();
+
+                                // `interface` 已被消费,对 `app` 的不可变借用
+                                // 随之释放——之前算好的 Files 搜索框真实焦点
+                                // 现在才写回工作区(供下一帧键盘路由
+                                // `files_search_focused` 消费)。每帧都重写,
+                                // 即使值没变也幂等,无副作用。
+                                app.set_files_search_focused(files_focused);
 
                                 // 关闭掉 `iced_graphics` 的 `web-colors` 后(见根
                                 // Cargo.toml 的 `[patch]`: 阻断 umbrella `iced`

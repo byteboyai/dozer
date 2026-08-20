@@ -3230,11 +3230,20 @@ impl App {
         self.active_workspace().is_some_and(|ws| ws.tree_editing())
     }
 
-    /// 文件树搜索框是否处于自绘编辑态(main.rs 键盘路由用)。为真时按键改
-    /// 路由成 `files::Message::SearchEvent`,不再喂 PTY。
-    pub fn search_editing(&self) -> bool {
+    /// 文件树搜索框是否持有 iced 真实焦点(main.rs 键盘路由用)。为真时按键
+    /// 放行给标准 iced 事件管线,交真正的 text_input 自己处理。
+    pub fn files_search_focused(&self) -> bool {
         self.active_workspace()
-            .is_some_and(|ws| ws.search_editing())
+            .is_some_and(|ws| ws.files_search_focused())
+    }
+
+    /// 每帧渲染循环调用:把 `extensions::files::CaptureSearchFocus` 问到
+    /// 的真实焦点态写进当前工作区(`main.rs` 键盘路由随后读
+    /// `files_search_focused` 消费)。
+    pub fn set_files_search_focused(&mut self, focused: bool) {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.files.set_search_focused(focused);
+        }
     }
 
     /// 右键文件树"搜索"弹窗是否打开(main.rs 键盘路由 + App view 浮层用)。
