@@ -1560,7 +1560,7 @@ fn bookmarks_toggle_button(
     state: &State,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     icons::icon_button_entry(
-        icons::IconKind::Bookmark,
+        icons::IconKind::FolderBookmark,
         byteui::theme::icon_size::row(),
         false,
         false,
