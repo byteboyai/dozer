@@ -92,6 +92,29 @@ fn maybe_ingest_from_hook_data(
     }
 }
 
+/// 会话状态转入 `Idle`/`AwaitingInput` 时的兜底摄取——替代定时轮询,
+/// 复用现有状态机,只在"这一刻状态真的变了"才触发,同态重复事件不重复
+/// 摄取(避免每次 hook 事件都无谓地读一次文件)。
+fn maybe_ingest_on_state_transition(
+    transcripts: &crate::transcripts::TranscriptStore,
+    agent: dozer_core::protocol::AgentKind,
+    old_state: dozer_core::protocol::AgentState,
+    new_state: dozer_core::protocol::AgentState,
+    transcript_path: Option<&str>,
+) {
+    use dozer_core::protocol::AgentState::{AwaitingInput, Idle};
+    if old_state == new_state {
+        return;
+    }
+    if !matches!(new_state, Idle | AwaitingInput) {
+        return;
+    }
+    let Some(path) = transcript_path else { return };
+    if let Err(e) = transcripts.ingest_session(agent, std::path::Path::new(path)) {
+        tracing::warn!(error = %e, %path, "待命态兜底摄取失败");
+    }
+}
+
 /// spec P1e D6：hook 事件名 → 四态映射；未知事件不改状态。
 pub fn agent_state_for(event: &str) -> Option<dozer_core::protocol::AgentState> {
     use dozer_core::protocol::AgentState::*;
@@ -189,7 +212,18 @@ async fn handle_conn(
                                         s.set_transcript_path(tp);
                                     }
                                     match agent_state_for(&event) {
-                                        Some(state) => s.set_agent_state(state, &event, ts_ms),
+                                        Some(state) => {
+                                            let old_state = s.info().agent_state;
+                                            s.set_agent_state(state, &event, ts_ms);
+                                            let tp = s.info().transcript_path;
+                                            maybe_ingest_on_state_transition(
+                                                &transcripts,
+                                                agent,
+                                                old_state,
+                                                state,
+                                                tp.as_deref(),
+                                            );
+                                        }
                                         None => tracing::debug!(%event, "未知 hook 事件，不改状态"),
                                     }
                                     maybe_ingest_from_hook_data(&transcripts, agent, &data);
@@ -430,5 +464,61 @@ mod tests {
         let turns = transcripts.get_conversation_turns("s1", -1, 10).unwrap();
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].content, "你好");
+    }
+
+    #[test]
+    fn idle_state_transition_triggers_ingest_backstop() {
+        use dozer_core::protocol::AgentState;
+        let tmp = tempfile::tempdir().unwrap();
+        let transcripts = std::sync::Arc::new(
+            crate::transcripts::TranscriptStore::open(&tmp.path().join("t.db")).unwrap(),
+        );
+        let file = tmp.path().join("s1.jsonl");
+        std::fs::write(
+            &file,
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"待命态触发\"}}\n",
+        )
+        .unwrap();
+
+        maybe_ingest_on_state_transition(
+            &transcripts,
+            dozer_core::protocol::AgentKind::Claude,
+            AgentState::Running,
+            AgentState::AwaitingInput,
+            Some(file.to_string_lossy().as_ref()),
+        );
+
+        let turns = transcripts.get_conversation_turns("s1", -1, 10).unwrap();
+        assert_eq!(turns.len(), 1);
+    }
+
+    #[test]
+    fn same_state_repeat_does_not_trigger_ingest() {
+        use dozer_core::protocol::AgentState;
+        let tmp = tempfile::tempdir().unwrap();
+        let transcripts = std::sync::Arc::new(
+            crate::transcripts::TranscriptStore::open(&tmp.path().join("t.db")).unwrap(),
+        );
+        let file = tmp.path().join("s1.jsonl");
+        std::fs::write(
+            &file,
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"x\"}}\n",
+        )
+        .unwrap();
+
+        maybe_ingest_on_state_transition(
+            &transcripts,
+            dozer_core::protocol::AgentKind::Claude,
+            AgentState::Idle,
+            AgentState::Idle,
+            Some(file.to_string_lossy().as_ref()),
+        );
+        assert!(
+            transcripts
+                .get_conversation_turns("s1", -1, 10)
+                .unwrap()
+                .is_empty(),
+            "同态重复不该触发摄取"
+        );
     }
 }
