@@ -2,6 +2,7 @@ pub mod checkbox;
 pub mod input_text;
 pub mod select;
 pub mod switch;
+pub mod text_area;
 
 #[cfg(test)]
 mod tests {
@@ -13,6 +14,7 @@ mod tests {
         Toggled(bool),
         Input(String),
         Selected(&'static str),
+        Edited(iced_widget::text_editor::Action),
     }
 
     #[test]
@@ -22,5 +24,7 @@ mod tests {
         let _ = input_text::view("placeholder", "value", false, Msg::Input);
         let options: &[&str] = &["a", "b"];
         let _ = select::view(options, Some(&"a"), Msg::Selected);
+        let content = iced_widget::text_editor::Content::new();
+        let _ = text_area::view(&content, "placeholder", Msg::Edited);
     }
 }
