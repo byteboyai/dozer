@@ -240,20 +240,22 @@ impl TranscriptStore {
         Ok(())
     }
 
-    /// 临时最小实现,供本 Task 测试用;Task 8 会替换成带 keyset 分页的
-    /// 完整版本(签名不变,调用方不受影响)。
+    /// keyset 分页:返回 `turn_index > after_turn_index` 的前 `limit` 条。
+    /// `after_turn_index` 传 `-1` 表示从第一条开始。
     pub fn get_conversation_turns(
         &self,
         conversation_id: &str,
-        _after_turn_index: i64,
-        _limit: u32,
+        after_turn_index: i64,
+        limit: u32,
     ) -> Result<Vec<dozer_core::protocol::TurnRecord>> {
         let conn = self.conn.lock().expect("db lock");
         let mut stmt = conn.prepare(
             "SELECT turn_index, role, content, tools_summary, thinking, ts
-             FROM conversation_turns WHERE conversation_id = ?1 ORDER BY turn_index ASC",
+             FROM conversation_turns
+             WHERE conversation_id = ?1 AND turn_index > ?2
+             ORDER BY turn_index ASC LIMIT ?3",
         )?;
-        let rows = stmt.query_map([conversation_id], |row| {
+        let rows = stmt.query_map(params![conversation_id, after_turn_index, limit], |row| {
             let tools_json: String = row.get(3)?;
             Ok(dozer_core::protocol::TurnRecord {
                 turn_index: row.get(0)?,
@@ -517,5 +519,30 @@ mod tests {
             .list_conversations_in(home.path(), "/proj", None, 2, 0)
             .unwrap();
         assert_eq!(page.len(), 2);
+    }
+
+    #[test]
+    fn get_conversation_turns_paginates_by_keyset() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let mut jsonl = String::new();
+        for i in 0..5 {
+            jsonl.push_str(&format!(
+                "{{\"type\":\"user\",\"uuid\":\"u{i}\",\"message\":{{\"role\":\"user\",\"content\":\"第{i}条\"}}}}\n"
+            ));
+        }
+        let file = fixture(tmp.path(), "s1.jsonl", &jsonl);
+        store.ingest_session(AgentKind::Claude, &file).unwrap();
+
+        let first_page = store.get_conversation_turns("s1", -1, 2).unwrap();
+        assert_eq!(first_page.len(), 2);
+        assert_eq!(first_page[0].turn_index, 0);
+        assert_eq!(first_page[1].turn_index, 1);
+
+        let last_seen = first_page[1].turn_index;
+        let second_page = store.get_conversation_turns("s1", last_seen, 2).unwrap();
+        assert_eq!(second_page.len(), 2);
+        assert_eq!(second_page[0].turn_index, 2);
+        assert_eq!(second_page[1].turn_index, 3);
     }
 }
