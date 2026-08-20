@@ -5,9 +5,10 @@
 //! `docs/superpowers/specs/2026-08-08-acceptance-pane-design.md`。
 use crate::delivery::FileChange;
 use crate::goal::Goal;
-use crate::workspace::AddrEvent;
 use dozer_client::Client;
-use iced_widget::core::{Border, Element, Length};
+use iced_widget::core::widget::operation::Focusable;
+use iced_widget::core::widget::{Id, Operation};
+use iced_widget::core::{Border, Element, Length, Rectangle};
 use iced_widget::{button, column, container, row, text};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -23,18 +24,24 @@ impl WorkspaceState {
         self.session.as_ref()
     }
 
-    /// 意见框是否处于编辑态(main.rs 键盘路由用它决定是否把按键直达
-    /// `CommentEvent`,同旧 `browser::addr_editing` 的用途,后者已迁 iced
-    /// 原生 text_input)。
-    pub fn comment_editing(&self) -> bool {
-        self.session.as_ref().is_some_and(|s| s.comment_editing)
+    /// 意见框是否持有 iced 真实焦点(main.rs 键盘路由用)。
+    pub fn comment_focused(&self) -> bool {
+        self.session.as_ref().is_some_and(|s| s.comment_focused)
     }
 
-    /// 退出意见框编辑态(main.rs 键盘路由失焦时调用,保留已输入文字)。
-    pub fn clear_comment_editing(&mut self) {
+    /// 每帧渲染循环读走 `CaptureCommentFocus` 查到的真实焦点态后写进来。
+    pub fn set_comment_focused(&mut self, focused: bool) {
         if let Some(s) = &mut self.session {
-            s.comment_editing = false;
+            s.comment_focused = focused;
         }
+    }
+
+    /// 读走(消费式)一次性聚焦标记,同 `files::take_tree_edit_focus_pending`
+    /// 的既有手法。
+    pub fn take_comment_focus_pending(&mut self) -> bool {
+        self.session
+            .as_mut()
+            .is_some_and(|s| std::mem::take(&mut s.comment_focus_pending))
     }
 
     /// 供内核 `Open` 拦截处理后落地新会话——不经过 `Message::Loaded`,
@@ -64,6 +71,37 @@ impl WorkspaceState {
     }
 }
 
+/// 意见框真 `text_input` 的 `widget::Id`,供 `CaptureCommentFocus` 匹配
+/// 真实焦点态、main.rs 程序化聚焦与键盘路由查询。
+pub fn comment_field_id() -> Id {
+    Id::new("acceptance-comment-box")
+}
+
+static COMMENT_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
+
+/// 读走(非消费)上一帧捕获到的意见框真 `text_input` 焦点态,同
+/// `files::take_tree_edit_focused` 的桥接手法。
+pub fn take_comment_focused() -> bool {
+    *COMMENT_FOCUSED.lock().unwrap()
+}
+
+/// 每帧 `interface.operate()` 跑一遍,把命中 `comment_field_id` 的真
+/// `text_input` 是否持有 iced 焦点写进 `COMMENT_FOCUSED`。`traverse`
+/// 必须调用传入闭包(见 [[dozer-operation-traverse-noop-bug]])。
+pub struct CaptureCommentFocus;
+impl Operation<()> for CaptureCommentFocus {
+    fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
+        if id == Some(&comment_field_id()) {
+            *COMMENT_FOCUSED.lock().unwrap() = state.is_focused();
+        }
+    }
+
+    fn traverse(&mut self, operate: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {
+        operate(self);
+    }
+}
+
 /// 一次进行中的验收(现有 `AcceptanceView` 的搬家版本)。
 pub struct AcceptanceSession {
     repo: PathBuf,
@@ -76,7 +114,12 @@ pub struct AcceptanceSession {
     /// diff 懒加载缓存:未展开过或仍在加载中的文件不在这个 map 里。
     diffs: HashMap<usize, Result<String, String>>,
     comment: String,
-    comment_editing: bool,
+    /// 意见框是否持有 iced 内部真实焦点,每帧由 `CaptureCommentFocus` 写入。
+    comment_focused: bool,
+    /// 一次性标记:点意见框(`CommentClick`)刚触发编辑时置真,main.rs 渲染
+    /// 循环取走后用 `operation::focusable::focus` 强制聚焦——点击落在旧的
+    /// 自绘 `button` 上,不是新出现的 `text_input` 本身,不会自动带焦点。
+    comment_focus_pending: bool,
     error: Option<String>,
     accepted_version: Option<u32>,
 }
@@ -103,8 +146,11 @@ pub enum Message {
     Toggle(usize),
     ToggleDiff(usize),
     DiffLoaded(i64, usize, Result<String, String>),
+    /// 点意见框进入编辑态(`comment_focus_pending` 置位,main.rs 据此程序
+    /// 化聚焦)。
     CommentClick,
-    CommentEvent(AddrEvent),
+    /// 意见框草稿变化(iced `text_input::on_input`,每次给全量当前字符串)。
+    CommentInput(String),
     Accept,
     Reject,
     Done(i64, Result<u32, String>),
@@ -134,7 +180,8 @@ pub fn update(
                 expanded: HashSet::new(),
                 diffs: HashMap::new(),
                 comment: String::new(),
-                comment_editing: false,
+                comment_focused: false,
+                comment_focus_pending: false,
                 error: None,
                 accepted_version: None,
             });
@@ -178,18 +225,12 @@ pub fn update(
         }
         Message::CommentClick => {
             if let Some(session) = &mut ws_state.session {
-                session.comment_editing = true;
+                session.comment_focus_pending = true;
             }
         }
-        Message::CommentEvent(ev) => {
+        Message::CommentInput(s) => {
             if let Some(session) = &mut ws_state.session {
-                match ev {
-                    AddrEvent::Text(s) => session.comment.push_str(&s),
-                    AddrEvent::Backspace => {
-                        session.comment.pop();
-                    }
-                    AddrEvent::Submit | AddrEvent::Cancel => session.comment_editing = false,
-                }
+                session.comment = s;
             }
         }
         Message::Accept => {
@@ -390,29 +431,21 @@ pub fn view<'a>(
         }
     }
 
-    let editing = session.comment_editing;
-    let comment_text = if editing {
-        format!("{}▏", session.comment)
-    } else if session.comment.is_empty() {
-        "验收意见…（打回时注回会话）".to_string()
-    } else {
-        session.comment.clone()
-    };
+    let editing = session.comment_focused;
     content = content.push(
-        button(
-            text(comment_text)
-                .size(byteui::theme::font::body())
-                .color(if editing {
-                    byteui::theme::color::current().cream
-                } else {
-                    byteui::theme::color::current().dim
-                }),
-        )
-        .on_press(Message::CommentClick)
+        container(byteui::form::input_text::view(
+            "验收意见…（打回时注回会话）",
+            &session.comment,
+            false,
+            Some(comment_field_id()),
+            false,
+            None,
+            true,
+            Message::CommentInput,
+        ))
         .width(Length::Fill)
-        .style(move |_t, _s| button::Style {
+        .style(move |_t: &iced_widget::Theme| container::Style {
             background: Some(byteui::theme::color::current().term_bg.into()),
-            text_color: byteui::theme::color::current().cream,
             border: Border {
                 color: if editing {
                     byteui::theme::color::current().gold
@@ -422,7 +455,7 @@ pub fn view<'a>(
                 width: 1.0,
                 radius: 2.0.into(),
             },
-            ..button::Style::default()
+            ..container::Style::default()
         }),
     );
 
@@ -535,7 +568,8 @@ mod tests {
             expanded: HashSet::new(),
             diffs: HashMap::new(),
             comment: String::new(),
-            comment_editing: false,
+            comment_focused: false,
+            comment_focus_pending: false,
             error: None,
             accepted_version: None,
         }
