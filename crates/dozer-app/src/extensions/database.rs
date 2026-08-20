@@ -1337,12 +1337,16 @@ fn source_form<'a>(
         &draft.name,
         false,
         None,
+        false,
+        None,
         Message::DraftNameChanged,
     ));
     if draft.driver == DriverKind::Sqlite {
         col = col.push(byteui::form::input_text::view(
             "文件路径",
             &draft.database,
+            false,
+            None,
             false,
             None,
             Message::DraftDatabaseChanged,
@@ -1353,11 +1357,15 @@ fn source_form<'a>(
             &draft.uri,
             false,
             None,
+            false,
+            None,
             Message::DraftUriChanged,
         ));
         col = col.push(byteui::form::input_text::view(
             "host",
             &draft.host,
+            false,
+            None,
             false,
             None,
             Message::DraftHostChanged,
@@ -1367,11 +1375,15 @@ fn source_form<'a>(
             &draft.port,
             false,
             None,
+            false,
+            None,
             Message::DraftPortChanged,
         ));
         col = col.push(byteui::form::input_text::view(
             "database",
             &draft.database,
+            false,
+            None,
             false,
             None,
             Message::DraftDatabaseChanged,
@@ -1381,12 +1393,16 @@ fn source_form<'a>(
             &draft.username,
             false,
             None,
+            false,
+            None,
             Message::DraftUsernameChanged,
         ));
         col = col.push(byteui::form::input_text::view(
             "password(留空则不修改)",
             &draft.password,
             true,
+            None,
+            false,
             None,
             Message::DraftPasswordChanged,
         ));
