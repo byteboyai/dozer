@@ -1416,7 +1416,7 @@ git commit -m "feat(dozerd): TranscriptStore 表结构 + ingest_session 增量�
 
 `cwd` → 该项目在各 agent 下的存储目录(`dir` 列的值),用 `dozer_core::agent_paths` 现算,不做"目录名倒推 cwd"这种有损逆运算(spec 设计决定,见计划撰写时的讨论)。`agent` 非空时只查该家对应的一个目录;为空时三家都查、结果按 `last_ts` 倒序合并。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `mod.rs` 的 `#[cfg(test)] mod tests` 里新增:
 
@@ -1488,7 +1488,7 @@ git commit -m "feat(dozerd): TranscriptStore 表结构 + ingest_session 增量�
 Run: `cargo test -p dozerd transcripts::tests::list_conversations`
 Expected: 编译失败(`list_conversations_in` 不存在)。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 在 `impl TranscriptStore` 块内新增(`ingest_session` 之后):
 
@@ -1566,12 +1566,12 @@ Expected: 编译失败(`list_conversations_in` 不存在)。
 
 删掉 Task 6 结尾给 `agent_from_str` 加的 `#[allow(dead_code)]`(现在用上了)。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozerd transcripts::tests`
 Expected: PASS(全部测试,包括之前的)
 
-- [ ] **Step 5: 全量校验 + 提交**
+- [x] **Step 5: 全量校验 + 提交**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd && cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -- --check`
 
