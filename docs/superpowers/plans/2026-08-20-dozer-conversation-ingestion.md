@@ -1590,7 +1590,7 @@ git commit -m "feat(dozerd): TranscriptStore::list_conversations"
 **Interfaces:**
 - Produces: 替换 Task 6 的临时 `get_conversation_turns`,签名不变,新增 `after_turn_index`/`limit` 真正生效。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `mod.rs` 测试模块新增:
 
@@ -1621,12 +1621,12 @@ git commit -m "feat(dozerd): TranscriptStore::list_conversations"
     }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cargo test -p dozerd transcripts::tests::get_conversation_turns_paginates_by_keyset`
 Expected: FAIL(临时实现忽略了 `after_turn_index`/`limit`,一次性返回全部 5 条)。
 
-- [ ] **Step 3: 替换实现**
+- [x] **Step 3: 替换实现**
 
 把 Task 6 里的临时 `get_conversation_turns` 方法体换成:
 
@@ -1659,12 +1659,12 @@ Expected: FAIL(临时实现忽略了 `after_turn_index`/`limit`,一次性返回�
     }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozerd transcripts::tests`
 Expected: PASS(全部测试)
 
-- [ ] **Step 5: 全量校验 + 提交**
+- [x] **Step 5: 全量校验 + 提交**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd && cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -- --check`
 
