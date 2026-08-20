@@ -25,6 +25,6 @@ mod tests {
         let options: &[&str] = &["a", "b"];
         let _ = select::view(options, Some(&"a"), Msg::Selected);
         let content = iced_widget::text_editor::Content::new();
-        let _ = text_area::view(&content, "placeholder", Msg::Edited);
+        let _ = text_area::view(&content, "placeholder", None, false, None, Msg::Edited);
     }
 }
