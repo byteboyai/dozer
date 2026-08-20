@@ -864,10 +864,19 @@ pub fn take_content_field_bounds() -> Option<Rectangle> {
 
 /// 每帧 `interface.operate` 跑一遍,把命中 `add_field_id`/`content_field_id`
 /// 的字段屏幕 `bounds` 记进 `static`,供鼠标点击把全局光标 x 折算成字段内
-/// 局部 x、再映射成字符下标。
+/// 局部 x、再映射成字符下标。两个 id 都挂在 `container(field)` 上
+/// (`iced_widget::container::Container::operate()`,`container.rs`),容器
+/// 汇报自己走的是 `operation.container(id, bounds)` 这个钩子,不是
+/// `operation.custom(..)`——之前误用 `custom` 导致这两个 bounds 从未被真正
+/// 写入过(`take_add_field_bounds`/`take_content_field_bounds` 恒 `None`,
+/// main.rs 里"按点击落点定位光标"的分支从未执行过)。`traverse` 也必须调用
+/// 传入的 `operate` 闭包才会继续递归子节点——`Row`/`Column` 等容器的
+/// `operate()` 实现把子节点遍历整个包在 `operation.traverse(&mut |op| {..})`
+/// 里,空实现会导致嵌在 `row!`/`column!` 里的容器整个被跳过(同
+/// `extensions::files::CaptureSearchFocus` 修复过的同款问题)。
 pub struct CaptureFieldBounds;
 impl Operation<()> for CaptureFieldBounds {
-    fn custom(&mut self, id: Option<&Id>, bounds: Rectangle, _state: &mut dyn std::any::Any) {
+    fn container(&mut self, id: Option<&Id>, bounds: Rectangle) {
         match id {
             Some(id) if *id == add_field_id() => {
                 *ADD_FIELD_BOUNDS.lock().unwrap() = Some(bounds);
@@ -879,7 +888,9 @@ impl Operation<()> for CaptureFieldBounds {
         }
     }
 
-    fn traverse(&mut self, _: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {}
+    fn traverse(&mut self, operate: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {
+        operate(self);
+    }
 }
 
 /// 把字段内的局部点击 x(逻辑像素)折算成字符下标,供鼠标点击定位光标。
