@@ -359,6 +359,88 @@ impl TranscriptStore {
         let end = (start + limit as usize).min(out.len());
         Ok(out[start..end].to_vec())
     }
+
+    /// 用量聚合,`cwd` → 该项目在各 agent 下的存储目录;`since_ts` 非空时
+    /// 只统计 `last_ts >= since_ts` 的会话。
+    pub fn get_usage_summary(
+        &self,
+        cwd: &str,
+        since_ts: Option<u64>,
+    ) -> Result<
+        Vec<(
+            dozer_core::protocol::ConversationSummary,
+            dozer_core::protocol::UsagePayload,
+        )>,
+    > {
+        self.get_usage_summary_in(&dozer_core::agent_paths::home_dir(), cwd, since_ts)
+    }
+
+    /// `home` 显式传入版本,测试用。
+    pub fn get_usage_summary_in(
+        &self,
+        home: &Path,
+        cwd: &str,
+        since_ts: Option<u64>,
+    ) -> Result<
+        Vec<(
+            dozer_core::protocol::ConversationSummary,
+            dozer_core::protocol::UsagePayload,
+        )>,
+    > {
+        let conversations = self.list_conversations_in(home, cwd, None, u32::MAX, 0)?;
+        let conn = self.conn.lock().expect("db lock");
+        let mut out = Vec::new();
+        for c in conversations {
+            if since_ts.is_some_and(|since| c.last_ts < since) {
+                continue;
+            }
+            let mut stmt = conn.prepare(
+                "WITH owners AS (
+                    SELECT t.message_key,
+                           MIN(printf('%020lld|', c2.first_ts) || c2.conversation_id) AS owner_key
+                    FROM conversation_turns t
+                    JOIN conversations c2 ON c2.conversation_id = t.conversation_id
+                    GROUP BY t.message_key
+                 )
+                 SELECT t.role, t.tool_calls, t.mutating_tool_calls, t.files_touched,
+                        t.tokens_in, t.tokens_out, t.tokens_cache_read, t.tokens_cache_write
+                 FROM conversation_turns t
+                 JOIN conversations c1 ON c1.conversation_id = t.conversation_id
+                 JOIN owners o ON o.message_key = t.message_key
+                 WHERE t.conversation_id = ?1
+                   AND (printf('%020lld|', c1.first_ts) || c1.conversation_id) = o.owner_key",
+            )?;
+            let rows = stmt.query_map([&c.conversation_id], |row| {
+                let files_json: String = row.get(3)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, u32>(2)?,
+                    files_json,
+                    row.get::<_, u64>(4)?,
+                    row.get::<_, u64>(5)?,
+                    row.get::<_, u64>(6)?,
+                    row.get::<_, u64>(7)?,
+                ))
+            })?;
+            let mut payload = dozer_core::protocol::UsagePayload::default();
+            for r in rows {
+                let (_role, tool_calls, mutating, files_json, tin, tout, tcr, tcw) = r?;
+                payload.turns += 1;
+                payload.tool_calls += tool_calls;
+                payload.mutating_tool_calls += mutating;
+                payload.tokens_in += tin;
+                payload.tokens_out += tout;
+                payload.tokens_cache_read += tcr;
+                payload.tokens_cache_write += tcw;
+                if let Ok(files) = serde_json::from_str::<Vec<String>>(&files_json) {
+                    payload.files_touched.extend(files);
+                }
+            }
+            out.push((c, payload));
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -544,5 +626,83 @@ mod tests {
         assert_eq!(second_page.len(), 2);
         assert_eq!(second_page[0].turn_index, 2);
         assert_eq!(second_page[1].turn_index, 3);
+    }
+
+    #[test]
+    fn get_usage_summary_dedupes_forked_message_key_by_earliest_owner() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let cwd = std::path::Path::new("/proj");
+        let dir = dozer_core::agent_paths::claude_project_dir_in(home.path(), cwd);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let original = fixture(
+            &dir,
+            "original.jsonl",
+            "{\"type\":\"assistant\",\"uuid\":\"shared-1\",\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":5},\"content\":[]}}\n",
+        );
+        store.ingest_session(AgentKind::Claude, &original).unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let forked = fixture(
+            &dir,
+            "forked.jsonl",
+            concat!(
+                "{\"type\":\"assistant\",\"uuid\":\"shared-1\",\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":5},\"content\":[]}}\n",
+                "{\"type\":\"assistant\",\"uuid\":\"new-1\",\"message\":{\"usage\":{\"input_tokens\":3,\"output_tokens\":1},\"content\":[]}}\n",
+            ),
+        );
+        store.ingest_session(AgentKind::Claude, &forked).unwrap();
+
+        let rows = store
+            .get_usage_summary_in(home.path(), "/proj", None)
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        let original_row = rows
+            .iter()
+            .find(|(c, _)| c.conversation_id == "original")
+            .unwrap();
+        let forked_row = rows
+            .iter()
+            .find(|(c, _)| c.conversation_id == "forked")
+            .unwrap();
+        assert_eq!(original_row.1.tokens_in, 10, "原始会话拥有 shared-1 的用量");
+        assert_eq!(
+            forked_row.1.tokens_in, 3,
+            "forked 会话里复制来的 shared-1 不重复计入,只有自己新增的 new-1 计入"
+        );
+    }
+
+    #[test]
+    fn get_usage_summary_breaks_first_ts_ties_deterministically() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let cwd = std::path::Path::new("/proj");
+        let dir = dozer_core::agent_paths::claude_project_dir_in(home.path(), cwd);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let a = fixture(
+            &dir,
+            "a.jsonl",
+            "{\"type\":\"assistant\",\"uuid\":\"shared-tie\",\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":0},\"content\":[]}}\n",
+        );
+        let b = fixture(
+            &dir,
+            "b.jsonl",
+            "{\"type\":\"assistant\",\"uuid\":\"shared-tie\",\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":0},\"content\":[]}}\n",
+        );
+        store.ingest_session(AgentKind::Claude, &a).unwrap();
+        store.ingest_session(AgentKind::Claude, &b).unwrap();
+
+        let rows = store
+            .get_usage_summary_in(home.path(), "/proj", None)
+            .unwrap();
+        let total_tokens_in: u64 = rows.iter().map(|(_, u)| u.tokens_in).sum();
+        assert_eq!(
+            total_tokens_in, 10,
+            "无论 first_ts 是否平局,shared-tie 只能被恰好一个会话计入一次"
+        );
     }
 }
