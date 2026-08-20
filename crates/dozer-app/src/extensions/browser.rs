@@ -108,13 +108,22 @@ impl Tabs {
     }
 
     /// 进入地址栏编辑:预填当前激活 tab 的 URL(浏览器 tab 恒为网页,不像
-    /// `PreviewPane::addr_begin` 还要 match `TabKind`)。
+    /// `PreviewPane::addr_begin` 还要 match `TabKind`)。空标签页(`about:blank`)
+    /// 没有可编辑的网址,预填会把 `about:blank` 带进输入框、再被后续键入
+    /// 拼成 `about:blankhttp://x.com` 这类垃圾——遇到空标签就当空输入处理,
+    /// 让用户直接打新地址。
     pub fn addr_begin(&mut self) {
         self.addr_editing = true;
         self.addr_buffer = self
             .tabs
             .get(self.active)
-            .map(|t| t.url.clone())
+            .map(|t| {
+                if t.url.is_empty() || t.url == "about:blank" {
+                    String::new()
+                } else {
+                    t.url.clone()
+                }
+            })
             .unwrap_or_default();
     }
 
@@ -468,7 +477,7 @@ mod tests {
             |_| {},
         );
         assert!(state.error.is_none());
-        assert_eq!(state.tabs.tabs().len(), 1);
+        assert_eq!(state.tabs.tabs().len(), 2);
     }
 
     #[tokio::test]
@@ -502,10 +511,10 @@ mod tests {
         );
         assert_eq!(
             state.tabs.tabs().len(),
-            1,
-            "提交应递归触发 OpenUrl 开一个 tab"
+            2,
+            "默认带一个 about:blank(下标 0),提交应再开一个真实 tab(下标 1)"
         );
-        assert_eq!(state.tabs.tabs()[0].url, "http://a.com");
+        assert_eq!(state.tabs.tabs()[1].url, "http://a.com");
     }
 
     #[tokio::test]
@@ -538,7 +547,11 @@ mod tests {
             |_| {},
         );
         assert_eq!(state.error.as_deref(), Some("浏览器不支持打开本地文件"));
-        assert!(state.tabs.tabs().is_empty());
+        assert_eq!(
+            state.tabs.tabs().len(),
+            1,
+            "仍是默认的 about:blank,未新增 tab"
+        );
     }
 
     #[tokio::test]
@@ -588,7 +601,17 @@ mod tests {
 
     #[tokio::test]
     async fn update_bookmark_add_without_active_tab_is_noop() {
-        let mut state = State::default();
+        // `State::default()` 现在自带一个 about:blank 标签页,不再是空标签;
+        // 要测"无激活 tab 时收藏是 no-op"的守卫分支,显式构造一个空标签状态。
+        let mut state = State {
+            tabs: Tabs::default(),
+            error: None,
+            bookmarks: Vec::new(),
+            bookmarks_open: false,
+            star_menu_open: false,
+            hover: HashMap::new(),
+            tooltip_starts: HashMap::new(),
+        };
         let handle = tokio::runtime::Handle::current();
         let client = client_for_test();
         update(
@@ -698,15 +721,17 @@ mod tests {
     fn state_accessors_delegate_to_tabs() {
         let mut state = State::default();
         assert!(!state.addr_editing());
-        assert_eq!(state.active_webview_id(), None);
-        assert!(state.desired_webviews().is_empty());
+        // 默认带一个 about:blank 标签页,它就是激活 tab
+        assert_eq!(state.active_webview_id(), Some(0));
+        assert_eq!(state.desired_webviews().len(), 1);
         state.tabs.open_url("http://a.com".into());
         state.tabs.addr_begin();
         assert!(state.addr_editing());
         state.addr_cancel();
         assert!(!state.addr_editing());
-        assert_eq!(state.active_webview_id(), Some(0));
-        assert_eq!(state.desired_webviews().len(), 1);
+        // 新开的 a.com 成为激活 tab,空标签仍在列表里
+        assert_eq!(state.active_webview_id(), Some(1));
+        assert_eq!(state.desired_webviews().len(), 2);
     }
 }
 
@@ -853,7 +878,6 @@ impl TabHover {
     }
 }
 
-#[derive(Default)]
 pub struct State {
     tabs: Tabs,
     error: Option<String>,
@@ -870,11 +894,29 @@ pub struct State {
     tooltip_starts: HashMap<usize, std::time::Instant>,
 }
 
+impl Default for State {
+    /// 浏览器面板默认状态:开一个 `about:blank` 标签页,而不是空标签栏——
+    /// 面板首次呈现就有一块可看的内容,地址栏也提示"输入网址"开始浏览。
+    fn default() -> Self {
+        Self::with_initial_url("about:blank")
+    }
+}
+
 impl State {
     /// 构造一个带初始 tab 的浏览器状态——用于首页全局浏览器默认打开某个
-    /// 站点(见 `app::App::home_browser` 初始化)。
+    /// 站点(见 `app::App::home_browser` 初始化)。默认(`State::default`)
+    /// 本就带一个 `about:blank` 标签页,这里把它换成给定的真实 URL,保持
+    /// "单一初始标签页"语义,不带多余空标签。
     pub fn with_initial_url(url: &str) -> Self {
-        let mut s = State::default();
+        let mut s = State {
+            tabs: Tabs::default(),
+            error: None,
+            bookmarks: Vec::new(),
+            bookmarks_open: false,
+            star_menu_open: false,
+            hover: HashMap::new(),
+            tooltip_starts: HashMap::new(),
+        };
         s.tabs.open_url(url.to_string());
         s
     }
