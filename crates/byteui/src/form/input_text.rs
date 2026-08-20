@@ -1,5 +1,6 @@
 //! amis `form/input-text`(单行文本输入):<https://baidu.github.io/amis/zh-CN/components/form/input-text>
 
+use iced_widget::core::widget;
 use iced_widget::core::{Border, Element};
 use iced_widget::text_input::{self, Status};
 
@@ -7,13 +8,20 @@ pub fn view<'a, Message: Clone + 'a>(
     placeholder: &str,
     value: &str,
     secure: bool,
+    id: Option<widget::Id>,
     on_input: impl Fn(String) -> Message + 'a,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    iced_widget::text_input(placeholder, value)
+    let input = iced_widget::text_input(placeholder, value)
         .secure(secure)
         .on_input(on_input)
         .size(crate::theme::font::body())
-        .padding(8)
+        .padding(8);
+    let input = if let Some(id) = id {
+        input.id(id)
+    } else {
+        input
+    };
+    input
         .style(|_theme: &iced_widget::Theme, status: Status| {
             let colors = crate::theme::color::current();
             let focused = matches!(status, Status::Focused { .. });

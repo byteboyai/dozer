@@ -1336,6 +1336,7 @@ fn source_form<'a>(
         "名字",
         &draft.name,
         false,
+        None,
         Message::DraftNameChanged,
     ));
     if draft.driver == DriverKind::Sqlite {
@@ -1343,6 +1344,7 @@ fn source_form<'a>(
             "文件路径",
             &draft.database,
             false,
+            None,
             Message::DraftDatabaseChanged,
         ));
     } else {
@@ -1350,36 +1352,42 @@ fn source_form<'a>(
             "连接 URI(可选,填了则忽略下面各项,例如 postgres://user:pw@host:5432/db)",
             &draft.uri,
             false,
+            None,
             Message::DraftUriChanged,
         ));
         col = col.push(byteui::form::input_text::view(
             "host",
             &draft.host,
             false,
+            None,
             Message::DraftHostChanged,
         ));
         col = col.push(byteui::form::input_text::view(
             "port",
             &draft.port,
             false,
+            None,
             Message::DraftPortChanged,
         ));
         col = col.push(byteui::form::input_text::view(
             "database",
             &draft.database,
             false,
+            None,
             Message::DraftDatabaseChanged,
         ));
         col = col.push(byteui::form::input_text::view(
             "username",
             &draft.username,
             false,
+            None,
             Message::DraftUsernameChanged,
         ));
         col = col.push(byteui::form::input_text::view(
             "password(留空则不修改)",
             &draft.password,
             true,
+            None,
             Message::DraftPasswordChanged,
         ));
     }
