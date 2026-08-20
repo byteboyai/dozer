@@ -9171,7 +9171,7 @@ fn ssh_terminal_pane<'a>(
     .padding(region.padding)
     .style(move |_t: &iced_widget::Theme| container::Style {
         background: region.background.map(Into::into),
-        border: region.border.unwrap_or_default(),
+        border: outer,
         ..container::Style::default()
     })
     .into()
