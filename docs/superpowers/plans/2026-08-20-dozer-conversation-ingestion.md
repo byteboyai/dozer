@@ -1873,7 +1873,7 @@ git commit -m "feat(dozerd): get_usage_summary——message_key 全局去重(最
 
 本 Task 先只接线"查询"路径,不接摄取触发(留 Task 11/12)。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `crates/dozerd/src/server.rs` 的 `#[cfg(test)] mod tests`(若没有则新增)里加一个纯函数级测试,验证 `serve` 签名可用即可——实际的端到端 UDS 测试留给 `dozer-client` 那边的 `against_real_daemon.rs`(Task 15 会补)。这里先写一个编译期占位测试确认新字段能正确传递:
 
@@ -1899,7 +1899,7 @@ git commit -m "feat(dozerd): get_usage_summary——message_key 全局去重(最
 Run: `cargo test -p dozerd transcript_store_field_compiles_into_serve_signature`
 Expected: 编译失败(`serve` 还没有 `transcripts` 形参)。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 在 `crates/dozerd/src/server.rs`:
 
@@ -1938,12 +1938,12 @@ Expected: 编译失败(`serve` 还没有 `transcripts` 形参)。
 
 `serve(...)` 调用点补上 `transcripts` 实参(紧跟 `bookmarks` 之后)。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd`
 Expected: PASS
 
-- [ ] **Step 5: 全量校验 + 提交**
+- [x] **Step 5: 全量校验 + 提交**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd && cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -- --check`
 
