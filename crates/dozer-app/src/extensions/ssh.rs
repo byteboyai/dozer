@@ -7,9 +7,7 @@
 use crate::app::{App, HoverId, ssh_tab_hover_key};
 use byteui::interaction::icons;
 use iced_widget::core::Element;
-use iced_widget::{
-    MouseArea, Scrollable, button, column, container, row, scrollable, stack, text,
-};
+use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, stack, text};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
