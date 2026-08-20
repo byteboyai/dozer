@@ -1021,58 +1021,55 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
-            // Files 搜索框(Stage 2)/ 浏览器地址栏(Stage 3),都已迁移到 iced
-            // 原生 text_input 且每帧查真实焦点 / SSH·Database 连接表单(字段
-            // 本来就是真 `text_input`,这次只是补上一直缺失的路由放行判断):
-            // 命中就直接放行给标准 iced 事件转换管线,交真正的 text_input
-            // 自己处理光标/选区/IME(同上面 Preview 原生编辑器那道闸门的手法)。
-            // SSH/Database 用"表单是否打开"这个粗粒度信号(不像 Files 搜索框/
-            // 浏览器地址栏要每帧查真实焦点),表单打开时整体放行,不区分表单内
-            // 具体哪个字段聚焦。必须放在下面 `to_self_drawn_input` 判断之前——
-            // 未来某个自绘面板与它同时报"编辑态为真"时,不能让自绘分支抢先
-            // 吞掉按键;也必须在 ⌘ 组合键判断(下方 `modifiers.super_key()`
-            // 分支)之前,否则 ⌘V 粘贴会被错误地转发进终端而不是交给
-            // text_input 自己内置的粘贴处理。
+            // Files 搜索框(Stage 2)/ 浏览器地址栏(Stage 3)/ Todo 搜索框、
+            // 新增任务框、首页项目搜索框(Stage 4),都已迁移到 iced 原生
+            // text_input/text_editor 且每帧查真实焦点 / SSH·Database 连接
+            // 表单(字段本来就是真 `text_input`,只是补上一直缺失的路由放行
+            // 判断):命中就直接放行给标准 iced 事件转换管线,交真正的
+            // text_input/text_editor 自己处理光标/选区/IME(同上面 Preview
+            // 原生编辑器那道闸门的手法)。SSH/Database 用"表单是否打开"这个
+            // 粗粒度信号(不像其它几个原生字段要每帧查真实焦点),表单打开时
+            // 整体放行,不区分表单内具体哪个字段聚焦。必须放在下面
+            // `to_self_drawn_input` 判断之前——未来某个自绘面板与它同时报
+            // "编辑态为真"时,不能让自绘分支抢先吞掉按键;也必须在 ⌘ 组合键
+            // 判断(下方 `modifiers.super_key()` 分支)之前,否则 ⌘V 粘贴会
+            // 被错误地转发进终端而不是交给 text_input 自己内置的粘贴处理。
             if app.files_search_focused()
                 || app.browser_addr_focused()
+                || app.todo_search_focused()
+                || app.todo_add_focused()
+                || app.home_project_search_focused()
                 || app.ssh_form_open()
                 || app.database_form_open()
             {
                 return;
             }
 
-            // 验收意见 / 项目树行内编辑态 / 项目名称编辑 / 文件树搜索框 /
-            // 右键"搜索"弹窗查询框 / Todo 搜索框、新增任务框、任务内容编辑、
-            // MARKDOWN 整文件编辑:键盘直达自绘输入(不经 keymap、不进 PTY)。
-            // 文件预览面板已不再有地址栏;浏览器地址栏已迁移 iced 原生
-            // text_input,走上面那道独立的原生放行闸门,不再在此列。提到 ⌘
-            // 组合键判断之前,因为 ⌘V 粘贴也要认这套聚焦态(见下方 fix)。
+            // 验收意见 / 项目树行内编辑态 / 项目名称编辑 / 右键"搜索"弹窗
+            // 查询框 / Todo 任务内容编辑 / Todo MARKDOWN 整文件编辑:键盘
+            // 直达自绘输入(不经 keymap、不进 PTY)。文件预览面板已不再有
+            // 地址栏;文件树搜索框/浏览器地址栏/Todo 面板搜索框、新增任务框/
+            // 首页项目搜索框均已迁移 iced 原生控件,走上面那道独立的原生
+            // 放行闸门,不再在此列。提到 ⌘ 组合键判断之前,因为 ⌘V 粘贴也要
+            // 认这套聚焦态(见下方 fix)。
             let to_comment = app.acceptance_comment_editing();
             let to_tree_edit = app.tree_editing();
             let to_project_name = app.project_name_editing();
             let to_search_popup = app.search_popup_editing();
-            let to_todo_search = app.todo_search_editing();
-            let to_todo_add = app.todo_add_editing();
             let to_todo_content = app.todo_content_editing();
             let to_todo_markdown = app.todo_markdown_editing();
-            let to_home_project_search = app.home_project_search_editing();
             let to_self_drawn_input = to_comment
                 || to_tree_edit
                 || to_project_name
                 || to_search_popup
-                || to_todo_search
-                || to_todo_add
                 || to_todo_content
-                || to_todo_markdown
-                || to_home_project_search;
-            // 优先级:右键"搜索"弹窗查询框 > 验收意见 > 项目树
-            // 编辑 > 项目名称编辑 > Todo 面板搜索框 > Todo 新增任务框 > Todo
-            // 任务内容编辑 > Todo MARKDOWN 编辑 > 首页项目搜索框(文件树搜索框/
-            // 浏览器地址栏已迁 iced 原生 text_input,走上面新增的独立放行闸门,
-            // 不再在此列;多者同真时罕见,谁先建的编辑态谁优先没有实际冲突场景,
-            // 这个顺序只是一个确定性兜底——首页项目搜索框排最后是因为它跟前
-            // 面所有工作区内的编辑态天然互斥,不可能同时为真,顺序对它没有实际
-            // 影响)。
+                || to_todo_markdown;
+            // 优先级:右键"搜索"弹窗查询框 > 验收意见 > 项目树编辑 > 项目
+            // 名称编辑 > Todo 任务内容编辑 > Todo MARKDOWN 整文件编辑(文件树
+            // 搜索框、浏览器地址栏、Todo 面板搜索框/新增任务框、首页项目
+            // 搜索框均已迁 iced 原生 text_input/text_editor,走上面新增的
+            // 独立放行闸门,不再在此列;多者同真时罕见,谁先建的编辑态谁
+            // 优先没有实际冲突场景,这个顺序只是一个确定性兜底)。
             // ⌘V 粘贴与逐字符输入共用这条链,保证两条路径落进同一个自绘输入。
             let addr_message = |ev: workspace::AddrEvent| -> Message {
                 if to_search_popup {
@@ -1083,16 +1080,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     Message::Files(extensions::files::Message::EditEvent(ev))
                 } else if to_project_name {
                     Message::Project(extensions::project::Message::NameEditEvent(ev))
-                } else if to_todo_search {
-                    Message::Todo(extensions::todo::Message::SearchEvent(ev))
-                } else if to_todo_add {
-                    Message::Todo(extensions::todo::Message::AddEvent(ev))
                 } else if to_todo_content {
                     Message::Todo(extensions::todo::Message::ContentEvent(ev))
-                } else if to_todo_markdown {
-                    Message::Todo(extensions::todo::Message::MarkdownEvent(ev))
                 } else {
-                    Message::HomeProjectSearchEvent(ev)
+                    Message::Todo(extensions::todo::Message::MarkdownEvent(ev))
                 }
             };
 
@@ -1154,11 +1145,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             }
 
             if to_self_drawn_input {
-                // 方向键 / Home / End:仅 Todo 自绘输入(新增任务框、任务内容
-                // 编辑、搜索框)与首页项目搜索框支持光标移动。其它自绘输入
-                // (地址栏/验收意见/树编辑等)暂不支持,方向键按原行为被吞掉、
-                // 不进终端。必须在下面的 `AddrEvent` 路由之前拦截,否则会落到
-                // `_ => None` 被吃掉而没机会进光标移动分支。
+                // 方向键 / Home / End:仅 Todo 任务内容行内编辑支持光标移动
+                // (Todo 新增任务框/搜索框、首页项目搜索框已迁 iced 原生
+                // text_input/text_editor,走上面的原生放行闸门,方向键由 iced
+                // 自己处理,不会落到这里)。其它自绘输入(地址栏/验收意见/
+                // 树编辑等)暂不支持,方向键按原行为被吞掉、不进终端。必须在
+                // 下面的 `AddrEvent` 路由之前拦截,否则会落到 `_ => None`
+                // 被吃掉而没机会进光标移动分支。
                 if let WindowEvent::KeyboardInput {
                     event: ke,
                     is_synthetic: false,
@@ -1177,14 +1170,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         _ => None,
                     };
                     if let Some(dir) = dir {
-                        let msg = if to_todo_add {
-                            Message::Todo(extensions::todo::Message::AddCursorMove(dir))
-                        } else if to_todo_content {
+                        let msg = if to_todo_content {
                             Message::Todo(extensions::todo::Message::ContentCursorMove(dir))
-                        } else if to_todo_search {
-                            Message::Todo(extensions::todo::Message::SearchCursorMove(dir))
-                        } else if to_home_project_search {
-                            Message::HomeProjectSearchCursorMove(dir)
                         } else {
                             // 其它自绘输入不支持方向键移动,按原行为吞掉。
                             return;
@@ -1591,18 +1578,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         }
                     }
                 }
-                // 新增任务框点击:进编辑态后,按鼠标落点把光标定位到对应字符
-                // (自绘输入没原生光标,全靠 `add_field_id` 记录的屏幕 bounds)。
-                Message::Todo(extensions::todo::Message::AddEditStart) => {
-                    app.update(Message::Todo(extensions::todo::Message::AddEditStart));
-                    if let Some(bounds) = extensions::todo::take_add_field_bounds() {
-                        let scale = window.scale_factor();
-                        let local_x = ((cursor_phys.x / scale) as f32 - bounds.x).max(0.0);
-                        app.update(Message::Todo(extensions::todo::Message::AddCursorAt(
-                            local_x,
-                        )));
-                    }
-                }
+                // 新增任务框已迁 iced 原生 `text_editor`(Stage 4),点击命中
+                // 区域内由组件自身接管聚焦与光标定位,不再有 `AddEditStart`/
+                // `AddCursorAt` 自绘换算分支。
                 // 任务内容编辑框点击:仅在"重击已处于编辑态的字段"时按落点定位
                 // (首击进入编辑态光标落行尾,字段 bounds 未必已记录,避免错位)。
                 Message::Todo(extensions::todo::Message::ContentEditStart(idx)) => {
@@ -2262,6 +2240,40 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                         false
                                     };
 
+                                // Todo 搜索框(Stage 4)同款:每帧查真实焦点态。
+                                // 只在 Todo 左栏可见时跑,不必要时不做无谓遍历。
+                                let todo_search_focused =
+                                    if matches!(app.left_view(), crate::app::PanelKind::Todo) {
+                                        interface.operate(
+                                            renderer,
+                                            &mut extensions::todo::CaptureTodoSearchFocus,
+                                        );
+                                        extensions::todo::take_todo_search_focused()
+                                    } else {
+                                        false
+                                    };
+
+                                // Todo 添加框(Stage 4):同款每帧查真实焦点态。
+                                let todo_add_focused =
+                                    if matches!(app.left_view(), crate::app::PanelKind::Todo) {
+                                        interface.operate(
+                                            renderer,
+                                            &mut extensions::todo::CaptureAddFocus,
+                                        );
+                                        extensions::todo::take_add_focused()
+                                    } else {
+                                        false
+                                    };
+
+                                // 首页项目搜索框(Stage 4):同款每帧查真实焦点态。
+                                let home_search_focused = if app.is_home() {
+                                    interface
+                                        .operate(renderer, &mut homespace::CaptureHomeSearchFocus);
+                                    homespace::take_home_search_focused()
+                                } else {
+                                    false
+                                };
+
                                 // Update the mouse cursor
                                 if let user_interface::State::Updated {
                                     mouse_interaction, ..
@@ -2302,6 +2314,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // `files_search_focused` 消费)。每帧都重写,
                                 // 即使值没变也幂等,无副作用。
                                 app.set_files_search_focused(files_focused);
+                                app.set_todo_search_focused(todo_search_focused);
+                                app.set_todo_add_focused(todo_add_focused);
+                                app.set_home_project_search_focused(home_search_focused);
 
                                 // 同上,浏览器地址栏的真实焦点态现在才写回工作区
                                 // (供下一帧键盘路由 `browser_addr_focused` 消费)。

@@ -15,9 +15,39 @@ use crate::theme;
 use crate::workspace::{lh, relative_time_text};
 use byteui::interaction::icons;
 use dozer_core::protocol::ProjectInfo;
-use iced_widget::core::{Border, Color, Element, Length, Padding};
+use iced_widget::core::widget::operation::Focusable;
+use iced_widget::core::widget::{Id, Operation};
+use iced_widget::core::{Border, Color, Element, Length, Padding, Rectangle};
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use std::path::PathBuf;
+
+/// 首页项目列表搜索框(iced 原生 `text_input`)的 `widget::Id`:main.rs 每帧
+/// `interface.operate` 用 `CaptureHomeSearchFocus` 问真实焦点态。
+pub fn home_search_field_id() -> Id {
+    Id::new("home-project-search-box")
+}
+
+static HOME_SEARCH_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
+
+pub fn take_home_search_focused() -> bool {
+    *HOME_SEARCH_FOCUSED.lock().unwrap()
+}
+
+/// 每帧 `interface.operate()` 跑一遍。`traverse` 必须调用传入闭包(见
+/// [[dozer-operation-traverse-noop-bug]])。
+pub struct CaptureHomeSearchFocus;
+impl Operation<()> for CaptureHomeSearchFocus {
+    fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
+        if id == Some(&home_search_field_id()) {
+            *HOME_SEARCH_FOCUSED.lock().unwrap() = state.is_focused();
+        }
+    }
+
+    fn traverse(&mut self, operate: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {
+        operate(self);
+    }
+}
 
 /// 首页左栏当前显示哪个 pane。语义、命名对齐工作区面板(原 `HomeLeftView`/
 /// `HomeRightView` 各自独立,不与工作区共用),但这是首页专属枚举——首页
@@ -406,29 +436,89 @@ fn home_project_list_view(
 
     col = col.push(home_panel_head(icons::IconKind::LayoutList, "项目"));
 
-    // 搜索框:接 `crate::search_box` 共享组件(D7 从"先视觉后接线"落地为
-    // 真正可用),颜色取首页自己独立配置的调色板(`theme::homespace_color`,
-    // 与工作区 `byteui::theme::color` 分开维护),不是工作区那一套。
-    col = col.push(crate::search_box::view(
-        &app.home_project_search_draft,
-        app.home_project_search_editing,
-        !app.home_project_search.is_empty(),
-        app.home_project_search_cursor,
-        "搜索项目…",
-        theme::homespace_font::body(),
+    // 搜索框:真正的 iced `text_input`(Stage 4,手写不经 `search_box::view`
+    // 共享组件),颜色取首页自己独立配置的调色板(`theme::homespace_color`,
+    // 与工作区 `byteui::theme::color` 分开维护)。提交按钮不再嵌进
+    // `search_box::view` 内部,改成外层 `row!` 拼一个独立图标按钮,与外层
+    // 容器共享 1px 边框——同 Stage 3 浏览器地址栏"输入框 + 星标按钮各自
+    // 独立小部件、外层容器画共享边框"的处理方式。
+    let editing = app.home_project_search_focused();
+    let search_field: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        iced_widget::text_input("搜索项目…", &app.home_project_search_draft)
+            .id(home_search_field_id())
+            .on_input(Message::HomeProjectSearchInput)
+            .on_submit(Message::HomeProjectSearchSubmit)
+            .size(theme::homespace_font::body())
+            .padding(0)
+            .style(
+                move |_t: &iced_widget::Theme, status: iced_widget::text_input::Status| {
+                    let _ = status; // 边框由外层容器统一画,这里只需要透明背景
+                    iced_widget::text_input::Style {
+                        background: iced_widget::core::Color::TRANSPARENT.into(),
+                        border: iced_widget::core::Border {
+                            color: iced_widget::core::Color::TRANSPARENT,
+                            width: 0.0,
+                            radius: 0.0.into(),
+                        },
+                        icon: theme::homespace_color::dim(),
+                        placeholder: theme::homespace_color::dim(),
+                        value: theme::homespace_color::cream(),
+                        selection: byteui::theme::color::mix(
+                            theme::homespace_color::gold(),
+                            theme::homespace_color::card_bg(),
+                            0.6,
+                        ),
+                    }
+                },
+            )
+            .into();
+
+    let submit_button = icons::icon_button_entry(
+        icons::IconKind::Search,
         byteui::theme::icon_size::row(),
-        crate::search_box::SearchBoxColors {
-            bg: theme::homespace_color::card_bg(),
-            border: theme::homespace_color::border(),
-            active: theme::homespace_color::gold(),
-            text: theme::homespace_color::cream(),
-            dim: theme::homespace_color::dim(),
-        },
+        false,
+        false,
         app.hover_progress(HoverId::HomeProjectSearchSubmit),
-        Message::HomeProjectSearchEditStart,
+        true,
+        byteui::theme::icon_size::row() + 12.0,
+        true,
         Message::HomeProjectSearchSubmit,
         |hovered| Message::Hover(HoverId::HomeProjectSearchSubmit, hovered),
-    ));
+        "搜索",
+    );
+
+    let content_h = byteui::theme::icon_size::row() + 12.0;
+    col = col.push(
+        container(
+            row![
+                container(search_field)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_y(iced_widget::core::alignment::Vertical::Center)
+                    .align_x(iced_widget::core::alignment::Horizontal::Left),
+                container(submit_button).align_y(iced_widget::core::alignment::Vertical::Center),
+            ]
+            .width(Length::Fill)
+            .height(Length::Fixed(content_h))
+            .align_y(iced_widget::core::Alignment::Center),
+        )
+        .width(Length::Fill)
+        .height(Length::Fixed(content_h + 12.0))
+        .padding([6, 8])
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(theme::homespace_color::card_bg().into()),
+            border: iced_widget::core::Border {
+                color: if editing || !app.home_project_search.is_empty() {
+                    theme::homespace_color::gold()
+                } else {
+                    theme::homespace_color::border()
+                },
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..container::Style::default()
+        }),
+    );
 
     // 按已提交的搜索词过滤,过滤后再分页——"更多..."按钮/页数据此按过滤后
     // 的结果集算,不是全量 `recent_projects`。

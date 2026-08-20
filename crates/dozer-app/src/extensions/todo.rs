@@ -13,6 +13,7 @@ use crate::theme;
 use crate::workspace::{AddrEvent, Workspace, agent_icon, tab_title};
 use byteui::interaction::icons;
 use dozer_core::protocol::AgentKind;
+use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
 use iced_widget::core::{Border, Color, Element, Length, Padding, Rectangle, mouse};
 use iced_widget::{
@@ -346,15 +347,14 @@ fn save_to(path: &Path, state: &TodoMetaState) -> io::Result<()> {
 pub struct WorkspaceState {
     items: Vec<TodoItem>,
     mtime: Option<std::time::SystemTime>,
-    add_draft: String,
-    /// 新增任务框草稿的光标位置(字符下标,非字节)。自绘输入没有原生光标,
-    /// 方向键/鼠标点击都靠这个下标重定位,渲染时把草稿从光标处劈成两段、
-    /// 中间塞 `▏` 当光标。`add_draft` 为空时恒为 0。
-    add_cursor: usize,
-    /// 新增任务框是否处于自绘编辑态。本 app 每帧重建界面,原生 `text_input`
-    /// 留不住焦点、也不参与 main.rs 的键盘路由裁决,不加这个标记的话打字
-    /// 会同时漏进已聚焦的终端(agent 输入),见 `todo_footer_bar`。
-    add_editing: bool,
+    /// 新增任务框草稿。类型从 `String` 换成 `iced_widget::text_editor::
+    /// Content`(实现 `Default`/`Clone`)——真正的 `text_editor` 自己管理
+    /// 光标/选区,不再需要应用层维护 `add_cursor` 字符下标。
+    add_draft: iced_widget::text_editor::Content,
+    /// 新增任务框是否持有 iced 内部真实焦点。**不是**应用层手动置位的
+    /// 镜像——每帧渲染循环里 `CaptureAddFocus` 问一遍 iced 真相后立刻写
+    /// 进这里(`set_add_focused`)。
+    add_focused: bool,
     /// 新增任务框高度(逻辑像素)。框顶的拖拽手柄向上拉时由 app 层换算写回
     /// (见 `app.rs::RowDrag` 的 `TodoAddGrow` 分支),0 表示"未拖过、用默认
     /// 高",视图侧一律 `max(ADD_INPUT_MIN_HEIGHT)` 兜底——这样 `#[derive(
@@ -376,16 +376,15 @@ pub struct WorkspaceState {
     scroll_to_top: bool,
     /// 已生效的搜索关键词(列表过滤用)。打字期间只改草稿 `search_draft`,
     /// 回车/点右侧搜索按钮才落成这里(与文件树搜索 `search_query` 同款
-    /// "草稿→提交"模型——本 app 的 iced 界面每帧重建、原生 `text_input`
-    /// 留不住焦点,搜索必须用自绘输入 + main.rs 键盘拦截路由,见 design)。
+    /// "草稿→提交"模型)。
     search: String,
-    /// 搜索框编辑态草稿。`search_editing` 为真时按键经 main.rs 路由成
-    /// `SearchEvent`,只动草稿,不重新过滤;回车/点搜索按钮才提交。
+    /// 搜索框草稿(iced `text_input` 的 `value`)。
     search_draft: String,
-    /// 搜索框草稿的光标位置(字符下标,见 `add_cursor` 注释)。
-    search_cursor: usize,
-    /// 搜索框是否处于自绘编辑态(main.rs 键盘路由用)。
-    search_editing: bool,
+    /// 搜索框是否持有 iced 内部真实焦点。**不是**应用层手动置位的镜像——
+    /// 每帧渲染循环里 `CaptureTodoSearchFocus` 问一遍 iced 真相后立刻写
+    /// 进这里(`set_search_focused`),`main.rs` 键盘路由读它决定要不要
+    /// 放行给标准 iced 管线。
+    search_focused: bool,
     dispatch_open: Option<usize>,
     /// 派发选择层浮层弹出锚点(逻辑像素,取点击"指派"按钮时的光标位置)。
     /// 窗口级 overlay 靠它定位到按钮旁边;关闭时清空。
@@ -530,25 +529,25 @@ impl WorkspaceState {
         self.mtime
     }
 
-    /// 搜索框是否处于自绘编辑态(main.rs 键盘路由用)。
-    pub fn search_editing(&self) -> bool {
-        self.search_editing
+    /// 搜索框是否持有 iced 真实焦点(main.rs 键盘路由用)。
+    pub fn search_focused(&self) -> bool {
+        self.search_focused
     }
 
-    /// 失焦退出搜索编辑态(`Workspace::blur_inputs` 用):草稿保留。
-    pub fn cancel_search_edit(&mut self) {
-        self.search_editing = false;
+    /// 每帧渲染循环读走 `CaptureTodoSearchFocus` 查到的真实焦点态后写
+    /// 进来。
+    pub fn set_search_focused(&mut self, focused: bool) {
+        self.search_focused = focused;
     }
 
-    /// 新增任务框是否处于自绘编辑态(main.rs 键盘路由用)。
-    pub fn add_editing(&self) -> bool {
-        self.add_editing
+    /// 新增任务框是否持有 iced 真实焦点(main.rs 键盘路由用)。
+    pub fn add_focused(&self) -> bool {
+        self.add_focused
     }
 
-    /// 失焦退出新增任务编辑态(`Workspace::blur_inputs` 用):草稿保留,
-    /// 与搜索框同款——半输入的任务文字不该因为点了别处就丢。
-    pub fn cancel_add_edit(&mut self) {
-        self.add_editing = false;
+    /// 每帧渲染循环读走 `CaptureAddFocus` 查到的真实焦点态后写进来。
+    pub fn set_add_focused(&mut self, focused: bool) {
+        self.add_focused = focused;
     }
 
     /// 新增任务框有效高度:0(默认/未拖过)按最小高兜底,避免每帧重建时
@@ -614,9 +613,39 @@ impl WorkspaceState {
         self.drag = None;
     }
 
-    /// 草稿落成为生效的 `search` 过滤词;保留编辑态(便于连续改词)。
+    /// 草稿落成为生效的 `search` 过滤词(回车 / 点右侧搜索按钮时调用)。
+    /// 焦点仍留在 iced `text_input` 上,不主动清空草稿(与 Files 搜索框
+    /// Stage 2 一致)。
     pub fn commit_search(&mut self) {
         self.search = self.search_draft.clone();
+    }
+}
+
+/// 搜索框稳定的 iced widget id。
+pub fn todo_search_field_id() -> Id {
+    Id::new("todo-search-box")
+}
+
+static TODO_SEARCH_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
+
+pub fn take_todo_search_focused() -> bool {
+    *TODO_SEARCH_FOCUSED.lock().unwrap()
+}
+
+/// 每帧 `interface.operate()` 跑一遍。`traverse` 必须调用传入闭包(见
+/// [[dozer-operation-traverse-noop-bug]]——同 `extensions::files::
+/// CaptureSearchFocus` 修复过的手法,这里从一开始就写对)。
+pub struct CaptureTodoSearchFocus;
+impl Operation<()> for CaptureTodoSearchFocus {
+    fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
+        if id == Some(&todo_search_field_id()) {
+            *TODO_SEARCH_FOCUSED.lock().unwrap() = state.is_focused();
+        }
+    }
+
+    fn traverse(&mut self, operate: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {
+        operate(self);
     }
 }
 
@@ -690,7 +719,8 @@ impl AppState {
 /// `update`——传进来会 `unreachable!`(同 Git Log 试点 `LoadMore` 的
 /// 处理方式)。
 /// 自绘输入的光标移动方向(main.rs 把方向键/Home/End 翻成这个,经
-/// `AddCursorMove`/`SearchCursorMove`/`ContentCursorMove` 路由进来)。自绘
+/// `ContentCursorMove` 路由进来——Todo 搜索框、添加框已迁真 `text_input`/
+/// `text_editor`,由原生管线管光标)。自绘
 /// 输入没有原生光标,方向键移动靠这里携带的方向重定位字符下标。定义与
 /// `insert_at_cursor`/`delete_before_cursor`/`move_cursor_in`/
 /// `char_to_byte`/`draft_with_caret` 一起挪到了 `crate::search_box`
@@ -700,20 +730,15 @@ pub use crate::search_box::CursorDir;
 #[derive(Debug, Clone)]
 pub enum Message {
     Toggle(usize),
-    /// 点新增任务框进入自绘编辑态(`add_editing = true`),后续按键经
-    /// main.rs 路由成 `AddEvent`,不再漏进终端(同 `SearchEditStart`)。
-    AddEditStart,
-    /// 编辑态下的按键:文本/退格改草稿,`AddrEvent::Submit` 落盘新任务。
-    AddEvent(AddrEvent),
+    /// 新增任务框编辑事件(iced `text_editor::on_action`,真正的
+    /// `Action` 由组件自己产生,应用层只负责 `content.perform(action)`
+    /// 落地——光标/选区/IME 全部交给 iced,不再是"文本/退格"这种自绘
+    /// 事件分解)。
+    AddEdit(iced_widget::text_editor::Action),
     /// 点新增任务框右侧 circle-arrow-up 提交按钮:把草稿落盘成新任务
-    /// (与回车 `AddEvent(Submit)` 共用 `commit_add_task` 一条路径)。
+    /// (与 `text_editor` 内置的 Enter 换行不冲突——提交只走按钮,不认
+    /// 回车,见 `todo_footer_bar` 的按钮说明不变)。
     AddSubmit,
-    /// 方向键/Home/End 移动新增任务框草稿光标(字符下标)。main.rs 把键盘
-    /// 方向键翻成 `CursorDir` 经此路由,自绘输入没原生光标,全靠这个。
-    AddCursorMove(CursorDir),
-    /// 鼠标点击新增任务框:把字段内局部点击 x(逻辑像素)折算成字符下标,
-    /// 定位光标(见 `CursorDir` 同款的"自绘输入没原生光标"背景)。
-    AddCursorAt(f32),
     /// 点新增任务框顶部的拖拽手柄:只在 app 层接管(`todo_message` 里置
     /// `dragging_row = TodoAddGrow`),真正的高度换算发生在 `app.rs::update`
     /// 的 `RowDrag` 分支——和 `Divider`/`RowDivider` 那套拖拽同构,只是目标
@@ -723,15 +748,10 @@ pub enum Message {
     FilterSet(TodoFilter),
     ViewModeSet(TodoViewMode),
     RowSelect(Option<usize>),
-    /// 点搜索框进入自绘编辑态(`search_editing = true`),后续按键经 main.rs
-    /// 路由成 `SearchEvent`,不再漏进终端。
-    SearchEditStart,
-    /// 编辑态下的按键:只动草稿 `search_draft`,不重新过滤(需提交)。
-    SearchEvent(AddrEvent),
+    /// 搜索框草稿变化(iced `text_input::on_input`,每次给全量当前字符串)。
+    SearchInput(String),
     /// 回车 / 点右侧搜索按钮:把草稿落成生效的 `search` 过滤词。
     SearchSubmit,
-    /// 方向键/Home/End 移动搜索框草稿光标(字符下标),见 `AddCursorMove`。
-    SearchCursorMove(CursorDir),
     /// 光标移动到了第 `idx` 个任务卡片上(由 `todo_card` 外层的
     /// `MouseArea::on_move` 构造)。若当前正在拖拽待办,更新目标位
     /// `target_idx`(悬停到已完成卡片时夹到待办块末尾,见 `update`)。
@@ -757,10 +777,12 @@ pub enum Message {
     ContentEditStart(usize),
     /// 内容编辑态下的按键:`Submit` 落盘改写任务文字,`Cancel` 丢弃退出。
     ContentEvent(AddrEvent),
-    /// 方向键/Home/End 移动任务内容编辑草稿光标(字符下标),见 `AddCursorMove`。
+    /// 方向键/Home/End 移动任务内容编辑草稿光标(字符下标)。内容编辑仍是
+    /// 自绘输入(本计划只迁「搜索框/添加框」,任务内容编辑不迁),方向键靠
+    /// main.rs 翻成 `CursorDir` 经此路由。
     ContentCursorMove(CursorDir),
     /// 鼠标点击任务内容编辑框:把字段内局部点击 x(逻辑像素)折算成字符下标,
-    /// 定位光标,见 `AddCursorAt`。
+    /// 定位光标(自绘输入没原生光标,靠 `content_field_id` 边界换算)。
     ContentCursorAt(f32),
     /// 点 MARKDOWN 视图主体 → 进入整文件编辑态(`markdown_editing` 置位)。
     MarkdownEditStart,
@@ -838,9 +860,14 @@ fn set_done(
 // `draft_with_caret` 挪到了 `crate::search_box`(见上面 `CursorDir` 的
 // `pub use` 注释),这里通过 `use` 引入,调用方式不变。
 
-/// 自绘输入字段的 `widget::Id`:main.rs 每帧 `interface.operate` 记录其屏幕
+/// `widget::Id`:main.rs 每帧 `interface.operate` 记录其屏幕
 /// `bounds`,鼠标点击时把全局光标 x 折算成字段内局部 x,再映射成字符下标
 /// (自绘输入没原生光标,点击定位全靠这个)。
+///
+/// `add_field_id` 原先是容器 id(挂 `container(field)` 上,由
+/// `CaptureFieldBounds` 捕获 bounds);添加框迁真 `text_editor` 后,id 转挂
+/// 到 `text_editor` 上,由 `text_editor::operate()` 的 `focusable` 钩子
+/// 汇报焦点,不再走 `container`/bounds。
 pub fn add_field_id() -> Id {
     Id::new("todo-add-field")
 }
@@ -849,26 +876,21 @@ pub fn content_field_id() -> Id {
 }
 
 /// 每帧 `interface.operate` 把字段屏幕 bounds 写进来,鼠标点击时读取。
-static ADD_FIELD_BOUNDS: std::sync::LazyLock<std::sync::Mutex<Option<Rectangle>>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 static CONTENT_FIELD_BOUNDS: std::sync::LazyLock<std::sync::Mutex<Option<Rectangle>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
 /// 取走字段屏幕 bounds(消费式克隆),鼠标点击定位光标用。
-pub fn take_add_field_bounds() -> Option<Rectangle> {
-    *ADD_FIELD_BOUNDS.lock().unwrap()
-}
 pub fn take_content_field_bounds() -> Option<Rectangle> {
     *CONTENT_FIELD_BOUNDS.lock().unwrap()
 }
 
-/// 每帧 `interface.operate` 跑一遍,把命中 `add_field_id`/`content_field_id`
+/// 每帧 `interface.operate` 跑一遍,把命中 `content_field_id`
 /// 的字段屏幕 `bounds` 记进 `static`,供鼠标点击把全局光标 x 折算成字段内
-/// 局部 x、再映射成字符下标。两个 id 都挂在 `container(field)` 上
+/// 局部 x、再映射成字符下标。id 挂在 `container(field)` 上
 /// (`iced_widget::container::Container::operate()`,`container.rs`),容器
 /// 汇报自己走的是 `operation.container(id, bounds)` 这个钩子,不是
 /// `operation.custom(..)`——之前误用 `custom` 导致这两个 bounds 从未被真正
-/// 写入过(`take_add_field_bounds`/`take_content_field_bounds` 恒 `None`,
+/// 写入过(`take_content_field_bounds` 恒 `None`,
 /// main.rs 里"按点击落点定位光标"的分支从未执行过)。`traverse` 也必须调用
 /// 传入的 `operate` 闭包才会继续递归子节点——`Row`/`Column` 等容器的
 /// `operate()` 实现把子节点遍历整个包在 `operation.traverse(&mut |op| {..})`
@@ -877,14 +899,31 @@ pub fn take_content_field_bounds() -> Option<Rectangle> {
 pub struct CaptureFieldBounds;
 impl Operation<()> for CaptureFieldBounds {
     fn container(&mut self, id: Option<&Id>, bounds: Rectangle) {
-        match id {
-            Some(id) if *id == add_field_id() => {
-                *ADD_FIELD_BOUNDS.lock().unwrap() = Some(bounds);
-            }
-            Some(id) if *id == content_field_id() => {
-                *CONTENT_FIELD_BOUNDS.lock().unwrap() = Some(bounds);
-            }
-            _ => {}
+        if *id.unwrap_or(&content_field_id()) == content_field_id() {
+            *CONTENT_FIELD_BOUNDS.lock().unwrap() = Some(bounds);
+        }
+    }
+
+    fn traverse(&mut self, operate: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {
+        operate(self);
+    }
+}
+
+static ADD_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
+
+pub fn take_add_focused() -> bool {
+    *ADD_FOCUSED.lock().unwrap()
+}
+
+/// 每帧 `interface.operate()` 跑一遍,把 `add_field_id`(真正的
+/// `text_editor`)的真实焦点态问进 `static`。`traverse` 必须调用传入闭包(见
+/// [[dozer-operation-traverse-noop-bug]])。
+pub struct CaptureAddFocus;
+impl Operation<()> for CaptureAddFocus {
+    fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
+        if id == Some(&add_field_id()) {
+            *ADD_FOCUSED.lock().unwrap() = state.is_focused();
         }
     }
 
@@ -915,7 +954,8 @@ fn cursor_from_x(draft: &str, local_x: f32, font_size: f32) -> usize {
 /// `AddEvent(Submit)` 的写盘逻辑:把草稿追加成新任务行,空白草稿
 /// (trim 后)no-op。
 fn commit_add_task(ws_state: &mut WorkspaceState, project_path: &std::path::Path) {
-    let text = ws_state.add_draft.trim().to_string();
+    let text = ws_state.add_draft.text();
+    let text = text.trim().to_string();
     if text.is_empty() {
         return;
     }
@@ -932,8 +972,7 @@ fn commit_add_task(ws_state: &mut WorkspaceState, project_path: &std::path::Path
         tracing::warn!("写入 todo.md 失败: {e}");
         return;
     }
-    ws_state.add_draft.clear();
-    ws_state.add_cursor = 0;
+    ws_state.add_draft = iced_widget::text_editor::Content::new();
     reload_from_disk(ws_state, project_path);
     // 新任务置顶落盘后:选中并滚动到列表顶部,保持 2 秒的选中态提示用户
     // "这条就是刚加的"。
@@ -1063,40 +1102,7 @@ pub fn update(
             let target = !item.done;
             set_done(ws_state, app_state, idx, project_id, project_path, target);
         }
-        Message::AddEditStart => ws_state.add_editing = true,
-        Message::AddEvent(ev) => {
-            // 编辑态之外(失焦)的 `AddEvent` 一律忽略,避免草稿被污染
-            // (同 `SearchEvent` 的既有约定)。
-            if !ws_state.add_editing {
-                return;
-            }
-            match ev {
-                AddrEvent::Text(s) => {
-                    insert_at_cursor(&mut ws_state.add_draft, &mut ws_state.add_cursor, &s)
-                }
-                AddrEvent::Backspace => {
-                    delete_before_cursor(&mut ws_state.add_draft, &mut ws_state.add_cursor);
-                }
-                AddrEvent::Cancel => ws_state.add_editing = false,
-                AddrEvent::Submit => commit_add_task(ws_state, project_path),
-            }
-        }
-        Message::AddCursorMove(dir) => {
-            if !ws_state.add_editing {
-                return;
-            }
-            move_cursor_in(&ws_state.add_draft, &mut ws_state.add_cursor, dir);
-        }
-        Message::AddCursorAt(local_x) => {
-            if !ws_state.add_editing {
-                return;
-            }
-            ws_state.add_cursor = cursor_from_x(
-                &ws_state.add_draft,
-                local_x,
-                byteui::theme::font::body() as f32,
-            );
-        }
+        Message::AddEdit(action) => ws_state.add_draft.perform(action),
         Message::AddSubmit => commit_add_task(ws_state, project_path),
         // 高度拖拽在 app 层 `todo_message` 已早退,不会到这里;保留 arm 仅
         // 为 match 穷尽。
@@ -1125,33 +1131,8 @@ pub fn update(
                 });
             }
         }
-        Message::SearchEditStart => ws_state.search_editing = true,
-        Message::SearchEvent(ev) => {
-            // 编辑态之外(失焦)的 `SearchEvent` 一律忽略,避免草稿被污染。
-            if !ws_state.search_editing {
-                return;
-            }
-            match ev {
-                AddrEvent::Text(s) => {
-                    insert_at_cursor(&mut ws_state.search_draft, &mut ws_state.search_cursor, &s)
-                }
-                AddrEvent::Backspace => {
-                    delete_before_cursor(&mut ws_state.search_draft, &mut ws_state.search_cursor);
-                }
-                AddrEvent::Cancel => ws_state.search_editing = false,
-                AddrEvent::Submit => ws_state.commit_search(),
-            }
-        }
-        Message::SearchCursorMove(dir) => {
-            if !ws_state.search_editing {
-                return;
-            }
-            move_cursor_in(&ws_state.search_draft, &mut ws_state.search_cursor, dir);
-        }
-        Message::SearchSubmit => {
-            ws_state.commit_search();
-            ws_state.search_editing = false;
-        }
+        Message::SearchInput(s) => ws_state.search_draft = s,
+        Message::SearchSubmit => ws_state.commit_search(),
         Message::DragMove(over_idx) => {
             // 只有"正在拖"才生效;纯悬停不会动任何东西。
             let Some(drag) = ws_state.drag else {
@@ -1496,40 +1477,26 @@ fn todo_resize_handle<'a>() -> Element<'a, Message, iced_widget::Theme, iced_ren
 /// 按钮嵌在输入框边框内**(右下方、无独立边框,只是框里一枚 circle-arrow-up
 /// 图标——视觉上按钮"在输入框内",且始终贴输入框右下角)。框顶还有一道可向上拖的 8px 手柄
 /// (`todo_resize_handle`),拉高输入框(高度落在 `WorkspaceState::
-/// add_input_height`)。自绘输入(键盘走 main.rs 拦截层路由成 `AddEvent`,
-/// 不用原生 `text_input`——本 app 每帧重建界面,原生输入留不住焦点也不
-/// 参与键盘路由裁决,打字会同时漏进已聚焦的终端,见 `todo_search_bar`
-/// 同款说明)。
+/// add_input_height`)。输入框已是真正的 iced `text_editor`(Stage 4 添加框
+/// 迁移,与 Todo 搜索框同期),点击/光标/IME 全由原生管线接管;键盘路由靠
+/// main.rs 每帧 `CaptureAddFocus` 问真实焦点态裁决。
 fn todo_footer_bar<'a>(
     app: &App,
     ws_state: &'a WorkspaceState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let editing = ws_state.add_editing;
-    let add_draft = &ws_state.add_draft;
-    let field: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        if add_draft.is_empty() && !editing {
-            text("添加新任务")
-                .size(byteui::theme::font::body())
-                .color(byteui::theme::color::current().dim)
-                .into()
-        } else {
-            // 编辑态下按光标位置劈开草稿、中间塞 `▏` 当光标(方向键/鼠标
-            // 移动的就是 `add_cursor`);非编辑态只静态显示草稿。
-            let shown = if editing {
-                draft_with_caret(add_draft, ws_state.add_cursor)
-            } else {
-                add_draft.clone()
-            };
-            text(shown)
-                .size(byteui::theme::font::body())
-                .color(byteui::theme::color::current().cream)
-                .into()
-        };
+    let field = byteui::form::text_area::view(
+        &ws_state.add_draft,
+        "添加新任务",
+        Some(add_field_id()),
+        true,
+        Some(ws_state.add_input_height()),
+        Message::AddEdit,
+    );
 
     // 提交按钮:circle-arrow-up,嵌在输入框右边框内、无独立边框(视觉上"在
-    // 框里"),回车或点它提交(同 `AddEvent(Submit)` 一条落盘路径)。它是
-    // 输入框 `MouseArea` 内层真正的 `button`,会自己吃掉点击,不会触发外
-    // 层 `AddEditStart`。
+    // 框里"),点它提交(与搜索框按钮同款,但不认回车——`text_editor` 内置
+    // Enter 换行,回车不提交新任务)。它是输入框容器内右侧的按钮,会自己
+    // 吃掉点击,不会把焦点让给别处。
     //
     // 图标配色对齐其它 icon 按钮(agent 面板"＋"、文件树搜索等):静止
     // DIM、hover 平滑过渡到 GOLD,由 `HoverId::TodoAddSubmit` + 外层
@@ -1549,51 +1516,47 @@ fn todo_footer_bar<'a>(
     );
 
     // 输入框本体:单个带边框的容器,把"文字区 + 提交按钮"一起包进边框内。
-    // 整框包一层 `MouseArea`——点框内(非提交按钮处)进编辑态;提交按钮是
-    // 内层 widget,会先截获自己的点击。高度可经顶部手柄拖拽放大。
-    // 内部一行两格:左格文字(占满高度、靠顶左对齐)、右格提交按钮(占满高度、
-    // 靠底)——按钮因此钉在输入框**右下方**,框变高时文字留顶、按钮贴底,
-    // 两者占对角,低高度下也不互相挤占。
-    let input_box: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        MouseArea::new(
-            container(
-                row![
-                    container(field)
-                        .width(Length::Fill)
-                        .height(Length::Fill)
-                        .align_y(iced_widget::core::alignment::Vertical::Top)
-                        .align_x(iced_widget::core::alignment::Horizontal::Left)
-                        .id(add_field_id()),
-                    container(submit)
-                        .height(Length::Fill)
-                        .align_y(iced_widget::core::alignment::Vertical::Bottom),
-                ]
+    // 不再需要 `MouseArea`/`AddEditStart`——`text_editor` 是真控件,点击
+    // 命中范围内就由 iced 标准鼠标管线自己处理聚焦(边框金/灰由下面
+    // `editing = add_focused()` 驱动)。高度仍可经顶部拖拽手柄放大
+    // (`add_input_height`,拖拽逻辑在 `app.rs::RowDrag`,本计划不改),
+    // `text_area` 的 `height` 参数按这个值定高。内部一行
+    // 两格:左格文字(占满高度、靠顶左对齐)、右格提交按钮(占满高度、靠底)。
+    let editing = ws_state.add_focused();
+    let input_box = container(
+        row![
+            container(field)
                 .width(Length::Fill)
-                .height(Length::Fill),
-            )
-            .width(Length::Fill)
-            .height(Length::Fixed(ws_state.add_input_height()))
-            .padding([10, 12])
-            .style(move |_t: &iced_widget::Theme| container::Style {
-                background: Some(byteui::theme::color::current().bg.into()),
-                border: Border {
-                    color: if editing {
-                        byteui::theme::color::current().gold
-                    } else {
-                        byteui::theme::color::current().border
-                    },
-                    width: 1.0,
-                    radius: 4.0.into(),
-                },
-                ..container::Style::default()
-            }),
-        )
-        .on_press(Message::AddEditStart)
-        .into();
+                .height(Length::Fill)
+                .align_y(iced_widget::core::alignment::Vertical::Top)
+                .align_x(iced_widget::core::alignment::Horizontal::Left),
+            container(submit)
+                .height(Length::Fill)
+                .align_y(iced_widget::core::alignment::Vertical::Bottom),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fixed(ws_state.add_input_height()))
+    .padding([10, 12])
+    .style(move |_t: &iced_widget::Theme| container::Style {
+        background: Some(byteui::theme::color::current().bg.into()),
+        border: Border {
+            color: if editing {
+                byteui::theme::color::current().gold
+            } else {
+                byteui::theme::color::current().border
+            },
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..container::Style::default()
+    });
 
     // 输入框自身已带 1px 边框,作为与列表区之间的唯一分割线;不再额外画
     // 一道 `top_line`,避免输入框上方出现两条并列分割线。
-    container(column![todo_resize_handle(), input_box,].spacing(4))
+    container(column![todo_resize_handle(), input_box].spacing(4))
         .width(Length::Fill)
         .padding([8, 20])
         .into()
@@ -1666,39 +1629,24 @@ fn todo_clear_footer_bar<'a>(
         .into()
 }
 
-/// 顶部搜索框:委托给共享的 `crate::search_box::view`(键盘仍走 main.rs
-/// 拦截层路由成 `SearchEvent`——组件本身不接管键盘,只管渲染)。颜色取
-/// 工作区标准调色板(`byteui::theme::color`);hover 进度用
-/// `HoverId::TodoSearchSubmit` + `App::hover_progress` 现算,组件本身
-/// 不认识 `HoverId`,只接收算好的 `f32`(同 `icons::icon_button_entry`
-/// 的既有接线约定)。
+/// 顶部搜索框:真正的 `byteui::form::input_text`,形状与 Files 搜索框
+/// (Stage 2)一致。草稿 `draft` 是 `text_input::on_input` 给的全量字符串,
+/// 焦点态由 `CaptureTodoSearchFocus` 每帧查、`main.rs` 据此放行键盘给
+/// 标准 iced 管线。`active` = 列表正被 `search` 过滤时持续金框提示(同
+/// Files `search_box` 的 `highlight`)。
 fn todo_search_bar<'a>(
-    app: &App,
     draft: &'a str,
-    editing: bool,
     active: bool,
-    cursor: usize,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let colors = byteui::theme::color::current();
-    crate::search_box::view(
-        draft,
-        editing,
-        active,
-        cursor,
+    byteui::form::input_text::view(
         "搜索任务…",
-        byteui::theme::font::body(),
-        byteui::theme::icon_size::row(),
-        crate::search_box::SearchBoxColors {
-            bg: colors.bg,
-            border: colors.border,
-            active: colors.gold,
-            text: colors.cream,
-            dim: colors.dim,
-        },
-        app.hover_progress(HoverId::TodoSearchSubmit),
-        Message::SearchEditStart,
-        Message::SearchSubmit,
-        |hovered| Message::Hover(HoverId::TodoSearchSubmit, hovered),
+        draft,
+        false,
+        Some(todo_search_field_id()),
+        active,
+        Some(Message::SearchSubmit),
+        false,
+        Message::SearchInput,
     )
 }
 
@@ -1716,11 +1664,8 @@ fn todo_list_view<'a>(
     // `spacing(8)` + `padding([0, 20])`):左右 20、上下 8,不再贴边顶到
     // tab 分隔线与首张卡片。
     let search = container(todo_search_bar(
-        app,
         &ws_state.search_draft,
-        ws_state.search_editing,
         !ws_state.search.is_empty(),
-        ws_state.search_cursor,
     ))
     .padding([8, 20])
     .width(Length::Fill);
@@ -3186,19 +3131,12 @@ mod tests {
     fn update_add_submit_prepends_and_clears_draft() {
         let (_dir, root) = project_dir_with_todo("# Todo\n");
         let mut ws_state = WorkspaceState {
-            add_draft: "新任务".to_string(),
-            add_editing: true,
+            add_draft: iced_widget::text_editor::Content::with_text("新任务"),
             ..WorkspaceState::default()
         };
         let mut app_state = AppState::default();
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::AddEvent(AddrEvent::Submit),
-            1,
-            &root,
-        );
-        assert!(ws_state.add_draft.is_empty());
+        update(&mut ws_state, &mut app_state, Message::AddSubmit, 1, &root);
+        assert!(ws_state.add_draft.text().is_empty());
         assert_eq!(ws_state.items.len(), 1);
         assert_eq!(ws_state.items[0].text, "新任务");
         // 新增后应置顶闪光:卡片保持选中、滚动位被武装(等 main.rs 消费)。
@@ -3267,67 +3205,35 @@ mod tests {
     #[test]
     fn update_add_submit_empty_draft_is_noop() {
         let (_dir, root) = project_dir_with_todo("# Todo\n");
-        let mut ws_state = WorkspaceState {
-            add_editing: true,
-            ..WorkspaceState::default()
-        };
+        let mut ws_state = WorkspaceState::default();
         let mut app_state = AppState::default();
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::AddEvent(AddrEvent::Submit),
-            1,
-            &root,
-        );
+        update(&mut ws_state, &mut app_state, Message::AddSubmit, 1, &root);
         assert!(ws_state.items.is_empty());
     }
 
     #[test]
-    fn update_add_event_ignored_outside_editing() {
+    fn update_add_edit_builds_draft_and_submits() {
         let (_dir, root) = project_dir_with_todo("# Todo\n");
-        let mut ws_state = WorkspaceState::default();
+        let mut ws_state = WorkspaceState {
+            add_draft: iced_widget::text_editor::Content::with_text("新任务"),
+            ..WorkspaceState::default()
+        };
         let mut app_state = AppState::default();
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::AddEvent(AddrEvent::Text("x".to_string())),
-            1,
-            &root,
-        );
-        assert!(ws_state.add_draft.is_empty());
+        assert_eq!(ws_state.add_draft.text(), "新任务");
+        update(&mut ws_state, &mut app_state, Message::AddSubmit, 1, &root);
+        assert!(ws_state.add_draft.text().is_empty());
+        assert_eq!(ws_state.items.len(), 1);
+        assert_eq!(ws_state.items[0].text, "新任务");
     }
 
     #[test]
-    fn update_add_edit_start_then_event_builds_draft_and_submits() {
-        let (_dir, root) = project_dir_with_todo("# Todo\n");
+    fn set_add_focused_updates_accessor() {
         let mut ws_state = WorkspaceState::default();
-        let mut app_state = AppState::default();
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::AddEditStart,
-            1,
-            &root,
-        );
-        assert!(ws_state.add_editing());
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::AddEvent(AddrEvent::Text("新任务".to_string())),
-            1,
-            &root,
-        );
-        assert_eq!(ws_state.add_draft, "新任务");
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::AddEvent(AddrEvent::Submit),
-            1,
-            &root,
-        );
-        assert!(ws_state.add_draft.is_empty());
-        assert_eq!(ws_state.items.len(), 1);
-        assert_eq!(ws_state.items[0].text, "新任务");
+        assert!(!ws_state.add_focused());
+        ws_state.set_add_focused(true);
+        assert!(ws_state.add_focused());
+        ws_state.set_add_focused(false);
+        assert!(!ws_state.add_focused());
     }
 
     #[test]
@@ -3346,14 +3252,7 @@ mod tests {
         update(
             &mut ws_state,
             &mut app_state,
-            Message::SearchEditStart,
-            1,
-            &root,
-        );
-        update(
-            &mut ws_state,
-            &mut app_state,
-            Message::SearchEvent(AddrEvent::Text("关键字".to_string())),
+            Message::SearchInput("关键字".to_string()),
             1,
             &root,
         );
@@ -3365,6 +3264,16 @@ mod tests {
             &root,
         );
         assert_eq!(ws_state.search, "关键字");
+    }
+
+    #[test]
+    fn set_search_focused_updates_accessor() {
+        let mut ws_state = WorkspaceState::default();
+        assert!(!ws_state.search_focused());
+        ws_state.set_search_focused(true);
+        assert!(ws_state.search_focused());
+        ws_state.set_search_focused(false);
+        assert!(!ws_state.search_focused());
     }
 
     #[test]
