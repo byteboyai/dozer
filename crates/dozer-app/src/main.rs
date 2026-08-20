@@ -1030,24 +1030,28 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             // 焦点),表单打开时整体放行,不区分表单内具体哪个字段聚焦。
             // 必须放在下面 `to_self_drawn_input` 判断之前——未来某个自绘
             // 面板与它同时报"编辑态为真"时,不能让自绘分支抢先吞掉按键;也
-            // 必须在 ⌘ 组合键判断(下方 `modifiers.super_key()` 分支)之前,
-            // 否则 ⌘V 粘贴会被错误地转发进终端而不是交给 text_input 自己
-            // 内置的粘贴处理。
-            if app.files_search_focused() || app.ssh_form_open() || app.database_form_open() {
+            // Todo 搜索框(Stage 4)也已是 iced 原生 text_input,并入这道
+            // 放行闸门。必须在 ⌘ 组合键判断(下方 `modifiers.super_key()`
+            // 分支)之前,否则 ⌘V 粘贴会被错误地转发进终端而不是交给
+            // text_input 自己内置的粘贴处理。
+            if app.files_search_focused()
+                || app.todo_search_focused()
+                || app.ssh_form_open()
+                || app.database_form_open()
+            {
                 return;
             }
 
             // 浏览器地址栏 / 验收意见 / 项目树行内编辑态 / 项目名称编辑 /
-            // 文件树搜索框 / 右键"搜索"弹窗查询框 / Todo 搜索框、新增任务框、
-            // 任务内容编辑、MARKDOWN 整文件编辑:键盘直达自绘输入(不经 keymap、
-            // 不进 PTY)。文件预览面板已不再有地址栏。提到 ⌘ 组合键判断之前,
+            // 右键"搜索"弹窗查询框 / Todo 新增任务框、任务内容编辑、
+            // MARKDOWN 整文件编辑:键盘直达自绘输入(不经 keymap、不进 PTY)。
+            // 文件预览面板已不再有地址栏。提到 ⌘ 组合键判断之前,
             // 因为 ⌘V 粘贴也要认这套聚焦态(见下方 fix)。
             let to_browser = app.browser_addr_editing();
             let to_comment = app.acceptance_comment_editing();
             let to_tree_edit = app.tree_editing();
             let to_project_name = app.project_name_editing();
             let to_search_popup = app.search_popup_editing();
-            let to_todo_search = app.todo_search_editing();
             let to_todo_add = app.todo_add_editing();
             let to_todo_content = app.todo_content_editing();
             let to_todo_markdown = app.todo_markdown_editing();
@@ -1057,14 +1061,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 || to_tree_edit
                 || to_project_name
                 || to_search_popup
-                || to_todo_search
                 || to_todo_add
                 || to_todo_content
                 || to_todo_markdown
                 || to_home_project_search;
             // 优先级:右键"搜索"弹窗查询框 > 浏览器地址栏 > 验收意见 > 项目树
-            // 编辑 > 项目名称编辑 > Todo 面板搜索框 > Todo 新增任务框 > Todo
-            // 任务内容编辑 > Todo MARKDOWN 编辑 > 首页项目搜索框(文件树搜索框
+            // 编辑 > 项目名称编辑 > Todo 新增任务框 > Todo 任务内容编辑 > Todo
+            // MARKDOWN 编辑 > 首页项目搜索框(文件树搜索框、Todo 面板搜索框
             // 已迁 iced 原生 text_input,走上面新增的独立放行闸门,不再在此列;
             // 多者同真时罕见,谁先建的编辑态谁优先没有实际冲突场景,这个顺序
             // 只是一个确定性兜底——首页项目搜索框排最后是因为它跟前面所有
@@ -1081,8 +1084,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     Message::Files(extensions::files::Message::EditEvent(ev))
                 } else if to_project_name {
                     Message::Project(extensions::project::Message::NameEditEvent(ev))
-                } else if to_todo_search {
-                    Message::Todo(extensions::todo::Message::SearchEvent(ev))
                 } else if to_todo_add {
                     Message::Todo(extensions::todo::Message::AddEvent(ev))
                 } else if to_todo_content {
@@ -1179,8 +1180,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             Message::Todo(extensions::todo::Message::AddCursorMove(dir))
                         } else if to_todo_content {
                             Message::Todo(extensions::todo::Message::ContentCursorMove(dir))
-                        } else if to_todo_search {
-                            Message::Todo(extensions::todo::Message::SearchCursorMove(dir))
                         } else if to_home_project_search {
                             Message::HomeProjectSearchCursorMove(dir)
                         } else {
@@ -2235,6 +2234,19 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                         false
                                     };
 
+                                // Todo 搜索框(Stage 4)同款:每帧查真实焦点态。
+                                // 只在 Todo 左栏可见时跑,不必要时不做无谓遍历。
+                                let todo_search_focused =
+                                    if matches!(app.left_view(), crate::app::PanelKind::Todo) {
+                                        interface.operate(
+                                            renderer,
+                                            &mut extensions::todo::CaptureTodoSearchFocus,
+                                        );
+                                        extensions::todo::take_todo_search_focused()
+                                    } else {
+                                        false
+                                    };
+
                                 // Update the mouse cursor
                                 if let user_interface::State::Updated {
                                     mouse_interaction, ..
@@ -2275,6 +2287,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // `files_search_focused` 消费)。每帧都重写,
                                 // 即使值没变也幂等,无副作用。
                                 app.set_files_search_focused(files_focused);
+                                app.set_todo_search_focused(todo_search_focused);
 
                                 // 关闭掉 `iced_graphics` 的 `web-colors` 后(见根
                                 // Cargo.toml 的 `[patch]`: 阻断 umbrella `iced`

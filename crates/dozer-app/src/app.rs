@@ -195,12 +195,9 @@ pub enum HoverId {
     /// Todo 面板底部"新增任务"输入框内的提交按钮(`CircleArrowUp`):静止
     /// DIM,hover 平滑过渡到 GOLD(见 `extensions::todo::todo_footer_bar`)。
     TodoAddSubmit,
-    /// Todo 面板顶部"搜索任务"输入框内的提交按钮(`Search`):静止 DIM,
-    /// hover 平滑过渡到 GOLD,同 `TodoAddSubmit` 的处理方式(见
-    /// `extensions::todo::todo_search_bar`)。
-    TodoSearchSubmit,
-    /// 首页项目列表搜索框内的提交按钮(`Search`),处理方式同
-    /// `TodoSearchSubmit`(见 `homespace::home_project_list_view`)。
+    /// 首页项目列表搜索框内的提交按钮(`Search`):静止 DIM,hover 平滑
+    /// 过渡到 GOLD,处理方式同 `TodoAddSubmit`(见
+    /// `homespace::home_project_list_view`)。
     HomeProjectSearchSubmit,
     /// 首页项目列表"更多..."翻页图标按钮(`Ellipsis`):静止 DIM,hover
     /// 平滑过渡到 GOLD,处理方式同 `HomeProjectSearchSubmit`。
@@ -3275,10 +3272,19 @@ impl App {
             .is_some_and(|ws| ws.project_name_editing())
     }
 
-    /// Todo 面板搜索框是否处于自绘编辑态(main.rs 键盘路由用)。
-    pub fn todo_search_editing(&self) -> bool {
+    /// Todo 面板搜索框是否持有 iced 真实焦点(main.rs 键盘路由用)。
+    pub fn todo_search_focused(&self) -> bool {
         self.active_workspace()
-            .is_some_and(|ws| ws.todo.search_editing())
+            .is_some_and(|ws| ws.todo.search_focused())
+    }
+
+    /// 每帧渲染循环调用:把 `extensions::todo::CaptureTodoSearchFocus` 问到
+    /// 的真实焦点态写进当前工作区的 Todo(`main.rs` 键盘路由随后读
+    /// `todo_search_focused` 消费)。
+    pub fn set_todo_search_focused(&mut self, focused: bool) {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.todo.set_search_focused(focused);
+        }
     }
 
     /// 首页项目列表搜索框是否处于自绘编辑态(main.rs 键盘路由用)。

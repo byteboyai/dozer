@@ -2127,7 +2127,6 @@ impl Workspace {
         }
         self.acceptance.clear_comment_editing();
         self.files.cancel_tree_edit();
-        self.todo.cancel_search_edit();
         self.todo.cancel_add_edit();
         self.todo.cancel_drag();
         // 名称编辑不在失焦时丢弃——改由 `App::blur_inputs` 取出缓冲并发起
