@@ -71,6 +71,24 @@ pub(crate) fn home_page<'a>(
 
     // 图标栏要贯穿到页面最底部(覆盖 footbar 上方),因此 footbar 放进中间
     // 列、与三栏面板同行,左右图标栏作为本 row 的兄弟节点一起吃到 Fill 高度。
+    // footbar 最左嵌「＋新增项目」按钮(甲方动作,奶油色)——按钮容器与
+    // footbar 同底色(theme::region::background)、同高,拼成一条连续的底栏。
+    let footbar = row![
+        container(home_new_project_button())
+            .height(Length::Fixed(byteui::theme::geometry::footbar_height()))
+            .align_y(iced_widget::core::Alignment::Center)
+            .padding(Padding {
+                top: 0.0,
+                right: 4.0,
+                bottom: 0.0,
+                left: 12.0,
+            })
+            .style(move |_t: &iced_widget::Theme| container::Style {
+                background: Some(theme::region::background().into()),
+                ..container::Style::default()
+            }),
+        crate::extensions::footbar::view(footbar_state).map(Message::Footbar),
+    ];
     let body = row![
         home_left_icon_rail(app),
         column![
@@ -81,7 +99,7 @@ pub(crate) fn home_page<'a>(
             ]
             .height(Length::Fill)
             .width(Length::Fill),
-            crate::extensions::footbar::view(footbar_state).map(Message::Footbar),
+            footbar,
         ]
         .width(Length::Fill),
         home_right_icon_rail(app),
@@ -277,8 +295,8 @@ fn home_right_zone(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
 
 /// 首页左栏"项目列表" pane(`HomeLeftView::ProjectList`):搜索框占位(D7)、
 /// 最近项目卡(取 `app.recent_projects` 按 `updated_ms` 排序后分页,首屏
-/// 5 条、"更多..."逐页展开)、"＋新增项目"(复用 `Message::ProjectTabPickFolder`)。
-/// 不画品牌行——顶栏
+/// 5 条、"更多..."逐页展开)。"＋新增项目"按钮不在这里——已移到页面底部
+/// footbar 最左端(`home_new_project_button`)。不画品牌行——顶栏
 /// 本身已有 `dozer_home_tab` 品牌页签,这里重复画属于视觉冗余。
 /// 通用面板标题组件:图标 + 标题(金色 `subtitle` 字号),标题底部一条 1px
 /// panel 标题与图标用的强调色(暖金 `#dcc9a3`)——刻意区别于甲方动作专属的
@@ -432,16 +450,12 @@ fn home_project_list_view(
                     lh(text(p.name.clone())
                         .size(theme::homespace_font::body())
                         .color(theme::homespace_color::cream())),
-                    lh(
-                        text(format!("更新 {}", relative_time_text(p.updated_ms, now_ms)))
-                            .size(theme::homespace_font::caption_sm())
-                            .color(theme::homespace_color::dim())
-                    ),
-                    lh(
-                        text(format!("创建 {}", relative_time_text(p.created_ms, now_ms)))
-                            .size(theme::homespace_font::caption_sm())
-                            .color(theme::homespace_color::dim())
-                    ),
+                    lh(text(format!(
+                        "更新于{}",
+                        relative_time_text(p.updated_ms, now_ms)
+                    ))
+                    .size(theme::homespace_font::caption_sm())
+                    .color(theme::homespace_color::dim())),
                     lh(text(p.path.clone())
                         .size(theme::homespace_font::caption_sm())
                         .color(theme::homespace_color::dim())),
@@ -501,36 +515,40 @@ fn home_project_list_view(
         );
     }
 
-    col = col.push(
-        button(
-            text("＋新增项目")
-                .size(theme::homespace_font::body())
-                .color(theme::homespace_color::gold()),
-        )
-        .on_press(Message::ProjectTabPickFolder)
-        .padding([8, 16])
-        .width(Length::Fill)
-        .style(|_t: &iced_widget::Theme, _s| button::Style {
-            background: Some(theme::homespace_color::card_bg().into()),
-            border: Border {
-                color: theme::homespace_color::gold(),
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            text_color: theme::homespace_color::gold(),
-            ..button::Style::default()
-        }),
-    );
-
     // 与外边框保持标准内边距:外层 `zone_box` 只留 1px 圆角裁切余量,内容
     // 若直接贴边会顶到圆角边框,因此这里补一层标准面板内距(与 project_pane
-    // 的 8 / 卡片的 10 同量级),让"项目"标题、搜索框、卡片、底部按钮
-    // 四周都不顶边框。
+    // 的 8 / 卡片的 10 同量级),让"项目"标题、搜索框、卡片四周都不顶边框。
     container(col)
         .width(Length::Fill)
         .height(Length::Fill)
         .padding(12)
         .into()
+}
+
+/// 底部 footbar 里的「＋新增项目」按钮(甲方动作)。样式参考 todo 分类列表
+/// 底栏的操作按钮(`todo_clear_footer_bar`):深色卡底 + 奶油字/奶油描边,
+/// 而非原来的金色——按钮文字从 GOLD 换成奶油色 `cream`。字号用 `caption_sm`
+/// 以塞进 22px 高的 footbar。
+fn home_new_project_button()
+-> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    button(
+        text("＋新增项目")
+            .size(theme::homespace_font::caption_sm())
+            .color(theme::homespace_color::cream()),
+    )
+    .on_press(Message::ProjectTabPickFolder)
+    .padding([2, 8])
+    .style(|_t: &iced_widget::Theme, _s| button::Style {
+        background: Some(theme::homespace_color::card_bg().into()),
+        border: Border {
+            color: theme::homespace_color::cream(),
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        text_color: theme::homespace_color::cream(),
+        ..button::Style::default()
+    })
+    .into()
 }
 
 /// 首页左栏"Recents" pane(`HomeLeftView::Recents`):合并原"最近的文件"/
