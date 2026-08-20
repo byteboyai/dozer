@@ -2289,7 +2289,7 @@ git commit -m "feat(dozerd): 启动时历史 transcript 全量回填"
 - Consumes: Task 1 的协议类型。
 - Produces: `Client::list_conversations(&self, cwd: &str, agent: Option<AgentKind>, limit: u32, offset: u32) -> Result<Vec<ConversationSummary>>`、`Client::get_conversation_turns(&self, conversation_id: &str, after_turn_index: i64, limit: u32) -> Result<Vec<TurnRecord>>`、`Client::get_usage_summary(&self, cwd: &str, since_ts: Option<u64>) -> Result<Vec<(ConversationSummary, UsagePayload)>>`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `crates/dozer-client/tests/against_real_daemon.rs` 需要一个真实跑起来的 `dozerd` 进程(现有测试文件的既定模式,直接照抄现有一个测试函数的 harness 搭建方式,如 `list_projects` 或 `list_bookmarks` 对应的测试,新增):
 
@@ -2325,7 +2325,7 @@ async fn list_conversations_and_usage_roundtrip_against_real_daemon() {
 Run: `cargo test -p dozer-client --test against_real_daemon list_conversations_and_usage_roundtrip`
 Expected: 编译失败(`Client` 上三个方法不存在)。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 在 `crates/dozer-client/src/lib.rs` 顶部 `use` 里给 `ConversationSummary`/`TurnRecord`/`UsagePayload` 补上导入(加进现有 `use dozer_core::protocol::{...}` 那一行的花括号列表)。在 `list_bookmarks` 方法之后新增:
 
@@ -2388,12 +2388,12 @@ Expected: 编译失败(`Client` 上三个方法不存在)。
     }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozer-client --test against_real_daemon list_conversations_and_usage_roundtrip`
 Expected: PASS
 
-- [ ] **Step 5: 全量校验 + 提交**
+- [x] **Step 5: 全量校验 + 提交**
 
 Run: `cargo build -p dozer-client && cargo test -p dozer-client && cargo clippy -p dozer-client --all-targets -- -D warnings && cargo fmt -- --check`
 
