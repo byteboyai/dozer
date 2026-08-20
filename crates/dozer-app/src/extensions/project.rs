@@ -4,10 +4,11 @@
 pub mod links;
 
 use crate::delivery::WorktreeInfo;
-use crate::workspace::AddrEvent;
 use byteui::interaction::icons;
 use dozer_core::protocol::ProjectInfo;
-use iced_widget::core::{Border, Element, Length};
+use iced_widget::core::widget::operation::Focusable;
+use iced_widget::core::widget::{Id, Operation};
+use iced_widget::core::{Border, Element, Length, Rectangle};
 use iced_widget::{MouseArea, button, column, container, row, text};
 use std::path::PathBuf;
 
@@ -27,6 +28,11 @@ pub struct WorkspaceState {
     description: Option<String>,
     /// 项目名称行内编辑态(None=未在编辑)。
     name_editing: Option<String>,
+    /// 名称编辑框是否持有 iced 内部真实焦点,每帧由 `CaptureNameEditFocus`
+    /// 写入。
+    name_edit_focused: bool,
+    /// 一次性标记:点项目名(`NameEditStart`)刚触发编辑时置真。
+    name_edit_focus_pending: bool,
     /// 项目描述编辑态(None=未在编辑)。采用 iced 原生 `text_editor::Content`。
     description_editing: Option<iced_widget::text_editor::Content>,
     /// 文档/Agent 记忆虚拟链接。
@@ -71,9 +77,22 @@ impl WorkspaceState {
         self.dirty
     }
 
-    /// 供内核 main.rs 键盘路由判断"项目名称是否在自绘编辑态"。
-    pub fn name_editing_is_some(&self) -> bool {
-        self.name_editing.is_some()
+    /// 名称编辑框是否持有 iced 真实焦点(main.rs 键盘路由用)。
+    pub fn name_edit_focused(&self) -> bool {
+        self.name_edit_focused
+    }
+
+    /// 每帧渲染循环读走 `CaptureNameEditFocus` 查到的真实焦点态后写进来。
+    /// **只更新焦点镜像标记,不做提交判断**——落盘需要 `project_id`/
+    /// `client`,`WorkspaceState` 自己拿不到,这个判断在
+    /// `App::set_project_name_focused` 里做(见 Task 4)。
+    pub fn set_name_edit_focused_flag(&mut self, focused: bool) {
+        self.name_edit_focused = focused;
+    }
+
+    /// 读走(消费式)一次性聚焦标记。
+    pub fn take_name_edit_focus_pending(&mut self) -> bool {
+        std::mem::take(&mut self.name_edit_focus_pending)
     }
 
     /// 供内核 `App::blur_inputs` 调用——失焦时取出当前编辑中的名称缓冲。
@@ -112,6 +131,36 @@ impl WorkspaceState {
     }
 }
 
+/// 名称编辑框真 `text_input` 的 `widget::Id`,供 `CaptureNameEditFocus` 匹配
+/// 真实焦点态、main.rs 程序化聚焦与键盘路由查询。
+pub fn name_field_id() -> Id {
+    Id::new("project-name-edit-box")
+}
+
+static NAME_EDIT_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
+
+/// 读走(非消费)上一帧捕获到的名称编辑框真 `text_input` 焦点态。
+pub fn take_name_edit_focused() -> bool {
+    *NAME_EDIT_FOCUSED.lock().unwrap()
+}
+
+/// 每帧 `interface.operate()` 跑一遍,把命中 `name_field_id` 的真
+/// `text_input` 是否持有 iced 焦点写进 `NAME_EDIT_FOCUSED`。`traverse`
+/// 必须调用传入闭包(见 [[dozer-operation-traverse-noop-bug]])。
+pub struct CaptureNameEditFocus;
+impl Operation<()> for CaptureNameEditFocus {
+    fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
+        if id == Some(&name_field_id()) {
+            *NAME_EDIT_FOCUSED.lock().unwrap() = state.is_focused();
+        }
+    }
+
+    fn traverse(&mut self, operate: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {
+        operate(self);
+    }
+}
+
 /// 组合 git 刷新结果里跟 Project 有关的部分(`branch`/`dirty`/`worktrees`/
 /// `remote_url`)、验收次数、daemon 改名结果。`GitRefreshed`/
 /// `AcceptanceCountLoaded`/`NameRenamed` 由内核分发,带 `project_id`,走
@@ -124,8 +173,12 @@ pub enum Message {
     DiskUsageLoaded(i64, u64),
     /// daemon 改名结果。带 `project_id`,走 `with_project` 路由。
     NameRenamed(i64, Result<dozer_core::protocol::ProjectInfo, String>),
+    /// 点项目名进入编辑态(`name_edit_focus_pending` 置位)。
     NameEditStart,
-    NameEditEvent(AddrEvent),
+    /// 名称编辑框草稿变化(iced `text_input::on_input`)。
+    NameEditInput(String),
+    /// 回车提交(与失焦提交共用 `submit_name_edit`)。
+    NameEditSubmit,
     DescriptionEditStart,
     DescriptionEditAction(iced_widget::text_editor::Action),
     /// 预留:当前描述靠 `submit_description_edit_on_blur` 直接写盘(见该文档
@@ -204,40 +257,23 @@ pub fn update(
         }
         Message::NameEditStart => {
             ws_state.name_editing = Some(current_name.to_string());
+            ws_state.name_edit_focus_pending = true;
         }
-        Message::NameEditEvent(ev) => match ev {
-            AddrEvent::Text(s) => {
-                if let Some(buf) = &mut ws_state.name_editing {
-                    buf.push_str(&s);
-                }
+        Message::NameEditInput(s) => {
+            if let Some(buf) = &mut ws_state.name_editing {
+                *buf = s;
             }
-            AddrEvent::Backspace => {
-                if let Some(buf) = &mut ws_state.name_editing {
-                    buf.pop();
-                }
-            }
-            AddrEvent::Cancel => ws_state.name_editing = None,
-            AddrEvent::Submit => {
-                let Some(raw) = ws_state.name_editing.clone() else {
-                    return;
-                };
-                let name = raw.trim().to_string();
-                if name.is_empty() || name == current_name {
-                    // 空名或未改动:直接关闭编辑框,不发请求。
-                    ws_state.name_editing = None;
-                    return;
-                }
-                let client = client.clone();
-                handle.spawn(async move {
-                    let result = client
-                        .rename_project(project_id, &name)
-                        .await
-                        .map_err(|e| e.to_string())
-                        .and_then(|opt| opt.ok_or_else(|| "项目不存在".to_string()));
-                    emit(Message::NameRenamed(project_id, result));
-                });
-            }
-        },
+        }
+        Message::NameEditSubmit => {
+            submit_name_edit(
+                ws_state,
+                project_id,
+                current_name,
+                client.clone(),
+                handle,
+                emit,
+            );
+        }
         Message::NameRenamed(_, result) => match result {
             Ok(_) => {
                 ws_state.name_editing = None;
@@ -328,6 +364,35 @@ pub fn update(
     }
 }
 
+/// 项目名称编辑的共享提交逻辑:回车提交(`NameEditSubmit`)与失焦提交
+/// (`App::set_project_name_focused` 的边缘触发)两条路径共用,避免两份
+/// 重复的 `client.rename_project` 调用(现状历史遗留,这次一并合并)。
+/// 空名字/未改动直接退出编辑态,不发请求。
+pub fn submit_name_edit(
+    ws_state: &mut WorkspaceState,
+    project_id: i64,
+    current_name: &str,
+    client: dozer_client::Client,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    let Some(raw) = ws_state.name_editing.take() else {
+        return;
+    };
+    let name = raw.trim().to_string();
+    if name.is_empty() || name == current_name {
+        return;
+    }
+    handle.spawn(async move {
+        let result = client
+            .rename_project(project_id, &name)
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|opt| opt.ok_or_else(|| "项目不存在".to_string()));
+        emit(Message::NameRenamed(project_id, result));
+    });
+}
+
 /// 磁盘占用统计的排除名单——跟 `crates/dozer-app/src/project.rs::HIDDEN`
 /// (文件树"要不要显示这一行")语义不同,这里是"算不算项目真实内容",不复用
 /// 那份常量。
@@ -394,24 +459,36 @@ pub fn view<'a>(
         "项目",
     ));
 
+    let editing = ws_state.name_edit_focused();
     let name_row: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        if let Some(buf) = &ws_state.name_editing {
-            container(
-                text(format!("{buf}▏"))
-                    .size(byteui::theme::font::title())
-                    .color(byteui::theme::color::current().cream),
-            )
+        if ws_state.name_editing.is_some() {
+            container(byteui::form::input_text::view(
+                "",
+                ws_state.name_editing.as_deref().unwrap_or(""),
+                false,
+                Some(name_field_id()),
+                false,
+                Some(Message::NameEditSubmit),
+                true,
+                Message::NameEditInput,
+            ))
             .padding([8, 12])
             .width(Length::Fill)
-            .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-                background: Some(byteui::theme::color::current().card.into()),
-                border: Border {
-                    color: byteui::theme::color::current().gold,
-                    width: 1.5,
-                    radius: 8.0.into(),
+            .style(
+                move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                    background: Some(byteui::theme::color::current().card.into()),
+                    border: Border {
+                        color: if editing {
+                            byteui::theme::color::current().gold
+                        } else {
+                            byteui::theme::color::current().border
+                        },
+                        width: 1.5,
+                        radius: 8.0.into(),
+                    },
+                    ..iced_widget::container::Style::default()
                 },
-                ..iced_widget::container::Style::default()
-            })
+            )
             .into()
         } else {
             button(
@@ -936,9 +1013,10 @@ mod tests {
             rt.handle(),
             |_| {},
         );
+        assert!(ws.name_edit_focus_pending, "点项目名应置一次性聚焦标记");
         update(
             &mut ws,
-            Message::NameEditEvent(AddrEvent::Submit),
+            Message::NameEditSubmit,
             1,
             "同名",
             &test_repo_path(),
@@ -947,6 +1025,7 @@ mod tests {
             |_| {},
         );
         assert!(ws.name_editing.is_none());
+        assert!(!ws.error.is_some(), "同名不改名不应报错");
     }
 
     #[test]
