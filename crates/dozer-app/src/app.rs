@@ -704,7 +704,7 @@ pub struct TabDrag {
 /// 正在进行的图标栏面板拖拽(同栏重排 / 跨栏移动)。语义、生命周期管理
 /// 手法照抄 `TabDrag`,但不复用它——`TabDrag`/`TabGroup` 是"同组内换位",
 /// 图标栏这次还要支持"跨栏移动",合并进同一个类型会让校验逻辑变复杂。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RailDrag {
     pub source_side: Side,
     pub source_index: usize,
@@ -716,6 +716,14 @@ pub struct RailDrag {
     /// 期间不搬、不落盘。悬停回源栏(或还没悬停到任何另一栏位置)时是
     /// `None`。
     pub pending_cross_side: Option<(Side, usize)>,
+    /// 按下瞬间的 `App::last_cursor`,拖拽期间不更新——`rail_drag_confirmed`
+    /// 用它和当前光标算位移,判断这是不是"真的在拖"(见其定义)。之所以
+    /// 不能靠 `dragging_rail()`(`rail_drag.is_some()`)本身:那个从按下
+    /// 瞬间就为真(见 `rail_drag_surface` 文档解释的"按下即武装"原因),
+    /// 快速单击(按下几乎立刻松开、光标几乎不动)也会先武装再清空,若视觉
+    /// (幽灵图标/源图标变淡/抓手光标)直接跟 `dragging_rail()` 走,会在
+    /// 单击时闪一下"进入拖拽"的效果。
+    pub press_pos: (f32, f32),
 }
 
 /// 主界面当前几何状态的只读快照(main.rs 拖拽追踪/离屏几何计算用途,
@@ -954,6 +962,22 @@ fn rail_cross_apply(
 fn dragged_panel_kind(rail: &RailLayout, drag: Option<RailDrag>) -> Option<PanelKind> {
     let drag = drag?;
     rail.side(drag.source_side).get(drag.source_index).copied()
+}
+
+/// 图标栏拖拽从"按下武装"到"视觉判定为一次真的拖拽"所需的最小位移
+/// (像素,窗口逻辑坐标系,同 `App::last_cursor`)。低于这个距离只是武装
+/// 态,不展示幽灵图标/源图标变淡/抓手光标——见 `RailDrag::press_pos` 字段
+/// 文档解释的"快速单击也会先武装"问题。数值对齐常见桌面 OS 的点击/拖拽
+/// 判定阈值。
+const RAIL_DRAG_VISUAL_THRESHOLD_PX: f32 = 4.0;
+
+/// `drag` 从武装(按下)到 `cursor`(当前 `App::last_cursor`)是否已经
+/// 越过 [`RAIL_DRAG_VISUAL_THRESHOLD_PX`]——越过才算"确认是一次拖拽,不是
+/// 单击",视图层据此决定要不要展示拖拽视觉。纯查询,不修改 `drag`。
+fn rail_drag_past_threshold(drag: RailDrag, cursor: (f32, f32)) -> bool {
+    let dx = cursor.0 - drag.press_pos.0;
+    let dy = cursor.1 - drag.press_pos.1;
+    dx * dx + dy * dy > RAIL_DRAG_VISUAL_THRESHOLD_PX * RAIL_DRAG_VISUAL_THRESHOLD_PX
 }
 
 /// 给定面板当前所在栏(不是默认栏,是"当前"——`RailLayout` 实时查),
@@ -3704,6 +3728,18 @@ impl App {
         dragged_panel_kind(&self.shell_layout.rail_layout, self.rail_drag)
     }
 
+    /// `dragging_rail()` 为真(已按下武装)且光标已相对按下点位移超过
+    /// [`RAIL_DRAG_VISUAL_THRESHOLD_PX`]——只有这时才算"确认是一次拖拽,
+    /// 不是单击",视图层(`icon_rail` 源图标变淡/抓手光标、`rail_drag_
+    /// ghost` 幽灵图标)一律看这个而不是 `dragging_rail()`,避免快速单击
+    /// 也闪一下拖拽视觉(见 `RailDrag::press_pos` 文档)。`RailDragEnd` 的
+    /// 收尾逻辑(`main.rs`/`end_rail_drag`)不受影响,继续按 `dragging_rail()`
+    /// 判断,因为松手清理拖拽态这件事无论有没有越过阈值都要做。
+    pub fn rail_drag_confirmed(&self) -> bool {
+        self.rail_drag
+            .is_some_and(|d| rail_drag_past_threshold(d, self.last_cursor))
+    }
+
     /// 结束页签拖拽:清掉拖拽态,若是项目页签组还把新顺序写盘。松开左键的
     /// 两条路径都会走到这里——winit 的 `MouseInput{Released}`(`TabDragEnd`)
     /// 与子 webview 上 JS 上报的 `mouseup`(`WebViewMouseUp`)——保证拖拽态
@@ -5884,6 +5920,7 @@ impl App {
             source_index,
             origin_index: source_index,
             pending_cross_side: None,
+            press_pos: self.last_cursor,
         });
         // 点当前已激活的图标:退回未选中并收起对应面板区;但若对侧面板区
         // 也已收起,当前侧就是最后一个还开着的 zone,不能关(两侧对称)。
@@ -6683,7 +6720,7 @@ impl App {
                 popped
             };
 
-        if self.dragging_rail() {
+        if self.rail_drag_confirmed() {
             stack![with_maximize, rail_drag_ghost(self)]
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -7611,7 +7648,7 @@ fn icon_rail(
                 icon,
                 byteui::theme::icon_size::rail(),
                 kind == active_kind && open,
-                Some(kind) == app.dragged_panel_kind(),
+                app.rail_drag_confirmed() && Some(kind) == app.dragged_panel_kind(),
                 app.hover_progress(HoverId::Rail(RailButton::Panel(kind))),
                 true,
                 button_size,
@@ -7629,7 +7666,7 @@ fn icon_rail(
             entry,
             side,
             idx,
-            app.dragging_rail(),
+            app.rail_drag_confirmed(),
             Message::PanelSelect(kind),
         ))
         .padding(Padding {
@@ -8651,12 +8688,15 @@ pub(crate) fn tab_drag_surface(
 /// 调用方必须给内层 `icon_button_entry` 传 `interactive: false`(见本函数
 /// 内部注释解释为什么不能像 `tab_drag_surface` 那样"内容自己接
 /// on_press、外层只补 on_move")。`on_move`:光标移动到这个按钮上时,若
-/// 正在拖拽(`App::dragging_rail()`),上报 `RailDragMove { side, index }`。
-/// `rail_drag_move` 只在 `rail_drag` 命中时才做同栏重排 / 记跨栏悬停,
-/// 所以没在拖拽时这条 `on_move` 是无害的 no-op。`armed`(调用方传
-/// `app.dragging_rail()`,同 `tab_drag_surface` 的 `armed` 用法)为真时
-/// 把光标切成"抓取"手型,给出"确实按住在拖"的视觉反馈,而不是悄无声息
-/// 就换了位。
+/// 正在拖拽(`App::dragging_rail()`,按下即为真,与下面的 `armed` 无关),
+/// 上报 `RailDragMove { side, index }`。`rail_drag_move` 只在 `rail_drag`
+/// 命中时才做同栏重排 / 记跨栏悬停,所以没在拖拽时这条 `on_move` 是无害的
+/// no-op;这条判断刻意继续用 `dragging_rail()` 而不是 `armed`,因为同栏
+/// 重排要求光标移到另一个按钮上(天然已经远超阈值),没有"快速单击误判"
+/// 这层顾虑,不需要等阈值。`armed`(调用方传 `app.rail_drag_confirmed()`,
+/// 已越过 `RAIL_DRAG_VISUAL_THRESHOLD_PX` 位移阈值,不是单纯的
+/// `dragging_rail()`——避免快速单击也闪一下抓手光标)为真时把光标切成
+/// "抓取"手型,给出"确实按住在拖"的视觉反馈,而不是悄无声息就换了位。
 fn rail_drag_surface(
     content: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>,
     side: Side,
@@ -9192,10 +9232,13 @@ fn ssh_terminal_pane<'a>(
 /// 请求重绘"),这两点凑在一起,`rail_drag_ghost` 不需要任何额外的重绘
 /// 触发就能逐帧跟手。
 ///
-/// 拖拽未在进行,或(理论不会发生的防御性分支)拖拽中但下标越界拿不到
-/// 面板种类时,返回空占位——不画任何东西。
+/// 拖拽未在进行、拖拽已武装但还没越过 [`RAIL_DRAG_VISUAL_THRESHOLD_PX`]
+/// 位移阈值(快速单击,见 `App::rail_drag_confirmed`),或(理论不会发生
+/// 的防御性分支)拖拽中但下标越界拿不到面板种类时,返回空占位——不画
+/// 任何东西。调用方(`App::view`)已经用 `rail_drag_confirmed()` 做了同样
+/// 的外层判断,这里的检查是防御性的第二道,不是唯一把关处。
 fn rail_drag_ghost(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    if !app.dragging_rail() {
+    if !app.rail_drag_confirmed() {
         return column![].into();
     }
     let Some(kind) = app.dragged_panel_kind() else {
@@ -10932,6 +10975,7 @@ mod tests {
                 source_index: 0,
                 origin_index: 0,
                 pending_cross_side: None,
+                press_pos: (0.0, 0.0),
             };
             let original_left = rail.left.clone();
             rail_drag_move_into(&mut rail, &mut drag, Side::Left, 2);
@@ -10960,6 +11004,7 @@ mod tests {
                 source_index: 0,
                 origin_index: 0,
                 pending_cross_side: None,
+                press_pos: (0.0, 0.0),
             };
             rail_drag_move_into(&mut rail, &mut drag, Side::Left, 0);
             assert_eq!(rail, original, "拖到同一位置是 no-op,RailLayout 不变");
@@ -11014,6 +11059,7 @@ mod tests {
                 source_index: 0,
                 origin_index: 0,
                 pending_cross_side: None,
+                press_pos: (0.0, 0.0),
             };
             rail_drag_move_into(&mut rail, &mut drag, Side::Right, 0); // 悬停到对侧
             assert_eq!(drag.pending_cross_side, Some((Side::Right, 0)));
@@ -11037,6 +11083,7 @@ mod tests {
                 source_index: 0,
                 origin_index: 0,
                 pending_cross_side: None,
+                press_pos: (0.0, 0.0),
             };
             assert_eq!(dragged_panel_kind(&rail, Some(drag)), Some(kind));
         }
@@ -11049,8 +11096,47 @@ mod tests {
                 source_index: 999,
                 origin_index: 999,
                 pending_cross_side: None,
+                press_pos: (0.0, 0.0),
             };
             assert_eq!(dragged_panel_kind(&rail, Some(drag)), None);
+        }
+
+        fn drag_at(press_pos: (f32, f32)) -> RailDrag {
+            RailDrag {
+                source_side: Side::Left,
+                source_index: 0,
+                origin_index: 0,
+                pending_cross_side: None,
+                press_pos,
+            }
+        }
+
+        /// 光标没动(或只在阈值内小幅抖动)不算越过阈值——快速单击场景。
+        #[test]
+        fn past_threshold_false_when_cursor_has_not_moved() {
+            let drag = drag_at((100.0, 100.0));
+            assert!(!rail_drag_past_threshold(drag, (100.0, 100.0)));
+            assert!(!rail_drag_past_threshold(drag, (101.0, 100.0)));
+        }
+
+        /// 恰好等于阈值(平方比较是 `>` 不是 `>=`)不算越过,严格大于才算。
+        #[test]
+        fn past_threshold_false_when_exactly_at_threshold() {
+            let drag = drag_at((0.0, 0.0));
+            assert!(!rail_drag_past_threshold(
+                drag,
+                (RAIL_DRAG_VISUAL_THRESHOLD_PX, 0.0)
+            ));
+        }
+
+        /// 光标越过阈值(任意方向,这里用纯 x 位移)判定为真的拖拽。
+        #[test]
+        fn past_threshold_true_once_cursor_moves_past_it() {
+            let drag = drag_at((0.0, 0.0));
+            assert!(rail_drag_past_threshold(
+                drag,
+                (RAIL_DRAG_VISUAL_THRESHOLD_PX + 1.0, 0.0)
+            ));
         }
     }
 
