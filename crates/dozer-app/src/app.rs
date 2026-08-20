@@ -946,6 +946,16 @@ fn rail_cross_apply(
     Some(kind)
 }
 
+/// 当前正被图标栏拖拽的面板种类(`None` = 未在拖拽)。纯查询,不修改
+/// `rail`/`drag`——拖拽中同栏重排会实时更新 `drag.source_index`(见
+/// `rail_drag_move_into`),所以这里查到的永远是"此刻鼠标下真正拖着的
+/// 那个图标",不是拖拽开始时的原始位置。下标越界(理论不会发生,防御性)
+/// 时返回 `None`,不 panic。
+fn dragged_panel_kind(rail: &RailLayout, drag: Option<RailDrag>) -> Option<PanelKind> {
+    let drag = drag?;
+    rail.side(drag.source_side).get(drag.source_index).copied()
+}
+
 /// 给定面板当前所在栏(不是默认栏,是"当前"——`RailLayout` 实时查),
 /// 算出这条分割线要用哪个 zone 的横向基准(x0)与可分配宽度。左栏基准是
 /// `icon_rail_width()`(从窗口左沿量),右栏基准是"窗口宽 - 右图标栏宽 -
@@ -3684,6 +3694,14 @@ impl App {
     /// 同 `dragging_group` 对 `TabDrag` 的用法)。
     pub fn dragging_rail(&self) -> bool {
         self.rail_drag.is_some()
+    }
+
+    /// 当前正被拖拽的面板种类(`None` = 未在拖拽)——视图层(`icon_rail`
+    /// 源图标变淡 / `rail_drag_ghost` 幽灵图标取图标)据此判断"这是不是
+    /// 我"。薄包装 `dragged_panel_kind` 自由函数(同 `rail_drag_move`
+    /// 包装 `rail_drag_move_into` 的既有手法),不重复实现逻辑。
+    pub fn dragged_panel_kind(&self) -> Option<PanelKind> {
+        dragged_panel_kind(&self.shell_layout.rail_layout, self.rail_drag)
     }
 
     /// 结束页签拖拽:清掉拖拽态,若是项目页签组还把新顺序写盘。松开左键的
@@ -10890,6 +10908,37 @@ mod tests {
             rail_drag_move_into(&mut rail, &mut drag, Side::Left, 0); // 移回源栏,index 未变
             assert_eq!(drag.pending_cross_side, None, "移回源栏取消跨栏悬停");
             assert_eq!(rail, before, "整个过程没有搬移,RailLayout 不变");
+        }
+
+        #[test]
+        fn dragged_panel_kind_none_when_not_dragging() {
+            let rail = RailLayout::default();
+            assert_eq!(dragged_panel_kind(&rail, None), None);
+        }
+
+        #[test]
+        fn dragged_panel_kind_reads_source_slot() {
+            let rail = RailLayout::default();
+            let kind = rail.left[0];
+            let drag = RailDrag {
+                source_side: Side::Left,
+                source_index: 0,
+                origin_index: 0,
+                pending_cross_side: None,
+            };
+            assert_eq!(dragged_panel_kind(&rail, Some(drag)), Some(kind));
+        }
+
+        #[test]
+        fn dragged_panel_kind_none_when_index_out_of_bounds() {
+            let rail = RailLayout::default();
+            let drag = RailDrag {
+                source_side: Side::Left,
+                source_index: 999,
+                origin_index: 999,
+                pending_cross_side: None,
+            };
+            assert_eq!(dragged_panel_kind(&rail, Some(drag)), None);
         }
     }
 
