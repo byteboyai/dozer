@@ -7477,6 +7477,11 @@ fn project_tab_item<'a>(
         text(name.clone())
             .font(top_bar_font())
             .size(byteui::theme::font::body())
+            // 长标题不换行:iced `Text` 默认 `Wrapping::Word`(不是曾经误以为
+            // 的 `None`),不显式关掉的话,标题区被压窄时会真的折成两行,而
+            // 不是靠下面 `label` 的 `.clip(true)` 单行截断——这正是"tab 标题
+            // 处理较长内容时不应换行"这条验收反馈的根因。
+            .wrapping(iced_widget::core::text::Wrapping::None)
             .color(if active {
                 // 选中态标题恒为金 `#F2D94E`(甲方动作专属色)。
                 byteui::theme::color::current().gold
@@ -8998,11 +9003,15 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
             text(title.clone())
                 .font(top_bar_font())
                 .size(byteui::theme::font::body())
+                // iced `Text` 默认 `Wrapping::Word`,不是曾经以为的
+                // `None`——不显式关掉,标题超宽时会真的折成两行,而不是
+                // 靠下面 `.clip(true)` 单行截断(验收反馈:较长标题换行)。
+                .wrapping(iced_widget::core::text::Wrapping::None)
                 .color(title_color),
         )
         // 标题超宽不补省略号、也不换行,直接裁掉溢出(见 CODEBUDDY 需求):
-        // iced `Text` 默认 `Wrapping::None`,`clip` 把越界部分藏起,视觉上即
-        // "隐藏"。满 2s 悬停后由外层 `controlled_tooltip` 弹出全称。
+        // `clip` 把越界部分藏起,视觉上即"隐藏"。满 2s 悬停后由外层
+        // `controlled_tooltip` 弹出全称。
         .width(Length::Shrink)
         .max_width(title_max)
         .clip(true),
