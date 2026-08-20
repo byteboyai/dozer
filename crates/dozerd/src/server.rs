@@ -255,6 +255,11 @@ async fn handle_conn(
                         Request::GetPreviewContext { project_id } => Reply::PreviewContext {
                             context: preview_contexts.get(project_id),
                         },
+                        Request::ListConversations { .. }
+                        | Request::GetConversationTurns { .. }
+                        | Request::GetUsageSummary { .. } => Reply::Error {
+                            message: "对话摄取查询尚未接线（Task 10）。".into(),
+                        },
                     },
                 };
                 w.write_all(encode_line(&reply).as_bytes()).await?;
