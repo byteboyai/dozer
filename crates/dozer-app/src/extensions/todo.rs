@@ -1522,32 +1522,19 @@ fn todo_footer_bar<'a>(
     // 图标配色对齐其它 icon 按钮(agent 面板"＋"、文件树搜索等):静止
     // DIM、hover 平滑过渡到 GOLD,由 `HoverId::TodoAddSubmit` + 外层
     // `MouseArea` 驱动同一套悬停动画(不再是恒 GOLD 的硬编码)。
-    let submit_color = byteui::theme::color::mix(
-        byteui::theme::color::current().dim,
-        byteui::theme::color::current().gold,
+    let submit = icons::icon_button_entry(
+        icons::IconKind::CircleArrowUp,
+        byteui::theme::icon_size::row(),
+        false,
+        false,
         app.hover_progress(HoverId::TodoAddSubmit),
+        false,
+        byteui::theme::geometry::tab_button_size(),
+        true,
+        Message::AddSubmit,
+        |hovered| Message::Hover(HoverId::TodoAddSubmit, hovered),
+        "提交",
     );
-    let submit = MouseArea::new(
-        button(icons::view(
-            icons::IconKind::CircleArrowUp,
-            byteui::theme::icon_size::row(),
-            submit_color,
-        ))
-        .on_press(Message::AddSubmit)
-        .padding(6)
-        .style(move |_t, _s| button::Style {
-            background: None,
-            border: Border {
-                color: byteui::theme::color::current().border,
-                width: 0.0,
-                radius: 4.0.into(),
-            },
-            text_color: submit_color,
-            ..button::Style::default()
-        }),
-    )
-    .on_enter(Message::Hover(HoverId::TodoAddSubmit, true))
-    .on_exit(Message::Hover(HoverId::TodoAddSubmit, false));
 
     // 输入框本体:单个带边框的容器,把"文字区 + 提交按钮"一起包进边框内。
     // 整框包一层 `MouseArea`——点框内(非提交按钮处)进编辑态;提交按钮是

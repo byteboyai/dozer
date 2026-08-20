@@ -8,7 +8,7 @@
 
 use byteui::interaction::icons;
 use iced_widget::core::{Border, Element, Length};
-use iced_widget::{button, column, container, row, scrollable, text, text_input};
+use iced_widget::{button, column, container, row, scrollable, text};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -1332,52 +1332,56 @@ fn source_form<'a>(
     }
 
     let mut col = column![driver_row].spacing(8);
-    col = col.push(
-        text_input("名字", &draft.name)
-            .on_input(Message::DraftNameChanged)
-            .size(byteui::theme::font::body()),
-    );
+    col = col.push(byteui::form::input_text::view(
+        "名字",
+        &draft.name,
+        false,
+        Message::DraftNameChanged,
+    ));
     if draft.driver == DriverKind::Sqlite {
-        col = col.push(
-            text_input("文件路径", &draft.database)
-                .on_input(Message::DraftDatabaseChanged)
-                .size(byteui::theme::font::body()),
-        );
+        col = col.push(byteui::form::input_text::view(
+            "文件路径",
+            &draft.database,
+            false,
+            Message::DraftDatabaseChanged,
+        ));
     } else {
-        col = col.push(
-            text_input(
-                "连接 URI(可选,填了则忽略下面各项,例如 postgres://user:pw@host:5432/db)",
-                &draft.uri,
-            )
-            .on_input(Message::DraftUriChanged)
-            .size(byteui::theme::font::body()),
-        );
-        col = col.push(
-            text_input("host", &draft.host)
-                .on_input(Message::DraftHostChanged)
-                .size(byteui::theme::font::body()),
-        );
-        col = col.push(
-            text_input("port", &draft.port)
-                .on_input(Message::DraftPortChanged)
-                .size(byteui::theme::font::body()),
-        );
-        col = col.push(
-            text_input("database", &draft.database)
-                .on_input(Message::DraftDatabaseChanged)
-                .size(byteui::theme::font::body()),
-        );
-        col = col.push(
-            text_input("username", &draft.username)
-                .on_input(Message::DraftUsernameChanged)
-                .size(byteui::theme::font::body()),
-        );
-        col = col.push(
-            text_input("password(留空则不修改)", &draft.password)
-                .secure(true)
-                .on_input(Message::DraftPasswordChanged)
-                .size(byteui::theme::font::body()),
-        );
+        col = col.push(byteui::form::input_text::view(
+            "连接 URI(可选,填了则忽略下面各项,例如 postgres://user:pw@host:5432/db)",
+            &draft.uri,
+            false,
+            Message::DraftUriChanged,
+        ));
+        col = col.push(byteui::form::input_text::view(
+            "host",
+            &draft.host,
+            false,
+            Message::DraftHostChanged,
+        ));
+        col = col.push(byteui::form::input_text::view(
+            "port",
+            &draft.port,
+            false,
+            Message::DraftPortChanged,
+        ));
+        col = col.push(byteui::form::input_text::view(
+            "database",
+            &draft.database,
+            false,
+            Message::DraftDatabaseChanged,
+        ));
+        col = col.push(byteui::form::input_text::view(
+            "username",
+            &draft.username,
+            false,
+            Message::DraftUsernameChanged,
+        ));
+        col = col.push(byteui::form::input_text::view(
+            "password(留空则不修改)",
+            &draft.password,
+            true,
+            Message::DraftPasswordChanged,
+        ));
     }
     col = col.push(
         row![

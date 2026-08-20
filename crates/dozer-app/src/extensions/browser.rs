@@ -1447,29 +1447,54 @@ pub fn view(
     } else {
         "输入网址".to_string()
     };
-    let addr = button(lh(text(addr_text).size(byteui::theme::font::body()).color(
-        if editing {
+    let addr_body = lh(text(addr_text)
+        .size(byteui::theme::font::body())
+        .color(if editing {
             byteui::theme::color::current().cream
         } else {
             byteui::theme::color::current().dim
-        },
-    )))
-    .on_press(Message::AddrClick)
-    .width(Length::Fill)
-    .style(move |_t, _s| button::Style {
-        background: Some(byteui::theme::color::current().term_bg.into()),
-        text_color: byteui::theme::color::current().cream,
-        border: Border {
-            color: if editing {
-                byteui::theme::color::current().gold
-            } else {
-                byteui::theme::color::current().border
+        }));
+
+    // 地址栏本体:单个带边框的容器,把"网址文字 + 收藏夹按钮"一起包进边框
+    // 内(复用 todo 新增输入框 / `crate::search_box` 的布局模式)。整框包
+    // 一层 `MouseArea`——点框内(非按钮处)进地址编辑态;收藏夹按钮是内层
+    // widget,会先截获自己的点击(开/关收藏夹面板)。框高由收藏按钮的方形
+    // 尺寸撑起,文字垂直居中,视觉上按钮嵌在地址栏右侧。
+    let content_h = byteui::theme::geometry::tab_button_size();
+    let addr_box = MouseArea::new(
+        container(
+            row![
+                container(addr_body)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_y(iced_widget::core::alignment::Vertical::Center)
+                    .align_x(iced_widget::core::alignment::Horizontal::Left),
+                container(bookmarks_toggle_button(state))
+                    .height(Length::Fill)
+                    .align_y(iced_widget::core::alignment::Vertical::Center),
+            ]
+            .width(Length::Fill)
+            .height(Length::Fixed(content_h))
+            .align_y(iced_widget::core::Alignment::Center),
+        )
+        .width(Length::Fill)
+        .height(Length::Fixed(content_h + 8.0))
+        .padding([4, 8])
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(byteui::theme::color::current().term_bg.into()),
+            border: Border {
+                color: if editing {
+                    byteui::theme::color::current().gold
+                } else {
+                    byteui::theme::color::current().border
+                },
+                width: 1.0,
+                radius: 2.0.into(),
             },
-            width: 1.0,
-            radius: 2.0.into(),
-        },
-        ..button::Style::default()
-    });
+            ..container::Style::default()
+        }),
+    )
+    .on_press(Message::AddrClick);
 
     // 后退/前进/刷新三颗导航按钮紧凑成组(组内间距 2,比下方整体 4 更紧),
     // 再与地址栏/收藏等拉开到 4,突出"导航簇"的视觉聚合。
@@ -1481,14 +1506,9 @@ pub fn view(
     .spacing(2)
     .align_y(iced_widget::core::Alignment::Center);
 
-    let addr_row = row![
-        nav_buttons,
-        addr,
-        star_button(state, project_id),
-        bookmarks_toggle_button(state)
-    ]
-    .spacing(4)
-    .align_y(iced_widget::core::Alignment::Center);
+    let addr_row = row![nav_buttons, addr_box, star_button(state, project_id),]
+        .spacing(4)
+        .align_y(iced_widget::core::Alignment::Center);
 
     let mut content = column![tab_bar, tab_divider(), addr_row].spacing(region.gap);
 
@@ -1560,7 +1580,7 @@ fn bookmarks_toggle_button(
     state: &State,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     icons::icon_button_entry(
-        icons::IconKind::Bookmark,
+        icons::IconKind::FolderBookmark,
         byteui::theme::icon_size::row(),
         false,
         false,

@@ -86,8 +86,10 @@ pub enum IconKind {
     /// 传 GOLD 而非切换到另一份实心图标——`icons::view` 只管描边色,单一
     /// 资源足够表达"已收藏/未收藏"两态(YAGNI,不新增 filled 变体)。
     Star,
-    /// tab 栏"收藏夹"下拉面板触发图标(Lucide bookmark)。
-    Bookmark,
+    /// tab 栏"收藏夹"下拉面板触发图标(Lucide folder-bookmark:文件夹 +
+    /// 右上角书签角标,表示"把整组页面收藏进文件夹"的语义,比单独 bookmark
+    /// 更贴合"收藏夹下拉面板"的动作)。
+    FolderBookmark,
     /// Agent 用量统计面板的图标(Lucide bar-chart-3)。
     BarChart3,
     /// 验收面板 rail 图标(Lucide badge-check)。
@@ -200,7 +202,7 @@ impl IconKind {
             IconKind::Play => include_bytes!("../../assets/icons/play.svg"),
             IconKind::Briefcase => include_bytes!("../../assets/icons/briefcase.svg"),
             IconKind::Star => include_bytes!("../../assets/icons/star.svg"),
-            IconKind::Bookmark => include_bytes!("../../assets/icons/bookmark.svg"),
+            IconKind::FolderBookmark => include_bytes!("../../assets/icons/folder-bookmark.svg"),
             IconKind::BarChart3 => include_bytes!("../../assets/icons/bar-chart-3.svg"),
             IconKind::BadgeCheck => include_bytes!("../../assets/icons/badge-check.svg"),
             IconKind::Database => include_bytes!("../../assets/icons/database.svg"),
