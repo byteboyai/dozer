@@ -6,10 +6,13 @@ use iced_widget::text_input::{self, Status};
 pub fn view<'a, Message: Clone + 'a>(
     placeholder: &str,
     value: &str,
+    secure: bool,
     on_input: impl Fn(String) -> Message + 'a,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     iced_widget::text_input(placeholder, value)
+        .secure(secure)
         .on_input(on_input)
+        .size(crate::theme::font::body())
         .padding(8)
         .style(|_theme: &iced_widget::Theme, status: Status| {
             let colors = crate::theme::color::current();
