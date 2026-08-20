@@ -7682,18 +7682,30 @@ fn icon_rail(
         layers.push(positioned.into());
     }
 
-    // 跨栏拖拽悬停到本栏时,在悬停下标处画一条金色插入线——`rail_cross_
-    // apply` 落地时是 `insert`(把已有项推后一位),不是跟目标位的按钮
-    // 互换,所以高亮画成"卡在两个按钮之间的线",不描边某个已存在按钮
-    // (那样会误导成"要跟它换位")。`pending_cross_side.1` 恒是目标栏
-    // 某个已有按钮自己上报的下标(见 `rail_drag_surface` 的 `on_move`
-    // 只挂在真实按钮上),不会是 `len()`(悬停不到"最后一个之后"这个
-    // 位置——现有交互面就是如此,不是这次新引入的限制)。
-    if let Some((_, idx)) = app
+    // 拖拽悬停(同栏重排 / 跨栏悬停)时,在预计插入点画一条金色插入线,
+    // 两种情况互斥(`pending_cross_side` 只在悬停到*另一*栏时才 `Some`),
+    // 同一帧同一侧最多画一条:
+    // - 跨栏悬停到本栏:插入点是 `pending_cross_side.1`——`rail_cross_
+    //   apply` 落地时是 `insert`(把已有项推后一位),不是跟目标位的按钮
+    //   互换,所以高亮画成"卡在两个按钮之间的线",不描边某个已存在按钮
+    //   (那样会误导成"要跟它换位")。这个下标恒是目标栏某个已有按钮自己
+    //   上报的下标(见 `rail_drag_surface` 的 `on_move` 只挂在真实按钮
+    //   上),不会是 `len()`(悬停不到"最后一个之后"这个位置——现有交互
+    //   面就是如此,不是这次新引入的限制)。
+    // - 同栏内拖拽重排:插入点是 `drag.source_index`——同栏分支的
+    //   `rail_drag_move_into` 已经把 `RailLayout`/`source_index` 实时改到
+    //   目标位(不像跨栏要等 `RailDragEnd` 才落地),所以这里不是"预告",
+    //   是"跟当前已生效的顺序对齐"的同一条线,视觉语言与跨栏悬停统一。
+    // 两种情况都只在越过点击/拖拽视觉阈值(`rail_drag_confirmed`)后才
+    // 画,理由同幽灵图标/源图标变淡——避免快速单击也闪一下插入线。
+    let insertion_idx = app
         .rail_drag
-        .and_then(|d| d.pending_cross_side)
-        .filter(|(s, _)| *s == side)
-    {
+        .filter(|_| app.rail_drag_confirmed())
+        .and_then(|d| match d.pending_cross_side {
+            Some((cross_side, idx)) => (cross_side == side).then_some(idx),
+            None => (d.source_side == side).then_some(d.source_index),
+        });
+    if let Some(idx) = insertion_idx {
         let bar_h = 3.0;
         let y = (region.padding.top + idx as f32 * step - region.gap / 2.0 - bar_h / 2.0).max(0.0);
         let marker = container(iced_widget::Space::new())
