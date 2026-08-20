@@ -15,6 +15,7 @@ const RAW: &str = include_str!("../../assets/theme/homespace.json");
 #[derive(Deserialize)]
 struct HomespaceFonts {
     caption_sm: u32,
+    label: u32,
     body: u32,
     subtitle: u32,
 }
@@ -41,6 +42,9 @@ fn scale(v: u32) -> u32 {
 pub fn caption_sm() -> u32 {
     scale(SIZES.caption_sm)
 }
+pub fn label() -> u32 {
+    scale(SIZES.label)
+}
 pub fn body() -> u32 {
     scale(SIZES.body)
 }
@@ -57,6 +61,7 @@ mod tests {
     #[test]
     fn sizes_match_config_literals_at_default_scale() {
         assert_eq!(caption_sm(), 11);
+        assert_eq!(label(), 13);
         assert_eq!(body(), 14);
         assert_eq!(subtitle(), 15);
     }

@@ -1354,7 +1354,7 @@ fn star_button(
     // 统一 icon 按钮规范:未收藏静止 DIM、hover 过渡到 GOLD;已收藏恒金
     // (active=true)。hover 动画走浏览器自己的 `State` 进度机(哨兵键)。
     icons::icon_button_entry(
-        icons::IconKind::Star,
+        icons::IconKind::FolderBookmark,
         byteui::theme::icon_size::row(),
         starred,
         false,
@@ -1635,14 +1635,14 @@ pub fn view(
     )
     .on_press(Message::AddrClick);
 
-    // 后退/前进/刷新三颗导航按钮紧凑成组(组内间距 2,比下方整体 4 更紧),
+    // 后退/前进/刷新三颗导航按钮紧凑成组(组内间距 0,比下方整体 4 更紧),
     // 再与地址栏/收藏等拉开到 4,突出"导航簇"的视觉聚合。
     let nav_buttons = row![
         nav_button(state, NavAction::Back),
         nav_button(state, NavAction::Forward),
         nav_button(state, NavAction::Refresh),
     ]
-    .spacing(2)
+    .spacing(0)
     .align_y(iced_widget::core::Alignment::Center);
 
     let addr_row = row![nav_buttons, addr_box, star_button(state, project_id),]
@@ -1719,7 +1719,7 @@ fn bookmarks_toggle_button(
     state: &State,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     icons::icon_button_entry(
-        icons::IconKind::FolderBookmark,
+        icons::IconKind::Star,
         byteui::theme::icon_size::row(),
         false,
         false,

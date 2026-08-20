@@ -344,6 +344,28 @@ where
     home_panel_head_with_actions(icon, title, None)
 }
 
+/// 子栏目标题,样式参考 workspace Project 面板「文件存储 / 项目文档」
+/// (`extensions::project` 的用量行 / `links_section` 头部):CircleSmall
+/// 圆点 + cream `label` 字号,无下划线——层级低于 `home_panel_head`
+/// 的面板标题(暖金 accent + subtitle + 1px 分割线)。
+fn home_section_head(
+    title: &str,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    row![
+        icons::view(
+            icons::IconKind::CircleSmall,
+            byteui::theme::icon_size::row(),
+            theme::homespace_color::cream(),
+        ),
+        lh(text(title)
+            .size(theme::homespace_font::label())
+            .color(theme::homespace_color::cream())),
+    ]
+    .spacing(6)
+    .align_y(iced_widget::core::Alignment::Center)
+    .into()
+}
+
 /// 首页"项目列表" pane 一页显示的条数。首屏 1 页,点"更多..."页数递增、
 /// 显示 `pages * PROJECT_PAGE_SIZE` 条。
 const PROJECT_PAGE_SIZE: usize = 5;
@@ -557,10 +579,11 @@ fn home_new_project_button()
     .into()
 }
 
-/// 首页左栏"Recents" pane(`HomeLeftView::Recents`):合并原"最近的文件"/
-/// "最近的对话"两卡。左栏宽度固定较窄(`h0_sidebar_width()`),两卡挤不下
-/// 并排,改上下堆叠(两张卡自己的外层容器相应把 `width`/`height` 的
-/// `FillPortion` 轴对调,见 `home_recent_files_card`/
+/// 首页左栏"Recents" pane(`HomeLeftView::Recents`):面板标题「最近」,
+/// 下挂「最近的对话」「最近的文件」两个子栏目(子栏目标题样式参考
+/// workspace Project 面板「文件存储 / 项目文档」)。左栏宽度固定较窄
+/// (`h0_sidebar_width()`),两子栏目上下堆叠(各自外层容器把 `height`
+/// 设成 `FillPortion(1)` 平分剩余高度,见 `home_recent_files_card`/
 /// `home_recent_conversations_card`)。
 fn home_recents_view(
     app: &App,
@@ -569,10 +592,11 @@ fn home_recents_view(
     // 与 project list 面板同款:外层 `zone_box` 仅留 1px 圆角裁切余量,这里
     // 再补一层标准内距,让两张卡片(含各自的标题)四周都不顶圆角边框。
     let inner = column![
-        home_recent_files_card(app, now_ms),
-        home_recent_conversations_card(app, now_ms)
+        home_panel_head(icons::IconKind::History, "最近"),
+        home_recent_conversations_card(app, now_ms),
+        home_recent_files_card(app, now_ms)
     ]
-    .spacing(24)
+    .spacing(16)
     .height(Length::Fill);
     container(inner)
         .width(Length::Fill)
@@ -587,7 +611,7 @@ fn home_recent_files_card(
     app: &App,
     now_ms: u64,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let mut col = column![home_panel_head(icons::IconKind::FileText, "最近的文件")].spacing(8);
+    let mut col = column![home_section_head("最近的文件")].spacing(8);
 
     if !app.home_recents_loaded {
         col = col.push(
@@ -659,11 +683,7 @@ fn home_recent_conversations_card(
     app: &App,
     now_ms: u64,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let mut col = column![home_panel_head(
-        icons::IconKind::MessageSquare,
-        "最近的对话"
-    )]
-    .spacing(8);
+    let mut col = column![home_section_head("最近的对话")].spacing(8);
 
     if !app.home_recents_loaded {
         col = col.push(

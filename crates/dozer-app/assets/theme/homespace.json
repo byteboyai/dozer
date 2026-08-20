@@ -9,6 +9,7 @@
   },
   "font_sizes": {
     "caption_sm": 11,
+    "label": 13,
     "body": 14,
     "subtitle": 15
   }
