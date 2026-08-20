@@ -2050,7 +2050,7 @@ git commit -m "feat(dozerd): hook 事件带 transcript_path 时触发增量摄�
 
 在 `agent_state_for(&event)` 算出新状态之前先读一次该 session 当前的 `agent_state`,若新状态是 `Idle`/`AwaitingInput` 且与旧状态不同(真正发生了状态转换,不是同一状态的重复事件),且该 session 已知 `transcript_path`,则额外触发一次摄取(补上 hook 事件本身可能没带 `transcript_path` 或文件当时还没写完整的情况)。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```rust
     #[test]
@@ -2109,7 +2109,7 @@ git commit -m "feat(dozerd): hook 事件带 transcript_path 时触发增量摄�
 Run: `cargo test -p dozerd maybe_ingest_on_state_transition`
 Expected: 编译失败(函数不存在)。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 在 `server.rs` 里 `maybe_ingest_from_hook_data` 之后新增:
 
@@ -2169,12 +2169,12 @@ fn maybe_ingest_on_state_transition(
 
 (这段紧跟在 Task 11 加的 `maybe_ingest_from_hook_data(&transcripts, agent, &data);` 之后——两次触发都保留:一次是 hook data 自带的路径快通道,一次是状态转换兜底,二者用的是同一个 `ingest_session`,同文件重复调用天然因为 cursor 推进而是廉价 no-op,不用额外去重。)
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cargo test -p dozerd transcripts_or_ingest` (或直接 `cargo test -p dozerd`)
 Expected: PASS(全部)
 
-- [ ] **Step 5: 全量校验 + 提交**
+- [x] **Step 5: 全量校验 + 提交**
 
 Run: `cargo build -p dozerd && cargo test -p dozerd && cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -- --check`
 
