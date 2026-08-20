@@ -8,7 +8,7 @@ use crate::app::{App, HoverId, ssh_tab_hover_key};
 use byteui::interaction::icons;
 use iced_widget::core::Element;
 use iced_widget::{
-    MouseArea, Scrollable, button, column, container, row, scrollable, stack, text, text_input,
+    MouseArea, Scrollable, button, column, container, row, scrollable, stack, text,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -911,42 +911,16 @@ fn host_form<'a>(
     draft: &'a SshHostDraft,
     status: &'a TestStatus,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    // 表单输入框统一底色 `#12202a`(CARD),深于一层的表单容器(容器本身
-    // 无底色,靠 GOLD 描边 + 外层 BG 衬托出层级)。
-    let input_style = |_t: &iced_widget::Theme,
-                       _s: iced_widget::text_input::Status|
-     -> iced_widget::text_input::Style {
-        iced_widget::text_input::Style {
-            background: byteui::theme::color::current().card.into(),
-            border: iced_widget::core::Border {
-                color: byteui::theme::color::current().border,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            icon: byteui::theme::color::current().dim,
-            placeholder: byteui::theme::color::current().dim,
-            value: byteui::theme::color::current().cream,
-            selection: byteui::theme::color::current().gold,
-        }
-    };
-
     let mut col = column![
-        text_input("主机名称", &draft.name)
-            .style(input_style)
-            .on_input(Message::DraftNameChanged)
-            .size(byteui::theme::font::body()),
-        text_input("Host", &draft.host)
-            .style(input_style)
-            .on_input(Message::DraftHostChanged)
-            .size(byteui::theme::font::body()),
-        text_input("port(22)", &draft.port)
-            .style(input_style)
-            .on_input(Message::DraftPortChanged)
-            .size(byteui::theme::font::body()),
-        text_input("user name", &draft.username)
-            .style(input_style)
-            .on_input(Message::DraftUsernameChanged)
-            .size(byteui::theme::font::body()),
+        byteui::form::input_text::view("主机名称", &draft.name, false, Message::DraftNameChanged),
+        byteui::form::input_text::view("Host", &draft.host, false, Message::DraftHostChanged),
+        byteui::form::input_text::view("port(22)", &draft.port, false, Message::DraftPortChanged),
+        byteui::form::input_text::view(
+            "user name",
+            &draft.username,
+            false,
+            Message::DraftUsernameChanged,
+        ),
         row![
             radio_dot(
                 "密码",
@@ -964,27 +938,25 @@ fn host_form<'a>(
     .spacing(10);
 
     if draft.use_private_key {
-        col = col.push(
-            text_input("私钥文件路径,如 ~/.ssh/id_ed25519", &draft.key_path)
-                .style(input_style)
-                .on_input(Message::DraftKeyPathChanged)
-                .size(byteui::theme::font::body()),
-        );
-        col = col.push(
-            text_input("私钥口令(留空则不修改/无口令)", &draft.password)
-                .secure(true)
-                .style(input_style)
-                .on_input(Message::DraftPasswordChanged)
-                .size(byteui::theme::font::body()),
-        );
+        col = col.push(byteui::form::input_text::view(
+            "私钥文件路径,如 ~/.ssh/id_ed25519",
+            &draft.key_path,
+            false,
+            Message::DraftKeyPathChanged,
+        ));
+        col = col.push(byteui::form::input_text::view(
+            "私钥口令(留空则不修改/无口令)",
+            &draft.password,
+            true,
+            Message::DraftPasswordChanged,
+        ));
     } else {
-        col = col.push(
-            text_input("password(留空则不修改)", &draft.password)
-                .secure(true)
-                .style(input_style)
-                .on_input(Message::DraftPasswordChanged)
-                .size(byteui::theme::font::body()),
-        );
+        col = col.push(byteui::form::input_text::view(
+            "password(留空则不修改)",
+            &draft.password,
+            true,
+            Message::DraftPasswordChanged,
+        ));
     }
 
     let text_btn = |label: &'a str, color: iced_widget::core::Color, msg: Message| {
