@@ -1191,6 +1191,13 @@ fn tree_edit_row(
     .into()
 }
 
+/// 文件树底部 git 栏三元组(图标 + 文案元素 + 可选操作按钮)。
+type GitFooterTriple<'a> = (
+    icons::IconKind,
+    Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
+    Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>>,
+);
+
 /// 文件树底部 git 栏:项目在仓库内显示
 /// `folder-git-2 当前分支名 〔切换按钮〕`;项目无 git 仓库显示
 /// `folder-minus 未受Git保护 〔新建Git仓库〕`;仓库信息尚未加载显示中性
@@ -1201,11 +1208,7 @@ fn git_footer_bar(
     branch_hover_t: f32,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let box_len = byteui::theme::icon_size::row() + 12.0;
-    let (icon, label, action): (
-        icons::IconKind,
-        Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>,
-        Option<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>>,
-    ) = if !ws_state.git_loaded {
+    let (icon, label, action): GitFooterTriple<'_> = if !ws_state.git_loaded {
         (
             icons::IconKind::GitBranch,
             text("加载仓库信息…")

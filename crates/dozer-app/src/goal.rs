@@ -39,6 +39,7 @@ pub fn parse_goal(md: &str) -> Option<Goal> {
 /// 标准各占一行 `- [ ] {criterion}`。不保留/不合并文件里其它手写内容——
 /// `parse_goal` 本来就只认标题行与 `- [ ]`/`- [x]` 列表项这两种语义,重新
 /// 生成不算破坏数据(见设计文档"非目标")。`.dozer` 目录不存在则先创建。
+#[cfg(test)]
 pub fn write_goal(repo: &Path, goal: &Goal) -> std::io::Result<()> {
     let path = goal_path(repo);
     if let Some(dir) = path.parent() {
