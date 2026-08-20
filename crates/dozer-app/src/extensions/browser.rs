@@ -8,10 +8,10 @@
 //! `Acceptance`、`open_path`/`is_editable_extension`/`flyfish_url` 等浏览器
 //! 用不到的逻辑),两者各自维护、互不知情。
 
-use crate::app::{panel_tab, tab_arrow_button, tab_divider, tab_window};
+use crate::app::{panel_tab, tab_divider};
 use crate::preview::WebviewSpec;
 use crate::theme;
-use crate::workspace::{lh, preview_tab_display_width, split_portions};
+use crate::workspace::{lh, split_portions};
 use byteui::interaction::icons;
 use dozer_client::Client;
 use dozer_core::protocol::{BookmarkInfo, BookmarkScope};
@@ -452,10 +452,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_open_url_clears_error_and_resets_tab_first() {
+    async fn update_open_url_clears_error() {
         let mut state = State {
             error: Some("旧错误".to_string()),
-            tab_first: 3,
             ..State::default()
         };
         let handle = tokio::runtime::Handle::current();
@@ -469,7 +468,6 @@ mod tests {
             |_| {},
         );
         assert!(state.error.is_none());
-        assert_eq!(state.tab_first, 0);
         assert_eq!(state.tabs.tabs().len(), 1);
     }
 
@@ -541,31 +539,6 @@ mod tests {
         );
         assert_eq!(state.error.as_deref(), Some("浏览器不支持打开本地文件"));
         assert!(state.tabs.tabs().is_empty());
-    }
-
-    #[tokio::test]
-    async fn update_tab_scroll_saturates_at_zero() {
-        let mut state = State::default();
-        let handle = tokio::runtime::Handle::current();
-        let client = client_for_test();
-        update(
-            &mut state,
-            Message::TabScroll(false),
-            Some(1),
-            &client,
-            &handle,
-            |_| {},
-        );
-        assert_eq!(state.tab_first, 0, "不该下溢");
-        update(
-            &mut state,
-            Message::TabScroll(true),
-            Some(1),
-            &client,
-            &handle,
-            |_| {},
-        );
-        assert_eq!(state.tab_first, 2);
     }
 
     #[tokio::test]
@@ -835,7 +808,6 @@ pub enum Message {
     DragHover(usize),
     AddrClick,
     AddrEvent(crate::workspace::AddrEvent),
-    TabScroll(bool),
     StarClick,
     BookmarkAdd(BookmarkScope),
     BookmarkRemove(i64),
@@ -885,7 +857,6 @@ impl TabHover {
 pub struct State {
     tabs: Tabs,
     error: Option<String>,
-    tab_first: usize,
     bookmarks: Vec<BookmarkInfo>,
     bookmarks_open: bool,
     star_menu_open: bool,
@@ -1090,7 +1061,6 @@ pub fn update(
         Message::OpenUrl(url) => {
             state.error = None;
             state.tabs.open_url(url);
-            state.tab_first = 0;
         }
         Message::SelectTab(idx) => state.tabs.select(idx),
         Message::DragHover(_) => {} // 拖拽换位在 `App::update` 翻译后处理,不落到这里
@@ -1099,7 +1069,6 @@ pub fn update(
         Message::Nav(_) => {}
         Message::CloseTab(idx) => {
             state.tabs.close(idx);
-            state.tab_first = 0;
         }
         Message::Hover(idx, is_close, hovered) => {
             state.hover.entry((idx, is_close)).or_default().set(hovered);
@@ -1129,13 +1098,6 @@ pub fn update(
                 Err(message) => state.error = Some(message),
             },
         },
-        Message::TabScroll(right) => {
-            if right {
-                state.tab_first = state.tab_first.saturating_add(2);
-            } else {
-                state.tab_first = state.tab_first.saturating_sub(2);
-            }
-        }
         Message::StarClick => {
             state.error = None;
             state.star_menu_open = !state.star_menu_open;
@@ -1442,25 +1404,12 @@ pub fn view(
     mirror: bool,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::browser_pane();
-    let widths: Vec<f32> = state
-        .tabs
-        .tabs()
-        .iter()
-        .map(|t| preview_tab_display_width(&t.title))
-        .collect();
-    let (first, can_left, can_right) = tab_window(
-        &widths,
-        4.0,
-        byteui::theme::geometry::tab_bar_avail_px(),
-        state.tab_first,
-    );
 
     let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = state
         .tabs
         .tabs()
         .iter()
         .enumerate()
-        .filter(|(idx, _)| *idx >= first)
         .map(|(idx, tab)| {
             let active = idx == state.tabs.active_idx();
             let title_hover_t = state.hover_progress(idx, false);
@@ -1488,19 +1437,7 @@ pub fn view(
         .collect();
     let tabs_row = row(items).spacing(4);
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
-    let left_arrow = tab_arrow_button(
-        icons::IconKind::ChevronLeft,
-        can_left,
-        Message::TabScroll(false),
-    );
-    let right_arrow = tab_arrow_button(
-        icons::IconKind::ChevronRight,
-        can_right,
-        Message::TabScroll(true),
-    );
-    let tab_bar = row![left_arrow, right_arrow, clipped]
-        .spacing(4)
-        .align_y(iced_widget::core::Alignment::Center);
+    let tab_bar = clipped;
 
     let editing = state.addr_editing();
     let addr_text = if editing {
@@ -1532,10 +1469,18 @@ pub fn view(
         ..button::Style::default()
     });
 
-    let addr_row = row![
+    // 后退/前进/刷新三颗导航按钮紧凑成组(组内间距 2,比下方整体 4 更紧),
+    // 再与地址栏/收藏等拉开到 4,突出"导航簇"的视觉聚合。
+    let nav_buttons = row![
         nav_button(state, NavAction::Back),
         nav_button(state, NavAction::Forward),
         nav_button(state, NavAction::Refresh),
+    ]
+    .spacing(2)
+    .align_y(iced_widget::core::Alignment::Center);
+
+    let addr_row = row![
+        nav_buttons,
         addr,
         star_button(state, project_id),
         bookmarks_toggle_button(state)
