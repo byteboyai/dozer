@@ -7601,7 +7601,7 @@ fn icon_rail(
                 icon,
                 byteui::theme::icon_size::rail(),
                 kind == active_kind && open,
-                false,
+                Some(kind) == app.dragged_panel_kind(),
                 app.hover_progress(HoverId::Rail(RailButton::Panel(kind))),
                 true,
                 button_size,
