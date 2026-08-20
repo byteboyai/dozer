@@ -7,7 +7,4 @@ pub mod ring;
 pub mod server;
 pub mod session;
 pub mod shell_integration;
-
-pub mod transcripts {
-    pub mod parse;
-}
+pub mod transcripts;
