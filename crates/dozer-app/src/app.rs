@@ -30,12 +30,11 @@ use crate::layout;
 use crate::open_projects;
 use crate::panel_layouts;
 use crate::preview::WebviewSpec;
-use crate::search_box::{self, delete_before_cursor, insert_at_cursor, move_cursor_in};
 use crate::term_view;
 use crate::theme;
 use crate::transcript::ReviewEntry;
 use crate::workspace::{
-    AddrEvent, PickerLaunch, RestorePayload, ReviewSource, ReviewView, SessionTab, ShellIo, SshOut,
+    PickerLaunch, RestorePayload, ReviewSource, ReviewView, SessionTab, ShellIo, SshOut,
     TabBackend, Workspace, agent_list_pane, agent_picker_popup, conversation_list_pane, dot_color,
     edit_discard_confirm_popup, edit_modal, effective_project_repo, exited_marker,
     fetch_project_restore, no_project_placeholder, preview_pane, project_preview_pane,
@@ -2132,14 +2131,8 @@ pub enum Message {
     /// 无 IO;只有还有更多项目时才渲染那颗按钮(见
     /// `homespace::home_project_list_view`)。
     HomeMoreProjects,
-    /// 点首页项目列表搜索框进入自绘编辑态,后续按键经 main.rs 路由成
-    /// `HomeProjectSearchEvent`,不再漏进终端(同 `todo::SearchEditStart`)。
-    HomeProjectSearchEditStart,
-    /// 自绘输入的文本/退格/取消/回车事件,`home_project_search_editing`
-    /// 为真时才生效(同 `todo::SearchEvent`)。
-    HomeProjectSearchEvent(AddrEvent),
-    /// 方向键/Home/End 移动搜索框草稿光标(字符下标)。
-    HomeProjectSearchCursorMove(search_box::CursorDir),
+    /// 首页项目列表搜索框草稿变化(iced `text_input::on_input`)。
+    HomeProjectSearchInput(String),
     /// 回车 / 点搜索按钮:把草稿落成生效的 `home_project_search` 过滤词,
     /// 同时把翻页重置回第 1 页(过滤后结果变少,停在旧页码没有意义)。
     HomeProjectSearchSubmit,
@@ -2378,10 +2371,10 @@ pub struct App {
     /// 搜索框编辑态草稿——同 `todo::search_draft`,打字期间只改草稿,
     /// 回车/点搜索按钮才落成 `home_project_search`。
     pub(crate) home_project_search_draft: String,
-    /// 搜索框是否处于自绘编辑态(main.rs 键盘路由用)。
-    pub(crate) home_project_search_editing: bool,
-    /// 搜索框草稿的光标位置(字符下标)。
-    pub(crate) home_project_search_cursor: usize,
+    /// 是否持有 iced 真实焦点。**不是**应用层手动置位的镜像——每帧渲染
+    /// 循环里 `CaptureHomeSearchFocus` 问一遍 iced 真相后立刻写进这里
+    /// (`set_home_project_search_focused`)。
+    pub(crate) home_project_search_focused: bool,
     /// 首页右栏当前显示哪个 pane(目前只有 Browser)。语义同上。
     pub(crate) home_right_view: homespace::HomeRightView,
     /// 首页全局浏览器面板状态,不挂在任何 `Workspace` 上;`view`/`update`
@@ -2699,8 +2692,7 @@ impl App {
             home_project_pages: 1,
             home_project_search: String::new(),
             home_project_search_draft: String::new(),
-            home_project_search_editing: false,
-            home_project_search_cursor: 0,
+            home_project_search_focused: false,
             home_right_view: homespace::HomeRightView::default(),
             home_browser: browser::State::with_initial_url("https://byteboy.ai"),
             git_log: git_log::State::default(),
@@ -3287,9 +3279,15 @@ impl App {
         }
     }
 
-    /// 首页项目列表搜索框是否处于自绘编辑态(main.rs 键盘路由用)。
-    pub fn home_project_search_editing(&self) -> bool {
-        self.home_project_search_editing
+    /// 首页项目搜索框是否持有 iced 真实焦点(main.rs 键盘路由用)。
+    pub fn home_project_search_focused(&self) -> bool {
+        self.home_project_search_focused
+    }
+
+    /// 每帧渲染循环调用:把 `CaptureHomeSearchFocus` 问到的真实焦点态
+    /// 写进来。
+    pub fn set_home_project_search_focused(&mut self, focused: bool) {
+        self.home_project_search_focused = focused;
     }
 
     /// 搜索框草稿落成为生效的 `home_project_search` 过滤词,并把翻页
@@ -4470,45 +4468,8 @@ impl App {
                 self.home_left_view = v;
             }
             Message::HomeMoreProjects => self.home_project_pages += 1,
-            Message::HomeProjectSearchEditStart => {
-                self.home_project_search_editing = true;
-            }
-            Message::HomeProjectSearchEvent(ev) => {
-                // 编辑态之外(失焦)的事件一律忽略,避免草稿被污染(同
-                // `todo::Message::SearchEvent` 的既有约定)。
-                if !self.home_project_search_editing {
-                    return;
-                }
-                match ev {
-                    AddrEvent::Text(s) => insert_at_cursor(
-                        &mut self.home_project_search_draft,
-                        &mut self.home_project_search_cursor,
-                        &s,
-                    ),
-                    AddrEvent::Backspace => {
-                        delete_before_cursor(
-                            &mut self.home_project_search_draft,
-                            &mut self.home_project_search_cursor,
-                        );
-                    }
-                    AddrEvent::Cancel => self.home_project_search_editing = false,
-                    AddrEvent::Submit => self.commit_home_project_search(),
-                }
-            }
-            Message::HomeProjectSearchCursorMove(dir) => {
-                if !self.home_project_search_editing {
-                    return;
-                }
-                move_cursor_in(
-                    &self.home_project_search_draft,
-                    &mut self.home_project_search_cursor,
-                    dir,
-                );
-            }
-            Message::HomeProjectSearchSubmit => {
-                self.commit_home_project_search();
-                self.home_project_search_editing = false;
-            }
+            Message::HomeProjectSearchInput(s) => self.home_project_search_draft = s,
+            Message::HomeProjectSearchSubmit => self.commit_home_project_search(),
             Message::HomeRightIconSelect(v) => {
                 self.home_right_view = v;
             }
@@ -6143,8 +6104,7 @@ impl App {
         self.home_project_pages = 1;
         self.home_project_search.clear();
         self.home_project_search_draft.clear();
-        self.home_project_search_editing = false;
-        self.home_project_search_cursor = 0;
+        self.home_project_search_focused = false;
         self.home_right_view = homespace::HomeRightView::default();
         let projects: Vec<ProjectInfo> = self.recent_projects.iter().take(5).cloned().collect();
         let client = self.client.clone();

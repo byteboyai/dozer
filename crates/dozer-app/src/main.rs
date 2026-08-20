@@ -1037,6 +1037,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             if app.files_search_focused()
                 || app.todo_search_focused()
                 || app.todo_add_focused()
+                || app.home_project_search_focused()
                 || app.ssh_form_open()
                 || app.database_form_open()
             {
@@ -1055,23 +1056,19 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             let to_search_popup = app.search_popup_editing();
             let to_todo_content = app.todo_content_editing();
             let to_todo_markdown = app.todo_markdown_editing();
-            let to_home_project_search = app.home_project_search_editing();
             let to_self_drawn_input = to_browser
                 || to_comment
                 || to_tree_edit
                 || to_project_name
                 || to_search_popup
                 || to_todo_content
-                || to_todo_markdown
-                || to_home_project_search;
+                || to_todo_markdown;
             // 优先级:右键"搜索"弹窗查询框 > 浏览器地址栏 > 验收意见 > 项目树
             // 编辑 > 项目名称编辑 > Todo 任务内容编辑 > Todo
-            // MARKDOWN 编辑 > 首页项目搜索框(文件树搜索框、Todo 面板搜索框、
-            // 新增任务框已迁 iced 原生 text_input/text_editor,走上面新增的
-            // 独立放行闸门,不再在此列;
-            // 多者同真时罕见,谁先建的编辑态谁优先没有实际冲突场景,这个顺序
-            // 只是一个确定性兜底——首页项目搜索框排最后是因为它跟前面所有
-            // 工作区内的编辑态天然互斥,不可能同时为真,顺序对它没有实际影响)。
+            // MARKDOWN 整文件编辑(文件树搜索框、Todo 面板搜索框/新增任务框、
+            // 首页项目搜索框已迁 iced 原生 text_input/text_editor,走上面新增
+            // 的独立放行闸门,不再在此列;多者同真时罕见,谁先建的编辑态谁优先
+            // 没有实际冲突场景,这个顺序只是一个确定性兜底)。
             // ⌘V 粘贴与逐字符输入共用这条链,保证两条路径落进同一个自绘输入。
             let addr_message = |ev: workspace::AddrEvent| -> Message {
                 if to_search_popup {
@@ -1086,10 +1083,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     Message::Project(extensions::project::Message::NameEditEvent(ev))
                 } else if to_todo_content {
                     Message::Todo(extensions::todo::Message::ContentEvent(ev))
-                } else if to_todo_markdown {
-                    Message::Todo(extensions::todo::Message::MarkdownEvent(ev))
                 } else {
-                    Message::HomeProjectSearchEvent(ev)
+                    Message::Todo(extensions::todo::Message::MarkdownEvent(ev))
                 }
             };
 
@@ -1176,8 +1171,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     if let Some(dir) = dir {
                         let msg = if to_todo_content {
                             Message::Todo(extensions::todo::Message::ContentCursorMove(dir))
-                        } else if to_home_project_search {
-                            Message::HomeProjectSearchCursorMove(dir)
                         } else {
                             // 其它自绘输入不支持方向键移动,按原行为吞掉。
                             return;
@@ -2246,6 +2239,15 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                         false
                                     };
 
+                                // 首页项目搜索框(Stage 4):同款每帧查真实焦点态。
+                                let home_search_focused = if app.is_home() {
+                                    interface
+                                        .operate(renderer, &mut homespace::CaptureHomeSearchFocus);
+                                    homespace::take_home_search_focused()
+                                } else {
+                                    false
+                                };
+
                                 // Update the mouse cursor
                                 if let user_interface::State::Updated {
                                     mouse_interaction, ..
@@ -2288,6 +2290,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 app.set_files_search_focused(files_focused);
                                 app.set_todo_search_focused(todo_search_focused);
                                 app.set_todo_add_focused(todo_add_focused);
+                                app.set_home_project_search_focused(home_search_focused);
 
                                 // 关闭掉 `iced_graphics` 的 `web-colors` 后(见根
                                 // Cargo.toml 的 `[patch]`: 阻断 umbrella `iced`
