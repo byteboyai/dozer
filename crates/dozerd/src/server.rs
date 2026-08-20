@@ -17,6 +17,7 @@ pub async fn serve(
     store: Arc<crate::acceptance::AcceptanceStore>,
     projects: Arc<crate::projects::ProjectStore>,
     bookmarks: Arc<crate::bookmarks::BookmarkStore>,
+    transcripts: Arc<crate::transcripts::TranscriptStore>,
 ) -> Result<()> {
     let preview_contexts = Arc::new(PreviewContextStore::new());
     if socket.exists() {
@@ -40,6 +41,7 @@ pub async fn serve(
         let projects = projects.clone();
         let bookmarks = bookmarks.clone();
         let preview_contexts = preview_contexts.clone();
+        let transcripts = transcripts.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_conn(
                 stream,
@@ -48,6 +50,7 @@ pub async fn serve(
                 projects,
                 bookmarks,
                 preview_contexts,
+                transcripts,
             )
             .await
             {
@@ -90,6 +93,7 @@ async fn handle_conn(
     projects: Arc<crate::projects::ProjectStore>,
     bookmarks: Arc<crate::bookmarks::BookmarkStore>,
     preview_contexts: Arc<PreviewContextStore>,
+    transcripts: Arc<crate::transcripts::TranscriptStore>,
 ) -> Result<()> {
     let (r, mut w) = stream.into_split();
     let mut lines = BufReader::new(r).lines();
@@ -255,11 +259,24 @@ async fn handle_conn(
                         Request::GetPreviewContext { project_id } => Reply::PreviewContext {
                             context: preview_contexts.get(project_id),
                         },
-                        Request::ListConversations { .. }
-                        | Request::GetConversationTurns { .. }
-                        | Request::GetUsageSummary { .. } => Reply::Error {
-                            message: "对话摄取查询尚未接线（Task 10）。".into(),
-                        },
+                        Request::ListConversations { cwd, agent, limit, offset } => {
+                            match transcripts.list_conversations(&cwd, agent, limit, offset) {
+                                Ok(conversations) => Reply::Conversations { conversations },
+                                Err(e) => Reply::Error { message: format!("列对话失败: {e}") },
+                            }
+                        }
+                        Request::GetConversationTurns { conversation_id, after_turn_index, limit } => {
+                            match transcripts.get_conversation_turns(&conversation_id, after_turn_index, limit) {
+                                Ok(turns) => Reply::ConversationTurns { conversation_id, turns },
+                                Err(e) => Reply::Error { message: format!("查询回合失败: {e}") },
+                            }
+                        }
+                        Request::GetUsageSummary { cwd, since_ts } => {
+                            match transcripts.get_usage_summary(&cwd, since_ts) {
+                                Ok(rows) => Reply::UsageSummary { rows },
+                                Err(e) => Reply::Error { message: format!("查询用量失败: {e}") },
+                            }
+                        }
                     },
                 };
                 w.write_all(encode_line(&reply).as_bytes()).await?;
@@ -356,5 +373,22 @@ mod tests {
             extract_transcript_path(&data),
             Some("/home/u/.claude/projects/x/y.jsonl")
         );
+    }
+
+    #[test]
+    fn transcript_store_field_compiles_into_serve_signature() {
+        // 编译期检查:确认 `serve` 函数签名接受 `Arc<TranscriptStore>`。
+        fn _assert_signature(
+            socket: &std::path::Path,
+            registry: std::sync::Arc<crate::registry::SessionRegistry>,
+            store: std::sync::Arc<crate::acceptance::AcceptanceStore>,
+            projects: std::sync::Arc<crate::projects::ProjectStore>,
+            bookmarks: std::sync::Arc<crate::bookmarks::BookmarkStore>,
+            transcripts: std::sync::Arc<crate::transcripts::TranscriptStore>,
+        ) {
+            let fut =
+                crate::server::serve(socket, registry, store, projects, bookmarks, transcripts);
+            std::mem::drop(fut);
+        }
     }
 }

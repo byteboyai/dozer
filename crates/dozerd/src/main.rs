@@ -44,7 +44,10 @@ async fn main() -> Result<()> {
     let bookmarks = Arc::new(dozerd::bookmarks::BookmarkStore::new(
         &dozer_core::paths::state_dir().join("dozer.db"),
     )?);
-    let serve = dozerd::server::serve(&socket, registry, store, projects, bookmarks);
+    let transcripts = Arc::new(dozerd::transcripts::TranscriptStore::open(
+        &dozer_core::paths::state_dir().join("dozer.db"),
+    )?);
+    let serve = dozerd::server::serve(&socket, registry, store, projects, bookmarks, transcripts);
     tokio::select! {
         r = serve => r?,
         _ = tokio::signal::ctrl_c() => {
