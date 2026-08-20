@@ -1075,6 +1075,15 @@ impl State {
             .map(|h| h.progress)
             .unwrap_or(0.0)
     }
+
+    /// tab 栏末尾"新标签页"(+)按钮的 hover 进度,哨兵键
+    /// `(NEW_TAB_KEY, false)`,远离真实 tab 序号空间。
+    pub(crate) fn new_tab_hover(&self) -> f32 {
+        self.hover
+            .get(&(NEW_TAB_KEY, false))
+            .map(|h| h.progress)
+            .unwrap_or(0.0)
+    }
 }
 
 /// 浏览器面板"星标/收藏夹"两个工具栏按钮的 hover 哨兵键——真实 tab 序号
@@ -1085,6 +1094,8 @@ const STAR_HOVER_KEY: usize = usize::MAX;
 const NAV_BACK_KEY: usize = usize::MAX - 1;
 const NAV_FORWARD_KEY: usize = usize::MAX - 2;
 const NAV_REFRESH_KEY: usize = usize::MAX - 3;
+/// tab 栏末尾"新标签页"(+)按钮的 hover 哨兵键,继续沿用上面的哨兵键空间。
+const NEW_TAB_KEY: usize = usize::MAX - 4;
 
 /// 处理浏览器面板的全部消息。`project_id` 由内核每次调用时从
 /// `ws.project.as_ref().map(|p| p.id)` 现取传入(`State` 本身不存这个,
@@ -1480,8 +1491,25 @@ pub fn view(
         })
         .collect();
     let tabs_row = row(items).spacing(4);
+    // 页签自身区域可横向裁切(溢出部分 clip),但末尾的"新标签页"(+)按钮
+    // 不做裁切,始终钉在 tab 栏右端可点——避免页签一多就被挤出可视区。
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
-    let tab_bar = clipped;
+    let new_tab_btn = icons::icon_button_entry(
+        icons::IconKind::SquarePlus,
+        byteui::theme::icon_size::row(),
+        false,
+        false,
+        state.new_tab_hover(),
+        false,
+        byteui::theme::geometry::tab_button_size(),
+        true,
+        Message::OpenUrl("about:blank".to_string()),
+        |hovered| Message::Hover(NEW_TAB_KEY, false, hovered),
+        "新标签页",
+    );
+    let tab_bar = row![clipped, new_tab_btn]
+        .spacing(4)
+        .align_y(iced_widget::core::Alignment::Center);
 
     let editing = state.addr_editing();
     let addr_text = if editing {
