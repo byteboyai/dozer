@@ -7644,6 +7644,42 @@ fn icon_rail(
         .align_y(iced_widget::core::alignment::Vertical::Top);
         layers.push(positioned.into());
     }
+
+    // 跨栏拖拽悬停到本栏时,在悬停下标处画一条金色插入线——`rail_cross_
+    // apply` 落地时是 `insert`(把已有项推后一位),不是跟目标位的按钮
+    // 互换,所以高亮画成"卡在两个按钮之间的线",不描边某个已存在按钮
+    // (那样会误导成"要跟它换位")。`pending_cross_side.1` 恒是目标栏
+    // 某个已有按钮自己上报的下标(见 `rail_drag_surface` 的 `on_move`
+    // 只挂在真实按钮上),不会是 `len()`(悬停不到"最后一个之后"这个
+    // 位置——现有交互面就是如此,不是这次新引入的限制)。
+    if let Some((_, idx)) = app
+        .rail_drag
+        .and_then(|d| d.pending_cross_side)
+        .filter(|(s, _)| *s == side)
+    {
+        let bar_h = 3.0;
+        let y = (region.padding.top + idx as f32 * step - region.gap / 2.0 - bar_h / 2.0).max(0.0);
+        let marker = container(iced_widget::Space::new())
+            .width(Length::Fixed(button_size))
+            .height(Length::Fixed(bar_h))
+            .style(|_t: &iced_widget::Theme| container::Style {
+                background: Some(byteui::theme::color::current().gold.into()),
+                ..container::Style::default()
+            });
+        let positioned = container(marker)
+            .padding(Padding {
+                top: y,
+                left: region.padding.left,
+                right: region.padding.right,
+                bottom: 0.0,
+            })
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(iced_widget::core::alignment::Horizontal::Left)
+            .align_y(iced_widget::core::alignment::Vertical::Top);
+        layers.push(positioned.into());
+    }
+
     let content = iced_widget::Stack::with_children(layers)
         .width(Length::Fill)
         .height(Length::Fill);
