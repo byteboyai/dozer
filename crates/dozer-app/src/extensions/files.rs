@@ -230,9 +230,11 @@ pub fn take_search_focused() -> bool {
 
 /// 每帧 `interface.operate()` 跑一遍,把 `search_field_id()` 命中的
 /// `text_input` 当前是否持有 iced 焦点写进 `SEARCH_FOCUSED`。`traverse`
-/// 留空——本仓库的渲染循环直接调 `UserInterface::operate()`,它走的是
-/// widget 树自己的递归 `operate()` 实现,不经过 `Operation::traverse`
-/// (同 `extensions::todo::CaptureFieldBounds` 的既有手法与注释)。
+/// 必须调用传入的 `operate` 闭包才能继续递归子节点——`Row`/`Column` 等容器的
+/// `operate()` 实现把子节点遍历整个包在 `operation.traverse(&mut |op| {..})`
+/// 里(iced_widget 0.14.2 `row.rs`/`column.rs`),不调用闭包会导致容器直接
+/// 跳过全部子节点,搜索框嵌在 `row!`/`column!` 里永远遍历不到、
+/// `focusable()` 永远不会被调用。
 pub struct CaptureSearchFocus;
 impl Operation<()> for CaptureSearchFocus {
     fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
@@ -241,7 +243,9 @@ impl Operation<()> for CaptureSearchFocus {
         }
     }
 
-    fn traverse(&mut self, _: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {}
+    fn traverse(&mut self, operate: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {
+        operate(self);
+    }
 }
 
 impl WorkspaceState {
