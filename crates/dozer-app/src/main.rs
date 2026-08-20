@@ -1022,14 +1022,18 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             }
 
             // Files 搜索框(Stage 2,唯一已迁移到 iced 原生 text_input 的
-            // 字段):不再手工路由成 `SearchEvent`,命中就直接放行给标准
+            // 字段)/ SSH·Database 连接表单(字段本来就是真 `text_input`,
+            // 这次只是补上一直缺失的路由放行判断):命中就直接放行给标准
             // iced 事件转换管线,交真正的 text_input 自己处理光标/选区/
-            // IME(同上面 Preview 原生编辑器那道闸门的手法)。必须放在下面
-            // `to_self_drawn_input` 判断之前——未来某个自绘面板与它同时报
-            // "编辑态为真"时,不能让自绘分支抢先吞掉按键;也必须在 ⌘ 组合键
-            // 判断(下方 `modifiers.super_key()` 分支)之前,否则 ⌘V 粘贴会
-            // 被错误地转发进终端而不是交给 text_input 自己内置的粘贴处理。
-            if app.files_search_focused() {
+            // IME(同上面 Preview 原生编辑器那道闸门的手法)。SSH/Database
+            // 用"表单是否打开"这个粗粒度信号(不像 Files 搜索框要每帧查真实
+            // 焦点),表单打开时整体放行,不区分表单内具体哪个字段聚焦。
+            // 必须放在下面 `to_self_drawn_input` 判断之前——未来某个自绘
+            // 面板与它同时报"编辑态为真"时,不能让自绘分支抢先吞掉按键;也
+            // 必须在 ⌘ 组合键判断(下方 `modifiers.super_key()` 分支)之前,
+            // 否则 ⌘V 粘贴会被错误地转发进终端而不是交给 text_input 自己
+            // 内置的粘贴处理。
+            if app.files_search_focused() || app.ssh_form_open() || app.database_form_open() {
                 return;
             }
 

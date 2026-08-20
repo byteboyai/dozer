@@ -2079,6 +2079,21 @@ impl Workspace {
         self.files.search_focused()
     }
 
+    /// SSH 连接表单是否打开(main.rs 键盘路由用)。信号粒度是"表单开着"而
+    /// 不是某个字段的真实焦点——表单里的字段已经是真 `text_input`(kooky
+    /// -review-followups 那次改的),只是从来没有对应的路由放行判断,导致
+    /// 表单打开时打字会同时漏进已聚焦的终端。不需要像 Files 搜索框那样每帧
+    /// 查 iced 焦点,表单开着就整体放行,足够粗粒度且够用。
+    pub fn ssh_form_open(&self) -> bool {
+        self.ssh.editing().is_some()
+    }
+
+    /// Database 连接表单是否打开(main.rs 键盘路由用),同 `ssh_form_open`
+    /// 的粒度与理由。
+    pub fn database_form_open(&self) -> bool {
+        self.database.editing().is_some()
+    }
+
     /// 右键文件树"搜索"弹窗是否打开(main.rs 键盘路由/App view 浮层用)。
     pub fn search_popup_open(&self) -> bool {
         self.search.is_open()

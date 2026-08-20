@@ -3237,6 +3237,17 @@ impl App {
             .is_some_and(|ws| ws.files_search_focused())
     }
 
+    /// SSH 连接表单是否打开(main.rs 键盘路由用)。
+    pub fn ssh_form_open(&self) -> bool {
+        self.active_workspace().is_some_and(|ws| ws.ssh_form_open())
+    }
+
+    /// Database 连接表单是否打开(main.rs 键盘路由用)。
+    pub fn database_form_open(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.database_form_open())
+    }
+
     /// 每帧渲染循环调用:把 `extensions::files::CaptureSearchFocus` 问到
     /// 的真实焦点态写进当前工作区(`main.rs` 键盘路由随后读
     /// `files_search_focused` 消费)。
