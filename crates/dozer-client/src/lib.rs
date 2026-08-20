@@ -2,8 +2,8 @@ use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use dozer_core::protocol::{
-    AgentKind, AgentState, BookmarkInfo, BookmarkScope, PreviewContext, ProjectInfo, Reply,
-    Request, SessionInfo, decode_line, encode_line,
+    AgentKind, AgentState, BookmarkInfo, BookmarkScope, ConversationSummary, PreviewContext,
+    ProjectInfo, Reply, Request, SessionInfo, TurnRecord, UsagePayload, decode_line, encode_line,
 };
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -228,6 +228,63 @@ impl Client {
             .await?
         {
             Reply::Bookmarks { bookmarks } => Ok(bookmarks),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn list_conversations(
+        &self,
+        cwd: &str,
+        agent: Option<AgentKind>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<ConversationSummary>> {
+        match self
+            .roundtrip(&Request::ListConversations {
+                cwd: cwd.into(),
+                agent,
+                limit,
+                offset,
+            })
+            .await?
+        {
+            Reply::Conversations { conversations } => Ok(conversations),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn get_conversation_turns(
+        &self,
+        conversation_id: &str,
+        after_turn_index: i64,
+        limit: u32,
+    ) -> Result<Vec<TurnRecord>> {
+        match self
+            .roundtrip(&Request::GetConversationTurns {
+                conversation_id: conversation_id.into(),
+                after_turn_index,
+                limit,
+            })
+            .await?
+        {
+            Reply::ConversationTurns { turns, .. } => Ok(turns),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn get_usage_summary(
+        &self,
+        cwd: &str,
+        since_ts: Option<u64>,
+    ) -> Result<Vec<(ConversationSummary, UsagePayload)>> {
+        match self
+            .roundtrip(&Request::GetUsageSummary {
+                cwd: cwd.into(),
+                since_ts,
+            })
+            .await?
+        {
+            Reply::UsageSummary { rows } => Ok(rows),
             other => bail!("意外应答: {other:?}"),
         }
     }
