@@ -7159,6 +7159,15 @@ fn project_tabs_row(
             .width(Length::Shrink); // 固定宽,不撑满;右侧留白把"＋"顶到最右
         // 分割竖线高度:顶栏高的约 45%,在行内 `align_y(Center)` 自然垂直居中。
         let sep_h = byteui::theme::geometry::top_bar_height() * 0.45;
+        let make_sep = || {
+            container(iced_widget::space::Space::new())
+                .width(Length::Fixed(1.0))
+                .height(Length::Fixed(sep_h))
+                .style(|_t: &iced_widget::Theme| container::Style {
+                    background: Some(byteui::theme::color::current().border.into()),
+                    ..container::Style::default()
+                })
+        };
         for (i, entry) in entries.iter().enumerate() {
             let active = active_project_id == Some(entry.id);
             let close_hover_t = app.hover_progress(HoverId::ProjectTabClose(entry.id));
@@ -7191,17 +7200,16 @@ fn project_tabs_row(
             if i + 1 < n {
                 let next_active = active_project_id == Some(entries[i + 1].id);
                 if !active && !next_active {
-                    tabs = tabs.push(
-                        container(iced_widget::space::Space::new())
-                            .width(Length::Fixed(1.0))
-                            .height(Length::Fixed(sep_h))
-                            .style(|_t: &iced_widget::Theme| container::Style {
-                                background: Some(byteui::theme::color::current().border.into()),
-                                ..container::Style::default()
-                            }),
-                    );
+                    tabs = tabs.push(make_sep());
                 }
             }
+        }
+        // 页签组与"＋"之间也补一条尾分割线(同"挨着选中页签不画"规则——
+        // 最后一片页签被选中时不画,保持选中页签右侧干净)。
+        if let Some(last) = entries.last()
+            && active_project_id != Some(last.id)
+        {
+            tabs = tabs.push(make_sep());
         }
 
         // 图标颜色:SVG 构建时定死、不吃 `button::Status`,hover 态平滑过渡到
