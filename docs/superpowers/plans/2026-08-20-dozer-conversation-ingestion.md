@@ -2668,18 +2668,18 @@ git commit -m "refactor(dozer-app): transcript.rs 瘦身,parse_transcript 迁至
 
 `spawn_conversations_refresh`(1032-1049行)、`spawn_review_load`(1109-1131行)是本 Task 唯一要改的两个函数——按调研报告已确认的既有异步范式(`browser.rs::request_bookmarks_refresh` 那种 `io.client.clone()` + `handle.spawn` + `proxy.send_event`)改写,函数签名/调用方(`app.rs`/`workspace.rs` 里 `ws.spawn_conversations_refresh(io)`/`ws.spawn_review_load(io, ...)` 的调用点)**不变**,只改函数体内部。
 
-- [ ] **Step 1: 读现状,确认函数体**
+- [x] **Step 1: 读现状,确认函数体**
 
 先读 `crates/dozer-app/src/workspace.rs:1032-1049` 和 `:1109-1131` 的准确当前内容(调研报告给的是大致行号,执行前用 `grep -n "fn spawn_conversations_refresh\|fn spawn_review_load" crates/dozer-app/src/workspace.rs` 定位精确行号,再 `Read` 这两段的完整现状),因为这是要改的既有代码,不是新写。
 
-- [ ] **Step 2: 写失败测试(集成层面难以单测异步 IO,改为验证转换逻辑的纯函数测试已在 Task 15/16 覆盖;本 Task 用编译作为主要验证手段,另加一个"排序仍是 mtime 倒序"的纯函数测试防回归)**
+- [x] **Step 2: 写失败测试(集成层面难以单测异步 IO,改为验证转换逻辑的纯函数测试已在 Task 15/16 覆盖;本 Task 用编译作为主要验证手段,另加一个"排序仍是 mtime 倒序"的纯函数测试防回归)**
 
 若 `workspace.rs` 现有测试模块里有类似"排序断言"的测试,在其旁新增(否则跳过本 Step,直接进入实现,靠 Step 4 的 `cargo build` 作为主要校验——`spawn_conversations_refresh`/`spawn_review_load` 本身是"发一个异步 IO 请求+回填消息"的胶水代码,过去也没有对它们的单元测试,只有集成校验,不强行为胶水代码补测试);改动完成后运行:
 
 Run: `cargo build -p dozer-app 2>&1 | grep -A5 "spawn_conversations_refresh\|spawn_review_load"`
 Expected: 目前的构建错误(如果先只改 `conversation.rs`/`transcript.rs` 而没改这两个函数,会报"找不到 `conversation::list_all_conversations`"之类的错误)——这一步只是确认当前失败原因确实是这两个函数,不是别的问题。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 把 `spawn_conversations_refresh` 函数体换成(签名不变,假设原签名是 `pub fn spawn_conversations_refresh(&self, io: &ShellIo)` 或类似形式——**以 Step 1 读到的真实签名为准,只替换函数体**):
 
@@ -2730,12 +2730,12 @@ Expected: 目前的构建错误(如果先只改 `conversation.rs`/`transcript.rs
 
 `limit: 10_000` 是"一次性拿全部回合"的临时上限(keyset 分页机制已就位,但 `review_content` 渲染函数目前假设 `rv.entries` 是完整列表,分页加载 UI 不在本计划范围——单个会话超过 1 万回合极其罕见,这个上限足够,真遇到再另开计划加"加载更多")。
 
-- [ ] **Step 4: 编译验证**
+- [x] **Step 4: 编译验证**
 
 Run: `cargo build -p dozer-app 2>&1 | grep -c "error\[" || true`
 Expected: 错误数量比 Task 16 结束时减少(`spawn_conversations_refresh`/`spawn_review_load` 相关错误消失;`usage.rs`/`homespace.rs` 相关错误预期仍在,留给 Task 18/19)。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add crates/dozer-app/src/workspace.rs
