@@ -1021,28 +1021,32 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
-            // Files 搜索框(Stage 2,唯一已迁移到 iced 原生 text_input 的
-            // 字段)/ SSH·Database 连接表单(字段本来就是真 `text_input`,
-            // 这次只是补上一直缺失的路由放行判断):命中就直接放行给标准
-            // iced 事件转换管线,交真正的 text_input 自己处理光标/选区/
-            // IME(同上面 Preview 原生编辑器那道闸门的手法)。SSH/Database
-            // 用"表单是否打开"这个粗粒度信号(不像 Files 搜索框要每帧查真实
-            // 焦点),表单打开时整体放行,不区分表单内具体哪个字段聚焦。
-            // 必须放在下面 `to_self_drawn_input` 判断之前——未来某个自绘
-            // 面板与它同时报"编辑态为真"时,不能让自绘分支抢先吞掉按键;也
-            // 必须在 ⌘ 组合键判断(下方 `modifiers.super_key()` 分支)之前,
-            // 否则 ⌘V 粘贴会被错误地转发进终端而不是交给 text_input 自己
-            // 内置的粘贴处理。
-            if app.files_search_focused() || app.ssh_form_open() || app.database_form_open() {
+            // Files 搜索框(Stage 2)/ 浏览器地址栏(Stage 3),都已迁移到 iced
+            // 原生 text_input 且每帧查真实焦点 / SSH·Database 连接表单(字段
+            // 本来就是真 `text_input`,这次只是补上一直缺失的路由放行判断):
+            // 命中就直接放行给标准 iced 事件转换管线,交真正的 text_input
+            // 自己处理光标/选区/IME(同上面 Preview 原生编辑器那道闸门的手法)。
+            // SSH/Database 用"表单是否打开"这个粗粒度信号(不像 Files 搜索框/
+            // 浏览器地址栏要每帧查真实焦点),表单打开时整体放行,不区分表单内
+            // 具体哪个字段聚焦。必须放在下面 `to_self_drawn_input` 判断之前——
+            // 未来某个自绘面板与它同时报"编辑态为真"时,不能让自绘分支抢先
+            // 吞掉按键;也必须在 ⌘ 组合键判断(下方 `modifiers.super_key()`
+            // 分支)之前,否则 ⌘V 粘贴会被错误地转发进终端而不是交给
+            // text_input 自己内置的粘贴处理。
+            if app.files_search_focused()
+                || app.browser_addr_focused()
+                || app.ssh_form_open()
+                || app.database_form_open()
+            {
                 return;
             }
 
-            // 浏览器地址栏 / 验收意见 / 项目树行内编辑态 / 项目名称编辑 /
-            // 文件树搜索框 / 右键"搜索"弹窗查询框 / Todo 搜索框、新增任务框、
-            // 任务内容编辑、MARKDOWN 整文件编辑:键盘直达自绘输入(不经 keymap、
-            // 不进 PTY)。文件预览面板已不再有地址栏。提到 ⌘ 组合键判断之前,
-            // 因为 ⌘V 粘贴也要认这套聚焦态(见下方 fix)。
-            let to_browser = app.browser_addr_editing();
+            // 验收意见 / 项目树行内编辑态 / 项目名称编辑 / 文件树搜索框 /
+            // 右键"搜索"弹窗查询框 / Todo 搜索框、新增任务框、任务内容编辑、
+            // MARKDOWN 整文件编辑:键盘直达自绘输入(不经 keymap、不进 PTY)。
+            // 文件预览面板已不再有地址栏;浏览器地址栏已迁移 iced 原生
+            // text_input,走上面那道独立的原生放行闸门,不再在此列。提到 ⌘
+            // 组合键判断之前,因为 ⌘V 粘贴也要认这套聚焦态(见下方 fix)。
             let to_comment = app.acceptance_comment_editing();
             let to_tree_edit = app.tree_editing();
             let to_project_name = app.project_name_editing();
@@ -1052,8 +1056,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             let to_todo_content = app.todo_content_editing();
             let to_todo_markdown = app.todo_markdown_editing();
             let to_home_project_search = app.home_project_search_editing();
-            let to_self_drawn_input = to_browser
-                || to_comment
+            let to_self_drawn_input = to_comment
                 || to_tree_edit
                 || to_project_name
                 || to_search_popup
@@ -1062,19 +1065,18 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 || to_todo_content
                 || to_todo_markdown
                 || to_home_project_search;
-            // 优先级:右键"搜索"弹窗查询框 > 浏览器地址栏 > 验收意见 > 项目树
+            // 优先级:右键"搜索"弹窗查询框 > 验收意见 > 项目树
             // 编辑 > 项目名称编辑 > Todo 面板搜索框 > Todo 新增任务框 > Todo
-            // 任务内容编辑 > Todo MARKDOWN 编辑 > 首页项目搜索框(文件树搜索框
-            // 已迁 iced 原生 text_input,走上面新增的独立放行闸门,不再在此列;
-            // 多者同真时罕见,谁先建的编辑态谁优先没有实际冲突场景,这个顺序
-            // 只是一个确定性兜底——首页项目搜索框排最后是因为它跟前面所有
-            // 工作区内的编辑态天然互斥,不可能同时为真,顺序对它没有实际影响)。
+            // 任务内容编辑 > Todo MARKDOWN 编辑 > 首页项目搜索框(文件树搜索框/
+            // 浏览器地址栏已迁 iced 原生 text_input,走上面新增的独立放行闸门,
+            // 不再在此列;多者同真时罕见,谁先建的编辑态谁优先没有实际冲突场景,
+            // 这个顺序只是一个确定性兜底——首页项目搜索框排最后是因为它跟前
+            // 面所有工作区内的编辑态天然互斥,不可能同时为真,顺序对它没有实际
+            // 影响)。
             // ⌘V 粘贴与逐字符输入共用这条链,保证两条路径落进同一个自绘输入。
             let addr_message = |ev: workspace::AddrEvent| -> Message {
                 if to_search_popup {
                     Message::Search(extensions::search::Message::QueryEvent(ev))
-                } else if to_browser {
-                    Message::Browser(extensions::browser::Message::AddrEvent(ev))
                 } else if to_comment {
                     Message::Acceptance(extensions::acceptance::Message::CommentEvent(ev))
                 } else if to_tree_edit {
@@ -2235,6 +2237,22 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                         false
                                     };
 
+                                // 浏览器地址栏(Stage 3)同款每帧真实焦点查询:
+                                // 与 Files 搜索框完全同构。`PanelKind::Web` 是浏览器
+                                // 面板对应的 left_view 取值(同 FocusIntent::Browser
+                                // 分支查 PanelKind::Web 的既有用法)。同样只把结果存
+                                // 进局部量,写回 app 要等 `interface` 释放借用之后。
+                                let browser_addr_focused =
+                                    if matches!(app.left_view(), crate::app::PanelKind::Web) {
+                                        interface.operate(
+                                            renderer,
+                                            &mut extensions::browser::CaptureAddrFocus,
+                                        );
+                                        extensions::browser::take_addr_focused()
+                                    } else {
+                                        false
+                                    };
+
                                 // Update the mouse cursor
                                 if let user_interface::State::Updated {
                                     mouse_interaction, ..
@@ -2275,6 +2293,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // `files_search_focused` 消费)。每帧都重写,
                                 // 即使值没变也幂等,无副作用。
                                 app.set_files_search_focused(files_focused);
+
+                                // 同上,浏览器地址栏的真实焦点态现在才写回工作区
+                                // (供下一帧键盘路由 `browser_addr_focused` 消费)。
+                                app.set_browser_addr_focused(browser_addr_focused);
 
                                 // 关闭掉 `iced_graphics` 的 `web-colors` 后(见根
                                 // Cargo.toml 的 `[patch]`: 阻断 umbrella `iced`

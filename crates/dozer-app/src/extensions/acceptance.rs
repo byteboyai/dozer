@@ -24,7 +24,8 @@ impl WorkspaceState {
     }
 
     /// 意见框是否处于编辑态(main.rs 键盘路由用它决定是否把按键直达
-    /// `CommentEvent`,同 `browser::addr_editing` 的用途)。
+    /// `CommentEvent`,同旧 `browser::addr_editing` 的用途,后者已迁 iced
+    /// 原生 text_input)。
     pub fn comment_editing(&self) -> bool {
         self.session.as_ref().is_some_and(|s| s.comment_editing)
     }

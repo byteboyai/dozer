@@ -142,8 +142,9 @@ pub(crate) enum PickerLaunch {
     Git,
 }
 
-/// 地址栏编辑事件:由 main.rs 的键盘拦截层在 `browser_addr_editing()`
-/// 为真时翻译产生(字符/退格/回车/Esc),不经过 keymap 的 PTY 字节翻译.
+/// 通用文本输入事件(验收意见框/搜索弹层/项目树行内编辑共用):由 main.rs
+/// 的键盘拦截层在对应输入被聚焦时翻译产生(字符/退格/回车/Esc),不经过
+/// keymap 的 PTY 字节翻译。地址栏已迁移 iced 原生 text_input,不再是消费方。
 #[derive(Debug, Clone)]
 pub enum AddrEvent {
     Text(String),
@@ -1987,10 +1988,11 @@ impl Workspace {
         }
     }
 
-    /// 浏览器地址栏是否在编辑态(main.rs 据此路由键盘:真 → AddrEvent,
-    /// 假 → keymap → PTY)。预览面板已不再有地址栏,只需查 `self.browser`。
-    pub fn browser_addr_editing(&self) -> bool {
-        self.browser.addr_editing()
+    /// 浏览器地址栏是否持有 iced 真实焦点(main.rs 据此路由键盘:真 →
+    /// 标准 iced 管线,假 → keymap → PTY)。预览面板已不再有地址栏,只需查
+    /// `self.browser`。
+    pub fn browser_addr_focused(&self) -> bool {
+        self.browser.addr_focused()
     }
 
     /// 验收意见输入是否在编辑态（main.rs 键盘路由用）。
@@ -2068,7 +2070,7 @@ impl Workspace {
     }
 
     /// 项目树是否处于行内编辑态(main.rs 键盘路由用,同款
-    /// `browser_addr_editing()`/`acceptance_comment_editing()`)。
+    /// `browser_addr_focused()`/`acceptance_comment_editing()`)。
     pub fn tree_editing(&self) -> bool {
         self.files.tree_edit_is_some()
     }
@@ -2122,9 +2124,6 @@ impl Workspace {
     /// 清:它已经有专门的外点 dismiss 遮罩(`files::Message::ContextMenuClose`,
     /// 见 view() 里的 stack dismiss 层),这里重复清是死代码。
     pub fn blur_inputs(&mut self) {
-        if self.browser.addr_editing() {
-            self.browser.addr_cancel();
-        }
         self.acceptance.clear_comment_editing();
         self.files.cancel_tree_edit();
         self.todo.cancel_search_edit();

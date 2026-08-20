@@ -3213,10 +3213,19 @@ impl App {
         self.active_workspace()?.active_selection_text()
     }
 
-    /// 浏览器地址栏是否在编辑态(main.rs 据此路由键盘)。
-    pub fn browser_addr_editing(&self) -> bool {
+    /// 浏览器地址栏是否持有 iced 真实焦点(main.rs 据此路由键盘)。
+    pub fn browser_addr_focused(&self) -> bool {
         self.active_workspace()
-            .is_some_and(|ws| ws.browser_addr_editing())
+            .is_some_and(|ws| ws.browser_addr_focused())
+    }
+
+    /// 每帧渲染循环调用:把 `extensions::browser::CaptureAddrFocus` 问到
+    /// 的真实焦点态写进当前工作区(`main.rs` 键盘路由随后读
+    /// `browser_addr_focused` 消费)。
+    pub fn set_browser_addr_focused(&mut self, focused: bool) {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.browser.set_addr_focused(focused);
+        }
     }
 
     /// 验收意见输入是否在编辑态（main.rs 键盘路由用）。
@@ -3968,16 +3977,12 @@ impl App {
     }
 
     /// 当前文本光标的窗口逻辑坐标 `(x, y_底, 行高)`,给 main.rs 设 IME
-    /// 候选窗位置(让选词窗落在光标右下,而非窗口左上)。地址栏/意见框编辑
-    /// 态用预览列上部近似(iced 立即模式拿不到精确控件屏坐标);否则用终端
-    /// 光标——单元格尺寸由 pane 像素 ÷ 网格推出,不依赖字号常量。
+    /// 候选窗位置(让选词窗落在光标右下,而非窗口左上)。意见框编辑态用预览
+    /// 列上部近似(地址栏已迁移 iced 原生 text_input,IME 位置由 iced 自己
+    /// 算准);否则用终端光标——单元格尺寸由 pane 像素 ÷ 网格推出,不依赖
+    /// 字号常量。
     pub fn ime_cursor_area(&self, window_w: f32, window_h: f32) -> (f32, f32, f32) {
         let state = self.shell_state();
-        if self.browser_addr_editing() {
-            let side = state.layout.rail_layout.side_of(PanelKind::Web);
-            let (bx, by, _bw, _bh) = preview_content_bounds_for(side, window_w, window_h, &state);
-            return (bx + 4.0, by, 20.0);
-        }
         if self.acceptance_comment_editing() {
             let side = state.layout.rail_layout.side_of(PanelKind::Acceptance);
             let (bx, by, _bw, _bh) = preview_content_bounds_for(side, window_w, window_h, &state);
