@@ -290,7 +290,7 @@ pub fn parse_chunk(
         AgentKind::Codebuddy => {
             parse_codebuddy_shaped_chunk(text, conversation_id, starting_turn_index)
         }
-        AgentKind::Codex | AgentKind::Qoder | AgentKind::V8agent => Vec::new(),
+        AgentKind::Codex | AgentKind::V8agent => Vec::new(),
     }
 }
 
@@ -348,7 +348,6 @@ mod tests {
     fn unsupported_agents_yield_empty() {
         let text = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"忽略\"}}\n";
         assert!(parse_chunk(AgentKind::Codex, text, "c", 0).is_empty());
-        assert!(parse_chunk(AgentKind::Qoder, text, "c", 0).is_empty());
         assert!(parse_chunk(AgentKind::V8agent, text, "c", 0).is_empty());
     }
 

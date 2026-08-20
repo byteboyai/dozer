@@ -24,7 +24,6 @@ fn agent_to_str(a: AgentKind) -> &'static str {
         AgentKind::Codebuddy => "codebuddy",
         AgentKind::Opencode => "opencode",
         AgentKind::Codex => "codex",
-        AgentKind::Qoder => "qoder",
         AgentKind::Kilo => "kilo",
         AgentKind::V8agent => "v8agent",
     }
@@ -36,7 +35,6 @@ fn agent_from_str(s: &str) -> AgentKind {
         "codebuddy" => AgentKind::Codebuddy,
         "opencode" => AgentKind::Opencode,
         "codex" => AgentKind::Codex,
-        "qoder" => AgentKind::Qoder,
         "kilo" => AgentKind::Kilo,
         "v8agent" => AgentKind::V8agent,
         _ => AgentKind::Unknown,

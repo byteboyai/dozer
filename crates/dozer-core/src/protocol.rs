@@ -24,7 +24,6 @@ pub enum AgentKind {
     Codebuddy,
     Opencode,
     Codex,
-    Qoder,
     Kilo,
     V8agent,
 }
@@ -40,7 +39,6 @@ impl AgentKind {
             AgentKind::Codebuddy => "codebuddy",
             AgentKind::Opencode => "opencode",
             AgentKind::Codex => "codex",
-            AgentKind::Qoder => "qoder",
             AgentKind::Kilo => "kilo",
             AgentKind::V8agent => "v8agent",
         }
@@ -693,10 +691,6 @@ mod tests {
             serde_json::to_string(&AgentKind::Codex).unwrap(),
             "\"codex\""
         );
-        assert_eq!(
-            serde_json::to_string(&AgentKind::Qoder).unwrap(),
-            "\"qoder\""
-        );
         assert_eq!(serde_json::to_string(&AgentKind::Kilo).unwrap(), "\"kilo\"");
         assert_eq!(
             serde_json::from_str::<AgentKind>("\"claude\"").unwrap(),
@@ -711,7 +705,6 @@ mod tests {
         assert_eq!(AgentKind::Codebuddy.label(), "codebuddy");
         assert_eq!(AgentKind::Opencode.label(), "opencode");
         assert_eq!(AgentKind::Codex.label(), "codex");
-        assert_eq!(AgentKind::Qoder.label(), "qoder");
         assert_eq!(AgentKind::Kilo.label(), "kilo");
     }
 

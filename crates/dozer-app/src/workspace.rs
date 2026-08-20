@@ -2228,12 +2228,9 @@ pub(crate) fn agent_card_refresh_plan(
     // "当前工作内容"兜底摘要的门禁比 model/mode 宽——只要 transcript
     // schema 能被 `parse_transcript` 解出人类/AI 文本就值得读(Opencode/
     // Kilo 的合成 transcript 是 Claude 形状,真有内容,只是没写 model/mode
-    // 字段而已);Codex/Qoder/V8agent 目前 `parse_transcript` 恒回空,读了
-    // 也提取不出东西,不值得为它们打开这道门。
-    let needs_activity = !matches!(
-        agent,
-        AgentKind::Codex | AgentKind::Qoder | AgentKind::V8agent
-    );
+    // 字段而已);Codex/V8agent 目前 `parse_transcript` 恒回空,读了也提取
+    // 不出东西,不值得为它们打开这道门。
+    let needs_activity = !matches!(agent, AgentKind::Codex | AgentKind::V8agent);
     // 精确相等太脆弱——cd 进项目根的任意子目录都会被判定成"偏离",既多做
     // 一次不必要的 git 查询,也是 Finding 1 那个 bug 更容易被触发的原因之
     // 一。改成路径前缀包含关系:cwd 是 project_root 的子路径就算"未偏离"。
@@ -2757,28 +2754,28 @@ pub(crate) fn agent_picker_toggle_button<'a>(
 }
 
 /// Agent 选择菜单浮层:固定挂在窗口右上角("＋"按钮下方——该按钮
-/// 就在最靠右的 Agent 面板头部,近似等于窗口右上角),九个选项
-/// Claude/CodeBuddy/OpenCode/Codex/Qoder/Kilo/v8agent/纯 Shell/Git Shell。跟项目树右键菜单
-/// (`context_menu_popup`)同款按钮样式,但不需要像素坐标定位——同
-/// `delete_confirm_popup` 一样固定 padding 摆位。`ws.agent_picker_open`
-/// 为假时返回空视图,调用方(`App::view`)据此决定要不要把这层塞进
-/// `stack!`。
+/// 就在最靠右的 Agent 面板头部,近似等于窗口右上角),八个选项按标签
+/// 首字母顺序排列:Claude/CodeBuddy/Codex/Git Shell/Kilo/OpenCode/
+/// v8agent/纯 Shell(验收反馈,2026-08-21;此前是手写的固定顺序,不便
+/// 找到目标 agent)。跟项目树右键菜单(`context_menu_popup`)同款按钮
+/// 样式,但不需要像素坐标定位——同 `delete_confirm_popup` 一样固定
+/// padding 摆位。`ws.agent_picker_open` 为假时返回空视图,调用方
+/// (`App::view`)据此决定要不要把这层塞进 `stack!`。
 pub(crate) fn agent_picker_popup(
     ws: &Workspace,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     if !ws.agent_picker_open {
         return column![].into();
     }
-    let items: [(&str, PickerLaunch); 9] = [
+    let items: [(&str, PickerLaunch); 8] = [
         ("Claude", PickerLaunch::Agent(Some(AgentKind::Claude))),
         ("CodeBuddy", PickerLaunch::Agent(Some(AgentKind::Codebuddy))),
-        ("OpenCode", PickerLaunch::Agent(Some(AgentKind::Opencode))),
         ("Codex", PickerLaunch::Agent(Some(AgentKind::Codex))),
-        ("Qoder", PickerLaunch::Agent(Some(AgentKind::Qoder))),
+        ("Git Shell", PickerLaunch::Git),
         ("Kilo", PickerLaunch::Agent(Some(AgentKind::Kilo))),
+        ("OpenCode", PickerLaunch::Agent(Some(AgentKind::Opencode))),
         ("v8agent", PickerLaunch::Agent(Some(AgentKind::V8agent))),
         ("纯 Shell", PickerLaunch::Agent(None)),
-        ("Git Shell", PickerLaunch::Git),
     ];
     // 单项统一走 `crate::menu::item_row`:图标沿用各 agent 代表色,文字保持
     // CREAM;hover/锁定语义、常宽、padding 同文件树右键菜单基准。
@@ -3401,7 +3398,7 @@ pub(crate) enum HookInstallTarget {
 
 pub(crate) fn hook_install_target(agent: AgentKind) -> Option<HookInstallTarget> {
     match agent {
-        AgentKind::Claude | AgentKind::Codebuddy | AgentKind::Codex | AgentKind::Qoder => {
+        AgentKind::Claude | AgentKind::Codebuddy | AgentKind::Codex => {
             Some(HookInstallTarget::Settings)
         }
         AgentKind::Opencode => Some(HookInstallTarget::Opencode),
@@ -3567,7 +3564,6 @@ pub(crate) fn agent_dot_color(agent: AgentKind) -> Color {
         AgentKind::Codebuddy => byteui::theme::color::current().purple,
         AgentKind::Opencode => byteui::theme::color::current().green,
         AgentKind::Codex => byteui::theme::color::current().orange,
-        AgentKind::Qoder => byteui::theme::color::current().magenta,
         AgentKind::Kilo => byteui::theme::color::current().blue,
         AgentKind::V8agent => byteui::theme::color::current().lime,
         AgentKind::Unknown => byteui::theme::color::current().dim,
@@ -3582,11 +3578,9 @@ pub(crate) fn agent_icon(agent: AgentKind) -> IconKind {
         AgentKind::Codebuddy => IconKind::Codebuddy,
         AgentKind::Opencode => IconKind::Opencode,
         // 暂无确认可用的品牌素材，回落通用图标（spec §8/§6 明确允许）。
-        AgentKind::Codex
-        | AgentKind::Qoder
-        | AgentKind::Kilo
-        | AgentKind::V8agent
-        | AgentKind::Unknown => IconKind::Bot,
+        AgentKind::Codex | AgentKind::Kilo | AgentKind::V8agent | AgentKind::Unknown => {
+            IconKind::Bot
+        }
     }
 }
 
@@ -4240,7 +4234,6 @@ mod tests {
             (AgentKind::Codebuddy, byteui::theme::color::current().purple),
             (AgentKind::Opencode, byteui::theme::color::current().green),
             (AgentKind::Codex, byteui::theme::color::current().orange),
-            (AgentKind::Qoder, byteui::theme::color::current().magenta),
             (AgentKind::Kilo, byteui::theme::color::current().blue),
             (AgentKind::V8agent, byteui::theme::color::current().lime),
             (AgentKind::Unknown, byteui::theme::color::current().dim),
@@ -4261,10 +4254,9 @@ mod tests {
         assert_eq!(agent_icon(AgentKind::Claude), IconKind::Claude);
         assert_eq!(agent_icon(AgentKind::Codebuddy), IconKind::Codebuddy);
         assert_eq!(agent_icon(AgentKind::Opencode), IconKind::Opencode);
-        // Codex/Qoder/Kilo/V8agent 暂无确认可用的品牌素材，回落通用 Bot 图标
+        // Codex/Kilo/V8agent 暂无确认可用的品牌素材，回落通用 Bot 图标
         // （见计划 Task 3 说明，非占位符——spec §8/§6 明确允许的兜底）。
         assert_eq!(agent_icon(AgentKind::Codex), IconKind::Bot);
-        assert_eq!(agent_icon(AgentKind::Qoder), IconKind::Bot);
         assert_eq!(agent_icon(AgentKind::Kilo), IconKind::Bot);
         assert_eq!(agent_icon(AgentKind::V8agent), IconKind::Bot);
         // Unknown 同样回落 Bot 图标。
@@ -4277,7 +4269,6 @@ mod tests {
         assert_eq!(agent_cli_command(AgentKind::Codebuddy), Some("codebuddy"));
         assert_eq!(agent_cli_command(AgentKind::Opencode), Some("opencode"));
         assert_eq!(agent_cli_command(AgentKind::Codex), Some("codex"));
-        assert_eq!(agent_cli_command(AgentKind::Qoder), Some("qoder"));
         assert_eq!(agent_cli_command(AgentKind::Kilo), Some("kilo"));
         assert_eq!(agent_cli_command(AgentKind::V8agent), Some("v8agent"));
         assert_eq!(agent_cli_command(AgentKind::Unknown), None);
@@ -4303,10 +4294,6 @@ mod tests {
             Some("codex".to_string())
         );
         assert_eq!(
-            picker_launch_command(PickerLaunch::Agent(Some(AgentKind::Qoder))),
-            Some("qoder".to_string())
-        );
-        assert_eq!(
             picker_launch_command(PickerLaunch::Agent(Some(AgentKind::Kilo))),
             Some("kilo".to_string())
         );
@@ -4325,14 +4312,9 @@ mod tests {
 
     #[test]
     fn hook_install_target_covers_only_agents_wired_up_in_dozer_hook() {
-        // Claude/CodeBuddy/Codex/Qoder 都走 `install::run_at` 的 JSON settings
+        // Claude/CodeBuddy/Codex 都走 `install::run_at` 的 JSON settings
         // 补丁机制。
-        for agent in [
-            AgentKind::Claude,
-            AgentKind::Codebuddy,
-            AgentKind::Codex,
-            AgentKind::Qoder,
-        ] {
+        for agent in [AgentKind::Claude, AgentKind::Codebuddy, AgentKind::Codex] {
             assert_eq!(
                 hook_install_target(agent),
                 Some(HookInstallTarget::Settings),

@@ -191,11 +191,7 @@ pub fn daily_totals_by_agent(
             AgentKind::Claude => entry.0 += total,
             AgentKind::Codebuddy => entry.1 += total,
             AgentKind::Opencode => entry.2 += total,
-            AgentKind::Unknown
-            | AgentKind::Codex
-            | AgentKind::Qoder
-            | AgentKind::Kilo
-            | AgentKind::V8agent => {}
+            AgentKind::Unknown | AgentKind::Codex | AgentKind::Kilo | AgentKind::V8agent => {}
         }
     }
     let mut days: Vec<DayAgentTotals> = by_day
@@ -880,7 +876,7 @@ mod tests {
 
     #[test]
     fn daily_totals_ignores_agents_without_dedicated_bucket() {
-        // Codex/Qoder/Kilo 目前没有专属的 DayAgentTotals 字段（这三家的
+        // Codex/Kilo 目前没有专属的 DayAgentTotals 字段（这两家的
         // 用量还进不了统计，见计划 Global Constraints），跟 Unknown 一样
         // 被忽略，不能 panic。
         let rows = vec![(meta_at(AgentKind::Codex, 0), usage_with_tokens(99))];

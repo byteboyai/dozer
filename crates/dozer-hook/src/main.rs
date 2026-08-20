@@ -1,7 +1,6 @@
 mod codebuddy;
 mod codex;
 mod opencode;
-mod qoder;
 
 use dozer_core::protocol::{AgentKind, Request, encode_line};
 use dozer_hook::{install, opencode_install};
@@ -57,7 +56,6 @@ fn parse_agent(arg: &str) -> AgentKind {
         "codebuddy" => AgentKind::Codebuddy,
         "opencode" => AgentKind::Opencode,
         "codex" => AgentKind::Codex,
-        "qoder" => AgentKind::Qoder,
         _ => AgentKind::Unknown,
     }
 }
@@ -71,7 +69,6 @@ fn resolve_event(agent: AgentKind, event_arg: Option<&str>) -> Option<String> {
     match agent {
         AgentKind::Codebuddy => codebuddy::translate_event(&raw),
         AgentKind::Codex => codex::translate_event(&raw),
-        AgentKind::Qoder => qoder::translate_event(&raw),
         _ => Some(raw),
     }
 }
@@ -205,23 +202,5 @@ mod tests {
     #[test]
     fn resolve_event_drops_codex_compaction_events() {
         assert_eq!(resolve_event(AgentKind::Codex, Some("PreCompact")), None);
-    }
-
-    #[test]
-    fn parse_agent_recognizes_qoder() {
-        assert_eq!(parse_agent("qoder"), AgentKind::Qoder);
-    }
-
-    #[test]
-    fn resolve_event_translates_qoder_failure_variants() {
-        assert_eq!(
-            resolve_event(AgentKind::Qoder, Some("PostToolUseFailure")),
-            Some("PostToolUse".to_string())
-        );
-    }
-
-    #[test]
-    fn resolve_event_drops_qoder_file_changed() {
-        assert_eq!(resolve_event(AgentKind::Qoder, Some("FileChanged")), None);
     }
 }
