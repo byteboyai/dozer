@@ -2111,7 +2111,7 @@ fn todo_card<'a>(
             };
             container(field)
                 .width(Length::Fill)
-                .padding([2, 4])
+                .padding([6, 8])
                 .id(content_field_id())
                 .style(|_t: &iced_widget::Theme| container::Style {
                     background: None,

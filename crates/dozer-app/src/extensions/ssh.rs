@@ -7,7 +7,9 @@
 use crate::app::{App, HoverId, ssh_tab_hover_key};
 use byteui::interaction::icons;
 use iced_widget::core::Element;
-use iced_widget::{MouseArea, button, column, container, row, stack, text, text_input};
+use iced_widget::{
+    MouseArea, Scrollable, button, column, container, row, scrollable, stack, text, text_input,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1093,15 +1095,13 @@ pub fn view<'a>(
     width: iced_widget::core::Length,
     outer: iced_widget::core::Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let mut col = column![crate::homespace::home_panel_head(
-        byteui::interaction::icons::IconKind::Server,
-        "主机"
-    )]
-    .spacing(12)
-    .padding(8);
+    let head =
+        crate::homespace::home_panel_head(byteui::interaction::icons::IconKind::Server, "主机");
+
+    let mut list = column![].spacing(12).padding(8);
 
     if ws_state.hosts().is_empty() {
-        col = col.push(
+        list = list.push(
             text("还没有主机")
                 .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim),
@@ -1109,7 +1109,7 @@ pub fn view<'a>(
     } else {
         for h in ws_state.hosts() {
             let hovered = app.hover_progress(HoverId::HostCard(ssh_tab_hover_key(&h.id))) > 0.0;
-            col = col.push(host_card(
+            list = list.push(host_card(
                 h,
                 ws_state.test_status(&h.id),
                 ws_state.hover_action(),
@@ -1125,10 +1125,20 @@ pub fn view<'a>(
             .as_deref()
             .map(|id| ws_state.test_status(id))
             .unwrap_or(&TestStatus::Idle);
-        col = col.push(host_form(draft, status));
+        list = list.push(host_form(draft, status));
     }
 
-    let body = column![col, ssh_footer_bar()].spacing(0);
+    let scroll = Scrollable::new(list)
+        .width(iced_widget::core::Length::Fill)
+        .height(iced_widget::core::Length::Fill)
+        .direction(scrollable::Direction::Vertical(
+            byteui::interaction::scrollbar::scrollbar(),
+        ))
+        .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style());
+
+    // 顶部面板标题固定、中间主机列表可滚动、底部「＋添加」footer-bar 固定
+    // 在面板最下方——footer-bar 不随主机列表滚动,始终可见(见 `ssh_footer_bar`)。
+    let body = column![head, scroll, ssh_footer_bar()].spacing(0);
 
     let base = container(body)
         .width(width)
