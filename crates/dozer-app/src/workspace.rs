@@ -2442,10 +2442,10 @@ pub(crate) fn conversation_list_pane(
         let sub = if current {
             format!(
                 "● 当前 · {}",
-                conversation_sub(c.agent.label(), c.modified_ms, c.size_bytes, now_ms)
+                conversation_sub(c.agent.label(), c.modified_ms, now_ms)
             )
         } else {
-            conversation_sub(c.agent.label(), c.modified_ms, c.size_bytes, now_ms)
+            conversation_sub(c.agent.label(), c.modified_ms, now_ms)
         };
         let sub_color = if current {
             byteui::theme::color::current().green
@@ -3312,19 +3312,9 @@ pub(crate) fn relative_time_text(modified_ms: u64, now_ms: u64) -> String {
 }
 
 /// 对话副行文案：`<agent> · <相对时间> · <规模>`（P1j）。
-pub(crate) fn conversation_sub(
-    agent: &str,
-    modified_ms: u64,
-    size_bytes: u64,
-    now_ms: u64,
-) -> String {
+pub(crate) fn conversation_sub(agent: &str, modified_ms: u64, now_ms: u64) -> String {
     let when = relative_time_text(modified_ms, now_ms);
-    let size = if size_bytes >= 1024 * 1024 {
-        format!("{:.1}MB", size_bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{}KB", (size_bytes / 1024).max(1))
-    };
-    format!("{agent} · {when} · {size}")
+    format!("{agent} · {when}")
 }
 
 /// AI 回合折叠行文案（P1i）：过程 = thinking + N 工具。
@@ -3935,11 +3925,8 @@ mod tests {
 
     #[test]
     fn conversation_sub_line_format() {
-        let s = conversation_sub("claude", 1000, 78 * 1024, 1000);
-        assert!(s.starts_with("claude · "), "含 agent 前缀: {s}");
-        assert!(s.ends_with("· 78KB"), "含规模: {s}");
-        let s2 = conversation_sub("claude", 1000, 8 * 1024 * 1024, 1000);
-        assert!(s2.ends_with("· 8.0MB"), "MB 规模: {s2}");
+        let s = conversation_sub("claude", 1000, 1000);
+        assert_eq!(s, "claude · 刚刚", "agent + 相对时间，不再含文件大小");
     }
 
     #[test]

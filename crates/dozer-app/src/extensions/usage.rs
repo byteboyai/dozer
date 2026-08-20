@@ -958,7 +958,6 @@ mod tests {
             path: std::path::PathBuf::from(format!("/{title}.jsonl")),
             title: title.to_string(),
             modified_ms: 0,
-            size_bytes: 0,
             agent,
         }
     }
@@ -998,7 +997,6 @@ mod tests {
             path: std::path::PathBuf::from(format!("/{ms}.jsonl")),
             title: String::new(),
             modified_ms: ms,
-            size_bytes: 0,
             agent,
         }
     }
