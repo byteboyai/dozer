@@ -23,6 +23,8 @@ pub struct ParsedTurn {
     pub tokens_cache_write: u64,
     pub ts: Option<u64>,
     pub raw_json: String,
+    /// 只对 `role == "tool_result"` 有意义:这次工具调用是否失败。
+    pub is_error: bool,
 }
 
 /// `text` 中"只含完整行"的前缀长度——最后一个 `'\n'` 之后的偏移;没有
@@ -81,6 +83,21 @@ fn tool_summary(name: &str, input: &Value) -> String {
     }
 }
 
+/// 一个 `tool_result` 内容块(`b.get("content")`)的实际文本——可能是
+/// 纯字符串，也可能是 `[{"type":"text","text":...}]` 数组(2026-08-21
+/// 实测两种真实 Claude transcript 样本都存在)。
+fn tool_result_text(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
 fn parse_claude_shaped_chunk(
     text: &str,
     conversation_id: &str,
@@ -103,28 +120,57 @@ fn parse_claude_shaped_chunk(
             .map(str::to_string)
             .unwrap_or_else(|| fallback_key(conversation_id, turn_index));
         match v.get("type").and_then(|t| t.as_str()) {
-            Some("user") => {
-                let Some(text) = v
-                    .get("message")
-                    .and_then(|m| m.get("content"))
-                    .and_then(|c| c.as_str())
-                else {
-                    continue;
-                };
-                let is_meta = v.get("isMeta").and_then(|m| m.as_bool()).unwrap_or(false);
-                if is_meta || is_synthetic_wrapper_content(text) {
-                    continue;
+            Some("user") => match v.get("message").and_then(|m| m.get("content")) {
+                Some(Value::String(text)) => {
+                    let is_meta = v.get("isMeta").and_then(|m| m.as_bool()).unwrap_or(false);
+                    if is_meta || is_synthetic_wrapper_content(text) {
+                        continue;
+                    }
+                    out.push(ParsedTurn {
+                        message_key,
+                        role: "human".into(),
+                        content: text.to_string(),
+                        ts,
+                        raw_json: line.to_string(),
+                        ..Default::default()
+                    });
+                    turn_index += 1;
                 }
-                out.push(ParsedTurn {
-                    message_key,
-                    role: "human".into(),
-                    content: text.to_string(),
-                    ts,
-                    raw_json: line.to_string(),
-                    ..Default::default()
-                });
-                turn_index += 1;
-            }
+                Some(Value::Array(blocks)) => {
+                    let mut content = String::new();
+                    let mut is_error = false;
+                    for b in blocks {
+                        if b.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
+                            continue;
+                        }
+                        if b.get("is_error").and_then(|e| e.as_bool()).unwrap_or(false) {
+                            is_error = true;
+                        }
+                        let text = tool_result_text(b.get("content"));
+                        if text.is_empty() {
+                            continue;
+                        }
+                        if !content.is_empty() {
+                            content.push('\n');
+                        }
+                        content.push_str(&text);
+                    }
+                    if content.is_empty() {
+                        continue;
+                    }
+                    out.push(ParsedTurn {
+                        message_key,
+                        role: "tool_result".into(),
+                        content,
+                        is_error,
+                        ts,
+                        raw_json: line.to_string(),
+                        ..Default::default()
+                    });
+                    turn_index += 1;
+                }
+                _ => continue,
+            },
             Some("assistant") => {
                 let Some(blocks) = v
                     .get("message")
@@ -198,6 +244,7 @@ fn parse_claude_shaped_chunk(
                     tokens_cache_write,
                     ts,
                     raw_json: line.to_string(),
+                    is_error: false,
                 });
                 turn_index += 1;
             }
@@ -237,58 +284,132 @@ fn parse_codebuddy_shaped_chunk(
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if v.get("type").and_then(|t| t.as_str()) != Some("message") {
-            continue;
-        }
-        let Some(blocks) = v.get("content").and_then(|c| c.as_array()) else {
-            continue;
-        };
         let ts = v.get("timestamp").and_then(|t| t.as_u64());
         let message_key = v
             .get("id")
             .and_then(|i| i.as_str())
             .map(str::to_string)
             .unwrap_or_else(|| fallback_key(conversation_id, turn_index));
-        let usage = v.get("providerData").and_then(|p| p.get("usage"));
-        let tokens_in = usage
-            .and_then(|u| u.get("inputTokens"))
-            .and_then(|n| n.as_u64())
-            .unwrap_or(0);
-        let tokens_out = usage
-            .and_then(|u| u.get("outputTokens"))
-            .and_then(|n| n.as_u64())
-            .unwrap_or(0);
-        match v.get("role").and_then(|r| r.as_str()) {
-            Some("user") => {
-                let content = join_codebuddy_text_blocks(blocks, "input_text");
-                if content.is_empty() || is_synthetic_wrapper_content(&content) {
+        match v.get("type").and_then(|t| t.as_str()) {
+            Some("message") => {
+                let Some(blocks) = v.get("content").and_then(|c| c.as_array()) else {
                     continue;
+                };
+                let usage = v.get("providerData").and_then(|p| p.get("usage"));
+                let tokens_in = usage
+                    .and_then(|u| u.get("inputTokens"))
+                    .and_then(|n| n.as_u64())
+                    .unwrap_or(0);
+                let tokens_out = usage
+                    .and_then(|u| u.get("outputTokens"))
+                    .and_then(|n| n.as_u64())
+                    .unwrap_or(0);
+                match v.get("role").and_then(|r| r.as_str()) {
+                    Some("user") => {
+                        let content = join_codebuddy_text_blocks(blocks, "input_text");
+                        if content.is_empty() || is_synthetic_wrapper_content(&content) {
+                            continue;
+                        }
+                        out.push(ParsedTurn {
+                            message_key,
+                            role: "human".into(),
+                            content,
+                            ts,
+                            tokens_in,
+                            tokens_out,
+                            raw_json: line.to_string(),
+                            ..Default::default()
+                        });
+                        turn_index += 1;
+                    }
+                    Some("assistant") => {
+                        out.push(ParsedTurn {
+                            message_key,
+                            role: "ai".into(),
+                            content: join_codebuddy_text_blocks(blocks, "output_text"),
+                            ts,
+                            tokens_in,
+                            tokens_out,
+                            raw_json: line.to_string(),
+                            ..Default::default()
+                        });
+                        turn_index += 1;
+                    }
+                    _ => {}
+                }
+            }
+            // 工具调用本身——跟 "message" 平级的顶层类型，不是嵌在某条
+            // message 的 content 数组里(2026-08-21 实测确认，此前完全
+            // 没被摄取)。`arguments` 是 JSON 编码的字符串，需要先解析
+            // 一层才能喂给通用的 `tool_summary()`。
+            Some("function_call") => {
+                let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("工具");
+                let input: Value = v
+                    .get("arguments")
+                    .and_then(|a| a.as_str())
+                    .and_then(|s| serde_json::from_str(s).ok())
+                    .unwrap_or(Value::Null);
+                let mutating = MUTATING_TOOLS.contains(&name);
+                let mut files_touched = Vec::new();
+                if mutating && let Some(path) = input.get("file_path").and_then(|p| p.as_str()) {
+                    files_touched.push(path.to_string());
                 }
                 out.push(ParsedTurn {
                     message_key,
-                    role: "human".into(),
-                    content,
+                    role: "ai".into(),
+                    tools_summary: vec![tool_summary(name, &input)],
+                    tool_calls: 1,
+                    mutating_tool_calls: if mutating { 1 } else { 0 },
+                    files_touched,
                     ts,
-                    tokens_in,
-                    tokens_out,
                     raw_json: line.to_string(),
                     ..Default::default()
                 });
                 turn_index += 1;
             }
-            Some("assistant") => {
+            // 工具调用的返回结果。没有观测到明确的错误信号字段(真实样本
+            // status 只见过 "completed"/"incomplete"，output.type 恒为
+            // "text")，`status == "incomplete"` 是启发式近似，不是精确
+            // 信号——以后如果找到更可靠的错误字段，回来改这一行。
+            Some("function_call_result") => {
+                let content = v
+                    .get("output")
+                    .and_then(|o| o.get("text"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if content.is_empty() {
+                    continue;
+                }
+                let is_error = v.get("status").and_then(|s| s.as_str()) == Some("incomplete");
+                out.push(ParsedTurn {
+                    message_key,
+                    role: "tool_result".into(),
+                    content,
+                    is_error,
+                    ts,
+                    raw_json: line.to_string(),
+                    ..Default::default()
+                });
+                turn_index += 1;
+            }
+            // CodeBuddy 的 thinking 等价物。跟 Claude 的 thinking block 同一
+            // 口径:只留一个"有没有思考"的布尔标记，不落全文(既有既定行为，
+            // 见 parse_claude_shaped_chunk 的 Some("thinking") => thinking =
+            // true 分支，这里保持一致，不新开先例)。
+            Some("reasoning") => {
                 out.push(ParsedTurn {
                     message_key,
                     role: "ai".into(),
-                    content: join_codebuddy_text_blocks(blocks, "output_text"),
+                    thinking: true,
                     ts,
-                    tokens_in,
-                    tokens_out,
                     raw_json: line.to_string(),
                     ..Default::default()
                 });
                 turn_index += 1;
             }
+            // file-history-snapshot / ai-title / summary / 其它未知类型：
+            // 跟既有行为一致，不摄取。
             _ => {}
         }
     }
@@ -386,6 +507,93 @@ mod tests {
         assert_eq!(turns.len(), 1, "只有真实消息应该摄取成回合");
         assert_eq!(turns[0].content, "真正的问题在这里");
         assert_eq!(turns[0].message_key, "u4");
+    }
+
+    #[test]
+    fn claude_captures_tool_result_as_its_own_turn() {
+        // 真实 Claude transcript 里 tool_result 的 content 可能是纯字符串，
+        // 也可能是 [{"type":"text","text":"..."}] 数组——两种都要处理
+        // (2026-08-21 实测本项目自己会话的原始 jsonl 文件确认)。
+        let text = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":100,\"message\":{\"role\":\"user\",",
+            "\"content\":[{\"tool_use_id\":\"t1\",\"type\":\"tool_result\",",
+            "\"content\":\"plain string result\"}]}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u2\",\"timestamp\":200,\"message\":{\"role\":\"user\",",
+            "\"content\":[{\"tool_use_id\":\"t2\",\"type\":\"tool_result\",\"is_error\":true,",
+            "\"content\":[{\"type\":\"text\",\"text\":\"boom\"}]}]}}\n"
+        );
+        let turns = parse_chunk(AgentKind::Claude, text, "conv1", 0);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].role, "tool_result");
+        assert_eq!(turns[0].content, "plain string result");
+        assert!(!turns[0].is_error);
+        assert_eq!(turns[0].message_key, "u1");
+        assert_eq!(turns[1].role, "tool_result");
+        assert_eq!(turns[1].content, "boom");
+        assert!(turns[1].is_error);
+    }
+
+    #[test]
+    fn claude_tool_result_with_multiple_text_blocks_joins_with_newline() {
+        let text = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",",
+            "\"content\":[{\"type\":\"tool_result\",",
+            "\"content\":[{\"type\":\"text\",\"text\":\"第一段\"},",
+            "{\"type\":\"text\",\"text\":\"第二段\"}]}]}}\n"
+        );
+        let turns = parse_chunk(AgentKind::Claude, text, "conv1", 0);
+        assert_eq!(turns[0].content, "第一段\n第二段");
+    }
+
+    #[test]
+    fn codebuddy_captures_function_call_and_result() {
+        // 2026-08-21 实测真实 CodeBuddy transcript：function_call/
+        // function_call_result 是跟 "message" 平级的顶层 type，不是嵌在
+        // message.content 数组里的 block——此前整个类型分支都没被认，
+        // 一律在最上面的 `type != "message"` 直接 continue 掉。
+        let text = concat!(
+            "{\"id\":\"fc1\",\"type\":\"function_call\",\"timestamp\":100,",
+            "\"name\":\"Grep\",\"arguments\":\"{\\\"pattern\\\":\\\"foo\\\",\\\"path\\\":\\\"src\\\"}\"}\n",
+            "{\"id\":\"fcr1\",\"type\":\"function_call_result\",\"timestamp\":200,",
+            "\"name\":\"Grep\",\"status\":\"completed\",",
+            "\"output\":{\"type\":\"text\",\"text\":\"src/a.rs\\nsrc/b.rs\"}}\n",
+            "{\"id\":\"fcr2\",\"type\":\"function_call_result\",\"timestamp\":300,",
+            "\"name\":\"Bash\",\"status\":\"incomplete\",",
+            "\"output\":{\"type\":\"text\",\"text\":\"command timed out\"}}\n"
+        );
+        let turns = parse_chunk(AgentKind::Codebuddy, text, "conv1", 0);
+        assert_eq!(turns.len(), 3);
+        assert_eq!(turns[0].role, "ai");
+        assert_eq!(turns[0].tool_calls, 1);
+        // `tool_summary()` 优先取 `pattern` 而非 `path`——与 Claude 侧既有
+        // 逻辑一致(工具调用本身通用，不在此处另开特例)。
+        assert_eq!(turns[0].tools_summary, vec!["Grep foo".to_string()]);
+        assert_eq!(turns[1].role, "tool_result");
+        assert_eq!(turns[1].content, "src/a.rs\nsrc/b.rs");
+        assert!(!turns[1].is_error);
+        assert_eq!(turns[2].role, "tool_result");
+        assert!(turns[2].is_error, "status=incomplete 应判定为失败");
+    }
+
+    #[test]
+    fn codebuddy_captures_reasoning_as_thinking_marker() {
+        let text = "{\"id\":\"r1\",\"type\":\"reasoning\",\"timestamp\":100}\n";
+        let turns = parse_chunk(AgentKind::Codebuddy, text, "conv1", 0);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].role, "ai");
+        assert!(turns[0].thinking);
+        assert_eq!(turns[0].content, "");
+    }
+
+    #[test]
+    fn codebuddy_ignores_snapshot_and_summary_lines() {
+        let text = concat!(
+            "{\"id\":\"s1\",\"type\":\"file-history-snapshot\"}\n",
+            "{\"id\":\"s2\",\"type\":\"ai-title\",\"title\":\"foo\"}\n",
+            "{\"id\":\"s3\",\"type\":\"summary\"}\n"
+        );
+        let turns = parse_chunk(AgentKind::Codebuddy, text, "conv1", 0);
+        assert!(turns.is_empty());
     }
 
     #[test]
