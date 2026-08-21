@@ -82,12 +82,29 @@ impl TranscriptStore {
                 tokens_cache_read INTEGER NOT NULL DEFAULT 0,
                 tokens_cache_write INTEGER NOT NULL DEFAULT 0,
                 raw_json TEXT NOT NULL,
+                is_error INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (conversation_id, message_key)
             );
             CREATE INDEX IF NOT EXISTS idx_turns_order
                 ON conversation_turns(conversation_id, turn_index);",
         )
         .context("建表")?;
+        // 老库(建表时还没有 is_error 列)迁移：CREATE TABLE IF NOT EXISTS
+        // 对已存在的表不生效，新列需要单独补。SQLite 的
+        // ALTER TABLE ADD COLUMN 没有 IF NOT EXISTS 语法(老版本不支持)，
+        // 靠 PRAGMA table_info 先查有没有再决定要不要补。
+        let has_is_error: bool = conn
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('conversation_turns') WHERE name = 'is_error'",
+            )?
+            .exists([])?;
+        if !has_is_error {
+            conn.execute(
+                "ALTER TABLE conversation_turns ADD COLUMN is_error INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .context("迁移 is_error 列")?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -449,6 +466,46 @@ mod tests {
         let p = dir.join(name);
         std::fs::write(&p, content).unwrap();
         p
+    }
+
+    #[test]
+    fn open_on_pre_existing_db_without_is_error_column_adds_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("old.db");
+        // 模拟老库：手写不带 is_error 列的旧表结构。
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE conversations (
+                    conversation_id TEXT PRIMARY KEY, agent_kind TEXT NOT NULL,
+                    dir TEXT NOT NULL, file_path TEXT NOT NULL, title TEXT,
+                    first_ts INTEGER NOT NULL, last_ts INTEGER NOT NULL,
+                    turn_count INTEGER NOT NULL DEFAULT 0,
+                    parsed_offset INTEGER NOT NULL DEFAULT 0,
+                    file_size_at_parse INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE conversation_turns (
+                    conversation_id TEXT NOT NULL, turn_index INTEGER NOT NULL,
+                    message_key TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL,
+                    tools_summary TEXT NOT NULL DEFAULT '[]', thinking INTEGER NOT NULL DEFAULT 0,
+                    ts INTEGER, tool_calls INTEGER NOT NULL DEFAULT 0,
+                    mutating_tool_calls INTEGER NOT NULL DEFAULT 0,
+                    files_touched TEXT NOT NULL DEFAULT '[]',
+                    tokens_in INTEGER NOT NULL DEFAULT 0, tokens_out INTEGER NOT NULL DEFAULT 0,
+                    tokens_cache_read INTEGER NOT NULL DEFAULT 0,
+                    tokens_cache_write INTEGER NOT NULL DEFAULT 0, raw_json TEXT NOT NULL,
+                    PRIMARY KEY (conversation_id, message_key)
+                );",
+            )
+            .unwrap();
+        }
+        // open() 应该在老库上补出 is_error 列，不报错。
+        let store = TranscriptStore::open(&db_path).unwrap();
+        let conn = store.conn.lock().unwrap();
+        let has_col: bool = conn
+            .prepare("SELECT is_error FROM conversation_turns LIMIT 0")
+            .is_ok();
+        assert!(has_col, "老库 open() 后应该已经补上 is_error 列");
     }
 
     #[test]
