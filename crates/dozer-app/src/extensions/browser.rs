@@ -1269,7 +1269,6 @@ pub fn update(
         },
         Message::StarClick => {
             state.error = None;
-            state.star_menu_open = false;
             let Some(url) = state
                 .tabs
                 .tabs()
@@ -1280,11 +1279,13 @@ pub fn update(
             };
             let status = bookmark_status(&state.bookmarks, &url, project_id);
             if !status.is_bookmarked() {
-                state.star_menu_open = true;
+                // 未收藏 → 原样切换"加入收藏"菜单的开合(与旧行为一致)。
+                state.star_menu_open = !state.star_menu_open;
                 return;
             }
             // 已收藏(选中态)→直接点击即全部移出收藏,不再弹菜单。复用
             // `BookmarkRemove` 的处理(乐观移除 + dozerd RPC),逐 scope 派发。
+            state.star_menu_open = false;
             for id in status.global.into_iter().chain(status.project) {
                 emit(Message::BookmarkRemove(id));
             }
