@@ -89,10 +89,17 @@ impl Tabs {
     }
 
     pub fn close(&mut self, idx: usize) {
-        if idx >= self.tabs.len() {
+        if self.tabs.is_empty() || idx >= self.tabs.len() {
             return;
         }
+        let closing_last = self.tabs.len() == 1;
         self.tabs.remove(idx);
+        // 页签组永不为空:关掉最后一个 tab 时自动补一个 `about:blank`,
+        // 与初始状态一致(见 `State::default`)。
+        if closing_last {
+            self.open_url("about:blank".to_string());
+            return;
+        }
         if self.active >= self.tabs.len() {
             self.active = self.tabs.len().saturating_sub(1);
         } else if idx < self.active {
@@ -1262,7 +1269,25 @@ pub fn update(
         },
         Message::StarClick => {
             state.error = None;
-            state.star_menu_open = !state.star_menu_open;
+            state.star_menu_open = false;
+            let Some(url) = state
+                .tabs
+                .tabs()
+                .get(state.tabs.active_idx())
+                .map(|t| t.url.clone())
+            else {
+                return;
+            };
+            let status = bookmark_status(&state.bookmarks, &url, project_id);
+            if !status.is_bookmarked() {
+                state.star_menu_open = true;
+                return;
+            }
+            // 已收藏(选中态)→直接点击即全部移出收藏,不再弹菜单。复用
+            // `BookmarkRemove` 的处理(乐观移除 + dozerd RPC),逐 scope 派发。
+            for id in status.global.into_iter().chain(status.project) {
+                emit(Message::BookmarkRemove(id));
+            }
         }
         Message::BookmarksToggle => state.bookmarks_open = !state.bookmarks_open,
         Message::BookmarkAdd(scope) => {
