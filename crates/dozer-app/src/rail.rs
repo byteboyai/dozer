@@ -7,7 +7,12 @@
 //! Rail 逻辑物理搬出 `app.rs`。见
 //! `docs/superpowers/specs/2026-08-21-rail-extraction-pilot-design.md`。
 
-use crate::app::{PanelKind, Side};
+use crate::app::{App, HoverId, Message, PanelKind, Side};
+use crate::theme;
+use byteui::interaction::icons;
+use iced_widget::core::mouse;
+use iced_widget::core::{Border, Color, Element, Length, Padding};
+use iced_widget::{MouseArea, button, column, container, stack};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -309,6 +314,370 @@ pub(crate) fn slot_position(
         .filter(|a| a.side == side)
         .map(|a| a.current)
         .unwrap_or(target)
+}
+
+/// 单个图标栏按钮：圆角正方形背景常驻,hover 图标变金(无金框),选中图标
+/// 变金且带金色外框。
+pub(crate) fn rail_icon_button<'a>(
+    icon: icons::IconKind,
+    active: bool,
+    hover_t: f32,
+    msg: Message,
+    tooltip: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    // 图标颜色:选中态恒为金;未选中时 hover 平滑过渡到金(见 `HoverId`/
+    // `App::hover_progress`——与光标闪烁同款自驱 redraw 动画)。SVG 颜色
+    // 构建时定死、不吃 `button::Status`,所以 hover 进度靠 `hover_t` 参数从
+    // App 算进来。
+    let color = if active {
+        byteui::theme::color::current().gold
+    } else {
+        byteui::theme::color::mix(
+            byteui::theme::color::current().dim,
+            byteui::theme::color::current().gold,
+            hover_t,
+        )
+    };
+    let inner = container(icons::view(icon, byteui::theme::icon_size::rail(), color))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center);
+
+    let radius = 8.0;
+    let base_border = Border {
+        color: Color::TRANSPARENT,
+        width: 1.0,
+        radius: radius.into(),
+    };
+
+    let content: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = button(inner)
+        .on_press(msg)
+        .width(Length::Fixed(byteui::theme::geometry::rail_button_size()))
+        .height(Length::Fixed(byteui::theme::geometry::rail_button_size()))
+        .padding(0)
+        .style(move |_t: &iced_widget::Theme, _status: button::Status| {
+            // 圆角正方形背景常驻(`CARD`);金色外框只在选中态出现,hover
+            // 不放金框——所以样式完全由 `active` 决定,与交互态无关。
+            button::Style {
+                background: Some(byteui::theme::color::current().card.into()),
+                border: Border {
+                    color: if active {
+                        byteui::theme::color::current().gold
+                    } else {
+                        Color::TRANSPARENT
+                    },
+                    ..base_border
+                },
+                ..button::Style::default()
+            }
+        })
+        .into();
+    icons::with_tooltip(content, tooltip)
+}
+
+/// 图标栏:按 `app.shell_layout.rail_layout.side(side)` 的顺序遍历渲染。
+/// 左右两条栏共用这一份实现——差异(区域样式、选中态取哪个
+/// `*_view`/`*_collapsed` 字段判断)通过 `side` 参数分派。
+pub(crate) fn icon_rail(
+    app: &App,
+    side: Side,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let region = match side {
+        Side::Left => theme::region::left_icon_rail(),
+        Side::Right => theme::region::right_icon_rail(),
+    };
+    // 视觉"选中"= 该视图激活 **且**对应面板区展开。点已选中的图标会收起
+    // 面板区,此时图标要退回未选中态,所以 `active` 得带上 `!collapsed`
+    // ——语义同拆分前的两条原图标栏函数。
+    let (active_kind, open) = match side {
+        Side::Left => (app.left_view, !app.left_collapsed),
+        Side::Right => (app.right_view, !app.right_collapsed),
+    };
+    // 每个按钮各占一个绝对定位的 `stack!` 图层,纵向偏移按
+    // `App::rail_slot_position` 算出的动画槽位号换算像素——取代原先的
+    // `column!`(严格按 `rail_layout` 下标顺序摆、换位瞬间跳变),让同栏
+    // 拖拽重排时让位的相邻按钮能平滑滑动到新槽位,而不是硬切。
+    let button_size = byteui::theme::geometry::rail_button_size();
+    let step = button_size + region.gap;
+    let mut layers = Vec::new();
+    for (idx, &kind) in app.shell_layout.rail_layout.side(side).iter().enumerate() {
+        let (icon, tooltip) = panel_meta(kind);
+        // `interactive: false`——按下选中不走这里内层的
+        // `iced_widget::button::on_press`(松手才触发,时机不对,见
+        // `rail_drag_surface` 的注释),改由外层 `rail_drag_surface` 的
+        // `MouseArea::on_press` 接管,`on_select` 参数这里只是占位不会被
+        // 内部真正接线,原样传 `Message::PanelSelect(kind)` 保持调用方
+        // 语义一致。视觉(选中金框/hover 渐变)不受 `interactive` 影响,
+        // 只有交互接线这一步被跳过。
+        let base: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+            icons::icon_button_entry(
+                icon,
+                byteui::theme::icon_size::rail(),
+                kind == active_kind && open,
+                app.rail_drag_confirmed() && Some(kind) == app.dragged_panel_kind(),
+                app.hover_progress(HoverId::Rail(RailButton::Panel(kind))),
+                true,
+                button_size,
+                false,
+                Message::PanelSelect(kind),
+                move |hovered| Message::Hover(HoverId::Rail(RailButton::Panel(kind)), hovered),
+                tooltip,
+            );
+        let entry = match panel_badge(app, kind) {
+            Some(badge) => stack![base, badge].into(),
+            None => base,
+        };
+        let y = region.padding.top + app.rail_slot_position(side, kind, idx) * step;
+        let positioned = container(rail_drag_surface(
+            entry,
+            side,
+            idx,
+            app.rail_drag_confirmed(),
+            Message::PanelSelect(kind),
+        ))
+        .padding(Padding {
+            top: y,
+            left: region.padding.left,
+            right: region.padding.right,
+            bottom: 0.0,
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Left)
+        .align_y(iced_widget::core::alignment::Vertical::Top);
+        layers.push(positioned.into());
+    }
+
+    // 拖拽悬停(同栏重排 / 跨栏悬停)时,在预计插入点画一条金色插入线,
+    // 两种情况互斥(`pending_cross_side` 只在悬停到*另一*栏时才 `Some`),
+    // 同一帧同一侧最多画一条:
+    // - 跨栏悬停到本栏:插入点是 `pending_cross_side.1`——`rail_cross_
+    //   apply` 落地时是 `insert`(把已有项推后一位),不是跟目标位的按钮
+    //   互换,所以高亮画成"卡在两个按钮之间的线",不描边某个已存在按钮
+    //   (那样会误导成"要跟它换位")。这个下标恒是目标栏某个已有按钮自己
+    //   上报的下标(见 `rail_drag_surface` 的 `on_move` 只挂在真实按钮
+    //   上),不会是 `len()`(悬停不到"最后一个之后"这个位置——现有交互
+    //   面就是如此,不是这次新引入的限制)。
+    // - 同栏内拖拽重排:插入点是 `drag.source_index`——同栏分支的
+    //   `rail_drag_move_into` 已经把 `RailLayout`/`source_index` 实时改到
+    //   目标位(不像跨栏要等 `RailDragEnd` 才落地),所以这里不是"预告",
+    //   是"跟当前已生效的顺序对齐"的同一条线,视觉语言与跨栏悬停统一。
+    // 两种情况都只在越过点击/拖拽视觉阈值(`rail_drag_confirmed`)后才
+    // 画,理由同幽灵图标/源图标变淡——避免快速单击也闪一下插入线。
+    let insertion_idx = app
+        .rail_drag
+        .filter(|_| app.rail_drag_confirmed())
+        .and_then(|d| match d.pending_cross_side {
+            Some((cross_side, idx)) => (cross_side == side).then_some(idx),
+            None => (d.source_side == side).then_some(d.source_index),
+        });
+    if let Some(idx) = insertion_idx {
+        let bar_h = 3.0;
+        let y = (region.padding.top + idx as f32 * step - region.gap / 2.0 - bar_h / 2.0).max(0.0);
+        let marker = container(iced_widget::Space::new())
+            .width(Length::Fixed(button_size))
+            .height(Length::Fixed(bar_h))
+            .style(|_t: &iced_widget::Theme| container::Style {
+                background: Some(byteui::theme::color::current().gold.into()),
+                ..container::Style::default()
+            });
+        let positioned = container(marker)
+            .padding(Padding {
+                top: y,
+                left: region.padding.left,
+                right: region.padding.right,
+                bottom: 0.0,
+            })
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(iced_widget::core::alignment::Horizontal::Left)
+            .align_y(iced_widget::core::alignment::Vertical::Top);
+        layers.push(positioned.into());
+    }
+
+    let content = iced_widget::Stack::with_children(layers)
+        .width(Length::Fill)
+        .height(Length::Fill);
+    container(content)
+        .width(Length::Fixed(byteui::theme::geometry::icon_rail_width()))
+        .height(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: region.background.map(Into::into),
+            border: region.border.unwrap_or_default(),
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// 面板 → (图标, 图标栏 tooltip 文案)。11 个 `PanelKind` variant 逐一
+/// 对应,顺序与 `PanelKind` 定义顺序一致,不代表渲染顺序(渲染顺序看
+/// `RailLayout`)。
+fn panel_meta(kind: PanelKind) -> (icons::IconKind, &'static str) {
+    match kind {
+        PanelKind::Files => (icons::IconKind::FolderTree, "文件"),
+        PanelKind::GitLog => (icons::IconKind::GitGraph, "Git 提交"),
+        PanelKind::Todo => (icons::IconKind::ListTodo, "待办"),
+        PanelKind::Project => (icons::IconKind::Briefcase, "项目"),
+        PanelKind::Database => (icons::IconKind::Database, "数据库"),
+        PanelKind::Ssh => (icons::IconKind::Server, "SSH 主机"),
+        PanelKind::Web => (icons::IconKind::Globe, "浏览器"),
+        PanelKind::Agent => (icons::IconKind::Brain, "代理"),
+        PanelKind::Conversations => (icons::IconKind::BotMessageSquare, "对话"),
+        PanelKind::Usage => (icons::IconKind::BarChart3, "用量"),
+        PanelKind::Acceptance => (icons::IconKind::BadgeCheck, "验收"),
+    }
+}
+
+/// 面板专属的按钮徽标装饰(目前只有验收面板有:当前激活 tab 有待处理
+/// 交付时,右上角叠一个金色小圆点)。其余 10 个面板返回 `None`。
+fn panel_badge(
+    app: &App,
+    kind: PanelKind,
+) -> Option<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> {
+    if kind != PanelKind::Acceptance {
+        return None;
+    }
+    let pending = app
+        .active_workspace()
+        .and_then(|ws| ws.tabs.get(ws.active))
+        .map(|t| t.delivery_pending)
+        .unwrap_or(false);
+    if !pending {
+        return None;
+    }
+    Some(
+        container(iced_widget::Space::new())
+            .width(Length::Fixed(8.0))
+            .height(Length::Fixed(8.0))
+            .style(|_t: &iced_widget::Theme| container::Style {
+                background: Some(byteui::theme::color::current().gold.into()),
+                border: Border {
+                    radius: 4.0.into(),
+                    ..Border::default()
+                },
+                ..container::Style::default()
+            })
+            .into(),
+    )
+}
+/// 给一个图标栏按钮包上"拖拽换栏/换位"的感应层,手法同 `tab_core::select`
+/// (`MouseArea::on_press`)——**这一层现在是按钮唯一的选中/拖拽入口**,
+/// 调用方必须给内层 `icon_button_entry` 传 `interactive: false`(见本函数
+/// 内部注释解释为什么不能像 `tab_drag_surface` 那样"内容自己接
+/// on_press、外层只补 on_move")。`on_move`:光标移动到这个按钮上时,若
+/// 正在拖拽(`App::dragging_rail()`,按下即为真,与下面的 `armed` 无关),
+/// 上报 `RailDragMove { side, index }`。`rail_drag_move` 只在 `rail_drag`
+/// 命中时才做同栏重排 / 记跨栏悬停,所以没在拖拽时这条 `on_move` 是无害的
+/// no-op;这条判断刻意继续用 `dragging_rail()` 而不是 `armed`,因为同栏
+/// 重排要求光标移到另一个按钮上(天然已经远超阈值),没有"快速单击误判"
+/// 这层顾虑,不需要等阈值。`armed`(调用方传 `app.rail_drag_confirmed()`,
+/// 已越过 `RAIL_DRAG_VISUAL_THRESHOLD_PX` 位移阈值,不是单纯的
+/// `dragging_rail()`——避免快速单击也闪一下抓手光标)为真时把光标切成
+/// "抓取"手型,给出"确实按住在拖"的视觉反馈,而不是悄无声息就换了位。
+fn rail_drag_surface(
+    content: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>,
+    side: Side,
+    index: usize,
+    armed: bool,
+    on_select: Message,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    // `on_press` 挂在这一层(而不是靠内层 `icon_button_entry` 自带的
+    // `iced_widget::button::on_press`)是这个函数存在的**核心原因**,不是
+    // 随手选的写法:`iced_widget::button` 的 `on_press` 实际在
+    // `ButtonReleased` 且松手时光标仍在按钮范围内才触发("点击"语义,
+    // 允许按下后拖出范围松手来取消)——`tab_core::select` 用
+    // `MouseArea::on_press`(`ButtonPressed` 即触发,`mousedown 即选中+
+    // 备拖` 见其模块文档)才是这里真正要的语义:必须在**按下瞬间**就把
+    // `rail_drag` 武装好,才能让紧随其后的 `RailDragMove`(拖拽期间的
+    // `CursorMoved`)有意义。若继续走内层 `button::on_press`,武装动作会
+    // 推迟到松手那一刻才发生,而 `main.rs` 的
+    // `WindowEvent::MouseInput{Released}` 收尾检查(`RailDragEnd`)在这次
+    // 事件分发里跑在它前面,看到的还是"未武装",什么也不清——`rail_drag`
+    // 会一直悬空到下次点击,期间任何鼠标移动(不按键)都会被误判成
+    // 拖拽换位。调用方必须给内层 `icon_button_entry` 传 `interactive:
+    // false`,不接 `button::on_press`,否则内层 `button` 会先一步捕获
+    // `ButtonPressed`,这一层的 `on_press` 永远收不到事件(iced 的
+    // widget `update()` 先递归子级、子级 `capture_event()` 后父级直接
+    // 提前返回)。
+    let area = MouseArea::new(content)
+        .on_press(on_select)
+        .on_move(move |_| Message::RailDragMove { side, index });
+    if armed {
+        let area = area.interaction(mouse::Interaction::Grabbing);
+        return area.into();
+    }
+    area.into()
+}
+/// 图标栏拖拽期间跟随光标的幽灵图标——视觉语言对齐 OS 拖文件夹:一个
+/// 圆角方卡(同 `icon_button_entry` 选中态的 CARD 底 + 金框),里面是被
+/// 拖面板的图标,整体以光标为中心悬浮。没有任何交互(不接 `MouseArea`/
+/// `on_press`),纯展示——不会挡住底下 `rail_drag_surface` 的 `on_move`/
+/// `on_press`(iced 里非交互 widget 天然不参与命中测试,同本文件
+/// `stack![base, badge]` 徽标叠在按钮上不挡点击的既有先例)。
+///
+/// 定位手法同 `project_add_menu_popup`:整窗 `Length::Fill` 容器 + 用
+/// `padding` 把内容推到目标坐标,这次坐标是每帧都在变的 `App::last_cursor`
+/// 而不是开菜单那一刻的定格快照,所以幽灵图标才会真的"跟手"——
+/// `last_cursor` 本来就在每次 `CursorMoved` 里更新,main.rs 也已经在每次
+/// `CursorMoved` 后无条件 `window.request_redraw()`(见其注释"悬停也要
+/// 请求重绘"),这两点凑在一起,`rail_drag_ghost` 不需要任何额外的重绘
+/// 触发就能逐帧跟手。
+///
+/// 拖拽未在进行、拖拽已武装但还没越过 [`RAIL_DRAG_VISUAL_THRESHOLD_PX`]
+/// 位移阈值(快速单击,见 `App::rail_drag_confirmed`),或(理论不会发生
+/// 的防御性分支)拖拽中但下标越界拿不到面板种类时,返回空占位——不画
+/// 任何东西。调用方(`App::view`)已经用 `rail_drag_confirmed()` 做了同样
+/// 的外层判断,这里的检查是防御性的第二道,不是唯一把关处。
+pub(crate) fn rail_drag_ghost(
+    app: &App,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    if !app.rail_drag_confirmed() {
+        return column![].into();
+    }
+    let Some(kind) = app.dragged_panel_kind() else {
+        return column![].into();
+    };
+    let (icon, _tooltip) = panel_meta(kind);
+    let size = byteui::theme::geometry::rail_button_size();
+    let colors = byteui::theme::color::current();
+
+    let ghost = container(icons::view(
+        icon,
+        byteui::theme::icon_size::rail(),
+        colors.gold,
+    ))
+    .width(Length::Fixed(size))
+    .height(Length::Fixed(size))
+    .align_x(iced_widget::core::alignment::Horizontal::Center)
+    .align_y(iced_widget::core::alignment::Vertical::Center)
+    .style(move |_t: &iced_widget::Theme| container::Style {
+        background: Some(colors.card.into()),
+        border: Border {
+            color: colors.gold,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        ..container::Style::default()
+    });
+
+    // 幽灵图标以光标为中心(减半个按钮边长做偏移),并钳制在窗口范围内
+    // ——防止贴着窗口边缘拖拽时图标一半画到窗口外。
+    let (cx, cy) = app.last_cursor;
+    let (window_w, window_h) = app.window_size;
+    let x = (cx - size / 2.0).clamp(0.0, (window_w - size).max(0.0));
+    let y = (cy - size / 2.0).clamp(0.0, (window_h - size).max(0.0));
+
+    container(ghost)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(Padding {
+            top: y,
+            left: x,
+            right: 0.0,
+            bottom: 0.0,
+        })
+        .into()
 }
 
 #[cfg(test)]

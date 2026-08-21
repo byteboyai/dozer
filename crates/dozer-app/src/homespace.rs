@@ -5,11 +5,11 @@
 //! `preview.rs`/`conversation.rs` 的既有先例——本文件不持有 `App`/`Workspace`
 //! 的 `impl` 块。见 `docs/superpowers/specs/2026-08-08-home-page-4col-layout-design.md`。
 
-use crate::app::{App, HoverId, Message, PaneCorner, rail_icon_button, zone_pane_border};
+use crate::app::{App, HoverId, Message, PaneCorner, zone_pane_border};
 use crate::conversation::ConversationMeta;
 use crate::delivery;
 use crate::extensions::browser;
-use crate::rail::RailButton;
+use crate::rail::{RailButton, rail_icon_button};
 use crate::theme;
 use crate::workspace::{lh, relative_time_text};
 use byteui::interaction::icons;
