@@ -2292,9 +2292,9 @@ pub(crate) fn apply_agent_card_refresh(
     tab.workspace_override = workspace;
 }
 
-/// 异步跑一次组合 git 查询(分支/脏/文件状态/worktree),完成后分发成两条
+/// 异步跑一次组合 git 查询(分支/脏/文件状态/remote),完成后分发成两条
 /// 独立消息:`Files(StatusesRefreshed)` 只带文件级状态,`Project(GitRefreshed)`
-/// 带分支/脏/worktree。两个 extension 互不知道对方存在,内核是唯一知道
+/// 带分支/脏/remote。两个 extension 互不知道对方存在,内核是唯一知道
 /// "这两份数据同源"的地方(设计文档"关键语义确认")。4 个既有调用点:
 /// `Workspace::from_restore`/`adopt_project`/回合结束(`DeliveryChecked`)/
 /// `Message::ProjectFsChanged`——因为要同时认识 `files::Message`/
@@ -2303,25 +2303,24 @@ pub(crate) fn apply_agent_card_refresh(
 pub(crate) fn spawn_project_git_refresh(project_id: i64, repo_path: PathBuf, io: &ShellIo) {
     let proxy = io.proxy.clone();
     io.handle.spawn(async move {
-        let (b, d, s, w, r) = tokio::task::spawn_blocking({
+        let (b, d, s, r) = tokio::task::spawn_blocking({
             let repo_path = repo_path.clone();
             move || {
                 (
                     delivery::branch(&repo_path),
                     delivery::is_dirty(&repo_path),
                     delivery::file_statuses(&repo_path),
-                    delivery::worktrees(&repo_path),
                     delivery::remote_url(&repo_path),
                 )
             }
         })
         .await
-        .unwrap_or((None, false, HashMap::new(), Vec::new(), Vec::new()));
+        .unwrap_or((None, false, HashMap::new(), Vec::new()));
         let _ = proxy.send_event(Message::Files(files::Message::StatusesRefreshed(
             project_id, s,
         )));
         let _ = proxy.send_event(Message::Project(project::Message::GitRefreshed(
-            project_id, b, d, w, r,
+            project_id, b, d, r,
         )));
     });
 }

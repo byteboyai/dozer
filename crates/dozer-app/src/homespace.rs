@@ -526,17 +526,22 @@ fn home_project_list_view(
 
     // 面板底部 panel footbar:放「＋新增项目」按钮(甲方动作),钉在面板最下方。
     // 空列表 / 搜索无结果时也照样显示,空态下用垂直 filler 把按钮顶到面板底。
+    // 与 workspace 项目面板 `project_footer_bar` 同款结构:1px 顶部分隔线
+    // (`border`)+ `padding([6, 8])` 容器;不再给整个 footbar 套四边 1px 边框
+    // (那是 homespace 自己偏离既有 footer-bar 规范的画法)。
+    let top_line = container(iced_widget::Space::new())
+        .width(Length::Fill)
+        .height(Length::Fixed(1.0))
+        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+            background: Some(theme::homespace_color::border().into()),
+            ..iced_widget::container::Style::default()
+        });
     let panel_footbar: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        container(home_new_project_button())
+        container(column![top_line, home_new_project_button()].spacing(4))
             .width(Length::Fill)
-            .height(Length::Fixed(byteui::theme::geometry::footbar_height()))
-            .align_y(iced_widget::core::Alignment::Center)
+            .padding([6, 8])
             .style(|_t: &iced_widget::Theme| container::Style {
-                border: Border {
-                    color: theme::homespace_color::border(),
-                    width: 1.0,
-                    radius: 0.0.into(),
-                },
+                background: None,
                 ..container::Style::default()
             })
             .into();
@@ -643,10 +648,10 @@ fn home_project_list_view(
         .into()
 }
 
-/// 底部 footbar 里的「＋新增项目」按钮(甲方动作)。样式参考 todo 分类列表
-/// 底栏的操作按钮(`todo_clear_footer_bar`):深色卡底 + 奶油字/奶油描边,
-/// 而非原来的金色——按钮文字从 GOLD 换成奶油色 `cream`。字号用 `caption_sm`
-/// 以塞进 22px 高的 footbar。
+/// 底部 footbar 里的「＋新增项目」按钮(甲方动作)。样式与 workspace 项目
+/// 面板 `project_footer_bar` 的按钮一致:面板底色实底(`card_bg`)+ `border`
+/// 描边 + 奶油字(`cream`),而非原来的金色描边——描边色从 GOLD/奶油改成
+/// 与全局 footer-bar 统一的 `border`。按钮 `width(Fill)` 撑满 footbar 行。
 fn home_new_project_button()
 -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     button(
@@ -655,11 +660,12 @@ fn home_new_project_button()
             .color(theme::homespace_color::cream()),
     )
     .on_press(Message::ProjectTabPickFolder)
-    .padding([2, 8])
+    .width(Length::Fill)
+    .padding([6, 8])
     .style(|_t: &iced_widget::Theme, _s| button::Style {
         background: Some(theme::homespace_color::card_bg().into()),
         border: Border {
-            color: theme::homespace_color::cream(),
+            color: theme::homespace_color::border(),
             width: 1.0,
             radius: 4.0.into(),
         },

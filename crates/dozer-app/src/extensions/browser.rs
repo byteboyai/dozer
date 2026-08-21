@@ -144,8 +144,8 @@ impl Tabs {
     /// (`about:blank`)没有可编辑的网址,预填会把 `about:blank` 带进输入框、
     /// 再被后续键入拼成 `about:blankhttp://x.com` 这类垃圾——遇到空标签就
     /// 当空输入处理,让用户直接打新地址。焦点从真变假(刚失去焦点)时清空
-    /// 草稿——不聚焦的地址栏恒显示占位符"输入网址",不回显当前网址(现状
-    /// 既有行为,不是本次新增)。
+    /// 草稿——不聚焦的地址栏由 `view()` 直接回显当前激活 tab 的完整网址
+    /// (不再只显示占位符"输入网址")。
     pub fn set_addr_focused(&mut self, focused: bool) {
         if !self.addr_focused && focused {
             self.addr_buffer = self
@@ -1647,9 +1647,22 @@ pub fn view(
         .align_y(iced_widget::core::Alignment::Center);
 
     let editing = state.addr_focused();
+    // 未聚焦时地址栏回显当前激活 tab 的完整网址(不再只显示"输入网址"
+    // 占位符)——聚焦时仍用 `addr_buffer`(焦点刚获得时已预填当前网址)。
+    let active_url = state
+        .tabs
+        .tabs()
+        .get(state.tabs.active_idx())
+        .map(|t| t.url.as_str())
+        .unwrap_or("");
+    let addr_value: &str = if editing {
+        state.tabs.addr_buffer()
+    } else {
+        active_url
+    };
     let addr_input = byteui::form::input_text::view(
         "输入网址",
-        state.tabs.addr_buffer(),
+        addr_value,
         false,
         Some(addr_field_id()),
         false,

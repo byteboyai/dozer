@@ -3,7 +3,6 @@
 
 pub mod links;
 
-use crate::delivery::WorktreeInfo;
 use byteui::interaction::icons;
 use dozer_core::protocol::ProjectInfo;
 use iced_widget::core::widget::operation::Focusable;
@@ -17,7 +16,6 @@ use std::path::PathBuf;
 pub struct WorkspaceState {
     branch: Option<String>,
     dirty: bool,
-    worktrees: Vec<WorktreeInfo>,
     project_acceptance_count: Option<u64>,
     /// git remote 的 fetch URL 列表(`delivery::remote_url`)。空 = 无 remote/
     /// 非 git(面板据此显示"未设置")。
@@ -58,13 +56,6 @@ impl WorkspaceState {
             links,
             ..Self::default()
         }
-    }
-
-    /// 供内核 `worktree_strip`(Git Log 视图外层装饰,不属于
-    /// `extensions::git_log`)读取——`worktrees` 数据来自组合 git 刷新,但
-    /// 消费方是 Git Log 视图,归属判断见设计文档"关键语义确认"。
-    pub fn worktrees(&self) -> &[WorktreeInfo] {
-        &self.worktrees
     }
 
     /// 项目级分支名(Project 面板/Agent 卡片工作区行共用读口)。
@@ -154,13 +145,13 @@ impl Operation<()> for CaptureNameEditFocus {
     }
 }
 
-/// 组合 git 刷新结果里跟 Project 有关的部分(`branch`/`dirty`/`worktrees`/
-/// `remote_url`)、验收次数、daemon 改名结果。`GitRefreshed`/
-/// `AcceptanceCountLoaded`/`NameRenamed` 由内核分发,带 `project_id`,走
-/// `with_project`;其余是用户交互消息。
+/// 组合 git 刷新结果里跟 Project 有关的部分(`branch`/`dirty`/`remote_url`)、
+/// 验收次数、daemon 改名结果。`GitRefreshed`/`AcceptanceCountLoaded`/
+/// `NameRenamed` 由内核分发,带 `project_id`,走 `with_project`;其余是用户
+/// 交互消息。
 #[derive(Debug, Clone)]
 pub enum Message {
-    GitRefreshed(i64, Option<String>, bool, Vec<WorktreeInfo>, Vec<String>),
+    GitRefreshed(i64, Option<String>, bool, Vec<String>),
     AcceptanceCountLoaded(i64, Option<u64>),
     /// 磁盘占用统计结果(排除构建产物后的字节数)。
     DiskUsageLoaded(i64, u64),
@@ -236,10 +227,9 @@ pub fn update(
     emit: impl Fn(Message) + Send + 'static,
 ) {
     match msg {
-        Message::GitRefreshed(_, branch, dirty, worktrees, remote_url) => {
+        Message::GitRefreshed(_, branch, dirty, remote_url) => {
             ws_state.branch = branch;
             ws_state.dirty = dirty;
-            ws_state.worktrees = worktrees;
             ws_state.remote_url = remote_url;
         }
         Message::AcceptanceCountLoaded(_, n) => {
@@ -924,7 +914,6 @@ mod tests {
                 1,
                 Some("main".to_string()),
                 true,
-                vec![],
                 vec!["https://x.git".to_string()],
             ),
             1,
@@ -936,7 +925,6 @@ mod tests {
         );
         assert_eq!(ws.branch.as_deref(), Some("main"));
         assert!(ws.dirty);
-        assert_eq!(ws.worktrees().len(), 0);
         assert_eq!(ws.remote_url.as_slice(), ["https://x.git"]);
     }
 
@@ -946,7 +934,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         update(
             &mut ws,
-            Message::GitRefreshed(1, Some("main".to_string()), true, vec![], vec![]),
+            Message::GitRefreshed(1, Some("main".to_string()), true, vec![]),
             1,
             "名字",
             &test_repo_path(),
