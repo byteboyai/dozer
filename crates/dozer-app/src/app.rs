@@ -3692,11 +3692,16 @@ impl App {
             }
             Message::ReviewLoaded(project_id, source, result) => {
                 self.with_project(project_id, |ws, _io| {
+                    if result.is_ok() {
+                        ws.review_nonce = ws.review_nonce.wrapping_add(1);
+                    }
+                    let nonce = ws.review_nonce;
                     if let Some(rv) = &mut ws.review
                         && rv.source == source
                     {
                         match result {
                             Ok(entries) => {
+                                rv.nonce = nonce;
                                 rv.ai_markdown = crate::workspace::parse_review_markdown(&entries);
                                 rv.entries = entries;
                                 rv.error = None;
@@ -5856,6 +5861,7 @@ impl App {
                 source: source.clone(),
                 entries: Vec::new(),
                 error: None,
+                nonce: 0,
                 expanded: std::collections::HashSet::new(),
                 ai_markdown: Vec::new(),
             });

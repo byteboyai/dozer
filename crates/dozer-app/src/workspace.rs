@@ -175,6 +175,11 @@ pub struct ReviewView {
     pub source: ReviewSource,
     pub entries: Vec<ReviewEntry>,
     pub error: Option<String>,
+    /// 审阅 webview 的重新加载水位:每次 `ReviewLoaded` 成功都从
+    /// `Workspace.review_nonce` 拷一份新值,写进 `dozer://review-trace/
+    /// host.html?_r=<nonce>` 的查询参数,逼 wry 在内容变化时重新导航
+    /// 拉取(同 `preview.rs::PreviewTab.reload_nonce` 的手法)。
+    pub nonce: u64,
     /// 展开了过程区的 AI 回合下标（entries 中的位置）。
     pub expanded: std::collections::HashSet<usize>,
     /// 与 `entries` 等长、下标对齐的预解析 markdown——非 `AiTurn` 条目对应
@@ -489,6 +494,13 @@ pub struct Workspace {
     pub(crate) acceptance: acceptance::WorkspaceState,
     /// 进行中的会话审阅（审阅 tab 内容;None=未打开;P1i）。
     pub(crate) review: Option<ReviewView>,
+    /// 全局单调递增的审阅内容加载水位,每次 `Message::ReviewLoaded`
+    /// 成功一次就 +1(与具体加载了哪个回合区间无关)——保证连续点开
+    /// 两个不同回合、恰好都是"该 source 第一次加载"时,`ReviewView.nonce`
+    /// 也不会撞成同一个值(如果各自从 0 起独立计数会撞)。见
+    /// docs/superpowers/plans/2026-08-21-review-content-webview-trace.md
+    /// Task 2。
+    pub(crate) review_nonce: u64,
     /// 当前项目全部 session 的回合，拍平成一份按时间倒序的列表；
     /// `None` = 还没加载过(会话列表面板会渲染"加载中…")，`Some(空
     /// vec)` = 加载完成但确实没有记录(2026-08-21，取代按 session 展开
@@ -721,6 +733,7 @@ impl Workspace {
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
             acceptance: acceptance::WorkspaceState::default(),
             review: None,
+            review_nonce: 0,
             conversation_turn_groups: None,
             conversation_pages: 0,
             usage: usage::WorkspaceState::default(),
