@@ -195,6 +195,9 @@ pub enum HoverId {
     /// Git Log 面板 commit 列表末尾"更多"翻页图标按钮,处理方式同
     /// `HomeProjectMore`(见 `extensions::git_log::commit_list_view`)。
     CommitListMore,
+    /// 对话列表面板(会话列表)扁平列表末尾的"更多..."翻页图标按钮,处理
+    /// 方式同 `CommitListMore`(见 `conversation_list_pane`)。
+    ConversationListMore,
     /// Git Log 面板改动文件列表某行(按下标区分):hover 时填充 `CARD` 背景 +
     /// 金色描边(见 `extensions::git_log::file_list_view`,统一卡片样式)。
     GitFile(usize),
@@ -1620,6 +1623,10 @@ pub enum Message {
     /// (`(start_turn_index, end_turn_index)`，闭区间，两端都含)。`agent`
     /// 随行内数据一并带上，不用再反查 session 列表。
     ConversationTurnGroupOpen(PathBuf, AgentKind, i64, i64),
+    /// 对话列表面板(会话列表)点"更多..."翻页图标按钮——只把当前已缓存的
+    /// `conversation_turn_groups` 往下多展开一页(`CONVERSATION_PAGE_SIZE` 条),
+    /// 不问 daemon 要新数据(同 `git_log::Message::CommitListMore`)。
+    ConversationListMore,
     /// 切换当前显示的 tab（这里的 `usize` 是 vec 位置——用户点击的是
     /// "屏幕上第几个 tab"，跟稳定 id 是两回事）。**仅限左侧终端 tab 栏本身
     /// 的按钮**发这条消息——`select_tab()` 顺带把 `tab_drag` 武装成"这一
@@ -4104,6 +4111,11 @@ impl App {
             }
             Message::ConversationTurnGroupOpen(path, agent, start, end) => {
                 self.conversation_turn_group_open(path, agent, start, end);
+            }
+            Message::ConversationListMore => {
+                self.with_focused_project(|ws, _io| {
+                    ws.conversation_pages += 1;
+                });
             }
 
             Message::SelectTab(idx) => self.select_tab(idx),
@@ -7836,6 +7848,7 @@ fn panel_body<'a>(
                 zone_pane_border(zone, lc),
             );
             let list = conversation_list_pane(
+                app,
                 ws,
                 Length::FillPortion(list_portion),
                 zone_pane_border(zone, rc),

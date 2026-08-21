@@ -493,6 +493,11 @@ pub struct Workspace {
     /// vec)` = 加载完成但确实没有记录(2026-08-21，取代按 session 展开
     /// 的树状展示)。
     pub(crate) conversation_turn_groups: Option<Vec<TurnGroupRow>>,
+    /// 会话列表(对话面板扁平列表)客户端分页已经点开的"更多"次数(0 起,
+    /// 第 0 次 = 只显示第 1 页 `CONVERSATION_PAGE_SIZE` 条)。同
+    /// `git_log::State::pages` 的手法:纯客户端状态,不问 daemon 要新数据。
+    /// 切项目/刷新列表打开新一批数据时重置回 0。
+    pub(crate) conversation_pages: usize,
     /// 当前项目的 agent 用量统计（会话粒度；扫描+解析全量 transcript，比
     /// `conversations` 贵得多,所以不像它那样跟着 `DeliveryChecked` 自动
     /// 刷新——只在切到 Usage 面板或点手动刷新按钮时才重新扫
@@ -716,6 +721,7 @@ impl Workspace {
             acceptance: acceptance::WorkspaceState::default(),
             review: None,
             conversation_turn_groups: None,
+            conversation_pages: 0,
             usage: usage::WorkspaceState::default(),
             project: None,
             project_panel: project::WorkspaceState::default(),
@@ -1260,6 +1266,7 @@ impl Workspace {
         // 的刷新信号会挂在一个此刻已经不对应这份 `Workspace` 的项目 id 上。
         self.git_watch = None;
         self.conversation_turn_groups = None;
+        self.conversation_pages = 0;
         self.usage = usage::WorkspaceState::default();
         let project_id = project.id;
         let repo_path = PathBuf::from(&project.path);
@@ -2444,15 +2451,32 @@ pub(crate) fn review_content<'a>(
     content
 }
 
+/// 会话列表(对话面板扁平列表)一页显示的条数,与 Git Log commit 列表的
+/// `COMMIT_PAGE_SIZE` 保持一致。首帧 1 页,点"更多..."页数递增、显示
+/// `pages * CONVERSATION_PAGE_SIZE` 条(见 `conversation_turn_groups` 上方的
+/// `conversation_pages` 注释)。
+pub(crate) const CONVERSATION_PAGE_SIZE: usize = 20;
+
+/// 按 `conversation_pages`(点过几次"更多",0 起)算出当前应该显示到第几条。
+/// 抽成纯函数与 `homespace::paginate_recent_projects` 同款手法,方便 headless
+/// 单测;视图只把返回值画出来。
+pub(crate) fn conversation_visible_count(pages: usize) -> usize {
+    (pages + 1) * CONVERSATION_PAGE_SIZE
+}
+
 /// 对话列表面板(右面板区"对话"视图的列表侧):当前项目全部 session 的
 /// 回合拍平成一份按时间倒序的列表,不再按 session 分树(2026-08-21，用
 /// 户明确要求"不要 session 树,直接按时间倒序列出对话回合")。点一行 →
 /// `ConversationTurnGroupOpen` 驱动右侧审阅内容,只加载这一个回合区间。
-pub(crate) fn conversation_list_pane(
-    ws: &Workspace,
+/// 列表按 `conversation_visible_count` 客户端分页:只画前若干条,画不完时
+/// 末尾补一个居中"更多..."图标按钮(同 `git_log::commit_list_view` 的处理
+/// 方式),点它翻一页——纯客户端状态,不问 daemon 要新数据。
+pub(crate) fn conversation_list_pane<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
     width: Length,
     outer: Border,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::conversation_list_pane();
     // 套用统一 panel head:Lucide `BotMessageSquare` 图标 + 暖金 `#dcc9a3`
     // 的 "会话" 标题 + 1px 分割线;去掉原先跟在项目名后的 "Dozer 项目" 副标题。
@@ -2496,7 +2520,8 @@ pub(crate) fn conversation_list_pane(
         .unwrap_or(0);
     let opens = ws.open_transcript_paths();
     let mut cards = column![].spacing(region.gap);
-    for g in rows {
+    let visible = conversation_visible_count(ws.conversation_pages);
+    for g in rows.iter().take(visible) {
         let current = conversation::is_current_conversation(&g.path, &opens);
         let sub = if current {
             format!("● 当前 · {}", relative_time_text(g.ts, now_ms))
@@ -2537,6 +2562,39 @@ pub(crate) fn conversation_list_pane(
             byteui::theme::color::current().card,
         ));
         cards = cards.push(row_btn);
+    }
+    // 还有没画出来的回合时,在列表末尾加一个居中的"更多..."图标按钮
+    // (Lucide ellipsis,无外边框/背景,hover DIM→GOLD)——点它翻下一页
+    // (`Message::ConversationListMore`,纯客户端状态,不问 daemon 要新数据)。
+    if rows.len() > visible {
+        let more_color = byteui::theme::color::mix(
+            byteui::theme::color::current().dim,
+            byteui::theme::color::current().gold,
+            app.hover_progress(HoverId::ConversationListMore),
+        );
+        let more_button = MouseArea::new(
+            iced_widget::button(icons::view(
+                icons::IconKind::Ellipsis,
+                byteui::theme::icon_size::row(),
+                more_color,
+            ))
+            .on_press(Message::ConversationListMore)
+            .padding(6)
+            .style(
+                move |_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+                    background: None,
+                    text_color: more_color,
+                    ..iced_widget::button::Style::default()
+                },
+            ),
+        )
+        .on_enter(Message::Hover(HoverId::ConversationListMore, true))
+        .on_exit(Message::Hover(HoverId::ConversationListMore, false));
+        cards = cards.push(
+            container(more_button)
+                .width(Length::Fill)
+                .align_x(iced_widget::core::alignment::Horizontal::Center),
+        );
     }
     content = content.push(
         Scrollable::new(cards)
@@ -3737,6 +3795,17 @@ pub(crate) async fn forward_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conversation_visible_count_starts_at_one_page() {
+        assert_eq!(conversation_visible_count(0), CONVERSATION_PAGE_SIZE);
+    }
+
+    #[test]
+    fn conversation_visible_count_grows_by_page_size() {
+        assert_eq!(conversation_visible_count(1), 2 * CONVERSATION_PAGE_SIZE);
+        assert_eq!(conversation_visible_count(2), 3 * CONVERSATION_PAGE_SIZE);
+    }
 
     #[test]
     fn agent_card_refresh_plan_decides_by_agent_and_cwd() {
