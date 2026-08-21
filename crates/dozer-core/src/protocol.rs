@@ -58,6 +58,21 @@ pub struct ConversationSummary {
     pub turn_count: u32,
 }
 
+/// 一个"回合分组"的索引摘要——从某个真实人类回合(锚点，排除斜杠命令，
+/// 见 `is_command_content`)开始，到下一个真实人类回合之前为止的连续
+/// `turn_index` 区间。会话列表面板按这个粒度展示子行(2026-08-21，
+/// 用户验收反馈:一个 session 里应该按回合分组，不是打包成一行)。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TurnGroupSummary {
+    pub start_turn_index: i64,
+    pub end_turn_index: i64,
+    /// 锚点人类回合内容前 80 字符，跟 `ConversationSummary.title` 的
+    /// 截断口径一致。
+    pub title: String,
+    /// 锚点人类回合的时间戳。
+    pub ts: u64,
+}
+
 /// 会话内一个回合(人类发言 / AI 回复 / 工具执行结果)的明细;`role` 取值
 /// `"human"`/`"ai"`/`"tool_result"`(不用枚举是为了跟 sqlite 存储列直接
 /// 对应,减一层转换)。`is_error` 只对 `role == "tool_result"` 有意义,
@@ -223,6 +238,11 @@ pub enum Request {
         after_turn_index: i64,
         limit: u32,
     },
+    /// 某个会话按人类回合切出的分组列表(session 展开时懒加载，不是
+    /// 会话列表面板一次性全量拉取所有 session 的分组)。
+    ListSessionTurnGroups {
+        conversation_id: String,
+    },
     /// 某 cwd 下按会话分组的用量统计。
     GetUsageSummary {
         cwd: String,
@@ -348,6 +368,11 @@ pub enum Reply {
         conversation_id: String,
         turns: Vec<TurnRecord>,
     },
+    /// `ListSessionTurnGroups` 应答。
+    SessionTurnGroups {
+        conversation_id: String,
+        groups: Vec<TurnGroupSummary>,
+    },
     /// `GetUsageSummary` 应答。
     UsageSummary {
         rows: Vec<(ConversationSummary, UsagePayload)>,
@@ -468,6 +493,30 @@ mod tests {
         let back: TurnRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(back, turn);
         assert!(json.contains("\"is_error\":true"));
+    }
+
+    #[test]
+    fn list_session_turn_groups_protocol_types_roundtrip() {
+        let req = Request::ListSessionTurnGroups {
+            conversation_id: "abc".into(),
+        };
+        let line = encode_line(&req);
+        let back: Request = decode_line(&line).unwrap();
+        assert_eq!(req, back);
+
+        let group = TurnGroupSummary {
+            start_turn_index: 2,
+            end_turn_index: 7,
+            title: "标题".into(),
+            ts: 100,
+        };
+        let reply = Reply::SessionTurnGroups {
+            conversation_id: "abc".into(),
+            groups: vec![group],
+        };
+        let line = encode_line(&reply);
+        let back: Reply = decode_line(&line).unwrap();
+        assert_eq!(reply, back);
     }
 
     #[test]
