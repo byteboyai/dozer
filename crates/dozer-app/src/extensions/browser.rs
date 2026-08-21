@@ -582,6 +582,7 @@ mod tests {
             star_menu_open: false,
             hover: Default::default(),
             tooltip_starts: Default::default(),
+            addr_select_all_pending: false,
         };
         let id = state.tabs.open_url("https://example.com".into());
         let handle = tokio::runtime::Handle::current();
@@ -722,6 +723,7 @@ mod tests {
             star_menu_open: false,
             hover: HashMap::new(),
             tooltip_starts: HashMap::new(),
+            addr_select_all_pending: false,
         };
         let handle = tokio::runtime::Handle::current();
         let client = client_for_test();
@@ -1009,6 +1011,10 @@ pub struct State {
     /// 终端页签的计时分开存(`App::hover_tooltip_starts`),因为浏览器面板
     /// 走自己这套 hover 状态机(`hover` 而非全局 `HoverId`)。
     tooltip_starts: HashMap<usize, std::time::Instant>,
+    /// 地址栏刚获得焦点时置位,请求内核在下一帧对地址栏做一次"全选"(
+    /// `main.rs` 的 draw 循环用 `interface.operate` 跑 `text_input::
+    /// select_all`)。一次性位,消费即复位(见 `take_addr_select_all_pending`)。
+    addr_select_all_pending: bool,
 }
 
 impl Default for State {
@@ -1033,6 +1039,7 @@ impl State {
             star_menu_open: false,
             hover: HashMap::new(),
             tooltip_starts: HashMap::new(),
+            addr_select_all_pending: false,
         };
         s.tabs.open_url(url.to_string());
         s
@@ -1057,8 +1064,17 @@ impl State {
     pub fn set_addr_focused(&mut self, focused: bool) {
         if !self.tabs.addr_focused() && focused {
             self.error = None;
+            // 焦点刚获得:请求内核下一帧对地址栏做一次全选(见
+            // `take_addr_select_all_pending`),让用户单击即选中整条网址。
+            self.addr_select_all_pending = true;
         }
         self.tabs.set_addr_focused(focused);
+    }
+
+    /// 取走"地址栏需全选"的一次性标记(消费即复位),内核 draw 循环据此
+    /// 跑 `text_input::select_all`(`main.rs`)。
+    pub fn take_addr_select_all_pending(&mut self) -> bool {
+        std::mem::take(&mut self.addr_select_all_pending)
     }
 
     /// 当前激活 tab 的 webview id(内核 `App::active_browser_webview_id`

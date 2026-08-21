@@ -2953,6 +2953,17 @@ impl App {
         }
     }
 
+    /// 取走"地址栏需全选"的一次性标记(消费即复位),路由同
+    /// `set_browser_addr_focused`(首页 `home_browser` / 当前工作区
+    /// `ws.browser` 二选一)。
+    pub fn take_addr_select_all_pending(&mut self) -> bool {
+        if self.is_home() {
+            return self.home_browser.take_addr_select_all_pending();
+        }
+        self.active_workspace_mut()
+            .is_some_and(|ws| ws.browser.take_addr_select_all_pending())
+    }
+
     /// 验收意见框是否持有 iced 真实焦点(main.rs 原生放行闸门用)。
     pub fn comment_focused(&self) -> bool {
         self.active_workspace()

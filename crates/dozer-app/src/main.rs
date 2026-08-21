@@ -2121,6 +2121,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     .active_workspace_mut()
                                     .is_some_and(|ws| ws.take_query_focus_pending());
 
+                                // 同理,消费"浏览器地址栏刚获得焦点、需要全选
+                                // 当前网址"的一次性位(单击即选中整条,见
+                                // `App::take_addr_select_all_pending`)。
+                                let addr_select_all_pending = app.take_addr_select_all_pending();
+
                                 // Draw iced on top
                                 let mut interface = UserInterface::build(
                                     app.view(),
@@ -2188,6 +2193,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                         iced_widget::core::widget::operation::focusable::focus::<()>(
                                             extensions::search::query_field_id(),
                                         );
+                                    interface.operate(renderer, &mut op);
+                                }
+
+                                // 浏览器地址栏刚获得焦点时,全选当前网址(
+                                // 单击即选中整条,方便直接覆盖输入)。一次性位,
+                                // 消费即复位(取位在 `interface` 构建前完成)。
+                                if addr_select_all_pending {
+                                    let mut op = iced_widget::core::widget::operation::text_input::select_all::<()>(
+                                        extensions::browser::addr_field_id(),
+                                    );
                                     interface.operate(renderer, &mut op);
                                 }
 
