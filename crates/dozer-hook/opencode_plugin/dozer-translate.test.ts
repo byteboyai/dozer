@@ -5,6 +5,7 @@ import {
   onUserMessage,
   onToolPartUpdated,
   onTextPartUpdated,
+  onMessageUpdated,
   onSessionIdle,
   onSessionDeleted,
 } from "./dozer-translate"
@@ -175,6 +176,97 @@ describe("onTextPartUpdated + onSessionIdle", () => {
     onTextPartUpdated(state, { id: "prt_2", text: "第二回合" })
     const result = onSessionIdle(state)
     expect(result.transcriptLine?.message.content).toEqual([{ type: "text", text: "第二回合" }])
+  })
+})
+
+describe("onMessageUpdated + onSessionIdle", () => {
+  test("assistant 消息的 tokens 随 Stop 一起转发,字段名对齐 Claude 形状", () => {
+    const state = createSessionState("/private/tmp")
+    onTextPartUpdated(state, { id: "prt_1", text: "回复内容" })
+    onMessageUpdated(state, {
+      id: "msg_1",
+      role: "assistant",
+      tokens: { input: 100, output: 20, cache: { read: 5, write: 3 } },
+    })
+    const result = onSessionIdle(state)
+    expect(result).toEqual({
+      event: "Stop",
+      cwd: "/private/tmp",
+      transcriptLine: {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "回复内容" }],
+          usage: {
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_read_input_tokens: 5,
+            cache_creation_input_tokens: 3,
+          },
+        },
+      },
+    })
+  })
+
+  test("非 assistant 角色的消息不采集", () => {
+    const state = createSessionState(".")
+    onMessageUpdated(state, { id: "msg_1", role: "user", tokens: { input: 100, output: 0 } })
+    const result = onSessionIdle(state)
+    expect(result.transcriptLine).toBeUndefined()
+  })
+
+  test("同一条消息多次更新按 id 覆盖,不累加", () => {
+    const state = createSessionState(".")
+    onMessageUpdated(state, { id: "msg_1", role: "assistant", tokens: { input: 50, output: 5 } })
+    onMessageUpdated(state, { id: "msg_1", role: "assistant", tokens: { input: 120, output: 30 } })
+    const result = onSessionIdle(state)
+    expect(result.transcriptLine?.message.usage).toEqual({
+      input_tokens: 120,
+      output_tokens: 30,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    })
+  })
+
+  test("一回合内多条不同 assistant 消息(多轮工具调用)的用量加总", () => {
+    const state = createSessionState(".")
+    onMessageUpdated(state, { id: "msg_1", role: "assistant", tokens: { input: 50, output: 5 } })
+    onMessageUpdated(state, { id: "msg_2", role: "assistant", tokens: { input: 80, output: 10 } })
+    const result = onSessionIdle(state)
+    expect(result.transcriptLine?.message.usage).toEqual({
+      input_tokens: 130,
+      output_tokens: 15,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    })
+  })
+
+  test("没有文本块但有用量时仍带 transcriptLine(全是工具调用的回合)", () => {
+    const state = createSessionState(".")
+    onMessageUpdated(state, { id: "msg_1", role: "assistant", tokens: { input: 10, output: 1 } })
+    const result = onSessionIdle(state)
+    expect(result.transcriptLine).toEqual({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [],
+        usage: {
+          input_tokens: 10,
+          output_tokens: 1,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+      },
+    })
+  })
+
+  test("Stop 之后用量缓冲被清空,不会带到下一回合", () => {
+    const state = createSessionState(".")
+    onMessageUpdated(state, { id: "msg_1", role: "assistant", tokens: { input: 10, output: 1 } })
+    onSessionIdle(state)
+    onTextPartUpdated(state, { id: "prt_1", text: "第二回合" })
+    const result = onSessionIdle(state)
+    expect(result.transcriptLine?.message.usage).toBeUndefined()
   })
 })
 

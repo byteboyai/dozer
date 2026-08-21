@@ -172,4 +172,63 @@ describe("resume gap: 未经本进程 session.created 的会话", () => {
     const stdin = JSON.parse(calls[0].values[0])
     expect(stdin.transcript_line.message.model).toBe("litellm/deepseek-v3")
   })
+
+  test("message.updated 不直接 emit,但 tokens 会随后续 session.idle 的 Stop 一起转发", async () => {
+    const { $, calls } = makeShellStub()
+    const { client } = makeClientStub({
+      ses_resumed_5: { directory: "/private/tmp/proj" },
+    })
+    const plugin = await loadPlugin($, client)
+
+    await plugin.event!({
+      event: {
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "msg_1",
+            sessionID: "ses_resumed_5",
+            role: "assistant",
+            tokens: { input: 42, output: 7, cache: { read: 0, write: 0 } },
+          },
+        },
+      },
+    })
+    expect(calls.length).toBe(0) // message.updated 本身不 spawn dozer-hook
+
+    await plugin.event!({
+      event: { type: "session.idle", properties: { sessionID: "ses_resumed_5" } },
+    })
+
+    expect(calls.length).toBe(1)
+    const stdin = JSON.parse(calls[0].values[0])
+    expect(stdin.transcript_line.message.usage).toEqual({
+      input_tokens: 42,
+      output_tokens: 7,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    })
+  })
+
+  test("message.updated 的 role 不是 assistant 时忽略", async () => {
+    const { $, calls } = makeShellStub()
+    const { client } = makeClientStub({
+      ses_resumed_6: { directory: "/private/tmp/proj" },
+    })
+    const plugin = await loadPlugin($, client)
+
+    await plugin.event!({
+      event: {
+        type: "message.updated",
+        properties: {
+          info: { id: "msg_1", sessionID: "ses_resumed_6", role: "user", tokens: { input: 1, output: 1 } },
+        },
+      },
+    })
+    await plugin.event!({
+      event: { type: "session.idle", properties: { sessionID: "ses_resumed_6" } },
+    })
+
+    const stdin = JSON.parse(calls[0].values[0])
+    expect(stdin.transcript_line).toBeNull() // 无文本、无用量,onSessionIdle 不带 transcriptLine
+  })
 })

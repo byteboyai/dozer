@@ -23,6 +23,17 @@ export interface TranscriptLine {
      * 认 `message.model` 这个字段名(Claude 真实 transcript 的原生形状),
      * 不看 `type`/`role`，同一路径直接复用，不需要 Dozer 那边加分支。 */
     model?: string
+    /** Claude 真实 transcript 的 usage 形状(字段名不能改——
+     * `dozerd::transcripts::parse::parse_claude_shaped_chunk` 就是照这
+     * 几个字段名读的,OpenCode 走同一条 Claude 形状解析路径,没有为它
+     * 单独加分支)。此前这个插件完全没写这个字段,导致用量面板 OpenCode
+     * 那栏永远是 0(验收反馈)。 */
+    usage?: {
+      input_tokens: number
+      output_tokens: number
+      cache_read_input_tokens: number
+      cache_creation_input_tokens: number
+    }
   }
 }
 
@@ -42,12 +53,25 @@ interface TextPart {
   text: string
 }
 
+interface MessageUsage {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+}
+
 export interface SessionState {
   sessionStartSent: boolean
   cwd: string
   toolCalls: Map<string, ToolCallState>
   textParts: Map<string, TextPart>
   nextOrder: number
+  /** 按 assistant message id 记的最新一次用量快照(`message.updated` 可能
+   * 对同一条消息触发多次,流式增量地补全 tokens——只按 id 覆盖写,不累加,
+   * 避免同一条消息被算两次)。一回合(`session.idle` 之前)可能有多条
+   * assistant 消息(多轮工具调用),`onSessionIdle` 把这里所有条目的
+   * tokens 加总当作这一回合的总用量。 */
+  usageByMessage: Map<string, MessageUsage>
 }
 
 export function createSessionState(cwd: string): SessionState {
@@ -57,6 +81,7 @@ export function createSessionState(cwd: string): SessionState {
     toolCalls: new Map(),
     textParts: new Map(),
     nextOrder: 0,
+    usageByMessage: new Map(),
   }
 }
 
@@ -191,9 +216,38 @@ export function onTextPartUpdated(state: SessionState, part: { id: string; text:
 }
 
 /**
+ * `message.updated` 事件，`info.role === "assistant"` 分支——SDK 类型见
+ * `@opencode-ai/sdk` 的 `AssistantMessage`(`tokens: {input, output,
+ * reasoning, cache: {read, write}}` + `cost`,均实测确认字段名，见
+ * `node_modules/@opencode-ai/sdk/dist/gen/types.gen.d.ts`)。只更新
+ * `state`，不产出 `TranslatedEvent`——用量数字要等这一回合结束
+ * （`onSessionIdle`）才跟着 Stop 一起转发，不需要单独触发一次
+ * dozer-hook 调用。同一条消息可能被多次调用(流式补全)，按 id 覆盖写。
+ * `reasoning` 没有对应的 Claude usage 字段，不采集(dozerd 的
+ * `conversation_turns` 表本来就没有推理 token 这一列)。
+ */
+export function onMessageUpdated(
+  state: SessionState,
+  message: {
+    id: string
+    role: string
+    tokens?: { input: number; output: number; cache?: { read: number; write: number } }
+  }
+): void {
+  if (message.role !== "assistant" || !message.tokens) return
+  state.usageByMessage.set(message.id, {
+    inputTokens: message.tokens.input ?? 0,
+    outputTokens: message.tokens.output ?? 0,
+    cacheReadTokens: message.tokens.cache?.read ?? 0,
+    cacheWriteTokens: message.tokens.cache?.write ?? 0,
+  })
+}
+
+/**
  * `session.idle` 事件 → Stop。把本回合累积的文本块按首次出现顺序拼成
- * 一行 assistant transcript（没有文本块时不带 transcriptLine，只发状态
- * 转换），然后清空缓冲——下一回合的文本不该跟这一回合的拼在一起。
+ * 一行 assistant transcript,叠加 `usageByMessage` 累计出的 token 用量
+ * （没有文本块也没有用量时不带 transcriptLine，只发状态转换），然后清空
+ * 缓冲——下一回合的文本/用量不该跟这一回合的拼在一起。
  */
 export function onSessionIdle(state: SessionState): TranslatedEvent {
   const parts = [...state.textParts.entries()]
@@ -202,12 +256,42 @@ export function onSessionIdle(state: SessionState): TranslatedEvent {
   state.textParts.clear()
   state.nextOrder = 0
   const text = parts.join("\n")
+
+  let usage: NonNullable<TranscriptLine["message"]["usage"]> | undefined
+  if (state.usageByMessage.size > 0) {
+    let inputTokens = 0
+    let outputTokens = 0
+    let cacheReadTokens = 0
+    let cacheWriteTokens = 0
+    for (const u of state.usageByMessage.values()) {
+      inputTokens += u.inputTokens
+      outputTokens += u.outputTokens
+      cacheReadTokens += u.cacheReadTokens
+      cacheWriteTokens += u.cacheWriteTokens
+    }
+    usage = {
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      cache_read_input_tokens: cacheReadTokens,
+      cache_creation_input_tokens: cacheWriteTokens,
+    }
+  }
+  state.usageByMessage.clear()
+
   return {
     event: "Stop",
     cwd: state.cwd,
-    transcriptLine: text
-      ? { type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } }
-      : undefined,
+    transcriptLine:
+      text || usage
+        ? {
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: text ? [{ type: "text", text }] : [],
+              ...(usage ? { usage } : {}),
+            },
+          }
+        : undefined,
   }
 }
 

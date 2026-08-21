@@ -18,6 +18,7 @@ import {
   onUserMessage,
   onToolPartUpdated,
   onTextPartUpdated,
+  onMessageUpdated,
   onSessionIdle,
   onSessionDeleted,
   type SessionState,
@@ -132,6 +133,19 @@ export const DozerPlugin: Plugin = async ({ $, client }) => {
             await emit($, onSessionDeleted(state))
             sessions.delete(sessionID)
             userMessageIds.delete(sessionID)
+            return
+          }
+          case "message.updated": {
+            // `AssistantMessage.tokens`/`cost`(实测字段名见
+            // `@opencode-ai/sdk` 的 `types.gen.d.ts`)——只在这个事件里
+            // 出现，`message.part.updated` 没有。不 emit，只更新 state，
+            // 等 `session.idle` 时随 Stop 一起转发(见 `onMessageUpdated`
+            // 文档)。
+            const info = event.properties?.info
+            if (!info?.id || info.role !== "assistant") return
+            const state = await resolveState(client, info.sessionID)
+            if (!state) return
+            onMessageUpdated(state, info)
             return
           }
           case "message.part.updated": {
