@@ -76,14 +76,36 @@ accessor(为 15 个读者重新发明一层间接),要么表面私有实际还�
    4 处调用点(`icon_rail(self, Side::Left/Right)` 两处、
    `rail_drag_ghost(self)` 一处)改成 `rail::icon_rail(self, ..)` /
    `rail::rail_drag_ghost(self)`。
-7. 现有 6 个 rail 相关测试(`zone_at_x_icon_rail_returns_none`/
-   `default_side_matches_rail_layout_default`/
-   `panel_mirrored_false_when_rail_layout_is_default`/
-   `rail_layout_default_covers_all_panels_without_duplicates`/
-   `rail_layout_side_accessors_map_correctly`/
-   `sanitize_rail_layout_falls_back_to_default_on_bad_data`)连同
-   `dragged_panel_kind_*` 三个测试一起搬进 `rail.rs` 的
-   `#[cfg(test)] mod tests`,断言不变。
+7. 现有 23 个 rail 相关测试搬进 `rail.rs` 的 `#[cfg(test)] mod tests`,
+   断言不变:
+   - 7 个平铺测试:`default_side_matches_rail_layout_default`/
+     `panel_mirrored_false_when_rail_layout_is_default`/
+     `panel_mirrored_true_when_manually_relocated`/
+     `rail_layout_default_covers_all_panels_without_duplicates`/
+     `rail_layout_side_accessors_map_correctly`/
+     `side_of_finds_every_default_panel`/
+     `sanitize_rail_layout_falls_back_to_default_on_bad_data`。
+   - `mod rail_drag_tests`(12 个测试 + `drag_at` 辅助函数)整体搬迁,
+     含 `same_side_reorder_*`/`cross_side_move_*`/
+     `hovering_back_to_source_side_cancels_the_pending_cross_move`/
+     `dragged_panel_kind_*`(3 个)/`past_threshold_*`(3 个)。
+   - `mod rail_slot_anim_tests`(4 个测试)整体搬迁:
+     `retarget_same_side_eases_toward_target_without_snapping_immediately`/
+     `retarget_same_side_converges_and_snaps_after_enough_ticks`/
+     `retarget_side_change_snaps_immediately_no_interpolation`/
+     `retarget_target_unchanged_stays_converged`。
+
+   **不搬**(容易望文生义搬错,写计划时排除):
+   - `zone_at_x_icon_rail_returns_none`——测的是 `zone_at_x`(几何命中
+     测试,留在 `app.rs`),只是恰好验证"点在图标栏范围内返回 None",
+     函数名带 `icon_rail` 字样但不是 rail.rs 的测试对象。
+   - `apply_column_drag_ssh_todo_gitlog_mirror_tests`/
+     `apply_column_drag_files_project_web_mirror_tests`/
+     `apply_column_drag_right_pair_mirror_tests` 三个 mod(共 18 个
+     测试)——测的是 `apply_column_drag`(分隔线拖拽,留在 `app.rs`)
+     在面板被搬到镜像栏后的分屏方向,不是 rail 拖拽逻辑本身,只是
+     测试装置里用 `state.layout.rail_layout.left/.right` 构造场景
+     (直接操作公开字段,不引用任何要搬迁的类型名,搬迁后无需改动)。
 
 **非目标**:
 
@@ -133,13 +155,16 @@ accessor(为 15 个读者重新发明一层间接),要么表面私有实际还�
 ### 1. `rail.rs` 模块内容清单
 
 ```rust
+// 常量
+const RAIL_DRAG_VISUAL_THRESHOLD_PX: f32 = 4.0; // 供 rail_drag_past_threshold 使用,原定义在 dragged_panel_kind 和 rail_drag_past_threshold 之间
+
 // 类型
 pub enum RailButton { Panel(PanelKind), HomeProjectList, HomeRecents, HomeBrowser }
 pub struct RailLayout { pub left: Vec<PanelKind>, pub right: Vec<PanelKind> }
 impl RailLayout { pub fn side(..), pub fn side_mut(..), pub fn side_of(..) }
 pub struct RailDrag { pub source_side, pub source_index, pub origin_index,
                        pub pending_cross_side, pub press_pos }
-struct RailSlotAnim { current: f32, side: Side }
+pub(crate) struct RailSlotAnim { current: f32, side: Side }
 impl RailSlotAnim { fn retarget(..), fn active(..) }
 
 // 纯函数(签名与现有 app.rs 内定义完全一致,原样搬迁)
@@ -163,9 +188,12 @@ fn rail_drag_surface(..) -> Element<'_, Message, ..>
 pub(crate) fn rail_drag_ghost(app: &App) -> Element<'_, Message, ..>
 ```
 
-`RailSlotAnim`/`rail_drag_surface` 保持现有可见性(`struct RailSlotAnim`
-私有、`fn rail_drag_surface` 模块内私有,只被 `icon_rail` 调用),其余按
-现有调用点跨模块的实际需要标 `pub(crate)`。
+`rail_drag_surface` 保持模块内私有(只被同模块的 `icon_rail` 调用)。
+`RailSlotAnim` 现有是模块私有(`struct RailSlotAnim`),但搬到 `rail.rs`
+后 `App.rail_slot_anims: HashMap<PanelKind, RailSlotAnim>` 字段声明在
+`app.rs`(兄弟模块)里,必须能按名引用该类型,所以搬迁时可见性升级为
+`pub(crate) struct RailSlotAnim`(字段本身仍可保持私有,只有类型名要
+可见)。其余类型/函数按现有调用点跨模块的实际需要标 `pub(crate)`。
 
 ### 2. `app.rs` 侧改动
 
@@ -222,10 +250,12 @@ pub(crate) fn panel_mirrored(&self, kind: PanelKind) -> bool {
 `view()` 里三处调用点加模块前缀:`rail::icon_rail(self, Side::Left)` /
 `rail::icon_rail(self, Side::Right)` / `rail::rail_drag_ghost(self)`。
 
-`layout.rs`/`panel_layouts.rs` 里 `use crate::app::{RailLayout, ..}` 一类
-的 import 改成 `use crate::rail::RailLayout`(`RailLayout` 的
-`Serialize`/`Deserialize` derive 随类型一起搬,持久化 JSON 格式不变,
-序列化字段名不受模块路径影响)。
+`layout.rs` 里两处 `use crate::app::RailLayout`(顶部 `use crate::app::
+{ShellLayout, sanitize_shell_layout};` 那一行不含 `RailLayout`,只有
+`#[cfg(test)] mod tests` 内 `use crate::app::RailLayout;` 一处)改成
+`use crate::rail::RailLayout`(`RailLayout` 的 `Serialize`/`Deserialize`
+derive 随类型一起搬,持久化 JSON 格式不变,序列化字段名不受模块路径
+影响)。`panel_layouts.rs` 不引用 `RailLayout`,不受影响。
 
 ### 3. 依赖方向
 
@@ -241,8 +271,12 @@ pub(crate) fn panel_mirrored(&self, kind: PanelKind) -> bool {
 
 ## 测试策略
 
-- 现有 9 个测试(6 个 rail_layout/mirrored 相关 + 3 个
-  `dragged_panel_kind_*`)原样搬进 `rail.rs`,断言与测试数据不变。
+- 现有 23 个测试(见"目标"第 7 条完整清单)原样搬进 `rail.rs`,断言与
+  测试数据不变。
+- `app.rs` 里 `is_in_preview_column_returns_project_when_project_on_right`
+  测试(不搬,测的是 `is_in_preview_column`)直接构造了一个
+  `RailLayout { left: vec![..], right: vec![..] }` 字面量当测试夹具,
+  搬迁后这处引用要加前缀改成 `rail::RailLayout { .. }`。
 - 不新增测试——这轮是代码组织重构,行为契约由"编译期防回归 + 现有测试
   全绿"验证,不是新增行为需要新覆盖。
 - 人工验收:图标栏点击切换面板、按住拖拽同栏重排、跨栏拖拽换边(含
