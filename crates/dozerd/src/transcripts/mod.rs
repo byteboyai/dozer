@@ -378,6 +378,59 @@ impl TranscriptStore {
         Ok(out[start..end].to_vec())
     }
 
+    /// 把一个会话的 `conversation_turns` 按"每个真实人类回合(排除斜杠
+    /// 命令)"切成分组区间。用窗口函数一次查完，不是"先整段拉取再在
+    /// Rust 里 split"——避免大会话(几百上千个 turn)把全部内容搬进内存
+    /// 只为了算分组边界。
+    ///
+    /// SQL 层做不了调用 `parse::is_command_content` 那个 Rust 函数，这里
+    /// 用等价的 `NOT GLOB '/[A-Za-z0-9]*'` 近似(SQLite `GLOB` 区分大小写、
+    /// 支持 `[...]` 字符类，`content` 整串以 `/` 加一个字母数字开头即命中)
+    /// ——覆盖面跟 `is_command_content` 的判定逻辑一致，两处判据分开维护
+    /// 是因为一个跑在 SQL 里、一个跑在 Rust 里，没有共用的余地，写好
+    /// `is_command_content` 的单测(Task 7)已经锁死了预期行为，这里的 SQL
+    /// 只要保持同样的"以 / 加字母数字开头"语义即可。
+    pub fn list_turn_groups(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<dozer_core::protocol::TurnGroupSummary>> {
+        let conn = self.conn.lock().expect("db lock");
+        let mut stmt = conn.prepare(
+            "WITH marked AS (
+                SELECT turn_index, role, content, ts,
+                    SUM(CASE
+                        WHEN role = 'human' AND content NOT GLOB '/[A-Za-z0-9]*'
+                        THEN 1 ELSE 0
+                    END) OVER (ORDER BY turn_index) AS grp
+                FROM conversation_turns
+                WHERE conversation_id = ?1
+             )
+             SELECT
+                MIN(turn_index) AS start_turn_index,
+                MAX(turn_index) AS end_turn_index,
+                COALESCE(MAX(CASE
+                    WHEN role = 'human' AND content NOT GLOB '/[A-Za-z0-9]*'
+                    THEN substr(content, 1, 80)
+                END), '') AS title,
+                COALESCE(MAX(CASE
+                    WHEN role = 'human' AND content NOT GLOB '/[A-Za-z0-9]*'
+                    THEN ts
+                END), MIN(ts), 0) AS group_ts
+             FROM marked
+             GROUP BY grp
+             ORDER BY start_turn_index ASC",
+        )?;
+        let rows = stmt.query_map([conversation_id], |row| {
+            Ok(dozer_core::protocol::TurnGroupSummary {
+                start_turn_index: row.get(0)?,
+                end_turn_index: row.get(1)?,
+                title: row.get(2)?,
+                ts: row.get::<_, Option<u64>>(3)?.unwrap_or(0),
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     /// 用量聚合,`cwd` → 该项目在各 agent 下的存储目录;`since_ts` 非空时
     /// 只统计 `last_ts >= since_ts` 的会话。
     pub fn get_usage_summary(
@@ -742,6 +795,47 @@ mod tests {
         assert_eq!(second_page.len(), 2);
         assert_eq!(second_page[0].turn_index, 2);
         assert_eq!(second_page[1].turn_index, 3);
+    }
+
+    #[test]
+    fn list_turn_groups_splits_on_real_human_turns_and_folds_commands() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let text = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":100,\"message\":{\"role\":\"user\",",
+            "\"content\":\"第一个真实问题\"}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":110,\"message\":{\"role\":\"assistant\",",
+            "\"content\":[{\"type\":\"text\",\"text\":\"回复一\"}]}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u2\",\"timestamp\":120,\"message\":{\"role\":\"user\",",
+            "\"content\":\"/clear\"}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u3\",\"timestamp\":200,\"message\":{\"role\":\"user\",",
+            "\"content\":\"第二个真实问题\"}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"a2\",\"timestamp\":210,\"message\":{\"role\":\"assistant\",",
+            "\"content\":[{\"type\":\"text\",\"text\":\"回复二\"}]}}\n"
+        );
+        let path = fixture(tmp.path(), "conv1.jsonl", text);
+        store.ingest_session(AgentKind::Claude, &path).unwrap();
+        let conversation_id = path.file_stem().unwrap().to_string_lossy().into_owned();
+
+        let groups = store.list_turn_groups(&conversation_id).unwrap();
+
+        // /clear 是斜杠命令，不该单独成组——应该并进"第一个真实问题"那组
+        // (它排在 u1/a1 之后、u3 之前，turn_index 上属于第一组的尾巴)。
+        assert_eq!(groups.len(), 2, "{groups:?}");
+        assert_eq!(groups[0].title, "第一个真实问题");
+        assert_eq!(groups[0].start_turn_index, 0);
+        assert_eq!(groups[0].end_turn_index, 2); // u1, a1, u2(/clear) 都在这组
+        assert_eq!(groups[1].title, "第二个真实问题");
+        assert_eq!(groups[1].start_turn_index, 3);
+        assert_eq!(groups[1].end_turn_index, 4);
+    }
+
+    #[test]
+    fn list_turn_groups_on_unknown_conversation_returns_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let groups = store.list_turn_groups("does-not-exist").unwrap();
+        assert!(groups.is_empty());
     }
 
     #[test]
