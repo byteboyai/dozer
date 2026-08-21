@@ -7332,14 +7332,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "spike-trace-webview"
-version = "0.1.0"
-dependencies = [
- "winit",
- "wry",
-]
-
-[[package]]
 name = "spike-webview-child"
 version = "0.1.0"
 dependencies = [
