@@ -32,7 +32,7 @@
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
 use crate::app::{
     App, DEFAULT_COLS, DEFAULT_ROWS, HoverId, Message, PROJECT_PREVIEW_ID_OFFSET, PanelKind,
-    ProjectId, panel_tab, tab_arrow_button, tab_divider, tab_window,
+    ProjectId, tab_divider,
 };
 use crate::conversation::{self, TurnGroupRow};
 use crate::delivery::{self};
@@ -52,6 +52,7 @@ use crate::osc::{OscEvent, OscScanner};
 use crate::preview::{PreviewPane, TabKind, is_editable_extension};
 use crate::preview_state;
 use crate::project::FileTree;
+use crate::tab_widget::{panel_tab, tab_arrow_button, tab_window};
 use crate::term_model::TerminalModel;
 use crate::theme;
 use crate::theme::terminal_font;
@@ -3597,7 +3598,7 @@ pub(crate) fn text_width_units(s: &str) -> f32 {
 pub(crate) fn tab_display_width(title: &str) -> f32 {
     // 状态点●+spacing ≈ 18, 名称 ≈ units * 半宽 8.0(14px), 关闭× ≈ 18, pill padding ≈ 12
     let est = 18.0 + text_width_units(title) * 8.0 + 18.0 + 12.0;
-    est.min(crate::app::PANEL_TAB_MAX_W)
+    est.min(crate::tab_widget::PANEL_TAB_MAX_W)
 }
 
 /// 预览 tab 估算显示宽：同 `tab_display_width` 但无状态点。上限封顶到
@@ -3606,7 +3607,7 @@ pub(crate) fn tab_display_width(title: &str) -> f32 {
 pub(crate) fn preview_tab_display_width(title: &str) -> f32 {
     // 名称 ≈ units * 半宽 8.0(14px), 关闭× ≈ 18, pill padding ≈ 12
     let est = text_width_units(title) * 8.0 + 18.0 + 12.0;
-    est.min(crate::app::PANEL_TAB_MAX_W)
+    est.min(crate::tab_widget::PANEL_TAB_MAX_W)
 }
 
 /// agent 四态中文（终端状态栏用）。

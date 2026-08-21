@@ -8,8 +8,9 @@
 //! `Acceptance`、`open_path`/`is_editable_extension`/`flyfish_url` 等浏览器
 //! 用不到的逻辑),两者各自维护、互不知情。
 
-use crate::app::{panel_tab, tab_divider};
+use crate::app::tab_divider;
 use crate::preview::WebviewSpec;
+use crate::tab_widget::panel_tab;
 use crate::theme;
 use crate::workspace::{lh, split_portions};
 use byteui::interaction::icons;
