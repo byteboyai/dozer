@@ -58,8 +58,10 @@ pub struct ConversationSummary {
     pub turn_count: u32,
 }
 
-/// 会话内一个回合(人类发言 / AI 回复)的明细;`role` 恒为 `"human"` 或
-/// `"ai"`(不用枚举是为了跟 sqlite 存储列直接对应,减一层转换)。
+/// 会话内一个回合(人类发言 / AI 回复 / 工具执行结果)的明细;`role` 取值
+/// `"human"`/`"ai"`/`"tool_result"`(不用枚举是为了跟 sqlite 存储列直接
+/// 对应,减一层转换)。`is_error` 只对 `role == "tool_result"` 有意义,
+/// 标记这次工具调用是否失败。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TurnRecord {
     pub turn_index: i64,
@@ -68,6 +70,8 @@ pub struct TurnRecord {
     pub tools_summary: Vec<String>,
     pub thinking: bool,
     pub ts: Option<u64>,
+    #[serde(default)]
+    pub is_error: bool,
 }
 
 /// 单个会话的用量统计(token/工具调用/改动文件),已按 `message_key` 做过
@@ -414,6 +418,7 @@ mod tests {
             tools_summary: vec!["Edit README.md".into()],
             thinking: true,
             ts: Some(42),
+            is_error: false,
         };
         let usage = UsagePayload {
             turns: 2,
@@ -446,6 +451,23 @@ mod tests {
         let line = encode_line(&reply3);
         let back3: Reply = decode_line(&line).unwrap();
         assert_eq!(reply3, back3);
+    }
+
+    #[test]
+    fn turn_record_is_error_field_roundtrips() {
+        let turn = TurnRecord {
+            turn_index: 0,
+            role: "tool_result".into(),
+            content: "boom".into(),
+            tools_summary: vec![],
+            thinking: false,
+            ts: Some(1),
+            is_error: true,
+        };
+        let json = serde_json::to_string(&turn).unwrap();
+        let back: TurnRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, turn);
+        assert!(json.contains("\"is_error\":true"));
     }
 
     #[test]
