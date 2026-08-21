@@ -324,6 +324,12 @@ async fn handle_conn(
                                 Err(e) => Reply::Error { message: format!("查询回合失败: {e}") },
                             }
                         }
+                        Request::ListSessionTurnGroups { conversation_id } => {
+                            match transcripts.list_turn_groups(&conversation_id) {
+                                Ok(groups) => Reply::SessionTurnGroups { conversation_id, groups },
+                                Err(e) => Reply::Error { message: format!("查询回合分组失败: {e}") },
+                            }
+                        }
                         Request::GetUsageSummary { cwd, since_ts } => {
                             match transcripts.get_usage_summary(&cwd, since_ts) {
                                 Ok(rows) => Reply::UsageSummary { rows },
