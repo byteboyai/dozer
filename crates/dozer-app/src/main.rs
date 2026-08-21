@@ -25,6 +25,7 @@ mod term_view;
 mod terminal;
 mod theme;
 mod transcript;
+mod webview_geometry;
 mod workspace;
 
 use app::{App, Message, PanelKind};
@@ -768,7 +769,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     // 文件预览与浏览器分别挂在 `Files`/`Project`/`Web` 面板上,
                     // 可能已拖到任一栏:`is_in_preview_column` 返回命中的面板,
                     // 据此区分交给哪个 webview 池(浏览器池 vs 预览池)。
-                    let intent = match app::is_in_preview_column(logical_x, logical_w, &state) {
+                    let intent = match webview_geometry::is_in_preview_column(
+                        logical_x, logical_w, &state,
+                    ) {
                         Some(PanelKind::Web) => FocusIntent::Browser,
                         Some(kind) => FocusIntent::Preview(kind),
                         None => FocusIntent::Terminal,
