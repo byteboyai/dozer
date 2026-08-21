@@ -25,6 +25,7 @@ mod term_model;
 mod term_view;
 mod terminal;
 mod theme;
+mod topbar;
 mod transcript;
 mod webview_geometry;
 mod workspace;
