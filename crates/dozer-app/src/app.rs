@@ -11,7 +11,7 @@
 //! 回传)。拆分细节见
 //! `docs/superpowers/specs/2026-08-08-app-workspace-file-split-design.md`.
 
-use crate::conversation::ConversationMeta;
+use crate::conversation::{ConversationMeta, TurnGroupMeta};
 use crate::delivery;
 use crate::extensions::acceptance;
 use crate::extensions::browser;
@@ -1884,8 +1884,17 @@ pub enum Message {
     ConversationsRefreshed(ProjectId, Vec<ConversationMeta>),
     /// Usage 面板的全部消息,内核只转发不解读——见 `extensions::usage::Message`。
     Usage(usage::Message),
-    /// 点对话列表某条 → 审阅该对话（当前会话用 Session 源以便回合刷新,历史用 File）。
-    ConversationOpen(PathBuf),
+    /// 会话列表面板里，展开/折叠一个 session 卡片。展开且还没缓存过分组
+    /// 时触发懒加载；折叠只改展开态，不清缓存(见 `Workspace.
+    /// conversation_turn_groups` 文档)。原 `ConversationOpen`(点卡片直接
+    /// 审阅整份会话)已被树状改造取代——现在点卡片是展开/折叠，点子行
+    /// 才加载审阅(2026-08-21)。
+    ConversationExpandToggle(PathBuf),
+    /// `ConversationExpandToggle` 触发的懒加载查询结果。
+    ConversationTurnGroupsLoaded(ProjectId, PathBuf, Result<Vec<TurnGroupMeta>, String>),
+    /// 点击会话列表里的某个回合子行——只加载这一个回合区间到审阅面板
+    /// (`(start_turn_index, end_turn_index)`，闭区间，两端都含)。
+    ConversationTurnGroupOpen(PathBuf, i64, i64),
     /// 切换当前显示的 tab（这里的 `usize` 是 vec 位置——用户点击的是
     /// "屏幕上第几个 tab"，跟稳定 id 是两回事）。**仅限左侧终端 tab 栏本身
     /// 的按钮**发这条消息——`select_tab()` 顺带把 `tab_drag` 武装成"这一
@@ -4391,7 +4400,30 @@ impl App {
                     );
                 });
             }
-            Message::ConversationOpen(path) => self.conversation_open(path),
+            Message::ConversationExpandToggle(path) => {
+                self.with_focused_project(move |ws, io| {
+                    if ws.conversation_expanded.contains(&path) {
+                        ws.conversation_expanded.remove(&path);
+                    } else {
+                        ws.conversation_expanded.insert(path.clone());
+                        if !ws.conversation_turn_groups.contains_key(&path) {
+                            ws.spawn_turn_groups_load(io, path);
+                        }
+                    }
+                });
+            }
+            Message::ConversationTurnGroupsLoaded(project_id, path, result) => {
+                self.with_project(project_id, move |ws, _io| {
+                    if let Ok(groups) = result {
+                        ws.conversation_turn_groups.insert(path, groups);
+                    }
+                    // 加载失败：不落缓存，保持"未加载"状态——下次重新展开
+                    // 会再触发一次懒加载，不做本计划范围外的错误提示 UI。
+                });
+            }
+            Message::ConversationTurnGroupOpen(path, start, end) => {
+                self.conversation_turn_group_open(path, start, end);
+            }
 
             Message::SelectTab(idx) => self.select_tab(idx),
             Message::SelectTabNoDrag(idx) => self.select_tab_no_drag(idx),
@@ -6411,7 +6443,14 @@ impl App {
                     .find(|t| t.tab_id == tab_id)
                     .and_then(|t| t.transcript_path.clone().map(|p| (p, t.agent)))
             {
-                ws.spawn_review_load(io, ReviewSource::Session(tab_id), path, tab_agent);
+                ws.spawn_review_load(
+                    io,
+                    ReviewSource::Session(tab_id),
+                    path,
+                    tab_agent,
+                    -1,
+                    10_000,
+                );
             }
         });
     }
@@ -6446,30 +6485,19 @@ impl App {
         });
     }
 
-    fn conversation_open(&mut self, path: PathBuf) {
+    /// 点击会话列表里的某个回合分组子行——只把审阅面板加载到这一个回合
+    /// 区间(`start_turn_index..=end_turn_index`)，不是整份会话(2026-08-21，
+    /// 树状展示改造，用户明确要求"点击后只显示这一个回合")。
+    fn conversation_turn_group_open(&mut self, path: PathBuf, start: i64, end: i64) {
         self.with_focused_project(move |ws, io| {
-            // 若点开的是某活会话的当前对话 → Session 源(回合结束刷新);否则 File 快照。
             let path_s = path.to_string_lossy().into_owned();
-            let session_tab = ws
-                .tabs
+            let agent = ws
+                .conversations
                 .iter()
-                .find(|t| t.transcript_path.as_deref() == Some(path_s.as_str()));
-            // 活会话 tab 的 agent 若还是 Unknown（hook 事件还没到，或
-            // 老装的 hook 一直上报 Unknown）不该盖掉从对话历史扫描
-            // 位置推断出的已知 agent——优先取“已知”的那个。
-            let agent = session_tab
-                .map(|t| t.agent)
-                .filter(|a| *a != AgentKind::Unknown)
-                .or_else(|| {
-                    ws.conversations
-                        .iter()
-                        .find(|c| c.path == path)
-                        .map(|c| c.agent)
-                })
+                .find(|c| c.path == path)
+                .map(|c| c.agent)
                 .unwrap_or_default();
-            let source = session_tab
-                .map(|t| ReviewSource::Session(t.tab_id))
-                .unwrap_or_else(|| ReviewSource::File(path.clone()));
+            let source = ReviewSource::FileRange(path.clone(), start, end);
             ws.review = Some(ReviewView {
                 source: source.clone(),
                 entries: Vec::new(),
@@ -6477,7 +6505,9 @@ impl App {
                 expanded: std::collections::HashSet::new(),
                 ai_markdown: Vec::new(),
             });
-            ws.spawn_review_load(io, source, path_s, agent);
+            let after = start - 1;
+            let limit = (end - start + 1).max(0) as u32;
+            ws.spawn_review_load(io, source, path_s, agent, after, limit);
         });
     }
 

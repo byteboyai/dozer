@@ -34,7 +34,7 @@ use crate::app::{
     App, DEFAULT_COLS, DEFAULT_ROWS, HoverId, Message, PROJECT_PREVIEW_ID_OFFSET, PanelKind,
     ProjectId, panel_tab, tab_arrow_button, tab_divider, tab_window,
 };
-use crate::conversation::{self, ConversationMeta};
+use crate::conversation::{self, ConversationMeta, TurnGroupMeta};
 use crate::delivery::{self};
 use crate::extensions::acceptance;
 use crate::extensions::browser;
@@ -153,11 +153,15 @@ pub enum AddrEvent {
     Cancel,
 }
 
-/// 审阅内容的来源（P1j）：活会话 tab（回合结束刷新）或历史对话文件（快照不刷新）。
+/// 审阅内容的来源（P1j）：活会话 tab（回合结束刷新）或历史对话文件里的
+/// 某一个回合分组区间(2026-08-21，树状展示改造——点击会话列表里的回合
+/// 子行走这条，只加载区间内的 turns)。原 `ReviewSource::File`(整份历史
+/// 对话文件全量快照)已随 `ConversationOpen` 一并移除(2026-08-21 树状
+/// 改造孤儿代码清理)。
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReviewSource {
     Session(usize),
-    File(PathBuf),
+    FileRange(PathBuf, i64, i64),
 }
 
 /// 回合结束时该审阅视图是否应重解析：仅当它是该会话的活审阅。
@@ -486,6 +490,13 @@ pub struct Workspace {
     pub(crate) review: Option<ReviewView>,
     /// 当前项目的对话列表（扫 Claude 目录；P1j）。
     pub(crate) conversations: Vec<ConversationMeta>,
+    /// 会话列表面板里，哪些 session(按 `ConversationMeta.path` 标识)
+    /// 处于"已展开"状态——展开的才会懒加载它的回合分组(2026-08-21，
+    /// 树状展示改造)。
+    pub(crate) conversation_expanded: std::collections::HashSet<PathBuf>,
+    /// 已加载的回合分组，按 session 路径索引；只有展开过的 session 才
+    /// 会有 entry，折叠不清空缓存(重新展开不用再查一次)。
+    pub(crate) conversation_turn_groups: std::collections::HashMap<PathBuf, Vec<TurnGroupMeta>>,
     /// 当前项目的 agent 用量统计（会话粒度；扫描+解析全量 transcript，比
     /// `conversations` 贵得多,所以不像它那样跟着 `DeliveryChecked` 自动
     /// 刷新——只在切到 Usage 面板或点手动刷新按钮时才重新扫
@@ -709,6 +720,8 @@ impl Workspace {
             acceptance: acceptance::WorkspaceState::default(),
             review: None,
             conversations: Vec::new(),
+            conversation_expanded: std::collections::HashSet::new(),
+            conversation_turn_groups: std::collections::HashMap::new(),
             usage: usage::WorkspaceState::default(),
             project: None,
             project_panel: project::WorkspaceState::default(),
@@ -1052,6 +1065,37 @@ impl Workspace {
         });
     }
 
+    /// 异步查某个 session 的回合分组 → ConversationTurnGroupsLoaded
+    /// (session 卡片展开时触发，懒加载，见 `Message::
+    /// ConversationExpandToggle` 的分发逻辑)。
+    pub(crate) fn spawn_turn_groups_load(&self, io: &ShellIo, path: PathBuf) {
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        let project_id = project.id;
+        let client = io.client.clone();
+        let proxy = io.proxy.clone();
+        let conversation_id = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        io.handle.spawn(async move {
+            let result = client
+                .list_session_turn_groups(&conversation_id)
+                .await
+                .map(|groups| {
+                    groups
+                        .iter()
+                        .map(crate::conversation::TurnGroupMeta::from_summary)
+                        .collect()
+                })
+                .map_err(|e| e.to_string());
+            let _ = proxy.send_event(Message::ConversationTurnGroupsLoaded(
+                project_id, path, result,
+            ));
+        });
+    }
+
     /// 异步扫当前项目的全部 transcript 并逐个解析用量 → `Usage(Loaded)`。
     /// 比 `spawn_conversations_refresh` 贵得多(要读整份文件内容，不只是
     /// 文件头)，所以不接入它那条"回合结束自动刷新"的调用链——只在
@@ -1111,12 +1155,17 @@ impl Workspace {
     }
 
     /// 异步查回合明细 → ReviewLoaded（改走 dozerd；P1i/P1j/P2b 按源）。
+    /// `after_turn_index`/`limit` 由调用方按 `source` 算好传入——
+    /// `ReviewSource::FileRange` 传精确区间(只拿这一个回合分组的内容)，
+    /// 其余两个 source 继续传 `(-1, 10_000)` 全量拉取(既有行为不变)。
     pub(crate) fn spawn_review_load(
         &self,
         io: &ShellIo,
         source: ReviewSource,
         path: String,
         _agent: AgentKind,
+        after_turn_index: i64,
+        limit: u32,
     ) {
         let Some(project) = self.project.as_ref() else {
             return;
@@ -1132,7 +1181,7 @@ impl Workspace {
             .unwrap_or_default();
         io.handle.spawn(async move {
             let result = client
-                .get_conversation_turns(&conversation_id, -1, 10_000)
+                .get_conversation_turns(&conversation_id, after_turn_index, limit)
                 .await
                 .map(|turns| crate::transcript::review_entries_from_turns(&turns))
                 .map_err(|e| e.to_string());
@@ -2435,7 +2484,9 @@ pub(crate) fn review_content<'a>(
 }
 
 /// 对话列表面板(右面板区"对话"视图的列表侧):当前项目的对话记录卡片,
-/// 活跃对话置顶+金框标记。点某条 → `ConversationOpen` 驱动右侧审阅内容。
+/// 活跃对话置顶+金框标记。点卡片 → 展开/折叠该 session 的回合子行；
+/// 点子行 → `ConversationTurnGroupOpen` 驱动右侧审阅内容(2026-08-21，
+/// 树状展示改造，取代原先"点卡片直接审阅整份会话")。
 pub(crate) fn conversation_list_pane(
     ws: &Workspace,
     width: Length,
@@ -2495,23 +2546,38 @@ pub(crate) fn conversation_list_pane(
         } else {
             byteui::theme::color::current().dim
         };
+        let expanded = ws.conversation_expanded.contains(&c.path);
+        let chevron = icons::view(
+            if expanded {
+                icons::IconKind::ChevronDown
+            } else {
+                icons::IconKind::ChevronRight
+            },
+            byteui::theme::icon_size::row(),
+            byteui::theme::color::current().dim,
+        );
         let card = button(
-            column![
-                row![
-                    byteui::feedback::status::dot(agent_dot_color(c.agent)),
-                    lh(text(c.title.clone())
-                        .size(byteui::theme::font::body())
-                        .color(byteui::theme::color::current().cream)),
+            row![
+                chevron,
+                column![
+                    row![
+                        byteui::feedback::status::dot(agent_dot_color(c.agent)),
+                        lh(text(c.title.clone())
+                            .size(byteui::theme::font::body())
+                            .color(byteui::theme::color::current().cream)),
+                    ]
+                    .spacing(6)
+                    .align_y(iced_widget::core::Alignment::Center),
+                    lh(text(sub)
+                        .size(byteui::theme::font::caption_sm())
+                        .color(sub_color)),
                 ]
-                .spacing(6)
-                .align_y(iced_widget::core::Alignment::Center),
-                lh(text(sub)
-                    .size(byteui::theme::font::caption_sm())
-                    .color(sub_color)),
+                .spacing(4),
             ]
-            .spacing(4),
+            .spacing(8)
+            .align_y(iced_widget::core::Alignment::Center),
         )
-        .on_press(Message::ConversationOpen(c.path.clone()))
+        .on_press(Message::ConversationExpandToggle(c.path.clone()))
         .width(Length::Fill)
         .padding(10)
         .style(byteui::interaction::cards::button_card(
@@ -2519,6 +2585,68 @@ pub(crate) fn conversation_list_pane(
             byteui::theme::color::current().card,
         ));
         cards = cards.push(card);
+        if expanded {
+            if let Some(groups) = ws.conversation_turn_groups.get(&c.path) {
+                if groups.is_empty() {
+                    cards = cards.push(
+                        container(
+                            text("这个会话还没有可展示的回合")
+                                .size(byteui::theme::font::caption_sm())
+                                .color(byteui::theme::color::current().dim),
+                        )
+                        .padding(Padding {
+                            top: 4.0,
+                            left: 32.0,
+                            ..Padding::ZERO
+                        }),
+                    );
+                } else {
+                    for g in groups {
+                        let child = button(
+                            column![
+                                lh(text(g.title.clone())
+                                    .size(byteui::theme::font::caption())
+                                    .color(byteui::theme::color::current().cream)),
+                                lh(text(relative_time_text(g.ts, now_ms))
+                                    .size(byteui::theme::font::caption_sm())
+                                    .color(byteui::theme::color::current().dim)),
+                            ]
+                            .spacing(2),
+                        )
+                        .on_press(Message::ConversationTurnGroupOpen(
+                            c.path.clone(),
+                            g.start_turn_index,
+                            g.end_turn_index,
+                        ))
+                        .width(Length::Fill)
+                        .padding(Padding {
+                            top: 6.0,
+                            right: 10.0,
+                            bottom: 6.0,
+                            left: 32.0,
+                        })
+                        .style(byteui::interaction::cards::button_card(
+                            false,
+                            byteui::theme::color::current().card,
+                        ));
+                        cards = cards.push(child);
+                    }
+                }
+            } else {
+                cards = cards.push(
+                    container(
+                        text("加载中…")
+                            .size(byteui::theme::font::caption_sm())
+                            .color(byteui::theme::color::current().dim),
+                    )
+                    .padding(Padding {
+                        top: 4.0,
+                        left: 32.0,
+                        ..Padding::ZERO
+                    }),
+                );
+            }
+        }
     }
     content = content.push(
         Scrollable::new(cards)
@@ -3986,7 +4114,7 @@ mod tests {
         assert!(review_should_refresh_on_turn(&ReviewSource::Session(3), 3));
         assert!(!review_should_refresh_on_turn(&ReviewSource::Session(3), 4));
         assert!(!review_should_refresh_on_turn(
-            &ReviewSource::File(PathBuf::from("/t/x.jsonl")),
+            &ReviewSource::FileRange(PathBuf::from("/t/x.jsonl"), 0, 4),
             3
         ));
     }
