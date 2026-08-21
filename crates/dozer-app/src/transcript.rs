@@ -17,24 +17,28 @@ pub enum ReviewEntry {
         tools: Vec<String>,
         thinking: bool,
     },
+    /// 工具调用的返回结果(2026-08-21 补摄取——此前这类数据在
+    /// dozerd 解析层被整体丢弃，见 parse.rs 的 tool_result 处理)。
+    ToolResult { content: String, is_error: bool },
 }
 
 /// dozerd 查询回来的回合明细 → 面板展示用的 `ReviewEntry`。
 pub fn review_entries_from_turns(turns: &[TurnRecord]) -> Vec<ReviewEntry> {
     turns
         .iter()
-        .map(|t| {
-            if t.role == "human" {
-                ReviewEntry::Human {
-                    text: t.content.clone(),
-                }
-            } else {
-                ReviewEntry::AiTurn {
-                    text: t.content.clone(),
-                    tools: t.tools_summary.clone(),
-                    thinking: t.thinking,
-                }
-            }
+        .map(|t| match t.role.as_str() {
+            "human" => ReviewEntry::Human {
+                text: t.content.clone(),
+            },
+            "tool_result" => ReviewEntry::ToolResult {
+                content: t.content.clone(),
+                is_error: t.is_error,
+            },
+            _ => ReviewEntry::AiTurn {
+                text: t.content.clone(),
+                tools: t.tools_summary.clone(),
+                thinking: t.thinking,
+            },
         })
         .collect()
 }
@@ -163,6 +167,7 @@ mod tests {
                 tools_summary: vec![],
                 thinking: false,
                 ts: None,
+                is_error: false,
             },
             TurnRecord {
                 turn_index: 1,
@@ -171,6 +176,7 @@ mod tests {
                 tools_summary: vec!["Edit README.md".into()],
                 thinking: true,
                 ts: None,
+                is_error: false,
             },
         ];
         let entries = review_entries_from_turns(&turns);
@@ -193,6 +199,45 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn review_entries_from_turns_maps_tool_result_role() {
+        use dozer_core::protocol::TurnRecord;
+        let turns = vec![
+            TurnRecord {
+                turn_index: 0,
+                role: "tool_result".into(),
+                content: "ok output".into(),
+                tools_summary: vec![],
+                thinking: false,
+                ts: None,
+                is_error: false,
+            },
+            TurnRecord {
+                turn_index: 1,
+                role: "tool_result".into(),
+                content: "boom".into(),
+                tools_summary: vec![],
+                thinking: false,
+                ts: None,
+                is_error: true,
+            },
+        ];
+        let entries = review_entries_from_turns(&turns);
+        assert_eq!(
+            entries,
+            vec![
+                ReviewEntry::ToolResult {
+                    content: "ok output".into(),
+                    is_error: false
+                },
+                ReviewEntry::ToolResult {
+                    content: "boom".into(),
+                    is_error: true
+                },
+            ]
+        );
     }
 
     #[test]

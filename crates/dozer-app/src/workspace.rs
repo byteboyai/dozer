@@ -185,7 +185,7 @@ pub(crate) fn parse_review_markdown(entries: &[ReviewEntry]) -> Vec<markdown::Co
         .iter()
         .map(|e| match e {
             ReviewEntry::AiTurn { text, .. } => markdown::Content::parse(text),
-            ReviewEntry::Human { .. } => markdown::Content::new(),
+            ReviewEntry::Human { .. } | ReviewEntry::ToolResult { .. } => markdown::Content::new(),
         })
         .collect()
 }
@@ -2414,6 +2414,20 @@ pub(crate) fn review_content<'a>(
                             .color(byteui::theme::color::current().cyan)));
                     }
                 }
+            }
+            ReviewEntry::ToolResult {
+                content: t,
+                is_error,
+            } => {
+                let color = if *is_error {
+                    byteui::theme::color::current().red
+                } else {
+                    byteui::theme::color::current().dim
+                };
+                let glyph = if *is_error { "⚠ " } else { "→ " };
+                content = content.push(lh(text(format!("  {glyph}{t}"))
+                    .size(byteui::theme::font::body())
+                    .color(color)));
             }
         }
     }
