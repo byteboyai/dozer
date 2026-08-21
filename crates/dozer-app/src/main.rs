@@ -19,6 +19,7 @@ mod preview;
 mod preview_state;
 mod project;
 mod project_meta;
+mod rail;
 mod term_model;
 mod term_view;
 mod theme;
