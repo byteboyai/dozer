@@ -637,7 +637,7 @@ pub(crate) fn right_zone_width(window_width: f32, state: &ShellState) -> f32 {
 /// 两侧配对都用 `FillPortion` 渲染内部分割，而 `FillPortion` 是在扣掉固定
 /// 宽的分隔线之后才按比例分剩余空间的，所以比例的分母必须是这个值，不是
 /// 区宽本身。
-fn pair_content_width(zone_width: f32) -> f32 {
+pub(crate) fn pair_content_width(zone_width: f32) -> f32 {
     (zone_width - byteui::theme::geometry::divider_width()).max(0.0)
 }
 
@@ -657,14 +657,14 @@ fn pair_list_content_width(pair_w: f32, split: f32) -> (f32, f32) {
 /// `mirrored` = true 时反过来。`preview_content_bounds_for`/
 /// `left_files_tree_bounds_for`/`is_in_preview_column` 三个函数(webview
 /// 矩形、文件树命中、焦点路由)都靠这一份算,不许各写各的偏移公式。
-struct PairColumns {
-    list_x: f32,
-    list_w: f32,
-    content_x: f32,
-    content_w: f32,
+pub(crate) struct PairColumns {
+    pub(crate) list_x: f32,
+    pub(crate) list_w: f32,
+    pub(crate) content_x: f32,
+    pub(crate) content_w: f32,
 }
 
-fn pair_columns(pair_w: f32, split: f32, mirrored: bool) -> PairColumns {
+pub(crate) fn pair_columns(pair_w: f32, split: f32, mirrored: bool) -> PairColumns {
     let (list_w, content_w) = pair_list_content_width(pair_w, split);
     let divider = byteui::theme::geometry::divider_width();
     if mirrored {
@@ -739,7 +739,7 @@ mod preview_desired_concurrent_tests {
 /// `icon_rail_width()`(从窗口左沿量),右栏基准是"窗口宽 - 右图标栏宽 -
 /// 右区宽"(从窗口左沿量到右区左边界,同现有 `RightPairSplit` 分支已经
 /// 在用的 `right_x0` 算法,这里把它提出来给两侧共用)。
-fn pair_x0_and_width(side: Side, window_width: f32, state: &ShellState) -> (f32, f32) {
+pub(crate) fn pair_x0_and_width(side: Side, window_width: f32, state: &ShellState) -> (f32, f32) {
     match side {
         Side::Left => (
             byteui::theme::geometry::icon_rail_width(),
@@ -999,7 +999,7 @@ pub(crate) fn apply_row_drag(
 /// `preview_content_bounds_for`/`is_in_preview_column`/`terminal_pane_pixel_size`
 /// 都靠它换算放大态几何,不能各写各的字面量,否则和 `maximize_overlay`
 /// 实际渲染的画面对不上。
-fn maximized_box_x_range(window_width: f32) -> (f32, f32) {
+pub(crate) fn maximized_box_x_range(window_width: f32) -> (f32, f32) {
     let x0 = byteui::theme::geometry::icon_rail_width()
         + byteui::theme::geometry::maximize_overlay_padding();
     let avail_w = (window_width
@@ -1013,7 +1013,7 @@ fn maximized_box_x_range(window_width: f32) -> (f32, f32) {
 /// 垫了一条 `byteui::theme::geometry::top_bar_height()` 高的 Space 把遮罩钉在顶栏之下,盒子上下各留
 /// `byteui::theme::geometry::maximize_overlay_padding()`;遮罩铺到窗口底边(状态栏也被盖住),所以这里
 /// **不**扣 `byteui::theme::geometry::status_bar_height()`——与 `preview_content_bounds` 放大分支同源。
-fn maximized_box_height(window_height: f32) -> f32 {
+pub(crate) fn maximized_box_height(window_height: f32) -> f32 {
     (window_height
         - byteui::theme::geometry::top_bar_height()
         - 2.0 * byteui::theme::geometry::maximize_overlay_padding())
