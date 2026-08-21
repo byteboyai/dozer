@@ -35,6 +35,23 @@ fn fallback_key(conversation_id: &str, turn_index: i64) -> String {
     format!("{conversation_id}:{turn_index}")
 }
 
+/// CLI 自己往 transcript 里注入的合成"人类消息"(斜杠命令回显、本地
+/// 命令的标准输出回显、local-command-caveat/system-reminder 包裹块)——
+/// 不是用户真正打的字,不该被当成一个对话回合摄取:既污染逐回合审阅
+/// 列表,也污染"取第一条人类消息前 80 字当标题"这条推导(验收反馈
+/// 截图:会话列表标题全是 `<local-command-caveat>Caveat: ...`/
+/// `<system-reminder ...>`/`<local-command-stdout>Switch model to ...`)。
+/// Claude 侧这类消息通常带 `isMeta: true`(调用方另行判断),但
+/// CodeBuddy 侧同款包裹块直接以纯文本出现在 `content` 里、没有对应
+/// 的结构化标记,只能认前缀——两边共用同一份前缀表,不重复维护。
+fn is_synthetic_wrapper_content(content: &str) -> bool {
+    let trimmed = content.trim_start();
+    trimmed.starts_with("<local-command-caveat")
+        || trimmed.starts_with("<local-command-stdout")
+        || trimmed.starts_with("<command-name")
+        || trimmed.starts_with("<system-reminder")
+}
+
 fn tool_summary(name: &str, input: &Value) -> String {
     let arg = input
         .get("file_path")
@@ -94,6 +111,10 @@ fn parse_claude_shaped_chunk(
                 else {
                     continue;
                 };
+                let is_meta = v.get("isMeta").and_then(|m| m.as_bool()).unwrap_or(false);
+                if is_meta || is_synthetic_wrapper_content(text) {
+                    continue;
+                }
                 out.push(ParsedTurn {
                     message_key,
                     role: "human".into(),
@@ -240,7 +261,7 @@ fn parse_codebuddy_shaped_chunk(
         match v.get("role").and_then(|r| r.as_str()) {
             Some("user") => {
                 let content = join_codebuddy_text_blocks(blocks, "input_text");
-                if content.is_empty() {
+                if content.is_empty() || is_synthetic_wrapper_content(&content) {
                     continue;
                 }
                 out.push(ParsedTurn {
@@ -345,6 +366,29 @@ mod tests {
     }
 
     #[test]
+    fn claude_skips_synthetic_caveat_and_command_echo_messages() {
+        // 验收反馈截图:会话列表标题全是 `<local-command-caveat>`/
+        // `<command-name>` 这类 CLI 自己注入的合成消息,不是用户真正
+        // 打的字——不该摄取成一个对话回合(否则"取第一条人类消息当
+        // 标题"这条推导必然踩中它们)。前者带 `isMeta: true`,后者
+        // (纯斜杠命令回显,如 `/clear`)不带,两条判据都要覆盖。
+        let text = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"isMeta\":true,\"message\":{\"role\":\"user\",",
+            "\"content\":\"<local-command-caveat>Caveat: ...</local-command-caveat>\"}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u2\",\"message\":{\"role\":\"user\",",
+            "\"content\":\"<command-name>/clear</command-name>\"}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u3\",\"message\":{\"role\":\"user\",",
+            "\"content\":\"<local-command-stdout>Set model to Sonnet 5</local-command-stdout>\"}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u4\",\"message\":{\"role\":\"user\",",
+            "\"content\":\"真正的问题在这里\"}}\n",
+        );
+        let turns = parse_chunk(AgentKind::Claude, text, "conv1", 0);
+        assert_eq!(turns.len(), 1, "只有真实消息应该摄取成回合");
+        assert_eq!(turns[0].content, "真正的问题在这里");
+        assert_eq!(turns[0].message_key, "u4");
+    }
+
+    #[test]
     fn unsupported_agents_yield_empty() {
         let text = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"忽略\"}}\n";
         assert!(parse_chunk(AgentKind::Codex, text, "c", 0).is_empty());
@@ -391,6 +435,24 @@ mod tests {
         assert_eq!(turns[0].message_key, "m1");
         assert_eq!(turns[1].content, "回复一");
         assert_eq!(turns[1].message_key, "m2");
+    }
+
+    #[test]
+    fn codebuddy_skips_synthetic_system_reminder_wrapper() {
+        // CodeBuddy 侧同款包裹块(`<system-reminder data-role="...">`)没有
+        // `isMeta` 这类结构化标记,直接以纯文本出现在 content 里,只能靠
+        // 前缀识别——验收反馈截图里就有一条 codebuddy 会话标题是这个。
+        let text = concat!(
+            "{\"id\":\"m1\",\"type\":\"message\",\"role\":\"user\",\"content\":",
+            "[{\"type\":\"input_text\",\"text\":",
+            "\"<system-reminder data-role=\\\"command-caveat\\\">Caveat: ...\"}]}\n",
+            "{\"id\":\"m2\",\"type\":\"message\",\"role\":\"user\",\"content\":",
+            "[{\"type\":\"input_text\",\"text\":\"真正的问题\"}]}\n",
+        );
+        let turns = parse_chunk(AgentKind::Codebuddy, text, "conv1", 0);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].content, "真正的问题");
+        assert_eq!(turns[0].message_key, "m2");
     }
 
     #[test]
