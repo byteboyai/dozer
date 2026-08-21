@@ -283,6 +283,7 @@ fn has_explicit_scheme(input: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn open_url_never_dedups_and_activates_new_tab() {
@@ -580,7 +581,6 @@ mod tests {
             error: None,
             bookmarks: Vec::new(),
             bookmarks_open: false,
-            star_menu_open: false,
             hover: Default::default(),
             tooltip_starts: Default::default(),
             addr_select_all_pending: false,
@@ -668,32 +668,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_star_click_toggles_menu_and_clears_error() {
+    async fn update_star_click_toggles_bookmark() {
         let mut state = State {
             error: Some("旧错误".to_string()),
             ..State::default()
         };
+        state.tabs.open_url("http://a.com".into());
         let handle = tokio::runtime::Handle::current();
         let client = client_for_test();
+
+        // 未收藏 → 点击星标直接加入全局收藏(并清掉旧错误)。
+        let emitted = Arc::new(Mutex::new(Vec::new()));
+        let sink = emitted.clone();
         update(
             &mut state,
             Message::StarClick,
             Some(1),
             &client,
             &handle,
-            |_| {},
+            move |m| sink.lock().unwrap().push(m),
         );
-        assert!(state.star_menu_open);
         assert!(state.error.is_none());
+        // 内核会把这些派发消息继续喂回 update(模拟 dispatch)。
+        for m in emitted.lock().unwrap().drain(..) {
+            update(&mut state, m, Some(1), &client, &handle, |_| {});
+        }
+        assert_eq!(state.bookmarks.len(), 1);
+        assert_eq!(state.bookmarks[0].scope, BookmarkScope::Global);
+        assert_eq!(state.bookmarks[0].project_id, None);
+
+        // 已收藏 → 再点星标取消收藏。
+        let emitted = Arc::new(Mutex::new(Vec::new()));
+        let sink = emitted.clone();
         update(
             &mut state,
             Message::StarClick,
             Some(1),
             &client,
             &handle,
-            |_| {},
+            move |m| sink.lock().unwrap().push(m),
         );
-        assert!(!state.star_menu_open);
+        for m in emitted.lock().unwrap().drain(..) {
+            update(&mut state, m, Some(1), &client, &handle, |_| {});
+        }
+        assert!(state.bookmarks.is_empty());
     }
 
     #[tokio::test]
@@ -721,7 +739,6 @@ mod tests {
             error: None,
             bookmarks: Vec::new(),
             bookmarks_open: false,
-            star_menu_open: false,
             hover: HashMap::new(),
             tooltip_starts: HashMap::new(),
             addr_select_all_pending: false,
@@ -756,7 +773,6 @@ mod tests {
         assert_eq!(state.bookmarks.len(), 1);
         assert_eq!(state.bookmarks[0].scope, BookmarkScope::Global);
         assert_eq!(state.bookmarks[0].project_id, None);
-        assert!(!state.star_menu_open);
     }
 
     #[tokio::test]
@@ -1003,7 +1019,6 @@ pub struct State {
     error: Option<String>,
     bookmarks: Vec<BookmarkInfo>,
     bookmarks_open: bool,
-    star_menu_open: bool,
     /// tab 标题/关闭按钮的 hover 进度,键 `(tab 序号, 是否关闭按钮)`。
     hover: HashMap<(usize, bool), TabHover>,
     /// 页签标题 tooltip 的悬停计时起点:键为 tab 序号(关闭按钮不计,只认
@@ -1037,7 +1052,6 @@ impl State {
             error: None,
             bookmarks: Vec::new(),
             bookmarks_open: false,
-            star_menu_open: false,
             hover: HashMap::new(),
             tooltip_starts: HashMap::new(),
             addr_select_all_pending: false,
@@ -1296,20 +1310,19 @@ pub fn update(
             };
             let status = bookmark_status(&state.bookmarks, &url, project_id);
             if !status.is_bookmarked() {
-                // 未收藏 → 原样切换"加入收藏"菜单的开合(与旧行为一致)。
-                state.star_menu_open = !state.star_menu_open;
+                // 未收藏 → 点击星标直接加入**全局**收藏(Chrome/Safari 同款
+                // 单点切换语义),委托 `BookmarkAdd` 处理(乐观插入 + dozerd RPC)。
+                emit(Message::BookmarkAdd(BookmarkScope::Global));
                 return;
             }
-            // 已收藏(选中态)→直接点击即全部移出收藏,不再弹菜单。复用
-            // `BookmarkRemove` 的处理(乐观移除 + dozerd RPC),逐 scope 派发。
-            state.star_menu_open = false;
+            // 已收藏(选中态)→ 再点即全部移出收藏。复用 `BookmarkRemove`
+            // 的处理(乐观移除 + dozerd RPC),逐 scope 派发。
             for id in status.global.into_iter().chain(status.project) {
                 emit(Message::BookmarkRemove(id));
             }
         }
         Message::BookmarksToggle => state.bookmarks_open = !state.bookmarks_open,
         Message::BookmarkAdd(scope) => {
-            state.star_menu_open = false;
             let Some(tab) = state.tabs.tabs().get(state.tabs.active_idx()) else {
                 return;
             };
@@ -1342,7 +1355,6 @@ pub fn update(
             });
         }
         Message::BookmarkRemove(id) => {
-            state.star_menu_open = false;
             optimistic_remove(&mut state.bookmarks, id);
             let Some(project_id) = project_id else { return };
             let client = client.clone();
@@ -1449,59 +1461,6 @@ fn star_button(
         |hovered| Message::Hover(STAR_HOVER_KEY, false, hovered),
         "收藏",
     )
-}
-
-/// 地址栏星标按钮:加入/移出收藏夹(弹出菜单)。图标用 `Star`,已收藏恒金。
-/// 样式统一走 `crate::menu::item_row_fill`(整行撑满所属面板宽)。
-fn bookmark_menu_row(
-    label: String,
-    msg: Message,
-) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    crate::menu::item_row_fill(
-        None,
-        label,
-        byteui::theme::color::current().cream,
-        Some(msg),
-    )
-}
-
-/// 星标小菜单:未收藏显示"加入…",已收藏显示"移出…"(打勾态)。
-fn star_menu_popup(
-    state: &State,
-    project_id: Option<i64>,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let Some(url) = state
-        .tabs
-        .tabs()
-        .get(state.tabs.active_idx())
-        .map(|t| t.url.clone())
-    else {
-        return column![].into();
-    };
-    let status = bookmark_status(&state.bookmarks, &url, project_id);
-
-    let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
-        vec![match status.global {
-            Some(id) => bookmark_menu_row("移出全局收藏".to_string(), Message::BookmarkRemove(id)),
-            None => bookmark_menu_row(
-                "加入全局收藏".to_string(),
-                Message::BookmarkAdd(BookmarkScope::Global),
-            ),
-        }];
-
-    if project_id.is_some() {
-        items.push(match status.project {
-            Some(id) => {
-                bookmark_menu_row("移出本项目收藏".to_string(), Message::BookmarkRemove(id))
-            }
-            None => bookmark_menu_row(
-                "加入本项目收藏".to_string(),
-                Message::BookmarkAdd(BookmarkScope::Project),
-            ),
-        });
-    }
-
-    crate::menu::shell(items, Length::Fill)
 }
 
 /// 一组收藏条目:文件夹图标 + 标题(点击新开 tab)+ `×` 删除按钮,风格照抄
@@ -1745,9 +1704,6 @@ pub fn view(
 
     let mut content = column![tab_bar, tab_divider(), addr_row].spacing(region.gap);
 
-    if state.star_menu_open {
-        content = content.push(star_menu_popup(state, project_id));
-    }
     if let Some(err) = &state.error {
         content = content.push(lh(text(format!("⚠ {err}"))
             .size(byteui::theme::font::body())
