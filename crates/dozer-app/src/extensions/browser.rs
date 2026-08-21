@@ -1394,7 +1394,7 @@ fn star_button(
     // 统一 icon 按钮规范:未收藏静止 DIM、hover 过渡到 GOLD;已收藏恒金
     // (active=true)。hover 动画走浏览器自己的 `State` 进度机(哨兵键)。
     icons::icon_button_entry(
-        icons::IconKind::FolderBookmark,
+        icons::IconKind::Star,
         byteui::theme::icon_size::row(),
         starred,
         false,
@@ -1408,7 +1408,7 @@ fn star_button(
     )
 }
 
-/// tab 栏"收藏夹"下拉面板触发按钮,颜色恒定(不像星标那样带收藏状态)。
+/// 地址栏星标按钮:加入/移出收藏夹(弹出菜单)。图标用 `Star`,已收藏恒金。
 /// 样式统一走 `crate::menu::item_row_fill`(整行撑满所属面板宽)。
 fn bookmark_menu_row(
     label: String,
@@ -1632,13 +1632,13 @@ pub fn view(
         Message::AddrInput,
     );
 
-    // 地址栏本体:单个带边框的容器,把"网址文字 + 收藏夹按钮"一起包进边框
-    // 内(复用 todo 新增输入框 / `crate::search_box` 的布局模式)。不再需要
-    // 外层 `MouseArea`/`AddrClick`——`text_input` 是真控件,点击命中范围内
+    // 地址栏本体:单个带边框的容器,把"网址文字 + 星标(收藏)按钮"一起包进
+    // 边框内(复用 todo 新增输入框 / `crate::search_box` 的布局模式)。不再
+    // 需要外层 `MouseArea`/`AddrClick`——`text_input` 是真控件,点击命中范围内
     // 就由 iced 标准鼠标管线自己处理聚焦,不需要应用层代理点击(唯一影响:
     // 点击胶囊的 4px padding 空白处不再能进编辑态,只有点在输入框自身范围
-    // 内才行,判定为可接受的小回归,见本计划 Global Constraints)。收藏夹
-    // 按钮是内层 widget,自己截获点击(开/关收藏夹面板)。框高由收藏按钮的
+    // 内才行,判定为可接受的小回归,见本计划 Global Constraints)。星标按钮
+    // 是内层 widget,自己截获点击(弹加入/移出收藏夹菜单)。框高由按钮的
     // 方形尺寸撑起,文字垂直居中,视觉上按钮嵌在地址栏右侧。
     let content_h = byteui::theme::geometry::tab_button_size();
     let addr_box = container(
@@ -1648,7 +1648,7 @@ pub fn view(
                 .height(Length::Fill)
                 .align_y(iced_widget::core::alignment::Vertical::Center)
                 .align_x(iced_widget::core::alignment::Horizontal::Left),
-            container(bookmarks_toggle_button(state))
+            container(star_button(state, project_id))
                 .height(Length::Fill)
                 .align_y(iced_widget::core::alignment::Vertical::Center),
         ]
@@ -1683,7 +1683,7 @@ pub fn view(
     .spacing(0)
     .align_y(iced_widget::core::Alignment::Center);
 
-    let addr_row = row![nav_buttons, addr_box, star_button(state, project_id),]
+    let addr_row = row![nav_buttons, addr_box, bookmarks_toggle_button(state),]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
 
@@ -1750,14 +1750,14 @@ pub fn view(
         .into()
 }
 
-/// tab 栏"收藏夹"下拉面板触发按钮。返回带收藏夹切换消息的按钮。走统一
-/// icon 按钮规范(DIM→GOLD hover,无选中态),hover 动画走浏览器自己的
-/// `State` 进度机(哨兵键)。
+/// 地址栏"收藏夹"展开按钮:切换收藏夹侧栏。图标用 `FolderBookmark`,颜色
+/// 恒定(不像星标那样带收藏状态)。走统一 icon 按钮规范(DIM→GOLD hover,
+/// 无选中态),hover 动画走浏览器自己的 `State` 进度机(哨兵键)。
 fn bookmarks_toggle_button(
     state: &State,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     icons::icon_button_entry(
-        icons::IconKind::Star,
+        icons::IconKind::FolderBookmark,
         byteui::theme::icon_size::row(),
         false,
         false,

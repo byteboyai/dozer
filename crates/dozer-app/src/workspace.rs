@@ -2800,21 +2800,25 @@ pub(crate) fn agent_picker_popup(
     if !ws.agent_picker_open {
         return column![].into();
     }
-    let items: [(&str, PickerLaunch); 8] = [
+    // 常规 agent 按标签首字母排序。"Git Shell" / "纯 Shell" 归到菜单最底部,
+    // 与上方 agent 用 1px 分割线(`crate::menu::separator`)分组隔开。
+    let agents: [(&str, PickerLaunch); 6] = [
         ("Claude", PickerLaunch::Agent(Some(AgentKind::Claude))),
         ("CodeBuddy", PickerLaunch::Agent(Some(AgentKind::Codebuddy))),
         ("Codex", PickerLaunch::Agent(Some(AgentKind::Codex))),
-        ("Git Shell", PickerLaunch::Git),
         ("Kilo", PickerLaunch::Agent(Some(AgentKind::Kilo))),
         ("OpenCode", PickerLaunch::Agent(Some(AgentKind::Opencode))),
         ("v8agent", PickerLaunch::Agent(Some(AgentKind::V8agent))),
+    ];
+    let shells: [(&str, PickerLaunch); 2] = [
+        ("Git Shell", PickerLaunch::Git),
         ("纯 Shell", PickerLaunch::Agent(None)),
     ];
     // 单项统一走 `crate::menu::item_row`:图标沿用各 agent 代表色,文字保持
     // CREAM;hover/锁定语义、常宽、padding 同文件树右键菜单基准。
-    let mut list: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
-        Vec::new();
-    for (label, agent) in items {
+    let mk_item = |label: &'static str,
+                   agent: PickerLaunch|
+     -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
         let (icon, icon_color) = match agent {
             PickerLaunch::Agent(Some(kind)) => (agent_icon(kind), agent_dot_color(kind)),
             PickerLaunch::Agent(None) => {
@@ -2822,7 +2826,7 @@ pub(crate) fn agent_picker_popup(
             }
             PickerLaunch::Git => (IconKind::GitBranch, byteui::theme::color::current().cream),
         };
-        list.push(crate::menu::item_row(
+        crate::menu::item_row(
             Some(icons::view(
                 icon,
                 byteui::theme::icon_size::row(),
@@ -2831,7 +2835,17 @@ pub(crate) fn agent_picker_popup(
             label,
             byteui::theme::color::current().cream,
             Some(Message::AgentPickerSelect(agent)),
-        ));
+        )
+    };
+    let mut list: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
+        Vec::new();
+    for (label, agent) in agents {
+        list.push(mk_item(label, agent));
+    }
+    // 1px 分割线:把 Shell 类(底部)与上方常规 agent 分组隔开。
+    list.push(crate::menu::separator());
+    for (label, agent) in shells {
+        list.push(mk_item(label, agent));
     }
     let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
         crate::menu::shell(
