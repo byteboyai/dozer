@@ -32,6 +32,7 @@ use crate::panel_layouts;
 use crate::preview::WebviewSpec;
 use crate::rail;
 use crate::term_view;
+use crate::terminal;
 use crate::theme;
 use crate::transcript::ReviewEntry;
 use crate::workspace::{
@@ -1441,22 +1442,6 @@ pub(crate) fn ssh_terminal_visible(state: &ShellState) -> bool {
     state.left_view == PanelKind::Ssh && state.maximized != Some(MaximizedPane::Right)
 }
 
-/// 键盘/粘贴事件此刻该写给右侧共享终端条还是 SSH 面板自己的内嵌终端。
-/// 复用既有 `active_zone`(点击左右面板区任意位置就会更新,已经在驱动
-/// `left_zone`/`right_zone` 的高亮边框,见 `App::set_active_zone`)——
-/// SSH 面板在左侧且左侧是当前聚焦区时走 SSH 面板,否则走现状的共享
-/// 终端条(不需要新增专门的终端焦点状态)。
-pub(crate) fn keyboard_term_target(
-    left_view: PanelKind,
-    active_zone: Option<ZoneSide>,
-) -> TermTarget {
-    if left_view == PanelKind::Ssh && active_zone == Some(ZoneSide::Left) {
-        TermTarget::SshPanel
-    } else {
-        TermTarget::Shared
-    }
-}
-
 /// 换算终端 PTY 网格时用的假想外壳状态:强制"右侧展开 + 显示 Agent 配对"。
 ///
 /// 终端此刻可能不可见(右侧收起 / 右视图是对话),但它的 PTY 网格仍应按
@@ -1585,24 +1570,15 @@ pub type ProjectId = i64;
 /// Ctrl + / Ctrl - 每次触发的相对缩放步近因子（1.1 ≈ 每按一次放大 10%）。
 const UI_ZOOM_STEP: f32 = 1.1;
 
-/// 终端相关消息(键盘/滚轮/选区/粘贴)该写去右侧共享终端条还是 SSH 面板
-/// 自己的内嵌终端——两者可能同时在屏幕上,裸消息本身不带这个信息,靠
-/// canvas 渲染时(`term_view::view`)烘焙进它构造的每条消息里。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TermTarget {
-    Shared,
-    SshPanel,
-}
-
 #[derive(Debug, Clone)]
 pub enum Message {
     /// 终端聚焦时的键盘/IME 输入字节（已经过 `keymap` 翻译）。直接写给
     /// 当前激活 tab 对应的 daemon 会话（`client.write`）——不再本地
     /// echo，回显完全走 PTY 真实回路（daemon → attach 流 → `TermOutput`）。
-    TermInput(TermTarget, Vec<u8>),
+    TermInput(terminal::TermTarget, Vec<u8>),
     /// IME 组字预览(未提交):`None` 表示组字结束/取消,清空预览。不发字节
     /// 给 PTY——只是渲染层叠加,`term_view` 画在光标位置(见其 `draw`)。
-    TermImePreedit(TermTarget, Option<String>),
+    TermImePreedit(terminal::TermTarget, Option<String>),
     /// attach 事件流转发来的输出字节，`usize` 是 tab 的稳定 id
     /// （`SessionTab::tab_id`，不是 vec 位置——关闭 tab 会移动位置，
     /// 但 id 不变，事件流路由必须认 id）。首字段的项目归属见 [`ProjectId`]
@@ -1769,7 +1745,7 @@ pub enum Message {
     DaemonError(String),
     /// 终端滚轮：视口向历史方向（正数）/活动区方向（负数）滚动的行数。
     /// 只作用于当前激活 tab（滚轮事件来自它的 canvas）。
-    TermScroll(TermTarget, i32),
+    TermScroll(terminal::TermTarget, i32),
     /// 终端 tab 栏箭头翻页（`true`=右/`false`=左）。一次翻 2 个 tab；
     /// 上界不在此钳，渲染时 `tab_window` 钳制显示（P1L T5 验收返工）。
     TermTabScroll(bool),
@@ -1778,21 +1754,21 @@ pub enum Message {
     /// 终端左键按下：在视口格 `(col, row)` 起新选区（`right` = 按点在
     /// 格子右半）。
     TermSelStart {
-        target: TermTarget,
+        target: terminal::TermTarget,
         col: usize,
         row: usize,
         right: bool,
     },
     /// 终端拖拽：选区末端更新到视口格 `(col, row)`。
     TermSelUpdate {
-        target: TermTarget,
+        target: terminal::TermTarget,
         col: usize,
         row: usize,
         right: bool,
     },
     /// ⌘V 粘贴剪贴板文本：按会话的 bracketed paste 模式决定是否包裹
     /// `ESC[200~`/`ESC[201~` 后写入 daemon。
-    TermPaste(TermTarget, String),
+    TermPaste(terminal::TermTarget, String),
     /// 预览:打开本地文件为新 tab(路径已由入口侧确认存在,来自项目树点击/
     /// 会话恢复;预览面板本身已不再有"打开文件…"按钮或地址栏)。
     PreviewOpenPath(PathBuf),
@@ -3370,8 +3346,8 @@ impl App {
     /// main.rs 键盘/粘贴路由用的目标终端(`Shared`/`SshPanel`)。委托给
     /// 纯函数 `keyboard_term_target`(单测用),这里只补上 `App` 私有字段的
     /// 读取。
-    pub(crate) fn keyboard_term_target(&self) -> TermTarget {
-        crate::app::keyboard_term_target(self.left_view, self.active_zone)
+    pub(crate) fn keyboard_term_target(&self) -> terminal::TermTarget {
+        terminal::keyboard_term_target(self.left_view, self.active_zone)
     }
 
     /// 当前终端 IME 组字预览文本(`term_view` 渲染 + `ime_cursor_area` 算
@@ -4365,8 +4341,8 @@ impl App {
             Message::TermScroll(target, delta) => {
                 self.with_focused_project(|ws, _io| {
                     let tab = match target {
-                        TermTarget::Shared => ws.tabs.get_mut(ws.active),
-                        TermTarget::SshPanel => ws.ssh_active_tab_mut(),
+                        terminal::TermTarget::Shared => ws.tabs.get_mut(ws.active),
+                        terminal::TermTarget::SshPanel => ws.ssh_active_tab_mut(),
                     };
                     if let Some(tab) = tab {
                         tab.model.scroll_display(delta);
@@ -4399,8 +4375,8 @@ impl App {
             } => {
                 self.with_focused_project(|ws, _io| {
                     let tab = match target {
-                        TermTarget::Shared => ws.tabs.get_mut(ws.active),
-                        TermTarget::SshPanel => ws.ssh_active_tab_mut(),
+                        terminal::TermTarget::Shared => ws.tabs.get_mut(ws.active),
+                        terminal::TermTarget::SshPanel => ws.ssh_active_tab_mut(),
                     };
                     if let Some(tab) = tab {
                         tab.model.selection_start(col, row, right);
@@ -4415,8 +4391,8 @@ impl App {
             } => {
                 self.with_focused_project(|ws, _io| {
                     let tab = match target {
-                        TermTarget::Shared => ws.tabs.get_mut(ws.active),
-                        TermTarget::SshPanel => ws.ssh_active_tab_mut(),
+                        terminal::TermTarget::Shared => ws.tabs.get_mut(ws.active),
+                        terminal::TermTarget::SshPanel => ws.ssh_active_tab_mut(),
                     };
                     if let Some(tab) = tab {
                         tab.model.selection_update(col, row, right);
@@ -5655,20 +5631,20 @@ impl App {
         }
     }
 
-    fn term_input(&mut self, target: TermTarget, bytes: Vec<u8>) {
+    fn term_input(&mut self, target: terminal::TermTarget, bytes: Vec<u8>) {
         // 终端不在屏上时丢弃按键(不报错、不写 PTY):否则用户在读
         // 对话审阅时敲的回车/方向键会静默提交给隐藏在后面的 agent
         // 会话(Fix round 2 #3)。
         let visible = match target {
-            TermTarget::Shared => self.terminal_visible(),
-            TermTarget::SshPanel => self.ssh_terminal_visible(), // Task 12 新增
+            terminal::TermTarget::Shared => self.terminal_visible(),
+            terminal::TermTarget::SshPanel => self.ssh_terminal_visible(), // Task 12 新增
         };
         if !visible {
             return;
         }
         self.with_focused_project(|ws, io| {
             match target {
-                TermTarget::Shared => {
+                terminal::TermTarget::Shared => {
                     // 键入即回底 + 清选区：正在回看历史时一敲键盘，视口跳回
                     // 实时输出（常规终端语义），再把字节写给 daemon。
                     if let Some(tab) = ws.tabs.get_mut(ws.active) {
@@ -5677,7 +5653,7 @@ impl App {
                     }
                     ws.send_input(io, bytes);
                 }
-                TermTarget::SshPanel => {
+                terminal::TermTarget::SshPanel => {
                     if let Some(tab) = ws.ssh_active_tab_mut() {
                         tab.model.scroll_to_bottom();
                         tab.model.selection_clear();
@@ -5717,21 +5693,23 @@ impl App {
         });
     }
 
-    fn term_paste(&mut self, target: TermTarget, text: String) {
+    fn term_paste(&mut self, target: terminal::TermTarget, text: String) {
         // 同 TermInput 的可见性闸门(Fix round 3):⌘V 粘贴走同一条
         // PTY 写入路径,粘贴内容若含换行还会在看不见的会话里直接
         // 执行,比单个按键更危险,必须同样拦截。
         let visible = match target {
-            TermTarget::Shared => self.terminal_visible(),
-            TermTarget::SshPanel => self.ssh_terminal_visible(),
+            terminal::TermTarget::Shared => self.terminal_visible(),
+            terminal::TermTarget::SshPanel => self.ssh_terminal_visible(),
         };
         if !visible {
             return;
         }
         self.with_focused_project(move |ws, io| {
             let bracketed = match target {
-                TermTarget::Shared => ws.tabs.get(ws.active).map(|t| t.model.bracketed_paste()),
-                TermTarget::SshPanel => ws
+                terminal::TermTarget::Shared => {
+                    ws.tabs.get(ws.active).map(|t| t.model.bracketed_paste())
+                }
+                terminal::TermTarget::SshPanel => ws
                     .ssh_tabs
                     .iter()
                     .find(|t| {
@@ -5745,12 +5723,12 @@ impl App {
                 return;
             };
             match target {
-                TermTarget::Shared => {
+                terminal::TermTarget::Shared => {
                     if let Some(tab) = ws.tabs.get_mut(ws.active) {
                         tab.model.scroll_to_bottom();
                     }
                 }
-                TermTarget::SshPanel => {
+                terminal::TermTarget::SshPanel => {
                     if let Some(tab) = ws.ssh_active_tab_mut() {
                         tab.model.scroll_to_bottom();
                     }
@@ -5765,8 +5743,8 @@ impl App {
                 text.into_bytes()
             };
             match target {
-                TermTarget::Shared => ws.send_input(io, bytes),
-                TermTarget::SshPanel => ws.ssh_send_input(io, bytes),
+                terminal::TermTarget::Shared => ws.send_input(io, bytes),
+                terminal::TermTarget::SshPanel => ws.ssh_send_input(io, bytes),
             }
         });
     }
@@ -7804,7 +7782,7 @@ fn panel_body<'a>(
         .map(Message::Browser),
         PanelKind::Agent => {
             let (list_portion, content_portion) = split_portions(app.dims.agent_split);
-            let terminal = terminal_pane(
+            let terminal = terminal::terminal_pane(
                 app,
                 ws,
                 Length::FillPortion(content_portion),
@@ -8147,54 +8125,6 @@ fn maximize_overlay<'a>(
     .width(Length::Fill)
     .height(Length::Fill)
     .into()
-}
-
-/// 终端栏：表头 + tab 栏 + （可能的错误文案）+ 当前激活 tab 的终端网格。
-fn terminal_pane<'a>(
-    app: &'a App,
-    ws: &'a Workspace,
-    width: Length,
-    outer: Border,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let region = theme::region::terminal_pane();
-    let mut content = column![tab_bar(app, ws)].spacing(region.gap);
-
-    if let Some(err) = &app.daemon_error {
-        content = content.push(
-            text(format!("⚠ {err}"))
-                .size(byteui::theme::font::body())
-                .color(byteui::theme::color::current().red),
-        );
-    }
-
-    // OSC 133;D 的最近命令非零退出码提示（下一条命令开始时消失）。
-    if let Some(code) = ws.tabs.get(ws.active).and_then(|t| t.last_exit)
-        && code != 0
-    {
-        content = content.push(
-            text(format!("exit {code}"))
-                .size(byteui::theme::font::label())
-                .color(byteui::theme::color::current().red),
-        );
-    }
-
-    // P1j 收敛：终端"审阅"按钮移除，会话审阅入口统一到右一对话列表。
-
-    content = content.push(active_tab_view(app, ws));
-
-    let body = container(content.spacing(region.gap).padding(region.padding))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(move |_theme: &iced_widget::Theme| container::Style {
-            background: region.background.map(Into::into),
-            border: outer,
-            ..container::Style::default()
-        });
-
-    // 底部状态栏(agent 态/resume/dozerd 持有说明)已按要求去掉——`body`
-    // 自己的 `style` 已经用 `outer` 收了圆角(含底角),不需要额外元素
-    // 补底角,直接就是这块 pane 的全部内容。
-    container(body).width(width).height(Length::Fill).into()
 }
 
 /// 分隔线:命中区 `byteui::theme::geometry::divider_width()` 宽、`Length::Fill` 高,
@@ -8587,7 +8517,7 @@ where
 /// 不再放独立"＋"。P1L T5 验收返工：横向 scrollable(底部滚动条)
 /// 换成索引窗口化 + `clip`——`on_scroll` 只认滚轮/拖拽，程序化滚动在本
 /// app 自建循环里够不到，箭头翻页必须走状态驱动的窗口渲染。
-fn tab_bar<'a>(
+pub(crate) fn tab_bar<'a>(
     app: &'a App,
     ws: &'a Workspace,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -8843,12 +8773,13 @@ fn ssh_terminal_pane<'a>(
                     .find(|t| t.info.id.strip_prefix("ssh:") == Some(host_id.as_str()));
                 match tab {
                     Some(tab) => {
-                        let focused = keyboard_term_target(app.left_view, app.active_zone)
-                            == TermTarget::SshPanel;
+                        let focused =
+                            terminal::keyboard_term_target(app.left_view, app.active_zone)
+                                == terminal::TermTarget::SshPanel;
                         term_view::view(
                             &tab.model,
                             focused,
-                            TermTarget::SshPanel,
+                            terminal::TermTarget::SshPanel,
                             focused.then(|| app.term_ime_preedit()).flatten(),
                         )
                     }
@@ -8888,18 +8819,18 @@ fn ssh_empty_state<'a>() -> Element<'a, Message, iced_widget::Theme, iced_render
     .into()
 }
 
-fn active_tab_view<'a>(
+pub(crate) fn active_tab_view<'a>(
     app: &'a App,
     ws: &'a Workspace,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     match ws.tabs.get(ws.active) {
         Some(tab) => {
-            let focused =
-                keyboard_term_target(app.left_view, app.active_zone) == TermTarget::Shared;
+            let focused = terminal::keyboard_term_target(app.left_view, app.active_zone)
+                == terminal::TermTarget::Shared;
             term_view::view(
                 &tab.model,
                 focused,
-                TermTarget::Shared,
+                terminal::TermTarget::Shared,
                 focused.then(|| app.term_ime_preedit()).flatten(),
             )
         }

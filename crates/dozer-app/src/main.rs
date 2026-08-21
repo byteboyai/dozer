@@ -22,6 +22,7 @@ mod project_meta;
 mod rail;
 mod term_model;
 mod term_view;
+mod terminal;
 mod theme;
 mod transcript;
 mod workspace;

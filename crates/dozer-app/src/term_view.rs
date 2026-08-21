@@ -237,7 +237,7 @@ fn encode_wheel_report(up: bool, col: usize, row: usize, sgr: bool) -> Vec<u8> {
 struct TermCanvas<'a> {
     model: &'a TerminalModel,
     focused: bool,
-    target: crate::app::TermTarget,
+    target: crate::terminal::TermTarget,
     /// IME 组字预览(未提交):有值时画在光标位置(带下划线),不写进
     /// `model`——真正的 PTY 网格只由 `Ime::Commit` 驱动。
     preedit: Option<&'a str>,
@@ -506,7 +506,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
 pub fn view<'a>(
     model: &'a TerminalModel,
     focused: bool,
-    target: crate::app::TermTarget,
+    target: crate::terminal::TermTarget,
     preedit: Option<&'a str>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     Canvas::new(TermCanvas {
