@@ -183,8 +183,9 @@ impl TranscriptStore {
                 "INSERT INTO conversation_turns
                  (conversation_id, turn_index, message_key, role, content, tools_summary,
                   thinking, ts, tool_calls, mutating_tool_calls, files_touched,
-                  tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, raw_json)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
+                  tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, raw_json,
+                  is_error)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
                  ON CONFLICT(conversation_id, message_key) DO UPDATE SET
                     turn_index=excluded.turn_index, role=excluded.role,
                     content=excluded.content, tools_summary=excluded.tools_summary,
@@ -195,7 +196,7 @@ impl TranscriptStore {
                     tokens_in=excluded.tokens_in, tokens_out=excluded.tokens_out,
                     tokens_cache_read=excluded.tokens_cache_read,
                     tokens_cache_write=excluded.tokens_cache_write,
-                    raw_json=excluded.raw_json",
+                    raw_json=excluded.raw_json, is_error=excluded.is_error",
                 params![
                     conversation_id,
                     turn_index,
@@ -213,6 +214,7 @@ impl TranscriptStore {
                     t.tokens_cache_read,
                     t.tokens_cache_write,
                     t.raw_json,
+                    t.is_error as i64,
                 ],
             )?;
         }
@@ -265,7 +267,7 @@ impl TranscriptStore {
     ) -> Result<Vec<dozer_core::protocol::TurnRecord>> {
         let conn = self.conn.lock().expect("db lock");
         let mut stmt = conn.prepare(
-            "SELECT turn_index, role, content, tools_summary, thinking, ts
+            "SELECT turn_index, role, content, tools_summary, thinking, ts, is_error
              FROM conversation_turns
              WHERE conversation_id = ?1 AND turn_index > ?2
              ORDER BY turn_index ASC LIMIT ?3",
@@ -279,6 +281,7 @@ impl TranscriptStore {
                 tools_summary: serde_json::from_str(&tools_json).unwrap_or_default(),
                 thinking: row.get::<_, i64>(4)? != 0,
                 ts: row.get(5)?,
+                is_error: row.get::<_, i64>(6)? != 0,
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -391,6 +394,15 @@ impl TranscriptStore {
     }
 
     /// `home` 显式传入版本,测试用。
+    ///
+    /// 曾经的实现在 `for c in conversations` 循环里每条会话各 `prepare`
+    /// 一次带 `owners` CTE 的查询——`owners` 本身是对**全库**
+    /// `conversation_turns`(不限 cwd,机器上所有项目、所有 agent 的全部
+    /// 回合)做一次 `GROUP BY message_key`,一个项目有 N 条会话就等于把这
+    /// 个全库扫描重跑 N 遍,是"打开用量面板很慢"的根因(2026-08-21 验收
+    /// 反馈定位)。改成只 `prepare`/扫描一次:`owners` 的 `WHERE
+    /// t.conversation_id IN (...)` 限定在这次查询实际涉及的会话集合内,
+    /// 一条 SQL 把所有会话的回合一次取回,按 `conversation_id` 分桶聚合。
     pub fn get_usage_summary_in(
         &self,
         home: &Path,
@@ -402,30 +414,44 @@ impl TranscriptStore {
             dozer_core::protocol::UsagePayload,
         )>,
     > {
-        let conversations = self.list_conversations_in(home, cwd, None, u32::MAX, 0)?;
+        let mut conversations = self.list_conversations_in(home, cwd, None, u32::MAX, 0)?;
+        if let Some(since) = since_ts {
+            conversations.retain(|c| c.last_ts >= since);
+        }
+        if conversations.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids: Vec<String> = conversations
+            .iter()
+            .map(|c| c.conversation_id.clone())
+            .collect();
+        let placeholders = std::iter::repeat_n("?", ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
         let conn = self.conn.lock().expect("db lock");
-        let mut out = Vec::new();
-        for c in conversations {
-            if since_ts.is_some_and(|since| c.last_ts < since) {
-                continue;
-            }
-            let mut stmt = conn.prepare(
-                "WITH owners AS (
-                    SELECT t.message_key,
-                           MIN(printf('%020lld|', c2.first_ts) || c2.conversation_id) AS owner_key
-                    FROM conversation_turns t
-                    JOIN conversations c2 ON c2.conversation_id = t.conversation_id
-                    GROUP BY t.message_key
-                 )
-                 SELECT t.role, t.tool_calls, t.mutating_tool_calls, t.files_touched,
-                        t.tokens_in, t.tokens_out, t.tokens_cache_read, t.tokens_cache_write
-                 FROM conversation_turns t
-                 JOIN conversations c1 ON c1.conversation_id = t.conversation_id
-                 JOIN owners o ON o.message_key = t.message_key
-                 WHERE t.conversation_id = ?1
-                   AND (printf('%020lld|', c1.first_ts) || c1.conversation_id) = o.owner_key",
-            )?;
-            let rows = stmt.query_map([&c.conversation_id], |row| {
+        let sql = format!(
+            "WITH owners AS (
+                SELECT t.message_key,
+                       MIN(printf('%020lld|', c2.first_ts) || c2.conversation_id) AS owner_key
+                FROM conversation_turns t
+                JOIN conversations c2 ON c2.conversation_id = t.conversation_id
+                WHERE t.conversation_id IN ({placeholders})
+                GROUP BY t.message_key
+             )
+             SELECT t.conversation_id, t.tool_calls, t.mutating_tool_calls, t.files_touched,
+                    t.tokens_in, t.tokens_out, t.tokens_cache_read, t.tokens_cache_write
+             FROM conversation_turns t
+             JOIN conversations c1 ON c1.conversation_id = t.conversation_id
+             JOIN owners o ON o.message_key = t.message_key
+             WHERE t.conversation_id IN ({placeholders})
+               AND (printf('%020lld|', c1.first_ts) || c1.conversation_id) = o.owner_key"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        // 两处 IN (...) 各用一份完整的 ids 列表——占位符在 SQL 里出现两次,
+        // 绑定参数也要给两份,`chain` 直接拼接,不需要两次 prepare。
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(ids.iter().chain(ids.iter())),
+            |row| {
                 let files_json: String = row.get(3)?;
                 Ok((
                     row.get::<_, String>(0)?,
@@ -437,23 +463,35 @@ impl TranscriptStore {
                     row.get::<_, u64>(6)?,
                     row.get::<_, u64>(7)?,
                 ))
-            })?;
-            let mut payload = dozer_core::protocol::UsagePayload::default();
-            for r in rows {
-                let (_role, tool_calls, mutating, files_json, tin, tout, tcr, tcw) = r?;
-                payload.turns += 1;
-                payload.tool_calls += tool_calls;
-                payload.mutating_tool_calls += mutating;
-                payload.tokens_in += tin;
-                payload.tokens_out += tout;
-                payload.tokens_cache_read += tcr;
-                payload.tokens_cache_write += tcw;
-                if let Ok(files) = serde_json::from_str::<Vec<String>>(&files_json) {
-                    payload.files_touched.extend(files);
-                }
+            },
+        )?;
+        let mut by_conversation: std::collections::HashMap<
+            String,
+            dozer_core::protocol::UsagePayload,
+        > = std::collections::HashMap::new();
+        for r in rows {
+            let (conversation_id, tool_calls, mutating, files_json, tin, tout, tcr, tcw) = r?;
+            let payload = by_conversation.entry(conversation_id).or_default();
+            payload.turns += 1;
+            payload.tool_calls += tool_calls;
+            payload.mutating_tool_calls += mutating;
+            payload.tokens_in += tin;
+            payload.tokens_out += tout;
+            payload.tokens_cache_read += tcr;
+            payload.tokens_cache_write += tcw;
+            if let Ok(files) = serde_json::from_str::<Vec<String>>(&files_json) {
+                payload.files_touched.extend(files);
             }
-            out.push((c, payload));
         }
+        let out = conversations
+            .into_iter()
+            .map(|c| {
+                let payload = by_conversation
+                    .remove(&c.conversation_id)
+                    .unwrap_or_default();
+                (c, payload)
+            })
+            .collect();
         Ok(out)
     }
 }
@@ -506,6 +544,29 @@ mod tests {
             .prepare("SELECT is_error FROM conversation_turns LIMIT 0")
             .is_ok();
         assert!(has_col, "老库 open() 后应该已经补上 is_error 列");
+    }
+
+    #[test]
+    fn ingested_tool_result_is_error_flag_persists_and_is_queryable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let text = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":100,\"message\":{\"role\":\"user\",",
+            "\"content\":\"帮我查一下\"}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u2\",\"timestamp\":200,\"message\":{\"role\":\"user\",",
+            "\"content\":[{\"type\":\"tool_result\",\"is_error\":true,",
+            "\"content\":\"boom\"}]}}\n"
+        );
+        let path = fixture(tmp.path(), "conv1.jsonl", text);
+        store.ingest_session(AgentKind::Claude, &path).unwrap();
+        let conversation_id = path.file_stem().unwrap().to_string_lossy().into_owned();
+        let turns = store
+            .get_conversation_turns(&conversation_id, -1, 100)
+            .unwrap();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[1].role, "tool_result");
+        assert!(turns[1].is_error);
+        assert!(!turns[0].is_error);
     }
 
     #[test]
@@ -758,6 +819,59 @@ mod tests {
         assert_eq!(
             total_tokens_in, 10,
             "无论 first_ts 是否平局,shared-tie 只能被恰好一个会话计入一次"
+        );
+    }
+
+    #[test]
+    fn get_usage_summary_batches_multiple_conversations_without_cross_contamination() {
+        // 单条 SQL 一次取回所有会话的回合、按 conversation_id 分桶聚合
+        // (2026-08-21 重写，此前是每条会话各查一次、每次都重新全库扫描
+        // owners CTE)——这个测试锁死"分桶不串台"这条正确性要求。
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let cwd = std::path::Path::new("/proj");
+        let dir = dozer_core::agent_paths::claude_project_dir_in(home.path(), cwd);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let a = fixture(
+            &dir,
+            "a.jsonl",
+            "{\"type\":\"assistant\",\"uuid\":\"a-1\",\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":1},\"content\":[]}}\n",
+        );
+        let b = fixture(
+            &dir,
+            "b.jsonl",
+            "{\"type\":\"assistant\",\"uuid\":\"b-1\",\"message\":{\"usage\":{\"input_tokens\":20,\"output_tokens\":2},\"content\":[]}}\n",
+        );
+        // c 会话只有人类发言,没有 assistant usage——应该仍然出现在结果
+        // 里,payload 是默认零值,不能因为没有匹配行就从结果集里消失。
+        let c = fixture(
+            &dir,
+            "c.jsonl",
+            "{\"type\":\"user\",\"uuid\":\"c-1\",\"message\":{\"role\":\"user\",\"content\":\"你好\"}}\n",
+        );
+        store.ingest_session(AgentKind::Claude, &a).unwrap();
+        store.ingest_session(AgentKind::Claude, &b).unwrap();
+        store.ingest_session(AgentKind::Claude, &c).unwrap();
+
+        let rows = store
+            .get_usage_summary_in(home.path(), "/proj", None)
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+        let usage_of = |id: &str| -> u64 {
+            rows.iter()
+                .find(|(c, _)| c.conversation_id == id)
+                .unwrap()
+                .1
+                .tokens_in
+        };
+        assert_eq!(usage_of("a"), 10);
+        assert_eq!(usage_of("b"), 20);
+        assert_eq!(
+            usage_of("c"),
+            0,
+            "没有 assistant usage 的会话仍应出现,只是用量为零"
         );
     }
 }
