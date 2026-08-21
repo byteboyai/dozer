@@ -52,6 +52,7 @@ fn is_synthetic_wrapper_content(content: &str) -> bool {
         || trimmed.starts_with("<local-command-stdout")
         || trimmed.starts_with("<command-name")
         || trimmed.starts_with("<system-reminder")
+        || trimmed.starts_with("<task-notification")
 }
 
 /// 真实用户敲的斜杠命令(`/clear`/`/model xxx`/`/compact` 等，Claude
@@ -519,6 +520,9 @@ mod tests {
         // 打的字——不该摄取成一个对话回合(否则"取第一条人类消息当
         // 标题"这条推导必然踩中它们)。前者带 `isMeta: true`,后者
         // (纯斜杠命令回显,如 `/clear`)不带,两条判据都要覆盖。
+        // `<task-notification>` 是同类问题:后台子 agent 完成时 CLI 注入
+        // 的通知块,不带 `isMeta`,同样会污染逐回合审阅列表(2026-08-21
+        // 实测本项目自己会话的原始 jsonl 文件确认)。
         let text = concat!(
             "{\"type\":\"user\",\"uuid\":\"u1\",\"isMeta\":true,\"message\":{\"role\":\"user\",",
             "\"content\":\"<local-command-caveat>Caveat: ...</local-command-caveat>\"}}\n",
@@ -527,12 +531,14 @@ mod tests {
             "{\"type\":\"user\",\"uuid\":\"u3\",\"message\":{\"role\":\"user\",",
             "\"content\":\"<local-command-stdout>Set model to Sonnet 5</local-command-stdout>\"}}\n",
             "{\"type\":\"user\",\"uuid\":\"u4\",\"message\":{\"role\":\"user\",",
+            "\"content\":\"<task-notification>\\n<task-id>abc</task-id>\\n<status>completed</status>\\n</task-notification>\"}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u5\",\"message\":{\"role\":\"user\",",
             "\"content\":\"真正的问题在这里\"}}\n",
         );
         let turns = parse_chunk(AgentKind::Claude, text, "conv1", 0);
         assert_eq!(turns.len(), 1, "只有真实消息应该摄取成回合");
         assert_eq!(turns[0].content, "真正的问题在这里");
-        assert_eq!(turns[0].message_key, "u4");
+        assert_eq!(turns[0].message_key, "u5");
     }
 
     #[test]
