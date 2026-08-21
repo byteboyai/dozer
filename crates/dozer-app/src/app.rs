@@ -2887,6 +2887,16 @@ impl App {
         }
     }
 
+    /// 协议闭包共享的审阅内容快照句柄(当前项目的那一份)——同
+    /// `allowed_files` 的手法,webview 创建时按聚焦项目捕获,天然做到
+    /// per-project 隔离,不会跨项目串数据。
+    pub fn review_snapshot(&self) -> Arc<Mutex<Option<String>>> {
+        match self.active_workspace() {
+            Some(ws) => ws.review_snapshot(),
+            None => Arc::new(Mutex::new(None)),
+        }
+    }
+
     /// 点击输入框外时退出所有自绘输入的编辑态(验收反馈:失焦回正常态)。
     /// 项目名称编辑的"失焦保存"已搬进 `set_project_name_focused` 的边缘触发
     /// (与回车提交共用 `extensions::project::submit_name_edit`),这里只交
@@ -3709,6 +3719,14 @@ impl App {
                     {
                         match result {
                             Ok(entries) => {
+                                // 快照写入必须放在 `rv.source == source` 判断
+                                // 通过之后——这是它跟旧实现(main.rs 里的裸
+                                // `static`,过期/乱序结果也会无条件覆盖)的
+                                // 关键区别,过期加载结果到这里已经被
+                                // 上面的守卫挡在外面,不会再污染快照。
+                                let json = serde_json::to_string(&entries).unwrap_or_default();
+                                *ws.review_snapshot.lock().expect("review snapshot 锁") =
+                                    Some(json);
                                 rv.nonce = nonce;
                                 rv.entries = entries;
                                 rv.error = None;

@@ -370,6 +370,16 @@ pub struct Workspace {
     pub(crate) acceptance: acceptance::WorkspaceState,
     /// 进行中的会话审阅（审阅 tab 内容;None=未打开;P1i）。
     pub(crate) review: Option<ReviewView>,
+    /// `dozer://review-trace/data.json` 协议端点回显的当前审阅内容快照
+    /// (JSON 字符串)。**per-project**——`Message::ReviewLoaded` 只在
+    /// `rv.source == source`(未过期)时才会写(见该处理分支),协议闭包
+    /// 在 webview 创建时按当前聚焦项目捕获这个 `Arc`(同 `allowed_files`
+    /// 的手法),天然避免"过期加载结果覆盖当前内容"与"跨项目串数据"
+    /// 两个问题——不能像最初实现那样用 main.rs 里的裸 `static`(那样会绕开
+    /// `rv.source == source` 的过期结果过滤,也没有 per-project 隔离)。见
+    /// docs/superpowers/plans/2026-08-21-review-content-webview-trace.md
+    /// 审阅记录。
+    pub(crate) review_snapshot: Arc<Mutex<Option<String>>>,
     /// 全局单调递增的审阅内容加载水位,每次 `Message::ReviewLoaded`
     /// 成功一次就 +1(与具体加载了哪个回合区间无关)——保证连续点开
     /// 两个不同回合、恰好都是"该 source 第一次加载"时,`ReviewView.nonce`
@@ -609,6 +619,7 @@ impl Workspace {
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
             acceptance: acceptance::WorkspaceState::default(),
             review: None,
+            review_snapshot: Arc::new(Mutex::new(None)),
             review_nonce: 0,
             conversation_turn_groups: None,
             conversation_pages: 0,
@@ -2094,6 +2105,11 @@ impl Workspace {
     /// 协议闭包共享的文件白名单句柄.
     pub fn allowed_files(&self) -> Arc<Mutex<HashSet<PathBuf>>> {
         Arc::clone(&self.allowed_files)
+    }
+
+    /// 协议闭包共享的审阅内容快照句柄,同 `allowed_files` 的手法。
+    pub fn review_snapshot(&self) -> Arc<Mutex<Option<String>>> {
+        Arc::clone(&self.review_snapshot)
     }
 
     /// 当前激活 tab 是否处于 application cursor mode（DECCKM）。

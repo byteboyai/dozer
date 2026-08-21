@@ -402,16 +402,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
     let app = runtime.block_on(build_app(client, handle, proxy.clone()));
 
-    /// 审阅 webview 的当前内容快照——`Message::ReviewLoaded` 成功时在
-    /// `dispatch()` 里写入(JSON 字符串),`dozer://review-trace/data.json`
-    /// 协议端点读取。用 `static` 而不是 `Runner::Ready` 的字段,是因为
-    /// `sync_webview_pool` 的协议闭包在 `Files`/`Project`/`browser_webviews`
-    /// 三个池之间是同一份代码、各自独立捕获——塞进某个池的结构体字段够不
-    /// 到另一个池的闭包,`static` 是所有闭包都能直接引用的最简单办法。
-    /// 见 docs/superpowers/plans/2026-08-21-review-content-webview-trace.md
-    /// Task 7。
-    static REVIEW_SNAPSHOT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-
     #[allow(clippy::large_enum_variant)]
     enum Runner {
         /// 持有启动序列已经构建好的 `App`（daemon 已连上/已降级为
@@ -500,6 +490,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         allowed_files: std::sync::Arc<
             std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
         >,
+        review_snapshot: std::sync::Arc<std::sync::Mutex<Option<String>>>,
         proxy: winit::event_loop::EventLoopProxy<Message>,
         report_title: bool,
     ) {
@@ -524,6 +515,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 }
                 None => {
                     let allowed = std::sync::Arc::clone(&allowed_files);
+                    let review_snapshot = std::sync::Arc::clone(&review_snapshot);
                     let root = assets::assets_root();
                     let ipc_proxy = proxy.clone();
                     let webview_id = spec.id;
@@ -603,7 +595,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         })
                         .with_custom_protocol("dozer".into(), move |_id, request| {
                             let allowed = allowed.lock().expect("allowed_files 锁");
-                            let review_data = REVIEW_SNAPSHOT.lock().expect("review snapshot 锁");
+                            let review_data = review_snapshot.lock().expect("review snapshot 锁");
                             let reply = assets::handle_protocol(
                                 &root,
                                 &allowed,
@@ -1310,6 +1302,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     })
                     .collect::<Vec<_>>(),
                 app.allowed_files(),
+                app.review_snapshot(),
                 proxy.clone(),
                 // 预览 webview 不需要回报页面标题,只有浏览器面板要。
                 false,
@@ -1345,6 +1338,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 browser_webviews,
                 browser_specs,
                 app.allowed_files(),
+                app.review_snapshot(),
                 proxy.clone(),
                 // 浏览器面板 webview 注入页面标题回报,tab 加载完成后标题
                 // 从 URL 切到 HTML `<title>`。
@@ -1556,18 +1550,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             }
                         }
                     }
-                }
-                // 审阅内容加载成功时,把 entries 序列化进快照,供
-                // `dozer://review-trace/data.json` 协议端点读取——webview
-                // 句柄摸不到(spike 约束 2),不能直接 evaluate_script 推,
-                // 靠 `review_webview_spec` 的 nonce 变化逼 wry 重新导航、
-                // 页面自己 fetch 拉取最新快照(Task 4/6)。
-                Message::ReviewLoaded(project_id, source, result) => {
-                    if let Ok(entries) = &result {
-                        let json = serde_json::to_string(entries).unwrap_or_default();
-                        *REVIEW_SNAPSHOT.lock().expect("review snapshot 锁") = Some(json);
-                    }
-                    app.update(Message::ReviewLoaded(project_id, source, result));
                 }
                 // 新增任务框已迁 iced 原生 `text_editor`(Stage 4),点击命中
                 // 区域内由组件自身接管聚焦与光标定位,不再有 `AddEditStart`/
