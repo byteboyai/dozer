@@ -5,9 +5,10 @@
 //! 迁移范围。纯函数，不碰 iced/IO。
 
 use dozer_core::protocol::TurnRecord;
+use serde::Serialize;
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum ReviewEntry {
     /// 人类发言（导航锚点）。
     Human { text: String },
@@ -155,6 +156,35 @@ fn truncate_activity(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn review_entry_serializes_with_external_tag_shape() {
+        let human = ReviewEntry::Human {
+            text: "你好".into(),
+        };
+        assert_eq!(
+            serde_json::to_string(&human).unwrap(),
+            r#"{"Human":{"text":"你好"}}"#
+        );
+
+        let ai = ReviewEntry::AiTurn {
+            text: "回复".into(),
+            tools: vec!["Edit README.md".into()],
+            thinking: true,
+        };
+        let json = serde_json::to_string(&ai).unwrap();
+        assert!(json.starts_with(r#"{"AiTurn":"#));
+        assert!(json.contains(r#""thinking":true"#));
+
+        let tool = ReviewEntry::ToolResult {
+            content: "boom".into(),
+            is_error: true,
+        };
+        assert_eq!(
+            serde_json::to_string(&tool).unwrap(),
+            r#"{"ToolResult":{"content":"boom","is_error":true}}"#
+        );
+    }
 
     #[test]
     fn review_entries_from_turns_maps_role_and_tools() {

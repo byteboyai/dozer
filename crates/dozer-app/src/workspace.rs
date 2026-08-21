@@ -62,11 +62,9 @@ use byteui::interaction::icons::IconKind;
 use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 use iced_code_editor::{CodeEditor, Message as EditorMessage};
-use iced_widget::core::font::Font;
 use iced_widget::core::mouse;
-use iced_widget::core::text::{Highlight, LineHeight};
+use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Color, Element, Length, Padding};
-use iced_widget::markdown;
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
 use std::collections::{HashMap, HashSet};
@@ -175,128 +173,11 @@ pub struct ReviewView {
     pub source: ReviewSource,
     pub entries: Vec<ReviewEntry>,
     pub error: Option<String>,
-    /// 展开了过程区的 AI 回合下标（entries 中的位置）。
-    pub expanded: std::collections::HashSet<usize>,
-    /// 与 `entries` 等长、下标对齐的预解析 markdown——非 `AiTurn` 条目对应
-    /// 位置放一份空 `Content`(构造代价可忽略)。只在 `entries` 落定时
-    /// (`ReviewLoaded`)解析一次，`view()` 只管渲染，不重复 parse。
-    pub ai_markdown: Vec<markdown::Content>,
-}
-
-/// `ReviewLoaded` 落 `entries` 时配套生成 `ai_markdown`：下标对齐,
-/// `AiTurn` 解析正文，其余位置放空 `Content` 占位。
-pub(crate) fn parse_review_markdown(entries: &[ReviewEntry]) -> Vec<markdown::Content> {
-    entries
-        .iter()
-        .map(|e| match e {
-            ReviewEntry::AiTurn { text, .. } => markdown::Content::parse(text),
-            ReviewEntry::Human { .. } | ReviewEntry::ToolResult { .. } => markdown::Content::new(),
-        })
-        .collect()
-}
-
-/// 对话审阅 AI 回合的 markdown 渲染样式:配色对齐 ByteBoy2077(链接/内联
-/// 代码走青色 `CYAN`,内联代码背景用卡片色 `CARD`),基础字号跟原先纯文本
-/// 渲染时的 `byteui::theme::font::subtitle()` 对齐,避免换 markdown 之后正文突然
-/// 变大变小。段落/标题本身的前景色不在 `markdown::Style` 的可控范围内
-/// (该结构只暴露链接色与内联代码色),交给 iced 默认主题决定。
-fn review_markdown_settings() -> markdown::Settings {
-    markdown::Settings::with_text_size(
-        byteui::theme::font::subtitle(),
-        markdown::Style {
-            font: Font::default(),
-            inline_code_highlight: Highlight {
-                background: byteui::theme::color::current().card.into(),
-                border: Border {
-                    color: byteui::theme::color::current().border,
-                    width: 1.0,
-                    radius: 4.0.into(),
-                },
-            },
-            // 内联代码高亮的背景/边框是叠在文字上的装饰,不占额外排版
-            // 宽度——padding 调大过(4px)会让高亮框直接吃掉两侧词间的
-            // 空格,视觉上文字贴着框边。iced 官方文档示例给的默认值是
-            // 左右各 1px,这里跟它对齐,不要再调大。
-            inline_code_padding: Padding {
-                top: 0.0,
-                right: 1.0,
-                bottom: 0.0,
-                left: 1.0,
-            },
-            inline_code_color: byteui::theme::color::current().cyan,
-            inline_code_font: Font::MONOSPACE,
-            code_block_font: Font::MONOSPACE,
-            link_color: byteui::theme::color::current().cyan,
-        },
-    )
-}
-
-/// `markdown::view` 默认给的段落/标题 `rich_text` 不带行高,回落到 iced
-/// 默认值——这个环境下 CJK 字形的默认行高偏紧,长段落换行后上下行会视觉
-/// 重叠(同 `lh()` 要处理的问题,见其文档)。iced 的 markdown 模块没开放
-/// 行高参数,只能自己实现 `Viewer` 重做 paragraph/heading 这两处,其余
-/// (列表/代码块/引用等)吃 trait 默认实现,照旧转发到官方版本。
-struct ReviewMarkdownViewer;
-
-impl<'a> markdown::Viewer<'a, Message, iced_widget::Theme, iced_renderer::Renderer>
-    for ReviewMarkdownViewer
-{
-    fn on_link_click(url: markdown::Uri) -> Message {
-        Message::Browser(browser::Message::OpenUrl(url))
-    }
-
-    fn paragraph(
-        &self,
-        settings: markdown::Settings,
-        text: &markdown::Text,
-    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-        iced_widget::rich_text(text.spans(settings.style))
-            .size(settings.text_size)
-            .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
-            .on_link_click(Self::on_link_click)
-            .color(byteui::theme::color::current().body)
-            .into()
-    }
-
-    fn heading(
-        &self,
-        settings: markdown::Settings,
-        level: &'a markdown::HeadingLevel,
-        text: &'a markdown::Text,
-        index: usize,
-    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-        let markdown::Settings {
-            h1_size,
-            h2_size,
-            h3_size,
-            h4_size,
-            h5_size,
-            h6_size,
-            text_size,
-            ..
-        } = settings;
-        container(
-            iced_widget::rich_text(text.spans(settings.style))
-                .on_link_click(Self::on_link_click)
-                .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
-                .color(byteui::theme::color::current().cream)
-                .size(match level {
-                    markdown::HeadingLevel::H1 => h1_size,
-                    markdown::HeadingLevel::H2 => h2_size,
-                    markdown::HeadingLevel::H3 => h3_size,
-                    markdown::HeadingLevel::H4 => h4_size,
-                    markdown::HeadingLevel::H5 => h5_size,
-                    markdown::HeadingLevel::H6 => h6_size,
-                }),
-        )
-        .padding(Padding {
-            top: if index > 0 { text_size.0 / 2.0 } else { 0.0 },
-            right: 0.0,
-            bottom: 0.0,
-            left: 0.0,
-        })
-        .into()
-    }
+    /// 审阅 webview 的重新加载水位:每次 `ReviewLoaded` 成功都从
+    /// `Workspace.review_nonce` 拷一份新值,写进 `dozer://review-trace/
+    /// host.html?_r=<nonce>` 的查询参数,逼 wry 在内容变化时重新导航
+    /// 拉取(同 `preview.rs::PreviewTab.reload_nonce` 的手法)。
+    pub nonce: u64,
 }
 
 /// 预览编辑弹层的进行中会话(全局至多一个;弹层是应用级模态)。
@@ -489,6 +370,23 @@ pub struct Workspace {
     pub(crate) acceptance: acceptance::WorkspaceState,
     /// 进行中的会话审阅（审阅 tab 内容;None=未打开;P1i）。
     pub(crate) review: Option<ReviewView>,
+    /// `dozer://review-trace/data.json` 协议端点回显的当前审阅内容快照
+    /// (JSON 字符串)。**per-project**——`Message::ReviewLoaded` 只在
+    /// `rv.source == source`(未过期)时才会写(见该处理分支),协议闭包
+    /// 在 webview 创建时按当前聚焦项目捕获这个 `Arc`(同 `allowed_files`
+    /// 的手法),天然避免"过期加载结果覆盖当前内容"与"跨项目串数据"
+    /// 两个问题——不能像最初实现那样用 main.rs 里的裸 `static`(那样会绕开
+    /// `rv.source == source` 的过期结果过滤,也没有 per-project 隔离)。见
+    /// docs/superpowers/plans/2026-08-21-review-content-webview-trace.md
+    /// 审阅记录。
+    pub(crate) review_snapshot: Arc<Mutex<Option<String>>>,
+    /// 全局单调递增的审阅内容加载水位,每次 `Message::ReviewLoaded`
+    /// 成功一次就 +1(与具体加载了哪个回合区间无关)——保证连续点开
+    /// 两个不同回合、恰好都是"该 source 第一次加载"时,`ReviewView.nonce`
+    /// 也不会撞成同一个值(如果各自从 0 起独立计数会撞)。见
+    /// docs/superpowers/plans/2026-08-21-review-content-webview-trace.md
+    /// Task 2。
+    pub(crate) review_nonce: u64,
     /// 当前项目全部 session 的回合，拍平成一份按时间倒序的列表；
     /// `None` = 还没加载过(会话列表面板会渲染"加载中…")，`Some(空
     /// vec)` = 加载完成但确实没有记录(2026-08-21，取代按 session 展开
@@ -721,6 +619,8 @@ impl Workspace {
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
             acceptance: acceptance::WorkspaceState::default(),
             review: None,
+            review_snapshot: Arc::new(Mutex::new(None)),
+            review_nonce: 0,
             conversation_turn_groups: None,
             conversation_pages: 0,
             usage: usage::WorkspaceState::default(),
@@ -2207,6 +2107,11 @@ impl Workspace {
         Arc::clone(&self.allowed_files)
     }
 
+    /// 协议闭包共享的审阅内容快照句柄,同 `allowed_files` 的手法。
+    pub fn review_snapshot(&self) -> Arc<Mutex<Option<String>>> {
+        Arc::clone(&self.review_snapshot)
+    }
+
     /// 当前激活 tab 是否处于 application cursor mode（DECCKM）。
     /// `main.rs` 的 `on_window_event` 用它决定方向键发 CSI 还是 SS3 序列
     /// （见 `keymap::key_to_bytes` 的 `app_cursor` 参数）。没有任何 tab
@@ -2381,74 +2286,15 @@ pub(crate) fn review_content<'a>(
         );
     }
     if rv.entries.is_empty() {
-        return content.push(lh(text("暂无对话")
+        content = content.push(lh(text("暂无对话")
             .size(byteui::theme::font::subtitle())
             .color(byteui::theme::color::current().dim)));
     }
-    for (i, e) in rv.entries.iter().enumerate() {
-        match e {
-            ReviewEntry::Human { text: t } => {
-                content = content.push(lh(text(format!("▎{t}"))
-                    .size(byteui::theme::font::title())
-                    .color(byteui::theme::color::current().cream)));
-            }
-            ReviewEntry::AiTurn {
-                text: body,
-                tools,
-                thinking,
-            } => {
-                if !body.is_empty() {
-                    content = content.push(markdown::view_with(
-                        rv.ai_markdown[i].items(),
-                        review_markdown_settings(),
-                        &ReviewMarkdownViewer,
-                    ));
-                }
-                let expanded = rv.expanded.contains(&i);
-                let glyph = if expanded { "▾ " } else { "▸ " };
-                content = content.push(
-                    button(lh(text(format!(
-                        "{glyph}{}",
-                        ai_turn_summary(tools.len(), *thinking)
-                    ))
-                    .size(byteui::theme::font::body())
-                    .color(byteui::theme::color::current().dim)))
-                    .on_press(Message::ReviewToggle(i))
-                    .style(|_t, _s| button::Style {
-                        background: None,
-                        text_color: byteui::theme::color::current().dim,
-                        ..button::Style::default()
-                    }),
-                );
-                if expanded {
-                    if *thinking {
-                        content = content.push(lh(text("  · 思考(略)")
-                            .size(byteui::theme::font::label())
-                            .color(byteui::theme::color::current().dim)));
-                    }
-                    for tool in tools {
-                        content = content.push(lh(text(format!("  · {tool}"))
-                            .size(byteui::theme::font::body())
-                            .color(byteui::theme::color::current().cyan)));
-                    }
-                }
-            }
-            ReviewEntry::ToolResult {
-                content: t,
-                is_error,
-            } => {
-                let color = if *is_error {
-                    byteui::theme::color::current().red
-                } else {
-                    byteui::theme::color::current().dim
-                };
-                let glyph = if *is_error { "⚠ " } else { "→ " };
-                content = content.push(lh(text(format!("  {glyph}{t}"))
-                    .size(byteui::theme::font::body())
-                    .color(color)));
-            }
-        }
-    }
+    // 有内容时:真正的渲染由 review_content_pane 区域叠加的 wry webview
+    // 负责(dozer://review-trace/host.html,数据经 dozer://review-trace/
+    // data.json 拉取),这里不再手写 iced Column——2026-08-21 webview
+    // trace 改造,见
+    // docs/superpowers/plans/2026-08-21-review-content-webview-trace.md。
     content
 }
 
@@ -2926,6 +2772,29 @@ pub(crate) fn agent_picker_popup(
             bottom: 0.0,
         })
         .into()
+}
+
+/// 审阅内容的 webview 期望清单(`preview::desired_webviews` 同款语义)。
+/// 没有审阅内容 / 出错 / 空回合区间时返回空清单——`sync_webview_pool`
+/// 的 `retain` 会据此销毁 webview,不需要额外的隐藏逻辑。有内容时返回
+/// 唯一一条,URL 带 `rv.nonce` 当查询参数,内容变化(`Message::ReviewLoaded`
+/// 落地新 entries)时 nonce 递增、URL 变化,逼 `sync_webview_pool` 重新
+/// `load_url`(同 `preview.rs::PreviewTab.reload_nonce` 的手法)。`id`
+/// 固定填 0,真正的池 key 由调用方(`App::preview_desired`)加
+/// `CONVERSATION_REVIEW_ID_OFFSET` 决定——这个面板任意时刻只有一份内容,
+/// 不需要 Files/Project 那种按 tab id 分池的能力。
+pub(crate) fn review_webview_spec(review: Option<&ReviewView>) -> Vec<crate::preview::WebviewSpec> {
+    let Some(rv) = review else {
+        return Vec::new();
+    };
+    if rv.error.is_some() || rv.entries.is_empty() {
+        return Vec::new();
+    }
+    vec![crate::preview::WebviewSpec {
+        id: 0,
+        url: format!("dozer://review-trace/host.html?_r={}", rv.nonce),
+        visible: true,
+    }]
 }
 
 /// 会话审阅内容面板(右面板区"对话"视图的内容侧):直接读 `ws.review`,
@@ -3445,16 +3314,6 @@ pub(crate) fn relative_time_text(modified_ms: u64, now_ms: u64) -> String {
     }
 }
 
-/// AI 回合折叠行文案（P1i）：过程 = thinking + N 工具。
-pub(crate) fn ai_turn_summary(tools_len: usize, thinking: bool) -> String {
-    match (thinking, tools_len) {
-        (false, 0) => "过程:无".into(),
-        (true, 0) => "过程:思考".into(),
-        (false, n) => format!("过程:{n} 工具"),
-        (true, n) => format!("过程:思考 + {n} 工具"),
-    }
-}
-
 /// 交付/验收使用的仓库：当前项目优先，无则回落会话 cwd（P1f 现状；P1g D4）。
 pub(crate) fn effective_project_repo(active: Option<&Path>, session_cwd: &Path) -> PathBuf {
     active
@@ -3798,6 +3657,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn review_webview_spec_empty_when_no_review() {
+        assert_eq!(review_webview_spec(None), Vec::new());
+    }
+
+    #[test]
+    fn review_webview_spec_empty_on_error_or_empty_entries() {
+        let with_error = ReviewView {
+            source: ReviewSource::FileRange(PathBuf::from("/tmp/a.jsonl"), 0, 1),
+            entries: vec![ReviewEntry::Human { text: "hi".into() }],
+            error: Some("boom".into()),
+            nonce: 3,
+        };
+        assert_eq!(review_webview_spec(Some(&with_error)), Vec::new());
+
+        let empty_entries = ReviewView {
+            source: ReviewSource::FileRange(PathBuf::from("/tmp/a.jsonl"), 0, 1),
+            entries: Vec::new(),
+            error: None,
+            nonce: 3,
+        };
+        assert_eq!(review_webview_spec(Some(&empty_entries)), Vec::new());
+    }
+
+    #[test]
+    fn review_webview_spec_url_carries_nonce_and_is_visible() {
+        let rv = ReviewView {
+            source: ReviewSource::FileRange(PathBuf::from("/tmp/a.jsonl"), 0, 1),
+            entries: vec![ReviewEntry::Human { text: "hi".into() }],
+            error: None,
+            nonce: 7,
+        };
+        let specs = review_webview_spec(Some(&rv));
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].url, "dozer://review-trace/host.html?_r=7");
+        assert!(specs[0].visible);
+    }
+
+    #[test]
     fn conversation_visible_count_starts_at_one_page() {
         assert_eq!(conversation_visible_count(0), CONVERSATION_PAGE_SIZE);
     }
@@ -4079,14 +3976,6 @@ mod tests {
             &ReviewSource::FileRange(PathBuf::from("/t/x.jsonl"), 0, 4),
             3
         ));
-    }
-
-    #[test]
-    fn ai_turn_summary_text() {
-        assert_eq!(ai_turn_summary(0, false), "过程:无");
-        assert_eq!(ai_turn_summary(2, false), "过程:2 工具");
-        assert_eq!(ai_turn_summary(2, true), "过程:思考 + 2 工具");
-        assert_eq!(ai_turn_summary(0, true), "过程:思考");
     }
 
     #[test]

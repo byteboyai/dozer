@@ -490,6 +490,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         allowed_files: std::sync::Arc<
             std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
         >,
+        review_snapshot: std::sync::Arc<std::sync::Mutex<Option<String>>>,
         proxy: winit::event_loop::EventLoopProxy<Message>,
         report_title: bool,
     ) {
@@ -514,6 +515,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 }
                 None => {
                     let allowed = std::sync::Arc::clone(&allowed_files);
+                    let review_snapshot = std::sync::Arc::clone(&review_snapshot);
                     let root = assets::assets_root();
                     let ipc_proxy = proxy.clone();
                     let webview_id = spec.id;
@@ -593,9 +595,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         })
                         .with_custom_protocol("dozer".into(), move |_id, request| {
                             let allowed = allowed.lock().expect("allowed_files 锁");
+                            let review_data = review_snapshot.lock().expect("review snapshot 锁");
                             let reply = assets::handle_protocol(
                                 &root,
                                 &allowed,
+                                review_data.as_deref(),
                                 &request.uri().to_string(),
                             );
                             wry::http::Response::builder()
@@ -1298,6 +1302,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     })
                     .collect::<Vec<_>>(),
                 app.allowed_files(),
+                app.review_snapshot(),
                 proxy.clone(),
                 // 预览 webview 不需要回报页面标题,只有浏览器面板要。
                 false,
@@ -1333,6 +1338,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 browser_webviews,
                 browser_specs,
                 app.allowed_files(),
+                app.review_snapshot(),
                 proxy.clone(),
                 // 浏览器面板 webview 注入页面标题回报,tab 加载完成后标题
                 // 从 URL 切到 HTML `<title>`。

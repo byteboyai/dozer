@@ -1247,8 +1247,6 @@ pub enum Message {
     Acceptance(acceptance::Message),
     /// 会话审阅:解析完成（来源, 条目 / 错误文案）。
     ReviewLoaded(ProjectId, ReviewSource, Result<Vec<ReviewEntry>, String>),
-    /// 会话审阅:展开/收起第 n 个 AI 回合的过程区。
-    ReviewToggle(usize),
     /// 对话面板扁平列表刷新结果:当前项目全部 session 的回合，已经拍平
     /// 并按时间倒序排好(2026-08-21，取代按 session 展开的树状展示；见
     /// `Workspace::spawn_all_turn_groups_refresh`)。
@@ -1934,6 +1932,12 @@ fn ensure_project_readme(repo: &std::path::Path, name: &str) -> Option<std::path
 /// 任何按 id 反查 `ws.project_preview` webview(`active_preview_webview_id`
 /// 的 Project 分支)都要用同一个偏移量加/减,两处不同步会导致查错池。
 pub(crate) const PROJECT_PREVIEW_ID_OFFSET: usize = 1_000_000;
+
+/// `Conversations` 面板的审阅 webview 只有唯一一份内容,不需要 Files/
+/// Project 那种按 tab id 分池——固定用这一个 id(经 `review_webview_spec`
+/// 的 `id: 0` 加这个偏移得到),与另两个偏移空间(`0` 起、`PROJECT_
+/// PREVIEW_ID_OFFSET` 起)互不相撞。
+pub(crate) const CONVERSATION_REVIEW_ID_OFFSET: usize = 2_000_000;
 
 impl App {
     /// `todo::AppState`(派发记录等)只读访问——`agent_card` 挂在
@@ -2883,6 +2887,16 @@ impl App {
         }
     }
 
+    /// 协议闭包共享的审阅内容快照句柄(当前项目的那一份)——同
+    /// `allowed_files` 的手法,webview 创建时按聚焦项目捕获,天然做到
+    /// per-project 隔离,不会跨项目串数据。
+    pub fn review_snapshot(&self) -> Arc<Mutex<Option<String>>> {
+        match self.active_workspace() {
+            Some(ws) => ws.review_snapshot(),
+            None => Arc::new(Mutex::new(None)),
+        }
+    }
+
     /// 点击输入框外时退出所有自绘输入的编辑态(验收反馈:失焦回正常态)。
     /// 项目名称编辑的"失焦保存"已搬进 `set_project_name_focused` 的边缘触发
     /// (与回车提交共用 `extensions::project::submit_name_edit`),这里只交
@@ -3526,6 +3540,10 @@ impl App {
                     ws.project_preview.desired_webviews(),
                     PROJECT_PREVIEW_ID_OFFSET,
                 ),
+                PanelKind::Conversations => (
+                    crate::workspace::review_webview_spec(ws.review.as_ref()),
+                    CONVERSATION_REVIEW_ID_OFFSET,
+                ),
                 _ => continue,
             };
             let bounds = webview_geometry::preview_content_bounds_for(
@@ -3692,26 +3710,29 @@ impl App {
             }
             Message::ReviewLoaded(project_id, source, result) => {
                 self.with_project(project_id, |ws, _io| {
+                    if result.is_ok() {
+                        ws.review_nonce = ws.review_nonce.wrapping_add(1);
+                    }
+                    let nonce = ws.review_nonce;
                     if let Some(rv) = &mut ws.review
                         && rv.source == source
                     {
                         match result {
                             Ok(entries) => {
-                                rv.ai_markdown = crate::workspace::parse_review_markdown(&entries);
+                                // 快照写入必须放在 `rv.source == source` 判断
+                                // 通过之后——这是它跟旧实现(main.rs 里的裸
+                                // `static`,过期/乱序结果也会无条件覆盖)的
+                                // 关键区别,过期加载结果到这里已经被
+                                // 上面的守卫挡在外面,不会再污染快照。
+                                let json = serde_json::to_string(&entries).unwrap_or_default();
+                                *ws.review_snapshot.lock().expect("review snapshot 锁") =
+                                    Some(json);
+                                rv.nonce = nonce;
                                 rv.entries = entries;
                                 rv.error = None;
                             }
                             Err(e) => rv.error = Some(e),
                         }
-                    }
-                });
-            }
-            Message::ReviewToggle(i) => {
-                self.with_focused_project(|ws, _io| {
-                    if let Some(rv) = &mut ws.review
-                        && !rv.expanded.remove(&i)
-                    {
-                        rv.expanded.insert(i);
                     }
                 });
             }
@@ -5856,8 +5877,7 @@ impl App {
                 source: source.clone(),
                 entries: Vec::new(),
                 error: None,
-                expanded: std::collections::HashSet::new(),
-                ai_markdown: Vec::new(),
+                nonce: 0,
             });
             let after = start - 1;
             let limit = (end - start + 1).max(0) as u32;
