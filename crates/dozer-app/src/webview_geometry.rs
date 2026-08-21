@@ -104,14 +104,25 @@ pub fn preview_content_bounds_for(
                 (x, y, w, h)
             }
             // Database/Ssh/Todo/GitLog 纯 iced 绘制,不挂 webview 子视图;
-            // Agent/Conversations/Usage/Acceptance 同理——任一侧放大只要
-            // 显示的是这几种,都没有 webview 可摆。
+            // Agent/Usage/Acceptance 同理——任一侧放大只要显示的是这几种,
+            // 都没有 webview 可摆。
             PanelKind::Database
             | PanelKind::Ssh
             | PanelKind::Agent
-            | PanelKind::Conversations
             | PanelKind::Usage
             | PanelKind::Acceptance => (0.0, 0.0, 0.0, 0.0),
+            // 审阅内容放大态:跟非放大态同一份 `!mirrored` 理由,只是
+            // x0/avail_w/avail_h 换成放大盒子的换算(同 Files/Project 放大
+            // 态分支)。
+            PanelKind::Conversations => {
+                let y = y0 + byteui::theme::geometry::preview_chrome_top_px();
+                let h = (avail_h - byteui::theme::geometry::preview_chrome_top_px() - 8.0).max(0.0);
+                let pair_w = pair_content_width(avail_w);
+                let cols = pair_columns(pair_w, state.dims.conversations_split, !mirrored);
+                let x = x0 + cols.content_x + 8.0;
+                let w = (cols.content_w - 16.0).max(0.0);
+                (x, y, w, h)
+            }
         };
     }
     let (zone_x0, zone_w) = pair_x0_and_width(side, window_width, state);
@@ -201,8 +212,19 @@ pub fn preview_content_bounds_for(
         PanelKind::Ssh => (0.0, 0.0, 0.0, 0.0),
         // Stage 4a 跨栏拖拽:该侧视图可为另一栏面板,纯 iced 绘制、该侧
         // 无 webview 可摆,装空矩形。
-        PanelKind::Agent | PanelKind::Conversations | PanelKind::Usage | PanelKind::Acceptance => {
-            (0.0, 0.0, 0.0, 0.0)
+        PanelKind::Agent | PanelKind::Usage | PanelKind::Acceptance => (0.0, 0.0, 0.0, 0.0),
+        // 审阅内容(2026-08-21 webview trace 改造):跟 Files/Project 同款
+        // "配对列宽 + preview chrome 高度"算法,但 `mirrored` 要取反——
+        // app.rs 的 `PanelKind::Conversations` 分支未镜像时渲染顺序是
+        // `[review, divider, list]`(内容先),跟 `pair_columns` 的内建
+        // 默认("mirrored=false → list 先")相反,同 Web 收藏夹那处的手法。
+        PanelKind::Conversations => {
+            let y = y_top(byteui::theme::geometry::preview_chrome_top_px());
+            let h = h_for(y);
+            let cols = pair_columns(zone_w, state.dims.conversations_split, !mirrored);
+            let x = zone_x0 + cols.content_x + 8.0 + m.left;
+            let w = (cols.content_w - 16.0 - m.left - m.right).max(0.0);
+            (x, y, w, h)
         }
     }
 }
@@ -422,6 +444,40 @@ mod tests {
     }
 
     #[test]
+    fn preview_content_bounds_conversations_review_content_is_first_when_not_mirrored() {
+        // app.rs 的 PanelKind::Conversations 分支(zone 渲染,`else` 臂):
+        // 未镜像时渲染顺序是 [review, divider, list]——跟 pair_columns 的
+        // 内建默认("mirrored=false → list 先")相反,所以必须传 `!mirrored`
+        // (同 Web 收藏夹那处的手法),否则 webview 会摆到列表底下而不是
+        // 列表前面。
+        let state = ShellState {
+            left_view: PanelKind::Conversations,
+            ..test_state()
+        };
+        let (x, _y, w, _h) = preview_content_bounds_for(Side::Left, 1440.0, 900.0, &state);
+        let m = theme::region::left_zone().margin;
+        let col_start = byteui::theme::geometry::icon_rail_width() + m.left;
+        assert!(
+            x >= col_start && x < col_start + 16.0,
+            "非镜像态 review 内容应紧贴面板区左边界(pair 里第一个元素): x={x}"
+        );
+        assert!(w > 200.0, "w={w}");
+    }
+
+    #[test]
+    fn preview_content_bounds_conversations_zero_when_left_collapsed() {
+        let state = ShellState {
+            left_view: PanelKind::Conversations,
+            left_collapsed: true,
+            ..test_state()
+        };
+        assert_eq!(
+            preview_content_bounds_for(Side::Left, 1440.0, 900.0, &state),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+    }
+
+    #[test]
     fn preview_content_bounds_web_view_spans_whole_left_zone() {
         // Web 视图(左栏最底部 Globe 按钮)没有配对,预览内容区从图标栏右侧起
         // 占满左面板区。
@@ -604,14 +660,13 @@ mod tests {
     /// Stage 4a 跨栏拖拽:右栏面板被拖到左栏后成了 `left_view`。它们纯 iced
     /// 绘制、左区没有 webview 可摆,`preview_content_bounds` 必须返回空矩形
     /// 而不是命中 `_ => unreachable!`(GUI 拖拽核对抓到的崩溃)。
+    ///
+    /// `Conversations` 已从这里除名:2026-08-21 webview trace 改造后它跟
+    /// Files/Project 一样挂 wry webview(即使被拖到左栏也返回真实 content
+    /// 矩形,见 `preview_content_bounds_conversations_*` 两个测试)。
     #[test]
     fn preview_content_bounds_bare_for_right_panel_on_left() {
-        for kind in [
-            PanelKind::Agent,
-            PanelKind::Conversations,
-            PanelKind::Usage,
-            PanelKind::Acceptance,
-        ] {
+        for kind in [PanelKind::Agent, PanelKind::Usage, PanelKind::Acceptance] {
             let state = ShellState {
                 left_view: kind,
                 ..test_state()
