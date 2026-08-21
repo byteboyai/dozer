@@ -3,7 +3,8 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use dozer_core::protocol::{
     AgentKind, AgentState, BookmarkInfo, BookmarkScope, ConversationSummary, PreviewContext,
-    ProjectInfo, Reply, Request, SessionInfo, TurnRecord, UsagePayload, decode_line, encode_line,
+    ProjectInfo, Reply, Request, SessionInfo, TurnGroupSummary, TurnRecord, UsagePayload,
+    decode_line, encode_line,
 };
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -268,6 +269,21 @@ impl Client {
             .await?
         {
             Reply::ConversationTurns { turns, .. } => Ok(turns),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn list_session_turn_groups(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<TurnGroupSummary>> {
+        match self
+            .roundtrip(&Request::ListSessionTurnGroups {
+                conversation_id: conversation_id.into(),
+            })
+            .await?
+        {
+            Reply::SessionTurnGroups { groups, .. } => Ok(groups),
             other => bail!("意外应答: {other:?}"),
         }
     }
