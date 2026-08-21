@@ -76,12 +76,40 @@ fn mime_for(path: &Path) -> &'static str {
     }
 }
 
-pub fn handle_protocol(assets_root: &Path, allowed: &HashSet<PathBuf>, uri: &str) -> ProtocolReply {
-    // 剥离 scheme 与 query;只服务 flyfish 命名空间。
+pub fn handle_protocol(
+    assets_root: &Path,
+    allowed: &HashSet<PathBuf>,
+    review_data: Option<&str>,
+    uri: &str,
+) -> ProtocolReply {
+    // 剥离 scheme 与 query;只服务 flyfish/review-trace 两个命名空间。
     let Some(rest) = uri.strip_prefix("dozer://") else {
         return not_found();
     };
     let rest = rest.split('?').next().unwrap_or(rest);
+
+    // 审阅面板 trace 页面(2026-08-21):页面本身是编译期内嵌的静态资源,
+    // 不走磁盘;数据端点回显调用方注入的当前审阅内容快照——没有快照
+    // (还没加载过审阅内容)时 404。
+    if let Some(path) = rest.strip_prefix("review-trace/") {
+        return match path {
+            "host.html" => ProtocolReply {
+                status: 200,
+                mime: "text/html",
+                body: include_str!("review_trace.html").as_bytes().to_vec(),
+            },
+            "data.json" => match review_data {
+                Some(json) => ProtocolReply {
+                    status: 200,
+                    mime: "application/json",
+                    body: json.as_bytes().to_vec(),
+                },
+                None => not_found(),
+            },
+            _ => not_found(),
+        };
+    }
+
     let Some(path) = rest.strip_prefix("flyfish/") else {
         return not_found();
     };
@@ -143,12 +171,59 @@ mod tests {
     }
 
     #[test]
+    fn review_trace_host_html_serves_embedded_page_regardless_of_review_data() {
+        let root = scratch();
+        let r = handle_protocol(
+            &root,
+            &HashSet::new(),
+            None,
+            "dozer://review-trace/host.html?_r=1",
+        );
+        assert_eq!(r.status, 200);
+        assert_eq!(r.mime, "text/html");
+        assert!(!r.body.is_empty());
+    }
+
+    #[test]
+    fn review_trace_data_json_echoes_injected_snapshot() {
+        let root = scratch();
+        let r = handle_protocol(
+            &root,
+            &HashSet::new(),
+            Some(r#"[{"Human":{"text":"hi"}}]"#),
+            "dozer://review-trace/data.json",
+        );
+        assert_eq!(r.status, 200);
+        assert_eq!(r.mime, "application/json");
+        assert_eq!(r.body, br#"[{"Human":{"text":"hi"}}]"#);
+    }
+
+    #[test]
+    fn review_trace_data_json_404_when_no_snapshot() {
+        let root = scratch();
+        let r = handle_protocol(
+            &root,
+            &HashSet::new(),
+            None,
+            "dozer://review-trace/data.json",
+        );
+        assert_eq!(r.status, 404);
+    }
+
+    #[test]
+    fn review_trace_unknown_subpath_404() {
+        let root = scratch();
+        let r = handle_protocol(&root, &HashSet::new(), None, "dozer://review-trace/nope");
+        assert_eq!(r.status, 404);
+    }
+
+    #[test]
     fn serves_vendored_asset_with_mime() {
         let root = scratch();
-        let r = handle_protocol(&root, &HashSet::new(), "dozer://flyfish/host.html");
+        let r = handle_protocol(&root, &HashSet::new(), None, "dozer://flyfish/host.html");
         assert_eq!((r.status, r.mime), (200, "text/html"));
         assert_eq!(r.body, b"<html>");
-        let r = handle_protocol(&root, &HashSet::new(), "dozer://flyfish/sub/a.js?v=1");
+        let r = handle_protocol(&root, &HashSet::new(), None, "dozer://flyfish/sub/a.js?v=1");
         assert_eq!(
             (r.status, r.mime),
             (200, "text/javascript"),
@@ -160,15 +235,21 @@ mod tests {
     fn rejects_traversal_and_unknown() {
         let root = scratch();
         assert_eq!(
-            handle_protocol(&root, &HashSet::new(), "dozer://flyfish/../etc/passwd").status,
+            handle_protocol(
+                &root,
+                &HashSet::new(),
+                None,
+                "dozer://flyfish/../etc/passwd"
+            )
+            .status,
             404
         );
         assert_eq!(
-            handle_protocol(&root, &HashSet::new(), "dozer://other/x").status,
+            handle_protocol(&root, &HashSet::new(), None, "dozer://other/x").status,
             404
         );
         assert_eq!(
-            handle_protocol(&root, &HashSet::new(), "dozer://flyfish/nope.js").status,
+            handle_protocol(&root, &HashSet::new(), None, "dozer://flyfish/nope.js").status,
             404
         );
     }
@@ -183,11 +264,14 @@ mod tests {
             f.to_string_lossy().replace(' ', "%20")
         );
         // 不在白名单 → 404
-        assert_eq!(handle_protocol(&root, &HashSet::new(), &uri).status, 404);
+        assert_eq!(
+            handle_protocol(&root, &HashSet::new(), None, &uri).status,
+            404
+        );
         // 在白名单 → 200 + 按扩展名给 mime
         let mut allowed = HashSet::new();
         allowed.insert(f.clone());
-        let r = handle_protocol(&root, &allowed, &uri);
+        let r = handle_protocol(&root, &allowed, None, &uri);
         assert_eq!((r.status, r.mime), (200, "text/markdown"));
         assert_eq!(r.body, b"# hi");
     }
@@ -202,7 +286,7 @@ mod tests {
             "dozer://flyfish/sub%2F..%2F..%2Fx",
         ] {
             assert_eq!(
-                handle_protocol(&root, &HashSet::new(), uri).status,
+                handle_protocol(&root, &HashSet::new(), None, uri).status,
                 404,
                 "{uri}"
             );
