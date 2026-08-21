@@ -2758,6 +2758,29 @@ pub(crate) fn agent_picker_popup(
         .into()
 }
 
+/// 审阅内容的 webview 期望清单(`preview::desired_webviews` 同款语义)。
+/// 没有审阅内容 / 出错 / 空回合区间时返回空清单——`sync_webview_pool`
+/// 的 `retain` 会据此销毁 webview,不需要额外的隐藏逻辑。有内容时返回
+/// 唯一一条,URL 带 `rv.nonce` 当查询参数,内容变化(`Message::ReviewLoaded`
+/// 落地新 entries)时 nonce 递增、URL 变化,逼 `sync_webview_pool` 重新
+/// `load_url`(同 `preview.rs::PreviewTab.reload_nonce` 的手法)。`id`
+/// 固定填 0,真正的池 key 由调用方(`App::preview_desired`)加
+/// `CONVERSATION_REVIEW_ID_OFFSET` 决定——这个面板任意时刻只有一份内容,
+/// 不需要 Files/Project 那种按 tab id 分池的能力。
+pub(crate) fn review_webview_spec(review: Option<&ReviewView>) -> Vec<crate::preview::WebviewSpec> {
+    let Some(rv) = review else {
+        return Vec::new();
+    };
+    if rv.error.is_some() || rv.entries.is_empty() {
+        return Vec::new();
+    }
+    vec![crate::preview::WebviewSpec {
+        id: 0,
+        url: format!("dozer://review-trace/host.html?_r={}", rv.nonce),
+        visible: true,
+    }]
+}
+
 /// 会话审阅内容面板(右面板区"对话"视图的内容侧):直接读 `ws.review`,
 /// 不经过 `ws.preview` 的 tab 系统——新外壳下审阅是独立面板,不再是
 /// 预览 tab 条里的一个 tab。
@@ -3616,6 +3639,44 @@ pub(crate) async fn forward_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn review_webview_spec_empty_when_no_review() {
+        assert_eq!(review_webview_spec(None), Vec::new());
+    }
+
+    #[test]
+    fn review_webview_spec_empty_on_error_or_empty_entries() {
+        let with_error = ReviewView {
+            source: ReviewSource::FileRange(PathBuf::from("/tmp/a.jsonl"), 0, 1),
+            entries: vec![ReviewEntry::Human { text: "hi".into() }],
+            error: Some("boom".into()),
+            nonce: 3,
+        };
+        assert_eq!(review_webview_spec(Some(&with_error)), Vec::new());
+
+        let empty_entries = ReviewView {
+            source: ReviewSource::FileRange(PathBuf::from("/tmp/a.jsonl"), 0, 1),
+            entries: Vec::new(),
+            error: None,
+            nonce: 3,
+        };
+        assert_eq!(review_webview_spec(Some(&empty_entries)), Vec::new());
+    }
+
+    #[test]
+    fn review_webview_spec_url_carries_nonce_and_is_visible() {
+        let rv = ReviewView {
+            source: ReviewSource::FileRange(PathBuf::from("/tmp/a.jsonl"), 0, 1),
+            entries: vec![ReviewEntry::Human { text: "hi".into() }],
+            error: None,
+            nonce: 7,
+        };
+        let specs = review_webview_spec(Some(&rv));
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].url, "dozer://review-trace/host.html?_r=7");
+        assert!(specs[0].visible);
+    }
 
     #[test]
     fn conversation_visible_count_starts_at_one_page() {

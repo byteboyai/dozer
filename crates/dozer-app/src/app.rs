@@ -1933,6 +1933,12 @@ fn ensure_project_readme(repo: &std::path::Path, name: &str) -> Option<std::path
 /// 的 Project 分支)都要用同一个偏移量加/减,两处不同步会导致查错池。
 pub(crate) const PROJECT_PREVIEW_ID_OFFSET: usize = 1_000_000;
 
+/// `Conversations` 面板的审阅 webview 只有唯一一份内容,不需要 Files/
+/// Project 那种按 tab id 分池——固定用这一个 id(经 `review_webview_spec`
+/// 的 `id: 0` 加这个偏移得到),与另两个偏移空间(`0` 起、`PROJECT_
+/// PREVIEW_ID_OFFSET` 起)互不相撞。
+pub(crate) const CONVERSATION_REVIEW_ID_OFFSET: usize = 2_000_000;
+
 impl App {
     /// `todo::AppState`(派发记录等)只读访问——`agent_card` 挂在
     /// `workspace.rs`,读不到 `App` 私有字段,需要这个跨模块 accessor 才能
@@ -3523,6 +3529,10 @@ impl App {
                 PanelKind::Project => (
                     ws.project_preview.desired_webviews(),
                     PROJECT_PREVIEW_ID_OFFSET,
+                ),
+                PanelKind::Conversations => (
+                    crate::workspace::review_webview_spec(ws.review.as_ref()),
+                    CONVERSATION_REVIEW_ID_OFFSET,
                 ),
                 _ => continue,
             };
