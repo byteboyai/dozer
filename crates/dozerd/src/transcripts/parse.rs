@@ -54,6 +54,32 @@ fn is_synthetic_wrapper_content(content: &str) -> bool {
         || trimmed.starts_with("<system-reminder")
 }
 
+/// 真实用户敲的斜杠命令(`/clear`/`/model xxx`/`/compact` 等，Claude
+/// Code/CodeBuddy/OpenCode 三家 CLI 通用的命令语法)——是真实用户行为，
+/// 内容要保留在数据库里，只是不该单独成为一个"回合分组"的锚点(用户
+/// 验收反馈:命令类回合不该在会话列表里单独占一行)。跟
+/// `is_synthetic_wrapper_content` 是两回事:那个是 CLI 自己注入的合成
+/// 消息，从 ingestion 阶段就整体丢弃；这个是真实用户输入，只影响分组
+/// 查询(Task 9)怎么切边界，不影响是否落库。
+///
+/// 判定:trim 后以 `/` 开头，且紧跟着至少一个字母/数字(排除"光一个
+/// `/`"和"以 `/` 开头的文件路径讨论"这种误判——后者虽然堵不住所有
+/// case，但"整条消息以 /word 开头"这个模式已经覆盖了三家 CLI 实测
+/// 见过的全部命令形态)。
+///
+/// 目前在生产代码里没有直接调用方——回合分组查询(Task 9)用的是 SQL
+/// `NOT GLOB '/[A-Za-z0-9]*'` 等价近似,而 SQL 跑不了 Rust 函数。这个
+/// 函数作为"什么叫斜杠命令"的单一权威实现保留,由单测锁定行为,SQL
+/// 侧按同样的"以 / + 字母数字开头"语义分开维护。
+#[allow(dead_code)]
+pub(crate) fn is_command_content(content: &str) -> bool {
+    let trimmed = content.trim();
+    let Some(rest) = trimmed.strip_prefix('/') else {
+        return false;
+    };
+    rest.chars().next().is_some_and(|c| c.is_alphanumeric())
+}
+
 fn tool_summary(name: &str, input: &Value) -> String {
     let arg = input
         .get("file_path")
@@ -543,6 +569,24 @@ mod tests {
         );
         let turns = parse_chunk(AgentKind::Claude, text, "conv1", 0);
         assert_eq!(turns[0].content, "第一段\n第二段");
+    }
+
+    #[test]
+    fn is_command_content_recognizes_slash_commands() {
+        assert!(is_command_content("/clear"));
+        assert!(is_command_content("/model glm-5.2"));
+        assert!(is_command_content("/compact"));
+        assert!(is_command_content("  /help  ")); // 前后空白不影响判断
+    }
+
+    #[test]
+    fn is_command_content_rejects_real_messages() {
+        assert!(!is_command_content("主机面板，一个主机只能打开一个SSH tab"));
+        assert!(!is_command_content(""));
+        assert!(!is_command_content("/")); // 光一个斜杠，后面没有命令名
+        // 注：`/path/...` 这种"整条以 / 开头的文件路径"是已知的误判盲区
+        // (见 is_command_content 文档注释:"堵不住所有 case")，这里不把它
+        // 当断言——实现按计划有意为之，`/ + 字母数字` 即判为命令。
     }
 
     #[test]
