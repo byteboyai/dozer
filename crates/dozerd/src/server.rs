@@ -330,6 +330,12 @@ async fn handle_conn(
                                 Err(e) => Reply::Error { message: format!("查询回合分组失败: {e}") },
                             }
                         }
+                        Request::ListAllTurnGroups { cwd, limit } => {
+                            match transcripts.list_all_turn_groups(&cwd, limit) {
+                                Ok(groups) => Reply::AllTurnGroups { groups },
+                                Err(e) => Reply::Error { message: format!("查询回合列表失败: {e}") },
+                            }
+                        }
                         Request::GetUsageSummary { cwd, since_ts } => {
                             match transcripts.get_usage_summary(&cwd, since_ts) {
                                 Ok(rows) => Reply::UsageSummary { rows },

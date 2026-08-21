@@ -73,6 +73,24 @@ pub struct TurnGroupSummary {
     pub ts: u64,
 }
 
+/// 跨全部 session 的回合分组条目——对话面板扁平列表用(2026-08-21，取代
+/// 按 session 展开的树状展示)。比 `TurnGroupSummary` 多带 `conversation_id`
+/// /`file_path`/`agent`，让一行自己就能定位到"点开后该审阅哪个会话的哪
+/// 段"，不用再反查所属 session。`ts` 已经在 dozerd 侧做过兜底：分组内锚
+/// 点人类回合的时间缺失(=0)时回落为所属 session 的 `last_ts`（分组本身的
+/// 时间戳不可靠是已知问题，兜底不是"修复根因"，只是让排序有个可用的
+/// 时间）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TurnGroupEntry {
+    pub conversation_id: String,
+    pub file_path: String,
+    pub agent: AgentKind,
+    pub start_turn_index: i64,
+    pub end_turn_index: i64,
+    pub title: String,
+    pub ts: u64,
+}
+
 /// 会话内一个回合(人类发言 / AI 回复 / 工具执行结果)的明细;`role` 取值
 /// `"human"`/`"ai"`/`"tool_result"`(不用枚举是为了跟 sqlite 存储列直接
 /// 对应,减一层转换)。`is_error` 只对 `role == "tool_result"` 有意义,
@@ -243,6 +261,12 @@ pub enum Request {
     ListSessionTurnGroups {
         conversation_id: String,
     },
+    /// 某 cwd 下所有 session 的回合分组，拍平成一份按时间倒序的列表
+    /// (对话面板不再按 session 分树，spec 2026-08-21)。
+    ListAllTurnGroups {
+        cwd: String,
+        limit: u32,
+    },
     /// 某 cwd 下按会话分组的用量统计。
     GetUsageSummary {
         cwd: String,
@@ -372,6 +396,10 @@ pub enum Reply {
     SessionTurnGroups {
         conversation_id: String,
         groups: Vec<TurnGroupSummary>,
+    },
+    /// `ListAllTurnGroups` 应答；`groups` 已按 `ts` 倒序排好。
+    AllTurnGroups {
+        groups: Vec<TurnGroupEntry>,
     },
     /// `GetUsageSummary` 应答。
     UsageSummary {

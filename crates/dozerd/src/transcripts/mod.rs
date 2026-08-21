@@ -431,6 +431,100 @@ impl TranscriptStore {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// 跨该 cwd 下全部 session 的回合分组，拍平成一份按时间倒序的列表
+    /// (对话面板扁平展示用，取代按 session 展开的树；spec 2026-08-21)。
+    pub fn list_all_turn_groups(
+        &self,
+        cwd: &str,
+        limit: u32,
+    ) -> Result<Vec<dozer_core::protocol::TurnGroupEntry>> {
+        self.list_all_turn_groups_in(&dozer_core::agent_paths::home_dir(), cwd, limit)
+    }
+
+    /// `home` 显式传入版本,测试用。跟 `get_usage_summary_in` 同样的手法:
+    /// 先用 `list_conversations_in` 拿到这个 cwd 下的会话集合，一条 SQL
+    /// 把所有会话的回合一次取回、按 `conversation_id` 分区分组，而不是
+    /// 对每个 session 各 `prepare`/查询一次(`list_turn_groups` 的单会话
+    /// 版本不能直接循环复用——那会退回"N 条会话就扫 N 次"的老问题)。
+    ///
+    /// 分组时间戳(`group_ts`)取自锚点人类回合的 `ts`；已知有分组解析
+    /// 不出锚点、且组内全部 `ts` 也是 NULL 的情况(=0)，这种"不准确"用
+    /// 所属 session 的 `last_ts` 兜底，而不是试图修掉根因。
+    pub fn list_all_turn_groups_in(
+        &self,
+        home: &Path,
+        cwd: &str,
+        limit: u32,
+    ) -> Result<Vec<dozer_core::protocol::TurnGroupEntry>> {
+        let conversations = self.list_conversations_in(home, cwd, None, u32::MAX, 0)?;
+        if conversations.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids: Vec<String> = conversations
+            .iter()
+            .map(|c| c.conversation_id.clone())
+            .collect();
+        let placeholders = std::iter::repeat_n("?", ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let conn = self.conn.lock().expect("db lock");
+        let sql = format!(
+            "WITH marked AS (
+                SELECT conversation_id, turn_index, role, content, ts,
+                    SUM(CASE
+                        WHEN role = 'human' AND content NOT GLOB '/[A-Za-z0-9]*'
+                        THEN 1 ELSE 0
+                    END) OVER (PARTITION BY conversation_id ORDER BY turn_index) AS grp
+                FROM conversation_turns
+                WHERE conversation_id IN ({placeholders})
+             ),
+             grouped AS (
+                SELECT conversation_id,
+                    MIN(turn_index) AS start_turn_index,
+                    MAX(turn_index) AS end_turn_index,
+                    COALESCE(MAX(CASE
+                        WHEN role = 'human' AND content NOT GLOB '/[A-Za-z0-9]*'
+                        THEN substr(content, 1, 80)
+                    END), '') AS title,
+                    COALESCE(MAX(CASE
+                        WHEN role = 'human' AND content NOT GLOB '/[A-Za-z0-9]*'
+                        THEN ts
+                    END), MIN(ts), 0) AS group_ts
+                FROM marked
+                GROUP BY conversation_id, grp
+             )
+             SELECT g.conversation_id, c.file_path, c.agent_kind,
+                    g.start_turn_index, g.end_turn_index, g.title,
+                    CASE WHEN g.group_ts = 0 THEN c.last_ts ELSE g.group_ts END AS effective_ts
+             FROM grouped g
+             JOIN conversations c ON c.conversation_id = g.conversation_id
+             ORDER BY effective_ts DESC
+             LIMIT ?"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let limit_param = i64::from(limit);
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(
+                ids.iter()
+                    .map(|s| s as &dyn rusqlite::ToSql)
+                    .chain(std::iter::once(&limit_param as &dyn rusqlite::ToSql)),
+            ),
+            |row| {
+                let agent_kind: String = row.get(2)?;
+                Ok(dozer_core::protocol::TurnGroupEntry {
+                    conversation_id: row.get(0)?,
+                    file_path: row.get(1)?,
+                    agent: agent_from_str(&agent_kind),
+                    start_turn_index: row.get(3)?,
+                    end_turn_index: row.get(4)?,
+                    title: row.get(5)?,
+                    ts: row.get(6)?,
+                })
+            },
+        )?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     /// 用量聚合,`cwd` → 该项目在各 agent 下的存储目录;`since_ts` 非空时
     /// 只统计 `last_ts >= since_ts` 的会话。
     pub fn get_usage_summary(
@@ -836,6 +930,87 @@ mod tests {
         let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
         let groups = store.list_turn_groups("does-not-exist").unwrap();
         assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn list_all_turn_groups_flattens_across_sessions_sorted_by_ts_desc() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let cwd = std::path::Path::new("/proj");
+        let dir = dozer_core::agent_paths::claude_project_dir_in(home.path(), cwd);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // session "old"：唯一分组的锚点 ts=100。
+        let old = fixture(
+            &dir,
+            "old.jsonl",
+            concat!(
+                "{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":100,\"message\":{\"role\":\"user\",",
+                "\"content\":\"很久以前的问题\"}}\n",
+            ),
+        );
+        // session "new"：两个分组，锚点 ts 分别为 300、200——组内乱序，
+        // 验证排序是按分组各自的 ts，不是按所属 session 整体排。
+        let new = fixture(
+            &dir,
+            "new.jsonl",
+            concat!(
+                "{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":200,\"message\":{\"role\":\"user\",",
+                "\"content\":\"第一个问题\"}}\n",
+                "{\"type\":\"user\",\"uuid\":\"u2\",\"timestamp\":300,\"message\":{\"role\":\"user\",",
+                "\"content\":\"第二个问题\"}}\n",
+            ),
+        );
+        store.ingest_session(AgentKind::Claude, &old).unwrap();
+        store.ingest_session(AgentKind::Claude, &new).unwrap();
+
+        let groups = store
+            .list_all_turn_groups_in(home.path(), "/proj", 10)
+            .unwrap();
+        assert_eq!(groups.len(), 3, "{groups:?}");
+        let ts_order: Vec<u64> = groups.iter().map(|g| g.ts).collect();
+        assert_eq!(ts_order, vec![300, 200, 100], "应按 ts 全局倒序拍平");
+        assert_eq!(groups[0].conversation_id, "new");
+        assert_eq!(groups[0].title, "第二个问题");
+        assert_eq!(groups[2].conversation_id, "old");
+        assert_eq!(groups[2].agent, AgentKind::Claude);
+        assert_eq!(groups[2].file_path, old.to_string_lossy());
+    }
+
+    #[test]
+    fn list_all_turn_groups_falls_back_to_session_last_ts_when_group_ts_is_zero() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let cwd = std::path::Path::new("/proj");
+        let dir = dozer_core::agent_paths::claude_project_dir_in(home.path(), cwd);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // 整份会话都没有 timestamp 字段——分组的锚点 ts 算出来是 0，
+        // ingest 落库时 last_ts 会退回摄取时刻的 wall clock（非 0）。
+        let no_ts = fixture(
+            &dir,
+            "no_ts.jsonl",
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"没有时间戳\"}}\n",
+        );
+        store.ingest_session(AgentKind::Claude, &no_ts).unwrap();
+
+        let conversations = store
+            .list_conversations_in(home.path(), "/proj", None, 10, 0)
+            .unwrap();
+        assert_eq!(conversations.len(), 1);
+        let session_last_ts = conversations[0].last_ts;
+        assert_ne!(session_last_ts, 0, "ingest 应该给了个非零的摄取时刻兜底");
+
+        let groups = store
+            .list_all_turn_groups_in(home.path(), "/proj", 10)
+            .unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(
+            groups[0].ts, session_last_ts,
+            "分组自身 ts=0 时应该回落成所属 session 的 last_ts，而不是继续显示 0"
+        );
     }
 
     #[test]

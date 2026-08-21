@@ -1,7 +1,7 @@
 //! 历史对话展示用的中间表示(P1j 起步;P2b 扩展到 CodeBuddy/OpenCode;
 //! spec 2026-08-20 起数据来源改为查询 dozerd,本文件不再直接碰磁盘)。
 
-use dozer_core::protocol::{AgentKind, ConversationSummary, TurnGroupSummary};
+use dozer_core::protocol::{AgentKind, ConversationSummary, TurnGroupEntry};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -23,23 +23,29 @@ impl ConversationMeta {
     }
 }
 
-/// 一个回合分组在 GUI 侧的展示用镜像(`TurnGroupSummary` 的 1:1 拷贝，
-/// 跟 `ConversationMeta` 镜像 `ConversationSummary` 是同一个手法)。
+/// 一行回合分组在 GUI 侧的展示用镜像(`TurnGroupEntry` 的 1:1 拷贝)。
+/// 对话面板扁平列表用(2026-08-21，取代按 session 展开的树状展示)——
+/// 自带 `path`/`agent`，点击一行就能直接打开审阅，不用像树状版那样
+/// 反查所属 session。
 #[derive(Debug, Clone, PartialEq)]
-pub struct TurnGroupMeta {
+pub struct TurnGroupRow {
+    pub path: PathBuf,
+    pub agent: AgentKind,
     pub start_turn_index: i64,
     pub end_turn_index: i64,
     pub title: String,
     pub ts: u64,
 }
 
-impl TurnGroupMeta {
-    pub fn from_summary(s: &TurnGroupSummary) -> Self {
+impl TurnGroupRow {
+    pub fn from_entry(e: &TurnGroupEntry) -> Self {
         Self {
-            start_turn_index: s.start_turn_index,
-            end_turn_index: s.end_turn_index,
-            title: s.title.clone(),
-            ts: s.ts,
+            path: PathBuf::from(&e.file_path),
+            agent: e.agent,
+            start_turn_index: e.start_turn_index,
+            end_turn_index: e.end_turn_index,
+            title: e.title.clone(),
+            ts: e.ts,
         }
     }
 }
@@ -76,18 +82,26 @@ mod tests {
     }
 
     #[test]
-    fn turn_group_meta_from_summary_maps_fields() {
-        let s = dozer_core::protocol::TurnGroupSummary {
+    fn turn_group_row_from_entry_maps_fields() {
+        let e = TurnGroupEntry {
+            conversation_id: "abc".into(),
+            file_path: "/h/.claude/projects/x/abc.jsonl".into(),
+            agent: AgentKind::Claude,
             start_turn_index: 2,
             end_turn_index: 7,
             title: "标题".into(),
             ts: 100,
         };
-        let meta = TurnGroupMeta::from_summary(&s);
-        assert_eq!(meta.start_turn_index, 2);
-        assert_eq!(meta.end_turn_index, 7);
-        assert_eq!(meta.title, "标题");
-        assert_eq!(meta.ts, 100);
+        let row = TurnGroupRow::from_entry(&e);
+        assert_eq!(
+            row.path,
+            std::path::PathBuf::from("/h/.claude/projects/x/abc.jsonl")
+        );
+        assert_eq!(row.agent, AgentKind::Claude);
+        assert_eq!(row.start_turn_index, 2);
+        assert_eq!(row.end_turn_index, 7);
+        assert_eq!(row.title, "标题");
+        assert_eq!(row.ts, 100);
     }
 
     #[test]

@@ -3,8 +3,8 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use dozer_core::protocol::{
     AgentKind, AgentState, BookmarkInfo, BookmarkScope, ConversationSummary, PreviewContext,
-    ProjectInfo, Reply, Request, SessionInfo, TurnGroupSummary, TurnRecord, UsagePayload,
-    decode_line, encode_line,
+    ProjectInfo, Reply, Request, SessionInfo, TurnGroupEntry, TurnGroupSummary, TurnRecord,
+    UsagePayload, decode_line, encode_line,
 };
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -284,6 +284,21 @@ impl Client {
             .await?
         {
             Reply::SessionTurnGroups { groups, .. } => Ok(groups),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// 某 cwd 下所有 session 的回合分组，拍平成一份按时间倒序的列表
+    /// (对话面板扁平展示用，spec 2026-08-21)。
+    pub async fn list_all_turn_groups(&self, cwd: &str, limit: u32) -> Result<Vec<TurnGroupEntry>> {
+        match self
+            .roundtrip(&Request::ListAllTurnGroups {
+                cwd: cwd.into(),
+                limit,
+            })
+            .await?
+        {
+            Reply::AllTurnGroups { groups } => Ok(groups),
             other => bail!("意外应答: {other:?}"),
         }
     }

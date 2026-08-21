@@ -231,6 +231,12 @@ async fn list_conversations_and_usage_roundtrip_against_real_daemon() {
     let groups = client.list_session_turn_groups("no-such-id").await.unwrap();
     assert!(groups.is_empty());
 
+    let all_groups = client
+        .list_all_turn_groups("/no/such/project", 50)
+        .await
+        .unwrap();
+    assert!(all_groups.is_empty());
+
     let usage = client
         .get_usage_summary("/no/such/project", None)
         .await

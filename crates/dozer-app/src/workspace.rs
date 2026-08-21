@@ -34,7 +34,7 @@ use crate::app::{
     App, DEFAULT_COLS, DEFAULT_ROWS, HoverId, Message, PROJECT_PREVIEW_ID_OFFSET, PanelKind,
     ProjectId, panel_tab, tab_arrow_button, tab_divider, tab_window,
 };
-use crate::conversation::{self, ConversationMeta, TurnGroupMeta};
+use crate::conversation::{self, TurnGroupRow};
 use crate::delivery::{self};
 use crate::extensions::acceptance;
 use crate::extensions::browser;
@@ -488,15 +488,11 @@ pub struct Workspace {
     pub(crate) acceptance: acceptance::WorkspaceState,
     /// 进行中的会话审阅（审阅 tab 内容;None=未打开;P1i）。
     pub(crate) review: Option<ReviewView>,
-    /// 当前项目的对话列表（扫 Claude 目录；P1j）。
-    pub(crate) conversations: Vec<ConversationMeta>,
-    /// 会话列表面板里，哪些 session(按 `ConversationMeta.path` 标识)
-    /// 处于"已展开"状态——展开的才会懒加载它的回合分组(2026-08-21，
-    /// 树状展示改造)。
-    pub(crate) conversation_expanded: std::collections::HashSet<PathBuf>,
-    /// 已加载的回合分组，按 session 路径索引；只有展开过的 session 才
-    /// 会有 entry，折叠不清空缓存(重新展开不用再查一次)。
-    pub(crate) conversation_turn_groups: std::collections::HashMap<PathBuf, Vec<TurnGroupMeta>>,
+    /// 当前项目全部 session 的回合，拍平成一份按时间倒序的列表；
+    /// `None` = 还没加载过(会话列表面板会渲染"加载中…")，`Some(空
+    /// vec)` = 加载完成但确实没有记录(2026-08-21，取代按 session 展开
+    /// 的树状展示)。
+    pub(crate) conversation_turn_groups: Option<Vec<TurnGroupRow>>,
     /// 当前项目的 agent 用量统计（会话粒度；扫描+解析全量 transcript，比
     /// `conversations` 贵得多,所以不像它那样跟着 `DeliveryChecked` 自动
     /// 刷新——只在切到 Usage 面板或点手动刷新按钮时才重新扫
@@ -651,7 +647,7 @@ impl Workspace {
         ws.spawn_preview_context_push(io);
         spawn_project_git_refresh(project_id, repo_path.clone(), io);
         spawn_disk_usage_refresh(project_id, repo_path, io);
-        ws.spawn_conversations_refresh(io);
+        ws.spawn_all_turn_groups_refresh(io);
         ws.spawn_acceptance_count_refresh(io);
         browser::request_bookmarks_refresh(
             ws.project.as_ref().map(|p| p.id),
@@ -719,9 +715,7 @@ impl Workspace {
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
             acceptance: acceptance::WorkspaceState::default(),
             review: None,
-            conversations: Vec::new(),
-            conversation_expanded: std::collections::HashSet::new(),
-            conversation_turn_groups: std::collections::HashMap::new(),
+            conversation_turn_groups: None,
             usage: usage::WorkspaceState::default(),
             project: None,
             project_panel: project::WorkspaceState::default(),
@@ -1043,8 +1037,10 @@ impl Workspace {
         }
     }
 
-    /// 异步查当前项目的对话列表 → ConversationsRefreshed（改走 dozerd，P1j 起）。
-    pub(crate) fn spawn_conversations_refresh(&self, io: &ShellIo) {
+    /// 异步查当前项目全部 session 的回合，拍平成一份按时间倒序的列表
+    /// → `ConversationTurnGroupsRefreshed`(对话面板扁平展示用，取代按
+    /// session 展开的树；spec 2026-08-21)。
+    pub(crate) fn spawn_all_turn_groups_refresh(&self, io: &ShellIo) {
         let Some(project) = self.project.as_ref() else {
             return;
         };
@@ -1053,51 +1049,17 @@ impl Workspace {
         let client = io.client.clone();
         let proxy = io.proxy.clone();
         io.handle.spawn(async move {
-            let list: Vec<crate::conversation::ConversationMeta> = client
-                .list_conversations(&cwd.to_string_lossy(), None, 500, 0)
-                .await
-                .unwrap_or_default()
-                .iter()
-                .map(crate::conversation::ConversationMeta::from_summary)
-                .collect();
-            tracing::debug!(n = list.len(), cwd = %cwd.display(), "对话列表查询完成");
-            let _ = proxy.send_event(Message::ConversationsRefreshed(project_id, list));
-        });
-    }
-
-    /// 异步查某个 session 的回合分组 → ConversationTurnGroupsLoaded
-    /// (session 卡片展开时触发，懒加载，见 `Message::
-    /// ConversationExpandToggle` 的分发逻辑)。
-    pub(crate) fn spawn_turn_groups_load(&self, io: &ShellIo, path: PathBuf) {
-        let Some(project) = self.project.as_ref() else {
-            return;
-        };
-        let project_id = project.id;
-        let client = io.client.clone();
-        let proxy = io.proxy.clone();
-        let conversation_id = path
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        io.handle.spawn(async move {
             let result = client
-                .list_session_turn_groups(&conversation_id)
+                .list_all_turn_groups(&cwd.to_string_lossy(), 500)
                 .await
-                .map(|groups| {
-                    groups
-                        .iter()
-                        .map(crate::conversation::TurnGroupMeta::from_summary)
-                        .collect()
-                })
+                .map(|groups| groups.iter().map(TurnGroupRow::from_entry).collect())
                 .map_err(|e| e.to_string());
-            let _ = proxy.send_event(Message::ConversationTurnGroupsLoaded(
-                project_id, path, result,
-            ));
+            let _ = proxy.send_event(Message::ConversationTurnGroupsRefreshed(project_id, result));
         });
     }
 
     /// 异步扫当前项目的全部 transcript 并逐个解析用量 → `Usage(Loaded)`。
-    /// 比 `spawn_conversations_refresh` 贵得多(要读整份文件内容，不只是
+    /// 比 `spawn_all_turn_groups_refresh` 贵得多(要读整份文件内容，不只是
     /// 文件头)，所以不接入它那条"回合结束自动刷新"的调用链——只在
     /// 切到 Usage 面板(右图标栏)或手动刷新按钮时触发。
     pub(crate) fn spawn_usage_refresh(&self, io: &ShellIo) {
@@ -1297,7 +1259,7 @@ impl Workspace {
         // 带着旧 project_id 继续在后台跑,`Message::ProjectFsChanged` 送来
         // 的刷新信号会挂在一个此刻已经不对应这份 `Workspace` 的项目 id 上。
         self.git_watch = None;
-        self.conversations = Vec::new();
+        self.conversation_turn_groups = None;
         self.usage = usage::WorkspaceState::default();
         let project_id = project.id;
         let repo_path = PathBuf::from(&project.path);
@@ -1313,7 +1275,7 @@ impl Workspace {
         self.spawn_preview_context_push(io);
         spawn_project_git_refresh(project_id, repo_path.clone(), io);
         spawn_disk_usage_refresh(project_id, repo_path, io);
-        self.spawn_conversations_refresh(io);
+        self.spawn_all_turn_groups_refresh(io);
         self.spawn_acceptance_count_refresh(io);
         browser::request_bookmarks_refresh(
             self.project.as_ref().map(|p| p.id),
@@ -2483,10 +2445,10 @@ pub(crate) fn review_content<'a>(
     content
 }
 
-/// 对话列表面板(右面板区"对话"视图的列表侧):当前项目的对话记录卡片,
-/// 活跃对话置顶+金框标记。点卡片 → 展开/折叠该 session 的回合子行；
-/// 点子行 → `ConversationTurnGroupOpen` 驱动右侧审阅内容(2026-08-21，
-/// 树状展示改造，取代原先"点卡片直接审阅整份会话")。
+/// 对话列表面板(右面板区"对话"视图的列表侧):当前项目全部 session 的
+/// 回合拍平成一份按时间倒序的列表,不再按 session 分树(2026-08-21，用
+/// 户明确要求"不要 session 树,直接按时间倒序列出对话回合")。点一行 →
+/// `ConversationTurnGroupOpen` 驱动右侧审阅内容,只加载这一个回合区间。
 pub(crate) fn conversation_list_pane(
     ws: &Workspace,
     width: Length,
@@ -2498,26 +2460,33 @@ pub(crate) fn conversation_list_pane(
     let mut content =
         column![home_panel_head(IconKind::BotMessageSquare, "会话"),].spacing(region.gap);
 
-    let opens = ws.open_transcript_paths();
-    let active_n = ws
-        .conversations
-        .iter()
-        .filter(|c| conversation::is_current_conversation(&c.path, &opens))
-        .count();
+    let Some(rows) = ws.conversation_turn_groups.as_ref() else {
+        content = content.push(lh(text("加载中…")
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().dim)));
+        return container(content.padding(region.padding))
+            .width(width)
+            .height(Length::Fill)
+            .style(move |_t: &iced_widget::Theme| container::Style {
+                background: region.background.map(Into::into),
+                border: outer,
+                ..container::Style::default()
+            })
+            .into();
+    };
+
     content = content.push(
         row![
             lh(text("会话")
                 .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().dim)),
-            lh(
-                text(format!("{} 条 · {} 活跃", ws.conversations.len(), active_n))
-                    .size(byteui::theme::font::caption())
-                    .color(byteui::theme::color::current().dim)
-            ),
+            lh(text(format!("{} 条回合", rows.len()))
+                .size(byteui::theme::font::caption())
+                .color(byteui::theme::color::current().dim)),
         ]
         .spacing(6),
     );
-    if ws.conversations.is_empty() {
+    if rows.is_empty() {
         content = content.push(lh(text("暂无对话记录")
             .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().dim)));
@@ -2526,127 +2495,49 @@ pub(crate) fn conversation_list_pane(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    // 当前活跃置顶：先活后历史（列表本身 mtime 倒序）。
-    let mut ordered: Vec<&ConversationMeta> = ws.conversations.iter().collect();
-    ordered.sort_by_key(|c| conversation::is_current_conversation(&c.path, &opens) as u8);
-    ordered.reverse();
+    let opens = ws.open_transcript_paths();
     let mut cards = column![].spacing(region.gap);
-    for c in ordered {
-        let current = conversation::is_current_conversation(&c.path, &opens);
+    for g in rows {
+        let current = conversation::is_current_conversation(&g.path, &opens);
         let sub = if current {
-            format!(
-                "● 当前 · {}",
-                conversation_sub(c.agent.label(), c.modified_ms, now_ms)
-            )
+            format!("● 当前 · {}", relative_time_text(g.ts, now_ms))
         } else {
-            conversation_sub(c.agent.label(), c.modified_ms, now_ms)
+            relative_time_text(g.ts, now_ms)
         };
         let sub_color = if current {
             byteui::theme::color::current().green
         } else {
             byteui::theme::color::current().dim
         };
-        let expanded = ws.conversation_expanded.contains(&c.path);
-        let chevron = icons::view(
-            if expanded {
-                icons::IconKind::ChevronDown
-            } else {
-                icons::IconKind::ChevronRight
-            },
-            byteui::theme::icon_size::row(),
-            byteui::theme::color::current().dim,
-        );
-        let card = button(
-            row![
-                chevron,
-                column![
-                    row![
-                        byteui::feedback::status::dot(agent_dot_color(c.agent)),
-                        lh(text(c.title.clone())
-                            .size(byteui::theme::font::body())
-                            .color(byteui::theme::color::current().cream)),
-                    ]
-                    .spacing(6)
-                    .align_y(iced_widget::core::Alignment::Center),
-                    lh(text(sub)
-                        .size(byteui::theme::font::caption_sm())
-                        .color(sub_color)),
+        let row_btn = button(
+            column![
+                row![
+                    byteui::feedback::status::dot(agent_dot_color(g.agent)),
+                    lh(text(g.title.clone())
+                        .size(byteui::theme::font::body())
+                        .color(byteui::theme::color::current().cream)),
                 ]
-                .spacing(4),
+                .spacing(6)
+                .align_y(iced_widget::core::Alignment::Center),
+                lh(text(sub)
+                    .size(byteui::theme::font::caption_sm())
+                    .color(sub_color)),
             ]
-            .spacing(8)
-            .align_y(iced_widget::core::Alignment::Center),
+            .spacing(4),
         )
-        .on_press(Message::ConversationExpandToggle(c.path.clone()))
+        .on_press(Message::ConversationTurnGroupOpen(
+            g.path.clone(),
+            g.agent,
+            g.start_turn_index,
+            g.end_turn_index,
+        ))
         .width(Length::Fill)
         .padding(10)
         .style(byteui::interaction::cards::button_card(
             current,
             byteui::theme::color::current().card,
         ));
-        cards = cards.push(card);
-        if expanded {
-            if let Some(groups) = ws.conversation_turn_groups.get(&c.path) {
-                if groups.is_empty() {
-                    cards = cards.push(
-                        container(
-                            text("这个会话还没有可展示的回合")
-                                .size(byteui::theme::font::caption_sm())
-                                .color(byteui::theme::color::current().dim),
-                        )
-                        .padding(Padding {
-                            top: 4.0,
-                            left: 32.0,
-                            ..Padding::ZERO
-                        }),
-                    );
-                } else {
-                    for g in groups {
-                        let child = button(
-                            column![
-                                lh(text(g.title.clone())
-                                    .size(byteui::theme::font::caption())
-                                    .color(byteui::theme::color::current().cream)),
-                                lh(text(relative_time_text(g.ts, now_ms))
-                                    .size(byteui::theme::font::caption_sm())
-                                    .color(byteui::theme::color::current().dim)),
-                            ]
-                            .spacing(2),
-                        )
-                        .on_press(Message::ConversationTurnGroupOpen(
-                            c.path.clone(),
-                            g.start_turn_index,
-                            g.end_turn_index,
-                        ))
-                        .width(Length::Fill)
-                        .padding(Padding {
-                            top: 6.0,
-                            right: 10.0,
-                            bottom: 6.0,
-                            left: 32.0,
-                        })
-                        .style(byteui::interaction::cards::button_card(
-                            false,
-                            byteui::theme::color::current().card,
-                        ));
-                        cards = cards.push(child);
-                    }
-                }
-            } else {
-                cards = cards.push(
-                    container(
-                        text("加载中…")
-                            .size(byteui::theme::font::caption_sm())
-                            .color(byteui::theme::color::current().dim),
-                    )
-                    .padding(Padding {
-                        top: 4.0,
-                        left: 32.0,
-                        ..Padding::ZERO
-                    }),
-                );
-            }
-        }
+        cards = cards.push(row_btn);
     }
     content = content.push(
         Scrollable::new(cards)
@@ -3482,12 +3373,6 @@ pub(crate) fn relative_time_text(modified_ms: u64, now_ms: u64) -> String {
     }
 }
 
-/// 对话副行文案：`<agent> · <相对时间> · <规模>`（P1j）。
-pub(crate) fn conversation_sub(agent: &str, modified_ms: u64, now_ms: u64) -> String {
-    let when = relative_time_text(modified_ms, now_ms);
-    format!("{agent} · {when}")
-}
-
 /// AI 回合折叠行文案（P1i）：过程 = thinking + N 工具。
 pub(crate) fn ai_turn_summary(tools_len: usize, thinking: bool) -> String {
     match (thinking, tools_len) {
@@ -4089,12 +3974,6 @@ mod tests {
             effective_project_repo(None, Path::new("/home/me")),
             PathBuf::from("/home/me")
         );
-    }
-
-    #[test]
-    fn conversation_sub_line_format() {
-        let s = conversation_sub("claude", 1000, 1000);
-        assert_eq!(s, "claude · 刚刚", "agent + 相对时间，不再含文件大小");
     }
 
     #[test]
