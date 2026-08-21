@@ -1247,8 +1247,6 @@ pub enum Message {
     Acceptance(acceptance::Message),
     /// 会话审阅:解析完成（来源, 条目 / 错误文案）。
     ReviewLoaded(ProjectId, ReviewSource, Result<Vec<ReviewEntry>, String>),
-    /// 会话审阅:展开/收起第 n 个 AI 回合的过程区。
-    ReviewToggle(usize),
     /// 对话面板扁平列表刷新结果:当前项目全部 session 的回合，已经拍平
     /// 并按时间倒序排好(2026-08-21，取代按 session 展开的树状展示；见
     /// `Workspace::spawn_all_turn_groups_refresh`)。
@@ -3702,21 +3700,11 @@ impl App {
                         match result {
                             Ok(entries) => {
                                 rv.nonce = nonce;
-                                rv.ai_markdown = crate::workspace::parse_review_markdown(&entries);
                                 rv.entries = entries;
                                 rv.error = None;
                             }
                             Err(e) => rv.error = Some(e),
                         }
-                    }
-                });
-            }
-            Message::ReviewToggle(i) => {
-                self.with_focused_project(|ws, _io| {
-                    if let Some(rv) = &mut ws.review
-                        && !rv.expanded.remove(&i)
-                    {
-                        rv.expanded.insert(i);
                     }
                 });
             }
@@ -5862,8 +5850,6 @@ impl App {
                 entries: Vec::new(),
                 error: None,
                 nonce: 0,
-                expanded: std::collections::HashSet::new(),
-                ai_markdown: Vec::new(),
             });
             let after = start - 1;
             let limit = (end - start + 1).max(0) as u32;

@@ -62,11 +62,9 @@ use byteui::interaction::icons::IconKind;
 use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 use iced_code_editor::{CodeEditor, Message as EditorMessage};
-use iced_widget::core::font::Font;
 use iced_widget::core::mouse;
-use iced_widget::core::text::{Highlight, LineHeight};
+use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Color, Element, Length, Padding};
-use iced_widget::markdown;
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
 use std::collections::{HashMap, HashSet};
@@ -180,128 +178,6 @@ pub struct ReviewView {
     /// host.html?_r=<nonce>` 的查询参数,逼 wry 在内容变化时重新导航
     /// 拉取(同 `preview.rs::PreviewTab.reload_nonce` 的手法)。
     pub nonce: u64,
-    /// 展开了过程区的 AI 回合下标（entries 中的位置）。
-    pub expanded: std::collections::HashSet<usize>,
-    /// 与 `entries` 等长、下标对齐的预解析 markdown——非 `AiTurn` 条目对应
-    /// 位置放一份空 `Content`(构造代价可忽略)。只在 `entries` 落定时
-    /// (`ReviewLoaded`)解析一次，`view()` 只管渲染，不重复 parse。
-    pub ai_markdown: Vec<markdown::Content>,
-}
-
-/// `ReviewLoaded` 落 `entries` 时配套生成 `ai_markdown`：下标对齐,
-/// `AiTurn` 解析正文，其余位置放空 `Content` 占位。
-pub(crate) fn parse_review_markdown(entries: &[ReviewEntry]) -> Vec<markdown::Content> {
-    entries
-        .iter()
-        .map(|e| match e {
-            ReviewEntry::AiTurn { text, .. } => markdown::Content::parse(text),
-            ReviewEntry::Human { .. } | ReviewEntry::ToolResult { .. } => markdown::Content::new(),
-        })
-        .collect()
-}
-
-/// 对话审阅 AI 回合的 markdown 渲染样式:配色对齐 ByteBoy2077(链接/内联
-/// 代码走青色 `CYAN`,内联代码背景用卡片色 `CARD`),基础字号跟原先纯文本
-/// 渲染时的 `byteui::theme::font::subtitle()` 对齐,避免换 markdown 之后正文突然
-/// 变大变小。段落/标题本身的前景色不在 `markdown::Style` 的可控范围内
-/// (该结构只暴露链接色与内联代码色),交给 iced 默认主题决定。
-fn review_markdown_settings() -> markdown::Settings {
-    markdown::Settings::with_text_size(
-        byteui::theme::font::subtitle(),
-        markdown::Style {
-            font: Font::default(),
-            inline_code_highlight: Highlight {
-                background: byteui::theme::color::current().card.into(),
-                border: Border {
-                    color: byteui::theme::color::current().border,
-                    width: 1.0,
-                    radius: 4.0.into(),
-                },
-            },
-            // 内联代码高亮的背景/边框是叠在文字上的装饰,不占额外排版
-            // 宽度——padding 调大过(4px)会让高亮框直接吃掉两侧词间的
-            // 空格,视觉上文字贴着框边。iced 官方文档示例给的默认值是
-            // 左右各 1px,这里跟它对齐,不要再调大。
-            inline_code_padding: Padding {
-                top: 0.0,
-                right: 1.0,
-                bottom: 0.0,
-                left: 1.0,
-            },
-            inline_code_color: byteui::theme::color::current().cyan,
-            inline_code_font: Font::MONOSPACE,
-            code_block_font: Font::MONOSPACE,
-            link_color: byteui::theme::color::current().cyan,
-        },
-    )
-}
-
-/// `markdown::view` 默认给的段落/标题 `rich_text` 不带行高,回落到 iced
-/// 默认值——这个环境下 CJK 字形的默认行高偏紧,长段落换行后上下行会视觉
-/// 重叠(同 `lh()` 要处理的问题,见其文档)。iced 的 markdown 模块没开放
-/// 行高参数,只能自己实现 `Viewer` 重做 paragraph/heading 这两处,其余
-/// (列表/代码块/引用等)吃 trait 默认实现,照旧转发到官方版本。
-struct ReviewMarkdownViewer;
-
-impl<'a> markdown::Viewer<'a, Message, iced_widget::Theme, iced_renderer::Renderer>
-    for ReviewMarkdownViewer
-{
-    fn on_link_click(url: markdown::Uri) -> Message {
-        Message::Browser(browser::Message::OpenUrl(url))
-    }
-
-    fn paragraph(
-        &self,
-        settings: markdown::Settings,
-        text: &markdown::Text,
-    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-        iced_widget::rich_text(text.spans(settings.style))
-            .size(settings.text_size)
-            .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
-            .on_link_click(Self::on_link_click)
-            .color(byteui::theme::color::current().body)
-            .into()
-    }
-
-    fn heading(
-        &self,
-        settings: markdown::Settings,
-        level: &'a markdown::HeadingLevel,
-        text: &'a markdown::Text,
-        index: usize,
-    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-        let markdown::Settings {
-            h1_size,
-            h2_size,
-            h3_size,
-            h4_size,
-            h5_size,
-            h6_size,
-            text_size,
-            ..
-        } = settings;
-        container(
-            iced_widget::rich_text(text.spans(settings.style))
-                .on_link_click(Self::on_link_click)
-                .line_height(LineHeight::Relative(terminal_font::line_height_factor()))
-                .color(byteui::theme::color::current().cream)
-                .size(match level {
-                    markdown::HeadingLevel::H1 => h1_size,
-                    markdown::HeadingLevel::H2 => h2_size,
-                    markdown::HeadingLevel::H3 => h3_size,
-                    markdown::HeadingLevel::H4 => h4_size,
-                    markdown::HeadingLevel::H5 => h5_size,
-                    markdown::HeadingLevel::H6 => h6_size,
-                }),
-        )
-        .padding(Padding {
-            top: if index > 0 { text_size.0 / 2.0 } else { 0.0 },
-            right: 0.0,
-            bottom: 0.0,
-            left: 0.0,
-        })
-        .into()
-    }
 }
 
 /// 预览编辑弹层的进行中会话(全局至多一个;弹层是应用级模态)。
@@ -2394,74 +2270,15 @@ pub(crate) fn review_content<'a>(
         );
     }
     if rv.entries.is_empty() {
-        return content.push(lh(text("暂无对话")
+        content = content.push(lh(text("暂无对话")
             .size(byteui::theme::font::subtitle())
             .color(byteui::theme::color::current().dim)));
     }
-    for (i, e) in rv.entries.iter().enumerate() {
-        match e {
-            ReviewEntry::Human { text: t } => {
-                content = content.push(lh(text(format!("▎{t}"))
-                    .size(byteui::theme::font::title())
-                    .color(byteui::theme::color::current().cream)));
-            }
-            ReviewEntry::AiTurn {
-                text: body,
-                tools,
-                thinking,
-            } => {
-                if !body.is_empty() {
-                    content = content.push(markdown::view_with(
-                        rv.ai_markdown[i].items(),
-                        review_markdown_settings(),
-                        &ReviewMarkdownViewer,
-                    ));
-                }
-                let expanded = rv.expanded.contains(&i);
-                let glyph = if expanded { "▾ " } else { "▸ " };
-                content = content.push(
-                    button(lh(text(format!(
-                        "{glyph}{}",
-                        ai_turn_summary(tools.len(), *thinking)
-                    ))
-                    .size(byteui::theme::font::body())
-                    .color(byteui::theme::color::current().dim)))
-                    .on_press(Message::ReviewToggle(i))
-                    .style(|_t, _s| button::Style {
-                        background: None,
-                        text_color: byteui::theme::color::current().dim,
-                        ..button::Style::default()
-                    }),
-                );
-                if expanded {
-                    if *thinking {
-                        content = content.push(lh(text("  · 思考(略)")
-                            .size(byteui::theme::font::label())
-                            .color(byteui::theme::color::current().dim)));
-                    }
-                    for tool in tools {
-                        content = content.push(lh(text(format!("  · {tool}"))
-                            .size(byteui::theme::font::body())
-                            .color(byteui::theme::color::current().cyan)));
-                    }
-                }
-            }
-            ReviewEntry::ToolResult {
-                content: t,
-                is_error,
-            } => {
-                let color = if *is_error {
-                    byteui::theme::color::current().red
-                } else {
-                    byteui::theme::color::current().dim
-                };
-                let glyph = if *is_error { "⚠ " } else { "→ " };
-                content = content.push(lh(text(format!("  {glyph}{t}"))
-                    .size(byteui::theme::font::body())
-                    .color(color)));
-            }
-        }
-    }
+    // 有内容时:真正的渲染由 review_content_pane 区域叠加的 wry webview
+    // 负责(dozer://review-trace/host.html,数据经 dozer://review-trace/
+    // data.json 拉取),这里不再手写 iced Column——2026-08-21 webview
+    // trace 改造,见
+    // docs/superpowers/plans/2026-08-21-review-content-webview-trace.md。
     content
 }
 
@@ -3458,16 +3275,6 @@ pub(crate) fn relative_time_text(modified_ms: u64, now_ms: u64) -> String {
     }
 }
 
-/// AI 回合折叠行文案（P1i）：过程 = thinking + N 工具。
-pub(crate) fn ai_turn_summary(tools_len: usize, thinking: bool) -> String {
-    match (thinking, tools_len) {
-        (false, 0) => "过程:无".into(),
-        (true, 0) => "过程:思考".into(),
-        (false, n) => format!("过程:{n} 工具"),
-        (true, n) => format!("过程:思考 + {n} 工具"),
-    }
-}
-
 /// 交付/验收使用的仓库：当前项目优先，无则回落会话 cwd（P1f 现状；P1g D4）。
 pub(crate) fn effective_project_repo(active: Option<&Path>, session_cwd: &Path) -> PathBuf {
     active
@@ -4092,14 +3899,6 @@ mod tests {
             &ReviewSource::FileRange(PathBuf::from("/t/x.jsonl"), 0, 4),
             3
         ));
-    }
-
-    #[test]
-    fn ai_turn_summary_text() {
-        assert_eq!(ai_turn_summary(0, false), "过程:无");
-        assert_eq!(ai_turn_summary(2, false), "过程:2 工具");
-        assert_eq!(ai_turn_summary(2, true), "过程:思考 + 2 工具");
-        assert_eq!(ai_turn_summary(0, true), "过程:思考");
     }
 
     #[test]
