@@ -2162,7 +2162,7 @@ pub enum Message {
     /// 项目:`git_watch` 监听到工作区/`.git` 引用变化,该重新跑一次 git 刷新
     /// 了(D4)。`Relevance` 决定这次触发要不要顺带做 Plan 2 的 Git Log 快照
     /// 重建。这条消息同时喂给 Files(刷新 git_statuses)、Project(刷新
-    /// branch/dirty/worktrees)和 Git Log(条件触发快照重建)三个独立扩展,
+    /// branch/dirty)和 Git Log(条件触发快照重建)三个独立扩展,
     /// 内核继续拦截、分别转发,不包进任何一个 extension 的 `Message`。
     ProjectFsChanged(ProjectId, git_watch::Relevance),
     /// Git Log 面板的全部消息,内核只转发不解读——见
@@ -4840,10 +4840,6 @@ impl App {
             Message::ProjectSlotLoaded(id, payload) => self.project_slot_loaded(id, payload),
             Message::ProjectFsChanged(project_id, relevance) => {
                 self.project_fs_changed(project_id, relevance)
-            }
-            Message::GitLog(git_log::Message::ProjectTabOpen(p)) => {
-                // worktree 条带里点其它 worktree,转成内核的切项目消息。
-                self.update(Message::ProjectTabOpen(p));
             }
             Message::GitLog(git_log::Message::ColumnDragStart) => {
                 // Git Log 三栏布局里左右分割线开始拖拽——扩展发不了 app 级
@@ -8136,7 +8132,6 @@ fn panel_body<'a>(
         PanelKind::GitLog => git_log::view(
             app,
             &app.git_log,
-            ws.project_panel.worktrees(),
             app.dims.git_log_split,
             app.dims.git_log_file_diff_split,
             app.panel_mirrored(PanelKind::GitLog),
@@ -8484,8 +8479,8 @@ fn left_panel_area<'a>(
         return inner;
     }
     let region = zone;
-    // worktree 速览条("本工作区：xxx" + 其它 worktree 切换)现在由 `git_log::view`
-    // 自己渲染在文件夹路径下方,不再在这里额外包一层,避免盖在面板标题上方。
+    // 其它 worktree 切换条已从 Git Log 面板移除(用户需求),这里不再包任何
+    // 额外层,直接透传面板本体。
     let zone_body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> = inner;
     // 聚焦态外框:本 zone 拿到焦点(= `active_zone`)时描 GOLD 边,否则沿用
     // region 的默认(无描边)外框。半径保持与默认外框一致。

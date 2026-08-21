@@ -7,7 +7,6 @@
 //! 画一根直线,commit 是线上的一个圆点,父子关系用直线连接(不是贝塞尔)。
 //! 验证通过、决定转正时,再补动画/交互/性能优化。
 use crate::app::{App, HoverId};
-use crate::delivery::WorktreeInfo;
 use crate::theme;
 use iced_widget::core::alignment;
 use iced_widget::core::{Border, Element, Font, Length};
@@ -224,10 +223,6 @@ pub enum Message {
     /// commit 列表客户端翻页"更多"图标按钮:只在已缓存的 `cache` 里往下
     /// 多展开一页(`COMMIT_PAGE_SIZE` 条),不问 git 要新数据。
     CommitListMore,
-    /// 点 worktree 条带里的其它 worktree,切过去。内核(`app.rs`)在
-    /// `Message::GitLog` 分发里拦截,转成 `Message::ProjectTabOpen`,
-    /// 不会转发到 `update`(见其 `unreachable!` 分支)。
-    ProjectTabOpen(PathBuf),
     DetailLoaded(PathBuf, git2::Oid, Result<CommitDetail, String>),
     SnapshotLoaded(PathBuf, usize, Result<GitLogSnapshot, String>),
     /// 点文件列表某一行,选中它(右下面板据此展示该文件的 diff)。
@@ -390,11 +385,6 @@ pub fn update(
             state.pages += 1;
             None
         }
-        Message::ProjectTabOpen(_) => {
-            unreachable!(
-                "ProjectTabOpen 由内核在 Message::GitLog 分支里直接处理(切到对应 worktree),不会转发到这里"
-            )
-        }
         Message::BranchPickerOpen => {
             state.branch_picker_open = true;
             None
@@ -431,68 +421,6 @@ pub fn update(
             )
         }
     }
-}
-
-/// 同仓库其它 worktree 压成一行小字,标示当前提交图对应哪个 worktree 上下文。
-/// 主 worktree + N 个链接 worktree 各自的分支会散落在同一条图上,这个条带帮
-/// 用户分辨 `[→main]` 到底指谁。它渲染在文件夹路径下方(见 `view` 的
-/// `header` 之后)。"本工作区"是状态展示,不是甲方动作,不能用 GOLD(CLAUDE.md
-/// 硬性裁决,GOLD 专属甲方动作)——真正的动作是点其它 worktree 切过去,那些
-/// 按钮才该用 GOLD。
-fn worktree_strip<'a>(
-    worktrees: &'a [WorktreeInfo],
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let others = worktrees
-        .iter()
-        .filter(|w| !w.is_current)
-        .collect::<Vec<_>>();
-    let mut chips: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = vec![];
-    for o in others {
-        let label = match (&o.branch, o.missing) {
-            (Some(b), true) => format!("{b} (缺失)"),
-            (Some(b), _) => b.clone(),
-            (None, true) => "无分支 (缺失)".into(),
-            (None, _) => "无分支".into(),
-        };
-        if o.missing {
-            // 目录已经不在磁盘上,没有可切换的目标——保留纯展示文案。
-            chips.push(
-                text(label)
-                    .size(byteui::theme::font::caption())
-                    .color(byteui::theme::color::current().dim)
-                    .into(),
-            );
-        } else {
-            chips.push(
-                iced_widget::button(
-                    text(label)
-                        .size(byteui::theme::font::caption())
-                        .color(byteui::theme::color::current().gold),
-                )
-                .on_press(Message::ProjectTabOpen(o.path.clone()))
-                .padding(0)
-                .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
-                    background: None,
-                    text_color: byteui::theme::color::current().gold,
-                    ..iced_widget::button::Style::default()
-                })
-                .into(),
-            );
-        }
-    }
-    if chips.is_empty() {
-        return container(iced_widget::Space::new())
-            .height(Length::Shrink)
-            .into();
-    }
-    row![
-        iced_widget::Row::with_children(chips).spacing(12),
-        iced_widget::Space::new().width(Length::Fill),
-    ]
-    .padding([4, 8])
-    .width(Length::Fill)
-    .height(Length::Shrink)
-    .into()
 }
 
 /// 异步重建 Git Log 快照,`max_count` 由调用方决定(通常是
@@ -815,7 +743,6 @@ fn file_list_view<'a>(
 pub fn view<'a>(
     app: &App,
     state: &'a State,
-    worktrees: &'a [WorktreeInfo],
     git_log_split: f32,
     git_log_file_diff_split: f32,
     mirror: bool,
@@ -862,12 +789,7 @@ pub fn view<'a>(
     }
 
     let head_branch = snapshot.head_branch();
-    // 顶部不再显示"本工作区:<分支>"(与 footbar 的分支名重复);仅当存在
-    // 其它(关联)工作树时才把切换条挂上,避免单工作树时凭空多一条间隙。
     let mut left = column![head].spacing(8);
-    if worktrees.iter().any(|w| !w.is_current) {
-        left = left.push(worktree_strip(worktrees));
-    }
     if let Some(err) = error {
         left = left.push(
             text(format!("git log 读取失败: {err}"))
