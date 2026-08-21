@@ -1768,7 +1768,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "dozer-app"
-version = "0.5.26"
+version = "0.5.27"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -7327,6 +7327,14 @@ dependencies = [
  "iced_widget",
  "iced_winit",
  "tracing-subscriber",
+ "winit",
+ "wry",
+]
+
+[[package]]
+name = "spike-trace-webview"
+version = "0.1.0"
+dependencies = [
  "winit",
  "wry",
 ]
