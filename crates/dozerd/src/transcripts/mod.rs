@@ -258,7 +258,10 @@ impl TranscriptStore {
     }
 
     /// keyset 分页:返回 `turn_index > after_turn_index` 的前 `limit` 条。
-    /// `after_turn_index` 传 `-1` 表示从第一条开始。
+    /// `after_turn_index` 传 `-1` 表示从第一条开始。JOIN `conversations`
+    /// 拿 `agent_kind` 只为了给 `parse::extract_turn_trace_detail` 挑对
+    /// 解析形状——不新增参数(client/protocol 签名都不用改),`raw_json`
+    /// 每行都读一次、当场解析,不落新列(见 spec"读时解析"一节)。
     pub fn get_conversation_turns(
         &self,
         conversation_id: &str,
@@ -267,21 +270,26 @@ impl TranscriptStore {
     ) -> Result<Vec<dozer_core::protocol::TurnRecord>> {
         let conn = self.conn.lock().expect("db lock");
         let mut stmt = conn.prepare(
-            "SELECT turn_index, role, content, tools_summary, thinking, ts, is_error
-             FROM conversation_turns
-             WHERE conversation_id = ?1 AND turn_index > ?2
-             ORDER BY turn_index ASC LIMIT ?3",
+            "SELECT t.turn_index, t.role, t.content, t.thinking, t.ts, t.is_error,
+                    t.raw_json, c.agent_kind
+             FROM conversation_turns t
+             JOIN conversations c ON c.conversation_id = t.conversation_id
+             WHERE t.conversation_id = ?1 AND t.turn_index > ?2
+             ORDER BY t.turn_index ASC LIMIT ?3",
         )?;
         let rows = stmt.query_map(params![conversation_id, after_turn_index, limit], |row| {
-            let tools_json: String = row.get(3)?;
+            let raw_json: String = row.get(6)?;
+            let agent_kind: String = row.get(7)?;
+            let detail = parse::extract_turn_trace_detail(&raw_json, agent_from_str(&agent_kind));
             Ok(dozer_core::protocol::TurnRecord {
                 turn_index: row.get(0)?,
                 role: row.get(1)?,
                 content: row.get(2)?,
-                tools_summary: serde_json::from_str(&tools_json).unwrap_or_default(),
-                thinking: row.get::<_, i64>(4)? != 0,
-                ts: row.get(5)?,
-                is_error: row.get::<_, i64>(6)? != 0,
+                tool_calls: detail.tool_calls,
+                thinking: row.get::<_, i64>(3)? != 0,
+                thinking_text: detail.thinking_text,
+                ts: row.get(4)?,
+                is_error: row.get::<_, i64>(5)? != 0,
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -889,6 +897,35 @@ mod tests {
         assert_eq!(second_page.len(), 2);
         assert_eq!(second_page[0].turn_index, 2);
         assert_eq!(second_page[1].turn_index, 3);
+    }
+
+    #[test]
+    fn get_conversation_turns_surfaces_thinking_text_and_tool_calls() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let text = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":100,\"message\":{\"role\":\"user\",",
+            "\"content\":\"改一下 README\"}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":110,\"message\":{\"content\":[",
+            "{\"type\":\"thinking\",\"thinking\":\"先看看现有内容\"},",
+            "{\"type\":\"tool_use\",\"name\":\"Edit\",\"input\":{\"file_path\":\"README.md\"}},",
+            "{\"type\":\"text\",\"text\":\"改好了\"}]}}\n"
+        );
+        let file = fixture(tmp.path(), "s2.jsonl", text);
+        store.ingest_session(AgentKind::Claude, &file).unwrap();
+
+        let turns = store.get_conversation_turns("s2", -1, 10).unwrap();
+        let ai_turn = turns.iter().find(|t| t.role == "ai").unwrap();
+        assert_eq!(ai_turn.thinking_text.as_deref(), Some("先看看现有内容"));
+        assert_eq!(ai_turn.tool_calls.len(), 1);
+        assert_eq!(ai_turn.tool_calls[0].summary, "Edit README.md");
+        assert!(
+            ai_turn.tool_calls[0]
+                .input_json
+                .as_deref()
+                .unwrap()
+                .contains("README.md")
+        );
     }
 
     #[test]
