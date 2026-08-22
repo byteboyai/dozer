@@ -1109,8 +1109,18 @@ pub fn view<'a>(
     width: iced_widget::core::Length,
     outer: iced_widget::core::Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let head =
-        crate::homespace::home_panel_head(byteui::interaction::icons::IconKind::Server, "主机");
+    // head 自己套一层 `project_pane` padding(同 todo 左栏 `header` 的既有
+    // 模式),不再靠外层 `base` 兜底——`list`/`ssh_footer_bar` 各自已经带了
+    // 自己的水平内距(20/`pp.left,right`,对齐 todo 的 `content_pane`/
+    // `sidebar_pane` 二者外层都是零 padding 的既有设计),外层如果再叠一层
+    // `project_pane` padding 就会跟它们的内距重复叠加,导致卡片左右边距比
+    // todo 面板宽了 8px、footbar 分割线两端也比 todo 面板多缩进 8px(验收
+    // 反馈:主机卡片边距/footbar 分割线长度、按钮位置跟 todo 面板不一致)。
+    let head = container(crate::homespace::home_panel_head(
+        byteui::interaction::icons::IconKind::Server,
+        "主机",
+    ))
+    .padding(crate::theme::region::project_pane().padding);
 
     let mut list = column![].spacing(12).padding([0, 20]);
 
@@ -1154,13 +1164,14 @@ pub fn view<'a>(
     // 在面板最下方——footer-bar 不随主机列表滚动,始终可见(见 `ssh_footer_bar`)。
     let body = column![head, scroll, ssh_footer_bar()].spacing(0);
 
-    // 外层补 `project_pane` 同款 padding(此前完全没有,导致标题贴顶,
-    // 分割线比 Files/Project/Todo 左栏高了近 10px,跟隔壁终端 pane 的
-    // tab 栏分割线对不齐,见验收反馈)。
+    // 不再在这里叠一层 `project_pane` padding——标题的垂直对齐已经改由
+    // `head` 自己套 `project_pane().padding` 解决(同 todo 左栏 `header`
+    // 的既有模式),`list`/`ssh_footer_bar` 也各自带了自己的水平内距,外层
+    // 保持零 padding 才不会跟它们的内距重复叠加(同 todo `content_pane`/
+    // `sidebar_pane` 外层零 padding 的既有设计)。
     let base = container(body)
         .width(width)
         .height(iced_widget::core::Length::Fill)
-        .padding(crate::theme::region::project_pane().padding)
         .style(
             move |_t: &iced_widget::Theme| iced_widget::container::Style {
                 background: Some(byteui::theme::color::current().bg.into()),

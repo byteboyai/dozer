@@ -443,89 +443,21 @@ fn home_project_list_view(
 
     col = col.push(home_panel_head(icons::IconKind::LayoutList, "项目"));
 
-    // 搜索框:真正的 iced `text_input`(Stage 4,手写不经 `search_box::view`
-    // 共享组件),颜色取首页自己独立配置的调色板(`theme::homespace_color`,
-    // 与工作区 `byteui::theme::color` 分开维护)。提交按钮不再嵌进
-    // `search_box::view` 内部,改成外层 `row!` 拼一个独立图标按钮,与外层
-    // 容器共享 1px 边框——同 Stage 3 浏览器地址栏"输入框 + 星标按钮各自
-    // 独立小部件、外层容器画共享边框"的处理方式。
+    // 搜索框:原为手写实现(不经共享组件),现收敛到
+    // `byteui::form::search_box`——所有面板搜索框统一样式的基准就是这份
+    // 首页项目列表搜索框的设计(需求:其它面板搜索框都要跟它一致)。
     let editing = app.home_project_search_focused();
-    let search_field: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        iced_widget::text_input("搜索项目…", &app.home_project_search_draft)
-            .id(home_search_field_id())
-            .on_input(Message::HomeProjectSearchInput)
-            .on_submit(Message::HomeProjectSearchSubmit)
-            .size(theme::homespace_font::body())
-            .padding(0)
-            .style(
-                move |_t: &iced_widget::Theme, status: iced_widget::text_input::Status| {
-                    let _ = status; // 边框由外层容器统一画,这里只需要透明背景
-                    iced_widget::text_input::Style {
-                        background: iced_widget::core::Color::TRANSPARENT.into(),
-                        border: iced_widget::core::Border {
-                            color: iced_widget::core::Color::TRANSPARENT,
-                            width: 0.0,
-                            radius: 0.0.into(),
-                        },
-                        icon: theme::homespace_color::dim(),
-                        placeholder: theme::homespace_color::dim(),
-                        value: theme::homespace_color::cream(),
-                        selection: byteui::theme::color::mix(
-                            theme::homespace_color::gold(),
-                            theme::homespace_color::card_bg(),
-                            0.6,
-                        ),
-                    }
-                },
-            )
-            .into();
-
-    let submit_button = icons::icon_button_entry(
-        icons::IconKind::Search,
-        byteui::theme::icon_size::row(),
-        false,
-        false,
-        app.hover_progress(HoverId::HomeProjectSearchSubmit),
-        true,
-        byteui::theme::icon_size::row() + 12.0,
-        true,
+    let highlight = editing || !app.home_project_search.is_empty();
+    col = col.push(byteui::form::search_box::view(
+        "搜索项目…",
+        &app.home_project_search_draft,
+        Some(home_search_field_id()),
+        highlight,
+        Message::HomeProjectSearchInput,
         Message::HomeProjectSearchSubmit,
+        app.hover_progress(HoverId::HomeProjectSearchSubmit),
         |hovered| Message::Hover(HoverId::HomeProjectSearchSubmit, hovered),
-        "搜索",
-    );
-
-    let content_h = byteui::theme::icon_size::row() + 12.0;
-    col = col.push(
-        container(
-            row![
-                container(search_field)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .align_y(iced_widget::core::alignment::Vertical::Center)
-                    .align_x(iced_widget::core::alignment::Horizontal::Left),
-                container(submit_button).align_y(iced_widget::core::alignment::Vertical::Center),
-            ]
-            .width(Length::Fill)
-            .height(Length::Fixed(content_h))
-            .align_y(iced_widget::core::Alignment::Center),
-        )
-        .width(Length::Fill)
-        .height(Length::Fixed(content_h + 12.0))
-        .padding([6, 8])
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(theme::homespace_color::card_bg().into()),
-            border: iced_widget::core::Border {
-                color: if editing || !app.home_project_search.is_empty() {
-                    theme::homespace_color::gold()
-                } else {
-                    theme::homespace_color::border()
-                },
-                width: 1.0,
-                radius: 4.0.into(),
-            },
-            ..container::Style::default()
-        }),
-    );
+    ));
 
     // 按已提交的搜索词过滤,过滤后再分页——"更多..."按钮/页数据此按过滤后
     // 的结果集算,不是全量 `recent_projects`。
@@ -658,12 +590,15 @@ fn home_project_list_view(
 /// 底部 footbar 里的「＋新增项目」按钮(甲方动作)。样式与 workspace 项目
 /// 面板 `project_footer_bar` 的按钮一致:面板底色实底(`card_bg`)+ `border`
 /// 描边 + 奶油字(`cream`),而非原来的金色描边——描边色从 GOLD/奶油改成
-/// 与全局 footer-bar 统一的 `border`。按钮 `width(Fill)` 撑满 footbar 行。
+/// 与全局 footer-bar 统一的 `border`。字号用 `label`(13px,同
+/// `project_footer_bar` 的 `byteui::theme::font::label()`)——曾经错用
+/// `caption_sm`(11px),两个 footbar 视觉不一致的根因。按钮 `width(Fill)`
+/// 撑满 footbar 行。
 fn home_new_project_button()
 -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     button(
         text("＋新增项目")
-            .size(theme::homespace_font::caption_sm())
+            .size(theme::homespace_font::label())
             .color(theme::homespace_color::cream()),
     )
     .on_press(Message::ProjectTabPickFolder)
@@ -806,8 +741,14 @@ fn home_recent_conversations_card(
         );
     } else {
         for c in &app.home_recent_conversations {
+            // 卡片样式对齐会话面板 `workspace::conversation_list_pane`(需求:
+            // "改为和会话面板-会话卡片一样的方式")——图标+标题一行,agent
+            // 名称挪到第二行(元信息),跟时间一起缩进到标题下方。项目名称
+            // 会话面板不需要(已经限定在单个项目内),这里跨项目必须保留,
+            // 插进 agent 与时间之间。
             let meta = format!(
-                "{} · {}",
+                "{} · {} · {}",
+                c.meta.agent.label(),
                 c.project_name,
                 relative_time_text(c.meta.modified_ms, now_ms)
             );
@@ -821,12 +762,9 @@ fn home_recent_conversations_card(
                                 agent_dot_color(c.meta.agent),
                             ),
                             column![
-                                lh(text(c.meta.agent.label())
-                                    .size(theme::homespace_font::body())
-                                    .color(theme::homespace_color::cream())),
                                 lh(text(c.meta.title.clone())
                                     .size(theme::homespace_font::body())
-                                    .color(theme::homespace_color::dim())),
+                                    .color(theme::homespace_color::cream())),
                                 lh(text(meta)
                                     .size(theme::homespace_font::caption_sm())
                                     .color(theme::homespace_color::dim())),

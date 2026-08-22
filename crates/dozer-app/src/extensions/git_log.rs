@@ -9,9 +9,12 @@
 use crate::app::{App, HoverId};
 use crate::theme;
 use iced_widget::core::alignment;
-use iced_widget::core::{Border, Element, Font, Length};
+use iced_widget::core::widget::operation::Focusable;
+use iced_widget::core::widget::{Id, Operation};
+use iced_widget::core::{Border, Element, Font, Length, Rectangle};
 use iced_widget::{MouseArea, column, container, row, scrollable, text};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 /// 首次打开面板拉多少个 commit——够看出分叉/合并的形状,又不至于让
 /// revwalk + 分支归属分析在大仓库上明显卡顿(gleisbau 的 API 是"从头按
@@ -223,6 +226,11 @@ pub enum Message {
     /// commit 列表客户端翻页"更多"图标按钮:只在已缓存的 `cache` 里往下
     /// 多展开一页(`COMMIT_PAGE_SIZE` 条),不问 git 要新数据。
     CommitListMore,
+    /// commit 搜索框草稿变化(iced `text_input::on_input`)。
+    SearchInput(String),
+    /// 回车 / 点搜索按钮:把草稿落成生效的 `search` 过滤词,同时把翻页
+    /// 重置回第 1 页(过滤后结果变少,停在旧页码没有意义)。
+    SearchSubmit,
     DetailLoaded(PathBuf, git2::Oid, Result<CommitDetail, String>),
     SnapshotLoaded(PathBuf, usize, Result<GitLogSnapshot, String>),
     /// 点文件列表某一行,选中它(右下面板据此展示该文件的 diff)。
@@ -282,6 +290,18 @@ pub struct State {
     /// "第一页",不需要额外的构造器初始化(同 `commit_visible_count` 的
     /// "+1 折算"注释)。
     pages: usize,
+    /// commit 搜索框已提交生效的过滤词(空串 = 不过滤,按摘要大小写不敏感
+    /// 子串匹配)。`git_log::State` 不按项目分(见结构体顶部注释),切项目
+    /// 不清空——同 `pages` 目前也不在切项目时重置的既有现状,不在这次改动
+    /// 里单独修。
+    search: String,
+    /// 搜索框编辑态草稿——同 `workspace::Workspace` 会话搜索的 draft/committed
+    /// 分离手法,打字期间只改草稿,回车/点搜索按钮才落成 `search`。
+    search_draft: String,
+    /// 搜索框是否持有 iced 真实焦点。**不是**应用层手动置位的镜像——每帧
+    /// 渲染循环里 `CaptureSearchFocus` 问一遍 iced 真相后立刻写进这里
+    /// (`main.rs` 键盘路由读它决定要不要把按键放行)。
+    search_focused: bool,
 }
 
 impl State {
@@ -305,6 +325,17 @@ impl State {
     /// "缓存是不是已经属于当前聚焦项目",不用时不重建。
     pub fn cache_repo_path(&self) -> Option<&Path> {
         self.cache.as_ref().map(|c| c.repo_path())
+    }
+
+    /// 搜索框是否持有 iced 真实焦点(`App::git_log_search_focused` 转发)。
+    pub fn search_focused(&self) -> bool {
+        self.search_focused
+    }
+
+    /// 每帧渲染循环调用(`App::set_git_log_search_focused` 转发),见字段
+    /// 上的文档。
+    pub(crate) fn set_search_focused(&mut self, focused: bool) {
+        self.search_focused = focused;
     }
 
     /// 分支列表是否还没查过(`BranchPickerOpen` 首次展开时,内核据此判断
@@ -383,6 +414,15 @@ pub fn update(
         }
         Message::CommitListMore => {
             state.pages += 1;
+            None
+        }
+        Message::SearchInput(s) => {
+            state.search_draft = s;
+            None
+        }
+        Message::SearchSubmit => {
+            state.search = state.search_draft.clone();
+            state.pages = 0;
             None
         }
         Message::BranchPickerOpen => {
@@ -515,6 +555,70 @@ pub fn commit_detail(repo_path: &Path, oid: git2::Oid) -> Result<CommitDetail, S
     Ok(CommitDetail { files })
 }
 
+/// commit 搜索框(iced 原生 `text_input`)的 `widget::Id`:main.rs 每帧
+/// `interface.operate` 用 `CaptureSearchFocus` 问真实焦点态。
+pub fn search_field_id() -> Id {
+    Id::new("git-log-search-box")
+}
+
+static SEARCH_FOCUSED: std::sync::LazyLock<Mutex<bool>> =
+    std::sync::LazyLock::new(|| Mutex::new(false));
+
+pub fn take_search_focused() -> bool {
+    *SEARCH_FOCUSED.lock().unwrap()
+}
+
+/// 每帧 `interface.operate()` 跑一遍。`traverse` 必须调用传入闭包(见
+/// [[dozer-operation-traverse-noop-bug]])。
+pub struct CaptureSearchFocus;
+impl Operation<()> for CaptureSearchFocus {
+    fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
+        if id == Some(&search_field_id()) {
+            *SEARCH_FOCUSED.lock().unwrap() = state.is_focused();
+        }
+    }
+
+    fn traverse(&mut self, operate: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {
+        operate(self);
+    }
+}
+
+/// commit 列表关键字过滤:摘要(commit 消息第一行,`CommitRow::summary`)
+/// 大小写不敏感子串匹配,空关键字不过滤。拆成纯函数(同
+/// `workspace::filter_turn_groups`)方便 headless 单测。
+fn filter_commit_rows<'a>(rows: &'a [CommitRow], query: &str) -> Vec<&'a CommitRow> {
+    if query.is_empty() {
+        return rows.iter().collect();
+    }
+    let needle = query.to_lowercase();
+    rows.iter()
+        .filter(|r| r.summary.to_lowercase().contains(&needle))
+        .collect()
+}
+
+/// commit 列表上方的搜索框:形状与会话列表搜索框
+/// (`workspace::conversation_list_pane`)一致——真正的 iced `text_input`
+/// (`byteui::form::input_text`)+ 右侧搜索图标按钮。不会边输入边过滤,
+/// 敲回车/点搜索按钮后由 `Message::SearchSubmit` 把草稿落成生效的
+/// `search`。`highlight` 传 `search_active`:即使当前没聚焦,只要列表被
+/// 搜索词过滤中就持续金框提示。
+fn commit_search_box<'a>(
+    app: &App,
+    state: &'a State,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let search_active = state.search_focused() || !state.search.is_empty();
+    byteui::form::search_box::view(
+        "搜索提交内容…",
+        &state.search_draft,
+        Some(search_field_id()),
+        search_active,
+        Message::SearchInput,
+        Message::SearchSubmit,
+        app.hover_progress(HoverId::GitLogSearchSubmit),
+        |hovered| Message::Hover(HoverId::GitLogSearchSubmit, hovered),
+    )
+}
+
 /// 把一行 commit 的 `refs` 拼成形如 `[main][origin/main]` 的前缀文本;当前
 /// HEAD 所在的本地分支加 `→` 标记(`[→main]`)。空 `refs` 返回空字符串。
 /// 不在这里上色——canvas 文本整体只有一个 `Color`,没法给子串单独上色,
@@ -547,13 +651,13 @@ fn ref_labels_text(refs: &[RefLabel], head_branch: Option<&str>) -> String {
 /// 几百条 commit 一次性铺开会让这块 `scrollable` 明显变沉。
 fn commit_list_view<'a>(
     app: &App,
-    snapshot: &'a GitLogSnapshot,
+    rows: &[&'a CommitRow],
     selected: Option<git2::Oid>,
     head_branch: Option<&'a str>,
     visible_count: usize,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut list = column![].spacing(8);
-    for (i, row) in snapshot.rows.iter().enumerate().take(visible_count) {
+    for row in rows.iter().take(visible_count) {
         let is_selected = selected == Some(row.oid);
         let icon_kind = if row.is_merge {
             byteui::interaction::icons::IconKind::GitMerge
@@ -627,28 +731,24 @@ fn commit_list_view<'a>(
         // 统一卡片样式:选中/一般/hover 三态(选中=金边、hover=金边+填充、
         // 一般态=描边),不再用左侧 3px 金竖条表示选中。内部间距与卡片内边距
         // 对齐 Agent 面板的 agent 卡片(`workspace.rs::agent_card`:行距 4、
-        // `padding(10)`),避免 commit 卡片内部过挤。
-        let hovered = app.hover_progress(HoverId::Commit(i)) > 0.0;
-        let inner = container(line).padding(10).width(Length::Fill).style(
-            move |_t: &iced_widget::Theme| {
-                byteui::interaction::cards::container_card(
-                    is_selected,
-                    hovered,
-                    byteui::theme::color::current().card,
-                )
-            },
-        );
-        let area = MouseArea::new(inner)
-            .interaction(iced_widget::core::mouse::Interaction::Pointer)
-            .on_enter(Message::Hover(HoverId::Commit(i), true))
-            .on_exit(Message::Hover(HoverId::Commit(i), false))
-            .on_press(Message::SelectCommit(row.oid));
-        list = list.push(area);
+        // `padding(10)`),避免 commit 卡片内部过挤。原先
+        // `MouseArea`+`container_card`+`hover_progress` 那套是指数衰减动画,
+        // 鼠标移开后高亮会拖尾残留(验收反馈:hover 要"停"2s 才消退)——改回
+        // agent 卡片同款原生 `button`+`button_card`,亮灭直接由 iced 自己的
+        // `button::Status` 驱动,没有额外状态、没有拖尾。
+        let card = iced_widget::button(container(line).padding(10))
+            .on_press(Message::SelectCommit(row.oid))
+            .width(Length::Fill)
+            .style(byteui::interaction::cards::button_card(
+                is_selected,
+                byteui::theme::color::current().card,
+            ));
+        list = list.push(card);
     }
     // 还有没画出来的 commit 时,在列表末尾加一个居中的"更多"图标按钮
     // (Lucide ellipsis,无外边框/背景,hover DIM→GOLD)——点它翻下一页
     // (`Message::CommitListMore`,纯客户端状态,不问 git 要新数据)。
-    if snapshot.rows.len() > visible_count {
+    if rows.len() > visible_count {
         let more_color = byteui::theme::color::mix(
             byteui::theme::color::current().dim,
             byteui::theme::color::current().gold,
@@ -822,13 +922,23 @@ pub fn view<'a>(
                 .color(byteui::theme::color::current().red),
         );
     }
-    left = left.push(commit_list_view(
-        app,
-        snapshot,
-        state.selected,
-        head_branch,
-        state.commit_visible_count(),
-    ));
+    left = left.push(commit_search_box(app, state));
+    let filtered = filter_commit_rows(&snapshot.rows, &state.search);
+    if filtered.is_empty() {
+        left = left.push(
+            text("无匹配结果")
+                .size(byteui::theme::font::caption())
+                .color(byteui::theme::color::current().dim),
+        );
+    } else {
+        left = left.push(commit_list_view(
+            app,
+            &filtered,
+            state.selected,
+            head_branch,
+            state.commit_visible_count(),
+        ));
+    }
     left = left.push(git_panel_footer_bar(state, head_branch));
     let left_with_picker = iced_widget::stack![
         container(left).width(Length::Fill).height(Length::Fill),
@@ -1743,5 +1853,56 @@ mod tests {
         assert!(state.selected.is_none());
         assert!(state.detail.is_none());
         assert_eq!(state.pending, Some((repo_path, 50)));
+    }
+
+    fn make_commit_row(summary: &str) -> CommitRow {
+        CommitRow {
+            short_sha: "abc1234".to_string(),
+            summary: summary.to_string(),
+            author: None,
+            refs: Vec::new(),
+            oid: git2::Oid::from_bytes(&[0; 20]).unwrap(),
+            time: 0,
+            is_merge: false,
+        }
+    }
+
+    #[test]
+    fn filter_commit_rows_empty_query_returns_all() {
+        let rows = vec![
+            make_commit_row("fix login bug"),
+            make_commit_row("refactor parser"),
+        ];
+        assert_eq!(filter_commit_rows(&rows, "").len(), 2);
+    }
+
+    #[test]
+    fn filter_commit_rows_matches_summary_case_insensitive_substring() {
+        let rows = vec![
+            make_commit_row("Fix Login Bug"),
+            make_commit_row("refactor parser"),
+        ];
+        let filtered = filter_commit_rows(&rows, "login");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].summary, "Fix Login Bug");
+    }
+
+    #[test]
+    fn filter_commit_rows_no_match_yields_empty() {
+        let rows = vec![make_commit_row("fix login bug")];
+        assert!(filter_commit_rows(&rows, "不存在").is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_submit_commits_draft_and_resets_pages() {
+        let handle = tokio::runtime::Handle::current();
+        let mut state = State {
+            pages: 3,
+            search_draft: "login".to_string(),
+            ..State::default()
+        };
+        assert!(update(&mut state, Message::SearchSubmit, &handle, |_| {}).is_none());
+        assert_eq!(state.search, "login");
+        assert_eq!(state.pages, 0);
     }
 }

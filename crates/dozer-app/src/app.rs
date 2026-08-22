@@ -184,6 +184,9 @@ pub enum HoverId {
     /// Todo 面板底部"新增任务"输入框内的提交按钮(`CircleArrowUp`):静止
     /// DIM,hover 平滑过渡到 GOLD(见 `extensions::todo::todo_footer_bar`)。
     TodoAddSubmit,
+    /// Todo 面板搜索框内的提交按钮(`Search`):静止 DIM,hover 平滑过渡到
+    /// GOLD,处理方式同 `TodoAddSubmit`(见 `extensions::todo::todo_search_bar`)。
+    TodoSearchSubmit,
     /// 首页项目列表搜索框内的提交按钮(`Search`):静止 DIM,hover 平滑
     /// 过渡到 GOLD,处理方式同 `TodoAddSubmit`(见
     /// `homespace::home_project_list_view`)。
@@ -191,9 +194,6 @@ pub enum HoverId {
     /// 首页项目列表"更多..."翻页图标按钮(`Ellipsis`):静止 DIM,hover
     /// 平滑过渡到 GOLD,处理方式同 `HomeProjectSearchSubmit`。
     HomeProjectMore,
-    /// Git Log 面板 commit 列表某行(按下标区分):hover 时填充 `CARD` 背景 +
-    /// 金色描边(见 `extensions::git_log::commit_list_view`,统一卡片样式)。
-    Commit(usize),
     /// Git Log 面板 commit 列表末尾"更多"翻页图标按钮,处理方式同
     /// `HomeProjectMore`(见 `extensions::git_log::commit_list_view`)。
     CommitListMore,
@@ -206,6 +206,10 @@ pub enum HoverId {
     /// Git Log 面板改动文件列表某行(按下标区分):hover 时填充 `CARD` 背景 +
     /// 金色描边(见 `extensions::git_log::file_list_view`,统一卡片样式)。
     GitFile(usize),
+    /// Git Log 面板 commit 搜索框内的提交按钮(`Search`):静止 DIM,hover
+    /// 平滑过渡到 GOLD,处理方式同 `ConversationSearchSubmit`(见
+    /// `extensions::git_log::commit_search_box`)。
+    GitLogSearchSubmit,
     /// 主机面板单个主机卡(按 host_id 哈希区分,`HoverId` 整体 `Copy` 不能
     /// 塞 `String`,同 `SshTabItem` 的精度取舍):hover 时填充 `CARD` 背景 +
     /// 金色描边(见 `extensions::ssh::host_card`,统一卡片样式)。
@@ -1263,9 +1267,14 @@ pub enum Message {
     /// 回车 / 点搜索按钮:把草稿落成生效的 `conversation_search` 过滤词,
     /// 同时把翻页重置回第 1 页(过滤后结果变少,停在旧页码没有意义)。
     ConversationSearchSubmit,
-    /// 会话列表底部 footbar 的 agent 筛选项点击:`None` = 全部。同样把翻页
-    /// 重置回第 1 页。
+    /// 会话列表底部 agent 筛选下拉某一项点击:`None` = 全部。同样把翻页
+    /// 重置回第 1 页,并顺带收起下拉(同 `files::Message::BranchSwitch` 选
+    /// 完即收起下拉的既有语义)。
     ConversationAgentFilterSelect(Option<AgentKind>),
+    /// 展开/收起会话列表底部的 agent 筛选下拉(样式对齐文件树面板的分支
+    /// 切换下拉)。
+    ConversationAgentPickerOpen,
+    ConversationAgentPickerClose,
     /// 切换当前显示的 tab（这里的 `usize` 是 vec 位置——用户点击的是
     /// "屏幕上第几个 tab"，跟稳定 id 是两回事）。**仅限左侧终端 tab 栏本身
     /// 的按钮**发这条消息——`select_tab()` 顺带把 `tab_drag` 武装成"这一
@@ -1324,7 +1333,10 @@ pub enum Message {
     /// 拖拽中:当前窗口逻辑宽 + 光标逻辑 x(main.rs 换算好传入,`update()`
     /// 统一算+夹取,不与 main.rs 分摊裁剪逻辑)。构造方为 main.rs 的
     /// `CursorMoved` 续传。
-    ColumnDrag { window_width: f32, logical_x: f32 },
+    ColumnDrag {
+        window_width: f32,
+        logical_x: f32,
+    },
     /// 松开左键,结束拖拽并触发写盘。构造方为 main.rs 的
     /// `MouseInput{Released}` 分支。
     ColumnDragEnd,
@@ -1332,7 +1344,10 @@ pub enum Message {
     /// `horizontal_divider_bar` 的 `on_press`。
     RowDragStart(RowDivider),
     /// 纵向拖拽中:当前窗口逻辑高 + 光标逻辑 y(main.rs 换算好传入)。
-    RowDrag { window_height: f32, logical_y: f32 },
+    RowDrag {
+        window_height: f32,
+        logical_y: f32,
+    },
     /// 松开左键,结束纵向拖拽并触发写盘。
     RowDragEnd,
     /// 拖拽中,光标进入了 `group` 组的第 `index` 个 tab 上空——拖起的源项
@@ -1340,7 +1355,10 @@ pub enum Message {
     /// `MouseArea::on_move`(仅在 `tab_drag` 命中本组时挂载)。按住页签＝
     /// 准备拖的来源,由各选中处理(`SelectTab`/`PreviewSelectTab`/
     /// `ProjectTabSwitch` 及浏览器 `SelectTab`)在按住瞬间把 `tab_drag` 置位。
-    TabDragMove { group: TabGroup, index: usize },
+    TabDragMove {
+        group: TabGroup,
+        index: usize,
+    },
     /// 松开左键,结束页签拖拽。构造方为 main.rs 的 `MouseInput{Released}`
     /// 分支;项目页签组顺带把新顺序写盘。
     TabDragEnd,
@@ -1348,7 +1366,10 @@ pub enum Message {
     /// 重排,跨栏是记录悬停目标。构造方为该栏每个按钮顶层的
     /// `MouseArea::on_move`(仅在 `rail_drag` 命中时挂载)。按住图标＝准备
     /// 拖的来源由 `panel_select` 在按住瞬间武装(`self.rail_drag` 置位)。
-    RailDragMove { side: Side, index: usize },
+    RailDragMove {
+        side: Side,
+        index: usize,
+    },
     /// 松开左键,结束图标栏面板拖拽。构造方为 main.rs 的
     /// `MouseInput{Released}` 分支;跨栏移动此时才提交并写盘。
     RailDragEnd,
@@ -1448,7 +1469,10 @@ pub enum Message {
     /// 预览 tab 右键菜单:在 `preview_pane` 某 tab 上右键打开,携带 tab 下标
     /// 与该文件是否可编辑(仅文本类文件,决定菜单"编辑"项是否出现)。定位
     /// 坐标复用 `files.last_right_click`(main.rs 右键时写入)。
-    PreviewTabContextMenu { idx: usize, editable: bool },
+    PreviewTabContextMenu {
+        idx: usize,
+        editable: bool,
+    },
     /// 预览 tab 右键菜单关闭(点遮罩 / 按 Esc)。
     PreviewTabContextMenuClose,
     /// Project 面板右配对预览:打开本地文件为新 tab,语义同 `PreviewOpenPath`。
@@ -1469,7 +1493,10 @@ pub enum Message {
     /// `PreviewEditOpenByTab`。
     ProjectPreviewEditOpenByTab(usize),
     /// Project 面板右配对预览 tab 右键菜单,语义同 `PreviewTabContextMenu`。
-    ProjectPreviewTabContextMenu { idx: usize, editable: bool },
+    ProjectPreviewTabContextMenu {
+        idx: usize,
+        editable: bool,
+    },
     /// Project 面板右配对预览 tab 右键菜单关闭。
     ProjectPreviewTabContextMenuClose,
     /// 浏览器面板的全部消息,内核只转发不解读——见
@@ -2759,6 +2786,20 @@ impl App {
         }
     }
 
+    /// Git Log 面板 commit 搜索框是否持有 iced 真实焦点(main.rs 键盘路由
+    /// 用)。`git_log::State` 不按项目分(同 `home_project_search_focused`
+    /// 直接挂在 `App` 上,不用走 `active_workspace` 那套间接)。
+    pub fn git_log_search_focused(&self) -> bool {
+        self.git_log.search_focused()
+    }
+
+    /// 每帧渲染循环调用:把 `extensions::git_log::CaptureSearchFocus` 问到
+    /// 的真实焦点态写进 `git_log::State`(`main.rs` 键盘路由随后读
+    /// `git_log_search_focused` 消费)。
+    pub fn set_git_log_search_focused(&mut self, focused: bool) {
+        self.git_log.set_search_focused(focused);
+    }
+
     /// 首页项目搜索框是否持有 iced 真实焦点(main.rs 键盘路由用)。
     pub fn home_project_search_focused(&self) -> bool {
         self.home_project_search_focused
@@ -3853,6 +3894,17 @@ impl App {
                 self.with_focused_project(|ws, _io| {
                     ws.conversation_agent_filter = agent;
                     ws.conversation_pages = 0;
+                    ws.conversation_agent_picker_open = false;
+                });
+            }
+            Message::ConversationAgentPickerOpen => {
+                self.with_focused_project(|ws, _io| {
+                    ws.conversation_agent_picker_open = true;
+                });
+            }
+            Message::ConversationAgentPickerClose => {
+                self.with_focused_project(|ws, _io| {
+                    ws.conversation_agent_picker_open = false;
                 });
             }
 

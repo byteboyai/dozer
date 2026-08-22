@@ -1051,6 +1051,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 || app.tree_edit_focused()
                 || app.home_project_search_focused()
                 || app.conversation_search_focused()
+                || app.git_log_search_focused()
                 || app.ssh_form_open()
                 || app.database_form_open()
                 || app.comment_focused()
@@ -2343,6 +2344,23 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     false
                                 };
 
+                                // Git Log commit 搜索框:同款每帧查真实焦点态。该面板
+                                // 默认挂左栏,但同样可以被拖到右栏(见
+                                // `App::rail_cross_apply`),两侧都要查,同
+                                // `conversation_search_focused` 的既有处理。
+                                let git_log_search_focused =
+                                    if matches!(app.left_view(), crate::app::PanelKind::GitLog)
+                                        || app.right_view == crate::app::PanelKind::GitLog
+                                    {
+                                        interface.operate(
+                                            renderer,
+                                            &mut extensions::git_log::CaptureSearchFocus,
+                                        );
+                                        extensions::git_log::take_search_focused()
+                                    } else {
+                                        false
+                                    };
+
                                 // 验收意见框(Stage 6):同款每帧查真实焦点态。
                                 let comment_focused =
                                     if matches!(app.left_view(), crate::app::PanelKind::Acceptance)
@@ -2545,6 +2563,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 app.set_project_name_focused(name_edit_focused);
                                 app.set_query_focused(query_focused);
                                 app.set_conversation_search_focused(conversation_search_focused);
+                                app.set_git_log_search_focused(git_log_search_focused);
 
                                 // 同上,浏览器地址栏的真实焦点态现在才写回工作区
                                 // (供下一帧键盘路由 `browser_addr_focused` 消费)。

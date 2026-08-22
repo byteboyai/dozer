@@ -955,32 +955,22 @@ pub fn view<'a>(
     // `iced_widget::text_input`:鼠标点击聚焦、方向键/选区/IME 全部走 iced
     // 标准管线自己处理,`main.rs` 只需要每帧问一遍它是否持有真实焦点
     // (`files_search_focused`)决定要不要把键盘事件放行,不再需要点击盒子
-    // 手动进入自绘编辑态。`highlight` 传 `search_active`:即使当前没聚焦,
-    // 只要树被搜索词过滤中就持续金框提示。
-    let search_active = !ws_state.search_query.is_empty();
-    let search_box = byteui::form::input_text::view(
+    // 手动进入自绘编辑态。样式收敛到 `byteui::form::search_box`(需求:所有
+    // 面板搜索框统一成首页项目列表搜索框那一套),不再是各画一套的
+    // `input_text` + 独立图标按钮;`highlight`(内部叫 `search_active`)
+    // 传真实聚焦态或已生效搜索词非空,即使当前没聚焦,只要树被搜索词
+    // 过滤中就持续金框提示。
+    let search_active = ws_state.search_focused() || !ws_state.search_query.is_empty();
+    let box_len = byteui::theme::icon_size::row() + 12.0;
+    let search_box = byteui::form::search_box::view(
         "搜索目录…",
         &ws_state.tree_search,
-        false,
         Some(search_field_id()),
         search_active,
-        Some(Message::SearchSubmit),
-        false,
         Message::SearchInput,
-    );
-    let box_len = byteui::theme::icon_size::row() + 12.0;
-    let search_button = icons::icon_button_entry(
-        icons::IconKind::FolderSearch,
-        byteui::theme::icon_size::row(),
-        false,
-        false,
-        search_hover_t,
-        true,
-        box_len,
-        true,
         Message::SearchSubmit,
+        search_hover_t,
         |hovered| Message::ToolbarHover(FilesToolbarTarget::SearchSubmit, hovered),
-        "搜索",
     );
 
     // "显示/隐藏点文件"按钮:切换后 `ToggleDotfiles` 调
@@ -1010,7 +1000,7 @@ pub fn view<'a>(
         "切换点文件",
     );
     header = header.push(
-        row![search_box, search_button, dotfiles_button]
+        row![search_box, dotfiles_button]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center)
             .padding([6, 0]),

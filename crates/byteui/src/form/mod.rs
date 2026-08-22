@@ -1,5 +1,6 @@
 pub mod checkbox;
 pub mod input_text;
+pub mod search_box;
 pub mod select;
 pub mod switch;
 pub mod text_area;
@@ -15,6 +16,7 @@ mod tests {
         Input(String),
         Selected(&'static str),
         Edited(iced_widget::text_editor::Action),
+        Submit,
     }
 
     #[test]
@@ -35,5 +37,15 @@ mod tests {
         let _ = select::view(options, Some(&"a"), Msg::Selected);
         let content = iced_widget::text_editor::Content::new();
         let _ = text_area::view(&content, "placeholder", None, false, None, Msg::Edited);
+        let _ = search_box::view(
+            "placeholder",
+            "value",
+            None,
+            false,
+            Msg::Input,
+            Msg::Submit,
+            0.0,
+            Msg::Toggled,
+        );
     }
 }

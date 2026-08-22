@@ -641,6 +641,16 @@ impl WorkspaceState {
     pub fn commit_search(&mut self) {
         self.search = self.search_draft.clone();
     }
+
+    /// 生效词和草稿都清空(切分类时调用,见 `Message::FilterSet` 处理器)——
+    /// 只清 `search` 会留下草稿里的旧关键词,用户以为搜索框已经清空,其实
+    /// 再次回车/失焦提交时会把旧词重新落成生效过滤,不是真正的重置。切
+    /// 回原来那个用关键词搜过的分类也一样清空,不做"记住每个分类各自的
+    /// 搜索词"那套(需求原话:哪怕切回去也要重置)。
+    pub fn clear_search(&mut self) {
+        self.search.clear();
+        self.search_draft.clear();
+    }
 }
 
 /// 搜索框稳定的 iced widget id。
@@ -1084,7 +1094,12 @@ pub fn update(
         // 高度拖拽在 app 层 `todo_message` 已早退,不会到这里;保留 arm 仅
         // 为 match 穷尽。
         Message::AddResizeStart => {}
-        Message::FilterSet(f) => ws_state.filter = f,
+        Message::FilterSet(f) => {
+            ws_state.filter = f;
+            // 切分类重置搜索关键词过滤(需求:哪怕切回原来那个用关键词
+            // 搜过的分类也要重置,不做"记住每个分类各自搜索词"那套)。
+            ws_state.clear_search();
+        }
         Message::ViewModeSet(m) => ws_state.view_mode = m,
         Message::RowSelect(idx) => {
             ws_state.selected_row = idx;
@@ -1582,18 +1597,19 @@ fn todo_clear_footer_bar<'a>(
 /// 标准 iced 管线。`active` = 列表正被 `search` 过滤时持续金框提示(同
 /// Files `search_box` 的 `highlight`)。
 fn todo_search_bar<'a>(
-    draft: &'a str,
-    active: bool,
+    app: &App,
+    ws_state: &'a WorkspaceState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    byteui::form::input_text::view(
+    let highlight = ws_state.search_focused() || !ws_state.search.is_empty();
+    byteui::form::search_box::view(
         "搜索任务…",
-        draft,
-        false,
+        &ws_state.search_draft,
         Some(todo_search_field_id()),
-        active,
-        Some(Message::SearchSubmit),
-        false,
+        highlight,
         Message::SearchInput,
+        Message::SearchSubmit,
+        app.hover_progress(HoverId::TodoSearchSubmit),
+        |hovered| Message::Hover(HoverId::TodoSearchSubmit, hovered),
     )
 }
 
@@ -1610,12 +1626,9 @@ fn todo_list_view<'a>(
     // 搜索框的水平/垂直间距对齐任务卡片的间距规格(卡片列表 `list` 是
     // `spacing(8)` + `padding([0, 20])`):左右 20、上下 8,不再贴边顶到
     // tab 分隔线与首张卡片。
-    let search = container(todo_search_bar(
-        &ws_state.search_draft,
-        !ws_state.search.is_empty(),
-    ))
-    .padding([8, 20])
-    .width(Length::Fill);
+    let search = container(todo_search_bar(app, ws_state))
+        .padding([8, 20])
+        .width(Length::Fill);
 
     let mut list = column![].spacing(8).padding([0, 20]);
     if visible_idx.is_empty() {
@@ -3214,6 +3227,50 @@ mod tests {
             &root,
         );
         assert_eq!(ws_state.search, "关键字");
+    }
+
+    #[test]
+    fn filter_set_clears_search_even_switching_back_to_same_filter() {
+        let (_dir, root) = project_dir_with_todo("# Todo\n");
+        let mut ws_state = WorkspaceState::default();
+        let mut app_state = AppState::default();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::SearchInput("关键字".to_string()),
+            1,
+            &root,
+        );
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::SearchSubmit,
+            1,
+            &root,
+        );
+        assert_eq!(ws_state.search, "关键字");
+
+        // 切到另一个分类:搜索词清空。
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::FilterSet(TodoFilter::Done),
+            1,
+            &root,
+        );
+        assert!(ws_state.search.is_empty());
+        assert!(ws_state.search_draft.is_empty());
+
+        // 再切回原来那个分类(All):即使是搜过词的那个分类,也不恢复。
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::FilterSet(TodoFilter::All),
+            1,
+            &root,
+        );
+        assert!(ws_state.search.is_empty());
+        assert!(ws_state.search_draft.is_empty());
     }
 
     #[test]
