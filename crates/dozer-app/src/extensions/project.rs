@@ -769,8 +769,9 @@ pub fn view<'a>(
 
 /// 项目信息面板底部 footer-bar,结构与文件树面板的 `git_footer_bar` 一致:
 /// 1px `BORDER` 分隔线 + `padding([6, 8])` 容器。当前放「修复项目 / 删除项目」
-/// 两个并排圆角按钮,行为仅为 UI 占位(`RepairProject` / `DeleteProject`),
-/// 实际逻辑后续接入。
+/// 两个并排圆角按钮:「修复项目」触发 `RepairProject`(见 `spawn_scaffold_run`),
+/// 「删除项目」触发 `DeleteProjectRequest` 打开三选一确认弹窗(见
+/// `project_delete_confirm_popup`)。
 fn project_footer_bar(
     ws_state: &WorkspaceState,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
