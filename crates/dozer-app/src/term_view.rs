@@ -25,6 +25,7 @@
 use crate::app::Message;
 use crate::term_model::{Cell, TerminalModel};
 use crate::theme::terminal_font;
+use dozer_core::protocol::AgentKind;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::font::Weight;
 use iced_widget::core::mouse::{self, ScrollDelta};
@@ -126,12 +127,32 @@ type Rgb = (u8, u8, u8);
 /// 变成实打实的前景填色,所以要拿 `term_bg`(面板默认背景的具体 RGB)
 /// 顶上——不能继续留 `None`,`None` 在 `Run` 里的含义是"这格不填底色",
 /// 反相格恰恰相反,一定要填。
-fn effective_colors(cell: &Cell, term_bg: Rgb) -> (Rgb, Option<Rgb>) {
+///
+/// `is_opencode`:opencode CLI(Bubble Tea/Lip Gloss TUI)固定用灰阶近黑
+/// `rgb(10,10,10)`/`rgb(40,40,40)` 画整屏底色,不是查询终端真实背景色
+/// 得出的结果,是它自己代码里硬编码的深色主题——跟 dozer 主题的深藏青
+/// `#08141d` 不一致,视觉上像挖出一块纯黑补丁(用户反馈)。这类显式背景
+/// 按 opencode 专属特判剥离,退回 `term_bg` 露出面板底色。不做成通用规则
+/// 是因为其它 agent 没这毛病,贸然剥离所有暗色背景可能误伤故意用深色块
+/// 强调的场景(比如 diff/日志高亮)。
+fn effective_colors(cell: &Cell, term_bg: Rgb, is_opencode: bool) -> (Rgb, Option<Rgb>) {
     if cell.inverse {
         (cell.bg.unwrap_or(term_bg), Some(cell.fg))
     } else {
-        (cell.fg, cell.bg)
+        let bg = cell
+            .bg
+            .filter(|&rgb| !(is_opencode && is_opencode_dark_chrome(rgb)));
+        (cell.fg, bg)
     }
+}
+
+/// 见 [`effective_colors`] 上的 `is_opencode` 说明:灰阶(r=g=b)且足够暗
+/// 的显式背景视为 opencode 自己的固定深色主题底色,不是终端真实场景需要
+/// 保留的着色。阈值 40 覆盖实测抓到的两个值(10/10/10、40/40/40),留出
+/// 一点余量。
+fn is_opencode_dark_chrome(rgb: Rgb) -> bool {
+    let (r, g, b) = rgb;
+    r == g && g == b && r <= 40
 }
 
 /// 单行 cell 序列 → 绘制 run 序列。切分规则见模块注释；选区内的空白格
@@ -140,7 +161,7 @@ fn effective_colors(cell: &Cell, term_bg: Rgb) -> (Rgb, Option<Rgb>) {
 /// TUI(实测 CodeBuddy CLI)常年关闭真实光标、自己在文本里放一个反相
 /// 空格当"假光标"块,不处理反相会导致这个格子被当成普通空白格跳过,
 /// 假光标整个不可见(验收反馈:CodeBuddy 光标不显示,根因)。
-fn layout_runs(row: &[Cell], term_bg: (u8, u8, u8)) -> Vec<Run> {
+fn layout_runs(row: &[Cell], term_bg: (u8, u8, u8), is_opencode: bool) -> Vec<Run> {
     let mut runs: Vec<Run> = Vec::new();
     let mut col = 0;
     while col < row.len() {
@@ -154,7 +175,7 @@ fn layout_runs(row: &[Cell], term_bg: (u8, u8, u8)) -> Vec<Run> {
             continue;
         }
         if cell.wide {
-            let (fg, bg) = effective_colors(cell, term_bg);
+            let (fg, bg) = effective_colors(cell, term_bg, is_opencode);
             runs.push(Run {
                 col,
                 cells: 2,
@@ -168,7 +189,7 @@ fn layout_runs(row: &[Cell], term_bg: (u8, u8, u8)) -> Vec<Run> {
             col += 2; // 本体 + spacer
             continue;
         }
-        let (fg0, bg0) = effective_colors(cell, term_bg);
+        let (fg0, bg0) = effective_colors(cell, term_bg, is_opencode);
         let style = (fg0, bg0, cell.bold, cell.selected);
         let start = col;
         let mut text = String::new();
@@ -176,7 +197,7 @@ fn layout_runs(row: &[Cell], term_bg: (u8, u8, u8)) -> Vec<Run> {
             let c = &row[col];
             let blank = c.ch == ' ' && c.bg.is_none() && !c.selected && !c.inverse;
             let c_style = {
-                let (fg, bg) = effective_colors(c, term_bg);
+                let (fg, bg) = effective_colors(c, term_bg, is_opencode);
                 (fg, bg, c.bold, c.selected)
             };
             if c.wide || c.spacer || blank || c_style != style {
@@ -241,6 +262,10 @@ struct TermCanvas<'a> {
     /// IME 组字预览(未提交):有值时画在光标位置(带下划线),不写进
     /// `model`——真正的 PTY 网格只由 `Ime::Commit` 驱动。
     preedit: Option<&'a str>,
+    /// 这块终端画布背后跑的是哪个 agent——`None` 表示不是某个 agent 会话
+    /// (比如 SSH 面板内嵌终端)。目前只用于 [`is_opencode_dark_chrome`]
+    /// 特判,以后如果出现别的 agent 专属渲染差异也走这里。
+    agent: Option<AgentKind>,
 }
 
 /// canvas 内部交互状态：滚轮余量累积 + 拖选进行中标记。
@@ -356,10 +381,11 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
         let (cursor_col, cursor_row) = self.model.cursor();
         let [tbr, tbg, tbb, _] = byteui::theme::color::current().term_bg.into_rgba8();
         let term_bg = (tbr, tbg, tbb);
+        let is_opencode = matches!(self.agent, Some(AgentKind::Opencode));
 
         for (row_idx, row) in lines.iter().enumerate() {
             let y = row_idx as f32 * line_height_px();
-            for run in layout_runs(row, term_bg) {
+            for run in layout_runs(row, term_bg, is_opencode) {
                 let x = run.col as f32 * cell_width();
                 let run_size = Size::new(run.cells as f32 * cell_width(), line_height_px());
                 if let Some(bg) = run.bg {
@@ -508,12 +534,14 @@ pub fn view<'a>(
     focused: bool,
     target: crate::terminal::TermTarget,
     preedit: Option<&'a str>,
+    agent: Option<AgentKind>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     Canvas::new(TermCanvas {
         model,
         focused,
         target,
         preedit,
+        agent,
     })
     .width(Length::Fill)
     .height(Length::Fill)
@@ -541,7 +569,7 @@ mod tests {
         t.selection_start(1, 0, false);
         t.selection_update(3, 0, true); // 选中 bcd
         let row = t.visible_lines().remove(0);
-        let runs = layout_runs(&row, TEST_TERM_BG);
+        let runs = layout_runs(&row, TEST_TERM_BG, false);
         let shape: Vec<_> = runs
             .iter()
             .map(|r| (r.col, r.text.as_str(), r.selected))
@@ -559,7 +587,7 @@ mod tests {
         t.selection_start(0, 0, false);
         t.selection_update(2, 0, true); // 选中 "a b"，中间空格也要高亮
         let row = t.visible_lines().remove(0);
-        let runs = layout_runs(&row, TEST_TERM_BG);
+        let runs = layout_runs(&row, TEST_TERM_BG, false);
         assert_eq!(runs.len(), 1);
         assert_eq!(
             (runs[0].col, runs[0].text.as_str(), runs[0].selected),
@@ -621,9 +649,9 @@ mod tests {
     fn wide_flag_distinguishes_cjk_run_from_same_cell_count_ascii_run() {
         // "ab" 是两个窄字符合并的 run，cells 也是 2——不能靠 cells==2 判断
         // 宽字符（见 `Run::wide` 字段注释），必须显式 flag。
-        let ascii = &layout_runs(&row_of(b"ab", 40), TEST_TERM_BG)[0];
+        let ascii = &layout_runs(&row_of(b"ab", 40), TEST_TERM_BG, false)[0];
         assert_eq!((ascii.cells, ascii.wide), (2, false));
-        let cjk = &layout_runs(&row_of("你".as_bytes(), 40), TEST_TERM_BG)[0];
+        let cjk = &layout_runs(&row_of("你".as_bytes(), 40), TEST_TERM_BG, false)[0];
         assert_eq!((cjk.cells, cjk.wide), (2, true));
     }
 
@@ -637,7 +665,7 @@ mod tests {
 
     #[test]
     fn ascii_same_style_merges_into_one_run() {
-        let runs = layout_runs(&row_of(b"hello", 40), TEST_TERM_BG);
+        let runs = layout_runs(&row_of(b"hello", 40), TEST_TERM_BG, false);
         assert_eq!(runs.len(), 1);
         assert_eq!(
             (runs[0].col, runs[0].cells, runs[0].text.as_str()),
@@ -647,7 +675,7 @@ mod tests {
 
     #[test]
     fn wide_char_gets_own_two_cell_run_and_spacer_is_skipped() {
-        let runs = layout_runs(&row_of("ab你cd".as_bytes(), 40), TEST_TERM_BG);
+        let runs = layout_runs(&row_of("ab你cd".as_bytes(), 40), TEST_TERM_BG, false);
         let shape: Vec<_> = runs
             .iter()
             .map(|r| (r.col, r.cells, r.text.as_str()))
@@ -657,7 +685,7 @@ mod tests {
 
     #[test]
     fn style_change_splits_runs() {
-        let runs = layout_runs(&row_of(b"a\x1b[31mb", 40), TEST_TERM_BG);
+        let runs = layout_runs(&row_of(b"a\x1b[31mb", 40), TEST_TERM_BG, false);
         assert_eq!(runs.len(), 2);
         assert_eq!((runs[0].col, runs[0].text.as_str()), (0, "a"));
         assert_eq!((runs[1].col, runs[1].text.as_str()), (1, "b"));
@@ -666,14 +694,14 @@ mod tests {
 
     #[test]
     fn bare_blank_cells_are_skipped_and_break_runs() {
-        let runs = layout_runs(&row_of(b"a  b", 40), TEST_TERM_BG);
+        let runs = layout_runs(&row_of(b"a  b", 40), TEST_TERM_BG, false);
         let shape: Vec<_> = runs.iter().map(|r| (r.col, r.text.as_str())).collect();
         assert_eq!(shape, vec![(0, "a"), (3, "b")]);
     }
 
     #[test]
     fn blank_cells_with_background_are_kept() {
-        let runs = layout_runs(&row_of(b"\x1b[41m x", 40), TEST_TERM_BG);
+        let runs = layout_runs(&row_of(b"\x1b[41m x", 40), TEST_TERM_BG, false);
         assert_eq!(runs.len(), 1);
         assert_eq!((runs[0].col, runs[0].text.as_str()), (0, " x"));
         assert!(runs[0].bg.is_some());
@@ -684,7 +712,7 @@ mod tests {
         // 反相空格(全屏重绘型 TUI 常见的"假光标"画法,实测 CodeBuddy CLI)
         // 不能被当成普通无背景空白格跳过——不然假光标整个不可见,正是这次
         // 要修的验收反馈根因。
-        let runs = layout_runs(&row_of(b"\x1b[7m x", 40), TEST_TERM_BG);
+        let runs = layout_runs(&row_of(b"\x1b[7m x", 40), TEST_TERM_BG, false);
         assert_eq!(runs.len(), 1);
         assert_eq!((runs[0].col, runs[0].text.as_str()), (0, " x"));
         assert!(runs[0].bg.is_some());
@@ -695,9 +723,34 @@ mod tests {
         // 反相格默认背景(未显式设过 bg)要换算成 `term_bg` 才能当新前景色
         // 用——不能继续留 `None`(那是"不填色"的意思，反相格恰恰要填)；
         // 新背景色固定是原本的前景色(终端默认前景 `(0x9A, 0xB4, 0xC4)`)。
-        let runs = layout_runs(&row_of(b"\x1b[7mA", 40), TEST_TERM_BG);
+        let runs = layout_runs(&row_of(b"\x1b[7mA", 40), TEST_TERM_BG, false);
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].fg, TEST_TERM_BG);
         assert_eq!(runs[0].bg, Some((0x9A, 0xB4, 0xC4)));
+    }
+
+    #[test]
+    fn opencode_dark_chrome_bg_is_stripped_only_when_flagged() {
+        // 实测抓到的两个值：rgb(10,10,10)/rgb(40,40,40)，opencode 自己
+        // 硬编码的深色主题底色，不是查询终端真实背景色得出的结果。
+        let input = b"\x1b[48;2;10;10;10ma\x1b[48;2;40;40;40mb";
+        let with_flag = layout_runs(&row_of(input, 40), TEST_TERM_BG, true);
+        assert!(
+            with_flag.iter().all(|r| r.bg.is_none()),
+            "opencode 灰阶近黑背景应被剥离: {with_flag:?}"
+        );
+        let without_flag = layout_runs(&row_of(input, 40), TEST_TERM_BG, false);
+        assert!(
+            without_flag.iter().any(|r| r.bg.is_some()),
+            "非 opencode 终端不应受影响: {without_flag:?}"
+        );
+    }
+
+    #[test]
+    fn opencode_flag_does_not_strip_colored_backgrounds() {
+        // 只剥离灰阶近黑，不影响正常着色背景（比如红色高亮）。
+        let runs = layout_runs(&row_of(b"\x1b[41m x", 40), TEST_TERM_BG, true);
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].bg.is_some());
     }
 }

@@ -232,6 +232,7 @@ pub(crate) fn active_tab_view<'a>(
                 focused,
                 TermTarget::Shared,
                 focused.then(|| app.term_ime_preedit()).flatten(),
+                Some(tab.agent),
             )
         }
         None => container(
