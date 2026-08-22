@@ -11,6 +11,8 @@ use iced_widget::core::{Border, Element, Length, Rectangle};
 use iced_widget::{MouseArea, button, column, container, row, text};
 use std::path::PathBuf;
 
+use crate::project_scaffold;
+
 /// 挂在每个 Workspace 上的项目信息面板状态。
 #[derive(Default)]
 pub struct WorkspaceState {
@@ -43,6 +45,7 @@ pub struct WorkspaceState {
     /// `None`=无选中(新开项目默认)。
     selected_link: Option<PathBuf>,
     error: Option<String>,
+    pub(crate) scaffold_report: Option<project_scaffold::ScaffoldReport>,
 }
 
 impl WorkspaceState {
@@ -210,6 +213,12 @@ pub enum Message {
     RepairProject,
     /// footer-bar「删除项目」按钮(UI 占位,逻辑后续接入)。
     DeleteProject,
+    /// 一次 ensure/repair 批跑完成。`visible=true`(修复项目按钮触发)才
+    /// 把结果存进 `WorkspaceState.scaffold_report` 供状态文字展示;
+    /// `visible=false`(打开项目时静默触发)只是让副作用(README/.dozer/
+    /// git/agent 历史)落地,不展示——两条触发路径共用同一个
+    /// `spawn_scaffold_run`,靠这个布尔位区分要不要展示。
+    ScaffoldDone(project_scaffold::ScaffoldReport, bool),
 }
 
 /// 处理全部消息——本模块不触碰终端会话域,没有需要内核拦截、`update` 里
@@ -341,10 +350,58 @@ pub fn update(
         Message::LinkContextMenu { .. } => {
             unreachable!("由内核拦截处理,见 files::Message::ContextMenuOpen 文档")
         }
-        // footer-bar 占位按钮:逻辑后续接入,暂不做任何处理。
-        Message::RepairProject => {}
+        Message::RepairProject => {
+            spawn_scaffold_run(repo_path.to_path_buf(), true, client.clone(), handle, emit);
+        }
+        // 删除项目:独立设计,不在本次范围内(见另一份 spec)。
         Message::DeleteProject => {}
+        Message::ScaffoldDone(report, visible) => {
+            if visible {
+                ws_state.scaffold_report = Some(report);
+            }
+        }
     }
+}
+
+/// 跑一次完整的 ensure/repair:README/`.dozer`/git 三个同步步骤打包进
+/// 一次 `spawn_blocking`(复用 `files.rs::Message::GitInit` 处理已经用过
+/// 的手法),再 `await` 一次 agent 历史数据回填,四项结果拼进一份
+/// `ScaffoldReport` 发回。`visible` 原样透传给 `Message::ScaffoldDone`,
+/// 决定这次结果要不要展示(见该消息的文档注释)。`app.rs::project_tab_opened`
+/// (新开 tab,`visible=false`)和这个文件的 `RepairProject` 处理
+/// (`visible=true`)都调这个函数,不重复实现两遍。
+pub fn spawn_scaffold_run(
+    repo_path: std::path::PathBuf,
+    visible: bool,
+    client: dozer_client::Client,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    let cwd = repo_path.to_string_lossy().into_owned();
+    handle.spawn(async move {
+        let sync_steps = {
+            let repo_path = repo_path.clone();
+            tokio::task::spawn_blocking(move || project_scaffold::run_sync_steps(&repo_path))
+                .await
+                .unwrap_or_else(|e| {
+                    vec![(
+                        "初始化检查".to_string(),
+                        project_scaffold::ScaffoldStepResult::Failed(format!("内部错误: {e}")),
+                    )]
+                })
+        };
+        let backfill_result = match client.backfill_project_transcripts(&cwd).await {
+            Ok(0) => project_scaffold::ScaffoldStepResult::AlreadyOk,
+            Ok(n) => project_scaffold::ScaffoldStepResult::Created(format!("导入 {n} 个历史文件")),
+            Err(e) => project_scaffold::ScaffoldStepResult::Failed(e.to_string()),
+        };
+        let mut steps = sync_steps;
+        steps.push(("agent 历史".to_string(), backfill_result));
+        emit(Message::ScaffoldDone(
+            project_scaffold::ScaffoldReport { steps },
+            visible,
+        ));
+    });
 }
 
 /// 项目名称编辑的共享提交逻辑:回车提交(`NameEditSubmit`)与失焦提交
@@ -655,7 +712,7 @@ pub fn view<'a>(
         );
     }
 
-    let body = column![content, project_footer_bar(),].spacing(0);
+    let body = column![content, project_footer_bar(ws_state)].spacing(0);
 
     container(body)
         .width(width)
@@ -674,7 +731,9 @@ pub fn view<'a>(
 /// 1px `BORDER` 分隔线 + `padding([6, 8])` 容器。当前放「修复项目 / 删除项目」
 /// 两个并排圆角按钮,行为仅为 UI 占位(`RepairProject` / `DeleteProject`),
 /// 实际逻辑后续接入。
-fn project_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+fn project_footer_bar(
+    ws_state: &WorkspaceState,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let repair = button(
         text("修复项目")
             .size(byteui::theme::font::label())
@@ -725,7 +784,18 @@ fn project_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_re
             ..iced_widget::container::Style::default()
         });
 
-    container(column![top_line, bar].spacing(4))
+    let status = ws_state.scaffold_report.as_ref().map(|report| {
+        text(project_scaffold::format_scaffold_report(report))
+            .size(byteui::theme::font::caption_sm())
+            .color(byteui::theme::color::current().dim)
+    });
+
+    let mut col = column![top_line, bar].spacing(4);
+    if let Some(status) = status {
+        col = col.push(status);
+    }
+
+    container(col)
         .width(Length::Fill)
         .padding([6, 8])
         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
@@ -1347,5 +1417,43 @@ mod tests {
         );
         assert_eq!(ws.selected_link.as_deref(), Some(child.as_path()));
         assert!(ws.expanded_link_dirs.is_empty());
+    }
+
+    #[test]
+    fn scaffold_done_stores_report_only_when_visible() {
+        let mut ws_state = WorkspaceState::new(None, links::LinksState::default());
+        let noop_client = dozer_client::Client::new(std::path::PathBuf::from("/tmp/dozer.sock"));
+        let handle = tokio::runtime::Handle::try_current()
+            .unwrap_or_else(|_| tokio::runtime::Runtime::new().unwrap().handle().clone());
+        let report = project_scaffold::ScaffoldReport {
+            steps: vec![(
+                "README".into(),
+                project_scaffold::ScaffoldStepResult::AlreadyOk,
+            )],
+        };
+
+        update(
+            &mut ws_state,
+            Message::ScaffoldDone(report.clone(), false),
+            1,
+            "demo",
+            std::path::Path::new("/tmp/demo"),
+            &noop_client,
+            &handle,
+            |_| {},
+        );
+        assert_eq!(ws_state.scaffold_report, None);
+
+        update(
+            &mut ws_state,
+            Message::ScaffoldDone(report.clone(), true),
+            1,
+            "demo",
+            std::path::Path::new("/tmp/demo"),
+            &noop_client,
+            &handle,
+            |_| {},
+        );
+        assert_eq!(ws_state.scaffold_report, Some(report));
     }
 }
