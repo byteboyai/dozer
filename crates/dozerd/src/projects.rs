@@ -174,6 +174,15 @@ impl ProjectStore {
         )
         .map_err(Into::into)
     }
+
+    pub fn remove(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().expect("db lock");
+        let affected = conn.execute("DELETE FROM projects WHERE id = ?1", [id])?;
+        if affected == 0 {
+            anyhow::bail!("项目 id={id} 不存在");
+        }
+        Ok(())
+    }
 }
 
 fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<ProjectInfo> {
@@ -249,5 +258,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = ProjectStore::new(&dir.path().join("t.db")).unwrap();
         assert!(store.rename(999, "x").is_err());
+    }
+
+    #[test]
+    fn remove_deletes_project_and_it_no_longer_lists() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ProjectStore::new(&dir.path().join("t.db")).unwrap();
+        let p = store.open("/proj/a").unwrap();
+
+        store.remove(p.id).unwrap();
+
+        let remaining = store.list().unwrap();
+        assert!(remaining.iter().all(|r| r.id != p.id));
+    }
+
+    #[test]
+    fn remove_missing_id_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ProjectStore::new(&dir.path().join("t.db")).unwrap();
+        assert!(store.remove(999).is_err());
     }
 }
