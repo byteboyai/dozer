@@ -40,7 +40,7 @@
     "agent_list_pane": {
       "background": "#0a0e16",
       "border": null,
-      "padding": [8, 12, 12, 12],
+      "padding": [6, 12, 12, 12],
       "gap": 8
     },
     "terminal_pane": {

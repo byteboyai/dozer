@@ -1050,6 +1050,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 || app.todo_content_focused()
                 || app.tree_edit_focused()
                 || app.home_project_search_focused()
+                || app.conversation_search_focused()
                 || app.ssh_form_open()
                 || app.database_form_open()
                 || app.comment_focused()
@@ -2322,6 +2323,26 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     false
                                 };
 
+                                // 会话列表搜索框:同款每帧查真实焦点态。该面板
+                                // (`PanelKind::Conversations`)默认挂右栏,但跟其它
+                                // 面板一样可以被拖到左栏(见 `App::rail_cross_apply`),
+                                // 所以两侧都要查,不能只看 `left_view()`(同浏览器
+                                // 地址栏 `browser_addr_focused` 两侧都查的既有处理)。
+                                let conversation_search_focused = if matches!(
+                                    app.left_view(),
+                                    crate::app::PanelKind::Conversations
+                                ) || app.right_view
+                                    == crate::app::PanelKind::Conversations
+                                {
+                                    interface.operate(
+                                        renderer,
+                                        &mut workspace::CaptureConversationSearchFocus,
+                                    );
+                                    workspace::take_conversation_search_focused()
+                                } else {
+                                    false
+                                };
+
                                 // 验收意见框(Stage 6):同款每帧查真实焦点态。
                                 let comment_focused =
                                     if matches!(app.left_view(), crate::app::PanelKind::Acceptance)
@@ -2523,6 +2544,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 app.set_comment_focused(comment_focused);
                                 app.set_project_name_focused(name_edit_focused);
                                 app.set_query_focused(query_focused);
+                                app.set_conversation_search_focused(conversation_search_focused);
 
                                 // 同上,浏览器地址栏的真实焦点态现在才写回工作区
                                 // (供下一帧键盘路由 `browser_addr_focused` 消费)。

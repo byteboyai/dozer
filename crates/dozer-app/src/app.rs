@@ -200,6 +200,9 @@ pub enum HoverId {
     /// 对话列表面板(会话列表)扁平列表末尾的"更多..."翻页图标按钮,处理
     /// 方式同 `CommitListMore`(见 `conversation_list_pane`)。
     ConversationListMore,
+    /// 会话列表搜索框内的提交按钮(`Search`):静止 DIM,hover 平滑过渡到
+    /// GOLD,处理方式同 `HomeProjectSearchSubmit`(见 `conversation_list_pane`)。
+    ConversationSearchSubmit,
     /// Git Log 面板改动文件列表某行(按下标区分):hover 时填充 `CARD` 背景 +
     /// 金色描边(见 `extensions::git_log::file_list_view`,统一卡片样式)。
     GitFile(usize),
@@ -1261,6 +1264,14 @@ pub enum Message {
     /// `conversation_turn_groups` 往下多展开一页(`CONVERSATION_PAGE_SIZE` 条),
     /// 不问 daemon 要新数据(同 `git_log::Message::CommitListMore`)。
     ConversationListMore,
+    /// 会话列表搜索框草稿变化(iced `text_input::on_input`)。
+    ConversationSearchInput(String),
+    /// 回车 / 点搜索按钮:把草稿落成生效的 `conversation_search` 过滤词,
+    /// 同时把翻页重置回第 1 页(过滤后结果变少,停在旧页码没有意义)。
+    ConversationSearchSubmit,
+    /// 会话列表底部 footbar 的 agent 筛选项点击:`None` = 全部。同样把翻页
+    /// 重置回第 1 页。
+    ConversationAgentFilterSelect(Option<AgentKind>),
     /// 切换当前显示的 tab（这里的 `usize` 是 vec 位置——用户点击的是
     /// "屏幕上第几个 tab"，跟稳定 id 是两回事）。**仅限左侧终端 tab 栏本身
     /// 的按钮**发这条消息——`select_tab()` 顺带把 `tab_drag` 武装成"这一
@@ -2739,6 +2750,21 @@ impl App {
         }
     }
 
+    /// 会话列表搜索框是否持有 iced 真实焦点(main.rs 键盘路由用)。
+    pub fn conversation_search_focused(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.conversation_search_focused)
+    }
+
+    /// 每帧渲染循环调用:把 `workspace::CaptureConversationSearchFocus` 问到
+    /// 的真实焦点态写进当前工作区(`main.rs` 键盘路由随后读
+    /// `conversation_search_focused` 消费)。
+    pub fn set_conversation_search_focused(&mut self, focused: bool) {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.conversation_search_focused = focused;
+        }
+    }
+
     /// 首页项目搜索框是否持有 iced 真实焦点(main.rs 键盘路由用)。
     pub fn home_project_search_focused(&self) -> bool {
         self.home_project_search_focused
@@ -3816,6 +3842,23 @@ impl App {
             Message::ConversationListMore => {
                 self.with_focused_project(|ws, _io| {
                     ws.conversation_pages += 1;
+                });
+            }
+            Message::ConversationSearchInput(s) => {
+                self.with_focused_project(|ws, _io| {
+                    ws.conversation_search_draft = s;
+                });
+            }
+            Message::ConversationSearchSubmit => {
+                self.with_focused_project(|ws, _io| {
+                    ws.conversation_search = ws.conversation_search_draft.clone();
+                    ws.conversation_pages = 0;
+                });
+            }
+            Message::ConversationAgentFilterSelect(agent) => {
+                self.with_focused_project(|ws, _io| {
+                    ws.conversation_agent_filter = agent;
+                    ws.conversation_pages = 0;
                 });
             }
 

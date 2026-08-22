@@ -64,7 +64,9 @@ use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 use iced_code_editor::{CodeEditor, Message as EditorMessage};
 use iced_widget::core::mouse;
 use iced_widget::core::text::LineHeight;
-use iced_widget::core::{Border, Color, Element, Length, Padding};
+use iced_widget::core::widget::operation::Focusable;
+use iced_widget::core::widget::{Id, Operation};
+use iced_widget::core::{Border, Color, Element, Length, Padding, Rectangle};
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
 use std::collections::{HashMap, HashSet};
@@ -397,6 +399,19 @@ pub struct Workspace {
     /// `git_log::State::pages` 的手法:纯客户端状态,不问 daemon 要新数据。
     /// 切项目/刷新列表打开新一批数据时重置回 0。
     pub(crate) conversation_pages: usize,
+    /// 会话列表搜索框已提交生效的过滤词(空串 = 不过滤,按标题大小写不敏感
+    /// 子串匹配)。同 `conversation_pages`,切项目重置(见 `adopt_project`)。
+    pub(crate) conversation_search: String,
+    /// 搜索框编辑态草稿——同 `todo::WorkspaceState` 的 draft/committed 分离
+    /// 手法,打字期间只改草稿,回车/点搜索按钮才落成 `conversation_search`。
+    pub(crate) conversation_search_draft: String,
+    /// 是否持有 iced 真实焦点。**不是**应用层手动置位的镜像——每帧渲染
+    /// 循环里 `CaptureConversationSearchFocus` 问一遍 iced 真相后立刻写进
+    /// 这里(`main.rs` 键盘路由读它决定要不要把按键放行)。
+    pub(crate) conversation_search_focused: bool,
+    /// 会话列表底部 footbar 的 agent 筛选:`None` = 全部,`Some(k)` = 只看
+    /// 该 agent。纯客户端过滤,不问 daemon 要新数据,切项目重置。
+    pub(crate) conversation_agent_filter: Option<AgentKind>,
     /// 当前项目的 agent 用量统计（会话粒度；扫描+解析全量 transcript，比
     /// `conversations` 贵得多,所以不像它那样跟着 `DeliveryChecked` 自动
     /// 刷新——只在切到 Usage 面板或点手动刷新按钮时才重新扫
@@ -623,6 +638,10 @@ impl Workspace {
             review_nonce: 0,
             conversation_turn_groups: None,
             conversation_pages: 0,
+            conversation_search: String::new(),
+            conversation_search_draft: String::new(),
+            conversation_search_focused: false,
+            conversation_agent_filter: None,
             usage: usage::WorkspaceState::default(),
             project: None,
             project_panel: project::WorkspaceState::default(),
@@ -1168,6 +1187,10 @@ impl Workspace {
         self.git_watch = None;
         self.conversation_turn_groups = None;
         self.conversation_pages = 0;
+        self.conversation_search.clear();
+        self.conversation_search_draft.clear();
+        self.conversation_search_focused = false;
+        self.conversation_agent_filter = None;
         self.usage = usage::WorkspaceState::default();
         let project_id = project.id;
         let repo_path = PathBuf::from(&project.path);
@@ -2311,6 +2334,153 @@ pub(crate) fn conversation_visible_count(pages: usize) -> usize {
     (pages + 1) * CONVERSATION_PAGE_SIZE
 }
 
+/// 会话列表搜索框(iced 原生 `text_input`)的 `widget::Id`:main.rs 每帧
+/// `interface.operate` 用 `CaptureConversationSearchFocus` 问真实焦点态。
+pub fn conversation_search_field_id() -> Id {
+    Id::new("conversation-search-box")
+}
+
+static CONVERSATION_SEARCH_FOCUSED: std::sync::LazyLock<Mutex<bool>> =
+    std::sync::LazyLock::new(|| Mutex::new(false));
+
+pub fn take_conversation_search_focused() -> bool {
+    *CONVERSATION_SEARCH_FOCUSED.lock().unwrap()
+}
+
+/// 每帧 `interface.operate()` 跑一遍。`traverse` 必须调用传入闭包(见
+/// [[dozer-operation-traverse-noop-bug]])。
+pub struct CaptureConversationSearchFocus;
+impl Operation<()> for CaptureConversationSearchFocus {
+    fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
+        if id == Some(&conversation_search_field_id()) {
+            *CONVERSATION_SEARCH_FOCUSED.lock().unwrap() = state.is_focused();
+        }
+    }
+
+    fn traverse(&mut self, operate: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {
+        operate(self);
+    }
+}
+
+/// 会话列表关键字 + agent 过滤:标题大小写不敏感子串匹配(空关键字不过滤
+/// 标题这一维)叠加 agent 精确匹配(`None` = 不限)。拆成纯函数(同
+/// `homespace::filter_projects_by_search`)方便 headless 单测。
+fn filter_turn_groups<'a>(
+    rows: &'a [TurnGroupRow],
+    query: &str,
+    agent: Option<AgentKind>,
+) -> Vec<&'a TurnGroupRow> {
+    let needle = query.to_lowercase();
+    rows.iter()
+        .filter(|r| agent.map(|a| r.agent == a).unwrap_or(true))
+        .filter(|r| query.is_empty() || r.title.to_lowercase().contains(&needle))
+        .collect()
+}
+
+/// 会话列表里出现过的 agent 种类,去重,固定展示顺序(与 `group_tabs_by_agent`
+/// 同一份手法,但覆盖全部 7 个 `AgentKind` 而不只 4 个——会话历史可能来自
+/// 任何一种 agent)。供底部 footbar 画筛选 chip;返回空 = 没有会话数据,
+/// footbar 不渲染(只剩"全部"一个选项没有意义)。
+fn conversation_agents_present(rows: &[TurnGroupRow]) -> Vec<AgentKind> {
+    const ORDER: [AgentKind; 7] = [
+        AgentKind::Claude,
+        AgentKind::Codebuddy,
+        AgentKind::Opencode,
+        AgentKind::Codex,
+        AgentKind::Kilo,
+        AgentKind::V8agent,
+        AgentKind::Unknown,
+    ];
+    ORDER
+        .into_iter()
+        .filter(|k| rows.iter().any(|r| r.agent == *k))
+        .collect()
+}
+
+/// 会话列表底部 footbar:1px 分割线 + agent 筛选 chip 行(含"全部")。
+/// `agents` 为空(没有会话数据)时不渲染整条 bar。
+fn conversation_footer_bar<'a>(
+    ws: &Workspace,
+    agents: &[AgentKind],
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    if agents.is_empty() {
+        return column![].into();
+    }
+
+    let top_line = container(iced_widget::Space::new())
+        .width(Length::Fill)
+        .height(Length::Fixed(1.0))
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(byteui::theme::color::current().border.into()),
+            ..container::Style::default()
+        });
+
+    let mut chips = row![]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center);
+    chips = chips.push(conversation_agent_chip(
+        "全部",
+        byteui::theme::color::current().dim,
+        ws.conversation_agent_filter.is_none(),
+        Message::ConversationAgentFilterSelect(None),
+    ));
+    for &agent in agents {
+        chips = chips.push(conversation_agent_chip(
+            agent.label(),
+            agent_dot_color(agent),
+            ws.conversation_agent_filter == Some(agent),
+            Message::ConversationAgentFilterSelect(Some(agent)),
+        ));
+    }
+
+    column![top_line, chips].spacing(8).into()
+}
+
+/// 单个 agent 筛选 chip:圆点 + 标签,选中态 `CARD` 底 + `BORDER` 描边圆角
+/// (pill 形,radius 12 与 `todo_tab` 的 6 区分"筛选"和"视图切换"两种语义)。
+/// 纯选择、无可关闭语义,不套 `tabs::tab_core`(同 `todo_tab` 文档的理由)。
+fn conversation_agent_chip<'a>(
+    label: &'a str,
+    dot_color: Color,
+    active: bool,
+    on_press: Message,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let fg = if active {
+        byteui::theme::color::current().cream
+    } else {
+        byteui::theme::color::current().dim
+    };
+    button(
+        row![
+            byteui::feedback::status::dot(dot_color),
+            text(label).size(byteui::theme::font::caption()).color(fg),
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::alignment::Vertical::Center),
+    )
+    .on_press(on_press)
+    .padding([4, 10])
+    .style(move |_t: &iced_widget::Theme, _s| button::Style {
+        background: if active {
+            Some(byteui::theme::color::current().card.into())
+        } else {
+            None
+        },
+        text_color: fg,
+        border: Border {
+            color: if active {
+                byteui::theme::color::current().border
+            } else {
+                Color::TRANSPARENT
+            },
+            width: 1.0,
+            radius: 12.0.into(),
+        },
+        ..button::Style::default()
+    })
+    .into()
+}
+
 /// 对话列表面板(右面板区"对话"视图的列表侧):当前项目全部 session 的
 /// 回合拍平成一份按时间倒序的列表,不再按 session 分树(2026-08-21，用
 /// 户明确要求"不要 session 树,直接按时间倒序列出对话回合")。点一行 →
@@ -2326,9 +2496,47 @@ pub(crate) fn conversation_list_pane<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::conversation_list_pane();
     // 套用统一 panel head:Lucide `BotMessageSquare` 图标 + 暖金 `#dcc9a3`
-    // 的 "会话" 标题 + 1px 分割线;去掉原先跟在项目名后的 "Dozer 项目" 副标题。
+    // 的 "会话" 标题 + 1px 分割线;去掉原先跟在项目名后的 "Dozer 项目" 副标题,
+    // 也去掉曾经紧跟标题的 "会话 N 条回合" 计数行(验收反馈:意义不大,让位
+    // 给下面新增的搜索框)。
     let mut content =
         column![home_panel_head(IconKind::BotMessageSquare, "会话"),].spacing(region.gap);
+
+    // 关键字搜索框:按标题筛选全部会话回合,形状与 Files 搜索框一致
+    // (`byteui::form::input_text`,真正的 iced `text_input`)。不会边输入边
+    // 过滤——敲回车/点右侧搜索按钮后由 `ConversationSearchSubmit` 把草稿
+    // 落成生效的 `conversation_search`。`highlight` 传 `search_active`:
+    // 即使当前没聚焦,只要列表被搜索词过滤中就持续金框提示。
+    let search_active = !ws.conversation_search.is_empty();
+    let search_box = byteui::form::input_text::view(
+        "搜索会话标题…",
+        &ws.conversation_search_draft,
+        false,
+        Some(conversation_search_field_id()),
+        search_active,
+        Some(Message::ConversationSearchSubmit),
+        false,
+        Message::ConversationSearchInput,
+    );
+    let box_len = byteui::theme::icon_size::row() + 12.0;
+    let search_button = icons::icon_button_entry(
+        icons::IconKind::Search,
+        byteui::theme::icon_size::row(),
+        false,
+        false,
+        app.hover_progress(HoverId::ConversationSearchSubmit),
+        true,
+        box_len,
+        true,
+        Message::ConversationSearchSubmit,
+        |hovered| Message::Hover(HoverId::ConversationSearchSubmit, hovered),
+        "搜索",
+    );
+    content = content.push(
+        row![container(search_box).width(Length::Fill), search_button,]
+            .spacing(6)
+            .align_y(iced_widget::core::Alignment::Center),
+    );
 
     let Some(rows) = ws.conversation_turn_groups.as_ref() else {
         content = content.push(lh(text("加载中…")
@@ -2345,19 +2553,14 @@ pub(crate) fn conversation_list_pane<'a>(
             .into();
     };
 
-    content = content.push(
-        row![
-            lh(text("会话")
-                .size(byteui::theme::font::caption())
-                .color(byteui::theme::color::current().dim)),
-            lh(text(format!("{} 条回合", rows.len()))
-                .size(byteui::theme::font::caption())
-                .color(byteui::theme::color::current().dim)),
-        ]
-        .spacing(6),
-    );
+    let agents_present = conversation_agents_present(rows);
+    let filtered = filter_turn_groups(rows, &ws.conversation_search, ws.conversation_agent_filter);
     if rows.is_empty() {
         content = content.push(lh(text("暂无对话记录")
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().dim)));
+    } else if filtered.is_empty() {
+        content = content.push(lh(text("无匹配结果")
             .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().dim)));
     }
@@ -2368,7 +2571,7 @@ pub(crate) fn conversation_list_pane<'a>(
     let opens = ws.open_transcript_paths();
     let mut cards = column![].spacing(region.gap);
     let visible = conversation_visible_count(ws.conversation_pages);
-    for g in rows.iter().take(visible) {
+    for g in filtered.iter().take(visible) {
         let current = conversation::is_current_conversation(&g.path, &opens);
         let sub = if current {
             format!("● 当前 · {}", relative_time_text(g.ts, now_ms))
@@ -2413,7 +2616,7 @@ pub(crate) fn conversation_list_pane<'a>(
     // 还有没画出来的回合时,在列表末尾加一个居中的"更多..."图标按钮
     // (Lucide ellipsis,无外边框/背景,hover DIM→GOLD)——点它翻下一页
     // (`Message::ConversationListMore`,纯客户端状态,不问 daemon 要新数据)。
-    if rows.len() > visible {
+    if filtered.len() > visible {
         let more_color = byteui::theme::color::mix(
             byteui::theme::color::current().dim,
             byteui::theme::color::current().gold,
@@ -2452,6 +2655,7 @@ pub(crate) fn conversation_list_pane<'a>(
             ))
             .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
     );
+    content = content.push(conversation_footer_bar(ws, &agents_present));
 
     container(content.padding(region.padding))
         .width(width)
@@ -3703,6 +3907,83 @@ mod tests {
     fn conversation_visible_count_grows_by_page_size() {
         assert_eq!(conversation_visible_count(1), 2 * CONVERSATION_PAGE_SIZE);
         assert_eq!(conversation_visible_count(2), 3 * CONVERSATION_PAGE_SIZE);
+    }
+
+    fn make_turn_group(title: &str, agent: AgentKind) -> TurnGroupRow {
+        TurnGroupRow {
+            path: PathBuf::from(format!("/tmp/{title}.jsonl")),
+            agent,
+            start_turn_index: 0,
+            end_turn_index: 1,
+            title: title.to_string(),
+            ts: 0,
+        }
+    }
+
+    #[test]
+    fn filter_turn_groups_empty_query_and_no_agent_returns_all() {
+        let rows = vec![
+            make_turn_group("修复登录 bug", AgentKind::Claude),
+            make_turn_group("重构解析器", AgentKind::Codebuddy),
+        ];
+        assert_eq!(filter_turn_groups(&rows, "", None).len(), 2);
+    }
+
+    #[test]
+    fn filter_turn_groups_matches_title_case_insensitive_substring() {
+        let rows = vec![
+            make_turn_group("Fix Login Bug", AgentKind::Claude),
+            make_turn_group("重构解析器", AgentKind::Codebuddy),
+        ];
+        let filtered = filter_turn_groups(&rows, "login", None);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].title, "Fix Login Bug");
+    }
+
+    #[test]
+    fn filter_turn_groups_filters_by_agent() {
+        let rows = vec![
+            make_turn_group("会话 A", AgentKind::Claude),
+            make_turn_group("会话 B", AgentKind::Codebuddy),
+        ];
+        let filtered = filter_turn_groups(&rows, "", Some(AgentKind::Codebuddy));
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].title, "会话 B");
+    }
+
+    #[test]
+    fn filter_turn_groups_combines_query_and_agent() {
+        let rows = vec![
+            make_turn_group("修复登录 bug", AgentKind::Claude),
+            make_turn_group("修复登录 bug", AgentKind::Codebuddy),
+        ];
+        let filtered = filter_turn_groups(&rows, "登录", Some(AgentKind::Claude));
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].agent, AgentKind::Claude);
+    }
+
+    #[test]
+    fn filter_turn_groups_no_match_yields_empty() {
+        let rows = vec![make_turn_group("会话 A", AgentKind::Claude)];
+        assert!(filter_turn_groups(&rows, "不存在", None).is_empty());
+    }
+
+    #[test]
+    fn conversation_agents_present_dedups_and_orders_stably() {
+        let rows = vec![
+            make_turn_group("a", AgentKind::Opencode),
+            make_turn_group("b", AgentKind::Claude),
+            make_turn_group("c", AgentKind::Claude),
+        ];
+        assert_eq!(
+            conversation_agents_present(&rows),
+            vec![AgentKind::Claude, AgentKind::Opencode]
+        );
+    }
+
+    #[test]
+    fn conversation_agents_present_empty_for_no_rows() {
+        assert!(conversation_agents_present(&[]).is_empty());
     }
 
     #[test]

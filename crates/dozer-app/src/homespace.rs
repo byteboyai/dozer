@@ -358,7 +358,11 @@ where
                 ..container::Style::default()
             }),
     ]
-    .spacing(8)
+    // 标题行到分割线的间距从 8 收到 4(验收反馈:左栏 Todo/Files/Project/
+    // Git/SSH 及 Agent 面板的头部分割线比 Agent 终端 tab 栏的分割线低了近
+    // 9px,几个并排面板的分割线高度对不齐;终端那条已确认是最合适的
+    // 基准,这里收紧靠拢它)。
+    .spacing(4)
     .into()
 }
 
