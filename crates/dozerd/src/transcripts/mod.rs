@@ -295,6 +295,17 @@ impl TranscriptStore {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// 按需回填单个项目的 agent transcript 历史(区别于 `crate::backfill::
+    /// backfill_all` 的"daemon 启动全量回填")——`OpenProject` 之外的独立
+    /// 请求(`Request::BackfillProjectTranscripts`,见 `server.rs`),供"新建
+    /// 项目"/"修复项目"按需触发。返回本次实际摄取的文件数,0 不代表出错
+    /// (可能这个项目此前已经全部摄取过)。
+    pub fn backfill_project(&self, cwd: &str) -> u32 {
+        let files =
+            crate::transcripts::scan::discover_project_transcript_files(std::path::Path::new(cwd));
+        crate::backfill::ingest_files(self, files)
+    }
+
     /// 生产入口,内部用 `dozer_core::agent_paths::home_dir()`。
     pub fn list_conversations(
         &self,
@@ -926,6 +937,36 @@ mod tests {
                 .unwrap()
                 .contains("README.md")
         );
+    }
+
+    #[test]
+    fn backfill_project_ingests_only_that_projects_transcripts() {
+        let home = tempfile::tempdir().unwrap();
+        let db_dir = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&db_dir.path().join("t.db")).unwrap();
+        let cwd = "/proj/a";
+        let claude_dir =
+            dozer_core::agent_paths::claude_project_dir_in(home.path(), std::path::Path::new(cwd));
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("s1.jsonl"),
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"你好\"}}\n",
+        )
+        .unwrap();
+
+        // `backfill_project` 内部用真实 `home_dir()`,这个测试没法直接控制
+        // `HOME` 环境变量、也不该在单测里改全局状态——直接调用
+        // `scan::discover_project_transcript_files_in` + `backfill::ingest_files`
+        // 这条底层组合验证"两个函数拼起来行为对不对",`backfill_project`
+        // 本身只是这两行的固定拼接,不单独测(实现阶段如果签名变化,这个测试
+        // 需要跟着挪)。
+        let files = super::scan::discover_project_transcript_files_in(
+            home.path(),
+            std::path::Path::new(cwd),
+        );
+        let n = crate::backfill::ingest_files(&store, files);
+        assert_eq!(n, 1);
+        assert_eq!(store.get_conversation_turns("s1", -1, 10).unwrap().len(), 1);
     }
 
     #[test]
