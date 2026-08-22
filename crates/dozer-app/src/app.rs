@@ -4846,6 +4846,7 @@ impl App {
             return;
         }
         let io = self.shell_io();
+        let repo_path = PathBuf::from(&project.path);
         let mut ws = Workspace::empty_for_project_placeholder();
         ws.recent_projects = recent;
         ws.adopt_project(&io, project);
@@ -4858,6 +4859,16 @@ impl App {
         self.current_page = AppPage::Workspace;
         self.sync_terminal_grid(); // 同上
         self.persist_open_projects();
+        // 新开的项目 tab(区别于"已开着、只是前台化"那条 `focus_project_tab`
+        // 早退分支):静默跑一次 ensure(README/.dozer/git/agent 历史),不
+        // 展示结果(见 project_scaffold 设计"打开即 ensure"一节)。
+        let client = self.client.clone();
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        let emit = move |m| {
+            let _ = proxy.send_event(Message::Project(m));
+        };
+        project::spawn_scaffold_run(repo_path, false, client, &handle, emit);
     }
 
     fn project_tab_switch(&mut self, id: i64) {
