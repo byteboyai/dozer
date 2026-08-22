@@ -302,6 +302,12 @@ pub enum Request {
     OpenProject {
         path: String,
     },
+    /// 补录一个项目目录下、dozerd 还没摄取过的 agent transcript 历史
+    /// (以及追平任何已摄取文件里新增的尾部内容)。`cwd` 是项目根目录的
+    /// 绝对路径字符串，跟 `OpenProject.path` 同一种形状。
+    BackfillProjectTranscripts {
+        cwd: String,
+    },
     /// 列出所有项目（按活跃时间倒序）。
     ListProjects,
     /// 项目改名。`id` 不存在或 `name` trim 后为空 → `Reply::Error`。成功复用
@@ -388,6 +394,12 @@ pub enum Reply {
     /// 单个/当前项目（无则 None）。
     Project {
         project: Option<ProjectInfo>,
+    },
+    /// `BackfillProjectTranscripts` 应答:这次实际导入(全新摄取)的文件数。
+    /// 0 表示这个项目的三家 agent 目录里没有还没摄取过的文件——不代表
+    /// 出错。
+    BackfillDone {
+        imported_files: u32,
     },
     /// 验收次数。
     AcceptanceCount {
@@ -561,6 +573,21 @@ mod tests {
             conversation_id: "abc".into(),
             groups: vec![group],
         };
+        let line = encode_line(&reply);
+        let back: Reply = decode_line(&line).unwrap();
+        assert_eq!(reply, back);
+    }
+
+    #[test]
+    fn backfill_project_transcripts_protocol_types_roundtrip() {
+        let req = Request::BackfillProjectTranscripts {
+            cwd: "/home/x/proj".into(),
+        };
+        let line = encode_line(&req);
+        let back: Request = decode_line(&line).unwrap();
+        assert_eq!(req, back);
+
+        let reply = Reply::BackfillDone { imported_files: 3 };
         let line = encode_line(&reply);
         let back: Reply = decode_line(&line).unwrap();
         assert_eq!(reply, back);
