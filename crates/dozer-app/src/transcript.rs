@@ -12,10 +12,15 @@ use serde_json::Value;
 pub enum ReviewEntry {
     /// 人类发言（导航锚点）。
     Human { text: String },
-    /// AI 一个回合：正文 + 真实思考文本 + 结构化工具调用 + 紧跟它的工具
-    /// 结果(2026-08-22 起按位置邻接折叠进来,不再是顶层独立条目——同一
-    /// `AiTurn` 之后、下一个 `Human`/`AiTurn` 之前的连续 `ToolResult` 都
-    /// 算它的,见 `review_entries_from_turns`)。
+    /// AI 一个逻辑回合：正文 + 真实思考文本 + 结构化工具调用 + 紧跟它的
+    /// 工具结果。上游 transcript 常把同一次回复拆成多条 `role:"ai"` 的
+    /// `TurnRecord`(先几条只有 tool_use、没有正文,最后一条才是给人看
+    /// 的回复文本),2026-08-22 起 `review_entries_from_turns` 会把这类
+    /// "正文还没落地"的连续 `ai` 行折叠进同一个 `AiTurn`,直到出现带正文
+    /// 的那一条才定稿——不然轨迹步骤会各自顶格显示成一堆只有"轨迹 ▸"、
+    /// 没有正文的空气泡,和真正的回复正文断成两截。`ToolResult` 的折叠
+    /// 规则不变:同一 `AiTurn` 之后、下一个 `Human`/`AiTurn` 之前的连续
+    /// `ToolResult` 都算它的。
     AiTurn {
         text: String,
         thinking_text: Option<String>,
@@ -35,10 +40,17 @@ pub struct ToolResultEntry {
 }
 
 /// dozerd 查询回来的回合明细 → 面板展示用的 `ReviewEntry`。顺序 fold 而
-/// 不是逐条 map:`tool_result` 角色的行按位置邻接归到紧邻它前面那个
-/// `AiTurn` 的 `tool_results`(`out.last_mut()` 还是同一个 `AiTurn` 就
-/// 一直往里塞),前面没有 `AiTurn`(比如会话/导出片段从工具结果开始)才
-/// 落回顶层 `ReviewEntry::ToolResult`。
+/// 不是逐条 map:
+/// - `tool_result` 角色的行按位置邻接归到紧邻它前面那个 `AiTurn` 的
+///   `tool_results`(`out.last_mut()` 还是同一个 `AiTurn` 就一直往里塞),
+///   前面没有 `AiTurn`(比如会话/导出片段从工具结果开始)才落回顶层
+///   `ReviewEntry::ToolResult`。
+/// - `ai` 角色的行:如果紧邻前面那个 `AiTurn` 还没有正文(`text` 为空,
+///   说明它到目前为止只是纯轨迹——思考/工具调用),就把当前行折叠进去
+///   (正文换成当前行的,thinking_text/tool_calls 累加),而不是另起一个
+///   顶层条目;一旦某个 `AiTurn` 有了正文就算定稿,后续再来的 `ai` 行
+///   会开启新的顶层条目。这样"最终回复前的一串纯工具调用回合"会跟那句
+///   回复正文合成一个条目,回复正文下面折叠的就是它的完整轨迹。
 pub fn review_entries_from_turns(turns: &[TurnRecord]) -> Vec<ReviewEntry> {
     let mut out: Vec<ReviewEntry> = Vec::new();
     for t in turns {
@@ -61,12 +73,40 @@ pub fn review_entries_from_turns(turns: &[TurnRecord]) -> Vec<ReviewEntry> {
                     }),
                 }
             }
-            _ => out.push(ReviewEntry::AiTurn {
-                text: t.content.clone(),
-                thinking_text: t.thinking_text.clone(),
-                tool_calls: t.tool_calls.clone(),
-                tool_results: Vec::new(),
-            }),
+            _ => {
+                let pending = matches!(
+                    out.last(),
+                    Some(ReviewEntry::AiTurn { text, .. }) if text.is_empty()
+                );
+                if pending {
+                    let Some(ReviewEntry::AiTurn {
+                        text,
+                        thinking_text,
+                        tool_calls,
+                        ..
+                    }) = out.last_mut()
+                    else {
+                        unreachable!("just matched AiTurn above");
+                    };
+                    *text = t.content.clone();
+                    match (thinking_text.as_mut(), &t.thinking_text) {
+                        (Some(existing), Some(new_text)) => {
+                            existing.push('\n');
+                            existing.push_str(new_text);
+                        }
+                        (None, Some(new_text)) => *thinking_text = Some(new_text.clone()),
+                        _ => {}
+                    }
+                    tool_calls.extend(t.tool_calls.iter().cloned());
+                } else {
+                    out.push(ReviewEntry::AiTurn {
+                        text: t.content.clone(),
+                        thinking_text: t.thinking_text.clone(),
+                        tool_calls: t.tool_calls.clone(),
+                        tool_results: Vec::new(),
+                    });
+                }
+            }
         }
     }
     out
@@ -342,6 +382,89 @@ mod tests {
                     }]
                 );
             }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn review_entries_from_turns_merges_leading_trajectory_only_ai_turns_into_final_reply() {
+        use dozer_core::protocol::{ToolCallInfo, TurnRecord};
+        fn ai_step(summary: &str) -> TurnRecord {
+            TurnRecord {
+                turn_index: 0,
+                role: "ai".into(),
+                content: String::new(),
+                tool_calls: vec![ToolCallInfo {
+                    summary: summary.into(),
+                    input_json: None,
+                }],
+                thinking: false,
+                thinking_text: None,
+                ts: None,
+                is_error: false,
+            }
+        }
+        fn ai_reply(content: &str) -> TurnRecord {
+            TurnRecord {
+                turn_index: 0,
+                role: "ai".into(),
+                content: content.into(),
+                tool_calls: vec![],
+                thinking: false,
+                thinking_text: None,
+                ts: None,
+                is_error: false,
+            }
+        }
+        // 真实 transcript 里,一次逻辑回复常被拆成好几条 `ai` 行:前面几条
+        // 只带 tool_use、没有正文,最后一条才是给人看的回复文本。这些"正文
+        // 还没落地"的连续行应该合并成一个 `AiTurn`,而不是各自顶格显示。
+        let turns = vec![
+            ai_step("git commit"),
+            ai_step("cargo build"),
+            ai_reply("Done."),
+        ];
+        let entries = review_entries_from_turns(&turns);
+        assert_eq!(entries.len(), 1, "应合并成一个条目,而不是三个空气泡");
+        match &entries[0] {
+            ReviewEntry::AiTurn {
+                text, tool_calls, ..
+            } => {
+                assert_eq!(text, "Done.");
+                assert_eq!(tool_calls.len(), 2);
+                assert_eq!(tool_calls[0].summary, "git commit");
+                assert_eq!(tool_calls[1].summary, "cargo build");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn review_entries_from_turns_does_not_merge_across_a_finalized_ai_turn() {
+        use dozer_core::protocol::TurnRecord;
+        fn ai(content: &str) -> TurnRecord {
+            TurnRecord {
+                turn_index: 0,
+                role: "ai".into(),
+                content: content.into(),
+                tool_calls: vec![],
+                thinking: false,
+                thinking_text: None,
+                ts: None,
+                is_error: false,
+            }
+        }
+        // 一旦某个 `AiTurn` 已经有正文(算定稿),后续 `ai` 行不该继续往
+        // 它里面塞——即使它没有正文,也该另起一个新条目。
+        let turns = vec![ai("先回一句"), ai("")];
+        let entries = review_entries_from_turns(&turns);
+        assert_eq!(entries.len(), 2);
+        match &entries[0] {
+            ReviewEntry::AiTurn { text, .. } => assert_eq!(text, "先回一句"),
+            other => panic!("{other:?}"),
+        }
+        match &entries[1] {
+            ReviewEntry::AiTurn { text, .. } => assert_eq!(text, ""),
             other => panic!("{other:?}"),
         }
     }
