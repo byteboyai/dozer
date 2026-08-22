@@ -1267,6 +1267,12 @@ pub enum Message {
     /// (`(start_turn_index, end_turn_index)`，闭区间，两端都含)。`agent`
     /// 随行内数据一并带上，不用再反查 session 列表。
     ConversationTurnGroupOpen(PathBuf, AgentKind, i64, i64),
+    /// 一次"删除项目"执行完成。`Vec<String>` 是文件系统步骤各自独立的
+    /// 失败原因(空 = 全部成功);dozerd 侧两步(登记/agent 历史)任一失败
+    /// 时这里只会收到那一条错误。项目对应的 tab 在发起删除时已经关掉,
+    /// 这个消息到达时已经没有面板可以展示状态,统一走 `self.daemon_error`
+    /// (同 `project_tab_opened` 失败路径的既有做法)。
+    ProjectDeleteDone(Vec<String>),
     /// 对话列表面板(会话列表)点"更多..."翻页图标按钮——只把当前已缓存的
     /// `conversation_turn_groups` 往下多展开一页(`CONVERSATION_PAGE_SIZE` 条),
     /// 不问 daemon 要新数据(同 `git_log::Message::CommitListMore`)。
@@ -3841,6 +3847,11 @@ impl App {
                     }
                 });
             }
+            Message::ProjectDeleteDone(errors) => {
+                if !errors.is_empty() {
+                    self.daemon_error = Some(format!("删除项目未完全成功: {}", errors.join("; ")));
+                }
+            }
             Message::Usage(msg @ usage::Message::Loaded(project_id, ..)) => {
                 self.with_project(project_id, move |ws, io| {
                     let Some(project) = &ws.project else { return };
@@ -4602,6 +4613,9 @@ impl App {
                     emit,
                 );
             }
+            Message::Project(project::Message::DeleteProjectConfirm) => {
+                self.project_delete_confirm();
+            }
             Message::Project(msg) => {
                 let Some(project_id) = self.active_project_id else {
                     return;
@@ -4940,6 +4954,38 @@ impl App {
         }
         self.sync_terminal_grid(); // 清放大态后重算网格,理由同 `ProjectTabSwitch`
         self.persist_open_projects();
+    }
+
+    /// "删除项目"确认弹窗的"删除"按钮触发,由 `Message::Project(project::
+    /// Message::DeleteProjectConfirm)` 拦截调用(见该分支注释)。这个操作
+    /// 一定作用在当前聚焦的项目上——删除按钮本来就在那个项目自己的面板
+    /// 里,不存在"删除一个没打开的项目"这回事。
+    fn project_delete_confirm(&mut self) {
+        let Some(project_id) = self.active_project_id else {
+            return;
+        };
+        let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+            return;
+        };
+        let Some(scope) = ws.project_panel.delete_pending.take() else {
+            return;
+        };
+        let Some(project) = ws.project.as_ref() else {
+            return;
+        };
+        let repo_path = PathBuf::from(&project.path);
+        // 关 tab 必须在发起删除请求之前——删除一旦成功,这个项目在
+        // dozerd/磁盘上都可能已经不存在了,`Workspace` 不该继续留着。
+        self.project_tab_close(project_id);
+        let client = self.client.clone();
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        let on_done = move |errors: Vec<String>| {
+            let _ = proxy.send_event(Message::ProjectDeleteDone(errors));
+        };
+        project::delete::spawn_delete_project(
+            project_id, repo_path, scope, client, &handle, on_done,
+        );
     }
 
     fn project_slot_loaded(&mut self, id: i64, payload: RestorePayload) {
