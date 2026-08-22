@@ -2,7 +2,7 @@
 //! 字段又带用量字段的 `ParsedTurn`(合并原 dozer-app `transcript.rs` +
 //! `usage.rs` 两套平行解析器,避免长期重复维护——spec"参考调研"一节)。
 
-use dozer_core::protocol::AgentKind;
+use dozer_core::protocol::{AgentKind, ToolCallInfo};
 use serde_json::Value;
 
 pub const MUTATING_TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
@@ -463,6 +463,120 @@ pub fn parse_chunk(
     }
 }
 
+/// 一个回合读时解析出的 trace 明细（思考文本 + 结构化工具调用），只在
+/// `dozerd::transcripts::mod::get_conversation_turns` 查询期间对 `raw_json`
+/// 现算，不在摄取时落库、不加新列——`raw_json` 本身已经全量持久化，读时
+/// 解析一次的代价可忽略（用户打开审阅面板才触发，单个 session 几十行）。
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TurnTraceDetail {
+    pub thinking_text: Option<String>,
+    pub tool_calls: Vec<ToolCallInfo>,
+}
+
+/// 从一行原始 JSONL(`raw_json`)按 `agent` 对应的形状提取真实思考文本和
+/// 结构化工具调用参数——`parse_claude_shaped_chunk`/`parse_codebuddy_shaped_chunk`
+/// 摄取时只留了布尔位/一行摘要，这里是独立的读时补全，**不复用/不修改**
+/// 那两个摄取函数(摄取路径是热路径、已有测试覆盖，不承担这次改动的风险；
+/// 两边对 `type` 字段的判断口径保持一致即可)。解析失败/形状不认识时返回
+/// 全空的 `TurnTraceDetail`，不 panic。
+pub fn extract_turn_trace_detail(raw_json: &str, agent: AgentKind) -> TurnTraceDetail {
+    let Ok(v) = serde_json::from_str::<Value>(raw_json) else {
+        return TurnTraceDetail::default();
+    };
+    match agent {
+        AgentKind::Codebuddy => extract_codebuddy_trace_detail(&v),
+        // Claude/Opencode/Kilo/Unknown 摄取时都走 parse_claude_shaped_chunk
+        // (parse_chunk 的分派,parse.rs:456-457),读时解析沿用同一分派。
+        AgentKind::Claude | AgentKind::Opencode | AgentKind::Kilo | AgentKind::Unknown => {
+            extract_claude_trace_detail(&v)
+        }
+        // Codex/V8agent 目前完全不摄取(parse_chunk 分派到空 Vec,
+        // parse.rs:462),没有 raw_json 可读。
+        AgentKind::Codex | AgentKind::V8agent => TurnTraceDetail::default(),
+    }
+}
+
+fn input_json_of(input: &Value) -> Option<String> {
+    if input.is_null() {
+        None
+    } else {
+        serde_json::to_string_pretty(input).ok()
+    }
+}
+
+fn extract_claude_trace_detail(v: &Value) -> TurnTraceDetail {
+    let mut thinking_text: Option<String> = None;
+    let mut tool_calls = Vec::new();
+    let Some(blocks) = v
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_array())
+    else {
+        return TurnTraceDetail::default();
+    };
+    for b in blocks {
+        match b.get("type").and_then(|t| t.as_str()) {
+            Some("thinking") => {
+                if let Some(t) = b.get("thinking").and_then(|t| t.as_str()) {
+                    match &mut thinking_text {
+                        Some(existing) => {
+                            existing.push('\n');
+                            existing.push_str(t);
+                        }
+                        None => thinking_text = Some(t.to_string()),
+                    }
+                }
+            }
+            Some("tool_use") => {
+                let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("工具");
+                let input = b.get("input").cloned().unwrap_or(Value::Null);
+                tool_calls.push(ToolCallInfo {
+                    summary: tool_summary(name, &input),
+                    input_json: input_json_of(&input),
+                });
+            }
+            _ => {}
+        }
+    }
+    TurnTraceDetail {
+        thinking_text,
+        tool_calls,
+    }
+}
+
+fn extract_codebuddy_trace_detail(v: &Value) -> TurnTraceDetail {
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("reasoning") => {
+            let blocks = v
+                .get("content")
+                .and_then(|c| c.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let text = join_codebuddy_text_blocks(&blocks, "reasoning_text");
+            TurnTraceDetail {
+                thinking_text: if text.is_empty() { None } else { Some(text) },
+                tool_calls: Vec::new(),
+            }
+        }
+        Some("function_call") => {
+            let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("工具");
+            let input: Value = v
+                .get("arguments")
+                .and_then(|a| a.as_str())
+                .and_then(|s| serde_json::from_str(s).ok())
+                .unwrap_or(Value::Null);
+            TurnTraceDetail {
+                thinking_text: None,
+                tool_calls: vec![ToolCallInfo {
+                    summary: tool_summary(name, &input),
+                    input_json: input_json_of(&input),
+                }],
+            }
+        }
+        _ => TurnTraceDetail::default(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -728,5 +842,95 @@ mod tests {
         assert_eq!(turns[0].tokens_out, 7);
         assert_eq!(turns[0].tool_calls, 0);
         assert!(turns[0].files_touched.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod trace_detail_tests {
+    use super::*;
+
+    #[test]
+    fn extract_claude_trace_detail_reads_thinking_text_and_tool_input() {
+        let raw = r#"{"type":"assistant","message":{"content":[
+            {"type":"thinking","thinking":"先看看现有实现"},
+            {"type":"tool_use","name":"Edit","input":{"file_path":"README.md","old_string":"a","new_string":"b"}},
+            {"type":"text","text":"改好了"}
+        ]}}"#;
+        let detail = extract_turn_trace_detail(raw, AgentKind::Claude);
+        assert_eq!(detail.thinking_text.as_deref(), Some("先看看现有实现"));
+        assert_eq!(detail.tool_calls.len(), 1);
+        assert_eq!(detail.tool_calls[0].summary, "Edit README.md");
+        let input_json = detail.tool_calls[0].input_json.as_deref().unwrap();
+        assert!(input_json.contains("README.md"));
+        assert!(input_json.contains("old_string"));
+    }
+
+    #[test]
+    fn extract_claude_trace_detail_multiple_tool_use_and_no_thinking() {
+        let raw = r#"{"type":"assistant","message":{"content":[
+            {"type":"tool_use","name":"Read","input":{"file_path":"a.txt"}},
+            {"type":"tool_use","name":"Bash","input":{"command":"ls -la"}}
+        ]}}"#;
+        let detail = extract_turn_trace_detail(raw, AgentKind::Claude);
+        assert_eq!(detail.thinking_text, None);
+        assert_eq!(detail.tool_calls.len(), 2);
+        assert_eq!(detail.tool_calls[0].summary, "Read a.txt");
+        assert_eq!(detail.tool_calls[1].summary, "Bash ls -la");
+    }
+
+    #[test]
+    fn extract_claude_trace_detail_no_blocks_returns_empty() {
+        let raw = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}"#;
+        let detail = extract_turn_trace_detail(raw, AgentKind::Claude);
+        assert_eq!(detail, TurnTraceDetail::default());
+    }
+
+    #[test]
+    fn extract_trace_detail_malformed_json_returns_empty() {
+        let detail = extract_turn_trace_detail("not json", AgentKind::Claude);
+        assert_eq!(detail, TurnTraceDetail::default());
+    }
+
+    #[test]
+    fn extract_codebuddy_trace_detail_function_call_has_input() {
+        let raw =
+            r#"{"type":"function_call","name":"Edit","arguments":"{\"file_path\":\"a.rs\"}"}"#;
+        let detail = extract_turn_trace_detail(raw, AgentKind::Codebuddy);
+        assert_eq!(detail.thinking_text, None);
+        assert_eq!(detail.tool_calls.len(), 1);
+        assert_eq!(detail.tool_calls[0].summary, "Edit a.rs");
+        assert!(
+            detail.tool_calls[0]
+                .input_json
+                .as_deref()
+                .unwrap()
+                .contains("a.rs")
+        );
+    }
+
+    #[test]
+    fn extract_codebuddy_trace_detail_reasoning_with_text_blocks() {
+        // CodeBuddy 的 reasoning 事件真实字段名未在现有 fixture 里观测到，
+        // 按该文件里 assistant 消息用 "output_text"/"input_text" 类型化
+        // block 数组的既有约定类推为 "reasoning_text"；如果拿到真实样本发现
+        // 字段名不同，回来改这一个函数即可，不影响其它任何东西。
+        let raw = r#"{"type":"reasoning","content":[{"type":"reasoning_text","text":"先想想"}]}"#;
+        let detail = extract_turn_trace_detail(raw, AgentKind::Codebuddy);
+        assert_eq!(detail.thinking_text.as_deref(), Some("先想想"));
+        assert_eq!(detail.tool_calls, Vec::new());
+    }
+
+    #[test]
+    fn extract_codebuddy_trace_detail_reasoning_without_matching_blocks_is_none() {
+        let raw =
+            r#"{"type":"reasoning","content":[{"type":"summary_text","text":"other shape"}]}"#;
+        let detail = extract_turn_trace_detail(raw, AgentKind::Codebuddy);
+        assert_eq!(detail.thinking_text, None);
+    }
+
+    #[test]
+    fn extract_trace_detail_unhandled_agent_returns_empty() {
+        let detail = extract_turn_trace_detail(r#"{"type":"whatever"}"#, AgentKind::Codex);
+        assert_eq!(detail, TurnTraceDetail::default());
     }
 }
