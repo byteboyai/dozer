@@ -1112,7 +1112,7 @@ pub fn view<'a>(
     let head =
         crate::homespace::home_panel_head(byteui::interaction::icons::IconKind::Server, "主机");
 
-    let mut list = column![].spacing(12).padding(8);
+    let mut list = column![].spacing(12).padding([0, 20]);
 
     if ws_state.hosts().is_empty() {
         list = list.push(
@@ -1275,24 +1275,39 @@ fn delete_confirm_popup<'a>(
 /// 一致。当前放「＋添加」单个按钮,底部固定,不随主机列表滚动。
 fn ssh_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let add_btn = button(
-        text("＋添加")
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().gold),
+        row![
+            icons::view(
+                icons::IconKind::SquarePlus,
+                byteui::theme::icon_size::row(),
+                byteui::theme::color::current().cream,
+            ),
+            text("添加主机")
+                .size(byteui::theme::font::label())
+                .color(byteui::theme::color::current().cream),
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center),
     )
     .on_press(Message::AddHostStart)
-    .padding([8, 16])
+    .padding([4, 8])
     .style(|_t: &iced_widget::Theme, _s| button::Style {
         background: Some(byteui::theme::color::current().bg.into()),
         border: iced_widget::core::Border {
-            color: byteui::theme::color::current().gold,
+            color: byteui::theme::color::current().border,
             width: 1.0,
-            radius: 6.0.into(),
+            radius: 4.0.into(),
         },
-        text_color: byteui::theme::color::current().gold,
+        text_color: byteui::theme::color::current().cream,
         ..button::Style::default()
     });
 
-    let bar = row![add_btn].align_y(iced_widget::core::Alignment::Center);
+    // 对齐 todo 左栏底部栏 `todo_clear_footer_bar`:按钮用
+    // bg 实底 + `border` 描边 + `cream` 文字 + `[4,8]` padding + 圆角 4
+    // (不再用 gold 描边/gold 文字那套),top_line 分割线内缩对齐 `project_pane`
+    // 的水平内距(否则 footbar 分割线比面板 header/content 更长,两端对不上)。
+    let bar = row![add_btn, iced_widget::space::horizontal()]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center);
 
     let top_line = container(iced_widget::Space::new())
         .width(iced_widget::core::Length::Fill)
@@ -1302,9 +1317,15 @@ fn ssh_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_render
             ..iced_widget::container::Style::default()
         });
 
+    let pp = crate::theme::region::project_pane().padding;
     container(column![top_line, bar].spacing(4))
         .width(iced_widget::core::Length::Fill)
-        .padding([6, 8])
+        .padding(iced_widget::core::Padding {
+            top: 6.0,
+            right: pp.right,
+            bottom: 6.0,
+            left: pp.left,
+        })
         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
             background: None,
             ..iced_widget::container::Style::default()

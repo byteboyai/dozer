@@ -53,22 +53,43 @@ impl Tabs {
     }
 
     /// 取 URL 的 host 部分当标题(去掉协议头,取第一个 `/` 之前的部分)。
-    /// 每次调用都新开一个 tab,不做去重——原样对齐现有
-    /// `PreviewPane::open_url` 的行为(`open_path` 才有去重,`open_url`
-    /// 没有),纯重构不改变这条现状。
-    pub fn open_url(&mut self, url: String) -> usize {
-        let title = url
-            .trim_start_matches("http://")
+    fn title_for(url: &str) -> String {
+        url.trim_start_matches("http://")
             .trim_start_matches("https://")
             .split('/')
             .next()
-            .unwrap_or(&url)
-            .to_string();
+            .unwrap_or(url)
+            .to_string()
+    }
+
+    /// 每次调用都新开一个 tab,不做去重——原样对齐现有
+    /// `PreviewPane::open_url` 的行为(`open_path` 才有去重,`open_url`
+    /// 没有),纯重构不改变这条现状。返回新开 tab 的 id。
+    pub fn open_url(&mut self, url: String) -> usize {
+        let title = Self::title_for(&url);
         let id = self.next_id;
         self.next_id += 1;
         self.tabs.push(BrowserTab { id, url, title });
         self.active = self.tabs.len() - 1;
         id
+    }
+
+    /// 在当前激活 tab 打开 URL:复用激活 tab(更新其 url/title,不新增),
+    /// 区别于 `open_url` 的"总是新开 tab"。tab 组理论上恒非空(`close` 兜底
+    /// 会补 `about:blank`),但为稳妥异常情况仍新开。返回被复用的 tab 的 id。
+    pub fn navigate_active(&mut self, url: String) -> usize {
+        let title = Self::title_for(&url);
+        if self.tabs.is_empty() {
+            let id = self.next_id;
+            self.next_id += 1;
+            self.tabs.push(BrowserTab { id, url, title });
+            return id;
+        }
+        let idx = self.active.min(self.tabs.len() - 1);
+        self.tabs[idx].url = url;
+        self.tabs[idx].title = title;
+        self.active = idx;
+        self.tabs[idx].id
     }
 
     pub fn select(&mut self, idx: usize) {
@@ -610,7 +631,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_addr_submit_ok_recurses_into_open_url() {
+    async fn update_addr_submit_opens_in_active_tab() {
         let mut state = State::default();
         let handle = tokio::runtime::Handle::current();
         let client = client_for_test();
@@ -632,10 +653,26 @@ mod tests {
         );
         assert_eq!(
             state.tabs.tabs().len(),
-            2,
-            "默认带一个 about:blank(下标 0),提交应再开一个真实 tab(下标 1)"
+            1,
+            "默认带一个 about:blank(下标 0),提交应在该激活 tab 打开而不新增"
         );
-        assert_eq!(state.tabs.tabs()[1].url, "http://a.com");
+        assert_eq!(state.tabs.tabs()[0].url, "http://a.com");
+    }
+
+    #[test]
+    fn navigate_active_reuses_active_tab_without_adding() {
+        let mut t = Tabs::default();
+        t.open_url("http://a.com".into());
+        t.open_url("http://b.com".into());
+        assert_eq!(t.tabs().len(), 2);
+        t.select(0);
+        let id = t.navigate_active("http://c.com".into());
+        assert_eq!(t.tabs().len(), 2, "复用激活 tab,数量不变");
+        assert_eq!(t.tabs()[0].url, "http://c.com");
+        assert_eq!(t.tabs()[0].title, "c.com");
+        assert_eq!(t.active_idx(), 0);
+        assert_eq!(t.tabs()[0].id, id);
+        assert_eq!(t.tabs()[1].url, "http://b.com", "无关 tab 不受影响");
     }
 
     #[tokio::test]
@@ -1288,14 +1325,12 @@ pub fn update(
         }
         Message::AddrInput(s) => state.tabs.set_addr_buffer(s),
         Message::AddrSubmit => match state.tabs.addr_submit() {
-            Ok(Some(url)) => update(
-                state,
-                Message::OpenUrl(url),
-                project_id,
-                client,
-                handle,
-                emit,
-            ),
+            Ok(Some(url)) => {
+                // 地址栏提交:在当前激活 tab 打开(复用 tab),不新开——
+                // 新建走 "+" 按钮(`OpenUrl`)。原实现 recurse 进
+                // `Message::OpenUrl` 会新开 tab,这里是行为变更,见计划。
+                state.tabs.navigate_active(url);
+            }
             Ok(None) => {}
             Err(message) => state.error = Some(message),
         },
@@ -1603,10 +1638,9 @@ pub fn view(
                 .into()
         })
         .collect();
-    let tabs_row = row(items).spacing(4);
-    // 页签自身区域可横向裁切(溢出部分 clip),但末尾的"新标签页"(+)按钮
-    // 不做裁切,始终钉在 tab 栏右端可点——避免页签一多就被挤出可视区。
-    let clipped = container(tabs_row).width(Length::Fill).clip(true);
+    // "新标签页"(+)按钮紧跟最后一个页签,一起放进同一行、按内容宽度排布:
+    // 它也位于页签最右端紧挨着,而不是被 `Length::Fill` 顶到 tab 栏最右缘。
+    // 行整体横向溢出被 clip(页签/按钮一多会被裁出可视区,与页签同一待遇)。
     let new_tab_btn = icons::icon_button_entry(
         icons::IconKind::SquarePlus,
         byteui::theme::icon_size::row(),
@@ -1620,9 +1654,13 @@ pub fn view(
         |hovered| Message::Hover(NEW_TAB_KEY, false, hovered),
         "新标签页",
     );
-    let tab_bar = row![clipped, new_tab_btn]
-        .spacing(4)
-        .align_y(iced_widget::core::Alignment::Center);
+    let tabs_row = row(items
+        .into_iter()
+        .chain(std::iter::once(new_tab_btn))
+        .collect::<Vec<_>>())
+    .spacing(4)
+    .align_y(iced_widget::core::Alignment::Center);
+    let tab_bar = container(tabs_row).width(Length::Shrink).clip(true);
 
     let editing = state.addr_focused();
     // 未聚焦时地址栏回显当前激活 tab 的完整网址(不再只显示"输入网址"
@@ -1671,11 +1709,11 @@ pub fn view(
         ]
         .width(Length::Fill)
         .height(Length::Fixed(content_h))
-        .align_y(iced_widget::core::Alignment::Center),
+        .align_y(iced_widget::core::alignment::Vertical::Center),
     )
     .width(Length::Fill)
-    .height(Length::Fixed(content_h + 8.0))
-    .padding([4, 8])
+    .height(Length::Fixed(content_h + 4.0))
+    .padding([2, 8])
     .style(move |_t: &iced_widget::Theme| container::Style {
         background: Some(byteui::theme::color::current().term_bg.into()),
         border: Border {
@@ -1698,11 +1736,20 @@ pub fn view(
         nav_button(state, NavAction::Refresh),
     ]
     .spacing(0)
-    .align_y(iced_widget::core::Alignment::Center);
+    .align_y(iced_widget::core::alignment::Vertical::Center);
 
-    let addr_row = row![nav_buttons, addr_box, bookmarks_toggle_button(state),]
-        .spacing(4)
-        .align_y(iced_widget::core::Alignment::Center);
+    // 地址栏整行作为组件包一层,给它额外的下边距(用容器底部 padding 充当
+    // margin),与下方内容拉出呼吸感;垂直 padding 已在上面的 `addr_box`
+    // 内压低来瘦身高,这里只贡献下边距、不再加别的内边距。
+    let addr_row = container(
+        container(
+            row![nav_buttons, addr_box, bookmarks_toggle_button(state),]
+                .spacing(4)
+                .align_y(iced_widget::core::alignment::Vertical::Center),
+        )
+        .width(Length::Fill),
+    )
+    .padding(iced_widget::core::padding::bottom(8.0));
 
     let mut content = column![tab_bar, tab_divider(), addr_row].spacing(region.gap);
 

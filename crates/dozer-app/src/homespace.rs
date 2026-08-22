@@ -70,16 +70,20 @@ pub(crate) enum HomeRightView {
 /// H0"最近的文件"卡一行(跨项目合并前的中间表示；D4)。`Message::
 /// HomeRecentsLoaded` 的载荷用到它，因此至少是 `pub(crate)`(见 `private_interfaces`)。
 /// 字段本身也是 `pub(crate)`——`workspace.rs` 里画卡片的视图函数要读它们。
+/// `project_id` 供点击卡片打开所属项目(`ProjectSelect(project_id)`)，与项目
+/// 列表面板同款跳转。
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct HomeRecentFile {
+    pub(crate) project_id: i64,
     pub(crate) path: PathBuf,
     pub(crate) project_name: String,
     pub(crate) modified_ms: u64,
 }
 
-/// H0"最近的对话"卡一行；语义同上。
+/// H0"最近的对话"卡一行；语义同上，`project_id` 同样供 `ProjectSelect`。
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct HomeRecentConversation {
+    pub(crate) project_id: i64,
     pub(crate) project_name: String,
     pub(crate) meta: ConversationMeta,
 }
@@ -725,7 +729,7 @@ fn home_recent_files_card(
                 .color(theme::homespace_color::dim()),
         );
     } else {
-        for (i, f) in app.home_recent_files.iter().enumerate() {
+        for f in &app.home_recent_files {
             let filename = f
                 .path
                 .file_name()
@@ -753,19 +757,18 @@ fn home_recent_files_card(
             ]
             .spacing(8)
             .align_y(iced_widget::core::Alignment::Center);
-            let hovered = app.hover_progress(HoverId::RecentFile(i)) > 0.0;
+            // 原生 button + button_card:hover 由 iced `button::Status` 驱动,
+            // 立即亮/立即灭——与项目列表面板同一套机制,避免 `container_card`
+            // + `hover_progress` 指数衰减让高亮在鼠标离开后残留过久。点击在
+            // 激活 tab 打开所属项目(`ProjectSelect`,见 `App::project_select`)。
             col = col.push(
-                MouseArea::new(container(row_el).padding(10).width(Length::Fill).style(
-                    move |_t: &iced_widget::Theme| {
-                        byteui::interaction::cards::container_card(
-                            false,
-                            hovered,
-                            byteui::theme::color::current().card,
-                        )
-                    },
-                ))
-                .on_enter(Message::Hover(HoverId::RecentFile(i), true))
-                .on_exit(Message::Hover(HoverId::RecentFile(i), false)),
+                button(container(row_el).padding(10).width(Length::Fill))
+                    .on_press(Message::ProjectSelect(f.project_id))
+                    .width(Length::Fill)
+                    .style(byteui::interaction::cards::button_card(
+                        false,
+                        byteui::theme::color::current().card,
+                    )),
             );
         }
     }
@@ -802,15 +805,14 @@ fn home_recent_conversations_card(
                 .color(theme::homespace_color::dim()),
         );
     } else {
-        for (i, c) in app.home_recent_conversations.iter().enumerate() {
+        for c in &app.home_recent_conversations {
             let meta = format!(
                 "{} · {}",
                 c.project_name,
                 relative_time_text(c.meta.modified_ms, now_ms)
             );
-            let hovered = app.hover_progress(HoverId::RecentConversation(i)) > 0.0;
             col = col.push(
-                MouseArea::new(
+                button(
                     container(
                         row![
                             icons::view(
@@ -835,17 +837,14 @@ fn home_recent_conversations_card(
                         .align_y(iced_widget::core::Alignment::Start),
                     )
                     .padding(10)
-                    .width(Length::Fill)
-                    .style(move |_t: &iced_widget::Theme| {
-                        byteui::interaction::cards::container_card(
-                            false,
-                            hovered,
-                            byteui::theme::color::current().card,
-                        )
-                    }),
+                    .width(Length::Fill),
                 )
-                .on_enter(Message::Hover(HoverId::RecentConversation(i), true))
-                .on_exit(Message::Hover(HoverId::RecentConversation(i), false)),
+                .on_press(Message::ProjectSelect(c.project_id))
+                .width(Length::Fill)
+                .style(byteui::interaction::cards::button_card(
+                    false,
+                    byteui::theme::color::current().card,
+                )),
             );
         }
     }
@@ -884,6 +883,7 @@ pub(crate) async fn load_home_recents(
                         .map(|d| d.as_millis() as u64)
                         .unwrap_or(0);
                     files.push(HomeRecentFile {
+                        project_id: p.id,
                         path,
                         project_name: p.name.clone(),
                         modified_ms,
@@ -906,6 +906,7 @@ pub(crate) async fn load_home_recents(
         if let Ok(summaries) = client.list_conversations(&cwd_str, None, 50, 0).await {
             for s in summaries {
                 convs.push(HomeRecentConversation {
+                    project_id: p.id,
                     project_name: p.name.clone(),
                     meta: ConversationMeta::from_summary(&s),
                 });
@@ -976,6 +977,7 @@ mod tests {
         let (files, convs) = load_home_recents(&client_for_test(), &projects).await;
         assert_eq!(files.len(), 1, "只有项目 A(git repo)贡献一条改动文件");
         assert_eq!(files[0].project_name, "proj-a");
+        assert_eq!(files[0].project_id, 1, "卡片点击应带回所属项目 id");
         assert!(files[0].path.ends_with("a.txt"));
         assert!(convs.is_empty(), "两个项目都没有 daemon 返回的会话");
     }
