@@ -69,6 +69,7 @@ use iced_widget::core::widget::{Id, Operation};
 use iced_widget::core::{Border, Color, Element, Length, Padding, Rectangle};
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -170,6 +171,14 @@ pub(crate) fn review_should_refresh_on_turn(source: &ReviewSource, tab_id: usize
     matches!(source, ReviewSource::Session(id) if *id == tab_id)
 }
 
+/// 前一话题/下一话题的静态预览(2026-08-22):只是一行标签文字,不可点击
+/// 跳转,文字直接用已加载的 `TurnGroupRow.title`,不额外发请求抓正文
+/// (见 spec"已知取舍")。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TopicPreview {
+    pub label: String,
+}
+
 /// 会话审阅 tab 的内容（P1i）。
 pub struct ReviewView {
     pub source: ReviewSource,
@@ -180,6 +189,40 @@ pub struct ReviewView {
     /// host.html?_r=<nonce>` 的查询参数,逼 wry 在内容变化时重新导航
     /// 拉取(同 `preview.rs::PreviewTab.reload_nonce` 的手法)。
     pub nonce: u64,
+    /// 打开这个话题时算好、跟着 `ReviewView` 一起存的邻居预览——跟
+    /// `entries`(异步加载)不同,这两个在 `app.rs::conversation_turn_group_open`
+    /// 里同步算好,不随 `ReviewLoaded` 变化。
+    pub prev_topic: Option<TopicPreview>,
+    pub next_topic: Option<TopicPreview>,
+}
+
+/// 从已加载的全量 turn-group 列表里,找出跟 `path` 同一 session、按
+/// `start_turn_index` 排序后紧邻当前话题([`start_turn_index`,
+/// `end_turn_index`])的前一个/后一个。首/末话题,或该邻居因为
+/// `conversation_turn_groups` 的 500 条上限没被加载进来,都返回 `None`——
+/// 不额外发请求去补(见 spec"已知取舍")。
+pub(crate) fn adjacent_topic_previews(
+    groups: &[TurnGroupRow],
+    path: &Path,
+    start_turn_index: i64,
+    end_turn_index: i64,
+) -> (Option<TopicPreview>, Option<TopicPreview>) {
+    let mut same_session: Vec<&TurnGroupRow> = groups.iter().filter(|g| g.path == path).collect();
+    same_session.sort_by_key(|g| g.start_turn_index);
+    let prev = same_session
+        .iter()
+        .rev()
+        .find(|g| g.end_turn_index < start_turn_index)
+        .map(|g| TopicPreview {
+            label: g.title.clone(),
+        });
+    let next = same_session
+        .iter()
+        .find(|g| g.start_turn_index > end_turn_index)
+        .map(|g| TopicPreview {
+            label: g.title.clone(),
+        });
+    (prev, next)
 }
 
 /// 预览编辑弹层的进行中会话(全局至多一个;弹层是应用级模态)。
@@ -3932,6 +3975,8 @@ mod tests {
             entries: vec![ReviewEntry::Human { text: "hi".into() }],
             error: Some("boom".into()),
             nonce: 3,
+            prev_topic: None,
+            next_topic: None,
         };
         assert_eq!(review_webview_spec(Some(&with_error)), Vec::new());
 
@@ -3940,6 +3985,8 @@ mod tests {
             entries: Vec::new(),
             error: None,
             nonce: 3,
+            prev_topic: None,
+            next_topic: None,
         };
         assert_eq!(review_webview_spec(Some(&empty_entries)), Vec::new());
     }
@@ -3951,11 +3998,83 @@ mod tests {
             entries: vec![ReviewEntry::Human { text: "hi".into() }],
             error: None,
             nonce: 7,
+            prev_topic: None,
+            next_topic: None,
         };
         let specs = review_webview_spec(Some(&rv));
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].url, "dozer://review-trace/host.html?_r=7");
         assert!(specs[0].visible);
+    }
+
+    #[test]
+    fn adjacent_topic_previews_finds_same_session_neighbors_sorted_by_turn_index() {
+        let path = PathBuf::from("/tmp/s1.jsonl");
+        let other_path = PathBuf::from("/tmp/s2.jsonl");
+        let groups = vec![
+            TurnGroupRow {
+                path: path.clone(),
+                agent: AgentKind::Claude,
+                start_turn_index: 0,
+                end_turn_index: 1,
+                title: "第一话题".into(),
+                ts: 100,
+            },
+            TurnGroupRow {
+                path: path.clone(),
+                agent: AgentKind::Claude,
+                start_turn_index: 2,
+                end_turn_index: 3,
+                title: "第二话题".into(),
+                ts: 200,
+            },
+            TurnGroupRow {
+                path: path.clone(),
+                agent: AgentKind::Claude,
+                start_turn_index: 4,
+                end_turn_index: 5,
+                title: "第三话题".into(),
+                ts: 300,
+            },
+            // 同名文件名、不同 session(不同 path)不能被当邻居。
+            TurnGroupRow {
+                path: other_path,
+                agent: AgentKind::Claude,
+                start_turn_index: 6,
+                end_turn_index: 7,
+                title: "别的会话".into(),
+                ts: 400,
+            },
+        ];
+        let (prev, next) = adjacent_topic_previews(&groups, &path, 2, 3);
+        assert_eq!(
+            prev,
+            Some(TopicPreview {
+                label: "第一话题".into()
+            })
+        );
+        assert_eq!(
+            next,
+            Some(TopicPreview {
+                label: "第三话题".into()
+            })
+        );
+    }
+
+    #[test]
+    fn adjacent_topic_previews_none_at_session_boundaries() {
+        let path = PathBuf::from("/tmp/s1.jsonl");
+        let groups = vec![TurnGroupRow {
+            path: path.clone(),
+            agent: AgentKind::Claude,
+            start_turn_index: 0,
+            end_turn_index: 1,
+            title: "唯一话题".into(),
+            ts: 100,
+        }];
+        let (prev, next) = adjacent_topic_previews(&groups, &path, 0, 1);
+        assert_eq!(prev, None);
+        assert_eq!(next, None);
     }
 
     #[test]
