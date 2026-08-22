@@ -772,7 +772,7 @@ fn home_recent_conversations_card(
                             .spacing(4),
                         ]
                         .spacing(8)
-                        .align_y(iced_widget::core::Alignment::Start),
+                        .align_y(iced_widget::core::Alignment::Center),
                     )
                     .padding(10)
                     .width(Length::Fill),

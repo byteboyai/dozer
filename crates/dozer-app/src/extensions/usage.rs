@@ -10,8 +10,9 @@ use crate::homespace::home_panel_head;
 use byteui::interaction::icons;
 use dozer_core::protocol::AgentKind;
 use iced_widget::canvas::{self, Canvas};
-use iced_widget::core::{Border, Color, Element, Length, Radians, Rectangle};
-use iced_widget::{column, container, text};
+use iced_widget::core::{Border, Color, Element, Length, Point, Radians, Rectangle};
+use iced_widget::tooltip::{Position, Tooltip};
+use iced_widget::{column, container, stack, text};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
@@ -517,6 +518,16 @@ fn grouped_list<'a>(
 
 const BAR_MAX_HEIGHT: f32 = 72.0;
 const BAR_WIDTH: f32 = 20.0;
+/// 柱顶总量数字 + 间距预留的高度,`GridLines`/`bar_chart` 靠它对齐网格线
+/// 与柱子的 0 基线(见 `bar_chart` 里 `col` 首个 `container` 的同一个值)。
+const BAR_LABEL_GAP: f32 = 14.0;
+const GRID_CANVAS_HEIGHT: f32 = BAR_MAX_HEIGHT + BAR_LABEL_GAP;
+/// 网格线左侧刻度数字预留的宽度:网格线本身从这条线右边才开始画,避免
+/// 刻度数字跟第一根柱子顶部的总量数字重叠。
+const GRID_LABEL_GUTTER: f32 = 26.0;
+/// 目标网格线条数——实际条数取决于 `nice_tick_step` 算出的整数步长,一般
+/// 落在 3~5 条,不保证精确等于这个数。
+const GRID_TARGET_TICKS: u32 = 4;
 
 fn bar_segment(
     height: f32,
@@ -548,6 +559,162 @@ fn bar_segment(
         .into()
 }
 
+/// 给 `max_value` 算一个"好读"的刻度步长(1/2/5 × 10ⁿ),不是简单
+/// `max_value / target_ticks` 等分——那样步长会是像 733 这种没法一眼读的
+/// 零头,不像典型图表库(Chart.js/D3 等)那样刻度总落在整数上。经典
+/// "nice numbers" 算法:按数量级取 1/2/5/10 里最接近目标步长的一档。
+fn nice_tick_step(max_value: u64, target_ticks: u32) -> u64 {
+    let raw_step = max_value as f64 / target_ticks.max(1) as f64;
+    if raw_step <= 0.0 {
+        return 1;
+    }
+    let magnitude = 10f64.powf(raw_step.log10().floor());
+    let residual = raw_step / magnitude;
+    let nice_residual = if residual <= 1.0 {
+        1.0
+    } else if residual <= 2.0 {
+        2.0
+    } else if residual <= 5.0 {
+        5.0
+    } else {
+        10.0
+    };
+    ((nice_residual * magnitude).round() as u64).max(1)
+}
+
+/// 从一个步长的整数倍往上数,数到 `max_total` 为止的刻度值(不含 0 基线
+/// ——柱子本身已经贴基线,不用再画一条线)。
+fn grid_ticks(max_total: u64) -> Vec<u64> {
+    if max_total == 0 {
+        return Vec::new();
+    }
+    let step = nice_tick_step(max_total, GRID_TARGET_TICKS);
+    let mut ticks = Vec::new();
+    let mut v = step;
+    while v <= max_total {
+        ticks.push(v);
+        v += step;
+    }
+    if ticks.is_empty() {
+        ticks.push(max_total);
+    }
+    ticks
+}
+
+/// 条形图背景网格线:水平参考线 + 左侧刻度数字,叠在柱子行后面(见
+/// `bar_chart` 用 `stack!` 把它跟柱子摞在一起)。画布高度固定为
+/// `GRID_CANVAS_HEIGHT`,跟柱子所在的那个 `container`(同高、底对齐)
+/// 严格对齐,0 值线落在画布最底部。
+struct GridLines {
+    ticks: Vec<u64>,
+    max_total: u64,
+}
+
+impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for GridLines {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced_renderer::Renderer,
+        _theme: &iced_widget::Theme,
+        bounds: Rectangle,
+        _cursor: iced_widget::core::mouse::Cursor,
+    ) -> Vec<canvas::Geometry<iced_renderer::Renderer>> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        if self.max_total == 0 {
+            return vec![frame.into_geometry()];
+        }
+        let line_color = byteui::theme::color::current().border;
+        let label_color = byteui::theme::color::current().dim;
+        for &tick in &self.ticks {
+            let y = GRID_CANVAS_HEIGHT - (tick as f32 / self.max_total as f32) * BAR_MAX_HEIGHT;
+            frame.stroke(
+                &canvas::Path::line(
+                    Point::new(GRID_LABEL_GUTTER, y),
+                    Point::new(bounds.width, y),
+                ),
+                canvas::Stroke::default()
+                    .with_color(line_color)
+                    .with_width(1.0),
+            );
+            frame.fill_text(canvas::Text {
+                content: format_token_short(tick),
+                position: Point::new(GRID_LABEL_GUTTER - 4.0, y),
+                color: label_color,
+                size: iced_widget::core::Pixels(7.0),
+                font: iced_widget::core::Font::MONOSPACE,
+                align_x: iced_widget::core::text::Alignment::Right,
+                align_y: iced_widget::core::alignment::Vertical::Center,
+                ..canvas::Text::default()
+            });
+        }
+        vec![frame.into_geometry()]
+    }
+}
+
+fn grid_lines_canvas(
+    max_total: u64,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    Canvas::new(GridLines {
+        ticks: grid_ticks(max_total),
+        max_total,
+    })
+    .width(Length::Fill)
+    .height(Length::Fixed(GRID_CANVAS_HEIGHT))
+    .into()
+}
+
+/// 悬停某天柱子时弹出的明细气泡:日期 + 各 agent 精确 token 数(非 k 缩写
+/// ——柱子颜色分段目前只靠色块区分,读不出具体数值,这里补上)。样式复用
+/// `byteui::interaction::icons::tooltip_bubble_style`,跟 icon 按钮 tooltip
+/// 同一套视觉。零值 agent 不列(同 `chart_legend` 只列有数据的 agent)。
+fn day_tooltip_bubble(
+    day: &DayAgentTotals,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let mut rows = column![
+        text(day.label.clone())
+            .size(byteui::theme::font::caption_sm())
+            .color(byteui::theme::color::current().cream),
+    ]
+    .spacing(4);
+    for (agent, value) in [
+        (AgentKind::Claude, day.claude),
+        (AgentKind::Codebuddy, day.codebuddy),
+        (AgentKind::Opencode, day.opencode),
+    ] {
+        if value == 0 {
+            continue;
+        }
+        let dot = container(iced_widget::Space::new())
+            .width(Length::Fixed(8.0))
+            .height(Length::Fixed(8.0))
+            .style({
+                let color = crate::workspace::agent_dot_color(agent);
+                move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                    background: Some(color.into()),
+                    border: Border {
+                        radius: 4.0.into(),
+                        ..Border::default()
+                    },
+                    ..iced_widget::container::Style::default()
+                }
+            });
+        rows = rows.push(
+            iced_widget::row![
+                dot,
+                text(format!("{} {value}", agent.label()))
+                    .size(byteui::theme::font::caption_sm())
+                    .color(byteui::theme::color::current().dim)
+                    .font(iced_widget::core::Font::MONOSPACE),
+            ]
+            .spacing(6)
+            .align_y(iced_widget::core::Alignment::Center),
+        );
+    }
+    container(rows).padding([6, 8]).into()
+}
+
 fn bar_chart(
     days: &[DayAgentTotals],
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -563,7 +730,7 @@ fn bar_chart(
         let total = d.claude + d.codebuddy + d.opencode;
         let scale = BAR_MAX_HEIGHT / max_total as f32;
         // 自底向上固定顺序:Claude 贴基线(直角)→ CodeBuddy → OpenCode 顶部(圆角)。
-        let stack = column![
+        let segments = column![
             bar_segment(
                 d.opencode as f32 * scale,
                 byteui::theme::color::current().green,
@@ -589,12 +756,12 @@ fn bar_chart(
                         .size(8.0)
                         .color(byteui::theme::color::current().dim)
                         .font(iced_widget::core::Font::MONOSPACE),
-                    stack,
+                    segments,
                 ]
                 .spacing(2)
                 .align_x(iced_widget::core::alignment::Horizontal::Center),
             )
-            .height(Length::Fixed(BAR_MAX_HEIGHT + 14.0))
+            .height(Length::Fixed(GRID_CANVAS_HEIGHT))
             .align_y(iced_widget::core::alignment::Vertical::Bottom),
             text(d.label.clone())
                 .size(8.0)
@@ -604,9 +771,27 @@ fn bar_chart(
         .spacing(4)
         .align_x(iced_widget::core::alignment::Horizontal::Center);
 
-        bars = bars.push(col);
+        let hoverable = Tooltip::new(col, day_tooltip_bubble(d), Position::Top)
+            .gap(6)
+            .style(icons::tooltip_bubble_style());
+
+        bars = bars.push(hoverable);
     }
-    bars.into()
+
+    // 网格线画布叠在柱子行后面(`stack!`):柱子行整体右移 `GRID_LABEL_GUTTER`
+    // 给左侧刻度数字腾地方,网格线本身(`GridLines::draw`)从这条线右边
+    // 才开始画,两者不会互相遮挡。
+    stack![
+        grid_lines_canvas(max_total),
+        container(bars).padding(iced_widget::core::Padding {
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: GRID_LABEL_GUTTER,
+        }),
+    ]
+    .width(Length::Fill)
+    .into()
 }
 
 /// 紧凑数字标签(1234 → "1.2k"，小于 1000 原样显示)，只用于条形图顶部的
@@ -726,6 +911,25 @@ fn chart_legend(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nice_tick_step_rounds_to_1_2_5_family() {
+        // 7 / 4 = 1.75 → 落在 (1,2] 档,取 2。
+        assert_eq!(nice_tick_step(7, 4), 2);
+        // 42 / 4 = 10.5 → 数量级 10,余数 1.05 → (1,2] 档,取 2*10=20。
+        assert_eq!(nice_tick_step(42, 4), 20);
+        // 1 / 4 = 0.25 → 数量级 0.1,余数 2.5 → (2,5] 档,取 5*0.1 四舍五入为 1。
+        assert_eq!(nice_tick_step(1, 4), 1);
+    }
+
+    #[test]
+    fn grid_ticks_stops_at_max_and_never_empty() {
+        assert_eq!(grid_ticks(0), Vec::<u64>::new());
+        // step=2(见上一条用例),数到 <=7 为止:2,4,6。
+        assert_eq!(grid_ticks(7), vec![2, 4, 6]);
+        // 数据量很小时(max_total < step)也至少给一条线兜底。
+        assert_eq!(grid_ticks(1), vec![1]);
+    }
 
     fn sample_usage(files: &[&str]) -> ConversationUsage {
         ConversationUsage {

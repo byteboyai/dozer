@@ -1316,7 +1316,9 @@ fn ssh_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_render
     // bg 实底 + `border` 描边 + `cream` 文字 + `[4,8]` padding + 圆角 4
     // (不再用 gold 描边/gold 文字那套),top_line 分割线内缩对齐 `project_pane`
     // 的水平内距(否则 footbar 分割线比面板 header/content 更长,两端对不上)。
-    let bar = row![add_btn, iced_widget::space::horizontal()]
+    // 按钮位置也对齐 `todo_clear_footer_bar`(靠右,`space::horizontal()`
+    // 在前把按钮推到最右——之前误放在左边,验收反馈按钮位置跟 todo 不一致)。
+    let bar = row![iced_widget::space::horizontal(), add_btn]
         .spacing(6)
         .align_y(iced_widget::core::Alignment::Center);
 

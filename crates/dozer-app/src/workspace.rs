@@ -2651,7 +2651,7 @@ pub(crate) fn conversation_list_pane<'a>(
                 .spacing(4),
             ]
             .spacing(8)
-            .align_y(iced_widget::core::Alignment::Start),
+            .align_y(iced_widget::core::Alignment::Center),
         )
         .on_press(Message::ConversationTurnGroupOpen(
             g.path.clone(),
