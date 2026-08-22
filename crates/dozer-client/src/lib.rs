@@ -283,6 +283,23 @@ impl Client {
         }
     }
 
+    pub async fn remove_project(&self, id: i64) -> Result<()> {
+        match self.roundtrip(&Request::RemoveProject { id }).await? {
+            Reply::Ok => Ok(()),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn delete_project_transcripts(&self, cwd: &str) -> Result<u32> {
+        match self
+            .roundtrip(&Request::DeleteProjectTranscripts { cwd: cwd.into() })
+            .await?
+        {
+            Reply::DeletedTranscripts { conversations } => Ok(conversations),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
     pub async fn list_session_turn_groups(
         &self,
         conversation_id: &str,
