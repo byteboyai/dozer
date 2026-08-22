@@ -3466,12 +3466,25 @@ impl App {
         let cell_w = pane_w / self.cols.max(1) as f32;
         let line_h = pane_h / self.rows.max(1) as f32;
         let right_w = right_zone_width(window_w, &state);
-        let (list_w, _) =
-            pair_list_content_width(pair_content_width(right_w), state.dims.agent_split);
+        // `PanelKind::Agent` 面板未镜像时,实际渲染顺序是 `[terminal,
+        // divider, list]`(内容在前,见 `app.rs` 的 `PanelKind::Agent`
+        // 分支 `else` 臂)——跟 `pair_columns` 的内建默认("mirrored=false
+        // → list 先")相反,必须传 `!mirrored`,否则算出来的内容列起点会
+        // 多算上一整个 list 宽度(2026-08-22 实测调试日志确认:候选窗
+        // x 坐标比实际光标多偏了正好一个 `list_w` 的量,同 `webview_
+        // geometry.rs` 的 `Conversations`/`Web` 两处同款手法)。
+        let mirrored =
+            state.layout.rail_layout.side_of(PanelKind::Agent) != PanelKind::Agent.default_side();
+        let cols = pair_columns(
+            pair_content_width(right_w),
+            state.dims.agent_split,
+            !mirrored,
+        );
+        let m = theme::region::right_zone().margin;
         let x0 = window_w - byteui::theme::geometry::icon_rail_width() - right_w
-            + list_w
-            + byteui::theme::geometry::divider_width()
-            + 8.0;
+            + cols.content_x
+            + 8.0
+            + m.left;
         // 终端网格上方 chrome:顶栏 44 + 上 padding 8 + tab 栏 30 + spacing 4(header 已去,P1L #4)
         let y0 = byteui::theme::geometry::top_bar_height() + 8.0 + 30.0 + 4.0;
         let (col, row) = self
@@ -3512,24 +3525,6 @@ impl App {
             .unwrap_or(0);
         let x = x0 + (col + preedit_cols) as f32 * cell_w;
         let y = y0 + (row as f32 + 1.0) * line_h; // 光标格底部,候选窗落其下方
-        tracing::warn!(
-            window_w,
-            window_h,
-            pane_w,
-            pane_h,
-            cell_w,
-            line_h,
-            right_w,
-            list_w,
-            x0,
-            y0,
-            col,
-            row,
-            preedit_cols,
-            x,
-            y,
-            "DEBUG ime_cursor_area"
-        );
         (x, y, line_h)
     }
 
