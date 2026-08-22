@@ -273,6 +273,16 @@ impl Client {
         }
     }
 
+    pub async fn backfill_project_transcripts(&self, cwd: &str) -> Result<u32> {
+        match self
+            .roundtrip(&Request::BackfillProjectTranscripts { cwd: cwd.into() })
+            .await?
+        {
+            Reply::BackfillDone { imported_files } => Ok(imported_files),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
     pub async fn list_session_turn_groups(
         &self,
         conversation_id: &str,
