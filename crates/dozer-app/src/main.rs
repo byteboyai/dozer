@@ -240,11 +240,16 @@ use iced_wgpu::graphics::{Shell, Viewport};
 use iced_wgpu::{Engine, Renderer, wgpu};
 use iced_winit::Clipboard;
 use iced_winit::conversion;
+use iced_winit::core::Renderer as _;
+use iced_winit::core::alignment;
+use iced_winit::core::input_method::InputMethod;
 use iced_winit::core::mouse;
 use iced_winit::core::renderer;
+use iced_winit::core::text;
+use iced_winit::core::text::Renderer as _;
 use iced_winit::core::time::Instant;
 use iced_winit::core::window;
-use iced_winit::core::{Event, Font, Pixels, Size, Theme};
+use iced_winit::core::{Color, Event, Font, Pixels, Point, Rectangle, Size, Theme};
 use iced_winit::futures;
 use iced_winit::runtime::task;
 use iced_winit::runtime::user_interface::{self, UserInterface};
@@ -2042,21 +2047,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
                 match event {
                     WindowEvent::RedrawRequested => {
-                        // IME 候选窗跟随文本光标(否则默认落窗口左上角)。每帧
-                        // 更新,始终反映当前输入上下文(终端/地址栏/意见框)。
-                        {
-                            let scale = window.scale_factor();
-                            let size = window.inner_size();
-                            let (lw, lh) = (
-                                size.width as f32 / scale as f32,
-                                size.height as f32 / scale as f32,
-                            );
-                            let (ix, iy, ih) = app.ime_cursor_area(lw, lh);
-                            window.set_ime_cursor_area(
-                                winit::dpi::LogicalPosition::new(ix, iy),
-                                winit::dpi::LogicalSize::new(1.0, ih),
-                            );
-                        }
+                        // IME 候选窗定位 + 组字预览浮层的绘制,挪到本帧
+                        // `interface.update()`(下面)产出最新 `InputMethod`
+                        // 之后处理——见该处理块的注释。
                         if *resized {
                             let size = window.inner_size();
 
@@ -2367,9 +2360,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     false
                                 };
 
+                                // IME 组字预览浮层的落点 + 内容,`State::Updated`
+                                // 分支下面填充,画在 `interface.draw()` 之后
+                                // (见下方"画 IME 组字预览浮层"注释)。
+                                let mut ime_overlay: Option<(Rectangle, String)> = None;
+
                                 // Update the mouse cursor
                                 if let user_interface::State::Updated {
-                                    mouse_interaction, ..
+                                    mouse_interaction,
+                                    input_method,
+                                    ..
                                 } = state
                                 {
                                     // Update the mouse cursor
@@ -2390,6 +2390,51 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                         mouse_interaction != mouse::Interaction::None,
                                         std::sync::atomic::Ordering::Relaxed,
                                     );
+
+                                    // IME 候选窗跟随文本光标:优先用 iced 自己
+                                    // 算出的 `input_method.cursor`(任何原生
+                                    // text_input 聚焦且要 IME 时都会给出精确
+                                    // 位置——这套手写的低层事件循环不像标准
+                                    // `iced_winit::program::run` 那样自动替我们
+                                    // 调 `set_ime_cursor_area`/画组字预览浮层,
+                                    // 这两件事以前都没人接,候选窗与组字文字
+                                    // 因此一律钉在终端光标位置或者干脆画不出来
+                                    // (2026-08-21 修复)。没有任何原生控件要 IME
+                                    // 时(`Disabled`,包括终端聚焦的情况——终端
+                                    // 不是 iced 控件)才退回终端光标的手写算法。
+                                    match input_method {
+                                        InputMethod::Enabled {
+                                            cursor, preedit, ..
+                                        } => {
+                                            window.set_ime_cursor_area(
+                                                winit::dpi::LogicalPosition::new(
+                                                    cursor.x, cursor.y,
+                                                ),
+                                                winit::dpi::LogicalSize::new(
+                                                    cursor.width.max(1.0),
+                                                    cursor.height,
+                                                ),
+                                            );
+                                            if let Some(p) = preedit
+                                                && !p.content.is_empty()
+                                            {
+                                                ime_overlay = Some((cursor, p.content));
+                                            }
+                                        }
+                                        InputMethod::Disabled => {
+                                            let scale = window.scale_factor();
+                                            let size = window.inner_size();
+                                            let (lw, lh) = (
+                                                size.width as f32 / scale as f32,
+                                                size.height as f32 / scale as f32,
+                                            );
+                                            let (ix, iy, ih) = app.ime_cursor_area(lw, lh);
+                                            window.set_ime_cursor_area(
+                                                winit::dpi::LogicalPosition::new(ix, iy),
+                                                winit::dpi::LogicalSize::new(1.0, ih),
+                                            );
+                                        }
+                                    }
                                 }
 
                                 // Draw the interface
@@ -2399,6 +2444,69 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     &renderer::Style::default(),
                                     *cursor,
                                 );
+
+                                // 画 IME 组字预览浮层:iced 的 `text_input` 自己
+                                // 不画组字中的文字(只上报 `InputMethod`,标准
+                                // `iced_winit::program::run` 才会把它画成一层
+                                // "over-the-spot" 浮层),这套手写事件循环没有
+                                // 这层运行时,只能自己补——半透明底 + 描边下划线,
+                                // 视觉上照抄终端自己那份组字预览
+                                // (`term_view.rs` 的 `preedit` 绘制)。粗略估算
+                                // 宽度(字符数 × 近似字宽),不做精确度量/换行,
+                                // 同终端那份一贯的"先简单实现"取舍。
+                                if let Some((cursor, content)) = ime_overlay {
+                                    let font_size = byteui::theme::font::body() as f32;
+                                    let char_w = font_size * 0.6;
+                                    let width =
+                                        (unicode_width::UnicodeWidthStr::width(content.as_str())
+                                            as f32
+                                            * char_w)
+                                            .max(char_w);
+                                    let height = cursor.height.max(font_size * 1.4);
+                                    let bounds = Rectangle::new(
+                                        Point::new(cursor.x, cursor.y),
+                                        Size::new(width, height),
+                                    );
+                                    renderer.with_layer(Rectangle::INFINITE, |renderer| {
+                                        renderer.fill_quad(
+                                            renderer::Quad {
+                                                bounds,
+                                                ..renderer::Quad::default()
+                                            },
+                                            Color {
+                                                a: 0.25,
+                                                ..byteui::theme::color::current().cream
+                                            },
+                                        );
+                                        renderer.fill_text(
+                                            text::Text {
+                                                content,
+                                                bounds: Size::new(width, height),
+                                                size: Pixels(font_size),
+                                                line_height: text::LineHeight::default(),
+                                                font: renderer.default_font(),
+                                                align_x: text::Alignment::Left,
+                                                align_y: alignment::Vertical::Top,
+                                                shaping: text::Shaping::Advanced,
+                                                wrapping: text::Wrapping::None,
+                                            },
+                                            Point::new(cursor.x, cursor.y),
+                                            byteui::theme::color::current().cream,
+                                            bounds,
+                                        );
+                                        renderer.fill_quad(
+                                            renderer::Quad {
+                                                bounds: Rectangle::new(
+                                                    Point::new(cursor.x, cursor.y + height - 2.0),
+                                                    Size::new(width, 2.0),
+                                                ),
+                                                ..renderer::Quad::default()
+                                            },
+                                            byteui::theme::color::current().cream,
+                                        );
+                                    });
+                                }
+
                                 *cache = interface.into_cache();
 
                                 // `interface` 已被消费,对 `app` 的不可变借用

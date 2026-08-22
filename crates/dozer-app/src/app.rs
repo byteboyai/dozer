@@ -3451,27 +3451,17 @@ impl App {
         std::mem::take(&mut self.pending_preview_zoom)
     }
 
-    /// 当前文本光标的窗口逻辑坐标 `(x, y_底, 行高)`,给 main.rs 设 IME
-    /// 候选窗位置(让选词窗落在光标右下,而非窗口左上)。地址栏/意见框编辑
-    /// 态用预览列上部近似(这套手写的低层 iced_winit 事件循环不经过
-    /// iced_winit::program::State,UserInterface::update 回传的 input_method
-    /// 字段在 main.rs 里被丢弃,iced 并不会替我们自动算准原生 text_input
-    /// 的 IME 位置,不能假设"迁移到 text_input 后位置自动正确");否则用
-    /// 终端光标——单元格尺寸由 pane 像素 ÷ 网格推出,不依赖字号常量。
+    /// 终端光标的窗口逻辑坐标 `(x, y_底, 行高)`,给 main.rs 在没有任何原生
+    /// `text_input` 要 IME 时(`InputMethod::Disabled`,即终端聚焦——终端
+    /// 不是 iced 控件,没有这套机制)设候选窗位置用。原生 `text_input`
+    /// 聚焦要 IME 的情况(地址栏/意见框/搜索框/……)现在统一由 main.rs 直接
+    /// 读 `UserInterface::update()` 返回的 `InputMethod::Enabled { cursor,
+    /// .. }` 处理,不再靠这里手写特判(2026-08-21 修复:`input_method` 字段
+    /// 此前被丢弃,原生控件的候选窗一律钉在这份终端光标算法给出的位置,
+    /// 组字预览文字也压根没地方画出来)。单元格尺寸由 pane 像素 ÷ 网格
+    /// 推出,不依赖字号常量。
     pub fn ime_cursor_area(&self, window_w: f32, window_h: f32) -> (f32, f32, f32) {
         let state = self.shell_state();
-        if self.browser_addr_focused() {
-            let side = state.layout.rail_layout.side_of(PanelKind::Web);
-            let (bx, by, _bw, _bh) =
-                webview_geometry::preview_content_bounds_for(side, window_w, window_h, &state);
-            return (bx + 4.0, by, 20.0);
-        }
-        if self.comment_focused() {
-            let side = state.layout.rail_layout.side_of(PanelKind::Acceptance);
-            let (bx, by, _bw, _bh) =
-                webview_geometry::preview_content_bounds_for(side, window_w, window_h, &state);
-            return (bx + 4.0, by, 20.0);
-        }
         let (pane_w, pane_h) = terminal_pane_pixel_size(window_w, window_h, &state);
         let cell_w = pane_w / self.cols.max(1) as f32;
         let line_h = pane_h / self.rows.max(1) as f32;
@@ -3487,7 +3477,22 @@ impl App {
         let (col, row) = self
             .active_workspace()
             .and_then(|ws| ws.tabs.get(ws.active))
-            .map(|t| t.model.cursor())
+            .map(|t| {
+                // 光标不可信(全屏重绘型 TUI 未发 `?25h` 显示光标,实测
+                // CodeBuddy CLI——见 `term_view.rs` 画方块光标那处同款
+                // `cursor_visible()` 判断的文档)或正在回看历史
+                // (`display_offset() > 0`)时,`model.cursor()` 只是一堆
+                // 重绘期间移动/清行序列扫过后留下的陈旧坐标,跟视觉上
+                // 光标实际所在毫无关系——不同 CLI 的终端更新习惯不同,
+                // 表现就是"候选窗偏移量因 agent 而异"(2026-08-21 用户
+                // 实测反馈)。退回"面板底部一行、列 0"这个粗略但不离谱的
+                // 默认位置,好过让候选窗跳到跟视觉毫不相关的地方。
+                if t.model.cursor_visible() && t.model.display_offset() == 0 {
+                    t.model.cursor()
+                } else {
+                    (0usize, self.rows.max(1) as usize - 1)
+                }
+            })
             .unwrap_or((0, 0));
         // 组字预览期间 PTY 收不到字节,`model.cursor()` 原地不动——候选窗
         // 要跟着预览文字的末尾走(与 `term_view` 画预览的落点算法一致),
