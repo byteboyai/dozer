@@ -11,7 +11,7 @@ use crate::delivery;
 use crate::extensions::browser;
 use crate::rail::{RailButton, rail_icon_button};
 use crate::theme;
-use crate::workspace::{lh, relative_time_text};
+use crate::workspace::{agent_icon, lh, relative_time_text};
 use byteui::interaction::icons;
 use dozer_core::protocol::ProjectInfo;
 use iced_widget::core::widget::operation::Focusable;
@@ -772,8 +772,10 @@ fn home_recent_files_card(
         .into()
 }
 
-/// "最近的对话"卡：语义同 `home_recent_files_card`。裁剪掉"进行中/已验收
-/// vN"状态字(D4)，只显示"标题 · 项目名 · agent · 相对时间"。
+/// "最近的对话"卡：语义同 `home_recent_files_card`。按需求改为三行:
+///   第一行:agent 图标 + agent 名称
+///   第二行:对话内容(即对话标题)
+///   第三行:项目名称 · 相对时间
 fn home_recent_conversations_card(
     app: &App,
     now_ms: u64,
@@ -794,10 +796,9 @@ fn home_recent_conversations_card(
         );
     } else {
         for (i, c) in app.home_recent_conversations.iter().enumerate() {
-            let sub = format!(
-                "{} · {} · {}",
+            let meta = format!(
+                "{} · {}",
                 c.project_name,
-                c.meta.agent.label(),
                 relative_time_text(c.meta.modified_ms, now_ms)
             );
             let hovered = app.hover_progress(HoverId::RecentConversation(i)) > 0.0;
@@ -805,10 +806,22 @@ fn home_recent_conversations_card(
                 MouseArea::new(
                     container(
                         column![
+                            row![
+                                icons::view(
+                                    agent_icon(c.meta.agent),
+                                    byteui::theme::icon_size::row(),
+                                    theme::homespace_color::cream(),
+                                ),
+                                lh(text(c.meta.agent.label())
+                                    .size(theme::homespace_font::body())
+                                    .color(theme::homespace_color::cream())),
+                            ]
+                            .spacing(8)
+                            .align_y(iced_widget::core::Alignment::Center),
                             lh(text(c.meta.title.clone())
                                 .size(theme::homespace_font::body())
                                 .color(theme::homespace_color::cream())),
-                            lh(text(sub)
+                            lh(text(meta)
                                 .size(theme::homespace_font::caption_sm())
                                 .color(theme::homespace_color::dim())),
                         ]
