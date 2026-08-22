@@ -9,7 +9,7 @@ use dozer_core::protocol::ProjectInfo;
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
 use iced_widget::core::{Border, Element, Length, Rectangle};
-use iced_widget::{MouseArea, button, column, container, row, text};
+use iced_widget::{MouseArea, button, column, container, row, stack, text};
 use std::path::PathBuf;
 
 use crate::project_scaffold;
@@ -47,6 +47,7 @@ pub struct WorkspaceState {
     selected_link: Option<PathBuf>,
     error: Option<String>,
     pub(crate) scaffold_report: Option<project_scaffold::ScaffoldReport>,
+    pub(crate) delete_pending: Option<delete::DeleteScope>,
 }
 
 impl WorkspaceState {
@@ -212,8 +213,17 @@ pub enum Message {
     Pick(links::LinkTarget),
     /// footer-bar「修复项目」按钮(UI 占位,逻辑后续接入)。
     RepairProject,
-    /// footer-bar「删除项目」按钮(UI 占位,逻辑后续接入)。
-    DeleteProject,
+    /// footer-bar「删除项目」按钮:打开三选一确认弹窗,默认选中最轻层级。
+    DeleteProjectRequest,
+    /// 弹窗内切换单选层级。
+    DeleteProjectScopeSelect(delete::DeleteScope),
+    /// 弹窗"取消"。
+    DeleteProjectCancel,
+    /// 弹窗"确认删除"。**由 `app.rs` 拦截处理**(需要关掉当前项目 tab，
+    /// 单个 extension 的 `update` 够不到跨 `Workspace` 的操作，同
+    /// `LinkContextMenu` 的既有先例)——`update()` 里这个分支是
+    /// `unreachable!()`。
+    DeleteProjectConfirm,
     /// 一次 ensure/repair 批跑完成。`visible=true`(修复项目按钮触发)才
     /// 把结果存进 `WorkspaceState.scaffold_report` 供状态文字展示;
     /// `visible=false`(打开项目时静默触发)只是让副作用(README/.dozer/
@@ -354,8 +364,18 @@ pub fn update(
         Message::RepairProject => {
             spawn_scaffold_run(repo_path.to_path_buf(), true, client.clone(), handle, emit);
         }
-        // 删除项目:独立设计,不在本次范围内(见另一份 spec)。
-        Message::DeleteProject => {}
+        Message::DeleteProjectRequest => {
+            ws_state.delete_pending = Some(delete::DeleteScope::DozerOnly);
+        }
+        Message::DeleteProjectScopeSelect(scope) => {
+            ws_state.delete_pending = Some(scope);
+        }
+        Message::DeleteProjectCancel => {
+            ws_state.delete_pending = None;
+        }
+        Message::DeleteProjectConfirm => {
+            unreachable!("由内核拦截处理,见 App::project_delete_confirm 文档")
+        }
         Message::ScaffoldDone(report, visible) => {
             if visible {
                 ws_state.scaffold_report = Some(report);
@@ -715,17 +735,36 @@ pub fn view<'a>(
 
     let body = column![content, project_footer_bar(ws_state)].spacing(0);
 
-    container(body)
-        .width(width)
-        .height(Length::Fill)
-        .style(
-            move |_t: &iced_widget::Theme| iced_widget::container::Style {
-                background: Some(byteui::theme::color::current().panel.into()),
-                border: outer,
-                ..iced_widget::container::Style::default()
-            },
+    let base =
+        container(body)
+            .width(width)
+            .height(Length::Fill)
+            .style(
+                move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                    background: Some(byteui::theme::color::current().panel.into()),
+                    border: outer,
+                    ..iced_widget::container::Style::default()
+                },
+            );
+
+    if ws_state.delete_pending.is_some() {
+        let dismiss = MouseArea::new(
+            container(column![])
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+                    background: Some(byteui::theme::color::current().scrim.into()),
+                    ..iced_widget::container::Style::default()
+                }),
         )
-        .into()
+        .on_press(Message::DeleteProjectCancel);
+        return stack![base, dismiss, project_delete_confirm_popup(ws_state)]
+            .width(width)
+            .height(Length::Fill)
+            .into();
+    }
+
+    base.into()
 }
 
 /// 项目信息面板底部 footer-bar,结构与文件树面板的 `git_footer_bar` 一致:
@@ -759,7 +798,7 @@ fn project_footer_bar(
             .size(byteui::theme::font::label())
             .color(byteui::theme::color::current().red),
     )
-    .on_press(Message::DeleteProject)
+    .on_press(Message::DeleteProjectRequest)
     .width(Length::Fill)
     .padding([6, 8])
     .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
@@ -803,6 +842,142 @@ fn project_footer_bar(
             background: None,
             ..iced_widget::container::Style::default()
         })
+        .into()
+}
+
+/// 「删除项目」三选一确认弹窗,视觉模板同 `ssh.rs::delete_confirm_popup`
+/// (卡片 + 取消/确认按钮)。单选行复用 `ssh.rs::radio_dot` 的视觉语言
+/// (选中态 GOLD 实心描边,未选中态空心 BORDER 描边)——ssh 的 `radio_dot`
+/// 绑定在 `ssh::Message` 上、跨模块复用不了类型,这里就地画一份同样的视觉。
+fn project_delete_confirm_popup(
+    ws_state: &WorkspaceState,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let selected = ws_state
+        .delete_pending
+        .unwrap_or(delete::DeleteScope::DozerOnly);
+
+    let radio_row = |scope: delete::DeleteScope, label: &'static str| {
+        let is_selected = selected == scope;
+        let dot = container(iced_widget::Space::new())
+            .width(Length::Fixed(10.0))
+            .height(Length::Fixed(10.0))
+            .style(
+                move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                    background: if is_selected {
+                        Some(byteui::theme::color::current().gold.into())
+                    } else {
+                        None
+                    },
+                    border: if is_selected {
+                        Border {
+                            color: byteui::theme::color::current().gold,
+                            width: 1.5,
+                            radius: 5.0.into(),
+                        }
+                    } else {
+                        Border {
+                            color: byteui::theme::color::current().border,
+                            width: 1.5,
+                            radius: 5.0.into(),
+                        }
+                    },
+                    ..iced_widget::container::Style::default()
+                },
+            );
+        let ring = container(dot)
+            .width(Length::Fixed(16.0))
+            .height(Length::Fixed(16.0))
+            .align_x(iced_widget::core::alignment::Horizontal::Center)
+            .align_y(iced_widget::core::alignment::Vertical::Center);
+        MouseArea::new(
+            row![
+                ring,
+                text(label)
+                    .size(byteui::theme::font::body())
+                    .color(byteui::theme::color::current().cream),
+            ]
+            .spacing(6)
+            .align_y(iced_widget::core::alignment::Vertical::Center),
+        )
+        .interaction(iced_widget::core::mouse::Interaction::Pointer)
+        .on_press(Message::DeleteProjectScopeSelect(scope))
+    };
+
+    let cancel = button(
+        text("取消")
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().cream),
+    )
+    .on_press(Message::DeleteProjectCancel)
+    .padding([6, 12])
+    .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+        background: Some(byteui::theme::color::current().card.into()),
+        text_color: byteui::theme::color::current().cream,
+        border: Border {
+            color: byteui::theme::color::current().border,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..iced_widget::button::Style::default()
+    });
+    let confirm = button(
+        text("删除")
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().red),
+    )
+    .on_press(Message::DeleteProjectConfirm)
+    .padding([6, 12])
+    .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+        background: Some(byteui::theme::color::current().card.into()),
+        text_color: byteui::theme::color::current().red,
+        border: Border {
+            color: byteui::theme::color::current().red,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..iced_widget::button::Style::default()
+    });
+
+    let dialog = container(
+        column![
+            text("删除项目")
+                .size(byteui::theme::font::subtitle())
+                .color(byteui::theme::color::current().cream),
+            text("选择删除范围,操作会把对应内容移入系统回收站(可找回)。")
+                .size(byteui::theme::font::label())
+                .color(byteui::theme::color::current().dim),
+            column![
+                radio_row(delete::DeleteScope::DozerOnly, "只删 dozer 关联与缓存文件"),
+                radio_row(
+                    delete::DeleteScope::WithAgentCache,
+                    "以上 + 所有 agent 缓存数据"
+                ),
+                radio_row(
+                    delete::DeleteScope::WithProjectFiles,
+                    "以上 + 项目文件与版本仓库"
+                ),
+            ]
+            .spacing(8),
+            row![cancel, confirm].spacing(8),
+        ]
+        .spacing(12),
+    )
+    .padding(16)
+    .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+        background: Some(byteui::theme::color::current().card.into()),
+        border: Border {
+            color: byteui::theme::color::current().border,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..iced_widget::container::Style::default()
+    });
+
+    container(dialog)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
         .into()
 }
 
@@ -1456,5 +1631,56 @@ mod tests {
             |_| {},
         );
         assert_eq!(ws_state.scaffold_report, Some(report));
+    }
+
+    #[test]
+    fn delete_project_request_then_scope_select_then_cancel() {
+        let mut ws_state = WorkspaceState::new(None, links::LinksState::default());
+        let noop_client = dozer_client::Client::new(std::path::PathBuf::from("/tmp/dozer.sock"));
+        let handle = tokio::runtime::Handle::try_current()
+            .unwrap_or_else(|_| tokio::runtime::Runtime::new().unwrap().handle().clone());
+        let repo = std::path::Path::new("/tmp/demo");
+
+        update(
+            &mut ws_state,
+            Message::DeleteProjectRequest,
+            1,
+            "demo",
+            repo,
+            &noop_client,
+            &handle,
+            |_| {},
+        );
+        assert_eq!(
+            ws_state.delete_pending,
+            Some(delete::DeleteScope::DozerOnly)
+        );
+
+        update(
+            &mut ws_state,
+            Message::DeleteProjectScopeSelect(delete::DeleteScope::WithProjectFiles),
+            1,
+            "demo",
+            repo,
+            &noop_client,
+            &handle,
+            |_| {},
+        );
+        assert_eq!(
+            ws_state.delete_pending,
+            Some(delete::DeleteScope::WithProjectFiles)
+        );
+
+        update(
+            &mut ws_state,
+            Message::DeleteProjectCancel,
+            1,
+            "demo",
+            repo,
+            &noop_client,
+            &handle,
+            |_| {},
+        );
+        assert_eq!(ws_state.delete_pending, None);
     }
 }
