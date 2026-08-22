@@ -4,7 +4,7 @@
 //! 系列仍直接读 transcript 原始文本（Agent 卡片实时指示器用），不在本次
 //! 迁移范围。纯函数，不碰 iced/IO。
 
-use dozer_core::protocol::TurnRecord;
+use dozer_core::protocol::{ToolCallInfo, TurnRecord};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -12,36 +12,64 @@ use serde_json::Value;
 pub enum ReviewEntry {
     /// 人类发言（导航锚点）。
     Human { text: String },
-    /// AI 一个回合：正文 + 工具一行摘要 + 是否含 thinking。
+    /// AI 一个回合：正文 + 真实思考文本 + 结构化工具调用 + 紧跟它的工具
+    /// 结果(2026-08-22 起按位置邻接折叠进来,不再是顶层独立条目——同一
+    /// `AiTurn` 之后、下一个 `Human`/`AiTurn` 之前的连续 `ToolResult` 都
+    /// 算它的,见 `review_entries_from_turns`)。
     AiTurn {
         text: String,
-        tools: Vec<String>,
-        thinking: bool,
+        thinking_text: Option<String>,
+        tool_calls: Vec<ToolCallInfo>,
+        tool_results: Vec<ToolResultEntry>,
     },
-    /// 工具调用的返回结果(2026-08-21 补摄取——此前这类数据在
-    /// dozerd 解析层被整体丢弃，见 parse.rs 的 tool_result 处理)。
+    /// 孤儿兜底:前面没有 `AiTurn` 的 `ToolResult`(理论边界情况,如导出
+    /// 片段从工具结果行开始)。正常情况下 `ToolResult` 都会被折叠进
+    /// 上面 `AiTurn::tool_results`,这个顶层变体只在没有归属对象时才用。
     ToolResult { content: String, is_error: bool },
 }
 
-/// dozerd 查询回来的回合明细 → 面板展示用的 `ReviewEntry`。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ToolResultEntry {
+    pub content: String,
+    pub is_error: bool,
+}
+
+/// dozerd 查询回来的回合明细 → 面板展示用的 `ReviewEntry`。顺序 fold 而
+/// 不是逐条 map:`tool_result` 角色的行按位置邻接归到紧邻它前面那个
+/// `AiTurn` 的 `tool_results`(`out.last_mut()` 还是同一个 `AiTurn` 就
+/// 一直往里塞),前面没有 `AiTurn`(比如会话/导出片段从工具结果开始)才
+/// 落回顶层 `ReviewEntry::ToolResult`。
 pub fn review_entries_from_turns(turns: &[TurnRecord]) -> Vec<ReviewEntry> {
-    turns
-        .iter()
-        .map(|t| match t.role.as_str() {
-            "human" => ReviewEntry::Human {
+    let mut out: Vec<ReviewEntry> = Vec::new();
+    for t in turns {
+        match t.role.as_str() {
+            "human" => out.push(ReviewEntry::Human {
                 text: t.content.clone(),
-            },
-            "tool_result" => ReviewEntry::ToolResult {
-                content: t.content.clone(),
-                is_error: t.is_error,
-            },
-            _ => ReviewEntry::AiTurn {
+            }),
+            "tool_result" => {
+                let entry = ToolResultEntry {
+                    content: t.content.clone(),
+                    is_error: t.is_error,
+                };
+                match out.last_mut() {
+                    Some(ReviewEntry::AiTurn { tool_results, .. }) => {
+                        tool_results.push(entry);
+                    }
+                    _ => out.push(ReviewEntry::ToolResult {
+                        content: entry.content,
+                        is_error: entry.is_error,
+                    }),
+                }
+            }
+            _ => out.push(ReviewEntry::AiTurn {
                 text: t.content.clone(),
-                tools: t.tools_summary.clone(),
-                thinking: t.thinking,
-            },
-        })
-        .collect()
+                thinking_text: t.thinking_text.clone(),
+                tool_calls: t.tool_calls.clone(),
+                tool_results: Vec::new(),
+            }),
+        }
+    }
+    out
 }
 
 /// 从 transcript 尾部提取最后一次出现的 model id / permissionMode(后
@@ -169,12 +197,17 @@ mod tests {
 
         let ai = ReviewEntry::AiTurn {
             text: "回复".into(),
-            tools: vec!["Edit README.md".into()],
-            thinking: true,
+            thinking_text: Some("先想想".into()),
+            tool_calls: vec![ToolCallInfo {
+                summary: "Edit README.md".into(),
+                input_json: Some("{\"file_path\":\"README.md\"}".into()),
+            }],
+            tool_results: Vec::new(),
         };
         let json = serde_json::to_string(&ai).unwrap();
         assert!(json.starts_with(r#"{"AiTurn":"#));
-        assert!(json.contains(r#""thinking":true"#));
+        assert!(json.contains(r#""thinking_text":"#));
+        assert!(json.contains(r#""Edit README.md""#));
 
         let tool = ReviewEntry::ToolResult {
             content: "boom".into(),
@@ -187,15 +220,16 @@ mod tests {
     }
 
     #[test]
-    fn review_entries_from_turns_maps_role_and_tools() {
-        use dozer_core::protocol::TurnRecord;
+    fn review_entries_from_turns_maps_ai_turn_with_thinking_and_tool_calls() {
+        use dozer_core::protocol::{ToolCallInfo, TurnRecord};
         let turns = vec![
             TurnRecord {
                 turn_index: 0,
                 role: "human".into(),
                 content: "你好".into(),
-                tools_summary: vec![],
+                tool_calls: vec![],
                 thinking: false,
+                thinking_text: None,
                 ts: None,
                 is_error: false,
             },
@@ -203,8 +237,12 @@ mod tests {
                 turn_index: 1,
                 role: "ai".into(),
                 content: "回复".into(),
-                tools_summary: vec!["Edit README.md".into()],
+                tool_calls: vec![ToolCallInfo {
+                    summary: "Edit README.md".into(),
+                    input_json: Some("{\"file_path\":\"README.md\"}".into()),
+                }],
                 thinking: true,
+                thinking_text: Some("先看看现有实现".into()),
                 ts: None,
                 is_error: false,
             },
@@ -220,53 +258,114 @@ mod tests {
         match &entries[1] {
             ReviewEntry::AiTurn {
                 text,
-                tools,
-                thinking,
+                thinking_text,
+                tool_calls,
+                tool_results,
             } => {
                 assert_eq!(text, "回复");
-                assert_eq!(tools, &vec!["Edit README.md".to_string()]);
-                assert!(*thinking);
+                assert_eq!(thinking_text.as_deref(), Some("先看看现有实现"));
+                assert_eq!(tool_calls.len(), 1);
+                assert_eq!(tool_calls[0].summary, "Edit README.md");
+                assert!(tool_results.is_empty());
             }
             other => panic!("{other:?}"),
         }
     }
 
     #[test]
-    fn review_entries_from_turns_maps_tool_result_role() {
+    fn review_entries_from_turns_nests_consecutive_tool_results_under_preceding_ai_turn() {
         use dozer_core::protocol::TurnRecord;
-        let turns = vec![
+        fn ai(content: &str) -> TurnRecord {
+            TurnRecord {
+                turn_index: 0,
+                role: "ai".into(),
+                content: content.into(),
+                tool_calls: vec![],
+                thinking: false,
+                thinking_text: None,
+                ts: None,
+                is_error: false,
+            }
+        }
+        fn tool_result(content: &str, is_error: bool) -> TurnRecord {
             TurnRecord {
                 turn_index: 0,
                 role: "tool_result".into(),
-                content: "ok output".into(),
-                tools_summary: vec![],
+                content: content.into(),
+                tool_calls: vec![],
                 thinking: false,
+                thinking_text: None,
                 ts: None,
-                is_error: false,
-            },
-            TurnRecord {
-                turn_index: 1,
-                role: "tool_result".into(),
-                content: "boom".into(),
-                tools_summary: vec![],
-                thinking: false,
-                ts: None,
-                is_error: true,
-            },
+                is_error,
+            }
+        }
+        let turns = vec![
+            ai("第一轮"),
+            tool_result("ok1", false),
+            tool_result("boom", true),
+            ai("第二轮"),
+            tool_result("ok2", false),
         ];
+        let entries = review_entries_from_turns(&turns);
+        assert_eq!(entries.len(), 2);
+        match &entries[0] {
+            ReviewEntry::AiTurn {
+                text, tool_results, ..
+            } => {
+                assert_eq!(text, "第一轮");
+                assert_eq!(
+                    tool_results,
+                    &vec![
+                        ToolResultEntry {
+                            content: "ok1".into(),
+                            is_error: false
+                        },
+                        ToolResultEntry {
+                            content: "boom".into(),
+                            is_error: true
+                        },
+                    ]
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        match &entries[1] {
+            ReviewEntry::AiTurn {
+                text, tool_results, ..
+            } => {
+                assert_eq!(text, "第二轮");
+                assert_eq!(
+                    tool_results,
+                    &vec![ToolResultEntry {
+                        content: "ok2".into(),
+                        is_error: false
+                    }]
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn review_entries_from_turns_keeps_orphan_tool_result_at_top_level() {
+        use dozer_core::protocol::TurnRecord;
+        let turns = vec![TurnRecord {
+            turn_index: 0,
+            role: "tool_result".into(),
+            content: "ok output".into(),
+            tool_calls: vec![],
+            thinking: false,
+            thinking_text: None,
+            ts: None,
+            is_error: false,
+        }];
         let entries = review_entries_from_turns(&turns);
         assert_eq!(
             entries,
-            vec![
-                ReviewEntry::ToolResult {
-                    content: "ok output".into(),
-                    is_error: false
-                },
-                ReviewEntry::ToolResult {
-                    content: "boom".into(),
-                    is_error: true
-                },
-            ]
+            vec![ReviewEntry::ToolResult {
+                content: "ok output".into(),
+                is_error: false,
+            }]
         );
     }
 
