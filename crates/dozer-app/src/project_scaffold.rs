@@ -66,6 +66,23 @@ fn ensure_git_repo(repo: &Path) -> ScaffoldStepResult {
     }
 }
 
+/// 重新扫一遍项目文档/Agent 记忆,把新发现的路径补进 `.dozer/links.json`
+/// (`links::merge_rediscovered`——只追加、不删用户手动移除过的条目)。
+/// `links::load_or_discover` 本身已经处理了"首次打开"的全量发现,这一步
+/// 补的是"项目打开之后新增的文件"这种场景(比如后来才加的 AGENTS.md),
+/// 普通打开/`load_or_discover` 不会重新扫,只有这个 ensure 步骤会。
+fn ensure_project_docs_and_memory(repo: &Path) -> ScaffoldStepResult {
+    let mut state = links::load_or_discover(repo);
+    let added = links::merge_rediscovered(repo, &mut state);
+    if added == 0 {
+        return ScaffoldStepResult::AlreadyOk;
+    }
+    match links::save(repo, &state) {
+        Ok(()) => ScaffoldStepResult::Created(format!("补充了 {added} 条项目文档/Agent 记忆")),
+        Err(e) => ScaffoldStepResult::Failed(e.to_string()),
+    }
+}
+
 /// 当前登记的同步步骤。以后其它 extension(todo/ssh/database 等)需要
 /// 真正的 ensure/repair 逻辑时,在这里加一行调用自己模块里的函数——不
 /// 需要改 `ScaffoldStep`/`ScaffoldStepResult` 这两个类型本身。
@@ -82,6 +99,10 @@ pub fn scaffold_steps() -> Vec<ScaffoldStep> {
         ScaffoldStep {
             label: "git 仓库",
             run: ensure_git_repo,
+        },
+        ScaffoldStep {
+            label: "项目文档/Agent 记忆",
+            run: ensure_project_docs_and_memory,
         },
     ]
 }
@@ -184,7 +205,39 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let results = run_sync_steps(tmp.path());
         let labels: Vec<&str> = results.iter().map(|(l, _)| l.as_str()).collect();
-        assert_eq!(labels, vec!["缓存目录", "README", "git 仓库"]);
+        assert_eq!(
+            labels,
+            vec!["缓存目录", "README", "git 仓库", "项目文档/Agent 记忆"]
+        );
+    }
+
+    #[test]
+    fn ensure_project_docs_and_memory_reports_already_ok_on_first_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("README.md"), "").unwrap();
+        // 首次打开:`load_or_discover` 已经把 README 全量发现并落盘,
+        // `merge_rediscovered` 找不到任何新东西。
+        assert_eq!(
+            ensure_project_docs_and_memory(tmp.path()),
+            ScaffoldStepResult::AlreadyOk
+        );
+    }
+
+    #[test]
+    fn ensure_project_docs_and_memory_reports_created_when_new_file_appears_later() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("README.md"), "").unwrap();
+        // 第一次跑,建立 links.json(等价于项目首次打开)。
+        ensure_project_docs_and_memory(tmp.path());
+        // 之后项目根目录多了一个 AGENTS.md。
+        std::fs::write(tmp.path().join("AGENTS.md"), "").unwrap();
+        let result = ensure_project_docs_and_memory(tmp.path());
+        assert_eq!(
+            result,
+            ScaffoldStepResult::Created("补充了 1 条项目文档/Agent 记忆".into())
+        );
+        let state = links::load(tmp.path()).unwrap();
+        assert_eq!(state.memory.len(), 1);
     }
 
     #[test]

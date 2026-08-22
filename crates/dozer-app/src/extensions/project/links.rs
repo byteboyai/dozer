@@ -26,6 +26,12 @@ pub struct LinkEntry {
 pub struct LinksState {
     pub docs: Vec<LinkEntry>,
     pub memory: Vec<LinkEntry>,
+    /// 用户手动移除过的路径(`LinkRemove` 写入)。`merge_rediscovered` 重新
+    /// 扫盘时跳过这里面的路径——否则一个被移除的自动发现条目,只要文件
+    /// 还在磁盘上,下次"修复项目"就会把它加回来,等于删除操作形同虚设。
+    /// `#[serde(default)]` 兼容没有这个字段的旧 `links.json`。
+    #[serde(default)]
+    pub dismissed: Vec<PathBuf>,
 }
 
 impl LinksState {
@@ -172,6 +178,31 @@ fn discover_memory_in(home: &Path, repo: &Path) -> Vec<LinkEntry> {
     entries
 }
 
+/// 重新跑一次 `discover_docs`/`discover_memory`,把 `state` 里还没有、也没被
+/// 用户手动移除过(`state.dismissed`)的新路径追加进去——已有条目和用户的
+/// 移除决定都不受影响。返回新增的条数(docs+memory 加总),供"修复项目"
+/// 报告用了多少新发现。**不落盘**,调用方负责在需要时 `save`。
+pub fn merge_rediscovered(repo: &Path, state: &mut LinksState) -> usize {
+    let mut added = 0usize;
+    for entry in discover_docs(repo) {
+        if !state.dismissed.contains(&entry.path)
+            && !state.docs.iter().any(|e| e.path == entry.path)
+        {
+            state.docs.push(entry);
+            added += 1;
+        }
+    }
+    for entry in discover_memory(repo) {
+        if !state.dismissed.contains(&entry.path)
+            && !state.memory.iter().any(|e| e.path == entry.path)
+        {
+            state.memory.push(entry);
+            added += 1;
+        }
+    }
+    added
+}
+
 /// `load` 返回 `None`(文件不存在,首次打开)时跑两个 `discover_*` 拼出初始
 /// `LinksState` 并立即 `save`;返回 `Some(state)` 直接用,不再跑发现。
 pub fn load_or_discover(repo: &Path) -> LinksState {
@@ -181,6 +212,7 @@ pub fn load_or_discover(repo: &Path) -> LinksState {
     let state = LinksState {
         docs: discover_docs(repo),
         memory: discover_memory(repo),
+        dismissed: Vec::new(),
     };
     let _ = save(repo, &state);
     state
@@ -228,6 +260,7 @@ mod tests {
                 kind: LinkKind::File,
             }],
             memory: vec![],
+            dismissed: vec![],
         };
         save(dir.path(), &state).unwrap();
         assert_eq!(load(dir.path()), Some(state));
@@ -356,11 +389,65 @@ mod tests {
         let manual = LinksState {
             docs: vec![],
             memory: vec![],
+            dismissed: vec![],
         };
         save(dir.path(), &manual).unwrap();
         std::fs::write(dir.path().join("README.md"), "").unwrap();
         let state = load_or_discover(dir.path());
         assert!(state.docs.is_empty()); // 不会因为磁盘上有 README 就补进来
+    }
+
+    #[test]
+    fn merge_rediscovered_adds_only_new_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("README.md"), "").unwrap();
+        let mut state = LinksState::default();
+        let added = merge_rediscovered(dir.path(), &mut state);
+        assert_eq!(added, 1);
+        assert_eq!(state.docs.len(), 1);
+
+        // 再跑一次:README 已经在 state 里了,不会重复添加。
+        let added_again = merge_rediscovered(dir.path(), &mut state);
+        assert_eq!(added_again, 0);
+        assert_eq!(state.docs.len(), 1);
+    }
+
+    #[test]
+    fn merge_rediscovered_skips_dismissed_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("README.md"), "").unwrap();
+        let readme_path = dir.path().join("README.md");
+        let mut state = LinksState {
+            docs: vec![],
+            memory: vec![],
+            dismissed: vec![readme_path],
+        };
+        // README 还在磁盘上,但用户已经手动移除过——不应该被重新加回来。
+        let added = merge_rediscovered(dir.path(), &mut state);
+        assert_eq!(added, 0);
+        assert!(state.docs.is_empty());
+    }
+
+    #[test]
+    fn merge_rediscovered_finds_new_file_added_after_initial_discovery() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("README.md"), "").unwrap();
+        let mut state = LinksState {
+            docs: vec![LinkEntry {
+                path: dir.path().join("README.md"),
+                kind: LinkKind::File,
+            }],
+            memory: vec![],
+            dismissed: vec![],
+        };
+        // 项目根目录后来多了一个 AGENTS.md(Agent 记忆),应该被发现补进来。
+        std::fs::write(dir.path().join("AGENTS.md"), "").unwrap();
+        let added = merge_rediscovered(dir.path(), &mut state);
+        assert_eq!(added, 1);
+        assert_eq!(state.memory.len(), 1);
+        assert_eq!(state.memory[0].path, dir.path().join("AGENTS.md"));
+        // docs 没变。
+        assert_eq!(state.docs.len(), 1);
     }
 
     #[test]

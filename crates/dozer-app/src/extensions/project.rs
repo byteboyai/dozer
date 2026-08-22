@@ -335,7 +335,12 @@ pub fn update(
                 return;
             }
             let removed = list.remove(index);
+            // 记进 dismissed:否则文件还在磁盘上的话,"修复项目"的
+            // `merge_rediscovered` 下次会把这条自动发现的记录重新加回来,
+            // 删除操作就形同虚设(见 `links::LinksState.dismissed` 文档)。
+            ws_state.links.dismissed.push(removed.path.clone());
             if let Err(e) = links::save(repo_path, &ws_state.links) {
+                ws_state.links.dismissed.pop();
                 ws_state.links.list_mut(target).insert(index, removed);
                 ws_state.error = Some(format!("保存失败: {e}"));
             } else {
