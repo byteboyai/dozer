@@ -324,6 +324,10 @@ async fn handle_conn(
                                 Err(e) => Reply::Error { message: format!("查询回合失败: {e}") },
                             }
                         }
+                        Request::BackfillProjectTranscripts { cwd } => {
+                            let imported_files = transcripts.backfill_project(&cwd);
+                            Reply::BackfillDone { imported_files }
+                        }
                         Request::ListSessionTurnGroups { conversation_id } => {
                             match transcripts.list_turn_groups(&conversation_id) {
                                 Ok(groups) => Reply::SessionTurnGroups { conversation_id, groups },
