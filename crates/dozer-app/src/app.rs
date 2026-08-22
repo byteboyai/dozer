@@ -39,9 +39,9 @@ use crate::topbar;
 use crate::transcript::ReviewEntry;
 use crate::webview_geometry;
 use crate::workspace::{
-    PickerLaunch, RestorePayload, ReviewSource, ReviewView, ShellIo, SshOut, TabBackend, Workspace,
-    agent_list_pane, agent_picker_popup, conversation_list_pane, dot_color,
-    edit_discard_confirm_popup, edit_modal, effective_project_repo, exited_marker,
+    PickerLaunch, RestorePayload, ReviewSource, ReviewView, ShellIo, SshOut, TabBackend,
+    TopicPreview, Workspace, agent_list_pane, agent_picker_popup, conversation_list_pane,
+    dot_color, edit_discard_confirm_popup, edit_modal, effective_project_repo, exited_marker,
     fetch_project_restore, no_project_placeholder, preview_pane, project_preview_pane,
     review_content_pane, review_should_refresh_on_turn, spawn_disk_usage_refresh,
     spawn_project_git_refresh, split_portions, tab_title,
@@ -68,6 +68,15 @@ use tokio::runtime::Handle;
 pub(crate) const DEFAULT_COLS: u16 = 80;
 
 pub(crate) const DEFAULT_ROWS: u16 = 24;
+
+/// `dozer://review-trace/data.json` 的响应体形状——`review_trace.html` 按
+/// 这个结构消费(`entries`/`prev_topic`/`next_topic` 三个顶层字段)。
+#[derive(serde::Serialize)]
+struct ReviewSnapshot<'a> {
+    entries: &'a [ReviewEntry],
+    prev_topic: Option<TopicPreview>,
+    next_topic: Option<TopicPreview>,
+}
 
 /// 工作区 11 个面板的统一标识——workspace 图标栏拖拽换栏功能
 /// (见 `2026-08-19-rail-panel-drag-relocation-design.md`)的面板类型。
@@ -3803,7 +3812,15 @@ impl App {
                                 // `static`,过期/乱序结果也会无条件覆盖)的
                                 // 关键区别,过期加载结果到这里已经被
                                 // 上面的守卫挡在外面,不会再污染快照。
-                                let json = serde_json::to_string(&entries).unwrap_or_default();
+                                // 前后话题预览(`prev_topic`/`next_topic`)
+                                // 是打开话题那一刻同步算好、存在 `rv` 上的,
+                                // 这里原样带进同一份 data.json,不重算。
+                                let snapshot = ReviewSnapshot {
+                                    entries: &entries,
+                                    prev_topic: rv.prev_topic.clone(),
+                                    next_topic: rv.next_topic.clone(),
+                                };
+                                let json = serde_json::to_string(&snapshot).unwrap_or_default();
                                 *ws.review_snapshot.lock().expect("review snapshot 锁") =
                                     Some(json);
                                 rv.nonce = nonce;
@@ -6029,11 +6046,21 @@ impl App {
         self.with_focused_project(move |ws, io| {
             let path_s = path.to_string_lossy().into_owned();
             let source = ReviewSource::FileRange(path.clone(), start, end);
+            // 前后话题邻居用已经加载好的 `conversation_turn_groups` 同步
+            // 算,不发新请求——数据没加载过(还没打开过会话面板)时兜底
+            // 成"没有邻居",不阻塞打开当前话题。
+            let (prev_topic, next_topic) = ws
+                .conversation_turn_groups
+                .as_deref()
+                .map(|groups| crate::workspace::adjacent_topic_previews(groups, &path, start, end))
+                .unwrap_or((None, None));
             ws.review = Some(ReviewView {
                 source: source.clone(),
                 entries: Vec::new(),
                 error: None,
                 nonce: 0,
+                prev_topic,
+                next_topic,
             });
             let after = start - 1;
             let limit = (end - start + 1).max(0) as u32;
