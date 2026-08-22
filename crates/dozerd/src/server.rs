@@ -328,6 +328,18 @@ async fn handle_conn(
                             let imported_files = transcripts.backfill_project(&cwd);
                             Reply::BackfillDone { imported_files }
                         }
+                        Request::RemoveProject { id } => match projects.remove(id) {
+                            Ok(()) => Reply::Ok,
+                            Err(e) => Reply::Error { message: format!("删除项目失败: {e}") },
+                        },
+                        Request::DeleteProjectTranscripts { cwd } => {
+                            match transcripts.delete_project_transcripts(&cwd) {
+                                Ok(conversations) => Reply::DeletedTranscripts { conversations },
+                                Err(e) => Reply::Error {
+                                    message: format!("删除 agent 历史失败: {e}"),
+                                },
+                            }
+                        }
                         Request::ListSessionTurnGroups { conversation_id } => {
                             match transcripts.list_turn_groups(&conversation_id) {
                                 Ok(groups) => Reply::SessionTurnGroups { conversation_id, groups },
