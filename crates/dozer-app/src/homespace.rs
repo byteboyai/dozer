@@ -11,7 +11,7 @@ use crate::delivery;
 use crate::extensions::browser;
 use crate::rail::{RailButton, rail_icon_button};
 use crate::theme;
-use crate::workspace::{agent_icon, lh, relative_time_text};
+use crate::workspace::{agent_dot_color, agent_icon, lh, relative_time_text};
 use byteui::interaction::icons;
 use dozer_core::protocol::ProjectInfo;
 use iced_widget::core::widget::operation::Focusable;
@@ -776,10 +776,13 @@ fn home_recent_files_card(
         .into()
 }
 
-/// "最近的对话"卡：语义同 `home_recent_files_card`。按需求改为三行:
-///   第一行:agent 图标 + agent 名称
-///   第二行:对话内容(即对话标题)
-///   第三行:项目名称 · 相对时间
+/// "最近的对话"卡：语义同 `home_recent_files_card`。按需求改为三行,文字
+/// 整体相对 agent 图标缩进(`row![icon, column![三行]]`,而不是图标单独占
+/// 一行的 `column![row![icon, 名称], 内容, 元信息]`——后者内容/元信息会
+/// 跟图标左边缘对齐,不是跟名称文字对齐):
+///   第一行:agent 图标(按 `agent_dot_color` 彩色) + agent 名称(奶油色)
+///   第二行:对话内容(即对话标题,灰色)
+///   第三行:项目名称 · 相对时间(灰色)
 fn home_recent_conversations_card(
     app: &App,
     now_ms: u64,
@@ -809,27 +812,27 @@ fn home_recent_conversations_card(
             col = col.push(
                 MouseArea::new(
                     container(
-                        column![
-                            row![
-                                icons::view(
-                                    agent_icon(c.meta.agent),
-                                    byteui::theme::icon_size::row(),
-                                    theme::homespace_color::cream(),
-                                ),
+                        row![
+                            icons::view(
+                                agent_icon(c.meta.agent),
+                                byteui::theme::icon_size::row(),
+                                agent_dot_color(c.meta.agent),
+                            ),
+                            column![
                                 lh(text(c.meta.agent.label())
                                     .size(theme::homespace_font::body())
                                     .color(theme::homespace_color::cream())),
+                                lh(text(c.meta.title.clone())
+                                    .size(theme::homespace_font::body())
+                                    .color(theme::homespace_color::dim())),
+                                lh(text(meta)
+                                    .size(theme::homespace_font::caption_sm())
+                                    .color(theme::homespace_color::dim())),
                             ]
-                            .spacing(8)
-                            .align_y(iced_widget::core::Alignment::Center),
-                            lh(text(c.meta.title.clone())
-                                .size(theme::homespace_font::body())
-                                .color(theme::homespace_color::cream())),
-                            lh(text(meta)
-                                .size(theme::homespace_font::caption_sm())
-                                .color(theme::homespace_color::dim())),
+                            .spacing(4),
                         ]
-                        .spacing(4),
+                        .spacing(8)
+                        .align_y(iced_widget::core::Alignment::Start),
                     )
                     .padding(10)
                     .width(Length::Fill)
