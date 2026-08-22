@@ -319,6 +319,18 @@ pub enum Request {
         id: i64,
         name: String,
     },
+    /// 从 dozerd 登记里彻底移除这个项目(层级 `DozerOnly` 起都会发)。
+    /// `id` 不存在 → `Reply::Error`。成功 → 裸 `Reply::Ok`。
+    RemoveProject {
+        id: i64,
+    },
+    /// 删掉这个项目在三家 agent 存储目录下已摄取的 conversations/
+    /// conversation_turns 数据(层级 `WithAgentCache` 起才发)。`cwd` 跟
+    /// `OpenProject.path` 同一种形状——原始项目根目录绝对路径,不是
+    /// agent 存储目录本身(那个由 dozerd 内部用 `agent_paths` 算)。
+    DeleteProjectTranscripts {
+        cwd: String,
+    },
     /// 取某仓库的验收次数（项目卡"N 次验收"用）。
     GetAcceptanceCount {
         repo: String,
@@ -403,6 +415,11 @@ pub enum Reply {
     /// 出错。
     BackfillDone {
         imported_files: u32,
+    },
+    /// `DeleteProjectTranscripts` 应答:这次实际删掉的 conversations 行数
+    /// (三家 agent 加总)。0 不代表出错——可能这个项目本来就没被摄取过。
+    DeletedTranscripts {
+        conversations: u32,
     },
     /// 验收次数。
     AcceptanceCount {
@@ -591,6 +608,29 @@ mod tests {
         assert_eq!(req, back);
 
         let reply = Reply::BackfillDone { imported_files: 3 };
+        let line = encode_line(&reply);
+        let back: Reply = decode_line(&line).unwrap();
+        assert_eq!(reply, back);
+    }
+
+    #[test]
+    fn remove_project_protocol_types_roundtrip() {
+        let req = Request::RemoveProject { id: 7 };
+        let line = encode_line(&req);
+        let back: Request = decode_line(&line).unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[test]
+    fn delete_project_transcripts_protocol_types_roundtrip() {
+        let req = Request::DeleteProjectTranscripts {
+            cwd: "/home/x/proj".into(),
+        };
+        let line = encode_line(&req);
+        let back: Request = decode_line(&line).unwrap();
+        assert_eq!(req, back);
+
+        let reply = Reply::DeletedTranscripts { conversations: 5 };
         let line = encode_line(&reply);
         let back: Reply = decode_line(&line).unwrap();
         assert_eq!(reply, back);
