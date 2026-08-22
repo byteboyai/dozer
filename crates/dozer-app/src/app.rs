@@ -207,12 +207,6 @@ pub enum HoverId {
     /// 塞 `String`,同 `SshTabItem` 的精度取舍):hover 时填充 `CARD` 背景 +
     /// 金色描边(见 `extensions::ssh::host_card`,统一卡片样式)。
     HostCard(u64),
-    /// 首页"最近的文件"卡某行(按下标区分):hover 时填充 `CARD` 背景 + 金色
-    /// 描边(见 `homespace::home_recent_files_card`,统一卡片样式)。
-    RecentFile(usize),
-    /// 首页"最近的对话"卡某行(按下标区分):hover 时填充 `CARD` 背景 + 金色
-    /// 描边(见 `homespace::home_recent_conversations_card`,统一卡片样式)。
-    RecentConversation(usize),
 }
 
 /// 一个可平滑过渡的 hover 动画状态机。iced 0.14 无内置动画 API,这套自驱
