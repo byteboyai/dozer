@@ -95,13 +95,27 @@ pub struct TurnGroupEntry {
 /// `"human"`/`"ai"`/`"tool_result"`(不用枚举是为了跟 sqlite 存储列直接
 /// 对应,减一层转换)。`is_error` 只对 `role == "tool_result"` 有意义,
 /// 标记这次工具调用是否失败。
+/// 一次工具调用的结构化明细：`summary` 是既有的一行摘要（`tool_summary()`
+/// 产出，如 "Edit README.md"），`input_json` 是完整 `input`/`arguments`
+/// pretty-print 后的 JSON 字符串，`None` 表示没有参数或解析失败。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolCallInfo {
+    pub summary: String,
+    pub input_json: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TurnRecord {
     pub turn_index: i64,
     pub role: String,
     pub content: String,
-    pub tools_summary: Vec<String>,
+    pub tool_calls: Vec<ToolCallInfo>,
     pub thinking: bool,
+    /// 真实思考文本（2026-08-22 起读时解析补上，见
+    /// `dozerd::transcripts::parse::extract_turn_trace_detail`）；老协议帧/
+    /// 无思考内容时为 `None`。
+    #[serde(default)]
+    pub thinking_text: Option<String>,
     pub ts: Option<u64>,
     #[serde(default)]
     pub is_error: bool,
@@ -468,8 +482,12 @@ mod tests {
             turn_index: 0,
             role: "human".into(),
             content: "你好".into(),
-            tools_summary: vec!["Edit README.md".into()],
+            tool_calls: vec![ToolCallInfo {
+                summary: "Edit README.md".into(),
+                input_json: Some("{\"file_path\":\"README.md\"}".into()),
+            }],
             thinking: true,
+            thinking_text: Some("先看看现有实现".into()),
             ts: Some(42),
             is_error: false,
         };
@@ -512,8 +530,9 @@ mod tests {
             turn_index: 0,
             role: "tool_result".into(),
             content: "boom".into(),
-            tools_summary: vec![],
+            tool_calls: vec![],
             thinking: false,
+            thinking_text: None,
             ts: Some(1),
             is_error: true,
         };
