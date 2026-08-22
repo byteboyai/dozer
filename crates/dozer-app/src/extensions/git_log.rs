@@ -534,9 +534,11 @@ fn ref_labels_text(refs: &[RefLabel], head_branch: Option<&str>) -> String {
 }
 
 /// commit 线性列表(替代原 Canvas 拓扑图,2026-08-17 重构——见 spec
-/// "架构与数据流"第 6 节)。每行上下两行:上行图标(普通/合并)+ short_sha +
-/// 时间戳 + refs 标签;下行 summary。整行可点选中(`Message::SelectCommit`),
-/// 选中态统一卡片样式(对齐 Todo/Files 面板既有选中行视觉语言)。
+/// "架构与数据流"第 6 节)。每张卡片四行:首行图标(普通/合并)+ 分支标签
+/// (refs,带 HEAD 的 `→` 标记,青色;无 ref 时回退 short_sha 灰显);其下
+/// 缩进三行依次是作者名、commit 摘要、时间戳。整行可点选中
+/// (`Message::SelectCommit`),选中态统一卡片样式(对齐 Todo/Files 面板
+/// 既有选中行视觉语言)。
 ///
 /// `visible_count`(`State::commit_visible_count`)客户端分页:只画前
 /// `visible_count` 条,画不完时列表末尾补一个"更多"图标按钮(同
@@ -558,35 +560,48 @@ fn commit_list_view<'a>(
         } else {
             byteui::interaction::icons::IconKind::GitCommitVertical
         };
-        let refs_prefix = ref_labels_text(&row.refs, head_branch);
-        // 上行:图标 + 作者名(无作者名回退 short_sha)+ 时间戳 + refs 标签
+        let branch_text = ref_labels_text(&row.refs, head_branch);
         let author_or_id = row.author.clone().unwrap_or_else(|| row.short_sha.clone());
-        let mut head_line = row![
+        // 新四行布局(2026-08-21 调整,对应需求"commit 卡片按 icon+分支 /
+        // 作者 / 摘要 / 时间 四行显示"):
+        //   第一行:图标 + 分支标签(带 HEAD 的 `→` 标记,青色;无 ref 时回退
+        //           short_sha 灰显)——把"属于哪条分支"从角落提到卡片首行。
+        //   第二行:作者名(无作者回退 short_sha),左缩进到图标之后。
+        //   第三行:commit 摘要,缩进对齐。
+        //   第四行:时间戳(UTC,`YYYY-MM-DD HH:MM:SS`),缩进对齐。
+        let branch_color = if row.refs.is_empty() {
+            byteui::theme::color::current().dim
+        } else {
+            byteui::theme::color::current().cyan
+        };
+        let line1 = row![
             byteui::interaction::icons::view(
                 icon_kind,
                 byteui::theme::icon_size::row(),
                 byteui::theme::color::current().dim
             ),
+            text(branch_text)
+                .size(byteui::theme::font::body())
+                .color(branch_color)
+                .font(Font::MONOSPACE),
+        ]
+        .spacing(8)
+        .align_y(alignment::Vertical::Center);
+        // 第 2~4 行统一左缩进到"图标之后":跳过图标宽度 + 图标与首行的
+        // `spacing(8)`,与首行分支标签左缘对齐。
+        let indent = byteui::theme::icon_size::row() + 8.0;
+        let author_line = container(
             text(author_or_id)
                 .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim)
                 .font(Font::MONOSPACE),
-            text(format_commit_time(row.time))
-                .size(byteui::theme::font::caption_sm())
-                .color(byteui::theme::color::current().dim),
-        ]
-        .spacing(8)
-        .align_y(alignment::Vertical::Center);
-        if !refs_prefix.is_empty() {
-            head_line = head_line.push(
-                text(refs_prefix)
-                    .size(byteui::theme::font::caption_sm())
-                    .color(byteui::theme::color::current().cyan),
-            );
-        }
-        // 下行:summary 主体——左缩进到与 commit id(short_sha)对齐:跳过
-        // 上行图标宽度 + 图标与 sha 之间的 `spacing(8)`。
-        let comment_indent = byteui::theme::icon_size::row() + 8.0;
+        )
+        .padding(iced_widget::core::Padding {
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: indent,
+        });
         let summary_line = container(
             text(row.summary.clone())
                 .size(byteui::theme::font::body())
@@ -596,9 +611,20 @@ fn commit_list_view<'a>(
             top: 0.0,
             right: 0.0,
             bottom: 0.0,
-            left: comment_indent,
+            left: indent,
         });
-        let line = column![head_line, summary_line].spacing(4);
+        let time_line = container(
+            text(format_commit_time(row.time))
+                .size(byteui::theme::font::caption_sm())
+                .color(byteui::theme::color::current().dim),
+        )
+        .padding(iced_widget::core::Padding {
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: indent,
+        });
+        let line = column![line1, author_line, summary_line, time_line].spacing(4);
         // 统一卡片样式:选中/一般/hover 三态(选中=金边、hover=金边+填充、
         // 一般态=描边),不再用左侧 3px 金竖条表示选中。内部间距与卡片内边距
         // 对齐 Agent 面板的 agent 卡片(`workspace.rs::agent_card`:行距 4、
