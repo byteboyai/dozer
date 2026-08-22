@@ -822,7 +822,7 @@ mod tests {
         let client = client_for_test();
         update(
             &mut state,
-            Message::BookmarksLoaded(1, fresh.clone()),
+            Message::BookmarksLoaded(Some(1), fresh.clone()),
             Some(1),
             &client,
             &handle,
@@ -838,7 +838,7 @@ mod tests {
         let client = client_for_test();
         update(
             &mut state,
-            Message::BookmarksMutated(1, Err("boom".to_string())),
+            Message::BookmarksMutated(Some(1), Err("boom".to_string())),
             Some(1),
             &client,
             &handle,
@@ -973,8 +973,9 @@ pub enum Message {
     BookmarkAdd(BookmarkScope),
     BookmarkRemove(i64),
     BookmarksToggle,
-    BookmarksLoaded(i64, Vec<BookmarkInfo>),
-    BookmarksMutated(i64, Result<(), String>),
+    /// `project_id` 用 `None` 表示首页全局浏览器/无项目工作区的全局收藏。
+    BookmarksLoaded(Option<i64>, Vec<BookmarkInfo>),
+    BookmarksMutated(Option<i64>, Result<(), String>),
     /// tab 标题/关闭按钮的 hover 进入/离开(idx = tab 序号, bool = 是否关闭
     /// 按钮, 最后 bool = 进入/离开)。浏览器面板有独立 `State`,无法复用顶栏
     /// 全局 `App::hover_progress`,自己维护一套进度机(见 `State::hover`)。
@@ -1344,7 +1345,12 @@ pub fn update(
                 &title,
                 created_ms,
             );
-            let Some(project_id) = project_id else { return };
+            // 全局收藏在首页/无项目工作区也能持久化:Project scope 仍需要真实
+            // project_id;Global scope 即使没有 project_id 也发 RPC。
+            // `BookmarksMutated(Option<i64>, ...)` 会把结果路由回对应浏览器。
+            if matches!(scope, BookmarkScope::Project) && project_id.is_none() {
+                return;
+            }
             let client = client.clone();
             handle.spawn(async move {
                 let res = client
@@ -1356,7 +1362,6 @@ pub fn update(
         }
         Message::BookmarkRemove(id) => {
             optimistic_remove(&mut state.bookmarks, id);
-            let Some(project_id) = project_id else { return };
             let client = client.clone();
             handle.spawn(async move {
                 let res = client.remove_bookmark(id).await.map_err(|e| e.to_string());
@@ -1381,20 +1386,17 @@ pub fn update(
 }
 
 /// 现有 `Workspace::spawn_bookmarks_refresh` 的搬家版本:异步拉取
-/// "全局 + 当前项目"收藏夹合集。
+/// 收藏夹合集。`project_id = Some(pid)` 时返回"全局 + pid 项目";`None` 时
+/// 只返回全局收藏(用于首页全局浏览器/无项目工作区)。
 pub fn request_bookmarks_refresh(
     project_id: Option<i64>,
     client: &Client,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
-    let Some(project_id) = project_id else { return };
     let client = client.clone();
     handle.spawn(async move {
-        let bookmarks = client
-            .list_bookmarks(Some(project_id))
-            .await
-            .unwrap_or_default();
+        let bookmarks = client.list_bookmarks(project_id).await.unwrap_or_default();
         emit(Message::BookmarksLoaded(project_id, bookmarks));
     });
 }

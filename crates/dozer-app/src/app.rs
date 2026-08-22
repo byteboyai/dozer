@@ -3512,6 +3512,24 @@ impl App {
             .unwrap_or(0);
         let x = x0 + (col + preedit_cols) as f32 * cell_w;
         let y = y0 + (row as f32 + 1.0) * line_h; // 光标格底部,候选窗落其下方
+        tracing::warn!(
+            window_w,
+            window_h,
+            pane_w,
+            pane_h,
+            cell_w,
+            line_h,
+            right_w,
+            list_w,
+            x0,
+            y0,
+            col,
+            row,
+            preedit_cols,
+            x,
+            y,
+            "DEBUG ime_cursor_area"
+        );
         (x, y, line_h)
     }
 
@@ -5267,8 +5285,27 @@ impl App {
         todo::update(&mut ws.todo, app_todo, msg, project_id, &project_path);
     }
 
-    fn browser_bookmarks_loaded(&mut self, pid: i64, bookmarks: Vec<BookmarkInfo>) {
-        self.with_project(pid, move |ws, io| {
+    fn browser_bookmarks_loaded(&mut self, pid: Option<i64>, bookmarks: Vec<BookmarkInfo>) {
+        if pid.is_none() {
+            // 首页全局浏览器(或无项目工作区)的收藏列表刷新。
+            let handle = self.handle.clone();
+            let client = self.client.clone();
+            let proxy = self.proxy.clone();
+            let emit = move |m| {
+                let _ = proxy.send_event(Message::HomeBrowser(m));
+            };
+            browser::update(
+                &mut self.home_browser,
+                browser::Message::BookmarksLoaded(None, bookmarks),
+                None,
+                &client,
+                &handle,
+                emit,
+            );
+            return;
+        }
+        self.with_project(pid.unwrap(), move |ws, io| {
+            let pid = pid.unwrap();
             let handle = io.handle.clone();
             let client = io.client.clone();
             let proxy = io.proxy.clone();
@@ -5277,7 +5314,7 @@ impl App {
             };
             browser::update(
                 &mut ws.browser,
-                browser::Message::BookmarksLoaded(pid, bookmarks),
+                browser::Message::BookmarksLoaded(Some(pid), bookmarks),
                 Some(pid),
                 &client,
                 &handle,
@@ -5286,8 +5323,27 @@ impl App {
         });
     }
 
-    fn browser_bookmarks_mutated(&mut self, pid: i64, res: Result<(), String>) {
-        self.with_project(pid, move |ws, io| {
+    fn browser_bookmarks_mutated(&mut self, pid: Option<i64>, res: Result<(), String>) {
+        if pid.is_none() {
+            // 首页全局浏览器(或无项目工作区)的添加/删除结果回调。
+            let handle = self.handle.clone();
+            let client = self.client.clone();
+            let proxy = self.proxy.clone();
+            let emit = move |m| {
+                let _ = proxy.send_event(Message::HomeBrowser(m));
+            };
+            browser::update(
+                &mut self.home_browser,
+                browser::Message::BookmarksMutated(None, res),
+                None,
+                &client,
+                &handle,
+                emit,
+            );
+            return;
+        }
+        self.with_project(pid.unwrap(), move |ws, io| {
+            let pid = pid.unwrap();
             let handle = io.handle.clone();
             let client = io.client.clone();
             let proxy = io.proxy.clone();
@@ -5296,7 +5352,7 @@ impl App {
             };
             browser::update(
                 &mut ws.browser,
-                browser::Message::BookmarksMutated(pid, res),
+                browser::Message::BookmarksMutated(Some(pid), res),
                 Some(pid),
                 &client,
                 &handle,
@@ -5473,6 +5529,17 @@ impl App {
                 ws.active = idx;
             }
         });
+        // `term_ime_preedit` 是 `App` 上唯一一份、不按 tab 分的组字预览态
+        // (见该字段文档),只在真正 `Ime::Commit`/组字取消时才清空——切
+        // tab 不会清。`TermTarget::Shared` 这道"该不该显示"闸门只判断
+        // "键盘现在归不归共享终端条",不区分具体哪个 tab,于是新切过去的
+        // tab 会直接"继承"上一个 tab 还没提交完的组字预览文字/候选词
+        // (2026-08-21 用户实测反馈:切 tab 后串台,选完字对方也不会真的
+        // 收到那些字——因为提交字节确实是发给切换后的新 tab 的 PTY,只是
+        // 预览视觉是借来的)。切 tab 时无条件清掉(即使 idx 越界导致上面
+        // 没真的切,清掉一份陈旧组字预览也没有副作用),避免这份陈旧状态
+        // 被新激活的 tab 误当成自己的组字预览渲染出来。
+        self.term_ime_preedit = None;
     }
 
     fn pane_resized(&mut self, cols: u16, rows: u16, ssh_cols: u16, ssh_rows: u16) {
