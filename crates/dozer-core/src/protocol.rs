@@ -109,6 +109,9 @@ pub struct TurnRecord {
     pub turn_index: i64,
     pub role: String,
     pub content: String,
+    /// 一次工具调用的结构化明细 (2026-08-22 起由 `raw_json` 读时解析补上)。
+    /// 老协议帧/无工具调用时为 `None`。
+    #[serde(default)]
     pub tool_calls: Vec<ToolCallInfo>,
     pub thinking: bool,
     /// 真实思考文本（2026-08-22 起读时解析补上，见
@@ -624,6 +627,32 @@ mod tests {
     #[test]
     fn decode_rejects_garbage() {
         assert!(decode_line::<Request>("not json").is_err());
+    }
+
+    #[test]
+    fn turn_record_missing_tool_calls_decodes_empty_vec() {
+        // 2026-08-22 起 `TurnRecord` 新增了 `tool_calls`,但老 daemon 进程
+        // 仍可能发来不带该字段的协议帧(它按旧代码序列化)。`tool_calls` 有
+        // `#[serde(default)]`,缺字段时应当解成空 vec,而不是报
+        // "missing field `tool_calls`" 让 session 明细整个打不开。
+        let old_frame = TurnRecord {
+            turn_index: 0,
+            role: "human".into(),
+            content: "你好".into(),
+            tool_calls: vec![],
+            thinking: true,
+            thinking_text: Some("先想想".into()),
+            ts: Some(42),
+            is_error: false,
+        };
+        let line = encode_line(&old_frame);
+        // 去掉 `tool_calls` 字段,模拟老 daemon 发来的帧。
+        let mut v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        v.as_object_mut().unwrap().remove("tool_calls");
+        let stripped = serde_json::to_string(&v).unwrap();
+
+        let back: TurnRecord = serde_json::from_str(&stripped).unwrap();
+        assert_eq!(back.tool_calls, vec![]);
     }
 
     #[test]
