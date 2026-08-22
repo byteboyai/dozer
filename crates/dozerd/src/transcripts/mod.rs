@@ -306,6 +306,43 @@ impl TranscriptStore {
         crate::backfill::ingest_files(self, files)
     }
 
+    /// 生产入口,内部用 `dozer_core::agent_paths::home_dir()`。按项目根目录
+    /// `cwd` 算出的三家 agent 存储目录，删掉这些目录下已摄取的
+    /// conversations 与对应 conversation_turns。返回被删的 conversations
+    /// 行数(三家加总)。
+    pub fn delete_project_transcripts(&self, cwd: &str) -> Result<u32> {
+        self.delete_project_transcripts_in(&dozer_core::agent_paths::home_dir(), cwd)
+    }
+
+    /// `home` 显式传入版本，测试用。
+    pub fn delete_project_transcripts_in(&self, home: &Path, cwd: &str) -> Result<u32> {
+        use dozer_core::agent_paths::{
+            claude_project_dir_in, codebuddy_project_dir_in, opencode_project_dir_in,
+        };
+        let cwd_path = Path::new(cwd);
+        let dirs = [
+            claude_project_dir_in(home, cwd_path),
+            codebuddy_project_dir_in(home, cwd_path),
+            opencode_project_dir_in(home, cwd_path),
+        ];
+
+        let mut conn = self.conn.lock().expect("db lock");
+        let tx = conn.transaction()?;
+        let mut deleted = 0u32;
+        for dir in &dirs {
+            let d = dir.to_string_lossy().into_owned();
+            tx.execute(
+                "DELETE FROM conversation_turns WHERE conversation_id IN
+                 (SELECT conversation_id FROM conversations WHERE dir = ?1)",
+                [&d],
+            )?;
+            let affected = tx.execute("DELETE FROM conversations WHERE dir = ?1", [&d])?;
+            deleted = deleted.saturating_add(affected as u32);
+        }
+        tx.commit()?;
+        Ok(deleted)
+    }
+
     /// 生产入口,内部用 `dozer_core::agent_paths::home_dir()`。
     pub fn list_conversations(
         &self,
@@ -967,6 +1004,75 @@ mod tests {
         let n = crate::backfill::ingest_files(&store, files);
         assert_eq!(n, 1);
         assert_eq!(store.get_conversation_turns("s1", -1, 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn delete_project_transcripts_in_removes_only_that_project() {
+        let home = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&home.path().join("t.db")).unwrap();
+
+        let cwd_project = "/work/proj-a";
+        let cwd_other = "/work/proj-b";
+
+        let claude_a = dozer_core::agent_paths::claude_project_dir_in(
+            home.path(),
+            std::path::Path::new(cwd_project),
+        );
+        let claude_b = dozer_core::agent_paths::claude_project_dir_in(
+            home.path(),
+            std::path::Path::new(cwd_other),
+        );
+        std::fs::create_dir_all(&claude_a).unwrap();
+        std::fs::create_dir_all(&claude_b).unwrap();
+        std::fs::write(
+            claude_a.join("s1.jsonl"),
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"你好\"}}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            claude_b.join("s2.jsonl"),
+            "{\"type\":\"user\",\"uuid\":\"u2\",\"message\":{\"role\":\"user\",\"content\":\"别的项目\"}}\n",
+        )
+        .unwrap();
+
+        let files_a = super::scan::discover_project_transcript_files_in(
+            home.path(),
+            std::path::Path::new(cwd_project),
+        );
+        let files_b = super::scan::discover_project_transcript_files_in(
+            home.path(),
+            std::path::Path::new(cwd_other),
+        );
+        crate::backfill::ingest_files(&store, files_a);
+        crate::backfill::ingest_files(&store, files_b);
+        assert_eq!(
+            store
+                .list_conversations_in(home.path(), cwd_project, None, 100, 0)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // 删 proj-a：它的对话(含 turns)被删，别的项目不受影响。
+        let deleted = store
+            .delete_project_transcripts_in(home.path(), cwd_project)
+            .unwrap();
+        assert_eq!(deleted, 1);
+        assert_eq!(
+            store
+                .list_conversations_in(home.path(), cwd_project, None, 100, 0)
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(store.get_conversation_turns("s1", -1, 10).unwrap().len(), 0);
+        assert_eq!(
+            store
+                .list_conversations_in(home.path(), cwd_other, None, 100, 0)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
