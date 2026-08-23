@@ -2074,6 +2074,289 @@ impl DatabaseContentState {
     }
 }
 
+/// 数据浏览/查询执行用的驱动原生连接池(区别于阶段 1/2 introspection
+/// 专用的 `sqlx::AnyPool`——原生池才能正确解码真实列类型,设计文档
+/// "架构与数据流 §4"一节)。
+enum NativePool {
+    Pg(sqlx::PgPool),
+    MySql(sqlx::MySqlPool),
+    Sqlite(sqlx::SqlitePool),
+}
+
+async fn connect_native(kind: DriverKind, url: &str) -> Result<NativePool, String> {
+    match kind {
+        DriverKind::Postgres => sqlx::PgPool::connect(url)
+            .await
+            .map(NativePool::Pg)
+            .map_err(|e| e.to_string()),
+        DriverKind::MySQL => sqlx::MySqlPool::connect(url)
+            .await
+            .map(NativePool::MySql)
+            .map_err(|e| e.to_string()),
+        DriverKind::Sqlite => sqlx::SqlitePool::connect(url)
+            .await
+            .map(NativePool::Sqlite)
+            .map_err(|e| e.to_string()),
+        DriverKind::MongoDB => unreachable!("connect_native 不处理 MongoDB"),
+    }
+}
+
+async fn close_native(pool: NativePool) {
+    match pool {
+        NativePool::Pg(p) => p.close().await,
+        NativePool::MySql(p) => p.close().await,
+        NativePool::Sqlite(p) => p.close().await,
+    }
+}
+
+/// 行 → 结果集:表头来自首行的列元信息(0 行结果时没有列头——已知限制,
+/// 见设计文档"错误处理"一节的补充说明,浏览页对 0 行走友好提示而不是
+/// 空表头)。三种 `Row` 类型共享这一个泛型函数。
+fn rows_to_result<R: sqlx::Row>(rows: &[R], stringify: impl Fn(&R) -> Vec<CellValue>) -> QueryResult
+where
+    <R::Database as sqlx::Database>::Column: sqlx::Column,
+{
+    use sqlx::Column;
+    let columns = rows
+        .first()
+        .map(|r| r.columns().iter().map(|c| c.name().to_string()).collect())
+        .unwrap_or_default();
+    let rows = rows.iter().map(&stringify).collect();
+    QueryResult { columns, rows }
+}
+
+/// Postgres 行转字符串。常见标量类型直接 match `TypeInfo::name()`;
+/// UUID/时间/JSON(B)/NUMERIC 走 Step 1 新加的 sqlx feature 解码;解不出的
+/// 生僻类型(数组、自定义枚举、复合类型…)显示占位,不 panic、不让整行
+/// 失败(设计文档"架构与数据流 §4")。
+fn stringify_pg_row(row: &sqlx::postgres::PgRow) -> Vec<CellValue> {
+    use sqlx::{Row, TypeInfo, ValueRef};
+    let mut out = Vec::with_capacity(row.len());
+    for i in 0..row.len() {
+        let Ok(raw) = row.try_get_raw(i) else {
+            out.push(CellValue::Null);
+            continue;
+        };
+        if raw.is_null() {
+            out.push(CellValue::Null);
+            continue;
+        }
+        let type_name = raw.type_info().name().to_ascii_uppercase();
+        let decoded: Option<String> = match type_name.as_str() {
+            "BOOL" => row.try_get::<bool, _>(i).ok().map(|v| v.to_string()),
+            "INT2" => row.try_get::<i16, _>(i).ok().map(|v| v.to_string()),
+            "INT4" => row.try_get::<i32, _>(i).ok().map(|v| v.to_string()),
+            "INT8" => row.try_get::<i64, _>(i).ok().map(|v| v.to_string()),
+            "FLOAT4" => row.try_get::<f32, _>(i).ok().map(|v| v.to_string()),
+            "FLOAT8" => row.try_get::<f64, _>(i).ok().map(|v| v.to_string()),
+            "TEXT" | "VARCHAR" | "BPCHAR" | "NAME" | "CITEXT" => row.try_get::<String, _>(i).ok(),
+            "BYTEA" => row
+                .try_get::<Vec<u8>, _>(i)
+                .ok()
+                .map(|b| format!("<{} bytes>", b.len())),
+            "UUID" => row
+                .try_get::<sqlx::types::Uuid, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            "TIMESTAMP" => row
+                .try_get::<sqlx::types::chrono::NaiveDateTime, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            "TIMESTAMPTZ" => row
+                .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            "DATE" => row
+                .try_get::<sqlx::types::chrono::NaiveDate, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            "JSON" | "JSONB" => row
+                .try_get::<serde_json::Value, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            "NUMERIC" => row
+                .try_get::<sqlx::types::Decimal, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            _ => None,
+        };
+        out.push(match decoded {
+            Some(s) => CellValue::Text(s),
+            None => CellValue::Text(format!("<不支持的类型: {type_name}>")),
+        });
+    }
+    out
+}
+
+/// MySQL 行转字符串,类型名集合参照 `information_schema.columns.data_type`
+/// 在 MySQL 里的常见取值(大写)。
+fn stringify_mysql_row(row: &sqlx::mysql::MySqlRow) -> Vec<CellValue> {
+    use sqlx::{Row, TypeInfo, ValueRef};
+    let mut out = Vec::with_capacity(row.len());
+    for i in 0..row.len() {
+        let Ok(raw) = row.try_get_raw(i) else {
+            out.push(CellValue::Null);
+            continue;
+        };
+        if raw.is_null() {
+            out.push(CellValue::Null);
+            continue;
+        }
+        let type_name = raw.type_info().name().to_ascii_uppercase();
+        let decoded: Option<String> = match type_name.as_str() {
+            "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "INTEGER" => {
+                row.try_get::<i64, _>(i).ok().map(|v| v.to_string())
+            }
+            "BIGINT" => row.try_get::<i64, _>(i).ok().map(|v| v.to_string()),
+            "FLOAT" => row.try_get::<f32, _>(i).ok().map(|v| v.to_string()),
+            "DOUBLE" => row.try_get::<f64, _>(i).ok().map(|v| v.to_string()),
+            "VARCHAR" | "CHAR" | "TEXT" | "ENUM" => row.try_get::<String, _>(i).ok(),
+            "BLOB" | "VARBINARY" | "BINARY" => row
+                .try_get::<Vec<u8>, _>(i)
+                .ok()
+                .map(|b| format!("<{} bytes>", b.len())),
+            "DATE" => row
+                .try_get::<sqlx::types::chrono::NaiveDate, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            "DATETIME" | "TIMESTAMP" => row
+                .try_get::<sqlx::types::chrono::NaiveDateTime, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            "JSON" => row
+                .try_get::<serde_json::Value, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            "DECIMAL" => row
+                .try_get::<sqlx::types::Decimal, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            _ => None,
+        };
+        out.push(match decoded {
+            Some(s) => CellValue::Text(s),
+            None => CellValue::Text(format!("<不支持的类型: {type_name}>")),
+        });
+    }
+    out
+}
+
+/// SQLite 行转字符串。SQLite 只有 5 种存储类型(含 NULL),`Any` 驱动
+/// 原本也能应付——这里用原生池只是为了和 Postgres/MySQL 走同一套
+/// `NativePool`/`rows_to_result` 代码路径,不是因为 SQLite 真的需要。
+fn stringify_sqlite_row(row: &sqlx::sqlite::SqliteRow) -> Vec<CellValue> {
+    use sqlx::{Row, TypeInfo, ValueRef};
+    let mut out = Vec::with_capacity(row.len());
+    for i in 0..row.len() {
+        let Ok(raw) = row.try_get_raw(i) else {
+            out.push(CellValue::Null);
+            continue;
+        };
+        if raw.is_null() {
+            out.push(CellValue::Null);
+            continue;
+        }
+        let type_name = raw.type_info().name().to_ascii_uppercase();
+        let decoded: Option<String> = match type_name.as_str() {
+            "INTEGER" | "BOOLEAN" => row.try_get::<i64, _>(i).ok().map(|v| v.to_string()),
+            "REAL" => row.try_get::<f64, _>(i).ok().map(|v| v.to_string()),
+            "TEXT" => row.try_get::<String, _>(i).ok(),
+            "BLOB" => row
+                .try_get::<Vec<u8>, _>(i)
+                .ok()
+                .map(|b| format!("<{} bytes>", b.len())),
+            _ => row.try_get::<String, _>(i).ok(), // SQLite 动态类型,兜底当文本试一次
+        };
+        out.push(match decoded {
+            Some(s) => CellValue::Text(s),
+            None => CellValue::Text(format!("<不支持的类型: {type_name}>")),
+        });
+    }
+    out
+}
+
+fn quote_table(kind: DriverKind, schema: Option<&str>, table: &str) -> String {
+    match kind {
+        DriverKind::Postgres => match schema {
+            Some(s) => format!("\"{s}\".\"{table}\""),
+            None => format!("\"{table}\""),
+        },
+        DriverKind::MySQL | DriverKind::Sqlite => format!("`{table}`"),
+        DriverKind::MongoDB => unreachable!("quote_table 不处理 MongoDB"),
+    }
+}
+
+/// 浏览页 SQL 生成:`LIMIT page_size+1` 用来判断"是否有下一页"(多出的
+/// 第 page_size+1 行渲染前丢弃),不做 `COUNT(*)`(设计文档"架构与数据流
+/// §5")。`where_clause`/`order_by` 原样拼接,不转义——原始片段输入框的
+/// 既定口径,用户对拼错/注入自担。
+fn build_browse_sql(
+    kind: DriverKind,
+    schema: Option<&str>,
+    table: &str,
+    where_clause: &str,
+    order_by: &str,
+    page: u32,
+    page_size: u32,
+) -> String {
+    let mut sql = format!("SELECT * FROM {}", quote_table(kind, schema, table));
+    let w = where_clause.trim();
+    if !w.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(w);
+    }
+    let o = order_by.trim();
+    if !o.is_empty() {
+        sql.push_str(" ORDER BY ");
+        sql.push_str(o);
+    }
+    sql.push_str(&format!(
+        " LIMIT {} OFFSET {}",
+        page_size as u64 + 1,
+        page as u64 * page_size as u64
+    ));
+    sql
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StatementKind {
+    /// `fetch_all` 走结果集渲染。
+    Rows,
+    /// `execute` 走"N 行受影响"/DDL 文案。
+    Execute,
+}
+
+/// 按 SQL 文本首个关键字(大小写不敏感、忽略前导空白)分流。设计文档
+/// "架构与数据流 §6":不识别 `RETURNING` 子句,`INSERT`/`UPDATE`/`DELETE`
+/// 一律走 `Execute`。
+fn classify_statement(sql: &str) -> StatementKind {
+    let first_word: String = sql
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_alphabetic())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    match first_word.as_str() {
+        "SELECT" | "WITH" | "SHOW" | "EXPLAIN" | "PRAGMA" => StatementKind::Rows,
+        _ => StatementKind::Execute,
+    }
+}
+
+/// `Execute` 分支里进一步区分"DDL(执行成功,不显示行数)" vs "DML(显示
+/// 受影响行数)"。
+fn is_ddl_keyword(sql: &str) -> bool {
+    let first_word: String = sql
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_alphabetic())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    matches!(
+        first_word.as_str(),
+        "CREATE" | "ALTER" | "DROP" | "TRUNCATE"
+    )
+}
+
 #[cfg(test)]
 mod url_tests {
     use super::*;
@@ -2896,5 +3179,81 @@ mod content_tests {
                 table: "keep".into()
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod query_gen_tests {
+    use super::*;
+
+    #[test]
+    fn quote_table_postgres_with_schema() {
+        assert_eq!(
+            quote_table(DriverKind::Postgres, Some("public"), "users"),
+            "\"public\".\"users\""
+        );
+    }
+
+    #[test]
+    fn quote_table_mysql_and_sqlite_use_backticks() {
+        assert_eq!(quote_table(DriverKind::MySQL, None, "users"), "`users`");
+        assert_eq!(quote_table(DriverKind::Sqlite, None, "users"), "`users`");
+    }
+
+    #[test]
+    fn build_browse_sql_omits_empty_where_and_order_by() {
+        let sql = build_browse_sql(DriverKind::Sqlite, None, "users", "", "", 0, 50);
+        assert_eq!(sql, "SELECT * FROM `users` LIMIT 51 OFFSET 0");
+    }
+
+    #[test]
+    fn build_browse_sql_includes_where_and_order_by_and_pages() {
+        let sql = build_browse_sql(
+            DriverKind::Postgres,
+            Some("public"),
+            "users",
+            "id > 10",
+            "id DESC",
+            2,
+            50,
+        );
+        assert_eq!(
+            sql,
+            "SELECT * FROM \"public\".\"users\" WHERE id > 10 ORDER BY id DESC LIMIT 51 OFFSET 100"
+        );
+    }
+
+    #[test]
+    fn classify_statement_recognizes_row_producing_keywords() {
+        for sql in [
+            "select 1",
+            "  SELECT * FROM t",
+            "with x as (select 1) select * from x",
+            "SHOW TABLES",
+            "explain select 1",
+            "pragma table_info(t)",
+        ] {
+            assert_eq!(classify_statement(sql), StatementKind::Rows, "sql={sql}");
+        }
+    }
+
+    #[test]
+    fn classify_statement_treats_dml_ddl_as_execute() {
+        for sql in [
+            "insert into t values (1)",
+            "UPDATE t SET x=1",
+            "delete from t",
+            "CREATE TABLE t (id int)",
+        ] {
+            assert_eq!(classify_statement(sql), StatementKind::Execute, "sql={sql}");
+        }
+    }
+
+    #[test]
+    fn is_ddl_keyword_matches_only_ddl() {
+        assert!(is_ddl_keyword("CREATE TABLE t (id int)"));
+        assert!(is_ddl_keyword("  drop table t"));
+        assert!(!is_ddl_keyword("insert into t values (1)"));
+        assert!(!is_ddl_keyword("update t set x=1"));
     }
 }
