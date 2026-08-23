@@ -175,9 +175,6 @@ pub enum HoverId {
     /// Agent 面板头部"＋"按钮:无背景的 `SquarePlus` 图标,未选中态静止 DIM,
     /// hover 平滑过渡到 GOLD(见 `agent_picker_toggle_button`)。
     AgentPickerToggle,
-    /// Usage 用量面板"手动刷新"按钮(`RefreshCw`):静止 DIM,hover 平滑过渡
-    /// 到 GOLD(见 `extensions/usage.rs`)。
-    UsageRefresh,
     /// 文件树搜索提交按钮(`FolderSearch`):静止 DIM,hover 过渡到 GOLD
     /// (见 `extensions/files.rs` 的搜索按钮)。
     FilesSearchSubmit,
@@ -3857,50 +3854,8 @@ impl App {
                 }
             }
             Message::Usage(msg @ usage::Message::Loaded(project_id, ..)) => {
-                self.with_project(project_id, move |ws, io| {
-                    let Some(project) = &ws.project else { return };
-                    let project_path = PathBuf::from(&project.path);
-                    let handle = io.handle.clone();
-                    let proxy = io.proxy.clone();
-                    let emit = move |m| {
-                        let _ = proxy.send_event(Message::Usage(m));
-                    };
-                    usage::update(
-                        &mut ws.usage,
-                        msg,
-                        project_id,
-                        project_path,
-                        &io.client,
-                        &handle,
-                        emit,
-                    );
-                });
-            }
-            Message::Usage(msg @ usage::Message::Hover(_)) => {
-                let usage::Message::Hover(h) = msg else {
-                    unreachable!()
-                };
-                self.set_hover(HoverId::UsageRefresh, h);
-            }
-            Message::Usage(msg) => {
-                self.with_focused_project(|ws, io| {
-                    let Some(project) = &ws.project else { return };
-                    let project_id = project.id;
-                    let project_path = PathBuf::from(&project.path);
-                    let handle = io.handle.clone();
-                    let proxy = io.proxy.clone();
-                    let emit = move |m| {
-                        let _ = proxy.send_event(Message::Usage(m));
-                    };
-                    usage::update(
-                        &mut ws.usage,
-                        msg,
-                        project_id,
-                        project_path,
-                        &io.client,
-                        &handle,
-                        emit,
-                    );
+                self.with_project(project_id, move |ws, _io| {
+                    usage::update(&mut ws.usage, msg);
                 });
             }
             Message::ConversationTurnGroupOpen(path, agent, start, end) => {
@@ -7078,13 +7033,9 @@ fn panel_body<'a>(
                 .into()
             }
         }
-        PanelKind::Usage => usage::view(
-            &ws.usage,
-            Length::Fill,
-            zone_pane_border(zone, ac),
-            app.hover_progress(HoverId::UsageRefresh),
-        )
-        .map(Message::Usage),
+        PanelKind::Usage => {
+            usage::view(&ws.usage, Length::Fill, zone_pane_border(zone, ac)).map(Message::Usage)
+        }
         PanelKind::Acceptance => {
             acceptance::view(&ws.acceptance, Length::Fill, zone_pane_border(zone, ac))
                 .map(Message::Acceptance)
