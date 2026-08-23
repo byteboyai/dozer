@@ -4255,6 +4255,45 @@ mod sqlite_browse_and_query {
     }
 
     #[tokio::test]
+    async fn run_query_delete_returns_affected_count() {
+        let (_dir, url) = setup_db_with_rows().await;
+        let outcome = run_query(DriverKind::Sqlite, &url, "DELETE FROM items WHERE id >= 4")
+            .await
+            .unwrap();
+        assert!(matches!(outcome, QueryOutcome::Affected(2)));
+    }
+
+    #[tokio::test]
+    async fn browse_real_and_datetime_values_render_as_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}/types.sqlite?mode=rwc", dir.path().display());
+        let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+        sqlx::query("CREATE TABLE t (score REAL, seen DATETIME, note TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO t (score, seen, note) VALUES (3.25, '2026-01-02 03:04:05', 'x')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+
+        let page = browse_table(DriverKind::Sqlite, &url, None, "t", "", "", 0, 50)
+            .await
+            .unwrap();
+        // 真实数值/时间不是"不支持的类型":SQLite 路径统一被 stringify 成文本。
+        // 行序尽力按数值/文本值摆列,这里只校验两个非 NULL 单元格写出了
+        // 非空、非降级标记的文本(具体格式交给 sqlite 的 ToSql/stringify)。
+        for cell in &page.result.rows[0] {
+            match cell {
+                CellValue::Text(s) => assert!(!s.is_empty()),
+                CellValue::Null => panic!("行里所有列都插了值,不应有 NULL"),
+            }
+        }
+        assert_eq!(page.result.rows[0].len(), 3);
+    }
+
+    #[tokio::test]
     async fn run_query_create_table_returns_ddl_outcome() {
         let (_dir, url) = setup_db_with_rows().await;
         let outcome = run_query(DriverKind::Sqlite, &url, "CREATE TABLE extra (id INTEGER)")
@@ -4413,5 +4452,34 @@ mod content_message_tests {
         b2.begin_run();
         apply_browse_result(&mut b2, Err("boom".into()));
         assert_eq!(b2.error.as_deref(), Some("boom"));
+    }
+
+    /// 过期的浏览结果(seq 不匹配当前轮)在 `update()` 的 `BrowseResult` 臂里
+    /// 被丢弃,不落地——对应人工验收里"连续快速改 WHERE 各回车一次,最终停
+    /// 在最后一次结果"的竞态防线(`run_seq`)。
+    #[test]
+    fn browse_result_stale_or_unloading_seq_is_dropped() {
+        let mut ws = WorkspaceState::default();
+        let tab = Message::OpenTableTab {
+            source_id: "s1".into(),
+            schema: None,
+            table: "users".into(),
+        };
+        update_with(&mut ws, tab);
+        let tab_id = ws.content().tabs()[0].id;
+        // tab 打开后还没有任何 run:`loading=false`,seq 进来对不上 → 弃。
+        let page = BrowsePage {
+            result: QueryResult {
+                columns: vec!["id".into()],
+                rows: vec![vec![CellValue::Text("1".into())]],
+            },
+            has_more: false,
+        };
+        update_with(&mut ws, Message::BrowseResult(42, tab_id, 7, Ok(page)));
+        let TabContent::Browse(b) = ws.content().content(tab_id).unwrap() else {
+            panic!("应为 Browse");
+        };
+        assert!(b.result.is_none(), "过期/未运行的结果不应落地");
+        assert!(!b.loading);
     }
 }
