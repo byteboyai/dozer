@@ -272,9 +272,16 @@ fn columns_sql(driver: DriverKind) -> &'static str {
     }
 }
 
-async fn load_tables(kind: DriverKind, url: &str) -> Result<Vec<TableRef>, String> {
+async fn load_tables(
+    kind: DriverKind,
+    url: &str,
+    mongo_db: Option<&str>,
+) -> Result<Vec<TableRef>, String> {
     if kind == DriverKind::MongoDB {
-        return Err("MongoDB 集合浏览将在后续阶段支持".to_string());
+        let Some(db_name) = mongo_db.filter(|s| !s.is_empty()) else {
+            return Err("请在数据源配置里填写数据库名后再浏览集合".to_string());
+        };
+        return load_mongo_collections(url, db_name).await;
     }
     let work = async {
         let pool = sqlx::AnyPool::connect(url)
@@ -320,6 +327,39 @@ async fn load_tables(kind: DriverKind, url: &str) -> Result<Vec<TableRef>, Strin
         .await;
         pool.close().await;
         out
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(5), work).await {
+        Ok(r) => r,
+        Err(_) => Err("加载超时(5秒)".to_string()),
+    }
+}
+
+/// MongoDB 集合清单,伪装成 `TableRef`(`schema: None, is_view: false`)——
+/// 复用阶段 2 现成的树渲染/展开数据结构,不新开 `SchemaRowKind` 变体
+/// (设计文档写作时预留了 `SchemaRowKind::Collection` 的可能性,写计划时
+/// 发现集合的"形状"和 MySQL/SQLite 的表完全一致,真正的差异只在**点击行为**
+/// ——这个差异在 Task 7 的 `schema_tree_row` 里按 `driver` 参数处理,不需要
+/// 数据模型层面的新类型)。
+async fn load_mongo_collections(url: &str, db_name: &str) -> Result<Vec<TableRef>, String> {
+    let work = async {
+        let client = mongodb::Client::with_uri_str(url)
+            .await
+            .map_err(|e| e.to_string())?;
+        let names = client
+            .database(db_name)
+            .list_collection_names()
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut refs: Vec<TableRef> = names
+            .into_iter()
+            .map(|name| TableRef {
+                schema: None,
+                name,
+                is_view: false,
+            })
+            .collect();
+        refs.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok::<_, String>(refs)
     };
     match tokio::time::timeout(std::time::Duration::from_secs(5), work).await {
         Ok(r) => r,
@@ -410,10 +450,11 @@ fn spawn_tables_load(
     source_id: String,
     kind: DriverKind,
     url: String,
+    mongo_db: Option<String>,
     emit: impl Fn(Message) + Send + 'static,
 ) {
     handle.spawn(async move {
-        let result = load_tables(kind, &url).await;
+        let result = load_tables(kind, &url, mongo_db.as_deref()).await;
         emit(Message::TablesLoaded(project_id, source_id, result));
     });
 }
@@ -877,12 +918,18 @@ pub fn update(
             let password = keyring_entry(project_id, &id)
                 .ok()
                 .and_then(|e| e.get_password().ok());
+            let url = if source.driver == DriverKind::MongoDB {
+                build_mongo_url(&source, password.as_deref())
+            } else {
+                build_sql_url(&source, password.as_deref())
+            };
             spawn_tables_load(
                 handle,
                 project_id,
                 id,
                 source.driver,
-                build_sql_url(&source, password.as_deref()),
+                url,
+                source.database.clone(),
                 emit,
             );
         }
@@ -903,12 +950,18 @@ pub fn update(
             let password = keyring_entry(project_id, &source_id)
                 .ok()
                 .and_then(|e| e.get_password().ok());
+            let url = if source.driver == DriverKind::MongoDB {
+                build_mongo_url(&source, password.as_deref())
+            } else {
+                build_sql_url(&source, password.as_deref())
+            };
             spawn_tables_load(
                 handle,
                 project_id,
                 source_id,
                 source.driver,
-                build_sql_url(&source, password.as_deref()),
+                url,
+                source.database.clone(),
                 emit,
             );
         }
@@ -1282,12 +1335,9 @@ fn source_card<'a>(
                     button(text("测试连接")).on_press(Message::TestConnection(source.id.clone()))
                 ]
                 .spacing(8);
-                if source.driver != DriverKind::MongoDB {
-                    // MongoDB 集合浏览是阶段 5;本阶段无入口
-                    btns = btns.push(
-                        button(text("浏览结构")).on_press(Message::BrowseSchema(source.id.clone())),
-                    );
-                }
+                btns = btns.push(
+                    button(text("浏览结构")).on_press(Message::BrowseSchema(source.id.clone())),
+                );
                 btns.push(
                     button(text("编辑")).on_press(Message::EditSourceStart(source.id.clone())),
                 )
@@ -2414,6 +2464,58 @@ async fn browse_table(
     }
 }
 
+/// MongoDB 集合浏览:游标式拉取,`limit(page_size+1)` 判"是否有下一页"
+/// (同浏览页其余路径,不做 `COUNT(*)`)。单列 `document`,整份 JSON 文本
+/// (设计文档"架构与数据流 §4")。
+async fn browse_collection(
+    url: &str,
+    db_name: &str,
+    name: &str,
+    page: u32,
+    page_size: u32,
+) -> Result<BrowsePage, String> {
+    use futures::stream::TryStreamExt;
+    let work = async {
+        let client = mongodb::Client::with_uri_str(url)
+            .await
+            .map_err(|e| e.to_string())?;
+        let coll: mongodb::Collection<mongodb::bson::Document> =
+            client.database(db_name).collection(name);
+        let mut cursor = coll
+            .find(mongodb::bson::doc! {})
+            .skip(page as u64 * page_size as u64)
+            .limit(page_size as i64 + 1)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut docs = Vec::new();
+        while let Some(doc) = cursor.try_next().await.map_err(|e| e.to_string())? {
+            docs.push(doc);
+        }
+        let has_more = docs.len() > page_size as usize;
+        docs.truncate(page_size as usize);
+        let rows = docs
+            .into_iter()
+            .map(|d| {
+                let json = mongodb::bson::Bson::Document(d).into_relaxed_extjson();
+                vec![CellValue::Text(
+                    serde_json::to_string_pretty(&json).unwrap_or_default(),
+                )]
+            })
+            .collect();
+        Ok::<_, String>(BrowsePage {
+            result: QueryResult {
+                columns: vec!["document".to_string()],
+                rows,
+            },
+            has_more,
+        })
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(15), work).await {
+        Ok(r) => r,
+        Err(_) => Err("查询超时(15秒)".to_string()),
+    }
+}
+
 /// 任意 SQL 执行入口。语句分流见 `classify_statement`(设计文档"架构与
 /// 数据流 §6");超时比被动加载的 5 秒更宽(30秒)——用户主动点"执行"、
 /// 愿意等,且任意 SQL 可能是有意的慢查询。
@@ -3140,7 +3242,7 @@ mod sqlite_introspection {
     async fn load_tables_lists_tables_and_views_in_order() {
         install_drivers();
         let (_dir, url) = setup_db().await;
-        let tables = load_tables(DriverKind::Sqlite, &url).await.unwrap();
+        let tables = load_tables(DriverKind::Sqlite, &url, None).await.unwrap();
         assert_eq!(tables.len(), 2);
         // SQLite: name ORDER BY → users 在 v_users 前
         assert_eq!(tables[0].name, "users");
@@ -3178,11 +3280,11 @@ mod sqlite_introspection {
 
     #[tokio::test]
     async fn mongodb_loaders_refuse_with_friendly_error() {
-        // UI 已无入口的双保险:直接错误文案,不 panic/不尝试连接
-        let err = load_tables(DriverKind::MongoDB, "mongodb://x")
+        // 缺数据库名 → 友好文案,不 panic/不尝试连接
+        let err = load_tables(DriverKind::MongoDB, "mongodb://x", None)
             .await
             .unwrap_err();
-        assert!(err.contains("MongoDB"));
+        assert!(err.contains("数据库名"));
         let err = load_columns(DriverKind::MongoDB, "mongodb://x", None, "c")
             .await
             .unwrap_err();
@@ -3490,5 +3592,26 @@ mod sqlite_browse_and_query {
             .await
             .unwrap_err();
         assert!(!err.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod mongo_collection_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn load_tables_mongo_without_db_name_gives_friendly_error() {
+        let err = load_tables(DriverKind::MongoDB, "mongodb://x", None)
+            .await
+            .unwrap_err();
+        assert!(err.contains("数据库名"));
+    }
+
+    #[tokio::test]
+    async fn load_tables_mongo_with_empty_db_name_also_errors() {
+        let err = load_tables(DriverKind::MongoDB, "mongodb://x", Some(""))
+            .await
+            .unwrap_err();
+        assert!(err.contains("数据库名"));
     }
 }
