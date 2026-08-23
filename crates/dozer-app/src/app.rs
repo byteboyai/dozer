@@ -76,6 +76,9 @@ struct ReviewSnapshot<'a> {
     entries: &'a [ReviewEntry],
     prev_topic: Option<TopicPreview>,
     next_topic: Option<TopicPreview>,
+    /// `AgentKind::label()`(如 `"claude"`)——AI 气泡的头像名字标签用它
+    /// 替代写死的"AI"。
+    agent_label: &'static str,
 }
 
 /// 工作区 11 个面板的统一标识——workspace 图标栏拖拽换栏功能
@@ -3825,6 +3828,7 @@ impl App {
                                     entries: &entries,
                                     prev_topic: rv.prev_topic.clone(),
                                     next_topic: rv.next_topic.clone(),
+                                    agent_label: rv.agent.label(),
                                 };
                                 let json = serde_json::to_string(&snapshot).unwrap_or_default();
                                 *ws.review_snapshot.lock().expect("review snapshot 锁") =
@@ -6115,6 +6119,7 @@ impl App {
                 source: source.clone(),
                 entries: Vec::new(),
                 error: None,
+                agent,
                 nonce: 0,
                 prev_topic,
                 next_topic,

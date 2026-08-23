@@ -184,6 +184,9 @@ pub struct ReviewView {
     pub source: ReviewSource,
     pub entries: Vec<ReviewEntry>,
     pub error: Option<String>,
+    /// 这份 transcript 归属的 agent——面板里"AI"气泡的头像/名字标签用它
+    /// 而不是写死的"AI"(P2b 多 agent 支持)。
+    pub agent: AgentKind,
     /// 审阅 webview 的重新加载水位:每次 `ReviewLoaded` 成功都从
     /// `Workspace.review_nonce` 拷一份新值,写进 `dozer://review-trace/
     /// host.html?_r=<nonce>` 的查询参数,逼 wry 在内容变化时重新导航
@@ -3974,6 +3977,7 @@ mod tests {
             source: ReviewSource::FileRange(PathBuf::from("/tmp/a.jsonl"), 0, 1),
             entries: vec![ReviewEntry::Human { text: "hi".into() }],
             error: Some("boom".into()),
+            agent: AgentKind::Claude,
             nonce: 3,
             prev_topic: None,
             next_topic: None,
@@ -3984,6 +3988,7 @@ mod tests {
             source: ReviewSource::FileRange(PathBuf::from("/tmp/a.jsonl"), 0, 1),
             entries: Vec::new(),
             error: None,
+            agent: AgentKind::Claude,
             nonce: 3,
             prev_topic: None,
             next_topic: None,
@@ -3997,6 +4002,7 @@ mod tests {
             source: ReviewSource::FileRange(PathBuf::from("/tmp/a.jsonl"), 0, 1),
             entries: vec![ReviewEntry::Human { text: "hi".into() }],
             error: None,
+            agent: AgentKind::Claude,
             nonce: 7,
             prev_topic: None,
             next_topic: None,

@@ -27,48 +27,96 @@
   .topic-divider {
     height: 1px; background: var(--line); border: none; margin: 14px 0;
   }
-  .entry { position: relative; padding-left: 22px; margin-bottom: 14px; }
-  .entry::before {
-    content: ""; position: absolute; left: 6px; top: 4px; bottom: -14px;
-    width: 1px; background: var(--line);
+
+  .msg { margin-bottom: 20px; max-width: 100%; }
+  .msg-head {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; letter-spacing: .02em;
+    margin-bottom: 6px;
   }
-  .entry:last-child::before { display: none; }
-  .entry::after {
-    content: ""; position: absolute; left: 2px; top: 4px;
-    width: 9px; height: 9px; border-radius: 50%;
+  .avatar-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .avatar-icon { width: 16px; height: 16px; flex: none; display: inline-flex; }
+  .avatar-icon svg { display: block; width: 100%; height: 100%; }
+
+  .msg.Human { margin-right: 12%; }
+  .msg.Human .msg-head { color: var(--gold); justify-content: flex-start; }
+  .msg.Human .avatar-dot { background: var(--gold); }
+  .msg.Human .bubble { border-color: var(--gold); }
+
+  .msg.AiTurn { margin-left: 12%; }
+  .msg.AiTurn .msg-head { color: var(--cyan); justify-content: flex-end; }
+  .msg.AiTurn .avatar-dot { background: var(--cyan); }
+  .msg.AiTurn .bubble { border-color: var(--cyan); }
+
+  .msg.ToolResult .msg-head { color: var(--green); }
+  .msg.ToolResult .avatar-dot { background: var(--green); }
+  .msg.ToolResult .bubble { border-color: var(--green); }
+  .msg.ToolResult.error .msg-head { color: var(--red); }
+  .msg.ToolResult.error .avatar-dot { background: var(--red); }
+  .msg.ToolResult.error .bubble { border-color: var(--red); }
+
+  .bubble {
+    border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px;
   }
-  .entry.Human::after { background: var(--gold); }
-  .entry.AiTurn::after { background: var(--cyan); }
-  .entry.ToolResult::after { background: var(--green); }
-  .entry.ToolResult.error::after { background: var(--red); }
-  .entry .role {
-    font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
-    margin-bottom: 3px;
-  }
-  .entry.Human .role { color: var(--gold); }
-  .entry.AiTurn .role { color: var(--cyan); }
-  .entry.ToolResult .role { color: var(--green); }
-  .entry.ToolResult.error .role { color: var(--red); }
-  .entry .text { white-space: pre-wrap; }
-  .entry.ToolResult .text {
+  .msg.ToolResult .bubble .text {
     color: var(--dim); font-family: ui-monospace, monospace; font-size: 12px;
+    white-space: pre-wrap;
   }
-  .entry.ToolResult.error .text { color: var(--red); }
-  details.trace-toggle { margin-top: 6px; }
+  .msg.ToolResult.error .bubble .text { color: var(--red); }
+
+  .md-p { white-space: pre-wrap; margin: 0 0 10px; }
+  .md-p:last-child { margin-bottom: 0; }
+  .md-h { font-weight: 700; margin: 12px 0 6px; }
+  .md-h:first-child { margin-top: 0; }
+  .md-h1 { font-size: 16px; }
+  .md-h2 { font-size: 15px; }
+  .md-h3, .md-h4, .md-h5, .md-h6 { font-size: 14px; }
+  .md-list { margin: 0 0 10px; padding-left: 20px; }
+  .md-list:last-child { margin-bottom: 0; }
+  .md-list li { margin-bottom: 3px; }
+  .md-code-block {
+    margin: 0 0 10px; padding: 8px 10px; background: #10151f;
+    border: 1px solid var(--line); border-radius: 6px; overflow-x: auto;
+  }
+  .md-code-block:last-child { margin-bottom: 0; }
+  .md-code-block code {
+    background: none; border: none; padding: 0; font-size: 12px; white-space: pre;
+  }
+  code {
+    font-family: ui-monospace, monospace; font-size: 12px;
+    background: #10151f; border: 1px solid var(--line); border-radius: 3px;
+    padding: 1px 4px;
+  }
+
+  details.trace-toggle {
+    margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line);
+  }
+  details.trace-toggle:first-child { margin-top: 0; padding-top: 0; border-top: none; }
   details.trace-toggle > summary {
     cursor: pointer; color: var(--dim); font-size: 11px; list-style: none;
   }
   details.trace-toggle > summary::-webkit-details-marker { display: none; }
   details.trace-toggle > summary::before { content: "轨迹 ▸ "; }
   details.trace-toggle[open] > summary::before { content: "轨迹 ▾ "; }
-  .trace-section { margin: 8px 0 0 10px; padding-left: 10px; border-left: 1px solid var(--line); }
-  .trace-section .section-title {
+  .trace-timeline { position: relative; margin-top: 8px; padding-left: 16px; }
+  .trace-timeline::before {
+    content: ""; position: absolute; left: 4px; top: 4px; bottom: 4px;
+    width: 1px; background: var(--line);
+  }
+  .trace-item { position: relative; margin-bottom: 8px; }
+  .trace-item:last-child { margin-bottom: 0; }
+  .trace-item::before {
+    content: ""; position: absolute; left: -15px; top: 4px;
+    width: 7px; height: 7px; border-radius: 50%; background: var(--dim);
+  }
+  .trace-item.thinking::before { background: var(--dim); }
+  .trace-item.tool-call::before { background: var(--cyan); }
+  .trace-item.tool-result::before { background: var(--green); }
+  .trace-item.tool-result.error::before { background: var(--red); }
+  .trace-item .item-title {
     font-size: 11px; color: var(--dim); margin-bottom: 4px;
   }
-  .trace-section .thinking-text {
-    white-space: pre-wrap; font-size: 12px; color: var(--dim);
-  }
-  .tool-call-row { margin-bottom: 6px; }
+  .trace-item .thinking-text { font-size: 12px; color: var(--dim); }
   .tool-call-row summary {
     cursor: pointer; color: var(--cyan); font-size: 11px;
     background: #10151f; border: 1px solid var(--line); border-radius: 4px;
@@ -78,7 +126,6 @@
     white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 11px;
     color: var(--dim); margin-top: 4px; padding-left: 4px;
   }
-  .tool-result-row { margin-bottom: 6px; }
   .tool-result-row summary {
     cursor: pointer; color: var(--dim); font-size: 11px;
   }
@@ -93,7 +140,166 @@
 <body>
 <div id="timeline"></div>
 <script>
-const ROLE_LABEL = { Human: "甲方", AiTurn: "AI", ToolResult: "工具结果" };
+const ROLE_LABEL = { ToolResult: "工具结果" };
+
+// lucide 通用图标(circle-user-round / bot)走 currentColor,跟随
+// `.msg-head` 的角色配色。品牌 logo(claude/codebuddy/opencode,同
+// `crates/byteui/assets/icons/*.svg` 内容)也是 currentColor 单色路径,
+// 但通过 AGENT_STYLE 单独指定颜色,跟 `workspace.rs::agent_icon` +
+// `agent_dot_color` 的配对逻辑保持一致(品牌图标/回落 bot 图标都按各自
+// 分配的主题色上色,不是统一的 AI 青色)。
+const ICONS = {
+  user: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.925 20.056a6 6 0 0 0-11.851.001"/><circle cx="12" cy="11" r="4"/><circle cx="12" cy="12" r="10"/></svg>',
+  bot: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>',
+  claude: '<svg role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"/></svg>',
+  codebuddy: '<svg role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" d="M18.636.289a1 1 0 0 0-.11 0c-.18.01-.195.02-.442.24-.716.636-1.722 2.546-2.703 5.137l-.274.72-.499.16c-1.554.498-2.934 1.128-4.157 1.893-1.174.73-1.81 1.207-2.768 2.056l-.578.51-.262-.045c-2.528-.447-4.8-.612-5.843-.43-.414.077-.757.216-.862.35-.092.12-.138.263-.138.474 0 .182.034.414.098.727.265 1.236.952 2.854 2.035 4.78l.7 1.236-.023.466c-.027.499 0 1.27.06 1.793.036.319.031.327-.135.516-.565.647-.708 1.676-.408 2.84h5.364l-.33-.57c-.64-1.108-.96-1.663-1.134-2.177a5.46 5.46 0 0 1 1.564-5.84c.408-.358.962-.678 2.072-1.32l6.38-3.683c1.11-.64 1.665-.96 2.18-1.134A5.46 5.46 0 0 1 24 10.275V6.462l-.117-.06-.504-.25-.357-.662c-.924-1.702-2.41-3.696-3.477-4.666-.4-.364-.655-.517-.91-.535M11.57 17.634a1.26 1.26 0 0 1 1.722.462l1.358 2.35c.842 1.455-1.341 2.717-2.183 1.262l-1.358-2.352a1.26 1.26 0 0 1 .461-1.722m6.802-3.926a1.26 1.26 0 0 1 1.721.46l1.358 2.352c.84 1.455-1.343 2.715-2.183 1.26l-1.358-2.35a1.26 1.26 0 0 1 .462-1.722"/></svg>',
+  opencode: '<svg role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" fill-rule="evenodd" d="M18 19.5H6V4.5H18V19.5ZM15 16.5H9V7.5H15V16.5Z"/></svg>',
+};
+
+// AgentKind::label() → {icon, color}。品牌 logo 三家(claude/codebuddy/
+// opencode)取自 `agent_icon()`;其余家没有确认可用的品牌素材,回落
+// 通用 bot 图标,颜色仍按 `agent_dot_color()` 同款取色(见 workspace.rs),
+// 保持跟对话列表圆点、Agent 卡片一致。
+const AGENT_STYLE = {
+  claude: { icon: ICONS.claude, color: "#47DEF0" },
+  codebuddy: { icon: ICONS.codebuddy, color: "#9580FF" },
+  opencode: { icon: ICONS.opencode, color: "#1AD585" },
+  codex: { icon: ICONS.bot, color: "#FF9B4D" },
+  kilo: { icon: ICONS.bot, color: "#4D8CFF" },
+  v8agent: { icon: ICONS.bot, color: "#A3E635" },
+  shell: { icon: ICONS.bot, color: "#6B7F8F" },
+};
+
+function renderAvatarIcon(svg, color) {
+  const icon = document.createElement("span");
+  icon.className = "avatar-icon";
+  icon.innerHTML = svg;
+  if (color) {
+    icon.style.color = color;
+  }
+  return icon;
+}
+
+// 极简 markdown → 安全 HTML(无依赖,不接 CDN——wry 自定义协议页面不
+// 兜底外部脚本失败,离线优先)。文本先整体转义再拼标签,标签只由本函数
+// 生成,不会把用户/模型文本里的尖括号当成真标签解释,规避 XSS。只覆盖
+// agent 回复里常见的子集:标题/粗体/斜体/行内代码/代码块/有序无序列表,
+// 不追求 CommonMark 全量兼容。
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function renderInlineMarkdown(s) {
+  const codeSpans = [];
+  // \uE000 是私有区码位,正常文本几乎不可能出现,用来给行内代码占位,
+  // 比原始 NUL 字节更安全——HTML5 输入预处理会把 U+0000 统一替换成
+  // U+FFFD,直接嵌 NUL 字节可行但脆弱、不可移植。
+  let out = escapeHtml(s).replace(/`([^`]+)`/g, function (_, code) {
+    codeSpans.push(code);
+    return "\uE000" + (codeSpans.length - 1) + "\uE000";
+  });
+  out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  out = out.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+  out = out.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+  out = out.replace(/_([^_\n]+)_/g, "<em>$1</em>");
+  out = out.replace(/\uE000(\d+)\uE000/g, function (_, i) {
+    return "<code>" + codeSpans[Number(i)] + "</code>";
+  });
+  return out;
+}
+
+function renderMarkdown(text) {
+  const frag = document.createDocumentFragment();
+  const lines = text.split("\n");
+  let para = [];
+  let i = 0;
+
+  function flushPara() {
+    if (para.length === 0) return;
+    const p = document.createElement("div");
+    p.className = "md-p";
+    p.innerHTML = para.map(renderInlineMarkdown).join("<br>");
+    frag.appendChild(p);
+    para = [];
+  }
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (/^```/.test(line)) {
+      flushPara();
+      const codeLines = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i])) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      i++; // 跳过收尾的 ```
+      const pre = document.createElement("pre");
+      pre.className = "md-code-block";
+      const codeEl = document.createElement("code");
+      codeEl.textContent = codeLines.join("\n");
+      pre.appendChild(codeEl);
+      frag.appendChild(pre);
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) {
+      flushPara();
+      const h = document.createElement("div");
+      h.className = "md-h md-h" + heading[1].length;
+      h.innerHTML = renderInlineMarkdown(heading[2]);
+      frag.appendChild(h);
+      i++;
+      continue;
+    }
+
+    if (/^[-*]\s+/.test(line)) {
+      flushPara();
+      const ul = document.createElement("ul");
+      ul.className = "md-list";
+      while (i < lines.length && /^[-*]\s+/.test(lines[i])) {
+        const li = document.createElement("li");
+        li.innerHTML = renderInlineMarkdown(lines[i].replace(/^[-*]\s+/, ""));
+        ul.appendChild(li);
+        i++;
+      }
+      frag.appendChild(ul);
+      continue;
+    }
+
+    if (/^\d+\.\s+/.test(line)) {
+      flushPara();
+      const ol = document.createElement("ol");
+      ol.className = "md-list";
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i])) {
+        const li = document.createElement("li");
+        li.innerHTML = renderInlineMarkdown(lines[i].replace(/^\d+\.\s+/, ""));
+        ol.appendChild(li);
+        i++;
+      }
+      frag.appendChild(ol);
+      continue;
+    }
+
+    if (line.trim() === "") {
+      flushPara();
+      i++;
+      continue;
+    }
+
+    para.push(line);
+    i++;
+  }
+  flushPara();
+  return frag;
+}
+
+function renderMarkdownInto(container, text) {
+  container.appendChild(renderMarkdown(text));
+  return container;
+}
 
 function renderTopicPreview(label, topic) {
   const wrap = document.createElement("div");
@@ -150,67 +356,93 @@ function renderTraceToggle(v) {
   const summary = document.createElement("summary");
   details.appendChild(summary);
 
+  const timeline = document.createElement("div");
+  timeline.className = "trace-timeline";
+
   if (hasThinking) {
-    const section = document.createElement("div");
-    section.className = "trace-section";
+    const item = document.createElement("div");
+    item.className = "trace-item thinking";
     const title = document.createElement("div");
-    title.className = "section-title";
+    title.className = "item-title";
     title.textContent = "思考过程";
     const text = document.createElement("div");
     text.className = "thinking-text";
-    text.textContent = v.thinking_text;
-    section.appendChild(title);
-    section.appendChild(text);
-    details.appendChild(section);
+    renderMarkdownInto(text, v.thinking_text);
+    item.appendChild(title);
+    item.appendChild(text);
+    timeline.appendChild(item);
   }
   if (hasToolCalls) {
-    const section = document.createElement("div");
-    section.className = "trace-section";
-    const title = document.createElement("div");
-    title.className = "section-title";
-    title.textContent = "操作过程";
-    section.appendChild(title);
-    v.tool_calls.forEach(function (call) {
-      section.appendChild(renderToolCallRow(call));
+    v.tool_calls.forEach(function (call, i) {
+      const item = document.createElement("div");
+      item.className = "trace-item tool-call";
+      if (i === 0) {
+        const title = document.createElement("div");
+        title.className = "item-title";
+        title.textContent = "操作过程";
+        item.appendChild(title);
+      }
+      item.appendChild(renderToolCallRow(call));
+      timeline.appendChild(item);
     });
-    details.appendChild(section);
   }
   if (hasToolResults) {
-    const section = document.createElement("div");
-    section.className = "trace-section";
-    const title = document.createElement("div");
-    title.className = "section-title";
-    title.textContent = "工具结果";
-    section.appendChild(title);
-    v.tool_results.forEach(function (result) {
-      section.appendChild(renderToolResultRow(result));
+    v.tool_results.forEach(function (result, i) {
+      const item = document.createElement("div");
+      item.className = "trace-item tool-result" + (result.is_error ? " error" : "");
+      if (i === 0) {
+        const title = document.createElement("div");
+        title.className = "item-title";
+        title.textContent = "工具结果";
+        item.appendChild(title);
+      }
+      item.appendChild(renderToolResultRow(result));
+      timeline.appendChild(item);
     });
-    details.appendChild(section);
   }
+  details.appendChild(timeline);
   return details;
 }
 
-function renderEntry(entry) {
+function renderEntry(entry, agentLabel) {
   const kind = Object.keys(entry)[0];
   const v = entry[kind];
   const el = document.createElement("div");
-  el.className = "entry " + kind + (kind === "ToolResult" && v.is_error ? " error" : "");
+  el.className = "msg " + kind + (kind === "ToolResult" && v.is_error ? " error" : "");
 
-  const role = document.createElement("div");
-  role.className = "role";
-  role.textContent = ROLE_LABEL[kind] || kind;
-  el.appendChild(role);
+  const head = document.createElement("div");
+  head.className = "msg-head";
+  const name = document.createElement("span");
+  if (kind === "Human") {
+    head.appendChild(renderAvatarIcon(ICONS.user));
+    name.textContent = "you";
+  } else if (kind === "AiTurn") {
+    const style = AGENT_STYLE[agentLabel] || { icon: ICONS.bot, color: null };
+    head.appendChild(renderAvatarIcon(style.icon, style.color));
+    name.textContent = agentLabel || "AI";
+  } else {
+    const dot = document.createElement("span");
+    dot.className = "avatar-dot";
+    head.appendChild(dot);
+    name.textContent = ROLE_LABEL[kind] || kind;
+  }
+  head.appendChild(name);
+  el.appendChild(head);
+
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  el.appendChild(bubble);
 
   if (kind === "ToolResult") {
-    el.appendChild(renderToolResultRow(v));
+    bubble.appendChild(renderToolResultRow(v));
     return el;
   }
 
   if (kind === "Human") {
     const text = document.createElement("div");
     text.className = "text";
-    text.textContent = v.text;
-    el.appendChild(text);
+    renderMarkdownInto(text, v.text);
+    bubble.appendChild(text);
     return el;
   }
 
@@ -218,12 +450,12 @@ function renderEntry(entry) {
   if (v.text) {
     const text = document.createElement("div");
     text.className = "text";
-    text.textContent = v.text;
-    el.appendChild(text);
+    renderMarkdownInto(text, v.text);
+    bubble.appendChild(text);
   }
   const trace = renderTraceToggle(v);
   if (trace) {
-    el.appendChild(trace);
+    bubble.appendChild(trace);
   }
   return el;
 }
@@ -239,7 +471,7 @@ fetch("dozer://review-trace/data.json")
       hr.className = "topic-divider";
       el.appendChild(hr);
     }
-    data.entries.forEach(function (entry) { el.appendChild(renderEntry(entry)); });
+    data.entries.forEach(function (entry) { el.appendChild(renderEntry(entry, data.agent_label)); });
     if (data.next_topic) {
       const hr = document.createElement("hr");
       hr.className = "topic-divider";
