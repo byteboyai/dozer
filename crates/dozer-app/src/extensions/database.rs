@@ -2140,31 +2140,33 @@ fn result_table<'a>(
         .into()
 }
 
-/// SQL 查询控制台 tab。`text_editor` 多行输入 + "运行"按钮 + 结果区;
+/// SQL 查询控制台 tab。`text_editor` 多行输入 + "执行"按钮 + 结果区;
 /// `QueryOutcome` 三态(行集 / 受影响行数 / DDL)分别渲染。
 fn query_view<'a>(
     tab_id: usize,
     q: &'a QueryState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let toolbar = row![
+        button(text(if q.running { "执行中…" } else { "执行" }))
+            .on_press_maybe((!q.running).then_some(Message::QueryRun(tab_id))),
+        text("Cmd+Enter 快捷执行")
+            .size(byteui::theme::font::caption_sm())
+            .color(byteui::theme::color::current().dim),
+    ]
+    .spacing(8)
+    .align_y(iced_widget::core::Alignment::Center);
+
     let editor = byteui::form::text_area::view(
         &q.sql,
-        "-- 例如:SELECT * FROM orders LIMIT 50",
+        "SELECT * FROM ...",
         None,
         false,
-        Some(200.0),
-        move |a| Message::QueryTextAction(tab_id, a),
+        Some(160.0),
+        move |action| Message::QueryTextAction(tab_id, action),
     );
-    let run_btn =
-        button(text("运行")).on_press_maybe((!q.running).then_some(Message::QueryRun(tab_id)));
-    let mut col = column![editor, row![run_btn].spacing(8),].spacing(8);
 
-    if q.running {
-        col = col.push(
-            text("执行中…")
-                .size(byteui::theme::font::caption_sm())
-                .color(byteui::theme::color::current().dim),
-        );
-    }
+    let mut col = column![toolbar, editor].spacing(8);
+
     if let Some(e) = &q.error {
         col = col.push(
             text(format!("✗ {e}"))
@@ -2174,30 +2176,29 @@ fn query_view<'a>(
     }
 
     match &q.result {
-        None => {
-            if !q.running && q.error.is_none() {
-                col = col.push(
-                    text("输入 SQL 后点运行查看结果")
-                        .size(byteui::theme::font::body())
-                        .color(byteui::theme::color::current().dim),
-                );
-            }
+        None => {}
+        Some(QueryOutcome::Rows(result)) if result.rows.is_empty() => {
+            col = col.push(
+                text("查询未返回任何行")
+                    .size(byteui::theme::font::body())
+                    .color(byteui::theme::color::current().dim),
+            );
         }
         Some(QueryOutcome::Rows(result)) => {
             col = col.push(result_table(tab_id, result, false));
         }
         Some(QueryOutcome::Affected(n)) => {
             col = col.push(
-                text(format!("受影响行数:{n}"))
+                text(format!("{n} 行受影响"))
                     .size(byteui::theme::font::body())
-                    .color(byteui::theme::color::current().cream),
+                    .color(byteui::theme::color::current().green),
             );
         }
         Some(QueryOutcome::Ddl) => {
             col = col.push(
-                text("DDL 语句已执行")
+                text("执行成功")
                     .size(byteui::theme::font::body())
-                    .color(byteui::theme::color::current().cream),
+                    .color(byteui::theme::color::current().green),
             );
         }
     }
