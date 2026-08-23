@@ -3989,17 +3989,32 @@ impl App {
                 table,
                 result,
             }) => self.database_columns_loaded(project_id, source_id, schema, table, result),
-            Message::Database(database::Message::BrowseResult(project_id, tab_id, run_seq, result)) => {
-                self.database_browse_result(project_id, tab_id, run_seq, result)
-            }
-            Message::Database(database::Message::QueryResult(project_id, tab_id, run_seq, result)) => {
-                self.database_query_result(project_id, tab_id, run_seq, result)
-            }
+            Message::Database(database::Message::BrowseResult(
+                project_id,
+                tab_id,
+                run_seq,
+                result,
+            )) => self.database_browse_result(project_id, tab_id, run_seq, result),
+            Message::Database(database::Message::QueryResult(
+                project_id,
+                tab_id,
+                run_seq,
+                result,
+            )) => self.database_query_result(project_id, tab_id, run_seq, result),
             Message::Database(database::Message::ToolbarHover(target, hovered)) => {
                 // 数据库面板 schema 树头部 icon 按钮的悬停:本面板不挂 App 的
                 // hover 动画表,把进入/离开转发成 `HoverId` 由内核统一驱动动画。
                 let id = match target {
                     database::DatabaseToolbarTarget::SchemaBack => HoverId::DatabaseSchemaBack,
+                };
+                self.set_hover(id, hovered);
+            }
+            Message::Database(database::Message::TabHover(target, idx, hovered)) => {
+                // 内容窗格 tab 本体/关闭按钮的悬停,转发成 `HoverId`(同
+                // `ToolbarHover` 的口径)。
+                let id = match target {
+                    database::DatabaseTabHoverTarget::Title => HoverId::DatabaseTabItem(idx),
+                    database::DatabaseTabHoverTarget::Close => HoverId::DatabaseTabClose(idx),
                 };
                 self.set_hover(id, hovered);
             }

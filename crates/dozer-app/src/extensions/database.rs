@@ -679,6 +679,15 @@ pub enum DatabaseToolbarTarget {
     SchemaBack,
 }
 
+/// 内容窗格 tab 栏里某个可悬停部件的身份;配合 `Message::TabHover` 由内核
+/// 转发到 `HoverId::DatabaseTabItem/DatabaseTabClose`(同 `ToolbarHover` 的
+/// 布线方式)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatabaseTabHoverTarget {
+    Title,
+    Close,
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     /// 驱动管理弹层:勾/取消勾某个驱动类型。
@@ -727,6 +736,10 @@ pub enum Message {
     /// (本面板不挂 App 的 hover 动画表),`update` 吃不到这里;保 no-op
     /// 分支维持 match 穷尽。
     ToolbarHover(DatabaseToolbarTarget, bool),
+    /// 内容窗格 tab 栏某个 tab 的悬停进入/离开;纯转发动机,`update()` 里
+    /// 保 no-op 分支维持 match 穷尽,真正接线在 `app.rs` 的特化臂(同
+    /// `ToolbarHover` 的口径)。
+    TabHover(DatabaseTabHoverTarget, usize, bool),
     /// Postgres schema 节点展开/收起(纯同步,不触发加载)。
     ToggleSchema(String),
     /// 表节点展开/收起;展开时列缓存缺失或曾失败 → 置 `Loading` 并发起列加载。
@@ -1195,7 +1208,6 @@ pub fn update(
             dispatch_browse_run(
                 ws_state, app_state, tab_id, project_id, repo_path, handle, emit,
             );
-            return;
         }
         Message::BrowseNext(tab_id) => {
             if let Some(TabContent::Browse(b)) = ws_state.content.content_mut(tab_id)
@@ -1206,13 +1218,11 @@ pub fn update(
             dispatch_browse_run(
                 ws_state, app_state, tab_id, project_id, repo_path, handle, emit,
             );
-            return;
         }
         Message::BrowseRun(tab_id) => {
             dispatch_browse_run(
                 ws_state, app_state, tab_id, project_id, repo_path, handle, emit,
             );
-            return;
         }
         Message::BrowseResult(_project_id, tab_id, seq, result) => {
             let Some(TabContent::Browse(b)) = ws_state.content.content_mut(tab_id) else {
@@ -1287,6 +1297,10 @@ pub fn update(
         }
         Message::ToolbarHover(..) => {
             // 悬停进度由内核 `Message::Database` 分支转发到 `HoverId`,吃不到这里。
+        }
+        Message::TabHover(..) => {
+            // 内容窗格 tab 悬停同 `ToolbarHover`:由内核 `App::update` 的特化臂
+            // 转发到 `HoverId::DatabaseTabItem/DatabaseTabClose`,吃不到这里。
         }
     }
 }
@@ -1844,6 +1858,353 @@ pub fn view<'a>(
         .into()
 }
 
+/// 右侧内容窗格:tab 栏(表/集合/查询)+ 当前激活 tab 的内容。骨架照抄
+/// `workspace.rs::preview_pane_for`,**不**带拖拽换位/右键菜单(设计文档
+/// 非目标)。
+pub fn content_pane<'a>(
+    app: &'a crate::app::App,
+    ws_state: &'a WorkspaceState,
+    width: Length,
+    outer: Border,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let content = ws_state.content();
+    let widths: Vec<f32> = content
+        .tabs()
+        .iter()
+        .map(|t| {
+            crate::tab_widget::PANEL_TAB_MAX_W.min(tab_title_display_width(&tab_title(t, ws_state)))
+        })
+        .collect();
+    let (first, can_left, can_right) = crate::tab_widget::tab_window(
+        &widths,
+        4.0,
+        byteui::theme::geometry::tab_bar_avail_px(),
+        content.tab_scroll_first(),
+    );
+
+    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = content
+        .tabs()
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| *idx >= first)
+        .map(|(idx, tab)| {
+            let active = idx == content.active_idx();
+            let title_hover_t = app.hover_progress(crate::app::HoverId::DatabaseTabItem(idx));
+            let close_hover_t = app.hover_progress(crate::app::HoverId::DatabaseTabClose(idx));
+            crate::tab_widget::panel_tab(
+                tab_title(tab, ws_state),
+                active,
+                title_hover_t,
+                close_hover_t,
+                None,
+                None,
+                Message::SelectTab(idx),
+                Message::CloseTab(idx),
+                app.hover_tooltip_ready(crate::app::HoverId::DatabaseTabItem(idx)),
+                move |h| Message::TabHover(DatabaseTabHoverTarget::Title, idx, h),
+                move |h| Message::TabHover(DatabaseTabHoverTarget::Close, idx, h),
+            )
+        })
+        .collect();
+    let tabs_row = row(items).spacing(4);
+    let clipped = container(tabs_row).width(Length::Fill).clip(true);
+    let left_arrow = crate::tab_widget::tab_arrow_button(
+        icons::IconKind::ChevronLeft,
+        can_left,
+        Message::TabScroll(false),
+    );
+    let right_arrow = crate::tab_widget::tab_arrow_button(
+        icons::IconKind::ChevronRight,
+        can_right,
+        Message::TabScroll(true),
+    );
+    let tab_bar = row![left_arrow, right_arrow, clipped]
+        .spacing(4)
+        .align_y(iced_widget::core::Alignment::Center);
+
+    let mut col = column![tab_bar].spacing(8);
+
+    match content.active_tab() {
+        None => {
+            col = col.push(
+                container(
+                    text("在左侧 schema 树点一张表/视图/集合,或点 + 新查询")
+                        .size(byteui::theme::font::subtitle())
+                        .color(byteui::theme::color::current().dim),
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(iced_widget::core::alignment::Horizontal::Center)
+                .align_y(iced_widget::core::alignment::Vertical::Center),
+            );
+        }
+        Some(tab) => {
+            let tab_id = tab.id;
+            match content.content(tab_id) {
+                Some(TabContent::Browse(b)) => col = col.push(browse_view(tab_id, b)),
+                Some(TabContent::Query(q)) => col = col.push(query_view(tab_id, q)),
+                None => {}
+            }
+        }
+    }
+
+    container(col.padding(16))
+        .width(width)
+        .height(iced_widget::core::Length::Fill)
+        .style(
+            move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                background: Some(byteui::theme::color::current().bg.into()),
+                border: outer,
+                ..iced_widget::container::Style::default()
+            },
+        )
+        .into()
+}
+
+fn tab_title(tab: &DatabaseTab, ws_state: &WorkspaceState) -> String {
+    let source_name = |id: &str| {
+        ws_state
+            .sources()
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| id.to_string())
+    };
+    match &tab.kind {
+        DatabaseTabKind::Table {
+            source_id,
+            schema,
+            table,
+        } => match schema {
+            Some(s) => format!("{table}@{}.{s}", source_name(source_id)),
+            None => format!("{table}@{}", source_name(source_id)),
+        },
+        DatabaseTabKind::Collection { source_id, name } => {
+            format!("{name}@{}", source_name(source_id))
+        }
+        DatabaseTabKind::Query {
+            source_id,
+            console_seq,
+        } => format!("查询 {console_seq}@{}", source_name(source_id)),
+    }
+}
+
+fn tab_title_display_width(title: &str) -> f32 {
+    // 同 `workspace.rs::preview_tab_display_width` 的估算思路:字符数 *
+    // 单字宽 + tab 内边距/关闭按钮的固定开销,不做真实文本测量(tab_window
+    // 只需要一个足够准的相对宽度做窗口裁剪)。
+    title.chars().count() as f32 * 8.0 + 56.0
+}
+
+fn browse_view<'a>(
+    tab_id: usize,
+    b: &'a BrowseState,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let toolbar = row![
+        byteui::form::input_text::view(
+            "WHERE(原始 SQL 片段,例如 id > 100)",
+            &b.where_clause,
+            false,
+            None,
+            false,
+            Some(Message::BrowseRun(tab_id)),
+            false,
+            move |v| Message::BrowseWhereChanged(tab_id, v),
+        ),
+        byteui::form::input_text::view(
+            "ORDER BY(原始 SQL 片段,例如 title DESC)",
+            &b.order_by,
+            false,
+            None,
+            false,
+            Some(Message::BrowseRun(tab_id)),
+            false,
+            move |v| Message::BrowseOrderByChanged(tab_id, v),
+        ),
+        byteui::form::select::view(&PAGE_SIZES, Some(&b.page_size), move |v| {
+            Message::BrowsePageSizeChanged(tab_id, v)
+        }),
+        button(text("上一页")).on_press_maybe((b.page > 0).then_some(Message::BrowsePrev(tab_id))),
+        button(text("下一页")).on_press_maybe(b.has_more.then_some(Message::BrowseNext(tab_id))),
+    ]
+    .spacing(8)
+    .align_y(iced_widget::core::Alignment::Center);
+
+    let mut col = column![toolbar].spacing(8);
+
+    if b.loading {
+        col = col.push(
+            text("加载中…")
+                .size(byteui::theme::font::caption_sm())
+                .color(byteui::theme::color::current().dim),
+        );
+    }
+    if let Some(e) = &b.error {
+        col = col.push(
+            text(format!("✗ {e}"))
+                .size(byteui::theme::font::caption_sm())
+                .color(byteui::theme::color::current().red),
+        );
+    }
+
+    match &b.result {
+        None => {
+            if !b.loading && b.error.is_none() {
+                col = col.push(
+                    text("暂无数据")
+                        .size(byteui::theme::font::body())
+                        .color(byteui::theme::color::current().dim),
+                );
+            }
+        }
+        Some(result) if result.rows.is_empty() => {
+            col = col.push(
+                text("该表当前没有数据(或筛选条件不匹配任何行)")
+                    .size(byteui::theme::font::body())
+                    .color(byteui::theme::color::current().dim),
+            );
+        }
+        Some(result) => {
+            col = col.push(result_table(tab_id, result, true));
+        }
+    }
+
+    col.into()
+}
+
+/// 结果网格。`sortable` 为 `true` 时(浏览页)列头可点写排序;查询控制台
+/// 的结果(`sortable=false`)纯展示,不接排序点击(设计文档"架构与数据流
+/// §6":查询结果不支持再排序)。
+fn result_table<'a>(
+    tab_id: usize,
+    result: &'a QueryResult,
+    sortable: bool,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    // 点列头 = 把 `"{列名} ASC"` 写进 ORDER BY 框(设计文档"架构与数据流
+    // §5":同列再点一次不做两态切换,DESC 由用户在框里手动追加——原始片段
+    // 输入框的既定口径下,点击只是个"快速起手")。
+    let header = row(result
+        .columns
+        .iter()
+        .map(|c| {
+            let label = text(c.clone())
+                .size(byteui::theme::font::caption_sm())
+                .color(byteui::theme::color::current().cream);
+            if sortable {
+                let asc = format!("{c} ASC");
+                button(label)
+                    .on_press(Message::BrowseOrderByChanged(tab_id, asc))
+                    .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+                        background: None,
+                        ..iced_widget::button::Style::default()
+                    })
+                    .into()
+            } else {
+                container(label).into()
+            }
+        })
+        .collect::<Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>>>())
+    .spacing(12);
+
+    let rows_col = column(
+        result
+            .rows
+            .iter()
+            .map(|r| {
+                row(r
+                    .iter()
+                    .map(|cell| match cell {
+                        CellValue::Text(s) => text(s.clone())
+                            .size(byteui::theme::font::caption_sm())
+                            .color(byteui::theme::color::current().body)
+                            .into(),
+                        CellValue::Null => text("NULL")
+                            .size(byteui::theme::font::caption_sm())
+                            .color(byteui::theme::color::current().dim)
+                            .into(),
+                    })
+                    .collect::<Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>>>())
+                .spacing(12)
+                .into()
+            })
+            .collect::<Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>>>(),
+    )
+    .spacing(4);
+
+    scrollable(column![header, rows_col].spacing(6))
+        .direction(scrollable::Direction::Both {
+            vertical: byteui::interaction::scrollbar::scrollbar(),
+            horizontal: byteui::interaction::scrollbar::scrollbar(),
+        })
+        .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style())
+        .into()
+}
+
+/// SQL 查询控制台 tab。`text_editor` 多行输入 + "运行"按钮 + 结果区;
+/// `QueryOutcome` 三态(行集 / 受影响行数 / DDL)分别渲染。
+fn query_view<'a>(
+    tab_id: usize,
+    q: &'a QueryState,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let editor = byteui::form::text_area::view(
+        &q.sql,
+        "-- 例如:SELECT * FROM orders LIMIT 50",
+        None,
+        false,
+        Some(200.0),
+        move |a| Message::QueryTextAction(tab_id, a),
+    );
+    let run_btn =
+        button(text("运行")).on_press_maybe((!q.running).then_some(Message::QueryRun(tab_id)));
+    let mut col = column![editor, row![run_btn].spacing(8),].spacing(8);
+
+    if q.running {
+        col = col.push(
+            text("执行中…")
+                .size(byteui::theme::font::caption_sm())
+                .color(byteui::theme::color::current().dim),
+        );
+    }
+    if let Some(e) = &q.error {
+        col = col.push(
+            text(format!("✗ {e}"))
+                .size(byteui::theme::font::caption_sm())
+                .color(byteui::theme::color::current().red),
+        );
+    }
+
+    match &q.result {
+        None => {
+            if !q.running && q.error.is_none() {
+                col = col.push(
+                    text("输入 SQL 后点运行查看结果")
+                        .size(byteui::theme::font::body())
+                        .color(byteui::theme::color::current().dim),
+                );
+            }
+        }
+        Some(QueryOutcome::Rows(result)) => {
+            col = col.push(result_table(tab_id, result, false));
+        }
+        Some(QueryOutcome::Affected(n)) => {
+            col = col.push(
+                text(format!("受影响行数:{n}"))
+                    .size(byteui::theme::font::body())
+                    .color(byteui::theme::color::current().cream),
+            );
+        }
+        Some(QueryOutcome::Ddl) => {
+            col = col.push(
+                text("DDL 语句已执行")
+                    .size(byteui::theme::font::body())
+                    .color(byteui::theme::color::current().cream),
+            );
+        }
+    }
+
+    col.into()
+}
+
 /// schema 树浏览视图(阶段 2)。drill-down:从卡片列表进入,`SchemaBack` 返回。
 fn schema_tree_view<'a>(
     source: &'a DataSource,
@@ -1867,7 +2228,7 @@ fn schema_tree_view<'a>(
         "返回",
     );
 
-    let header = row![
+    let mut header = row![
         back_button,
         text(source.name.clone())
             .size(byteui::theme::font::subtitle())
@@ -1876,10 +2237,14 @@ fn schema_tree_view<'a>(
             .size(byteui::theme::font::caption_sm())
             .color(byteui::theme::color::current().dim),
         iced_widget::space::horizontal(),
-        button(text("刷新")).on_press(Message::SchemaRefresh(source.id.clone())),
     ]
     .spacing(8)
     .align_y(iced_widget::core::Alignment::Center);
+    if source.driver != DriverKind::MongoDB {
+        header = header
+            .push(button(text("+ 新查询")).on_press(Message::OpenQueryTab(source.id.clone())));
+    }
+    header = header.push(button(text("刷新")).on_press(Message::SchemaRefresh(source.id.clone())));
 
     let mut col = column![header].spacing(8);
 
@@ -1927,7 +2292,7 @@ fn schema_tree_view<'a>(
     } else {
         let mut tree = column![].spacing(2);
         for r in tree_rows(st, source.driver) {
-            tree = tree.push(schema_tree_row(&source.id, r));
+            tree = tree.push(schema_tree_row(&source.id, source.driver, r));
         }
         col = col.push(
             scrollable(tree)
@@ -1951,9 +2316,11 @@ fn schema_tree_view<'a>(
         .into()
 }
 
-/// 单行渲染。source_id 用于构造 `ToggleTable`。
+/// 单行渲染。source_id 用于构造 `ToggleTable`/`OpenTableTab`/`OpenCollectionTab`,driver
+/// 决定 MongoDB 集合行(无 chevron、点文字开集合 tab)与关系型表/视图行的差异。
 fn schema_tree_row<'a>(
     source_id: &str,
+    driver: DriverKind,
     r: SchemaRow<'a>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let indent = text("  ".repeat(r.depth)).size(crate::workspace::tree_row_font_size());
@@ -1998,47 +2365,76 @@ fn schema_tree_row<'a>(
             .into()
         }
         SchemaRowKind::Table(t) => {
-            let chevron = if r.expanded {
-                icons::IconKind::ChevronDown
-            } else {
-                icons::IconKind::ChevronRight
-            };
-            let icon = if t.is_view {
+            let icon_kind = if t.is_view {
                 icons::IconKind::Eye
             } else {
-                icons::IconKind::Table
+                icons::IconKind::Table // MongoDB 集合复用这个图标,视觉上够用(设计文档)
             };
-            button(
-                row![
-                    indent,
-                    icons::view(
-                        chevron,
-                        byteui::theme::icon_size::chevron(),
-                        byteui::theme::color::current().dim
-                    ),
-                    icons::view(
-                        icon,
-                        byteui::theme::icon_size::row(),
-                        byteui::theme::color::current().dim
-                    ),
-                    text(t.name.clone())
-                        .size(crate::workspace::tree_row_font_size())
-                        .color(byteui::theme::color::current().cream),
-                ]
-                .spacing(byteui::theme::icon_size::tree_row_gap())
-                .align_y(iced_widget::core::Alignment::Center),
+            let icon = icons::view(
+                icon_kind,
+                byteui::theme::icon_size::row(),
+                byteui::theme::color::current().dim,
+            );
+            let label = text(t.name.clone())
+                .size(crate::workspace::tree_row_font_size())
+                .color(byteui::theme::color::current().cream);
+            let open_msg = if driver == DriverKind::MongoDB {
+                Message::OpenCollectionTab {
+                    source_id: source_id.to_string(),
+                    name: t.name.clone(),
+                }
+            } else {
+                Message::OpenTableTab {
+                    source_id: source_id.to_string(),
+                    schema: t.schema.clone(),
+                    table: t.name.clone(),
+                }
+            };
+            let label_btn = button(
+                row![icon, label]
+                    .spacing(byteui::theme::icon_size::tree_row_gap())
+                    .align_y(iced_widget::core::Alignment::Center),
             )
-            .on_press(Message::ToggleTable {
-                source_id: source_id.to_string(),
-                schema: t.schema.clone(),
-                table: t.name.clone(),
-            })
+            .on_press(open_msg)
             .width(Length::Fill)
             .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
                 background: None,
                 ..iced_widget::button::Style::default()
-            })
-            .into()
+            });
+
+            let mut row_el = row![indent].spacing(byteui::theme::icon_size::tree_row_gap());
+            if driver == DriverKind::MongoDB {
+                // MongoDB 集合无列层可展开,不画 chevron,留同宽空位对齐。
+                row_el = row_el.push(
+                    iced_widget::space::Space::new()
+                        .width(Length::Fixed(byteui::theme::icon_size::chevron())),
+                );
+            } else {
+                let chevron_icon = if r.expanded {
+                    icons::IconKind::ChevronDown
+                } else {
+                    icons::IconKind::ChevronRight
+                };
+                let chevron_btn = button(icons::view(
+                    chevron_icon,
+                    byteui::theme::icon_size::chevron(),
+                    byteui::theme::color::current().dim,
+                ))
+                .on_press(Message::ToggleTable {
+                    source_id: source_id.to_string(),
+                    schema: t.schema.clone(),
+                    table: t.name.clone(),
+                })
+                .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+                    background: None,
+                    ..iced_widget::button::Style::default()
+                });
+                row_el = row_el.push(chevron_btn);
+            }
+            row_el
+                .push(label_btn)
+                .align_y(iced_widget::core::Alignment::Center)
+                .into()
         }
         SchemaRowKind::Column(c) => {
             // 可空性用颜色深浅表达:非空 CREAM、可空 BODY(不加 "NOT NULL" 文本)
@@ -2695,6 +3091,7 @@ pub struct BrowsePage {
     pub has_more: bool,
 }
 
+#[allow(clippy::too_many_arguments)] // 计划给定签名:驱动 + 连接信息 + 条件 + 分页 8 参
 async fn browse_table(
     kind: DriverKind,
     url: &str,
