@@ -537,7 +537,7 @@ pub struct DataSourceDraft {
 
 /// 挂在每个 `Workspace` 上:当前项目配置的数据源列表 + 编辑态 + 每条数据源
 /// 的连接测试状态 + schema 树浏览态(阶段 2,纯内存)。
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct WorkspaceState {
     sources: Vec<DataSource>,
     editing: Option<DataSourceDraft>,
@@ -546,6 +546,22 @@ pub struct WorkspaceState {
     browsing: Option<String>,
     /// 每个数据源 id 一份 schema 树状态(阶段 2,纯内存)。
     schemas: HashMap<String, SchemaState>,
+    /// 右侧内容窗格状态(表/集合/查询 tab)。纯内存,不持久化——同
+    /// `schemas`(阶段 2),重启后 tab 全部关闭,不留痕迹。
+    content: DatabaseContentState,
+}
+
+impl std::fmt::Debug for WorkspaceState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkspaceState")
+            .field("sources", &self.sources)
+            .field("editing", &self.editing)
+            .field("test_status", &self.test_status)
+            .field("browsing", &self.browsing)
+            .field("schemas", &self.schemas)
+            .field("content_tab_count", &self.content.tabs().len())
+            .finish()
+    }
 }
 
 impl WorkspaceState {
@@ -575,6 +591,11 @@ impl WorkspaceState {
     #[cfg(test)]
     pub fn schema_state(&self, source_id: &str) -> Option<&SchemaState> {
         self.schemas.get(source_id)
+    }
+
+    /// 右侧内容窗格状态只读视图(视图层 Task 7/8 消费)。
+    pub fn content(&self) -> &DatabaseContentState {
+        &self.content
     }
 }
 
@@ -1758,6 +1779,301 @@ fn schema_tree_row<'a>(
     }
 }
 
+/// 右侧内容窗格里的一个 tab。`id` 是跨重排/关闭都稳定的标识(消息/异步
+/// 结果按它路由,不用索引——索引会随关闭其它 tab 而漂移)。
+pub struct DatabaseTab {
+    pub id: usize,
+    pub kind: DatabaseTabKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DatabaseTabKind {
+    Table {
+        source_id: String,
+        schema: Option<String>,
+        table: String,
+    },
+    Collection {
+        source_id: String,
+        name: String,
+    },
+    /// `console_seq` 只用来生成默认标题("查询 1"/"查询 2"),不参与去重
+    /// 比较——`open_query` 永远新开,同一数据源可以有多个查询 tab。
+    Query {
+        source_id: String,
+        console_seq: u32,
+    },
+}
+
+impl DatabaseTabKind {
+    fn source_id(&self) -> &str {
+        match self {
+            DatabaseTabKind::Table { source_id, .. }
+            | DatabaseTabKind::Collection { source_id, .. }
+            | DatabaseTabKind::Query { source_id, .. } => source_id,
+        }
+    }
+}
+
+/// 表格/集合浏览页的页大小可选项。
+pub const PAGE_SIZES: [u32; 3] = [50, 100, 500];
+
+/// 表格/集合浏览 tab 的状态。`run_seq` 是过期结果防线:每次发起查询
+/// `+1` 并带进异步闭包,结果落地时核对是否仍是发出时那个值(设计文档
+/// "异步路由与过期防线"一节)。
+pub struct BrowseState {
+    pub where_clause: String,
+    pub order_by: String,
+    pub page: u32,
+    pub page_size: u32,
+    pub has_more: bool,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub result: Option<QueryResult>,
+    run_seq: u64,
+}
+
+impl Default for BrowseState {
+    fn default() -> Self {
+        Self {
+            where_clause: String::new(),
+            order_by: String::new(),
+            page: 0,
+            page_size: PAGE_SIZES[0],
+            has_more: false,
+            loading: false,
+            error: None,
+            result: None,
+            run_seq: 0,
+        }
+    }
+}
+
+impl BrowseState {
+    /// 发起一次新请求前调用:`run_seq +1` 并置 loading,返回新 seq 供
+    /// 异步闭包携带。
+    pub fn begin_run(&mut self) -> u64 {
+        self.run_seq += 1;
+        self.loading = true;
+        self.run_seq
+    }
+
+    /// 结果落地时核对:seq 不是当前这轮 → 过期,调用方应丢弃不落地。
+    pub fn is_current_run(&self, seq: u64) -> bool {
+        self.loading && self.run_seq == seq
+    }
+}
+
+/// SQL 查询控制台 tab 的状态。`sql` 用 `text_editor::Content`(同
+/// `todo.rs` 任务内容多行编辑框的既有用法),不是纯 `String`——
+/// `byteui::form::text_area::view` 要求这个类型。
+pub struct QueryState {
+    pub sql: iced_widget::text_editor::Content,
+    pub running: bool,
+    pub error: Option<String>,
+    pub result: Option<QueryOutcome>,
+    run_seq: u64,
+}
+
+impl Default for QueryState {
+    fn default() -> Self {
+        Self {
+            sql: iced_widget::text_editor::Content::new(),
+            running: false,
+            error: None,
+            result: None,
+            run_seq: 0,
+        }
+    }
+}
+
+impl QueryState {
+    pub fn begin_run(&mut self) -> u64 {
+        self.run_seq += 1;
+        self.running = true;
+        self.run_seq
+    }
+
+    pub fn is_current_run(&self, seq: u64) -> bool {
+        self.running && self.run_seq == seq
+    }
+}
+
+pub enum TabContent {
+    Browse(BrowseState),
+    Query(QueryState),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CellValue {
+    Text(String),
+    Null,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct QueryResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<CellValue>>,
+}
+
+pub enum QueryOutcome {
+    Rows(QueryResult),
+    Affected(u64),
+    Ddl,
+}
+
+/// 右侧内容窗格:多个表/集合/查询 tab,`active` 是**索引**(同
+/// `PreviewPane::active_idx()` 的约定,tab 栏渲染/hover 状态按索引找)。
+/// `contents` 按**稳定 id**存(消息/异步结果按 id 路由,索引会随关闭
+/// 漂移)。
+#[derive(Default)]
+pub struct DatabaseContentState {
+    tabs: Vec<DatabaseTab>,
+    contents: std::collections::HashMap<usize, TabContent>,
+    active: usize,
+    next_id: usize,
+    next_console_seq: u32,
+    /// tab 栏箭头翻页的窗口起点(同 `Workspace::preview_tab_first` 的用法),
+    /// 每次渲染都交给 `tab_window` 钳到合法范围,这里存的只是"用户上次翻到
+    /// 哪"的粗略意图。
+    tab_scroll_first: usize,
+}
+
+impl DatabaseContentState {
+    pub fn tabs(&self) -> &[DatabaseTab] {
+        &self.tabs
+    }
+
+    pub fn active_idx(&self) -> usize {
+        self.active
+    }
+
+    pub fn tab_scroll_first(&self) -> usize {
+        self.tab_scroll_first
+    }
+
+    /// tab 栏箭头翻页,`right=true` 右翻、`false` 左翻。步进量(2)和越界
+    /// 钳制逻辑照抄 `app.rs::Message::PreviewTabScroll` 的既有实现——越界
+    /// 不在这里防,`tab_window` 渲染时会自动钳回合法范围。
+    pub fn scroll_tabs(&mut self, right: bool) {
+        if right {
+            self.tab_scroll_first = self.tab_scroll_first.saturating_add(2);
+        } else {
+            self.tab_scroll_first = self.tab_scroll_first.saturating_sub(2);
+        }
+    }
+
+    pub fn active_tab(&self) -> Option<&DatabaseTab> {
+        self.tabs.get(self.active)
+    }
+
+    pub fn content(&self, id: usize) -> Option<&TabContent> {
+        self.contents.get(&id)
+    }
+
+    pub fn content_mut(&mut self, id: usize) -> Option<&mut TabContent> {
+        self.contents.get_mut(&id)
+    }
+
+    fn push(&mut self, kind: DatabaseTabKind, content: TabContent) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.tabs.push(DatabaseTab { id, kind });
+        self.contents.insert(id, content);
+        self.active = self.tabs.len() - 1;
+        id
+    }
+
+    /// 已开同一张表的 tab → 聚焦(内容/游标不重置);否则新开一个空浏览态。
+    pub fn open_table(
+        &mut self,
+        source_id: String,
+        schema: Option<String>,
+        table: String,
+    ) -> usize {
+        if let Some((idx, tab)) = self.tabs.iter().enumerate().find(|(_, t)| {
+            matches!(&t.kind, DatabaseTabKind::Table { source_id: s, schema: sc, table: tb }
+                if *s == source_id && *sc == schema && *tb == table)
+        }) {
+            self.active = idx;
+            return tab.id;
+        }
+        self.push(
+            DatabaseTabKind::Table {
+                source_id,
+                schema,
+                table,
+            },
+            TabContent::Browse(BrowseState::default()),
+        )
+    }
+
+    /// 已开同一个集合的 tab → 聚焦;否则新开。
+    pub fn open_collection(&mut self, source_id: String, name: String) -> usize {
+        if let Some((idx, tab)) = self.tabs.iter().enumerate().find(|(_, t)| {
+            matches!(&t.kind, DatabaseTabKind::Collection { source_id: s, name: n }
+                if *s == source_id && *n == name)
+        }) {
+            self.active = idx;
+            return tab.id;
+        }
+        self.push(
+            DatabaseTabKind::Collection { source_id, name },
+            TabContent::Browse(BrowseState::default()),
+        )
+    }
+
+    /// 查询 tab 永不去重,`console_seq` 递增当默认标题的编号来源。
+    pub fn open_query(&mut self, source_id: String) -> usize {
+        self.next_console_seq += 1;
+        let seq = self.next_console_seq;
+        self.push(
+            DatabaseTabKind::Query {
+                source_id,
+                console_seq: seq,
+            },
+            TabContent::Query(QueryState::default()),
+        )
+    }
+
+    pub fn select(&mut self, idx: usize) {
+        if idx < self.tabs.len() {
+            self.active = idx;
+        }
+    }
+
+    /// 关闭指定索引的 tab。`active` 调整规则同浏览器标签页惯例:关掉
+    /// active 之前的 tab → active 索引减 1(仍指向原 tab);关掉 active
+    /// 自己且不是最后一个 → active 索引不变(自然落到后一个 tab 上);
+    /// 关掉最后一个 tab 且它正是 active → active 收缩到新的最后一个。
+    pub fn close(&mut self, idx: usize) {
+        if idx >= self.tabs.len() {
+            return;
+        }
+        let id = self.tabs[idx].id;
+        self.tabs.remove(idx);
+        self.contents.remove(&id);
+        if self.tabs.is_empty() {
+            self.active = 0;
+        } else if self.active >= self.tabs.len() {
+            self.active = self.tabs.len() - 1;
+        } else if idx < self.active {
+            self.active -= 1;
+        }
+    }
+
+    /// 数据源被删除/编辑保存(连接信息可能变了)时,关掉所有关联 tab。
+    pub fn close_by_source(&mut self, source_id: &str) {
+        while let Some(idx) = self
+            .tabs
+            .iter()
+            .position(|t| t.kind.source_id() == source_id)
+        {
+            self.close(idx);
+        }
+    }
+}
+
 #[cfg(test)]
 mod url_tests {
     use super::*;
@@ -2464,5 +2780,121 @@ mod sqlite_introspection {
             .await
             .unwrap_err();
         assert!(err.contains("MongoDB"));
+    }
+}
+
+#[cfg(test)]
+mod content_tests {
+    use super::*;
+
+    #[test]
+    fn open_table_dedups_and_focuses_existing() {
+        let mut st = DatabaseContentState::default();
+        let id1 = st.open_table("s1".into(), Some("public".into()), "users".into());
+        st.open_table("s1".into(), Some("public".into()), "orders".into());
+        assert_eq!(st.tabs().len(), 2);
+        let id_again = st.open_table("s1".into(), Some("public".into()), "users".into());
+        assert_eq!(id1, id_again);
+        assert_eq!(st.tabs().len(), 2); // 没有新开
+        assert_eq!(st.active_idx(), 0); // 聚焦回第一个 tab
+    }
+
+    #[test]
+    fn open_table_reopen_preserves_content() {
+        let mut st = DatabaseContentState::default();
+        let id = st.open_table("s1".into(), None, "users".into());
+        if let Some(TabContent::Browse(b)) = st.content_mut(id) {
+            b.where_clause = "id > 10".into();
+        }
+        st.open_collection("s1".into(), "other".into()); // 切走
+        st.open_table("s1".into(), None, "users".into()); // 再开同一张表
+        let TabContent::Browse(b) = st.content(id).unwrap() else {
+            panic!("应为 Browse");
+        };
+        assert_eq!(b.where_clause, "id > 10"); // 内容没被重置
+    }
+
+    #[test]
+    fn open_collection_dedups() {
+        let mut st = DatabaseContentState::default();
+        let id1 = st.open_collection("s1".into(), "logs".into());
+        let id2 = st.open_collection("s1".into(), "logs".into());
+        assert_eq!(id1, id2);
+        assert_eq!(st.tabs().len(), 1);
+    }
+
+    #[test]
+    fn open_query_never_dedups_and_increments_seq() {
+        let mut st = DatabaseContentState::default();
+        st.open_query("s1".into());
+        st.open_query("s1".into());
+        assert_eq!(st.tabs().len(), 2);
+        let seqs: Vec<u32> = st
+            .tabs()
+            .iter()
+            .map(|t| match &t.kind {
+                DatabaseTabKind::Query { console_seq, .. } => *console_seq,
+                _ => panic!("应为 Query"),
+            })
+            .collect();
+        assert_eq!(seqs, vec![1, 2]);
+    }
+
+    #[test]
+    fn close_before_active_shifts_active_index_down() {
+        let mut st = DatabaseContentState::default();
+        st.open_table("s1".into(), None, "a".into());
+        st.open_table("s1".into(), None, "b".into());
+        st.select(1); // active = b(索引1)
+        st.close(0); // 关掉 a(在 active 之前)
+        assert_eq!(st.tabs().len(), 1);
+        assert_eq!(st.active_idx(), 0); // 仍指向 b,现在挪到索引0
+        assert_eq!(
+            st.tabs()[0].kind,
+            DatabaseTabKind::Table {
+                source_id: "s1".into(),
+                schema: None,
+                table: "b".into()
+            }
+        );
+    }
+
+    #[test]
+    fn close_active_last_tab_shrinks_active() {
+        let mut st = DatabaseContentState::default();
+        st.open_table("s1".into(), None, "a".into());
+        st.open_table("s1".into(), None, "b".into());
+        // active 目前是索引1(b,刚开的)
+        st.close(1);
+        assert_eq!(st.tabs().len(), 1);
+        assert_eq!(st.active_idx(), 0);
+    }
+
+    #[test]
+    fn close_only_tab_empties_state() {
+        let mut st = DatabaseContentState::default();
+        st.open_table("s1".into(), None, "a".into());
+        st.close(0);
+        assert!(st.tabs().is_empty());
+        assert!(st.active_tab().is_none());
+    }
+
+    #[test]
+    fn close_by_source_removes_all_kinds_for_that_source() {
+        let mut st = DatabaseContentState::default();
+        st.open_table("s1".into(), None, "a".into());
+        st.open_collection("s1".into(), "c".into());
+        st.open_query("s1".into());
+        st.open_table("s2".into(), None, "keep".into());
+        st.close_by_source("s1");
+        assert_eq!(st.tabs().len(), 1);
+        assert_eq!(
+            st.tabs()[0].kind,
+            DatabaseTabKind::Table {
+                source_id: "s2".into(),
+                schema: None,
+                table: "keep".into()
+            }
+        );
     }
 }
