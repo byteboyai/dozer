@@ -53,6 +53,10 @@ fn legacy_global_dims(layout_path: &Path) -> PanelDims {
                 .get("browser_bookmarks_split")
                 .and_then(num)
                 .unwrap_or(byteui::theme::geometry::default_split_ratio()),
+            database_split: v
+                .get("database_split")
+                .and_then(num)
+                .unwrap_or(byteui::theme::geometry::default_split_ratio()),
         })
         .unwrap_or_default()
 }

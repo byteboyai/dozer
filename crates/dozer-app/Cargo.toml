@@ -49,7 +49,7 @@ trash = "5.2.6"
 arboard = "3"
 png = "0.17"
 uuid.workspace = true
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "any", "postgres", "mysql", "sqlite"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "any", "postgres", "mysql", "sqlite", "uuid", "chrono", "json", "rust_decimal"] }
 mongodb = { version = "3", default-features = false, features = ["rustls-tls", "compat-3-0-0"] }
 # keyring：数据库面板(extensions::database)与 SSH 面板(extensions::ssh)
 # 共用同一个依赖，两边独立开发时各自加过一次，合并时按较新的 4.x 统一

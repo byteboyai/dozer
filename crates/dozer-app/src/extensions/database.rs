@@ -272,9 +272,16 @@ fn columns_sql(driver: DriverKind) -> &'static str {
     }
 }
 
-async fn load_tables(kind: DriverKind, url: &str) -> Result<Vec<TableRef>, String> {
+async fn load_tables(
+    kind: DriverKind,
+    url: &str,
+    mongo_db: Option<&str>,
+) -> Result<Vec<TableRef>, String> {
     if kind == DriverKind::MongoDB {
-        return Err("MongoDB 集合浏览将在后续阶段支持".to_string());
+        let Some(db_name) = mongo_db.filter(|s| !s.is_empty()) else {
+            return Err("请在数据源配置里填写数据库名后再浏览集合".to_string());
+        };
+        return load_mongo_collections(url, db_name).await;
     }
     let work = async {
         let pool = sqlx::AnyPool::connect(url)
@@ -320,6 +327,39 @@ async fn load_tables(kind: DriverKind, url: &str) -> Result<Vec<TableRef>, Strin
         .await;
         pool.close().await;
         out
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(5), work).await {
+        Ok(r) => r,
+        Err(_) => Err("加载超时(5秒)".to_string()),
+    }
+}
+
+/// MongoDB 集合清单,伪装成 `TableRef`(`schema: None, is_view: false`)——
+/// 复用阶段 2 现成的树渲染/展开数据结构,不新开 `SchemaRowKind` 变体
+/// (设计文档写作时预留了 `SchemaRowKind::Collection` 的可能性,写计划时
+/// 发现集合的"形状"和 MySQL/SQLite 的表完全一致,真正的差异只在**点击行为**
+/// ——这个差异在 Task 7 的 `schema_tree_row` 里按 `driver` 参数处理,不需要
+/// 数据模型层面的新类型)。
+async fn load_mongo_collections(url: &str, db_name: &str) -> Result<Vec<TableRef>, String> {
+    let work = async {
+        let client = mongodb::Client::with_uri_str(url)
+            .await
+            .map_err(|e| e.to_string())?;
+        let names = client
+            .database(db_name)
+            .list_collection_names()
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut refs: Vec<TableRef> = names
+            .into_iter()
+            .map(|name| TableRef {
+                schema: None,
+                name,
+                is_view: false,
+            })
+            .collect();
+        refs.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok::<_, String>(refs)
     };
     match tokio::time::timeout(std::time::Duration::from_secs(5), work).await {
         Ok(r) => r,
@@ -410,10 +450,11 @@ fn spawn_tables_load(
     source_id: String,
     kind: DriverKind,
     url: String,
+    mongo_db: Option<String>,
     emit: impl Fn(Message) + Send + 'static,
 ) {
     handle.spawn(async move {
-        let result = load_tables(kind, &url).await;
+        let result = load_tables(kind, &url, mongo_db.as_deref()).await;
         emit(Message::TablesLoaded(project_id, source_id, result));
     });
 }
@@ -537,7 +578,7 @@ pub struct DataSourceDraft {
 
 /// 挂在每个 `Workspace` 上:当前项目配置的数据源列表 + 编辑态 + 每条数据源
 /// 的连接测试状态 + schema 树浏览态(阶段 2,纯内存)。
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct WorkspaceState {
     sources: Vec<DataSource>,
     editing: Option<DataSourceDraft>,
@@ -546,6 +587,22 @@ pub struct WorkspaceState {
     browsing: Option<String>,
     /// 每个数据源 id 一份 schema 树状态(阶段 2,纯内存)。
     schemas: HashMap<String, SchemaState>,
+    /// 右侧内容窗格状态(表/集合/查询 tab)。纯内存,不持久化——同
+    /// `schemas`(阶段 2),重启后 tab 全部关闭,不留痕迹。
+    content: DatabaseContentState,
+}
+
+impl std::fmt::Debug for WorkspaceState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkspaceState")
+            .field("sources", &self.sources)
+            .field("editing", &self.editing)
+            .field("test_status", &self.test_status)
+            .field("browsing", &self.browsing)
+            .field("schemas", &self.schemas)
+            .field("content_tab_count", &self.content.tabs().len())
+            .finish()
+    }
 }
 
 impl WorkspaceState {
@@ -575,6 +632,11 @@ impl WorkspaceState {
     #[cfg(test)]
     pub fn schema_state(&self, source_id: &str) -> Option<&SchemaState> {
         self.schemas.get(source_id)
+    }
+
+    /// 右侧内容窗格状态只读视图(视图层 Task 7/8 消费)。
+    pub fn content(&self) -> &DatabaseContentState {
+        &self.content
     }
 }
 
@@ -615,6 +677,15 @@ fn keyring_entry(project_id: i64, source_id: &str) -> Result<keyring::Entry, key
 pub enum DatabaseToolbarTarget {
     /// schema 树顶部 "← 返回"(回卡片列表)。
     SchemaBack,
+}
+
+/// 内容窗格 tab 栏里某个可悬停部件的身份;配合 `Message::TabHover` 由内核
+/// 转发到 `HoverId::DatabaseTabItem/DatabaseTabClose`(同 `ToolbarHover` 的
+/// 布线方式)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatabaseTabHoverTarget {
+    Title,
+    Close,
 }
 
 #[derive(Debug, Clone)]
@@ -665,6 +736,10 @@ pub enum Message {
     /// (本面板不挂 App 的 hover 动画表),`update` 吃不到这里;保 no-op
     /// 分支维持 match 穷尽。
     ToolbarHover(DatabaseToolbarTarget, bool),
+    /// 内容窗格 tab 栏某个 tab 的悬停进入/离开;纯转发动机,`update()` 里
+    /// 保 no-op 分支维持 match 穷尽,真正接线在 `app.rs` 的特化臂(同
+    /// `ToolbarHover` 的口径)。
+    TabHover(DatabaseTabHoverTarget, usize, bool),
     /// Postgres schema 节点展开/收起(纯同步,不触发加载)。
     ToggleSchema(String),
     /// 表节点展开/收起;展开时列缓存缺失或曾失败 → 置 `Loading` 并发起列加载。
@@ -684,6 +759,52 @@ pub enum Message {
         table: String,
         result: Result<Vec<ColumnInfo>, String>,
     },
+
+    // ---- 右侧内容窗格:表/集合/查询 tab 的开关 ----
+    /// schema 树点一张表/视图的行内文字 → 开(或聚焦已开的)浏览 tab。
+    OpenTableTab {
+        source_id: String,
+        schema: Option<String>,
+        table: String,
+    },
+    /// schema 树点一个 MongoDB 集合 → 开(或聚焦已开的)浏览 tab。
+    OpenCollectionTab {
+        source_id: String,
+        name: String,
+    },
+    /// schema 树头部"+ 新查询" → 永远新开一个查询 tab。
+    OpenQueryTab(String),
+    /// tab 栏点某个 tab → 切换 active(索引)。
+    SelectTab(usize),
+    /// tab 栏点 × → 关闭(索引)。
+    CloseTab(usize),
+    /// tab 栏箭头翻页(tab 溢出可视宽度时),`true`=右翻、`false`=左翻。
+    TabScroll(bool),
+
+    // ---- 浏览页(WHERE/ORDER BY/分页) ----
+    BrowseWhereChanged(usize, String),
+    BrowseOrderByChanged(usize, String),
+    BrowsePageSizeChanged(usize, u32),
+    BrowsePrev(usize),
+    BrowseNext(usize),
+    /// 显式"运行"(WHERE 框回车/翻页/改页大小/改排序 统一走这个,见 Task 7)。
+    BrowseRun(usize),
+    /// 异步结果,带 `project_id` + tab 稳定 id(路由口径同
+    /// `TablesLoaded`/`ColumnsLoaded`)。
+    /// 第三个字段是发起这轮请求时 `BrowseState::begin_run()` 返回的
+    /// `run_seq`——落地前必须核对它仍是当前值(`BrowseState::is_current_run`),
+    /// 只查 `loading` 布尔标志分辨不出"哪一轮"结果,连续两次改 WHERE 会让
+    /// 旧结果覆盖新结果(设计文档"架构与数据流 §7"的过期防线,数字比对是
+    /// 必须的,不能简化成布尔)。
+    BrowseResult(i64, usize, u64, Result<BrowsePage, String>),
+
+    // ---- SQL 查询控制台 ----
+    /// 编辑器动作(`text_editor::Action`),`update()` 只管
+    /// `content.sql.perform(action)`,同 `todo.rs::AddEdit` 的既有用法。
+    QueryTextAction(usize, iced_widget::text_editor::Action),
+    QueryRun(usize),
+    /// 第三个字段同 `BrowseResult`,是 `QueryState::begin_run()` 的 `run_seq`。
+    QueryResult(i64, usize, u64, Result<QueryOutcome, String>),
 }
 
 pub fn update(
@@ -788,6 +909,7 @@ pub fn update(
             // 编辑已有源:连接信息可能变了,旧结构快照不作数(设计文档 §2)。
             if draft.id.is_some() {
                 ws_state.schemas.remove(&id);
+                ws_state.content.close_by_source(&id);
                 if ws_state.browsing.as_deref() == Some(id.as_str()) {
                     ws_state.browsing = None;
                 }
@@ -803,6 +925,7 @@ pub fn update(
             ws_state.sources.retain(|s| s.id != id);
             ws_state.test_status.remove(&id);
             ws_state.schemas.remove(&id);
+            ws_state.content.close_by_source(&id);
             if ws_state.browsing.as_deref() == Some(id.as_str()) {
                 ws_state.browsing = None;
             }
@@ -856,12 +979,18 @@ pub fn update(
             let password = keyring_entry(project_id, &id)
                 .ok()
                 .and_then(|e| e.get_password().ok());
+            let url = if source.driver == DriverKind::MongoDB {
+                build_mongo_url(&source, password.as_deref())
+            } else {
+                build_sql_url(&source, password.as_deref())
+            };
             spawn_tables_load(
                 handle,
                 project_id,
                 id,
                 source.driver,
-                build_sql_url(&source, password.as_deref()),
+                url,
+                source.database.clone(),
                 emit,
             );
         }
@@ -882,12 +1011,18 @@ pub fn update(
             let password = keyring_entry(project_id, &source_id)
                 .ok()
                 .and_then(|e| e.get_password().ok());
+            let url = if source.driver == DriverKind::MongoDB {
+                build_mongo_url(&source, password.as_deref())
+            } else {
+                build_sql_url(&source, password.as_deref())
+            };
             spawn_tables_load(
                 handle,
                 project_id,
                 source_id,
                 source.driver,
-                build_sql_url(&source, password.as_deref()),
+                url,
+                source.database.clone(),
                 emit,
             );
         }
@@ -1032,9 +1167,241 @@ pub fn update(
                 },
             );
         }
+        Message::OpenTableTab {
+            source_id,
+            schema,
+            table,
+        } => {
+            ws_state.content.open_table(source_id, schema, table);
+        }
+        Message::OpenCollectionTab { source_id, name } => {
+            ws_state.content.open_collection(source_id, name);
+        }
+        Message::OpenQueryTab(source_id) => {
+            ws_state.content.open_query(source_id);
+        }
+        Message::SelectTab(idx) => ws_state.content.select(idx),
+        Message::CloseTab(idx) => ws_state.content.close(idx),
+        Message::TabScroll(right) => ws_state.content.scroll_tabs(right),
+        Message::BrowseWhereChanged(tab_id, v) => {
+            if let Some(TabContent::Browse(b)) = ws_state.content.content_mut(tab_id) {
+                b.where_clause = v;
+            }
+        }
+        Message::BrowseOrderByChanged(tab_id, v) => {
+            if let Some(TabContent::Browse(b)) = ws_state.content.content_mut(tab_id) {
+                b.order_by = v;
+            }
+        }
+        Message::BrowsePageSizeChanged(tab_id, size) => {
+            if let Some(TabContent::Browse(b)) = ws_state.content.content_mut(tab_id) {
+                b.page_size = size;
+                b.page = 0; // 换页大小回第一页,避免 offset 算错位置
+            }
+        }
+        Message::BrowsePrev(tab_id) => {
+            if let Some(TabContent::Browse(b)) = ws_state.content.content_mut(tab_id)
+                && b.page > 0
+            {
+                b.page -= 1;
+            }
+            dispatch_browse_run(
+                ws_state, app_state, tab_id, project_id, repo_path, handle, emit,
+            );
+        }
+        Message::BrowseNext(tab_id) => {
+            if let Some(TabContent::Browse(b)) = ws_state.content.content_mut(tab_id)
+                && b.has_more
+            {
+                b.page += 1;
+            }
+            dispatch_browse_run(
+                ws_state, app_state, tab_id, project_id, repo_path, handle, emit,
+            );
+        }
+        Message::BrowseRun(tab_id) => {
+            dispatch_browse_run(
+                ws_state, app_state, tab_id, project_id, repo_path, handle, emit,
+            );
+        }
+        Message::BrowseResult(_project_id, tab_id, seq, result) => {
+            let Some(TabContent::Browse(b)) = ws_state.content.content_mut(tab_id) else {
+                return; // tab 已关闭
+            };
+            if !b.is_current_run(seq) {
+                return; // 过期结果:tab 内又发起了更新的一轮请求,这轮作废
+            }
+            apply_browse_result(b, result);
+        }
+        Message::QueryTextAction(tab_id, action) => {
+            if let Some(TabContent::Query(q)) = ws_state.content.content_mut(tab_id) {
+                q.sql.perform(action);
+            }
+        }
+        Message::QueryRun(tab_id) => {
+            let Some(kind) = ws_state
+                .content
+                .tabs()
+                .iter()
+                .find(|t| t.id == tab_id)
+                .and_then(|t| match &t.kind {
+                    DatabaseTabKind::Query { source_id, .. } => driver_of(ws_state, source_id),
+                    _ => None,
+                })
+            else {
+                return;
+            };
+            let Some(source) = ws_state
+                .content
+                .tabs()
+                .iter()
+                .find(|t| t.id == tab_id)
+                .and_then(|t| match &t.kind {
+                    DatabaseTabKind::Query { source_id, .. } => ws_state
+                        .sources
+                        .iter()
+                        .find(|s| &s.id == source_id)
+                        .cloned(),
+                    _ => None,
+                })
+            else {
+                return;
+            };
+            let sql = match ws_state.content.content_mut(tab_id) {
+                Some(TabContent::Query(q)) => {
+                    let seq = q.begin_run();
+                    let text = q.sql.text();
+                    (seq, text)
+                }
+                _ => return,
+            };
+            let (seq, sql_text) = sql;
+            let password = keyring_entry(project_id, &source.id)
+                .ok()
+                .and_then(|e| e.get_password().ok());
+            let url = build_sql_url(&source, password.as_deref());
+            let emit = emit.clone();
+            handle.spawn(async move {
+                let result = run_query(kind, &url, &sql_text).await;
+                emit(Message::QueryResult(project_id, tab_id, seq, result));
+            });
+        }
+        Message::QueryResult(_project_id, tab_id, seq, result) => {
+            let Some(TabContent::Query(q)) = ws_state.content.content_mut(tab_id) else {
+                return;
+            };
+            if !q.is_current_run(seq) {
+                return; // 过期结果:同一 tab 内已经又执行了一次更新的查询
+            }
+            apply_query_result(q, result);
+        }
         Message::ToolbarHover(..) => {
             // 悬停进度由内核 `Message::Database` 分支转发到 `HoverId`,吃不到这里。
         }
+        Message::TabHover(..) => {
+            // 内容窗格 tab 悬停同 `ToolbarHover`:由内核 `App::update` 的特化臂
+            // 转发到 `HoverId::DatabaseTabItem/DatabaseTabClose`,吃不到这里。
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch_browse_run(
+    ws_state: &mut WorkspaceState,
+    _app_state: &AppState,
+    tab_id: usize,
+    project_id: i64,
+    repo_path: &Path,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + Clone + 'static,
+) {
+    let Some(tab) = ws_state.content.tabs().iter().find(|t| t.id == tab_id) else {
+        return;
+    };
+    let (source_id, mongo_name, table_schema, table_name) = match &tab.kind {
+        DatabaseTabKind::Table {
+            source_id,
+            schema,
+            table,
+        } => (source_id.clone(), None, schema.clone(), Some(table.clone())),
+        DatabaseTabKind::Collection { source_id, name } => {
+            (source_id.clone(), Some(name.clone()), None, None)
+        }
+        DatabaseTabKind::Query { .. } => return, // 查询 tab 不走这条路径
+    };
+    let Some(source) = ws_state.sources.iter().find(|s| s.id == source_id).cloned() else {
+        return;
+    };
+    let Some(TabContent::Browse(b)) = ws_state.content.content_mut(tab_id) else {
+        return;
+    };
+    let seq = b.begin_run();
+    b.error = None;
+    let (where_clause, order_by, page, page_size) = (
+        b.where_clause.clone(),
+        b.order_by.clone(),
+        b.page,
+        b.page_size,
+    );
+    let password = keyring_entry(project_id, &source.id)
+        .ok()
+        .and_then(|e| e.get_password().ok());
+    let _ = repo_path; // 本函数不需要仓库路径,保留参数只为和 update() 里其它 dispatch 签名一致
+    let emit2 = emit.clone();
+    if source.driver == DriverKind::MongoDB {
+        let url = build_mongo_url(&source, password.as_deref());
+        let db_name = source.database.clone().unwrap_or_default();
+        let name = mongo_name.unwrap_or_default();
+        handle.spawn(async move {
+            let result = browse_collection(&url, &db_name, &name, page, page_size).await;
+            emit2(Message::BrowseResult(project_id, tab_id, seq, result));
+        });
+    } else {
+        let url = build_sql_url(&source, password.as_deref());
+        let kind = source.driver;
+        let table = table_name.unwrap_or_default();
+        handle.spawn(async move {
+            let result = browse_table(
+                kind,
+                &url,
+                table_schema.as_deref(),
+                &table,
+                &where_clause,
+                &order_by,
+                page,
+                page_size,
+            )
+            .await;
+            emit2(Message::BrowseResult(project_id, tab_id, seq, result));
+        });
+    }
+}
+
+/// `BrowseResult` 落地:过期结果的核对(`run_seq` 对不上)在 `update()` 的
+/// `Message::BrowseResult` 分支里做完才会调到这个函数,这里只管把结果写
+/// 进状态。模块私有——`app.rs`(Task 6)不直接调它,而是把消息重新塞回
+/// `database::update()`,由 `update()` 内部调这个函数。
+fn apply_browse_result(b: &mut BrowseState, result: Result<BrowsePage, String>) {
+    b.loading = false;
+    match result {
+        Ok(page) => {
+            b.error = None;
+            b.result = Some(page.result);
+            b.has_more = page.has_more;
+        }
+        Err(e) => b.error = Some(e),
+    }
+}
+
+/// `QueryResult` 落地,同上——模块私有,理由同 `apply_browse_result`。
+fn apply_query_result(q: &mut QueryState, result: Result<QueryOutcome, String>) {
+    q.running = false;
+    match result {
+        Ok(outcome) => {
+            q.error = None;
+            q.result = Some(outcome);
+        }
+        Err(e) => q.error = Some(e),
     }
 }
 
@@ -1261,12 +1628,9 @@ fn source_card<'a>(
                     button(text("测试连接")).on_press(Message::TestConnection(source.id.clone()))
                 ]
                 .spacing(8);
-                if source.driver != DriverKind::MongoDB {
-                    // MongoDB 集合浏览是阶段 5;本阶段无入口
-                    btns = btns.push(
-                        button(text("浏览结构")).on_press(Message::BrowseSchema(source.id.clone())),
-                    );
-                }
+                btns = btns.push(
+                    button(text("浏览结构")).on_press(Message::BrowseSchema(source.id.clone())),
+                );
                 btns.push(
                     button(text("编辑")).on_press(Message::EditSourceStart(source.id.clone())),
                 )
@@ -1494,6 +1858,354 @@ pub fn view<'a>(
         .into()
 }
 
+/// 右侧内容窗格:tab 栏(表/集合/查询)+ 当前激活 tab 的内容。骨架照抄
+/// `workspace.rs::preview_pane_for`,**不**带拖拽换位/右键菜单(设计文档
+/// 非目标)。
+pub fn content_pane<'a>(
+    app: &'a crate::app::App,
+    ws_state: &'a WorkspaceState,
+    width: Length,
+    outer: Border,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let content = ws_state.content();
+    let widths: Vec<f32> = content
+        .tabs()
+        .iter()
+        .map(|t| {
+            crate::tab_widget::PANEL_TAB_MAX_W.min(tab_title_display_width(&tab_title(t, ws_state)))
+        })
+        .collect();
+    let (first, can_left, can_right) = crate::tab_widget::tab_window(
+        &widths,
+        4.0,
+        byteui::theme::geometry::tab_bar_avail_px(),
+        content.tab_scroll_first(),
+    );
+
+    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = content
+        .tabs()
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| *idx >= first)
+        .map(|(idx, tab)| {
+            let active = idx == content.active_idx();
+            let title_hover_t = app.hover_progress(crate::app::HoverId::DatabaseTabItem(idx));
+            let close_hover_t = app.hover_progress(crate::app::HoverId::DatabaseTabClose(idx));
+            crate::tab_widget::panel_tab(
+                tab_title(tab, ws_state),
+                active,
+                title_hover_t,
+                close_hover_t,
+                None,
+                None,
+                Message::SelectTab(idx),
+                Message::CloseTab(idx),
+                app.hover_tooltip_ready(crate::app::HoverId::DatabaseTabItem(idx)),
+                move |h| Message::TabHover(DatabaseTabHoverTarget::Title, idx, h),
+                move |h| Message::TabHover(DatabaseTabHoverTarget::Close, idx, h),
+            )
+        })
+        .collect();
+    let tabs_row = row(items).spacing(4);
+    let clipped = container(tabs_row).width(Length::Fill).clip(true);
+    let left_arrow = crate::tab_widget::tab_arrow_button(
+        icons::IconKind::ChevronLeft,
+        can_left,
+        Message::TabScroll(false),
+    );
+    let right_arrow = crate::tab_widget::tab_arrow_button(
+        icons::IconKind::ChevronRight,
+        can_right,
+        Message::TabScroll(true),
+    );
+    let tab_bar = row![left_arrow, right_arrow, clipped]
+        .spacing(4)
+        .align_y(iced_widget::core::Alignment::Center);
+
+    let mut col = column![tab_bar].spacing(8);
+
+    match content.active_tab() {
+        None => {
+            col = col.push(
+                container(
+                    text("在左侧 schema 树点一张表/视图/集合,或点 + 新查询")
+                        .size(byteui::theme::font::subtitle())
+                        .color(byteui::theme::color::current().dim),
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(iced_widget::core::alignment::Horizontal::Center)
+                .align_y(iced_widget::core::alignment::Vertical::Center),
+            );
+        }
+        Some(tab) => {
+            let tab_id = tab.id;
+            match content.content(tab_id) {
+                Some(TabContent::Browse(b)) => col = col.push(browse_view(tab_id, b)),
+                Some(TabContent::Query(q)) => col = col.push(query_view(tab_id, q)),
+                None => {}
+            }
+        }
+    }
+
+    container(col.padding(16))
+        .width(width)
+        .height(iced_widget::core::Length::Fill)
+        .style(
+            move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                background: Some(byteui::theme::color::current().bg.into()),
+                border: outer,
+                ..iced_widget::container::Style::default()
+            },
+        )
+        .into()
+}
+
+fn tab_title(tab: &DatabaseTab, ws_state: &WorkspaceState) -> String {
+    let source_name = |id: &str| {
+        ws_state
+            .sources()
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| id.to_string())
+    };
+    match &tab.kind {
+        DatabaseTabKind::Table {
+            source_id,
+            schema,
+            table,
+        } => match schema {
+            Some(s) => format!("{table}@{}.{s}", source_name(source_id)),
+            None => format!("{table}@{}", source_name(source_id)),
+        },
+        DatabaseTabKind::Collection { source_id, name } => {
+            format!("{name}@{}", source_name(source_id))
+        }
+        DatabaseTabKind::Query {
+            source_id,
+            console_seq,
+        } => format!("查询 {console_seq}@{}", source_name(source_id)),
+    }
+}
+
+fn tab_title_display_width(title: &str) -> f32 {
+    // 同 `workspace.rs::preview_tab_display_width` 的估算思路:字符数 *
+    // 单字宽 + tab 内边距/关闭按钮的固定开销,不做真实文本测量(tab_window
+    // 只需要一个足够准的相对宽度做窗口裁剪)。
+    title.chars().count() as f32 * 8.0 + 56.0
+}
+
+fn browse_view<'a>(
+    tab_id: usize,
+    b: &'a BrowseState,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let toolbar = row![
+        byteui::form::input_text::view(
+            "WHERE(原始 SQL 片段,例如 id > 100)",
+            &b.where_clause,
+            false,
+            None,
+            false,
+            Some(Message::BrowseRun(tab_id)),
+            false,
+            move |v| Message::BrowseWhereChanged(tab_id, v),
+        ),
+        byteui::form::input_text::view(
+            "ORDER BY(原始 SQL 片段,例如 title DESC)",
+            &b.order_by,
+            false,
+            None,
+            false,
+            Some(Message::BrowseRun(tab_id)),
+            false,
+            move |v| Message::BrowseOrderByChanged(tab_id, v),
+        ),
+        byteui::form::select::view(&PAGE_SIZES, Some(&b.page_size), move |v| {
+            Message::BrowsePageSizeChanged(tab_id, v)
+        }),
+        button(text("上一页")).on_press_maybe((b.page > 0).then_some(Message::BrowsePrev(tab_id))),
+        button(text("下一页")).on_press_maybe(b.has_more.then_some(Message::BrowseNext(tab_id))),
+    ]
+    .spacing(8)
+    .align_y(iced_widget::core::Alignment::Center);
+
+    let mut col = column![toolbar].spacing(8);
+
+    if b.loading {
+        col = col.push(
+            text("加载中…")
+                .size(byteui::theme::font::caption_sm())
+                .color(byteui::theme::color::current().dim),
+        );
+    }
+    if let Some(e) = &b.error {
+        col = col.push(
+            text(format!("✗ {e}"))
+                .size(byteui::theme::font::caption_sm())
+                .color(byteui::theme::color::current().red),
+        );
+    }
+
+    match &b.result {
+        None => {
+            if !b.loading && b.error.is_none() {
+                col = col.push(
+                    text("暂无数据")
+                        .size(byteui::theme::font::body())
+                        .color(byteui::theme::color::current().dim),
+                );
+            }
+        }
+        Some(result) if result.rows.is_empty() => {
+            col = col.push(
+                text("该表当前没有数据(或筛选条件不匹配任何行)")
+                    .size(byteui::theme::font::body())
+                    .color(byteui::theme::color::current().dim),
+            );
+        }
+        Some(result) => {
+            col = col.push(result_table(tab_id, result, true));
+        }
+    }
+
+    col.into()
+}
+
+/// 结果网格。`sortable` 为 `true` 时(浏览页)列头可点写排序;查询控制台
+/// 的结果(`sortable=false`)纯展示,不接排序点击(设计文档"架构与数据流
+/// §6":查询结果不支持再排序)。
+fn result_table<'a>(
+    tab_id: usize,
+    result: &'a QueryResult,
+    sortable: bool,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    // 点列头 = 把 `"{列名} ASC"` 写进 ORDER BY 框(设计文档"架构与数据流
+    // §5":同列再点一次不做两态切换,DESC 由用户在框里手动追加——原始片段
+    // 输入框的既定口径下,点击只是个"快速起手")。
+    let header = row(result
+        .columns
+        .iter()
+        .map(|c| {
+            let label = text(c.clone())
+                .size(byteui::theme::font::caption_sm())
+                .color(byteui::theme::color::current().cream);
+            if sortable {
+                let asc = format!("{c} ASC");
+                button(label)
+                    .on_press(Message::BrowseOrderByChanged(tab_id, asc))
+                    .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+                        background: None,
+                        ..iced_widget::button::Style::default()
+                    })
+                    .into()
+            } else {
+                container(label).into()
+            }
+        })
+        .collect::<Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>>>())
+    .spacing(12);
+
+    let rows_col = column(
+        result
+            .rows
+            .iter()
+            .map(|r| {
+                row(r
+                    .iter()
+                    .map(|cell| match cell {
+                        CellValue::Text(s) => text(s.clone())
+                            .size(byteui::theme::font::caption_sm())
+                            .color(byteui::theme::color::current().body)
+                            .into(),
+                        CellValue::Null => text("NULL")
+                            .size(byteui::theme::font::caption_sm())
+                            .color(byteui::theme::color::current().dim)
+                            .into(),
+                    })
+                    .collect::<Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>>>())
+                .spacing(12)
+                .into()
+            })
+            .collect::<Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>>>(),
+    )
+    .spacing(4);
+
+    scrollable(column![header, rows_col].spacing(6))
+        .direction(scrollable::Direction::Both {
+            vertical: byteui::interaction::scrollbar::scrollbar(),
+            horizontal: byteui::interaction::scrollbar::scrollbar(),
+        })
+        .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style())
+        .into()
+}
+
+/// SQL 查询控制台 tab。`text_editor` 多行输入 + "执行"按钮 + 结果区;
+/// `QueryOutcome` 三态(行集 / 受影响行数 / DDL)分别渲染。
+fn query_view<'a>(
+    tab_id: usize,
+    q: &'a QueryState,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let toolbar = row![
+        button(text(if q.running { "执行中…" } else { "执行" }))
+            .on_press_maybe((!q.running).then_some(Message::QueryRun(tab_id))),
+        text("Cmd+Enter 快捷执行")
+            .size(byteui::theme::font::caption_sm())
+            .color(byteui::theme::color::current().dim),
+    ]
+    .spacing(8)
+    .align_y(iced_widget::core::Alignment::Center);
+
+    let editor = byteui::form::text_area::view(
+        &q.sql,
+        "SELECT * FROM ...",
+        None,
+        false,
+        Some(160.0),
+        move |action| Message::QueryTextAction(tab_id, action),
+    );
+
+    let mut col = column![toolbar, editor].spacing(8);
+
+    if let Some(e) = &q.error {
+        col = col.push(
+            text(format!("✗ {e}"))
+                .size(byteui::theme::font::caption_sm())
+                .color(byteui::theme::color::current().red),
+        );
+    }
+
+    match &q.result {
+        None => {}
+        Some(QueryOutcome::Rows(result)) if result.rows.is_empty() => {
+            col = col.push(
+                text("查询未返回任何行")
+                    .size(byteui::theme::font::body())
+                    .color(byteui::theme::color::current().dim),
+            );
+        }
+        Some(QueryOutcome::Rows(result)) => {
+            col = col.push(result_table(tab_id, result, false));
+        }
+        Some(QueryOutcome::Affected(n)) => {
+            col = col.push(
+                text(format!("{n} 行受影响"))
+                    .size(byteui::theme::font::body())
+                    .color(byteui::theme::color::current().green),
+            );
+        }
+        Some(QueryOutcome::Ddl) => {
+            col = col.push(
+                text("执行成功")
+                    .size(byteui::theme::font::body())
+                    .color(byteui::theme::color::current().green),
+            );
+        }
+    }
+
+    col.into()
+}
+
 /// schema 树浏览视图(阶段 2)。drill-down:从卡片列表进入,`SchemaBack` 返回。
 fn schema_tree_view<'a>(
     source: &'a DataSource,
@@ -1517,7 +2229,7 @@ fn schema_tree_view<'a>(
         "返回",
     );
 
-    let header = row![
+    let mut header = row![
         back_button,
         text(source.name.clone())
             .size(byteui::theme::font::subtitle())
@@ -1526,10 +2238,14 @@ fn schema_tree_view<'a>(
             .size(byteui::theme::font::caption_sm())
             .color(byteui::theme::color::current().dim),
         iced_widget::space::horizontal(),
-        button(text("刷新")).on_press(Message::SchemaRefresh(source.id.clone())),
     ]
     .spacing(8)
     .align_y(iced_widget::core::Alignment::Center);
+    if source.driver != DriverKind::MongoDB {
+        header = header
+            .push(button(text("+ 新查询")).on_press(Message::OpenQueryTab(source.id.clone())));
+    }
+    header = header.push(button(text("刷新")).on_press(Message::SchemaRefresh(source.id.clone())));
 
     let mut col = column![header].spacing(8);
 
@@ -1577,7 +2293,7 @@ fn schema_tree_view<'a>(
     } else {
         let mut tree = column![].spacing(2);
         for r in tree_rows(st, source.driver) {
-            tree = tree.push(schema_tree_row(&source.id, r));
+            tree = tree.push(schema_tree_row(&source.id, source.driver, r));
         }
         col = col.push(
             scrollable(tree)
@@ -1601,9 +2317,11 @@ fn schema_tree_view<'a>(
         .into()
 }
 
-/// 单行渲染。source_id 用于构造 `ToggleTable`。
+/// 单行渲染。source_id 用于构造 `ToggleTable`/`OpenTableTab`/`OpenCollectionTab`,driver
+/// 决定 MongoDB 集合行(无 chevron、点文字开集合 tab)与关系型表/视图行的差异。
 fn schema_tree_row<'a>(
     source_id: &str,
+    driver: DriverKind,
     r: SchemaRow<'a>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let indent = text("  ".repeat(r.depth)).size(crate::workspace::tree_row_font_size());
@@ -1648,47 +2366,76 @@ fn schema_tree_row<'a>(
             .into()
         }
         SchemaRowKind::Table(t) => {
-            let chevron = if r.expanded {
-                icons::IconKind::ChevronDown
-            } else {
-                icons::IconKind::ChevronRight
-            };
-            let icon = if t.is_view {
+            let icon_kind = if t.is_view {
                 icons::IconKind::Eye
             } else {
-                icons::IconKind::Table
+                icons::IconKind::Table // MongoDB 集合复用这个图标,视觉上够用(设计文档)
             };
-            button(
-                row![
-                    indent,
-                    icons::view(
-                        chevron,
-                        byteui::theme::icon_size::chevron(),
-                        byteui::theme::color::current().dim
-                    ),
-                    icons::view(
-                        icon,
-                        byteui::theme::icon_size::row(),
-                        byteui::theme::color::current().dim
-                    ),
-                    text(t.name.clone())
-                        .size(crate::workspace::tree_row_font_size())
-                        .color(byteui::theme::color::current().cream),
-                ]
-                .spacing(byteui::theme::icon_size::tree_row_gap())
-                .align_y(iced_widget::core::Alignment::Center),
+            let icon = icons::view(
+                icon_kind,
+                byteui::theme::icon_size::row(),
+                byteui::theme::color::current().dim,
+            );
+            let label = text(t.name.clone())
+                .size(crate::workspace::tree_row_font_size())
+                .color(byteui::theme::color::current().cream);
+            let open_msg = if driver == DriverKind::MongoDB {
+                Message::OpenCollectionTab {
+                    source_id: source_id.to_string(),
+                    name: t.name.clone(),
+                }
+            } else {
+                Message::OpenTableTab {
+                    source_id: source_id.to_string(),
+                    schema: t.schema.clone(),
+                    table: t.name.clone(),
+                }
+            };
+            let label_btn = button(
+                row![icon, label]
+                    .spacing(byteui::theme::icon_size::tree_row_gap())
+                    .align_y(iced_widget::core::Alignment::Center),
             )
-            .on_press(Message::ToggleTable {
-                source_id: source_id.to_string(),
-                schema: t.schema.clone(),
-                table: t.name.clone(),
-            })
+            .on_press(open_msg)
             .width(Length::Fill)
             .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
                 background: None,
                 ..iced_widget::button::Style::default()
-            })
-            .into()
+            });
+
+            let mut row_el = row![indent].spacing(byteui::theme::icon_size::tree_row_gap());
+            if driver == DriverKind::MongoDB {
+                // MongoDB 集合无列层可展开,不画 chevron,留同宽空位对齐。
+                row_el = row_el.push(
+                    iced_widget::space::Space::new()
+                        .width(Length::Fixed(byteui::theme::icon_size::chevron())),
+                );
+            } else {
+                let chevron_icon = if r.expanded {
+                    icons::IconKind::ChevronDown
+                } else {
+                    icons::IconKind::ChevronRight
+                };
+                let chevron_btn = button(icons::view(
+                    chevron_icon,
+                    byteui::theme::icon_size::chevron(),
+                    byteui::theme::color::current().dim,
+                ))
+                .on_press(Message::ToggleTable {
+                    source_id: source_id.to_string(),
+                    schema: t.schema.clone(),
+                    table: t.name.clone(),
+                })
+                .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+                    background: None,
+                    ..iced_widget::button::Style::default()
+                });
+                row_el = row_el.push(chevron_btn);
+            }
+            row_el
+                .push(label_btn)
+                .align_y(iced_widget::core::Alignment::Center)
+                .into()
         }
         SchemaRowKind::Column(c) => {
             // 可空性用颜色深浅表达:非空 CREAM、可空 BODY(不加 "NOT NULL" 文本)
@@ -1755,6 +2502,762 @@ fn schema_tree_row<'a>(
         .spacing(6)
         .align_y(iced_widget::core::Alignment::Center)
         .into(),
+    }
+}
+
+/// 右侧内容窗格里的一个 tab。`id` 是跨重排/关闭都稳定的标识(消息/异步
+/// 结果按它路由,不用索引——索引会随关闭其它 tab 而漂移)。
+pub struct DatabaseTab {
+    pub id: usize,
+    pub kind: DatabaseTabKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DatabaseTabKind {
+    Table {
+        source_id: String,
+        schema: Option<String>,
+        table: String,
+    },
+    Collection {
+        source_id: String,
+        name: String,
+    },
+    /// `console_seq` 只用来生成默认标题("查询 1"/"查询 2"),不参与去重
+    /// 比较——`open_query` 永远新开,同一数据源可以有多个查询 tab。
+    Query {
+        source_id: String,
+        console_seq: u32,
+    },
+}
+
+impl DatabaseTabKind {
+    fn source_id(&self) -> &str {
+        match self {
+            DatabaseTabKind::Table { source_id, .. }
+            | DatabaseTabKind::Collection { source_id, .. }
+            | DatabaseTabKind::Query { source_id, .. } => source_id,
+        }
+    }
+}
+
+/// 表格/集合浏览页的页大小可选项。
+pub const PAGE_SIZES: [u32; 3] = [50, 100, 500];
+
+/// 表格/集合浏览 tab 的状态。`run_seq` 是过期结果防线:每次发起查询
+/// `+1` 并带进异步闭包,结果落地时核对是否仍是发出时那个值(设计文档
+/// "异步路由与过期防线"一节)。
+pub struct BrowseState {
+    pub where_clause: String,
+    pub order_by: String,
+    pub page: u32,
+    pub page_size: u32,
+    pub has_more: bool,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub result: Option<QueryResult>,
+    run_seq: u64,
+}
+
+impl Default for BrowseState {
+    fn default() -> Self {
+        Self {
+            where_clause: String::new(),
+            order_by: String::new(),
+            page: 0,
+            page_size: PAGE_SIZES[0],
+            has_more: false,
+            loading: false,
+            error: None,
+            result: None,
+            run_seq: 0,
+        }
+    }
+}
+
+impl BrowseState {
+    /// 发起一次新请求前调用:`run_seq +1` 并置 loading,返回新 seq 供
+    /// 异步闭包携带。
+    pub fn begin_run(&mut self) -> u64 {
+        self.run_seq += 1;
+        self.loading = true;
+        self.run_seq
+    }
+
+    /// 结果落地时核对:seq 不是当前这轮 → 过期,调用方应丢弃不落地。
+    pub fn is_current_run(&self, seq: u64) -> bool {
+        self.loading && self.run_seq == seq
+    }
+}
+
+/// SQL 查询控制台 tab 的状态。`sql` 用 `text_editor::Content`(同
+/// `todo.rs` 任务内容多行编辑框的既有用法),不是纯 `String`——
+/// `byteui::form::text_area::view` 要求这个类型。
+pub struct QueryState {
+    pub sql: iced_widget::text_editor::Content,
+    pub running: bool,
+    pub error: Option<String>,
+    pub result: Option<QueryOutcome>,
+    run_seq: u64,
+}
+
+impl Default for QueryState {
+    fn default() -> Self {
+        Self {
+            sql: iced_widget::text_editor::Content::new(),
+            running: false,
+            error: None,
+            result: None,
+            run_seq: 0,
+        }
+    }
+}
+
+impl QueryState {
+    pub fn begin_run(&mut self) -> u64 {
+        self.run_seq += 1;
+        self.running = true;
+        self.run_seq
+    }
+
+    pub fn is_current_run(&self, seq: u64) -> bool {
+        self.running && self.run_seq == seq
+    }
+}
+
+pub enum TabContent {
+    Browse(BrowseState),
+    Query(QueryState),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CellValue {
+    Text(String),
+    Null,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct QueryResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<CellValue>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum QueryOutcome {
+    Rows(QueryResult),
+    Affected(u64),
+    Ddl,
+}
+
+/// 右侧内容窗格:多个表/集合/查询 tab,`active` 是**索引**(同
+/// `PreviewPane::active_idx()` 的约定,tab 栏渲染/hover 状态按索引找)。
+/// `contents` 按**稳定 id**存(消息/异步结果按 id 路由,索引会随关闭
+/// 漂移)。
+#[derive(Default)]
+pub struct DatabaseContentState {
+    tabs: Vec<DatabaseTab>,
+    contents: std::collections::HashMap<usize, TabContent>,
+    active: usize,
+    next_id: usize,
+    next_console_seq: u32,
+    /// tab 栏箭头翻页的窗口起点(同 `Workspace::preview_tab_first` 的用法),
+    /// 每次渲染都交给 `tab_window` 钳到合法范围,这里存的只是"用户上次翻到
+    /// 哪"的粗略意图。
+    tab_scroll_first: usize,
+}
+
+impl DatabaseContentState {
+    pub fn tabs(&self) -> &[DatabaseTab] {
+        &self.tabs
+    }
+
+    pub fn active_idx(&self) -> usize {
+        self.active
+    }
+
+    pub fn tab_scroll_first(&self) -> usize {
+        self.tab_scroll_first
+    }
+
+    /// tab 栏箭头翻页,`right=true` 右翻、`false` 左翻。步进量(2)和越界
+    /// 钳制逻辑照抄 `app.rs::Message::PreviewTabScroll` 的既有实现——越界
+    /// 不在这里防,`tab_window` 渲染时会自动钳回合法范围。
+    pub fn scroll_tabs(&mut self, right: bool) {
+        if right {
+            self.tab_scroll_first = self.tab_scroll_first.saturating_add(2);
+        } else {
+            self.tab_scroll_first = self.tab_scroll_first.saturating_sub(2);
+        }
+    }
+
+    pub fn active_tab(&self) -> Option<&DatabaseTab> {
+        self.tabs.get(self.active)
+    }
+
+    pub fn content(&self, id: usize) -> Option<&TabContent> {
+        self.contents.get(&id)
+    }
+
+    pub fn content_mut(&mut self, id: usize) -> Option<&mut TabContent> {
+        self.contents.get_mut(&id)
+    }
+
+    fn push(&mut self, kind: DatabaseTabKind, content: TabContent) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.tabs.push(DatabaseTab { id, kind });
+        self.contents.insert(id, content);
+        self.active = self.tabs.len() - 1;
+        id
+    }
+
+    /// 已开同一张表的 tab → 聚焦(内容/游标不重置);否则新开一个空浏览态。
+    pub fn open_table(
+        &mut self,
+        source_id: String,
+        schema: Option<String>,
+        table: String,
+    ) -> usize {
+        if let Some((idx, tab)) = self.tabs.iter().enumerate().find(|(_, t)| {
+            matches!(&t.kind, DatabaseTabKind::Table { source_id: s, schema: sc, table: tb }
+                if *s == source_id && *sc == schema && *tb == table)
+        }) {
+            self.active = idx;
+            return tab.id;
+        }
+        self.push(
+            DatabaseTabKind::Table {
+                source_id,
+                schema,
+                table,
+            },
+            TabContent::Browse(BrowseState::default()),
+        )
+    }
+
+    /// 已开同一个集合的 tab → 聚焦;否则新开。
+    pub fn open_collection(&mut self, source_id: String, name: String) -> usize {
+        if let Some((idx, tab)) = self.tabs.iter().enumerate().find(|(_, t)| {
+            matches!(&t.kind, DatabaseTabKind::Collection { source_id: s, name: n }
+                if *s == source_id && *n == name)
+        }) {
+            self.active = idx;
+            return tab.id;
+        }
+        self.push(
+            DatabaseTabKind::Collection { source_id, name },
+            TabContent::Browse(BrowseState::default()),
+        )
+    }
+
+    /// 查询 tab 永不去重,`console_seq` 递增当默认标题的编号来源。
+    pub fn open_query(&mut self, source_id: String) -> usize {
+        self.next_console_seq += 1;
+        let seq = self.next_console_seq;
+        self.push(
+            DatabaseTabKind::Query {
+                source_id,
+                console_seq: seq,
+            },
+            TabContent::Query(QueryState::default()),
+        )
+    }
+
+    pub fn select(&mut self, idx: usize) {
+        if idx < self.tabs.len() {
+            self.active = idx;
+        }
+    }
+
+    /// 关闭指定索引的 tab。`active` 调整规则同浏览器标签页惯例:关掉
+    /// active 之前的 tab → active 索引减 1(仍指向原 tab);关掉 active
+    /// 自己且不是最后一个 → active 索引不变(自然落到后一个 tab 上);
+    /// 关掉最后一个 tab 且它正是 active → active 收缩到新的最后一个。
+    pub fn close(&mut self, idx: usize) {
+        if idx >= self.tabs.len() {
+            return;
+        }
+        let id = self.tabs[idx].id;
+        self.tabs.remove(idx);
+        self.contents.remove(&id);
+        if self.tabs.is_empty() {
+            self.active = 0;
+        } else if self.active >= self.tabs.len() {
+            self.active = self.tabs.len() - 1;
+        } else if idx < self.active {
+            self.active -= 1;
+        }
+    }
+
+    /// 数据源被删除/编辑保存(连接信息可能变了)时,关掉所有关联 tab。
+    pub fn close_by_source(&mut self, source_id: &str) {
+        while let Some(idx) = self
+            .tabs
+            .iter()
+            .position(|t| t.kind.source_id() == source_id)
+        {
+            self.close(idx);
+        }
+    }
+}
+
+/// 数据浏览/查询执行用的驱动原生连接池(区别于阶段 1/2 introspection
+/// 专用的 `sqlx::AnyPool`——原生池才能正确解码真实列类型,设计文档
+/// "架构与数据流 §4"一节)。
+enum NativePool {
+    Pg(sqlx::PgPool),
+    MySql(sqlx::MySqlPool),
+    Sqlite(sqlx::SqlitePool),
+}
+
+async fn connect_native(kind: DriverKind, url: &str) -> Result<NativePool, String> {
+    match kind {
+        DriverKind::Postgres => sqlx::PgPool::connect(url)
+            .await
+            .map(NativePool::Pg)
+            .map_err(|e| e.to_string()),
+        DriverKind::MySQL => sqlx::MySqlPool::connect(url)
+            .await
+            .map(NativePool::MySql)
+            .map_err(|e| e.to_string()),
+        DriverKind::Sqlite => sqlx::SqlitePool::connect(url)
+            .await
+            .map(NativePool::Sqlite)
+            .map_err(|e| e.to_string()),
+        DriverKind::MongoDB => unreachable!("connect_native 不处理 MongoDB"),
+    }
+}
+
+async fn close_native(pool: NativePool) {
+    match pool {
+        NativePool::Pg(p) => p.close().await,
+        NativePool::MySql(p) => p.close().await,
+        NativePool::Sqlite(p) => p.close().await,
+    }
+}
+
+/// 行 → 结果集:表头来自首行的列元信息(0 行结果时没有列头——已知限制,
+/// 见设计文档"错误处理"一节的补充说明,浏览页对 0 行走友好提示而不是
+/// 空表头)。三种 `Row` 类型共享这一个泛型函数。
+fn rows_to_result<R: sqlx::Row>(rows: &[R], stringify: impl Fn(&R) -> Vec<CellValue>) -> QueryResult
+where
+    <R::Database as sqlx::Database>::Column: sqlx::Column,
+{
+    use sqlx::Column;
+    let columns = rows
+        .first()
+        .map(|r| r.columns().iter().map(|c| c.name().to_string()).collect())
+        .unwrap_or_default();
+    let rows = rows.iter().map(&stringify).collect();
+    QueryResult { columns, rows }
+}
+
+/// Postgres 行转字符串。常见标量类型直接 match `TypeInfo::name()`;
+/// UUID/时间/JSON(B)/NUMERIC 走 Step 1 新加的 sqlx feature 解码;解不出的
+/// 生僻类型(数组、自定义枚举、复合类型…)显示占位,不 panic、不让整行
+/// 失败(设计文档"架构与数据流 §4")。
+fn stringify_pg_row(row: &sqlx::postgres::PgRow) -> Vec<CellValue> {
+    use sqlx::{Row, TypeInfo, ValueRef};
+    let mut out = Vec::with_capacity(row.len());
+    for i in 0..row.len() {
+        let Ok(raw) = row.try_get_raw(i) else {
+            out.push(CellValue::Null);
+            continue;
+        };
+        if raw.is_null() {
+            out.push(CellValue::Null);
+            continue;
+        }
+        let type_name = raw.type_info().name().to_ascii_uppercase();
+        let decoded: Option<String> = match type_name.as_str() {
+            "BOOL" => row.try_get::<bool, _>(i).ok().map(|v| v.to_string()),
+            "INT2" => row.try_get::<i16, _>(i).ok().map(|v| v.to_string()),
+            "INT4" => row.try_get::<i32, _>(i).ok().map(|v| v.to_string()),
+            "INT8" => row.try_get::<i64, _>(i).ok().map(|v| v.to_string()),
+            "FLOAT4" => row.try_get::<f32, _>(i).ok().map(|v| v.to_string()),
+            "FLOAT8" => row.try_get::<f64, _>(i).ok().map(|v| v.to_string()),
+            "TEXT" | "VARCHAR" | "BPCHAR" | "NAME" | "CITEXT" => row.try_get::<String, _>(i).ok(),
+            "BYTEA" => row
+                .try_get::<Vec<u8>, _>(i)
+                .ok()
+                .map(|b| format!("<{} bytes>", b.len())),
+            "UUID" => row
+                .try_get::<sqlx::types::Uuid, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            "TIMESTAMP" => row
+                .try_get::<sqlx::types::chrono::NaiveDateTime, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            "TIMESTAMPTZ" => row
+                .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            "DATE" => row
+                .try_get::<sqlx::types::chrono::NaiveDate, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            "JSON" | "JSONB" => row
+                .try_get::<serde_json::Value, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            "NUMERIC" => row
+                .try_get::<sqlx::types::Decimal, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            _ => None,
+        };
+        out.push(match decoded {
+            Some(s) => CellValue::Text(s),
+            None => CellValue::Text(format!("<不支持的类型: {type_name}>")),
+        });
+    }
+    out
+}
+
+/// MySQL 行转字符串,类型名集合参照 `information_schema.columns.data_type`
+/// 在 MySQL 里的常见取值(大写)。
+fn stringify_mysql_row(row: &sqlx::mysql::MySqlRow) -> Vec<CellValue> {
+    use sqlx::{Row, TypeInfo, ValueRef};
+    let mut out = Vec::with_capacity(row.len());
+    for i in 0..row.len() {
+        let Ok(raw) = row.try_get_raw(i) else {
+            out.push(CellValue::Null);
+            continue;
+        };
+        if raw.is_null() {
+            out.push(CellValue::Null);
+            continue;
+        }
+        let type_name = raw.type_info().name().to_ascii_uppercase();
+        let decoded: Option<String> = match type_name.as_str() {
+            "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "INTEGER" => {
+                row.try_get::<i64, _>(i).ok().map(|v| v.to_string())
+            }
+            "BIGINT" => row.try_get::<i64, _>(i).ok().map(|v| v.to_string()),
+            "FLOAT" => row.try_get::<f32, _>(i).ok().map(|v| v.to_string()),
+            "DOUBLE" => row.try_get::<f64, _>(i).ok().map(|v| v.to_string()),
+            "VARCHAR" | "CHAR" | "TEXT" | "ENUM" => row.try_get::<String, _>(i).ok(),
+            "BLOB" | "VARBINARY" | "BINARY" => row
+                .try_get::<Vec<u8>, _>(i)
+                .ok()
+                .map(|b| format!("<{} bytes>", b.len())),
+            "DATE" => row
+                .try_get::<sqlx::types::chrono::NaiveDate, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            "DATETIME" | "TIMESTAMP" => row
+                .try_get::<sqlx::types::chrono::NaiveDateTime, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            "JSON" => row
+                .try_get::<serde_json::Value, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            "DECIMAL" => row
+                .try_get::<sqlx::types::Decimal, _>(i)
+                .ok()
+                .map(|v| v.to_string()),
+            _ => None,
+        };
+        out.push(match decoded {
+            Some(s) => CellValue::Text(s),
+            None => CellValue::Text(format!("<不支持的类型: {type_name}>")),
+        });
+    }
+    out
+}
+
+/// SQLite 行转字符串。SQLite 只有 5 种存储类型(含 NULL),`Any` 驱动
+/// 原本也能应付——这里用原生池只是为了和 Postgres/MySQL 走同一套
+/// `NativePool`/`rows_to_result` 代码路径,不是因为 SQLite 真的需要。
+fn stringify_sqlite_row(row: &sqlx::sqlite::SqliteRow) -> Vec<CellValue> {
+    use sqlx::{Row, TypeInfo, ValueRef};
+    let mut out = Vec::with_capacity(row.len());
+    for i in 0..row.len() {
+        let Ok(raw) = row.try_get_raw(i) else {
+            out.push(CellValue::Null);
+            continue;
+        };
+        if raw.is_null() {
+            out.push(CellValue::Null);
+            continue;
+        }
+        let type_name = raw.type_info().name().to_ascii_uppercase();
+        let decoded: Option<String> = match type_name.as_str() {
+            "INTEGER" | "BOOLEAN" => row.try_get::<i64, _>(i).ok().map(|v| v.to_string()),
+            "REAL" => row.try_get::<f64, _>(i).ok().map(|v| v.to_string()),
+            "TEXT" => row.try_get::<String, _>(i).ok(),
+            "BLOB" => row
+                .try_get::<Vec<u8>, _>(i)
+                .ok()
+                .map(|b| format!("<{} bytes>", b.len())),
+            _ => row.try_get::<String, _>(i).ok(), // SQLite 动态类型,兜底当文本试一次
+        };
+        out.push(match decoded {
+            Some(s) => CellValue::Text(s),
+            None => CellValue::Text(format!("<不支持的类型: {type_name}>")),
+        });
+    }
+    out
+}
+
+fn quote_table(kind: DriverKind, schema: Option<&str>, table: &str) -> String {
+    match kind {
+        DriverKind::Postgres => match schema {
+            Some(s) => format!("\"{s}\".\"{table}\""),
+            None => format!("\"{table}\""),
+        },
+        DriverKind::MySQL | DriverKind::Sqlite => format!("`{table}`"),
+        DriverKind::MongoDB => unreachable!("quote_table 不处理 MongoDB"),
+    }
+}
+
+/// 浏览页 SQL 生成:`LIMIT page_size+1` 用来判断"是否有下一页"(多出的
+/// 第 page_size+1 行渲染前丢弃),不做 `COUNT(*)`(设计文档"架构与数据流
+/// §5")。`where_clause`/`order_by` 原样拼接,不转义——原始片段输入框的
+/// 既定口径,用户对拼错/注入自担。
+fn build_browse_sql(
+    kind: DriverKind,
+    schema: Option<&str>,
+    table: &str,
+    where_clause: &str,
+    order_by: &str,
+    page: u32,
+    page_size: u32,
+) -> String {
+    let mut sql = format!("SELECT * FROM {}", quote_table(kind, schema, table));
+    let w = where_clause.trim();
+    if !w.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(w);
+    }
+    let o = order_by.trim();
+    if !o.is_empty() {
+        sql.push_str(" ORDER BY ");
+        sql.push_str(o);
+    }
+    sql.push_str(&format!(
+        " LIMIT {} OFFSET {}",
+        page_size as u64 + 1,
+        page as u64 * page_size as u64
+    ));
+    sql
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StatementKind {
+    /// `fetch_all` 走结果集渲染。
+    Rows,
+    /// `execute` 走"N 行受影响"/DDL 文案。
+    Execute,
+}
+
+/// 按 SQL 文本首个关键字(大小写不敏感、忽略前导空白)分流。设计文档
+/// "架构与数据流 §6":不识别 `RETURNING` 子句,`INSERT`/`UPDATE`/`DELETE`
+/// 一律走 `Execute`。
+fn classify_statement(sql: &str) -> StatementKind {
+    let first_word: String = sql
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_alphabetic())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    match first_word.as_str() {
+        "SELECT" | "WITH" | "SHOW" | "EXPLAIN" | "PRAGMA" => StatementKind::Rows,
+        _ => StatementKind::Execute,
+    }
+}
+
+/// `Execute` 分支里进一步区分"DDL(执行成功,不显示行数)" vs "DML(显示
+/// 受影响行数)"。
+fn is_ddl_keyword(sql: &str) -> bool {
+    let first_word: String = sql
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_alphabetic())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    matches!(
+        first_word.as_str(),
+        "CREATE" | "ALTER" | "DROP" | "TRUNCATE"
+    )
+}
+
+/// 浏览页一次查询的结果:`has_more` 由"多取一行"判断(设计文档"架构与
+/// 数据流 §5"),渲染前已把多出的那行丢弃。
+#[derive(Debug, Clone)]
+pub struct BrowsePage {
+    pub result: QueryResult,
+    pub has_more: bool,
+}
+
+#[allow(clippy::too_many_arguments)] // 计划给定签名:驱动 + 连接信息 + 条件 + 分页 8 参
+async fn browse_table(
+    kind: DriverKind,
+    url: &str,
+    schema: Option<&str>,
+    table: &str,
+    where_clause: &str,
+    order_by: &str,
+    page: u32,
+    page_size: u32,
+) -> Result<BrowsePage, String> {
+    let sql = build_browse_sql(kind, schema, table, where_clause, order_by, page, page_size);
+    let work = async {
+        let pool = connect_native(kind, url).await?;
+        let mut result = match &pool {
+            NativePool::Pg(p) => {
+                let rows = sqlx::query(&sql)
+                    .fetch_all(p)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                rows_to_result(&rows, stringify_pg_row)
+            }
+            NativePool::MySql(p) => {
+                let rows = sqlx::query(&sql)
+                    .fetch_all(p)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                rows_to_result(&rows, stringify_mysql_row)
+            }
+            NativePool::Sqlite(p) => {
+                let rows = sqlx::query(&sql)
+                    .fetch_all(p)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                rows_to_result(&rows, stringify_sqlite_row)
+            }
+        };
+        close_native(pool).await;
+        let has_more = result.rows.len() > page_size as usize;
+        if has_more {
+            result.rows.truncate(page_size as usize);
+        }
+        Ok::<_, String>(BrowsePage { result, has_more })
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(15), work).await {
+        Ok(r) => r,
+        Err(_) => Err("查询超时(15秒)".to_string()),
+    }
+}
+
+/// MongoDB 集合浏览:游标式拉取,`limit(page_size+1)` 判"是否有下一页"
+/// (同浏览页其余路径,不做 `COUNT(*)`)。单列 `document`,整份 JSON 文本
+/// (设计文档"架构与数据流 §4")。
+async fn browse_collection(
+    url: &str,
+    db_name: &str,
+    name: &str,
+    page: u32,
+    page_size: u32,
+) -> Result<BrowsePage, String> {
+    use futures::stream::TryStreamExt;
+    let work = async {
+        let client = mongodb::Client::with_uri_str(url)
+            .await
+            .map_err(|e| e.to_string())?;
+        let coll: mongodb::Collection<mongodb::bson::Document> =
+            client.database(db_name).collection(name);
+        let mut cursor = coll
+            .find(mongodb::bson::doc! {})
+            .skip(page as u64 * page_size as u64)
+            .limit(page_size as i64 + 1)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut docs = Vec::new();
+        while let Some(doc) = cursor.try_next().await.map_err(|e| e.to_string())? {
+            docs.push(doc);
+        }
+        let has_more = docs.len() > page_size as usize;
+        docs.truncate(page_size as usize);
+        let rows = docs
+            .into_iter()
+            .map(|d| {
+                let json = mongodb::bson::Bson::Document(d).into_relaxed_extjson();
+                vec![CellValue::Text(
+                    serde_json::to_string_pretty(&json).unwrap_or_default(),
+                )]
+            })
+            .collect();
+        Ok::<_, String>(BrowsePage {
+            result: QueryResult {
+                columns: vec!["document".to_string()],
+                rows,
+            },
+            has_more,
+        })
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(15), work).await {
+        Ok(r) => r,
+        Err(_) => Err("查询超时(15秒)".to_string()),
+    }
+}
+
+/// 任意 SQL 执行入口。语句分流见 `classify_statement`(设计文档"架构与
+/// 数据流 §6");超时比被动加载的 5 秒更宽(30秒)——用户主动点"执行"、
+/// 愿意等,且任意 SQL 可能是有意的慢查询。
+async fn run_query(kind: DriverKind, url: &str, sql: &str) -> Result<QueryOutcome, String> {
+    let work = async {
+        let pool = connect_native(kind, url).await?;
+        let outcome = match classify_statement(sql) {
+            StatementKind::Rows => {
+                let result = match &pool {
+                    NativePool::Pg(p) => rows_to_result(
+                        &sqlx::query(sql)
+                            .fetch_all(p)
+                            .await
+                            .map_err(|e| e.to_string())?,
+                        stringify_pg_row,
+                    ),
+                    NativePool::MySql(p) => rows_to_result(
+                        &sqlx::query(sql)
+                            .fetch_all(p)
+                            .await
+                            .map_err(|e| e.to_string())?,
+                        stringify_mysql_row,
+                    ),
+                    NativePool::Sqlite(p) => rows_to_result(
+                        &sqlx::query(sql)
+                            .fetch_all(p)
+                            .await
+                            .map_err(|e| e.to_string())?,
+                        stringify_sqlite_row,
+                    ),
+                };
+                QueryOutcome::Rows(result)
+            }
+            StatementKind::Execute => {
+                let affected = match &pool {
+                    NativePool::Pg(p) => sqlx::query(sql)
+                        .execute(p)
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .rows_affected(),
+                    NativePool::MySql(p) => sqlx::query(sql)
+                        .execute(p)
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .rows_affected(),
+                    NativePool::Sqlite(p) => sqlx::query(sql)
+                        .execute(p)
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .rows_affected(),
+                };
+                if is_ddl_keyword(sql) {
+                    QueryOutcome::Ddl
+                } else {
+                    QueryOutcome::Affected(affected)
+                }
+            }
+        };
+        close_native(pool).await;
+        Ok::<_, String>(outcome)
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(30), work).await {
+        Ok(r) => r,
+        Err(_) => Err("查询超时(30秒)".to_string()),
     }
 }
 
@@ -2417,7 +3920,7 @@ mod sqlite_introspection {
     async fn load_tables_lists_tables_and_views_in_order() {
         install_drivers();
         let (_dir, url) = setup_db().await;
-        let tables = load_tables(DriverKind::Sqlite, &url).await.unwrap();
+        let tables = load_tables(DriverKind::Sqlite, &url, None).await.unwrap();
         assert_eq!(tables.len(), 2);
         // SQLite: name ORDER BY → users 在 v_users 前
         assert_eq!(tables[0].name, "users");
@@ -2455,14 +3958,528 @@ mod sqlite_introspection {
 
     #[tokio::test]
     async fn mongodb_loaders_refuse_with_friendly_error() {
-        // UI 已无入口的双保险:直接错误文案,不 panic/不尝试连接
-        let err = load_tables(DriverKind::MongoDB, "mongodb://x")
+        // 缺数据库名 → 友好文案,不 panic/不尝试连接
+        let err = load_tables(DriverKind::MongoDB, "mongodb://x", None)
             .await
             .unwrap_err();
-        assert!(err.contains("MongoDB"));
+        assert!(err.contains("数据库名"));
         let err = load_columns(DriverKind::MongoDB, "mongodb://x", None, "c")
             .await
             .unwrap_err();
         assert!(err.contains("MongoDB"));
+    }
+}
+
+#[cfg(test)]
+mod content_tests {
+    use super::*;
+
+    #[test]
+    fn open_table_dedups_and_focuses_existing() {
+        let mut st = DatabaseContentState::default();
+        let id1 = st.open_table("s1".into(), Some("public".into()), "users".into());
+        st.open_table("s1".into(), Some("public".into()), "orders".into());
+        assert_eq!(st.tabs().len(), 2);
+        let id_again = st.open_table("s1".into(), Some("public".into()), "users".into());
+        assert_eq!(id1, id_again);
+        assert_eq!(st.tabs().len(), 2); // 没有新开
+        assert_eq!(st.active_idx(), 0); // 聚焦回第一个 tab
+    }
+
+    #[test]
+    fn open_table_reopen_preserves_content() {
+        let mut st = DatabaseContentState::default();
+        let id = st.open_table("s1".into(), None, "users".into());
+        if let Some(TabContent::Browse(b)) = st.content_mut(id) {
+            b.where_clause = "id > 10".into();
+        }
+        st.open_collection("s1".into(), "other".into()); // 切走
+        st.open_table("s1".into(), None, "users".into()); // 再开同一张表
+        let TabContent::Browse(b) = st.content(id).unwrap() else {
+            panic!("应为 Browse");
+        };
+        assert_eq!(b.where_clause, "id > 10"); // 内容没被重置
+    }
+
+    #[test]
+    fn open_collection_dedups() {
+        let mut st = DatabaseContentState::default();
+        let id1 = st.open_collection("s1".into(), "logs".into());
+        let id2 = st.open_collection("s1".into(), "logs".into());
+        assert_eq!(id1, id2);
+        assert_eq!(st.tabs().len(), 1);
+    }
+
+    #[test]
+    fn open_query_never_dedups_and_increments_seq() {
+        let mut st = DatabaseContentState::default();
+        st.open_query("s1".into());
+        st.open_query("s1".into());
+        assert_eq!(st.tabs().len(), 2);
+        let seqs: Vec<u32> = st
+            .tabs()
+            .iter()
+            .map(|t| match &t.kind {
+                DatabaseTabKind::Query { console_seq, .. } => *console_seq,
+                _ => panic!("应为 Query"),
+            })
+            .collect();
+        assert_eq!(seqs, vec![1, 2]);
+    }
+
+    #[test]
+    fn close_before_active_shifts_active_index_down() {
+        let mut st = DatabaseContentState::default();
+        st.open_table("s1".into(), None, "a".into());
+        st.open_table("s1".into(), None, "b".into());
+        st.select(1); // active = b(索引1)
+        st.close(0); // 关掉 a(在 active 之前)
+        assert_eq!(st.tabs().len(), 1);
+        assert_eq!(st.active_idx(), 0); // 仍指向 b,现在挪到索引0
+        assert_eq!(
+            st.tabs()[0].kind,
+            DatabaseTabKind::Table {
+                source_id: "s1".into(),
+                schema: None,
+                table: "b".into()
+            }
+        );
+    }
+
+    #[test]
+    fn close_active_last_tab_shrinks_active() {
+        let mut st = DatabaseContentState::default();
+        st.open_table("s1".into(), None, "a".into());
+        st.open_table("s1".into(), None, "b".into());
+        // active 目前是索引1(b,刚开的)
+        st.close(1);
+        assert_eq!(st.tabs().len(), 1);
+        assert_eq!(st.active_idx(), 0);
+    }
+
+    #[test]
+    fn close_only_tab_empties_state() {
+        let mut st = DatabaseContentState::default();
+        st.open_table("s1".into(), None, "a".into());
+        st.close(0);
+        assert!(st.tabs().is_empty());
+        assert!(st.active_tab().is_none());
+    }
+
+    #[test]
+    fn close_by_source_removes_all_kinds_for_that_source() {
+        let mut st = DatabaseContentState::default();
+        st.open_table("s1".into(), None, "a".into());
+        st.open_collection("s1".into(), "c".into());
+        st.open_query("s1".into());
+        st.open_table("s2".into(), None, "keep".into());
+        st.close_by_source("s1");
+        assert_eq!(st.tabs().len(), 1);
+        assert_eq!(
+            st.tabs()[0].kind,
+            DatabaseTabKind::Table {
+                source_id: "s2".into(),
+                schema: None,
+                table: "keep".into()
+            }
+        );
+    }
+}
+
+#[cfg(test)]
+mod query_gen_tests {
+    use super::*;
+
+    #[test]
+    fn quote_table_postgres_with_schema() {
+        assert_eq!(
+            quote_table(DriverKind::Postgres, Some("public"), "users"),
+            "\"public\".\"users\""
+        );
+    }
+
+    #[test]
+    fn quote_table_mysql_and_sqlite_use_backticks() {
+        assert_eq!(quote_table(DriverKind::MySQL, None, "users"), "`users`");
+        assert_eq!(quote_table(DriverKind::Sqlite, None, "users"), "`users`");
+    }
+
+    #[test]
+    fn build_browse_sql_omits_empty_where_and_order_by() {
+        let sql = build_browse_sql(DriverKind::Sqlite, None, "users", "", "", 0, 50);
+        assert_eq!(sql, "SELECT * FROM `users` LIMIT 51 OFFSET 0");
+    }
+
+    #[test]
+    fn build_browse_sql_includes_where_and_order_by_and_pages() {
+        let sql = build_browse_sql(
+            DriverKind::Postgres,
+            Some("public"),
+            "users",
+            "id > 10",
+            "id DESC",
+            2,
+            50,
+        );
+        assert_eq!(
+            sql,
+            "SELECT * FROM \"public\".\"users\" WHERE id > 10 ORDER BY id DESC LIMIT 51 OFFSET 100"
+        );
+    }
+
+    #[test]
+    fn classify_statement_recognizes_row_producing_keywords() {
+        for sql in [
+            "select 1",
+            "  SELECT * FROM t",
+            "with x as (select 1) select * from x",
+            "SHOW TABLES",
+            "explain select 1",
+            "pragma table_info(t)",
+        ] {
+            assert_eq!(classify_statement(sql), StatementKind::Rows, "sql={sql}");
+        }
+    }
+
+    #[test]
+    fn classify_statement_treats_dml_ddl_as_execute() {
+        for sql in [
+            "insert into t values (1)",
+            "UPDATE t SET x=1",
+            "delete from t",
+            "CREATE TABLE t (id int)",
+        ] {
+            assert_eq!(classify_statement(sql), StatementKind::Execute, "sql={sql}");
+        }
+    }
+
+    #[test]
+    fn is_ddl_keyword_matches_only_ddl() {
+        assert!(is_ddl_keyword("CREATE TABLE t (id int)"));
+        assert!(is_ddl_keyword("  drop table t"));
+        assert!(!is_ddl_keyword("insert into t values (1)"));
+        assert!(!is_ddl_keyword("update t set x=1"));
+    }
+}
+
+#[cfg(test)]
+mod sqlite_browse_and_query {
+    use super::*;
+
+    async fn setup_db_with_rows() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}/browse.sqlite?mode=rwc", dir.path().display());
+        let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+        sqlx::query("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL, note TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for i in 1..=5 {
+            sqlx::query("INSERT INTO items (id, name, note) VALUES (?, ?, ?)")
+                .bind(i)
+                .bind(format!("item-{i}"))
+                .bind(if i == 3 {
+                    None::<String>
+                } else {
+                    Some(format!("note-{i}"))
+                })
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        pool.close().await;
+        (dir, url)
+    }
+
+    #[tokio::test]
+    async fn browse_table_paginates_and_reports_has_more() {
+        let (_dir, url) = setup_db_with_rows().await;
+        let page0 = browse_table(DriverKind::Sqlite, &url, None, "items", "", "id ASC", 0, 2)
+            .await
+            .unwrap();
+        assert_eq!(page0.result.columns, vec!["id", "name", "note"]);
+        assert_eq!(page0.result.rows.len(), 2);
+        assert!(page0.has_more);
+
+        let page2 = browse_table(DriverKind::Sqlite, &url, None, "items", "", "id ASC", 2, 2)
+            .await
+            .unwrap();
+        assert_eq!(page2.result.rows.len(), 1); // 第5条,最后一页
+        assert!(!page2.has_more);
+    }
+
+    #[tokio::test]
+    async fn browse_table_where_clause_filters_and_null_renders_as_null() {
+        let (_dir, url) = setup_db_with_rows().await;
+        let page = browse_table(DriverKind::Sqlite, &url, None, "items", "id = 3", "", 0, 50)
+            .await
+            .unwrap();
+        assert_eq!(page.result.rows.len(), 1);
+        let note_idx = page
+            .result
+            .columns
+            .iter()
+            .position(|c| c == "note")
+            .unwrap();
+        assert_eq!(page.result.rows[0][note_idx], CellValue::Null);
+    }
+
+    #[tokio::test]
+    async fn run_query_select_returns_rows() {
+        let (_dir, url) = setup_db_with_rows().await;
+        let outcome = run_query(
+            DriverKind::Sqlite,
+            &url,
+            "SELECT id, name FROM items WHERE id <= 2 ORDER BY id",
+        )
+        .await
+        .unwrap();
+        let QueryOutcome::Rows(result) = outcome else {
+            panic!("应为 Rows");
+        };
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.columns, vec!["id", "name"]);
+    }
+
+    #[tokio::test]
+    async fn run_query_update_returns_affected_count() {
+        let (_dir, url) = setup_db_with_rows().await;
+        let outcome = run_query(
+            DriverKind::Sqlite,
+            &url,
+            "UPDATE items SET note = 'x' WHERE id <= 2",
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, QueryOutcome::Affected(2)));
+    }
+
+    #[tokio::test]
+    async fn run_query_delete_returns_affected_count() {
+        let (_dir, url) = setup_db_with_rows().await;
+        let outcome = run_query(DriverKind::Sqlite, &url, "DELETE FROM items WHERE id >= 4")
+            .await
+            .unwrap();
+        assert!(matches!(outcome, QueryOutcome::Affected(2)));
+    }
+
+    #[tokio::test]
+    async fn browse_real_and_datetime_values_render_as_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}/types.sqlite?mode=rwc", dir.path().display());
+        let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+        sqlx::query("CREATE TABLE t (score REAL, seen DATETIME, note TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO t (score, seen, note) VALUES (3.25, '2026-01-02 03:04:05', 'x')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+
+        let page = browse_table(DriverKind::Sqlite, &url, None, "t", "", "", 0, 50)
+            .await
+            .unwrap();
+        // 真实数值/时间不是"不支持的类型":SQLite 路径统一被 stringify 成文本。
+        // 行序尽力按数值/文本值摆列,这里只校验两个非 NULL 单元格写出了
+        // 非空、非降级标记的文本(具体格式交给 sqlite 的 ToSql/stringify)。
+        for cell in &page.result.rows[0] {
+            match cell {
+                CellValue::Text(s) => assert!(!s.is_empty()),
+                CellValue::Null => panic!("行里所有列都插了值,不应有 NULL"),
+            }
+        }
+        assert_eq!(page.result.rows[0].len(), 3);
+    }
+
+    #[tokio::test]
+    async fn run_query_create_table_returns_ddl_outcome() {
+        let (_dir, url) = setup_db_with_rows().await;
+        let outcome = run_query(DriverKind::Sqlite, &url, "CREATE TABLE extra (id INTEGER)")
+            .await
+            .unwrap();
+        assert!(matches!(outcome, QueryOutcome::Ddl));
+    }
+
+    #[tokio::test]
+    async fn run_query_syntax_error_is_reported() {
+        let (_dir, url) = setup_db_with_rows().await;
+        let err = run_query(DriverKind::Sqlite, &url, "SELEKT * FROM items")
+            .await
+            .unwrap_err();
+        assert!(!err.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod mongo_collection_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn load_tables_mongo_without_db_name_gives_friendly_error() {
+        let err = load_tables(DriverKind::MongoDB, "mongodb://x", None)
+            .await
+            .unwrap_err();
+        assert!(err.contains("数据库名"));
+    }
+
+    #[tokio::test]
+    async fn load_tables_mongo_with_empty_db_name_also_errors() {
+        let err = load_tables(DriverKind::MongoDB, "mongodb://x", Some(""))
+            .await
+            .unwrap_err();
+        assert!(err.contains("数据库名"));
+    }
+}
+
+#[cfg(test)]
+mod content_message_tests {
+    use super::*;
+
+    fn sqlite_source(id: &str) -> DataSource {
+        DataSource {
+            id: id.into(),
+            name: format!("test-{id}"),
+            driver: DriverKind::Sqlite,
+            host: None,
+            port: None,
+            database: Some("/nonexistent/does-not-matter.sqlite".into()),
+            username: None,
+            uri: None,
+        }
+    }
+
+    fn update_with(ws: &mut WorkspaceState, msg: Message) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let mut app_state = AppState::default();
+        let dir = tempfile::tempdir().unwrap();
+        rt.block_on(async {
+            update(ws, &mut app_state, msg, 42, dir.path(), rt.handle(), |_| ());
+        });
+    }
+
+    #[test]
+    fn open_table_tab_message_creates_tab() {
+        let mut ws = WorkspaceState::default();
+        update_with(
+            &mut ws,
+            Message::OpenTableTab {
+                source_id: "s1".into(),
+                schema: None,
+                table: "users".into(),
+            },
+        );
+        assert_eq!(ws.content().tabs().len(), 1);
+    }
+
+    #[test]
+    fn browse_where_changed_updates_state() {
+        let mut ws = WorkspaceState::default();
+        update_with(
+            &mut ws,
+            Message::OpenTableTab {
+                source_id: "s1".into(),
+                schema: None,
+                table: "users".into(),
+            },
+        );
+        let tab_id = ws.content().tabs()[0].id;
+        update_with(
+            &mut ws,
+            Message::BrowseWhereChanged(tab_id, "id > 1".into()),
+        );
+        let TabContent::Browse(b) = ws.content().content(tab_id).unwrap() else {
+            panic!("应为 Browse");
+        };
+        assert_eq!(b.where_clause, "id > 1");
+    }
+
+    #[test]
+    fn close_tab_message_removes_it() {
+        let mut ws = WorkspaceState::default();
+        update_with(
+            &mut ws,
+            Message::OpenTableTab {
+                source_id: "s1".into(),
+                schema: None,
+                table: "users".into(),
+            },
+        );
+        update_with(&mut ws, Message::CloseTab(0));
+        assert!(ws.content().tabs().is_empty());
+    }
+
+    #[test]
+    fn delete_source_closes_its_tabs() {
+        let mut ws = WorkspaceState::default();
+        ws.sources.push(sqlite_source("s1"));
+        update_with(
+            &mut ws,
+            Message::OpenTableTab {
+                source_id: "s1".into(),
+                schema: None,
+                table: "users".into(),
+            },
+        );
+        assert_eq!(ws.content().tabs().len(), 1);
+        update_with(&mut ws, Message::DeleteSource("s1".into()));
+        assert!(ws.content().tabs().is_empty());
+    }
+
+    #[test]
+    fn apply_browse_result_ok_and_err_paths() {
+        let mut b = BrowseState::default();
+        b.begin_run();
+        apply_browse_result(
+            &mut b,
+            Ok(BrowsePage {
+                result: QueryResult {
+                    columns: vec!["id".into()],
+                    rows: vec![vec![CellValue::Text("1".into())]],
+                },
+                has_more: true,
+            }),
+        );
+        assert!(!b.loading);
+        assert!(b.has_more);
+        assert_eq!(b.result.as_ref().unwrap().rows.len(), 1);
+
+        let mut b2 = BrowseState::default();
+        b2.begin_run();
+        apply_browse_result(&mut b2, Err("boom".into()));
+        assert_eq!(b2.error.as_deref(), Some("boom"));
+    }
+
+    /// 过期的浏览结果(seq 不匹配当前轮)在 `update()` 的 `BrowseResult` 臂里
+    /// 被丢弃,不落地——对应人工验收里"连续快速改 WHERE 各回车一次,最终停
+    /// 在最后一次结果"的竞态防线(`run_seq`)。
+    #[test]
+    fn browse_result_stale_or_unloading_seq_is_dropped() {
+        let mut ws = WorkspaceState::default();
+        let tab = Message::OpenTableTab {
+            source_id: "s1".into(),
+            schema: None,
+            table: "users".into(),
+        };
+        update_with(&mut ws, tab);
+        let tab_id = ws.content().tabs()[0].id;
+        // tab 打开后还没有任何 run:`loading=false`,seq 进来对不上 → 弃。
+        let page = BrowsePage {
+            result: QueryResult {
+                columns: vec!["id".into()],
+                rows: vec![vec![CellValue::Text("1".into())]],
+            },
+            has_more: false,
+        };
+        update_with(&mut ws, Message::BrowseResult(42, tab_id, 7, Ok(page)));
+        let TabContent::Browse(b) = ws.content().content(tab_id).unwrap() else {
+            panic!("应为 Browse");
+        };
+        assert!(b.result.is_none(), "过期/未运行的结果不应落地");
+        assert!(!b.loading);
     }
 }

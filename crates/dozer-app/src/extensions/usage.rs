@@ -40,16 +40,12 @@ impl WorkspaceState {
     }
 }
 
-/// 对应现在顶层 `Message` 里的 `UsageRefresh`/`UsageLoaded` 两个变体,去
-/// 前缀原样搬来。
+/// 对应现在顶层 `Message` 里的 `UsageLoaded` 变体,去前缀原样搬来。
+/// `Refresh`/`Hover` 随手动刷新按钮一起移除——进入面板时由
+/// `Workspace::spawn_usage_refresh` 自动刷新,不再需要面板内按钮。
 #[derive(Debug, Clone)]
 pub enum Message {
-    Refresh,
     Loaded(i64, Vec<(ConversationMeta, ConversationUsage)>),
-    /// 手动刷新按钮的 hover 进入/离开,由 `App` 转发到自己的 hover 动画系统
-    /// (见 `Message::Usage` 的分支)。图标颜色在构建时定死,必须由
-    /// `App::hover_progress` 提供给本面板。
-    Hover(bool),
 }
 
 /// 单个会话（= 一份 transcript 文件）的用量统计。
@@ -111,34 +107,6 @@ pub fn aggregate(rows: &[ConversationUsage]) -> ProjectUsageTotals {
     }
     totals.files_touched = files.len() as u32;
     totals
-}
-
-/// 按 `AgentKind` 把会话分组，固定顺序 Claude → Codebuddy → Opencode →
-/// Unknown，只返回非空分组；组内保持传入顺序。返回下标而非引用，语义同
-/// `workspace.rs::group_tabs_by_agent`——渲染时既要下标回查
-/// `rows[idx]` 取展示字段，直接存下标比存 `&(ConversationMeta, ConversationUsage)`
-/// 省一次生命周期纠缠。
-pub fn group_usage_by_agent(
-    rows: &[(ConversationMeta, ConversationUsage)],
-) -> Vec<(AgentKind, Vec<usize>)> {
-    const ORDER: [AgentKind; 4] = [
-        AgentKind::Claude,
-        AgentKind::Codebuddy,
-        AgentKind::Opencode,
-        AgentKind::Unknown,
-    ];
-    ORDER
-        .into_iter()
-        .filter_map(|kind| {
-            let idxs: Vec<usize> = rows
-                .iter()
-                .enumerate()
-                .filter(|(_, (meta, _))| meta.agent == kind)
-                .map(|(i, _)| i)
-                .collect();
-            (!idxs.is_empty()).then_some((kind, idxs))
-        })
-        .collect()
 }
 
 /// `daily_totals_by_agent` 只保留最近这么多天的数据(2026-08-23 起
@@ -236,33 +204,18 @@ pub fn agent_token_share(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<
         .collect()
 }
 
-pub fn update(
-    ws_state: &mut WorkspaceState,
-    msg: Message,
-    project_id: i64,
-    project_path: PathBuf,
-    client: &dozer_client::Client,
-    handle: &tokio::runtime::Handle,
-    emit: impl Fn(Message) + Send + 'static,
-) {
+pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
     match msg {
-        Message::Refresh => {
-            ws_state.loading = true;
-            spawn_refresh(project_id, project_path, client, handle, emit);
-        }
         Message::Loaded(_, rows) => {
             ws_state.rows = rows;
             ws_state.loading = false;
         }
-        // hover 动画由 App 在转发 `usage` 消息前吃掉(`Message::Usage(msg)`),
-        // 不会进到这里;保一个 no-op 分支保持 match 穷尽。
-        Message::Hover(_) => {}
     }
 }
 
 /// 异步扫描项目全部 agent transcript 并逐个解析用量。内核在
-/// `PanelSelect(PanelKind::Usage)` 分支(切到面板首次刷新)与
-/// `update` 处理 `Refresh`(手动点刷新按钮)两处调用。现有
+/// `PanelSelect(PanelKind::Usage)` 分支(切到面板时自动刷新)调用,
+/// 经 `Workspace::spawn_usage_refresh` 转发。现有
 /// `Workspace::spawn_usage_refresh` 的搬家版本,逻辑不变(读失败的会话
 /// 整条跳过、不计入汇总)。
 pub fn spawn_refresh(
@@ -299,28 +252,13 @@ pub fn view<'a>(
     ws_state: &'a WorkspaceState,
     width: Length,
     outer: Border,
-    refresh_hover_t: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let rows = ws_state.rows();
     let loading = ws_state.loading();
     // 套用统一 panel head:Lucide `BarChart3` 图标 + 暖金 `#dcc9a3` 的 "用量"
-    // 标题 + 1px 分割线;手动刷新按钮放到 head 下方(同 数据库/SSH 面板的
-    // 操作按钮布局)。刷新按钮走统一 icon 按钮规范:DIM→GOLD hover,无选中态。
-    let refresh = icons::icon_button_entry(
-        icons::IconKind::RefreshCw,
-        byteui::theme::icon_size::row(),
-        false,
-        false,
-        refresh_hover_t,
-        false,
-        byteui::theme::geometry::rail_button_size(),
-        true,
-        Message::Refresh,
-        Message::Hover,
-        "刷新",
-    );
-
-    let mut content = column![home_panel_head(icons::IconKind::BarChart3, "用量"), refresh]
+    // 标题 + 1px 分割线。刷新不再走面板内按钮——进入面板时由
+    // `Workspace::spawn_usage_refresh` 自动触发(见 `panel_select`)。
+    let mut content = column![home_panel_head(icons::IconKind::BarChart3, "用量")]
         .spacing(12)
         .padding(14);
 
@@ -356,9 +294,6 @@ pub fn view<'a>(
             content = content.push(home_section_head("每日用量统计"));
             content = content.push(bar_chart(&days));
         }
-
-        content = content.push(home_section_head("会话明细"));
-        content = content.push(grouped_list(rows));
     }
 
     container(content)
@@ -418,8 +353,8 @@ fn stat_box(
 
 /// "项目用量统计"区块:两张并排的卡片。会话数(`conversation_count`)
 /// 原来只出现在小字说明行里,草图把它列成正式的一格统计,这里跟着改。
-/// `工具调用(改动)`原来带的改动数细分草图没画,挪到下面 `会话明细`
-/// 的单会话行里继续展示,不丢数据、只是不在这张汇总卡上重复。
+/// `工具调用(改动)`的改动数细分草图没画,不在这张汇总卡上重复(单会话
+/// 行已在「会话明细」阶段移除,改动数本身仍由 `mutating_tool_calls` 统计)。
 fn project_summary_boxes(
     totals: &ProjectUsageTotals,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -440,82 +375,6 @@ fn project_summary_boxes(
     iced_widget::row![activity_box, token_box]
         .spacing(12)
         .into()
-}
-
-fn usage_row<'a>(
-    meta: &'a ConversationMeta,
-    u: &'a ConversationUsage,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let activity = format!(
-        "{} 轮 · {} 次工具({} 改动) · {} 文件",
-        u.turns,
-        u.tool_calls,
-        u.mutating_tool_calls,
-        u.files_touched.len()
-    );
-    let tokens = format!(
-        "in {} · out {} · cache读 {} · cache写 {}",
-        u.tokens_in, u.tokens_out, u.tokens_cache_read, u.tokens_cache_write
-    );
-    container(
-        column![
-            text(meta.title.clone())
-                .size(byteui::theme::font::body())
-                .color(byteui::theme::color::current().cream),
-            text(activity)
-                .size(byteui::theme::font::caption_sm())
-                .color(byteui::theme::color::current().dim)
-                .font(iced_widget::core::Font::MONOSPACE),
-            text(tokens)
-                .size(byteui::theme::font::caption_sm())
-                .color(byteui::theme::color::current().cyan)
-                .font(iced_widget::core::Font::MONOSPACE),
-        ]
-        .spacing(4),
-    )
-    .width(Length::Fill)
-    .padding(10)
-    .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-        background: Some(byteui::theme::color::current().card.into()),
-        border: Border {
-            radius: 10.0.into(),
-            ..Border::default()
-        },
-        ..iced_widget::container::Style::default()
-    })
-    .into()
-}
-
-fn grouped_list<'a>(
-    rows: &'a [(ConversationMeta, ConversationUsage)],
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let groups = group_usage_by_agent(rows);
-    let mut col = column![].spacing(12);
-    for (agent, idxs) in groups {
-        let group_tokens: u64 = idxs
-            .iter()
-            .map(|&i| {
-                let u = &rows[i].1;
-                u.tokens_in + u.tokens_out + u.tokens_cache_read + u.tokens_cache_write
-            })
-            .sum();
-        col = col.push(
-            iced_widget::row![
-                text(agent.label())
-                    .size(byteui::theme::font::caption())
-                    .color(crate::workspace::agent_dot_color(agent)),
-                text(format!("{} 会话 · {} tokens", idxs.len(), group_tokens))
-                    .size(byteui::theme::font::caption())
-                    .color(byteui::theme::color::current().dim),
-            ]
-            .spacing(8),
-        );
-        for &i in &idxs {
-            let (meta, u) = &rows[i];
-            col = col.push(usage_row(meta, u));
-        }
-    }
-    col.into()
 }
 
 const BAR_MAX_HEIGHT: f32 = 72.0;
@@ -1010,27 +869,6 @@ mod tests {
     }
 
     #[test]
-    fn group_usage_by_agent_orders_claude_codebuddy_opencode_and_skips_empty_groups() {
-        let rows = vec![
-            (
-                meta(AgentKind::Codebuddy, "b"),
-                ConversationUsage::default(),
-            ),
-            (meta(AgentKind::Claude, "a"), ConversationUsage::default()),
-        ];
-        let groups = group_usage_by_agent(&rows);
-        assert_eq!(groups.len(), 2, "没有 OpenCode 数据,不留空分组");
-        assert_eq!(
-            groups[0].0,
-            AgentKind::Claude,
-            "固定顺序:Claude 先于 CodeBuddy"
-        );
-        assert_eq!(groups[0].1, vec![1]);
-        assert_eq!(groups[1].0, AgentKind::Codebuddy);
-        assert_eq!(groups[1].1, vec![0]);
-    }
-
-    #[test]
     fn civil_from_days_known_epoch_dates() {
         // 1970-01-01 是 epoch day 0。
         assert_eq!(civil_from_days(0), (1970, 1, 1));
@@ -1130,31 +968,12 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn refresh_sets_loading_true() {
-        let mut ws_state = WorkspaceState::default();
-        let handle = tokio::runtime::Handle::current();
-        let client = dozer_client::Client::new(std::path::PathBuf::from("/tmp/dz-usage-test.sock"));
-        update(
-            &mut ws_state,
-            Message::Refresh,
-            1,
-            std::path::PathBuf::from("/tmp/does-not-matter"),
-            &client,
-            &handle,
-            |_| {},
-        );
-        assert!(ws_state.loading());
-    }
-
-    #[tokio::test]
-    async fn loaded_clears_loading_and_stores_rows() {
+    #[test]
+    fn loaded_clears_loading_and_stores_rows() {
         let mut ws_state = WorkspaceState {
             loading: true,
             ..WorkspaceState::default()
         };
-        let handle = tokio::runtime::Handle::current();
-        let client = dozer_client::Client::new(std::path::PathBuf::from("/tmp/dz-usage-test.sock"));
         let rows = vec![(
             meta(AgentKind::Claude, "a"),
             ConversationUsage {
@@ -1162,15 +981,7 @@ mod tests {
                 ..Default::default()
             },
         )];
-        update(
-            &mut ws_state,
-            Message::Loaded(1, rows.clone()),
-            1,
-            std::path::PathBuf::from("/tmp/does-not-matter"),
-            &client,
-            &handle,
-            |_| {},
-        );
+        update(&mut ws_state, Message::Loaded(1, rows.clone()));
         assert!(!ws_state.loading());
         assert_eq!(ws_state.rows(), rows.as_slice());
     }

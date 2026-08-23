@@ -175,9 +175,6 @@ pub enum HoverId {
     /// Agent 面板头部"＋"按钮:无背景的 `SquarePlus` 图标,未选中态静止 DIM,
     /// hover 平滑过渡到 GOLD(见 `agent_picker_toggle_button`)。
     AgentPickerToggle,
-    /// Usage 用量面板"手动刷新"按钮(`RefreshCw`):静止 DIM,hover 平滑过渡
-    /// 到 GOLD(见 `extensions/usage.rs`)。
-    UsageRefresh,
     /// 文件树搜索提交按钮(`FolderSearch`):静止 DIM,hover 过渡到 GOLD
     /// (见 `extensions/files.rs` 的搜索按钮)。
     FilesSearchSubmit,
@@ -190,6 +187,11 @@ pub enum HoverId {
     /// 数据库面板 schema 树"返回"按钮(`ChevronLeft`):静止 DIM,hover 过渡
     /// 到 GOLD(见 `extensions/database.rs`)。
     DatabaseSchemaBack,
+    /// 数据库内容窗格 tab 栏:某个 tab 本体的悬停(按索引区分,同
+    /// `PreviewTabItem`)。
+    DatabaseTabItem(usize),
+    /// 数据库内容窗格 tab 栏:某个 tab 关闭按钮 `×` 的悬停。
+    DatabaseTabClose(usize),
     /// Todo 面板单个任务卡(按下标区分):hover 时填充 `CARD` 背景 + 金色描边
     /// (见 `extensions::todo::todo_card`,统一卡片样式)。
     TodoCard(usize),
@@ -395,6 +397,9 @@ pub struct PanelDims {
     /// "内容在左、收藏夹侧栏在右"的唯一左面板区配对,详见 spec 第 1 节命名
     /// 理由。
     pub browser_bookmarks_split: f32,
+    /// 数据库面板配对:schema 树占左面板区宽度的比例,右侧内容窗格(表/
+    /// 集合/查询 tab)拿剩下的。
+    pub database_split: f32,
 }
 
 /// 每项目尺寸的默认值(数值来源统一从这取,迁走的 `ShellLayout::default()`
@@ -413,6 +418,7 @@ fn default_panel_dims() -> PanelDims {
         agent_split: byteui::theme::geometry::default_split_ratio(),
         conversations_split: byteui::theme::geometry::default_split_ratio(),
         browser_bookmarks_split: byteui::theme::geometry::default_split_ratio(),
+        database_split: byteui::theme::geometry::default_split_ratio(),
     }
 }
 
@@ -509,6 +515,7 @@ pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
         agent_split: clamp_split(d.agent_split),
         conversations_split: clamp_split(d.conversations_split),
         browser_bookmarks_split: clamp_split(d.browser_bookmarks_split),
+        database_split: clamp_split(d.database_split),
     }
 }
 
@@ -531,6 +538,8 @@ pub enum Divider {
     /// `apply_column_drag` 这条分支直接写 `ratio`(拖拽点左侧占比 = 内容占
     /// 比),不需要像 `RightPairSplit` 那样取反。
     BrowserBookmarksSplit,
+    /// 数据库面板内部的分隔线:左边 schema 树,右边表/集合/查询内容窗格。
+    DatabaseSplit,
     RightPairSplit,
 }
 
@@ -861,6 +870,27 @@ pub(crate) fn apply_column_drag(
             };
             PanelDims {
                 ssh_split: ratio,
+                ..state.dims
+            }
+        }
+        Divider::DatabaseSplit => {
+            let side = state.layout.rail_layout.side_of(PanelKind::Database);
+            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
+            if pair_w <= 0.0 {
+                return state.dims;
+            }
+            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
+                byteui::theme::geometry::min_split_ratio(),
+                byteui::theme::geometry::max_split_ratio(),
+            );
+            let mirrored = side != PanelKind::Database.default_side();
+            let ratio = if list_rendered_first(true, mirrored) {
+                raw_ratio
+            } else {
+                1.0 - raw_ratio
+            };
+            PanelDims {
+                database_split: ratio,
                 ..state.dims
             }
         }
@@ -3857,50 +3887,8 @@ impl App {
                 }
             }
             Message::Usage(msg @ usage::Message::Loaded(project_id, ..)) => {
-                self.with_project(project_id, move |ws, io| {
-                    let Some(project) = &ws.project else { return };
-                    let project_path = PathBuf::from(&project.path);
-                    let handle = io.handle.clone();
-                    let proxy = io.proxy.clone();
-                    let emit = move |m| {
-                        let _ = proxy.send_event(Message::Usage(m));
-                    };
-                    usage::update(
-                        &mut ws.usage,
-                        msg,
-                        project_id,
-                        project_path,
-                        &io.client,
-                        &handle,
-                        emit,
-                    );
-                });
-            }
-            Message::Usage(msg @ usage::Message::Hover(_)) => {
-                let usage::Message::Hover(h) = msg else {
-                    unreachable!()
-                };
-                self.set_hover(HoverId::UsageRefresh, h);
-            }
-            Message::Usage(msg) => {
-                self.with_focused_project(|ws, io| {
-                    let Some(project) = &ws.project else { return };
-                    let project_id = project.id;
-                    let project_path = PathBuf::from(&project.path);
-                    let handle = io.handle.clone();
-                    let proxy = io.proxy.clone();
-                    let emit = move |m| {
-                        let _ = proxy.send_event(Message::Usage(m));
-                    };
-                    usage::update(
-                        &mut ws.usage,
-                        msg,
-                        project_id,
-                        project_path,
-                        &io.client,
-                        &handle,
-                        emit,
-                    );
+                self.with_project(project_id, move |ws, _io| {
+                    usage::update(&mut ws.usage, msg);
                 });
             }
             Message::ConversationTurnGroupOpen(path, agent, start, end) => {
@@ -4001,11 +3989,32 @@ impl App {
                 table,
                 result,
             }) => self.database_columns_loaded(project_id, source_id, schema, table, result),
+            Message::Database(database::Message::BrowseResult(
+                project_id,
+                tab_id,
+                run_seq,
+                result,
+            )) => self.database_browse_result(project_id, tab_id, run_seq, result),
+            Message::Database(database::Message::QueryResult(
+                project_id,
+                tab_id,
+                run_seq,
+                result,
+            )) => self.database_query_result(project_id, tab_id, run_seq, result),
             Message::Database(database::Message::ToolbarHover(target, hovered)) => {
                 // 数据库面板 schema 树头部 icon 按钮的悬停:本面板不挂 App 的
                 // hover 动画表,把进入/离开转发成 `HoverId` 由内核统一驱动动画。
                 let id = match target {
                     database::DatabaseToolbarTarget::SchemaBack => HoverId::DatabaseSchemaBack,
+                };
+                self.set_hover(id, hovered);
+            }
+            Message::Database(database::Message::TabHover(target, idx, hovered)) => {
+                // 内容窗格 tab 本体/关闭按钮的悬停,转发成 `HoverId`(同
+                // `ToolbarHover` 的口径)。
+                let id = match target {
+                    database::DatabaseTabHoverTarget::Title => HoverId::DatabaseTabItem(idx),
+                    database::DatabaseTabHoverTarget::Close => HoverId::DatabaseTabClose(idx),
                 };
                 self.set_hover(id, hovered);
             }
@@ -5110,6 +5119,68 @@ impl App {
             &mut ws.database,
             app_db,
             database::Message::TestConnectionResult(project_id, source_id, result),
+            project_id,
+            &repo_path,
+            &handle,
+            emit,
+        );
+    }
+
+    fn database_browse_result(
+        &mut self,
+        project_id: i64,
+        tab_id: usize,
+        run_seq: u64,
+        result: Result<database::BrowsePage, String>,
+    ) {
+        let app_db = &mut self.database;
+        let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+            return;
+        };
+        let Some(project) = ws.project.as_ref() else {
+            return;
+        };
+        let repo_path = std::path::PathBuf::from(&project.path);
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        let emit = move |m| {
+            let _ = proxy.send_event(Message::Database(m));
+        };
+        database::update(
+            &mut ws.database,
+            app_db,
+            database::Message::BrowseResult(project_id, tab_id, run_seq, result),
+            project_id,
+            &repo_path,
+            &handle,
+            emit,
+        );
+    }
+
+    fn database_query_result(
+        &mut self,
+        project_id: i64,
+        tab_id: usize,
+        run_seq: u64,
+        result: Result<database::QueryOutcome, String>,
+    ) {
+        let app_db = &mut self.database;
+        let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+            return;
+        };
+        let Some(project) = ws.project.as_ref() else {
+            return;
+        };
+        let repo_path = std::path::PathBuf::from(&project.path);
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        let emit = move |m| {
+            let _ = proxy.send_event(Message::Database(m));
+        };
+        database::update(
+            &mut ws.database,
+            app_db,
+            database::Message::QueryResult(project_id, tab_id, run_seq, result),
             project_id,
             &repo_path,
             &handle,
@@ -6911,14 +6982,55 @@ fn panel_body<'a>(
             if ws.project.is_none() {
                 return column![].into();
             }
-            database::view(
+            let (list_portion, content_portion) = split_portions(app.dims.database_split);
+            let list_pane = database::view(
                 &app.database,
                 &ws.database,
-                Length::Fill,
-                zone_pane_border(zone, ac),
+                Length::FillPortion(list_portion),
+                zone_pane_border(zone, lc),
                 app.hover_progress(HoverId::DatabaseSchemaBack),
             )
-            .map(Message::Database)
+            .map(Message::Database);
+            let content_pane = database::content_pane(
+                app,
+                &ws.database,
+                Length::FillPortion(content_portion),
+                zone_pane_border(zone, rc),
+            )
+            .map(Message::Database);
+            let list_bg = theme::region::project_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            let content_bg = theme::region::preview_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            if app.panel_mirrored(PanelKind::Database) {
+                row![
+                    content_pane,
+                    divider_bar(
+                        Divider::DatabaseSplit,
+                        content_bg,
+                        list_bg,
+                        Message::ColumnDragStart(Divider::DatabaseSplit),
+                    ),
+                    list_pane,
+                ]
+                .width(Length::Fill)
+                .into()
+            } else {
+                row![
+                    list_pane,
+                    divider_bar(
+                        Divider::DatabaseSplit,
+                        list_bg,
+                        content_bg,
+                        Message::ColumnDragStart(Divider::DatabaseSplit),
+                    ),
+                    content_pane,
+                ]
+                .width(Length::Fill)
+                .into()
+            }
         }
         PanelKind::Ssh => {
             // 同 Files/Database 面板:`ws.project.is_none()` 是 Stub→Loaded
@@ -7078,13 +7190,9 @@ fn panel_body<'a>(
                 .into()
             }
         }
-        PanelKind::Usage => usage::view(
-            &ws.usage,
-            Length::Fill,
-            zone_pane_border(zone, ac),
-            app.hover_progress(HoverId::UsageRefresh),
-        )
-        .map(Message::Usage),
+        PanelKind::Usage => {
+            usage::view(&ws.usage, Length::Fill, zone_pane_border(zone, ac)).map(Message::Usage)
+        }
         PanelKind::Acceptance => {
             acceptance::view(&ws.acceptance, Length::Fill, zone_pane_border(zone, ac))
                 .map(Message::Acceptance)
