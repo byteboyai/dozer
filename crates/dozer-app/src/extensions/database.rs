@@ -1916,6 +1916,7 @@ pub struct QueryResult {
     pub rows: Vec<Vec<CellValue>>,
 }
 
+#[derive(Debug)]
 pub enum QueryOutcome {
     Rows(QueryResult),
     Affected(u64),
@@ -2355,6 +2356,129 @@ fn is_ddl_keyword(sql: &str) -> bool {
         first_word.as_str(),
         "CREATE" | "ALTER" | "DROP" | "TRUNCATE"
     )
+}
+
+/// 浏览页一次查询的结果:`has_more` 由"多取一行"判断(设计文档"架构与
+/// 数据流 §5"),渲染前已把多出的那行丢弃。
+pub struct BrowsePage {
+    pub result: QueryResult,
+    pub has_more: bool,
+}
+
+async fn browse_table(
+    kind: DriverKind,
+    url: &str,
+    schema: Option<&str>,
+    table: &str,
+    where_clause: &str,
+    order_by: &str,
+    page: u32,
+    page_size: u32,
+) -> Result<BrowsePage, String> {
+    let sql = build_browse_sql(kind, schema, table, where_clause, order_by, page, page_size);
+    let work = async {
+        let pool = connect_native(kind, url).await?;
+        let mut result = match &pool {
+            NativePool::Pg(p) => {
+                let rows = sqlx::query(&sql)
+                    .fetch_all(p)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                rows_to_result(&rows, stringify_pg_row)
+            }
+            NativePool::MySql(p) => {
+                let rows = sqlx::query(&sql)
+                    .fetch_all(p)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                rows_to_result(&rows, stringify_mysql_row)
+            }
+            NativePool::Sqlite(p) => {
+                let rows = sqlx::query(&sql)
+                    .fetch_all(p)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                rows_to_result(&rows, stringify_sqlite_row)
+            }
+        };
+        close_native(pool).await;
+        let has_more = result.rows.len() > page_size as usize;
+        if has_more {
+            result.rows.truncate(page_size as usize);
+        }
+        Ok::<_, String>(BrowsePage { result, has_more })
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(15), work).await {
+        Ok(r) => r,
+        Err(_) => Err("查询超时(15秒)".to_string()),
+    }
+}
+
+/// 任意 SQL 执行入口。语句分流见 `classify_statement`(设计文档"架构与
+/// 数据流 §6");超时比被动加载的 5 秒更宽(30秒)——用户主动点"执行"、
+/// 愿意等,且任意 SQL 可能是有意的慢查询。
+async fn run_query(kind: DriverKind, url: &str, sql: &str) -> Result<QueryOutcome, String> {
+    let work = async {
+        let pool = connect_native(kind, url).await?;
+        let outcome = match classify_statement(sql) {
+            StatementKind::Rows => {
+                let result = match &pool {
+                    NativePool::Pg(p) => rows_to_result(
+                        &sqlx::query(sql)
+                            .fetch_all(p)
+                            .await
+                            .map_err(|e| e.to_string())?,
+                        stringify_pg_row,
+                    ),
+                    NativePool::MySql(p) => rows_to_result(
+                        &sqlx::query(sql)
+                            .fetch_all(p)
+                            .await
+                            .map_err(|e| e.to_string())?,
+                        stringify_mysql_row,
+                    ),
+                    NativePool::Sqlite(p) => rows_to_result(
+                        &sqlx::query(sql)
+                            .fetch_all(p)
+                            .await
+                            .map_err(|e| e.to_string())?,
+                        stringify_sqlite_row,
+                    ),
+                };
+                QueryOutcome::Rows(result)
+            }
+            StatementKind::Execute => {
+                let affected = match &pool {
+                    NativePool::Pg(p) => sqlx::query(sql)
+                        .execute(p)
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .rows_affected(),
+                    NativePool::MySql(p) => sqlx::query(sql)
+                        .execute(p)
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .rows_affected(),
+                    NativePool::Sqlite(p) => sqlx::query(sql)
+                        .execute(p)
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .rows_affected(),
+                };
+                if is_ddl_keyword(sql) {
+                    QueryOutcome::Ddl
+                } else {
+                    QueryOutcome::Affected(affected)
+                }
+            }
+        };
+        close_native(pool).await;
+        Ok::<_, String>(outcome)
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(30), work).await {
+        Ok(r) => r,
+        Err(_) => Err("查询超时(30秒)".to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -3255,5 +3379,116 @@ mod query_gen_tests {
         assert!(is_ddl_keyword("  drop table t"));
         assert!(!is_ddl_keyword("insert into t values (1)"));
         assert!(!is_ddl_keyword("update t set x=1"));
+    }
+}
+
+#[cfg(test)]
+mod sqlite_browse_and_query {
+    use super::*;
+
+    async fn setup_db_with_rows() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}/browse.sqlite?mode=rwc", dir.path().display());
+        let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+        sqlx::query("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL, note TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for i in 1..=5 {
+            sqlx::query("INSERT INTO items (id, name, note) VALUES (?, ?, ?)")
+                .bind(i)
+                .bind(format!("item-{i}"))
+                .bind(if i == 3 {
+                    None::<String>
+                } else {
+                    Some(format!("note-{i}"))
+                })
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        pool.close().await;
+        (dir, url)
+    }
+
+    #[tokio::test]
+    async fn browse_table_paginates_and_reports_has_more() {
+        let (_dir, url) = setup_db_with_rows().await;
+        let page0 = browse_table(DriverKind::Sqlite, &url, None, "items", "", "id ASC", 0, 2)
+            .await
+            .unwrap();
+        assert_eq!(page0.result.columns, vec!["id", "name", "note"]);
+        assert_eq!(page0.result.rows.len(), 2);
+        assert!(page0.has_more);
+
+        let page2 = browse_table(DriverKind::Sqlite, &url, None, "items", "", "id ASC", 2, 2)
+            .await
+            .unwrap();
+        assert_eq!(page2.result.rows.len(), 1); // 第5条,最后一页
+        assert!(!page2.has_more);
+    }
+
+    #[tokio::test]
+    async fn browse_table_where_clause_filters_and_null_renders_as_null() {
+        let (_dir, url) = setup_db_with_rows().await;
+        let page = browse_table(DriverKind::Sqlite, &url, None, "items", "id = 3", "", 0, 50)
+            .await
+            .unwrap();
+        assert_eq!(page.result.rows.len(), 1);
+        let note_idx = page
+            .result
+            .columns
+            .iter()
+            .position(|c| c == "note")
+            .unwrap();
+        assert_eq!(page.result.rows[0][note_idx], CellValue::Null);
+    }
+
+    #[tokio::test]
+    async fn run_query_select_returns_rows() {
+        let (_dir, url) = setup_db_with_rows().await;
+        let outcome = run_query(
+            DriverKind::Sqlite,
+            &url,
+            "SELECT id, name FROM items WHERE id <= 2 ORDER BY id",
+        )
+        .await
+        .unwrap();
+        let QueryOutcome::Rows(result) = outcome else {
+            panic!("应为 Rows");
+        };
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.columns, vec!["id", "name"]);
+    }
+
+    #[tokio::test]
+    async fn run_query_update_returns_affected_count() {
+        let (_dir, url) = setup_db_with_rows().await;
+        let outcome = run_query(
+            DriverKind::Sqlite,
+            &url,
+            "UPDATE items SET note = 'x' WHERE id <= 2",
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, QueryOutcome::Affected(2)));
+    }
+
+    #[tokio::test]
+    async fn run_query_create_table_returns_ddl_outcome() {
+        let (_dir, url) = setup_db_with_rows().await;
+        let outcome = run_query(DriverKind::Sqlite, &url, "CREATE TABLE extra (id INTEGER)")
+            .await
+            .unwrap();
+        assert!(matches!(outcome, QueryOutcome::Ddl));
+    }
+
+    #[tokio::test]
+    async fn run_query_syntax_error_is_reported() {
+        let (_dir, url) = setup_db_with_rows().await;
+        let err = run_query(DriverKind::Sqlite, &url, "SELEKT * FROM items")
+            .await
+            .unwrap_err();
+        assert!(!err.is_empty());
     }
 }
