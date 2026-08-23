@@ -104,7 +104,7 @@ pub struct ToolCallInfo {
     pub input_json: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TurnRecord {
     pub turn_index: i64,
     pub role: String,
@@ -122,6 +122,17 @@ pub struct TurnRecord {
     pub ts: Option<u64>,
     #[serde(default)]
     pub is_error: bool,
+    /// 本行(单次 API 调用)的 token 用量,跟 `UsagePayload` 同款四个字段
+    /// 同名(2026-08-23 起补上,供审阅面板"轨迹"展示统计用)。`ai` 角色外
+    /// 恒为 0。老协议帧缺该字段时回落 0,不是"确实为 0"。
+    #[serde(default)]
+    pub tokens_in: u64,
+    #[serde(default)]
+    pub tokens_out: u64,
+    #[serde(default)]
+    pub tokens_cache_read: u64,
+    #[serde(default)]
+    pub tokens_cache_write: u64,
 }
 
 /// 单个会话的用量统计(token/工具调用/改动文件),已按 `message_key` 做过
@@ -522,6 +533,7 @@ mod tests {
             thinking_text: Some("先看看现有实现".into()),
             ts: Some(42),
             is_error: false,
+            ..Default::default()
         };
         let usage = UsagePayload {
             turns: 2,
@@ -567,6 +579,7 @@ mod tests {
             thinking_text: None,
             ts: Some(1),
             is_error: true,
+            ..Default::default()
         };
         let json = serde_json::to_string(&turn).unwrap();
         let back: TurnRecord = serde_json::from_str(&json).unwrap();
@@ -684,6 +697,7 @@ mod tests {
             thinking_text: Some("先想想".into()),
             ts: Some(42),
             is_error: false,
+            ..Default::default()
         };
         let line = encode_line(&old_frame);
         // 去掉 `tool_calls` 字段,模拟老 daemon 发来的帧。

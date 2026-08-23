@@ -398,8 +398,10 @@ pub struct WorkspaceState {
     /// overlay 靠它定位到按钮旁边;关闭时清空。
     calendar_anchor: Option<(f32, f32)>,
     /// 任务内容行内编辑态(卡片下标, 草稿)。点卡片任务文字进入,失焦或
-    /// 回车落盘改写任务文字(`commit_content_edit`)。
-    editing_content: Option<(usize, String)>,
+    /// 回车落盘改写任务文字(`commit_content_edit`)。草稿用
+    /// `iced_widget::text_editor::Content`(多行,随内容自然撑高),不再用
+    /// 单行 `String`——编辑态的输入框改走 `byteui::form::text_area`。
+    editing_content: Option<(usize, iced_widget::text_editor::Content)>,
     /// 任务内容编辑框是否持有 iced 内部真实焦点,每帧由
     /// `CaptureContentEditFocus` 写入。
     content_edit_focused: bool,
@@ -799,8 +801,10 @@ pub enum Message {
     /// 点卡片任务文字 → 进入内容行内编辑态(`editing_content` 置位 +
     /// `content_edit_focus_pending` 置位,main.rs 据此程序化聚焦)。
     ContentEditStart(usize),
-    /// 内容编辑框草稿变化(iced `text_input::on_input`)。
-    ContentInput(String),
+    /// 内容编辑框草稿变化(iced `text_editor::on_action`,真正的 `Action`
+    /// 由组件自己产生,应用层只负责 `content.perform(action)` 落地——光标/
+    /// 选区/IME 全部交给 iced,与 `AddEdit` 同构)。
+    ContentEdit(iced_widget::text_editor::Action),
     /// 回车提交:落盘改写任务文字(与失焦落盘共用 `commit_content_edit`
     /// 一条路径)。
     ContentSubmit,
@@ -977,7 +981,7 @@ fn commit_content_edit(ws_state: &mut WorkspaceState, project_path: &std::path::
     let Some((idx, draft)) = ws_state.editing_content.clone() else {
         return;
     };
-    let new_text = draft.trim().to_string();
+    let new_text = draft.text().trim().to_string();
     if new_text.is_empty() {
         ws_state.editing_content = None;
         return;
@@ -1243,15 +1247,18 @@ pub fn update(
                 return;
             }
             if let Some(item) = ws_state.items.get(idx) {
-                ws_state.editing_content = Some((idx, item.text.clone()));
+                ws_state.editing_content = Some((
+                    idx,
+                    iced_widget::text_editor::Content::with_text(&item.text),
+                ));
             }
-            // 点卡片文字这个点击落在旧的文字 `MouseArea` 上,真 `text_input`
+            // 点卡片文字这个点击落在旧的文字 `MouseArea` 上,真 `text_editor`
             // 下一帧才出现、不会自己拿聚焦,置位一次性聚焦标记。
             ws_state.content_edit_focus_pending = true;
         }
-        Message::ContentInput(s) => {
-            if let Some((_, draft)) = ws_state.editing_content.as_mut() {
-                *draft = s;
+        Message::ContentEdit(action) => {
+            if let Some((_, content)) = ws_state.editing_content.as_mut() {
+                content.perform(action);
             }
         }
         Message::ContentSubmit => commit_content_edit(ws_state, project_path),
@@ -1813,7 +1820,7 @@ fn todo_list_row<'a>(
     let editing_draft = if let Some((editing_idx, draft)) = &ws_state.editing_content
         && *editing_idx == idx
     {
-        Some(draft.as_str())
+        Some(draft)
     } else {
         None
     };
@@ -1869,7 +1876,7 @@ fn todo_card<'a>(
     grabbing: bool,
     is_drag_source: bool,
     hovered: bool,
-    editing_draft: Option<&'a str>,
+    editing_draft: Option<&'a iced_widget::text_editor::Content>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let done = item.done;
 
@@ -2002,19 +2009,20 @@ fn todo_card<'a>(
     // (透出卡片底),避免整卡被替换成另一个带金边的大框。
     let label_area: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         if let Some(draft) = editing_draft {
-            // 真正的 iced `text_input`(`bare: true` 不画自身背景/描边,把外框
-            // 交回下面这个外层 `container` 复刻旧版"只有描边、不透底"的观感)。
-            // `content_field_id` 从旧版 `container` 挪到真 `text_input` 上,
-            // `CaptureContentEditFocus` 的 `focusable` 钩子才能认出它。
-            container(byteui::form::input_text::view(
-                "任务内容…",
+            // 真正的 iced `text_editor`(`byteui::form::text_area`,`bare: true`
+            // 不画自身背景/描边,把外框交回下面这个外层 `container` 复刻旧版
+            // "只有描边、不透底"的观感)。`height: None` 走 iced 的
+            // `Length::Shrink`,随内容自然撑高——多行任务文字编辑时不再被
+            // 压成单行(见 `byteui::form::text_area` 头部注释)。`content_field_id`
+            // 从旧版 `container` 挪到真 `text_editor` 上,`CaptureContentEditFocus`
+            // 的 `focusable` 钩子才能认出它。
+            container(byteui::form::text_area::view(
                 draft,
-                false,
+                "任务内容…",
                 Some(content_field_id()),
-                false,
-                Some(Message::ContentSubmit),
                 true,
-                Message::ContentInput,
+                None,
+                Message::ContentEdit,
             ))
             .width(Length::Fill)
             .padding([10, 12])
@@ -3419,12 +3427,21 @@ mod tests {
             &root,
         );
         assert!(ws_state.editing_content.is_some());
-        // `ContentInput` 直接替换整个缓冲(原生 `text_input` 语义),不再有
-        // `ContentEvent(Text)` 的"在光标处插入"。
+        // 原生 `text_editor` 语义:先 `SelectAll` 选中整段,再 `Edit::Paste`
+        // 整体改写为新文字(不再是单行 `text_input` 的"整缓冲替换")。
         update(
             &mut ws_state,
             &mut app_state,
-            Message::ContentInput("新".to_string()),
+            Message::ContentEdit(iced_widget::text_editor::Action::SelectAll),
+            1,
+            &root,
+        );
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::ContentEdit(iced_widget::text_editor::Action::Edit(
+                iced_widget::text_editor::Edit::Paste("新".to_string().into()),
+            )),
             1,
             &root,
         );
@@ -3456,11 +3473,13 @@ mod tests {
         update(
             &mut ws_state,
             &mut app_state,
-            Message::ContentInput("x".to_string()),
+            Message::ContentEdit(iced_widget::text_editor::Action::Edit(
+                iced_widget::text_editor::Edit::Paste("x".to_string().into()),
+            )),
             1,
             &root,
         );
-        // 原生 `text_input` 没有 `Cancel` 消息:丢弃半输入走"失焦清空"路径
+        // `text_editor` 没有 `Cancel` 消息:丢弃半输入走"失焦清空"路径
         // (没有打开项目时 `App::set_todo_content_focused` 调 `cancel_content_edit`)。
         ws_state.cancel_content_edit();
         assert!(ws_state.editing_content.is_none());

@@ -40,6 +40,10 @@ impl std::fmt::Debug for PreviewTab {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TabKind {
     File(PathBuf),
+    /// 关掉最后一个文件 tab 后自动补的空白 tab(内容区显示 Dozer 品牌标,
+    /// 见 `workspace.rs::preview_pane_for`)——不进 `desired_webviews()`
+    /// 期望清单,没有 wry 页面,纯 iced 原生渲染。
+    Blank,
 }
 
 /// main.rs 同步 webview 的期望清单项。
@@ -249,11 +253,29 @@ impl PreviewPane {
         }
     }
 
+    /// 项目切换清理专用:真清空,不补 `Blank` 占位 tab——`close()` 的自动
+    /// 补位是给"用户手动关到没了"这个交互场景用的,项目切换是"整个 pane
+    /// 要换主人",旧项目的空白占位 tab 没必要带过去。调用方(`Workspace::
+    /// close_all_tabs_for_switch`)原来是 `while !tabs().is_empty() {
+    /// close(0) }`,`close()` 加了自动补位后那个循环会死循环,所以专门
+    /// 开一个不走补位逻辑的清空方法。
+    pub fn clear_all(&mut self) {
+        self.tabs.clear();
+        self.active = 0;
+    }
+
+    /// 关掉一个 tab。若这是最后一个,不留空——立刻补一个 `TabKind::Blank`
+    /// 空白 tab(浏览器"关到只剩新标签页"那种体验),`push_tab` 顺带把
+    /// `active` 指过去,不用再手动纠正。
     pub fn close(&mut self, idx: usize) {
         if idx >= self.tabs.len() {
             return;
         }
         self.tabs.remove(idx);
+        if self.tabs.is_empty() {
+            self.push_tab(TabKind::Blank, "空白".into());
+            return;
+        }
         if self.active >= self.tabs.len() {
             self.active = self.tabs.len().saturating_sub(1);
         } else if idx < self.active {
@@ -287,17 +309,21 @@ impl PreviewPane {
             .iter()
             .enumerate()
             .filter(|(_, tab)| tab.editor.is_none())
-            .map(|(idx, tab)| {
-                let TabKind::File(path) = &tab.kind;
+            .filter_map(|(idx, tab)| {
+                // `Blank` 没有 wry 页面(内容区是纯 iced 渲染的 Dozer 品牌标),
+                // 不进期望清单——`sync_webview_pool` 据此不会为它创建 webview。
+                let TabKind::File(path) = &tab.kind else {
+                    return None;
+                };
                 let mut u = flyfish_url(path);
                 if tab.reload_nonce > 0 {
                     u.push_str(&format!("&_r={}", tab.reload_nonce));
                 }
-                WebviewSpec {
+                Some(WebviewSpec {
                     id: tab.id,
                     url: u,
                     visible: idx == self.active,
-                }
+                })
             })
             .collect()
     }
@@ -337,8 +363,11 @@ impl PreviewPane {
         if tab.editor.is_some() {
             // 原生 tab:只读态没有光标/undo 历史值得跨重建保留,直接读盘换新
             // 实例比"原地更新缓冲区"更简单可靠。读取失败保留旧 editor 不动
-            // (比闪成空白/丢内容更安全的降级)。
-            let TabKind::File(path) = &tab.kind;
+            // (比闪成空白/丢内容更安全的降级)。`Blank` tab 恒 `editor: None`
+            // (见 `push_tab`),这个分支实际到不了,`else` 只是满足穷尽性。
+            let TabKind::File(path) = &tab.kind else {
+                return;
+            };
             if let Ok(fresh) = read_and_build_native_editor(path) {
                 tab.editor = Some(fresh);
             }
@@ -761,6 +790,50 @@ mod tests {
         assert_eq!(p.active_idx(), 0);
         p.close(0);
         assert_eq!(p.tabs().len(), 1);
+        assert_eq!(p.active_idx(), 0);
+    }
+
+    #[test]
+    fn closing_last_tab_opens_a_blank_placeholder_instead_of_leaving_empty() {
+        let mut p = PreviewPane::default();
+        p.open_path(PathBuf::from("/tmp/only.md"));
+        assert_eq!(p.tabs().len(), 1);
+        p.close(0);
+        assert_eq!(
+            p.tabs().len(),
+            1,
+            "关掉最后一个 tab 不该留空,要自动补一个 Blank 占位 tab"
+        );
+        assert_eq!(p.tabs()[0].kind, TabKind::Blank);
+        assert_eq!(p.active_idx(), 0);
+        // Blank tab 没有 wry 页面,不该进期望清单。
+        assert!(p.desired_webviews().is_empty());
+    }
+
+    #[test]
+    fn closing_the_blank_placeholder_replaces_it_with_a_fresh_one() {
+        let mut p = PreviewPane::default();
+        p.open_path(PathBuf::from("/tmp/only.md"));
+        p.close(0);
+        assert_eq!(p.tabs()[0].kind, TabKind::Blank);
+        // 关掉这个占位 tab 本身也不该真的清空——立刻补一个新的,行为跟
+        // 浏览器"关掉唯一的新标签页"一致(还是停在一个新标签页)。
+        p.close(0);
+        assert_eq!(p.tabs().len(), 1);
+        assert_eq!(p.tabs()[0].kind, TabKind::Blank);
+    }
+
+    #[test]
+    fn clear_all_empties_tabs_without_refilling_a_blank_placeholder() {
+        let mut p = PreviewPane::default();
+        p.open_path(PathBuf::from("/tmp/a.md"));
+        p.open_path(PathBuf::from("/tmp/b.md"));
+        p.clear_all();
+        assert_eq!(
+            p.tabs().len(),
+            0,
+            "项目切换清理要真清空,不是 close() 那种自动补位语义"
+        );
         assert_eq!(p.active_idx(), 0);
     }
 

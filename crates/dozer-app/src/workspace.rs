@@ -774,7 +774,11 @@ impl Workspace {
         let Some(tab) = preview.tabs().get(idx) else {
             return;
         };
-        let TabKind::File(path) = &tab.kind;
+        // `Blank` 占位 tab 没有真实文件,右键菜单本来就不会给它挂"编辑"项
+        // (见 `preview_pane_for` 的 `editable` 判定),这里只是防御性兜底。
+        let TabKind::File(path) = &tab.kind else {
+            return;
+        };
         let path = path.clone();
         let tab_id = tab.id;
         match std::fs::read_to_string(&path) {
@@ -1202,9 +1206,7 @@ impl Workspace {
         while !self.tabs.is_empty() {
             self.close_tab(io, 0);
         }
-        while !self.preview.tabs().is_empty() {
-            self.preview.close(0);
-        }
+        self.preview.clear_all();
         self.acceptance = acceptance::WorkspaceState::default();
         self.preview_error = None;
         self.term_tab_first = 0;
@@ -1383,7 +1385,12 @@ impl Workspace {
         let mut paths = Vec::new();
         let mut active_path = None;
         for (idx, tab) in self.preview.tabs().iter().enumerate() {
-            let TabKind::File(p) = &tab.kind;
+            // `Blank` 占位 tab(关到最后一个后自动补的那个)没有真实路径,
+            // 不写进持久化状态——下次启动没必要"恢复"出一个空白 tab,
+            // 没有 tab 时 `PreviewPane::default()` 天然就是这个样子。
+            let TabKind::File(p) = &tab.kind else {
+                continue;
+            };
             paths.push(p.clone());
             if idx == active_idx {
                 active_path = Some(p.clone());
@@ -1420,7 +1427,9 @@ impl Workspace {
             .tabs()
             .get(self.preview.active_idx())
             .and_then(|tab| {
-                let TabKind::File(path) = &tab.kind;
+                let TabKind::File(path) = &tab.kind else {
+                    return None;
+                };
                 let editor = tab.editor.as_ref()?;
                 let path_str = path.to_string_lossy().into_owned();
                 Some(preview_context_from_editor_state(
@@ -3407,6 +3416,21 @@ fn preview_pane_for<'a>(
                 container(editor.view().map(move |ev| editor_msg(tab_id, ev)))
                     .width(Length::Fill)
                     .height(Length::Fill),
+            );
+        } else if active_tab.kind == TabKind::Blank {
+            // 关到最后一个 tab 后自动补的空白占位:没有 wry 页面,内容区
+            // 纯 iced 原生渲染,居中放 Dozer 品牌标(`IconKind::Dozer`,此前
+            // 一直没有调用点,见该枚举成员的注释)。
+            content = content.push(
+                container(icons::view(
+                    icons::IconKind::Dozer,
+                    96.0,
+                    byteui::theme::color::current().dim,
+                ))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(iced_widget::core::alignment::Horizontal::Center)
+                .align_y(iced_widget::core::alignment::Vertical::Center),
             );
         }
     }

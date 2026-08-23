@@ -58,6 +58,7 @@
   .bubble {
     border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px;
   }
+  .msg.AiTurn .bubble .text { color: #9AB4C4; }
   .msg.ToolResult .bubble .text {
     color: var(--dim); font-family: ui-monospace, monospace; font-size: 12px;
     white-space: pre-wrap;
@@ -98,6 +99,7 @@
   details.trace-toggle > summary::-webkit-details-marker { display: none; }
   details.trace-toggle > summary::before { content: "轨迹 ▸ "; }
   details.trace-toggle[open] > summary::before { content: "轨迹 ▾ "; }
+  details.trace-toggle > summary .trace-stats { margin-left: 6px; opacity: .75; }
   .trace-timeline { position: relative; margin-top: 8px; padding-left: 16px; }
   .trace-timeline::before {
     content: ""; position: absolute; left: 4px; top: 4px; bottom: 4px;
@@ -124,7 +126,9 @@
   }
   .tool-call-row .input-json {
     white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 11px;
-    color: var(--dim); margin-top: 4px; padding-left: 4px;
+    color: var(--dim); margin-top: 4px; padding: 8px 10px;
+    background: #10151f; border: 1px solid var(--line); border-radius: 6px;
+    overflow-x: auto;
   }
   .tool-result-row summary {
     cursor: pointer; color: var(--dim); font-size: 11px;
@@ -132,7 +136,9 @@
   .tool-result-row.error summary { color: var(--red); }
   .tool-result-row .body {
     white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px;
-    color: var(--dim); margin-top: 2px;
+    color: var(--dim); margin-top: 4px; padding: 8px 10px;
+    background: #10151f; border: 1px solid var(--line); border-radius: 6px;
+    overflow-x: auto;
   }
   .tool-result-row.error .body { color: var(--red); }
 </style>
@@ -344,6 +350,39 @@ function renderToolResultRow(result) {
   return details;
 }
 
+// 1000 进 "k",一位小数、去掉多余的 ".0"——轨迹摘要行放不下完整数字,
+// 只需要一眼看出量级。
+function formatTokenCount(n) {
+  if (n >= 1000) {
+    return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+  }
+  return String(n);
+}
+
+// 轨迹折叠行(未展开时)就能看到的统计摘要:工具调用次数(+失败数)、
+// token 总量(in+out+cache_read+cache_write 相加,不细分——细分对一行
+// 摘要来说信息过载,想看明细本来就有下面的工具结果/thinking 展开)。
+// 两项都没有(纯 thinking、且老协议帧没有 token 字段)时返回空串,调用方
+// 据此决定要不要挂这个 span。
+function buildTraceStatsLabel(v) {
+  const parts = [];
+  const toolCount = (v.tool_calls || []).length;
+  if (toolCount > 0) {
+    const errCount = (v.tool_results || []).filter(function (r) {
+      return r.is_error;
+    }).length;
+    parts.push(
+      toolCount + " 次工具调用" + (errCount > 0 ? "(" + errCount + " 失败)" : "")
+    );
+  }
+  const totalTokens =
+    (v.tokens_in || 0) + (v.tokens_out || 0) + (v.tokens_cache_read || 0) + (v.tokens_cache_write || 0);
+  if (totalTokens > 0) {
+    parts.push(formatTokenCount(totalTokens) + " tokens");
+  }
+  return parts.join(" · ");
+}
+
 function renderTraceToggle(v) {
   const hasThinking = !!v.thinking_text;
   const hasToolCalls = v.tool_calls && v.tool_calls.length > 0;
@@ -354,6 +393,13 @@ function renderTraceToggle(v) {
   const details = document.createElement("details");
   details.className = "trace-toggle";
   const summary = document.createElement("summary");
+  const statsLabel = buildTraceStatsLabel(v);
+  if (statsLabel) {
+    const stats = document.createElement("span");
+    stats.className = "trace-stats";
+    stats.textContent = statsLabel;
+    summary.appendChild(stats);
+  }
   details.appendChild(summary);
 
   const timeline = document.createElement("div");

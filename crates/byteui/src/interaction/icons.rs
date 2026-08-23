@@ -112,10 +112,9 @@ pub enum IconKind {
     /// 首页左栏"Recents" pane rail 图标(Lucide history)。
     History,
     /// Dozer 品牌标(dozer-logo-main.jpeg → potrace 矢量化)。顶栏
-    /// `dozer_home_tab` 品牌页签改用 Lucide house(`IconKind::Home`)后暂无
-    /// 调用点——资源本身保留(重新矢量化成本不低),供以后需要展示这枚
-    /// 定制矢量标时复用。
-    #[allow(dead_code)]
+    /// `dozer_home_tab` 品牌页签改用 Lucide house(`IconKind::Home`)后一度
+    /// 没有调用点,2026-08-23 起用在文件预览/项目预览关到最后一个 tab 后
+    /// 自动补的空白占位 tab 内容区(见 `workspace.rs::preview_pane_for`)。
     Dozer,
     /// Agent 品牌标(着色用 `currentColor`,由调用方按 agent 指定主题色)。
     /// 来源:Claude/CodeBuddy 取自 Simple Icons,OpenCode 取自其官网 favicon 并

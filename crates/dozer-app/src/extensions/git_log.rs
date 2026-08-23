@@ -948,9 +948,34 @@ pub fn view<'a>(
     let (list_portion, content_portion) = crate::workspace::split_portions(git_log_split);
     let right: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
         if let Some(detail) = state.detail.as_ref() {
+            // 文件列表上方头部:改动文件计数 + 一条 1px 分割线(见需求
+            // "右侧文件列表上方新增头部统计文件数量")。计数直接取当前选中
+            // 提交 `detail` 的文件数;加载失败时记 0(此时 file_list_view
+            // 会另显示错误文案,头部只是个中性计数)。
+            let file_count = match detail {
+                Ok(d) => d.files.len(),
+                Err(_) => 0,
+            };
+            let header = container(
+                column![
+                    text(format!("{} 个修改的文件", file_count))
+                        .size(byteui::theme::font::caption())
+                        .color(byteui::theme::color::current().dim),
+                    container(iced_widget::Space::new())
+                        .width(Length::Fill)
+                        .height(Length::Fixed(1.0))
+                        .style(|_t: &iced_widget::Theme| container::Style {
+                            background: Some(byteui::theme::color::current().border.into()),
+                            ..container::Style::default()
+                        }),
+                ]
+                .spacing(6),
+            )
+            .padding([4, 8]);
             let (top_portion, bottom_portion) =
                 crate::workspace::split_portions(git_log_file_diff_split);
             column![
+                header,
                 container(file_list_view(app, detail, state.selected_file.as_deref()))
                     .height(Length::FillPortion(top_portion)),
                 crate::app::horizontal_divider_bar(
@@ -1026,7 +1051,7 @@ fn diff_pane_view<'a>(
     let mut content = column![
         text(entry.path.clone())
             .size(byteui::theme::font::caption())
-            .color(byteui::theme::color::current().dim)
+            .color(byteui::theme::color::current().cream)
     ]
     .spacing(4);
     if entry.patch.is_empty() {

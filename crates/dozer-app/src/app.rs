@@ -7641,13 +7641,31 @@ fn ssh_terminal_pane<'a>(
     .into()
 }
 
+/// 没有活动主机 tab 时的占位内容(关到最后一个 tab 后、或还没开过任何
+/// tab):跟文件预览面板"关到最后一个 tab 自动补 Blank 占位 tab"是同一套
+/// 视觉语言——居中放 Dozer 品牌标 + 引导文案。SSH 这边每个 tab 都是真实
+/// PTY/SFTP 连接(`SessionTab`/`SftpTabState`),没有"空白占位 tab"这种
+/// 轻量概念可以塞进 `ws.ssh_tabs`,所以不像 `preview.rs::TabKind::Blank`
+/// 那样在 tab 栏里插一个假 tab——直接把内容区换成这个更完整的占位态。
 fn ssh_empty_state<'a>() -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     container(
-        text("点主机卡片的终端/文件传输图标开始")
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().dim),
+        column![
+            icons::view(
+                icons::IconKind::Dozer,
+                72.0,
+                byteui::theme::color::current().dim,
+            ),
+            text("点主机卡片的终端/文件传输图标开始")
+                .size(byteui::theme::font::body())
+                .color(byteui::theme::color::current().dim),
+        ]
+        .spacing(14)
+        .align_x(iced_widget::core::alignment::Horizontal::Center),
     )
-    .padding(20)
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .align_x(iced_widget::core::alignment::Horizontal::Center)
+    .align_y(iced_widget::core::alignment::Vertical::Center)
     .into()
 }
 

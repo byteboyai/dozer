@@ -6,7 +6,7 @@
 //! agent transcript JSONL。
 
 use crate::conversation::ConversationMeta;
-use crate::homespace::home_panel_head;
+use crate::homespace::{home_panel_head, home_section_head};
 use byteui::interaction::icons;
 use dozer_core::protocol::AgentKind;
 use iced_widget::canvas::{self, Canvas};
@@ -141,9 +141,13 @@ pub fn group_usage_by_agent(
         .collect()
 }
 
+/// `daily_totals_by_agent` 只保留最近这么多天的数据(2026-08-23 起
+/// 7→15,产品要求看更长的趋势窗口)。
+const DAILY_CHART_WINDOW_DAYS: usize = 15;
+
 /// epoch 毫秒 → 该毫秒所在的 UTC 日索引(自 1970-01-01 起的第几天)。用于
 /// 按天分桶;**不做本地时区换算**——纯 std 没有时区能力,引入 `chrono`/`time`
-/// 属于新增依赖(spec 明确不新增)，UTC 分桶对"看近 7 天趋势形状"这个用途
+/// 属于新增依赖(spec 明确不新增)，UTC 分桶对"看近 15 天趋势形状"这个用途
 /// 足够，不追求跟用户本地墙上时钟严格对齐。
 fn day_index_from_ms(ms: u64) -> i64 {
     (ms / 86_400_000) as i64
@@ -166,9 +170,9 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
 }
 
 /// 按天、按 agent 聚合的 token 合计（四项 token 加总，不细分 in/out/
-/// cache——见 spec"关键语义确认"）。只保留最近 7 天，不足 7 天不补占位
-/// 空天，按 `day_index` 升序（最旧在前，最新在后，图表从左到右自然是时间
-/// 顺序）。
+/// cache——见 spec"关键语义确认"）。只保留最近 `DAILY_CHART_WINDOW_DAYS`
+/// 天，不足这个天数不补占位空天，按 `day_index` 升序（最旧在前，最新在后，
+/// 图表从左到右自然是时间顺序）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct DayAgentTotals {
     pub day_index: i64,
@@ -198,7 +202,7 @@ pub fn daily_totals_by_agent(
     let mut days: Vec<DayAgentTotals> = by_day
         .into_iter()
         .map(|(day_index, (claude, codebuddy, opencode))| {
-            // 年份在"近 7 天"这种短窗口的标签里用不上，解构时直接忽略。
+            // 年份在"近 15 天"这种短窗口的标签里用不上，解构时直接忽略。
             let (_, m, d) = civil_from_days(day_index);
             DayAgentTotals {
                 day_index,
@@ -209,11 +213,11 @@ pub fn daily_totals_by_agent(
             }
         })
         .collect();
-    let start = days.len().saturating_sub(7);
+    let start = days.len().saturating_sub(DAILY_CHART_WINDOW_DAYS);
     days.split_off(start)
 }
 
-/// 整个项目范围（不限"近 7 天"）按 agent 的 token 总量（四项合计），供
+/// 整个项目范围（不限"近 15 天"）按 agent 的 token 总量（四项合计），供
 /// 饼图用；只返回项目里实际出现过的 agent，不产生全零占位记录。
 pub fn agent_token_share(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<(AgentKind, u64)> {
     const ORDER: [AgentKind; 3] = [AgentKind::Claude, AgentKind::Codebuddy, AgentKind::Opencode];
@@ -334,15 +338,26 @@ pub fn view<'a>(
         );
     } else {
         let usages: Vec<ConversationUsage> = rows.iter().map(|(_, u)| u.clone()).collect();
-        content = content.push(summary_card(&aggregate(&usages)));
-        let days = daily_totals_by_agent(rows);
-        if !days.is_empty() {
-            content = content.push(bar_chart(&days));
-        }
+        content = content.push(home_section_head("项目用量统计"));
+        content = content.push(project_summary_boxes(&aggregate(&usages)));
+
         let share = agent_token_share(rows);
         if !share.is_empty() {
-            content = content.push(column![chart_legend(&share), pie_chart(&share),].spacing(10));
+            content = content.push(home_section_head("Agent 用量统计"));
+            content = content.push(
+                iced_widget::row![pie_chart(&share), chart_legend(&share)]
+                    .spacing(20)
+                    .align_y(iced_widget::core::Alignment::Center),
+            );
         }
+
+        let days = daily_totals_by_agent(rows);
+        if !days.is_empty() {
+            content = content.push(home_section_head("每日用量统计"));
+            content = content.push(bar_chart(&days));
+        }
+
+        content = content.push(home_section_head("会话明细"));
         content = content.push(grouped_list(rows));
     }
 
@@ -359,85 +374,72 @@ pub fn view<'a>(
         .into()
 }
 
-fn summary_card(
+fn stat(
+    label: &'static str,
+    value: String,
+    color: Color,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    column![
+        text(label)
+            .size(byteui::theme::font::caption())
+            .color(byteui::theme::color::current().dim),
+        text(value)
+            .size(15.0)
+            .color(color)
+            .font(iced_widget::core::Font::MONOSPACE),
+    ]
+    .spacing(2)
+    .into()
+}
+
+/// 一个带边框的统计卡片:一行 `stat` 并排。`project_summary_boxes` 拿它
+/// 拼出两张卡(会话/回合/工具调用/触达文件 一张,四个 token 分项另一张)
+/// ——参照设计草图,两张卡各自成框、并排放,不是原来的单卡通栏。
+fn stat_box(
+    stats: Vec<Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer>>,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let mut row = iced_widget::row![].spacing(24);
+    for s in stats {
+        row = row.push(s);
+    }
+    container(row)
+        .padding(12)
+        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+            background: Some(byteui::theme::color::current().card.into()),
+            border: Border {
+                width: 1.0,
+                color: byteui::theme::color::current().border,
+                radius: 10.0.into(),
+            },
+            ..iced_widget::container::Style::default()
+        })
+        .into()
+}
+
+/// "项目用量统计"区块:两张并排的卡片。会话数(`conversation_count`)
+/// 原来只出现在小字说明行里,草图把它列成正式的一格统计,这里跟着改。
+/// `工具调用(改动)`原来带的改动数细分草图没画,挪到下面 `会话明细`
+/// 的单会话行里继续展示,不丢数据、只是不在这张汇总卡上重复。
+fn project_summary_boxes(
     totals: &ProjectUsageTotals,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    fn stat(
-        label: &'static str,
-        value: String,
-        color: Color,
-    ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-        column![
-            text(label)
-                .size(byteui::theme::font::caption())
-                .color(byteui::theme::color::current().dim),
-            text(value)
-                .size(15.0)
-                .color(color)
-                .font(iced_widget::core::Font::MONOSPACE),
-        ]
-        .spacing(2)
+    let cream = byteui::theme::color::current().cream;
+    let cyan = byteui::theme::color::current().cyan;
+    let activity_box = stat_box(vec![
+        stat("会话", totals.conversation_count.to_string(), cream),
+        stat("回合", totals.turns.to_string(), cream),
+        stat("工具调用", totals.tool_calls.to_string(), cream),
+        stat("触达文件", totals.files_touched.to_string(), cream),
+    ]);
+    let token_box = stat_box(vec![
+        stat("Input", totals.tokens_in.to_string(), cyan),
+        stat("Output", totals.tokens_out.to_string(), cyan),
+        stat("cache 读", totals.tokens_cache_read.to_string(), cyan),
+        stat("cache 写", totals.tokens_cache_write.to_string(), cyan),
+    ]);
+    iced_widget::row![activity_box, token_box]
+        .spacing(12)
         .into()
-    }
-
-    let row = iced_widget::row![
-        stat(
-            "轮次",
-            totals.turns.to_string(),
-            byteui::theme::color::current().cream
-        ),
-        stat(
-            "工具调用(改动)",
-            format!("{} ({})", totals.tool_calls, totals.mutating_tool_calls),
-            byteui::theme::color::current().cream
-        ),
-        stat(
-            "触达文件",
-            totals.files_touched.to_string(),
-            byteui::theme::color::current().cream
-        ),
-        stat(
-            "input",
-            totals.tokens_in.to_string(),
-            byteui::theme::color::current().cyan
-        ),
-        stat(
-            "output",
-            totals.tokens_out.to_string(),
-            byteui::theme::color::current().cyan
-        ),
-        stat(
-            "cache 读",
-            totals.tokens_cache_read.to_string(),
-            byteui::theme::color::current().cyan
-        ),
-        stat(
-            "cache 写",
-            totals.tokens_cache_write.to_string(),
-            byteui::theme::color::current().cyan
-        ),
-    ]
-    .spacing(24);
-
-    container(
-        column![
-            text(format!("项目汇总 · {} 会话", totals.conversation_count))
-                .size(byteui::theme::font::caption())
-                .color(byteui::theme::color::current().dim),
-            row,
-        ]
-        .spacing(10),
-    )
-    .padding(12)
-    .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-        background: Some(byteui::theme::color::current().card.into()),
-        border: Border {
-            radius: 10.0.into(),
-            ..Border::default()
-        },
-        ..iced_widget::container::Style::default()
-    })
-    .into()
 }
 
 fn usage_row<'a>(
@@ -517,7 +519,9 @@ fn grouped_list<'a>(
 }
 
 const BAR_MAX_HEIGHT: f32 = 72.0;
-const BAR_WIDTH: f32 = 20.0;
+/// 柱宽(2026-08-23 起 20→14,配合 `DAILY_CHART_WINDOW_DAYS` 7→15——柱数
+/// 翻倍,原宽度会把图表撑到 ~466px,窄一点的可调栏宽会被截断看不全)。
+const BAR_WIDTH: f32 = 14.0;
 /// 柱顶总量数字 + 间距预留的高度,`GridLines`/`bar_chart` 靠它对齐网格线
 /// 与柱子的 0 基线(见 `bar_chart` 里 `col` 首个 `container` 的同一个值)。
 const BAR_LABEL_GAP: f32 = 14.0;
@@ -725,7 +729,8 @@ fn bar_chart(
         .unwrap_or(1)
         .max(1);
 
-    let mut bars = iced_widget::row![].spacing(10);
+    // 间距同 `BAR_WIDTH` 一起收窄(10→6),给 15 根柱子腾地方。
+    let mut bars = iced_widget::row![].spacing(6);
     for d in days {
         let total = d.claude + d.codebuddy + d.opencode;
         let scale = BAR_MAX_HEIGHT / max_total as f32;
@@ -864,11 +869,13 @@ fn pie_chart(
     .into()
 }
 
+/// 图例列表——2026-08-23 起改竖排(原来是横排 `row`),配合草图把它挪到
+/// 饼图右边、并排放而不是叠在下面。
 fn chart_legend(
     share: &[(AgentKind, u64)],
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let total: u64 = share.iter().map(|(_, v)| v).sum();
-    let mut row = iced_widget::row![].spacing(18);
+    let mut col = column![].spacing(10);
     for (agent, value) in share {
         let pct = value
             .checked_mul(100)
@@ -888,7 +895,7 @@ fn chart_legend(
                     ..iced_widget::container::Style::default()
                 }
             });
-        row = row.push(
+        col = col.push(
             iced_widget::row![
                 dot,
                 text(format!(
@@ -905,7 +912,7 @@ fn chart_legend(
             .align_y(iced_widget::core::Alignment::Center),
         );
     }
-    row.into()
+    col.into()
 }
 
 #[cfg(test)]
@@ -1090,8 +1097,8 @@ mod tests {
     }
 
     #[test]
-    fn daily_totals_by_agent_keeps_only_most_recent_7_days() {
-        let rows: Vec<_> = (0..10)
+    fn daily_totals_by_agent_keeps_only_most_recent_15_days() {
+        let rows: Vec<_> = (0..20)
             .map(|i| {
                 (
                     meta_at(AgentKind::Claude, (20_668 + i) as u64 * 86_400_000),
@@ -1100,13 +1107,13 @@ mod tests {
             })
             .collect();
         let days = daily_totals_by_agent(&rows);
-        assert_eq!(days.len(), 7, "超过 7 天的历史只保留最近 7 天");
+        assert_eq!(days.len(), 15, "超过 15 天的历史只保留最近 15 天");
         assert_eq!(
             days.last().unwrap().day_index,
-            20_677,
+            20_687,
             "最后一天是最新的那天"
         );
-        assert_eq!(days.first().unwrap().day_index, 20_671);
+        assert_eq!(days.first().unwrap().day_index, 20_673);
     }
 
     #[test]

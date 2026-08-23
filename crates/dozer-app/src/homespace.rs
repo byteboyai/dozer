@@ -384,10 +384,15 @@ where
 /// 子栏目标题,样式参考 workspace Project 面板「文件存储 / 项目文档」
 /// (`extensions::project` 的用量行 / `links_section` 头部):CircleSmall
 /// 圆点 + cream `label` 字号,无下划线——层级低于 `home_panel_head`
-/// 的面板标题(暖金 accent + subtitle + 1px 分割线)。
-fn home_section_head(
-    title: &str,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+/// 的面板标题(暖金 accent + subtitle + 1px 分割线)。跟 `home_panel_head`
+/// 一样对 `Message` 泛型(2026-08-23 起 `pub(crate)`,供 `extensions::usage`
+/// 复用,不是只有首页用得上——纯展示、不产生消息,泛型化零风险)。
+pub(crate) fn home_section_head<'a, Message>(
+    title: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>
+where
+    Message: 'a,
+{
     row![
         icons::view(
             icons::IconKind::CircleSmall,

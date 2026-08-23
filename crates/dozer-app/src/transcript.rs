@@ -26,6 +26,14 @@ pub enum ReviewEntry {
         thinking_text: Option<String>,
         tool_calls: Vec<ToolCallInfo>,
         tool_results: Vec<ToolResultEntry>,
+        /// 这个逻辑回合(可能是好几条 `ai` 行折叠来的)累加的 token 用量——
+        /// 每条 `ai` 行的四个字段是它自己那一次 API 调用的用量,折叠时逐项
+        /// 相加就是这句回复的总花费,不是均摊/去重(同一逻辑回合的多次
+        /// API 调用本来就都要计费)。
+        tokens_in: u64,
+        tokens_out: u64,
+        tokens_cache_read: u64,
+        tokens_cache_write: u64,
     },
     /// 孤儿兜底:前面没有 `AiTurn` 的 `ToolResult`(理论边界情况,如导出
     /// 片段从工具结果行开始)。正常情况下 `ToolResult` 都会被折叠进
@@ -83,6 +91,10 @@ pub fn review_entries_from_turns(turns: &[TurnRecord]) -> Vec<ReviewEntry> {
                         text,
                         thinking_text,
                         tool_calls,
+                        tokens_in,
+                        tokens_out,
+                        tokens_cache_read,
+                        tokens_cache_write,
                         ..
                     }) = out.last_mut()
                     else {
@@ -98,12 +110,20 @@ pub fn review_entries_from_turns(turns: &[TurnRecord]) -> Vec<ReviewEntry> {
                         _ => {}
                     }
                     tool_calls.extend(t.tool_calls.iter().cloned());
+                    *tokens_in += t.tokens_in;
+                    *tokens_out += t.tokens_out;
+                    *tokens_cache_read += t.tokens_cache_read;
+                    *tokens_cache_write += t.tokens_cache_write;
                 } else {
                     out.push(ReviewEntry::AiTurn {
                         text: t.content.clone(),
                         thinking_text: t.thinking_text.clone(),
                         tool_calls: t.tool_calls.clone(),
                         tool_results: Vec::new(),
+                        tokens_in: t.tokens_in,
+                        tokens_out: t.tokens_out,
+                        tokens_cache_read: t.tokens_cache_read,
+                        tokens_cache_write: t.tokens_cache_write,
                     });
                 }
             }
@@ -243,11 +263,17 @@ mod tests {
                 input_json: Some("{\"file_path\":\"README.md\"}".into()),
             }],
             tool_results: Vec::new(),
+            tokens_in: 12,
+            tokens_out: 34,
+            tokens_cache_read: 0,
+            tokens_cache_write: 0,
         };
         let json = serde_json::to_string(&ai).unwrap();
         assert!(json.starts_with(r#"{"AiTurn":"#));
         assert!(json.contains(r#""thinking_text":"#));
         assert!(json.contains(r#""Edit README.md""#));
+        assert!(json.contains(r#""tokens_in":12"#));
+        assert!(json.contains(r#""tokens_out":34"#));
 
         let tool = ReviewEntry::ToolResult {
             content: "boom".into(),
@@ -272,6 +298,7 @@ mod tests {
                 thinking_text: None,
                 ts: None,
                 is_error: false,
+                ..Default::default()
             },
             TurnRecord {
                 turn_index: 1,
@@ -285,6 +312,10 @@ mod tests {
                 thinking_text: Some("先看看现有实现".into()),
                 ts: None,
                 is_error: false,
+                tokens_in: 100,
+                tokens_out: 50,
+                tokens_cache_read: 5,
+                tokens_cache_write: 2,
             },
         ];
         let entries = review_entries_from_turns(&turns);
@@ -301,12 +332,20 @@ mod tests {
                 thinking_text,
                 tool_calls,
                 tool_results,
+                tokens_in,
+                tokens_out,
+                tokens_cache_read,
+                tokens_cache_write,
             } => {
                 assert_eq!(text, "回复");
                 assert_eq!(thinking_text.as_deref(), Some("先看看现有实现"));
                 assert_eq!(tool_calls.len(), 1);
                 assert_eq!(tool_calls[0].summary, "Edit README.md");
                 assert!(tool_results.is_empty());
+                assert_eq!(*tokens_in, 100);
+                assert_eq!(*tokens_out, 50);
+                assert_eq!(*tokens_cache_read, 5);
+                assert_eq!(*tokens_cache_write, 2);
             }
             other => panic!("{other:?}"),
         }
@@ -325,6 +364,7 @@ mod tests {
                 thinking_text: None,
                 ts: None,
                 is_error: false,
+                ..Default::default()
             }
         }
         fn tool_result(content: &str, is_error: bool) -> TurnRecord {
@@ -337,6 +377,7 @@ mod tests {
                 thinking_text: None,
                 ts: None,
                 is_error,
+                ..Default::default()
             }
         }
         let turns = vec![
@@ -389,7 +430,7 @@ mod tests {
     #[test]
     fn review_entries_from_turns_merges_leading_trajectory_only_ai_turns_into_final_reply() {
         use dozer_core::protocol::{ToolCallInfo, TurnRecord};
-        fn ai_step(summary: &str) -> TurnRecord {
+        fn ai_step(summary: &str, tokens_in: u64, tokens_out: u64) -> TurnRecord {
             TurnRecord {
                 turn_index: 0,
                 role: "ai".into(),
@@ -402,9 +443,12 @@ mod tests {
                 thinking_text: None,
                 ts: None,
                 is_error: false,
+                tokens_in,
+                tokens_out,
+                ..Default::default()
             }
         }
-        fn ai_reply(content: &str) -> TurnRecord {
+        fn ai_reply(content: &str, tokens_in: u64, tokens_out: u64) -> TurnRecord {
             TurnRecord {
                 turn_index: 0,
                 role: "ai".into(),
@@ -414,26 +458,38 @@ mod tests {
                 thinking_text: None,
                 ts: None,
                 is_error: false,
+                tokens_in,
+                tokens_out,
+                ..Default::default()
             }
         }
         // 真实 transcript 里,一次逻辑回复常被拆成好几条 `ai` 行:前面几条
         // 只带 tool_use、没有正文,最后一条才是给人看的回复文本。这些"正文
         // 还没落地"的连续行应该合并成一个 `AiTurn`,而不是各自顶格显示。
+        // token 用量(`tokens_in`/`tokens_out`)是每条 `ai` 行自己那一次 API
+        // 调用的花费,折叠时应该逐项相加成这句回复的总花费,不是只取最后
+        // 一条(那条往往文本很短、tokens_out 很低,单独看会严重低估成本)。
         let turns = vec![
-            ai_step("git commit"),
-            ai_step("cargo build"),
-            ai_reply("Done."),
+            ai_step("git commit", 10, 5),
+            ai_step("cargo build", 20, 8),
+            ai_reply("Done.", 30, 3),
         ];
         let entries = review_entries_from_turns(&turns);
         assert_eq!(entries.len(), 1, "应合并成一个条目,而不是三个空气泡");
         match &entries[0] {
             ReviewEntry::AiTurn {
-                text, tool_calls, ..
+                text,
+                tool_calls,
+                tokens_in,
+                tokens_out,
+                ..
             } => {
                 assert_eq!(text, "Done.");
                 assert_eq!(tool_calls.len(), 2);
                 assert_eq!(tool_calls[0].summary, "git commit");
                 assert_eq!(tool_calls[1].summary, "cargo build");
+                assert_eq!(*tokens_in, 60, "三条 ai 行的 tokens_in 应该相加:10+20+30");
+                assert_eq!(*tokens_out, 16, "三条 ai 行的 tokens_out 应该相加:5+8+3");
             }
             other => panic!("{other:?}"),
         }
@@ -452,6 +508,7 @@ mod tests {
                 thinking_text: None,
                 ts: None,
                 is_error: false,
+                ..Default::default()
             }
         }
         // 一旦某个 `AiTurn` 已经有正文(算定稿),后续 `ai` 行不该继续往
@@ -481,6 +538,7 @@ mod tests {
             thinking_text: None,
             ts: None,
             is_error: false,
+            ..Default::default()
         }];
         let entries = review_entries_from_turns(&turns);
         assert_eq!(

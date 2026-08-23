@@ -261,7 +261,11 @@ impl TranscriptStore {
     /// `after_turn_index` 传 `-1` 表示从第一条开始。JOIN `conversations`
     /// 拿 `agent_kind` 只为了给 `parse::extract_turn_trace_detail` 挑对
     /// 解析形状——不新增参数(client/protocol 签名都不用改),`raw_json`
-    /// 每行都读一次、当场解析,不落新列(见 spec"读时解析"一节)。
+    /// 每行都读一次、当场解析,不落新列(见 spec"读时解析"一节)。token 四列
+    /// (`tokens_in`/`tokens_out`/`tokens_cache_read`/`tokens_cache_write`)
+    /// 直接落库读出,不用读时解析——摄取阶段(`parse_claude_shaped_chunk`)
+    /// 已经从 `message.usage` 抽好存了(2026-08-23 起补进 `TurnRecord`,
+    /// 供审阅面板"轨迹"统计用)。
     pub fn get_conversation_turns(
         &self,
         conversation_id: &str,
@@ -271,7 +275,8 @@ impl TranscriptStore {
         let conn = self.conn.lock().expect("db lock");
         let mut stmt = conn.prepare(
             "SELECT t.turn_index, t.role, t.content, t.thinking, t.ts, t.is_error,
-                    t.raw_json, c.agent_kind
+                    t.raw_json, c.agent_kind, t.tokens_in, t.tokens_out,
+                    t.tokens_cache_read, t.tokens_cache_write
              FROM conversation_turns t
              JOIN conversations c ON c.conversation_id = t.conversation_id
              WHERE t.conversation_id = ?1 AND t.turn_index > ?2
@@ -290,6 +295,10 @@ impl TranscriptStore {
                 thinking_text: detail.thinking_text,
                 ts: row.get(4)?,
                 is_error: row.get::<_, i64>(5)? != 0,
+                tokens_in: row.get(8)?,
+                tokens_out: row.get(9)?,
+                tokens_cache_read: row.get(10)?,
+                tokens_cache_write: row.get(11)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -957,7 +966,9 @@ mod tests {
             "{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":110,\"message\":{\"content\":[",
             "{\"type\":\"thinking\",\"thinking\":\"先看看现有内容\"},",
             "{\"type\":\"tool_use\",\"name\":\"Edit\",\"input\":{\"file_path\":\"README.md\"}},",
-            "{\"type\":\"text\",\"text\":\"改好了\"}]}}\n"
+            "{\"type\":\"text\",\"text\":\"改好了\"}],",
+            "\"usage\":{\"input_tokens\":100,\"output_tokens\":50,",
+            "\"cache_read_input_tokens\":5,\"cache_creation_input_tokens\":2}}}\n"
         );
         let file = fixture(tmp.path(), "s2.jsonl", text);
         store.ingest_session(AgentKind::Claude, &file).unwrap();
@@ -974,6 +985,13 @@ mod tests {
                 .unwrap()
                 .contains("README.md")
         );
+        // token 四列摄取阶段就落库了(`parse_claude_shaped_chunk` 抽
+        // `message.usage`),`get_conversation_turns` 直接读列,不用像
+        // thinking_text/tool_calls 那样读时重新解析 raw_json。
+        assert_eq!(ai_turn.tokens_in, 100);
+        assert_eq!(ai_turn.tokens_out, 50);
+        assert_eq!(ai_turn.tokens_cache_read, 5);
+        assert_eq!(ai_turn.tokens_cache_write, 2);
     }
 
     #[test]
