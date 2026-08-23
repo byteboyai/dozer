@@ -746,6 +746,52 @@ pub enum Message {
         table: String,
         result: Result<Vec<ColumnInfo>, String>,
     },
+
+    // ---- 右侧内容窗格:表/集合/查询 tab 的开关 ----
+    /// schema 树点一张表/视图的行内文字 → 开(或聚焦已开的)浏览 tab。
+    OpenTableTab {
+        source_id: String,
+        schema: Option<String>,
+        table: String,
+    },
+    /// schema 树点一个 MongoDB 集合 → 开(或聚焦已开的)浏览 tab。
+    OpenCollectionTab {
+        source_id: String,
+        name: String,
+    },
+    /// schema 树头部"+ 新查询" → 永远新开一个查询 tab。
+    OpenQueryTab(String),
+    /// tab 栏点某个 tab → 切换 active(索引)。
+    SelectTab(usize),
+    /// tab 栏点 × → 关闭(索引)。
+    CloseTab(usize),
+    /// tab 栏箭头翻页(tab 溢出可视宽度时),`true`=右翻、`false`=左翻。
+    TabScroll(bool),
+
+    // ---- 浏览页(WHERE/ORDER BY/分页) ----
+    BrowseWhereChanged(usize, String),
+    BrowseOrderByChanged(usize, String),
+    BrowsePageSizeChanged(usize, u32),
+    BrowsePrev(usize),
+    BrowseNext(usize),
+    /// 显式"运行"(WHERE 框回车/翻页/改页大小/改排序 统一走这个,见 Task 7)。
+    BrowseRun(usize),
+    /// 异步结果,带 `project_id` + tab 稳定 id(路由口径同
+    /// `TablesLoaded`/`ColumnsLoaded`)。
+    /// 第三个字段是发起这轮请求时 `BrowseState::begin_run()` 返回的
+    /// `run_seq`——落地前必须核对它仍是当前值(`BrowseState::is_current_run`),
+    /// 只查 `loading` 布尔标志分辨不出"哪一轮"结果,连续两次改 WHERE 会让
+    /// 旧结果覆盖新结果(设计文档"架构与数据流 §7"的过期防线,数字比对是
+    /// 必须的,不能简化成布尔)。
+    BrowseResult(i64, usize, u64, Result<BrowsePage, String>),
+
+    // ---- SQL 查询控制台 ----
+    /// 编辑器动作(`text_editor::Action`),`update()` 只管
+    /// `content.sql.perform(action)`,同 `todo.rs::AddEdit` 的既有用法。
+    QueryTextAction(usize, iced_widget::text_editor::Action),
+    QueryRun(usize),
+    /// 第三个字段同 `BrowseResult`,是 `QueryState::begin_run()` 的 `run_seq`。
+    QueryResult(i64, usize, u64, Result<QueryOutcome, String>),
 }
 
 pub fn update(
@@ -850,6 +896,7 @@ pub fn update(
             // 编辑已有源:连接信息可能变了,旧结构快照不作数(设计文档 §2)。
             if draft.id.is_some() {
                 ws_state.schemas.remove(&id);
+                ws_state.content.close_by_source(&id);
                 if ws_state.browsing.as_deref() == Some(id.as_str()) {
                     ws_state.browsing = None;
                 }
@@ -865,6 +912,7 @@ pub fn update(
             ws_state.sources.retain(|s| s.id != id);
             ws_state.test_status.remove(&id);
             ws_state.schemas.remove(&id);
+            ws_state.content.close_by_source(&id);
             if ws_state.browsing.as_deref() == Some(id.as_str()) {
                 ws_state.browsing = None;
             }
@@ -1106,9 +1154,240 @@ pub fn update(
                 },
             );
         }
+        Message::OpenTableTab {
+            source_id,
+            schema,
+            table,
+        } => {
+            ws_state.content.open_table(source_id, schema, table);
+        }
+        Message::OpenCollectionTab { source_id, name } => {
+            ws_state.content.open_collection(source_id, name);
+        }
+        Message::OpenQueryTab(source_id) => {
+            ws_state.content.open_query(source_id);
+        }
+        Message::SelectTab(idx) => ws_state.content.select(idx),
+        Message::CloseTab(idx) => ws_state.content.close(idx),
+        Message::TabScroll(right) => ws_state.content.scroll_tabs(right),
+        Message::BrowseWhereChanged(tab_id, v) => {
+            if let Some(TabContent::Browse(b)) = ws_state.content.content_mut(tab_id) {
+                b.where_clause = v;
+            }
+        }
+        Message::BrowseOrderByChanged(tab_id, v) => {
+            if let Some(TabContent::Browse(b)) = ws_state.content.content_mut(tab_id) {
+                b.order_by = v;
+            }
+        }
+        Message::BrowsePageSizeChanged(tab_id, size) => {
+            if let Some(TabContent::Browse(b)) = ws_state.content.content_mut(tab_id) {
+                b.page_size = size;
+                b.page = 0; // 换页大小回第一页,避免 offset 算错位置
+            }
+        }
+        Message::BrowsePrev(tab_id) => {
+            if let Some(TabContent::Browse(b)) = ws_state.content.content_mut(tab_id)
+                && b.page > 0
+            {
+                b.page -= 1;
+            }
+            dispatch_browse_run(
+                ws_state, app_state, tab_id, project_id, repo_path, handle, emit,
+            );
+            return;
+        }
+        Message::BrowseNext(tab_id) => {
+            if let Some(TabContent::Browse(b)) = ws_state.content.content_mut(tab_id)
+                && b.has_more
+            {
+                b.page += 1;
+            }
+            dispatch_browse_run(
+                ws_state, app_state, tab_id, project_id, repo_path, handle, emit,
+            );
+            return;
+        }
+        Message::BrowseRun(tab_id) => {
+            dispatch_browse_run(
+                ws_state, app_state, tab_id, project_id, repo_path, handle, emit,
+            );
+            return;
+        }
+        Message::BrowseResult(_project_id, tab_id, seq, result) => {
+            let Some(TabContent::Browse(b)) = ws_state.content.content_mut(tab_id) else {
+                return; // tab 已关闭
+            };
+            if !b.is_current_run(seq) {
+                return; // 过期结果:tab 内又发起了更新的一轮请求,这轮作废
+            }
+            apply_browse_result(b, result);
+        }
+        Message::QueryTextAction(tab_id, action) => {
+            if let Some(TabContent::Query(q)) = ws_state.content.content_mut(tab_id) {
+                q.sql.perform(action);
+            }
+        }
+        Message::QueryRun(tab_id) => {
+            let Some(kind) = ws_state
+                .content
+                .tabs()
+                .iter()
+                .find(|t| t.id == tab_id)
+                .and_then(|t| match &t.kind {
+                    DatabaseTabKind::Query { source_id, .. } => driver_of(ws_state, source_id),
+                    _ => None,
+                })
+            else {
+                return;
+            };
+            let Some(source) = ws_state
+                .content
+                .tabs()
+                .iter()
+                .find(|t| t.id == tab_id)
+                .and_then(|t| match &t.kind {
+                    DatabaseTabKind::Query { source_id, .. } => ws_state
+                        .sources
+                        .iter()
+                        .find(|s| &s.id == source_id)
+                        .cloned(),
+                    _ => None,
+                })
+            else {
+                return;
+            };
+            let sql = match ws_state.content.content_mut(tab_id) {
+                Some(TabContent::Query(q)) => {
+                    let seq = q.begin_run();
+                    let text = q.sql.text();
+                    (seq, text)
+                }
+                _ => return,
+            };
+            let (seq, sql_text) = sql;
+            let password = keyring_entry(project_id, &source.id)
+                .ok()
+                .and_then(|e| e.get_password().ok());
+            let url = build_sql_url(&source, password.as_deref());
+            let emit = emit.clone();
+            handle.spawn(async move {
+                let result = run_query(kind, &url, &sql_text).await;
+                emit(Message::QueryResult(project_id, tab_id, seq, result));
+            });
+        }
+        Message::QueryResult(_project_id, tab_id, seq, result) => {
+            let Some(TabContent::Query(q)) = ws_state.content.content_mut(tab_id) else {
+                return;
+            };
+            if !q.is_current_run(seq) {
+                return; // 过期结果:同一 tab 内已经又执行了一次更新的查询
+            }
+            apply_query_result(q, result);
+        }
         Message::ToolbarHover(..) => {
             // 悬停进度由内核 `Message::Database` 分支转发到 `HoverId`,吃不到这里。
         }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch_browse_run(
+    ws_state: &mut WorkspaceState,
+    _app_state: &AppState,
+    tab_id: usize,
+    project_id: i64,
+    repo_path: &Path,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + Clone + 'static,
+) {
+    let Some(tab) = ws_state.content.tabs().iter().find(|t| t.id == tab_id) else {
+        return;
+    };
+    let (source_id, mongo_name, table_schema, table_name) = match &tab.kind {
+        DatabaseTabKind::Table {
+            source_id,
+            schema,
+            table,
+        } => (source_id.clone(), None, schema.clone(), Some(table.clone())),
+        DatabaseTabKind::Collection { source_id, name } => {
+            (source_id.clone(), Some(name.clone()), None, None)
+        }
+        DatabaseTabKind::Query { .. } => return, // 查询 tab 不走这条路径
+    };
+    let Some(source) = ws_state.sources.iter().find(|s| s.id == source_id).cloned() else {
+        return;
+    };
+    let Some(TabContent::Browse(b)) = ws_state.content.content_mut(tab_id) else {
+        return;
+    };
+    let seq = b.begin_run();
+    b.error = None;
+    let (where_clause, order_by, page, page_size) = (
+        b.where_clause.clone(),
+        b.order_by.clone(),
+        b.page,
+        b.page_size,
+    );
+    let password = keyring_entry(project_id, &source.id)
+        .ok()
+        .and_then(|e| e.get_password().ok());
+    let _ = repo_path; // 本函数不需要仓库路径,保留参数只为和 update() 里其它 dispatch 签名一致
+    let emit2 = emit.clone();
+    if source.driver == DriverKind::MongoDB {
+        let url = build_mongo_url(&source, password.as_deref());
+        let db_name = source.database.clone().unwrap_or_default();
+        let name = mongo_name.unwrap_or_default();
+        handle.spawn(async move {
+            let result = browse_collection(&url, &db_name, &name, page, page_size).await;
+            emit2(Message::BrowseResult(project_id, tab_id, seq, result));
+        });
+    } else {
+        let url = build_sql_url(&source, password.as_deref());
+        let kind = source.driver;
+        let table = table_name.unwrap_or_default();
+        handle.spawn(async move {
+            let result = browse_table(
+                kind,
+                &url,
+                table_schema.as_deref(),
+                &table,
+                &where_clause,
+                &order_by,
+                page,
+                page_size,
+            )
+            .await;
+            emit2(Message::BrowseResult(project_id, tab_id, seq, result));
+        });
+    }
+}
+
+/// `BrowseResult` 落地:过期结果的核对(`run_seq` 对不上)在 `update()` 的
+/// `Message::BrowseResult` 分支里做完才会调到这个函数,这里只管把结果写
+/// 进状态。模块私有——`app.rs`(Task 6)不直接调它,而是把消息重新塞回
+/// `database::update()`,由 `update()` 内部调这个函数。
+fn apply_browse_result(b: &mut BrowseState, result: Result<BrowsePage, String>) {
+    b.loading = false;
+    match result {
+        Ok(page) => {
+            b.error = None;
+            b.result = Some(page.result);
+            b.has_more = page.has_more;
+        }
+        Err(e) => b.error = Some(e),
+    }
+}
+
+/// `QueryResult` 落地,同上——模块私有,理由同 `apply_browse_result`。
+fn apply_query_result(q: &mut QueryState, result: Result<QueryOutcome, String>) {
+    q.running = false;
+    match result {
+        Ok(outcome) => {
+            q.error = None;
+            q.result = Some(outcome);
+        }
+        Err(e) => q.error = Some(e),
     }
 }
 
@@ -1966,7 +2245,7 @@ pub struct QueryResult {
     pub rows: Vec<Vec<CellValue>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum QueryOutcome {
     Rows(QueryResult),
     Affected(u64),
@@ -2410,6 +2689,7 @@ fn is_ddl_keyword(sql: &str) -> bool {
 
 /// 浏览页一次查询的结果:`has_more` 由"多取一行"判断(设计文档"架构与
 /// 数据流 §5"),渲染前已把多出的那行丢弃。
+#[derive(Debug, Clone)]
 pub struct BrowsePage {
     pub result: QueryResult,
     pub has_more: bool,
@@ -3613,5 +3893,127 @@ mod mongo_collection_tests {
             .await
             .unwrap_err();
         assert!(err.contains("数据库名"));
+    }
+}
+
+#[cfg(test)]
+mod content_message_tests {
+    use super::*;
+
+    fn sqlite_source(id: &str) -> DataSource {
+        DataSource {
+            id: id.into(),
+            name: format!("test-{id}"),
+            driver: DriverKind::Sqlite,
+            host: None,
+            port: None,
+            database: Some("/nonexistent/does-not-matter.sqlite".into()),
+            username: None,
+            uri: None,
+        }
+    }
+
+    fn update_with(ws: &mut WorkspaceState, msg: Message) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let mut app_state = AppState::default();
+        let dir = tempfile::tempdir().unwrap();
+        rt.block_on(async {
+            update(ws, &mut app_state, msg, 42, dir.path(), rt.handle(), |_| ());
+        });
+    }
+
+    #[test]
+    fn open_table_tab_message_creates_tab() {
+        let mut ws = WorkspaceState::default();
+        update_with(
+            &mut ws,
+            Message::OpenTableTab {
+                source_id: "s1".into(),
+                schema: None,
+                table: "users".into(),
+            },
+        );
+        assert_eq!(ws.content().tabs().len(), 1);
+    }
+
+    #[test]
+    fn browse_where_changed_updates_state() {
+        let mut ws = WorkspaceState::default();
+        update_with(
+            &mut ws,
+            Message::OpenTableTab {
+                source_id: "s1".into(),
+                schema: None,
+                table: "users".into(),
+            },
+        );
+        let tab_id = ws.content().tabs()[0].id;
+        update_with(
+            &mut ws,
+            Message::BrowseWhereChanged(tab_id, "id > 1".into()),
+        );
+        let TabContent::Browse(b) = ws.content().content(tab_id).unwrap() else {
+            panic!("应为 Browse");
+        };
+        assert_eq!(b.where_clause, "id > 1");
+    }
+
+    #[test]
+    fn close_tab_message_removes_it() {
+        let mut ws = WorkspaceState::default();
+        update_with(
+            &mut ws,
+            Message::OpenTableTab {
+                source_id: "s1".into(),
+                schema: None,
+                table: "users".into(),
+            },
+        );
+        update_with(&mut ws, Message::CloseTab(0));
+        assert!(ws.content().tabs().is_empty());
+    }
+
+    #[test]
+    fn delete_source_closes_its_tabs() {
+        let mut ws = WorkspaceState::default();
+        ws.sources.push(sqlite_source("s1"));
+        update_with(
+            &mut ws,
+            Message::OpenTableTab {
+                source_id: "s1".into(),
+                schema: None,
+                table: "users".into(),
+            },
+        );
+        assert_eq!(ws.content().tabs().len(), 1);
+        update_with(&mut ws, Message::DeleteSource("s1".into()));
+        assert!(ws.content().tabs().is_empty());
+    }
+
+    #[test]
+    fn apply_browse_result_ok_and_err_paths() {
+        let mut b = BrowseState::default();
+        b.begin_run();
+        apply_browse_result(
+            &mut b,
+            Ok(BrowsePage {
+                result: QueryResult {
+                    columns: vec!["id".into()],
+                    rows: vec![vec![CellValue::Text("1".into())]],
+                },
+                has_more: true,
+            }),
+        );
+        assert!(!b.loading);
+        assert!(b.has_more);
+        assert_eq!(b.result.as_ref().unwrap().rows.len(), 1);
+
+        let mut b2 = BrowseState::default();
+        b2.begin_run();
+        apply_browse_result(&mut b2, Err("boom".into()));
+        assert_eq!(b2.error.as_deref(), Some("boom"));
     }
 }
