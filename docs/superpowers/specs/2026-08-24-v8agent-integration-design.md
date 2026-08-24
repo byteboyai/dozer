@@ -56,18 +56,33 @@ transcript 写入器顺带补上了它自己独立的会话持久化能力,不�
 
 ## 改动一:v8agent-core —— 捕获 usage
 
-`crates/v8agent-core/src/event.rs` 里 `MultiTurnStreamItem` → `AgentEvent`
-的转换函数已经 `use rig::completion::GetTokenUsage`(usage 数据本来就在
-rig 的流里,只是没被读取)。改动:
+`crates/v8agent-core/src/event.rs` 里 `translate_stream_item` 的
+`MultiTurnStreamItem::FinalResponse(response)` 分支目前直接丢弃 `response`
+携带的数据,只产出无字段的 `AgentEvent::TurnEnded`。核实发现 `response`
+的类型 `rig::agent::PromptResponse`(准确说是 `rig_agent::prompt_request::PromptResponse`,
+经 `rig::agent` 重导出)本身就有一个 `pub usage: rig::completion::Usage`
+字段——"本轮运行的聚合 token 用量",不需要再手动调用
+`GetTokenUsage::token_usage()`,也不需要新定义一个 `TokenUsage` 结构体。
+`rig::completion::Usage` 派生了 `Debug, PartialEq, Eq, Clone, Copy,
+Serialize, Deserialize`,字段是
+`input_tokens`/`output_tokens`/`total_tokens`/`cached_input_tokens`/
+`cache_creation_input_tokens`/`tool_use_prompt_tokens`/`reasoning_tokens`,
+直接满足 `AgentEvent` 现有的 `#[derive(Debug, Clone, PartialEq)]` 约束。改动:
 
-- `AgentEvent::TurnEnded` 从无字段变体改为 `TurnEnded { usage: Option<TokenUsage> }`
-  (`TokenUsage` 是新增的小结构体:`input_tokens`/`output_tokens`/
-  `cache_read_tokens`/`cache_write_tokens`,字段命名对齐 dozerd 侧
-  `UsagePayload` 的既有口径)。
+- `AgentEvent::TurnEnded` 从无字段变体改为
+  `TurnEnded { usage: rig::completion::Usage }`(非 `Option`——
+  `PromptResponse.usage` 永远有值,provider 没报用量时是全零的
+  `Usage::new()` 哨兵值,不是缺失)。
+- `translate_stream_item` 的 `FinalResponse` 分支改为
+  `Some(AgentEvent::TurnEnded { usage: response.usage })`。
 - 不新开一个独立的 `AgentEvent::Usage` 变体——下游(transcript 写入器、
   hook 上报)都是"一轮结束时落一条 usage 记录",没有需要独立时序对齐的
   消费场景,拆分是不必要的复杂度。
 - `AgentEvent::Error` 分支没有 usage 可带,维持不变。
+- 这是一处破坏性类型改动:`event.rs`/`engine.rs` 测试里所有构造裸
+  `AgentEvent::TurnEnded`(无花括号)的位置,以及 `dozer_bridge.rs`/
+  `repl.rs` 里匹配 `AgentEvent::TurnEnded => ...` 的位置,都需要跟着改成
+  带字段的形式——具体位置见对应实现计划。
 
 ## 改动二:v8agent-cli —— 本地 transcript 写入器
 
@@ -106,11 +121,13 @@ rig 的流里,只是没被读取)。改动:
 
 磁盘上的 key 名(`input_tokens`/`output_tokens`/`cache_read_input_tokens`/
 `cache_creation_input_tokens`)直接照抄 `parse_claude_shaped_chunk` 现在
-读取的四个 key,不新增/改名——`transcript_writer.rs` 负责把"改动一"里
-`TokenUsage` 结构体的字段(`input_tokens`/`output_tokens`/
-`cache_read_tokens`/`cache_write_tokens`)映射成这四个磁盘 key,两边命名
-不必强行统一,结构体内部命名以 dozerd `UsagePayload` 口径对齐为准,磁盘
-格式以 Claude transcript 原生 key 名为准。
+读取的四个 key,不新增/改名。`transcript_writer.rs` 负责把"改动一"里
+`rig::completion::Usage` 的字段映射成这四个磁盘 key:
+`input_tokens`→`input_tokens`,`output_tokens`→`output_tokens`,
+`cached_input_tokens`→`cache_read_input_tokens`,
+`cache_creation_input_tokens`→`cache_creation_input_tokens`(这两个字段
+恰好同名,不需要映射);`total_tokens`/`tool_use_prompt_tokens`/
+`reasoning_tokens` 三个 `Usage` 字段磁盘格式不需要,不落盘。
 
 ## 改动三:dozer —— 解析器 dispatch + 排除表清理
 
