@@ -160,7 +160,18 @@ Serialize, Deserialize`,字段是
 
 `crates/dozer-app/src/extensions/usage.rs`:
 
-- 用量统计排除表(约 167 行)去掉 `AgentKind::V8agent`。
+- **不需要改动**——写 spec 时以为这里有一张类似 `needs_activity` 那样的
+  简单排除表,实现前重新核实(读代码)发现判断有误:usage 面板的主表
+  (`WorkspaceState::rows()`,`Vec<(ConversationMeta, ConversationUsage)>`)
+  完全下游于 dozerd 的 `list_conversations`/`get_usage_summary`,不按
+  agent kind 过滤——`parse_chunk` 分派改对之后,V8agent 的会话/用量行
+  自动出现在这张表里,dozer-app 侧没有需要跟着改的代码。
+  `AgentKind::Unknown | Codex | Kilo | V8agent => {}` 那一行(167 行)
+  属于另一个东西:`daily_totals_by_agent()` 产出的**按天用量趋势图**,
+  `DayAgentTotals` 结构体硬编码只有 `claude`/`codebuddy`/`opencode` 三个
+  字段(图表画布渲染、图例、配色都是按这三家写死的)。给 V8agent 在这张
+  图里也开一列,需要新增结构体字段 + 改画布渲染 + 加图例配色,是独立量级
+  的 UI 改动,不是"去掉一行排除"。这次不做,归入下面"非目标"。
 
 ### 测试改动
 
@@ -173,6 +184,9 @@ Serialize, Deserialize`,字段是
 - `dozer-app/workspace.rs` 里 `ensure_hook_installed_is_noop_for_kilo_v8agent_and_unknown`
   等测试:V8agent 部分保留(返回 None 的行为没变),但测试名/注释里
   "V8agent 是占位"的措辞需要更新,避免误导未来读者以为这是待修的缺口。
+- `dozer-app/workspace.rs` 的 `agent_card_refresh_plan_decides_by_agent_and_cwd`
+  测试:目前完全没有覆盖 V8agent 这个 case(排除表本身此前也没被
+  单测锁定过),需要新增一条断言。
 
 新增测试覆盖:
 
@@ -192,3 +206,7 @@ Serialize, Deserialize`,字段是
 - v8agent 自己的 transcript 文件不做垃圾回收/轮转策略——量级和现有其他
   agent 的 transcript 目录一致,回填/清理沿用 dozerd 现有机制,不在这次
   范围内单独设计。
+- 不给 `usage.rs` 的按天用量趋势图(`DayAgentTotals`)加 V8agent 列——
+  详见"改动三"里的说明,是独立量级的图表 UI 改动。V8agent 的用量数据
+  在 usage 面板的主表(逐会话列表)里正常可见,只是不出现在这张趋势图上,
+  跟 Codex/Kilo/Unknown 现在的处境一致。
