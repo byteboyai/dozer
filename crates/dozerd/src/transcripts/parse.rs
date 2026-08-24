@@ -231,8 +231,17 @@ fn parse_claude_shaped_chunk(
                             tool_calls += 1;
                             if mutating_tools.contains(&name) {
                                 mutating_tool_calls += 1;
-                                if let Some(path) = input.get("file_path").and_then(|p| p.as_str())
-                                {
+                                // 跟 tool_summary() 一样的 file_path→path 回退链——
+                                // Claude 自己的工具用 file_path,V8agent 的
+                                // write_file/edit_file 用 path(见
+                                // v8agent-core/src/tools/fs.rs 的
+                                // WriteFileArgs/EditFileArgs),不回退会让
+                                // V8agent 的 files_touched 恒为空。
+                                let path = input
+                                    .get("file_path")
+                                    .or_else(|| input.get("path"))
+                                    .and_then(|p| p.as_str());
+                                if let Some(path) = path {
                                     files_touched.push(path.to_string());
                                 }
                             }
@@ -779,15 +788,22 @@ mod tests {
 
     #[test]
     fn v8agent_uses_its_own_mutating_tool_list() {
+        // v8agent-core 的 WriteFileArgs/EditFileArgs 用 "path" 做参数键,
+        // 不是 Claude 工具的 "file_path"——这里必须用真实的 v8agent 参数
+        // 形状,否则测不出 file_path→path 回退链缺失的 bug。
         let text = concat!(
             "{\"type\":\"assistant\",\"message\":{\"content\":[",
-            "{\"type\":\"tool_use\",\"name\":\"write_file\",\"input\":{\"file_path\":\"foo.rs\"}}",
+            "{\"type\":\"tool_use\",\"name\":\"write_file\",\"input\":{\"path\":\"foo.rs\"}}",
             "]}}\n"
         );
         let turns = parse_chunk(AgentKind::V8agent, text, "conv1", 0);
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].mutating_tool_calls, 1);
-        assert_eq!(turns[0].files_touched, vec!["foo.rs".to_string()]);
+        assert_eq!(
+            turns[0].files_touched,
+            vec!["foo.rs".to_string()],
+            "files_touched must fall back to the \"path\" key for V8agent's own tool args"
+        );
     }
 
     #[test]
