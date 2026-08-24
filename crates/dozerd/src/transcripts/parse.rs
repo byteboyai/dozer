@@ -6,6 +6,7 @@ use dozer_core::protocol::{AgentKind, ToolCallInfo};
 use serde_json::Value;
 
 pub const MUTATING_TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
+const V8AGENT_MUTATING_TOOLS: [&str; 3] = ["write_file", "edit_file", "git_commit"];
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ParsedTurn {
@@ -129,6 +130,7 @@ fn parse_claude_shaped_chunk(
     text: &str,
     conversation_id: &str,
     starting_turn_index: i64,
+    mutating_tools: &[&str],
 ) -> Vec<ParsedTurn> {
     let mut out = Vec::new();
     let mut turn_index = starting_turn_index;
@@ -227,7 +229,7 @@ fn parse_claude_shaped_chunk(
                             let input = b.get("input").cloned().unwrap_or(Value::Null);
                             tools_summary.push(tool_summary(name, &input));
                             tool_calls += 1;
-                            if MUTATING_TOOLS.contains(&name) {
+                            if mutating_tools.contains(&name) {
                                 mutating_tool_calls += 1;
                                 if let Some(path) = input.get("file_path").and_then(|p| p.as_str())
                                 {
@@ -454,12 +456,18 @@ pub fn parse_chunk(
 ) -> Vec<ParsedTurn> {
     match agent {
         AgentKind::Claude | AgentKind::Opencode | AgentKind::Kilo | AgentKind::Unknown => {
-            parse_claude_shaped_chunk(text, conversation_id, starting_turn_index)
+            parse_claude_shaped_chunk(text, conversation_id, starting_turn_index, &MUTATING_TOOLS)
         }
+        AgentKind::V8agent => parse_claude_shaped_chunk(
+            text,
+            conversation_id,
+            starting_turn_index,
+            &V8AGENT_MUTATING_TOOLS,
+        ),
         AgentKind::Codebuddy => {
             parse_codebuddy_shaped_chunk(text, conversation_id, starting_turn_index)
         }
-        AgentKind::Codex | AgentKind::V8agent => Vec::new(),
+        AgentKind::Codex => Vec::new(),
     }
 }
 
@@ -485,14 +493,17 @@ pub fn extract_turn_trace_detail(raw_json: &str, agent: AgentKind) -> TurnTraceD
     };
     match agent {
         AgentKind::Codebuddy => extract_codebuddy_trace_detail(&v),
-        // Claude/Opencode/Kilo/Unknown 摄取时都走 parse_claude_shaped_chunk
-        // (parse_chunk 的分派,parse.rs:456-457),读时解析沿用同一分派。
-        AgentKind::Claude | AgentKind::Opencode | AgentKind::Kilo | AgentKind::Unknown => {
-            extract_claude_trace_detail(&v)
-        }
-        // Codex/V8agent 目前完全不摄取(parse_chunk 分派到空 Vec,
-        // parse.rs:462),没有 raw_json 可读。
-        AgentKind::Codex | AgentKind::V8agent => TurnTraceDetail::default(),
+        // Claude/Opencode/Kilo/Unknown/V8agent 摄取时都走
+        // parse_claude_shaped_chunk(parse_chunk 的分派,parse.rs 上方),
+        // 读时解析沿用同一分派。
+        AgentKind::Claude
+        | AgentKind::Opencode
+        | AgentKind::Kilo
+        | AgentKind::Unknown
+        | AgentKind::V8agent => extract_claude_trace_detail(&v),
+        // Codex 目前完全不摄取(parse_chunk 分派到空 Vec),没有 raw_json
+        // 可读。
+        AgentKind::Codex => TurnTraceDetail::default(),
     }
 }
 
@@ -761,10 +772,52 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_agents_yield_empty() {
+    fn codex_yields_empty() {
         let text = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"忽略\"}}\n";
         assert!(parse_chunk(AgentKind::Codex, text, "c", 0).is_empty());
-        assert!(parse_chunk(AgentKind::V8agent, text, "c", 0).is_empty());
+    }
+
+    #[test]
+    fn v8agent_uses_its_own_mutating_tool_list() {
+        let text = concat!(
+            "{\"type\":\"assistant\",\"message\":{\"content\":[",
+            "{\"type\":\"tool_use\",\"name\":\"write_file\",\"input\":{\"file_path\":\"foo.rs\"}}",
+            "]}}\n"
+        );
+        let turns = parse_chunk(AgentKind::V8agent, text, "conv1", 0);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].mutating_tool_calls, 1);
+        assert_eq!(turns[0].files_touched, vec!["foo.rs".to_string()]);
+    }
+
+    #[test]
+    fn v8agent_does_not_recognize_claudes_mutating_tool_names() {
+        let text = concat!(
+            "{\"type\":\"assistant\",\"message\":{\"content\":[",
+            "{\"type\":\"tool_use\",\"name\":\"Edit\",\"input\":{\"file_path\":\"foo.rs\"}}",
+            "]}}\n"
+        );
+        let turns = parse_chunk(AgentKind::V8agent, text, "conv1", 0);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0].mutating_tool_calls, 0,
+            "V8agent's own tool is write_file/edit_file, not Claude's Edit — must not cross-recognize"
+        );
+    }
+
+    #[test]
+    fn claude_does_not_recognize_v8agents_mutating_tool_names() {
+        let text = concat!(
+            "{\"type\":\"assistant\",\"message\":{\"content\":[",
+            "{\"type\":\"tool_use\",\"name\":\"write_file\",\"input\":{\"file_path\":\"foo.rs\"}}",
+            "]}}\n"
+        );
+        let turns = parse_chunk(AgentKind::Claude, text, "conv1", 0);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0].mutating_tool_calls, 0,
+            "parameterizing must not leak V8agent's tool names into Claude's list"
+        );
     }
 
     #[test]
@@ -863,6 +916,16 @@ mod trace_detail_tests {
         let input_json = detail.tool_calls[0].input_json.as_deref().unwrap();
         assert!(input_json.contains("README.md"));
         assert!(input_json.contains("old_string"));
+    }
+
+    #[test]
+    fn extract_turn_trace_detail_works_for_v8agent_via_claude_shape() {
+        let raw = r#"{"type":"assistant","message":{"content":[
+            {"type":"tool_use","name":"edit_file","input":{"file_path":"foo.rs"}}
+        ]}}"#;
+        let detail = extract_turn_trace_detail(raw, AgentKind::V8agent);
+        assert_eq!(detail.tool_calls.len(), 1);
+        assert_eq!(detail.tool_calls[0].summary, "edit_file foo.rs");
     }
 
     #[test]
