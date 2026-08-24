@@ -2236,9 +2236,10 @@ pub(crate) fn agent_card_refresh_plan(
     // "当前工作内容"兜底摘要的门禁比 model/mode 宽——只要 transcript
     // schema 能被 `parse_transcript` 解出人类/AI 文本就值得读(Opencode/
     // Kilo 的合成 transcript 是 Claude 形状,真有内容,只是没写 model/mode
-    // 字段而已);Codex/V8agent 目前 `parse_transcript` 恒回空,读了也提取
-    // 不出东西,不值得为它们打开这道门。
-    let needs_activity = !matches!(agent, AgentKind::Codex | AgentKind::V8agent);
+    // 字段而已;V8agent 的 transcript 现在也走同一条 Claude 形状解析路径,
+    // 见 dozerd `transcripts/parse.rs` 的 `parse_chunk` 分派)。Codex 目前
+    // `parse_transcript` 恒回空,读了也提取不出东西,不值得为它打开这道门。
+    let needs_activity = !matches!(agent, AgentKind::Codex);
     // 精确相等太脆弱——cd 进项目根的任意子目录都会被判定成"偏离",既多做
     // 一次不必要的 git 查询,也是 Finding 1 那个 bug 更容易被触发的原因之
     // 一。改成路径前缀包含关系:cwd 是 project_root 的子路径就算"未偏离"。
@@ -3679,9 +3680,14 @@ pub(crate) fn agent_cli_command(agent: AgentKind) -> Option<&'static str> {
 /// 已接入 `dozer-hook` 安装器的 agent 集合。刻意穷尽 match 而不是拿
 /// `agent.label()` 当 catch-all 参数：`install::settings_path_for` 对未识别
 /// 的 agent 名一律落回 Claude 的 `settings.json`路径，如果不显式排除
-/// Kilo/V8agent(纯 GUI 占位，没有真实 hook 支持)，误调用会把
-/// "kilo"/"v8agent" 的 hook 命令写进 Claude 的 settings.json，顶掉真正的
-/// claude hook 条目。
+/// Kilo/V8agent，误调用会把 "kilo"/"v8agent" 的 hook 命令写进 Claude 的
+/// settings.json，顶掉真正的 claude hook 条目。两者排除的原因不同：Kilo
+/// 是真实缺口(没有任何 hook 上报机制)；V8agent 走的是完全不同的路子——
+/// `v8agent-cli` 在 `DOZER_SESSION_ID` 存在时直接通过 UDS socket 上报
+/// `Request::HookEvent`(见 `dozer-core::protocol`),不依赖这套"往
+/// agent 自己的配置文件里写 hook 命令"的安装机制，所以这里返回 `None`
+/// 对 V8agent 而言是正确行为，不是待办事项(spec
+/// `docs/superpowers/specs/2026-08-24-v8agent-integration-design.md`)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HookInstallTarget {
     Settings,
@@ -4265,6 +4271,13 @@ mod tests {
             "Codex 的 transcript 恒解不出内容(parse_transcript 空 Vec),\
              model/mode/activity 都不值得读"
         );
+        assert_eq!(
+            agent_card_refresh_plan(dozer_core::protocol::AgentKind::V8agent, &root, Some(&root)),
+            (false, true, false),
+            "V8agent 现在走 Claude 形状解析(parse.rs 的 dispatch 改动),\
+             transcript 能真正解出内容,activity 门禁应该打开;\
+             model/mode 门禁不动(V8agent 的 transcript 里没有 model 字段)"
+        );
     }
 
     #[test]
@@ -4811,7 +4824,9 @@ mod tests {
         // Kilo/V8agent 在 `dozer-hook::install::settings_path_for` 里没有专属
         // 分支，会落回 Claude 的 settings.json 路径——绝不能对它们调用安装
         // 逻辑，否则会把 "kilo"/"v8agent" 的 hook 命令误写进 Claude 的配置，
-        // 顶掉真正的 claude hook 条目。Unknown 同理，从不该触发安装。
+        // 顶掉真正的 claude hook 条目。Unknown 同理，从不该触发安装。V8agent
+        // 不属于这里(它走 socket 直连上报，见 hook_install_target 上方文档
+        // 注释)，只是恰好也该返回 None——跟 Kilo 是两个不同的理由。
         for agent in [AgentKind::Kilo, AgentKind::V8agent, AgentKind::Unknown] {
             assert_eq!(hook_install_target(agent), None, "{agent:?}");
         }
