@@ -167,8 +167,39 @@ fn prefers_rendered_preview(path: &std::path::Path) -> bool {
             .unwrap_or("")
             .to_ascii_lowercase()
             .as_str(),
-        "md" | "markdown"
+        "md" | "markdown" | "html" | "htm"
     )
+}
+
+/// html/htm 走真实 `file://` URL 直接加载,不经 flyfish——flyfish 的渲染
+/// 器把 html/htm 也归进它自己的通用文本/源码管线(不是当网页渲染),给它
+/// 加 `prefers_rendered_preview` 只是换个地方显示源码,达不到"像 md 一样
+/// 渲染出效果"的目的(核心原则见 CLAUDE.md:预览应该让用户看到 AI 产出的
+/// 实际效果)。让 wry 直接加载文件本身的 `file://` URL,WKWebView 按普通
+/// 网页处理,相对路径引用的 css/js/图片按文件所在目录自然解析,不用额外
+/// 起服务。`p`(每段路径分量分别编码,保留 `/` 分隔符,不能直接套
+/// `encode_component` 整段编码——那会把 `/` 也转义掉,破坏 URL 结构)。
+fn file_url(path: &std::path::Path) -> String {
+    let encoded_segments: Vec<String> = path
+        .to_string_lossy()
+        .split('/')
+        .map(encode_component)
+        .collect();
+    format!("file://{}", encoded_segments.join("/"))
+}
+
+/// `TabKind::File` → wry 期望加载的 URL,按扩展名分派两条渲染路径。
+fn preview_url(path: &std::path::Path) -> String {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "html" | "htm" => file_url(path),
+        _ => flyfish_url(path),
+    }
 }
 
 #[derive(Default)]
@@ -315,9 +346,12 @@ impl PreviewPane {
                 let TabKind::File(path) = &tab.kind else {
                     return None;
                 };
-                let mut u = flyfish_url(path);
+                let mut u = preview_url(path);
                 if tab.reload_nonce > 0 {
-                    u.push_str(&format!("&_r={}", tab.reload_nonce));
+                    // flyfish URL 已经带 `?p=...` 查询串,html 的 file:// URL
+                    // 还没有——按 URL 是否已有查询串决定用 `&` 还是 `?` 起头。
+                    let sep = if u.contains('?') { '&' } else { '?' };
+                    u.push_str(&format!("{sep}_r={}", tab.reload_nonce));
                 }
                 Some(WebviewSpec {
                     id: tab.id,
@@ -774,6 +808,74 @@ mod tests {
         );
 
         std::fs::remove_file(&md_path).ok();
+    }
+
+    #[test]
+    fn html_renders_via_webview_but_stays_editable() {
+        // 跟 markdown_renders_via_webview_but_stays_editable 同一套断言,
+        // 验证 html 现在也走"能编辑但默认展示渲染效果"这条路径。
+        let dir = std::env::temp_dir();
+        let html_path = dir.join(format!("preview_html_test_{}.html", std::process::id()));
+        std::fs::write(&html_path, "<h1>hello</h1>").unwrap();
+
+        let mut p = PreviewPane::default();
+        p.open_path(html_path.clone());
+
+        assert!(
+            p.tabs()[0].editor.is_none(),
+            ".html 默认预览应走 wry 渲染,不建原生只读 editor"
+        );
+        assert!(
+            is_editable_extension(&html_path),
+            ".html 仍应保留可编辑属性,右键“编辑”入口不受影响"
+        );
+        let specs = p.desired_webviews();
+        assert_eq!(specs.len(), 1, ".html 现在应进 wry 期望清单");
+        assert_eq!(
+            specs[0].url,
+            format!("file://{}", html_path.to_string_lossy()),
+            ".html 应该直接加载 file:// URL,不经 flyfish(flyfish 只会把它当源码显示)"
+        );
+
+        std::fs::remove_file(&html_path).ok();
+    }
+
+    #[test]
+    fn file_url_percent_encodes_each_path_segment_but_keeps_slashes() {
+        assert_eq!(
+            file_url(std::path::Path::new("/tmp/a b/c.html")),
+            "file:///tmp/a%20b/c.html"
+        );
+    }
+
+    #[test]
+    fn preview_url_dispatches_html_to_file_url_and_others_to_flyfish() {
+        assert_eq!(
+            preview_url(std::path::Path::new("/tmp/page.html")),
+            "file:///tmp/page.html"
+        );
+        assert_eq!(
+            preview_url(std::path::Path::new("/tmp/page.HTM")),
+            "file:///tmp/page.HTM",
+            "扩展名判定大小写不敏感"
+        );
+        assert_eq!(
+            preview_url(std::path::Path::new("/tmp/notes.md")),
+            flyfish_url(std::path::Path::new("/tmp/notes.md")),
+            "非 html/htm 扩展名不变,仍走 flyfish"
+        );
+    }
+
+    #[test]
+    fn bump_reload_uses_question_mark_separator_for_file_url_html() {
+        let mut p = PreviewPane::default();
+        let id0 = p.open_path(PathBuf::from("/tmp/a.html"));
+        p.bump_reload(id0);
+        assert_eq!(
+            p.desired_webviews()[0].url,
+            "file:///tmp/a.html?_r=1",
+            "file:// URL 本身没有查询串,重载参数要用 ? 起头而不是 &"
+        );
     }
 
     #[test]
