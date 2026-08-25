@@ -1556,6 +1556,15 @@ pub enum Message {
     /// main.rs 的 IPC 分支不知道自己在哪套里,故用独立顶层消息,不开新
     /// `browser::Message::TitleLoaded` 包装。
     BrowserTitle(usize, String),
+    /// 浏览器 webview 渲染进程报回网页内超链接/`window.open` 自行导航后的
+    /// 真实地址(id = webview/tab id,url = webview 加载到的 URL)。路由口径
+    /// 同 `BrowserTitle`:首页全局/工作区两套浏览器按 `is_home()` 分派,而不
+    /// 走 `Message::Browser(..)`(那会只落到聚焦工作区)。
+    BrowserNavigated(usize, String),
+    /// 网页内 `target="_blank"`/`window.open` 请求新窗口。wry 的
+    /// `new_window_req` 分支不知道目标归属哪套浏览器,同 `BrowserTitle` 按
+    /// `is_home()` 路由,在其内 `open_url`(总开新 tab,不复用激活 tab)。
+    BrowserNewWindow(String),
     /// 项目:切换到最近项目。
     ProjectSelect(i64),
     /// 项目:"打开项目…"→ rfd 文件夹选择(main.rs 执行),选中后回送
@@ -4167,6 +4176,54 @@ impl App {
                     );
                 } else {
                     // 工作区浏览器:webview id 落在当前聚焦工作区的 `ws.browser`。
+                    self.with_focused_project(|ws, io| {
+                        browser::update(
+                            &mut ws.browser,
+                            msg,
+                            ws.project.as_ref().map(|p| p.id),
+                            &io.client,
+                            &io.handle,
+                            |_| {},
+                        );
+                    });
+                }
+            }
+            Message::BrowserNavigated(id, url) => {
+                let msg = browser::Message::Loaded(id, url);
+                if self.is_home() {
+                    browser::update(
+                        &mut self.home_browser,
+                        msg,
+                        None,
+                        &self.client,
+                        &self.handle,
+                        |_| {},
+                    );
+                } else {
+                    self.with_focused_project(|ws, io| {
+                        browser::update(
+                            &mut ws.browser,
+                            msg,
+                            ws.project.as_ref().map(|p| p.id),
+                            &io.client,
+                            &io.handle,
+                            |_| {},
+                        );
+                    });
+                }
+            }
+            Message::BrowserNewWindow(url) => {
+                let msg = browser::Message::OpenUrl(url);
+                if self.is_home() {
+                    browser::update(
+                        &mut self.home_browser,
+                        msg,
+                        None,
+                        &self.client,
+                        &self.handle,
+                        |_| {},
+                    );
+                } else {
                     self.with_focused_project(|ws, io| {
                         browser::update(
                             &mut ws.browser,

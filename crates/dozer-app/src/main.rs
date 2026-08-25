@@ -507,7 +507,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         for (spec, bounds) in specs {
             match pool.get_mut(&spec.id) {
                 Some((view, loaded_url)) => {
-                    if *loaded_url != spec.url {
+                    // 去重判断优先信 webview 的**实际当前地址**(`view.url()` 读
+                    // WKWebView 主 frame URL)。否则网页内超链接让 webview 自行
+                    // 导航后,缓存的 `loaded_url` 仍是旧值,这里会误判成"要加载"
+                    // 而对同一个已加载好的目标页再 `load_url` 一次(整页重载
+                    // 闪烁)。`view.url()` 失败(罕见)时退回缓存的 `loaded_url`。
+                    let current = view.url().unwrap_or_else(|_| loaded_url.clone());
+                    if current != spec.url {
                         if let Err(e) = view.load_url(&spec.url) {
                             tracing::warn!("预览导航失败: {e}");
                         }
@@ -524,6 +530,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     let review_snapshot = std::sync::Arc::clone(&review_snapshot);
                     let root = assets::assets_root();
                     let ipc_proxy = proxy.clone();
+                    let nav_proxy = proxy.clone();
                     let webview_id = spec.id;
                     // 常驻注入脚本:焦点/拖拽/缩放三件套(所有 webview);浏览器
                     // 面板(`report_title`)额外附一段"页面标题回报":把
@@ -541,13 +548,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             ";function _dt(){window.ipc.postMessage('title:'+String(__dozer_webview)+':'+document.title)}if(document.readyState==='complete'){_dt()}else{document.addEventListener('DOMContentLoaded',_dt)}new MutationObserver(_dt).observe(document.documentElement||document,{childList:true,subtree:true,attributeFilter:['title']});",
                         );
                     }
-                    let built = wry::WebViewBuilder::new()
+                    let mut builder = wry::WebViewBuilder::new()
                         .with_url(&spec.url)
                         .with_bounds(bounds)
                         .with_visible(spec.visible)
-                        // 关掉 macOS 的链接预览(force-click 弹出 peek 浮层),
-                        // 否则点网页里的超链接会变成"预览"而非跳转,表现就是
-                        // "能打开网页但点不了超链接"。wry 默认 allow_link_preview=true。
+                        // 关掉 macOS 的链接预览 force-click/long-press peek 浮层。
+                        // (这只影响长按/重压预览,不影响普通单击跳转;普通单击
+                        // 跳转真正缺的那块是下方的 `on_page_load`/`new_window_req`
+                        // 回报钩子。)
                         .with_allow_link_preview(false)
                         // 子 webview 上的 mousedown winit 收不到,这里注入 JS
                         // 在捕获阶段监听 mousedown,经 IPC 通知宿主调 view.focus()
@@ -598,7 +606,41 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     let _ = ipc_proxy.send_event(Message::WebViewFocused);
                                 }
                             }
-                        })
+                        });
+                    // 浏览器面板 webview 额外挂两个导航回报钩子(预览 webview
+                    // 不需要):
+                    // 1) `on_page_load`:网页内超链接让 webview 自行导航后,把
+                    //    真实目标 URL 报回宿主(`Message::BrowserNavigated`),让
+                    //    地址栏/页签跟随页面跳转——此前没有任何机制告诉浏览器
+                    //    面板"页面自己跳走了",点链接后面板仍停在旧 URL;
+                    //    2) `new_window_req`:`target="_blank"`/`window.open`
+                    //    请求新窗口,wry 默认 `createWebViewWith:` 返回 nil 会
+                    //    静默丢弃这类点击。这里拒绝 OS 新窗口、改在浏览器面板
+                    //    里新开一个 tab。
+                    if report_title {
+                        // `on_page_load` 与 `new_window_req` 是两个 `move` 闭包,
+                        // 不能共用同一个 `nav_proxy`(第一个构造时就把原始值移走),
+                        // 这里各留一份 clone。
+                        let page_proxy = nav_proxy.clone();
+                        let win_proxy = nav_proxy;
+                        builder = builder
+                            .with_on_page_load_handler(move |event, url| {
+                                // 只在整页**加载完成**时回报一次(`Finished` 对应
+                                // WKWebView `didFinishNavigation`,第二个参数就是
+                                // 主 frame 的当前地址,不会被子 frame/资源加载
+                                // 刷屏)。`Started` 也会触发主 frame 提交,但完成态
+                                // 更稳,避免回报过早。
+                                if matches!(event, wry::PageLoadEvent::Finished) {
+                                    let _ = page_proxy
+                                        .send_event(Message::BrowserNavigated(webview_id, url));
+                                }
+                            })
+                            .with_new_window_req_handler(move |url, _features| {
+                                let _ = win_proxy.send_event(Message::BrowserNewWindow(url));
+                                wry::NewWindowResponse::Deny
+                            });
+                    }
+                    let built = builder
                         .with_custom_protocol("dozer".into(), move |_id, request| {
                             let allowed = allowed.lock().expect("allowed_files 锁");
                             let review_data = review_snapshot.lock().expect("review snapshot 锁");

@@ -110,6 +110,20 @@ impl Tabs {
         }
     }
 
+    /// 网页内超链接点击后,渲染进程经 IPC 报回 webview 实际导航到的 URL
+    /// (`id` 是 webview/tab id)。把对应 tab 的 `url` 原地更新为真实地址、
+    /// `title` 退回 URL 标题,让地址栏/页签与页面保持一致;目标页随后由页面
+    /// 标题回报(`TitleLoaded`)覆盖成 HTML `<title>`。URL 没变(同址导航/
+    /// 冗余回报)时 no-op,避免造成消息风暴。
+    pub fn apply_url(&mut self, id: usize, url: String) {
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id)
+            && tab.url != url
+        {
+            tab.url = url.clone();
+            tab.title = Self::title_for(&url);
+        }
+    }
+
     pub fn close(&mut self, idx: usize) {
         if self.tabs.is_empty() || idx >= self.tabs.len() {
             return;
@@ -675,6 +689,24 @@ mod tests {
         assert_eq!(t.tabs()[1].url, "http://b.com", "无关 tab 不受影响");
     }
 
+    #[test]
+    fn apply_url_updates_matching_tab_in_place() {
+        let mut t = Tabs::default();
+        let id = t.open_url("http://a.com".into());
+        t.open_url("http://b.com".into());
+        // 目标 tab 自己的 url 被更新,title 退回 URL 标题;无关 tab 不受影响。
+        t.apply_url(id, "http://nav.com".into());
+        assert_eq!(t.tabs()[0].url, "http://nav.com");
+        assert_eq!(t.tabs()[0].title, "nav.com");
+        assert_eq!(t.tabs()[1].url, "http://b.com");
+        // 同址冗余回报(如同址导航)是 no-op,不重写 title。
+        t.apply_url(id, "http://nav.com".into());
+        assert_eq!(t.tabs()[0].url, "http://nav.com");
+        // 未知 id 是 no-op。
+        t.apply_url(999, "http://x.com".into());
+        assert_eq!(t.tabs().len(), 2);
+    }
+
     #[tokio::test]
     async fn update_addr_submit_local_path_sets_error_without_opening_tab() {
         let mut state = State::default();
@@ -994,6 +1026,11 @@ pub enum Message {
     /// webview/tab id,`title` 是页面标题)——覆盖 `open_url` 初建的 URL 标题。
     /// `about:blank` 等空标题页面不覆盖(见 `Tabs::apply_title` 的空标题守卫)。
     TitleLoaded(usize, String),
+    /// 网页内超链接/`window.open` 等让 webview 自行导航后,渲染进程经 IPC
+    /// 报回的目标 URL(`id` 是 webview/tab id,`url` 是 webview 实际加载到的
+    /// 地址)。让浏览器面板从"导航由地址栏主动发起"扩展到"跟随页面内部
+    /// 跳转",否则点超链接后面板仍停留在旧 URL。
+    Loaded(usize, String),
     SelectTab(usize),
     CloseTab(usize),
     /// 后退/前进/刷新按钮。`browser::update` 里是 no-op,真正的 webview
@@ -1308,6 +1345,7 @@ pub fn update(
             state.tabs.open_url(url);
         }
         Message::TitleLoaded(id, title) => state.tabs.apply_title(id, title),
+        Message::Loaded(id, url) => state.tabs.apply_url(id, url),
         Message::SelectTab(idx) => state.tabs.select(idx),
         Message::DragHover(_) => {} // 拖拽换位在 `App::update` 翻译后处理,不落到这里
         // 导航按钮:真正的 webview 历史导航/刷新由 main.rs `dispatch` 拦截
