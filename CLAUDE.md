@@ -34,6 +34,7 @@ cargo clippy --all-targets && cargo fmt
 
 ## 关键裁决（违反即错）
 
+- **核心原则：Dozer 方便用户预览 AI 的工作结果,用户应尽可能通过 AI 修改产物,而不是自己直接改产物。** 预览类功能(文件预览、Preview WebView 等)优先做"渲染/查看"而非"编辑";如果确实需要提供直接编辑入口,要能说明为什么这个场景绕不开用户亲自动手,不能默认给。
 - boy CLI 已废弃，永不回归；agent 启动/模型托管/doctor 全归 dozerd。`crates/legacy-boy` 已删除（2026-08-12）——删除时 dozerd 尚未实际迁入 `config`/`process`/`doctor` 这三块，旧实现只留在 git 历史（删除前的最后一次提交）里，之后要做这几块时得从那份历史重新参考，不是已经迁完。
 - GUI 只用 iced 0.14 生态；预览 WebView 走 wry 子视图叠加，⌘K 打开时隐藏预览。
 - mac 先发但架构留门：不引入 Swift/AppKit 专属能力；核心不依赖 Node/Python。
