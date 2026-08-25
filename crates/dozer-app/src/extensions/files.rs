@@ -1212,6 +1212,26 @@ pub fn view<'a>(
                 tree_col = tree_col.push(tree_edit_row(row.depth + 1, buffer));
             }
         }
+        // 项目根目录不出现在 `visible_rows()` 里(它只渲染成上方静态头部),
+        // 所以上面循环里的 `is_new_target` 永远匹配不到 root。这里单独补一段:
+        // 当选中根目录作为新建父目录时,在根头部下方、按子项深度渲染编辑框,
+        // 否则在根目录右键"新建文件/文件夹"会"点了菜单却没有任何输入框"。
+        let root_new_edit = matches!(
+            &ws_state.tree_edit,
+            Some(TreeEdit {
+                mode: TreeEditMode::NewFile | TreeEditMode::NewFolder,
+                parent_dir,
+                ..
+            }) if parent_dir.as_path() == tree.root()
+        );
+        if root_new_edit {
+            let buffer = ws_state
+                .tree_edit
+                .as_ref()
+                .map(|e| e.buffer.as_str())
+                .unwrap_or("");
+            tree_col = tree_col.push(tree_edit_row(1, buffer));
+        }
     }
 
     let body = container(
