@@ -410,6 +410,32 @@ async fn build_app(
     }
 }
 
+/// 执行一次 `operation` 遍历(程序化聚焦/滚动/每帧真实焦点镜像查询)。
+///
+/// 兜底修复:第三方 `iced_code_editor` 用 `iced_aw::ContextMenu` 包住代码画布,
+/// 而 iced_aw 0.13.1 的 `ContextMenu::operate` 在菜单展开(`show == true`)时会
+/// 把 underlay 的 layout 错当 overlay 的 layout 交给一段只含菜单浮动的 widget
+/// 树,`iced_widget::Container::operate` 于是 `layout.children().next().unwrap()`
+/// 到 `None` 直接 panic(整窗卡死)。Dozer 无法 patch crates.io 上的 iced_aw,故
+/// 在调用侧 `catch_unwind` 兜底。这些遍历只读镜像/一次性操作,崩溃时该帧镜像
+/// 留 `false`、程序化动作不生效,都是安全的;菜单一关下一帧即恢复。panic hook
+/// 在遍历期间临时摘掉,避免菜单展开的每帧都打印一整屏误导性的 backtrace。
+fn run_operate(
+    interface: &mut UserInterface<Message, iced_widget::Theme, iced_renderer::Renderer>,
+    renderer: &mut iced_renderer::Renderer,
+    operation: &mut dyn iced_winit::core::widget::operation::Operation,
+) {
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        interface.operate(renderer, operation);
+    }));
+    std::panic::set_hook(prev_hook);
+    if result.is_err() {
+        tracing::debug!("operate 遍历被 iced_aw ContextMenu 的展开菜单 panic 吸收(安全)");
+    }
+}
+
 pub fn main() -> Result<(), winit::error::EventLoopError> {
     tracing_subscriber::fmt::init();
 
@@ -2257,7 +2283,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                             y: Some(0.0),
                                         },
                                     );
-                                    interface.operate(renderer, &mut op);
+                                    run_operate(&mut interface, renderer, &mut op);
                                 }
 
                                 // 项目树行内编辑刚触发时程序化聚焦真正的
@@ -2267,7 +2293,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                         iced_widget::core::widget::operation::focusable::focus::<()>(
                                             extensions::files::tree_edit_field_id(),
                                         );
-                                    interface.operate(renderer, &mut op);
+                                    run_operate(&mut interface, renderer, &mut op);
                                 }
 
                                 // Todo 任务内容编辑刚触发时程序化聚焦真正的
@@ -2277,7 +2303,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                         iced_widget::core::widget::operation::focusable::focus::<()>(
                                             extensions::todo::content_field_id(),
                                         );
-                                    interface.operate(renderer, &mut op);
+                                    run_operate(&mut interface, renderer, &mut op);
                                 }
 
                                 // 项目名称编辑 / 右键搜索弹窗查询框刚触发时程序化聚焦
@@ -2287,14 +2313,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                         iced_widget::core::widget::operation::focusable::focus::<()>(
                                             extensions::project::name_field_id(),
                                         );
-                                    interface.operate(renderer, &mut op);
+                                    run_operate(&mut interface, renderer, &mut op);
                                 }
                                 if query_focus_pending {
                                     let mut op =
                                         iced_widget::core::widget::operation::focusable::focus::<()>(
                                             extensions::search::query_field_id(),
                                         );
-                                    interface.operate(renderer, &mut op);
+                                    run_operate(&mut interface, renderer, &mut op);
                                 }
 
                                 // 浏览器地址栏刚获得焦点时,全选当前网址(
@@ -2304,7 +2330,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     let mut op = iced_widget::core::widget::operation::text_input::select_all::<()>(
                                         extensions::browser::addr_field_id(),
                                     );
-                                    interface.operate(renderer, &mut op);
+                                    run_operate(&mut interface, renderer, &mut op);
                                 }
 
                                 // 右键输入框弹菜单后,把焦点移到被右键的输入(
@@ -2314,7 +2340,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                         iced_widget::core::widget::operation::focusable::focus::<()>(
                                             id,
                                         );
-                                    interface.operate(renderer, &mut op);
+                                    run_operate(&mut interface, renderer, &mut op);
                                 }
 
                                 // Files 搜索框(Stage 2,唯一已迁移到 iced
@@ -2333,7 +2359,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // 还活着,不能同时再可变借用 `app`。
                                 let files_focused =
                                     if matches!(app.left_view(), crate::app::PanelKind::Files) {
-                                        interface.operate(
+                                        run_operate(
+                                            &mut interface,
                                             renderer,
                                             &mut extensions::files::CaptureSearchFocus,
                                         );
@@ -2346,7 +2373,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // 与 Files 搜索框完全同构。只在 Files 左栏可见时跑。
                                 let tree_edit_focused =
                                     if matches!(app.left_view(), crate::app::PanelKind::Files) {
-                                        interface.operate(
+                                        run_operate(
+                                            &mut interface,
                                             renderer,
                                             &mut extensions::files::CaptureTreeEditFocus,
                                         );
@@ -2371,7 +2399,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     if matches!(app.left_view(), crate::app::PanelKind::Web)
                                         || app.is_home()
                                     {
-                                        interface.operate(
+                                        run_operate(
+                                            &mut interface,
                                             renderer,
                                             &mut extensions::browser::CaptureAddrFocus,
                                         );
@@ -2384,7 +2413,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // 只在 Todo 左栏可见时跑,不必要时不做无谓遍历。
                                 let todo_search_focused =
                                     if matches!(app.left_view(), crate::app::PanelKind::Todo) {
-                                        interface.operate(
+                                        run_operate(
+                                            &mut interface,
                                             renderer,
                                             &mut extensions::todo::CaptureTodoSearchFocus,
                                         );
@@ -2396,7 +2426,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // Todo 添加框(Stage 4):同款每帧查真实焦点态。
                                 let todo_add_focused =
                                     if matches!(app.left_view(), crate::app::PanelKind::Todo) {
-                                        interface.operate(
+                                        run_operate(
+                                            &mut interface,
                                             renderer,
                                             &mut extensions::todo::CaptureAddFocus,
                                         );
@@ -2411,7 +2442,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // `set_todo_content_focused` 做"失焦即落盘"边缘触发。
                                 let content_edit_focused =
                                     if matches!(app.left_view(), crate::app::PanelKind::Todo) {
-                                        interface.operate(
+                                        run_operate(
+                                            &mut interface,
                                             renderer,
                                             &mut extensions::todo::CaptureContentEditFocus,
                                         );
@@ -2422,8 +2454,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
 
                                 // 首页项目搜索框(Stage 4):同款每帧查真实焦点态。
                                 let home_search_focused = if app.is_home() {
-                                    interface
-                                        .operate(renderer, &mut homespace::CaptureHomeSearchFocus);
+                                    run_operate(
+                                        &mut interface,
+                                        renderer,
+                                        &mut homespace::CaptureHomeSearchFocus,
+                                    );
                                     homespace::take_home_search_focused()
                                 } else {
                                     false
@@ -2440,7 +2475,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 ) || app.right_view
                                     == crate::app::PanelKind::Conversations
                                 {
-                                    interface.operate(
+                                    run_operate(
+                                        &mut interface,
                                         renderer,
                                         &mut workspace::CaptureConversationSearchFocus,
                                     );
@@ -2457,7 +2493,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     if matches!(app.left_view(), crate::app::PanelKind::GitLog)
                                         || app.right_view == crate::app::PanelKind::GitLog
                                     {
-                                        interface.operate(
+                                        run_operate(
+                                            &mut interface,
                                             renderer,
                                             &mut extensions::git_log::CaptureSearchFocus,
                                         );
@@ -2470,7 +2507,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 let comment_focused =
                                     if matches!(app.left_view(), crate::app::PanelKind::Acceptance)
                                     {
-                                        interface.operate(
+                                        run_operate(
+                                            &mut interface,
                                             renderer,
                                             &mut extensions::acceptance::CaptureCommentFocus,
                                         );
@@ -2483,7 +2521,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // Project`,同款每帧查真实焦点态。
                                 let name_edit_focused =
                                     if matches!(app.left_view(), crate::app::PanelKind::Project) {
-                                        interface.operate(
+                                        run_operate(
+                                            &mut interface,
                                             renderer,
                                             &mut extensions::project::CaptureNameEditFocus,
                                         );
@@ -2495,7 +2534,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // 右键搜索弹窗查询框(Stage 6):全局浮层,不挂靠
                                 // 任何 `left_view`,gating 条件用 `search_popup_open`。
                                 let query_focused = if app.search_popup_open() {
-                                    interface.operate(
+                                    run_operate(
+                                        &mut interface,
                                         renderer,
                                         &mut extensions::search::CaptureQueryFocus,
                                     );
@@ -2795,7 +2835,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         if let Some(id) = app.text_input_menu_target_id() {
                             let mut op =
                                 iced_winit::core::widget::operation::focusable::focus::<()>(id);
-                            interface.operate(renderer, &mut op);
+                            run_operate(&mut interface, renderer, &mut op);
                         }
                         let synth = [unique_command_event(ch)];
                         let mut second: Vec<Message> = Vec::new();

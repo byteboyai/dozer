@@ -1588,6 +1588,9 @@ pub enum Message {
     /// 预览:点 tab chip 上的"编辑"按钮,携带 tab 下标(渲染时发出,和
     /// `PreviewSelectTab`/`PreviewCloseTab` 同一约定)。
     PreviewEditOpen(usize),
+    /// 预览 tab 右键菜单里的"刷新":从文件系统重新读盘并重新渲染该 tab
+    /// (下标即 vec 位置,与 `PreviewCloseTab` 同约定)。
+    PreviewReload(usize),
     /// 预览:原生编辑器右键菜单里的"编辑"项(`Message::OpenInEditor`),
     /// 携带 `PreviewTab.id`。由 `main.rs` 从 `PreviewEditorEvent` 前置拦截,
     /// 转成这条,打开对应文件的编辑浮层。
@@ -1630,6 +1633,8 @@ pub enum Message {
     ProjectPreviewEditorEvent(usize, iced_code_editor::Message),
     /// Project 面板右配对预览:右键菜单里的"编辑"项,语义同 `PreviewEditOpen`。
     ProjectPreviewEditOpen(usize),
+    /// Project 面板右配对预览 tab 右键菜单里的"刷新",语义同 `PreviewReload`。
+    ProjectPreviewReload(usize),
     /// Project 面板右配对预览:原生编辑器里的"编辑"项
     /// (`Message::OpenInEditor`),按 `PreviewTab.id` 路由,语义同
     /// `PreviewEditOpenByTab`。
@@ -4517,6 +4522,10 @@ impl App {
                 self.preview_tab_menu = None;
                 self.with_focused_project(move |ws, _io| ws.preview_edit_open(idx));
             }
+            Message::PreviewReload(idx) => {
+                self.preview_tab_menu = None;
+                self.with_focused_project(move |ws, _io| ws.preview_reload(idx));
+            }
             Message::PreviewEditOpenByTab(tab_id) => {
                 self.with_focused_project(move |ws, _io| ws.preview_edit_open_by_id(tab_id));
             }
@@ -4584,6 +4593,10 @@ impl App {
             Message::ProjectPreviewEditOpen(idx) => {
                 self.project_preview_tab_menu = None;
                 self.with_focused_project(move |ws, _io| ws.project_preview_edit_open(idx));
+            }
+            Message::ProjectPreviewReload(idx) => {
+                self.project_preview_tab_menu = None;
+                self.with_focused_project(move |ws, _io| ws.project_preview_reload(idx));
             }
             Message::ProjectPreviewEditOpenByTab(tab_id) => {
                 self.with_focused_project(move |ws, _io| {
@@ -6596,9 +6609,9 @@ impl App {
         files::update(&mut ws.files, app_files, msg, project_id, &handle, emit);
     }
 
-    /// 文件预览 tab 右键菜单浮层:含"编辑"(仅可编辑文本文件)与"关闭"两项。
-    /// 定位坐标由 `PreviewTabContextMenu` 打开时记录,风格与文件树右键菜单
-    /// 一致(`files::context_menu_popup`/`menu_item`)。
+    /// 文件预览 tab 右键菜单浮层:含"刷新"(恒有)、"编辑"(仅可编辑文本文件)
+    /// 与"关闭"三项。定位坐标由 `PreviewTabContextMenu` 打开时记录,风格与
+    /// 文件树右键菜单一致(`files::context_menu_popup`/`menu_item`)。
     fn preview_tab_context_menu_popup<'a>(
         &self,
     ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -6608,6 +6621,13 @@ impl App {
         };
         let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
             Vec::new();
+        // “刷新”:从文件系统重新读盘并重新渲染当前预览的文件——右键菜单
+        // 里最常用的一档,排最前。
+        items.push(crate::menu::item::<Message>(
+            Some(icons::IconKind::RefreshCw),
+            "刷新",
+            Message::PreviewReload(menu.idx),
+        ));
         // 仅可编辑文本文件显示"编辑"(见 `is_editable_extension`)。
         if menu.editable {
             items.push(crate::menu::item::<Message>(
@@ -6660,6 +6680,11 @@ impl App {
         };
         let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
             Vec::new();
+        items.push(crate::menu::item::<Message>(
+            Some(icons::IconKind::RefreshCw),
+            "刷新",
+            Message::ProjectPreviewReload(menu.idx),
+        ));
         if menu.editable {
             items.push(crate::menu::item::<Message>(
                 Some(icons::IconKind::Rename),

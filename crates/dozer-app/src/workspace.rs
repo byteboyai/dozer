@@ -815,6 +815,27 @@ impl Workspace {
         }
     }
 
+    /// 预览 tab 右键菜单"刷新"落地(Files 面板):按 tab 下标重载该文件——
+    /// 从文件系统重新读盘并重新渲染(原生 editor 重建 / webview 换 URL 重载)。
+    pub(crate) fn preview_reload(&mut self, idx: usize) {
+        self.preview_reload_for(PreviewPaneKind::Files, idx);
+    }
+
+    /// Project 面板右配对预览的"刷新",语义同 `preview_reload`,状态取自
+    /// `ws.project_preview`。
+    pub(crate) fn project_preview_reload(&mut self, idx: usize) {
+        self.preview_reload_for(PreviewPaneKind::Project, idx);
+    }
+
+    fn preview_reload_for(&mut self, kind: PreviewPaneKind, idx: usize) {
+        // 下标越界(菜单目标已被拖拽/关闭换位)由 `reload_at` 防御性 no-op——
+        // 与 `preview_edit_open_for` 同口径,正常路径走不到。
+        match kind {
+            PreviewPaneKind::Files => self.preview.reload_at(idx),
+            PreviewPaneKind::Project => self.project_preview.reload_at(idx),
+        };
+    }
+
     /// 按预览 tab id 打开对应文件的编辑浮层——右键"编辑"上下文菜单动作
     /// (`Message::OpenInEditor`)落地的入口。没找到该 tab 时 no-op。
     pub(crate) fn preview_edit_open_by_id(&mut self, tab_id: usize) {
