@@ -647,8 +647,8 @@ impl Workspace {
             &io.handle,
             repo,
             std::time::Duration::from_millis(300),
-            move |relevance| {
-                let _ = proxy.send_event(Message::ProjectFsChanged(project_id, relevance));
+            move |changes| {
+                let _ = proxy.send_event(Message::ProjectFsChanged(project_id, changes));
             },
         ) {
             Ok(handle) => self.git_watch = Some(handle),

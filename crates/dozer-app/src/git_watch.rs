@@ -64,10 +64,21 @@ pub struct Handle {
     _watcher: notify::RecommendedWatcher,
 }
 
+/// 一次 debounce 窗口内被判定为"相关"的变更路径集合(去重、规范路径)。
+/// `paths` 供调用方做**增量**跟进——文件树按变更所在目录刷新、预览按命中
+/// 的路径重载,不必为每个 `read_dir` 无关的文件重读全部缓存。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FsChanges {
+    /// 这批变更里"最值得上报"的类别:`GitRefs` 优先于 `Workdir`(一批事件里
+    /// 只要有一个引用类变化,调用方就该顺带重建 Git Log 快照)。
+    pub relevance: Option<Relevance>,
+    /// 所有相关的工作区路径(去重后)。
+    pub paths: Vec<PathBuf>,
+}
+
 /// 启动一个仓库根的 debounced 监听。`on_change` 在 debounce 窗口(连续事件
-/// 间隔小于 `debounce` 就算同一批)结束后,拿这批事件里"最值得上报"的
-/// `Relevance` 调用一次——`GitRefs` 优先于 `Workdir`(一批事件里只要有一个
-/// 引用类变化,调用方就该顺带重建 Git Log 快照)。
+/// 间隔小于 `debounce` 就算同一批)结束后调用一次,参数携带这批事件里最值得
+/// 上报的 `Relevance` 与全部相关变更路径(见 [`FsChanges`])。
 ///
 /// 内部用 `tokio::sync::mpsc` 把 notify 的同步回调(跑在 notify 自己的后台
 /// 线程上)和这里的 debounce 循环(跑在调用方传入的 tokio runtime 上)串起来,
@@ -77,31 +88,44 @@ pub fn start(
     handle: &tokio::runtime::Handle,
     repo: PathBuf,
     debounce: Duration,
-    mut on_change: impl FnMut(Relevance) + Send + 'static,
+    mut on_change: impl FnMut(FsChanges) + Send + 'static,
 ) -> notify::Result<Handle> {
     // FSEvents 上报的是路径形如 `/private/var/...`,而 `repo` 常常是符号
     // 链接后的 `/var/...`(macOS 上 `/var` → `/private/var`)。不统一会让
     // `strip_prefix` 失败、所有事件都被当成无关。这里先 canonicalize,让
     // `watch` 与 `is_relevant_path` 都基于同一套规范路径比对。
     let repo = repo.canonicalize().unwrap_or(repo);
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Relevance>();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<FsChanges>();
     let filter_repo = repo.clone();
 
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         let Ok(event) = res else { return };
-        let mut best: Option<Relevance> = None;
+        let mut batch = FsChanges::default();
+        let mut seen = std::collections::HashSet::new();
         for path in &event.paths {
             match is_relevant_path(&filter_repo, path) {
                 Some(Relevance::GitRefs) => {
-                    best = Some(Relevance::GitRefs);
+                    if batch.relevance != Some(Relevance::GitRefs) {
+                        batch.relevance = Some(Relevance::GitRefs);
+                    }
+                    if seen.insert(path.clone()) {
+                        batch.paths.push(path.clone());
+                    }
                     break; // GitRefs 优先级最高,找到就不用再看这批里其余路径
                 }
-                Some(Relevance::Workdir) => best = best.or(Some(Relevance::Workdir)),
+                Some(Relevance::Workdir) => {
+                    if batch.relevance != Some(Relevance::GitRefs) {
+                        batch.relevance = Some(Relevance::Workdir);
+                    }
+                    if seen.insert(path.clone()) {
+                        batch.paths.push(path.clone());
+                    }
+                }
                 None => {}
             }
         }
-        if let Some(r) = best {
-            let _ = tx.send(r);
+        if batch.relevance.is_some() {
+            let _ = tx.send(batch);
         }
     })?;
     watcher.watch(&repo, notify::RecursiveMode::Recursive)?;
@@ -109,13 +133,21 @@ pub fn start(
     handle.spawn(async move {
         while let Some(first) = rx.recv().await {
             let mut best = first;
+            let mut paths = std::collections::HashSet::new();
+            paths.extend(best.paths.clone());
             // 合并这个 debounce 窗口内接下来到达的信号;超时或 channel 关闭即止
-            while let Ok(Some(r)) = tokio::time::timeout(debounce, rx.recv()).await {
-                if r == Relevance::GitRefs {
-                    best = Relevance::GitRefs;
+            while let Ok(Some(more)) = tokio::time::timeout(debounce, rx.recv()).await {
+                for p in &more.paths {
+                    paths.insert(p.clone());
+                }
+                if more.relevance == Some(Relevance::GitRefs) {
+                    best.relevance = Some(Relevance::GitRefs);
                 }
             }
-            on_change(best);
+            on_change(FsChanges {
+                relevance: best.relevance,
+                paths: paths.into_iter().collect(),
+            });
         }
     });
 
@@ -219,7 +251,7 @@ mod tests {
                 &tokio::runtime::Handle::current(),
                 repo.clone(),
                 Duration::from_millis(100),
-                move |_relevance| {
+                move |_changes| {
                     count2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 },
             )
@@ -256,7 +288,7 @@ mod tests {
                 &tokio::runtime::Handle::current(),
                 repo.clone(),
                 Duration::from_millis(100),
-                move |_relevance| {
+                move |_changes| {
                     count2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 },
             )

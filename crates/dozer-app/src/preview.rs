@@ -278,9 +278,23 @@ impl PreviewPane {
             .filter(|t| t.editor.is_none())
             .map(|t| t.id)
     }
+    /// 手动点 tab / 打开时切到已存在 tab。切到**另一个**文件 tab 时,若目标
+    /// 走 wry 路径(没有原生 editor)则顺手推进 `reload_nonce`,让 webview
+    /// 切回来时重新 `load_url` 读到磁盘最新内容(同右键"刷新"的机制)。原生
+    /// editor tab 不动——它重载会重建实例、丢滚动/只读态,按品鉴保留(用户在
+    /// 别处手动确认过:原生 tab 切回不自动重载)。点当前已激活 tab 是 no-op。
     pub fn select(&mut self, idx: usize) {
-        if idx < self.tabs.len() {
-            self.active = idx;
+        if idx >= self.tabs.len() || idx == self.active {
+            return;
+        }
+        let is_webview_file = matches!(
+            &self.tabs[idx].kind,
+            TabKind::File(_) if self.tabs[idx].editor.is_none()
+        );
+        self.active = idx;
+        if is_webview_file {
+            let id = self.tabs[idx].id;
+            self.bump_reload(id);
         }
     }
 
@@ -419,6 +433,40 @@ impl PreviewPane {
             }
         } else {
             tab.reload_nonce += 1;
+        }
+    }
+
+    /// 外部文件系统变化后,按变更路径集跟进预览:只重载**走 wry 的 webview**
+    /// 文件 tab(其路径命中任一 `changed`),推进 `reload_nonce` 让它 `load_url`
+    /// 读到磁盘最新内容。原生 editor tab **不**动——自动重载会重建实例、丢
+    /// 滚动/只读态,与"手动点 tab 不重载原生"同一品鉴口径(见 `select`)。
+    /// 路径比对先做逐字节精确匹配,匹配不到再对 tab 路径 canonicalize 后比
+    /// 一次(`notify` 递的是规范实路径,而 tab 路径可能来自未规范化的点击)。
+    /// 空变更集 / 无命中 tab 都是 no-op。
+    pub fn reload_webviews_for(&mut self, changed: &[PathBuf]) {
+        if changed.is_empty() {
+            return;
+        }
+        let mut matched: Vec<usize> = self
+            .tabs
+            .iter()
+            .filter(|t| t.editor.is_none())
+            .filter_map(|t| match &t.kind {
+                TabKind::File(path)
+                    if changed.iter().any(|c| c == path)
+                        || std::fs::canonicalize(path)
+                            .map(|p| changed.iter().any(|c| c == &p))
+                            .unwrap_or(false) =>
+                {
+                    Some(t.id)
+                }
+                _ => None,
+            })
+            .collect();
+        matched.sort();
+        matched.dedup();
+        for id in matched {
+            self.bump_reload(id);
         }
     }
 }
@@ -1017,6 +1065,107 @@ mod tests {
             "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&ln=1&_r=1",
             "越界刷新不改状态"
         );
+    }
+
+    #[test]
+    fn reload_webviews_for_hits_matching_webview_tabs_only() {
+        let mut p = PreviewPane::default();
+        p.open_path(PathBuf::from("/tmp/a.md")); // webview
+        p.open_path(PathBuf::from("/tmp/b.md")); // webview
+        // 原生 editor tab(真实 temp .rs 文件)。
+        let rs_path =
+            std::env::temp_dir().join(format!("preview_webviews_for_{}.rs", std::process::id()));
+        std::fs::write(&rs_path, "fn main() {}").unwrap();
+        let _ = p.open_path(rs_path.clone());
+
+        // 空变更集:no-op,一个都不推进。
+        p.reload_webviews_for(&[]);
+        assert_eq!(p.tabs()[0].reload_nonce, 0);
+        assert_eq!(p.tabs()[1].reload_nonce, 0);
+        assert_eq!(p.tabs()[2].reload_nonce, 0);
+
+        // 命中 b.md:只推进 b 的 reload_nonce。
+        p.reload_webviews_for(&[PathBuf::from("/tmp/b.md")]);
+        assert_eq!(p.tabs()[0].reload_nonce, 0, "a.md 不受影响");
+        assert_eq!(p.tabs()[1].reload_nonce, 1, "b.md 命中,webview 推进");
+        let specs = p.desired_webviews();
+        assert_eq!(
+            specs[1].url, "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&ln=1&_r=1",
+            "命中的 webview 换 URL 重载"
+        );
+
+        // 命中原生 tab 的路径:不推进(原生 editor 不自动重载)。
+        p.reload_webviews_for(std::slice::from_ref(&rs_path));
+        assert_eq!(
+            p.tabs()[2].reload_nonce,
+            0,
+            "原生 editor tab 命中也不自动重载,保住滚动/只读态"
+        );
+
+        // 未命中的路径:no-op。
+        p.reload_webviews_for(&[PathBuf::from("/tmp/other.md")]);
+        assert_eq!(p.tabs()[1].reload_nonce, 1, "未命中不改状态");
+
+        std::fs::remove_file(&rs_path).ok();
+    }
+
+    #[test]
+    fn select_reloads_webview_tab_on_switch_but_not_same_or_native() {
+        let mut p = PreviewPane::default();
+        let id0 = p.open_path(PathBuf::from("/tmp/a.md")); // webview(.md 走渲染预览)
+        let id1 = p.open_path(PathBuf::from("/tmp/b.md")); // webview
+        assert_eq!(p.active_idx(), 1);
+
+        // 切到另一个 webview tab:推进 reload_nonce,切回时换 URL 重载。
+        p.select(0);
+        assert_eq!(
+            p.desired_webviews()[0].url,
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&ln=1&_r=1",
+            "切到异 tab 的 webview 要自动推进 reload_nonce"
+        );
+        assert_eq!(
+            p.desired_webviews()[1].url,
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&ln=1",
+            "非目标 tab 不受影响"
+        );
+
+        // 点当前已激活的 tab:no-op,不再多推进一次。
+        p.select(0);
+        assert_eq!(
+            p.desired_webviews()[0].url,
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&ln=1&_r=1",
+            "重复选同一 tab 不改 reload_nonce"
+        );
+
+        // 原生 editor tab 切换不重载:重开一个走原生路径的文件(whitelisted
+        // 非渲染扩展,读盘建 editor),其 reload_nonce 保持 0。
+        let rs_path =
+            std::env::temp_dir().join(format!("preview_select_test_{}.rs", std::process::id()));
+        std::fs::write(&rs_path, "fn main() {}").unwrap();
+        let _id_rs = p.open_path(rs_path.clone());
+        assert_eq!(p.active_idx(), 2);
+        assert!(p.tabs()[2].editor.is_some(), "c.rs 应是原生 editor tab");
+        p.select(1); // 切回 b.md(webview)
+        assert_eq!(
+            p.desired_webviews()[0].url,
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&ln=1&_r=1",
+            "再切回 webview 推进一次 reload"
+        );
+        p.select(2); // 切回 c.rs(原生)
+        assert_eq!(
+            p.tabs()[2].reload_nonce,
+            0,
+            "原生 editor tab 切回不自动重载,保住滚动/只读态"
+        );
+        std::fs::remove_file(&rs_path).ok();
+
+        // 越界/原生切片语义:切到越界下标是 no-op。
+        let before = p.active_idx();
+        p.select(99);
+        assert_eq!(p.active_idx(), before);
+
+        // id0/id1 仍在,避免未使用告警。
+        let _ = (id0, id1);
     }
 
     #[test]

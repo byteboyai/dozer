@@ -419,6 +419,16 @@ impl WorkspaceState {
             .unwrap_or_default()
     }
 
+    /// 外部文件系统变化(agent/其他进程改了盘)后,让文件树从磁盘重读已缓存
+    /// 目录,即时反映新增/删除/改名(现有 `FileTree::reload_from_disk`:只
+    /// 重读已缓存过的目录、不清 `expanded`,当前展开层级保持不变)。由
+    /// `App::project_fs_changed` 在 `git_watch` 上报的工作区变更里调用。
+    pub fn reload_tree_from_disk(&mut self) {
+        if let Some(tree) = &mut self.file_tree {
+            tree.reload_from_disk();
+        }
+    }
+
     /// "新建文件"/"新建文件夹"的公共起点(现有 `Workspace::start_tree_new`
     /// 的搬家版本,逻辑不变)。
     fn start_tree_new(&mut self, parent: PathBuf, mode: TreeEditMode) {
@@ -2006,6 +2016,29 @@ mod tests {
             |_| {},
         );
         assert_eq!(ws_state.tree_selected, Some(sub));
+    }
+
+    #[test]
+    fn reload_tree_from_disk_reflects_externally_added_and_deleted_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        // 初始只有根目录,展开它让行可见。
+        ws_state.file_tree.as_mut().unwrap().toggle(dir.path());
+        assert!(ws_state.visible_tree_rows().iter().all(|r| !r.is_dir));
+
+        // 外部(agent/其他进程)新增一个文件:此刻未重载,树看不到。
+        let added = dir.path().join("new.txt");
+        std::fs::write(&added, "x").unwrap();
+        assert!(!ws_state.visible_tree_rows().iter().any(|r| r.path == added));
+
+        // `reload_tree_from_disk` 后即时反映新增。
+        ws_state.reload_tree_from_disk();
+        assert!(ws_state.visible_tree_rows().iter().any(|r| r.path == added));
+
+        // 外部删除同一文件:重载后从树消失。
+        std::fs::remove_file(&added).unwrap();
+        ws_state.reload_tree_from_disk();
+        assert!(!ws_state.visible_tree_rows().iter().any(|r| r.path == added));
     }
 
     #[tokio::test]

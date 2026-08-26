@@ -1723,7 +1723,7 @@ pub enum Message {
     /// 重建。这条消息同时喂给 Files(刷新 git_statuses)、Project(刷新
     /// branch/dirty)和 Git Log(条件触发快照重建)三个独立扩展,
     /// 内核继续拦截、分别转发,不包进任何一个 extension 的 `Message`。
-    ProjectFsChanged(ProjectId, git_watch::Relevance),
+    ProjectFsChanged(ProjectId, git_watch::FsChanges),
     /// Git Log 面板的全部消息,内核只转发不解读——见
     /// `extensions::git_log::Message`。
     GitLog(git_log::Message),
@@ -4658,8 +4658,8 @@ impl App {
             Message::ProjectTabSwitch(id) => self.project_tab_switch(id),
             Message::ProjectTabClose(id) => self.project_tab_close(id),
             Message::ProjectSlotLoaded(id, payload) => self.project_slot_loaded(id, payload),
-            Message::ProjectFsChanged(project_id, relevance) => {
-                self.project_fs_changed(project_id, relevance)
+            Message::ProjectFsChanged(project_id, changes) => {
+                self.project_fs_changed(project_id, changes)
             }
             Message::GitLog(git_log::Message::ColumnDragStart) => {
                 // Git Log 三栏布局里左右分割线开始拖拽——扩展发不了 app 级
@@ -5344,7 +5344,20 @@ impl App {
             .insert(id, WorkspaceSlot::Loaded(Box::new(ws)));
     }
 
-    fn project_fs_changed(&mut self, project_id: ProjectId, relevance: git_watch::Relevance) {
+    fn project_fs_changed(&mut self, project_id: ProjectId, changes: git_watch::FsChanges) {
+        // 工作区类变更:文件树 + 打开的 webview 预览即时跟进。`notify` 递上
+        // 的是具体变更路径 `changes.paths`,文件树按"受影响即相关"整棵从盘重
+        // 读已缓存目录(`reload_tree_from_disk`,只重读已展开/缓存过的层,开销
+        // 小),预览则只重载路径命中的 webview tab。
+        if changes.relevance == Some(git_watch::Relevance::Workdir)
+            || changes.relevance == Some(git_watch::Relevance::GitRefs)
+        {
+            self.with_project(project_id, |ws, _io| {
+                ws.files.reload_tree_from_disk();
+                ws.preview.reload_webviews_for(&changes.paths);
+                ws.project_preview.reload_webviews_for(&changes.paths);
+            });
+        }
         self.with_project(project_id, |ws, io| {
             let Some(project) = &ws.project else { return };
             let repo_path = PathBuf::from(&project.path);
@@ -5360,7 +5373,7 @@ impl App {
         // 的引用变化会拿"缓存路径恰好等于前台项目路径"这个巧合当
         // 通行证,把前台正打开的详情/选中态平白清掉,而其实什么都
         // 没变。项目 id 匹配之外再核一次路径,双保险防状态漂移。
-        if relevance == git_watch::Relevance::GitRefs
+        if changes.relevance == Some(git_watch::Relevance::GitRefs)
             && self.active_project_id == Some(project_id)
             && let Some(repo_path) = self.git_log.cache_repo_path().map(|p| p.to_path_buf())
             && self
