@@ -361,16 +361,16 @@ fn project_summary_boxes(
     let cream = byteui::theme::color::current().cream;
     let cyan = byteui::theme::color::current().cyan;
     let activity_box = stat_box(vec![
-        stat("会话", totals.conversation_count.to_string(), cream),
-        stat("回合", totals.turns.to_string(), cream),
-        stat("工具调用", totals.tool_calls.to_string(), cream),
-        stat("触达文件", totals.files_touched.to_string(), cream),
+        stat("会话", format_count(totals.conversation_count), cream),
+        stat("回合", format_count(totals.turns), cream),
+        stat("工具调用", format_count(totals.tool_calls), cream),
+        stat("触达文件", format_count(totals.files_touched), cream),
     ]);
     let token_box = stat_box(vec![
-        stat("Input", totals.tokens_in.to_string(), cyan),
-        stat("Output", totals.tokens_out.to_string(), cyan),
-        stat("cache 读", totals.tokens_cache_read.to_string(), cyan),
-        stat("cache 写", totals.tokens_cache_write.to_string(), cyan),
+        stat("Input", format_count(totals.tokens_in), cyan),
+        stat("Output", format_count(totals.tokens_out), cyan),
+        stat("cache 读", format_count(totals.tokens_cache_read), cyan),
+        stat("cache 写", format_count(totals.tokens_cache_write), cyan),
     ]);
     iced_widget::row![activity_box, token_box]
         .spacing(12)
@@ -502,7 +502,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for G
                     .with_width(1.0),
             );
             frame.fill_text(canvas::Text {
-                content: format_token_short(tick),
+                content: format_count(tick),
                 position: Point::new(GRID_LABEL_GUTTER - 4.0, y),
                 color: label_color,
                 size: iced_widget::core::Pixels(7.0),
@@ -528,8 +528,8 @@ fn grid_lines_canvas(
     .into()
 }
 
-/// 悬停某天柱子时弹出的明细气泡:日期 + 各 agent 精确 token 数(非 k 缩写
-/// ——柱子颜色分段目前只靠色块区分,读不出具体数值,这里补上)。样式复用
+/// 悬停某天柱子时弹出的明细气泡:日期 + 各 agent token 数(2026-08-26 起随
+/// 全局统一走 `format_count` 的 k/m 缩写)。样式复用
 /// `byteui::interaction::icons::tooltip_bubble_style`,跟 icon 按钮 tooltip
 /// 同一套视觉。零值 agent 不列(同 `chart_legend` 只列有数据的 agent)。
 fn day_tooltip_bubble(
@@ -566,7 +566,7 @@ fn day_tooltip_bubble(
         rows = rows.push(
             iced_widget::row![
                 dot,
-                text(format!("{} {value}", agent.label()))
+                text(format!("{} {}", agent.label(), format_count(value)))
                     .size(byteui::theme::font::caption_sm())
                     .color(byteui::theme::color::current().dim)
                     .font(iced_widget::core::Font::MONOSPACE),
@@ -616,7 +616,7 @@ fn bar_chart(
         let col = column![
             container(
                 column![
-                    text(format_token_short(total))
+                    text(format_count(total))
                         .size(8.0)
                         .color(byteui::theme::color::current().dim)
                         .font(iced_widget::core::Font::MONOSPACE),
@@ -658,11 +658,20 @@ fn bar_chart(
     .into()
 }
 
-/// 紧凑数字标签(1234 → "1.2k"，小于 1000 原样显示)，只用于条形图顶部的
-/// 总量标注，跟汇总条/明细行的完整数字(不做单位换算)是两回事——图表标签
-/// 空间小，明细数字要精确,两者刻意不共用格式化函数。
-fn format_token_short(n: u64) -> String {
-    if n >= 1000 {
+/// 用量面板数字的统一样式(2026-08-26 起所有数字共用这一套,不再区分图表
+/// 标签/明细/汇总):三档自动换算 + 千分号。
+///
+/// - `< 1000`:原样(千以下不需要数字分隔,如 `999`)。
+/// - `≥ 1000` 且 `< 1,000,000`:除以 1000 显示 `k`,1 位小数,如 `123.5k`。
+/// - `≥ 1,000,000`:除以 1,000,000 显示 `m`,1 位小数,如 `1.2m`。
+///
+/// 边界取 `≥`(而非字面的"大于"):`1000` 直接进 `1.0k`、`1,000,000` 直接进
+/// `1.0m`,避免算出 `1000.0k` 这种难读的中间档。
+fn format_count<N: Into<u64>>(n: N) -> String {
+    let n: u64 = n.into();
+    if n >= 1_000_000 {
+        format!("{:.1}m", n as f32 / 1_000_000.0)
+    } else if n >= 1000 {
         format!("{:.1}k", n as f32 / 1000.0)
     } else {
         n.to_string()
@@ -729,11 +738,14 @@ fn pie_chart(
 }
 
 /// 图例列表——2026-08-23 起改竖排(原来是横排 `row`),配合草图把它挪到
-/// 饼图右边、并排放而不是叠在下面。
+/// 饼图右边、并排放而不是叠在下面。末尾固定加一行"全部"(100%)汇总——
+/// 2026-08-26 新加点:整张饼的总 token 数,样式用暖金 + 顶部细分隔线,跟
+/// 各 agent 行(暗色文字)区分开。
 fn chart_legend(
     share: &[(AgentKind, u64)],
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let total: u64 = share.iter().map(|(_, v)| v).sum();
+    let cream = byteui::theme::color::current().cream;
     let mut col = column![].spacing(10);
     for (agent, value) in share {
         let pct = value
@@ -761,7 +773,7 @@ fn chart_legend(
                     "{} {}% · {}",
                     agent.label(),
                     pct,
-                    format_token_short(*value)
+                    format_count(*value)
                 ))
                 .size(byteui::theme::font::caption_sm())
                 .color(byteui::theme::color::current().dim)
@@ -771,6 +783,41 @@ fn chart_legend(
             .align_y(iced_widget::core::Alignment::Center),
         );
     }
+    // 全部:总 token 统计,恒 100%。暖金文字 + 实心圆点 + 顶部 1px 分隔线,
+    // 让"总览"一眼区别于上面各 agent 的明细行。
+    let total_dot = container(iced_widget::Space::new())
+        .width(Length::Fixed(8.0))
+        .height(Length::Fixed(8.0))
+        .style({
+            let c = cream;
+            move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                background: Some(c.into()),
+                border: Border {
+                    radius: 4.0.into(),
+                    ..Border::default()
+                },
+                ..iced_widget::container::Style::default()
+            }
+        });
+    let total_row = iced_widget::row![
+        total_dot,
+        text(format!("全部 100% · {}", format_count(total)))
+            .size(byteui::theme::font::caption_sm())
+            .color(cream)
+            .font(iced_widget::core::Font::MONOSPACE),
+    ]
+    .spacing(6)
+    .align_y(iced_widget::core::Alignment::Center);
+    // 顶部细分隔线:一条 1px、与面板分隔线同色的横线,把"全部"行和 agent
+    // 明细行区隔开(不用 `Border::Side`,避免引入尚无用到的边框类型)。
+    let divider = container(iced_widget::Space::new())
+        .width(Length::Fill)
+        .height(Length::Fixed(1.0))
+        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+            background: Some(byteui::theme::color::current().border.into()),
+            ..iced_widget::container::Style::default()
+        });
+    col = col.push(column![divider, total_row].spacing(10));
     col.into()
 }
 
@@ -795,6 +842,22 @@ mod tests {
         assert_eq!(grid_ticks(7), vec![2, 4, 6]);
         // 数据量很小时(max_total < step)也至少给一条线兜底。
         assert_eq!(grid_ticks(1), vec![1]);
+    }
+
+    #[test]
+    fn format_count_three_tier_k_m_rounding() {
+        // 千以下原样。
+        assert_eq!(format_count(0_u64), "0");
+        assert_eq!(format_count(999_u64), "999");
+        // ≥1000 且 <1,000,000 → k,1 位小数。`1000` 直接进 `1.0k`,
+        // 不出现 `1000.0k` 的中间档(见函数注释)。
+        assert_eq!(format_count(1000_u64), "1.0k");
+        assert_eq!(format_count(1234_u64), "1.2k");
+        assert_eq!(format_count(123_456_u64), "123.5k");
+        assert_eq!(format_count(999_999_u64), "1000.0k");
+        // ≥1,000,000 → m,1 位小数。`1,000,000` 直接进 `1.0m`。
+        assert_eq!(format_count(1_000_000_u64), "1.0m");
+        assert_eq!(format_count(1_234_567_u64), "1.2m");
     }
 
     fn sample_usage(files: &[&str]) -> ConversationUsage {

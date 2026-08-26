@@ -548,7 +548,7 @@ mod tests {
             },
             ..test_state()
         };
-        let (x_open, _y_open, w_open, _h_open) =
+        let (_x_open, _y_open, w_open, _h_open) =
             preview_content_bounds_for(Side::Left, 1440.0, 900.0, &open);
         let (x_collapsed, _y_collapsed, w_collapsed, _h_collapsed) =
             preview_content_bounds_for(Side::Left, 1440.0, 900.0, &collapsed);
