@@ -129,6 +129,22 @@ pub enum TopbarButton {
     Settings,
 }
 
+/// 标识一个可弹右键菜单的 iced 原生输入框。右键时 `TextInputMenuOpen(target)`
+/// 用它做两件事:
+///
+/// - `id`: 把焦点程序化移到该输入(`interface.operate` 的 `focusable::focus`),
+///   这样菜单的复制/粘贴经 main.rs 合成回 ⌘/Ctrl+`c`/`v` 键盘事件后能作用于
+///   这个输入(iced 的 `text_input` 只有左键会聚焦,右键不会,必须显式补)。
+/// - `secure`: 密码框。复制/剪切在密码框里被 iced 原生禁用(快捷键同),右键
+///   菜单里也应置灰这几项;粘贴/全选仍可用。
+///
+/// 各输入点用自己稳定的 `field_id()`(没有的已补)构造一个目标。
+#[derive(Debug, Clone)]
+pub struct TextInputTarget {
+    pub id: iced_widget::core::widget::Id,
+    pub secure: bool,
+}
+
 /// 所有需要"悬停平滑过渡动画"的按钮的统一标识。把顶栏右侧按钮
 /// (`TopbarButton`)、图标栏按钮(`RailButton`)收进同一个
 /// 枚举,这样它们能共用一套 `hover_anims` 状态机与同一条自驱 redraw 定时
@@ -184,6 +200,9 @@ pub enum HoverId {
     /// 文件树底栏 git 分支切换按钮(`ChevronDown`):静止 DIM,hover 过渡到
     /// GOLD(见 `extensions/files.rs` 的 `git_footer_bar`)。
     FilesBranchSwitch,
+    /// 文件预览右上角"收起/展开文件树"按钮(`panel-left/right-close/open`):
+    /// 静止 DIM,hover 平滑过渡到 GOLD(见 `preview_pane_for`)。
+    FileTreeCollapse,
     /// 数据库面板 schema 树"返回"按钮(`ChevronLeft`):静止 DIM,hover 过渡
     /// 到 GOLD(见 `extensions/database.rs`)。
     DatabaseSchemaBack,
@@ -376,6 +395,11 @@ pub struct PanelDims {
     pub left_width: f32,
     /// 文件列表配对:项目树占左面板区宽度的比例，文件预览拿剩下的。
     pub files_split: f32,
+    /// 文件树列表子栏是否被收起(文件预览面板右上角按钮切换)。收起时文件树
+    /// 列表不渲染(预览拿满整个配对宽度),但 `files_split` 比例保留,展开时按
+    /// 原比例恢复。`#[serde(default)]` 对老 `panel_layouts.json` 缺该字段时补
+    /// `false`(默认展开)。
+    pub files_tree_collapsed: bool,
     /// Project 面板配对:信息面板占左面板区宽度的比例，项目预览(右配对)拿剩下的。
     pub project_split: f32,
     /// SSH 面板"主机列表 | 内嵌终端"两栏的分屏比例,镜像 `project_split`。
@@ -410,6 +434,7 @@ fn default_panel_dims() -> PanelDims {
     PanelDims {
         left_width: 640.0,
         files_split: byteui::theme::geometry::default_split_ratio(),
+        files_tree_collapsed: false,
         project_split: byteui::theme::geometry::default_split_ratio(),
         ssh_split: byteui::theme::geometry::default_split_ratio(),
         todo_split: byteui::theme::geometry::default_split_ratio(),
@@ -507,6 +532,7 @@ pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
             PanelDims::default().left_width
         },
         files_split: clamp_split(d.files_split),
+        files_tree_collapsed: d.files_tree_collapsed,
         project_split: clamp_split(d.project_split),
         ssh_split: clamp_split(d.ssh_split),
         todo_split: clamp_split(d.todo_split),
@@ -1429,6 +1455,26 @@ pub enum Message {
     /// 图标栏点击选中某个面板——不区分左右栏,`panel_select` 内部按
     /// `RailLayout::side_of` 查它当前挂在哪条栏。
     PanelSelect(PanelKind),
+    /// 文件预览面板右上角"收起/展开文件树"按钮:翻转
+    /// `dims.files_tree_collapsed`。只影响文件树列表子栏的显隐,不触碰
+    /// `files_split` 比例,展开时按原比例恢复。
+    ToggleFileTreeCollapse,
+    /// 任意 iced 原生输入框(`text_input`/`text_editor`)的右键菜单:在某输入
+    /// 框上右键触发(由 byteui 的 `context_menu::wrap` 接线)。携带被右键的
+    /// 输入目标,用于本次右键时把焦点移到该输入,让菜单的复制/粘贴作用于
+    /// 它。定位坐标复用 `files.last_right_click`(main.rs 右键时已写入)。
+    TextInputMenuOpen(TextInputTarget),
+    /// 输入框右键菜单关闭(点遮罩 / 按 Esc)。
+    TextInputMenuClose,
+    /// 输入框右键菜单的动作项:剪切/复制/粘贴/全选。`App::update` 只负责把
+    /// 菜单关掉;真正把动作作用到聚焦输入框的是 main.rs——把这些消息合成回
+    /// 对应的 ⌘/Ctrl+`x`/`c`/`v`/`a` 键盘事件,喂给下一帧 `interface.update`,
+    /// 复用 iced 原生的剪贴板/光标插入逻辑(见 `dispatch`/`editor`)。密码框
+    /// 会禁用剪切/复制(同原生快捷键)。
+    TextInputMenuCut,
+    TextInputMenuCopy,
+    TextInputMenuPaste,
+    TextInputMenuSelectAll,
     /// 图标栏按钮 hover 进入/离开:进入带 `Some(id)`,离开带 `None`,
     /// 任意按钮的 hover 进入/离开:带按钮标识 `HoverId` 与 `true`/`false`,
     /// 驱动该按钮图标/背景/边框颜色的平滑过渡动画(见 `App::set_hover`/
@@ -1684,6 +1730,15 @@ struct ProjectLinkMenu {
     index: usize,
 }
 
+/// 输入框右键菜单浮层状态:定位坐标(屏幕空间,复用 `files.last_right_click`)
+/// 与被右键的输入目标。二者都由 `TextInputMenuOpen(target)` 写入,关闭或
+/// 执行某个编辑动作后清空。渲染见 `app.view` 顶层 `text_input_menu_popup`。
+struct TextInputMenu {
+    x: f32,
+    y: f32,
+    target: TextInputTarget,
+}
+
 pub struct App {
     client: Client,
     handle: Handle,
@@ -1807,6 +1862,13 @@ pub struct App {
     /// Project 面板「项目文档 / Agent 记忆」链接行的右键菜单浮层状态,坐标
     /// 同样复用 `files.last_right_click`。
     project_link_menu: Option<ProjectLinkMenu>,
+    /// 通用输入框右键菜单浮层状态(屏幕空间单例)。`TextInputMenuOpen` 时
+    /// 写入、`TextInputMenuClose`/动作后清空。同一时刻最多挂一个。
+    text_input_menu: Option<TextInputMenu>,
+    /// 待处理的"输入框右键菜单要作用的输入"焦点:载入 `TextInputMenuOpen`
+    /// 携带的 `TextInputTarget.id`,由 main.rs 的 `apply_pending_focus` 在
+    /// 本帧后移至该输入,供菜单的复制/粘贴作用到被右键的输入。
+    pending_text_input_focus: Option<iced_widget::core::widget::Id>,
 
     /// 并行打开的项目页签:project id → 该项目的完整/占位状态。
     pub(crate) projects: HashMap<i64, WorkspaceSlot>,
@@ -2160,6 +2222,8 @@ impl App {
             preview_tab_menu: None,
             project_preview_tab_menu: None,
             project_link_menu: None,
+            text_input_menu: None,
+            pending_text_input_focus: None,
             projects: HashMap::new(),
             project_order: Vec::new(),
             active_project_id: None,
@@ -2721,12 +2785,27 @@ impl App {
 
     /// 每帧渲染循环调用:把 `extensions::files::CaptureTreeEditFocus` 问到的
     /// 真实焦点态写进当前工作区(`main.rs` 键盘路由随后读
-    /// `tree_edit_focused` 消费)。焦点从真变假时清空树内编辑态(点别处退出
-    /// 重命名/新建)。
+    /// `tree_edit_focused` 消费)。焦点从真变假(失焦)时在边缘处落盘——
+    /// 项目树重命名/新建是"点别处就该保存"的一次性行内编辑,直接调
+    /// `ws.files.submit_tree_edit` 走与回车提交(`Message::EditSubmit`)同一
+    /// 份逻辑(空名字/未改动会自行退出编辑态,不产生文件/重命名)。
     pub fn set_tree_edit_focused(&mut self, focused: bool) {
-        if let Some(ws) = self.active_workspace_mut() {
-            ws.files.set_tree_edit_focused(focused);
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        let Some(project_id) = self.active_project_id else {
+            return;
+        };
+        let Some(ws) = self.active_workspace_mut() else {
+            return;
+        };
+        let was_focused = ws.tree_edit_focused();
+        if was_focused && !focused && ws.files.tree_edit_is_some() {
+            let emit = move |m: files::Message| {
+                let _ = proxy.send_event(Message::Files(m));
+            };
+            ws.files.submit_tree_edit(project_id, &handle, emit);
         }
+        ws.files.set_tree_edit_focused(focused);
     }
 
     /// 文件树搜索框是否持有 iced 真实焦点(main.rs 键盘路由用)。为真时按键
@@ -3420,6 +3499,26 @@ impl App {
             || self.preview_tab_menu.is_some()
             || self.project_preview_tab_menu.is_some()
             || self.project_link_menu.is_some()
+            || self.text_input_menu.is_some()
+    }
+
+    /// 输入框右键菜单是否打开(main.rs Esc 键路由用)。
+    pub fn text_input_menu_open(&self) -> bool {
+        self.text_input_menu.is_some()
+    }
+
+    /// main.rs 读取"本帧若产生右上角输入框右键菜单动作,要作用到的输入
+    /// 焦点",清空后返回。`TextInputMenuOpen` 时写入,供复制/粘贴作用于
+    /// 被右键的输入。
+    pub fn take_pending_text_input_focus(&mut self) -> Option<iced_widget::core::widget::Id> {
+        self.pending_text_input_focus.take()
+    }
+
+    /// main.rs 读取"输入框右键菜单当前要作用的输入 id"。菜单展开时
+    /// `TextInputMenuOpen` 已写入 `target`,main.rs 在合成复制/粘贴键盘事件前
+    /// 用它把焦点再补一次到被右键的输入(保证作用于它而不是别的)。
+    pub fn text_input_menu_target_id(&self) -> Option<iced_widget::core::widget::Id> {
+        self.text_input_menu.as_ref().map(|m| m.target.id.clone())
     }
 
     /// 预览 tab 右键菜单是否打开(main.rs Esc 键路由用)。
@@ -3830,6 +3929,9 @@ impl App {
                 | acceptance::Message::DiffLoaded(project_id, ..)
                 | acceptance::Message::Done(project_id, ..)),
             ) => self.acceptance_result(project_id, msg),
+            Message::Acceptance(acceptance::Message::TextInputMenuOpen(target)) => {
+                self.update(Message::TextInputMenuOpen(target));
+            }
             Message::Acceptance(msg) => {
                 let Some(project_id) = self.active_project_id else {
                     return;
@@ -4027,15 +4129,24 @@ impl App {
                 };
                 self.set_hover(id, hovered);
             }
+            Message::Database(database::Message::TextInputMenuOpen(target)) => {
+                self.update(Message::TextInputMenuOpen(target));
+            }
             Message::Database(msg) => self.database_message(msg),
             Message::Todo(msg) => match msg {
                 todo::Message::Hover(id, h) => self.set_hover(id, h),
+                todo::Message::TextInputMenuOpen(target) => {
+                    self.update(Message::TextInputMenuOpen(target));
+                }
                 other => self.todo_message(other),
             },
             // 文件树右键"搜索"弹窗:`SearchResults` 带 `project_id`,异步结果
             // 按所属项目路由(用户可能已切走);其余交互投当前聚焦项目。
             Message::Search(search::Message::SearchResults(project_id, result)) => {
                 self.search_results(project_id, result)
+            }
+            Message::Search(search::Message::TextInputMenuOpen(target)) => {
+                self.update(Message::TextInputMenuOpen(target));
             }
             Message::Search(msg) => {
                 let handle = self.handle.clone();
@@ -4128,6 +4239,40 @@ impl App {
                 self.todo_message(todo::Message::DragEnd);
             }
             Message::PanelSelect(v) => self.panel_select(v),
+            Message::ToggleFileTreeCollapse => self.toggle_files_tree_collapse(),
+            Message::TextInputMenuOpen(target) => {
+                // 与其它右键菜单互斥——关掉别的,只留本菜单(同时避免互相顶)。
+                self.files.close_context_menu();
+                self.preview_tab_menu = None;
+                self.project_preview_tab_menu = None;
+                self.project_link_menu = None;
+                let (x, y) = self.files.last_right_click();
+                self.text_input_menu = Some(TextInputMenu {
+                    x,
+                    y,
+                    target: target.clone(),
+                });
+                // 右键不聚焦 iced 输入框(只有左键会),菜单的复制/粘贴需要通过
+                // `interface.operate` 把焦点移到目标输入,否则合成回的 ⌘+c/v
+                // 事件作用不到它。记录待聚焦 id,本帧后由 `apply_pending_focus`
+                // 应用(main.rs)。
+                self.pending_text_input_focus = Some(target.id);
+            }
+            Message::TextInputMenuClose => {
+                self.text_input_menu = None;
+            }
+            Message::TextInputMenuCut => {
+                self.text_input_menu = None;
+            }
+            Message::TextInputMenuCopy => {
+                self.text_input_menu = None;
+            }
+            Message::TextInputMenuPaste => {
+                self.text_input_menu = None;
+            }
+            Message::TextInputMenuSelectAll => {
+                self.text_input_menu = None;
+            }
             Message::Hover(id, h) => {
                 self.set_hover(id, h);
             }
@@ -4414,6 +4559,9 @@ impl App {
             Message::Browser(browser::Message::ColumnDragStart) => {
                 self.update(Message::ColumnDragStart(Divider::BrowserBookmarksSplit));
             }
+            Message::Browser(browser::Message::TextInputMenuOpen(target)) => {
+                self.update(Message::TextInputMenuOpen(target));
+            }
             Message::Browser(msg) => self.browser_message(msg),
             Message::ProjectSelect(id) => self.project_select(id),
             Message::ProjectTabPickFolder => {
@@ -4506,6 +4654,9 @@ impl App {
                         .send_event(Message::GitLog(git_log::Message::BranchSwitchDone(result)));
                 });
             }
+            Message::GitLog(git_log::Message::TextInputMenuOpen(target)) => {
+                self.update(Message::TextInputMenuOpen(target));
+            }
             Message::GitLog(msg) => {
                 if let git_log::Message::Hover(id, h) = msg {
                     self.set_hover(id, h);
@@ -4579,6 +4730,9 @@ impl App {
                     files::FilesToolbarTarget::BranchSwitch => HoverId::FilesBranchSwitch,
                 };
                 self.set_hover(id, hovered);
+            }
+            Message::Files(files::Message::TextInputMenuOpen(target)) => {
+                self.update(Message::TextInputMenuOpen(target));
             }
             Message::Files(msg) => {
                 let Some(project_id) = self.active_project_id else {
@@ -4685,6 +4839,9 @@ impl App {
             }
             Message::Project(project::Message::DeleteProjectConfirm) => {
                 self.project_delete_confirm();
+            }
+            Message::Project(project::Message::TextInputMenuOpen(target)) => {
+                self.update(Message::TextInputMenuOpen(target));
             }
             Message::Project(msg) => {
                 let Some(project_id) = self.active_project_id else {
@@ -4803,6 +4960,9 @@ impl App {
             // 一模一样的 `with_project` 外壳)。
             Message::Ssh(ssh::Message::TerminalConnectFailed(project_id, host_id, tab_id, err)) => {
                 self.ssh_terminal_connect_failed(project_id, host_id, tab_id, err)
+            }
+            Message::Ssh(ssh::Message::TextInputMenuOpen(target)) => {
+                self.update(Message::TextInputMenuOpen(target));
             }
             Message::Ssh(msg) => {
                 if let ssh::Message::Hover(id, h) = msg {
@@ -5971,6 +6131,16 @@ impl App {
         self.on_shell_layout_changed();
     }
 
+    /// 文件预览右上角按钮:翻转文件树列表子栏的展开/收起。只改一个布尔
+    /// (`dims.files_tree_collapsed`),不动 `files_split` 比例(展开时按原比例
+    /// 恢复)。收起态下文件树列表不渲染、预览拿满整个配对宽度。与
+    /// `panel_select` 一样退出放大态并落盘/重算网格。
+    fn toggle_files_tree_collapse(&mut self) {
+        self.dims.files_tree_collapsed = !self.dims.files_tree_collapsed;
+        self.maximized = None;
+        self.on_shell_layout_changed();
+    }
+
     /// 该面板当前是否偏离了默认栏——8 个有内部两栏布局的面板据此决定
     /// 渲染顺序要不要反转。这个 Stage 结束时 `RailLayout` 只可能是
     /// `default()`,所以这个函数在正常运行时恒返回 `false`;它的分支
@@ -5978,6 +6148,13 @@ impl App {
     /// 能不能拖拽出这个状态(Stage 4 才有拖拽)。
     pub(crate) fn panel_mirrored(&self, kind: PanelKind) -> bool {
         rail::panel_mirrored_in(&self.shell_layout.rail_layout, kind)
+    }
+
+    /// 文件树列表子栏当前是否被收起(文件预览右上角按钮切换)。暴露只读
+    /// 的 `dims.files_tree_collapsed` 给 workspace 层渲染收起按钮时用,
+    /// `dims` 字段本身保持模块私有。
+    pub(crate) fn files_tree_collapsed(&self) -> bool {
+        self.dims.files_tree_collapsed
     }
 
     fn top_bar_home(&mut self) {
@@ -6423,6 +6600,75 @@ impl App {
             .into()
     }
 
+    /// 输入框右键菜单浮层:固定四项(剪切/复制/粘贴/全选),定位坐标复用
+    /// `files.last_right_click`(main.rs 任意右键都会先写入,`TextInputMenuOpen`
+    /// 已用它填好 `x/y`)。动作消息回 main.rs——由它合成回 ⌘/Ctrl+`x`/`c`/`v`/`a`
+    /// 键盘事件作用到被右键的输入。密码框(`secure`)禁用剪切/复制(置灰)。
+    fn text_input_menu_popup<'a>(
+        &self,
+    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+        let menu = match &self.text_input_menu {
+            Some(m) => m,
+            None => return column![].into(),
+        };
+        let dim = byteui::theme::color::current().dim;
+        let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
+            Vec::new();
+        if menu.target.secure {
+            // 密码框:复制/剪切同原生快捷键一样被禁用,置灰不可点。
+            items.push(crate::menu::item_locked(
+                Some(icons::IconKind::Scissors),
+                "剪切",
+                dim,
+            ));
+            items.push(crate::menu::item_locked(
+                Some(icons::IconKind::Copy),
+                "复制",
+                dim,
+            ));
+        } else {
+            items.push(crate::menu::item(
+                Some(icons::IconKind::Scissors),
+                "剪切",
+                Message::TextInputMenuCut,
+            ));
+            items.push(crate::menu::item(
+                Some(icons::IconKind::Copy),
+                "复制",
+                Message::TextInputMenuCopy,
+            ));
+        }
+        items.push(crate::menu::item(
+            Some(icons::IconKind::ClipboardPaste),
+            "粘贴",
+            Message::TextInputMenuPaste,
+        ));
+        items.push(crate::menu::item(
+            Some(icons::IconKind::SelectAll),
+            "全选",
+            Message::TextInputMenuSelectAll,
+        ));
+
+        let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+            crate::menu::shell(
+                items,
+                Length::Fixed(byteui::theme::geometry::menu_item_width()),
+            );
+        // 常规右键菜单就地向下/向上弹即可,这里输入框多用在面板内容区,直接
+        // 以光标为左上锚弹出(必要时可在下方再夹窗口高度,留待需要时加)。
+        container(list)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_y(iced_widget::core::alignment::Vertical::Top)
+            .padding(Padding {
+                top: menu.y,
+                left: menu.x,
+                right: 0.0,
+                bottom: 0.0,
+            })
+            .into()
+    }
+
     pub fn view(
         &self,
     ) -> iced_widget::core::Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -6602,6 +6848,17 @@ impl App {
             )
             .on_press(Message::ProjectLinkContextMenuClose);
             stack![base, dismiss, self.project_link_context_menu_popup()]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else if self.text_input_menu.is_some() {
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::TextInputMenuClose);
+            stack![base, dismiss, self.text_input_menu_popup()]
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
@@ -6860,6 +7117,12 @@ fn panel_body<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     match kind {
         PanelKind::Files => {
+            let preview = preview_pane(app, ws, Length::Fill, zone_pane_border(zone, rc));
+            if app.dims.files_tree_collapsed {
+                // 收起文件树:整个配对宽度都交给预览,项目树列表与分隔线都不
+                // 渲染。`files_split` 比例保留,展开时按原比例恢复。
+                return preview;
+            }
             let (list_portion, content_portion) = split_portions(app.dims.files_split);
             let list_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
                 if ws.project.is_some() {

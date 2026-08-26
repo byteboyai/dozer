@@ -708,6 +708,9 @@ pub enum Message {
     DraftPasswordChanged(String),
     /// 表单里的"连接 URI"输入变更(Postgres/MySQL 便捷粘贴)。
     DraftUriChanged(String),
+    /// 任意数据源输入框/SQL 编辑器被右键:内核拦截,不进 `update`——转发成
+    /// 顶层 `Message::TextInputMenuOpen` 弹出通用输入框右键菜单(见 app.rs)。
+    TextInputMenuOpen(crate::app::TextInputTarget),
     /// 提交表单:新增或更新(视 `draft.id` 是否为 `None`),写盘 + 密码进
     /// Keychain,关闭表单。
     DraftSave,
@@ -840,6 +843,9 @@ pub fn update(
             }
         }
         Message::DraftNameChanged(v) => set_draft(ws_state, |d| d.name = v),
+        Message::TextInputMenuOpen(_) => {
+            unreachable!("由内核拦截处理,见 database::Message::TextInputMenuOpen 文档")
+        }
         Message::DraftDriverChanged(v) => set_draft(ws_state, |d| d.driver = v),
         Message::DraftHostChanged(v) => set_draft(ws_state, |d| d.host = v),
         Message::DraftPortChanged(v) => set_draft(ws_state, |d| d.port = v),
@@ -1696,87 +1702,119 @@ fn source_form<'a>(
     }
 
     let mut col = column![driver_row].spacing(8);
-    col = col.push(byteui::form::input_text::view(
-        "名字",
-        &draft.name,
+    col = col.push(wrap_form_input(
+        byteui::form::input_text::view(
+            "名字",
+            &draft.name,
+            false,
+            Some(form_field_id("name")),
+            false,
+            None,
+            false,
+            Message::DraftNameChanged,
+        ),
+        form_field_id("name"),
         false,
-        None,
-        false,
-        None,
-        false,
-        Message::DraftNameChanged,
     ));
     if draft.driver == DriverKind::Sqlite {
-        col = col.push(byteui::form::input_text::view(
-            "文件路径",
-            &draft.database,
+        col = col.push(wrap_form_input(
+            byteui::form::input_text::view(
+                "文件路径",
+                &draft.database,
+                false,
+                Some(form_field_id("sqlite-database")),
+                false,
+                None,
+                false,
+                Message::DraftDatabaseChanged,
+            ),
+            form_field_id("sqlite-database"),
             false,
-            None,
-            false,
-            None,
-            false,
-            Message::DraftDatabaseChanged,
         ));
     } else {
-        col = col.push(byteui::form::input_text::view(
-            "连接 URI(可选,填了则忽略下面各项,例如 postgres://user:pw@host:5432/db)",
-            &draft.uri,
+        col = col.push(wrap_form_input(
+            byteui::form::input_text::view(
+                "连接 URI(可选,填了则忽略下面各项,例如 postgres://user:pw@host:5432/db)",
+                &draft.uri,
+                false,
+                Some(form_field_id("uri")),
+                false,
+                None,
+                false,
+                Message::DraftUriChanged,
+            ),
+            form_field_id("uri"),
             false,
-            None,
-            false,
-            None,
-            false,
-            Message::DraftUriChanged,
         ));
-        col = col.push(byteui::form::input_text::view(
-            "host",
-            &draft.host,
+        col = col.push(wrap_form_input(
+            byteui::form::input_text::view(
+                "host",
+                &draft.host,
+                false,
+                Some(form_field_id("host")),
+                false,
+                None,
+                false,
+                Message::DraftHostChanged,
+            ),
+            form_field_id("host"),
             false,
-            None,
-            false,
-            None,
-            false,
-            Message::DraftHostChanged,
         ));
-        col = col.push(byteui::form::input_text::view(
-            "port",
-            &draft.port,
+        col = col.push(wrap_form_input(
+            byteui::form::input_text::view(
+                "port",
+                &draft.port,
+                false,
+                Some(form_field_id("port")),
+                false,
+                None,
+                false,
+                Message::DraftPortChanged,
+            ),
+            form_field_id("port"),
             false,
-            None,
-            false,
-            None,
-            false,
-            Message::DraftPortChanged,
         ));
-        col = col.push(byteui::form::input_text::view(
-            "database",
-            &draft.database,
+        col = col.push(wrap_form_input(
+            byteui::form::input_text::view(
+                "database",
+                &draft.database,
+                false,
+                Some(form_field_id("database")),
+                false,
+                None,
+                false,
+                Message::DraftDatabaseChanged,
+            ),
+            form_field_id("database"),
             false,
-            None,
-            false,
-            None,
-            false,
-            Message::DraftDatabaseChanged,
         ));
-        col = col.push(byteui::form::input_text::view(
-            "username",
-            &draft.username,
+        col = col.push(wrap_form_input(
+            byteui::form::input_text::view(
+                "username",
+                &draft.username,
+                false,
+                Some(form_field_id("username")),
+                false,
+                None,
+                false,
+                Message::DraftUsernameChanged,
+            ),
+            form_field_id("username"),
             false,
-            None,
-            false,
-            None,
-            false,
-            Message::DraftUsernameChanged,
         ));
-        col = col.push(byteui::form::input_text::view(
-            "password(留空则不修改)",
-            &draft.password,
+        col = col.push(wrap_form_input(
+            byteui::form::input_text::view(
+                "password(留空则不修改)",
+                &draft.password,
+                true,
+                Some(form_field_id("password")),
+                false,
+                None,
+                false,
+                Message::DraftPasswordChanged,
+            ),
+            form_field_id("password"),
             true,
-            None,
-            false,
-            None,
-            false,
-            Message::DraftPasswordChanged,
         ));
     }
     col = col.push(
@@ -1996,30 +2034,87 @@ fn tab_title_display_width(title: &str) -> f32 {
     title.chars().count() as f32 * 8.0 + 56.0
 }
 
+// 各输入框/SQL 编辑器的稳定 `widget::Id`,供右键菜单把焦点移到被右键的
+// 输入(复制/粘贴作用于它,见 main.rs 的合成键盘事件)。表单字段是单例、
+// 固定 id;浏览 WHERE/ORDER BY 与查询 SQL 编辑器按 `tab_id` 区分(同个 tab
+// 内是单例,多个 tab 互不抢焦点)。
+fn form_field_id(component: &'static str) -> iced_widget::core::widget::Id {
+    match component {
+        "name" => iced_widget::core::widget::Id::new("db-form-name"),
+        "sqlite-database" => iced_widget::core::widget::Id::new("db-form-sqlite-database"),
+        "uri" => iced_widget::core::widget::Id::new("db-form-uri"),
+        "host" => iced_widget::core::widget::Id::new("db-form-host"),
+        "port" => iced_widget::core::widget::Id::new("db-form-port"),
+        "database" => iced_widget::core::widget::Id::new("db-form-database"),
+        "username" => iced_widget::core::widget::Id::new("db-form-username"),
+        "password" => iced_widget::core::widget::Id::new("db-form-password"),
+        _ => iced_widget::core::widget::Id::new("db-form-unknown"),
+    }
+}
+fn new_tab_field_id(component: &'static str, _tab_id: usize) -> iced_widget::core::widget::Id {
+    // 内容窗格同一时刻只渲染激活 tab 的控件,不同 tab 用同一个静态 id 不冲突
+    // (激活 tab 的编辑器是唯一在 widget 树里的那个)。
+    match component {
+        "browse-where" => iced_widget::core::widget::Id::new("db-browse-where"),
+        "browse-order" => iced_widget::core::widget::Id::new("db-browse-order"),
+        "query" => iced_widget::core::widget::Id::new("db-query"),
+        _ => iced_widget::core::widget::Id::new("db-unknown"),
+    }
+}
+
+/// 给数据库表单/浏览/编辑器等输入框套上统一右键菜单封装:外包
+/// `MouseArea::on_right_press`,右键下发 `TextInputMenuOpen`(见
+/// `byteui::interaction::context_menu`)。`secure` 输入(密码)禁用
+/// 复制/剪切(菜单项灰掉),见 `text_input_menu_popup`。
+fn wrap_form_input<'a, I>(
+    input: I,
+    id: iced_widget::core::widget::Id,
+    secure: bool,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>
+where
+    I: Into<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>>,
+{
+    byteui::interaction::context_menu::wrap(
+        input.into(),
+        Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+            id,
+            secure,
+        })),
+    )
+}
+
 fn browse_view<'a>(
     tab_id: usize,
     b: &'a BrowseState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let toolbar = row![
-        byteui::form::input_text::view(
-            "WHERE(原始 SQL 片段,例如 id > 100)",
-            &b.where_clause,
+        wrap_form_input(
+            byteui::form::input_text::view(
+                "WHERE(原始 SQL 片段,例如 id > 100)",
+                &b.where_clause,
+                false,
+                Some(new_tab_field_id("browse-where", tab_id)),
+                false,
+                Some(Message::BrowseRun(tab_id)),
+                false,
+                move |v| Message::BrowseWhereChanged(tab_id, v),
+            ),
+            new_tab_field_id("browse-where", tab_id),
             false,
-            None,
-            false,
-            Some(Message::BrowseRun(tab_id)),
-            false,
-            move |v| Message::BrowseWhereChanged(tab_id, v),
         ),
-        byteui::form::input_text::view(
-            "ORDER BY(原始 SQL 片段,例如 title DESC)",
-            &b.order_by,
+        wrap_form_input(
+            byteui::form::input_text::view(
+                "ORDER BY(原始 SQL 片段,例如 title DESC)",
+                &b.order_by,
+                false,
+                Some(new_tab_field_id("browse-order", tab_id)),
+                false,
+                Some(Message::BrowseRun(tab_id)),
+                false,
+                move |v| Message::BrowseOrderByChanged(tab_id, v),
+            ),
+            new_tab_field_id("browse-order", tab_id),
             false,
-            None,
-            false,
-            Some(Message::BrowseRun(tab_id)),
-            false,
-            move |v| Message::BrowseOrderByChanged(tab_id, v),
         ),
         byteui::form::select::view(&PAGE_SIZES, Some(&b.page_size), move |v| {
             Message::BrowsePageSizeChanged(tab_id, v)
@@ -2156,13 +2251,17 @@ fn query_view<'a>(
     .spacing(8)
     .align_y(iced_widget::core::Alignment::Center);
 
-    let editor = byteui::form::text_area::view(
-        &q.sql,
-        "SELECT * FROM ...",
-        None,
+    let editor = wrap_form_input(
+        byteui::form::text_area::view(
+            &q.sql,
+            "SELECT * FROM ...",
+            Some(new_tab_field_id("query", tab_id)),
+            false,
+            Some(160.0),
+            move |action| Message::QueryTextAction(tab_id, action),
+        ),
+        new_tab_field_id("query", tab_id),
         false,
-        Some(160.0),
-        move |action| Message::QueryTextAction(tab_id, action),
     );
 
     let mut col = column![toolbar, editor].spacing(8);

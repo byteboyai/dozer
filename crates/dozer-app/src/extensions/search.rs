@@ -186,6 +186,9 @@ pub enum Message {
     SearchResults(i64, Result<Vec<(String, Vec<SearchHit>)>, String>),
     /// 点击命中 → 内核拦截映射为 `PreviewOpenPath`(本模块只声明,不进 update)。
     Pick(SearchHit),
+    /// 查询框被右键:内核拦截,不进 `update`——转发成顶层
+    /// `Message::TextInputMenuOpen` 弹出通用输入框右键菜单(见 app.rs)。
+    TextInputMenuOpen(crate::app::TextInputTarget),
 }
 
 /// 打开弹窗并预填作用域。keyword 草稿保留上次(同项目内复用),结果清空。
@@ -241,6 +244,8 @@ pub fn update(
         }
         // `Pick` 由内核拦截映射为预览打开,不进这里。
         Message::Pick(_) => {}
+        // `TextInputMenuOpen` 由内核拦截映射为右键菜单,不进这里。
+        Message::TextInputMenuOpen(_) => {}
     }
 }
 
@@ -250,15 +255,21 @@ fn query_box(
     ws: &WorkspaceState,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let active = ws.query_focused() || ws.running;
-    byteui::form::input_text::view(
-        "搜索内容…",
-        &ws.query,
-        false,
-        Some(query_field_id()),
-        active,
-        Some(Message::QuerySubmit),
-        false,
-        Message::QueryInput,
+    byteui::interaction::context_menu::wrap(
+        byteui::form::input_text::view(
+            "搜索内容…",
+            &ws.query,
+            false,
+            Some(query_field_id()),
+            active,
+            Some(Message::QuerySubmit),
+            false,
+            Message::QueryInput,
+        ),
+        Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+            id: query_field_id(),
+            secure: false,
+        })),
     )
 }
 

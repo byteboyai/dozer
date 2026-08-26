@@ -126,6 +126,12 @@ pub fn name_field_id() -> Id {
     Id::new("project-name-edit-box")
 }
 
+/// 描述编辑框真 `text_editor` 的 `widget::Id`。菜单复制/粘贴靠
+/// `interface.operate(focus)` 聚焦到它,故描述框也挂稳定 id。
+pub fn description_field_id() -> Id {
+    Id::new("project-description-edit-box")
+}
+
 static NAME_EDIT_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
 
@@ -168,6 +174,9 @@ pub enum Message {
     NameEditInput(String),
     /// 回车提交(与失焦提交共用 `submit_name_edit`)。
     NameEditSubmit,
+    /// 名称 / 描述编辑框被右键:内核拦截,不进 `update`——转发成顶层
+    /// `Message::TextInputMenuOpen` 弹出通用输入框右键菜单(见 app.rs)。
+    TextInputMenuOpen(crate::app::TextInputTarget),
     DescriptionEditStart,
     DescriptionEditAction(iced_widget::text_editor::Action),
     /// 预留:当前描述靠 `submit_description_edit_on_blur` 直接写盘(见该文档
@@ -291,6 +300,9 @@ pub fn update(
             let initial = ws_state.description.clone().unwrap_or_default();
             ws_state.description_editing =
                 Some(iced_widget::text_editor::Content::with_text(&initial));
+        }
+        Message::TextInputMenuOpen(_) => {
+            unreachable!("由内核拦截处理,见 project::Message::TextInputMenuOpen 文档")
         }
         Message::DescriptionEditAction(action) => {
             if let Some(content) = &mut ws_state.description_editing {
@@ -528,15 +540,21 @@ pub fn view<'a>(
     let editing = ws_state.name_edit_focused();
     let name_row: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
         if ws_state.name_editing.is_some() {
-            container(byteui::form::input_text::view(
-                "",
-                ws_state.name_editing.as_deref().unwrap_or(""),
-                false,
-                Some(name_field_id()),
-                false,
-                Some(Message::NameEditSubmit),
-                true,
-                Message::NameEditInput,
+            container(byteui::interaction::context_menu::wrap(
+                byteui::form::input_text::view(
+                    "",
+                    ws_state.name_editing.as_deref().unwrap_or(""),
+                    false,
+                    Some(name_field_id()),
+                    false,
+                    Some(Message::NameEditSubmit),
+                    true,
+                    Message::NameEditInput,
+                ),
+                Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+                    id: name_field_id(),
+                    secure: false,
+                })),
             ))
             .padding([8, 12])
             .width(Length::Fill)
@@ -574,22 +592,31 @@ pub fn view<'a>(
 
     let description_block: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
         if let Some(editing) = &ws_state.description_editing {
-            iced_widget::text_editor(editing)
-                .placeholder("项目描述信息…")
-                .on_action(Message::DescriptionEditAction)
-                .height(Length::Fixed(96.0))
-                .style(|_t, _s| iced_widget::text_editor::Style {
-                    background: byteui::theme::color::current().card.into(),
-                    border: Border {
-                        color: byteui::theme::color::current().gold,
-                        width: 1.5,
-                        radius: 8.0.into(),
-                    },
-                    placeholder: byteui::theme::color::current().dim,
-                    value: byteui::theme::color::current().cream,
-                    selection: byteui::theme::color::current().gold,
-                })
-                .into()
+            let editor: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+                iced_widget::text_editor(editing)
+                    .id(description_field_id())
+                    .placeholder("项目描述信息…")
+                    .on_action(Message::DescriptionEditAction)
+                    .height(Length::Fixed(96.0))
+                    .style(|_t, _s| iced_widget::text_editor::Style {
+                        background: byteui::theme::color::current().card.into(),
+                        border: Border {
+                            color: byteui::theme::color::current().gold,
+                            width: 1.5,
+                            radius: 8.0.into(),
+                        },
+                        placeholder: byteui::theme::color::current().dim,
+                        value: byteui::theme::color::current().cream,
+                        selection: byteui::theme::color::current().gold,
+                    })
+                    .into();
+            byteui::interaction::context_menu::wrap(
+                editor,
+                Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+                    id: description_field_id(),
+                    secure: false,
+                })),
+            )
         } else {
             let label = ws_state
                 .description

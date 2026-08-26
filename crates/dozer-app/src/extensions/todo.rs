@@ -777,6 +777,9 @@ pub enum Message {
     SearchInput(String),
     /// 回车 / 点右侧搜索按钮:把草稿落成生效的 `search` 过滤词。
     SearchSubmit,
+    /// 新增框 / 搜索框 / 内容编辑框被右键:内核拦截,不进 `update`——转发成
+    /// 顶层 `Message::TextInputMenuOpen` 弹出通用输入框右键菜单(见 app.rs)。
+    TextInputMenuOpen(crate::app::TextInputTarget),
     /// 光标移动到了第 `idx` 个任务卡片上(由 `todo_card` 外层的
     /// `MouseArea::on_move` 构造)。若当前正在拖拽待办,更新目标位
     /// `target_idx`(悬停到已完成卡片时夹到待办块末尾,见 `update`)。
@@ -1086,6 +1089,8 @@ pub fn update(
         Message::Hover(_, _) => {}
         // footbar"清空列表"按钮:功能尚未实现,仅占位。
         Message::ClearList => {}
+        // `TextInputMenuOpen` 由内核拦截映射为右键菜单,不进这里。
+        Message::TextInputMenuOpen(_) => {}
         Message::Toggle(idx) => {
             let Some(item) = ws_state.items.get(idx) else {
                 return;
@@ -1461,6 +1466,13 @@ fn todo_footer_bar<'a>(
         Some(ws_state.add_input_height()),
         Message::AddEdit,
     );
+    let field = byteui::interaction::context_menu::wrap(
+        field,
+        Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+            id: add_field_id(),
+            secure: false,
+        })),
+    );
 
     // 提交按钮:circle-arrow-up,嵌在输入框右边框内、无独立边框(视觉上"在
     // 框里"),点它提交(与搜索框按钮同款,但不认回车——`text_editor` 内置
@@ -1608,7 +1620,7 @@ fn todo_search_bar<'a>(
     ws_state: &'a WorkspaceState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let highlight = ws_state.search_focused() || !ws_state.search.is_empty();
-    byteui::form::search_box::view(
+    let bar = byteui::form::search_box::view(
         "搜索任务…",
         &ws_state.search_draft,
         Some(todo_search_field_id()),
@@ -1617,6 +1629,13 @@ fn todo_search_bar<'a>(
         Message::SearchSubmit,
         app.hover_progress(HoverId::TodoSearchSubmit),
         |hovered| Message::Hover(HoverId::TodoSearchSubmit, hovered),
+    );
+    byteui::interaction::context_menu::wrap(
+        bar,
+        Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+            id: todo_search_field_id(),
+            secure: false,
+        })),
     )
 }
 
@@ -2016,13 +2035,19 @@ fn todo_card<'a>(
             // 压成单行(见 `byteui::form::text_area` 头部注释)。`content_field_id`
             // 从旧版 `container` 挪到真 `text_editor` 上,`CaptureContentEditFocus`
             // 的 `focusable` 钩子才能认出它。
-            container(byteui::form::text_area::view(
-                draft,
-                "任务内容…",
-                Some(content_field_id()),
-                true,
-                None,
-                Message::ContentEdit,
+            container(byteui::interaction::context_menu::wrap(
+                byteui::form::text_area::view(
+                    draft,
+                    "任务内容…",
+                    Some(content_field_id()),
+                    true,
+                    None,
+                    Message::ContentEdit,
+                ),
+                Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+                    id: content_field_id(),
+                    secure: false,
+                })),
             ))
             .width(Length::Fill)
             .padding([10, 12])

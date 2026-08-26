@@ -250,7 +250,7 @@ use iced_winit::core::text;
 use iced_winit::core::text::Renderer as _;
 use iced_winit::core::time::Instant;
 use iced_winit::core::window;
-use iced_winit::core::{Color, Event, Font, Pixels, Point, Rectangle, Size, Theme};
+use iced_winit::core::{Color, Event, Font, Pixels, Point, Rectangle, Size, SmolStr, Theme};
 use iced_winit::futures;
 use iced_winit::runtime::task;
 use iced_winit::runtime::user_interface::{self, UserInterface};
@@ -309,6 +309,45 @@ fn clear<'a>(
         timestamp_writes: None,
         occlusion_query_set: None,
     })
+}
+
+/// 输入框右键菜单动作 → 对应的快捷键字符:返回 `Some('c')` 等,供
+/// `link_command_event` 合成 ⌘/Ctrl+该键的键盘事件。非菜单动作返回 `None`。
+fn menu_edit_key(message: &Message) -> Option<char> {
+    match message {
+        Message::TextInputMenuCut => Some('x'),
+        Message::TextInputMenuCopy => Some('c'),
+        Message::TextInputMenuPaste => Some('v'),
+        Message::TextInputMenuSelectAll => Some('a'),
+        _ => None,
+    }
+}
+
+/// 合成一个 `⌘/Ctrl(COMMAND)+ch` 的 `KeyPressed` iced 事件。`text_input`/
+/// `text_editor` 靠 `key.to_latin(physical_key)` 把它落成 `'x'/'c'/'v'/'a'`,
+/// 再检查 `modifiers.command()` 走各自的剪贴板/全选分支;`physical_key` 给
+/// 出与字符一致的物理键码,保证 `to_latin` 命中。`COMMAND` 在 mac 上即 ⌘
+/// (LOGO),其余平台即 Ctrl(见 iced `keyboard::Modifiers::COMMAND`)。
+fn unique_command_event(ch: char) -> Event {
+    use iced_winit::core::keyboard::key::Code;
+    use iced_winit::core::keyboard::{self, key};
+    let code = match ch {
+        'a' => Code::KeyA,
+        'c' => Code::KeyC,
+        'v' => Code::KeyV,
+        'x' => Code::KeyX,
+        _ => unreachable!("menu_edit_key only maps c/x/v/a"),
+    };
+    let keyboard_event = keyboard::Event::KeyPressed {
+        key: keyboard::Key::Character(SmolStr::new(format!("{ch}"))),
+        modified_key: keyboard::Key::Character(SmolStr::new(format!("{ch}"))),
+        physical_key: key::Physical::Code(code),
+        modifiers: keyboard::Modifiers::COMMAND,
+        location: keyboard::Location::Standard,
+        text: Some(SmolStr::new(format!("{ch}"))),
+        repeat: false,
+    };
+    Event::Keyboard(keyboard_event)
 }
 
 /// daemon 连不上时的自动拉起：优先用 `current_exe` 同目录下的 `dozerd`
@@ -507,13 +546,19 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         for (spec, bounds) in specs {
             match pool.get_mut(&spec.id) {
                 Some((view, loaded_url)) => {
-                    // 去重判断优先信 webview 的**实际当前地址**(`view.url()` 读
-                    // WKWebView 主 frame URL)。否则网页内超链接让 webview 自行
-                    // 导航后,缓存的 `loaded_url` 仍是旧值,这里会误判成"要加载"
-                    // 而对同一个已加载好的目标页再 `load_url` 一次(整页重载
-                    // 闪烁)。`view.url()` 失败(罕见)时退回缓存的 `loaded_url`。
+                    // 去重判断要同时看两个来源,缺一个都会闪:
+                    // - `view.url()`(webview 实际地址):网页内超链接让 webview
+                    //   自行导航后,这里才反映新地址。只信它会导致地址栏驱动
+                    //   的导航`load_url` 后、真提交前那几帧里 `view.url()`
+                    //   仍是旧值,每一帧都重发一次 `load_url`(反复重启导航,
+                    //   页面不停闪烁)。
+                    // - `loaded_url`(我们曾下达的命令地址):只信它会在网页内
+                    //   跳转完成后把已加载好的目标页误判成"要加载"再整页重载
+                    //   一次。`view.url()` 失败(罕见)时退回缓存的 `loaded_url`。
+                    // 合起来:只有**既没到过、也没下达过**这个地址时才真正加载,
+                    // 既挡住地址栏提交后的重复导航,又不打扰网页内跳转。
                     let current = view.url().unwrap_or_else(|_| loaded_url.clone());
-                    if current != spec.url {
+                    if current != spec.url && *loaded_url != spec.url {
                         if let Err(e) = view.load_url(&spec.url) {
                             tracing::warn!("预览导航失败: {e}");
                         }
@@ -954,6 +999,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     app.update(Message::ProjectPreviewTabContextMenuClose);
                 } else if app.project_link_context_menu_open() {
                     app.update(Message::ProjectLinkContextMenuClose);
+                } else if app.text_input_menu_open() {
+                    app.update(Message::TextInputMenuClose);
                 } else {
                     app.update(Message::Files(extensions::files::Message::ContextMenuClose));
                 }
@@ -2175,6 +2222,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // `App::take_addr_select_all_pending`)。
                                 let addr_select_all_pending = app.take_addr_select_all_pending();
 
+                                // 同理,右键输入框弹菜单时把焦点移到被右键的输入
+                                // (右键不聚焦 iced 输入框,菜单复制/粘贴要作用到它,
+                                // 必须显式 focus;一次性位,消费即复位)。
+                                let input_menu_focus = app.take_pending_text_input_focus();
+
                                 // Draw iced on top
                                 let mut interface = UserInterface::build(
                                     app.view(),
@@ -2252,6 +2304,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     let mut op = iced_widget::core::widget::operation::text_input::select_all::<()>(
                                         extensions::browser::addr_field_id(),
                                     );
+                                    interface.operate(renderer, &mut op);
+                                }
+
+                                // 右键输入框弹菜单后,把焦点移到被右键的输入(
+                                // 使菜单的复制/粘贴作用于它)。一次性位,消费即复位。
+                                if let Some(id) = input_menu_focus {
+                                    let mut op =
+                                        iced_widget::core::widget::operation::focusable::focus::<()>(
+                                            id,
+                                        );
                                     interface.operate(renderer, &mut op);
                                 }
 
@@ -2717,6 +2779,30 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     let _ = interface.update(events, *cursor, renderer, clipboard, &mut messages);
 
                     events.clear();
+
+                    // 输入框右键菜单动作:把 "Cut/Copy/Paste/Select All" 合成回
+                    // 对应的 ⌘/Ctrl+`x`/`c`/`v`/`a` 键盘事件,喂给同一个
+                    // `interface` 再跑一遍——复用 iced 原生 text_input /
+                    // text_editor 的剪贴板与光标插入逻辑(它们靠
+                    // `key.to_latin(physical_key)+command` 识别快捷键;
+                    // text_input 还会自行跳过密码框的复制/剪切)。
+                    //
+                    // 帧序:菜单是上一帧右键弹出的(那时已把焦点经
+                    // `focusable::focus` 移到被右键的输入),这里点菜单项本身
+                    // 不抢走输入框焦点;合成前再用 `focusable::focus` 补一次,
+                    // 双保险保证作用于被右键的那个输入。
+                    if let Some(ch) = messages.iter().find_map(menu_edit_key) {
+                        if let Some(id) = app.text_input_menu_target_id() {
+                            let mut op =
+                                iced_winit::core::widget::operation::focusable::focus::<()>(id);
+                            interface.operate(renderer, &mut op);
+                        }
+                        let synth = [unique_command_event(ch)];
+                        let mut second: Vec<Message> = Vec::new();
+                        let _ = interface.update(&synth, *cursor, renderer, clipboard, &mut second);
+                        messages.append(&mut second);
+                    }
+
                     *cache = interface.into_cache();
 
                     messages

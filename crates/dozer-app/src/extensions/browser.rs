@@ -1043,6 +1043,9 @@ pub enum Message {
     /// 字符串)。
     AddrInput(String),
     AddrSubmit,
+    /// 地址栏被右键:内核拦截,不进 `update`——转发成顶层
+    /// `Message::TextInputMenuOpen` 弹出通用输入框右键菜单(见 app.rs)。
+    TextInputMenuOpen(crate::app::TextInputTarget),
     StarClick,
     BookmarkAdd(BookmarkScope),
     BookmarkRemove(i64),
@@ -1455,6 +1458,9 @@ pub fn update(
                  (转成 app 级拖拽消息),不会转发到这里"
             );
         }
+        Message::TextInputMenuOpen(_) => {
+            unreachable!("由内核拦截处理,见 browser::Message::TextInputMenuOpen 文档")
+        }
     }
 }
 
@@ -1714,15 +1720,21 @@ pub fn view(
     } else {
         active_url
     };
-    let addr_input = byteui::form::input_text::view(
-        "输入网址",
-        addr_value,
-        false,
-        Some(addr_field_id()),
-        false,
-        Some(Message::AddrSubmit),
-        true,
-        Message::AddrInput,
+    let addr_input = byteui::interaction::context_menu::wrap(
+        byteui::form::input_text::view(
+            "输入网址",
+            addr_value,
+            false,
+            Some(addr_field_id()),
+            false,
+            Some(Message::AddrSubmit),
+            true,
+            Message::AddrInput,
+        ),
+        Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+            id: addr_field_id(),
+            secure: false,
+        })),
     );
 
     // 地址栏本体:单个带边框的容器,把"网址文字 + 星标(收藏)按钮"一起包进

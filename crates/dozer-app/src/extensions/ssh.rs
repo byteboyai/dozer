@@ -404,6 +404,9 @@ pub enum Message {
     DraftAuthMethodToggled(bool), // true = 用私钥,false = 用密码
     DraftKeyPathChanged(String),
     DraftPasswordChanged(String),
+    /// 表单任意输入框被右键:内核拦截,不进 `update`——转发成顶层
+    /// `Message::TextInputMenuOpen` 弹出通用输入框右键菜单(见 app.rs)。
+    TextInputMenuOpen(crate::app::TextInputTarget),
     DraftSave,
     DraftCancel,
     /// 点主机卡片垃圾桶图标:进入"待确认删除"态(把 host_id 记进
@@ -696,7 +699,8 @@ pub fn update(
         Message::OpenSshTab(..)
         | Message::CloseSshTab(..)
         | Message::SelectSshTab(..)
-        | Message::Sftp(..) => {
+        | Message::Sftp(..)
+        | Message::TextInputMenuOpen(_) => {
             // 内核 `App::update` 在通配 `Message::Ssh(msg)` 之前拦截,
             // 这里理论上到不了;写出来只是为了 `match` 穷尽。
         }
@@ -905,50 +909,87 @@ fn radio_dot<'a>(
     .into()
 }
 
+/// 给 SSH 表单输入框套统一右键菜单封装(同 database::wrap_form_input):外包
+/// `MouseArea::on_right_press`,右键下发 `TextInputMenuOpen`。`secure`(密码/
+/// 私钥口令)禁用复制/剪切。
+fn wrap_ssh_field<'a, I>(
+    input: I,
+    id: &'static str,
+    secure: bool,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>
+where
+    I: Into<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>>,
+{
+    let id = iced_widget::core::widget::Id::new(id);
+    byteui::interaction::context_menu::wrap(
+        input.into(),
+        Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+            id,
+            secure,
+        })),
+    )
+}
+
 fn host_form<'a>(
     draft: &'a SshHostDraft,
     status: &'a TestStatus,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![
-        byteui::form::input_text::view(
-            "主机名称",
-            &draft.name,
+        wrap_ssh_field(
+            byteui::form::input_text::view(
+                "主机名称",
+                &draft.name,
+                false,
+                Some(iced_widget::core::widget::Id::new("ssh-form-name")),
+                false,
+                None,
+                false,
+                Message::DraftNameChanged,
+            ),
+            "ssh-form-name",
             false,
-            None,
-            false,
-            None,
-            false,
-            Message::DraftNameChanged,
         ),
-        byteui::form::input_text::view(
-            "Host",
-            &draft.host,
+        wrap_ssh_field(
+            byteui::form::input_text::view(
+                "Host",
+                &draft.host,
+                false,
+                Some(iced_widget::core::widget::Id::new("ssh-form-host")),
+                false,
+                None,
+                false,
+                Message::DraftHostChanged,
+            ),
+            "ssh-form-host",
             false,
-            None,
-            false,
-            None,
-            false,
-            Message::DraftHostChanged,
         ),
-        byteui::form::input_text::view(
-            "port(22)",
-            &draft.port,
+        wrap_ssh_field(
+            byteui::form::input_text::view(
+                "port(22)",
+                &draft.port,
+                false,
+                Some(iced_widget::core::widget::Id::new("ssh-form-port")),
+                false,
+                None,
+                false,
+                Message::DraftPortChanged,
+            ),
+            "ssh-form-port",
             false,
-            None,
-            false,
-            None,
-            false,
-            Message::DraftPortChanged,
         ),
-        byteui::form::input_text::view(
-            "user name",
-            &draft.username,
+        wrap_ssh_field(
+            byteui::form::input_text::view(
+                "user name",
+                &draft.username,
+                false,
+                Some(iced_widget::core::widget::Id::new("ssh-form-username")),
+                false,
+                None,
+                false,
+                Message::DraftUsernameChanged,
+            ),
+            "ssh-form-username",
             false,
-            None,
-            false,
-            None,
-            false,
-            Message::DraftUsernameChanged,
         ),
         row![
             radio_dot(
@@ -967,36 +1008,50 @@ fn host_form<'a>(
     .spacing(10);
 
     if draft.use_private_key {
-        col = col.push(byteui::form::input_text::view(
-            "私钥文件路径,如 ~/.ssh/id_ed25519",
-            &draft.key_path,
+        col = col.push(wrap_ssh_field(
+            byteui::form::input_text::view(
+                "私钥文件路径,如 ~/.ssh/id_ed25519",
+                &draft.key_path,
+                false,
+                Some(iced_widget::core::widget::Id::new("ssh-form-key-path")),
+                false,
+                None,
+                false,
+                Message::DraftKeyPathChanged,
+            ),
+            "ssh-form-key-path",
             false,
-            None,
-            false,
-            None,
-            false,
-            Message::DraftKeyPathChanged,
         ));
-        col = col.push(byteui::form::input_text::view(
-            "私钥口令(留空则不修改/无口令)",
-            &draft.password,
+        col = col.push(wrap_ssh_field(
+            byteui::form::input_text::view(
+                "私钥口令(留空则不修改/无口令)",
+                &draft.password,
+                true,
+                Some(iced_widget::core::widget::Id::new(
+                    "ssh-form-key-passphrase",
+                )),
+                false,
+                None,
+                false,
+                Message::DraftPasswordChanged,
+            ),
+            "ssh-form-key-passphrase",
             true,
-            None,
-            false,
-            None,
-            false,
-            Message::DraftPasswordChanged,
         ));
     } else {
-        col = col.push(byteui::form::input_text::view(
-            "password(留空则不修改)",
-            &draft.password,
+        col = col.push(wrap_ssh_field(
+            byteui::form::input_text::view(
+                "password(留空则不修改)",
+                &draft.password,
+                true,
+                Some(iced_widget::core::widget::Id::new("ssh-form-password")),
+                false,
+                None,
+                false,
+                Message::DraftPasswordChanged,
+            ),
+            "ssh-form-password",
             true,
-            None,
-            false,
-            None,
-            false,
-            Message::DraftPasswordChanged,
         ));
     }
 

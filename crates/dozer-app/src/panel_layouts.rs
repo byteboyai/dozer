@@ -33,6 +33,8 @@ fn legacy_global_dims(layout_path: &Path) -> PanelDims {
         .map(|v| PanelDims {
             left_width: v.get("left_width").and_then(num).unwrap_or_default(),
             files_split: v.get("files_split").and_then(num).unwrap_or_default(),
+            // 旧版全局 layout.json 出现在文件树可收起之前,恒默认展开。
+            files_tree_collapsed: false,
             project_split: v.get("project_split").and_then(num).unwrap_or_default(),
             ssh_split: v
                 .get("ssh_split")

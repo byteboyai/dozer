@@ -453,7 +453,7 @@ fn home_project_list_view(
     // 首页项目列表搜索框的设计(需求:其它面板搜索框都要跟它一致)。
     let editing = app.home_project_search_focused();
     let highlight = editing || !app.home_project_search.is_empty();
-    col = col.push(byteui::form::search_box::view(
+    let search_box = byteui::form::search_box::view(
         "搜索项目…",
         &app.home_project_search_draft,
         Some(home_search_field_id()),
@@ -462,6 +462,13 @@ fn home_project_list_view(
         Message::HomeProjectSearchSubmit,
         app.hover_progress(HoverId::HomeProjectSearchSubmit),
         |hovered| Message::Hover(HoverId::HomeProjectSearchSubmit, hovered),
+    );
+    col = col.push(byteui::interaction::context_menu::wrap(
+        search_box,
+        Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+            id: home_search_field_id(),
+            secure: false,
+        })),
     ));
 
     // 按已提交的搜索词过滤,过滤后再分页——"更多..."按钮/页数据此按过滤后

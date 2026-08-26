@@ -136,6 +136,9 @@ pub enum Message {
     DiffLoaded(i64, usize, Result<String, String>),
     /// 意见框草稿变化(iced `text_input::on_input`,每次给全量当前字符串)。
     CommentInput(String),
+    /// 意见框被右键:内核拦截,不进 `update`——转发成顶层
+    /// `Message::TextInputMenuOpen` 弹出通用输入框右键菜单(见 app.rs)。
+    TextInputMenuOpen(crate::app::TextInputTarget),
     Accept,
     Reject,
     Done(i64, Result<u32, String>),
@@ -154,6 +157,9 @@ pub fn update(
 ) {
     match msg {
         Message::Open(..) => unreachable!("由内核拦截处理,见 Message::Open 文档"),
+        Message::TextInputMenuOpen(_) => {
+            unreachable!("由内核拦截处理,见 acceptance::Message::TextInputMenuOpen 文档")
+        }
         Message::Loaded(_, repo, source_tab_id, goal, changes) => {
             let n = goal.as_ref().map(|g| g.criteria.len()).unwrap_or(0);
             ws_state.session = Some(AcceptanceSession {
@@ -412,15 +418,21 @@ pub fn view<'a>(
 
     let editing = session.comment_focused;
     content = content.push(
-        container(byteui::form::input_text::view(
-            "验收意见…（打回时注回会话）",
-            &session.comment,
-            false,
-            Some(comment_field_id()),
-            false,
-            None,
-            true,
-            Message::CommentInput,
+        container(byteui::interaction::context_menu::wrap(
+            byteui::form::input_text::view(
+                "验收意见…（打回时注回会话）",
+                &session.comment,
+                false,
+                Some(comment_field_id()),
+                false,
+                None,
+                true,
+                Message::CommentInput,
+            ),
+            Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+                id: comment_field_id(),
+                secure: false,
+            })),
         ))
         .width(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {

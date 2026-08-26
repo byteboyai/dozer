@@ -32,7 +32,7 @@
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
 use crate::app::{
     App, DEFAULT_COLS, DEFAULT_ROWS, HoverId, Message, PROJECT_PREVIEW_ID_OFFSET, PanelKind,
-    ProjectId, tab_divider,
+    ProjectId, Side, tab_divider,
 };
 use crate::conversation::{self, TurnGroupRow};
 use crate::delivery::{self};
@@ -2624,7 +2624,7 @@ pub(crate) fn conversation_list_pane<'a>(
     // `highlight` 传真实聚焦态或已生效搜索词非空:即使当前没聚焦,只要
     // 列表被搜索词过滤中就持续金框提示。
     let search_active = ws.conversation_search_focused || !ws.conversation_search.is_empty();
-    content = content.push(byteui::form::search_box::view(
+    let search_box = byteui::form::search_box::view(
         "搜索会话标题…",
         &ws.conversation_search_draft,
         Some(conversation_search_field_id()),
@@ -2633,6 +2633,13 @@ pub(crate) fn conversation_list_pane<'a>(
         Message::ConversationSearchSubmit,
         app.hover_progress(HoverId::ConversationSearchSubmit),
         |hovered| Message::Hover(HoverId::ConversationSearchSubmit, hovered),
+    );
+    content = content.push(byteui::interaction::context_menu::wrap(
+        search_box,
+        Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+            id: conversation_search_field_id(),
+            secure: false,
+        })),
     ));
 
     let Some(rows) = ws.conversation_turn_groups.as_ref() else {
@@ -3385,7 +3392,37 @@ fn preview_pane_for<'a>(
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
     let left_arrow = tab_arrow_button(icons::IconKind::ChevronLeft, can_left, scroll_msg(false));
     let right_arrow = tab_arrow_button(icons::IconKind::ChevronRight, can_right, scroll_msg(true));
-    let tab_bar = row![left_arrow, right_arrow, clipped]
+    // 文件预览右上角"收起/展开文件树"按钮:仅 Files 预览(与项目树配对的)有
+    // 文件树可收,Project 预览没有,放一个不占宽度的惰性元素保持行布局逐像素
+    // 不变。图标按 Files 面板当前所在栏(左/右)与收起态四选一,见
+    // `IconKind::PanelLeftClose` 等注释。
+    let collapse: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = match kind {
+        PreviewPaneKind::Files => {
+            let side = app.shell_layout.rail_layout.side_of(PanelKind::Files);
+            let collapsed = app.files_tree_collapsed();
+            let (icon, tooltip) = match (side, collapsed) {
+                (Side::Left, false) => (IconKind::PanelLeftClose, "收起文件树"),
+                (Side::Left, true) => (IconKind::PanelLeftOpen, "展开文件树"),
+                (Side::Right, false) => (IconKind::PanelRightClose, "收起文件树"),
+                (Side::Right, true) => (IconKind::PanelRightOpen, "展开文件树"),
+            };
+            icons::icon_button_entry(
+                icon,
+                byteui::theme::icon_size::row(),
+                false,
+                false,
+                app.hover_progress(HoverId::FileTreeCollapse),
+                false,
+                byteui::theme::icon_size::row() + 6.0,
+                true,
+                Message::ToggleFileTreeCollapse,
+                move |hovered| Message::Hover(HoverId::FileTreeCollapse, hovered),
+                tooltip,
+            )
+        }
+        PreviewPaneKind::Project => iced_widget::Space::new().width(Length::Fixed(0.0)).into(),
+    };
+    let tab_bar = row![left_arrow, right_arrow, clipped, collapse]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
 

@@ -164,6 +164,9 @@ pub enum Message {
     /// 回车 / 失焦(由 `set_tree_edit_focused` 的边缘触发,不经过消息):
     /// 提交改名/新建。
     EditSubmit,
+    /// 行内编辑框 / 搜索框被右键:内核拦截,不进 `update`——转发成顶层
+    /// `Message::TextInputMenuOpen` 弹出通用输入框右键菜单(见 app.rs)。
+    TextInputMenuOpen(crate::app::TextInputTarget),
     /// 搜索框草稿变化(iced `text_input::on_input`,每次按键给全量当前
     /// 字符串,不是逐字符追加)。只进草稿,不触发过滤——同现状,过滤词由
     /// `SearchSubmit` 落定。
@@ -332,15 +335,18 @@ impl WorkspaceState {
     }
 
     /// 每帧渲染循环读走 `CaptureTreeEditFocus` 查到的真实焦点态后写进来。
-    /// 焦点从真变假(刚失去焦点)时清空 `tree_edit`——项目树重命名/新建
-    /// 是"点别处就该退出"的一次性行内编辑,不像搜索框那样希望保留草稿
-    /// (现状既有行为,`cancel_tree_edit` 原本就是这个语义,只是触发时机
-    /// 从"点击外部"改成"真实焦点丢失")。
+    /// 这里只更新焦点标志位;焦点从真变假(失焦)时该不该保存由内核
+    /// `App::set_tree_edit_focused` 在边缘处直接调 `submit_tree_edit` 落盘
+    /// (同 `App::set_project_name_focused` 的既有手法,与回车提交共用同一份
+    /// 逻辑,不再像旧 `cancel_tree_edit` 那样失焦即丢)。
     pub fn set_tree_edit_focused(&mut self, focused: bool) {
-        if self.tree_edit_focused_flag && !focused {
-            self.tree_edit = None;
-        }
         self.tree_edit_focused_flag = focused;
+    }
+
+    /// 行内编辑框当前是否展开(`App::set_tree_edit_focused` 的边缘判断用:
+    /// 只在有编辑在页时失焦才提交,避免空转)。
+    pub(crate) fn tree_edit_is_some(&self) -> bool {
+        self.tree_edit.is_some()
     }
 
     /// 读走(消费式)一次性聚焦标记。main.rs 在 `UserInterface::build`
@@ -428,11 +434,12 @@ impl WorkspaceState {
         self.tree_edit_focus_pending = true;
     }
 
-    /// 行内编辑框回车提交(现有 `Workspace::submit_tree_edit` 的搬家版本:
-    /// `io: &ShellIo` 换成 `handle`/`emit`,`self.project_id()` 换成显式传入
-    /// 的 `project_id`,其余逻辑原样照抄,含三种模式的重名校验/路径分量
-    /// 校验)。
-    fn submit_tree_edit(
+    /// 行内编辑框提交:回车(`Message::EditSubmit`)与失焦(`App::
+    /// set_tree_edit_focused` 的边缘触发)两条路径共用,避免两份重复的重名/
+    /// 路径分量校验与落盘调用。逻辑是现有 `Workspace::submit_tree_edit` 的
+    /// 搬家版本(`io: &ShellIo` 换成 `handle`/`emit`,`self.project_id()` 换成
+    /// 显式传入的 `project_id`),三模式的重名校验/路径分量校验原样照抄。
+    pub(crate) fn submit_tree_edit(
         &mut self,
         project_id: i64,
         handle: &tokio::runtime::Handle,
@@ -796,6 +803,9 @@ pub fn update(
         Message::EditSubmit => {
             ws_state.submit_tree_edit(project_id, handle, emit);
         }
+        Message::TextInputMenuOpen(_) => {
+            unreachable!("由内核拦截处理,见 files::Message::TextInputMenuOpen 文档")
+        }
         Message::CopyPath(..) => {
             unreachable!("由内核拦截处理,见 files::Message::CopyPath 文档")
         }
@@ -971,6 +981,13 @@ pub fn view<'a>(
         Message::SearchSubmit,
         search_hover_t,
         |hovered| Message::ToolbarHover(FilesToolbarTarget::SearchSubmit, hovered),
+    );
+    let search_box = byteui::interaction::context_menu::wrap(
+        search_box,
+        Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+            id: search_field_id(),
+            secure: false,
+        })),
     );
 
     // "显示/隐藏点文件"按钮:切换后 `ToggleDotfiles` 调
@@ -1275,22 +1292,30 @@ fn tree_edit_row(
     // `extensions::todo::cursor_from_x` 的换算口径)* 2(原来每级两个空格)。
     // 数字来源见 Stage 5 计划 Task 1 Step 8 的说明,不是随手拍脑袋的魔法值。
     let indent_px = depth as f32 * crate::workspace::tree_row_font_size() * 0.6 * 2.0;
-    container(byteui::form::input_text::view(
-        "",
-        buffer,
-        false,
-        Some(tree_edit_field_id()),
-        false,
-        Some(Message::EditSubmit),
-        false,
-        Message::EditInput,
-    ))
-    .width(Length::Fill)
-    .padding(Padding {
-        left: indent_px,
-        ..Padding::default()
-    })
-    .into()
+    let field: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        container(byteui::form::input_text::view(
+            "",
+            buffer,
+            false,
+            Some(tree_edit_field_id()),
+            false,
+            Some(Message::EditSubmit),
+            false,
+            Message::EditInput,
+        ))
+        .width(Length::Fill)
+        .padding(Padding {
+            left: indent_px,
+            ..Padding::default()
+        })
+        .into();
+    byteui::interaction::context_menu::wrap(
+        field,
+        Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+            id: tree_edit_field_id(),
+            secure: false,
+        })),
+    )
 }
 
 /// 文件树底部 git 栏三元组(图标 + 文案元素 + 可选操作按钮)。
@@ -2239,7 +2264,7 @@ mod tests {
     }
 
     #[test]
-    fn set_tree_edit_focused_clears_edit_on_focus_loss() {
+    fn set_tree_edit_focused_only_tracks_focus_flag() {
         let dir = tempfile::tempdir().unwrap();
         let mut ws_state = ws_with_tree(dir.path().to_path_buf());
         ws_state.tree_edit = Some(TreeEdit {
@@ -2247,14 +2272,45 @@ mod tests {
             mode: TreeEditMode::NewFile,
             buffer: "ab".to_string(),
         });
-        // 先置真:进入聚焦态,编辑框保留。
+        // 先置真:进入聚焦态。
         ws_state.set_tree_edit_focused(true);
         assert!(ws_state.tree_edit.is_some());
         assert!(ws_state.tree_edit_focused());
-        // 焦点从真变假:清理行内编辑态(点别处退出重命名/新建)。
+        // 焦点从真变假:这里只落焦点标志位——该不该保存/是否清空由内核
+        // `App::set_tree_edit_focused` 在边缘处调 `submit_tree_edit` 决定,
+        // `set_tree_edit_focused` 本身不再改动编辑态。
         ws_state.set_tree_edit_focused(false);
-        assert!(ws_state.tree_edit.is_none());
+        assert!(ws_state.tree_edit.is_some());
         assert!(!ws_state.tree_edit_focused());
+    }
+
+    #[tokio::test]
+    async fn submit_edit_creates_new_file_on_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        let mut app_state = AppState::default();
+        ws_state.tree_edit = Some(TreeEdit {
+            parent_dir: dir.path().to_path_buf(),
+            mode: TreeEditMode::NewFile,
+            buffer: "fresh.txt".to_string(),
+        });
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::EditSubmit,
+            1,
+            &handle,
+            // 成功路径会 spawn 一个异步落盘任务,这里不能 panic。
+            |_| {},
+        );
+        // 提交即取走编辑态(退出行内编辑框)。
+        assert!(ws_state.tree_edit.is_none());
+        // 让当前线程的 tokio 运行时有空档轮询刚 spawn 的落盘任务,再断言。
+        // `spawn_blocking` 会把文件系统操作丢给阻塞线程池,这里 `.await`
+        // 主动让出执行器,等它把结果送回。
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(dir.path().join("fresh.txt").exists());
     }
 
     #[tokio::test]

@@ -231,6 +231,9 @@ pub enum Message {
     /// 回车 / 点搜索按钮:把草稿落成生效的 `search` 过滤词,同时把翻页
     /// 重置回第 1 页(过滤后结果变少,停在旧页码没有意义)。
     SearchSubmit,
+    /// commit 搜索框被右键:内核拦截,不进 `update`——转发成顶层
+    /// `Message::TextInputMenuOpen` 弹出通用输入框右键菜单(见 app.rs)。
+    TextInputMenuOpen(crate::app::TextInputTarget),
     DetailLoaded(PathBuf, git2::Oid, Result<CommitDetail, String>),
     SnapshotLoaded(PathBuf, usize, Result<GitLogSnapshot, String>),
     /// 点文件列表某一行,选中它(右下面板据此展示该文件的 diff)。
@@ -361,6 +364,7 @@ pub fn update(
     match msg {
         // 卡片悬停由内核 `App::update` 拦截转发到 `set_hover`,不会到这。
         Message::Hover(_, _) => None,
+        Message::TextInputMenuOpen(_) => None,
         Message::SelectCommit(oid) => {
             state.selected = Some(oid);
             state.detail = None;
@@ -607,7 +611,7 @@ fn commit_search_box<'a>(
     state: &'a State,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let search_active = state.search_focused() || !state.search.is_empty();
-    byteui::form::search_box::view(
+    let box_el = byteui::form::search_box::view(
         "搜索提交内容…",
         &state.search_draft,
         Some(search_field_id()),
@@ -616,6 +620,13 @@ fn commit_search_box<'a>(
         Message::SearchSubmit,
         app.hover_progress(HoverId::GitLogSearchSubmit),
         |hovered| Message::Hover(HoverId::GitLogSearchSubmit, hovered),
+    );
+    byteui::interaction::context_menu::wrap(
+        box_el,
+        Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+            id: search_field_id(),
+            secure: false,
+        })),
     )
 }
 

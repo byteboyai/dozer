@@ -51,6 +51,10 @@ pub enum IconKind {
     FolderPlus,
     Copy,
     ClipboardPaste,
+    /// 输入框右键菜单"剪切"项(Lucide scissors)。
+    Scissors,
+    /// 输入框右键菜单"全选"项(Lucide select:外框虚线内再一个内框,表全选)。
+    SelectAll,
     Trash,
     Rename,
     Globe,
@@ -150,6 +154,19 @@ pub enum IconKind {
     CircleArrowRight,
     /// 浏览器面板"刷新"导航按钮图标(Lucide rotate-cw)。
     RotateCw,
+    /// 文件预览面板右上角"收起文件树"按钮图标:文件树位于**左侧** zone 时,
+    /// 收起文件树列表(当前展开)用 panel-left-close:面板框 + 居中竖线 + 指左
+    /// 的三角箭头,提示"把左侧面板藏起来"。
+    PanelLeftClose,
+    /// 同上,文件树位于**左侧** zone 且已收起时,再点把文件树展开用
+    /// panel-left-open:三角箭头指向左栏,提示"把左侧面板展开"。
+    PanelLeftOpen,
+    /// 文件预览面板右上角"收起文件树"按钮图标:文件树位于**右侧** zone 时,
+    /// 收起(当前展开)用 panel-right-close:指右三角箭头,提示"把右侧面板藏起来"。
+    PanelRightClose,
+    /// 同上,文件树位于**右侧** zone 且已收起时,再点展开用 panel-right-open:
+    /// 指右栏的三角箭头,提示"把右侧面板展开"。
+    PanelRightOpen,
 }
 
 impl IconKind {
@@ -180,6 +197,8 @@ impl IconKind {
             IconKind::FolderPlus => include_bytes!("../../assets/icons/folder-plus.svg"),
             IconKind::Copy => include_bytes!("../../assets/icons/copy.svg"),
             IconKind::ClipboardPaste => include_bytes!("../../assets/icons/clipboard-paste.svg"),
+            IconKind::Scissors => include_bytes!("../../assets/icons/scissors.svg"),
+            IconKind::SelectAll => include_bytes!("../../assets/icons/select.svg"),
             IconKind::Trash => include_bytes!("../../assets/icons/trash-2.svg"),
             IconKind::Rename => include_bytes!("../../assets/icons/pen-line.svg"),
             IconKind::Globe => include_bytes!("../../assets/icons/globe.svg"),
@@ -231,6 +250,14 @@ impl IconKind {
                 include_bytes!("../../assets/icons/circle-arrow-right.svg")
             }
             IconKind::RotateCw => include_bytes!("../../assets/icons/rotate-cw.svg"),
+            IconKind::PanelLeftClose => {
+                include_bytes!("../../assets/icons/panel-left-close.svg")
+            }
+            IconKind::PanelLeftOpen => include_bytes!("../../assets/icons/panel-left-open.svg"),
+            IconKind::PanelRightClose => {
+                include_bytes!("../../assets/icons/panel-right-close.svg")
+            }
+            IconKind::PanelRightOpen => include_bytes!("../../assets/icons/panel-right-open.svg"),
         }
     }
 }
