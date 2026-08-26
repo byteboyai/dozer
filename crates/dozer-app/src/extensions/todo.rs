@@ -777,6 +777,9 @@ pub enum Message {
     SearchInput(String),
     /// 回车 / 点右侧搜索按钮:把草稿落成生效的 `search` 过滤词。
     SearchSubmit,
+    /// 内容侧"收起/展开列表列"按钮:内核拦截,不进 `update`——转发成顶层
+    /// `Message::TogglePanelListCollapse(PanelKind::Todo)`(见 app.rs)。
+    ToggleListCollapse,
     /// 新增框 / 搜索框 / 内容编辑框被右键:内核拦截,不进 `update`——转发成
     /// 顶层 `Message::TextInputMenuOpen` 弹出通用输入框右键菜单(见 app.rs)。
     TextInputMenuOpen(crate::app::TextInputTarget),
@@ -1091,6 +1094,8 @@ pub fn update(
         Message::ClearList => {}
         // `TextInputMenuOpen` 由内核拦截映射为右键菜单,不进这里。
         Message::TextInputMenuOpen(_) => {}
+        // `ToggleListCollapse` 由内核拦截映射为列表列收起/展开,不进这里。
+        Message::ToggleListCollapse => {}
         Message::Toggle(idx) => {
             let Some(item) = ws_state.items.get(idx) else {
                 return;
@@ -1397,7 +1402,23 @@ pub fn view<'a>(
         .into();
 
     // ---- 右栏 pane：tab 段 + 视图主体 ----
-    let tabs_bar = todo_view_tabs(ws_state.view_mode);
+    // 视图切换 tab 右侧钉一个"收起/展开列表列"按钮(内容侧,收起左列后仍在
+    // 此可见以便恢复)。按钮消息为本地 `Message::ToggleListCollapse`,由内核
+    // `App::update` 拦截转发成顶层 `Message::TogglePanelListCollapse`。
+    let collapse = app.list_collapse_button(
+        crate::app::PanelKind::Todo,
+        app.list_collapsed(crate::app::PanelKind::Todo),
+        crate::app::HoverId::TodoListCollapse,
+        "收起列表",
+        "展开列表",
+        Message::ToggleListCollapse,
+        move |hovered| Message::Hover(crate::app::HoverId::TodoListCollapse, hovered),
+    );
+    let tabs_bar = row![todo_view_tabs(ws_state.view_mode), collapse]
+        .width(Length::Fill)
+        .align_y(iced_widget::core::Alignment::Center)
+        .spacing(4)
+        .padding([4, 20]);
     let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         match ws_state.view_mode {
             TodoViewMode::List => todo_list_view(app_state, app, ws_state, project_id, &states),

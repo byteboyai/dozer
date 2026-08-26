@@ -32,7 +32,7 @@
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
 use crate::app::{
     App, DEFAULT_COLS, DEFAULT_ROWS, HoverId, Message, PROJECT_PREVIEW_ID_OFFSET, PanelKind,
-    ProjectId, Side, tab_divider,
+    ProjectId, tab_divider,
 };
 use crate::conversation::{self, TurnGroupRow};
 use crate::delivery::{self};
@@ -3127,15 +3127,34 @@ pub(crate) fn review_webview_spec(review: Option<&ReviewView>) -> Vec<crate::pre
 /// 会话审阅内容面板(右面板区"对话"视图的内容侧):直接读 `ws.review`,
 /// 不经过 `ws.preview` 的 tab 系统——新外壳下审阅是独立面板,不再是
 /// 预览 tab 条里的一个 tab。
-pub(crate) fn review_content_pane(
-    ws: &Workspace,
+pub(crate) fn review_content_pane<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
     width: Length,
     outer: Border,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::review_content_pane();
-    // 去掉原先的 "会话审阅" 标题文字——列表侧已统一为 "会话" panel head,
-    // 内容侧直接展示选中会话的审阅正文,不再重复标题。
-    let mut content = column![].spacing(region.gap);
+    // 内容侧标题栏:左侧名字信息面板(会话/agent 态) + 右侧"收起/展开
+    // 列表列"按钮(与 Todo/Database/SSH/Agent 内容侧统一)。列表列收起后
+    // 本面板拿满配对宽度,按钮仍在此处可见以便恢复。
+    let header = container(
+        row![home_panel_head_with_actions(
+            IconKind::BotMessageSquare,
+            "会话",
+            Some(app.list_collapse_button(
+                PanelKind::Conversations,
+                app.list_collapsed(PanelKind::Conversations),
+                HoverId::ConversationsListCollapse,
+                "收起列表",
+                "展开列表",
+                Message::TogglePanelListCollapse(PanelKind::Conversations),
+                move |h| { Message::Hover(HoverId::ConversationsListCollapse, h) },
+            )),
+        )]
+        .width(Length::Fill),
+    )
+    .padding(theme::region::project_pane().padding);
+    let mut content = column![header].spacing(region.gap);
 
     if ws.review.is_some() {
         let body = review_content(column![].spacing(region.gap), ws);
@@ -3392,35 +3411,29 @@ fn preview_pane_for<'a>(
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
     let left_arrow = tab_arrow_button(icons::IconKind::ChevronLeft, can_left, scroll_msg(false));
     let right_arrow = tab_arrow_button(icons::IconKind::ChevronRight, can_right, scroll_msg(true));
-    // 文件预览右上角"收起/展开文件树"按钮:仅 Files 预览(与项目树配对的)有
-    // 文件树可收,Project 预览没有,放一个不占宽度的惰性元素保持行布局逐像素
-    // 不变。图标按 Files 面板当前所在栏(左/右)与收起态四选一,见
-    // `IconKind::PanelLeftClose` 等注释。
+    // 预览右上角"收起/展开列表列"按钮:Files 预览收起文件树,Project 预览
+    // 收起 info 列。按钮始终在此(内容侧),收起后仍可见以便恢复。图标按该
+    // 面板当前所在栏(左/右)与收起态四选一,见 `IconKind::PanelLeftClose`
+    // 等注释;工具文案由调用方给静态字符串。
     let collapse: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = match kind {
-        PreviewPaneKind::Files => {
-            let side = app.shell_layout.rail_layout.side_of(PanelKind::Files);
-            let collapsed = app.files_tree_collapsed();
-            let (icon, tooltip) = match (side, collapsed) {
-                (Side::Left, false) => (IconKind::PanelLeftClose, "收起文件树"),
-                (Side::Left, true) => (IconKind::PanelLeftOpen, "展开文件树"),
-                (Side::Right, false) => (IconKind::PanelRightClose, "收起文件树"),
-                (Side::Right, true) => (IconKind::PanelRightOpen, "展开文件树"),
-            };
-            icons::icon_button_entry(
-                icon,
-                byteui::theme::icon_size::row(),
-                false,
-                false,
-                app.hover_progress(HoverId::FileTreeCollapse),
-                false,
-                byteui::theme::icon_size::row() + 6.0,
-                true,
-                Message::ToggleFileTreeCollapse,
-                move |hovered| Message::Hover(HoverId::FileTreeCollapse, hovered),
-                tooltip,
-            )
-        }
-        PreviewPaneKind::Project => iced_widget::Space::new().width(Length::Fixed(0.0)).into(),
+        PreviewPaneKind::Files => app.list_collapse_button(
+            PanelKind::Files,
+            app.files_tree_collapsed(),
+            HoverId::FileTreeCollapse,
+            "收起文件树",
+            "展开文件树",
+            Message::ToggleFileTreeCollapse,
+            move |hovered| Message::Hover(HoverId::FileTreeCollapse, hovered),
+        ),
+        PreviewPaneKind::Project => app.list_collapse_button(
+            PanelKind::Project,
+            app.list_collapsed(PanelKind::Project),
+            HoverId::ProjectListCollapse,
+            "收起列表",
+            "展开列表",
+            Message::TogglePanelListCollapse(PanelKind::Project),
+            move |hovered| Message::Hover(HoverId::ProjectListCollapse, hovered),
+        ),
     };
     let tab_bar = row![left_arrow, right_arrow, clipped, collapse]
         .spacing(4)

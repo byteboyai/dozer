@@ -711,6 +711,9 @@ pub enum Message {
     /// 任意数据源输入框/SQL 编辑器被右键:内核拦截,不进 `update`——转发成
     /// 顶层 `Message::TextInputMenuOpen` 弹出通用输入框右键菜单(见 app.rs)。
     TextInputMenuOpen(crate::app::TextInputTarget),
+    /// 内容侧"收起/展开列表列"按钮:内核拦截,不进 `update`——转发成顶层
+    /// `Message::TogglePanelListCollapse(PanelKind::Database)`(见 app.rs)。
+    ToggleListCollapse,
     /// 提交表单:新增或更新(视 `draft.id` 是否为 `None`),写盘 + 密码进
     /// Keychain,关闭表单。
     DraftSave,
@@ -739,6 +742,9 @@ pub enum Message {
     /// (本面板不挂 App 的 hover 动画表),`update` 吃不到这里;保 no-op
     /// 分支维持 match 穷尽。
     ToolbarHover(DatabaseToolbarTarget, bool),
+    /// 任意顶部 `HoverId` 的悬停进入/离开(内容侧收起按钮等)。内核拦截转发
+    /// 给顶层 `App::set_hover`,本面板 `update` 保 no-op 分支维持 match 穷尽。
+    Hover(crate::app::HoverId, bool),
     /// 内容窗格 tab 栏某个 tab 的悬停进入/离开;纯转发动机,`update()` 里
     /// 保 no-op 分支维持 match 穷尽,真正接线在 `app.rs` 的特化臂(同
     /// `ToolbarHover` 的口径)。
@@ -845,6 +851,12 @@ pub fn update(
         Message::DraftNameChanged(v) => set_draft(ws_state, |d| d.name = v),
         Message::TextInputMenuOpen(_) => {
             unreachable!("由内核拦截处理,见 database::Message::TextInputMenuOpen 文档")
+        }
+        Message::ToggleListCollapse => {
+            unreachable!("由内核拦截处理,见 database::Message::ToggleListCollapse 文档")
+        }
+        Message::Hover(_, _) => {
+            unreachable!("由内核拦截处理,见 database::Message::Hover 文档")
         }
         Message::DraftDriverChanged(v) => set_draft(ws_state, |d| d.driver = v),
         Message::DraftHostChanged(v) => set_draft(ws_state, |d| d.host = v),
@@ -1956,7 +1968,18 @@ pub fn content_pane<'a>(
         can_right,
         Message::TabScroll(true),
     );
-    let tab_bar = row![left_arrow, right_arrow, clipped]
+    // 内容侧"收起/展开列表列"按钮(收起左列 schema 树后仍在此可见以便恢复)。
+    // 消息为本地 `Message::ToggleListCollapse`,由内核 `App::update` 拦截。
+    let collapse = app.list_collapse_button(
+        crate::app::PanelKind::Database,
+        app.list_collapsed(crate::app::PanelKind::Database),
+        crate::app::HoverId::DatabaseListCollapse,
+        "收起列表",
+        "展开列表",
+        Message::ToggleListCollapse,
+        move |hovered| Message::Hover(crate::app::HoverId::DatabaseListCollapse, hovered),
+    );
+    let tab_bar = row![left_arrow, right_arrow, clipped, collapse]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
 

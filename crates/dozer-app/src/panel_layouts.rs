@@ -35,6 +35,12 @@ fn legacy_global_dims(layout_path: &Path) -> PanelDims {
             files_split: v.get("files_split").and_then(num).unwrap_or_default(),
             // 旧版全局 layout.json 出现在文件树可收起之前,恒默认展开。
             files_tree_collapsed: false,
+            project_list_collapsed: false,
+            todo_list_collapsed: false,
+            database_list_collapsed: false,
+            ssh_list_collapsed: false,
+            agent_list_collapsed: false,
+            conversations_list_collapsed: false,
             project_split: v.get("project_split").and_then(num).unwrap_or_default(),
             ssh_split: v
                 .get("ssh_split")

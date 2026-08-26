@@ -159,9 +159,22 @@ pub(crate) fn tab_bar<'a>(
         Message::TermTabScroll(true),
     );
 
-    let tab_row = row![left_arrow, right_arrow, clipped]
-        .spacing(4)
-        .align_y(iced_widget::core::Alignment::Center);
+    let tab_row = row![
+        left_arrow,
+        right_arrow,
+        clipped,
+        app.list_collapse_button(
+            PanelKind::Agent,
+            app.list_collapsed(PanelKind::Agent),
+            HoverId::AgentListCollapse,
+            "收起列表",
+            "展开列表",
+            Message::TogglePanelListCollapse(PanelKind::Agent),
+            move |hovered| Message::Hover(HoverId::AgentListCollapse, hovered),
+        ),
+    ]
+    .spacing(4)
+    .align_y(iced_widget::core::Alignment::Center);
 
     column![tab_row, tab_divider()].spacing(4).into()
 }

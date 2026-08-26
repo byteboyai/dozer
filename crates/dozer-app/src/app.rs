@@ -203,6 +203,24 @@ pub enum HoverId {
     /// 文件预览右上角"收起/展开文件树"按钮(`panel-left/right-close/open`):
     /// 静止 DIM,hover 平滑过渡到 GOLD(见 `preview_pane_for`)。
     FileTreeCollapse,
+    /// Project 面板列表列"收起/展开"按钮(`panel-left/right-close/open`):
+    /// 处理方式同 `FileTreeCollapse`(见 `preview_pane_for`)。
+    ProjectListCollapse,
+    /// Todo 面板列表列"收起/展开"按钮:处理方式同 `FileTreeCollapse`
+    /// (见 `extensions::todo::view`)。
+    TodoListCollapse,
+    /// Database 面板列表列"收起/展开"按钮:处理方式同 `FileTreeCollapse`
+    /// (见 `extensions::database::content_pane`)。
+    DatabaseListCollapse,
+    /// SSH 面板列表列"收起/展开"按钮:处理方式同 `FileTreeCollapse`
+    /// (见 `ssh_tab_bar`)。
+    SshListCollapse,
+    /// Agent 面板列表列"收起/展开"按钮:处理方式同 `FileTreeCollapse`
+    /// (见 `terminal::tab_bar`)。
+    AgentListCollapse,
+    /// Conversations 面板列表列"收起/展开"按钮:处理方式同 `FileTreeCollapse`
+    /// (见 `review_content_pane`)。
+    ConversationsListCollapse,
     /// 数据库面板 schema 树"返回"按钮(`ChevronLeft`):静止 DIM,hover 过渡
     /// 到 GOLD(见 `extensions/database.rs`)。
     DatabaseSchemaBack,
@@ -400,6 +418,19 @@ pub struct PanelDims {
     /// 原比例恢复。`#[serde(default)]` 对老 `panel_layouts.json` 缺该字段时补
     /// `false`(默认展开)。
     pub files_tree_collapsed: bool,
+    /// Project 面板列表列是否被收起(内容侧的展开/收起按钮切换)。语义同
+    /// `files_tree_collapsed`——列表不渲染、内容拿满配对宽度,split 比例保留。
+    pub project_list_collapsed: bool,
+    /// Todo 面板列表列是否被收起,语义同 `project_list_collapsed`。
+    pub todo_list_collapsed: bool,
+    /// Database 面板列表列是否被收起,语义同 `project_list_collapsed`。
+    pub database_list_collapsed: bool,
+    /// SSH 面板列表列是否被收起,语义同 `project_list_collapsed`。
+    pub ssh_list_collapsed: bool,
+    /// Agent 面板列表列是否被收起,语义同 `project_list_collapsed`。
+    pub agent_list_collapsed: bool,
+    /// Conversations 面板列表列是否被收起,语义同 `project_list_collapsed`。
+    pub conversations_list_collapsed: bool,
     /// Project 面板配对:信息面板占左面板区宽度的比例，项目预览(右配对)拿剩下的。
     pub project_split: f32,
     /// SSH 面板"主机列表 | 内嵌终端"两栏的分屏比例,镜像 `project_split`。
@@ -435,6 +466,12 @@ fn default_panel_dims() -> PanelDims {
         left_width: 640.0,
         files_split: byteui::theme::geometry::default_split_ratio(),
         files_tree_collapsed: false,
+        project_list_collapsed: false,
+        todo_list_collapsed: false,
+        database_list_collapsed: false,
+        ssh_list_collapsed: false,
+        agent_list_collapsed: false,
+        conversations_list_collapsed: false,
         project_split: byteui::theme::geometry::default_split_ratio(),
         ssh_split: byteui::theme::geometry::default_split_ratio(),
         todo_split: byteui::theme::geometry::default_split_ratio(),
@@ -533,6 +570,12 @@ pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
         },
         files_split: clamp_split(d.files_split),
         files_tree_collapsed: d.files_tree_collapsed,
+        project_list_collapsed: d.project_list_collapsed,
+        todo_list_collapsed: d.todo_list_collapsed,
+        database_list_collapsed: d.database_list_collapsed,
+        ssh_list_collapsed: d.ssh_list_collapsed,
+        agent_list_collapsed: d.agent_list_collapsed,
+        conversations_list_collapsed: d.conversations_list_collapsed,
         project_split: clamp_split(d.project_split),
         ssh_split: clamp_split(d.ssh_split),
         todo_split: clamp_split(d.todo_split),
@@ -1459,6 +1502,11 @@ pub enum Message {
     /// `dims.files_tree_collapsed`。只影响文件树列表子栏的显隐,不触碰
     /// `files_split` 比例,展开时按原比例恢复。
     ToggleFileTreeCollapse,
+    /// 某两栏面板的列表列收起/展开按钮:翻转该面板对应的 `dims.*_list_collapsed`。
+    /// 与 `ToggleFileTreeCollapse` 同一套语义——只改列表子栏显隐、不触碰
+    /// split 比例,展开时按原宽度恢复。`PanelKind` 只能是六个两栏面板之一
+    /// (Project/Todo/Database/Ssh/Agent/Conversations),不是它们则忽略。
+    TogglePanelListCollapse(PanelKind),
     /// 任意 iced 原生输入框(`text_input`/`text_editor`)的右键菜单:在某输入
     /// 框上右键触发(由 byteui 的 `context_menu::wrap` 接线)。携带被右键的
     /// 输入目标,用于本次右键时把焦点移到该输入,让菜单的复制/粘贴作用于
@@ -4132,11 +4180,18 @@ impl App {
             Message::Database(database::Message::TextInputMenuOpen(target)) => {
                 self.update(Message::TextInputMenuOpen(target));
             }
+            Message::Database(database::Message::ToggleListCollapse) => {
+                self.toggle_panel_list_collapse(PanelKind::Database);
+            }
+            Message::Database(database::Message::Hover(id, h)) => self.set_hover(id, h),
             Message::Database(msg) => self.database_message(msg),
             Message::Todo(msg) => match msg {
                 todo::Message::Hover(id, h) => self.set_hover(id, h),
                 todo::Message::TextInputMenuOpen(target) => {
                     self.update(Message::TextInputMenuOpen(target));
+                }
+                todo::Message::ToggleListCollapse => {
+                    self.toggle_panel_list_collapse(PanelKind::Todo);
                 }
                 other => self.todo_message(other),
             },
@@ -4240,6 +4295,7 @@ impl App {
             }
             Message::PanelSelect(v) => self.panel_select(v),
             Message::ToggleFileTreeCollapse => self.toggle_files_tree_collapse(),
+            Message::TogglePanelListCollapse(kind) => self.toggle_panel_list_collapse(kind),
             Message::TextInputMenuOpen(target) => {
                 // 与其它右键菜单互斥——关掉别的,只留本菜单(同时避免互相顶)。
                 self.files.close_context_menu();
@@ -6157,6 +6213,77 @@ impl App {
         self.dims.files_tree_collapsed
     }
 
+    /// 六个两栏面板(Project/Todo/Database/Ssh/Agent/Conversations)的列表列
+    /// 当前是否被收起。语义同 `files_tree_collapsed`:列表不渲染、内容拿满
+    /// 配对宽度,split 比例保留(展开时按原宽度恢复)。
+    pub(crate) fn list_collapsed(&self, kind: PanelKind) -> bool {
+        match kind {
+            PanelKind::Project => self.dims.project_list_collapsed,
+            PanelKind::Todo => self.dims.todo_list_collapsed,
+            PanelKind::Database => self.dims.database_list_collapsed,
+            PanelKind::Ssh => self.dims.ssh_list_collapsed,
+            PanelKind::Agent => self.dims.agent_list_collapsed,
+            PanelKind::Conversations => self.dims.conversations_list_collapsed,
+            _ => false,
+        }
+    }
+
+    /// 翻转某两栏面板列表列的展开/收起(`Message::TogglePanelListCollapse` 的
+    /// 处理)。只改对应布尔、不动 split 比例,并像 `panel_select` 一样退出
+    /// 放大态 + 落盘/重算网格。非两栏面板(`Files` 走独立的
+    /// `files_tree_collapsed`,其余单/两栏面板无此能力)直接忽略。
+    fn toggle_panel_list_collapse(&mut self, kind: PanelKind) {
+        let flag = match kind {
+            PanelKind::Project => &mut self.dims.project_list_collapsed,
+            PanelKind::Todo => &mut self.dims.todo_list_collapsed,
+            PanelKind::Database => &mut self.dims.database_list_collapsed,
+            PanelKind::Ssh => &mut self.dims.ssh_list_collapsed,
+            PanelKind::Agent => &mut self.dims.agent_list_collapsed,
+            PanelKind::Conversations => &mut self.dims.conversations_list_collapsed,
+            _ => return,
+        };
+        *flag = !*flag;
+        self.maximized = None;
+        self.on_shell_layout_changed();
+    }
+
+    /// 内容侧"收起/展开列表列"按钮:用户点击某面板内容区的按钮翻转其列表列
+    /// 显隐。语义完全对齐文件预览的 `FileTreeCollapse` 按钮(见 `preview_pane_for`),
+    /// 只是图标按该面板当前所在栏(左/右)与收起态四选一、tooltip 由调用方
+    /// 给静态文案。泛型 `M` 兼容顶层 `Message` 与各扩展模块的本地 `Message`。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn list_collapse_button<'a, M: Clone + 'a>(
+        &self,
+        kind: PanelKind,
+        collapsed: bool,
+        hover_id: HoverId,
+        tooltip_collapse: &'a str,
+        tooltip_expand: &'a str,
+        on_select: M,
+        on_hover: impl Fn(bool) -> M + 'a,
+    ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
+        let side = self.shell_layout.rail_layout.side_of(kind);
+        let (icon, tooltip) = match (side, collapsed) {
+            (Side::Left, false) => (icons::IconKind::PanelLeftClose, tooltip_collapse),
+            (Side::Left, true) => (icons::IconKind::PanelLeftOpen, tooltip_expand),
+            (Side::Right, false) => (icons::IconKind::PanelRightClose, tooltip_collapse),
+            (Side::Right, true) => (icons::IconKind::PanelRightOpen, tooltip_expand),
+        };
+        icons::icon_button_entry(
+            icon,
+            byteui::theme::icon_size::row(),
+            false,
+            false,
+            self.hover_progress(hover_id),
+            false,
+            byteui::theme::icon_size::row() + 6.0,
+            true,
+            on_select,
+            on_hover,
+            tooltip,
+        )
+    }
+
     fn top_bar_home(&mut self) {
         self.current_page = AppPage::Home;
         self.home_recents_loaded = false;
@@ -7198,6 +7325,24 @@ fn panel_body<'a>(
                 .project
                 .as_ref()
                 .map(|p| std::path::PathBuf::from(&p.path));
+            let collapsed = app.list_collapsed(PanelKind::Todo);
+            // 列表列收起:内容拿满整个配对宽度,侧栏不渲染。
+            if collapsed {
+                return todo::view(
+                    &app.todo,
+                    app,
+                    &ws.todo,
+                    ws,
+                    project_id,
+                    project_path.as_deref(),
+                    Length::Fixed(0.0),
+                    Border::default(),
+                    Length::Fill,
+                    zone_pane_border(zone, rc),
+                )
+                .1
+                .map(Message::Todo);
+            }
             let (list_portion, content_portion) = split_portions(app.dims.todo_split);
             let (sidebar_pane, content_pane) = todo::view(
                 &app.todo,
@@ -7248,6 +7393,9 @@ fn panel_body<'a>(
             }
         }
         PanelKind::Project => {
+            if app.list_collapsed(PanelKind::Project) {
+                return project_preview_pane(app, ws, Length::Fill, zone_pane_border(zone, rc));
+            }
             let (list_portion, content_portion) = split_portions(app.dims.project_split);
             let info_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
                 project::view(
@@ -7301,6 +7449,15 @@ fn panel_body<'a>(
             // 数据库面板需要项目已打开才能读写 `.dozer/database.json`。
             if ws.project.is_none() {
                 return column![].into();
+            }
+            if app.list_collapsed(PanelKind::Database) {
+                return database::content_pane(
+                    app,
+                    &ws.database,
+                    Length::Fill,
+                    zone_pane_border(zone, rc),
+                )
+                .map(Message::Database);
             }
             let (list_portion, content_portion) = split_portions(app.dims.database_split);
             let list_pane = database::view(
@@ -7357,6 +7514,9 @@ fn panel_body<'a>(
             // 促成期间的占位态。
             if ws.project.is_none() {
                 return column![].into();
+            }
+            if app.list_collapsed(PanelKind::Ssh) {
+                return ssh_terminal_pane(app, ws, Length::Fill, zone_pane_border(zone, rc));
             }
             let (list_portion, content_portion) = split_portions(app.dims.ssh_split);
             let list_pane = ssh::view(
@@ -7416,6 +7576,9 @@ fn panel_body<'a>(
         )
         .map(Message::Browser),
         PanelKind::Agent => {
+            if app.list_collapsed(PanelKind::Agent) {
+                return terminal::terminal_pane(app, ws, Length::Fill, zone_pane_border(zone, lc));
+            }
             let (list_portion, content_portion) = split_portions(app.dims.agent_split);
             let terminal = terminal::terminal_pane(
                 app,
@@ -7464,8 +7627,12 @@ fn panel_body<'a>(
             }
         }
         PanelKind::Conversations => {
+            if app.list_collapsed(PanelKind::Conversations) {
+                return review_content_pane(app, ws, Length::Fill, zone_pane_border(zone, lc));
+            }
             let (list_portion, content_portion) = split_portions(app.dims.conversations_split);
             let review = review_content_pane(
+                app,
                 ws,
                 Length::FillPortion(content_portion),
                 zone_pane_border(zone, lc),
@@ -8010,6 +8177,16 @@ fn ssh_tab_bar<'a>(
         ));
         let _ = state;
     }
+    // 内容侧"收起/展开列表列"按钮(收起左列主机列表后仍在此可见以便恢复)。
+    bar = bar.push(app.list_collapse_button(
+        PanelKind::Ssh,
+        app.list_collapsed(PanelKind::Ssh),
+        HoverId::SshListCollapse,
+        "收起列表",
+        "展开列表",
+        Message::TogglePanelListCollapse(PanelKind::Ssh),
+        move |hovered| Message::Hover(HoverId::SshListCollapse, hovered),
+    ));
     bar.into()
 }
 
