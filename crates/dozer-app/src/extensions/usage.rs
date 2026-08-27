@@ -314,10 +314,17 @@ pub fn view<'a>(
                 );
             }
             if !turn_share.is_empty() && !token_share.is_empty() {
+                // 分隔线的高度必须是 `Length::Fixed`,不能是 `Length::Fill`——
+                // iced 0.14 的 `Row`/`Column::push` 会把子元素的 `Fill` 沿
+                // `Length::enclose` 一路传染给 `agent_row` 再到 `content`,
+                // 让整行被撑成"吃满面板剩余高度",饼图/图例固定尺寸不变,
+                // `align_y(Center)` 一居中就在上下留出大片空白(2026-08-27
+                // 修的真实 bug,面板本该紧凑排布)。高度对齐 `pie_chart` 的
+                // 固定尺寸,视觉上跟饼图顶/底对齐。
                 agent_row = agent_row.push(
                     container(iced_widget::Space::new())
                         .width(Length::Fixed(1.0))
-                        .height(Length::Fill)
+                        .height(Length::Fixed(PIE_RADIUS * 2.0 + 8.0))
                         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
                             background: Some(byteui::theme::color::current().border.into()),
                             ..iced_widget::container::Style::default()
