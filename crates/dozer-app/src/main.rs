@@ -517,6 +517,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             /// `retain` 本来就只保留"当前项目期望清单里的 id",切走的项目的
             /// webview 无论如何都会被销毁。
             webview_project: Option<i64>,
+            /// 最近一次同步后所有**可见** wry 子视图的逻辑矩形(窗口逻辑坐标
+            /// `(x, y, w, h)`),两个池(预览 + 浏览器)合并。每帧在
+            /// `sync_previews` 里重算,`RedrawRequested` 的 cursor 更新用它做
+            /// 命中测试:光标落在任一 webview 内就**不**调 `window.set_cursor`,
+            /// 把光标控制权让给 WKWebView——否则 iced 每帧把窗口光标强制刷成
+            /// 箭头,会盖掉 WKWebView 自己在超链接上显示的握手光标。
+            webview_rects: Vec<(f32, f32, f32, f32)>,
             /// 最近一次光标物理位置(CursorMoved 更新),鼠标点击时用于命中测试。
             cursor_phys: winit::dpi::PhysicalPosition<f64>,
             /// 是否有外部 OS 文件正处于拖拽过程(winit `HoveredFile` 置
@@ -611,6 +618,20 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     // 完成后从 URL 切换到 HTML `<title>`。预览 webview 不掺和。
                     let mut script = String::from(
                         "document.addEventListener('mousedown',function(){window.ipc.postMessage('focus')},true);document.addEventListener('mouseup',function(){window.ipc.postMessage('mouseup')},true);document.addEventListener('keydown',function(e){if(e.ctrlKey){var c=e.code,k=e.key;if(c==='Equal'||k==='+'||k==='='){e.preventDefault();window.ipc.postMessage('zoom_in');}else if(c==='Minus'||k==='-'){e.preventDefault();window.ipc.postMessage('zoom_out');}else if(c==='Digit1'||k==='1'){e.preventDefault();window.ipc.postMessage('zoom_reset');}}},true);",
+                    );
+                    // 文本光标 + Ctrl/Cmd+C 复制(所有 webview):
+                    // - 默认让普通文字显示 I 形文本光标;链接/按钮等可交互元素
+                    //   仍是手形(继承自 `cursor: text` 时会被 `cursor: pointer`
+                    //   覆盖,因为后写、同为 `!important`)。
+                    // - Ctrl+C / Cmd+C 都拦截复制当前选区:webview 成为 first
+                    //   responder 后 keydown 被它吃掉、到不了 winit,得在这段
+                    //   注入 JS 里自己拦。用 `document.execCommand('copy')`
+                    //   (用户手势触发,WKWebView 会放行);个别方案拿不到选区
+                    //   或失败时再退回 `navigator.clipboard`。`Cmd+Meta` 双键
+                    //   都按,保证两套快捷键一致触发。用 `e.code` 判断,避免
+                    //   键盘布局差异影响 `e.key`。
+                    script.push_str(
+                        "(function(){var s=document.createElement('style');s.textContent=\"html,body,body *{cursor:text!important}a,a *,button,*[role='link'],*[role='button'],summary,*[onclick],label[for]{cursor:pointer!important}\";(document.head||document.documentElement).appendChild(s);document.addEventListener('keydown',function(e){if((e.ctrlKey||e.metaKey)&&e.code==='KeyC'){e.preventDefault();var ok=false;try{ok=document.execCommand('copy')}catch(_){}if(!ok){var g=window.getSelection&&window.getSelection();if(g&&g.toString()){try{navigator.clipboard.writeText(g.toString()).then(function(){},function(){})}catch(_){}}}}});})();",
                     );
                     if report_title {
                         script.push_str("window.__dozer_webview=");
@@ -1383,6 +1404,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 webviews,
                 browser_webviews,
                 webview_project,
+                webview_rects,
                 proxy,
                 ..
             } = self
@@ -1397,6 +1419,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 browser_webviews.clear();
                 *webview_project = app.active_project_id();
             }
+
+            // 每帧重算可见 webview 矩形,供 cursor 更新做命中测试
+            // (参见 `webview_rects` 字段文档)。
+            webview_rects.clear();
 
             let size = window.inner_size();
             let scale = window.scale_factor();
@@ -1415,6 +1441,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 app.preview_desired(logical_w, logical_h)
                     .into_iter()
                     .map(|(s, (x, y, w, h))| {
+                        webview_rects.push((x, y, w, h));
                         (
                             s,
                             wry::Rect {
@@ -1437,7 +1464,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             // 算好矩形;首页分支带的是占位 `(0,0,0,0)`,这里用 `home_browser_bounds`
             // 整体覆盖。
             let browser_specs: Vec<(preview::WebviewSpec, wry::Rect)> = if app.is_home() {
-                let bounds = Self::home_browser_bounds(logical_w, logical_h);
+                let (r, bounds) = Self::home_browser_bounds(logical_w, logical_h);
+                webview_rects.push(r);
                 app.browser_desired(logical_w, logical_h)
                     .into_iter()
                     .map(|(s, _)| (s, bounds))
@@ -1446,6 +1474,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 app.browser_desired(logical_w, logical_h)
                     .into_iter()
                     .map(|(s, (x, y, w, h))| {
+                        webview_rects.push((x, y, w, h));
                         (
                             s,
                             wry::Rect {
@@ -1473,7 +1502,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         /// 面板区(左图标栏 + 首页侧栏 + 分隔线之后,到右侧图标栏之前),扣掉
         /// right_zone 的 margin、顶栏/footbar 高度与浏览器地址栏高度。原生
         /// 子视图不听 iced 布局,逐像素算(同 `preview_content_bounds` 的思路)。
-        fn home_browser_bounds(window_width: f32, window_height: f32) -> wry::Rect {
+        /// 返回逻辑 `(x, y, w, h)`,并顺带给出 `wry::Rect` 供摆放。
+        fn home_browser_bounds(
+            window_width: f32,
+            window_height: f32,
+        ) -> ((f32, f32, f32, f32), wry::Rect) {
             let rail = byteui::theme::geometry::icon_rail_width();
             let sidebar = byteui::theme::geometry::h0_sidebar_width();
             let divider = byteui::theme::geometry::divider_width();
@@ -1491,10 +1524,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 - chrome
                 - 8.0)
                 .max(0.0);
-            wry::Rect {
-                position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
-                size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
-            }
+            (
+                (x, y, w, h),
+                wry::Rect {
+                    position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
+                    size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
+                },
+            )
         }
 
         /// 两个 `(x, y, w, h)` 逻辑矩形是否重叠(含恰好边贴边的情况)。用于
@@ -2102,6 +2138,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     // 池是空的,记 `None` 让第一次 sync_previews 自然对齐到
                     // 当前项目(清空空池是 no-op)。
                     webview_project: None,
+                    webview_rects: Vec::new(),
                     cursor_phys: winit::dpi::PhysicalPosition::new(0.0, 0.0),
                     files_dragging: false,
                     pending_focus: None,
@@ -2153,6 +2190,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     events,
                     viewport,
                     cursor,
+                    webview_rects,
                     modifiers,
                     clipboard,
                     cache,
@@ -2560,8 +2598,27 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     if let Some(icon) =
                                         conversion::mouse_interaction(mouse_interaction)
                                     {
-                                        window.set_cursor(icon);
-                                        window.set_cursor_visible(true);
+                                        // 光标落进任一**可见** wry 子视图(预览面板
+                                        // / 浏览器面板)时,把光标控制权让给 WKWebView:
+                                        // 否则 iced 每帧 `window.set_cursor` 会把窗口
+                                        // 光标强制刷成箭头,盖掉 WKWebView 自己在超链接
+                                        // 上显示的握手光标(窗口级 NSCursor 是全局唯一
+                                        // 的,谁最后写谁赢)。webview 自身会管理光标
+                                        // (箭头/握手/文本),无需我们隐藏或覆写。
+                                        let cursor_over_webview =
+                                            webview_rects.iter().any(|&(wx, wy, ww, wh)| {
+                                                let (cx, cy) = app.last_cursor;
+                                                ww > 0.0
+                                                    && wh > 0.0
+                                                    && cx >= wx
+                                                    && cx <= wx + ww
+                                                    && cy >= wy
+                                                    && cy <= wy + wh
+                                            });
+                                        if !cursor_over_webview {
+                                            window.set_cursor(icon);
+                                            window.set_cursor_visible(true);
+                                        }
                                     } else {
                                         window.set_cursor_visible(false);
                                     }
