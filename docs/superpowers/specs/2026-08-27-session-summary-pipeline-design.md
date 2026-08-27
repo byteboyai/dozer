@@ -43,6 +43,16 @@ agent 会话注入任务 → agent 调用 `dozer-mcp` 的写工具 → 结果落
 - 对话摄取管线([[dozer-conversation-ingestion-pipeline]])已把 Claude/
   CodeBuddy/OpenCode 三家的对话增量落进 `dozerd` 的 `conversation_turns`
   表,本设计的启发式兜底直接读这张表,不需要重新解析 transcript 文件。
+- **V8agent(用户自研 agent,以后新功能默认都要覆盖它)已经是第四家被
+  真正打通的 agent**,接入方式和前三家都不一样,且成本更低:①对话摄取
+  不走目录扫描,是 v8agent-cli 直连 socket 上报 `transcript_path`,命中
+  `dozerd` 现有的 hook 快速通道(`extract_transcript_path()`),
+  `conversation_turns` 数据是全的(2026-08-24 的
+  `2026-08-24-v8agent-integration-design.md` 已落地);②v8agent-cli
+  **硬编码**检测到 `DOZER_SESSION_ID` 环境变量(dozerd 本来就给所有
+  session 子进程注入)时自动挂载 `dozer-mcp serve` 作为 MCP
+  server(`v8agent-core/src/mcp/mod.rs` + `v8agent-cli/src/main.rs:67`),
+  不需要 Claude/CodeBuddy/Codex/OpenCode 那套"改配置文件注册"的流程。
 
 **已确认不存在、本设计不新造的东西**:
 
@@ -68,11 +78,10 @@ agent 会话注入任务 → agent 调用 `dozer-mcp` 的写工具 → 结果落
    (仿 `ensure_hook_installed` 模式),在支持的 agent 类型下新建 session
    时静默调用 `dozer-mcp install`,不要求用户手动操作。
 4. `dozer-app` 关闭 tab(×)的行为改造:UI 侧仍然立即移除该 tab(用户体感
-   不变,不阻塞);仅当 `tab.agent` 属于对话摄取管线已覆盖的三家
-   (Claude/CodeBuddy/OpenCode)且走 daemon 后端时,改发一个新的
+   不变,不阻塞);仅当 `tab.agent` 属于对话摄取管线已覆盖的四家
+   (Claude/CodeBuddy/OpenCode/V8agent)且走 daemon 后端时,改发一个新的
    "总结后关闭"请求而不是直接 `Kill`；其余情况(纯 shell/`AgentKind::
-   Unknown`/SSH 后端/Codex/Kilo/V8agent)维持现状直接 `Kill`,不纳入本次
-   范围。
+   Unknown`/SSH 后端/Codex/Kilo)维持现状直接 `Kill`,不纳入本次范围。
 5. `dozerd` 收到"总结后关闭"请求后:往该 session 的 PTY 注入一段固定总结
    prompt,进入等待;agent 调写工具落表则视为成功(status=`ai_generated`),
    立即真正 kill;若在超时窗口内没有等到,`dozerd` 自己从
@@ -96,11 +105,13 @@ agent 会话注入任务 → agent 调用 `dozer-mcp` 的写工具 → 结果落
 - **不在 `agent_card`/`last_activity` 上展示总结**——总结产出的那一刻,
   对应的 tab 已经从 `ws.tabs` 里移除,不可能出现在活跃卡片列表里。总结的
   展示方是"对话面板改版"这份独立 spec,本设计只负责产出与持久化。
-- **不覆盖 Codex/Kilo/V8agent/纯 shell/SSH 会话**——`dozer-mcp` 安装器
-  目前只支持 Claude/CodeBuddy/Codex/OpenCode 四家,而对话摄取管线(启发式
-  兜底的数据源)只覆盖 Claude/CodeBuddy/OpenCode 三家,两者交集之外的
-  agent 类型即使勉强接入也拿不到有意义的兜底数据。本次范围收窄到这个
-  交集,其余类型维持现状直接 `Kill`,不产出总结记录。
+- **不覆盖 Codex/Kilo/纯 shell/SSH 会话**——Codex 的 transcript 解析器
+  现状是刻意的"恒返回空"(诚实设计,非缺口,这次不动);Kilo 目前既没有
+  真实 hook 上报也没有对话摄取,是独立的已知缺口,不在本次范围;纯
+  shell/`AgentKind::Unknown` 没有 agent 可注入 prompt;SSH 后端本来就
+  不走 `registry.kill` 这条清理路径。这四类维持现状直接 `Kill`,不产出
+  总结记录。**V8agent 不在这个排除列表里**——见"背景"一节,它的对话摄取
+  与 MCP 挂载都已经是打通状态,且用户明确要求以后新功能默认覆盖它。
 - **不做设置面板/"默认 agent"配置**——讨论中出现过"原 agent 无法工作时
   fallback 到默认 agent"的想法,调研确认 Dozer 目前连设置面板本体都不
   存在(设置齿轮是纯视觉占位)。本设计的失败路径统一走启发式兜底,不引入
@@ -148,7 +159,8 @@ CREATE TABLE IF NOT EXISTS session_summaries (
 ```rust
 let should_summarize = tab.alive
     && backend == Backend::Daemon
-    && matches!(tab.agent, AgentKind::Claude | AgentKind::Codebuddy | AgentKind::Opencode);
+    && matches!(tab.agent, AgentKind::Claude | AgentKind::Codebuddy
+        | AgentKind::Opencode | AgentKind::V8agent);
 
 if should_summarize {
     io.handle.spawn(async move { client.close_with_summary(&id).await });
@@ -259,6 +271,15 @@ CodeBuddy/Codex/OpenCode 四家)时才执行,幂等、静默、失败只
 `tracing::warn!`——完全复用 hook 那一套错误处理哲学,不因为 mcp 注册失败
 阻塞用户开会话。
 
+**V8agent 走完全不同的路,`ensure_mcp_installed` 对它直接返回
+`None`/no-op**(与 `ensure_hook_installed` 对 V8agent 现状已经是 `None`
+同理,不是遗漏):v8agent-cli 自己硬编码检测 `DOZER_SESSION_ID` 后自动
+挂载 `dozer-mcp serve` 作为 MCP server(`v8agent-core/src/mcp/mod.rs`,
+`v8agent-cli/src/main.rs:67`),不读任何配置文件,dozer-app 这边不需要写
+任何东西。唯一的隐含前置条件是 `dozer-mcp` 这个二进制得能被 v8agent-cli
+用裸命令名 `["serve"]`(无绝对路径)启动子进程时解析到——即需要在 PATH
+上可找到,实现阶段用真机验证一次即可,不是需要设计决策的问题。
+
 ## 错误处理
 
 - **agent 忽略/没理解注入的 prompt**:60 秒超时兜底覆盖,不会无限等待。
@@ -317,6 +338,11 @@ CodeBuddy/Codex/OpenCode 四家)时才执行,幂等、静默、失败只
    - 纯 shell tab(未键入任何 agent CLI):关闭行为与改造前一致(直接
      kill,不产生总结行、不注入任何文本)。
    - Codex 会话:关闭行为与改造前一致(直接 kill,本次范围排除)。
+   - V8agent 会话:不需要任何手动安装步骤,正常对话后点 × 关闭,确认
+     `session_summaries` 出现一行 `status=ai_generated`(验证
+     v8agent-cli 的自动 MCP 挂载在真实 Dozer 会话环境里确实生效,包括
+     `dozer-mcp` 二进制能被裸命令名解析到);再故意让 `dozer-mcp` 从
+     PATH 移除后重复一次,确认走 `heuristic_fallback` 且内容非空。
 
 ## 排期备注
 
