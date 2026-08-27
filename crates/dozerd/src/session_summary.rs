@@ -89,6 +89,26 @@ impl SessionSummaryStore {
             );",
         )
         .context("建表")?;
+        // 老库(建表时还没有 conversation_id 列)迁移:CREATE TABLE IF NOT
+        // EXISTS 对已存在的表不生效,新列需要单独补(同 `conversation_turns`
+        // 补 `is_error` 列的既有写法,2026-08-27 修正)。
+        let has_conversation_id: bool = conn
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('session_summaries') WHERE name = 'conversation_id'",
+            )?
+            .exists([])?;
+        if !has_conversation_id {
+            conn.execute(
+                "ALTER TABLE session_summaries ADD COLUMN conversation_id TEXT",
+                [],
+            )
+            .context("迁移 conversation_id 列")?;
+        }
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_session_summaries_conversation_id
+                ON session_summaries(conversation_id);",
+        )
+        .context("建索引")?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -97,10 +117,11 @@ impl SessionSummaryStore {
     pub fn record(&self, payload: &SessionSummaryPayload) -> Result<()> {
         self.conn.lock().expect("db lock").execute(
             "INSERT INTO session_summaries
-             (session_id, agent_kind, title, summary, status, created_ts_ms)
-             VALUES (?1,?2,?3,?4,?5,?6)
+             (session_id, agent_kind, conversation_id, title, summary, status, created_ts_ms)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)
              ON CONFLICT(session_id) DO UPDATE SET
                 agent_kind = excluded.agent_kind,
+                conversation_id = excluded.conversation_id,
                 title = excluded.title,
                 summary = excluded.summary,
                 status = excluded.status,
@@ -108,6 +129,7 @@ impl SessionSummaryStore {
             rusqlite::params![
                 payload.session_id,
                 agent_to_str(payload.agent_kind),
+                payload.conversation_id,
                 payload.title,
                 payload.summary,
                 status_to_str(payload.status),
@@ -120,7 +142,7 @@ impl SessionSummaryStore {
     pub fn get(&self, session_id: &str) -> Result<Option<SessionSummaryPayload>> {
         let conn = self.conn.lock().expect("db lock");
         let mut stmt = conn.prepare(
-            "SELECT session_id, agent_kind, title, summary, status, created_ts_ms
+            "SELECT session_id, agent_kind, conversation_id, title, summary, status, created_ts_ms
              FROM session_summaries WHERE session_id = ?1",
         )?;
         let mut rows = stmt.query(rusqlite::params![session_id])?;
@@ -128,13 +150,14 @@ impl SessionSummaryStore {
             return Ok(None);
         };
         let agent_kind: String = row.get(1)?;
-        let status: String = row.get(4)?;
-        let created_ts_ms: i64 = row.get(5)?;
+        let status: String = row.get(5)?;
+        let created_ts_ms: i64 = row.get(6)?;
         Ok(Some(SessionSummaryPayload {
             session_id: row.get(0)?,
             agent_kind: agent_from_str(&agent_kind),
-            title: row.get(2)?,
-            summary: row.get(3)?,
+            conversation_id: row.get(2)?,
+            title: row.get(3)?,
+            summary: row.get(4)?,
             status: status_from_str(&status),
             created_ts_ms: created_ts_ms as u64,
         }))
@@ -149,6 +172,7 @@ mod tests {
         SessionSummaryPayload {
             session_id: session_id.into(),
             agent_kind: AgentKind::Claude,
+            conversation_id: Some(format!("conv-{session_id}")),
             title: "改了个函数".into(),
             summary: "详细过程".into(),
             status: SummaryStatus::AiGenerated,
@@ -190,6 +214,52 @@ mod tests {
         }
         let store = SessionSummaryStore::open(&path).unwrap();
         assert!(store.get("s1").unwrap().is_some());
+    }
+
+    #[test]
+    fn record_and_get_roundtrip_with_no_conversation_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionSummaryStore::open(&dir.path().join("t.db")).unwrap();
+        let mut p = payload("s1");
+        p.conversation_id = None;
+        store.record(&p).unwrap();
+        let got = store.get("s1").unwrap().unwrap();
+        assert_eq!(got.conversation_id, None);
+    }
+
+    /// 老库(建表时还没有 conversation_id 列)迁移:手写不带该列的旧表结构,
+    /// 重新 `open` 应该幂等补上这一列,而不是报错或丢数据(2026-08-27 修正)。
+    #[test]
+    fn open_on_pre_existing_db_without_conversation_id_column_adds_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("old.db");
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE session_summaries (
+                    session_id TEXT PRIMARY KEY,
+                    agent_kind TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_ts_ms INTEGER NOT NULL
+                );
+                INSERT INTO session_summaries VALUES
+                    ('s1', 'claude', '旧标题', '旧摘要', 'ai_generated', 1);",
+            )
+            .unwrap();
+        }
+        let store = SessionSummaryStore::open(&db_path).unwrap();
+        let got = store.get("s1").unwrap().unwrap();
+        assert_eq!(got.title, "旧标题");
+        assert_eq!(got.conversation_id, None, "老行迁移后该列应为 NULL");
+
+        // 迁移后的库仍能正常写入带 conversation_id 的新数据。
+        store.record(&payload("s2")).unwrap();
+        assert_eq!(
+            store.get("s2").unwrap().unwrap().conversation_id,
+            Some("conv-s2".into())
+        );
     }
 
     fn turn(role: &str, content: &str) -> dozer_core::protocol::TurnRecord {

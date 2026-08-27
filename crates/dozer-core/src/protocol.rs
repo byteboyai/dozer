@@ -59,6 +59,12 @@ pub enum SummaryStatus {
 pub struct SessionSummaryPayload {
     pub session_id: String,
     pub agent_kind: AgentKind,
+    /// 该会话对应的 transcript conversation_id(取自 `transcript_path` 的
+    /// `file_stem()`)。`None` 表示这个会话直到总结产出时都没收到过任何
+    /// hook 事件(纯 shell/agent 没配好 hook),启发式兜底也查不到任何数据。
+    /// `session_id`(dozerd 自己生成的 PTY 会话 id)与这里的 `conversation_id`
+    /// 是两个不相关的 id 空间,不能混用去查 `conversation_turns`。
+    pub conversation_id: Option<String>,
     pub title: String,
     pub summary: String,
     pub status: SummaryStatus,
@@ -994,7 +1000,9 @@ mod tests {
 
     #[test]
     fn close_with_summary_request_roundtrips() {
-        let req = Request::CloseWithSummary { session_id: "s1".into() };
+        let req = Request::CloseWithSummary {
+            session_id: "s1".into(),
+        };
         let line = encode_line(&req);
         assert_eq!(decode_line::<Request>(&line).unwrap(), req);
     }
@@ -1005,6 +1013,25 @@ mod tests {
             summary: Some(SessionSummaryPayload {
                 session_id: "s1".into(),
                 agent_kind: AgentKind::Claude,
+                conversation_id: Some("c1".into()),
+                title: "t".into(),
+                summary: "s".into(),
+                status: SummaryStatus::AiGenerated,
+                created_ts_ms: 42,
+            }),
+        };
+        let line = encode_line(&reply);
+        let back: Reply = decode_line(&line).unwrap();
+        assert_eq!(reply, back);
+    }
+
+    #[test]
+    fn get_session_summary_reply_roundtrips_with_no_conversation_id() {
+        let reply = Reply::SessionSummary {
+            summary: Some(SessionSummaryPayload {
+                session_id: "s1".into(),
+                agent_kind: AgentKind::Claude,
+                conversation_id: None,
                 title: "t".into(),
                 summary: "s".into(),
                 status: SummaryStatus::AiGenerated,

@@ -118,6 +118,16 @@ fn maybe_ingest_on_state_transition(
     }
 }
 
+/// 从一个存活/已死 `Session` 的 `transcript_path` 解析出 `conversation_id`
+/// (同 `TranscriptStore::ingest_session` 的派生逻辑)。没有 `transcript_path`
+/// (会话从没收到过 hook 事件)时返回 `None`(2026-08-27 修正)。
+fn conversation_id_for_session(s: &crate::session::Session) -> Option<String> {
+    s.info()
+        .transcript_path
+        .as_deref()
+        .and_then(|p| crate::transcripts::conversation_id_for_path(std::path::Path::new(p)))
+}
+
 const CLOSE_WITH_SUMMARY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 const CLOSE_WITH_SUMMARY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -127,8 +137,17 @@ const SUMMARY_PROMPT: &str = "请总结你在本次会话中完成的工作:给�
 /// `session_summaries` 表,等到就直接 kill;超时则从 `conversation_turns`
 /// 算启发式兜底再 kill。`timeout`/`poll_interval` 抽成参数只为方便测试
 /// 注入短间隔,生产调用点固定用上面两个常量。
+///
+/// `conversation_id` 由调用方(`CloseWithSummary` handler)在拿到
+/// `Session::info().transcript_path` 时提前解析好传入——`session_id`
+/// (dozerd 自己生成的 PTY 会话 id)和 `conversation_id`(transcript 文件名
+/// 派生,如 Claude 自己分配的 session id)是两个不相关的 id 空间,
+/// `conversation_turns` 按后者索引,不能拿 `session_id` 去查(2026-08-27
+/// 修正:此前这里错拿 `session_id` 查,生产环境几乎总是查不到数据)。
+#[allow(clippy::too_many_arguments)]
 async fn finalize_session_summary(
     session_id: String,
+    conversation_id: Option<String>,
     registry: Arc<SessionRegistry>,
     session_summaries: Arc<crate::session_summary::SessionSummaryStore>,
     transcripts: Arc<crate::transcripts::TranscriptStore>,
@@ -144,13 +163,17 @@ async fn finalize_session_summary(
             Err(e) => tracing::error!(error = %e, %session_id, "查询会话总结失败"),
         }
         if tokio::time::Instant::now() >= deadline {
-            let turns = transcripts
-                .get_conversation_turns(&session_id, -1, u32::MAX)
-                .unwrap_or_default();
+            let turns = match &conversation_id {
+                Some(cid) => transcripts
+                    .get_conversation_turns(cid, -1, u32::MAX)
+                    .unwrap_or_default(),
+                None => Vec::new(),
+            };
             let (title, summary) = crate::session_summary::heuristic_from_turns(&turns);
             let payload = dozer_core::protocol::SessionSummaryPayload {
                 session_id: session_id.clone(),
                 agent_kind: agent,
+                conversation_id: conversation_id.clone(),
                 title,
                 summary,
                 status: dozer_core::protocol::SummaryStatus::HeuristicFallback,
@@ -423,6 +446,7 @@ async fn handle_conn(
                                     let payload = dozer_core::protocol::SessionSummaryPayload {
                                         session_id: session_id.clone(),
                                         agent_kind: s.info().agent,
+                                        conversation_id: conversation_id_for_session(&s),
                                         title,
                                         summary,
                                         status: dozer_core::protocol::SummaryStatus::AiGenerated,
@@ -454,11 +478,13 @@ async fn handle_conn(
                                 None => Reply::Error { message: format!("会话不存在: {session_id}") },
                                 Some(s) => {
                                     let agent = s.info().agent;
+                                    let conversation_id = conversation_id_for_session(&s);
                                     if let Err(e) = s.write(SUMMARY_PROMPT.as_bytes()) {
                                         tracing::warn!(error = %e, %session_id, "注入总结 prompt 失败");
                                     }
                                     tokio::spawn(finalize_session_summary(
                                         session_id.clone(),
+                                        conversation_id,
                                         registry.clone(),
                                         session_summaries.clone(),
                                         transcripts.clone(),
@@ -677,9 +703,8 @@ mod tests {
         let session_summaries = Arc::new(
             crate::session_summary::SessionSummaryStore::open(&tmp.path().join("s.db")).unwrap(),
         );
-        let transcripts = Arc::new(
-            crate::transcripts::TranscriptStore::open(&tmp.path().join("t.db")).unwrap(),
-        );
+        let transcripts =
+            Arc::new(crate::transcripts::TranscriptStore::open(&tmp.path().join("t.db")).unwrap());
         let s = registry
             .create(crate::session::SessionSpec {
                 name: "t".into(),
@@ -696,6 +721,7 @@ mod tests {
             .record(&dozer_core::protocol::SessionSummaryPayload {
                 session_id: id.clone(),
                 agent_kind: dozer_core::protocol::AgentKind::Claude,
+                conversation_id: None,
                 title: "已经总结好了".into(),
                 summary: "摘要".into(),
                 status: dozer_core::protocol::SummaryStatus::AiGenerated,
@@ -705,6 +731,7 @@ mod tests {
 
         finalize_session_summary(
             id.clone(),
+            None,
             registry.clone(),
             session_summaries.clone(),
             transcripts,
@@ -728,9 +755,8 @@ mod tests {
         let session_summaries = Arc::new(
             crate::session_summary::SessionSummaryStore::open(&tmp.path().join("s.db")).unwrap(),
         );
-        let transcripts = Arc::new(
-            crate::transcripts::TranscriptStore::open(&tmp.path().join("t.db")).unwrap(),
-        );
+        let transcripts =
+            Arc::new(crate::transcripts::TranscriptStore::open(&tmp.path().join("t.db")).unwrap());
         let s = registry
             .create(crate::session::SessionSpec {
                 name: "t".into(),
@@ -743,7 +769,14 @@ mod tests {
             })
             .unwrap();
         let id = s.id().to_string();
-        let file = tmp.path().join(format!("{id}.jsonl"));
+        // 关键:transcript 文件名(=真实 conversation_id)故意跟 dozerd 的
+        // session_id 不一样(现实里 Claude 自己分配的 session id 跟
+        // DOZER_SESSION_ID 从来不相等)——这个测试要验证的正是"就算两个
+        // id 不同,只要显式传对 conversation_id,兜底算法依然能查到真实
+        // 数据",而不是靠"文件名恰好等于 session_id"这种巧合通过
+        // (2026-08-27 修正前的版本就是靠这个巧合掩盖了真实 bug)。
+        let real_conversation_id = "totally-different-claude-conv-id";
+        let file = tmp.path().join(format!("{real_conversation_id}.jsonl"));
         std::fs::write(
             &file,
             "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"人类发言\"}}\n",
@@ -755,6 +788,7 @@ mod tests {
 
         finalize_session_summary(
             id.clone(),
+            Some(real_conversation_id.to_string()),
             registry.clone(),
             session_summaries.clone(),
             transcripts,
@@ -765,8 +799,80 @@ mod tests {
         .await;
 
         let got = session_summaries.get(&id).unwrap().unwrap();
-        assert_eq!(got.status, dozer_core::protocol::SummaryStatus::HeuristicFallback);
+        assert_eq!(
+            got.status,
+            dozer_core::protocol::SummaryStatus::HeuristicFallback
+        );
         assert_eq!(got.title, "人类发言");
+        assert_eq!(got.conversation_id.as_deref(), Some(real_conversation_id));
         assert!(!registry.get(&id).unwrap().info().alive, "应该已被 kill");
+    }
+
+    /// 会话从没收到过任何 hook 事件(`transcript_path` 恒 `None`)时,
+    /// 兜底应该直接落占位文案,不该 panic 或跳过落库(2026-08-27 修正)。
+    #[tokio::test]
+    async fn finalize_session_summary_with_no_conversation_id_falls_back_to_placeholder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let registry = Arc::new(crate::registry::SessionRegistry::new());
+        let session_summaries = Arc::new(
+            crate::session_summary::SessionSummaryStore::open(&tmp.path().join("s.db")).unwrap(),
+        );
+        let transcripts =
+            Arc::new(crate::transcripts::TranscriptStore::open(&tmp.path().join("t.db")).unwrap());
+        let s = registry
+            .create(crate::session::SessionSpec {
+                name: "t".into(),
+                command: "/bin/sh".into(),
+                args: vec!["-c".into(), "sleep 5".into()],
+                cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+                cols: 80,
+                rows: 24,
+                project_id: 1,
+            })
+            .unwrap();
+        let id = s.id().to_string();
+
+        finalize_session_summary(
+            id.clone(),
+            None,
+            registry.clone(),
+            session_summaries.clone(),
+            transcripts,
+            dozer_core::protocol::AgentKind::Claude,
+            std::time::Duration::from_millis(10),
+            std::time::Duration::from_millis(5),
+        )
+        .await;
+
+        let got = session_summaries.get(&id).unwrap().unwrap();
+        assert_eq!(
+            got.status,
+            dozer_core::protocol::SummaryStatus::HeuristicFallback
+        );
+        assert_eq!(got.title, "(无对话记录)");
+        assert_eq!(got.conversation_id, None);
+    }
+
+    #[test]
+    fn conversation_id_for_session_resolves_from_transcript_path() {
+        let registry = crate::registry::SessionRegistry::new();
+        let s = registry
+            .create(crate::session::SessionSpec {
+                name: "t".into(),
+                command: "/bin/sh".into(),
+                args: vec!["-c".into(), "sleep 5".into()],
+                cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+                cols: 80,
+                rows: 24,
+                project_id: 1,
+            })
+            .unwrap();
+        assert_eq!(conversation_id_for_session(&s), None);
+        s.set_transcript_path("/home/u/.claude/projects/x/my-conv-id.jsonl");
+        assert_eq!(
+            conversation_id_for_session(&s),
+            Some("my-conv-id".to_string())
+        );
+        let _ = s.kill();
     }
 }

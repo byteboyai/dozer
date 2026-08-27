@@ -10,6 +10,17 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::Mutex;
 
+/// 从 transcript 文件路径派生 `conversation_id`(即文件名去掉扩展名)。
+/// `ingest_session` 与 `dozerd::server` 的 `RecordSessionSummary`/
+/// `CloseWithSummary` 处理器共用同一份派生逻辑,避免各自写一份、两处
+/// 拼写分叉(2026-08-27 修正)。
+pub fn conversation_id_for_path(file_path: &Path) -> Option<String> {
+    file_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(String::from)
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -115,14 +126,9 @@ impl TranscriptStore {
     /// dozerd 自己的 PTY session id(两者是不同的 id 空间:后者只在
     /// agent 活着时存在,回填历史文件时根本没有)。
     pub fn ingest_session(&self, agent: AgentKind, file_path: &Path) -> Result<()> {
-        let conversation_id = file_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-        if conversation_id.is_empty() {
-            anyhow::bail!("无法从文件名派生 conversation_id: {}", file_path.display());
-        }
+        let conversation_id = conversation_id_for_path(file_path).ok_or_else(|| {
+            anyhow::anyhow!("无法从文件名派生 conversation_id: {}", file_path.display())
+        })?;
         let dir = file_path
             .parent()
             .map(|p| p.to_string_lossy().into_owned())

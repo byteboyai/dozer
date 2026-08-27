@@ -433,7 +433,14 @@ async fn close_with_summary_kills_session_after_ai_summary_recorded() {
         .unwrap();
     let id = s.id().to_string();
 
-    match send_req(&sock, &Request::CloseWithSummary { session_id: id.clone() }).await {
+    match send_req(
+        &sock,
+        &Request::CloseWithSummary {
+            session_id: id.clone(),
+        },
+    )
+    .await
+    {
         Reply::Ok => {}
         other => panic!("意外应答: {other:?}"),
     }
@@ -456,7 +463,14 @@ async fn close_with_summary_kills_session_after_ai_summary_recorded() {
 
     // 后台任务下一次 2 秒轮询会看到已落库的总结并 kill;给够时间等它跑完。
     tokio::time::sleep(Duration::from_secs(3)).await;
-    match send_req(&sock, &Request::GetSessionSummary { session_id: id.clone() }).await {
+    match send_req(
+        &sock,
+        &Request::GetSessionSummary {
+            session_id: id.clone(),
+        },
+    )
+    .await
+    {
         Reply::SessionSummary { summary: Some(p) } => assert_eq!(p.title, "标题"),
         other => panic!("意外应答: {other:?}"),
     }

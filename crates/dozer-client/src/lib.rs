@@ -127,7 +127,9 @@ impl Client {
 
     pub async fn close_with_summary(&self, id: &str) -> Result<()> {
         match self
-            .roundtrip(&Request::CloseWithSummary { session_id: id.into() })
+            .roundtrip(&Request::CloseWithSummary {
+                session_id: id.into(),
+            })
             .await?
         {
             Reply::Ok => Ok(()),

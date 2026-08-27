@@ -4770,10 +4770,26 @@ mod tests {
 
     #[test]
     fn should_summarize_on_close_false_for_unsupported_agents_or_dead_or_ssh() {
-        assert!(!should_summarize_on_close(AgentKind::Codex, true, &TabBackend::Daemon));
-        assert!(!should_summarize_on_close(AgentKind::Kilo, true, &TabBackend::Daemon));
-        assert!(!should_summarize_on_close(AgentKind::Unknown, true, &TabBackend::Daemon));
-        assert!(!should_summarize_on_close(AgentKind::Claude, false, &TabBackend::Daemon));
+        assert!(!should_summarize_on_close(
+            AgentKind::Codex,
+            true,
+            &TabBackend::Daemon
+        ));
+        assert!(!should_summarize_on_close(
+            AgentKind::Kilo,
+            true,
+            &TabBackend::Daemon
+        ));
+        assert!(!should_summarize_on_close(
+            AgentKind::Unknown,
+            true,
+            &TabBackend::Daemon
+        ));
+        assert!(!should_summarize_on_close(
+            AgentKind::Claude,
+            false,
+            &TabBackend::Daemon
+        ));
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         assert!(!should_summarize_on_close(
             AgentKind::Claude,
