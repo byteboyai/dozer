@@ -1560,6 +1560,7 @@ impl Workspace {
         let jh = io.handle.spawn(async move {
             if let Some(agent) = hook_agent {
                 let _ = tokio::task::spawn_blocking(move || ensure_hook_installed(agent)).await;
+                let _ = tokio::task::spawn_blocking(move || ensure_mcp_installed(agent)).await;
             }
             let info = match client
                 .create("shell", &shell, &[], &cwd, cols, rows, project_id)
@@ -3827,6 +3828,23 @@ fn ensure_hook_installed(agent: AgentKind) {
     }
 }
 
+/// `dozer-mcp` 自动注册:仿 `ensure_hook_installed` 同一套幂等/静默/失败
+/// 只 warn 的哲学。V8agent 走完全不同的路(见 `hook_install_target` 文档
+/// 注释同款理由)——它自己硬编码检测 `DOZER_SESSION_ID` 后自动挂载
+/// `dozer-mcp serve`,不读任何配置文件,这里对它直接 no-op。
+fn ensure_mcp_installed(agent: AgentKind) {
+    let Some((path, _)) = dozer_mcp::install::config_path_for(agent.label()) else {
+        return;
+    };
+    let exe =
+        dozer_hook_binary_path(&std::env::current_exe().unwrap_or_else(|_| PathBuf::from("dozer")))
+            .parent()
+            .map(|dir| dir.join("dozer-mcp"))
+            .unwrap_or_else(|| PathBuf::from("dozer-mcp"));
+    let exe = exe.to_string_lossy();
+    let _ = dozer_mcp::install::run_at_with_exe(&path, agent.label(), true, &exe);
+}
+
 /// picker 选择项 → attach 成功后自动键入 PTY 的初始命令。`Agent(Some(a))`
 /// 复用 `agent_cli_command`(键入 agent CLI);`Agent(None)` 不键入(纯 Shell);
 /// `Git` 键入 `git status`——新开的 shell 已在项目根,直接看仓库状态。
@@ -4900,6 +4918,33 @@ mod tests {
         // 注释)，只是恰好也该返回 None——跟 Kilo 是两个不同的理由。
         for agent in [AgentKind::Kilo, AgentKind::V8agent, AgentKind::Unknown] {
             assert_eq!(hook_install_target(agent), None, "{agent:?}");
+        }
+    }
+
+    #[test]
+    fn mcp_install_target_covers_four_config_capable_agents() {
+        for agent in [
+            AgentKind::Claude,
+            AgentKind::Codebuddy,
+            AgentKind::Codex,
+            AgentKind::Opencode,
+        ] {
+            assert!(
+                dozer_mcp::install::config_path_for(agent.label()).is_some(),
+                "{agent:?} 应该有对应的 mcp 配置文件路径"
+            );
+        }
+    }
+
+    #[test]
+    fn mcp_install_target_excludes_v8agent_kilo_unknown() {
+        // V8agent 走硬编码自动挂载(不读配置文件),Kilo 无 MCP 支持,
+        // Unknown 是纯 shell——三者都不该有配置文件路径。
+        for agent in [AgentKind::V8agent, AgentKind::Kilo, AgentKind::Unknown] {
+            assert!(
+                dozer_mcp::install::config_path_for(agent.label()).is_none(),
+                "{agent:?} 不该有 mcp 配置文件路径"
+            );
         }
     }
 

@@ -13,6 +13,8 @@ dozer-client = { path = "../dozer-client" }
 # 复用 dozer-hook 的 hook 安装逻辑(install::run_at/opencode_install::run_at)，
 # 新建 agent 会话时静默注册对应 CLI 的 hook，不必用户手动跑 `dozer-hook install`。
 dozer-hook = { path = "../dozer-hook" }
+# 新建 agent 会话时静默注册对应 CLI 的 dozer-mcp（第一个写工具 2026-08-27）。
+dozer-mcp = { path = "../dozer-mcp" }
 byteui = { path = "../byteui" }
 anyhow.workspace = true
 serde.workspace = true

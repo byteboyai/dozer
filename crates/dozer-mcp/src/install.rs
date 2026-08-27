@@ -11,7 +11,7 @@ fn exe_path() -> String {
 }
 
 /// Claude/Codebuddy 共用：`{"mcpServers": {"dozer": {...}}}`。
-fn run_at_claude_like(path: &Path, install: bool) -> i32 {
+fn run_at_claude_like(path: &Path, install: bool, exe: &str) -> i32 {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".into(),
@@ -43,7 +43,7 @@ fn run_at_claude_like(path: &Path, install: bool) -> i32 {
             "dozer".into(),
             serde_json::json!({
                 "type": "stdio",
-                "command": exe_path(),
+                "command": exe,
                 "args": ["serve"],
                 "env": {}
             }),
@@ -56,17 +56,17 @@ fn run_at_claude_like(path: &Path, install: bool) -> i32 {
 
 /// `[mcp_servers.dozer]` 的内容（`command` + `args`）。父表是行内表时得
 /// 造行内表值，否则造独立表头，不然编码出来的 TOML 不合法。
-fn codex_dozer_entry(inline: bool) -> toml_edit::Item {
+fn codex_dozer_entry(inline: bool, exe: &str) -> toml_edit::Item {
     let mut args = toml_edit::Array::new();
     args.push("serve");
     if inline {
         let mut t = toml_edit::InlineTable::new();
-        t.insert("command", exe_path().into());
+        t.insert("command", exe.into());
         t.insert("args", toml_edit::Value::Array(args));
         toml_edit::Item::Value(toml_edit::Value::InlineTable(t))
     } else {
         let mut t = toml_edit::Table::new();
-        t.insert("command", toml_edit::value(exe_path()));
+        t.insert("command", toml_edit::value(exe.to_string()));
         t.insert("args", toml_edit::value(args));
         toml_edit::Item::Table(t)
     }
@@ -78,7 +78,7 @@ fn codex_dozer_entry(inline: bool) -> toml_edit::Item {
 /// 用户手写的文件，走 `toml::Value` 往返序列化会把注释、空行、键序全部抹
 /// 掉——对一个不归我们所有的文件来说那是实打实的数据损坏。`toml_edit` 只
 /// 改我们碰过的那几个键，其余原样保留。
-fn run_at_codex(path: &Path, install: bool) -> i32 {
+fn run_at_codex(path: &Path, install: bool, exe: &str) -> i32 {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -112,7 +112,7 @@ fn run_at_codex(path: &Path, install: bool) -> i32 {
         return 1;
     };
     if install {
-        servers.insert("dozer", codex_dozer_entry(inline));
+        servers.insert("dozer", codex_dozer_entry(inline, exe));
     } else {
         servers.remove("dozer");
     }
@@ -120,7 +120,7 @@ fn run_at_codex(path: &Path, install: bool) -> i32 {
 }
 
 /// OpenCode：`{"mcp": {"dozer": {"type":"local","command":[...],"enabled":true}}}`。
-fn run_at_opencode(path: &Path, install: bool) -> i32 {
+fn run_at_opencode(path: &Path, install: bool, exe: &str) -> i32 {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".into(),
@@ -150,7 +150,7 @@ fn run_at_opencode(path: &Path, install: bool) -> i32 {
             "dozer".into(),
             serde_json::json!({
                 "type": "local",
-                "command": [exe_path(), "serve"],
+                "command": [exe.to_string(), "serve"],
                 "enabled": true
             }),
         );
@@ -191,9 +191,9 @@ fn write_text(path: &Path, text: &str) -> i32 {
 }
 
 /// (配置文件路径, 该 agent 对应的安装/卸载处理函数)。
-type ConfigTarget = (PathBuf, fn(&Path, bool) -> i32);
+type ConfigTarget = (PathBuf, fn(&Path, bool, &str) -> i32);
 
-fn config_path_for(agent: &str) -> Option<ConfigTarget> {
+pub fn config_path_for(agent: &str) -> Option<ConfigTarget> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
     match agent {
         "claude" => Some((
@@ -233,8 +233,26 @@ fn config_path_for(agent: &str) -> Option<ConfigTarget> {
 }
 
 pub fn run(agent: &str, install: bool) -> i32 {
+    run_at_with_exe_impl(agent, install, &exe_path())
+}
+
+/// GUI 场景(`dozer-app` 在 agent 启动时静默自动注册)不能走 `run()`——它
+/// 内部调 `exe_path()`,在 `dozer-app` 进程内直接函数调用时会拿到
+/// `dozer-app` 自己的可执行文件路径,写出一条指向错误二进制的 MCP server
+/// 注册项。必须显式传入 `dozer-mcp` 的 sibling 二进制路径。
+pub fn run_at_with_exe(path: &Path, agent: &str, install: bool, exe: &str) -> i32 {
     match config_path_for(agent) {
-        Some((path, handler)) => handler(&path, install),
+        Some((_, handler)) => handler(path, install, exe),
+        None => {
+            eprintln!("不支持的 agent: {agent}（支持 claude/codebuddy/codex/opencode）");
+            2
+        }
+    }
+}
+
+fn run_at_with_exe_impl(agent: &str, install: bool, exe: &str) -> i32 {
+    match config_path_for(agent) {
+        Some((path, handler)) => handler(&path, install, exe),
         None => {
             eprintln!("不支持的 agent: {agent}（支持 claude/codebuddy/codex/opencode）");
             2
@@ -250,8 +268,8 @@ mod tests {
     fn install_claude_creates_mcp_json_and_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("mcp.json");
-        assert_eq!(run_at_claude_like(&path, true), 0);
-        assert_eq!(run_at_claude_like(&path, true), 0); // 再装一次
+        assert_eq!(run_at_claude_like(&path, true, "dozer-mcp"), 0);
+        assert_eq!(run_at_claude_like(&path, true, "dozer-mcp"), 0); // 再装一次
         let root: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let servers = root["mcpServers"].as_object().unwrap();
@@ -263,8 +281,8 @@ mod tests {
     fn uninstall_claude_removes_entry() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("mcp.json");
-        run_at_claude_like(&path, true);
-        assert_eq!(run_at_claude_like(&path, false), 0);
+        run_at_claude_like(&path, true, "dozer-mcp");
+        assert_eq!(run_at_claude_like(&path, false, "dozer-mcp"), 0);
         let root: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert!(root["mcpServers"].as_object().unwrap().is_empty());
@@ -274,8 +292,8 @@ mod tests {
     fn install_codex_writes_toml_table_and_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        assert_eq!(run_at_codex(&path, true), 0);
-        assert_eq!(run_at_codex(&path, true), 0);
+        assert_eq!(run_at_codex(&path, true, "dozer-mcp"), 0);
+        assert_eq!(run_at_codex(&path, true, "dozer-mcp"), 0);
         let text = std::fs::read_to_string(&path).unwrap();
         // `.parse()`（`Value: FromStr`）解析的是裸值字面量而非完整文档，
         // 见 run_at_codex 里的注释；这里同样改用 `toml::from_str`。
@@ -289,8 +307,8 @@ mod tests {
     fn install_opencode_writes_command_array_and_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("opencode.json");
-        assert_eq!(run_at_opencode(&path, true), 0);
-        assert_eq!(run_at_opencode(&path, true), 0);
+        assert_eq!(run_at_opencode(&path, true, "dozer-mcp"), 0);
+        assert_eq!(run_at_opencode(&path, true, "dozer-mcp"), 0);
         let root: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let servers = root["mcp"].as_object().unwrap();
@@ -307,7 +325,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("mcp.json");
         std::fs::create_dir(&path).unwrap();
-        assert_eq!(run_at_claude_like(&path, true), 1);
+        assert_eq!(run_at_claude_like(&path, true, "dozer-mcp"), 1);
         assert!(path.is_dir(), "读失败时不应把目录路径覆盖成文件");
     }
 
@@ -316,7 +334,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::create_dir(&path).unwrap();
-        assert_eq!(run_at_codex(&path, true), 1);
+        assert_eq!(run_at_codex(&path, true, "dozer-mcp"), 1);
         assert!(path.is_dir(), "读失败时不应把目录路径覆盖成文件");
     }
 
@@ -325,7 +343,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("opencode.json");
         std::fs::create_dir(&path).unwrap();
-        assert_eq!(run_at_opencode(&path, true), 1);
+        assert_eq!(run_at_opencode(&path, true, "dozer-mcp"), 1);
         assert!(path.is_dir(), "读失败时不应把目录路径覆盖成文件");
     }
 
@@ -352,7 +370,7 @@ mod tests {
             "# 这行注释必须活下来\nmodel = \"o3\"\n\n[mcp_servers.other]\ncommand = \"foo\"\n";
         std::fs::write(&path, original).unwrap();
 
-        assert_eq!(run_at_codex(&path, true), 0);
+        assert_eq!(run_at_codex(&path, true, "dozer-mcp"), 0);
 
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(
@@ -369,6 +387,32 @@ mod tests {
     /// 安装器只碰自己的 `dozer` 条目：别家 MCP server 的注册必须原样还在。
     /// Claude/Codebuddy 共用 `run_at_claude_like`，一条覆盖两家。
     #[test]
+    fn run_at_with_exe_uses_explicit_exe_not_current_exe() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+        assert_eq!(
+            run_at_with_exe(&path, "claude", true, "/opt/dozer/dozer-mcp"),
+            0
+        );
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            root["mcpServers"]["dozer"]["command"],
+            "/opt/dozer/dozer-mcp"
+        );
+    }
+
+    #[test]
+    fn run_at_with_exe_unsupported_agent_returns_error_code() {
+        let dir = tempfile::tempdir().unwrap();
+        // 未支持的 agent 名不该落到任何默认路径去改文件,直接报错码。
+        assert_eq!(
+            run_at_with_exe(&dir.path().join("x"), "kilo", true, "/x/dozer-mcp"),
+            2
+        );
+    }
+
+    #[test]
     fn install_claude_like_keeps_unrelated_entries() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".claude.json");
@@ -378,7 +422,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(run_at_claude_like(&path, true), 0);
+        assert_eq!(run_at_claude_like(&path, true, "dozer-mcp"), 0);
 
         let root: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -396,7 +440,7 @@ mod tests {
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "[mcp_servers.other]\ncommand = \"foo\"\n").unwrap();
 
-        assert_eq!(run_at_codex(&path, true), 0);
+        assert_eq!(run_at_codex(&path, true, "dozer-mcp"), 0);
 
         let root: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let servers = root["mcp_servers"].as_table().unwrap();
@@ -415,7 +459,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(run_at_opencode(&path, true), 0);
+        assert_eq!(run_at_opencode(&path, true, "dozer-mcp"), 0);
 
         let root: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
