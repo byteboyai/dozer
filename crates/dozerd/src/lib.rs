@@ -7,5 +7,6 @@ pub mod registry;
 pub mod ring;
 pub mod server;
 pub mod session;
+pub mod session_summary;
 pub mod shell_integration;
 pub mod transcripts;
