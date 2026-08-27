@@ -188,7 +188,12 @@ pub fn daily_totals_by_agent(
 /// 整个项目范围（不限"近 15 天"）按 agent 的 token 总量（四项合计），供
 /// 饼图用；只返回项目里实际出现过的 agent，不产生全零占位记录。
 pub fn agent_token_share(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<(AgentKind, u64)> {
-    const ORDER: [AgentKind; 3] = [AgentKind::Claude, AgentKind::Codebuddy, AgentKind::Opencode];
+    const ORDER: [AgentKind; 4] = [
+        AgentKind::Claude,
+        AgentKind::Codebuddy,
+        AgentKind::Opencode,
+        AgentKind::V8agent,
+    ];
     ORDER
         .into_iter()
         .filter_map(|kind| {
@@ -208,7 +213,12 @@ pub fn agent_token_share(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<
 /// 即 human 发言数（2026-08-27 调整，见 dozerd `get_usage_summary_in`）。
 /// 只返回实际有回合的 agent，不产生全零占位记录。供 Agent 会话统计饼图用。
 pub fn agent_turn_share(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<(AgentKind, u64)> {
-    const ORDER: [AgentKind; 3] = [AgentKind::Claude, AgentKind::Codebuddy, AgentKind::Opencode];
+    const ORDER: [AgentKind; 4] = [
+        AgentKind::Claude,
+        AgentKind::Codebuddy,
+        AgentKind::Opencode,
+        AgentKind::V8agent,
+    ];
     ORDER
         .into_iter()
         .filter_map(|kind| {
@@ -1098,6 +1108,16 @@ mod tests {
         );
     }
 
+    /// V8agent(用户自研 agent)默认要被用量统计覆盖,不能像 Codex/Kilo 那样
+    /// 被排除——2026-08-27 之前 `ORDER` 常量漏了它,饼图/图例里完全不出现
+    /// 这家的用量,是真实 bug 不是刻意范围收窄。
+    #[test]
+    fn agent_token_share_includes_v8agent() {
+        let rows = vec![(meta(AgentKind::V8agent, "a"), usage_with_tokens(7))];
+        let share = agent_token_share(&rows);
+        assert_eq!(share, vec![(AgentKind::V8agent, 7)]);
+    }
+
     fn usage_with_turns(turns: u32) -> ConversationUsage {
         ConversationUsage {
             turns,
@@ -1119,6 +1139,13 @@ mod tests {
             share,
             vec![(AgentKind::Claude, 5), (AgentKind::Codebuddy, 5)]
         );
+    }
+
+    #[test]
+    fn agent_turn_share_includes_v8agent() {
+        let rows = vec![(meta(AgentKind::V8agent, "a"), usage_with_turns(4))];
+        let share = agent_turn_share(&rows);
+        assert_eq!(share, vec![(AgentKind::V8agent, 4)]);
     }
 
     #[test]
