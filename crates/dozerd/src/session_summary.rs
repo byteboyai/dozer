@@ -37,6 +37,37 @@ fn status_from_str(s: &str) -> SummaryStatus {
     }
 }
 
+const HEURISTIC_PLACEHOLDER: &str = "(无对话记录)";
+const HEURISTIC_TITLE_MAX_CHARS: usize = 60;
+
+/// 没等到 agent 交回总结时的兜底算法:用已摄取的对话数据(仅取人类回合,
+/// 与 `truncate_activity` 的 60 字符惯例保持一致)拼一份"没有语义压缩"的
+/// 降级总结。空结果返回固定占位文案而不是空字符串,保证消费方不用处理
+/// "有的 session 干脆没有总结"这种特例(spec 2026-08-27 D5)。
+pub fn heuristic_from_turns(turns: &[dozer_core::protocol::TurnRecord]) -> (String, String) {
+    let human: Vec<&str> = turns
+        .iter()
+        .filter(|t| t.role == "human")
+        .map(|t| t.content.as_str())
+        .collect();
+    if human.is_empty() {
+        return (HEURISTIC_PLACEHOLDER.into(), HEURISTIC_PLACEHOLDER.into());
+    }
+    (
+        truncate_chars(human[0], HEURISTIC_TITLE_MAX_CHARS),
+        human.join("\n"),
+    )
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let head: String = s.chars().take(max).collect();
+        format!("{head}…")
+    }
+}
+
 pub struct SessionSummaryStore {
     conn: Mutex<Connection>,
 }
@@ -159,5 +190,49 @@ mod tests {
         }
         let store = SessionSummaryStore::open(&path).unwrap();
         assert!(store.get("s1").unwrap().is_some());
+    }
+
+    fn turn(role: &str, content: &str) -> dozer_core::protocol::TurnRecord {
+        dozer_core::protocol::TurnRecord {
+            role: role.into(),
+            content: content.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn heuristic_uses_first_human_turn_as_title() {
+        let turns = vec![
+            turn("human", "帮我改一下 README"),
+            turn("ai", "好的,我来改"),
+            turn("human", "再加一段安装说明"),
+        ];
+        let (title, summary) = heuristic_from_turns(&turns);
+        assert_eq!(title, "帮我改一下 README");
+        assert_eq!(summary, "帮我改一下 README\n再加一段安装说明");
+    }
+
+    #[test]
+    fn heuristic_ignores_non_human_turns() {
+        let turns = vec![turn("ai", "纯 AI 输出"), turn("tool", "工具结果")];
+        let (title, summary) = heuristic_from_turns(&turns);
+        assert_eq!(title, "(无对话记录)");
+        assert_eq!(summary, "(无对话记录)");
+    }
+
+    #[test]
+    fn heuristic_truncates_long_title_at_60_chars() {
+        let long = "a".repeat(100);
+        let turns = vec![turn("human", &long)];
+        let (title, _) = heuristic_from_turns(&turns);
+        assert_eq!(title.chars().count(), 61); // 60 + "…"
+        assert!(title.ends_with('…'));
+    }
+
+    #[test]
+    fn heuristic_empty_turns_returns_placeholder() {
+        let (title, summary) = heuristic_from_turns(&[]);
+        assert_eq!(title, "(无对话记录)");
+        assert_eq!(summary, "(无对话记录)");
     }
 }
