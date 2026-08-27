@@ -23,6 +23,117 @@
 
 ---
 
+## ⚠️ 修正(2026-08-27,写姊妹项目 B 时发现,Task 1-3 已实现完毕后补的):`session_id` ≠ `conversation_id`
+
+`dozerd::registry` 的 `session_id`(`Session::spawn` 里 `uuid::Uuid::new_v4()` 生成)和
+`TranscriptStore` 的 `conversation_id`(取 transcript 文件名的 `file_stem()`,比如 Claude
+自己那份 `.jsonl` 的文件名,是 Claude 自己分配的 id)是**两套完全独立生成、互不相关的
+UUID**。唯一的桥是 `Session::info().transcript_path`(hook 上报时写入,只在内存
+registry 里,不落库)。
+
+**这意味着 Task 8(还没开始实现)里 `finalize_session_summary` 的启发式兜底分支,如果
+直接拿 `session_id` 当 `conversation_id` 去查 `transcripts.get_conversation_turns`,
+在生产环境里几乎总是查不到数据**(两个 id 根本不相等,只会命中"空结果"分支,一直落到
+"(无对话记录)"占位文案)。同理,这也是姊妹项目 B(对话面板导航改版,把
+`session_summaries` join 进 `ListConversations` 的结果)的阻塞项——现在
+`session_summaries` 表里没有 `conversation_id` 列,没法关联。
+
+Task 1(`SessionSummaryPayload`)和 Task 2(`SessionSummaryStore` 表结构)已经实现完
+且不含这个字段/列——**下面是需要在原有实现基础上追加的最小修正,不是推倒重做**:
+
+1. **`crates/dozer-core/src/protocol.rs`**:`SessionSummaryPayload` struct 追加一个
+   字段(紧跟 `agent_kind` 之后):
+   ```rust
+   /// 该会话对应的 transcript conversation_id(取自 `transcript_path` 的
+   /// `file_stem()`)。`None` 表示这个会话直到总结产出时都没收到过任何 hook
+   /// 事件(纯 shell/agent 没配好 hook),启发式兜底也查不到任何数据。
+   pub conversation_id: Option<String>,
+   ```
+   补一个序列化往返测试(仿 Task 1 已有的 `get_session_summary_reply_roundtrips_with_payload`,
+   造一个 `conversation_id: Some("c1".into())` 和一个 `None` 的两个用例)。
+
+2. **`crates/dozerd/src/transcripts/mod.rs`**:把 `ingest_session` 内联的
+   `file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string()` 这段抽成一个
+   `pub` 函数,供 `session_summary.rs`/`server.rs` 复用(避免同一段派生逻辑写两份):
+   ```rust
+   /// 从 transcript 文件路径派生 `conversation_id`(即文件名去掉扩展名)。
+   /// `ingest_session` 与 `dozerd::server` 的 `RecordSessionSummary`/
+   /// `CloseWithSummary` 处理器共用同一份派生逻辑。
+   pub fn conversation_id_for_path(file_path: &Path) -> Option<String> {
+       file_path.file_stem().and_then(|s| s.to_str()).map(String::from)
+   }
+   ```
+   `ingest_session` 内部改用这个函数(`unwrap_or("").to_string()` 换成
+   `conversation_id_for_path(file_path).ok_or_else(|| ...)?`,空路径时的报错分支保持原有
+   行为不变)。补一个新测试确认非法/无扩展名路径的行为,以及既有 `ingest_session` 相关
+   测试全部保持通过(纯重构,不改行为)。
+
+3. **`crates/dozerd/src/session_summary.rs`**:表结构追加 `conversation_id TEXT` 可空列
+   (仿 `crates/dozerd/src/transcripts/mod.rs` 里 `conversation_turns` 加 `is_error` 列的
+   既有幂等迁移写法——`SELECT 1 FROM pragma_table_info(...)` 判断列是否已存在,不存在才
+   `ALTER TABLE ... ADD COLUMN`,因为已经有人跑过 `CREATE TABLE IF NOT EXISTS` 建过旧表结构
+   的库需要能平滑升级)。`record`/`get` 两个方法的 SQL 和 Rust 结构体映射都要带上这一列
+   (`get` 里 `conversation_id: row.get::<_, Option<String>>(6)?`)。补测试:写入带
+   `Some(id)` 的记录读回一致;写入 `None` 的记录读回也是 `None`。
+
+4. **`crates/dozerd/src/server.rs` 的 `RecordSessionSummary` handler(Task 3 已实现,
+   需要打补丁)**:构造 `SessionSummaryPayload` 时,`conversation_id` 字段用
+   `s.info().transcript_path.as_deref().and_then(|p| crate::transcripts::conversation_id_for_path(Path::new(p)))`
+   算出来(`s` 就是 `registry.get(&session_id)` 已经拿到的那个 `Arc<Session>`,不需要
+   额外查询)。
+
+5. **Task 8 的 `finalize_session_summary` 落地时,直接按下面的签名写,不要用
+   `session_id` 查 `conversation_turns`**:
+
+   ```rust
+   async fn finalize_session_summary(
+       session_id: String,
+       conversation_id: Option<String>,
+       registry: Arc<SessionRegistry>,
+       session_summaries: Arc<crate::session_summary::SessionSummaryStore>,
+       transcripts: Arc<crate::transcripts::TranscriptStore>,
+       agent: dozer_core::protocol::AgentKind,
+       timeout: std::time::Duration,
+       poll_interval: std::time::Duration,
+   ) {
+       // ... 轮询逻辑不变 ...
+       // 超时分支:
+       let turns = match &conversation_id {
+           Some(cid) => transcripts.get_conversation_turns(cid, -1, u32::MAX).unwrap_or_default(),
+           None => Vec::new(),
+       };
+       let (title, summary) = crate::session_summary::heuristic_from_turns(&turns);
+       let payload = dozer_core::protocol::SessionSummaryPayload {
+           session_id: session_id.clone(),
+           agent_kind: agent,
+           conversation_id: conversation_id.clone(),
+           title,
+           summary,
+           status: dozer_core::protocol::SummaryStatus::HeuristicFallback,
+           created_ts_ms: /* 同原设计 */,
+       };
+       // ... 落库 + kill 不变 ...
+   }
+   ```
+
+   `Request::CloseWithSummary` 处理器里调用它时,在拿到 `s = registry.get(&session_id)`
+   之后立刻算好 `conversation_id`(同第 4 点的算法),连同 `agent` 一起传进去,不要在
+   `finalize_session_summary` 内部重新查 registry(那时 session 可能已经被后台任务自己
+   kill 掉,`registry.get` 依然能查到已死会话——但没必要多这一次查询,拿到 `s` 时早取
+   走更简单)。
+
+   **Task 8 原稿里 `finalize_session_summary_falls_back_to_heuristic_on_timeout` 这条
+   测试也要跟着改**:调用时传入 `conversation_id: Some(id.clone())`(fixture 里文件名
+   本来就是 `{id}.jsonl`,现在通过显式参数传,而不是依赖"session_id 恰好等于
+   conversation_id"这个巧合),另补一条 `conversation_id: None` 时兜底直接落"(无对话
+   记录)"占位文案、不报错的测试。
+
+**这条修正需要在到达 Task 8 之前落地(Task 4-7 不受影响,可以继续按原计划推进)**,
+因为 Task 8 一旦照原稿写完再改,返工成本更高。已经实现的 Task 1-3 只需要打上面 1/3/4
+三处小补丁,不需要重写。
+
+---
+
 ## Task 1: 协议层新增类型与 Request/Reply(不含 `CloseWithSummary`)
 
 **Files:**
