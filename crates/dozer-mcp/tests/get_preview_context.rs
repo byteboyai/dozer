@@ -25,9 +25,20 @@ async fn start_daemon() -> (std::path::PathBuf, CleanupGuard) {
     let projects = Arc::new(dozerd::projects::ProjectStore::new(&db).unwrap());
     let bookmarks = Arc::new(dozerd::bookmarks::BookmarkStore::new(&db).unwrap());
     let transcripts = Arc::new(dozerd::transcripts::TranscriptStore::open(&db).unwrap());
+    let session_summaries =
+        Arc::new(dozerd::session_summary::SessionSummaryStore::open(&db).unwrap());
     let s = sock.clone();
     tokio::spawn(async move {
-        dozerd::server::serve(&s, registry, store, projects, bookmarks, transcripts).await
+        dozerd::server::serve(
+            &s,
+            registry,
+            store,
+            projects,
+            bookmarks,
+            transcripts,
+            session_summaries,
+        )
+        .await
     });
     for _ in 0..100 {
         if sock.exists() {

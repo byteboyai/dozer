@@ -38,6 +38,7 @@ async fn hook_event_reaches_attached_client_and_list() {
                 test_projects(),
                 test_bookmarks(),
                 test_transcripts(),
+                test_session_summaries(),
             )
             .await
         }
@@ -164,17 +165,29 @@ async fn record_acceptance_persists() {
     let projects = Arc::new(dozerd::projects::ProjectStore::new(&db).unwrap());
     let bookmarks = Arc::new(dozerd::bookmarks::BookmarkStore::new(&db).unwrap());
     let transcripts = Arc::new(dozerd::transcripts::TranscriptStore::open(&db).unwrap());
+    let session_summaries =
+        Arc::new(dozerd::session_summary::SessionSummaryStore::open(&db).unwrap());
     tokio::spawn({
-        let (sock, registry, store, projects, bookmarks, transcripts) = (
+        let (sock, registry, store, projects, bookmarks, transcripts, session_summaries) = (
             sock.clone(),
             registry.clone(),
             store.clone(),
             projects.clone(),
             bookmarks.clone(),
             transcripts.clone(),
+            session_summaries.clone(),
         );
         async move {
-            dozerd::server::serve(&sock, registry, store, projects, bookmarks, transcripts).await
+            dozerd::server::serve(
+                &sock,
+                registry,
+                store,
+                projects,
+                bookmarks,
+                transcripts,
+                session_summaries,
+            )
+            .await
         }
     });
     for _ in 0..100 {
@@ -221,6 +234,12 @@ fn test_transcripts() -> std::sync::Arc<dozerd::transcripts::TranscriptStore> {
     std::sync::Arc::new(dozerd::transcripts::TranscriptStore::open(&db).unwrap())
 }
 
+/// 每次调用建独立临时库的会话总结存储（测试用；serve 需要）。
+fn test_session_summaries() -> std::sync::Arc<dozerd::session_summary::SessionSummaryStore> {
+    let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
+    std::sync::Arc::new(dozerd::session_summary::SessionSummaryStore::open(&db).unwrap())
+}
+
 #[tokio::test]
 async fn project_open_and_list_roundtrip() {
     let sock = std::env::temp_dir().join(format!("dozerd-proj-{}.sock", uuid::Uuid::new_v4()));
@@ -230,17 +249,29 @@ async fn project_open_and_list_roundtrip() {
     let projects = Arc::new(dozerd::projects::ProjectStore::new(&db).unwrap());
     let bookmarks = Arc::new(dozerd::bookmarks::BookmarkStore::new(&db).unwrap());
     let transcripts = Arc::new(dozerd::transcripts::TranscriptStore::open(&db).unwrap());
+    let session_summaries =
+        Arc::new(dozerd::session_summary::SessionSummaryStore::open(&db).unwrap());
     tokio::spawn({
-        let (sock, registry, store, projects, bookmarks, transcripts) = (
+        let (sock, registry, store, projects, bookmarks, transcripts, session_summaries) = (
             sock.clone(),
             registry.clone(),
             store.clone(),
             projects.clone(),
             bookmarks.clone(),
             transcripts.clone(),
+            session_summaries.clone(),
         );
         async move {
-            dozerd::server::serve(&sock, registry, store, projects, bookmarks, transcripts).await
+            dozerd::server::serve(
+                &sock,
+                registry,
+                store,
+                projects,
+                bookmarks,
+                transcripts,
+                session_summaries,
+            )
+            .await
         }
     });
     for _ in 0..100 {
@@ -266,4 +297,93 @@ async fn project_open_and_list_roundtrip() {
         Reply::Projects { projects } => assert_eq!(projects.len(), 1),
         other => panic!("{other:?}"),
     }
+}
+
+#[tokio::test]
+async fn record_and_get_session_summary_roundtrip() {
+    let sock = std::env::temp_dir().join(format!("dzsum-{}.sock", uuid::Uuid::new_v4()));
+    let registry = Arc::new(SessionRegistry::new());
+    let store = test_store();
+    let projects = test_projects();
+    let bookmarks = test_bookmarks();
+    let transcripts = test_transcripts();
+    let session_summaries = test_session_summaries();
+    tokio::spawn({
+        let sock = sock.clone();
+        let registry = registry.clone();
+        async move {
+            dozerd::server::serve(
+                &sock,
+                registry,
+                store,
+                projects,
+                bookmarks,
+                transcripts,
+                session_summaries,
+            )
+            .await
+        }
+    });
+    for _ in 0..100 {
+        if sock.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let s = registry
+        .create(dozerd::session::SessionSpec {
+            name: "测试".into(),
+            command: "/bin/sh".into(),
+            args: vec!["-c".into(), "sleep 5".into()],
+            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+            cols: 80,
+            rows: 24,
+            project_id: 1,
+        })
+        .unwrap();
+    let id = s.id().to_string();
+
+    match send_req(
+        &sock,
+        &Request::GetSessionSummary {
+            session_id: id.clone(),
+        },
+    )
+    .await
+    {
+        Reply::SessionSummary { summary: None } => {}
+        other => panic!("意外应答: {other:?}"),
+    }
+
+    match send_req(
+        &sock,
+        &Request::RecordSessionSummary {
+            session_id: id.clone(),
+            title: "标题".into(),
+            summary: "摘要".into(),
+        },
+    )
+    .await
+    {
+        Reply::Ok => {}
+        other => panic!("意外应答: {other:?}"),
+    }
+
+    match send_req(
+        &sock,
+        &Request::GetSessionSummary {
+            session_id: id.clone(),
+        },
+    )
+    .await
+    {
+        Reply::SessionSummary { summary: Some(p) } => {
+            assert_eq!(p.title, "标题");
+            assert_eq!(p.summary, "摘要");
+            assert_eq!(p.status, dozer_core::protocol::SummaryStatus::AiGenerated);
+        }
+        other => panic!("意外应答: {other:?}"),
+    }
+    let _ = s.kill();
 }

@@ -18,6 +18,7 @@ pub async fn serve(
     projects: Arc<crate::projects::ProjectStore>,
     bookmarks: Arc<crate::bookmarks::BookmarkStore>,
     transcripts: Arc<crate::transcripts::TranscriptStore>,
+    session_summaries: Arc<crate::session_summary::SessionSummaryStore>,
 ) -> Result<()> {
     let preview_contexts = Arc::new(PreviewContextStore::new());
     if socket.exists() {
@@ -42,6 +43,7 @@ pub async fn serve(
         let bookmarks = bookmarks.clone();
         let preview_contexts = preview_contexts.clone();
         let transcripts = transcripts.clone();
+        let session_summaries = session_summaries.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_conn(
                 stream,
@@ -51,6 +53,7 @@ pub async fn serve(
                 bookmarks,
                 preview_contexts,
                 transcripts,
+                session_summaries,
             )
             .await
             {
@@ -127,6 +130,7 @@ pub fn agent_state_for(event: &str) -> Option<dozer_core::protocol::AgentState> 
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_conn(
     stream: UnixStream,
     registry: Arc<SessionRegistry>,
@@ -135,6 +139,7 @@ async fn handle_conn(
     bookmarks: Arc<crate::bookmarks::BookmarkStore>,
     preview_contexts: Arc<PreviewContextStore>,
     transcripts: Arc<crate::transcripts::TranscriptStore>,
+    session_summaries: Arc<crate::session_summary::SessionSummaryStore>,
 ) -> Result<()> {
     let (r, mut w) = stream.into_split();
     let mut lines = BufReader::new(r).lines();
@@ -358,6 +363,38 @@ async fn handle_conn(
                                 Err(e) => Reply::Error { message: format!("查询用量失败: {e}") },
                             }
                         }
+                        Request::RecordSessionSummary { session_id, title, summary } => {
+                            match registry.get(&session_id) {
+                                None => Reply::Error { message: format!("会话不存在: {session_id}") },
+                                Some(s) => {
+                                    let payload = dozer_core::protocol::SessionSummaryPayload {
+                                        session_id: session_id.clone(),
+                                        agent_kind: s.info().agent,
+                                        title,
+                                        summary,
+                                        status: dozer_core::protocol::SummaryStatus::AiGenerated,
+                                        created_ts_ms: std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .map(|d| d.as_millis() as u64)
+                                            .unwrap_or(0),
+                                    };
+                                    match session_summaries.record(&payload) {
+                                        Ok(()) => Reply::Ok,
+                                        Err(e) => Reply::Error {
+                                            message: format!("会话总结落库失败: {e}"),
+                                        },
+                                    }
+                                }
+                            }
+                        }
+                        Request::GetSessionSummary { session_id } => {
+                            match session_summaries.get(&session_id) {
+                                Ok(summary) => Reply::SessionSummary { summary },
+                                Err(e) => Reply::Error {
+                                    message: format!("查询会话总结失败: {e}"),
+                                },
+                            }
+                        }
                     },
                 };
                 w.write_all(encode_line(&reply).as_bytes()).await?;
@@ -458,7 +495,7 @@ mod tests {
 
     #[test]
     fn transcript_store_field_compiles_into_serve_signature() {
-        // 编译期检查:确认 `serve` 函数签名接受 `Arc<TranscriptStore>`。
+        // 编译期检查:确认 `serve` 函数签名接受 `Arc<TranscriptStore>` 与 `Arc<SessionSummaryStore>`。
         fn _assert_signature(
             socket: &std::path::Path,
             registry: std::sync::Arc<crate::registry::SessionRegistry>,
@@ -466,9 +503,17 @@ mod tests {
             projects: std::sync::Arc<crate::projects::ProjectStore>,
             bookmarks: std::sync::Arc<crate::bookmarks::BookmarkStore>,
             transcripts: std::sync::Arc<crate::transcripts::TranscriptStore>,
+            session_summaries: std::sync::Arc<crate::session_summary::SessionSummaryStore>,
         ) {
-            let fut =
-                crate::server::serve(socket, registry, store, projects, bookmarks, transcripts);
+            let fut = crate::server::serve(
+                socket,
+                registry,
+                store,
+                projects,
+                bookmarks,
+                transcripts,
+                session_summaries,
+            );
             std::mem::drop(fut);
         }
     }
