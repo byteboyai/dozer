@@ -475,3 +475,111 @@ async fn close_with_summary_kills_session_after_ai_summary_recorded() {
         other => panic!("意外应答: {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn list_conversations_with_summaries_joins_correctly() {
+    // 会话列表面板定位 transcript 用的是 `home_dir()(=$HOME)/.claude/...`。
+    // 把 $HOME 指到一个临时目录,让摄取的 transcript 落在真实查询路径下,
+    // 测试结束后由 TempDir 自动清理(不污染真实家目录)。
+    let home = tempfile::tempdir().unwrap();
+    // SAFETY: 测试用临时 HOME,daemon 在进程内 tokio::spawn 跑,读取的是
+    // set 之后的 HOME;本测试二进制里没有任何其他测试依赖 $HOME。
+    unsafe { std::env::set_var("HOME", home.path()) };
+
+    let sock = std::env::temp_dir().join(format!("dozerd-join-{}.sock", uuid::Uuid::new_v4()));
+    let registry = Arc::new(SessionRegistry::new());
+    let transcripts = test_transcripts();
+    let session_summaries = test_session_summaries();
+    tokio::spawn({
+        let sock = sock.clone();
+        let registry = registry.clone();
+        let transcripts = transcripts.clone();
+        let session_summaries = session_summaries.clone();
+        async move {
+            dozerd::server::serve(
+                &sock,
+                registry,
+                test_store(),
+                test_projects(),
+                test_bookmarks(),
+                transcripts,
+                session_summaries,
+            )
+            .await
+        }
+    });
+    for _ in 0..100 {
+        if sock.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    // 造一个真实摄取的 conversation(c1)+一个匹配的 session_summaries 行,
+    // 另一个 conversation(c2)不给总结,验证降级为 None。transcript 放在
+    // `home/.claude/projects/-x`(cwd `/x` 的 `project_key` 是 `-x`)。
+    let claude_dir = home.path().join(".claude").join("projects").join("-x");
+    std::fs::create_dir_all(&claude_dir).unwrap();
+    std::fs::write(
+        claude_dir.join("c1.jsonl"),
+        "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"c1 内容\"}}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        claude_dir.join("c2.jsonl"),
+        "{\"type\":\"user\",\"uuid\":\"u2\",\"message\":{\"role\":\"user\",\"content\":\"c2 内容\"}}\n",
+    )
+    .unwrap();
+    transcripts
+        .ingest_session(
+            dozer_core::protocol::AgentKind::Claude,
+            &claude_dir.join("c1.jsonl"),
+        )
+        .unwrap();
+    transcripts
+        .ingest_session(
+            dozer_core::protocol::AgentKind::Claude,
+            &claude_dir.join("c2.jsonl"),
+        )
+        .unwrap();
+    session_summaries
+        .record(&dozer_core::protocol::SessionSummaryPayload {
+            session_id: "s1".into(),
+            agent_kind: dozer_core::protocol::AgentKind::Claude,
+            conversation_id: Some("c1".into()),
+            title: "c1 的总结标题".into(),
+            summary: "c1 的总结全文".into(),
+            status: dozer_core::protocol::SummaryStatus::AiGenerated,
+            created_ts_ms: 1,
+        })
+        .unwrap();
+
+    // cwd `/x` 经 `project_key` 映射为目录 `-x`,正好对上上面的 claude_dir。
+    let cwd = "/x";
+    let rows = match send_req(
+        &sock,
+        &Request::ListConversationsWithSummaries {
+            cwd: cwd.into(),
+            agent: None,
+            limit: 50,
+            offset: 0,
+        },
+    )
+    .await
+    {
+        Reply::ConversationsWithSummaries { rows } => rows,
+        other => panic!("意外应答: {other:?}"),
+    };
+
+    assert_eq!(rows.len(), 2);
+    let c1 = rows
+        .iter()
+        .find(|(c, _)| c.conversation_id == "c1")
+        .unwrap();
+    assert_eq!(c1.1.as_ref().unwrap().title, "c1 的总结标题");
+    let c2 = rows
+        .iter()
+        .find(|(c, _)| c.conversation_id == "c2")
+        .unwrap();
+    assert!(c2.1.is_none());
+}

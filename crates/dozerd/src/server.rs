@@ -421,16 +421,33 @@ async fn handle_conn(
                                 },
                             }
                         }
-                        Request::ListSessionTurnGroups { conversation_id } => {
-                            match transcripts.list_turn_groups(&conversation_id) {
-                                Ok(groups) => Reply::SessionTurnGroups { conversation_id, groups },
-                                Err(e) => Reply::Error { message: format!("查询回合分组失败: {e}") },
-                            }
-                        }
-                        Request::ListAllTurnGroups { cwd, limit } => {
-                            match transcripts.list_all_turn_groups(&cwd, limit) {
-                                Ok(groups) => Reply::AllTurnGroups { groups },
-                                Err(e) => Reply::Error { message: format!("查询回合列表失败: {e}") },
+                        Request::ListConversationsWithSummaries {
+                            cwd,
+                            agent,
+                            limit,
+                            offset,
+                        } => {
+                            match transcripts.list_conversations(&cwd, agent, limit, offset) {
+                                Ok(conversations) => {
+                                    let ids: Vec<String> = conversations
+                                        .iter()
+                                        .map(|c| c.conversation_id.clone())
+                                        .collect();
+                                    let summaries = session_summaries
+                                        .get_many(&ids)
+                                        .unwrap_or_default();
+                                    let rows = conversations
+                                        .into_iter()
+                                        .map(|c| {
+                                            let s = summaries
+                                                .get(&c.conversation_id)
+                                                .cloned();
+                                            (c, s)
+                                        })
+                                        .collect();
+                                    Reply::ConversationsWithSummaries { rows }
+                                }
+                                Err(e) => Reply::Error { message: format!("列对话失败: {e}") },
                             }
                         }
                         Request::GetUsageSummary { cwd, since_ts } => {
