@@ -34,7 +34,7 @@ use crate::app::{
     App, DEFAULT_COLS, DEFAULT_ROWS, HoverId, Message, PROJECT_PREVIEW_ID_OFFSET, PanelKind,
     ProjectId, tab_divider,
 };
-use crate::conversation::{self, TurnGroupRow};
+use crate::conversation::{self, SessionRow};
 use crate::delivery::{self};
 use crate::extensions::acceptance;
 use crate::extensions::browser;
@@ -69,7 +69,6 @@ use iced_widget::core::widget::{Id, Operation};
 use iced_widget::core::{Border, Color, Element, Length, Padding, Rectangle};
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
-use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -155,28 +154,20 @@ pub enum AddrEvent {
     Cancel,
 }
 
-/// 审阅内容的来源（P1j）：活会话 tab（回合结束刷新）或历史对话文件里的
-/// 某一个回合分组区间(2026-08-21，树状展示改造——点击会话列表里的回合
-/// 子行走这条，只加载区间内的 turns)。原 `ReviewSource::File`(整份历史
-/// 对话文件全量快照)已随 `ConversationOpen` 一并移除(2026-08-21 树状
-/// 改造孤儿代码清理)。
+/// 审阅内容的来源（P1j）：活会话 tab（回合结束刷新）或对话面板的
+/// session 详情(2026-08-27，整段摊平加载)。原 `ReviewSource::FileRange`
+/// (历史对话文件里某个回合区间)已随会话树改造一并移除。
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReviewSource {
     Session(usize),
-    FileRange(PathBuf, i64, i64),
+    /// 对话面板的 session 详情:`conversation_id`,整段摊平加载,不再有
+    /// "回合区间"概念(2026-08-27,取代 `FileRange`)。
+    Conversation(String),
 }
 
 /// 回合结束时该审阅视图是否应重解析：仅当它是该会话的活审阅。
 pub(crate) fn review_should_refresh_on_turn(source: &ReviewSource, tab_id: usize) -> bool {
     matches!(source, ReviewSource::Session(id) if *id == tab_id)
-}
-
-/// 前一话题/下一话题的静态预览(2026-08-22):只是一行标签文字,不可点击
-/// 跳转,文字直接用已加载的 `TurnGroupRow.title`,不额外发请求抓正文
-/// (见 spec"已知取舍")。
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct TopicPreview {
-    pub label: String,
 }
 
 /// 会话审阅 tab 的内容（P1i）。
@@ -192,40 +183,10 @@ pub struct ReviewView {
     /// host.html?_r=<nonce>` 的查询参数,逼 wry 在内容变化时重新导航
     /// 拉取(同 `preview.rs::PreviewTab.reload_nonce` 的手法)。
     pub nonce: u64,
-    /// 打开这个话题时算好、跟着 `ReviewView` 一起存的邻居预览——跟
-    /// `entries`(异步加载)不同,这两个在 `app.rs::conversation_turn_group_open`
-    /// 里同步算好,不随 `ReviewLoaded` 变化。
-    pub prev_topic: Option<TopicPreview>,
-    pub next_topic: Option<TopicPreview>,
-}
-
-/// 从已加载的全量 turn-group 列表里,找出跟 `path` 同一 session、按
-/// `start_turn_index` 排序后紧邻当前话题([`start_turn_index`,
-/// `end_turn_index`])的前一个/后一个。首/末话题,或该邻居因为
-/// `conversation_turn_groups` 的 500 条上限没被加载进来,都返回 `None`——
-/// 不额外发请求去补(见 spec"已知取舍")。
-pub(crate) fn adjacent_topic_previews(
-    groups: &[TurnGroupRow],
-    path: &Path,
-    start_turn_index: i64,
-    end_turn_index: i64,
-) -> (Option<TopicPreview>, Option<TopicPreview>) {
-    let mut same_session: Vec<&TurnGroupRow> = groups.iter().filter(|g| g.path == path).collect();
-    same_session.sort_by_key(|g| g.start_turn_index);
-    let prev = same_session
-        .iter()
-        .rev()
-        .find(|g| g.end_turn_index < start_turn_index)
-        .map(|g| TopicPreview {
-            label: g.title.clone(),
-        });
-    let next = same_session
-        .iter()
-        .find(|g| g.start_turn_index > end_turn_index)
-        .map(|g| TopicPreview {
-            label: g.title.clone(),
-        });
-    (prev, next)
+    /// session 总结标题/全文(有则展示,无则详情页只显示回合列表)。
+    /// 数据来自打开详情时已加载好的 `SessionRow`,不为此单独发请求。
+    pub summary_title: Option<String>,
+    pub summary_text: Option<String>,
 }
 
 /// 预览编辑弹层的进行中会话(全局至多一个;弹层是应用级模态)。
@@ -435,11 +396,11 @@ pub struct Workspace {
     /// docs/superpowers/plans/2026-08-21-review-content-webview-trace.md
     /// Task 2。
     pub(crate) review_nonce: u64,
-    /// 当前项目全部 session 的回合，拍平成一份按时间倒序的列表；
+    /// 当前项目全部 session 的列表(标题+总结),按最后活跃时间倒序;
     /// `None` = 还没加载过(会话列表面板会渲染"加载中…")，`Some(空
-    /// vec)` = 加载完成但确实没有记录(2026-08-21，取代按 session 展开
-    /// 的树状展示)。
-    pub(crate) conversation_turn_groups: Option<Vec<TurnGroupRow>>,
+    /// vec)` = 加载完成但确实没有记录(2026-08-27，取代按回合分组拍平的
+    /// `conversation_turn_groups`)。
+    pub(crate) conversation_sessions: Option<Vec<SessionRow>>,
     /// 会话列表(对话面板扁平列表)客户端分页已经点开的"更多"次数(0 起,
     /// 第 0 次 = 只显示第 1 页 `CONVERSATION_PAGE_SIZE` 条)。同
     /// `git_log::State::pages` 的手法:纯客户端状态,不问 daemon 要新数据。
@@ -616,7 +577,7 @@ impl Workspace {
         ws.spawn_preview_context_push(io);
         spawn_project_git_refresh(project_id, repo_path.clone(), io);
         spawn_disk_usage_refresh(project_id, repo_path, io);
-        ws.spawn_all_turn_groups_refresh(io);
+        ws.spawn_conversations_refresh(io);
         ws.spawn_acceptance_count_refresh(io);
         browser::request_bookmarks_refresh(
             ws.project.as_ref().map(|p| p.id),
@@ -686,7 +647,7 @@ impl Workspace {
             review: None,
             review_snapshot: Arc::new(Mutex::new(None)),
             review_nonce: 0,
-            conversation_turn_groups: None,
+            conversation_sessions: None,
             conversation_pages: 0,
             conversation_search: String::new(),
             conversation_search_draft: String::new(),
@@ -1039,10 +1000,10 @@ impl Workspace {
         }
     }
 
-    /// 异步查当前项目全部 session 的回合，拍平成一份按时间倒序的列表
-    /// → `ConversationTurnGroupsRefreshed`(对话面板扁平展示用，取代按
-    /// session 展开的树；spec 2026-08-21)。
-    pub(crate) fn spawn_all_turn_groups_refresh(&self, io: &ShellIo) {
+    /// 加载(或刷新)当前项目的会话列表(联查总结，标题+摘要预览)
+    /// → `ConversationSessionsRefreshed`(spec 2026-08-27，取代
+    /// `spawn_all_turn_groups_refresh`)。
+    pub(crate) fn spawn_conversations_refresh(&self, io: &ShellIo) {
         let Some(project) = self.project.as_ref() else {
             return;
         };
@@ -1052,11 +1013,15 @@ impl Workspace {
         let proxy = io.proxy.clone();
         io.handle.spawn(async move {
             let result = client
-                .list_all_turn_groups(&cwd.to_string_lossy(), 500)
+                .list_conversations_with_summaries(&cwd.to_string_lossy(), None, 500, 0)
                 .await
-                .map(|groups| groups.iter().map(TurnGroupRow::from_entry).collect())
+                .map(|rows| {
+                    rows.iter()
+                        .map(|(c, s)| SessionRow::from_row(c, s.as_ref()))
+                        .collect()
+                })
                 .map_err(|e| e.to_string());
-            let _ = proxy.send_event(Message::ConversationTurnGroupsRefreshed(project_id, result));
+            let _ = proxy.send_event(Message::ConversationSessionsRefreshed(project_id, result));
         });
     }
 
@@ -1149,7 +1114,39 @@ impl Workspace {
                 .await
                 .map(|turns| crate::transcript::review_entries_from_turns(&turns))
                 .map_err(|e| e.to_string());
-            let _ = proxy.send_event(Message::ReviewLoaded(project_id, source, result));
+            let _ = proxy.send_event(Message::ReviewLoaded(project_id, source, false, result));
+        });
+    }
+
+    /// session 详情整段加载/"加载更多"追加(2026-08-27)。`append` 为
+    /// `true` 时结果应追加进现有 `entries`(加载更多),`false` 时替换
+    /// (首次打开)——原样透传进 `Message::ReviewLoaded` 的第三个参数,
+    /// 实际的追加/替换逻辑在 `update()` 里处理,这里只负责发请求带上
+    /// 这个标记。**`Message::ReviewLoaded` 的签名要在 Task 8 扩到 4 元组
+    /// `(ProjectId, ReviewSource, bool, Result<...>)` 才能接住这里传的
+    /// `append`——本任务落地后 `dozer-app` 暂时编译不过是预期状态**。
+    pub(crate) fn spawn_review_load_conversation(
+        &self,
+        io: &ShellIo,
+        conversation_id: String,
+        after_turn_index: i64,
+        limit: u32,
+        append: bool,
+    ) {
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        let project_id = project.id;
+        let client = io.client.clone();
+        let proxy = io.proxy.clone();
+        let source = ReviewSource::Conversation(conversation_id.clone());
+        io.handle.spawn(async move {
+            let result = client
+                .get_conversation_turns(&conversation_id, after_turn_index, limit)
+                .await
+                .map(|turns| crate::transcript::review_entries_from_turns(&turns))
+                .map_err(|e| e.to_string());
+            let _ = proxy.send_event(Message::ReviewLoaded(project_id, source, append, result));
         });
     }
 
@@ -1259,7 +1256,7 @@ impl Workspace {
         // 带着旧 project_id 继续在后台跑,`Message::ProjectFsChanged` 送来
         // 的刷新信号会挂在一个此刻已经不对应这份 `Workspace` 的项目 id 上。
         self.git_watch = None;
-        self.conversation_turn_groups = None;
+        self.conversation_sessions = None;
         self.conversation_pages = 0;
         self.conversation_search.clear();
         self.conversation_search_draft.clear();
@@ -1281,7 +1278,7 @@ impl Workspace {
         self.spawn_preview_context_push(io);
         spawn_project_git_refresh(project_id, repo_path.clone(), io);
         spawn_disk_usage_refresh(project_id, repo_path, io);
-        self.spawn_all_turn_groups_refresh(io);
+        self.spawn_conversations_refresh(io);
         self.spawn_acceptance_count_refresh(io);
         browser::request_bookmarks_refresh(
             self.project.as_ref().map(|p| p.id),
@@ -2408,7 +2405,45 @@ pub(crate) fn review_content<'a>(
     // data.json 拉取),这里不再手写 iced Column——2026-08-21 webview
     // trace 改造,见
     // docs/superpowers/plans/2026-08-21-review-content-webview-trace.md。
+    // 对话面板 session 详情(2026-08-27):条目渲染走 webview,但"加载更多"
+    // 按钮补在 iced 滚动体末尾——点它发 `ConversationDetailLoadMore`,
+    // dozer-app 的 `update` 用 `spawn_review_load_conversation(append=true)`
+    // 追加下一页回合,而不是替换首屏。
+    if let ReviewSource::Conversation(conversation_id) = &rv.source
+        && !rv.entries.is_empty()
+    {
+        content = content.push(load_more_button(conversation_id, rv.entries.len() as i64));
+    }
     content
+}
+
+/// 会话详情"加载更多"按钮(2026-08-27):居中的 `<summary>` 样式的图标按钮,
+/// hover 金边提示,点击追加下一页回合。`after_turn_index` 用 `entries.len()`
+/// 当锚点——`ReviewEntry` 不携带原始 turn index,详情页按整段摊平加载,取
+/// 条数近似下一步起点即可(跳过首尾折叠带来的少量误差在可接受范围)。
+fn load_more_button<'a>(
+    conversation_id: &'a str,
+    after_turn_index: i64,
+) -> iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let btn = iced_widget::button(
+        text("加载更多…")
+            .size(byteui::theme::font::caption_sm())
+            .color(byteui::theme::color::current().dim),
+    )
+    .on_press(Message::ConversationDetailLoadMore(
+        conversation_id.to_string(),
+        after_turn_index,
+    ))
+    .padding(6)
+    .style(|_t, _s| iced_widget::button::Style {
+        background: None,
+        text_color: byteui::theme::color::current().dim,
+        ..iced_widget::button::Style::default()
+    });
+    container(btn)
+        .width(Length::Fill)
+        .align_x(iced_widget::core::Alignment::Center)
+        .into()
 }
 
 /// 会话列表(对话面板扁平列表)一页显示的条数,与 Git Log commit 列表的
@@ -2416,6 +2451,10 @@ pub(crate) fn review_content<'a>(
 /// `pages * CONVERSATION_PAGE_SIZE` 条(见 `conversation_turn_groups` 上方的
 /// `conversation_pages` 注释)。
 pub(crate) const CONVERSATION_PAGE_SIZE: usize = 20;
+
+/// 对话面板 session 详情的首屏回合页大小(2026-08-27):列表分页
+/// (`CONVERSATION_PAGE_SIZE`,20)与详情页分页(这里,200)含义不同,不要混用。
+pub(crate) const CONVERSATION_DETAIL_PAGE_SIZE: u32 = 200;
 
 /// 按 `conversation_pages`(点过几次"更多",0 起)算出当前应该显示到第几条。
 /// 抽成纯函数与 `homespace::paginate_recent_projects` 同款手法,方便 headless
@@ -2452,18 +2491,19 @@ impl Operation<()> for CaptureConversationSearchFocus {
     }
 }
 
-/// 会话列表关键字 + agent 过滤:标题大小写不敏感子串匹配(空关键字不过滤
-/// 标题这一维)叠加 agent 精确匹配(`None` = 不限)。拆成纯函数(同
-/// `homespace::filter_projects_by_search`)方便 headless 单测。
-fn filter_turn_groups<'a>(
-    rows: &'a [TurnGroupRow],
+/// 会话列表关键字 + agent 过滤:标题(`display_title`)大小写不敏感子串匹配
+/// (空关键字不过滤标题这一维)叠加 agent 精确匹配(`None` = 不限)。拆成
+/// 纯函数(同 `homespace::filter_projects_by_search`)方便 headless 单测；
+/// 2026-08-27 取代 `filter_turn_groups`。
+fn filter_sessions<'a>(
+    rows: &'a [SessionRow],
     query: &str,
     agent: Option<AgentKind>,
-) -> Vec<&'a TurnGroupRow> {
+) -> Vec<&'a SessionRow> {
     let needle = query.to_lowercase();
     rows.iter()
         .filter(|r| agent.map(|a| r.agent == a).unwrap_or(true))
-        .filter(|r| query.is_empty() || r.title.to_lowercase().contains(&needle))
+        .filter(|r| query.is_empty() || r.display_title.to_lowercase().contains(&needle))
         .collect()
 }
 
@@ -2471,7 +2511,7 @@ fn filter_turn_groups<'a>(
 /// 同一份手法,但覆盖全部 7 个 `AgentKind` 而不只 4 个——会话历史可能来自
 /// 任何一种 agent)。供底部 footbar 画筛选 chip;返回空 = 没有会话数据,
 /// footbar 不渲染(只剩"全部"一个选项没有意义)。
-fn conversation_agents_present(rows: &[TurnGroupRow]) -> Vec<AgentKind> {
+fn conversation_agents_present(rows: &[SessionRow]) -> Vec<AgentKind> {
     const ORDER: [AgentKind; 7] = [
         AgentKind::Claude,
         AgentKind::Codebuddy,
@@ -2485,6 +2525,18 @@ fn conversation_agents_present(rows: &[TurnGroupRow]) -> Vec<AgentKind> {
         .into_iter()
         .filter(|k| rows.iter().any(|r| r.agent == *k))
         .collect()
+}
+
+/// 会话列表副行总结预览:整段 `summary` 截成单行,超过 60 个字符补 "…"
+/// (同 `transcript::truncate_activity` 的 60 字符口径;本文件不走跨模块
+/// 依赖,单独留一份)。
+fn truncate_for_preview(s: &str) -> String {
+    if s.chars().count() <= 60 {
+        s.to_string()
+    } else {
+        let head: String = s.chars().take(60).collect();
+        format!("{head}…")
+    }
 }
 
 /// 会话列表底部 agent 筛选栏:样式对齐文件树面板的分支切换下拉
@@ -2625,12 +2677,12 @@ fn conversation_agent_picker_view(
 }
 
 /// 对话列表面板(右面板区"对话"视图的列表侧):当前项目全部 session 的
-/// 回合拍平成一份按时间倒序的列表,不再按 session 分树(2026-08-21，用
-/// 户明确要求"不要 session 树,直接按时间倒序列出对话回合")。点一行 →
-/// `ConversationTurnGroupOpen` 驱动右侧审阅内容,只加载这一个回合区间。
-/// 列表按 `conversation_visible_count` 客户端分页:只画前若干条,画不完时
-/// 末尾补一个居中"更多..."图标按钮(同 `git_log::commit_list_view` 的处理
-/// 方式),点它翻一页——纯客户端状态,不问 daemon 要新数据。
+/// 列表(标题+总结预览),按最后活跃时间倒序(2026-08-27，取代按回合
+/// 拍平的列表)。点一行 → `ConversationSessionOpen` 驱动右侧审阅该 session
+/// 的完整回合列表。列表按 `conversation_visible_count` 客户端分页:只画
+/// 前若干条,画不完时末尾补一个居中"更多..."图标按钮(同
+/// `git_log::commit_list_view` 的处理方式),点它翻一页——纯客户端状态,
+/// 不问 daemon 要新数据。
 pub(crate) fn conversation_list_pane<'a>(
     app: &'a App,
     ws: &'a Workspace,
@@ -2670,7 +2722,7 @@ pub(crate) fn conversation_list_pane<'a>(
         })),
     ));
 
-    let Some(rows) = ws.conversation_turn_groups.as_ref() else {
+    let Some(rows) = ws.conversation_sessions.as_ref() else {
         content = content.push(lh(text("加载中…")
             .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().dim)));
@@ -2686,7 +2738,7 @@ pub(crate) fn conversation_list_pane<'a>(
     };
 
     let agents_present = conversation_agents_present(rows);
-    let filtered = filter_turn_groups(rows, &ws.conversation_search, ws.conversation_agent_filter);
+    let filtered = filter_sessions(rows, &ws.conversation_search, ws.conversation_agent_filter);
     if rows.is_empty() {
         content = content.push(lh(text("暂无对话记录")
             .size(byteui::theme::font::body())
@@ -2704,17 +2756,21 @@ pub(crate) fn conversation_list_pane<'a>(
     let mut cards = column![].spacing(region.gap);
     let visible = conversation_visible_count(ws.conversation_pages);
     for g in filtered.iter().take(visible) {
-        let current = conversation::is_current_conversation(&g.path, &opens);
+        let current = conversation::is_current_conversation_id(&g.conversation_id, &opens);
         // 时间前面加上 agent 名称(需求),不管是不是当前会话都紧挨在时间
-        // 之前;"● 当前" 前缀保留在最前面。
+        // 之前;"● 当前" 前缀保留在最前面。副行优先显示总结预览(截断成
+        // 单行),没有总结(c2 这类降级行)才退到 "agent · 相对时间"。
         let agent_label = g.agent.label();
-        let sub = if current {
-            format!(
+        // 总结全文渲染时截断成预览(60 字符,超长加 …,同 `truncate_activity`
+        // 口径);有总结就不再拼 "agent · 时间"。
+        let sub = match g.summary.as_deref() {
+            Some(summary) if current => format!("● 当前 · {}", truncate_for_preview(summary)),
+            Some(summary) => truncate_for_preview(summary),
+            None if current => format!(
                 "● 当前 · {agent_label} · {}",
-                relative_time_text(g.ts, now_ms)
-            )
-        } else {
-            format!("{agent_label} · {}", relative_time_text(g.ts, now_ms))
+                relative_time_text(g.last_ts, now_ms)
+            ),
+            None => format!("{agent_label} · {}", relative_time_text(g.last_ts, now_ms)),
         };
         let sub_color = if current {
             byteui::theme::color::current().green
@@ -2732,7 +2788,7 @@ pub(crate) fn conversation_list_pane<'a>(
                     agent_dot_color(g.agent),
                 ),
                 column![
-                    lh(text(g.title.clone())
+                    lh(text(g.display_title.clone())
                         .size(byteui::theme::font::body())
                         .color(byteui::theme::color::current().cream)),
                     lh(text(sub)
@@ -2744,11 +2800,9 @@ pub(crate) fn conversation_list_pane<'a>(
             .spacing(8)
             .align_y(iced_widget::core::Alignment::Center),
         )
-        .on_press(Message::ConversationTurnGroupOpen(
-            g.path.clone(),
+        .on_press(Message::ConversationSessionOpen(
+            g.conversation_id.clone(),
             g.agent,
-            g.start_turn_index,
-            g.end_turn_index,
         ))
         .width(Length::Fill)
         .padding(10)
@@ -4111,24 +4165,24 @@ mod tests {
     #[test]
     fn review_webview_spec_empty_on_error_or_empty_entries() {
         let with_error = ReviewView {
-            source: ReviewSource::FileRange(PathBuf::from("/tmp/a.jsonl"), 0, 1),
+            source: ReviewSource::Conversation("a".into()),
             entries: vec![ReviewEntry::Human { text: "hi".into() }],
             error: Some("boom".into()),
             agent: AgentKind::Claude,
             nonce: 3,
-            prev_topic: None,
-            next_topic: None,
+            summary_title: None,
+            summary_text: None,
         };
         assert_eq!(review_webview_spec(Some(&with_error)), Vec::new());
 
         let empty_entries = ReviewView {
-            source: ReviewSource::FileRange(PathBuf::from("/tmp/a.jsonl"), 0, 1),
+            source: ReviewSource::Conversation("a".into()),
             entries: Vec::new(),
             error: None,
             agent: AgentKind::Claude,
             nonce: 3,
-            prev_topic: None,
-            next_topic: None,
+            summary_title: None,
+            summary_text: None,
         };
         assert_eq!(review_webview_spec(Some(&empty_entries)), Vec::new());
     }
@@ -4136,88 +4190,18 @@ mod tests {
     #[test]
     fn review_webview_spec_url_carries_nonce_and_is_visible() {
         let rv = ReviewView {
-            source: ReviewSource::FileRange(PathBuf::from("/tmp/a.jsonl"), 0, 1),
+            source: ReviewSource::Conversation("a".into()),
             entries: vec![ReviewEntry::Human { text: "hi".into() }],
             error: None,
             agent: AgentKind::Claude,
             nonce: 7,
-            prev_topic: None,
-            next_topic: None,
+            summary_title: None,
+            summary_text: None,
         };
         let specs = review_webview_spec(Some(&rv));
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].url, "dozer://review-trace/host.html?_r=7");
         assert!(specs[0].visible);
-    }
-
-    #[test]
-    fn adjacent_topic_previews_finds_same_session_neighbors_sorted_by_turn_index() {
-        let path = PathBuf::from("/tmp/s1.jsonl");
-        let other_path = PathBuf::from("/tmp/s2.jsonl");
-        let groups = vec![
-            TurnGroupRow {
-                path: path.clone(),
-                agent: AgentKind::Claude,
-                start_turn_index: 0,
-                end_turn_index: 1,
-                title: "第一话题".into(),
-                ts: 100,
-            },
-            TurnGroupRow {
-                path: path.clone(),
-                agent: AgentKind::Claude,
-                start_turn_index: 2,
-                end_turn_index: 3,
-                title: "第二话题".into(),
-                ts: 200,
-            },
-            TurnGroupRow {
-                path: path.clone(),
-                agent: AgentKind::Claude,
-                start_turn_index: 4,
-                end_turn_index: 5,
-                title: "第三话题".into(),
-                ts: 300,
-            },
-            // 同名文件名、不同 session(不同 path)不能被当邻居。
-            TurnGroupRow {
-                path: other_path,
-                agent: AgentKind::Claude,
-                start_turn_index: 6,
-                end_turn_index: 7,
-                title: "别的会话".into(),
-                ts: 400,
-            },
-        ];
-        let (prev, next) = adjacent_topic_previews(&groups, &path, 2, 3);
-        assert_eq!(
-            prev,
-            Some(TopicPreview {
-                label: "第一话题".into()
-            })
-        );
-        assert_eq!(
-            next,
-            Some(TopicPreview {
-                label: "第三话题".into()
-            })
-        );
-    }
-
-    #[test]
-    fn adjacent_topic_previews_none_at_session_boundaries() {
-        let path = PathBuf::from("/tmp/s1.jsonl");
-        let groups = vec![TurnGroupRow {
-            path: path.clone(),
-            agent: AgentKind::Claude,
-            start_turn_index: 0,
-            end_turn_index: 1,
-            title: "唯一话题".into(),
-            ts: 100,
-        }];
-        let (prev, next) = adjacent_topic_previews(&groups, &path, 0, 1);
-        assert_eq!(prev, None);
-        assert_eq!(next, None);
     }
 
     #[test]
@@ -4231,71 +4215,71 @@ mod tests {
         assert_eq!(conversation_visible_count(2), 3 * CONVERSATION_PAGE_SIZE);
     }
 
-    fn make_turn_group(title: &str, agent: AgentKind) -> TurnGroupRow {
-        TurnGroupRow {
-            path: PathBuf::from(format!("/tmp/{title}.jsonl")),
+    fn session_row(title: &str, agent: AgentKind) -> SessionRow {
+        SessionRow {
+            conversation_id: title.to_string(),
             agent,
-            start_turn_index: 0,
-            end_turn_index: 1,
-            title: title.to_string(),
-            ts: 0,
+            last_ts: 0,
+            display_title: title.to_string(),
+            summary: None,
+            summary_status: None,
         }
     }
 
     #[test]
-    fn filter_turn_groups_empty_query_and_no_agent_returns_all() {
+    fn filter_sessions_empty_query_and_no_agent_returns_all() {
         let rows = vec![
-            make_turn_group("修复登录 bug", AgentKind::Claude),
-            make_turn_group("重构解析器", AgentKind::Codebuddy),
+            session_row("修复登录 bug", AgentKind::Claude),
+            session_row("重构解析器", AgentKind::Codebuddy),
         ];
-        assert_eq!(filter_turn_groups(&rows, "", None).len(), 2);
+        assert_eq!(filter_sessions(&rows, "", None).len(), 2);
     }
 
     #[test]
-    fn filter_turn_groups_matches_title_case_insensitive_substring() {
+    fn filter_sessions_matches_title_case_insensitive_substring() {
         let rows = vec![
-            make_turn_group("Fix Login Bug", AgentKind::Claude),
-            make_turn_group("重构解析器", AgentKind::Codebuddy),
+            session_row("Fix Login Bug", AgentKind::Claude),
+            session_row("重构解析器", AgentKind::Codebuddy),
         ];
-        let filtered = filter_turn_groups(&rows, "login", None);
+        let filtered = filter_sessions(&rows, "login", None);
         assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].title, "Fix Login Bug");
+        assert_eq!(filtered[0].display_title, "Fix Login Bug");
     }
 
     #[test]
-    fn filter_turn_groups_filters_by_agent() {
+    fn filter_sessions_filters_by_agent() {
         let rows = vec![
-            make_turn_group("会话 A", AgentKind::Claude),
-            make_turn_group("会话 B", AgentKind::Codebuddy),
+            session_row("会话 A", AgentKind::Claude),
+            session_row("会话 B", AgentKind::Codebuddy),
         ];
-        let filtered = filter_turn_groups(&rows, "", Some(AgentKind::Codebuddy));
+        let filtered = filter_sessions(&rows, "", Some(AgentKind::Codebuddy));
         assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].title, "会话 B");
+        assert_eq!(filtered[0].display_title, "会话 B");
     }
 
     #[test]
-    fn filter_turn_groups_combines_query_and_agent() {
+    fn filter_sessions_combines_query_and_agent() {
         let rows = vec![
-            make_turn_group("修复登录 bug", AgentKind::Claude),
-            make_turn_group("修复登录 bug", AgentKind::Codebuddy),
+            session_row("修复登录 bug", AgentKind::Claude),
+            session_row("修复登录 bug", AgentKind::Codebuddy),
         ];
-        let filtered = filter_turn_groups(&rows, "登录", Some(AgentKind::Claude));
+        let filtered = filter_sessions(&rows, "登录", Some(AgentKind::Claude));
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].agent, AgentKind::Claude);
     }
 
     #[test]
-    fn filter_turn_groups_no_match_yields_empty() {
-        let rows = vec![make_turn_group("会话 A", AgentKind::Claude)];
-        assert!(filter_turn_groups(&rows, "不存在", None).is_empty());
+    fn filter_sessions_no_match_yields_empty() {
+        let rows = vec![session_row("会话 A", AgentKind::Claude)];
+        assert!(filter_sessions(&rows, "不存在", None).is_empty());
     }
 
     #[test]
     fn conversation_agents_present_dedups_and_orders_stably() {
         let rows = vec![
-            make_turn_group("a", AgentKind::Opencode),
-            make_turn_group("b", AgentKind::Claude),
-            make_turn_group("c", AgentKind::Claude),
+            session_row("a", AgentKind::Opencode),
+            session_row("b", AgentKind::Claude),
+            session_row("c", AgentKind::Claude),
         ];
         assert_eq!(
             conversation_agents_present(&rows),
@@ -4579,11 +4563,20 @@ mod tests {
 
     #[test]
     fn review_refresh_only_for_matching_session() {
-        use std::path::PathBuf;
         assert!(review_should_refresh_on_turn(&ReviewSource::Session(3), 3));
         assert!(!review_should_refresh_on_turn(&ReviewSource::Session(3), 4));
         assert!(!review_should_refresh_on_turn(
-            &ReviewSource::FileRange(PathBuf::from("/t/x.jsonl"), 0, 4),
+            &ReviewSource::Conversation("x".into()),
+            3
+        ));
+    }
+
+    #[test]
+    fn review_source_conversation_matches_conversation_id_not_tab() {
+        // Conversation 变体不该被 review_should_refresh_on_turn(只认
+        // Session(tab_id))误判为需要跟随终端回合刷新。
+        assert!(!review_should_refresh_on_turn(
+            &ReviewSource::Conversation("c1".into()),
             3
         ));
     }
