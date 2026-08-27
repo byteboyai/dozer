@@ -4,6 +4,7 @@
 use anyhow::{Context, Result};
 use dozer_core::protocol::{AgentKind, SessionSummaryPayload, SummaryStatus};
 use rusqlite::Connection;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -162,6 +163,51 @@ impl SessionSummaryStore {
             created_ts_ms: created_ts_ms as u64,
         }))
     }
+
+    /// 按 `conversation_id` 批量查总结,返回以 `conversation_id` 为键的 map。
+    /// 空输入返回空 map;某个 id 查不到就不出现在 map 里(调用方据此把该项
+    /// 判为"没有总结")。只 `prepare` 一次,避免"N 条会话 prepare N 次"
+    /// (同 `TranscriptStore::get_usage_summary_in` 的既有口径)。SQL 注入走
+    /// rusqlite 参数绑定,id 本身永远是占位符不是拼接。
+    pub fn get_many(
+        &self,
+        conversation_ids: &[String],
+    ) -> Result<HashMap<String, SessionSummaryPayload>> {
+        if conversation_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = conversation_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT session_id, agent_kind, conversation_id, title, summary, status, created_ts_ms
+             FROM session_summaries WHERE conversation_id IN ({placeholders})"
+        );
+        let conn = self.conn.lock().expect("db lock");
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(rusqlite::params_from_iter(conversation_ids))?;
+        let mut out = HashMap::new();
+        while let Some(row) = rows.next()? {
+            let agent_kind: String = row.get(1)?;
+            let status: String = row.get(5)?;
+            let created_ts_ms: i64 = row.get(6)?;
+            let payload = SessionSummaryPayload {
+                session_id: row.get(0)?,
+                agent_kind: agent_from_str(&agent_kind),
+                conversation_id: row.get(2)?,
+                title: row.get(3)?,
+                summary: row.get(4)?,
+                status: status_from_str(&status),
+                created_ts_ms: created_ts_ms as u64,
+            };
+            if let Some(id) = &payload.conversation_id {
+                out.insert(id.clone(), payload);
+            }
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -304,5 +350,56 @@ mod tests {
         let (title, summary) = heuristic_from_turns(&[]);
         assert_eq!(title, "(无对话记录)");
         assert_eq!(summary, "(无对话记录)");
+    }
+
+    #[test]
+    fn get_many_empty_input_returns_empty_map() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionSummaryStore::open(&dir.path().join("t.db")).unwrap();
+        assert!(store.get_many(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn get_many_batches_multiple_ids_partial_hit() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionSummaryStore::open(&dir.path().join("t.db")).unwrap();
+        let mut p1 = payload("s1");
+        p1.conversation_id = Some("c1".into());
+        let mut p2 = payload("s2");
+        p2.conversation_id = Some("c2".into());
+        store.record(&p1).unwrap();
+        store.record(&p2).unwrap();
+
+        let got = store
+            .get_many(&["c1".to_string(), "c2".to_string(), "c-missing".to_string()])
+            .unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got["c1"].session_id, "s1");
+        assert_eq!(got["c2"].session_id, "s2");
+        assert!(!got.contains_key("c-missing"));
+    }
+
+    #[test]
+    fn get_many_ignores_rows_with_null_conversation_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionSummaryStore::open(&dir.path().join("t.db")).unwrap();
+        let mut p = payload("s1");
+        p.conversation_id = None;
+        store.record(&p).unwrap();
+        // 查一个跟这行完全无关的 id 列表——不该因为库里存在 conversation_id
+        // 为 NULL 的行就出错或误命中。
+        assert!(store.get_many(&["c1".to_string()]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn get_many_ids_with_special_characters_are_parameter_bound_not_concatenated() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionSummaryStore::open(&dir.path().join("t.db")).unwrap();
+        let mut p = payload("s1");
+        // 含单引号的 id——若实现拼字符串而不是走参数绑定,这里会破坏 SQL。
+        p.conversation_id = Some("weird'id".into());
+        store.record(&p).unwrap();
+        let got = store.get_many(&["weird'id".to_string()]).unwrap();
+        assert_eq!(got.len(), 1);
     }
 }
