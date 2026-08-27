@@ -404,6 +404,12 @@ pub enum Request {
     GetSessionSummary {
         session_id: String,
     },
+    /// 关闭 tab 时触发"总结后再 kill":dozerd 立即返回 Ok,实际注入 prompt/
+    /// 轮询/超时兜底/kill 全部在后台异步完成,调用方不等待(spec
+    /// 2026-08-27)。
+    CloseWithSummary {
+        session_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -984,6 +990,13 @@ mod tests {
         let line = encode_line(&req);
         let back: Request = decode_line(&line).unwrap();
         assert_eq!(req, back);
+    }
+
+    #[test]
+    fn close_with_summary_request_roundtrips() {
+        let req = Request::CloseWithSummary { session_id: "s1".into() };
+        let line = encode_line(&req);
+        assert_eq!(decode_line::<Request>(&line).unwrap(), req);
     }
 
     #[test]
