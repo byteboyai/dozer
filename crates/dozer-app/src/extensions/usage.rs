@@ -140,44 +140,58 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
 /// 按天、按 agent 聚合的 token 合计（四项 token 加总，不细分 in/out/
 /// cache——见 spec"关键语义确认"）。只保留最近 `DAILY_CHART_WINDOW_DAYS`
 /// 天，不足这个天数不补占位空天，按 `day_index` 升序（最旧在前，最新在后，
-/// 图表从左到右自然是时间顺序）。
+/// 图表从左到右自然是时间顺序）。`totals` 只含这个项目实际用过的 agent
+/// (与 `agent_token_share` 同一套判定+顺序),不再是写死的 3/4 家——某个
+/// agent 这个项目压根没用过,就不该在柱状图里占一个永远是 0 的位置
+/// (2026-08-27 修正,原先固定 claude/codebuddy/opencode 三个字段,V8agent
+/// 完全进不了图,别的项目哪怕只用一家 agent 也照样画三根柱子)。同一个
+/// agent 在所有日期分组里 `totals` 的顺序保持一致,方便跨日对比同一根
+/// 柱子的颜色/位置。
 #[derive(Debug, Clone, PartialEq)]
 pub struct DayAgentTotals {
     pub day_index: i64,
     pub label: String,
-    pub claude: u64,
-    pub codebuddy: u64,
-    pub opencode: u64,
+    pub totals: Vec<(AgentKind, u64)>,
 }
 
 pub fn daily_totals_by_agent(
     rows: &[(ConversationMeta, ConversationUsage)],
 ) -> Vec<DayAgentTotals> {
     use std::collections::BTreeMap;
-    let mut by_day: BTreeMap<i64, (u64, u64, u64)> = BTreeMap::new();
+    let project_agents: Vec<AgentKind> = agent_token_share(rows)
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect();
+    if project_agents.is_empty() {
+        return Vec::new();
+    }
+    // 内层按 `project_agents` 里的下标(而不是 `AgentKind` 本身)分桶——
+    // `AgentKind` 没实现 `Ord`/`Hash`,当不了 `BTreeMap`/`HashMap` 的键;
+    // agent 数量本来就是个位数,线性查下标够用,不值得为此给协议层的
+    // `AgentKind` 加派生。
+    let mut by_day: BTreeMap<i64, Vec<u64>> = BTreeMap::new();
     for (meta, usage) in rows {
+        let Some(idx) = project_agents.iter().position(|&a| a == meta.agent) else {
+            continue;
+        };
         let day = day_index_from_ms(meta.modified_ms);
         let total =
             usage.tokens_in + usage.tokens_out + usage.tokens_cache_read + usage.tokens_cache_write;
-        let entry = by_day.entry(day).or_insert((0, 0, 0));
-        match meta.agent {
-            AgentKind::Claude => entry.0 += total,
-            AgentKind::Codebuddy => entry.1 += total,
-            AgentKind::Opencode => entry.2 += total,
-            AgentKind::Unknown | AgentKind::Codex | AgentKind::Kilo | AgentKind::V8agent => {}
-        }
+        let bucket = by_day
+            .entry(day)
+            .or_insert_with(|| vec![0; project_agents.len()]);
+        bucket[idx] += total;
     }
     let mut days: Vec<DayAgentTotals> = by_day
         .into_iter()
-        .map(|(day_index, (claude, codebuddy, opencode))| {
+        .map(|(day_index, bucket)| {
             // 年份在"近 15 天"这种短窗口的标签里用不上，解构时直接忽略。
             let (_, m, d) = civil_from_days(day_index);
+            let totals = project_agents.iter().copied().zip(bucket).collect();
             DayAgentTotals {
                 day_index,
                 label: format!("{m:02}/{d:02}"),
-                claude,
-                codebuddy,
-                opencode,
+                totals,
             }
         })
         .collect();
@@ -603,11 +617,7 @@ fn day_tooltip_bubble(
             .color(byteui::theme::color::current().cream),
     ]
     .spacing(4);
-    for (agent, value) in [
-        (AgentKind::Claude, day.claude),
-        (AgentKind::Codebuddy, day.codebuddy),
-        (AgentKind::Opencode, day.opencode),
-    ] {
+    for &(agent, value) in &day.totals {
         if value == 0 {
             continue;
         }
@@ -664,24 +674,30 @@ fn bar_chart(
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let max_total = days
         .iter()
-        .map(|d| d.claude.max(d.codebuddy).max(d.opencode))
+        .flat_map(|d| d.totals.iter().map(|(_, v)| *v))
         .max()
         .unwrap_or(1)
         .max(1);
 
-    // 每天内部并排出 3 根(Claude/CodeBuddy/OpenCode)各自的柱子,组与组之间
-    // 间隔更大,agent 相邻贴得更近,方便"同日横向对比 + 跨日纵向看趋势"
-    // (2026-08-27 由"每日一根堆叠柱"改为分组柱状图)。
+    // 每天内部并排出这个项目实际用过的 agent 各自的柱子(`d.totals` 已经
+    // 是动态集合,不再写死 3 根——2026-08-27 修正,原先固定
+    // Claude/CodeBuddy/OpenCode 三根,只用一家 agent 的项目也会画出两根
+    // 常年 0 的柱子),组与组之间间隔更大,agent 相邻贴得更近,方便
+    // "同日横向对比 + 跨日纵向看趋势"(2026-08-27 由"每日一根堆叠柱"改为
+    // 分组柱状图)。颜色统一走 `agent_dot_color`,不再在这里单独维护一份
+    // cyan/purple/green 映射。
     let mut groups = iced_widget::row![].spacing(8);
     for d in days {
         let scale = BAR_MAX_HEIGHT / max_total as f32;
-        let day_group = iced_widget::row![
-            agent_bar(d.claude, scale, byteui::theme::color::current().cyan),
-            agent_bar(d.codebuddy, scale, byteui::theme::color::current().purple),
-            agent_bar(d.opencode, scale, byteui::theme::color::current().green),
-        ]
-        .spacing(3)
-        .align_y(iced_widget::core::alignment::Vertical::Bottom);
+        let mut day_group = iced_widget::row![].spacing(3);
+        for &(agent, value) in &d.totals {
+            day_group = day_group.push(agent_bar(
+                value,
+                scale,
+                crate::workspace::agent_dot_color(agent),
+            ));
+        }
+        let day_group = day_group.align_y(iced_widget::core::alignment::Vertical::Bottom);
 
         let col = column![
             container(day_group)
@@ -1033,6 +1049,14 @@ mod tests {
         }
     }
 
+    fn total_for(day: &DayAgentTotals, agent: AgentKind) -> u64 {
+        day.totals
+            .iter()
+            .find(|(a, _)| *a == agent)
+            .map(|(_, v)| *v)
+            .unwrap_or(0)
+    }
+
     #[test]
     fn daily_totals_by_agent_buckets_by_day_and_sums_per_agent() {
         // day 20672 = 2026-08-07 00:00:00 UTC 起的毫秒;+3600_000 还在同一天。
@@ -1055,23 +1079,52 @@ mod tests {
         let days = daily_totals_by_agent(&rows);
         assert_eq!(days.len(), 2, "只返回实际有数据的两天,不补空天占位");
         assert_eq!(days[0].day_index, 20_672);
-        assert_eq!(days[0].claude, 15, "同一天两条 Claude 会话的 token 要累加");
-        assert_eq!(days[0].codebuddy, 2);
-        assert_eq!(days[0].opencode, 0);
+        assert_eq!(
+            total_for(&days[0], AgentKind::Claude),
+            15,
+            "同一天两条 Claude 会话的 token 要累加"
+        );
+        assert_eq!(total_for(&days[0], AgentKind::Codebuddy), 2);
+        assert_eq!(
+            total_for(&days[0], AgentKind::Opencode),
+            0,
+            "Opencode 这个项目里用过(次日有),当天没用则该 agent 那天是 0,不是不出现"
+        );
         assert_eq!(days[1].day_index, 20_673);
-        assert_eq!(days[1].opencode, 7);
+        assert_eq!(total_for(&days[1], AgentKind::Opencode), 7);
         assert_eq!(days[0].label, "08/07");
     }
 
     #[test]
-    fn daily_totals_ignores_agents_without_dedicated_bucket() {
-        // Codex/Kilo 目前没有专属的 DayAgentTotals 字段（这两家的
-        // 用量还进不了统计，见计划 Global Constraints），跟 Unknown 一样
-        // 被忽略，不能 panic。
-        let rows = vec![(meta_at(AgentKind::Codex, 0), usage_with_tokens(99))];
+    fn daily_totals_by_agent_only_includes_agents_actually_used_in_project() {
+        // 这个项目只用过 Claude,不该在图里给从没出现过的 Codebuddy/Opencode
+        // 各占一根常年 0 的柱子(2026-08-27 修正的真实 bug)。
+        let rows = vec![(meta_at(AgentKind::Claude, 0), usage_with_tokens(10))];
         let days = daily_totals_by_agent(&rows);
         assert_eq!(days.len(), 1);
-        assert_eq!(days[0].claude + days[0].codebuddy + days[0].opencode, 0);
+        assert_eq!(
+            days[0].totals,
+            vec![(AgentKind::Claude, 10)],
+            "只应该出现 Claude 一项,不该混进 Codebuddy/Opencode 的 0 值占位"
+        );
+    }
+
+    #[test]
+    fn daily_totals_by_agent_includes_v8agent() {
+        let rows = vec![(meta_at(AgentKind::V8agent, 0), usage_with_tokens(3))];
+        let days = daily_totals_by_agent(&rows);
+        assert_eq!(days.len(), 1);
+        assert_eq!(total_for(&days[0], AgentKind::V8agent), 3);
+    }
+
+    #[test]
+    fn daily_totals_ignores_agents_without_dedicated_bucket() {
+        // Codex/Kilo 目前不产出可统计的用量数据（见计划 Global
+        // Constraints），跟 Unknown 一样被忽略，不能 panic,也不产生
+        // 任何一天的记录(没有任何可展示的 agent,图表应该整体不渲染)。
+        let rows = vec![(meta_at(AgentKind::Codex, 0), usage_with_tokens(99))];
+        let days = daily_totals_by_agent(&rows);
+        assert!(days.is_empty(), "没有任何已知 agent 有数据时不该产出天记录");
     }
 
     #[test]
