@@ -83,6 +83,19 @@ struct ReviewSnapshot<'a> {
     summary_text: Option<String>,
 }
 
+/// `Message::ReviewLoaded` 落地新一页回合时,决定是替换还是追加进已有
+/// `entries`。`append == true`("加载更多")必须真的累加,不能让调用方
+/// 在这一步完成之前就拿刚到手的这一页去建 webview 快照——那样会把之前
+/// 已经展示的内容整个换掉,只剩最新这一页(2026-08-27 修正的真实 bug,
+/// 抽成纯函数方便 headless 单测覆盖这条语义,不依赖 App 级测试夹具)。
+fn merge_review_entries(existing: &mut Vec<ReviewEntry>, new: Vec<ReviewEntry>, append: bool) {
+    if append {
+        existing.extend(new);
+    } else {
+        *existing = new;
+    }
+}
+
 /// 工作区 11 个面板的统一标识——workspace 图标栏拖拽换栏功能
 /// (见 `2026-08-19-rail-panel-drag-relocation-design.md`)的面板类型。
 /// 由原左栏(7)+ 右栏(4)两个枚举合并而来,variant 名字逐一沿用,
@@ -4025,8 +4038,9 @@ impl App {
                                 // `static`,过期/乱序结果也会无条件覆盖)的
                                 // 关键区别,过期加载结果到这里已经被
                                 // 上面的守卫挡在外面,不会再污染快照。
+                                merge_review_entries(&mut rv.entries, entries, append);
                                 let snapshot = ReviewSnapshot {
-                                    entries: &entries,
+                                    entries: &rv.entries,
                                     agent_label: rv.agent.label(),
                                     summary_title: rv.summary_title.clone(),
                                     summary_text: rv.summary_text.clone(),
@@ -4035,11 +4049,6 @@ impl App {
                                 *ws.review_snapshot.lock().expect("review snapshot 锁") =
                                     Some(json);
                                 rv.nonce = nonce;
-                                if append {
-                                    rv.entries.extend(entries);
-                                } else {
-                                    rv.entries = entries;
-                                }
                                 rv.error = None;
                             }
                             Err(e) => rv.error = Some(e),
@@ -8335,6 +8344,48 @@ fn ssh_empty_state<'a>() -> Element<'a, Message, iced_widget::Theme, iced_render
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merge_review_entries_append_true_accumulates_instead_of_replacing() {
+        let mut existing = vec![ReviewEntry::Human {
+            text: "第一页第一条".into(),
+        }];
+        let new = vec![ReviewEntry::Human {
+            text: "第二页第一条".into(),
+        }];
+        merge_review_entries(&mut existing, new, true);
+        assert_eq!(existing.len(), 2, "加载更多应该追加,不该丢掉已有内容");
+        assert_eq!(
+            existing[0],
+            ReviewEntry::Human {
+                text: "第一页第一条".into()
+            }
+        );
+        assert_eq!(
+            existing[1],
+            ReviewEntry::Human {
+                text: "第二页第一条".into()
+            }
+        );
+    }
+
+    #[test]
+    fn merge_review_entries_append_false_replaces() {
+        let mut existing = vec![ReviewEntry::Human {
+            text: "旧内容".into(),
+        }];
+        let new = vec![ReviewEntry::Human {
+            text: "首次加载的新内容".into(),
+        }];
+        merge_review_entries(&mut existing, new, false);
+        assert_eq!(existing.len(), 1);
+        assert_eq!(
+            existing[0],
+            ReviewEntry::Human {
+                text: "首次加载的新内容".into()
+            }
+        );
+    }
 
     fn loaded_slot(marker: &str) -> WorkspaceSlot {
         let mut ws = Workspace::empty_for_project_placeholder();
