@@ -45,6 +45,26 @@ impl AgentKind {
     }
 }
 
+/// 一次会话总结的产出状态:agent 真的经 dozer-mcp 交回,还是超时后由
+/// dozerd 从已摄取对话数据算的启发式兜底(spec 2026-08-27)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SummaryStatus {
+    AiGenerated,
+    HeuristicFallback,
+}
+
+/// 一份持久化的会话总结(`dozerd` 的 `session_summaries` 表一行)。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionSummaryPayload {
+    pub session_id: String,
+    pub agent_kind: AgentKind,
+    pub title: String,
+    pub summary: String,
+    pub status: SummaryStatus,
+    pub created_ts_ms: u64,
+}
+
 /// 单个历史会话(=一份 agent transcript 文件)的索引摘要;由 dozerd 的
 /// `TranscriptStore` 摄取落库维护(spec 2026-08-20)。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -372,6 +392,18 @@ pub enum Request {
     GetPreviewContext {
         project_id: i64,
     },
+    /// `dozer-mcp` 的写工具提交一份会话总结;`dozerd` 只做"session_id 是否
+    /// 存在于 registry"的存在性检查,不做权限校验(与 `Write`/`HookEvent`
+    /// 同等信任本机调用方)。主键 `session_id`,重复提交后到覆盖先到。
+    RecordSessionSummary {
+        session_id: String,
+        title: String,
+        summary: String,
+    },
+    /// 查询某会话是否已有总结(`None` 表示尚未生成或本会话不适用)。
+    GetSessionSummary {
+        session_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -466,6 +498,10 @@ pub enum Reply {
     /// 或该 `project_id` 从未收到过推送。
     PreviewContext {
         context: Option<PreviewContext>,
+    },
+    /// `GetSessionSummary` 应答。
+    SessionSummary {
+        summary: Option<SessionSummaryPayload>,
     },
 }
 
@@ -924,6 +960,55 @@ mod tests {
             serde_json::from_str::<AgentKind>("\"claude\"").unwrap(),
             AgentKind::Claude
         );
+    }
+
+    #[test]
+    fn summary_status_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&SummaryStatus::AiGenerated).unwrap(),
+            "\"ai_generated\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SummaryStatus::HeuristicFallback).unwrap(),
+            "\"heuristic_fallback\""
+        );
+    }
+
+    #[test]
+    fn record_session_summary_request_roundtrips() {
+        let req = Request::RecordSessionSummary {
+            session_id: "s1".into(),
+            title: "改了个函数".into(),
+            summary: "用户让改 README,agent 改完了".into(),
+        };
+        let line = encode_line(&req);
+        let back: Request = decode_line(&line).unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[test]
+    fn get_session_summary_reply_roundtrips_with_payload() {
+        let reply = Reply::SessionSummary {
+            summary: Some(SessionSummaryPayload {
+                session_id: "s1".into(),
+                agent_kind: AgentKind::Claude,
+                title: "t".into(),
+                summary: "s".into(),
+                status: SummaryStatus::AiGenerated,
+                created_ts_ms: 42,
+            }),
+        };
+        let line = encode_line(&reply);
+        let back: Reply = decode_line(&line).unwrap();
+        assert_eq!(reply, back);
+    }
+
+    #[test]
+    fn get_session_summary_reply_roundtrips_with_none() {
+        let reply = Reply::SessionSummary { summary: None };
+        let line = encode_line(&reply);
+        let back: Reply = decode_line(&line).unwrap();
+        assert_eq!(reply, back);
     }
 
     #[test]
