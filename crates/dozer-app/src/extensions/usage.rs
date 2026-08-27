@@ -204,6 +204,24 @@ pub fn agent_token_share(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<
         .collect()
 }
 
+/// 整个项目范围按 agent 的"回合"数合计——口径沿用用量面板的"回合"
+/// 即 human 发言数（2026-08-27 调整，见 dozerd `get_usage_summary_in`）。
+/// 只返回实际有回合的 agent，不产生全零占位记录。供 Agent 会话统计饼图用。
+pub fn agent_turn_share(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<(AgentKind, u64)> {
+    const ORDER: [AgentKind; 3] = [AgentKind::Claude, AgentKind::Codebuddy, AgentKind::Opencode];
+    ORDER
+        .into_iter()
+        .filter_map(|kind| {
+            let total: u64 = rows
+                .iter()
+                .filter(|(meta, _)| meta.agent == kind)
+                .map(|(_, u)| u.turns as u64)
+                .sum();
+            (total > 0).then_some((kind, total))
+        })
+        .collect()
+}
+
 pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
     match msg {
         Message::Loaded(_, rows) => {
@@ -279,14 +297,41 @@ pub fn view<'a>(
         content = content.push(home_section_head("项目用量统计"));
         content = content.push(project_summary_boxes(&aggregate(&usages)));
 
-        let share = agent_token_share(rows);
-        if !share.is_empty() {
+        let token_share = agent_token_share(rows);
+        let turn_share = agent_turn_share(rows);
+        if !token_share.is_empty() || !turn_share.is_empty() {
             content = content.push(home_section_head("Agent 用量统计"));
-            content = content.push(
-                iced_widget::row![pie_chart(&share), chart_legend(&share)]
-                    .spacing(20)
-                    .align_y(iced_widget::core::Alignment::Center),
-            );
+            // 左侧是"会话·回合"统计饼图(按 human 发言数),右侧是 token 占比
+            // 饼图——各自配一块图例并排(2026-08-27 新增回合饼图)。
+            let mut agent_row = iced_widget::row![]
+                .spacing(32)
+                .align_y(iced_widget::core::Alignment::Center);
+            if !turn_share.is_empty() {
+                agent_row = agent_row.push(
+                    iced_widget::row![pie_chart(&turn_share), chart_label("回合", &turn_share)]
+                        .spacing(16)
+                        .align_y(iced_widget::core::Alignment::Center),
+                );
+            }
+            if !turn_share.is_empty() && !token_share.is_empty() {
+                agent_row = agent_row.push(
+                    container(iced_widget::Space::new())
+                        .width(Length::Fixed(1.0))
+                        .height(Length::Fill)
+                        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+                            background: Some(byteui::theme::color::current().border.into()),
+                            ..iced_widget::container::Style::default()
+                        }),
+                );
+            }
+            if !token_share.is_empty() {
+                agent_row = agent_row.push(
+                    iced_widget::row![pie_chart(&token_share), chart_legend(&token_share)]
+                        .spacing(16)
+                        .align_y(iced_widget::core::Alignment::Center),
+                );
+            }
+            content = content.push(agent_row);
         }
 
         let days = daily_totals_by_agent(rows);
@@ -578,55 +623,53 @@ fn day_tooltip_bubble(
     container(rows).padding([6, 8]).into()
 }
 
+/// 单根 agent 柱:柱身上方叠一个小数字标注(2026-08-27 分组柱状图起,
+/// 每个 agent 一根独立柱子、自带数值,不再只在天量汇总那一根上标)。
+fn agent_bar(
+    value: u64,
+    scale: f32,
+    color: Color,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    column![
+        text(format_count(value))
+            .size(8.0)
+            .color(byteui::theme::color::current().dim)
+            .font(iced_widget::core::Font::MONOSPACE),
+        bar_segment(value as f32 * scale, color, true),
+    ]
+    .spacing(2)
+    .align_x(iced_widget::core::alignment::Horizontal::Center)
+    .into()
+}
+
 fn bar_chart(
     days: &[DayAgentTotals],
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let max_total = days
         .iter()
-        .map(|d| d.claude + d.codebuddy + d.opencode)
+        .map(|d| d.claude.max(d.codebuddy).max(d.opencode))
         .max()
         .unwrap_or(1)
         .max(1);
 
-    // 间距同 `BAR_WIDTH` 一起收窄(10→6),给 15 根柱子腾地方。
-    let mut bars = iced_widget::row![].spacing(6);
+    // 每天内部并排出 3 根(Claude/CodeBuddy/OpenCode)各自的柱子,组与组之间
+    // 间隔更大,agent 相邻贴得更近,方便"同日横向对比 + 跨日纵向看趋势"
+    // (2026-08-27 由"每日一根堆叠柱"改为分组柱状图)。
+    let mut groups = iced_widget::row![].spacing(8);
     for d in days {
-        let total = d.claude + d.codebuddy + d.opencode;
         let scale = BAR_MAX_HEIGHT / max_total as f32;
-        // 自底向上固定顺序:Claude 贴基线(直角)→ CodeBuddy → OpenCode 顶部(圆角)。
-        let segments = column![
-            bar_segment(
-                d.opencode as f32 * scale,
-                byteui::theme::color::current().green,
-                true
-            ),
-            bar_segment(
-                d.codebuddy as f32 * scale,
-                byteui::theme::color::current().purple,
-                false
-            ),
-            bar_segment(
-                d.claude as f32 * scale,
-                byteui::theme::color::current().cyan,
-                false
-            ),
+        let day_group = iced_widget::row![
+            agent_bar(d.claude, scale, byteui::theme::color::current().cyan),
+            agent_bar(d.codebuddy, scale, byteui::theme::color::current().purple),
+            agent_bar(d.opencode, scale, byteui::theme::color::current().green),
         ]
-        .spacing(2);
+        .spacing(3)
+        .align_y(iced_widget::core::alignment::Vertical::Bottom);
 
         let col = column![
-            container(
-                column![
-                    text(format_count(total))
-                        .size(8.0)
-                        .color(byteui::theme::color::current().dim)
-                        .font(iced_widget::core::Font::MONOSPACE),
-                    segments,
-                ]
-                .spacing(2)
-                .align_x(iced_widget::core::alignment::Horizontal::Center),
-            )
-            .height(Length::Fixed(GRID_CANVAS_HEIGHT))
-            .align_y(iced_widget::core::alignment::Vertical::Bottom),
+            container(day_group)
+                .height(Length::Fixed(GRID_CANVAS_HEIGHT))
+                .align_y(iced_widget::core::alignment::Vertical::Bottom),
             text(d.label.clone())
                 .size(8.0)
                 .color(byteui::theme::color::current().dim)
@@ -639,7 +682,7 @@ fn bar_chart(
             .gap(6)
             .style(icons::tooltip_bubble_style());
 
-        bars = bars.push(hoverable);
+        groups = groups.push(hoverable);
     }
 
     // 网格线画布叠在柱子行后面(`stack!`):柱子行整体右移 `GRID_LABEL_GUTTER`
@@ -647,7 +690,7 @@ fn bar_chart(
     // 才开始画,两者不会互相遮挡。
     stack![
         grid_lines_canvas(max_total),
-        container(bars).padding(iced_widget::core::Padding {
+        container(groups).padding(iced_widget::core::Padding {
             top: 0.0,
             right: 0.0,
             bottom: 0.0,
@@ -819,6 +862,23 @@ fn chart_legend(
         });
     col = col.push(column![divider, total_row].spacing(10));
     col.into()
+}
+
+/// 在 `chart_legend` 上方加一行小节标题(如"回合"),用来区分同一区里
+/// 并排的多个饼图(2026-08-27 新增回合饼图时:左侧回合、右侧 token,各有
+/// 自己的标题避免图例数字混看)。
+fn chart_label(
+    title: &'static str,
+    share: &[(AgentKind, u64)],
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    column![
+        text(title)
+            .size(byteui::theme::font::caption())
+            .color(byteui::theme::color::current().dim),
+        chart_legend(share),
+    ]
+    .spacing(6)
+    .into()
 }
 
 #[cfg(test)]
@@ -1028,6 +1088,29 @@ mod tests {
         assert_eq!(
             share,
             vec![(AgentKind::Claude, 15), (AgentKind::Codebuddy, 3)]
+        );
+    }
+
+    fn usage_with_turns(turns: u32) -> ConversationUsage {
+        ConversationUsage {
+            turns,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn agent_turn_share_sums_human_turns_per_agent_and_skips_empty() {
+        let rows = vec![
+            (meta(AgentKind::Claude, "a"), usage_with_turns(3)),
+            (meta(AgentKind::Claude, "b"), usage_with_turns(2)),
+            (meta(AgentKind::Codebuddy, "c"), usage_with_turns(5)),
+            // Opencode 有会话但零回合——不产生占位,也不进图例。
+            (meta(AgentKind::Opencode, "d"), usage_with_turns(0)),
+        ];
+        let share = agent_turn_share(&rows);
+        assert_eq!(
+            share,
+            vec![(AgentKind::Claude, 5), (AgentKind::Codebuddy, 5)]
         );
     }
 
