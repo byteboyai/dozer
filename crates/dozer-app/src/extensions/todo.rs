@@ -597,7 +597,7 @@ impl WorkspaceState {
         self.editing_content = None;
     }
 
-    /// 失焦退出任务内容编辑态并**写盘保存**(与回车 `ContentSubmit` 同一条
+    /// 失焦退出任务内容编辑态并**写盘保存**(与回车提交同一条
     /// `commit_content_edit` 落盘路径):改动且非空才写,否则丢弃。
     /// `App::set_todo_content_focused` 在真实焦点从真变假那一刻走这条,让
     /// "点别处"也等价于"按回车提交",不丢用户刚改的任务文字(见用户反馈:
@@ -809,11 +809,10 @@ pub enum Message {
     ContentEditStart(usize),
     /// 内容编辑框草稿变化(iced `text_editor::on_action`,真正的 `Action`
     /// 由组件自己产生,应用层只负责 `content.perform(action)` 落地——光标/
-    /// 选区/IME 全部交给 iced,与 `AddEdit` 同构)。
+    /// 选区/IME 全部交给 iced,与 `AddEdit` 同构)。回车(`Edit::Enter`)在
+    /// update 里被拦截为提交:落盘改写任务文字,与失焦落盘共用
+    /// `commit_content_edit` 一条路径。
     ContentEdit(iced_widget::text_editor::Action),
-    /// 回车提交:落盘改写任务文字(与失焦落盘共用 `commit_content_edit`
-    /// 一条路径)。
-    ContentSubmit,
     /// 点 MARKDOWN 视图主体 → 进入整文件编辑态(`markdown_editing` 置位)。
     MarkdownEditStart,
     /// MARKDOWN 编辑态下的按键:`Text`(含回车翻成的 `"\n"`)/`Backspace`
@@ -981,8 +980,8 @@ fn commit_add_task(ws_state: &mut WorkspaceState, project_path: &std::path::Path
     ws_state.start_flash(flash_idx);
 }
 
-/// `ContentSubmit` 的写盘逻辑:把草稿改写进 `.dozer/todo.md` 里对应
-/// 的任务行(文本变了才写),并刷新列表。空白草稿(trim 后)丢弃不写。
+/// 任务内容提交(`ContentEdit` 回车的写盘逻辑):把草稿改写进 `.dozer/todo.md`
+/// 里对应的任务行(文本变了才写),并刷新列表。空白草稿(trim 后)丢弃不写。
 fn commit_content_edit(ws_state: &mut WorkspaceState, project_path: &std::path::Path) {
     let Some((idx, draft)) = ws_state.editing_content.clone() else {
         return;
@@ -1077,7 +1076,7 @@ fn first_weekday_of_month(y: i32, m: u32) -> u32 {
 }
 
 /// 处理除 `DispatchToExisting` 之外的消息,统一接收两块
-/// 状态——`Toggle`/`CalendarPick`/`ContentSubmit` 需要读写
+/// 状态——`Toggle`/`CalendarPick`/`ContentEdit` 需要读写
 /// `AppState`(不只是 Git Log/浏览器试点里"只有派发类消息碰跨领域状态"
 /// 那么简单,写计划前重新核对现有代码才发现这点)。
 pub fn update(
@@ -1267,11 +1266,20 @@ pub fn update(
             ws_state.content_edit_focus_pending = true;
         }
         Message::ContentEdit(action) => {
+            // 内容编辑器内回车=提交(与失焦落盘共用 `commit_content_edit`):
+            // `text_editor` 把 Enter 报成 `Edit::Enter`,在这里就地落盘,不再
+            // 走单独的 `ContentSubmit` 消息(update() 无返回值,无法重发消息)。
+            if matches!(
+                action,
+                iced_widget::text_editor::Action::Edit(iced_widget::text_editor::Edit::Enter)
+            ) {
+                commit_content_edit(ws_state, project_path);
+                return;
+            }
             if let Some((_, content)) = ws_state.editing_content.as_mut() {
                 content.perform(action);
             }
         }
-        Message::ContentSubmit => commit_content_edit(ws_state, project_path),
         Message::MarkdownEditStart => {
             let path = todo_path(project_path);
             ws_state.markdown_draft = std::fs::read_to_string(&path).unwrap_or_default();
@@ -3491,10 +3499,13 @@ mod tests {
             1,
             &root,
         );
+        // 回车提交:`text_editor` 报 `Edit::Enter`,`update` 就地落盘。
         update(
             &mut ws_state,
             &mut app_state,
-            Message::ContentSubmit,
+            Message::ContentEdit(iced_widget::text_editor::Action::Edit(
+                iced_widget::text_editor::Edit::Enter,
+            )),
             1,
             &root,
         );
