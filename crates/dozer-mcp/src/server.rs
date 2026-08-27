@@ -18,6 +18,23 @@ pub struct DozerMcpServer {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct NoParams {}
 
+const SUMMARY_TITLE_MAX_CHARS: usize = 200;
+const SUMMARY_TEXT_MAX_CHARS: usize = 8000;
+
+fn truncate_chars(s: String, max: usize) -> String {
+    if s.chars().count() <= max {
+        s
+    } else {
+        s.chars().take(max).collect()
+    }
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SubmitSessionSummaryParams {
+    pub title: String,
+    pub summary: String,
+}
+
 #[tool_router(server_handler)]
 impl DozerMcpServer {
     pub fn new(client: Client, session_id: String) -> Self {
@@ -64,6 +81,24 @@ impl DozerMcpServer {
             }
             Err(e) => Err(McpError::internal_error(format!("{e}"), None)),
         }
+    }
+
+    #[tool(
+        description = "提交本次会话的总结:一个简短标题和一段摘要。仅在被要求总结当前会话时调用一次,不要在其他场景主动调用。"
+    )]
+    pub async fn submit_session_summary(
+        &self,
+        Parameters(SubmitSessionSummaryParams { title, summary }): Parameters<
+            SubmitSessionSummaryParams,
+        >,
+    ) -> Result<CallToolResult, McpError> {
+        let title = truncate_chars(title, SUMMARY_TITLE_MAX_CHARS);
+        let summary = truncate_chars(summary, SUMMARY_TEXT_MAX_CHARS);
+        self.client
+            .record_session_summary(&self.session_id, &title, &summary)
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        Ok(CallToolResult::structured(json!({ "recorded": true })))
     }
 }
 
