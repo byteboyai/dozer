@@ -387,3 +387,77 @@ async fn record_and_get_session_summary_roundtrip() {
     }
     let _ = s.kill();
 }
+
+#[tokio::test]
+async fn close_with_summary_kills_session_after_ai_summary_recorded() {
+    let sock = std::env::temp_dir().join(format!("dzsum-{}.sock", uuid::Uuid::new_v4()));
+    let registry = Arc::new(SessionRegistry::new());
+    let store = test_store();
+    let projects = test_projects();
+    let bookmarks = test_bookmarks();
+    let transcripts = test_transcripts();
+    let session_summaries = test_session_summaries();
+    tokio::spawn({
+        let sock = sock.clone();
+        let registry = registry.clone();
+        async move {
+            dozerd::server::serve(
+                &sock,
+                registry,
+                store,
+                projects,
+                bookmarks,
+                transcripts,
+                session_summaries,
+            )
+            .await
+        }
+    });
+    for _ in 0..100 {
+        if sock.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let s = registry
+        .create(dozerd::session::SessionSpec {
+            name: "测试".into(),
+            command: "/bin/sh".into(),
+            args: vec!["-c".into(), "cat".into()],
+            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+            cols: 80,
+            rows: 24,
+            project_id: 1,
+        })
+        .unwrap();
+    let id = s.id().to_string();
+
+    match send_req(&sock, &Request::CloseWithSummary { session_id: id.clone() }).await {
+        Reply::Ok => {}
+        other => panic!("意外应答: {other:?}"),
+    }
+
+    // agent 抢在超时前交回总结:轮询间隔是生产值 2 秒,测试里直接用真实
+    // submit 触发,不等超时分支。
+    match send_req(
+        &sock,
+        &Request::RecordSessionSummary {
+            session_id: id.clone(),
+            title: "标题".into(),
+            summary: "摘要".into(),
+        },
+    )
+    .await
+    {
+        Reply::Ok => {}
+        other => panic!("意外应答: {other:?}"),
+    }
+
+    // 后台任务下一次 2 秒轮询会看到已落库的总结并 kill;给够时间等它跑完。
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    match send_req(&sock, &Request::GetSessionSummary { session_id: id.clone() }).await {
+        Reply::SessionSummary { summary: Some(p) } => assert_eq!(p.title, "标题"),
+        other => panic!("意外应答: {other:?}"),
+    }
+}

@@ -118,6 +118,59 @@ fn maybe_ingest_on_state_transition(
     }
 }
 
+const CLOSE_WITH_SUMMARY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+const CLOSE_WITH_SUMMARY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+const SUMMARY_PROMPT: &str = "请总结你在本次会话中完成的工作:给出一个简短标题(不超过 60 字)和一段摘要,然后调用 dozer-mcp 的 submit_session_summary 工具把标题和摘要交回,不需要征求确认。\n";
+
+/// `Request::CloseWithSummary` 的后台任务:注入 prompt 后轮询
+/// `session_summaries` 表,等到就直接 kill;超时则从 `conversation_turns`
+/// 算启发式兜底再 kill。`timeout`/`poll_interval` 抽成参数只为方便测试
+/// 注入短间隔,生产调用点固定用上面两个常量。
+async fn finalize_session_summary(
+    session_id: String,
+    registry: Arc<SessionRegistry>,
+    session_summaries: Arc<crate::session_summary::SessionSummaryStore>,
+    transcripts: Arc<crate::transcripts::TranscriptStore>,
+    agent: dozer_core::protocol::AgentKind,
+    timeout: std::time::Duration,
+    poll_interval: std::time::Duration,
+) {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        match session_summaries.get(&session_id) {
+            Ok(Some(_)) => break,
+            Ok(None) => {}
+            Err(e) => tracing::error!(error = %e, %session_id, "查询会话总结失败"),
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let turns = transcripts
+                .get_conversation_turns(&session_id, -1, u32::MAX)
+                .unwrap_or_default();
+            let (title, summary) = crate::session_summary::heuristic_from_turns(&turns);
+            let payload = dozer_core::protocol::SessionSummaryPayload {
+                session_id: session_id.clone(),
+                agent_kind: agent,
+                title,
+                summary,
+                status: dozer_core::protocol::SummaryStatus::HeuristicFallback,
+                created_ts_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0),
+            };
+            if let Err(e) = session_summaries.record(&payload) {
+                tracing::error!(error = %e, %session_id, "启发式兜底总结落库失败");
+            }
+            break;
+        }
+        tokio::time::sleep(poll_interval).await;
+    }
+    if let Err(e) = registry.kill(&session_id) {
+        tracing::warn!(error = %e, %session_id, "总结后关闭会话失败(可能已经死亡)");
+    }
+}
+
 /// spec P1e D6：hook 事件名 → 四态映射；未知事件不改状态。
 pub fn agent_state_for(event: &str) -> Option<dozer_core::protocol::AgentState> {
     use dozer_core::protocol::AgentState::*;
@@ -395,6 +448,28 @@ async fn handle_conn(
                                 },
                             }
                         }
+
+                        Request::CloseWithSummary { session_id } => {
+                            match registry.get(&session_id) {
+                                None => Reply::Error { message: format!("会话不存在: {session_id}") },
+                                Some(s) => {
+                                    let agent = s.info().agent;
+                                    if let Err(e) = s.write(SUMMARY_PROMPT.as_bytes()) {
+                                        tracing::warn!(error = %e, %session_id, "注入总结 prompt 失败");
+                                    }
+                                    tokio::spawn(finalize_session_summary(
+                                        session_id.clone(),
+                                        registry.clone(),
+                                        session_summaries.clone(),
+                                        transcripts.clone(),
+                                        agent,
+                                        CLOSE_WITH_SUMMARY_TIMEOUT,
+                                        CLOSE_WITH_SUMMARY_POLL_INTERVAL,
+                                    ));
+                                    Reply::Ok
+                                }
+                            }
+                        }
                     },
                 };
                 w.write_all(encode_line(&reply).as_bytes()).await?;
@@ -593,5 +668,105 @@ mod tests {
                 .is_empty(),
             "同态重复不该触发摄取"
         );
+    }
+
+    #[tokio::test]
+    async fn finalize_session_summary_short_circuits_when_summary_already_recorded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let registry = Arc::new(crate::registry::SessionRegistry::new());
+        let session_summaries = Arc::new(
+            crate::session_summary::SessionSummaryStore::open(&tmp.path().join("s.db")).unwrap(),
+        );
+        let transcripts = Arc::new(
+            crate::transcripts::TranscriptStore::open(&tmp.path().join("t.db")).unwrap(),
+        );
+        let s = registry
+            .create(crate::session::SessionSpec {
+                name: "t".into(),
+                command: "/bin/sh".into(),
+                args: vec!["-c".into(), "sleep 5".into()],
+                cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+                cols: 80,
+                rows: 24,
+                project_id: 1,
+            })
+            .unwrap();
+        let id = s.id().to_string();
+        session_summaries
+            .record(&dozer_core::protocol::SessionSummaryPayload {
+                session_id: id.clone(),
+                agent_kind: dozer_core::protocol::AgentKind::Claude,
+                title: "已经总结好了".into(),
+                summary: "摘要".into(),
+                status: dozer_core::protocol::SummaryStatus::AiGenerated,
+                created_ts_ms: 1,
+            })
+            .unwrap();
+
+        finalize_session_summary(
+            id.clone(),
+            registry.clone(),
+            session_summaries.clone(),
+            transcripts,
+            dozer_core::protocol::AgentKind::Claude,
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_millis(10),
+        )
+        .await;
+
+        // 已有总结不该被覆盖成兜底文案。
+        let got = session_summaries.get(&id).unwrap().unwrap();
+        assert_eq!(got.title, "已经总结好了");
+        assert_eq!(got.status, dozer_core::protocol::SummaryStatus::AiGenerated);
+        assert!(!registry.get(&id).unwrap().info().alive, "应该已被 kill");
+    }
+
+    #[tokio::test]
+    async fn finalize_session_summary_falls_back_to_heuristic_on_timeout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let registry = Arc::new(crate::registry::SessionRegistry::new());
+        let session_summaries = Arc::new(
+            crate::session_summary::SessionSummaryStore::open(&tmp.path().join("s.db")).unwrap(),
+        );
+        let transcripts = Arc::new(
+            crate::transcripts::TranscriptStore::open(&tmp.path().join("t.db")).unwrap(),
+        );
+        let s = registry
+            .create(crate::session::SessionSpec {
+                name: "t".into(),
+                command: "/bin/sh".into(),
+                args: vec!["-c".into(), "sleep 5".into()],
+                cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+                cols: 80,
+                rows: 24,
+                project_id: 1,
+            })
+            .unwrap();
+        let id = s.id().to_string();
+        let file = tmp.path().join(format!("{id}.jsonl"));
+        std::fs::write(
+            &file,
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"人类发言\"}}\n",
+        )
+        .unwrap();
+        transcripts
+            .ingest_session(dozer_core::protocol::AgentKind::Claude, &file)
+            .unwrap();
+
+        finalize_session_summary(
+            id.clone(),
+            registry.clone(),
+            session_summaries.clone(),
+            transcripts,
+            dozer_core::protocol::AgentKind::Claude,
+            std::time::Duration::from_millis(30),
+            std::time::Duration::from_millis(10),
+        )
+        .await;
+
+        let got = session_summaries.get(&id).unwrap().unwrap();
+        assert_eq!(got.status, dozer_core::protocol::SummaryStatus::HeuristicFallback);
+        assert_eq!(got.title, "人类发言");
+        assert!(!registry.get(&id).unwrap().info().alive, "应该已被 kill");
     }
 }

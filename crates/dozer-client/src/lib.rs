@@ -125,6 +125,16 @@ impl Client {
         }
     }
 
+    pub async fn close_with_summary(&self, id: &str) -> Result<()> {
+        match self
+            .roundtrip(&Request::CloseWithSummary { session_id: id.into() })
+            .await?
+        {
+            Reply::Ok => Ok(()),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn record_acceptance(
         &self,
