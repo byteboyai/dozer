@@ -509,8 +509,9 @@ impl TranscriptStore {
                 WHERE t.conversation_id IN ({placeholders})
                 GROUP BY t.message_key
              )
-             SELECT t.conversation_id, t.tool_calls, t.mutating_tool_calls, t.files_touched,
-                    t.tokens_in, t.tokens_out, t.tokens_cache_read, t.tokens_cache_write
+             SELECT t.conversation_id, t.role, t.tool_calls, t.mutating_tool_calls,
+                    t.files_touched, t.tokens_in, t.tokens_out, t.tokens_cache_read,
+                    t.tokens_cache_write
              FROM conversation_turns t
              JOIN conversations c1 ON c1.conversation_id = t.conversation_id
              JOIN owners o ON o.message_key = t.message_key
@@ -523,16 +524,17 @@ impl TranscriptStore {
         let rows = stmt.query_map(
             rusqlite::params_from_iter(ids.iter().chain(ids.iter())),
             |row| {
-                let files_json: String = row.get(3)?;
+                let files_json: String = row.get(4)?;
                 Ok((
                     row.get::<_, String>(0)?,
-                    row.get::<_, u32>(1)?,
+                    row.get::<_, String>(1)?,
                     row.get::<_, u32>(2)?,
+                    row.get::<_, u32>(3)?,
                     files_json,
-                    row.get::<_, u64>(4)?,
                     row.get::<_, u64>(5)?,
                     row.get::<_, u64>(6)?,
                     row.get::<_, u64>(7)?,
+                    row.get::<_, u64>(8)?,
                 ))
             },
         )?;
@@ -541,9 +543,13 @@ impl TranscriptStore {
             dozer_core::protocol::UsagePayload,
         > = std::collections::HashMap::new();
         for r in rows {
-            let (conversation_id, tool_calls, mutating, files_json, tin, tout, tcr, tcw) = r?;
+            let (conversation_id, role, tool_calls, mutating, files_json, tin, tout, tcr, tcw) = r?;
             let payload = by_conversation.entry(conversation_id).or_default();
-            payload.turns += 1;
+            // "回合"只统计 human 发言数:P1j 时代的呈现口径(每一条 user 消息
+            // 算一个回合),AI 回合/工具调用不计入这一项(2026-08-27 调整)。
+            if role == "human" {
+                payload.turns += 1;
+            }
             payload.tool_calls += tool_calls;
             payload.mutating_tool_calls += mutating;
             payload.tokens_in += tin;
@@ -1081,5 +1087,45 @@ mod tests {
             0,
             "没有 assistant usage 的会话仍应出现,只是用量为零"
         );
+    }
+
+    #[test]
+    fn usage_turns_counts_human_messages_only() {
+        // "回合"口径 2026-08-27 调整为只统计 human 发言数:AI 回合(assistant,
+        // 即便带 usage)和工具调用的 tool_result 都不计入 `turns`,只有
+        // `role == "human"` 的 user 消息才算。
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let cwd = std::path::Path::new("/proj");
+        let dir = dozer_core::agent_paths::claude_project_dir_in(home.path(), cwd);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // 2 条 human + 1 条 ai(带 usage) + 1 条 tool_result。
+        let lines = concat!(
+            "{\"type\":\"user\",\"uuid\":\"h1\",\"timestamp\":100,\"message\":{\"role\":\"user\",\"content\":\"第一问\"}}\n",
+            "{\"type\":\"user\",\"uuid\":\"h2\",\"timestamp\":200,\"message\":{\"role\":\"user\",\"content\":\"第二问\"}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":300,\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":5},\"content\":[{\"type\":\"text\",\"text\":\"答复\"}]}}\n",
+            "{\"type\":\"user\",\"uuid\":\"tr1\",\"timestamp\":400,\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"content\":\"结果\"}]}}\n"
+        );
+        fixture(&dir, "s.jsonl", lines);
+        let path = dir.join("s.jsonl");
+        store.ingest_session(AgentKind::Claude, &path).unwrap();
+
+        // 全部回合数是 4,但 "回合"统计只算 human 的 2 条。
+        let all = store.get_conversation_turns("s", -1, 100).unwrap();
+        assert_eq!(all.len(), 4, "入库的原始回合是 4 条");
+
+        let rows = store
+            .get_usage_summary_in(home.path(), "/proj", None)
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        let (_, usage) = &rows[0];
+        assert_eq!(usage.turns, 2, "回合只统计 human 发言数");
+        assert_eq!(
+            usage.tokens_in, 10,
+            "token 用量不受口径调整影响,仍按全量回合统计"
+        );
+        assert_eq!(usage.tool_calls, 0, "本夹具没有工具调用,tool_calls 仍为 0");
     }
 }
