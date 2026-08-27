@@ -1,9 +1,7 @@
 //! 历史对话展示用的中间表示(P1j 起步;P2b 扩展到 CodeBuddy/OpenCode;
 //! spec 2026-08-20 起数据来源改为查询 dozerd,本文件不再直接碰磁盘)。
 
-use dozer_core::protocol::{
-    AgentKind, ConversationSummary, SessionSummaryPayload, SummaryStatus,
-};
+use dozer_core::protocol::{AgentKind, ConversationSummary, SessionSummaryPayload, SummaryStatus};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -45,7 +43,9 @@ impl SessionRow {
             conversation_id: c.conversation_id.clone(),
             agent: c.agent,
             last_ts: c.last_ts,
-            display_title: s.map(|s| s.title.clone()).unwrap_or_else(|| c.title.clone()),
+            display_title: s
+                .map(|s| s.title.clone())
+                .unwrap_or_else(|| c.title.clone()),
             summary: s.map(|s| s.summary.clone()),
             summary_status: s.map(|s| s.status),
         }
@@ -57,10 +57,7 @@ impl SessionRow {
 /// `is_current_conversation`。
 pub fn is_current_conversation_id(conversation_id: &str, open_transcripts: &[String]) -> bool {
     open_transcripts.iter().any(|p| {
-        std::path::Path::new(p)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            == Some(conversation_id)
+        std::path::Path::new(p).file_stem().and_then(|s| s.to_str()) == Some(conversation_id)
     })
 }
 

@@ -11,7 +11,7 @@
 //! 回传)。拆分细节见
 //! `docs/superpowers/specs/2026-08-08-app-workspace-file-split-design.md`.
 
-use crate::conversation::TurnGroupRow;
+use crate::conversation::SessionRow;
 use crate::delivery;
 use crate::extensions::acceptance;
 use crate::extensions::browser;
@@ -39,8 +39,8 @@ use crate::topbar;
 use crate::transcript::ReviewEntry;
 use crate::webview_geometry;
 use crate::workspace::{
-    PickerLaunch, RestorePayload, ReviewSource, ReviewView, ShellIo, SshOut, TabBackend,
-    TopicPreview, Workspace, agent_list_pane, agent_picker_popup, conversation_list_pane,
+    CONVERSATION_DETAIL_PAGE_SIZE, PickerLaunch, RestorePayload, ReviewSource, ReviewView, ShellIo,
+    SshOut, TabBackend, Workspace, agent_list_pane, agent_picker_popup, conversation_list_pane,
     dot_color, edit_discard_confirm_popup, edit_modal, effective_project_repo, exited_marker,
     fetch_project_restore, no_project_placeholder, preview_pane, project_preview_pane,
     review_content_pane, review_should_refresh_on_turn, spawn_disk_usage_refresh,
@@ -70,15 +70,17 @@ pub(crate) const DEFAULT_COLS: u16 = 80;
 pub(crate) const DEFAULT_ROWS: u16 = 24;
 
 /// `dozer://review-trace/data.json` 的响应体形状——`review_trace.html` 按
-/// 这个结构消费(`entries`/`prev_topic`/`next_topic` 三个顶层字段)。
+/// 这个结构消费(`entries`/`agent_label`/`summary_title`/`summary_text`
+/// 顶层字段)。总结区(标题/全文)只在本会话详情里非空,活会话 `None`。
 #[derive(serde::Serialize)]
 struct ReviewSnapshot<'a> {
     entries: &'a [ReviewEntry],
-    prev_topic: Option<TopicPreview>,
-    next_topic: Option<TopicPreview>,
     /// `AgentKind::label()`(如 `"claude"`)——AI 气泡的头像名字标签用它
     /// 替代写死的"AI"。
     agent_label: &'static str,
+    /// session 详情顶部总结区标题/全文(2026-08-27;活会话审阅为 `None`)。
+    summary_title: Option<String>,
+    summary_text: Option<String>,
 }
 
 /// 工作区 11 个面板的统一标识——workspace 图标栏拖拽换栏功能
@@ -1357,18 +1359,26 @@ pub enum Message {
     /// 验收面板的全部消息,内核只转发不解读——见
     /// `extensions::acceptance::Message`。
     Acceptance(acceptance::Message),
-    /// 会话审阅:解析完成（来源, 条目 / 错误文案）。
-    ReviewLoaded(ProjectId, ReviewSource, Result<Vec<ReviewEntry>, String>),
-    /// 对话面板扁平列表刷新结果:当前项目全部 session 的回合，已经拍平
-    /// 并按时间倒序排好(2026-08-21，取代按 session 展开的树状展示；见
-    /// `Workspace::spawn_all_turn_groups_refresh`)。
-    ConversationTurnGroupsRefreshed(ProjectId, Result<Vec<TurnGroupRow>, String>),
+    /// 会话审阅:解析完成（来源, 追加标记, 条目 / 错误文案）。`append`
+    /// 为 `true` 时新条目应追加进现有 `entries`(详情"加载更多"),`false`
+    /// 时整段替换(首次打开/活会话刷新)。
+    ReviewLoaded(
+        ProjectId,
+        ReviewSource,
+        bool,
+        Result<Vec<ReviewEntry>, String>,
+    ),
+    /// 对话面板会话列表刷新结果:当前项目全部 session(联查总结),按最后
+    /// 活跃时间倒序(2026-08-27，取代按回合拍平的列表；见
+    /// `Workspace::spawn_conversations_refresh`)。
+    ConversationSessionsRefreshed(ProjectId, Result<Vec<SessionRow>, String>),
     /// Usage 面板的全部消息,内核只转发不解读——见 `extensions::usage::Message`。
     Usage(usage::Message),
-    /// 点击对话面板扁平列表里的某一行——只加载这一个回合区间到审阅面板
-    /// (`(start_turn_index, end_turn_index)`，闭区间，两端都含)。`agent`
-    /// 随行内数据一并带上，不用再反查 session 列表。
-    ConversationTurnGroupOpen(PathBuf, AgentKind, i64, i64),
+    /// 点击对话面板会话列表里的某一行——打开该 session 的详情审阅
+    /// (整段回合列表 + 总结展示区)。`agent` 随行内数据一并带上。
+    ConversationSessionOpen(String, AgentKind),
+    /// "加载更多"追加当前 session 详情的下一页(`after_turn_index`)。
+    ConversationDetailLoadMore(String, i64),
     /// 一次"删除项目"执行完成。`Vec<String>` 是文件系统步骤各自独立的
     /// 失败原因(空 = 全部成功);dozerd 侧两步(登记/agent 历史)任一失败
     /// 时这里只会收到那一条错误。项目对应的 tab 在发起删除时已经关掉,
@@ -3999,7 +4009,7 @@ impl App {
                     acceptance::update(&mut ws.acceptance, msg, project_id, &client, &handle, emit);
                 });
             }
-            Message::ReviewLoaded(project_id, source, result) => {
+            Message::ReviewLoaded(project_id, source, append, result) => {
                 self.with_project(project_id, |ws, _io| {
                     if result.is_ok() {
                         ws.review_nonce = ws.review_nonce.wrapping_add(1);
@@ -4015,20 +4025,21 @@ impl App {
                                 // `static`,过期/乱序结果也会无条件覆盖)的
                                 // 关键区别,过期加载结果到这里已经被
                                 // 上面的守卫挡在外面,不会再污染快照。
-                                // 前后话题预览(`prev_topic`/`next_topic`)
-                                // 是打开话题那一刻同步算好、存在 `rv` 上的,
-                                // 这里原样带进同一份 data.json,不重算。
                                 let snapshot = ReviewSnapshot {
                                     entries: &entries,
-                                    prev_topic: rv.prev_topic.clone(),
-                                    next_topic: rv.next_topic.clone(),
                                     agent_label: rv.agent.label(),
+                                    summary_title: rv.summary_title.clone(),
+                                    summary_text: rv.summary_text.clone(),
                                 };
                                 let json = serde_json::to_string(&snapshot).unwrap_or_default();
                                 *ws.review_snapshot.lock().expect("review snapshot 锁") =
                                     Some(json);
                                 rv.nonce = nonce;
-                                rv.entries = entries;
+                                if append {
+                                    rv.entries.extend(entries);
+                                } else {
+                                    rv.entries = entries;
+                                }
                                 rv.error = None;
                             }
                             Err(e) => rv.error = Some(e),
@@ -4036,12 +4047,12 @@ impl App {
                     }
                 });
             }
-            Message::ConversationTurnGroupsRefreshed(project_id, result) => {
+            Message::ConversationSessionsRefreshed(project_id, result) => {
                 self.with_project(project_id, move |ws, _io| match result {
-                    Ok(rows) => ws.conversation_turn_groups = Some(rows),
+                    Ok(rows) => ws.conversation_sessions = Some(rows),
                     Err(e) => {
-                        tracing::warn!(error = %e, "对话回合列表查询失败");
-                        ws.conversation_turn_groups = Some(Vec::new());
+                        tracing::warn!(error = %e, "对话会话列表查询失败");
+                        ws.conversation_sessions = Some(Vec::new());
                     }
                 });
             }
@@ -4055,8 +4066,19 @@ impl App {
                     usage::update(&mut ws.usage, msg);
                 });
             }
-            Message::ConversationTurnGroupOpen(path, agent, start, end) => {
-                self.conversation_turn_group_open(path, agent, start, end);
+            Message::ConversationSessionOpen(conversation_id, agent) => {
+                self.conversation_session_open(conversation_id, agent);
+            }
+            Message::ConversationDetailLoadMore(conversation_id, after_turn_index) => {
+                self.with_focused_project(|ws, io| {
+                    ws.spawn_review_load_conversation(
+                        io,
+                        conversation_id,
+                        after_turn_index,
+                        CONVERSATION_DETAIL_PAGE_SIZE,
+                        true,
+                    );
+                });
             }
             Message::ConversationListMore => {
                 self.with_focused_project(|ws, _io| {
@@ -6546,45 +6568,43 @@ impl App {
                 spawn_project_git_refresh(project_id, repo_path.clone(), io);
                 spawn_disk_usage_refresh(project_id, repo_path, io);
             }
-            // 回合结束后刷新对话列表(transcript 增长/新增；P1j)。
-            ws.spawn_all_turn_groups_refresh(io);
+            // 回合结束后刷新会话列表(transcript 增长/新增；P1j)。
+            ws.spawn_conversations_refresh(io);
         });
     }
 
     /// 点击对话面板扁平列表里的某一行——只把审阅面板加载到这一个回合
-    /// 区间(`start_turn_index..=end_turn_index`)，不是整份会话(2026-08-21，
-    /// 用户明确要求"点击后只显示这一个回合")。`agent` 由调用方随行内数
-    /// 据一并传入，扁平列表下已经不查 `ws.conversations`。
-    fn conversation_turn_group_open(
-        &mut self,
-        path: PathBuf,
-        agent: AgentKind,
-        start: i64,
-        end: i64,
-    ) {
+    /// 点对话面板会话列表某一行 → 打开该 session 的详情审阅:整段回合
+    /// 列表 + 总结展示区(标题/全文)。`agent` 由调用方随行内数据一并传入。
+    /// 总结数据直接取自已加载的 `SessionRow`,不为此单独发请求(2026-08-27)。
+    fn conversation_session_open(&mut self, conversation_id: String, agent: AgentKind) {
         self.with_focused_project(move |ws, io| {
-            let path_s = path.to_string_lossy().into_owned();
-            let source = ReviewSource::FileRange(path.clone(), start, end);
-            // 前后话题邻居用已经加载好的 `conversation_turn_groups` 同步
-            // 算,不发新请求——数据没加载过(还没打开过会话面板)时兜底
-            // 成"没有邻居",不阻塞打开当前话题。
-            let (prev_topic, next_topic) = ws
-                .conversation_turn_groups
-                .as_deref()
-                .map(|groups| crate::workspace::adjacent_topic_previews(groups, &path, start, end))
-                .unwrap_or((None, None));
+            let Some(row) = ws
+                .conversation_sessions
+                .as_ref()
+                .and_then(|rows| rows.iter().find(|r| r.conversation_id == conversation_id))
+            else {
+                // 列表刷新与点击之间的竞态(极小概率):这一行已经不在当前
+                // 列表里了,直接不打开详情,不 panic、不报错弹窗。
+                return;
+            };
+            let source = ReviewSource::Conversation(conversation_id.clone());
             ws.review = Some(ReviewView {
                 source: source.clone(),
                 entries: Vec::new(),
                 error: None,
                 agent,
                 nonce: 0,
-                prev_topic,
-                next_topic,
+                summary_title: Some(row.display_title.clone()),
+                summary_text: row.summary.clone(),
             });
-            let after = start - 1;
-            let limit = (end - start + 1).max(0) as u32;
-            ws.spawn_review_load(io, source, path_s, agent, after, limit);
+            ws.spawn_review_load_conversation(
+                io,
+                conversation_id,
+                -1,
+                CONVERSATION_DETAIL_PAGE_SIZE,
+                false,
+            );
         });
     }
 
