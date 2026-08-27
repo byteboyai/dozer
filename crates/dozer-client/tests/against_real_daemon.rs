@@ -254,3 +254,39 @@ async fn list_conversations_and_usage_roundtrip_against_real_daemon() {
         .unwrap();
     assert!(usage.is_empty());
 }
+
+#[tokio::test]
+async fn record_and_get_session_summary_via_client() {
+    let (sock, _registry, _guard) = start_daemon().await;
+    let client = Client::new(sock);
+    let session = client
+        .create(
+            "测试",
+            "/bin/sh",
+            &["-c".into(), "sleep 5".into()],
+            "/tmp",
+            80,
+            24,
+            1,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(client.get_session_summary(&session.id).await.unwrap(), None);
+
+    client
+        .record_session_summary(&session.id, "标题", "摘要内容")
+        .await
+        .unwrap();
+
+    let got = client
+        .get_session_summary(&session.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(got.title, "标题");
+    assert_eq!(got.summary, "摘要内容");
+    assert_eq!(got.status, dozer_core::protocol::SummaryStatus::AiGenerated);
+
+    client.kill(&session.id).await.unwrap();
+}

@@ -3,8 +3,8 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use dozer_core::protocol::{
     AgentKind, AgentState, BookmarkInfo, BookmarkScope, ConversationSummary, PreviewContext,
-    ProjectInfo, Reply, Request, SessionInfo, TurnGroupEntry, TurnGroupSummary, TurnRecord,
-    UsagePayload, decode_line, encode_line,
+    ProjectInfo, Reply, Request, SessionInfo, SessionSummaryPayload, TurnGroupEntry,
+    TurnGroupSummary, TurnRecord, UsagePayload, decode_line, encode_line,
 };
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -370,6 +370,32 @@ impl Client {
             .await?
         {
             Reply::PreviewContext { context } => Ok(context),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn record_session_summary(&self, id: &str, title: &str, summary: &str) -> Result<()> {
+        match self
+            .roundtrip(&Request::RecordSessionSummary {
+                session_id: id.into(),
+                title: title.into(),
+                summary: summary.into(),
+            })
+            .await?
+        {
+            Reply::Ok => Ok(()),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn get_session_summary(&self, id: &str) -> Result<Option<SessionSummaryPayload>> {
+        match self
+            .roundtrip(&Request::GetSessionSummary {
+                session_id: id.into(),
+            })
+            .await?
+        {
+            Reply::SessionSummary { summary } => Ok(summary),
             other => bail!("意外应答: {other:?}"),
         }
     }
