@@ -24,6 +24,7 @@ APP_NAME="Dozer AI Coder"
 BIN_NAME="dozer"
 DAEMON_BIN_NAME="dozerd"
 HOOK_BIN_NAME="dozer-hook"
+MCP_BIN_NAME="dozer-mcp"
 
 # Ask cargo for the built executables' actual paths via JSON output, rather
 # than guessing target/<profile> vs target/<triple>/<profile> (this machine's
@@ -34,9 +35,15 @@ HOOK_BIN_NAME="dozer-hook"
 # (crates/dozer-app/src/workspace.rs ensure_hook_installed()) writes hook
 # commands that point at a "dozer-hook" binary sibling to dozer's own
 # executable — if it's missing from the bundle, every registered hook fails
-# with "no such file or directory" (2026-08 incident).
+# with "no such file or directory" (2026-08 incident). dozer-mcp must ship
+# alongside dozer for the same reason: ensure_mcp_installed() (spec
+# 2026-08-27) registers agent MCP configs pointing at a "dozer-mcp" sibling
+# binary, and v8agent-cli auto-mounts "dozer-mcp serve" by bare command name
+# off PATH/its working dir assumptions — omitting it here reproduces the
+# exact class of bug the dozer-hook incident already taught us to guard
+# against.
 BUILD_JSON=$(
-  cargo build "${CARGO_PROFILE_FLAG[@]}" -p dozer-app -p dozerd -p dozer-hook --message-format=json
+  cargo build "${CARGO_PROFILE_FLAG[@]}" -p dozer-app -p dozerd -p dozer-hook -p dozer-mcp --message-format=json
 )
 
 BIN_PATH=$(
@@ -54,6 +61,11 @@ HOOK_BIN_PATH=$(
     'select(.reason=="compiler-artifact" and .target.name==$bin and .executable != null) | .executable' \
     | tail -n 1
 )
+MCP_BIN_PATH=$(
+  echo "$BUILD_JSON" | jq -r --arg bin "$MCP_BIN_NAME" \
+    'select(.reason=="compiler-artifact" and .target.name==$bin and .executable != null) | .executable' \
+    | tail -n 1
+)
 
 if [ -z "$BIN_PATH" ] || [ ! -x "$BIN_PATH" ]; then
   echo "error: could not locate built '$BIN_NAME' executable" >&2
@@ -67,6 +79,10 @@ if [ -z "$HOOK_BIN_PATH" ] || [ ! -x "$HOOK_BIN_PATH" ]; then
   echo "error: could not locate built '$HOOK_BIN_NAME' executable" >&2
   exit 1
 fi
+if [ -z "$MCP_BIN_PATH" ] || [ ! -x "$MCP_BIN_PATH" ]; then
+  echo "error: could not locate built '$MCP_BIN_NAME' executable" >&2
+  exit 1
+fi
 
 OUT_DIR="$(dirname "$(dirname "$BIN_PATH")")/bundle/macos"
 APP_DIR="$OUT_DIR/$APP_NAME.app"
@@ -77,6 +93,7 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/$BIN_NAME"
 cp "$DAEMON_BIN_PATH" "$APP_DIR/Contents/MacOS/$DAEMON_BIN_NAME"
 cp "$HOOK_BIN_PATH" "$APP_DIR/Contents/MacOS/$HOOK_BIN_NAME"
+cp "$MCP_BIN_PATH" "$APP_DIR/Contents/MacOS/$MCP_BIN_NAME"
 cp "$PACKAGING_DIR/Info.plist" "$APP_DIR/Contents/Info.plist"
 cp "$PACKAGING_DIR/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
 
