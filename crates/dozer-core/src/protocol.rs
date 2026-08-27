@@ -84,39 +84,6 @@ pub struct ConversationSummary {
     pub turn_count: u32,
 }
 
-/// 一个"回合分组"的索引摘要——从某个真实人类回合(锚点，排除斜杠命令，
-/// 见 `is_command_content`)开始，到下一个真实人类回合之前为止的连续
-/// `turn_index` 区间。会话列表面板按这个粒度展示子行(2026-08-21，
-/// 用户验收反馈:一个 session 里应该按回合分组，不是打包成一行)。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TurnGroupSummary {
-    pub start_turn_index: i64,
-    pub end_turn_index: i64,
-    /// 锚点人类回合内容前 80 字符，跟 `ConversationSummary.title` 的
-    /// 截断口径一致。
-    pub title: String,
-    /// 锚点人类回合的时间戳。
-    pub ts: u64,
-}
-
-/// 跨全部 session 的回合分组条目——对话面板扁平列表用(2026-08-21，取代
-/// 按 session 展开的树状展示)。比 `TurnGroupSummary` 多带 `conversation_id`
-/// /`file_path`/`agent`，让一行自己就能定位到"点开后该审阅哪个会话的哪
-/// 段"，不用再反查所属 session。`ts` 已经在 dozerd 侧做过兜底：分组内锚
-/// 点人类回合的时间缺失(=0)时回落为所属 session 的 `last_ts`（分组本身的
-/// 时间戳不可靠是已知问题，兜底不是"修复根因"，只是让排序有个可用的
-/// 时间）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TurnGroupEntry {
-    pub conversation_id: String,
-    pub file_path: String,
-    pub agent: AgentKind,
-    pub start_turn_index: i64,
-    pub end_turn_index: i64,
-    pub title: String,
-    pub ts: u64,
-}
-
 /// 会话内一个回合(人类发言 / AI 回复 / 工具执行结果)的明细;`role` 取值
 /// `"human"`/`"ai"`/`"tool_result"`(不用枚举是为了跟 sqlite 存储列直接
 /// 对应,减一层转换)。`is_error` 只对 `role == "tool_result"` 有意义,
@@ -310,16 +277,14 @@ pub enum Request {
         after_turn_index: i64,
         limit: u32,
     },
-    /// 某个会话按人类回合切出的分组列表(session 展开时懒加载，不是
-    /// 会话列表面板一次性全量拉取所有 session 的分组)。
-    ListSessionTurnGroups {
-        conversation_id: String,
-    },
-    /// 某 cwd 下所有 session 的回合分组，拍平成一份按时间倒序的列表
-    /// (对话面板不再按 session 分树，spec 2026-08-21)。
-    ListAllTurnGroups {
+    /// 某 cwd 下会话列表，每行附上该会话的总结(来自 `session_summaries`，
+    /// 无总结的会话第二项为 `None`)。对话面板 session 列表/详情导航用
+    /// (spec 2026-08-27)。
+    ListConversationsWithSummaries {
         cwd: String,
+        agent: Option<AgentKind>,
         limit: u32,
+        offset: u32,
     },
     /// 某 cwd 下按会话分组的用量统计。
     GetUsageSummary {
@@ -493,14 +458,9 @@ pub enum Reply {
         conversation_id: String,
         turns: Vec<TurnRecord>,
     },
-    /// `ListSessionTurnGroups` 应答。
-    SessionTurnGroups {
-        conversation_id: String,
-        groups: Vec<TurnGroupSummary>,
-    },
-    /// `ListAllTurnGroups` 应答；`groups` 已按 `ts` 倒序排好。
-    AllTurnGroups {
-        groups: Vec<TurnGroupEntry>,
+    /// `ListConversationsWithSummaries` 应答；`rows` 已按 `last_ts` 倒序排好。
+    ConversationsWithSummaries {
+        rows: Vec<(ConversationSummary, Option<SessionSummaryPayload>)>,
     },
     /// `GetUsageSummary` 应答。
     UsageSummary {
@@ -636,23 +596,37 @@ mod tests {
     }
 
     #[test]
-    fn list_session_turn_groups_protocol_types_roundtrip() {
-        let req = Request::ListSessionTurnGroups {
-            conversation_id: "abc".into(),
+    fn list_conversations_with_summaries_protocol_types_roundtrip() {
+        let req = Request::ListConversationsWithSummaries {
+            cwd: "/home/x/proj".into(),
+            agent: Some(AgentKind::Claude),
+            limit: 500,
+            offset: 0,
         };
         let line = encode_line(&req);
         let back: Request = decode_line(&line).unwrap();
         assert_eq!(req, back);
 
-        let group = TurnGroupSummary {
-            start_turn_index: 2,
-            end_turn_index: 7,
-            title: "标题".into(),
-            ts: 100,
-        };
-        let reply = Reply::SessionTurnGroups {
+        let summary = ConversationSummary {
             conversation_id: "abc".into(),
-            groups: vec![group],
+            agent: AgentKind::Claude,
+            file_path: "/home/x/proj/.dozer/transcripts/abc.md".into(),
+            title: "标题".into(),
+            first_ts: 1,
+            last_ts: 100,
+            turn_count: 3,
+        };
+        let payload = SessionSummaryPayload {
+            session_id: "s1".into(),
+            agent_kind: AgentKind::Claude,
+            conversation_id: Some("abc".into()),
+            title: "总结标题".into(),
+            summary: "总结全文".into(),
+            status: SummaryStatus::AiGenerated,
+            created_ts_ms: 200,
+        };
+        let reply = Reply::ConversationsWithSummaries {
+            rows: vec![(summary.clone(), Some(payload.clone())), (summary, None)],
         };
         let line = encode_line(&reply);
         let back: Reply = decode_line(&line).unwrap();
