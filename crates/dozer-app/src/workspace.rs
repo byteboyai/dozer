@@ -1310,9 +1310,15 @@ impl Workspace {
         }
         let tab = self.tabs.remove(idx);
         tab.forwarder.abort();
-        if tab.alive && matches!(tab.backend, TabBackend::Daemon) {
-            let client = io.client.clone();
-            let id = tab.info.id.clone();
+        let client = io.client.clone();
+        let id = tab.info.id.clone();
+        if should_summarize_on_close(tab.agent, tab.alive, &tab.backend) {
+            io.handle.spawn(async move {
+                if let Err(e) = client.close_with_summary(&id).await {
+                    tracing::warn!("关闭 tab 时触发总结失败: {e}");
+                }
+            });
+        } else if tab.alive && matches!(tab.backend, TabBackend::Daemon) {
             io.handle.spawn(async move {
                 if let Err(e) = client.kill(&id).await {
                     tracing::warn!("关闭 tab 时结束会话失败: {e}");
@@ -3749,6 +3755,18 @@ pub(crate) fn agent_cli_command(agent: AgentKind) -> Option<&'static str> {
     }
 }
 
+/// 关闭 tab 时是否应该走"总结后关闭"而不是直接 `Kill`——仅对话摄取管线
+/// 已覆盖、且当前存活、且走 daemon 后端的四家 agent(spec
+/// 2026-08-27)。
+fn should_summarize_on_close(agent: AgentKind, alive: bool, backend: &TabBackend) -> bool {
+    alive
+        && matches!(backend, TabBackend::Daemon)
+        && matches!(
+            agent,
+            AgentKind::Claude | AgentKind::Codebuddy | AgentKind::Opencode | AgentKind::V8agent
+        )
+}
+
 /// 已接入 `dozer-hook` 安装器的 agent 集合。刻意穷尽 match 而不是拿
 /// `agent.label()` 当 catch-all 参数：`install::settings_path_for` 对未识别
 /// 的 agent 名一律落回 Claude 的 `settings.json`路径，如果不显式排除
@@ -4733,6 +4751,35 @@ mod tests {
         assert_eq!(tab.llm_model, None);
         assert_eq!(tab.permission_mode, None);
         assert_eq!(tab.workspace_override, None);
+    }
+
+    #[test]
+    fn should_summarize_on_close_true_for_four_supported_agents() {
+        for agent in [
+            AgentKind::Claude,
+            AgentKind::Codebuddy,
+            AgentKind::Opencode,
+            AgentKind::V8agent,
+        ] {
+            assert!(
+                should_summarize_on_close(agent, true, &TabBackend::Daemon),
+                "{agent:?} 应该走总结后关闭"
+            );
+        }
+    }
+
+    #[test]
+    fn should_summarize_on_close_false_for_unsupported_agents_or_dead_or_ssh() {
+        assert!(!should_summarize_on_close(AgentKind::Codex, true, &TabBackend::Daemon));
+        assert!(!should_summarize_on_close(AgentKind::Kilo, true, &TabBackend::Daemon));
+        assert!(!should_summarize_on_close(AgentKind::Unknown, true, &TabBackend::Daemon));
+        assert!(!should_summarize_on_close(AgentKind::Claude, false, &TabBackend::Daemon));
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        assert!(!should_summarize_on_close(
+            AgentKind::Claude,
+            true,
+            &TabBackend::Ssh { out: tx }
+        ));
     }
 
     #[test]
