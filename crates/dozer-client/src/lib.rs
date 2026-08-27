@@ -3,8 +3,8 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use dozer_core::protocol::{
     AgentKind, AgentState, BookmarkInfo, BookmarkScope, ConversationSummary, PreviewContext,
-    ProjectInfo, Reply, Request, SessionInfo, SessionSummaryPayload, TurnGroupEntry,
-    TurnGroupSummary, TurnRecord, UsagePayload, decode_line, encode_line,
+    ProjectInfo, Reply, Request, SessionInfo, SessionSummaryPayload, TurnRecord, UsagePayload,
+    decode_line, encode_line,
 };
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -312,32 +312,25 @@ impl Client {
         }
     }
 
-    pub async fn list_session_turn_groups(
+    /// 某 cwd 下会话列表，每行附上该会话的总结(`None` 表示该会话没有
+    /// 已产出的总结，spec 2026-08-27)。
+    pub async fn list_conversations_with_summaries(
         &self,
-        conversation_id: &str,
-    ) -> Result<Vec<TurnGroupSummary>> {
+        cwd: &str,
+        agent: Option<AgentKind>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<(ConversationSummary, Option<SessionSummaryPayload>)>> {
         match self
-            .roundtrip(&Request::ListSessionTurnGroups {
-                conversation_id: conversation_id.into(),
-            })
-            .await?
-        {
-            Reply::SessionTurnGroups { groups, .. } => Ok(groups),
-            other => bail!("意外应答: {other:?}"),
-        }
-    }
-
-    /// 某 cwd 下所有 session 的回合分组，拍平成一份按时间倒序的列表
-    /// (对话面板扁平展示用，spec 2026-08-21)。
-    pub async fn list_all_turn_groups(&self, cwd: &str, limit: u32) -> Result<Vec<TurnGroupEntry>> {
-        match self
-            .roundtrip(&Request::ListAllTurnGroups {
+            .roundtrip(&Request::ListConversationsWithSummaries {
                 cwd: cwd.into(),
+                agent,
                 limit,
+                offset,
             })
             .await?
         {
-            Reply::AllTurnGroups { groups } => Ok(groups),
+            Reply::ConversationsWithSummaries { rows } => Ok(rows),
             other => bail!("意外应答: {other:?}"),
         }
     }
