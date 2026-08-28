@@ -22,6 +22,7 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
     let transcripts = Arc::new(dozerd::transcripts::TranscriptStore::open(&db).unwrap());
     let session_summaries =
         Arc::new(dozerd::session_summary::SessionSummaryStore::open(&db).unwrap());
+    let backfill_registry = Arc::new(dozerd::session_summary_backfill::BackfillRegistry::new());
     tokio::spawn(async move {
         dozerd::server::serve(
             &s,
@@ -31,6 +32,7 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
             bookmarks,
             transcripts,
             session_summaries,
+            backfill_registry,
         )
         .await
     });
@@ -286,4 +288,31 @@ async fn record_and_get_session_summary_via_client() {
     assert_eq!(got.status, dozer_core::protocol::SummaryStatus::AiGenerated);
 
     client.kill(&session.id).await.unwrap();
+}
+
+#[tokio::test]
+async fn backfill_session_summaries_on_empty_project_completes_immediately() {
+    let (sock, _registry, _guard) = start_daemon().await;
+    let client = Client::new(sock);
+    client
+        .backfill_session_summaries("/no/such/project")
+        .await
+        .unwrap();
+    // 空项目:total=0,应该立刻可查到"已完成"(completed>=total)。
+    let (completed, total) = client
+        .get_session_summary_backfill_status("/no/such/project")
+        .await
+        .unwrap();
+    assert_eq!((completed, total), (0, 0));
+}
+
+#[tokio::test]
+async fn get_backfill_status_for_never_started_cwd_returns_zero() {
+    let (sock, _registry, _guard) = start_daemon().await;
+    let client = Client::new(sock);
+    let (completed, total) = client
+        .get_session_summary_backfill_status("/never/touched")
+        .await
+        .unwrap();
+    assert_eq!((completed, total), (0, 0));
 }

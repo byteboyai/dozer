@@ -288,12 +288,16 @@ mod tests {
         let std_cmd = cmd.as_std();
         assert_eq!(std_cmd.get_program(), "v8agent");
         let envs: Vec<_> = std_cmd.get_envs().collect();
-        assert!(envs
-            .iter()
-            .any(|(k, v)| *k == "V8AGENT_ONESHOT" && *v == Some(std::ffi::OsStr::new("1"))));
+        assert!(
+            envs.iter()
+                .any(|(k, v)| *k == "V8AGENT_ONESHOT" && *v == Some(std::ffi::OsStr::new("1")))
+        );
         // DOZER_SESSION_ID 显式清掉,避免 v8agent-cli 误挂载 dozer-mcp
         // (headless 总结走 stdout 解析,不需要 MCP,见 spec)。
-        assert!(envs.iter().any(|(k, v)| *k == "DOZER_SESSION_ID" && v.is_none()));
+        assert!(
+            envs.iter()
+                .any(|(k, v)| *k == "DOZER_SESSION_ID" && v.is_none())
+        );
         assert!(stdin.is_some());
     }
 

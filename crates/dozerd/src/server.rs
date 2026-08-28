@@ -11,6 +11,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn serve(
     socket: &Path,
     registry: Arc<SessionRegistry>,
@@ -19,6 +20,7 @@ pub async fn serve(
     bookmarks: Arc<crate::bookmarks::BookmarkStore>,
     transcripts: Arc<crate::transcripts::TranscriptStore>,
     session_summaries: Arc<crate::session_summary::SessionSummaryStore>,
+    backfill_registry: Arc<crate::session_summary_backfill::BackfillRegistry>,
 ) -> Result<()> {
     let preview_contexts = Arc::new(PreviewContextStore::new());
     if socket.exists() {
@@ -44,6 +46,7 @@ pub async fn serve(
         let preview_contexts = preview_contexts.clone();
         let transcripts = transcripts.clone();
         let session_summaries = session_summaries.clone();
+        let backfill_registry = backfill_registry.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_conn(
                 stream,
@@ -54,6 +57,7 @@ pub async fn serve(
                 preview_contexts,
                 transcripts,
                 session_summaries,
+                backfill_registry,
             )
             .await
             {
@@ -216,6 +220,7 @@ async fn handle_conn(
     preview_contexts: Arc<PreviewContextStore>,
     transcripts: Arc<crate::transcripts::TranscriptStore>,
     session_summaries: Arc<crate::session_summary::SessionSummaryStore>,
+    backfill_registry: Arc<crate::session_summary_backfill::BackfillRegistry>,
 ) -> Result<()> {
     let (r, mut w) = stream.into_split();
     let mut lines = BufReader::new(r).lines();
@@ -513,17 +518,30 @@ async fn handle_conn(
                                 }
                             }
                         }
-                        Request::BackfillSessionSummaries { .. } => {
-                            // 占位实现,Task 6 换成真正的后台补总结逻辑。
-                            Reply::Error {
-                                message: "补总结功能尚未实现".into(),
-                            }
+                        Request::BackfillSessionSummaries { cwd } => {
+                            let missing = crate::session_summary_backfill::missing_summary_conversations(
+                                &transcripts,
+                                &session_summaries,
+                                &cwd,
+                            );
+                            let total = missing.len() as u32;
+                            backfill_registry.start(&cwd, total);
+                            let agent = crate::default_agent_config::load_default_agent();
+                            tokio::spawn(crate::session_summary_backfill::run_backfill(
+                                cwd.clone(),
+                                missing,
+                                transcripts.clone(),
+                                session_summaries.clone(),
+                                backfill_registry.clone(),
+                                agent,
+                            ));
+                            Reply::Ok
                         }
-                        Request::GetSessionSummaryBackfillStatus { .. } => {
-                            // 占位实现,Task 6 换成真正的进度查询。
+                        Request::GetSessionSummaryBackfillStatus { cwd } => {
+                            let progress = backfill_registry.get(&cwd).unwrap_or_default();
                             Reply::BackfillStatus {
-                                total: 0,
-                                completed: 0,
+                                total: progress.total,
+                                completed: progress.completed,
                             }
                         }
                     },
@@ -644,6 +662,7 @@ mod tests {
                 bookmarks,
                 transcripts,
                 session_summaries,
+                std::sync::Arc::new(crate::session_summary_backfill::BackfillRegistry::new()),
             );
             std::mem::drop(fut);
         }

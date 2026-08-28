@@ -10,5 +10,6 @@ pub mod ring;
 pub mod server;
 pub mod session;
 pub mod session_summary;
+pub mod session_summary_backfill;
 pub mod shell_integration;
 pub mod transcripts;

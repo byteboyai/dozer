@@ -66,6 +66,7 @@ async fn session_survives_client_disconnect() {
                 test_bookmarks(),
                 test_transcripts(),
                 test_session_summaries(),
+                test_backfill_registry(),
             )
             .await
         }
@@ -197,6 +198,7 @@ async fn unknown_session_returns_error_reply() {
                 test_bookmarks(),
                 test_transcripts(),
                 test_session_summaries(),
+                test_backfill_registry(),
             )
             .await
         }
@@ -238,6 +240,7 @@ async fn attach_delivers_marker_exactly_once() {
                 test_bookmarks(),
                 test_transcripts(),
                 test_session_summaries(),
+                test_backfill_registry(),
             )
             .await
         }
@@ -315,6 +318,7 @@ async fn attach_from_offset_resumes_within_window() {
                 test_bookmarks(),
                 test_transcripts(),
                 test_session_summaries(),
+                test_backfill_registry(),
             )
             .await
         }
@@ -421,6 +425,7 @@ async fn attach_stream_offset_invariant_under_load() {
                 test_bookmarks(),
                 test_transcripts(),
                 test_session_summaries(),
+                test_backfill_registry(),
             )
             .await
         }
@@ -514,6 +519,7 @@ async fn attach_from_offset_out_of_window_falls_back_to_full_snapshot() {
                 test_bookmarks(),
                 test_transcripts(),
                 test_session_summaries(),
+                test_backfill_registry(),
             )
             .await
         }
@@ -600,4 +606,9 @@ fn test_transcripts() -> std::sync::Arc<dozerd::transcripts::TranscriptStore> {
 fn test_session_summaries() -> std::sync::Arc<dozerd::session_summary::SessionSummaryStore> {
     let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
     std::sync::Arc::new(dozerd::session_summary::SessionSummaryStore::open(&db).unwrap())
+}
+
+/// 无状态的补总结内存登记表（测试用；serve 需要）。
+fn test_backfill_registry() -> std::sync::Arc<dozerd::session_summary_backfill::BackfillRegistry> {
+    std::sync::Arc::new(dozerd::session_summary_backfill::BackfillRegistry::new())
 }
