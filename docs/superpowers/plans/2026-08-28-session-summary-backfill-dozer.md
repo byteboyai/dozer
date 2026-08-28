@@ -10,6 +10,14 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-28-session-summary-backfill-design.md`
 
+**状态(2026-08-28):** Task 1-9 全部执行完并已提交(`02e843b`/`2d2a2cd`/
+`50a31b0`/`e8ea412`/`efe8cea`/`143dab9`/`78195b4`)。Task 9 的自动化验证
+(build/test/clippy/fmt)全绿;唯一没做的是 Task 9 Step 4 的真机人工点击
+验证(需要真实项目+真实 agent CLI,过一遍"修复项目"弹窗的实际交互),
+留给用户自己找时间跑。审阅过程中发现过一次真实缺口:Task 7/8(dozer-app
+弹窗 UI)最初被漏做,后端(Task 1-6)已就绪但完全不可达,补做后才算真正
+完成——细节见 memory `dozer-session-summary-backfill-plan.md`。
+
 ## Global Constraints
 
 - GUI 只用 iced 0.14 生态,不引入新的 GUI 框架/组件库。
@@ -44,7 +52,7 @@ crate 会立刻编译失败(非穷尽匹配),而 Task 3/4/5 都要跑
   `Reply::BackfillStatus { total: u32, completed: u32 }`——后续所有任务依赖
   这三个类型。
 
-- [ ] **Step 1: 写失败的 roundtrip 测试**
+- [x] **Step 1: 写失败的 roundtrip 测试**
 
 在 `protocol.rs` 的 `#[cfg(test)] mod tests` 里追加:
 
@@ -75,12 +83,12 @@ crate 会立刻编译失败(非穷尽匹配),而 Task 3/4/5 都要跑
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-core backfill_session_summaries_request_roundtrips get_session_summary_backfill_status_roundtrips`
 Expected: 编译失败(`Request::BackfillSessionSummaries`/`Reply::BackfillStatus` 不存在)。
 
-- [ ] **Step 3: 加变体**
+- [x] **Step 3: 加变体**
 
 在 `pub enum Request` 里,`CloseWithSummary` 变体之后追加:
 
@@ -112,12 +120,12 @@ Expected: 编译失败(`Request::BackfillSessionSummaries`/`Reply::BackfillStatu
     },
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-core backfill_session_summaries_request_roundtrips get_session_summary_backfill_status_roundtrips`
 Expected: PASS
 
-- [ ] **Step 5: 给 `server.rs` 打占位分支,保住 `dozerd` 的可编译性**
+- [x] **Step 5: 给 `server.rs` 打占位分支,保住 `dozerd` 的可编译性**
 
 在 `crates/dozerd/src/server.rs` 的 `match req { ... }` 里,
 `Request::CloseWithSummary { session_id } => { ... }` 分支之后追加:
@@ -138,13 +146,13 @@ Expected: PASS
                         }
 ```
 
-- [ ] **Step 6: 全量协议测试 + lint**
+- [x] **Step 6: 全量协议测试 + lint**
 
 Run: `cargo build -p dozerd && cargo test -p dozer-core && cargo clippy -p dozer-core -p dozerd --all-targets -- -D warnings && cargo fmt -p dozer-core -p dozerd -- --check`
 Expected: 全绿(`cargo build -p dozerd` 这一步就是在验证 Step 5 的占位分支
 确实把非穷尽匹配问题堵上了)。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/dozer-core/src/protocol.rs crates/dozerd/src/server.rs
@@ -172,7 +180,7 @@ EOF
   相反——`(completed, total)` 是为了跟 `dozer-app` 侧"已完成/总数"的展示口径
   对齐,调用方在 Task 7 会直接用)。
 
-- [ ] **Step 1: 加方法**
+- [x] **Step 1: 加方法**
 
 在 `crates/dozer-client/src/lib.rs` 的 `close_with_summary` 方法之后追加:
 
@@ -203,7 +211,7 @@ EOF
     }
 ```
 
-- [ ] **Step 2: 编译检查**
+- [x] **Step 2: 编译检查**
 
 Run: `cargo build -p dozer-client && cargo test -p dozer-client`
 Expected: 全绿(Task 1 已经给 `server.rs` 打好占位分支,`dozerd` 作为
@@ -211,12 +219,12 @@ Expected: 全绿(Task 1 已经给 `server.rs` 打好占位分支,`dozerd` 作为
 的往返测试——那个留给 Task 6 Step 6,等 `server.rs` 有真实实现后再测才有
 意义,这里先只保证方法本身能编译、既有测试不受影响)。
 
-- [ ] **Step 3: lint**
+- [x] **Step 3: lint**
 
 Run: `cargo clippy -p dozer-client --all-targets -- -D warnings && cargo fmt -p dozer-client -- --check`
 Expected: 全绿
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/dozer-client/src/lib.rs
@@ -243,7 +251,7 @@ EOF
   (测试用,显式传路径,同 `TranscriptStore::list_conversations_in` 的既有
   "生产入口包一层显式路径版本"模式)。
 
-- [ ] **Step 1: 加依赖**
+- [x] **Step 1: 加依赖**
 
 在 `crates/dozerd/Cargo.toml` 的 `[dependencies]` 里追加(紧跟 `serde_json.workspace = true` 之后):
 
@@ -252,7 +260,7 @@ serde.workspace = true
 toml = "0.9"
 ```
 
-- [ ] **Step 2: 写失败的测试**
+- [x] **Step 2: 写失败的测试**
 
 创建 `crates/dozerd/src/default_agent_config.rs`:
 
@@ -354,17 +362,17 @@ mod tests {
 pub mod default_agent_config;
 ```
 
-- [ ] **Step 3: 跑测试确认通过**
+- [x] **Step 3: 跑测试确认通过**
 
 Run: `cargo test -p dozerd default_agent_config`
 Expected: PASS(这个模块本身不依赖任何其它未完成的任务,可以独立通过)。
 
-- [ ] **Step 4: lint**
+- [x] **Step 4: lint**
 
 Run: `cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -p dozerd -- --check`
 Expected: 全绿
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozerd/Cargo.toml crates/dozerd/src/lib.rs crates/dozerd/src/default_agent_config.rs
@@ -390,7 +398,7 @@ EOF
   `pub async fn summarize_headless(agent: AgentKind, human_turns: &[String]) -> Result<(String, String), HeadlessError>`
   ——Task 6 直接调这一个函数,不需要知道内部按 agent 分派的细节。
 
-- [ ] **Step 1: 写失败的测试(纯函数部分:`extract_summary`)**
+- [x] **Step 1: 写失败的测试(纯函数部分:`extract_summary`)**
 
 创建 `crates/dozerd/src/headless_agent.rs`:
 
@@ -619,17 +627,17 @@ mod tests {
 pub mod headless_agent;
 ```
 
-- [ ] **Step 2: 跑测试确认通过**
+- [x] **Step 2: 跑测试确认通过**
 
 Run: `cargo test -p dozerd headless_agent`
 Expected: PASS(全部 8 个测试)。
 
-- [ ] **Step 3: lint**
+- [x] **Step 3: lint**
 
 Run: `cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -p dozerd -- --check`
 Expected: 全绿
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/dozerd/src/lib.rs crates/dozerd/src/headless_agent.rs
@@ -653,7 +661,7 @@ EOF
 - Produces: 无新公开接口,`summarize_headless` 现在对 `Claude`/`Codebuddy`/
   `Opencode`/`V8agent` 四家都返回 `Some`。
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 在 `headless_agent.rs` 的 `mod tests` 里追加:
 
@@ -710,13 +718,13 @@ EOF
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozerd headless_agent`
 Expected: FAIL(`codebuddy`/`opencode`/`v8agent` 三个新测试断言不成立,因为
 `build_command` 目前对这三家都落进 `_ => None` 分支)。
 
-- [ ] **Step 3: 补全 `build_command`**
+- [x] **Step 3: 补全 `build_command`**
 
 把 `headless_agent.rs` 里的 `build_command` 函数体替换成:
 
@@ -756,17 +764,17 @@ fn build_command(agent: AgentKind, turns_text: &str) -> Option<(tokio::process::
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozerd headless_agent`
 Expected: PASS(全部测试,含 Task 4 遗留的 8 个 + 本任务新增的 4 个)。
 
-- [ ] **Step 5: lint**
+- [x] **Step 5: lint**
 
 Run: `cargo clippy -p dozerd --all-targets -- -D warnings && cargo fmt -p dozerd -- --check`
 Expected: 全绿
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/dozerd/src/headless_agent.rs
@@ -800,7 +808,7 @@ EOF
   新增第 7 个参数 `backfill_registry: Arc<BackfillRegistry>`——`main.rs` 与
   测试里所有 `serve(...)` 调用点都要同步加这个参数,否则编译不过。
 
-- [ ] **Step 1: 写 `BackfillRegistry` 的失败测试**
+- [x] **Step 1: 写 `BackfillRegistry` 的失败测试**
 
 创建 `crates/dozerd/src/session_summary_backfill.rs`:
 
@@ -1027,12 +1035,12 @@ mod tests {
 pub mod session_summary_backfill;
 ```
 
-- [ ] **Step 2: 跑测试确认通过**
+- [x] **Step 2: 跑测试确认通过**
 
 Run: `cargo test -p dozerd session_summary_backfill`
 Expected: PASS(6 个测试)。
 
-- [ ] **Step 3: 接入 `server.rs`**
+- [x] **Step 3: 接入 `server.rs`**
 
 在 `crates/dozerd/src/server.rs` 顶部 `pub async fn serve` 签名里加一个参数
 (紧跟 `session_summaries` 之后):
@@ -1101,7 +1109,7 @@ pub async fn serve(
                         }
 ```
 
-- [ ] **Step 4: 接入 `main.rs`**
+- [x] **Step 4: 接入 `main.rs`**
 
 在 `crates/dozerd/src/main.rs` 里,`session_summaries` 构造之后追加:
 
@@ -1112,7 +1120,7 @@ pub async fn serve(
 `dozerd::server::serve(...)` 调用的参数列表里,`session_summaries,` 之后
 追加 `backfill_registry,`。
 
-- [ ] **Step 5: 修 `dozer-client` 集成测试的 `start_daemon` 帮助函数**
+- [x] **Step 5: 修 `dozer-client` 集成测试的 `start_daemon` 帮助函数**
 
 在 `crates/dozer-client/tests/against_real_daemon.rs` 的 `start_daemon`
 函数里,`session_summaries` 构造之后追加:
@@ -1124,7 +1132,7 @@ pub async fn serve(
 `dozerd::server::serve(...)` 调用参数列表里,`session_summaries,` 之后
 追加 `backfill_registry,`。
 
-- [ ] **Step 6: 写端到端集成测试**
+- [x] **Step 6: 写端到端集成测试**
 
 在 `against_real_daemon.rs` 里追加:
 
@@ -1157,19 +1165,19 @@ async fn get_backfill_status_for_never_started_cwd_returns_zero() {
 }
 ```
 
-- [ ] **Step 7: 跑全部相关测试确认通过**
+- [x] **Step 7: 跑全部相关测试确认通过**
 
 Run: `cargo test -p dozerd -p dozer-client`
 Expected: PASS(含 `handle_conn`/`serve` 签名改动波及的既有测试——若有其它
 测试文件也调用了 `serve(...)`,同样按 Step 5 的方式补 `backfill_registry`
 参数,先跑一次确认没有遗漏的调用点)。
 
-- [ ] **Step 8: lint**
+- [x] **Step 8: lint**
 
 Run: `cargo clippy -p dozerd -p dozer-client --all-targets -- -D warnings && cargo fmt -p dozerd -p dozer-client -- --check`
 Expected: 全绿
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add crates/dozerd/src/lib.rs crates/dozerd/src/session_summary_backfill.rs \
@@ -1201,7 +1209,7 @@ EOF
   `pub fn spawn_repair_run(repo_path, project_id, client, handle, emit)`——
   Task 8(弹窗渲染)直接读 `ws_state.scaffold_run`。
 
-- [ ] **Step 1: 加状态类型 + 精简 `WorkspaceState`**
+- [x] **Step 1: 加状态类型 + 精简 `WorkspaceState`**
 
 在 `crates/dozer-app/src/extensions/project.rs` 里,把
 `WorkspaceState` 的字段:
@@ -1276,7 +1284,7 @@ impl ScaffoldRunState {
 }
 ```
 
-- [ ] **Step 2: 加 Message 变体,删掉 `ScaffoldDone`**
+- [x] **Step 2: 加 Message 变体,删掉 `ScaffoldDone`**
 
 删除:
 
@@ -1307,7 +1315,7 @@ impl ScaffoldRunState {
     ScaffoldPopupClose,
 ```
 
-- [ ] **Step 3: 改 `update()`**
+- [x] **Step 3: 改 `update()`**
 
 删除原来的:
 
@@ -1387,7 +1395,7 @@ impl ScaffoldRunState {
         }
 ```
 
-- [ ] **Step 4: 重写 `spawn_scaffold_run`(静默路径,签名精简),新增
+- [x] **Step 4: 重写 `spawn_scaffold_run`(静默路径,签名精简),新增
   `spawn_repair_run`**
 
 把现有的 `pub fn spawn_scaffold_run(...)` 整个替换成两个函数:
@@ -1477,7 +1485,7 @@ pub fn spawn_repair_run(
 }
 ```
 
-- [ ] **Step 5: 改 `app.rs` 的静默调用点 + 加 `project_id` 路由**
+- [x] **Step 5: 改 `app.rs` 的静默调用点 + 加 `project_id` 路由**
 
 `app.rs:5215` 附近的调用:
 
@@ -1531,7 +1539,7 @@ pub fn spawn_repair_run(
 弹窗关闭按钮只有当前激活 tab 的弹窗才可能被点到),不存在跨 tab 切换后
 消息投递错位的风险,不需要跟着改。
 
-- [ ] **Step 6: 改既有测试**
+- [x] **Step 6: 改既有测试**
 
 `project.rs` 测试里引用 `Message::ScaffoldDone(report.clone(), false)`/
 `(report.clone(), true)`/`ws_state.scaffold_report` 的用例(约 1640-1670
@@ -1655,22 +1663,22 @@ refreshed_updates_four_fields` 等既有测试同款用法),`tokio::runtime::Han
     }
 ```
 
-- [ ] **Step 7: 跑测试确认通过**
+- [x] **Step 7: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app project::`
 Expected: PASS
 
-- [ ] **Step 8: 全量编译检查(`app.rs` 改动影响面广)**
+- [x] **Step 8: 全量编译检查(`app.rs` 改动影响面广)**
 
 Run: `cargo build -p dozer-app && cargo test -p dozer-app`
 Expected: PASS 全绿(这一步会暴露任何遗漏的调用点/字段引用)。
 
-- [ ] **Step 9: lint**
+- [x] **Step 9: lint**
 
 Run: `cargo clippy -p dozer-app --all-targets -- -D warnings && cargo fmt -p dozer-app -- --check`
 Expected: 全绿
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add crates/dozer-app/src/extensions/project.rs crates/dozer-app/src/app.rs
@@ -1695,7 +1703,7 @@ EOF
 - Produces: `fn scaffold_progress_popup(&WorkspaceState) -> Element` (私有,
   仅本文件内的 `view`/渲染函数调用)。
 
-- [ ] **Step 1: 删掉旧的 footer-bar 状态文字块**
+- [x] **Step 1: 删掉旧的 footer-bar 状态文字块**
 
 在 `project_footer_bar` 函数里,删除:
 
@@ -1723,7 +1731,7 @@ EOF
 `project_scaffold.rs` 里不动——它是纯函数,留着不影响任何东西,不必强行
 删除跨文件的既有测试覆盖。）
 
-- [ ] **Step 2: 加弹窗渲染函数**
+- [x] **Step 2: 加弹窗渲染函数**
 
 在 `project_delete_confirm_popup` 函数定义之前(或之后,同一文件内任意
 靠近的位置)新增:
@@ -1862,7 +1870,7 @@ fn scaffold_progress_popup(
 }
 ```
 
-- [ ] **Step 3: 挂进主渲染栈**
+- [x] **Step 3: 挂进主渲染栈**
 
 在 `view` 函数里(`if ws_state.delete_pending.is_some() { ... }` 那段
 判断附近),追加一个并列分支——`scaffold_run` 和 `delete_pending` 不会
@@ -1907,24 +1915,24 @@ fn scaffold_progress_popup(
     base.into()
 ```
 
-- [ ] **Step 4: 编译检查**
+- [x] **Step 4: 编译检查**
 
 Run: `cargo build -p dozer-app`
 Expected: PASS
 
-- [ ] **Step 5: 跑相关测试**
+- [x] **Step 5: 跑相关测试**
 
 Run: `cargo test -p dozer-app project::`
 Expected: PASS(渲染函数本身不好写自动化断言——iced `Element` 树没有内建
 的"渲染成文本快照"机制,这个任务的正确性主要靠 Task 9 的人工验证,单测
 只覆盖 Task 7 已经写好的状态机)。
 
-- [ ] **Step 6: lint**
+- [x] **Step 6: lint**
 
 Run: `cargo clippy -p dozer-app --all-targets -- -D warnings && cargo fmt -p dozer-app -- --check`
 Expected: 全绿
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/dozer-app/src/extensions/project.rs
@@ -1943,17 +1951,17 @@ EOF
 **Files:**
 - 无代码改动(纯验证)。
 
-- [ ] **Step 1: 全 workspace 构建**
+- [x] **Step 1: 全 workspace 构建**
 
 Run: `cargo build`
 Expected: 全绿,无警告。
 
-- [ ] **Step 2: 全 workspace 测试**
+- [x] **Step 2: 全 workspace 测试**
 
 Run: `cargo test`
 Expected: 全绿(含 Task 1-8 新增的全部测试)。
 
-- [ ] **Step 3: lint + 格式**
+- [x] **Step 3: lint + 格式**
 
 Run: `cargo clippy --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: 全绿。
