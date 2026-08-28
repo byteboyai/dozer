@@ -105,13 +105,8 @@ pub async fn run_backfill(
         let turns = transcripts
             .get_conversation_turns(&conv.conversation_id, -1, u32::MAX)
             .unwrap_or_default();
-        let human: Vec<String> = turns
-            .iter()
-            .filter(|t| t.role == "human")
-            .map(|t| t.content.clone())
-            .collect();
         let (title, summary, status) =
-            match crate::headless_agent::summarize_headless(agent, &human).await {
+            match crate::headless_agent::summarize_headless(agent, &turns).await {
                 Ok((t, s)) => (t, s, SummaryStatus::AiGenerated),
                 Err(e) => {
                     tracing::warn!(

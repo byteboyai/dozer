@@ -4874,6 +4874,15 @@ impl App {
                 if let project::Message::NameRenamed(_, Ok(updated)) = &msg {
                     ws.project = Some(updated.clone());
                 }
+                // 补总结进度追到 Done 时,弹窗外面缓存的 `conversation_sessions`
+                // (`spawn_conversations_refresh` 唯一写入点)不会自动感知
+                // `session_summaries` 表的新增行——不重新拉一次,对话列表会一直
+                // 显示"未总结"直到用户重开项目 tab 或触发别的回合结束刷新。
+                let refresh_conversations = matches!(
+                    &msg,
+                    project::Message::SummaryBackfillProgress(_, completed, total)
+                        if completed >= total
+                );
                 let client = self.client.clone();
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
@@ -4890,6 +4899,11 @@ impl App {
                     &handle,
                     emit,
                 );
+                if refresh_conversations {
+                    self.with_project(project_id, |ws, io| {
+                        ws.spawn_conversations_refresh(io);
+                    });
+                }
             }
             Message::Project(project::Message::OpenLink(path)) => {
                 // 项目链接打开的文件进 Project 面板右配对的预览(`ws.project_preview`),
