@@ -82,7 +82,31 @@ fn build_command(
             cmd.arg("-p").arg(instruction_text());
             Some((cmd, Some(turns_text.as_bytes().to_vec())))
         }
-        _ => None, // CodeBuddy/OpenCode/V8agent 在 Task 5 补上
+        AgentKind::Codebuddy => {
+            let mut cmd = tokio::process::Command::new("codebuddy");
+            // `-y`/`--dangerously-skip-permissions`:CodeBuddy 非交互模式下
+            // 执行任何需要授权的操作(哪怕这里只是让它输出文字)的必需参数,
+            // 不加会卡在授权确认上,headless 场景下无人能应答(spec
+            // 2026-08-28 调研结论)。
+            cmd.arg("-p").arg(instruction_text()).arg("-y");
+            Some((cmd, Some(turns_text.as_bytes().to_vec())))
+        }
+        AgentKind::Opencode => {
+            let mut cmd = tokio::process::Command::new("opencode");
+            // `run` 子命令没有独立 stdin 输入通道,拼接文本直接作为 message
+            // 参数的一部分(spec 2026-08-28 调研结论)。
+            cmd.arg("run")
+                .arg(format!("{}\n\n{}", instruction_text(), turns_text));
+            Some((cmd, None))
+        }
+        AgentKind::V8agent => {
+            let mut cmd = tokio::process::Command::new("v8agent");
+            cmd.env("V8AGENT_ONESHOT", "1");
+            cmd.env_remove("DOZER_SESSION_ID");
+            let stdin_text = format!("{}\n\n{}", instruction_text(), turns_text);
+            Some((cmd, Some(stdin_text.into_bytes())))
+        }
+        AgentKind::Unknown | AgentKind::Codex | AgentKind::Kilo => None,
     }
 }
 
@@ -227,5 +251,56 @@ mod tests {
         // V8agent,Codex 本来就不在覆盖范围内,见 spec 非目标)。
         let result = summarize_headless(AgentKind::Codex, &[]).await;
         assert_eq!(result, Err(HeadlessError::Unsupported));
+    }
+
+    #[test]
+    fn codebuddy_command_includes_dash_y_for_non_interactive_permission() {
+        let (cmd, stdin) = build_command(AgentKind::Codebuddy, "内容").unwrap();
+        let std_cmd = cmd.as_std();
+        assert_eq!(std_cmd.get_program(), "codebuddy");
+        let args: Vec<String> = std_cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args[0], "-p");
+        assert!(args.contains(&"-y".to_string()));
+        assert_eq!(stdin, Some("内容".as_bytes().to_vec()));
+    }
+
+    #[test]
+    fn opencode_command_uses_run_subcommand_with_inline_message_no_stdin() {
+        let (cmd, stdin) = build_command(AgentKind::Opencode, "用户内容").unwrap();
+        let std_cmd = cmd.as_std();
+        assert_eq!(std_cmd.get_program(), "opencode");
+        let args: Vec<String> = std_cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args[0], "run");
+        assert!(args[1].contains(SUMMARY_START_MARKER));
+        assert!(args[1].contains("用户内容"));
+        assert_eq!(stdin, None);
+    }
+
+    #[test]
+    fn v8agent_command_sets_oneshot_env_and_clears_session_id() {
+        let (cmd, stdin) = build_command(AgentKind::V8agent, "用户内容").unwrap();
+        let std_cmd = cmd.as_std();
+        assert_eq!(std_cmd.get_program(), "v8agent");
+        let envs: Vec<_> = std_cmd.get_envs().collect();
+        assert!(envs
+            .iter()
+            .any(|(k, v)| *k == "V8AGENT_ONESHOT" && *v == Some(std::ffi::OsStr::new("1"))));
+        // DOZER_SESSION_ID 显式清掉,避免 v8agent-cli 误挂载 dozer-mcp
+        // (headless 总结走 stdout 解析,不需要 MCP,见 spec)。
+        assert!(envs.iter().any(|(k, v)| *k == "DOZER_SESSION_ID" && v.is_none()));
+        assert!(stdin.is_some());
+    }
+
+    #[test]
+    fn unsupported_kinds_return_none() {
+        assert!(build_command(AgentKind::Codex, "x").is_none());
+        assert!(build_command(AgentKind::Kilo, "x").is_none());
+        assert!(build_command(AgentKind::Unknown, "x").is_none());
     }
 }
