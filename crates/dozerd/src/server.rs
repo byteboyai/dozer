@@ -513,6 +513,19 @@ async fn handle_conn(
                                 }
                             }
                         }
+                        Request::BackfillSessionSummaries { .. } => {
+                            // 占位实现,Task 6 换成真正的后台补总结逻辑。
+                            Reply::Error {
+                                message: "补总结功能尚未实现".into(),
+                            }
+                        }
+                        Request::GetSessionSummaryBackfillStatus { .. } => {
+                            // 占位实现,Task 6 换成真正的进度查询。
+                            Reply::BackfillStatus {
+                                total: 0,
+                                completed: 0,
+                            }
+                        }
                     },
                 };
                 w.write_all(encode_line(&reply).as_bytes()).await?;

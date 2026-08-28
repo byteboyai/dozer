@@ -381,6 +381,20 @@ pub enum Request {
     CloseWithSummary {
         session_id: String,
     },
+    /// 补录一个项目目录下缺失 `session_summaries` 行的历史会话总结(项目
+    /// "修复"按钮触发)。立即返回 `Reply::Ok`——实际处理在 dozerd 后台异步
+    /// 完成,`total` 在返回 Ok 之前已同步算好并写进内存态进度表,调用方拿到
+    /// Ok 后即可放心轮询 `GetSessionSummaryBackfillStatus` 不会撞见"还没算出
+    /// total"的空窗期(spec 2026-08-28)。
+    BackfillSessionSummaries {
+        cwd: String,
+    },
+    /// 查询某 cwd 下补总结后台任务的进度。找不到对应记录(还没发起过/
+    /// dozerd 重启后内存态丢失)时约定回 `total=0, completed=0`,调用方据此
+    /// 判定"无进行中任务"。
+    GetSessionSummaryBackfillStatus {
+        cwd: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -474,6 +488,12 @@ pub enum Reply {
     /// `GetSessionSummary` 应答。
     SessionSummary {
         summary: Option<SessionSummaryPayload>,
+    },
+    /// `GetSessionSummaryBackfillStatus` 应答。`completed >= total` 表示
+    /// 已处理完(`total == 0` 表示这个项目本来就没有缺总结的会话)。
+    BackfillStatus {
+        total: u32,
+        completed: u32,
     },
 }
 
@@ -979,6 +999,31 @@ mod tests {
         };
         let line = encode_line(&req);
         assert_eq!(decode_line::<Request>(&line).unwrap(), req);
+    }
+
+    #[test]
+    fn backfill_session_summaries_request_roundtrips() {
+        let req = Request::BackfillSessionSummaries {
+            cwd: "/repo/x".into(),
+        };
+        let line = encode_line(&req);
+        assert_eq!(decode_line::<Request>(&line).unwrap(), req);
+    }
+
+    #[test]
+    fn get_session_summary_backfill_status_roundtrips() {
+        let req = Request::GetSessionSummaryBackfillStatus {
+            cwd: "/repo/x".into(),
+        };
+        let line = encode_line(&req);
+        assert_eq!(decode_line::<Request>(&line).unwrap(), req);
+
+        let reply = Reply::BackfillStatus {
+            total: 5,
+            completed: 2,
+        };
+        let line = encode_line(&reply);
+        assert_eq!(decode_line::<Reply>(&line).unwrap(), reply);
     }
 
     #[test]
