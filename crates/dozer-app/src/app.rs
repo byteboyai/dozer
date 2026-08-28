@@ -4853,7 +4853,12 @@ impl App {
                 msg @ (project::Message::GitRefreshed(project_id, ..)
                 | project::Message::AcceptanceCountLoaded(project_id, ..)
                 | project::Message::NameRenamed(project_id, ..)
-                | project::Message::DiskUsageLoaded(project_id, ..)),
+                | project::Message::DiskUsageLoaded(project_id, ..)
+                | project::Message::ScaffoldStepStarted(project_id, ..)
+                | project::Message::ScaffoldStepFinished(project_id, ..)
+                | project::Message::TranscriptBackfillStarted(project_id, ..)
+                | project::Message::TranscriptBackfillFinished(project_id, ..)
+                | project::Message::SummaryBackfillProgress(project_id, ..)),
             ) => {
                 let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
                     return;
@@ -5212,7 +5217,7 @@ impl App {
         let emit = move |m| {
             let _ = proxy.send_event(Message::Project(m));
         };
-        project::spawn_scaffold_run(repo_path, false, client, &handle, emit);
+        project::spawn_scaffold_run(repo_path, client, &handle, emit);
     }
 
     fn project_tab_switch(&mut self, id: i64) {

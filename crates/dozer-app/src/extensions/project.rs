@@ -14,6 +14,64 @@ use std::path::PathBuf;
 
 use crate::project_scaffold;
 
+/// 单个同步 scaffold 步骤(缓存目录/README/git 仓库/项目文档与 Agent
+/// 记忆)在弹窗里的实时状态。`ScaffoldStepResult` 只有终态,这里补一层
+/// pending/running。
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScaffoldStepState {
+    Pending,
+    Running,
+    Done(project_scaffold::ScaffoldStepResult),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BackfillProgress {
+    pub completed: u32,
+    pub total: u32,
+}
+
+/// "补总结"聚合进度行的状态。`Done` 不区分成功/失败——补总结内部每条都有
+/// 自己的降级路径(headless 失败就走启发式,见 `dozerd` 侧),从这个面板的
+/// 视角看永远是"处理完了 N/M 条",没有整体失败态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackfillStepState {
+    Pending,
+    Running(BackfillProgress),
+    Done(BackfillProgress),
+}
+
+/// 一次"修复项目"弹窗跑的完整状态:4 个同步步骤 + 转录历史补录 + 补总结
+/// 聚合进度。`steps` 里固定 5 项,顺序 = `project_scaffold::scaffold_steps()`
+/// 的 4 项 + 追加的"agent 历史"转录补录(与既有 `spawn_scaffold_run` 的
+/// 拼接顺序一致)。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScaffoldRunState {
+    pub steps: Vec<(String, ScaffoldStepState)>,
+    pub backfill: BackfillStepState,
+}
+
+impl ScaffoldRunState {
+    /// 初始态:全部步骤 Pending,补总结也 Pending。
+    fn pending() -> Self {
+        let mut steps: Vec<(String, ScaffoldStepState)> = project_scaffold::scaffold_steps()
+            .into_iter()
+            .map(|s| (s.label.to_string(), ScaffoldStepState::Pending))
+            .collect();
+        steps.push(("agent 历史".to_string(), ScaffoldStepState::Pending));
+        Self {
+            steps,
+            backfill: BackfillStepState::Pending,
+        }
+    }
+
+    pub fn all_done(&self) -> bool {
+        self.steps
+            .iter()
+            .all(|(_, s)| matches!(s, ScaffoldStepState::Done(_)))
+            && matches!(self.backfill, BackfillStepState::Done(_))
+    }
+}
+
 /// 挂在每个 Workspace 上的项目信息面板状态。
 #[derive(Default)]
 pub struct WorkspaceState {
@@ -46,7 +104,7 @@ pub struct WorkspaceState {
     /// `None`=无选中(新开项目默认)。
     selected_link: Option<PathBuf>,
     error: Option<String>,
-    pub(crate) scaffold_report: Option<project_scaffold::ScaffoldReport>,
+    pub(crate) scaffold_run: Option<ScaffoldRunState>,
     pub(crate) delete_pending: Option<delete::DeleteScope>,
 }
 
@@ -220,7 +278,8 @@ pub enum Message {
     /// 单颗"＋"按钮:由内核 rfd 弹 OS 文件浏览器(根目录在项目根),选中的
     /// 文件/目录由内核判 `is_dir()` 定 `LinkKind`,再回送 `LinkAdd`。
     Pick(links::LinkTarget),
-    /// footer-bar「修复项目」按钮(UI 占位,逻辑后续接入)。
+    /// footer-bar「修复项目」按钮:弹出逐步骤实时反馈弹窗,见
+    /// `spawn_repair_run`。
     RepairProject,
     /// footer-bar「删除项目」按钮:打开三选一确认弹窗,默认选中最轻层级。
     DeleteProjectRequest,
@@ -233,12 +292,24 @@ pub enum Message {
     /// `LinkContextMenu` 的既有先例)——`update()` 里这个分支是
     /// `unreachable!()`。
     DeleteProjectConfirm,
-    /// 一次 ensure/repair 批跑完成。`visible=true`(修复项目按钮触发)才
-    /// 把结果存进 `WorkspaceState.scaffold_report` 供状态文字展示;
-    /// `visible=false`(打开项目时静默触发)只是让副作用(README/.dozer/
-    /// git/agent 历史)落地,不展示——两条触发路径共用同一个
-    /// `spawn_scaffold_run`,靠这个布尔位区分要不要展示。
-    ScaffoldDone(project_scaffold::ScaffoldReport, bool),
+    /// 静默 scaffold 跑(打开项目 tab 时触发,不弹窗)完成。目前没有任何
+    /// UI 需要消费这个结果——四个同步步骤 + 转录补录的副作用已经落地,这
+    /// 条消息只是给 `update()` 一个"忽略"分支占位,不驱动任何状态。
+    ScaffoldDone,
+    /// "修复项目"弹窗:第 `idx` 个同步步骤(下标对应
+    /// `ScaffoldRunState.steps`)进入 Running。
+    ScaffoldStepStarted(i64, usize),
+    /// 同上,携带该步骤终态。
+    ScaffoldStepFinished(i64, usize, project_scaffold::ScaffoldStepResult),
+    /// "agent 历史"转录补录步骤(固定是 `steps` 的最后一项)开始。
+    TranscriptBackfillStarted(i64),
+    /// 同上,携带终态。
+    TranscriptBackfillFinished(i64, project_scaffold::ScaffoldStepResult),
+    /// 补总结轮询到新的 `(completed, total)`。`completed >= total` 时
+    /// `update()` 把 `backfill` 置为 `Done`,否则 `Running`。
+    SummaryBackfillProgress(i64, u32, u32),
+    /// 弹窗"关闭"按钮(全部完成才可点)。
+    ScaffoldPopupClose,
 }
 
 /// 处理全部消息——本模块不触碰终端会话域,没有需要内核拦截、`update` 里
@@ -379,7 +450,14 @@ pub fn update(
             unreachable!("由内核拦截处理,见 files::Message::ContextMenuOpen 文档")
         }
         Message::RepairProject => {
-            spawn_scaffold_run(repo_path.to_path_buf(), true, client.clone(), handle, emit);
+            ws_state.scaffold_run = Some(ScaffoldRunState::pending());
+            spawn_repair_run(
+                repo_path.to_path_buf(),
+                project_id,
+                client.clone(),
+                handle,
+                emit,
+            );
         }
         Message::DeleteProjectRequest => {
             ws_state.delete_pending = Some(delete::DeleteScope::DozerOnly);
@@ -393,52 +471,139 @@ pub fn update(
         Message::DeleteProjectConfirm => {
             unreachable!("由内核拦截处理,见 App::project_delete_confirm 文档")
         }
-        Message::ScaffoldDone(report, visible) => {
-            if visible {
-                ws_state.scaffold_report = Some(report);
+        Message::ScaffoldDone => {}
+        Message::ScaffoldStepStarted(_, idx) => {
+            if let Some(run) = &mut ws_state.scaffold_run
+                && let Some((_, state)) = run.steps.get_mut(idx)
+            {
+                *state = ScaffoldStepState::Running;
+            }
+        }
+        Message::ScaffoldStepFinished(_, idx, result) => {
+            if let Some(run) = &mut ws_state.scaffold_run
+                && let Some((_, state)) = run.steps.get_mut(idx)
+            {
+                *state = ScaffoldStepState::Done(result);
+            }
+        }
+        Message::TranscriptBackfillStarted(_) => {
+            if let Some(run) = &mut ws_state.scaffold_run {
+                let last = run.steps.len() - 1;
+                if let Some((_, state)) = run.steps.get_mut(last) {
+                    *state = ScaffoldStepState::Running;
+                }
+            }
+        }
+        Message::TranscriptBackfillFinished(_, result) => {
+            if let Some(run) = &mut ws_state.scaffold_run {
+                let last = run.steps.len() - 1;
+                if let Some((_, state)) = run.steps.get_mut(last) {
+                    *state = ScaffoldStepState::Done(result);
+                }
+            }
+        }
+        Message::SummaryBackfillProgress(_, completed, total) => {
+            if let Some(run) = &mut ws_state.scaffold_run {
+                let progress = BackfillProgress { completed, total };
+                run.backfill = if completed >= total {
+                    BackfillStepState::Done(progress)
+                } else {
+                    BackfillStepState::Running(progress)
+                };
+            }
+        }
+        Message::ScaffoldPopupClose => {
+            if matches!(&ws_state.scaffold_run, Some(run) if run.all_done()) {
+                ws_state.scaffold_run = None;
             }
         }
     }
 }
 
-/// 跑一次完整的 ensure/repair:README/`.dozer`/git 三个同步步骤打包进
-/// 一次 `spawn_blocking`(复用 `files.rs::Message::GitInit` 处理已经用过
-/// 的手法),再 `await` 一次 agent 历史数据回填,四项结果拼进一份
-/// `ScaffoldReport` 发回。`visible` 原样透传给 `Message::ScaffoldDone`,
-/// 决定这次结果要不要展示(见该消息的文档注释)。`app.rs::project_tab_opened`
-/// (新开 tab,`visible=false`)和这个文件的 `RepairProject` 处理
-/// (`visible=true`)都调这个函数,不重复实现两遍。
+/// 静默 scaffold 跑(项目 tab 打开时触发,`app.rs::project_tab_opened`
+/// 唯一调用点,不弹窗)。跑完四个同步步骤 + 转录历史补录,不产出任何
+/// UI 可见结果——`emit(Message::ScaffoldDone)` 只是让调用方知道这批
+/// spawn 任务已经跑完(目前没有消费方,`update()` 是空分支),不携带内容。
+/// **不触发补总结**:补总结只在显式点击"修复项目"时跑(spec
+/// 2026-08-28,避免每次静默打开项目都真实拉起 agent 进程)。
 pub fn spawn_scaffold_run(
     repo_path: std::path::PathBuf,
-    visible: bool,
     client: dozer_client::Client,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
     let cwd = repo_path.to_string_lossy().into_owned();
     handle.spawn(async move {
-        let sync_steps = {
-            let repo_path = repo_path.clone();
-            tokio::task::spawn_blocking(move || project_scaffold::run_sync_steps(&repo_path))
+        let repo_path2 = repo_path.clone();
+        let _ = tokio::task::spawn_blocking(move || project_scaffold::run_sync_steps(&repo_path2))
+            .await;
+        let _ = client.backfill_project_transcripts(&cwd).await;
+        emit(Message::ScaffoldDone);
+    });
+}
+
+const SUMMARY_BACKFILL_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// "修复项目"按钮触发的完整跑法:4 个同步步骤逐个 Started/Finished、
+/// 转录历史补录 Started/Finished、再触发补总结并轮询进度,全部实时
+/// `emit` 给弹窗(spec 2026-08-28)。所有消息都携带 `project_id`,靠
+/// `app.rs` 里按 `project_id` 查找 workspace 的路由分支落地(不依赖
+/// "当前激活哪个 tab"),避免用户在补总结进行中切换项目 tab 时消息投递到
+/// 错误的 workspace。
+pub fn spawn_repair_run(
+    repo_path: std::path::PathBuf,
+    project_id: i64,
+    client: dozer_client::Client,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    let cwd = repo_path.to_string_lossy().into_owned();
+    handle.spawn(async move {
+        let steps = project_scaffold::scaffold_steps();
+        for (idx, step) in steps.into_iter().enumerate() {
+            emit(Message::ScaffoldStepStarted(project_id, idx));
+            let repo_path3 = repo_path.clone();
+            let result = tokio::task::spawn_blocking(move || (step.run)(&repo_path3))
                 .await
                 .unwrap_or_else(|e| {
-                    vec![(
-                        "初始化检查".to_string(),
-                        project_scaffold::ScaffoldStepResult::Failed(format!("内部错误: {e}")),
-                    )]
-                })
-        };
+                    project_scaffold::ScaffoldStepResult::Failed(format!("内部错误: {e}"))
+                });
+            emit(Message::ScaffoldStepFinished(project_id, idx, result));
+        }
+
+        emit(Message::TranscriptBackfillStarted(project_id));
         let backfill_result = match client.backfill_project_transcripts(&cwd).await {
             Ok(0) => project_scaffold::ScaffoldStepResult::AlreadyOk,
             Ok(n) => project_scaffold::ScaffoldStepResult::Created(format!("导入 {n} 个历史文件")),
             Err(e) => project_scaffold::ScaffoldStepResult::Failed(e.to_string()),
         };
-        let mut steps = sync_steps;
-        steps.push(("agent 历史".to_string(), backfill_result));
-        emit(Message::ScaffoldDone(
-            project_scaffold::ScaffoldReport { steps },
-            visible,
+        emit(Message::TranscriptBackfillFinished(
+            project_id,
+            backfill_result,
         ));
+
+        if let Err(e) = client.backfill_session_summaries(&cwd).await {
+            tracing::warn!(error = %e, "补总结请求发送失败,视为无需补");
+            emit(Message::SummaryBackfillProgress(project_id, 0, 0));
+            return;
+        }
+        loop {
+            tokio::time::sleep(SUMMARY_BACKFILL_POLL_INTERVAL).await;
+            match client.get_session_summary_backfill_status(&cwd).await {
+                Ok((completed, total)) => {
+                    emit(Message::SummaryBackfillProgress(
+                        project_id, completed, total,
+                    ));
+                    if completed >= total {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "查询补总结进度失败,停止轮询");
+                    break;
+                }
+            }
+        }
     });
 }
 
@@ -765,7 +930,7 @@ pub fn view<'a>(
         );
     }
 
-    let body = column![content, project_footer_bar(ws_state)].spacing(0);
+    let body = column![content, project_footer_bar()].spacing(0);
 
     let base =
         container(body)
@@ -796,17 +961,32 @@ pub fn view<'a>(
             .into();
     }
 
+    if ws_state.scaffold_run.is_some() {
+        // 进行中不可通过点击遮罩关闭:遮罩本身不挂 `on_press`,只挡住底层
+        // 交互(与 `delete_pending` 分支的可点击遮罩故意不同——必须等全部
+        // 步骤完成才能关,见 spec"弹窗可取消性"一节)。
+        let scrim = container(column![])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+                background: Some(byteui::theme::color::current().scrim.into()),
+                ..iced_widget::container::Style::default()
+            });
+        return stack![base, scrim, scaffold_progress_popup(ws_state)]
+            .width(width)
+            .height(Length::Fill)
+            .into();
+    }
+
     base.into()
 }
 
 /// 项目信息面板底部 footer-bar,结构与文件树面板的 `git_footer_bar` 一致:
 /// 1px `BORDER` 分隔线 + `padding([6, 8])` 容器。当前放「修复项目 / 删除项目」
-/// 两个并排圆角按钮:「修复项目」触发 `RepairProject`(见 `spawn_scaffold_run`),
-/// 「删除项目」触发 `DeleteProjectRequest` 打开三选一确认弹窗(见
-/// `project_delete_confirm_popup`)。
-fn project_footer_bar(
-    ws_state: &WorkspaceState,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+/// 两个并排圆角按钮:「修复项目」触发 `RepairProject`(见 `spawn_repair_run`,
+/// 弹出逐步骤进度弹窗),「删除项目」触发 `DeleteProjectRequest` 打开三选一
+/// 确认弹窗(见 `project_delete_confirm_popup`)。
+fn project_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let repair = button(
         text("修复项目")
             .size(byteui::theme::font::label())
@@ -857,22 +1037,161 @@ fn project_footer_bar(
             ..iced_widget::container::Style::default()
         });
 
-    let status = ws_state.scaffold_report.as_ref().map(|report| {
-        text(project_scaffold::format_scaffold_report(report))
-            .size(byteui::theme::font::caption_sm())
-            .color(byteui::theme::color::current().dim)
-    });
-
-    let mut col = column![top_line, bar].spacing(4);
-    if let Some(status) = status {
-        col = col.push(status);
-    }
+    let col = column![top_line, bar].spacing(4);
 
     container(col)
         .width(Length::Fill)
         .padding([6, 8])
         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
             background: None,
+            ..iced_widget::container::Style::default()
+        })
+        .into()
+}
+
+/// "修复项目"弹窗单行:左侧状态符号 + 步骤名 + 右侧简短详情文字。
+fn scaffold_step_row<'a>(
+    label: &'a str,
+    state: &'a ScaffoldStepState,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let (glyph, glyph_color, detail): (&str, iced_widget::core::Color, String) = match state {
+        ScaffoldStepState::Pending => ("○", byteui::theme::color::current().dim, String::new()),
+        ScaffoldStepState::Running => (
+            "…",
+            byteui::theme::color::current().gold,
+            "进行中".to_string(),
+        ),
+        ScaffoldStepState::Done(project_scaffold::ScaffoldStepResult::AlreadyOk) => (
+            "✓",
+            byteui::theme::color::current().green,
+            "已是最新".to_string(),
+        ),
+        ScaffoldStepState::Done(project_scaffold::ScaffoldStepResult::Created(msg)) => {
+            ("✓", byteui::theme::color::current().green, msg.clone())
+        }
+        ScaffoldStepState::Done(project_scaffold::ScaffoldStepResult::Failed(msg)) => {
+            ("✗", byteui::theme::color::current().red, msg.clone())
+        }
+    };
+    row![
+        text(glyph)
+            .size(byteui::theme::font::body())
+            .color(glyph_color),
+        text(label)
+            .size(byteui::theme::font::label())
+            .color(byteui::theme::color::current().cream)
+            .width(Length::Fixed(140.0)),
+        text(detail)
+            .size(byteui::theme::font::caption())
+            .color(byteui::theme::color::current().dim),
+    ]
+    .spacing(8)
+    .align_y(iced_widget::core::Alignment::Center)
+    .into()
+}
+
+fn scaffold_backfill_row(
+    state: &BackfillStepState,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let (glyph, glyph_color, detail) = match state {
+        BackfillStepState::Pending => (
+            "○".to_string(),
+            byteui::theme::color::current().dim,
+            String::new(),
+        ),
+        BackfillStepState::Running(p) => (
+            "…".to_string(),
+            byteui::theme::color::current().gold,
+            format!("{}/{}", p.completed, p.total),
+        ),
+        BackfillStepState::Done(p) if p.total == 0 => (
+            "✓".to_string(),
+            byteui::theme::color::current().green,
+            "无需补".to_string(),
+        ),
+        BackfillStepState::Done(p) => (
+            "✓".to_string(),
+            byteui::theme::color::current().green,
+            format!("{}/{}", p.completed, p.total),
+        ),
+    };
+    row![
+        text(glyph)
+            .size(byteui::theme::font::body())
+            .color(glyph_color),
+        text("补总结")
+            .size(byteui::theme::font::label())
+            .color(byteui::theme::color::current().cream)
+            .width(Length::Fixed(140.0)),
+        text(detail)
+            .size(byteui::theme::font::caption())
+            .color(byteui::theme::color::current().dim),
+    ]
+    .spacing(8)
+    .align_y(iced_widget::core::Alignment::Center)
+    .into()
+}
+
+/// "修复项目"进度弹窗:视觉模板同 `project_delete_confirm_popup`(卡片 +
+/// 底部按钮)。进行中时"关闭"按钮不可点(`on_press_maybe`),全部完成
+/// (`ScaffoldRunState::all_done`)才激活。
+fn scaffold_progress_popup(
+    ws_state: &WorkspaceState,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let Some(run) = &ws_state.scaffold_run else {
+        return container(column![]).into();
+    };
+    let mut rows = column![].spacing(10);
+    for (label, state) in &run.steps {
+        rows = rows.push(scaffold_step_row(label, state));
+    }
+    rows = rows.push(scaffold_backfill_row(&run.backfill));
+
+    let done = run.all_done();
+    let close_label = if done { "关闭" } else { "进行中…" };
+    let close_btn = button(
+        text(close_label)
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().cream),
+    )
+    .on_press_maybe(done.then_some(Message::ScaffoldPopupClose))
+    .padding([6, 12])
+    .style(
+        move |_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+            background: Some(byteui::theme::color::current().card.into()),
+            text_color: byteui::theme::color::current().cream,
+            border: Border {
+                color: if done {
+                    byteui::theme::color::current().gold
+                } else {
+                    byteui::theme::color::current().border
+                },
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..iced_widget::button::Style::default()
+        },
+    );
+
+    let card = column![
+        text("修复项目")
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().cream),
+        rows,
+        container(close_btn).align_x(iced_widget::core::alignment::Horizontal::Right),
+    ]
+    .spacing(14);
+
+    container(card)
+        .width(Length::Fixed(360.0))
+        .padding(16)
+        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+            background: Some(byteui::theme::color::current().card.into()),
+            border: Border {
+                color: byteui::theme::color::current().border,
+                width: 1.0,
+                radius: 8.0.into(),
+            },
             ..iced_widget::container::Style::default()
         })
         .into()
@@ -1629,41 +1948,232 @@ mod tests {
     }
 
     #[test]
-    fn scaffold_done_stores_report_only_when_visible() {
-        let mut ws_state = WorkspaceState::new(None, links::LinksState::default());
-        let noop_client = dozer_client::Client::new(std::path::PathBuf::from("/tmp/dozer.sock"));
-        let handle = tokio::runtime::Handle::try_current()
-            .unwrap_or_else(|_| tokio::runtime::Runtime::new().unwrap().handle().clone());
-        let report = project_scaffold::ScaffoldReport {
-            steps: vec![(
-                "README".into(),
-                project_scaffold::ScaffoldStepResult::AlreadyOk,
-            )],
-        };
-
+    fn scaffold_done_is_a_pure_noop() {
+        let mut ws = new_ws();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         update(
-            &mut ws_state,
-            Message::ScaffoldDone(report.clone(), false),
+            &mut ws,
+            Message::ScaffoldDone,
             1,
-            "demo",
-            std::path::Path::new("/tmp/demo"),
-            &noop_client,
-            &handle,
+            "名字",
+            &test_repo_path(),
+            &test_client(),
+            rt.handle(),
             |_| {},
         );
-        assert_eq!(ws_state.scaffold_report, None);
+        assert!(ws.scaffold_run.is_none());
+    }
 
+    #[test]
+    fn repair_project_sets_pending_scaffold_run() {
+        let mut ws = new_ws();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         update(
-            &mut ws_state,
-            Message::ScaffoldDone(report.clone(), true),
+            &mut ws,
+            Message::RepairProject,
             1,
-            "demo",
-            std::path::Path::new("/tmp/demo"),
-            &noop_client,
-            &handle,
+            "名字",
+            &test_repo_path(),
+            &test_client(),
+            rt.handle(),
             |_| {},
         );
-        assert_eq!(ws_state.scaffold_report, Some(report));
+        let run = ws.scaffold_run.expect("弹窗状态应已初始化");
+        assert_eq!(run.steps.len(), 5);
+        assert!(
+            run.steps
+                .iter()
+                .all(|(_, s)| matches!(s, ScaffoldStepState::Pending))
+        );
+        assert_eq!(run.backfill, BackfillStepState::Pending);
+    }
+
+    #[test]
+    fn scaffold_step_started_then_finished_updates_that_step_only() {
+        let mut ws = new_ws();
+        ws.scaffold_run = Some(ScaffoldRunState::pending());
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::ScaffoldStepStarted(1, 1),
+            1,
+            "名字",
+            &test_repo_path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        let run = ws.scaffold_run.as_ref().unwrap();
+        assert_eq!(run.steps[0].1, ScaffoldStepState::Pending);
+        assert_eq!(run.steps[1].1, ScaffoldStepState::Running);
+
+        update(
+            &mut ws,
+            Message::ScaffoldStepFinished(1, 1, project_scaffold::ScaffoldStepResult::AlreadyOk),
+            1,
+            "名字",
+            &test_repo_path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        let run = ws.scaffold_run.as_ref().unwrap();
+        assert_eq!(
+            run.steps[1].1,
+            ScaffoldStepState::Done(project_scaffold::ScaffoldStepResult::AlreadyOk)
+        );
+    }
+
+    #[test]
+    fn transcript_backfill_started_then_finished_updates_last_step_only() {
+        let mut ws = new_ws();
+        ws.scaffold_run = Some(ScaffoldRunState::pending());
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::TranscriptBackfillStarted(1),
+            1,
+            "名字",
+            &test_repo_path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        let run = ws.scaffold_run.as_ref().unwrap();
+        let last = run.steps.len() - 1;
+        assert_eq!(run.steps[last].1, ScaffoldStepState::Running);
+        assert_eq!(run.steps[0].1, ScaffoldStepState::Pending);
+
+        update(
+            &mut ws,
+            Message::TranscriptBackfillFinished(
+                1,
+                project_scaffold::ScaffoldStepResult::Created("导入 3 个历史文件".into()),
+            ),
+            1,
+            "名字",
+            &test_repo_path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        let run = ws.scaffold_run.as_ref().unwrap();
+        assert_eq!(
+            run.steps[last].1,
+            ScaffoldStepState::Done(project_scaffold::ScaffoldStepResult::Created(
+                "导入 3 个历史文件".into()
+            ))
+        );
+    }
+
+    #[test]
+    fn summary_backfill_progress_marks_done_when_completed_reaches_total() {
+        let mut ws = new_ws();
+        ws.scaffold_run = Some(ScaffoldRunState::pending());
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::SummaryBackfillProgress(1, 2, 5),
+            1,
+            "名字",
+            &test_repo_path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert_eq!(
+            ws.scaffold_run.as_ref().unwrap().backfill,
+            BackfillStepState::Running(BackfillProgress {
+                completed: 2,
+                total: 5
+            })
+        );
+
+        update(
+            &mut ws,
+            Message::SummaryBackfillProgress(1, 5, 5),
+            1,
+            "名字",
+            &test_repo_path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert_eq!(
+            ws.scaffold_run.as_ref().unwrap().backfill,
+            BackfillStepState::Done(BackfillProgress {
+                completed: 5,
+                total: 5
+            })
+        );
+    }
+
+    #[test]
+    fn summary_backfill_progress_of_zero_total_is_immediately_done() {
+        let mut ws = new_ws();
+        ws.scaffold_run = Some(ScaffoldRunState::pending());
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::SummaryBackfillProgress(1, 0, 0),
+            1,
+            "名字",
+            &test_repo_path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert_eq!(
+            ws.scaffold_run.as_ref().unwrap().backfill,
+            BackfillStepState::Done(BackfillProgress {
+                completed: 0,
+                total: 0
+            })
+        );
+    }
+
+    #[test]
+    fn popup_close_only_clears_state_when_all_done() {
+        let mut ws = new_ws();
+        ws.scaffold_run = Some(ScaffoldRunState::pending());
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::ScaffoldPopupClose,
+            1,
+            "名字",
+            &test_repo_path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert!(ws.scaffold_run.is_some(), "未完成时点关闭不应清空状态");
+    }
+
+    #[test]
+    fn popup_close_clears_state_once_all_steps_and_backfill_are_done() {
+        let mut ws = new_ws();
+        let mut run = ScaffoldRunState::pending();
+        for (_, state) in run.steps.iter_mut() {
+            *state = ScaffoldStepState::Done(project_scaffold::ScaffoldStepResult::AlreadyOk);
+        }
+        run.backfill = BackfillStepState::Done(BackfillProgress {
+            completed: 0,
+            total: 0,
+        });
+        ws.scaffold_run = Some(run);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::ScaffoldPopupClose,
+            1,
+            "名字",
+            &test_repo_path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert!(ws.scaffold_run.is_none());
     }
 
     #[test]

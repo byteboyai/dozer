@@ -1,7 +1,8 @@
 //! 项目 ensure/repair 的可扩展步骤机制(spec 2026-08-22)。README/`.dozer`
-//! 目录/git 仓库三个同步步骤登记在这里；agent 历史数据导入是异步的
-//! dozerd 请求，不在这个纯函数列表里，由调用方(`extensions::project`)
-//! 单独跑完再拼进同一份 `ScaffoldReport`。
+//! 目录/git 仓库三个同步步骤登记在这里；agent 历史数据导入/会话总结补录
+//! 是异步的 dozerd 请求，不在这个纯函数列表里，由调用方
+//! (`extensions::project::spawn_repair_run`)驱动、逐步骤实时反馈进弹窗
+//! (spec 2026-08-28)。
 
 use crate::extensions::project::links;
 use std::path::Path;
@@ -16,11 +17,6 @@ pub enum ScaffoldStepResult {
 pub struct ScaffoldStep {
     pub label: &'static str,
     pub run: fn(&Path) -> ScaffoldStepResult,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ScaffoldReport {
-    pub steps: Vec<(String, ScaffoldStepResult)>,
 }
 
 fn ensure_dozer_dir(repo: &Path) -> ScaffoldStepResult {
@@ -108,44 +104,16 @@ pub fn scaffold_steps() -> Vec<ScaffoldStep> {
 }
 
 /// 顺序跑完全部同步步骤。这几步都可能阻塞(尤其 `ensure_git_repo` 会
-/// shell 出子进程),调用方(`extensions::project::spawn_scaffold_run`,
-/// Task 8)负责把这个函数整体包进 `tokio::task::spawn_blocking`,这里
-/// 本身不做任何异步处理。
+/// shell 出子进程),批量一次跑完的调用方(静默路径
+/// `extensions::project::spawn_scaffold_run`)负责把这个函数整体包进
+/// `tokio::task::spawn_blocking`——需要逐步骤实时反馈的路径
+/// (`spawn_repair_run`)改成对每个 `scaffold_steps()` 元素单独
+/// `spawn_blocking`,不调这个批量函数。这里本身不做任何异步处理。
 pub fn run_sync_steps(repo: &Path) -> Vec<(String, ScaffoldStepResult)> {
     scaffold_steps()
         .into_iter()
         .map(|step| (step.label.to_string(), (step.run)(repo)))
         .collect()
-}
-
-/// `ScaffoldReport` → "修复项目"按钮旁边展示的一行状态文字。全部
-/// `AlreadyOk` 时给一句"一切正常"的简短总结,否则按 已修复/已是最新/失败
-/// 三类分组列出各自涉及的步骤标签,失败项带上错误信息。
-pub fn format_scaffold_report(report: &ScaffoldReport) -> String {
-    let mut created = Vec::new();
-    let mut already_ok = Vec::new();
-    let mut failed = Vec::new();
-    for (label, result) in &report.steps {
-        match result {
-            ScaffoldStepResult::Created(_) => created.push(label.as_str()),
-            ScaffoldStepResult::AlreadyOk => already_ok.push(label.as_str()),
-            ScaffoldStepResult::Failed(msg) => failed.push(format!("{label}({msg})")),
-        }
-    }
-    if created.is_empty() && failed.is_empty() {
-        return "一切正常".to_string();
-    }
-    let mut parts = Vec::new();
-    if !created.is_empty() {
-        parts.push(format!("已修复:{}", created.join("、")));
-    }
-    if !already_ok.is_empty() {
-        parts.push(format!("已是最新:{}", already_ok.join("、")));
-    }
-    if !failed.is_empty() {
-        parts.push(format!("失败:{}", failed.join("、")));
-    }
-    parts.join(";")
 }
 
 #[cfg(test)]
@@ -238,37 +206,5 @@ mod tests {
         );
         let state = links::load(tmp.path()).unwrap();
         assert_eq!(state.memory.len(), 1);
-    }
-
-    #[test]
-    fn format_scaffold_report_lists_created_already_ok_and_failed_separately() {
-        let report = ScaffoldReport {
-            steps: vec![
-                (
-                    "git 仓库".into(),
-                    ScaffoldStepResult::Created("已初始化".into()),
-                ),
-                ("缓存目录".into(), ScaffoldStepResult::AlreadyOk),
-                (
-                    "agent 历史".into(),
-                    ScaffoldStepResult::Failed("daemon 断开".into()),
-                ),
-            ],
-        };
-        let text = format_scaffold_report(&report);
-        assert!(text.contains("已修复:git 仓库"));
-        assert!(text.contains("已是最新:缓存目录"));
-        assert!(text.contains("失败:agent 历史(daemon 断开)"));
-    }
-
-    #[test]
-    fn format_scaffold_report_all_already_ok_shows_single_summary() {
-        let report = ScaffoldReport {
-            steps: vec![
-                ("缓存目录".into(), ScaffoldStepResult::AlreadyOk),
-                ("README".into(), ScaffoldStepResult::AlreadyOk),
-            ],
-        };
-        assert_eq!(format_scaffold_report(&report), "一切正常");
     }
 }
