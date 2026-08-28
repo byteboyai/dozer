@@ -137,6 +137,31 @@ impl Client {
         }
     }
 
+    /// 触发某 cwd 下缺失总结会话的批量补录(项目"修复"按钮用,spec
+    /// 2026-08-28)。立即返回;实际补录在 dozerd 后台完成,进度靠
+    /// `get_session_summary_backfill_status` 轮询。
+    pub async fn backfill_session_summaries(&self, cwd: &str) -> Result<()> {
+        match self
+            .roundtrip(&Request::BackfillSessionSummaries { cwd: cwd.into() })
+            .await?
+        {
+            Reply::Ok => Ok(()),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// 查询补总结进度,返回 `(completed, total)`。找不到进行中任务时回
+    /// `(0, 0)`。
+    pub async fn get_session_summary_backfill_status(&self, cwd: &str) -> Result<(u32, u32)> {
+        match self
+            .roundtrip(&Request::GetSessionSummaryBackfillStatus { cwd: cwd.into() })
+            .await?
+        {
+            Reply::BackfillStatus { total, completed } => Ok((completed, total)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn record_acceptance(
         &self,
