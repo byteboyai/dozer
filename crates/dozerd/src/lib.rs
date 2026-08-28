@@ -1,6 +1,7 @@
 pub mod acceptance;
 pub mod backfill;
 pub mod bookmarks;
+pub mod default_agent_config;
 pub mod preview_context;
 pub mod projects;
 pub mod registry;
