@@ -302,27 +302,35 @@ impl CodeEditor {
         }
 
         // Lucide 风格的折叠箭头:用两段矢量描边画出(不依赖字形字体),
-        // 收起时朝右 `chevron-right`,展开时朝下 `chevron-down`。
+        // 收起时朝右 `chevron-right`,展开时朝下 `chevron-down`。真正的
+        // lucide chevron-down/-right 图标沿箭头方向的半长(`l`)是垂直方向
+        // 半深(`d`)的两倍(如 chevron-down 视口坐标 (6,9)-(12,15)-(18,9),
+        // 折算成中心相对坐标是 (∓6,∓3)/( 0,+3)),不是 `l == d` 的正方形
+        // 缺口——之前 `l`/`d` 共用同一个 `s`,把箭头画成了更陡更"高"的形状
+        // (2026-08-29 用户反馈:图标被拉高、没保持原比例)。
         let cx = number_area_width + self.fold_margin_width * 0.5;
         let cy = y + ctx.line_height * 0.5;
-        let s = (ctx.font_size * 0.30).max(3.0);
+        let l = (ctx.font_size * 0.30).max(3.0);
+        let d = l * 0.5;
         let stroke = canvas::Stroke::default()
             .with_color(self.style.line_number_color)
             .with_width((ctx.font_size * 0.12).max(1.0))
             .with_line_cap(canvas::LineCap::Round);
         let (a, b, c) = if self.is_folded(visual_line.logical_line) {
-            // ">" : 上 -> 中 -> 下
+            // ">" chevron-right:箭头方向是竖直的,`l` 用在 y 轴、`d` 用在
+            // x 轴——上 -> 中(尖端朝右)-> 下。
             (
-                Point::new(cx - s, cy - s),
-                Point::new(cx + s, cy),
-                Point::new(cx - s, cy + s),
+                Point::new(cx - d, cy - l),
+                Point::new(cx + d, cy),
+                Point::new(cx - d, cy + l),
             )
         } else {
-            // "v" : 左 -> 中 -> 右
+            // "v" chevron-down:箭头方向是水平的,`l` 用在 x 轴、`d` 用在
+            // y 轴——左 -> 中(尖端朝下)-> 右。
             (
-                Point::new(cx - s, cy - s),
-                Point::new(cx, cy + s),
-                Point::new(cx + s, cy - s),
+                Point::new(cx - l, cy - d),
+                Point::new(cx, cy + d),
+                Point::new(cx + l, cy - d),
             )
         };
         frame.stroke(&canvas::Path::line(a, b), stroke);

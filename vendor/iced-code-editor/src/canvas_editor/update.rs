@@ -2626,6 +2626,14 @@ impl CodeEditor {
                     | Message::Tick
                     | Message::CanvasFocusGained
                     | Message::CanvasFocusLost
+                    // 折叠是纯视图态(只读/展开哪些行),不改缓冲区内容,
+                    // 只读模式不该拦——否则只读预览里点折叠箭头/折叠快捷键
+                    // 全部悄悄失效(2026-08-29 用户反馈:点击后无法收起
+                    // 代码,根因就是这四个 Fold 消息漏在白名单外)。
+                    | Message::ToggleFold(..)
+                    | Message::ToggleFoldAtCursor
+                    | Message::FoldAll
+                    | Message::UnfoldAll
             )
         {
             return Task::none();

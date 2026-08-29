@@ -3057,6 +3057,31 @@ mod tests {
         assert_eq!((line, col), (0, 1), "只读态下光标移动应正常生效");
     }
 
+    /// 折叠是纯视图态,不改缓冲区内容,只读模式不该拦(2026-08-29 回归
+    /// 测试:此前 `ToggleFold`/`ToggleFoldAtCursor`/`FoldAll`/`UnfoldAll`
+    /// 漏在只读白名单外,导致只读预览里点折叠箭头悄悄没反应)。
+    #[test]
+    fn test_read_only_allows_toggle_fold() {
+        let mut editor = CodeEditor::new("if true {\n    x = 1;\n}", "rs").with_read_only(true);
+        assert!(!editor.is_folded(0));
+        let _ = editor.update(&Message::ToggleFold(0));
+        assert!(
+            editor.is_folded(0),
+            "只读态下点击折叠箭头应该照常折叠该 header 行"
+        );
+        let _ = editor.update(&Message::ToggleFold(0));
+        assert!(!editor.is_folded(0), "再点一次应该展开");
+    }
+
+    #[test]
+    fn test_read_only_allows_fold_all_and_unfold_all() {
+        let mut editor = CodeEditor::new("if true {\n    x = 1;\n}", "rs").with_read_only(true);
+        let _ = editor.update(&Message::FoldAll);
+        assert!(editor.is_folded(0), "只读态下 FoldAll 应该照常生效");
+        let _ = editor.update(&Message::UnfoldAll);
+        assert!(!editor.is_folded(0), "只读态下 UnfoldAll 应该照常生效");
+    }
+
     #[test]
     fn vim_disabled_by_default() {
         let editor = CodeEditor::new("unchanged", "rs");
