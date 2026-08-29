@@ -23,6 +23,11 @@ pub fn socket_path() -> PathBuf {
     state_dir().join("dozerd.sock")
 }
 
+/// 滚动日志文件目录(`dozerd` 按天切分的 tracing 输出)。
+pub fn logs_dir() -> PathBuf {
+    state_dir().join("logs")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -42,5 +47,12 @@ mod tests {
         let s = socket_path();
         assert!(s.starts_with(state_dir()));
         assert_eq!(s.file_name().unwrap(), "dozerd.sock");
+    }
+
+    #[test]
+    fn logs_dir_is_under_state_dir() {
+        let d = logs_dir();
+        assert!(d.starts_with(state_dir()));
+        assert_eq!(d.file_name().unwrap(), "logs");
     }
 }
