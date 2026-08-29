@@ -1417,16 +1417,24 @@ pub fn view<'a>(
         crate::app::PanelKind::Todo,
         app.list_collapsed(crate::app::PanelKind::Todo),
         crate::app::HoverId::TodoListCollapse,
-        "收起列表",
-        "展开列表",
+        "收起",
+        "展开",
         Message::ToggleListCollapse,
         move |hovered| Message::Hover(crate::app::HoverId::TodoListCollapse, hovered),
     );
-    let tabs_bar = row![todo_view_tabs(ws_state.view_mode), collapse]
-        .width(Length::Fill)
-        .align_y(iced_widget::core::Alignment::Center)
-        .spacing(4)
-        .padding([4, 20]);
+    // 中间塞一块 `Fill` 空间把 `collapse` 顶到行右端,右缘对齐 `padding`
+    // 的 20px 右内边距——跟下面任务卡片/搜索框的右侧留白(同为 20px)取平
+    // (2026-08-28 用户反馈:改之前 collapse 紧贴在 tab 右边,没有跟卡片
+    // 右对齐)。
+    let tabs_bar = row![
+        todo_view_tabs(ws_state.view_mode),
+        space::Space::new().width(Length::Fill),
+        collapse
+    ]
+    .width(Length::Fill)
+    .align_y(iced_widget::core::Alignment::Center)
+    .spacing(4)
+    .padding([4, 20]);
     let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         match ws_state.view_mode {
             TodoViewMode::List => todo_list_view(app_state, app, ws_state, project_id, &states),
@@ -2572,8 +2580,11 @@ fn todo_view_tabs<'a>(
     ]
     .spacing(4)
     // 上下从 8 收到 4(验收反馈:这里不是 `panel_tab`,是独立实现的视图
-    // 切换 tab,原高度比左栏 header 分割线低了近 8px,对不齐)。
-    .padding([4, 20])
+    // 切换 tab,原高度比左栏 header 分割线低了近 8px,对不齐)。左右不再
+    // 单独留白(2026-08-28 起改 0)——外层 `tabs_bar` 已经有 20px 左右
+    // padding,这里再叠一层会让"列表"tab 比下面的搜索框/任务卡片多缩进
+    // 一截,对不齐左边。
+    .padding([4, 0])
     .align_y(iced_widget::core::alignment::Vertical::Center)
     .into()
 }
