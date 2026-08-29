@@ -366,6 +366,7 @@ pub fn view<'a>(
         // 右侧 agent 筛选栏(2026-08-28):列表本身按全量 `rows` 算,不随
         // 筛选结果收缩;下面所有统计区改吃 `filtered_rows`。
         sidebar = Some(agent_filter_sidebar(
+            rows,
             &agents_present(rows),
             ws_state.agent_filter,
         ));
@@ -461,48 +462,77 @@ pub fn view<'a>(
         .into()
 }
 
-/// 右侧 agent 筛选栏(2026-08-28):固定宽度竖排列表,"全部agent" 固定置顶,
-/// 后面跟项目实际用过的每个 agent。视觉复用 `todo_category_button` 同款
-/// "选中态 CARD 底 + GOLD 描边"样式,不为这一处再发明一套。
+/// 右侧 agent 筛选栏(2026-08-29 参照 Todo 面板"任务分类"列表重新实现):
+/// 头部(`home_panel_head` 图标+标题+分割线,跟 Todo 左栏头部同一套)+
+/// 竖排导航列表,每项 图标+名称+右侧计数,跟 `todo_category_button` 逐字段
+/// 对应,不再是没有计数、也没有独立头部/边框的一截裸列表。外面套一层
+/// 卡片边框,视觉上读成一个独立的子面板,而不是浮在内容区里的按钮堆。
 fn agent_filter_sidebar<'a>(
+    rows: &[(ConversationMeta, ConversationUsage)],
     present: &[AgentKind],
     current: Option<AgentKind>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let mut col = column![]
-        .spacing(4)
-        .padding(iced_widget::core::Padding {
-            top: 0.0,
-            right: 0.0,
-            bottom: 0.0,
+    let header = container(home_panel_head(icons::IconKind::Bot, "Agent")).padding(
+        iced_widget::core::Padding {
+            top: 12.0,
+            right: 12.0,
+            bottom: 8.0,
             left: 12.0,
-        })
-        .width(Length::Fixed(140.0));
-    col = col.push(agent_filter_button(
+        },
+    );
+
+    let mut nav = column![].spacing(4).padding(iced_widget::core::Padding {
+        top: 0.0,
+        right: 8.0,
+        bottom: 12.0,
+        left: 8.0,
+    });
+    nav = nav.push(agent_filter_button(
         None,
         current,
         "全部agent".to_string(),
+        rows.len(),
         icons::IconKind::BarChart3,
         None,
     ));
     for &agent in present {
-        col = col.push(agent_filter_button(
+        let count = rows.iter().filter(|(m, _)| m.agent == agent).count();
+        nav = nav.push(agent_filter_button(
             Some(agent),
             current,
             agent.label().to_string(),
+            count,
             crate::workspace::agent_icon(agent),
             Some(crate::workspace::agent_dot_color(agent)),
         ));
     }
-    col.into()
+
+    container(column![header, nav])
+        .width(Length::Fixed(160.0))
+        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+            background: Some(byteui::theme::color::current().bg.into()),
+            border: Border {
+                color: byteui::theme::color::current().border,
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..iced_widget::container::Style::default()
+        })
+        .into()
 }
 
-/// 单个筛选项:`icon_color` 为 `None` 时(仅"全部agent")选中态用金色、
-/// 未选中用暗色;传了具体颜色(各 agent 自己的品牌色,同饼图/圆点配色)时
-/// 不论选中与否都固定用那个颜色,方便跟面板别处的同色圆点对上号。
+/// 单个筛选项,字段逐一对应 `todo_category_button`:图标 + 名称 + 右侧
+/// 计数,选中态 `CARD` 底 + `GOLD` 1px 描边、计数变金,未选中暗色。
+/// `icon_color` 为 `None` 时(仅"全部agent")图标跟着选中态在金/暗之间切;
+/// 传了具体颜色(各 agent 自己的品牌色,同饼图/圆点配色)时图标固定用那个
+/// 颜色,不随选中态变,方便跟面板别处的同色圆点对上号——这一点是跟
+/// `todo_category_button` 唯一的差异,因为分类导航没有"每类自己的颜色"
+/// 这个概念,agent 筛选栏有。
 fn agent_filter_button<'a>(
     value: Option<AgentKind>,
     current: Option<AgentKind>,
     label: String,
+    count: usize,
     icon: icons::IconKind,
     icon_color: Option<Color>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -517,10 +547,21 @@ fn agent_filter_button<'a>(
     } else {
         byteui::theme::color::current().dim
     });
+    let count_color = if active {
+        byteui::theme::color::current().gold
+    } else {
+        byteui::theme::color::current().dim
+    };
     button(
         iced_widget::row![
             icons::view(icon, byteui::theme::icon_size::row(), icon_color),
             text(label).size(byteui::theme::font::body()).color(fg),
+            iced_widget::space::Space::new()
+                .width(Length::Fill)
+                .height(Length::Shrink),
+            text(format!("{count}"))
+                .size(byteui::theme::font::caption())
+                .color(count_color),
         ]
         .spacing(8)
         .align_y(iced_widget::core::Alignment::Center),
