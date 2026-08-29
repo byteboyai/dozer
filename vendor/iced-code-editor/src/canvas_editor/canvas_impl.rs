@@ -1686,7 +1686,19 @@ impl CodeEditor {
     /// # Arguments
     ///
     /// * `point` - The click position in canvas coordinates
-    pub(crate) fn fold_header_at_point(&self, point: Point) -> Option<usize> {
+    /// * `viewport_width` - The width to wrap lines against; callers must pass
+    ///   the *live* widget bounds width (not the cached `self.viewport_width`,
+    ///   which is only refreshed on `Message::Scrolled` and can be stale right
+    ///   after a modal opens or after keyboard-only navigation that never
+    ///   triggers a scroll event — a mismatch here silently desyncs this
+    ///   hit-test from what `draw()` actually wrapped, so clicks on a header
+    ///   that visibly has a chevron miss and fall through to the plain-click
+    ///   path, which doesn't capture the event and lets it bubble to whatever
+    ///   sits underneath the editor (2026-08-29: this is what made clicking
+    ///   the fold chevron in the edit overlay pop the "discard changes?"
+    ///   dialog — the miss fell through to the dismiss-on-click-outside
+    ///   layer).
+    pub(crate) fn fold_header_at_point(&self, point: Point, viewport_width: f32) -> Option<usize> {
         if !self.folding_enabled {
             return None;
         }
@@ -1698,7 +1710,7 @@ impl CodeEditor {
         }
 
         let visual_line_idx = (point.y / self.line_height) as usize;
-        let visual_lines = self.visual_lines_cached(self.viewport_width);
+        let visual_lines = self.visual_lines_cached(viewport_width);
         let visual_line = visual_lines.get(visual_line_idx)?;
         if !visual_line.is_first_segment() {
             return None;
@@ -1718,8 +1730,10 @@ impl CodeEditor {
             mouse::Event::ButtonPressed(mouse::Button::Left) => {
                 cursor.position_in(bounds).map(|position| {
                     // Clicking a fold chevron toggles the block instead of
-                    // moving the caret.
-                    if let Some(header) = self.fold_header_at_point(position) {
+                    // moving the caret. `bounds.width` (not the possibly-stale
+                    // `self.viewport_width`) so this agrees with what `draw()`
+                    // actually wrapped this frame.
+                    if let Some(header) = self.fold_header_at_point(position, bounds.width) {
                         return Action::publish(Message::ToggleFold(header)).and_capture();
                     }
 
@@ -2160,7 +2174,7 @@ impl canvas::Program<Message> for CodeEditor {
             return mouse::Interaction::default();
         };
 
-        if self.fold_header_at_point(position).is_some() {
+        if self.fold_header_at_point(position, bounds.width).is_some() {
             mouse::Interaction::Pointer
         } else if position.x >= self.gutter_width() {
             mouse::Interaction::Text
@@ -2213,6 +2227,43 @@ mod tests {
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
         canvas::Program::<Message>::mouse_interaction(editor, &(), bounds, cursor)
+    }
+
+    /// Regression test for the bug where clicking a visibly-correct fold
+    /// chevron could miss and fall through to the plain-click path: the hit
+    /// test used to always wrap against `self.viewport_width`, a field only
+    /// refreshed on `Message::Scrolled`, instead of the width actually live
+    /// this frame. A long first line pushed past a fold header shifts the
+    /// header's visual-line index depending on which width it wraps against,
+    /// so passing the wrong width resolves the click to a different (wrong)
+    /// visual line.
+    #[test]
+    fn fold_header_at_point_uses_passed_viewport_width_not_stale_field() {
+        let long_line = "a".repeat(200);
+        let content = format!("{long_line}\nif true {{\n    x = 1;\n}}");
+        let mut editor = CodeEditor::new(&content, "rs");
+        // Simulate a stale cached `viewport_width` that no longer matches
+        // what's actually being rendered this frame.
+        editor.viewport_width = 2000.0;
+
+        let fold_margin_x = editor.line_number_gutter_width() + editor.fold_margin_width() * 0.5;
+        let point_at_visual_line_1 = Point::new(fold_margin_x, editor.line_height + 1.0);
+
+        // Narrow width: `long_line` wraps into many segments, so visual line
+        // 1 is one of its continuations, not the `if` header.
+        assert_eq!(
+            editor.fold_header_at_point(point_at_visual_line_1, 150.0),
+            None,
+            "narrow width: visual line 1 should be a wrapped continuation, not the fold header"
+        );
+
+        // Wide width: `long_line` fits on one visual line, so visual line 1
+        // is the `if` header (logical line 1).
+        assert_eq!(
+            editor.fold_header_at_point(point_at_visual_line_1, 2000.0),
+            Some(1),
+            "wide width: visual line 1 should be the `if` fold header"
+        );
     }
 
     #[test]
