@@ -43,8 +43,8 @@ use crate::workspace::{
     SshOut, TabBackend, Workspace, agent_list_pane, agent_picker_popup, conversation_list_pane,
     dot_color, edit_discard_confirm_popup, edit_modal, effective_project_repo, exited_marker,
     fetch_project_restore, no_project_placeholder, preview_pane, project_preview_pane,
-    review_content_pane, review_should_refresh_on_turn, spawn_disk_usage_refresh,
-    spawn_project_git_refresh, split_portions, tab_title,
+    relative_time_text, review_content_pane, review_should_refresh_on_turn,
+    spawn_disk_usage_refresh, spawn_project_git_refresh, split_portions, tab_title,
 };
 use byteui::interaction::icons;
 use dozer_client::Client;
@@ -70,17 +70,20 @@ pub(crate) const DEFAULT_COLS: u16 = 80;
 pub(crate) const DEFAULT_ROWS: u16 = 24;
 
 /// `dozer://review-trace/data.json` 的响应体形状——`review_trace.html` 按
-/// 这个结构消费(`entries`/`agent_label`/`summary_title`/`summary_text`
-/// 顶层字段)。总结区(标题/全文)只在本会话详情里非空,活会话 `None`。
+/// 这个结构消费(`entries`/`agent_label`/`summary_title`/`summary_text`/
+/// `summary_time` 顶层字段)。总结区(标题/全文/时间)只在本会话详情里非空,
+/// 活会话 `None`。
 #[derive(serde::Serialize)]
 struct ReviewSnapshot<'a> {
     entries: &'a [ReviewEntry],
     /// `AgentKind::label()`(如 `"claude"`)——AI 气泡的头像名字标签用它
     /// 替代写死的"AI"。
     agent_label: &'static str,
-    /// session 详情顶部总结区标题/全文(2026-08-27;活会话审阅为 `None`)。
+    /// session 详情顶部总结区标题/全文/相对时间(2026-08-27 起标题/全文;
+    /// 2026-08-28 加时间;活会话审阅为 `None`)。
     summary_title: Option<String>,
     summary_text: Option<String>,
+    summary_time: Option<String>,
 }
 
 /// `Message::ReviewLoaded` 落地新一页回合时,决定是替换还是追加进已有
@@ -873,6 +876,69 @@ fn list_rendered_first(default_list_first: bool, mirrored: bool) -> bool {
     default_list_first != mirrored
 }
 
+/// 给定 `PanelKind`,取它在 `PanelDims` 里对应的配对分割比例字段——统一
+/// 口径是"pair 内第一个 slot 的占比"(`pair_list_content_width` 的
+/// `split` 参数,不区分这个 slot 语义上是"列表"还是"内容",Browser 的
+/// `browser_bookmarks_split` 反着命名也是同一套算法)。`None` 表示这个
+/// 面板是单栏(Usage/Acceptance),没有分割比例。
+fn pair_split_ratio(dims: &PanelDims, kind: PanelKind) -> Option<f32> {
+    match kind {
+        PanelKind::Files => Some(dims.files_split),
+        PanelKind::Project => Some(dims.project_split),
+        PanelKind::Ssh => Some(dims.ssh_split),
+        PanelKind::Database => Some(dims.database_split),
+        PanelKind::Todo => Some(dims.todo_split),
+        PanelKind::GitLog => Some(dims.git_log_split),
+        PanelKind::Web => Some(dims.browser_bookmarks_split),
+        PanelKind::Agent => Some(dims.agent_split),
+        PanelKind::Conversations => Some(dims.conversations_split),
+        PanelKind::Usage | PanelKind::Acceptance => None,
+    }
+}
+
+/// `pair_split_ratio` 的写入侧。
+fn with_pair_split_ratio(dims: PanelDims, kind: PanelKind, ratio: f32) -> PanelDims {
+    match kind {
+        PanelKind::Files => PanelDims {
+            files_split: ratio,
+            ..dims
+        },
+        PanelKind::Project => PanelDims {
+            project_split: ratio,
+            ..dims
+        },
+        PanelKind::Ssh => PanelDims {
+            ssh_split: ratio,
+            ..dims
+        },
+        PanelKind::Database => PanelDims {
+            database_split: ratio,
+            ..dims
+        },
+        PanelKind::Todo => PanelDims {
+            todo_split: ratio,
+            ..dims
+        },
+        PanelKind::GitLog => PanelDims {
+            git_log_split: ratio,
+            ..dims
+        },
+        PanelKind::Web => PanelDims {
+            browser_bookmarks_split: ratio,
+            ..dims
+        },
+        PanelKind::Agent => PanelDims {
+            agent_split: ratio,
+            ..dims
+        },
+        PanelKind::Conversations => PanelDims {
+            conversations_split: ratio,
+            ..dims
+        },
+        PanelKind::Usage | PanelKind::Acceptance => dims,
+    }
+}
+
 /// 拖拽某条分隔线到窗口逻辑 x 坐标 `logical_x` 后的新 `ShellLayout`。
 /// `LeftPairSplit`/`RightPairSplit` 写哪个 split 字段取决于当前那一侧的
 /// 视图选择(比如右侧当前是"对话"就写 `conversations_split`，不是
@@ -889,10 +955,47 @@ pub(crate) fn apply_column_drag(
                 window_width,
                 logical_x - byteui::theme::geometry::icon_rail_width(),
             );
-            PanelDims {
+            let mut new_dims = PanelDims {
                 left_width: new_left,
                 ..state.dims
+            };
+            // 拖外层 zone 分隔线时,连带补偿左右两侧当前活跃的配对面板的
+            // 分割比例,让"拖内层分隔线定下来的那个像素宽度"保持不变——
+            // 否则比如文件树这类列表面板会跟着 zone 宽度重新按比例缩放,
+            // 用户明明只是在调整左右两个 zone 的分界,没碰过文件树自己的
+            // 分隔线(2026-08-29 用户反馈)。用新 `left_width` 探测两侧新
+            // pair 宽,按"旧像素宽 / 新 pair 宽"反解新比例,clamp 到合法
+            // 区间兜底(pair 宽被压得极窄时不会算出离谱的比例)。
+            let new_probe = ShellState {
+                dims: new_dims,
+                ..state.clone()
+            };
+            for (kind, side) in [
+                (
+                    state.left_view,
+                    state.layout.rail_layout.side_of(state.left_view),
+                ),
+                (
+                    state.right_view,
+                    state.layout.rail_layout.side_of(state.right_view),
+                ),
+            ] {
+                let Some(old_ratio) = pair_split_ratio(&state.dims, kind) else {
+                    continue;
+                };
+                let (_, old_pair_w) = pair_x0_and_width(side, window_width, &state);
+                let (_, new_pair_w) = pair_x0_and_width(side, window_width, &new_probe);
+                if old_pair_w <= 0.0 || new_pair_w <= 0.0 {
+                    continue;
+                }
+                let fixed_px = old_pair_w * old_ratio;
+                let new_ratio = (fixed_px / new_pair_w).clamp(
+                    byteui::theme::geometry::min_split_ratio(),
+                    byteui::theme::geometry::max_split_ratio(),
+                );
+                new_dims = with_pair_split_ratio(new_dims, kind, new_ratio);
             }
+            new_dims
         }
         Divider::LeftPairSplit => {
             let side = state.layout.rail_layout.side_of(PanelKind::Files);
@@ -4044,6 +4147,7 @@ impl App {
                                     agent_label: rv.agent.label(),
                                     summary_title: rv.summary_title.clone(),
                                     summary_text: rv.summary_text.clone(),
+                                    summary_time: rv.summary_time.clone(),
                                 };
                                 let json = serde_json::to_string(&snapshot).unwrap_or_default();
                                 *ws.review_snapshot.lock().expect("review snapshot 锁") =
@@ -4072,6 +4176,11 @@ impl App {
             }
             Message::Usage(msg @ usage::Message::Loaded(project_id, ..)) => {
                 self.with_project(project_id, move |ws, _io| {
+                    usage::update(&mut ws.usage, msg);
+                });
+            }
+            Message::Usage(msg) => {
+                self.with_focused_project(|ws, _io| {
                     usage::update(&mut ws.usage, msg);
                 });
             }
@@ -6616,6 +6725,10 @@ impl App {
                 // 列表里了,直接不打开详情,不 panic、不报错弹窗。
                 return;
             };
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
             let source = ReviewSource::Conversation(conversation_id.clone());
             ws.review = Some(ReviewView {
                 source: source.clone(),
@@ -6625,6 +6738,7 @@ impl App {
                 nonce: 0,
                 summary_title: Some(row.display_title.clone()),
                 summary_text: row.summary.clone(),
+                summary_time: Some(relative_time_text(row.last_ts, now_ms)),
             });
             ws.spawn_review_load_conversation(
                 io,
@@ -9426,6 +9540,75 @@ mod tests {
         let state = test_state();
         let l = apply_column_drag(state, Divider::LeftRight, 700.0, 650.0);
         assert_eq!(l.left_width, byteui::theme::geometry::min_zone_width());
+    }
+
+    #[test]
+    fn left_right_drag_keeps_list_pane_pixel_width_fixed() {
+        // 默认 `test_state()`:left_view = Files,files_split 默认 0.35。
+        // 拖外层 zone 分隔线把 left_width 从默认 640 拉到 800,文件树的
+        // 绝对像素宽应该保持不变(只有比例跟着 zone 变宽而回调)。
+        let state = test_state();
+        let window_width = 1440.0;
+        let old_pair_w = pair_content_width(clamp_left_width(window_width, state.dims.left_width));
+        let old_list_px = old_pair_w * state.dims.files_split;
+
+        let logical_x = 800.0 + byteui::theme::geometry::icon_rail_width();
+        let new = apply_column_drag(state.clone(), Divider::LeftRight, window_width, logical_x);
+        assert!(
+            (new.left_width - 800.0).abs() < 0.01,
+            "拖拽目标本身要生效: {}",
+            new.left_width
+        );
+
+        let new_pair_w = pair_content_width(clamp_left_width(window_width, new.left_width));
+        let new_list_px = new_pair_w * new.files_split;
+        assert!(
+            (new_list_px - old_list_px).abs() < 0.5,
+            "文件树列表像素宽应保持不变: old={old_list_px}, new={new_list_px}"
+        );
+        // 反解出的新比例必须比默认值小——zone 变宽了,同样的像素宽占比更低。
+        assert!(new.files_split < state.dims.files_split);
+    }
+
+    #[test]
+    fn left_right_drag_also_compensates_right_zone_active_panel() {
+        // right_view 默认是 Agent(agent_split)。左边变宽会挤压右边 zone,
+        // 右侧配对面板(这里是 Agent 列表)同样不该被连带缩放。
+        let state = test_state();
+        let window_width = 1440.0;
+        let old_right_zone_w = right_zone_width(window_width, &state);
+        let old_pair_w = pair_content_width(old_right_zone_w);
+        let old_list_px = old_pair_w * state.dims.agent_split;
+
+        let logical_x = 800.0 + byteui::theme::geometry::icon_rail_width();
+        let new = apply_column_drag(state.clone(), Divider::LeftRight, window_width, logical_x);
+        let new_probe = ShellState {
+            dims: new,
+            ..state
+        };
+        let new_right_zone_w = right_zone_width(window_width, &new_probe);
+        let new_pair_w = pair_content_width(new_right_zone_w);
+        let new_list_px = new_pair_w * new_probe.dims.agent_split;
+        assert!(
+            (new_list_px - old_list_px).abs() < 0.5,
+            "Agent 列表像素宽应保持不变: old={old_list_px}, new={new_list_px}"
+        );
+    }
+
+    #[test]
+    fn left_right_drag_skips_single_pane_panels() {
+        // Usage/Acceptance 是单栏,没有 split 字段——补偿逻辑不应该 panic
+        // 或动到任何 split 字段。
+        let state = ShellState {
+            left_view: PanelKind::Usage,
+            right_view: PanelKind::Acceptance,
+            ..test_state()
+        };
+        let before = state.dims;
+        let logical_x = 800.0 + byteui::theme::geometry::icon_rail_width();
+        let new = apply_column_drag(state, Divider::LeftRight, 1440.0, logical_x);
+        assert_eq!(new.files_split, before.files_split);
+        assert_eq!(new.agent_split, before.agent_split);
     }
 
     #[test]

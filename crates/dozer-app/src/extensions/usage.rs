@@ -12,7 +12,7 @@ use dozer_core::protocol::AgentKind;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::{Border, Color, Element, Length, Point, Radians, Rectangle};
 use iced_widget::tooltip::{Position, Tooltip};
-use iced_widget::{column, container, stack, text};
+use iced_widget::{button, column, container, stack, text};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
@@ -22,6 +22,8 @@ use std::path::PathBuf;
 pub struct WorkspaceState {
     rows: Vec<(ConversationMeta, ConversationUsage)>,
     loading: bool,
+    /// 右侧 agent 筛选栏当前选中项:`None` = "全部agent"(默认,不过滤)。
+    agent_filter: Option<AgentKind>,
 }
 
 impl WorkspaceState {
@@ -46,6 +48,8 @@ impl WorkspaceState {
 #[derive(Debug, Clone)]
 pub enum Message {
     Loaded(i64, Vec<(ConversationMeta, ConversationUsage)>),
+    /// 右侧 agent 筛选栏点击(2026-08-28):`None` 选"全部agent"。
+    AgentFilterSet(Option<AgentKind>),
 }
 
 /// 单个会话（= 一份 transcript 文件）的用量统计。
@@ -109,13 +113,13 @@ pub fn aggregate(rows: &[ConversationUsage]) -> ProjectUsageTotals {
     totals
 }
 
-/// `daily_totals_by_agent` 只保留最近这么多天的数据(2026-08-23 起
-/// 7→15,产品要求看更长的趋势窗口)。
-const DAILY_CHART_WINDOW_DAYS: usize = 15;
+/// `daily_totals_by_agent` 只保留最近这么多天的数据(2026-08-28 起
+/// 15→7,产品改回看近一周的紧凑窗口)。
+const DAILY_CHART_WINDOW_DAYS: usize = 7;
 
 /// epoch 毫秒 → 该毫秒所在的 UTC 日索引(自 1970-01-01 起的第几天)。用于
 /// 按天分桶;**不做本地时区换算**——纯 std 没有时区能力,引入 `chrono`/`time`
-/// 属于新增依赖(spec 明确不新增)，UTC 分桶对"看近 15 天趋势形状"这个用途
+/// 属于新增依赖(spec 明确不新增)，UTC 分桶对"看近 7 天趋势形状"这个用途
 /// 足够，不追求跟用户本地墙上时钟严格对齐。
 fn day_index_from_ms(ms: u64) -> i64 {
     (ms / 86_400_000) as i64
@@ -185,7 +189,7 @@ pub fn daily_totals_by_agent(
     let mut days: Vec<DayAgentTotals> = by_day
         .into_iter()
         .map(|(day_index, bucket)| {
-            // 年份在"近 15 天"这种短窗口的标签里用不上，解构时直接忽略。
+            // 年份在"近 7 天"这种短窗口的标签里用不上，解构时直接忽略。
             let (_, m, d) = civil_from_days(day_index);
             let totals = project_agents.iter().copied().zip(bucket).collect();
             DayAgentTotals {
@@ -199,7 +203,7 @@ pub fn daily_totals_by_agent(
     days.split_off(start)
 }
 
-/// 整个项目范围（不限"近 15 天"）按 agent 的 token 总量（四项合计），供
+/// 整个项目范围（不限"近 7 天"）按 agent 的 token 总量（四项合计），供
 /// 饼图用；只返回项目里实际出现过的 agent，不产生全零占位记录。
 pub fn agent_token_share(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<(AgentKind, u64)> {
     const ORDER: [AgentKind; 4] = [
@@ -246,11 +250,50 @@ pub fn agent_turn_share(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<(
         .collect()
 }
 
+/// 项目里实际出现过的 agent,顺序固定(与 `agent_token_share`/
+/// `agent_turn_share` 同一份 `ORDER`,含 V8agent——新功能默认覆盖它,不能
+/// 像 Codex/Kilo 那样被漏掉)。供右侧筛选栏用:传入未经筛选的全量 `rows`,
+/// 这样切换到某个 agent 之后,列表本身不会跟着收缩到只剩它自己。
+pub fn agents_present(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<AgentKind> {
+    const ORDER: [AgentKind; 4] = [
+        AgentKind::Claude,
+        AgentKind::Codebuddy,
+        AgentKind::Opencode,
+        AgentKind::V8agent,
+    ];
+    ORDER
+        .into_iter()
+        .filter(|kind| rows.iter().any(|(meta, _)| meta.agent == *kind))
+        .collect()
+}
+
+/// 按右侧筛选栏当前选中的 agent 过滤统计用的行,`None` = 不过滤("全部
+/// agent")。返回拥有所有权的克隆而不是借用——下游 `aggregate`/
+/// `agent_token_share`/`daily_totals_by_agent` 都吃
+/// `&[(ConversationMeta, ConversationUsage)]`,筛选后条数通常不大,直接拥
+/// 有一份比额外弄一层借用包装简单。
+fn filter_rows_by_agent(
+    rows: &[(ConversationMeta, ConversationUsage)],
+    filter: Option<AgentKind>,
+) -> Vec<(ConversationMeta, ConversationUsage)> {
+    match filter {
+        None => rows.to_vec(),
+        Some(agent) => rows
+            .iter()
+            .filter(|(meta, _)| meta.agent == agent)
+            .cloned()
+            .collect(),
+    }
+}
+
 pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
     match msg {
         Message::Loaded(_, rows) => {
             ws_state.rows = rows;
             ws_state.loading = false;
+        }
+        Message::AgentFilterSet(agent) => {
+            ws_state.agent_filter = agent;
         }
     }
 }
@@ -302,7 +345,10 @@ pub fn view<'a>(
     // `Workspace::spawn_usage_refresh` 自动触发(见 `panel_select`)。
     let mut content = column![home_panel_head(icons::IconKind::BarChart3, "用量")]
         .spacing(12)
-        .padding(14);
+        .padding(14)
+        .width(Length::Fill);
+    let mut sidebar: Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> =
+        None;
 
     if loading {
         content = content.push(
@@ -317,62 +363,92 @@ pub fn view<'a>(
                 .color(byteui::theme::color::current().dim),
         );
     } else {
-        let usages: Vec<ConversationUsage> = rows.iter().map(|(_, u)| u.clone()).collect();
-        content = content.push(home_section_head("项目用量统计"));
-        content = content.push(project_summary_boxes(&aggregate(&usages)));
+        // 右侧 agent 筛选栏(2026-08-28):列表本身按全量 `rows` 算,不随
+        // 筛选结果收缩;下面所有统计区改吃 `filtered_rows`。
+        sidebar = Some(agent_filter_sidebar(
+            &agents_present(rows),
+            ws_state.agent_filter,
+        ));
+        let filtered_rows = filter_rows_by_agent(rows, ws_state.agent_filter);
+        if filtered_rows.is_empty() {
+            content = content.push(
+                text("这个 agent 在当前项目还没有用量数据")
+                    .size(byteui::theme::font::body())
+                    .color(byteui::theme::color::current().dim),
+            );
+        } else {
+            let usages: Vec<ConversationUsage> =
+                filtered_rows.iter().map(|(_, u)| u.clone()).collect();
+            content = content.push(home_section_head("项目用量统计"));
+            content = content.push(project_summary_boxes(&aggregate(&usages)));
 
-        let token_share = agent_token_share(rows);
-        let turn_share = agent_turn_share(rows);
-        if !token_share.is_empty() || !turn_share.is_empty() {
-            content = content.push(home_section_head("Agent 用量统计"));
-            // 左侧是"会话·回合"统计饼图(按 human 发言数),右侧是 token 占比
-            // 饼图——各自配一块图例并排(2026-08-27 新增回合饼图)。
-            let mut agent_row = iced_widget::row![]
-                .spacing(32)
-                .align_y(iced_widget::core::Alignment::Center);
-            if !turn_share.is_empty() {
-                agent_row = agent_row.push(
-                    iced_widget::row![pie_chart(&turn_share), chart_label("回合", &turn_share)]
+            let token_share = agent_token_share(&filtered_rows);
+            let turn_share = agent_turn_share(&filtered_rows);
+            if !token_share.is_empty() || !turn_share.is_empty() {
+                content = content.push(home_section_head("Agent 用量统计"));
+                // 左侧"回合"、右侧"token"各一份饼图 + 列表式统计并排放
+                // (2026-08-28 用户反馈:饼图不能去掉——列表只是换了图例的文字
+                // 格式,圆环本体保留)。
+                let mut agent_row = iced_widget::row![]
+                    .spacing(32)
+                    .align_y(iced_widget::core::Alignment::Center);
+                if !turn_share.is_empty() {
+                    agent_row = agent_row.push(
+                        iced_widget::row![
+                            pie_chart(&turn_share),
+                            chart_stat_list("Round", &turn_share)
+                        ]
                         .spacing(16)
                         .align_y(iced_widget::core::Alignment::Center),
-                );
-            }
-            if !turn_share.is_empty() && !token_share.is_empty() {
-                // 分隔线的高度必须是 `Length::Fixed`,不能是 `Length::Fill`——
-                // iced 0.14 的 `Row`/`Column::push` 会把子元素的 `Fill` 沿
-                // `Length::enclose` 一路传染给 `agent_row` 再到 `content`,
-                // 让整行被撑成"吃满面板剩余高度",饼图/图例固定尺寸不变,
-                // `align_y(Center)` 一居中就在上下留出大片空白(2026-08-27
-                // 修的真实 bug,面板本该紧凑排布)。高度对齐 `pie_chart` 的
-                // 固定尺寸,视觉上跟饼图顶/底对齐。
-                agent_row = agent_row.push(
-                    container(iced_widget::Space::new())
-                        .width(Length::Fixed(1.0))
-                        .height(Length::Fixed(PIE_RADIUS * 2.0 + 8.0))
-                        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-                            background: Some(byteui::theme::color::current().border.into()),
-                            ..iced_widget::container::Style::default()
-                        }),
-                );
-            }
-            if !token_share.is_empty() {
-                agent_row = agent_row.push(
-                    iced_widget::row![pie_chart(&token_share), chart_legend(&token_share)]
+                    );
+                }
+                if !turn_share.is_empty() && !token_share.is_empty() {
+                    // 分隔线的高度必须是 `Length::Fixed`,不能是 `Length::Fill`——
+                    // iced 0.14 的 `Row`/`Column::push` 会把子元素的 `Fill` 沿
+                    // `Length::enclose` 一路传染给 `agent_row` 再到 `content`,
+                    // 让整行被撑成"吃满面板剩余高度",饼图/图例固定尺寸不变,
+                    // `align_y(Center)` 一居中就在上下留出大片空白(2026-08-27
+                    // 修的真实 bug,面板本该紧凑排布)。高度对齐 `pie_chart` 的
+                    // 固定尺寸,视觉上跟饼图顶/底对齐。
+                    agent_row = agent_row.push(
+                        container(iced_widget::Space::new())
+                            .width(Length::Fixed(1.0))
+                            .height(Length::Fixed(PIE_RADIUS * 2.0 + 8.0))
+                            .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+                                background: Some(byteui::theme::color::current().border.into()),
+                                ..iced_widget::container::Style::default()
+                            }),
+                    );
+                }
+                if !token_share.is_empty() {
+                    agent_row = agent_row.push(
+                        iced_widget::row![
+                            pie_chart(&token_share),
+                            chart_stat_list("Token", &token_share)
+                        ]
                         .spacing(16)
                         .align_y(iced_widget::core::Alignment::Center),
-                );
+                    );
+                }
+                content = content.push(agent_row);
             }
-            content = content.push(agent_row);
-        }
 
-        let days = daily_totals_by_agent(rows);
-        if !days.is_empty() {
-            content = content.push(home_section_head("每日用量统计"));
-            content = content.push(bar_chart(&days));
+            let days = daily_totals_by_agent(&filtered_rows);
+            if !days.is_empty() {
+                content = content.push(home_section_head("每日用量统计"));
+                content = content.push(bar_chart(&days));
+            }
         }
     }
 
-    container(content)
+    let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = match sidebar {
+        Some(sidebar) => iced_widget::row![content, sidebar]
+            .width(Length::Fill)
+            .into(),
+        None => content.into(),
+    };
+
+    container(body)
         .width(width)
         .height(Length::Fill)
         .style(
@@ -383,6 +459,94 @@ pub fn view<'a>(
             },
         )
         .into()
+}
+
+/// 右侧 agent 筛选栏(2026-08-28):固定宽度竖排列表,"全部agent" 固定置顶,
+/// 后面跟项目实际用过的每个 agent。视觉复用 `todo_category_button` 同款
+/// "选中态 CARD 底 + GOLD 描边"样式,不为这一处再发明一套。
+fn agent_filter_sidebar<'a>(
+    present: &[AgentKind],
+    current: Option<AgentKind>,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let mut col = column![]
+        .spacing(4)
+        .padding(iced_widget::core::Padding {
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: 12.0,
+        })
+        .width(Length::Fixed(140.0));
+    col = col.push(agent_filter_button(
+        None,
+        current,
+        "全部agent".to_string(),
+        icons::IconKind::BarChart3,
+        None,
+    ));
+    for &agent in present {
+        col = col.push(agent_filter_button(
+            Some(agent),
+            current,
+            agent.label().to_string(),
+            crate::workspace::agent_icon(agent),
+            Some(crate::workspace::agent_dot_color(agent)),
+        ));
+    }
+    col.into()
+}
+
+/// 单个筛选项:`icon_color` 为 `None` 时(仅"全部agent")选中态用金色、
+/// 未选中用暗色;传了具体颜色(各 agent 自己的品牌色,同饼图/圆点配色)时
+/// 不论选中与否都固定用那个颜色,方便跟面板别处的同色圆点对上号。
+fn agent_filter_button<'a>(
+    value: Option<AgentKind>,
+    current: Option<AgentKind>,
+    label: String,
+    icon: icons::IconKind,
+    icon_color: Option<Color>,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let active = value == current;
+    let fg = if active {
+        byteui::theme::color::current().cream
+    } else {
+        byteui::theme::color::current().dim
+    };
+    let icon_color = icon_color.unwrap_or(if active {
+        byteui::theme::color::current().gold
+    } else {
+        byteui::theme::color::current().dim
+    });
+    button(
+        iced_widget::row![
+            icons::view(icon, byteui::theme::icon_size::row(), icon_color),
+            text(label).size(byteui::theme::font::body()).color(fg),
+        ]
+        .spacing(8)
+        .align_y(iced_widget::core::Alignment::Center),
+    )
+    .on_press(Message::AgentFilterSet(value))
+    .width(Length::Fill)
+    .padding([8, 10])
+    .style(move |_t: &iced_widget::Theme, _s| button::Style {
+        background: if active {
+            Some(byteui::theme::color::current().card.into())
+        } else {
+            None
+        },
+        text_color: fg,
+        border: Border {
+            color: if active {
+                byteui::theme::color::current().gold
+            } else {
+                Color::TRANSPARENT
+            },
+            width: if active { 1.0 } else { 0.0 },
+            radius: 6.0.into(),
+        },
+        ..button::Style::default()
+    })
+    .into()
 }
 
 fn stat(
@@ -454,13 +618,17 @@ fn project_summary_boxes(
 }
 
 const BAR_MAX_HEIGHT: f32 = 72.0;
-/// 柱宽(2026-08-23 起 20→14,配合 `DAILY_CHART_WINDOW_DAYS` 7→15——柱数
-/// 翻倍,原宽度会把图表撑到 ~466px,窄一点的可调栏宽会被截断看不全)。
+/// 柱宽(2026-08-23 起 20→14,当时 `DAILY_CHART_WINDOW_DAYS` 从 7 改到
+/// 15 让柱数翻倍;2026-08-28 窗口改回 7 天,但沿用这个更紧凑的宽度)。
 const BAR_WIDTH: f32 = 14.0;
 /// 柱顶总量数字 + 间距预留的高度,`GridLines`/`bar_chart` 靠它对齐网格线
 /// 与柱子的 0 基线(见 `bar_chart` 里 `col` 首个 `container` 的同一个值)。
 const BAR_LABEL_GAP: f32 = 14.0;
 const GRID_CANVAS_HEIGHT: f32 = BAR_MAX_HEIGHT + BAR_LABEL_GAP;
+/// 每天间隔背景条带的高度:柱子区域(`GRID_CANVAS_HEIGHT`)加上列内
+/// spacing 和日期文字行,让条带从柱顶盖到日期标签底部。后两项是估算值
+/// (8px 字号文字行高约 11~12px),条带本就是装饰性的,像素级出入不影响观感。
+const DAY_BAND_HEIGHT: f32 = GRID_CANVAS_HEIGHT + 4.0 + 12.0;
 /// 网格线左侧刻度数字预留的宽度:网格线本身从这条线右边才开始画,避免
 /// 刻度数字跟第一根柱子顶部的总量数字重叠。
 const GRID_LABEL_GUTTER: f32 = 26.0;
@@ -607,7 +775,7 @@ fn grid_lines_canvas(
 /// 悬停某天柱子时弹出的明细气泡:日期 + 各 agent token 数(2026-08-26 起随
 /// 全局统一走 `format_count` 的 k/m 缩写)。样式复用
 /// `byteui::interaction::icons::tooltip_bubble_style`,跟 icon 按钮 tooltip
-/// 同一套视觉。零值 agent 不列(同 `chart_legend` 只列有数据的 agent)。
+/// 同一套视觉。零值 agent 不列(同 `chart_stat_list` 只列有数据的 agent)。
 fn day_tooltip_bubble(
     day: &DayAgentTotals,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -687,7 +855,7 @@ fn bar_chart(
     // 分组柱状图)。颜色统一走 `agent_dot_color`,不再在这里单独维护一份
     // cyan/purple/green 映射。
     let mut groups = iced_widget::row![].spacing(8);
-    for d in days {
+    for (i, d) in days.iter().enumerate() {
         let scale = BAR_MAX_HEIGHT / max_total as f32;
         let mut day_group = iced_widget::row![].spacing(3);
         for &(agent, value) in &d.totals {
@@ -715,7 +883,25 @@ fn bar_chart(
             .gap(6)
             .style(icons::tooltip_bubble_style());
 
-        groups = groups.push(hoverable);
+        // 间隔背景条带:偶数日(0-based)铺一块 `card` 底色,奇数日透明,
+        // 形成"一天有背景、一天没有"的斑马纹,方便按天分组扫视(2026-08-28
+        // 产品要求)。奇偶两种日子共用同一份 padding/圆角,不会因为背景
+        // 有无而让列宽跳动。
+        let banded = container(hoverable)
+            .padding([0, 4])
+            .height(Length::Fixed(DAY_BAND_HEIGHT))
+            .style(
+                move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                    background: (i % 2 == 0).then(|| byteui::theme::color::current().card.into()),
+                    border: Border {
+                        radius: 4.0.into(),
+                        ..Border::default()
+                    },
+                    ..iced_widget::container::Style::default()
+                },
+            );
+
+        groups = groups.push(banded);
     }
 
     // 网格线画布叠在柱子行后面(`stack!`):柱子行整体右移 `GRID_LABEL_GUTTER`
@@ -813,16 +999,33 @@ fn pie_chart(
     .into()
 }
 
-/// 图例列表——2026-08-23 起改竖排(原来是横排 `row`),配合草图把它挪到
-/// 饼图右边、并排放而不是叠在下面。末尾固定加一行"全部"(100%)汇总——
-/// 2026-08-26 新加点:整张饼的总 token 数,样式用暖金 + 顶部细分隔线,跟
-/// 各 agent 行(暗色文字)区分开。
-fn chart_legend(
+/// Agent 用量的列表式呈现,配在饼图右边当图例:标题行 `{title}(总数)` +
+/// 1px 分隔线 + 逐 agent `agent - 数量(百分比%)`(2026-08-28 用户反馈:
+/// 圆环不能去掉,只是把图例的文字格式换成这种更直接的数字表——取代原来
+/// 的 `chart_legend`/`chart_label` 文字格式,饼图本体保留)。百分比用整数
+/// 除法截断、不四舍五入,跟原图例的算法保持一致,避免几档相加超过 100%。
+fn chart_stat_list(
+    title: &'static str,
     share: &[(AgentKind, u64)],
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let total: u64 = share.iter().map(|(_, v)| v).sum();
     let cream = byteui::theme::color::current().cream;
-    let mut col = column![].spacing(10);
+    let dim = byteui::theme::color::current().dim;
+    let divider = container(iced_widget::Space::new())
+        .width(Length::Fill)
+        .height(Length::Fixed(1.0))
+        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+            background: Some(byteui::theme::color::current().border.into()),
+            ..iced_widget::container::Style::default()
+        });
+    let mut col = column![
+        text(format!("{title}({})", format_count(total)))
+            .size(byteui::theme::font::caption())
+            .color(cream)
+            .font(iced_widget::core::Font::MONOSPACE),
+        divider,
+    ]
+    .spacing(8);
     for (agent, value) in share {
         let pct = value
             .checked_mul(100)
@@ -846,72 +1049,19 @@ fn chart_legend(
             iced_widget::row![
                 dot,
                 text(format!(
-                    "{} {}% · {}",
+                    "{} - {}({pct}%)",
                     agent.label(),
-                    pct,
                     format_count(*value)
                 ))
                 .size(byteui::theme::font::caption_sm())
-                .color(byteui::theme::color::current().dim)
+                .color(dim)
                 .font(iced_widget::core::Font::MONOSPACE),
             ]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center),
         );
     }
-    // 全部:总 token 统计,恒 100%。暖金文字 + 实心圆点 + 顶部 1px 分隔线,
-    // 让"总览"一眼区别于上面各 agent 的明细行。
-    let total_dot = container(iced_widget::Space::new())
-        .width(Length::Fixed(8.0))
-        .height(Length::Fixed(8.0))
-        .style({
-            let c = cream;
-            move |_t: &iced_widget::Theme| iced_widget::container::Style {
-                background: Some(c.into()),
-                border: Border {
-                    radius: 4.0.into(),
-                    ..Border::default()
-                },
-                ..iced_widget::container::Style::default()
-            }
-        });
-    let total_row = iced_widget::row![
-        total_dot,
-        text(format!("全部 100% · {}", format_count(total)))
-            .size(byteui::theme::font::caption_sm())
-            .color(cream)
-            .font(iced_widget::core::Font::MONOSPACE),
-    ]
-    .spacing(6)
-    .align_y(iced_widget::core::Alignment::Center);
-    // 顶部细分隔线:一条 1px、与面板分隔线同色的横线,把"全部"行和 agent
-    // 明细行区隔开(不用 `Border::Side`,避免引入尚无用到的边框类型)。
-    let divider = container(iced_widget::Space::new())
-        .width(Length::Fill)
-        .height(Length::Fixed(1.0))
-        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-            background: Some(byteui::theme::color::current().border.into()),
-            ..iced_widget::container::Style::default()
-        });
-    col = col.push(column![divider, total_row].spacing(10));
     col.into()
-}
-
-/// 在 `chart_legend` 上方加一行小节标题(如"回合"),用来区分同一区里
-/// 并排的多个饼图(2026-08-27 新增回合饼图时:左侧回合、右侧 token,各有
-/// 自己的标题避免图例数字混看)。
-fn chart_label(
-    title: &'static str,
-    share: &[(AgentKind, u64)],
-) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    column![
-        text(title)
-            .size(byteui::theme::font::caption())
-            .color(byteui::theme::color::current().dim),
-        chart_legend(share),
-    ]
-    .spacing(6)
-    .into()
 }
 
 #[cfg(test)]
@@ -1128,7 +1278,7 @@ mod tests {
     }
 
     #[test]
-    fn daily_totals_by_agent_keeps_only_most_recent_15_days() {
+    fn daily_totals_by_agent_keeps_only_most_recent_7_days() {
         let rows: Vec<_> = (0..20)
             .map(|i| {
                 (
@@ -1138,13 +1288,13 @@ mod tests {
             })
             .collect();
         let days = daily_totals_by_agent(&rows);
-        assert_eq!(days.len(), 15, "超过 15 天的历史只保留最近 15 天");
+        assert_eq!(days.len(), 7, "超过 7 天的历史只保留最近 7 天");
         assert_eq!(
             days.last().unwrap().day_index,
             20_687,
             "最后一天是最新的那天"
         );
-        assert_eq!(days.first().unwrap().day_index, 20_673);
+        assert_eq!(days.first().unwrap().day_index, 20_681);
     }
 
     #[test]
@@ -1169,6 +1319,46 @@ mod tests {
         let rows = vec![(meta(AgentKind::V8agent, "a"), usage_with_tokens(7))];
         let share = agent_token_share(&rows);
         assert_eq!(share, vec![(AgentKind::V8agent, 7)]);
+    }
+
+    #[test]
+    fn agents_present_returns_used_agents_in_fixed_order() {
+        let rows = vec![
+            (meta(AgentKind::Codebuddy, "a"), usage_with_tokens(1)),
+            (meta(AgentKind::Claude, "b"), usage_with_tokens(1)),
+            (meta(AgentKind::V8agent, "c"), usage_with_tokens(1)),
+        ];
+        assert_eq!(
+            agents_present(&rows),
+            vec![AgentKind::Claude, AgentKind::Codebuddy, AgentKind::V8agent]
+        );
+    }
+
+    #[test]
+    fn agents_present_ignores_agents_without_dedicated_bucket() {
+        let rows = vec![(meta(AgentKind::Codex, "a"), usage_with_tokens(1))];
+        assert_eq!(agents_present(&rows), Vec::new());
+    }
+
+    #[test]
+    fn filter_rows_by_agent_none_keeps_everything() {
+        let rows = vec![
+            (meta(AgentKind::Claude, "a"), usage_with_tokens(1)),
+            (meta(AgentKind::Codebuddy, "b"), usage_with_tokens(1)),
+        ];
+        assert_eq!(filter_rows_by_agent(&rows, None), rows);
+    }
+
+    #[test]
+    fn filter_rows_by_agent_some_keeps_only_that_agent() {
+        let rows = vec![
+            (meta(AgentKind::Claude, "a"), usage_with_tokens(1)),
+            (meta(AgentKind::Codebuddy, "b"), usage_with_tokens(2)),
+            (meta(AgentKind::Claude, "c"), usage_with_tokens(3)),
+        ];
+        let filtered = filter_rows_by_agent(&rows, Some(AgentKind::Claude));
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|(m, _)| m.agent == AgentKind::Claude));
     }
 
     fn usage_with_turns(turns: u32) -> ConversationUsage {

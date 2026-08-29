@@ -187,6 +187,10 @@ pub struct ReviewView {
     /// 数据来自打开详情时已加载好的 `SessionRow`,不为此单独发请求。
     pub summary_title: Option<String>,
     pub summary_text: Option<String>,
+    /// 总结区展示的相对时间(如 "3 分钟前"),打开详情那一刻用
+    /// `SessionRow.last_ts` 算一次定格,不随详情页停留时长实时跳字
+    /// (2026-08-28 新增)。
+    pub summary_time: Option<String>,
 }
 
 /// 预览编辑弹层的进行中会话(全局至多一个;弹层是应用级模态)。
@@ -2527,18 +2531,6 @@ fn conversation_agents_present(rows: &[SessionRow]) -> Vec<AgentKind> {
         .collect()
 }
 
-/// 会话列表副行总结预览:整段 `summary` 截成单行,超过 60 个字符补 "…"
-/// (同 `transcript::truncate_activity` 的 60 字符口径;本文件不走跨模块
-/// 依赖,单独留一份)。
-fn truncate_for_preview(s: &str) -> String {
-    if s.chars().count() <= 60 {
-        s.to_string()
-    } else {
-        let head: String = s.chars().take(60).collect();
-        format!("{head}…")
-    }
-}
-
 /// 会话列表底部 agent 筛选栏:样式对齐文件树面板的分支切换下拉
 /// (`files::git_footer_bar`/`branch_picker_popup`)——左边图标 + 当前筛选
 /// (agent 名称,不筛选时"全部"),右边一个展开/收起下拉的箭头按钮,不再是
@@ -2758,19 +2750,16 @@ pub(crate) fn conversation_list_pane<'a>(
     for g in filtered.iter().take(visible) {
         let current = conversation::is_current_conversation_id(&g.conversation_id, &opens);
         // 时间前面加上 agent 名称(需求),不管是不是当前会话都紧挨在时间
-        // 之前;"● 当前" 前缀保留在最前面。副行优先显示总结预览(截断成
-        // 单行),没有总结(c2 这类降级行)才退到 "agent · 相对时间"。
+        // 之前;"● 当前" 前缀保留在最前面。副行只显示 "agent · 相对时间"
+        // (2026-08-28 起不再显示总结预览——列表只要标题+时间)。
         let agent_label = g.agent.label();
-        // 总结全文渲染时截断成预览(60 字符,超长加 …,同 `truncate_activity`
-        // 口径);有总结就不再拼 "agent · 时间"。
-        let sub = match g.summary.as_deref() {
-            Some(summary) if current => format!("● 当前 · {}", truncate_for_preview(summary)),
-            Some(summary) => truncate_for_preview(summary),
-            None if current => format!(
+        let sub = if current {
+            format!(
                 "● 当前 · {agent_label} · {}",
                 relative_time_text(g.last_ts, now_ms)
-            ),
-            None => format!("{agent_label} · {}", relative_time_text(g.last_ts, now_ms)),
+            )
+        } else {
+            format!("{agent_label} · {}", relative_time_text(g.last_ts, now_ms))
         };
         let sub_color = if current {
             byteui::theme::color::current().green
@@ -4172,6 +4161,7 @@ mod tests {
             nonce: 3,
             summary_title: None,
             summary_text: None,
+            summary_time: None,
         };
         assert_eq!(review_webview_spec(Some(&with_error)), Vec::new());
 
@@ -4183,6 +4173,7 @@ mod tests {
             nonce: 3,
             summary_title: None,
             summary_text: None,
+            summary_time: None,
         };
         assert_eq!(review_webview_spec(Some(&empty_entries)), Vec::new());
     }
@@ -4197,6 +4188,7 @@ mod tests {
             nonce: 7,
             summary_title: None,
             summary_text: None,
+            summary_time: None,
         };
         let specs = review_webview_spec(Some(&rv));
         assert_eq!(specs.len(), 1);
