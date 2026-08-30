@@ -8,7 +8,7 @@
 
 use byteui::interaction::icons;
 use iced_widget::core::{Border, Element, Length};
-use iced_widget::{button, column, container, row, scrollable, text};
+use iced_widget::{Scrollable, button, column, container, row, scrollable, text};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -39,6 +39,20 @@ impl DriverKind {
             DriverKind::Sqlite => "SQLite",
             DriverKind::MongoDB => "MongoDB",
         }
+    }
+}
+
+/// 新增/编辑数据源表单里"数据源类型"select 的一个选项:驱动 + 预先算好的
+/// 展示文案(可能带"(已禁用)"后缀,见 `source_form`)。
+#[derive(Debug, Clone, PartialEq)]
+struct DriverOption {
+    driver: DriverKind,
+    label: String,
+}
+
+impl std::fmt::Display for DriverOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.label)
     }
 }
 
@@ -1685,7 +1699,7 @@ fn source_form<'a>(
     draft: &'a DataSourceDraft,
     app_state: &'a AppState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let mut driver_row = row![].spacing(8);
+    let mut driver_options: Vec<DriverOption> = Vec::new();
     for driver in DriverKind::ALL {
         // 只列已启用的驱动;若正在编辑的数据源本身用的驱动已被禁用,
         // 仍把它加回来并标注"已禁用"(设计文档"目标"第 4 条)——这里判断
@@ -1699,26 +1713,19 @@ fn source_form<'a>(
         } else {
             format!("{}(已禁用)", driver.label())
         };
-        driver_row = driver_row.push(
-            button(text(label))
-                .on_press(Message::DraftDriverChanged(driver))
-                .style(
-                    move |_t: &iced_widget::Theme, _s| iced_widget::button::Style {
-                        background: Some(
-                            if is_current {
-                                byteui::theme::color::current().gold
-                            } else {
-                                byteui::theme::color::current().card
-                            }
-                            .into(),
-                        ),
-                        ..iced_widget::button::Style::default()
-                    },
-                ),
-        );
+        driver_options.push(DriverOption { driver, label });
     }
+    let selected_driver_option = driver_options
+        .iter()
+        .find(|o| o.driver == draft.driver)
+        .cloned();
+    let driver_select = byteui::form::select::view(
+        driver_options,
+        selected_driver_option,
+        |opt: DriverOption| Message::DraftDriverChanged(opt.driver),
+    );
 
-    let mut col = column![driver_row].spacing(8);
+    let mut col = column![driver_select].spacing(8);
     col = col.push(wrap_form_input(
         byteui::form::input_text::view(
             "名字",
@@ -1869,38 +1876,49 @@ pub fn view<'a>(
     if let Some((source, st)) = ws_state.browsing_source() {
         return schema_tree_view(source, st, width, outer, schema_back_hover_t);
     }
-    let mut col = column![
-        crate::homespace::home_panel_head(icons::IconKind::Database, "数据库"),
-        row![
-            button(text("管理驱动")).on_press(Message::DriversPopupToggle),
-            button(text("＋新增数据源")).on_press(Message::AddSourceStart),
-        ]
-        .spacing(8)
-        .align_y(iced_widget::core::Alignment::Center),
-    ]
-    .spacing(12);
+    // 顶部面板标题固定、中间可滚动、底部「管理驱动/新增数据源」footer-bar
+    // 固定在面板最下方——镜像 `ssh.rs::view`/`ssh_footer_bar` 的既有布局
+    // (原先两个按钮跟标题挤在同一行,不随内容滚动分区,验收反馈参照主机
+    // 面板"添加主机"统一到 footer-bar)。
+    let head = container(crate::homespace::home_panel_head(
+        icons::IconKind::Database,
+        "数据库",
+    ))
+    .padding(crate::theme::region::project_pane().padding);
+
+    let mut list = column![].spacing(12).padding([0, 20]);
 
     if app_state.drivers_popup_open() {
-        col = col.push(drivers_popup(app_state));
+        list = list.push(drivers_popup(app_state));
     }
 
     if let Some(draft) = ws_state.editing() {
-        col = col.push(source_form(draft, app_state));
+        list = list.push(source_form(draft, app_state));
     }
 
     if ws_state.sources().is_empty() {
-        col = col.push(
+        list = list.push(
             text("还没有数据源")
                 .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim),
         );
     } else {
         for source in ws_state.sources() {
-            col = col.push(source_card(source, ws_state.test_status(&source.id)));
+            list = list.push(source_card(source, ws_state.test_status(&source.id)));
         }
     }
 
-    container(col.padding(16))
+    let scroll = Scrollable::new(list)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .direction(scrollable::Direction::Vertical(
+            byteui::interaction::scrollbar::scrollbar(),
+        ))
+        .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style());
+
+    let body = column![head, scroll, database_footer_bar()].spacing(0);
+
+    container(body)
         .width(width)
         .height(iced_widget::core::Length::Fill)
         .style(
@@ -1910,6 +1928,79 @@ pub fn view<'a>(
                 ..iced_widget::container::Style::default()
             },
         )
+        .into()
+}
+
+/// 数据库面板底部 footer-bar:1px `BORDER` 分隔线 + `padding([6, 8])` 容器,
+/// 结构照抄 `ssh.rs::ssh_footer_bar`(同一产品语言——"管理驱动"+"新增数据源"
+/// 两个按钮固定在面板最下方,不随数据源列表滚动)。
+fn database_footer_bar<'a>() -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let btn = |icon: icons::IconKind, label: &'static str, on_press: Message| {
+        button(
+            row![
+                icons::view(
+                    icon,
+                    byteui::theme::icon_size::row(),
+                    byteui::theme::color::current().cream,
+                ),
+                text(label)
+                    .size(byteui::theme::font::label())
+                    .color(byteui::theme::color::current().cream),
+            ]
+            .spacing(6)
+            .align_y(iced_widget::core::Alignment::Center),
+        )
+        .on_press(on_press)
+        .padding([4, 8])
+        .style(|_t: &iced_widget::Theme, _s| button::Style {
+            background: Some(byteui::theme::color::current().bg.into()),
+            border: iced_widget::core::Border {
+                color: byteui::theme::color::current().border,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            text_color: byteui::theme::color::current().cream,
+            ..button::Style::default()
+        })
+    };
+
+    let bar = row![
+        iced_widget::space::horizontal(),
+        btn(
+            icons::IconKind::Settings,
+            "管理驱动",
+            Message::DriversPopupToggle,
+        ),
+        btn(
+            icons::IconKind::SquarePlus,
+            "新增数据源",
+            Message::AddSourceStart
+        ),
+    ]
+    .spacing(6)
+    .align_y(iced_widget::core::Alignment::Center);
+
+    let top_line = container(iced_widget::Space::new())
+        .width(iced_widget::core::Length::Fill)
+        .height(iced_widget::core::Length::Fixed(1.0))
+        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+            background: Some(byteui::theme::color::current().border.into()),
+            ..iced_widget::container::Style::default()
+        });
+
+    let pp = crate::theme::region::project_pane().padding;
+    container(column![top_line, bar].spacing(4))
+        .width(iced_widget::core::Length::Fill)
+        .padding(iced_widget::core::Padding {
+            top: 6.0,
+            right: pp.right,
+            bottom: 6.0,
+            left: pp.left,
+        })
+        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+            background: None,
+            ..iced_widget::container::Style::default()
+        })
         .into()
 }
 
@@ -1929,23 +2020,25 @@ pub fn content_pane<'a>(
     // hover key 用 `usize::MAX`,真实 tab 下标不可能到这个值。
     const BLANK_HOVER_KEY: usize = usize::MAX;
     let blank_active = content.active_idx().is_none();
-    let mut entries: Vec<(f32, Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>)> =
-        vec![(
-            tab_title_display_width("空白"),
-            crate::tab_widget::panel_tab(
-                "空白".to_string(),
-                blank_active,
-                app.hover_progress(crate::app::HoverId::DatabaseTabItem(BLANK_HOVER_KEY)),
-                app.hover_progress(crate::app::HoverId::DatabaseTabClose(BLANK_HOVER_KEY)),
-                None,
-                None,
-                Message::SelectBlankTab,
-                Message::SelectBlankTab,
-                app.hover_tooltip_ready(crate::app::HoverId::DatabaseTabItem(BLANK_HOVER_KEY)),
-                move |h| Message::TabHover(DatabaseTabHoverTarget::Title, BLANK_HOVER_KEY, h),
-                move |h| Message::TabHover(DatabaseTabHoverTarget::Close, BLANK_HOVER_KEY, h),
-            ),
-        )];
+    let mut entries: Vec<(
+        f32,
+        Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
+    )> = vec![(
+        tab_title_display_width("空白"),
+        crate::tab_widget::panel_tab(
+            "空白".to_string(),
+            blank_active,
+            app.hover_progress(crate::app::HoverId::DatabaseTabItem(BLANK_HOVER_KEY)),
+            app.hover_progress(crate::app::HoverId::DatabaseTabClose(BLANK_HOVER_KEY)),
+            None,
+            None,
+            Message::SelectBlankTab,
+            Message::SelectBlankTab,
+            app.hover_tooltip_ready(crate::app::HoverId::DatabaseTabItem(BLANK_HOVER_KEY)),
+            move |h| Message::TabHover(DatabaseTabHoverTarget::Title, BLANK_HOVER_KEY, h),
+            move |h| Message::TabHover(DatabaseTabHoverTarget::Close, BLANK_HOVER_KEY, h),
+        ),
+    )];
     entries.extend(content.tabs().iter().enumerate().map(|(idx, tab)| {
         let active = Some(idx) == content.active_idx();
         let title_hover_t = app.hover_progress(crate::app::HoverId::DatabaseTabItem(idx));
@@ -2008,7 +2101,13 @@ pub fn content_pane<'a>(
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
 
-    let mut col = column![tab_bar].spacing(8);
+    // tab 栏下方 1px 分割线,同 SSH/预览面板的 `tab_divider()`(此前漏加,
+    // 验收反馈 tab 下方少了一根横线)。外层 padding/tab 栏间距改用
+    // `terminal_pane` region(同 `app.rs::ssh_terminal_pane` 的既有取值:
+    // padding 8、gap 4)——之前硬编码 16/8 是 SSH 面板的两倍,tab 栏看起来
+    // 比主机面板厚一圈(验收反馈"右侧 tab 高度太高")。
+    let region = crate::theme::region::terminal_pane();
+    let mut col = column![tab_bar, crate::app::tab_divider()].spacing(region.gap);
 
     match content.active_tab() {
         None => {
@@ -2034,7 +2133,7 @@ pub fn content_pane<'a>(
         }
     }
 
-    container(col.padding(16))
+    container(col.padding(region.padding))
         .width(width)
         .height(iced_widget::core::Length::Fill)
         .style(
@@ -2164,7 +2263,7 @@ fn browse_view<'a>(
             new_tab_field_id("browse-order", tab_id),
             false,
         ),
-        byteui::form::select::view(&PAGE_SIZES, Some(&b.page_size), move |v| {
+        byteui::form::select::view(&PAGE_SIZES[..], Some(&b.page_size), move |v| {
             Message::BrowsePageSizeChanged(tab_id, v)
         }),
         button(text("上一页")).on_press_maybe((b.page > 0).then_some(Message::BrowsePrev(tab_id))),

@@ -2,14 +2,17 @@
 
 use iced_widget::core::{Border, Element};
 use iced_widget::pick_list::{self, Status};
+use std::borrow::Borrow;
 
-pub fn view<'a, T, Message>(
-    options: &'a [T],
-    selected: Option<&'a T>,
+pub fn view<'a, T, L, V, Message>(
+    options: L,
+    selected: Option<V>,
     on_select: impl Fn(T) -> Message + 'a,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>
 where
     T: ToString + PartialEq + Clone + 'a,
+    L: Borrow<[T]> + 'a,
+    V: Borrow<T> + 'a,
     Message: Clone + 'a,
 {
     iced_widget::pick_list(options, selected, on_select)
