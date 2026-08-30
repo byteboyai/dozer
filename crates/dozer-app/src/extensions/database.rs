@@ -8,7 +8,7 @@
 
 use byteui::interaction::icons;
 use iced_widget::core::{Border, Element, Length};
-use iced_widget::{Scrollable, button, column, container, row, scrollable, text};
+use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -597,8 +597,10 @@ pub struct WorkspaceState {
     sources: Vec<DataSource>,
     editing: Option<DataSourceDraft>,
     test_status: HashMap<String, TestStatus>,
-    /// 正在浏览 schema 树的数据源 id;`None` = 卡片列表视图(阶段 2)。
-    browsing: Option<String>,
+    /// 数据源树里当前展开(显示 schema/表)的数据源 id 集合——允许多个
+    /// 根节点同时展开,不再是单选的"进入/返回"整页切换(设计文档回顾里
+    /// 的卡片列表已改成内联树,见 `view`)。
+    expanded_sources: HashSet<String>,
     /// 每个数据源 id 一份 schema 树状态(阶段 2,纯内存)。
     schemas: HashMap<String, SchemaState>,
     /// 右侧内容窗格状态(表/集合/查询 tab)。纯内存,不持久化——同
@@ -612,7 +614,7 @@ impl std::fmt::Debug for WorkspaceState {
             .field("sources", &self.sources)
             .field("editing", &self.editing)
             .field("test_status", &self.test_status)
-            .field("browsing", &self.browsing)
+            .field("expanded_sources", &self.expanded_sources)
             .field("schemas", &self.schemas)
             .field("content_tab_count", &self.content.tabs().len())
             .finish()
@@ -632,18 +634,14 @@ impl WorkspaceState {
         self.test_status.get(source_id).unwrap_or(&TestStatus::Idle)
     }
 
-    /// 当前正在浏览的数据源及其 schema 树状态(阶段 2 树视图用)。
-    /// `reload_from_disk` 后 `browsing` 可能指向磁盘已不存在的源——取不到
-    /// 返回 `None`,调用方回退卡片列表即可,不专门清理(设计文档 §2 过期防线)。
-    pub fn browsing_source(&self) -> Option<(&DataSource, &SchemaState)> {
-        let id = self.browsing.as_deref()?;
-        let source = self.sources.iter().find(|s| s.id == id)?;
-        let st = self.schemas.get(id)?;
-        Some((source, st))
+    /// 该数据源在树里是否已展开(header 行 chevron 状态 + 右键菜单"刷新"
+    /// 是否可用都靠它判断)。
+    pub fn is_expanded(&self, source_id: &str) -> bool {
+        self.expanded_sources.contains(source_id)
     }
 
-    /// 指定数据源的 schema 树状态只读视图(状态机单测断言用)。
-    #[cfg(test)]
+    /// 已展开数据源的 schema 树状态只读视图(`None` = 尚未加载/已被删除,
+    /// 调用方按"加载中"渲染即可,不专门清理,同设计文档 §2 过期防线)。
     pub fn schema_state(&self, source_id: &str) -> Option<&SchemaState> {
         self.schemas.get(source_id)
     }
@@ -682,26 +680,17 @@ fn keyring_entry(project_id: i64, source_id: &str) -> Result<keyring::Entry, key
     keyring::Entry::new("dozer", &format!("{project_id}:{source_id}"))
 }
 
-/// 连接测试 / 表单交互的统一消息。`TestConnectionResult` 特化携带
-/// `project_id`——异步结果可能晚于用户切换项目才回来,必须按这个项目 id
-/// 而不是"当前聚焦项目"路由回正确的 `WorkspaceState`。
-/// 数据库面板里可悬停的 icon 按钮(schema 树头部行的 "← 返回""刷新")。
-/// 悬停进度不由本模块挂的动画表驱动,内核把进入/离开转发成 `HoverId`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DatabaseToolbarTarget {
-    /// schema 树顶部 "← 返回"(回卡片列表)。
-    SchemaBack,
-}
-
 /// 内容窗格 tab 栏里某个可悬停部件的身份;配合 `Message::TabHover` 由内核
-/// 转发到 `HoverId::DatabaseTabItem/DatabaseTabClose`(同 `ToolbarHover` 的
-/// 布线方式)。
+/// 转发到 `HoverId::DatabaseTabItem/DatabaseTabClose`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatabaseTabHoverTarget {
     Title,
     Close,
 }
 
+/// 连接测试 / 表单交互的统一消息。`TestConnectionResult` 特化携带
+/// `project_id`——异步结果可能晚于用户切换项目才回来,必须按这个项目 id
+/// 而不是"当前聚焦项目"路由回正确的 `WorkspaceState`。
 #[derive(Debug, Clone)]
 pub enum Message {
     /// 驱动管理弹层:勾/取消勾某个驱动类型。
@@ -744,27 +733,26 @@ pub enum Message {
     /// 页签,`App::update` 必须按这里的 `project_id` 而不是"当前聚焦
     /// 项目"路由。
     TestConnectionResult(i64, String, Result<(), String>),
-    /// 点"浏览结构":`browsing = Some(id)`;该源从未加载过则自动发起表加载
-    /// (有缓存/有错误保留现状,错误态由"重试"触发)。
-    BrowseSchema(String),
-    /// schema 树顶部"← 返回":回到卡片列表(树状态保留,再进入不重拉)。
-    SchemaBack,
-    /// schema 树顶部"刷新":重拉表列表(旧快照保留不闪空,成功后对账)。
-    /// 处理前先核对 `browsing == Some(id)`,防旧视图残留按钮。
+    /// 数据源树 header 行左键点(chevron/名字):展开/收起该源的 schema 树。
+    /// 首次展开且从未加载过才自动发起表加载(有缓存/有错误保留现状,
+    /// 错误态由右键菜单"刷新"触发)。允许多个源同时展开。
+    ToggleSourceExpanded(String),
+    /// 数据源树 header 行右键:内核拦截,不进 `update`——转发成顶层
+    /// `App::database_source_context_menu` 弹出测试连接/编辑/删除/刷新
+    /// 菜单(见 app.rs)。
+    SourceContextMenu(String),
+    /// 右键菜单"刷新":重拉表列表(旧快照保留不闪空,成功后对账)。处理前
+    /// 先核对该源当前确实展开着,防菜单残留动作作用到已收起的源。
     SchemaRefresh(String),
-    /// schema 树头部 icon 按钮的悬停进入/离开。悬停进度由内核统一驱动
-    /// (本面板不挂 App 的 hover 动画表),`update` 吃不到这里;保 no-op
-    /// 分支维持 match 穷尽。
-    ToolbarHover(DatabaseToolbarTarget, bool),
     /// 任意顶部 `HoverId` 的悬停进入/离开(内容侧收起按钮等)。内核拦截转发
     /// 给顶层 `App::set_hover`,本面板 `update` 保 no-op 分支维持 match 穷尽。
     Hover(crate::app::HoverId, bool),
     /// 内容窗格 tab 栏某个 tab 的悬停进入/离开;纯转发动机,`update()` 里
-    /// 保 no-op 分支维持 match 穷尽,真正接线在 `app.rs` 的特化臂(同
-    /// `ToolbarHover` 的口径)。
+    /// 保 no-op 分支维持 match 穷尽,真正接线在 `app.rs` 的特化臂。
     TabHover(DatabaseTabHoverTarget, usize, bool),
-    /// Postgres schema 节点展开/收起(纯同步,不触发加载)。
-    ToggleSchema(String),
+    /// Postgres schema 节点展开/收起(纯同步,不触发加载)。带 `source_id`——
+    /// 允许多个源同时展开后,不能再靠单一"当前浏览源"隐式定位。
+    ToggleSchema(String, String),
     /// 表节点展开/收起;展开时列缓存缺失或曾失败 → 置 `Loading` 并发起列加载。
     ToggleTable {
         source_id: String,
@@ -876,6 +864,9 @@ pub fn update(
         Message::Hover(_, _) => {
             unreachable!("由内核拦截处理,见 database::Message::Hover 文档")
         }
+        Message::SourceContextMenu(_) => {
+            unreachable!("由内核拦截处理,见 database::Message::SourceContextMenu 文档")
+        }
         Message::DraftDriverChanged(v) => set_draft(ws_state, |d| d.driver = v),
         Message::DraftHostChanged(v) => set_draft(ws_state, |d| d.host = v),
         Message::DraftPortChanged(v) => set_draft(ws_state, |d| d.port = v),
@@ -946,9 +937,7 @@ pub fn update(
             if draft.id.is_some() {
                 ws_state.schemas.remove(&id);
                 ws_state.content.close_by_source(&id);
-                if ws_state.browsing.as_deref() == Some(id.as_str()) {
-                    ws_state.browsing = None;
-                }
+                ws_state.expanded_sources.remove(&id);
             }
             if let Err(e) = save_sources(repo_path, &ws_state.sources) {
                 tracing::warn!("写入 database.json 失败: {e}");
@@ -962,9 +951,7 @@ pub fn update(
             ws_state.test_status.remove(&id);
             ws_state.schemas.remove(&id);
             ws_state.content.close_by_source(&id);
-            if ws_state.browsing.as_deref() == Some(id.as_str()) {
-                ws_state.browsing = None;
-            }
+            ws_state.expanded_sources.remove(&id);
             if let Ok(entry) = keyring_entry(project_id, &id) {
                 let _ = entry.delete_credential();
             }
@@ -1000,13 +987,17 @@ pub fn update(
             };
             ws_state.test_status.insert(id, status);
         }
-        Message::BrowseSchema(id) => {
+        Message::ToggleSourceExpanded(id) => {
+            if !ws_state.expanded_sources.remove(&id) {
+                ws_state.expanded_sources.insert(id.clone());
+            } else {
+                return; // 收起:保留缓存,不取消飞行中的加载
+            }
             let Some(source) = ws_state.sources.iter().find(|s| s.id == id).cloned() else {
                 return;
             };
-            ws_state.browsing = Some(id.clone());
             let st = ws_state.schemas.entry(id.clone()).or_default();
-            // 从未加载过才拉:有缓存 → 直接显示;有错误 → 等用户点"重试"
+            // 从未加载过才拉:有缓存 → 直接显示;有错误 → 等用户点右键菜单"刷新"
             let need_load = st.tables.is_empty() && !st.loading_tables && st.tables_error.is_none();
             if !need_load {
                 return;
@@ -1030,12 +1021,9 @@ pub fn update(
                 emit,
             );
         }
-        Message::SchemaBack => {
-            ws_state.browsing = None;
-        }
         Message::SchemaRefresh(source_id) => {
-            if ws_state.browsing.as_deref() != Some(source_id.as_str()) {
-                return; // 旧视图残留按钮防线
+            if !ws_state.expanded_sources.contains(&source_id) {
+                return; // 菜单残留防线:源已被收起
             }
             let Some(source) = ws_state.sources.iter().find(|s| s.id == source_id).cloned() else {
                 return;
@@ -1062,11 +1050,8 @@ pub fn update(
                 emit,
             );
         }
-        Message::ToggleSchema(name) => {
-            let Some(browsing) = ws_state.browsing.clone() else {
-                return;
-            };
-            let Some(st) = ws_state.schemas.get_mut(&browsing) else {
+        Message::ToggleSchema(source_id, name) => {
+            let Some(st) = ws_state.schemas.get_mut(&source_id) else {
                 return;
             };
             if !st.expanded_schemas.remove(&name) {
@@ -1078,7 +1063,7 @@ pub fn update(
             schema,
             table,
         } => {
-            if ws_state.browsing.as_deref() != Some(source_id.as_str()) {
+            if !ws_state.expanded_sources.contains(&source_id) {
                 return; // 旧视图残留按钮防线
             }
             let Some(source) = ws_state.sources.iter().find(|s| s.id == source_id).cloned() else {
@@ -1332,12 +1317,9 @@ pub fn update(
             }
             apply_query_result(q, result);
         }
-        Message::ToolbarHover(..) => {
-            // 悬停进度由内核 `Message::Database` 分支转发到 `HoverId`,吃不到这里。
-        }
         Message::TabHover(..) => {
-            // 内容窗格 tab 悬停同 `ToolbarHover`:由内核 `App::update` 的特化臂
-            // 转发到 `HoverId::DatabaseTabItem/DatabaseTabClose`,吃不到这里。
+            // 内容窗格 tab 悬停:由内核 `App::update` 的特化臂转发到
+            // `HoverId::DatabaseTabItem/DatabaseTabClose`,吃不到这里。
         }
     }
 }
@@ -1615,82 +1597,155 @@ fn drivers_popup<'a>(
     crate::menu::shell(items, iced_widget::core::Length::Fixed(220.0))
 }
 
-/// 单条数据源卡片:名称 + 驱动 + 连接摘要 + 测试/编辑/删除按钮 + 测试状态。
-fn source_card<'a>(
+/// 数据源根节点图标:关系型驱动统一用 `Database`(圆柱),MongoDB 用
+/// `Leaf`。现有图标库没有贴切的各厂商品牌图标,退而求其次按"关系型/
+/// 文档型"两类区分形状——颜色仍走主题染色(dim),不引入固定品牌色,
+/// 跟本仓库其它 icon 的处理口径一致。
+fn driver_icon(driver: DriverKind) -> icons::IconKind {
+    match driver {
+        DriverKind::MongoDB => icons::IconKind::Leaf,
+        DriverKind::Postgres | DriverKind::MySQL | DriverKind::Sqlite => icons::IconKind::Database,
+    }
+}
+
+/// 树行左侧缩进宽度,对齐 header 行的 chevron + 图标列(子行没有自己的
+/// chevron 时用这个占位,行内文字信息用这个当左边距)。
+fn source_tree_indent() -> Length {
+    Length::Fixed(byteui::theme::icon_size::chevron() + byteui::theme::icon_size::tree_row_gap())
+}
+
+fn indented_line<'a>(
+    text_str: impl Into<String>,
+    color: iced_widget::core::Color,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    row![
+        iced_widget::space::Space::new().width(source_tree_indent()),
+        text(text_str.into())
+            .size(byteui::theme::font::caption_sm())
+            .color(color),
+    ]
+    .into()
+}
+
+/// 数据源树的一个根节点:header 行(chevron + 驱动图标 + 名字,左键展开/
+/// 收起、右键弹测试连接/编辑/删除/刷新菜单,见 `app.rs` 的
+/// `database_source_context_menu_popup`)+ 展开时的 schema/表子树。子树
+/// 结构复用阶段 2 现成的 `SchemaState`/`tree_rows`/`schema_tree_row`——此前
+/// 是切到独立整页 `schema_tree_view`,这次改成内联挂在同一个可滚动列表里。
+fn source_tree_node<'a>(
     source: &'a DataSource,
     status: &'a TestStatus,
+    expanded: bool,
+    st: Option<&'a SchemaState>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let status_text = match status {
-        TestStatus::Idle => "".to_string(),
-        TestStatus::Testing => "测试中…".to_string(),
-        TestStatus::Ok => "✓ 连接成功".to_string(),
-        TestStatus::Err(e) => format!("✗ {e}"),
+    let chevron = if expanded {
+        icons::IconKind::ChevronDown
+    } else {
+        icons::IconKind::ChevronRight
     };
-    let status_color = match status {
-        TestStatus::Ok => byteui::theme::color::current().green,
-        TestStatus::Err(_) => byteui::theme::color::current().red,
-        _ => byteui::theme::color::current().dim,
-    };
-    let summary = match source.driver {
-        DriverKind::Sqlite => source.database.clone().unwrap_or_default(),
-        _ => source
-            .uri
-            .as_deref()
-            .map(|u| u.to_string())
-            .unwrap_or_else(|| {
-                format!(
-                    "{}:{}/{}",
-                    source.host.as_deref().unwrap_or("-"),
-                    source.port.map(|p| p.to_string()).unwrap_or_default(),
-                    source.database.as_deref().unwrap_or("-"),
-                )
-            }),
-    };
-    container(
-        column![
+    let header = MouseArea::new(
+        button(
             row![
+                icons::view(
+                    chevron,
+                    byteui::theme::icon_size::chevron(),
+                    byteui::theme::color::current().dim
+                ),
+                icons::view(
+                    driver_icon(source.driver),
+                    byteui::theme::icon_size::row(),
+                    byteui::theme::color::current().dim
+                ),
                 text(source.name.clone())
                     .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().cream),
-                text(source.driver.label())
-                    .size(byteui::theme::font::caption_sm())
-                    .color(byteui::theme::color::current().dim),
             ]
-            .spacing(8),
-            text(summary)
-                .size(byteui::theme::font::caption_sm())
-                .color(byteui::theme::color::current().dim),
-            {
-                let mut btns = row![
-                    button(text("测试连接")).on_press(Message::TestConnection(source.id.clone()))
-                ]
-                .spacing(8);
-                btns = btns.push(
-                    button(text("浏览结构")).on_press(Message::BrowseSchema(source.id.clone())),
-                );
-                btns.push(
-                    button(text("编辑")).on_press(Message::EditSourceStart(source.id.clone())),
-                )
-                .push(button(text("删除")).on_press(Message::DeleteSource(source.id.clone())))
-            },
-            text(status_text)
-                .size(byteui::theme::font::caption_sm())
-                .color(status_color),
-        ]
-        .spacing(6),
+            .spacing(byteui::theme::icon_size::tree_row_gap())
+            .align_y(iced_widget::core::Alignment::Center),
+        )
+        .on_press(Message::ToggleSourceExpanded(source.id.clone()))
+        .width(Length::Fill)
+        .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+            background: None,
+            ..iced_widget::button::Style::default()
+        }),
     )
-    .padding(10)
-    .width(iced_widget::core::Length::Fill)
-    .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-        background: Some(byteui::theme::color::current().card.into()),
-        border: iced_widget::core::Border {
-            color: byteui::theme::color::current().border,
-            width: 1.0,
-            radius: 8.0.into(),
-        },
-        ..iced_widget::container::Style::default()
-    })
-    .into()
+    .on_right_press(Message::SourceContextMenu(source.id.clone()));
+
+    let mut col = column![header].spacing(2);
+
+    let status_line = match status {
+        TestStatus::Idle => None,
+        TestStatus::Testing => Some(("测试中…".to_string(), byteui::theme::color::current().dim)),
+        TestStatus::Ok => Some((
+            "✓ 连接成功".to_string(),
+            byteui::theme::color::current().green,
+        )),
+        TestStatus::Err(e) => Some((format!("✗ {e}"), byteui::theme::color::current().red)),
+    };
+    if let Some((line, color)) = status_line {
+        col = col.push(indented_line(line, color));
+    }
+
+    if !expanded {
+        return col.into();
+    }
+
+    if source.driver != DriverKind::MongoDB {
+        col = col.push(row![
+            iced_widget::space::Space::new().width(source_tree_indent()),
+            button(
+                text("+ 新查询")
+                    .size(byteui::theme::font::caption_sm())
+                    .color(byteui::theme::color::current().dim)
+            )
+            .on_press(Message::OpenQueryTab(source.id.clone()))
+            .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+                background: None,
+                ..iced_widget::button::Style::default()
+            }),
+        ]);
+    }
+
+    let dim = byteui::theme::color::current().dim;
+    let Some(st) = st else {
+        return col.push(indented_line("加载中…", dim)).into();
+    };
+
+    // 旧快照在手 + 正在刷新 → 一行"刷新中…"提示,旧树照常(同 git_log 不闪空惯例)
+    if st.loading_tables() && !st.tables().is_empty() {
+        col = col.push(indented_line("刷新中…", dim));
+    }
+    if let Some(e) = st.tables_error()
+        && !st.tables().is_empty()
+    {
+        col = col.push(indented_line(
+            format!("刷新失败:{e}"),
+            byteui::theme::color::current().red,
+        ));
+    }
+
+    if st.loading_tables() && st.tables().is_empty() {
+        col.push(indented_line("加载中…", dim)).into()
+    } else if st.tables().is_empty() {
+        if let Some(e) = st.tables_error() {
+            col.push(indented_line(
+                format!("✗ {e}(右键菜单可重试)"),
+                byteui::theme::color::current().red,
+            ))
+            .into()
+        } else {
+            col.push(indented_line("该库没有表或视图", dim)).into()
+        }
+    } else {
+        for r in tree_rows(st, source.driver) {
+            col = col.push(row![
+                iced_widget::space::Space::new().width(source_tree_indent()),
+                schema_tree_row(&source.id, source.driver, r),
+            ]);
+        }
+        col.into()
+    }
 }
 
 /// 新增/编辑数据源表单。SQLite 只留"文件路径"一栏,其它驱动列出 host/port/
@@ -1870,12 +1925,7 @@ pub fn view<'a>(
     ws_state: &'a WorkspaceState,
     width: Length,
     outer: Border,
-    schema_back_hover_t: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    // 正在浏览某数据源的 schema 树 → 树视图;否则阶段 1 卡片列表(以下原样)。
-    if let Some((source, st)) = ws_state.browsing_source() {
-        return schema_tree_view(source, st, width, outer, schema_back_hover_t);
-    }
     // 顶部面板标题固定、中间可滚动、底部「管理驱动/新增数据源」footer-bar
     // 固定在面板最下方——镜像 `ssh.rs::view`/`ssh_footer_bar` 的既有布局
     // (原先两个按钮跟标题挤在同一行,不随内容滚动分区,验收反馈参照主机
@@ -1904,7 +1954,13 @@ pub fn view<'a>(
         );
     } else {
         for source in ws_state.sources() {
-            list = list.push(source_card(source, ws_state.test_status(&source.id)));
+            let expanded = ws_state.is_expanded(&source.id);
+            list = list.push(source_tree_node(
+                source,
+                ws_state.test_status(&source.id),
+                expanded,
+                ws_state.schema_state(&source.id),
+            ));
         }
     }
 
@@ -2452,117 +2508,6 @@ fn query_view<'a>(
     col.into()
 }
 
-/// schema 树浏览视图(阶段 2)。drill-down:从卡片列表进入,`SchemaBack` 返回。
-fn schema_tree_view<'a>(
-    source: &'a DataSource,
-    st: &'a SchemaState,
-    width: Length,
-    outer: Border,
-    schema_back_hover_t: f32,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let box_len = byteui::theme::icon_size::row() + 12.0;
-    let back_button = icons::icon_button_entry(
-        icons::IconKind::ChevronLeft,
-        byteui::theme::icon_size::row(),
-        false,
-        false,
-        schema_back_hover_t,
-        false,
-        box_len,
-        true,
-        Message::SchemaBack,
-        |hovered| Message::ToolbarHover(DatabaseToolbarTarget::SchemaBack, hovered),
-        "返回",
-    );
-
-    let mut header = row![
-        back_button,
-        text(source.name.clone())
-            .size(byteui::theme::font::subtitle())
-            .color(byteui::theme::color::current().cream),
-        text(source.driver.label())
-            .size(byteui::theme::font::caption_sm())
-            .color(byteui::theme::color::current().dim),
-        iced_widget::space::horizontal(),
-    ]
-    .spacing(8)
-    .align_y(iced_widget::core::Alignment::Center);
-    if source.driver != DriverKind::MongoDB {
-        header = header
-            .push(button(text("+ 新查询")).on_press(Message::OpenQueryTab(source.id.clone())));
-    }
-    header = header.push(button(text("刷新")).on_press(Message::SchemaRefresh(source.id.clone())));
-
-    let mut col = column![header].spacing(8);
-
-    // 旧快照在手 + 正在刷新 → 一行"刷新中…"提示,旧树照常(同 git_log 不闪空惯例)
-    if st.loading_tables() && !st.tables().is_empty() {
-        col = col.push(
-            text("刷新中…")
-                .size(byteui::theme::font::caption_sm())
-                .color(byteui::theme::color::current().dim),
-        );
-    }
-    if let Some(e) = st.tables_error()
-        && !st.tables().is_empty()
-    {
-        // 有旧快照:树保留,一行红字说明刷新失败
-        col = col.push(
-            text(format!("刷新失败:{e}"))
-                .size(byteui::theme::font::caption_sm())
-                .color(byteui::theme::color::current().red),
-        );
-    }
-
-    if st.loading_tables() && st.tables().is_empty() {
-        col = col.push(
-            text("加载中…")
-                .size(byteui::theme::font::body())
-                .color(byteui::theme::color::current().dim),
-        );
-    } else if st.tables().is_empty() {
-        if let Some(e) = st.tables_error() {
-            col = col.push(
-                text(format!("✗ {e}"))
-                    .size(byteui::theme::font::body())
-                    .color(byteui::theme::color::current().red),
-            );
-            col =
-                col.push(button(text("重试")).on_press(Message::SchemaRefresh(source.id.clone())));
-        } else {
-            col = col.push(
-                text("该库没有表或视图")
-                    .size(byteui::theme::font::body())
-                    .color(byteui::theme::color::current().dim),
-            );
-        }
-    } else {
-        let mut tree = column![].spacing(2);
-        for r in tree_rows(st, source.driver) {
-            tree = tree.push(schema_tree_row(&source.id, source.driver, r));
-        }
-        col = col.push(
-            scrollable(tree)
-                .direction(scrollable::Direction::Vertical(
-                    byteui::interaction::scrollbar::scrollbar(),
-                ))
-                .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
-        );
-    }
-
-    container(col.padding(16))
-        .width(width)
-        .height(iced_widget::core::Length::Fill)
-        .style(
-            move |_t: &iced_widget::Theme| iced_widget::container::Style {
-                background: Some(byteui::theme::color::current().bg.into()),
-                border: outer,
-                ..iced_widget::container::Style::default()
-            },
-        )
-        .into()
-}
-
 /// 单行渲染。source_id 用于构造 `ToggleTable`/`OpenTableTab`/`OpenCollectionTab`,driver
 /// 决定 MongoDB 集合行(无 chevron、点文字开集合 tab)与关系型表/视图行的差异。
 fn schema_tree_row<'a>(
@@ -2603,7 +2548,10 @@ fn schema_tree_row<'a>(
                 .spacing(byteui::theme::icon_size::tree_row_gap())
                 .align_y(iced_widget::core::Alignment::Center),
             )
-            .on_press(Message::ToggleSchema(name.to_string()))
+            .on_press(Message::ToggleSchema(
+                source_id.to_string(),
+                name.to_string(),
+            ))
             .width(Length::Fill)
             .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
                 background: None,
@@ -3810,7 +3758,7 @@ mod tests {
 
     fn seeded_ws(source: DataSource) -> WorkspaceState {
         let mut ws = WorkspaceState {
-            browsing: Some(source.id.clone()),
+            expanded_sources: HashSet::from([source.id.clone()]),
             ..Default::default()
         };
         ws.sources.push(source.clone());
@@ -3823,8 +3771,8 @@ mod tests {
         let src = pg_source("s1");
         let mut ws = WorkspaceState::default();
         ws.sources.push(src.clone());
-        update_with(&mut ws, Message::BrowseSchema("s1".into()));
-        assert_eq!(ws.browsing.as_deref(), Some("s1"));
+        update_with(&mut ws, Message::ToggleSourceExpanded("s1".into()));
+        assert!(ws.is_expanded("s1"));
         let st = ws.schema_state("s1").unwrap_or_else(|| panic!());
         assert!(st.loading_tables());
         assert!(st.tables().is_empty());
@@ -3835,9 +3783,9 @@ mod tests {
     fn browse_schema_second_time_uses_cache() {
         let mut ws = seeded_ws(pg_source("s1"));
         ws.schemas.get_mut("s1").unwrap().tables = vec![tree_table(Some("public"), "users", false)];
-        // 模拟已加载完成
-        update_with(&mut ws, Message::SchemaBack);
-        update_with(&mut ws, Message::BrowseSchema("s1".into()));
+        // 模拟已加载完成:收起再展开
+        update_with(&mut ws, Message::ToggleSourceExpanded("s1".into()));
+        update_with(&mut ws, Message::ToggleSourceExpanded("s1".into()));
         let st = ws.schema_state("s1").unwrap();
         assert!(!st.loading_tables()); // 有缓存,不重拉
         assert_eq!(st.tables().len(), 1);
@@ -3847,17 +3795,17 @@ mod tests {
     fn schema_back_clears_browsing_keeps_cache() {
         let mut ws = seeded_ws(pg_source("s1"));
         ws.schemas.get_mut("s1").unwrap().tables = vec![tree_table(Some("public"), "users", false)];
-        update_with(&mut ws, Message::SchemaBack);
-        assert_eq!(ws.browsing, None);
+        update_with(&mut ws, Message::ToggleSourceExpanded("s1".into()));
+        assert!(!ws.is_expanded("s1"));
         assert_eq!(ws.schema_state("s1").unwrap().tables().len(), 1);
     }
 
     #[test]
     fn schema_refresh_requires_browsing_match() {
         let mut ws = seeded_ws(pg_source("s1"));
-        update_with(&mut ws, Message::SchemaBack); // browsing = None
+        update_with(&mut ws, Message::ToggleSourceExpanded("s1".into())); // 收起
         update_with(&mut ws, Message::SchemaRefresh("s1".into()));
-        assert!(!ws.schema_state("s1").unwrap().loading_tables()); // 旧按钮防线
+        assert!(!ws.schema_state("s1").unwrap().loading_tables()); // 旧菜单残留防线
     }
 
     #[test]
@@ -3865,13 +3813,13 @@ mod tests {
         let mut ws = seeded_ws(pg_source("s1"));
         let st = ws.schemas.get_mut("s1").unwrap();
         st.tables = vec![tree_table(Some("public"), "users", false)];
-        update_with(&mut ws, Message::ToggleSchema("public".into()));
+        update_with(&mut ws, Message::ToggleSchema("s1".into(), "public".into()));
         assert!(
             tree_rows(ws.schema_state("s1").unwrap(), DriverKind::Postgres)
                 .iter()
                 .any(|r| matches!(r.kind, SchemaRowKind::Table(_)))
         );
-        update_with(&mut ws, Message::ToggleSchema("public".into()));
+        update_with(&mut ws, Message::ToggleSchema("s1".into(), "public".into()));
         assert!(
             !tree_rows(ws.schema_state("s1").unwrap(), DriverKind::Postgres)
                 .iter()
@@ -3884,7 +3832,7 @@ mod tests {
         let mut ws = seeded_ws(pg_source("s1"));
         ws.schemas.get_mut("s1").unwrap().tables = vec![tree_table(Some("public"), "users", false)];
         // 展开 schema 节点,表行/列行才会进 tree_rows(Postgres 多一层)
-        update_with(&mut ws, Message::ToggleSchema("public".into()));
+        update_with(&mut ws, Message::ToggleSchema("s1".into(), "public".into()));
         // 首次展开 → Loading(spawn 的任务不会在本测试 runtime 里跑完)
         update_with(
             &mut ws,
@@ -3940,7 +3888,7 @@ mod tests {
     fn failed_columns_retry_by_recollapse_expand() {
         let mut ws = seeded_ws(pg_source("s1"));
         ws.schemas.get_mut("s1").unwrap().tables = vec![tree_table(Some("public"), "users", false)];
-        update_with(&mut ws, Message::ToggleSchema("public".into()));
+        update_with(&mut ws, Message::ToggleSchema("s1".into(), "public".into()));
         let key = (Some("public".to_string()), "users".to_string());
         update_with(
             &mut ws,
@@ -4072,7 +4020,7 @@ mod tests {
         let mut ws = seeded_ws(pg_source("s1"));
         update_with(&mut ws, Message::DeleteSource("s1".into()));
         assert!(ws.schema_state("s1").is_none());
-        assert_eq!(ws.browsing, None);
+        assert!(!ws.is_expanded("s1"));
 
         // DraftSave 编辑已有源 → 同样清理(连接信息可能变,旧快照不作数)
         let mut ws = seeded_ws(pg_source("s1"));
@@ -4089,7 +4037,7 @@ mod tests {
         });
         update_with(&mut ws, Message::DraftSave);
         assert!(ws.schema_state("s1").is_none());
-        assert_eq!(ws.browsing, None);
+        assert!(!ws.is_expanded("s1"));
     }
 
     #[test]

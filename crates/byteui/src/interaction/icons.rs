@@ -100,6 +100,9 @@ pub enum IconKind {
     BadgeCheck,
     /// 数据库面板 rail 图标(Lucide database)。
     Database,
+    /// 数据库面板数据源树根节点图标,MongoDB 用(Lucide leaf)——区别于关系型
+    /// 驱动统一用的 `Database`(见 `extensions/database.rs` 的 `driver_icon`)。
+    Leaf,
     /// schema 树表节点图标(Lucide table)。
     Table,
     /// schema 树视图节点图标(Lucide eye)。
@@ -224,6 +227,7 @@ impl IconKind {
             IconKind::BarChart3 => include_bytes!("../../assets/icons/bar-chart-3.svg"),
             IconKind::BadgeCheck => include_bytes!("../../assets/icons/badge-check.svg"),
             IconKind::Database => include_bytes!("../../assets/icons/database.svg"),
+            IconKind::Leaf => include_bytes!("../../assets/icons/leaf.svg"),
             IconKind::Table => include_bytes!("../../assets/icons/table.svg"),
             IconKind::Eye => include_bytes!("../../assets/icons/eye.svg"),
             IconKind::EyeOff => include_bytes!("../../assets/icons/eye-off.svg"),

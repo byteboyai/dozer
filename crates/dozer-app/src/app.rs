@@ -240,9 +240,6 @@ pub enum HoverId {
     /// Conversations 面板列表列"收起/展开"按钮:处理方式同 `FileTreeCollapse`
     /// (见 `review_content_pane`)。
     ConversationsListCollapse,
-    /// 数据库面板 schema 树"返回"按钮(`ChevronLeft`):静止 DIM,hover 过渡
-    /// 到 GOLD(见 `extensions/database.rs`)。
-    DatabaseSchemaBack,
     /// 数据库内容窗格 tab 栏:某个 tab 本体的悬停(按索引区分,同
     /// `PreviewTabItem`)。
     DatabaseTabItem(usize),
@@ -1808,6 +1805,8 @@ pub enum Message {
     ProjectLinkPick(project::links::LinkTarget),
     /// Project 面板链接行右键菜单关闭(点遮罩 / 按 Esc)。
     ProjectLinkContextMenuClose,
+    /// 数据库面板数据源树 header 行右键菜单关闭(点遮罩 / 按 Esc)。
+    DatabaseSourceContextMenuClose,
     /// 项目页签:把某路径作为**新页签**打开(不动任何已存在页签的内容)。
     ProjectTabOpen(PathBuf),
     /// 项目页签:`ProjectTabOpen` 异步完成(daemon upsert 结果 + 最近列表)。
@@ -1917,6 +1916,15 @@ struct TextInputMenu {
     x: f32,
     y: f32,
     target: TextInputTarget,
+}
+
+/// 数据库面板数据源树 header 行的右键菜单浮层状态:定位坐标(复用
+/// `files.last_right_click`)+ 目标数据源 id。测试连接/编辑/删除/刷新
+/// 四个动作见 `database_source_context_menu_popup`。
+struct DatabaseSourceMenu {
+    x: f32,
+    y: f32,
+    source_id: String,
 }
 
 pub struct App {
@@ -2045,6 +2053,9 @@ pub struct App {
     /// 通用输入框右键菜单浮层状态(屏幕空间单例)。`TextInputMenuOpen` 时
     /// 写入、`TextInputMenuClose`/动作后清空。同一时刻最多挂一个。
     text_input_menu: Option<TextInputMenu>,
+    /// 数据库面板数据源树 header 行的右键菜单浮层状态,坐标同样复用
+    /// `files.last_right_click`。
+    database_source_menu: Option<DatabaseSourceMenu>,
     /// 待处理的"输入框右键菜单要作用的输入"焦点:载入 `TextInputMenuOpen`
     /// 携带的 `TextInputTarget.id`,由 main.rs 的 `apply_pending_focus` 在
     /// 本帧后移至该输入,供菜单的复制/粘贴作用到被右键的输入。
@@ -2403,6 +2414,7 @@ impl App {
             project_preview_tab_menu: None,
             project_link_menu: None,
             text_input_menu: None,
+            database_source_menu: None,
             pending_text_input_focus: None,
             projects: HashMap::new(),
             project_order: Vec::new(),
@@ -3680,6 +3692,7 @@ impl App {
             || self.project_preview_tab_menu.is_some()
             || self.project_link_menu.is_some()
             || self.text_input_menu.is_some()
+            || self.database_source_menu.is_some()
     }
 
     /// 输入框右键菜单是否打开(main.rs Esc 键路由用)。
@@ -3714,6 +3727,19 @@ impl App {
     /// Project 面板链接行右键菜单是否打开(main.rs Esc 键路由用)。
     pub fn project_link_context_menu_open(&self) -> bool {
         self.project_link_menu.is_some()
+    }
+
+    /// 数据库面板数据源树 header 行右键菜单是否打开(main.rs Esc 键路由用)。
+    pub fn database_source_context_menu_open(&self) -> bool {
+        self.database_source_menu.is_some()
+    }
+
+    /// 打开数据库面板数据源树 header 行的右键菜单(测试连接/编辑/删除/
+    /// 刷新)。与文件树右键菜单互斥(坐标复用 `files.last_right_click`)。
+    fn database_source_context_menu(&mut self, source_id: String) {
+        let (x, y) = self.files.last_right_click();
+        self.files.close_context_menu();
+        self.database_source_menu = Some(DatabaseSourceMenu { x, y, source_id });
     }
 
     /// 打开 Project 面板「项目文档 / Agent 记忆」链接行的删除右键菜单。与
@@ -4306,13 +4332,8 @@ impl App {
                 run_seq,
                 result,
             )) => self.database_query_result(project_id, tab_id, run_seq, result),
-            Message::Database(database::Message::ToolbarHover(target, hovered)) => {
-                // 数据库面板 schema 树头部 icon 按钮的悬停:本面板不挂 App 的
-                // hover 动画表,把进入/离开转发成 `HoverId` 由内核统一驱动动画。
-                let id = match target {
-                    database::DatabaseToolbarTarget::SchemaBack => HoverId::DatabaseSchemaBack,
-                };
-                self.set_hover(id, hovered);
+            Message::Database(database::Message::SourceContextMenu(source_id)) => {
+                self.database_source_context_menu(source_id);
             }
             Message::Database(database::Message::TabHover(target, idx, hovered)) => {
                 // 内容窗格 tab 本体/关闭按钮的悬停,转发成 `HoverId`(同
@@ -4784,6 +4805,9 @@ impl App {
             Message::ProjectLinkPick(_) => {}
             Message::ProjectLinkContextMenuClose => {
                 self.project_link_menu = None;
+            }
+            Message::DatabaseSourceContextMenuClose => {
+                self.database_source_menu = None;
             }
             Message::ProjectTabOpen(path) => {
                 let client = self.client.clone();
@@ -5733,6 +5757,19 @@ impl App {
     }
 
     fn database_message(&mut self, msg: database::Message) {
+        // 四个动作都可能来自数据源树 header 行的右键菜单——菜单本体没有
+        // "点了就自动收起"的行为(popup 盖在 dismiss 遮罩之上,点菜单项本身
+        // 吃不到遮罩的点击),落地时顺手收掉,不来自菜单时该字段本就是
+        // `None`,无副作用。
+        if matches!(
+            msg,
+            database::Message::TestConnection(_)
+                | database::Message::EditSourceStart(_)
+                | database::Message::DeleteSource(_)
+                | database::Message::SchemaRefresh(_)
+        ) {
+            self.database_source_menu = None;
+        }
         let Some(project_id) = self.active_project_id else {
             return;
         };
@@ -6945,6 +6982,67 @@ impl App {
             .into()
     }
 
+    /// 数据库面板数据源树 header 行右键菜单浮层:测试连接/编辑/删除/刷新。
+    /// 定位坐标复用 `files.last_right_click`。"刷新"只有该数据源当前已
+    /// 展开(有 schema 树数据)才可点,未展开时置灰——展开动作本身走左键
+    /// 点 header,不进这个菜单。
+    fn database_source_context_menu_popup<'a>(
+        &self,
+    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+        let menu = match &self.database_source_menu {
+            Some(m) => m,
+            None => return column![].into(),
+        };
+        let source_id = menu.source_id.clone();
+        let expanded = self
+            .active_workspace()
+            .is_some_and(|ws| ws.database.is_expanded(&source_id));
+        let dim = byteui::theme::color::current().dim;
+        let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
+            vec![
+                crate::menu::item::<Message>(
+                    Some(icons::IconKind::RefreshCw),
+                    "测试连接",
+                    Message::Database(database::Message::TestConnection(source_id.clone())),
+                ),
+                crate::menu::item::<Message>(
+                    Some(icons::IconKind::Settings),
+                    "编辑",
+                    Message::Database(database::Message::EditSourceStart(source_id.clone())),
+                ),
+                crate::menu::item::<Message>(
+                    Some(icons::IconKind::Trash),
+                    "删除",
+                    Message::Database(database::Message::DeleteSource(source_id.clone())),
+                ),
+            ];
+        items.push(if expanded {
+            crate::menu::item::<Message>(
+                Some(icons::IconKind::RotateCw),
+                "刷新",
+                Message::Database(database::Message::SchemaRefresh(source_id.clone())),
+            )
+        } else {
+            crate::menu::item_locked(Some(icons::IconKind::RotateCw), "刷新", dim)
+        });
+
+        let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+            crate::menu::shell(
+                items,
+                Length::Fixed(byteui::theme::geometry::menu_item_width()),
+            );
+        container(list)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(Padding {
+                top: menu.y,
+                left: menu.x,
+                right: 0.0,
+                bottom: 0.0,
+            })
+            .into()
+    }
+
     /// 输入框右键菜单浮层:固定四项(剪切/复制/粘贴/全选),定位坐标复用
     /// `files.last_right_click`(main.rs 任意右键都会先写入,`TextInputMenuOpen`
     /// 已用它填好 `x/y`)。动作消息回 main.rs——由它合成回 ⌘/Ctrl+`x`/`c`/`v`/`a`
@@ -7204,6 +7302,17 @@ impl App {
             )
             .on_press(Message::TextInputMenuClose);
             stack![base, dismiss, self.text_input_menu_popup()]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else if self.database_source_menu.is_some() {
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::DatabaseSourceContextMenuClose);
+            stack![base, dismiss, self.database_source_context_menu_popup()]
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
@@ -7683,7 +7792,6 @@ fn panel_body<'a>(
                 &ws.database,
                 Length::FillPortion(list_portion),
                 zone_pane_border(zone, lc),
-                app.hover_progress(HoverId::DatabaseSchemaBack),
             )
             .map(Message::Database);
             let content_pane = database::content_pane(

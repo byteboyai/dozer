@@ -1048,6 +1048,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     app.update(Message::ProjectLinkContextMenuClose);
                 } else if app.text_input_menu_open() {
                     app.update(Message::TextInputMenuClose);
+                } else if app.database_source_context_menu_open() {
+                    app.update(Message::DatabaseSourceContextMenuClose);
                 } else {
                     app.update(Message::Files(extensions::files::Message::ContextMenuClose));
                 }
