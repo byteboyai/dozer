@@ -44,7 +44,8 @@ use crate::workspace::{
     dot_color, edit_discard_confirm_popup, edit_modal, effective_project_repo, exited_marker,
     fetch_project_restore, no_project_placeholder, preview_pane, project_preview_pane,
     relative_time_text, review_content_pane, review_should_refresh_on_turn,
-    spawn_disk_usage_refresh, spawn_project_git_refresh, split_portions, tab_title,
+    spawn_disk_usage_refresh, spawn_project_git_refresh, split_portions, tab_display_width,
+    tab_title,
 };
 use byteui::interaction::icons;
 use dozer_client::Client;
@@ -5173,6 +5174,23 @@ impl App {
                     ws.select_ssh_tab(host_id, kind);
                 });
             }
+            // 点固定的"空白"占位 tab:它不对应 `ssh_tabs`/`sftp_tabs` 里
+            // 任何一条记录,选中态就是 `ssh_active == None`。
+            Message::Ssh(ssh::Message::SelectBlankTab) => {
+                self.with_focused_project(|ws, _io| {
+                    ws.ssh_active = None;
+                });
+            }
+            // tab 条翻页箭头,逻辑同 `Message::PreviewTabScroll`。
+            Message::Ssh(ssh::Message::TabScroll(right)) => {
+                self.with_focused_project(|ws, _io| {
+                    if right {
+                        ws.ssh_tab_first = ws.ssh_tab_first.saturating_add(2);
+                    } else {
+                        ws.ssh_tab_first = ws.ssh_tab_first.saturating_sub(2);
+                    }
+                });
+            }
             // SFTP tab 内部交互:按 host_id 路由到 `sftp::route`,真正的
             // 处理逻辑在那边(sftp::Message 有 7+ 个变体,内容又都操作
             // `ws.sftp_tabs`,摊平会让这里的大 match 更难读)。
@@ -8282,20 +8300,53 @@ pub(crate) fn ssh_tab_hover_key(host_id: &str) -> u64 {
     hasher.finish()
 }
 
-/// SSH 面板自己的 tab 条:遍历 `ws.ssh_tabs`,每个渲染一个可关闭 tab。
-/// 直接复用 `panel_tab`(右侧共享终端条 `tab_item` 用的同一个函数)而不是
-/// 自己拼容器样式,视觉/hover 动画与全应用其它 tab 完全一致——不需要
+/// SSH 面板自己的 tab 条:固定一个"空白"占位 tab 打头,后面遍历
+/// `ws.ssh_tabs`/`ws.sftp_tabs`,每个渲染一个可关闭 tab。直接复用
+/// `panel_tab`(右侧共享终端条 `tab_item` 用的同一个函数)而不是自己拼
+/// 容器样式,视觉/hover 动画与全应用其它 tab 完全一致——不需要
 /// `tabs::tab_core` 手动接线。前缀图标固定用 `IconKind::Terminal`(阶段
 /// 4 只有这一种;阶段 3 加 `Sftp` 变体后按 tab 的种类换图标,`SessionTab`
 /// 本身不带 `SshTabKind` 字段,种类信息只在 `ws.ssh_active` 里——阶段 4
 /// 全部 `ssh_tabs` 里的 tab 都是 `Terminal` 种类,这里暂时不需要按 tab
 /// 查种类,阶段 3 扩展这个函数时才需要处理"同一个 host_id 可能对应两个
 /// 不同种类的 tab,要分别渲染两个 tab 条目"这件事)。
+///
+/// 翻页箭头 + 窗口化裁剪(P1L T5 那套 `tab_window` 索引窗口)镜像
+/// `workspace.rs::preview_pane_for`:先把全部 tab 元素连同估算宽度收进
+/// `entries`,再用 `tab_window` 算出可视窗口起点 `first`,只渲染
+/// `entries[first..]`,左右箭头到头置灰。原先没有这套窗口化,tab 一多
+/// 就会被右侧"收起列表"按钮的 `clip` 直接裁没、连滚动入口都没有。
 fn ssh_tab_bar<'a>(
     app: &'a App,
     ws: &'a Workspace,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let mut bar = row![].spacing(4);
+    let mut entries: Vec<(f32, Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>)> =
+        Vec::new();
+    // "空白"占位 tab:不对应 `ssh_tabs`/`sftp_tabs` 里任何一条记录,选中
+    // 态即 `ssh_active == None`(未开任何主机 tab,或关到最后一个后的
+    // 默认落点)。跟文件预览面板 `preview.rs::TabKind::Blank` 是同一个
+    // 产品概念,但这边没有对应的轻量 tab 数据可插进 `ssh_tabs`,所以只在
+    // 这里画一个固定条目,内容侧靠 `ssh_active == None` 分支渲染
+    // `ssh_empty_state()`,不需要真的建一个 tab 结构体。用 `""` 当 hover
+    // key(真实 host_id 是 UUID,不会是空串,不会撞)。
+    let blank_key = ssh_tab_hover_key("");
+    let blank_active = ws.ssh_active.is_none();
+    entries.push((
+        tab_display_width("空白"),
+        tab_widget::panel_tab(
+            "空白".to_string(),
+            blank_active,
+            app.hover_progress(HoverId::SshTabItem(blank_key)),
+            app.hover_progress(HoverId::SshTabClose(blank_key)),
+            None,
+            None,
+            Message::Ssh(ssh::Message::SelectBlankTab),
+            Message::Ssh(ssh::Message::SelectBlankTab),
+            app.hover_tooltip_ready(HoverId::SshTabItem(blank_key)),
+            move |h| Message::Hover(HoverId::SshTabItem(blank_key), h),
+            move |h| Message::Hover(HoverId::SshTabClose(blank_key), h),
+        ),
+    ));
     for tab in &ws.ssh_tabs {
         let host_id = tab
             .info
@@ -8319,24 +8370,32 @@ fn ssh_tab_bar<'a>(
         let close_id = host_id.clone();
         let title_hover_id = host_id.clone();
         let close_hover_id = host_id;
-        bar = bar.push(tab_widget::panel_tab(
-            tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
-            is_active,
-            title_hover_t,
-            close_hover_t,
-            Some(icon),
-            None,
-            Message::Ssh(ssh::Message::SelectSshTab(
-                select_id,
-                ssh::SshTabKind::Terminal,
-            )),
-            Message::Ssh(ssh::Message::CloseSshTab(
-                close_id,
-                ssh::SshTabKind::Terminal,
-            )),
-            app.hover_tooltip_ready(HoverId::SshTabItem(key)),
-            move |h| Message::Hover(HoverId::SshTabItem(ssh_tab_hover_key(&title_hover_id)), h),
-            move |h| Message::Hover(HoverId::SshTabClose(ssh_tab_hover_key(&close_hover_id)), h),
+        let title = tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name);
+        entries.push((
+            tab_display_width(&title),
+            tab_widget::panel_tab(
+                title,
+                is_active,
+                title_hover_t,
+                close_hover_t,
+                Some(icon),
+                None,
+                Message::Ssh(ssh::Message::SelectSshTab(
+                    select_id,
+                    ssh::SshTabKind::Terminal,
+                )),
+                Message::Ssh(ssh::Message::CloseSshTab(
+                    close_id,
+                    ssh::SshTabKind::Terminal,
+                )),
+                app.hover_tooltip_ready(HoverId::SshTabItem(key)),
+                move |h| {
+                    Message::Hover(HoverId::SshTabItem(ssh_tab_hover_key(&title_hover_id)), h)
+                },
+                move |h| {
+                    Message::Hover(HoverId::SshTabClose(ssh_tab_hover_key(&close_hover_id)), h)
+                },
+            ),
         ));
     }
     // SFTP tab(阶段 3):`sftp_tabs` 按 host_id 去重,渲染形状跟终端 tab
@@ -8362,23 +8421,60 @@ fn ssh_tab_bar<'a>(
         let close_id = host_id.clone();
         let title_hover_id = host_id.clone();
         let close_hover_id = host_id.clone();
-        bar = bar.push(tab_widget::panel_tab(
-            label,
-            is_active,
-            title_hover_t,
-            close_hover_t,
-            Some(icon),
-            None,
-            Message::Ssh(ssh::Message::SelectSshTab(select_id, ssh::SshTabKind::Sftp)),
-            Message::Ssh(ssh::Message::CloseSshTab(close_id, ssh::SshTabKind::Sftp)),
-            app.hover_tooltip_ready(HoverId::SshTabItem(key)),
-            move |h| Message::Hover(HoverId::SshTabItem(ssh_tab_hover_key(&title_hover_id)), h),
-            move |h| Message::Hover(HoverId::SshTabClose(ssh_tab_hover_key(&close_hover_id)), h),
+        entries.push((
+            tab_display_width(&label),
+            tab_widget::panel_tab(
+                label,
+                is_active,
+                title_hover_t,
+                close_hover_t,
+                Some(icon),
+                None,
+                Message::Ssh(ssh::Message::SelectSshTab(select_id, ssh::SshTabKind::Sftp)),
+                Message::Ssh(ssh::Message::CloseSshTab(close_id, ssh::SshTabKind::Sftp)),
+                app.hover_tooltip_ready(HoverId::SshTabItem(key)),
+                move |h| {
+                    Message::Hover(HoverId::SshTabItem(ssh_tab_hover_key(&title_hover_id)), h)
+                },
+                move |h| {
+                    Message::Hover(HoverId::SshTabClose(ssh_tab_hover_key(&close_hover_id)), h)
+                },
+            ),
         ));
         let _ = state;
     }
+    let widths: Vec<f32> = entries.iter().map(|(w, _)| *w).collect();
+    let (first, can_left, can_right) = tab_widget::tab_window(
+        &widths,
+        4.0,
+        byteui::theme::geometry::tab_bar_avail_px(),
+        ws.ssh_tab_first,
+    );
+    let items: Vec<_> = entries
+        .into_iter()
+        .enumerate()
+        .filter(|(idx, _)| *idx >= first)
+        .map(|(_, (_, el))| el)
+        .collect();
+    // tab 条本身占 Fill、裁掉右侧溢出,让"收起列表"钉在裁剪区外的最右侧
+    // (镜像 `workspace.rs::preview_pane_for` 的 `clipped`/`collapse` 布局
+    // ——之前 `bar` 整体是 `Shrink`,收起按钮只是跟在最后一个 tab 后面,
+    // tab 少时会贴在中间而不是面板右边缘,验收反馈要求钉死在右侧)。
+    let clipped = container(row(items).spacing(4))
+        .width(Length::Fill)
+        .clip(true);
+    let left_arrow = tab_widget::tab_arrow_button(
+        icons::IconKind::ChevronLeft,
+        can_left,
+        Message::Ssh(ssh::Message::TabScroll(false)),
+    );
+    let right_arrow = tab_widget::tab_arrow_button(
+        icons::IconKind::ChevronRight,
+        can_right,
+        Message::Ssh(ssh::Message::TabScroll(true)),
+    );
     // 内容侧"收起/展开列表列"按钮(收起左列主机列表后仍在此可见以便恢复)。
-    bar = bar.push(app.list_collapse_button(
+    let collapse = app.list_collapse_button(
         PanelKind::Ssh,
         app.list_collapsed(PanelKind::Ssh),
         HoverId::SshListCollapse,
@@ -8386,8 +8482,11 @@ fn ssh_tab_bar<'a>(
         "展开列表",
         Message::TogglePanelListCollapse(PanelKind::Ssh),
         move |hovered| Message::Hover(HoverId::SshListCollapse, hovered),
-    ));
-    bar.into()
+    );
+    row![left_arrow, right_arrow, clipped, collapse]
+        .spacing(4)
+        .align_y(iced_widget::core::Alignment::Center)
+        .into()
 }
 
 /// SSH 面板内嵌终端区:tab 条 + 终端画布(或空态)。镜像 `preview_pane`/
@@ -8446,12 +8545,13 @@ fn ssh_terminal_pane<'a>(
     .into()
 }
 
-/// 没有活动主机 tab 时的占位内容(关到最后一个 tab 后、或还没开过任何
-/// tab):跟文件预览面板"关到最后一个 tab 自动补 Blank 占位 tab"是同一套
-/// 视觉语言——居中放 Dozer 品牌标 + 引导文案。SSH 这边每个 tab 都是真实
-/// PTY/SFTP 连接(`SessionTab`/`SftpTabState`),没有"空白占位 tab"这种
-/// 轻量概念可以塞进 `ws.ssh_tabs`,所以不像 `preview.rs::TabKind::Blank`
-/// 那样在 tab 栏里插一个假 tab——直接把内容区换成这个更完整的占位态。
+/// "空白" tab(`ssh_active == None`)选中时的内容:跟文件预览面板
+/// `preview.rs::TabKind::Blank` 是同一套视觉语言——居中放 Dozer 品牌标 +
+/// 引导文案。SSH 这边每个真实 tab 都对应一条 PTY/SFTP 连接
+/// (`SessionTab`/`SftpTabState`),没有轻量数据能塞进 `ws.ssh_tabs` 去
+/// 表示"空白",所以"空白" tab 只在 `ssh_tab_bar()` 里画一个固定条目,
+/// 内容侧靠 `ssh_active == None` 这个分支渲染,不是真的建一个 tab 结构体
+/// (对照 preview 那边"tab 数据里有一个 `TabKind::Blank` 变体"的做法)。
 fn ssh_empty_state<'a>() -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     container(
         column![

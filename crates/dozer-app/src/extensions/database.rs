@@ -785,6 +785,10 @@ pub enum Message {
     OpenQueryTab(String),
     /// tab 栏点某个 tab → 切换 active(索引)。
     SelectTab(usize),
+    /// tab 栏点最前面那个固定的"空白"占位 tab(不对应 `tabs` 里任何一条
+    /// 记录,`content.active_idx() == None` 即代表它处于选中态,参考
+    /// `extensions/ssh.rs::Message::SelectBlankTab` 同款设计)。
+    SelectBlankTab,
     /// tab 栏点 × → 关闭(索引)。
     CloseTab(usize),
     /// tab 栏箭头翻页(tab 溢出可视宽度时),`true`=右翻、`false`=左翻。
@@ -1199,6 +1203,7 @@ pub fn update(
             ws_state.content.open_query(source_id);
         }
         Message::SelectTab(idx) => ws_state.content.select(idx),
+        Message::SelectBlankTab => ws_state.content.select_blank(),
         Message::CloseTab(idx) => ws_state.content.close(idx),
         Message::TabScroll(right) => ws_state.content.scroll_tabs(right),
         Message::BrowseWhereChanged(tab_id, v) => {
@@ -1918,31 +1923,38 @@ pub fn content_pane<'a>(
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let content = ws_state.content();
-    let widths: Vec<f32> = content
-        .tabs()
-        .iter()
-        .map(|t| {
-            crate::tab_widget::PANEL_TAB_MAX_W.min(tab_title_display_width(&tab_title(t, ws_state)))
-        })
-        .collect();
-    let (first, can_left, can_right) = crate::tab_widget::tab_window(
-        &widths,
-        4.0,
-        byteui::theme::geometry::tab_bar_avail_px(),
-        content.tab_scroll_first(),
-    );
-
-    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = content
-        .tabs()
-        .iter()
-        .enumerate()
-        .filter(|(idx, _)| *idx >= first)
-        .map(|(idx, tab)| {
-            let active = idx == content.active_idx();
-            let title_hover_t = app.hover_progress(crate::app::HoverId::DatabaseTabItem(idx));
-            let close_hover_t = app.hover_progress(crate::app::HoverId::DatabaseTabClose(idx));
+    // "空白"占位 tab 固定打头,不对应 `content.tabs()` 里任何一条记录,
+    // 选中态即 `content.active_idx() == None`——参考 SSH 面板
+    // `app.rs::ssh_tab_bar` 同款设计(见 `Message::SelectBlankTab`)。
+    // hover key 用 `usize::MAX`,真实 tab 下标不可能到这个值。
+    const BLANK_HOVER_KEY: usize = usize::MAX;
+    let blank_active = content.active_idx().is_none();
+    let mut entries: Vec<(f32, Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>)> =
+        vec![(
+            tab_title_display_width("空白"),
             crate::tab_widget::panel_tab(
-                tab_title(tab, ws_state),
+                "空白".to_string(),
+                blank_active,
+                app.hover_progress(crate::app::HoverId::DatabaseTabItem(BLANK_HOVER_KEY)),
+                app.hover_progress(crate::app::HoverId::DatabaseTabClose(BLANK_HOVER_KEY)),
+                None,
+                None,
+                Message::SelectBlankTab,
+                Message::SelectBlankTab,
+                app.hover_tooltip_ready(crate::app::HoverId::DatabaseTabItem(BLANK_HOVER_KEY)),
+                move |h| Message::TabHover(DatabaseTabHoverTarget::Title, BLANK_HOVER_KEY, h),
+                move |h| Message::TabHover(DatabaseTabHoverTarget::Close, BLANK_HOVER_KEY, h),
+            ),
+        )];
+    entries.extend(content.tabs().iter().enumerate().map(|(idx, tab)| {
+        let active = Some(idx) == content.active_idx();
+        let title_hover_t = app.hover_progress(crate::app::HoverId::DatabaseTabItem(idx));
+        let close_hover_t = app.hover_progress(crate::app::HoverId::DatabaseTabClose(idx));
+        let title = tab_title(tab, ws_state);
+        (
+            crate::tab_widget::PANEL_TAB_MAX_W.min(tab_title_display_width(&title)),
+            crate::tab_widget::panel_tab(
+                title,
                 active,
                 title_hover_t,
                 close_hover_t,
@@ -1953,8 +1965,21 @@ pub fn content_pane<'a>(
                 app.hover_tooltip_ready(crate::app::HoverId::DatabaseTabItem(idx)),
                 move |h| Message::TabHover(DatabaseTabHoverTarget::Title, idx, h),
                 move |h| Message::TabHover(DatabaseTabHoverTarget::Close, idx, h),
-            )
-        })
+            ),
+        )
+    }));
+    let widths: Vec<f32> = entries.iter().map(|(w, _)| *w).collect();
+    let (first, can_left, can_right) = crate::tab_widget::tab_window(
+        &widths,
+        4.0,
+        byteui::theme::geometry::tab_bar_avail_px(),
+        content.tab_scroll_first(),
+    );
+    let items: Vec<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> = entries
+        .into_iter()
+        .enumerate()
+        .filter(|(idx, _)| *idx >= first)
+        .map(|(_, (_, el))| el)
         .collect();
     let tabs_row = row(items).spacing(4);
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
@@ -2773,13 +2798,15 @@ pub enum QueryOutcome {
 
 /// 右侧内容窗格:多个表/集合/查询 tab,`active` 是**索引**(同
 /// `PreviewPane::active_idx()` 的约定,tab 栏渲染/hover 状态按索引找)。
+/// `None` = 当前选中的是 tab 栏最前面固定的"空白"占位 tab(不在
+/// `tabs` 里,参考 `extensions/ssh.rs::ssh_active` 同款 `Option` 设计)。
 /// `contents` 按**稳定 id**存(消息/异步结果按 id 路由,索引会随关闭
 /// 漂移)。
 #[derive(Default)]
 pub struct DatabaseContentState {
     tabs: Vec<DatabaseTab>,
     contents: std::collections::HashMap<usize, TabContent>,
-    active: usize,
+    active: Option<usize>,
     next_id: usize,
     next_console_seq: u32,
     /// tab 栏箭头翻页的窗口起点(同 `Workspace::preview_tab_first` 的用法),
@@ -2793,7 +2820,7 @@ impl DatabaseContentState {
         &self.tabs
     }
 
-    pub fn active_idx(&self) -> usize {
+    pub fn active_idx(&self) -> Option<usize> {
         self.active
     }
 
@@ -2813,7 +2840,7 @@ impl DatabaseContentState {
     }
 
     pub fn active_tab(&self) -> Option<&DatabaseTab> {
-        self.tabs.get(self.active)
+        self.tabs.get(self.active?)
     }
 
     pub fn content(&self, id: usize) -> Option<&TabContent> {
@@ -2829,7 +2856,7 @@ impl DatabaseContentState {
         self.next_id += 1;
         self.tabs.push(DatabaseTab { id, kind });
         self.contents.insert(id, content);
-        self.active = self.tabs.len() - 1;
+        self.active = Some(self.tabs.len() - 1);
         id
     }
 
@@ -2844,7 +2871,7 @@ impl DatabaseContentState {
             matches!(&t.kind, DatabaseTabKind::Table { source_id: s, schema: sc, table: tb }
                 if *s == source_id && *sc == schema && *tb == table)
         }) {
-            self.active = idx;
+            self.active = Some(idx);
             return tab.id;
         }
         self.push(
@@ -2863,7 +2890,7 @@ impl DatabaseContentState {
             matches!(&t.kind, DatabaseTabKind::Collection { source_id: s, name: n }
                 if *s == source_id && *n == name)
         }) {
-            self.active = idx;
+            self.active = Some(idx);
             return tab.id;
         }
         self.push(
@@ -2887,14 +2914,23 @@ impl DatabaseContentState {
 
     pub fn select(&mut self, idx: usize) {
         if idx < self.tabs.len() {
-            self.active = idx;
+            self.active = Some(idx);
         }
+    }
+
+    /// 点固定的"空白"占位 tab:不对应 `tabs` 里任何一条记录,选中态就是
+    /// `active == None`(同 `ssh::update` 里 `Message::SelectBlankTab` 的
+    /// 处理)。
+    pub fn select_blank(&mut self) {
+        self.active = None;
     }
 
     /// 关闭指定索引的 tab。`active` 调整规则同浏览器标签页惯例:关掉
     /// active 之前的 tab → active 索引减 1(仍指向原 tab);关掉 active
     /// 自己且不是最后一个 → active 索引不变(自然落到后一个 tab 上);
     /// 关掉最后一个 tab 且它正是 active → active 收缩到新的最后一个。
+    /// `active == None`(正显示"空白"占位 tab)时关掉某个后台 tab 不改变
+    /// 选中态,仍留在空白 tab 上。
     pub fn close(&mut self, idx: usize) {
         if idx >= self.tabs.len() {
             return;
@@ -2903,11 +2939,14 @@ impl DatabaseContentState {
         self.tabs.remove(idx);
         self.contents.remove(&id);
         if self.tabs.is_empty() {
-            self.active = 0;
-        } else if self.active >= self.tabs.len() {
-            self.active = self.tabs.len() - 1;
-        } else if idx < self.active {
-            self.active -= 1;
+            self.active = None;
+            return;
+        }
+        match self.active {
+            None => {}
+            Some(a) if a >= self.tabs.len() => self.active = Some(self.tabs.len() - 1),
+            Some(a) if idx < a => self.active = Some(a - 1),
+            Some(_) => {}
         }
     }
 
@@ -4105,7 +4144,7 @@ mod content_tests {
         let id_again = st.open_table("s1".into(), Some("public".into()), "users".into());
         assert_eq!(id1, id_again);
         assert_eq!(st.tabs().len(), 2); // 没有新开
-        assert_eq!(st.active_idx(), 0); // 聚焦回第一个 tab
+        assert_eq!(st.active_idx(), Some(0)); // 聚焦回第一个 tab
     }
 
     #[test]
@@ -4157,7 +4196,7 @@ mod content_tests {
         st.select(1); // active = b(索引1)
         st.close(0); // 关掉 a(在 active 之前)
         assert_eq!(st.tabs().len(), 1);
-        assert_eq!(st.active_idx(), 0); // 仍指向 b,现在挪到索引0
+        assert_eq!(st.active_idx(), Some(0)); // 仍指向 b,现在挪到索引0
         assert_eq!(
             st.tabs()[0].kind,
             DatabaseTabKind::Table {
@@ -4176,7 +4215,7 @@ mod content_tests {
         // active 目前是索引1(b,刚开的)
         st.close(1);
         assert_eq!(st.tabs().len(), 1);
-        assert_eq!(st.active_idx(), 0);
+        assert_eq!(st.active_idx(), Some(0));
     }
 
     #[test]

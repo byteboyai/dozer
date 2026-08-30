@@ -356,6 +356,9 @@ pub struct Workspace {
     /// SFTP tab 状态(阶段 3),按 host_id 去重——同一主机同时只有一个
     /// SFTP tab 有意义(见 spec 的既有论证)。
     pub(crate) sftp_tabs: HashMap<String, ssh::sftp::SftpTabState>,
+    /// SSH 面板 tab 条翻页窗口起点,语义同 `preview_tab_first`——
+    /// `tab_window` 每帧据此钳制到合法范围,这里只存"用户上次翻到哪"。
+    pub(crate) ssh_tab_first: usize,
     /// 预览域状态机(P1d).
     pub(crate) preview: PreviewPane,
     /// Project 面板右配对的预览状态机——独立的 `PreviewPane` 实例,与
@@ -640,6 +643,7 @@ impl Workspace {
             ssh_tabs: Vec::new(),
             ssh_active: None,
             sftp_tabs: HashMap::new(),
+            ssh_tab_first: 0,
             preview: PreviewPane::default(),
             project_preview: PreviewPane::default(),
             preview_error: None,

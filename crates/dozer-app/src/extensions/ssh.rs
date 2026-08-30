@@ -442,6 +442,15 @@ pub enum Message {
     /// 切换 SSH 面板当前显示哪个 tab(点 tab 条里非当前的一个)。同上,
     /// 内核拦截(需要 `&mut Workspace` 设 `ssh_active`)。
     SelectSshTab(String, SshTabKind),
+    /// 点 tab 条最前面那个固定的"空白"占位 tab(不对应任何 `ssh_tabs`/
+    /// `sftp_tabs` 条目,`ssh_active == None` 即代表它处于选中态,见
+    /// `app.rs::ssh_tab_bar`)。同上,内核拦截(需要 `&mut Workspace` 清
+    /// `ssh_active`)。
+    SelectBlankTab,
+    /// tab 条左右箭头翻页(`true` = 向右),语义同 `Message::PreviewTabScroll`
+    /// (`workspace.rs::preview_pane_for`)。同上,内核拦截(需要
+    /// `&mut Workspace` 改 `ssh_tab_first`)。
+    TabScroll(bool),
     /// 主机卡片图标按钮的鼠标悬停进/出:更新 `ws_state.hover_action`,
     /// 驱动卡片上对应按钮的 DIM→GOLD 高亮。图标按钮的 `on_enter`/`on_exit`
     /// 事件由 `icons::icon_button_entry` 接好,这里只落状态。
@@ -699,6 +708,8 @@ pub fn update(
         Message::OpenSshTab(..)
         | Message::CloseSshTab(..)
         | Message::SelectSshTab(..)
+        | Message::SelectBlankTab
+        | Message::TabScroll(_)
         | Message::Sftp(..)
         | Message::TextInputMenuOpen(_) => {
             // 内核 `App::update` 在通配 `Message::Ssh(msg)` 之前拦截,
