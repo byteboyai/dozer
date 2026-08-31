@@ -9,7 +9,7 @@ use crate::app::{App, HoverId, Message, PaneCorner, zone_pane_border};
 use crate::conversation::ConversationMeta;
 use crate::delivery;
 use crate::extensions::browser;
-use crate::rail::{RailButton, rail_icon_button};
+use crate::rail::RailButton;
 use crate::theme;
 use crate::workspace::{agent_dot_color, agent_icon, lh, relative_time_text};
 use byteui::interaction::icons;
@@ -17,7 +17,7 @@ use dozer_core::protocol::ProjectInfo;
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
 use iced_widget::core::{Border, Color, Element, Length, Padding, Rectangle};
-use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
+use iced_widget::{Scrollable, button, column, container, row, scrollable, text};
 use std::path::PathBuf;
 
 /// 首页项目列表搜索框(iced 原生 `text_input`)的 `widget::Id`:main.rs 每帧
@@ -168,33 +168,32 @@ fn home_left_icon_rail(
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::left_icon_rail();
     let content = column![
-        MouseArea::new(rail_icon_button(
+        icons::icon_button_entry(
             icons::IconKind::LayoutList,
+            byteui::theme::icon_size::rail(),
             app.home_left_view == HomeLeftView::ProjectList,
+            false,
             app.hover_progress(HoverId::Rail(RailButton::HomeProjectList)),
+            true,
+            byteui::theme::geometry::rail_button_size(),
+            true,
             Message::HomeLeftIconSelect(HomeLeftView::ProjectList),
+            |hovered| Message::Hover(HoverId::Rail(RailButton::HomeProjectList), hovered),
             "项目列表",
-        ))
-        .on_enter(Message::Hover(
-            HoverId::Rail(RailButton::HomeProjectList),
-            true
-        ))
-        .on_exit(Message::Hover(
-            HoverId::Rail(RailButton::HomeProjectList),
-            false
-        )),
-        MouseArea::new(rail_icon_button(
+        ),
+        icons::icon_button_entry(
             icons::IconKind::History,
+            byteui::theme::icon_size::rail(),
             app.home_left_view == HomeLeftView::Recents,
+            false,
             app.hover_progress(HoverId::Rail(RailButton::HomeRecents)),
+            true,
+            byteui::theme::geometry::rail_button_size(),
+            true,
             Message::HomeLeftIconSelect(HomeLeftView::Recents),
+            |hovered| Message::Hover(HoverId::Rail(RailButton::HomeRecents), hovered),
             "最近记录",
-        ))
-        .on_enter(Message::Hover(HoverId::Rail(RailButton::HomeRecents), true))
-        .on_exit(Message::Hover(
-            HoverId::Rail(RailButton::HomeRecents),
-            false
-        )),
+        ),
     ]
     .spacing(region.gap)
     .padding(region.padding);
@@ -215,20 +214,19 @@ fn home_right_icon_rail(
     app: &App,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::right_icon_rail();
-    let content = column![
-        MouseArea::new(rail_icon_button(
-            icons::IconKind::Globe,
-            app.home_right_view == HomeRightView::Browser,
-            app.hover_progress(HoverId::Rail(RailButton::HomeBrowser)),
-            Message::HomeRightIconSelect(HomeRightView::Browser),
-            "浏览器",
-        ))
-        .on_enter(Message::Hover(HoverId::Rail(RailButton::HomeBrowser), true))
-        .on_exit(Message::Hover(
-            HoverId::Rail(RailButton::HomeBrowser),
-            false
-        )),
-    ]
+    let content = column![icons::icon_button_entry(
+        icons::IconKind::Globe,
+        byteui::theme::icon_size::rail(),
+        app.home_right_view == HomeRightView::Browser,
+        false,
+        app.hover_progress(HoverId::Rail(RailButton::HomeBrowser)),
+        true,
+        byteui::theme::geometry::rail_button_size(),
+        true,
+        Message::HomeRightIconSelect(HomeRightView::Browser),
+        |hovered| Message::Hover(HoverId::Rail(RailButton::HomeBrowser), hovered),
+        "浏览器",
+    ),]
     .spacing(region.gap)
     .padding(region.padding);
 
@@ -551,27 +549,19 @@ fn home_project_list_view(
         // (Lucide ellipsis,无外边框/背景);点它再展开下一页(见
         // `Message::HomeMoreProjects`)。全部显示完就消失。
         if more_remain {
-            let more_color = byteui::theme::color::mix(
-                theme::homespace_color::dim(),
-                theme::homespace_color::gold(),
+            let more_button = icons::icon_button_entry(
+                icons::IconKind::Ellipsis,
+                byteui::theme::icon_size::row(),
+                false,
+                false,
                 app.hover_progress(HoverId::HomeProjectMore),
+                false,
+                byteui::theme::geometry::tab_button_size(),
+                true,
+                Message::HomeMoreProjects,
+                |hovered| Message::Hover(HoverId::HomeProjectMore, hovered),
+                "更多",
             );
-            let more_button = MouseArea::new(
-                button(icons::view(
-                    icons::IconKind::Ellipsis,
-                    byteui::theme::icon_size::row(),
-                    more_color,
-                ))
-                .on_press(Message::HomeMoreProjects)
-                .padding(6)
-                .style(move |_t: &iced_widget::Theme, _s| button::Style {
-                    background: None,
-                    text_color: more_color,
-                    ..button::Style::default()
-                }),
-            )
-            .on_enter(Message::Hover(HoverId::HomeProjectMore, true))
-            .on_exit(Message::Hover(HoverId::HomeProjectMore, false));
             list = list.push(
                 container(more_button)
                     .width(Length::Fill)

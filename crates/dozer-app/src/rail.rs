@@ -11,8 +11,8 @@ use crate::app::{App, HoverId, Message, PanelKind, Side};
 use crate::theme;
 use byteui::interaction::icons;
 use iced_widget::core::mouse;
-use iced_widget::core::{Border, Color, Element, Length, Padding};
-use iced_widget::{MouseArea, button, column, container, stack};
+use iced_widget::core::{Border, Element, Length, Padding};
+use iced_widget::{MouseArea, column, container, stack};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -314,66 +314,6 @@ pub(crate) fn slot_position(
         .filter(|a| a.side == side)
         .map(|a| a.current)
         .unwrap_or(target)
-}
-
-/// 单个图标栏按钮：圆角正方形背景常驻,hover 图标变金(无金框),选中图标
-/// 变金且带金色外框。
-pub(crate) fn rail_icon_button<'a>(
-    icon: icons::IconKind,
-    active: bool,
-    hover_t: f32,
-    msg: Message,
-    tooltip: &'a str,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    // 图标颜色:选中态恒为金;未选中时 hover 平滑过渡到金(见 `HoverId`/
-    // `App::hover_progress`——与光标闪烁同款自驱 redraw 动画)。SVG 颜色
-    // 构建时定死、不吃 `button::Status`,所以 hover 进度靠 `hover_t` 参数从
-    // App 算进来。
-    let color = if active {
-        byteui::theme::color::current().gold
-    } else {
-        byteui::theme::color::mix(
-            byteui::theme::color::current().dim,
-            byteui::theme::color::current().gold,
-            hover_t,
-        )
-    };
-    let inner = container(icons::view(icon, byteui::theme::icon_size::rail(), color))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(iced_widget::core::alignment::Horizontal::Center)
-        .align_y(iced_widget::core::alignment::Vertical::Center);
-
-    let radius = 8.0;
-    let base_border = Border {
-        color: Color::TRANSPARENT,
-        width: 1.0,
-        radius: radius.into(),
-    };
-
-    let content: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = button(inner)
-        .on_press(msg)
-        .width(Length::Fixed(byteui::theme::geometry::rail_button_size()))
-        .height(Length::Fixed(byteui::theme::geometry::rail_button_size()))
-        .padding(0)
-        .style(move |_t: &iced_widget::Theme, _status: button::Status| {
-            // 圆角正方形背景常驻(`CARD`);金色外框只在选中态出现,hover
-            // 不放金框——所以样式完全由 `active` 决定,与交互态无关。
-            button::Style {
-                background: Some(byteui::theme::color::current().card.into()),
-                border: Border {
-                    color: if active {
-                        byteui::theme::color::current().gold
-                    } else {
-                        Color::TRANSPARENT
-                    },
-                    ..base_border
-                },
-                ..button::Style::default()
-            }
-        })
-        .into();
-    icons::with_tooltip(content, tooltip)
 }
 
 /// 图标栏:按 `app.shell_layout.rail_layout.side(side)` 的顺序遍历渲染。

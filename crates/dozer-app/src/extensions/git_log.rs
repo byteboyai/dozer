@@ -763,29 +763,19 @@ fn commit_list_view<'a>(
     // (Lucide ellipsis,无外边框/背景,hover DIM→GOLD)——点它翻下一页
     // (`Message::CommitListMore`,纯客户端状态,不问 git 要新数据)。
     if rows.len() > visible_count {
-        let more_color = byteui::theme::color::mix(
-            byteui::theme::color::current().dim,
-            byteui::theme::color::current().gold,
+        let more_button = byteui::interaction::icons::icon_button_entry(
+            byteui::interaction::icons::IconKind::Ellipsis,
+            byteui::theme::icon_size::row(),
+            false,
+            false,
             app.hover_progress(HoverId::CommitListMore),
+            false,
+            byteui::theme::geometry::tab_button_size(),
+            true,
+            Message::CommitListMore,
+            |hovered| Message::Hover(HoverId::CommitListMore, hovered),
+            "更多",
         );
-        let more_button = MouseArea::new(
-            iced_widget::button(byteui::interaction::icons::view(
-                byteui::interaction::icons::IconKind::Ellipsis,
-                byteui::theme::icon_size::row(),
-                more_color,
-            ))
-            .on_press(Message::CommitListMore)
-            .padding(6)
-            .style(
-                move |_t: &iced_widget::Theme, _s| iced_widget::button::Style {
-                    background: None,
-                    text_color: more_color,
-                    ..iced_widget::button::Style::default()
-                },
-            ),
-        )
-        .on_enter(Message::Hover(HoverId::CommitListMore, true))
-        .on_exit(Message::Hover(HoverId::CommitListMore, false));
         list = list.push(
             container(more_button)
                 .width(Length::Fill)

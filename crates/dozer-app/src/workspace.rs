@@ -2818,29 +2818,19 @@ pub(crate) fn conversation_list_pane<'a>(
     // (Lucide ellipsis,无外边框/背景,hover DIM→GOLD)——点它翻下一页
     // (`Message::ConversationListMore`,纯客户端状态,不问 daemon 要新数据)。
     if filtered.len() > visible {
-        let more_color = byteui::theme::color::mix(
-            byteui::theme::color::current().dim,
-            byteui::theme::color::current().gold,
+        let more_button = icons::icon_button_entry(
+            icons::IconKind::Ellipsis,
+            byteui::theme::icon_size::row(),
+            false,
+            false,
             app.hover_progress(HoverId::ConversationListMore),
+            false,
+            byteui::theme::geometry::tab_button_size(),
+            true,
+            Message::ConversationListMore,
+            |hovered| Message::Hover(HoverId::ConversationListMore, hovered),
+            "更多",
         );
-        let more_button = MouseArea::new(
-            iced_widget::button(icons::view(
-                icons::IconKind::Ellipsis,
-                byteui::theme::icon_size::row(),
-                more_color,
-            ))
-            .on_press(Message::ConversationListMore)
-            .padding(6)
-            .style(
-                move |_t: &iced_widget::Theme, _s| iced_widget::button::Style {
-                    background: None,
-                    text_color: more_color,
-                    ..iced_widget::button::Style::default()
-                },
-            ),
-        )
-        .on_enter(Message::Hover(HoverId::ConversationListMore, true))
-        .on_exit(Message::Hover(HoverId::ConversationListMore, false));
         cards = cards.push(
             container(more_button)
                 .width(Length::Fill)
@@ -3077,28 +3067,19 @@ fn work_content_and_workspace_row(
 pub(crate) fn agent_picker_toggle_button<'a>(
     app: &App,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let color = byteui::theme::color::mix(
-        byteui::theme::color::current().dim,
-        byteui::theme::color::current().gold,
+    icons::icon_button_entry(
+        icons::IconKind::SquarePlus,
+        byteui::theme::icon_size::row(),
+        false,
+        false,
         app.hover_progress(HoverId::AgentPickerToggle),
-    );
-    let add = MouseArea::new(
-        button(icons::view(
-            icons::IconKind::SquarePlus,
-            byteui::theme::icon_size::row(),
-            color,
-        ))
-        .on_press(Message::AgentPickerToggle)
-        .padding([6, 8])
-        .style(move |_t: &iced_widget::Theme, _s| button::Style {
-            background: None,
-            text_color: color,
-            ..button::Style::default()
-        }),
+        false,
+        byteui::theme::geometry::tab_button_size(),
+        true,
+        Message::AgentPickerToggle,
+        |hovered| Message::Hover(HoverId::AgentPickerToggle, hovered),
+        "新建 Agent 会话",
     )
-    .on_enter(Message::Hover(HoverId::AgentPickerToggle, true))
-    .on_exit(Message::Hover(HoverId::AgentPickerToggle, false));
-    add.into()
 }
 
 /// Agent 选择菜单浮层:固定挂在窗口右上角("＋"按钮下方——该按钮

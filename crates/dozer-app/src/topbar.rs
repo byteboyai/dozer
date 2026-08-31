@@ -185,40 +185,21 @@ pub(crate) fn top_bar(
     let tabs = container(project_tabs_row(app)).width(Length::Fill);
 
     let mut right = row![].spacing(10);
-    // 设计稿"btn settings"外框 padding-left 6 / padding-y 4(hit-box 留白,
-    // 图标本身仍是 16x16)。目前尚未接入设置面板,先只还原视觉,不加
+    // 目前尚未接入设置面板,先只还原视觉,`interactive: false` 不挂
     // on_press——没有对应 Message 变体可派发。
-    // 图标颜色:SVG 颜色构建时定死,hover 态平滑过渡到金(见 `HoverId`/
-    // `App::hover_progress`——与光标闪烁同款自驱 redraw 动画)。
-    let settings_color = byteui::theme::color::mix(
-        byteui::theme::color::current().dim,
-        byteui::theme::color::current().gold,
+    right = right.push(icons::icon_button_entry(
+        icons::IconKind::Settings,
+        byteui::theme::icon_size::rail(),
+        false,
+        false,
         app.hover_progress(HoverId::Topbar(TopbarButton::Settings)),
-    );
-    right = right.push(
-        MouseArea::new(
-            container(icons::view(
-                icons::IconKind::Settings,
-                byteui::theme::icon_size::rail(),
-                settings_color,
-            ))
-            .padding(Padding {
-                top: 4.0,
-                right: 0.0,
-                bottom: 4.0,
-                left: 6.0,
-            }),
-        )
-        .on_enter(Message::Hover(
-            HoverId::Topbar(TopbarButton::Settings),
-            true,
-        ))
-        .on_exit(Message::Hover(
-            HoverId::Topbar(TopbarButton::Settings),
-            false,
-        ))
-        .interaction(mouse::Interaction::Pointer),
-    );
+        false,
+        byteui::theme::geometry::tab_button_size(),
+        false,
+        Message::Noop,
+        move |hovered| Message::Hover(HoverId::Topbar(TopbarButton::Settings), hovered),
+        "设置",
+    ));
 
     let region = theme::region::top_bar();
     let bar = row![title, tabs, right]
@@ -388,35 +369,19 @@ fn project_tabs_row(
             tabs = tabs.push(make_sep());
         }
 
-        // 图标颜色:SVG 构建时定死、不吃 `button::Status`,hover 态平滑过渡到
-        // 金(见 `HoverId`/`App::hover_progress`)。
-        let add_color = byteui::theme::color::mix(
-            byteui::theme::color::current().dim,
-            byteui::theme::color::current().gold,
-            app.hover_progress(HoverId::Topbar(TopbarButton::AddProject)),
-        );
-        let add = MouseArea::new(
-            button(icons::view(
-                icons::IconKind::SquarePlus,
-                byteui::theme::icon_size::row(),
-                add_color,
-            ))
-            .on_press(Message::ProjectAddMenuToggle)
-            .padding([6, 8])
-            .style(move |_t: &iced_widget::Theme, _s| button::Style {
-                background: None,
-                text_color: add_color,
-                ..button::Style::default()
-            }),
-        )
-        .on_enter(Message::Hover(
-            HoverId::Topbar(TopbarButton::AddProject),
-            true,
-        ))
-        .on_exit(Message::Hover(
-            HoverId::Topbar(TopbarButton::AddProject),
+        let add = icons::icon_button_entry(
+            icons::IconKind::SquarePlus,
+            byteui::theme::icon_size::row(),
             false,
-        ));
+            false,
+            app.hover_progress(HoverId::Topbar(TopbarButton::AddProject)),
+            false,
+            byteui::theme::geometry::tab_button_size(),
+            true,
+            Message::ProjectAddMenuToggle,
+            move |hovered| Message::Hover(HoverId::Topbar(TopbarButton::AddProject), hovered),
+            "新建项目",
+        );
 
         // 页签(固定宽,左对齐) + "＋"紧邻最后一片页签之后(不再用弹性留白把
         // 它顶到最右——它隶属于页签区,跟在最后一片页签后面,像浏览器新建
