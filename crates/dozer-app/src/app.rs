@@ -4015,7 +4015,10 @@ impl App {
         let Some(ws) = self.active_workspace() else {
             return Vec::new();
         };
-        let edit_open = ws.edit_session.is_some();
+        // `search_modal` 跟 `edit_modal` 同款满窗 SCRIM+卡片形制(见
+        // `extensions/search.rs::search_modal` 注释),同样要在打开时隐藏
+        // webview,否则 webview 会盖住遮罩和弹窗卡片。
+        let app_modal_open = ws.edit_session.is_some() || ws.search.is_open();
         let mut out = Vec::new();
         for side in [Side::Left, Side::Right] {
             let kind = match side {
@@ -4042,10 +4045,10 @@ impl App {
             );
             out.extend(specs.into_iter().map(|mut s| {
                 s.id += id_offset;
-                // 编辑弹层开着时,应用级模态盖住了预览区,原生 wry 子视图
-                // 不听 iced 绘制顺序摆布,必须显式 visible=false 才能真正
-                // 藏起来。
-                if edit_open {
+                // 编辑弹层或搜索弹窗开着时,应用级模态盖住了预览区,原生
+                // wry 子视图不听 iced 绘制顺序摆布,必须显式 visible=false
+                // 才能真正藏起来。
+                if app_modal_open {
                     s.visible = false;
                 }
                 (s, bounds)
