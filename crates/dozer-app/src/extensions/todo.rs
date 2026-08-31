@@ -663,8 +663,11 @@ pub fn todo_search_field_id() -> Id {
 static TODO_SEARCH_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
 
+/// 读走并复位(消费式),同 `extensions::files::take_search_focused` 的
+/// 消费式复位手法,避免搜索框不可见的帧卡死上一次 `true` 永久堵死终端
+/// 键盘转发。
 pub fn take_todo_search_focused() -> bool {
-    *TODO_SEARCH_FOCUSED.lock().unwrap()
+    std::mem::replace(&mut *TODO_SEARCH_FOCUSED.lock().unwrap(), false)
 }
 
 /// 每帧 `interface.operate()` 跑一遍。`traverse` 必须调用传入闭包(见
@@ -901,10 +904,11 @@ pub fn content_field_id() -> Id {
 static CONTENT_EDIT_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
 
-/// 读走(非消费)任务内容编辑框上一帧是否持有 iced 内部真实焦点,同
-/// `files::take_tree_edit_focused` 的桥接手法。
+/// 读走并复位(消费式)任务内容编辑框上一帧是否持有 iced 内部真实焦点,同
+/// `files::take_tree_edit_focused` 的桥接手法(含消费式复位,避免编辑框
+/// 不可见的帧卡死上一次 `true` 永久堵死终端键盘转发)。
 pub fn take_content_edit_focused() -> bool {
-    *CONTENT_EDIT_FOCUSED.lock().unwrap()
+    std::mem::replace(&mut *CONTENT_EDIT_FOCUSED.lock().unwrap(), false)
 }
 
 /// 每帧 `interface.operate()` 跑一遍,把命中 `content_field_id` 的真
@@ -927,8 +931,11 @@ impl Operation<()> for CaptureContentEditFocus {
 static ADD_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
 
+/// 读走并复位(消费式),同 `extensions::files::take_search_focused` 的
+/// 消费式复位手法,避免新增框不可见的帧卡死上一次 `true` 永久堵死终端
+/// 键盘转发。
 pub fn take_add_focused() -> bool {
-    *ADD_FOCUSED.lock().unwrap()
+    std::mem::replace(&mut *ADD_FOCUSED.lock().unwrap(), false)
 }
 
 /// 每帧 `interface.operate()` 跑一遍,把 `add_field_id`(真正的

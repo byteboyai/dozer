@@ -236,13 +236,18 @@ pub fn search_field_id() -> Id {
 static SEARCH_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
 
-/// 读走(非消费——值留在 `static` 里直到下次 `CaptureSearchFocus` 覆盖)
-/// 搜索框上一帧是否持有 iced 内部真实焦点。`main.rs` 渲染循环每帧跑完
-/// `CaptureSearchFocus` 后立刻调用本函数,把结果塞进当前 `Workspace`
-/// (`set_search_focused`)——`static` 只是临时桥接,不是长期状态存放处
-/// (同 `extensions::todo::take_add_field_bounds` 的既有手法)。
+/// 读走并复位(消费式)搜索框上一帧是否持有 iced 内部真实焦点。`main.rs`
+/// 渲染循环每帧跑完 `CaptureSearchFocus` 后立刻调用本函数,把结果塞进当前
+/// `Workspace`(`set_search_focused`)——`static` 只是临时桥接,不是长期
+/// 状态存放处(同 `extensions::todo::take_add_field_bounds` 的既有手法)。
+/// **必须消费式复位为 `false`**:搜索框不可见时(如收起 Files 面板但
+/// `left_view` 未变)本帧 `CaptureSearchFocus` 找不到匹配 id、不会覆盖,
+/// 若读了不清就会让上一次的 `true` 一直卡住,永久堵死终端键盘转发
+/// (main.rs 键盘路由的 OR 链——`files_search_focused()` 卡真则任何按键都
+/// 出不去、送不进 PTY)。消费后下一帧只要搜索框真被找到,`focusable()` 会
+/// 立刻拿真值覆盖回来,不会丢真实焦点态。
 pub fn take_search_focused() -> bool {
-    *SEARCH_FOCUSED.lock().unwrap()
+    std::mem::replace(&mut *SEARCH_FOCUSED.lock().unwrap(), false)
 }
 
 /// 每帧 `interface.operate()` 跑一遍,把 `search_field_id()` 命中的
@@ -275,10 +280,11 @@ pub fn tree_edit_field_id() -> Id {
 static TREE_EDIT_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
 
-/// 读走(非消费)项目树编辑框上一帧是否持有 iced 内部真实焦点,同
-/// `take_search_focused` 的桥接手法。
+/// 读走并复位(消费式)项目树编辑框上一帧是否持有 iced 内部真实焦点,同
+/// `take_search_focused` 的桥接手法——消费式复位的理由同上(避免编辑框
+/// 不可见的帧里卡死上一次的 `true`,永久堵死终端键盘转发)。
 pub fn take_tree_edit_focused() -> bool {
-    *TREE_EDIT_FOCUSED.lock().unwrap()
+    std::mem::replace(&mut *TREE_EDIT_FOCUSED.lock().unwrap(), false)
 }
 
 /// 每帧 `interface.operate()` 跑一遍,把 `tree_edit_field_id()` 命中的
@@ -1852,6 +1858,31 @@ mod tests {
             is_dir,
             expanded: false,
         }
+    }
+
+    /// 回归测试:main.rs 键盘路由靠 `files_search_focused()` 决定按键是否
+    /// 放行给终端/agent PTY——一旦这个标志卡在 `true` 就永久堵死终端输入
+    /// (用户实测反馈,2026-08-31:切到文件树面板、用过输入框之后,右侧
+    /// agent 输入框再也打不进字)。根因是搜索框不可见的帧(收起 Files 面板
+    /// 但 `left_view` 未变、切到别的面板等)`CaptureSearchFocus` 找不到匹配
+    /// id、不会覆盖 `SEARCH_FOCUSED`,旧版 `take_search_focused` 又是非消费
+    /// 读法,上一次的 `true` 就会一直卡着。改成消费式复位后,读一次没找到
+    /// 真身的 `true` 就应该只生效一帧,不能无限期卡住。
+    #[test]
+    fn take_search_focused_consumes_stale_true_after_one_read() {
+        *SEARCH_FOCUSED.lock().unwrap() = true;
+        assert!(take_search_focused());
+        // `CaptureSearchFocus` 这一帧没找到搜索框(未运行/未命中),复位后
+        // 第二次读必须是 false,不能沿用上一帧的 true。
+        assert!(!take_search_focused());
+    }
+
+    /// 同上,项目树行内编辑框(`TREE_EDIT_FOCUSED`)同款消费式复位回归测试。
+    #[test]
+    fn take_tree_edit_focused_consumes_stale_true_after_one_read() {
+        *TREE_EDIT_FOCUSED.lock().unwrap() = true;
+        assert!(take_tree_edit_focused());
+        assert!(!take_tree_edit_focused());
     }
 
     #[test]

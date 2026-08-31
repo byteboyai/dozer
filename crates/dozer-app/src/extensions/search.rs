@@ -151,9 +151,11 @@ pub fn query_field_id() -> Id {
 static QUERY_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
 
-/// 读走(非消费)上一帧捕获到的查询框真 `text_input` 焦点态。
+/// 读走并复位(消费式)上一帧捕获到的查询框真 `text_input` 焦点态,同
+/// `extensions::files::take_search_focused` 的消费式复位手法,避免查询框
+/// 不可见的帧卡死上一次 `true` 永久堵死终端键盘转发。
 pub fn take_query_focused() -> bool {
-    *QUERY_FOCUSED.lock().unwrap()
+    std::mem::replace(&mut *QUERY_FOCUSED.lock().unwrap(), false)
 }
 
 /// 每帧 `interface.operate()` 跑一遍,把命中 `query_field_id` 的真

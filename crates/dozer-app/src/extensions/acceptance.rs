@@ -72,10 +72,11 @@ pub fn comment_field_id() -> Id {
 static COMMENT_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
 
-/// 读走(非消费)上一帧捕获到的意见框真 `text_input` 焦点态,同
-/// `files::take_tree_edit_focused` 的桥接手法。
+/// 读走并复位(消费式)上一帧捕获到的意见框真 `text_input` 焦点态,同
+/// `files::take_tree_edit_focused` 的桥接手法(含消费式复位,避免意见框
+/// 不可见的帧卡死上一次 `true` 永久堵死终端键盘转发)。
 pub fn take_comment_focused() -> bool {
-    *COMMENT_FOCUSED.lock().unwrap()
+    std::mem::replace(&mut *COMMENT_FOCUSED.lock().unwrap(), false)
 }
 
 /// 每帧 `interface.operate()` 跑一遍,把命中 `comment_field_id` 的真

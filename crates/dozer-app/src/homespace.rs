@@ -29,8 +29,11 @@ pub fn home_search_field_id() -> Id {
 static HOME_SEARCH_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
 
+/// 读走并复位(消费式),同 `extensions::files::take_search_focused` 的
+/// 消费式复位手法,避免搜索框不可见的帧卡死上一次 `true` 永久堵死终端
+/// 键盘转发。
 pub fn take_home_search_focused() -> bool {
-    *HOME_SEARCH_FOCUSED.lock().unwrap()
+    std::mem::replace(&mut *HOME_SEARCH_FOCUSED.lock().unwrap(), false)
 }
 
 /// 每帧 `interface.operate()` 跑一遍。`traverse` 必须调用传入闭包(见

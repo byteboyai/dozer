@@ -256,12 +256,13 @@ pub fn addr_field_id() -> Id {
 static ADDR_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
 
-/// 读走(非消费)地址栏上一帧是否持有 iced 内部真实焦点。`main.rs` 渲染
-/// 循环每帧跑完 `CaptureAddrFocus` 后立刻调用本函数,把结果塞进当前
+/// 读走并复位(消费式)地址栏上一帧是否持有 iced 内部真实焦点。`main.rs`
+/// 渲染循环每帧跑完 `CaptureAddrFocus` 后立刻调用本函数,把结果塞进当前
 /// `Workspace`(`State::set_addr_focused`)——`static` 只是临时桥接(同
-/// `extensions::files::take_search_focused` 的既有手法)。
+/// `extensions::files::take_search_focused` 的既有手法,含消费式复位避免
+/// 地址栏不可见的帧卡死上一次 `true` 永久堵死终端键盘转发的理由)。
 pub fn take_addr_focused() -> bool {
-    *ADDR_FOCUSED.lock().unwrap()
+    std::mem::replace(&mut *ADDR_FOCUSED.lock().unwrap(), false)
 }
 
 /// 每帧 `interface.operate()` 跑一遍,把 `addr_field_id()` 命中的
