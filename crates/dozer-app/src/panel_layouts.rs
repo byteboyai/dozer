@@ -41,6 +41,10 @@ fn legacy_global_dims(layout_path: &Path) -> PanelDims {
             ssh_list_collapsed: false,
             agent_list_collapsed: false,
             conversations_list_collapsed: false,
+            // 用量面板可收起/可拖拽是这版才加的能力,旧版全局 layout.json
+            // 里不存在这两个字段,恒退回默认值。
+            usage_list_collapsed: false,
+            usage_split: byteui::theme::geometry::default_split_ratio(),
             project_split: v.get("project_split").and_then(num).unwrap_or_default(),
             ssh_split: v
                 .get("ssh_split")

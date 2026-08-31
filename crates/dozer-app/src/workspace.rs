@@ -2511,7 +2511,13 @@ fn filter_sessions<'a>(
     let needle = query.to_lowercase();
     rows.iter()
         .filter(|r| agent.map(|a| r.agent == a).unwrap_or(true))
-        .filter(|r| query.is_empty() || r.display_title.to_lowercase().contains(&needle))
+        .filter(|r| {
+            query.is_empty()
+                || r.display_title.to_lowercase().contains(&needle)
+                || r.summary
+                    .as_deref()
+                    .is_some_and(|s| s.to_lowercase().contains(&needle))
+        })
         .collect()
 }
 
@@ -2693,15 +2699,15 @@ pub(crate) fn conversation_list_pane<'a>(
     let mut content =
         column![home_panel_head(IconKind::BotMessageSquare, "会话"),].spacing(region.gap);
 
-    // 关键字搜索框:按标题筛选全部会话回合,样式收敛到
-    // `byteui::form::search_box`(需求:所有面板搜索框统一成首页项目列表
-    // 搜索框那一套)。不会边输入边过滤——敲回车/点右侧搜索按钮后由
+    // 关键字搜索框:按标题或摘要筛选全部会话(见 `filter_sessions`),样式
+    // 收敛到 `byteui::form::search_box`(需求:所有面板搜索框统一成首页
+    // 项目列表搜索框那一套)。不会边输入边过滤——敲回车/点右侧搜索按钮后由
     // `ConversationSearchSubmit` 把草稿落成生效的 `conversation_search`。
     // `highlight` 传真实聚焦态或已生效搜索词非空:即使当前没聚焦,只要
     // 列表被搜索词过滤中就持续金框提示。
     let search_active = ws.conversation_search_focused || !ws.conversation_search.is_empty();
     let search_box = byteui::form::search_box::view(
-        "搜索会话标题…",
+        "搜索会话标题/摘要…",
         &ws.conversation_search_draft,
         Some(conversation_search_field_id()),
         search_active,
@@ -4240,6 +4246,25 @@ mod tests {
         let filtered = filter_sessions(&rows, "login", None);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].display_title, "Fix Login Bug");
+    }
+
+    #[test]
+    fn filter_sessions_matches_summary_case_insensitive_substring() {
+        let mut with_summary = session_row("修复登录 bug", AgentKind::Claude);
+        with_summary.summary = Some("Rewrote the OAuth callback handler".to_string());
+        let rows = vec![
+            with_summary,
+            session_row("重构解析器", AgentKind::Codebuddy),
+        ];
+        let filtered = filter_sessions(&rows, "oauth", None);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].display_title, "修复登录 bug");
+    }
+
+    #[test]
+    fn filter_sessions_no_summary_does_not_match_on_summary_query() {
+        let rows = vec![session_row("修复登录 bug", AgentKind::Claude)];
+        assert!(filter_sessions(&rows, "oauth", None).is_empty());
     }
 
     #[test]

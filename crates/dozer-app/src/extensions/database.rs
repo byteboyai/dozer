@@ -1896,12 +1896,40 @@ fn source_form<'a>(
             true,
         ));
     }
+    // 按钮样式照抄 `ssh.rs::host_form` 的 `text_btn`:透明背景 + 1px
+    // 描边(描边色=文字色),不再用纯色填充按钮,跟主机表单保持同一产品
+    // 语言(设计文档回顾)。
+    let text_btn = |label: &'a str, color: iced_widget::core::Color, msg: Message| {
+        button(text(label).size(byteui::theme::font::label()).color(color))
+            .on_press(msg)
+            .padding([6, 12])
+            .style(
+                move |_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+                    background: Some(byteui::theme::color::current().bg.into()),
+                    border: iced_widget::core::Border {
+                        color,
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    text_color: color,
+                    ..iced_widget::button::Style::default()
+                },
+            )
+    };
     col = col.push(
         row![
-            button(text("保存")).on_press(Message::DraftSave),
-            button(text("取消")).on_press(Message::DraftCancel),
+            text_btn(
+                "保存",
+                byteui::theme::color::current().cream,
+                Message::DraftSave
+            ),
+            text_btn(
+                "取消",
+                byteui::theme::color::current().dim,
+                Message::DraftCancel
+            ),
         ]
-        .spacing(8),
+        .spacing(6),
     );
 
     container(col)
@@ -1942,10 +1970,6 @@ pub fn view<'a>(
         list = list.push(drivers_popup(app_state));
     }
 
-    if let Some(draft) = ws_state.editing() {
-        list = list.push(source_form(draft, app_state));
-    }
-
     if ws_state.sources().is_empty() {
         list = list.push(
             text("还没有数据源")
@@ -1962,6 +1986,12 @@ pub fn view<'a>(
                 ws_state.schema_state(&source.id),
             ));
         }
+    }
+
+    // 表单排在数据源树下方,不是上方——跟主机面板 `ssh.rs::view` 的既有
+    // 顺序一致(先列表后表单),新增/编辑不会把树往下挤。
+    if let Some(draft) = ws_state.editing() {
+        list = list.push(source_form(draft, app_state));
     }
 
     let scroll = Scrollable::new(list)

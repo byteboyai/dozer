@@ -40,6 +40,13 @@ impl WorkspaceState {
     pub fn set_loading(&mut self, loading: bool) {
         self.loading = loading;
     }
+
+    /// 有没有数据可展示 agent 筛选栏(`list_pane`)——加载中/还没数据时
+    /// 不拼两栏,内容侧独占全宽,同改造前 `sidebar: Option<..>` 为 `None`
+    /// 时的行为(见 app.rs `PanelKind::Usage` 分支)。
+    pub fn has_agent_filter(&self) -> bool {
+        !self.loading && !self.rows.is_empty()
+    }
 }
 
 /// 对应现在顶层 `Message` 里的 `UsageLoaded` 变体,去前缀原样搬来。
@@ -50,6 +57,12 @@ pub enum Message {
     Loaded(i64, Vec<(ConversationMeta, ConversationUsage)>),
     /// 右侧 agent 筛选栏点击(2026-08-28):`None` 选"全部agent"。
     AgentFilterSet(Option<AgentKind>),
+    /// 内容侧"收起/展开列表列"按钮:内核拦截,不进 `update`——转发成顶层
+    /// `Message::TogglePanelListCollapse(PanelKind::Usage)`(见 app.rs)。
+    ToggleListCollapse,
+    /// 任意顶部 `HoverId` 的悬停进入/离开(收起按钮等)。内核拦截转发给
+    /// 顶层 `App::set_hover`,本面板 `update` 保 no-op 分支维持 match 穷尽。
+    Hover(crate::app::HoverId, bool),
 }
 
 /// 单个会话（= 一份 transcript 文件）的用量统计。
@@ -295,6 +308,12 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
         Message::AgentFilterSet(agent) => {
             ws_state.agent_filter = agent;
         }
+        Message::ToggleListCollapse => {
+            unreachable!("由内核拦截处理,见 usage::Message::ToggleListCollapse 文档")
+        }
+        Message::Hover(_, _) => {
+            unreachable!("由内核拦截处理,见 usage::Message::Hover 文档")
+        }
     }
 }
 
@@ -329,11 +348,15 @@ pub fn spawn_refresh(
     });
 }
 
-/// 面板主入口，对应右图标栏的"用量"视图（单栏，不像 Conversations
-/// 那样是"列表:内容"配对分栏——见 spec）。`rows` 为空且 `loading` 为假时
-/// 是"还没数据"的空态；`loading` 为真时是刷新中占位态；两者互斥由 `update`
-/// 保证（`WorkspaceState::set_loading` 调用后、`Loaded` 落地时清掉）。
-pub fn view<'a>(
+/// 面板内容侧:统计图表 + 顶部"用量"标题。原先跟 `list_pane`(agent 筛选栏)
+/// 挤在同一个 `view` 函数里手写 `row![content, sidebar]`,现在拆成独立的
+/// 列表/内容两个面板函数,接入跟 Database/Agent 面板一样的可拖拽 split +
+/// 收起机制(见 app.rs `PanelKind::Usage` 分支、`Divider::UsageSplit`)。
+/// `rows` 为空且 `loading` 为假时是"还没数据"的空态；`loading` 为真时是
+/// 刷新中占位态；两者互斥由 `update` 保证(`WorkspaceState::set_loading`
+/// 调用后、`Loaded` 落地时清掉)。
+pub fn content_pane<'a>(
+    app: &crate::app::App,
     ws_state: &'a WorkspaceState,
     width: Length,
     outer: Border,
@@ -343,12 +366,23 @@ pub fn view<'a>(
     // 套用统一 panel head:Lucide `BarChart3` 图标 + 暖金 `#dcc9a3` 的 "用量"
     // 标题 + 1px 分割线。刷新不再走面板内按钮——进入面板时由
     // `Workspace::spawn_usage_refresh` 自动触发(见 `panel_select`)。
-    let mut content = column![home_panel_head(icons::IconKind::BarChart3, "用量")]
-        .spacing(12)
-        .padding(14)
-        .width(Length::Fill);
-    let mut sidebar: Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> =
-        None;
+    // 标题行末尾挂"收起/展开列表列"按钮(收起 agent 筛选栏后仍在此可见
+    // 以便恢复),照抄 `database.rs` 的 `list_collapse_button` 用法。
+    let collapse = app.list_collapse_button(
+        crate::app::PanelKind::Usage,
+        app.list_collapsed(crate::app::PanelKind::Usage),
+        crate::app::HoverId::UsageListCollapse,
+        "收起列表",
+        "展开列表",
+        Message::ToggleListCollapse,
+        move |hovered| Message::Hover(crate::app::HoverId::UsageListCollapse, hovered),
+    );
+    let head = crate::homespace::home_panel_head_with_actions(
+        icons::IconKind::BarChart3,
+        "用量",
+        Some(collapse),
+    );
+    let mut content = column![head].spacing(12).padding(14).width(Length::Fill);
 
     if loading {
         content = content.push(
@@ -363,13 +397,8 @@ pub fn view<'a>(
                 .color(byteui::theme::color::current().dim),
         );
     } else {
-        // 右侧 agent 筛选栏(2026-08-28):列表本身按全量 `rows` 算,不随
-        // 筛选结果收缩;下面所有统计区改吃 `filtered_rows`。
-        sidebar = Some(agent_filter_sidebar(
-            rows,
-            &agents_present(rows),
-            ws_state.agent_filter,
-        ));
+        // agent 筛选栏拆到 `list_pane`(独立面板函数,见下)。这里下面所有
+        // 统计区改吃 `filtered_rows`。
         let filtered_rows = filter_rows_by_agent(rows, ws_state.agent_filter);
         if filtered_rows.is_empty() {
             content = content.push(
@@ -442,14 +471,7 @@ pub fn view<'a>(
         }
     }
 
-    let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = match sidebar {
-        Some(sidebar) => iced_widget::row![content, sidebar]
-            .width(Length::Fill)
-            .into(),
-        None => content.into(),
-    };
-
-    container(body)
+    container(content)
         .width(width)
         .height(Length::Fill)
         .style(
@@ -462,7 +484,25 @@ pub fn view<'a>(
         .into()
 }
 
-/// 右侧 agent 筛选栏(2026-08-29 参照 Todo 面板"任务分类"列表重新实现):
+/// 面板列表侧:agent 筛选栏。跟 Database/Agent 等面板的"列表列"同一套
+/// 接入方式——只在有数据时才由调用方(app.rs `PanelKind::Usage` 分支)
+/// 决定要不要拿这个函数拼两栏(没数据/加载中时只显示 `content_pane`,
+/// 不拼分栏,同改造前 `sidebar: Option<..>` 为 `None` 时的行为)。
+pub fn list_pane<'a>(
+    ws_state: &'a WorkspaceState,
+    width: Length,
+    outer: Border,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    agent_filter_sidebar(
+        ws_state.rows(),
+        &agents_present(ws_state.rows()),
+        ws_state.agent_filter,
+        width,
+        outer,
+    )
+}
+
+/// agent 筛选栏(2026-08-29 参照 Todo 面板"任务分类"列表重新实现):
 /// 头部(`home_panel_head` 图标+标题+分割线,跟 Todo 左栏头部同一套)+
 /// 竖排导航列表,每项 图标+名称+右侧计数,跟 `todo_category_button` 逐字段
 /// 对应,不再是没有计数、也没有独立头部/边框的一截裸列表。外面套一层
@@ -471,6 +511,8 @@ fn agent_filter_sidebar<'a>(
     rows: &[(ConversationMeta, ConversationUsage)],
     present: &[AgentKind],
     current: Option<AgentKind>,
+    width: Length,
+    outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let header = container(home_panel_head(icons::IconKind::Bot, "Agent")).padding(
         iced_widget::core::Padding {
@@ -508,16 +550,15 @@ fn agent_filter_sidebar<'a>(
     }
 
     container(column![header, nav])
-        .width(Length::Fixed(160.0))
-        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-            background: Some(byteui::theme::color::current().bg.into()),
-            border: Border {
-                color: byteui::theme::color::current().border,
-                width: 1.0,
-                radius: 8.0.into(),
+        .width(width)
+        .height(Length::Fill)
+        .style(
+            move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                background: Some(byteui::theme::color::current().bg.into()),
+                border: outer,
+                ..iced_widget::container::Style::default()
             },
-            ..iced_widget::container::Style::default()
-        })
+        )
         .into()
 }
 

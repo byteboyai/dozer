@@ -240,6 +240,9 @@ pub enum HoverId {
     /// Conversations 面板列表列"收起/展开"按钮:处理方式同 `FileTreeCollapse`
     /// (见 `review_content_pane`)。
     ConversationsListCollapse,
+    /// 用量面板 agent 筛选栏"收起/展开"按钮:处理方式同 `FileTreeCollapse`
+    /// (见 `extensions::usage::content_pane`)。
+    UsageListCollapse,
     /// 数据库内容窗格 tab 栏:某个 tab 本体的悬停(按索引区分,同
     /// `PreviewTabItem`)。
     DatabaseTabItem(usize),
@@ -447,6 +450,8 @@ pub struct PanelDims {
     pub agent_list_collapsed: bool,
     /// Conversations 面板列表列是否被收起,语义同 `project_list_collapsed`。
     pub conversations_list_collapsed: bool,
+    /// 用量面板 agent 筛选栏是否被收起,语义同 `project_list_collapsed`。
+    pub usage_list_collapsed: bool,
     /// Project 面板配对:信息面板占左面板区宽度的比例，项目预览(右配对)拿剩下的。
     pub project_split: f32,
     /// SSH 面板"主机列表 | 内嵌终端"两栏的分屏比例,镜像 `project_split`。
@@ -471,6 +476,10 @@ pub struct PanelDims {
     /// 数据库面板配对:schema 树占左面板区宽度的比例,右侧内容窗格(表/
     /// 集合/查询 tab)拿剩下的。
     pub database_split: f32,
+    /// 用量面板配对:agent 筛选栏占右面板区宽度的比例,统计内容(左)拿
+    /// 剩下的。语义同 `agent_split`(默认"内容在前、列表在后",见
+    /// `Divider::UsageSplit`)。
+    pub usage_split: f32,
 }
 
 /// 每项目尺寸的默认值(数值来源统一从这取,迁走的 `ShellLayout::default()`
@@ -488,6 +497,7 @@ fn default_panel_dims() -> PanelDims {
         ssh_list_collapsed: false,
         agent_list_collapsed: false,
         conversations_list_collapsed: false,
+        usage_list_collapsed: false,
         project_split: byteui::theme::geometry::default_split_ratio(),
         ssh_split: byteui::theme::geometry::default_split_ratio(),
         todo_split: byteui::theme::geometry::default_split_ratio(),
@@ -497,6 +507,7 @@ fn default_panel_dims() -> PanelDims {
         conversations_split: byteui::theme::geometry::default_split_ratio(),
         browser_bookmarks_split: byteui::theme::geometry::default_split_ratio(),
         database_split: byteui::theme::geometry::default_split_ratio(),
+        usage_split: byteui::theme::geometry::default_split_ratio(),
     }
 }
 
@@ -592,6 +603,7 @@ pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
         ssh_list_collapsed: d.ssh_list_collapsed,
         agent_list_collapsed: d.agent_list_collapsed,
         conversations_list_collapsed: d.conversations_list_collapsed,
+        usage_list_collapsed: d.usage_list_collapsed,
         project_split: clamp_split(d.project_split),
         ssh_split: clamp_split(d.ssh_split),
         todo_split: clamp_split(d.todo_split),
@@ -601,6 +613,7 @@ pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
         conversations_split: clamp_split(d.conversations_split),
         browser_bookmarks_split: clamp_split(d.browser_bookmarks_split),
         database_split: clamp_split(d.database_split),
+        usage_split: clamp_split(d.usage_split),
     }
 }
 
@@ -625,6 +638,11 @@ pub enum Divider {
     BrowserBookmarksSplit,
     /// 数据库面板内部的分隔线:左边 schema 树,右边表/集合/查询内容窗格。
     DatabaseSplit,
+    /// 用量面板内部的分隔线:左边统计内容,右边 agent 筛选栏。跟
+    /// `RightPairSplit` 一样"默认内容在前、列表在后",但用量面板不参与
+    /// Agent/Conversations 的互斥右栏轮换,所以单独开一个 divider 而不是
+    /// 塞进 `RightPairSplit` 的 `kind` 分支。
+    UsageSplit,
     RightPairSplit,
 }
 
@@ -878,7 +896,7 @@ fn list_rendered_first(default_list_first: bool, mirrored: bool) -> bool {
 /// 口径是"pair 内第一个 slot 的占比"(`pair_list_content_width` 的
 /// `split` 参数,不区分这个 slot 语义上是"列表"还是"内容",Browser 的
 /// `browser_bookmarks_split` 反着命名也是同一套算法)。`None` 表示这个
-/// 面板是单栏(Usage/Acceptance),没有分割比例。
+/// 面板是单栏(Acceptance),没有分割比例。
 fn pair_split_ratio(dims: &PanelDims, kind: PanelKind) -> Option<f32> {
     match kind {
         PanelKind::Files => Some(dims.files_split),
@@ -890,7 +908,8 @@ fn pair_split_ratio(dims: &PanelDims, kind: PanelKind) -> Option<f32> {
         PanelKind::Web => Some(dims.browser_bookmarks_split),
         PanelKind::Agent => Some(dims.agent_split),
         PanelKind::Conversations => Some(dims.conversations_split),
-        PanelKind::Usage | PanelKind::Acceptance => None,
+        PanelKind::Usage => Some(dims.usage_split),
+        PanelKind::Acceptance => None,
     }
 }
 
@@ -933,7 +952,11 @@ fn with_pair_split_ratio(dims: PanelDims, kind: PanelKind, ratio: f32) -> PanelD
             conversations_split: ratio,
             ..dims
         },
-        PanelKind::Usage | PanelKind::Acceptance => dims,
+        PanelKind::Usage => PanelDims {
+            usage_split: ratio,
+            ..dims
+        },
+        PanelKind::Acceptance => dims,
     }
 }
 
@@ -1076,6 +1099,30 @@ pub(crate) fn apply_column_drag(
             };
             PanelDims {
                 database_split: ratio,
+                ..state.dims
+            }
+        }
+        Divider::UsageSplit => {
+            let side = state.layout.rail_layout.side_of(PanelKind::Usage);
+            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
+            if pair_w <= 0.0 {
+                return state.dims;
+            }
+            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
+                byteui::theme::geometry::min_split_ratio(),
+                byteui::theme::geometry::max_split_ratio(),
+            );
+            let mirrored = side != PanelKind::Usage.default_side();
+            // 用量面板默认"内容在前、agent 筛选栏在后"(同 Agent/Conversations
+            // 的 `RightPairSplit`,`default_list_first = false`),翻转方向
+            // 跟 Database/Ssh 等"列表在前"的面板相反。
+            let ratio = if list_rendered_first(false, mirrored) {
+                raw_ratio
+            } else {
+                1.0 - raw_ratio
+            };
+            PanelDims {
+                usage_split: ratio,
                 ..state.dims
             }
         }
@@ -4206,6 +4253,10 @@ impl App {
                     usage::update(&mut ws.usage, msg);
                 });
             }
+            Message::Usage(usage::Message::ToggleListCollapse) => {
+                self.toggle_panel_list_collapse(PanelKind::Usage);
+            }
+            Message::Usage(usage::Message::Hover(id, h)) => self.set_hover(id, h),
             Message::Usage(msg) => {
                 self.with_focused_project(|ws, _io| {
                     usage::update(&mut ws.usage, msg);
@@ -6453,9 +6504,9 @@ impl App {
         self.dims.files_tree_collapsed
     }
 
-    /// 六个两栏面板(Project/Todo/Database/Ssh/Agent/Conversations)的列表列
-    /// 当前是否被收起。语义同 `files_tree_collapsed`:列表不渲染、内容拿满
-    /// 配对宽度,split 比例保留(展开时按原宽度恢复)。
+    /// 七个两栏面板(Project/Todo/Database/Ssh/Agent/Conversations/Usage)的
+    /// 列表列当前是否被收起。语义同 `files_tree_collapsed`:列表不渲染、内容
+    /// 拿满配对宽度,split 比例保留(展开时按原宽度恢复)。
     pub(crate) fn list_collapsed(&self, kind: PanelKind) -> bool {
         match kind {
             PanelKind::Project => self.dims.project_list_collapsed,
@@ -6464,6 +6515,7 @@ impl App {
             PanelKind::Ssh => self.dims.ssh_list_collapsed,
             PanelKind::Agent => self.dims.agent_list_collapsed,
             PanelKind::Conversations => self.dims.conversations_list_collapsed,
+            PanelKind::Usage => self.dims.usage_list_collapsed,
             _ => false,
         }
     }
@@ -6480,6 +6532,7 @@ impl App {
             PanelKind::Ssh => &mut self.dims.ssh_list_collapsed,
             PanelKind::Agent => &mut self.dims.agent_list_collapsed,
             PanelKind::Conversations => &mut self.dims.conversations_list_collapsed,
+            PanelKind::Usage => &mut self.dims.usage_list_collapsed,
             _ => return,
         };
         *flag = !*flag;
@@ -6998,24 +7051,23 @@ impl App {
             .active_workspace()
             .is_some_and(|ws| ws.database.is_expanded(&source_id));
         let dim = byteui::theme::color::current().dim;
-        let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
-            vec![
-                crate::menu::item::<Message>(
-                    Some(icons::IconKind::RefreshCw),
-                    "测试连接",
-                    Message::Database(database::Message::TestConnection(source_id.clone())),
-                ),
-                crate::menu::item::<Message>(
-                    Some(icons::IconKind::Settings),
-                    "编辑",
-                    Message::Database(database::Message::EditSourceStart(source_id.clone())),
-                ),
-                crate::menu::item::<Message>(
-                    Some(icons::IconKind::Trash),
-                    "删除",
-                    Message::Database(database::Message::DeleteSource(source_id.clone())),
-                ),
-            ];
+        let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = vec![
+            crate::menu::item::<Message>(
+                Some(icons::IconKind::RefreshCw),
+                "测试连接",
+                Message::Database(database::Message::TestConnection(source_id.clone())),
+            ),
+            crate::menu::item::<Message>(
+                Some(icons::IconKind::Settings),
+                "编辑",
+                Message::Database(database::Message::EditSourceStart(source_id.clone())),
+            ),
+            crate::menu::item::<Message>(
+                Some(icons::IconKind::Trash),
+                "删除",
+                Message::Database(database::Message::DeleteSource(source_id.clone())),
+            ),
+        ];
         items.push(if expanded {
             crate::menu::item::<Message>(
                 Some(icons::IconKind::RotateCw),
@@ -8004,7 +8056,69 @@ fn panel_body<'a>(
             }
         }
         PanelKind::Usage => {
-            usage::view(&ws.usage, Length::Fill, zone_pane_border(zone, ac)).map(Message::Usage)
+            // 加载中/还没数据时没有 agent 筛选栏可拼(同改造前
+            // `sidebar: Option<..>` 为 `None` 时的行为),内容侧独占全宽。
+            if !ws.usage.has_agent_filter() {
+                return usage::content_pane(
+                    app,
+                    &ws.usage,
+                    Length::Fill,
+                    zone_pane_border(zone, ac),
+                )
+                .map(Message::Usage);
+            }
+            if app.list_collapsed(PanelKind::Usage) {
+                return usage::content_pane(
+                    app,
+                    &ws.usage,
+                    Length::Fill,
+                    zone_pane_border(zone, lc),
+                )
+                .map(Message::Usage);
+            }
+            let (list_portion, content_portion) = split_portions(app.dims.usage_split);
+            let content_pane = usage::content_pane(
+                app,
+                &ws.usage,
+                Length::FillPortion(content_portion),
+                zone_pane_border(zone, lc),
+            )
+            .map(Message::Usage);
+            let list_pane = usage::list_pane(
+                &ws.usage,
+                Length::FillPortion(list_portion),
+                zone_pane_border(zone, rc),
+            )
+            .map(Message::Usage);
+            let content_bg = byteui::theme::color::current().panel;
+            let list_bg = byteui::theme::color::current().bg;
+            if app.panel_mirrored(PanelKind::Usage) {
+                row![
+                    list_pane,
+                    divider_bar(
+                        Divider::UsageSplit,
+                        list_bg,
+                        content_bg,
+                        Message::ColumnDragStart(Divider::UsageSplit),
+                    ),
+                    content_pane,
+                ]
+                .width(Length::Fill)
+                .into()
+            } else {
+                row![
+                    content_pane,
+                    divider_bar(
+                        Divider::UsageSplit,
+                        content_bg,
+                        list_bg,
+                        Message::ColumnDragStart(Divider::UsageSplit),
+                    ),
+                    list_pane,
+                ]
+                .width(Length::Fill)
+                .into()
+            }
         }
         PanelKind::Acceptance => {
             acceptance::view(&ws.acceptance, Length::Fill, zone_pane_border(zone, ac))
