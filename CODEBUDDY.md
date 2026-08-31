@@ -60,7 +60,7 @@ scripts/build-macos-app.sh [debug|release]   # 打 Dozer.app 包（debug 默认 
 ## 关键裁决（违反即错）
 
 - **boy CLI 已废弃，永不回归**；agent 启动 / 模型托管 / doctor 全归 dozerd。`legacy-boy` 只准删不准扩。
-- **GUI 只用 iced 0.14 生态**；预览 WebView 走 wry 子视图叠加，⌘K 打开时隐藏预览（spike B 验证过的方案，见 `docs/superpowers/specs/2026-07-15-spike-report-webview.md`）。
+- **GUI 只用 iced 0.14 生态**；预览 WebView 走 wry 子视图叠加，webview 恒在 GPU 内容之上——凡是需要盖住它的原生浮层（如验收 tab 全屏态）都要显式隐藏 webview，不能指望层级自然遮挡。**⌘K 命令面板未实现**（规格 §3 已裁掉一期范围，顶栏曾有的纯视觉占位搜索框已于后续迭代移除，见 `app.rs` 中该处的移除说明注释）；「⌘K 打开时隐藏预览」这条早期设计陈述作废，不要再引用它。
 - **wry 统一 0.55.1**，`WebViewBuilder::new().with_url().with_bounds().build_as_child(&window)` 用法已验证。ToggleGate 类副作用必须在拥有 window/webview 句柄的事件环执行，纯视图层拿不到句柄（spike 约束 2）。
 - **mac 先发但架构留门**：不引入 Swift/AppKit 专属能力；核心不依赖 Node/Python。
 - **一期范围以规格 §3"一期范围裁剪"为准**；显式未决项（规格 §8）不得擅自定死。

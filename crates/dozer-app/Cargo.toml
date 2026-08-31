@@ -79,7 +79,6 @@ url = "2"
 # 公开 API,不引入新版本解析。
 unicode-width = "0.2"
 # sysinfo：footbar 系统信息条(CPU/RAM/网络/磁盘)的统一数据源。
-# 版本与 crates/legacy-boy 一致,workspace Cargo.lock 已热,不引入新版本解析。
 sysinfo = "0.32"
 # ripgrep 搜索内核(纯 Rust),用于文件树右键"搜索"弹窗的全文内容搜索。
 # 直接依赖 grep-searcher + grep-regex 做匹配(grep 伞 crate 本身没被
