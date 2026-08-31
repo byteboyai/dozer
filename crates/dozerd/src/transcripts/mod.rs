@@ -386,6 +386,7 @@ impl TranscriptStore {
     ) -> Result<Vec<dozer_core::protocol::ConversationSummary>> {
         use dozer_core::agent_paths::{
             claude_project_dir_in, codebuddy_project_dir_in, opencode_project_dir_in,
+            v8agent_project_dir_in,
         };
         let cwd_path = Path::new(cwd);
         let candidate_dirs: Vec<(AgentKind, String)> = match agent {
@@ -394,6 +395,7 @@ impl TranscriptStore {
                     AgentKind::Claude => claude_project_dir_in(home, cwd_path),
                     AgentKind::Codebuddy => codebuddy_project_dir_in(home, cwd_path),
                     AgentKind::Opencode => opencode_project_dir_in(home, cwd_path),
+                    AgentKind::V8agent => v8agent_project_dir_in(home, cwd_path),
                     _ => return Ok(Vec::new()),
                 };
                 vec![(a, dir.to_string_lossy().into_owned())]
@@ -414,6 +416,12 @@ impl TranscriptStore {
                 (
                     AgentKind::Opencode,
                     opencode_project_dir_in(home, cwd_path)
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+                (
+                    AgentKind::V8agent,
+                    v8agent_project_dir_in(home, cwd_path)
                         .to_string_lossy()
                         .into_owned(),
                 ),
@@ -770,6 +778,38 @@ mod tests {
             .unwrap();
         assert_eq!(claude_only.len(), 1);
         assert_eq!(claude_only[0].agent, AgentKind::Claude);
+    }
+
+    /// 回归测试：`list_conversations_in` 曾经完全没有 V8agent 的候选目录
+    /// 分支（`Some(V8agent)` 落进 `_ => return Ok(Vec::new())`，`None`
+    /// 分支的候选列表里压根没有它），导致哪怕 `conversations` 表里已经有
+    /// 真实的 v8agent 数据，按项目查询也永远查不到——数据在库里，UI 却
+    /// 看不到。
+    #[test]
+    fn list_conversations_includes_v8agent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let cwd = std::path::Path::new("/proj");
+        let v8agent_dir = dozer_core::agent_paths::v8agent_project_dir_in(home.path(), cwd);
+        std::fs::create_dir_all(&v8agent_dir).unwrap();
+        let f = fixture(
+            &v8agent_dir,
+            "a.jsonl",
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"v8agent 对话\"}}\n",
+        );
+        store.ingest_session(AgentKind::V8agent, &f).unwrap();
+
+        let all = store
+            .list_conversations_in(home.path(), "/proj", None, 10, 0)
+            .unwrap();
+        assert!(all.iter().any(|c| c.agent == AgentKind::V8agent));
+
+        let v8agent_only = store
+            .list_conversations_in(home.path(), "/proj", Some(AgentKind::V8agent), 10, 0)
+            .unwrap();
+        assert_eq!(v8agent_only.len(), 1);
+        assert_eq!(v8agent_only[0].agent, AgentKind::V8agent);
     }
 
     #[test]

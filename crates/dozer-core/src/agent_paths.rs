@@ -53,6 +53,16 @@ pub fn opencode_project_dir_in(home: &Path, cwd: &Path) -> PathBuf {
     project_dir_in(home, ".dozer/agents/opencode", cwd)
 }
 
+pub fn v8agent_project_dir(cwd: &Path) -> PathBuf {
+    v8agent_project_dir_in(&home_dir(), cwd)
+}
+
+/// v8agent 用 Claude 同款编码（`project_key`：斜杠换成短横线，保留开头的
+/// `-`）——v8agent 没有 CodeBuddy 那种"去掉开头斜杠"的特殊需求。
+pub fn v8agent_project_dir_in(home: &Path, cwd: &Path) -> PathBuf {
+    project_dir_in(home, ".v8agent", cwd)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,5 +86,11 @@ mod tests {
             d.to_string_lossy()
                 .ends_with("/.dozer/agents/opencode/projects/-a-b-c")
         );
+    }
+
+    #[test]
+    fn v8agent_dir_uses_claude_style_encoding_under_its_own_root() {
+        let d = v8agent_project_dir(Path::new("/a/b/c"));
+        assert!(d.to_string_lossy().ends_with("/.v8agent/projects/-a-b-c"));
     }
 }

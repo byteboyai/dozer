@@ -5,14 +5,16 @@
 
 use dozer_core::agent_paths::{
     claude_project_dir_in, codebuddy_project_dir_in, home_dir, opencode_project_dir_in,
+    v8agent_project_dir_in,
 };
 use dozer_core::protocol::AgentKind;
 use std::path::PathBuf;
 
-const AGENT_ROOTS: [(AgentKind, &str); 3] = [
+const AGENT_ROOTS: [(AgentKind, &str); 4] = [
     (AgentKind::Claude, ".claude"),
     (AgentKind::Codebuddy, ".codebuddy"),
     (AgentKind::Opencode, ".dozer/agents/opencode"),
+    (AgentKind::V8agent, ".v8agent"),
 ];
 
 pub(crate) fn jsonl_files_in(dir: &std::path::Path) -> Vec<PathBuf> {
@@ -68,6 +70,7 @@ pub fn discover_project_transcript_files_in(
         (AgentKind::Claude, claude_project_dir_in(home, cwd)),
         (AgentKind::Codebuddy, codebuddy_project_dir_in(home, cwd)),
         (AgentKind::Opencode, opencode_project_dir_in(home, cwd)),
+        (AgentKind::V8agent, v8agent_project_dir_in(home, cwd)),
     ] {
         for f in jsonl_files_in(&dir) {
             out.push((agent, f));
@@ -105,6 +108,20 @@ mod tests {
         assert!(discover_all_transcript_files_in(home.path()).is_empty());
     }
 
+    /// 回归测试：`AGENT_ROOTS` 曾经只有三家(Claude/Codebuddy/Opencode)，
+    /// V8agent 的项目子目录永远不会被启动全量回填扫到。
+    #[test]
+    fn discovers_v8agent_files_alongside_the_other_three_agents() {
+        let home = tempfile::tempdir().unwrap();
+        let v8agent_proj = home.path().join(".v8agent/projects/-a-b-c");
+        std::fs::create_dir_all(&v8agent_proj).unwrap();
+        std::fs::write(v8agent_proj.join("s1.jsonl"), "{}").unwrap();
+
+        let found = discover_all_transcript_files_in(home.path());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, AgentKind::V8agent);
+    }
+
     #[test]
     fn discover_project_transcript_files_scans_only_that_projects_agent_dirs() {
         let home = tempfile::tempdir().unwrap();
@@ -134,5 +151,18 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let cwd = std::path::Path::new("/proj/never-opened");
         assert!(discover_project_transcript_files_in(home.path(), cwd).is_empty());
+    }
+
+    #[test]
+    fn discover_project_transcript_files_includes_v8agent() {
+        let home = tempfile::tempdir().unwrap();
+        let cwd = std::path::Path::new("/proj/a");
+        let v8agent_dir = dozer_core::agent_paths::v8agent_project_dir_in(home.path(), cwd);
+        std::fs::create_dir_all(&v8agent_dir).unwrap();
+        std::fs::write(v8agent_dir.join("s1.jsonl"), "{}").unwrap();
+
+        let found = discover_project_transcript_files_in(home.path(), cwd);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, AgentKind::V8agent);
     }
 }
