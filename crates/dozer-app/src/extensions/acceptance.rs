@@ -256,15 +256,15 @@ pub fn update(
                             .map(|d| d.as_millis() as u64)
                             .unwrap_or(0);
                         if let Err(e) = client
-                            .record_acceptance(
-                                &repo.to_string_lossy(),
-                                &goal_title,
-                                &checked,
-                                "accepted",
-                                &comment,
-                                &ref_name,
+                            .record_acceptance(dozer_client::RecordAcceptanceParams {
+                                repo: &repo.to_string_lossy(),
+                                goal: &goal_title,
+                                criteria_checked: &checked,
+                                verdict: "accepted",
+                                comment: &comment,
+                                ref_name: &ref_name,
                                 ts_ms,
-                            )
+                            })
                             .await
                         {
                             Err(format!("已沉淀 v{n},但记录落库失败: {e}"))

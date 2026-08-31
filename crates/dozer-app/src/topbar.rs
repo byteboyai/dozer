@@ -581,19 +581,19 @@ fn project_tab_item<'a>(
         a: hover,
         ..close_base
     };
-    let (select, close) = tabs::tab_core(
-        container(label)
+    let (select, close) = tabs::tab_core(tabs::TabCoreArgs {
+        content: container(label)
             .width(Length::Fill)
             .height(Length::Fixed(tab_h))
             .into(),
         close_sz,
         close_color,
-        hovered,
-        Message::ProjectTabSwitch(id),
-        Message::ProjectTabClose(id),
-        move |hovered| Message::Hover(HoverId::ProjectTabItem(id), hovered),
-        move |hovered| Message::Hover(HoverId::ProjectTabClose(id), hovered),
-    );
+        close_interactive: hovered,
+        on_select: Message::ProjectTabSwitch(id),
+        on_close: Message::ProjectTabClose(id),
+        on_select_hover: move |hovered| Message::Hover(HoverId::ProjectTabItem(id), hovered),
+        on_close_hover: move |hovered| Message::Hover(HoverId::ProjectTabClose(id), hovered),
+    });
 
     // 页签主体(select)为底层、关闭按钮为上层叠在其右:关闭按钮视觉上落在
     // 页签背景里,而非独立的相邻按钮。两层都 `Fill` 撑满整条顶栏高,select

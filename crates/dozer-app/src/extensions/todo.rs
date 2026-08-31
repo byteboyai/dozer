@@ -1887,19 +1887,19 @@ fn todo_list_row<'a>(
     } else {
         None
     };
-    todo_card(
+    todo_card(TodoCardArgs {
         number,
         idx,
         item,
-        states[idx],
+        state: states[idx],
         meta,
         dispatch,
-        ws_state.selected_row == Some(idx),
+        selected: ws_state.selected_row == Some(idx),
         grabbing,
         is_drag_source,
         hovered,
         editing_draft,
-    )
+    })
 }
 
 /// 拖拽换位的"插入指示线":一条细的金色横条,插在"松手会落到这里"的
@@ -1927,8 +1927,10 @@ fn drag_insert_indicator() -> Element<'static, Message, iced_widget::Theme, iced
 /// 状态紧跟序号)+ 日期徽章(calendar 图标 → 日历选择器)→ checkbox + 任务文字
 /// (点文字进入内容编辑)→ 指派文本按钮(仅待办未派发时)。选中/一般/hover 三态
 /// 走统一卡片样式(选中=金边、hover=金边+填充、一般态=描边)。
-#[allow(clippy::too_many_arguments)]
-fn todo_card<'a>(
+/// `todo_card` 的参数对象:11 个位置参数里 `selected`/`grabbing`/
+/// `is_drag_source`/`hovered` 四个连续 `bool`,顺序传错编译器发现不了
+/// (Rust Design Patterns:Builder,用具名字段替代同类型位置参数)。
+struct TodoCardArgs<'a> {
     number: usize,
     idx: usize,
     item: &'a TodoItem,
@@ -1940,7 +1942,24 @@ fn todo_card<'a>(
     is_drag_source: bool,
     hovered: bool,
     editing_draft: Option<&'a iced_widget::text_editor::Content>,
+}
+
+fn todo_card<'a>(
+    args: TodoCardArgs<'a>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let TodoCardArgs {
+        number,
+        idx,
+        item,
+        state,
+        meta,
+        dispatch,
+        selected,
+        grabbing,
+        is_drag_source,
+        hovered,
+        editing_draft,
+    } = args;
     let done = item.done;
 
     // ---- 顶部行：编号 + 日期徽章(calendar 图标 → 日历选择器)+ 状态文字 ----

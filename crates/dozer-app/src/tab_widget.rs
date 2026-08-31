@@ -42,23 +42,53 @@ const PANEL_TAB_PAD_Y: f32 = 0.0;
 /// `suffix` 承载预览编辑图标(标题右侧、关闭按钮前，仍是独立可点元素)。
 /// `show_tooltip` 由调用方按"悬停满 2s"算好(`App::hover_tooltip_ready` /
 /// `browser::State::hover_tooltip_ready`)，满则包一层 tooltip 显示标题全称。
-// 共享的 panel tab 渲染器,被终端/预览/browser 三处复用;参数多是刻意保留的
-// 单一职责接口(标题/激活态/两组 hover 进度与回调/前后缀/tooltip 开关),拆
-// 结构体反而要引入 `Box<dyn Fn>`,得不偿失。
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn panel_tab<'a, M: Clone + 'a>(
-    title: String,
-    active: bool,
-    hover_t: f32,
-    close_hover_t: f32,
-    prefix: Option<Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>>,
-    suffix: Option<Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>>,
-    on_select: M,
-    on_close: M,
-    show_tooltip: bool,
-    title_hover: impl Fn(bool) -> M + 'a,
-    close_hover: impl Fn(bool) -> M + 'a,
-) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
+// 共享的 panel tab 渲染器,被终端/预览/browser/database 多处跨模块复用。
+// 曾因"拆结构体要引入 `Box<dyn Fn>`,得不偿失"没做 Builder 化——实际上
+// 把两个闭包做成结构体自己的泛型参数(而非 trait object)就不用装箱,
+// `PanelTabArgs` 就是这样做的:`on_select`/`on_close` 同为 `M`、
+// `title_hover`/`close_hover`/`prefix`/`suffix` 各自同类型相邻,原先 11
+// 个位置参数顺序传错编译器发现不了(Rust Design Patterns:Builder,用
+// 具名字段替代同类型位置参数)。
+pub(crate) struct PanelTabArgs<'a, M, F1, F2>
+where
+    M: Clone + 'a,
+    F1: Fn(bool) -> M + 'a,
+    F2: Fn(bool) -> M + 'a,
+{
+    pub title: String,
+    pub active: bool,
+    pub hover_t: f32,
+    pub close_hover_t: f32,
+    pub prefix: Option<Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>>,
+    pub suffix: Option<Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>>,
+    pub on_select: M,
+    pub on_close: M,
+    pub show_tooltip: bool,
+    pub title_hover: F1,
+    pub close_hover: F2,
+}
+
+pub(crate) fn panel_tab<'a, M, F1, F2>(
+    args: PanelTabArgs<'a, M, F1, F2>,
+) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>
+where
+    M: Clone + 'a,
+    F1: Fn(bool) -> M + 'a,
+    F2: Fn(bool) -> M + 'a,
+{
+    let PanelTabArgs {
+        title,
+        active,
+        hover_t,
+        close_hover_t,
+        prefix,
+        suffix,
+        on_select,
+        on_close,
+        show_tooltip,
+        title_hover,
+        close_hover,
+    } = args;
     let close_sz = byteui::theme::geometry::tab_button_size();
     // 组合 hover:悬停标题或 × 任一,胶囊背景都浮现、× 显形。
     let hover = hover_t.max(close_hover_t).clamp(0.0, 1.0);
@@ -115,16 +145,16 @@ pub(crate) fn panel_tab<'a, M: Clone + 'a>(
         a: hover,
         ..close_base
     };
-    let (select, close) = tabs::tab_core(
-        title_row.into(),
+    let (select, close) = tabs::tab_core(tabs::TabCoreArgs {
+        content: title_row.into(),
         close_sz,
         close_color,
-        hovered,
+        close_interactive: hovered,
         on_select,
         on_close,
-        title_hover,
-        close_hover,
-    );
+        on_select_hover: title_hover,
+        on_close_hover: close_hover,
+    });
 
     let mut tab_row = row![select]
         .spacing(2)

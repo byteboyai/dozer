@@ -52,7 +52,7 @@ use crate::osc::{OscEvent, OscScanner};
 use crate::preview::{PreviewPane, TabKind, is_editable_extension};
 use crate::preview_state;
 use crate::project::FileTree;
-use crate::tab_widget::{panel_tab, tab_arrow_button, tab_window};
+use crate::tab_widget::{PanelTabArgs, panel_tab, tab_arrow_button, tab_window};
 use crate::term_model::TerminalModel;
 use crate::theme;
 use crate::theme::terminal_font;
@@ -3442,19 +3442,19 @@ fn preview_pane_for<'a>(
             // 仅文本类文件可编辑——决定右键菜单里"编辑"项是否出现(标题后的
             // 编辑图标已移除,编辑入口统一收进 tab 右键菜单,见 `PreviewTabContextMenu`)。
             let editable = matches!(&tab.kind, TabKind::File(path) if is_editable_extension(path));
-            let tab = panel_tab(
-                tab.title.clone(),
+            let tab = panel_tab(PanelTabArgs {
+                title: tab.title.clone(),
                 active,
-                title_hover_t,
+                hover_t: title_hover_t,
                 close_hover_t,
-                None,
-                None,
-                select_msg(idx),
-                close_msg(idx),
-                app.hover_tooltip_ready(item_hover(idx)),
-                move |h| Message::Hover(item_hover(idx), h),
-                move |h| Message::Hover(close_hover(idx), h),
-            );
+                prefix: None,
+                suffix: None,
+                on_select: select_msg(idx),
+                on_close: close_msg(idx),
+                show_tooltip: app.hover_tooltip_ready(item_hover(idx)),
+                title_hover: move |h| Message::Hover(item_hover(idx), h),
+                close_hover: move |h| Message::Hover(close_hover(idx), h),
+            });
             // 右键 tab 弹上下文菜单:"编辑"(仅可编辑)/"关闭"。
             // 拖拽换位:按住页签(选中处理已把 `app.tab_drag` 置位)后光标
             // 扫过哪个页签,这个 `on_move` 就按它发 `TabDragMove`,完成换位。

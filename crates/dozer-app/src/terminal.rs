@@ -195,19 +195,19 @@ fn tab_item(
     // 状态点作 `panel_tab` 的 prefix。
     let dot = byteui::feedback::status::dot(color);
 
-    tab_widget::panel_tab(
-        tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
+    tab_widget::panel_tab(tab_widget::PanelTabArgs {
+        title: tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
         active,
-        title_hover_t,
+        hover_t: title_hover_t,
         close_hover_t,
-        Some(dot),
-        None,
-        Message::SelectTab(idx),
-        Message::CloseTab(idx),
+        prefix: Some(dot),
+        suffix: None,
+        on_select: Message::SelectTab(idx),
+        on_close: Message::CloseTab(idx),
         show_tooltip,
-        move |h| Message::Hover(HoverId::TermTabItem(idx), h),
-        move |h| Message::Hover(HoverId::TermTabClose(idx), h),
-    )
+        title_hover: move |h| Message::Hover(HoverId::TermTabItem(idx), h),
+        close_hover: move |h| Message::Hover(HoverId::TermTabClose(idx), h),
+    })
 }
 
 /// 给一块 tab 内容包上"拖拽换位"的感应层:内容本身仍是原来的交互(点标题

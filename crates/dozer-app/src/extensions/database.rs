@@ -1380,16 +1380,16 @@ fn dispatch_browse_run(
         let kind = source.driver;
         let table = table_name.unwrap_or_default();
         handle.spawn(async move {
-            let result = browse_table(
+            let result = browse_table(BrowseTableParams {
                 kind,
-                &url,
-                table_schema.as_deref(),
-                &table,
-                &where_clause,
-                &order_by,
+                url: &url,
+                schema: table_schema.as_deref(),
+                table: &table,
+                where_clause: &where_clause,
+                order_by: &order_by,
                 page,
                 page_size,
-            )
+            })
             .await;
             emit2(Message::BrowseResult(project_id, tab_id, seq, result));
         });
@@ -2111,19 +2111,25 @@ pub fn content_pane<'a>(
         Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
     )> = vec![(
         tab_title_display_width("空白"),
-        crate::tab_widget::panel_tab(
-            "空白".to_string(),
-            blank_active,
-            app.hover_progress(crate::app::HoverId::DatabaseTabItem(BLANK_HOVER_KEY)),
-            app.hover_progress(crate::app::HoverId::DatabaseTabClose(BLANK_HOVER_KEY)),
-            None,
-            None,
-            Message::SelectBlankTab,
-            Message::SelectBlankTab,
-            app.hover_tooltip_ready(crate::app::HoverId::DatabaseTabItem(BLANK_HOVER_KEY)),
-            move |h| Message::TabHover(DatabaseTabHoverTarget::Title, BLANK_HOVER_KEY, h),
-            move |h| Message::TabHover(DatabaseTabHoverTarget::Close, BLANK_HOVER_KEY, h),
-        ),
+        crate::tab_widget::panel_tab(crate::tab_widget::PanelTabArgs {
+            title: "空白".to_string(),
+            active: blank_active,
+            hover_t: app.hover_progress(crate::app::HoverId::DatabaseTabItem(BLANK_HOVER_KEY)),
+            close_hover_t: app
+                .hover_progress(crate::app::HoverId::DatabaseTabClose(BLANK_HOVER_KEY)),
+            prefix: None,
+            suffix: None,
+            on_select: Message::SelectBlankTab,
+            on_close: Message::SelectBlankTab,
+            show_tooltip: app
+                .hover_tooltip_ready(crate::app::HoverId::DatabaseTabItem(BLANK_HOVER_KEY)),
+            title_hover: move |h| {
+                Message::TabHover(DatabaseTabHoverTarget::Title, BLANK_HOVER_KEY, h)
+            },
+            close_hover: move |h| {
+                Message::TabHover(DatabaseTabHoverTarget::Close, BLANK_HOVER_KEY, h)
+            },
+        }),
     )];
     entries.extend(content.tabs().iter().enumerate().map(|(idx, tab)| {
         let active = Some(idx) == content.active_idx();
@@ -2132,19 +2138,19 @@ pub fn content_pane<'a>(
         let title = tab_title(tab, ws_state);
         (
             crate::tab_widget::PANEL_TAB_MAX_W.min(tab_title_display_width(&title)),
-            crate::tab_widget::panel_tab(
+            crate::tab_widget::panel_tab(crate::tab_widget::PanelTabArgs {
                 title,
                 active,
-                title_hover_t,
+                hover_t: title_hover_t,
                 close_hover_t,
-                None,
-                None,
-                Message::SelectTab(idx),
-                Message::CloseTab(idx),
-                app.hover_tooltip_ready(crate::app::HoverId::DatabaseTabItem(idx)),
-                move |h| Message::TabHover(DatabaseTabHoverTarget::Title, idx, h),
-                move |h| Message::TabHover(DatabaseTabHoverTarget::Close, idx, h),
-            ),
+                prefix: None,
+                suffix: None,
+                on_select: Message::SelectTab(idx),
+                on_close: Message::CloseTab(idx),
+                show_tooltip: app.hover_tooltip_ready(crate::app::HoverId::DatabaseTabItem(idx)),
+                title_hover: move |h| Message::TabHover(DatabaseTabHoverTarget::Title, idx, h),
+                close_hover: move |h| Message::TabHover(DatabaseTabHoverTarget::Close, idx, h),
+            }),
         )
     }));
     let widths: Vec<f32> = entries.iter().map(|(w, _)| *w).collect();
@@ -3330,17 +3336,32 @@ pub struct BrowsePage {
     pub has_more: bool,
 }
 
-#[allow(clippy::too_many_arguments)] // 计划给定签名:驱动 + 连接信息 + 条件 + 分页 8 参
-async fn browse_table(
+/// `browse_table` 的参数对象:8 个位置参数里 `schema`/`table`/
+/// `where_clause`/`order_by` 四个 `Option<&str>`/`&str` 挨在一起,顺序传错
+/// 编译器发现不了(Rust Design Patterns:Builder,用具名字段替代同类型
+/// 位置参数)。
+struct BrowseTableParams<'a> {
     kind: DriverKind,
-    url: &str,
-    schema: Option<&str>,
-    table: &str,
-    where_clause: &str,
-    order_by: &str,
+    url: &'a str,
+    schema: Option<&'a str>,
+    table: &'a str,
+    where_clause: &'a str,
+    order_by: &'a str,
     page: u32,
     page_size: u32,
-) -> Result<BrowsePage, String> {
+}
+
+async fn browse_table(params: BrowseTableParams<'_>) -> Result<BrowsePage, String> {
+    let BrowseTableParams {
+        kind,
+        url,
+        schema,
+        table,
+        where_clause,
+        order_by,
+        page,
+        page_size,
+    } = params;
     let sql = build_browse_sql(kind, schema, table, where_clause, order_by, page, page_size);
     let work = async {
         let pool = connect_native(kind, url).await?;
@@ -4432,16 +4453,34 @@ mod sqlite_browse_and_query {
     #[tokio::test]
     async fn browse_table_paginates_and_reports_has_more() {
         let (_dir, url) = setup_db_with_rows().await;
-        let page0 = browse_table(DriverKind::Sqlite, &url, None, "items", "", "id ASC", 0, 2)
-            .await
-            .unwrap();
+        let page0 = browse_table(BrowseTableParams {
+            kind: DriverKind::Sqlite,
+            url: &url,
+            schema: None,
+            table: "items",
+            where_clause: "",
+            order_by: "id ASC",
+            page: 0,
+            page_size: 2,
+        })
+        .await
+        .unwrap();
         assert_eq!(page0.result.columns, vec!["id", "name", "note"]);
         assert_eq!(page0.result.rows.len(), 2);
         assert!(page0.has_more);
 
-        let page2 = browse_table(DriverKind::Sqlite, &url, None, "items", "", "id ASC", 2, 2)
-            .await
-            .unwrap();
+        let page2 = browse_table(BrowseTableParams {
+            kind: DriverKind::Sqlite,
+            url: &url,
+            schema: None,
+            table: "items",
+            where_clause: "",
+            order_by: "id ASC",
+            page: 2,
+            page_size: 2,
+        })
+        .await
+        .unwrap();
         assert_eq!(page2.result.rows.len(), 1); // 第5条,最后一页
         assert!(!page2.has_more);
     }
@@ -4449,9 +4488,18 @@ mod sqlite_browse_and_query {
     #[tokio::test]
     async fn browse_table_where_clause_filters_and_null_renders_as_null() {
         let (_dir, url) = setup_db_with_rows().await;
-        let page = browse_table(DriverKind::Sqlite, &url, None, "items", "id = 3", "", 0, 50)
-            .await
-            .unwrap();
+        let page = browse_table(BrowseTableParams {
+            kind: DriverKind::Sqlite,
+            url: &url,
+            schema: None,
+            table: "items",
+            where_clause: "id = 3",
+            order_by: "",
+            page: 0,
+            page_size: 50,
+        })
+        .await
+        .unwrap();
         assert_eq!(page.result.rows.len(), 1);
         let note_idx = page
             .result
@@ -4516,9 +4564,18 @@ mod sqlite_browse_and_query {
             .unwrap();
         pool.close().await;
 
-        let page = browse_table(DriverKind::Sqlite, &url, None, "t", "", "", 0, 50)
-            .await
-            .unwrap();
+        let page = browse_table(BrowseTableParams {
+            kind: DriverKind::Sqlite,
+            url: &url,
+            schema: None,
+            table: "t",
+            where_clause: "",
+            order_by: "",
+            page: 0,
+            page_size: 50,
+        })
+        .await
+        .unwrap();
         // 真实数值/时间不是"不支持的类型":SQLite 路径统一被 stringify 成文本。
         // 行序尽力按数值/文本值摆列,这里只校验两个非 NULL 单元格写出了
         // 非空、非降级标记的文本(具体格式交给 sqlite 的 ToSql/stringify)。

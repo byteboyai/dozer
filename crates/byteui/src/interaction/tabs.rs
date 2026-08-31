@@ -14,20 +14,48 @@ use iced_widget::{MouseArea, button, container, text};
 /// (项目页签用"标题 hover 与关闭 hover 取最大值"的组合 alpha,面板 tab
 /// 只用自己的 `close_hover_t`),这个差异保留在调用方，`tab_core` 不替
 /// 调用方做选择。
-#[allow(clippy::too_many_arguments)]
-pub fn tab_core<'a, M: Clone + 'a>(
-    content: Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>,
-    close_sz: f32,
-    close_color: Color,
-    close_interactive: bool,
-    on_select: M,
-    on_close: M,
-    on_select_hover: impl Fn(bool) -> M + 'a,
-    on_close_hover: impl Fn(bool) -> M + 'a,
+/// `tab_core` 的参数对象:8 个位置参数里 `on_select`/`on_close` 同为 `M`、
+/// `on_select_hover`/`on_close_hover` 同为闭包,两组"同类型不同语义"参数
+/// 挨在一起,顺序传错编译器发现不了(Rust Design Patterns:Builder,用
+/// 具名字段替代同类型位置参数)。闭包类型各自保留独立泛型参数(而非
+/// `Box<dyn Fn>`),保持零成本。
+pub struct TabCoreArgs<'a, M, F1, F2>
+where
+    M: Clone + 'a,
+    F1: Fn(bool) -> M + 'a,
+    F2: Fn(bool) -> M + 'a,
+{
+    pub content: Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>,
+    pub close_sz: f32,
+    pub close_color: Color,
+    pub close_interactive: bool,
+    pub on_select: M,
+    pub on_close: M,
+    pub on_select_hover: F1,
+    pub on_close_hover: F2,
+}
+
+pub fn tab_core<'a, M, F1, F2>(
+    args: TabCoreArgs<'a, M, F1, F2>,
 ) -> (
     Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>,
     Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>,
-) {
+)
+where
+    M: Clone + 'a,
+    F1: Fn(bool) -> M + 'a,
+    F2: Fn(bool) -> M + 'a,
+{
+    let TabCoreArgs {
+        content,
+        close_sz,
+        close_color,
+        close_interactive,
+        on_select,
+        on_close,
+        on_select_hover,
+        on_close_hover,
+    } = args;
     let select = MouseArea::new(content)
         .on_press(on_select)
         .on_enter(on_select_hover(true))

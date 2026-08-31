@@ -10,7 +10,7 @@
 
 use crate::app::tab_divider;
 use crate::preview::WebviewSpec;
-use crate::tab_widget::panel_tab;
+use crate::tab_widget::{PanelTabArgs, panel_tab};
 use crate::theme;
 use crate::workspace::{lh, split_portions};
 use byteui::interaction::icons;
@@ -1662,19 +1662,19 @@ pub fn view(
             let active = idx == state.tabs.active_idx();
             let title_hover_t = state.hover_progress(idx, false);
             let close_hover_t = state.hover_progress(idx, true);
-            let tab = panel_tab(
-                tab.title.clone(),
+            let tab = panel_tab(PanelTabArgs {
+                title: tab.title.clone(),
                 active,
-                title_hover_t,
+                hover_t: title_hover_t,
                 close_hover_t,
-                None,
-                None,
-                Message::SelectTab(idx),
-                Message::CloseTab(idx),
-                state.hover_tooltip_ready(idx),
-                move |h| Message::Hover(idx, false, h),
-                move |h| Message::Hover(idx, true, h),
-            );
+                prefix: None,
+                suffix: None,
+                on_select: Message::SelectTab(idx),
+                on_close: Message::CloseTab(idx),
+                show_tooltip: state.hover_tooltip_ready(idx),
+                title_hover: move |h| Message::Hover(idx, false, h),
+                close_hover: move |h| Message::Hover(idx, true, h),
+            });
             // 拖拽换位:按住页签(App 侧把 `tab_drag` 置位)后光标扫过哪个
             // 页签,这个 `on_move` 发出 `DragHover(idx)`,再在 `App::update`
             // 翻译成 `TabDragMove`(组校验在那里做),完成换位。

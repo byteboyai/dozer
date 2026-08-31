@@ -8558,19 +8558,19 @@ fn ssh_tab_bar<'a>(
     let blank_active = ws.ssh_active.is_none();
     entries.push((
         tab_display_width("空白"),
-        tab_widget::panel_tab(
-            "空白".to_string(),
-            blank_active,
-            app.hover_progress(HoverId::SshTabItem(blank_key)),
-            app.hover_progress(HoverId::SshTabClose(blank_key)),
-            None,
-            None,
-            Message::Ssh(ssh::Message::SelectBlankTab),
-            Message::Ssh(ssh::Message::SelectBlankTab),
-            app.hover_tooltip_ready(HoverId::SshTabItem(blank_key)),
-            move |h| Message::Hover(HoverId::SshTabItem(blank_key), h),
-            move |h| Message::Hover(HoverId::SshTabClose(blank_key), h),
-        ),
+        tab_widget::panel_tab(tab_widget::PanelTabArgs {
+            title: "空白".to_string(),
+            active: blank_active,
+            hover_t: app.hover_progress(HoverId::SshTabItem(blank_key)),
+            close_hover_t: app.hover_progress(HoverId::SshTabClose(blank_key)),
+            prefix: None,
+            suffix: None,
+            on_select: Message::Ssh(ssh::Message::SelectBlankTab),
+            on_close: Message::Ssh(ssh::Message::SelectBlankTab),
+            show_tooltip: app.hover_tooltip_ready(HoverId::SshTabItem(blank_key)),
+            title_hover: move |h| Message::Hover(HoverId::SshTabItem(blank_key), h),
+            close_hover: move |h| Message::Hover(HoverId::SshTabClose(blank_key), h),
+        }),
     ));
     for tab in &ws.ssh_tabs {
         let host_id = tab
@@ -8598,29 +8598,29 @@ fn ssh_tab_bar<'a>(
         let title = tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name);
         entries.push((
             tab_display_width(&title),
-            tab_widget::panel_tab(
+            tab_widget::panel_tab(tab_widget::PanelTabArgs {
                 title,
-                is_active,
-                title_hover_t,
+                active: is_active,
+                hover_t: title_hover_t,
                 close_hover_t,
-                Some(icon),
-                None,
-                Message::Ssh(ssh::Message::SelectSshTab(
+                prefix: Some(icon),
+                suffix: None,
+                on_select: Message::Ssh(ssh::Message::SelectSshTab(
                     select_id,
                     ssh::SshTabKind::Terminal,
                 )),
-                Message::Ssh(ssh::Message::CloseSshTab(
+                on_close: Message::Ssh(ssh::Message::CloseSshTab(
                     close_id,
                     ssh::SshTabKind::Terminal,
                 )),
-                app.hover_tooltip_ready(HoverId::SshTabItem(key)),
-                move |h| {
+                show_tooltip: app.hover_tooltip_ready(HoverId::SshTabItem(key)),
+                title_hover: move |h| {
                     Message::Hover(HoverId::SshTabItem(ssh_tab_hover_key(&title_hover_id)), h)
                 },
-                move |h| {
+                close_hover: move |h| {
                     Message::Hover(HoverId::SshTabClose(ssh_tab_hover_key(&close_hover_id)), h)
                 },
-            ),
+            }),
         ));
     }
     // SFTP tab(阶段 3):`sftp_tabs` 按 host_id 去重,渲染形状跟终端 tab
@@ -8648,23 +8648,26 @@ fn ssh_tab_bar<'a>(
         let close_hover_id = host_id.clone();
         entries.push((
             tab_display_width(&label),
-            tab_widget::panel_tab(
-                label,
-                is_active,
-                title_hover_t,
+            tab_widget::panel_tab(tab_widget::PanelTabArgs {
+                title: label,
+                active: is_active,
+                hover_t: title_hover_t,
                 close_hover_t,
-                Some(icon),
-                None,
-                Message::Ssh(ssh::Message::SelectSshTab(select_id, ssh::SshTabKind::Sftp)),
-                Message::Ssh(ssh::Message::CloseSshTab(close_id, ssh::SshTabKind::Sftp)),
-                app.hover_tooltip_ready(HoverId::SshTabItem(key)),
-                move |h| {
+                prefix: Some(icon),
+                suffix: None,
+                on_select: Message::Ssh(ssh::Message::SelectSshTab(
+                    select_id,
+                    ssh::SshTabKind::Sftp,
+                )),
+                on_close: Message::Ssh(ssh::Message::CloseSshTab(close_id, ssh::SshTabKind::Sftp)),
+                show_tooltip: app.hover_tooltip_ready(HoverId::SshTabItem(key)),
+                title_hover: move |h| {
                     Message::Hover(HoverId::SshTabItem(ssh_tab_hover_key(&title_hover_id)), h)
                 },
-                move |h| {
+                close_hover: move |h| {
                     Message::Hover(HoverId::SshTabClose(ssh_tab_hover_key(&close_hover_id)), h)
                 },
-            ),
+            }),
         ));
         let _ = state;
     }
