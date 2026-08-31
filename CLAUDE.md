@@ -41,3 +41,4 @@ cargo clippy --all-targets && cargo fmt
 - 一期范围以规格 §3"一期范围裁剪"为准；显式未决项（规格 §8）不得擅自定死。
 - 主题 ByteBoy2077：bg `#0a0e16`、金 `#F2D94E`（甲方动作专属）、奶油文字 `#FFE5B4`、青 `#47DEF0`、绿 `#1AD585`。
 - 新增/改造 icon 按钮、tab 类 UI 时优先复用统一组件（`icons::icon_button_entry`/`tabs::tab_core`），不要重新手写一套 `MouseArea`+`on_enter`/`on_exit` 接线；确需自定义（形状/交互模式明显不同）要在 plan 里说明理由，不是绝对禁止。
+- 新增/改造函数参数 ≥7 个、且有多个同类型参数相邻（顺序传错编译器发现不了，如连续几个 `&str`/`bool`/同一消息类型）时，优先用具名字段的参数结构体替代位置参数（Rust Design Patterns: Builder），不要无脑加 `#[allow(clippy::too_many_arguments)]` 了事；结构体带闭包字段时用结构体自身的泛型参数承载（不要 `Box<dyn Fn>`），保持零成本。参数虽多但天然同质、不易传错的情况（如四个方向 padding、RGBA 四值）不受此约束。
