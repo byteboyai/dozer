@@ -40,6 +40,7 @@ async fn hook_event_reaches_attached_client_and_list() {
                 test_transcripts(),
                 test_session_summaries(),
                 test_backfill_registry(),
+                test_todos(),
             )
             .await
         }
@@ -169,6 +170,7 @@ async fn record_acceptance_persists() {
     let session_summaries =
         Arc::new(dozerd::session_summary::SessionSummaryStore::open(&db).unwrap());
     let backfill_registry = test_backfill_registry();
+    let todos = test_todos();
     tokio::spawn({
         let (
             sock,
@@ -179,6 +181,7 @@ async fn record_acceptance_persists() {
             transcripts,
             session_summaries,
             backfill_registry,
+            todos,
         ) = (
             sock.clone(),
             registry.clone(),
@@ -188,6 +191,7 @@ async fn record_acceptance_persists() {
             transcripts.clone(),
             session_summaries.clone(),
             backfill_registry.clone(),
+            todos.clone(),
         );
         async move {
             dozerd::server::serve(
@@ -199,6 +203,7 @@ async fn record_acceptance_persists() {
                 transcripts,
                 session_summaries,
                 backfill_registry,
+                todos,
             )
             .await
         }
@@ -258,6 +263,12 @@ fn test_backfill_registry() -> std::sync::Arc<dozerd::session_summary_backfill::
     std::sync::Arc::new(dozerd::session_summary_backfill::BackfillRegistry::new())
 }
 
+/// 每次调用建独立临时库的 Todo 存储（测试用；serve 需要）。
+fn test_todos() -> std::sync::Arc<dozerd::todo::TodoStore> {
+    let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
+    std::sync::Arc::new(dozerd::todo::TodoStore::new(&db).unwrap())
+}
+
 #[tokio::test]
 async fn project_open_and_list_roundtrip() {
     let sock = std::env::temp_dir().join(format!("dozerd-proj-{}.sock", uuid::Uuid::new_v4()));
@@ -270,6 +281,7 @@ async fn project_open_and_list_roundtrip() {
     let session_summaries =
         Arc::new(dozerd::session_summary::SessionSummaryStore::open(&db).unwrap());
     let backfill_registry = test_backfill_registry();
+    let todos = test_todos();
     tokio::spawn({
         let (
             sock,
@@ -280,6 +292,7 @@ async fn project_open_and_list_roundtrip() {
             transcripts,
             session_summaries,
             backfill_registry,
+            todos,
         ) = (
             sock.clone(),
             registry.clone(),
@@ -289,6 +302,7 @@ async fn project_open_and_list_roundtrip() {
             transcripts.clone(),
             session_summaries.clone(),
             backfill_registry.clone(),
+            todos.clone(),
         );
         async move {
             dozerd::server::serve(
@@ -300,6 +314,7 @@ async fn project_open_and_list_roundtrip() {
                 transcripts,
                 session_summaries,
                 backfill_registry,
+                todos,
             )
             .await
         }
@@ -339,6 +354,7 @@ async fn record_and_get_session_summary_roundtrip() {
     let transcripts = test_transcripts();
     let session_summaries = test_session_summaries();
     let backfill_registry = test_backfill_registry();
+    let todos = test_todos();
     tokio::spawn({
         let sock = sock.clone();
         let registry = registry.clone();
@@ -352,6 +368,7 @@ async fn record_and_get_session_summary_roundtrip() {
                 transcripts,
                 session_summaries,
                 backfill_registry,
+                todos,
             )
             .await
         }
@@ -430,6 +447,7 @@ async fn close_with_summary_kills_session_after_ai_summary_recorded() {
     let transcripts = test_transcripts();
     let session_summaries = test_session_summaries();
     let backfill_registry = test_backfill_registry();
+    let todos = test_todos();
     tokio::spawn({
         let sock = sock.clone();
         let registry = registry.clone();
@@ -443,6 +461,7 @@ async fn close_with_summary_kills_session_after_ai_summary_recorded() {
                 transcripts,
                 session_summaries,
                 backfill_registry,
+                todos,
             )
             .await
         }
@@ -525,12 +544,14 @@ async fn list_conversations_with_summaries_joins_correctly() {
     let transcripts = test_transcripts();
     let session_summaries = test_session_summaries();
     let backfill_registry = test_backfill_registry();
+    let todos = test_todos();
     tokio::spawn({
         let sock = sock.clone();
         let registry = registry.clone();
         let transcripts = transcripts.clone();
         let session_summaries = session_summaries.clone();
         let backfill_registry = backfill_registry.clone();
+        let todos = todos.clone();
         async move {
             dozerd::server::serve(
                 &sock,
@@ -541,6 +562,7 @@ async fn list_conversations_with_summaries_joins_correctly() {
                 transcripts,
                 session_summaries,
                 backfill_registry,
+                todos,
             )
             .await
         }

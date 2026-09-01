@@ -1,13 +1,14 @@
 use dozer_client::Client;
-use dozer_core::protocol::SummaryStatus;
-use dozer_mcp::server::{DozerMcpServer, SubmitSessionSummaryParams};
+use dozer_mcp::server::{
+    AddTodoParams, DozerMcpServer, EditTodoTextParams, NoParams, ToggleTodoParams,
+};
 use rmcp::handler::server::wrapper::Parameters;
 use std::sync::Arc;
 use std::time::Duration;
 
 fn temp_sock() -> std::path::PathBuf {
     let id = uuid::Uuid::new_v4();
-    std::path::PathBuf::from(format!("/tmp/dz-mcp-{}.sock", &id.to_string()[..8]))
+    std::path::PathBuf::from(format!("/tmp/dz-mcp-todo-{}.sock", &id.to_string()[..8]))
 }
 
 struct CleanupGuard(std::path::PathBuf);
@@ -20,7 +21,7 @@ impl Drop for CleanupGuard {
 async fn start_daemon() -> (std::path::PathBuf, CleanupGuard) {
     let sock = temp_sock();
     let registry = Arc::new(dozerd::registry::SessionRegistry::new());
-    let db = std::path::PathBuf::from(format!("/tmp/dz-mcp-{}.db", uuid::Uuid::new_v4()));
+    let db = std::path::PathBuf::from(format!("/tmp/dz-mcp-todo-{}.db", uuid::Uuid::new_v4()));
     let store = Arc::new(dozerd::acceptance::AcceptanceStore::open(&db).unwrap());
     let projects = Arc::new(dozerd::projects::ProjectStore::new(&db).unwrap());
     let bookmarks = Arc::new(dozerd::bookmarks::BookmarkStore::new(&db).unwrap());
@@ -54,89 +55,73 @@ async fn start_daemon() -> (std::path::PathBuf, CleanupGuard) {
     (sock, guard)
 }
 
-#[tokio::test]
-async fn submit_session_summary_records_to_dozerd() {
-    let (sock, _guard) = start_daemon().await;
-    let client = Client::new(sock.clone());
+async fn session_with_project(sock: &std::path::Path, project_id: i64) -> String {
+    let client = Client::new(sock.to_path_buf());
     let session = client
         .create(
             "测试",
             "/bin/sh",
-            &["-c".into(), "sleep 5".into()],
+            &["-c".into(), "cat".into()],
             "/tmp",
             80,
             24,
-            1,
+            project_id,
         )
         .await
         .unwrap();
-
-    let server = DozerMcpServer::new(Client::new(sock), session.id.clone());
-    server
-        .submit_session_summary(Parameters(SubmitSessionSummaryParams {
-            title: "标题".into(),
-            summary: "摘要".into(),
-        }))
-        .await
-        .unwrap();
-
-    let got = client
-        .get_session_summary(&session.id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(got.title, "标题");
-    assert_eq!(got.summary, "摘要");
-    assert_eq!(got.status, SummaryStatus::AiGenerated);
+    session.id
 }
 
 #[tokio::test]
-async fn submit_session_summary_truncates_oversized_fields() {
+async fn add_list_toggle_and_edit_todo_via_mcp_tools() {
     let (sock, _guard) = start_daemon().await;
-    let client = Client::new(sock.clone());
-    let session = client
-        .create(
-            "测试",
-            "/bin/sh",
-            &["-c".into(), "sleep 5".into()],
-            "/tmp",
-            80,
-            24,
-            1,
-        )
-        .await
-        .unwrap();
+    let session_id = session_with_project(&sock, 1).await;
+    let server = DozerMcpServer::new(Client::new(sock), session_id);
 
-    let long_title = "标".repeat(500);
-    let long_summary = "摘".repeat(20_000);
-    let server = DozerMcpServer::new(Client::new(sock), session.id.clone());
-    server
-        .submit_session_summary(Parameters(SubmitSessionSummaryParams {
-            title: long_title,
-            summary: long_summary,
+    let added = server
+        .add_todo(Parameters(AddTodoParams {
+            text: "写完 spec".into(),
         }))
         .await
         .unwrap();
+    let added_value = added.structured_content.expect("结构化内容");
+    assert_eq!(added_value["text"], "写完 spec");
+    assert_eq!(added_value["done"], false);
+    let id = added_value["id"].as_i64().unwrap();
 
-    let got = client
-        .get_session_summary(&session.id)
+    let listed = server.list_todos(Parameters(NoParams {})).await.unwrap();
+    let listed_value = listed.structured_content.expect("结构化内容");
+    assert_eq!(listed_value["todos"].as_array().unwrap().len(), 1);
+
+    let toggled = server
+        .toggle_todo(Parameters(ToggleTodoParams { id, done: true }))
         .await
-        .unwrap()
         .unwrap();
-    assert!(got.title.chars().count() <= 200);
-    assert!(got.summary.chars().count() <= 8000);
+    assert_eq!(
+        toggled.structured_content.expect("结构化内容")["done"],
+        true
+    );
+
+    let edited = server
+        .edit_todo_text(Parameters(EditTodoTextParams {
+            id,
+            text: "改过的文字".into(),
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        edited.structured_content.expect("结构化内容")["text"],
+        "改过的文字"
+    );
 }
 
 #[tokio::test]
-async fn submit_session_summary_errors_for_unknown_session() {
+async fn list_todos_errors_for_unknown_session() {
     let (sock, _guard) = start_daemon().await;
     let server = DozerMcpServer::new(Client::new(sock), "not-a-real-session".into());
     let err = server
-        .submit_session_summary(Parameters(SubmitSessionSummaryParams {
-            title: "t".into(),
-            summary: "s".into(),
-        }))
+        .list_todos(Parameters(NoParams {}))
         .await
         .unwrap_err();
-    assert!(err.message.contains("会话不存在") || err.message.contains("daemon 错误"));
+    assert!(err.message.contains("会话不存在"));
 }

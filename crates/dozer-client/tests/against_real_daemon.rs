@@ -23,6 +23,7 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
     let session_summaries =
         Arc::new(dozerd::session_summary::SessionSummaryStore::open(&db).unwrap());
     let backfill_registry = Arc::new(dozerd::session_summary_backfill::BackfillRegistry::new());
+    let todos = Arc::new(dozerd::todo::TodoStore::new(&db).unwrap());
     tokio::spawn(async move {
         dozerd::server::serve(
             &s,
@@ -33,6 +34,7 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
             transcripts,
             session_summaries,
             backfill_registry,
+            todos,
         )
         .await
     });
@@ -315,4 +317,65 @@ async fn get_backfill_status_for_never_started_cwd_returns_zero() {
         .await
         .unwrap();
     assert_eq!((completed, total), (0, 0));
+}
+
+#[tokio::test]
+async fn add_toggle_and_list_todos_roundtrip() {
+    let (sock, _registry, _guard) = start_daemon().await;
+    let client = Client::new(sock);
+
+    let t1 = client.add_todo(1, "第一条").await.unwrap();
+    let t2 = client.add_todo(1, "第二条").await.unwrap();
+
+    let listed = client.list_todos(1).await.unwrap();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].id, t2.id, "后加的排最前");
+    assert_eq!(listed[1].id, t1.id);
+
+    let toggled = client.toggle_todo(t1.id, true).await.unwrap();
+    assert!(toggled.done);
+    assert!(toggled.completed_at_ms.is_some());
+
+    let listed = client.list_todos(1).await.unwrap();
+    assert_eq!(listed[0].id, t2.id, "唯一待办排最前");
+    assert_eq!(listed[1].id, t1.id, "已完成沉底");
+}
+
+#[tokio::test]
+async fn edit_reorder_plan_date_and_dispatch_roundtrip() {
+    let (sock, _registry, _guard) = start_daemon().await;
+    let client = Client::new(sock);
+
+    let t1 = client.add_todo(1, "旧文字").await.unwrap();
+    let edited = client.edit_todo_text(t1.id, "新文字").await.unwrap();
+    assert_eq!(edited.text, "新文字");
+
+    let t2 = client.add_todo(1, "另一条").await.unwrap();
+    let reordered = client.reorder_todo(t1.id, Some(t2.id)).await.unwrap();
+    assert_eq!(reordered.id, t1.id);
+    let listed = client.list_todos(1).await.unwrap();
+    assert_eq!(listed[0].id, t2.id);
+    assert_eq!(listed[1].id, t1.id);
+
+    let with_date = client
+        .set_todo_plan_date(t1.id, Some("08-10"))
+        .await
+        .unwrap();
+    assert_eq!(with_date.plan_date, Some("08-10".to_string()));
+    let cleared = client.set_todo_plan_date(t1.id, None).await.unwrap();
+    assert_eq!(cleared.plan_date, None);
+
+    let dispatched = client
+        .record_todo_dispatch(t1.id, "sess-xyz")
+        .await
+        .unwrap();
+    assert_eq!(dispatched.dispatch_session_id, Some("sess-xyz".to_string()));
+}
+
+#[tokio::test]
+async fn toggle_unknown_todo_id_errors() {
+    let (sock, _registry, _guard) = start_daemon().await;
+    let client = Client::new(sock);
+    let err = client.toggle_todo(999, true).await.unwrap_err();
+    assert!(err.to_string().contains("任务不存在"));
 }

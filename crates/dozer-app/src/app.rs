@@ -198,8 +198,8 @@ pub enum HoverId {
     /// SSH 面板自己 tab 条上某个 tab 的标题文字,按 host_id 的哈希区分
     /// (SSH tab 没有稳定的数字序号——按身份是 `(host_id, SshTabKind)`,
     /// `HoverId` 整体 `derive(Copy)`,`String` 不是 `Copy`,不能直接塞
-    /// `host_id.clone()`,用哈希值退化成 `u64`,同 `todo_line_key` 的
-    /// 既有精度取舍)。
+    /// `host_id.clone()`,用哈希值退化成 `u64`,不要求无碰撞,只要求
+    /// "实践中够用"。
     SshTabItem(u64),
     /// SSH 面板自己 tab 条上某个 tab 的关闭按钮(×),同上按 host_id 哈希区分。
     SshTabClose(u64),
@@ -2157,9 +2157,6 @@ pub struct App {
     /// `extensions::git_log`。`App` 级共享、不按项目分(现状,纯重构不改,
     /// 见 `sync_git_log_to_active_project`)。
     git_log: git_log::State,
-    /// Todo 面板 App 级状态(派发记录/计划时间/完成时间,按项目分桶,
-    /// 启动时读盘、每次变更落盘)——见 `extensions::todo::AppState`。
-    todo: todo::AppState,
     /// 数据库面板 App 级状态(哪些驱动类型在"新增数据源"下拉里可选,
     /// 启动时读盘)——见 `extensions::database::AppState`。
     database: database::AppState,
@@ -2329,14 +2326,6 @@ pub(crate) const PROJECT_PREVIEW_ID_OFFSET: usize = 1_000_000;
 pub(crate) const CONVERSATION_REVIEW_ID_OFFSET: usize = 2_000_000;
 
 impl App {
-    /// `todo::AppState`(派发记录等)只读访问——`agent_card` 挂在
-    /// `workspace.rs`,读不到 `App` 私有字段,需要这个跨模块 accessor 才能
-    /// 反查"这个 tab 是不是某条 Todo 任务派发出来的"(见
-    /// `todo::WorkspaceState::task_title_for_session`)。
-    pub(crate) fn todo_meta(&self) -> &todo::AppState {
-        &self.todo
-    }
-
     /// 启动序列成功路径:建好外壳态,再把上次退出时开着的**整份**项目页签
     /// 集合恢复出来。
     ///
@@ -2479,7 +2468,6 @@ impl App {
             home_right_view: homespace::HomeRightView::default(),
             home_browser: browser::State::with_initial_url("https://byteboy.ai"),
             git_log: git_log::State::default(),
-            todo: todo::AppState::load(),
             database: database::AppState::load(),
             footbar: footbar::AppState::default(),
         };
@@ -2670,12 +2658,11 @@ impl App {
         self.left_view == PanelKind::Todo && self.active_workspace().is_some()
     }
 
-    /// `main.rs` 定时唤醒调用：只在 `todo_panel_visible()` 时才真的
-    /// `stat` 一下 `.dozer/todo.md` 的 mtime；没变就是一次系统调用，
-    /// 变了才重读+reparse（`todo::reload_from_disk` 内部也会再 stat 一次
-    /// mtime，多一次系统调用换取它保持独立可复用）。按 `last_todo_poll_at`
-    /// 自限速到 `TODO_POLL_INTERVAL`——悬停动画等更快节奏把唤醒带密时
-    /// 不会跟着高频重复 `stat`(2026-08-12 解耦重构)。
+    /// `main.rs` 定时唤醒调用：只在 `todo_panel_visible()` 时真的拉取一次
+    /// `dozerd` 侧的任务列表(经 `request_todos_refresh` 异步 `Loaded` 落回
+    /// `ws.todo.items`),兼顾响应与省电。按 `last_todo_poll_at` 自限速到
+    /// `TODO_POLL_INTERVAL`——悬停动画等更快节奏把唤醒带密时不会跟着高频
+    /// 重复发请求(2026-08-12 解耦重构)。
     pub fn poll_todo_if_visible(&mut self) {
         if !self.todo_panel_visible() {
             return;
@@ -2685,17 +2672,16 @@ impl App {
             return;
         }
         self.last_todo_poll_at = now;
-        let Some(ws) = self.active_workspace_mut() else {
+        let Some(project_id) = self.active_project_id else {
             return;
         };
-        let Some(project) = ws.project.as_ref() else {
-            return;
+        let client = self.client.clone();
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        let emit = move |m: todo::Message| {
+            let _ = proxy.send_event(Message::Todo(m));
         };
-        let path = todo::todo_path(std::path::Path::new(&project.path));
-        let current = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-        if current != ws.todo.mtime() {
-            todo::reload_from_disk(&mut ws.todo, std::path::Path::new(&project.path));
-        }
+        todo::request_todos_refresh(project_id, &client, &handle, emit);
     }
 
     /// 设置某按钮的悬停目标（`true`=进入,`false`=离开）；动画由
@@ -3223,21 +3209,30 @@ impl App {
             return;
         };
         let was_focused = ws.todo.content_edit_focused();
-        if was_focused && !focused {
-            if let Some(project) = ws.project.as_ref() {
-                let path = std::path::PathBuf::from(&project.path);
-                ws.todo.commit_content_edit(&path);
-            } else {
-                ws.todo.cancel_content_edit();
-            }
-        }
+        // 失焦回退:取走待提交的草稿改动(`commit_content_edit` 返回
+        // `Some((id, new_text))` 表示草稿确有改动,且会消费 `editing_content`);
+        // 无改动/空草稿返回 `None`,到此随 `editing_content` 一并丢弃。
+        let pending_commit = if was_focused && !focused {
+            ws.todo.commit_content_edit()
+        } else {
+            None
+        };
         ws.todo.set_content_edit_focused_flag(focused);
-    }
-
-    /// Todo 面板 MARKDOWN 视图是否处于整文件编辑态(main.rs 键盘路由用)。
-    pub fn todo_markdown_editing(&self) -> bool {
-        self.active_workspace()
-            .is_some_and(|ws| ws.todo.markdown_editing())
+        // 先把 `ws` 的借用放掉,再经 self 的 client/handle/proxy 发起异步提交
+        // (否则 `active_workspace_mut` 对 `self` 的可变借用会挡住 `self.client`)。
+        if let Some((id, new_text)) = pending_commit {
+            let client = self.client.clone();
+            let handle = self.handle.clone();
+            let proxy = self.proxy.clone();
+            handle.spawn(async move {
+                let res = client
+                    .edit_todo_text(id, &new_text)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string());
+                let _ = proxy.send_event(Message::Todo(todo::Message::Mutated(res)));
+            });
+        }
     }
 
     /// 当前左栏显示哪个面板(main.rs 每帧 `interface.operate` 捕获 Todo 自绘
@@ -6029,21 +6024,37 @@ impl App {
     }
 
     fn todo_dispatch_to_existing(&mut self, idx: usize, session_id: String) {
-        let Some(project_id) = self.active_project_id else {
-            return;
-        };
-        let text = self
+        let Some(id) = self
             .active_workspace()
             .and_then(|ws| ws.todo.items().get(idx))
-            .map(|item| item.text.clone());
-        let Some(text) = text else {
+            .map(|item| item.id)
+        else {
+            return;
+        };
+        let Some(text) = self
+            .active_workspace()
+            .and_then(|ws| ws.todo.items().get(idx))
+            .map(|item| item.text.clone())
+        else {
             return;
         };
         self.with_focused_project(|ws, io| {
             ws.todo.close_dispatch_popup();
             ws.dispatch_todo_to_existing(io, &session_id, &text);
         });
-        self.todo.record_dispatch(project_id, &text, session_id);
+        // 指派记录落服务端 SQLite(`record_todo_dispatch`),异步确认经
+        // `Mutated` 刷新列表——与乐观更新的其它写操作同一条链路。
+        let handle = self.handle.clone();
+        let client = self.client.clone();
+        let proxy = self.proxy.clone();
+        handle.spawn(async move {
+            let res = client
+                .record_todo_dispatch(id, &session_id)
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string());
+            let _ = proxy.send_event(Message::Todo(todo::Message::Mutated(res)));
+        });
     }
 
     fn todo_message(&mut self, msg: todo::Message) {
@@ -6058,31 +6069,28 @@ impl App {
         let Some(project_id) = self.active_project_id else {
             return;
         };
-        // `self.todo`(App 级)和某个 `Workspace` 要同时可变借用,
-        // `todo::update` 才能一次处理完两块状态——不能套用
-        // `with_focused_project(|ws, _io| ..)` 那种单参数闭包(它只
-        // 借出 `ws`,拿不到 `self.todo`)。改用 `loaded_workspace_mut`
-        // 直接从 `self.projects` 借 `&mut Workspace`,跟 `&mut self.todo`
-        // 是结构体的两个不同字段,互不冲突,Rust 借用检查器允许分别
-        // 借用。
-        let app_todo = &mut self.todo;
-        let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
-            return;
+        let client = self.client.clone();
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        let last_cursor = self.last_cursor;
+        // 异步结果/写确认透过 `proxy` 重发回主循环,回调里会借用 `self`
+        // 的 client/handle ——闭包捕获是 move 出来的副本,行得通(同
+        // `Message::Search` 分支的既有手法)。
+        let emit = move |m: todo::Message| {
+            let _ = proxy.send_event(Message::Todo(m));
         };
-        let Some(project) = ws.project.as_ref() else {
-            return;
-        };
-        let project_path = std::path::PathBuf::from(&project.path);
-        // 点日历按钮时的光标逻辑坐标,作为窗口级 overlay 的弹出锚点——先
-        // 记下再交给 `todo::update` 展开(它只管 `calendar_open`/`calendar_view`)。
-        if matches!(msg, todo::Message::CalendarOpen(_)) {
-            ws.todo.set_calendar_anchor(self.last_cursor);
-        }
-        // 点"指派"按钮时的光标逻辑坐标,作为派发选择层 overlay 的弹出锚点。
-        if matches!(msg, todo::Message::DispatchOpen(_)) {
-            ws.todo.set_dispatch_anchor(self.last_cursor);
-        }
-        todo::update(&mut ws.todo, app_todo, msg, project_id, &project_path);
+        self.with_focused_project(move |ws, _io| {
+            // 点日历按钮时的光标逻辑坐标,作为窗口级 overlay 的弹出锚点——
+            // 先记下再交给 `todo::update` 展开(它只管 `calendar_open`/`calendar_view`)。
+            if matches!(msg, todo::Message::CalendarOpen(_)) {
+                ws.todo.set_calendar_anchor(last_cursor);
+            }
+            // 点"指派"按钮时的光标逻辑坐标,作为派发选择层 overlay 的弹出锚点。
+            if matches!(msg, todo::Message::DispatchOpen(_)) {
+                ws.todo.set_dispatch_anchor(last_cursor);
+            }
+            todo::update(&mut ws.todo, msg, project_id, &client, &handle, emit);
+        });
     }
 
     fn browser_bookmarks_loaded(&mut self, pid: Option<i64>, bookmarks: Vec<BookmarkInfo>) {
@@ -6435,11 +6443,17 @@ impl App {
         if fire {
             match kind {
                 PanelKind::GitLog => self.sync_git_log_to_active_project(),
-                PanelKind::Todo => self.with_focused_project(|ws, _io| {
-                    if let Some(project) = ws.project.as_ref() {
-                        todo::reload_from_disk(&mut ws.todo, std::path::Path::new(&project.path));
+                PanelKind::Todo => {
+                    if let Some(project_id) = self.active_project_id {
+                        let client = self.client.clone();
+                        let handle = self.handle.clone();
+                        let proxy = self.proxy.clone();
+                        let emit = move |m: todo::Message| {
+                            let _ = proxy.send_event(Message::Todo(m));
+                        };
+                        todo::request_todos_refresh(project_id, &client, &handle, emit);
                     }
-                }),
+                }
                 PanelKind::Database => self.with_focused_project(|ws, _io| {
                     if let Some(project) = ws.project.as_ref() {
                         database::reload_from_disk(
@@ -7402,7 +7416,7 @@ impl App {
                     .height(Length::Fill),
             )
             .on_press(Message::Todo(todo::Message::CalendarClose));
-            match todo::todo_calendar_overlay(&self.todo, ws, self.window_size) {
+            match todo::todo_calendar_overlay(ws, self.window_size) {
                 Some(popup) => stack![base, dismiss, popup.map(Message::Todo)]
                     .width(Length::Fill)
                     .height(Length::Fill)
@@ -7700,23 +7714,13 @@ fn panel_body<'a>(
         )
         .map(Message::GitLog),
         PanelKind::Todo => {
-            let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
-                return column![].into();
-            };
-            let project_path = ws
-                .project
-                .as_ref()
-                .map(|p| std::path::PathBuf::from(&p.path));
             let collapsed = app.list_collapsed(PanelKind::Todo);
             // 列表列收起:内容拿满整个配对宽度,侧栏不渲染。
             if collapsed {
                 return todo::view(
-                    &app.todo,
                     app,
                     &ws.todo,
                     ws,
-                    project_id,
-                    project_path.as_deref(),
                     Length::Fixed(0.0),
                     Border::default(),
                     Length::Fill,
@@ -7727,12 +7731,9 @@ fn panel_body<'a>(
             }
             let (list_portion, content_portion) = split_portions(app.dims.todo_split);
             let (sidebar_pane, content_pane) = todo::view(
-                &app.todo,
                 app,
                 &ws.todo,
                 ws,
-                project_id,
-                project_path.as_deref(),
                 Length::FillPortion(list_portion),
                 zone_pane_border(zone, lc),
                 Length::FillPortion(content_portion),
@@ -8515,9 +8516,8 @@ where
 }
 
 /// `host_id` → `HoverId::SshTab{Item,Close}` 用的哈希键(`HoverId` 整体
-/// `derive(Copy)`,`String` 不是 `Copy`,退化成 `u64`,同 `todo_line_key`
-/// 的既有精度取舍——碰撞在同一台主机的 tab hover 高亮场景下不构成实际
-/// 风险)。
+/// `derive(Copy)`,`String` 不是 `Copy`,退化成 `u64`,不要求无碰撞——
+/// 碰撞在同一台主机的 tab hover 高亮场景下不构成实际风险)。
 pub(crate) fn ssh_tab_hover_key(host_id: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -8545,8 +8545,10 @@ fn ssh_tab_bar<'a>(
     app: &'a App,
     ws: &'a Workspace,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let mut entries: Vec<(f32, Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>)> =
-        Vec::new();
+    let mut entries: Vec<(
+        f32,
+        Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
+    )> = Vec::new();
     // "空白"占位 tab:不对应 `ssh_tabs`/`sftp_tabs` 里任何一条记录,选中
     // 态即 `ssh_active == None`(未开任何主机 tab,或关到最后一个后的
     // 默认落点)。跟文件预览面板 `preview.rs::TabKind::Blank` 是同一个
@@ -9910,10 +9912,7 @@ mod tests {
 
         let logical_x = 800.0 + byteui::theme::geometry::icon_rail_width();
         let new = apply_column_drag(state.clone(), Divider::LeftRight, window_width, logical_x);
-        let new_probe = ShellState {
-            dims: new,
-            ..state
-        };
+        let new_probe = ShellState { dims: new, ..state };
         let new_right_zone_w = right_zone_width(window_width, &new_probe);
         let new_pair_w = pair_content_width(new_right_zone_w);
         let new_list_px = new_pair_w * new_probe.dims.agent_split;

@@ -1017,9 +1017,8 @@ pub enum NavAction {
 
 /// 浏览器面板自己的消息类型——内核(`workspace.rs`)只认一个包装变体
 /// `Message::Browser(extensions::browser::Message)`,这个模块本身不
-/// import 顶层 `Message`。`AddrEvent` 是验收意见框/项目树行内编辑两处
-/// 共用的通用文本输入事件类型,定义在 `crate::workspace`,这里直接引用,
-/// 不复制。
+/// import 顶层 `Message`。原通用的 `AddrEvent` 文本输入事件类型已随
+/// Todo MARKDOWN 键盘路由移除(2026-09-01 SQLite 迁移),不再引用。
 #[derive(Debug, Clone)]
 pub enum Message {
     OpenUrl(String),
