@@ -35,6 +35,23 @@ pub struct SubmitSessionSummaryParams {
     pub summary: String,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct AddTodoParams {
+    pub text: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ToggleTodoParams {
+    pub id: i64,
+    pub done: bool,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct EditTodoTextParams {
+    pub id: i64,
+    pub text: String,
+}
+
 #[tool_router(server_handler)]
 impl DozerMcpServer {
     pub fn new(client: Client, session_id: String) -> Self {
@@ -100,6 +117,80 @@ impl DozerMcpServer {
             .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
         Ok(CallToolResult::structured(json!({ "recorded": true })))
     }
+
+    #[tool(
+        description = "列出当前项目的任务列表(id/文字/是否完成)。想知道当前有哪些待办任务时调用。"
+    )]
+    pub async fn list_todos(
+        &self,
+        Parameters(NoParams {}): Parameters<NoParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let project_id = self
+            .resolve_project_id()
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        let todos = self
+            .client
+            .list_todos(project_id)
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        let value = json!(
+            todos
+                .into_iter()
+                .map(|t| json!({ "id": t.id, "text": t.text, "done": t.done }))
+                .collect::<Vec<_>>()
+        );
+        Ok(CallToolResult::structured(json!({ "todos": value })))
+    }
+
+    #[tool(description = "新增一条任务,置顶到列表最前。")]
+    pub async fn add_todo(
+        &self,
+        Parameters(AddTodoParams { text }): Parameters<AddTodoParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let project_id = self
+            .resolve_project_id()
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        let todo = self
+            .client
+            .add_todo(project_id, &text)
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        Ok(CallToolResult::structured(
+            json!({ "id": todo.id, "text": todo.text, "done": todo.done }),
+        ))
+    }
+
+    #[tool(description = "勾选或取消勾选一条任务的完成状态。")]
+    pub async fn toggle_todo(
+        &self,
+        Parameters(ToggleTodoParams { id, done }): Parameters<ToggleTodoParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let todo = self
+            .client
+            .toggle_todo(id, done)
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        Ok(CallToolResult::structured(
+            json!({ "id": todo.id, "text": todo.text, "done": todo.done }),
+        ))
+    }
+
+    #[tool(description = "修改一条任务的文字内容。")]
+    pub async fn edit_todo_text(
+        &self,
+        Parameters(EditTodoTextParams { id, text }): Parameters<EditTodoTextParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let todo = self
+            .client
+            .edit_todo_text(id, &text)
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        Ok(CallToolResult::structured(
+            json!({ "id": todo.id, "text": todo.text, "done": todo.done }),
+        ))
+    }
 }
 
 impl DozerMcpServer {
@@ -122,6 +213,24 @@ impl DozerMcpServer {
             .get_preview_context(project_id)
             .await
             .map_err(|e| anyhow::anyhow!("查询预览上下文失败: {e}"))
+    }
+
+    /// session_id → project_id 的解析逻辑,`get_preview_context`(`fetch_
+    /// context`)已经有一份等价实现;Todo 工具的 4 个新方法里,需要按项目
+    /// 过滤的(`list_todos`/`add_todo`)也复用同一套,抽成独立方法避免重复。
+    async fn resolve_project_id(&self) -> anyhow::Result<i64> {
+        let sessions = self
+            .client
+            .list()
+            .await
+            .map_err(|e| anyhow::anyhow!("连接 dozerd 失败: {e}"))?;
+        let session = sessions
+            .iter()
+            .find(|s| s.id == self.session_id)
+            .ok_or_else(|| anyhow::anyhow!("会话不存在于 dozerd"))?;
+        session
+            .project_id
+            .ok_or_else(|| anyhow::anyhow!("会话尚未归属任何项目"))
     }
 
     /// 测试专用入口：绕开 MCP `Parameters`/`CallToolResult` 包装，直接跑
