@@ -197,6 +197,26 @@ pub struct BookmarkInfo {
     pub created_ms: u64,
 }
 
+/// 一条任务(`dozerd` 的 `todos` 表一行)。`id` 是稳定身份,取代 v1 时
+/// 靠文本哈希关联元数据的做法(2026-09-01 SQLite 迁移)。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TodoInfo {
+    pub id: i64,
+    pub project_id: i64,
+    pub text: String,
+    pub done: bool,
+    /// 排序键:同一 project 下,展示查询固定 `ORDER BY done, rank`——待办
+    /// 按 rank 升序在前,已完成按 rank 升序沉底,同一 done 分组内比较才
+    /// 有意义,跨分组数值不保证可比。
+    pub rank: i64,
+    pub created_ms: u64,
+    pub completed_at_ms: Option<u64>,
+    /// "MM-DD" 格式,GUI 日历选择器写入。
+    pub plan_date: Option<String>,
+    pub dispatch_session_id: Option<String>,
+    pub dispatch_at_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: String,
@@ -395,6 +415,42 @@ pub enum Request {
     GetSessionSummaryBackfillStatus {
         cwd: String,
     },
+    /// 列出某项目全部任务,`ORDER BY done, rank` 排好序返回。
+    ListTodos {
+        project_id: i64,
+    },
+    /// 新增一条待办,置顶(rank 小于当前最小待办 rank)。
+    AddTodo {
+        project_id: i64,
+        text: String,
+    },
+    /// 勾选/取消勾选;`done` 从假变真时服务端顺带写 `completed_at_ms`,
+    /// 真变假时清空。`id` 不存在 → `Reply::Error`。
+    ToggleTodo {
+        id: i64,
+        done: bool,
+    },
+    /// 改任务文字。`id` 不存在 → `Reply::Error`。
+    EditTodoText {
+        id: i64,
+        text: String,
+    },
+    /// 把 `id` 挪到 `after_id` 之后(`None` = 待办块最前);只在待办子集内
+    /// 生效,服务端对该 project 的待办子集做一次完整 rank 重编号。
+    ReorderTodo {
+        id: i64,
+        after_id: Option<i64>,
+    },
+    /// 写/清计划日期,`None` 表示清空。
+    SetTodoPlanDate {
+        id: i64,
+        plan_date: Option<String>,
+    },
+    /// 记录一次派发(指派到已有会话)。
+    RecordTodoDispatch {
+        id: i64,
+        session_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -494,6 +550,12 @@ pub enum Reply {
     BackfillStatus {
         total: u32,
         completed: u32,
+    },
+    Todos {
+        todos: Vec<TodoInfo>,
+    },
+    Todo {
+        todo: TodoInfo,
     },
 }
 
@@ -1210,5 +1272,46 @@ mod tests {
         let reply = Reply::PreviewContext { context: Some(ctx) };
         let line = encode_line(&reply);
         assert_eq!(decode_line::<Reply>(&line).unwrap(), reply);
+    }
+
+    #[test]
+    fn todo_protocol_types_roundtrip() {
+        let add_req = Request::AddTodo {
+            project_id: 1,
+            text: "写完 spec".into(),
+        };
+        let line = encode_line(&add_req);
+        let back: Request = decode_line(&line).unwrap();
+        assert_eq!(add_req, back);
+
+        let reorder_req = Request::ReorderTodo {
+            id: 5,
+            after_id: Some(3),
+        };
+        let line = encode_line(&reorder_req);
+        let back: Request = decode_line(&line).unwrap();
+        assert_eq!(reorder_req, back);
+
+        let todo = TodoInfo {
+            id: 1,
+            project_id: 1,
+            text: "写完 spec".into(),
+            done: false,
+            rank: 0,
+            created_ms: 1_700_000_000_000,
+            completed_at_ms: None,
+            plan_date: Some("08-10".into()),
+            dispatch_session_id: None,
+            dispatch_at_ms: None,
+        };
+        let reply = Reply::Todo { todo: todo.clone() };
+        let line = encode_line(&reply);
+        let back: Reply = decode_line(&line).unwrap();
+        assert_eq!(reply, back);
+
+        let list_reply = Reply::Todos { todos: vec![todo] };
+        let line = encode_line(&list_reply);
+        let back: Reply = decode_line(&line).unwrap();
+        assert_eq!(list_reply, back);
     }
 }
