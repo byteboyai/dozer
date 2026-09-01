@@ -2866,16 +2866,20 @@ pub(crate) fn conversation_list_pane<'a>(
 }
 
 /// 按 `AgentKind` 把会话 tab 分组,固定顺序 Claude → Codebuddy → Opencode
-/// → Unknown,只返回非空分组(没有该 agent 的会话就不出现,面板不留空
+/// → Codex → Kilo → V8agent → Unknown(与 `conversation_agents_present`
+/// 同一份顺序),只返回非空分组(没有该 agent 的会话就不出现,面板不留空
 /// 分组占位)。组内保持 `tabs` 原有顺序(tab 打开顺序)。返回下标而非
 /// 引用——渲染时既要下标发 `Message::SelectTab(idx)`,又要用下标回查
 /// `ws.tabs[idx]` 取展示字段,直接存下标比存 `&SessionTab` 省一次生命
 /// 周期纠缠。
 pub(crate) fn group_tabs_by_agent(tabs: &[SessionTab]) -> Vec<(AgentKind, Vec<usize>)> {
-    const ORDER: [AgentKind; 4] = [
+    const ORDER: [AgentKind; 7] = [
         AgentKind::Claude,
         AgentKind::Codebuddy,
         AgentKind::Opencode,
+        AgentKind::Codex,
+        AgentKind::Kilo,
+        AgentKind::V8agent,
         AgentKind::Unknown,
     ];
     ORDER
@@ -4869,6 +4873,28 @@ mod tests {
                 (AgentKind::Claude, vec![1, 3]),
                 (AgentKind::Opencode, vec![0]),
                 (AgentKind::Unknown, vec![2]),
+            ]
+        );
+    }
+
+    #[test]
+    fn group_tabs_by_agent_includes_codex_kilo_and_v8agent() {
+        // 回归测试:`ORDER` 曾经只有 4 个 AgentKind(Claude/Codebuddy/
+        // Opencode/Unknown),Codex/Kilo/V8agent 的会话会被 filter_map
+        // 静默丢弃——tab 标题栏能正确识别出 agent 种类,但 Agent 侧栏
+        // 面板完全不显示这些会话,面板直接留空。
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let tabs = vec![
+            make_test_tab(&rt, "a", AgentKind::V8agent),
+            make_test_tab(&rt, "b", AgentKind::Codex),
+            make_test_tab(&rt, "c", AgentKind::Kilo),
+        ];
+        assert_eq!(
+            group_tabs_by_agent(&tabs),
+            vec![
+                (AgentKind::Codex, vec![1]),
+                (AgentKind::Kilo, vec![2]),
+                (AgentKind::V8agent, vec![0]),
             ]
         );
     }
