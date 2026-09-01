@@ -2,9 +2,9 @@ use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use dozer_core::protocol::{
-    AgentKind, AgentState, BookmarkInfo, BookmarkScope, ConversationSummary, PreviewContext,
-    ProjectInfo, Reply, Request, SessionInfo, SessionSummaryPayload, TodoInfo, TurnRecord,
-    UsagePayload, decode_line, encode_line,
+    AgentKind, AgentState, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
+    ConversationSummary, PreviewContext, ProjectInfo, Reply, Request, SessionInfo,
+    SessionSummaryPayload, TodoInfo, TurnRecord, UsagePayload, decode_line, encode_line,
 };
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -348,6 +348,100 @@ impl Client {
                 id,
                 session_id: session_id.into(),
             })
+            .await?
+        {
+            Reply::Todo { todo } => Ok(todo),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn list_categories(&self, project_id: i64) -> Result<Vec<CategoryInfo>> {
+        match self
+            .roundtrip(&Request::ListCategories { project_id })
+            .await?
+        {
+            Reply::Categories { categories } => Ok(categories),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn add_category(
+        &self,
+        project_id: i64,
+        parent_id: Option<i64>,
+        name: &str,
+    ) -> Result<CategoryInfo> {
+        match self
+            .roundtrip(&Request::AddCategory {
+                project_id,
+                parent_id,
+                name: name.into(),
+            })
+            .await?
+        {
+            Reply::Category { category } => Ok(category),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn rename_category(&self, id: i64, name: &str) -> Result<CategoryInfo> {
+        match self
+            .roundtrip(&Request::RenameCategory {
+                id,
+                name: name.into(),
+            })
+            .await?
+        {
+            Reply::Category { category } => Ok(category),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn delete_category(&self, id: i64) -> Result<()> {
+        match self.roundtrip(&Request::DeleteCategory { id }).await? {
+            Reply::Ok => Ok(()),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn reparent_category(
+        &self,
+        id: i64,
+        new_parent_id: Option<i64>,
+    ) -> Result<CategoryInfo> {
+        match self
+            .roundtrip(&Request::ReparentCategory { id, new_parent_id })
+            .await?
+        {
+            Reply::Category { category } => Ok(category),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn move_category_sibling(
+        &self,
+        id: i64,
+        direction: CategoryMoveDirection,
+    ) -> Result<CategoryInfo> {
+        match self
+            .roundtrip(&Request::MoveCategorySibling { id, direction })
+            .await?
+        {
+            Reply::Category { category } => Ok(category),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn set_todo_category(&self, id: i64, category_id: Option<i64>) -> Result<TodoInfo> {
+        match self
+            .roundtrip(&Request::SetTodoCategory { id, category_id })
             .await?
         {
             Reply::Todo { todo } => Ok(todo),

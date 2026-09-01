@@ -24,6 +24,7 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
         Arc::new(dozerd::session_summary::SessionSummaryStore::open(&db).unwrap());
     let backfill_registry = Arc::new(dozerd::session_summary_backfill::BackfillRegistry::new());
     let todos = Arc::new(dozerd::todo::TodoStore::new(&db).unwrap());
+    let categories = Arc::new(dozerd::todo_category::CategoryStore::new(&db).unwrap());
     tokio::spawn(async move {
         dozerd::server::serve(
             &s,
@@ -35,6 +36,7 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
             session_summaries,
             backfill_registry,
             todos,
+            categories,
         )
         .await
     });
@@ -378,4 +380,58 @@ async fn toggle_unknown_todo_id_errors() {
     let client = Client::new(sock);
     let err = client.toggle_todo(999, true).await.unwrap_err();
     assert!(err.to_string().contains("任务不存在"));
+}
+
+#[tokio::test]
+async fn category_crud_and_reorder_roundtrip() {
+    let (sock, _registry, _guard) = start_daemon().await;
+    let client = Client::new(sock);
+
+    let frontend = client.add_category(1, None, "前端").await.unwrap();
+    let backend = client.add_category(1, None, "后端").await.unwrap();
+    let ui = client
+        .add_category(1, Some(frontend.id), "UI")
+        .await
+        .unwrap();
+
+    let listed = client.list_categories(1).await.unwrap();
+    assert_eq!(listed.len(), 3);
+
+    let renamed = client.rename_category(ui.id, "界面").await.unwrap();
+    assert_eq!(renamed.name, "界面");
+
+    let reparented = client
+        .reparent_category(ui.id, Some(backend.id))
+        .await
+        .unwrap();
+    assert_eq!(reparented.parent_id, Some(backend.id));
+
+    client.delete_category(ui.id).await.unwrap();
+    let listed = client.list_categories(1).await.unwrap();
+    assert_eq!(listed.len(), 2);
+
+    let moved = client
+        .move_category_sibling(backend.id, dozer_core::protocol::CategoryMoveDirection::Up)
+        .await
+        .unwrap();
+    assert_eq!(moved.id, backend.id);
+}
+
+#[tokio::test]
+async fn set_todo_category_roundtrip() {
+    let (sock, _registry, _guard) = start_daemon().await;
+    let client = Client::new(sock);
+
+    let category = client.add_category(1, None, "分类").await.unwrap();
+    let todo = client.add_todo(1, "任务").await.unwrap();
+    assert_eq!(todo.category_id, None);
+
+    let categorized = client
+        .set_todo_category(todo.id, Some(category.id))
+        .await
+        .unwrap();
+    assert_eq!(categorized.category_id, Some(category.id));
+
+    let cleared = client.set_todo_category(todo.id, None).await.unwrap();
+    assert_eq!(cleared.category_id, None);
 }

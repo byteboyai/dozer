@@ -68,6 +68,7 @@ async fn session_survives_client_disconnect() {
                 test_session_summaries(),
                 test_backfill_registry(),
                 test_todos(),
+                test_categories(),
             )
             .await
         }
@@ -201,6 +202,7 @@ async fn unknown_session_returns_error_reply() {
                 test_session_summaries(),
                 test_backfill_registry(),
                 test_todos(),
+                test_categories(),
             )
             .await
         }
@@ -244,6 +246,7 @@ async fn attach_delivers_marker_exactly_once() {
                 test_session_summaries(),
                 test_backfill_registry(),
                 test_todos(),
+                test_categories(),
             )
             .await
         }
@@ -323,6 +326,7 @@ async fn attach_from_offset_resumes_within_window() {
                 test_session_summaries(),
                 test_backfill_registry(),
                 test_todos(),
+                test_categories(),
             )
             .await
         }
@@ -431,6 +435,7 @@ async fn attach_stream_offset_invariant_under_load() {
                 test_session_summaries(),
                 test_backfill_registry(),
                 test_todos(),
+                test_categories(),
             )
             .await
         }
@@ -526,6 +531,7 @@ async fn attach_from_offset_out_of_window_falls_back_to_full_snapshot() {
                 test_session_summaries(),
                 test_backfill_registry(),
                 test_todos(),
+                test_categories(),
             )
             .await
         }
@@ -622,4 +628,10 @@ fn test_backfill_registry() -> std::sync::Arc<dozerd::session_summary_backfill::
 fn test_todos() -> std::sync::Arc<dozerd::todo::TodoStore> {
     let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
     std::sync::Arc::new(dozerd::todo::TodoStore::new(&db).unwrap())
+}
+
+/// 每次调用建独立临时库的分类存储（测试用；serve 需要）。
+fn test_categories() -> std::sync::Arc<dozerd::todo_category::CategoryStore> {
+    let db = std::env::temp_dir().join(format!("dozerd-cat-{}.db", uuid::Uuid::new_v4()));
+    std::sync::Arc::new(dozerd::todo_category::CategoryStore::new(&db).unwrap())
 }

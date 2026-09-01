@@ -10,7 +10,7 @@ use crate::theme;
 use crate::workspace::{Workspace, agent_icon, tab_title};
 use byteui::interaction::icons;
 use dozer_client::Client;
-use dozer_core::protocol::{AgentKind, TodoInfo};
+use dozer_core::protocol::{AgentKind, CategoryInfo, TodoInfo};
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
 use iced_widget::core::{Border, Color, Element, Length, Padding, Rectangle, mouse};
@@ -49,6 +49,29 @@ pub enum TodoFilter {
     Pending,
     InProgress,
     Done,
+}
+
+/// 分类树的当前过滤选中态。`All`/`Uncategorized` 是钉在树顶的两个伪
+/// 节点(不对应真实 `CategoryInfo` 行),`Node(id)` 才是用户自建的真实
+/// 分类节点。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CategoryFilter {
+    #[default]
+    All,
+    Uncategorized,
+    Node(i64),
+}
+
+/// 分类树左侧面板一行的拍平展示(镜像 `project.rs::TreeRow` 的"扁平
+/// 存储 + 展开集 → 拍平成行"模式,只是节点数据源从文件系统换成
+/// `CategoryInfo`)。
+#[derive(Debug, Clone, PartialEq)]
+pub struct CategoryTreeRow {
+    pub id: i64,
+    pub name: String,
+    pub depth: usize,
+    pub has_children: bool,
+    pub expanded: bool,
 }
 
 /// Todo 面板右区固定展示列表视图(MARKDOWN tab 已随存储迁移移除),不再
@@ -113,6 +136,110 @@ pub fn filter_todos(
         })
         .map(|(i, _)| i)
         .collect()
+}
+
+/// 按 `parent_id` 把 `categories` 拼成树,按 `expanded` 展开态深度优先
+/// 拍平成可见行(未展开节点的子孙不出现在结果里,但节点自身若有子节点
+/// 仍会标 `has_children = true`,供左侧渲染箭头)。同级顺序按
+/// `CategoryInfo.rank` 升序。
+pub fn visible_category_rows(
+    categories: &[CategoryInfo],
+    expanded: &std::collections::HashSet<i64>,
+) -> Vec<CategoryTreeRow> {
+    let mut children_of: std::collections::HashMap<Option<i64>, Vec<&CategoryInfo>> =
+        std::collections::HashMap::new();
+    for c in categories {
+        children_of.entry(c.parent_id).or_default().push(c);
+    }
+    for siblings in children_of.values_mut() {
+        siblings.sort_by_key(|c| c.rank);
+    }
+    let mut rows = Vec::new();
+    fn walk(
+        parent: Option<i64>,
+        depth: usize,
+        children_of: &std::collections::HashMap<Option<i64>, Vec<&CategoryInfo>>,
+        expanded: &std::collections::HashSet<i64>,
+        rows: &mut Vec<CategoryTreeRow>,
+    ) {
+        let Some(siblings) = children_of.get(&parent) else {
+            return;
+        };
+        for c in siblings {
+            let has_children = children_of
+                .get(&Some(c.id))
+                .map(|v| !v.is_empty())
+                .unwrap_or(false);
+            let is_expanded = expanded.contains(&c.id);
+            rows.push(CategoryTreeRow {
+                id: c.id,
+                name: c.name.clone(),
+                depth,
+                has_children,
+                expanded: is_expanded,
+            });
+            if is_expanded {
+                walk(Some(c.id), depth + 1, children_of, expanded, rows);
+            }
+        }
+    }
+    walk(None, 0, &children_of, expanded, &mut rows);
+    rows
+}
+
+/// `root` 的全部子孙节点 id(不含 `root` 自己)。给"选中父节点汇总子孙
+/// 任务"和"reparent 目标合法性校验"(GUI 侧提前拦截,dozerd 侧
+/// `CategoryStore::reparent` 仍会再校验一次,双保险)复用。
+pub fn category_descendants(
+    categories: &[CategoryInfo],
+    root: i64,
+) -> std::collections::HashSet<i64> {
+    let mut children_of: std::collections::HashMap<i64, Vec<i64>> =
+        std::collections::HashMap::new();
+    for c in categories {
+        if let Some(p) = c.parent_id {
+            children_of.entry(p).or_default().push(c.id);
+        }
+    }
+    let mut out = std::collections::HashSet::new();
+    let mut frontier = vec![root];
+    while let Some(node) = frontier.pop() {
+        if let Some(children) = children_of.get(&node) {
+            for &child in children {
+                if out.insert(child) {
+                    frontier.push(child);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 按当前分类过滤选中态,返回符合条件的任务 id 集合(不是下标——调用方
+/// 若需要按下标跟既有 `filter_todos` 的结果取交集,自己按 `todos[i].id`
+/// 是否在这个集合里判断)。`Node(id)` 汇总该节点及其全部子孙下的任务。
+pub fn filter_todos_by_category(
+    todos: &[TodoInfo],
+    categories: &[CategoryInfo],
+    filter: CategoryFilter,
+) -> std::collections::HashSet<i64> {
+    match filter {
+        CategoryFilter::All => todos.iter().map(|t| t.id).collect(),
+        CategoryFilter::Uncategorized => todos
+            .iter()
+            .filter(|t| t.category_id.is_none())
+            .map(|t| t.id)
+            .collect(),
+        CategoryFilter::Node(root) => {
+            let mut allowed = category_descendants(categories, root);
+            allowed.insert(root);
+            todos
+                .iter()
+                .filter(|t| t.category_id.is_some_and(|cid| allowed.contains(&cid)))
+                .map(|t| t.id)
+                .collect()
+        }
+    }
 }
 
 /// `done` 翻转成 `completed_at` 该有的值：完成 → `Some(now)`，取消
@@ -197,6 +324,21 @@ pub struct WorkspaceState {
     /// 待办子序列做展示置换并改光标为抓取态；落盘只在 `DragEnd` 时一次性
     /// 发生。已完成任务不可拖动(见 `RowSelect`/`DragMove` 的不变量)。
     drag: Option<TodoDrag>,
+    /// 当前项目全部分类节点,随 `ListTodos` 同一轮轮询一并拉取
+    /// (`request_categories_refresh`)。
+    categories: Vec<CategoryInfo>,
+    /// 展开的分类节点 id,纯 UI 态,不落盘(对齐 `FileTree::expanded`
+    /// 同样"只在内存里"的处理)。
+    category_expanded: std::collections::HashSet<i64>,
+    /// 当前选中的分类过滤节点,默认"全部"。
+    category_selected: CategoryFilter,
+    /// 分类树行内改名态(分类 id, 草稿字符串),镜像
+    /// `files::TreeEdit`——单行文本,不用 `text_editor::Content`。
+    category_renaming: Option<(i64, String)>,
+    /// 改名框是否持有 iced 真实焦点,镜像 `files.rs::tree_edit_focused`。
+    category_rename_focused: bool,
+    /// 一次性聚焦标记,镜像 `files.rs::tree_edit_focus_pending`。
+    category_rename_focus_pending: bool,
 }
 
 impl WorkspaceState {
@@ -388,6 +530,75 @@ impl WorkspaceState {
         self.search.clear();
         self.search_draft.clear();
     }
+
+    /// 当前项目全部分类节点(左侧树渲染 + 过滤计算用)。
+    pub fn categories(&self) -> &[CategoryInfo] {
+        &self.categories
+    }
+
+    /// 展开的分类节点 id 集合(左侧树渲染用)。
+    pub fn category_expanded(&self) -> &std::collections::HashSet<i64> {
+        &self.category_expanded
+    }
+
+    /// 当前选中的分类过滤节点。
+    pub fn category_selected(&self) -> CategoryFilter {
+        self.category_selected
+    }
+
+    /// 展开/收起某个分类节点(点左侧树箭头)。
+    fn toggle_category_expanded(&mut self, id: i64) {
+        if !self.category_expanded.remove(&id) {
+            self.category_expanded.insert(id);
+        }
+    }
+
+    /// 当前行内改名的分类(id, 草稿)。
+    pub fn category_renaming(&self) -> Option<(i64, &str)> {
+        self.category_renaming
+            .as_ref()
+            .map(|(id, draft)| (*id, draft.as_str()))
+    }
+
+    pub fn category_rename_focused(&self) -> bool {
+        self.category_rename_focused
+    }
+
+    pub fn set_category_rename_focused_flag(&mut self, focused: bool) {
+        self.category_rename_focused = focused;
+    }
+
+    pub fn take_category_rename_focus_pending(&mut self) -> bool {
+        std::mem::take(&mut self.category_rename_focus_pending)
+    }
+
+    /// 草稿变化时调用(`on_input`)。
+    fn set_category_rename_draft(&mut self, text: String) {
+        if let Some((_, draft)) = self.category_renaming.as_mut() {
+            *draft = text;
+        }
+    }
+
+    /// 提交(回车/失焦边缘触发共用)。返回 `Some((id, new_name))` 表示有
+    /// 改动需要落盘(空白/未变都视为无改动,直接丢弃草稿)。
+    fn commit_category_rename(&mut self) -> Option<(i64, String)> {
+        let (id, draft) = self.category_renaming.take()?;
+        let new_name = draft.trim().to_string();
+        if new_name.is_empty() {
+            return None;
+        }
+        let current = self.categories.iter().find(|c| c.id == id)?;
+        if current.name == new_name {
+            return None;
+        }
+        Some((id, new_name))
+    }
+
+    /// `app.rs::set_category_rename_focused` 失焦边缘触发用的公开入口,
+    /// 转发到 `commit_category_rename`。
+    pub(crate) fn commit_category_rename_for_blur(&mut self) -> Option<(i64, String)> {
+        self.commit_category_rename()
+    }
 }
 
 /// 搜索框稳定的 iced widget id。
@@ -498,6 +709,47 @@ pub enum Message {
     /// 触发一次 `Loaded` 刷新——成功时拿到权威的最新状态,失败时也借这次
     /// 刷新纠正掉之前的乐观更新。
     Mutated(Result<(), String>),
+    /// 拉取分类树的异步结果(轮询、或任一分类写操作成功后的刷新都落
+    /// 这里),与 `Loaded` 同构。
+    CategoriesLoaded(Vec<CategoryInfo>),
+    /// 分类写操作(增/改/删/reparent/上移下移/挂任务分类)的异步确认;
+    /// 不管成功失败都触发一次 `CategoriesLoaded` + `Loaded` 双刷新——
+    /// `SetTodoCategory` 改的是任务的 `category_id`,单刷分类树看不到
+    /// 任务列表那边的变化,所以两份列表一起刷,与 `Mutated` 只刷
+    /// `Loaded` 的原因不同(那边改的字段只影响任务本身)。
+    CategoryMutated(Result<(), String>),
+    /// 点左侧树箭头,展开/收起该节点。
+    CategoryToggleExpand(i64),
+    /// 点左侧树某一行(或"全部"/"未分类"伪节点),切换当前过滤。
+    CategorySelect(CategoryFilter),
+    /// 右键某个分类节点(伪节点"全部"/"未分类"不触发这个消息)。内核
+    /// 拦截转发成 `App::todo_category_context_menu`(同 `ProjectLinkMenu`
+    /// 的既有接线方式),不进 `todo::update`。
+    CategoryContextMenuOpen(i64),
+    /// 右键菜单"新建子分类":先用默认名新建(RPC 返回真实 id),再立刻
+    /// 进入该节点的改名态,让用户直接输入真实名字。
+    CategoryNewChild(i64),
+    /// 右键菜单"新建同级分类":`parent_id` 是被右键节点的父节点(`None`
+    /// 表示新建一个顶层分类,对应"未分类"/空白处右键 → 全局"新建分类"
+    /// 入口)。
+    CategoryNewSibling(Option<i64>),
+    /// 右键菜单"删除"。
+    CategoryDelete(i64),
+    /// 右键菜单"重命名"/新建后自动触发:进入行内改名态。
+    CategoryRenameStart(i64),
+    /// 改名框草稿变化(`text_input::on_input`,给全量当前字符串)。
+    CategoryRenameEdit(String),
+    /// 改名框提交(回车 `on_submit`;失焦边缘触发走
+    /// `App::set_category_rename_focused`)。
+    CategoryRenameSubmit,
+    /// 与前一个/后一个同级节点交换顺序。
+    CategoryMoveSibling(i64, dozer_core::protocol::CategoryMoveDirection),
+    /// 打开"移动到..."选择器(内核拦截,转发到
+    /// `App::todo_category_picker_open_for_category`)。
+    CategoryReparentPickerOpen(i64),
+    /// 点任务卡片的分类 chip,打开分类选择器(内核拦截,转发到
+    /// `App::todo_category_picker_open`)。
+    CategoryPickerOpenForTodo(i64),
 }
 
 /// 任务内容编辑/添加框的真 `text_input`/`text_editor` 的 `widget::Id`。
@@ -532,6 +784,30 @@ impl Operation<()> for CaptureContentEditFocus {
     fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
         if id == Some(&content_field_id()) {
             *CONTENT_EDIT_FOCUSED.lock().unwrap() = state.is_focused();
+        }
+    }
+
+    fn traverse(&mut self, operate: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {
+        operate(self);
+    }
+}
+
+pub fn category_rename_field_id() -> Id {
+    Id::new("todo-category-rename-field")
+}
+
+static CATEGORY_RENAME_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
+
+pub fn take_category_rename_focused() -> bool {
+    std::mem::replace(&mut *CATEGORY_RENAME_FOCUSED.lock().unwrap(), false)
+}
+
+pub struct CaptureCategoryRenameFocus;
+impl Operation<()> for CaptureCategoryRenameFocus {
+    fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
+        if id == Some(&category_rename_field_id()) {
+            *CATEGORY_RENAME_FOCUSED.lock().unwrap() = state.is_focused();
         }
     }
 
@@ -584,6 +860,20 @@ pub fn request_todos_refresh(
     handle.spawn(async move {
         let todos = client.list_todos(project_id).await.unwrap_or_default();
         emit(Message::Loaded(todos));
+    });
+}
+
+/// `request_todos_refresh` 的分类树版本:异步拉取某项目的全部分类节点。
+pub fn request_categories_refresh(
+    project_id: i64,
+    client: &Client,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    let client = client.clone();
+    handle.spawn(async move {
+        let categories = client.list_categories(project_id).await.unwrap_or_default();
+        emit(Message::CategoriesLoaded(categories));
     });
 }
 
@@ -652,7 +942,7 @@ pub fn update(
     project_id: i64,
     client: &Client,
     handle: &tokio::runtime::Handle,
-    emit: impl Fn(Message) + Send + 'static,
+    emit: impl Fn(Message) + Send + Sync + 'static,
 ) {
     match msg {
         // 卡片悬停由内核 `App::update` 拦截转发到 `set_hover`,不会到这。
@@ -670,6 +960,100 @@ pub fn update(
             }
             request_todos_refresh(project_id, client, handle, emit);
         }
+        Message::CategoriesLoaded(categories) => ws_state.categories = categories,
+        Message::CategoryMutated(res) => {
+            if let Err(e) = res {
+                tracing::warn!("分类写操作失败: {e}");
+            }
+            let client1 = client.clone();
+            let client2 = client.clone();
+            let handle1 = handle.clone();
+            let handle2 = handle.clone();
+            let emit = std::sync::Arc::new(emit);
+            let emit1 = emit.clone();
+            let emit2 = emit;
+            request_categories_refresh(project_id, &client1, &handle1, move |m| emit1(m));
+            handle2.spawn(async move {
+                let todos = client2.list_todos(project_id).await.unwrap_or_default();
+                emit2(Message::Loaded(todos));
+            });
+        }
+        Message::CategoryToggleExpand(id) => ws_state.toggle_category_expanded(id),
+        Message::CategorySelect(filter) => ws_state.category_selected = filter,
+        Message::CategoryContextMenuOpen(_) => {}
+        Message::CategoryNewChild(parent_id) => {
+            let client = client.clone();
+            let project_id_owned = project_id;
+            handle.spawn(async move {
+                let res = client
+                    .add_category(project_id_owned, Some(parent_id), "新分类")
+                    .await;
+                match res {
+                    Ok(category) => {
+                        emit(Message::CategoryRenameStart(category.id));
+                        emit(Message::CategoryMutated(Ok(())));
+                    }
+                    Err(e) => emit(Message::CategoryMutated(Err(e.to_string()))),
+                }
+            });
+        }
+        Message::CategoryNewSibling(parent_id) => {
+            let client = client.clone();
+            let project_id_owned = project_id;
+            handle.spawn(async move {
+                let res = client
+                    .add_category(project_id_owned, parent_id, "新分类")
+                    .await;
+                match res {
+                    Ok(category) => {
+                        emit(Message::CategoryRenameStart(category.id));
+                        emit(Message::CategoryMutated(Ok(())));
+                    }
+                    Err(e) => emit(Message::CategoryMutated(Err(e.to_string()))),
+                }
+            });
+        }
+        Message::CategoryDelete(id) => {
+            let client = client.clone();
+            handle.spawn(async move {
+                let res = client.delete_category(id).await.map_err(|e| e.to_string());
+                emit(Message::CategoryMutated(res));
+            });
+        }
+        Message::CategoryRenameStart(id) => {
+            let Some(current) = ws_state.categories.iter().find(|c| c.id == id) else {
+                return;
+            };
+            ws_state.category_renaming = Some((id, current.name.clone()));
+            ws_state.category_rename_focus_pending = true;
+        }
+        Message::CategoryRenameEdit(text) => ws_state.set_category_rename_draft(text),
+        Message::CategoryRenameSubmit => {
+            if let Some((id, new_name)) = ws_state.commit_category_rename() {
+                let client = client.clone();
+                handle.spawn(async move {
+                    let res = client
+                        .rename_category(id, &new_name)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| e.to_string());
+                    emit(Message::CategoryMutated(res));
+                });
+            }
+        }
+        Message::CategoryMoveSibling(id, direction) => {
+            let client = client.clone();
+            handle.spawn(async move {
+                let res = client
+                    .move_category_sibling(id, direction)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string());
+                emit(Message::CategoryMutated(res));
+            });
+        }
+        Message::CategoryReparentPickerOpen(_) => {}
+        Message::CategoryPickerOpenForTodo(_) => {}
         Message::Toggle(idx) => {
             let Some(item) = ws_state.items.get(idx) else {
                 return;
@@ -722,6 +1106,7 @@ pub fn update(
                     plan_date: None,
                     dispatch_session_id: None,
                     dispatch_at_ms: None,
+                    category_id: None,
                 },
             );
             ws_state.start_flash(0);
@@ -996,11 +1381,14 @@ pub fn view<'a>(
     for (filter, count) in counts {
         nav = nav.push(todo_category_button(filter, count, ws_state.filter));
     }
+    // ---- 分类树导航:钉在状态过滤 nav 下方,同一块左栏滚动区域 ----
+    let category_nav = category_tree_nav(app, ws_state);
     let sidebar_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         container(
             column![
                 header,
                 nav,
+                category_nav,
                 space::Space::new().height(Length::Fill),
                 todo_clear_footer_bar(ws_state),
             ]
@@ -1281,7 +1669,17 @@ fn todo_list_view<'a>(
     ws_state: &'a WorkspaceState,
     states: &[TodoState],
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let visible_idx = filter_todos(&ws_state.items, states, ws_state.filter, &ws_state.search);
+    let status_visible_idx =
+        filter_todos(&ws_state.items, states, ws_state.filter, &ws_state.search);
+    let category_allowed_ids = filter_todos_by_category(
+        &ws_state.items,
+        ws_state.categories(),
+        ws_state.category_selected(),
+    );
+    let visible_idx: Vec<usize> = status_visible_idx
+        .into_iter()
+        .filter(|&i| category_allowed_ids.contains(&ws_state.items[i].id))
+        .collect();
 
     // 搜索框的水平/垂直间距对齐任务卡片的间距规格(卡片列表 `list` 是
     // `spacing(8)` + `padding([0, 20])`):左右 20、上下 8,不再贴边顶到
@@ -1424,6 +1822,7 @@ fn todo_list_row<'a>(
         is_drag_source,
         hovered,
         editing_draft,
+        categories: ws_state.categories(),
     })
 }
 
@@ -1465,6 +1864,7 @@ struct TodoCardArgs<'a> {
     is_drag_source: bool,
     hovered: bool,
     editing_draft: Option<&'a iced_widget::text_editor::Content>,
+    categories: &'a [CategoryInfo],
 }
 
 fn todo_card<'a>(
@@ -1480,6 +1880,7 @@ fn todo_card<'a>(
         is_drag_source,
         hovered,
         editing_draft,
+        categories,
     } = args;
     let done = item.done;
 
@@ -1522,10 +1923,34 @@ fn todo_card<'a>(
         .size(byteui::theme::font::caption())
         .color(byteui::theme::color::current().dim);
 
+    // 分类 chip:显示任务所属分类(找不到就是"未分类"),点击打开分类选择器。
+    let category_label = categories
+        .iter()
+        .find(|c| Some(c.id) == item.category_id)
+        .map(|c| c.name.clone())
+        .unwrap_or_else(|| "未分类".to_string());
+    let chip = button(
+        text(category_label)
+            .size(byteui::theme::font::caption())
+            .color(byteui::theme::color::current().dim),
+    )
+    .on_press(Message::CategoryPickerOpenForTodo(item.id))
+    .padding([2, 8])
+    .style(|_t: &iced_widget::Theme, _s| button::Style {
+        background: Some(byteui::theme::color::current().card.into()),
+        border: Border {
+            color: byteui::theme::color::current().border,
+            width: 1.0,
+            radius: 10.0.into(),
+        },
+        ..button::Style::default()
+    });
+
     let top_row = row![
         number_text,
         status_sep,
         status_label,
+        chip,
         iced_widget::space::Space::new()
             .width(Length::Fill)
             .height(Length::Shrink),
@@ -2095,6 +2520,190 @@ fn todo_category_button<'a>(
     .into()
 }
 
+/// 分类树导航区:钉顶的"全部"/"未分类"伪节点 + 用户自建分类节点(可
+/// 展开/收起、点选切过滤)。本函数只做展示 + 选中;右键菜单/增删改在
+/// 后续任务接入。
+fn category_tree_nav<'a>(
+    app: &App,
+    ws_state: &'a WorkspaceState,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let mut col = column![].spacing(2).padding([4, 8]);
+
+    col = col.push(category_pseudo_row(
+        icons::IconKind::CircleSmall,
+        "全部",
+        ws_state.category_selected() == CategoryFilter::All,
+        Message::CategorySelect(CategoryFilter::All),
+    ));
+    col = col.push(category_pseudo_row(
+        icons::IconKind::CircleSmall,
+        "未分类",
+        ws_state.category_selected() == CategoryFilter::Uncategorized,
+        Message::CategorySelect(CategoryFilter::Uncategorized),
+    ));
+
+    let rows = visible_category_rows(ws_state.categories(), ws_state.category_expanded());
+    for row in rows {
+        if let Some((renaming_id, draft)) = ws_state.category_renaming()
+            && renaming_id == row.id
+        {
+            col = col.push(category_rename_row(row.depth, draft));
+            continue;
+        }
+        let active = ws_state.category_selected() == CategoryFilter::Node(row.id);
+        let fg = if active {
+            byteui::theme::color::current().cream
+        } else {
+            byteui::theme::color::current().dim
+        };
+        let chevron: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+            if row.has_children {
+                icons::icon_button_entry(
+                    if row.expanded {
+                        icons::IconKind::ChevronDown
+                    } else {
+                        icons::IconKind::ChevronRight
+                    },
+                    byteui::theme::icon_size::row(),
+                    active,
+                    !active,
+                    app.hover_progress(HoverId::TodoCategoryRow(row.id)),
+                    false,
+                    byteui::theme::geometry::tab_button_size(),
+                    true,
+                    Message::CategoryToggleExpand(row.id),
+                    move |hovered| Message::Hover(HoverId::TodoCategoryRow(row.id), hovered),
+                    if row.expanded { "收起" } else { "展开" },
+                )
+            } else {
+                space::Space::new()
+                    .width(byteui::theme::geometry::tab_button_size())
+                    .into()
+            };
+        let label = button(
+            row![
+                chevron,
+                text(row.name.clone())
+                    .size(byteui::theme::font::body())
+                    .color(fg),
+            ]
+            .spacing(4)
+            .align_y(iced_widget::core::alignment::Vertical::Center),
+        )
+        .on_press(Message::CategorySelect(CategoryFilter::Node(row.id)))
+        .width(Length::Fill)
+        .padding([6, 4 + (row.depth as u16) * 16])
+        .style(move |_t: &iced_widget::Theme, _s| button::Style {
+            background: if active {
+                Some(byteui::theme::color::current().card.into())
+            } else {
+                None
+            },
+            text_color: fg,
+            border: Border {
+                color: if active {
+                    byteui::theme::color::current().gold
+                } else {
+                    Color::TRANSPARENT
+                },
+                width: if active { 1.0 } else { 0.0 },
+                radius: 6.0.into(),
+            },
+            ..button::Style::default()
+        });
+        col = col.push(byteui::interaction::context_menu::wrap(
+            label.into(),
+            Some(Message::CategoryContextMenuOpen(row.id)),
+        ));
+    }
+    col.into()
+}
+
+/// 分类树一行的行内改名输入框,镜像 `files.rs::tree_edit_row`(同款
+/// `byteui::form::input_text::view` 单行 `text_input`,`on_submit` 直接
+/// 回车提交,缩进用外层 `Padding::left` 换算,不拼进文本内容)。
+fn category_rename_row<'a>(
+    depth: usize,
+    draft: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let indent_px = 4.0 + depth as f32 * 16.0; // 对齐 category_tree_nav 里真实行的缩进算法
+    let field = container(byteui::form::input_text::view(
+        "",
+        draft,
+        false,
+        Some(category_rename_field_id()),
+        false,
+        Some(Message::CategoryRenameSubmit),
+        false,
+        Message::CategoryRenameEdit,
+    ))
+    .width(Length::Fill)
+    .padding(Padding {
+        left: indent_px,
+        ..Padding::default()
+    });
+    byteui::interaction::context_menu::wrap(
+        field.into(),
+        Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+            id: category_rename_field_id(),
+            secure: false,
+        })),
+    )
+}
+
+/// "全部"/"未分类"两个不可删除/不可右键的伪节点行,视觉对齐真实分类
+/// 节点但没有展开箭头。
+fn category_pseudo_row<'a>(
+    icon: icons::IconKind,
+    label: &'a str,
+    active: bool,
+    on_press: Message,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let fg = if active {
+        byteui::theme::color::current().cream
+    } else {
+        byteui::theme::color::current().dim
+    };
+    button(
+        row![
+            icons::view(
+                icon,
+                byteui::theme::icon_size::row(),
+                if active {
+                    byteui::theme::color::current().gold
+                } else {
+                    byteui::theme::color::current().dim
+                }
+            ),
+            text(label).size(byteui::theme::font::body()).color(fg),
+        ]
+        .spacing(8)
+        .align_y(iced_widget::core::alignment::Vertical::Center),
+    )
+    .on_press(on_press)
+    .width(Length::Fill)
+    .padding([6, 10])
+    .style(move |_t: &iced_widget::Theme, _s| button::Style {
+        background: if active {
+            Some(byteui::theme::color::current().card.into())
+        } else {
+            None
+        },
+        text_color: fg,
+        border: Border {
+            color: if active {
+                byteui::theme::color::current().gold
+            } else {
+                Color::TRANSPARENT
+            },
+            width: if active { 1.0 } else { 0.0 },
+            radius: 6.0.into(),
+        },
+        ..button::Style::default()
+    })
+    .into()
+}
+
 /// 完成时间(毫秒) → "MM-DD"（SUCCESS 徽章用，只取月日）。
 fn format_todo_month_day(ms: u64) -> String {
     let secs = ms / 1000;
@@ -2134,6 +2743,7 @@ mod tests {
             plan_date: None,
             dispatch_session_id: None,
             dispatch_at_ms: None,
+            category_id: None,
         }
     }
 
@@ -2297,5 +2907,121 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(ws_state.commit_content_edit(), None);
+    }
+
+    fn cat(id: i64, parent_id: Option<i64>, name: &str) -> CategoryInfo {
+        CategoryInfo {
+            id,
+            project_id: 1,
+            parent_id,
+            name: name.into(),
+            rank: 0,
+            created_ms: 0,
+        }
+    }
+
+    #[test]
+    fn visible_category_rows_flattens_by_expanded_state() {
+        // 前端(展开) -> UI, 性能(未展开无子节点)
+        //   UI(未展开) -> 组件库(不可见,父未展开)
+        // 后端(未展开) -> 数据库(不可见)
+        let categories = vec![
+            cat(1, None, "前端"),
+            cat(2, Some(1), "UI"),
+            cat(3, Some(1), "性能"),
+            cat(4, Some(2), "组件库"),
+            cat(5, None, "后端"),
+            cat(6, Some(5), "数据库"),
+        ];
+        let mut expanded = std::collections::HashSet::new();
+        expanded.insert(1);
+        let rows = visible_category_rows(&categories, &expanded);
+        let visible_ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
+        assert_eq!(
+            visible_ids,
+            vec![1, 2, 3, 5],
+            "只展开了前端,UI/后端的子节点都不可见"
+        );
+        let front = rows.iter().find(|r| r.id == 1).unwrap();
+        assert_eq!(front.depth, 0);
+        assert!(front.has_children);
+        assert!(front.expanded);
+        let ui = rows.iter().find(|r| r.id == 2).unwrap();
+        assert_eq!(ui.depth, 1);
+        assert!(
+            ui.has_children,
+            "UI 有子节点组件库,即使未展开也要标记有子节点"
+        );
+        assert!(!ui.expanded);
+        let perf = rows.iter().find(|r| r.id == 3).unwrap();
+        assert!(!perf.has_children);
+    }
+
+    #[test]
+    fn category_descendants_covers_multi_level_and_excludes_root() {
+        let categories = vec![
+            cat(1, None, "前端"),
+            cat(2, Some(1), "UI"),
+            cat(3, Some(2), "组件库"),
+            cat(4, None, "后端"),
+        ];
+        let descendants = category_descendants(&categories, 1);
+        assert_eq!(
+            descendants,
+            std::collections::HashSet::from([2, 3]),
+            "根节点自己不算子孙,后端这条不相关分支不应该出现"
+        );
+        assert!(
+            category_descendants(&categories, 3).is_empty(),
+            "叶子节点没有子孙"
+        );
+    }
+
+    #[test]
+    fn filter_todos_by_category_all_returns_everything() {
+        let todos = vec![todo_with_category(1, Some(10)), todo_with_category(2, None)];
+        let categories = vec![cat(10, None, "分类")];
+        let ids = filter_todos_by_category(&todos, &categories, CategoryFilter::All);
+        assert_eq!(ids, std::collections::HashSet::from([1, 2]));
+    }
+
+    #[test]
+    fn filter_todos_by_category_uncategorized_only() {
+        let todos = vec![todo_with_category(1, Some(10)), todo_with_category(2, None)];
+        let ids = filter_todos_by_category(&todos, &[], CategoryFilter::Uncategorized);
+        assert_eq!(ids, std::collections::HashSet::from([2]));
+    }
+
+    #[test]
+    fn filter_todos_by_category_node_includes_descendant_tasks() {
+        // 前端(id 10) -> UI(id 11);任务 1 挂前端,任务 2 挂 UI,任务 3 未分类。
+        // 选中"前端"应该看到任务 1 和任务 2(子孙汇总)。
+        let todos = vec![
+            todo_with_category(1, Some(10)),
+            todo_with_category(2, Some(11)),
+            todo_with_category(3, None),
+        ];
+        let categories = vec![cat(10, None, "前端"), cat(11, Some(10), "UI")];
+        let ids = filter_todos_by_category(&todos, &categories, CategoryFilter::Node(10));
+        assert_eq!(ids, std::collections::HashSet::from([1, 2]));
+        // 选中叶子节点"UI"只看到任务 2。
+        let ids = filter_todos_by_category(&todos, &categories, CategoryFilter::Node(11));
+        assert_eq!(ids, std::collections::HashSet::from([2]));
+    }
+
+    fn todo_with_category(id: i64, category_id: Option<i64>) -> TodoInfo {
+        TodoInfo {
+            id,
+            project_id: 1,
+            text: format!("任务{id}"),
+            done: false,
+            rank: 0,
+            created_ms: 0,
+            completed_at_ms: None,
+            plan_date: None,
+            dispatch_session_id: None,
+            dispatch_at_ms: None,
+            category_id,
+        }
     }
 }

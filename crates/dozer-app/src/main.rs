@@ -1046,6 +1046,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     app.update(Message::ProjectPreviewTabContextMenuClose);
                 } else if app.project_link_context_menu_open() {
                     app.update(Message::ProjectLinkContextMenuClose);
+                } else if app.category_context_menu_open() {
+                    app.update(Message::CategoryContextMenuClose);
+                } else if app.category_picker_open() {
+                    app.update(Message::CategoryPickerClose);
                 } else if app.text_input_menu_open() {
                     app.update(Message::TextInputMenuClose);
                 } else if app.database_source_context_menu_open() {
@@ -2206,6 +2210,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     .active_workspace_mut()
                                     .is_some_and(|ws| ws.take_content_edit_focus_pending());
 
+                                // 同理,消费"Todo 分类树行内改名刚触发、需要程序化
+                                // 聚焦"一次性位(右键"重命名"/新建后自动进入改名态,
+                                // 真 `text_input` 下一帧才出现、不会自己拿焦点)。
+                                let category_edit_focus_pending = app
+                                    .active_workspace_mut()
+                                    .is_some_and(|ws| ws.todo.take_category_rename_focus_pending());
+
                                 // 同理,消费 项目名称编辑/右键搜索 弹窗查询框两个
                                 // 一次性聚焦位(触发点击落在旧的 button/MouseArea
                                 // 上,真 `text_input` 本帧才出现、不会自己拿焦点;
@@ -2276,6 +2287,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     let mut op =
                                         iced_widget::core::widget::operation::focusable::focus::<()>(
                                             extensions::todo::content_field_id(),
+                                        );
+                                    run_operate(&mut interface, renderer, &mut op);
+                                }
+
+                                // Todo 分类树行内改名刚触发时程序化聚焦真正的
+                                // `text_input`(一次性位,消费即复位)。
+                                if category_edit_focus_pending {
+                                    let mut op =
+                                        iced_widget::core::widget::operation::focusable::focus::<()>(
+                                            extensions::todo::category_rename_field_id(),
                                         );
                                     run_operate(&mut interface, renderer, &mut op);
                                 }
@@ -2422,6 +2443,20 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                             &mut extensions::todo::CaptureContentEditFocus,
                                         );
                                         extensions::todo::take_content_edit_focused()
+                                    } else {
+                                        false
+                                    };
+
+                                // Todo 分类树行内改名框:同款每帧查真实
+                                // 焦点态,只在 Todo 左栏可见时跑。
+                                let category_rename_focused =
+                                    if matches!(app.left_view(), crate::app::PanelKind::Todo) {
+                                        run_operate(
+                                            &mut interface,
+                                            renderer,
+                                            &mut extensions::todo::CaptureCategoryRenameFocus,
+                                        );
+                                        extensions::todo::take_category_rename_focused()
                                     } else {
                                         false
                                     };
@@ -2697,6 +2732,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 app.set_home_project_search_focused(home_search_focused);
                                 app.set_tree_edit_focused(tree_edit_focused);
                                 app.set_todo_content_focused(content_edit_focused);
+                                app.set_category_rename_focused(category_rename_focused);
                                 app.set_comment_focused(comment_focused);
                                 app.set_project_name_focused(name_edit_focused);
                                 app.set_query_focused(query_focused);

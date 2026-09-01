@@ -29,7 +29,7 @@ fn id_not_found(id: i64) -> anyhow::Error {
 /// `RETURNING`/`SELECT` 都用这份列顺序,`query_row`/`query_map` 的行映射
 /// 闭包与之一一对应。
 const TODO_COLUMNS: &str = "id, project_id, text, done, rank, created_ms, \
-    completed_at_ms, plan_date, dispatch_session_id, dispatch_at_ms";
+    completed_at_ms, plan_date, dispatch_session_id, dispatch_at_ms, category_id";
 
 fn row_to_todo(row: &rusqlite::Row) -> rusqlite::Result<TodoInfo> {
     Ok(TodoInfo {
@@ -43,6 +43,7 @@ fn row_to_todo(row: &rusqlite::Row) -> rusqlite::Result<TodoInfo> {
         plan_date: row.get(7)?,
         dispatch_session_id: row.get(8)?,
         dispatch_at_ms: row.get::<_, Option<i64>>(9)?.map(|v| v as u64),
+        category_id: row.get(10)?,
     })
 }
 
@@ -63,12 +64,24 @@ impl TodoStore {
                 completed_at_ms INTEGER,
                 plan_date TEXT,
                 dispatch_session_id TEXT,
-                dispatch_at_ms INTEGER
+                dispatch_at_ms INTEGER,
+                category_id INTEGER
              );
              CREATE INDEX IF NOT EXISTS idx_todos_project_order
                 ON todos(project_id, done, rank);",
         )
         .context("建表")?;
+        // 老库(建表时还没有 category_id 列)迁移:CREATE TABLE IF NOT
+        // EXISTS 对已存在的表不生效,新列需要单独补。SQLite 的 ALTER
+        // TABLE ADD COLUMN 没有 IF NOT EXISTS 语法,靠 PRAGMA table_info
+        // 先查有没有再决定要不要补(同 transcripts.rs 的 is_error 列前例)。
+        let has_category_id: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('todos') WHERE name = 'category_id'")?
+            .exists([])?;
+        if !has_category_id {
+            conn.execute("ALTER TABLE todos ADD COLUMN category_id INTEGER", [])
+                .context("迁移 category_id 列")?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -83,6 +96,18 @@ impl TodoStore {
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map([project_id], row_to_todo)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 查单条任务(`SetTodoCategory` 校验分类归属用)。`id` 不存在返回
+    /// `Err`。
+    pub fn get(&self, id: i64) -> Result<TodoInfo> {
+        let conn = self.conn.lock().expect("db lock");
+        let sql = format!("SELECT {TODO_COLUMNS} FROM todos WHERE id = ?1");
+        conn.query_row(&sql, [id], row_to_todo)
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => id_not_found(id),
+                e => e.into(),
+            })
     }
 
     /// 新增即置顶:新 rank = 当前待办最小 rank - 1(表内该项目还没有待办
@@ -147,6 +172,22 @@ impl TodoStore {
              WHERE id = ?3 RETURNING {TODO_COLUMNS}"
         );
         conn.query_row(&sql, params![session_id, now, id], row_to_todo)
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => id_not_found(id),
+                e => e.into(),
+            })
+    }
+
+    /// 挂/摘任务的分类。`category_id: None` 摘掉分类(变回未分类)。
+    /// **不校验** `category_id` 指向的分类是否存在——那是跨 store 的
+    /// 校验,`TodoStore` 不知道 `CategoryStore` 的存在,交给
+    /// `server.rs` 的请求处理器在调用前做(见 Task 4)。`id` 不存在
+    /// 返回 `Err`。
+    pub fn set_category(&self, id: i64, category_id: Option<i64>) -> Result<TodoInfo> {
+        let conn = self.conn.lock().expect("db lock");
+        let sql =
+            format!("UPDATE todos SET category_id = ?1 WHERE id = ?2 RETURNING {TODO_COLUMNS}");
+        conn.query_row(&sql, params![category_id, id], row_to_todo)
             .map_err(|e| match e {
                 rusqlite::Error::QueryReturnedNoRows => id_not_found(id),
                 e => e.into(),
@@ -333,5 +374,33 @@ mod tests {
         store.add(2, "项目2的任务").unwrap();
         assert_eq!(store.list(1).unwrap().len(), 1);
         assert_eq!(store.list(2).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn get_returns_task_and_unknown_id_errors() {
+        let (_dir, store) = store();
+        let t = store.add(1, "任务").unwrap();
+        let fetched = store.get(t.id).unwrap();
+        assert_eq!(fetched.id, t.id);
+        assert!(store.get(999).is_err());
+    }
+
+    #[test]
+    fn set_category_assigns_and_clears() {
+        let (_dir, store) = store();
+        let t = store.add(1, "任务").unwrap();
+        assert_eq!(t.category_id, None);
+
+        let categorized = store.set_category(t.id, Some(42)).unwrap();
+        assert_eq!(categorized.category_id, Some(42));
+
+        let cleared = store.set_category(t.id, None).unwrap();
+        assert_eq!(cleared.category_id, None);
+    }
+
+    #[test]
+    fn set_category_unknown_id_errors() {
+        let (_dir, store) = store();
+        assert!(store.set_category(999, Some(1)).is_err());
     }
 }

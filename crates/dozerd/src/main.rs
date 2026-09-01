@@ -95,6 +95,9 @@ async fn main() -> Result<()> {
     let todos = Arc::new(dozerd::todo::TodoStore::new(
         &dozer_core::paths::state_dir().join("dozer.db"),
     )?);
+    let categories = Arc::new(dozerd::todo_category::CategoryStore::new(
+        &dozer_core::paths::state_dir().join("dozer.db"),
+    )?);
     {
         let files = dozerd::transcripts::scan::discover_all_transcript_files();
         tracing::info!(count = files.len(), "启动回填:发现历史 transcript 文件");
@@ -110,6 +113,7 @@ async fn main() -> Result<()> {
         session_summaries,
         backfill_registry,
         todos,
+        categories,
     );
     tokio::select! {
         r = serve => r?,
