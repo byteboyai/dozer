@@ -55,7 +55,7 @@ use iced_widget::core::font::Weight;
 use iced_widget::core::mouse;
 use iced_widget::core::{Border, Color, Element, Font, Length, Padding};
 use iced_widget::tooltip::{Position, Tooltip};
-use iced_widget::{MouseArea, column, container, row, stack, text};
+use iced_widget::{MouseArea, button, column, container, row, stack, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -228,6 +228,9 @@ pub enum HoverId {
     /// Todo 面板列表列"收起/展开"按钮:处理方式同 `FileTreeCollapse`
     /// (见 `extensions::todo::view`)。
     TodoListCollapse,
+    /// Todo 面板分类树的某一行(展开箭头 + 行本身共用一个悬停态,按分类
+    /// id 区分,同一时刻可能有多行渲染,不能用全局标识共用)。
+    TodoCategoryRow(i64),
     /// Database 面板列表列"收起/展开"按钮:处理方式同 `FileTreeCollapse`
     /// (见 `extensions::database::content_pane`)。
     DatabaseListCollapse,
@@ -1858,6 +1861,13 @@ pub enum Message {
     ProjectLinkPick(project::links::LinkTarget),
     /// Project 面板链接行右键菜单关闭(点遮罩 / 按 Esc)。
     ProjectLinkContextMenuClose,
+    /// Todo 分类树节点右键菜单关闭(点遮罩 / 按 Esc)。
+    CategoryContextMenuClose,
+    /// 分类选择器("移动到..." / 任务挂分类)浮层关闭(点遮罩 / 按 Esc)。
+    CategoryPickerClose,
+    /// 选择器里点了某一项:`None` = "未分类"(仅 `Todo` target 下有效,
+    /// `Category` target 选"未分类"表示挪到顶层)。
+    CategoryPickerSelect(Option<i64>),
     /// 数据库面板数据源树 header 行右键菜单关闭(点遮罩 / 按 Esc)。
     DatabaseSourceContextMenuClose,
     /// 项目页签:把某路径作为**新页签**打开(不动任何已存在页签的内容)。
@@ -1960,6 +1970,34 @@ struct ProjectLinkMenu {
     y: f32,
     target: project::links::LinkTarget,
     index: usize,
+}
+
+/// Todo 分类树节点右键菜单浮层状态,镜像 `ProjectLinkMenu`。
+struct CategoryContextMenu {
+    x: f32,
+    y: f32,
+    /// 被右键的分类节点 id。
+    id: i64,
+}
+
+/// 分类选择器要挂靠的目标:给任务挂分类,还是给分类节点 reparent。
+/// 两种场景共用同一份"点树选一个节点"的浮层交互,只是选中后调用的
+/// `Client` 方法不同(`set_todo_category` vs `reparent_category`)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CategoryPickerTarget {
+    /// 给某个任务挂分类(任务 id)。
+    Todo(i64),
+    /// 给某个分类节点 reparent(分类 id)。
+    Category(i64),
+}
+
+/// 分类选择器浮层状态:定位坐标 + 目标。渲染内容复用
+/// `category_tree_nav` 同一份树数据(只读展示,不接展开/右键,选中即
+/// 关闭并提交)。
+struct CategoryPicker {
+    x: f32,
+    y: f32,
+    target: CategoryPickerTarget,
 }
 
 /// 输入框右键菜单浮层状态:定位坐标(屏幕空间,复用 `files.last_right_click`)
@@ -2103,6 +2141,10 @@ pub struct App {
     /// Project 面板「项目文档 / Agent 记忆」链接行的右键菜单浮层状态,坐标
     /// 同样复用 `files.last_right_click`。
     project_link_menu: Option<ProjectLinkMenu>,
+    /// Todo 分类树节点右键菜单浮层状态,坐标复用 `files.last_right_click`。
+    category_context_menu: Option<CategoryContextMenu>,
+    /// 分类选择器("移动到..." / 任务挂分类)浮层状态:定位坐标 + 目标。
+    category_picker: Option<CategoryPicker>,
     /// 通用输入框右键菜单浮层状态(屏幕空间单例)。`TextInputMenuOpen` 时
     /// 写入、`TextInputMenuClose`/动作后清空。同一时刻最多挂一个。
     text_input_menu: Option<TextInputMenu>,
@@ -2455,6 +2497,8 @@ impl App {
             preview_tab_menu: None,
             project_preview_tab_menu: None,
             project_link_menu: None,
+            category_context_menu: None,
+            category_picker: None,
             text_input_menu: None,
             database_source_menu: None,
             pending_text_input_focus: None,
@@ -2687,7 +2731,9 @@ impl App {
         let emit = move |m: todo::Message| {
             let _ = proxy.send_event(Message::Todo(m));
         };
-        todo::request_todos_refresh(project_id, &client, &handle, emit);
+        let emit_todos = emit.clone();
+        todo::request_todos_refresh(project_id, &client, &handle, emit_todos);
+        todo::request_categories_refresh(project_id, &client, &handle, emit);
     }
 
     /// 设置某按钮的悬停目标（`true`=进入,`false`=离开）；动画由
@@ -3237,6 +3283,35 @@ impl App {
                     .map(|_| ())
                     .map_err(|e| e.to_string());
                 let _ = proxy.send_event(Message::Todo(todo::Message::Mutated(res)));
+            });
+        }
+    }
+
+    /// 分类改名框真实焦点态每帧写回;失焦边缘(`was_focused && !focused`)
+    /// 触发一次提交(镜像 `set_todo_content_focused`,只是落盘方法换成
+    /// `rename_category`,成功/失败都触发 `CategoryMutated` 刷新)。
+    pub fn set_category_rename_focused(&mut self, focused: bool) {
+        let Some(ws) = self.active_workspace_mut() else {
+            return;
+        };
+        let was_focused = ws.todo.category_rename_focused();
+        let pending_commit = if was_focused && !focused {
+            ws.todo.commit_category_rename_for_blur()
+        } else {
+            None
+        };
+        ws.todo.set_category_rename_focused_flag(focused);
+        if let Some((id, new_name)) = pending_commit {
+            let client = self.client.clone();
+            let handle = self.handle.clone();
+            let proxy = self.proxy.clone();
+            handle.spawn(async move {
+                let res = client
+                    .rename_category(id, &new_name)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string());
+                let _ = proxy.send_event(Message::Todo(todo::Message::CategoryMutated(res)));
             });
         }
     }
@@ -3811,6 +3886,30 @@ impl App {
                 ws.project_panel.set_selected_link(path);
             });
         }
+    }
+
+    /// 打开分类树节点的右键菜单。坐标复用 `files.last_right_click()`
+    /// (同 `project_link_context_menu` 的既有接线方式)。
+    fn todo_category_context_menu(&mut self, id: i64) {
+        let (x, y) = self.files.last_right_click();
+        self.files.close_context_menu();
+        self.category_context_menu = Some(CategoryContextMenu { x, y, id });
+    }
+
+    /// 分类选择器是否打开(main.rs Esc 键路由用)。
+    pub fn category_picker_open(&self) -> bool {
+        self.category_picker.is_some()
+    }
+
+    /// Todo 分类树节点右键菜单是否打开(main.rs Esc 键路由用)。
+    pub fn category_context_menu_open(&self) -> bool {
+        self.category_context_menu.is_some()
+    }
+
+    /// 打开分类选择器浮层,挂到给定目标(任务挂分类 / 分类 reparent)。
+    fn todo_category_picker_open(&mut self, target: CategoryPickerTarget) {
+        let (x, y) = self.last_cursor;
+        self.category_picker = Some(CategoryPicker { x, y, target });
     }
 
     /// Agent 选择菜单是否打开(main.rs Esc 键路由用)。
@@ -4415,6 +4514,15 @@ impl App {
                 todo::Message::ToggleListCollapse => {
                     self.toggle_panel_list_collapse(PanelKind::Todo);
                 }
+                todo::Message::CategoryContextMenuOpen(id) => {
+                    self.todo_category_context_menu(id);
+                }
+                todo::Message::CategoryReparentPickerOpen(id) => {
+                    self.todo_category_picker_open(CategoryPickerTarget::Category(id));
+                }
+                todo::Message::CategoryPickerOpenForTodo(todo_id) => {
+                    self.todo_category_picker_open(CategoryPickerTarget::Todo(todo_id));
+                }
                 other => self.todo_message(other),
             },
             // 文件树右键"搜索"弹窗:`SearchResults` 带 `project_id`,异步结果
@@ -4860,6 +4968,47 @@ impl App {
             Message::ProjectLinkPick(_) => {}
             Message::ProjectLinkContextMenuClose => {
                 self.project_link_menu = None;
+            }
+            Message::CategoryContextMenuClose => {
+                self.category_context_menu = None;
+            }
+            Message::CategoryPickerClose => {
+                self.category_picker = None;
+            }
+            Message::CategoryPickerSelect(chosen) => {
+                let Some(picker) = self.category_picker.take() else {
+                    return;
+                };
+                match picker.target {
+                    CategoryPickerTarget::Todo(todo_id) => {
+                        let client = self.client.clone();
+                        let handle = self.handle.clone();
+                        let proxy = self.proxy.clone();
+                        handle.spawn(async move {
+                            let res = client
+                                .set_todo_category(todo_id, chosen)
+                                .await
+                                .map(|_| ())
+                                .map_err(|e| e.to_string());
+                            let _ = proxy
+                                .send_event(Message::Todo(todo::Message::CategoryMutated(res)));
+                        });
+                    }
+                    CategoryPickerTarget::Category(category_id) => {
+                        let client = self.client.clone();
+                        let handle = self.handle.clone();
+                        let proxy = self.proxy.clone();
+                        handle.spawn(async move {
+                            let res = client
+                                .reparent_category(category_id, chosen)
+                                .await
+                                .map(|_| ())
+                                .map_err(|e| e.to_string());
+                            let _ = proxy
+                                .send_event(Message::Todo(todo::Message::CategoryMutated(res)));
+                        });
+                    }
+                }
             }
             Message::DatabaseSourceContextMenuClose => {
                 self.database_source_menu = None;
@@ -6457,7 +6606,9 @@ impl App {
                         let emit = move |m: todo::Message| {
                             let _ = proxy.send_event(Message::Todo(m));
                         };
-                        todo::request_todos_refresh(project_id, &client, &handle, emit);
+                        let emit_todos = emit.clone();
+                        todo::request_todos_refresh(project_id, &client, &handle, emit_todos);
+                        todo::request_categories_refresh(project_id, &client, &handle, emit);
                     }
                 }
                 PanelKind::Database => self.with_focused_project(|ws, _io| {
@@ -7058,6 +7209,137 @@ impl App {
             .into()
     }
 
+    /// Todo 分类树节点右键菜单浮层:新建子/同级分类、重命名、删除、上移/
+    /// 下移、移动到...。定位坐标复用 `files.last_right_click`。
+    fn category_context_menu_popup<'a>(
+        &self,
+    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+        let menu = match &self.category_context_menu {
+            Some(m) => m,
+            None => return column![].into(),
+        };
+        let id = menu.id;
+        // 被右键节点的 parent_id,给"新建同级分类"用(同级 = 挂在同一个
+        // parent_id 下)。取不到就退化为顶层。
+        let sibling_parent_id = self.active_workspace().and_then(|ws| {
+            ws.todo
+                .categories()
+                .iter()
+                .find(|c| c.id == id)
+                .and_then(|c| c.parent_id)
+        });
+        let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = vec![
+            crate::menu::item::<Message>(
+                Some(icons::IconKind::SquarePlus),
+                "新建子分类",
+                Message::Todo(todo::Message::CategoryNewChild(id)),
+            ),
+            crate::menu::item::<Message>(
+                Some(icons::IconKind::SquarePlus),
+                "新建同级分类",
+                Message::Todo(todo::Message::CategoryNewSibling(sibling_parent_id)),
+            ),
+            crate::menu::item::<Message>(
+                Some(icons::IconKind::ChevronUp),
+                "上移",
+                Message::Todo(todo::Message::CategoryMoveSibling(
+                    id,
+                    dozer_core::protocol::CategoryMoveDirection::Up,
+                )),
+            ),
+            crate::menu::item::<Message>(
+                Some(icons::IconKind::ChevronDown),
+                "下移",
+                Message::Todo(todo::Message::CategoryMoveSibling(
+                    id,
+                    dozer_core::protocol::CategoryMoveDirection::Down,
+                )),
+            ),
+            crate::menu::item::<Message>(
+                Some(icons::IconKind::FolderOpen),
+                "移动到...",
+                Message::Todo(todo::Message::CategoryReparentPickerOpen(id)),
+            ),
+            crate::menu::item::<Message>(
+                Some(icons::IconKind::Rename),
+                "重命名",
+                Message::Todo(todo::Message::CategoryRenameStart(id)),
+            ),
+            crate::menu::item::<Message>(
+                Some(icons::IconKind::Trash),
+                "删除",
+                Message::Todo(todo::Message::CategoryDelete(id)),
+            ),
+        ];
+        let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+            crate::menu::shell(items, Length::Shrink);
+        container(list)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(Padding {
+                top: menu.y,
+                left: menu.x,
+                right: 0.0,
+                bottom: 0.0,
+            })
+            .into()
+    }
+
+    /// 分类选择器浮层:列出当前项目的全部分类节点(全展开按 depth 缩进
+    /// 平铺),点"未分类"或某个节点即把 `category_picker` 目标落盘
+    /// (Category → reparent, Todo → set_todo_category)并关闭。
+    fn category_picker_popup<'a>(
+        &self,
+    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+        let Some(picker) = &self.category_picker else {
+            return column![].into();
+        };
+        let categories = self
+            .active_workspace()
+            .map(|ws| ws.todo.categories().to_vec())
+            .unwrap_or_default();
+        let mut list = column![].spacing(2);
+        list = list.push(
+            button(text("未分类").size(byteui::theme::font::body()))
+                .on_press(Message::CategoryPickerSelect(None))
+                .width(Length::Fill)
+                .padding([6, 10]),
+        );
+        // 复用一份没有展开态(全展开)的拍平——选择器只做单次选择,不需要
+        // 折叠交互,直接把整棵树按 depth 缩进平铺出来最简单。
+        let all_expanded: std::collections::HashSet<i64> =
+            categories.iter().map(|c| c.id).collect();
+        for row in todo::visible_category_rows(&categories, &all_expanded) {
+            list = list.push(
+                button(
+                    text(format!("{}{}", "  ".repeat(row.depth), row.name))
+                        .size(byteui::theme::font::body()),
+                )
+                .on_press(Message::CategoryPickerSelect(Some(row.id)))
+                .width(Length::Fill)
+                .padding([6, 10]),
+            );
+        }
+        container(list)
+            .width(Length::Fixed(220.0))
+            .padding(Padding {
+                top: picker.y,
+                left: picker.x,
+                right: 0.0,
+                bottom: 0.0,
+            })
+            .style(move |_t: &iced_widget::Theme| container::Style {
+                background: Some(byteui::theme::color::current().card.into()),
+                border: Border {
+                    color: byteui::theme::color::current().border,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..container::Style::default()
+            })
+            .into()
+    }
+
     /// 数据库面板数据源树 header 行右键菜单浮层:测试连接/编辑/删除/刷新。
     /// 定位坐标复用 `files.last_right_click`。"刷新"只有该数据源当前已
     /// 展开(有 schema 树数据)才可点,未展开时置灰——展开动作本身走左键
@@ -7366,6 +7648,28 @@ impl App {
             )
             .on_press(Message::ProjectLinkContextMenuClose);
             stack![base, dismiss, self.project_link_context_menu_popup()]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else if self.category_context_menu.is_some() {
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::CategoryContextMenuClose);
+            stack![base, dismiss, self.category_context_menu_popup()]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else if self.category_picker.is_some() {
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::CategoryPickerClose);
+            stack![base, dismiss, self.category_picker_popup()]
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
