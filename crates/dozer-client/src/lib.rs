@@ -3,6 +3,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use dozer_core::protocol::{
     AgentKind, AgentState, BookmarkInfo, BookmarkScope, ConversationSummary, PreviewContext,
+    TodoInfo,
     ProjectInfo, Reply, Request, SessionInfo, SessionSummaryPayload, TurnRecord, UsagePayload,
     decode_line, encode_line,
 };
@@ -269,6 +270,93 @@ impl Client {
             .await?
         {
             Reply::Bookmarks { bookmarks } => Ok(bookmarks),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn list_todos(&self, project_id: i64) -> Result<Vec<TodoInfo>> {
+        match self.roundtrip(&Request::ListTodos { project_id }).await? {
+            Reply::Todos { todos } => Ok(todos),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn add_todo(&self, project_id: i64, text: &str) -> Result<TodoInfo> {
+        match self
+            .roundtrip(&Request::AddTodo {
+                project_id,
+                text: text.into(),
+            })
+            .await?
+        {
+            Reply::Todo { todo } => Ok(todo),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn toggle_todo(&self, id: i64, done: bool) -> Result<TodoInfo> {
+        match self.roundtrip(&Request::ToggleTodo { id, done }).await? {
+            Reply::Todo { todo } => Ok(todo),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn edit_todo_text(&self, id: i64, text: &str) -> Result<TodoInfo> {
+        match self
+            .roundtrip(&Request::EditTodoText {
+                id,
+                text: text.into(),
+            })
+            .await?
+        {
+            Reply::Todo { todo } => Ok(todo),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn reorder_todo(&self, id: i64, after_id: Option<i64>) -> Result<TodoInfo> {
+        match self
+            .roundtrip(&Request::ReorderTodo { id, after_id })
+            .await?
+        {
+            Reply::Todo { todo } => Ok(todo),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn set_todo_plan_date(
+        &self,
+        id: i64,
+        plan_date: Option<&str>,
+    ) -> Result<TodoInfo> {
+        match self
+            .roundtrip(&Request::SetTodoPlanDate {
+                id,
+                plan_date: plan_date.map(String::from),
+            })
+            .await?
+        {
+            Reply::Todo { todo } => Ok(todo),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn record_todo_dispatch(&self, id: i64, session_id: &str) -> Result<TodoInfo> {
+        match self
+            .roundtrip(&Request::RecordTodoDispatch {
+                id,
+                session_id: session_id.into(),
+            })
+            .await?
+        {
+            Reply::Todo { todo } => Ok(todo),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
             other => bail!("意外应答: {other:?}"),
         }
     }
