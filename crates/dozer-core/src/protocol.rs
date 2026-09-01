@@ -215,6 +215,32 @@ pub struct TodoInfo {
     pub plan_date: Option<String>,
     pub dispatch_session_id: Option<String>,
     pub dispatch_at_ms: Option<u64>,
+    /// 所属分类节点 id,`None` = 未分类(2026-09-01 分类树设计新增)。
+    #[serde(default)]
+    pub category_id: Option<i64>,
+}
+
+/// 一个分类树节点(`dozerd` 的 `todo_categories` 表一行)。`parent_id ==
+/// None` 表示顶层节点。作用域按 `project_id` 隔离,不跨项目共享
+/// (2026-09-01 分类树设计)。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CategoryInfo {
+    pub id: i64,
+    pub project_id: i64,
+    pub parent_id: Option<i64>,
+    pub name: String,
+    /// 同一 `parent_id` 下的兄弟排序键,升序展示。
+    pub rank: i64,
+    pub created_ms: u64,
+}
+
+/// `MoveCategorySibling` 的方向:与同一 `parent_id` 下相邻的前一个/
+/// 后一个兄弟节点交换 `rank`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CategoryMoveDirection {
+    Up,
+    Down,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -451,6 +477,44 @@ pub enum Request {
         id: i64,
         session_id: String,
     },
+    /// 列出某项目全部分类节点,扁平返回(不分页,数据量小)。
+    ListCategories {
+        project_id: i64,
+    },
+    /// 新增分类,追加到 `parent_id` 下兄弟节点末尾。
+    AddCategory {
+        project_id: i64,
+        parent_id: Option<i64>,
+        name: String,
+    },
+    /// 重命名。`id` 不存在 → `Reply::Error`。
+    RenameCategory {
+        id: i64,
+        name: String,
+    },
+    /// 删除该节点及其全部子孙节点;原本挂在这棵子树下的任务全部降级为
+    /// 未分类(`category_id = NULL`),任务本身不删除。`id` 不存在 →
+    /// `Reply::Error`。
+    DeleteCategory {
+        id: i64,
+    },
+    /// 重新挂到 `new_parent_id` 下(`None` = 顶层),追加到新父节点子级
+    /// 末尾。目标是自己或自己的子孙时 → `Reply::Error`(防止成环)。
+    ReparentCategory {
+        id: i64,
+        new_parent_id: Option<i64>,
+    },
+    /// 与同一 `parent_id` 下相邻的前一个/后一个兄弟节点交换 `rank`。已经
+    /// 在最前/最后时对应方向是 no-op(仍返回 `Reply::Category`,不报错)。
+    MoveCategorySibling {
+        id: i64,
+        direction: CategoryMoveDirection,
+    },
+    /// 挂/摘任务的分类。`category_id: None` = 摘掉分类,变回未分类。
+    SetTodoCategory {
+        id: i64,
+        category_id: Option<i64>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -556,6 +620,12 @@ pub enum Reply {
     },
     Todo {
         todo: TodoInfo,
+    },
+    Categories {
+        categories: Vec<CategoryInfo>,
+    },
+    Category {
+        category: CategoryInfo,
     },
 }
 
@@ -1303,6 +1373,7 @@ mod tests {
             plan_date: Some("08-10".into()),
             dispatch_session_id: None,
             dispatch_at_ms: None,
+            category_id: None,
         };
         let reply = Reply::Todo { todo: todo.clone() };
         let line = encode_line(&reply);
@@ -1313,5 +1384,49 @@ mod tests {
         let line = encode_line(&list_reply);
         let back: Reply = decode_line(&line).unwrap();
         assert_eq!(list_reply, back);
+    }
+
+    #[test]
+    fn category_protocol_types_roundtrip() {
+        let req = Request::AddCategory {
+            project_id: 1,
+            parent_id: Some(2),
+            name: "前端".into(),
+        };
+        let line = encode_line(&req);
+        let decoded: Request = decode_line(&line).unwrap();
+        assert_eq!(req, decoded);
+
+        let category = CategoryInfo {
+            id: 10,
+            project_id: 1,
+            parent_id: Some(2),
+            name: "前端".into(),
+            rank: 0,
+            created_ms: 1_700_000_000_000,
+        };
+        let reply = Reply::Category {
+            category: category.clone(),
+        };
+        let line = encode_line(&reply);
+        let decoded: Reply = decode_line(&line).unwrap();
+        assert_eq!(reply, decoded);
+
+        let list_reply = Reply::Categories {
+            categories: vec![category],
+        };
+        let line = encode_line(&list_reply);
+        let decoded: Reply = decode_line(&line).unwrap();
+        assert_eq!(list_reply, decoded);
+    }
+
+    #[test]
+    fn todo_info_category_id_defaults_to_none_when_absent_from_json() {
+        // 老协议帧没有 category_id 字段,新增字段要能优雅缺省,不报错。
+        let json = r#"{"id":1,"project_id":1,"text":"任务","done":false,"rank":0,
+            "created_ms":0,"completed_at_ms":null,"plan_date":null,
+            "dispatch_session_id":null,"dispatch_at_ms":null}"#;
+        let todo: TodoInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(todo.category_id, None);
     }
 }
