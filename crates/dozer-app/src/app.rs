@@ -3209,12 +3209,30 @@ impl App {
             return;
         };
         let was_focused = ws.todo.content_edit_focused();
-        if was_focused && !focused {
-            // Task 6 临时版本:失焦直接丢弃草稿。真正的 `edit_todo_text`
-            // 提交在 Task 7 由调用方发起。
-            ws.todo.cancel_content_edit();
-        }
+        // 失焦回退:取走待提交的草稿改动(`commit_content_edit` 返回
+        // `Some((id, new_text))` 表示草稿确有改动,且会消费 `editing_content`);
+        // 无改动/空草稿返回 `None`,到此随 `editing_content` 一并丢弃。
+        let pending_commit = if was_focused && !focused {
+            ws.todo.commit_content_edit()
+        } else {
+            None
+        };
         ws.todo.set_content_edit_focused_flag(focused);
+        // 先把 `ws` 的借用放掉,再经 self 的 client/handle/proxy 发起异步提交
+        // (否则 `active_workspace_mut` 对 `self` 的可变借用会挡住 `self.client`)。
+        if let Some((id, new_text)) = pending_commit {
+            let client = self.client.clone();
+            let handle = self.handle.clone();
+            let proxy = self.proxy.clone();
+            handle.spawn(async move {
+                let res = client
+                    .edit_todo_text(id, &new_text)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string());
+                let _ = proxy.send_event(Message::Todo(todo::Message::Mutated(res)));
+            });
+        }
     }
 
     /// 当前左栏显示哪个面板(main.rs 每帧 `interface.operate` 捕获 Todo 自绘

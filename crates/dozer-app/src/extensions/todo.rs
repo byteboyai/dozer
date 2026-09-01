@@ -260,6 +260,16 @@ impl WorkspaceState {
         &self.items
     }
 
+    /// 反查:这个 `session_id` 是不是某条 Todo 任务派发出来的会话,是的话
+    /// 返回该任务原文——给 Agent 卡片"当前工作内容"当主选数据源用。
+    /// `TodoInfo` 自带 `dispatch_session_id`,不再需要额外的元数据表查询。
+    pub fn task_title_for_session<'a>(&'a self, session_id: &str) -> Option<&'a str> {
+        self.items
+            .iter()
+            .find(|item| item.dispatch_session_id.as_deref() == Some(session_id))
+            .map(|item| item.text.as_str())
+    }
+
     /// 关闭派发选择层(选中目标后,或 Esc)。
     pub fn close_dispatch_popup(&mut self) {
         self.dispatch_open = None;
@@ -337,11 +347,20 @@ impl WorkspaceState {
         std::mem::take(&mut self.content_edit_focus_pending)
     }
 
-    /// 失焦退出任务内容编辑态(`App::set_todo_content_focused` 无项目时用):
-    /// 直接丢弃半输入。内容编辑是点卡片文字才弹出的一次性行内编辑,行为对齐
-    /// 项目树重命名(`cancel_tree_edit`)而不是搜索框。
-    pub fn cancel_content_edit(&mut self) {
-        self.editing_content = None;
+    /// 失焦退出任务内容编辑态。返回 `Some((id, new_text))` 表示有改动需要
+    /// 提交,调用方(`App::set_todo_content_focused`)据此发起
+    /// `client.edit_todo_text`;返回 `None` 表示无改动或草稿为空,纯丢弃。
+    pub fn commit_content_edit(&mut self) -> Option<(i64, String)> {
+        let (idx, draft) = self.editing_content.take()?;
+        let new_text = draft.text().trim().to_string();
+        if new_text.is_empty() {
+            return None;
+        }
+        let item = self.items.get(idx)?;
+        if item.text == new_text {
+            return None;
+        }
+        Some((item.id, new_text))
     }
 
     /// 是否正在拖拽排序(main.rs 鼠标释放路由 + about_to_wait 持续重绘用)。
@@ -771,9 +790,40 @@ pub fn update(
             }
         }
         Message::DragEnd => {
-            // 排序落盘逻辑由 Task 7 接入 `client.reorder_todo`,本任务只
-            // 保留拖拽进行态清理,不重排。
-            ws_state.drag = None;
+            let Some(drag) = ws_state.drag.take() else {
+                return;
+            };
+            if drag.source_idx == drag.target_idx {
+                return;
+            }
+            let Some(source_item) = ws_state.items.get(drag.source_idx) else {
+                return;
+            };
+            let id = source_item.id;
+            // target_idx == usize::MAX 表示拖到待办块末尾(悬停到已完成
+            // 卡片),此时 after_id 取"当前最后一个待办"的 id;否则取
+            // target_idx 对应任务的 id(挪到它之后)。
+            let after_id = if drag.target_idx == usize::MAX {
+                // 先排除被拖动的任务本身再取"待办块末尾"——否则被拖的刚好
+                // 就是原本最后一条待办时,会把自己算成自己的 after_id 而
+                // 被过滤掉,错误地退化成"挪到最前"。
+                ws_state
+                    .items
+                    .iter()
+                    .rfind(|it| !it.done && it.id != id)
+                    .map(|it| it.id)
+            } else {
+                ws_state.items.get(drag.target_idx).map(|it| it.id)
+            };
+            let client = client.clone();
+            handle.spawn(async move {
+                let res = client
+                    .reorder_todo(id, after_id)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string());
+                emit(Message::Mutated(res));
+            });
         }
         Message::DispatchOpen(idx) => ws_state.dispatch_open = Some(idx),
         Message::DispatchClose => ws_state.dispatch_open = None,
@@ -801,8 +851,18 @@ pub fn update(
             ws_state.calendar_view = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
         }
         Message::CalendarPick(idx, day) => {
-            // 计划日期落盘逻辑由 Task 7 接入 `client.set_todo_plan_date`。
-            let _ = (idx, day);
+            if let Some(item) = ws_state.items.get(idx) {
+                let id = item.id;
+                let client = client.clone();
+                handle.spawn(async move {
+                    let res = client
+                        .set_todo_plan_date(id, Some(&day))
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| e.to_string());
+                    emit(Message::Mutated(res));
+                });
+            }
             ws_state.close_calendar_popup();
         }
         Message::ContentEditStart(idx) => {
@@ -826,10 +886,33 @@ pub fn update(
             ws_state.content_edit_focus_pending = true;
         }
         Message::ContentEdit(action) => {
-            // 本任务先只做本地草稿编辑、回车不提交——真正的 `edit_todo_text`
-            // 提交在 Task 7 接入。见 `commit_content_edit` 的临时版本说明。
-            if let Some((_, content)) = ws_state.editing_content.as_mut() {
-                content.perform(action);
+            let is_enter = matches!(
+                action,
+                iced_widget::text_editor::Action::Edit(iced_widget::text_editor::Edit::Enter)
+            );
+            if let Some((idx, draft)) = ws_state.editing_content.as_mut() {
+                draft.perform(action.clone());
+                if is_enter {
+                    let idx = *idx;
+                    let new_text = draft.text().trim().to_string();
+                    let old_item = ws_state.items.get(idx).cloned();
+                    ws_state.editing_content = None;
+                    if let Some(old_item) = old_item
+                        && !new_text.is_empty()
+                        && old_item.text != new_text
+                    {
+                        let id = old_item.id;
+                        let client = client.clone();
+                        handle.spawn(async move {
+                            let res = client
+                                .edit_todo_text(id, &new_text)
+                                .await
+                                .map(|_| ())
+                                .map_err(|e| e.to_string());
+                            emit(Message::Mutated(res));
+                        });
+                    }
+                }
             }
         }
         Message::DispatchToExisting(..) => {
@@ -2040,9 +2123,9 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 mod tests {
     use super::*;
 
-    fn info(text: &str, done: bool) -> TodoInfo {
+    fn todo_info(id: i64, text: &str, done: bool) -> TodoInfo {
         TodoInfo {
-            id: 1,
+            id,
             project_id: 1,
             text: text.to_string(),
             done,
@@ -2057,7 +2140,7 @@ mod tests {
 
     #[test]
     fn display_state_done_wins_over_dispatch() {
-        let mut item = info("任务A", true);
+        let mut item = todo_info(1, "任务A", true);
         item.dispatch_session_id = Some("s1".into());
         assert_eq!(todo_display_state(&item, true), TodoState::Done);
         item.done = false;
@@ -2069,9 +2152,9 @@ mod tests {
 
     fn sample_states() -> Vec<TodoInfo> {
         vec![
-            info("修复登录页闪烁", false),
-            info("补 README 安装说明", true),
-            info("给 claude 指派生成报告", false),
+            todo_info(1, "修复登录页闪烁", false),
+            todo_info(2, "补 README 安装说明", true),
+            todo_info(3, "给 claude 指派生成报告", false),
         ]
     }
 
@@ -2157,5 +2240,63 @@ mod tests {
     fn format_month_day_from_ms() {
         // 1970-01-01 的毫秒。
         assert_eq!(format_todo_month_day(0), "01-01");
+    }
+
+    #[test]
+    fn task_title_for_session_finds_dispatched_task() {
+        let mut ws_state = WorkspaceState {
+            items: vec![todo_info(1, "任务A", false), todo_info(2, "任务B", false)],
+            ..Default::default()
+        };
+        ws_state.items[1].dispatch_session_id = Some("sess-1".to_string());
+        assert_eq!(ws_state.task_title_for_session("sess-1"), Some("任务B"));
+    }
+
+    #[test]
+    fn task_title_for_session_none_when_no_dispatch_matches() {
+        let ws_state = WorkspaceState {
+            items: vec![todo_info(1, "任务A", false)],
+            ..Default::default()
+        };
+        assert_eq!(ws_state.task_title_for_session("sess-1"), None);
+    }
+
+    fn editing_state(text: &str) -> WorkspaceState {
+        WorkspaceState {
+            items: vec![todo_info(7, "旧文字", false)],
+            editing_content: Some((0, iced_widget::text_editor::Content::with_text(text))),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn commit_content_edit_returns_id_and_text_when_changed() {
+        let mut ws_state = editing_state("新文字");
+        let result = ws_state.commit_content_edit();
+        assert_eq!(result, Some((7, "新文字".to_string())));
+        assert!(ws_state.editing_content.is_none());
+    }
+
+    #[test]
+    fn commit_content_edit_none_when_unchanged() {
+        let mut ws_state = WorkspaceState {
+            items: vec![todo_info(7, "同样的文字", false)],
+            editing_content: Some((
+                0,
+                iced_widget::text_editor::Content::with_text("同样的文字"),
+            )),
+            ..Default::default()
+        };
+        assert_eq!(ws_state.commit_content_edit(), None);
+    }
+
+    #[test]
+    fn commit_content_edit_none_when_draft_empty() {
+        let mut ws_state = WorkspaceState {
+            items: vec![todo_info(7, "旧文字", false)],
+            editing_content: Some((0, iced_widget::text_editor::Content::new())),
+            ..Default::default()
+        };
+        assert_eq!(ws_state.commit_content_edit(), None);
     }
 }

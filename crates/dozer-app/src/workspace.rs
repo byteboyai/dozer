@@ -2939,12 +2939,12 @@ pub(crate) fn agent_list_pane<'a>(
 
 /// Agent 面板里单条会话卡片,三行:1) 图标 + agent 名(+ `(model, mode)`,
 /// 只要有一项能读到就跟名字拼一起,两项都没有就只显示名字);2) "当前
-/// 工作内容"(优先 transcript 最后活动摘要兜底,都没有就省略)紧跟工作区
-/// 文案(分支名+脏标),同一行不换行(卡片改版要求,work_content 在前);
-/// 3) 状态点 + 状态文字。整卡可点选中该 tab(`idx == ws.active` 时金色
-/// 边框高亮、无背景;hover 时显示 `CARD` 背景 + 金色边框)。Task 6 起
-/// `work_content` 直接用 `tab.last_activity`(不再反查 `todo::AppState`
-/// 派发记录)。
+/// 工作内容"(优先 Todo 任务派发出来时反查到的任务标题,拿不到就用
+/// transcript 最后活动摘要兜底,都没有就省略)紧跟工作区文案(分支名+脏标),
+/// 同一行不换行(卡片改版要求,work_content 在前);3) 状态点 + 状态文字。
+/// 整卡可点选中该 tab(`idx == ws.active` 时金色边框高亮、无背景;hover 时
+/// 显示 `CARD` 背景 + 金色边框)。Task 6 起 `TodoInfo` 自带派发记录,
+/// `task_title_for_session` 不再需要 `app` 侧的元数据表(见 todo.rs)。
 pub(crate) fn agent_card<'a>(
     ws: &'a Workspace,
     idx: usize,
@@ -2973,7 +2973,11 @@ pub(crate) fn agent_card<'a>(
     ]
     .spacing(4);
 
-    let work_content = tab.last_activity.clone();
+    let work_content = ws
+        .todo
+        .task_title_for_session(&tab.info.id)
+        .map(str::to_string)
+        .or_else(|| tab.last_activity.clone());
 
     let (branch, dirty) = match &tab.workspace_override {
         Some(w) => (w.branch.as_deref(), w.dirty),
