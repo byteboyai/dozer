@@ -162,10 +162,20 @@ async fn finalize_session_summary(
     timeout: std::time::Duration,
     poll_interval: std::time::Duration,
 ) {
-    let deadline = tokio::time::Instant::now() + timeout;
+    let started_at = tokio::time::Instant::now();
+    let deadline = started_at + timeout;
+    let mut poll_count: u32 = 0;
     loop {
         match session_summaries.get(&session_id) {
-            Ok(Some(_)) => break,
+            Ok(Some(_)) => {
+                tracing::info!(
+                    %session_id,
+                    poll_count,
+                    elapsed_ms = started_at.elapsed().as_millis() as u64,
+                    "总结已由 agent 落库,即将 kill 会话"
+                );
+                break;
+            }
             Ok(None) => {}
             Err(e) => tracing::error!(error = %e, %session_id, "查询会话总结失败"),
         }
@@ -189,11 +199,18 @@ async fn finalize_session_summary(
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0),
             };
+            tracing::info!(
+                %session_id,
+                poll_count,
+                elapsed_ms = started_at.elapsed().as_millis() as u64,
+                "等待 agent 落库总结超时,改用启发式兜底,即将 kill 会话"
+            );
             if let Err(e) = session_summaries.record(&payload) {
                 tracing::error!(error = %e, %session_id, "启发式兜底总结落库失败");
             }
             break;
         }
+        poll_count += 1;
         tokio::time::sleep(poll_interval).await;
     }
     if let Err(e) = registry.kill(&session_id) {
