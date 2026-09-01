@@ -21,6 +21,7 @@ pub async fn serve(
     transcripts: Arc<crate::transcripts::TranscriptStore>,
     session_summaries: Arc<crate::session_summary::SessionSummaryStore>,
     backfill_registry: Arc<crate::session_summary_backfill::BackfillRegistry>,
+    todos: Arc<crate::todo::TodoStore>,
 ) -> Result<()> {
     let preview_contexts = Arc::new(PreviewContextStore::new());
     if socket.exists() {
@@ -47,6 +48,7 @@ pub async fn serve(
         let transcripts = transcripts.clone();
         let session_summaries = session_summaries.clone();
         let backfill_registry = backfill_registry.clone();
+        let todos = todos.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_conn(
                 stream,
@@ -58,6 +60,7 @@ pub async fn serve(
                 transcripts,
                 session_summaries,
                 backfill_registry,
+                todos.clone(),
             )
             .await
             {
@@ -221,6 +224,7 @@ async fn handle_conn(
     transcripts: Arc<crate::transcripts::TranscriptStore>,
     session_summaries: Arc<crate::session_summary::SessionSummaryStore>,
     backfill_registry: Arc<crate::session_summary_backfill::BackfillRegistry>,
+    todos: Arc<crate::todo::TodoStore>,
 ) -> Result<()> {
     let (r, mut w) = stream.into_split();
     let mut lines = BufReader::new(r).lines();
@@ -344,7 +348,14 @@ async fn handle_conn(
                             }
                         }
                         Request::OpenProject { path } => match projects.open(&path) {
-                            Ok(p) => Reply::Project { project: Some(p) },
+                            Ok(p) => {
+                                if let Err(e) =
+                                    todos.import_legacy_if_needed(p.id, Path::new(&path))
+                                {
+                                    tracing::warn!(project_id = p.id, error = %e, "Todo 历史导入失败");
+                                }
+                                Reply::Project { project: Some(p) }
+                            }
                             Err(e) => Reply::Error { message: format!("打开项目失败: {e}") },
                         },
                         Request::ListProjects => match projects.list() {
@@ -388,6 +399,58 @@ async fn handle_conn(
                                 Ok(bookmarks) => Reply::Bookmarks { bookmarks },
                                 Err(e) => Reply::Error {
                                     message: format!("列收藏失败: {e}"),
+                                },
+                            }
+                        }
+                        Request::ListTodos { project_id } => match todos.list(project_id) {
+                            Ok(todos) => Reply::Todos { todos },
+                            Err(e) => Reply::Error {
+                                message: format!("列任务失败: {e}"),
+                            },
+                        },
+                        Request::AddTodo { project_id, text } => {
+                            match todos.add(project_id, &text) {
+                                Ok(todo) => Reply::Todo { todo },
+                                Err(e) => Reply::Error {
+                                    message: format!("新增任务失败: {e}"),
+                                },
+                            }
+                        }
+                        Request::ToggleTodo { id, done } => match todos.toggle(id, done) {
+                            Ok(todo) => Reply::Todo { todo },
+                            Err(e) => Reply::Error {
+                                message: format!("切换完成态失败: {e}"),
+                            },
+                        },
+                        Request::EditTodoText { id, text } => {
+                            match todos.edit_text(id, &text) {
+                                Ok(todo) => Reply::Todo { todo },
+                                Err(e) => Reply::Error {
+                                    message: format!("改任务文字失败: {e}"),
+                                },
+                            }
+                        }
+                        Request::ReorderTodo { id, after_id } => {
+                            match todos.reorder(id, after_id) {
+                                Ok(todo) => Reply::Todo { todo },
+                                Err(e) => Reply::Error {
+                                    message: format!("排序失败: {e}"),
+                                },
+                            }
+                        }
+                        Request::SetTodoPlanDate { id, plan_date } => {
+                            match todos.set_plan_date(id, plan_date.as_deref()) {
+                                Ok(todo) => Reply::Todo { todo },
+                                Err(e) => Reply::Error {
+                                    message: format!("设置计划日期失败: {e}"),
+                                },
+                            }
+                        }
+                        Request::RecordTodoDispatch { id, session_id } => {
+                            match todos.record_dispatch(id, &session_id) {
+                                Ok(todo) => Reply::Todo { todo },
+                                Err(e) => Reply::Error {
+                                    message: format!("记录派发失败: {e}"),
                                 },
                             }
                         }
@@ -645,6 +708,7 @@ mod tests {
     #[test]
     fn transcript_store_field_compiles_into_serve_signature() {
         // 编译期检查:确认 `serve` 函数签名接受 `Arc<TranscriptStore>` 与 `Arc<SessionSummaryStore>`。
+        #[allow(clippy::too_many_arguments)]
         fn _assert_signature(
             socket: &std::path::Path,
             registry: std::sync::Arc<crate::registry::SessionRegistry>,
@@ -653,6 +717,7 @@ mod tests {
             bookmarks: std::sync::Arc<crate::bookmarks::BookmarkStore>,
             transcripts: std::sync::Arc<crate::transcripts::TranscriptStore>,
             session_summaries: std::sync::Arc<crate::session_summary::SessionSummaryStore>,
+            todos: std::sync::Arc<crate::todo::TodoStore>,
         ) {
             let fut = crate::server::serve(
                 socket,
@@ -663,6 +728,7 @@ mod tests {
                 transcripts,
                 session_summaries,
                 std::sync::Arc::new(crate::session_summary_backfill::BackfillRegistry::new()),
+                todos,
             );
             std::mem::drop(fut);
         }
