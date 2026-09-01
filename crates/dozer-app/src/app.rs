@@ -4517,8 +4517,22 @@ impl App {
                 todo::Message::CategoryContextMenuOpen(id) => {
                     self.todo_category_context_menu(id);
                 }
+                // 以下几种分类动作都是从右键菜单里点出来的:先关掉菜单本
+                // 身(浮层 if-else 链里 `category_context_menu` 分支排在
+                // `category_picker` 之前,不关会导致"移动到..."开了选择器
+                // 却永远被菜单盖住),镜像 `files.rs::RenameStart` 落盘动作
+                // 时 `app_state.context_menu = None;` 的既有口径。
                 todo::Message::CategoryReparentPickerOpen(id) => {
+                    self.category_context_menu = None;
                     self.todo_category_picker_open(CategoryPickerTarget::Category(id));
+                }
+                todo::Message::CategoryNewChild(_)
+                | todo::Message::CategoryNewSibling(_)
+                | todo::Message::CategoryDelete(_)
+                | todo::Message::CategoryRenameStart(_)
+                | todo::Message::CategoryMoveSibling(_, _) => {
+                    self.category_context_menu = None;
+                    self.todo_message(msg);
                 }
                 todo::Message::CategoryPickerOpenForTodo(todo_id) => {
                     self.todo_category_picker_open(CategoryPickerTarget::Todo(todo_id));
