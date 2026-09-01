@@ -143,17 +143,6 @@ pub(crate) enum PickerLaunch {
     Git,
 }
 
-/// 通用文本输入事件(验收意见框/搜索弹层/项目树行内编辑共用):由 main.rs
-/// 的键盘拦截层在对应输入被聚焦时翻译产生(字符/退格/回车/Esc),不经过
-/// keymap 的 PTY 字节翻译。地址栏已迁移 iced 原生 text_input,不再是消费方。
-#[derive(Debug, Clone)]
-pub enum AddrEvent {
-    Text(String),
-    Backspace,
-    Submit,
-    Cancel,
-}
-
 /// 审阅内容的来源（P1j）：活会话 tab（回合结束刷新）或对话面板的
 /// session 详情(2026-08-27，整段摊平加载)。原 `ReviewSource::FileRange`
 /// (历史对话文件里某个回合区间)已随会话树改造一并移除。
@@ -2192,9 +2181,6 @@ impl Workspace {
         if let Some(project) = self.project.as_ref() {
             let path = std::path::Path::new(&project.path);
             self.project_panel.submit_description_edit_on_blur(path);
-            // MARKDOWN 整文件编辑在失焦时写盘(回车是换行、没有独立提交,
-            // 失焦即提交);Esc 才是丢弃,见 `MarkdownEvent(Cancel)`。
-            self.todo.cancel_markdown_edit(path);
         }
         // 任务内容行内编辑的失焦落盘/丢弃判断已经从 `blur_inputs` 搬走——
         // 改由 `App::set_todo_content_focused` 的边缘触发(`CaptureContentEditFocus`
@@ -2935,7 +2921,7 @@ pub(crate) fn agent_list_pane<'a>(
                 .spacing(8),
             );
             for idx in idxs {
-                content = content.push(agent_card(app, ws, idx));
+                content = content.push(agent_card(ws, idx));
             }
         }
     }
@@ -2953,15 +2939,13 @@ pub(crate) fn agent_list_pane<'a>(
 
 /// Agent 面板里单条会话卡片,三行:1) 图标 + agent 名(+ `(model, mode)`,
 /// 只要有一项能读到就跟名字拼一起,两项都没有就只显示名字);2) "当前
-/// 工作内容"(优先 Todo 派发的任务标题,拿不到就用 transcript 最后活动
-/// 摘要兜底,都没有就省略)紧跟工作区文案(分支名+脏标),同一行不换行
-/// (卡片改版要求,work_content 在前);3) 状态点 + 状态文字。整卡可点
-/// 选中该 tab(`idx == ws.active` 时金色边框高亮、无背景;hover 时显示
-/// `CARD` 背景 + 金色边框)。`app` 只用来读 `todo::AppState`(派发记录反查
-/// 要跨 `App`/`Workspace` 两边的状态,`agent_card` 原先读不到 `App`,
-/// 调用链上唯一多穿一层的地方)。
+/// 工作内容"(优先 transcript 最后活动摘要兜底,都没有就省略)紧跟工作区
+/// 文案(分支名+脏标),同一行不换行(卡片改版要求,work_content 在前);
+/// 3) 状态点 + 状态文字。整卡可点选中该 tab(`idx == ws.active` 时金色
+/// 边框高亮、无背景;hover 时显示 `CARD` 背景 + 金色边框)。Task 6 起
+/// `work_content` 直接用 `tab.last_activity`(不再反查 `todo::AppState`
+/// 派发记录)。
 pub(crate) fn agent_card<'a>(
-    app: &'a App,
     ws: &'a Workspace,
     idx: usize,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -2989,14 +2973,7 @@ pub(crate) fn agent_card<'a>(
     ]
     .spacing(4);
 
-    let work_content = ws
-        .project_id()
-        .and_then(|project_id| {
-            ws.todo
-                .task_title_for_session(app.todo_meta(), project_id, &tab.info.id)
-        })
-        .map(str::to_string)
-        .or_else(|| tab.last_activity.clone());
+    let work_content = tab.last_activity.clone();
 
     let (branch, dirty) = match &tab.workspace_override {
         Some(w) => (w.branch.as_deref(), w.dirty),

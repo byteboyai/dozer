@@ -1200,31 +1200,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
-            // Todo MARKDOWN 整文件编辑:键盘直达自绘输入(不经 keymap、不
-            // 进 PTY)。验收意见/项目名称编辑/右键"搜索"弹窗查询框均已迁移
-            // iced 原生 text_input,走上面那道独立的原生放行闸门,不再在此列;
-            // 文件预览面板已不再有地址栏;文件树搜索框/项目树行内编辑框/浏览器
-            // 地址栏/Todo 面板搜索框、新增任务框、任务内容编辑框/首页项目搜索框
-            // 均已迁移 iced 原生控件,走上面那道独立的原生放行闸门,不再在此列。
+            // Todo/浏览器/文件树/项目树等面板输入均已迁移 iced 原生
+            // text_input/text_editor,走上面那道独立的原生放行闸门,不再在此列。
             // 提到 ⌘ 组合键判断之前,因为 ⌘V 粘贴也要认这套聚焦态(见下方 fix)。
-            let to_todo_markdown = app.todo_markdown_editing();
-            let to_self_drawn_input = to_todo_markdown;
-            // 优先级:Todo MARKDOWN 整文件编辑(文件树搜索框、项目树行内编辑框、
-            // 浏览器地址栏、Todo 面板搜索框/新增任务框/任务内容编辑框、首页项目
-            // 搜索框、验收意见、项目名称、右键搜索弹窗都已迁 iced 原生
-            // text_input/text_editor,走上面新增的独立放行闸门,不再在此列)。
-            // ⌘V 粘贴与逐字符输入共用这条链,保证两条路径落进同一个自绘输入。
-            let addr_message = |ev: workspace::AddrEvent| -> Message {
-                Message::Todo(extensions::todo::Message::MarkdownEvent(ev))
-            };
 
-            // ⌘ 组合键是应用级快捷键，一律不进 PTY（此前 ⌘C 会把裸 "c"
-            // 漏写进终端）。⌘C 复制当前选区；⌘V 粘贴剪贴板——但若某个自绘
-            // 输入正聚焦（如 Todo 新增任务框），粘贴要落进那个输入而不是
-            // 终端：此前这里跳过了 `to_self_drawn_input` 判断，直接
-            // `TermPaste` 到终端，导致在自绘输入里粘贴文字会跑进正在运行的
-            // agent 终端（用户实测反馈，2026-08-18；逐字符输入不受影响，
-            // 因为那条路径本就在这道判断之后）。
+            // ⌘ 组合键是应用级快捷键，一律不进 PTY(此前 ⌘C 会把裸 "c"
+            // 漏写进终端)。⌘C 复制当前选区；⌘V 粘贴剪贴板——粘贴落进正在
+            // 聚焦的 iced 原生输入(经原生放行闸门),未聚焦则走 `TermPaste`。
             if modifiers.super_key() {
                 if let WindowEvent::KeyboardInput {
                     event,
@@ -1244,23 +1226,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             if let Some(text) =
                                 clipboard.read(iced_winit::core::clipboard::Kind::Standard)
                             {
-                                if to_self_drawn_input {
-                                    app.update(addr_message(workspace::AddrEvent::Text(text)));
-                                } else {
-                                    let target = app.keyboard_term_target();
-                                    app.update(Message::TermPaste(target, text));
-                                }
+                                let target = app.keyboard_term_target();
+                                app.update(Message::TermPaste(target, text));
                                 window.request_redraw();
-                            } else if !to_self_drawn_input
-                                && let Some(path) =
-                                    clipboard_image::read_pasteboard_image_as_temp_file()
+                            } else if let Some(path) =
+                                clipboard_image::read_pasteboard_image_as_temp_file()
                             {
                                 // 剪贴板没有文本表示(纯截图),iced 的
                                 // Clipboard::read 只认字符串,取不到图片
                                 // 字节。落临时 PNG,粘贴文件路径——claude
-                                // 等 CLI 会把路径识别成图片附件加载。自绘
-                                // 输入不需要这条(它们不接收图片附件),
-                                // `to_self_drawn_input` 时保持原样不处理。
+                                // 等 CLI 会把路径识别成图片附件加载。
                                 let target = app.keyboard_term_target();
                                 app.update(Message::TermPaste(
                                     target,
@@ -1271,45 +1246,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         }
                         _ => {}
                     }
-                }
-                return;
-            }
-
-            if to_self_drawn_input {
-                let addr_event = match event {
-                    WindowEvent::KeyboardInput {
-                        event,
-                        is_synthetic: false,
-                        ..
-                    } if event.state == ElementState::Pressed => {
-                        use winit::keyboard::{Key, NamedKey};
-                        match &event.logical_key {
-                            Key::Character(s) => Some(workspace::AddrEvent::Text(s.to_string())),
-                            Key::Named(NamedKey::Space) => {
-                                Some(workspace::AddrEvent::Text(" ".into()))
-                            }
-                            Key::Named(NamedKey::Backspace) => {
-                                Some(workspace::AddrEvent::Backspace)
-                            }
-                            // MARKDOWN 整文件编辑里回车是换行(多行文本),其它
-                            // 单行自绘输入回车才是提交。
-                            Key::Named(NamedKey::Enter) => Some(if to_todo_markdown {
-                                workspace::AddrEvent::Text("\n".into())
-                            } else {
-                                workspace::AddrEvent::Submit
-                            }),
-                            Key::Named(NamedKey::Escape) => Some(workspace::AddrEvent::Cancel),
-                            _ => None,
-                        }
-                    }
-                    WindowEvent::Ime(Ime::Commit(text)) => {
-                        Some(workspace::AddrEvent::Text(text.clone()))
-                    }
-                    _ => None,
-                };
-                if let Some(ev) = addr_event {
-                    app.update(addr_message(ev));
-                    window.request_redraw();
                 }
                 return;
             }
