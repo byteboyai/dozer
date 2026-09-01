@@ -3,9 +3,8 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use dozer_core::protocol::{
     AgentKind, AgentState, BookmarkInfo, BookmarkScope, ConversationSummary, PreviewContext,
-    TodoInfo,
-    ProjectInfo, Reply, Request, SessionInfo, SessionSummaryPayload, TurnRecord, UsagePayload,
-    decode_line, encode_line,
+    ProjectInfo, Reply, Request, SessionInfo, SessionSummaryPayload, TodoInfo, TurnRecord,
+    UsagePayload, decode_line, encode_line,
 };
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -329,11 +328,7 @@ impl Client {
         }
     }
 
-    pub async fn set_todo_plan_date(
-        &self,
-        id: i64,
-        plan_date: Option<&str>,
-    ) -> Result<TodoInfo> {
+    pub async fn set_todo_plan_date(&self, id: i64, plan_date: Option<&str>) -> Result<TodoInfo> {
         match self
             .roundtrip(&Request::SetTodoPlanDate {
                 id,
