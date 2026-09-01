@@ -1177,9 +1177,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             // text_input/text_editor 自己处理光标/选区/IME(同上面 Preview
             // 原生编辑器那道闸门的手法)。SSH/Database 用"表单是否打开"这个
             // 粗粒度信号(不像其它几个原生字段要每帧查真实焦点),表单打开时
-            // 整体放行,不区分表单内具体哪个字段聚焦。必须放在下面
-            // `to_self_drawn_input` 判断之前——未来某个自绘面板与它同时报
-            // "编辑态为真"时,不能让自绘分支抢先吞掉按键;也必须在 ⌘ 组合键
+            // 整体放行,不区分表单内具体哪个字段聚焦。必须放在 ⌘ 组合键
             // 判断(下方 `modifiers.super_key()` 分支)之前,否则 ⌘V 粘贴会
             // 被错误地转发进终端而不是交给 text_input 自己内置的粘贴处理。
             if app.files_search_focused()

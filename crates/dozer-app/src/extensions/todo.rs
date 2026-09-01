@@ -125,7 +125,6 @@ pub fn completed_at_for_toggle(
     done.then_some(now)
 }
 
-#[derive(Debug, Clone)]
 /// Todo 面板挂在每个 `Workspace` 上的状态。
 #[derive(Default)]
 pub struct WorkspaceState {

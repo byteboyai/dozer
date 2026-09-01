@@ -198,8 +198,8 @@ pub enum HoverId {
     /// SSH 面板自己 tab 条上某个 tab 的标题文字,按 host_id 的哈希区分
     /// (SSH tab 没有稳定的数字序号——按身份是 `(host_id, SshTabKind)`,
     /// `HoverId` 整体 `derive(Copy)`,`String` 不是 `Copy`,不能直接塞
-    /// `host_id.clone()`,用哈希值退化成 `u64`,同 `todo_line_key` 的
-    /// 既有精度取舍)。
+    /// `host_id.clone()`,用哈希值退化成 `u64`,不要求无碰撞,只要求
+    /// "实践中够用"。
     SshTabItem(u64),
     /// SSH 面板自己 tab 条上某个 tab 的关闭按钮(×),同上按 host_id 哈希区分。
     SshTabClose(u64),
@@ -8516,9 +8516,8 @@ where
 }
 
 /// `host_id` → `HoverId::SshTab{Item,Close}` 用的哈希键(`HoverId` 整体
-/// `derive(Copy)`,`String` 不是 `Copy`,退化成 `u64`,同 `todo_line_key`
-/// 的既有精度取舍——碰撞在同一台主机的 tab hover 高亮场景下不构成实际
-/// 风险)。
+/// `derive(Copy)`,`String` 不是 `Copy`,退化成 `u64`,不要求无碰撞——
+/// 碰撞在同一台主机的 tab hover 高亮场景下不构成实际风险)。
 pub(crate) fn ssh_tab_hover_key(host_id: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
