@@ -108,8 +108,9 @@ impl CategoryStore {
 
     pub fn rename(&self, id: i64, name: &str) -> Result<CategoryInfo> {
         let conn = self.conn.lock().expect("db lock");
-        let sql =
-            format!("UPDATE todo_categories SET name = ?1 WHERE id = ?2 RETURNING {CATEGORY_COLUMNS}");
+        let sql = format!(
+            "UPDATE todo_categories SET name = ?1 WHERE id = ?2 RETURNING {CATEGORY_COLUMNS}"
+        );
         conn.query_row(&sql, params![name, id], row_to_category)
             .map_err(|e| match e {
                 rusqlite::Error::QueryReturnedNoRows => id_not_found(id),
@@ -127,8 +128,9 @@ impl CategoryStore {
             for parent in frontier {
                 let mut stmt =
                     conn.prepare("SELECT id FROM todo_categories WHERE parent_id = ?1")?;
-                let children: Vec<i64> =
-                    stmt.query_map([parent], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+                let children: Vec<i64> = stmt
+                    .query_map([parent], |r| r.get(0))?
+                    .collect::<rusqlite::Result<_>>()?;
                 next.extend(children);
             }
             ids.extend(&next);
@@ -143,11 +145,9 @@ impl CategoryStore {
     pub fn delete(&self, id: i64) -> Result<()> {
         let mut conn = self.conn.lock().expect("db lock");
         let exists: bool = conn
-            .query_row(
-                "SELECT 1 FROM todo_categories WHERE id = ?1",
-                [id],
-                |_| Ok(()),
-            )
+            .query_row("SELECT 1 FROM todo_categories WHERE id = ?1", [id], |_| {
+                Ok(())
+            })
             .optional()?
             .is_some();
         if !exists {
@@ -156,14 +156,20 @@ impl CategoryStore {
         let subtree_ids = Self::collect_subtree_ids(&conn, id)?;
         let tx = conn.transaction()?;
         {
-            let placeholders = subtree_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-            let update_sql =
-                format!("UPDATE todos SET category_id = NULL WHERE category_id IN ({placeholders})");
-            let params: Vec<&dyn rusqlite::ToSql> =
-                subtree_ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+            let placeholders = subtree_ids
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(",");
+            let update_sql = format!(
+                "UPDATE todos SET category_id = NULL WHERE category_id IN ({placeholders})"
+            );
+            let params: Vec<&dyn rusqlite::ToSql> = subtree_ids
+                .iter()
+                .map(|id| id as &dyn rusqlite::ToSql)
+                .collect();
             tx.execute(&update_sql, params.as_slice())?;
-            let delete_sql =
-                format!("DELETE FROM todo_categories WHERE id IN ({placeholders})");
+            let delete_sql = format!("DELETE FROM todo_categories WHERE id IN ({placeholders})");
             tx.execute(&delete_sql, params.as_slice())?;
         }
         tx.commit()?;
@@ -207,10 +213,10 @@ impl CategoryStore {
                 rusqlite::Error::QueryReturnedNoRows => id_not_found(id),
                 e => e.into(),
             })?;
-        if let Some(target) = new_parent_id {
-            if Self::is_ancestor_or_self(&conn, target, id)? {
-                anyhow::bail!("不能把分类移动到自己或自己的子分类下面");
-            }
+        if let Some(target) = new_parent_id
+            && Self::is_ancestor_or_self(&conn, target, id)?
+        {
+            anyhow::bail!("不能把分类移动到自己或自己的子分类下面");
         }
         let rank = Self::next_sibling_rank(&conn, project_id, new_parent_id)?;
         let sql = format!(
@@ -279,6 +285,10 @@ mod tests {
     fn store() -> (tempfile::TempDir, CategoryStore) {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("t.db");
+        // 生产里 `CategoryStore` 与 `TodoStore` 共享同一个 `dozer.db`，
+        // `delete` 会反写 `todos.category_id`，测试用例也需要建好 `todos`
+        // 表，否则 `UPDATE todos` 会因表不存在而失败。
+        let _todo_store = crate::todo::TodoStore::new(&db).unwrap();
         let store = CategoryStore::new(&db).unwrap();
         (dir, store)
     }
@@ -396,9 +406,7 @@ mod tests {
         let b = store.add(1, None, "B").unwrap(); // rank 1
         let c = store.add(1, None, "C").unwrap(); // rank 2
         // 把 B 上移:B、A 交换 rank → 顺序变 B, A, C。
-        store
-            .move_sibling(b.id, CategoryMoveDirection::Up)
-            .unwrap();
+        store.move_sibling(b.id, CategoryMoveDirection::Up).unwrap();
         let listed = store.list(1).unwrap();
         assert_eq!(
             listed.iter().map(|c| c.id).collect::<Vec<_>>(),
@@ -411,9 +419,7 @@ mod tests {
         let (_dir, store) = store();
         let a = store.add(1, None, "A").unwrap();
         let b = store.add(1, None, "B").unwrap();
-        let result = store
-            .move_sibling(a.id, CategoryMoveDirection::Up)
-            .unwrap();
+        let result = store.move_sibling(a.id, CategoryMoveDirection::Up).unwrap();
         assert_eq!(result.rank, 0, "已经在最前,不报错也不改变");
         let listed = store.list(1).unwrap();
         assert_eq!(listed[0].id, a.id);

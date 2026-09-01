@@ -24,6 +24,7 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
         Arc::new(dozerd::session_summary::SessionSummaryStore::open(&db).unwrap());
     let backfill_registry = Arc::new(dozerd::session_summary_backfill::BackfillRegistry::new());
     let todos = Arc::new(dozerd::todo::TodoStore::new(&db).unwrap());
+    let categories = Arc::new(dozerd::todo_category::CategoryStore::new(&db).unwrap());
     tokio::spawn(async move {
         dozerd::server::serve(
             &s,
@@ -35,6 +36,7 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
             session_summaries,
             backfill_registry,
             todos,
+            categories,
         )
         .await
     });

@@ -98,6 +98,18 @@ impl TodoStore {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// 查单条任务(`SetTodoCategory` 校验分类归属用)。`id` 不存在返回
+    /// `Err`。
+    pub fn get(&self, id: i64) -> Result<TodoInfo> {
+        let conn = self.conn.lock().expect("db lock");
+        let sql = format!("SELECT {TODO_COLUMNS} FROM todos WHERE id = ?1");
+        conn.query_row(&sql, [id], row_to_todo)
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => id_not_found(id),
+                e => e.into(),
+            })
+    }
+
     /// 新增即置顶:新 rank = 当前待办最小 rank - 1(表内该项目还没有待办
     /// 时从 0 开始)。
     pub fn add(&self, project_id: i64, text: &str) -> Result<TodoInfo> {
@@ -362,6 +374,15 @@ mod tests {
         store.add(2, "项目2的任务").unwrap();
         assert_eq!(store.list(1).unwrap().len(), 1);
         assert_eq!(store.list(2).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn get_returns_task_and_unknown_id_errors() {
+        let (_dir, store) = store();
+        let t = store.add(1, "任务").unwrap();
+        let fetched = store.get(t.id).unwrap();
+        assert_eq!(fetched.id, t.id);
+        assert!(store.get(999).is_err());
     }
 
     #[test]

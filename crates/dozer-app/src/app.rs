@@ -1403,9 +1403,9 @@ pub fn terminal_pane_pixel_size(
         let (_list_w, content_w) =
             pair_list_content_width(pair_content_width(avail_w), state.dims.agent_split);
         let pane_width = (content_w - byteui::theme::geometry::chrome_width_px()).max(0.0);
-        let pane_height =
-            (maximized_box_height(window_height) - byteui::theme::geometry::chrome_height_px())
-                .max(0.0);
+        let pane_height = (maximized_box_height(window_height)
+            - byteui::theme::geometry::chrome_height_px())
+        .max(0.0);
         return (pane_width, pane_height);
     }
     let right_w = right_zone_width(window_width, state);

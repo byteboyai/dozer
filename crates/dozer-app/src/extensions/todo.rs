@@ -722,6 +722,7 @@ pub fn update(
                     plan_date: None,
                     dispatch_session_id: None,
                     dispatch_at_ms: None,
+                    category_id: None,
                 },
             );
             ws_state.start_flash(0);
@@ -2134,6 +2135,7 @@ mod tests {
             plan_date: None,
             dispatch_session_id: None,
             dispatch_at_ms: None,
+            category_id: None,
         }
     }
 

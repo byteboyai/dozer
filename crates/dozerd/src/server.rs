@@ -22,6 +22,7 @@ pub async fn serve(
     session_summaries: Arc<crate::session_summary::SessionSummaryStore>,
     backfill_registry: Arc<crate::session_summary_backfill::BackfillRegistry>,
     todos: Arc<crate::todo::TodoStore>,
+    categories: Arc<crate::todo_category::CategoryStore>,
 ) -> Result<()> {
     let preview_contexts = Arc::new(PreviewContextStore::new());
     if socket.exists() {
@@ -49,6 +50,7 @@ pub async fn serve(
         let session_summaries = session_summaries.clone();
         let backfill_registry = backfill_registry.clone();
         let todos = todos.clone();
+        let categories = categories.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_conn(
                 stream,
@@ -61,6 +63,7 @@ pub async fn serve(
                 session_summaries,
                 backfill_registry,
                 todos.clone(),
+                categories.clone(),
             )
             .await
             {
@@ -242,6 +245,7 @@ async fn handle_conn(
     session_summaries: Arc<crate::session_summary::SessionSummaryStore>,
     backfill_registry: Arc<crate::session_summary_backfill::BackfillRegistry>,
     todos: Arc<crate::todo::TodoStore>,
+    categories: Arc<crate::todo_category::CategoryStore>,
 ) -> Result<()> {
     let (r, mut w) = stream.into_split();
     let mut lines = BufReader::new(r).lines();
@@ -461,6 +465,80 @@ async fn handle_conn(
                                 Ok(todo) => Reply::Todo { todo },
                                 Err(e) => Reply::Error {
                                     message: format!("记录派发失败: {e}"),
+                                },
+                            }
+                        }
+                        Request::ListCategories { project_id } => {
+                            match categories.list(project_id) {
+                                Ok(categories) => Reply::Categories { categories },
+                                Err(e) => Reply::Error {
+                                    message: format!("列分类失败: {e}"),
+                                },
+                            }
+                        }
+                        Request::AddCategory { project_id, parent_id, name } => {
+                            match categories.add(project_id, parent_id, &name) {
+                                Ok(category) => Reply::Category { category },
+                                Err(e) => Reply::Error {
+                                    message: format!("新增分类失败: {e}"),
+                                },
+                            }
+                        }
+                        Request::RenameCategory { id, name } => {
+                            match categories.rename(id, &name) {
+                                Ok(category) => Reply::Category { category },
+                                Err(e) => Reply::Error {
+                                    message: format!("重命名分类失败: {e}"),
+                                },
+                            }
+                        }
+                        Request::DeleteCategory { id } => match categories.delete(id) {
+                            Ok(()) => Reply::Ok,
+                            Err(e) => Reply::Error {
+                                message: format!("删除分类失败: {e}"),
+                            },
+                        },
+                        Request::ReparentCategory { id, new_parent_id } => {
+                            match categories.reparent(id, new_parent_id) {
+                                Ok(category) => Reply::Category { category },
+                                Err(e) => Reply::Error {
+                                    message: format!("移动分类失败: {e}"),
+                                },
+                            }
+                        }
+                        Request::MoveCategorySibling { id, direction } => {
+                            match categories.move_sibling(id, direction) {
+                                Ok(category) => Reply::Category { category },
+                                Err(e) => Reply::Error {
+                                    message: format!("调整分类顺序失败: {e}"),
+                                },
+                            }
+                        }
+                        Request::SetTodoCategory { id, category_id } => {
+                            // 挂真实分类前先校验它存在且属于同一 project——
+                            // 防止 GUI 传错 id 把任务挂到别的项目的分类下面。
+                            // `TodoStore` 自己不知道 `CategoryStore` 的存在,
+                            // 这层校验只能在这里(两个 store 的交汇点)做。
+                            let validation = match category_id {
+                                None => Ok(()),
+                                Some(cat_id) => todos.get(id).and_then(|todo| {
+                                    let same_project = categories
+                                        .list(todo.project_id)?
+                                        .iter()
+                                        .any(|c| c.id == cat_id);
+                                    if same_project {
+                                        Ok(())
+                                    } else {
+                                        Err(anyhow::anyhow!(
+                                            "分类 id={cat_id} 不存在或不属于该项目"
+                                        ))
+                                    }
+                                }),
+                            };
+                            match validation.and_then(|()| todos.set_category(id, category_id)) {
+                                Ok(todo) => Reply::Todo { todo },
+                                Err(e) => Reply::Error {
+                                    message: format!("设置任务分类失败: {e}"),
                                 },
                             }
                         }
@@ -728,6 +806,7 @@ mod tests {
             transcripts: std::sync::Arc<crate::transcripts::TranscriptStore>,
             session_summaries: std::sync::Arc<crate::session_summary::SessionSummaryStore>,
             todos: std::sync::Arc<crate::todo::TodoStore>,
+            categories: std::sync::Arc<crate::todo_category::CategoryStore>,
         ) {
             let fut = crate::server::serve(
                 socket,
@@ -739,6 +818,7 @@ mod tests {
                 session_summaries,
                 std::sync::Arc::new(crate::session_summary_backfill::BackfillRegistry::new()),
                 todos,
+                categories,
             );
             std::mem::drop(fut);
         }
