@@ -7,7 +7,7 @@
 
 use anyhow::{Context, Result};
 use dozer_core::protocol::TodoInfo;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -66,11 +66,7 @@ impl TodoStore {
                 dispatch_at_ms INTEGER
              );
              CREATE INDEX IF NOT EXISTS idx_todos_project_order
-                ON todos(project_id, done, rank);
-             CREATE TABLE IF NOT EXISTS todo_legacy_imported (
-                project_id INTEGER PRIMARY KEY,
-                imported_ms INTEGER NOT NULL
-             );",
+                ON todos(project_id, done, rank);",
         )
         .context("建表")?;
         Ok(Self {
@@ -207,167 +203,6 @@ impl TodoStore {
         let sql = format!("SELECT {TODO_COLUMNS} FROM todos WHERE id = ?1");
         conn.query_row(&sql, [id], row_to_todo).map_err(Into::into)
     }
-
-    /// 对外入口:算出真实磁盘路径后调 `import_legacy_if_needed_at`。
-    /// `cwd` 是项目根目录绝对路径(与 `Request::OpenProject.path` 同一种
-    /// 形状)。
-    pub fn import_legacy_if_needed(&self, project_id: i64, cwd: &Path) -> Result<()> {
-        let todo_md_path = cwd.join(".dozer").join("todo.md");
-        let meta_json_path = dozer_core::paths::config_dir().join("todo_meta.json");
-        self.import_legacy_if_needed_at(project_id, &todo_md_path, &meta_json_path)
-    }
-
-    /// 参数化的实现,便于单测用临时目录路径调用,不依赖真实的
-    /// `dozer_core::paths::config_dir()`(那是机器级全局路径,测试不该碰)。
-    /// 一次性:`todo_legacy_imported` 里已有该 `project_id` 记录就直接
-    /// 返回,不重复导入(即使 `todo_md_path` 之后又变了)。读取/解析失败
-    /// 按"这个项目没有历史任务"处理,仍然写迁移标记,避免每次 `OpenProject`
-    /// 都重新尝试同一个读不了的文件。
-    fn import_legacy_if_needed_at(
-        &self,
-        project_id: i64,
-        todo_md_path: &Path,
-        meta_json_path: &Path,
-    ) -> Result<()> {
-        let mut conn = self.conn.lock().expect("db lock");
-        let already = conn
-            .query_row(
-                "SELECT 1 FROM todo_legacy_imported WHERE project_id = ?1",
-                [project_id],
-                |_| Ok(()),
-            )
-            .optional()?
-            .is_some();
-        if already {
-            return Ok(());
-        }
-        let md = std::fs::read_to_string(todo_md_path).unwrap_or_default();
-        let items = parse_legacy_markdown(&md);
-        let meta = read_legacy_meta_json(meta_json_path, project_id);
-        let now = now_ms() as i64;
-        let tx = conn.transaction()?;
-        for (rank, (text, done)) in items.iter().enumerate() {
-            let key = legacy_todo_line_key(text);
-            let m = meta.get(&key);
-            tx.execute(
-                "INSERT INTO todos (project_id, text, done, rank, created_ms,
-                    completed_at_ms, plan_date, dispatch_session_id, dispatch_at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![
-                    project_id,
-                    text,
-                    *done,
-                    rank as i64,
-                    now,
-                    m.and_then(|m| m.completed_at_ms),
-                    m.and_then(|m| m.plan_date.clone()),
-                    m.and_then(|m| m.dispatch_session_id.clone()),
-                    m.and_then(|m| m.dispatch_at_ms),
-                ],
-            )?;
-        }
-        tx.execute(
-            "INSERT INTO todo_legacy_imported (project_id, imported_ms) VALUES (?1, ?2)",
-            params![project_id, now],
-        )?;
-        tx.commit()?;
-        Ok(())
-    }
-}
-
-/// 镜像 `dozer-app::extensions::todo::parse_todo`:只认顶格(列 0)的
-/// `- [ ]`/`- [x]` 一级列表项,按文件出现顺序返回 `(text, done)`。
-fn parse_legacy_markdown(md: &str) -> Vec<(String, bool)> {
-    let mut items = Vec::new();
-    for line in md.lines() {
-        if let Some(rest) = line.strip_prefix("- [ ]") {
-            items.push((rest.trim().to_string(), false));
-        } else if let Some(rest) = line.strip_prefix("- [x]") {
-            items.push((rest.trim().to_string(), true));
-        }
-    }
-    items
-}
-
-/// 镜像 `dozer-app::extensions::todo::todo_line_key`:trim 后文本的
-/// `DefaultHasher` 哈希,用来跟旧 `todo_meta.json` 里的记录关联。
-fn legacy_todo_line_key(text: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    text.trim().hash(&mut hasher);
-    hasher.finish()
-}
-
-struct LegacyMeta {
-    dispatch_session_id: Option<String>,
-    dispatch_at_ms: Option<i64>,
-    plan_date: Option<String>,
-    completed_at_ms: Option<i64>,
-}
-
-/// `SystemTime` 经 serde 序列化成 `{"secs_since_epoch": u64,
-/// "nanos_since_epoch": u32}`(serde 标准库支持,`dozer-app` 那边
-/// `TodoTaskMeta`/`DispatchRecord` 的 `SystemTime` 字段就是这么落盘的),
-/// 这里手动转换成毫秒,不需要在 `dozerd` 里重新定义匹配的 Rust 结构体。
-fn system_time_json_to_ms(v: &serde_json::Value) -> Option<i64> {
-    let secs = v.get("secs_since_epoch")?.as_i64()?;
-    let nanos = v
-        .get("nanos_since_epoch")
-        .and_then(|n| n.as_i64())
-        .unwrap_or(0);
-    Some(secs * 1000 + nanos / 1_000_000)
-}
-
-/// 读旧 `todo_meta.json`(`TodoMetaState = HashMap<i64 project_id,
-/// HashMap<u64 hash, TodoTaskMeta>>`,整数 key 经 serde_json 序列化成字符串
-/// key),按 `project_id` 取子表。文件不存在/JSON 损坏/这个 project_id
-/// 没有记录,一律回落空表,不报错(与 `dozer-app` 侧 `meta_load` 同样的
-/// 宽松读取哲学)。
-fn read_legacy_meta_json(
-    path: &Path,
-    project_id: i64,
-) -> std::collections::HashMap<u64, LegacyMeta> {
-    let mut out = std::collections::HashMap::new();
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return out;
-    };
-    let Ok(root) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return out;
-    };
-    let Some(project_map) = root
-        .get(project_id.to_string().as_str())
-        .and_then(|v| v.as_object())
-    else {
-        return out;
-    };
-    for (key, entry) in project_map {
-        let Ok(hash_key) = key.parse::<u64>() else {
-            continue;
-        };
-        let dispatch = entry.get("dispatch").filter(|d| !d.is_null());
-        out.insert(
-            hash_key,
-            LegacyMeta {
-                dispatch_session_id: dispatch
-                    .and_then(|d| d.get("session_id"))
-                    .and_then(|s| s.as_str())
-                    .map(String::from),
-                dispatch_at_ms: dispatch
-                    .and_then(|d| d.get("dispatched_at"))
-                    .and_then(system_time_json_to_ms),
-                plan_date: entry
-                    .get("plan_date")
-                    .filter(|v| !v.is_null())
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
-                completed_at_ms: entry
-                    .get("completed_at")
-                    .filter(|v| !v.is_null())
-                    .and_then(system_time_json_to_ms),
-            },
-        );
-    }
-    out
 }
 
 #[cfg(test)]
@@ -496,96 +331,6 @@ mod tests {
         let (_dir, store) = store();
         store.add(1, "项目1的任务").unwrap();
         store.add(2, "项目2的任务").unwrap();
-        assert_eq!(store.list(1).unwrap().len(), 1);
-        assert_eq!(store.list(2).unwrap().len(), 1);
-    }
-
-    #[test]
-    fn import_skips_when_no_md_file() {
-        let (dir, store) = store();
-        let md_path = dir.path().join("nope").join("todo.md");
-        let meta_path = dir.path().join("nope").join("todo_meta.json");
-        store
-            .import_legacy_if_needed_at(1, &md_path, &meta_path)
-            .unwrap();
-        assert!(store.list(1).unwrap().is_empty());
-    }
-
-    #[test]
-    fn import_parses_markdown_without_meta_file() {
-        let (dir, store) = store();
-        let md_path = dir.path().join("todo.md");
-        std::fs::write(&md_path, "- [ ] 任务一\n- [x] 任务二\n").unwrap();
-        let meta_path = dir.path().join("todo_meta.json");
-        store
-            .import_legacy_if_needed_at(1, &md_path, &meta_path)
-            .unwrap();
-        let listed = store.list(1).unwrap();
-        assert_eq!(listed.len(), 2);
-        assert!(listed.iter().any(|t| t.text == "任务一" && !t.done));
-        assert!(listed.iter().any(|t| t.text == "任务二" && t.done));
-    }
-
-    #[test]
-    fn import_correlates_meta_by_legacy_hash() {
-        let (dir, store) = store();
-        let md_path = dir.path().join("todo.md");
-        std::fs::write(&md_path, "- [ ] 派发过的任务\n").unwrap();
-        let key = legacy_todo_line_key("派发过的任务");
-        let meta_json = serde_json::json!({
-            "1": {
-                key.to_string(): {
-                    "dispatch": {
-                        "session_id": "sess-abc",
-                        "dispatched_at": {"secs_since_epoch": 1_700_000_000u64, "nanos_since_epoch": 0},
-                    },
-                    "plan_date": "08-10",
-                    "completed_at": null,
-                }
-            }
-        });
-        let meta_path = dir.path().join("todo_meta.json");
-        std::fs::write(&meta_path, meta_json.to_string()).unwrap();
-        store
-            .import_legacy_if_needed_at(1, &md_path, &meta_path)
-            .unwrap();
-        let listed = store.list(1).unwrap();
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].dispatch_session_id, Some("sess-abc".to_string()));
-        assert_eq!(listed[0].dispatch_at_ms, Some(1_700_000_000_000));
-        assert_eq!(listed[0].plan_date, Some("08-10".to_string()));
-    }
-
-    #[test]
-    fn import_is_not_repeated_on_second_call() {
-        let (dir, store) = store();
-        let md_path = dir.path().join("todo.md");
-        std::fs::write(&md_path, "- [ ] 任务\n").unwrap();
-        let meta_path = dir.path().join("todo_meta.json");
-        store
-            .import_legacy_if_needed_at(1, &md_path, &meta_path)
-            .unwrap();
-        // 追加内容后再导入一次,不应该产生新行(已标记导入过)。
-        std::fs::write(&md_path, "- [ ] 任务\n- [ ] 后来加的\n").unwrap();
-        store
-            .import_legacy_if_needed_at(1, &md_path, &meta_path)
-            .unwrap();
-        assert_eq!(store.list(1).unwrap().len(), 1);
-    }
-
-    #[test]
-    fn import_is_isolated_per_project() {
-        let (dir, store) = store();
-        let md_path = dir.path().join("todo.md");
-        std::fs::write(&md_path, "- [ ] 任务\n").unwrap();
-        let meta_path = dir.path().join("todo_meta.json");
-        store
-            .import_legacy_if_needed_at(1, &md_path, &meta_path)
-            .unwrap();
-        // project 2 没导入过,即使复用同一份 md 路径也应该正常导入。
-        store
-            .import_legacy_if_needed_at(2, &md_path, &meta_path)
-            .unwrap();
         assert_eq!(store.list(1).unwrap().len(), 1);
         assert_eq!(store.list(2).unwrap().len(), 1);
     }

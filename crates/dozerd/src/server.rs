@@ -365,14 +365,7 @@ async fn handle_conn(
                             }
                         }
                         Request::OpenProject { path } => match projects.open(&path) {
-                            Ok(p) => {
-                                if let Err(e) =
-                                    todos.import_legacy_if_needed(p.id, Path::new(&path))
-                                {
-                                    tracing::warn!(project_id = p.id, error = %e, "Todo 历史导入失败");
-                                }
-                                Reply::Project { project: Some(p) }
-                            }
+                            Ok(p) => Reply::Project { project: Some(p) },
                             Err(e) => Reply::Error { message: format!("打开项目失败: {e}") },
                         },
                         Request::ListProjects => match projects.list() {
