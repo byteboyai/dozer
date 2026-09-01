@@ -1403,12 +1403,9 @@ pub fn terminal_pane_pixel_size(
         let (_list_w, content_w) =
             pair_list_content_width(pair_content_width(avail_w), state.dims.agent_split);
         let pane_width = (content_w - byteui::theme::geometry::chrome_width_px()).max(0.0);
-        // `byteui::theme::geometry::status_bar_height()` 是终端 pane 自带的底栏(`terminal_status_bar`,
-        // 不是窗口级状态栏),放大态一样在盒子里,照扣。
-        let pane_height = (maximized_box_height(window_height)
-            - byteui::theme::geometry::status_bar_height()
-            - byteui::theme::geometry::chrome_height_px())
-        .max(0.0);
+        let pane_height =
+            (maximized_box_height(window_height) - byteui::theme::geometry::chrome_height_px())
+                .max(0.0);
         return (pane_width, pane_height);
     }
     let right_w = right_zone_width(window_width, state);
@@ -1417,10 +1414,18 @@ pub fn terminal_pane_pixel_size(
     let pane_width = (content_w - byteui::theme::geometry::chrome_width_px()).max(0.0);
     // `right_zone` 上下 margin:终端是 iced 布局(自动 inset),但其 PTY 网格
     // 尺寸靠这里算,必须同步扣掉上下 margin,否则字符网格比实际渲染区高。
+    //
+    // 不扣 `status_bar_height()`:终端 pane 自带的底栏(`terminal_status_bar`)
+    // 已经按要求去掉(`terminal.rs::terminal_pane` 不再往 column 里塞状态栏
+    // 元素),这里之前仍在扣这块高度是遗留的死重——真实渲染区比这个公式
+    // 算出来的整整多一条状态栏那么高,PTY 网格因此比实际可见区少了几行，
+    // 造成终端 pane 底部有一截真实存在、但 PTY 不知道的空白，v8agent 自己
+    // 画的状态栏一旦跨越这条边界（内容一多、发生了 resize 之后）就会跟真实
+    // 渲染错位。SSH 终端那边的姊妹函数 `ssh_terminal_pane_pixel_size` 从来
+    // 没有这一条减法，这条本该在状态栏移除时一起删掉。
     let m = theme::region::right_zone().margin;
     let pane_height = (window_height
         - byteui::theme::geometry::top_bar_height()
-        - byteui::theme::geometry::status_bar_height()
         - byteui::theme::geometry::chrome_height_px()
         - m.top
         - m.bottom)
@@ -1451,8 +1456,9 @@ pub fn ssh_terminal_pane_pixel_size(
     let (_list_w, content_w) = pair_list_content_width(pair_w, state.dims.ssh_split);
     let pane_width = (content_w - byteui::theme::geometry::chrome_width_px()).max(0.0);
     // `chrome_height_px()`(tab 栏 + padding + spacing 的估算)与
-    // `terminal_pane_pixel_size` 同源;SSH 终端没有 `terminal_status_bar`,
-    // 不像共享终端那样额外扣状态栏高。
+    // `terminal_pane_pixel_size` 同源;两边现在都不扣 `status_bar_height()`
+    // ——共享终端自带的 `terminal_status_bar` 早已按要求去掉，两个函数的
+    // 高度公式形状一致，不是"SSH 特例更简单"。
     let m = theme::region::left_zone().margin;
     let pane_height = (window_height
         - byteui::theme::geometry::top_bar_height()
@@ -9205,21 +9211,19 @@ mod tests {
     }
 
     #[test]
-    fn terminal_pane_height_excludes_top_and_status_bars() {
+    fn terminal_pane_height_excludes_top_bar_and_chrome() {
+        // 共享终端自带的 `terminal_status_bar` 已经去掉，高度公式不再扣
+        // `status_bar_height()`——只扣顶栏 + chrome + right_zone 上下
+        // margin，跟 SSH 终端那边的公式形状一致。
         let state = test_state();
         let (_, h_with) = terminal_pane_pixel_size(1440.0, 900.0, &state);
         let only_chrome = 900.0 - byteui::theme::geometry::chrome_height_px();
         let m = theme::region::right_zone().margin;
         assert!(
-            (only_chrome
-                - h_with
-                - (byteui::theme::geometry::top_bar_height()
-                    + byteui::theme::geometry::status_bar_height()
-                    + m.top
-                    + m.bottom))
+            (only_chrome - h_with - (byteui::theme::geometry::top_bar_height() + m.top + m.bottom))
                 .abs()
                 < 0.01,
-            "终端 pane 高度必须再扣顶栏+状态栏+right_zone 上下 margin"
+            "终端 pane 高度必须再扣顶栏+right_zone 上下 margin"
         );
     }
 
@@ -9446,11 +9450,12 @@ mod tests {
     /// 具体数字(1440x900,`agent_split`=默认统一 split 0.35):
     /// avail_w = 1440 - 2*44 - 2*40 = 1272,pair_w = 1272 - 8 = 1264,
     /// 终端占 1-0.35 → 1264*0.65 = 821.6,减 `byteui::theme::geometry::chrome_width_px()`(16) = 805.6;
-    /// 盒子高 = 900 - 40(顶栏) - 2*40 = 780,再减 pane 自带底栏 26
-    /// (`byteui::theme::geometry::status_bar_height()`)与 `byteui::theme::geometry::chrome_height_px()`(50) = 704。
+    /// 盒子高 = 900 - 40(顶栏) - 2*40 = 780,再减
+    /// `byteui::theme::geometry::chrome_height_px()`(50) = 730(不扣状态栏高——
+    /// 终端 pane 自带的 `terminal_status_bar` 已经去掉)。
     /// 对照平时:zones_width = 1440-2*44-8=1344,right_w = 1344 - 640 = 704,pair = 696,
-    /// 696*0.65 = 452.4,减 16 = 436.4;高 = 900 - 40 - 26 - 50 - right_zone 上下 margin = 778。
-    /// 换成网格(CELL_WIDTH=8.4,LINE_HEIGHT_PX=16.8 即 14*1.2):放大后 95x41,平时 51x46。
+    /// 696*0.65 = 452.4,减 16 = 436.4;高 = 900 - 40 - 50 - right_zone 上下 margin = 804。
+    /// 换成网格(CELL_WIDTH=8.4,LINE_HEIGHT_PX=16.8 即 14*1.2):放大后 95x43,平时 51x47。
     #[test]
     fn terminal_pane_pixel_size_right_maximized_matches_overlay_box() {
         let maxed = ShellState {
@@ -9459,16 +9464,16 @@ mod tests {
         };
         let (w, h) = terminal_pane_pixel_size(1440.0, 900.0, &maxed);
         assert!((w - 805.6).abs() < 0.1, "w={w}");
-        assert!((h - 704.0).abs() < 0.1, "h={h}");
+        assert!((h - 730.0).abs() < 0.1, "h={h}");
 
         let normal = terminal_pane_pixel_size(1440.0, 900.0, &test_state());
         assert!((normal.0 - 436.4).abs() < 0.1, "平时 w={}", normal.0);
-        assert!((normal.1 - 778.0).abs() < 0.1, "平时 h={}", normal.1);
+        assert!((normal.1 - 804.0).abs() < 0.1, "平时 h={}", normal.1);
         assert_ne!((w, h), normal, "放大态几何必须和平时不同");
         assert!(w > normal.0, "放大后终端必须真的更宽(网格跟着变宽)");
 
-        assert_eq!(crate::term_view::grid_size(w, h), (95, 41));
-        assert_eq!(crate::term_view::grid_size(normal.0, normal.1), (51, 46));
+        assert_eq!(crate::term_view::grid_size(w, h), (95, 43));
+        assert_eq!(crate::term_view::grid_size(normal.0, normal.1), (51, 47));
 
         // 左侧放大不改变右面板区几何(右半只是被遮罩盖住)。
         let left_maxed = ShellState {
@@ -9503,9 +9508,9 @@ mod tests {
             assert_eq!(terminal_pane_pixel_size(1440.0, 900.0, &for_grid), shown);
         }
 
-        // 具体网格:1440x900 下应是 51x46(已扣 right_zone 上下 margin),不是兜底的 80x24。
+        // 具体网格:1440x900 下应是 51x47(已扣 right_zone 上下 margin),不是兜底的 80x24。
         let (cols, rows) = crate::term_view::grid_size(shown.0, shown.1);
-        assert_eq!((cols, rows), (51, 46));
+        assert_eq!((cols, rows), (51, 47));
         assert_ne!(
             (cols as u16, rows as u16),
             (DEFAULT_COLS, DEFAULT_ROWS),
