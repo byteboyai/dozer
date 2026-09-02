@@ -1146,6 +1146,23 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
+            // Todo 搜索框左前"状态"筛选浮层打开时,Esc 同样优先关掉弹出层,
+            // 口径同上面 Todo 日历选择器。
+            if app.todo_status_filter_open()
+                && let WindowEvent::KeyboardInput {
+                    event,
+                    is_synthetic: false,
+                    ..
+                } = event
+                && event.state == ElementState::Pressed
+                && event.logical_key
+                    == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+            {
+                app.update(Message::Todo(extensions::todo::Message::StatusFilterClose));
+                window.request_redraw();
+                return;
+            }
+
             // 预览编辑弹层打开时,Esc 优先触发关闭流程(脏则弹确认,不脏直接
             // 关),口径同上面几个弹层。
             if app.edit_session_open()

@@ -1868,10 +1868,6 @@ pub enum Message {
     /// 选择器里点了某一项:`None` = "未分类"(仅 `Todo` target 下有效,
     /// `Category` target 选"未分类"表示挪到顶层)。
     CategoryPickerSelect(Option<i64>),
-    /// 分类筛选下拉(搜索框内嵌 segment)点了某一项:把当前 Todo 列表的过滤
-    /// 切到对应分类,**保留**已输入的关键词(与左栏 `CategorySelect` 在切栏时
-    /// 清关键词不同——这里是同一个搜索框内换细分)。不异步 RPC。
-    CategoryFilterPicked(todo::CategoryFilter),
     /// 数据库面板数据源树 header 行右键菜单关闭(点遮罩 / 按 Esc)。
     DatabaseSourceContextMenuClose,
     /// 项目页签:把某路径作为**新页签**打开(不动任何已存在页签的内容)。
@@ -1986,18 +1982,14 @@ struct CategoryContextMenu {
     id: Option<i64>,
 }
 
-/// 分类选择器要挂靠的目标:给任务挂分类、给分类节点 reparent、或搜索框
-/// 里的分类筛选下拉。挂任务/reparent 共用"点树选一个节点";筛选则是把
-/// 当前列表过滤切到某一种(全部/未分类/某分类)。
+/// 分类选择器要挂靠的目标:给任务挂分类、给分类节点 reparent。二者共用
+/// "点树选一个节点";挂任务 → `set_todo_category`,reparent → `reparent_category`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CategoryPickerTarget {
     /// 给某个任务挂分类(任务 id)。
     Todo(i64),
     /// 给某个分类节点 reparent(分类 id)。
     Category(i64),
-    /// 搜索框前内嵌分类筛选下拉:浮层上加钉顶"全部"、"未分类"两个伪项,
-    /// 命中后走 `CategoryFilterPicked`(不异步 RPC)。
-    Filter,
 }
 
 /// 分类选择器浮层状态:定位坐标 + 目标。渲染内容复用
@@ -3962,6 +3954,14 @@ impl App {
             .unwrap_or(false)
     }
 
+    /// Todo **搜索框状态筛选**浮层是否打开(给 main.rs 的 Esc 关闭用,同
+    /// `todo_dispatch_open` 的既有模式)。
+    pub fn todo_status_filter_open(&self) -> bool {
+        self.active_workspace()
+            .map(|ws| ws.todo.status_filter_popup_open())
+            .unwrap_or(false)
+    }
+
     /// 预览编辑弹层是否打开(main.rs 键盘路由用)。打开期间键盘必须走
     /// 弹层的文本编辑器,不能落进终端 PTY——弹层挂在左侧预览面板,不影响
     /// `terminal_visible()` 的判断条件(右侧展开与否),不加这道闸门的话,
@@ -4560,9 +4560,6 @@ impl App {
                 todo::Message::CategoryPickerOpenForTodo(todo_id) => {
                     self.todo_category_picker_open(CategoryPickerTarget::Todo(todo_id));
                 }
-                todo::Message::CategoryFilterPickerOpen => {
-                    self.todo_category_picker_open(CategoryPickerTarget::Filter);
-                }
                 other => self.todo_message(other),
             },
             // 文件树右键"搜索"弹窗:`SearchResults` 带 `project_id`,异步结果
@@ -5015,16 +5012,6 @@ impl App {
             Message::CategoryPickerClose => {
                 self.category_picker = None;
             }
-            Message::CategoryFilterPicked(filter) => {
-                // 下拉选了某项:先关浮层,再由内层 `CategorySetKeepKeyword`
-                // 只切当前过滤(保留搜索关键词)。复用 `todo_message` 的
-                // `with_focused_project` 投射归属工作区,与左栏 `CategorySelect`
-                // 同一落地类型,只是不清空搜索词。
-                self.category_picker = None;
-                let proxy = self.proxy.clone();
-                let _ =
-                    proxy.send_event(Message::Todo(todo::Message::CategorySetKeepKeyword(filter)));
-            }
             Message::CategoryPickerSelect(chosen) => {
                 let Some(picker) = self.category_picker.take() else {
                     return;
@@ -5058,10 +5045,6 @@ impl App {
                                 .send_event(Message::Todo(todo::Message::CategoryMutated(res)));
                         });
                     }
-                    // Filter 模式(搜索框分类下拉)不会走到
-                    // `CategoryPickerSelect`:它的行发的是 `CategoryFilterPicked`。
-                    // 这里仅为了 match 穷尽;万一被触发只关浮层不做任何事。
-                    CategoryPickerTarget::Filter => {}
                 }
             }
             Message::DatabaseSourceContextMenuClose => {
@@ -6304,6 +6287,12 @@ impl App {
             if matches!(msg, todo::Message::StatusOpen(_)) {
                 ws.todo.set_status_anchor(last_cursor);
             }
+            // 点搜索框左前"状态"segment 按钮时的光标逻辑坐标,作为搜索框状态
+            // 筛选浮层 overlay 的弹出锚点。`StatusFilterOpen` 自身交给
+            // `todo::update` 展开(它只改 `status_filter_open`)。
+            if matches!(msg, todo::Message::StatusFilterOpen) {
+                ws.todo.set_status_filter_anchor(last_cursor);
+            }
             todo::update(&mut ws.todo, msg, project_id, &client, &handle, emit);
         });
     }
@@ -7376,10 +7365,9 @@ impl App {
 
     /// 分类选择器浮层:列出当前项目的全部分类节点(全展开按 depth 缩进
     /// 平铺),点"未分类"或某个节点即把 `category_picker` 目标落盘并关闭
-    /// (Category → reparent, Todo → set_todo_category)。**筛选模式**
-    /// (`CategoryPickerTarget::Filter`,来自搜索框内嵌的分类下拉)额外在树顶
-    /// 加一颗"全部",命中全部改成发 `CategoryFilterPicked`——纯本地把
-    /// 当前过滤切过去、保留搜索关键词,不做任何 RPC。
+    /// (Category → reparent,Todo → set_todo_category)。浮层只服务这两类
+    /// "把一个节点挂到某个分类"的动作 —— 搜索框的分类速滤已移除(改为
+    /// 按状态过滤),不再有 `Filter` 目标。
     fn category_picker_popup<'a>(
         &self,
     ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -7390,44 +7378,22 @@ impl App {
             .active_workspace()
             .map(|ws| ws.todo.categories().to_vec())
             .unwrap_or_default();
-        let is_filter = matches!(picker.target, CategoryPickerTarget::Filter);
         let mut list = column![].spacing(2);
 
-        // 筛选模式:钉两个伪项"全部 / 未分类"在树顶,命中发 `CategoryFilterPicked`
-        // (纯本地改状态,保留搜索关键词);否则沿用 `CategoryPickerSelect`(挂任务
-        // / reparent,`None`="未分类")。
-        let uncategorized_msg = if is_filter {
-            Message::CategoryFilterPicked(todo::CategoryFilter::Uncategorized)
-        } else {
-            Message::CategoryPickerSelect(None)
-        };
-        if is_filter {
-            list = list.push(
-                button(text("全部").size(byteui::theme::font::body()))
-                    .on_press(Message::CategoryFilterPicked(todo::CategoryFilter::All))
-                    .width(Length::Fill)
-                    .padding([6, 10]),
-            );
-        }
+        // "未分类"钉在树顶(`None` = 未分类)。
         list = list.push(
             button(text("未分类").size(byteui::theme::font::body()))
-                .on_press(uncategorized_msg)
+                .on_press(Message::CategoryPickerSelect(None))
                 .width(Length::Fill)
                 .padding([6, 10]),
         );
         // 复用一份没有展开态(全展开)的拍平——选择器只做单次选择,不需要
-        // 折叠交互,直接把整棵树按 depth 缩进平铺出来最简单。行的视觉效果与
-        // 既有(挂任务 / reparent)一致,只在筛选模式下命中 `CategoryFilterPicked`
-        // 不做 RPC。
+        // 折叠交互,直接把整棵树按 depth 缩进平铺出来最简单。
         let all_expanded: std::collections::HashSet<i64> =
             categories.iter().map(|c| c.id).collect();
         for row in todo::visible_category_rows(&categories, &all_expanded) {
             let id = row.id;
-            let click = if is_filter {
-                Message::CategoryFilterPicked(todo::CategoryFilter::Node(id))
-            } else {
-                Message::CategoryPickerSelect(Some(id))
-            };
+            let click = Message::CategoryPickerSelect(Some(id));
             list = list.push(
                 button(
                     text(format!("{}{}", "  ".repeat(row.depth), row.name))
@@ -7889,6 +7855,27 @@ impl App {
             )
             .on_press(Message::Todo(todo::Message::DispatchClose));
             match todo::todo_dispatch_overlay(ws, self.window_size) {
+                Some(popup) => stack![base, dismiss, popup.map(Message::Todo)]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+                None => stack![base, dismiss]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+            }
+        } else if ws.todo.status_filter_popup_open() {
+            // 搜索框左前"状态"筛选浮层:窗口级 overlay。点弹层外任意处经
+            // dismiss 收起(与右键菜单/分支切换同款约定),弹层本体的每一项
+            // (全部/待办/进行中/搁置/已完成)emit `StatusFilterPick`,选中
+            // 浮层即收。
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::Todo(todo::Message::StatusFilterClose));
+            match todo::todo_status_filter_overlay(ws, self.window_size) {
                 Some(popup) => stack![base, dismiss, popup.map(Message::Todo)]
                     .width(Length::Fill)
                     .height(Length::Fill)

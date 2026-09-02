@@ -77,6 +77,17 @@ pub enum CategoryFilter {
     Node(i64),
 }
 
+/// 搜索框左前「按状态筛选」下拉的选中态:`All` = 不看状态(等于是三段都
+/// 算),`Status(s)` = 只看这一种派生状态的卡片。四种状态(Pending/
+/// InProgress/Suspended/Done)看着多,但语义单一——只决定"展示哪一段",
+/// 不改变任何落盘/拖拽行为。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StatusFilter {
+    #[default]
+    All,
+    Status(TodoState),
+}
+
 /// 分类树左侧面板一行的拍平展示(镜像 `project.rs::TreeRow` 的"扁平
 /// 存储 + 展开集 → 拍平成行"模式,只是节点数据源从文件系统换成
 /// `CategoryInfo`)。
@@ -345,6 +356,17 @@ pub struct WorkspaceState {
     category_expanded: std::collections::HashSet<i64>,
     /// 当前选中的分类过滤节点,默认"全部"。
     category_selected: CategoryFilter,
+    /// 搜索框左前「按状态」下拉筛选中项,默认"全部"(不做状态维度过滤)。
+    /// 与 `category_selected` 并列两维:右区列表 =关键词∩分类∩状态,三段
+    /// 展示随选中态收敛(详见 `todo_list_view`)。
+    status_filter: StatusFilter,
+    /// 搜索框左前的状态筛选浮层是否展开(`true` 时点状态 segment 弹出
+    /// "全部 + 四种状态"选择层)。用了同卡内状态按钮一样的"锚点 + 窗口级
+    /// overlay"展开模式,见 `status_filter_anchor`。
+    status_filter_open: bool,
+    /// 状态筛选浮层弹出锚点(逻辑像素,取点击"全部/某状态"segment 时的光标
+    /// 位置)。关闭后清空。
+    status_filter_anchor: Option<(f32, f32)>,
     /// 分类树行内改名态(分类 id, 草稿字符串),镜像
     /// `files::TreeEdit`——单行文本,不用 `text_editor::Content`。
     category_renaming: Option<(i64, String)>,
@@ -579,6 +601,36 @@ impl WorkspaceState {
         self.category_selected
     }
 
+    /// 当前搜索框左前按「状态」筛选中项(read-only,视图 label/过滤计算用)。
+    pub fn status_filter(&self) -> StatusFilter {
+        self.status_filter
+    }
+
+    /// 按状态筛选浮层当前是否展开(main.rs Esc 键盘路由 + 视图 overlay 用)。
+    pub fn status_filter_popup_open(&self) -> bool {
+        self.status_filter_open
+    }
+
+    /// 打开状态筛选浮层并记录弹出锚点(锚点由 `app.rs` 在收到
+    /// `Message::StatusFilterOpen` 时先写,这里只翻 bool;同一套"切任何一
+    /// 个都先关其它同款浮层"的模型,见 `close_*_popup`)。
+    pub fn open_status_filter(&mut self) {
+        self.status_filter_open = true;
+    }
+
+    /// 关闭状态筛选浮层(选中某一项、Esc 或点外部)。
+    pub fn close_status_filter_popup(&mut self) {
+        self.status_filter_open = false;
+        self.status_filter_anchor = None;
+    }
+
+    /// 记录状态筛选浮层弹出锚点(点"全部/待办/..."segment 时的光标位置),
+    /// 窗口级 overlay 靠它定位;由 `app.rs::todo_message` 在
+    /// `StatusFilterOpen` 时写入(同一套 `set_status_anchor` 手法)。
+    pub fn set_status_filter_anchor(&mut self, anchor: (f32, f32)) {
+        self.status_filter_anchor = Some(anchor);
+    }
+
     /// 右区当前视图模式(列表/看板),内容渲染与 tab 高亮共用。
     pub fn view(&self) -> TodoView {
         self.view
@@ -724,6 +776,15 @@ pub enum Message {
     /// 状态下拉里选了某一态:`state` 是用户想切到的目标状态(含派生的
     /// `InProgress`,见 `update` 里对三存储态 + InProgress 的分别处理)。
     StatusPick(usize, TodoState),
+    /// 点搜索框左前「按状态」segment → 弹出状态筛选浮层(全部/待办/进行中/
+    /// 搁置/已完成)。内核 `app.rs` 拦截写在 `status_filter_anchor`;本消息
+    /// 只在 `todo::update` 里把 `status_filter_open` 翻真。
+    StatusFilterOpen,
+    /// 关闭状态筛选浮层(Esc / 点外部 / 选中一项后)。
+    StatusFilterClose,
+    /// 状态筛选浮层选中某一项:只改 `status_filter`(纯本地过滤轴,不落盘、不
+    /// 清搜索关键词),随后关闭浮层。
+    StatusFilterPick(StatusFilter),
     /// 点卡片计划日期徽章 → 弹出日历日期选择器(取代原来的行内文本编辑)。
     CalendarOpen(usize),
     /// 关闭日历选择器(Esc / 点外部 / 选中日期后)。
@@ -768,11 +829,6 @@ pub enum Message {
     CategoryToggleExpand(i64),
     /// 点左侧树某一行(或"全部"/"未分类"伪节点),切换当前过滤。
     CategorySelect(CategoryFilter),
-    /// 搜索框内嵌分类筛选下拉选了某个过滤:**只改** `category_selected`,
-    /// 不清关键词、不做任何副作用——与左栏 `CategorySelect`(切栏顺带
-    /// `clear_search`)不同,关键词是跟搜索框同一个输入,不该在换细分时
-    /// 被抹掉。
-    CategorySetKeepKeyword(CategoryFilter),
     /// 切换右区视图模式(列表视图/看板视图)。看板暂占位(CategoryFilter 里
     /// 两个伪节点的空壳),仅记录选中态,列表内容仍正常渲染。
     SelectView(TodoView),
@@ -806,10 +862,6 @@ pub enum Message {
     /// 点任务卡片的分类 chip,打开分类选择器(内核拦截,转发到
     /// `App::todo_category_picker_open`)。
     CategoryPickerOpenForTodo(i64),
-    /// 点搜索框左前方的分类筛选下拉(分类 segment),打开窗口级分类筛选
-    /// 浮层(内核拦截,转发到 `App::todo_category_picker_open` 的
-    /// `CategoryPickerTarget::Filter`)。只切当前过滤用、不动关键词。
-    CategoryFilterPickerOpen,
 }
 
 /// 任务内容编辑/添加框的真 `text_input`/`text_editor` 的 `widget::Id`。
@@ -1047,10 +1099,6 @@ pub fn update(
             // 关键词搜过的分类也要重置,不做"记住每个分类各自搜索词"那套。
             ws_state.clear_search();
         }
-        // 搜索框内嵌分类下拉走的专用通道:只切当前过滤、保留关键词。
-        Message::CategorySetKeepKeyword(filter) => {
-            ws_state.category_selected = filter;
-        }
         Message::CategoryContextMenuOpen(_) => {}
         Message::CategoryNewChild(parent_id) => {
             let client = client.clone();
@@ -1125,7 +1173,6 @@ pub fn update(
         }
         Message::CategoryReparentPickerOpen(_) => {}
         Message::CategoryPickerOpenForTodo(_) => {}
-        Message::CategoryFilterPickerOpen => {}
         Message::Toggle(idx) => {
             let Some(item) = ws_state.items.get(idx) else {
                 return;
@@ -1277,7 +1324,13 @@ pub fn update(
                 emit(Message::Mutated(res));
             });
         }
-        Message::DispatchOpen(idx) => ws_state.dispatch_open = Some(idx),
+        Message::DispatchOpen(idx) => {
+            // 与卡片浮层互斥:开派发层顺手收起状态筛选、日历、卡片状态下拉。
+            ws_state.close_status_filter_popup();
+            ws_state.calendar_open = None;
+            ws_state.status_open = None;
+            ws_state.dispatch_open = Some(idx);
+        }
         Message::DispatchClose => {
             ws_state.dispatch_open = None;
             ws_state.dispatch_anchor = None;
@@ -1285,6 +1338,7 @@ pub fn update(
         Message::StatusOpen(idx) => {
             // 同一时刻只允许一个卡片弹层(状态/日历/派发互斥):打开状态下拉时
             // 顺手把另外两个收起,避免叠两层卡片浮层。
+            ws_state.close_status_filter_popup();
             ws_state.dispatch_open = None;
             ws_state.calendar_open = None;
             ws_state.status_open = Some(idx);
@@ -1348,9 +1402,24 @@ pub fn update(
                 emit(Message::Mutated(res));
             });
         }
+        Message::StatusFilterOpen => {
+            // 与卡片浮层互斥:开搜索框筛选浮层时先收起派发层/日历/卡片状态。
+            ws_state.status_open = None;
+            ws_state.dispatch_open = None;
+            ws_state.calendar_open = None;
+            ws_state.open_status_filter();
+        }
+        Message::StatusFilterClose => ws_state.close_status_filter_popup(),
+        Message::StatusFilterPick(filter) => {
+            // 纯本地筛选轴:只改选中项,不落盘、不动搜索关键词。选中某项或
+            // "全部"后顺带关闭浮层。
+            ws_state.status_filter = filter;
+            ws_state.close_status_filter_popup();
+        }
         Message::CalendarOpen(idx) => {
             // 与 StatusOpen/派发同样"同时只能有一个浮层":开日历时收起状态
-            // 提层/派发层。
+            // 提层/派发层,以及搜索框的状态筛选浮层。
+            ws_state.close_status_filter_popup();
             ws_state.status_open = None;
             ws_state.status_anchor = None;
             ws_state.dispatch_open = None;
@@ -1855,15 +1924,20 @@ fn todo_clear_footer_bar<'a>(
 /// (Stage 2)一致。草稿 `draft` 是 `text_input::on_input` 给的全量字符串,
 /// 焦点态由 `CaptureTodoSearchFocus` 每帧查、`main.rs` 据此放行键盘给
 /// 标准 iced 管线。`highlight` = 列表正被 `search` 过滤或搜索聚焦时持续
-/// 金框提示(同 Files `search_box`)。左前区内嵌分类筛选 segment
-/// (`view_with_prefix`),点它 `CategoryFilterPickerOpen` → 窗口级过滤浮层。
+/// 金框提示(同 Files `search_box`)。左前区内嵌「按状态筛选」segment
+/// (`view_with_prefix`),点它开 `Message::StatusFilterOpen` 弹"全部 + 四种
+/// 状态"选择浮层(不再按分类——分类改由左侧分类树承担)。
 fn todo_search_bar<'a>(
     app: &App,
     ws_state: &'a WorkspaceState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let highlight = ws_state.search_focused() || !ws_state.search.is_empty();
-    let filter_label = category_filter_label(ws_state.categories(), ws_state.category_selected());
-    let prefix = category_filter_segment(filter_label);
+    let filter_label = status_filter_label(ws_state.status_filter());
+    let filter_state = match ws_state.status_filter() {
+        StatusFilter::All => None,
+        StatusFilter::Status(st) => Some(st),
+    };
+    let prefix = status_filter_segment(filter_label, filter_state);
     let bar = byteui::form::search_box::view_with_prefix(
         "搜索任务…",
         &ws_state.search_draft,
@@ -1884,33 +1958,34 @@ fn todo_search_bar<'a>(
     )
 }
 
-/// 当前 `CategoryFilter` 在筛选 segment 上显示的名字:`All`="全部"、
-/// `Uncategorized`="未分类"、`Node(id)` 取节点名,原名为空时回退"全部分类"。
-fn category_filter_label(categories: &[CategoryInfo], filter: CategoryFilter) -> String {
+/// 当前 `StatusFilter` 在搜索 segment 上显示的名字:`All` = "全部"(不做
+/// 状态维度过滤),`Status(s)` = 那态的中文(fm `status_meta`,带它自己的色)。
+fn status_filter_label(filter: StatusFilter) -> String {
     match filter {
-        CategoryFilter::All => "全部".to_string(),
-        CategoryFilter::Uncategorized => "未分类".to_string(),
-        CategoryFilter::Node(id) => categories
-            .iter()
-            .find(|c| c.id == id)
-            .map(|c| c.name.clone())
-            .unwrap_or_else(|| "全部分类".to_string()),
+        StatusFilter::All => "全部".to_string(),
+        StatusFilter::Status(st) => status_meta(st).0.to_string(),
     }
 }
 
-/// 搜索框左前方的"分类"segment:显示当前过滤名 + 下箭头,点开窗口级筛选
-/// 浮层。色调对齐分类左栏选中行(hover 卡底 + 金描边);本身无边框,与
-/// 外层 `search_box` 共用同一圈搜索框边框,点击不开走输入焦点——
-/// 通过 `byteui::form::search_box::view_with_prefix` 内嵌在输入位左前区。
-fn category_filter_segment<'a>(
+/// 搜索框左前方的"状态"segment:显示当前过滤名 + 下箭头,点开窗口级浮层
+/// (列出"全部 + 待办/进行中/搁置/已完成")。色调对齐分类左栏选中行(hover
+/// 卡底 + 金描边);本身无边框,与外层 `search_box` 共用同一圈搜索框边框,
+/// 点击不开走输入焦点——通过 `byteui::form::search_box::view_with_prefix`
+/// 内嵌在输入位左前区。文案按当前过滤单项变色:选中状态时用那态的颜色,
+/// "全部"用奶油,一眼能看出当前筛在哪个态。
+fn status_filter_segment<'a>(
     label: String,
+    active_state: Option<TodoState>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = byteui::theme::color::current();
+    let text_color = active_state
+        .map(|st| status_meta(st).1)
+        .unwrap_or(colors.cream);
     button(
         row![
             text(label)
                 .size(byteui::theme::font::body())
-                .color(colors.cream),
+                .color(text_color),
             icons::view(
                 icons::IconKind::ChevronDown,
                 byteui::theme::icon_size::chevron(),
@@ -1920,7 +1995,7 @@ fn category_filter_segment<'a>(
         .spacing(4)
         .align_y(iced_widget::core::alignment::Vertical::Center),
     )
-    .on_press(Message::CategoryFilterPickerOpen)
+    .on_press(Message::StatusFilterOpen)
     .style(move |_t: &iced_widget::Theme, s: button::Status| {
         let hovered = matches!(s, button::Status::Hovered);
         button::Style {
@@ -1929,7 +2004,7 @@ fn category_filter_segment<'a>(
             } else {
                 Some(colors.bg.into())
             },
-            text_color: colors.cream,
+            text_color,
             border: Border {
                 color: if hovered { colors.gold } else { colors.border },
                 width: 1.0,
@@ -1953,9 +2028,16 @@ fn todo_list_view<'a>(
         ws_state.categories(),
         ws_state.category_selected(),
     );
+    // 状态维度:由搜索框左前「状态」筛选项决定(从 `states` 取每条的状态)。
+    // 与分类维度并列,二者连同关键词取交集(`All` 不设约束)。
+    let status_allowed = match ws_state.status_filter() {
+        StatusFilter::All => None,
+        StatusFilter::Status(st) => Some(st),
+    };
     let visible_idx: Vec<usize> = keyword_idx
         .into_iter()
         .filter(|&i| category_allowed_ids.contains(&ws_state.items[i].id))
+        .filter(|&i| status_allowed.map(|st| states[i] == st).unwrap_or(true))
         .collect();
 
     // 搜索框的水平/垂直间距对齐任务卡片的间距规格(卡片列表 `list` 是
@@ -2663,6 +2745,110 @@ pub fn todo_status_overlay<'a>(
     let pop_h = (4.0_f32 * 28.0) + 16.0;
     let x = ax.min((window_w - pop_w).max(0.0));
     let y = ay.min((window_h - pop_h).max(0.0));
+    Some(
+        container(popup)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(Padding {
+                top: y,
+                left: x,
+                right: 0.0,
+                bottom: 0.0,
+            })
+            .into(),
+    )
+}
+
+/// 搜索框左前「按状态筛选」的选择浮层(窗口级 overlay):从上到下列出
+/// 「全部」 + 待办 / 进行中 / 搁置 / 已完成。"全部"不设任何状态约束(奶油
+/// 文案);其余四种用各自 `status_meta` 专属色,并在前面缀一个当前正选中的
+/// 状态用 **✓** 单字做选中标记,方便一眼看到现在筛在哪个态。点某条发
+/// `Message::StatusFilterPick(filter)`(纯本地改 `status_filter`,不动关键词、
+/// 不落盘),随后由该消息关闭浮层。`app.rs` 在状态详情浮层(卡片状态按钮)
+/// 与日历/派发层之外单独判断,与它们互斥不得同时弹出。
+///
+/// 返回 `None`:要么浮层根本没打开,要么锚点还没记上(理论上到不了,调用方
+/// 降级为只铺 dismiss 收起层)。
+pub fn todo_status_filter_overlay<'a>(
+    ws: &Workspace,
+    window_size: (f32, f32),
+) -> Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> {
+    let ws_state = &ws.todo;
+    if !ws_state.status_filter_open {
+        return None;
+    }
+    let anchor = ws_state.status_filter_anchor?;
+    // 记下当前正筛中的状态(“全部”时 `None”),用于在浮层里给对应项打 ✓。
+    let checked_state = match ws_state.status_filter() {
+        StatusFilter::All => None,
+        StatusFilter::Status(st) => Some(st),
+    };
+
+    let mut items: Vec<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> =
+        Vec::new();
+    let all_checked = checked_state.is_none();
+    let marker = if all_checked { "✓ " } else { "  " };
+    let cream = byteui::theme::color::current().cream;
+    let all_btn = button(
+        text(format!("{marker}全部"))
+            .size(byteui::theme::font::body())
+            .color(cream),
+    )
+    .on_press(Message::StatusFilterPick(StatusFilter::All))
+    .width(Length::Fill)
+    .padding([6, 10])
+    .style(move |_t: &iced_widget::Theme, _s| button::Style {
+        background: None,
+        text_color: cream,
+        ..button::Style::default()
+    });
+    items.push(all_btn.into());
+
+    // 四种状态——带当前选中的先导记号(✓),其余补两个空格以对齐列宽。
+    let order = [
+        TodoState::Pending,
+        TodoState::InProgress,
+        TodoState::Suspended,
+        TodoState::Done,
+    ];
+    for st in order {
+        let (lbl, c) = status_meta(st);
+        let checked = checked_state == Some(st);
+        let lead = if checked { "✓ " } else { "  " };
+        let row = button(
+            text(format!("{lead}{lbl}"))
+                .size(byteui::theme::font::body())
+                .color(c),
+        )
+        .on_press(Message::StatusFilterPick(StatusFilter::Status(st)))
+        .width(Length::Fill)
+        .padding([6, 10])
+        .style(move |_t: &iced_widget::Theme, _s| button::Style {
+            background: None,
+            text_color: c,
+            ..button::Style::default()
+        });
+        items.push(row.into());
+    }
+
+    let popup = container(column(items).spacing(2))
+        .width(Length::Fixed(200.0))
+        .padding(4)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(byteui::theme::color::current().card.into()),
+            border: Border {
+                color: byteui::theme::color::current().border,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..container::Style::default()
+        });
+
+    let (ax, ay) = anchor;
+    let pop_w = 200.0_f32;
+    let pop_h = 5.0_f32 * 34.0 + 10.0;
+    let x = ax.min((window_size.0 - pop_w).max(0.0));
+    let y = ay.min((window_size.1 - pop_h).max(0.0));
     Some(
         container(popup)
             .width(Length::Fill)
