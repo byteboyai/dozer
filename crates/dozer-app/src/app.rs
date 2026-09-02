@@ -1868,6 +1868,10 @@ pub enum Message {
     /// 选择器里点了某一项:`None` = "未分类"(仅 `Todo` target 下有效,
     /// `Category` target 选"未分类"表示挪到顶层)。
     CategoryPickerSelect(Option<i64>),
+    /// 分类筛选下拉(搜索框内嵌 segment)点了某一项:把当前 Todo 列表的过滤
+    /// 切到对应分类,**保留**已输入的关键词(与左栏 `CategorySelect` 在切栏时
+    /// 清关键词不同——这里是同一个搜索框内换细分)。不异步 RPC。
+    CategoryFilterPicked(todo::CategoryFilter),
     /// 数据库面板数据源树 header 行右键菜单关闭(点遮罩 / 按 Esc)。
     DatabaseSourceContextMenuClose,
     /// 项目页签:把某路径作为**新页签**打开(不动任何已存在页签的内容)。
@@ -1972,23 +1976,28 @@ struct ProjectLinkMenu {
     index: usize,
 }
 
-/// Todo 分类树节点右键菜单浮层状态,镜像 `ProjectLinkMenu`。
+/// Todo 分类树节点右键菜单浮层状态,镜像 `ProjectLinkMenu`。`id` 为
+/// `None` 表示右键的是"全部"/"未分类"伪节点(菜单只含"新建分类"新建
+/// 顶层分类)。
 struct CategoryContextMenu {
     x: f32,
     y: f32,
-    /// 被右键的分类节点 id。
-    id: i64,
+    /// 被右键的节点:`Some` 为真实分类 id,`None` 为全部/未分类伪节点。
+    id: Option<i64>,
 }
 
-/// 分类选择器要挂靠的目标:给任务挂分类,还是给分类节点 reparent。
-/// 两种场景共用同一份"点树选一个节点"的浮层交互,只是选中后调用的
-/// `Client` 方法不同(`set_todo_category` vs `reparent_category`)。
+/// 分类选择器要挂靠的目标:给任务挂分类、给分类节点 reparent、或搜索框
+/// 里的分类筛选下拉。挂任务/reparent 共用"点树选一个节点";筛选则是把
+/// 当前列表过滤切到某一种(全部/未分类/某分类)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CategoryPickerTarget {
     /// 给某个任务挂分类(任务 id)。
     Todo(i64),
     /// 给某个分类节点 reparent(分类 id)。
     Category(i64),
+    /// 搜索框前内嵌分类筛选下拉:浮层上加钉顶"全部"、"未分类"两个伪项,
+    /// 命中后走 `CategoryFilterPicked`(不异步 RPC)。
+    Filter,
 }
 
 /// 分类选择器浮层状态:定位坐标 + 目标。渲染内容复用
@@ -3890,7 +3899,7 @@ impl App {
 
     /// 打开分类树节点的右键菜单。坐标复用 `files.last_right_click()`
     /// (同 `project_link_context_menu` 的既有接线方式)。
-    fn todo_category_context_menu(&mut self, id: i64) {
+    fn todo_category_context_menu(&mut self, id: Option<i64>) {
         let (x, y) = self.files.last_right_click();
         self.files.close_context_menu();
         self.category_context_menu = Some(CategoryContextMenu { x, y, id });
@@ -4537,6 +4546,9 @@ impl App {
                 todo::Message::CategoryPickerOpenForTodo(todo_id) => {
                     self.todo_category_picker_open(CategoryPickerTarget::Todo(todo_id));
                 }
+                todo::Message::CategoryFilterPickerOpen => {
+                    self.todo_category_picker_open(CategoryPickerTarget::Filter);
+                }
                 other => self.todo_message(other),
             },
             // 文件树右键"搜索"弹窗:`SearchResults` 带 `project_id`,异步结果
@@ -4989,6 +5001,16 @@ impl App {
             Message::CategoryPickerClose => {
                 self.category_picker = None;
             }
+            Message::CategoryFilterPicked(filter) => {
+                // 下拉选了某项:先关浮层,再由内层 `CategorySetKeepKeyword`
+                // 只切当前过滤(保留搜索关键词)。复用 `todo_message` 的
+                // `with_focused_project` 投射归属工作区,与左栏 `CategorySelect`
+                // 同一落地类型,只是不清空搜索词。
+                self.category_picker = None;
+                let proxy = self.proxy.clone();
+                let _ =
+                    proxy.send_event(Message::Todo(todo::Message::CategorySetKeepKeyword(filter)));
+            }
             Message::CategoryPickerSelect(chosen) => {
                 let Some(picker) = self.category_picker.take() else {
                     return;
@@ -5022,6 +5044,10 @@ impl App {
                                 .send_event(Message::Todo(todo::Message::CategoryMutated(res)));
                         });
                     }
+                    // Filter 模式(搜索框分类下拉)不会走到
+                    // `CategoryPickerSelect`:它的行发的是 `CategoryFilterPicked`。
+                    // 这里仅为了 match 穷尽;万一被触发只关浮层不做任何事。
+                    CategoryPickerTarget::Filter => {}
                 }
             }
             Message::DatabaseSourceContextMenuClose => {
@@ -7248,59 +7274,72 @@ impl App {
             Some(m) => m,
             None => return column![].into(),
         };
-        let id = menu.id;
-        // 被右键节点的 parent_id,给"新建同级分类"用(同级 = 挂在同一个
-        // parent_id 下)。取不到就退化为顶层。
-        let sibling_parent_id = self.active_workspace().and_then(|ws| {
-            ws.todo
-                .categories()
-                .iter()
-                .find(|c| c.id == id)
-                .and_then(|c| c.parent_id)
-        });
-        let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = vec![
-            crate::menu::item::<Message>(
-                Some(icons::IconKind::SquarePlus),
-                "新建子分类",
-                Message::Todo(todo::Message::CategoryNewChild(id)),
-            ),
-            crate::menu::item::<Message>(
-                Some(icons::IconKind::SquarePlus),
-                "新建同级分类",
-                Message::Todo(todo::Message::CategoryNewSibling(sibling_parent_id)),
-            ),
-            crate::menu::item::<Message>(
-                Some(icons::IconKind::ChevronUp),
-                "上移",
-                Message::Todo(todo::Message::CategoryMoveSibling(
-                    id,
-                    dozer_core::protocol::CategoryMoveDirection::Up,
-                )),
-            ),
-            crate::menu::item::<Message>(
-                Some(icons::IconKind::ChevronDown),
-                "下移",
-                Message::Todo(todo::Message::CategoryMoveSibling(
-                    id,
-                    dozer_core::protocol::CategoryMoveDirection::Down,
-                )),
-            ),
-            crate::menu::item::<Message>(
-                Some(icons::IconKind::FolderOpen),
-                "移动到...",
-                Message::Todo(todo::Message::CategoryReparentPickerOpen(id)),
-            ),
-            crate::menu::item::<Message>(
-                Some(icons::IconKind::Rename),
-                "重命名",
-                Message::Todo(todo::Message::CategoryRenameStart(id)),
-            ),
-            crate::menu::item::<Message>(
-                Some(icons::IconKind::Trash),
-                "删除",
-                Message::Todo(todo::Message::CategoryDelete(id)),
-            ),
-        ];
+        // 右键的是"全部"/"未分类"伪节点:菜单只含"新建分类"(新建顶层
+        // 分类,不挂在任何真实名字下——那两个只是视图桶)。真实节点才给
+        // 完整节点操作集。
+        let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
+            match menu.id {
+                None => vec![crate::menu::item::<Message>(
+                    Some(icons::IconKind::SquarePlus),
+                    "新建分类",
+                    Message::Todo(todo::Message::CategoryNewSibling(None)),
+                )],
+                Some(id) => {
+                    // 被右键节点的 parent_id,给"新建同级分类"用(同级 =
+                    // 挂在同一个 parent_id 下)。取不到就退化为顶层。
+                    let sibling_parent_id = self.active_workspace().and_then(|ws| {
+                        ws.todo
+                            .categories()
+                            .iter()
+                            .find(|c| c.id == id)
+                            .and_then(|c| c.parent_id)
+                    });
+                    vec![
+                        crate::menu::item::<Message>(
+                            Some(icons::IconKind::SquarePlus),
+                            "新建子分类",
+                            Message::Todo(todo::Message::CategoryNewChild(id)),
+                        ),
+                        crate::menu::item::<Message>(
+                            Some(icons::IconKind::SquarePlus),
+                            "新建同级分类",
+                            Message::Todo(todo::Message::CategoryNewSibling(sibling_parent_id)),
+                        ),
+                        crate::menu::item::<Message>(
+                            Some(icons::IconKind::ChevronUp),
+                            "上移",
+                            Message::Todo(todo::Message::CategoryMoveSibling(
+                                id,
+                                dozer_core::protocol::CategoryMoveDirection::Up,
+                            )),
+                        ),
+                        crate::menu::item::<Message>(
+                            Some(icons::IconKind::ChevronDown),
+                            "下移",
+                            Message::Todo(todo::Message::CategoryMoveSibling(
+                                id,
+                                dozer_core::protocol::CategoryMoveDirection::Down,
+                            )),
+                        ),
+                        crate::menu::item::<Message>(
+                            Some(icons::IconKind::FolderOpen),
+                            "移动到...",
+                            Message::Todo(todo::Message::CategoryReparentPickerOpen(id)),
+                        ),
+                        crate::menu::item::<Message>(
+                            Some(icons::IconKind::Rename),
+                            "重命名",
+                            Message::Todo(todo::Message::CategoryRenameStart(id)),
+                        ),
+                        crate::menu::item::<Message>(
+                            Some(icons::IconKind::Trash),
+                            "删除",
+                            Message::Todo(todo::Message::CategoryDelete(id)),
+                        ),
+                    ]
+                }
+            };
+
         let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
             crate::menu::shell(items, Length::Shrink);
         container(list)
@@ -7316,8 +7355,11 @@ impl App {
     }
 
     /// 分类选择器浮层:列出当前项目的全部分类节点(全展开按 depth 缩进
-    /// 平铺),点"未分类"或某个节点即把 `category_picker` 目标落盘
-    /// (Category → reparent, Todo → set_todo_category)并关闭。
+    /// 平铺),点"未分类"或某个节点即把 `category_picker` 目标落盘并关闭
+    /// (Category → reparent, Todo → set_todo_category)。**筛选模式**
+    /// (`CategoryPickerTarget::Filter`,来自搜索框内嵌的分类下拉)额外在树顶
+    /// 加一颗"全部",命中全部改成发 `CategoryFilterPicked`——纯本地把
+    /// 当前过滤切过去、保留搜索关键词,不做任何 RPC。
     fn category_picker_popup<'a>(
         &self,
     ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -7328,24 +7370,50 @@ impl App {
             .active_workspace()
             .map(|ws| ws.todo.categories().to_vec())
             .unwrap_or_default();
+        let is_filter = matches!(picker.target, CategoryPickerTarget::Filter);
         let mut list = column![].spacing(2);
+
+        // 筛选模式:钉两个伪项"全部 / 未分类"在树顶,命中发 `CategoryFilterPicked`
+        // (纯本地改状态,保留搜索关键词);否则沿用 `CategoryPickerSelect`(挂任务
+        // / reparent,`None`="未分类")。
+        let uncategorized_msg = if is_filter {
+            Message::CategoryFilterPicked(todo::CategoryFilter::Uncategorized)
+        } else {
+            Message::CategoryPickerSelect(None)
+        };
+        if is_filter {
+            list = list.push(
+                button(text("全部").size(byteui::theme::font::body()))
+                    .on_press(Message::CategoryFilterPicked(todo::CategoryFilter::All))
+                    .width(Length::Fill)
+                    .padding([6, 10]),
+            );
+        }
         list = list.push(
             button(text("未分类").size(byteui::theme::font::body()))
-                .on_press(Message::CategoryPickerSelect(None))
+                .on_press(uncategorized_msg)
                 .width(Length::Fill)
                 .padding([6, 10]),
         );
         // 复用一份没有展开态(全展开)的拍平——选择器只做单次选择,不需要
-        // 折叠交互,直接把整棵树按 depth 缩进平铺出来最简单。
+        // 折叠交互,直接把整棵树按 depth 缩进平铺出来最简单。行的视觉效果与
+        // 既有(挂任务 / reparent)一致,只在筛选模式下命中 `CategoryFilterPicked`
+        // 不做 RPC。
         let all_expanded: std::collections::HashSet<i64> =
             categories.iter().map(|c| c.id).collect();
         for row in todo::visible_category_rows(&categories, &all_expanded) {
+            let id = row.id;
+            let click = if is_filter {
+                Message::CategoryFilterPicked(todo::CategoryFilter::Node(id))
+            } else {
+                Message::CategoryPickerSelect(Some(id))
+            };
             list = list.push(
                 button(
                     text(format!("{}{}", "  ".repeat(row.depth), row.name))
                         .size(byteui::theme::font::body()),
                 )
-                .on_press(Message::CategoryPickerSelect(Some(row.id)))
+                .on_press(click)
                 .width(Length::Fill)
                 .padding([6, 10]),
             );

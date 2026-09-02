@@ -11,6 +11,21 @@ fn project_key(cwd: &Path) -> String {
     cwd.to_string_lossy().replace('/', "-")
 }
 
+/// Claude Code 自己的目录命名规则比 `project_key` 更激进:除了 `/` 之外,
+/// 路径里的 `_`(以及其他非字母数字字符)也会被换成 `-`——实测
+/// `~/.claude/projects/` 下的真实目录名核实(如本地目录
+/// `.../Anrong/anrong_finagent` 对应的真实会话目录是
+/// `...-Anrong-anrong-finagent`,下划线也被换成了短横线)。这条规则只
+/// 属于 Claude Code 自己的存储约定,不能挪去改 `project_key`——
+/// opencode/v8agent 用 `project_key` 是 dozerd 自己定的存储目录,已有数据
+/// 用的是斜杠替换版本,改了会让既有目录对不上。
+fn claude_project_key(cwd: &Path) -> String {
+    cwd.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
 /// CodeBuddy 自己的目录命名规则跟 Claude 不一样:Claude 把开头的 `/` 也
 /// 一并换成 `-`(留下开头一个 `-`),CodeBuddy 是先去掉开头 `/` 再替换
 /// 剩余的 `/`(不留开头 `-`)——实测 `~/.codebuddy/projects/` 下的真实
@@ -32,7 +47,9 @@ pub fn claude_project_dir(cwd: &Path) -> PathBuf {
 }
 
 pub fn claude_project_dir_in(home: &Path, cwd: &Path) -> PathBuf {
-    project_dir_in(home, ".claude", cwd)
+    home.join(".claude")
+        .join("projects")
+        .join(claude_project_key(cwd))
 }
 
 pub fn codebuddy_project_dir(cwd: &Path) -> PathBuf {
@@ -71,6 +88,24 @@ mod tests {
     fn project_dir_maps_slashes_to_dashes() {
         let d = claude_project_dir(Path::new("/a/b/c"));
         assert!(d.to_string_lossy().ends_with("/.claude/projects/-a-b-c"));
+    }
+
+    #[test]
+    fn claude_project_dir_maps_underscores_to_dashes_too() {
+        let d = claude_project_dir(Path::new("/a/b/anrong_finagent"));
+        assert!(
+            d.to_string_lossy()
+                .ends_with("/.claude/projects/-a-b-anrong-finagent")
+        );
+    }
+
+    #[test]
+    fn opencode_dir_keeps_underscores_unlike_claude() {
+        let d = opencode_project_dir(Path::new("/a/b/anrong_finagent"));
+        assert!(
+            d.to_string_lossy()
+                .ends_with("/.dozer/agents/opencode/projects/-a-b-anrong_finagent")
+        );
     }
 
     #[test]

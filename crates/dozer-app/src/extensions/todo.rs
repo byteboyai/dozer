@@ -25,6 +25,17 @@ pub enum TodoState {
     Done,
 }
 
+/// 右区当前展示的视图模式。`List` 是现有的一列一列的任务列表(卡片逐行
+/// 堆叠/可拖拽排序);`Kanban` 是看板视图,按状态分列展示同批任务——**一期
+/// 只占位,暂无渲染实现**(见下方 `kanban_placeholder`),先让用户在两种视图
+/// 间切换的入口可用而不报错。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TodoView {
+    #[default]
+    List,
+    Kanban,
+}
+
 /// `done` 为真直接 `Done`（不管有没有派发记录——已完成的任务不需要
 /// 再关心是谁做的）；否则看有没有派发记录，记录存在且目标 session
 /// 仍存活（`target_alive`，调用方传 `ws.tabs.iter().any(|t| t.info.id
@@ -321,6 +332,8 @@ pub struct WorkspaceState {
     category_rename_focused: bool,
     /// 一次性聚焦标记,镜像 `files.rs::tree_edit_focus_pending`。
     category_rename_focus_pending: bool,
+    /// 右区视图模式:列表视图 `List`(默认)/ 看板视图 `Kanban`。
+    view: TodoView,
 }
 
 impl WorkspaceState {
@@ -528,6 +541,11 @@ impl WorkspaceState {
         self.category_selected
     }
 
+    /// 右区当前视图模式(列表/看板),内容渲染与 tab 高亮共用。
+    pub fn view(&self) -> TodoView {
+        self.view
+    }
+
     /// 展开/收起某个分类节点(点左侧树箭头)。
     fn toggle_category_expanded(&mut self, id: i64) {
         if !self.category_expanded.remove(&id) {
@@ -703,10 +721,20 @@ pub enum Message {
     CategoryToggleExpand(i64),
     /// 点左侧树某一行(或"全部"/"未分类"伪节点),切换当前过滤。
     CategorySelect(CategoryFilter),
-    /// 右键某个分类节点(伪节点"全部"/"未分类"不触发这个消息)。内核
-    /// 拦截转发成 `App::todo_category_context_menu`(同 `ProjectLinkMenu`
-    /// 的既有接线方式),不进 `todo::update`。
-    CategoryContextMenuOpen(i64),
+    /// 搜索框内嵌分类筛选下拉选了某个过滤:**只改** `category_selected`,
+    /// 不清关键词、不做任何副作用——与左栏 `CategorySelect`(切栏顺带
+    /// `clear_search`)不同,关键词是跟搜索框同一个输入,不该在换细分时
+    /// 被抹掉。
+    CategorySetKeepKeyword(CategoryFilter),
+    /// 切换右区视图模式(列表视图/看板视图)。看板暂占位(CategoryFilter 里
+    /// 两个伪节点的空壳),仅记录选中态,列表内容仍正常渲染。
+    SelectView(TodoView),
+    /// 右键某个分类节点,打开其右键菜单。`Some(id)` 是真实分类节点;
+    /// `None` 表示右键的是钉住的"全部"/"未分类"伪节点——伪节点菜单只
+    /// 含"新建分类"(新建顶层分类)。内核拦截转发成
+    /// `App::todo_category_context_menu`(同 `ProjectLinkMenu` 的既有
+    /// 接线方式),不进 `todo::update`。
+    CategoryContextMenuOpen(Option<i64>),
     /// 右键菜单"新建子分类":先用默认名新建(RPC 返回真实 id),再立刻
     /// 进入该节点的改名态,让用户直接输入真实名字。
     CategoryNewChild(i64),
@@ -731,6 +759,10 @@ pub enum Message {
     /// 点任务卡片的分类 chip,打开分类选择器(内核拦截,转发到
     /// `App::todo_category_picker_open`)。
     CategoryPickerOpenForTodo(i64),
+    /// 点搜索框左前方的分类筛选下拉(分类 segment),打开窗口级分类筛选
+    /// 浮层(内核拦截,转发到 `App::todo_category_picker_open` 的
+    /// `CategoryPickerTarget::Filter`)。只切当前过滤用、不动关键词。
+    CategoryFilterPickerOpen,
 }
 
 /// 任务内容编辑/添加框的真 `text_input`/`text_editor` 的 `widget::Id`。
@@ -960,12 +992,17 @@ pub fn update(
             });
         }
         Message::CategoryToggleExpand(id) => ws_state.toggle_category_expanded(id),
+        Message::SelectView(view) => ws_state.view = view,
         Message::CategorySelect(filter) => {
             ws_state.category_selected = filter;
             // 切显示分类重置搜索关键词过滤(原在切换状态分类时做,现左栏只留
             // 自定义分类这一口径,故改到切换分类这里):哪怕切回原来那个用
             // 关键词搜过的分类也要重置,不做"记住每个分类各自搜索词"那套。
             ws_state.clear_search();
+        }
+        // 搜索框内嵌分类下拉走的专用通道:只切当前过滤、保留关键词。
+        Message::CategorySetKeepKeyword(filter) => {
+            ws_state.category_selected = filter;
         }
         Message::CategoryContextMenuOpen(_) => {}
         Message::CategoryNewChild(parent_id) => {
@@ -1041,6 +1078,7 @@ pub fn update(
         }
         Message::CategoryReparentPickerOpen(_) => {}
         Message::CategoryPickerOpenForTodo(_) => {}
+        Message::CategoryFilterPickerOpen => {}
         Message::Toggle(idx) => {
             let Some(item) = ws_state.items.get(idx) else {
                 return;
@@ -1362,10 +1400,12 @@ pub fn view<'a>(
         })
         .into();
 
-    // ---- 右栏 pane：收起/展开列表列按钮 + 视图主体 ----
-    // 右栏只保留列表视图(MARKDOWN tab 已随存储迁移移除)。收起/展开列表
-    // 列按钮消息为本地 `Message::ToggleListCollapse`,由内核 `App::update`
-    // 拦截转发成顶层 `Message::TogglePanelListCollapse`。
+    // ---- 右栏 pane：视图切换 tab + 收起/展开列表列按钮 + 视图主体 ----
+    // 右栏内容区按 `TodoView` 渲染:列表视图(现有逐行列表)与看板视图
+    // (一期仅占位,见 `kanban_placeholder`)。顶部一行左侧是这两个视图切换
+    // tab、右端是收起/展开列表列按钮。收起/展开按钮消息为本地
+    // `Message::ToggleListCollapse`,由内核 `App::update` 拦截转发成顶层
+    // `Message::TogglePanelListCollapse`。
     let collapse = app.list_collapse_button(
         crate::app::PanelKind::Todo,
         app.list_collapsed(crate::app::PanelKind::Todo),
@@ -1375,19 +1415,37 @@ pub fn view<'a>(
         Message::ToggleListCollapse,
         move |hovered| Message::Hover(crate::app::HoverId::TodoListCollapse, hovered),
     );
-    // `collapse` 右缘对齐 `padding` 的 20px 右内边距——跟下面任务卡片/搜索框
-    // 的右侧留白(同为 20px)取平(2026-08-28 用户反馈:改之前 collapse 紧贴在
-    // list 右边,没有跟卡片右对齐)。中间塞一块 `Fill` 空间把 `collapse` 顶到
-    // 行右端。
-    let tabs_bar = row![space::Space::new().width(Length::Fill), collapse]
-        .width(Length::Fill)
-        .align_y(iced_widget::core::Alignment::Center)
-        .spacing(4)
-        .padding([4, 20]);
+    // 右区顶栏:左侧放「列表视图/看板视图」两个视图切换 tab,右端放
+    // 收起/展开列表列按钮。中间 `Fill` 空间把右侧按钮顶到行尾,也让视图
+    // tab 左贴内容区(都与下方任务卡片取平)。`collapse` 右缘对齐 20px 右边
+    // 距(2026-08-28 用户反馈:改之前 collapse 紧贴 list 右边,没跟卡片右
+    // 对齐)。
+    let top_row = row![
+        todo_view_tab(
+            "列表视图",
+            TodoView::List,
+            ws_state.view() == TodoView::List
+        ),
+        todo_view_tab(
+            "看板视图",
+            TodoView::Kanban,
+            ws_state.view() == TodoView::Kanban
+        ),
+        space::Space::new().width(Length::Fill),
+        collapse,
+    ]
+    .width(Length::Fill)
+    .align_y(iced_widget::core::Alignment::Center)
+    .spacing(4)
+    .padding([4, 20]);
     let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        todo_list_view(app, ws_state, &states);
+        match ws_state.view() {
+            TodoView::List => todo_list_view(app, ws_state, &states),
+            // 看板视图一期仅占位:切换有入口、渲染不崩,内容留空待后续实现。
+            TodoView::Kanban => kanban_placeholder(),
+        };
     let content_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        container(column![tabs_bar, crate::app::tab_divider(), body].height(Length::Fill))
+        container(column![top_row, crate::app::tab_divider(), body].height(Length::Fill))
             .width(content_width)
             .height(Length::Fill)
             .style(move |_t: &iced_widget::Theme| container::Style {
@@ -1398,6 +1456,59 @@ pub fn view<'a>(
             .into();
 
     (sidebar_pane, content_pane)
+}
+
+/// 右区顶部一个视图模式切换 tab(纯文字 pill):选中态 cream 文字 + CARD
+/// 实底 + 1px 金描边,与左侧分类树的选中行同视觉语言;未选中态 DIM。点击
+/// 下发 `Message::SelectView`,切换列表/看板视图。
+fn todo_view_tab<'a>(
+    label: &'static str,
+    view: TodoView,
+    active: bool,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let theme = byteui::theme::color::current();
+    let fg = if active { theme.cream } else { theme.dim };
+    button(text(label).size(byteui::theme::font::body()).color(fg))
+        .on_press(Message::SelectView(view))
+        .width(Length::Shrink)
+        .padding([6, 14])
+        .style(
+            move |_t: &iced_widget::Theme, _s: button::Status| button::Style {
+                background: if active {
+                    Some(theme.card.into())
+                } else {
+                    None
+                },
+                text_color: fg,
+                border: Border {
+                    color: if active {
+                        theme.gold
+                    } else {
+                        Color::TRANSPARENT
+                    },
+                    width: if active { 1.0 } else { 0.0 },
+                    radius: 6.0.into(),
+                },
+                ..button::Style::default()
+            },
+        )
+        .into()
+}
+
+/// 看板视图的一期占位:视觉几列状态分区我们不渲染任何任务(功能未实现),
+/// 只在内容区中央给一行淡淡的提示文字,说明该视图待实现。等接入了真正
+/// 的看板渲染(按状态分列的那批 `todo_card`)再替换这里。
+fn kanban_placeholder<'a>() -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    container(
+        text("看板视图待实现")
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().dim),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .align_x(iced_widget::core::alignment::Horizontal::Center)
+    .align_y(iced_widget::core::alignment::Vertical::Center)
+    .into()
 }
 
 /// 新增任务框高度上/下限(逻辑像素)。下限即默认高(约 5 行正文,保证多行
@@ -1596,14 +1707,17 @@ fn todo_clear_footer_bar<'a>(
 /// 顶部搜索框:真正的 `byteui::form::input_text`,形状与 Files 搜索框
 /// (Stage 2)一致。草稿 `draft` 是 `text_input::on_input` 给的全量字符串,
 /// 焦点态由 `CaptureTodoSearchFocus` 每帧查、`main.rs` 据此放行键盘给
-/// 标准 iced 管线。`active` = 列表正被 `search` 过滤时持续金框提示(同
-/// Files `search_box` 的 `highlight`)。
+/// 标准 iced 管线。`highlight` = 列表正被 `search` 过滤或搜索聚焦时持续
+/// 金框提示(同 Files `search_box`)。左前区内嵌分类筛选 segment
+/// (`view_with_prefix`),点它 `CategoryFilterPickerOpen` → 窗口级过滤浮层。
 fn todo_search_bar<'a>(
     app: &App,
     ws_state: &'a WorkspaceState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let highlight = ws_state.search_focused() || !ws_state.search.is_empty();
-    let bar = byteui::form::search_box::view(
+    let filter_label = category_filter_label(ws_state.categories(), ws_state.category_selected());
+    let prefix = category_filter_segment(filter_label);
+    let bar = byteui::form::search_box::view_with_prefix(
         "搜索任务…",
         &ws_state.search_draft,
         Some(todo_search_field_id()),
@@ -1612,6 +1726,7 @@ fn todo_search_bar<'a>(
         Message::SearchSubmit,
         app.hover_progress(HoverId::TodoSearchSubmit),
         |hovered| Message::Hover(HoverId::TodoSearchSubmit, hovered),
+        Some(prefix),
     );
     byteui::interaction::context_menu::wrap(
         bar,
@@ -1620,6 +1735,63 @@ fn todo_search_bar<'a>(
             secure: false,
         })),
     )
+}
+
+/// 当前 `CategoryFilter` 在筛选 segment 上显示的名字:`All`="全部"、
+/// `Uncategorized`="未分类"、`Node(id)` 取节点名,原名为空时回退"全部分类"。
+fn category_filter_label(categories: &[CategoryInfo], filter: CategoryFilter) -> String {
+    match filter {
+        CategoryFilter::All => "全部".to_string(),
+        CategoryFilter::Uncategorized => "未分类".to_string(),
+        CategoryFilter::Node(id) => categories
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| "全部分类".to_string()),
+    }
+}
+
+/// 搜索框左前方的"分类"segment:显示当前过滤名 + 下箭头,点开窗口级筛选
+/// 浮层。色调对齐分类左栏选中行(hover 卡底 + 金描边);本身无边框,与
+/// 外层 `search_box` 共用同一圈搜索框边框,点击不开走输入焦点——
+/// 通过 `byteui::form::search_box::view_with_prefix` 内嵌在输入位左前区。
+fn category_filter_segment<'a>(
+    label: String,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let colors = byteui::theme::color::current();
+    button(
+        row![
+            text(label)
+                .size(byteui::theme::font::body())
+                .color(colors.cream),
+            icons::view(
+                icons::IconKind::ChevronDown,
+                byteui::theme::icon_size::chevron(),
+                colors.dim,
+            ),
+        ]
+        .spacing(4)
+        .align_y(iced_widget::core::alignment::Vertical::Center),
+    )
+    .on_press(Message::CategoryFilterPickerOpen)
+    .style(move |_t: &iced_widget::Theme, s: button::Status| {
+        let hovered = matches!(s, button::Status::Hovered);
+        button::Style {
+            background: if hovered {
+                Some(colors.card.into())
+            } else {
+                Some(colors.bg.into())
+            },
+            text_color: colors.cream,
+            border: Border {
+                color: if hovered { colors.gold } else { colors.border },
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..button::Style::default()
+        }
+    })
+    .into()
 }
 
 /// 列表视图主体：搜索栏 + 编号行列表 + 底部新增输入。
@@ -2418,17 +2590,26 @@ fn category_tree_nav<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![].spacing(2).padding([4, 8]);
 
-    col = col.push(category_pseudo_row(
-        icons::IconKind::CircleSmall,
-        "全部",
-        ws_state.category_selected() == CategoryFilter::All,
-        Message::CategorySelect(CategoryFilter::All),
+    // "全部"/"未分类"伪节点可右键弹出顶层"新建分类"(见
+    // `CategoryContextMenuOpen(None)` 的语义)。两者都新建的是顶层分类
+    // (新建后并不会真挂在哪个名字下面——全部/未分类只是视图桶)。
+    col = col.push(byteui::interaction::context_menu::wrap(
+        category_pseudo_row(
+            icons::IconKind::CircleSmall,
+            "全部",
+            ws_state.category_selected() == CategoryFilter::All,
+            Message::CategorySelect(CategoryFilter::All),
+        ),
+        Some(Message::CategoryContextMenuOpen(None)),
     ));
-    col = col.push(category_pseudo_row(
-        icons::IconKind::CircleSmall,
-        "未分类",
-        ws_state.category_selected() == CategoryFilter::Uncategorized,
-        Message::CategorySelect(CategoryFilter::Uncategorized),
+    col = col.push(byteui::interaction::context_menu::wrap(
+        category_pseudo_row(
+            icons::IconKind::CircleSmall,
+            "未分类",
+            ws_state.category_selected() == CategoryFilter::Uncategorized,
+            Message::CategorySelect(CategoryFilter::Uncategorized),
+        ),
+        Some(Message::CategoryContextMenuOpen(None)),
     ));
 
     let rows = visible_category_rows(ws_state.categories(), ws_state.category_expanded());
@@ -2502,7 +2683,7 @@ fn category_tree_nav<'a>(
         });
         col = col.push(byteui::interaction::context_menu::wrap(
             label.into(),
-            Some(Message::CategoryContextMenuOpen(row.id)),
+            Some(Message::CategoryContextMenuOpen(Some(row.id))),
         ));
     }
     col.into()

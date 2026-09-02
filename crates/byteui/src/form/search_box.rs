@@ -21,6 +21,60 @@ pub fn view<'a, Message: Clone + 'a>(
     submit_hover_t: f32,
     on_submit_hover: impl Fn(bool) -> Message + 'a,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    view_inner(
+        placeholder,
+        value,
+        id,
+        highlight,
+        on_input,
+        on_submit,
+        submit_hover_t,
+        on_submit_hover,
+        None,
+    )
+}
+
+/// `view` 的变体:允许在输入区左前方(同一圈边框内)内嵌一个引导位
+/// (`prefix`,通常是分类筛选等带下拉的 segment)。`None` 时与 `view`
+/// 完全等同——现有无引导位的调用方无需改任何代码。带 `prefix` 时常配
+/// 合屏幕点选的下拉浮层使用(浮层由调用方另叠)。
+#[allow(clippy::too_many_arguments)]
+pub fn view_with_prefix<'a, Message: Clone + 'a>(
+    placeholder: &str,
+    value: &'a str,
+    id: Option<widget::Id>,
+    highlight: bool,
+    on_input: impl Fn(String) -> Message + 'a,
+    on_submit: Message,
+    submit_hover_t: f32,
+    on_submit_hover: impl Fn(bool) -> Message + 'a,
+    prefix: Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>>,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    view_inner(
+        placeholder,
+        value,
+        id,
+        highlight,
+        on_input,
+        on_submit,
+        submit_hover_t,
+        on_submit_hover,
+        prefix,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn view_inner<'a, Message: Clone + 'a>(
+    placeholder: &str,
+    value: &'a str,
+    id: Option<widget::Id>,
+    highlight: bool,
+    on_input: impl Fn(String) -> Message + 'a,
+    on_submit: Message,
+    submit_hover_t: f32,
+    on_submit_hover: impl Fn(bool) -> Message + 'a,
+    prefix: Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>>,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = crate::theme::color::current();
     let mut input = iced_widget::text_input(placeholder, value)
         .on_input(on_input)
@@ -63,8 +117,21 @@ pub fn view<'a, Message: Clone + 'a>(
     );
 
     let content_h = crate::theme::icon_size::row() + 12.0;
+    // `spacing` 只在带前缀时拉开:无前缀时保持"输入区紧贴右侧提交按钮"的
+    // 既有观感(默认 `view` 行为不变),避免旁支搜索框整体内距被改动。
+    let with_prefix = prefix.is_some();
+    let prefix_cell: Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> =
+        prefix.map(|p| {
+            // 引导位独占一行内容高,与输入区共用外圈边框;右侧留一条缝与文字
+            // 区分(分割线由调用方自带,这里克制不加第二道竖线)。
+            iced_widget::container(p)
+                .height(Length::Fill)
+                .align_y(iced_widget::core::alignment::Vertical::Center)
+                .into()
+        });
     iced_widget::container(
         iced_widget::row![
+            prefix_cell,
             iced_widget::container(field)
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -73,6 +140,7 @@ pub fn view<'a, Message: Clone + 'a>(
             iced_widget::container(submit_button)
                 .align_y(iced_widget::core::alignment::Vertical::Center),
         ]
+        .spacing(if with_prefix { 8.0 } else { 0.0 })
         .width(Length::Fill)
         .height(Length::Fixed(content_h))
         .align_y(iced_widget::core::Alignment::Center),
