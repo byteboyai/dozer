@@ -69,6 +69,10 @@ pub struct SessionSummaryPayload {
     pub summary: String,
     pub status: SummaryStatus,
     pub created_ts_ms: u64,
+    /// 该会话是否由 Todo 任务处理产生,是则记该任务 `TodoInfo.id`。会话
+    /// 面板据此展示"关联任务"标签。与交互式 PTY 会话无关时为 `None`。
+    #[serde(default)]
+    pub task_id: Option<i64>,
 }
 
 /// 单个历史会话(=一份 agent transcript 文件)的索引摘要;由 dozerd 的
@@ -239,6 +243,11 @@ pub struct TodoInfo {
     /// 所属分类节点 id,`None` = 未分类(2026-09-01 分类树设计新增)。
     #[serde(default)]
     pub category_id: Option<i64>,
+    /// 指派给哪个 agent 种类(纯记录,不触发执行;`None` = 未指派)。只有
+    /// `AgentKind::label()` 有 headless 适配器的四种(Claude/Codebuddy/
+    /// Opencode/V8agent)会出现在这里,选择器不出现其余三种。
+    #[serde(default)]
+    pub assigned_agent: Option<AgentKind>,
 }
 
 /// 一个分类树节点(`dozerd` 的 `todo_categories` 表一行)。`parent_id ==
@@ -253,6 +262,10 @@ pub struct CategoryInfo {
     /// 同一 `parent_id` 下的兄弟排序键,升序展示。
     pub rank: i64,
     pub created_ms: u64,
+    /// 该分类下的任务是否开启自动轮询处理(dozerd 后台定时扫描触发
+    /// headless 处理),默认关闭。
+    #[serde(default)]
+    pub auto_poll_enabled: bool,
 }
 
 /// `MoveCategorySibling` 的方向:与同一 `parent_id` 下相邻的前一个/
@@ -493,10 +506,28 @@ pub enum Request {
         id: i64,
         plan_date: Option<String>,
     },
-    /// 记录一次派发(指派到已有会话)。
-    RecordTodoDispatch {
+    /// 指派任务给某个 agent 种类。纯记录,不触发任何执行、不写 PTY——
+    /// dozerd 只更新 `assigned_agent`/`dispatch_at_ms`。
+    AssignTodoAgent {
         id: i64,
-        session_id: String,
+        agent: AgentKind,
+    },
+    /// 打开/关闭某分类下任务的自动轮询处理。
+    SetCategoryAutoPoll {
+        id: i64,
+        enabled: bool,
+    },
+    /// 立即触发一次该任务的 headless 处理,不等轮询。`human_reply` 为
+    /// `None` 表示这次触发没有新增人类文本(指派后从未回复过就先点了
+    /// "处理")。命中"该任务正在处理中"时应答 `Reply::Error`。
+    ProcessTodoNow {
+        id: i64,
+        human_reply: Option<String>,
+    },
+    /// 详情弹窗打开时一次性拿任务信息 + 关联会话的完整回合列表。
+    /// `dispatch_session_id` 为 `None`(从未处理过)时 `turns` 返回空数组。
+    GetTodoDetail {
+        id: i64,
     },
     /// 把任务设为某个已存储逻辑状态(`TodoStoredStatus`,见其注释里三值各
     /// 自落哪些 `done`/`paused`/`dispatch_*` 组合)。服务端一次 UPDATE 原子
@@ -655,6 +686,11 @@ pub enum Reply {
     Category {
         category: CategoryInfo,
     },
+    /// `GetTodoDetail` 应答。
+    TodoDetail {
+        info: TodoInfo,
+        turns: Vec<TurnRecord>,
+    },
 }
 
 pub fn encode_line<T: Serialize>(value: &T) -> String {
@@ -804,6 +840,7 @@ mod tests {
             summary: "总结全文".into(),
             status: SummaryStatus::AiGenerated,
             created_ts_ms: 200,
+            task_id: None,
         };
         let reply = Reply::ConversationsWithSummaries {
             rows: vec![(summary.clone(), Some(payload.clone())), (summary, None)],
@@ -1197,6 +1234,7 @@ mod tests {
                 summary: "s".into(),
                 status: SummaryStatus::AiGenerated,
                 created_ts_ms: 42,
+                task_id: None,
             }),
         };
         let line = encode_line(&reply);
@@ -1215,6 +1253,7 @@ mod tests {
                 summary: "s".into(),
                 status: SummaryStatus::AiGenerated,
                 created_ts_ms: 42,
+                task_id: None,
             }),
         };
         let line = encode_line(&reply);
@@ -1410,6 +1449,7 @@ mod tests {
             dispatch_session_id: None,
             dispatch_at_ms: None,
             category_id: None,
+            assigned_agent: None,
         };
         let reply = Reply::Todo { todo: todo.clone() };
         let line = encode_line(&reply);
@@ -1440,6 +1480,7 @@ mod tests {
             name: "前端".into(),
             rank: 0,
             created_ms: 1_700_000_000_000,
+            auto_poll_enabled: false,
         };
         let reply = Reply::Category {
             category: category.clone(),
@@ -1464,5 +1505,73 @@ mod tests {
             "dispatch_session_id":null,"dispatch_at_ms":null}"#;
         let todo: TodoInfo = serde_json::from_str(json).unwrap();
         assert_eq!(todo.category_id, None);
+    }
+
+    #[test]
+    fn assign_todo_agent_and_todo_detail_roundtrip() {
+        let req = Request::AssignTodoAgent {
+            id: 1,
+            agent: AgentKind::Claude,
+        };
+        let line = encode_line(&req);
+        assert_eq!(decode_line::<Request>(&line).unwrap(), req);
+
+        let req = Request::SetCategoryAutoPoll { id: 10, enabled: true };
+        let line = encode_line(&req);
+        assert_eq!(decode_line::<Request>(&line).unwrap(), req);
+
+        let req = Request::ProcessTodoNow {
+            id: 1,
+            human_reply: Some("继续吧".into()),
+        };
+        let line = encode_line(&req);
+        assert_eq!(decode_line::<Request>(&line).unwrap(), req);
+
+        let req = Request::GetTodoDetail { id: 1 };
+        let line = encode_line(&req);
+        assert_eq!(decode_line::<Request>(&line).unwrap(), req);
+
+        let turn = TurnRecord {
+            turn_index: 0,
+            role: "human".into(),
+            content: "先看看这个 bug".into(),
+            tool_calls: vec![],
+            thinking: false,
+            thinking_text: None,
+            ts: Some(1),
+            is_error: false,
+            tokens_in: 0,
+            tokens_out: 0,
+            tokens_cache_read: 0,
+            tokens_cache_write: 0,
+        };
+        let todo = TodoInfo {
+            id: 1,
+            project_id: 1,
+            text: "修个 bug".into(),
+            done: false,
+            paused: false,
+            rank: 0,
+            created_ms: 1,
+            completed_at_ms: None,
+            plan_date: None,
+            dispatch_session_id: Some("mint-1".into()),
+            dispatch_at_ms: Some(1),
+            category_id: None,
+            assigned_agent: Some(AgentKind::Claude),
+        };
+        let reply = Reply::TodoDetail { info: todo, turns: vec![turn] };
+        let line = encode_line(&reply);
+        assert_eq!(decode_line::<Reply>(&line).unwrap(), reply);
+    }
+
+    #[test]
+    fn todo_info_assigned_agent_defaults_to_none_when_absent_from_json() {
+        // 老协议帧没有 assigned_agent 字段,新增字段要能优雅缺省,不报错。
+        let json = r#"{"id":1,"project_id":1,"text":"任务","done":false,"paused":false,
+            "rank":0,"created_ms":0,"completed_at_ms":null,"plan_date":null,
+            "dispatch_session_id":null,"dispatch_at_ms":null}"#;
+        let todo: TodoInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(todo.assigned_agent, None);
     }
 }
