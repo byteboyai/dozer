@@ -42,15 +42,6 @@ pub fn todo_display_state(item: &TodoInfo, target_alive: bool) -> TodoState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TodoFilter {
-    #[default]
-    All,
-    Pending,
-    InProgress,
-    Done,
-}
-
 /// 分类树的当前过滤选中态。`All`/`Uncategorized` 是钉在树顶的两个伪
 /// 节点(不对应真实 `CategoryInfo` 行),`Node(id)` 才是用户自建的真实
 /// 分类节点。
@@ -114,24 +105,16 @@ pub const TODO_LIST_SCROLL_ID: &str = "todo-list";
 /// 纯前端过滤：状态相等匹配 + 关键字对 `TodoInfo.text` 做大小写不敏感
 /// 的子串匹配（空 `query` 不过滤）。作用在"已经解析+推导好状态"的
 /// 内存列表上，不碰数据库（design 第 7 节）。
-pub fn filter_todos(
-    items: &[TodoInfo],
-    states: &[TodoState],
-    filter: TodoFilter,
-    query: &str,
-) -> Vec<usize> {
+/// 纯前端关键字过滤：对 `TodoInfo.text` 做大小写不敏感子串匹配（空
+/// `query` 不过滤）。作用在"已经解析+推导好状态"的内存列表上，不碰
+/// 数据库（design 第 7 节）。左栏"按状态分类"筛选维度移除后，可视
+/// 范围只由「关键字 × 自定义分类」两口径取交集决定。
+pub fn filter_todos(items: &[TodoInfo], query: &str) -> Vec<usize> {
     let query_lower = query.trim().to_lowercase();
     items
         .iter()
-        .zip(states.iter())
         .enumerate()
-        .filter(|(_, (_, state))| match filter {
-            TodoFilter::All => true,
-            TodoFilter::Pending => **state == TodoState::Pending,
-            TodoFilter::InProgress => **state == TodoState::InProgress,
-            TodoFilter::Done => **state == TodoState::Done,
-        })
-        .filter(|(_, (item, _))| {
+        .filter(|(_, item)| {
             query_lower.is_empty() || item.text.to_lowercase().contains(&query_lower)
         })
         .map(|(i, _)| i)
@@ -269,7 +252,6 @@ pub struct WorkspaceState {
     /// 高",视图侧一律 `max(ADD_INPUT_MIN_HEIGHT)` 兜底——这样 `#[derive(
     /// Default)]` 给的 0 也不会渲染成 0 高框。
     add_input_height: f32,
-    filter: TodoFilter,
     selected_row: Option<usize>,
     /// 新增任务后"置顶 + 选中保持 2 秒"的计时态。`Some(Flash)` 表示刚新增
     /// 了一条任务,其卡片的 `selected_row` 高亮要在 `flash.until` 时刻自动
@@ -521,11 +503,11 @@ impl WorkspaceState {
         self.search = self.search_draft.clone();
     }
 
-    /// 生效词和草稿都清空(切分类时调用,见 `Message::FilterSet` 处理器)——
-    /// 只清 `search` 会留下草稿里的旧关键词,用户以为搜索框已经清空,其实
-    /// 再次回车/失焦提交时会把旧词重新落成生效过滤,不是真正的重置。切
-    /// 回原来那个用关键词搜过的分类也一样清空,不做"记住每个分类各自的
-    /// 搜索词"那套(需求原话:哪怕切回去也要重置)。
+    /// 生效词和草稿都清空(切显示分类时调用,见 `Message::CategorySelect`
+    /// 处理器)——只清 `search` 会留下草稿里的旧关键词,用户以为搜索框已经
+    /// 清空,其实再次回车/失焦提交时会把旧词重新落成生效过滤,不是真正的
+    /// 重置。切回原来那个用关键词搜过的分类也一样清空,不做"记住每个分类
+    /// 各自的搜索词"那套(需求原话:哪怕切回去也要重置)。
     pub fn clear_search(&mut self) {
         self.search.clear();
         self.search_draft.clear();
@@ -654,7 +636,6 @@ pub enum Message {
     /// 状态落在 `WorkspaceState::add_input_height` 而非 `PanelDims`。`todo::
     /// update` 收不到这条(早退),这里仍给个 no-op arm 保持 match 穷尽。
     AddResizeStart,
-    FilterSet(TodoFilter),
     RowSelect(Option<usize>),
     /// 搜索框草稿变化(iced `text_input::on_input`,每次给全量当前字符串)。
     SearchInput(String),
@@ -979,7 +960,13 @@ pub fn update(
             });
         }
         Message::CategoryToggleExpand(id) => ws_state.toggle_category_expanded(id),
-        Message::CategorySelect(filter) => ws_state.category_selected = filter,
+        Message::CategorySelect(filter) => {
+            ws_state.category_selected = filter;
+            // 切显示分类重置搜索关键词过滤(原在切换状态分类时做,现左栏只留
+            // 自定义分类这一口径,故改到切换分类这里):哪怕切回原来那个用
+            // 关键词搜过的分类也要重置,不做"记住每个分类各自搜索词"那套。
+            ws_state.clear_search();
+        }
         Message::CategoryContextMenuOpen(_) => {}
         Message::CategoryNewChild(parent_id) => {
             let client = client.clone();
@@ -1124,12 +1111,6 @@ pub fn update(
         // 高度拖拽在 app 层 `todo_message` 已早退,不会到这里;保留 arm 仅
         // 为 match 穷尽。
         Message::AddResizeStart => {}
-        Message::FilterSet(f) => {
-            ws_state.filter = f;
-            // 切分类重置搜索关键词过滤(需求:哪怕切回原来那个用关键词
-            // 搜过的分类也要重置,不做"记住每个分类各自搜索词"那套)。
-            ws_state.clear_search();
-        }
         Message::RowSelect(idx) => {
             ws_state.selected_row = idx;
             // 用户手动选中(点卡片空白处)会打断"新增闪光":否则 2 秒计时到点
@@ -1336,7 +1317,7 @@ pub fn view<'a>(
     ))
     .padding(theme::region::project_pane().padding);
 
-    // ---- 状态推导（一次算好，侧栏计数 + 列表渲染共用） ----
+    // ---- 状态推导（每张任务卡片的状态标/派发判断共用,一次算好） ----
     let states: Vec<TodoState> = ws_state
         .items
         .iter()
@@ -1354,40 +1335,18 @@ pub fn view<'a>(
             todo_display_state(item, target_alive)
         })
         .collect();
-    let counts = [
-        (TodoFilter::All, ws_state.items.len()),
-        (
-            TodoFilter::Pending,
-            states.iter().filter(|s| **s == TodoState::Pending).count(),
-        ),
-        (
-            TodoFilter::InProgress,
-            states
-                .iter()
-                .filter(|s| **s == TodoState::InProgress)
-                .count(),
-        ),
-        (
-            TodoFilter::Done,
-            states.iter().filter(|s| **s == TodoState::Done).count(),
-        ),
-    ];
 
-    // ---- 左栏 pane：header + 分类导航 + 底部「任务计数 / 清空列表」栏 ----
-    // 原 content pane 右下角的 `todo_clear_footer_bar` 整体迁到左栏:分类导航
-    // 之下、靠底。计数(左)与「清空列表」(右)不再堆在内容区右下方,改由左栏
-    // 底部统一呈现——内容区底部只留「新增任务」输入框。
-    let mut nav = column![].spacing(4).padding([12, 8]);
-    for (filter, count) in counts {
-        nav = nav.push(todo_category_button(filter, count, ws_state.filter));
-    }
-    // ---- 分类树导航:钉在状态过滤 nav 下方,同一块左栏滚动区域 ----
+    // ---- 左栏 pane：header + 分类导航 + 底部「清空列表」栏 ----
+    // 去掉按任务状态分类的列表(全部/待办/进行中/已完成),只保留下方的
+    // 自定义分类导航。原 content pane 右下角的 `todo_clear_footer_bar` 整体
+    // 迁到左栏:分类导航之下、靠底。计数与「清空列表」不再堆在内容区右下方,
+    // 改由左栏底部统一呈现——内容区底部只留「新增任务」输入框。
+    // ---- 分类树导航:左栏唯一的多类别入口 ----
     let category_nav = category_tree_nav(app, ws_state);
     let sidebar_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         container(
             column![
                 header,
-                nav,
                 category_nav,
                 space::Space::new().height(Length::Fill),
                 todo_clear_footer_bar(ws_state),
@@ -1669,14 +1628,13 @@ fn todo_list_view<'a>(
     ws_state: &'a WorkspaceState,
     states: &[TodoState],
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let status_visible_idx =
-        filter_todos(&ws_state.items, states, ws_state.filter, &ws_state.search);
+    let keyword_idx = filter_todos(&ws_state.items, &ws_state.search);
     let category_allowed_ids = filter_todos_by_category(
         &ws_state.items,
         ws_state.categories(),
         ws_state.category_selected(),
     );
-    let visible_idx: Vec<usize> = status_visible_idx
+    let visible_idx: Vec<usize> = keyword_idx
         .into_iter()
         .filter(|&i| category_allowed_ids.contains(&ws_state.items[i].id))
         .collect();
@@ -2451,75 +2409,6 @@ pub fn todo_calendar_overlay<'a>(
     )
 }
 
-/// 左栏分类导航项（= 原 filter 段，竖排）：图标 + 标签 + 右侧计数，选中态
-/// 金框 + CREAM 字 + CARD 底。点击 → `FilterSet`。
-fn todo_category_button<'a>(
-    filter: TodoFilter,
-    count: usize,
-    current: TodoFilter,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let (icon, label) = match filter {
-        TodoFilter::All => (icons::IconKind::CircleSmall, "全部任务"),
-        TodoFilter::Pending => (icons::IconKind::CircleSmall, "待办任务"),
-        TodoFilter::InProgress => (icons::IconKind::CircleSmall, "进行中任务"),
-        TodoFilter::Done => (icons::IconKind::CircleSmall, "已完成任务"),
-    };
-    let active = filter == current;
-    let fg = if active {
-        byteui::theme::color::current().cream
-    } else {
-        byteui::theme::color::current().dim
-    };
-    button(
-        row![
-            icons::view(
-                icon,
-                byteui::theme::icon_size::row(),
-                if active {
-                    byteui::theme::color::current().gold
-                } else {
-                    byteui::theme::color::current().dim
-                }
-            ),
-            text(label).size(byteui::theme::font::body()).color(fg),
-            iced_widget::space::Space::new()
-                .width(Length::Fill)
-                .height(Length::Shrink),
-            text(format!("{count}"))
-                .size(byteui::theme::font::caption())
-                .color(if active {
-                    byteui::theme::color::current().gold
-                } else {
-                    byteui::theme::color::current().dim
-                }),
-        ]
-        .spacing(8)
-        .align_y(iced_widget::core::alignment::Vertical::Center),
-    )
-    .on_press(Message::FilterSet(filter))
-    .width(Length::Fill)
-    .padding([8, 10])
-    .style(move |_t: &iced_widget::Theme, _s| button::Style {
-        background: if active {
-            Some(byteui::theme::color::current().card.into())
-        } else {
-            None
-        },
-        text_color: fg,
-        border: Border {
-            color: if active {
-                byteui::theme::color::current().gold
-            } else {
-                Color::TRANSPARENT
-            },
-            width: if active { 1.0 } else { 0.0 },
-            radius: 6.0.into(),
-        },
-        ..button::Style::default()
-    })
-    .into()
-}
-
 /// 分类树导航区:钉顶的"全部"/"未分类"伪节点 + 用户自建分类节点(可
 /// 展开/收起、点选切过滤)。本函数只做展示 + 选中;右键菜单/增删改在
 /// 后续任务接入。
@@ -2770,41 +2659,21 @@ mod tests {
     #[test]
     fn filter_all_with_empty_query_keeps_everything() {
         let items = sample_states();
-        let states: Vec<TodoState> = items.iter().map(|i| todo_display_state(i, false)).collect();
-        let hits = filter_todos(&items, &states, TodoFilter::All, "");
+        let hits = filter_todos(&items, "");
         assert_eq!(hits, vec![0, 1, 2]);
-    }
-
-    #[test]
-    fn filter_by_state() {
-        let items = sample_states();
-        let states: Vec<TodoState> = items.iter().map(|i| todo_display_state(i, false)).collect();
-        assert_eq!(
-            filter_todos(&items, &states, TodoFilter::Pending, ""),
-            vec![0, 2]
-        );
-        assert_eq!(filter_todos(&items, &states, TodoFilter::Done, ""), vec![1]);
     }
 
     #[test]
     fn filter_by_keyword_case_insensitive_substring() {
         let items = sample_states();
-        let states: Vec<TodoState> = items.iter().map(|i| todo_display_state(i, false)).collect();
-        assert_eq!(
-            filter_todos(&items, &states, TodoFilter::All, "CLAUDE"),
-            vec![2]
-        );
+        assert_eq!(filter_todos(&items, "CLAUDE"), vec![2]);
     }
 
     #[test]
-    fn filter_combines_state_and_keyword() {
+    fn filter_keyword_is_substring_match_on_text() {
         let items = sample_states();
-        let states: Vec<TodoState> = items.iter().map(|i| todo_display_state(i, false)).collect();
-        // Pending 且不含"README" → 0(修复登录页)与 2(指派)。
-        assert_eq!(
-            filter_todos(&items, &states, TodoFilter::Pending, "登录"),
-            vec![0]
-        );
+        assert_eq!(filter_todos(&items, "登录"), vec![0]);
+        assert_eq!(filter_todos(&items, "不存在的关键词"), Vec::<usize>::new());
     }
 
     #[test]
