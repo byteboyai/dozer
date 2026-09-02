@@ -14,4 +14,6 @@ pub mod session_summary_backfill;
 pub mod shell_integration;
 pub mod todo;
 pub mod todo_category;
+pub mod task_processor;
+pub mod task_poller;
 pub mod transcripts;

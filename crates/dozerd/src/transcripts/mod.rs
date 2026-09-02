@@ -263,6 +263,66 @@ impl TranscriptStore {
         Ok(())
     }
 
+    /// headless 任务处理专用:确保 `conversation_id` 对应的 `conversations`
+    /// 占位行存在(`file_path` 用空字符串——这个会话没有真实 transcript
+    /// 文件,和"扫描磁盘文件"的摄取路径完全独立),再插入一条人类回合 +
+    /// 一条 AI 回合。`turn_index` 从该 `conversation_id` 现有最大值 + 1 起
+    /// 连续分配,`message_key` 用 `"{conversation_id}:{turn_index}"` 保证
+    /// 主键不冲突。
+    pub fn record_task_turns(
+        &self,
+        conversation_id: &str,
+        agent: AgentKind,
+        project_dir: &str,
+        task_title: &str,
+        human_content: &str,
+        ai_content: &str,
+    ) -> Result<()> {
+        let mut conn = self.conn.lock().expect("db lock");
+        let tx = conn.transaction()?;
+        let now = now_ms() as i64;
+        tx.execute(
+            "INSERT INTO conversations
+             (conversation_id, agent_kind, dir, file_path, title, first_ts, last_ts,
+              turn_count, parsed_offset, file_size_at_parse)
+             VALUES (?1,?2,?3,'',?4,?5,?5,0,0,0)
+             ON CONFLICT(conversation_id) DO NOTHING",
+            params![conversation_id, agent_to_str(agent), project_dir, task_title, now],
+        )?;
+        let starting_turn_index: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(turn_index), -1) + 1 FROM conversation_turns
+             WHERE conversation_id = ?1",
+            [conversation_id],
+            |row| row.get(0),
+        )?;
+        for (offset, (role, content)) in
+            [("human", human_content), ("ai", ai_content)].into_iter().enumerate()
+        {
+            let turn_index = starting_turn_index + offset as i64;
+            let message_key = format!("{conversation_id}:{turn_index}");
+            tx.execute(
+                "INSERT INTO conversation_turns
+                 (conversation_id, turn_index, message_key, role, content, tools_summary,
+                  thinking, ts, tool_calls, mutating_tool_calls, files_touched,
+                  tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, raw_json,
+                  is_error)
+                 VALUES (?1,?2,?3,?4,?5,'[]',0,?6,0,0,'[]',0,0,0,0,'{}',0)",
+                params![conversation_id, turn_index, message_key, role, content, now],
+            )?;
+        }
+        let turn_count: u32 = tx.query_row(
+            "SELECT COUNT(*) FROM conversation_turns WHERE conversation_id = ?1",
+            [conversation_id],
+            |row| row.get(0),
+        )?;
+        tx.execute(
+            "UPDATE conversations SET last_ts = ?1, turn_count = ?2 WHERE conversation_id = ?3",
+            params![now, turn_count, conversation_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// keyset 分页:返回 `turn_index > after_turn_index` 的前 `limit` 条。
     /// `after_turn_index` 传 `-1` 表示从第一条开始。JOIN `conversations`
     /// 拿 `agent_kind` 只为了给 `parse::extract_turn_trace_detail` 挑对
@@ -1167,5 +1227,65 @@ mod tests {
             "token 用量不受口径调整影响,仍按全量回合统计"
         );
         assert_eq!(usage.tool_calls, 0, "本夹具没有工具调用,tool_calls 仍为 0");
+    }
+
+    #[test]
+    fn get_conversation_turns_returns_empty_without_matching_conversations_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        // 直接绕过 `ingest_session`,只手动插 conversation_turns,不插 conversations——
+        // 复现"headless 任务处理如果忘记同时插 conversations 占位行"这个坑。
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO conversation_turns
+                 (conversation_id, turn_index, message_key, role, content, tools_summary,
+                  thinking, ts, tool_calls, mutating_tool_calls, files_touched,
+                  tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, raw_json, is_error)
+                 VALUES ('orphan',0,'orphan:0','human','hi','[]',0,1,0,0,'[]',0,0,0,0,'{}',0)",
+                [],
+            )
+            .unwrap();
+        let turns = store.get_conversation_turns("orphan", -1, 10).unwrap();
+        assert!(turns.is_empty(), "没有 conversations 行时,JOIN 应该拿不到任何数据");
+    }
+
+    #[test]
+    fn record_task_turns_creates_conversations_row_and_two_turns() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        store
+            .record_task_turns(
+                "task-session-1",
+                AgentKind::Claude,
+                "/tmp/proj",
+                "修个 bug",
+                "先看看这个 bug",
+                "已经修好了,提交在 abc123",
+            )
+            .unwrap();
+        let turns = store.get_conversation_turns("task-session-1", -1, 10).unwrap();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].role, "human");
+        assert_eq!(turns[1].role, "ai");
+        assert_eq!(turns[1].content, "已经修好了,提交在 abc123");
+    }
+
+    #[test]
+    fn record_task_turns_appends_on_second_call_without_duplicating_conversations_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        store
+            .record_task_turns("task-session-1", AgentKind::Claude, "/tmp/proj", "修个 bug", "第一句", "第一次回复")
+            .unwrap();
+        store
+            .record_task_turns("task-session-1", AgentKind::Claude, "/tmp/proj", "修个 bug", "第二句", "第二次回复")
+            .unwrap();
+        let turns = store.get_conversation_turns("task-session-1", -1, 10).unwrap();
+        assert_eq!(turns.len(), 4);
+        assert_eq!(turns[2].turn_index, 2);
+        assert_eq!(turns[3].content, "第二次回复");
     }
 }

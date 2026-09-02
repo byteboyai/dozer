@@ -98,6 +98,15 @@ async fn main() -> Result<()> {
     let categories = Arc::new(dozerd::todo_category::CategoryStore::new(
         &dozer_core::paths::state_dir().join("dozer.db"),
     )?);
+    let in_flight = dozerd::task_poller::new_in_flight();
+    dozerd::task_poller::spawn(
+        todos.clone(),
+        categories.clone(),
+        session_summaries.clone(),
+        transcripts.clone(),
+        projects.clone(),
+        in_flight.clone(),
+    );
     {
         let files = dozerd::transcripts::scan::discover_all_transcript_files();
         tracing::info!(count = files.len(), "启动回填:发现历史 transcript 文件");
@@ -114,6 +123,7 @@ async fn main() -> Result<()> {
         backfill_registry,
         todos,
         categories,
+        in_flight,
     );
     tokio::select! {
         r = serve => r?,

@@ -5,6 +5,7 @@
 
 use dozer_core::protocol::{AgentKind, TurnRecord};
 use serde::Deserialize;
+use std::path::Path;
 use std::time::Duration;
 
 const SUMMARY_START_MARKER: &str = "<<<DOZER_SUMMARY_JSON>>>";
@@ -20,6 +21,13 @@ const MAX_TURN_CHARS: usize = 4000;
 /// AI 实际做了什么(2026-08-28 用户反馈),这个预算就是为了在不炸 prompt
 /// 的前提下把 AI 回合也喂进去。
 const MAX_TRANSCRIPT_CHARS: usize = 16_000;
+/// 任务处理可能要跑真正的编辑/构建,不是"读一遍对话写两句话",给更长的
+/// 超时窗口。后续按实测调整,不是精确校准过的值。
+const TASK_PROCESS_TIMEOUT: Duration = Duration::from_secs(600);
+/// 喂进 prompt 的历史往来记录预算(字符数),超预算从最早的回合开始丢弃,
+/// 保留离"现在要处理的指示"最近的尾部——同 `MAX_TRANSCRIPT_CHARS` 的
+/// 既有口径,避免历史很长的任务把 prompt 撑爆或撞 CLI 参数长度上限。
+const MAX_PRIOR_TURNS_CHARS_FOR_TASK: usize = 12_000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HeadlessError {
@@ -58,6 +66,25 @@ fn truncate_chars(s: &str, max: usize) -> String {
         let head: String = s.chars().take(max).collect();
         format!("{head}…")
     }
+}
+
+fn task_instruction_text(
+    task_text: &str,
+    prior_turns_text: &str,
+    human_instruction: &str,
+) -> String {
+    let history_block = if prior_turns_text.is_empty() {
+        "(这是第一次处理,还没有任何往来记录)".to_string()
+    } else {
+        let truncated = truncate_chars(prior_turns_text, MAX_PRIOR_TURNS_CHARS_FOR_TASK);
+        format!("到目前为止的往来记录:\n{truncated}")
+    };
+    format!(
+        "你正在处理 Dozer 里的一个任务,可以真正读写这个项目目录下的文件、\
+         执行命令来完成它。\n任务描述:{task_text}\n{history_block}\n\
+         我现在的指示:{human_instruction}\n\
+         请直接开始处理,完成后用简短的文字说明你做了什么、结果如何。"
+    )
 }
 
 /// 把该会话的人类+AI 回合(不含 `tool_result`、不含 `thinking` 内心独白,
@@ -200,6 +227,58 @@ fn build_command(
     }
 }
 
+/// 与 `build_command` 并列,不复用其分隔符协议。四家分支都要
+/// `current_dir(project_dir)`(`build_command` 完全没设置这个,总结不需要
+/// 碰项目文件;这次必须要,否则 agent 编辑的是 dozerd 进程自己的 cwd)
+/// 和 `DOZER_SESSION_ID` 环境变量(让 agent 侧 `dozer-mcp`/v8agent-cli 的
+/// MCP 挂载识别到正确的 session,agent 才能调 `toggle_todo` 之类工具)。
+/// V8agent 分支**不**像 `build_command` 那样 `env_remove("DOZER_SESSION_ID")`
+/// ——总结场景故意不让 v8agent-cli 挂 MCP,这次场景反过来需要它挂上。
+fn build_task_command(
+    agent: AgentKind,
+    program: &str,
+    project_dir: &Path,
+    session_id: &str,
+    prompt: &str,
+) -> Option<(tokio::process::Command, Option<Vec<u8>>)> {
+    match agent {
+        AgentKind::Claude => {
+            let mut cmd = tokio::process::Command::new(program);
+            cmd.current_dir(project_dir)
+                .env("DOZER_SESSION_ID", session_id)
+                .arg("-p")
+                .arg(prompt)
+                .arg("--dangerously-skip-permissions");
+            Some((cmd, None))
+        }
+        AgentKind::Codebuddy => {
+            let mut cmd = tokio::process::Command::new(program);
+            cmd.current_dir(project_dir)
+                .env("DOZER_SESSION_ID", session_id)
+                .arg("-p")
+                .arg(prompt)
+                .arg("-y");
+            Some((cmd, None))
+        }
+        AgentKind::Opencode => {
+            let mut cmd = tokio::process::Command::new(program);
+            cmd.current_dir(project_dir)
+                .env("DOZER_SESSION_ID", session_id)
+                .arg("run")
+                .arg(prompt);
+            Some((cmd, None))
+        }
+        AgentKind::V8agent => {
+            let mut cmd = tokio::process::Command::new(program);
+            cmd.current_dir(project_dir)
+                .env("DOZER_SESSION_ID", session_id)
+                .env("V8AGENT_ONESHOT", "1");
+            Some((cmd, Some(prompt.as_bytes().to_vec())))
+        }
+        AgentKind::Unknown | AgentKind::Codex | AgentKind::Kilo => None,
+    }
+}
+
 /// 跑一个已经构造好的子进程,拿完整 stdout 后解析。跟 `build_command` 分开
 /// 是为了这一段能用真实存在的 `sh`/不存在的二进制名做确定性单测,不需要
 /// 装 claude/codebuddy/opencode/v8agent 才能测超时/spawn 失败这些分支。
@@ -254,6 +333,65 @@ pub async fn summarize_headless(
         return Err(HeadlessError::Unsupported);
     };
     run_and_extract(cmd, stdin_bytes, HEADLESS_TIMEOUT).await
+}
+
+/// 与 `run_and_extract` 并列,但不做分隔符提取——原样返回完整 stdout(容
+/// 忍非 UTF-8 字节用 `from_utf8_lossy`,这次输出是任意自由文本,不是受控
+/// 的 JSON 载荷)。
+async fn run_task_and_capture(
+    mut cmd: tokio::process::Command,
+    stdin_bytes: Option<Vec<u8>>,
+    timeout: Duration,
+) -> Result<String, HeadlessError> {
+    use std::process::Stdio;
+    cmd.stdin(if stdin_bytes.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::null());
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| HeadlessError::Spawn(e.to_string()))?;
+    if let Some(bytes) = stdin_bytes {
+        use tokio::io::AsyncWriteExt;
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(&bytes).await;
+        }
+    }
+    let output = tokio::time::timeout(timeout, child.wait_with_output())
+        .await
+        .map_err(|_| HeadlessError::Timeout)?
+        .map_err(|e| HeadlessError::Spawn(e.to_string()))?;
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// 任务处理变体的对外唯一入口:喂入任务文本 + 已有往来记录 + 本次人类指示,
+/// 让 `agent` 在 `project_dir` 下跑一次真正的处理(允许调用工具、不要求结
+/// 构化输出)。`Ok(String)` 是捕获的完整 stdout。`session_id` 只用于注入
+/// `DOZER_SESSION_ID`,不影响本函数自身的返回值。
+pub async fn process_task_headless(
+    agent: AgentKind,
+    project_dir: &Path,
+    session_id: &str,
+    task_text: &str,
+    prior_turns_text: &str,
+    human_instruction: &str,
+) -> Result<String, HeadlessError> {
+    let Some(bare) = bare_program_name(agent) else {
+        return Err(HeadlessError::Unsupported);
+    };
+    let program = resolve_binary_path(bare)
+        .await
+        .unwrap_or_else(|| bare.to_string());
+    let prompt = task_instruction_text(task_text, prior_turns_text, human_instruction);
+    let Some((cmd, stdin_bytes)) =
+        build_task_command(agent, &program, project_dir, session_id, &prompt)
+    else {
+        return Err(HeadlessError::Unsupported);
+    };
+    run_task_and_capture(cmd, stdin_bytes, TASK_PROCESS_TIMEOUT).await
 }
 
 #[cfg(test)]
@@ -474,5 +612,84 @@ mod tests {
     async fn resolve_binary_path_returns_none_for_missing_binary() {
         let resolved = resolve_binary_path("this-binary-does-not-exist-xyz").await;
         assert_eq!(resolved, None);
+    }
+
+    #[tokio::test]
+    async fn process_task_headless_returns_unsupported_for_kind_without_adapter() {
+        let err = process_task_headless(
+            AgentKind::Codex,
+            Path::new("/tmp"),
+            "s1",
+            "task",
+            "",
+            "go",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, HeadlessError::Unsupported);
+    }
+
+    #[test]
+    fn build_task_command_sets_current_dir_and_session_env() {
+        let (cmd, _) = build_task_command(
+            AgentKind::Claude,
+            "sh",
+            Path::new("/tmp/probe-dir"),
+            "sess-1",
+            "prompt text",
+        )
+        .unwrap();
+        let std_cmd = cmd.as_std();
+        assert_eq!(std_cmd.get_current_dir(), Some(Path::new("/tmp/probe-dir")));
+        let envs: std::collections::HashMap<_, _> = std_cmd
+            .get_envs()
+            .filter_map(|(k, v)| Some((k.to_str()?.to_string(), v?.to_str()?.to_string())))
+            .collect();
+        assert_eq!(envs.get("DOZER_SESSION_ID"), Some(&"sess-1".to_string()));
+    }
+
+    #[test]
+    fn build_task_command_v8agent_keeps_session_env_but_plain_command_clears_it() {
+        // 总结变体要清 DOZER_SESSION_ID(防挂 MCP),任务变体要保留。
+        let (plain_cmd, _) = build_command(AgentKind::V8agent, "v8agent", "x").unwrap();
+        let cleared = plain_cmd
+            .as_std()
+            .get_envs()
+            .any(|(k, v)| k.to_str() == Some("DOZER_SESSION_ID") && v.is_none());
+        assert!(cleared);
+        let (task_cmd, _) = build_task_command(
+            AgentKind::V8agent,
+            "v8agent",
+            Path::new("/tmp"),
+            "sess-1",
+            "p",
+        )
+        .unwrap();
+        let envs: std::collections::HashMap<_, _> = task_cmd
+            .as_std()
+            .get_envs()
+            .filter_map(|(k, v)| Some((k.to_str()?.to_string(), v?.to_str()?.to_string())))
+            .collect();
+        assert_eq!(envs.get("DOZER_SESSION_ID"), Some(&"sess-1".to_string()));
+    }
+
+    #[tokio::test]
+    async fn run_task_and_capture_returns_stdout_verbatim() {
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c").arg("echo hello-task");
+        let out = run_task_and_capture(cmd, None, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert!(out.contains("hello-task"));
+    }
+
+    #[tokio::test]
+    async fn run_task_and_capture_times_out() {
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c").arg("sleep 5");
+        let err = run_task_and_capture(cmd, None, Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert_eq!(err, HeadlessError::Timeout);
     }
 }

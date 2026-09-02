@@ -29,7 +29,22 @@ fn id_not_found(id: i64) -> anyhow::Error {
 /// `RETURNING`/`SELECT` 都用这份列顺序,`query_row`/`query_map` 的行映射
 /// 闭包与之一一对应。
 const TODO_COLUMNS: &str = "id, project_id, text, done, paused, rank, created_ms, \
-    completed_at_ms, plan_date, dispatch_session_id, dispatch_at_ms, category_id";
+    completed_at_ms, plan_date, dispatch_session_id, dispatch_at_ms, category_id, \
+    assigned_agent";
+
+/// 只覆盖有 headless 适配器的四种(与 `dozerd::headless_agent::bare_program_name`
+/// 覆盖面一致)——`assigned_agent` 列不会存其余三种。未识别字符串(理论上
+/// 不会出现,防御性)落回 `None`,不是恐慌。
+fn agent_from_label(s: &str) -> Option<dozer_core::protocol::AgentKind> {
+    use dozer_core::protocol::AgentKind;
+    match s {
+        "claude" => Some(AgentKind::Claude),
+        "codebuddy" => Some(AgentKind::Codebuddy),
+        "opencode" => Some(AgentKind::Opencode),
+        "v8agent" => Some(AgentKind::V8agent),
+        _ => None,
+    }
+}
 
 fn row_to_todo(row: &rusqlite::Row) -> rusqlite::Result<TodoInfo> {
     Ok(TodoInfo {
@@ -45,6 +60,9 @@ fn row_to_todo(row: &rusqlite::Row) -> rusqlite::Result<TodoInfo> {
         dispatch_session_id: row.get(9)?,
         dispatch_at_ms: row.get::<_, Option<i64>>(10)?.map(|v| v as u64),
         category_id: row.get(11)?,
+        assigned_agent: row
+            .get::<_, Option<String>>(12)?
+            .and_then(|s| agent_from_label(&s)),
     })
 }
 
@@ -67,10 +85,13 @@ impl TodoStore {
                 plan_date TEXT,
                 dispatch_session_id TEXT,
                 dispatch_at_ms INTEGER,
-                category_id INTEGER
+                category_id INTEGER,
+                assigned_agent TEXT
              );
              CREATE INDEX IF NOT EXISTS idx_todos_project_order
-                ON todos(project_id, done, paused, rank);",
+                ON todos(project_id, done, paused, rank);
+             CREATE INDEX IF NOT EXISTS idx_todos_dispatch_on_project
+                ON todos(project_id, dispatch_at_ms);",
         )
         .context("建表")?;
         // 老库(建表时还没有 category_id/paused 列)迁移:CREATE TABLE IF NOT
@@ -93,6 +114,13 @@ impl TodoStore {
                 [],
             )
             .context("迁移 paused 列")?;
+        }
+        let has_assigned_agent: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('todos') WHERE name = 'assigned_agent'")?
+            .exists([])?;
+        if !has_assigned_agent {
+            conn.execute("ALTER TABLE todos ADD COLUMN assigned_agent TEXT", [])
+                .context("迁移 assigned_agent 列")?;
         }
         Ok(Self {
             conn: Mutex::new(conn),
@@ -221,11 +249,35 @@ impl TodoStore {
             })
     }
 
-    pub fn record_dispatch(&self, id: i64, session_id: &str) -> Result<TodoInfo> {
+    /// 指派随身 agent 去 headless 干这条任务(干完回填 `process_agent` / 两条
+    /// `__chat` turn,派生回 `session_id`)。指派不申请也不会清掉已有
+    /// `dispatch_at_ms` 存活派发。
+    pub fn assign_agent(
+        &self,
+        id: i64,
+        agent: dozer_core::protocol::AgentKind,
+    ) -> Result<TodoInfo> {
+        let conn = self.conn.lock().expect("db lock");
+        let label = agent.label().to_string();
+        let sql = format!(
+            "UPDATE todos SET assigned_agent = ?1 WHERE id = ?2 RETURNING {TODO_COLUMNS}"
+        );
+        conn.query_row(&sql, params![label, id], row_to_todo)
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => id_not_found(id),
+                e => e.into(),
+            })
+    }
+
+    /// 派发生成任务(session 面板"生成任务"入口或 schedule 回填任务时)落存档,
+    /// 顺手 `assigned_agent = NULL`(程序派生,不能标"指派");单条最近
+    /// `dispatch_session_id` 语义,与 plan §6 一致。
+    pub fn set_dispatch_session(&self, id: i64, session_id: &str) -> Result<TodoInfo> {
         let conn = self.conn.lock().expect("db lock");
         let now = now_ms() as i64;
         let sql = format!(
-            "UPDATE todos SET dispatch_session_id = ?1, dispatch_at_ms = ?2
+            "UPDATE todos SET dispatch_session_id = ?1, dispatch_at_ms = ?2,
+                assigned_agent = NULL
              WHERE id = ?3 RETURNING {TODO_COLUMNS}"
         );
         conn.query_row(&sql, params![session_id, now, id], row_to_todo)
@@ -233,6 +285,52 @@ impl TodoStore {
                 rusqlite::Error::QueryReturnedNoRows => id_not_found(id),
                 e => e.into(),
             })
+    }
+
+    /// 某分类下已指派但未完成的任务(供 `task_poller` 扫描用)。
+    pub fn list_assigned_incomplete_in_category(&self, category_id: i64) -> Result<Vec<TodoInfo>> {
+        let conn = self.conn.lock().expect("db lock");
+        let sql = format!(
+            "SELECT {TODO_COLUMNS} FROM todos
+             WHERE category_id = ?1 AND done = 0 AND assigned_agent IS NOT NULL
+             ORDER BY rank ASC"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([category_id], row_to_todo)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 分页拉某项目"需要推进"的活动派发任务:进行中(`done=0,paused=0`)里
+    /// 有存活派发(`dispatch_at_ms NOT NULL`)的那些,从小到大取 `limit` 条
+    /// (给 dispatch_at 加索引以保证稳定升序)。
+    pub fn dispatchable_pending(&self, project_id: i64, limit: i64) -> Result<Vec<TodoInfo>> {
+        let conn = self.conn.lock().expect("db lock");
+        let sql = format!(
+            "SELECT {TODO_COLUMNS} FROM todos
+             WHERE project_id = ?1 AND done = 0 AND paused = 0
+               AND dispatch_at_ms IS NOT NULL
+             ORDER BY dispatch_at_ms ASC
+             LIMIT ?2"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![project_id, limit], row_to_todo)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// `[dispatch_session_id] = ?` 为空的都行的稳定备用 id 源不用加索引。
+    /// 全表查归自己 project 下 `[dispatch_at_ms] IS NOT NULL`：选中的调度用
+    /// 例行被 processnow 打断,完成后清空,避免再被秒级轮询拾起来反复开进程。
+    /// 补充索引(见 `new()`)。返回带 `done`/`paused`(前端进度判定用)。
+    pub fn occupying_sessions(&self, project_id: i64) -> Result<Vec<TodoInfo>> {
+        let conn = self.conn.lock().expect("db lock");
+        let sql = format!(
+            "SELECT {TODO_COLUMNS} FROM todos
+             WHERE project_id = ?1 AND dispatch_at_ms IS NOT NULL
+             ORDER BY rank ASC"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([project_id], row_to_todo)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     /// 挂/摘任务的分类。`category_id: None` 摘掉分类(变回未分类)。
@@ -385,9 +483,67 @@ mod tests {
     fn record_dispatch_sets_session_and_timestamp() {
         let (_dir, store) = store();
         let t = store.add(1, "任务").unwrap();
-        let dispatched = store.record_dispatch(t.id, "sess-1").unwrap();
+        let dispatched = store.set_dispatch_session(t.id, "sess-1").unwrap();
         assert_eq!(dispatched.dispatch_session_id, Some("sess-1".to_string()));
         assert!(dispatched.dispatch_at_ms.is_some());
+    }
+
+    #[test]
+    fn assign_agent_sets_label() {
+        use dozer_core::protocol::AgentKind;
+        let (_dir, store) = store();
+        let t = store.add(1, "任务").unwrap();
+        let a = store.assign_agent(t.id, AgentKind::Claude).unwrap();
+        assert_eq!(a.assigned_agent, Some(AgentKind::Claude));
+        assert!(store.assign_agent(999, AgentKind::Claude).is_err());
+    }
+
+    #[test]
+    fn set_dispatch_session_clears_assigned_agent() {
+        use dozer_core::protocol::AgentKind;
+        let (_dir, store) = store();
+        let t = store.add(1, "任务").unwrap();
+        store.assign_agent(t.id, AgentKind::Claude).unwrap();
+        let dispatched = store.set_dispatch_session(t.id, "sess-1").unwrap();
+        assert_eq!(dispatched.assigned_agent, None, "程序派发不应标指派");
+        assert_eq!(dispatched.dispatch_session_id, Some("sess-1".to_string()));
+    }
+
+    #[test]
+    fn dispatchable_pending_and_occupying_sessions_filter() {
+        let (_dir, store) = store();
+        let a = store.add(1, "派发1").unwrap();
+        let b = store.add(1, "派发2").unwrap();
+        let c = store.add(1, "已完成派发").unwrap();
+        store.set_dispatch_session(a.id, "s1").unwrap();
+        store.set_dispatch_session(b.id, "s2").unwrap();
+        store.set_dispatch_session(c.id, "s3").unwrap();
+        store.toggle(c.id, true).unwrap();
+
+        // c 已 done:dispatchable 只该有两张;dispatching 汇总也该含已 done 的 c。
+        let dp = store.dispatchable_pending(1, 10).unwrap();
+        assert_eq!(dp.len(), 2);
+        let occ = store.occupying_sessions(1).unwrap();
+        assert_eq!(occ.len(), 3);
+    }
+
+    #[test]
+    fn list_assigned_incomplete_in_category_filters_correctly() {
+        use dozer_core::protocol::AgentKind;
+        let (_dir, store) = store();
+        let t1 = store.add(1, "已指派未完成").unwrap();
+        store.assign_agent(t1.id, AgentKind::Claude).unwrap();
+        store.set_category(t1.id, Some(10)).unwrap();
+        let t2 = store.add(1, "未指派").unwrap();
+        store.set_category(t2.id, Some(10)).unwrap();
+        let t3 = store.add(1, "已指派已完成").unwrap();
+        store.assign_agent(t3.id, AgentKind::Claude).unwrap();
+        store.set_category(t3.id, Some(10)).unwrap();
+        store.toggle(t3.id, true).unwrap();
+
+        let result = store.list_assigned_incomplete_in_category(10).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, t1.id);
     }
 
     #[test]
@@ -493,7 +649,7 @@ mod tests {
         let t = store.add(1, "任务").unwrap();
 
         // → 搁置:置 paused、清派发,未完成
-        store.record_dispatch(t.id, "sess-1").unwrap();
+        store.set_dispatch_session(t.id, "sess-1").unwrap();
         let s = store.set_status(t.id, TodoStoredStatus::Suspended).unwrap();
         assert!(s.paused);
         assert!(!s.done);
@@ -506,7 +662,7 @@ mod tests {
         assert!(done.completed_at_ms.is_some());
 
         // → 待办:完成/搁置都撤销、摘派发
-        store.record_dispatch(t.id, "sess-2").unwrap();
+        store.set_dispatch_session(t.id, "sess-2").unwrap();
         let todo = store.set_status(t.id, TodoStoredStatus::Todo).unwrap();
         assert!(!todo.done);
         assert!(!todo.paused);

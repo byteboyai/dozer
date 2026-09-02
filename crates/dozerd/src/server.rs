@@ -11,6 +11,59 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast;
 
+/// `ProcessTodoNow` handler 的实际执行:查任务 → 加入 in_flight → 调
+/// `task_processor::process_task` → 移出 in_flight → 回最新任务或错误。
+/// 拆成独立 async 函数是为了把"多条可能中途返回不同 Reply 的路径"收敛成
+/// 一个 `Reply`(handle_conn 里那个大的 `match req` 整体求值成 `Reply` 一个值,
+/// 不是逐个分支 `return`)。
+async fn process_todo_now(
+    in_flight: &crate::task_poller::InFlight,
+    todos: &Arc<crate::todo::TodoStore>,
+    session_summaries: &Arc<crate::session_summary::SessionSummaryStore>,
+    transcripts: &Arc<crate::transcripts::TranscriptStore>,
+    projects: &Arc<crate::projects::ProjectStore>,
+    id: i64,
+    human_reply: Option<String>,
+) -> Reply {
+    let todo = match todos.get(id) {
+        Ok(todo) => todo,
+        Err(e) => {
+            return Reply::Error {
+                message: format!("任务不存在: id={id}: {e}"),
+            }
+        }
+    };
+    {
+        let mut guard = in_flight.lock().expect("in_flight lock");
+        if !guard.insert(id) {
+            return Reply::Error {
+                message: "该任务正在处理中".into(),
+            };
+        }
+    }
+    let result = crate::task_processor::process_task(
+        todos,
+        session_summaries,
+        transcripts,
+        projects,
+        &todo,
+        human_reply.as_deref(),
+    )
+    .await;
+    in_flight.lock().expect("in_flight lock").remove(&id);
+    match result {
+        Ok(()) => match todos.get(id) {
+            Ok(todo) => Reply::Todo { todo },
+            Err(e) => Reply::Error {
+                message: e.to_string(),
+            },
+        },
+        Err(e) => Reply::Error {
+            message: format!("处理任务失败: {e}"),
+        },
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn serve(
     socket: &Path,
@@ -23,6 +76,7 @@ pub async fn serve(
     backfill_registry: Arc<crate::session_summary_backfill::BackfillRegistry>,
     todos: Arc<crate::todo::TodoStore>,
     categories: Arc<crate::todo_category::CategoryStore>,
+    in_flight: crate::task_poller::InFlight,
 ) -> Result<()> {
     let preview_contexts = Arc::new(PreviewContextStore::new());
     if socket.exists() {
@@ -51,6 +105,7 @@ pub async fn serve(
         let backfill_registry = backfill_registry.clone();
         let todos = todos.clone();
         let categories = categories.clone();
+        let in_flight = in_flight.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_conn(
                 stream,
@@ -64,6 +119,7 @@ pub async fn serve(
                 backfill_registry,
                 todos.clone(),
                 categories.clone(),
+                in_flight,
             )
             .await
             {
@@ -247,6 +303,7 @@ async fn handle_conn(
     backfill_registry: Arc<crate::session_summary_backfill::BackfillRegistry>,
     todos: Arc<crate::todo::TodoStore>,
     categories: Arc<crate::todo_category::CategoryStore>,
+    in_flight: crate::task_poller::InFlight,
 ) -> Result<()> {
     let (r, mut w) = stream.into_split();
     let mut lines = BufReader::new(r).lines();
@@ -461,14 +518,49 @@ async fn handle_conn(
                                 },
                             }
                         }
-                        Request::RecordTodoDispatch { id, session_id } => {
-                            match todos.record_dispatch(id, &session_id) {
+                        Request::AssignTodoAgent { id, agent } => {
+                            match todos.assign_agent(id, agent) {
                                 Ok(todo) => Reply::Todo { todo },
                                 Err(e) => Reply::Error {
-                                    message: format!("记录派发失败: {e}"),
+                                    message: format!("指派任务失败: {e}"),
                                 },
                             }
                         }
+                        Request::SetCategoryAutoPoll { id, enabled } => {
+                            match categories.set_auto_poll(id, enabled) {
+                                Ok(category) => Reply::Category { category },
+                                Err(e) => Reply::Error {
+                                    message: format!("设置自动轮询失败: {e}"),
+                                },
+                            }
+                        }
+                        Request::ProcessTodoNow { id, human_reply } => {
+                            process_todo_now(
+                                &in_flight,
+                                &todos,
+                                &session_summaries,
+                                &transcripts,
+                                &projects,
+                                id,
+                                human_reply,
+                            )
+                            .await
+                        }
+                        Request::GetTodoDetail { id } => match todos.get(id) {
+                            Ok(info) => {
+                                let turns = info
+                                    .dispatch_session_id
+                                    .as_deref()
+                                    .and_then(|sid| {
+                                        transcripts.get_conversation_turns(sid, -1, u32::MAX).ok()
+                                    })
+                                    .unwrap_or_default();
+                                Reply::TodoDetail { info, turns }
+                            }
+                            Err(e) => Reply::Error {
+                                message: format!("获取任务详情失败: {e}"),
+                            },
+                        },
                         Request::SetTodoStatus { id, status } => match todos.set_status(id, status) {
                             Ok(todo) => Reply::Todo { todo },
                             Err(e) => Reply::Error {
@@ -827,6 +919,7 @@ mod tests {
                 std::sync::Arc::new(crate::session_summary_backfill::BackfillRegistry::new()),
                 todos,
                 categories,
+                crate::task_poller::new_in_flight(),
             );
             std::mem::drop(fut);
         }

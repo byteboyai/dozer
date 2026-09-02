@@ -69,6 +69,7 @@ async fn session_survives_client_disconnect() {
                 test_backfill_registry(),
                 test_todos(),
                 test_categories(),
+                dozerd::task_poller::new_in_flight(),
             )
             .await
         }
@@ -203,6 +204,7 @@ async fn unknown_session_returns_error_reply() {
                 test_backfill_registry(),
                 test_todos(),
                 test_categories(),
+                dozerd::task_poller::new_in_flight(),
             )
             .await
         }
@@ -247,6 +249,7 @@ async fn attach_delivers_marker_exactly_once() {
                 test_backfill_registry(),
                 test_todos(),
                 test_categories(),
+                dozerd::task_poller::new_in_flight(),
             )
             .await
         }
@@ -327,6 +330,7 @@ async fn attach_from_offset_resumes_within_window() {
                 test_backfill_registry(),
                 test_todos(),
                 test_categories(),
+                dozerd::task_poller::new_in_flight(),
             )
             .await
         }
@@ -436,6 +440,7 @@ async fn attach_stream_offset_invariant_under_load() {
                 test_backfill_registry(),
                 test_todos(),
                 test_categories(),
+                dozerd::task_poller::new_in_flight(),
             )
             .await
         }
@@ -532,6 +537,7 @@ async fn attach_from_offset_out_of_window_falls_back_to_full_snapshot() {
                 test_backfill_registry(),
                 test_todos(),
                 test_categories(),
+                dozerd::task_poller::new_in_flight(),
             )
             .await
         }

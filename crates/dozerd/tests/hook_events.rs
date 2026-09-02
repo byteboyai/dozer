@@ -42,6 +42,7 @@ async fn hook_event_reaches_attached_client_and_list() {
                 test_backfill_registry(),
                 test_todos(),
                 test_categories(),
+                dozerd::task_poller::new_in_flight(),
             )
             .await
         }
@@ -209,6 +210,7 @@ async fn record_acceptance_persists() {
                 backfill_registry,
                 todos,
                 categories,
+                dozerd::task_poller::new_in_flight(),
             )
             .await
         }
@@ -329,6 +331,7 @@ async fn project_open_and_list_roundtrip() {
                 backfill_registry,
                 todos,
                 categories,
+                dozerd::task_poller::new_in_flight(),
             )
             .await
         }
@@ -385,6 +388,7 @@ async fn record_and_get_session_summary_roundtrip() {
                 backfill_registry,
                 todos,
                 categories,
+                dozerd::task_poller::new_in_flight(),
             )
             .await
         }
@@ -480,6 +484,7 @@ async fn close_with_summary_kills_session_after_ai_summary_recorded() {
                 backfill_registry,
                 todos,
                 categories,
+                dozerd::task_poller::new_in_flight(),
             )
             .await
         }
@@ -583,6 +588,7 @@ async fn list_conversations_with_summaries_joins_correctly() {
                 backfill_registry,
                 todos,
                 categories,
+                dozerd::task_poller::new_in_flight(),
             )
             .await
         }
@@ -630,6 +636,7 @@ async fn list_conversations_with_summaries_joins_correctly() {
             summary: "c1 的总结全文".into(),
             status: dozer_core::protocol::SummaryStatus::AiGenerated,
             created_ts_ms: 1,
+            task_id: None,
         })
         .unwrap();
 
