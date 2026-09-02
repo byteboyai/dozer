@@ -201,6 +201,7 @@ async fn finalize_session_summary(
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0),
+                task_id: None,
             };
             tracing::info!(
                 %session_id,
@@ -633,6 +634,7 @@ async fn handle_conn(
                                             .duration_since(std::time::UNIX_EPOCH)
                                             .map(|d| d.as_millis() as u64)
                                             .unwrap_or(0),
+                                        task_id: None,
                                     };
                                     match session_summaries.record(&payload) {
                                         Ok(()) => Reply::Ok,
@@ -937,6 +939,7 @@ mod tests {
                 summary: "摘要".into(),
                 status: dozer_core::protocol::SummaryStatus::AiGenerated,
                 created_ts_ms: 1,
+                task_id: None,
             })
             .unwrap();
 

@@ -129,6 +129,7 @@ pub async fn run_backfill(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0),
+            task_id: None,
         };
         if let Err(e) = session_summaries.record(&payload) {
             tracing::error!(error = %e, conversation_id = %conv.conversation_id, "补总结落库失败");

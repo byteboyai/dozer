@@ -86,7 +86,8 @@ impl SessionSummaryStore {
                 title TEXT NOT NULL,
                 summary TEXT NOT NULL,
                 status TEXT NOT NULL,
-                created_ts_ms INTEGER NOT NULL
+                created_ts_ms INTEGER NOT NULL,
+                task_id INTEGER
             );",
         )
         .context("建表")?;
@@ -110,6 +111,13 @@ impl SessionSummaryStore {
                 ON session_summaries(conversation_id);",
         )
         .context("建索引")?;
+        let has_task_id: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('session_summaries') WHERE name = 'task_id'")?
+            .exists([])?;
+        if !has_task_id {
+            conn.execute("ALTER TABLE session_summaries ADD COLUMN task_id INTEGER", [])
+                .context("迁移 task_id 列")?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -118,15 +126,16 @@ impl SessionSummaryStore {
     pub fn record(&self, payload: &SessionSummaryPayload) -> Result<()> {
         self.conn.lock().expect("db lock").execute(
             "INSERT INTO session_summaries
-             (session_id, agent_kind, conversation_id, title, summary, status, created_ts_ms)
-             VALUES (?1,?2,?3,?4,?5,?6,?7)
+             (session_id, agent_kind, conversation_id, title, summary, status, created_ts_ms, task_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
              ON CONFLICT(session_id) DO UPDATE SET
                 agent_kind = excluded.agent_kind,
                 conversation_id = excluded.conversation_id,
                 title = excluded.title,
                 summary = excluded.summary,
                 status = excluded.status,
-                created_ts_ms = excluded.created_ts_ms",
+                created_ts_ms = excluded.created_ts_ms,
+                task_id = excluded.task_id",
             rusqlite::params![
                 payload.session_id,
                 agent_to_str(payload.agent_kind),
@@ -135,6 +144,7 @@ impl SessionSummaryStore {
                 payload.summary,
                 status_to_str(payload.status),
                 payload.created_ts_ms,
+                payload.task_id,
             ],
         )?;
         Ok(())
@@ -143,7 +153,7 @@ impl SessionSummaryStore {
     pub fn get(&self, session_id: &str) -> Result<Option<SessionSummaryPayload>> {
         let conn = self.conn.lock().expect("db lock");
         let mut stmt = conn.prepare(
-            "SELECT session_id, agent_kind, conversation_id, title, summary, status, created_ts_ms
+            "SELECT session_id, agent_kind, conversation_id, title, summary, status, created_ts_ms, task_id
              FROM session_summaries WHERE session_id = ?1",
         )?;
         let mut rows = stmt.query(rusqlite::params![session_id])?;
@@ -161,6 +171,7 @@ impl SessionSummaryStore {
             summary: row.get(4)?,
             status: status_from_str(&status),
             created_ts_ms: created_ts_ms as u64,
+            task_id: row.get(7)?,
         }))
     }
 
@@ -182,7 +193,7 @@ impl SessionSummaryStore {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT session_id, agent_kind, conversation_id, title, summary, status, created_ts_ms
+            "SELECT session_id, agent_kind, conversation_id, title, summary, status, created_ts_ms, task_id
              FROM session_summaries WHERE conversation_id IN ({placeholders})"
         );
         let conn = self.conn.lock().expect("db lock");
@@ -201,6 +212,7 @@ impl SessionSummaryStore {
                 summary: row.get(4)?,
                 status: status_from_str(&status),
                 created_ts_ms: created_ts_ms as u64,
+                task_id: row.get(7)?,
             };
             if let Some(id) = &payload.conversation_id {
                 out.insert(id.clone(), payload);
@@ -223,6 +235,7 @@ mod tests {
             summary: "详细过程".into(),
             status: SummaryStatus::AiGenerated,
             created_ts_ms: 1_700_000_000_000,
+            task_id: None,
         }
     }
 
@@ -306,6 +319,17 @@ mod tests {
             store.get("s2").unwrap().unwrap().conversation_id,
             Some("conv-s2".into())
         );
+    }
+
+    #[test]
+    fn record_and_get_roundtrips_task_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionSummaryStore::open(&dir.path().join("t.db")).unwrap();
+        let mut p = payload("s1");
+        p.task_id = Some(42);
+        store.record(&p).unwrap();
+        let got = store.get("s1").unwrap().unwrap();
+        assert_eq!(got.task_id, Some(42));
     }
 
     fn turn(role: &str, content: &str) -> dozer_core::protocol::TurnRecord {
