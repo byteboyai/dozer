@@ -300,9 +300,18 @@ Todo 卡片新增"详情"图标按钮,点击打开一个窗口级弹窗
 
 - 顶部:任务文本、当前分类、`assigned_agent`(未指派则显示 agent 类型
   选择器,选中即调用 `AssignTodoAgent`)。
-- 中部:回合列表,数据源是 `GetTodoDetail` 返回的 `turns`,渲染逻辑直接
-  复用会话面板现成的回合渲染组件/函数(`workspace.rs:147-180` 状态结构 /
-  `app.rs:7061-7072` 一带的渲染代码),不重新写一套气泡 UI。
+- 中部:回合列表,数据源是 `GetTodoDetail` 返回的 `turns`。**不复用会话
+  面板的回合渲染**——研究阶段确认那套渲染(`workspace.rs::review_content`)
+  实际内容是 wry webview(`dozer://review-trace/host.html`),`review_content`
+  本身只画空态/错误态兜底,真正的气泡是 webview 画的。CLAUDE.md 明确
+  webview 恒在原生浮层之上、需要盖住它必须显式隐藏,把这套机制塞进一个
+  跟随光标定位、随时开合的原生弹窗层级里不合适,也没这个必要——任务
+  详情要看的只是"人类/agent 往来文本",不需要会话面板那套工具调用折叠
+  /trace 可视化。改成**新写一个极简原生 iced 渲染**:遍历 `turns`,每条
+  按 `role`(`"human"`/`"ai"`)显示一个来源标签(人类固定"你",agent 用
+  `assigned_agent.label()`)+ 换行文本(`text(&turn.content).width(Fill)`),
+  纵向 `column![]` 排列,不做折叠/工具调用展示——这些信息量对"任务继续
+  处理"这个场景不必要。
 - 底部:一个原生 `text_input` 回复框 + "处理"按钮。提交时:
   1. 乐观本地插入一条 `role="human"` 的回合到当前显示的列表(不等 RPC
      回来就先看到自己刚发的内容)。
