@@ -6652,8 +6652,13 @@ impl App {
                         self.update(Message::Acceptance(acceptance::Message::Open(tab_id)));
                     }
                 }
-                PanelKind::Files | PanelKind::Web | PanelKind::Agent | PanelKind::Conversations => {
-                }
+                // 会话列表原本只在项目打开时和回合结束时刷新,切进这个面板时
+                // 没有任何补救手段——离开一段时间再切回来看到的还是上次的
+                // 快照。补一次切入即刷新,同 `Usage` 面板的既有口径。
+                PanelKind::Conversations => self.with_focused_project(|ws, io| {
+                    ws.spawn_conversations_refresh(io);
+                }),
+                PanelKind::Files | PanelKind::Web | PanelKind::Agent => {}
             }
         }
         // 图标栏点击一律退出放大态。放大态浮层不拦图标栏上的点击
@@ -6954,6 +6959,17 @@ impl App {
                     active_repo.clone(),
                 );
             }
+            // 回合结束后刷新会话列表(transcript 增长/新增；P1j)。此前这个
+            // 刷新只挂在 `delivery_checked`(交付检测异步任务成功回来才发的
+            // 消息)上——非 git 仓库、`repo_root` 解析失败、`spawn_blocking`
+            // 出错都会让那条异步任务直接 `return None` 而不发
+            // `DeliveryChecked`,会话列表就此静默再也不刷新,且没有任何
+            // 手动刷新入口能补救(用户反馈"看不到新会话",根因就是这个耦合)。
+            // 会话列表新鲜度跟交付检测是否成功完全是两件事,不该耦合在一起,
+            // 这里改成回合结束就无条件刷新,不等交付检测。
+            if state == AgentState::TurnEnded {
+                ws.spawn_conversations_refresh(io);
+            }
             // 审阅 tab 若开着且属本会话,回合结束重解析 transcript（P1i）。
             if state == AgentState::TurnEnded
                 && let Some(rv) = &ws.review
@@ -7001,8 +7017,8 @@ impl App {
                 spawn_project_git_refresh(project_id, repo_path.clone(), io);
                 spawn_disk_usage_refresh(project_id, repo_path, io);
             }
-            // 回合结束后刷新会话列表(transcript 增长/新增；P1j)。
-            ws.spawn_conversations_refresh(io);
+            // 会话列表刷新已经在 `agent_state_changed` 里 `TurnEnded` 时无条件
+            // 触发过一次(不再等这条交付检测异步消息回来才刷),这里不再重复。
         });
     }
 
