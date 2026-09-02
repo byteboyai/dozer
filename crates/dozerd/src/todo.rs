@@ -6,7 +6,7 @@
 //! `docs/superpowers/specs/2026-09-01-dozer-todo-sqlite-migration-design.md`)。
 
 use anyhow::{Context, Result};
-use dozer_core::protocol::TodoInfo;
+use dozer_core::protocol::{TodoInfo, TodoStoredStatus};
 use rusqlite::{Connection, params};
 use std::path::Path;
 use std::sync::Mutex;
@@ -28,7 +28,7 @@ fn id_not_found(id: i64) -> anyhow::Error {
 
 /// `RETURNING`/`SELECT` 都用这份列顺序,`query_row`/`query_map` 的行映射
 /// 闭包与之一一对应。
-const TODO_COLUMNS: &str = "id, project_id, text, done, rank, created_ms, \
+const TODO_COLUMNS: &str = "id, project_id, text, done, paused, rank, created_ms, \
     completed_at_ms, plan_date, dispatch_session_id, dispatch_at_ms, category_id";
 
 fn row_to_todo(row: &rusqlite::Row) -> rusqlite::Result<TodoInfo> {
@@ -37,13 +37,14 @@ fn row_to_todo(row: &rusqlite::Row) -> rusqlite::Result<TodoInfo> {
         project_id: row.get(1)?,
         text: row.get(2)?,
         done: row.get(3)?,
-        rank: row.get(4)?,
-        created_ms: row.get::<_, i64>(5)? as u64,
-        completed_at_ms: row.get::<_, Option<i64>>(6)?.map(|v| v as u64),
-        plan_date: row.get(7)?,
-        dispatch_session_id: row.get(8)?,
-        dispatch_at_ms: row.get::<_, Option<i64>>(9)?.map(|v| v as u64),
-        category_id: row.get(10)?,
+        paused: row.get(4)?,
+        rank: row.get(5)?,
+        created_ms: row.get::<_, i64>(6)? as u64,
+        completed_at_ms: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
+        plan_date: row.get(8)?,
+        dispatch_session_id: row.get(9)?,
+        dispatch_at_ms: row.get::<_, Option<i64>>(10)?.map(|v| v as u64),
+        category_id: row.get(11)?,
     })
 }
 
@@ -59,6 +60,7 @@ impl TodoStore {
                 project_id INTEGER NOT NULL,
                 text TEXT NOT NULL,
                 done INTEGER NOT NULL DEFAULT 0,
+                paused INTEGER NOT NULL DEFAULT 0,
                 rank INTEGER NOT NULL,
                 created_ms INTEGER NOT NULL,
                 completed_at_ms INTEGER,
@@ -68,13 +70,13 @@ impl TodoStore {
                 category_id INTEGER
              );
              CREATE INDEX IF NOT EXISTS idx_todos_project_order
-                ON todos(project_id, done, rank);",
+                ON todos(project_id, done, paused, rank);",
         )
         .context("建表")?;
-        // 老库(建表时还没有 category_id 列)迁移:CREATE TABLE IF NOT
-        // EXISTS 对已存在的表不生效,新列需要单独补。SQLite 的 ALTER
-        // TABLE ADD COLUMN 没有 IF NOT EXISTS 语法,靠 PRAGMA table_info
-        // 先查有没有再决定要不要补(同 transcripts.rs 的 is_error 列前例)。
+        // 老库(建表时还没有 category_id/paused 列)迁移:CREATE TABLE IF NOT
+        // EXISTS 对已存在的表不生效,新列需要单独补。SQLite 的 ALTER TABLE
+        // ADD COLUMN 没有 IF NOT EXISTS 语法,靠 PRAGMA table_info 先查有没有
+        // 再决定要不要补(同 transcripts.rs 的 is_error 列前例)。
         let has_category_id: bool = conn
             .prepare("SELECT 1 FROM pragma_table_info('todos') WHERE name = 'category_id'")?
             .exists([])?;
@@ -82,16 +84,29 @@ impl TodoStore {
             conn.execute("ALTER TABLE todos ADD COLUMN category_id INTEGER", [])
                 .context("迁移 category_id 列")?;
         }
+        let has_paused: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('todos') WHERE name = 'paused'")?
+            .exists([])?;
+        if !has_paused {
+            conn.execute(
+                "ALTER TABLE todos ADD COLUMN paused INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .context("迁移 paused 列")?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
     }
 
-    /// 某项目全部任务,待办按 rank 升序在前、已完成按 rank 升序沉底。
+    /// 某项目全部任务:进行中/待办(`done=0,paused=0`)按 rank 升序在最前,
+    /// 搁置(`paused=1`)按 rank 升序其次,已完成(`done=1`)按 rank 升序沉底。
+    /// (服务端不区分"进行中/待办",那是派生状态;同在此块内按 rank 排。)
     pub fn list(&self, project_id: i64) -> Result<Vec<TodoInfo>> {
         let conn = self.conn.lock().expect("db lock");
         let sql = format!(
-            "SELECT {TODO_COLUMNS} FROM todos WHERE project_id = ?1 ORDER BY done ASC, rank ASC"
+            "SELECT {TODO_COLUMNS} FROM todos WHERE project_id = ?1
+             ORDER BY done ASC, paused ASC, rank ASC"
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map([project_id], row_to_todo)?;
@@ -130,18 +145,60 @@ impl TodoStore {
     }
 
     /// `done` 从假变真时写 `completed_at_ms = now`,真变假时清空——与现状
-    /// `completed_at_for_toggle` 纯函数行为等价,合并进这一次 UPDATE。
+    /// `completed_at_for_toggle` 纯函数行为等价,合并进这一次 UPDATE。真
+    /// (已完成)时同时清 `paused`(把一个已搁置任务勾成完成,不应同时残留
+    /// "搁置"),假时不动 `paused`(取消勾选只回到待办/进行中,停不停搁置由
+    /// 用户用状态下拉决定)。`id` 不存在 → `Err`。
     pub fn toggle(&self, id: i64, done: bool) -> Result<TodoInfo> {
         let conn = self.conn.lock().expect("db lock");
         let completed_at_ms: Option<i64> = done.then(|| now_ms() as i64);
         let sql = format!(
-            "UPDATE todos SET done = ?1, completed_at_ms = ?2 WHERE id = ?3 RETURNING {TODO_COLUMNS}"
+            "UPDATE todos SET done = ?1,
+                completed_at_ms = ?2,
+                paused = CASE WHEN ?1 = 1 THEN 0 ELSE paused END
+             WHERE id = ?3 RETURNING {TODO_COLUMNS}"
         );
         conn.query_row(&sql, params![done, completed_at_ms, id], row_to_todo)
             .map_err(|e| match e {
                 rusqlite::Error::QueryReturnedNoRows => id_not_found(id),
                 e => e.into(),
             })
+    }
+
+    /// 把任务设为某个已存储逻辑状态(`TodoStoredStatus`),一次 UPDATE 原子落定
+    /// (覆盖 `done`/`paused`/派发记录三者的组合,避免"先改 done 再改 paused"
+    /// 两步各自落盘被打断的脏状态)。语义:
+    /// - `Todo`:完成撤销、搁置撤销、派发摘掉(拿回即脱离会话);若由已完成降级,
+    ///   顺手清 `completed_at_ms`。
+    /// - `Suspended`:完成撤销、置搁置、摘派发(同「拿回」,搁置即不推进);若由
+    ///   已完成降级,顺手清 `completed_at_ms`。
+    /// - `Done`:置完成、搁置撤销、写 `completed_at_ms`(等价勾选)。
+    ///   只下已存储字段;`进行中`(存活派发)派生状态不在本函数管辖。
+    pub fn set_status(&self, id: i64, status: TodoStoredStatus) -> Result<TodoInfo> {
+        let conn = self.conn.lock().expect("db lock");
+        let now = now_ms() as i64;
+        let (done, paused, unset_dispatch, completed): (i64, i64, bool, Option<i64>) = match status
+        {
+            TodoStoredStatus::Done => (1, 0, false, Some(now)),
+            TodoStoredStatus::Suspended => (0, 1, true, None),
+            TodoStoredStatus::Todo => (0, 0, true, None),
+        };
+        let sql = format!(
+            "UPDATE todos SET done = ?1, paused = ?2,
+                dispatch_session_id = CASE WHEN ?3 THEN NULL ELSE dispatch_session_id END,
+                dispatch_at_ms = CASE WHEN ?3 THEN NULL ELSE dispatch_at_ms END,
+                completed_at_ms = ?4
+             WHERE id = ?5 RETURNING {TODO_COLUMNS}"
+        );
+        conn.query_row(
+            &sql,
+            params![done, paused, unset_dispatch, completed, id],
+            row_to_todo,
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => id_not_found(id),
+            e => e.into(),
+        })
     }
 
     pub fn edit_text(&self, id: i64, text: &str) -> Result<TodoInfo> {
@@ -402,5 +459,77 @@ mod tests {
     fn set_category_unknown_id_errors() {
         let (_dir, store) = store();
         assert!(store.set_category(999, Some(1)).is_err());
+    }
+
+    #[test]
+    fn added_tasks_default_not_paused_and_list_orders_paused_middle() {
+        let (_dir, store) = store();
+        let t = store.add(1, "任务").unwrap();
+        assert!(!t.done);
+        assert!(!t.paused);
+
+        // 建三条,分别落成 待办 / 搁置 / 已完成,期望三段次序。
+        let paused = store.add(1, "搁置任务").unwrap();
+        let done = store.add(1, "完成后沉底").unwrap();
+        store.toggle(done.id, true).unwrap();
+        store
+            .set_status(paused.id, TodoStoredStatus::Suspended)
+            .unwrap();
+        store.add(1, "进行中或待办").unwrap(); // 新加置顶属活动段
+
+        let listed = store.list(1).unwrap();
+        let texts: Vec<&str> = listed.iter().map(|i| i.text.as_str()).collect();
+        let a = texts.iter().position(|&x| x == "进行中或待办").unwrap();
+        let b = texts.iter().position(|&x| x == "搁置任务").unwrap();
+        let c = texts.iter().position(|&x| x == "完成后沉底").unwrap();
+        assert!(a < b, "活动待办在搁置前");
+        assert!(b < c, "搁置在已完成前");
+        assert!(listed.get(b).unwrap().paused);
+    }
+
+    #[test]
+    fn set_status_maps_three_stored_states() {
+        let (_dir, store) = store();
+        let t = store.add(1, "任务").unwrap();
+
+        // → 搁置:置 paused、清派发,未完成
+        store.record_dispatch(t.id, "sess-1").unwrap();
+        let s = store.set_status(t.id, TodoStoredStatus::Suspended).unwrap();
+        assert!(s.paused);
+        assert!(!s.done);
+        assert_eq!(s.dispatch_session_id, None);
+
+        // → 已完成:完成 + 撤销搁置
+        let done = store.set_status(t.id, TodoStoredStatus::Done).unwrap();
+        assert!(done.done);
+        assert!(!done.paused);
+        assert!(done.completed_at_ms.is_some());
+
+        // → 待办:完成/搁置都撤销、摘派发
+        store.record_dispatch(t.id, "sess-2").unwrap();
+        let todo = store.set_status(t.id, TodoStoredStatus::Todo).unwrap();
+        assert!(!todo.done);
+        assert!(!todo.paused);
+        assert_eq!(todo.dispatch_session_id, None);
+        assert_eq!(todo.completed_at_ms, None);
+    }
+
+    #[test]
+    fn set_status_unknown_id_errors() {
+        let (_dir, store) = store();
+        assert!(store.set_status(999, TodoStoredStatus::Done).is_err());
+    }
+
+    #[test]
+    fn toggle_done_clears_paused_and_back_keeps_it_as_last_set() {
+        let (_dir, store) = store();
+        let t = store.add(1, "任务").unwrap();
+        store.set_status(t.id, TodoStoredStatus::Suspended).unwrap();
+        let done = store.toggle(t.id, true).unwrap();
+        assert!(done.done);
+        assert!(!done.paused, "已完成时不应残留搁置");
+        store.toggle(t.id, false).unwrap();
+        let listed = store.list(1).unwrap();
+        assert!(!listed[0].paused, "取消勾选回到待办(不残留搁置)");
     }
 }

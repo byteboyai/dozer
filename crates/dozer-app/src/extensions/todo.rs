@@ -23,6 +23,10 @@ pub enum TodoState {
     Pending,
     InProgress,
     Done,
+    /// 搁置(用户主动"拿回/暂停",服务端存储位 `paused`)。优先级在
+    /// `Done` 之下、`InProgress` 之上:一个既完成又(残留)搁置的按完成算;
+    /// 派发但被用户搁置的按搁置算——搁置即"停手追那家伙",不残留进行中。
+    Suspended,
 }
 
 /// 右区当前展示的视图模式。`List` 是现有的一列一列的任务列表(卡片逐行
@@ -36,21 +40,30 @@ pub enum TodoView {
     Kanban,
 }
 
-/// `done` 为真直接 `Done`（不管有没有派发记录——已完成的任务不需要
-/// 再关心是谁做的）；否则看有没有派发记录，记录存在且目标 session
-/// 仍存活（`target_alive`，调用方传 `ws.tabs.iter().any(|t| t.info.id
-/// == dispatch.session_id && t.alive)`）→ `InProgress`；否则（没派发
-/// 过，或派发目标已经退出）→ `Pending`。`plan_date`/`completed_at` 的
-/// 权威值现在都在 `TodoInfo` 自身上（不再走 sidecar）。
+/// `done` 为真直接 `Done`（已完成优先，不管有没有派发/搁置记录）；
+/// 否则若 `paused` 为真 → `Suspended`（搁置即停手，覆盖派发/进行中）；
+/// 否则看派发记录：存在且 session 存活 → `InProgress`；否则 → `Pending`。
+/// 四种派生状态:Pending / InProgress / Suspended / Done。
+/// `plan_date`/`completed_at`/`paused` 的权威值现在都在 `TodoInfo` 自身上
+/// （不再走 sidecar）。
 pub fn todo_display_state(item: &TodoInfo, target_alive: bool) -> TodoState {
     if item.done {
         return TodoState::Done;
+    }
+    if item.paused {
+        return TodoState::Suspended;
     }
     if item.dispatch_session_id.is_some() && target_alive {
         TodoState::InProgress
     } else {
         TodoState::Pending
     }
+}
+
+/// 正在"谈/进行"（等于总能在"活动段"里被拖拽重排的子集）：`!done && !paused`。
+/// 搁置（`paused`）是中间第三个不可拖放的段，完成是沉底段——都不可拖。
+fn is_active_todo(item: &TodoInfo) -> bool {
+    !item.done && !item.paused
 }
 
 /// 分类树的当前过滤选中态。`All`/`Uncategorized` 是钉在树顶的两个伪
@@ -290,6 +303,13 @@ pub struct WorkspaceState {
     /// 派发选择层浮层弹出锚点(逻辑像素,取点击"指派"按钮时的光标位置)。
     /// 窗口级 overlay 靠它定位到按钮旁边;关闭时清空。
     dispatch_anchor: Option<(f32, f32)>,
+    /// 状态下拉展开态(卡片下标):点卡片左下角状态按钮弹出四态(待办/进行中/
+    /// 搁置/已完成)选择层。与 `dispatch_open`/`calendar_open` 同一种"同
+    /// 时只能有一个"模型——展开状态下拉后,其它同样的弹层都认为关闭。
+    status_open: Option<usize>,
+    /// 状态下拉浮层弹出锚点(逻辑像素,取点击状态按钮时的光标位置)。与
+    /// `dispatch_anchor` 同款窗口级 overlay 定位手法;关闭时清空。
+    status_anchor: Option<(f32, f32)>,
     /// 日历日期选择器展开态(卡片下标),`None` = 未展开。跟 `dispatch_open`
     /// 同一种"同时只能有一个"模型。
     calendar_open: Option<usize>,
@@ -340,6 +360,12 @@ impl WorkspaceState {
     /// 派发选择层是否打开(内核 `App::todo_dispatch_open` 键盘/UI 状态查询用)。
     pub fn dispatch_popup_open(&self) -> bool {
         self.dispatch_open.is_some()
+    }
+
+    /// 状态下拉选择层是否打开(内核 `App::todo_status_open` 键盘/UI 状态
+    /// 查询用)。
+    pub fn status_popup_open(&self) -> bool {
+        self.status_open.is_some()
     }
 
     /// 日历日期选择器是否打开(内核 `App::todo_calendar_open` 键盘 Esc
@@ -416,6 +442,18 @@ impl WorkspaceState {
     /// 窗口级 overlay 定位用。`app.rs::todo_message` 在 `DispatchOpen` 时写入。
     pub fn set_dispatch_anchor(&mut self, anchor: (f32, f32)) {
         self.dispatch_anchor = Some(anchor);
+    }
+
+    /// 关闭状态下拉选择层(选中某一态并落地后,或 Esc / 点外部)。
+    pub fn close_status_popup(&mut self) {
+        self.status_open = None;
+        self.status_anchor = None;
+    }
+
+    /// 记录状态下拉选择层浮层弹出锚点(点击状态按钮时的光标逻辑坐标),供
+    /// 窗口级 overlay 定位用。`app.rs::todo_message` 在 `StatusOpen` 时写入。
+    pub fn set_status_anchor(&mut self, anchor: (f32, f32)) {
+        self.status_anchor = Some(anchor);
     }
 
     /// 关闭日历选择器(选中日期后,或 Esc / 点外部)。
@@ -677,6 +715,15 @@ pub enum Message {
     DispatchOpen(usize),
     DispatchClose,
     DispatchToExisting(usize, String),
+    /// 点卡片左下角状态按钮:弹出从"待办/进行中/搁置/已完成"四态选一的
+    /// 状态下拉选择层(`status_open` 记下标,`status_anchor` 记弹出锚点)。
+    StatusOpen(usize),
+    /// 关闭状态下拉选择层(选中并落地后 / Esc / 点弹层外)。只清浮层,不动
+    /// 任务。
+    StatusClose,
+    /// 状态下拉里选了某一态:`state` 是用户想切到的目标状态(含派生的
+    /// `InProgress`,见 `update` 里对三存储态 + InProgress 的分别处理)。
+    StatusPick(usize, TodoState),
     /// 点卡片计划日期徽章 → 弹出日历日期选择器(取代原来的行内文本编辑)。
     CalendarOpen(usize),
     /// 关闭日历选择器(Esc / 点外部 / 选中日期后)。
@@ -1125,6 +1172,7 @@ pub fn update(
                     project_id,
                     text: text.clone(),
                     done: false,
+                    paused: false,
                     rank: 0,
                     created_ms: 0,
                     completed_at_ms: None,
@@ -1156,14 +1204,14 @@ pub fn update(
             // 时用户主动点才会走到这里,新增闪光阶段不处理(见 `Message::Toggle`
             // 之上对闪光来源的约定)。
             ws_state.flash = None;
-            // 待办卡片被按下即"准备拖":记下它的 item-index 作为拖拽源。
-            // 已完成不参与拖拽(只有待办才进 `drag`)。注意这跟选中态是两件
-            // 独立的事——纯点击(不移动)也会落到这里,但松手时
+            // 活动卡片被按下即"准备拖":记下它的 item-index 作为拖拽源。
+            // 搁置/完成不参与拖拽(只有活动段才进 `drag`)。注意这跟选中态是
+            // 两件独立的事——纯点击(不移动)也会落到这里,但松手时
             // source==target 不写盘,只是正常选中切换(同 `TabDragMove`
             // 的"按住=准备拖,移动才换位"语义)。
             if let Some(i) = idx
                 && let Some(item) = ws_state.items.get(i)
-                && !item.done
+                && is_active_todo(item)
             {
                 ws_state.drag = Some(TodoDrag {
                     source_idx: i,
@@ -1178,12 +1226,23 @@ pub fn update(
             let Some(drag) = ws_state.drag else {
                 return;
             };
-            // 悬停到待办卡片 → 目标取该卡片 item-index;悬停到已完成卡片
-            // → 目标夹到待办块末尾(usize::MAX 哨兵,`DragEnd` 时折算成
-            // 最后一个待办 rank)。已完成不可被拖到(只会改变落点)。
+            // 活动段尾部下标:最后一个活动(非 done && 非 paused)项的
+            // item-index。搁置/完成都夹不到活动段的"之后"(活动段是整它自己
+            // 那一段),落到非活动行就一律取"最后一个活动"当落点。
+            let last_active = ws_state
+                .items
+                .iter()
+                .enumerate()
+                .rfind(|(_, it)| is_active_todo(it))
+                .map(|(i, _)| i);
             let target = match ws_state.items.get(over_idx) {
-                Some(it) if !it.done => over_idx,
-                _ => usize::MAX,
+                Some(it) if is_active_todo(it) => over_idx,
+                // 走到这个分支时表示悬停到搁置/完成(或在它之上)。为了让用户把
+                // 活动拖到"搁置段之前",落点取最后一个活动项的 idx(下面换算成
+                // after_id);若根本没有可落的活动行则走 usize::MAX(交服务端
+                // 按"待办块挪到最前"处理)。注意 source 等于该 last_active(正要
+                // 把它挪到自己之后)会让 last_active 与 itself 结算成 no-op。
+                _ => last_active.unwrap_or(usize::MAX),
             };
             if target != drag.target_idx {
                 ws_state.drag = Some(TodoDrag {
@@ -1203,21 +1262,11 @@ pub fn update(
                 return;
             };
             let id = source_item.id;
-            // target_idx == usize::MAX 表示拖到待办块末尾(悬停到已完成
-            // 卡片),此时 after_id 取"当前最后一个待办"的 id;否则取
-            // target_idx 对应任务的 id(挪到它之后)。
-            let after_id = if drag.target_idx == usize::MAX {
-                // 先排除被拖动的任务本身再取"待办块末尾"——否则被拖的刚好
-                // 就是原本最后一条待办时,会把自己算成自己的 after_id 而
-                // 被过滤掉,错误地退化成"挪到最前"。
-                ws_state
-                    .items
-                    .iter()
-                    .rfind(|it| !it.done && it.id != id)
-                    .map(|it| it.id)
-            } else {
-                ws_state.items.get(drag.target_idx).map(|it| it.id)
-            };
+            // 落点 target 只在"另一个活动项"上(DragMove 里已保证夹在活动段
+            // 内、且 source != target 已在上方早退),after_id 直接取它的 id,
+            // 让服务端把本任务挪到它之后。活动段/搁置段边界由 DragMove 夹好,
+            // 这里不需要再区分 usize::MAX。
+            let after_id = ws_state.items.get(drag.target_idx).map(|it| it.id);
             let client = client.clone();
             handle.spawn(async move {
                 let res = client
@@ -1229,8 +1278,82 @@ pub fn update(
             });
         }
         Message::DispatchOpen(idx) => ws_state.dispatch_open = Some(idx),
-        Message::DispatchClose => ws_state.dispatch_open = None,
+        Message::DispatchClose => {
+            ws_state.dispatch_open = None;
+            ws_state.dispatch_anchor = None;
+        }
+        Message::StatusOpen(idx) => {
+            // 同一时刻只允许一个卡片弹层(状态/日历/派发互斥):打开状态下拉时
+            // 顺手把另外两个收起,避免叠两层卡片浮层。
+            ws_state.dispatch_open = None;
+            ws_state.calendar_open = None;
+            ws_state.status_open = Some(idx);
+        }
+        Message::StatusClose => ws_state.close_status_popup(),
+        Message::StatusPick(idx, target) => {
+            // 关闭状态下拉;无论目标是什么都先收起浮层,再做分支处理。
+            ws_state.close_status_popup();
+            let Some(item) = ws_state.items.get(idx) else {
+                return;
+            };
+            // 需要把状态落到 dozerd 的存储态。InProgress 不是存储位:真正
+            // "进进行中"要一次指派(选到某个存活会话);这里要么把这个分支
+            // 转给派发选择层(待办/搁置想进进行中),要么撤销搁置先变"待办"。
+            let stored_target = match target {
+                TodoState::Pending => Some(dozer_core::protocol::TodoStoredStatus::Todo),
+                TodoState::Done => Some(dozer_core::protocol::TodoStoredStatus::Done),
+                TodoState::Suspended => Some(dozer_core::protocol::TodoStoredStatus::Suspended),
+                TodoState::InProgress => None,
+            };
+            // InProgress:当前没存活会话(从 Pending/Suspended 想转)就交给
+            // 派发选择层;已经 InProgress 的选它不做事。搁置(拿回暂停)想
+            // 进"进行中"先把 stored 位撤回待办(撤销暂停),下一拍用户再走
+            // "指派"一个存活会话；这里不连做两次写只因想分清"取消搁置"跟
+            // "指派会话"两件原子动作。
+            if target == TodoState::InProgress {
+                if item.paused {
+                    let client = client.clone();
+                    let id = item.id;
+                    handle.spawn(async move {
+                        let res = client
+                            .set_todo_status(id, dozer_core::protocol::TodoStoredStatus::Todo)
+                            .await
+                            .map(|_| ())
+                            .map_err(|e| e.to_string());
+                        emit(Message::Mutated(res));
+                    });
+                } else {
+                    // 非搁置想进进行中 = 想指派一个会话 → 把状态浮层让位给
+                    // 派发浮层,并沿用它自己的弹出锚点(刚记录的那次点击)。
+                    if let Some(a) = ws_state.status_anchor.take() {
+                        ws_state.dispatch_anchor = Some(a);
+                    }
+                    ws_state.dispatch_open = Some(idx);
+                }
+                ws_state.status_open = None;
+                ws_state.status_anchor = None;
+                return;
+            }
+            let Some(stored_target) = stored_target else {
+                return;
+            };
+            let client = client.clone();
+            let id = item.id;
+            handle.spawn(async move {
+                let res = client
+                    .set_todo_status(id, stored_target)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string());
+                emit(Message::Mutated(res));
+            });
+        }
         Message::CalendarOpen(idx) => {
+            // 与 StatusOpen/派发同样"同时只能有一个浮层":开日历时收起状态
+            // 提层/派发层。
+            ws_state.status_open = None;
+            ws_state.status_anchor = None;
+            ws_state.dispatch_open = None;
             // 打开日历:默认停在"当前月",若任务已有计划日期且能解析成 MM-DD,
             // 则把视图拨到该月(年份取当前年——plan_date 只有月日,无年份)。
             let (now_y, now_m, _) = today_ymd();
@@ -1458,41 +1581,65 @@ pub fn view<'a>(
     (sidebar_pane, content_pane)
 }
 
-/// 右区顶部一个视图模式切换 tab(纯文字 pill):选中态 cream 文字 + CARD
-/// 实底 + 1px 金描边,与左侧分类树的选中行同视觉语言;未选中态 DIM。点击
-/// 下发 `Message::SelectView`,切换列表/看板视图。
+/// 右区顶部一个视图模式切换 tab(纯文字 pill):选中态 cream 文字 + `card`
+/// 实底 + 1px `theme.border` 描边,未选中态静止为 `dim` 文字。
+///
+/// 视觉对齐文件/浏览器/终端那套共享 `tab_widget::panel_tab` 的激活态
+/// (cream 文字 + `card` 底 + 1px 中性描边,非原来自成一派的金描边):因此两
+/// 颗「列表视图/看板视图」切换钮与 readme 预览/浏览器打开的文件页签长相一
+/// 致 —— 同一行里选中那颗 = `panel_tab` 激活页签,未选中的 = 未激活页签
+/// (hover 时浮现 `tab_hover` 胶囊、文字 `dim`→`gold`)。区别只在它是无关闭
+/// × 的互斥选择开关(视图切换没有"关掉列表视图"这种语义),故不复用
+/// `panel_tab` 那个关不掉关闭按钮的带 close 形状,只 `button::status` 做同一套
+/// 静止/hover 两态。点击下发 `Message::SelectView`,切换列表/看板视图。
 fn todo_view_tab<'a>(
     label: &'static str,
     view: TodoView,
     active: bool,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let theme = byteui::theme::color::current();
-    let fg = if active { theme.cream } else { theme.dim };
-    button(text(label).size(byteui::theme::font::body()).color(fg))
+    // 文字颜色不固定在构造期:透明底让 `button::Style.text_color` 统一接管,
+    // 这样按下/hover 才能驱动 `dim`→`gold`(同 `panel_tab` 的标题染色)。
+    let content = text(label)
+        .size(byteui::theme::font::body())
+        .color(Color::TRANSPARENT);
+    let btn = button(content)
         .on_press(Message::SelectView(view))
         .width(Length::Shrink)
-        .padding([6, 14])
-        .style(
-            move |_t: &iced_widget::Theme, _s: button::Status| button::Style {
-                background: if active {
-                    Some(theme.card.into())
-                } else {
-                    None
-                },
-                text_color: fg,
-                border: Border {
-                    color: if active {
-                        theme.gold
-                    } else {
-                        Color::TRANSPARENT
+        .padding([5, 14])
+        .style(move |_t: &iced_widget::Theme, status| {
+            if active {
+                // 选中 → 同 `panel_tab` 激活态:CARD 实底 + 1px `theme.border`。
+                button::Style {
+                    background: Some(theme.card.into()),
+                    text_color: theme.cream,
+                    border: Border {
+                        color: theme.border,
+                        width: 1.0,
+                        radius: 6.0.into(),
                     },
-                    width: if active { 1.0 } else { 0.0 },
-                    radius: 6.0.into(),
-                },
-                ..button::Style::default()
-            },
-        )
-        .into()
+                    ..button::Style::default()
+                }
+            } else {
+                // 未选中 → 同 `panel_tab` 未激活态:静止透明 dim;hover/press
+                // 浮现 `tab_hover` 胶囊、文字 `dim`→`gold`。
+                let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+                button::Style {
+                    background: if hovered {
+                        Some(theme.tab_hover.into())
+                    } else {
+                        None
+                    },
+                    text_color: if hovered { theme.gold } else { theme.dim },
+                    border: Border {
+                        radius: 6.0.into(),
+                        ..Border::default()
+                    },
+                    ..button::Style::default()
+                }
+            }
+        });
+    btn.into()
 }
 
 /// 看板视图的一期占位:视觉几列状态分区我们不渲染任何任务(功能未实现),
@@ -1829,46 +1976,50 @@ fn todo_list_view<'a>(
             .padding([20, 20]),
         );
     } else {
-        // 待办在前、已完成沉底:把 `visible_idx` 拆成两段,各自保持原(items)
-        // 次序后拼接。与落盘时"待办块 + 已完成块"的归一化一致。
-        let mut pending_idx: Vec<usize> = Vec::new();
+        // 三段布局:活动(待办/进行中,可拖拽)→ 搁置(拿回暂停,不可拖)→
+        // 已完成(沉底,不可拖)。把 `visible_idx` 按每项 `is_active_todo`/
+        // paused/done 拆开,各自保持原(items)次序。与 dozerd 落盘
+        // `ORDER BY done, paused, rank` 的"活动-搁置-完成"顺序同构。
+        let mut active_idx: Vec<usize> = Vec::new();
+        let mut suspended_idx: Vec<usize> = Vec::new();
         let mut done_idx: Vec<usize> = Vec::new();
         for &i in &visible_idx {
-            if ws_state.items[i].done {
+            let it = &ws_state.items[i];
+            if it.done {
                 done_idx.push(i);
+            } else if it.paused {
+                suspended_idx.push(i);
             } else {
-                pending_idx.push(i);
+                active_idx.push(i);
             }
         }
-        // 拖拽进行中不再对 pending_idx 做展示置换——之前"每帧按新顺序
+        // 拖拽进行中不再对 active 段做展示置换——之前"每帧按新顺序
         // remove+insert 整个重排"会让被拖卡片之外的其它卡片瞬间跳位,
         // 没有任何过渡帧(用户反馈"动画不够流畅"的根因)。改成更常见的
-        // "源卡片原位高亮 + 插入指示线"模式:待办子序列渲染顺序全程不变,
+        // "源卡片原位高亮 + 插入指示线"模式:active 子序列渲染顺序全程不变,
         // 被拖的那张卡片本身描边变金(`is_drag_source`),目标位置前插一条
         // 细的金色指示线提示"松手会落在这里"。真正的换位只在 `DragEnd`
-        // 落盘时一次性发生,视觉上不再有中间态的"其它卡片被顶开"。
+        // 落盘时一次性发生。搁置/完成不可拖也不让拖到它们上头
+        // (`DragMove` 只把落点夹在 active 段内)。
         let drag_source_idx = ws_state.drag.map(|d| d.source_idx);
-        // 指示线该出现在 pending 子序列的哪个展示位置之前:target_idx 对应
-        // 的卡片当前在 pending_idx 里的下标(`usize::MAX` 哨兵表示插到
-        // pending 块末尾,单独用 insert_at_end 标记,不落进这个 Option)。
-        // source_idx == target_idx(还没真的移动过)时不显示指示线,跟换位
-        // 逻辑本身"没移动不写盘"的既有语义对齐。
+        // 指示线该出现在 active 子序列的哪个展示位置之前:target_idx 对应
+        // 的卡片在 active_idx 里的下标。落点是 active 段尾巴(悬停到搁置
+        // 标题/完成段或末尾)时,指示线插这段最后一张之后。source ==
+        // target(还没真的移动过)时不显示,跟换位逻辑"没移动不写盘"对齐。
         let (insert_before, insert_at_end) = match ws_state.drag {
             Some(drag) if drag.source_idx != drag.target_idx => {
-                if drag.target_idx == usize::MAX {
-                    (None, true)
-                } else {
-                    (
-                        pending_idx.iter().position(|&x| x == drag.target_idx),
-                        false,
-                    )
+                match active_idx.iter().position(|&x| x == drag.target_idx) {
+                    Some(p) => (Some(p), false),
+                    None => (None, true),
                 }
             }
             _ => (None, false),
         };
         let grabbing = ws_state.drag.is_some();
-        let pending_len = pending_idx.len();
-        for (display_no, &idx) in pending_idx.iter().enumerate() {
+        let mut shown = 0usize;
+        // ---- 段一:活动(待办/进行中,可拖拽) ----
+        for (display_no, &idx) in active_idx.iter().enumerate() {
+            shown += 1;
             if insert_before == Some(display_no) {
                 list = list.push(drag_insert_indicator());
             }
@@ -1876,26 +2027,36 @@ fn todo_list_view<'a>(
                 app,
                 ws_state,
                 states,
-                display_no + 1,
+                shown,
                 idx,
                 grabbing,
                 drag_source_idx == Some(idx),
             ));
         }
-        if insert_at_end || insert_before == Some(pending_len) {
+        if insert_at_end || insert_before == Some(active_idx.len()) {
             list = list.push(drag_insert_indicator());
         }
-        for (i, &idx) in done_idx.iter().enumerate() {
-            list = list.push(todo_list_row(
-                app,
-                ws_state,
-                states,
-                pending_len + i + 1,
-                idx,
-                grabbing,
-                false,
-            ));
+        // ---- 段二:搁置(已暂停,拿回待重启) ----
+        if !suspended_idx.is_empty() {
+            list = list.push(todo_segment_divider("搁置"));
+            for &idx in &suspended_idx {
+                shown += 1;
+                list = list.push(todo_list_row(
+                    app, ws_state, states, shown, idx, grabbing, false,
+                ));
+            }
         }
+        // ---- 段三:已完成(沉底) ----
+        if !done_idx.is_empty() {
+            list = list.push(todo_segment_divider("已完成"));
+            for &idx in &done_idx {
+                shown += 1;
+                list = list.push(todo_list_row(
+                    app, ws_state, states, shown, idx, grabbing, false,
+                ));
+            }
+        }
+        let _ = shown;
     }
 
     column![
@@ -1976,6 +2137,30 @@ fn drag_insert_indicator() -> Element<'static, Message, iced_widget::Theme, iced
         .into()
 }
 
+/// 段标题(搁置 / 已完成):一段窄的暗色分隔条 + 缩进 caption 文字,用来
+/// 把三段列表(活动 / 搁置 / 完成)在视觉上明确切开——前两段纯靠卡片排布
+/// 分不出来,加个低频次、高信息量的分隔标题最省事。本身不响应任何输入。
+fn todo_segment_divider(
+    label: impl Into<String>,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    row![
+        text(label.into())
+            .size(byteui::theme::font::caption())
+            .color(byteui::theme::color::current().dim),
+        container(iced_widget::space::Space::new())
+            .width(Length::Fill)
+            .height(Length::Fixed(1.0))
+            .style(|_t: &iced_widget::Theme| container::Style {
+                background: Some(byteui::theme::color::current().border.into()),
+                ..container::Style::default()
+            }),
+    ]
+    .spacing(8)
+    .align_y(iced_widget::core::alignment::Vertical::Center)
+    .padding([10, 0])
+    .into()
+}
+
 /// 统一卡片组件：列表视图使用的边框卡片视觉，取代原来的
 /// `todo_row`(扁平高亮行)。结构自上而下：编号 + 状态(`#002 - 待办` 形式,
 /// 状态紧跟序号)+ 日期徽章(calendar 图标 → 日历选择器)→ checkbox + 任务文字
@@ -2045,13 +2230,9 @@ fn todo_card<'a>(
         .on_press(Message::CalendarOpen(idx))
         .into();
 
-    // 状态:静态文字(不再是可点击 pill),颜色随三态走——待办=青、进行中=金、
-    // 完成=灰。紧跟在序号之后(如 `#002 - 待办`),日期徽章仍居右。
-    let status_label = state_label(state);
-
-    let status_sep = text(" - ")
-        .size(byteui::theme::font::caption())
-        .color(byteui::theme::color::current().dim);
+    // 状态不再作为顶部静态文字跟在序号后面(`#002 - 待办` 形式废除)——四态
+    // 移到卡片底部左下的状态按钮(`todo_status_button`)以"当前状态"作button
+    // 文本,点开状态下拉四选。顶部这行只留序号,分类 chip 与日期徽章续排。
 
     // 分类 chip:显示任务所属分类(找不到就是"未分类"),点击打开分类选择器。
     let category_label = categories
@@ -2078,8 +2259,6 @@ fn todo_card<'a>(
 
     let top_row = row![
         number_text,
-        status_sep,
-        status_label,
         chip,
         iced_widget::space::Space::new()
             .width(Length::Fill)
@@ -2209,10 +2388,11 @@ fn todo_card<'a>(
         .spacing(10)
         .align_y(iced_widget::core::alignment::Vertical::Center);
 
-    // ---- 底部行：指派文本按钮(仅待办未派发) ----
-    let mut bottom = row![]
-        .spacing(8)
-        .align_y(iced_widget::core::alignment::Vertical::Center);
+    // ---- 底部行：左=四态状态按钮(所有卡片都有),右=指派按钮(仅
+    // "待办且未派发"会出现——指派本身就是把某条待办推进到"进行中")----
+    let status_btn = todo_status_button(state, idx);
+
+    let mut bottom = row![status_btn].spacing(12);
     if state == TodoState::Pending && item.dispatch_session_id.is_none() {
         // 样式对齐 `project.rs::project_footer_bar` 的「修复项目」按钮:
         // BG 底 + 1px BORDER 描边 + 圆角 4 + CREAM 文字,label 字号 + 内边距
@@ -2234,7 +2414,7 @@ fn todo_card<'a>(
         )
         .on_press(Message::DispatchOpen(idx))
         .padding([6, 8])
-        .style(|_t: &iced_widget::Theme, s: button::Status| {
+        .style(move |_t: &iced_widget::Theme, s: button::Status| {
             let hovered = matches!(s, button::Status::Hovered);
             button::Style {
                 background: if hovered {
@@ -2259,10 +2439,10 @@ fn todo_card<'a>(
     }
 
     let bottom_row = row![
+        bottom,
         iced_widget::space::Space::new()
             .width(Length::Fill)
             .height(Length::Shrink),
-        bottom,
     ];
 
     let card_body = column![top_row, body_row, bottom_row].spacing(8);
@@ -2383,21 +2563,118 @@ pub fn todo_dispatch_overlay<'a>(
     )
 }
 
-/// 状态静态文字：三态只显示彩色文字,没有按钮/菜单行为(状态不再可点击切换,
-/// 只能靠 checkbox 勾选翻转)。颜色:待办=青 `CYAN`、进行中=金 `GOLD`、
-/// 完成=灰 `DIM`。
-fn state_label(
-    state: TodoState,
-) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let (label, color) = match state {
+/// 任务状态文案与专属色,四态一个不落:
+/// 待办=青 `CYAN`、进行中=金 `GOLD`、搁置=奶油 `CREAM`(比 DIM 略亮一点、
+/// 强调"还没完,只是被拿回来放着")、完成=灰 `DIM`。状态按钮文本与状态下拉
+/// 菜单各条目统一从这里取色,不各写一份颜色表。
+fn status_meta(state: TodoState) -> (&'static str, Color) {
+    match state {
         TodoState::Pending => ("待办", byteui::theme::color::current().cyan),
         TodoState::InProgress => ("进行中", byteui::theme::color::current().gold),
+        TodoState::Suspended => ("搁置", byteui::theme::color::current().cream),
         TodoState::Done => ("已完成", byteui::theme::color::current().dim),
-    };
-    text(label)
-        .size(byteui::theme::font::caption())
-        .color(color)
-        .into()
+    }
+}
+
+/// 卡片底部左下的「状态」下拉按钮:文本 = 当前状态(待办/进行中/搁置/已完成,
+/// 颜色随 `status_meta`),后跟向下箭头提示展开。点开弹 `todo_status_overlay`
+/// 的四个选项。整体观感对齐同一行的「指派」按钮(BG 底 + BORDER 描边 +
+/// 圆角 4),避免一张卡里两种按钮风格打架。
+fn todo_status_button(
+    state: TodoState,
+    idx: usize,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let (label, color) = status_meta(state);
+    button(
+        row![
+            text(label).size(byteui::theme::font::label()).color(color),
+            icons::view(
+                icons::IconKind::ChevronDown,
+                byteui::theme::icon_size::row(),
+                byteui::theme::color::current().dim,
+            ),
+        ]
+        .spacing(4)
+        .align_y(iced_widget::core::alignment::Vertical::Center),
+    )
+    .on_press(Message::StatusOpen(idx))
+    .padding([6, 8])
+    .style(move |_t: &iced_widget::Theme, s: button::Status| {
+        let hovered = matches!(s, button::Status::Hovered);
+        button::Style {
+            background: if hovered {
+                Some(byteui::theme::color::current().card.into())
+            } else {
+                Some(byteui::theme::color::current().bg.into())
+            },
+            border: Border {
+                color: if hovered {
+                    byteui::theme::color::current().gold
+                } else {
+                    byteui::theme::color::current().border
+                },
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            text_color: color,
+            ..button::Style::default()
+        }
+    })
+    .into()
+}
+
+/// Todo 状态下拉选择层(窗口级 overlay 版,设计风格复用 `todo_dispatch_overlay`
+/// ——都是"点一个卡片按钮弹出的四选/选项列表",用同一套 `menu::shell` 壳保证
+/// 观感一致):从上到下依次列出 待办/进行中/搁置/已完成 四态,每个条目文字用
+/// 该态自己的 `status_meta` 色。点某条发 `StatusPick(idx, 该态)`(真实的存储
+/// 落盘 / 转派发选择层的分支都在 `Message::StatusPick` 里处理)。返回 `None`
+/// 表示 `status_open` 为真但锚点缺失(理论上到不了,调用方降级为只铺 dismiss
+/// 收起层)。
+pub fn todo_status_overlay<'a>(
+    ws: &Workspace,
+    window_size: (f32, f32),
+) -> Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> {
+    let ws_state = &ws.todo;
+    let idx = ws_state.status_open?;
+    let anchor = ws_state.status_anchor?;
+
+    let candidates = [
+        TodoState::Pending,
+        TodoState::InProgress,
+        TodoState::Suspended,
+        TodoState::Done,
+    ];
+    let items: Vec<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> = candidates
+        .into_iter()
+        .map(|st| {
+            let (label, color) = status_meta(st);
+            crate::menu::item_row(None, label, color, Some(Message::StatusPick(idx, st)))
+        })
+        .collect();
+    let popup = crate::menu::shell(items, Length::Shrink);
+
+    // 全窗口容器 + padding 把弹层推到锚点;窗口边界钳制,避免超出右下。
+    let (ax, ay) = anchor;
+    let window_w = window_size.0;
+    let window_h = window_size.1;
+    // 菜单估算尺寸:常宽约 160(文字 + 内边距,比派发列表窄,因为没有图标列),
+    // 高约每项 28 + 壳内边距;给足余量。
+    let pop_w = 160.0_f32;
+    let pop_h = (4.0_f32 * 28.0) + 16.0;
+    let x = ax.min((window_w - pop_w).max(0.0));
+    let y = ay.min((window_h - pop_h).max(0.0));
+    Some(
+        container(popup)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(Padding {
+                top: y,
+                left: x,
+                right: 0.0,
+                bottom: 0.0,
+            })
+            .into(),
+    )
 }
 
 /// 日历日期选择器：点卡片日期徽章弹出,展示 `calendar_view` 那个月,上一月/
@@ -2807,6 +3084,7 @@ mod tests {
             project_id: 1,
             text: text.to_string(),
             done,
+            paused: false,
             rank: 0,
             created_ms: 0,
             completed_at_ms: None,
@@ -3065,6 +3343,7 @@ mod tests {
             project_id: 1,
             text: format!("任务{id}"),
             done: false,
+            paused: false,
             rank: 0,
             created_ms: 0,
             completed_at_ms: None,

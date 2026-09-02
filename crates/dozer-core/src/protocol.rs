@@ -197,6 +197,22 @@ pub struct BookmarkInfo {
     pub created_ms: u64,
 }
 
+/// `SetTodoStatus` 期望的**已存储**逻辑状态。注意"进行中"(派发到某个
+/// 存活会话)不是纯存储态——它由 `dispatch_session_id` 的存活与否在服务端
+/// 之外(GUI)推导,不在此列。三值各自对应 `todos` 表 `done`/`paused`/
+/// `dispatch_*` 的组合,服务端一次 UPDATE 原子落定:
+/// - `Todo`(待办):撤销完成、撤销搁置、摘掉派发记录 → 变为可再排队的待办。
+/// - `Suspended`(搁置):撤销完成、置搁置、同时摘掉派发记录(搁置 = 拿回,
+///   不残留"还在某个会话手上")。
+/// - `Done`(已完成):置完成、撤销搁置(与勾选 `ToggleTodo(true)` 等价)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TodoStoredStatus {
+    Todo,
+    Suspended,
+    Done,
+}
+
 /// 一条任务(`dozerd` 的 `todos` 表一行)。`id` 是稳定身份,取代 v1 时
 /// 靠文本哈希关联元数据的做法(2026-09-01 SQLite 迁移)。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -205,9 +221,14 @@ pub struct TodoInfo {
     pub project_id: i64,
     pub text: String,
     pub done: bool,
-    /// 排序键:同一 project 下,展示查询固定 `ORDER BY done, rank`——待办
-    /// 按 rank 升序在前,已完成按 rank 升序沉底,同一 done 分组内比较才
-    /// 有意义,跨分组数值不保证可比。
+    /// 搁置(`1` = 已暂停不推进)。独立于 `done`,是第四种派生状态"搁置"
+    /// (`!done && paused`)的存储来源;`done` 真时以"已完成"优先。记录一次
+    /// 任务被"拿回/停用"的历史,让任务语义更接近现实的"暂停后待重启"。
+    #[serde(default)]
+    pub paused: bool,
+    /// 排序键:同一 project 下,展示查询固定 `ORDER BY done, paused, rank`
+    /// ——进行中/待办按 rank 升序在最前、搁置其次、已完成沉底;同一分组内
+    /// 比较才有意义,跨分组数值不保证可比。
     pub rank: i64,
     pub created_ms: u64,
     pub completed_at_ms: Option<u64>,
@@ -441,7 +462,7 @@ pub enum Request {
     GetSessionSummaryBackfillStatus {
         cwd: String,
     },
-    /// 列出某项目全部任务,`ORDER BY done, rank` 排好序返回。
+    /// 列出某项目全部任务,`ORDER BY done, paused, rank` 排好序返回。
     ListTodos {
         project_id: i64,
     },
@@ -476,6 +497,13 @@ pub enum Request {
     RecordTodoDispatch {
         id: i64,
         session_id: String,
+    },
+    /// 把任务设为某个已存储逻辑状态(`TodoStoredStatus`,见其注释里三值各
+    /// 自落哪些 `done`/`paused`/`dispatch_*` 组合)。服务端一次 UPDATE 原子
+    /// 完成;`id` 不存在 → `Reply::Error`。
+    SetTodoStatus {
+        id: i64,
+        status: TodoStoredStatus,
     },
     /// 列出某项目全部分类节点,扁平返回(不分页,数据量小)。
     ListCategories {
@@ -1362,11 +1390,19 @@ mod tests {
         let back: Request = decode_line(&line).unwrap();
         assert_eq!(reorder_req, back);
 
+        let status_req = Request::SetTodoStatus {
+            id: 5,
+            status: TodoStoredStatus::Suspended,
+        };
+        let line = encode_line(&status_req);
+        assert_eq!(decode_line::<Request>(&line).unwrap(), status_req);
+
         let todo = TodoInfo {
             id: 1,
             project_id: 1,
             text: "写完 spec".into(),
             done: false,
+            paused: false,
             rank: 0,
             created_ms: 1_700_000_000_000,
             completed_at_ms: None,

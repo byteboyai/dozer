@@ -356,6 +356,23 @@ impl Client {
         }
     }
 
+    /// 把任务原子设为某个已存储逻辑状态(待办/搁置/已完成)。见协议侧
+    /// `TodoStoredStatus` 各值对应哪些 `done`/`paused`/派发记录的落盘组合。
+    pub async fn set_todo_status(
+        &self,
+        id: i64,
+        status: dozer_core::protocol::TodoStoredStatus,
+    ) -> Result<TodoInfo> {
+        match self
+            .roundtrip(&Request::SetTodoStatus { id, status })
+            .await?
+        {
+            Reply::Todo { todo } => Ok(todo),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
     pub async fn list_categories(&self, project_id: i64) -> Result<Vec<CategoryInfo>> {
         match self
             .roundtrip(&Request::ListCategories { project_id })

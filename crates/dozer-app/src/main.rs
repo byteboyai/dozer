@@ -1112,6 +1112,23 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
+            // Todo 状态(待办/进行中/搁置/已完成)下拉选择层打开时,Esc 优先
+            // 关掉弹出层,口径同上面 agent 选择菜单。
+            if app.todo_status_open()
+                && let WindowEvent::KeyboardInput {
+                    event,
+                    is_synthetic: false,
+                    ..
+                } = event
+                && event.state == ElementState::Pressed
+                && event.logical_key
+                    == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+            {
+                app.update(Message::Todo(extensions::todo::Message::StatusClose));
+                window.request_redraw();
+                return;
+            }
+
             // Todo 日历日期选择器打开时,Esc 同样优先关掉弹出层,口径同上面
             // 的 Todo 派发选择层。
             if app.todo_calendar_open()

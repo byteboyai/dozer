@@ -468,6 +468,12 @@ async fn handle_conn(
                                 },
                             }
                         }
+                        Request::SetTodoStatus { id, status } => match todos.set_status(id, status) {
+                            Ok(todo) => Reply::Todo { todo },
+                            Err(e) => Reply::Error {
+                                message: format!("设置任务状态失败: {e}"),
+                            },
+                        },
                         Request::ListCategories { project_id } => {
                             match categories.list(project_id) {
                                 Ok(categories) => Reply::Categories { categories },

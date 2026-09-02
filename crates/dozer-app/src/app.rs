@@ -3954,6 +3954,14 @@ impl App {
             .unwrap_or(false)
     }
 
+    /// Todo 状态下拉选择层是否打开(给 main.rs 的 Esc 关闭用,同
+    /// `todo_dispatch_open` 的既有模式)。
+    pub fn todo_status_open(&self) -> bool {
+        self.active_workspace()
+            .map(|ws| ws.todo.status_popup_open())
+            .unwrap_or(false)
+    }
+
     /// 预览编辑弹层是否打开(main.rs 键盘路由用)。打开期间键盘必须走
     /// 弹层的文本编辑器,不能落进终端 PTY——弹层挂在左侧预览面板,不影响
     /// `terminal_visible()` 的判断条件(右侧展开与否),不加这道闸门的话,
@@ -6290,6 +6298,12 @@ impl App {
             if matches!(msg, todo::Message::DispatchOpen(_)) {
                 ws.todo.set_dispatch_anchor(last_cursor);
             }
+            // 点卡片左下"状态"按钮的光标逻辑坐标,作为状态下拉选择层 overlay
+            // 的弹出锚点。`StatusOpen` 自身交给 `todo::update` 展开(它只改
+            // `status_open`)。
+            if matches!(msg, todo::Message::StatusOpen(_)) {
+                ws.todo.set_status_anchor(last_cursor);
+            }
             todo::update(&mut ws.todo, msg, project_id, &client, &handle, emit);
         });
     }
@@ -7424,15 +7438,17 @@ impl App {
                 .padding([6, 10]),
             );
         }
-        let list = container(list.width(Length::Fixed(220.0)))
-            .style(move |_t: &iced_widget::Theme| container::Style {
-                background: Some(byteui::theme::color::current().card.into()),
-                border: Border {
-                    color: byteui::theme::color::current().border,
-                    width: 1.0,
-                    radius: 6.0.into(),
-                },
-                ..container::Style::default()
+        let list =
+            container(list.width(Length::Fixed(220.0))).style(move |_t: &iced_widget::Theme| {
+                container::Style {
+                    background: Some(byteui::theme::color::current().card.into()),
+                    border: Border {
+                        color: byteui::theme::color::current().border,
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..container::Style::default()
+                }
             });
         container(list)
             .width(Length::Fill)
@@ -7823,6 +7839,26 @@ impl App {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
+        } else if ws.todo.status_popup_open() {
+            // 状态下拉选择层:窗口级 overlay。点弹层外任意处经 dismiss 收起
+            // (与右键菜单/分支切换同款约定),弹层本体定位到点击"状态"按钮时
+            // 的光标锚点。
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::Todo(todo::Message::StatusClose));
+            match todo::todo_status_overlay(ws, self.window_size) {
+                Some(popup) => stack![base, dismiss, popup.map(Message::Todo)]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+                None => stack![base, dismiss]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+            }
         } else if ws.todo.calendar_popup_open() {
             // 日历浮层:窗口级 overlay。点弹层外任意处经 dismiss 收起(与右键
             // 菜单/分支切换同款约定),弹层本体定位到点击按钮时的光标锚点。
