@@ -342,15 +342,47 @@ impl Client {
         }
     }
 
-    pub async fn record_todo_dispatch(&self, id: i64, session_id: &str) -> Result<TodoInfo> {
+    pub async fn assign_todo_agent(&self, id: i64, agent: AgentKind) -> Result<TodoInfo> {
         match self
-            .roundtrip(&Request::RecordTodoDispatch {
+            .roundtrip(&Request::AssignTodoAgent { id, agent })
+            .await?
+        {
+            Reply::Todo { todo } => Ok(todo),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn set_category_auto_poll(&self, id: i64, enabled: bool) -> Result<CategoryInfo> {
+        match self
+            .roundtrip(&Request::SetCategoryAutoPoll { id, enabled })
+            .await?
+        {
+            Reply::Category { category } => Ok(category),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// 立即触发一次任务处理(不等轮询)。可能耗时数分钟(headless 处理
+    /// 上限 10 分钟),调用方需要走异步 `handle.spawn`,不能阻塞 UI 线程。
+    pub async fn process_todo_now(&self, id: i64, human_reply: Option<&str>) -> Result<TodoInfo> {
+        match self
+            .roundtrip(&Request::ProcessTodoNow {
                 id,
-                session_id: session_id.into(),
+                human_reply: human_reply.map(|s| s.to_string()),
             })
             .await?
         {
             Reply::Todo { todo } => Ok(todo),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn get_todo_detail(&self, id: i64) -> Result<(TodoInfo, Vec<TurnRecord>)> {
+        match self.roundtrip(&Request::GetTodoDetail { id }).await? {
+            Reply::TodoDetail { info, turns } => Ok((info, turns)),
             Reply::Error { message } => Err(anyhow::anyhow!(message)),
             other => bail!("意外应答: {other:?}"),
         }
