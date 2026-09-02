@@ -1189,6 +1189,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 || app.todo_search_focused()
                 || app.todo_add_focused()
                 || app.todo_content_focused()
+                || app.category_rename_focused()
                 || app.tree_edit_focused()
                 || app.home_project_search_focused()
                 || app.conversation_search_focused()

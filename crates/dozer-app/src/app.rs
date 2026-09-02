@@ -3296,6 +3296,12 @@ impl App {
         }
     }
 
+    /// 分类改名框是否持有 iced 真实焦点(main.rs 键盘路由用)。
+    pub fn category_rename_focused(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.todo.category_rename_focused())
+    }
+
     /// 分类改名框真实焦点态每帧写回;失焦边缘(`was_focused && !focused`)
     /// 触发一次提交(镜像 `set_todo_content_focused`,只是落盘方法换成
     /// `rename_category`,成功/失败都触发 `CategoryMutated` 刷新)。
