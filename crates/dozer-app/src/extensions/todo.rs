@@ -7,7 +7,7 @@
 
 use crate::app::{App, HoverId};
 use crate::theme;
-use crate::workspace::{Workspace, agent_icon, tab_title};
+use crate::workspace::{Workspace, agent_icon};
 use byteui::interaction::icons;
 use dozer_client::Client;
 use dozer_core::protocol::{AgentKind, CategoryInfo, TodoInfo};
@@ -376,6 +376,19 @@ pub struct WorkspaceState {
     category_rename_focus_pending: bool,
     /// 右区视图模式:列表视图 `List`(默认)/ 看板视图 `Kanban`。
     view: TodoView,
+    /// 详情弹窗展开态(卡片下标),`None` = 未展开。跟 `dispatch_open`/
+    /// `calendar_open` 同一种"同时只能有一个"模型。
+    detail_open: Option<usize>,
+    /// 详情弹窗拉到的回合列表(`GetTodoDetail` 应答),弹窗关闭时清空。
+    detail_turns: Vec<dozer_core::protocol::TurnRecord>,
+    /// 回复框草稿(`text_input` 的 value)。
+    detail_reply_draft: String,
+    /// 回复框是否持有 iced 内部真实焦点,每帧由 `CaptureDetailReplyFocus`
+    /// 写入,镜像 `category_rename_focused`。
+    detail_reply_focused: bool,
+    /// "处理"按钮是否正在等待 `ProcessTodoNow` RPC 返回——耗时可能到 10
+    /// 分钟,期间按钮显示 loading 态、禁用重复提交。
+    detail_processing: bool,
 }
 
 impl WorkspaceState {
@@ -438,15 +451,16 @@ impl WorkspaceState {
         pending
     }
 
-    /// 只读当前已加载的任务列表,给视图层渲染与内核派发
-    /// (`DispatchToExisting`) 按下标取任务文本用。
+    /// 只读当前已加载的任务列表,给视图层渲染与内核处理按下标取任务用。
     pub fn items(&self) -> &[TodoInfo] {
         &self.items
     }
 
-    /// 反查:这个 `session_id` 是不是某条 Todo 任务派发出来的会话,是的话
-    /// 返回该任务原文——给 Agent 卡片"当前工作内容"当主选数据源用。
-    /// `TodoInfo` 自带 `dispatch_session_id`,不再需要额外的元数据表查询。
+    /// 反查:这个 `session_id` 是不是某条 Todo 任务铸造出来的会话,是的话
+    /// 返回该任务原文——给 Agent 卡片"当前工作内容"当主选数据源用。注意
+    /// `dispatch_session_id` 现在是"首次真正处理时铸造"的值(2026-09-02
+    /// 起,指派与执行解耦),任务被指派但还没真正处理过时该字段是 `None`,
+    /// 这个反查天然不会命中——不代表这个反查逻辑本身需要改。
     pub fn task_title_for_session<'a>(&'a self, session_id: &str) -> Option<&'a str> {
         self.items
             .iter()
@@ -689,6 +703,73 @@ impl WorkspaceState {
     pub(crate) fn commit_category_rename_for_blur(&mut self) -> Option<(i64, String)> {
         self.commit_category_rename()
     }
+
+    /// 详情弹窗是否打开(内核键盘 Esc 关闭用,同 `dispatch_popup_open`)。
+    pub fn detail_popup_open(&self) -> bool {
+        self.detail_open.is_some()
+    }
+
+    pub fn detail_turns(&self) -> &[dozer_core::protocol::TurnRecord] {
+        &self.detail_turns
+    }
+
+    pub fn detail_reply_draft(&self) -> &str {
+        &self.detail_reply_draft
+    }
+
+    pub fn detail_processing(&self) -> bool {
+        self.detail_processing
+    }
+
+    pub fn detail_reply_focused(&self) -> bool {
+        self.detail_reply_focused
+    }
+
+    pub fn set_detail_reply_focused_flag(&mut self, focused: bool) {
+        self.detail_reply_focused = focused;
+    }
+
+    /// `App::todo_detail_open` 拉到 `GetTodoDetail` 应答后写回本地状态。
+    pub fn open_detail(&mut self, idx: usize, turns: Vec<dozer_core::protocol::TurnRecord>) {
+        self.detail_open = Some(idx);
+        self.detail_turns = turns;
+        self.detail_reply_draft.clear();
+    }
+
+    pub fn close_detail(&mut self) {
+        self.detail_open = None;
+        self.detail_turns.clear();
+        self.detail_reply_draft.clear();
+        self.detail_processing = false;
+    }
+
+    /// 乐观本地插入一条人类回合(提交回复时,不等 RPC 回来就先看到)。
+    pub fn push_optimistic_human_turn(&mut self, content: String) {
+        let next_index = self.detail_turns.last().map(|t| t.turn_index + 1).unwrap_or(0);
+        self.detail_turns.push(dozer_core::protocol::TurnRecord {
+            turn_index: next_index,
+            role: "human".into(),
+            content,
+            tool_calls: vec![],
+            thinking: false,
+            thinking_text: None,
+            ts: None,
+            is_error: false,
+            tokens_in: 0,
+            tokens_out: 0,
+            tokens_cache_read: 0,
+            tokens_cache_write: 0,
+        });
+        self.detail_processing = true;
+    }
+
+    /// `ProcessTodoNow` RPC 权威结果回来后,用服务端最新回合列表整体替换
+    /// (替换掉乐观插入的那条,避免和服务端最终写入的 `turn_index`/
+    /// `message_key` 不一致)。
+    pub fn replace_detail_turns(&mut self, turns: Vec<dozer_core::protocol::TurnRecord>) {
+        self.detail_turns = turns;
+        self.detail_processing = false;
+    }
 }
 
 /// 搜索框稳定的 iced widget id。
@@ -766,7 +847,21 @@ pub enum Message {
     DragEnd,
     DispatchOpen(usize),
     DispatchClose,
-    DispatchToExisting(usize, String),
+    /// 选定 agent 类型完成指派(纯记录,不触发执行)。内核拦截,转发到
+    /// `App::todo_assign_agent`——真正的 RPC 调用在 `app.rs`,`todo::update`
+    /// 只负责关掉选择层。
+    AssignAgent(usize, dozer_core::protocol::AgentKind),
+    /// 点卡片"详情"按钮,打开任务详情弹窗。内核拦截,转发到
+    /// `App::todo_detail_open`(发 `GetTodoDetail` RPC 拉取回合列表)。
+    DetailOpen(usize),
+    /// 关闭详情弹窗(Esc / 点外部 / 点关闭按钮)。
+    DetailClose,
+    /// 详情弹窗回复框草稿变化(`text_input::on_input`,给全量当前字符串)。
+    DetailReplyInput(String),
+    /// 点"处理"按钮:内核拦截,转发到 `App::todo_detail_process`(乐观插入
+    /// 一条本地回合 + 发 `ProcessTodoNow` RPC)。`todo::update` 只清空
+    /// 草稿、置处理中标记。
+    DetailReplySubmit,
     /// 点卡片左下角状态按钮:弹出从"待办/进行中/搁置/已完成"四态选一的
     /// 状态下拉选择层(`status_open` 记下标,`status_anchor` 记弹出锚点)。
     StatusOpen(usize),
@@ -920,6 +1015,30 @@ impl Operation<()> for CaptureCategoryRenameFocus {
     fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
         if id == Some(&category_rename_field_id()) {
             *CATEGORY_RENAME_FOCUSED.lock().unwrap() = state.is_focused();
+        }
+    }
+
+    fn traverse(&mut self, operate: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {
+        operate(self);
+    }
+}
+
+pub fn detail_reply_field_id() -> Id {
+    Id::new("todo-detail-reply-field")
+}
+
+static DETAIL_REPLY_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
+
+pub fn take_detail_reply_focused() -> bool {
+    std::mem::replace(&mut *DETAIL_REPLY_FOCUSED.lock().unwrap(), false)
+}
+
+pub struct CaptureDetailReplyFocus;
+impl Operation<()> for CaptureDetailReplyFocus {
+    fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
+        if id == Some(&detail_reply_field_id()) {
+            *DETAIL_REPLY_FOCUSED.lock().unwrap() = state.is_focused();
         }
     }
 
@@ -1227,6 +1346,7 @@ pub fn update(
                     dispatch_session_id: None,
                     dispatch_at_ms: None,
                     category_id: None,
+                    assigned_agent: None,
                 },
             );
             ws_state.start_flash(0);
@@ -1334,6 +1454,29 @@ pub fn update(
         Message::DispatchClose => {
             ws_state.dispatch_open = None;
             ws_state.dispatch_anchor = None;
+        }
+        Message::AssignAgent(_, _) => {
+            // 真正的 RPC 调用在 `App::todo_assign_agent`(app.rs),这里
+            // 只负责关掉选择层——与 `DispatchClose` 同款收尾。
+            ws_state.dispatch_open = None;
+            ws_state.dispatch_anchor = None;
+        }
+        Message::DetailClose => ws_state.close_detail(),
+        Message::DetailReplyInput(text) => ws_state.detail_reply_draft = text,
+        Message::DetailReplySubmit => {
+            // 乐观插入 + 置处理中标记在这里做(纯本地状态);真正发
+            // `ProcessTodoNow` RPC 在 `App::todo_detail_process`(app.rs),
+            // 那边会读 `detail_reply_draft` 拿文本、读 `items()[idx].id`
+            // 拿任务 id。
+            let draft = std::mem::take(&mut ws_state.detail_reply_draft);
+            if !draft.trim().is_empty() {
+                ws_state.push_optimistic_human_turn(draft);
+            }
+        }
+        Message::DetailOpen(_) => {
+            // 真正拉 `GetTodoDetail` 在 `App::todo_detail_open`(app.rs),
+            // `todo::update` 不处理这条(no-op arm 保持 match 穷尽,同
+            // `AddResizeStart` 的既有模式)。
         }
         Message::StatusOpen(idx) => {
             // 同一时刻只允许一个卡片弹层(状态/日历/派发互斥):打开状态下拉时
@@ -1509,12 +1652,6 @@ pub fn update(
                     }
                 }
             }
-        }
-        Message::DispatchToExisting(..) => {
-            unreachable!(
-                "DispatchToExisting 由内核在 Message::Todo 分支里直接处理\
-                 (需要终端会话读写能力),不会转发到这里"
-            )
         }
     }
 }
@@ -2575,12 +2712,10 @@ fn todo_card<'a>(
     }
 }
 
-/// Todo 派发选择层(窗口级 overlay 版):列出当前项目存活的 agent tab(不再
-/// 提供"新建 agent 会话"入口——见 2026-08-17 优化),每个条目前带该 agent
-/// 的品牌图标。样式统一走 `crate::menu::item_row_fill` + `menu::shell`(基准
-/// 即文件树右键菜单),定位靠 `dispatch_anchor`(点"指派"按钮时的光标,等价于
-/// "按钮旁边")。返回 `None` 表示没有可弹的层(`dispatch_open` 为真但锚点缺失,
-/// 理论上不会到——调用方降级为只铺 dismiss 收起层)。
+/// Todo 指派选择层(窗口级 overlay 版):选一个 agent 种类完成指派,不再
+/// 要求"存在活着的 tab"(2026-09-02 起,指派与执行解耦——指派只是记录,
+/// 真正执行靠分类轮询开关或详情弹窗手动"处理")。样式沿用
+/// `crate::menu::item_row_fill` + `menu::shell`,定位靠 `dispatch_anchor`。
 pub fn todo_dispatch_overlay<'a>(
     ws: &Workspace,
     window_size: (f32, f32),
@@ -2588,35 +2723,28 @@ pub fn todo_dispatch_overlay<'a>(
     let ws_state = &ws.todo;
     let idx = ws_state.dispatch_open?;
     let anchor = ws_state.dispatch_anchor?;
-    // 当前项目存活的终端/SSH 会话都是可派发目标;session_id 与展示标题沿用
-    // `app.rs` 原 `SessionTabSummary` 的算法(`info.id` + `tab_title`)。
-    let tabs: Vec<(String, AgentKind, String)> = ws
-        .tabs
-        .iter()
-        .chain(ws.ssh_tabs.iter())
-        .filter(|t| t.alive)
-        .map(|t| {
-            (
-                t.info.id.clone(),
-                t.agent,
-                tab_title(t.agent, t.cwd.as_deref(), &t.info.name),
-            )
-        })
-        .collect();
 
-    let items: Vec<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> = tabs
-        .iter()
-        .map(|(session_id, agent, title)| {
+    // 只列出有 headless 适配器的四种(与 `AgentKind::label()` 的四个可指派
+    // 值一致,`dozerd::headless_agent::bare_program_name` 同一份覆盖面)。
+    let candidates = [
+        AgentKind::Claude,
+        AgentKind::Codebuddy,
+        AgentKind::Opencode,
+        AgentKind::V8agent,
+    ];
+    let items: Vec<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> = candidates
+        .into_iter()
+        .map(|agent| {
             let icon = icons::view(
-                agent_icon(*agent),
+                agent_icon(agent),
                 byteui::theme::icon_size::row(),
                 byteui::theme::color::current().cream,
             );
             crate::menu::item_row(
                 Some(icon),
-                title.clone(),
+                agent.label().to_string(),
                 byteui::theme::color::current().cream,
-                Some(Message::DispatchToExisting(idx, session_id.clone())),
+                Some(Message::AssignAgent(idx, agent)),
             )
         })
         .collect();
@@ -2626,9 +2754,9 @@ pub fn todo_dispatch_overlay<'a>(
     let (ax, ay) = anchor;
     let window_w = window_size.0;
     let window_h = window_size.1;
-    // 菜单估算尺寸:常宽约 220(图标 + 文字 + 内边距)、高约每项 28 + 内边距。
+    // 菜单估算尺寸:常宽约 220(图标 + 文字 + 内边距)、四条候选高约 4*28 + 内边距。
     let pop_w = 224.0_f32;
-    let pop_h = 240.0_f32;
+    let pop_h = 160.0_f32;
     let x = ax.min((window_w - pop_w).max(0.0));
     let y = ay.min((window_h - pop_h).max(0.0));
     Some(
@@ -3278,6 +3406,7 @@ mod tests {
             dispatch_session_id: None,
             dispatch_at_ms: None,
             category_id: None,
+            assigned_agent: None,
         }
     }
 
@@ -3537,6 +3666,7 @@ mod tests {
             dispatch_session_id: None,
             dispatch_at_ms: None,
             category_id,
+            assigned_agent: None,
         }
     }
 }
