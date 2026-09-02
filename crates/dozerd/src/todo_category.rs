@@ -24,7 +24,7 @@ fn id_not_found(id: i64) -> anyhow::Error {
     anyhow::anyhow!("分类不存在: id={id}")
 }
 
-const CATEGORY_COLUMNS: &str = "id, project_id, parent_id, name, rank, created_ms";
+const CATEGORY_COLUMNS: &str = "id, project_id, parent_id, name, rank, created_ms, auto_poll_enabled";
 
 fn row_to_category(row: &rusqlite::Row) -> rusqlite::Result<CategoryInfo> {
     Ok(CategoryInfo {
@@ -34,6 +34,7 @@ fn row_to_category(row: &rusqlite::Row) -> rusqlite::Result<CategoryInfo> {
         name: row.get(3)?,
         rank: row.get(4)?,
         created_ms: row.get::<_, i64>(5)? as u64,
+        auto_poll_enabled: row.get(6)?,
     })
 }
 
@@ -50,12 +51,25 @@ impl CategoryStore {
                 parent_id INTEGER,
                 name TEXT NOT NULL,
                 rank INTEGER NOT NULL,
-                created_ms INTEGER NOT NULL
+                created_ms INTEGER NOT NULL,
+                auto_poll_enabled INTEGER NOT NULL DEFAULT 0
              );
              CREATE INDEX IF NOT EXISTS idx_todo_categories_project_parent
                 ON todo_categories(project_id, parent_id, rank);",
         )
         .context("建表")?;
+        let has_auto_poll_enabled: bool = conn
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('todo_categories') WHERE name = 'auto_poll_enabled'",
+            )?
+            .exists([])?;
+        if !has_auto_poll_enabled {
+            conn.execute(
+                "ALTER TABLE todo_categories ADD COLUMN auto_poll_enabled INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .context("迁移 auto_poll_enabled 列")?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -276,6 +290,32 @@ impl CategoryStore {
         conn.query_row(&sql, [id], row_to_category)
             .map_err(Into::into)
     }
+
+    /// 打开/关闭某分类下任务的自动轮询处理。
+    pub fn set_auto_poll(&self, id: i64, enabled: bool) -> Result<CategoryInfo> {
+        let conn = self.conn.lock().expect("db lock");
+        let sql = format!(
+            "UPDATE todo_categories SET auto_poll_enabled = ?1
+             WHERE id = ?2 RETURNING {CATEGORY_COLUMNS}"
+        );
+        conn.query_row(&sql, params![enabled, id], row_to_category)
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => id_not_found(id),
+                e => e.into(),
+            })
+    }
+
+    /// 跨全部项目扫描开启了自动轮询的分类,供 `task_poller` 用——dozerd
+    /// 单进程服务多个项目,轮询不按"当前打开哪个项目"限定范围。
+    pub fn list_auto_poll_enabled_all(&self) -> Result<Vec<CategoryInfo>> {
+        let conn = self.conn.lock().expect("db lock");
+        let sql = format!(
+            "SELECT {CATEGORY_COLUMNS} FROM todo_categories WHERE auto_poll_enabled = 1"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], row_to_category)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
 }
 
 #[cfg(test)]
@@ -452,5 +492,28 @@ mod tests {
             .unwrap();
         assert_eq!(result.parent_id, Some(parent.id));
         let _ = top_level;
+    }
+
+    #[test]
+    fn set_auto_poll_toggles_and_list_all_reflects_it() {
+        let (_dir, store) = store();
+        let cat = store.add(1, None, "系统bug").unwrap();
+        assert!(!cat.auto_poll_enabled);
+        assert!(store.list_auto_poll_enabled_all().unwrap().is_empty());
+
+        let updated = store.set_auto_poll(cat.id, true).unwrap();
+        assert!(updated.auto_poll_enabled);
+        let all = store.list_auto_poll_enabled_all().unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].id, cat.id);
+
+        store.set_auto_poll(cat.id, false).unwrap();
+        assert!(store.list_auto_poll_enabled_all().unwrap().is_empty());
+    }
+
+    #[test]
+    fn set_auto_poll_unknown_id_errors() {
+        let (_dir, store) = store();
+        assert!(store.set_auto_poll(999, true).is_err());
     }
 }
