@@ -7424,14 +7424,7 @@ impl App {
                 .padding([6, 10]),
             );
         }
-        container(list)
-            .width(Length::Fixed(220.0))
-            .padding(Padding {
-                top: picker.y,
-                left: picker.x,
-                right: 0.0,
-                bottom: 0.0,
-            })
+        let list = container(list.width(Length::Fixed(220.0)))
             .style(move |_t: &iced_widget::Theme| container::Style {
                 background: Some(byteui::theme::color::current().card.into()),
                 border: Border {
@@ -7440,6 +7433,15 @@ impl App {
                     radius: 6.0.into(),
                 },
                 ..container::Style::default()
+            });
+        container(list)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(Padding {
+                top: picker.y,
+                left: picker.x,
+                right: 0.0,
+                bottom: 0.0,
             })
             .into()
     }
