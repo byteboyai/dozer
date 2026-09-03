@@ -2027,6 +2027,11 @@ pub struct App {
     client: Client,
     handle: Handle,
     proxy: EventLoopProxy<Message>,
+    /// 关 tab/丢弃过期促成结果时发往 daemon 的 kill/总结请求句柄——退出前
+    /// `wait_for_pending_exit_tasks` 要等它们跑完,不然请求可能因为 tokio
+    /// runtime 随进程退出被中途丢弃,daemon 侧会话仍是 `alive`,下次启动
+    /// 又被恢复出来。见 `ShellIo::track_exit_critical`。
+    pending_exit_tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     /// 当前终端网格尺寸,随 `PaneResized` 更新;新建 tab 时也用这份
     /// 尺寸,保证新会话从一开始就跟 pane 实际大小匹配。
     cols: u16,
@@ -2378,6 +2383,25 @@ pub(crate) const PROJECT_PREVIEW_ID_OFFSET: usize = 1_000_000;
 /// PREVIEW_ID_OFFSET` 起)互不相撞。
 pub(crate) const CONVERSATION_REVIEW_ID_OFFSET: usize = 2_000_000;
 
+/// `wait_for_pending_exit_tasks` 允许在飞的关 tab 收尾请求跑完的总预算。
+/// 本地 UDS 往返通常亚毫秒级,留 2 秒是给 daemon 偶尔卡顿的余量,而不是
+/// 期望真正用满——超时后放弃等待,不能让退出被一个卡死的 daemon 拖住。
+const EXIT_TASK_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// `App::wait_for_pending_exit_tasks` 的核心逻辑,拆成独立函数以便不依赖
+/// `ShellIo`/`EventLoopProxy`(单测环境构造不出真实 winit 事件循环)直接
+/// 测试:一批 spawn 任务在预算内全部跑完就正常返回,超预算就放弃等待
+/// 并打日志,但**不会**无限期挂住调用方。
+async fn join_pending_exit_tasks(
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+    budget: std::time::Duration,
+) {
+    let joined = futures::future::join_all(tasks);
+    if tokio::time::timeout(budget, joined).await.is_err() {
+        tracing::warn!("退出前等待关 tab 的收尾请求超时,放弃等待");
+    }
+}
+
 impl App {
     /// 启动序列成功路径:建好外壳态,再把上次退出时开着的**整份**项目页签
     /// 集合恢复出来。
@@ -2469,6 +2493,7 @@ impl App {
             client,
             handle,
             proxy,
+            pending_exit_tasks: Arc::new(Mutex::new(Vec::new())),
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
             ssh_cols: DEFAULT_COLS,
@@ -2540,6 +2565,7 @@ impl App {
             proxy: self.proxy.clone(),
             cols: self.cols,
             rows: self.rows,
+            pending_exit_tasks: self.pending_exit_tasks.clone(),
         }
     }
 
@@ -3592,6 +3618,33 @@ impl App {
         if let Err(e) = layout::save(&self.shell_layout) {
             tracing::warn!("退出前窗口尺寸写盘失败: {e}");
         }
+    }
+
+    /// 退出前等"关 tab 时发往 daemon 的 kill/总结请求"真正跑完(main.rs 在
+    /// `WindowEvent::CloseRequested` 时调用,`event_loop.exit()` 之前)。
+    ///
+    /// 这些请求走 `io.handle.spawn` fire-and-forget,只需一次本地 UDS
+    /// 往返(通常亚毫秒级)。但如果用户关 tab 后紧接着退出,`event_loop.exit()`
+    /// 后 `run_app` 返回、tokio `Runtime` 被 drop——drop 不保证在飞的
+    /// spawn 任务跑完,kill 请求可能根本没发出去,daemon 侧会话仍是
+    /// `alive`,下次启动就被恢复策略(`s.alive && s.project_id == ...`)
+    /// 当成"还开着"重新挂回来(用户报告的验收反馈:显式关闭的 tab 不该
+    /// 在重启后还魂)。
+    ///
+    /// 这里是继启动序列 `runtime.block_on(build_app(..))` 之后,UI 线程
+    /// 上第二处、也是唯一一处允许 `block_on` 的地方——同样的理由:窗口
+    /// 马上要关,不存在"占用正在渲染的 UI 线程"的问题。有限超时防止
+    /// daemon 卡死/socket 挂起时把退出拖住。
+    pub fn wait_for_pending_exit_tasks(&self) {
+        let tasks: Vec<_> = match self.pending_exit_tasks.lock() {
+            Ok(mut pending) => std::mem::take(&mut *pending),
+            Err(_) => return,
+        };
+        if tasks.is_empty() {
+            return;
+        }
+        self.handle
+            .block_on(join_pending_exit_tasks(tasks, EXIT_TASK_BUDGET));
     }
 
     /// 按当前窗口尺寸+外壳状态重算终端网格并同步给所有 tab / daemon。
@@ -5794,13 +5847,16 @@ impl App {
                 .iter()
                 .map(|(info, _, _)| info.id.clone())
                 .collect();
-            self.handle.spawn(async move {
+            let task = self.handle.spawn(async move {
                 for sid in ids {
                     if let Err(e) = client.kill(&sid).await {
                         tracing::warn!("丢弃过期促成结果时结束会话失败: {e}");
                     }
                 }
             });
+            if let Ok(mut pending) = self.pending_exit_tasks.lock() {
+                pending.push(task);
+            }
             return;
         }
         let io = self.shell_io();
@@ -9431,6 +9487,60 @@ fn ssh_empty_state<'a>() -> Element<'a, Message, iced_widget::Theme, iced_render
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 复现验收反馈的核心机制:关 tab 后立刻退出,`event_loop.exit()` 不该
+    /// 让在飞的 kill/总结 spawn 任务半路被丢弃——`join_pending_exit_tasks`
+    /// 必须真的等它们跑完(而不是像修复前那样直接 drop `JoinHandle` 不管)。
+    #[test]
+    fn join_pending_exit_tasks_waits_for_spawned_tasks_to_finish() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ran_clone = ran.clone();
+        let task = rt.spawn(async move {
+            // 模拟一次真实的本地 UDS 往返耗时。
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            ran_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        rt.block_on(join_pending_exit_tasks(
+            vec![task],
+            std::time::Duration::from_secs(2),
+        ));
+        assert!(
+            ran.load(std::sync::atomic::Ordering::SeqCst),
+            "预算充足时必须等 spawn 任务真正跑完,而不是提前放弃"
+        );
+    }
+
+    /// 超预算的任务(daemon 卡死等极端情况)不能把退出流程无限期挂住——
+    /// 放弃等待即可,不要求任务本身被中止。
+    #[test]
+    fn join_pending_exit_tasks_gives_up_after_budget_without_hanging() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let task = rt.spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        });
+        let start = std::time::Instant::now();
+        rt.block_on(join_pending_exit_tasks(
+            vec![task],
+            std::time::Duration::from_millis(50),
+        ));
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "超预算必须尽快放弃等待,不能拖住退出流程"
+        );
+    }
+
+    /// 没有任何在飞任务时(没关过 tab,或都已跑完)应该是零成本的直接返回。
+    #[test]
+    fn join_pending_exit_tasks_empty_list_returns_immediately() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let start = std::time::Instant::now();
+        rt.block_on(join_pending_exit_tasks(
+            Vec::new(),
+            std::time::Duration::from_secs(2),
+        ));
+        assert!(start.elapsed() < std::time::Duration::from_millis(100));
+    }
 
     #[test]
     fn merge_review_entries_append_true_accumulates_instead_of_replacing() {

@@ -319,6 +319,24 @@ pub struct ShellIo {
     /// 终端网格尺寸快照(新建会话时让新 PTY 一开始就匹配 pane 实际大小)。
     pub(crate) cols: u16,
     pub(crate) rows: u16,
+    /// "退出前必须等它跑完"的 spawn 任务句柄暂存区(与 `App` 共享同一份
+    /// `Arc`)。关 tab 时发往 daemon 的 kill/总结请求属于此类——不然 App
+    /// 退出时 tokio runtime 直接 drop,任务可能没来得及把 kill 发出去,
+    /// daemon 侧会话仍是 `alive`,下次启动又被恢复出来(P1x 验收反馈)。
+    /// 见 [`ShellIo::track_exit_critical`] 与 `App::wait_for_pending_exit_tasks`。
+    pub(crate) pending_exit_tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+}
+
+impl ShellIo {
+    /// 登记一个"退出前必须等完"的 spawn 任务。调用方仍按 fire-and-forget
+    /// 的写法 `io.handle.spawn(...)`,只是把返回的 `JoinHandle` 交这里
+    /// 存着,而不是直接丢弃——退出时 `App::wait_for_pending_exit_tasks`
+    /// 会把它们收走、`block_on` 等到完成或超时。
+    pub(crate) fn track_exit_critical(&self, task: tokio::task::JoinHandle<()>) {
+        if let Ok(mut pending) = self.pending_exit_tasks.lock() {
+            pending.push(task);
+        }
+    }
 }
 
 pub struct Workspace {
@@ -1276,17 +1294,19 @@ impl Workspace {
         let client = io.client.clone();
         let id = tab.info.id.clone();
         if should_summarize_on_close(tab.agent, tab.alive, &tab.backend) {
-            io.handle.spawn(async move {
+            let task = io.handle.spawn(async move {
                 if let Err(e) = client.close_with_summary(&id).await {
                     tracing::warn!("关闭 tab 时触发总结失败: {e}");
                 }
             });
+            io.track_exit_critical(task);
         } else if tab.alive && matches!(tab.backend, TabBackend::Daemon) {
-            io.handle.spawn(async move {
+            let task = io.handle.spawn(async move {
                 if let Err(e) = client.kill(&id).await {
                     tracing::warn!("关闭 tab 时结束会话失败: {e}");
                 }
             });
+            io.track_exit_critical(task);
         }
         if self.active >= self.tabs.len() {
             self.active = self.tabs.len().saturating_sub(1);

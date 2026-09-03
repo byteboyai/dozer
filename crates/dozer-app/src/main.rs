@@ -2848,6 +2848,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         // 同步写盘,不用 `spawn_shell_layout_save` 的异步路径——
                         // 进程马上退出,spawn 的 tokio 任务不保证跑得完。
                         app.persist_window_size_on_exit();
+                        // 关 tab 时发往 daemon 的 kill/总结请求同理不保证跑完
+                        // ——这里有限等待,避免用户关 tab 后立刻退出导致请求
+                        // 半路被丢弃、daemon 侧会话仍 alive、重启后还魂。
+                        app.wait_for_pending_exit_tasks();
                         event_loop.exit();
                     }
                     _ => {}
