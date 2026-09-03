@@ -761,7 +761,11 @@ impl WorkspaceState {
 
     /// 乐观本地插入一条人类回合(提交回复时,不等 RPC 回来就先看到)。
     pub fn push_optimistic_human_turn(&mut self, content: String) {
-        let next_index = self.detail_turns.last().map(|t| t.turn_index + 1).unwrap_or(0);
+        let next_index = self
+            .detail_turns
+            .last()
+            .map(|t| t.turn_index + 1)
+            .unwrap_or(0);
         self.detail_turns.push(dozer_core::protocol::TurnRecord {
             turn_index: next_index,
             role: "human".into(),

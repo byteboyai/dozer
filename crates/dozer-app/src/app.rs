@@ -7501,7 +7501,9 @@ impl App {
     /// 那套渲染实际内容在 `dozer://review-trace/host.html` 里,任务详情
     /// 只需要看人类/agent 往来文本,不需要工具调用折叠/trace 可视化,
     /// 塞进一个跟随光标定位、随时开合的原生弹窗里没有必要也不合适)。
-    fn todo_detail_popup<'a>(&self) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    fn todo_detail_popup<'a>(
+        &self,
+    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
         let Some(ws) = self.active_workspace() else {
             return column![].into();
         };
@@ -7571,9 +7573,8 @@ impl App {
         };
         let submit = button(text(submit_label))
             .on_press_maybe(
-                (!ws.todo.detail_processing()).then_some(Message::Todo(
-                    todo::Message::DetailReplySubmit,
-                )),
+                (!ws.todo.detail_processing())
+                    .then_some(Message::Todo(todo::Message::DetailReplySubmit)),
             )
             .padding([6, 12]);
 

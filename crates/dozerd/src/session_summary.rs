@@ -115,8 +115,11 @@ impl SessionSummaryStore {
             .prepare("SELECT 1 FROM pragma_table_info('session_summaries') WHERE name = 'task_id'")?
             .exists([])?;
         if !has_task_id {
-            conn.execute("ALTER TABLE session_summaries ADD COLUMN task_id INTEGER", [])
-                .context("迁移 task_id 列")?;
+            conn.execute(
+                "ALTER TABLE session_summaries ADD COLUMN task_id INTEGER",
+                [],
+            )
+            .context("迁移 task_id 列")?;
         }
         Ok(Self {
             conn: Mutex::new(conn),

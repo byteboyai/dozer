@@ -43,6 +43,7 @@ async fn start_daemon() -> (std::path::PathBuf, CleanupGuard) {
             backfill_registry,
             todos,
             categories,
+            dozerd::task_poller::new_in_flight(),
         )
         .await
     });

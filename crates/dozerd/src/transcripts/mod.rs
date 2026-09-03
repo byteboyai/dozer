@@ -287,7 +287,13 @@ impl TranscriptStore {
               turn_count, parsed_offset, file_size_at_parse)
              VALUES (?1,?2,?3,'',?4,?5,?5,0,0,0)
              ON CONFLICT(conversation_id) DO NOTHING",
-            params![conversation_id, agent_to_str(agent), project_dir, task_title, now],
+            params![
+                conversation_id,
+                agent_to_str(agent),
+                project_dir,
+                task_title,
+                now
+            ],
         )?;
         let starting_turn_index: i64 = tx.query_row(
             "SELECT COALESCE(MAX(turn_index), -1) + 1 FROM conversation_turns
@@ -295,8 +301,9 @@ impl TranscriptStore {
             [conversation_id],
             |row| row.get(0),
         )?;
-        for (offset, (role, content)) in
-            [("human", human_content), ("ai", ai_content)].into_iter().enumerate()
+        for (offset, (role, content)) in [("human", human_content), ("ai", ai_content)]
+            .into_iter()
+            .enumerate()
         {
             let turn_index = starting_turn_index + offset as i64;
             let message_key = format!("{conversation_id}:{turn_index}");
@@ -1249,7 +1256,10 @@ mod tests {
             )
             .unwrap();
         let turns = store.get_conversation_turns("orphan", -1, 10).unwrap();
-        assert!(turns.is_empty(), "没有 conversations 行时,JOIN 应该拿不到任何数据");
+        assert!(
+            turns.is_empty(),
+            "没有 conversations 行时,JOIN 应该拿不到任何数据"
+        );
     }
 
     #[test]
@@ -1266,7 +1276,9 @@ mod tests {
                 "已经修好了,提交在 abc123",
             )
             .unwrap();
-        let turns = store.get_conversation_turns("task-session-1", -1, 10).unwrap();
+        let turns = store
+            .get_conversation_turns("task-session-1", -1, 10)
+            .unwrap();
         assert_eq!(turns.len(), 2);
         assert_eq!(turns[0].role, "human");
         assert_eq!(turns[1].role, "ai");
@@ -1278,12 +1290,28 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
         store
-            .record_task_turns("task-session-1", AgentKind::Claude, "/tmp/proj", "修个 bug", "第一句", "第一次回复")
+            .record_task_turns(
+                "task-session-1",
+                AgentKind::Claude,
+                "/tmp/proj",
+                "修个 bug",
+                "第一句",
+                "第一次回复",
+            )
             .unwrap();
         store
-            .record_task_turns("task-session-1", AgentKind::Claude, "/tmp/proj", "修个 bug", "第二句", "第二次回复")
+            .record_task_turns(
+                "task-session-1",
+                AgentKind::Claude,
+                "/tmp/proj",
+                "修个 bug",
+                "第二句",
+                "第二次回复",
+            )
             .unwrap();
-        let turns = store.get_conversation_turns("task-session-1", -1, 10).unwrap();
+        let turns = store
+            .get_conversation_turns("task-session-1", -1, 10)
+            .unwrap();
         assert_eq!(turns.len(), 4);
         assert_eq!(turns[2].turn_index, 2);
         assert_eq!(turns[3].content, "第二次回复");

@@ -37,6 +37,7 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
             backfill_registry,
             todos,
             categories,
+            dozerd::task_poller::new_in_flight(),
         )
         .await
     });
@@ -344,7 +345,7 @@ async fn add_toggle_and_list_todos_roundtrip() {
 }
 
 #[tokio::test]
-async fn edit_reorder_plan_date_and_dispatch_roundtrip() {
+async fn edit_reorder_plan_date_and_assign_agent_roundtrip() {
     let (sock, _registry, _guard) = start_daemon().await;
     let client = Client::new(sock);
 
@@ -368,10 +369,13 @@ async fn edit_reorder_plan_date_and_dispatch_roundtrip() {
     assert_eq!(cleared.plan_date, None);
 
     let dispatched = client
-        .record_todo_dispatch(t1.id, "sess-xyz")
+        .assign_todo_agent(t1.id, dozer_core::protocol::AgentKind::Claude)
         .await
         .unwrap();
-    assert_eq!(dispatched.dispatch_session_id, Some("sess-xyz".to_string()));
+    assert_eq!(
+        dispatched.assigned_agent,
+        Some(dozer_core::protocol::AgentKind::Claude)
+    );
 }
 
 #[tokio::test]

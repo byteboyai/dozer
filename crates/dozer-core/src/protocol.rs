@@ -1516,7 +1516,10 @@ mod tests {
         let line = encode_line(&req);
         assert_eq!(decode_line::<Request>(&line).unwrap(), req);
 
-        let req = Request::SetCategoryAutoPoll { id: 10, enabled: true };
+        let req = Request::SetCategoryAutoPoll {
+            id: 10,
+            enabled: true,
+        };
         let line = encode_line(&req);
         assert_eq!(decode_line::<Request>(&line).unwrap(), req);
 
@@ -1560,7 +1563,10 @@ mod tests {
             category_id: None,
             assigned_agent: Some(AgentKind::Claude),
         };
-        let reply = Reply::TodoDetail { info: todo, turns: vec![turn] };
+        let reply = Reply::TodoDetail {
+            info: todo,
+            turns: vec![turn],
+        };
         let line = encode_line(&reply);
         assert_eq!(decode_line::<Reply>(&line).unwrap(), reply);
     }

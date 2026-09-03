@@ -24,7 +24,8 @@ fn id_not_found(id: i64) -> anyhow::Error {
     anyhow::anyhow!("分类不存在: id={id}")
 }
 
-const CATEGORY_COLUMNS: &str = "id, project_id, parent_id, name, rank, created_ms, auto_poll_enabled";
+const CATEGORY_COLUMNS: &str =
+    "id, project_id, parent_id, name, rank, created_ms, auto_poll_enabled";
 
 fn row_to_category(row: &rusqlite::Row) -> rusqlite::Result<CategoryInfo> {
     Ok(CategoryInfo {
@@ -309,9 +310,8 @@ impl CategoryStore {
     /// 单进程服务多个项目,轮询不按"当前打开哪个项目"限定范围。
     pub fn list_auto_poll_enabled_all(&self) -> Result<Vec<CategoryInfo>> {
         let conn = self.conn.lock().expect("db lock");
-        let sql = format!(
-            "SELECT {CATEGORY_COLUMNS} FROM todo_categories WHERE auto_poll_enabled = 1"
-        );
+        let sql =
+            format!("SELECT {CATEGORY_COLUMNS} FROM todo_categories WHERE auto_poll_enabled = 1");
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map([], row_to_category)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

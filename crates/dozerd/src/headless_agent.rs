@@ -616,16 +616,10 @@ mod tests {
 
     #[tokio::test]
     async fn process_task_headless_returns_unsupported_for_kind_without_adapter() {
-        let err = process_task_headless(
-            AgentKind::Codex,
-            Path::new("/tmp"),
-            "s1",
-            "task",
-            "",
-            "go",
-        )
-        .await
-        .unwrap_err();
+        let err =
+            process_task_headless(AgentKind::Codex, Path::new("/tmp"), "s1", "task", "", "go")
+                .await
+                .unwrap_err();
         assert_eq!(err, HeadlessError::Unsupported);
     }
 

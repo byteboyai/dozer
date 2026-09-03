@@ -166,10 +166,16 @@ mod tests {
         let transcripts = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
         let projects = ProjectStore::new(&tmp.path().join("t.db")).unwrap();
         let todo = todos.add(1, "任务").unwrap();
-        let err =
-            process_task(&todos, &session_summaries, &transcripts, &projects, &todo, None)
-                .await
-                .unwrap_err();
+        let err = process_task(
+            &todos,
+            &session_summaries,
+            &transcripts,
+            &projects,
+            &todo,
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(err.contains("未指派"));
     }
 

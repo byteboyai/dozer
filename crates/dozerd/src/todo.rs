@@ -259,9 +259,8 @@ impl TodoStore {
     ) -> Result<TodoInfo> {
         let conn = self.conn.lock().expect("db lock");
         let label = agent.label().to_string();
-        let sql = format!(
-            "UPDATE todos SET assigned_agent = ?1 WHERE id = ?2 RETURNING {TODO_COLUMNS}"
-        );
+        let sql =
+            format!("UPDATE todos SET assigned_agent = ?1 WHERE id = ?2 RETURNING {TODO_COLUMNS}");
         conn.query_row(&sql, params![label, id], row_to_todo)
             .map_err(|e| match e {
                 rusqlite::Error::QueryReturnedNoRows => id_not_found(id),
