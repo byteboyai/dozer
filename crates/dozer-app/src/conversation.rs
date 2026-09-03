@@ -35,6 +35,10 @@ pub struct SessionRow {
     pub display_title: String,
     pub summary: Option<String>,
     pub summary_status: Option<SummaryStatus>,
+    /// 该会话关联的 Todo 任务 id(有则来自 `SessionSummaryPayload.task_id`),
+    /// 会话面板据此展示"关联任务"标签。`None` = 与任务无关的普通交互式
+    /// 会话。
+    pub task_id: Option<i64>,
 }
 
 impl SessionRow {
@@ -48,6 +52,7 @@ impl SessionRow {
                 .unwrap_or_else(|| c.title.clone()),
             summary: s.map(|s| s.summary.clone()),
             summary_status: s.map(|s| s.status),
+            task_id: s.and_then(|s| s.task_id),
         }
     }
 }
@@ -105,6 +110,7 @@ mod tests {
             summary: "总结全文".into(),
             status: SummaryStatus::AiGenerated,
             created_ts_ms: 1,
+            task_id: None,
         };
         let row = SessionRow::from_row(&c, Some(&s));
         assert_eq!(row.conversation_id, "c1");

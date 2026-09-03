@@ -966,37 +966,6 @@ impl Workspace {
         }
     }
 
-    /// 把 `text` 当输入写进已存活的 `session_id` 对应 tab。派发目标可能在
-    /// 选择弹层打开期间被用户关掉（tab 已不在 `self.tabs` 里）——静默跳过。
-    pub(crate) fn dispatch_todo_to_existing(&self, io: &ShellIo, session_id: &str, text: &str) {
-        let Some(tab) = self
-            .tabs
-            .iter()
-            .find(|t| t.info.id == session_id)
-            .or_else(|| self.ssh_tabs.iter().find(|t| t.info.id == session_id))
-        else {
-            return;
-        };
-        if !tab.alive {
-            return;
-        }
-        let bytes = format!("{text}\n").into_bytes();
-        match &tab.backend {
-            TabBackend::Daemon => {
-                let client = io.client.clone();
-                let id = session_id.to_string();
-                io.handle.spawn(async move {
-                    if let Err(e) = client.write(&id, &bytes).await {
-                        tracing::warn!("派发任务文本失败: {e}");
-                    }
-                });
-            }
-            TabBackend::Ssh { out } => {
-                let _ = out.send(SshOut::Data(bytes));
-            }
-        }
-    }
-
     /// 加载(或刷新)当前项目的会话列表(联查总结，标题+摘要预览)
     /// → `ConversationSessionsRefreshed`(spec 2026-08-27，取代
     /// `spawn_all_turn_groups_refresh`)。
@@ -2752,13 +2721,34 @@ pub(crate) fn conversation_list_pane<'a>(
         // 之前;"● 当前" 前缀保留在最前面。副行只显示 "agent · 相对时间"
         // (2026-08-28 起不再显示总结预览——列表只要标题+时间)。
         let agent_label = g.agent.label();
+        let task_suffix = g
+            .task_id
+            .and_then(|task_id| {
+                ws.todo
+                    .items()
+                    .iter()
+                    .find(|t| t.id == task_id)
+                    .map(|t| t.text.as_str())
+            })
+            .map(|text| {
+                let truncated: String = text.chars().take(30).collect();
+                if text.chars().count() > 30 {
+                    format!(" · 关联任务:{truncated}…")
+                } else {
+                    format!(" · 关联任务:{truncated}")
+                }
+            })
+            .unwrap_or_default();
         let sub = if current {
             format!(
-                "● 当前 · {agent_label} · {}",
+                "● 当前 · {agent_label} · {}{task_suffix}",
                 relative_time_text(g.last_ts, now_ms)
             )
         } else {
-            format!("{agent_label} · {}", relative_time_text(g.last_ts, now_ms))
+            format!(
+                "{agent_label} · {}{task_suffix}",
+                relative_time_text(g.last_ts, now_ms)
+            )
         };
         let sub_color = if current {
             byteui::theme::color::current().green
@@ -4194,6 +4184,7 @@ mod tests {
             display_title: title.to_string(),
             summary: None,
             summary_status: None,
+            task_id: None,
         }
     }
 

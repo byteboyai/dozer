@@ -3576,6 +3576,7 @@ mod tests {
             name: name.into(),
             rank: 0,
             created_ms: 0,
+            auto_poll_enabled: false,
         }
     }
 

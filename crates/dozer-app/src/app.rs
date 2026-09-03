@@ -1542,6 +1542,10 @@ pub enum Message {
     /// 活跃时间倒序(2026-08-27，取代按回合拍平的列表；见
     /// `Workspace::spawn_conversations_refresh`)。
     ConversationSessionsRefreshed(ProjectId, Result<Vec<SessionRow>, String>),
+    /// `GetTodoDetail` 异步结果:`usize` 是打开弹窗时记录的卡片下标(用来
+    /// 校验弹窗还开着同一个任务,不是用 id 找——`items()` 下标和渲染时
+    /// 用的下标必须一致,同 `todo::Message` 全线用下标寻址任务的既有约定)。
+    TodoDetailLoaded(usize, Vec<dozer_core::protocol::TurnRecord>),
     /// Usage 面板的全部消息,内核只转发不解读——见 `extensions::usage::Message`。
     Usage(usage::Message),
     /// 点击对话面板会话列表里的某一行——打开该 session 的详情审阅
@@ -3323,6 +3327,23 @@ impl App {
         }
     }
 
+    /// 详情弹窗回复框是否持有 iced 真实焦点(main.rs 键盘路由用)。
+    pub fn detail_reply_focused(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.todo.detail_reply_focused())
+    }
+
+    /// 每帧渲染循环调用:把 `CaptureDetailReplyFocus` 问到的真实焦点态
+    /// 写进当前工作区的 Todo(`main.rs` 键盘路由随后读 `detail_reply_focused`
+    /// 消费)。这个输入没有"失焦提交"的语义(提交靠点"处理"按钮,不是
+    /// 失焦/回车),所以不需要 `category_rename_focused`/`todo_content_focused`
+    /// 那种"失焦边缘触发落盘"的逻辑,直接写回标记位即可。
+    pub fn set_detail_reply_focused(&mut self, focused: bool) {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.todo.set_detail_reply_focused_flag(focused);
+        }
+    }
+
     /// 当前左栏显示哪个面板(main.rs 每帧 `interface.operate` 捕获 Todo 自绘
     /// 输入字段 bounds 时用来判断是否要遍历,避免无谓开销)。
     pub fn left_view(&self) -> PanelKind {
@@ -4471,9 +4492,11 @@ impl App {
             Message::ProjectAddMenuClose => {
                 self.project_add_menu_open = false;
             }
-            Message::Todo(todo::Message::DispatchToExisting(idx, session_id)) => {
-                self.todo_dispatch_to_existing(idx, session_id)
+            Message::Todo(todo::Message::AssignAgent(idx, agent)) => {
+                self.todo_assign_agent(idx, agent)
             }
+            Message::Todo(todo::Message::DetailOpen(idx)) => self.todo_detail_open(idx),
+            Message::Todo(todo::Message::DetailReplySubmit) => self.todo_detail_process(),
             // 数据库连接测试的异步结果带显式 `project_id`——用户可能在等待
             // 期间切走了项目页签,必须按自带 id 路由,不能用当前聚焦项目
             // (同 `TabAttached`/`ProjectSlotLoaded` 那批异步消息的约定,见设计
@@ -4562,6 +4585,13 @@ impl App {
                 }
                 other => self.todo_message(other),
             },
+            Message::TodoDetailLoaded(idx, turns) => {
+                self.with_focused_project(move |ws, _io| {
+                    if ws.todo.detail_open_idx() == Some(idx) {
+                        ws.todo.replace_detail_turns(turns);
+                    }
+                });
+            }
             // 文件树右键"搜索"弹窗:`SearchResults` 带 `project_id`,异步结果
             // 按所属项目路由(用户可能已切走);其余交互投当前聚焦项目。
             Message::Search(search::Message::SearchResults(project_id, result)) => {
@@ -6215,7 +6245,9 @@ impl App {
         });
     }
 
-    fn todo_dispatch_to_existing(&mut self, idx: usize, session_id: String) {
+    /// 指派任务给某个 agent 种类,纯记录,不触发任何执行。异步确认经
+    /// `Mutated` 刷新列表——与其它写操作同一条乐观更新链路。
+    fn todo_assign_agent(&mut self, idx: usize, agent: dozer_core::protocol::AgentKind) {
         let Some(id) = self
             .active_workspace()
             .and_then(|ws| ws.todo.items().get(idx))
@@ -6223,29 +6255,66 @@ impl App {
         else {
             return;
         };
-        let Some(text) = self
-            .active_workspace()
-            .and_then(|ws| ws.todo.items().get(idx))
-            .map(|item| item.text.clone())
-        else {
-            return;
-        };
-        self.with_focused_project(|ws, io| {
+        self.with_focused_project(|ws, _io| {
             ws.todo.close_dispatch_popup();
-            ws.dispatch_todo_to_existing(io, &session_id, &text);
         });
-        // 指派记录落服务端 SQLite(`record_todo_dispatch`),异步确认经
-        // `Mutated` 刷新列表——与乐观更新的其它写操作同一条链路。
         let handle = self.handle.clone();
         let client = self.client.clone();
         let proxy = self.proxy.clone();
         handle.spawn(async move {
             let res = client
-                .record_todo_dispatch(id, &session_id)
+                .assign_todo_agent(id, agent)
                 .await
                 .map(|_| ())
                 .map_err(|e| e.to_string());
             let _ = proxy.send_event(Message::Todo(todo::Message::Mutated(res)));
+        });
+    }
+
+    /// 打开任务详情弹窗:先本地记下 `idx`(弹窗定位/后续"处理"要用),再
+    /// 异步拉 `GetTodoDetail`。RPC 结果经专门的 `Message::TodoDetailLoaded`
+    /// 落地——`todo::Message::Mutated` 那条通用刷新链路只刷 `items`/
+    /// `categories`,不携带回合数据,不能复用。
+    fn todo_detail_open(&mut self, idx: usize) {
+        let Some(id) = self
+            .active_workspace()
+            .and_then(|ws| ws.todo.items().get(idx))
+            .map(|item| item.id)
+        else {
+            return;
+        };
+        self.with_focused_project(|ws, _io| {
+            ws.todo.open_detail(idx, Vec::new());
+        });
+        let handle = self.handle.clone();
+        let client = self.client.clone();
+        let proxy = self.proxy.clone();
+        handle.spawn(async move {
+            if let Ok((_, turns)) = client.get_todo_detail(id).await {
+                let _ = proxy.send_event(Message::TodoDetailLoaded(idx, turns));
+            }
+        });
+    }
+
+    /// 详情弹窗"处理"按钮:乐观插入已经在 `todo::update`(`DetailReplySubmit`
+    /// 分支)做过,这里只管发 `ProcessTodoNow` RPC 并在结果回来后用服务端
+    /// 权威回合列表刷新。耗时可能到 10 分钟,走 `handle.spawn` 不阻塞 UI。
+    fn todo_detail_process(&mut self) {
+        let Some((idx, id, reply_text)) = self.active_workspace().and_then(|ws| {
+            let idx = ws.todo.detail_open_idx()?;
+            let id = ws.todo.items().get(idx)?.id;
+            Some((idx, id, ws.todo.last_reply_text()))
+        }) else {
+            return;
+        };
+        let handle = self.handle.clone();
+        let client = self.client.clone();
+        let proxy = self.proxy.clone();
+        handle.spawn(async move {
+            let _ = client.process_todo_now(id, reply_text.as_deref()).await;
+            if let Ok((_, turns)) = client.get_todo_detail(id).await {
+                let _ = proxy.send_event(Message::TodoDetailLoaded(idx, turns));
+            }
         });
     }
 
@@ -7428,6 +7497,108 @@ impl App {
             .into()
     }
 
+    /// 任务详情弹窗:原生 iced 渲染(不复用会话面板的 webview trace——
+    /// 那套渲染实际内容在 `dozer://review-trace/host.html` 里,任务详情
+    /// 只需要看人类/agent 往来文本,不需要工具调用折叠/trace 可视化,
+    /// 塞进一个跟随光标定位、随时开合的原生弹窗里没有必要也不合适)。
+    fn todo_detail_popup<'a>(&self) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+        let Some(ws) = self.active_workspace() else {
+            return column![].into();
+        };
+        let Some(idx) = ws.todo.detail_open_idx() else {
+            return column![].into();
+        };
+        let Some(item) = ws.todo.items().get(idx) else {
+            return column![].into();
+        };
+
+        let header = column![
+            text(item.text.clone()).size(byteui::theme::font::subtitle()),
+            text(
+                item.assigned_agent
+                    .map(|a| format!("指派给:{}", a.label()))
+                    .unwrap_or_else(|| "未指派".to_string())
+            )
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().dim),
+        ]
+        .spacing(4);
+
+        let mut turns_col = column![].spacing(8);
+        for turn in ws.todo.detail_turns() {
+            let label = if turn.role == "human" {
+                "你".to_string()
+            } else {
+                item.assigned_agent
+                    .map(|a| a.label().to_string())
+                    .unwrap_or_else(|| "AI".to_string())
+            };
+            turns_col = turns_col.push(
+                column![
+                    text(label)
+                        .size(byteui::theme::font::caption())
+                        .color(byteui::theme::color::current().gold),
+                    text(turn.content.clone())
+                        .size(byteui::theme::font::body())
+                        .width(Length::Fill),
+                ]
+                .spacing(2),
+            );
+        }
+        let turns_scroll = iced_widget::Scrollable::new(turns_col)
+            .width(Length::Fill)
+            .height(Length::Fixed(320.0))
+            .direction(iced_widget::scrollable::Direction::Vertical(
+                byteui::interaction::scrollbar::scrollbar(),
+            ))
+            .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style());
+
+        let reply_box = container(byteui::form::input_text::view(
+            "回复...",
+            ws.todo.detail_reply_draft(),
+            false,
+            Some(todo::detail_reply_field_id()),
+            false,
+            None,
+            false,
+            |s| Message::Todo(todo::Message::DetailReplyInput(s)),
+        ))
+        .width(Length::Fill);
+        let submit_label = if ws.todo.detail_processing() {
+            "处理中…"
+        } else {
+            "处理"
+        };
+        let submit = button(text(submit_label))
+            .on_press_maybe(
+                (!ws.todo.detail_processing()).then_some(Message::Todo(
+                    todo::Message::DetailReplySubmit,
+                )),
+            )
+            .padding([6, 12]);
+
+        let card = column![header, turns_scroll, row![reply_box, submit].spacing(8)]
+            .spacing(12)
+            .padding(16)
+            .width(Length::Fixed(480.0));
+        let card = container(card).style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(byteui::theme::color::current().card.into()),
+            border: Border {
+                color: byteui::theme::color::current().border,
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..container::Style::default()
+        });
+
+        container(card)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(iced_widget::core::alignment::Horizontal::Center)
+            .align_y(iced_widget::core::alignment::Vertical::Center)
+            .into()
+    }
+
     /// 数据库面板数据源树 header 行右键菜单浮层:测试连接/编辑/删除/刷新。
     /// 定位坐标复用 `files.last_right_click`。"刷新"只有该数据源当前已
     /// 展开(有 schema 树数据)才可点,未展开时置灰——展开动作本身走左键
@@ -7864,6 +8035,19 @@ impl App {
                     .height(Length::Fill)
                     .into(),
             }
+        } else if ws.todo.detail_popup_open() {
+            // 任务详情弹窗:窗口级 overlay,原生渲染(不走 wry webview)。
+            // 点弹层外任意处经 dismiss 收起,与其它 Todo 浮层同款约定。
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::Todo(todo::Message::DetailClose));
+            stack![base, dismiss, self.todo_detail_popup()]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
         } else if ws.todo.status_filter_popup_open() {
             // 搜索框左前"状态"筛选浮层:窗口级 overlay。点弹层外任意处经
             // dismiss 收起(与右键菜单/分支切换同款约定),弹层本体的每一项
