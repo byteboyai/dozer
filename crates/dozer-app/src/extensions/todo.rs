@@ -2628,6 +2628,39 @@ fn todo_card<'a>(
     let status_btn = todo_status_button(state, idx);
 
     let mut bottom = row![status_btn].spacing(12);
+    // 详情按钮:只要这条任务已指派过/已留过会话(有可回看的往来、可继续
+    // 人工触发处理)就出现,点击打开任务详情弹窗(`Message::DetailOpen`)。
+    if item.assigned_agent.is_some() || item.dispatch_session_id.is_some() {
+        let detail_btn = button(
+            text("详情")
+                .size(byteui::theme::font::caption())
+                .color(byteui::theme::color::current().gold),
+        )
+        .on_press(Message::DetailOpen(idx))
+        .padding([6, 8])
+        .style(move |_t: &iced_widget::Theme, s: button::Status| {
+            let hovered = matches!(s, button::Status::Hovered);
+            button::Style {
+                background: if hovered {
+                    Some(byteui::theme::color::current().card.into())
+                } else {
+                    None
+                },
+                border: Border {
+                    color: if hovered {
+                        byteui::theme::color::current().gold
+                    } else {
+                        byteui::theme::color::current().border
+                    },
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                text_color: byteui::theme::color::current().gold,
+                ..button::Style::default()
+            }
+        });
+        bottom = bottom.push(detail_btn);
+    }
     if state == TodoState::Pending && item.dispatch_session_id.is_none() {
         // 样式对齐 `project.rs::project_footer_bar` 的「修复项目」按钮:
         // BG 底 + 1px BORDER 描边 + 圆角 4 + CREAM 文字,label 字号 + 内边距
