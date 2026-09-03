@@ -725,6 +725,22 @@ impl WorkspaceState {
         self.detail_reply_focused
     }
 
+    pub fn detail_open_idx(&self) -> Option<usize> {
+        self.detail_open
+    }
+
+    /// 详情弹窗最后一次乐观插入的人类回合内容(`push_optimistic_human_turn`
+    /// 刚插入的那条),供 `App::todo_detail_process` 转发进 `ProcessTodoNow`
+    /// RPC 的 `human_reply` 参数。`detail_turns` 里最后一条一定是刚插入的
+    /// 人类回合(`DetailReplySubmit` 处理顺序:先插入本地乐观回合,`app.rs`
+    /// 再读这个值发 RPC)。
+    pub fn last_reply_text(&self) -> Option<String> {
+        self.detail_turns
+            .last()
+            .filter(|t| t.role == "human")
+            .map(|t| t.content.clone())
+    }
+
     pub fn set_detail_reply_focused_flag(&mut self, focused: bool) {
         self.detail_reply_focused = focused;
     }
