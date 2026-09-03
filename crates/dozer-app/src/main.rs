@@ -1224,6 +1224,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 || app.todo_add_focused()
                 || app.todo_content_focused()
                 || app.category_rename_focused()
+                || app.detail_reply_focused()
                 || app.tree_edit_focused()
                 || app.home_project_search_focused()
                 || app.conversation_search_focused()
@@ -2496,6 +2497,20 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                         false
                                     };
 
+                                // Todo 任务详情弹窗的回复框:同款每帧查真实
+                                // 焦点态(Todo 浮层都长在当前总布局里)。
+                                let detail_reply_focused =
+                                    if matches!(app.left_view(), crate::app::PanelKind::Todo) {
+                                        run_operate(
+                                            &mut interface,
+                                            renderer,
+                                            &mut extensions::todo::CaptureDetailReplyFocus,
+                                        );
+                                        extensions::todo::take_detail_reply_focused()
+                                    } else {
+                                        false
+                                    };
+
                                 // 首页项目搜索框(Stage 4):同款每帧查真实焦点态。
                                 let home_search_focused = if app.is_home() {
                                     run_operate(
@@ -2768,6 +2783,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 app.set_tree_edit_focused(tree_edit_focused);
                                 app.set_todo_content_focused(content_edit_focused);
                                 app.set_category_rename_focused(category_rename_focused);
+                                app.set_detail_reply_focused(detail_reply_focused);
                                 app.set_comment_focused(comment_focused);
                                 app.set_project_name_focused(name_edit_focused);
                                 app.set_query_focused(query_focused);
