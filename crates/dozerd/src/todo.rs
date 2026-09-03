@@ -269,15 +269,17 @@ impl TodoStore {
             })
     }
 
-    /// 派发生成任务(session 面板"生成任务"入口或 schedule 回填任务时)落存档,
-    /// 顺手 `assigned_agent = NULL`(程序派生,不能标"指派");单条最近
-    /// `dispatch_session_id` 语义,与 plan §6 一致。
+    /// 首次真正触发 headless 处理时,由 `task_processor` 铸造好
+    /// `session_id` 后写回;之后每次处理复用同一个,不再变化。**不**碰
+    /// `assigned_agent`——那是独立的"长期指派给谁"状态,`dispatch_session_id`
+    /// 只是"当前处理会话"标识,两者互不清空(此前误加过
+    /// `assigned_agent = NULL`,会导致任务处理一轮后从轮询扫描里永久消失、
+    /// 也会让"处理"按钮后续调用因 `assigned_agent` 为空而直接报错,已修复)。
     pub fn set_dispatch_session(&self, id: i64, session_id: &str) -> Result<TodoInfo> {
         let conn = self.conn.lock().expect("db lock");
         let now = now_ms() as i64;
         let sql = format!(
-            "UPDATE todos SET dispatch_session_id = ?1, dispatch_at_ms = ?2,
-                assigned_agent = NULL
+            "UPDATE todos SET dispatch_session_id = ?1, dispatch_at_ms = ?2
              WHERE id = ?3 RETURNING {TODO_COLUMNS}"
         );
         conn.query_row(&sql, params![session_id, now, id], row_to_todo)
@@ -499,13 +501,17 @@ mod tests {
     }
 
     #[test]
-    fn set_dispatch_session_clears_assigned_agent() {
+    fn set_dispatch_session_preserves_assigned_agent() {
         use dozer_core::protocol::AgentKind;
         let (_dir, store) = store();
         let t = store.add(1, "任务").unwrap();
         store.assign_agent(t.id, AgentKind::Claude).unwrap();
         let dispatched = store.set_dispatch_session(t.id, "sess-1").unwrap();
-        assert_eq!(dispatched.assigned_agent, None, "程序派发不应标指派");
+        assert_eq!(
+            dispatched.assigned_agent,
+            Some(AgentKind::Claude),
+            "铸造/复用处理会话不应清掉长期指派——否则轮询扫描和后续\"处理\"按钮都会失效"
+        );
         assert_eq!(dispatched.dispatch_session_id, Some("sess-1".to_string()));
     }
 
