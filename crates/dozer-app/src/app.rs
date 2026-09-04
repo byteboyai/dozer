@@ -676,10 +676,34 @@ pub enum TabGroup {
 
 /// 正在进行的页签拖拽换位。`source` 记拖起时该组里的源下标，换位过程中源
 /// 下标会随 `Vec` 移动而更新（移动后源跑到新位置，续拖以新位置为准）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `press_pos` 记按下瞬间的光标位置(同 `RailDrag::press_pos` 手法)，
+/// `tab_drag_move` 据此过滤"按下即松开途中的亚像素抖动"，见其文档。
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TabDrag {
     pub group: TabGroup,
     pub source: usize,
+    pub press_pos: (f32, f32),
+}
+
+/// 页签拖拽确认阈值(同 rail 图标栏 `RAIL_DRAG_VISUAL_THRESHOLD_PX`)：按下
+/// 瞬间到当前光标的位移必须越过这个半径才算"确认是一次拖拽换位"，见
+/// `tab_drag_past_threshold` 用法处的文档。
+const TAB_DRAG_CONFIRM_THRESHOLD_PX: f32 = 4.0;
+
+/// `drag.press_pos` 到 `cursor` 的位移是否已越过 [`TAB_DRAG_CONFIRM_THRESHOLD_PX`]。
+/// 页签(4px 间距)比 rail 图标栏排得更紧——`select_tab`/`preview_select_tab`
+/// 等"按下即武装拖拽"的调用点(见 `Message::SelectTab` 文档)本身没问题，
+/// 但 `tab_drag_move` 此前对**任何** `on_move`（哪怕只挪了半个像素）都直接
+/// 执行换位 + `rekey_hover_range`：触控板等高灵敏输入下，单击落点到抬起
+/// 之间的亚像素抖动偶尔会越界到邻居页签的命中框，触发一次肉眼不可见的
+/// "拖拽"，把正被按住那个页签的 hover 光效错挪到邻居页签上——观感上就是
+/// 两个页签同时像被选中(2026-09-04 用户反馈截图：点击切换 tab 后出现两个
+/// 高亮页签，且无拖拽意图、偶发)。`tab_drag_move` 现在先过这道阈值，真正
+/// 的拖拽(持续位移必然越界)不受影响，普通点击的抖动不再触发换位。
+fn tab_drag_past_threshold(press_pos: (f32, f32), cursor: (f32, f32)) -> bool {
+    let dx = cursor.0 - press_pos.0;
+    let dy = cursor.1 - press_pos.1;
+    dx * dx + dy * dy > TAB_DRAG_CONFIRM_THRESHOLD_PX * TAB_DRAG_CONFIRM_THRESHOLD_PX
 }
 
 /// 主界面当前几何状态的只读快照(main.rs 拖拽追踪/离屏几何计算用途,
@@ -2871,13 +2895,17 @@ impl App {
     }
 
     /// 拖拽换位:把当前拖起的源项(`self.tab_drag.source`)移到 `group` 组的
-    /// `to` 处。源与目标同址/越界/不在拖拽中均 no-op。换位后把 `self.tab_drag
-    /// .source` 更新成新位置(续拖以新位置为准),并顺带修正受影响的 index-
-    /// keyed hover 键/激活项。
+    /// `to` 处。源与目标同址/越界/不在拖拽中/未越过 [`tab_drag_past_threshold`]
+    /// 均 no-op(阈值过滤见其文档——挡的是单击途中的抖动,不是真实拖拽)。
+    /// 换位后把 `self.tab_drag.source` 更新成新位置(续拖以新位置为准),并
+    /// 顺带修正受影响的 index-keyed hover 键/激活项。
     fn tab_drag_move(&mut self, group: TabGroup, to: usize) {
         let Some(drag) = self.tab_drag else {
             return;
         };
+        if !tab_drag_past_threshold(drag.press_pos, self.last_cursor) {
+            return;
+        }
         if drag.group != group {
             return;
         }
@@ -2890,7 +2918,11 @@ impl App {
                 }
                 let id = self.project_order.remove(from);
                 self.project_order.insert(to, id);
-                self.tab_drag = Some(TabDrag { group, source: to });
+                self.tab_drag = Some(TabDrag {
+                    group,
+                    source: to,
+                    press_pos: drag.press_pos,
+                });
                 // 项目页签 hover 存的是 id-keyed 键(`HoverId::ProjectTabItem`/
                 // `ProjectTabClose`),值本身不会因换位错配到别的项目——但换位
                 // 让页签在**树里的位置**跟着挪，`MouseArea` 自己那份按位置续存
@@ -2918,7 +2950,11 @@ impl App {
                     }
                     ws.reorder_term_tab(from, to);
                 }
-                self.tab_drag = Some(TabDrag { group, source: to });
+                self.tab_drag = Some(TabDrag {
+                    group,
+                    source: to,
+                    press_pos: drag.press_pos,
+                });
                 self.rekey_hover_range(HoverId::TermTabItem, HoverId::TermTabClose, from, to);
             }
             TabGroup::Preview => {
@@ -2934,7 +2970,11 @@ impl App {
                     }
                     ws.preview.reorder(from, to);
                 }
-                self.tab_drag = Some(TabDrag { group, source: to });
+                self.tab_drag = Some(TabDrag {
+                    group,
+                    source: to,
+                    press_pos: drag.press_pos,
+                });
                 self.rekey_hover_range(HoverId::PreviewTabItem, HoverId::PreviewTabClose, from, to);
             }
             TabGroup::ProjectPreview => {
@@ -2950,7 +2990,11 @@ impl App {
                     }
                     ws.project_preview.reorder(from, to);
                 }
-                self.tab_drag = Some(TabDrag { group, source: to });
+                self.tab_drag = Some(TabDrag {
+                    group,
+                    source: to,
+                    press_pos: drag.press_pos,
+                });
                 self.rekey_hover_range(
                     HoverId::ProjectPreviewTabItem,
                     HoverId::ProjectPreviewTabClose,
@@ -2971,7 +3015,11 @@ impl App {
                     }
                     ws.browser.reorder_tab(from, to);
                 }
-                self.tab_drag = Some(TabDrag { group, source: to });
+                self.tab_drag = Some(TabDrag {
+                    group,
+                    source: to,
+                    press_pos: drag.press_pos,
+                });
             }
         }
     }
@@ -5686,6 +5734,7 @@ impl App {
             self.tab_drag = Some(TabDrag {
                 group: TabGroup::Project,
                 source: idx,
+                press_pos: self.last_cursor,
             });
         }
     }
@@ -6398,6 +6447,7 @@ impl App {
             self.tab_drag = Some(TabDrag {
                 group: TabGroup::Browser,
                 source: active,
+                press_pos: self.last_cursor,
             });
         }
     }
@@ -6532,6 +6582,7 @@ impl App {
             self.tab_drag = Some(TabDrag {
                 group: TabGroup::Terminal,
                 source: idx,
+                press_pos: self.last_cursor,
             });
         }
     }
@@ -6851,6 +6902,7 @@ impl App {
             self.tab_drag = Some(TabDrag {
                 group: TabGroup::Preview,
                 source: idx,
+                press_pos: self.last_cursor,
             });
         }
     }
@@ -6907,6 +6959,7 @@ impl App {
             self.tab_drag = Some(TabDrag {
                 group: TabGroup::ProjectPreview,
                 source: idx,
+                press_pos: self.last_cursor,
             });
         }
     }
@@ -9287,6 +9340,35 @@ fn ssh_empty_state<'a>() -> Element<'a, Message, iced_widget::Theme, iced_render
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 光标没动(或只在阈值内小幅抖动)不算越过阈值——普通单击场景,同
+    /// `rail::rail_drag_past_threshold` 的对应用例。这是 2026-09-04
+    /// 用户反馈"agent tab 偶尔两个同时看起来被选中"的根因防回归测试:
+    /// 单击 tab 时按下瞬间到抬起前的亚像素抖动不该被当成一次拖拽换位。
+    #[test]
+    fn tab_drag_past_threshold_false_when_cursor_has_not_moved() {
+        assert!(!tab_drag_past_threshold((100.0, 100.0), (100.0, 100.0)));
+        assert!(!tab_drag_past_threshold((100.0, 100.0), (101.0, 100.0)));
+    }
+
+    /// 恰好等于阈值(平方比较是 `>` 不是 `>=`)不算越过,严格大于才算。
+    #[test]
+    fn tab_drag_past_threshold_false_when_exactly_at_threshold() {
+        assert!(!tab_drag_past_threshold(
+            (0.0, 0.0),
+            (TAB_DRAG_CONFIRM_THRESHOLD_PX, 0.0)
+        ));
+    }
+
+    /// 光标越过阈值(任意方向,这里用纯 x 位移)判定为真的拖拽,真实拖拽
+    /// 不受这道阈值影响。
+    #[test]
+    fn tab_drag_past_threshold_true_once_cursor_moves_past_it() {
+        assert!(tab_drag_past_threshold(
+            (0.0, 0.0),
+            (TAB_DRAG_CONFIRM_THRESHOLD_PX + 1.0, 0.0)
+        ));
+    }
 
     /// 复现验收反馈的核心机制:关 tab 后立刻退出,`event_loop.exit()` 不该
     /// 让在飞的 kill/总结 spawn 任务半路被丢弃——`join_pending_exit_tasks`
