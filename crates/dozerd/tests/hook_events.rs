@@ -34,7 +34,6 @@ async fn hook_event_reaches_attached_client_and_list() {
             dozerd::server::serve(
                 &sock,
                 registry,
-                test_store(),
                 test_projects(),
                 test_bookmarks(),
                 test_transcripts(),
@@ -154,93 +153,6 @@ async fn hook_event_reaches_attached_client_and_list() {
     }
 }
 
-/// 每次调用建一个独立临时库的验收存储（测试用；P1f serve 需要）。
-fn test_store() -> std::sync::Arc<dozerd::acceptance::AcceptanceStore> {
-    let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
-    std::sync::Arc::new(dozerd::acceptance::AcceptanceStore::open(&db).unwrap())
-}
-
-#[tokio::test]
-async fn record_acceptance_persists() {
-    let sock = std::env::temp_dir().join(format!("dozerd-acc-{}.sock", uuid::Uuid::new_v4()));
-    let db = std::env::temp_dir().join(format!("dozerd-acc-{}.db", uuid::Uuid::new_v4()));
-    let registry = Arc::new(SessionRegistry::new());
-    let store = Arc::new(dozerd::acceptance::AcceptanceStore::open(&db).unwrap());
-    let projects = Arc::new(dozerd::projects::ProjectStore::new(&db).unwrap());
-    let bookmarks = Arc::new(dozerd::bookmarks::BookmarkStore::new(&db).unwrap());
-    let transcripts = Arc::new(dozerd::transcripts::TranscriptStore::open(&db).unwrap());
-    let session_summaries =
-        Arc::new(dozerd::session_summary::SessionSummaryStore::open(&db).unwrap());
-    let backfill_registry = test_backfill_registry();
-    let todos = test_todos();
-    let categories = test_categories();
-    tokio::spawn({
-        let (
-            sock,
-            registry,
-            store,
-            projects,
-            bookmarks,
-            transcripts,
-            session_summaries,
-            backfill_registry,
-            todos,
-            categories,
-        ) = (
-            sock.clone(),
-            registry.clone(),
-            store.clone(),
-            projects.clone(),
-            bookmarks.clone(),
-            transcripts.clone(),
-            session_summaries.clone(),
-            backfill_registry.clone(),
-            todos.clone(),
-            categories.clone(),
-        );
-        async move {
-            dozerd::server::serve(
-                &sock,
-                registry,
-                store,
-                projects,
-                bookmarks,
-                transcripts,
-                session_summaries,
-                backfill_registry,
-                todos,
-                categories,
-                dozerd::task_poller::new_in_flight(),
-            )
-            .await
-        }
-    });
-    for _ in 0..100 {
-        if sock.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    match send_req(
-        &sock,
-        &Request::RecordAcceptance {
-            repo: "/r".into(),
-            goal: "g".into(),
-            criteria_checked: vec![],
-            verdict: "accepted".into(),
-            comment: "".into(),
-            ref_name: "refs/dozer/accepted/1".into(),
-            ts_ms: 1,
-        },
-    )
-    .await
-    {
-        Reply::Ok => {}
-        other => panic!("{other:?}"),
-    }
-    assert_eq!(store.count().unwrap(), 1);
-}
-
 /// 每次调用建独立临时库的项目存储（测试用；P1g serve 需要）。
 fn test_projects() -> std::sync::Arc<dozerd::projects::ProjectStore> {
     let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
@@ -286,7 +198,6 @@ async fn project_open_and_list_roundtrip() {
     let sock = std::env::temp_dir().join(format!("dozerd-proj-{}.sock", uuid::Uuid::new_v4()));
     let db = std::env::temp_dir().join(format!("dozerd-proj-{}.db", uuid::Uuid::new_v4()));
     let registry = Arc::new(SessionRegistry::new());
-    let store = Arc::new(dozerd::acceptance::AcceptanceStore::open(&db).unwrap());
     let projects = Arc::new(dozerd::projects::ProjectStore::new(&db).unwrap());
     let bookmarks = Arc::new(dozerd::bookmarks::BookmarkStore::new(&db).unwrap());
     let transcripts = Arc::new(dozerd::transcripts::TranscriptStore::open(&db).unwrap());
@@ -299,7 +210,6 @@ async fn project_open_and_list_roundtrip() {
         let (
             sock,
             registry,
-            store,
             projects,
             bookmarks,
             transcripts,
@@ -310,7 +220,6 @@ async fn project_open_and_list_roundtrip() {
         ) = (
             sock.clone(),
             registry.clone(),
-            store.clone(),
             projects.clone(),
             bookmarks.clone(),
             transcripts.clone(),
@@ -323,7 +232,6 @@ async fn project_open_and_list_roundtrip() {
             dozerd::server::serve(
                 &sock,
                 registry,
-                store,
                 projects,
                 bookmarks,
                 transcripts,
@@ -365,7 +273,6 @@ async fn project_open_and_list_roundtrip() {
 async fn record_and_get_session_summary_roundtrip() {
     let sock = std::env::temp_dir().join(format!("dzsum-{}.sock", uuid::Uuid::new_v4()));
     let registry = Arc::new(SessionRegistry::new());
-    let store = test_store();
     let projects = test_projects();
     let bookmarks = test_bookmarks();
     let transcripts = test_transcripts();
@@ -380,7 +287,6 @@ async fn record_and_get_session_summary_roundtrip() {
             dozerd::server::serve(
                 &sock,
                 registry,
-                store,
                 projects,
                 bookmarks,
                 transcripts,
@@ -461,7 +367,6 @@ async fn record_and_get_session_summary_roundtrip() {
 async fn close_with_summary_kills_session_after_ai_summary_recorded() {
     let sock = std::env::temp_dir().join(format!("dzsum-{}.sock", uuid::Uuid::new_v4()));
     let registry = Arc::new(SessionRegistry::new());
-    let store = test_store();
     let projects = test_projects();
     let bookmarks = test_bookmarks();
     let transcripts = test_transcripts();
@@ -476,7 +381,6 @@ async fn close_with_summary_kills_session_after_ai_summary_recorded() {
             dozerd::server::serve(
                 &sock,
                 registry,
-                store,
                 projects,
                 bookmarks,
                 transcripts,
@@ -580,7 +484,6 @@ async fn list_conversations_with_summaries_joins_correctly() {
             dozerd::server::serve(
                 &sock,
                 registry,
-                test_store(),
                 test_projects(),
                 test_bookmarks(),
                 transcripts,

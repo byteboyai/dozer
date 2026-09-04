@@ -1,4 +1,3 @@
-pub mod acceptance;
 pub mod backfill;
 pub mod bookmarks;
 pub mod default_agent_config;

@@ -68,7 +68,6 @@ async fn process_todo_now(
 pub async fn serve(
     socket: &Path,
     registry: Arc<SessionRegistry>,
-    store: Arc<crate::acceptance::AcceptanceStore>,
     projects: Arc<crate::projects::ProjectStore>,
     bookmarks: Arc<crate::bookmarks::BookmarkStore>,
     transcripts: Arc<crate::transcripts::TranscriptStore>,
@@ -96,7 +95,6 @@ pub async fn serve(
             }
         };
         let registry = registry.clone();
-        let store = store.clone();
         let projects = projects.clone();
         let bookmarks = bookmarks.clone();
         let preview_contexts = preview_contexts.clone();
@@ -110,7 +108,6 @@ pub async fn serve(
             if let Err(e) = handle_conn(
                 stream,
                 registry,
-                store,
                 projects,
                 bookmarks,
                 preview_contexts,
@@ -294,7 +291,6 @@ pub fn agent_state_for(event: &str) -> Option<dozer_core::protocol::AgentState> 
 async fn handle_conn(
     stream: UnixStream,
     registry: Arc<SessionRegistry>,
-    store: Arc<crate::acceptance::AcceptanceStore>,
     projects: Arc<crate::projects::ProjectStore>,
     bookmarks: Arc<crate::bookmarks::BookmarkStore>,
     preview_contexts: Arc<PreviewContextStore>,
@@ -400,32 +396,6 @@ async fn handle_conn(
                             }
                             Reply::Ok
                         }
-                        Request::RecordAcceptance {
-                            repo,
-                            goal,
-                            criteria_checked,
-                            verdict,
-                            comment,
-                            ref_name,
-                            ts_ms,
-                        } => {
-                            let rec = crate::acceptance::AcceptanceRecord {
-                                repo,
-                                goal,
-                                criteria_checked,
-                                verdict,
-                                comment,
-                                ref_name,
-                                acceptor: "user".into(), // 一期单人;四期多成员在此扩展
-                                ts_ms,
-                            };
-                            match store.record(&rec) {
-                                Ok(()) => Reply::Ok,
-                                Err(e) => Reply::Error {
-                                    message: format!("验收记录落库失败: {e}"),
-                                },
-                            }
-                        }
                         Request::OpenProject { path } => match projects.open(&path) {
                             Ok(p) => Reply::Project { project: Some(p) },
                             Err(e) => Reply::Error { message: format!("打开项目失败: {e}") },
@@ -445,10 +415,6 @@ async fn handle_conn(
                                 }
                             }
                         }
-                        Request::GetAcceptanceCount { repo } => match store.count_for_repo(&repo) {
-                            Ok(count) => Reply::AcceptanceCount { count },
-                            Err(e) => Reply::Error { message: format!("验收计数失败: {e}") },
-                        },
                         Request::AddBookmark {
                             scope,
                             project_id,
@@ -900,7 +866,6 @@ mod tests {
         fn _assert_signature(
             socket: &std::path::Path,
             registry: std::sync::Arc<crate::registry::SessionRegistry>,
-            store: std::sync::Arc<crate::acceptance::AcceptanceStore>,
             projects: std::sync::Arc<crate::projects::ProjectStore>,
             bookmarks: std::sync::Arc<crate::bookmarks::BookmarkStore>,
             transcripts: std::sync::Arc<crate::transcripts::TranscriptStore>,
@@ -911,7 +876,6 @@ mod tests {
             let fut = crate::server::serve(
                 socket,
                 registry,
-                store,
                 projects,
                 bookmarks,
                 transcripts,

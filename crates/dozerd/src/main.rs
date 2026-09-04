@@ -79,9 +79,6 @@ async fn main() -> Result<()> {
     let projects = Arc::new(dozerd::projects::ProjectStore::new(
         &dozer_core::paths::state_dir().join("dozer.db"),
     )?);
-    let store = Arc::new(dozerd::acceptance::AcceptanceStore::open(
-        &dozer_core::paths::state_dir().join("dozer.db"),
-    )?);
     let bookmarks = Arc::new(dozerd::bookmarks::BookmarkStore::new(
         &dozer_core::paths::state_dir().join("dozer.db"),
     )?);
@@ -115,7 +112,6 @@ async fn main() -> Result<()> {
     let serve = dozerd::server::serve(
         &socket,
         registry,
-        store,
         projects,
         bookmarks,
         transcripts,

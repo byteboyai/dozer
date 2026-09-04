@@ -1,6 +1,6 @@
 //! 项目存储：rusqlite（spec P1g D1）。projects 表（不再有活跃项目指针，
 //! P2a 起 daemon 变成纯会话仓库）。
-//! 与 AcceptanceStore 各持一个到 dozer.db 的连接；项目/验收写频度极低，
+//! 各 store 各持一个到 dozer.db 的连接；项目写频度极低，
 //! 多连接足够（无需连接池）。
 
 use anyhow::{Context, Result};

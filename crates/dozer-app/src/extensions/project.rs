@@ -77,7 +77,6 @@ impl ScaffoldRunState {
 pub struct WorkspaceState {
     branch: Option<String>,
     dirty: bool,
-    project_acceptance_count: Option<u64>,
     /// git remote 的 fetch URL 列表(`delivery::remote_url`)。空 = 无 remote/
     /// 非 git(面板据此显示"未设置")。
     remote_url: Vec<String>,
@@ -217,13 +216,11 @@ impl Operation<()> for CaptureNameEditFocus {
 }
 
 /// 组合 git 刷新结果里跟 Project 有关的部分(`branch`/`dirty`/`remote_url`)、
-/// 验收次数、daemon 改名结果。`GitRefreshed`/`AcceptanceCountLoaded`/
-/// `NameRenamed` 由内核分发,带 `project_id`,走 `with_project`;其余是用户
-/// 交互消息。
+/// daemon 改名结果。`GitRefreshed`/`NameRenamed` 由内核分发,带 `project_id`,
+/// 走 `with_project`;其余是用户交互消息。
 #[derive(Debug, Clone)]
 pub enum Message {
     GitRefreshed(i64, Option<String>, bool, Vec<String>),
-    AcceptanceCountLoaded(i64, Option<u64>),
     /// 磁盘占用统计结果(排除构建产物后的字节数)。
     DiskUsageLoaded(i64, u64),
     /// daemon 改名结果。带 `project_id`,走 `with_project` 路由。
@@ -315,7 +312,7 @@ pub enum Message {
 }
 
 /// 处理全部消息——本模块不触碰终端会话域,没有需要内核拦截、`update` 里
-/// `unreachable!` 的消息(不像 Files/Acceptance);改名需要 daemon 往返,走
+/// `unreachable!` 的消息(不像 Files);改名需要 daemon 往返,走
 /// `handle`/`emit`。
 #[allow(clippy::too_many_arguments)]
 pub fn update(
@@ -333,9 +330,6 @@ pub fn update(
             ws_state.branch = branch;
             ws_state.dirty = dirty;
             ws_state.remote_url = remote_url;
-        }
-        Message::AcceptanceCountLoaded(_, n) => {
-            ws_state.project_acceptance_count = n;
         }
         Message::DiskUsageLoaded(_, bytes) => {
             ws_state.disk_usage_bytes = Some(bytes);
@@ -810,14 +804,6 @@ pub fn view<'a>(
                 .into()
         };
     content = content.push(description_block);
-
-    if let Some(n) = ws_state.project_acceptance_count.filter(|n| *n > 0) {
-        content = content.push(
-            text(format!("{n} 次验收"))
-                .size(byteui::theme::font::caption())
-                .color(byteui::theme::color::current().gold),
-        );
-    }
 
     let usage_label = ws_state
         .disk_usage_bytes
@@ -1544,23 +1530,6 @@ mod tests {
         );
         assert_eq!(ws.branch(), Some("main"));
         assert!(ws.dirty());
-    }
-
-    #[test]
-    fn acceptance_count_loaded_sets_field() {
-        let mut ws = new_ws();
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        update(
-            &mut ws,
-            Message::AcceptanceCountLoaded(1, Some(3)),
-            1,
-            "名字",
-            &test_repo_path(),
-            &test_client(),
-            rt.handle(),
-            |_| {},
-        );
-        assert_eq!(ws.project_acceptance_count, Some(3));
     }
 
     #[test]

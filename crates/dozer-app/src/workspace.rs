@@ -36,7 +36,6 @@ use crate::app::{
 };
 use crate::conversation::{self, SessionRow};
 use crate::delivery::{self};
-use crate::extensions::acceptance;
 use crate::extensions::browser;
 use crate::extensions::database;
 use crate::extensions::files;
@@ -242,10 +241,6 @@ pub struct SessionTab {
     /// OSC 133;D 上报的最近命令退出码；非零时终端栏红字提示；
     /// 下一条命令开始（133;C）时清除。
     pub last_exit: Option<i32>,
-    /// TurnEnded 检测出的"交付待验收"标记（spec P1f D3）。
-    pub delivery_pending: bool,
-    /// 上一次 TurnEnded 时的 HEAD（无沉淀 ref 时的比对基线）。
-    pub last_turn_head: Option<String>,
     /// 最近一次 hook 事件后从 transcript 尾部提取的模型 id(原始,未美化;
     /// 渲染时经 `format_model_label`)。仅 `agent == AgentKind::Claude` 会
     /// 被填充,其余 agent 恒 `None`。不叫 `model`——上面已有一个
@@ -388,9 +383,6 @@ pub struct Workspace {
     /// `dozer://flyfish/__file__` 端点的文件白名单;与 main.rs 的协议
     /// 闭包共享(Arc),打开文件时插入.
     pub(crate) allowed_files: Arc<Mutex<HashSet<PathBuf>>>,
-    /// 进行中的验收——验收面板 per-project 状态,见
-    /// `extensions::acceptance::WorkspaceState`。
-    pub(crate) acceptance: acceptance::WorkspaceState,
     /// 进行中的会话审阅（审阅 tab 内容;None=未打开;P1i）。
     pub(crate) review: Option<ReviewView>,
     /// `dozer://review-trace/data.json` 协议端点回显的当前审阅内容快照
@@ -438,8 +430,8 @@ pub struct Workspace {
     /// 选另一个)。
     pub(crate) conversation_agent_picker_open: bool,
     /// 当前项目的 agent 用量统计（会话粒度；扫描+解析全量 transcript，比
-    /// `conversations` 贵得多,所以不像它那样跟着 `DeliveryChecked` 自动
-    /// 刷新——只在切到 Usage 面板或点手动刷新按钮时才重新扫
+    /// `conversations` 贵得多,所以不像它那样在回合结束时自动刷新——只在
+    /// 切到 Usage 面板或点手动刷新按钮时才重新扫
     /// （spec 非目标"不做实时更新"）。
     /// Usage 面板 per-project 状态——见 `extensions::usage::WorkspaceState`。
     pub(crate) usage: usage::WorkspaceState,
@@ -543,8 +535,6 @@ impl Workspace {
                 osc: OscScanner::new(),
                 cwd: None,
                 last_exit: None,
-                delivery_pending: false,
-                last_turn_head: None,
                 llm_model: None,
                 permission_mode: None,
                 last_activity: None,
@@ -592,7 +582,6 @@ impl Workspace {
         spawn_project_git_refresh(project_id, repo_path.clone(), io);
         spawn_disk_usage_refresh(project_id, repo_path, io);
         ws.spawn_conversations_refresh(io);
-        ws.spawn_acceptance_count_refresh(io);
         browser::request_bookmarks_refresh(
             ws.project.as_ref().map(|p| p.id),
             &io.client,
@@ -658,7 +647,6 @@ impl Workspace {
             preview_context_nonce: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             browser: browser::State::default(),
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
-            acceptance: acceptance::WorkspaceState::default(),
             review: None,
             review_snapshot: Arc::new(Mutex::new(None)),
             review_nonce: 0,
@@ -1026,31 +1014,6 @@ impl Workspace {
         usage::spawn_refresh(project_id, project_path, &io.client, &io.handle, emit);
     }
 
-    /// 异步取当前项目验收次数 → AcceptanceCountLoaded（项目卡副行）。
-    /// 查询键走 `acceptance_query_repo`（= 落库侧 `delivery::repo_root`），
-    /// 而非原始 `p.path`，否则子目录/符号链接路径撞不到库、副行静默空白。
-    pub(crate) fn spawn_acceptance_count_refresh(&self, io: &ShellIo) {
-        let Some(p) = &self.project else { return };
-        let project_id = p.id;
-        let project_path = p.path.clone();
-        let client = io.client.clone();
-        let proxy = io.proxy.clone();
-        io.handle.spawn(async move {
-            // repo_root 是阻塞 git 调用，隔离到 spawn_blocking。
-            let repo = tokio::task::spawn_blocking(move || acceptance_query_repo(&project_path))
-                .await
-                .ok()
-                .flatten();
-            let n = match repo {
-                Some(repo) => client.acceptance_count(&repo).await.ok(),
-                None => None,
-            };
-            let _ = proxy.send_event(Message::Project(project::Message::AcceptanceCountLoaded(
-                project_id, n,
-            )));
-        });
-    }
-
     /// 本 `Workspace` 归属的项目 id。所有"发起时已知项目、结果晚些才回来"的
     /// 异步任务都要带上它,让 [`App::with_project`] 能投回原主(见
     /// [`ProjectId`])。`None` 只可能出现在 `ProjectOpened` 单条消息内部那个
@@ -1202,21 +1165,20 @@ impl Workspace {
     }
 
     /// 项目切换清理：关掉所有终端 tab（=结束会话，同 CloseTab 语义）与
-    /// 所有预览 tab，给新项目一个干净起点（P1g 验收反馈）。webview 池由
+    /// 所有预览 tab，给新项目一个干净起点。webview 池由
     /// main.rs 的 sync_previews 依据空的期望清单自动销毁。
     pub(crate) fn close_all_tabs_for_switch(&mut self, io: &ShellIo) {
         while !self.tabs.is_empty() {
             self.close_tab(io, 0);
         }
         self.preview.clear_all();
-        self.acceptance = acceptance::WorkspaceState::default();
         self.preview_error = None;
         self.term_tab_first = 0;
         self.preview_tab_first = 0;
     }
 
     /// 让这份 `Workspace` 认领一个项目:项目相关的字段整体换成该项目的,
-    /// 再把"要等 IO 才有结果"的部分(终端/git/对话/验收次数)异步补上。
+    /// 再把"要等 IO 才有结果"的部分(终端/git/对话)异步补上。
     ///
     /// 两个调用方共用:`ProjectOpened`(把当前页签就地改写成另一个项目,
     /// 调用前已 `close_all_tabs_for_switch` 清场)与
@@ -1263,7 +1225,6 @@ impl Workspace {
         spawn_project_git_refresh(project_id, repo_path.clone(), io);
         spawn_disk_usage_refresh(project_id, repo_path, io);
         self.spawn_conversations_refresh(io);
-        self.spawn_acceptance_count_refresh(io);
         browser::request_bookmarks_refresh(
             self.project.as_ref().map(|p| p.id),
             &io.client,
@@ -1914,8 +1875,6 @@ impl Workspace {
             osc: OscScanner::new(),
             cwd: None,
             last_exit: None,
-            delivery_pending: false,
-            last_turn_head: None,
             llm_model: None,
             permission_mode: None,
             last_activity: None,
@@ -2007,11 +1966,6 @@ impl Workspace {
     /// `self.browser`。
     pub fn browser_addr_focused(&self) -> bool {
         self.browser.addr_focused()
-    }
-
-    /// 验收意见框是否持有 iced 真实焦点(main.rs 原生放行闸门用)。
-    pub fn comment_focused(&self) -> bool {
-        self.acceptance.comment_focused()
     }
 
     /// `kind` 是 `is_in_preview_column` 命中的面板(`Files` 或
@@ -2298,11 +2252,11 @@ pub(crate) fn apply_agent_card_refresh(
     tab.workspace_override = workspace;
 }
 
-/// 异步跑一次组合 git 查询(分支/脏/文件状态/remote),完成后分发成两条
+/// 项目 git/磁盘状态在多个地方触发刷新,完成后分发成两条
 /// 独立消息:`Files(StatusesRefreshed)` 只带文件级状态,`Project(GitRefreshed)`
 /// 带分支/脏/remote。两个 extension 互不知道对方存在,内核是唯一知道
-/// "这两份数据同源"的地方(设计文档"关键语义确认")。4 个既有调用点:
-/// `Workspace::from_restore`/`adopt_project`/回合结束(`DeliveryChecked`)/
+/// "这两份数据同源"的地方(设计文档"关键语义确认")。既有调用点:
+/// `Workspace::from_restore`/`adopt_project`/回合结束(`agent_state_changed`)/
 /// `Message::ProjectFsChanged`——因为要同时认识 `files::Message`/
 /// `project::Message` 两个类型,不适合作为任何一个 extension 的自由函数,
 /// 也不需要 `&self`,做成纯自由函数、参数显式传入。
@@ -3759,21 +3713,6 @@ pub(crate) fn relative_time_text(modified_ms: u64, now_ms: u64) -> String {
     }
 }
 
-/// 交付/验收使用的仓库：当前项目优先，无则回落会话 cwd（P1f 现状；P1g D4）。
-pub(crate) fn effective_project_repo(active: Option<&Path>, session_cwd: &Path) -> PathBuf {
-    active
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| session_cwd.to_path_buf())
-}
-
-/// 从项目路径求"验收查询键"：与落库侧同款 `delivery::repo_root`（git
-/// toplevel，解析符号链接/子目录），保证 `count_for_repo` 精确匹配命中。
-/// 非 git 路径返回 `None`——验收依赖 git ref 沉淀，非 git 仓库不可能有记录，
-/// 直接不查，别拿未规范化的原始路径去撞库（会静默查不到→副行空白）。
-pub(crate) fn acceptance_query_repo(project_path: &str) -> Option<String> {
-    delivery::repo_root(Path::new(project_path)).map(|p| p.to_string_lossy().into_owned())
-}
-
 /// agent 选择菜单选中的 agent → 要自动键入 PTY 的 CLI 命令名。`Unknown`
 /// 不该从选择菜单产生(选项只有 Claude/CodeBuddy/OpenCode/纯 Shell 四选
 /// 一,纯 Shell 走 `launch: None`,不经过这个函数),但函数保持穷尽
@@ -4526,32 +4465,6 @@ mod tests {
     }
 
     #[test]
-    fn acceptance_query_repo_none_for_non_git_path() {
-        // 非 git 目录必须回 None(不能退化成原始路径去撞库——Important #2)。
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(
-            acceptance_query_repo(&dir.path().to_string_lossy()),
-            None,
-            "非 git 临时目录应回 None"
-        );
-        // 不存在的路径同样 None(repo_root 先做 is_dir 检查)。
-        assert_eq!(acceptance_query_repo("/no/such/path/xyz"), None);
-    }
-
-    #[test]
-    fn effective_project_repo_prefers_active() {
-        use std::path::Path;
-        assert_eq!(
-            effective_project_repo(Some(Path::new("/proj")), Path::new("/home/me")),
-            PathBuf::from("/proj")
-        );
-        assert_eq!(
-            effective_project_repo(None, Path::new("/home/me")),
-            PathBuf::from("/home/me")
-        );
-    }
-
-    #[test]
     fn relative_time_text_boundaries() {
         assert_eq!(relative_time_text(1000, 1000), "刚刚");
         assert_eq!(relative_time_text(0, 59_000), "刚刚");
@@ -4726,8 +4639,6 @@ mod tests {
             osc: OscScanner::new(),
             cwd: None,
             last_exit: None,
-            delivery_pending: false,
-            last_turn_head: None,
             llm_model: None,
             permission_mode: None,
             last_activity: None,

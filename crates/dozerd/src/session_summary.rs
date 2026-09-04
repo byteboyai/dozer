@@ -1,5 +1,5 @@
 //! 会话总结存储:rusqlite 单表,主键 session_id(spec 2026-08-27)。
-//! Mutex<Connection>——同 AcceptanceStore,写入频度低,无需连接池。
+//! Mutex<Connection>——写入频度低,无需连接池。
 
 use anyhow::{Context, Result};
 use dozer_core::protocol::{AgentKind, SessionSummaryPayload, SummaryStatus};

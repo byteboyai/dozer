@@ -371,16 +371,6 @@ pub enum Request {
         cwd: String,
         since_ts: Option<u64>,
     },
-    /// 验收通过的结构性记录（spec P1f D5）；acceptor 由 daemon 侧补 "user"。
-    RecordAcceptance {
-        repo: String,
-        goal: String,
-        criteria_checked: Vec<String>,
-        verdict: String,
-        comment: String,
-        ref_name: String,
-        ts_ms: u64,
-    },
     /// 打开一个目录为项目（已存在则更新活跃时间，返回该项目信息）。
     /// P2a 起不再有"顺带置为当前项目"的副作用——daemon 不维护活跃项目
     /// 概念，"当前显示哪个项目"完全是 GUI 侧的本地状态。
@@ -412,10 +402,6 @@ pub enum Request {
     /// agent 存储目录本身(那个由 dozerd 内部用 `agent_paths` 算)。
     DeleteProjectTranscripts {
         cwd: String,
-    },
-    /// 取某仓库的验收次数（项目卡"N 次验收"用）。
-    GetAcceptanceCount {
-        repo: String,
     },
     /// 加入收藏(幂等:同 scope+project_id+url 已存在则 no-op)。
     AddBookmark {
@@ -633,10 +619,6 @@ pub enum Reply {
     /// (三家 agent 加总)。0 不代表出错——可能这个项目本来就没被摄取过。
     DeletedTranscripts {
         conversations: u32,
-    },
-    /// 验收次数。
-    AcceptanceCount {
-        count: u64,
     },
     /// 收藏夹列表。
     Bookmarks {
@@ -1030,21 +1012,6 @@ mod tests {
     }
 
     #[test]
-    fn record_acceptance_roundtrips() {
-        let req = Request::RecordAcceptance {
-            repo: "/r".into(),
-            goal: "目标".into(),
-            criteria_checked: vec!["测试全绿".into()],
-            verdict: "accepted".into(),
-            comment: "".into(),
-            ref_name: "refs/dozer/accepted/1".into(),
-            ts_ms: 9,
-        };
-        let back: Request = decode_line(encode_line(&req).trim()).unwrap();
-        assert_eq!(back, req);
-    }
-
-    #[test]
     fn agent_event_carries_transcript_path() {
         let line = encode_line(&Reply::AgentEvent {
             session_id: "s".into(),
@@ -1074,16 +1041,6 @@ mod tests {
             r#"{"id":"a","name":"n","command":"/bin/sh","cwd":"/tmp","alive":true,"created_ms":1}"#;
         let info: SessionInfo = decode_line(old).unwrap();
         assert_eq!(info.transcript_path, None);
-    }
-
-    #[test]
-    fn acceptance_count_request_roundtrips() {
-        let req = Request::GetAcceptanceCount { repo: "/r".into() };
-        let back: Request = decode_line(&encode_line(&req)).unwrap();
-        assert_eq!(back, req);
-        let rep = Reply::AcceptanceCount { count: 12 };
-        let back: Reply = decode_line(&encode_line(&rep)).unwrap();
-        assert_eq!(back, rep);
     }
 
     #[test]

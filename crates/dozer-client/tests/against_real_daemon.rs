@@ -16,7 +16,6 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
     let s = sock.clone();
     let r = registry.clone();
     let db = std::path::PathBuf::from(format!("/tmp/dz-{}.db", uuid::Uuid::new_v4()));
-    let store = Arc::new(dozerd::acceptance::AcceptanceStore::open(&db).unwrap());
     let projects = Arc::new(dozerd::projects::ProjectStore::new(&db).unwrap());
     let bookmarks = Arc::new(dozerd::bookmarks::BookmarkStore::new(&db).unwrap());
     let transcripts = Arc::new(dozerd::transcripts::TranscriptStore::open(&db).unwrap());
@@ -29,7 +28,6 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
         dozerd::server::serve(
             &s,
             r,
-            store,
             projects,
             bookmarks,
             transcripts,

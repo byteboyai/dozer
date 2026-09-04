@@ -1,4 +1,4 @@
-//! Todo 存储:rusqlite,与 `ProjectStore`/`AcceptanceStore`/`BookmarkStore`
+//! Todo 存储:rusqlite,与 `ProjectStore`/`BookmarkStore`
 //! 共享同一个 `dozer.db`(见 `main.rs` 里 `new` 时传入同一路径)。任务
 //! 正文+全部元数据(派发记录/计划日期/完成时间)合并成一张表、一行一条
 //! 任务,`id` 是稳定身份,取代 v1(`.dozer/todo.md` + `todo_meta.json`)

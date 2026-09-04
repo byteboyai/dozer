@@ -148,7 +148,7 @@ mod tests {
             1,
             PanelLayout {
                 left_view: PanelKind::Project,
-                right_view: PanelKind::Acceptance,
+                right_view: PanelKind::Usage,
                 left_collapsed: true,
                 right_collapsed: false,
                 dims: PanelDims::default(),
@@ -178,7 +178,7 @@ mod tests {
             1,
             PanelLayout {
                 left_view: PanelKind::Project,
-                right_view: PanelKind::Acceptance,
+                right_view: PanelKind::Usage,
                 left_collapsed: true,
                 right_collapsed: false,
                 dims: PanelDims::default(),

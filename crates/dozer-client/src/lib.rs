@@ -30,19 +30,6 @@ pub struct Client {
     socket: PathBuf,
 }
 
-/// `Client::record_acceptance` 的参数对象:原先 7 个位置参数里 `repo`/
-/// `goal`/`verdict`/`comment`/`ref_name` 五个都是 `&str`,顺序传错编译器
-/// 发现不了(Rust Design Patterns:Builder,用具名字段替代同类型位置参数)。
-pub struct RecordAcceptanceParams<'a> {
-    pub repo: &'a str,
-    pub goal: &'a str,
-    pub criteria_checked: &'a [String],
-    pub verdict: &'a str,
-    pub comment: &'a str,
-    pub ref_name: &'a str,
-    pub ts_ms: u64,
-}
-
 impl Client {
     pub fn new(socket: PathBuf) -> Self {
         Self { socket }
@@ -175,24 +162,6 @@ impl Client {
         }
     }
 
-    pub async fn record_acceptance(&self, params: RecordAcceptanceParams<'_>) -> Result<()> {
-        match self
-            .roundtrip(&Request::RecordAcceptance {
-                repo: params.repo.into(),
-                goal: params.goal.into(),
-                criteria_checked: params.criteria_checked.to_vec(),
-                verdict: params.verdict.into(),
-                comment: params.comment.into(),
-                ref_name: params.ref_name.into(),
-                ts_ms: params.ts_ms,
-            })
-            .await?
-        {
-            Reply::Ok => Ok(()),
-            other => bail!("意外应答: {other:?}"),
-        }
-    }
-
     pub async fn open_project(&self, path: &str) -> Result<Option<ProjectInfo>> {
         match self
             .roundtrip(&Request::OpenProject { path: path.into() })
@@ -221,17 +190,6 @@ impl Client {
         match self.roundtrip(&Request::ListProjects).await? {
             Reply::Projects { projects } => Ok(projects),
             other => bail!("意外应答: {other:?}"),
-        }
-    }
-
-    pub async fn acceptance_count(&self, repo: &str) -> Result<u64> {
-        match self
-            .roundtrip(&Request::GetAcceptanceCount { repo: repo.into() })
-            .await?
-        {
-            Reply::AcceptanceCount { count } => Ok(count),
-            Reply::Error { message } => Err(anyhow::anyhow!(message)),
-            other => Err(anyhow::anyhow!("非预期应答: {other:?}")),
         }
     }
 

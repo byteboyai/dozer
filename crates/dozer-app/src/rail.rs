@@ -1,5 +1,5 @@
 // crates/dozer-app/src/rail.rs
-//! 图标栏(Rail):11 个面板挂载的两条侧栏,支持点击切换、同栏重排、跨栏
+//! 图标栏(Rail):10 个面板挂载的两条侧栏,支持点击切换、同栏重排、跨栏
 //! 拖拽换边。类型 + 纯逻辑 + 槽位动画 + 渲染都在这个模块——不是
 //! `extensions/` 那种私有 Message+State+update+view 的 extension 形态,
 //! `rail_layout`/`rail_drag`/`rail_slot_anims` 三个字段仍然挂在
@@ -12,7 +12,7 @@ use crate::theme;
 use byteui::interaction::icons;
 use iced_widget::core::mouse;
 use iced_widget::core::{Border, Element, Length, Padding};
-use iced_widget::{MouseArea, column, container, stack};
+use iced_widget::{MouseArea, column, container};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -84,7 +84,7 @@ impl RailLayout {
     }
 
     /// 给定面板,反查它当前挂在哪条栏。`RailLayout` 的不变式(见
-    /// `sanitize_rail_layout`)保证 11 个面板不重不漏分布在两条栏,
+    /// `sanitize_rail_layout`)保证 10 个面板不重不漏分布在两条栏,
     /// 所以这里的 `expect` 不会在合法状态下触发——`RailLayout` 一旦
     /// 通不过消毒就已经在 `layout::load_from` 里回落 `default()` 了,
     /// 不会带着"某个面板哪条栏都不在"的坏数据流到这里。
@@ -122,17 +122,12 @@ impl Default for RailLayout {
                 PanelKind::Ssh,
                 PanelKind::Web,
             ],
-            right: vec![
-                PanelKind::Agent,
-                PanelKind::Conversations,
-                PanelKind::Usage,
-                PanelKind::Acceptance,
-            ],
+            right: vec![PanelKind::Agent, PanelKind::Conversations, PanelKind::Usage],
         }
     }
 }
 
-/// `RailLayout` 的消毒:任一栏为空,或两侧合计不是恰 11 个不重复的
+/// `RailLayout` 的消毒:任一栏为空,或两侧合计不是恰 10 个不重复的
 /// `PanelKind`(手改/版本不一致导致的坏数据),整个回落 `default()`。
 /// 不做部分修复——缺一个面板就补在默认栏这种中间态比"直接用默认值"
 /// 更难排查。
@@ -143,7 +138,7 @@ pub(crate) fn sanitize_rail_layout(rail: RailLayout) -> RailLayout {
     let mut all: Vec<_> = rail.left.iter().chain(rail.right.iter()).collect();
     all.sort_by_key(|k| format!("{k:?}"));
     all.dedup();
-    if all.len() != 11 || rail.left.len() + rail.right.len() != 11 {
+    if all.len() != 10 || rail.left.len() + rail.right.len() != 10 {
         return RailLayout::default();
     }
     rail
@@ -364,13 +359,9 @@ pub(crate) fn icon_rail(
                 move |hovered| Message::Hover(HoverId::Rail(RailButton::Panel(kind)), hovered),
                 tooltip,
             );
-        let entry = match panel_badge(app, kind) {
-            Some(badge) => stack![base, badge].into(),
-            None => base,
-        };
         let y = region.padding.top + app.rail_slot_position(side, kind, idx) * step;
         let positioned = container(rail_drag_surface(
-            entry,
+            base,
             side,
             idx,
             app.rail_drag_confirmed(),
@@ -450,7 +441,7 @@ pub(crate) fn icon_rail(
         .into()
 }
 
-/// 面板 → (图标, 图标栏 tooltip 文案)。11 个 `PanelKind` variant 逐一
+/// 面板 → (图标, 图标栏 tooltip 文案)。10 个 `PanelKind` variant 逐一
 /// 对应,顺序与 `PanelKind` 定义顺序一致,不代表渲染顺序(渲染顺序看
 /// `RailLayout`)。
 fn panel_meta(kind: PanelKind) -> (icons::IconKind, &'static str) {
@@ -465,42 +456,9 @@ fn panel_meta(kind: PanelKind) -> (icons::IconKind, &'static str) {
         PanelKind::Agent => (icons::IconKind::Brain, "代理"),
         PanelKind::Conversations => (icons::IconKind::BotMessageSquare, "对话"),
         PanelKind::Usage => (icons::IconKind::BarChart3, "用量"),
-        PanelKind::Acceptance => (icons::IconKind::BadgeCheck, "验收"),
     }
 }
 
-/// 面板专属的按钮徽标装饰(目前只有验收面板有:当前激活 tab 有待处理
-/// 交付时,右上角叠一个金色小圆点)。其余 10 个面板返回 `None`。
-fn panel_badge(
-    app: &App,
-    kind: PanelKind,
-) -> Option<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> {
-    if kind != PanelKind::Acceptance {
-        return None;
-    }
-    let pending = app
-        .active_workspace()
-        .and_then(|ws| ws.tabs.get(ws.active))
-        .map(|t| t.delivery_pending)
-        .unwrap_or(false);
-    if !pending {
-        return None;
-    }
-    Some(
-        container(iced_widget::Space::new())
-            .width(Length::Fixed(8.0))
-            .height(Length::Fixed(8.0))
-            .style(|_t: &iced_widget::Theme| container::Style {
-                background: Some(byteui::theme::color::current().gold.into()),
-                border: Border {
-                    radius: 4.0.into(),
-                    ..Border::default()
-                },
-                ..container::Style::default()
-            })
-            .into(),
-    )
-}
 /// 给一个图标栏按钮包上"拖拽换栏/换位"的感应层,手法同 `tab_core::select`
 /// (`MouseArea::on_press`)——**这一层现在是按钮唯一的选中/拖拽入口**,
 /// 调用方必须给内层 `icon_button_entry` 传 `interactive: false`(见本函数
@@ -671,17 +629,17 @@ mod tests {
         );
     }
 
-    /// `RailLayout::default()` 把 11 个面板不重不漏分到左右两栏,
-    /// 与现状 7/4 分组逐一对应(防漂移锚)。
+    /// `RailLayout::default()` 把 10 个面板不重不漏分到左右两栏,
+    /// 与现状 7/3 分组逐一对应(防漂移锚)。
     #[test]
     fn rail_layout_default_covers_all_panels_without_duplicates() {
         let rail = RailLayout::default();
         assert_eq!(rail.left.len(), 7);
-        assert_eq!(rail.right.len(), 4);
+        assert_eq!(rail.right.len(), 3);
         let mut all: Vec<_> = rail.left.iter().chain(rail.right.iter()).collect();
         all.sort_by_key(|k| format!("{k:?}"));
         all.dedup();
-        assert_eq!(all.len(), 11, "11 个面板不重不漏分到左右两栏");
+        assert_eq!(all.len(), 10, "10 个面板不重不漏分到左右两栏");
     }
 
     #[test]
@@ -697,11 +655,10 @@ mod tests {
         assert_eq!(rail.side_of(PanelKind::Files), Side::Left);
         assert_eq!(rail.side_of(PanelKind::Web), Side::Left);
         assert_eq!(rail.side_of(PanelKind::Agent), Side::Right);
-        assert_eq!(rail.side_of(PanelKind::Acceptance), Side::Right);
     }
 
     /// `sanitize_rail_layout` 对坏数据回落默认:任一栏为空、面板重复、
-    /// 面板数不是 11——任一情形都不做部分修复。
+    /// 面板数不是 10——任一情形都不做部分修复。
     #[test]
     fn sanitize_rail_layout_falls_back_to_default_on_bad_data() {
         // 左侧为空。
@@ -711,17 +668,17 @@ mod tests {
         };
         assert_eq!(sanitize_rail_layout(empty_left), RailLayout::default());
 
-        // 面板数不是 11。
+        // 面板数不是 10。
         let too_few = RailLayout {
             left: vec![PanelKind::Files],
             right: vec![PanelKind::Agent],
         };
         assert_eq!(sanitize_rail_layout(too_few), RailLayout::default());
 
-        // 面板重复(缺一个面板 + 重复另一个,合计仍 11 但去重后不足)。
+        // 面板重复(缺一个面板 + 重复另一个,合计仍 10 但去重后不足)。
         let dup = RailLayout {
             left: vec![PanelKind::Files; 7],
-            right: vec![PanelKind::Agent; 4],
+            right: vec![PanelKind::Agent; 3],
         };
         assert_eq!(sanitize_rail_layout(dup), RailLayout::default());
 

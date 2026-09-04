@@ -7,7 +7,6 @@ mod diff_render;
 mod extensions;
 mod fonts;
 mod git_watch;
-mod goal;
 mod homespace;
 mod keymap;
 mod layout;
@@ -1231,7 +1230,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 || app.git_log_search_focused()
                 || app.ssh_form_open()
                 || app.database_form_open()
-                || app.comment_focused()
                 || app.project_name_focused()
                 || app.query_focused()
             {
@@ -2562,20 +2560,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                         false
                                     };
 
-                                // 验收意见框(Stage 6):同款每帧查真实焦点态。
-                                let comment_focused =
-                                    if matches!(app.left_view(), crate::app::PanelKind::Acceptance)
-                                    {
-                                        run_operate(
-                                            &mut interface,
-                                            renderer,
-                                            &mut extensions::acceptance::CaptureCommentFocus,
-                                        );
-                                        extensions::acceptance::take_comment_focused()
-                                    } else {
-                                        false
-                                    };
-
                                 // 项目名称编辑框(Stage 6):渲染在 `PanelKind::
                                 // Project`,同款每帧查真实焦点态。
                                 let name_edit_focused =
@@ -2784,7 +2768,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 app.set_todo_content_focused(content_edit_focused);
                                 app.set_category_rename_focused(category_rename_focused);
                                 app.set_detail_reply_focused(detail_reply_focused);
-                                app.set_comment_focused(comment_focused);
                                 app.set_project_name_focused(name_edit_focused);
                                 app.set_query_focused(query_focused);
                                 app.set_conversation_search_focused(conversation_search_focused);

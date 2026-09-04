@@ -21,7 +21,7 @@ use crate::theme;
 /// 窗口逻辑尺寸 → `side` 这一侧当前活跃 webview 面板(如果有)的内容区
 /// 矩形(逻辑像素 x/y/w/h),供 main.rs 摆放 wry webview 用。`side` 这一
 /// 侧收起、或不是 webview 面板(GitLog/Todo/Database/Ssh/Agent/
-/// Conversations/Usage/Acceptance)时返回零尺寸矩形。
+/// Conversations/Usage)时返回零尺寸矩形。
 ///
 /// 放大态:另一侧被放大时这一侧内容被 `maximize_overlay` 的变暗遮罩整片
 /// 盖住——但 wry webview 是原生子视图,不听 iced 的绘制顺序摆布,会无视
@@ -111,13 +111,12 @@ pub fn preview_content_bounds_for(
                 (x, y, w, h)
             }
             // Database/Ssh/Todo/GitLog 纯 iced 绘制,不挂 webview 子视图;
-            // Agent/Usage/Acceptance 同理——任一侧放大只要显示的是这几种,
+            // Agent/Usage 同理——任一侧放大只要显示的是这几种,
             // 都没有 webview 可摆。
             PanelKind::Database
             | PanelKind::Ssh
             | PanelKind::Agent
-            | PanelKind::Usage
-            | PanelKind::Acceptance => (0.0, 0.0, 0.0, 0.0),
+            | PanelKind::Usage => (0.0, 0.0, 0.0, 0.0),
             // 审阅内容放大态:跟非放大态同一份 `!mirrored` 理由,只是
             // x0/avail_w/avail_h 换成放大盒子的换算(同 Files/Project 放大
             // 态分支)。
@@ -236,7 +235,7 @@ pub fn preview_content_bounds_for(
         PanelKind::Ssh => (0.0, 0.0, 0.0, 0.0),
         // Stage 4a 跨栏拖拽:该侧视图可为另一栏面板,纯 iced 绘制、该侧
         // 无 webview 可摆,装空矩形。
-        PanelKind::Agent | PanelKind::Usage | PanelKind::Acceptance => (0.0, 0.0, 0.0, 0.0),
+        PanelKind::Agent | PanelKind::Usage => (0.0, 0.0, 0.0, 0.0),
         // 审阅内容(2026-08-21 webview trace 改造):跟 Files/Project 同款
         // "配对列宽 + preview chrome 高度"算法,但 `mirrored` 要取反——
         // app.rs 的 `PanelKind::Conversations` 分支未镜像时渲染顺序是
@@ -741,7 +740,7 @@ mod tests {
     /// 矩形,见 `preview_content_bounds_conversations_*` 两个测试)。
     #[test]
     fn preview_content_bounds_bare_for_right_panel_on_left() {
-        for kind in [PanelKind::Agent, PanelKind::Usage, PanelKind::Acceptance] {
+        for kind in [PanelKind::Agent, PanelKind::Usage] {
             let state = ShellState {
                 left_view: kind,
                 ..test_state()
@@ -768,12 +767,7 @@ mod tests {
     /// 不得命中 `_ => unreachable!`)。
     #[test]
     fn is_in_preview_column_false_for_right_panel_on_left() {
-        for kind in [
-            PanelKind::Agent,
-            PanelKind::Conversations,
-            PanelKind::Usage,
-            PanelKind::Acceptance,
-        ] {
+        for kind in [PanelKind::Agent, PanelKind::Conversations, PanelKind::Usage] {
             let state = ShellState {
                 left_view: kind,
                 ..test_state()
@@ -840,7 +834,7 @@ mod tests {
         let state = ShellState {
             layout: ShellLayout {
                 rail_layout: rail::RailLayout {
-                    // Project 从默认左栏挪到右栏(11 个面板不重不漏),
+                    // Project 从默认左栏挪到右栏(10 个面板不重不漏),
                     // 保持 `side_of` 不变式——Project 只出现在右栏。
                     left: vec![
                         PanelKind::Todo,
@@ -855,7 +849,6 @@ mod tests {
                         PanelKind::Agent,
                         PanelKind::Conversations,
                         PanelKind::Usage,
-                        PanelKind::Acceptance,
                     ],
                 },
                 ..ShellLayout::default()

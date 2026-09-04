@@ -1,5 +1,5 @@
-//! 收藏夹存储:rusqlite,与 `ProjectStore`/`AcceptanceStore` 共享同一个
-//! `dozer.db`(见 `main.rs` 里三者各自 `new`/`open` 时传入同一路径)。
+//! 收藏夹存储:rusqlite,与 `ProjectStore` 共享同一个
+//! `dozer.db`(见 `main.rs` 里各 store 各自 `new`/`open` 时传入同一路径)。
 //! `bookmarks` 表用两条局部唯一索引分别去重全局/项目收藏——SQLite 的
 //! 表级 `UNIQUE` 把多个 NULL 视为互不相同,`project_id` 为 NULL 时不能靠
 //! 它给全局收藏去重,必须用 `WHERE scope = 'global'` 的局部索引。

@@ -12,8 +12,6 @@
 //! `docs/superpowers/specs/2026-08-08-app-workspace-file-split-design.md`.
 
 use crate::conversation::SessionRow;
-use crate::delivery;
-use crate::extensions::acceptance;
 use crate::extensions::browser;
 use crate::extensions::database;
 use crate::extensions::files;
@@ -41,11 +39,10 @@ use crate::webview_geometry;
 use crate::workspace::{
     CONVERSATION_DETAIL_PAGE_SIZE, PickerLaunch, RestorePayload, ReviewSource, ReviewView, ShellIo,
     SshOut, TabBackend, Workspace, agent_list_pane, agent_picker_popup, conversation_list_pane,
-    dot_color, edit_discard_confirm_popup, edit_modal, effective_project_repo, exited_marker,
-    fetch_project_restore, no_project_placeholder, preview_pane, project_preview_pane,
-    relative_time_text, review_content_pane, review_should_refresh_on_turn,
-    spawn_disk_usage_refresh, spawn_project_git_refresh, split_portions, tab_display_width,
-    tab_title,
+    dot_color, edit_discard_confirm_popup, edit_modal, exited_marker, fetch_project_restore,
+    no_project_placeholder, preview_pane, project_preview_pane, relative_time_text,
+    review_content_pane, review_should_refresh_on_turn, spawn_disk_usage_refresh,
+    spawn_project_git_refresh, split_portions, tab_display_width, tab_title,
 };
 use byteui::interaction::icons;
 use dozer_client::Client;
@@ -100,9 +97,9 @@ fn merge_review_entries(existing: &mut Vec<ReviewEntry>, new: Vec<ReviewEntry>, 
     }
 }
 
-/// 工作区 11 个面板的统一标识——workspace 图标栏拖拽换栏功能
+/// 工作区 10 个面板的统一标识——workspace 图标栏拖拽换栏功能
 /// (见 `2026-08-19-rail-panel-drag-relocation-design.md`)的面板类型。
-/// 由原左栏(7)+ 右栏(4)两个枚举合并而来,variant 名字逐一沿用,
+/// 由原左栏(7)+ 右栏(3)两个枚举合并而来,variant 名字逐一沿用,
 /// 不改名。Stage 1(这次)只做了类型统一 + 数据模型,渲染/交互仍各自
 /// 按 `left_view`/`right_view` 字段走(Stage 2/4 才遍历 `RailLayout`)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -117,7 +114,6 @@ pub enum PanelKind {
     Agent,
     Conversations,
     Usage,
-    Acceptance,
 }
 
 impl PanelKind {
@@ -133,7 +129,7 @@ impl PanelKind {
             | Self::Database
             | Self::Ssh
             | Self::Web => Side::Left,
-            Self::Agent | Self::Conversations | Self::Usage | Self::Acceptance => Side::Right,
+            Self::Agent | Self::Conversations | Self::Usage => Side::Right,
         }
     }
 }
@@ -898,8 +894,7 @@ fn list_rendered_first(default_list_first: bool, mirrored: bool) -> bool {
 /// 给定 `PanelKind`,取它在 `PanelDims` 里对应的配对分割比例字段——统一
 /// 口径是"pair 内第一个 slot 的占比"(`pair_list_content_width` 的
 /// `split` 参数,不区分这个 slot 语义上是"列表"还是"内容",Browser 的
-/// `browser_bookmarks_split` 反着命名也是同一套算法)。`None` 表示这个
-/// 面板是单栏(Acceptance),没有分割比例。
+/// `browser_bookmarks_split` 反着命名也是同一套算法)。
 fn pair_split_ratio(dims: &PanelDims, kind: PanelKind) -> Option<f32> {
     match kind {
         PanelKind::Files => Some(dims.files_split),
@@ -912,7 +907,6 @@ fn pair_split_ratio(dims: &PanelDims, kind: PanelKind) -> Option<f32> {
         PanelKind::Agent => Some(dims.agent_split),
         PanelKind::Conversations => Some(dims.conversations_split),
         PanelKind::Usage => Some(dims.usage_split),
-        PanelKind::Acceptance => None,
     }
 }
 
@@ -959,7 +953,6 @@ fn with_pair_split_ratio(dims: PanelDims, kind: PanelKind, ratio: f32) -> PanelD
             usage_split: ratio,
             ..dims
         },
-        PanelKind::Acceptance => dims,
     }
 }
 
@@ -1229,11 +1222,9 @@ pub(crate) fn apply_column_drag(
                 },
                 // 用量统计是单栏（不分割）,没有自己的 split 权重。
                 PanelKind::Usage => state.dims,
-                // 验收面板同用量统计是单栏,不分割。
-                PanelKind::Acceptance => state.dims,
                 _ => unreachable!(
                     "RightPairSplit 只会在 state.right_view 是 Agent/Conversations/\
-                     Usage/Acceptance 之一时出现——Stage 1 遗留的兜底,这里维持"
+                     Usage 之一时出现——Stage 1 遗留的兜底,这里维持"
                 ),
             }
         }
@@ -1486,7 +1477,7 @@ pub fn ssh_terminal_pane_pixel_size(
 /// 所以凡是"发起时就已知归属项目、结果晚些才回来"的消息,一律带上
 /// `project_id`,由 [`App::with_project`] 直接投递到对应槽位;投递不到
 /// (项目已被关掉/还没促成)就静默丢弃。反过来,由用户点击当前界面直接
-/// 触发的消息(`TermInput`/`Acceptance(..::Open(..))`/`PreviewSelectTab` …)仍然走
+/// 触发的消息(`TermInput`/`PreviewSelectTab` …)仍然走
 /// `with_focused_project`——它们的语义本来就是"作用于用户此刻看着的那个项目"。
 pub type ProjectId = i64;
 
@@ -1511,8 +1502,6 @@ pub enum Message {
     SessionExited(ProjectId, usize),
     /// attach 流转发来的 agent 状态变更（tab_id, 状态, 该会话最新 transcript 路径）。
     AgentStateChanged(ProjectId, usize, AgentKind, AgentState, Option<String>),
-    /// TurnEnded 触发的交付检测结果（tab_id, 是否有待验收交付）。
-    DeliveryChecked(ProjectId, usize, bool),
     /// hook 事件驱动的 Agent 卡片元信息刷新结果(tab_id, LLM 型号,
     /// permission mode,transcript 最后活动摘要(兜底"当前工作内容",见
     /// `workspace::agent_card`),工作区分支/脏标覆盖)。`None` 字段表示
@@ -1526,9 +1515,6 @@ pub enum Message {
         Option<String>,
         Option<crate::workspace::WorkspaceGitInfo>,
     ),
-    /// 验收面板的全部消息,内核只转发不解读——见
-    /// `extensions::acceptance::Message`。
-    Acceptance(acceptance::Message),
     /// 会话审阅:解析完成（来源, 追加标记, 条目 / 错误文案）。`append`
     /// 为 `true` 时新条目应追加进现有 `entries`(详情"加载更多"),`false`
     /// 时整段替换(首次打开/活会话刷新)。
@@ -3070,20 +3056,6 @@ impl App {
             .is_some_and(|ws| ws.browser.take_addr_select_all_pending())
     }
 
-    /// 验收意见框是否持有 iced 真实焦点(main.rs 原生放行闸门用)。
-    pub fn comment_focused(&self) -> bool {
-        self.active_workspace()
-            .is_some_and(|ws| ws.comment_focused())
-    }
-
-    /// 每帧渲染循环读走 `CaptureCommentFocus` 查到的真实焦点态后写进当前
-    /// 工作区(main.rs 键盘路由随后读 `comment_focused` 消费)。
-    pub fn set_comment_focused(&mut self, focused: bool) {
-        if let Some(ws) = self.active_workspace_mut() {
-            ws.acceptance.set_comment_focused(focused);
-        }
-    }
-
     /// 项目树行内编辑框是否持有 iced 真实焦点(main.rs 键盘路由用)。为真时
     /// 按键放行给标准 iced 事件管线,交真正的 text_input 自己处理。
     pub fn tree_edit_focused(&self) -> bool {
@@ -4353,9 +4325,6 @@ impl App {
             Message::AgentStateChanged(project_id, tab_id, agent, state, transcript_path) => {
                 self.agent_state_changed(project_id, tab_id, agent, state, transcript_path)
             }
-            Message::DeliveryChecked(project_id, tab_id, pending) => {
-                self.delivery_checked(project_id, tab_id, pending)
-            }
             Message::AgentCardRefreshed(
                 project_id,
                 tab_id,
@@ -4373,30 +4342,6 @@ impl App {
                         activity,
                         workspace,
                     );
-                });
-            }
-            Message::Acceptance(acceptance::Message::Open(tab_id)) => self.acceptance_open(tab_id),
-            Message::Acceptance(acceptance::Message::Reject) => self.acceptance_reject(),
-            Message::Acceptance(
-                msg @ (acceptance::Message::Loaded(project_id, ..)
-                | acceptance::Message::DiffLoaded(project_id, ..)
-                | acceptance::Message::Done(project_id, ..)),
-            ) => self.acceptance_result(project_id, msg),
-            Message::Acceptance(acceptance::Message::TextInputMenuOpen(target)) => {
-                self.update(Message::TextInputMenuOpen(target));
-            }
-            Message::Acceptance(msg) => {
-                let Some(project_id) = self.active_project_id else {
-                    return;
-                };
-                self.with_focused_project(|ws, io| {
-                    let client = io.client.clone();
-                    let handle = io.handle.clone();
-                    let proxy = io.proxy.clone();
-                    let emit = move |m| {
-                        let _ = proxy.send_event(Message::Acceptance(m));
-                    };
-                    acceptance::update(&mut ws.acceptance, msg, project_id, &client, &handle, emit);
                 });
             }
             Message::ReviewLoaded(project_id, source, append, result) => {
@@ -5309,7 +5254,6 @@ impl App {
             }
             Message::Project(
                 msg @ (project::Message::GitRefreshed(project_id, ..)
-                | project::Message::AcceptanceCountLoaded(project_id, ..)
                 | project::Message::NameRenamed(project_id, ..)
                 | project::Message::DiskUsageLoaded(project_id, ..)
                 | project::Message::ScaffoldStepStarted(project_id, ..)
@@ -6235,72 +6179,6 @@ impl App {
         });
     }
 
-    fn acceptance_open(&mut self, tab_id: usize) {
-        self.with_focused_project(|ws, io| {
-            let active_repo = ws.project.as_ref().map(|p| PathBuf::from(&p.path));
-            let Some(project_id) = ws.project_id() else {
-                return;
-            };
-            let Some(tab) = ws.tab_by_id_mut(tab_id) else {
-                return;
-            };
-            tab.delivery_pending = false;
-            let cwd = effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
-            let handle = io.handle.clone();
-            let proxy = io.proxy.clone();
-            let emit = move |m| {
-                let _ = proxy.send_event(Message::Acceptance(m));
-            };
-            acceptance::spawn_open(project_id, tab_id, cwd, &handle, emit);
-        });
-    }
-
-    fn acceptance_reject(&mut self) {
-        self.with_focused_project(|ws, io| {
-            let Some(session) = ws.acceptance.session() else {
-                return;
-            };
-            let comment = session.comment().trim().to_string();
-            let source = session.source_tab_id();
-            let target = ws.tabs.iter().find(|t| t.tab_id == source);
-            let Some(tab) = target.filter(|t| t.alive) else {
-                // 会话已结束,意见无处可注——留住当前 session,不清空,让用户
-                // 看到错误(现有 `acceptance_reject` 的降级路径)。
-                ws.acceptance
-                    .set_error("会话已结束,意见无处可注".to_string());
-                return;
-            };
-            let id = tab.info.id.clone();
-            let client = io.client.clone();
-            let text_out = format!("[Dozer 验收打回] {comment}\n");
-            io.handle.spawn(async move {
-                if let Err(e) = client.write(&id, text_out.as_bytes()).await {
-                    tracing::warn!("打回注回失败: {e}");
-                }
-            });
-            ws.acceptance.clear_session();
-        });
-    }
-
-    fn acceptance_result(&mut self, project_id: i64, msg: acceptance::Message) {
-        // 判断"这次是不是通过成功"要在 `msg` 被 `move` 进闭包之前算好
-        // (用 `&msg` 引用匹配,不消耗它;闭包里 `acceptance::update` 会真正
-        // 拿走 `msg` 的所有权),否则会撞上"用后借用"的编译错误。
-        let is_accept_ok = matches!(&msg, acceptance::Message::Done(_, Ok(_)));
-        self.with_project(project_id, move |ws, io| {
-            let client = io.client.clone();
-            let handle = io.handle.clone();
-            let proxy = io.proxy.clone();
-            let emit = move |m| {
-                let _ = proxy.send_event(Message::Acceptance(m));
-            };
-            acceptance::update(&mut ws.acceptance, msg, project_id, &client, &handle, emit);
-            if is_accept_ok {
-                ws.spawn_acceptance_count_refresh(io);
-            }
-        });
-    }
-
     /// 指派任务给某个 agent 种类,纯记录,不触发任何执行。异步确认经
     /// `Mutated` 刷新列表——与其它写操作同一条乐观更新链路。
     fn todo_assign_agent(&mut self, idx: usize, agent: dozer_core::protocol::AgentKind) {
@@ -6713,7 +6591,7 @@ impl App {
         // 同栏重排 / 跨栏移动都是靠渲染层挂在图标上的 `on_move` 驱动
         // (`Message::RailDragMove`),`MouseMotion` 期间逐帧上报；这里只记下
         // "从哪栏的哪个位置开始拖"。`RailLayout` 的不变式(sanitize 已保证
-        // 11 个面板不重不漏分到两栏)确保 `kind` 一定能在 `side_of` 返回的
+        // 10 个面板不重不漏分到两栏)确保 `kind` 一定能在 `side_of` 返回的
         // 那一栏里被 `position` 找到。
         let source_index = self
             .shell_layout
@@ -6760,7 +6638,7 @@ impl App {
         // 面板专属的"切入时动作"。原左栏处理器把 GitLog/Todo/
         // Database/Project/Ssh 的触发放在 if/else 之后的无条件
         // `if self.left_view == PanelKind::X` 里——收起/展开当前激活的特殊
-        // 面板也会跑一遍;原右栏处理器把 Usage/Acceptance 放在 else(真正
+        // 面板也会跑一遍;原右栏处理器把 Usage 放在 else(真正
         // 切换)分支里——只有切换时才触发。为保持逐像素零差异,左侧面板恒
         // 触发、右侧面板仅在真正切换时触发(默认布局下它们恰好按这个分侧;
         // Stage 4 拖拽换栏后这里再按 `rail_layout.side_of` 重新对齐各面板
@@ -6803,15 +6681,6 @@ impl App {
                     ws.usage.set_loading(true);
                     ws.spawn_usage_refresh(io);
                 }),
-                PanelKind::Acceptance => {
-                    let tab_id = self
-                        .active_workspace()
-                        .and_then(|ws| ws.tabs.get(ws.active))
-                        .map(|t| t.tab_id);
-                    if let Some(tab_id) = tab_id {
-                        self.update(Message::Acceptance(acceptance::Message::Open(tab_id)));
-                    }
-                }
                 // 会话列表原本只在项目打开时和回合结束时刷新,切进这个面板时
                 // 没有任何补救手段——离开一段时间再切回来看到的还是上次的
                 // 快照。补一次切入即刷新,同 `Usage` 面板的既有口径。
@@ -7069,45 +6938,6 @@ impl App {
                 }
                 tracing::info!(tab_id, ?state, "agent 状态变更");
                 card_refresh_args = Some((tab.transcript_path.clone(), tab.effective_cwd()));
-                if state == AgentState::TurnEnded {
-                    // git 检测不许在 UI 线程跑：丢 tokio,结果经 proxy 回来
-                    let cwd = effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
-                    let last_turn = tab.last_turn_head.clone();
-                    let proxy = io.proxy.clone();
-                    tracing::info!(tab_id, cwd = %cwd.display(), "回合结束,开始交付检测");
-                    io.handle.spawn(async move {
-                        let pending = tokio::task::spawn_blocking(move || {
-                            let Some(repo) = delivery::repo_root(&cwd) else {
-                                tracing::info!(cwd = %cwd.display(), "非 git 仓库,不参与闭环");
-                                return None;
-                            };
-                            let dirty = delivery::is_dirty(&repo);
-                            let head = delivery::head_commit(&repo);
-                            let accepted = delivery::last_accepted(&repo).map(|(_, c)| c);
-                            let pending = delivery::delivery_pending(
-                                dirty,
-                                head.as_deref(),
-                                accepted.as_deref(),
-                                last_turn.as_deref(),
-                            );
-                            tracing::info!(
-                                repo = %repo.display(),
-                                dirty,
-                                has_accepted = accepted.is_some(),
-                                pending,
-                                "交付检测完成"
-                            );
-                            Some(pending)
-                        })
-                        .await
-                        .ok()
-                        .flatten();
-                        if let Some(pending) = pending {
-                            let _ = proxy
-                                .send_event(Message::DeliveryChecked(project_id, tab_id, pending));
-                        }
-                    });
-                }
             }
             if let Some((transcript_path, cwd)) = card_refresh_args {
                 ws.spawn_agent_card_refresh(
@@ -7119,16 +6949,20 @@ impl App {
                     active_repo.clone(),
                 );
             }
-            // 回合结束后刷新会话列表(transcript 增长/新增；P1j)。此前这个
-            // 刷新只挂在 `delivery_checked`(交付检测异步任务成功回来才发的
-            // 消息)上——非 git 仓库、`repo_root` 解析失败、`spawn_blocking`
-            // 出错都会让那条异步任务直接 `return None` 而不发
-            // `DeliveryChecked`,会话列表就此静默再也不刷新,且没有任何
-            // 手动刷新入口能补救(用户反馈"看不到新会话",根因就是这个耦合)。
-            // 会话列表新鲜度跟交付检测是否成功完全是两件事,不该耦合在一起,
-            // 这里改成回合结束就无条件刷新,不等交付检测。
+            // 回合结束后刷新会话列表(transcript 增长/新增；P1j)与项目 git/
+            // 磁盘占用状态(文件树装饰随之更新；P1h)。这两项刷新原先分别挂在
+            // 会话列表自己的耦合链路、以及已删除的验收检测异步回调
+            // (`delivery_checked`)上——验收闭环删除后,后者连带的刷新触发点
+            // 也没了,这里改成回合结束就无条件触发,不再依赖任何验收检测结果
+            // (前半"会话列表"这条 P1j 当年就已经这样修过一次,这次是把后半
+            // "git/磁盘占用"也补齐同样的处理)。
             if state == AgentState::TurnEnded {
                 ws.spawn_conversations_refresh(io);
+                if let Some(project) = &ws.project {
+                    let repo_path = PathBuf::from(&project.path);
+                    spawn_project_git_refresh(project_id, repo_path.clone(), io);
+                    spawn_disk_usage_refresh(project_id, repo_path, io);
+                }
             }
             // 审阅 tab 若开着且属本会话,回合结束重解析 transcript（P1i）。
             if state == AgentState::TurnEnded
@@ -7149,36 +6983,6 @@ impl App {
                     10_000,
                 );
             }
-        });
-    }
-
-    fn delivery_checked(&mut self, project_id: ProjectId, tab_id: usize, pending: bool) {
-        self.with_project(project_id, |ws, io| {
-            let active_id = ws.tabs.get(ws.active).map(|t| t.tab_id);
-            let is_active = active_id == Some(tab_id);
-            let active_repo = ws.project.as_ref().map(|p| PathBuf::from(&p.path));
-            tracing::info!(
-                tab_id,
-                pending,
-                is_active,
-                "交付检测结果落地(pending 写入该 tab;仅当前激活 tab 显示横幅)"
-            );
-            if let Some(tab) = ws.tab_by_id_mut(tab_id) {
-                tab.delivery_pending = pending;
-                // 记录本回合 HEAD 供下回合比对（同步读一次可容忍:仅 rev-parse）
-                let cwd = effective_project_repo(active_repo.as_deref(), &tab.effective_cwd());
-                if let Some(repo) = delivery::repo_root(&cwd) {
-                    tab.last_turn_head = delivery::head_commit(&repo);
-                }
-            }
-            // 回合结束后刷新项目 git 状态,文件树装饰随之更新（P1h）。
-            if let Some(project) = &ws.project {
-                let repo_path = PathBuf::from(&project.path);
-                spawn_project_git_refresh(project_id, repo_path.clone(), io);
-                spawn_disk_usage_refresh(project_id, repo_path, io);
-            }
-            // 会话列表刷新已经在 `agent_state_changed` 里 `TurnEnded` 时无条件
-            // 触发过一次(不再等这条交付检测异步消息回来才刷),这里不再重复。
         });
     }
 
@@ -8803,10 +8607,6 @@ fn panel_body<'a>(
                 .width(Length::Fill)
                 .into()
             }
-        }
-        PanelKind::Acceptance => {
-            acceptance::view(&ws.acceptance, Length::Fill, zone_pane_border(zone, ac))
-                .map(Message::Acceptance)
         }
     }
 }
@@ -10653,22 +10453,6 @@ mod tests {
             (new_list_px - old_list_px).abs() < 0.5,
             "Agent 列表像素宽应保持不变: old={old_list_px}, new={new_list_px}"
         );
-    }
-
-    #[test]
-    fn left_right_drag_skips_single_pane_panels() {
-        // Usage/Acceptance 是单栏,没有 split 字段——补偿逻辑不应该 panic
-        // 或动到任何 split 字段。
-        let state = ShellState {
-            left_view: PanelKind::Usage,
-            right_view: PanelKind::Acceptance,
-            ..test_state()
-        };
-        let before = state.dims;
-        let logical_x = 800.0 + byteui::theme::geometry::icon_rail_width();
-        let new = apply_column_drag(state, Divider::LeftRight, 1440.0, logical_x);
-        assert_eq!(new.files_split, before.files_split);
-        assert_eq!(new.agent_split, before.agent_split);
     }
 
     #[test]

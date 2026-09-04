@@ -61,7 +61,6 @@ async fn session_survives_client_disconnect() {
             dozerd::server::serve(
                 &sock,
                 registry,
-                test_store(),
                 test_projects(),
                 test_bookmarks(),
                 test_transcripts(),
@@ -196,7 +195,6 @@ async fn unknown_session_returns_error_reply() {
             dozerd::server::serve(
                 &sock,
                 registry,
-                test_store(),
                 test_projects(),
                 test_bookmarks(),
                 test_transcripts(),
@@ -241,7 +239,6 @@ async fn attach_delivers_marker_exactly_once() {
             dozerd::server::serve(
                 &sock,
                 registry,
-                test_store(),
                 test_projects(),
                 test_bookmarks(),
                 test_transcripts(),
@@ -322,7 +319,6 @@ async fn attach_from_offset_resumes_within_window() {
             dozerd::server::serve(
                 &sock,
                 registry,
-                test_store(),
                 test_projects(),
                 test_bookmarks(),
                 test_transcripts(),
@@ -432,7 +428,6 @@ async fn attach_stream_offset_invariant_under_load() {
             dozerd::server::serve(
                 &sock,
                 registry,
-                test_store(),
                 test_projects(),
                 test_bookmarks(),
                 test_transcripts(),
@@ -529,7 +524,6 @@ async fn attach_from_offset_out_of_window_falls_back_to_full_snapshot() {
             dozerd::server::serve(
                 &sock,
                 registry,
-                test_store(),
                 test_projects(),
                 test_bookmarks(),
                 test_transcripts(),
@@ -594,12 +588,6 @@ async fn attach_from_offset_out_of_window_falls_back_to_full_snapshot() {
     .await;
     server.abort();
     let _ = std::fs::remove_file(&sock);
-}
-
-/// 每次调用建一个独立临时库的验收存储（测试用；P1f serve 需要）。
-fn test_store() -> std::sync::Arc<dozerd::acceptance::AcceptanceStore> {
-    let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
-    std::sync::Arc::new(dozerd::acceptance::AcceptanceStore::open(&db).unwrap())
 }
 
 /// 每次调用建独立临时库的项目存储（测试用；P1g serve 需要）。
