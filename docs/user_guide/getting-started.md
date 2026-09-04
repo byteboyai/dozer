@@ -48,19 +48,14 @@ Dozer 没有传统意义上的"新建工程向导"。首次启动会落在**首�
 
 ## 一轮最简闭环
 
-1. 在项目根目录手写一个 `.dozer/goal.md`:第一行是目标,后面若干 `- [ ]` 是验收标准(Dozer 目前没有图形化的创建入口,纯文本即可,agent 也可以帮你写)。
-2. 让 agent 干活。
-3. 一轮结束(agent 报告"我做完了"或你觉得该看看了),点右侧 **验收** 图标——如果有改动待审,图标上会有一个金色小红点。
-4. 在验收视图里逐个勾标准、看 diff、写意见,然后"通过·沉淀"(打一个 `refs/dozer/accepted/N` 的 git ref)或"打回并注回"(把你的意见当作输入直接发回那个 agent 的终端)。
-
-这个循环是 Dozer 的核心,详见 [验收闭环](acceptance.md)。
+1. 让 agent 干活。
+2. 一轮结束后,自己判断这轮做得怎么样、要不要继续。
 
 ## 下一步
 
 - [工作区布局](workspace.md) —— 认识四栏、图标栏、如何拖拽/收起/放大面板。
 - [项目管理](projects.md) —— 多项目标签、首页、删除项目。
 - [Agent 会话](agents.md) —— 支持哪些 agent、hook/MCP 具体接了什么。
-- [验收闭环](acceptance.md) —— goal.md 格式、验收标准、通过与打回。
 - [资产预览](preview.md) —— 文件/图片/PDF/网页怎么在 Dozer 里直接看。
 - [面板参考](panels.md) —— Files/Todo/Git Log/Database/SSH/Browser/Usage/Conversations 逐一介绍。
 - [快捷键](keybindings.md)

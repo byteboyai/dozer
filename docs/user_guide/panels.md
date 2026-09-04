@@ -1,6 +1,6 @@
 # 面板参考
 
-Dozer 一共有 11 种面板,挂在左右两条图标栏上(见 [工作区布局](workspace.md))。**Project**、**Acceptance**、**Agent**、**Conversations** 分别在 [项目管理](projects.md)、[验收闭环](acceptance.md)、[Agent 会话](agents.md) 里单独讲过,本页覆盖剩下的七个。
+Dozer 一共有 10 种面板,挂在左右两条图标栏上(见 [工作区布局](workspace.md))。**Project**、**Agent**、**Conversations** 分别在 [项目管理](projects.md)、[Agent 会话](agents.md) 里单独讲过,本页覆盖剩下的七个。
 
 ## Files
 

@@ -44,7 +44,6 @@ MCP 注册目前支持 **Claude**(写 `~/.claude.json`)、**CodeBuddy**(写 `~/.
 
 终端标签和顶栏项目点上看到的颜色状态,来自 hook 上报驱动的状态机:空闲(Idle)、运行中(Running)、等待你输入(AwaitingInput)、一轮结束(TurnEnded)。如果一个会话完全没收到过 hook 事件(比如 Kilo,或者你选的是纯 Shell),状态点会保持灰色的"未知"。
 
-`TurnEnded` 是触发 [验收](acceptance.md) 检查的信号——一轮结束后 Dozer 会去看工作区有没有改动、HEAD 有没有前移,决定要不要在验收图标上点一个金色小红点提醒你。
 
 ## 会话存活
 

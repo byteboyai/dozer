@@ -24,13 +24,12 @@ Dozer **没有图形化的设置面板**——顶栏右上角那个齿轮图标�
 | `panel_layouts.json` | 每个项目自己的面板尺寸/折叠状态 |
 | `ui_scale.json` | `⌘/Ctrl +/-` 缩放级别 |
 | `open_projects.json` | 上次退出时开着哪些项目标签 |
-| `dozer.db` | `dozerd` 的 SQLite 库:项目列表、验收记录、浏览器书签、会话摘要、已摄取的对话/transcript 索引 |
+| `dozer.db` | `dozerd` 的 SQLite 库:项目列表、浏览器书签、会话摘要、已摄取的对话/transcript 索引 |
 
 项目内部(每个项目自己的 `.dozer/` 目录下):
 
 | 文件 | 内容 |
 |---|---|
-| `.dozer/goal.md` | 当前目标 + 验收标准(纯手写 Markdown,见 [验收闭环](acceptance.md)) |
 | `.dozer/todo.md` | 待办清单(见 [面板参考 · Todo](panels.md#todo)) |
 | `.dozer/links.json` | 自动发现的项目文档/agent 记忆文件链接 |
 | `.dozer/ssh_hosts.json` | SSH 面板的主机连接配置 |
