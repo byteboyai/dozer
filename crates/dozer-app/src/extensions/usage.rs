@@ -562,13 +562,16 @@ pub fn content_pane<'a>(
                     }
                 }
                 None => {
-                    // —— 以下为"全部 agent"(`None`)态保留的原布局 ——
-                    // Agent 用量统计从原先"回合/Token"两张饼图拆成四个统计口径的
-                    // 两行饼图(2026-09-05 初版用户要求):第一行 = Session +
-                    // Round,第二行 = Input/Output + Cache Read/Write。每张饼
-                    // 图右侧带同圆环着色的列表式图例(2026-08-28 反馈:圆环本体保留,
-                    // 只是图例换成数字表);每个口径各自归总、跳过空口径,避免给某
-                    // agent 画一个永远 0 的占位扇区。
+                    // —— 以下为"全部 agent"(`None`)态 ——
+                    // "Agent 用量统计"内按两个大组竖排;每组 = 一条概况横幅 + 一
+                    // 对彼此等分面板宽度的环图格:
+                    //   组一 Sessions/Rounds:横幅 "Session(会话总数 total),
+                    //   下配 Session 环 + Round(回合)环;
+                    //   组二 Tokens:横幅 "Tokens(全项目四项 token total)",
+                    //   下配 Input/Output 环 + Cache Read/Write 环。
+                    // 圆环与逐 agent 数字表并存(环本体保留 2026-08-28 决定,只是图
+                    // 例用 `chart_stat_list` 的数字表格式)。每个口径各自归总、跳过
+                    // 空口径,避免给某 agent 画永远 0 的占位扇区。
                     let session_share = agent_session_share(&filtered_rows);
                     let turn_share = agent_turn_share(&filtered_rows);
                     let io_share = agent_io_token_share(&filtered_rows);
@@ -578,27 +581,46 @@ pub fn content_pane<'a>(
                         || !io_share.is_empty()
                         || !cache_share.is_empty();
                     if any_agent_metric {
-                        // 组装"Agent 用量统计"这一个内层小节:标题 + 两张指标行,
-                        // 小节内统一走 `SECTION_CHART_GAP` 间距。每个"指标格"= 一张
-                        // 饼图 + 配套数字表图例,由 `agent_metrics_row` 负责把给定
-                        // 两个口径并排、两张时用 1px 竖线隔开;某口径为空时只放有
-                        // 数据那张。竖线高度/格间距都用 `Length::Fixed`,不能是
-                        // `Length::Fill`(见外层注释里 `Fill` 传染的说明,2026-08-27)。
-                        let lines = [
-                            ("Session", &session_share, "Round", &turn_share),
-                            (
-                                "Input/Output Token",
-                                &io_share,
-                                "Cache Read/Write",
-                                &cache_share,
-                            ),
-                        ];
                         let mut agent_metrics_section =
                             column![home_section_head("Agent 用量统计")].spacing(SECTION_CHART_GAP);
-                        for (l1, s1, l2, s2) in lines {
-                            agent_metrics_section =
-                                agent_metrics_section.push(agent_metrics_row(l1, s1, l2, s2));
+
+                        let sess_total = share_total(&session_share);
+                        let has_session_group = !session_share.is_empty() || !turn_share.is_empty();
+                        if has_session_group {
+                            agent_metrics_section = agent_metrics_section
+                                .push(metric_group_banner("Session", sess_total));
+                            agent_metrics_section = agent_metrics_section.push(pair_metric_cells(
+                                (!session_share.is_empty())
+                                    .then_some(("Session", session_share.as_slice())),
+                                (!turn_share.is_empty())
+                                    .then_some(("Round", turn_share.as_slice())),
+                            ));
                         }
+
+                        let has_token_group = !io_share.is_empty() || !cache_share.is_empty();
+                        if has_token_group {
+                            // 组二横幅总数用"全项目(即全部 agent 视图整组)四项
+                            // token 之和",与底下两个 token 细分环是"大盘 vs 细拆"
+                            // 视角,不求等于两个环各自 total 相加。
+                            let total_tokens: u64 = filtered_rows
+                                .iter()
+                                .map(|(_, u)| {
+                                    u.tokens_in
+                                        + u.tokens_out
+                                        + u.tokens_cache_read
+                                        + u.tokens_cache_write
+                                })
+                                .sum();
+                            agent_metrics_section = agent_metrics_section
+                                .push(metric_group_banner("Tokens", total_tokens));
+                            agent_metrics_section = agent_metrics_section.push(pair_metric_cells(
+                                (!io_share.is_empty())
+                                    .then_some(("Input/Output", io_share.as_slice())),
+                                (!cache_share.is_empty())
+                                    .then_some(("Cache Read/Write", cache_share.as_slice())),
+                            ));
+                        }
+
                         content = content.push(agent_metrics_section);
                     }
 
@@ -1512,45 +1534,74 @@ fn pie_chart(
     .into()
 }
 
-/// 一张"饼图 + 数字表图例"的独立指标格(`pie_chart` 与 `chart_stat_list` 都
-/// 签 `'static`,这里可以直接返回 `'static`)。饼图与图例间距 16,垂直居中。
+/// 一个 share 口径内全部 agent 的次数之和(横排"整组/整节总数"、横幅题头用它;
+/// 与 `chart_stat_list` 内部的总数算法一致)。
+fn share_total(share: &[(AgentKind, u64)]) -> u64 {
+    share.iter().map(|(_, v)| v).sum()
+}
+
 fn agent_metric_group(
     title: &'static str,
     share: &[(AgentKind, u64)],
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    // 一节 metric:环图居左,右边竖排"标题(total)+逐 agent 数字表"。这个组合
+    // 只负责把环图旁边该显示的文字带出来;两节等宽二分由外层 `pair_metric_cells`
+    // 让本节的容器吃掉 `FillPortion(1)`。
     iced_widget::row![pie_chart(share), chart_stat_list(title, share)]
         .spacing(16)
+        .width(Length::Fill)
         .align_y(iced_widget::core::Alignment::Center)
         .into()
 }
 
-/// 把一对指标格拼成一行横排(Agent 用量统计一小行的左、右两格)。`left_share`
-/// 非空才在左放第一格;`right_share` 非空时用 1px 竖线接到其右边。空格不占位。
-/// 竖线高度用 `Length::Fixed`,对齐饼图固定尺寸(见调用点注释里 `Fill` 传染
-/// 的说明)。
-fn agent_metrics_row<'a>(
-    left_title: &'static str,
-    left_share: &'a [(AgentKind, u64)],
-    right_title: &'static str,
-    right_share: &'a [(AgentKind, u64)],
+/// 把两个指标节并排成一行,并让左右各自恰好各占面板一半宽(2026-09-05 要求:
+/// “左侧饼图区域的宽度和右侧饼图区域宽度保持一致,即平分面板宽度”)。用
+/// `Length::FillPortion(1)` 让两节在行内平均瓜分剩余高宽,而不是各自按内容
+/// 自然宽缩放——即使左表文字比右短,中线也稳居面板正中。某一边没有数据时,
+/// 只放有数据那一节并让它吃满整行,不给空白占位。
+fn pair_metric_cells<'a>(
+    left: Option<(&'static str, &'a [(AgentKind, u64)])>,
+    right: Option<(&'static str, &'a [(AgentKind, u64)])>,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let mut row = iced_widget::row![].spacing(32);
-    if !left_share.is_empty() {
-        row = row.push(agent_metric_group(left_title, left_share));
-    }
-    if !right_share.is_empty() {
-        row = row.push(
-            container(iced_widget::Space::new())
-                .width(Length::Fixed(1.0))
-                .height(Length::Fixed(PIE_RADIUS * 2.0 + 8.0))
-                .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-                    background: Some(byteui::theme::color::current().border.into()),
-                    ..iced_widget::container::Style::default()
-                }),
-        );
-        row = row.push(agent_metric_group(right_title, right_share));
-    }
-    row.into()
+    let cell = |title: &'static str, share: &'a [(AgentKind, u64)]| {
+        container(agent_metric_group(title, share))
+            .width(Length::FillPortion(1))
+            .into()
+    };
+    let positioned: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        match (left, right) {
+            (Some((l, ls)), Some((r, rs))) => iced_widget::row![cell(l, ls), cell(r, rs)]
+                .width(Length::Fill)
+                .spacing(16)
+                .into(),
+            (Some((l, ls)), None) | (None, Some((l, ls))) => cell(l, ls),
+            (None, None) => iced_widget::Space::new().into(),
+        };
+    positioned.into()
+}
+
+/// 一个大组的“横幅”题头:左边浅色词(如 “Session”),右侧排在同行的等宽数字
+/// 给出该组口径总数、紧跟字面 “total”(示例 “Session 190 total”)。2026-09-05
+/// 用户要求这种整段首行概况。数字与列表内各行共用 `format_count` 三档缩写,
+/// 避免横幅与底下各行对同样大的数目措辞不一致(如都 1.2k,而不是横幅 1234、
+/// 底下 1.2k)。
+fn metric_group_banner(
+    label: &'static str,
+    total: u64,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let c = byteui::theme::color::current();
+    iced_widget::row![
+        text(label)
+            .size(byteui::theme::font::label())
+            .color(c.cream),
+        iced_widget::Space::new().width(Length::Fill),
+        text(format!("{} total", format_count(total)))
+            .size(byteui::theme::font::caption())
+            .color(c.cream)
+            .font(iced_widget::core::Font::MONOSPACE),
+    ]
+    .width(Length::Fill)
+    .into()
 }
 
 /// Agent 用量的列表式呈现,配在饼图右边当图例:标题行 `{title}(总数)` +
