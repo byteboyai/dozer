@@ -1824,11 +1824,12 @@ fn todo_view_tab<'a>(
     active: bool,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let theme = byteui::theme::color::current();
-    // 文字颜色不固定在构造期:透明底让 `button::Style.text_color` 统一接管,
-    // 这样按下/hover 才能驱动 `dim`→`gold`(同 `panel_tab` 的标题染色)。
-    let content = text(label)
-        .size(byteui::theme::font::body())
-        .color(Color::TRANSPARENT);
+    // 文字颜色不固定在构造期:不显式 `.color()`(默认 `None` = 继承父级),
+    // 这样才会读 `button::Style.text_color`,按下/hover 驱动 `dim`→`gold`
+    // (同 `panel_tab` 的标题染色)。之前误加 `.color(Color::TRANSPARENT)`
+    // ——iced `Text::color()` 一旦调用就是固定值、不是"占位待继承",导致
+    // 文字恒透明不可见(2026-09-04 用户反馈肉眼看不到 tab 文字)。
+    let content = text(label).size(byteui::theme::font::body());
     let btn = button(content)
         .on_press(Message::SelectView(view))
         .width(Length::Shrink)

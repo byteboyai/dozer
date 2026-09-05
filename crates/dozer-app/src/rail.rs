@@ -380,16 +380,54 @@ pub(crate) fn icon_rail(
         layers.push(positioned.into());
     }
 
+    // 补一块"末尾"命中区:每个按钮的 `on_move`(`rail_drag_surface`)只挂
+    // 在按钮自己的矩形上,悬停能上报的下标上限永远是"最后一个按钮自己的
+    // 下标"(len - 1)。跨栏拖拽时目标栏不含正被拖的面板,`rail_cross_
+    // apply` 按这个上限插入(`insert(len - 1, _)`)只会把面板插到目标栏
+    // 最后一项*之前*,永远到不了真正的末位——同栏重排不受影响(目标栏
+    // 仍含被拖面板本身,悬停最后一个按钮上报的下标就已经是"插入后的末位"
+    // ,见 `rail_drag_move_into` 同栏分支的等价推导)。这块透明区从最后一
+    // 个按钮往下铺满剩余 `Fill` 高度,悬停上报下标固定为当前栏长度
+    // (`len()`)——同栏分支里 `to >= panels.len()` 直接 no-op(该场景已由
+    // 真实按钮覆盖,见上段),跨栏分支里 `target_index.min(len)` 在
+    // `target_index == len` 时就是"插到最后"语义,两边都不需要为这个下标
+    // 值加任何特判。未在拖拽时上报也是无害 no-op,同其余按钮 `on_move`。
+    let tail_index = app.shell_layout.rail_layout.side(side).len();
+    let tail_y = region.padding.top + tail_index as f32 * step;
+    let tail_area = MouseArea::new(
+        iced_widget::Space::new()
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .on_move(move |_| Message::RailDragMove {
+        side,
+        index: tail_index,
+    });
+    let positioned_tail = container(tail_area)
+        .padding(Padding {
+            top: tail_y,
+            left: region.padding.left,
+            right: region.padding.right,
+            bottom: 0.0,
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Left)
+        .align_y(iced_widget::core::alignment::Vertical::Top);
+    layers.push(positioned_tail.into());
+
     // 拖拽悬停(同栏重排 / 跨栏悬停)时,在预计插入点画一条金色插入线,
     // 两种情况互斥(`pending_cross_side` 只在悬停到*另一*栏时才 `Some`),
     // 同一帧同一侧最多画一条:
     // - 跨栏悬停到本栏:插入点是 `pending_cross_side.1`——`rail_cross_
     //   apply` 落地时是 `insert`(把已有项推后一位),不是跟目标位的按钮
     //   互换,所以高亮画成"卡在两个按钮之间的线",不描边某个已存在按钮
-    //   (那样会误导成"要跟它换位")。这个下标恒是目标栏某个已有按钮自己
-    //   上报的下标(见 `rail_drag_surface` 的 `on_move` 只挂在真实按钮
-    //   上),不会是 `len()`(悬停不到"最后一个之后"这个位置——现有交互
-    //   面就是如此,不是这次新引入的限制)。
+    //   (那样会误导成"要跟它换位")。这个下标要么是目标栏某个已有按钮
+    //   自己上报的下标(`rail_drag_surface` 的 `on_move`),要么是本函数
+    //   前面补的"末尾命中区"上报的 `len()`(悬停到最后一个按钮之后,即
+    //   拖到目标栏最末位)——两者用的是同一条公式(`idx as f32 * step`),
+    //   `idx == len()` 时算出的 y 恰好落在最后一个按钮下方,不需要为这个
+    //   取值单独处理。
     // - 同栏内拖拽重排:插入点是 `drag.source_index`——同栏分支的
     //   `rail_drag_move_into` 已经把 `RailLayout`/`source_index` 实时改到
     //   目标位(不像跨栏要等 `RailDragEnd` 才落地),所以这里不是"预告",
@@ -749,6 +787,45 @@ mod tests {
             assert_eq!(applied, Some(kind));
             assert!(!rail.left.contains(&kind), "源栏应不再含被移动面板");
             assert!(rail.right.contains(&kind), "目标栏应含被移动面板");
+        }
+
+        /// 跨栏拖到目标栏"末尾命中区"(`icon_rail` 补的那块透明区,悬停
+        /// 上报下标固定为目标栏当前长度)应把面板放到目标栏真正的最后一
+        /// 位,而不是卡在原最后一项*前面*——这是本次要修的 bug:此前跨栏
+        /// 悬停只能拿到"目标栏某个已有按钮自己的下标"(上限 len - 1),
+        /// `rail_cross_apply` 按它 insert 时把新项推到原最后一项*之前*,
+        /// 永远到不了末位。完整走一遍消息路径:先 `rail_drag_move_into`
+        /// 记悬停(模拟 `RailDragMove`),再 `rail_cross_apply` 落地(模拟
+        /// `end_rail_drag`)。
+        #[test]
+        fn cross_side_hover_at_tail_index_lands_panel_as_last() {
+            let mut rail = RailLayout::default();
+            let kind = rail.left[0];
+            let mut drag = RailDrag {
+                source_side: Side::Left,
+                source_index: 0,
+                origin_index: 0,
+                pending_cross_side: None,
+                press_pos: (0.0, 0.0),
+            };
+            let tail_index = rail.right.len();
+            rail_drag_move_into(&mut rail, &mut drag, Side::Right, tail_index);
+            assert_eq!(drag.pending_cross_side, Some((Side::Right, tail_index)));
+
+            let (target_side, target_index) = drag.pending_cross_side.unwrap();
+            let applied = rail_cross_apply(
+                &mut rail,
+                drag.source_side,
+                drag.source_index,
+                target_side,
+                target_index,
+            );
+            assert_eq!(applied, Some(kind));
+            assert_eq!(
+                rail.right.last().copied(),
+                Some(kind),
+                "悬停末尾命中区应把面板放到目标栏最后一位,不是倒数第二位"
+            );
         }
 
         /// 源栏只剩 1 个面板时禁止搬走(不支持"栏清空"),`RailLayout` 不变。
