@@ -1577,7 +1577,7 @@ fn pair_metric_cells<'a>(
             (Some((l, ls)), None) | (None, Some((l, ls))) => cell(l, ls),
             (None, None) => iced_widget::Space::new().into(),
         };
-    positioned.into()
+    positioned
 }
 
 /// 一个大组的“横幅”题头:左边浅色词(如 “Session”),右侧排在同行的等宽数字

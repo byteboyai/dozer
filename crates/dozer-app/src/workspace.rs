@@ -34,6 +34,7 @@ use crate::app::{
     App, DEFAULT_COLS, DEFAULT_ROWS, HoverId, Message, PROJECT_PREVIEW_ID_OFFSET, PanelKind,
     ProjectId, tab_divider,
 };
+use crate::code_editor::CodeView;
 use crate::conversation::{self, SessionRow};
 use crate::delivery::{self};
 use crate::extensions::browser;
@@ -60,12 +61,12 @@ use byteui::interaction::icons;
 use byteui::interaction::icons::IconKind;
 use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
-use iced_code_editor::{CodeEditor, Message as EditorMessage};
 use iced_widget::core::mouse;
 use iced_widget::core::text::LineHeight;
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
 use iced_widget::core::{Border, Color, Element, Length, Padding, Rectangle};
+use iced_widget::text_editor::Action as EditorAction;
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
 use std::collections::{HashMap, HashSet};
@@ -187,12 +188,9 @@ pub struct EditSession {
     /// `Workspace::preview_edit_open` 的取值处)。
     pub tab_id: usize,
     pub path: PathBuf,
-    /// 编辑器组件(`iced-code-editor`)。有状态 widget,持有内容与撤销栈。
-    pub editor: CodeEditor,
-    /// 上次落盘(或打开)时的内容快照。脏标记 = `editor.content() !=
-    /// saved_content`,不依赖 `editor.is_modified()`——后者在连续输入
-    /// 的 undo 分组(`is_grouping`)未提交期间会恒为 `true`,导致保存后
-    /// 仍误报脏(`iced-code-editor` 没有公开的 `end_group` 接口来收口分组)。
+    /// 编辑器组件(`code_editor::CodeView`)。有状态 widget,持有内容与撤销栈。
+    pub editor: CodeView,
+    /// 上次落盘(或打开)时的内容快照。脏标记 = `editor.text() != saved_content`。
     pub saved_content: String,
     /// 打开失败(理论上不会,打开前已判过存在)或保存失败的错误文案。
     pub error: Option<String>,
@@ -458,6 +456,14 @@ pub struct Workspace {
     pub(crate) agent_picker_open: bool,
     /// 预览编辑弹层进行中的会话;`None` = 未打开。
     pub(crate) edit_session: Option<EditSession>,
+    /// 编辑弹层刚打开时置位的一次性程序化聚焦标记,语义同
+    /// `PreviewPane::pending_editor_focus`。
+    pub(crate) pending_edit_session_focus: bool,
+    /// 消息驱动(非鼠标点击)把焦点拨离预览编辑器时置位——官方 `text_editor`
+    /// 的焦点是真实 iced 焦点树的一部分,不能像 vendored `iced-code-editor`
+    /// 那样直接对某个实例调 `lose_focus()`,改成一次性位,main.rs 下一帧用
+    /// `operation::focusable::unfocus` 统一让出当前焦点(见 `blur_preview_editors`)。
+    pub(crate) pending_editor_unfocus: bool,
     /// Todo 面板 per-project 状态——见 `extensions::todo::WorkspaceState`。
     pub(crate) todo: todo::WorkspaceState,
     /// 数据库面板 per-project 状态(当前项目的数据源列表 + 编辑草稿 + 测试
@@ -668,6 +674,8 @@ impl Workspace {
             files: files::WorkspaceState::default(),
             agent_picker_open: false,
             edit_session: None,
+            pending_edit_session_focus: false,
+            pending_editor_unfocus: false,
             todo: todo::WorkspaceState::default(),
             database: database::WorkspaceState::default(),
             ssh: ssh::WorkspaceState::default(),
@@ -748,22 +756,8 @@ impl Workspace {
         match std::fs::read_to_string(&path) {
             Ok(text) => {
                 *error_field = None;
-                let mut editor =
-                    CodeEditor::new(&text, &crate::preview::extension_to_syntax(&path));
-                // 让编辑器适配 Dozer 配色(见 `dozer_editor_style`),而非
-                // 让 Dozer 迁就编辑器的默认蓝底。chrome 与语法 token 一起接管。
-                editor.set_theme(crate::preview::dozer_editor_style());
-                editor.set_syntax_theme(crate::preview::dozer_syntax_theme());
-                editor.set_font(crate::fonts::code_font());
-                // 编辑器/终端排版同步(见 CLAUDE.md 关键裁决,以及
-                // `font.rs` _font/tab 注释):字号、行高与终端同源,
-                // 一个字面量真相源 `terminal_font`(乘全局 scale)。
-                // 字距两者都走 cosmic-text 默认,不额外加宽。
-                crate::preview::dozer_editor_font_metrics(&mut editor);
-                // 打开即夺焦点:设置内部 focus 标记,使键盘事件无需先点击
-                // 即可直达编辑器(仍建议点击以触发光标定位与选区)。
-                editor.request_focus();
-                let _ = editor.update(&EditorMessage::CanvasFocusGained);
+                let editor =
+                    CodeView::new(&text, crate::preview::extension_to_syntax(&path), false);
                 self.edit_session = Some(EditSession {
                     tab_id,
                     path,
@@ -772,6 +766,11 @@ impl Workspace {
                     error: None,
                     confirm_discard: false,
                 });
+                // 打开即程序化聚焦:键盘事件无需先点击即可直达编辑器(官方
+                // `text_editor` 的焦点是真实 iced 焦点树的一部分,构造时拿不
+                // 到,靠 main.rs 下一帧用 `operation::focusable::focus` 强制
+                // 聚焦——同 `PreviewPane::pending_editor_focus`)。
+                self.pending_edit_session_focus = true;
             }
             Err(e) => {
                 *error_field = Some(format!("打开编辑失败: {e}"));
@@ -800,65 +799,32 @@ impl Workspace {
         };
     }
 
-    /// 按预览 tab id 打开对应文件的编辑浮层——右键"编辑"上下文菜单动作
-    /// (`Message::OpenInEditor`)落地的入口。没找到该 tab 时 no-op。
-    pub(crate) fn preview_edit_open_by_id(&mut self, tab_id: usize) {
-        let idx = self.preview.tabs().iter().position(|tab| tab.id == tab_id);
-        if let Some(idx) = idx {
-            self.preview_edit_open(idx);
+    /// 读走(消费式)编辑弹层的一次性程序化聚焦标记。
+    pub(crate) fn take_edit_session_focus_pending(&mut self) -> bool {
+        std::mem::take(&mut self.pending_edit_session_focus)
+    }
+
+    /// 转发 `text_editor::Action` 给编辑弹层。没有打开编辑会话时 no-op。
+    pub(crate) fn preview_edit_event(&mut self, action: EditorAction) {
+        if let Some(session) = self.edit_session.as_mut() {
+            session.editor.perform(action);
         }
     }
 
-    /// 转发 `iced-code-editor` 的内部消息,返回编辑器产生的    /// `iced::Task<EditorMessage>`(交由 `main.rs` 的 Task 桥接器执行——
-    /// 主要是剪贴板读写与搜索框聚焦;无运行时下普通编辑路径恒为
-    /// `Task::none()`)。没有打开编辑会话时直接返回 `Task::none()`。
-    pub(crate) fn preview_edit_event(
-        &mut self,
-        event: EditorMessage,
-    ) -> iced_winit::runtime::Task<EditorMessage> {
-        let Some(session) = self.edit_session.as_mut() else {
-            return iced_winit::runtime::Task::none();
-        };
-        session.editor.update(&event)
-    }
-
-    /// 转发 `iced-code-editor` 的内部消息到某个原生预览 tab(按 `tab_id` 定位,
-    /// 不是"当前聚焦编辑弹层"——一个项目可以同时开好几个原生预览 tab,只有
-    /// 事件来源的那一个该收到)。tab 不存在或不是原生 tab 时静默 no-op。
-    pub(crate) fn preview_tab_editor_event(
-        &mut self,
-        tab_id: usize,
-        event: EditorMessage,
-    ) -> iced_winit::runtime::Task<EditorMessage> {
-        match self.preview.editor_mut(tab_id) {
-            Some(editor) => editor.update(&event),
-            None => iced_winit::runtime::Task::none(),
+    /// 转发 `text_editor::Action` 到某个原生预览 tab(按 `tab_id` 定位,不是
+    /// "当前聚焦编辑弹层"——一个项目可以同时开好几个原生预览 tab,只有事件
+    /// 来源的那一个该收到)。tab 不存在或不是原生 tab 时静默 no-op。
+    pub(crate) fn preview_tab_editor_event(&mut self, tab_id: usize, action: EditorAction) {
+        if let Some(editor) = self.preview.editor_mut(tab_id) {
+            editor.perform(action);
         }
     }
 
-    /// 按 Project 面板右配对预览 tab id 打开编辑浮层,语义同
-    /// `preview_edit_open_by_id`,状态取自 `ws.project_preview`。
-    pub(crate) fn project_preview_edit_open_by_id(&mut self, tab_id: usize) {
-        let idx = self
-            .project_preview
-            .tabs()
-            .iter()
-            .position(|tab| tab.id == tab_id);
-        if let Some(idx) = idx {
-            self.project_preview_edit_open(idx);
-        }
-    }
-
-    /// 转发 `iced-code-editor` 的内部消息到 Project 面板右配对预览的某个原生
-    /// tab,语义同 `preview_tab_editor_event`,状态取自 `ws.project_preview`。
-    pub(crate) fn project_preview_tab_editor_event(
-        &mut self,
-        tab_id: usize,
-        event: EditorMessage,
-    ) -> iced_winit::runtime::Task<EditorMessage> {
-        match self.project_preview.editor_mut(tab_id) {
-            Some(editor) => editor.update(&event),
-            None => iced_winit::runtime::Task::none(),
+    /// 转发 `text_editor::Action` 到 Project 面板右配对预览的某个原生 tab,
+    /// 语义同 `preview_tab_editor_event`,状态取自 `ws.project_preview`。
+    pub(crate) fn project_preview_tab_editor_event(&mut self, tab_id: usize, action: EditorAction) {
+        if let Some(editor) = self.project_preview.editor_mut(tab_id) {
+            editor.perform(action);
         }
     }
 
@@ -869,10 +835,9 @@ impl Workspace {
         let Some(session) = self.edit_session.as_mut() else {
             return;
         };
-        match std::fs::write(&session.path, session.editor.content()) {
+        match std::fs::write(&session.path, session.editor.text()) {
             Ok(()) => {
-                session.saved_content = session.editor.content();
-                session.editor.mark_saved();
+                session.saved_content = session.editor.text();
                 session.error = None;
                 let tab_id = session.tab_id;
                 self.preview.bump_reload(tab_id);
@@ -889,7 +854,7 @@ impl Workspace {
         let Some(session) = self.edit_session.as_mut() else {
             return;
         };
-        if session.editor.content() != session.saved_content {
+        if session.editor.text() != session.saved_content {
             session.confirm_discard = true;
         } else {
             self.edit_session = None;
@@ -2018,19 +1983,6 @@ impl Workspace {
             .is_some_and(|t| t.editor.is_some())
     }
 
-    /// Ctrl ± / 重置缩放后,重算所有原生编辑器(编辑弹层 + Files/Project
-    /// 两个独立预览面板各自的 tab)的排版,使其随全局 scale 一起放大缩小。
-    /// 见 `preview::dozer_editor_font_metrics`。此前只重算 `self.preview`
-    /// (Files)——`Project` 预览面板里的原生编辑器字号一直冻结在打开时刻,
-    /// 不随全局缩放联动,是同一类"Project 那半支被漏查"的预存 bug。
-    pub(crate) fn resync_editor_font_metrics(&mut self) {
-        if let Some(session) = self.edit_session.as_mut() {
-            crate::preview::dozer_editor_font_metrics(&mut session.editor);
-        }
-        self.preview.resync_editor_font_metrics();
-        self.project_preview.resync_editor_font_metrics();
-    }
-
     /// 当前激活浏览器 tab 的 webview id,语义同 `active_preview_webview_id`,
     /// 查独立的 `self.browser`。
     pub fn active_browser_webview_id(&self) -> Option<usize> {
@@ -2131,21 +2083,21 @@ impl Workspace {
         self.blur_preview_editors();
     }
 
-    /// `iced-code-editor` 不会自己在别处获得焦点时让出焦点(vendor README
-    /// 明文要求宿主显式调用 `lose_focus()`),否则光标闪烁/IME 状态会一直
-    /// 赖在最后打开的编辑器上,即使键盘输入其实已经转到了终端/其它输入框。
-    /// 两个独立 `PreviewPane`(Files 预览、Project 面板配对预览)+ 编辑
-    /// 弹层各自的 editor 都要清。独立于 `blur_inputs` 之外单独暴露:
-    /// `main.rs` 里还有一条不经过鼠标点击、纯靠消息把 `current_focus` 拨
-    /// 离 `FocusIntent::Preview` 的路径(切终端 tab/新会话落成/选中
-    /// agent),那条路径不该顺带触发 `blur_inputs` 里其它自绘输入的失焦
-    /// 逻辑(地址栏取消/树编辑取消等语义不搭)。
+    /// 官方 `text_editor` 的焦点是真实 iced 焦点树的一部分,不能像 vendored
+    /// `iced-code-editor` 那样直接对某个实例调 `lose_focus()`——只能置一个
+    /// 一次性位,main.rs 下一帧用 `operation::focusable::unfocus`(不指定
+    /// 目标,统一让出当前持有焦点的那个 widget)。独立于 `blur_inputs` 之外
+    /// 单独暴露:`main.rs` 里还有一条不经过鼠标点击、纯靠消息把
+    /// `current_focus` 拨离 `FocusIntent::Preview` 的路径(切终端 tab/新会话
+    /// 落成/选中 agent),那条路径不该顺带触发 `blur_inputs` 里其它自绘输入
+    /// 的失焦逻辑(地址栏取消/树编辑取消等语义不搭)。
     pub fn blur_preview_editors(&mut self) {
-        self.preview.blur_all_editors();
-        self.project_preview.blur_all_editors();
-        if let Some(session) = self.edit_session.as_mut() {
-            session.editor.lose_focus();
-        }
+        self.pending_editor_unfocus = true;
+    }
+
+    /// 读走(消费式)"让出预览编辑器焦点"的一次性标记。
+    pub fn take_editor_unfocus_pending(&mut self) -> bool {
+        std::mem::take(&mut self.pending_editor_unfocus)
     }
 
     /// 协议闭包共享的文件白名单句柄.
@@ -4073,6 +4025,7 @@ pub(crate) async fn forward_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iced_widget::text_editor;
 
     #[test]
     fn review_webview_spec_empty_when_no_review() {
@@ -5052,31 +5005,6 @@ mod tests {
     }
 
     #[test]
-    fn resync_editor_font_metrics_updates_project_preview_editor_too() {
-        let (_dir_rs, rs_path) = write_temp_file("a.rs", "fn main() {}");
-        let mut ws = Workspace::empty_for_project_placeholder();
-        let id = ws.project_preview.open_path(rs_path);
-
-        // 手动改到一个和 `dozer_editor_font_metrics` 期望值不同的字号,
-        // 模拟"缩放前遗留的旧字号",resync 后应该被覆盖成当前 scale 对应
-        // 的值——此前只 resync `self.preview`(Files),`project_preview`
-        // 这边永远不会被这个断言覆盖到。
-        ws.project_preview
-            .editor_mut(id)
-            .expect("刚打开的 .rs tab 应该是原生编辑器")
-            .set_font_size(1.0, false);
-
-        ws.resync_editor_font_metrics();
-
-        let expected = terminal_font::size() * byteui::theme::icon_size::scale();
-        assert_eq!(
-            ws.project_preview.editor_mut(id).unwrap().font_size(),
-            expected,
-            "Project 预览面板的原生编辑器字号也应该跟着全局缩放同步"
-        );
-    }
-
-    #[test]
     fn preview_edit_open_reads_file_and_starts_clean_session() {
         let (_dir, path) = write_temp_file("a.rs", "fn main() {}");
         let mut ws = Workspace::empty_for_project_placeholder();
@@ -5085,11 +5013,15 @@ mod tests {
         let session = ws.edit_session.as_ref().expect("应打开编辑会话");
         assert_eq!(session.tab_id, tab_id);
         assert_eq!(session.path, path);
-        assert_eq!(session.editor.content(), "fn main() {}");
+        assert_eq!(session.editor.text(), "fn main() {}");
         assert_eq!(session.saved_content, "fn main() {}");
-        assert!(session.editor.content() == session.saved_content);
+        assert!(session.editor.text() == session.saved_content);
         assert!(session.error.is_none());
         assert!(!session.confirm_discard);
+        assert!(
+            ws.take_edit_session_focus_pending(),
+            "打开编辑弹层应置一次性聚焦位"
+        );
     }
 
     #[test]
@@ -5111,46 +5043,24 @@ mod tests {
     }
 
     #[test]
-    fn preview_edit_open_by_id_opens_matching_tab() {
-        let (_dir, path) = write_temp_file("a.rs", "fn main() {}");
-        let mut ws = Workspace::empty_for_project_placeholder();
-        let tab_id = ws.preview.open_path(path.clone());
-        ws.preview_edit_open_by_id(tab_id);
-        let session = ws.edit_session.as_ref().expect("应打开编辑会话");
-        assert_eq!(session.tab_id, tab_id);
-        assert_eq!(session.path, path);
-    }
-
-    #[test]
-    fn preview_edit_open_by_id_unknown_tab_is_noop() {
-        let mut ws = Workspace::empty_for_project_placeholder();
-        ws.preview_edit_open_by_id(424242);
-        assert!(ws.edit_session.is_none());
-        assert!(ws.preview_error.is_none());
-    }
-
-    #[test]
     fn preview_edit_action_marks_dirty_only_on_edit_actions() {
         let (_dir, path) = write_temp_file("a.txt", "hi");
         let mut ws = Workspace::empty_for_project_placeholder();
         ws.preview.open_path(path);
         ws.preview_edit_open(0);
         // 非编辑动作(光标移动)不置脏。
-        let _ = ws.preview_edit_event(EditorMessage::ArrowKey(
-            iced_code_editor::ArrowDirection::Right,
-            false,
-        ));
+        ws.preview_edit_event(EditorAction::Move(text_editor::Motion::Right));
         assert!(
-            ws.edit_session.as_ref().unwrap().editor.content()
+            ws.edit_session.as_ref().unwrap().editor.text()
                 == ws.edit_session.as_ref().unwrap().saved_content
         );
         // 编辑动作置脏。前一步光标右移了一位,Insert 落在 'h' 之后。
-        let _ = ws.preview_edit_event(EditorMessage::CharacterInput('!'));
+        ws.preview_edit_event(EditorAction::Edit(text_editor::Edit::Insert('!')));
         assert!(
-            ws.edit_session.as_ref().unwrap().editor.content()
+            ws.edit_session.as_ref().unwrap().editor.text()
                 != ws.edit_session.as_ref().unwrap().saved_content
         );
-        assert_eq!(ws.edit_session.as_ref().unwrap().editor.content(), "h!i");
+        assert_eq!(ws.edit_session.as_ref().unwrap().editor.text(), "h!i");
     }
 
     #[test]
@@ -5159,10 +5069,10 @@ mod tests {
         let mut ws = Workspace::empty_for_project_placeholder();
         let tab_id = ws.preview.open_path(path.clone());
         ws.preview_edit_open(0);
-        let _ = ws.preview_edit_event(EditorMessage::CharacterInput('!'));
+        ws.preview_edit_event(EditorAction::Edit(text_editor::Edit::Insert('!')));
         ws.preview_edit_save();
         assert!(
-            ws.edit_session.as_ref().unwrap().editor.content()
+            ws.edit_session.as_ref().unwrap().editor.text()
                 == ws.edit_session.as_ref().unwrap().saved_content
         );
         assert!(ws.edit_session.as_ref().unwrap().error.is_none());
@@ -5173,7 +5083,7 @@ mod tests {
         let tab = &ws.preview.tabs()[0];
         assert!(tab.editor.is_some(), "原生 tab 保存后仍持有(重建的)editor");
         assert_eq!(
-            tab.editor.as_ref().unwrap().content(),
+            tab.editor.as_ref().unwrap().text(),
             "!hi",
             "保存内容应反映磁盘上的新内容"
         );
@@ -5203,7 +5113,7 @@ mod tests {
         let mut ws = Workspace::empty_for_project_placeholder();
         ws.preview.open_path(path);
         ws.preview_edit_open(0);
-        let _ = ws.preview_edit_event(EditorMessage::CharacterInput('!'));
+        ws.preview_edit_event(EditorAction::Edit(text_editor::Edit::Insert('!')));
         ws.preview_edit_close_request();
         assert!(
             ws.edit_session.as_ref().unwrap().confirm_discard,
@@ -5217,7 +5127,7 @@ mod tests {
             "取消要回到编辑态"
         );
         assert!(
-            ws.edit_session.as_ref().unwrap().editor.content()
+            ws.edit_session.as_ref().unwrap().editor.text()
                 != ws.edit_session.as_ref().unwrap().saved_content,
             "取消不丢改动"
         );
@@ -5225,5 +5135,14 @@ mod tests {
         ws.preview_edit_close_request();
         ws.preview_edit_confirm_discard();
         assert!(ws.edit_session.is_none(), "确认放弃要真正关闭");
+    }
+
+    #[test]
+    fn blur_preview_editors_sets_pending_unfocus_flag() {
+        let mut ws = Workspace::empty_for_project_placeholder();
+        assert!(!ws.take_editor_unfocus_pending());
+        ws.blur_preview_editors();
+        assert!(ws.take_editor_unfocus_pending(), "应置一次性让出焦点标记");
+        assert!(!ws.take_editor_unfocus_pending(), "消费式:取走后应复位");
     }
 }

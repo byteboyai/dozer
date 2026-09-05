@@ -1,6 +1,7 @@
 mod app;
 mod assets;
 mod clipboard_image;
+mod code_editor;
 mod conversation;
 mod delivery;
 mod diff_render;
@@ -251,9 +252,7 @@ use iced_winit::core::time::Instant;
 use iced_winit::core::window;
 use iced_winit::core::{Color, Event, Font, Pixels, Point, Rectangle, Size, SmolStr, Theme};
 use iced_winit::futures;
-use iced_winit::runtime::task;
 use iced_winit::runtime::user_interface::{self, UserInterface};
-use iced_winit::runtime::{Action, clipboard::Action as ClipboardAction};
 use iced_winit::winit;
 
 use winit::{
@@ -411,28 +410,17 @@ async fn build_app(
 
 /// 执行一次 `operation` 遍历(程序化聚焦/滚动/每帧真实焦点镜像查询)。
 ///
-/// 兜底修复:第三方 `iced_code_editor` 用 `iced_aw::ContextMenu` 包住代码画布,
-/// 而 iced_aw 0.13.1 的 `ContextMenu::operate` 在菜单展开(`show == true`)时会
-/// 把 underlay 的 layout 错当 overlay 的 layout 交给一段只含菜单浮动的 widget
-/// 树,`iced_widget::Container::operate` 于是 `layout.children().next().unwrap()`
-/// 到 `None` 直接 panic(整窗卡死)。Dozer 无法 patch crates.io 上的 iced_aw,故
-/// 在调用侧 `catch_unwind` 兜底。这些遍历只读镜像/一次性操作,崩溃时该帧镜像
-/// 留 `false`、程序化动作不生效,都是安全的;菜单一关下一帧即恢复。panic hook
-/// 在遍历期间临时摘掉,避免菜单展开的每帧都打印一整屏误导性的 backtrace。
+/// 此前这里有一段 `catch_unwind` 兜底,是因为 vendored `iced-code-editor`
+/// 内部用 `iced_aw::ContextMenu` 包代码画布,`iced_aw 0.13.1` 的
+/// `ContextMenu::operate` 在菜单展开时有布局层级 panic——那个依赖已经随
+/// `code_editor` 模块的官方 `text_editor` 替换一起删除(不再引入 `iced_aw`),
+/// 兜底不再需要,恢复正常的 panic 行为。
 fn run_operate(
     interface: &mut UserInterface<Message, iced_widget::Theme, iced_renderer::Renderer>,
     renderer: &mut iced_renderer::Renderer,
     operation: &mut dyn iced_winit::core::widget::operation::Operation,
 ) {
-    let prev_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        interface.operate(renderer, operation);
-    }));
-    std::panic::set_hook(prev_hook);
-    if result.is_err() {
-        tracing::debug!("operate 遍历被 iced_aw ContextMenu 的展开菜单 panic 吸收(安全)");
-    }
+    interface.operate(renderer, operation);
 }
 
 pub fn main() -> Result<(), winit::error::EventLoopError> {
@@ -1589,20 +1577,20 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 app.blur_preview_editors();
             }
             match message {
-                // `iced-code-editor` 的内部消息:编辑器产生的 `iced::Task`(剪贴板
-                // 读写/搜索框聚焦)需要在持有 `Clipboard` 句柄的这里执行,不能走
-                // `app.update`(其返回 `()`,无运行时)。桥接器把 Task 里的
-                // 副作用(剪贴板)落到系统剪贴板,把 `Output` 子消息递归回灌编辑器。
-                Message::EditorEvent(event) => {
-                    Self::run_editor_task(app, clipboard, event);
+                // 官方 `text_editor` 的 `Action`:剪贴板读写由 iced 运行时经
+                // `Widget::update` 拿到的 `Clipboard` 直接处理,不再需要像
+                // vendored `iced-code-editor` 那样手动拆 `Task` 桥接,直接走
+                // 正常的 `app.update` 路径即可。
+                Message::EditorEvent(action) => {
+                    app.preview_edit_event(action);
                     window.request_redraw();
                 }
-                Message::PreviewEditorEvent(tab_id, event) => {
-                    Self::run_preview_tab_editor_task(app, clipboard, tab_id, event, false);
+                Message::PreviewEditorEvent(tab_id, action) => {
+                    app.preview_tab_editor_event(tab_id, action);
                     window.request_redraw();
                 }
-                Message::ProjectPreviewEditorEvent(tab_id, event) => {
-                    Self::run_preview_tab_editor_task(app, clipboard, tab_id, event, true);
+                Message::ProjectPreviewEditorEvent(tab_id, action) => {
+                    app.project_preview_tab_editor_event(tab_id, action);
                     window.request_redraw();
                 }
                 // 顶栏"＋"与项目栏"打开项目…"共用的唯一打开入口:rfd 模态选中
@@ -1693,115 +1681,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 other => app.update(other),
             }
             window.request_redraw();
-        }
-
-        /// 执行 `iced-code-editor` 产生的 `iced::Task`。dozer 的 `App::update`
-        /// 返回 `()`、没有 iced 运行时,编辑器把剪贴板读写等副作用包成
-        /// `Task` 委托给宿主——这里手动把 Task 拆成 `Action` 流,把剪贴板
-        /// 动作落到系统剪贴板(持有 `Clipboard` 句柄的只有 `Runner`),把
-        /// `Output` 子消息(如剪贴板读到的 `Paste(text)`)递归回灌编辑器。
-        ///
-        /// 普通编辑路径(打字/删改/移动)产生的 Task 恒为 `Task::none()`,这里
-        /// 直接跳过;只有复制/剪切/粘贴会真正走剪贴板分支。
-        fn run_editor_task(
-            app: &mut App,
-            clipboard: &mut Clipboard,
-            event: iced_code_editor::Message,
-        ) {
-            use iced_winit::futures::futures::stream::StreamExt;
-            let mut queue = std::collections::VecDeque::new();
-            queue.push_back(event);
-            while let Some(ev) = queue.pop_front() {
-                let t = app.preview_edit_event(ev);
-                let Some(stream) = task::into_stream(t) else {
-                    continue;
-                };
-                // 把这一轮 Task 流里的 `Output` 子消息收集起来,剪贴板动作
-                // 同步落到系统剪贴板。流里可能有 `yield_now` 占位项,被
-                // `filter_map` 跳过,不影响。
-                let mut outputs: Vec<iced_code_editor::Message> = Vec::new();
-                futures::futures::executor::block_on(async {
-                    let mut stream = stream;
-                    while let Some(action) = stream.next().await {
-                        match action {
-                            Action::Output(m) => outputs.push(m),
-                            Action::Clipboard(cb) => match cb {
-                                ClipboardAction::Read { target, channel } => {
-                                    let text = clipboard.read(target);
-                                    let _ = channel.send(text);
-                                }
-                                ClipboardAction::Write { target, contents } => {
-                                    clipboard.write(target, contents);
-                                }
-                            },
-                            _ => {}
-                        }
-                    }
-                });
-                for m in outputs {
-                    queue.push_back(m);
-                }
-            }
-        }
-
-        /// 同 `run_editor_task`,但把消息转发给某个原生预览 tab(按 `tab_id`)而不是
-        /// 编辑弹层的单一 `edit_session`。两个函数体基本重复——保持"预览/编辑分层"
-        /// 这条既定决策(见设计文档),不引入一个把两种目标都塞进同一签名的抽象。
-        /// `project` 为 true 时路由到 Project 面板右配对预览
-        /// (`ProjectPreviewEditOpenByTab`/`app.project_preview_tab_editor_event`),
-        /// 否则走 Files 预览那套。
-        fn run_preview_tab_editor_task(
-            app: &mut App,
-            clipboard: &mut Clipboard,
-            tab_id: usize,
-            event: iced_code_editor::Message,
-            project: bool,
-        ) {
-            use iced_winit::futures::futures::stream::StreamExt;
-            let mut queue = std::collections::VecDeque::new();
-            queue.push_back(event);
-            while let Some(ev) = queue.pop_front() {
-                // 只读预览的右键"编辑"项:不入编辑器(编辑器是只读的,内部也没有
-                // 对应处理),直接转成本体消息打开该 tab 的编辑浮层。
-                if let iced_code_editor::Message::OpenInEditor = ev {
-                    if project {
-                        app.update(Message::ProjectPreviewEditOpenByTab(tab_id));
-                    } else {
-                        app.update(Message::PreviewEditOpenByTab(tab_id));
-                    }
-                    continue;
-                }
-                let t = if project {
-                    app.project_preview_tab_editor_event(tab_id, ev)
-                } else {
-                    app.preview_tab_editor_event(tab_id, ev)
-                };
-                let Some(stream) = task::into_stream(t) else {
-                    continue;
-                };
-                let mut outputs: Vec<iced_code_editor::Message> = Vec::new();
-                futures::futures::executor::block_on(async {
-                    let mut stream = stream;
-                    while let Some(action) = stream.next().await {
-                        match action {
-                            Action::Output(m) => outputs.push(m),
-                            Action::Clipboard(cb) => match cb {
-                                ClipboardAction::Read { target, channel } => {
-                                    let text = clipboard.read(target);
-                                    let _ = channel.send(text);
-                                }
-                                ClipboardAction::Write { target, contents } => {
-                                    clipboard.write(target, contents);
-                                }
-                            },
-                            _ => {}
-                        }
-                    }
-                });
-                for m in outputs {
-                    queue.push_back(m);
-                }
-            }
         }
 
         /// sync_previews 之后统一应用焦点意图(此时新建 webview 已入池)。
@@ -2272,6 +2151,41 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // 必须显式 focus;一次性位,消费即复位)。
                                 let input_menu_focus = app.take_pending_text_input_focus();
 
+                                // 同理,消费"新建原生预览编辑器/编辑弹层刚打开、需要
+                                // 程序化聚焦"三个一次性位——官方 `text_editor` 的焦点
+                                // 是真实 iced 焦点树的一部分,构造时拿不到,要等下一帧
+                                // 用 `operation::focusable::focus` 强制聚焦(同项目树
+                                // 行内编辑/Todo 内容编辑的既有手法)。
+                                let preview_editor_focus_id =
+                                    app.active_workspace_mut().and_then(|ws| {
+                                        ws.preview
+                                            .take_pending_editor_focus()
+                                            .then(|| ws.preview.active_editor_focus_id())
+                                            .flatten()
+                                    });
+                                let project_preview_editor_focus_id =
+                                    app.active_workspace_mut().and_then(|ws| {
+                                        ws.project_preview
+                                            .take_pending_editor_focus()
+                                            .then(|| ws.project_preview.active_editor_focus_id())
+                                            .flatten()
+                                    });
+                                let edit_session_editor_focus_id =
+                                    app.active_workspace_mut().and_then(|ws| {
+                                        ws.take_edit_session_focus_pending()
+                                            .then(|| {
+                                                ws.edit_session
+                                                    .as_ref()
+                                                    .map(|s| s.editor.focus_id())
+                                            })
+                                            .flatten()
+                                    });
+                                // 同理,消费"消息驱动把焦点拨离预览编辑器"一次性位
+                                // (见 `Workspace::blur_preview_editors` 的说明)。
+                                let editor_unfocus_pending = app
+                                    .active_workspace_mut()
+                                    .is_some_and(|ws| ws.take_editor_unfocus_pending());
+
                                 // Draw iced on top
                                 let mut interface = UserInterface::build(
                                     app.view(),
@@ -2368,6 +2282,32 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     let mut op =
                                         iced_widget::core::widget::operation::focusable::focus::<()>(
                                             id,
+                                        );
+                                    run_operate(&mut interface, renderer, &mut op);
+                                }
+
+                                // 新建原生预览编辑器 tab / 打开编辑弹层时程序化聚焦
+                                // 真正的 `text_editor`(一次性位,消费即复位)。
+                                for id in [
+                                    preview_editor_focus_id,
+                                    project_preview_editor_focus_id,
+                                    edit_session_editor_focus_id,
+                                ]
+                                .into_iter()
+                                .flatten()
+                                {
+                                    let mut op =
+                                        iced_widget::core::widget::operation::focusable::focus::<()>(
+                                            id,
+                                        );
+                                    run_operate(&mut interface, renderer, &mut op);
+                                }
+
+                                // 消息驱动(非鼠标点击)把焦点拨离预览编辑器——统一
+                                // 让出当前持有焦点的 widget(不指定目标)。
+                                if editor_unfocus_pending {
+                                    let mut op =
+                                        iced_widget::core::widget::operation::focusable::unfocus::<()>(
                                         );
                                     run_operate(&mut interface, renderer, &mut op);
                                 }

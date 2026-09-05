@@ -1785,18 +1785,14 @@ pub enum Message {
     /// 预览 tab 右键菜单里的"刷新":从文件系统重新读盘并重新渲染该 tab
     /// (下标即 vec 位置,与 `PreviewCloseTab` 同约定)。
     PreviewReload(usize),
-    /// 预览:原生编辑器右键菜单里的"编辑"项(`Message::OpenInEditor`),
-    /// 携带 `PreviewTab.id`。由 `main.rs` 从 `PreviewEditorEvent` 前置拦截,
-    /// 转成这条,打开对应文件的编辑浮层。
-    PreviewEditOpenByTab(usize),
-    /// 预览编辑弹层:`iced-code-editor` 的内部消息。由 `main.rs` 的 Task
-    /// 桥接器消费(编辑产生的 `iced::Task` 在此执行剪贴板/聚焦等副作用),
-    /// 不经 `App::update`。
-    EditorEvent(iced_code_editor::Message),
-    /// 原生预览 tab 的 `iced-code-editor` 内部消息,`usize` 是 `PreviewTab.id`。
+    /// 预览编辑弹层:官方 `text_editor` 的 `Action`。由 `main.rs` 的 dispatch
+    /// 直接转发给 `App::preview_edit_event`(剪贴板由 iced 运行时自己处理,
+    /// 不需要像 vendored `iced-code-editor` 那样手动拆 `Task` 桥接)。
+    EditorEvent(iced_widget::text_editor::Action),
+    /// 原生预览 tab 的 `text_editor::Action`,`usize` 是 `PreviewTab.id`。
     /// 与 `EditorEvent`(编辑弹层专用)是两条独立路径,互不路由串台——见
     /// `preview_tab_editor_event` 的文档。
-    PreviewEditorEvent(usize, iced_code_editor::Message),
+    PreviewEditorEvent(usize, iced_widget::text_editor::Action),
     /// 预览编辑弹层:"保存"按钮 / ⌘S。
     PreviewEditSave,
     /// 预览编辑弹层:×按钮 / 点遮罩——脏改动会先转成二次确认,不直接关。
@@ -1822,17 +1818,13 @@ pub enum Message {
     ProjectPreviewCloseTab(usize),
     /// Project 面板右配对预览:tab 栏箭头翻页(语义同 `PreviewTabScroll`)。
     ProjectPreviewTabScroll(bool),
-    /// Project 面板右配对预览的原生 `iced-code-editor` 内部消息，语义同
+    /// Project 面板右配对预览的原生 `text_editor::Action`，语义同
     /// `PreviewEditorEvent`。
-    ProjectPreviewEditorEvent(usize, iced_code_editor::Message),
+    ProjectPreviewEditorEvent(usize, iced_widget::text_editor::Action),
     /// Project 面板右配对预览:右键菜单里的"编辑"项,语义同 `PreviewEditOpen`。
     ProjectPreviewEditOpen(usize),
     /// Project 面板右配对预览 tab 右键菜单里的"刷新",语义同 `PreviewReload`。
     ProjectPreviewReload(usize),
-    /// Project 面板右配对预览:原生编辑器里的"编辑"项
-    /// (`Message::OpenInEditor`),按 `PreviewTab.id` 路由,语义同
-    /// `PreviewEditOpenByTab`。
-    ProjectPreviewEditOpenByTab(usize),
     /// Project 面板右配对预览 tab 右键菜单,语义同 `PreviewTabContextMenu`。
     ProjectPreviewTabContextMenu {
         idx: usize,
@@ -3720,18 +3712,6 @@ impl App {
         });
     }
 
-    /// Ctrl ± / 重置缩放后,把全局 scale 变化同步到所有已打开的原生编辑器
-    /// (预览 tab + 编辑弹层),使其字号随终端/图标一起缩放——否则编辑器字号
-    /// 冻结在打开时刻(见 `preview::dozer_editor_font_metrics` 注释)。
-    fn resync_editor_font_metrics(&mut self) {
-        let ids: Vec<i64> = self.projects.keys().copied().collect();
-        for pid in ids {
-            if let Some(ws) = loaded_workspace_mut(&mut self.projects, pid) {
-                ws.resync_editor_font_metrics();
-            }
-        }
-    }
-
     /// 左面板区当前**有效**宽度:每项目持久化宽按当前窗口宽夹取(见
     /// `clamp_left_width`)。渲染侧(`left_panel_area`)必须用这个值,而不是
     /// 直接读 `self.dims.left_width`——几何侧(`left_zone_width`)走的是
@@ -4077,50 +4057,39 @@ impl App {
             .unwrap_or(false)
     }
 
-    /// 转发 `iced-code-editor` 的内部消息到当前聚焦项目的编辑器,返回编辑器
-    /// 产生的 `iced::Task`(剪贴板读写/搜索框聚焦等),交由 `main.rs` 的 Task
-    /// 桥接器执行。`iced_code_editor::Message` 经 `Message::EditorEvent` 进入
-    /// `main.rs::dispatch` 后才会走到这里。
-    pub fn preview_edit_event(
-        &mut self,
-        event: iced_code_editor::Message,
-    ) -> iced_winit::runtime::Task<iced_code_editor::Message> {
+    /// 转发 `text_editor::Action` 到当前聚焦项目的编辑弹层。官方 `text_editor`
+    /// 的剪贴板读写由 iced 运行时经 `Widget::update` 拿到的 `Clipboard` 直接
+    /// 处理,不再需要像 vendored `iced-code-editor` 那样手动拆 `Task` 桥接
+    /// (那套桥接已随依赖一起删除,见 main.rs 历史)。
+    pub fn preview_edit_event(&mut self, action: iced_widget::text_editor::Action) {
         if let Some(ws) = self.active_workspace_mut() {
-            ws.preview_edit_event(event)
-        } else {
-            iced_winit::runtime::Task::none()
+            ws.preview_edit_event(action);
         }
     }
 
     /// 转发到聚焦项目里某个原生预览 tab 的 editor,语义同 `preview_edit_event`
-    /// 但按 `tab_id` 定位而不是"当前编辑弹层"。`Message::PreviewEditorEvent` 经
-    /// `main.rs::dispatch` 进入后走到这里。
+    /// 但按 `tab_id` 定位而不是"当前编辑弹层"。
     pub fn preview_tab_editor_event(
         &mut self,
         tab_id: usize,
-        event: iced_code_editor::Message,
-    ) -> iced_winit::runtime::Task<iced_code_editor::Message> {
+        action: iced_widget::text_editor::Action,
+    ) {
         let io = self.shell_io();
         if let Some(ws) = self.active_workspace_mut() {
-            let task = ws.preview_tab_editor_event(tab_id, event);
+            ws.preview_tab_editor_event(tab_id, action);
             ws.spawn_preview_context_push(&io);
-            task
-        } else {
-            iced_winit::runtime::Task::none()
         }
     }
 
-    /// Project 面板右配对预览 tab 的 `iced-code-editor` 内部消息转发,语义同
+    /// Project 面板右配对预览 tab 的 `text_editor::Action` 转发,语义同
     /// `preview_tab_editor_event`,作用于 `ws.project_preview`。
     pub fn project_preview_tab_editor_event(
         &mut self,
         tab_id: usize,
-        event: iced_code_editor::Message,
-    ) -> iced_winit::runtime::Task<iced_code_editor::Message> {
+        action: iced_widget::text_editor::Action,
+    ) {
         if let Some(ws) = self.active_workspace_mut() {
-            ws.project_preview_tab_editor_event(tab_id, event)
-        } else {
-            iced_winit::runtime::Task::none()
+            ws.project_preview_tab_editor_event(tab_id, action);
         }
     }
 
@@ -4964,18 +4933,12 @@ impl App {
                 self.preview_tab_menu = None;
                 self.with_focused_project(move |ws, _io| ws.preview_reload(idx));
             }
-            Message::PreviewEditOpenByTab(tab_id) => {
-                self.with_focused_project(move |ws, _io| ws.preview_edit_open_by_id(tab_id));
+            Message::EditorEvent(_action) => {
+                // main.rs 的 dispatch 直接调 `App::preview_edit_event`,不经过
+                // 这里的 `App::update`——到达此处说明未走 dispatch 拦截,忽略。
             }
-            Message::EditorEvent(_event) => {
-                // `iced-code-editor` 的内部消息走 `main.rs` 的 Task 桥接器
-                // (需要 `Clipboard` 句柄执行剪贴板副作用),这里不处理——若
-                // 真到达 `App::update` 说明事件未走 dispatch 拦截,直接忽略。
-            }
-            Message::PreviewEditorEvent(_tab_id, _event) => {
-                // 原生预览 tab 的 `iced-code-editor` 内部消息同样走 `main.rs`
-                // 的 Task 桥接器(`run_preview_tab_editor_task`),与 `EditorEvent`
-                // 同口径:到达 `App::update` 说明未走 dispatch 拦截,直接忽略。
+            Message::PreviewEditorEvent(_tab_id, _action) => {
+                // 同 `EditorEvent`,main.rs 直接调 `App::preview_tab_editor_event`。
             }
             Message::PreviewEditSave => {
                 self.with_focused_project(|ws, _io| ws.preview_edit_save());
@@ -5035,11 +4998,6 @@ impl App {
             Message::ProjectPreviewReload(idx) => {
                 self.project_preview_tab_menu = None;
                 self.with_focused_project(move |ws, _io| ws.project_preview_reload(idx));
-            }
-            Message::ProjectPreviewEditOpenByTab(tab_id) => {
-                self.with_focused_project(move |ws, _io| {
-                    ws.project_preview_edit_open_by_id(tab_id)
-                });
             }
             Message::ProjectPreviewTabContextMenu { idx, editable } => {
                 let (x, y) = self.files.last_right_click();
@@ -5578,20 +5536,17 @@ impl App {
                 byteui::theme::icon_size::zoom_by(UI_ZOOM_STEP);
                 byteui::theme::icon_size::persist_scale(&crate::theme::ui_scale_path());
                 self.sync_terminal_grid();
-                self.resync_editor_font_metrics();
                 self.pending_preview_zoom = true;
             }
             Message::ZoomOut => {
                 byteui::theme::icon_size::zoom_by(1.0 / UI_ZOOM_STEP);
                 byteui::theme::icon_size::persist_scale(&crate::theme::ui_scale_path());
                 self.sync_terminal_grid();
-                self.resync_editor_font_metrics();
                 self.pending_preview_zoom = true;
             }
             Message::ZoomReset => {
                 byteui::theme::icon_size::reset_scale(&crate::theme::ui_scale_path());
                 self.sync_terminal_grid();
-                self.resync_editor_font_metrics();
                 self.pending_preview_zoom = true;
             }
             // WebViewFocused 只在 main.rs 的 dispatch 里设 pending_focus,

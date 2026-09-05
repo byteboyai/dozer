@@ -2,13 +2,6 @@
 resolver = "3"
 members = ["crates/*", "spike/*"]
 
-# Dozer 本地补丁：`iced_font_awesome` 上游把 umbrella `iced` 以 default 特性依赖，
-# 其 default 里的 `web-colors` 会经特性联合打开共享 `iced_graphics::GAMMA_CORRECTION`
-# =false，整窗 Secondary gamma 灰白发灰。这里用 `vendor/` 里的本地副本替换注册表源，
-# 副本已把 `iced` 依赖设为 `default-features = false`。
-[patch.crates-io]
-iced_font_awesome = { path = "vendor/iced_font_awesome" }
-
 [workspace.package]
 edition = "2024"
 license = "MIT"

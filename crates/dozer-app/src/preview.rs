@@ -7,8 +7,6 @@
 //! 地址栏,这里只保留文件/验收两种 tab。
 use std::path::PathBuf;
 
-use crate::theme;
-
 /// 一个预览 tab。
 pub struct PreviewTab {
     pub id: usize,
@@ -20,9 +18,9 @@ pub struct PreviewTab {
     pub reload_nonce: u64,
     /// 仅白名单扩展名(`is_editable_extension`)的文件 tab 有值。非空即代表这个
     /// tab 走原生渲染路径,`desired_webviews()` 据此把它从 wry 期望清单里排除。
-    /// `CodeEditor` 没有实现 `Clone`/`PartialEq`,这也是 `PreviewTab` 摘掉这两个
+    /// `CodeView` 没有实现 `Clone`/`PartialEq`,这也是 `PreviewTab` 摘掉这两个
     /// derive 的原因(见下方手写的 `Debug`)。
-    pub editor: Option<iced_code_editor::CodeEditor>,
+    pub editor: Option<crate::code_editor::CodeView>,
 }
 
 impl std::fmt::Debug for PreviewTab {
@@ -87,13 +85,23 @@ fn flyfish_url(path: &std::path::Path) -> String {
     u
 }
 
-/// 读盘并按白名单扩展名构造一个只读 `CodeEditor`。内容不是合法 UTF-8 时降级
+/// 读盘并按白名单扩展名构造一个只读 `CodeView`。内容不是合法 UTF-8 时降级
 /// 用 lossy 转换(不当错误);其余读取失败(不存在/权限不够等)原样透传
 /// `std::io::Error`,调用方(`push_tab`/`bump_reload`)按现有"打开失败"路径
 /// 处理,不在这里新增错误类型。
+///
+/// 只读预览的右键"编辑"项已经是 Dozer 自己的 tab 右键菜单
+/// (`Message::PreviewEditOpen`,见 `app.rs::preview_tab_context_menu_popup`),
+/// 不再需要编辑器内部自带一个等价入口(vendored `iced-code-editor` 那个内部
+/// 右键菜单已随依赖一起删除)。
+///
+/// 打开即程序化聚焦(键盘事件无需先点击一次即可直达编辑器)这件事挪到
+/// `push_tab` 里置一次性 `pending_focus` 位——官方 `text_editor` 的焦点是
+/// 真实 iced 焦点树的一部分,不能像 vendored 版本那样在构造时直接
+/// `request_focus()` 拿到。
 fn read_and_build_native_editor(
     path: &std::path::Path,
-) -> std::io::Result<iced_code_editor::CodeEditor> {
+) -> std::io::Result<crate::code_editor::CodeView> {
     let text = std::fs::read_to_string(path).or_else(|e| {
         // 白名单扩展名但内容不是合法 UTF-8:降级用 lossy 转换,不当错误处理
         // (多数文本查看器的通行做法,见设计文档"错误处理"一节)。
@@ -103,21 +111,11 @@ fn read_and_build_native_editor(
             Err(e)
         }
     })?;
-    let mut editor =
-        iced_code_editor::CodeEditor::new(&text, &extension_to_syntax(path)).with_read_only(true);
-    // 只读预览也挂右键"编辑"项:点击即发 `Message::OpenInEditor`,由宿主接管
-    // 打开可编辑的编辑浮层(编辑浮层本身是读写的,不再挂这一项)。
-    editor.set_edit_entry_enabled(true);
-    editor.set_theme(dozer_editor_style());
-    editor.set_syntax_theme(dozer_syntax_theme());
-    editor.set_font(crate::fonts::code_font());
-    editor.set_font_size(byteui::theme::font::body() as f32, false);
-    // 打开即夺焦点(同 `preview_edit_open` 的编辑弹层),键盘事件无需先点击
-    // 一次即可直达编辑器——否则新开的原生预览 tab 得先点一下才能用方向键
-    // 滚动/移动光标。
-    editor.request_focus();
-    let _ = editor.update(&iced_code_editor::Message::CanvasFocusGained);
-    Ok(editor)
+    Ok(crate::code_editor::CodeView::new(
+        &text,
+        extension_to_syntax(path),
+        true,
+    ))
 }
 
 /// "编辑"按钮的显示范围:纯扩展名白名单,不做内容嗅探(YAGNI,见设计文档
@@ -207,6 +205,11 @@ pub struct PreviewPane {
     tabs: Vec<PreviewTab>,
     active: usize,
     next_id: usize,
+    /// 新建原生编辑器 tab 时置位的一次性程序化聚焦标记——`CodeView` 的焦点
+    /// 是真实 iced 焦点树的一部分,构造时不能直接拿到,要等下一帧
+    /// `UserInterface::build` 之后由 main.rs 用 `operation::focusable::focus`
+    /// 强制聚焦(同项目树行内编辑/Todo 内容编辑的既有手法)。
+    pending_editor_focus: bool,
 }
 
 impl PreviewPane {
@@ -218,15 +221,18 @@ impl PreviewPane {
         self.active
     }
 
-    /// Ctrl ± / 重置缩放后,把全局 scale 变化反映到所有原生预览 tab 的编辑器
-    /// 排版(字号/行高/布局),否则编辑器字号冻结在打开时刻,不随终端/图标一起
-    /// 放大缩小(见 `dozer_editor_font_metrics` 注释里的既定意图)。
-    pub fn resync_editor_font_metrics(&mut self) {
-        for tab in self.tabs.iter_mut() {
-            if let Some(editor) = tab.editor.as_mut() {
-                dozer_editor_font_metrics(editor);
-            }
-        }
+    /// 读走(消费式)一次性程序化聚焦标记。
+    pub fn take_pending_editor_focus(&mut self) -> bool {
+        std::mem::take(&mut self.pending_editor_focus)
+    }
+
+    /// 当前激活 tab 若走原生渲染,返回其编辑器的 `widget::Id`(供
+    /// `operation::focusable::focus` 定位)。
+    pub fn active_editor_focus_id(&self) -> Option<iced_widget::core::widget::Id> {
+        self.tabs
+            .get(self.active)
+            .and_then(|t| t.editor.as_ref())
+            .map(|e| e.focus_id())
     }
 
     pub fn open_path(&mut self, path: PathBuf) -> usize {
@@ -259,6 +265,11 @@ impl PreviewPane {
             }
             _ => None,
         };
+        // 新建原生编辑器 tab:键盘事件无需先点击一次即可直达编辑器(见
+        // `pending_editor_focus` 文档)。
+        if editor.is_some() {
+            self.pending_editor_focus = true;
+        }
         self.tabs.push(PreviewTab {
             id,
             kind,
@@ -377,27 +388,13 @@ impl PreviewPane {
     }
 
     /// 按 tab id 取该 tab 的原生 editor 可变引用。tab 不存在或该 tab 走 wry
-    /// 路径(没有 editor)都返回 `None`。main.rs 的 `Message::PreviewEditorEvent`
-    /// 桥接器用它把 `iced_code_editor::Message` 转发给正确的 tab。
-    pub fn editor_mut(&mut self, tab_id: usize) -> Option<&mut iced_code_editor::CodeEditor> {
+    /// 路径(没有 editor)都返回 `None`。main.rs 把 `Message::PreviewEditorEvent`
+    /// 转发的 `Action` 用它路由给正确的 tab。
+    pub fn editor_mut(&mut self, tab_id: usize) -> Option<&mut crate::code_editor::CodeView> {
         self.tabs
             .iter_mut()
             .find(|t| t.id == tab_id)
             .and_then(|t| t.editor.as_mut())
-    }
-
-    /// 点击预览列以外的地方时调用:`iced-code-editor` 不会自己在别处获得
-    /// 焦点时让出焦点(vendor README 明文要求宿主显式调用
-    /// `lose_focus()`),不叫的话光标/闪烁/IME 状态会一直赖在最后一个打开
-    /// 的 tab 上,哪怕键盘输入其实已经转到了终端/其它输入框。所有 tab 的
-    /// editor 全部无条件调用一遍——多数本来就没在 focus(`CodeEditor` 内部
-    /// 靠一个进程级 `FOCUSED_EDITOR_ID` 判断"我是不是那一个",`lose_focus`
-    /// 对没在 focus 的实例是没有可观察副作用的空操作),不用先判断哪个才是
-    /// 真正持有焦点的那个。
-    pub fn blur_all_editors(&mut self) {
-        for tab in self.tabs.iter_mut().filter_map(|t| t.editor.as_mut()) {
-            tab.lose_focus();
-        }
     }
 
     /// 右键菜单"刷新"落地:按 tab 下标(与 `close`/`select`/`edit_open`
@@ -471,100 +468,16 @@ impl PreviewPane {
     }
 }
 
-/// 编辑器 chrome 对齐到 Dozer 的 ByteBoy2077 配色——是编辑器来适配
-/// Dozer,不是反过来让四栏骨架迁就编辑器的默认蓝底。背景/文本/行号栏/
-/// 滚动条/当前行高亮这一层与 bg `#0a0e16` + 奶油 `#FFE5B4` + 青
-/// `#47DEF0` + 边框灰 `#1c3440` 一致。金 `#F2D94E` 是"甲方动作专属",
-/// 不在此处使用。语法高亮的 token 颜色由 `dozer_syntax_theme` 单独接管。
-pub(crate) fn dozer_editor_style() -> iced_code_editor::theme::Style {
-    use iced_widget::core::Color;
-    let bg = byteui::theme::color::current().bg;
-    let cyan = byteui::theme::color::current().cyan;
-    iced_code_editor::theme::Style {
-        background: bg,
-        text_color: byteui::theme::color::current().cream,
-        gutter_background: byteui::theme::color::current().term_bg,
-        gutter_border: byteui::theme::color::current().border,
-        line_number_color: byteui::theme::color::current().dim,
-        scrollbar: iced_code_editor::theme::ScrollbarStyle {
-            // 与中央 `scrollbar.rs` 同一套几何/配色:轨道透明无描边、thumb 用
-            // `TAB_ACTIVE_BORDER`(#dcc9a3)胶囊,半径 = thumb宽/2。hover 时
-            // 朝奶油 `#FFE5B4` 提亮一档,便于在编辑器内看清可拖拽。
-            rail_width: byteui::theme::geometry::scrollbar_width(),
-            thumb_width: byteui::theme::geometry::scrollbar_thumb_width(),
-            thumb_radius: byteui::theme::geometry::scrollbar_thumb_width() / 2.0,
-            thumb_color: byteui::theme::color::current().tab_active_border,
-            thumb_hover_color: byteui::theme::color::mix(
-                byteui::theme::color::current().tab_active_border,
-                byteui::theme::color::current().cream,
-                0.35,
-            ),
-            thumb_border: iced_widget::core::Border::default(),
-            track_background: None,
-            track_radius: 0.0,
-            track_border: iced_widget::core::Border::default(),
-        },
-        current_line_highlight: Color {
-            r: cyan.r,
-            g: cyan.g,
-            b: cyan.b,
-            a: 0.10,
-        },
-        whitespace_color: byteui::theme::color::current().dim,
-        context_menu: iced_code_editor::theme::ContextMenuStyle {
-            // 与文件树/分支切换右键菜单同一套 `context_menu` 区域令牌:
-            // bg `#0a0e16` 实底 + `#1c3440` 1px 描边圆角 10 + 内边距 6、列距 2。
-            background: bg,
-            border_color: byteui::theme::color::current().border,
-            border_width: 1.0,
-            border_radius: 10.0,
-            // Dozer 的右键菜单不投影(region 无 shadow),这里清掉编辑器默认阴影。
-            shadow: iced_widget::core::Shadow::default(),
-            padding: 6.0,
-            gap: 2.0,
-            // 固定宽:比文件树菜单项(160)略宽,给"操作名 + 快捷键"两列都留足
-            // 空间,不裁剪 ⇧⌘Z 这类长快捷键。取 `context_menu_width`(180)。
-            menu_width: byteui::theme::geometry::context_menu_width(),
-            item_radius: 4.0,
-            item_hover_background: byteui::theme::color::current().tab_hover,
-            item_text_color: byteui::theme::color::current().cream,
-            item_disabled_text_color: byteui::theme::color::current().dim,
-            item_padding_h: byteui::theme::geometry::menu_pad_h(),
-            item_padding_v: byteui::theme::geometry::menu_pad_v(),
-            item_gap: byteui::theme::geometry::menu_gap(),
-            separator_color: byteui::theme::color::current().border,
-        },
-    }
-}
-
-/// 给编辑器灌一套与终端同源的排版指标(字号、行高),再乘上全局 scale(
-/// `icon_size::scale`)做布局。见 `dozer_editor_style` 上方注释。
-///
-/// 字距不做处理:编辑器与终端都走 cosmic-text 默认字距,天然一致,显式
-/// 加宽反而会引入第二套数据源。
-pub(crate) fn dozer_editor_font_metrics(editor: &mut iced_code_editor::CodeEditor) {
-    let scale = byteui::theme::icon_size::scale();
-    let font_size = theme::terminal_font::size() * scale;
-    editor.set_font_size(font_size, false);
-    let line_height = font_size * theme::terminal_font::line_height_factor();
-    editor.set_line_height(line_height);
-
-    // 编辑器的静态布局像素(行号区宽 / 折叠列宽 / 字形顶部内边距)取
-    // `ice-code-editor::theme` 的公开默认(基线锚),再乘全局 scale——
-    // 这样 Ctrl ± 时编辑器与终端/图标一起等比放大,而非冻结在启动时刻。
-    // scale=1 时不漂移。
-    editor.set_layout_metrics(
-        iced_code_editor::theme::DEFAULT_GUTTER_WIDTH * scale,
-        iced_code_editor::theme::DEFAULT_FOLD_MARGIN_WIDTH * scale,
-        iced_code_editor::theme::DEFAULT_TOP_PADDING * scale,
-    );
-}
-
 /// 构造一份 ByteBoy2077 的 syntect 语法主题,让语法高亮的 token 颜色
-/// (关键字/字符串/注释/类型/函数名……)融入 Dozer 配色。`iced-code-editor`
-/// 上游把 syntect 主题硬编码成 base16-ocean.dark、无公开接口可改;我们
-/// vendored 了一份打了 `set_syntax_theme` 补丁的副本(`vendor/iced-code-editor`),
-/// 才能把这份主题灌进编辑器。
+/// (关键字/字符串/注释/类型/函数名……)融入 Dozer 配色。喂给
+/// `code_editor::highlighter::Highlighter`(自实现的 `text::Highlighter`,
+/// 不用 `iced_highlighter` 自带的 5 个内置主题——那是个封闭枚举,没有
+/// "传入任意 syntect Theme" 的公开口子)。
+///
+/// 编辑器 chrome(背景/文本/选区色)对齐 ByteBoy2077 配色的逻辑挪到
+/// `code_editor::editor_style`——官方 `text_editor::Style` 字段比这份
+/// syntect 主题简单得多,没有 gutter/滚动条/右键菜单的概念(那些 UI 官方
+/// widget 本来就不画,gutter 是 `code_editor` 自建的 canvas)。
 ///
 /// 配色唯一真相源是终端 16 色面板(`term_model::ANSI16`)与终端默认前景
 /// (`term_model::default_fg_rgb`)——编辑器里展示的语法色因此与终端里
@@ -760,7 +673,7 @@ mod tests {
             "reload 后原生 tab 应仍持有(重建后的)editor"
         );
         assert_eq!(
-            p.tabs()[0].editor.as_ref().unwrap().content(),
+            p.tabs()[0].editor.as_ref().unwrap().text(),
             "fn two() {}",
             "原生 tab reload 应读入磁盘上的新内容"
         );
@@ -769,37 +682,34 @@ mod tests {
     }
 
     #[test]
-    fn blur_all_editors_clears_canvas_focus_on_native_tabs() {
-        // vendor README:`iced-code-editor` 不会自己在别处获得焦点时让出
-        // 焦点,必须宿主显式调 `lose_focus()`——这里验证 `blur_all_editors`
-        // 真的调用到了,而不是接口对了但没接线。
+    fn opening_native_editor_tab_sets_pending_focus() {
+        // 官方 `text_editor` 的焦点是真实 iced 焦点树的一部分,构造时不能
+        // 直接拿到,改成置一次性 `pending_editor_focus` 位,main.rs 下一帧
+        // 用 `operation::focusable::focus` 强制聚焦(见该字段文档)。
         let path =
-            std::env::temp_dir().join(format!("preview_blur_test_{}.rs", std::process::id()));
+            std::env::temp_dir().join(format!("preview_focus_test_{}.rs", std::process::id()));
         std::fs::write(&path, "fn main() {}").unwrap();
 
         let mut p = PreviewPane::default();
         p.open_path(path.clone());
         assert!(
-            p.tabs()[0].editor.as_ref().unwrap().has_canvas_focus(),
-            "打开原生 tab 时已 dispatch CanvasFocusGained,应处于 focus 态"
+            p.take_pending_editor_focus(),
+            "新建原生 tab 应置一次性聚焦位"
         );
-
-        p.blur_all_editors();
-        assert!(
-            !p.tabs()[0].editor.as_ref().unwrap().has_canvas_focus(),
-            "点击预览列以外应让原生 editor 失去 canvas focus"
-        );
+        assert!(!p.take_pending_editor_focus(), "消费式:取走后应复位");
 
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
-    fn blur_all_editors_is_noop_on_webview_tabs() {
-        // .png 走 wry,没有 editor——确认对这类 tab 是安全的空操作,不 panic。
+    fn opening_webview_tab_does_not_set_pending_focus() {
         let mut p = PreviewPane::default();
-        p.open_path(PathBuf::from("/tmp/blur_test.png"));
+        p.open_path(PathBuf::from("/tmp/no_focus_test.png"));
         assert!(p.tabs()[0].editor.is_none());
-        p.blur_all_editors(); // 不应 panic
+        assert!(
+            !p.take_pending_editor_focus(),
+            ".png 走 wry,没有原生 editor,不该置聚焦位"
+        );
     }
 
     #[test]
@@ -1227,58 +1137,6 @@ mod tests {
         assert_eq!(encode_component("你"), "%E4%BD%A0");
     }
 
-    /// 防漂移锚:原生预览编辑器的右键菜单必须和 Dozer 文件树/分支切换右键
-    /// 菜单同一套 ByteBoy2077 视觉——`#0a0e16` 实底、`#1c3440` 1px 圆角 10
-    /// 描边、无投影、`TAB_HOVER` hover 底、`CREAM` 文字、`DIM` 禁用,内边距/
-    /// 列距取自 `context_menu` region 令牌。某天有人手滑改掉会在这里炸。
-    #[test]
-    fn dozer_editor_context_menu_matches_byteboy_style() {
-        let m = dozer_editor_style().context_menu;
-        assert_eq!(m.background, byteui::theme::color::current().bg);
-        assert_eq!(m.border_color, byteui::theme::color::current().border);
-        assert_eq!(m.border_width, 1.0);
-        assert_eq!(m.border_radius, 10.0);
-        assert_eq!(m.shadow, iced_widget::core::Shadow::default());
-        assert_eq!(m.padding, 6.0);
-        assert_eq!(m.gap, 2.0);
-        assert_eq!(m.menu_width, byteui::theme::geometry::context_menu_width());
-        assert_eq!(m.item_radius, 4.0);
-        assert_eq!(
-            m.item_hover_background,
-            byteui::theme::color::current().tab_hover
-        );
-        assert_eq!(m.item_text_color, byteui::theme::color::current().cream);
-        assert_eq!(
-            m.item_disabled_text_color,
-            byteui::theme::color::current().dim
-        );
-        assert_eq!(m.item_padding_h, byteui::theme::geometry::menu_pad_h());
-        assert_eq!(m.item_padding_v, byteui::theme::geometry::menu_pad_v());
-        assert_eq!(m.item_gap, byteui::theme::geometry::menu_gap());
-        assert_eq!(m.separator_color, byteui::theme::color::current().border);
-    }
-
-    /// 防漂移锚:编辑器排版指标必须和终端同源——字号 `terminal_font::size()`
-    /// 乘全局 scale、行高再乘 `terminal_font::line_height_factor()`,静态布局
-    /// 像素(行号区/折叠列/字形内边距)取 vendored 编辑器公开默认再乘 scale。
-    #[test]
-    fn dozer_editor_font_metrics_match_terminal() {
-        let scale = byteui::theme::icon_size::scale();
-        let mut editor = iced_code_editor::CodeEditor::new("abc", "rs");
-        dozer_editor_font_metrics(&mut editor);
-
-        assert_eq!(
-            editor.font_size(),
-            theme::terminal_font::size() * scale,
-            "编辑器字号应与终端同源(terminal_font)"
-        );
-        assert_eq!(
-            editor.line_height(),
-            theme::terminal_font::size() * scale * theme::terminal_font::line_height_factor(),
-            "编辑器行高应与终端同源(terminal_font::line_height_factor)"
-        );
-    }
-
     /// 防漂移锚:编辑器语法高亮的 token 颜色必须锚定到终端 16 色面板与终端
     /// 默认前景,而不是一套独立的十六进制魔数。字符串=Green、关键字=Cyan、
     /// 注释=BrightBlack、类型=Blue、函数=BrightBlue、默认前/后景=终端本色。
@@ -1333,36 +1191,6 @@ mod tests {
                 .expect("未命中 regexp")
                 != 0xd9,
             "regexp 不应使用甲方金 #F2D94E"
-        );
-    }
-
-    /// 防漂移锚:编辑器滚动条的几何/配色必须与中央 `scrollbar.rs` 的规范一致。
-    #[test]
-    fn dozer_editor_scrollbar_matches_byteboy_style() {
-        let s = dozer_editor_style().scrollbar;
-        assert_eq!(s.rail_width, byteui::theme::geometry::scrollbar_width());
-        assert_eq!(
-            s.thumb_width,
-            byteui::theme::geometry::scrollbar_thumb_width()
-        );
-        assert_eq!(
-            s.thumb_radius,
-            byteui::theme::geometry::scrollbar_thumb_width() / 2.0
-        );
-        assert_eq!(
-            s.thumb_color,
-            byteui::theme::color::current().tab_active_border
-        );
-        assert_eq!(s.track_background, None);
-        assert_eq!(
-            s.track_border,
-            iced_widget::core::Border::default(),
-            "轨道应无描边"
-        );
-        assert_eq!(
-            s.thumb_border,
-            iced_widget::core::Border::default(),
-            "thumb 应无描边"
         );
     }
 }
