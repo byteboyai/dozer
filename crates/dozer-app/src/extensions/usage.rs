@@ -564,8 +564,8 @@ pub fn content_pane<'a>(
                 None => {
                     // —— 以下为"全部 agent"(`None`)态保留的原布局 ——
                     // Agent 用量统计从原先"回合/Token"两张饼图拆成四个统计口径的
-                    // 两行饼图(2026-09-05 初版用户要求):第一行 = Session 数量 +
-                    // Round 数量,第二行 = Input/Output + Cache Read/Write。每张饼
+                    // 两行饼图(2026-09-05 初版用户要求):第一行 = Session +
+                    // Round,第二行 = Input/Output + Cache Read/Write。每张饼
                     // 图右侧带同圆环着色的列表式图例(2026-08-28 反馈:圆环本体保留,
                     // 只是图例换成数字表);每个口径各自归总、跳过空口径,避免给某
                     // agent 画一个永远 0 的占位扇区。
@@ -585,7 +585,7 @@ pub fn content_pane<'a>(
                         // 数据那张。竖线高度/格间距都用 `Length::Fixed`,不能是
                         // `Length::Fill`(见外层注释里 `Fill` 传染的说明,2026-08-27)。
                         let lines = [
-                            ("Session 数量", &session_share, "Round 数量", &turn_share),
+                            ("Session", &session_share, "Round", &turn_share),
                             (
                                 "Input/Output Token",
                                 &io_share,
