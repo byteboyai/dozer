@@ -1142,6 +1142,7 @@ fn bar_chart(
         }),
     ]
     .width(Length::Fill)
+    .height(Length::Fixed(DAY_BAND_HEIGHT))
     .into()
 }
 
@@ -1295,6 +1296,7 @@ fn trend_bar_chart(
         }),
     ]
     .width(Length::Fill)
+    .height(Length::Fixed(DAY_BAND_HEIGHT))
     .into()
 }
 
