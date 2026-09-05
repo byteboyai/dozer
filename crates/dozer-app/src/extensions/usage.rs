@@ -138,6 +138,16 @@ fn day_index_from_ms(ms: u64) -> i64 {
     (ms / 86_400_000) as i64
 }
 
+/// 当前时刻对应的 UTC 日索引，供趋势图当时间轴的右端点（“最近 N 天”）。同上
+/// 不做时区换算，与 `day_index_from_ms`/`daily_totals_by_agent` 的分桶口径一致。
+fn today_day_index() -> i64 {
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    day_index_from_ms(ms)
+}
+
 /// UTC 日索引 → (year, month, day)。Howard Hinnant 的公开 civil_from_days
 /// 算法(纯数学换算，不依赖任何日期库)。
 fn civil_from_days(z: i64) -> (i32, u32, u32) {
@@ -216,65 +226,179 @@ pub fn daily_totals_by_agent(
     days.split_off(start)
 }
 
-/// 整个项目范围（不限"近 7 天"）按 agent 的 token 总量（四项合计），供
-/// 饼图用；只返回项目里实际出现过的 agent，不产生全零占位记录。
+/// 选中具体 agent 后的存量趋势聚合（2026-09-05,+n）数据的单天结构：某天的
+/// 若干并列可度量量（`values[i]` 的含义由调用方给出序列标签）。与上面
+/// `DayAgentTotals` 专为“每天按 agent 分几根柱”不同，这里“每天并列几根
+/// 量”由 `values` 按序列下标承载——实际服务 Session 趋势（会话/回合）与
+/// Token 趋势（Input/Output、Cache read/write）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DaySeries {
+    pub day_index: i64,
+    pub label: String,
+    pub values: Vec<u64>,
+}
+
+/// 三个趋势各自的最近窗口天数（2026-09-05 用户要求：Session 与 Input/Output
+/// 看近 15 天整的一条轴；Cache read/write 只看近 5 天更紧的一跳）。
+const SESSION_TREND_WINDOW: i64 = 15;
+const IO_TREND_WINDOW: i64 = 15;
+const CACHE_TREND_WINDOW: i64 = 5;
+
+/// 把某 agent 的会话按天分桶、摊成最近 `window` 天的一根连续时间轴（最旧在
+/// 左、今天在右，`values[bar_idx]` 交给 `per_row` 逐条会话各取一个标量求和；
+/// `conversation_count` 的“每会话记 1”由 `session` 桶单独算）。空的天不会
+/// 被丢掉——趋势类图表如果只画实际有数据的日期，稀疏使用看起来就像是连续的
+/// 活跃曲线（计划待办里测过、产品方向也认可连续轴）。时间轴右端落在
+/// `last_day_index`（调方传“今天”，单测传固定值保证可复现），不从最新的
+/// 数据那天开始反向截——那样一旦最近几天没数据窗口就会漂移。
+///
+/// 返回的 `DaySeries.values.len() == per_series_count`（统一每列都有那么多根
+/// 柱，未填充的是 0），保证渲染时某天某序列缺数据也能占一根、不塌列。
+fn trend_series(
+    rows: &[(ConversationMeta, ConversationUsage)],
+    agent: AgentKind,
+    window: i64,
+    last_day_index: i64,
+    per_row: impl Fn(&ConversationUsage) -> Vec<u64>,
+) -> Vec<DaySeries> {
+    let first_day = last_day_index - window + 1;
+    let count = per_row(&ConversationUsage::default()).len();
+    let mut buckets: std::collections::BTreeMap<i64, Vec<u64>> = std::collections::BTreeMap::new();
+    for (meta, usage) in rows {
+        if meta.agent != agent {
+            continue;
+        }
+        let day = day_index_from_ms(meta.modified_ms);
+        if day < first_day || day > last_day_index {
+            continue;
+        }
+        let row = per_row(usage);
+        let slot = buckets.entry(day).or_insert_with(|| vec![0; count]);
+        for (i, v) in row.into_iter().enumerate() {
+            slot[i] = slot[i].saturating_add(v);
+        }
+    }
+    (first_day..=last_day_index)
+        .map(|day_index| {
+            let (_, m, d) = civil_from_days(day_index);
+            let values = buckets.remove(&day_index).unwrap_or_else(|| vec![0; count]);
+            DaySeries {
+                day_index,
+                label: format!("{m:02}/{d:02}"),
+                values,
+            }
+        })
+        .collect()
+}
+
+/// Session 趋势：某 agent 最近 `SESSION_TREND_WINDOW` 天逐日 `[会话数, 回合数]`
+/// 两序列。会话数=当日的 transcript（会话文件）条数，与 `agent_session_share`
+/// 口径一致（含零回合空会话，各记 1）；回合数=`turns` 求和。
+fn session_round_trend(
+    rows: &[(ConversationMeta, ConversationUsage)],
+    agent: AgentKind,
+    today_index: i64,
+) -> Vec<DaySeries> {
+    trend_series(rows, agent, SESSION_TREND_WINDOW, today_index, |u| {
+        vec![1, u.turns as u64]
+    })
+}
+
+fn io_trend(
+    rows: &[(ConversationMeta, ConversationUsage)],
+    agent: AgentKind,
+    today_index: i64,
+) -> Vec<DaySeries> {
+    trend_series(rows, agent, IO_TREND_WINDOW, today_index, |u| {
+        vec![u.tokens_in, u.tokens_out]
+    })
+}
+
+fn cache_trend(
+    rows: &[(ConversationMeta, ConversationUsage)],
+    agent: AgentKind,
+    today_index: i64,
+) -> Vec<DaySeries> {
+    trend_series(rows, agent, CACHE_TREND_WINDOW, today_index, |u| {
+        vec![u.tokens_cache_read, u.tokens_cache_write]
+    })
+}
+
+/// 展示固定顺序（含 V8agent，CLAUDE.md：新功能默认覆盖它，不能像 Codex/
+/// Kilo 那样被漏掉）。2026-09-05 起把原先三份拷贝收拢成这一份常量，供下面
+/// 各 `agent_*_share` 与 `agents_present` 共用，避免动一处漏一处的旧坑。
+const AGENT_ORDER: [AgentKind; 4] = [
+    AgentKind::Claude,
+    AgentKind::Codebuddy,
+    AgentKind::Opencode,
+    AgentKind::V8agent,
+];
+
+/// 整个项目范围按 agent 归总某会话级标量（`per_row` 从每条会话取一个数）。
+/// 只返回总和 > 0 的 agent，不产生全零占位记录、不改变 `AGENT_ORDER` 顺序
+/// ——四种统计饼图共用同一套口径与起止，图例顺序始终对齐。
+fn agent_metric_share(
+    rows: &[(ConversationMeta, ConversationUsage)],
+    per_row: impl Fn(&ConversationUsage) -> u64,
+) -> Vec<(AgentKind, u64)> {
+    AGENT_ORDER
+        .into_iter()
+        .filter_map(|kind| {
+            let total: u64 = rows
+                .iter()
+                .filter(|(meta, _)| meta.agent == kind)
+                .map(|(_, u)| per_row(u))
+                .sum();
+            (total > 0).then_some((kind, total))
+        })
+        .collect()
+}
+
+/// 整个项目范围（不限"近 7 天"）按 agent 的 token 总量（四项合计）。四张
+/// 统计饼图从这条总口径切出细分口径（见 `agent_io_token_share`、`agent_cache_
+/// token_share`）前，`daily_totals_by_agent` 仍用它的 agent 集合当"本项目出现
+/// 过的 agent"排序基准。
 pub fn agent_token_share(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<(AgentKind, u64)> {
-    const ORDER: [AgentKind; 4] = [
-        AgentKind::Claude,
-        AgentKind::Codebuddy,
-        AgentKind::Opencode,
-        AgentKind::V8agent,
-    ];
-    ORDER
-        .into_iter()
-        .filter_map(|kind| {
-            let total: u64 = rows
-                .iter()
-                .filter(|(meta, _)| meta.agent == kind)
-                .map(|(_, u)| {
-                    u.tokens_in + u.tokens_out + u.tokens_cache_read + u.tokens_cache_write
-                })
-                .sum();
-            (total > 0).then_some((kind, total))
-        })
-        .collect()
+    agent_metric_share(rows, |u| {
+        u.tokens_in + u.tokens_out + u.tokens_cache_read + u.tokens_cache_write
+    })
 }
 
-/// 整个项目范围按 agent 的"回合"数合计——口径沿用用量面板的"回合"
-/// 即 human 发言数（2026-08-27 调整，见 dozerd `get_usage_summary_in`）。
-/// 只返回实际有回合的 agent，不产生全零占位记录。供 Agent 会话统计饼图用。
+/// 整个项目范围按 agent 的"回合"数合计——口径沿用用量面板的"回合"即
+/// human 发言数（2026-08-27 调整，见 dozerd `get_usage_summary_in`）。
 pub fn agent_turn_share(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<(AgentKind, u64)> {
-    const ORDER: [AgentKind; 4] = [
-        AgentKind::Claude,
-        AgentKind::Codebuddy,
-        AgentKind::Opencode,
-        AgentKind::V8agent,
-    ];
-    ORDER
-        .into_iter()
-        .filter_map(|kind| {
-            let total: u64 = rows
-                .iter()
-                .filter(|(meta, _)| meta.agent == kind)
-                .map(|(_, u)| u.turns as u64)
-                .sum();
-            (total > 0).then_some((kind, total))
-        })
-        .collect()
+    agent_metric_share(rows, |u| u.turns as u64)
 }
 
-/// 项目里实际出现过的 agent,顺序固定(与 `agent_token_share`/
-/// `agent_turn_share` 同一份 `ORDER`,含 V8agent——新功能默认覆盖它,不能
-/// 像 Codex/Kilo 那样被漏掉)。供右侧筛选栏用:传入未经筛选的全量 `rows`,
-/// 这样切换到某个 agent 之后,列表本身不会跟着收缩到只剩它自己。
+/// 每个 agent 的"会话数"＝它在项目里留下的 transcript 会话条数。每一条
+/// 会话记 1（含零回合的空会话），让"这个 agent 跑过几个会话"独立成立。
+pub fn agent_session_share(
+    rows: &[(ConversationMeta, ConversationUsage)],
+) -> Vec<(AgentKind, u64)> {
+    agent_metric_share(rows, |_| 1)
+}
+
+/// Input/Output token：每会话上下文进出量（`tokens_in + tokens_out`）。
+pub fn agent_io_token_share(
+    rows: &[(ConversationMeta, ConversationUsage)],
+) -> Vec<(AgentKind, u64)> {
+    agent_metric_share(rows, |u| u.tokens_in + u.tokens_out)
+}
+
+/// Cache Read/Write token：每会话提示缓存读写/写入量
+/// （`tokens_cache_read + tokens_cache_write`），与 IO 量分开看图。
+pub fn agent_cache_token_share(
+    rows: &[(ConversationMeta, ConversationUsage)],
+) -> Vec<(AgentKind, u64)> {
+    agent_metric_share(rows, |u| u.tokens_cache_read + u.tokens_cache_write)
+}
+
+/// 项目里实际出现过的 agent,顺序固定(共用上面的 `AGENT_ORDER`,含 V8agent
+/// ——新功能默认覆盖它,不能像 Codex/Kilo 那样被漏掉)。供右侧筛选栏用:传入
+/// 未经筛选的全量 `rows`,这样切换到某个 agent 之后,列表本身不会跟着收缩到
+/// 只剩它自己。
 pub fn agents_present(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<AgentKind> {
-    const ORDER: [AgentKind; 4] = [
-        AgentKind::Claude,
-        AgentKind::Codebuddy,
-        AgentKind::Opencode,
-        AgentKind::V8agent,
-    ];
-    ORDER
+    AGENT_ORDER
         .into_iter()
         .filter(|kind| rows.iter().any(|(meta, _)| meta.agent == *kind))
         .collect()
@@ -409,64 +533,83 @@ pub fn content_pane<'a>(
         } else {
             let usages: Vec<ConversationUsage> =
                 filtered_rows.iter().map(|(_, u)| u.clone()).collect();
-            content = content.push(home_section_head("项目用量统计"));
-            content = content.push(project_summary_boxes(&aggregate(&usages)));
+            // 每个"小节标题 + 它的图表"作为一个独立内层 column 组装,内层用手调
+            // 的较大 `SECTION_CHART_GAP`,让标题跟随后的图表之间有更富余的间距;
+            // 外层 `content` 默认 spacing(12) 只负责小节与小节、与小节上方面板
+            // 标题等之间的常规间距——两者解耦,避免一刀切把别处空隙也放大。
+            let proj_section = column![home_section_head("项目用量统计")]
+                .spacing(SECTION_CHART_GAP)
+                .push(project_summary_boxes(&aggregate(&usages)));
+            content = content.push(proj_section);
 
-            let token_share = agent_token_share(&filtered_rows);
-            let turn_share = agent_turn_share(&filtered_rows);
-            if !token_share.is_empty() || !turn_share.is_empty() {
-                content = content.push(home_section_head("Agent 用量统计"));
-                // 左侧"回合"、右侧"token"各一份饼图 + 列表式统计并排放
-                // (2026-08-28 用户反馈:饼图不能去掉——列表只是换了图例的文字
-                // 格式,圆环本体保留)。
-                let mut agent_row = iced_widget::row![]
-                    .spacing(32)
-                    .align_y(iced_widget::core::Alignment::Center);
-                if !turn_share.is_empty() {
-                    agent_row = agent_row.push(
-                        iced_widget::row![
-                            pie_chart(&turn_share),
-                            chart_stat_list("Round", &turn_share)
-                        ]
-                        .spacing(16)
-                        .align_y(iced_widget::core::Alignment::Center),
-                    );
+            // 内容在"选中具体 agent"与"全部 agent"两态用两套统计:选单个 agent
+            // 时,Agent 的横向对比饼图和"每日按 agent 分组"的柱子都失去意义
+            // (大饼只有一片、每日柱只剩本地那一根),所以切成一连串"该 agent"
+            // 的按天趋势;只有"全部 agent"才保留横向 + 每日对比布局。2026-09-05。
+            match ws_state.agent_filter {
+                Some(agent) => {
+                    // 趋势轴右端定位到"今天"(UTC),让"最近 N 天"从今天往回铺,
+                    // 不会因为最近几天没活动就把窗口漂走。
+                    let today = today_day_index();
+                    let session = session_round_trend(rows, agent, today);
+                    let session_series = session_trend_series();
+                    if let Some(sec) = trend_chart_section("Session 趋势", session_series, &session)
+                    {
+                        content = content.push(sec);
+                    }
+                    if let Some(sec) = token_trend_section(agent, rows, today) {
+                        content = content.push(sec);
+                    }
                 }
-                if !turn_share.is_empty() && !token_share.is_empty() {
-                    // 分隔线的高度必须是 `Length::Fixed`,不能是 `Length::Fill`——
-                    // iced 0.14 的 `Row`/`Column::push` 会把子元素的 `Fill` 沿
-                    // `Length::enclose` 一路传染给 `agent_row` 再到 `content`,
-                    // 让整行被撑成"吃满面板剩余高度",饼图/图例固定尺寸不变,
-                    // `align_y(Center)` 一居中就在上下留出大片空白(2026-08-27
-                    // 修的真实 bug,面板本该紧凑排布)。高度对齐 `pie_chart` 的
-                    // 固定尺寸,视觉上跟饼图顶/底对齐。
-                    agent_row = agent_row.push(
-                        container(iced_widget::Space::new())
-                            .width(Length::Fixed(1.0))
-                            .height(Length::Fixed(PIE_RADIUS * 2.0 + 8.0))
-                            .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-                                background: Some(byteui::theme::color::current().border.into()),
-                                ..iced_widget::container::Style::default()
-                            }),
-                    );
-                }
-                if !token_share.is_empty() {
-                    agent_row = agent_row.push(
-                        iced_widget::row![
-                            pie_chart(&token_share),
-                            chart_stat_list("Token", &token_share)
-                        ]
-                        .spacing(16)
-                        .align_y(iced_widget::core::Alignment::Center),
-                    );
-                }
-                content = content.push(agent_row);
-            }
+                None => {
+                    // —— 以下为"全部 agent"(`None`)态保留的原布局 ——
+                    // Agent 用量统计从原先"回合/Token"两张饼图拆成四个统计口径的
+                    // 两行饼图(2026-09-05 初版用户要求):第一行 = Session 数量 +
+                    // Round 数量,第二行 = Input/Output + Cache Read/Write。每张饼
+                    // 图右侧带同圆环着色的列表式图例(2026-08-28 反馈:圆环本体保留,
+                    // 只是图例换成数字表);每个口径各自归总、跳过空口径,避免给某
+                    // agent 画一个永远 0 的占位扇区。
+                    let session_share = agent_session_share(&filtered_rows);
+                    let turn_share = agent_turn_share(&filtered_rows);
+                    let io_share = agent_io_token_share(&filtered_rows);
+                    let cache_share = agent_cache_token_share(&filtered_rows);
+                    let any_agent_metric = !session_share.is_empty()
+                        || !turn_share.is_empty()
+                        || !io_share.is_empty()
+                        || !cache_share.is_empty();
+                    if any_agent_metric {
+                        // 组装"Agent 用量统计"这一个内层小节:标题 + 两张指标行,
+                        // 小节内统一走 `SECTION_CHART_GAP` 间距。每个"指标格"= 一张
+                        // 饼图 + 配套数字表图例,由 `agent_metrics_row` 负责把给定
+                        // 两个口径并排、两张时用 1px 竖线隔开;某口径为空时只放有
+                        // 数据那张。竖线高度/格间距都用 `Length::Fixed`,不能是
+                        // `Length::Fill`(见外层注释里 `Fill` 传染的说明,2026-08-27)。
+                        let lines = [
+                            ("Session 数量", &session_share, "Round 数量", &turn_share),
+                            (
+                                "Input/Output Token",
+                                &io_share,
+                                "Cache Read/Write",
+                                &cache_share,
+                            ),
+                        ];
+                        let mut agent_metrics_section =
+                            column![home_section_head("Agent 用量统计")].spacing(SECTION_CHART_GAP);
+                        for (l1, s1, l2, s2) in lines {
+                            agent_metrics_section =
+                                agent_metrics_section.push(agent_metrics_row(l1, s1, l2, s2));
+                        }
+                        content = content.push(agent_metrics_section);
+                    }
 
-            let days = daily_totals_by_agent(&filtered_rows);
-            if !days.is_empty() {
-                content = content.push(home_section_head("每日用量统计"));
-                content = content.push(bar_chart(&days));
+                    let days = daily_totals_by_agent(&filtered_rows);
+                    if !days.is_empty() {
+                        let day_section = column![home_section_head("每日用量统计")]
+                            .spacing(SECTION_CHART_GAP)
+                            .push(bar_chart(&days));
+                        content = content.push(day_section);
+                    }
+                }
             }
         }
     }
@@ -1002,6 +1145,287 @@ fn bar_chart(
     .into()
 }
 
+/// 一张趋势柱状图里并列的若干序列标签与配色。`values` 下标与这里一一对应,
+/// 渲染与图例共用同一份,避免两处各写一遍序列名/色。
+type TrendSeries = Vec<(&'static str, Color)>;
+
+/// 悬停趋势图某天柱子的气泡:日期 + 该天各序列值(>0 才列,同 `chart_stat_list`
+/// 只列有效数据的口径)。样式复用 `icons::tooltip_bubble_style`。
+fn trend_tooltip_bubble(
+    day: &DaySeries,
+    series: &TrendSeries,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let mut rows = column![
+        text(day.label.clone())
+            .size(byteui::theme::font::caption_sm())
+            .color(byteui::theme::color::current().cream),
+    ]
+    .spacing(4);
+    for (i, &(label, color)) in series.iter().enumerate() {
+        if day.values[i] == 0 {
+            continue;
+        }
+        let dot = container(iced_widget::Space::new())
+            .width(Length::Fixed(8.0))
+            .height(Length::Fixed(8.0))
+            .style(
+                move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                    background: Some(color.into()),
+                    border: Border {
+                        radius: 4.0.into(),
+                        ..Border::default()
+                    },
+                    ..iced_widget::container::Style::default()
+                },
+            );
+        rows = rows.push(
+            iced_widget::row![
+                dot,
+                text(format!("{label}: {}", format_count(day.values[i])))
+                    .size(byteui::theme::font::caption_sm())
+                    .color(byteui::theme::color::current().dim)
+                    .font(iced_widget::core::Font::MONOSPACE),
+            ]
+            .spacing(6)
+            .align_y(iced_widget::core::alignment::Vertical::Center),
+        );
+    }
+    container(rows).padding([6, 8]).into()
+}
+
+/// 横排的序列图例:色点 + 名称一排（放在趋势图标题下方）。替代对多序列柱状图
+/// 用鼠悬一个个去猜颜色。
+fn trend_legend(
+    series: &TrendSeries,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let mut row = iced_widget::row![].spacing(12);
+    for (label, color) in series {
+        let dot = container(iced_widget::Space::new())
+            .width(Length::Fixed(8.0))
+            .height(Length::Fixed(8.0))
+            .style({
+                let color = *color;
+                move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                    background: Some(color.into()),
+                    border: Border {
+                        radius: 4.0.into(),
+                        ..Border::default()
+                    },
+                    ..iced_widget::container::Style::default()
+                }
+            });
+        row = row.push(
+            iced_widget::row![
+                dot,
+                text(*label)
+                    .size(byteui::theme::font::caption_sm())
+                    .color(byteui::theme::color::current().dim),
+            ]
+            .spacing(5)
+            .align_y(iced_widget::core::alignment::Vertical::Center),
+        );
+    }
+    row.into()
+}
+
+/// 通用"每天并列若干序列柱"的趋势柱状图，结构和 `bar_chart`（每天并列几根
+/// agent 柱、叠网格/斑马带/悬停气泡）保持一致，只是每根柱来自 `series` 对应
+/// 下标的量而不是某个 agent。`days` 的下标数量须 === `series.len()`（聚合时
+/// 已保证每天固定那么多数量的柱，空天补 0）。
+fn trend_bar_chart(
+    days: &[DaySeries],
+    series: &TrendSeries,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let max_total = days
+        .iter()
+        .flat_map(|d| d.values.iter().copied())
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let scale = BAR_MAX_HEIGHT / max_total as f32;
+
+    let mut groups = iced_widget::row![].spacing(8);
+    for (i, d) in days.iter().enumerate() {
+        let mut day_group = iced_widget::row![].spacing(3);
+        for (j, (_, color)) in series.iter().enumerate() {
+            let value = d.values[j];
+            day_group = day_group.push(agent_bar(value, scale, *color));
+        }
+        let day_group = day_group.align_y(iced_widget::core::alignment::Vertical::Bottom);
+
+        let col = column![
+            container(day_group)
+                .height(Length::Fixed(GRID_CANVAS_HEIGHT))
+                .align_y(iced_widget::core::alignment::Vertical::Bottom),
+            text(d.label.clone())
+                .size(8.0)
+                .color(byteui::theme::color::current().dim)
+                .font(iced_widget::core::Font::MONOSPACE),
+        ]
+        .spacing(4)
+        .align_x(iced_widget::core::alignment::Horizontal::Center);
+
+        let hoverable = Tooltip::new(col, trend_tooltip_bubble(d, series), Position::Top)
+            .gap(6)
+            .style(icons::tooltip_bubble_style());
+
+        let banded = container(hoverable)
+            .padding([0, 4])
+            .height(Length::Fixed(DAY_BAND_HEIGHT))
+            .style(
+                move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                    background: (i % 2 == 0).then(|| byteui::theme::color::current().card.into()),
+                    border: Border {
+                        radius: 4.0.into(),
+                        ..Border::default()
+                    },
+                    ..iced_widget::container::Style::default()
+                },
+            );
+        groups = groups.push(banded);
+    }
+
+    stack![
+        grid_lines_canvas(max_total),
+        container(groups).padding(iced_widget::core::Padding {
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: GRID_LABEL_GUTTER,
+        }),
+    ]
+    .width(Length::Fill)
+    .into()
+}
+
+/// `days` 里是否至少一天有非零值——趋势窗口若整段都是 0（目标 agent 最近
+/// 这段时间其实没活动），上层就不画这个趋势区，避免白框空难读。
+fn has_any_value(days: &[DaySeries]) -> bool {
+    days.iter().any(|d| d.values.iter().any(|&v| v > 0))
+}
+
+/// 单个"小节标题 +（标题右侧）序列图例 + 图表"的组合。`title` 仍走统一的
+/// `home_section_head` 小结标题样式(Session 趋势 / Token 趋势…)，图例挨在它
+/// 右侧对齐、不占纵向。放在节内的内层 column 统一吃 `SECTION_CHART_GAP`。
+fn trend_chart_section(
+    title: &'static str,
+    series: TrendSeries,
+    days: &[DaySeries],
+) -> Option<Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer>> {
+    if !has_any_value(days) {
+        return None;
+    }
+    let title_row = iced_widget::row![
+        home_section_head(title),
+        iced_widget::Space::new()
+            .width(Length::Fill)
+            .height(Length::Shrink),
+        trend_legend(&series),
+    ]
+    .align_y(iced_widget::core::alignment::Vertical::Center)
+    .spacing(8);
+    Some(
+        column![title_row]
+            .spacing(SECTION_CHART_GAP)
+            .push(trend_bar_chart(days, &series))
+            .into(),
+    )
+}
+
+/// Session 趋势的序列配色——会话/回合各一根柱,分别用 cream(项目"活动类"统计的
+/// 颜色习惯)与 green;对比只在同一张图内部保色相区分,跨图可重复用色。
+fn session_trend_series() -> TrendSeries {
+    let c = byteui::theme::color::current();
+    vec![("会话", c.cream), ("回合", c.green)]
+}
+
+fn io_trend_series() -> TrendSeries {
+    let c = byteui::theme::color::current();
+    vec![("Input", c.cyan), ("Output", c.purple)]
+}
+
+fn cache_trend_series() -> TrendSeries {
+    let c = byteui::theme::color::current();
+    vec![("读", c.lime), ("写", c.green)]
+}
+
+/// 一张趋势图右上角的"窗口"小标注(如"近 15 天"),放在标题行里,让读者一眼
+/// 看到口径,不靠猜。
+fn trend_window_tag(
+    window: &'static str,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    text(window)
+        .size(byteui::theme::font::caption_sm())
+        .color(byteui::theme::color::current().dim)
+        .into()
+}
+
+/// Token 趋势区:一个标题(Token 趋势)下按 15 天(Input/Output)与 5 天
+/// (Cache read/write)分别画两根并列柱。两张窗口/量级差太多,单独成图、各自
+/// 独立纵轴 max,不共用刻度。任一图整段无数据时只画另一张;都空则整区不给。
+fn token_trend_section(
+    agent: AgentKind,
+    rows: &[(ConversationMeta, ConversationUsage)],
+    today_index: i64,
+) -> Option<Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer>> {
+    let io = io_trend(rows, agent, today_index);
+    let cache = cache_trend(rows, agent, today_index);
+
+    let io_series = io_trend_series();
+    let cache_series = cache_trend_series();
+    let io_has = has_any_value(&io);
+    let cache_has = has_any_value(&cache);
+
+    let mut head_row = iced_widget::row![
+        home_section_head("Token 趋势"),
+        iced_widget::Space::new()
+            .width(Length::Fill)
+            .height(Length::Shrink),
+    ]
+    .align_y(iced_widget::core::alignment::Vertical::Center)
+    .spacing(8);
+    if io_has {
+        let io_group = iced_widget::row![
+            trend_legend(&io_series),
+            iced_widget::Space::new()
+                .width(Length::Fixed(10.0))
+                .height(Length::Shrink),
+            trend_window_tag("近 15 天 Input/Output"),
+        ]
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .spacing(6);
+        head_row = head_row.push(io_group);
+    }
+
+    let mut section = column![head_row].spacing(SECTION_CHART_GAP);
+    if io_has {
+        section = section.push(trend_bar_chart(&io, &io_series));
+    }
+
+    if cache_has {
+        let cache_header = iced_widget::row![
+            text("Cache read / write")
+                .size(byteui::theme::font::caption_sm())
+                .color(byteui::theme::color::current().dim),
+            iced_widget::Space::new()
+                .width(Length::Fill)
+                .height(Length::Shrink),
+            trend_legend(&cache_series),
+            trend_window_tag("近 5 天"),
+        ]
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .spacing(8);
+        section = section
+            .push(cache_header)
+            .push(trend_bar_chart(&cache, &cache_series));
+    }
+
+    if !io_has && !cache_has {
+        return None;
+    }
+    Some(section.into())
+}
+
 /// 用量面板数字的统一样式(2026-08-26 起所有数字共用这一套,不再区分图表
 /// 标签/明细/汇总):三档自动换算 + 千分号。
 ///
@@ -1024,6 +1448,11 @@ fn format_count<N: Into<u64>>(n: N) -> String {
 
 const PIE_RADIUS: f32 = 52.0;
 const PIE_GAP_RAD: f32 = 0.035;
+
+/// 用量面板"小节(mid)"标题与它正下方图表之间的纵向间距。小节标题与图表包进
+/// 内层 column 单独吃这个值(见 `content_pane`),与面板外层常规的 `spacing(12)`
+/// 解耦——2026-09-05 产品要求"加大每一节标题和 chart 的间距"。
+const SECTION_CHART_GAP: f32 = 24.0;
 
 struct PieChart {
     share: Vec<(AgentKind, u64)>,
@@ -1081,11 +1510,53 @@ fn pie_chart(
     .into()
 }
 
+/// 一张"饼图 + 数字表图例"的独立指标格(`pie_chart` 与 `chart_stat_list` 都
+/// 签 `'static`,这里可以直接返回 `'static`)。饼图与图例间距 16,垂直居中。
+fn agent_metric_group(
+    title: &'static str,
+    share: &[(AgentKind, u64)],
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    iced_widget::row![pie_chart(share), chart_stat_list(title, share)]
+        .spacing(16)
+        .align_y(iced_widget::core::Alignment::Center)
+        .into()
+}
+
+/// 把一对指标格拼成一行横排(Agent 用量统计一小行的左、右两格)。`left_share`
+/// 非空才在左放第一格;`right_share` 非空时用 1px 竖线接到其右边。空格不占位。
+/// 竖线高度用 `Length::Fixed`,对齐饼图固定尺寸(见调用点注释里 `Fill` 传染
+/// 的说明)。
+fn agent_metrics_row<'a>(
+    left_title: &'static str,
+    left_share: &'a [(AgentKind, u64)],
+    right_title: &'static str,
+    right_share: &'a [(AgentKind, u64)],
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let mut row = iced_widget::row![].spacing(32);
+    if !left_share.is_empty() {
+        row = row.push(agent_metric_group(left_title, left_share));
+    }
+    if !right_share.is_empty() {
+        row = row.push(
+            container(iced_widget::Space::new())
+                .width(Length::Fixed(1.0))
+                .height(Length::Fixed(PIE_RADIUS * 2.0 + 8.0))
+                .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
+                    background: Some(byteui::theme::color::current().border.into()),
+                    ..iced_widget::container::Style::default()
+                }),
+        );
+        row = row.push(agent_metric_group(right_title, right_share));
+    }
+    row.into()
+}
+
 /// Agent 用量的列表式呈现,配在饼图右边当图例:标题行 `{title}(总数)` +
-/// 1px 分隔线 + 逐 agent `agent - 数量(百分比%)`(2026-08-28 用户反馈:
-/// 圆环不能去掉,只是把图例的文字格式换成这种更直接的数字表——取代原来
-/// 的 `chart_legend`/`chart_label` 文字格式,饼图本体保留)。百分比用整数
-/// 除法截断、不四舍五入,跟原图例的算法保持一致,避免几档相加超过 100%。
+/// 逐 agent `agent - 数量(百分比%)`(2026-08-28 用户反馈:圆环不能去掉,只是
+/// 把图例的文字格式换成这种更直接的数字表——取代原来的 `chart_legend`/
+/// `chart_label` 文字格式,饼图本体保留。标题行与列表间的 1px 分隔线于
+/// 2026-09-05 用户要求去掉,标题后直接接数字表)。百分比用整数除法截断、
+/// 不四舍五入,跟原图例的算法保持一致,避免几档相加超过 100%。
 fn chart_stat_list(
     title: &'static str,
     share: &[(AgentKind, u64)],
@@ -1093,19 +1564,11 @@ fn chart_stat_list(
     let total: u64 = share.iter().map(|(_, v)| v).sum();
     let cream = byteui::theme::color::current().cream;
     let dim = byteui::theme::color::current().dim;
-    let divider = container(iced_widget::Space::new())
-        .width(Length::Fill)
-        .height(Length::Fixed(1.0))
-        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-            background: Some(byteui::theme::color::current().border.into()),
-            ..iced_widget::container::Style::default()
-        });
     let mut col = column![
         text(format!("{title}({})", format_count(total)))
             .size(byteui::theme::font::caption())
             .color(cream)
             .font(iced_widget::core::Font::MONOSPACE),
-        divider,
     ]
     .spacing(8);
     for (agent, value) in share {
@@ -1404,6 +1867,50 @@ mod tests {
     }
 
     #[test]
+    fn agent_session_share_counts_one_per_conversation_including_zero_turn() {
+        let rows = vec![
+            // 同一 agent 两条会话。
+            (meta(AgentKind::Claude, "a"), usage_with_turns(3)),
+            (meta(AgentKind::Claude, "b"), usage_with_turns(0)),
+            // 不同 agent 一条会话(也给回合)。
+            (meta(AgentKind::Codebuddy, "c"), usage_with_turns(1)),
+        ];
+        // 回合口径把"零回合会话"的 Claude 剔除 → 只有 (Claude,3),(Codebuddy,1);
+        assert_eq!(
+            agent_turn_share(&rows),
+            vec![(AgentKind::Claude, 3), (AgentKind::Codebuddy, 1)]
+        );
+        // 会话数口径每会话记 1 → 空回合会话也要占一条。
+        assert_eq!(
+            agent_session_share(&rows),
+            vec![(AgentKind::Claude, 2), (AgentKind::Codebuddy, 1)]
+        );
+    }
+
+    #[test]
+    fn agent_io_cache_shares_keep_io_and_cache_separate() {
+        let usage = |io: u64, cache: u64| ConversationUsage {
+            tokens_in: io,             // IO 读
+            tokens_out: io,            // IO 写(同量便于断言合值)
+            tokens_cache_read: cache,  // 缓存读
+            tokens_cache_write: cache, // 缓存写
+            ..Default::default()
+        };
+        let rows = vec![
+            (meta(AgentKind::Claude, "a"), usage(10, 4)),
+            (meta(AgentKind::Claude, "b"), usage(1, 1)),
+            (meta(AgentKind::V8agent, "c"), usage(0, 3)),
+        ];
+        // IO = tokens_in+tokens_out 之和;缓存 = cache_read+cache_write 之和,
+        // 两类分开计、不混在一个图里。
+        assert_eq!(agent_io_token_share(&rows), vec![(AgentKind::Claude, 22)]);
+        assert_eq!(
+            agent_cache_token_share(&rows),
+            vec![(AgentKind::Claude, 10), (AgentKind::V8agent, 6)]
+        );
+    }
+
+    #[test]
     fn agents_present_returns_used_agents_in_fixed_order() {
         let rows = vec![
             (meta(AgentKind::Codebuddy, "a"), usage_with_tokens(1)),
@@ -1489,5 +1996,86 @@ mod tests {
         update(&mut ws_state, Message::Loaded(1, rows.clone()));
         assert!(!ws_state.loading());
         assert_eq!(ws_state.rows(), rows.as_slice());
+    }
+
+    #[test]
+    fn session_round_trend_zero_fills_full_window_only_target_agent() {
+        // day 20672 = 2026-08-07;13 天前 = 20659,仍在同一 15 天窗口内。
+        let today = 20_672i64;
+        let ms = |day: i64| (day as u64) * 86_400_000;
+        let rows = vec![
+            (
+                meta_at(AgentKind::Claude, ms(today)),
+                ConversationUsage {
+                    turns: 2,
+                    ..Default::default()
+                },
+            ),
+            (
+                meta_at(AgentKind::Claude, ms(today - 13)),
+                ConversationUsage {
+                    turns: 4,
+                    ..Default::default()
+                },
+            ),
+            // 其他 agent 即便同在今天有会话也不该被某单 agent 趋势吃进去。
+            (
+                meta_at(AgentKind::Codebuddy, ms(today)),
+                ConversationUsage {
+                    turns: 9,
+                    ..Default::default()
+                },
+            ),
+        ];
+        let trend = session_round_trend(&rows, AgentKind::Claude, today);
+        // 窗口从 today 往回整 15 个日历天,哪怕没有数据也补占位,不允许空窗漂。
+        assert_eq!(trend.len(), 15);
+        assert_eq!(trend[0].day_index, today - 14, "最左应正好是窗口首日(0 值)");
+        assert_eq!(trend[0].values, vec![0, 0]);
+        // 13 天前那条:today-13 落在窗口内,序列 [1,4](会话一次、回合 4)。
+        let earlier = &trend[(today - 13 - (today - 14)) as usize];
+        assert_eq!(earlier.day_index, today - 13);
+        assert_eq!(earlier.values, vec![1, 4]);
+        // 今天(窗口右端):只算 Claude,CodeBuddy 不进。
+        let last = trend.last().unwrap();
+        assert_eq!(last.day_index, today);
+        assert_eq!(last.values, vec![1, 2]);
+    }
+
+    #[test]
+    fn io_and_cache_trend_use_their_own_window_and_split_fields() {
+        let today = 20_672i64;
+        let ms = |day: i64| (day as u64) * 86_400_000;
+        // sample_usage:in=10,out=2,read=1,write=1。
+        let rows = vec![(meta_at(AgentKind::Claude, ms(today)), sample_usage(&[]))];
+        let io = io_trend(&rows, AgentKind::Claude, today);
+        let cache = cache_trend(&rows, AgentKind::Claude, today);
+        assert_eq!(io.len(), 15, "Input/Output 看近 15 天");
+        assert_eq!(cache.len(), 5, "Cache read/write 看近 5 天");
+        assert_eq!(io.last().unwrap().values, vec![10, 2]);
+        assert_eq!(cache.last().unwrap().values, vec![1, 1]);
+    }
+
+    #[test]
+    fn window_axis_is_self_contained_when_recent_days_idle() {
+        // 数据停在 14 天前,今天(窗口右端)本身没有更新——窗口仍从 today 起铺
+        // 整 15 天,最新若干格是 0,不只收在有数据那几天。
+        let today = 20_672i64;
+        let ms = |day: i64| (day as u64) * 86_400_000;
+        let rows = vec![(
+            meta_at(AgentKind::Claude, ms(today - 14)),
+            ConversationUsage {
+                turns: 1,
+                ..Default::default()
+            },
+        )];
+        let trend = session_round_trend(&rows, AgentKind::Claude, today);
+        assert_eq!(trend.len(), 15);
+        assert_eq!(trend[0].values, vec![1, 1], "最旧天数据落在窗口最左");
+        assert_eq!(
+            trend.last().unwrap().values,
+            vec![0, 0],
+            "今天无活动但保留占位"
+        );
     }
 }
