@@ -814,9 +814,16 @@ impl Workspace {
     /// 转发 `text_editor::Action` 到某个原生预览 tab(按 `tab_id` 定位,不是
     /// "当前聚焦编辑弹层"——一个项目可以同时开好几个原生预览 tab,只有事件
     /// 来源的那一个该收到)。tab 不存在或不是原生 tab 时静默 no-op。
+    /// 事件类别是"会改写正文的 `Action::Edit`"(插字/退格/删除/粘贴/Enter/IME
+    /// paste)时,顺手把该 tab 标脏(2026-09-06 原生预览就地可写,dirty 由这个
+    /// 事件位推进,fallback 仍由 Pane 层的 save/刷新/项目切换按相同字段读写)。
     pub(crate) fn preview_tab_editor_event(&mut self, tab_id: usize, action: EditorAction) {
         if let Some(editor) = self.preview.editor_mut(tab_id) {
+            let is_edit = matches!(action, EditorAction::Edit(_));
             editor.perform(action);
+            if is_edit {
+                self.preview.mark_dirty_by_id(tab_id);
+            }
         }
     }
 
@@ -824,7 +831,11 @@ impl Workspace {
     /// 语义同 `preview_tab_editor_event`,状态取自 `ws.project_preview`。
     pub(crate) fn project_preview_tab_editor_event(&mut self, tab_id: usize, action: EditorAction) {
         if let Some(editor) = self.project_preview.editor_mut(tab_id) {
+            let is_edit = matches!(action, EditorAction::Edit(_));
             editor.perform(action);
+            if is_edit {
+                self.project_preview.mark_dirty_by_id(tab_id);
+            }
         }
     }
 
@@ -1981,6 +1992,69 @@ impl Workspace {
         pane.tabs()
             .get(pane.active_idx())
             .is_some_and(|t| t.editor.is_some())
+    }
+
+    /// 把 `kind` 面板**当前激活原生 tab** 的就地改动保存到磁盘。仅当该 tab 是
+    /// 原生可编辑且脏 时动作(不脏不动磁盘,免得无谓改 mtime 引爆外部监听);
+    /// 无脏 / 激活的是 webview · Blank tab 一律 no-op。成功清该 tab 脏;失败把
+    /// 文案写进对应面板的 error(与预览打开失败同通道,已经在 tab_bar 下方渲染)。
+    /// 保存成功会同步 `reload_nonce`?不必——原生 tab 本身走 `bump_reload` 重建
+    /// 会丢滚动/脏,这里只落盘 + 清脏,不做"重读自己刚写的内容";若同一文件以
+    /// wry tab 形态在另一预览开着,外部监听(`reload_webviews_for`)会去刷它,
+    /// 那是 notify 职责,不在此手写联动(见 plan Non-Goals)。
+    pub fn preview_pane_save_active(&mut self, kind: PanelKind) {
+        let project = kind == PanelKind::Project;
+        // 一次不可变读取:定位激活原生 tab、是否脏、磁盘路径、tab_id。
+        let (tab_id, path) = {
+            let pane = if project {
+                &self.project_preview
+            } else {
+                &self.preview
+            };
+            let Some(tab) = pane.tabs().get(pane.active_idx()) else {
+                return;
+            };
+            // 仅脏的**原生** tab 值得落盘;不脏不动磁盘(省得住人保存也触发
+            // 外部监听/无谓 mtime),webview / Blank 没有就地 buffer。
+            if !tab.dirty || tab.editor.is_none() {
+                return;
+            }
+            let TabKind::File(p) = &tab.kind else {
+                return;
+            };
+            (tab.id, p.clone())
+        };
+        // 取当前文本:结束上面的不可变借后,再作一次短暂可变借拿到 buffer 全量。
+        let text = {
+            let pane = if project {
+                &mut self.project_preview
+            } else {
+                &mut self.preview
+            };
+            match pane.editor_mut(tab_id) {
+                Some(e) => e.text(),
+                None => return,
+            }
+        };
+        match std::fs::write(&path, text) {
+            Ok(()) => {
+                // 落盘成功:按先前那段的 `dirty==true` 前提清脏;fail 写该面板 error。
+                let pane = if project {
+                    &mut self.project_preview
+                } else {
+                    &mut self.preview
+                };
+                pane.clear_dirty_by_id(tab_id);
+            }
+            Err(e) => {
+                let err = Some(format!("保存失败: {e}"));
+                if project {
+                    self.project_preview_error = err;
+                } else {
+                    self.preview_error = err;
+                }
+            }
+        }
     }
 
     /// 当前激活浏览器 tab 的 webview id,语义同 `active_preview_webview_id`,
@@ -3343,8 +3417,15 @@ fn preview_pane_for<'a>(
             // 仅文本类文件可编辑——决定右键菜单里"编辑"项是否出现(标题后的
             // 编辑图标已移除,编辑入口统一收进 tab 右键菜单,见 `PreviewTabContextMenu`)。
             let editable = matches!(&tab.kind, TabKind::File(path) if is_editable_extension(path));
+            // 就地可写的原生 tab 有未保存改动:标题后缀 ` *`(2026-09-06)。宽度
+            // 预算仍按 `tab.title`(不带星)估,最坏多一个字符略挤,不换行折叠。
+            let display_title = if tab.editor.is_some() && tab.dirty {
+                format!("{} *", tab.title)
+            } else {
+                tab.title.clone()
+            };
             let tab = panel_tab(PanelTabArgs {
-                title: tab.title.clone(),
+                title: display_title,
                 active,
                 hover_t: title_hover_t,
                 close_hover_t,

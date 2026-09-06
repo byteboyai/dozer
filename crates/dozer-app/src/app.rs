@@ -1795,6 +1795,12 @@ pub enum Message {
     PreviewEditorEvent(usize, iced_widget::text_editor::Action),
     /// 预览编辑弹层:"保存"按钮 / ⌘S。
     PreviewEditSave,
+    /// 原生预览就地可写后的 ⌘S:把 `kind` 指向面板(`Files`/`Project`)当前激活
+    /// 原生 tab 的改动保存到磁盘(仅脏的原生 tab 动作;见
+    /// `Workspace::preview_pane_save_active`)。与 `PreviewEditSave`(弹层专用)
+    /// 是不同路径。携带 `PanelKind`(可由 main.rs `FocusIntent::Preview` 直接
+    /// 转发,不必频繁 preview↔panel 双枚举映射)。
+    PreviewSaveActive(PanelKind),
     /// 预览编辑弹层:×按钮 / 点遮罩——脏改动会先转成二次确认,不直接关。
     PreviewEditCloseRequest,
     /// 预览编辑弹层二次确认:"放弃改动"。
@@ -4942,6 +4948,9 @@ impl App {
             }
             Message::PreviewEditSave => {
                 self.with_focused_project(|ws, _io| ws.preview_edit_save());
+            }
+            Message::PreviewSaveActive(kind) => {
+                self.with_focused_project(move |ws, _io| ws.preview_pane_save_active(kind));
             }
             Message::PreviewEditCloseRequest => {
                 self.with_focused_project(|ws, _io| ws.preview_edit_close_request());

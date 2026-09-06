@@ -21,6 +21,11 @@ pub struct PreviewTab {
     /// `CodeView` 没有实现 `Clone`/`PartialEq`,这也是 `PreviewTab` 摘掉这两个
     /// derive 的原因(见下方手写的 `Debug`)。
     pub editor: Option<crate::code_editor::CodeView>,
+    /// 原生可编辑 tab 的"buffer 与磁盘不一致"标记:用户就地改过、还没 ⌘S 保存
+    /// (或右键"刷新"/项目切换丢弃归零)为 `true`。`Blank`/`webview` tab 恒
+    /// `false`。2026-09-06 原生预览不再只读,有了就地编辑就必须能显式挂脏并兜底,
+    /// 否则用户会无声丢改动(见 workspace.rs 关闭/切换前的确认)。
+    pub dirty: bool,
 }
 
 impl std::fmt::Debug for PreviewTab {
@@ -30,6 +35,7 @@ impl std::fmt::Debug for PreviewTab {
             .field("kind", &self.kind)
             .field("title", &self.title)
             .field("reload_nonce", &self.reload_nonce)
+            .field("dirty", &self.dirty)
             .field("editor", &self.editor.is_some())
             .finish()
     }
@@ -85,15 +91,12 @@ fn flyfish_url(path: &std::path::Path) -> String {
     u
 }
 
-/// 读盘并按白名单扩展名构造一个只读 `CodeView`。内容不是合法 UTF-8 时降级
-/// 用 lossy 转换(不当错误);其余读取失败(不存在/权限不够等)原样透传
-/// `std::io::Error`,调用方(`push_tab`/`bump_reload`)按现有"打开失败"路径
-/// 处理,不在这里新增错误类型。
-///
-/// 只读预览的右键"编辑"项已经是 Dozer 自己的 tab 右键菜单
-/// (`Message::PreviewEditOpen`,见 `app.rs::preview_tab_context_menu_popup`),
-/// 不再需要编辑器内部自带一个等价入口(vendored `iced-code-editor` 那个内部
-/// 右键菜单已随依赖一起删除)。
+/// 读盘并按白名单扩展名构造一个**可写** `CodeView`(2026-09-06 起原生文本预览
+/// 不再只读:用户可直接拖选/复制/就地编辑,配合 `Workspace` 侧的脏标记与
+/// `preview_pane_save` ⌘S 落盘——见 `docs/superpowers/plans/2026-09-06-*.md`）。
+/// 内容不是合法 UTF-8 时降级用 lossy 转换(不当错误);其余读取失败(不存在/权限
+/// 不够等)原样透传 `std::io::Error`,调用方(`push_tab`/`bump_reload`)按现有
+/// "打开失败"路径处理,不在这里新增错误类型。
 ///
 /// 打开即程序化聚焦(键盘事件无需先点击一次即可直达编辑器)这件事挪到
 /// `push_tab` 里置一次性 `pending_focus` 位——官方 `text_editor` 的焦点是
@@ -114,7 +117,7 @@ fn read_and_build_native_editor(
     Ok(crate::code_editor::CodeView::new(
         &text,
         extension_to_syntax(path),
-        true,
+        false,
     ))
 }
 
@@ -278,6 +281,7 @@ impl PreviewPane {
             title,
             reload_nonce: 0,
             editor,
+            dirty: false,
         });
         self.active = self.tabs.len() - 1;
         id
@@ -389,6 +393,24 @@ impl PreviewPane {
             .collect()
     }
 
+    /// 按 `PreviewTab.id` 把某个原生 tab 标脏(当且仅当其编辑器收到过"改正文"
+    /// 的 Action 时由 Workspace 转发层调用;见 `preview_tab_editor_event`)。
+    /// tab 不存在/非原生时 no-op。
+    pub fn mark_dirty_by_id(&mut self, tab_id: usize) {
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id)
+            && tab.editor.is_some()
+        {
+            tab.dirty = true;
+        }
+    }
+
+    /// 按 `PreviewTab.id` 清除脏标记(⌘S 成功落盘后调用)。
+    pub fn clear_dirty_by_id(&mut self, tab_id: usize) {
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+            tab.dirty = false;
+        }
+    }
+
     /// 按 tab id 取该 tab 的原生 editor 可变引用。tab 不存在或该 tab 走 wry
     /// 路径(没有 editor)都返回 `None`。main.rs 把 `Message::PreviewEditorEvent`
     /// 转发的 `Action` 用它路由给正确的 tab。
@@ -429,6 +451,10 @@ impl PreviewPane {
             };
             if let Ok(fresh) = read_and_build_native_editor(path) {
                 tab.editor = Some(fresh);
+                // 读盘重建 = 重载/刷新:buffer 回到磁盘态,原先的就地改动(若有)
+                // 一并丢弃,脏标记清零(可写后"刷新"会丢未保存改动——右键刷新前
+                // 是否弹确认由调用方 handler 决定,清空这里是为了状态自洽)。
+                tab.dirty = false;
             }
         } else {
             tab.reload_nonce += 1;
@@ -1181,6 +1207,69 @@ mod tests {
         assert_eq!(encode_component("aZ09-._~"), "aZ09-._~");
         assert_eq!(encode_component("/a b"), "%2Fa%20b");
         assert_eq!(encode_component("你"), "%E4%BD%A0");
+    }
+
+    #[test]
+    fn dirty_marker_lifecycle_for_native_tab() {
+        // 原生可写 tab 就地编辑:编辑事件标脏 → ⌘S 落盘清脏(mark/clear 按 id)。
+        let path =
+            std::env::temp_dir().join(format!("dirty_marker_test_{}.rs", std::process::id()));
+        std::fs::write(&path, "fn main() {}").unwrap();
+
+        let mut p = PreviewPane::default();
+        let id = p.open_path(path.clone());
+        assert!(p.tabs()[0].editor.is_some(), "夹具应落在原生 editor 分支");
+        assert!(!p.tabs()[0].dirty, "新开原生 tab 默认不脏");
+
+        p.mark_dirty_by_id(id);
+        assert!(p.tabs()[0].dirty, "收到编辑 Action 后应标脏");
+
+        // 对 webview 形态 / 不存在 id 标脏——都该 no-op。
+        let empty_id = p.next_id + 99;
+        p.mark_dirty_by_id(empty_id);
+        assert!(
+            p.tabs()[0].dirty && p.tabs().len() == 1,
+            "未知 id 标脏是 no-op,不应误标/误建"
+        );
+
+        p.clear_dirty_by_id(id);
+        assert!(!p.tabs()[0].dirty, "落盘成功后应清脏");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn mark_dirty_only_applies_to_native_tabs() {
+        // .png 走 wry(editor.is_none());对 id 标脏应被 mark_dirty_by_id 拒掉。
+        let mut p = PreviewPane::default();
+        let id = p.open_path(PathBuf::from("/tmp/no_dirty_mark.png"));
+        assert!(p.tabs()[0].editor.is_none());
+        p.mark_dirty_by_id(id);
+        assert!(!p.tabs()[0].dirty, "非原生 tab 不该被标脏");
+    }
+
+    #[test]
+    fn bump_reload_discards_pending_dirty_for_native_tab() {
+        // 右键"刷新"重建原生 editor 会丢弃未保存改动 → 脏标记一并清零(保存
+        // 态自洽:内存 buffer 都被换掉了,不能再以"有脏"混淆后续 ⌘S)。
+        let path =
+            std::env::temp_dir().join(format!("dirty_reload_test_{}.rs", std::process::id()));
+        std::fs::write(&path, "fn one() {}").unwrap();
+
+        let mut p = PreviewPane::default();
+        let id = p.open_path(path.clone());
+        p.mark_dirty_by_id(id);
+        assert!(p.tabs()[0].dirty);
+
+        std::fs::write(&path, "fn two() {}").unwrap();
+        p.bump_reload(id);
+
+        assert!(
+            !p.tabs()[0].dirty,
+            "原生 tab 刷新重建 editor 后,内存里的旧改动已丢弃,脏标记应复位"
+        );
+
+        std::fs::remove_file(&path).ok();
     }
 
     /// 防漂移锚:编辑器语法高亮的 token 颜色必须锚定到终端 16 色面板与终端

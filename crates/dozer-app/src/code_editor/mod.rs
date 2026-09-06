@@ -1,9 +1,14 @@
-//! 官方 iced `text_editor` + syntect 语法高亮的组合组件,preview.rs 只读预览
-//! 与 workspace.rs 编辑浮层共用,替代 vendored `iced-code-editor`(2026-09
+//! 官方 iced `text_editor` + syntect 语法高亮的组合组件,preview.rs 原生文本
+//! 预览与 workspace.rs 编辑浮层共用,替代 vendored `iced-code-editor`(2026-09
 //! 删除,见 git 历史)。删除动机:vendored 版本内部用 `iced_aw::ContextMenu`
 //! 包代码画布,`iced_aw 0.13.1` 的 `ContextMenu::operate` 在菜单展开时有布局
 //! 层级 panic,`main.rs` 曾需要给全应用每次 `operate()` 遍历套 `catch_unwind`
 //! 兜底——补丁面覆盖全应用而不是编辑器局部,是换掉整个依赖的直接原因。
+//!
+//! 用途演进(2026-09-06):原生文本预览不再强制只读 —— preview.rs 现在用
+//! `read_only=false` 建编辑器,用户可选中/复制/就地编辑;保存与脏标记由
+//! `workspace.rs`(`PreviewPane`/`EditSession`)各自负责。`read_only` 参数仍保留,
+//! 供(将来)确需只读展示的场景;分派逻辑不变:只读时滤掉 `Action::Edit`。
 //!
 //! 已知取舍(用户已确认接受):
 //! - 自建行号 gutter 靠应用层累加 `Action::Scroll{lines}` 镜像滚动位置——

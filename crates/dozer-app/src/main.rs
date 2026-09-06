@@ -1191,6 +1191,25 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             if let FocusIntent::Preview(kind) = *current_focus
                 && app.active_preview_tab_has_native_editor(kind)
             {
+                // 2026-09-06 原生预览就地可写:键盘焦点在原生编辑器上时 ⌘S 已
+                // 不属于"编辑器自己打字/剪切复制"的范畴,由应用拦下来保存当前
+                // 原生激活 tab(文件内搜索 ⌘F 尚未实现,拆到后续迭代再接入)。
+                // 必须在下面那行 `return` **之前**吃掉,否则会被原样放行给
+                // iced(iced 文本框不认识 ⌘S,会把 s 当普通输入吞掉)。其余按键
+                // 照旧 `return`,交 iced 标准管线直达编辑器。
+                if let WindowEvent::KeyboardInput {
+                    event,
+                    is_synthetic: false,
+                    ..
+                } = event
+                    && event.state == ElementState::Pressed
+                    && modifiers.super_key()
+                    && event.logical_key == winit::keyboard::Key::Character("s".into())
+                {
+                    app.update(Message::PreviewSaveActive(kind));
+                    window.request_redraw();
+                    return;
+                }
                 return;
             }
 
