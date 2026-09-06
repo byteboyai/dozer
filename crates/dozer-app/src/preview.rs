@@ -118,36 +118,38 @@ fn read_and_build_native_editor(
     ))
 }
 
-/// "编辑"按钮的显示范围:纯扩展名白名单,不做内容嗅探(YAGNI,见设计文档
-/// "范围外")。`.gitignore` 这类点开头、`Path::extension()` 认不出扩展名
-/// 的文件单独特判文件名。
+/// "编辑/原生 code editor 预览"的适用范围。判定规则单一来源 = 语法能力:
+/// `extension_to_syntax` 能给出具体语法(syntact 语法高亮)的源码类扩展名,
+/// 一律收敛进原生 text editor 预览(不再落到 flyfish 只当纯文本/兜底);
+/// 再加上少数"没有语法、但纯文本、进原生一样能看"的兜底扩展名。这样
+/// `is_editable_extension` 与高亮器认识的语言集保持一致,不会出现"文件能高亮
+/// 却一开始就进不了编辑器"的脱节(2026-09-05 用户:js/json 等代码类的文件
+/// 都应由 text editor 预览)。
+///
+/// `.gitignore` 这类点开头、`Path::extension()` 认不出扩展名的文件沿用旧
+/// 单独特判;`LICENSE`/`Makefile` 等其它**无扩展名**文件刻意不进(既有约定,
+/// 见 `is_editable_extension_rejects_unknown_and_binary_like`)。`md/html` 虽
+/// 命中语法分支返回 `true`,却由 `prefers_rendered_preview` 挡住默认预览(见
+/// 其文档),只保留右键"编辑"入口;图片/PDF/二进制扩展名高亮器不认识、又不在
+/// 纯文本兜底集,照旧交给 flyfish。
 pub fn is_editable_extension(path: &std::path::Path) -> bool {
     if path.file_name().and_then(|n| n.to_str()) == Some(".gitignore") {
         return true;
     }
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    // 主判据:高亮器认得出语法 → 代码类 → 原生文本/编辑器预览。顺带把
+    // .md/.html 等渲染型也归为"可编辑"(右键能编辑),跟前几版行为一致。
+    if extension_to_syntax(path) != "txt" {
+        return true;
+    }
+    // 兜底:没有语法映射但确实是纯文档/配置文本的扩展名,原生预览优于 flyfish。
     matches!(
-        path.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase()
-            .as_str(),
-        "rs" | "toml"
-            | "md"
-            | "txt"
-            | "json"
-            | "yaml"
-            | "yml"
-            | "sh"
-            | "py"
-            | "js"
-            | "ts"
-            | "tsx"
-            | "jsx"
-            | "html"
-            | "css"
-            | "xml"
-            | "log"
-            | "conf"
+        ext.as_str(),
+        "txt" | "log" | "conf" | "cfg" | "ini" | "csv" | "tsv" | "json5"
     )
 }
 
@@ -834,6 +836,50 @@ mod tests {
             flyfish_url(std::path::Path::new("/tmp/notes.md")),
             "非 html/htm 扩展名不变,仍走 flyfish"
         );
+    }
+
+    #[test]
+    fn code_class_extensions_route_to_native_text_editor_preview() {
+        // 2026-09-05:js/json「等代码类」文件都应由 text editor 预览,而不是
+        // 落进 flyfish 当不可预览的兜底。判据单一来源=语法能力(`extension_to_syntax`
+        // 非 txt),凡高亮器认得出的源码扩展名都必须能进原生预览。这里挑几个
+        // 旧白名单里没有、用户常碰的源码格式逐一断言。(旧列表只有 rs/toml/md/
+        // txt/json/yaml/yml/sh/py/js/ts/tsx/jsx/html/css/xml/log/conf。）
+        for ext in [
+            "go", "java", "kt", "c", "h", "cpp", "cc", "rb", "php", "scss", "mjs", "cjs", "sql",
+            "lua", "r", "swift", "zig", "proto", "graphql", "gql", "ex", "hs", "scala", "diff",
+        ] {
+            assert!(
+                is_editable_extension(std::path::Path::new(&format!("/tmp/code.{ext}"))),
+                ".{ext} 是有语法的源码扩展名,应走原生 text editor 预览"
+            );
+        }
+    }
+
+    #[test]
+    fn image_pdf_and_binary_exts_stay_out_of_native_editor() {
+        // 图片/PDF/富媒体/压缩包不属于"代码类",必须继续留给 flyfish(或其兜底),
+        // 绝不能因语法判据脱节被误塞进原生文本编辑器。
+        for ext in [
+            "png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "pdf", "zip", "mp4",
+        ] {
+            assert!(
+                !is_editable_extension(std::path::Path::new(&format!("/tmp/a.{ext}"))),
+                ".{ext} 是二进制/媒体,不该进原生文本编辑器"
+            );
+        }
+    }
+
+    #[test]
+    fn markdown_and_html_still_editable_but_default_preview_is_rendered() {
+        // is_editable_extension 变宽(语法判据)后,md/html 必须仍被
+        // prefers_rendered_preview 拉去渲染预览而不是落到原生,避免回归。
+        assert!(is_editable_extension(std::path::Path::new("/tmp/a.md")));
+        assert!(is_editable_extension(std::path::Path::new("/tmp/a.html")));
+        assert!(prefers_rendered_preview(std::path::Path::new("/tmp/a.md")));
+        assert!(prefers_rendered_preview(std::path::Path::new(
+            "/tmp/a.html"
+        )));
     }
 
     #[test]
