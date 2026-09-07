@@ -2118,6 +2118,16 @@ impl Workspace {
         }
     }
 
+    /// 翻转 Find 条大小写敏感开关(`case_sensitive` 真=逐字严格、假=ASCII 折叠),
+    /// 作用在 `kind` 面板当前打开的会话上;条未开是 no-op。
+    pub fn preview_find_case(&mut self, kind: PanelKind, case_sensitive: bool) {
+        if kind == PanelKind::Project {
+            self.project_preview.set_find_case(case_sensitive);
+        } else {
+            self.preview.set_find_case(case_sensitive);
+        }
+    }
+
     /// 当前激活浏览器 tab 的 webview id,语义同 `active_preview_webview_id`,
     /// 查独立的 `self.browser`。
     pub fn active_browser_webview_id(&self) -> Option<usize> {
@@ -3629,6 +3639,26 @@ fn preview_pane_for<'a>(
                         >::new())
                         .into()
                     };
+                // 「Aa」大小写开关:无独立 SVG 的字形钮(同被删的 Find × 按钮,但
+                // 有真状态)。开(逐字严格)文字青 `cyan`、关(ASCII 折叠)灰 `dim`。
+                // 青是 ByteBoy2077 甲方金之外的"用户动作强调色",toggle 归用户操作,
+                // 不用甲方专属 gold,遵循 CLAUDE.md 裁决。
+                let case_toggle = {
+                    let active = find.case_sensitive;
+                    button(text("Aa").size(byteui::theme::font::body()))
+                        .on_press(match panel {
+                            PanelKind::Project => {
+                                Message::PreviewFindCase(PanelKind::Project, !active)
+                            }
+                            _ => Message::PreviewFindCase(PanelKind::Files, !active),
+                        })
+                        .padding(2)
+                        .style(move |_t, _s| button::Style {
+                            background: None,
+                            text_color: if active { colors.cyan } else { colors.dim },
+                            ..button::Style::default()
+                        })
+                };
                 let hover = move |next: bool| match next {
                     true => match panel {
                         PanelKind::Project => HoverId::ProjectPreviewFindNext,
@@ -3643,9 +3673,9 @@ fn preview_pane_for<'a>(
                     let hid = hover(next);
                     icons::icon_button_entry(
                         if next {
-                            icons::IconKind::ChevronDown
+                            icons::IconKind::ArrowDown
                         } else {
-                            icons::IconKind::ChevronUp
+                            icons::IconKind::ArrowUp
                         },
                         byteui::theme::icon_size::row(),
                         false,
@@ -3665,36 +3695,16 @@ fn preview_pane_for<'a>(
                             (false, _) => Message::PreviewFindGo(PanelKind::Files, false),
                         },
                         move |hovered| Message::Hover(hid, hovered),
-                        if next {
-                            "下一个命中 (⌘G)"
-                        } else {
-                            "上一个命中 (⌘↑)"
-                        },
+                        if next { "下一个" } else { "上一个" },
                     )
                 };
-                // × 关闭条:文字按钮沿模态弹层同款手法(Find 无独立 close SVG)。
-                let close_btn = button(
-                    text("×")
-                        .size(byteui::theme::font::subtitle())
-                        .color(colors.dim),
-                )
-                .on_press(match panel {
-                    PanelKind::Project => Message::PreviewFindClose(PanelKind::Project),
-                    _ => Message::PreviewFindClose(PanelKind::Files),
-                })
-                .padding(0)
-                .style(|_t, _s| button::Style {
-                    background: None,
-                    text_color: byteui::theme::color::current().dim,
-                    ..button::Style::default()
-                });
                 let strip = container(
                     row![
                         container(input).width(Length::Fill),
                         count_label,
+                        case_toggle,
                         step_icon(false),
                         step_icon(true),
-                        close_btn
                     ]
                     .spacing(4)
                     .align_y(iced_widget::core::Alignment::Center),

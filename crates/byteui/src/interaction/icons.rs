@@ -19,6 +19,12 @@ pub enum IconKind {
     /// 文件树底部分支切换按钮在弹层**展开**态下的图标(Lucide chevron-up):
     /// 收起时为 `ChevronDown`,展开后翻转,提示"点此收起弹层"。
     ChevronUp,
+    /// 原生预览 File-Find 条「下一个命中」跳转图标(Lucide arrow-down)。区别于
+    /// 收/展用的 `ChevronDown`:直线 + 箭头,语义更强的"向下跳到下一处"。
+    ArrowDown,
+    /// 原生预览 File-Find 条「上一个命中」跳转图标(Lucide arrow-up),与
+    /// `ArrowDown` 镜像。
+    ArrowUp,
     Folder,
     FolderOpen,
     /// 文件树根目录头部图标(Lucide folder-open-dot:展开的文件夹 + 右上圆点,
@@ -179,6 +185,8 @@ impl IconKind {
             IconKind::ChevronRight => include_bytes!("../../assets/icons/chevron-right.svg"),
             IconKind::ChevronDown => include_bytes!("../../assets/icons/chevron-down.svg"),
             IconKind::ChevronUp => include_bytes!("../../assets/icons/chevron-up.svg"),
+            IconKind::ArrowDown => include_bytes!("../../assets/icons/arrow-down.svg"),
+            IconKind::ArrowUp => include_bytes!("../../assets/icons/arrow-up.svg"),
             IconKind::Folder => include_bytes!("../../assets/icons/folder.svg"),
             IconKind::FolderOpen => include_bytes!("../../assets/icons/folder-open.svg"),
             IconKind::FolderOpenDot => include_bytes!("../../assets/icons/folder-open-dot.svg"),
