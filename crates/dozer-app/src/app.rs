@@ -2669,6 +2669,25 @@ impl App {
         files::tree_drop_target(x, y, bounds, ws.files.tree_scroll(), &rows)
     }
 
+    /// 外部文件拖拽悬停命中一个仍处于折叠态的目录时调用:自动展开,让子级
+    /// 可见、拖拽能继续往深一层落(main.rs `RedrawRequested`/`files_dragging`
+    /// 分支里对每次命中结果调用)。已展开则不动——`visible_tree_rows` 里查
+    /// 不到就当已展开处理,避免对不存在的行重复 `Toggle`。
+    pub fn expand_files_dir_if_collapsed(&mut self, dir: &std::path::Path) {
+        let Some(ws) = self.active_workspace() else {
+            return;
+        };
+        let already_expanded = ws
+            .files
+            .visible_tree_rows()
+            .iter()
+            .find(|r| r.path == dir)
+            .is_none_or(|r| r.expanded);
+        if !already_expanded {
+            self.update(Message::Files(files::Message::Toggle(dir.to_path_buf())));
+        }
+    }
+
     /// 同上，可变引用版本；如果对应槽位是 `Stub`，就地促成 `Loaded`
     /// （拉取该项目的完整状态）后再返回引用。
     pub fn active_workspace_mut(&mut self) -> Option<&mut Workspace> {
