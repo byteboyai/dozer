@@ -12,7 +12,7 @@ use dozer_core::protocol::AgentKind;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::{Border, Color, Element, Length, Point, Radians, Rectangle};
 use iced_widget::tooltip::{Position, Tooltip};
-use iced_widget::{button, column, container, stack, text};
+use iced_widget::{button, column, container, row, stack, text};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
@@ -539,7 +539,9 @@ pub fn content_pane<'a>(
             // 标题等之间的常规间距——两者解耦,避免一刀切把别处空隙也放大。
             let proj_section = column![home_section_head("项目用量统计")]
                 .spacing(SECTION_CHART_GAP)
-                .push(project_summary_boxes(&aggregate(&usages)));
+                .push(align_to_section_title(project_summary_boxes(&aggregate(
+                    &usages,
+                ))));
             content = content.push(proj_section);
 
             // 内容在"选中具体 agent"与"全部 agent"两态用两套统计:选单个 agent
@@ -587,14 +589,17 @@ pub fn content_pane<'a>(
                         let sess_total = share_total(&session_share);
                         let has_session_group = !session_share.is_empty() || !turn_share.is_empty();
                         if has_session_group {
-                            agent_metrics_section = agent_metrics_section
-                                .push(metric_group_banner("Session", sess_total));
-                            agent_metrics_section = agent_metrics_section.push(pair_metric_cells(
-                                (!session_share.is_empty())
-                                    .then_some(("Session", session_share.as_slice())),
-                                (!turn_share.is_empty())
-                                    .then_some(("Round", turn_share.as_slice())),
-                            ));
+                            agent_metrics_section = agent_metrics_section.push(
+                                align_to_section_title(metric_group_banner("Session", sess_total)),
+                            );
+                            agent_metrics_section = agent_metrics_section.push(
+                                align_to_section_title(pair_metric_cells(
+                                    (!session_share.is_empty())
+                                        .then_some(("Session", session_share.as_slice())),
+                                    (!turn_share.is_empty())
+                                        .then_some(("Round", turn_share.as_slice())),
+                                )),
+                            );
                         }
 
                         let has_token_group = !io_share.is_empty() || !cache_share.is_empty();
@@ -611,14 +616,17 @@ pub fn content_pane<'a>(
                                         + u.tokens_cache_write
                                 })
                                 .sum();
-                            agent_metrics_section = agent_metrics_section
-                                .push(metric_group_banner("Tokens", total_tokens));
-                            agent_metrics_section = agent_metrics_section.push(pair_metric_cells(
-                                (!io_share.is_empty())
-                                    .then_some(("Input/Output", io_share.as_slice())),
-                                (!cache_share.is_empty())
-                                    .then_some(("Cache Read/Write", cache_share.as_slice())),
-                            ));
+                            agent_metrics_section = agent_metrics_section.push(
+                                align_to_section_title(metric_group_banner("Tokens", total_tokens)),
+                            );
+                            agent_metrics_section = agent_metrics_section.push(
+                                align_to_section_title(pair_metric_cells(
+                                    (!io_share.is_empty())
+                                        .then_some(("Input/Output", io_share.as_slice())),
+                                    (!cache_share.is_empty())
+                                        .then_some(("Cache Read/Write", cache_share.as_slice())),
+                                )),
+                            );
                         }
 
                         content = content.push(agent_metrics_section);
@@ -628,7 +636,7 @@ pub fn content_pane<'a>(
                     if !days.is_empty() {
                         let day_section = column![home_section_head("每日用量统计")]
                             .spacing(SECTION_CHART_GAP)
-                            .push(bar_chart(&days));
+                            .push(align_to_section_title(bar_chart(&days)));
                         content = content.push(day_section);
                     }
                 }
@@ -864,16 +872,12 @@ fn project_summary_boxes(
     // 张饼图卡的宽度与排法(2026-09-07 要求):每张吃掉 `FillPortion(1)`、外层
     // 行撑满、16px 间距——不加的话 `stat_box` 天然按内容收窄,两卡会左贴紧、
     // 不等宽地摆,失去"成对均分"的观感。
-    let even_half = |boxed: Element<
-        'static,
-        Message,
-        iced_widget::Theme,
-        iced_renderer::Renderer,
-    >| {
-        let mut cell = iced_widget::container(boxed);
-        cell = cell.width(Length::FillPortion(1));
-        cell
-    };
+    let even_half =
+        |boxed: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer>| {
+            let mut cell = iced_widget::container(boxed);
+            cell = cell.width(Length::FillPortion(1));
+            cell
+        };
     iced_widget::row![even_half(activity_box), even_half(token_box)]
         .width(Length::Fill)
         .spacing(16)
@@ -1492,6 +1496,29 @@ const PIE_GAP_RAD: f32 = 0.035;
 /// 内层 column 单独吃这个值(见 `content_pane`),与面板外层常规的 `spacing(12)`
 /// 解耦——2026-09-05 产品要求"加大每一节标题和 chart 的间距"。
 const SECTION_CHART_GAP: f32 = 24.0;
+
+/// 子栏目标题 `home_section_head` 由「圆点图标 + 6px 间距 + 标题文字」组成,
+/// 标题文字相对该行起点缩进 `icon_size::row() + 6`。每个小节标题下的卡片/图表
+/// 若要和标题**文字**左对齐(而不是跟圆点起点),内容同样要收走这么远,否则视觉
+/// 上卡片总比标题突出一截。2026-09-07:用量面板三个小节(项目 / Agent / 每日)
+/// 的卡组统一用它对齐到标题文字。
+const SECTION_BODY_INSET: fn() -> f32 = || byteui::theme::icon_size::row() + 6.0;
+
+/// 把某个紧跟在 `home_section_head` 之下的图表/卡片组整体左收 `SECTION_BODY_INSET`,
+/// 使它的左边缘与上一行标题文字起点对齐。
+fn align_to_section_title<'a>(
+    body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    row![
+        iced_widget::Space::new()
+            .width(Length::Fixed(SECTION_BODY_INSET()))
+            .height(Length::Fill),
+        container(body).width(Length::Fill),
+    ]
+    .width(Length::Fill)
+    .spacing(0)
+    .into()
+}
 
 struct PieChart {
     share: Vec<(AgentKind, u64)>,
