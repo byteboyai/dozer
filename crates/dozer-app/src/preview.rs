@@ -498,22 +498,114 @@ impl PreviewPane {
         self.find.as_ref()
     }
 
-    /// 不可变看 Find 是否锁着与激活原生 tab 相同的文件(渲染条的依据之一)。
-    /// Find 打开但激活 tab 不是我锁的那个文件时返回 `false`。
-    pub fn find_belongs_to_active(&self) -> bool {
-        self.find.as_ref().is_some_and(|f| {
-            matches!(
-                self.tabs.get(self.active),
-                Some(t) if t.editor.is_some() && t.id == f.tab_id
-            )
-        })
+    /// 用户在输入框里编辑 query。每次落键就同步进 `state.query`,并**当场**按新
+    /// query 在锁定 buffer 上重算:命中>0 就选择第 1 个并把编辑器光标移过去(键入
+    /// 即"跳到第一个匹配"),否则切到"无命中"展示(count 0、输入框下灰提示),不
+    /// 移动光标。query 为空同样只清展示不动光标。
+    pub fn find_type(&mut self, query: String) {
+        let Some(tab_id) = self.find.as_ref().map(|f| f.tab_id) else {
+            return;
+        };
+        // 先放 query 进状态(下一段要读它重算)。
+        if let Some(state) = self.find.as_mut() {
+            state.query = query;
+        }
+        // 现算命中:清点并选第 1 个起点。
+        let matches_and_first = {
+            let Some(editor) = self
+                .tabs
+                .iter()
+                .find(|t| t.id == tab_id)
+                .and_then(|t| t.editor.as_ref())
+            else {
+                return;
+            };
+            editor.find_matches_all(&self.find.as_ref().unwrap().query)
+        };
+        let count = matches_and_first.len();
+        let first_start = matches_and_first.first().map(|(s, _)| *s);
+        // 写回 count/current。
+        if let Some(state) = self.find.as_mut() {
+            state.count = count;
+            state.current = 0;
+        }
+        // 有命中就真的把光标落过去。
+        if let Some((line, col)) = first_start
+            && let Some(editor) = self.editor_mut(tab_id)
+        {
+            editor.move_cursor_to((line, col));
+        }
     }
 
-    /// Find 会话就位(已打开且属于激活 tab)时给可变引用——供 Workspace 层输入
-    /// query / 推进 current / 写回 count;否则 `None`。`tab_id` 由 open/lifecycle
-    /// 保护,这里不再校验(调用它们的消息已按激活 tab 路由)。
-    pub fn find_state_mut(&mut self) -> Option<&mut FindState> {
-        self.find.as_mut()
+    /// 导航一次到下一个/上一个匹配(循环):先按 `query` 在锁定 buffer 上**现算**
+    /// (编辑正文会改变命中集,导航永远以当下 buffer 为准),再在命中集里推进
+    /// `state.current`(到末尾 wrap 回 0)。query 空或 0 命中时不动作。
+    pub fn find_go(&mut self, next: bool) {
+        let Some(state) = self.find.as_ref() else {
+            return;
+        };
+        let empty_query = state.query.is_empty();
+        let tab_id = state.tab_id;
+        let hits: Vec<(usize, usize)> = {
+            let Some(editor) = self
+                .tabs
+                .iter()
+                .find(|t| t.id == tab_id)
+                .and_then(|t| t.editor.as_ref())
+            else {
+                return;
+            };
+            if empty_query {
+                return;
+            }
+            editor
+                .find_matches_all(&self.find.as_ref().unwrap().query)
+                .into_iter()
+                .map(|(s, _)| s)
+                .collect()
+        };
+        if hits.is_empty() {
+            if let Some(s) = self.find.as_mut() {
+                s.count = 0;
+            }
+            return;
+        }
+        let current = self.find.as_ref().unwrap().current.min(hits.len().saturating_sub(1));
+        let idx = if next {
+            (current + 1) % hits.len()
+        } else {
+            (current + hits.len() - 1) % hits.len()
+        };
+        let (line, col) = hits[idx];
+        if let Some(s) = self.find.as_mut() {
+            s.count = hits.len();
+            s.current = idx;
+        }
+        if let Some(editor) = self.editor_mut(tab_id) {
+            editor.move_cursor_to((line, col));
+        }
+    }
+
+    /// 编辑事件后刷新展示量:当锁定 tab 的 buffer 被就地改过(用户在条开着时回到
+    /// 编辑器敲字),把 `state.count` 按当下 buffer 重算,`current` 钳到有效范围。
+    /// 不移动光标(改动发生在用户聚焦编辑器处,不该被 yank)。供 Workspace 编辑
+    /// 事件转发层每收到一个 Edit Action 调用;非锁定 tab/未开条是 no-op。
+    pub fn find_refresh_after_edit(&mut self, edited_tab_id: usize) {
+        if !self.find.as_ref().is_some_and(|f| f.tab_id == edited_tab_id) {
+            return;
+        }
+        let tab_id = edited_tab_id;
+        let count = self
+            .tabs
+            .iter()
+            .find(|t| t.id == tab_id)
+            .and_then(|t| t.editor.as_ref())
+            .map(|e| e.find_matches_all(&self.find.as_ref().unwrap().query).len())
+            .unwrap_or(0);
+        if let Some(s) = self.find.as_mut() {
+            s.count = count;
+            s.current = usize::min(s.current, count.saturating_sub(1));
+        }
     }
 
     /// 内部:激活 tab / 关闭/清空导致激活的原生 tab 变了时,清掉不再匹配的 Find。
@@ -1504,7 +1596,6 @@ mod tests {
         p.open_find_on_active();
         assert!(p.find_bar_open());
         assert_eq!(p.find_state().map(|f| f.tab_id), Some(id_b));
-        assert!(p.find_belongs_to_active());
 
         // 切回 A(复用已开的 tab,直接切激活)→ 命中别份文件,cull。
         p.open_path(a.clone());
@@ -1527,20 +1618,39 @@ mod tests {
     }
 
     #[test]
-    fn open_find_same_tab_is_noop_but_close_and_reopen_reset() {
-        let path = std::env::temp_dir().join(format!("find_reset_{}.rs", std::process::id()));
+    fn open_find_same_tab_keeps_query_and_cursor_on_nav() {
+        let path = std::env::temp_dir().join(format!("find_nav_{}.rs", std::process::id()));
         std::fs::write(&path, "hello world").unwrap();
 
         let mut p = PreviewPane::default();
         p.open_path(path.clone());
         p.open_find_on_active();
-        p.find_state_mut().unwrap().query = "lo".into();
-        p.find_state_mut().unwrap().count = 1;
 
-        // 已锁定同一 tab 再 ⌘F:保持 query/count 不变(供 main 重聚焦用)。
+        // 输入 query:当场清点 count 并把光标跳到第一个命中("lo" 在 "hello" 起于首行
+        // col3,按字节 col3(ascii)读回)。
+        p.find_type("lo".into());
+        let s = p.find_state().unwrap();
+        assert_eq!(s.query, "lo");
+        assert_eq!(s.count, 1, "输入后应立即把命中数回填为 1");
+        assert_eq!(s.current, 0);
+        let cur = p.tabs()[p.active_idx()].editor.as_ref().unwrap().cursor_position();
+        assert_eq!(cur, (0, 3), "find_type 应把光标移到第一个命中起点");
+
+        // 已锁定同一 tab 再 ⌘F 是 no-op——query/count 保留(供 main 重聚焦);
+        // 这时 text 只命中 1 次,find_go(prev) 也仍停在 col3(循环不自增越界)。
         p.open_find_on_active();
         assert_eq!(p.find_state().unwrap().query, "lo");
         assert_eq!(p.find_state().unwrap().count, 1);
+        p.find_go(false);
+        assert_eq!(p.find_state().unwrap().current, 0);
+
+        // find_go(next) 单命中循环:0 → 0。
+        p.find_go(true);
+        assert_eq!(p.find_state().unwrap().current, 0);
+        assert_eq!(
+            p.tabs()[p.active_idx()].editor.as_ref().unwrap().cursor_position(),
+            (0, 3)
+        );
 
         // close_find → 条消失;再 open 得到全新空 query 会话。
         p.close_find();
@@ -1553,6 +1663,55 @@ mod tests {
         assert!(s.query.is_empty());
         assert_eq!(s.count, 0);
         assert_eq!(s.current, 0);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn find_go_wraps_across_multiple_matches() {
+        let path = std::env::temp_dir().join(format!("find_wrap_{}.rs", std::process::id()));
+        std::fs::write(&path, "ab\ncd\nab\nab\nef").unwrap();
+        let mut p = PreviewPane::default();
+        p.open_path(path.clone());
+        p.open_find_on_active();
+
+        // "ab" 命中 3 次:行0 col0 / 行2 col0 / 行3 col0。
+        p.find_type("ab".into());
+        let s = p.find_state().unwrap();
+        assert_eq!(p.find_state().unwrap().count, 3);
+        assert_eq!(p.find_state().unwrap().current, 0);
+        let _ = s;
+        assert_eq!(
+            p.tabs()[p.active_idx()].editor.as_ref().unwrap().cursor_position(),
+            (0, 0)
+        );
+
+        // 确定性的推进序列:正向 0→1→2→(wrap)0,再从 0 反向 →2→1。
+        p.find_go(true); // 0 → 1
+        assert_eq!(p.find_state().unwrap().current, 1);
+        let cursor = |p: &PreviewPane| p.tabs()[p.active_idx()].editor.as_ref().unwrap().cursor_position();
+        assert_eq!(cursor(&p), (2, 0), "current=1 应落在第 3 处命中(行2)");
+
+        p.find_go(true); // 1 → 2
+        assert_eq!(p.find_state().unwrap().current, 2);
+        assert_eq!(cursor(&p), (3, 0), "current=2 应落在行3");
+
+        p.find_go(true); // 2 → 0(wrap)
+        assert_eq!(p.find_state().unwrap().current, 0);
+        assert_eq!(cursor(&p), (0, 0), "到末尾正向应 wrap 回第 0 个命中");
+
+        p.find_go(false); // 0 → 2(反向 wrap)
+        assert_eq!(p.find_state().unwrap().current, 2);
+        assert_eq!(cursor(&p), (3, 0));
+
+        p.find_go(false); // 2 → 1
+        assert_eq!(p.find_state().unwrap().current, 1);
+
+        // 无命中 query:保持 count0、current 无意义但不 panic。
+        p.find_type("zz".into());
+        assert_eq!(p.find_state().unwrap().count, 0);
+        p.find_go(true);
+        assert_eq!(p.find_state().unwrap().count, 0);
 
         std::fs::remove_file(&path).ok();
     }

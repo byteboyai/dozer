@@ -1801,6 +1801,19 @@ pub enum Message {
     /// 是不同路径。携带 `PanelKind`(可由 main.rs `FocusIntent::Preview` 直接
     /// 转发,不必频繁 preview↔panel 双枚举映射)。
     PreviewSaveActive(PanelKind),
+    /// 原生预览打开 File-Find(⌘F)。`kind` 指向 `Files` 或 `Project` 面板——
+    /// File-Find 对两个面板的原生编辑 tab 语义相同(见
+    /// `Workspace::preview_find_open`,⌘F 已开时是重聚焦的 no-op)。跟
+    /// `PreviewSaveActive` 一样用 `PanelKind` 一跳区分面板,不强做 preview↔panel
+    /// 双枚举映射。
+    PreviewFindOpen(PanelKind),
+    /// File-Find 关闭(输入框 × / Esc / 切走文件)。`kind` 语义同
+    /// `PreviewFindOpen`。
+    PreviewFindClose(PanelKind),
+    /// File-Find 输入框每键的 query 落定:同步到面板并让面板当场重算、跳首个命中。
+    PreviewFindText(PanelKind, String),
+    /// File-Find 下一条 / 上一条。
+    PreviewFindGo(PanelKind, bool),
     /// 预览编辑弹层:×按钮 / 点遮罩——脏改动会先转成二次确认,不直接关。
     PreviewEditCloseRequest,
     /// 预览编辑弹层二次确认:"放弃改动"。
@@ -4970,6 +4983,18 @@ impl App {
             }
             Message::PreviewSaveActive(kind) => {
                 self.with_focused_project(move |ws, _io| ws.preview_pane_save_active(kind));
+            }
+            Message::PreviewFindOpen(kind) => {
+                self.with_focused_project(move |ws, _io| ws.preview_find_open(kind));
+            }
+            Message::PreviewFindClose(kind) => {
+                self.with_focused_project(move |ws, _io| ws.preview_find_close(kind));
+            }
+            Message::PreviewFindText(kind, query) => {
+                self.with_focused_project(move |ws, _io| ws.preview_find_type(kind, query));
+            }
+            Message::PreviewFindGo(kind, next) => {
+                self.with_focused_project(move |ws, _io| ws.preview_find_go(kind, next));
             }
             Message::PreviewEditCloseRequest => {
                 self.with_focused_project(|ws, _io| ws.preview_edit_close_request());

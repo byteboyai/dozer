@@ -2057,6 +2057,44 @@ impl Workspace {
         }
     }
 
+    /// 把 `kind` 面板的 Find 命令转发给面板执行。四种都只需要分面板取到变引用
+    /// 调对应方法(面板自持 buffer + Find 状态,逻辑全在 pane 内,这里只当跳板,
+    /// 避免 workspace 顶部对各项目冗余拆两支)。
+    pub fn preview_find_open(&mut self, kind: PanelKind) {
+        if kind == PanelKind::Project {
+            self.project_preview.open_find_on_active();
+        } else {
+            self.preview.open_find_on_active();
+        }
+    }
+
+    /// 关闭 `kind` 面板 Find 条(× / Esc / ⌘F 里输入框清空后的迁离)。
+    pub fn preview_find_close(&mut self, kind: PanelKind) {
+        if kind == PanelKind::Project {
+            self.project_preview.close_find();
+        } else {
+            self.preview.close_find();
+        }
+    }
+
+    /// 键入:转发 query 到面板,让面板当场重算与跳第一个命中。
+    pub fn preview_find_type(&mut self, kind: PanelKind, query: String) {
+        if kind == PanelKind::Project {
+            self.project_preview.find_type(query);
+        } else {
+            self.preview.find_type(query);
+        }
+    }
+
+    /// 下一个/上一个命中。
+    pub fn preview_find_go(&mut self, kind: PanelKind, next: bool) {
+        if kind == PanelKind::Project {
+            self.project_preview.find_go(next);
+        } else {
+            self.preview.find_go(next);
+        }
+    }
+
     /// 当前激活浏览器 tab 的 webview id,语义同 `active_preview_webview_id`,
     /// 查独立的 `self.browser`。
     pub fn active_browser_webview_id(&self) -> Option<usize> {
