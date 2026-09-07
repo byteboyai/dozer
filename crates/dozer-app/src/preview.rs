@@ -226,6 +226,9 @@ pub struct FindState {
     pub current: usize,
     /// 当前 `query` 在该 tab buffer 里总共命中数,调用方执行后回填,视图只读。
     pub count: usize,
+    /// 大小写敏感开关(false=默认的 ASCII 大小写折叠,true=逐字严格比较)。由
+    /// 调用方以 `Message` 翻转后持久在这里;每次匹配 / 导航 / 编辑后现算都读它。
+    pub case_sensitive: bool,
 }
 
 #[derive(Default)]
@@ -524,6 +527,7 @@ impl PreviewPane {
                 query: String::new(),
                 current: 0,
                 count: 0,
+                case_sensitive: false,
             });
         }
     }
@@ -560,7 +564,10 @@ impl PreviewPane {
             else {
                 return;
             };
-            editor.find_matches_all(&self.find.as_ref().unwrap().query)
+            editor.find_matches_all(
+                &self.find.as_ref().unwrap().query,
+                self.find.as_ref().unwrap().case_sensitive,
+            )
         };
         let count = matches_and_first.len();
         let first_start = matches_and_first.first().map(|(s, _)| *s);
@@ -577,16 +584,24 @@ impl PreviewPane {
         }
     }
 
-    /// 导航一次到下一个/上一个匹配(循环):先按 `query` 在锁定 buffer 上**现算**
-    /// (编辑正文会改变命中集,导航永远以当下 buffer 为准),再在命中集里推进
-    /// `state.current`(到末尾 wrap 回 0)。query 空或 0 命中时不动作。
+    /// 导航到下一个/上一个命中,落点**以当下光标为锚**而非内部序号:先按 `query`
+    /// 在锁定 buffer 上现算命中列表(编辑正文会改变命中集,永远以当下 buffer 为
+    /// 准),读回缓冲区内真实光标坐标,解出"光标站在/贴着哪个命中"(站在命中内部、
+    /// 或停在某命中边界——normal 相邻时以**前缘含、末缘不含**判归属),再朝方向
+    /// 步进一格并循环(光标在当前命中起点再按「上一个」会 wrap 到最后一个等)。
+    ///
+    /// 为什么以光标为准:用户可能先把光标点到文件中段再看那一带,再按「下一个/
+    /// 上一个」就应以可见区域为起点就近接续,而不是从条的计数 0 一路算。落点选中
+    /// 整段命中;**光标落边与方向一致**——「下一个」把光标停到命中**末缘**、
+    /// 「上一个」停到命中**前缘**([`CodeView::select_range_backward`]),这样同向
+    /// 连按能单调续走得动,不会因锚点卡在原命中原处。query 空或 0 命中不动作。
     pub fn find_go(&mut self, next: bool) {
         let Some(state) = self.find.as_ref() else {
             return;
         };
         let empty_query = state.query.is_empty();
         let tab_id = state.tab_id;
-        let hits: Vec<(usize, usize)> = {
+        let (hits, caret) = {
             let Some(editor) = self
                 .tabs
                 .iter()
@@ -598,36 +613,54 @@ impl PreviewPane {
             if empty_query {
                 return;
             }
-            editor
-                .find_matches_all(&self.find.as_ref().unwrap().query)
-                .into_iter()
-                .map(|(s, _)| s)
-                .collect()
+            let q = self.find.as_ref().unwrap().query.clone();
+            let cs = self.find.as_ref().unwrap().case_sensitive;
+            (editor.find_matches_all(&q, cs), editor.cursor_position())
         };
-        if hits.is_empty() {
+        let n = hits.len();
+        if n == 0 {
             if let Some(s) = self.find.as_mut() {
                 s.count = 0;
             }
             return;
         }
-        let current = self
-            .find
-            .as_ref()
-            .unwrap()
-            .current
-            .min(hits.len().saturating_sub(1));
-        let idx = if next {
-            (current + 1) % hits.len()
-        } else {
-            (current + hits.len() - 1) % hits.len()
+        // 纵坐标比较:命中与光标都在同一份字节布局里,字典序(line,col)即文件序。
+        let le = |a: (usize, usize), b: (usize, usize)| a.0 < b.0 || (a.0 == b.0 && a.1 <= b.1);
+        let lt = |a: (usize, usize), b: (usize, usize)| a.0 < b.0 || (a.0 == b.0 && a.1 < b.1);
+        // 「当前命中」:光标落在这段 [s,e) 里(s 含 e 不含)。不命中任何段时,取
+        // 「最后一段起点不晚于光标」者——即光标右边还有个更近的段不算;光标压过
+        // 所有段末尾时是最后一个。全段起点都在光标之后=> `None`,视"在一切之前"。
+        let anchor = hits
+            .iter()
+            .position(|(s, e)| le(*s, caret) && lt(caret, *e))
+            .or_else(|| hits.iter().rposition(|(s, _)| le(*s, caret)));
+        let idx = match anchor {
+            Some(a) => {
+                if next {
+                    (a + 1) % n
+                } else {
+                    (a + n - 1) % n
+                }
+            }
+            None => {
+                if next {
+                    0
+                } else {
+                    n - 1
+                }
+            }
         };
-        let (line, col) = hits[idx];
+        let (start, end) = hits[idx];
         if let Some(s) = self.find.as_mut() {
-            s.count = hits.len();
+            s.count = n;
             s.current = idx;
         }
         if let Some(editor) = self.editor_mut(tab_id) {
-            editor.move_cursor_to((line, col));
+            if next {
+                editor.select_range(start, end);
+            } else {
+                editor.select_range_backward(start, end);
+            }
         }
     }
 
@@ -649,12 +682,39 @@ impl PreviewPane {
             .iter()
             .find(|t| t.id == tab_id)
             .and_then(|t| t.editor.as_ref())
-            .map(|e| e.find_matches_all(&self.find.as_ref().unwrap().query).len())
+            .map(|e| {
+                e.find_matches_all(
+                    &self.find.as_ref().unwrap().query,
+                    self.find.as_ref().unwrap().case_sensitive,
+                )
+                .len()
+            })
             .unwrap_or(0);
         if let Some(s) = self.find.as_mut() {
             s.count = count;
             s.current = usize::min(s.current, count.saturating_sub(1));
         }
+    }
+
+    /// 翻转大小写敏感开关(`true`=逐字严格,`false`=ASCII 大小写折叠)。只改
+    /// 状态里持久下一轮的标识,**不移动光标/选区**(等价一次"编辑后刷新":把
+    /// count/current 按新敏感度重算)。改完后用户再敲下一轮 query 或点下一个/
+    /// 上一个即以新敏感度重搜;翻回相同值 no-op。
+    pub fn set_find_case(&mut self, case_sensitive: bool) {
+        let Some(tab_id) = self.find.as_ref().map(|f| f.tab_id) else {
+            return;
+        };
+        if self
+            .find
+            .as_ref()
+            .is_some_and(|f| f.case_sensitive == case_sensitive)
+        {
+            return;
+        }
+        if let Some(s) = self.find.as_mut() {
+            s.case_sensitive = case_sensitive;
+        }
+        self.find_refresh_after_edit(tab_id);
     }
 
     /// 内部:激活 tab / 关闭/清空导致激活的原生 tab 变了时,清掉不再匹配的 Find。
@@ -1699,7 +1759,8 @@ mod tests {
         p.find_go(false);
         assert_eq!(p.find_state().unwrap().current, 0);
 
-        // find_go(next) 单命中循环:0 → 0。
+        // find_go(next) 单命中循环:0 → 0。caret 落在命中**末尾列**(选区高亮
+        // "lo",position 在其末列;锚点在起点)。
         p.find_go(true);
         assert_eq!(p.find_state().unwrap().current, 0);
         assert_eq!(
@@ -1708,7 +1769,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .cursor_position(),
-            (0, 3)
+            (0, 5)
         );
 
         // close_find → 条消失;再 open 得到全新空 query 会话。
@@ -1740,6 +1801,8 @@ mod tests {
         assert_eq!(p.find_state().unwrap().count, 3);
         assert_eq!(p.find_state().unwrap().current, 0);
         let _ = s;
+        // find_type 只把光标落起点;下面 find_go 才真的"选中命中",caret 置于
+        // 命中**末列**(col0 + query 长2)。
         assert_eq!(
             p.tabs()[p.active_idx()]
                 .editor
@@ -1749,8 +1812,10 @@ mod tests {
             (0, 0)
         );
 
-        // 确定性的推进序列:正向 0→1→2→(wrap)0,再从 0 反向 →2→1。
-        p.find_go(true); // 0 → 1
+        // 正向:以光标为锚,每次都把光标停在命中的**末缘**(col2),连按单调续接:
+        // caret(0,0)⊂命中0 → 1,(caret(2,2)贴在命中1末缘 → 命中0的下一段也算在内由
+        // start≤判定锚住命中1 → 2)→ caret(3,0 起步后→wrap 回命中0。
+        p.find_go(true); // 命中0 → 1
         assert_eq!(p.find_state().unwrap().current, 1);
         let cursor = |p: &PreviewPane| {
             p.tabs()[p.active_idx()]
@@ -1759,22 +1824,39 @@ mod tests {
                 .unwrap()
                 .cursor_position()
         };
-        assert_eq!(cursor(&p), (2, 0), "current=1 应落在第 3 处命中(行2)");
+        assert_eq!(
+            cursor(&p),
+            (2, 2),
+            "current=1 应选中第 2 处命中(行2),curs@末缘"
+        );
+        assert_eq!(p.find_state().unwrap().current, 1);
 
         p.find_go(true); // 1 → 2
         assert_eq!(p.find_state().unwrap().current, 2);
-        assert_eq!(cursor(&p), (3, 0), "current=2 应落在行3");
+        assert_eq!(cursor(&p), (3, 2), "current=2 应选中行3 命中,curs@末缘");
 
         p.find_go(true); // 2 → 0(wrap)
         assert_eq!(p.find_state().unwrap().current, 0);
-        assert_eq!(cursor(&p), (0, 0), "到末尾正向应 wrap 回第 0 个命中");
+        assert_eq!(
+            cursor(&p),
+            (0, 2),
+            "正向越过最后命中应 wrap 回第 0 命中的末缘"
+        );
 
+        // 从此处反向「上一个」:不再逐字回退,而是以光标锚换边——反向跳把光标停
+        // 到命中**前缘**(col0),连按「上一个」单调往回走(wrap:命中0 的前缘出发反
+        // 向一步回到最后命中 2)。
         p.find_go(false); // 0 → 2(反向 wrap)
         assert_eq!(p.find_state().unwrap().current, 2);
-        assert_eq!(cursor(&p), (3, 0));
+        assert_eq!(cursor(&p), (3, 0), "反向跳出 0 后落在行3 命中前缘");
 
         p.find_go(false); // 2 → 1
         assert_eq!(p.find_state().unwrap().current, 1);
+        assert_eq!(cursor(&p), (2, 0), "再「上一个」回到行2 命中前缘");
+
+        p.find_go(false); // 1 → 0
+        assert_eq!(p.find_state().unwrap().current, 0);
+        assert_eq!(cursor(&p), (0, 0));
 
         // 无命中 query:保持 count0、current 无意义但不 panic。
         p.find_type("zz".into());

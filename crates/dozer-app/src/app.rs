@@ -1822,6 +1822,9 @@ pub enum Message {
     PreviewFindText(PanelKind, String),
     /// File-Find 下一条 / 上一条。
     PreviewFindGo(PanelKind, bool),
+    /// File-Find 大小写敏感开关(`true`=逐字严格、`false`=ASCII 大小写折叠)——
+    /// 点条上「Aa」切换钮落定的方向。只翻当轮会话的语义,不改全局默认。
+    PreviewFindCase(PanelKind, bool),
     /// 预览编辑弹层:×按钮 / 点遮罩——脏改动会先转成二次确认,不直接关。
     PreviewEditCloseRequest,
     /// 预览编辑弹层二次确认:"放弃改动"。
@@ -5011,6 +5014,9 @@ impl App {
             }
             Message::PreviewFindGo(kind, next) => {
                 self.with_focused_project(move |ws, _io| ws.preview_find_go(kind, next));
+            }
+            Message::PreviewFindCase(kind, sensitive) => {
+                self.with_focused_project(move |ws, _io| ws.preview_find_case(kind, sensitive));
             }
             Message::PreviewEditCloseRequest => {
                 self.with_focused_project(|ws, _io| ws.preview_edit_close_request());
