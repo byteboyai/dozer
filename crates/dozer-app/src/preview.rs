@@ -548,9 +548,14 @@ impl PreviewPane {
     }
 
     /// 用户在输入框里编辑 query。每次落键就同步进 `state.query`,并**当场**按新
-    /// query 在锁定 buffer 上重算:命中>0 就选择第 1 个并把编辑器光标移过去(键入
-    /// 即"跳到第一个匹配"),否则切到"无命中"展示(count 0、输入框下灰提示),不
-    /// 移动光标。query 为空同样只清展示不动光标。
+    /// query 在锁定 buffer 上重算:命中>0 就把第 1 个**整段选中**([`select_range`],
+    /// 选区在代码里高亮、光标停在命中末缘,方向和「下一个」一致),否则切到
+    /// "无命中"展示(count 0、输入框下灰提示),不移动光标。query 为空同样只清展示
+    /// 不动光标。
+    ///
+    /// 为什么不只 `move_cursor_to` 落个点:find_type 一有命中就应从 Find 输入框
+    /// **自动在正文里框出关键词**(用户输入时眼睛跟着查询词的位置),只把光标放
+    /// 起点是无选区的裸光标,代码里看不到任何东西被选中。
     pub fn find_type(&mut self, query: String) {
         let Some(tab_id) = self.find.as_ref().map(|f| f.tab_id) else {
             return;
@@ -559,8 +564,8 @@ impl PreviewPane {
         if let Some(state) = self.find.as_mut() {
             state.query = query;
         }
-        // 现算命中:清点并选第 1 个起点。
-        let matches_and_first = {
+        // 现算命中:清点并选第 1 个整段。
+        let matches = {
             let Some(editor) = self
                 .tabs
                 .iter()
@@ -574,18 +579,18 @@ impl PreviewPane {
                 self.find.as_ref().unwrap().case_sensitive,
             )
         };
-        let count = matches_and_first.len();
-        let first_start = matches_and_first.first().map(|(s, _)| *s);
+        let count = matches.len();
+        let first = matches.first().copied();
         // 写回 count/current。
         if let Some(state) = self.find.as_mut() {
             state.count = count;
             state.current = 0;
         }
-        // 有命中就真的把光标落过去。
-        if let Some((line, col)) = first_start
+        // 有命中就把第 1 个整段选中([s,e)、光标落末缘),没命中/空 query 不留选区。
+        if let Some((start, end)) = first
             && let Some(editor) = self.editor_mut(tab_id)
         {
-            editor.move_cursor_to((line, col));
+            editor.select_range(start, end);
         }
     }
 
@@ -1838,19 +1843,21 @@ mod tests {
         p.open_path(path.clone());
         p.open_find_on_active();
 
-        // 输入 query:当场清点 count 并把光标跳到第一个命中("lo" 在 "hello" 起于首行
-        // col3,按字节 col3(ascii)读回)。
+        // 输入 query:当场清点 count 并把首个命中**整段选中**("lo" 在 "hello" 起于
+        // 首行 col3,含 2 个字节,结束时 col5,光标落末缘——正文里能看见词被框住)。
         p.find_type("lo".into());
         let s = p.find_state().unwrap();
         assert_eq!(s.query, "lo");
         assert_eq!(s.count, 1, "输入后应立即把命中数回填为 1");
         assert_eq!(s.current, 0);
-        let cur = p.tabs()[p.active_idx()]
-            .editor
-            .as_ref()
-            .unwrap()
-            .cursor_position();
-        assert_eq!(cur, (0, 3), "find_type 应把光标移到第一个命中起点");
+        let e = p.tabs()[p.active_idx()].editor.as_ref().unwrap();
+        assert_eq!(
+            e.selection_range(),
+            Some(((0, 3), (0, 5))),
+            "find_type 应自动选中首个命中整段"
+        );
+        assert_eq!(e.cursor_position(), (0, 5), "选中后光标停在命中末缘");
+        assert!(e.has_selection());
 
         // 已锁定同一 tab 再 ⌘F 是 no-op——query/count 保留(供 main 重聚焦);
         // 这时 text 只命中 1 次,find_go(prev) 也仍停在 col3(循环不自增越界)。
@@ -1902,20 +1909,19 @@ mod tests {
         assert_eq!(p.find_state().unwrap().count, 3);
         assert_eq!(p.find_state().unwrap().current, 0);
         let _ = s;
-        // find_type 只把光标落起点;下面 find_go 才真的"选中命中",caret 置于
-        // 命中**末列**(col0 + query 长2)。
+        // find_type 已把首个命中整段选中,caret 落命中**末列**(col0 + query 长2)。
+        let e0 = p.tabs()[p.active_idx()].editor.as_ref().unwrap();
         assert_eq!(
-            p.tabs()[p.active_idx()]
-                .editor
-                .as_ref()
-                .unwrap()
-                .cursor_position(),
-            (0, 0)
+            e0.selection_range(),
+            Some(((0, 0), (0, 2))),
+            "find_type 应自动框住第一个命中"
         );
+        assert_eq!(e0.cursor_position(), (0, 2));
 
-        // 正向:以光标为锚,每次都把光标停在命中的**末缘**(col2),连按单调续接:
-        // caret(0,0)⊂命中0 → 1,(caret(2,2)贴在命中1末缘 → 命中0的下一段也算在内由
-        // start≤判定锚住命中1 → 2)→ caret(3,0 起步后→wrap 回命中0。
+        // 正向:用户连按「下一个」,每次把光标停在命中**末缘**(col2)单调续接。
+        // find_type 之后 caret 已落在命中0 末缘(0,2);cast 归属在 [s,e) 左闭右开下
+        // caret 贴末缘不算段内,走“start≤caret”落在命中0(anchor0)→ 步进到命中1;
+        // caret(2,2)同理 → 命中2 → wrap 回命中0。
         p.find_go(true); // 命中0 → 1
         assert_eq!(p.find_state().unwrap().current, 1);
         let cursor = |p: &PreviewPane| {
