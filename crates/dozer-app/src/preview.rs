@@ -233,6 +233,10 @@ pub struct FindState {
     /// 一个要被原样插进去的字符串,不做规则匹配)。`replace_current` /
     /// `replace_all` 都拿它当替换物;空串表示“删掉那处命中”。
     pub replacement: String,
+    /// 替换行(第二行,含替换输入框 + 「替换当前」/「替换全部」)是否展开
+    /// 显示。⌘F 打开时收起、⌘R 打开时展开;查询框前的圆盘箭头可随时手动
+    /// 切换。默认收起,不占多余纵向空间——多数查找场景不需要替换。
+    pub replace_open: bool,
 }
 
 #[derive(Default)]
@@ -516,7 +520,12 @@ impl PreviewPane {
     /// no-op(⌘F 连按只把 focus 还给输入框,不清输入内容);切到别的文件后再开,
     /// 丢弃旧会话重建空 query。激活 tab 不是原生(webview/Blank)时 no-op——
     /// Find 只对有 iced `text_editor` 的 tab 有意义。
-    pub fn open_find_on_active(&mut self) {
+    ///
+    /// `replace_open` 定住这次打开动作要的替换行展开态——⌘F 传 `false`(收起)、
+    /// ⌘R 传 `true`(展开),每次调用都显式生效(哪怕会话已开着),不是只在
+    /// 新建时起作用:用户按下的是哪个快捷键,条就该立刻呈现对应形态,不能因为
+    /// "会话已存在"就沿用上一次的展开态。
+    pub fn open_find_on_active(&mut self, replace_open: bool) {
         let Some(active_id) = self
             .tabs
             .get(self.active)
@@ -525,7 +534,11 @@ impl PreviewPane {
         else {
             return;
         };
-        if !self.find.as_ref().is_some_and(|f| f.tab_id == active_id) {
+        if self.find.as_ref().is_some_and(|f| f.tab_id == active_id) {
+            if let Some(f) = self.find.as_mut() {
+                f.replace_open = replace_open;
+            }
+        } else {
             self.find = Some(FindState {
                 tab_id: active_id,
                 query: String::new(),
@@ -533,7 +546,16 @@ impl PreviewPane {
                 count: 0,
                 case_sensitive: false,
                 replacement: String::new(),
+                replace_open,
             });
+        }
+    }
+
+    /// 查询框前的圆盘箭头点击:手动翻转替换行展开态,不受 ⌘F/⌘R 的固定值
+    /// 约束。条未开是 no-op。
+    pub fn toggle_find_replace(&mut self) {
+        if let Some(f) = self.find.as_mut() {
+            f.replace_open = !f.replace_open;
         }
     }
 
@@ -1803,14 +1825,14 @@ mod tests {
             p.tabs()[p.active_idx()].editor.is_none(),
             "非原生扩展(.xyz)不该有 editor"
         );
-        p.open_find_on_active();
+        p.open_find_on_active(false);
         assert!(!p.find_bar_open(), "非原生激活 tab 上 ⌘F 不该开条");
 
         // 打开原生 A、B:B 为激活,⌘F 锁到 B。
         p.open_path(a.clone());
         p.open_path(b.clone());
         let id_b = p.tabs()[p.active_idx()].id;
-        p.open_find_on_active();
+        p.open_find_on_active(false);
         assert!(p.find_bar_open());
         assert_eq!(p.find_state().map(|f| f.tab_id), Some(id_b));
 
@@ -1822,7 +1844,7 @@ mod tests {
         );
 
         // select 在 A、B 间切换同样触发 cull。
-        p.open_find_on_active(); // 激活是 A,锁 A
+        p.open_find_on_active(false); // 激活是 A,锁 A
         let id_a = p.tabs()[p.active_idx()].id;
         let idx_b = p.tabs().iter().position(|t| t.id == id_b).unwrap();
         p.select(idx_b);
@@ -1841,7 +1863,7 @@ mod tests {
 
         let mut p = PreviewPane::default();
         p.open_path(path.clone());
-        p.open_find_on_active();
+        p.open_find_on_active(false);
 
         // 输入 query:当场清点 count 并把首个命中**整段选中**("lo" 在 "hello" 起于
         // 首行 col3,含 2 个字节,结束时 col5,光标落末缘——正文里能看见词被框住)。
@@ -1861,7 +1883,7 @@ mod tests {
 
         // 已锁定同一 tab 再 ⌘F 是 no-op——query/count 保留(供 main 重聚焦);
         // 这时 text 只命中 1 次,find_go(prev) 也仍停在 col3(循环不自增越界)。
-        p.open_find_on_active();
+        p.open_find_on_active(false);
         assert_eq!(p.find_state().unwrap().query, "lo");
         assert_eq!(p.find_state().unwrap().count, 1);
         p.find_go(false);
@@ -1885,7 +1907,7 @@ mod tests {
         assert!(!p.find_bar_open());
         assert!(p.find_state().is_none());
 
-        p.open_find_on_active();
+        p.open_find_on_active(false);
         assert!(p.find_bar_open());
         let s = p.find_state().unwrap();
         assert!(s.query.is_empty());
@@ -1901,7 +1923,7 @@ mod tests {
         std::fs::write(&path, "ab\ncd\nab\nab\nef").unwrap();
         let mut p = PreviewPane::default();
         p.open_path(path.clone());
-        p.open_find_on_active();
+        p.open_find_on_active(false);
 
         // "ab" 命中 3 次:行0 col0 / 行2 col0 / 行3 col0。
         p.find_type("ab".into());
@@ -1988,7 +2010,7 @@ mod tests {
 
         let mut p = PreviewPane::default();
         let id = p.open_path(p_a.clone());
-        p.open_find_on_active();
+        p.open_find_on_active(false);
         assert!(p.find_bar_open());
 
         // 关掉正搜索的文件会清空 vec → 自动补 Blank(push_tab 里的 cull)。
@@ -2001,7 +2023,7 @@ mod tests {
 
         // clear_all(项目切换路径)同样吐掉 find。
         p.open_path(p_b.clone());
-        p.open_find_on_active();
+        p.open_find_on_active(false);
         assert!(p.find_bar_open());
         p.clear_all();
         assert!(p.find_state().is_none(), "clear_all 后 Find 应一并丢弃");
@@ -2026,6 +2048,7 @@ mod tests {
             count: 2,
             case_sensitive: false,
             replacement: "SEO".into(),
+            replace_open: true,
         });
         assert!(p.replace_all(), "两处命中应全换掉");
         let editor_text = p.tabs()[p.active_idx()].editor.as_ref().unwrap().text();
@@ -2050,6 +2073,7 @@ mod tests {
             count: 2,
             case_sensitive: false,
             replacement: "Y".into(),
+            replace_open: true,
         });
         assert!(p.replace_current());
         let text = p.tabs()[p.active_idx()].editor.as_ref().unwrap().text();

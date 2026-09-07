@@ -44,12 +44,17 @@ pub fn view_at_size<'a, Message: Clone + 'a>(
     bare: bool,
     on_input: impl Fn(String) -> Message + 'a,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    // `bare=true` 时不画自己的框/底(边框/底色留给调用方外层 container),
+    // 内边距也该交出去——否则调用方即便把外层 padding 调到跟另一个 bare
+    // 输入框一致,这里内建的 8px 还是会让占位符文字整体多缩进一截,两个
+    // 框的文字起点对不上(2026-09-07 file-find 查询/替换框左对齐问题的
+    // 根因)。
     let input = iced_widget::text_input(placeholder, value)
         .secure(secure)
         .on_input(on_input)
         .on_submit_maybe(on_submit)
         .size(size)
-        .padding(8);
+        .padding(if bare { 0 } else { 8 });
     let input = if let Some(id) = id {
         input.id(id)
     } else {

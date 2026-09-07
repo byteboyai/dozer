@@ -298,8 +298,7 @@ fn install_file_drag_position_tracker(window: &std::sync::Arc<winit::window::Win
     let Some(delegate) = ns_window.delegate() else {
         return;
     };
-    let delegate_obj: &AnyObject =
-        unsafe { &*(Retained::as_ptr(&delegate) as *const AnyObject) };
+    let delegate_obj: &AnyObject = unsafe { &*(Retained::as_ptr(&delegate) as *const AnyObject) };
     let class: &AnyClass = delegate_obj.class();
 
     unsafe extern "C-unwind" fn dragging_updated(
@@ -1454,6 +1453,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     } else if normal_char("f") {
                         // 第二趟 ⌘F 仍是开/聚焦(消息贴合 request_find_focus)。
                         Some(Message::PreviewFindOpen(kind_root))
+                    } else if normal_char("r") {
+                        // ⌘R:同 ⌘F 但替换行默认展开(用户需求:F 收起/R 展开,
+                        // 查询框前圆盘箭头再手动切换)。
+                        Some(Message::PreviewFindOpenWithReplace(kind_root))
                     } else if bar_open && normal_char("g") {
                         // 下一个命中(文件内循环)。无条时空放给 iced 无副作用。
                         Some(Message::PreviewFindGo(kind_root, true))

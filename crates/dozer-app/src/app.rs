@@ -229,6 +229,14 @@ pub enum HoverId {
     /// 一套;× 关闭按钮是文字 glyph,不参与悬停着色)。
     ProjectPreviewFindPrev,
     ProjectPreviewFindNext,
+    /// 查询框前的展开/收起替换行圆盘箭头(Files / Project 各一套)。
+    PreviewFindReplaceToggle,
+    ProjectPreviewFindReplaceToggle,
+    /// 替换行「替换当前」/「替换全部」图标按钮(Files / Project 各一套)。
+    PreviewFindReplaceCurrentBtn,
+    PreviewFindReplaceAllBtn,
+    ProjectPreviewFindReplaceCurrentBtn,
+    ProjectPreviewFindReplaceAllBtn,
     /// Todo 面板列表列"收起/展开"按钮:处理方式同 `FileTreeCollapse`
     /// (见 `extensions::todo::view`)。
     TodoListCollapse,
@@ -1820,6 +1828,11 @@ pub enum Message {
     /// `PreviewSaveActive` 一样用 `PanelKind` 一跳区分面板,不强做 preview↔panel
     /// 双枚举映射。
     PreviewFindOpen(PanelKind),
+    /// 同 `PreviewFindOpen`(⌘R),但替换行默认展开——查询框前的圆盘箭头也
+    /// 展示这个展开态,`PreviewFindReplaceToggle` 再手动翻转。
+    PreviewFindOpenWithReplace(PanelKind),
+    /// 查询框前的圆盘箭头点击:手动翻转替换行展开/收起,不受 ⌘F/⌘R 影响。
+    PreviewFindReplaceToggle(PanelKind),
     /// File-Find 关闭(输入框 × / Esc / 切走文件)。`kind` 语义同
     /// `PreviewFindOpen`。
     PreviewFindClose(PanelKind),
@@ -5050,6 +5063,12 @@ impl App {
             }
             Message::PreviewFindOpen(kind) => {
                 self.with_focused_project(move |ws, _io| ws.preview_find_open(kind));
+            }
+            Message::PreviewFindOpenWithReplace(kind) => {
+                self.with_focused_project(move |ws, _io| ws.preview_find_open_with_replace(kind));
+            }
+            Message::PreviewFindReplaceToggle(kind) => {
+                self.with_focused_project(move |ws, _io| ws.preview_find_toggle_replace(kind));
             }
             Message::PreviewFindClose(kind) => {
                 self.with_focused_project(move |ws, _io| ws.preview_find_close(kind));

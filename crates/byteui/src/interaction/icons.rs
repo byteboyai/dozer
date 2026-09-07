@@ -25,6 +25,10 @@ pub enum IconKind {
     /// 原生预览 File-Find 条「上一个命中」跳转图标(Lucide arrow-up),与
     /// `ArrowDown` 镜像。
     ArrowUp,
+    /// 原生预览替换行「替换当前」按钮图标(Lucide replace)。
+    Replace,
+    /// 原生预览替换行「替换全部」按钮图标(Lucide replace-all)。
+    ReplaceAll,
     Folder,
     FolderOpen,
     /// 文件树根目录头部图标(Lucide folder-open-dot:展开的文件夹 + 右上圆点,
@@ -187,6 +191,8 @@ impl IconKind {
             IconKind::ChevronUp => include_bytes!("../../assets/icons/chevron-up.svg"),
             IconKind::ArrowDown => include_bytes!("../../assets/icons/arrow-down.svg"),
             IconKind::ArrowUp => include_bytes!("../../assets/icons/arrow-up.svg"),
+            IconKind::Replace => include_bytes!("../../assets/icons/replace.svg"),
+            IconKind::ReplaceAll => include_bytes!("../../assets/icons/replace-all.svg"),
             IconKind::Folder => include_bytes!("../../assets/icons/folder.svg"),
             IconKind::FolderOpen => include_bytes!("../../assets/icons/folder-open.svg"),
             IconKind::FolderOpenDot => include_bytes!("../../assets/icons/folder-open-dot.svg"),
