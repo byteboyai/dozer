@@ -200,6 +200,121 @@ fn install_topbar_drag_guard(window: &winit::window::Window) {
     }
 }
 
+/// macOS 专有：外部 OS 文件拖拽悬停在窗口内移动期间的最新光标位置（逻辑
+/// 坐标，原点左上，Y 向下——与 `cursor_phys`/`files_drop_target` 同源）。
+///
+/// 由 [`install_file_drag_position_tracker`] 装的 `draggingUpdated:` 覆写
+/// 每次回调都写一遍；`main.rs` 的 `on_window_event` 每帧 `RedrawRequested`
+/// 读一遍去重算文件树命中/高亮（见该处调用）。winit 的 macOS 后端只实现了
+/// `draggingEntered:`/`performDragOperation:`/`draggingExited:` 三个
+/// `NSDraggingDestination` 方法，唯独没有 `draggingUpdated:`——已用诊断日志
+/// 实测确认：一次完整的外部文件拖拽过程里，`WindowEvent::CursorMoved` 一次
+/// 都不会触发，`HoveredFile` 只在进入窗口那一刻来一次。这不是这份实现的
+/// bug，是 winit 本身没有为原生拖拽悬停过程暴露任何带位置的事件。
+#[cfg(target_os = "macos")]
+static FILE_DRAG_POSITION: std::sync::Mutex<Option<(f32, f32)>> = std::sync::Mutex::new(None);
+
+/// 读一次 [`FILE_DRAG_POSITION`]。非 macOS 平台恒 `None`(该平台的 winit
+/// 后端若确实在拖拽悬停时发 `CursorMoved`,调用方自会退回 `cursor_phys`,
+/// 见调用处)。
+#[cfg(target_os = "macos")]
+fn file_drag_position() -> Option<(f32, f32)> {
+    FILE_DRAG_POSITION.lock().ok().and_then(|p| *p)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn file_drag_position() -> Option<(f32, f32)> {
+    None
+}
+
+/// macOS 专有：[`install_file_drag_position_tracker`] 装的原生覆写要在
+/// 拖拽悬停期间反复请求重绘,但它是个不持有 `Self::Ready` 任何字段的
+/// `extern "C-unwind" fn`,够不到 `main.rs` 事件循环里的 `window` 变量——
+/// 装覆写时把 `Arc<Window>` 存一份在这里,让覆写体能调 winit 官方的
+/// `request_redraw()`(会自己去抖合并,不会比原生 `setNeedsDisplay:` 更
+/// 激进,且走的是 winit 预期的重绘请求路径,不绕过它的内部记账)。
+#[cfg(target_os = "macos")]
+static FILE_DRAG_WINDOW: std::sync::OnceLock<std::sync::Arc<winit::window::Window>> =
+    std::sync::OnceLock::new();
+
+/// macOS 专有：给内容 NSView 的运行时类新增 `draggingUpdated:` 覆写，补上
+/// winit 没实现的这一环（见 [`FILE_DRAG_POSITION`] 文档）。同 `install_
+/// topbar_drag_guard` 的手法——`class_addMethod` 只新增全新 selector，不碰
+/// winit 自己已经实现的 `draggingEntered:`/`performDragOperation:`。
+///
+/// 覆写体只做两件事：把 `[sender draggingLocation]`（AppKit 坐标，原点左
+/// 下、Y 向上）翻转成逻辑坐标写进 `FILE_DRAG_POSITION`，再调
+/// [`FILE_DRAG_WINDOW`] 的 `request_redraw()`——真正的命中测试/高亮/自动
+/// 展开仍在 Rust 侧 `RedrawRequested` 里读这个静态量执行，这个 native
+/// 覆写本身不碰 `App`/`Message`。
+#[cfg(target_os = "macos")]
+fn install_file_drag_position_tracker(window: &std::sync::Arc<winit::window::Window>) {
+    use objc2::encode::Encode;
+    use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
+    use objc2::{ffi, sel};
+    use objc2_app_kit::NSDragOperation;
+    use objc2_foundation::NSPoint;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let _ = FILE_DRAG_WINDOW.set(window.clone());
+
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::AppKit(ah) = handle.as_raw() else {
+        return;
+    };
+    // 安全：同 `install_topbar_drag_guard`——`ns_view` 是已装进窗口的合法
+    // 指针，这里只借它的运行时类指针去挂方法，不持有/释放该对象。
+    let ns_view: &AnyObject = unsafe { &*(ah.ns_view.as_ptr() as *mut AnyObject) };
+    let class: &AnyClass = ns_view.class();
+
+    unsafe extern "C-unwind" fn dragging_updated(
+        this: &AnyObject,
+        _cmd: Sel,
+        sender: *mut AnyObject,
+    ) -> NSDragOperation {
+        let loc: NSPoint = unsafe { objc2::msg_send![sender, draggingLocation] };
+        let frame: objc2_foundation::NSRect = unsafe { objc2::msg_send![this, frame] };
+        let logical_y = frame.size.height - loc.y;
+        if let Ok(mut pos) = FILE_DRAG_POSITION.lock() {
+            *pos = Some((loc.x as f32, logical_y as f32));
+        }
+        if let Some(window) = FILE_DRAG_WINDOW.get() {
+            window.request_redraw();
+        }
+        NSDragOperation::Generic
+    }
+
+    // `-(NSDragOperation)draggingUpdated:(id)sender` 的类型串：返回值 + self
+    // + _cmd + 一个 id 参数,四段。
+    let types = std::ffi::CString::new(format!(
+        "{}{}{}{}",
+        NSDragOperation::ENCODING,
+        <*mut AnyObject>::ENCODING,
+        Sel::ENCODING,
+        <*mut AnyObject>::ENCODING,
+    ))
+    .expect("type encoding 不含 NUL");
+    let imp: Imp = unsafe {
+        core::mem::transmute::<
+            unsafe extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject) -> NSDragOperation,
+            Imp,
+        >(dragging_updated)
+    };
+    let added = unsafe {
+        ffi::class_addMethod(
+            class as *const AnyClass as *mut AnyClass,
+            sel!(draggingUpdated:),
+            imp,
+            types.as_ptr(),
+        )
+    };
+    if !added.as_bool() {
+        tracing::warn!("挂 draggingUpdated: 覆写失败(selector 可能已存在于该类)");
+    }
+}
+
 /// macOS 专有：单个"＋"入口要能同时选择**文件**和**目录**（项目文档 /
 /// Agent 记忆都能挂任意路径）。rfd 的 `pick_file`/`pick_folder` 各自只允许
 /// 一种（`NSOpenPanel` 内部硬编码 `canChooseFiles`/`canChooseDirectories` 二
@@ -977,6 +1092,36 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     app.update(Message::TodoDragEnd);
                     window.request_redraw();
                 }
+                // 外部 OS 文件拖拽悬停期间的实时高亮/自动展开:macOS 上原生
+                // 拖拽悬停不产生 `CursorMoved`(见 `FILE_DRAG_POSITION` 文档),
+                // 改由 `install_file_drag_position_tracker` 装的原生覆写驱动
+                // 的 `RedrawRequested` 重新命中并刷新;命中到仍折叠的目录顺带
+                // 自动展开,让拖拽能继续往深一层落。非 macOS 平台
+                // `file_drag_position()` 恒返回 `None`,退回 `cursor_phys`
+                // (若该平台的 winit 后端确实在拖拽悬停时发 `CursorMoved`,
+                // 下面 CursorMoved 分支的现状逻辑仍会正常接手)。
+                WindowEvent::RedrawRequested if *files_dragging => {
+                    let scale = window.scale_factor();
+                    let (logical_x, logical_y) = file_drag_position().unwrap_or_else(|| {
+                        (
+                            (cursor_phys.x / scale) as f32,
+                            (cursor_phys.y / scale) as f32,
+                        )
+                    });
+                    let window_width = (window.inner_size().width as f64 / scale) as f32;
+                    let window_height = (window.inner_size().height as f64 / scale) as f32;
+                    let target =
+                        app.files_drop_target(window_width, window_height, logical_x, logical_y);
+                    if let Some(dir) = &target {
+                        app.expand_files_dir_if_collapsed(dir);
+                    }
+                    let hover = target
+                        .into_iter()
+                        .collect::<std::collections::HashSet<std::path::PathBuf>>();
+                    app.update(Message::Files(extensions::files::Message::FileDragHover(
+                        hover,
+                    )));
+                }
                 // 外部 OS 文件拖拽进入窗口:进入即置拖拽标记,之后每个
                 // `CursorMoved` 都会 re-hit-test 树并刷新高亮(见上面
                 // CursorMoved 分支);离开窗口/取消时清标记并收起高亮。
@@ -993,11 +1138,18 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 }
                 // 外部 OS 文件拖拽落下:优先落到文件树目录行 → 触发移动
                 // (吸收掉,不再进后面的终端字节分发);否则落给终端现状行为
-                // (不 return,继续走 bytes 匹配的 `DroppedFile` 分支)。
+                // (不 return,继续走 bytes 匹配的 `DroppedFile` 分支)。命中
+                // 位置优先用 `file_drag_position()`(见上面 RedrawRequested
+                // 分支的说明),`cursor_phys` 只作非 macOS/未及时收到过原生
+                // 覆写回调时的退路。
                 WindowEvent::DroppedFile(path) if *files_dragging => {
                     let scale = window.scale_factor();
-                    let logical_x = (cursor_phys.x / scale) as f32;
-                    let logical_y = (cursor_phys.y / scale) as f32;
+                    let (logical_x, logical_y) = file_drag_position().unwrap_or_else(|| {
+                        (
+                            (cursor_phys.x / scale) as f32,
+                            (cursor_phys.y / scale) as f32,
+                        )
+                    });
                     let window_w = (window.inner_size().width as f64 / scale) as f32;
                     let window_h = (window.inner_size().height as f64 / scale) as f32;
                     let target = app.files_drop_target(window_w, window_h, logical_x, logical_y);
@@ -1982,6 +2134,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 // 顶栏原生拖窗守卫：只需装一次方法覆写，见函数文档。
                 #[cfg(target_os = "macos")]
                 install_topbar_drag_guard(&window);
+                // 外部文件拖拽悬停位置追踪：补 winit 没实现的 `draggingUpdated:`，
+                // 见函数文档。
+                #[cfg(target_os = "macos")]
+                install_file_drag_position_tracker(&window);
 
                 let physical_size = window.inner_size();
                 let viewport = Viewport::with_physical_size(

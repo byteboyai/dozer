@@ -853,6 +853,20 @@ pub fn update(
             if paths.is_empty() {
                 return;
             }
+            // 已经在项目内的文件不许走这条"外部文件拖拽"通路移动路径——核心
+            // 裁决要求直接改动项目产物的入口收着给,不能让鼠标拖拽变成一个
+            // 可以随手重排项目文件结构的隐藏功能(容易误操作,又绕开 AI 侧
+            // 的变更记录)。整批只要有一个源在项目树内就整体拒绝,不做"部分
+            // 生效"。
+            if let Some(tree) = &ws_state.file_tree
+                && let Some(bad) = paths.iter().find(|p| p.starts_with(tree.root()))
+            {
+                ws_state.tree_error = Some(format!(
+                    "{} 已在项目内,不支持用拖拽移动项目内文件",
+                    bad.display()
+                ));
+                return;
+            }
             let drop_target = target.clone();
             handle.spawn(async move {
                 let result = tokio::task::spawn_blocking(move || {
