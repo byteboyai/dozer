@@ -3677,9 +3677,10 @@ fn preview_pane_for<'a>(
                         })
                         .into()
                 };
-                // 边框高亮同 search_box 约定由调用方给:查询词非空即金框(内嵌
-                // 后缀后 text_input 恒透明,不再自带 `Status::Focused` 金框)。
-                let input = byteui::form::input_text::view_with_suffix_at_size(
+                // 边框高亮同 search_box 约定由调用方给:查询词非空即金框。
+                // 输入框用 unframed 透明版——查询行与下方替换行合成一整块 card
+                // 背景(见 `find_band`),单字段不再自带 chip,才符合"整块搜索框"。
+                let input = byteui::form::input_text::view_with_suffix_unframed_at_size(
                     find_font,
                     "在文件中查找…",
                     &find.query,
@@ -3753,7 +3754,17 @@ fn preview_pane_for<'a>(
                         if next { "下一个" } else { "上一个" },
                     )
                 };
-                let strip = container(
+                // 查询行 + 替换行合进「一整块 File-Find 搜索框」:各自裁掉独立
+                // 的窄内边距,底/框全部交给下方 `find_band` 唯一 card 统一画,
+                // 中间行只留一点垂直换气让两行看得清层次。
+                type EE<'x> = iced_widget::core::Element<
+                    'x,
+                    Message,
+                    iced_widget::Theme,
+                    iced_renderer::Renderer,
+                >;
+                let mut find_rows: Vec<EE<'_>> = vec![];
+                let query_row: EE<'_> = container(
                     row![
                         container(input).width(Length::Fill),
                         count_label,
@@ -3761,11 +3772,12 @@ fn preview_pane_for<'a>(
                         step_icon(true),
                     ]
                     .spacing(4)
-                    .align_y(iced_widget::core::Alignment::Center),
+                    .align_y(iced_widget::core::alignment::Alignment::Center),
                 )
                 .width(Length::Fill)
-                .padding([4, 6]);
-                content = content.push(strip);
+                .padding([0, 2])
+                .into();
+                find_rows.push(query_row);
 
                 // ---- 文件内替换行(条身之下第二行) ----
                 // 替换只改锁定 buffer 并标脏、落盘仍等 ⌘S(`PreviewPane::replace_*`
@@ -3773,6 +3785,7 @@ fn preview_pane_for<'a>(
                 // 成替换框逗号残片)。“替换当前”会顺带到下一命中、方便一路处理,
                 // “替换全部”把这一轮全部落一次。两个按钮共用一轮是否可替换的开关。
                 let armed = find.count > 0;
+                // 替换框同为整块 card 的一部分:bare=true 去底去框透明融入。
                 let replacement_input = byteui::form::input_text::view_at_size(
                     find_font,
                     "替换为…",
@@ -3781,7 +3794,7 @@ fn preview_pane_for<'a>(
                     None,
                     !find.replacement.is_empty(),
                     None,
-                    false,
+                    true,
                     move |s: String| match panel {
                         PanelKind::Project => {
                             Message::PreviewFindReplacement(PanelKind::Project, s)
@@ -3842,8 +3855,31 @@ fn preview_pane_for<'a>(
                     .align_y(iced_widget::core::Alignment::Center),
                 )
                 .width(Length::Fill)
-                .padding([4, 6]);
-                content = content.push(replace_row);
+                .into();
+                find_rows.push(replace_row);
+
+                // 唯一的一块 card:查询行(含 Aa/命中数/箭头)与替换行共底、同框。
+                // 原本两个输入框各自的 card 小方框拆掉,把那种背景色"提升"给整个
+                // File-Find 工具栏;查询词非空仍金框提示(沿用单字段 chip 的强调),
+                // 否则普通边色。radius6 与 `input_text` 框外半径一致,观感是预览
+                // 区里一块圆角搜索框,内部输入框透明融入。
+                let find_band = container(column(find_rows).spacing(7))
+                    .width(Length::Fill)
+                    .padding([5, 8])
+                    .style(move |_t: &iced_widget::Theme| container::Style {
+                        background: Some(colors.card.into()),
+                        border: iced_widget::core::Border {
+                            color: if !find.query.is_empty() {
+                                colors.gold
+                            } else {
+                                colors.border
+                            },
+                            width: 1.0,
+                            radius: 6.0.into(),
+                        },
+                        ..container::Style::default()
+                    });
+                content = content.push(find_band);
             }
             content = content.push(
                 container(editor.view().map(move |ev| editor_msg(tab_id, ev)))

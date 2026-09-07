@@ -95,10 +95,16 @@ pub fn view_at_size<'a, Message: Clone + 'a>(
 
 /// `view` 的变体:在输入框**同一圈边框内**靠右内嵌一个后缀控件(`suffix`,
 /// 如 Find 条的「Aa」大小写开关)。结构参照 `search_box::view_with_prefix`
-/// 的既有做法:text_input 自身恒透明无边框(`padding(0)`),外框由 container
-/// 统一画 card 底色/边框——观感与非 bare `view` 对齐(radius 6、card 底)。
-/// 代价同 search_box:边框高亮不再看 iced `text_input::Status::Focused`,由
-/// 调用方传 `highlight`(如"查询词非空"),聚焦但空 query 时无金框提示。
+/// 的既有做法(即[`view_with_suffix_at_size_flags`] 传 `framed`);text_input
+/// 自身恒透明无边框(`padding(0)`),卡片底与边框分两种:
+///
+/// - `framed=true`(本函数与 [`view_with_suffix_at_size`]):
+///   由内部 container 统一画 card 底色/边框,观感与非 bare `view` /
+///   [`view_at_size`] 对齐(radius 6、card 底)。代价:边框高亮不再看 iced
+///   `text_input::Status::Focused`,由调用方传 `highlight`。
+/// - `framed=false`([`view_with_suffix_unframed_at_size`]):
+///   背景与边框都被调用方接管(File-Find 把"查询行+替换行"合成一整块 card
+///   时用),这里的输入框只是透明行,不自己画出方框。
 #[allow(clippy::too_many_arguments)]
 pub fn view_with_suffix<'a, Message: Clone + 'a>(
     placeholder: &str,
@@ -110,7 +116,8 @@ pub fn view_with_suffix<'a, Message: Clone + 'a>(
     on_input: impl Fn(String) -> Message + 'a,
     suffix: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    view_with_suffix_at_size(
+    view_with_suffix_at_size_flags(
+        true,
         crate::theme::font::body() as f32,
         placeholder,
         value,
@@ -125,9 +132,67 @@ pub fn view_with_suffix<'a, Message: Clone + 'a>(
 
 /// [`view_with_suffix`] 的字号可显式给的版本(`size` 在最前)。配套
 /// [`view_at_size`],供原生预览 File-Find 这类要跟代码编辑器字号走同一条线的
-/// 输入框用。
+/// 输入框用(带自己一圈 card 框,`framed=true`)。
 #[allow(clippy::too_many_arguments)]
 pub fn view_with_suffix_at_size<'a, Message: Clone + 'a>(
+    size: f32,
+    placeholder: &str,
+    value: &str,
+    secure: bool,
+    id: Option<widget::Id>,
+    highlight: bool,
+    on_submit: Option<Message>,
+    on_input: impl Fn(String) -> Message + 'a,
+    suffix: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    view_with_suffix_at_size_flags(
+        true,
+        size,
+        placeholder,
+        value,
+        secure,
+        id,
+        highlight,
+        on_submit,
+        on_input,
+        suffix,
+    )
+}
+
+/// [`view_with_suffix_at_size`] 的 `framed=false` 同款:后缀输入框不自带 card
+/// 底/框,底色边框留给调用方(File-Find 单块搜索框)。其余等同 `_at_size`。
+#[allow(clippy::too_many_arguments)]
+pub fn view_with_suffix_unframed_at_size<'a, Message: Clone + 'a>(
+    size: f32,
+    placeholder: &str,
+    value: &str,
+    secure: bool,
+    id: Option<widget::Id>,
+    highlight: bool,
+    on_submit: Option<Message>,
+    on_input: impl Fn(String) -> Message + 'a,
+    suffix: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    view_with_suffix_at_size_flags(
+        false,
+        size,
+        placeholder,
+        value,
+        secure,
+        id,
+        highlight,
+        on_submit,
+        on_input,
+        suffix,
+    )
+}
+
+/// 后缀输入框的共用实装。`framed=true` 画成孤立的 card 圆角小框(card 底 + 金/
+/// 边色 1px 边框 + radius 6);`framed=false` 原样返回「输入框+后缀」的透明行,
+/// 由调用方外面盖统一 card。
+#[allow(clippy::too_many_arguments)]
+fn view_with_suffix_at_size_flags<'a, Message: Clone + 'a>(
+    framed: bool,
     size: f32,
     placeholder: &str,
     value: &str,
@@ -146,7 +211,8 @@ pub fn view_with_suffix_at_size<'a, Message: Clone + 'a>(
         .size(size)
         .padding(0)
         .style(move |_theme: &iced_widget::Theme, _status: Status| {
-            // 边框/底色由外层容器统一画(见下),输入框自己恒透明。
+            // 边框/底色天然透明——framed 时由外层 container 画,unframed 时由
+            // 调用方的整块 card 垫底,均不进 text_input 自身。
             text_input::Style {
                 background: iced_widget::core::Color::TRANSPARENT.into(),
                 border: Border {
@@ -164,33 +230,36 @@ pub fn view_with_suffix_at_size<'a, Message: Clone + 'a>(
         input = input.id(id);
     }
     let field: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = input.into();
-    iced_widget::container(
-        iced_widget::row![
-            iced_widget::container(field)
-                .width(Length::Fill)
-                .align_y(iced_widget::core::alignment::Vertical::Center),
-            iced_widget::container(suffix).align_y(iced_widget::core::alignment::Vertical::Center),
-        ]
-        .spacing(6)
-        .align_y(iced_widget::core::Alignment::Center),
-    )
+    let row = iced_widget::row![
+        iced_widget::container(field)
+            .width(Length::Fill)
+            .align_y(iced_widget::core::alignment::Vertical::Center),
+        iced_widget::container(suffix).align_y(iced_widget::core::alignment::Vertical::Center),
+    ]
+    .spacing(6)
+    .align_y(iced_widget::core::Alignment::Center);
+    if !framed {
+        return iced_widget::container(row).width(Length::Fill).into();
+    }
     // padding 8 对齐非 bare `view` 里 text_input 自带的 `.padding(8)`,
     // 条高观感不因内嵌后缀而变。
-    .padding(8)
-    .style(
-        move |_t: &iced_widget::Theme| iced_widget::container::Style {
-            background: Some(colors.card.into()),
-            border: Border {
-                color: if highlight {
-                    colors.gold
-                } else {
-                    colors.border
+    iced_widget::container(row)
+        .width(Length::Fill)
+        .padding(8)
+        .style(
+            move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                background: Some(colors.card.into()),
+                border: Border {
+                    color: if highlight {
+                        colors.gold
+                    } else {
+                        colors.border
+                    },
+                    width: 1.0,
+                    radius: 6.0.into(),
                 },
-                width: 1.0,
-                radius: 6.0.into(),
+                ..iced_widget::container::Style::default()
             },
-            ..iced_widget::container::Style::default()
-        },
-    )
-    .into()
+        )
+        .into()
 }
