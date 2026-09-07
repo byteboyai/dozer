@@ -93,6 +93,82 @@ impl CodeView {
         self.id.clone()
     }
 
+    /// 文件内搜索(文件预览原生 tab 的 Find):返回 `query` 在当前 buffer 里的
+    /// 全部匹配,每个匹配给一对逻辑坐标 —— `.0` 是匹配起始、`.1` 是匹配**结束
+    /// 边界**——调用层拿 `.0` 调 [`CodeView::move_cursor_to`] 落光标 / 定位。
+    ///
+    /// 语义约定(与 cosmic-text 光标一致):坐标 `(line, column)` 中 `line` 是
+    /// buffer 逻辑行(由明文换行划分,不随 wrapping 变);`column` 是**该行内的
+    /// 字节偏移**——cosmic 的 `Cursor { line, index }` 里 `index` 与
+    /// `position.column` 直通(iced_graphics `move_to` 把 column 原样写入
+    /// `set_cursor.index`,已核实)。匹配区间永不跨到换行字节之外,因此返回的
+    /// 起止都落在真实字符边界。
+    ///
+    /// 匹配规则:**大小写 ASCII 折叠**的等长字节比较(`eq_ignore_ascii_case`)。
+    /// 不先把文本整体 to_lowercase 再比 —— 那样的复制会改变非 ASCII 文本的字
+    /// 节布局,导致回溯的坐标错位;这里只在候选与 query 等长时按字节 compare,
+    /// A-Z 忽略大小写,非 ASCII 严格相等,坐标因此恒与 `Content` 字节布局对齐。
+    /// 空 query 返回空表。
+    ///
+    /// 纯计算:不写 buffer、不移动光标。哪个匹配变"当前"是调用层 Find 栏状态。
+    pub fn find_matches_all(&self, query: &str) -> Vec<((usize, usize), (usize, usize))> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        // 初次扫出全部匹配的 [start_byte, end_byte) 区间(在全串字节坐标上)。
+        let text = self.content.text();
+        let bytes = text.as_bytes();
+        let q = query.as_bytes();
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        if q.len() <= bytes.len() {
+            for i in 0..=(bytes.len() - q.len()) {
+                if bytes[i..i + q.len()].eq_ignore_ascii_case(q) {
+                    ranges.push((i, i + q.len()));
+                }
+            }
+        }
+        if ranges.is_empty() {
+            return Vec::new();
+        }
+        // 每行字节起点:按 `\n` 字节切出每逻辑行的起始字节。Dozer 保存统一用
+        // `\n`(Lf),`\r\n` 里的 `\r` 会原样保留在行文本字节内、不额外造空行;
+        // 孤例 Cr/LfCr 分隔的文档极少见,坐标仅此一次以 \n 计,可接受。
+        let mut line_starts = vec![0usize];
+        for (i, b) in bytes.iter().enumerate() {
+            if *b == b'\n' {
+                line_starts.push(i + 1);
+            }
+        }
+        let locate = |abs: usize| -> (usize, usize) {
+            // abs >= len 不会发生(abs 是文本字节内位置);等于某行起点 => 该行
+            // (Ok);不在起点集且居两起点之间 => Err(插入点)-1 回到前一行;末尾行
+            // (无尾随 \n)起点之后绝不越 len,Err = len => 钳到某实行。
+            let line = match line_starts.binary_search(&abs) {
+                Ok(l) => l,
+                Err(l) => l.saturating_sub(1).min(line_starts.len().saturating_sub(1)),
+            };
+            (line, abs - line_starts[line])
+        };
+        ranges
+            .into_iter()
+            .map(|(s, e)| (locate(s), locate(e)))
+            .collect()
+    }
+
+    /// 把光标移到某逻辑 `(line, column)`(字节列,语义见 [`find_matches_all`])——
+    /// 调用层"跳到第 n 个匹配"的实际落点。只落光标不上选区。行号越界钳到末行;
+    /// cosmic `set_cursor` 对超出该行字节长的 index 会安全钳到行尾附近,只读/可
+    /// 写态通用。
+    pub fn move_cursor_to(&mut self, (line, column): (usize, usize)) {
+        use text_editor::{Cursor, Position};
+        let last = self.content.line_count().saturating_sub(1);
+        let line = line.min(last);
+        self.content.move_to(Cursor {
+            position: Position { line, column },
+            selection: None,
+        });
+    }
+
     /// 处理一次 `Action`:只读态过滤掉 [`Action::Edit`](能选中/复制/滚动,
     /// 改不了内容),滚动额外驱动 gutter 的镜像滚动位置(钳制到
     /// `[0, line_count()-1]`——已知在文件末尾附近可能与真实滚动位置漂移,
@@ -268,5 +344,58 @@ mod tests {
 
         view.perform(Action::Scroll { lines: -100 });
         assert_eq!(view.scroll_lines, 0.0);
+    }
+
+    #[test]
+    fn find_matches_all_reports_line_col_with_ascii_fold() {
+        let view = CodeView::new("hey foo Bar\nbaz\nfoo quux FOO", "txt", false);
+        // "foo" 大小写 ASCII 折叠:命中第 0 行 "foo"(col4,但开头小写 foo 于 col4
+        // 也被折叠——不进 "Bar")、第 2 行 "foo"(col0) 与 "FOO"(col9)。注意
+        // 第 0 行还有一处小写 "foo"—不重复,共 3 处(0,0 的 "hey foo"之外没有)。
+        let hits = view.find_matches_all("foo");
+        assert_eq!(
+            hits,
+            vec![
+                ((0, 4), (0, 7)),  // 行0 "foo"
+                ((2, 0), (2, 3)),  // 行2 "foo"
+                ((2, 9), (2, 12)), // 行2 "FOO"(col9 起)
+            ]
+        );
+    }
+
+    #[test]
+    fn find_matches_all_handles_multiline_and_trailing_no_match() {
+        let view = CodeView::new("ab\ncd\nef", "txt", false);
+        assert_eq!(view.find_matches_all("zz"), Vec::new(), "无匹配返回空");
+        // query 会跨两行?字面 query 含 \n 时以整串字节找:第 0 行 "ab\n" 越过
+        // 换行在第 1 行继续才算 —— "ab\ncd" 中间是真换行字节。不特判,应命中
+        // (0,0)->覆盖到 (1,2)= "ab\ncd" 结束于第 1 行 col2。
+        let hits = view.find_matches_all("ab\ncd");
+        assert_eq!(hits, vec![((0, 0), (1, 2))]);
+    }
+
+    #[test]
+    fn find_matches_all_byte_columns_survive_multibyte_before_hit() {
+        // 中文在 ASCII 前缀之前出现(每字 3 字节)时,列仍是字节偏移且精确。
+        let view = CodeView::new("先例func\nfunc", "txt", false);
+        // 第一行 "先例func":先例=6 字节 → func 从 col6 起(col6..10);
+        // 第二行 func 从 col0 起(col0..4)。全部命中按行序返回。
+        assert_eq!(
+            view.find_matches_all("func"),
+            vec![((0, 6), (0, 10)), ((1, 0), (1, 4))]
+        );
+    }
+
+    #[test]
+    fn move_cursor_to_lands_and_roundtrips() {
+        let mut view = CodeView::new("a\nneedle here\nb", "txt", false);
+        view.move_cursor_to((1, 0));
+        assert_eq!(view.cursor_position(), (1, 0), "光标应落在第 1 行第 0 列");
+        // 跳到"needle"起始(4)并可读回(position.column == 字节列)。
+        view.move_cursor_to((1, 4));
+        assert_eq!(view.cursor_position().0, 1);
+        // 越界行钳到末行。
+        view.move_cursor_to((99, 1));
+        assert_eq!(view.cursor_position().0, 2, "超出末行的 line 应钳到末行");
     }
 }
