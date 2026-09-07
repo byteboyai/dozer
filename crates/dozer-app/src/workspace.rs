@@ -3598,25 +3598,51 @@ fn preview_pane_for<'a>(
             // 的 wry webview 子视图负责渲染,现状不变。
             let tab_id = active_tab.id;
             // 文件内 Find 条:锁着当前激活原生 tab 的会话存在时,在 tab_bar 分隔线
-            // 之下、编辑器之上渲染输入框 + n/m + ⌃ 上一命中 / ⌄ 下一命中 + ×。
+            // 之下、编辑器之上渲染输入框(框内右侧内嵌 Aa 大小写开关)+ n/m 计数 +
+            // ↑ 上一个 / ↓ 下一命中。
             // 切走文件时 `PreviewPane` 已 cull 掉失配会话,条随之一并消失——既然
             // open/lifecycle 保证 `find` 总锁着激活原生 tab、此处又只在激活 tab 是
             // 原生时进入,读数即可,不必再校 tab 归属。
             if let Some(find) = preview.find_state() {
                 let panel = find_panel();
                 let colors = byteui::theme::color::current();
-                let input = byteui::form::input_text::view(
+                // 「Aa」大小写开关:无独立 SVG 的字形钮(同被删的 Find × 按钮,但
+                // 有真状态)。开(逐字严格)文字青 `cyan`、关(ASCII 折叠)灰 `dim`。
+                // 青是 ByteBoy2077 甲方金之外的"用户动作强调色",toggle 归用户操作,
+                // 不用甲方专属 gold,遵循 CLAUDE.md 裁决。
+                // 内嵌在输入框同一圈边框内靠右(`input_text::view_with_suffix`,
+                // 结构参照 search_box 的"共框尾控件"既有做法),不再占条上独立槽位。
+                let case_toggle: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> = {
+                    let active = find.case_sensitive;
+                    button(text("Aa").size(byteui::theme::font::body()))
+                        .on_press(match panel {
+                            PanelKind::Project => {
+                                Message::PreviewFindCase(PanelKind::Project, !active)
+                            }
+                            _ => Message::PreviewFindCase(PanelKind::Files, !active),
+                        })
+                        .padding(2)
+                        .style(move |_t, _s| button::Style {
+                            background: None,
+                            text_color: if active { colors.cyan } else { colors.dim },
+                            ..button::Style::default()
+                        })
+                        .into()
+                };
+                // 边框高亮同 search_box 约定由调用方给:查询词非空即金框(内嵌
+                // 后缀后 text_input 恒透明,不再自带 `Status::Focused` 金框)。
+                let input = byteui::form::input_text::view_with_suffix(
                     "在文件中查找…",
                     &find.query,
                     false,
                     Some(crate::preview::find_field_id(panel)),
-                    false,
+                    !find.query.is_empty(),
                     None,
-                    false,
                     move |q: String| match panel {
                         PanelKind::Project => Message::PreviewFindText(PanelKind::Project, q),
                         _ => Message::PreviewFindText(PanelKind::Files, q),
                     },
+                    case_toggle,
                 );
                 // 命中计数:n 1-based;查无命中(非空 query)标红;新开 empty query
                 // 不显示计数——这条进列就 pad 占用让条高稳定,避免每次刷字数跳动。
@@ -3639,26 +3665,6 @@ fn preview_pane_for<'a>(
                         >::new())
                         .into()
                     };
-                // 「Aa」大小写开关:无独立 SVG 的字形钮(同被删的 Find × 按钮,但
-                // 有真状态)。开(逐字严格)文字青 `cyan`、关(ASCII 折叠)灰 `dim`。
-                // 青是 ByteBoy2077 甲方金之外的"用户动作强调色",toggle 归用户操作,
-                // 不用甲方专属 gold,遵循 CLAUDE.md 裁决。
-                let case_toggle = {
-                    let active = find.case_sensitive;
-                    button(text("Aa").size(byteui::theme::font::body()))
-                        .on_press(match panel {
-                            PanelKind::Project => {
-                                Message::PreviewFindCase(PanelKind::Project, !active)
-                            }
-                            _ => Message::PreviewFindCase(PanelKind::Files, !active),
-                        })
-                        .padding(2)
-                        .style(move |_t, _s| button::Style {
-                            background: None,
-                            text_color: if active { colors.cyan } else { colors.dim },
-                            ..button::Style::default()
-                        })
-                };
                 let hover = move |next: bool| match next {
                     true => match panel {
                         PanelKind::Project => HoverId::ProjectPreviewFindNext,
@@ -3702,7 +3708,6 @@ fn preview_pane_for<'a>(
                     row![
                         container(input).width(Length::Fill),
                         count_label,
-                        case_toggle,
                         step_icon(false),
                         step_icon(true),
                     ]
