@@ -205,6 +205,29 @@ fn preview_url(path: &std::path::Path) -> String {
     }
 }
 
+/// 原生预览编辑器"文件内搜索"(⌘F)会话状态。挂在 `PreviewPane` 上——Files 与
+/// Project 各持一份,`⌘F` 只作用于当前聚焦 pane 的那个 pane 的激活原生 tab
+/// (隔离天然成立)。`tab_id` 固定这次会话锁定的 tab:用户切走别的 tab / 关闭 /
+/// 整个 pane 清空后,`cull_stale_find` 会把整条会话丢掉(Find 是"此刻对着这个
+/// 文件"的一次性 UI,不该在切到另一份文件后还挂着一个失配的输入框)。
+///
+/// 本结构**不缓存匹配清点表**:`count` 只是"最近一次执行/输入后"的展示数字,
+/// 由调用方(Workspace 层)每次触发时用 [`CodeView::find_matches_all`] 现算回填;
+/// 空 query / 未命中时 `count==0`。编辑正文时若输入框开着,旧 count 会短暂陈旧,
+/// 但下一次 typing(受 `PreviewFindText` 驱动)或导航会基于**当前 buffer** 重算,
+/// 因此陈旧值只在期间展示,不产生错误落点。
+#[derive(Debug, Clone)]
+pub struct FindState {
+    /// 搜索锁定到的原生 tab 的 `PreviewTab.id`。跳转光标只作用在它身上。
+    pub tab_id: usize,
+    /// 输入框草稿(query 原文,不做 trim)。
+    pub query: String,
+    /// 当前选中的匹配序号(0-based;`< count` 才有意义;nav 到末尾 wrap 回 0)。
+    pub current: usize,
+    /// 当前 `query` 在该 tab buffer 里总共命中数,调用方执行后回填,视图只读。
+    pub count: usize,
+}
+
 #[derive(Default)]
 pub struct PreviewPane {
     tabs: Vec<PreviewTab>,
@@ -215,6 +238,8 @@ pub struct PreviewPane {
     /// `UserInterface::build` 之后由 main.rs 用 `operation::focusable::focus`
     /// 强制聚焦(同项目树行内编辑/Todo 内容编辑的既有手法)。
     pending_editor_focus: bool,
+    /// 文件内搜索(⌘F)会话,`Some` 表示条已显示;Files / Project 各一份,独立。
+    find: Option<FindState>,
 }
 
 impl PreviewPane {
@@ -260,6 +285,8 @@ impl PreviewPane {
         {
             let id = tab.id;
             self.active = idx;
+            // 直接切激活(不经过 `push_tab`)—若换到的文件不是正在搜索的,丢条。
+            self.cull_stale_find();
             return id;
         }
         let title = path
@@ -294,6 +321,10 @@ impl PreviewPane {
             dirty: false,
         });
         self.active = self.tabs.len() - 1;
+        // 新 tab 成为激活者(可能顶掉旧 find tab)——清掉不再匹配的 Find
+        // (譬如把搜索着的文件替换掉了,或有 Blank 顶到激活位)。对"同一文件复用
+        // 已存在 tab"的 `open_path` 路径,`push_tab` 不跑,见其自行 cull。
+        self.cull_stale_find();
         id
     }
 
@@ -323,6 +354,7 @@ impl PreviewPane {
             let id = self.tabs[idx].id;
             self.bump_reload(id);
         }
+        self.cull_stale_find();
     }
 
     /// 项目切换清理专用:真清空,不补 `Blank` 占位 tab——`close()` 的自动
@@ -334,6 +366,8 @@ impl PreviewPane {
     pub fn clear_all(&mut self) {
         self.tabs.clear();
         self.active = 0;
+        // 整个 pane 换主人/清空:Find 必然失配,直接丢。
+        self.find = None;
     }
 
     /// 关掉一个 tab。若这是最后一个,不留空——立刻补一个 `TabKind::Blank`
@@ -353,6 +387,9 @@ impl PreviewPane {
         } else if idx < self.active {
             self.active -= 1;
         }
+        // 关掉正在搜的 tab / 关闭导致激活换到别的文件:清掉失配的 Find
+        // (空 tab 自动补位路径会经 `push_tab` 里的 cull,这里只处理非空尾部)。
+        self.cull_stale_find();
     }
 
     /// 拖拽换位:把 `from` 处的 tab 移到 `to` 处,并同步 `active` 下标。`from`
@@ -373,6 +410,8 @@ impl PreviewPane {
             // 源在激活项右侧,且目标落到了激活项左侧/身上——激活项右移一位。
             self.active += 1;
         }
+        // 拖拽换位可能把激活项换到别的文件——激活指的已是不同 tab 时丢 Find。
+        self.cull_stale_find();
     }
 
     /// webview 期望清单:每文件 tab 一个,仅激活者可见(设计 D2)。
@@ -418,6 +457,77 @@ impl PreviewPane {
     pub fn clear_dirty_by_id(&mut self, tab_id: usize) {
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
             tab.dirty = false;
+        }
+    }
+
+    /// Find 条目当前是否显示(至少打开过一次且没被生命周期/手动关掉)。
+    pub fn find_bar_open(&self) -> bool {
+        self.find.is_some()
+    }
+
+    /// 针对**当前激活**的原生 tab 打开(或刷新)Find。已对该 tab 开着时是
+    /// no-op(⌘F 连按只把 focus 还给输入框,不清输入内容);切到别的文件后再开,
+    /// 丢弃旧会话重建空 query。激活 tab 不是原生(webview/Blank)时 no-op——
+    /// Find 只对有 iced `text_editor` 的 tab 有意义。
+    pub fn open_find_on_active(&mut self) {
+        let Some(active_id) = self
+            .tabs
+            .get(self.active)
+            .filter(|t| t.editor.is_some())
+            .map(|t| t.id)
+        else {
+            return;
+        };
+        if !self.find.as_ref().is_some_and(|f| f.tab_id == active_id) {
+            self.find = Some(FindState {
+                tab_id: active_id,
+                query: String::new(),
+                current: 0,
+                count: 0,
+            });
+        }
+    }
+
+    /// 关掉 Find 条目(⌘F 里输入框 ×、Esc、切走文件后的自动清扫都走这里)。
+    pub fn close_find(&mut self) {
+        self.find = None;
+    }
+
+    /// Find 会话只读引用(视图展示 n/m 与判灰用);未打开时 `None`。
+    pub fn find_state(&self) -> Option<&FindState> {
+        self.find.as_ref()
+    }
+
+    /// 不可变看 Find 是否锁着与激活原生 tab 相同的文件(渲染条的依据之一)。
+    /// Find 打开但激活 tab 不是我锁的那个文件时返回 `false`。
+    pub fn find_belongs_to_active(&self) -> bool {
+        self.find.as_ref().is_some_and(|f| {
+            matches!(
+                self.tabs.get(self.active),
+                Some(t) if t.editor.is_some() && t.id == f.tab_id
+            )
+        })
+    }
+
+    /// Find 会话就位(已打开且属于激活 tab)时给可变引用——供 Workspace 层输入
+    /// query / 推进 current / 写回 count;否则 `None`。`tab_id` 由 open/lifecycle
+    /// 保护,这里不再校验(调用它们的消息已按激活 tab 路由)。
+    pub fn find_state_mut(&mut self) -> Option<&mut FindState> {
+        self.find.as_mut()
+    }
+
+    /// 内部:激活 tab / 关闭/清空导致激活的原生 tab 变了时,清掉不再匹配的 Find。
+    /// tab 交换(reorder)也隐式适用。用户从"正在搜索的文件 A"切到 B 或关掉 A,
+    /// 挂着上一文件的失配搜索条毫无意义,直接丢弃。
+    fn cull_stale_find(&mut self) {
+        let keep = self.find.as_ref().is_some_and(|f| {
+            matches!(
+                self.tabs.get(self.active),
+                Some(t) if t.editor.is_some() && t.id == f.tab_id
+            )
+        });
+        if !keep {
+            self.find = None;
         }
     }
 
@@ -1359,5 +1469,128 @@ mod tests {
                 != 0xd9,
             "regexp 不应使用甲方金 #F2D94E"
         );
+    }
+
+    #[test]
+    fn open_find_binds_to_active_native_tab_only() {
+        let tmp = |name: &str| {
+            let p = std::env::temp_dir().join(format!("{name}_{}.rs", std::process::id()));
+            std::fs::write(&p, "fn x() {}").unwrap();
+            p
+        };
+        // 清理(按名字逐个删;即使中途断言 panic 也留到末尾尽量收拾)。
+        let mut created: Vec<PathBuf> = Vec::new();
+        let a = tmp("find_a");
+        let b = tmp("find_b");
+        created.extend([a.clone(), b.clone()]);
+
+        let mut p = PreviewPane::default();
+        // 非可编辑文件(非原生)的 tab 上 ⌘F 是 no-op,不开条。
+        let web = std::env::temp_dir().join(format!("find_web_{}.xyz", std::process::id()));
+        std::fs::write(&web, "no editor").unwrap();
+        created.push(web.clone());
+        p.open_path(web.clone());
+        assert!(
+            p.tabs()[p.active_idx()].editor.is_none(),
+            "非原生扩展(.xyz)不该有 editor"
+        );
+        p.open_find_on_active();
+        assert!(!p.find_bar_open(), "非原生激活 tab 上 ⌘F 不该开条");
+
+        // 打开原生 A、B:B 为激活,⌘F 锁到 B。
+        p.open_path(a.clone());
+        p.open_path(b.clone());
+        let id_b = p.tabs()[p.active_idx()].id;
+        p.open_find_on_active();
+        assert!(p.find_bar_open());
+        assert_eq!(p.find_state().map(|f| f.tab_id), Some(id_b));
+        assert!(p.find_belongs_to_active());
+
+        // 切回 A(复用已开的 tab,直接切激活)→ 命中别份文件,cull。
+        p.open_path(a.clone());
+        assert!(
+            !p.find_bar_open(),
+            "切到正在搜索文件之外的 tab 后,Find 应被清扫"
+        );
+
+        // select 在 A、B 间切换同样触发 cull。
+        p.open_find_on_active(); // 激活是 A,锁 A
+        let id_a = p.tabs()[p.active_idx()].id;
+        let idx_b = p.tabs().iter().position(|t| t.id == id_b).unwrap();
+        p.select(idx_b);
+        assert!(!p.find_bar_open(), "select 切到别的文件后 Find 应被清扫");
+        let _ = id_a;
+
+        for f in created {
+            std::fs::remove_file(f).ok();
+        }
+    }
+
+    #[test]
+    fn open_find_same_tab_is_noop_but_close_and_reopen_reset() {
+        let path = std::env::temp_dir().join(format!("find_reset_{}.rs", std::process::id()));
+        std::fs::write(&path, "hello world").unwrap();
+
+        let mut p = PreviewPane::default();
+        p.open_path(path.clone());
+        p.open_find_on_active();
+        p.find_state_mut().unwrap().query = "lo".into();
+        p.find_state_mut().unwrap().count = 1;
+
+        // 已锁定同一 tab 再 ⌘F:保持 query/count 不变(供 main 重聚焦用)。
+        p.open_find_on_active();
+        assert_eq!(p.find_state().unwrap().query, "lo");
+        assert_eq!(p.find_state().unwrap().count, 1);
+
+        // close_find → 条消失;再 open 得到全新空 query 会话。
+        p.close_find();
+        assert!(!p.find_bar_open());
+        assert!(p.find_state().is_none());
+
+        p.open_find_on_active();
+        assert!(p.find_bar_open());
+        let s = p.find_state().unwrap();
+        assert!(s.query.is_empty());
+        assert_eq!(s.count, 0);
+        assert_eq!(s.current, 0);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn clear_all_and_close_native_drop_find() {
+        let tmp = |name: &str, content: &str| {
+            let p = std::env::temp_dir().join(format!("{name}_{}.rs", std::process::id()));
+            std::fs::write(&p, content).unwrap();
+            p
+        };
+        let mut created = Vec::new();
+        let p_a = tmp("cull_a", "a");
+        let p_b = tmp("cull_b", "b");
+        created.extend([p_a.clone(), p_b.clone()]);
+
+        let mut p = PreviewPane::default();
+        let id = p.open_path(p_a.clone());
+        p.open_find_on_active();
+        assert!(p.find_bar_open());
+
+        // 关掉正搜索的文件会清空 vec → 自动补 Blank(push_tab 里的 cull)。
+        p.close(id);
+        assert!(!p.find_bar_open());
+        assert!(
+            p.tabs()[p.active_idx()].editor.is_none(),
+            "关到空后应回 Blank 占位"
+        );
+
+        // clear_all(项目切换路径)同样吐掉 find。
+        p.open_path(p_b.clone());
+        p.open_find_on_active();
+        assert!(p.find_bar_open());
+        p.clear_all();
+        assert!(p.find_state().is_none(), "clear_all 后 Find 应一并丢弃");
+
+        for f in created {
+            std::fs::remove_file(f).ok();
+        }
     }
 }
