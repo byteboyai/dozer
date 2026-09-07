@@ -3432,6 +3432,48 @@ pub(crate) fn no_project_placeholder<'a>(
     container(body).width(width).height(Length::Fill).into()
 }
 
+/// 原生预览里文件内 Find 的「查询」与「替换」两个输入框各自的外框壳。
+/// text_input 本体是透明无边框的(`bare`/`unframed` 或带 8px 自己 padding),
+/// 真正的圆角框底/描边由这里画齐整:
+/// - 底色用 `colors.bg` —— 与 `code_editor::editor_style` 画编辑器同一 `bg`,
+///   让文件内搜索时敲进去的词,底色跟右侧正浏览的代码看板完全一致(需求:
+///   "输入框背景色和 editor 一致")。
+/// - 有内容(`active`)整框描金,否则普通 `colors.border` 边色(沿用单字段
+///   chip 的"非空即高亮"约定)。
+fn find_field_shell<'a>(
+    inner: iced_widget::core::Element<
+        'a,
+        crate::app::Message,
+        iced_widget::Theme,
+        iced_renderer::Renderer,
+    >,
+    colors: byteui::theme::color::ColorTokens,
+    vert: f32,
+    horiz: f32,
+    active: bool,
+) -> iced_widget::core::Element<'a, crate::app::Message, iced_widget::Theme, iced_renderer::Renderer>
+{
+    use iced_widget::core::Length;
+    iced_widget::container(inner)
+        .width(Length::Fill)
+        .padding([vert, horiz])
+        .style({
+            let bg = colors.bg;
+            let border_color = if active { colors.gold } else { colors.border };
+            move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                background: Some(bg.into()),
+                border: iced_widget::core::Border {
+                    color: border_color,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..iced_widget::container::Style::default()
+            }
+        })
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .into()
+}
+
 /// Project 面板右配对的预览 pane,复用与 Files 预览同一套渲染。独立调一个
 /// 新 `PreviewPaneKind`,让项目链接打开的文件进 `ws.project_preview` 而不是
 /// 冲进 Files 预览(见 Task 12 `OpenLink` 路由)。
@@ -3678,11 +3720,11 @@ fn preview_pane_for<'a>(
                         .into()
                 };
                 // 边框高亮同 search_box 约定由调用方给:查询词非空即金框。
-                // 输入框用 unframed 透明版——查询行与下方替换行合成一整块 card
-                // 背景(见 `find_band`),单字段不再自带 chip,才符合"整块搜索框"。
+                // 用 unframed 透明版 text_input(框/底由外层 `find_field_shell`
+                // 统一垫 editor 背景 + 描边),让 Aa 大小写钮共享同一圈内边距。
                 let input = byteui::form::input_text::view_with_suffix_unframed_at_size(
                     find_font,
-                    "在文件中查找…",
+                    "搜索",
                     &find.query,
                     false,
                     Some(crate::preview::find_field_id(panel)),
@@ -3754,9 +3796,11 @@ fn preview_pane_for<'a>(
                         if next { "下一个" } else { "上一个" },
                     )
                 };
-                // 查询行 + 替换行合进「一整块 File-Find 搜索框」:各自裁掉独立
-                // 的窄内边距,底/框全部交给下方 `find_band` 唯一 card 统一画,
-                // 中间行只留一点垂直换气让两行看得清层次。
+                // 文件内搜索的查询框与替换框各自独立、成两个带 1px 圆角边框的
+                // 输入框(需求:v0.5.94 之后改回,不再合成一整块):框内底色与
+                // 右侧代码编辑器同一 `colors.bg`,敲词文字底色跟被找正文看板一致
+                // (比亮一点的 card 更"嵌进"编辑区);有内容时整框描金、否则普通
+                // 边色。命中计数与上下箭头、替换按钮都摆在框外右侧,不占框内。
                 type EE<'x> = iced_widget::core::Element<
                     'x,
                     Message,
@@ -3766,7 +3810,7 @@ fn preview_pane_for<'a>(
                 let mut find_rows: Vec<EE<'_>> = vec![];
                 let query_row: EE<'_> = container(
                     row![
-                        container(input).width(Length::Fill),
+                        find_field_shell(input, colors, 7.0, 10.0, !find.query.is_empty()),
                         count_label,
                         step_icon(false),
                         step_icon(true),
@@ -3775,7 +3819,6 @@ fn preview_pane_for<'a>(
                     .align_y(iced_widget::core::alignment::Alignment::Center),
                 )
                 .width(Length::Fill)
-                .padding([0, 2])
                 .into();
                 find_rows.push(query_row);
 
@@ -3785,10 +3828,11 @@ fn preview_pane_for<'a>(
                 // 成替换框逗号残片)。“替换当前”会顺带到下一命中、方便一路处理,
                 // “替换全部”把这一轮全部落一次。两个按钮共用一轮是否可替换的开关。
                 let armed = find.count > 0;
-                // 替换框同为整块 card 的一部分:bare=true 去底去框透明融入。
+                // 替换框同查询框独立栅格:bare=true 去底去框透明,边框/底色交给
+                // 下方 `editor_field` 统一垫(editor 背景色)。
                 let replacement_input = byteui::form::input_text::view_at_size(
                     find_font,
-                    "替换为…",
+                    "替换",
                     &find.replacement,
                     false,
                     None,
@@ -3829,7 +3873,13 @@ fn preview_pane_for<'a>(
                 };
                 let replace_row = container(
                     row![
-                        container(replacement_input).width(Length::Fill),
+                        find_field_shell(
+                            replacement_input,
+                            colors,
+                            4.0,
+                            10.0,
+                            !find.replacement.is_empty()
+                        ),
                         replace_text_button(
                             "替换当前",
                             match panel {
@@ -3852,34 +3902,13 @@ fn preview_pane_for<'a>(
                         ),
                     ]
                     .spacing(6)
-                    .align_y(iced_widget::core::Alignment::Center),
+                    .align_y(iced_widget::core::alignment::Alignment::Center),
                 )
                 .width(Length::Fill)
                 .into();
                 find_rows.push(replace_row);
-
-                // 唯一的一块 card:查询行(含 Aa/命中数/箭头)与替换行共底、同框。
-                // 原本两个输入框各自的 card 小方框拆掉,把那种背景色"提升"给整个
-                // File-Find 工具栏;查询词非空仍金框提示(沿用单字段 chip 的强调),
-                // 否则普通边色。radius6 与 `input_text` 框外半径一致,观感是预览
-                // 区里一块圆角搜索框,内部输入框透明融入。
-                let find_band = container(column(find_rows).spacing(7))
-                    .width(Length::Fill)
-                    .padding([5, 8])
-                    .style(move |_t: &iced_widget::Theme| container::Style {
-                        background: Some(colors.card.into()),
-                        border: iced_widget::core::Border {
-                            color: if !find.query.is_empty() {
-                                colors.gold
-                            } else {
-                                colors.border
-                            },
-                            width: 1.0,
-                            radius: 6.0.into(),
-                        },
-                        ..container::Style::default()
-                    });
-                content = content.push(find_band);
+                let find_rows = column(find_rows).spacing(4);
+                content = content.push(find_rows);
             }
             content = content.push(
                 container(editor.view().map(move |ev| editor_msg(tab_id, ev)))
