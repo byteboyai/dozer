@@ -1510,9 +1510,7 @@ fn align_to_section_title<'a>(
     body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     row![
-        iced_widget::Space::new()
-            .width(Length::Fixed(SECTION_BODY_INSET()))
-            .height(Length::Fill),
+        iced_widget::Space::new().width(Length::Fixed(SECTION_BODY_INSET())),
         container(body).width(Length::Fill),
     ]
     .width(Length::Fill)
@@ -1636,13 +1634,12 @@ fn metric_group_banner(
         text(label)
             .size(byteui::theme::font::label())
             .color(c.cream),
-        iced_widget::Space::new().width(Length::Fill),
         text(format!("{} total", format_count(total)))
             .size(byteui::theme::font::caption())
             .color(c.cream)
             .font(iced_widget::core::Font::MONOSPACE),
     ]
-    .width(Length::Fill)
+    .spacing(8)
     .into()
 }
 
@@ -1657,12 +1654,11 @@ fn chart_stat_list(
     share: &[(AgentKind, u64)],
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let total: u64 = share.iter().map(|(_, v)| v).sum();
-    let cream = byteui::theme::color::current().cream;
     let dim = byteui::theme::color::current().dim;
     let mut col = column![
         text(format!("{title}({})", format_count(total)))
             .size(byteui::theme::font::caption())
-            .color(cream)
+            .color(dim)
             .font(iced_widget::core::Font::MONOSPACE),
     ]
     .spacing(8);
