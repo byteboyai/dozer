@@ -825,6 +825,7 @@ fn stat_box(
         row = row.push(s);
     }
     container(row)
+        .width(Length::Fill)
         .padding(12)
         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
             background: Some(byteui::theme::color::current().card.into()),
@@ -859,11 +860,25 @@ fn project_summary_boxes(
         stat("cache 读", format_count(totals.tokens_cache_read), cyan),
         stat("cache 写", format_count(totals.tokens_cache_write), cyan),
     ]);
-    iced_widget::row![activity_box, token_box]
-        .spacing(12)
+    // 两张卡各自等分面板宽度、上下拉开成对排布,同"Agent 用量统计"里左右两
+    // 张饼图卡的宽度与排法(2026-09-07 要求):每张吃掉 `FillPortion(1)`、外层
+    // 行撑满、16px 间距——不加的话 `stat_box` 天然按内容收窄,两卡会左贴紧、
+    // 不等宽地摆,失去"成对均分"的观感。
+    let even_half = |boxed: Element<
+        'static,
+        Message,
+        iced_widget::Theme,
+        iced_renderer::Renderer,
+    >| {
+        let mut cell = iced_widget::container(boxed);
+        cell = cell.width(Length::FillPortion(1));
+        cell
+    };
+    iced_widget::row![even_half(activity_box), even_half(token_box)]
+        .width(Length::Fill)
+        .spacing(16)
         .into()
 }
-
 const BAR_MAX_HEIGHT: f32 = 72.0;
 /// 柱宽(2026-08-23 起 20→14,当时 `DAILY_CHART_WINDOW_DAYS` 从 7 改到
 /// 15 让柱数翻倍;2026-08-28 窗口改回 7 天,但沿用这个更紧凑的宽度)。
