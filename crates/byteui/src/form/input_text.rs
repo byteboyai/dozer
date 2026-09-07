@@ -4,8 +4,37 @@ use iced_widget::core::widget;
 use iced_widget::core::{Border, Element, Length};
 use iced_widget::text_input::{self, Status};
 
+/// [`view`] 的实装:把真 `text_input` 按默认 UI 字号(box 缺省 `body`)烤出来。
 #[allow(clippy::too_many_arguments)]
 pub fn view<'a, Message: Clone + 'a>(
+    placeholder: &str,
+    value: &str,
+    secure: bool,
+    id: Option<widget::Id>,
+    highlight: bool,
+    on_submit: Option<Message>,
+    bare: bool,
+    on_input: impl Fn(String) -> Message + 'a,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    view_at_size(
+        crate::theme::font::body() as f32,
+        placeholder,
+        value,
+        secure,
+        id,
+        highlight,
+        on_submit,
+        bare,
+        on_input,
+    )
+}
+
+/// [`view`] 的字号可显式给的版本:`size`(px)放在最前,供只需某只在单一字号
+/// 下输入的调用方(如原生预览的 File-Find 条,要跟右侧编辑器的代码字号对齐)
+/// 用,其余同 [`view`]。通用 `view` 仍走缺省 `body`,别动别的调用方观感。
+#[allow(clippy::too_many_arguments)]
+pub fn view_at_size<'a, Message: Clone + 'a>(
+    size: f32,
     placeholder: &str,
     value: &str,
     secure: bool,
@@ -19,7 +48,7 @@ pub fn view<'a, Message: Clone + 'a>(
         .secure(secure)
         .on_input(on_input)
         .on_submit_maybe(on_submit)
-        .size(crate::theme::font::body())
+        .size(size)
         .padding(8);
     let input = if let Some(id) = id {
         input.id(id)
@@ -81,12 +110,40 @@ pub fn view_with_suffix<'a, Message: Clone + 'a>(
     on_input: impl Fn(String) -> Message + 'a,
     suffix: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    view_with_suffix_at_size(
+        crate::theme::font::body() as f32,
+        placeholder,
+        value,
+        secure,
+        id,
+        highlight,
+        on_submit,
+        on_input,
+        suffix,
+    )
+}
+
+/// [`view_with_suffix`] 的字号可显式给的版本(`size` 在最前)。配套
+/// [`view_at_size`],供原生预览 File-Find 这类要跟代码编辑器字号走同一条线的
+/// 输入框用。
+#[allow(clippy::too_many_arguments)]
+pub fn view_with_suffix_at_size<'a, Message: Clone + 'a>(
+    size: f32,
+    placeholder: &str,
+    value: &str,
+    secure: bool,
+    id: Option<widget::Id>,
+    highlight: bool,
+    on_submit: Option<Message>,
+    on_input: impl Fn(String) -> Message + 'a,
+    suffix: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = crate::theme::color::current();
     let mut input = iced_widget::text_input(placeholder, value)
         .secure(secure)
         .on_input(on_input)
         .on_submit_maybe(on_submit)
-        .size(crate::theme::font::body())
+        .size(size)
         .padding(0)
         .style(move |_theme: &iced_widget::Theme, _status: Status| {
             // 边框/底色由外层容器统一画(见下),输入框自己恒透明。

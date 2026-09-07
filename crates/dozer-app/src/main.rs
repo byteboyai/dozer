@@ -1178,7 +1178,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
-            // 预览编辑弹层打开时,其余按键一律不再往下走 ⌘ 快捷键/地址栏/
+            // 预览编辑弹层打开时,剩余按键一律不再往下走 ⌘ 快捷键/地址栏/
             // 终端转发——弹层里的 `iced-code-editor` 走标准 iced 事件管线
             // (键盘事件经 `Canvas` widget 的 `on_event` 自己消化),这里不需要
             // 也不应该手工转发。不加这道闸门的话,`terminal_visible()` 只看右侧
@@ -1186,6 +1186,39 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             // 里打的每个字符、包括回车,都会同时写进背后那个终端/agent 会话
             // (Critical,code review 发现)。
             if app.edit_session_open() {
+                // 但 iced 原生 `text_editor` 对仅顶替 OS 组合键的 ⌘Z/⌘⇧Z(以及
+                // 无 super 的类 Unix Ctrl+Z/Ctrl+⇧Z)不产 `Action::Edit`:切退格/
+                // 重做这类"OS 级撤销语义"standard 引擎没有 binding(见 code_editor
+                // 模块注释),gate 得在把按键原样放进出 pre-compose *之前*把这两条
+                // 截下来,映射成撤销/重做消息(编辑器自身快照记录在 CodeView 里,
+                // 撤/补是应用层整文替换,不走 cosmic 引擎的 on_event)。普通打字与
+                // 单字符/光标动作仍照旧放行给 iced 消化,不影响输入。
+                let WindowEvent::KeyboardInput {
+                    event: ez,
+                    is_synthetic: false,
+                    ..
+                } = event
+                else {
+                    return;
+                };
+                if ez.state == ElementState::Pressed {
+                    // 修饰键状态是外层每帧由 `WindowEvent::ModifiersChanged` 维护的
+                    // `modifiers`(见左近 `modifiers.super_key()` 分支同一来源)。
+                    let m = modifiers;
+                    // 带上 super(⌘)或 control(⌃)才是"撤销/重做",裸 z 放行给打字。
+                    if (m.super_key() || m.control_key())
+                        && ez.logical_key == winit::keyboard::Key::Character("z".into())
+                    {
+                        let msg = if m.shift_key() {
+                            Message::EditorRedo
+                        } else {
+                            Message::EditorUndo
+                        };
+                        app.update(msg);
+                        window.request_redraw();
+                        return;
+                    }
+                }
                 return;
             }
 

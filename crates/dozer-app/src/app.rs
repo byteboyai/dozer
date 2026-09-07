@@ -1797,6 +1797,11 @@ pub enum Message {
     /// 直接转发给 `App::preview_edit_event`(剪贴板由 iced 运行时自己处理,
     /// 不需要像 vendored `iced-code-editor` 那样手动拆 `Task` 桥接)。
     EditorEvent(iced_widget::text_editor::Action),
+    /// 预览编辑弹层:撤销(⌘Z / Ctrl+Z)。同样由 `main.rs` 命中组合键后直接
+    /// 转发给 `App` 下的 `workspace`(见 `preview_edit_undo`)。
+    EditorUndo,
+    /// 预览编辑弹层:重做(⌘⇧Z / Ctrl+⇧Z)。
+    EditorRedo,
     /// 原生预览 tab 的 `text_editor::Action`,`usize` 是 `PreviewTab.id`。
     /// 与 `EditorEvent`(编辑弹层专用)是两条独立路径,互不路由串台——见
     /// `preview_tab_editor_event` 的文档。
@@ -5004,6 +5009,16 @@ impl App {
             Message::EditorEvent(_action) => {
                 // main.rs 的 dispatch 直接调 `App::preview_edit_event`,不经过
                 // 这里的 `App::update`——到达此处说明未走 dispatch 拦截,忽略。
+            }
+            Message::EditorUndo => {
+                // 键盘(⌘Z)经 `app.update` 进来时走这里真正撤销;main.rs 另有
+                // `App::preview_edit_undo` 直呼口(绕过 `update`),两路都只操作
+                // 聚焦项目编辑弹层的 editor。
+                self.with_focused_project(|ws, _io| ws.preview_edit_undo());
+            }
+            Message::EditorRedo => {
+                // 同 `EditorUndo`(⌘⇧Z)。
+                self.with_focused_project(|ws, _io| ws.preview_edit_redo());
             }
             Message::PreviewEditorEvent(_tab_id, _action) => {
                 // 同 `EditorEvent`,main.rs 直接调 `App::preview_tab_editor_event`。

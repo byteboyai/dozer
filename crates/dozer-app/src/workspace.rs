@@ -811,6 +811,23 @@ impl Workspace {
         }
     }
 
+    /// 撤销编辑弹层最近一次编辑(⌘Z / Ctrl+Z,由 `main.rs` 命中组合键后发
+    /// `Message::EditorUndo` 转发下来)。历史/[`code_editor::CodeView::redo`] 由
+    /// 引擎侧 snapshot 记录,这里只需让弹层编辑器真正回退。没有打开会话时
+    /// no-op。
+    pub(crate) fn preview_edit_undo(&mut self) {
+        if let Some(session) = self.edit_session.as_mut() {
+            session.editor.undo();
+        }
+    }
+
+    /// 重做上一步被 `⌘Z` 撤销的编辑(⌘⇧Z / Ctrl+⇧Z)。没有打开会话时 no-op。
+    pub(crate) fn preview_edit_redo(&mut self) {
+        if let Some(session) = self.edit_session.as_mut() {
+            session.editor.redo();
+        }
+    }
+
     /// 转发 `text_editor::Action` 到某个原生预览 tab(按 `tab_id` 定位,不是
     /// "当前聚焦编辑弹层"——一个项目可以同时开好几个原生预览 tab,只有事件
     /// 来源的那一个该收到)。tab 不存在或不是原生 tab 时静默 no-op。
@@ -3633,6 +3650,10 @@ fn preview_pane_for<'a>(
             if let Some(find) = preview.find_state() {
                 let panel = find_panel();
                 let colors = byteui::theme::color::current();
+                // Find 条紧贴右侧编辑器,查询框/替换框正文用与编辑器相同的代码
+                // 字号(`tree_row_font_size` 与 code_editor 同公式),让用户敲的
+                // 词跟被找的文件正文看齐(需求:文件内查找条字号 = text editor)。
+                let find_font = tree_row_font_size();
                 // 「Aa」大小写开关:无独立 SVG 的字形钮(同被删的 Find × 按钮,但
                 // 有真状态)。开(逐字严格)文字青 `cyan`、关(ASCII 折叠)灰 `dim`。
                 // 青是 ByteBoy2077 甲方金之外的"用户动作强调色",toggle 归用户操作,
@@ -3658,7 +3679,8 @@ fn preview_pane_for<'a>(
                 };
                 // 边框高亮同 search_box 约定由调用方给:查询词非空即金框(内嵌
                 // 后缀后 text_input 恒透明,不再自带 `Status::Focused` 金框)。
-                let input = byteui::form::input_text::view_with_suffix(
+                let input = byteui::form::input_text::view_with_suffix_at_size(
+                    find_font,
                     "在文件中查找…",
                     &find.query,
                     false,
@@ -3751,7 +3773,8 @@ fn preview_pane_for<'a>(
                 // 成替换框逗号残片)。“替换当前”会顺带到下一命中、方便一路处理,
                 // “替换全部”把这一轮全部落一次。两个按钮共用一轮是否可替换的开关。
                 let armed = find.count > 0;
-                let replacement_input = byteui::form::input_text::view(
+                let replacement_input = byteui::form::input_text::view_at_size(
+                    find_font,
                     "替换为…",
                     &find.replacement,
                     false,
@@ -5454,6 +5477,46 @@ mod tests {
                 != ws.edit_session.as_ref().unwrap().saved_content
         );
         assert_eq!(ws.edit_session.as_ref().unwrap().editor.text(), "h!i");
+    }
+
+    #[test]
+    fn preview_edit_undo_then_redo_restores_roundtrips_dirty() {
+        let (_dir, path) = write_temp_file("a.txt", "hi");
+        let mut ws = Workspace::empty_for_project_placeholder();
+        ws.preview.open_path(path);
+        ws.preview_edit_open(0);
+        // 光标先移到文档尾(纯移动,不置脏、不进 undo 快照)。
+        ws.preview_edit_event(EditorAction::Move(text_editor::Motion::DocumentEnd));
+        ws.preview_edit_event(EditorAction::Edit(text_editor::Edit::Insert('1')));
+        assert_eq!(
+            ws.edit_session.as_ref().unwrap().editor.text(),
+            "hi1",
+            "编辑应生效"
+        );
+        assert!(
+            ws.edit_session.as_ref().unwrap().editor.text()
+                != ws.edit_session.as_ref().unwrap().saved_content,
+            "编辑后应算脏"
+        );
+
+        ws.preview_edit_undo();
+        assert_eq!(
+            ws.edit_session.as_ref().unwrap().editor.text(),
+            "hi",
+            "⌘Z 应撤回到键入前"
+        );
+        assert!(
+            ws.edit_session.as_ref().unwrap().editor.text()
+                == ws.edit_session.as_ref().unwrap().saved_content,
+            "撤销到打开时内容应不再脏"
+        );
+
+        ws.preview_edit_redo();
+        assert_eq!(
+            ws.edit_session.as_ref().unwrap().editor.text(),
+            "hi1",
+            "⌘⇧Z 应补回刚撤销的编辑"
+        );
     }
 
     #[test]

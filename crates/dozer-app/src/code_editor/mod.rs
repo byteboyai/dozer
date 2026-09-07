@@ -24,6 +24,12 @@
 //!   `icon_size::scale()` 重新推导),不像 vendored 版本需要显式
 //!   `set_font_size`/`set_layout_metrics` 再手动 `resync`——Ctrl ± 缩放
 //!   天然生效,不需要专门的 "resync_editor_font_metrics" 步骤。
+//! - 官方 `text_editor` 没有任何 undo/redo API(引擎是 cosmic-text,只对
+//!   `Action::Edit` 落盘,不暴露按动作回滚),撤销只能靠在应用层做整文本
+//!   快照栈(见本模块 [`Snapshot`]/[`CodeView::undo`])。实现取舍:快照是
+//!   全文本拷贝、按"编辑命令"粒度建档(连续纯打字 run 折叠成一条),因此
+//!   undo 序列不是逐键、光标位置也只是尽量还原近似;只读预览 tab(不参与
+//!   键盘路由)不会被触发 undo,绑定关系见 workspace.rs 编辑弹层的 ⌘Z。
 
 pub mod highlighter;
 
@@ -34,15 +40,42 @@ use iced_widget::text_editor::{self, Action};
 
 /// 官方 `text_editor::TextEditor` 自己的默认 padding(`Padding::new(5.0)`,
 /// 见 `iced_widget::text_editor` 源码)。在这里显式设出来并喂给 `.padding(...)`,
-/// 不再依赖那个未在我们代码里出现过的隐式默认值——`CaretRow` 叠层算光标行屏幕 y
-/// 时要原样加回同一个 padding.top,两处必须共用同一个数,否则叠层与实际文字的
-/// 起始行会错位(叠层的画布 bounds 是编辑器**未收缩**的外框,文字本身是
-/// `bounds.shrink(padding)` 之后才开始画的)。
+/// 不再依赖那个未在我们代码里出现过的隐式默认值。
 const EDITOR_PADDING: f32 = 5.0;
+
+/// 撤销/重做栈单条快照:整段 text(采用"该段一次编辑命令落下的前状态"),
+/// 加该时刻的光标 `(line, column)` 供还原后把光标尽量挪回原处(越界由
+/// [`CodeView::move_cursor_to`] 钳到末行/行尾附近)。快照是全文本拷贝——
+/// 官方 `text_editor` 引擎没有任何 undo API(见模块文档),只能应用层记。
+/// 一条快照对应一条"编辑命令"(连续纯打字被折叠成一条),不是逐键。
+struct Snapshot {
+    text: String,
+    line: usize,
+    column: usize,
+}
+
+/// 撤销栈深度上限:无限保留会随时间把超大文件 RAM 吃光,给个保守的窗。
+const EDIT_HISTORY_LIMIT: usize = 60;
+
+/// 把一条快照无脑压进给定历史栈(带"栈顶文字与快照相同就不压"的排重),
+/// 超上限时从最旧端裁掉 excess 条。undo / redo 在方法里各自借 `self` 的
+/// 一个字段当 sink,所以这里必须是不接收 `self` 的自由函数(用 &mut self
+/// 方法会跟外部对字段的借冲突)。
+fn commit_history(sink: &mut Vec<Snapshot>, snap: Snapshot) {
+    if matches!(sink.last(), Some(top) if top.text == snap.text) {
+        return;
+    }
+    sink.push(snap);
+    if sink.len() > EDIT_HISTORY_LIMIT {
+        let excess = sink.len() - EDIT_HISTORY_LIMIT;
+        sink.drain(0..excess);
+    }
+}
 
 /// 组出可直接嵌入的 `text_editor`。两处复用:`preview.rs` 只读文件预览、
 /// `workspace.rs` 的 `EditSession` 可写编辑浮层——`read_only` 决定
-/// [`Action::Edit`] 是否被过滤掉。
+/// [`Action::Edit`] 是否被过滤掉。撤销历史在这里全量与 buffer 一起记:
+/// 官方引擎不暴露按动作回滚,见模块文档"已知取舍"(底下那条注释请保留)。
 pub struct CodeView {
     id: WidgetId,
     content: text_editor::Content,
@@ -51,6 +84,14 @@ pub struct CodeView {
     read_only: bool,
     /// 语法 token(如 "rust"),见 `preview::extension_to_syntax`。
     token: String,
+    /// 撤销栈:栈顶是最新一个"可回退前"快照(倒放回该快照即完成一次 undo)。
+    undo: Vec<Snapshot>,
+    /// 重做栈:undo 弹出来的"被回退后的旧当前态"暂存于此,redo 时放回。
+    redo: Vec<Snapshot>,
+    /// 是否正处在一段"连续纯打字"里。连续 `Edit::Insert`(逐键)共享同一
+    /// 快照起点,松开那一串只算一条命令;插的任意其它编辑/光标移动会结束
+    /// 这一段(`false`)。作用是避免每敲一键都整份拷贝文本(见 [`Snapshot`])。
+    typing_run: bool,
 }
 
 impl CodeView {
@@ -61,6 +102,9 @@ impl CodeView {
             scroll_lines: 0.0,
             read_only,
             token: token.into(),
+            undo: Vec::new(),
+            redo: Vec::new(),
+            typing_run: false,
         }
     }
 
@@ -235,15 +279,110 @@ impl CodeView {
     /// 处理一次 `Action`:只读态过滤掉 [`Action::Edit`](能选中/复制/滚动,
     /// 改不了内容),滚动额外更新滚动条的镜像滚动起点(累加 clamp——已知是
     /// 近似,见模块文档"已知取舍")。
+    ///
+    /// 顺带维护撤销历史(每条"编辑命令"落地前压一条[`Snapshot`])——见
+    /// [`CodeView::undo`]/[`CodeView::redo`]。连续纯打字共享同一快照起点,
+    /// 只有在"打字 run"里时才每键编码该键前状态,否则会退化回每次按键一项
+    /// 全量拷贝,违背 [`Snapshot`] 的造价注释。
     pub fn perform(&mut self, action: Action) {
-        if let Action::Scroll { lines } = action {
+        if let Action::Scroll { lines } = &action {
             let max_scroll = self.content.line_count().saturating_sub(1) as f32;
-            self.scroll_lines = (self.scroll_lines + lines as f32).clamp(0.0, max_scroll);
+            self.scroll_lines = (self.scroll_lines + *lines as f32).clamp(0.0, max_scroll);
         }
-        if self.read_only && matches!(action, Action::Edit(_)) {
+        let blocked = self.read_only && matches!(action, Action::Edit(_));
+        self.record_before(&action);
+        if blocked {
             return;
         }
         self.content.perform(action);
+    }
+
+    /// 撤销一次编辑:把 buffer 回退到最新一条[`Snapshot`]记录的内容,并把
+    /// 刚被回退的当前态挪进重做栈(供 [`CodeView::redo`])。没有可撤销历史
+    /// 时不动作。返回是否真的发生过回退。
+    pub fn undo(&mut self) -> bool {
+        let Some(prev) = self.undo.pop() else {
+            return false;
+        };
+        let current = self.snapshot_now();
+        commit_history(&mut self.redo, current);
+        self.restore(prev);
+        self.typing_run = false;
+        true
+    }
+
+    /// 重做被 [`CodeView::undo`] 撤消的最后一次编辑。返回是否真的发生过重做。
+    pub fn redo(&mut self) -> bool {
+        let Some(last) = self.redo.pop() else {
+            return false;
+        };
+        let current = self.snapshot_now();
+        commit_history(&mut self.undo, current);
+        self.restore(last);
+        self.typing_run = false;
+        true
+    }
+
+    /// 在一条编辑命令落盘**前**(即 `content` 尚未 `perform`)调用:决定是否该
+    /// 因为开启/切换命令而预留一条前状态快照。`action` 就是即将交给
+    /// [`CodeView::perform`] 的那条 `Action`。
+    fn record_before(&mut self, action: &Action) {
+        if self.read_only || !matches!(action, Action::Edit(_)) {
+            // 没落盘编辑就不记(只读/光标移动都不要),并结束打字 run——移动
+            // 光标后重新开始敲字就是另一段命令。
+            self.typing_run = false;
+            return;
+        }
+        let is_single_insert = matches!(action, Action::Edit(text_editor::Edit::Insert(_)));
+        // 延续中的连续纯打字(run 内逐键 Insert):已在前一组记录的同一个快照
+        // 之后继续插入,无需再为每键新压一条,整串只算一条命令。
+        if self.typing_run && is_single_insert {
+            return;
+        }
+        // 任意打断 run 的编辑(Enter/粘贴/删除/退格)或重新开始的打字,都先把
+        // "当前尚未落的新输入"还原点压栈,再进入下一步真正的 perform。
+        self.push_undo_snapshot();
+        self.typing_run = is_single_insert;
+    }
+
+    /// 取当前全文本 + 当前光标 `(line, column)`,封装成一条可用作还原点的
+    /// [`Snapshot`]。
+    fn snapshot_now(&self) -> Snapshot {
+        let (line, column) = self.cursor_position();
+        Snapshot {
+            text: self.text(),
+            line,
+            column,
+        }
+    }
+
+    /// 在"新的一条编辑命令即将把当前态真正推进"前调用:压一条前状态快照,
+    /// 同时丢掉整个 redo 栈——编辑回滚后另走新路,replay 无意义(线性历史)。
+    fn push_undo_snapshot(&mut self) {
+        let snap = self.snapshot_now();
+        commit_history(&mut self.undo, snap);
+        self.redo.clear();
+    }
+
+    /// 任何不经 [`CodeView::perform`] 直接把 `content` 整体重写的入口(如
+    /// Find 的整段替换)落地后都要清历史:它们不等价于用户一条条编辑命令,
+    /// 留着旧栈会让 undo 落到一个替换被半拆断的怪状态。
+    pub fn reset_edit_history(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+        self.typing_run = false;
+    }
+
+    /// 把 `content` 换成某条快照文本,并把光标挪回接近该快照时刻原位置
+    /// (行越界时钳在末行,列由 `move_cursor_to` 交给 cosmic 钳回行尾附近)。
+    fn restore(&mut self, snap: Snapshot) {
+        let last_line = self.content.line_count();
+        let line = snap.line.min(last_line.saturating_sub(1));
+        self.content = text_editor::Content::with_text(&snap.text);
+        self.scroll_lines = self
+            .scroll_lines
+            .clamp(0.0, self.content.line_count().saturating_sub(1) as f32);
+        self.move_cursor_to((line, snap.column));
     }
 
     /// 把 buffer 里所有 `query` 匹配**(贪婪、左到右、避开重叠)**替换成
@@ -267,6 +406,7 @@ impl CodeView {
             return 0;
         }
         self.content = text_editor::Content::with_text(&new_text);
+        self.reset_edit_history();
         count
     }
 
@@ -288,6 +428,7 @@ impl CodeView {
             return false;
         };
         self.content = text_editor::Content::with_text(&new_text);
+        self.reset_edit_history();
         true
     }
 
@@ -317,26 +458,6 @@ impl CodeView {
             .padding(EDITOR_PADDING)
             .on_action(std::convert::identity);
 
-        // 「光标所在行」背景(低 alpha 行着色,视觉近似):高层叠在编辑器之上的
-        // 纯指示图层,按 `content.cursor().position.line` + 滚动镜像算出该行的
-        // 屏幕 y,画一条全行宽淡淡的青色调(BytByte2077,避开甲方专属金)。官方
-        // `text_editor` 不暴露“按行加背景”的钩子(见模块文档),只能叠在字上;
-        // 用很小 alpha、不把它做得比选区还吵。图层不放任何鼠标/焦点处理,点击
-        // 仍会贯通到下面的编辑器本体。
-        let caret_line = self.content.cursor().position.line;
-        let caret_row = canvas::Canvas::new(CaretRow {
-            line: caret_line,
-            scroll_lines: self.scroll_lines,
-            line_height: line_height_px,
-            padding_top: EDITOR_PADDING,
-        })
-        .width(Length::Fill)
-        .height(Length::Fill);
-
-        // 文字编辑器垫底、caret 行着色浮在上面;含顶的整块吃满区域(后续一行就是
-        // 滚条,两者同排),caret 行着色不会画出编辑器外的滚条列。
-        let editor_pane = iced_widget::stack![editor, caret_row];
-
         let scrollstrip = canvas::Canvas::new(Scrollstrip {
             line_count: self.content.line_count(),
             scroll_lines: self.scroll_lines,
@@ -347,7 +468,7 @@ impl CodeView {
         .width(Length::Fixed(byteui::theme::geometry::scrollbar_width()))
         .height(Length::Fill);
 
-        iced_widget::row![editor_pane, scrollstrip].into()
+        iced_widget::row![editor, scrollstrip].into()
     }
 }
 
@@ -515,82 +636,6 @@ impl<Message> canvas::Program<Message> for Scrollstrip {
     }
 }
 
-/// 光标所在行的整行背景着色(只 "高亮所在行",没有交互)。官方 `text_editor`
-/// 自绘画布、不给“按行加背景”钩子,靠这一个叠在编辑器**上方**的全幅画布,拿
-/// `line + (滚动镜像 scroll_lines)` 反推光标行在当前视口的屏幕 y,画一条横贯整
-/// 行宽的淡淡的青调矩形。alpha 取很小值(刻意小于选区的 `0.25`),即使压在字形
-/// 上也几乎不伤可读性——这正是该近似在视觉上的代价,已被用户接受,见模块文档
-/// “已知取舍”。
-///
-/// 纯装饰:不产生任何事件、不申请背景交互,pointer 会原样贯通到下面的编辑器
-/// (iced 把事件发给实现了相应监听器的 widget;本图层一个都不实现)。
-struct CaretRow {
-    /// 光标所在 buffer 逻辑行(0-indexed)。
-    line: usize,
-    /// 滚动条镜像出来的滚动起点(行,含小数)——同一条镜像同时喂滚动条 thumb。
-    scroll_lines: f32,
-    /// 每行像素高度(与 `view()` 里给 text_editor 的 `line_height` 同一来源)。
-    line_height: f32,
-    /// 与 `view()` 里喂给 text_editor 的 `.padding(...)` 同一个 [`EDITOR_PADDING`]
-    /// 值——本画布拿到的 `bounds` 是编辑器**未收缩**的外框,文字实际从
-    /// `bounds.shrink(padding)` 之后才开始画,不加回这个量整行会往上错位。
-    padding_top: f32,
-}
-
-impl<Message> canvas::Program<Message> for CaretRow {
-    type State = ();
-
-    fn draw(
-        &self,
-        _state: &Self::State,
-        renderer: &iced_renderer::Renderer,
-        _theme: &iced_widget::Theme,
-        bounds: Rectangle,
-        _cursor: mouse::Cursor,
-    ) -> Vec<canvas::Geometry> {
-        let Some(rect) = caret_row_rect(self, bounds) else {
-            return Vec::new();
-        };
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
-
-        // 视觉近似用的青调 #47DEF0@0.07;刻意不硬调成甲方专属金(那条是
-        // 甲方(用户侧 AI)动作专属)。行着色是"眼睛定位",比选区 `0.25` 更淡。
-        let tint = byteui::theme::color::current().cyan;
-        frame.fill_rectangle(
-            Point::new(rect.x, rect.y),
-            Size::new(rect.width, rect.height),
-            Color {
-                r: tint.r,
-                g: tint.g,
-                b: tint.b,
-                a: 0.07,
-            },
-        );
-
-        vec![frame.into_geometry()]
-    }
-}
-
-/// 计算光标行对应的屏幕矩形。行已在视口之上(行号比滚动起点还小,完全滚出)则
-/// `None`。纯函数放这好单测:给固定几何验数学,不给 panic。
-fn caret_row_rect(caret: &CaretRow, bounds: Rectangle) -> Option<Rectangle> {
-    if caret.line_height <= 0.0 {
-        return None;
-    }
-    // 内容坐标里光标行顶 = padding.top + (光标行号 - 已滚回的行数) * 行高;
-    // 负(减去 padding 后仍 < 0)=> 已滚出视口上缘不画。
-    let top = caret.padding_top + (caret.line as f32 - caret.scroll_lines) * caret.line_height;
-    if top < -caret.line_height || top > bounds.height {
-        return None;
-    }
-    Some(Rectangle {
-        x: bounds.x,
-        y: bounds.y + top,
-        width: bounds.width,
-        height: caret.line_height,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -614,6 +659,54 @@ mod tests {
         view.perform(Action::Move(text_editor::Motion::DocumentEnd));
         view.perform(Action::Edit(text_editor::Edit::Insert('!')));
         assert_eq!(view.text(), "ab!");
+    }
+
+    #[test]
+    fn undo_restores_and_redo_reapplies_single_commit() {
+        let mut view = CodeView::new("ab", "rust", false);
+        view.perform(Action::Move(text_editor::Motion::DocumentEnd));
+        view.perform(Action::Edit(text_editor::Edit::Insert('!')));
+        assert_eq!(view.text(), "ab!");
+
+        assert!(view.undo(), "刚插入过应可撤销");
+        assert_eq!(view.text(), "ab");
+        assert!(view.redo(), "撤销后应可重做");
+        assert_eq!(view.text(), "ab!");
+
+        // 全栈弹空后 no-op(到 "ab" 再撤就没有更早的态了)。
+        assert!(view.undo());
+        assert_eq!(view.text(), "ab");
+        assert!(!view.undo(), "历史已空");
+    }
+
+    #[test]
+    fn continuous_typing_run_collapses_to_one_undo_step() {
+        let mut view = CodeView::new("hi", "txt", false);
+        view.perform(Action::Move(text_editor::Motion::DocumentEnd));
+        view.perform(Action::Edit(text_editor::Edit::Insert('x')));
+        view.perform(Action::Edit(text_editor::Edit::Insert('y')));
+        view.perform(Action::Edit(text_editor::Edit::Insert('z')));
+        assert_eq!(view.text(), "hixyz");
+
+        assert!(view.undo());
+        // 连续逐键插入在 run 内共享同一个还原点,一次 undo 应退回到输入前。
+        assert_eq!(view.text(), "hi");
+        assert!(view.redo());
+        assert_eq!(view.text(), "hixyz");
+    }
+
+    #[test]
+    fn undo_interleaved_with_retype_clears_redo_branch() {
+        let mut view = CodeView::new("a", "txt", false);
+        view.perform(Action::Move(text_editor::Motion::DocumentEnd));
+        view.perform(Action::Edit(text_editor::Edit::Insert('b')));
+        view.undo();
+        assert_eq!(view.text(), "a");
+        // 撤销后再敲新内容:旧 redo 分支(回到 "ab")应被清空,重做 fallback 到空。
+        view.perform(Action::Move(text_editor::Motion::DocumentEnd));
+        view.perform(Action::Edit(text_editor::Edit::Insert('c')));
+        assert_eq!(view.text(), "ac");
+        assert!(!view.redo(), "新编辑后不该还能重做被清掉的旧分支");
     }
 
     #[test]
@@ -731,50 +824,6 @@ mod tests {
         // 末端——反向连按「上一个」能据此从更早处续接,不会卡在原命中。
         assert_eq!(view.cursor_position(), (1, 0));
         assert_eq!(view.selection_range(), Some(((1, 0), (1, 6))));
-    }
-
-    #[test]
-    fn caret_row_rect_lines_up_with_scroll_mirror() {
-        use iced_widget::core::Rectangle as R;
-        let caret = CaretRow {
-            line: 5,
-            scroll_lines: 2.5,
-            line_height: 20.0,
-            padding_top: 5.0,
-        };
-        let bounds = R {
-            x: 0.0,
-            y: 10.0,
-            width: 500.0,
-            height: 200.0,
-        };
-        // 行5 - 滚2.5 = 内容第2.5 行,row y = 10 + 5(padding) + (2.5*20) = 65。
-        let rect = caret_row_rect(&caret, bounds).unwrap();
-        assert_eq!(rect.y, 65.0);
-        assert_eq!(rect.height, 20.0);
-        assert_eq!(rect.width, 500.0);
-
-        // 光标行已滚出上缘(某行号 < since scroll huge)->None。
-        let gone = CaretRow {
-            line: 0,
-            scroll_lines: 80.0,
-            line_height: 20.0,
-            padding_top: 5.0,
-        };
-        assert_eq!(caret_row_rect(&gone, bounds), None);
-        // 退化行高也拒绝。
-        assert_eq!(
-            caret_row_rect(
-                &CaretRow {
-                    line: 1,
-                    scroll_lines: 0.0,
-                    line_height: 0.0,
-                    padding_top: 5.0,
-                },
-                bounds,
-            ),
-            None
-        );
     }
 
     #[test]
