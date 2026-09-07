@@ -815,6 +815,12 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             logical_x,
                             logical_y,
                         );
+                        tracing::warn!(
+                            ?target,
+                            logical_x,
+                            logical_y,
+                            "DEBUG dnd: CursorMoved while files_dragging"
+                        );
                         let hover = target
                             .into_iter()
                             .collect::<std::collections::HashSet<std::path::PathBuf>>();
@@ -974,10 +980,12 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 // 外部 OS 文件拖拽进入窗口:进入即置拖拽标记,之后每个
                 // `CursorMoved` 都会 re-hit-test 树并刷新高亮(见上面
                 // CursorMoved 分支);离开窗口/取消时清标记并收起高亮。
-                WindowEvent::HoveredFile(_) => {
+                WindowEvent::HoveredFile(p) => {
+                    tracing::warn!(path = ?p, "DEBUG dnd: HoveredFile received");
                     *files_dragging = true;
                 }
                 WindowEvent::HoveredFileCancelled => {
+                    tracing::warn!("DEBUG dnd: HoveredFileCancelled");
                     *files_dragging = false;
                     Self::clear_file_drag_hover(app);
                     window.request_redraw();
@@ -993,6 +1001,15 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     let window_w = (window.inner_size().width as f64 / scale) as f32;
                     let window_h = (window.inner_size().height as f64 / scale) as f32;
                     let target = app.files_drop_target(window_w, window_h, logical_x, logical_y);
+                    tracing::warn!(
+                        ?path,
+                        ?target,
+                        logical_x,
+                        logical_y,
+                        window_w,
+                        window_h,
+                        "DEBUG dnd: DroppedFile guarded branch"
+                    );
                     *files_dragging = false;
                     if let Some(target) = target {
                         app.update(Message::Files(extensions::files::Message::FileDrop {
