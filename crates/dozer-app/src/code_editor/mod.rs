@@ -32,6 +32,14 @@ use iced_widget::core::widget::Id as WidgetId;
 use iced_widget::core::{Color, Element, Length, Pixels, Point, Rectangle, Size, mouse};
 use iced_widget::text_editor::{self, Action};
 
+/// 官方 `text_editor::TextEditor` 自己的默认 padding(`Padding::new(5.0)`,
+/// 见 `iced_widget::text_editor` 源码)。在这里显式设出来并喂给 `.padding(...)`,
+/// 不再依赖那个未在我们代码里出现过的隐式默认值——`CaretRow` 叠层算光标行屏幕 y
+/// 时要原样加回同一个 padding.top,两处必须共用同一个数,否则叠层与实际文字的
+/// 起始行会错位(叠层的画布 bounds 是编辑器**未收缩**的外框,文字本身是
+/// `bounds.shrink(padding)` 之后才开始画的)。
+const EDITOR_PADDING: f32 = 5.0;
+
 /// 组出可直接嵌入的 `text_editor`。两处复用:`preview.rs` 只读文件预览、
 /// `workspace.rs` 的 `EditSession` 可写编辑浮层——`read_only` 决定
 /// [`Action::Edit`] 是否被过滤掉。
@@ -238,6 +246,51 @@ impl CodeView {
         self.content.perform(action);
     }
 
+    /// 把 buffer 里所有 `query` 匹配**(贪婪、左到右、避开重叠)**替换成
+    /// `replacement`,返回替换次数。匹配用的严格比较 / ASCII 折叠语义与
+    /// [`find_matches_all`] 的 `case_sensitive` 完全一致(等长字节)。这是
+    /// Find「替换全部」的落地:走一次全量扫描,**每个命中只替换一次且不重叠**,
+    /// 因此即使 `ends-with-query` 连排也只推进 query 长度跳过,不产生无限的
+    /// "替换出来的又变成匹配" 自吞效应。
+    ///
+    /// 结果直接重建 `self.content`(cosmic 语法高亮来源不变;不做单 Action 折叠
+    /// 是为了把“多处删加、长度可变”压缩成一个事务,避免一趟几十个 Edit)。重建
+    /// 会丢光标/选区与 undo —— `read_only` 恒 false(原生预览可编辑,见
+    /// `PreviewTab` 注释),替换是“未保存 buffer 的就地改动”语义之一,由调用方
+    /// (PreviewPane)在此之后标脏并 Reanchor 光标。
+    ///
+    /// 空 query / 无命中也走不动作,返回 0。
+    pub fn replace_all(&mut self, query: &str, case_sensitive: bool, replacement: &str) -> usize {
+        let (new_text, count) =
+            replace_pass_all(&self.content.text(), query, case_sensitive, replacement);
+        if count == 0 {
+            return 0;
+        }
+        self.content = text_editor::Content::with_text(&new_text);
+        count
+    }
+
+    /// 只替换窗口序里的第 `nth`(0-based)个命中——「替换当前命中」用,序与
+    /// [`find_matches_all`] 从前往后(含重叠窗)完全一致,调用方拿自己的
+    /// `current` 来即可。命中不存在(越界)返回 `false` 且 buffer 不动;命中
+    /// 存在则原地把那一处替换成 `replacement`(两侧其余文本原样保留),返回
+    /// `true`。同样重建 `self.content`、不保留 undo(见 [`CodeView::replace_all`])。
+    pub fn replace_nth(
+        &mut self,
+        nth: usize,
+        query: &str,
+        case_sensitive: bool,
+        replacement: &str,
+    ) -> bool {
+        let text = self.content.text();
+        let Some(new_text) = replace_pass_nth(&text, nth, query, case_sensitive, replacement)
+        else {
+            return false;
+        };
+        self.content = text_editor::Content::with_text(&new_text);
+        true
+    }
+
     /// 组出 `[editor, scrollstrip]` 一行:正文靠左撑满,右侧一根窄条画统一
     /// 风格滚动条(只在内容纵向溢出时显 thumb)。内层消息就是原始 `Action`——
     /// 调用方按原 `iced_code_editor::Message` 时代同样的手法 `.map(...)` 转发到
@@ -261,6 +314,7 @@ impl CodeView {
                 |highlight, _theme| highlight.to_format(),
             )
             .style(editor_style)
+            .padding(EDITOR_PADDING)
             .on_action(std::convert::identity);
 
         // 「光标所在行」背景(低 alpha 行着色,视觉近似):高层叠在编辑器之上的
@@ -274,6 +328,7 @@ impl CodeView {
             line: caret_line,
             scroll_lines: self.scroll_lines,
             line_height: line_height_px,
+            padding_top: EDITOR_PADDING,
         })
         .width(Length::Fill)
         .height(Length::Fill);
@@ -294,6 +349,90 @@ impl CodeView {
 
         iced_widget::row![editor_pane, scrollstrip].into()
     }
+}
+
+/// replace_pass_all 的单步扫描体 —— 两趟换行/表序所需的纯替换实现搁在文件级
+/// 便于单测(`CodeView` 构造要带 token,纯替换逻辑不值得为它造 editor)。
+/// 匹配语义与 `find_matches_all` 的字节相等 / ASCII 折叠相同(等长字节比较),
+/// 返回 (全部完成后整串文本, 替换次数)。贪婪不重叠:`every hit once`,
+/// 命中起点立刻跳到命中末(等价 editor 常见的 find-replace-forward)。
+fn replace_pass_all(
+    text: &str,
+    query: &str,
+    case_sensitive: bool,
+    replacement: &str,
+) -> (String, usize) {
+    if query.is_empty() || text.is_empty() {
+        return (text.to_owned(), 0);
+    }
+    let bytes = text.as_bytes();
+    let q = query.as_bytes();
+    let mut out =
+        String::with_capacity(text.len() + (replacement.len().saturating_sub(q.len())) * 8 + 16);
+    let mut last = 0usize;
+    let mut i = 0usize;
+    let mut count = 0usize;
+    while i + q.len() <= bytes.len() {
+        let cand = &bytes[i..i + q.len()];
+        let equal = if case_sensitive {
+            cand.eq(q)
+        } else {
+            cand.eq_ignore_ascii_case(q)
+        };
+        if !equal {
+            i += 1;
+            continue;
+        }
+        // 命中：把 [last, i) 原文 + replacement 追加，游标跳到命中末避免重叠。
+        out.push_str(&text[last..i]);
+        out.push_str(replacement);
+        last = i + q.len();
+        i += q.len();
+        count += 1;
+    }
+    out.push_str(&text[last..]);
+    (out, count)
+}
+
+/// 只替换窗口序第 `nth` 个命中;两侧原样保留。`None` = 那里没有命中(越界或空
+/// query),调用方不该动 buffer。恰逢命中边界即 utf8 字符边界(与 find 同规则)。
+fn replace_pass_nth(
+    text: &str,
+    nth: usize,
+    query: &str,
+    case_sensitive: bool,
+    replacement: &str,
+) -> Option<String> {
+    if query.is_empty() {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    let q = query.as_bytes();
+    let mut seen = 0usize;
+    let mut i = 0usize;
+    while i + q.len() <= bytes.len() {
+        let cand = &bytes[i..i + q.len()];
+        let equal = if case_sensitive {
+            cand.eq(q)
+        } else {
+            cand.eq_ignore_ascii_case(q)
+        };
+        if !equal {
+            i += 1;
+            continue;
+        }
+        if seen == nth {
+            let mut out =
+                String::with_capacity(text.len().saturating_sub(q.len()) + replacement.len() + 8);
+            out.push_str(&text[..i]);
+            out.push_str(replacement);
+            out.push_str(&text[i + q.len()..]);
+            return Some(out);
+        }
+        seen += 1;
+        i += 1;
+    }
+    None
 }
 
 /// 编辑器 chrome 对齐到 ByteBoy2077 配色——官方 `text_editor::Style` 字段比
@@ -392,6 +531,10 @@ struct CaretRow {
     scroll_lines: f32,
     /// 每行像素高度(与 `view()` 里给 text_editor 的 `line_height` 同一来源)。
     line_height: f32,
+    /// 与 `view()` 里喂给 text_editor 的 `.padding(...)` 同一个 [`EDITOR_PADDING`]
+    /// 值——本画布拿到的 `bounds` 是编辑器**未收缩**的外框,文字实际从
+    /// `bounds.shrink(padding)` 之后才开始画,不加回这个量整行会往上错位。
+    padding_top: f32,
 }
 
 impl<Message> canvas::Program<Message> for CaretRow {
@@ -434,8 +577,9 @@ fn caret_row_rect(caret: &CaretRow, bounds: Rectangle) -> Option<Rectangle> {
     if caret.line_height <= 0.0 {
         return None;
     }
-    // 内容坐标里光标行顶 = 光标行号 - 已滚回的行数;负 => 已滚出视口上缘不画。
-    let top = (caret.line as f32 - caret.scroll_lines) * caret.line_height;
+    // 内容坐标里光标行顶 = padding.top + (光标行号 - 已滚回的行数) * 行高;
+    // 负(减去 padding 后仍 < 0)=> 已滚出视口上缘不画。
+    let top = caret.padding_top + (caret.line as f32 - caret.scroll_lines) * caret.line_height;
     if top < -caret.line_height || top > bounds.height {
         return None;
     }
@@ -596,6 +740,7 @@ mod tests {
             line: 5,
             scroll_lines: 2.5,
             line_height: 20.0,
+            padding_top: 5.0,
         };
         let bounds = R {
             x: 0.0,
@@ -603,9 +748,9 @@ mod tests {
             width: 500.0,
             height: 200.0,
         };
-        // 行5 - 滚2.5 = 内容第2.5 行,row y = 10 + (2.5*20) = 60。
+        // 行5 - 滚2.5 = 内容第2.5 行,row y = 10 + 5(padding) + (2.5*20) = 65。
         let rect = caret_row_rect(&caret, bounds).unwrap();
-        assert_eq!(rect.y, 60.0);
+        assert_eq!(rect.y, 65.0);
         assert_eq!(rect.height, 20.0);
         assert_eq!(rect.width, 500.0);
 
@@ -614,6 +759,7 @@ mod tests {
             line: 0,
             scroll_lines: 80.0,
             line_height: 20.0,
+            padding_top: 5.0,
         };
         assert_eq!(caret_row_rect(&gone, bounds), None);
         // 退化行高也拒绝。
@@ -622,11 +768,63 @@ mod tests {
                 &CaretRow {
                     line: 1,
                     scroll_lines: 0.0,
-                    line_height: 0.0
+                    line_height: 0.0,
+                    padding_top: 5.0,
                 },
                 bounds,
             ),
             None
         );
+    }
+
+    #[test]
+    fn replace_all_replaces_every_match_and_keeps_order() {
+        let mut view = CodeView::new("foo xx foo\nxFOO foo", "txt", false);
+        let n = view.replace_all("foo", true, "bar");
+        assert_eq!(n, 3, "逐字严格:大写 FOO 不算,三处小写 foo 都换");
+        assert_eq!(view.text(), "bar xx bar\nxFOO bar");
+    }
+
+    #[test]
+    fn replace_all_case_insensitive_covers_folded_and_is_greedy_no_overlap() {
+        let mut view = CodeView::new("aaaa", "txt", false);
+        // 大小写折叠:全部命中;贪婪:连续串只推进 query 长,不回扫重叠。
+        let n = view.replace_all("aa", false, "x");
+        assert_eq!(n, 2);
+        assert_eq!(view.text(), "xx");
+    }
+
+    #[test]
+    fn replace_all_empty_query_is_noop() {
+        let mut view = CodeView::new("needle needle", "txt", false);
+        assert_eq!(view.replace_all("", false, "x"), 0);
+        assert_eq!(view.text(), "needle needle");
+    }
+
+    #[test]
+    fn replace_nth_targets_exact_occurrence_leaving_neighbors() {
+        let mut view = CodeView::new("aa bb aa cc", "txt", false);
+        // 第 2 个(1-based)命中 = 索引 1 的 aa → 只换它。
+        assert!(view.replace_nth(1, "aa", false, "ZZ"));
+        assert_eq!(view.text(), "aa bb ZZ cc");
+        // 越界索引不改动。
+        assert!(!view.replace_nth(9, "aa", false, "Y"));
+        assert_eq!(view.text(), "aa bb ZZ cc");
+    }
+
+    #[test]
+    fn replace_nth_multibyte_and_multiline_query_respects_byte_indices() {
+        // 中文命中的字节边界与前缀一致;多行 query 中间换行也能命中窗口替换。
+        let mut view = CodeView::new("先例", "txt", false);
+        assert!(view.replace_nth(0, "先", false, "h"));
+        assert_eq!(view.text(), "h例");
+    }
+
+    #[test]
+    fn replace_rewrite_survives_crlf_rather_than_guessing_line_ends() {
+        // 替换只在明文字节上做,不把 \r\n 拆成行:整块 CRLF 保留。
+        let mut view = CodeView::new("a\r\nregex\r\nb", "txt", false);
+        assert_eq!(view.replace_all("regex", false, "x"), 1);
+        assert_eq!(view.text(), "a\r\nx\r\nb");
     }
 }

@@ -229,6 +229,10 @@ pub struct FindState {
     /// 大小写敏感开关(false=默认的 ASCII 大小写折叠,true=逐字严格比较)。由
     /// 调用方以 `Message` 翻转后持久在这里;每次匹配 / 导航 / 编辑后现算都读它。
     pub case_sensitive: bool,
+    /// “替换为”文本草稿(替换条的输入框内容,不吃 query 的大小写折叠——只是
+    /// 一个要被原样插进去的字符串,不做规则匹配)。`replace_current` /
+    /// `replace_all` 都拿它当替换物;空串表示“删掉那处命中”。
+    pub replacement: String,
 }
 
 #[derive(Default)]
@@ -528,6 +532,7 @@ impl PreviewPane {
                 current: 0,
                 count: 0,
                 case_sensitive: false,
+                replacement: String::new(),
             });
         }
     }
@@ -715,6 +720,102 @@ impl PreviewPane {
             s.case_sensitive = case_sensitive;
         }
         self.find_refresh_after_edit(tab_id);
+    }
+
+    /// 更新「替换为」草稿(替换条的输入框每键触发)。只写 state,不做任何计算 —
+    /// 真实替换发生(点「替换」/「替换全部」)时才会带着它一起扫。
+    pub fn set_find_replacement(&mut self, replacement: String) {
+        if let Some(s) = self.find.as_mut() {
+            s.replacement = replacement;
+        }
+    }
+
+    /// 「替换全部」:把当前 `query`(用 `case_sensitive` / 折叠语义 + `replacement`)
+    /// 在锁定 buffer 里的一次性替换做完。与普通打字一致只改**未保存 buffer**并标
+    /// 脏(`mark_dirty_by_id`),真正写盘仍交 ⌘S;这是 Find 条没有 [CLAUDE.md 裁决
+    /// 的“预览尽量不改产物”]冲突的落点——改动先驻留在预览缓冲区、用户决定保存与
+    /// 否。替换完按新 buffer 刷新 `count/current`。空 query / 没条 / 0 命中 no-op,
+    /// 返回 `false`。
+    pub fn replace_all(&mut self) -> bool {
+        let Some((tab_id, query, cs, repl)) = self.find.as_ref().map(|f| {
+            (
+                f.tab_id,
+                f.query.clone(),
+                f.case_sensitive,
+                f.replacement.clone(),
+            )
+        }) else {
+            return false;
+        };
+        if query.is_empty() {
+            return false;
+        }
+        let replaced = self
+            .editor_mut(tab_id)
+            .map(|editor| editor.replace_all(&query, cs, &repl))
+            .unwrap_or(0);
+        if replaced == 0 {
+            return false;
+        }
+        self.mark_dirty_by_id(tab_id);
+        // 重算之后可能有残留命中(尤其 replacement 又重现 query),count 忠实反映。
+        self.find_refresh_after_edit(tab_id);
+        true
+    }
+
+    /// 「替换当前命中」:把 `find_state().current` 指着的那一处替换掉(第 `nth`
+    /// 个命中,窗口序与 `find_matches_all` 一致)。动作与 [`PreviewPane::replace_all`]
+    /// 相同——只动未保存 buffer、标脏等 ⌘S。替换成功后把光标拨回被删匹配的起点,
+    /// 再由 [`PreviewPane::find_go`] 按当下 buffer 往**下一个**命中走(替换者通常要
+    /// 一路往下逐个处理;简单同字符替换时光标就卡在被换处以便继续替换)。空 query /
+    /// 无命中 / 目标已是文件尾(替换后不再有该 query)都会安全 no-op 返回 `false`。
+    pub fn replace_current(&mut self) -> bool {
+        let Some((tab_id, query, cs, repl, n)) = self.find.as_ref().map(|f| {
+            (
+                f.tab_id,
+                f.query.clone(),
+                f.case_sensitive,
+                f.replacement.clone(),
+                f.current,
+            )
+        }) else {
+            return false;
+        };
+        if query.is_empty() {
+            return false;
+        }
+        // 被替换命中的起点坐标(换完 buffer 重建会丢光标,靠它把焦点落回原位再
+        // 让 find_go 续next)。前缀在此之前的字节原样保留,坐标在简单替换中仍成立。
+        let lost_start = {
+            let Some(editor) = self
+                .tabs
+                .iter()
+                .find(|t| t.id == tab_id)
+                .and_then(|t| t.editor.as_ref())
+            else {
+                return false;
+            };
+            let all = editor.find_matches_all(&query, cs);
+            let idx = n.min(all.len().saturating_sub(1));
+            all.get(idx).map(|&(start, _)| start)
+        };
+        let did = self
+            .editor_mut(tab_id)
+            .map(|editor| editor.replace_nth(n, &query, cs, &repl))
+            .unwrap_or(false);
+        if !did {
+            return false;
+        }
+        self.mark_dirty_by_id(tab_id);
+        // 光标复位到被换处附近,再走一次「下一个」续递。
+        if let Some(start) = lost_start
+            && let Some(editor) = self.editor_mut(tab_id)
+        {
+            editor.move_cursor_to(start);
+        }
+        self.find_refresh_after_edit(tab_id);
+        self.find_go(true);
+        true
     }
 
     /// 内部:激活 tab / 关闭/清空导致激活的原生 tab 变了时,清掉不再匹配的 Find。
@@ -1902,5 +2003,52 @@ mod tests {
         for f in created {
             std::fs::remove_file(f).ok();
         }
+    }
+
+    #[test]
+    fn replace_all_rewrites_buffer_marks_dirty_and_refreshes_count() {
+        let tmp = std::env::temp_dir().join(format!("pane_replace_all_{}.rs", std::process::id()));
+        std::fs::write(&tmp, "needle 1\nplain\nneedle 2").unwrap();
+
+        let mut p = PreviewPane::default();
+        let id = p.open_path(tmp.clone());
+        assert!(p.tabs()[p.active_idx()].editor.is_some());
+        p.find = Some(FindState {
+            tab_id: id,
+            query: "needle".into(),
+            current: 0,
+            count: 2,
+            case_sensitive: false,
+            replacement: "SEO".into(),
+        });
+        assert!(p.replace_all(), "两处命中应全换掉");
+        let editor_text = p.tabs()[p.active_idx()].editor.as_ref().unwrap().text();
+        assert_eq!(editor_text, "SEO 1\nplain\nSEO 2");
+        assert!(p.tabs()[p.active_idx()].dirty, "替换应标脏待 ⌘S 落盘");
+        assert_eq!(p.find_state().unwrap().count, 0, "替换后主题串不再命中");
+        assert!(!p.replace_all(), "无命中再替换是 no-op");
+        std::fs::remove_file(tmp).ok();
+    }
+
+    #[test]
+    fn replace_current_targets_only_the_locked_occurrence_then_advances() {
+        let tmp = std::env::temp_dir().join(format!("pane_replace_cur_{}.rs", std::process::id()));
+        std::fs::write(&tmp, "aa bb aa\ncc").unwrap();
+
+        let mut p = PreviewPane::default();
+        let id = p.open_path(tmp.clone());
+        p.find = Some(FindState {
+            tab_id: id,
+            query: "aa".into(),
+            current: 1, // 窗口序第 1 个命中(0-based)= 第二个 aa。
+            count: 2,
+            case_sensitive: false,
+            replacement: "Y".into(),
+        });
+        assert!(p.replace_current());
+        let text = p.tabs()[p.active_idx()].editor.as_ref().unwrap().text();
+        assert_eq!(text, "aa bb Y\ncc", "current=1 应该只替换第二个 aa");
+        assert!(p.tabs()[p.active_idx()].dirty);
+        std::fs::remove_file(tmp).ok();
     }
 }

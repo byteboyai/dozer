@@ -2128,6 +2128,33 @@ impl Workspace {
         }
     }
 
+    /// 落定「替换为」草稿到 `kind` 面板当前 Find 会话(只写,不触发替换)。
+    pub fn preview_find_set_replacement(&mut self, kind: PanelKind, replacement: String) {
+        if kind == PanelKind::Project {
+            self.project_preview.set_find_replacement(replacement);
+        } else {
+            self.preview.set_find_replacement(replacement);
+        }
+    }
+
+    /// 「替换当前命中」。作用对象与返回值语义见 `PreviewPane::replace_current`。
+    pub fn preview_find_replace_current(&mut self, kind: PanelKind) {
+        if kind == PanelKind::Project {
+            self.project_preview.replace_current();
+        } else {
+            self.preview.replace_current();
+        }
+    }
+
+    /// 「替换全部」。作用对象与返回值语义见 `PreviewPane::replace_all`。
+    pub fn preview_find_replace_all(&mut self, kind: PanelKind) {
+        if kind == PanelKind::Project {
+            self.project_preview.replace_all();
+        } else {
+            self.preview.replace_all();
+        }
+    }
+
     /// 当前激活浏览器 tab 的 webview id,语义同 `active_preview_webview_id`,
     /// 查独立的 `self.browser`。
     pub fn active_browser_webview_id(&self) -> Option<usize> {
@@ -3717,6 +3744,83 @@ fn preview_pane_for<'a>(
                 .width(Length::Fill)
                 .padding([4, 6]);
                 content = content.push(strip);
+
+                // ---- 文件内替换行(条身之下第二行) ----
+                // 替换只改锁定 buffer 并标脏、落盘仍等 ⌘S(`PreviewPane::replace_*`
+                // 的语义),不做直接磁盘写。默认跳过空命中(避免误把用户缓冲区清空
+                // 成替换框逗号残片)。“替换当前”会顺带到下一命中、方便一路处理,
+                // “替换全部”把这一轮全部落一次。两个按钮共用一轮是否可替换的开关。
+                let armed = find.count > 0;
+                let replacement_input = byteui::form::input_text::view(
+                    "替换为…",
+                    &find.replacement,
+                    false,
+                    None,
+                    !find.replacement.is_empty(),
+                    None,
+                    false,
+                    move |s: String| match panel {
+                        PanelKind::Project => {
+                            Message::PreviewFindReplacement(PanelKind::Project, s)
+                        }
+                        _ => Message::PreviewFindReplacement(PanelKind::Files, s),
+                    },
+                );
+                let replace_text_button = |label: &'static str,
+                                           msg: Message,
+                                           disabled: bool|
+                 -> iced_widget::core::Element<
+                    'static,
+                    Message,
+                    iced_widget::Theme,
+                    iced_renderer::Renderer,
+                > {
+                    let text_color = if disabled { colors.dim } else { colors.cyan };
+                    iced_widget::button(text(label).size(byteui::theme::font::body()))
+                        .on_press_maybe(if disabled { None } else { Some(msg) })
+                        .padding([3, 6])
+                        .style(
+                            move |_t: &iced_widget::Theme, _s: iced_widget::button::Status| {
+                                use iced_widget::button;
+                                button::Style {
+                                    background: None,
+                                    text_color,
+                                    ..button::Style::default()
+                                }
+                            },
+                        )
+                        .into()
+                };
+                let replace_row = container(
+                    row![
+                        container(replacement_input).width(Length::Fill),
+                        replace_text_button(
+                            "替换当前",
+                            match panel {
+                                PanelKind::Project => {
+                                    Message::PreviewFindReplaceCurrent(PanelKind::Project)
+                                }
+                                _ => Message::PreviewFindReplaceCurrent(PanelKind::Files),
+                            },
+                            !armed,
+                        ),
+                        replace_text_button(
+                            "替换全部",
+                            match panel {
+                                PanelKind::Project => {
+                                    Message::PreviewFindReplaceAll(PanelKind::Project)
+                                }
+                                _ => Message::PreviewFindReplaceAll(PanelKind::Files),
+                            },
+                            !armed,
+                        ),
+                    ]
+                    .spacing(6)
+                    .align_y(iced_widget::core::Alignment::Center),
+                )
+                .width(Length::Fill)
+                .padding([4, 6]);
+                content = content.push(replace_row);
             }
             content = content.push(
                 container(editor.view().map(move |ev| editor_msg(tab_id, ev)))

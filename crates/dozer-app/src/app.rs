@@ -1825,6 +1825,17 @@ pub enum Message {
     /// File-Find 大小写敏感开关(`true`=逐字严格、`false`=ASCII 大小写折叠)——
     /// 点条上「Aa」切换钮落定的方向。只翻当轮会话的语义,不改全局默认。
     PreviewFindCase(PanelKind, bool),
+    /// File-Find 条的「替换为」输入框每键落定(只写 `FindState::replacement`
+    /// 草稿,不触发任何替换;真正动作在点「替…」按钮时发生)。
+    PreviewFindReplacement(PanelKind, String),
+    /// File-Find 条「替换当前」:把本轮 `current` 指着的那一处清掉换成替换框
+    /// 文本。照 Enter/⌘S 外的普通打字语义,只改**原生 buffer 并标脏**等待用户
+    /// ⌘S 落盘——替换不隐式写盘([CLAUDE.md 裁决]预览优先渲染/不可逆动作留给
+    /// 显式保存)。
+    PreviewFindReplaceCurrent(PanelKind),
+    /// File-Find 条「替换全部」:与 `PreviewFindReplaceCurrent` 同一 buffer-only
+    /// 语义,只是把这轮每一处命中一次性全改、同样标脏等 ⌘S。
+    PreviewFindReplaceAll(PanelKind),
     /// 预览编辑弹层:×按钮 / 点遮罩——脏改动会先转成二次确认,不直接关。
     PreviewEditCloseRequest,
     /// 预览编辑弹层二次确认:"放弃改动"。
@@ -5017,6 +5028,21 @@ impl App {
             }
             Message::PreviewFindCase(kind, sensitive) => {
                 self.with_focused_project(move |ws, _io| ws.preview_find_case(kind, sensitive));
+            }
+            Message::PreviewFindReplacement(kind, repl) => {
+                self.with_focused_project(move |ws, _io| {
+                    ws.preview_find_set_replacement(kind, repl);
+                });
+            }
+            Message::PreviewFindReplaceCurrent(kind) => {
+                self.with_focused_project(move |ws, _io| {
+                    ws.preview_find_replace_current(kind);
+                });
+            }
+            Message::PreviewFindReplaceAll(kind) => {
+                self.with_focused_project(move |ws, _io| {
+                    ws.preview_find_replace_all(kind);
+                });
             }
             Message::PreviewEditCloseRequest => {
                 self.with_focused_project(|ws, _io| ws.preview_edit_close_request());
