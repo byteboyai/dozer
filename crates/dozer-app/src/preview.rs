@@ -240,6 +240,16 @@ impl PreviewPane {
             .map(|e| e.focus_id())
     }
 
+    /// 当前激活 tab 是否为原生可编辑的 `CodeView`(有真实 iced `text_editor`,
+    /// 点其内容区那帧会 self-focus 出光标)。main.rs 据此判断这次左键按下该
+    /// 不该把预览编辑器一起 `blur`(否则点到编辑器本身就会把刚自聚焦出的光标
+    /// 同一帧抬掉——"点代码预览无法获得光标")。
+    pub fn active_tab_is_native(&self) -> bool {
+        self.tabs
+            .get(self.active)
+            .is_some_and(|t| t.editor.is_some())
+    }
+
     pub fn open_path(&mut self, path: PathBuf) -> usize {
         // 同一文件已开则切过去,不重复开 tab（验收反馈）。
         if let Some((idx, tab)) = self
@@ -738,6 +748,28 @@ mod tests {
             !p.take_pending_editor_focus(),
             ".png 走 wry,没有原生 editor,不该置聚焦位"
         );
+    }
+
+    #[test]
+    fn active_tab_is_native_only_when_active_editor_holds_codeview() {
+        let mut p = PreviewPane::default();
+        assert!(!p.active_tab_is_native(), "空预览不是原生编辑 tab");
+
+        let path =
+            std::env::temp_dir().join(format!("preview_is_native_test_{}.rs", std::process::id()));
+        std::fs::write(&path, "fn main() {}").unwrap();
+        p.open_path(path.clone());
+        assert!(
+            p.active_tab_is_native(),
+            "白名单源码 tab 应是原生可编辑预览"
+        );
+        let png = PathBuf::from("/tmp/isnative_native_off.png");
+        p.open_path(png.clone());
+        assert!(
+            !p.active_tab_is_native(),
+            "切到 wry 渲染 tab 后不再是原生可编辑预览"
+        );
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

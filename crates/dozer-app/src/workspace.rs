@@ -2143,7 +2143,14 @@ impl Workspace {
     /// 在悄悄写进树编辑缓冲区,"打不出字"的假象)。`context_menu` 不在这里
     /// 清:它已经有专门的外点 dismiss 遮罩(`files::Message::ContextMenuClose`,
     /// 见 view() 里的 stack dismiss 层),这里重复清是死代码。
-    pub fn blur_inputs(&mut self) {
+    /// 点击输入框外时退出所有自绘输入的编辑态。`keep_native_preview_editor`
+    /// 为 `true` 时跳过结尾的 `blur_preview_editors`(见其文档):官方
+    /// `text_editor` 是真实 iced 焦点,鼠标点进它自己那帧会 self-focus 出
+    /// 光标,这里若再补一记 unfocus 就会同一帧把光标抬掉——`pending_editor_focus`
+    /// 之外,点到原生预览编辑器本身上时也必须让它留住焦点(2026-09-06:
+    /// "点代码预览无法获得光标" 修复)。点击的是预览列里非编辑器区(树/Files
+    /// 等)时保持 `false`,照旧把预览编辑器也一起 blur 掉。
+    pub fn blur_inputs(&mut self, keep_native_preview_editor: bool) {
         self.todo.cancel_drag();
         // 名称编辑不在失焦时丢弃——改由 `App::blur_inputs` 取出缓冲并发起
         // daemon 改名(改动且非空才发请求),与描述字段"失焦写盘"行为对齐。
@@ -2154,7 +2161,9 @@ impl Workspace {
         // 任务内容行内编辑的失焦落盘/丢弃判断已经从 `blur_inputs` 搬走——
         // 改由 `App::set_todo_content_focused` 的边缘触发(`CaptureContentEditFocus`
         // 每帧查到的真实焦点从真变假那一刻)承担,见该方法的文档。
-        self.blur_preview_editors();
+        if !keep_native_preview_editor {
+            self.blur_preview_editors();
+        }
     }
 
     /// 官方 `text_editor` 的焦点是真实 iced 焦点树的一部分,不能像 vendored
@@ -5225,5 +5234,28 @@ mod tests {
         ws.blur_preview_editors();
         assert!(ws.take_editor_unfocus_pending(), "应置一次性让出焦点标记");
         assert!(!ws.take_editor_unfocus_pending(), "消费式:取走后应复位");
+    }
+
+    #[test]
+    fn blur_inputs_keep_native_preview_editor_skips_pending_unfocus() {
+        let (_dir, path) = write_temp_file("a.txt", "hi");
+        let mut ws = Workspace::empty_for_project_placeholder();
+        ws.preview.open_path(path);
+        assert!(
+            ws.preview.active_tab_is_native(),
+            "白名单文本 tab 应为原生可编辑预览"
+        );
+        // 点到原生预览编辑器本身:保留(不置让出焦点标记)。
+        ws.blur_inputs(true);
+        assert!(
+            !ws.take_editor_unfocus_pending(),
+            "保留时不该同帧把 self-focus 出的光标抬掉"
+        );
+        // 点其它地方:维持原行为,照常让出预览编辑器焦点。
+        ws.blur_inputs(false);
+        assert!(
+            ws.take_editor_unfocus_pending(),
+            "点非编辑器区仍应让出预览编辑器焦点"
+        );
     }
 }

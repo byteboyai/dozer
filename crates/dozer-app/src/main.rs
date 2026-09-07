@@ -890,7 +890,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     button: winit::event::MouseButton::Left,
                     ..
                 } => {
-                    app.blur_inputs();
                     let scale = window.scale_factor();
                     let logical_x = (cursor_phys.x / scale) as f32;
                     let logical_w = (window.inner_size().width as f64 / scale) as f32;
@@ -909,6 +908,18 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         Some(kind) => FocusIntent::Preview(kind),
                         None => FocusIntent::Terminal,
                     };
+                    // 左键按下统一 blur 输入框。但若落点是"原生可编辑预览"
+                    // 列,它的 `text_editor` 自己这一帧会 self-focus 出光标
+                    // (官方 `text_editor` 点击即聚焦,无需 main.rs 参与),这里
+                    // 若再把预览编辑器一起 blur 掉,就会同一帧把它刚自聚焦出
+                    // 的光标抬掉——表现为"点了代码预览却拿不到光标"(2026-09-06
+                    // 修复)。是该列仍是原生编辑时才保留;点预览列里其它非编辑器
+                    // 区/点在其它列时维持原行为,把预览编辑器照常 blur。
+                    let keep_native_preview_editor = matches!(
+                        intent,
+                        FocusIntent::Preview(kind) if app.preview_active_tab_is_native(kind)
+                    );
+                    app.blur_inputs(keep_native_preview_editor);
                     *pending_focus = Some(intent);
                     *current_focus = intent;
                     window.request_redraw();

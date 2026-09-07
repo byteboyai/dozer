@@ -3485,11 +3485,30 @@ impl App {
     /// 项目名称编辑的"失焦保存"已搬进 `set_project_name_focused` 的边缘触发
     /// (与回车提交共用 `extensions::project::submit_name_edit`),这里只交
     /// 给 `Workspace::blur_inputs` 清其它编辑态。
-    pub fn blur_inputs(&mut self) {
+    ///
+    /// `keep_native_preview_editor` 为 `true` 时保留原生预览编辑器的焦点(见
+    /// `Workspace::blur_inputs`/`active_tab_is_native` 的说明):这次左键按下
+    /// 若落在原生 `text_editor` 上,编辑器自己那帧会 self-focus 出光标,不能再
+    /// 顺带 `blur`——2026-09-06 "点代码预览无法获得光标" 修复。
+    pub fn blur_inputs(&mut self, keep_native_preview_editor: bool) {
         let Some(ws) = self.active_workspace_mut() else {
             return;
         };
-        ws.blur_inputs();
+        ws.blur_inputs(keep_native_preview_editor);
+    }
+
+    /// 当前指定 `PanelKind`(Files/Project)预览列是否"本身是原生可编辑预览"
+    /// (激活 tab 是 `CodeView`)。main.rs 在左键按下路由到该列时据此决定
+    /// `blur_inputs` 要不要保留预览编辑器(-->)。
+    pub fn preview_active_tab_is_native(&self, kind: PanelKind) -> bool {
+        let Some(ws) = self.active_workspace() else {
+            return false;
+        };
+        match kind {
+            PanelKind::Files => ws.preview.active_tab_is_native(),
+            PanelKind::Project => ws.project_preview.active_tab_is_native(),
+            _ => false,
+        }
     }
 
     /// 键盘焦点被消息(非鼠标点击)拨离预览列时调用——`main.rs` 里切终端
