@@ -152,7 +152,7 @@ pub fn is_editable_extension(path: &std::path::Path) -> bool {
     // 兜底:没有语法映射但确实是纯文档/配置文本的扩展名,原生预览优于 flyfish。
     matches!(
         ext.as_str(),
-        "txt" | "log" | "conf" | "cfg" | "ini" | "csv" | "tsv" | "json5"
+        "txt" | "log" | "conf" | "cfg" | "ini" | "csv" | "tsv"
     )
 }
 
@@ -238,8 +238,28 @@ pub struct PreviewPane {
     /// `UserInterface::build` 之后由 main.rs 用 `operation::focusable::focus`
     /// 强制聚焦(同项目树行内编辑/Todo 内容编辑的既有手法)。
     pending_editor_focus: bool,
+    /// Find 条输入框同样要一次性程序化聚焦(⌘F 打开输入框那帧无法直接拿到
+    /// 真正的 text_input 焦点,靠 main.rs 下一帧 operation 拨)。`*_focus_for_find`
+    /// 在 open/close 时置位,消费式读走。与 `pending_editor_focus` 互斥生效——
+    /// 同一时刻只有 Find 输入框**或**其下的代码编辑器持焦。
+    pending_find_focus: bool,
     /// 文件内搜索(⌘F)会话,`Some` 表示条已显示;Files / Project 各一份,独立。
     find: Option<FindState>,
+}
+
+/// Find 输入框的稳定 `widget::Id`。Files / Project 两个预览面板各渲染一根
+/// Find 条,两个 text_input 同帧都存在于 iced 焦点树,id 必须按面板区分
+/// (iced 里同 id 的 focusable 会撞车),不能像全局单个搜索框那样给固定 id。
+/// workspace.rs 渲染条、main.rs 用 `operation::focusable::focus` 拨焦点都用
+/// 同一个 `kind` 解析出同一个 id。
+pub(crate) fn find_field_id(kind: crate::app::PanelKind) -> iced_widget::core::widget::Id {
+    // 两个面板的输入框以 distinct 静态 id 区分(iced 焦点树里同 id 会撞车)。
+    match kind {
+        crate::app::PanelKind::Project => {
+            iced_widget::core::widget::Id::new("preview-find-project")
+        }
+        _ => iced_widget::core::widget::Id::new("preview-find-files"),
+    }
 }
 
 impl PreviewPane {
@@ -254,6 +274,26 @@ impl PreviewPane {
     /// 读走(消费式)一次性程序化聚焦标记。
     pub fn take_pending_editor_focus(&mut self) -> bool {
         std::mem::take(&mut self.pending_editor_focus)
+    }
+
+    /// 请求把焦点拨给 Find 输入框(⌘F 打开的那帧置位,次帧 main.rs 拨;与
+    /// `pending_editor_focus` 互斥——见字段注释)。
+    pub fn request_find_focus(&mut self) {
+        self.pending_find_focus = true;
+        self.pending_editor_focus = false;
+    }
+
+    /// 读走(消费式)Find 输入框的一次性程序化聚焦标记。
+    pub fn take_pending_find_focus(&mut self) -> bool {
+        std::mem::take(&mut self.pending_find_focus)
+    }
+
+    /// Find 条关闭(⌘F 第二下 / × / Esc)后焦点归回其下的代码编辑器——复用
+    /// `pending_editor_focus` 机制,次帧 main.rs 用 `active_editor_focus_id`
+    /// 把真实焦点拨回编辑器。
+    pub fn request_editor_focus(&mut self) {
+        self.pending_editor_focus = true;
+        self.pending_find_focus = false;
     }
 
     /// 当前激活 tab 若走原生渲染,返回其编辑器的 `widget::Id`(供
@@ -570,7 +610,12 @@ impl PreviewPane {
             }
             return;
         }
-        let current = self.find.as_ref().unwrap().current.min(hits.len().saturating_sub(1));
+        let current = self
+            .find
+            .as_ref()
+            .unwrap()
+            .current
+            .min(hits.len().saturating_sub(1));
         let idx = if next {
             (current + 1) % hits.len()
         } else {
@@ -591,7 +636,11 @@ impl PreviewPane {
     /// 不移动光标(改动发生在用户聚焦编辑器处,不该被 yank)。供 Workspace 编辑
     /// 事件转发层每收到一个 Edit Action 调用;非锁定 tab/未开条是 no-op。
     pub fn find_refresh_after_edit(&mut self, edited_tab_id: usize) {
-        if !self.find.as_ref().is_some_and(|f| f.tab_id == edited_tab_id) {
+        if !self
+            .find
+            .as_ref()
+            .is_some_and(|f| f.tab_id == edited_tab_id)
+        {
             return;
         }
         let tab_id = edited_tab_id;
@@ -861,7 +910,9 @@ pub(crate) fn extension_to_syntax(path: &std::path::Path) -> String {
         "html" | "htm" => "html",
         "css" => "css",
         "scss" => "scss",
-        "json" => "json",
+        // two-face 语法集没有独立 JSON5 语法,借用 JSON 做近似高亮(JSON5 是
+        // JSON 超集,注释/尾逗号/不加引号的键不会被认出,但比纯文本好)。
+        "json" | "json5" => "json",
         "yaml" | "yml" => "yaml",
         "toml" => "toml",
         "md" | "markdown" => "markdown",
@@ -1633,7 +1684,11 @@ mod tests {
         assert_eq!(s.query, "lo");
         assert_eq!(s.count, 1, "输入后应立即把命中数回填为 1");
         assert_eq!(s.current, 0);
-        let cur = p.tabs()[p.active_idx()].editor.as_ref().unwrap().cursor_position();
+        let cur = p.tabs()[p.active_idx()]
+            .editor
+            .as_ref()
+            .unwrap()
+            .cursor_position();
         assert_eq!(cur, (0, 3), "find_type 应把光标移到第一个命中起点");
 
         // 已锁定同一 tab 再 ⌘F 是 no-op——query/count 保留(供 main 重聚焦);
@@ -1648,7 +1703,11 @@ mod tests {
         p.find_go(true);
         assert_eq!(p.find_state().unwrap().current, 0);
         assert_eq!(
-            p.tabs()[p.active_idx()].editor.as_ref().unwrap().cursor_position(),
+            p.tabs()[p.active_idx()]
+                .editor
+                .as_ref()
+                .unwrap()
+                .cursor_position(),
             (0, 3)
         );
 
@@ -1682,14 +1741,24 @@ mod tests {
         assert_eq!(p.find_state().unwrap().current, 0);
         let _ = s;
         assert_eq!(
-            p.tabs()[p.active_idx()].editor.as_ref().unwrap().cursor_position(),
+            p.tabs()[p.active_idx()]
+                .editor
+                .as_ref()
+                .unwrap()
+                .cursor_position(),
             (0, 0)
         );
 
         // 确定性的推进序列:正向 0→1→2→(wrap)0,再从 0 反向 →2→1。
         p.find_go(true); // 0 → 1
         assert_eq!(p.find_state().unwrap().current, 1);
-        let cursor = |p: &PreviewPane| p.tabs()[p.active_idx()].editor.as_ref().unwrap().cursor_position();
+        let cursor = |p: &PreviewPane| {
+            p.tabs()[p.active_idx()]
+                .editor
+                .as_ref()
+                .unwrap()
+                .cursor_position()
+        };
         assert_eq!(cursor(&p), (2, 0), "current=1 应落在第 3 处命中(行2)");
 
         p.find_go(true); // 1 → 2

@@ -1202,22 +1202,53 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             if let FocusIntent::Preview(kind) = *current_focus
                 && app.active_preview_tab_has_native_editor(kind)
             {
-                // 2026-09-06 原生预览就地可写:键盘焦点在原生编辑器上时 ⌘S 已
-                // 不属于"编辑器自己打字/剪切复制"的范畴,由应用拦下来保存当前
-                // 原生激活 tab(文件内搜索 ⌘F 尚未实现,拆到后续迭代再接入)。
-                // 必须在下面那行 `return` **之前**吃掉,否则会被原样放行给
-                // iced(iced 文本框不认识 ⌘S,会把 s 当普通输入吞掉)。其余按键
-                // 照旧 `return`,交 iced 标准管线直达编辑器。
-                if let WindowEvent::KeyboardInput {
-                    event,
+                // 原生预览闸门内的应用级快捷键:原生编辑器/Find 输入框都是真 iced
+                // widget,普通打字与剪切复制由 iced 消化;但 ⌘S · ⌘F · ⌘G · ⌘↑ ·
+                // Esc 属于"编辑器自己也当普通键吞掉"的组合键,必须先在这里拦下,再
+                // 把没命中的键放行给 iced。这里只把命中映射一个 `Message` 交给 gate
+                // 末尾统一 update——避免为每个组合键重复 update+redraw、也避开闭包
+                // 捕捉 `app` 造成借用冲突。
+                let kind_root = kind;
+                let WindowEvent::KeyboardInput {
+                    event: kev,
                     is_synthetic: false,
                     ..
                 } = event
-                    && event.state == ElementState::Pressed
-                    && modifiers.super_key()
-                    && event.logical_key == winit::keyboard::Key::Character("s".into())
-                {
-                    app.update(Message::PreviewSaveActive(kind));
+                else {
+                    return;
+                };
+                if kev.state != ElementState::Pressed {
+                    return;
+                }
+                let normal_char =
+                    |c: &str| kev.logical_key == winit::keyboard::Key::Character(c.into());
+                let named = |n: winit::keyboard::NamedKey| {
+                    kev.logical_key == winit::keyboard::Key::Named(n)
+                };
+                // 命中一个当前动作;无 Find 会话时 Esc/⌘G/⌘↑ 不抢(没条就别误会要开)。
+                let bar_open = app.preview_find_bar_open(kind_root);
+                let action: Option<Message> = if modifiers.super_key() {
+                    if normal_char("s") {
+                        Some(Message::PreviewSaveActive(kind_root))
+                    } else if normal_char("f") {
+                        // 第二趟 ⌘F 仍是开/聚焦(消息贴合 request_find_focus)。
+                        Some(Message::PreviewFindOpen(kind_root))
+                    } else if bar_open && normal_char("g") {
+                        // 下一个命中(文件内循环)。无条时空放给 iced 无副作用。
+                        Some(Message::PreviewFindGo(kind_root, true))
+                    } else if bar_open && named(winit::keyboard::NamedKey::ArrowUp) {
+                        Some(Message::PreviewFindGo(kind_root, false))
+                    } else {
+                        None
+                    }
+                } else if bar_open && named(winit::keyboard::NamedKey::Escape) {
+                    // Esc 关条并把焦点归还编辑器(`PreviewFindClose` 内层触发)。
+                    Some(Message::PreviewFindClose(kind_root))
+                } else {
+                    None
+                };
+                if let Some(msg) = action {
+                    app.update(msg);
                     window.request_redraw();
                     return;
                 }
@@ -2200,6 +2231,21 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                             .then(|| ws.project_preview.active_editor_focus_id())
                                             .flatten()
                                     });
+                                // ⌘F 打开 Find 条后把焦点给输入框(一次性位,消费即复
+                                // 位)。取的是 `find_field_id(kind)` 这个稳定静态 id——它
+                                // 只出现在有条的那一帧,位与条同帧建立、同帧被这里消费。
+                                let preview_find_focus_id =
+                                    app.active_workspace_mut().and_then(|ws| {
+                                        ws.preview.take_pending_find_focus().then(|| {
+                                            crate::preview::find_field_id(PanelKind::Files)
+                                        })
+                                    });
+                                let project_preview_find_focus_id =
+                                    app.active_workspace_mut().and_then(|ws| {
+                                        ws.project_preview.take_pending_find_focus().then(|| {
+                                            crate::preview::find_field_id(PanelKind::Project)
+                                        })
+                                    });
                                 let edit_session_editor_focus_id =
                                     app.active_workspace_mut().and_then(|ws| {
                                         ws.take_edit_session_focus_pending()
@@ -2325,6 +2371,20 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 ]
                                 .into_iter()
                                 .flatten()
+                                {
+                                    let mut op =
+                                        iced_widget::core::widget::operation::focusable::focus::<()>(
+                                            id,
+                                        );
+                                    run_operate(&mut interface, renderer, &mut op);
+                                }
+
+                                // ⌘F 打开 Find 条时把焦点程序化拨到输入框(`text_input`,
+                                // 一次性位如上)。放在上一段编辑器聚焦之后——同帧不会同时
+                                // 开条又想聚焦编辑器,顺序无冲突。
+                                for id in [preview_find_focus_id, project_preview_find_focus_id]
+                                    .into_iter()
+                                    .flatten()
                                 {
                                     let mut op =
                                         iced_widget::core::widget::operation::focusable::focus::<()>(

@@ -2045,6 +2045,9 @@ impl Workspace {
                     &mut self.preview
                 };
                 pane.clear_dirty_by_id(tab_id);
+                // 落盘成功:若该 tab 上开着文件内 Find 会话,按最新文本重算命中与
+                // 当前定位(编辑把命中行推走/删除后,陈旧索引会导致 ⌘G 跳到错位)。
+                pane.find_refresh_after_edit(tab_id);
             }
             Err(e) => {
                 let err = Some(format!("保存失败: {e}"));
@@ -2060,21 +2063,41 @@ impl Workspace {
     /// 把 `kind` 面板的 Find 命令转发给面板执行。四种都只需要分面板取到变引用
     /// 调对应方法(面板自持 buffer + Find 状态,逻辑全在 pane 内,这里只当跳板,
     /// 避免 workspace 顶部对各项目冗余拆两支)。
+    /// ⌘F 打开同时在面板上置一次性"请求聚焦输入框"(已开着的第二次 ⌘F 也只是
+    /// 把焦点拨回输入框——见 `open_find_on_active` 的 no-op 语义),主循环次帧
+    /// 用 `find_field_id(panel)` 真正把焦点给输入框。
     pub fn preview_find_open(&mut self, kind: PanelKind) {
-        if kind == PanelKind::Project {
-            self.project_preview.open_find_on_active();
+        let pane = if kind == PanelKind::Project {
+            &mut self.project_preview
         } else {
-            self.preview.open_find_on_active();
+            &mut self.preview
+        };
+        pane.open_find_on_active();
+        pane.request_find_focus();
+    }
+
+    /// `kind` 面板的 Find 条当前是否显示(main.rs Esc/⌘ 键盘路由、视图渲染分层
+    /// 共用)。
+    pub fn preview_find_bar_open(&self, kind: PanelKind) -> bool {
+        if kind == PanelKind::Project {
+            self.project_preview.find_bar_open()
+        } else {
+            self.preview.find_bar_open()
         }
     }
 
-    /// 关闭 `kind` 面板 Find 条(× / Esc / ⌘F 里输入框清空后的迁离)。
+    /// 关闭 `kind` 面板 Find 条(× / Esc / ⌘F 里输入框清空后的迁离)。关闭后把
+    /// 焦点拨回其下代码编辑器(`request_editor_focus` 置一次性位,次帧 main.rs
+    /// 用 `active_editor_focus_id` 真正聚焦回)——⌘F 打开时开条会抢走输入框焦
+    /// 点,关闭就该还回去,不许键盘焦点悬空在已消失的 widget 上。
     pub fn preview_find_close(&mut self, kind: PanelKind) {
-        if kind == PanelKind::Project {
-            self.project_preview.close_find();
+        let pane = if kind == PanelKind::Project {
+            &mut self.project_preview
         } else {
-            self.preview.close_find();
-        }
+            &mut self.preview
+        };
+        pane.close_find();
+        pane.request_editor_focus();
     }
 
     /// 键入:转发 query 到面板,让面板当场重算与跳第一个命中。
@@ -3439,6 +3462,13 @@ fn preview_pane_for<'a>(
         PreviewPaneKind::Files => Message::PreviewEditorEvent(tab_id, ev),
         PreviewPaneKind::Project => Message::ProjectPreviewEditorEvent(tab_id, ev),
     };
+    // Find 条与编辑器共享同一份"按面板选消息/悬停态"手法。消息统一走带
+    // `PanelKind` 的顶层 `Message::PreviewFind*`(同 `PreviewSaveActive`,一条
+    // 消息两面板通吃,Files/Project 由 `PanelKind` 区分)。
+    let find_panel = move || match kind {
+        PreviewPaneKind::Files => PanelKind::Files,
+        PreviewPaneKind::Project => PanelKind::Project,
+    };
 
     let widths: Vec<f32> = preview
         .tabs()
@@ -3557,6 +3587,122 @@ fn preview_pane_for<'a>(
             // 的 wry 路由 tab 不 push 任何 iced 元素——那片区域由 main.rs 定位
             // 的 wry webview 子视图负责渲染,现状不变。
             let tab_id = active_tab.id;
+            // 文件内 Find 条:锁着当前激活原生 tab 的会话存在时,在 tab_bar 分隔线
+            // 之下、编辑器之上渲染输入框 + n/m + ⌃ 上一命中 / ⌄ 下一命中 + ×。
+            // 切走文件时 `PreviewPane` 已 cull 掉失配会话,条随之一并消失——既然
+            // open/lifecycle 保证 `find` 总锁着激活原生 tab、此处又只在激活 tab 是
+            // 原生时进入,读数即可,不必再校 tab 归属。
+            if let Some(find) = preview.find_state() {
+                let panel = find_panel();
+                let colors = byteui::theme::color::current();
+                let input = byteui::form::input_text::view(
+                    "在文件中查找…",
+                    &find.query,
+                    false,
+                    Some(crate::preview::find_field_id(panel)),
+                    false,
+                    None,
+                    false,
+                    move |q: String| match panel {
+                        PanelKind::Project => Message::PreviewFindText(PanelKind::Project, q),
+                        _ => Message::PreviewFindText(PanelKind::Files, q),
+                    },
+                );
+                // 命中计数:n 1-based;查无命中(非空 query)标红;新开 empty query
+                // 不显示计数——这条进列就 pad 占用让条高稳定,避免每次刷字数跳动。
+                let count_label: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+                    if find.count > 0 {
+                        text(format!("{}/{}", find.current + 1, find.count))
+                            .size(byteui::theme::font::body())
+                            .color(colors.dim)
+                            .into()
+                    } else if !find.query.is_empty() {
+                        text("0 命中")
+                            .size(byteui::theme::font::body())
+                            .color(colors.red)
+                            .into()
+                    } else {
+                        container(iced_widget::Row::<
+                            Message,
+                            iced_widget::Theme,
+                            iced_renderer::Renderer,
+                        >::new())
+                        .into()
+                    };
+                let hover = move |next: bool| match next {
+                    true => match panel {
+                        PanelKind::Project => HoverId::ProjectPreviewFindNext,
+                        _ => HoverId::PreviewFindNext,
+                    },
+                    false => match panel {
+                        PanelKind::Project => HoverId::ProjectPreviewFindPrev,
+                        _ => HoverId::PreviewFindPrev,
+                    },
+                };
+                let step_icon = move |next: bool| {
+                    let hid = hover(next);
+                    icons::icon_button_entry(
+                        if next {
+                            icons::IconKind::ChevronDown
+                        } else {
+                            icons::IconKind::ChevronUp
+                        },
+                        byteui::theme::icon_size::row(),
+                        false,
+                        false,
+                        app.hover_progress(hid),
+                        false,
+                        byteui::theme::geometry::tab_button_size(),
+                        true,
+                        match (next, panel) {
+                            (true, PanelKind::Project) => {
+                                Message::PreviewFindGo(PanelKind::Project, true)
+                            }
+                            (true, _) => Message::PreviewFindGo(PanelKind::Files, true),
+                            (false, PanelKind::Project) => {
+                                Message::PreviewFindGo(PanelKind::Project, false)
+                            }
+                            (false, _) => Message::PreviewFindGo(PanelKind::Files, false),
+                        },
+                        move |hovered| Message::Hover(hid, hovered),
+                        if next {
+                            "下一个命中 (⌘G)"
+                        } else {
+                            "上一个命中 (⌘↑)"
+                        },
+                    )
+                };
+                // × 关闭条:文字按钮沿模态弹层同款手法(Find 无独立 close SVG)。
+                let close_btn = button(
+                    text("×")
+                        .size(byteui::theme::font::subtitle())
+                        .color(colors.dim),
+                )
+                .on_press(match panel {
+                    PanelKind::Project => Message::PreviewFindClose(PanelKind::Project),
+                    _ => Message::PreviewFindClose(PanelKind::Files),
+                })
+                .padding(0)
+                .style(|_t, _s| button::Style {
+                    background: None,
+                    text_color: byteui::theme::color::current().dim,
+                    ..button::Style::default()
+                });
+                let strip = container(
+                    row![
+                        container(input).width(Length::Fill),
+                        count_label,
+                        step_icon(false),
+                        step_icon(true),
+                        close_btn
+                    ]
+                    .spacing(4)
+                    .align_y(iced_widget::core::Alignment::Center),
+                )
+                .width(Length::Fill)
+                .padding([4, 6]);
+                content = content.push(strip);
+            }
             content = content.push(
                 container(editor.view().map(move |ev| editor_msg(tab_id, ev)))
                     .width(Length::Fill)

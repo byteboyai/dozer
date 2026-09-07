@@ -221,6 +221,14 @@ pub enum HoverId {
     /// Project 面板列表列"收起/展开"按钮(`panel-left/right-close/open`):
     /// 处理方式同 `FileTreeCollapse`(见 `preview_pane_for`)。
     ProjectListCollapse,
+    /// 预览文件 Find 条的上一个/下一个命中(⌃/⌄)与关闭(×)图标按钮,悬停
+    /// DIM→GOLD(处理同 `FilesBranchSwitch`)。Files / Project 预览各一套。
+    PreviewFindPrev,
+    PreviewFindNext,
+    /// Project 面板预览 Find 条同上定向的独立 hover 态(Files / Project 各有
+    /// 一套;× 关闭按钮是文字 glyph,不参与悬停着色)。
+    ProjectPreviewFindPrev,
+    ProjectPreviewFindNext,
     /// Todo 面板列表列"收起/展开"按钮:处理方式同 `FileTreeCollapse`
     /// (见 `extensions::todo::view`)。
     TodoListCollapse,
@@ -4092,6 +4100,14 @@ impl App {
     pub fn active_preview_tab_has_native_editor(&self, kind: PanelKind) -> bool {
         self.active_workspace()
             .map(|ws| ws.active_preview_tab_has_native_editor(kind))
+            .unwrap_or(false)
+    }
+
+    /// `kind` 预览面板的 Find 条当前是否显示。main.rs Esc/⌘ 键盘路由据此决定在
+    /// 原生预览闸门里先吃哪些键(Esc 关条/⌘G 步进只在有条时可行动)。
+    pub fn preview_find_bar_open(&self, kind: PanelKind) -> bool {
+        self.active_workspace()
+            .map(|ws| ws.preview_find_bar_open(kind))
             .unwrap_or(false)
     }
 
