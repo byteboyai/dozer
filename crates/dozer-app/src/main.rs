@@ -1111,6 +1111,17 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     app.update(Message::RailDragEnd);
                     window.request_redraw();
                 }
+                // 文件树内拖拽移动同理:左键松开即结束,悬停命中/合法性校验
+                // 是靠被拖过目录行的 `on_move` 驱动的(`TreeDragOver`),这里
+                // 只负责收尾——有合法待定目标就提交移动,否则原地清空。
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: winit::event::MouseButton::Left,
+                    ..
+                } if app.dragging_tree_item() => {
+                    app.update(Message::Files(extensions::files::Message::TreeDragEnd));
+                    window.request_redraw();
+                }
                 // Todo 面板拖拽排序同理:左键松开即结束并把新顺序写盘(换位
                 // 是靠被拖过卡片的 `on_move` 驱动的,这里只负责收尾)。
                 WindowEvent::MouseInput {

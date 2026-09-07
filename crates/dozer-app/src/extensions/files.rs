@@ -42,6 +42,23 @@ pub(super) struct ContextMenu {
     is_dir: bool,
 }
 
+/// 树内拖拽(文件/文件夹在项目树内移动目录)进行中的状态。`target` 是当前
+/// 悬停命中的合法落点目录,悬停到非法落点(自身/自身子树)或没悬停到任何
+/// 目录行时为 `None`——`TreeDragEnd` 只在 `Some` 时提交移动。
+#[derive(Debug, Clone, PartialEq)]
+struct TreeDrag {
+    source: PathBuf,
+    source_is_dir: bool,
+    target: Option<PathBuf>,
+    /// 按下瞬间的 `App::last_cursor`(窗口逻辑坐标),拖拽期间不更新——
+    /// 内核用它和当前光标算位移,判断这是不是"真的在拖"(同
+    /// `TabDrag::press_pos`/`RailDrag::press_pos` 的既有用法)。单击时的
+    /// 正常光标抖动若不设这道门槛,会被 `TreeDragOver` 当成"拖到了旁边
+    /// 那一行"——2026-09 用户实测反馈:点一下就报"不能把目录移到它自己或
+    /// 其子目录里",根因正是本消息此前无阈值直接生效。
+    press_pos: (f32, f32),
+}
+
 /// 挂在每个 Workspace 上的 Files 面板状态(项目信息卡数据 + 文件树 + 树操作
 /// 弹层)。对应现有 `Workspace` 上 11 个字段。
 #[derive(Default)]
@@ -97,6 +114,10 @@ pub struct WorkspaceState {
     branch_picker_open: bool,
     /// 底栏 git 操作(切换分支/新建仓库)的最近错误,就地显示在底栏下缘。
     git_error: Option<String>,
+    /// 树内拖拽移动进行中的状态,`None` 表示当前没有树内拖拽——见 `TreeDrag`
+    /// 文档。按下树行武装(`arm_tree_drag`),`TreeDragOver`/`TreeDragEnd`
+    /// 更新/收尾。
+    tree_drag: Option<TreeDrag>,
 }
 
 /// 一次 git 仓库信息加载的结果(分支栏渲染用)。判"是否在仓库内"靠
@@ -135,10 +156,6 @@ pub enum Message {
     /// 右键菜单"搜索":内核拦截,不进 `update`——由内核映射成
     /// `search::Message::SearchOpen` 打开文件树右键作用域的搜索弹窗。
     OpenSearch(PathBuf, bool),
-    /// 单击文件行:在内核里打开预览。该面板本身不渲染预览(预览是被窗格),
-    /// 故文件行点击要跨过 `files::Message` 边界、由内核拦截映射到
-    /// `Message::PreviewOpenPath`——本模块不渲染预览,`update()` 不处理它。
-    OpenFile(PathBuf),
     /// 内核拦截,不进 `update`——真正的系统剪贴板写入需要 `main.rs` 的
     /// `Clipboard` 句柄,`update()` 拿不到(见设计文档"关键语义确认")。
     CopyPath(PathBuf, PathKind),
@@ -214,6 +231,23 @@ pub enum Message {
     /// 一次拖入的异步移动结果:成功时刷新 `target` 目录,失败时置
     /// `tree_error`。
     FileDropDone(i64, PathBuf, Result<(), String>),
+    /// 树内行被按下:武装拖拽,同时保留原有点击语义(展开/折叠目录,或打开
+    /// 文件——文件要跨到 `Message::PreviewOpenPath`,该面板本身不渲染预览)。
+    /// 这条跨内核边界:由 `App::update` 拦截转发,`files::update()` 收到会
+    /// `unreachable!`。
+    TreeRowPress {
+        path: PathBuf,
+        is_dir: bool,
+    },
+    /// 树内拖拽悬停到某个目录行(项目内部移动专用,与外部 OS 拖拽的
+    /// `FileDragHover` 分开走——内部拖拽还要校验落点合法性,见
+    /// `is_valid_move_target`,非法落点不高亮、不记为待定目标)。
+    TreeDragOver(PathBuf),
+    /// 树内拖拽松开左键:main.rs 全局 `MouseInput::Released` 在
+    /// `App::dragging_tree_item()` 为真时发出。有合法待定目标就提交移动
+    /// (复用 `FileDrop` 的 `move_item` + `FileDropDone` 收尾),否则原地
+    /// 清空,不做任何文件系统操作。
+    TreeDragEnd,
 }
 
 /// 文件树工具行里带 hover 动画的 icon 按钮。与内核 `HoverId` 一一对应
@@ -564,6 +598,49 @@ impl WorkspaceState {
     }
 }
 
+impl WorkspaceState {
+    /// 树内行被按下:武装拖拽(见 `Message::TreeRowPress` 文档)。该消息本身
+    /// 由内核拦截(还要跨到 `PreviewOpenPath`),不进 `files::update()`,故
+    /// 内核直接调用这个方法而不是发一条 `files::Message`。
+    pub(crate) fn arm_tree_drag(
+        &mut self,
+        source: PathBuf,
+        source_is_dir: bool,
+        press_pos: (f32, f32),
+    ) {
+        self.tree_drag = Some(TreeDrag {
+            source,
+            source_is_dir,
+            target: None,
+            press_pos,
+        });
+    }
+
+    /// 树内拖拽是否正在进行(供 `App::dragging_tree_item()` 判断全局左键
+    /// 松开是否该收尾这场拖拽——同 `dragging_rail`/`dragging_tab` 的用法)。
+    pub(crate) fn is_dragging_tree_item(&self) -> bool {
+        self.tree_drag.is_some()
+    }
+
+    /// 当前这场树内拖拽按下瞬间的光标位置(`None` = 没有拖拽在进行)——供
+    /// 内核在 `TreeDragOver` 到达时和当前光标比对,判断是否已越过阈值、
+    /// 真正算作一次拖拽,见 `TreeDrag::press_pos` 文档。
+    pub(crate) fn tree_drag_press_pos(&self) -> Option<(f32, f32)> {
+        self.tree_drag.as_ref().map(|d| d.press_pos)
+    }
+
+    /// `TreeDragEnd` 收尾前问一句:这一按其实只是单击一个文件(没有产生
+    /// 合法拖拽目标),该不该由内核补发 `PreviewOpenPath`——`TreeRowPress`
+    /// 不再立即打开文件就是为了避免预览 webview 在拖拽途中冒出来挡住画面
+    /// (见其文档)。目录不需要这个:它的点击语义(展开/折叠)按下那一刻
+    /// 已经立即执行。**必须在 `files::update()` 消费 `tree_drag` 之前调用**
+    /// ——那之后状态已被 `TreeDragEnd` 的处理器 `take()` 走。
+    pub(crate) fn pending_click_open_file(&self) -> Option<PathBuf> {
+        let drag = self.tree_drag.as_ref()?;
+        (!drag.source_is_dir && drag.target.is_none()).then(|| drag.source.clone())
+    }
+}
+
 impl AppState {
     /// 供内核判断"右键菜单该不该显示"(`App::view()` 顶层互斥浮层判断链
     /// 用)。
@@ -825,9 +902,6 @@ pub fn update(
         Message::CopyPath(..) => {
             unreachable!("由内核拦截处理,见 files::Message::CopyPath 文档")
         }
-        Message::OpenFile(_) => {
-            unreachable!("由内核拦截处理,见 files::Message::OpenFile 文档")
-        }
         Message::OpenSearch(..) => {
             unreachable!("由内核拦截处理,映射成 search::Message::SearchOpen")
         }
@@ -890,6 +964,51 @@ pub fn update(
             }
             Err(e) => ws_state.tree_error = Some(e),
         },
+        Message::TreeRowPress { .. } => {
+            unreachable!("由内核拦截处理,见 files::Message::TreeRowPress 文档")
+        }
+        // 树内拖拽悬停:只在落点合法(非自身/自身子树,见
+        // `is_valid_move_target`)时记为待定目标并高亮——复用外部拖拽同一份
+        // `drag_hover` 渲染,不用另画一套。悬停到折叠的目录顺带自动展开,
+        // 方便继续往深一层拖(同外部 OS 拖拽既有的 `expand_dir_if_collapsed`
+        // 行为一致)。
+        Message::TreeDragOver(target) => {
+            let Some(drag) = &mut ws_state.tree_drag else {
+                return;
+            };
+            if is_valid_move_target(&drag.source, drag.source_is_dir, &target) {
+                drag.target = Some(target.clone());
+                ws_state.drag_hover = std::iter::once(target.clone()).collect();
+                expand_dir_if_collapsed(ws_state, &target);
+            } else {
+                drag.target = None;
+                ws_state.drag_hover = HashSet::new();
+            }
+        }
+        // 树内拖拽松开:有合法待定目标就提交移动,复用 `FileDrop` 那套
+        // `move_item` + `spawn_blocking` + `FileDropDone` 收尾逻辑;没有
+        // (没悬停到任何目录/悬停到的都是非法落点)就只清状态,不碰文件系统。
+        Message::TreeDragEnd => {
+            let Some(drag) = ws_state.tree_drag.take() else {
+                return;
+            };
+            ws_state.drag_hover = HashSet::new();
+            let Some(target) = drag.target else {
+                return;
+            };
+            let source = drag.source;
+            let is_dir = drag.source_is_dir;
+            let refresh_target = target.clone();
+            handle.spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::project::move_item(&source, is_dir, &target)?;
+                    Ok::<(), String>(())
+                })
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()));
+                emit(Message::FileDropDone(project_id, refresh_target, result));
+            });
+        }
     }
 }
 
@@ -972,6 +1091,45 @@ pub fn tree_drop_target(
         Some(row.path.clone())
     } else {
         None
+    }
+}
+
+/// 树内拖拽合法落点校验:只拒绝"移到自己"、"目录移进自己子树"(会产生
+/// 环/孤儿)。`starts_with` 走路径分量比较(不是字符串前缀),`/proj/ab`
+/// 不会被误判成 `/proj/a` 的子路径。
+///
+/// 拖到"当前所在的父目录"(true no-op)**不**在这里拒绝——2026-09 用户
+/// 实测反馈"无法拖到父目录":这条曾经的"帮用户挡掉无意义操作"的好心
+/// 拒绝,实际效果只是悬停时不高亮、用户以为拖拽坏了。真无意义时
+/// `crate::project::move_item` 自己会安全兜底(目标路径与源相同:文件走
+/// "已存在同名项"报错,目录走"不能移到它自己"报错,`std::fs::rename`
+/// 都不会被调用),不需要在这一层提前拦。
+pub(super) fn is_valid_move_target(
+    source: &std::path::Path,
+    source_is_dir: bool,
+    target: &std::path::Path,
+) -> bool {
+    if target == source {
+        return false;
+    }
+    if source_is_dir && target.starts_with(source) {
+        return false;
+    }
+    true
+}
+
+/// 树内拖拽悬停到折叠的目录时自动展开,方便继续往深一层拖——同外部 OS
+/// 拖拽既有的 `App::expand_files_dir_if_collapsed` 行为一致,只是这里操作
+/// 对象是 `WorkspaceState` 本身(`files::update()` 已经有 `&mut
+/// WorkspaceState`,不需要跨到内核)。已展开则不重复调用 `toggle`(避免
+/// 误触发折叠)。
+fn expand_dir_if_collapsed(ws_state: &mut WorkspaceState, dir: &std::path::Path) {
+    let already_expanded = ws_state
+        .visible_tree_rows()
+        .iter()
+        .any(|r| r.path == dir && r.expanded);
+    if !already_expanded && let Some(tree) = &mut ws_state.file_tree {
+        tree.toggle(dir);
     }
 }
 
@@ -1070,6 +1228,11 @@ pub fn view<'a>(
         let root_state = delivery::dir_status(root, &ws_state.git_statuses)
             .unwrap_or(delivery::TreeState::Unchanged);
         let root_color = tree_state_color(root_state);
+        // 根目录本身也是合法的拖拽落点(项目内移动到顶层),但它不在
+        // `visible_tree_rows()` 循环里(单独渲成静态头部,见上方注释),
+        // 得在这里单独补上同一套"命中即高亮 + 悬停上报"逻辑,否则永远拖不
+        // 到根目录(2026-09 用户实测反馈)。
+        let root_is_drop_target = ws_state.drag_hover.contains(root);
         let root_header = container(
             row![
                 icons::view(
@@ -1085,13 +1248,32 @@ pub fn view<'a>(
             .align_y(iced_widget::core::Alignment::Center),
         )
         .width(Length::Fill)
-        .padding([0, 0]);
-        header = header.push(MouseArea::new(root_header).on_right_press(
-            Message::ContextMenuOpen {
-                path: root.to_path_buf(),
-                is_dir: true,
+        .padding([0, 0])
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            border: if root_is_drop_target {
+                Border {
+                    color: byteui::theme::color::current().gold,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                }
+            } else {
+                Border {
+                    color: Color::TRANSPARENT,
+                    width: 0.0,
+                    radius: 0.0.into(),
+                }
             },
-        ));
+            ..container::Style::default()
+        });
+        let mut root_area = MouseArea::new(root_header).on_right_press(Message::ContextMenuOpen {
+            path: root.to_path_buf(),
+            is_dir: true,
+        });
+        if ws_state.tree_drag.is_some() {
+            let root_target = root.to_path_buf();
+            root_area = root_area.on_move(move |_| Message::TreeDragOver(root_target.clone()));
+        }
+        header = header.push(root_area);
     }
 
     if let Some(err) = &ws_state.tree_error {
@@ -1198,10 +1380,9 @@ pub fn view<'a>(
             ]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center);
-            let msg = if row.is_dir {
-                Message::Toggle(row.path.clone())
-            } else {
-                Message::OpenFile(row.path.clone())
+            let msg = Message::TreeRowPress {
+                path: row.path.clone(),
+                is_dir: row.is_dir,
             };
             let is_selected = ws_state.tree_selected.as_deref() == Some(row.path.as_path());
             // 外部文件拖拽落点:目录被命中 → 整行金色描边高亮(仅目录可作落点)。
@@ -1236,12 +1417,19 @@ pub fn view<'a>(
                     },
                     ..button::Style::default()
                 });
-            tree_col = tree_col.push(MouseArea::new(row_btn).on_right_press(
-                Message::ContextMenuOpen {
-                    path: row.path.clone(),
-                    is_dir: row.is_dir,
-                },
-            ));
+            let mut row_area = MouseArea::new(row_btn).on_right_press(Message::ContextMenuOpen {
+                path: row.path.clone(),
+                is_dir: row.is_dir,
+            });
+            // 树内拖拽进行中且这一行是目录:光标划过即上报为悬停命中,驱动
+            // `TreeDragOver` 校验落点合法性并刷新 `drag_hover` 高亮(同外部
+            // OS 拖拽复用的那一圈金色描边)。非目录行/没有拖拽在进行时不挂
+            // `on_move`,避免无意义消息。
+            if row.is_dir && ws_state.tree_drag.is_some() {
+                let drag_target = row.path.clone();
+                row_area = row_area.on_move(move |_| Message::TreeDragOver(drag_target.clone()));
+            }
+            tree_col = tree_col.push(row_area);
             let is_new_target = matches!(
                 &ws_state.tree_edit,
                 Some(TreeEdit {
@@ -1950,6 +2138,64 @@ mod tests {
     }
 
     #[test]
+    fn is_valid_move_target_rejects_moving_dir_into_itself() {
+        assert!(!is_valid_move_target(
+            &PathBuf::from("/proj/a"),
+            true,
+            &PathBuf::from("/proj/a"),
+        ));
+    }
+
+    #[test]
+    fn is_valid_move_target_rejects_moving_dir_into_own_descendant() {
+        assert!(!is_valid_move_target(
+            &PathBuf::from("/proj/a"),
+            true,
+            &PathBuf::from("/proj/a/b"),
+        ));
+    }
+
+    /// 2026-09 用户实测反馈"无法拖到父目录"后取消了这条拒绝——真无意义时
+    /// `move_item` 自己会安全兜底,不需要在悬停高亮这一层提前挡。
+    #[test]
+    fn is_valid_move_target_allows_dropping_onto_current_parent_as_true_noop() {
+        assert!(is_valid_move_target(
+            &PathBuf::from("/proj/a/f.rs"),
+            false,
+            &PathBuf::from("/proj/a"),
+        ));
+    }
+
+    #[test]
+    fn is_valid_move_target_allows_moving_file_to_unrelated_dir() {
+        assert!(is_valid_move_target(
+            &PathBuf::from("/proj/a/f.rs"),
+            false,
+            &PathBuf::from("/proj/c"),
+        ));
+    }
+
+    #[test]
+    fn is_valid_move_target_allows_moving_dir_to_unrelated_dir() {
+        assert!(is_valid_move_target(
+            &PathBuf::from("/proj/a"),
+            true,
+            &PathBuf::from("/proj/z"),
+        ));
+    }
+
+    /// 目录名前缀相同但不是真子路径(`/proj/ab` 不是 `/proj/a` 的子目录)不能
+    /// 被 `starts_with` 字符串前缀误判——必须走路径分量比较。
+    #[test]
+    fn is_valid_move_target_does_not_confuse_sibling_with_shared_prefix() {
+        assert!(is_valid_move_target(
+            &PathBuf::from("/proj/a"),
+            true,
+            &PathBuf::from("/proj/ab"),
+        ));
+    }
+
+    #[test]
     fn tree_drop_target_respects_scroll() {
         let rows = vec![row("/a", true), row("/b", true), row("/c", true)];
         let bounds = (0.0, 0.0, 500.0, 500.0);
@@ -2061,6 +2307,233 @@ mod tests {
             |_| {},
         );
         assert_eq!(ws_state.tree_selected, Some(sub));
+    }
+
+    #[test]
+    fn arm_tree_drag_records_source_and_starts_with_no_target() {
+        let mut ws_state = WorkspaceState::default();
+        assert!(!ws_state.is_dragging_tree_item());
+        ws_state.arm_tree_drag(PathBuf::from("/proj/a"), true, (10.0, 20.0));
+        assert!(ws_state.is_dragging_tree_item());
+    }
+
+    #[test]
+    fn tree_drag_press_pos_returns_press_point_recorded_at_arm_time() {
+        let mut ws_state = WorkspaceState::default();
+        assert_eq!(ws_state.tree_drag_press_pos(), None);
+        ws_state.arm_tree_drag(PathBuf::from("/proj/a"), true, (10.0, 20.0));
+        assert_eq!(ws_state.tree_drag_press_pos(), Some((10.0, 20.0)));
+    }
+
+    #[test]
+    fn pending_click_open_file_returns_source_when_file_press_had_no_drag_target() {
+        let mut ws_state = WorkspaceState::default();
+        ws_state.arm_tree_drag(PathBuf::from("/proj/f.rs"), false, (0.0, 0.0));
+        assert_eq!(
+            ws_state.pending_click_open_file(),
+            Some(PathBuf::from("/proj/f.rs"))
+        );
+    }
+
+    #[test]
+    fn pending_click_open_file_none_once_a_drag_target_is_recorded() {
+        let mut ws_state = WorkspaceState::default();
+        ws_state.arm_tree_drag(PathBuf::from("/proj/f.rs"), false, (0.0, 0.0));
+        ws_state.tree_drag.as_mut().unwrap().target = Some(PathBuf::from("/proj/dst"));
+        assert_eq!(ws_state.pending_click_open_file(), None);
+    }
+
+    #[test]
+    fn pending_click_open_file_none_for_directory_source() {
+        let mut ws_state = WorkspaceState::default();
+        ws_state.arm_tree_drag(PathBuf::from("/proj/dir"), true, (0.0, 0.0));
+        assert_eq!(ws_state.pending_click_open_file(), None);
+    }
+
+    #[test]
+    fn pending_click_open_file_none_when_no_drag_armed() {
+        let ws_state = WorkspaceState::default();
+        assert_eq!(ws_state.pending_click_open_file(), None);
+    }
+
+    #[tokio::test]
+    async fn tree_drag_over_expands_collapsed_target_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("child.txt"), b"hi").unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+        ws_state.arm_tree_drag(dir.path().join("other.txt"), false, (0.0, 0.0));
+
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::TreeDragOver(sub.clone()),
+            1,
+            &handle,
+            |_| {},
+        );
+
+        assert!(
+            ws_state
+                .visible_tree_rows()
+                .iter()
+                .any(|r| r.path == sub && r.expanded)
+        );
+    }
+
+    #[tokio::test]
+    async fn tree_drag_over_does_not_toggle_an_already_expanded_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        // 空目录 `toggle` 不会标记 expanded(无可展开内容,见 `FileTree::
+        // toggle` 文档),得放一个子项才能让"已展开"这个前提成立。
+        std::fs::write(sub.join("child.txt"), b"hi").unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        ws_state.file_tree.as_mut().unwrap().toggle(&sub);
+        assert!(
+            ws_state
+                .visible_tree_rows()
+                .iter()
+                .any(|r| r.path == sub && r.expanded)
+        );
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+        ws_state.arm_tree_drag(dir.path().join("other.txt"), false, (0.0, 0.0));
+
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::TreeDragOver(sub.clone()),
+            1,
+            &handle,
+            |_| {},
+        );
+
+        // 已展开的目录不该被再 toggle 一次(那会变成收起)。
+        assert!(
+            ws_state
+                .visible_tree_rows()
+                .iter()
+                .any(|r| r.path == sub && r.expanded)
+        );
+    }
+
+    #[tokio::test]
+    async fn tree_drag_over_valid_target_sets_target_and_highlight() {
+        let mut ws_state = WorkspaceState::default();
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+        ws_state.arm_tree_drag(PathBuf::from("/proj/a/f.rs"), false, (0.0, 0.0));
+
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::TreeDragOver(PathBuf::from("/proj/c")),
+            1,
+            &handle,
+            |_| {},
+        );
+
+        assert_eq!(
+            ws_state.tree_drag.as_ref().and_then(|d| d.target.clone()),
+            Some(PathBuf::from("/proj/c"))
+        );
+        assert!(ws_state.drag_hover.contains(&PathBuf::from("/proj/c")));
+    }
+
+    #[tokio::test]
+    async fn tree_drag_over_invalid_target_clears_target_and_highlight() {
+        let mut ws_state = WorkspaceState::default();
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+        // 目录拖到自己的子目录:非法落点,不该被记为待定目标或高亮。
+        ws_state.arm_tree_drag(PathBuf::from("/proj/a"), true, (0.0, 0.0));
+
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::TreeDragOver(PathBuf::from("/proj/a/b")),
+            1,
+            &handle,
+            |_| {},
+        );
+
+        assert_eq!(
+            ws_state.tree_drag.as_ref().and_then(|d| d.target.clone()),
+            None
+        );
+        assert!(ws_state.drag_hover.is_empty());
+    }
+
+    #[tokio::test]
+    async fn tree_drag_end_without_target_clears_drag_state_without_moving_anything() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("f.txt");
+        std::fs::write(&file, b"hi").unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+        ws_state.arm_tree_drag(file.clone(), false, (0.0, 0.0));
+
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::TreeDragEnd,
+            1,
+            &handle,
+            |_| panic!("no target armed, TreeDragEnd 不该 emit 任何消息"),
+        );
+
+        assert!(!ws_state.is_dragging_tree_item());
+        assert!(ws_state.drag_hover.is_empty());
+        assert!(file.exists());
+    }
+
+    #[tokio::test]
+    async fn tree_drag_end_with_valid_target_moves_file_and_refreshes_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let file = dir.path().join("f.txt");
+        std::fs::write(&file, b"hi").unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+        ws_state.arm_tree_drag(file.clone(), false, (0.0, 0.0));
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::TreeDragOver(sub.clone()),
+            1,
+            &handle,
+            |_| {},
+        );
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let tx = std::sync::Mutex::new(Some(tx));
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::TreeDragEnd,
+            1,
+            &handle,
+            move |msg| {
+                if let Some(tx) = tx.lock().unwrap().take() {
+                    let _ = tx.send(msg);
+                }
+            },
+        );
+        assert!(!ws_state.is_dragging_tree_item());
+        let done_msg = rx.await.unwrap();
+        update(&mut ws_state, &mut app_state, done_msg, 1, &handle, |_| {});
+
+        assert!(!file.exists());
+        assert!(sub.join("f.txt").exists());
+        assert!(ws_state.tree_error.is_none());
     }
 
     #[test]

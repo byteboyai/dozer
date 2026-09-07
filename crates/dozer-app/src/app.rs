@@ -722,6 +722,24 @@ fn tab_drag_past_threshold(press_pos: (f32, f32), cursor: (f32, f32)) -> bool {
     dx * dx + dy * dy > TAB_DRAG_CONFIRM_THRESHOLD_PX * TAB_DRAG_CONFIRM_THRESHOLD_PX
 }
 
+/// 文件树内拖拽确认阈值。同 `TAB_DRAG_CONFIRM_THRESHOLD_PX` 手法照抄,但不
+/// 复用它——理由同 `RailDrag` 文档:分开定义,校验逻辑改动互不牵连。
+const TREE_DRAG_CONFIRM_THRESHOLD_PX: f32 = 4.0;
+
+/// `drag.press_pos` 到 `cursor` 的位移是否已越过 [`TREE_DRAG_CONFIRM_THRESHOLD_PX`]。
+/// `files::Message::TreeRowPress`(见其文档)"按下即武装"是同一个已知会
+/// 抖动的模式(同 `tab_drag_past_threshold` 修的那个 bug):单击落点到抬起
+/// 之间的亚像素抖动偶尔会越界到邻居目录行的命中框,`TreeDragOver` 若不设
+/// 这道门槛会把这次抖动当成"拖到了旁边那一行",直接判定合法性并可能提交
+/// 移动——2026-09 用户实测反馈:点一下目录就报"不能把目录移到它自己或其
+/// 子目录里"。`App::update` 收到 `TreeDragOver` 时先过这道阈值再转发给
+/// `files::update()`,未越过就整条丢弃,`drag.target` 保持原值不变。
+fn tree_drag_past_threshold(press_pos: (f32, f32), cursor: (f32, f32)) -> bool {
+    let dx = cursor.0 - press_pos.0;
+    let dy = cursor.1 - press_pos.1;
+    dx * dx + dy * dy > TREE_DRAG_CONFIRM_THRESHOLD_PX * TREE_DRAG_CONFIRM_THRESHOLD_PX
+}
+
 /// 主界面当前几何状态的只读快照(main.rs 拖拽追踪/离屏几何计算用途,
 /// `Copy` 类型直接按值传递)。取代旧 `PanelLayout` 单独传递的做法——
 /// 新几何公式(webview bounds/焦点路由/IME 光标)都依赖"当前是哪个视图、
@@ -3953,6 +3971,13 @@ impl App {
         self.rail_drag.is_some()
     }
 
+    /// 当前是否正在拖拽文件树内的某一行(main.rs 全局左键松开靠它判断该不
+    /// 该发 `TreeDragEnd` 收尾——同 `dragging_rail`/`dragging_tab` 的用法)。
+    pub(crate) fn dragging_tree_item(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.files.is_dragging_tree_item())
+    }
+
     /// 当前正被拖拽的面板种类(`None` = 未在拖拽)——视图层(`icon_rail`
     /// 源图标变淡 / `rail_drag_ghost` 幽灵图标取图标)据此判断"这是不是
     /// 我"。薄包装 `dragged_panel_kind` 自由函数(同 `rail_drag_move`
@@ -5354,13 +5379,6 @@ impl App {
             Message::Files(files::Message::CopyPath(path, kind)) => {
                 let _ = (path, kind); // main.rs 拦截处理写剪贴板,这里维持现状空分支
             }
-            Message::Files(files::Message::OpenFile(path)) => {
-                // 单击文件行打开预览——`files` 模块不认识预览域,这条消息由
-                // 内核拦截转发成核心的 `PreviewOpenPath`(同
-                // `files::Message::CopyPath`,不能落进下面的兜底分支,否则会
-                // 命中 `files::update` 里的 `unreachable!`)。
-                self.update(Message::PreviewOpenPath(path));
-            }
             Message::Files(files::Message::OpenSearch(path, is_dir)) => {
                 // 右键菜单"搜索":跨 `files::Message` 边界,由内核把它映射成
                 // `search::Message::SearchOpen`。先关右键菜单(否则搜索弹窗
@@ -5397,9 +5415,50 @@ impl App {
             Message::Files(files::Message::TextInputMenuOpen(target)) => {
                 self.update(Message::TextInputMenuOpen(target));
             }
+            // 树内行被按下:先武装拖拽(供 main.rs 全局松开左键时收尾)。目录
+            // 顺带立即 `Toggle`(files 域内,展开/折叠与它本身能不能被拖走
+            // 互不冲突,立即执行没有副作用)。文件的"打开预览"**不**在这里
+            // 立即发——预览用的原生 wry webview 恒盖在 GPU 内容最上层(见
+            // `sync_previews` 文档),按下就打开的话,若这一按其实是拖拽的
+            // 起点,新冒出来的 webview 会挡住被拖行/光标的视觉(2026-09 用户
+            // 实测反馈:拖动时文件和鼠标指针都看不到)。改成推迟到松开、且
+            // 确认没有产生合法拖拽目标(真的只是单击)时才发,见下面
+            // `Message::Files(msg)` catch-all 里对 `TreeDragEnd` 的特判。
+            Message::Files(files::Message::TreeRowPress { path, is_dir }) => {
+                let press_pos = self.last_cursor;
+                if let Some(ws) = self.active_workspace_mut() {
+                    ws.files.arm_tree_drag(path.clone(), is_dir, press_pos);
+                }
+                if is_dir {
+                    self.update(Message::Files(files::Message::Toggle(path)));
+                }
+            }
+            // 树内拖拽悬停确认门槛:同 `tab_drag_past_threshold` 修的那类
+            // bug(见 `tree_drag_past_threshold` 文档)——`TreeRowPress` 按下
+            // 即武装,若不设阈值,单击时的正常光标抖动会被这条消息当成"拖到
+            // 了旁边那一行",直接判定合法性/高亮/落盘。未越过阈值时整条丢弃
+            // (不转发给下面的 catch-all → `files::update()`),`drag.target`
+            // 保持原值不变,越过阈值后的悬停照常走 catch-all 处理。
+            Message::Files(files::Message::TreeDragOver(_))
+                if !self
+                    .active_workspace()
+                    .and_then(|ws| ws.files.tree_drag_press_pos())
+                    .is_some_and(|press_pos| {
+                        tree_drag_past_threshold(press_pos, self.last_cursor)
+                    }) => {}
             Message::Files(msg) => {
                 let Some(project_id) = self.active_project_id else {
                     return;
+                };
+                // `TreeDragEnd` 收尾前问一句"这其实是不是单击一个文件"(见
+                // `TreeRowPress` 文档:文件的打开推迟到这里才决定)——必须在
+                // `files::update()` 消费掉 `tree_drag` 之前问,`files::update()`
+                // 自己不认识 `PreviewOpenPath`,这条判断/转发只能留在内核。
+                let pending_open_after_click = if matches!(&msg, files::Message::TreeDragEnd) {
+                    self.active_workspace()
+                        .and_then(|ws| ws.files.pending_click_open_file())
+                } else {
+                    None
                 };
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
@@ -5411,6 +5470,9 @@ impl App {
                     return;
                 };
                 files::update(&mut ws.files, app_files, msg, project_id, &handle, emit);
+                if let Some(path) = pending_open_after_click {
+                    self.update(Message::PreviewOpenPath(path));
+                }
             }
             Message::Project(
                 msg @ (project::Message::GitRefreshed(project_id, ..)
@@ -9476,6 +9538,32 @@ mod tests {
         assert!(tab_drag_past_threshold(
             (0.0, 0.0),
             (TAB_DRAG_CONFIRM_THRESHOLD_PX + 1.0, 0.0)
+        ));
+    }
+
+    /// `tree_drag_past_threshold` 同款三条用例(同 `tab_drag_past_threshold`
+    /// 的对应测试)——2026-09 用户实测反馈"点一下目录就报'不能把目录移到
+    /// 它自己或其子目录里'"的根因防回归测试:单击时按下瞬间到抬起前的
+    /// 亚像素抖动不该被当成一次真实拖拽。
+    #[test]
+    fn tree_drag_past_threshold_false_when_cursor_has_not_moved() {
+        assert!(!tree_drag_past_threshold((100.0, 100.0), (100.0, 100.0)));
+        assert!(!tree_drag_past_threshold((100.0, 100.0), (101.0, 100.0)));
+    }
+
+    #[test]
+    fn tree_drag_past_threshold_false_when_exactly_at_threshold() {
+        assert!(!tree_drag_past_threshold(
+            (0.0, 0.0),
+            (TREE_DRAG_CONFIRM_THRESHOLD_PX, 0.0)
+        ));
+    }
+
+    #[test]
+    fn tree_drag_past_threshold_true_once_cursor_moves_past_it() {
+        assert!(tree_drag_past_threshold(
+            (0.0, 0.0),
+            (TREE_DRAG_CONFIRM_THRESHOLD_PX + 1.0, 0.0)
         ));
     }
 
