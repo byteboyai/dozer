@@ -2677,14 +2677,12 @@ impl App {
         let Some(ws) = self.active_workspace() else {
             return;
         };
-        let row = ws
+        let already_expanded = ws
             .files
             .visible_tree_rows()
             .iter()
             .find(|r| r.path == dir)
-            .cloned();
-        let already_expanded = row.as_ref().is_none_or(|r| r.expanded);
-        tracing::warn!(?dir, ?row, already_expanded, "DEBUG dnd: expand_files_dir_if_collapsed");
+            .is_none_or(|r| r.expanded);
         if !already_expanded {
             self.update(Message::Files(files::Message::Toggle(dir.to_path_buf())));
         }

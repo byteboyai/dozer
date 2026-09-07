@@ -237,22 +237,46 @@ fn file_drag_position() -> Option<(f32, f32)> {
 static FILE_DRAG_WINDOW: std::sync::OnceLock<std::sync::Arc<winit::window::Window>> =
     std::sync::OnceLock::new();
 
+// macOS 专有：装覆写时顺手存一份内容 NSView 的裸指针,供覆写体调
+// `convertPoint:fromView:` 把窗口坐标换算成这块 view 自己的本地坐标系
+// （见 `install_file_drag_position_tracker` 文档"坐标换算"一段）。只在
+// 主线程读写(AppKit 回调/`install_*` 安装都在主线程),用 `Cell` 免加锁。
+// 存活期与窗口本身相同,不需要释放。
+#[cfg(target_os = "macos")]
+thread_local! {
+    static FILE_DRAG_CONTENT_VIEW: std::cell::Cell<*mut objc2_app_kit::NSView> =
+        const { std::cell::Cell::new(std::ptr::null_mut()) };
+}
+
 /// macOS 专有：给内容 NSView 的运行时类新增 `draggingUpdated:` 覆写，补上
 /// winit 没实现的这一环（见 [`FILE_DRAG_POSITION`] 文档）。同 `install_
 /// topbar_drag_guard` 的手法——`class_addMethod` 只新增全新 selector，不碰
 /// winit 自己已经实现的 `draggingEntered:`/`performDragOperation:`。
 ///
-/// 覆写体只做两件事：把 `[sender draggingLocation]`（AppKit 坐标，原点左
-/// 下、Y 向上）翻转成逻辑坐标写进 `FILE_DRAG_POSITION`，再调
-/// [`FILE_DRAG_WINDOW`] 的 `request_redraw()`——真正的命中测试/高亮/自动
-/// 展开仍在 Rust 侧 `RedrawRequested` 里读这个静态量执行，这个 native
-/// 覆写本身不碰 `App`/`Message`。
+/// 坐标换算：`[sender draggingLocation]` 给的是窗口 base 坐标系的点，直接
+/// 拿窗口高度做算术翻转一度踩了坑——`fullSizeContentView` 窗口的标题栏/
+/// 内容视图边界关系没有一份公开、稳定的算术公式（`NSWindow.
+/// contentRectForFrameRect:`、`inner_size()` 各种推导都实测跟
+/// `draggingLocation` 对不上，偏差还不是个简单常数）。改用 AppKit 自己的
+/// `[contentView convertPoint:loc fromView:nil]`——这是官方指定的"从窗口
+/// 坐标转某个 view 本地坐标"的转换,不管标题栏怎么算都会给对的答案;若这块
+/// view `isFlipped`(iced/wgpu 内容视图通常是),转换结果已经是原点左上、Y
+/// 向下,直接就是 `files_drop_target` 要的逻辑坐标,不需要再手动翻转。
+///
+/// 挂载对象是**窗口的 delegate**,不是内容 NSView——读 winit 0.30.13 源码
+/// (`window_delegate.rs`)确认 `draggingEntered:`/`performDragOperation:`/
+/// `draggingExited:` 三个方法和 `registerForDraggedTypes:` 调用都在
+/// `WindowDelegate` 类上,不在内容 view 上;挂错对象时 `class_addMethod`
+/// 照样报成功(纯运行时类操作,不检查这个类是不是真的会收到拖拽回调),
+/// 但 AppKit 实际派发拖拽事件时根本不会问这个 view,已用日志实测确认
+/// (`class_addMethod` 成功但覆写体从未被调用)。
 #[cfg(target_os = "macos")]
 fn install_file_drag_position_tracker(window: &std::sync::Arc<winit::window::Window>) {
     use objc2::encode::Encode;
+    use objc2::rc::Retained;
     use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
     use objc2::{ffi, sel};
-    use objc2_app_kit::NSDragOperation;
+    use objc2_app_kit::{NSDragOperation, NSView};
     use objc2_foundation::NSPoint;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -265,22 +289,34 @@ fn install_file_drag_position_tracker(window: &std::sync::Arc<winit::window::Win
         return;
     };
     // 安全：同 `install_topbar_drag_guard`——`ns_view` 是已装进窗口的合法
-    // 指针，这里只借它的运行时类指针去挂方法，不持有/释放该对象。
-    let ns_view: &AnyObject = unsafe { &*(ah.ns_view.as_ptr() as *mut AnyObject) };
-    let class: &AnyClass = ns_view.class();
+    // 指针，这里只借它去拿窗口/delegate 对象，不持有/释放它们。
+    let ns_view: &NSView = unsafe { &*(ah.ns_view.as_ptr() as *mut NSView) };
+    FILE_DRAG_CONTENT_VIEW.with(|v| v.set(ns_view as *const NSView as *mut NSView));
+    let Some(ns_window) = ns_view.window() else {
+        return;
+    };
+    let Some(delegate) = ns_window.delegate() else {
+        return;
+    };
+    let delegate_obj: &AnyObject =
+        unsafe { &*(Retained::as_ptr(&delegate) as *const AnyObject) };
+    let class: &AnyClass = delegate_obj.class();
 
     unsafe extern "C-unwind" fn dragging_updated(
-        this: &AnyObject,
+        _this: &AnyObject,
         _cmd: Sel,
         sender: *mut AnyObject,
     ) -> NSDragOperation {
         let loc: NSPoint = unsafe { objc2::msg_send![sender, draggingLocation] };
-        let frame: objc2_foundation::NSRect = unsafe { objc2::msg_send![this, frame] };
-        let logical_y = frame.size.height - loc.y;
-        if let Ok(mut pos) = FILE_DRAG_POSITION.lock() {
-            *pos = Some((loc.x as f32, logical_y as f32));
-        }
-        if let Some(window) = FILE_DRAG_WINDOW.get() {
+        let view_ptr = FILE_DRAG_CONTENT_VIEW.with(|v| v.get());
+        if !view_ptr.is_null()
+            && let Some(window) = FILE_DRAG_WINDOW.get()
+        {
+            let view: &NSView = unsafe { &*view_ptr };
+            let local: NSPoint = view.convertPoint_fromView(loc, None);
+            if let Ok(mut pos) = FILE_DRAG_POSITION.lock() {
+                *pos = Some((local.x as f32, local.y as f32));
+            }
             window.request_redraw();
         }
         NSDragOperation::Generic
@@ -930,12 +966,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             logical_x,
                             logical_y,
                         );
-                        tracing::warn!(
-                            ?target,
-                            logical_x,
-                            logical_y,
-                            "DEBUG dnd: CursorMoved while files_dragging"
-                        );
                         let hover = target
                             .into_iter()
                             .collect::<std::collections::HashSet<std::path::PathBuf>>();
@@ -1125,12 +1155,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 // 外部 OS 文件拖拽进入窗口:进入即置拖拽标记,之后每个
                 // `CursorMoved` 都会 re-hit-test 树并刷新高亮(见上面
                 // CursorMoved 分支);离开窗口/取消时清标记并收起高亮。
-                WindowEvent::HoveredFile(p) => {
-                    tracing::warn!(path = ?p, "DEBUG dnd: HoveredFile received");
+                WindowEvent::HoveredFile(_) => {
                     *files_dragging = true;
                 }
                 WindowEvent::HoveredFileCancelled => {
-                    tracing::warn!("DEBUG dnd: HoveredFileCancelled");
                     *files_dragging = false;
                     Self::clear_file_drag_hover(app);
                     window.request_redraw();
@@ -1153,15 +1181,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     let window_w = (window.inner_size().width as f64 / scale) as f32;
                     let window_h = (window.inner_size().height as f64 / scale) as f32;
                     let target = app.files_drop_target(window_w, window_h, logical_x, logical_y);
-                    tracing::warn!(
-                        ?path,
-                        ?target,
-                        logical_x,
-                        logical_y,
-                        window_w,
-                        window_h,
-                        "DEBUG dnd: DroppedFile guarded branch"
-                    );
                     *files_dragging = false;
                     if let Some(target) = target {
                         app.update(Message::Files(extensions::files::Message::FileDrop {
