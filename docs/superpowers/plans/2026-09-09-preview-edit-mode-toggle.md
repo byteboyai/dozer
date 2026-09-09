@@ -197,7 +197,7 @@ struct PreviewTabMenu {
 
 - [ ] **Step 4: 删除两个右键菜单渲染函数**
 
-删除 `app.rs:7564-7620`(`preview_tab_context_menu_popup` 及其文档注释):
+删除 `app.rs:7564-7620`(`preview_tab_context_menu_popup` 及其文档注释,完整函数体如下):
 
 ```rust
     /// 文件预览 tab 右键菜单浮层:含"刷新"(恒有)、"编辑"(仅可编辑文本文件)
@@ -206,13 +206,107 @@ struct PreviewTabMenu {
     fn preview_tab_context_menu_popup<'a>(
         &self,
     ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-        // ...(整个函数体,见上面 Step 探索时读到的完整实现)
+        let menu = match &self.preview_tab_menu {
+            Some(m) => m,
+            None => return column![].into(),
+        };
+        let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
+            Vec::new();
+        items.push(crate::menu::item::<Message>(
+            Some(icons::IconKind::RefreshCw),
+            "刷新",
+            Message::PreviewReload(menu.idx),
+        ));
+        if menu.editable {
+            items.push(crate::menu::item::<Message>(
+                Some(icons::IconKind::Rename),
+                "编辑",
+                Message::PreviewEditOpen(menu.idx),
+            ));
+        }
+        items.push(crate::menu::item::<Message>(
+            None,
+            "关闭",
+            Message::PreviewCloseTab(menu.idx),
+        ));
+
+        let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+            crate::menu::shell(
+                items,
+                Length::Fixed(byteui::theme::geometry::menu_item_width()),
+            );
+        let window_h = self.window_size.1;
+        let bottom = (window_h - menu.y).max(0.0);
+        container(list)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_y(iced_widget::core::alignment::Vertical::Bottom)
+            .padding(Padding {
+                top: 0.0,
+                left: menu.x,
+                right: 0.0,
+                bottom,
+            })
+            .into()
     }
 ```
 
-删除 `app.rs:7622-约7680`(`project_preview_tab_context_menu_popup` 及其文档注释,结构与上面完全对称)。
+删除 `app.rs:7622-约7674`(`project_preview_tab_context_menu_popup` 及其文档注释,完整函数体——与上面结构完全对称,只是状态源/消息换成 Project 版本):
 
-(执行时直接把这两个函数从"文档注释开头"到"函数结尾的 `}`"整段删掉即可,函数体内容在探索阶段已经完整读过,不需要额外确认。)
+```rust
+    /// Project 面板右配对预览 tab 右键菜单浮层,语义同
+    /// `preview_tab_context_menu_popup`。定位坐标同样复用 `files.last_right_click`
+    /// (main.rs 任意右键都会先写入),"编辑"项落 `ProjectPreviewEditOpen`(编辑
+    /// project 预览的 tab)、"关闭"落 `ProjectPreviewCloseTab`。
+    fn project_preview_tab_context_menu_popup<'a>(
+        &self,
+    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+        let menu = match &self.project_preview_tab_menu {
+            Some(m) => m,
+            None => return column![].into(),
+        };
+        let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
+            Vec::new();
+        items.push(crate::menu::item::<Message>(
+            Some(icons::IconKind::RefreshCw),
+            "刷新",
+            Message::ProjectPreviewReload(menu.idx),
+        ));
+        if menu.editable {
+            items.push(crate::menu::item::<Message>(
+                Some(icons::IconKind::Rename),
+                "编辑",
+                Message::ProjectPreviewEditOpen(menu.idx),
+            ));
+        }
+        items.push(crate::menu::item::<Message>(
+            None,
+            "关闭",
+            Message::ProjectPreviewCloseTab(menu.idx),
+        ));
+
+        let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+            crate::menu::shell(
+                items,
+                Length::Fixed(byteui::theme::geometry::menu_item_width()),
+            );
+        let window_h = self.window_size.1;
+        let bottom = (window_h - menu.y).max(0.0);
+        container(list)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_y(iced_widget::core::alignment::Vertical::Bottom)
+            .padding(Padding {
+                top: 0.0,
+                left: menu.x,
+                right: 0.0,
+                bottom,
+            })
+            .into()
+    }
+```
+
+(若实际读到的行号边界与上面注明的略有出入,以两个函数各自"文档注释开头"到"函数结尾 `}`"为准——上面贴出的就是完整函数体,不存在需要另外查阅的部分。)
 
 - [ ] **Step 5: 删除 `view()` 里对应的 `stack!` 分支**
 
@@ -801,8 +895,10 @@ Expected: PASS
     /// 局限于"当前激活"——`preview_pane_toggle_render_mode`(代码→预览)、
     /// `PreviewCloseTab`/`ProjectPreviewCloseTab`(关闭前静默保存)都可能要
     /// 保存一个非激活的背景 tab。仅当该 tab 是原生可编辑且脏时动作,其余
-    /// 沿用原实现(不脏不动磁盘、失败写面板 error)。
-    fn preview_pane_save_at(&mut self, kind: PanelKind, idx: usize) {
+    /// 沿用原实现(不脏不动磁盘、失败写面板 error)。`pub(crate)`(而非
+    /// 私有 `fn`)是因为 `app.rs::update` 的 `PreviewCloseTab`/
+    /// `ProjectPreviewCloseTab` 分支(Step 8)要直接调它做关闭前静默保存。
+    pub(crate) fn preview_pane_save_at(&mut self, kind: PanelKind, idx: usize) {
         let project = kind == PanelKind::Project;
         let (tab_id, path) = {
             let pane = if project {
@@ -1036,8 +1132,6 @@ Expected: 报 `Message::PreviewToggleRenderMode`/`ProjectPreviewToggleRenderMode
                 });
             }
 ```
-
-(`preview_pane_save_at` 目前是 `fn`(私有)——上面 Step 4 定义时改成 `pub(crate) fn`,让 `app.rs` 能调用到。)
 
 Run: `cargo build -p dozer-app 2>&1 | tail -100 && cargo clippy -p dozer-app --all-targets 2>&1 | tail -100 && cargo fmt`
 Expected: PASS,无警告残留
