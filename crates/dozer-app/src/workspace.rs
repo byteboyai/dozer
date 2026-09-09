@@ -4249,21 +4249,19 @@ pub(crate) fn text_width_units(s: &str) -> f32 {
 }
 
 /// 终端 tab 估算显示宽（逻辑像素）：状态点+名称+关闭×+pill padding 的粗估。
-/// 不追求精确——估偏几像素只会让翻页边界差一个 tab。上限封顶到
-/// `PANEL_TAB_MAX_W`,与 `preview_tab_display_width` 同款理由。
+/// 不追求精确——估偏几像素只会让翻页边界差一个 tab。宽度随标题实际长度
+/// 增长(无上限),渲染侧亦有对应 `panel_tab` 的按内容伸缩。
 pub(crate) fn tab_display_width(title: &str) -> f32 {
     // 状态点●+spacing ≈ 18, 名称 ≈ units * 半宽 8.0(14px), 关闭× ≈ 18, pill padding ≈ 12
-    let est = 18.0 + text_width_units(title) * 8.0 + 18.0 + 12.0;
-    est.min(crate::tab_widget::PANEL_TAB_MAX_W)
+    18.0 + text_width_units(title) * 8.0 + 18.0 + 12.0
 }
 
-/// 预览 tab 估算显示宽：同 `tab_display_width` 但无状态点。上限封顶到
-/// `PANEL_TAB_MAX_W`——标题超宽会被省略号截断,翻页窗口数学据此不会把
-/// 被裁剪的 tab 算成比实际渲染更宽。
+/// 预览 tab 估算显示宽：同 `tab_display_width` 但无状态点。同按标题实际长度
+/// 估算,不设上限(与渲染侧 `panel_tab` 按内容伸缩对齐,翻页窗口数学按真实
+/// 宽度算,标题多宽估多宽)。
 pub(crate) fn preview_tab_display_width(title: &str) -> f32 {
     // 名称 ≈ units * 半宽 8.0(14px), 关闭× ≈ 18, pill padding ≈ 12
-    let est = text_width_units(title) * 8.0 + 18.0 + 12.0;
-    est.min(crate::tab_widget::PANEL_TAB_MAX_W)
+    text_width_units(title) * 8.0 + 18.0 + 12.0
 }
 
 /// agent 四态中文（终端状态栏用）。

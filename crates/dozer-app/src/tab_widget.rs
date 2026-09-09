@@ -17,10 +17,6 @@ use iced_widget::core::{Border, Color, Element, Length, Padding};
 use iced_widget::tooltip::Position;
 use iced_widget::{MouseArea, button, column, container, row, scrollable, stack, text};
 
-/// 面板 tab 统一上限宽（对齐顶栏 `project_tab_max_width`）。标题超宽时直接
-/// 隐藏溢出(不换行、不省略号),正常情况下 tab 宽度随标题适配。导出给
-/// `workspace.rs`/`browser.rs` 的翻页宽度估算共用,避免各处硬编码 160。
-pub(crate) const PANEL_TAB_MAX_W: f32 = 160.0;
 /// 面板 tab 内边距:横向留白给 hover 胶囊,纵向收紧以缩小高度。左侧单独
 /// 放大(原先与右侧同为 4,标题贴左缘太紧),右侧维持贴近关闭按钮的窄距。
 /// 上下 `PANEL_TAB_PAD_Y` 从 1 收到 0(验收反馈:tab 栏分割线要跟左栏
@@ -29,12 +25,16 @@ const PANEL_TAB_PAD_LEFT: f32 = 10.0;
 const PANEL_TAB_PAD_X: f32 = 4.0;
 const PANEL_TAB_PAD_Y: f32 = 0.0;
 
+/// 传给 `tab_label::max_width` 表示"不设上限"的名目值——面板 tab 随标题实际
+/// 内容伸缩,标题区用不上限宽参数 (`tab_label` 仅在下拉行需要按行宽裁列)。
+pub(crate) const NO_TAB_W_LIMIT: f32 = f32::MAX;
+
 /// 面板内 tab（终端 / 预览 / 浏览器三处共用）的渲染器，样式对齐顶栏未选中
 /// 页签：标题 `body()`(13px) + `top_bar_font()`，静止 `DIM`、hover 动画
 /// `DIM→金`；关闭 `×` 静止 `DIM`、hover `DIM→金`、24×24 命中框；未选中
-/// hover 显 `TAB_HOVER` 胶囊背景（radius 8）。tab 宽度随标题适配
-/// (`Length::Shrink`)，超过 `PANEL_TAB_MAX_W` 时标题超宽部分直接隐藏
-/// (不换行、不补省略号，靠 `clip` 裁掉溢出，见 CODEBUDDY 需求)。激活态外观
+/// hover 显 `TAB_HOVER` 胶囊背景（radius 8）。tab 宽度随标题实际内容伸缩
+/// (`Length::Shrink`)，不设上限——标题超宽即在所在行多余空间放不下时被外层
+/// `.clip` 截断（不换行、不补省略号），整行放得下时完整展示全称。激活态外观
 /// (CREAM 标题 + CARD 实底 + 1px 边框)由本函数统一绘制，未选中态额外画
 /// hover 细节。
 ///
@@ -87,9 +87,9 @@ pub(crate) fn tab_label<'a, M: 'a>(
                 .wrapping(iced_widget::core::text::Wrapping::None)
                 .color(title_color),
         )
-        // 标题超宽不补省略号、也不换行,直接裁掉溢出(见 CODEBUDDY 需求):
-        // `clip` 把越界部分藏起,视觉上即"隐藏"。满 2s 悬停后由外层
-        // `controlled_tooltip` 弹出全称。
+        // 超宽不补省略号、不换行:`max_width` 只对下拉行(有行宽预算)起到
+        // 截列作用;面板横向 tab 传 `NO_TAB_W_LIMIT`(≈无限)则不触发截列,
+        // 标题完整展示,由外层行的 `.clip` 决定哪里裁掉。
         .width(Length::Shrink)
         .max_width(max_width)
         .clip(true),
@@ -181,9 +181,9 @@ where
     // 组合 hover:悬停标题或 × 任一,胶囊背景都浮现、× 显形。
     let hover = hover_t.max(close_hover_t).clamp(0.0, 1.0);
     let hovered = hover > 0.001;
-    // 标题区域最大宽 = 整 tab 上限 - 左右 padding - 与关闭按钮的间距 - 关闭按钮。
-    let title_max = PANEL_TAB_MAX_W - PANEL_TAB_PAD_LEFT - PANEL_TAB_PAD_X - 2.0 - close_sz;
-    let title_row = tab_label(prefix, title.clone(), active, hover_t, title_max);
+    // 标题宽度不设上限:tab 随标题实际内容伸缩。给 `tab_label` 一个足够大的
+    // 名义上限即可对其不产生截断效果(真实上限由外层行 `.clip` 决定)。
+    let title_row = tab_label(prefix, title.clone(), active, hover_t, NO_TAB_W_LIMIT);
 
     // 选中/关闭的接线逻辑收在 `tabs::tab_core`(2026-08-12 抽取,试点已
     // 验证过——项目页签早已用它;这里是把面板 tab 自己那份原版实现换
@@ -225,7 +225,6 @@ where
             left: PANEL_TAB_PAD_LEFT,
         })
         .width(Length::Shrink)
-        .max_width(PANEL_TAB_MAX_W)
         .style(tab_container_style(active, hover))
         .into();
     // 面板页签在屏幕底部,tooltip 用 `Top` 弹在页签上方,免出屏。仅当悬停

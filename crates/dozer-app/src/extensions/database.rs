@@ -1216,15 +1216,11 @@ pub fn update(
         }
         Message::SelectTab(idx) => {
             ws_state.content.select(idx);
-            let approx_widths =
-                vec![crate::tab_widget::PANEL_TAB_MAX_W; ws_state.content.tabs().len() + 1];
-            ws_state.content.reveal_tab(&approx_widths, idx + 1);
+            reveal_tab_widths(ws_state, idx + 1);
         }
         Message::SelectBlankTab => {
             ws_state.content.select_blank();
-            let approx_widths =
-                vec![crate::tab_widget::PANEL_TAB_MAX_W; ws_state.content.tabs().len() + 1];
-            ws_state.content.reveal_tab(&approx_widths, 0);
+            reveal_tab_widths(ws_state, 0);
         }
         Message::CloseTab(idx) => ws_state.content.close(idx),
         Message::BrowseWhereChanged(tab_id, v) => {
@@ -2159,7 +2155,7 @@ pub fn content_pane<'a>(
         let close_hover_t = app.hover_progress(crate::app::HoverId::DatabaseTabClose(idx));
         let title = tab_title(tab, ws_state);
         (
-            crate::tab_widget::PANEL_TAB_MAX_W.min(tab_title_display_width(&title)),
+            tab_title_display_width(&title),
             crate::tab_widget::panel_tab(crate::tab_widget::PanelTabArgs {
                 title,
                 active,
@@ -2331,6 +2327,25 @@ fn tab_title_display_width(title: &str) -> f32 {
     // 单字宽 + tab 内边距/关闭按钮的固定开销,不做真实文本测量(tab_window
     // 只需要一个足够准的相对宽度做窗口裁剪)。
     title.chars().count() as f32 * 8.0 + 56.0
+}
+
+/// 按"空白占位 + 各数据库 tab"的真实估算宽重建宽度向量并调用
+/// `DatabaseContentState::reveal_tab` 把选中 tab 带入可见区。用实际内容宽
+/// (而非早年的统一上限 `PANEL_TAB_MAX_W`)喂给翻页窗口数学,见渲染侧
+/// `content_pane` 同款 `tab_title_display_width` 口径。
+fn reveal_tab_widths(ws_state: &mut WorkspaceState, target: usize) {
+    let widths = {
+        let content = ws_state.content();
+        let mut w = vec![tab_title_display_width("空白")];
+        w.extend(
+            content
+                .tabs()
+                .iter()
+                .map(|tab| tab_title_display_width(&tab_title(tab, ws_state))),
+        );
+        w
+    };
+    ws_state.content_mut().reveal_tab(&widths, target);
 }
 
 // 各输入框/SQL 编辑器的稳定 `widget::Id`,供右键菜单把焦点移到被右键的
