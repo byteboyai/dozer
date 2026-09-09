@@ -204,15 +204,20 @@ pub struct AppState {
 /// `RightClickAt` 变体,去前缀原样搬来。
 #[derive(Debug, Clone)]
 pub enum Message {
-    /// 立即展开/折叠一个目录并选中它,不经拖拽/双击那套延迟判定——三处
-    /// 调用点:①目录箭头(`>`/`V`)被按下(见 `view()` 挂在箭头自己的
-    /// `MouseArea::on_press` 上,点击会 `shell.capture_event()`,不会冒泡
-    /// 触发外层整行的 `TreeRowPress`/`TreeRowDoubleClick`);②目录行被双击
-    /// (`TreeRowDoubleClick` 分派,同箭头效果,给没精确点在箭头上的用户
-    /// 一个整行都能双击的入口);③外部/内部拖拽悬停到折叠目录时自动展开
-    /// (`expand_files_dir_if_collapsed`/`expand_dir_if_collapsed`)。不跨
-    /// 内核边界,直接在 `files::update()` 里处理。
+    /// 立即展开/折叠一个目录并选中它,不经拖拽/双击那套延迟判定——两处
+    /// 调用点:①目录行被双击(`TreeRowDoubleClick` 分派,给没精确点在箭头
+    /// 上的用户一个整行都能双击的入口);②外部/内部拖拽悬停到折叠目录时
+    /// 自动展开(`expand_files_dir_if_collapsed`/`expand_dir_if_collapsed`)。
+    /// 不跨内核边界,直接在 `files::update()` 里处理。目录箭头(`>`/`V`)
+    /// 本身**不**发这条消息——见 `ToggleNoSelect`(2026-09 用户反馈:点箭头
+    /// 只是想看子项,不代表要把这个目录选中,原先箭头也发 `Toggle` 会把它
+    /// 一并选中)。
     Toggle(PathBuf),
+    /// 只展开/折叠,不改变选中——目录箭头(`>`/`V`)专用,见 `view()` 挂在
+    /// 箭头自己的 `MouseArea::on_press` 上(点击会 `shell.capture_event()`,
+    /// 不会冒泡触发外层整行的 `TreeRowPress`/`TreeRowDoubleClick`)。与
+    /// `Toggle` 的唯一差异就是不写 `tree_selected`。
+    ToggleNoSelect(PathBuf),
     StatusesRefreshed(i64, HashMap<PathBuf, FileGitStatus>),
     RightClickAt {
         x: f32,
@@ -927,6 +932,11 @@ pub fn update(
     match msg {
         Message::Toggle(dir) => {
             ws_state.tree_selected = Some(dir.clone());
+            if let Some(tree) = &mut ws_state.file_tree {
+                tree.toggle(&dir);
+            }
+        }
+        Message::ToggleNoSelect(dir) => {
             if let Some(tree) = &mut ws_state.file_tree {
                 tree.toggle(&dir);
             }
@@ -1823,11 +1833,11 @@ pub fn view<'a>(
                     icons::IconKind::Folder
                 };
                 // 箭头自己挂一个独立的 `MouseArea::on_press`(见
-                // `Message::Toggle` 文档):点箭头立即切换,不走整行
-                // 那套"按下武装拖拽→松开才决定单击/双击"的延迟判定。
-                // iced 事件先派发给子节点(`MouseArea::update` 见其源码
-                // 注释),箭头处理完会 `shell.capture_event()`,不会再
-                // 冒泡触发外层整行的 `TreeRowPress`/`TreeRowDoubleClick`。
+                // `Message::ToggleNoSelect` 文档):点箭头立即切换展开态、
+                // 不改变选中,不走整行那套"按下武装拖拽→松开才决定单击/
+                // 双击"的延迟判定。iced 事件先派发给子节点(`MouseArea::
+                // update` 见其源码注释),箭头处理完会 `shell.capture_event()`,
+                // 不会再冒泡触发外层整行的 `TreeRowPress`/`TreeRowDoubleClick`。
                 let chevron_target = row.path.clone();
                 let chevron_el: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
                     MouseArea::new(icons::view(
@@ -1835,7 +1845,7 @@ pub fn view<'a>(
                         byteui::theme::icon_size::chevron(),
                         icon_color,
                     ))
-                    .on_press(Message::Toggle(chevron_target))
+                    .on_press(Message::ToggleNoSelect(chevron_target))
                     .interaction(mouse::Interaction::Pointer)
                     .into();
                 row![
@@ -3001,9 +3011,10 @@ mod tests {
         assert!(!ws_state.search_focused());
     }
 
-    /// 覆盖 `Message::Toggle` 的三个调用点共用的核心行为(选中 + 立即
-    /// 切换展开态,不经拖拽/双击的延迟判定):箭头点击、目录双击、外部/
-    /// 内部拖拽悬停自动展开都发的是这同一条消息。
+    /// 覆盖 `Message::Toggle` 的两个调用点共用的核心行为(选中 + 立即
+    /// 切换展开态,不经拖拽/双击的延迟判定):目录双击、外部/内部拖拽悬停
+    /// 自动展开都发的是这同一条消息(箭头点击改发 `ToggleNoSelect`,见
+    /// 下一个测试)。
     #[tokio::test]
     async fn toggle_sets_selected_and_toggles_tree() {
         let dir = tempfile::tempdir().unwrap();
@@ -3022,6 +3033,39 @@ mod tests {
             |_| {},
         );
         assert_eq!(ws_state.tree_selected, Some(sub.clone()));
+        assert!(
+            ws_state
+                .visible_tree_rows()
+                .iter()
+                .any(|r| r.path == sub && r.expanded)
+        );
+    }
+
+    /// 箭头点击(`ToggleNoSelect`)只切换展开态,不触碰 `tree_selected`——
+    /// 2026-09 用户反馈:点箭头之前会连带把目录选中,只是想看子项却意外
+    /// 改了选中态。这里先选中一个**不同**的路径,断言 `Toggle` 之后选中
+    /// 原样未变。
+    #[tokio::test]
+    async fn toggle_no_select_toggles_tree_without_changing_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("child.txt"), b"hi").unwrap();
+        let other = dir.path().join("other.txt");
+        std::fs::write(&other, b"x").unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        ws_state.tree_selected = Some(other.clone());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::ToggleNoSelect(sub.clone()),
+            1,
+            &handle,
+            |_| {},
+        );
+        assert_eq!(ws_state.tree_selected, Some(other));
         assert!(
             ws_state
                 .visible_tree_rows()
@@ -3080,8 +3124,8 @@ mod tests {
 
     /// 单击(未越过拖拽确认阈值)只选中——不再自动展开/打开,见
     /// `Message::TreeDragEnd` 文档;文件/目录一视同仁,这里用文件源验证
-    /// （目录源的选中+展开分别由 `Message::Toggle`/`TreeRowDoubleClick` 覆盖,
-    /// 见其他测试)。
+    /// （目录源的展开分别由 `Message::ToggleNoSelect`(箭头)/`Toggle`(双击)
+    /// 覆盖,见其他测试)。
     #[tokio::test]
     async fn tree_drag_end_unconfirmed_selects_file_without_opening() {
         let mut ws_state = WorkspaceState::default();
@@ -3788,7 +3832,8 @@ mod tests {
     }
 
     /// 单击(`confirmed=false`)目录只选中,不再展开/折叠——展开/折叠改由
-    /// 箭头(`Message::Toggle`)或双击(`TreeRowDoubleClick`)触发,见两者文档。
+    /// 箭头(`Message::ToggleNoSelect`)或双击(`TreeRowDoubleClick`)触发,
+    /// 见两者文档。
     #[tokio::test]
     async fn tree_drag_end_unconfirmed_selects_directory_without_toggling() {
         let dir = tempfile::tempdir().unwrap();
