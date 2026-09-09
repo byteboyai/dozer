@@ -362,6 +362,8 @@ pub struct Workspace {
     /// SSH 面板 tab 条翻页窗口起点,语义同 `preview_tab_first`——
     /// `tab_window` 每帧据此钳制到合法范围,这里只存"用户上次翻到哪"。
     pub(crate) ssh_tab_first: usize,
+    /// SSH tab 栏溢出下拉锚点,语义同 `term_tab_overflow_anchor`。
+    pub(crate) ssh_tab_overflow_anchor: Option<(f32, f32)>,
     /// 预览域状态机(P1d).
     pub(crate) preview: PreviewPane,
     /// Project 面板右配对的预览状态机——独立的 `PreviewPane` 实例,与
@@ -658,6 +660,7 @@ impl Workspace {
             ssh_active: None,
             sftp_tabs: HashMap::new(),
             ssh_tab_first: 0,
+            ssh_tab_overflow_anchor: None,
             preview: PreviewPane::default(),
             project_preview: PreviewPane::default(),
             preview_error: None,

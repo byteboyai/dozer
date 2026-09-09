@@ -5838,6 +5838,45 @@ impl App {
             Message::Ssh(ssh::Message::SelectSshTab(host_id, kind)) => {
                 self.with_focused_project(|ws, _io| {
                     ws.select_ssh_tab(host_id, kind);
+                    let mut widths: Vec<f32> = vec![tab_display_width("空白")];
+                    widths.extend(ws.ssh_tabs.iter().map(|t| {
+                        tab_display_width(&tab_title(t.agent, t.cwd.as_deref(), &t.info.name))
+                    }));
+                    widths.extend(ws.sftp_tabs.keys().map(|host_id| {
+                        tab_display_width(
+                            &ws.ssh
+                                .hosts()
+                                .iter()
+                                .find(|h| &h.id == host_id)
+                                .map(|h| h.name.clone())
+                                .unwrap_or_else(|| host_id.clone()),
+                        )
+                    }));
+                    let target = match &ws.ssh_active {
+                        None => 0,
+                        Some((active_host, ssh::SshTabKind::Terminal)) => ws
+                            .ssh_tabs
+                            .iter()
+                            .position(|t| {
+                                t.info.id.strip_prefix("ssh:") == Some(active_host.as_str())
+                            })
+                            .map(|i| i + 1)
+                            .unwrap_or(0),
+                        Some((active_host, ssh::SshTabKind::Sftp)) => ws
+                            .sftp_tabs
+                            .keys()
+                            .position(|h| h == active_host)
+                            .map(|i| i + 1 + ws.ssh_tabs.len())
+                            .unwrap_or(0),
+                    };
+                    ws.ssh_tab_first = tab_widget::tab_window_reveal(
+                        &widths,
+                        4.0,
+                        byteui::theme::geometry::tab_bar_avail_px(),
+                        ws.ssh_tab_first,
+                        target,
+                    );
+                    ws.ssh_tab_overflow_anchor = None;
                 });
             }
             // 点固定的"空白"占位 tab:它不对应 `ssh_tabs`/`sftp_tabs` 里
@@ -5845,16 +5884,43 @@ impl App {
             Message::Ssh(ssh::Message::SelectBlankTab) => {
                 self.with_focused_project(|ws, _io| {
                     ws.ssh_active = None;
+                    let mut widths: Vec<f32> = vec![tab_display_width("空白")];
+                    widths.extend(ws.ssh_tabs.iter().map(|t| {
+                        tab_display_width(&tab_title(t.agent, t.cwd.as_deref(), &t.info.name))
+                    }));
+                    widths.extend(ws.sftp_tabs.keys().map(|host_id| {
+                        tab_display_width(
+                            &ws.ssh
+                                .hosts()
+                                .iter()
+                                .find(|h| &h.id == host_id)
+                                .map(|h| h.name.clone())
+                                .unwrap_or_else(|| host_id.clone()),
+                        )
+                    }));
+                    ws.ssh_tab_first = tab_widget::tab_window_reveal(
+                        &widths,
+                        4.0,
+                        byteui::theme::geometry::tab_bar_avail_px(),
+                        ws.ssh_tab_first,
+                        0,
+                    );
+                    ws.ssh_tab_overflow_anchor = None;
                 });
             }
-            // tab 条翻页箭头,逻辑同 `Message::PreviewTabScroll`。
-            Message::Ssh(ssh::Message::TabScroll(right)) => {
+            Message::Ssh(ssh::Message::TabOverflowToggle) => {
+                let last_cursor = self.last_cursor;
                 self.with_focused_project(|ws, _io| {
-                    if right {
-                        ws.ssh_tab_first = ws.ssh_tab_first.saturating_add(2);
+                    ws.ssh_tab_overflow_anchor = if ws.ssh_tab_overflow_anchor.is_some() {
+                        None
                     } else {
-                        ws.ssh_tab_first = ws.ssh_tab_first.saturating_sub(2);
-                    }
+                        Some(last_cursor)
+                    };
+                });
+            }
+            Message::Ssh(ssh::Message::TabOverflowDismiss) => {
+                self.with_focused_project(|ws, _io| {
+                    ws.ssh_tab_overflow_anchor = None;
                 });
             }
             // SFTP tab 内部交互:按 host_id 路由到 `sftp::route`,真正的
@@ -9604,13 +9670,10 @@ fn ssh_tab_bar<'a>(
         byteui::theme::geometry::tab_bar_avail_px(),
         ws.ssh_tab_first,
     );
-    let first = window.first;
-    let can_left = first > 0;
-    let can_right = window.visible_end < widths.len();
     let items: Vec<_> = entries
         .into_iter()
         .enumerate()
-        .filter(|(idx, _)| *idx >= first)
+        .filter(|(idx, _)| (window.first..window.visible_end).contains(idx))
         .map(|(_, (_, el))| el)
         .collect();
     // tab 条本身占 Fill、裁掉右侧溢出,让"收起列表"钉在裁剪区外的最右侧
@@ -9620,15 +9683,10 @@ fn ssh_tab_bar<'a>(
     let clipped = container(row(items).spacing(4))
         .width(Length::Fill)
         .clip(true);
-    let left_arrow = tab_widget::tab_arrow_button(
-        icons::IconKind::ChevronLeft,
-        can_left,
-        Message::Ssh(ssh::Message::TabScroll(false)),
-    );
-    let right_arrow = tab_widget::tab_arrow_button(
-        icons::IconKind::ChevronRight,
-        can_right,
-        Message::Ssh(ssh::Message::TabScroll(true)),
+    let hidden_count = window.hidden_before().len() + window.hidden_after(widths.len()).len();
+    let overflow_button = tab_widget::tab_overflow_button(
+        hidden_count,
+        Message::Ssh(ssh::Message::TabOverflowToggle),
     );
     // 内容侧"收起/展开列表列"按钮(收起左列主机列表后仍在此可见以便恢复)。
     let collapse = app.list_collapse_button(
@@ -9640,10 +9698,152 @@ fn ssh_tab_bar<'a>(
         Message::TogglePanelListCollapse(PanelKind::Ssh),
         move |hovered| Message::Hover(HoverId::SshListCollapse, hovered),
     );
-    row![left_arrow, right_arrow, clipped, collapse]
+    let mut tab_bar_row = row![clipped]
         .spacing(4)
-        .align_y(iced_widget::core::Alignment::Center)
-        .into()
+        .align_y(iced_widget::core::Alignment::Center);
+    if let Some(btn) = overflow_button {
+        tab_bar_row = tab_bar_row.push(btn);
+    }
+    let tab_bar = tab_bar_row.push(collapse);
+
+    let base: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = tab_bar.into();
+    if let Some(anchor) = ws.ssh_tab_overflow_anchor {
+        if window.has_overflow(widths.len()) {
+            let mut entries: Vec<tab_widget::TabOverflowEntry<'_, Message>> = Vec::new();
+            let hidden: std::collections::HashSet<usize> = window
+                .hidden_before()
+                .chain(window.hidden_after(widths.len()))
+                .collect();
+            if hidden.contains(&0) {
+                entries.push(tab_widget::TabOverflowEntry {
+                    index: 0,
+                    prefix: None,
+                    title: "空白".to_string(),
+                    active: ws.ssh_active.is_none(),
+                    closable: false,
+                });
+            }
+            for (i, tab) in ws.ssh_tabs.iter().enumerate() {
+                let idx = i + 1;
+                if !hidden.contains(&idx) {
+                    continue;
+                }
+                let host_id = tab
+                    .info
+                    .id
+                    .strip_prefix("ssh:")
+                    .unwrap_or(&tab.info.id)
+                    .to_string();
+                entries.push(tab_widget::TabOverflowEntry {
+                    index: idx,
+                    prefix: Some(icons::view(
+                        icons::IconKind::Terminal,
+                        byteui::theme::icon_size::row(),
+                        byteui::theme::color::current().dim,
+                    )),
+                    title: tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
+                    active: ws
+                        .ssh_active
+                        .as_ref()
+                        .is_some_and(|(h, k)| h == &host_id && *k == ssh::SshTabKind::Terminal),
+                    closable: true,
+                });
+            }
+            for (i, (host_id, _)) in ws.sftp_tabs.iter().enumerate() {
+                let idx = i + 1 + ws.ssh_tabs.len();
+                if !hidden.contains(&idx) {
+                    continue;
+                }
+                let label = ws
+                    .ssh
+                    .hosts()
+                    .iter()
+                    .find(|h| &h.id == host_id)
+                    .map(|h| h.name.clone())
+                    .unwrap_or_else(|| host_id.clone());
+                entries.push(tab_widget::TabOverflowEntry {
+                    index: idx,
+                    prefix: Some(icons::view(
+                        icons::IconKind::FolderSync,
+                        byteui::theme::icon_size::row(),
+                        byteui::theme::color::current().dim,
+                    )),
+                    title: label,
+                    active: ws.ssh_active.as_ref()
+                        == Some(&(host_id.clone(), ssh::SshTabKind::Sftp)),
+                    closable: true,
+                });
+            }
+            let menu = tab_widget::tab_overflow_menu(tab_widget::TabOverflowMenuArgs {
+                entries,
+                anchor,
+                window_size: app.window_size,
+                on_select: |idx| ssh_tab_overflow_select_message(ws, idx),
+                on_close: |idx| ssh_tab_overflow_close_message(ws, idx),
+                on_dismiss: Message::Ssh(ssh::Message::TabOverflowDismiss),
+            });
+            return iced_widget::stack![base, menu].into();
+        }
+    }
+    base
+}
+
+/// 把溢出下拉的扁平下标翻回 SSH 的 `(host_id, kind)`：下标 0 = 空白占位
+/// tab；`1..=ssh_tabs.len()` 是终端段；再往后是 SFTP 段。越界兜底回空白态。
+fn ssh_tab_overflow_select_message(ws: &Workspace, idx: usize) -> Message {
+    if idx == 0 {
+        return Message::Ssh(ssh::Message::SelectBlankTab);
+    }
+    let terminal_count = ws.ssh_tabs.len();
+    if idx <= terminal_count {
+        let tab = &ws.ssh_tabs[idx - 1];
+        let host_id = tab
+            .info
+            .id
+            .strip_prefix("ssh:")
+            .unwrap_or(&tab.info.id)
+            .to_string();
+        return Message::Ssh(ssh::Message::SelectSshTab(
+            host_id,
+            ssh::SshTabKind::Terminal,
+        ));
+    }
+    match ws.sftp_tabs.keys().nth(idx - 1 - terminal_count) {
+        Some(host_id) => Message::Ssh(ssh::Message::SelectSshTab(
+            host_id.clone(),
+            ssh::SshTabKind::Sftp,
+        )),
+        None => Message::Ssh(ssh::Message::SelectBlankTab),
+    }
+}
+
+/// `ssh_tab_overflow_select_message` 的关闭版。空白占位 `closable: false`
+/// 保证下拉里它没有 x，走到这只能是兜底，发顶层 no-op。
+fn ssh_tab_overflow_close_message(ws: &Workspace, idx: usize) -> Message {
+    if idx == 0 {
+        return Message::Noop;
+    }
+    let terminal_count = ws.ssh_tabs.len();
+    if idx <= terminal_count {
+        let tab = &ws.ssh_tabs[idx - 1];
+        let host_id = tab
+            .info
+            .id
+            .strip_prefix("ssh:")
+            .unwrap_or(&tab.info.id)
+            .to_string();
+        return Message::Ssh(ssh::Message::CloseSshTab(
+            host_id,
+            ssh::SshTabKind::Terminal,
+        ));
+    }
+    match ws.sftp_tabs.keys().nth(idx - 1 - terminal_count) {
+        Some(host_id) => Message::Ssh(ssh::Message::CloseSshTab(
+            host_id.clone(),
+            ssh::SshTabKind::Sftp,
+        )),
+        None => Message::Noop,
+    }
 }
 
 /// SSH 面板内嵌终端区:tab 条 + 终端画布(或空态)。镜像 `preview_pane`/

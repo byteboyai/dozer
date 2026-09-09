@@ -447,10 +447,10 @@ pub enum Message {
     /// `app.rs::ssh_tab_bar`)。同上,内核拦截(需要 `&mut Workspace` 清
     /// `ssh_active`)。
     SelectBlankTab,
-    /// tab 条左右箭头翻页(`true` = 向右),语义同 `Message::PreviewTabScroll`
-    /// (`workspace.rs::preview_pane_for`)。同上,内核拦截(需要
-    /// `&mut Workspace` 改 `ssh_tab_first`)。
-    TabScroll(bool),
+    /// tab 栏溢出下拉开关,语义同顶层 `Message::TermTabOverflowToggle`。
+    TabOverflowToggle,
+    /// tab 栏溢出下拉:点击外部关闭。同样由 `App::update` 拦截。
+    TabOverflowDismiss,
     /// 主机卡片图标按钮的鼠标悬停进/出:更新 `ws_state.hover_action`,
     /// 驱动卡片上对应按钮的 DIM→GOLD 高亮。图标按钮的 `on_enter`/`on_exit`
     /// 事件由 `icons::icon_button_entry` 接好,这里只落状态。
@@ -709,7 +709,8 @@ pub fn update(
         | Message::CloseSshTab(..)
         | Message::SelectSshTab(..)
         | Message::SelectBlankTab
-        | Message::TabScroll(_)
+        | Message::TabOverflowToggle
+        | Message::TabOverflowDismiss
         | Message::Sftp(..)
         | Message::TextInputMenuOpen(_) => {
             // 内核 `App::update` 在通配 `Message::Ssh(msg)` 之前拦截,
