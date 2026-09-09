@@ -650,6 +650,13 @@ impl WorkspaceState {
     pub fn content(&self) -> &DatabaseContentState {
         &self.content
     }
+
+    /// 右侧内容窗格状态的可变视图。仅供 `app.rs` 拦截 `TabOverflowToggle`/
+    /// `TabOverflowDismiss`(这两个消息需要 `App::last_cursor`,不进
+    /// `database::update`)时对溢出锚点做切换时使用。
+    pub(crate) fn content_mut(&mut self) -> &mut DatabaseContentState {
+        &mut self.content
+    }
 }
 
 pub fn sources_path(repo: &Path) -> PathBuf {
@@ -793,8 +800,15 @@ pub enum Message {
     SelectBlankTab,
     /// tab 栏点 × → 关闭(索引)。
     CloseTab(usize),
-    /// tab 栏箭头翻页(tab 溢出可视宽度时),`true`=右翻、`false`=左翻。
-    TabScroll(bool),
+    /// tab 栏溢出下拉开关,语义同顶层 `Message::TermTabOverflowToggle`。由
+    /// `App::update` 拦截处理(需要 `App::last_cursor`),不进 `database::update`。
+    TabOverflowToggle,
+    /// tab 栏溢出下拉:点击外部关闭。同样由 `App::update` 拦截。
+    TabOverflowDismiss,
+    /// 下拉行的 hover 占位消息(不产生任何副作用),`tab_overflow_menu` 的
+    /// `on_select_hover`/`on_close_hover` 要求返回一个消息,这里补一个纯
+    /// no-op,避免为一个短生命周期浮层铺一整套 hover 动画状态。
+    Noop,
 
     // ---- 浏览页(WHERE/ORDER BY/分页) ----
     BrowseWhereChanged(usize, String),
@@ -832,6 +846,10 @@ pub fn update(
     emit: impl Fn(Message) + Send + Clone + 'static,
 ) {
     match msg {
+        Message::Noop => {}
+        // 这两个溢出开关由 `app.rs` 主级 `update` 拦截(需要 `App::last_cursor`),
+        // 正常不会走到这个子级 `database::update`——保留空 arm 只为满足穷尽。
+        Message::TabOverflowToggle | Message::TabOverflowDismiss => {}
         Message::ToggleDriver(driver) => app_state.toggle(driver),
         Message::DriversPopupToggle => {
             app_state.drivers_popup_open = !app_state.drivers_popup_open;
@@ -1201,10 +1219,19 @@ pub fn update(
         Message::OpenQueryTab(source_id) => {
             ws_state.content.open_query(source_id);
         }
-        Message::SelectTab(idx) => ws_state.content.select(idx),
-        Message::SelectBlankTab => ws_state.content.select_blank(),
+        Message::SelectTab(idx) => {
+            ws_state.content.select(idx);
+            let approx_widths =
+                vec![crate::tab_widget::PANEL_TAB_MAX_W; ws_state.content.tabs().len() + 1];
+            ws_state.content.reveal_tab(&approx_widths, idx + 1);
+        }
+        Message::SelectBlankTab => {
+            ws_state.content.select_blank();
+            let approx_widths =
+                vec![crate::tab_widget::PANEL_TAB_MAX_W; ws_state.content.tabs().len() + 1];
+            ws_state.content.reveal_tab(&approx_widths, 0);
+        }
         Message::CloseTab(idx) => ws_state.content.close(idx),
-        Message::TabScroll(right) => ws_state.content.scroll_tabs(right),
         Message::BrowseWhereChanged(tab_id, v) => {
             if let Some(TabContent::Browse(b)) = ws_state.content.content_mut(tab_id) {
                 b.where_clause = v;
@@ -2154,7 +2181,7 @@ pub fn content_pane<'a>(
         )
     }));
     let widths: Vec<f32> = entries.iter().map(|(w, _)| *w).collect();
-    let (first, can_left, can_right) = crate::tab_widget::tab_window(
+    let window = crate::tab_widget::tab_window(
         &widths,
         4.0,
         byteui::theme::geometry::tab_bar_avail_px(),
@@ -2163,21 +2190,14 @@ pub fn content_pane<'a>(
     let items: Vec<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> = entries
         .into_iter()
         .enumerate()
-        .filter(|(idx, _)| *idx >= first)
+        .filter(|(idx, _)| (window.first..window.visible_end).contains(idx))
         .map(|(_, (_, el))| el)
         .collect();
     let tabs_row = row(items).spacing(4);
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
-    let left_arrow = crate::tab_widget::tab_arrow_button(
-        icons::IconKind::ChevronLeft,
-        can_left,
-        Message::TabScroll(false),
-    );
-    let right_arrow = crate::tab_widget::tab_arrow_button(
-        icons::IconKind::ChevronRight,
-        can_right,
-        Message::TabScroll(true),
-    );
+    let hidden_count = window.hidden_before().len() + window.hidden_after(widths.len()).len();
+    let overflow_button =
+        crate::tab_widget::tab_overflow_button(hidden_count, Message::TabOverflowToggle);
     // 内容侧"收起/展开列表列"按钮(收起左列 schema 树后仍在此可见以便恢复)。
     // 消息为本地 `Message::ToggleListCollapse`,由内核 `App::update` 拦截。
     let collapse = app.list_collapse_button(
@@ -2189,9 +2209,13 @@ pub fn content_pane<'a>(
         Message::ToggleListCollapse,
         move |hovered| Message::Hover(crate::app::HoverId::DatabaseListCollapse, hovered),
     );
-    let tab_bar = row![left_arrow, right_arrow, clipped, collapse]
+    let mut tab_bar_row = row![clipped]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
+    if let Some(btn) = overflow_button {
+        tab_bar_row = tab_bar_row.push(btn);
+    }
+    let tab_bar = tab_bar_row.push(collapse);
 
     // tab 栏下方 1px 分割线,同 SSH/预览面板的 `tab_divider()`(此前漏加,
     // 验收反馈 tab 下方少了一根横线)。外层 padding/tab 栏间距改用
@@ -2225,7 +2249,7 @@ pub fn content_pane<'a>(
         }
     }
 
-    container(col.padding(region.padding))
+    let outer_container = container(col.padding(region.padding))
         .width(width)
         .height(iced_widget::core::Length::Fill)
         .style(
@@ -2234,8 +2258,58 @@ pub fn content_pane<'a>(
                 border: outer,
                 ..iced_widget::container::Style::default()
             },
-        )
-        .into()
+        );
+    let result: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        outer_container.into();
+    if let Some(anchor) = content.tab_overflow_anchor() {
+        if window.has_overflow(widths.len()) {
+            let hidden: std::collections::HashSet<usize> = window
+                .hidden_before()
+                .chain(window.hidden_after(widths.len()))
+                .collect();
+            let mut overflow_entries: Vec<crate::tab_widget::TabOverflowEntry<'_, Message>> =
+                Vec::new();
+            if hidden.contains(&0) {
+                overflow_entries.push(crate::tab_widget::TabOverflowEntry {
+                    index: 0,
+                    prefix: None,
+                    title: "空白".to_string(),
+                    active: content.active_idx().is_none(),
+                    closable: false,
+                });
+            }
+            for (i, tab) in content.tabs().iter().enumerate() {
+                let idx = i + 1;
+                if !hidden.contains(&idx) {
+                    continue;
+                }
+                overflow_entries.push(crate::tab_widget::TabOverflowEntry {
+                    index: idx,
+                    prefix: None,
+                    title: tab_title(tab, ws_state),
+                    active: Some(i) == content.active_idx(),
+                    closable: true,
+                });
+            }
+            let menu =
+                crate::tab_widget::tab_overflow_menu(crate::tab_widget::TabOverflowMenuArgs {
+                    entries: overflow_entries,
+                    anchor,
+                    window_size: app.window_size,
+                    on_select: |idx| {
+                        if idx == 0 {
+                            Message::SelectBlankTab
+                        } else {
+                            Message::SelectTab(idx - 1)
+                        }
+                    },
+                    on_close: |idx| Message::CloseTab(idx - 1),
+                    on_dismiss: Message::TabOverflowDismiss,
+                });
+            return iced_widget::stack![result, menu].into();
+        }
+    }
+    result
 }
 
 fn tab_title(tab: &DatabaseTab, ws_state: &WorkspaceState) -> String {
@@ -2896,6 +2970,8 @@ pub struct DatabaseContentState {
     /// 每次渲染都交给 `tab_window` 钳到合法范围,这里存的只是"用户上次翻到
     /// 哪"的粗略意图。
     tab_scroll_first: usize,
+    /// tab 栏溢出下拉的悬浮锚点,语义同 `Workspace::term_tab_overflow_anchor`。
+    tab_overflow_anchor: Option<(f32, f32)>,
 }
 
 impl DatabaseContentState {
@@ -2911,15 +2987,33 @@ impl DatabaseContentState {
         self.tab_scroll_first
     }
 
-    /// tab 栏箭头翻页,`right=true` 右翻、`false` 左翻。步进量(2)和越界
-    /// 钳制逻辑照抄 `app.rs::Message::PreviewTabScroll` 的既有实现——越界
-    /// 不在这里防,`tab_window` 渲染时会自动钳回合法范围。
-    pub fn scroll_tabs(&mut self, right: bool) {
-        if right {
-            self.tab_scroll_first = self.tab_scroll_first.saturating_add(2);
+    pub fn tab_overflow_anchor(&self) -> Option<(f32, f32)> {
+        self.tab_overflow_anchor
+    }
+
+    pub fn toggle_tab_overflow(&mut self, cursor: (f32, f32)) {
+        self.tab_overflow_anchor = if self.tab_overflow_anchor.is_some() {
+            None
         } else {
-            self.tab_scroll_first = self.tab_scroll_first.saturating_sub(2);
-        }
+            Some(cursor)
+        };
+    }
+
+    pub fn dismiss_tab_overflow(&mut self) {
+        self.tab_overflow_anchor = None;
+    }
+
+    /// 选中 `target`(扁平下标,0 留给空白占位 tab)后,若它当前隐藏,重新
+    /// 钳出包含它的窗口;已可见则不动。`widths` 由渲染侧按 `tab_bar_avail_px`
+    /// 同一套口径传入(含开头的空白占位 tab 宽度)。
+    pub fn reveal_tab(&mut self, widths: &[f32], target: usize) {
+        self.tab_scroll_first = crate::tab_widget::tab_window_reveal(
+            widths,
+            4.0,
+            byteui::theme::geometry::tab_bar_avail_px(),
+            self.tab_scroll_first,
+            target,
+        );
     }
 
     pub fn active_tab(&self) -> Option<&DatabaseTab> {
@@ -2999,6 +3093,7 @@ impl DatabaseContentState {
         if idx < self.tabs.len() {
             self.active = Some(idx);
         }
+        self.tab_overflow_anchor = None;
     }
 
     /// 点固定的"空白"占位 tab:不对应 `tabs` 里任何一条记录,选中态就是
@@ -3006,6 +3101,7 @@ impl DatabaseContentState {
     /// 处理)。
     pub fn select_blank(&mut self) {
         self.active = None;
+        self.tab_overflow_anchor = None;
     }
 
     /// 关闭指定索引的 tab。`active` 调整规则同浏览器标签页惯例:关掉

@@ -4824,6 +4824,17 @@ impl App {
             Message::Database(database::Message::ToggleListCollapse) => {
                 self.toggle_panel_list_collapse(PanelKind::Database);
             }
+            Message::Database(database::Message::TabOverflowToggle) => {
+                let last_cursor = self.last_cursor;
+                self.with_focused_project(|ws, _io| {
+                    ws.database.content_mut().toggle_tab_overflow(last_cursor);
+                });
+            }
+            Message::Database(database::Message::TabOverflowDismiss) => {
+                self.with_focused_project(|ws, _io| {
+                    ws.database.content_mut().dismiss_tab_overflow();
+                });
+            }
             Message::Database(database::Message::Hover(id, h)) => self.set_hover(id, h),
             Message::Database(msg) => self.database_message(msg),
             Message::Todo(msg) => match msg {
