@@ -52,7 +52,10 @@ use crate::osc::{OscEvent, OscScanner};
 use crate::preview::{PreviewPane, TabKind, is_editable_extension};
 use crate::preview_state;
 use crate::project::FileTree;
-use crate::tab_widget::{PanelTabArgs, panel_tab, tab_arrow_button, tab_window};
+use crate::tab_widget::{
+    PanelTabArgs, TabOverflowEntry, TabOverflowMenuArgs, panel_tab, tab_overflow_button,
+    tab_overflow_menu, tab_window,
+};
 use crate::term_model::TerminalModel;
 use crate::theme;
 use crate::theme::terminal_font;
@@ -454,6 +457,10 @@ pub struct Workspace {
     /// Project 面板右配对预览 tab 栏当前最左可见 tab 序号,语义同
     /// `preview_tab_first`。
     pub(crate) project_preview_tab_first: usize,
+    /// 文件预览 tab 栏溢出下拉锚点,语义同 `term_tab_overflow_anchor`。
+    pub(crate) preview_tab_overflow_anchor: Option<(f32, f32)>,
+    /// 项目预览 tab 栏溢出下拉锚点,语义同上。
+    pub(crate) project_preview_tab_overflow_anchor: Option<(f32, f32)>,
     /// Files 面板 per-project 状态——见 `extensions::files::WorkspaceState`。
     pub(crate) files: files::WorkspaceState,
     /// Agent 面板"＋"按钮弹出的"新建"菜单当前是否打开。不需要坐标——面板顶部固定
@@ -676,7 +683,9 @@ impl Workspace {
             term_tab_first: 0,
             term_tab_overflow_anchor: None,
             preview_tab_first: 0,
+            preview_tab_overflow_anchor: None,
             project_preview_tab_first: 0,
+            project_preview_tab_overflow_anchor: None,
             files: files::WorkspaceState::default(),
             agent_picker_open: false,
             edit_session: None,
@@ -3103,7 +3112,7 @@ pub(crate) fn agent_list_pane<'a>(
     container(content.padding(region.padding))
         .width(width)
         .height(Length::Fill)
-        .style(move |_t: &iced_widget::Theme| container::Style {
+        .style(move |_theme: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
             border: outer,
             ..container::Style::default()
@@ -3575,12 +3584,18 @@ fn preview_pane_for<'a>(
     // 反馈:文件预览与浏览器彻底分离,文件只走项目树入口)。
     // P1L T5 验收返工:同 term `tab_bar`,横向 scrollable 换成索引窗口化 + clip.
     let region = theme::region::preview_pane();
-    let (preview, tab_first, error) = match kind {
-        PreviewPaneKind::Files => (&ws.preview, ws.preview_tab_first, &ws.preview_error),
+    let (preview, tab_first, error, overflow_anchor) = match kind {
+        PreviewPaneKind::Files => (
+            &ws.preview,
+            ws.preview_tab_first,
+            &ws.preview_error,
+            ws.preview_tab_overflow_anchor,
+        ),
         PreviewPaneKind::Project => (
             &ws.project_preview,
             ws.project_preview_tab_first,
             &ws.project_preview_error,
+            ws.project_preview_tab_overflow_anchor,
         ),
     };
     // 状态取的是一份只读引用,后续渲染把对应的消息/前缀按 `kind` 选好。
@@ -3605,9 +3620,13 @@ fn preview_pane_for<'a>(
         PreviewPaneKind::Files => Message::PreviewCloseTab(idx),
         PreviewPaneKind::Project => Message::ProjectPreviewCloseTab(idx),
     };
-    let scroll_msg = move |right| match kind {
-        PreviewPaneKind::Files => Message::PreviewTabScroll(right),
-        PreviewPaneKind::Project => Message::ProjectPreviewTabScroll(right),
+    let overflow_toggle_msg = move || match kind {
+        PreviewPaneKind::Files => Message::PreviewTabOverflowToggle,
+        PreviewPaneKind::Project => Message::ProjectPreviewTabOverflowToggle,
+    };
+    let overflow_dismiss_msg = move || match kind {
+        PreviewPaneKind::Files => Message::PreviewTabOverflowDismiss,
+        PreviewPaneKind::Project => Message::ProjectPreviewTabOverflowDismiss,
     };
     let context_msg = move |idx, editable| match kind {
         PreviewPaneKind::Files => Message::PreviewTabContextMenu { idx, editable },
@@ -3636,15 +3655,12 @@ fn preview_pane_for<'a>(
         byteui::theme::geometry::tab_bar_avail_px(),
         tab_first,
     );
-    let first = window.first;
-    let can_left = first > 0;
-    let can_right = window.visible_end < widths.len();
 
     let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = preview
         .tabs()
         .iter()
         .enumerate()
-        .filter(|(idx, _)| *idx >= first)
+        .filter(|(idx, _)| (window.first..window.visible_end).contains(idx))
         .map(|(idx, tab)| {
             let active = idx == preview.active_idx();
             let title_hover_t = app.hover_progress(item_hover(idx));
@@ -3688,11 +3704,13 @@ fn preview_pane_for<'a>(
             area.into()
         })
         .collect();
-    // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;左右箭头钉在裁剪区外。
+    // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;溢出 V 按钮钉在裁剪区外
+    // (仅当有被挤出去的 tab 时才渲染)。
     let tabs_row = row(items).spacing(4);
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
-    let left_arrow = tab_arrow_button(icons::IconKind::ChevronLeft, can_left, scroll_msg(false));
-    let right_arrow = tab_arrow_button(icons::IconKind::ChevronRight, can_right, scroll_msg(true));
+    let hidden_count =
+        window.hidden_before().len() + window.hidden_after(preview.tabs().len()).len();
+    let overflow_button = tab_overflow_button(hidden_count, overflow_toggle_msg());
     // 预览右上角"收起/展开列表列"按钮:Files 预览收起文件树,Project 预览
     // 收起 info 列。按钮始终在此(内容侧),收起后仍可见以便恢复。图标按该
     // 面板当前所在栏(左/右)与收起态四选一,见 `IconKind::PanelLeftClose`
@@ -3717,9 +3735,13 @@ fn preview_pane_for<'a>(
             move |hovered| Message::Hover(HoverId::ProjectListCollapse, hovered),
         ),
     };
-    let tab_bar = row![left_arrow, right_arrow, clipped, collapse]
+    let mut tab_bar_row = row![clipped]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
+    if let Some(btn) = overflow_button {
+        tab_bar_row = tab_bar_row.push(btn);
+    }
+    let tab_bar = tab_bar_row.push(collapse);
 
     let mut content = column![tab_bar, tab_divider()].spacing(region.gap);
 
@@ -4125,15 +4147,43 @@ fn preview_pane_for<'a>(
         }
     }
 
-    container(content.padding(region.padding))
-        .width(width)
-        .height(Length::Fill)
-        .style(move |_theme: &iced_widget::Theme| container::Style {
-            background: region.background.map(Into::into),
-            border: outer,
-            ..container::Style::default()
-        })
-        .into()
+    let base: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        container(content.padding(region.padding))
+            .width(width)
+            .height(Length::Fill)
+            .style(move |_theme: &iced_widget::Theme| container::Style {
+                background: region.background.map(Into::into),
+                border: outer,
+                ..container::Style::default()
+            })
+            .into();
+    if let Some(anchor) = overflow_anchor {
+        if window.has_overflow(preview.tabs().len()) {
+            let entries: Vec<TabOverflowEntry<'_, Message>> = preview
+                .tabs()
+                .iter()
+                .enumerate()
+                .filter(|(idx, _)| !(window.first..window.visible_end).contains(idx))
+                .map(|(idx, tab)| TabOverflowEntry {
+                    index: idx,
+                    prefix: None,
+                    title: tab.title.clone(),
+                    active: idx == preview.active_idx(),
+                    closable: true,
+                })
+                .collect();
+            let menu = tab_overflow_menu(TabOverflowMenuArgs {
+                entries,
+                anchor,
+                window_size: app.window_size,
+                on_select: select_msg,
+                on_close: close_msg,
+                on_dismiss: overflow_dismiss_msg(),
+            });
+            return iced_widget::stack![base, menu].into();
+        }
+    }
+    base
 }
 
 /// 文本编辑弹层:标题行(文件名+关闭)+ `iced-code-editor` 代码编辑器主体

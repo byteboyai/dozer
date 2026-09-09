@@ -40,9 +40,10 @@ use crate::workspace::{
     CONVERSATION_DETAIL_PAGE_SIZE, PickerLaunch, RestorePayload, ReviewSource, ReviewView, ShellIo,
     SshOut, TabBackend, Workspace, agent_list_pane, agent_picker_popup, conversation_list_pane,
     dot_color, edit_discard_confirm_popup, edit_modal, exited_marker, fetch_project_restore,
-    no_project_placeholder, preview_pane, project_preview_pane, relative_time_text,
-    review_content_pane, review_should_refresh_on_turn, spawn_disk_usage_refresh,
-    spawn_project_git_refresh, split_portions, tab_display_width, tab_title,
+    no_project_placeholder, preview_pane, preview_tab_display_width, project_preview_pane,
+    relative_time_text, review_content_pane, review_should_refresh_on_turn,
+    spawn_disk_usage_refresh, spawn_project_git_refresh, split_portions, tab_display_width,
+    tab_title,
 };
 use byteui::interaction::icons;
 use dozer_client::Client;
@@ -1814,8 +1815,10 @@ pub enum Message {
     TermTabOverflowToggle,
     /// 终端 tab 栏溢出下拉：点击外部区域关闭。
     TermTabOverflowDismiss,
-    /// 预览 tab 栏箭头翻页，语义同 `TermTabScroll`。
-    PreviewTabScroll(bool),
+    /// 文件预览 tab 栏溢出下拉开关,语义同 `TermTabOverflowToggle`。
+    PreviewTabOverflowToggle,
+    /// 文件预览 tab 栏溢出下拉:点击外部关闭。
+    PreviewTabOverflowDismiss,
     /// 终端左键按下：在视口格 `(col, row)` 起新选区（`right` = 按点在
     /// 格子右半）。
     TermSelStart {
@@ -1928,8 +1931,11 @@ pub enum Message {
     ProjectPreviewSelectTab(usize),
     /// Project 面板右配对预览:关闭 tab(vec 位置)。
     ProjectPreviewCloseTab(usize),
-    /// Project 面板右配对预览:tab 栏箭头翻页(语义同 `PreviewTabScroll`)。
-    ProjectPreviewTabScroll(bool),
+    /// Project 面板右配对预览 tab 栏溢出下拉开关,语义同上
+    /// (`PreviewTabOverflowToggle`)。
+    ProjectPreviewTabOverflowToggle,
+    /// Project 面板右配对预览 tab 栏溢出下拉:点击外部关闭。
+    ProjectPreviewTabOverflowDismiss,
     /// Project 面板右配对预览的原生 `text_editor::Action`，语义同
     /// `PreviewEditorEvent`。
     ProjectPreviewEditorEvent(usize, iced_widget::text_editor::Action),
@@ -5130,13 +5136,19 @@ impl App {
                     ws.term_tab_overflow_anchor = None;
                 });
             }
-            Message::PreviewTabScroll(right) => {
+            Message::PreviewTabOverflowToggle => {
+                let last_cursor = self.last_cursor;
                 self.with_focused_project(|ws, _io| {
-                    if right {
-                        ws.preview_tab_first = ws.preview_tab_first.saturating_add(2);
+                    ws.preview_tab_overflow_anchor = if ws.preview_tab_overflow_anchor.is_some() {
+                        None
                     } else {
-                        ws.preview_tab_first = ws.preview_tab_first.saturating_sub(2);
-                    }
+                        Some(last_cursor)
+                    };
+                });
+            }
+            Message::PreviewTabOverflowDismiss => {
+                self.with_focused_project(|ws, _io| {
+                    ws.preview_tab_overflow_anchor = None;
                 });
             }
             Message::TermSelStart {
@@ -5294,15 +5306,20 @@ impl App {
                     ws.project_preview_tab_first = 0;
                 });
             }
-            Message::ProjectPreviewTabScroll(right) => {
+            Message::ProjectPreviewTabOverflowToggle => {
+                let last_cursor = self.last_cursor;
                 self.with_focused_project(|ws, _io| {
-                    if right {
-                        ws.project_preview_tab_first =
-                            ws.project_preview_tab_first.saturating_add(2);
-                    } else {
-                        ws.project_preview_tab_first =
-                            ws.project_preview_tab_first.saturating_sub(2);
-                    }
+                    ws.project_preview_tab_overflow_anchor =
+                        if ws.project_preview_tab_overflow_anchor.is_some() {
+                            None
+                        } else {
+                            Some(last_cursor)
+                        };
+                });
+            }
+            Message::ProjectPreviewTabOverflowDismiss => {
+                self.with_focused_project(|ws, _io| {
+                    ws.project_preview_tab_overflow_anchor = None;
                 });
             }
             Message::ProjectPreviewEditorEvent(_tab_id, _event) => {
@@ -7217,6 +7234,22 @@ impl App {
             .unwrap_or(false);
         self.with_focused_project(|ws, io| {
             ws.preview.select(idx);
+            if idx < ws.preview.tabs().len() {
+                let widths: Vec<f32> = ws
+                    .preview
+                    .tabs()
+                    .iter()
+                    .map(|t| preview_tab_display_width(&t.title))
+                    .collect();
+                ws.preview_tab_first = tab_widget::tab_window_reveal(
+                    &widths,
+                    4.0,
+                    byteui::theme::geometry::tab_bar_avail_px(),
+                    ws.preview_tab_first,
+                    idx,
+                );
+                ws.preview_tab_overflow_anchor = None;
+            }
             ws.spawn_preview_state_save(io);
             ws.spawn_preview_context_push(io);
         });
@@ -7276,6 +7309,22 @@ impl App {
             .unwrap_or(false);
         self.with_focused_project(|ws, _io| {
             ws.project_preview.select(idx);
+            if idx < ws.project_preview.tabs().len() {
+                let widths: Vec<f32> = ws
+                    .project_preview
+                    .tabs()
+                    .iter()
+                    .map(|t| preview_tab_display_width(&t.title))
+                    .collect();
+                ws.project_preview_tab_first = tab_widget::tab_window_reveal(
+                    &widths,
+                    4.0,
+                    byteui::theme::geometry::tab_bar_avail_px(),
+                    ws.project_preview_tab_first,
+                    idx,
+                );
+                ws.project_preview_tab_overflow_anchor = None;
+            }
         });
         if arming {
             self.tab_drag = Some(TabDrag {
