@@ -18,10 +18,10 @@ pub fn tree_row_h() -> f32 {
     crate::workspace::tree_row_font_size() * crate::theme::terminal_font::line_height_factor()
 }
 
-/// 文件树 Scrollable 之上（容器上内边距 + 面板头 + 搜索/工具栏 + 两段行间距）
-/// 的 chrome 高度（逻辑像素），已含全局 scale。`left_files_tree_bounds` 用它
-/// 与 `preview_content_bounds` 同源的谱系换算树视口的纵向起点；同样地，它底
-/// 下（git 脚注栏 + 行间距 + 容器下内边距）由 `tree_chrome_bottom_px` 承担。
+/// 文件树 Scrollable 之上（容器上内边距 + 面板头 + 搜索/工具栏 + 根目录头部 +
+/// 三段行间距）的 chrome 高度（逻辑像素），已含全局 scale。`left_files_tree_bounds`
+/// 用它与 `preview_content_bounds` 同源的谱系换算树视口的纵向起点；同样地，
+/// 它底下（git 脚注栏 + 行间距 + 容器下内边距）由 `tree_chrome_bottom_px` 承担。
 ///
 /// 这里**复刻** `files::view` 的固定堆栈，不另起字面量——内里每一项都取自
 /// 渲染侧同一 token，改一处自动同步。行文字用 `LineHeight::Normal` 的高度
@@ -38,7 +38,14 @@ pub fn tree_chrome_top_px() -> f32 {
     let search_h = byteui::theme::font::body() as f32 * 1.2 + 12.0 + 2.0;
     let box_h = row + 12.0;
     let header_h = search_h.max(box_h) + 12.0;
-    region.padding.top + head_h + region.gap + header_h + region.gap
+    // 根目录头部行（图标 + 名称，`header` 列里紧跟在搜索/工具栏行下面，自身
+    // 无内边距）：高度取图标行高与文字行高的较大者。根目录本身也是合法拖拽
+    // 落点（`files::view` 的 `root_header`），这一行漏算会让 `left_files_tree_
+    // bounds_for` 算出的视口顶端偏高、命中测试整体偏移一行——外部拖拽悬停
+    // 时高亮的目录会比光标实际位置低一截（2026-09 用户实测反馈"鼠标比选中
+    // 目录高一点"）。
+    let root_header_h = row.max(byteui::theme::font::body() as f32 * 1.2);
+    region.padding.top + head_h + region.gap + header_h + region.gap + root_header_h + region.gap
 }
 
 /// 文件树 Scrollable 之下（git 脚注栏 + 一段行间距 + 容器下内边距）的 chrome
@@ -63,9 +70,14 @@ mod tests {
         let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
         assert!(near(tree_row_h(), 16.8)); // 14 × 1.2
         // tree_chrome_top = pad8 + (max(14,15*1.2)+9) + gap2 + (max(14*1.2+12+2, 26)+12) + gap2
-        //                = 8 + (18.0+9) + 2 + (30.8+12) + 2 = 81.8
+        //                 + max(14,14*1.2) + gap2
+        //                = 8 + (18.0+9) + 2 + (30.8+12) + 2 + 16.8 + 2 = 100.6
         // 字号基准抬到 14px(subtitle 15/body 14)后,head_h 与 header_h 各 +1.8/+1.2。
-        assert!(near(tree_chrome_top_px(), 8.0 + 27.0 + 2.0 + 42.8 + 2.0));
+        // 根目录头部行(root_header,可作拖拽落点)补入后新增 gap2+16.8。
+        assert!(near(
+            tree_chrome_top_px(),
+            8.0 + 27.0 + 2.0 + 42.8 + 2.0 + 16.8 + 2.0
+        ));
         // tree_chrome_bottom = pad8 + gap2 + footer(1+4+(14+12)+12) = 8+2+43
         assert!(near(tree_chrome_bottom_px(), 8.0 + 2.0 + 43.0));
     }

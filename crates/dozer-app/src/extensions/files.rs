@@ -13,7 +13,7 @@ use iced_widget::core::widget::{Id, Operation};
 use iced_widget::core::{Border, Color, Element, Length, Padding, Rectangle};
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// 项目树行内编辑的模式:新建文件/新建文件夹/重命名(携带原路径)。
 /// 现有 `workspace.rs::TreeEditMode` 的搬家版本,定义不变。
@@ -84,6 +84,24 @@ struct TreeDrag {
     armed_at: std::time::Instant,
 }
 
+/// 拖拽移动待确认——内部树拖拽落点合法、或外部 OS 单文件拖入命中树上
+/// 某一行后,不立即移动,而是弹这个确认框:用户可在框里改文件名/改
+/// 目标目录,取消则整场拖拽作废(磁盘不会有任何改动),点确定才真正提交
+/// (`Message::MoveConfirm`)。2026-09 用户实测反馈:拖拽移动不该悄无声息
+/// 直接改路径,得让用户确认。多文件外部拖入(理论上今天走不到——
+/// main.rs 每次 `DroppedFile` 只带一个路径,见 `Message::FileDrop`
+/// 文档)不弹这个框,批量改名没有意义,原地保留旧的"直接移动"行为。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingMove {
+    source: PathBuf,
+    source_is_dir: bool,
+    /// 编辑框草稿:新文件名(不含路径,默认原文件名)。
+    name_draft: String,
+    /// 编辑框草稿:目标目录路径文本(默认落点目录,允许手改或用
+    /// `MoveDirBrowse` 选)。
+    dir_draft: String,
+}
+
 /// 挂在每个 Workspace 上的 Files 面板状态(项目信息卡数据 + 文件树 + 树操作
 /// 弹层)。对应现有 `Workspace` 上 11 个字段。
 #[derive(Default)]
@@ -143,7 +161,26 @@ pub struct WorkspaceState {
     /// 文档。按下树行武装(`arm_tree_drag`),`TreeDragOver`/`TreeDragEnd`
     /// 更新/收尾。
     tree_drag: Option<TreeDrag>,
+    /// 拖拽(外部 OS 拖入或树内拖拽,两条路径共用这一份状态)悬停在一个
+    /// 仍处于折叠态的目录上时,记录"从什么时候开始悬停"——`arm_drag_expand`
+    /// 维护、`drag_expand_ready` 读、`clear_drag_expand` 清空。真正的展开
+    /// 推迟到悬停满 `DRAG_HOVER_EXPAND_DELAY` 才由 `App::advance_drag_hover_
+    /// expand` 触发(同 `HOVER_TOOLTIP_DELAY` 那套"武装计时→轮询到点才动手"
+    /// 手法),不在悬停那一刻立即展开——2026-09 用户实测反馈:拖着划过时
+    /// 沿途目录被立即强制展开,布局跟着疯狂跳动,来不及瞄准真正想投放的
+    /// 目录。
+    drag_expand_pending: Option<(PathBuf, std::time::Instant)>,
+    /// 拖拽移动待确认,见 `PendingMove` 文档。
+    pending_move: Option<PendingMove>,
+    /// 一次性标记:`pending_move` 刚从 `None` 变成 `Some` 时置真,main.rs
+    /// 渲染循环取走后程序化聚焦"新名称"输入框(同 `tree_edit_focus_pending`
+    /// 的既有手法,见其文档)。
+    move_focus_pending: bool,
 }
+
+/// 拖拽悬停到折叠目录后等满这么久才自动展开,见 `WorkspaceState::
+/// drag_expand_pending` 文档。
+pub(crate) const DRAG_HOVER_EXPAND_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// 一次 git 仓库信息加载的结果(分支栏渲染用)。判"是否在仓库内"靠
 /// `repo_root().is_some()`,再取当前分支与本地分支表。
@@ -167,6 +204,14 @@ pub struct AppState {
 /// `RightClickAt` 变体,去前缀原样搬来。
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// 立即展开/折叠一个目录并选中它,不经拖拽/双击那套延迟判定——三处
+    /// 调用点:①目录箭头(`>`/`V`)被按下(见 `view()` 挂在箭头自己的
+    /// `MouseArea::on_press` 上,点击会 `shell.capture_event()`,不会冒泡
+    /// 触发外层整行的 `TreeRowPress`/`TreeRowDoubleClick`);②目录行被双击
+    /// (`TreeRowDoubleClick` 分派,同箭头效果,给没精确点在箭头上的用户
+    /// 一个整行都能双击的入口);③外部/内部拖拽悬停到折叠目录时自动展开
+    /// (`expand_files_dir_if_collapsed`/`expand_dir_if_collapsed`)。不跨
+    /// 内核边界,直接在 `files::update()` 里处理。
     Toggle(PathBuf),
     StatusesRefreshed(i64, HashMap<PathBuf, FileGitStatus>),
     RightClickAt {
@@ -247,20 +292,63 @@ pub enum Message {
     /// 用于把那些目录行高亮成"拖入落点"(整行高亮),见 `view()`。
     FileDragHover(HashSet<PathBuf>),
     /// 外部文件被松开(落下)在某个目录上:`paths` 是本次拖入的文件/目录
-    /// 完整路径,`target` 是落点目录。由 main.rs 在原生 `DroppedFile` 事件层
-    /// 命中测试后发出,异步移动(见 `Message::FileDrop` 处理器)。
+    /// 完整路径(main.rs 每次原生 `DroppedFile` 事件只带一个路径,一次拖入
+    /// 多个文件会拆成多条独立的 `DroppedFile`/`FileDrop`,`paths` 恒长度 1;
+    /// `Vec` 类型只是留了口子,不是当前真实会出现多元素的场景),`target`
+    /// 是落点目录。由 main.rs 在原生 `DroppedFile` 事件层命中测试后发出。
+    /// 单文件(今天恒成立的情况)不立即移动,弹 `PendingMove` 确认框
+    /// (见其文档);那条从未被触发过的"多文件"分支保留旧的直接移动行为
+    /// 兜底。
     FileDrop {
         paths: Vec<PathBuf>,
         target: PathBuf,
     },
-    /// 一次拖入的异步移动结果:成功时刷新 `target` 目录,失败时置
-    /// `tree_error`。
+    /// 一次拖入(多文件兜底分支)/`Message::MoveConfirm` 的异步移动结果:
+    /// 成功时刷新 `target` 目录,失败时置 `tree_error`。
     FileDropDone(i64, PathBuf, Result<(), String>),
-    /// 树内行被按下:武装拖拽,同时保留原有点击语义(展开/折叠目录,或打开
-    /// 文件——文件要跨到 `Message::PreviewOpenPath`,该面板本身不渲染预览)。
-    /// 这条跨内核边界:由 `App::update` 拦截转发,`files::update()` 收到会
+    /// 拖拽移动确认框"新名称"输入框内容变化(`byteui::form::input_text`
+    /// 的 `on_input`)。
+    MoveNameInput(String),
+    /// 拖拽移动确认框"到目录"输入框内容变化——手动改写路径文本,或
+    /// `MoveDirBrowse` 选完目录后回填。
+    MoveDirInput(String),
+    /// 拖拽移动确认框"到目录"字段旁边的"..."浏览按钮:要弹原生目录选择器
+    /// (`rfd::FileDialog`),`files::update()`(纯状态转换,拿不到原生
+    /// 对话框能力)处理不了——由 main.rs 的 `Runner::dispatch` 拦截(同
+    /// `Message::ProjectTabPickFolder` 的既有套路,注意这**不是**
+    /// `App::update` 那层拦截,是更外层 main.rs 自己的 match),选完后转发
+    /// 一条 `MoveDirInput` 回填草稿。
+    MoveDirBrowse,
+    /// 拖拽移动确认框"确定":真正提交移动(改名 + 改目标目录一起生效,见
+    /// `PendingMove`/`crate::project::move_item_to`)。校验失败(名字为空/
+    /// 含路径分隔符、目标目录不存在)置 `tree_error` 并把对话框放回去
+    /// (不关闭,同行内编辑框"已存在同名项"校验失败时的既有口径);校验通过
+    /// 异步落盘,完成后复用 `FileDropDone` 刷新目标目录。
+    MoveConfirm,
+    /// 拖拽移动确认框"取消"/点击框外空白(见 app.rs 顶层浮层的 `dismiss`
+    /// 层,同 `DeleteCancel` 的既有套路):整场拖拽作废,不做任何磁盘改动,
+    /// 只清空 `pending_move`。
+    MoveCancel,
+    /// 树内行(不含目录箭头,箭头见 `Message::Toggle`)被按下:武装拖拽,
+    /// 同时保留原有点击语义——单击只选中,不展开/折叠目录、不打开文件
+    /// 预览,那两个效果都推迟到双击才触发,见 `TreeRowDoubleClick`。这条
+    /// 跨内核边界:由 `App::update` 拦截转发,`files::update()` 收到会
     /// `unreachable!`。
     TreeRowPress {
+        path: PathBuf,
+        is_dir: bool,
+    },
+    /// 树行被双击:文件打开预览;目录展开/折叠(与点箭头的 `Message::
+    /// Toggle` 等效,给没精确点在箭头上的用户一个整行都能双击的入口)。
+    /// 单击只选中(见 `TreeRowPress`)。文件那支要跨到 `Message::
+    /// PreviewOpenPath`,该面板本身不渲染预览;这条整体跨内核边界:由
+    /// `App::update` 按 `is_dir` 分派(目录转发 `Message::Toggle`,文件转
+    /// `PreviewOpenPath`),`files::update()` 收到会 `unreachable!`。iced
+    /// `MouseArea::on_double_click` 的事件时序是 `on_press -> on_release ->
+    /// on_press -> on_double_click -> on_release`,第二次按下仍会重新武装一
+    /// 次拖拽(`TreeRowPress`)、松开仍会照常触发 `TreeDragEnd(false)` 选中
+    /// 同一路径——都是幂等操作,不需要互斥。
+    TreeRowDoubleClick {
         path: PathBuf,
         is_dir: bool,
     },
@@ -346,6 +434,18 @@ pub fn tree_edit_field_id() -> Id {
     Id::new("files-tree-edit-box")
 }
 
+/// 拖拽移动确认框"新名称"输入框稳定的 iced widget id——`pending_move`
+/// 刚出现时程序化聚焦这个 id(见 `move_focus_pending` 文档),同一时刻
+/// 至多一场待确认的移动,固定 id 够用。
+pub fn move_name_field_id() -> Id {
+    Id::new("files-move-name-box")
+}
+
+/// 拖拽移动确认框"到目录"输入框稳定的 iced widget id。
+pub fn move_dir_field_id() -> Id {
+    Id::new("files-move-dir-box")
+}
+
 static TREE_EDIT_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
 
@@ -429,6 +529,28 @@ impl WorkspaceState {
     /// 的既有调用时机。
     pub fn take_tree_edit_focus_pending(&mut self) -> bool {
         std::mem::take(&mut self.tree_edit_focus_pending)
+    }
+
+    /// 供内核判断"拖拽移动确认框该不该显示"(`App::view()` 顶层互斥浮层
+    /// 判断链用,同 `tree_delete_confirm_is_some` 的用法),以及键盘路由是否
+    /// 该整体放行给对话框里的两个原生 `text_input`(粗粒度信号,同 SSH/
+    /// Database 表单"整体放行不细分字段"的既有口径——同一时刻框里只有两个
+    /// 字段,不需要为哪个字段真正持有焦点单独判断)。
+    pub fn pending_move_is_some(&self) -> bool {
+        self.pending_move.is_some()
+    }
+
+    /// 读走(消费式)一次性聚焦标记,同 `take_tree_edit_focus_pending` 的
+    /// 既有手法——main.rs 据此程序化聚焦"新名称"输入框。
+    pub fn take_move_focus_pending(&mut self) -> bool {
+        std::mem::take(&mut self.move_focus_pending)
+    }
+
+    /// `Message::MoveDirBrowse` 弹原生目录选择器时用作起始目录(main.rs
+    /// `Runner::dispatch` 拦截处理时调用,见其文档)。没有待确认的移动时
+    /// 返回 `None`。
+    pub fn move_dir_draft(&self) -> Option<&str> {
+        self.pending_move.as_ref().map(|m| m.dir_draft.as_str())
     }
 
     /// 搜索框草稿、生效词保留,退出后仍作为盒子里的已输入文本继续显示。
@@ -653,6 +775,46 @@ impl WorkspaceState {
         });
     }
 
+    /// 拖拽悬停命中一个目录时调用(外部 OS 拖入、内部树拖拽两条路径共用):
+    /// `already_expanded` 由调用方算好传入(两条路径判断口径不同,一条读
+    /// `visible_tree_rows`,一条还要考虑根目录特例,見各自调用点)。已展开
+    /// 直接清空计时(没什么好等的);未展开且悬停的还是同一个目录则**不**
+    /// 重置计时(这才是"悬停满 1s"的关键——否则光标在同一行内轻微抖动,
+    /// 每帧都重新起计时,永远等不满);悬停切换到别的目录才重新起计时。
+    pub(crate) fn arm_drag_expand(&mut self, dir: PathBuf, already_expanded: bool) {
+        if already_expanded {
+            self.drag_expand_pending = None;
+            return;
+        }
+        if self.drag_expand_pending.as_ref().map(|(p, _)| p) != Some(&dir) {
+            self.drag_expand_pending = Some((dir, std::time::Instant::now()));
+        }
+    }
+
+    /// 悬停离开目标目录、拖拽收尾/取消时调用:清空计时,不留残留状态
+    /// (否则一场拖拽结束后,下一场全新拖拽可能被上一场的残留计时提前
+    /// 触发展开)。
+    pub(crate) fn clear_drag_expand(&mut self) {
+        self.drag_expand_pending = None;
+    }
+
+    /// 当前悬停的目录是否已经计满 `DRAG_HOVER_EXPAND_DELAY`——满则返回该
+    /// 目录路径(克隆一份,调用方据此发 `Message::Toggle` 真正展开),未满
+    /// 或没有悬停中的目录都返回 `None`。供 `App::advance_drag_hover_expand`
+    /// 每次唤醒时轮询。
+    pub(crate) fn drag_expand_ready(&self) -> Option<PathBuf> {
+        let (dir, start) = self.drag_expand_pending.as_ref()?;
+        (start.elapsed() >= DRAG_HOVER_EXPAND_DELAY).then(|| dir.clone())
+    }
+
+    /// 距计时满 1s 的剩余时间——`App::next_drag_hover_expand_wake` 据此给
+    /// `about_to_wait` 排精确唤醒(同 `next_tooltip_wake` 手法),不空转也
+    /// 不迟到。没有悬停中的目录时返回 `None`。
+    pub(crate) fn next_drag_expand_wake(&self) -> Option<std::time::Duration> {
+        let (_, start) = self.drag_expand_pending.as_ref()?;
+        DRAG_HOVER_EXPAND_DELAY.checked_sub(start.elapsed())
+    }
+
     /// 树内拖拽是否正在进行(供 `App::dragging_tree_item()` 判断全局左键
     /// 松开是否该收尾这场拖拽——同 `dragging_rail`/`dragging_tab` 的用法)。
     /// 无论处于 `Pending` 还是 `Dragging` 都算"在进行":松开必须总能收尾、
@@ -729,24 +891,6 @@ impl WorkspaceState {
     /// 文档。
     pub(crate) fn tree_drag_armed_at(&self) -> Option<std::time::Instant> {
         self.tree_drag.as_ref().map(|d| d.armed_at)
-    }
-
-    /// `TreeDragEnd` 收尾前问一句:`confirmed`(光标是否已越过确认阈值,
-    /// 由内核算出)为假时这其实只是一次单击,若源是文件,该不该由内核补发
-    /// `PreviewOpenPath`——`TreeRowPress` 不再立即打开文件就是为了避免预览
-    /// webview 在拖拽途中冒出来挡住画面(见其文档)。`confirmed` 是唯一
-    /// 判据:哪怕碰巧记了个 `target`(没真正越过阈值也不算数,见
-    /// `Message::TreeDragEnd` 文档),`confirmed=false` 就该当单击处理。
-    /// 目录不需要跨内核边界这一步:它的点击语义(展开/折叠)由
-    /// `files::update()` 自己在 `TreeDragEnd` 里直接执行。**必须在
-    /// `files::update()` 消费 `tree_drag` 之前调用**——那之后状态已被
-    /// `TreeDragEnd` 的处理器 `take()` 走。
-    pub(crate) fn pending_click_open_file(&self, confirmed: bool) -> Option<PathBuf> {
-        if confirmed {
-            return None;
-        }
-        let drag = self.tree_drag.as_ref()?;
-        (!drag.source_is_dir).then(|| drag.source.clone())
     }
 }
 
@@ -1050,6 +1194,24 @@ pub fn update(
                 ));
                 return;
             }
+            if let [only] = paths.as_slice() {
+                // 单文件(main.rs 每次 `DroppedFile` 恒只带一个路径,见
+                // `Message::FileDrop` 文档):弹确认框,不立即移动。
+                let name = only
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                ws_state.pending_move = Some(PendingMove {
+                    source: only.clone(),
+                    source_is_dir: only.is_dir(),
+                    name_draft: name,
+                    dir_draft: target.display().to_string(),
+                });
+                ws_state.move_focus_pending = true;
+                return;
+            }
+            // 理论上不会走到这里(见上面 `Message::FileDrop` 文档),多文件
+            // 批量改名弹一个框没有意义,原地保留旧的"直接移动"兜底行为。
             let drop_target = target.clone();
             handle.spawn(async move {
                 let result = tokio::task::spawn_blocking(move || {
@@ -1073,56 +1235,155 @@ pub fn update(
             }
             Err(e) => ws_state.tree_error = Some(e),
         },
+        Message::MoveNameInput(s) => {
+            if let Some(pending) = &mut ws_state.pending_move {
+                pending.name_draft = s;
+            }
+        }
+        Message::MoveDirInput(s) => {
+            if let Some(pending) = &mut ws_state.pending_move {
+                pending.dir_draft = s;
+            }
+        }
+        Message::MoveDirBrowse => {
+            unreachable!(
+                "由 main.rs Runner::dispatch 拦截处理,见 files::Message::MoveDirBrowse 文档"
+            )
+        }
+        Message::MoveCancel => {
+            ws_state.pending_move = None;
+        }
+        // 校验同行内编辑框既有口径(`submit_tree_edit`):名字非空、不含路径
+        // 分隔符;目标目录必须真实存在。任一失败都把 `pending_move` 放
+        // 回去(草稿保留用户已输入的内容,只是换上校验后的值),对话框留
+        // 在屏幕上,不当成"取消"处理。
+        Message::MoveConfirm => {
+            let Some(pending) = ws_state.pending_move.take() else {
+                return;
+            };
+            ws_state.tree_error = None;
+            let name = pending.name_draft.trim().to_string();
+            let dir_text = pending.dir_draft.trim().to_string();
+            if name.is_empty() || !crate::project::is_single_path_component(&name) {
+                ws_state.tree_error = Some("名字不能为空或包含路径分隔符".to_string());
+                ws_state.pending_move = Some(PendingMove {
+                    name_draft: name,
+                    ..pending
+                });
+                return;
+            }
+            let target_dir = PathBuf::from(&dir_text);
+            if !target_dir.is_dir() {
+                ws_state.tree_error = Some(format!("{} 不是有效目录", target_dir.display()));
+                ws_state.pending_move = Some(PendingMove {
+                    dir_draft: dir_text,
+                    ..pending
+                });
+                return;
+            }
+            let dest = target_dir.join(&name);
+            let source = pending.source;
+            let is_dir = pending.source_is_dir;
+            // 路径压根没变(没改名也没改目录,原地确认)、或目录被改成要移进
+            // 它自己的子树——这两种在 `move_item_to` 里都会撞上"已存在同名
+            // 项"/"不能移到它自己或其子树"的校验失败,但对用户来说这不是
+            // "出错了",只是"什么都没变"或"这么改没有意义"——静默当取消处理
+            // (不提示错误、不动磁盘),不吓用户一跳(2026-09 用户实测反馈:
+            // 这类情形不该弹错误)。
+            if dest == source || (is_dir && dest.starts_with(&source)) {
+                return;
+            }
+            let refresh_target = target_dir.clone();
+            handle.spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::project::move_item_to(&source, is_dir, &dest)?;
+                    Ok::<(), String>(())
+                })
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()));
+                emit(Message::FileDropDone(project_id, refresh_target, result));
+            });
+        }
         Message::TreeRowPress { .. } => {
             unreachable!("由内核拦截处理,见 files::Message::TreeRowPress 文档")
         }
         Message::TreeDragRelease => {
             unreachable!("由内核拦截处理,见 files::Message::TreeDragRelease 文档")
         }
-        // 树内拖拽悬停:只在落点合法(非自身/自身子树,见
-        // `is_valid_move_target`)时记为待定目标并高亮——复用外部拖拽同一份
-        // `drag_hover` 渲染,不用另画一套。悬停到折叠的目录顺带自动展开,
-        // 方便继续往深一层拖(同外部 OS 拖拽既有的 `expand_dir_if_collapsed`
-        // 行为一致)。
+        Message::TreeRowDoubleClick { .. } => {
+            unreachable!("由内核拦截处理,见 files::Message::TreeRowDoubleClick 文档")
+        }
+        // 树内拖拽悬停:悬停命中的行(文件或目录都可,2026-09 用户实测反馈
+        // "悬浮到文件上也该有高亮")真正的落点目录若命中的是目录本身即为
+        // 目标;命中文件则退到其父目录(同 Finder"拖到某个文件上=拖进它
+        // 所在文件夹"的既有语义,文件所在目录既然渲染出这一行就必然已经
+        // 展开,退到父目录永远是"已展开"的 no-op)。只在落点合法(非自身/
+        // 自身子树,见 `is_valid_move_target`)时记为待定目标并高亮命中的
+        // 那一行——复用外部拖拽同一份 `drag_hover` 渲染,不用另画一套。
+        // 悬停到折叠的目录不立即展开,武装 `DRAG_HOVER_EXPAND_DELAY` 计时,
+        // 真正展开推迟到 `App::advance_drag_hover_expand` 满时才做(见
+        // `drag_expand_pending` 文档:立即展开会让拖着划过沿途目录疯狂
+        // 跳动布局)。
         // 只有 `Dragging` 阶段的行才会挂 `on_move`(见 `view()`),所以这条
         // 消息到达时 `drag.phase` 理论上总是 `Dragging`——仍用 `let ... else`
         // 防御性处理,不假设调用方永远遵守约定。
-        Message::TreeDragOver(target) => {
+        Message::TreeDragOver(hovered) => {
+            let is_root = ws_state
+                .file_tree
+                .as_ref()
+                .is_some_and(|t| t.root() == hovered);
+            let hovered_row = ws_state
+                .visible_tree_rows()
+                .into_iter()
+                .find(|r| r.path == hovered);
+            let hovered_is_dir = is_root || hovered_row.as_ref().is_some_and(|r| r.is_dir);
+            let already_expanded = is_root || hovered_row.is_none_or(|r| r.expanded);
             let Some(drag) = &mut ws_state.tree_drag else {
                 return;
             };
             let TreeDragPhase::Dragging { target: current } = &mut drag.phase else {
                 return;
             };
-            if is_valid_move_target(&drag.source, drag.source_is_dir, &target) {
-                *current = Some(target.clone());
-                ws_state.drag_hover = std::iter::once(target.clone()).collect();
-                expand_dir_if_collapsed(ws_state, &target);
+            let target_dir = if hovered_is_dir {
+                Some(hovered.clone())
+            } else {
+                hovered.parent().map(Path::to_path_buf)
+            };
+            let Some(target_dir) = target_dir else {
+                *current = None;
+                ws_state.drag_hover = HashSet::new();
+                ws_state.clear_drag_expand();
+                return;
+            };
+            if is_valid_move_target(&drag.source, drag.source_is_dir, &target_dir) {
+                *current = Some(target_dir);
+                ws_state.drag_hover = std::iter::once(hovered.clone()).collect();
+                if hovered_is_dir {
+                    ws_state.arm_drag_expand(hovered, already_expanded);
+                } else {
+                    ws_state.clear_drag_expand();
+                }
             } else {
                 *current = None;
                 ws_state.drag_hover = HashSet::new();
+                ws_state.clear_drag_expand();
             }
         }
         // 树内拖拽松开:`confirmed` 就是"这场拖拽有没有走到 Dragging 阶段"
         // (由 `App::maybe_confirm_tree_drag` 在越过距离+时长两道阈值时
         // 推进,一次到位,松开时不用重新算——见 `TreeDragPhase` 文档)。
-        // `!confirmed`(仍是 `Pending`):这其实只是一次单击,目录顺延到
-        // 这里才展开/折叠(文件的"打开预览"同理推迟,但那部分要跨内核
-        // 边界,由 `pending_click_open_file` 在这条消息到达前问出)。
-        // `confirmed` 且有合法待定目标:提交移动,复用 `FileDrop` 那套
-        // `move_item` + `spawn_blocking` + `FileDropDone` 收尾逻辑。
+        // `!confirmed`(仍是 `Pending`):这其实只是一次单击,只选中——文件/
+        // 目录的展开/打开都推迟到双击(`TreeRowDoubleClick`)或箭头
+        // (`Message::Toggle`),不在这里做。
+        // `confirmed` 且有合法待定目标:不立即移动,弹 `PendingMove` 确认框
+        // (同 `FileDrop` 单文件那支,见其文档)——用户点"确定"才真正提交。
         Message::TreeDragEnd(confirmed) => {
             let Some(drag) = ws_state.tree_drag.take() else {
                 return;
             };
             ws_state.drag_hover = HashSet::new();
             if !confirmed {
-                if drag.source_is_dir {
-                    ws_state.tree_selected = Some(drag.source.clone());
-                    if let Some(tree) = &mut ws_state.file_tree {
-                        tree.toggle(&drag.source);
-                    }
-                }
+                ws_state.tree_selected = Some(drag.source.clone());
                 return;
             }
             let TreeDragPhase::Dragging { target } = drag.phase else {
@@ -1131,18 +1392,18 @@ pub fn update(
             let Some(target) = target else {
                 return;
             };
-            let source = drag.source;
-            let is_dir = drag.source_is_dir;
-            let refresh_target = target.clone();
-            handle.spawn(async move {
-                let result = tokio::task::spawn_blocking(move || {
-                    crate::project::move_item(&source, is_dir, &target)?;
-                    Ok::<(), String>(())
-                })
-                .await
-                .unwrap_or_else(|e| Err(e.to_string()));
-                emit(Message::FileDropDone(project_id, refresh_target, result));
+            let name = drag
+                .source
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            ws_state.pending_move = Some(PendingMove {
+                source: drag.source,
+                source_is_dir: drag.source_is_dir,
+                name_draft: name,
+                dir_draft: target.display().to_string(),
             });
+            ws_state.move_focus_pending = true;
         }
     }
 }
@@ -1189,22 +1450,34 @@ fn spawn_git_info_load(
     });
 }
 
-/// 窗口坐标 (x, y) → 命中的**目录行**路径。外部 OS 文件拖拽的命中测试：
+/// 外部 OS 拖拽命中一行后的结果:`highlight` 是光标字面命中的行路径
+/// (文件或目录都可,`view()` 据此渲染金框高亮——2026-09 用户实测反馈
+/// "悬浮到文件上也该有高亮"),`target` 是真正的落点目录:命中目录本身即
+/// 为 `target`;命中文件则退到其父目录(同 Finder"拖到某个文件上=拖进它
+/// 所在文件夹"的既有语义)。命中目录行时两者相同。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DropHit {
+    pub highlight: PathBuf,
+    pub target: PathBuf,
+}
+
+/// 窗口坐标 (x, y) → 命中行的落点结果。外部 OS 文件拖拽的命中测试：
 /// main.rs 在原生事件层拿不到 iced 布局，只能靠 `left_files_tree_bounds`
 /// 算出的树视口矩形 + `tree_scroll` 偏移 + 行高/行间距，把窗口 Y 换算成
-/// 可见行序号，再确认命中行是目录。
+/// 可见行序号。
 ///
-/// 只返回**目录**（文件不可作落点）；命中视图外 / 非目录行返回 `None`。
-/// 行 i 的屏幕上沿 = `bounds.y - scroll + i * (row_h + region.gap)`，行高
-/// 与间距必须和渲染侧同源（`tree_row_h()`、`project_pane().gap`）。行间死
-/// 区（间距）落在任一相邻目录行之间时按最近目录行吸住。
+/// 命中视图外返回 `None`；命中文件行退到其父目录当 `target`(见 `DropHit`
+/// 文档),父目录必然存在(树内路径不可能是文件系统根)。行 i 的屏幕上沿
+/// = `bounds.y - scroll + i * (row_h + region.gap)`，行高与间距必须和渲染
+/// 侧同源（`tree_row_h()`、`project_pane().gap`）。行间死区（间距）落在
+/// 任一相邻行之间时按最近行吸住。
 pub fn tree_drop_target(
     x: f32,
     y: f32,
     bounds: (f32, f32, f32, f32),
     scroll: f32,
     rows: &[TreeRow],
-) -> Option<PathBuf> {
+) -> Option<DropHit> {
     let (bx, by, bw, bh) = bounds;
     if bw <= 0.0 || bh <= 0.0 || !(bx..bx + bw).contains(&x) || !(by..by + bh).contains(&y) {
         return None;
@@ -1223,9 +1496,15 @@ pub fn tree_drop_target(
     }
     let row = &rows[idx as usize];
     if row.is_dir {
-        Some(row.path.clone())
+        Some(DropHit {
+            highlight: row.path.clone(),
+            target: row.path.clone(),
+        })
     } else {
-        None
+        row.path.parent().map(|p| DropHit {
+            highlight: row.path.clone(),
+            target: p.to_path_buf(),
+        })
     }
 }
 
@@ -1251,21 +1530,6 @@ pub(super) fn is_valid_move_target(
         return false;
     }
     true
-}
-
-/// 树内拖拽悬停到折叠的目录时自动展开,方便继续往深一层拖——同外部 OS
-/// 拖拽既有的 `App::expand_files_dir_if_collapsed` 行为一致,只是这里操作
-/// 对象是 `WorkspaceState` 本身(`files::update()` 已经有 `&mut
-/// WorkspaceState`,不需要跨到内核)。已展开则不重复调用 `toggle`(避免
-/// 误触发折叠)。
-fn expand_dir_if_collapsed(ws_state: &mut WorkspaceState, dir: &std::path::Path) {
-    let already_expanded = ws_state
-        .visible_tree_rows()
-        .iter()
-        .any(|r| r.path == dir && r.expanded);
-    if !already_expanded && let Some(tree) = &mut ws_state.file_tree {
-        tree.toggle(dir);
-    }
 }
 
 /// 树内拖拽已确认(`Dragging`)时跟随光标的幽灵胶囊(图标 + 文件名),
@@ -1529,52 +1793,76 @@ pub fn view<'a>(
                     .map(delivery::TreeState::from)
                     .unwrap_or(delivery::TreeState::Unchanged)
             };
-            let name_color = tree_state_color(state);
-            let row_icon: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-                if row.is_dir {
-                    let chevron = if row.expanded {
-                        icons::IconKind::ChevronDown
-                    } else {
-                        icons::IconKind::ChevronRight
-                    };
-                    let folder = if row.expanded {
-                        icons::IconKind::FolderOpen
-                    } else {
-                        icons::IconKind::Folder
-                    };
-                    row![
-                        icons::view(
-                            chevron,
-                            byteui::theme::icon_size::chevron(),
-                            byteui::theme::color::current().dim
-                        ),
-                        icons::view(
-                            folder,
-                            byteui::theme::icon_size::row(),
-                            byteui::theme::color::current().dim
-                        ),
-                    ]
-                    .spacing(byteui::theme::icon_size::tree_row_gap())
-                    .align_y(iced_widget::core::Alignment::Center)
-                    .into()
+            let is_selected = ws_state.tree_selected.as_deref() == Some(row.path.as_path());
+            // 选中行整行填充奶油色实底(见下方 `row_btn` 的 `background`),
+            // 原本配深底设计的浅色文字/图标(git 状态色、`dim`)在亮底上会
+            // 对比度不足——选中态改用主题深底色 `bg`(#0a0e16)顶替,未选中
+            // 保持原有颜色不变(2026-09 用户实测反馈选中背景要改成奶油色,
+            // 连带这里一起调整,不然选中行的字会糊在亮底上看不清)。
+            let icon_color = if is_selected {
+                byteui::theme::color::current().bg
+            } else {
+                byteui::theme::color::current().dim
+            };
+            let name_color = if is_selected {
+                byteui::theme::color::current().bg
+            } else {
+                tree_state_color(state)
+            };
+            let row_icon: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> = if row
+                .is_dir
+            {
+                let chevron = if row.expanded {
+                    icons::IconKind::ChevronDown
                 } else {
-                    row![
-                        iced_widget::space::Space::new()
-                            .width(Length::Fixed(
-                                byteui::theme::icon_size::chevron()
-                                    + byteui::theme::icon_size::tree_row_gap(),
-                            ))
-                            .height(Length::Shrink),
-                        icons::view(
-                            icons::icon_for_file(&row.name),
-                            byteui::theme::icon_size::row(),
-                            byteui::theme::color::current().dim
-                        ),
-                    ]
-                    .spacing(0)
-                    .align_y(iced_widget::core::Alignment::Center)
-                    .into()
+                    icons::IconKind::ChevronRight
                 };
+                let folder = if row.expanded {
+                    icons::IconKind::FolderOpen
+                } else {
+                    icons::IconKind::Folder
+                };
+                // 箭头自己挂一个独立的 `MouseArea::on_press`(见
+                // `Message::Toggle` 文档):点箭头立即切换,不走整行
+                // 那套"按下武装拖拽→松开才决定单击/双击"的延迟判定。
+                // iced 事件先派发给子节点(`MouseArea::update` 见其源码
+                // 注释),箭头处理完会 `shell.capture_event()`,不会再
+                // 冒泡触发外层整行的 `TreeRowPress`/`TreeRowDoubleClick`。
+                let chevron_target = row.path.clone();
+                let chevron_el: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+                    MouseArea::new(icons::view(
+                        chevron,
+                        byteui::theme::icon_size::chevron(),
+                        icon_color,
+                    ))
+                    .on_press(Message::Toggle(chevron_target))
+                    .interaction(mouse::Interaction::Pointer)
+                    .into();
+                row![
+                    chevron_el,
+                    icons::view(folder, byteui::theme::icon_size::row(), icon_color),
+                ]
+                .spacing(byteui::theme::icon_size::tree_row_gap())
+                .align_y(iced_widget::core::Alignment::Center)
+                .into()
+            } else {
+                row![
+                    iced_widget::space::Space::new()
+                        .width(Length::Fixed(
+                            byteui::theme::icon_size::chevron()
+                                + byteui::theme::icon_size::tree_row_gap(),
+                        ))
+                        .height(Length::Shrink),
+                    icons::view(
+                        icons::icon_for_file(&row.name),
+                        byteui::theme::icon_size::row(),
+                        icon_color
+                    ),
+                ]
+                .spacing(0)
+                .align_y(iced_widget::core::Alignment::Center)
+                .into()
+            };
             let line = row![
                 text(indent)
                     .size(crate::workspace::tree_row_font_size())
@@ -1592,9 +1880,12 @@ pub fn view<'a>(
                 path: row.path.clone(),
                 is_dir: row.is_dir,
             };
-            let is_selected = ws_state.tree_selected.as_deref() == Some(row.path.as_path());
-            // 外部文件拖拽落点:目录被命中 → 整行金色描边高亮(仅目录可作落点)。
-            let is_drop_target = row.is_dir && ws_state.drag_hover.contains(&row.path);
+            // 拖拽(外部 OS 拖入/内部树拖拽共用 `drag_hover`)悬停命中这一行
+            // → 整行金色描边高亮——文件行也高亮(2026-09 用户实测反馈),
+            // 即便文件本身不是真正落点(落点会退到其父目录,见
+            // `files::DropHit`/`Message::TreeDragOver` 文档),这里只管"光标
+            // 压中的是哪一行"的视觉反馈。
+            let is_drop_target = ws_state.drag_hover.contains(&row.path);
             // 这里**不**接内层 `button` 自己的 `on_press`——iced 的
             // `iced_widget::button` 名字叫 `on_press`,实际却是在
             // `ButtonReleased`(且松开时光标仍在按钮上)才 `shell.publish`
@@ -1620,40 +1911,48 @@ pub fn view<'a>(
                 .width(Length::Fill)
                 .style(move |_t, _s| button::Style {
                     background: if is_selected {
-                        Some(byteui::theme::color::current().card.into())
+                        Some(byteui::theme::color::current().cream.into())
                     } else {
                         None
                     },
-                    text_color: byteui::theme::color::current().body,
-                    border: if is_drop_target {
-                        Border {
-                            color: byteui::theme::color::current().gold,
-                            width: 1.0,
-                            radius: 6.0.into(),
-                        }
+                    text_color: if is_selected {
+                        byteui::theme::color::current().bg
                     } else {
-                        Border {
-                            color: Color::TRANSPARENT,
-                            width: 0.0,
-                            radius: 0.0.into(),
-                        }
+                        byteui::theme::color::current().body
+                    },
+                    // 圆角恒为 6px——不只是拖拽落点描边要圆角,选中态的奶油色
+                    // 实底同样要圆角(2026-09 用户实测反馈),不能只在有描边
+                    // 时才圆,否则选中背景会露出方角。未选中且非落点时颜色
+                    // 透明、宽度 0,圆角设了也看不出来,不需要另外分支。
+                    border: Border {
+                        color: if is_drop_target {
+                            byteui::theme::color::current().gold
+                        } else {
+                            Color::TRANSPARENT
+                        },
+                        width: if is_drop_target { 1.0 } else { 0.0 },
+                        radius: 6.0.into(),
                     },
                     ..button::Style::default()
                 });
-            let mut row_area =
-                MouseArea::new(row_btn)
-                    .on_press(msg)
-                    .on_right_press(Message::ContextMenuOpen {
-                        path: row.path.clone(),
-                        is_dir: row.is_dir,
-                    });
-            // 树内拖拽已确认(`Dragging`,越过距离+时长两道阈值)且这一行是
-            // 目录:光标划过即上报为悬停命中,驱动 `TreeDragOver` 校验落点
-            // 合法性并刷新 `drag_hover` 高亮(同外部 OS 拖拽复用的那一圈
-            // 金色描边),顺带把光标换成抓取图标。非目录行/仍处于 `Pending`
-            // 时不挂 `on_move`——`Pending` 期间必须完全没有反应,见
-            // `TreeDragPhase` 文档("点一下就进入拖拽态"的根因)。
-            if row.is_dir && ws_state.tree_drag_confirmed() {
+            let mut row_area = MouseArea::new(row_btn)
+                .on_press(msg)
+                .on_double_click(Message::TreeRowDoubleClick {
+                    path: row.path.clone(),
+                    is_dir: row.is_dir,
+                })
+                .on_right_press(Message::ContextMenuOpen {
+                    path: row.path.clone(),
+                    is_dir: row.is_dir,
+                });
+            // 树内拖拽已确认(`Dragging`,越过距离+时长两道阈值):光标划过
+            // 任意行(文件或目录都上报,`Message::TreeDragOver` 里再解析
+            // 落点/高亮,见其文档)即上报为悬停命中,驱动 `TreeDragOver` 校验
+            // 落点合法性并刷新 `drag_hover` 高亮(同外部 OS 拖拽复用的那一圈
+            // 金色描边),顺带把光标换成抓取图标。仍处于 `Pending` 时不挂
+            // `on_move`——`Pending` 期间必须完全没有反应,见 `TreeDragPhase`
+            // 文档("点一下就进入拖拽态"的根因)。
+            if ws_state.tree_drag_confirmed() {
                 let drag_target = row.path.clone();
                 row_area = row_area
                     .on_move(move |_| Message::TreeDragOver(drag_target.clone()))
@@ -2260,6 +2559,157 @@ pub fn delete_confirm_popup(
         .into()
 }
 
+/// 拖拽移动确认框:居中浮层,视觉模板同 `delete_confirm_popup`(卡片 +
+/// 取消/确认按钮)。多出"新名称"/"到目录"两个真正的 `iced_widget::
+/// text_input`(复用 `byteui::form::input_text::view`),用户可在确认前
+/// 改文件名/改目标目录——2026-09 用户实测反馈:拖拽移动不该悄无声息直接
+/// 改路径,得让用户确认,见 `PendingMove` 文档。
+pub fn move_confirm_popup(
+    ws_state: &WorkspaceState,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let Some(pending) = &ws_state.pending_move else {
+        return column![].into();
+    };
+    let kind = if pending.source_is_dir {
+        "文件夹"
+    } else {
+        "文件"
+    };
+    let source_name = pending
+        .source
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| pending.source.display().to_string());
+
+    let label = |s: &str| {
+        text(s.to_string())
+            .size(byteui::theme::font::label())
+            .color(byteui::theme::color::current().dim)
+    };
+    let name_field = container(byteui::form::input_text::view(
+        "",
+        &pending.name_draft,
+        false,
+        Some(move_name_field_id()),
+        false,
+        Some(Message::MoveConfirm),
+        false,
+        Message::MoveNameInput,
+    ))
+    .width(Length::Fixed(320.0));
+    let dir_field = container(byteui::form::input_text::view(
+        "",
+        &pending.dir_draft,
+        false,
+        Some(move_dir_field_id()),
+        false,
+        Some(Message::MoveConfirm),
+        false,
+        Message::MoveDirInput,
+    ))
+    .width(Length::Fixed(264.0));
+    let browse_btn = button(
+        text("…")
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().cream),
+    )
+    .on_press(Message::MoveDirBrowse)
+    .padding([6, 10])
+    .style(|_t, _s| button::Style {
+        background: Some(byteui::theme::color::current().card.into()),
+        text_color: byteui::theme::color::current().cream,
+        border: Border {
+            color: byteui::theme::color::current().border,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..button::Style::default()
+    });
+
+    let mut body = column![
+        text(format!("移动{kind} \"{source_name}\""))
+            .size(byteui::theme::font::subtitle())
+            .color(byteui::theme::color::current().cream),
+        column![label("新名称:"), name_field].spacing(4),
+        column![
+            label("到目录:"),
+            row![dir_field, browse_btn]
+                .spacing(6)
+                .align_y(iced_widget::core::Alignment::Center)
+        ]
+        .spacing(4),
+    ]
+    .spacing(10);
+
+    if let Some(err) = &ws_state.tree_error {
+        body = body.push(
+            text(err.clone())
+                .size(byteui::theme::font::label())
+                .color(byteui::theme::color::current().red),
+        );
+    }
+
+    body = body.push(
+        row![
+            button(
+                text("取消")
+                    .size(byteui::theme::font::body())
+                    .color(byteui::theme::color::current().cream)
+            )
+            .on_press(Message::MoveCancel)
+            .padding([6, 12])
+            .style(|_t, _s| button::Style {
+                background: Some(byteui::theme::color::current().card.into()),
+                text_color: byteui::theme::color::current().cream,
+                border: Border {
+                    color: byteui::theme::color::current().border,
+                    width: 1.0,
+                    radius: 4.0.into()
+                },
+                ..button::Style::default()
+            }),
+            button(
+                text("确定")
+                    .size(byteui::theme::font::body())
+                    .color(byteui::theme::color::current().gold)
+            )
+            .on_press(Message::MoveConfirm)
+            .padding([6, 12])
+            .style(|_t, _s| button::Style {
+                background: Some(byteui::theme::color::current().card.into()),
+                text_color: byteui::theme::color::current().gold,
+                border: Border {
+                    color: byteui::theme::color::current().gold,
+                    width: 1.0,
+                    radius: 4.0.into()
+                },
+                ..button::Style::default()
+            }),
+        ]
+        .spacing(8)
+        .align_y(iced_widget::core::Alignment::Center),
+    );
+
+    let dialog = container(body)
+        .padding(16)
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: Some(byteui::theme::color::current().card.into()),
+            border: Border {
+                color: byteui::theme::color::current().border,
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..container::Style::default()
+        });
+
+    container(dialog)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .into()
+}
+
 /// 文件树名称颜色编码 git 状态,取代早前 D2 的行尾色点。按
 /// `delivery::TreeState` 档位取色:未加入版本 → 红 `RED`;加入版本未提交的
 /// 新文件 → 绿 `GREEN`;修改/删除未提交 → 青 `CYAN`;被忽略 → 弱灰
@@ -2318,7 +2768,7 @@ mod tests {
     }
 
     #[test]
-    fn tree_drop_target_hits_only_folders_within_viewport() {
+    fn tree_drop_target_dir_hit_highlights_and_targets_itself() {
         let rows = vec![
             row("/a", true),
             row("/a/f.rs", false),
@@ -2331,24 +2781,28 @@ mod tests {
         let gap = crate::theme::region::project_pane().gap;
         let pitch = row_h + gap;
         let by = bounds.1;
-        // 第 0 行是目录 → 命中。
+        // 第 0 行是目录 → 命中,高亮与落点都是它自己。
         assert_eq!(
             tree_drop_target(200.0, by + row_h / 2.0, bounds, scroll, &rows),
-            Some(PathBuf::from("/a"))
-        );
-        // 第 1 行是文件 → None。
-        assert_eq!(
-            tree_drop_target(200.0, by + pitch + row_h / 2.0, bounds, scroll, &rows),
-            None
+            Some(DropHit {
+                highlight: PathBuf::from("/a"),
+                target: PathBuf::from("/a"),
+            })
         );
         // 第 2、3 行都是目录 → 各自命中。
         assert_eq!(
             tree_drop_target(200.0, by + 2.0 * pitch + row_h / 2.0, bounds, scroll, &rows),
-            Some(PathBuf::from("/b"))
+            Some(DropHit {
+                highlight: PathBuf::from("/b"),
+                target: PathBuf::from("/b"),
+            })
         );
         assert_eq!(
             tree_drop_target(200.0, by + 3.0 * pitch + row_h / 2.0, bounds, scroll, &rows),
-            Some(PathBuf::from("/c"))
+            Some(DropHit {
+                highlight: PathBuf::from("/c"),
+                target: PathBuf::from("/c"),
+            })
         );
         // 视图上方 / 右侧外 → None。
         assert_eq!(
@@ -2363,7 +2817,31 @@ mod tests {
         // 之上;吸住 /b)。
         assert_eq!(
             tree_drop_target(200.0, by + 2.0 * pitch - 1.0, bounds, scroll, &rows),
-            Some(PathBuf::from("/b"))
+            Some(DropHit {
+                highlight: PathBuf::from("/b"),
+                target: PathBuf::from("/b"),
+            })
+        );
+    }
+
+    /// 2026-09 用户实测反馈"悬浮到文件上也该有高亮":命中文件行不再是
+    /// `None`——`highlight` 是文件自己(渲染高亮它),`target`(真正的落点
+    /// 目录)退到其父目录,同 Finder"拖到某个文件上=拖进它所在文件夹"。
+    #[test]
+    fn tree_drop_target_file_hit_highlights_file_but_targets_parent() {
+        let rows = vec![row("/a", true), row("/a/f.rs", false), row("/b", true)];
+        let bounds = (100.0, 100.0, 400.0, 400.0);
+        let scroll = 0.0;
+        let row_h = crate::theme::geometry::tree_row_h();
+        let gap = crate::theme::region::project_pane().gap;
+        let pitch = row_h + gap;
+        let by = bounds.1;
+        assert_eq!(
+            tree_drop_target(200.0, by + pitch + row_h / 2.0, bounds, scroll, &rows),
+            Some(DropHit {
+                highlight: PathBuf::from("/a/f.rs"),
+                target: PathBuf::from("/a"),
+            })
         );
     }
 
@@ -2436,7 +2914,10 @@ mod tests {
         let scroll = pitch;
         assert_eq!(
             tree_drop_target(100.0, row_h / 2.0, bounds, scroll, &rows),
-            Some(PathBuf::from("/b"))
+            Some(DropHit {
+                highlight: PathBuf::from("/b"),
+                target: PathBuf::from("/b"),
+            })
         );
     }
 
@@ -2520,11 +3001,15 @@ mod tests {
         assert!(!ws_state.search_focused());
     }
 
+    /// 覆盖 `Message::Toggle` 的三个调用点共用的核心行为(选中 + 立即
+    /// 切换展开态,不经拖拽/双击的延迟判定):箭头点击、目录双击、外部/
+    /// 内部拖拽悬停自动展开都发的是这同一条消息。
     #[tokio::test]
     async fn toggle_sets_selected_and_toggles_tree() {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("sub");
         std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("child.txt"), b"hi").unwrap();
         let mut ws_state = ws_with_tree(dir.path().to_path_buf());
         let mut app_state = AppState::default();
         let handle = tokio::runtime::Handle::current();
@@ -2536,7 +3021,13 @@ mod tests {
             &handle,
             |_| {},
         );
-        assert_eq!(ws_state.tree_selected, Some(sub));
+        assert_eq!(ws_state.tree_selected, Some(sub.clone()));
+        assert!(
+            ws_state
+                .visible_tree_rows()
+                .iter()
+                .any(|r| r.path == sub && r.expanded)
+        );
     }
 
     #[test]
@@ -2587,56 +3078,37 @@ mod tests {
         assert_eq!(ws_state.tree_drag_press_pos(), Some((10.0, 20.0)));
     }
 
-    #[test]
-    fn pending_click_open_file_returns_source_when_unconfirmed() {
-        let mut ws_state = WorkspaceState::default();
-        ws_state.arm_tree_drag(
-            PathBuf::from("/proj/f.rs"),
-            false,
-            (0.0, 0.0),
-            std::time::Instant::now(),
-        );
-        assert_eq!(
-            ws_state.pending_click_open_file(false),
-            Some(PathBuf::from("/proj/f.rs"))
-        );
-    }
-
-    /// `confirmed` 是唯一判据:哪怕碰巧没落到任何目标(松开在无效落点)、
-    /// 只要越过了阈值就不算单击,不该顺带打开文件——那是一次拖拽尝试
-    /// 失败,不是点击。
-    #[test]
-    fn pending_click_open_file_none_when_confirmed_even_without_target() {
-        let mut ws_state = WorkspaceState::default();
-        ws_state.arm_tree_drag(
-            PathBuf::from("/proj/f.rs"),
-            false,
-            (0.0, 0.0),
-            std::time::Instant::now(),
-        );
-        assert_eq!(ws_state.pending_click_open_file(true), None);
-    }
-
-    #[test]
-    fn pending_click_open_file_none_for_directory_source() {
-        let mut ws_state = WorkspaceState::default();
-        ws_state.arm_tree_drag(
-            PathBuf::from("/proj/dir"),
-            true,
-            (0.0, 0.0),
-            std::time::Instant::now(),
-        );
-        assert_eq!(ws_state.pending_click_open_file(false), None);
-    }
-
-    #[test]
-    fn pending_click_open_file_none_when_no_drag_armed() {
-        let ws_state = WorkspaceState::default();
-        assert_eq!(ws_state.pending_click_open_file(false), None);
-    }
-
+    /// 单击(未越过拖拽确认阈值)只选中——不再自动展开/打开,见
+    /// `Message::TreeDragEnd` 文档;文件/目录一视同仁,这里用文件源验证
+    /// （目录源的选中+展开分别由 `Message::Toggle`/`TreeRowDoubleClick` 覆盖,
+    /// 见其他测试)。
     #[tokio::test]
-    async fn tree_drag_over_expands_collapsed_target_directory() {
+    async fn tree_drag_end_unconfirmed_selects_file_without_opening() {
+        let mut ws_state = WorkspaceState::default();
+        ws_state.arm_tree_drag(
+            PathBuf::from("/proj/f.rs"),
+            false,
+            (0.0, 0.0),
+            std::time::Instant::now(),
+        );
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut ws_state,
+            &mut AppState::default(),
+            Message::TreeDragEnd(false),
+            1,
+            &handle,
+            |_| panic!("单击不该 emit 任何消息"),
+        );
+        assert_eq!(ws_state.tree_selected, Some(PathBuf::from("/proj/f.rs")));
+    }
+
+    /// 悬停命中一个折叠目录不立即展开——只武装计时(见 `drag_expand_
+    /// pending` 文档),真正展开推迟到满 `DRAG_HOVER_EXPAND_DELAY` 由
+    /// `App::advance_drag_hover_expand` 触发(2026-09 用户实测反馈:立即
+    /// 展开会让拖着划过沿途目录疯狂跳动布局)。
+    #[tokio::test]
+    async fn tree_drag_over_arms_expand_timer_but_does_not_expand_immediately() {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("sub");
         std::fs::create_dir(&sub).unwrap();
@@ -2662,10 +3134,54 @@ mod tests {
         );
 
         assert!(
-            ws_state
+            !ws_state
                 .visible_tree_rows()
                 .iter()
                 .any(|r| r.path == sub && r.expanded)
+        );
+        assert!(ws_state.drag_expand_ready().is_none());
+    }
+
+    /// `arm_drag_expand`/`drag_expand_ready` 隔离单测:未满计时返回
+    /// `None`,直接回拨记录的起始时间模拟"已经悬停超过 1s"(不用真的
+    /// `sleep`,保持测试快且确定性)。
+    #[test]
+    fn arm_drag_expand_becomes_ready_after_delay_elapses() {
+        let mut ws_state = WorkspaceState::default();
+        let dir = PathBuf::from("/proj/sub");
+        ws_state.arm_drag_expand(dir.clone(), false);
+        assert!(ws_state.drag_expand_ready().is_none());
+        ws_state.drag_expand_pending = Some((
+            dir.clone(),
+            std::time::Instant::now() - DRAG_HOVER_EXPAND_DELAY,
+        ));
+        assert_eq!(ws_state.drag_expand_ready(), Some(dir));
+    }
+
+    /// 已展开(`already_expanded=true`)直接清空计时,不留残留——避免下一次
+    /// 悬停别的折叠目录时被上一目录的旧计时提前触发。
+    #[test]
+    fn arm_drag_expand_already_expanded_clears_pending() {
+        let mut ws_state = WorkspaceState::default();
+        let dir = PathBuf::from("/proj/sub");
+        ws_state.arm_drag_expand(dir.clone(), false);
+        assert!(ws_state.next_drag_expand_wake().is_some());
+        ws_state.arm_drag_expand(dir, true);
+        assert!(ws_state.next_drag_expand_wake().is_none());
+    }
+
+    /// 同一目录持续悬停不重置计时——否则光标在同一行内轻微抖动,每帧都
+    /// 重新起计时,永远等不满 1s。
+    #[test]
+    fn arm_drag_expand_on_same_dir_does_not_reset_timer() {
+        let mut ws_state = WorkspaceState::default();
+        let dir = PathBuf::from("/proj/sub");
+        ws_state.arm_drag_expand(dir.clone(), false);
+        let first_start = ws_state.drag_expand_pending.as_ref().unwrap().1;
+        ws_state.arm_drag_expand(dir.clone(), false);
+        assert_eq!(
+            ws_state.drag_expand_pending.as_ref().unwrap().1,
+            first_start
         );
     }
 
@@ -2674,8 +3190,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("sub");
         std::fs::create_dir(&sub).unwrap();
-        // 空目录 `toggle` 不会标记 expanded(无可展开内容,见 `FileTree::
-        // toggle` 文档),得放一个子项才能让"已展开"这个前提成立。
         std::fs::write(sub.join("child.txt"), b"hi").unwrap();
         let mut ws_state = ws_with_tree(dir.path().to_path_buf());
         ws_state.file_tree.as_mut().unwrap().toggle(&sub);
@@ -2712,13 +3226,18 @@ mod tests {
         );
     }
 
+    /// 悬停命中的是**目录行**:落点就是它自己(与 `tree_drag_over_file_
+    /// hit_targets_its_parent_dir` 对照——命中文件行落点会退到父目录)。
     #[tokio::test]
     async fn tree_drag_over_valid_target_sets_target_and_highlight() {
-        let mut ws_state = WorkspaceState::default();
+        let dir = tempfile::tempdir().unwrap();
+        let target_dir = dir.path().join("c");
+        std::fs::create_dir(&target_dir).unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
         let mut app_state = AppState::default();
         let handle = tokio::runtime::Handle::current();
         ws_state.arm_tree_drag(
-            PathBuf::from("/proj/a/f.rs"),
+            dir.path().join("a/f.rs"),
             false,
             (0.0, 0.0),
             std::time::Instant::now(),
@@ -2728,7 +3247,7 @@ mod tests {
         update(
             &mut ws_state,
             &mut app_state,
-            Message::TreeDragOver(PathBuf::from("/proj/c")),
+            Message::TreeDragOver(target_dir.clone()),
             1,
             &handle,
             |_| {},
@@ -2737,10 +3256,47 @@ mod tests {
         assert_eq!(
             ws_state.tree_drag.as_ref().map(|d| &d.phase),
             Some(&TreeDragPhase::Dragging {
-                target: Some(PathBuf::from("/proj/c"))
+                target: Some(target_dir.clone())
             })
         );
-        assert!(ws_state.drag_hover.contains(&PathBuf::from("/proj/c")));
+        assert!(ws_state.drag_hover.contains(&target_dir));
+    }
+
+    /// 悬停命中的是**文件行**:落点退到其父目录,但高亮(`drag_hover`)记的
+    /// 还是文件自己那一行——2026-09 用户实测反馈"悬浮到文件上也该有高亮",
+    /// 见 `Message::TreeDragOver` 文档。
+    #[tokio::test]
+    async fn tree_drag_over_file_hit_targets_its_parent_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let target_file = dir.path().join("readme.txt");
+        std::fs::write(&target_file, b"hi").unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+        ws_state.arm_tree_drag(
+            dir.path().join("a/f.rs"),
+            false,
+            (0.0, 0.0),
+            std::time::Instant::now(),
+        );
+
+        ws_state.confirm_tree_drag();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::TreeDragOver(target_file.clone()),
+            1,
+            &handle,
+            |_| {},
+        );
+
+        assert_eq!(
+            ws_state.tree_drag.as_ref().map(|d| &d.phase),
+            Some(&TreeDragPhase::Dragging {
+                target: Some(dir.path().to_path_buf())
+            })
+        );
+        assert!(ws_state.drag_hover.contains(&target_file));
     }
 
     #[tokio::test]
@@ -2797,8 +3353,80 @@ mod tests {
         assert!(file.exists());
     }
 
+    /// 外部单文件拖入(main.rs 恒只带一个路径,见 `Message::FileDrop`
+    /// 文档)命中落点后不立即移动——弹 `PendingMove` 确认框,同内部拖拽
+    /// (`TreeDragEnd`)那支。
     #[tokio::test]
-    async fn tree_drag_end_confirmed_with_valid_target_moves_file_and_refreshes_tree() {
+    async fn file_drop_single_path_arms_pending_move_without_moving_yet() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("sub");
+        std::fs::create_dir(&target).unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let source = external.path().join("outside.txt");
+        std::fs::write(&source, b"hi").unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::FileDrop {
+                paths: vec![source.clone()],
+                target: target.clone(),
+            },
+            1,
+            &handle,
+            |_| panic!("弹确认框不该 emit 任何消息"),
+        );
+
+        assert!(source.exists());
+        assert_eq!(
+            ws_state.pending_move,
+            Some(PendingMove {
+                source,
+                source_is_dir: false,
+                name_draft: "outside.txt".to_string(),
+                dir_draft: target.display().to_string(),
+            })
+        );
+    }
+
+    /// 已经在项目内的文件不许走外部拖拽这条通路移动(见 `Message::
+    /// FileDrop` 处理器的核心裁决注释):拒绝,不弹确认框、不动磁盘。
+    #[tokio::test]
+    async fn file_drop_rejects_path_already_inside_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("sub");
+        std::fs::create_dir(&target).unwrap();
+        let inside = dir.path().join("already-here.txt");
+        std::fs::write(&inside, b"hi").unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::FileDrop {
+                paths: vec![inside.clone()],
+                target,
+            },
+            1,
+            &handle,
+            |_| panic!("拒绝不该 emit 任何消息"),
+        );
+
+        assert!(ws_state.pending_move.is_none());
+        assert!(ws_state.tree_error.is_some());
+        assert!(inside.exists());
+    }
+
+    /// `TreeDragEnd(true)` 落到合法目标不再立即移动——弹 `PendingMove`
+    /// 确认框(2026-09 用户实测反馈:拖拽移动不该悄无声息直接改路径),
+    /// 真正的移动推迟到用户点"确定"(`Message::MoveConfirm`)才提交。
+    #[tokio::test]
+    async fn tree_drag_end_confirmed_arms_pending_move_without_moving_yet() {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("sub");
         std::fs::create_dir(&sub).unwrap();
@@ -2818,12 +3446,54 @@ mod tests {
             |_| {},
         );
 
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::TreeDragEnd(true),
+            1,
+            &handle,
+            |_| panic!("弹确认框不该 emit 任何消息"),
+        );
+
+        assert!(!ws_state.is_dragging_tree_item());
+        assert!(file.exists());
+        assert_eq!(
+            ws_state.pending_move,
+            Some(PendingMove {
+                source: file,
+                source_is_dir: false,
+                name_draft: "f.txt".to_string(),
+                dir_draft: sub.display().to_string(),
+            })
+        );
+    }
+
+    /// `MoveConfirm` 真正提交移动——沿用确认框里的(未改过的)草稿,行为等同
+    /// 旧版立即移动:同文件系统 `rename`,成功后 `FileDropDone` 刷新目标
+    /// 目录。
+    #[tokio::test]
+    async fn move_confirm_with_unedited_draft_moves_file_and_refreshes_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let file = dir.path().join("f.txt");
+        std::fs::write(&file, b"hi").unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+        ws_state.pending_move = Some(PendingMove {
+            source: file.clone(),
+            source_is_dir: false,
+            name_draft: "f.txt".to_string(),
+            dir_draft: sub.display().to_string(),
+        });
+
         let (tx, rx) = tokio::sync::oneshot::channel();
         let tx = std::sync::Mutex::new(Some(tx));
         update(
             &mut ws_state,
             &mut app_state,
-            Message::TreeDragEnd(true),
+            Message::MoveConfirm,
             1,
             &handle,
             move |msg| {
@@ -2832,13 +3502,212 @@ mod tests {
                 }
             },
         );
-        assert!(!ws_state.is_dragging_tree_item());
+        assert!(ws_state.pending_move.is_none());
         let done_msg = rx.await.unwrap();
         update(&mut ws_state, &mut app_state, done_msg, 1, &handle, |_| {});
 
         assert!(!file.exists());
         assert!(sub.join("f.txt").exists());
         assert!(ws_state.tree_error.is_none());
+    }
+
+    /// `MoveConfirm` 改过草稿:新文件名 + 新目标目录都要生效——覆盖
+    /// `move_item_to` 的"改名"能力,不是简单复用不改名的 `move_item`。
+    #[tokio::test]
+    async fn move_confirm_with_edited_draft_renames_and_retargets() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub_b = dir.path().join("b");
+        std::fs::create_dir(&sub_b).unwrap();
+        let file = dir.path().join("f.txt");
+        std::fs::write(&file, b"hi").unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+        ws_state.pending_move = Some(PendingMove {
+            source: file.clone(),
+            source_is_dir: false,
+            name_draft: "renamed.txt".to_string(),
+            dir_draft: sub_b.display().to_string(),
+        });
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let tx = std::sync::Mutex::new(Some(tx));
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::MoveConfirm,
+            1,
+            &handle,
+            move |msg| {
+                if let Some(tx) = tx.lock().unwrap().take() {
+                    let _ = tx.send(msg);
+                }
+            },
+        );
+        let done_msg = rx.await.unwrap();
+        update(&mut ws_state, &mut app_state, done_msg, 1, &handle, |_| {});
+
+        assert!(!file.exists());
+        assert!(!sub_b.join("f.txt").exists());
+        assert!(sub_b.join("renamed.txt").exists());
+        assert!(ws_state.tree_error.is_none());
+    }
+
+    /// 名字含路径分隔符:拒绝,`pending_move` 放回去(对话框留在屏幕上),
+    /// 不提交任何磁盘改动。
+    #[tokio::test]
+    async fn move_confirm_rejects_name_with_path_separator() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("f.txt");
+        std::fs::write(&file, b"hi").unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+        ws_state.pending_move = Some(PendingMove {
+            source: file.clone(),
+            source_is_dir: false,
+            name_draft: "a/b.txt".to_string(),
+            dir_draft: dir.path().display().to_string(),
+        });
+
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::MoveConfirm,
+            1,
+            &handle,
+            |_| panic!("校验失败不该 emit 任何消息"),
+        );
+
+        assert!(file.exists());
+        assert!(ws_state.pending_move.is_some());
+        assert!(ws_state.tree_error.is_some());
+    }
+
+    /// 目标目录不存在:拒绝,同上不提交任何磁盘改动。
+    #[tokio::test]
+    async fn move_confirm_rejects_nonexistent_target_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("f.txt");
+        std::fs::write(&file, b"hi").unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+        ws_state.pending_move = Some(PendingMove {
+            source: file.clone(),
+            source_is_dir: false,
+            name_draft: "f.txt".to_string(),
+            dir_draft: dir.path().join("does-not-exist").display().to_string(),
+        });
+
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::MoveConfirm,
+            1,
+            &handle,
+            |_| panic!("校验失败不该 emit 任何消息"),
+        );
+
+        assert!(file.exists());
+        assert!(ws_state.pending_move.is_some());
+        assert!(ws_state.tree_error.is_some());
+    }
+
+    /// 路径压根没变(草稿名字/目录都还是源本来的):静默当取消处理——不
+    /// 提示错误、不留 `pending_move`、不动磁盘。若真调用 `move_item_to`
+    /// 会撞上"已存在同名项"(目标就是源自己),但这对用户来说不是错误,
+    /// 只是"什么都没变"(2026-09 用户实测反馈)。
+    #[tokio::test]
+    async fn move_confirm_silently_cancels_when_path_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("f.txt");
+        std::fs::write(&file, b"hi").unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+        ws_state.pending_move = Some(PendingMove {
+            source: file.clone(),
+            source_is_dir: false,
+            name_draft: "f.txt".to_string(),
+            dir_draft: dir.path().display().to_string(),
+        });
+
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::MoveConfirm,
+            1,
+            &handle,
+            |_| panic!("路径未变不该 emit 任何消息"),
+        );
+
+        assert!(file.exists());
+        assert!(ws_state.pending_move.is_none());
+        assert!(ws_state.tree_error.is_none());
+    }
+
+    /// 目录被改成要移进它自己的子树:静默当取消处理,同上不提示错误——
+    /// `move_item_to` 会拒绝这个操作,但对用户来说这只是"这么改没有意义",
+    /// 不是需要红字提醒的错误。
+    #[tokio::test]
+    async fn move_confirm_silently_cancels_when_dir_targets_own_subtree() {
+        let dir = tempfile::tempdir().unwrap();
+        let src_dir = dir.path().join("parent");
+        let nested = src_dir.join("child");
+        std::fs::create_dir_all(&nested).unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+        ws_state.pending_move = Some(PendingMove {
+            source: src_dir.clone(),
+            source_is_dir: true,
+            name_draft: "parent".to_string(),
+            dir_draft: nested.display().to_string(),
+        });
+
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::MoveConfirm,
+            1,
+            &handle,
+            |_| panic!("移进自己子树不该 emit 任何消息"),
+        );
+
+        assert!(src_dir.exists());
+        assert!(nested.exists());
+        assert!(ws_state.pending_move.is_none());
+        assert!(ws_state.tree_error.is_none());
+    }
+
+    /// `MoveCancel` 整场作废,不做任何磁盘改动。
+    #[tokio::test]
+    async fn move_cancel_clears_pending_without_touching_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("f.txt");
+        std::fs::write(&file, b"hi").unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+        ws_state.pending_move = Some(PendingMove {
+            source: file.clone(),
+            source_is_dir: false,
+            name_draft: "f.txt".to_string(),
+            dir_draft: dir.path().display().to_string(),
+        });
+
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::MoveCancel,
+            1,
+            &handle,
+            |_| panic!("取消不该 emit 任何消息"),
+        );
+
+        assert!(ws_state.pending_move.is_none());
+        assert!(file.exists());
     }
 
     /// `Pending` 阶段是纯粹的死区:悬停完全没有反应,不记 target、不高亮——
@@ -2918,12 +3787,10 @@ mod tests {
         assert!(!sub.join("f.txt").exists());
     }
 
-    /// 目录的展开/折叠推迟到 `TreeDragEnd` 才执行(见 `TreeRowPress` 文档:
-    /// 按下就立即展开会让布局位移,是上面那个 bug 的根因)——`confirmed=
-    /// false`(真的只是单击)才展开,`confirmed=true`(哪怕没落到有效目标,
-    /// 也是一次拖拽尝试而非单击)不展开。
+    /// 单击(`confirmed=false`)目录只选中,不再展开/折叠——展开/折叠改由
+    /// 箭头(`Message::Toggle`)或双击(`TreeRowDoubleClick`)触发,见两者文档。
     #[tokio::test]
-    async fn tree_drag_end_unconfirmed_toggles_directory_source() {
+    async fn tree_drag_end_unconfirmed_selects_directory_without_toggling() {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("sub");
         std::fs::create_dir(&sub).unwrap();
@@ -2944,7 +3811,7 @@ mod tests {
 
         assert_eq!(ws_state.tree_selected, Some(sub.clone()));
         assert!(
-            ws_state
+            !ws_state
                 .visible_tree_rows()
                 .iter()
                 .any(|r| r.path == sub && r.expanded)

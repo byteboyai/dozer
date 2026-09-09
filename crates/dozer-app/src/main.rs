@@ -922,12 +922,15 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
         /// `App::update` 收到 `TermInput` 后写给 daemon（`client.write`），
         /// 不再本地 echo——回显完全走 PTY 真实回路（daemon → attach 流 →
         /// `Message::TermOutput` → `TerminalModel::feed`）。
-        /// 清除文件树拖拽高亮(`drag_hover` 置空)。拖拽取消/落下但不在树上时
-        /// 调用,让上一帧金框高亮立刻消失(否则树会一直亮着直到下一次 hover)。
+        /// 清除文件树拖拽高亮(`drag_hover` 置空)+ 展开计时。拖拽取消/落下
+        /// 但不在树上时调用,让上一帧金框高亮立刻消失(否则树会一直亮着
+        /// 直到下一次 hover),顺带清掉可能残留的展开计时,避免下一场全新
+        /// 拖拽被上一场的残留计时提前触发展开。
         fn clear_file_drag_hover(app: &mut App) {
             app.update(Message::Files(extensions::files::Message::FileDragHover(
                 std::collections::HashSet::new(),
             )));
+            app.clear_drag_hover_expand();
         }
 
         fn on_window_event(&mut self, event: &WindowEvent) {
@@ -997,14 +1000,23 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         let logical_y = (cursor_phys.y / scale) as f32;
                         let window_width = (window.inner_size().width as f64 / scale) as f32;
                         let window_height = (window.inner_size().height as f64 / scale) as f32;
-                        let target = app.files_drop_target(
+                        let hit = app.files_drop_target(
                             window_width,
                             window_height,
                             logical_x,
                             logical_y,
                         );
-                        let hover = target
+                        // 命中折叠目录时武装展开计时(满 1s 才真正展开,见
+                        // `App::arm_drag_hover_expand` 文档);没命中就清空,
+                        // 不留残留计时。
+                        if let Some(hit) = &hit {
+                            app.arm_drag_hover_expand(&hit.target);
+                        } else {
+                            app.clear_drag_hover_expand();
+                        }
+                        let hover = hit
                             .into_iter()
+                            .map(|h| h.highlight)
                             .collect::<std::collections::HashSet<std::path::PathBuf>>();
                         app.update(Message::Files(extensions::files::Message::FileDragHover(
                             hover,
@@ -1188,13 +1200,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     });
                     let window_width = (window.inner_size().width as f64 / scale) as f32;
                     let window_height = (window.inner_size().height as f64 / scale) as f32;
-                    let target =
+                    let hit =
                         app.files_drop_target(window_width, window_height, logical_x, logical_y);
-                    if let Some(dir) = &target {
-                        app.expand_files_dir_if_collapsed(dir);
+                    if let Some(hit) = &hit {
+                        app.arm_drag_hover_expand(&hit.target);
+                    } else {
+                        app.clear_drag_hover_expand();
                     }
-                    let hover = target
+                    let hover = hit
                         .into_iter()
+                        .map(|h| h.highlight)
                         .collect::<std::collections::HashSet<std::path::PathBuf>>();
                     app.update(Message::Files(extensions::files::Message::FileDragHover(
                         hover,
@@ -1228,12 +1243,12 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     });
                     let window_w = (window.inner_size().width as f64 / scale) as f32;
                     let window_h = (window.inner_size().height as f64 / scale) as f32;
-                    let target = app.files_drop_target(window_w, window_h, logical_x, logical_y);
+                    let hit = app.files_drop_target(window_w, window_h, logical_x, logical_y);
                     *files_dragging = false;
-                    if let Some(target) = target {
+                    if let Some(hit) = hit {
                         app.update(Message::Files(extensions::files::Message::FileDrop {
                             paths: vec![path.clone()],
-                            target,
+                            target: hit.target,
                         }));
                         window.request_redraw();
                         return;
@@ -1552,6 +1567,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 || app.git_log_search_focused()
                 || app.ssh_form_open()
                 || app.database_form_open()
+                || app.files_move_confirm_open()
                 || app.project_name_focused()
                 || app.query_focused()
             {
@@ -1936,6 +1952,24 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         app.update(Message::ProjectTabOpen(dir));
                     }
                 }
+                // 拖拽移动确认框"到目录"旁边的"..."浏览按钮:同上一条
+                // `ProjectTabPickFolder` 的套路,原生模态选中后回填
+                // `MoveDirInput`(`files::update()` 自己不认识 `rfd`,见
+                // `files::Message::MoveDirBrowse` 文档)。起始目录用当前
+                // 草稿(没有待确认的移动时这条消息本就不会被派发,`unwrap_or_
+                // default` 只是防御性兜底)。
+                Message::Files(extensions::files::Message::MoveDirBrowse) => {
+                    let start = app
+                        .active_workspace()
+                        .and_then(|ws| ws.files.move_dir_draft())
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_default();
+                    if let Some(dir) = rfd::FileDialog::new().set_directory(&start).pick_folder() {
+                        app.update(Message::Files(extensions::files::Message::MoveDirInput(
+                            dir.display().to_string(),
+                        )));
+                    }
+                }
                 Message::ProjectLinkPick(target) => {
                     // 单颗"＋"入口:打开根目录在项目根的文件浏览器,选中后按
                     // 实际类型(`is_dir()`)判定虚拟链接是该当文件还是目录,再回
@@ -2114,6 +2148,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 if app.any_hover_anim_active() {
                     app.advance_hover_anims();
                 }
+                // 拖拽悬停到折叠目录的展开计时:满 1s 才真正展开,见
+                // `App::advance_drag_hover_expand` 文档。
+                app.advance_drag_hover_expand();
                 window.request_redraw();
             }
         }
@@ -2133,7 +2170,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 // 新增任务闪光计时:按剩余时间精确排一次"恰好 2s 才清除高亮"
                 // 的唤醒,到期后 `next_todo_flash_wake` 返回 None 自然停下。
                 let next_flash = app.next_todo_flash_wake();
-                let wakes: [(bool, Duration); 5] = [
+                // 拖拽悬停展开计时:同上,满 1s 那一刻精确唤醒一次让
+                // `advance_drag_hover_expand` 真正展开,没有悬停中的目录时
+                // 返回 `None` 不再空转。
+                let next_drag_expand = app.next_drag_hover_expand_wake();
+                let wakes: [(bool, Duration); 6] = [
                     (app.any_hover_anim_active(), HOVER_ANIM_INTERVAL),
                     (app.todo_panel_visible(), TODO_POLL_INTERVAL),
                     (
@@ -2147,6 +2188,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     (
                         next_flash.is_some(),
                         next_flash.unwrap_or(crate::extensions::todo::ADD_SELECT_HIGHLIGHT),
+                    ),
+                    (
+                        next_drag_expand.is_some(),
+                        next_drag_expand.unwrap_or(extensions::files::DRAG_HOVER_EXPAND_DELAY),
                     ),
                 ];
                 if let Some(interval) = wakes
@@ -2455,6 +2500,13 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     .active_workspace_mut()
                                     .is_some_and(|ws| ws.take_tree_edit_focus_pending());
 
+                                // 同理,消费"拖拽移动确认框刚弹出、需要程序化聚焦
+                                // 新名称输入框"一次性位(拖放/双击落点触发,真
+                                // `text_input` 下一帧才出现、不会自己拿焦点)。
+                                let move_focus_pending = app
+                                    .active_workspace_mut()
+                                    .is_some_and(|ws| ws.take_move_focus_pending());
+
                                 // 同理,消费"Todo 任务内容编辑刚触发、需要程序化
                                 // 聚焦"一次性位(点卡片文字进入编辑态,真 `text_input`
                                 // 下一帧才出现、不会自己拿焦点)。
@@ -2579,6 +2631,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     let mut op =
                                         iced_widget::core::widget::operation::focusable::focus::<()>(
                                             extensions::files::tree_edit_field_id(),
+                                        );
+                                    run_operate(&mut interface, renderer, &mut op);
+                                }
+
+                                // 拖拽移动确认框刚弹出时程序化聚焦"新名称"输入框
+                                // (一次性位,消费即复位)。
+                                if move_focus_pending {
+                                    let mut op =
+                                        iced_widget::core::widget::operation::focusable::focus::<()>(
+                                            extensions::files::move_name_field_id(),
                                         );
                                     run_operate(&mut interface, renderer, &mut op);
                                 }

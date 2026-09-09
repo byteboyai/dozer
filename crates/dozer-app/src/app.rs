@@ -2684,9 +2684,10 @@ impl App {
         }
     }
 
-    /// 外部 OS 文件拖拽命中测试：窗口坐标 (x, y) 在**当前**左侧是否落在某个
-    /// 目录行上，返回该目录路径。main.rs 在 winit 原生事件层的
-    /// `CursorMoved`/`DroppedFile` 上调用它——只要不在文件树目录行上就返回
+    /// 外部 OS 文件拖拽命中测试：窗口坐标 (x, y) 在**当前**左侧是否落在
+    /// 文件树某一行上，返回该行的落点结果(见 `files::DropHit` 文档:命中
+    /// 文件行时 `target` 会退到其父目录)。main.rs 在 winit 原生事件层的
+    /// `CursorMoved`/`DroppedFile` 上调用它——只要不在文件树上就返回
     /// `None`（此时拖入按现状落给终端）。
     ///
     /// 不做任何像素布局复制：文件树列的矩形由 [`left_files_tree_bounds_for`]
@@ -2698,7 +2699,7 @@ impl App {
         window_h: f32,
         x: f32,
         y: f32,
-    ) -> Option<PathBuf> {
+    ) -> Option<files::DropHit> {
         let side = self
             .shell_state()
             .layout
@@ -2726,11 +2727,13 @@ impl App {
         files::tree_drop_target(x, y, bounds, ws.files.tree_scroll(), &rows)
     }
 
-    /// 外部文件拖拽悬停命中一个仍处于折叠态的目录时调用:自动展开,让子级
-    /// 可见、拖拽能继续往深一层落(main.rs `RedrawRequested`/`files_dragging`
-    /// 分支里对每次命中结果调用)。已展开则不动——`visible_tree_rows` 里查
-    /// 不到就当已展开处理,避免对不存在的行重复 `Toggle`。
-    pub fn expand_files_dir_if_collapsed(&mut self, dir: &std::path::Path) {
+    /// 拖拽(外部 OS 拖入/内部树拖拽共用)悬停命中一个仍处于折叠态的目录时
+    /// 调用:不立即展开,武装 `files::DRAG_HOVER_EXPAND_DELAY` 计时——真正
+    /// 展开推迟到 `advance_drag_hover_expand` 满时才做,见 `WorkspaceState::
+    /// drag_expand_pending` 文档(立即展开会让拖着划过沿途目录疯狂跳动
+    /// 布局,2026-09 用户实测反馈)。已展开(或查不到该行,当已展开处理)
+    /// 直接清空计时。
+    pub fn arm_drag_hover_expand(&mut self, dir: &std::path::Path) {
         let Some(ws) = self.active_workspace() else {
             return;
         };
@@ -2740,9 +2743,41 @@ impl App {
             .iter()
             .find(|r| r.path == dir)
             .is_none_or(|r| r.expanded);
-        if !already_expanded {
-            self.update(Message::Files(files::Message::Toggle(dir.to_path_buf())));
+        let Some(ws) = self.active_workspace_mut() else {
+            return;
+        };
+        ws.files
+            .arm_drag_expand(dir.to_path_buf(), already_expanded);
+    }
+
+    /// 悬停离开文件树、拖拽收尾/取消时调用:清空展开计时,不留残留状态。
+    pub fn clear_drag_hover_expand(&mut self) {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.files.clear_drag_expand();
         }
+    }
+
+    /// `about_to_wait`/`ResumeTimeReached` 每次唤醒都调:当前项目悬停中的
+    /// 目录若已计满 `DRAG_HOVER_EXPAND_DELAY`,发 `Message::Toggle` 真正
+    /// 展开并清空计时;未满或没有悬停中的目录都是 no-op。
+    pub fn advance_drag_hover_expand(&mut self) {
+        let Some(dir) = self
+            .active_workspace()
+            .and_then(|ws| ws.files.drag_expand_ready())
+        else {
+            return;
+        };
+        self.update(Message::Files(files::Message::Toggle(dir)));
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.files.clear_drag_expand();
+        }
+    }
+
+    /// 距当前项目的展开计时满 1s 的剩余时间,`about_to_wait` 据此排精确
+    /// 唤醒(同 `next_tooltip_wake` 手法)。没有悬停中的目录时返回 `None`。
+    pub fn next_drag_hover_expand_wake(&self) -> Option<std::time::Duration> {
+        self.active_workspace()
+            .and_then(|ws| ws.files.next_drag_expand_wake())
     }
 
     /// 同上，可变引用版本；如果对应槽位是 `Stub`，就地促成 `Loaded`
@@ -3266,6 +3301,14 @@ impl App {
     pub fn database_form_open(&self) -> bool {
         self.active_workspace()
             .is_some_and(|ws| ws.database_form_open())
+    }
+
+    /// 拖拽移动确认框是否打开(main.rs 键盘路由用)。同 SSH/Database 表单
+    /// 的粗粒度口径——框里只有两个字段,整体放行不细分哪个字段真正持有
+    /// 焦点,见 `WorkspaceState::pending_move_is_some` 文档。
+    pub fn files_move_confirm_open(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.files.pending_move_is_some())
     }
 
     /// 每帧渲染循环调用:把 `extensions::files::CaptureSearchFocus` 问到
@@ -5516,20 +5559,19 @@ impl App {
                     .is_some_and(|ws| ws.files.tree_drag_confirmed());
                 self.update(Message::Files(files::Message::TreeDragEnd(confirmed)));
             }
+            // 树行双击:目录复用 `Message::Toggle` 那条本地消息直接切换展开
+            // 态(同点箭头效果),文件跨到 `PreviewOpenPath`——该面板本身
+            // 不认识这条消息,见 `files::Message::TreeRowDoubleClick` 文档。
+            Message::Files(files::Message::TreeRowDoubleClick { path, is_dir }) => {
+                if is_dir {
+                    self.update(Message::Files(files::Message::Toggle(path)));
+                } else {
+                    self.update(Message::PreviewOpenPath(path));
+                }
+            }
             Message::Files(msg) => {
                 let Some(project_id) = self.active_project_id else {
                     return;
-                };
-                // `TreeDragEnd` 收尾前问一句"这其实是不是单击一个文件"(见
-                // `TreeRowPress` 文档:文件的打开推迟到这里才决定)——必须在
-                // `files::update()` 消费掉 `tree_drag` 之前问,`files::update()`
-                // 自己不认识 `PreviewOpenPath`,这条判断/转发只能留在内核。
-                let pending_open_after_click = if let files::Message::TreeDragEnd(confirmed) = &msg
-                {
-                    self.active_workspace()
-                        .and_then(|ws| ws.files.pending_click_open_file(*confirmed))
-                } else {
-                    None
                 };
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
@@ -5541,9 +5583,6 @@ impl App {
                     return;
                 };
                 files::update(&mut ws.files, app_files, msg, project_id, &handle, emit);
-                if let Some(path) = pending_open_after_click {
-                    self.update(Message::PreviewOpenPath(path));
-                }
             }
             Message::Project(
                 msg @ (project::Message::GitRefreshed(project_id, ..)
@@ -7996,6 +8035,21 @@ impl App {
                 base,
                 dismiss,
                 files::delete_confirm_popup(&ws.files).map(Message::Files)
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        } else if ws.files.pending_move_is_some() {
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::Files(files::Message::MoveCancel));
+            stack![
+                base,
+                dismiss,
+                files::move_confirm_popup(&ws.files).map(Message::Files)
             ]
             .width(Length::Fill)
             .height(Length::Fill)

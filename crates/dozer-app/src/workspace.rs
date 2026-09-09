@@ -2213,6 +2213,14 @@ impl Workspace {
         self.files.take_tree_edit_focus_pending()
     }
 
+    /// 读走(消费式)拖拽移动确认框"新名称"输入框的一次性程序化聚焦标记
+    /// (弹框刚出现时置位,真 `text_input` 下一帧才出现、不会自己拿焦点)。
+    /// main.rs 在 `UserInterface::build` 之前调用,为真则用 `operation::
+    /// focusable::focus` 强制聚焦,同 `take_tree_edit_focus_pending`。
+    pub fn take_move_focus_pending(&mut self) -> bool {
+        self.files.take_move_focus_pending()
+    }
+
     /// 读走(消费式)Todo 任务内容编辑的一次性程序化聚焦标记(点卡片文字进入
     /// 编辑态时置位,text_input 下一帧才出现、不会自己拿焦点)。main.rs 在
     /// `UserInterface::build` 之前调用,为真则用 `operation::focusable::

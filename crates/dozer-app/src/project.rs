@@ -98,22 +98,16 @@ impl FileTree {
         self.show_dotfiles
     }
 
-    /// 展开/收起一个目录。展开时若未缓存则同步读一次。
+    /// 展开/收起一个目录。展开时若未缓存则同步读一次。哪怕目录是空的
+    /// 或不可读,点击后箭头图标（>→V）也要如实反映"已展开"这个状态,
+    /// 不能因为无可展开内容就悄悄拒绝翻转。
     pub fn toggle(&mut self, dir: &Path) {
         if self.expanded.remove(dir) {
             return; // 已展开 → 收起
         }
         let children = read_children(self, dir);
         self.children.entry(dir.to_path_buf()).or_insert(children);
-        // 空目录/不可读:缓存为空 vec,不标 expanded(无可展开内容)
-        if self
-            .children
-            .get(dir)
-            .map(|c| !c.is_empty())
-            .unwrap_or(false)
-        {
-            self.expanded.insert(dir.to_path_buf());
-        }
+        self.expanded.insert(dir.to_path_buf());
     }
 
     /// 强制重读一个目录的子项缓存（增删改后调用，让 `visible_rows()`
@@ -141,11 +135,9 @@ impl FileTree {
     }
 
     /// 确保目录处于展开态（新建文件/文件夹前调用，让新项有可见位置）。
-    /// 与 `toggle` 不同：无条件标记 expanded，哪怕目录当前是空的——
-    /// 新建文件/文件夹的落点必须可见，即便"可见"只是一个空的展开态
-    /// 目录（渲染零子行，不 crash、不视觉异常）。若走 `toggle` 的
-    /// "空目录不标 expanded" 逻辑，右键空目录→新建，编辑框永远不会
-    /// 出现在屏幕上，但键盘输入已经在悄悄写进不可见的编辑缓冲区。
+    /// 与 `toggle` 不同：只展开、不收起——已展开时调用不会把目录翻回
+    /// 收起态。新建文件/文件夹的落点必须可见，即便"可见"只是一个空的
+    /// 展开态目录（渲染零子行，不 crash、不视觉异常）。
     pub fn ensure_expanded(&mut self, dir: &Path) {
         let children = read_children(self, dir);
         self.children.entry(dir.to_path_buf()).or_insert(children);
@@ -332,12 +324,16 @@ pub fn paste_item(
     result.map(|_| dest).map_err(|e| e.to_string())
 }
 
-/// 把 `source`(文件或目录)移动到 `target_dir` 下,用源的文件名。语义对齐
-/// macOS Finder 拖拽:同文件系统直接 `std::fs::rename`(改目录项、不拷数据);
-/// 跨文件系统(rename 返回 `EXDEV`)降级为复制 + 删除源。目标存在同名项 →
-/// `Err`;目录移进自身子树 → `Err`。成功返回新建出的完整路径。
-pub fn move_item(source: &Path, source_is_dir: bool, target_dir: &Path) -> Result<PathBuf, String> {
-    let dest = target_dir.join(source.file_name().unwrap_or_default());
+/// 把 `source` 移动到明确指定的完整目标路径 `dest`(目录 + 文件名都由
+/// 调用方给定,允许改名)——`move_item` 的通用版本。语义对齐 macOS
+/// Finder 拖拽:同文件系统直接 `std::fs::rename`(改目录项、不拷数据);
+/// 跨文件系统(rename 返回 `EXDEV`)降级为复制 + 删除源(不复用
+/// `paste_item`——那个函数自己按源文件名算 `dest`,这里 `dest` 已经是
+/// 调用方定好的完整路径,直接拷到它)。`dest` 已存在 → `Err`;目录移进
+/// 自身子树 → `Err`。成功返回 `dest`。供"拖拽移动确认框"(用户可在确认
+/// 前改文件名/改目标目录,见 `files::PendingMove`)和 `move_item`(不改名
+/// 的既有场景)共用。
+pub fn move_item_to(source: &Path, source_is_dir: bool, dest: &Path) -> Result<PathBuf, String> {
     // 同 `paste_item`:目录不能移进自己或自己的子目录(无界自增长)。
     if source_is_dir && (dest.starts_with(source) || dest == source) {
         return Err("不能把目录移到它自己或其子目录里".to_string());
@@ -345,25 +341,38 @@ pub fn move_item(source: &Path, source_is_dir: bool, target_dir: &Path) -> Resul
     if dest.exists() {
         return Err(format!("{} 已存在同名项", dest.display()));
     }
-    match std::fs::rename(source, &dest) {
-        Ok(()) => Ok(dest),
+    match std::fs::rename(source, dest) {
+        Ok(()) => Ok(dest.to_path_buf()),
         // 跨文件系统:ErrorKind::CrossesDevices(EXDEV)——复制后删源。
         Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
-            match paste_item(source, source_is_dir, target_dir) {
-                Ok(copied) => {
+            let copied = if source_is_dir {
+                copy_dir_recursive(source, dest)
+            } else {
+                std::fs::copy(source, dest).map(|_| ())
+            };
+            match copied {
+                Ok(()) => {
                     let cleanup = if source_is_dir {
                         std::fs::remove_dir_all(source)
                     } else {
                         std::fs::remove_file(source)
                     };
-                    cleanup.map_err(|e| format!("已复制到目标,但删除源失败: {e}"))?;
-                    Ok(copied)
+                    cleanup
+                        .map(|()| dest.to_path_buf())
+                        .map_err(|e| format!("已复制到目标,但删除源失败: {e}"))
                 }
-                Err(e) => Err(e),
+                Err(e) => Err(e.to_string()),
             }
         }
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// 把 `source`(文件或目录)移动到 `target_dir` 下,用源的文件名——
+/// `move_item_to` 的常用简写,不改名的既有拖拽场景用它。
+pub fn move_item(source: &Path, source_is_dir: bool, target_dir: &Path) -> Result<PathBuf, String> {
+    let dest = target_dir.join(source.file_name().unwrap_or_default());
+    move_item_to(source, source_is_dir, &dest)
 }
 
 /// 校验新建/重命名输入框里键入的名字是不是"单一正常路径分量"——不含
@@ -451,8 +460,8 @@ mod tests {
 
     #[test]
     fn ensure_expanded_on_empty_dir_expands_anyway() {
-        // 与 toggle 不同:ensure_expanded 无条件展开,哪怕目录是空的——
-        // 这样"新建文件/文件夹"落点所在的目录才有渲染位置(Critical #2)。
+        // 哪怕目录是空的,ensure_expanded 也无条件展开——这样"新建文件/
+        // 文件夹"落点所在的目录才有渲染位置(Critical #2)。
         let d = tempfile::tempdir().unwrap();
         std::fs::create_dir(d.path().join("empty")).unwrap();
         let mut t = FileTree::new(d.path().to_path_buf());
@@ -463,6 +472,31 @@ mod tests {
             .find(|r| r.name == "empty")
             .unwrap();
         assert!(row.expanded);
+    }
+
+    #[test]
+    fn toggle_on_empty_dir_flips_expanded_so_chevron_updates() {
+        // 空目录点击展开箭头(>)也要变成(V)——即便没有子项可渲染,
+        // 用户点了展开就该看到"已展开"的图标反馈,不能悄悄拒绝翻转。
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir(d.path().join("empty")).unwrap();
+        let mut t = FileTree::new(d.path().to_path_buf());
+        t.toggle(&d.path().join("empty"));
+        let row = t
+            .visible_rows()
+            .into_iter()
+            .find(|r| r.name == "empty")
+            .unwrap();
+        assert!(row.expanded);
+
+        // 再点一次要能收起回去。
+        t.toggle(&d.path().join("empty"));
+        let row = t
+            .visible_rows()
+            .into_iter()
+            .find(|r| r.name == "empty")
+            .unwrap();
+        assert!(!row.expanded);
     }
 
     #[test]
@@ -564,6 +598,24 @@ mod tests {
         assert_eq!(result, target_dir.join("a.txt"));
         assert_eq!(std::fs::read_to_string(&result).unwrap(), "hello");
         // 源已移除(移动而非复制)
+        assert!(!src_file.exists());
+    }
+
+    /// `move_item_to` 是 `move_item` 的通用版本,允许改名(目标文件名不必
+    /// 跟源一致)——拖拽移动确认框(`files::PendingMove`)靠它实现"改名 +
+    /// 改目标目录一起生效"。
+    #[test]
+    fn move_item_to_renames_while_moving() {
+        let d = tempfile::tempdir().unwrap();
+        let src_file = d.path().join("a.txt");
+        std::fs::write(&src_file, "hello").unwrap();
+        let target_dir = d.path().join("target");
+        std::fs::create_dir(&target_dir).unwrap();
+        let dest = target_dir.join("renamed.txt");
+
+        let result = move_item_to(&src_file, false, &dest).unwrap();
+        assert_eq!(result, dest);
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "hello");
         assert!(!src_file.exists());
     }
 
