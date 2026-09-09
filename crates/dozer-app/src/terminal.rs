@@ -21,7 +21,6 @@ use crate::tab_widget;
 use crate::term_view;
 use crate::theme;
 use crate::workspace::{SessionTab, Workspace, dot_color, tab_display_width, tab_title};
-use byteui::interaction::icons;
 use iced_widget::core::mouse;
 use iced_widget::core::{Border, Element, Length};
 use iced_widget::{MouseArea, column, container, row, text};
@@ -113,18 +112,17 @@ pub(crate) fn tab_bar<'a>(
         .iter()
         .map(|t| tab_display_width(&tab_title(t.agent, t.cwd.as_deref(), &t.info.name)))
         .collect();
-    let (first, can_left, can_right) = tab_widget::tab_window(
+    let window = tab_widget::tab_window(
         &widths,
         4.0,
         byteui::theme::geometry::tab_bar_avail_px(),
         ws.term_tab_first,
     );
-
     let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = ws
         .tabs
         .iter()
         .enumerate()
-        .filter(|(idx, _)| *idx >= first)
+        .filter(|(idx, _)| (window.first..window.visible_end).contains(idx))
         .map(|(idx, tab)| {
             let title_hover_t = app.hover_progress(HoverId::TermTabItem(idx));
             let close_hover_t = app.hover_progress(HoverId::TermTabClose(idx));
@@ -145,38 +143,61 @@ pub(crate) fn tab_bar<'a>(
         })
         .collect();
 
-    // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;左右箭头钉在裁剪区外.
+    // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;溢出 V 按钮钉在裁剪区外(仅当有
+    // 被挤出去的 tab 时才渲染——`tab_overflow_button` 无溢出返回 `None`)。
     let tabs_row = row(items).spacing(4);
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
-    let left_arrow = tab_widget::tab_arrow_button(
-        icons::IconKind::ChevronLeft,
-        can_left,
-        Message::TermTabScroll(false),
-    );
-    let right_arrow = tab_widget::tab_arrow_button(
-        icons::IconKind::ChevronRight,
-        can_right,
-        Message::TermTabScroll(true),
-    );
+    let hidden_count = window.hidden_before().len() + window.hidden_after(ws.tabs.len()).len();
+    let overflow_button =
+        tab_widget::tab_overflow_button(hidden_count, Message::TermTabOverflowToggle);
 
-    let tab_row = row![
-        left_arrow,
-        right_arrow,
-        clipped,
-        app.list_collapse_button(
-            PanelKind::Agent,
-            app.list_collapsed(PanelKind::Agent),
-            HoverId::AgentListCollapse,
-            "收起列表",
-            "展开列表",
-            Message::TogglePanelListCollapse(PanelKind::Agent),
-            move |hovered| Message::Hover(HoverId::AgentListCollapse, hovered),
-        ),
-    ]
-    .spacing(4)
-    .align_y(iced_widget::core::Alignment::Center);
+    let mut tab_row = row![clipped]
+        .spacing(4)
+        .align_y(iced_widget::core::Alignment::Center);
+    if let Some(btn) = overflow_button {
+        tab_row = tab_row.push(btn);
+    }
+    tab_row = tab_row.push(app.list_collapse_button(
+        PanelKind::Agent,
+        app.list_collapsed(PanelKind::Agent),
+        HoverId::AgentListCollapse,
+        "收起列表",
+        "展开列表",
+        Message::TogglePanelListCollapse(PanelKind::Agent),
+        move |hovered| Message::Hover(HoverId::AgentListCollapse, hovered),
+    ));
 
-    column![tab_row, tab_divider()].spacing(4).into()
+    let base = column![tab_row, tab_divider()].spacing(4);
+    if let Some(anchor) = ws.term_tab_overflow_anchor {
+        if window.has_overflow(ws.tabs.len()) {
+            let entries: Vec<tab_widget::TabOverflowEntry<'_, Message>> = ws
+                .tabs
+                .iter()
+                .enumerate()
+                .filter(|(idx, _)| !(window.first..window.visible_end).contains(idx))
+                .map(|(idx, tab)| tab_widget::TabOverflowEntry {
+                    index: idx,
+                    prefix: Some(byteui::feedback::status::dot(dot_color(
+                        tab.agent_state,
+                        tab.alive,
+                    ))),
+                    title: tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
+                    active: idx == ws.active,
+                    closable: true,
+                })
+                .collect();
+            let menu = tab_widget::tab_overflow_menu(tab_widget::TabOverflowMenuArgs {
+                entries,
+                anchor,
+                window_size: app.window_size,
+                on_select: Message::SelectTab,
+                on_close: Message::CloseTab,
+                on_dismiss: Message::TermTabOverflowDismiss,
+            });
+            return iced_widget::stack![base, menu].into();
+        }
+    }
+    base.into()
 }
 
 /// 单个 tab：状态点（颜色见 `dot_color`）+ 名称的选中按钮，紧跟一个关闭

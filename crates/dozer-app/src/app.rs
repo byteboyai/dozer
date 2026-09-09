@@ -1809,9 +1809,11 @@ pub enum Message {
     /// 终端滚轮：视口向历史方向（正数）/活动区方向（负数）滚动的行数。
     /// 只作用于当前激活 tab（滚轮事件来自它的 canvas）。
     TermScroll(terminal::TermTarget, i32),
-    /// 终端 tab 栏箭头翻页（`true`=右/`false`=左）。一次翻 2 个 tab；
-    /// 上界不在此钳，渲染时 `tab_window` 钳制显示（P1L T5 验收返工）。
-    TermTabScroll(bool),
+    /// 终端 tab 栏溢出下拉开关：点 V 按钮切换；打开时把 `App::last_cursor`
+    /// 记进 `Workspace::term_tab_overflow_anchor` 作为悬浮定位锚点。
+    TermTabOverflowToggle,
+    /// 终端 tab 栏溢出下拉：点击外部区域关闭。
+    TermTabOverflowDismiss,
     /// 预览 tab 栏箭头翻页，语义同 `TermTabScroll`。
     PreviewTabScroll(bool),
     /// 终端左键按下：在视口格 `(col, row)` 起新选区（`right` = 按点在
@@ -5113,13 +5115,19 @@ impl App {
                     }
                 });
             }
-            Message::TermTabScroll(right) => {
+            Message::TermTabOverflowToggle => {
+                let last_cursor = self.last_cursor;
                 self.with_focused_project(|ws, _io| {
-                    if right {
-                        ws.term_tab_first = ws.term_tab_first.saturating_add(2);
+                    ws.term_tab_overflow_anchor = if ws.term_tab_overflow_anchor.is_some() {
+                        None
                     } else {
-                        ws.term_tab_first = ws.term_tab_first.saturating_sub(2);
-                    }
+                        Some(last_cursor)
+                    };
+                });
+            }
+            Message::TermTabOverflowDismiss => {
+                self.with_focused_project(|ws, _io| {
+                    ws.term_tab_overflow_anchor = None;
                 });
             }
             Message::PreviewTabScroll(right) => {
@@ -6891,6 +6899,22 @@ impl App {
         self.with_focused_project(|ws, _io| {
             if idx < ws.tabs.len() {
                 ws.active = idx;
+                // 溢出下拉里选中一个被挤出可见区的 tab:选中它之后自动把
+                // 主条滚入可见窗口(已可见则不受影响,见 `tab_window_reveal`),
+                // 并收起下拉——避免"选中了却看不见在哪"。
+                let widths: Vec<f32> = ws
+                    .tabs
+                    .iter()
+                    .map(|t| tab_display_width(&tab_title(t.agent, t.cwd.as_deref(), &t.info.name)))
+                    .collect();
+                ws.term_tab_first = tab_widget::tab_window_reveal(
+                    &widths,
+                    4.0,
+                    byteui::theme::geometry::tab_bar_avail_px(),
+                    ws.term_tab_first,
+                    idx,
+                );
+                ws.term_tab_overflow_anchor = None;
             }
         });
         // `term_ime_preedit` 是 `App` 上唯一一份、不按 tab 分的组字预览态
@@ -9525,12 +9549,15 @@ fn ssh_tab_bar<'a>(
         let _ = state;
     }
     let widths: Vec<f32> = entries.iter().map(|(w, _)| *w).collect();
-    let (first, can_left, can_right) = tab_widget::tab_window(
+    let window = tab_widget::tab_window(
         &widths,
         4.0,
         byteui::theme::geometry::tab_bar_avail_px(),
         ws.ssh_tab_first,
     );
+    let first = window.first;
+    let can_left = first > 0;
+    let can_right = window.visible_end < widths.len();
     let items: Vec<_> = entries
         .into_iter()
         .enumerate()

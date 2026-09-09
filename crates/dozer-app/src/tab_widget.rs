@@ -13,7 +13,7 @@ use crate::app::{controlled_tooltip, top_bar_font};
 use byteui::interaction::{icons, tabs};
 use iced_widget::core::{Border, Color, Element, Length, Padding};
 use iced_widget::tooltip::Position;
-use iced_widget::{button, container, row, text};
+use iced_widget::{MouseArea, button, column, container, row, scrollable, stack, text};
 
 /// 面板 tab 统一上限宽（对齐顶栏 `project_tab_max_width`）。标题超宽时直接
 /// 隐藏溢出(不换行、不省略号),正常情况下 tab 宽度随标题适配。导出给
@@ -49,6 +49,92 @@ const PANEL_TAB_PAD_Y: f32 = 0.0;
 // `title_hover`/`close_hover`/`prefix`/`suffix` 各自同类型相邻,原先 11
 // 个位置参数顺序传错编译器发现不了(Rust Design Patterns:Builder,用
 // 具名字段替代同类型位置参数)。
+/// tab 的"图标+文字"渲染,横向 tab(`panel_tab`)与下拉行(`tab_overflow_menu`)
+/// 共用。`active`/`hover_t` 决定标题颜色(选中恒 CREAM,未选中 DIM→GOLD
+/// 按 `hover_t` 插值,与原 `panel_tab` 配色公式一致)。
+pub(crate) fn tab_label<'a, M: 'a>(
+    prefix: Option<Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>>,
+    title: String,
+    active: bool,
+    hover_t: f32,
+    max_width: f32,
+) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
+    let title_color = if active {
+        byteui::theme::color::current().cream
+    } else {
+        byteui::theme::color::mix(
+            byteui::theme::color::current().dim,
+            byteui::theme::color::current().gold,
+            hover_t,
+        )
+    };
+    let mut title_row = row![]
+        .spacing(4)
+        .align_y(iced_widget::core::Alignment::Center);
+    if let Some(p) = prefix {
+        title_row = title_row.push(p);
+    }
+    title_row = title_row.push(
+        container(
+            text(title)
+                .font(top_bar_font())
+                .size(byteui::theme::font::body())
+                // iced `Text` 默认 `Wrapping::Word`,不是曾经以为的
+                // `None`——不显式关掉,标题超宽时会真的折成两行,而不是
+                // 靠下面 `.clip(true)` 单行截断(验收反馈:较长标题换行)。
+                .wrapping(iced_widget::core::text::Wrapping::None)
+                .color(title_color),
+        )
+        // 标题超宽不补省略号、也不换行,直接裁掉溢出(见 CODEBUDDY 需求):
+        // `clip` 把越界部分藏起,视觉上即"隐藏"。满 2s 悬停后由外层
+        // `controlled_tooltip` 弹出全称。
+        .width(Length::Shrink)
+        .max_width(max_width)
+        .clip(true),
+    );
+    title_row.into()
+}
+
+/// tab 容器的背景/边框:选中态 CARD 实底+1px 边框,未选中 hover 时
+/// TAB_HOVER 胶囊背景,都不是则透明。从 `panel_tab` 抽取,`tab_overflow_menu`
+/// 的行高亮复用同一份判断,避免两处各写一份容易分叉的样式逻辑。
+pub(crate) fn tab_container_style(
+    active: bool,
+    hover: f32,
+) -> impl Fn(&iced_widget::Theme) -> container::Style {
+    move |_theme: &iced_widget::Theme| {
+        if active {
+            container::Style {
+                background: Some(byteui::theme::color::current().card.into()),
+                border: Border {
+                    color: byteui::theme::color::current().border,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..container::Style::default()
+            }
+        } else if hover > 0.0 {
+            // 悬停胶囊铺满整片 tab(含 × 区),× 落在其内部。
+            container::Style {
+                background: Some(
+                    Color {
+                        a: hover,
+                        ..byteui::theme::color::current().tab_hover
+                    }
+                    .into(),
+                ),
+                border: Border {
+                    radius: 6.0.into(),
+                    ..Border::default()
+                },
+                ..container::Style::default()
+            }
+        } else {
+            container::Style::default()
+        }
+    }
+}
+
 pub(crate) struct PanelTabArgs<'a, M, F1, F2>
 where
     M: Clone + 'a,
@@ -95,41 +181,7 @@ where
     let hovered = hover > 0.001;
     // 标题区域最大宽 = 整 tab 上限 - 左右 padding - 与关闭按钮的间距 - 关闭按钮。
     let title_max = PANEL_TAB_MAX_W - PANEL_TAB_PAD_LEFT - PANEL_TAB_PAD_X - 2.0 - close_sz;
-    let title_color = if active {
-        byteui::theme::color::current().cream
-    } else {
-        // 未选中态:静止 DIM,hover 时平滑过渡到金(与顶栏页签同一套动画)。
-        byteui::theme::color::mix(
-            byteui::theme::color::current().dim,
-            byteui::theme::color::current().gold,
-            hover_t,
-        )
-    };
-
-    let mut title_row = row![]
-        .spacing(4)
-        .align_y(iced_widget::core::Alignment::Center);
-    if let Some(p) = prefix {
-        title_row = title_row.push(p);
-    }
-    title_row = title_row.push(
-        container(
-            text(title.clone())
-                .font(top_bar_font())
-                .size(byteui::theme::font::body())
-                // iced `Text` 默认 `Wrapping::Word`,不是曾经以为的
-                // `None`——不显式关掉,标题超宽时会真的折成两行,而不是
-                // 靠下面 `.clip(true)` 单行截断(验收反馈:较长标题换行)。
-                .wrapping(iced_widget::core::text::Wrapping::None)
-                .color(title_color),
-        )
-        // 标题超宽不补省略号、也不换行,直接裁掉溢出(见 CODEBUDDY 需求):
-        // `clip` 把越界部分藏起,视觉上即"隐藏"。满 2s 悬停后由外层
-        // `controlled_tooltip` 弹出全称。
-        .width(Length::Shrink)
-        .max_width(title_max)
-        .clip(true),
-    );
+    let title_row = tab_label(prefix, title.clone(), active, hover_t, title_max);
 
     // 选中/关闭的接线逻辑收在 `tabs::tab_core`(2026-08-12 抽取,试点已
     // 验证过——项目页签早已用它;这里是把面板 tab 自己那份原版实现换
@@ -172,37 +224,7 @@ where
         })
         .width(Length::Shrink)
         .max_width(PANEL_TAB_MAX_W)
-        .style(move |_t: &iced_widget::Theme| {
-            if active {
-                container::Style {
-                    background: Some(byteui::theme::color::current().card.into()),
-                    border: Border {
-                        color: byteui::theme::color::current().border,
-                        width: 1.0,
-                        radius: 6.0.into(),
-                    },
-                    ..container::Style::default()
-                }
-            } else if hover > 0.0 {
-                // 悬停胶囊铺满整片 tab(含 × 区),× 落在其内部。
-                container::Style {
-                    background: Some(
-                        Color {
-                            a: hover,
-                            ..byteui::theme::color::current().tab_hover
-                        }
-                        .into(),
-                    ),
-                    border: Border {
-                        radius: 6.0.into(),
-                        ..Border::default()
-                    },
-                    ..container::Style::default()
-                }
-            } else {
-                container::Style::default()
-            }
-        })
+        .style(tab_container_style(active, hover))
         .into();
     // 面板页签在屏幕底部,tooltip 用 `Top` 弹在页签上方,免出屏。仅当悬停
     // 满 2s(`show_tooltip`)才显示标题全称(见 `App::hover_tooltip_ready`)。
@@ -263,24 +285,47 @@ pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
     btn.into()
 }
 
-/// 给定各 tab 宽、tab 间距、可视宽、当前 first，算出：
-/// (钳制后的 first, 左可滚, 右可滚)。
-/// - 全部 tab 能放下(总宽<=avail) → first=0, 两端皆不可滚(箭头都变灰)。
-/// - 溢出 → max_first = 最小的 i 使 tabs[i..] 总宽 <= avail(即从 i 起剩余恰好放得下);
-///   钳制 first 到 [0, max_first]; 左可滚 = first>0; 右可滚 = first<max_first。
-pub(crate) fn tab_window(
-    widths: &[f32],
-    gap: f32,
-    avail: f32,
-    first: usize,
-) -> (usize, bool, bool) {
+/// 给定各 tab 宽、tab 间距、可视宽、当前 first,算出实际渲染窗口:
+/// (钳制后的 first, 可见区间的独占结束下标)。
+/// - 全部 tab 能放下(总宽<=avail) → first=0, visible_end=n(全可见,无溢出)。
+/// - 溢出 → 先按原算法算 max_first(从右往左累加,找最大窗口起点使尾部放得下),
+///   钳 first 到 [0, max_first];再从钳后的 first 往右累加,算出这一屏实际能
+///   放下几个(`visible_end`)——原算法只钳 first,不知道"从 first 起到底能看见
+///   几个",全靠调用方外层 `.clip(true)` 视觉裁切,拿不到索引,这次要靠这个
+///   新窗口的可见区间构建"隐藏了哪些 tab"的列表,必须补上这个正向累加。
+pub(crate) struct TabOverflow {
+    pub first: usize,
+    pub visible_end: usize,
+}
+
+impl TabOverflow {
+    pub(crate) fn hidden_before(&self) -> std::ops::Range<usize> {
+        0..self.first
+    }
+
+    pub(crate) fn hidden_after(&self, len: usize) -> std::ops::Range<usize> {
+        self.visible_end..len
+    }
+
+    pub(crate) fn has_overflow(&self, len: usize) -> bool {
+        self.first > 0 || self.visible_end < len
+    }
+}
+
+pub(crate) fn tab_window(widths: &[f32], gap: f32, avail: f32, first: usize) -> TabOverflow {
     let n = widths.len();
     if n == 0 {
-        return (0, false, false);
+        return TabOverflow {
+            first: 0,
+            visible_end: 0,
+        };
     }
     let total: f32 = widths.iter().sum::<f32>() + gap * (n.saturating_sub(1)) as f32;
     if total <= avail {
-        return (0, false, false);
+        return TabOverflow {
+            first: 0,
+            visible_end: n,
+        };
     }
     // 求 max_first：从右往左累加，找最大的窗口起点使 tails 放得下。
     let mut max_first = n - 1;
@@ -295,5 +340,226 @@ pub(crate) fn tab_window(
         }
     }
     let clamped = first.min(max_first);
-    (clamped, clamped > 0, clamped < max_first)
+    // 从钳后的 first 往右累加，算这一屏实际放得下几个。
+    let mut visible_end = clamped;
+    let mut fwd = 0.0;
+    for i in clamped..n {
+        let w = widths[i] + if i > clamped { gap } else { 0.0 };
+        if fwd + w <= avail {
+            fwd += w;
+            visible_end = i + 1;
+        } else {
+            break;
+        }
+    }
+    TabOverflow {
+        first: clamped,
+        visible_end,
+    }
+}
+
+/// 选中某个 tab(`target`)后:若它已经在当前窗口可见区间内,`first` 原样
+/// 不变(避免"点已可见的 tab 也跟着跳一下"的抖动);若它当前隐藏(在窗口外),
+/// 把候选 first 设为 `target` 本身,交给 `tab_window` 重新钳出一个包含它的
+/// 窗口——这就是"自动滚动带入可见区"的全部逻辑,没有新算法,只是换个候选值
+/// 重跑一次既有的钳制。
+pub(crate) fn tab_window_reveal(
+    widths: &[f32],
+    gap: f32,
+    avail: f32,
+    first: usize,
+    target: usize,
+) -> usize {
+    let current = tab_window(widths, gap, avail, first);
+    if target >= current.first && target < current.visible_end {
+        current.first
+    } else {
+        tab_window(widths, gap, avail, target).first
+    }
+}
+
+/// 溢出下拉入口:仅当 `hidden_count > 0` 时渲染,否则返回 `None`——调用方
+/// 直接跳过这一项,不走"禁用态灰按钮"(见 spec 关键语义确认 4)。尺寸/颜色
+/// 复用 `tab_overflow_button` 同一套 geometry/icon_size 常量,保证视觉一致。
+pub(crate) fn tab_overflow_button<'a, M: Clone + 'a>(
+    hidden_count: usize,
+    on_press: M,
+) -> Option<Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>> {
+    if hidden_count == 0 {
+        return None;
+    }
+    let color = byteui::theme::color::current().tab_active_border;
+    let btn = button(icons::view(
+        icons::IconKind::ChevronDown,
+        byteui::theme::icon_size::chevron(),
+        color,
+    ))
+    .width(Length::Fixed(
+        byteui::theme::geometry::tab_arrow_button_size(),
+    ))
+    .height(Length::Fixed(
+        byteui::theme::geometry::tab_arrow_button_size(),
+    ))
+    .padding(0)
+    .on_press(on_press)
+    .style(move |_theme, status| {
+        let base = button::Style {
+            background: None,
+            text_color: color,
+            ..button::Style::default()
+        };
+        match status {
+            button::Status::Hovered | button::Status::Pressed => button::Style {
+                background: Some(byteui::theme::color::current().card.into()),
+                text_color: byteui::theme::color::current().gold,
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..base
+            },
+            _ => base,
+        }
+    });
+    Some(btn.into())
+}
+
+/// 悬浮下拉里的一行,对应一个"当前被挤出可见区看不到"的 tab。`prefix` 与
+/// 横向 tab 用同一个已经建好的 `Element`(状态点/图标/无),`active` 决定
+/// 是否高亮(理论上活动 tab 不该被挤出去,但初次加载等边界场景仍可能发生,
+/// 高亮让用户看得出"这其实是当前选中的那个")。`closable=false` 用于
+/// SSH/Database 的固定"空白"占位 tab(它本来就不可关闭)。
+pub(crate) struct TabOverflowEntry<'a, M> {
+    pub index: usize,
+    pub prefix: Option<Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>>,
+    pub title: String,
+    pub active: bool,
+    pub closable: bool,
+}
+
+/// `tab_overflow_menu` 的参数:仿 `tabs::TabCoreArgs`/`tab_widget::PanelTabArgs`
+/// 的具名字段结构体风格(闭包走结构体自身泛型参数,不用 `Box<dyn Fn>`)。
+/// `anchor` 是点 V 按钮那一刻的 `App::last_cursor` 快照(逻辑坐标),
+/// `window_size` 是当前窗口尺寸,两者一起用于把下拉钉在按钮附近同时不越出
+/// 窗口边界。
+pub(crate) struct TabOverflowMenuArgs<'a, M, FSel, FClose>
+where
+    M: Clone + 'a,
+    FSel: Fn(usize) -> M,
+    FClose: Fn(usize) -> M,
+{
+    pub entries: Vec<TabOverflowEntry<'a, M>>,
+    pub anchor: (f32, f32),
+    pub window_size: (f32, f32),
+    pub on_select: FSel,
+    pub on_close: FClose,
+    pub on_dismiss: M,
+}
+
+const TAB_OVERFLOW_MENU_WIDTH: f32 = 220.0;
+const TAB_OVERFLOW_MENU_MAX_HEIGHT: f32 = 320.0;
+
+/// 悬浮下拉列表:每行用既有的 `tabs::tab_core` 包装选中(mousedown)/关闭(×)
+/// 交互(CLAUDE.md 裁决:tab 类 UI 优先复用 `tab_core`,不手写
+/// `MouseArea`+`on_enter`/`on_exit`)。关闭按钮**始终可点**(不像横向 tab 那样
+/// hover 才显形)——这是刻意的自定义(见截图:下拉里的 x 是常显的,不是
+/// hover-only),因为悬浮列表本就是"已经主动点开来看"的场景,hover-only 反而
+/// 多一次交互成本。行内不做 hover 动画(`title_hover`/`close_hover` 两个
+/// 回调固定传 `on_dismiss.clone()` 以外的**不产生副作用**的消息——各调用点
+/// 传入自己那套 `Message` 里已有的 no-op 变体,terminal/preview/ssh 用顶层
+/// `Message::Noop`,database 用新增的 `database::Message::Noop`,详见各自
+/// 任务),避免为一个短生命周期的浮层再铺一整套 `HoverId` 动画状态。
+///
+/// 悬浮定位:向上弹(同 `PreviewTabMenu`——文件/项目预览的 tab 栏下方是
+/// wry webview 子视图,webview 恒在 iced 内容之上,向下弹会被盖住;为了让
+/// 5 处调用点共用同一套定位逻辑、不用按面板特判,统一向上弹),同时按
+/// `project_add_menu_popup` 的手法钳一次 x/y 防止超出窗口右/下边缘。
+pub(crate) fn tab_overflow_menu<'a, M, FSel, FClose>(
+    args: TabOverflowMenuArgs<'a, M, FSel, FClose>,
+) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>
+where
+    M: Clone + 'a,
+    FSel: Fn(usize) -> M + 'a,
+    FClose: Fn(usize) -> M + 'a,
+{
+    let TabOverflowMenuArgs {
+        entries,
+        anchor,
+        window_size,
+        on_select,
+        on_close,
+        on_dismiss,
+    } = args;
+    let close_sz = byteui::theme::geometry::tab_button_size();
+    let row_max_w = TAB_OVERFLOW_MENU_WIDTH - close_sz - 16.0;
+
+    let mut rows: Vec<Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>> = Vec::new();
+    for entry in entries {
+        let idx = entry.index;
+        let label = tab_label(entry.prefix, entry.title, entry.active, 0.0, row_max_w);
+        let close_color = byteui::theme::color::current().dim;
+        let (select, close) = tabs::tab_core(tabs::TabCoreArgs {
+            content: label,
+            close_sz,
+            close_color,
+            close_interactive: entry.closable,
+            on_select: (on_select)(idx),
+            on_close: (on_close)(idx),
+            on_select_hover: {
+                let d = on_dismiss.clone();
+                move |_h| d.clone()
+            },
+            on_close_hover: {
+                let d = on_dismiss.clone();
+                move |_h| d.clone()
+            },
+        });
+        let row_content = row![select, close]
+            .spacing(4)
+            .align_y(iced_widget::core::Alignment::Center);
+        rows.push(
+            container(row_content)
+                .width(Length::Fill)
+                .padding(Padding::new(4.0))
+                .style(tab_container_style(entry.active, 0.0))
+                .into(),
+        );
+    }
+
+    let list = crate::menu::shell(
+        vec![
+            scrollable(column(rows).spacing(2))
+                .height(Length::Shrink)
+                .into(),
+        ],
+        Length::Fixed(TAB_OVERFLOW_MENU_WIDTH),
+    );
+    let list = container(list).max_height(TAB_OVERFLOW_MENU_MAX_HEIGHT);
+
+    // 全屏透明遮罩,接住"点外部关闭"(同 `PreviewTabMenu`/`project_add_menu_popup`
+    // 的既有套路)。内容本身不画任何东西(空白 Space),让容器撑满全窗。
+    let dismiss = MouseArea::new(
+        container(iced_widget::Space::new())
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .on_press(on_dismiss.clone());
+
+    let (ax, ay) = anchor;
+    let (window_w, window_h) = window_size;
+    let x = ax.min((window_w - TAB_OVERFLOW_MENU_WIDTH).max(0.0));
+    let bottom = (window_h - ay).max(0.0);
+    let positioned = container(list)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_y(iced_widget::core::alignment::Vertical::Bottom)
+        .padding(Padding {
+            top: 0.0,
+            left: x,
+            right: 0.0,
+            bottom,
+        });
+
+    stack![dismiss, positioned].into()
 }

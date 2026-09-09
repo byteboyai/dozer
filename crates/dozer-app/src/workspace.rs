@@ -442,8 +442,13 @@ pub struct Workspace {
     pub(crate) git_watch: Option<git_watch::Handle>,
     /// Project 信息面板 per-project 状态——见 `extensions::project::WorkspaceState`。
     pub(crate) project_panel: project::WorkspaceState,
-    /// 终端 tab 栏当前最左可见 tab 序号（箭头翻页用；P1L T5）。
+    /// 终端 tab 栏当前最左可见 tab 序号（箭头翻页用；P1L T5）。溢出改 V
+    /// 下拉后该字段仍保留(仅被 `tab_window_reveal` 驱动,不再有手动翻页)。
     pub(crate) term_tab_first: usize,
+    /// 终端 tab 栏溢出下拉的悬浮锚点：`None`=下拉关闭，`Some(x,y)`=打开且
+    /// 记录了点 V 按钮那一刻的 `App::last_cursor` 快照（逻辑坐标），同
+    /// `project_add_menu_anchor` 手法。
+    pub(crate) term_tab_overflow_anchor: Option<(f32, f32)>,
     /// 预览 tab 栏当前最左可见 tab 序号，语义同 `term_tab_first`。
     pub(crate) preview_tab_first: usize,
     /// Project 面板右配对预览 tab 栏当前最左可见 tab 序号,语义同
@@ -669,6 +674,7 @@ impl Workspace {
             recent_projects: Vec::new(),
             git_watch: None,
             term_tab_first: 0,
+            term_tab_overflow_anchor: None,
             preview_tab_first: 0,
             project_preview_tab_first: 0,
             files: files::WorkspaceState::default(),
@@ -3624,12 +3630,15 @@ fn preview_pane_for<'a>(
         .iter()
         .map(|t| preview_tab_display_width(&t.title))
         .collect();
-    let (first, can_left, can_right) = tab_window(
+    let window = tab_window(
         &widths,
         4.0,
         byteui::theme::geometry::tab_bar_avail_px(),
         tab_first,
     );
+    let first = window.first;
+    let can_left = first > 0;
+    let can_right = window.visible_end < widths.len();
 
     let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = preview
         .tabs()
@@ -5153,18 +5162,51 @@ mod tests {
     }
 
     #[test]
-    fn tab_window_no_overflow_both_disabled() {
-        let (first, left, right) = tab_window(&[50.0, 50.0, 50.0], 4.0, 500.0, 0);
-        assert_eq!((first, left, right), (0, false, false));
+    fn tab_window_no_overflow_all_visible() {
+        let w = tab_window(&[50.0, 50.0, 50.0], 4.0, 500.0, 0);
+        assert_eq!((w.first, w.visible_end), (0, 3));
+        assert!(!w.has_overflow(3));
     }
 
     #[test]
-    fn tab_window_overflow_clamps_and_flags() {
-        let w = [100.0; 5];
-        assert_eq!(tab_window(&w, 0.0, 250.0, 0), (0, false, true));
-        // 末2个(200)放得下、末3个(300)放不下 → max_first=3;过大 first 钳到 3、右到头
-        assert_eq!(tab_window(&w, 0.0, 250.0, 99), (3, true, false));
-        assert_eq!(tab_window(&w, 0.0, 250.0, 1), (1, true, true));
+    fn tab_window_overflow_clamps_and_computes_visible_end() {
+        let widths = [100.0; 5];
+        let w = tab_window(&widths, 0.0, 250.0, 0);
+        assert_eq!((w.first, w.visible_end), (0, 2));
+        assert!(w.has_overflow(5));
+        assert_eq!(w.hidden_before(), 0..0);
+        assert_eq!(w.hidden_after(5), 2..5);
+
+        // 请求的 first 越界 → 钳到 max_first(=3),此时尾部 3 个恰好全可见。
+        let w = tab_window(&widths, 0.0, 250.0, 99);
+        assert_eq!((w.first, w.visible_end), (3, 5));
+        assert_eq!(w.hidden_before(), 0..3);
+        assert_eq!(w.hidden_after(5), 5..5);
+
+        let w = tab_window(&widths, 0.0, 250.0, 1);
+        assert_eq!((w.first, w.visible_end), (1, 3));
+        assert_eq!(w.hidden_before(), 0..1);
+        assert_eq!(w.hidden_after(5), 3..5);
+    }
+
+    #[test]
+    fn tab_window_reveal_keeps_visible_tab_still_no_jump() {
+        let widths = [100.0; 5];
+        // first=1 时可见区间是 [1,3):选中已经可见的 tab 1,first 不应该变。
+        assert_eq!(
+            crate::tab_widget::tab_window_reveal(&widths, 0.0, 250.0, 1, 1),
+            1
+        );
+    }
+
+    #[test]
+    fn tab_window_reveal_scrolls_hidden_tab_into_view() {
+        let widths = [100.0; 5];
+        // first=0 时可见区间是 [0,2):选中隐藏在右侧的 tab 4,应重新钳出
+        // 一个包含它的窗口。
+        let new_first = crate::tab_widget::tab_window_reveal(&widths, 0.0, 250.0, 0, 4);
+        let w = tab_window(&widths, 0.0, 250.0, new_first);
+        assert!((w.first..w.visible_end).contains(&4));
     }
 
     #[test]
