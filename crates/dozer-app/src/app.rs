@@ -6993,9 +6993,10 @@ impl App {
         self.with_focused_project(|ws, _io| {
             if idx < ws.tabs.len() {
                 ws.active = idx;
-                // 溢出下拉里选中一个被挤出可见区的 tab:选中它之后自动把
-                // 主条滚入可见窗口(已可见则不受影响,见 `tab_window_reveal`),
-                // 并收起下拉——避免"选中了却看不见在哪"。
+                // 从 tab 栏的 V 下拉里选中某一项:选中后把主条滚入可见窗口
+                // (若该项仍横向可见则不受影响,见 `tab_window_reveal`),并收起
+                // 下拉——避免"选中了却看不见在哪"。下拉列的是组内全部 tab,
+                // 高亮常驻在可见宽度内时不会多跳一行。
                 let widths: Vec<f32> = ws
                     .tabs
                     .iter()

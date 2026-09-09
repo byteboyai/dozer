@@ -1,9 +1,11 @@
 // crates/dozer-app/src/tab_widget.rs
 //! 面板内 tab 栏的共享部件:`panel_tab`(单个 tab 渲染器,被终端
 //! `terminal.rs`、SSH 面板 `app.rs::ssh_tab_bar`、文件/项目预览
-//! `workspace.rs`、浏览器 `extensions::browser` 四处跨模块复用)+
-//! `tab_arrow_button`/`tab_window`(翻页箭头 + 窗口化滚动算法,被终端
-//! `tab_bar` 和 `workspace.rs` 的预览页签栏两处复用)。
+//! `workspace.rs`、浏览器 `extensions::browser` 四处跨模块复用)、
+//! `tab_window`/`tab_window_reveal`(窗口化滚动算法 + 选中自动带入可见区),
+//! 以及 `tab_overflow_button`/`tab_overflow_menu`(V 溢出下拉入口与悬浮
+//! 菜单,列出某 tab 组内全部 tab,供 `terminal.rs`/`workspace.rs`/
+//! `ssh_tab_bar`/Database 面板复用)。
 //!
 //! `tab_bar`/`tab_drag_surface`/`tab_item`/`active_tab_view` 表面上看
 //! 起来也是"共享 chrome",摸底后发现实际唯一调用方只有终端自己,已经
@@ -377,11 +379,11 @@ pub(crate) fn tab_overflow_button<'a, M: Clone + 'a>(
     Some(btn.into())
 }
 
-/// 悬浮下拉里的一行,对应一个"当前被挤出可见区看不到"的 tab。`prefix` 与
-/// 横向 tab 用同一个已经建好的 `Element`(状态点/图标/无),`active` 决定
-/// 是否高亮(理论上活动 tab 不该被挤出去,但初次加载等边界场景仍可能发生,
-/// 高亮让用户看得出"这其实是当前选中的那个")。`closable=false` 用于
-/// SSH/Database 的固定"空白"占位 tab(它本来就不可关闭)。
+/// 悬浮下拉里的一行,对应该 tab 组里的**某个 tab**(V 菜单列的是组内全部
+/// tab,不局限于当前横向被裁掉的)。`prefix` 与横向 tab 用同一个已经建好的
+/// `Element`(状态点/图标/无),`active` 决定是否高亮——菜单里可能同时出现
+/// 已经横向可见的当前选中项,高亮让用户看得出"这其实是当前那个"。
+/// `closable=false` 用于 SSH/Database 的固定"空白"占位 tab(本来就不可关闭)。
 pub(crate) struct TabOverflowEntry<'a, M> {
     pub index: usize,
     pub prefix: Option<Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>>,
