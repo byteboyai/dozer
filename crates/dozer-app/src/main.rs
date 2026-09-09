@@ -1449,67 +1449,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 return;
             }
 
-            // 预览编辑弹层打开时,Esc 优先触发关闭流程(脏则弹确认,不脏直接
-            // 关),口径同上面几个弹层。
-            if app.edit_session_open()
-                && let WindowEvent::KeyboardInput {
-                    event,
-                    is_synthetic: false,
-                    ..
-                } = event
-                && event.state == ElementState::Pressed
-                && event.logical_key
-                    == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
-            {
-                app.update(Message::PreviewEditCloseRequest);
-                window.request_redraw();
-                return;
-            }
-
-            // 预览编辑弹层打开时,剩余按键一律不再往下走 ⌘ 快捷键/地址栏/
-            // 终端转发——弹层里的 `iced-code-editor` 走标准 iced 事件管线
-            // (键盘事件经 `Canvas` widget 的 `on_event` 自己消化),这里不需要
-            // 也不应该手工转发。不加这道闸门的话,`terminal_visible()` 只看右侧
-            // 是否展开、对弹层状态一无所知,默认布局(右侧终端可见)下弹层
-            // 里打的每个字符、包括回车,都会同时写进背后那个终端/agent 会话
-            // (Critical,code review 发现)。
-            if app.edit_session_open() {
-                // 但 iced 原生 `text_editor` 对仅顶替 OS 组合键的 ⌘Z/⌘⇧Z(以及
-                // 无 super 的类 Unix Ctrl+Z/Ctrl+⇧Z)不产 `Action::Edit`:切退格/
-                // 重做这类"OS 级撤销语义"standard 引擎没有 binding(见 code_editor
-                // 模块注释),gate 得在把按键原样放进出 pre-compose *之前*把这两条
-                // 截下来,映射成撤销/重做消息(编辑器自身快照记录在 CodeView 里,
-                // 撤/补是应用层整文替换,不走 cosmic 引擎的 on_event)。普通打字与
-                // 单字符/光标动作仍照旧放行给 iced 消化,不影响输入。
-                let WindowEvent::KeyboardInput {
-                    event: ez,
-                    is_synthetic: false,
-                    ..
-                } = event
-                else {
-                    return;
-                };
-                if ez.state == ElementState::Pressed {
-                    // 修饰键状态是外层每帧由 `WindowEvent::ModifiersChanged` 维护的
-                    // `modifiers`(见左近 `modifiers.super_key()` 分支同一来源)。
-                    let m = modifiers;
-                    // 带上 super(⌘)或 control(⌃)才是"撤销/重做",裸 z 放行给打字。
-                    if (m.super_key() || m.control_key())
-                        && ez.logical_key == winit::keyboard::Key::Character("z".into())
-                    {
-                        let msg = if m.shift_key() {
-                            Message::EditorRedo
-                        } else {
-                            Message::EditorUndo
-                        };
-                        app.update(msg);
-                        window.request_redraw();
-                        return;
-                    }
-                }
-                return;
-            }
-
             // 原生预览 tab(白名单扩展名,`preview.rs` 直接画 `CodeEditor`,
             // 不再是旧版 wry 预览那种能抢走 OS 级键盘焦点的子视图)打开且
             // 键盘焦点确实在预览列时,同上一道闸门的道理放行——键盘事件走
@@ -1973,14 +1912,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 app.blur_preview_editors();
             }
             match message {
-                // 官方 `text_editor` 的 `Action`:剪贴板读写由 iced 运行时经
-                // `Widget::update` 拿到的 `Clipboard` 直接处理,不再需要像
-                // vendored `iced-code-editor` 那样手动拆 `Task` 桥接,直接走
-                // 正常的 `app.update` 路径即可。
-                Message::EditorEvent(action) => {
-                    app.preview_edit_event(action);
-                    window.request_redraw();
-                }
+                // 原生预览 tab 的官方 `text_editor` `Action`:剪贴板读写由 iced
+                // 运行时经 `Widget::update` 拿到的 `Clipboard` 直接处理,不需要
+                // 像 vendored `iced-code-editor` 那样拆 `Task` 桥接。`Files`/
+                // `Project` 两个预览面板分两套消息,分别直呼对应转发方法。
                 Message::PreviewEditorEvent(tab_id, action) => {
                     app.preview_tab_editor_event(tab_id, action);
                     window.request_redraw();
@@ -2425,8 +2360,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     files_dragging: false,
                     left_mouse_down: false,
                     pending_focus: None,
-                    // 默认终端拿键盘,跟现状(启动时终端可打字、没有任何
-                    // 预览/编辑弹层抢焦点)一致。
+                    // 默认终端拿键盘,跟现状(启动时终端可打字)一致。
                     current_focus: FocusIntent::Terminal,
                     proxy: proxy.clone(),
                 };
@@ -2588,8 +2522,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // 必须显式 focus;一次性位,消费即复位)。
                                 let input_menu_focus = app.take_pending_text_input_focus();
 
-                                // 同理,消费"新建原生预览编辑器/编辑弹层刚打开、需要
-                                // 程序化聚焦"三个一次性位——官方 `text_editor` 的焦点
+                                // 同理,消费"新建原生预览编辑器 tab 需要程序化聚焦"
+                                // 三个一次性位——官方 `text_editor` 的焦点
                                 // 是真实 iced 焦点树的一部分,构造时拿不到,要等下一帧
                                 // 用 `operation::focusable::focus` 强制聚焦(同项目树
                                 // 行内编辑/Todo 内容编辑的既有手法)。
@@ -2637,16 +2571,6 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                         ws.project_preview
                                             .take_pending_editor_reveal_focus()
                                             .then(|| ws.project_preview.find_editor_focus_id())
-                                            .flatten()
-                                    });
-                                let edit_session_editor_focus_id =
-                                    app.active_workspace_mut().and_then(|ws| {
-                                        ws.take_edit_session_focus_pending()
-                                            .then(|| {
-                                                ws.edit_session
-                                                    .as_ref()
-                                                    .map(|s| s.editor.focus_id())
-                                            })
                                             .flatten()
                                     });
                                 // 同理,消费"消息驱动把焦点拨离预览编辑器"一次性位
@@ -2765,15 +2689,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     run_operate(&mut interface, renderer, &mut op);
                                 }
 
-                                // 新建原生预览编辑器 tab / 打开编辑弹层时程序化聚焦
-                                // 真正的 `text_editor`(一次性位,消费即复位)。
-                                for id in [
-                                    preview_editor_focus_id,
-                                    project_preview_editor_focus_id,
-                                    edit_session_editor_focus_id,
-                                ]
-                                .into_iter()
-                                .flatten()
+                                // 新建原生预览编辑器 tab 时程序化聚焦真正的
+                                // `text_editor`(一次性位,消费即复位)。
+                                for id in [preview_editor_focus_id, project_preview_editor_focus_id]
+                                    .into_iter()
+                                    .flatten()
                                 {
                                     let mut op =
                                         iced_widget::core::widget::operation::focusable::focus::<()>(

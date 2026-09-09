@@ -156,13 +156,11 @@ pub fn is_editable_extension(path: &std::path::Path) -> bool {
     )
 }
 
-/// 默认预览要不要走 flyfish 渲染而不是原生只读代码编辑器:目前只有
+/// 默认预览要不要走 flyfish 渲染而不是原生代码编辑器:目前只有
 /// .md/.markdown——flyfish 内置的 markdown 渲染器能出标题/粗体/列表/代码块
 /// 排版效果(GitHub 风格 `.markdown-body`),原生编辑器只能给纯文本+语法
-/// 高亮,看不出排版。跟 `is_editable_extension` 是两个独立的判定:后者仍对
-/// .md 返回 `true`,右键"编辑"照常能打开可写的原生编辑器
-/// (`preview_edit_open_for` 独立读盘建 editor,不依赖这个 tab 当前是不是
-/// 走 webview),只是**默认预览**换成渲染效果。
+/// 高亮,看不出排版。这只决定**默认预览**走渲染效果;用户切到可写原生 tab
+/// 后仍是 `.txt` 一类的就地编辑器,不依赖这个默认走不走的判定。
 fn prefers_rendered_preview(path: &std::path::Path) -> bool {
     matches!(
         path.extension()

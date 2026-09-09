@@ -1,5 +1,6 @@
-//! 官方 iced `text_editor` + syntect 语法高亮的组合组件,preview.rs 原生文本
-//! 预览与 workspace.rs 编辑浮层共用,替代 vendored `iced-code-editor`(2026-09
+//! 官方 iced `text_editor` + syntect 语法高亮的组合组件,preview.rs 的本地
+//! 文件/项目预览原生 tab 都在用(自"全局编辑弹层"移除后它是唯一消费者),
+//! 替代 vendored `iced-code-editor`(2026-09
 //! 删除,见 git 历史)。删除动机:vendored 版本内部用 `iced_aw::ContextMenu`
 //! 包代码画布,`iced_aw 0.13.1` 的 `ContextMenu::operate` 在菜单展开时有布局
 //! 层级 panic,`main.rs` 曾需要给全应用每次 `operate()` 遍历套 `catch_unwind`
@@ -7,7 +8,7 @@
 //!
 //! 用途演进(2026-09-06):原生文本预览不再强制只读 —— preview.rs 现在用
 //! `read_only=false` 建编辑器,用户可选中/复制/就地编辑;保存与脏标记由
-//! `workspace.rs`(`PreviewPane`/`EditSession`)各自负责。`read_only` 参数仍保留,
+//! `workspace.rs` 的 `PreviewPane` 各自负责。`read_only` 参数仍保留,
 //! 供(将来)确需只读展示的场景;分派逻辑不变:只读时滤掉 `Action::Edit`。
 //!
 //! 已知取舍(用户已确认接受):
@@ -28,8 +29,9 @@
 //!   `Action::Edit` 落盘,不暴露按动作回滚),撤销只能靠在应用层做整文本
 //!   快照栈(见本模块 [`Snapshot`]/[`CodeView::undo`])。实现取舍:快照是
 //!   全文本拷贝、按"编辑命令"粒度建档(连续纯打字 run 折叠成一条),因此
-//!   undo 序列不是逐键、光标位置也只是尽量还原近似;只读预览 tab(不参与
-//!   键盘路由)不会被触发 undo,绑定关系见 workspace.rs 编辑弹层的 ⌘Z。
+//!   undo 序列不是逐键、光标位置也只是尽量还原近似;先前的"全局编辑弹层"
+//!   曾为它绑 ⌘Z 撤销,弹层移除后目前没有键位触发 `CodeView::undo`,API 保留
+//!   供将来需要(与只读 tab 天然不触发 undo 的事实一致)。
 
 pub mod highlighter;
 
@@ -48,6 +50,10 @@ const EDITOR_PADDING: f32 = 5.0;
 /// [`CodeView::move_cursor_to`] 钳到末行/行尾附近)。快照是全文本拷贝——
 /// 官方 `text_editor` 引擎没有任何 undo API(见模块文档),只能应用层记。
 /// 一条快照对应一条"编辑命令"(连续纯打字被折叠成一条),不是逐键。
+/// 撤销系统的调用方(先前的全局编辑弹层界面的 ⌘Z/⌘⇧Z)已随弹层移除,弹层
+/// 独有的整套回滚代码当前没有非测试消费方,故整体 `allow(dead_code)` 保留
+/// 供将来(可能给原生预览编辑 tab 复绑 ⌘Z/⌘⇧Z)复用——见模块文档"已知取舍"。
+#[allow(dead_code)]
 struct Snapshot {
     text: String,
     line: usize,
@@ -72,10 +78,10 @@ fn commit_history(sink: &mut Vec<Snapshot>, snap: Snapshot) {
     }
 }
 
-/// 组出可直接嵌入的 `text_editor`。两处复用:`preview.rs` 只读文件预览、
-/// `workspace.rs` 的 `EditSession` 可写编辑浮层——`read_only` 决定
-/// [`Action::Edit`] 是否被过滤掉。撤销历史在这里全量与 buffer 一起记:
-/// 官方引擎不暴露按动作回滚,见模块文档"已知取舍"(底下那条注释请保留)。
+/// 组出可直接嵌入的 `text_editor`(preview.rs 文件/项目预览的原生 tab 在用,
+/// 见模块文档用途演进)——`read_only` 决定 [`Action::Edit`] 是否被过滤掉。
+/// 撤销历史在这里全量与 buffer 一起记:官方引擎不暴露按动作回滚,见模块
+/// 文档"已知取舍"(底下那条注释请保留)。
 pub struct CodeView {
     id: WidgetId,
     content: text_editor::Content,
@@ -300,6 +306,8 @@ impl CodeView {
     /// 撤销一次编辑:把 buffer 回退到最新一条[`Snapshot`]记录的内容,并把
     /// 刚被回退的当前态挪进重做栈(供 [`CodeView::redo`])。没有可撤销历史
     /// 时不动作。返回是否真的发生过回退。
+    /// (休眠代码:当前无调用方,见 [`Snapshot`] 的 `allow(dead_code)` 说明。)
+    #[allow(dead_code)]
     pub fn undo(&mut self) -> bool {
         let Some(prev) = self.undo.pop() else {
             return false;
@@ -312,6 +320,8 @@ impl CodeView {
     }
 
     /// 重做被 [`CodeView::undo`] 撤消的最后一次编辑。返回是否真的发生过重做。
+    /// (休眠代码:当前无调用方,见 [`Snapshot`] 的 `allow(dead_code)` 说明。)
+    #[allow(dead_code)]
     pub fn redo(&mut self) -> bool {
         let Some(last) = self.redo.pop() else {
             return false;
@@ -435,8 +445,9 @@ impl CodeView {
     /// 组出 `[editor, scrollstrip]` 一行:正文靠左撑满,右侧一根窄条画统一
     /// 风格滚动条(只在内容纵向溢出时显 thumb)。内层消息就是原始 `Action`——
     /// 调用方按原 `iced_code_editor::Message` 时代同样的手法 `.map(...)` 转发到
-    /// 自己的顶层 `Message`(`Message::EditorEvent`/`editor_msg(tab_id, ev)` 等,
-    /// 调用点不用改)。
+    /// 自己的顶层 `Message`(`Message::PreviewEditorEvent` /
+    /// `Message::ProjectPreviewEditorEvent` 两条兄弟消息,`editor_msg(tab_id, ev)`
+    /// 分别带上 `PreviewTab.id`,调用点不用改)。
     pub fn view<'a>(&'a self) -> Element<'a, Action, iced_widget::Theme, iced_renderer::Renderer> {
         let scale = byteui::theme::icon_size::scale();
         let font_size = crate::theme::terminal_font::size() * scale;

@@ -34,7 +34,6 @@ use crate::app::{
     App, DEFAULT_COLS, DEFAULT_ROWS, HoverId, Message, PROJECT_PREVIEW_ID_OFFSET, PanelKind,
     ProjectId, tab_divider,
 };
-use crate::code_editor::CodeView;
 use crate::conversation::{self, SessionRow};
 use crate::delivery::{self};
 use crate::extensions::browser;
@@ -183,22 +182,6 @@ pub struct ReviewView {
     /// `SessionRow.last_ts` 算一次定格,不随详情页停留时长实时跳字
     /// (2026-08-28 新增)。
     pub summary_time: Option<String>,
-}
-
-/// 预览编辑弹层的进行中会话(全局至多一个;弹层是应用级模态)。
-pub struct EditSession {
-    /// `PreviewTab.id`(webview 池用的稳定 id,不是 `tabs` vec 下标——见
-    /// `Workspace::preview_edit_open` 的取值处)。
-    pub tab_id: usize,
-    pub path: PathBuf,
-    /// 编辑器组件(`code_editor::CodeView`)。有状态 widget,持有内容与撤销栈。
-    pub editor: CodeView,
-    /// 上次落盘(或打开)时的内容快照。脏标记 = `editor.text() != saved_content`。
-    pub saved_content: String,
-    /// 打开失败(理论上不会,打开前已判过存在)或保存失败的错误文案。
-    pub error: Option<String>,
-    /// 脏改动下点关闭:先弹二次确认,不直接丢。
-    pub confirm_discard: bool,
 }
 
 /// UI → SSH 泵任务的写指令(`Workspace::spawn_ssh_tab` 消费)。
@@ -468,11 +451,6 @@ pub struct Workspace {
     /// Agent 面板"＋"按钮弹出的"新建"菜单当前是否打开。不需要坐标——面板顶部固定
     /// 位置的下拉,不像项目树右键菜单需要跟随点击坐标。
     pub(crate) agent_picker_open: bool,
-    /// 预览编辑弹层进行中的会话;`None` = 未打开。
-    pub(crate) edit_session: Option<EditSession>,
-    /// 编辑弹层刚打开时置位的一次性程序化聚焦标记,语义同
-    /// `PreviewPane::pending_editor_focus`。
-    pub(crate) pending_edit_session_focus: bool,
     /// 消息驱动(非鼠标点击)把焦点拨离预览编辑器时置位——官方 `text_editor`
     /// 的焦点是真实 iced 焦点树的一部分,不能像 vendored `iced-code-editor`
     /// 那样直接对某个实例调 `lose_focus()`,改成一次性位,main.rs 下一帧用
@@ -691,8 +669,6 @@ impl Workspace {
             project_preview_tab_overflow_anchor: None,
             files: files::WorkspaceState::default(),
             agent_picker_open: false,
-            edit_session: None,
-            pending_edit_session_focus: false,
             pending_editor_unfocus: false,
             todo: todo::WorkspaceState::default(),
             database: database::WorkspaceState::default(),
@@ -743,91 +719,9 @@ impl Workspace {
             .or_else(|| self.ssh_tabs.iter_mut().find(|t| t.tab_id == tab_id))
     }
 
-    /// 打开预览编辑弹层:按 tab 下标取路径读盘。下标越界或该 tab 不是
-    /// `TabKind::File` 时静默 no-op(按钮本就只在 file tab 上画,正常路径
-    /// 走不到这两种情况)。读盘失败写 `preview_error`,不开弹层。
-    pub(crate) fn preview_edit_open(&mut self, idx: usize) {
-        self.preview_edit_open_for(PreviewPaneKind::Files, idx);
-    }
-
-    /// Project 面板右配对预览的编辑入口,语义同 `preview_edit_open`,状态取自
-    /// `ws.project_preview`,错误写到 `project_preview_error`。
-    pub(crate) fn project_preview_edit_open(&mut self, idx: usize) {
-        self.preview_edit_open_for(PreviewPaneKind::Project, idx);
-    }
-
-    fn preview_edit_open_for(&mut self, kind: PreviewPaneKind, idx: usize) {
-        let (preview, error_field) = match kind {
-            PreviewPaneKind::Files => (&self.preview, &mut self.preview_error),
-            PreviewPaneKind::Project => (&self.project_preview, &mut self.project_preview_error),
-        };
-        let Some(tab) = preview.tabs().get(idx) else {
-            return;
-        };
-        // `Blank` 占位 tab 没有真实文件,右键菜单本来就不会给它挂"编辑"项
-        // (见 `preview_pane_for` 的 `editable` 判定),这里只是防御性兜底。
-        let TabKind::File(path) = &tab.kind else {
-            return;
-        };
-        let path = path.clone();
-        let tab_id = tab.id;
-        match std::fs::read_to_string(&path) {
-            Ok(text) => {
-                *error_field = None;
-                let editor =
-                    CodeView::new(&text, crate::preview::extension_to_syntax(&path), false);
-                self.edit_session = Some(EditSession {
-                    tab_id,
-                    path,
-                    editor,
-                    saved_content: text.clone(),
-                    error: None,
-                    confirm_discard: false,
-                });
-                // 打开即程序化聚焦:键盘事件无需先点击即可直达编辑器(官方
-                // `text_editor` 的焦点是真实 iced 焦点树的一部分,构造时拿不
-                // 到,靠 main.rs 下一帧用 `operation::focusable::focus` 强制
-                // 聚焦——同 `PreviewPane::pending_editor_focus`)。
-                self.pending_edit_session_focus = true;
-            }
-            Err(e) => {
-                *error_field = Some(format!("打开编辑失败: {e}"));
-            }
-        }
-    }
-
-    /// 读走(消费式)编辑弹层的一次性程序化聚焦标记。
-    pub(crate) fn take_edit_session_focus_pending(&mut self) -> bool {
-        std::mem::take(&mut self.pending_edit_session_focus)
-    }
-
-    /// 转发 `text_editor::Action` 给编辑弹层。没有打开编辑会话时 no-op。
-    pub(crate) fn preview_edit_event(&mut self, action: EditorAction) {
-        if let Some(session) = self.edit_session.as_mut() {
-            session.editor.perform(action);
-        }
-    }
-
-    /// 撤销编辑弹层最近一次编辑(⌘Z / Ctrl+Z,由 `main.rs` 命中组合键后发
-    /// `Message::EditorUndo` 转发下来)。历史/[`code_editor::CodeView::redo`] 由
-    /// 引擎侧 snapshot 记录,这里只需让弹层编辑器真正回退。没有打开会话时
-    /// no-op。
-    pub(crate) fn preview_edit_undo(&mut self) {
-        if let Some(session) = self.edit_session.as_mut() {
-            session.editor.undo();
-        }
-    }
-
-    /// 重做上一步被 `⌘Z` 撤销的编辑(⌘⇧Z / Ctrl+⇧Z)。没有打开会话时 no-op。
-    pub(crate) fn preview_edit_redo(&mut self) {
-        if let Some(session) = self.edit_session.as_mut() {
-            session.editor.redo();
-        }
-    }
-
     /// 转发 `text_editor::Action` 到某个原生预览 tab(按 `tab_id` 定位,不是
-    /// "当前聚焦编辑弹层"——一个项目可以同时开好几个原生预览 tab,只有事件
-    /// 来源的那一个该收到)。tab 不存在或不是原生 tab 时静默 no-op。
+    /// "固定某个面板当前激活的那个"——一个项目可以同时开好几个原生预览 tab,
+    /// 只有事件来源的那一个该收到)。tab 不存在或不是原生 tab 时静默 no-op。
     /// 事件类别是"会改写正文的 `Action::Edit`"(插字/退格/删除/粘贴/Enter/IME
     /// paste)时,顺手把该 tab 标脏(2026-09-06 原生预览就地可写,dirty 由这个
     /// 事件位推进,fallback 仍由 Pane 层的 save/刷新/项目切换按相同字段读写)。
@@ -850,51 +744,6 @@ impl Workspace {
             if is_edit {
                 self.project_preview.mark_dirty_by_id(tab_id);
             }
-        }
-    }
-
-    /// 保存当前编辑会话到磁盘,成功则清脏(`mark_saved`)并推进该 tab 的
-    /// reload nonce(逼预览 webview 重新加载,否则用户会看到保存前的旧内容)。
-    /// 失败写 `session.error`,弹层不关。没有打开编辑会话时 no-op。
-    pub(crate) fn preview_edit_save(&mut self) {
-        let Some(session) = self.edit_session.as_mut() else {
-            return;
-        };
-        match std::fs::write(&session.path, session.editor.text()) {
-            Ok(()) => {
-                session.saved_content = session.editor.text();
-                session.error = None;
-                let tab_id = session.tab_id;
-                self.preview.bump_reload(tab_id);
-            }
-            Err(e) => {
-                session.error = Some(format!("保存失败: {e}"));
-            }
-        }
-    }
-
-    /// 请求关闭编辑弹层:有未保存改动则转成二次确认,否则直接关。没有
-    /// 打开编辑会话时 no-op。
-    pub(crate) fn preview_edit_close_request(&mut self) {
-        let Some(session) = self.edit_session.as_mut() else {
-            return;
-        };
-        if session.editor.text() != session.saved_content {
-            session.confirm_discard = true;
-        } else {
-            self.edit_session = None;
-        }
-    }
-
-    /// 二次确认:确认放弃未保存改动,真正关闭。
-    pub(crate) fn preview_edit_confirm_discard(&mut self) {
-        self.edit_session = None;
-    }
-
-    /// 二次确认:取消,回到编辑态(改动不丢)。
-    pub(crate) fn preview_edit_confirm_cancel(&mut self) {
-        if let Some(session) = self.edit_session.as_mut() {
-            session.confirm_discard = false;
         }
     }
 
@@ -1992,9 +1841,9 @@ impl Workspace {
 
     /// `kind` 是当前 `FocusIntent::Preview` 携带的面板(`Files` 或
     /// `Project`)——当前激活预览 tab 是否走原生渲染(有 `editor`)。
-    /// main.rs 键盘路由用:原生预览 tab 跟编辑弹层(`edit_session_open`)
-    /// 一样,需要在按键分发链里提前放行,让键盘事件走 iced 正常管线直达
-    /// `CodeEditor`,不落进终端/⌘ 快捷键那些手工转发分支。此前硬编码只查
+    /// main.rs 键盘路由用:原生预览 tab 需要在按键分发链里提前放行,让键盘
+    /// 事件走 iced 正常管线直达 `CodeEditor`,不落进终端/⌘ 快捷键那些手工
+    /// 转发分支。此前硬编码只查
     /// `self.preview`(Files)——`Project` 预览面板里打开的原生编辑器 tab
     /// 收不到键盘输入,是这次 Stage 4b 审阅时发现的独立预存 bug,和
     /// `active_preview_webview_id` 此前只查 `ws.preview` 是同一类问题。
@@ -4158,191 +4007,6 @@ fn preview_pane_for<'a>(
     base
 }
 
-/// 文本编辑弹层:标题行(文件名+关闭)+ `iced-code-editor` 代码编辑器主体
-/// (语法高亮/等宽字体)+ 错误位 + 保存/关闭按钮。宽高吃满大部分屏幕("放大
-/// 窗口"的产品意图,
-/// 不是小弹窗),四周留 `40.0` 边距,与 `maximize_overlay` 的
-/// `scrim_padding` 同一量级,视觉上是同一族"大号应用内模态"。
-pub(crate) fn edit_modal(
-    ws: &Workspace,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let Some(session) = &ws.edit_session else {
-        return column![].into();
-    };
-    let name = session
-        .path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| session.path.display().to_string());
-
-    let title_row = row![
-        text(name)
-            .size(byteui::theme::font::subtitle())
-            .color(byteui::theme::color::current().cream),
-        iced_widget::space::horizontal(),
-        button(
-            text("×")
-                .size(byteui::theme::font::subtitle())
-                .color(byteui::theme::color::current().dim)
-        )
-        .on_press(Message::PreviewEditCloseRequest)
-        .padding(0)
-        .style(|_t, _s| button::Style {
-            background: None,
-            text_color: byteui::theme::color::current().dim,
-            ..button::Style::default()
-        }),
-    ]
-    .align_y(iced_widget::core::Alignment::Center);
-
-    // `iced-code-editor::view()` 返回的是裸 `Element`,没有 `height` 这类
-    // widget 方法,用 `container` 包一层再撑满弹层正文高度。
-    let editor: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        container(session.editor.view().map(Message::EditorEvent))
-            .height(Length::Fill)
-            .into();
-
-    let mut body = column![title_row, editor].spacing(8);
-
-    if let Some(err) = &session.error {
-        body = body.push(
-            text(format!("⚠ {err}"))
-                .size(byteui::theme::font::body())
-                .color(byteui::theme::color::current().red),
-        );
-    }
-
-    let close_btn = button(
-        text("关闭")
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().cream),
-    )
-    .on_press(Message::PreviewEditCloseRequest)
-    .padding([6, 12])
-    .style(|_t, _s| button::Style {
-        background: Some(byteui::theme::color::current().card.into()),
-        text_color: byteui::theme::color::current().cream,
-        border: Border {
-            color: byteui::theme::color::current().border,
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        ..button::Style::default()
-    });
-    let save_btn = button(
-        text("保存")
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().cream),
-    )
-    .on_press(Message::PreviewEditSave)
-    .padding([6, 12])
-    .style(|_t, _s| button::Style {
-        background: Some(byteui::theme::color::current().card.into()),
-        text_color: byteui::theme::color::current().cream,
-        border: Border {
-            color: byteui::theme::color::current().cream,
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        ..button::Style::default()
-    });
-    body = body.push(row![close_btn, save_btn].spacing(8));
-
-    let dialog = container(body.padding(16))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(byteui::theme::color::current().card.into()),
-            border: Border {
-                color: byteui::theme::color::current().border,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..container::Style::default()
-        });
-
-    container(dialog)
-        .padding(40.0)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(byteui::theme::color::current().scrim.into()),
-            ..container::Style::default()
-        })
-        .into()
-}
-
-/// 编辑弹层的二次确认:脏改动状态下点关闭,叠在 `edit_modal` 之上。
-/// 视觉风格与 `delete_confirm_popup` 一致。
-pub(crate) fn edit_discard_confirm_popup<'a>()
--> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let dialog = container(
-        column![
-            text("放弃未保存的改动?")
-                .size(byteui::theme::font::subtitle())
-                .color(byteui::theme::color::current().cream),
-            text("关闭后这次编辑不会被保存。")
-                .size(byteui::theme::font::label())
-                .color(byteui::theme::color::current().dim),
-            row![
-                button(
-                    text("取消")
-                        .size(byteui::theme::font::body())
-                        .color(byteui::theme::color::current().cream)
-                )
-                .on_press(Message::PreviewEditConfirmCancel)
-                .padding([6, 12])
-                .style(|_t, _s| button::Style {
-                    background: Some(byteui::theme::color::current().card.into()),
-                    text_color: byteui::theme::color::current().cream,
-                    border: Border {
-                        color: byteui::theme::color::current().border,
-                        width: 1.0,
-                        radius: 4.0.into(),
-                    },
-                    ..button::Style::default()
-                }),
-                button(
-                    text("放弃改动")
-                        .size(byteui::theme::font::body())
-                        .color(byteui::theme::color::current().red)
-                )
-                .on_press(Message::PreviewEditConfirmDiscard)
-                .padding([6, 12])
-                .style(|_t, _s| button::Style {
-                    background: Some(byteui::theme::color::current().card.into()),
-                    text_color: byteui::theme::color::current().red,
-                    border: Border {
-                        color: byteui::theme::color::current().red,
-                        width: 1.0,
-                        radius: 4.0.into(),
-                    },
-                    ..button::Style::default()
-                }),
-            ]
-            .spacing(8),
-        ]
-        .spacing(8),
-    )
-    .padding(16)
-    .style(|_t: &iced_widget::Theme| container::Style {
-        background: Some(byteui::theme::color::current().card.into()),
-        border: Border {
-            color: byteui::theme::color::current().border,
-            width: 1.0,
-            radius: 6.0.into(),
-        },
-        ..container::Style::default()
-    });
-
-    container(dialog)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(iced_widget::core::alignment::Horizontal::Center)
-        .align_y(iced_widget::core::alignment::Vertical::Center)
-        .into()
-}
-
 /// 对话副行文案：`<agent> · <相对时间> · <规模>`（P1j）。
 /// 相对时间文案：刚刚/N 分钟前/N 小时前/N 天前（D5，从 `conversation_sub`
 /// 抽出为独立纯函数）。H0 项目卡"活跃时间"、文件卡、对话卡三处复用，
@@ -4720,7 +4384,6 @@ pub(crate) async fn forward_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iced_widget::text_editor;
 
     #[test]
     fn review_webview_spec_empty_when_no_review() {
@@ -5730,179 +5393,6 @@ mod tests {
             !ws.active_preview_tab_has_native_editor(PanelKind::Files),
             "Files 预览面板本身没开 tab,不该被 Project 那边的状态影响"
         );
-    }
-
-    #[test]
-    fn preview_edit_open_reads_file_and_starts_clean_session() {
-        let (_dir, path) = write_temp_file("a.rs", "fn main() {}");
-        let mut ws = Workspace::empty_for_project_placeholder();
-        let tab_id = ws.preview.open_path(path.clone());
-        ws.preview_edit_open(0);
-        let session = ws.edit_session.as_ref().expect("应打开编辑会话");
-        assert_eq!(session.tab_id, tab_id);
-        assert_eq!(session.path, path);
-        assert_eq!(session.editor.text(), "fn main() {}");
-        assert_eq!(session.saved_content, "fn main() {}");
-        assert!(session.editor.text() == session.saved_content);
-        assert!(session.error.is_none());
-        assert!(!session.confirm_discard);
-        assert!(
-            ws.take_edit_session_focus_pending(),
-            "打开编辑弹层应置一次性聚焦位"
-        );
-    }
-
-    #[test]
-    fn preview_edit_open_missing_file_reports_error_and_does_not_open() {
-        let mut ws = Workspace::empty_for_project_placeholder();
-        ws.preview
-            .open_path(PathBuf::from("/nonexistent/does-not-exist.rs"));
-        ws.preview_edit_open(0);
-        assert!(ws.edit_session.is_none());
-        assert!(ws.preview_error.is_some());
-    }
-
-    #[test]
-    fn preview_edit_open_out_of_range_index_is_noop() {
-        let mut ws = Workspace::empty_for_project_placeholder();
-        ws.preview_edit_open(0);
-        assert!(ws.edit_session.is_none());
-        assert!(ws.preview_error.is_none());
-    }
-
-    #[test]
-    fn preview_edit_action_marks_dirty_only_on_edit_actions() {
-        let (_dir, path) = write_temp_file("a.txt", "hi");
-        let mut ws = Workspace::empty_for_project_placeholder();
-        ws.preview.open_path(path);
-        ws.preview_edit_open(0);
-        // 非编辑动作(光标移动)不置脏。
-        ws.preview_edit_event(EditorAction::Move(text_editor::Motion::Right));
-        assert!(
-            ws.edit_session.as_ref().unwrap().editor.text()
-                == ws.edit_session.as_ref().unwrap().saved_content
-        );
-        // 编辑动作置脏。前一步光标右移了一位,Insert 落在 'h' 之后。
-        ws.preview_edit_event(EditorAction::Edit(text_editor::Edit::Insert('!')));
-        assert!(
-            ws.edit_session.as_ref().unwrap().editor.text()
-                != ws.edit_session.as_ref().unwrap().saved_content
-        );
-        assert_eq!(ws.edit_session.as_ref().unwrap().editor.text(), "h!i");
-    }
-
-    #[test]
-    fn preview_edit_undo_then_redo_restores_roundtrips_dirty() {
-        let (_dir, path) = write_temp_file("a.txt", "hi");
-        let mut ws = Workspace::empty_for_project_placeholder();
-        ws.preview.open_path(path);
-        ws.preview_edit_open(0);
-        // 光标先移到文档尾(纯移动,不置脏、不进 undo 快照)。
-        ws.preview_edit_event(EditorAction::Move(text_editor::Motion::DocumentEnd));
-        ws.preview_edit_event(EditorAction::Edit(text_editor::Edit::Insert('1')));
-        assert_eq!(
-            ws.edit_session.as_ref().unwrap().editor.text(),
-            "hi1",
-            "编辑应生效"
-        );
-        assert!(
-            ws.edit_session.as_ref().unwrap().editor.text()
-                != ws.edit_session.as_ref().unwrap().saved_content,
-            "编辑后应算脏"
-        );
-
-        ws.preview_edit_undo();
-        assert_eq!(
-            ws.edit_session.as_ref().unwrap().editor.text(),
-            "hi",
-            "⌘Z 应撤回到键入前"
-        );
-        assert!(
-            ws.edit_session.as_ref().unwrap().editor.text()
-                == ws.edit_session.as_ref().unwrap().saved_content,
-            "撤销到打开时内容应不再脏"
-        );
-
-        ws.preview_edit_redo();
-        assert_eq!(
-            ws.edit_session.as_ref().unwrap().editor.text(),
-            "hi1",
-            "⌘⇧Z 应补回刚撤销的编辑"
-        );
-    }
-
-    #[test]
-    fn preview_edit_save_writes_disk_clears_dirty_and_bumps_reload() {
-        let (_dir, path) = write_temp_file("a.txt", "hi");
-        let mut ws = Workspace::empty_for_project_placeholder();
-        let tab_id = ws.preview.open_path(path.clone());
-        ws.preview_edit_open(0);
-        ws.preview_edit_event(EditorAction::Edit(text_editor::Edit::Insert('!')));
-        ws.preview_edit_save();
-        assert!(
-            ws.edit_session.as_ref().unwrap().editor.text()
-                == ws.edit_session.as_ref().unwrap().saved_content
-        );
-        assert!(ws.edit_session.as_ref().unwrap().error.is_none());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "!hi");
-        // `.txt` 是白名单扩展名,原生 tab。保存后 `bump_reload` 走原生路径:
-        // 读盘重建 editor,而非推进 reload nonce——原生 tab 不进 wry 期望清单,
-        // 也不会出现在 webview 规格里(闭包因 editor.is_some() 被 filter 掉)。
-        let tab = &ws.preview.tabs()[0];
-        assert!(tab.editor.is_some(), "原生 tab 保存后仍持有(重建的)editor");
-        assert_eq!(
-            tab.editor.as_ref().unwrap().text(),
-            "!hi",
-            "保存内容应反映磁盘上的新内容"
-        );
-        assert_eq!(
-            tab.reload_nonce, 0,
-            "原生 tab 的 reload 不推进 nonce(那是 wry URL 换参专用)"
-        );
-        assert!(
-            !ws.preview.desired_webviews().iter().any(|s| s.id == tab_id),
-            "原生 tab 移出 wry 期望清单"
-        );
-    }
-
-    #[test]
-    fn preview_edit_close_request_without_dirty_closes_immediately() {
-        let (_dir, path) = write_temp_file("a.txt", "hi");
-        let mut ws = Workspace::empty_for_project_placeholder();
-        ws.preview.open_path(path);
-        ws.preview_edit_open(0);
-        ws.preview_edit_close_request();
-        assert!(ws.edit_session.is_none());
-    }
-
-    #[test]
-    fn preview_edit_close_request_with_dirty_asks_confirm_then_discard_or_cancel() {
-        let (_dir, path) = write_temp_file("a.txt", "hi");
-        let mut ws = Workspace::empty_for_project_placeholder();
-        ws.preview.open_path(path);
-        ws.preview_edit_open(0);
-        ws.preview_edit_event(EditorAction::Edit(text_editor::Edit::Insert('!')));
-        ws.preview_edit_close_request();
-        assert!(
-            ws.edit_session.as_ref().unwrap().confirm_discard,
-            "脏改动关闭要先确认"
-        );
-        assert!(ws.edit_session.is_some(), "确认前不能真的关掉");
-
-        ws.preview_edit_confirm_cancel();
-        assert!(
-            !ws.edit_session.as_ref().unwrap().confirm_discard,
-            "取消要回到编辑态"
-        );
-        assert!(
-            ws.edit_session.as_ref().unwrap().editor.text()
-                != ws.edit_session.as_ref().unwrap().saved_content,
-            "取消不丢改动"
-        );
-
-        ws.preview_edit_close_request();
-        ws.preview_edit_confirm_discard();
-        assert!(ws.edit_session.is_none(), "确认放弃要真正关闭");
     }
 
     #[test]

@@ -39,11 +39,10 @@ use crate::webview_geometry;
 use crate::workspace::{
     CONVERSATION_DETAIL_PAGE_SIZE, PickerLaunch, RestorePayload, ReviewSource, ReviewView, ShellIo,
     SshOut, TabBackend, Workspace, agent_list_pane, agent_picker_popup, conversation_list_pane,
-    dot_color, edit_discard_confirm_popup, edit_modal, exited_marker, fetch_project_restore,
-    no_project_placeholder, preview_pane, preview_tab_display_width, project_preview_pane,
-    relative_time_text, review_content_pane, review_should_refresh_on_turn,
-    spawn_disk_usage_refresh, spawn_project_git_refresh, split_portions, tab_display_width,
-    tab_title,
+    dot_color, exited_marker, fetch_project_restore, no_project_placeholder, preview_pane,
+    preview_tab_display_width, project_preview_pane, relative_time_text, review_content_pane,
+    review_should_refresh_on_turn, spawn_disk_usage_refresh, spawn_project_git_refresh,
+    split_portions, tab_display_width, tab_title,
 };
 use byteui::interaction::icons;
 use dozer_client::Client;
@@ -1844,26 +1843,15 @@ pub enum Message {
     PreviewSelectTab(usize),
     /// 预览:关闭 tab(vec 位置).
     PreviewCloseTab(usize),
-    /// 预览编辑弹层:官方 `text_editor` 的 `Action`。由 `main.rs` 的 dispatch
-    /// 直接转发给 `App::preview_edit_event`(剪贴板由 iced 运行时自己处理,
-    /// 不需要像 vendored `iced-code-editor` 那样手动拆 `Task` 桥接)。
-    EditorEvent(iced_widget::text_editor::Action),
-    /// 预览编辑弹层:撤销(⌘Z / Ctrl+Z)。同样由 `main.rs` 命中组合键后直接
-    /// 转发给 `App` 下的 `workspace`(见 `preview_edit_undo`)。
-    EditorUndo,
-    /// 预览编辑弹层:重做(⌘⇧Z / Ctrl+⇧Z)。
-    EditorRedo,
-    /// 原生预览 tab 的 `text_editor::Action`,`usize` 是 `PreviewTab.id`。
-    /// 与 `EditorEvent`(编辑弹层专用)是两条独立路径,互不路由串台——见
-    /// `preview_tab_editor_event` 的文档。
+    /// 原生预览 tab 的 `text_editor::Action`,`usize` 是 `PreviewTab.id`。由
+    /// `main.rs` 的 dispatch 直接转发给 `App::preview_tab_editor_event`(剪贴
+    /// 板由 iced 运行时自己处理,不需要像 vendored `iced-code-editor` 那样手动
+    /// 拆 `Task` 桥接)。
     PreviewEditorEvent(usize, iced_widget::text_editor::Action),
-    /// 预览编辑弹层:"保存"按钮 / ⌘S。
-    PreviewEditSave,
     /// 原生预览就地可写后的 ⌘S:把 `kind` 指向面板(`Files`/`Project`)当前激活
     /// 原生 tab 的改动保存到磁盘(仅脏的原生 tab 动作;见
-    /// `Workspace::preview_pane_save_active`)。与 `PreviewEditSave`(弹层专用)
-    /// 是不同路径。携带 `PanelKind`(可由 main.rs `FocusIntent::Preview` 直接
-    /// 转发,不必频繁 preview↔panel 双枚举映射)。
+    /// `Workspace::preview_pane_save_active`)。携带 `PanelKind`(可由 main.rs
+    /// `FocusIntent::Preview` 直接转发,不必频繁 preview↔panel 双枚举映射)。
     PreviewSaveActive(PanelKind),
     /// 原生预览 tab 就地敲 Tab(裸 Tab、非 ⌘/⌃/⌥ 组合):iced 官方
     /// `text_editor` 默认 Binding 对 Tab 完全不产生动作,必须在这里作为一条
@@ -1904,12 +1892,6 @@ pub enum Message {
     /// File-Find 条「替换全部」:与 `PreviewFindReplaceCurrent` 同一 buffer-only
     /// 语义,只是把这轮每一处命中一次性全改、同样标脏等 ⌘S。
     PreviewFindReplaceAll(PanelKind),
-    /// 预览编辑弹层:×按钮 / 点遮罩——脏改动会先转成二次确认,不直接关。
-    PreviewEditCloseRequest,
-    /// 预览编辑弹层二次确认:"放弃改动"。
-    PreviewEditConfirmDiscard,
-    /// 预览编辑弹层二次确认:"取消"(回到编辑态)。
-    PreviewEditConfirmCancel,
     /// Project 面板右配对预览:打开本地文件为新 tab,语义同 `PreviewOpenPath`。
     ProjectPreviewOpenPath(PathBuf),
     /// Project 面板右配对预览:切换 tab(vec 位置)。
@@ -4228,21 +4210,10 @@ impl App {
             .unwrap_or(false)
     }
 
-    /// 预览编辑弹层是否打开(main.rs 键盘路由用)。打开期间键盘必须走
-    /// 弹层的文本编辑器,不能落进终端 PTY——弹层挂在左侧预览面板,不影响
-    /// `terminal_visible()` 的判断条件(右侧展开与否),不加这道闸门的话,
-    /// 默认布局(右侧终端可见)下编辑弹层里敲的每个字符,包括回车,都会
-    /// 同时写进背后那个终端/agent 会话。
-    pub fn edit_session_open(&self) -> bool {
-        self.active_workspace()
-            .map(|ws| ws.edit_session.is_some())
-            .unwrap_or(false)
-    }
-
-    /// 当前激活预览 tab 是否走原生渲染。main.rs 键盘路由用,同 `edit_session_open`
-    /// 那道闸门的道理——但原生预览不是模态弹层,还要求键盘焦点确实在预览列
-    /// (`current_focus == FocusIntent::Preview`),否则用户正在打字给终端时,
-    /// 只因为预览列背景里开着一个原生 tab 就会把按键错误地拦下来。
+    /// 当前激活预览 tab 是否走原生渲染。main.rs 键盘路由用:原生预览是就地可
+    /// 写的非模态编辑器,还要求键盘焦点确实在预览列(`current_focus ==
+    /// FocusIntent::Preview`),否则用户正在打字给终端时,只因为预览列背景里
+    /// 开着一个原生 tab 就会把按键错误地拦下来。
     pub fn active_preview_tab_has_native_editor(&self, kind: PanelKind) -> bool {
         self.active_workspace()
             .map(|ws| ws.active_preview_tab_has_native_editor(kind))
@@ -4257,18 +4228,10 @@ impl App {
             .unwrap_or(false)
     }
 
-    /// 转发 `text_editor::Action` 到当前聚焦项目的编辑弹层。官方 `text_editor`
-    /// 的剪贴板读写由 iced 运行时经 `Widget::update` 拿到的 `Clipboard` 直接
-    /// 处理,不再需要像 vendored `iced-code-editor` 那样手动拆 `Task` 桥接
-    /// (那套桥接已随依赖一起删除,见 main.rs 历史)。
-    pub fn preview_edit_event(&mut self, action: iced_widget::text_editor::Action) {
-        if let Some(ws) = self.active_workspace_mut() {
-            ws.preview_edit_event(action);
-        }
-    }
-
-    /// 转发到聚焦项目里某个原生预览 tab 的 editor,语义同 `preview_edit_event`
-    /// 但按 `tab_id` 定位而不是"当前编辑弹层"。
+    /// 转发到聚焦项目里某个原生预览 tab 的 editor,按 `tab_id` 定位(带面板语
+    /// 义的兄弟在 `preview_tab_editor_event` / `project_preview_tab_editor_event`,
+    /// 语义同文)。官方 `text_editor` 的剪贴板读写由 iced 运行时经
+    /// `Widget::update` 拿到的 `Clipboard` 直接处理。
     pub fn preview_tab_editor_event(
         &mut self,
         tab_id: usize,
@@ -4401,10 +4364,10 @@ impl App {
         let Some(ws) = self.active_workspace() else {
             return Vec::new();
         };
-        // `search_modal` 跟 `edit_modal` 同款满窗 SCRIM+卡片形制(见
-        // `extensions/search.rs::search_modal` 注释),同样要在打开时隐藏
-        // webview,否则 webview 会盖住遮罩和弹窗卡片。
-        let app_modal_open = ws.edit_session.is_some() || ws.search.is_open();
+        // `search_modal` 是满窗 SCRIM+卡片形制(见
+        // `extensions/search.rs::search_modal` 注释),打开时要隐藏 webview,
+        // 否则 webview 会盖住遮罩和弹窗卡片。
+        let app_modal_open = ws.search.is_open();
         let mut out = Vec::new();
         for side in [Side::Left, Side::Right] {
             let kind = match side {
@@ -4431,7 +4394,7 @@ impl App {
             );
             out.extend(specs.into_iter().map(|mut s| {
                 s.id += id_offset;
-                // 编辑弹层或搜索弹窗开着时,应用级模态盖住了预览区,原生
+                // 搜索弹窗开着时,应用级模态盖住了预览区,原生
                 // wry 子视图不听 iced 绘制顺序摆布,必须显式 visible=false
                 // 才能真正藏起来。
                 if app_modal_open {
@@ -5145,25 +5108,8 @@ impl App {
                     ws.spawn_preview_context_push(io);
                 });
             }
-            Message::EditorEvent(_action) => {
-                // main.rs 的 dispatch 直接调 `App::preview_edit_event`,不经过
-                // 这里的 `App::update`——到达此处说明未走 dispatch 拦截,忽略。
-            }
-            Message::EditorUndo => {
-                // 键盘(⌘Z)经 `app.update` 进来时走这里真正撤销;main.rs 另有
-                // `App::preview_edit_undo` 直呼口(绕过 `update`),两路都只操作
-                // 聚焦项目编辑弹层的 editor。
-                self.with_focused_project(|ws, _io| ws.preview_edit_undo());
-            }
-            Message::EditorRedo => {
-                // 同 `EditorUndo`(⌘⇧Z)。
-                self.with_focused_project(|ws, _io| ws.preview_edit_redo());
-            }
             Message::PreviewEditorEvent(_tab_id, _action) => {
-                // 同 `EditorEvent`,main.rs 直接调 `App::preview_tab_editor_event`。
-            }
-            Message::PreviewEditSave => {
-                self.with_focused_project(|ws, _io| ws.preview_edit_save());
+                // main.rs 直接调 `App::preview_tab_editor_event`,不经过这里。
             }
             Message::PreviewSaveActive(kind) => {
                 self.with_focused_project(move |ws, _io| ws.preview_pane_save_active(kind));
@@ -5213,15 +5159,6 @@ impl App {
                 self.with_focused_project(move |ws, _io| {
                     ws.preview_find_replace_all(kind);
                 });
-            }
-            Message::PreviewEditCloseRequest => {
-                self.with_focused_project(|ws, _io| ws.preview_edit_close_request());
-            }
-            Message::PreviewEditConfirmDiscard => {
-                self.with_focused_project(|ws, _io| ws.preview_edit_confirm_discard());
-            }
-            Message::PreviewEditConfirmCancel => {
-                self.with_focused_project(|ws, _io| ws.preview_edit_confirm_cancel());
             }
             Message::ProjectPreviewOpenPath(path) => self.project_preview_open_path(path),
             Message::ProjectPreviewSelectTab(idx) => self.project_preview_select_tab(idx),
@@ -7958,25 +7895,6 @@ impl App {
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
-        } else if ws.edit_session.is_some() {
-            let dismiss = MouseArea::new(
-                container(column![])
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            )
-            .on_press(Message::PreviewEditCloseRequest);
-            let confirm_discard = ws.edit_session.as_ref().is_some_and(|s| s.confirm_discard);
-            if confirm_discard {
-                stack![base, dismiss, edit_modal(ws), edit_discard_confirm_popup()]
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into()
-            } else {
-                stack![base, dismiss, edit_modal(ws)]
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into()
-            }
         } else if ws.files.tree_delete_confirm_is_some() {
             let dismiss = MouseArea::new(
                 container(column![])
