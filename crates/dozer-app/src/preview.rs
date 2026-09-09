@@ -251,9 +251,20 @@ pub struct PreviewPane {
     pending_editor_focus: bool,
     /// Find 条输入框同样要一次性程序化聚焦(⌘F 打开输入框那帧无法直接拿到
     /// 真正的 text_input 焦点,靠 main.rs 下一帧 operation 拨)。`*_focus_for_find`
-    /// 在 open/close 时置位,消费式读走。与 `pending_editor_focus` 互斥生效——
-    /// 同一时刻只有 Find 输入框**或**其下的代码编辑器持焦。
+    /// 在 open/close 时置位,消费式读走。
     pending_find_focus: bool,
+    /// 一次性标记:`select_range`/`select_range_backward` 刚给编辑器选中一段
+    /// 查找命中时置位——原生 `iced_widget::text_editor` 的选区高亮只在**真持有
+    /// iced 焦点**时才画(`draw()` 里 `if let Some(focus) = state.focus.as_ref()`
+    /// 才会渲染 `Selection::Range`,vendored 源码已核实),而 Find 输入框才是
+    /// 这一刻的真焦点(`pending_find_focus` 打开时已把编辑器 unfocus 掉,见
+    /// `operation::focusable::focus` 文档:命中 target 之外的 focusable 全部
+    /// `unfocus()`)——不补这一步,选中的命中永远是"选了但看不见"。main.rs 消费
+    /// 后用**不会 unfocus 别的 widget**的自定义 Operation(`FocusAlso`,只
+    /// `.focus()` 目标、不碰其它 focusable)把编辑器也标记为聚焦,让它画出高亮,
+    /// 同时不动 Find 输入框已有的真焦点(2026-09 用户实测反馈:查找跳到第 n 个
+    /// 命中时代码里应该真的选中那段文字,不能只是计数器数字变了)。
+    pending_editor_reveal_focus: bool,
     /// 文件内搜索(⌘F)会话,`Some` 表示条已显示;Files / Project 各一份,独立。
     find: Option<FindState>,
 }
@@ -297,6 +308,24 @@ impl PreviewPane {
     /// 读走(消费式)Find 输入框的一次性程序化聚焦标记。
     pub fn take_pending_find_focus(&mut self) -> bool {
         std::mem::take(&mut self.pending_find_focus)
+    }
+
+    /// 读走(消费式)"编辑器需要补聚焦以显出查找命中高亮"标记,见
+    /// `pending_editor_reveal_focus` 字段文档。
+    pub fn take_pending_editor_reveal_focus(&mut self) -> bool {
+        std::mem::take(&mut self.pending_editor_reveal_focus)
+    }
+
+    /// 当前锁定 Find 会话的那个 tab 的原生编辑器 `focus_id`——
+    /// `take_pending_editor_reveal_focus` 为真时 main.rs 用它跑
+    /// `FocusAlso` 操作。没有 Find 会话/该 tab 没有原生编辑器都返回 `None`。
+    pub fn find_editor_focus_id(&self) -> Option<iced_widget::core::widget::Id> {
+        let tab_id = self.find.as_ref()?.tab_id;
+        self.tabs
+            .iter()
+            .find(|t| t.id == tab_id)
+            .and_then(|t| t.editor.as_ref())
+            .map(|e| e.focus_id())
     }
 
     /// Find 条关闭(⌘F 第二下 / × / Esc)后焦点归回其下的代码编辑器——复用
@@ -613,6 +642,10 @@ impl PreviewPane {
             && let Some(editor) = self.editor_mut(tab_id)
         {
             editor.select_range(start, end);
+            // 编辑器此刻没有真 iced 焦点(Find 输入框才有),选区不会被原生
+            // `text_editor` 画出来——武装补聚焦标记,见 `pending_editor_reveal_
+            // focus` 文档。
+            self.pending_editor_reveal_focus = true;
         }
     }
 
@@ -693,6 +726,9 @@ impl PreviewPane {
             } else {
                 editor.select_range_backward(start, end);
             }
+            // 同 `find_type`:补聚焦标记,让原生 `text_editor` 画出这次跳转
+            // 选中的命中(见 `pending_editor_reveal_focus` 文档)。
+            self.pending_editor_reveal_focus = true;
         }
     }
 

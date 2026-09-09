@@ -573,6 +573,47 @@ fn run_operate(
     interface.operate(renderer, operation);
 }
 
+/// 只给命中 `target` 的 focusable 调 `.focus()`,不碰任何其它 widget——官方
+/// `operation::focusable::focus` 会把树里除 target 外的全部 focusable
+/// `unfocus()`(见其源码,命中之外一律 `state.unfocus()`),不能直接拿来给
+/// 代码编辑器补聚焦,那样会把 Find 输入框刚拿到的真焦点撵掉。
+///
+/// 用途:文件内搜索(⌘F)跳到某个命中时,原生 `iced_widget::text_editor`
+/// 的选区高亮只在**自己持有真 iced 焦点**时才画(`draw()` 里
+/// `if let Some(focus) = state.focus.as_ref()` 才会渲染 `Selection::Range`,
+/// vendored 源码已核实),但这一刻真正的键盘焦点理应留在 Find 输入框(用户
+/// 还要继续敲字)。用这个操作让编辑器**也**进入"已聚焦"态、只为了画出选区,
+/// 不影响谁在接收键盘事件——键盘路由是这份代码库自己在 main.rs 顶层按
+/// `*_focused()`/`current_focus` 这套粗粒度信号决定放行给哪个字段(见
+/// `WindowEvent::KeyboardInput` 分支),不是靠 iced 内部 `is_focused()`
+/// 反查"谁该收这个键",所以编辑器"看起来聚焦"不会导致它偷吃 Find 输入框
+/// 正在敲的字符。见 `preview::PreviewPane::pending_editor_reveal_focus`
+/// 文档(2026-09 用户实测反馈:查找跳到第 n 个命中,代码里必须真的选中那段
+/// 文字)。
+struct FocusAlso {
+    target: iced_winit::core::widget::Id,
+}
+
+impl<T> iced_winit::core::widget::Operation<T> for FocusAlso {
+    fn focusable(
+        &mut self,
+        id: Option<&iced_winit::core::widget::Id>,
+        _bounds: iced_winit::core::Rectangle,
+        state: &mut dyn iced_winit::core::widget::operation::Focusable,
+    ) {
+        if id == Some(&self.target) {
+            state.focus();
+        }
+    }
+
+    fn traverse(
+        &mut self,
+        operate: &mut dyn FnMut(&mut dyn iced_winit::core::widget::Operation<T>),
+    ) {
+        operate(self);
+    }
+}
+
 pub fn main() -> Result<(), winit::error::EventLoopError> {
     tracing_subscriber::fmt::init();
 
@@ -2585,6 +2626,23 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                             crate::preview::find_field_id(PanelKind::Project)
                                         })
                                     });
+                                // 查找跳到某个命中后,编辑器需要补聚焦才能画出选区高亮
+                                // (一次性位,消费即复位;不撵走 Find 输入框的真焦点,
+                                // 见 `FocusAlso` 文档)。
+                                let preview_reveal_focus_id =
+                                    app.active_workspace_mut().and_then(|ws| {
+                                        ws.preview
+                                            .take_pending_editor_reveal_focus()
+                                            .then(|| ws.preview.find_editor_focus_id())
+                                            .flatten()
+                                    });
+                                let project_preview_reveal_focus_id =
+                                    app.active_workspace_mut().and_then(|ws| {
+                                        ws.project_preview
+                                            .take_pending_editor_reveal_focus()
+                                            .then(|| ws.project_preview.find_editor_focus_id())
+                                            .flatten()
+                                    });
                                 let edit_session_editor_focus_id =
                                     app.active_workspace_mut().and_then(|ws| {
                                         ws.take_edit_session_focus_pending()
@@ -2739,6 +2797,19 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                         iced_widget::core::widget::operation::focusable::focus::<()>(
                                             id,
                                         );
+                                    run_operate(&mut interface, renderer, &mut op);
+                                }
+
+                                // 查找跳到某个命中后补聚焦编辑器,让原生 `text_editor`
+                                // 画出选区高亮——用不 unfocus 别人的 `FocusAlso`(标准
+                                // `operation::focusable::focus` 会把 Find 输入框刚拿到
+                                // 的焦点撵掉,见其文档),放在上面 Find 输入框聚焦之后,
+                                // 确保输入框的真焦点(接收键盘)不被这一步覆盖。
+                                for id in [preview_reveal_focus_id, project_preview_reveal_focus_id]
+                                    .into_iter()
+                                    .flatten()
+                                {
+                                    let mut op = FocusAlso { target: id };
                                     run_operate(&mut interface, renderer, &mut op);
                                 }
 
