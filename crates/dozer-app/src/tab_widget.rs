@@ -379,6 +379,45 @@ pub(crate) fn tab_overflow_button<'a, M: Clone + 'a>(
     Some(btn.into())
 }
 
+/// 预览/代码模式切换按钮:只在 `preview::wry_toggle_eligible` 为真的文件
+/// tab 上画(调用方判断,这里只管渲染)。`in_code_mode` 决定图标——预览态
+/// 显示 `FileCode`(点它切到代码),代码态显示 `Eye`(点它切回预览)。hover
+/// 用 iced 内置 `button::Status`,不接入 `HoverId` 动画体系——同 `tab_arrow_button`/
+/// `tab_overflow_button` 的既有做法:这个按钮会随 tab 增减/拖拽换位下标
+/// 漂移,`rekey_hover_range` 目前只接受两个 `HoverId` 构造器(item/close),
+/// 犯不着为它扩展签名。
+pub(crate) fn tab_render_mode_button<'a, M: Clone + 'a>(
+    in_code_mode: bool,
+    on_press: M,
+) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
+    let icon = if in_code_mode {
+        icons::IconKind::Eye
+    } else {
+        icons::IconKind::FileCode
+    };
+    let color = byteui::theme::color::current().dim;
+    let btn = button(icons::view(icon, byteui::theme::icon_size::row(), color))
+        .width(Length::Fixed(byteui::theme::geometry::tab_button_size()))
+        .height(Length::Fixed(byteui::theme::geometry::tab_button_size()))
+        .padding(0)
+        .on_press(on_press)
+        .style(move |_theme, status| {
+            let base = button::Style {
+                background: None,
+                text_color: color,
+                ..button::Style::default()
+            };
+            match status {
+                button::Status::Hovered | button::Status::Pressed => button::Style {
+                    text_color: byteui::theme::color::current().gold,
+                    ..base
+                },
+                _ => base,
+            }
+        });
+    btn.into()
+}
+
 /// 悬浮下拉里的一行,对应该 tab 组里的**某个 tab**(V 菜单列的是组内全部
 /// tab,不局限于当前横向被裁掉的)。`prefix` 与横向 tab 用同一个已经建好的
 /// `Element`(状态点/图标/无),`active` 决定是否高亮——菜单里可能同时出现

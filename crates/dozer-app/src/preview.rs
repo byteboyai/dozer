@@ -133,8 +133,9 @@ fn read_and_build_native_editor(
 /// 单独特判;`LICENSE`/`Makefile` 等其它**无扩展名**文件刻意不进(既有约定,
 /// 见 `is_editable_extension_rejects_unknown_and_binary_like`)。`md/html` 虽
 /// 命中语法分支返回 `true`,却由 `prefers_rendered_preview` 挡住默认预览(见
-/// 其文档),只保留右键"编辑"入口;图片/PDF/二进制扩展名高亮器不认识、又不在
-/// 纯文本兜底集,照旧交给 flyfish。
+/// 其文档),默认走渲染、tab 上出现预览/代码切换按钮(`wry_toggle_eligible`,
+/// 见 [`wry_toggle_eligible`])可一键切回可写原生编辑器;图片/PDF/二进制扩展名
+/// 高亮器不认识、又不在纯文本兜底集,照旧交给 flyfish。
 pub fn is_editable_extension(path: &std::path::Path) -> bool {
     if path.file_name().and_then(|n| n.to_str()) == Some(".gitignore") {
         return true;
@@ -170,6 +171,15 @@ fn prefers_rendered_preview(path: &std::path::Path) -> bool {
             .as_str(),
         "md" | "markdown" | "html" | "htm"
     )
+}
+
+/// tab 上"预览/代码"切换按钮该不该出现的判定:只对"文本可编辑、但默认走
+/// wry/flyfish 渲染"的文件出现(目前即 `.md`/`.markdown`/`.html`/`.htm`)。
+/// 图片/PDF/压缩包等真二进制文件(`is_editable_extension` 为假)不出现;
+/// 本来就默认原生可编辑的其它文本文件(`!prefers_rendered_preview`,如
+/// `.rs`/`.py`/`.json`)也不出现——它们从来不是 wry 打开的,永远原生。
+pub fn wry_toggle_eligible(path: &std::path::Path) -> bool {
+    is_editable_extension(path) && prefers_rendered_preview(path)
 }
 
 /// html/htm 走真实 `file://` URL 直接加载,不经 flyfish——flyfish 的渲染
@@ -932,6 +942,36 @@ impl PreviewPane {
         }
     }
 
+    /// 预览→代码:按下标读盘建一个可写 `CodeView` 挂到该 tab 上(只应对
+    /// `wry_toggle_eligible` 的文件 tab 调用,按钮只在这类 tab 上画)。下标
+    /// 越界或该 tab 不是 `TabKind::File` 是 no-op;读盘失败把 `io::Error`
+    /// 透传给调用方(`Workspace::preview_pane_toggle_render_mode`)写面板
+    /// error,这里不生成错误文案。
+    pub fn enter_code_mode(&mut self, idx: usize) -> std::io::Result<()> {
+        let Some(tab) = self.tabs.get(idx) else {
+            return Ok(());
+        };
+        let TabKind::File(path) = &tab.kind else {
+            return Ok(());
+        };
+        let editor = read_and_build_native_editor(path)?;
+        if let Some(tab) = self.tabs.get_mut(idx) {
+            tab.editor = Some(editor);
+            tab.dirty = false;
+        }
+        Ok(())
+    }
+
+    /// 代码→预览:清空该 tab 的原生 editor,转回 wry/flyfish 渲染。调用方
+    /// 负责在此之前先把脏改动落盘(`Workspace::preview_pane_toggle_render_mode`
+    /// 里先 `preview_pane_save_at` 再调这个)——这里只做状态切换,不碰磁盘。
+    /// 下标越界是 no-op。
+    pub fn exit_code_mode(&mut self, idx: usize) {
+        if let Some(tab) = self.tabs.get_mut(idx) {
+            tab.editor = None;
+        }
+    }
+
     /// 外部文件系统变化后,按变更路径集跟进预览:只重载**走 wry 的 webview**
     /// 文件 tab(其路径命中任一 `changed`),推进 `reload_nonce` 让它 `load_url`
     /// 读到磁盘最新内容。原生 editor tab **不**动——自动重载会重建实例、丢
@@ -1658,6 +1698,26 @@ mod tests {
             "无扩展名不在白名单里"
         );
         assert!(!is_editable_extension(Path::new("Makefile")));
+    }
+
+    #[test]
+    fn wry_toggle_eligible_true_for_rendered_preview_text_types() {
+        assert!(wry_toggle_eligible(Path::new("README.md")));
+        assert!(wry_toggle_eligible(Path::new("page.html")));
+    }
+
+    #[test]
+    fn wry_toggle_eligible_false_for_always_native_text_types() {
+        assert!(!wry_toggle_eligible(Path::new("main.rs")));
+        assert!(!wry_toggle_eligible(Path::new("script.py")));
+        assert!(!wry_toggle_eligible(Path::new("data.json")));
+    }
+
+    #[test]
+    fn wry_toggle_eligible_false_for_binary_types() {
+        assert!(!wry_toggle_eligible(Path::new("photo.png")));
+        assert!(!wry_toggle_eligible(Path::new("doc.pdf")));
+        assert!(!wry_toggle_eligible(Path::new("archive.zip")));
     }
 
     #[test]

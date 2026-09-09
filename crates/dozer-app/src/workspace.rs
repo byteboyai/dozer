@@ -53,7 +53,7 @@ use crate::preview_state;
 use crate::project::FileTree;
 use crate::tab_widget::{
     PanelTabArgs, TabOverflowEntry, TabOverflowMenuArgs, panel_tab, tab_overflow_button,
-    tab_overflow_menu, tab_window,
+    tab_overflow_menu, tab_render_mode_button, tab_window,
 };
 use crate::term_model::TerminalModel;
 use crate::theme;
@@ -1878,24 +1878,34 @@ impl Workspace {
         }
     }
 
-    /// 把 `kind` 面板**当前激活原生 tab** 的就地改动保存到磁盘。仅当该 tab 是
-    /// 原生可编辑且脏 时动作(不脏不动磁盘,免得无谓改 mtime 引爆外部监听);
-    /// 无脏 / 激活的是 webview · Blank tab 一律 no-op。成功清该 tab 脏;失败把
-    /// 文案写进对应面板的 error(与预览打开失败同通道,已经在 tab_bar 下方渲染)。
-    /// 保存成功会同步 `reload_nonce`?不必——原生 tab 本身走 `bump_reload` 重建
-    /// 会丢滚动/脏,这里只落盘 + 清脏,不做"重读自己刚写的内容";若同一文件以
-    /// wry tab 形态在另一预览开着,外部监听(`reload_webviews_for`)会去刷它,
-    /// 那是 notify 职责,不在此手写联动(见 plan Non-Goals)。
+    /// ⌘S:把 `kind` 面板**当前激活原生 tab** 的就地改动保存到磁盘,语义同
+    /// `preview_pane_save_at`——除了定位固定取"当前激活 tab"。
     pub fn preview_pane_save_active(&mut self, kind: PanelKind) {
+        let idx = if kind == PanelKind::Project {
+            self.project_preview.active_idx()
+        } else {
+            self.preview.active_idx()
+        };
+        self.preview_pane_save_at(kind, idx);
+    }
+
+    /// 把 `kind` 面板**指定下标**tab 的就地改动保存到磁盘,语义同
+    /// `preview_pane_save_active`(其实现已改为委托这个方法),差别只是不再
+    /// 局限于"当前激活"——`preview_pane_toggle_render_mode`(代码→预览)、
+    /// `PreviewCloseTab`/`ProjectPreviewCloseTab`(关闭前静默保存)都可能要
+    /// 保存一个非激活的背景 tab。仅当该 tab 是原生可编辑且脏时动作,其余
+    /// 沿用原实现(不脏不动磁盘、失败写面板 error)。`pub(crate)`(而非
+    /// 私有 `fn`)是因为 `app.rs::update` 的 `PreviewCloseTab`/
+    /// `ProjectPreviewCloseTab` 分支(Step 8)要直接调它做关闭前静默保存。
+    pub(crate) fn preview_pane_save_at(&mut self, kind: PanelKind, idx: usize) {
         let project = kind == PanelKind::Project;
-        // 一次不可变读取:定位激活原生 tab、是否脏、磁盘路径、tab_id。
         let (tab_id, path) = {
             let pane = if project {
                 &self.project_preview
             } else {
                 &self.preview
             };
-            let Some(tab) = pane.tabs().get(pane.active_idx()) else {
+            let Some(tab) = pane.tabs().get(idx) else {
                 return;
             };
             // 仅脏的**原生** tab 值得落盘;不脏不动磁盘(省得住人保存也触发
@@ -1935,6 +1945,46 @@ impl Workspace {
             }
             Err(e) => {
                 let err = Some(format!("保存失败: {e}"));
+                if project {
+                    self.project_preview_error = err;
+                } else {
+                    self.preview_error = err;
+                }
+            }
+        }
+    }
+
+    /// 切换 `kind` 面板某个 tab 的预览/代码渲染模式(仅对 `wry_toggle_eligible`
+    /// 的文件 tab 有意义——按钮只在这类 tab 上画,其它 tab 点不到)。
+    /// 代码→预览:先 `preview_pane_save_at` 静默落盘(不脏则内部直接
+    /// no-op),再 `exit_code_mode` 转回渲染。预览→代码:直接
+    /// `enter_code_mode` 读盘建原生编辑器,失败写对应面板 error。
+    pub(crate) fn preview_pane_toggle_render_mode(&mut self, kind: PanelKind, idx: usize) {
+        let project = kind == PanelKind::Project;
+        let in_code_mode = {
+            let pane = if project {
+                &self.project_preview
+            } else {
+                &self.preview
+            };
+            pane.tabs().get(idx).is_some_and(|t| t.editor.is_some())
+        };
+        if in_code_mode {
+            self.preview_pane_save_at(kind, idx);
+            let pane = if project {
+                &mut self.project_preview
+            } else {
+                &mut self.preview
+            };
+            pane.exit_code_mode(idx);
+        } else {
+            let pane = if project {
+                &mut self.project_preview
+            } else {
+                &mut self.preview
+            };
+            if let Err(e) = pane.enter_code_mode(idx) {
+                let err = Some(format!("打开代码模式失败: {e}"));
                 if project {
                     self.project_preview_error = err;
                 } else {
@@ -3451,6 +3501,10 @@ fn preview_pane_for<'a>(
         PreviewPaneKind::Files => Message::PreviewCloseTab(idx),
         PreviewPaneKind::Project => Message::ProjectPreviewCloseTab(idx),
     };
+    let toggle_msg = move |idx| match kind {
+        PreviewPaneKind::Files => Message::PreviewToggleRenderMode(idx),
+        PreviewPaneKind::Project => Message::ProjectPreviewToggleRenderMode(idx),
+    };
     let overflow_toggle_msg = move || match kind {
         PreviewPaneKind::Files => Message::PreviewTabOverflowToggle,
         PreviewPaneKind::Project => Message::ProjectPreviewTabOverflowToggle,
@@ -3483,48 +3537,62 @@ fn preview_pane_for<'a>(
         tab_first,
     );
 
-    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = preview
-        .tabs()
-        .iter()
-        .enumerate()
-        .filter(|(idx, _)| (window.first..window.visible_end).contains(idx))
-        .map(|(idx, tab)| {
-            let active = idx == preview.active_idx();
-            let title_hover_t = app.hover_progress(item_hover(idx));
-            let close_hover_t = app.hover_progress(close_hover(idx));
-            // 就地可写的原生 tab 有未保存改动:标题后缀 ` *`(2026-09-06)。宽度
-            // 预算仍按 `tab.title`(不带星)估,最坏多一个字符略挤,不换行折叠。
-            let display_title = if tab.editor.is_some() && tab.dirty {
-                format!("{} *", tab.title)
-            } else {
-                tab.title.clone()
-            };
-            let tab = panel_tab(PanelTabArgs {
-                title: display_title,
-                active,
-                hover_t: title_hover_t,
-                close_hover_t,
-                prefix: None,
-                suffix: None,
-                on_select: select_msg(idx),
-                on_close: close_msg(idx),
-                show_tooltip: app.hover_tooltip_ready(item_hover(idx)),
-                title_hover: move |h| Message::Hover(item_hover(idx), h),
-                close_hover: move |h| Message::Hover(close_hover(idx), h),
-            });
-            // 拖拽换位:按住页签(选中处理已把 `app.tab_drag` 置位)后光标
-            // 扫过哪个页签,这个 `on_move` 就按它发 `TabDragMove`,完成换位。
-            let armed = app.dragging_group(tab_group);
-            let mut area = MouseArea::new(tab).on_move(move |_| Message::TabDragMove {
-                group: tab_group,
-                index: idx,
-            });
-            if armed {
-                area = area.interaction(mouse::Interaction::Grabbing);
-            }
-            area.into()
-        })
-        .collect();
+    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
+        preview
+            .tabs()
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| (window.first..window.visible_end).contains(idx))
+            .map(|(idx, tab)| {
+                let active = idx == preview.active_idx();
+                let title_hover_t = app.hover_progress(item_hover(idx));
+                let close_hover_t = app.hover_progress(close_hover(idx));
+                // 就地可写的原生 tab 有未保存改动:标题后缀 ` *`(2026-09-06)。宽度
+                // 预算仍按 `tab.title`(不带星)估,最坏多一个字符略挤,不换行折叠。
+                let display_title = if tab.editor.is_some() && tab.dirty {
+                    format!("{} *", tab.title)
+                } else {
+                    tab.title.clone()
+                };
+                // 预览/代码切换按钮:仅对 `wry_toggle_eligible`(文本可编辑却默认走
+                // wry/flyfish 渲染)的文件出现,且随当前代码模式换图标(`editor.is_some()`
+                // = 代码模式 → 显示 Eye,点它切回预览;否则显示 FileCode 切进代码)。
+                // 这类 tab 不多,直接每个可见 tab 调用一次构造,不缓存留脏。
+                let suffix: Option<
+                    Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
+                > = {
+                    let eligible = match &tab.kind {
+                        crate::preview::TabKind::File(p) => crate::preview::wry_toggle_eligible(p),
+                        _ => false,
+                    };
+                    eligible.then(|| tab_render_mode_button(tab.editor.is_some(), toggle_msg(idx)))
+                };
+                let tab = panel_tab(PanelTabArgs {
+                    title: display_title,
+                    active,
+                    hover_t: title_hover_t,
+                    close_hover_t,
+                    prefix: None,
+                    suffix,
+                    on_select: select_msg(idx),
+                    on_close: close_msg(idx),
+                    show_tooltip: app.hover_tooltip_ready(item_hover(idx)),
+                    title_hover: move |h| Message::Hover(item_hover(idx), h),
+                    close_hover: move |h| Message::Hover(close_hover(idx), h),
+                });
+                // 拖拽换位:按住页签(选中处理已把 `app.tab_drag` 置位)后光标
+                // 扫过哪个页签,这个 `on_move` 就按它发 `TabDragMove`,完成换位。
+                let armed = app.dragging_group(tab_group);
+                let mut area = MouseArea::new(tab).on_move(move |_| Message::TabDragMove {
+                    group: tab_group,
+                    index: idx,
+                });
+                if armed {
+                    area = area.interaction(mouse::Interaction::Grabbing);
+                }
+                area.into()
+            })
+            .collect();
     // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;V 按钮钉在裁剪区外(只要 tab
     // 组非空即显示,见 `tab_overflow_button`——无溢出也列出全部 tab 供跳转)。
     let tabs_row = row(items).spacing(4);

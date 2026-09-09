@@ -1843,6 +1843,10 @@ pub enum Message {
     PreviewSelectTab(usize),
     /// 预览:关闭 tab(vec 位置).
     PreviewCloseTab(usize),
+    /// 预览:点 tab 上的预览/代码切换按钮(只对 `wry_toggle_eligible` 的文件
+    /// 画)——`usize` 是 vec 位置,交给 `Workspace::preview_pane_toggle_render_mode`
+    /// 落盘 + 切渲染路径。Files 预览面板。
+    PreviewToggleRenderMode(usize),
     /// 原生预览 tab 的 `text_editor::Action`,`usize` 是 `PreviewTab.id`。由
     /// `main.rs` 的 dispatch 直接转发给 `App::preview_tab_editor_event`(剪贴
     /// 板由 iced 运行时自己处理,不需要像 vendored `iced-code-editor` 那样手动
@@ -1898,6 +1902,8 @@ pub enum Message {
     ProjectPreviewSelectTab(usize),
     /// Project 面板右配对预览:关闭 tab(vec 位置)。
     ProjectPreviewCloseTab(usize),
+    /// Project 面板右配对预览:预览/代码切换按钮,语义同 `PreviewToggleRenderMode`。
+    ProjectPreviewToggleRenderMode(usize),
     /// Project 面板右配对预览 tab 栏溢出下拉开关,语义同上
     /// (`PreviewTabOverflowToggle`)。
     ProjectPreviewTabOverflowToggle,
@@ -5101,11 +5107,22 @@ impl App {
             Message::PreviewSelectTab(idx) => self.preview_select_tab(idx),
             Message::PreviewCloseTab(idx) => {
                 self.with_focused_project(|ws, io| {
+                    // 关闭前静默保存该 tab 的就地改动(仅当它是脏的原生 tab 才
+                    // 动作;不脏/走 wry 的 tab 内部直接 no-op)——复用
+                    // `preview_pane_save_at` 的落盘 + 清脏 + 面板 error 管线,抵掉
+                    // 关闭即丢改动。顺序:先 `save_at`(取的是关闭前的下标 + buffer)
+                    // 再 `close`。
+                    ws.preview_pane_save_at(PanelKind::Files, idx);
                     ws.preview.close(idx);
                     // 关 tab 后位置全变，旧 first 可能越界——归零防御（P1L T5）。
                     ws.preview_tab_first = 0;
                     ws.spawn_preview_state_save(io);
                     ws.spawn_preview_context_push(io);
+                });
+            }
+            Message::PreviewToggleRenderMode(idx) => {
+                self.with_focused_project(|ws, _io| {
+                    ws.preview_pane_toggle_render_mode(PanelKind::Files, idx);
                 });
             }
             Message::PreviewEditorEvent(_tab_id, _action) => {
@@ -5164,8 +5181,15 @@ impl App {
             Message::ProjectPreviewSelectTab(idx) => self.project_preview_select_tab(idx),
             Message::ProjectPreviewCloseTab(idx) => {
                 self.with_focused_project(|ws, _io| {
+                    // 关闭前静默保存,语义同 `PreviewCloseTab`(先 `save_at` 再 close)。
+                    ws.preview_pane_save_at(PanelKind::Project, idx);
                     ws.project_preview.close(idx);
                     ws.project_preview_tab_first = 0;
+                });
+            }
+            Message::ProjectPreviewToggleRenderMode(idx) => {
+                self.with_focused_project(|ws, _io| {
+                    ws.preview_pane_toggle_render_mode(PanelKind::Project, idx);
                 });
             }
             Message::ProjectPreviewTabOverflowToggle => {
