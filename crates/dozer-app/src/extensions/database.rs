@@ -805,10 +805,6 @@ pub enum Message {
     TabOverflowToggle,
     /// tab 栏溢出下拉:点击外部关闭。同样由 `App::update` 拦截。
     TabOverflowDismiss,
-    /// 下拉行的 hover 占位消息(不产生任何副作用),`tab_overflow_menu` 的
-    /// `on_select_hover`/`on_close_hover` 要求返回一个消息,这里补一个纯
-    /// no-op,避免为一个短生命周期浮层铺一整套 hover 动画状态。
-    Noop,
 
     // ---- 浏览页(WHERE/ORDER BY/分页) ----
     BrowseWhereChanged(usize, String),
@@ -846,7 +842,6 @@ pub fn update(
     emit: impl Fn(Message) + Send + Clone + 'static,
 ) {
     match msg {
-        Message::Noop => {}
         // 这两个溢出开关由 `app.rs` 主级 `update` 拦截(需要 `App::last_cursor`),
         // 正常不会走到这个子级 `database::update`——保留空 arm 只为满足穷尽。
         Message::TabOverflowToggle | Message::TabOverflowDismiss => {}
@@ -2195,9 +2190,10 @@ pub fn content_pane<'a>(
         .collect();
     let tabs_row = row(items).spacing(4);
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
-    let hidden_count = window.hidden_before().len() + window.hidden_after(widths.len()).len();
+    // V 一直可见：只要 tab 组非空就显示,下拉列出组内全部(空白占位 + 真实 tab)。
+    let db_tab_total = 1 + content.tabs().len();
     let overflow_button =
-        crate::tab_widget::tab_overflow_button(hidden_count, Message::TabOverflowToggle);
+        crate::tab_widget::tab_overflow_button(db_tab_total, Message::TabOverflowToggle);
     // 内容侧"收起/展开列表列"按钮(收起左列 schema 树后仍在此可见以便恢复)。
     // 消息为本地 `Message::ToggleListCollapse`,由内核 `App::update` 拦截。
     let collapse = app.list_collapse_button(
@@ -2262,52 +2258,42 @@ pub fn content_pane<'a>(
     let result: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         outer_container.into();
     if let Some(anchor) = content.tab_overflow_anchor() {
-        if window.has_overflow(widths.len()) {
-            let hidden: std::collections::HashSet<usize> = window
-                .hidden_before()
-                .chain(window.hidden_after(widths.len()))
-                .collect();
-            let mut overflow_entries: Vec<crate::tab_widget::TabOverflowEntry<'_, Message>> =
-                Vec::new();
-            if hidden.contains(&0) {
-                overflow_entries.push(crate::tab_widget::TabOverflowEntry {
-                    index: 0,
-                    prefix: None,
-                    title: "空白".to_string(),
-                    active: content.active_idx().is_none(),
-                    closable: false,
-                });
-            }
-            for (i, tab) in content.tabs().iter().enumerate() {
-                let idx = i + 1;
-                if !hidden.contains(&idx) {
-                    continue;
-                }
-                overflow_entries.push(crate::tab_widget::TabOverflowEntry {
-                    index: idx,
-                    prefix: None,
-                    title: tab_title(tab, ws_state),
-                    active: Some(i) == content.active_idx(),
-                    closable: true,
-                });
-            }
-            let menu =
-                crate::tab_widget::tab_overflow_menu(crate::tab_widget::TabOverflowMenuArgs {
-                    entries: overflow_entries,
-                    anchor,
-                    window_size: app.window_size,
-                    on_select: |idx| {
-                        if idx == 0 {
-                            Message::SelectBlankTab
-                        } else {
-                            Message::SelectTab(idx - 1)
-                        }
-                    },
-                    on_close: |idx| Message::CloseTab(idx - 1),
-                    on_dismiss: Message::TabOverflowDismiss,
-                });
-            return iced_widget::stack![result, menu].into();
+        // 下拉列出该面板内**全部** tab(空白占位 + 真实 tab),方便一览/直接
+        // 跳到任一项,而不是只列当前被挤出可见区的子集。
+        let mut overflow_entries: Vec<crate::tab_widget::TabOverflowEntry<'_, Message>> =
+            Vec::new();
+        overflow_entries.push(crate::tab_widget::TabOverflowEntry {
+            index: 0,
+            prefix: None,
+            title: "空白".to_string(),
+            active: content.active_idx().is_none(),
+            closable: false,
+        });
+        for (i, tab) in content.tabs().iter().enumerate() {
+            let idx = i + 1;
+            overflow_entries.push(crate::tab_widget::TabOverflowEntry {
+                index: idx,
+                prefix: None,
+                title: tab_title(tab, ws_state),
+                active: Some(i) == content.active_idx(),
+                closable: true,
+            });
         }
+        let menu = crate::tab_widget::tab_overflow_menu(crate::tab_widget::TabOverflowMenuArgs {
+            entries: overflow_entries,
+            anchor,
+            window_size: app.window_size,
+            on_select: |idx| {
+                if idx == 0 {
+                    Message::SelectBlankTab
+                } else {
+                    Message::SelectTab(idx - 1)
+                }
+            },
+            on_close: |idx| Message::CloseTab(idx - 1),
+            on_dismiss: Message::TabOverflowDismiss,
+        });
+        return iced_widget::stack![result, menu].into();
     }
     result
 }

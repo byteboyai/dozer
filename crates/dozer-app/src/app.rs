@@ -9694,9 +9694,11 @@ fn ssh_tab_bar<'a>(
     let clipped = container(row(items).spacing(4))
         .width(Length::Fill)
         .clip(true);
-    let hidden_count = window.hidden_before().len() + window.hidden_after(widths.len()).len();
+    // V 一直可见：只要 tab 组非空(空白占位 + 终端 + SFTP)就渲染,下拉随即列出
+    // 组内全部 tab,供随时跳转。
+    let ssh_tab_total = 1 + ws.ssh_tabs.len() + ws.sftp_tabs.len();
     let overflow_button = tab_widget::tab_overflow_button(
-        hidden_count,
+        ssh_tab_total,
         Message::Ssh(ssh::Message::TabOverflowToggle),
     );
     // 内容侧"收起/展开列表列"按钮(收起左列主机列表后仍在此可见以便恢复)。
@@ -9719,82 +9721,70 @@ fn ssh_tab_bar<'a>(
 
     let base: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = tab_bar.into();
     if let Some(anchor) = ws.ssh_tab_overflow_anchor {
-        if window.has_overflow(widths.len()) {
-            let mut entries: Vec<tab_widget::TabOverflowEntry<'_, Message>> = Vec::new();
-            let hidden: std::collections::HashSet<usize> = window
-                .hidden_before()
-                .chain(window.hidden_after(widths.len()))
-                .collect();
-            if hidden.contains(&0) {
-                entries.push(tab_widget::TabOverflowEntry {
-                    index: 0,
-                    prefix: None,
-                    title: "空白".to_string(),
-                    active: ws.ssh_active.is_none(),
-                    closable: false,
-                });
-            }
-            for (i, tab) in ws.ssh_tabs.iter().enumerate() {
-                let idx = i + 1;
-                if !hidden.contains(&idx) {
-                    continue;
-                }
-                let host_id = tab
-                    .info
-                    .id
-                    .strip_prefix("ssh:")
-                    .unwrap_or(&tab.info.id)
-                    .to_string();
-                entries.push(tab_widget::TabOverflowEntry {
-                    index: idx,
-                    prefix: Some(icons::view(
-                        icons::IconKind::Terminal,
-                        byteui::theme::icon_size::row(),
-                        byteui::theme::color::current().dim,
-                    )),
-                    title: tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
-                    active: ws
-                        .ssh_active
-                        .as_ref()
-                        .is_some_and(|(h, k)| h == &host_id && *k == ssh::SshTabKind::Terminal),
-                    closable: true,
-                });
-            }
-            for (i, (host_id, _)) in ws.sftp_tabs.iter().enumerate() {
-                let idx = i + 1 + ws.ssh_tabs.len();
-                if !hidden.contains(&idx) {
-                    continue;
-                }
-                let label = ws
-                    .ssh
-                    .hosts()
-                    .iter()
-                    .find(|h| &h.id == host_id)
-                    .map(|h| h.name.clone())
-                    .unwrap_or_else(|| host_id.clone());
-                entries.push(tab_widget::TabOverflowEntry {
-                    index: idx,
-                    prefix: Some(icons::view(
-                        icons::IconKind::FolderSync,
-                        byteui::theme::icon_size::row(),
-                        byteui::theme::color::current().dim,
-                    )),
-                    title: label,
-                    active: ws.ssh_active.as_ref()
-                        == Some(&(host_id.clone(), ssh::SshTabKind::Sftp)),
-                    closable: true,
-                });
-            }
-            let menu = tab_widget::tab_overflow_menu(tab_widget::TabOverflowMenuArgs {
-                entries,
-                anchor,
-                window_size: app.window_size,
-                on_select: |idx| ssh_tab_overflow_select_message(ws, idx),
-                on_close: |idx| ssh_tab_overflow_close_message(ws, idx),
-                on_dismiss: Message::Ssh(ssh::Message::TabOverflowDismiss),
+        // 下拉列出该 SSH 面板内**全部** tab(空白占位 + 终端 + SFTP),即
+        // horizontal tab 条之上的完整视图——点 V 不是为了翻越隐藏项,而是
+        // 一览/跳到任意 tab。
+        let mut entries: Vec<tab_widget::TabOverflowEntry<'_, Message>> = Vec::new();
+        entries.push(tab_widget::TabOverflowEntry {
+            index: 0,
+            prefix: None,
+            title: "空白".to_string(),
+            active: ws.ssh_active.is_none(),
+            closable: false,
+        });
+        for (i, tab) in ws.ssh_tabs.iter().enumerate() {
+            let idx = i + 1;
+            let host_id = tab
+                .info
+                .id
+                .strip_prefix("ssh:")
+                .unwrap_or(&tab.info.id)
+                .to_string();
+            entries.push(tab_widget::TabOverflowEntry {
+                index: idx,
+                prefix: Some(icons::view(
+                    icons::IconKind::Terminal,
+                    byteui::theme::icon_size::row(),
+                    byteui::theme::color::current().dim,
+                )),
+                title: tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
+                active: ws
+                    .ssh_active
+                    .as_ref()
+                    .is_some_and(|(h, k)| h == &host_id && *k == ssh::SshTabKind::Terminal),
+                closable: true,
             });
-            return iced_widget::stack![base, menu].into();
         }
+        for (i, (host_id, _)) in ws.sftp_tabs.iter().enumerate() {
+            let idx = i + 1 + ws.ssh_tabs.len();
+            let label = ws
+                .ssh
+                .hosts()
+                .iter()
+                .find(|h| &h.id == host_id)
+                .map(|h| h.name.clone())
+                .unwrap_or_else(|| host_id.clone());
+            entries.push(tab_widget::TabOverflowEntry {
+                index: idx,
+                prefix: Some(icons::view(
+                    icons::IconKind::FolderSync,
+                    byteui::theme::icon_size::row(),
+                    byteui::theme::color::current().dim,
+                )),
+                title: label,
+                active: ws.ssh_active.as_ref() == Some(&(host_id.clone(), ssh::SshTabKind::Sftp)),
+                closable: true,
+            });
+        }
+        let menu = tab_widget::tab_overflow_menu(tab_widget::TabOverflowMenuArgs {
+            entries,
+            anchor,
+            window_size: app.window_size,
+            on_select: |idx| ssh_tab_overflow_select_message(ws, idx),
+            on_close: |idx| ssh_tab_overflow_close_message(ws, idx),
+            on_dismiss: Message::Ssh(ssh::Message::TabOverflowDismiss),
+        });
+        return iced_widget::stack![base, menu].into();
     }
     base
 }

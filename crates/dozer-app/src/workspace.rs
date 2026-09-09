@@ -3707,13 +3707,11 @@ fn preview_pane_for<'a>(
             area.into()
         })
         .collect();
-    // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;溢出 V 按钮钉在裁剪区外
-    // (仅当有被挤出去的 tab 时才渲染)。
+    // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;V 按钮钉在裁剪区外(只要 tab
+    // 组非空即显示,见 `tab_overflow_button`——无溢出也列出全部 tab 供跳转)。
     let tabs_row = row(items).spacing(4);
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
-    let hidden_count =
-        window.hidden_before().len() + window.hidden_after(preview.tabs().len()).len();
-    let overflow_button = tab_overflow_button(hidden_count, overflow_toggle_msg());
+    let overflow_button = tab_overflow_button(preview.tabs().len(), overflow_toggle_msg());
     // 预览右上角"收起/展开列表列"按钮:Files 预览收起文件树,Project 预览
     // 收起 info 列。按钮始终在此(内容侧),收起后仍可见以便恢复。图标按该
     // 面板当前所在栏(左/右)与收起态四选一,见 `IconKind::PanelLeftClose`
@@ -4160,31 +4158,33 @@ fn preview_pane_for<'a>(
                 ..container::Style::default()
             })
             .into();
-    if let Some(anchor) = overflow_anchor {
-        if window.has_overflow(preview.tabs().len()) {
-            let entries: Vec<TabOverflowEntry<'_, Message>> = preview
-                .tabs()
-                .iter()
-                .enumerate()
-                .filter(|(idx, _)| !(window.first..window.visible_end).contains(idx))
-                .map(|(idx, tab)| TabOverflowEntry {
-                    index: idx,
-                    prefix: None,
-                    title: tab.title.clone(),
-                    active: idx == preview.active_idx(),
-                    closable: true,
-                })
-                .collect();
-            let menu = tab_overflow_menu(TabOverflowMenuArgs {
-                entries,
-                anchor,
-                window_size: app.window_size,
-                on_select: select_msg,
-                on_close: close_msg,
-                on_dismiss: overflow_dismiss_msg(),
-            });
-            return iced_widget::stack![base, menu].into();
-        }
+    let Some(anchor) = overflow_anchor else {
+        return base;
+    };
+    if !preview.tabs().is_empty() {
+        // 下拉列出精选组内**全部** tab(不管当前是否横向可见),便于随时
+        // 跳转到某一项,而非只列"被挤出可见区"的子集。
+        let entries: Vec<TabOverflowEntry<'_, Message>> = preview
+            .tabs()
+            .iter()
+            .enumerate()
+            .map(|(idx, tab)| TabOverflowEntry {
+                index: idx,
+                prefix: None,
+                title: tab.title.clone(),
+                active: idx == preview.active_idx(),
+                closable: true,
+            })
+            .collect();
+        let menu = tab_overflow_menu(TabOverflowMenuArgs {
+            entries,
+            anchor,
+            window_size: app.window_size,
+            on_select: select_msg,
+            on_close: close_msg,
+            on_dismiss: overflow_dismiss_msg(),
+        });
+        return iced_widget::stack![base, menu].into();
     }
     base
 }

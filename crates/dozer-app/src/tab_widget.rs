@@ -198,7 +198,7 @@ where
         ..close_base
     };
     let (select, close) = tabs::tab_core(tabs::TabCoreArgs {
-        content: title_row.into(),
+        content: title_row,
         close_sz,
         close_color,
         close_interactive: hovered,
@@ -231,60 +231,6 @@ where
     controlled_tooltip(el, title, Position::Top, show_tooltip)
 }
 
-/// 箭头翻页按钮：ChevronLeft / ChevronRight，可用时 GOLD，hover 显 CARD 圆角底，到头时 DIM 且不可点。
-pub(crate) fn tab_arrow_button<'a, M: Clone + 'a>(
-    icon: icons::IconKind,
-    enabled: bool,
-    msg: M,
-) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
-    // 激活(可点)态用 `#dcc9a3`(同顶栏选中页签描边 `TAB_ACTIVE_BORDER`),
-    // 静止不再用金;hover 再跳到金 `#F2D94E` 提亮。
-    let color = if enabled {
-        byteui::theme::color::current().tab_active_border
-    } else {
-        byteui::theme::color::current().dim
-    };
-    let mut btn = button(icons::view(
-        icon,
-        byteui::theme::icon_size::tab_arrow(),
-        color,
-    ))
-    .width(Length::Fixed(
-        byteui::theme::geometry::tab_arrow_button_size(),
-    ))
-    .height(Length::Fixed(
-        byteui::theme::geometry::tab_arrow_button_size(),
-    ))
-    .padding(0)
-    .style(move |_theme, status| {
-        let base = button::Style {
-            background: None,
-            text_color: color,
-            ..button::Style::default()
-        };
-        if !enabled {
-            return base;
-        }
-        match status {
-            button::Status::Hovered | button::Status::Pressed => button::Style {
-                background: Some(byteui::theme::color::current().card.into()),
-                text_color: byteui::theme::color::current().gold,
-                border: Border {
-                    color: Color::TRANSPARENT,
-                    width: 1.0,
-                    radius: 4.0.into(),
-                },
-                ..base
-            },
-            _ => base,
-        }
-    });
-    if enabled {
-        btn = btn.on_press(msg);
-    }
-    btn.into()
-}
-
 /// 给定各 tab 宽、tab 间距、可视宽、当前 first,算出实际渲染窗口:
 /// (钳制后的 first, 可见区间的独占结束下标)。
 /// - 全部 tab 能放下(总宽<=avail) → first=0, visible_end=n(全可见,无溢出)。
@@ -298,6 +244,11 @@ pub(crate) struct TabOverflow {
     pub visible_end: usize,
 }
 
+// 该窗口结构体最终在 `tab_window_reveal` 里按是否落在窗口内决定是否松开
+// 钳制。下面三组"隐藏段"取法只在既有单元测试里断言布局时用到(V 下拉不再
+// 消费它们:新版下拉列出组内全部 tab,不区分子集),生产 build 里去重以免
+// dead-code 告警,故整块挂在 `#[cfg(test)]` 下。
+#[cfg(test)]
 impl TabOverflow {
     pub(crate) fn hidden_before(&self) -> std::ops::Range<usize> {
         0..self.first
@@ -343,8 +294,8 @@ pub(crate) fn tab_window(widths: &[f32], gap: f32, avail: f32, first: usize) -> 
     // 从钳后的 first 往右累加，算这一屏实际放得下几个。
     let mut visible_end = clamped;
     let mut fwd = 0.0;
-    for i in clamped..n {
-        let w = widths[i] + if i > clamped { gap } else { 0.0 };
+    for (i, w) in widths.iter().enumerate().skip(clamped) {
+        let w = *w + if i > clamped { gap } else { 0.0 };
         if fwd + w <= avail {
             fwd += w;
             visible_end = i + 1;
@@ -378,14 +329,15 @@ pub(crate) fn tab_window_reveal(
     }
 }
 
-/// 溢出下拉入口:仅当 `hidden_count > 0` 时渲染,否则返回 `None`——调用方
-/// 直接跳过这一项,不走"禁用态灰按钮"(见 spec 关键语义确认 4)。尺寸/颜色
-/// 复用 `tab_overflow_button` 同一套 geometry/icon_size 常量,保证视觉一致。
+/// 溢出下拉入口。V 按钮在 tab 组非空时始终显示(即使当前没有横向溢出,
+/// 下拉也要列出**该组全部 tab**,供随时跳转)。仅当 tab 组为空(编号 0)时
+/// 返回 `None` 让调用方跳过——不走"禁用态灰按钮"(见 spec 语义确认)。
+/// 尺寸/颜色复用 `tab_arrow_button` 同一套 geometry/icon_size 常量,保证视觉一致。
 pub(crate) fn tab_overflow_button<'a, M: Clone + 'a>(
-    hidden_count: usize,
+    tab_count: usize,
     on_press: M,
 ) -> Option<Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>> {
-    if hidden_count == 0 {
+    if tab_count == 0 {
         return None;
     }
     let color = byteui::theme::color::current().tab_active_border;

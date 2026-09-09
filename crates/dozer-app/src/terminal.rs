@@ -143,13 +143,13 @@ pub(crate) fn tab_bar<'a>(
         })
         .collect();
 
-    // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;溢出 V 按钮钉在裁剪区外(仅当有
-    // 被挤出去的 tab 时才渲染——`tab_overflow_button` 无溢出返回 `None`)。
+    // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;V 按钮钉在裁剪区外。V
+    // "一直可见"：只要 tab 组非空就显示(`tab_overflow_button` 仅在全空时返回
+    // `None`),下拉列出组内全部 tab,供随时跳转,不只列横向可见的部分。
     let tabs_row = row(items).spacing(4);
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
-    let hidden_count = window.hidden_before().len() + window.hidden_after(ws.tabs.len()).len();
     let overflow_button =
-        tab_widget::tab_overflow_button(hidden_count, Message::TermTabOverflowToggle);
+        tab_widget::tab_overflow_button(ws.tabs.len(), Message::TermTabOverflowToggle);
 
     let mut tab_row = row![clipped]
         .spacing(4)
@@ -168,34 +168,34 @@ pub(crate) fn tab_bar<'a>(
     ));
 
     let base = column![tab_row, tab_divider()].spacing(4);
-    if let Some(anchor) = ws.term_tab_overflow_anchor {
-        if window.has_overflow(ws.tabs.len()) {
-            let entries: Vec<tab_widget::TabOverflowEntry<'_, Message>> = ws
-                .tabs
-                .iter()
-                .enumerate()
-                .filter(|(idx, _)| !(window.first..window.visible_end).contains(idx))
-                .map(|(idx, tab)| tab_widget::TabOverflowEntry {
-                    index: idx,
-                    prefix: Some(byteui::feedback::status::dot(dot_color(
-                        tab.agent_state,
-                        tab.alive,
-                    ))),
-                    title: tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
-                    active: idx == ws.active,
-                    closable: true,
-                })
-                .collect();
-            let menu = tab_widget::tab_overflow_menu(tab_widget::TabOverflowMenuArgs {
-                entries,
-                anchor,
-                window_size: app.window_size,
-                on_select: Message::SelectTab,
-                on_close: Message::CloseTab,
-                on_dismiss: Message::TermTabOverflowDismiss,
-            });
-            return iced_widget::stack![base, menu].into();
-        }
+    let Some(anchor) = ws.term_tab_overflow_anchor else {
+        return base.into();
+    };
+    if !ws.tabs.is_empty() {
+        let entries: Vec<tab_widget::TabOverflowEntry<'_, Message>> = ws
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(idx, tab)| tab_widget::TabOverflowEntry {
+                index: idx,
+                prefix: Some(byteui::feedback::status::dot(dot_color(
+                    tab.agent_state,
+                    tab.alive,
+                ))),
+                title: tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
+                active: idx == ws.active,
+                closable: true,
+            })
+            .collect();
+        let menu = tab_widget::tab_overflow_menu(tab_widget::TabOverflowMenuArgs {
+            entries,
+            anchor,
+            window_size: app.window_size,
+            on_select: Message::SelectTab,
+            on_close: Message::CloseTab,
+            on_dismiss: Message::TermTabOverflowDismiss,
+        });
+        return iced_widget::stack![base, menu].into();
     }
     base.into()
 }
