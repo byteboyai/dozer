@@ -614,6 +614,40 @@ impl<T> iced_winit::core::widget::Operation<T> for FocusAlso {
     }
 }
 
+/// 只对命中 `targets` 里某个 id 的 focusable 调 `.unfocus()`,不碰任何其它
+/// widget——`operation::focusable::unfocus()`(无目标版本)会让**当前持有
+/// 焦点的那个 widget**失焦,不管它是谁;这在"预览原生编辑器该让出焦点"
+/// 的场景里是错的,因为触发这次 unfocus 的同一次点击,可能恰好正在把焦点
+/// 给**另一个**原生 `text_input`(比如常驻搜索框)——无目标 unfocus 会把
+/// 这个刚拿到的新焦点也一并抹掉(2026-09 用户反馈:文件树/Todo/Git Log
+/// 常驻搜索框、右键搜索弹窗查询框统统点了打不出字,根因就是这个)。用这个
+/// 操作把"让出焦点"限定到预览编辑器自己的 id 上,不影响其它 widget。
+struct UnfocusTargets {
+    targets: Vec<iced_winit::core::widget::Id>,
+}
+
+impl<T> iced_winit::core::widget::Operation<T> for UnfocusTargets {
+    fn focusable(
+        &mut self,
+        id: Option<&iced_winit::core::widget::Id>,
+        _bounds: iced_winit::core::Rectangle,
+        state: &mut dyn iced_winit::core::widget::operation::Focusable,
+    ) {
+        if let Some(id) = id
+            && self.targets.contains(id)
+        {
+            state.unfocus();
+        }
+    }
+
+    fn traverse(
+        &mut self,
+        operate: &mut dyn FnMut(&mut dyn iced_winit::core::widget::Operation<T>),
+    ) {
+        operate(self);
+    }
+}
+
 pub fn main() -> Result<(), winit::error::EventLoopError> {
     tracing_subscriber::fmt::init();
 
@@ -2578,6 +2612,21 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 let editor_unfocus_pending = app
                                     .active_workspace_mut()
                                     .is_some_and(|ws| ws.take_editor_unfocus_pending());
+                                // 两个预览面板各自的原生 editor id(若当前 tab 是原生态)——
+                                // 只有这两个 id 会被下面的 `UnfocusTargets` 摘掉焦点,不会
+                                // 误伤同一次点击刚刚聚焦的其它 widget(见 `UnfocusTargets` 文档)。
+                                let editor_unfocus_targets: Vec<iced_winit::core::widget::Id> = app
+                                    .active_workspace()
+                                    .map(|ws| {
+                                        [
+                                            ws.preview.active_editor_focus_id(),
+                                            ws.project_preview.active_editor_focus_id(),
+                                        ]
+                                        .into_iter()
+                                        .flatten()
+                                        .collect()
+                                    })
+                                    .unwrap_or_default();
 
                                 // Draw iced on top
                                 let mut interface = UserInterface::build(
@@ -2729,12 +2778,17 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     run_operate(&mut interface, renderer, &mut op);
                                 }
 
-                                // 消息驱动(非鼠标点击)把焦点拨离预览编辑器——统一
-                                // 让出当前持有焦点的 widget(不指定目标)。
-                                if editor_unfocus_pending {
-                                    let mut op =
-                                        iced_widget::core::widget::operation::focusable::unfocus::<()>(
-                                        );
+                                // 消息驱动(非鼠标点击)把焦点拨离预览编辑器——只摘
+                                // `editor_unfocus_targets`(两个预览面板各自的原生
+                                // editor id)自己的焦点,不用无目标版本的
+                                // `operation::focusable::unfocus()`(那个会把**当前
+                                // 持有焦点的任意 widget**都摘掉,同一次点击如果恰好
+                                // 正在把焦点交给别的原生输入框——比如常驻搜索框——
+                                // 会被这一下连带打掉,见 `UnfocusTargets` 文档)。
+                                if editor_unfocus_pending && !editor_unfocus_targets.is_empty() {
+                                    let mut op = UnfocusTargets {
+                                        targets: editor_unfocus_targets.clone(),
+                                    };
                                     run_operate(&mut interface, renderer, &mut op);
                                 }
 
@@ -2752,31 +2806,43 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // 不可变借用之后(见下方 `into_cache` 之后),
                                 // 否则这里借用 `app.view()` 建出的 `interface`
                                 // 还活着,不能同时再可变借用 `app`。
-                                let files_focused =
-                                    if matches!(app.left_view(), crate::app::PanelKind::Files) {
-                                        run_operate(
-                                            &mut interface,
-                                            renderer,
-                                            &mut extensions::files::CaptureSearchFocus,
-                                        );
-                                        extensions::files::take_search_focused()
-                                    } else {
-                                        false
-                                    };
+                                // Files 面板可以被挪到右栏(`relocate_to_right`),
+                                // 只查 `left_view` 会在这种布局下让搜索框永远
+                                // 捕不到真实焦点(2026-09 用户反馈:文件树搜索框
+                                // 点了也打不进字——鼠标点击本身走 iced 正常
+                                // widget 树、能拿到真焦点,但这里的每帧焦点捕获
+                                // 一直没跑,`files_search_focused()` 恒 false,
+                                // 键盘路由 OR 链永远不放行,字符全被拦下)。
+                                let files_in_either_view = matches!(
+                                    app.left_view(),
+                                    crate::app::PanelKind::Files
+                                ) || matches!(
+                                    app.right_view(),
+                                    crate::app::PanelKind::Files
+                                );
+                                let files_focused = if files_in_either_view {
+                                    run_operate(
+                                        &mut interface,
+                                        renderer,
+                                        &mut extensions::files::CaptureSearchFocus,
+                                    );
+                                    extensions::files::take_search_focused()
+                                } else {
+                                    false
+                                };
 
                                 // 项目树行内编辑框(Stage 5)同款每帧真实焦点查询:
-                                // 与 Files 搜索框完全同构。只在 Files 左栏可见时跑。
-                                let tree_edit_focused =
-                                    if matches!(app.left_view(), crate::app::PanelKind::Files) {
-                                        run_operate(
-                                            &mut interface,
-                                            renderer,
-                                            &mut extensions::files::CaptureTreeEditFocus,
-                                        );
-                                        extensions::files::take_tree_edit_focused()
-                                    } else {
-                                        false
-                                    };
+                                // 与 Files 搜索框完全同构,同样要两栏都查。
+                                let tree_edit_focused = if files_in_either_view {
+                                    run_operate(
+                                        &mut interface,
+                                        renderer,
+                                        &mut extensions::files::CaptureTreeEditFocus,
+                                    );
+                                    extensions::files::take_tree_edit_focused()
+                                } else {
+                                    false
+                                };
 
                                 // 浏览器地址栏(Stage 3)同款每帧真实焦点查询:
                                 // 与 Files 搜索框完全同构。`PanelKind::Web` 是浏览器

@@ -3509,6 +3509,15 @@ impl App {
         self.left_view
     }
 
+    /// 同 `left_view`,右栏当前显示的面板种类——Files 面板可以被拖到右栏
+    /// (`relocate_to_right`),main.rs 的键盘焦点捕获闸门(`CaptureSearchFocus`/
+    /// `CaptureTreeEditFocus`)必须两栏都查,只查 `left_view` 会在 Files 挪到
+    /// 右栏后让搜索框/树内编辑框永远捕不到真实焦点(2026-09 用户反馈:文件树
+    /// 搜索框点了也打不进字)。
+    pub fn right_view(&self) -> PanelKind {
+        self.right_view
+    }
+
     /// 是否正在拖拽 Todo 任务排序(main.rs 鼠标释放路由 + about_to_wait
     /// 持续重绘用;同 `dragging_tab` 那套)。
     pub fn todo_dragging(&self) -> bool {
