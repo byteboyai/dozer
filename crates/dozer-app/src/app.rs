@@ -722,9 +722,16 @@ fn tab_drag_past_threshold(press_pos: (f32, f32), cursor: (f32, f32)) -> bool {
     dx * dx + dy * dy > TAB_DRAG_CONFIRM_THRESHOLD_PX * TAB_DRAG_CONFIRM_THRESHOLD_PX
 }
 
-/// 文件树内拖拽确认阈值。同 `TAB_DRAG_CONFIRM_THRESHOLD_PX` 手法照抄,但不
-/// 复用它——理由同 `RailDrag` 文档:分开定义,校验逻辑改动互不牵连。
-const TREE_DRAG_CONFIRM_THRESHOLD_PX: f32 = 4.0;
+/// 文件树内拖拽确认阈值。最初照抄 `TAB_DRAG_CONFIRM_THRESHOLD_PX` 的 4px,
+/// 但 tab/rail 是紧凑排列的小控件,4px 越界就意味着真的碰到邻居;树行是
+/// 整行高的目标,trackpad 上一次认真点击(尤其是刻意放慢、想点准的那种)
+/// 本身就可能带着好几像素的手指位移,4px 太容易被"只是想点一下"的正常
+/// 点击越过——2026-09 用户实测反馈(第二轮):做了 Pending/Dragging 两阶段
+/// 拆分后仍然"点一下就进入拖拽态",且连带累及点击本身(左侧 `>` 图标点了
+/// 展开不了目录,因为松开时 `confirmed` 被误判成 true,走的是"拖拽失败"
+/// 分支而不是"这其实是单击"分支,见 `Message::TreeDragEnd` 文档)。调大到
+/// 12px,量级对齐"确实移到另一行附近"而不是"点按的手指晃了几像素"。
+const TREE_DRAG_CONFIRM_THRESHOLD_PX: f32 = 12.0;
 
 /// `drag.press_pos` 到 `cursor` 的位移是否已越过 [`TREE_DRAG_CONFIRM_THRESHOLD_PX`]。
 /// `files::Message::TreeRowPress`(见其文档)"按下即武装"是同一个已知会
@@ -738,6 +745,25 @@ fn tree_drag_past_threshold(press_pos: (f32, f32), cursor: (f32, f32)) -> bool {
     let dx = cursor.0 - press_pos.0;
     let dy = cursor.1 - press_pos.1;
     dx * dx + dy * dy > TREE_DRAG_CONFIRM_THRESHOLD_PX * TREE_DRAG_CONFIRM_THRESHOLD_PX
+}
+
+/// 树内拖拽最短按住时长。2026-09 用户实测反馈(带诊断日志实锤):在
+/// trackpad 上快速点两下目录,第二下按下到松开之间光标真的划出了 ~32px
+/// (远超 [`TREE_DRAG_CONFIRM_THRESHOLD_PX`])——纯距离阈值挡不住"快速
+/// 划动"这种真实位移但并非有意拖拽的手势。真正想把文件拖到某个目录、
+/// 看着落点高亮再松手,耗时天然比一次快速点按长得多,加一道时长门槛作为
+/// 距离阈值之外的第二重确认。200ms 在第二轮反馈里仍偏紧——刻意放慢、想
+/// 点准的一次单击也可能超过 200ms,调到 300ms 留更多余量,真实拖拽(移动
+/// 到目标目录、看着高亮再松手)耗时远不止于此。
+const TREE_DRAG_MIN_HOLD_DURATION: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// 按下到松开的 `elapsed` 是否已达到 [`TREE_DRAG_MIN_HOLD_DURATION`]——同
+/// `tree_drag_past_threshold` 一起、两者都满足才判定为一次真实拖拽(见
+/// `Message::TreeDragEnd` 的 `confirmed` 文档),缺一不可:纯距离挡不住
+/// 快速划动的误判,纯时长又会让"按住不动很久"被误判成拖拽却没有合法
+/// 目标。
+fn tree_drag_held_long_enough(elapsed: std::time::Duration) -> bool {
+    elapsed > TREE_DRAG_MIN_HOLD_DURATION
 }
 
 /// 主界面当前几何状态的只读快照(main.rs 拖拽追踪/离屏几何计算用途,
@@ -3978,6 +4004,51 @@ impl App {
             .is_some_and(|ws| ws.files.is_dragging_tree_item())
     }
 
+    /// 树内拖拽是否已确认(`Dragging` 阶段,见 `TreeDragPhase` 文档)——
+    /// 供顶层 `view()` 判断要不要叠加 `files::tree_drag_ghost` 幽灵胶囊
+    /// (同 `rail_drag_confirmed()` 驱动 `rail_drag_ghost` 的用法)。
+    pub(crate) fn tree_drag_confirmed(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.files.tree_drag_confirmed())
+    }
+
+    /// 每次 `CursorMoved`(main.rs 调用)都判断一次:当前树内拖拽若还在
+    /// `Pending`、且光标位移越过 [`tree_drag_past_threshold`]、按住时长
+    /// 越过 [`tree_drag_held_long_enough`],就推进到 `Dragging`——这个
+    /// 转换只发生一次(`confirm_tree_drag` 对已是 `Dragging` 的状态是
+    /// no-op),之后 `TreeDragEnd` 的 `confirmed` 直接读这个结果,不必在
+    /// 松开时重新算(见 `TreeDragPhase`/`Message::TreeDragRelease` 文档)。
+    /// 返回是否真的发生了这次转换,供调用方决定要不要 `request_redraw`
+    /// (转换会让行开始挂 `on_move`/显示抓取光标/幽灵胶囊,不重绘看不出来)。
+    /// `left_mouse_down` 是硬性前提(见 `main.rs` 里 `left_mouse_down` 字段
+    /// 文档):不管存好的按下坐标/时间戳算出来是否越过阈值,左键这一刻没
+    /// 有物理按住就绝不确认——顺手把任何残留的 `tree_drag` 自愈清空(正常
+    /// 路径下 `TreeDragRelease` 早该清过一次;还留着只可能是那次收尾因为
+    /// 某种原因没触发,不是一次合法的、仍在进行的拖拽)。
+    pub(crate) fn maybe_confirm_tree_drag(&mut self, left_mouse_down: bool) -> bool {
+        if !left_mouse_down {
+            if let Some(ws) = self.active_workspace_mut() {
+                ws.files.cancel_tree_drag();
+            }
+            return false;
+        }
+        let should_confirm = self.active_workspace().is_some_and(|ws| {
+            ws.files.tree_drag_is_pending()
+                && ws
+                    .files
+                    .tree_drag_press_pos()
+                    .is_some_and(|p| tree_drag_past_threshold(p, self.last_cursor))
+                && ws
+                    .files
+                    .tree_drag_armed_at()
+                    .is_some_and(|t| tree_drag_held_long_enough(t.elapsed()))
+        });
+        if should_confirm && let Some(ws) = self.active_workspace_mut() {
+            ws.files.confirm_tree_drag();
+        }
+        should_confirm
+    }
+
     /// 当前正被拖拽的面板种类(`None` = 未在拖拽)——视图层(`icon_rail`
     /// 源图标变淡 / `rail_drag_ghost` 幽灵图标取图标)据此判断"这是不是
     /// 我"。薄包装 `dragged_panel_kind` 自由函数(同 `rail_drag_move`
@@ -5415,37 +5486,36 @@ impl App {
             Message::Files(files::Message::TextInputMenuOpen(target)) => {
                 self.update(Message::TextInputMenuOpen(target));
             }
-            // 树内行被按下:先武装拖拽(供 main.rs 全局松开左键时收尾)。目录
-            // 顺带立即 `Toggle`(files 域内,展开/折叠与它本身能不能被拖走
-            // 互不冲突,立即执行没有副作用)。文件的"打开预览"**不**在这里
-            // 立即发——预览用的原生 wry webview 恒盖在 GPU 内容最上层(见
-            // `sync_previews` 文档),按下就打开的话,若这一按其实是拖拽的
-            // 起点,新冒出来的 webview 会挡住被拖行/光标的视觉(2026-09 用户
-            // 实测反馈:拖动时文件和鼠标指针都看不到)。改成推迟到松开、且
-            // 确认没有产生合法拖拽目标(真的只是单击)时才发,见下面
-            // `Message::Files(msg)` catch-all 里对 `TreeDragEnd` 的特判。
+            // 树内行被按下:只武装拖拽(供 main.rs 全局松开左键时收尾),
+            // **不**立即执行任何点击语义(既不展开/折叠目录,也不打开文件)。
+            // 两者都推迟到真正松开、且确认这其实只是一次单击(未越过拖拽
+            // 确认阈值)时才在 `TreeDragEnd` 里补做——展开目录会让下方行
+            // 布局位移,若按下就立即展开,静止不动的光标可能被 iced 判定成
+            // 树内行被按下:只武装 `Pending`(见 `TreeDragPhase` 文档)——
+            // `Pending` 期间完全没有任何反应,不挂 `on_move`、不展开目录、
+            // 不打开文件。真正推进到 `Dragging`(越过距离+时长两道阈值)由
+            // `maybe_confirm_tree_drag` 在每次 `CursorMoved` 时判断(main.rs
+            // 调用),不在这里做。
             Message::Files(files::Message::TreeRowPress { path, is_dir }) => {
                 let press_pos = self.last_cursor;
                 if let Some(ws) = self.active_workspace_mut() {
-                    ws.files.arm_tree_drag(path.clone(), is_dir, press_pos);
-                }
-                if is_dir {
-                    self.update(Message::Files(files::Message::Toggle(path)));
+                    ws.files
+                        .arm_tree_drag(path, is_dir, press_pos, std::time::Instant::now());
                 }
             }
-            // 树内拖拽悬停确认门槛:同 `tab_drag_past_threshold` 修的那类
-            // bug(见 `tree_drag_past_threshold` 文档)——`TreeRowPress` 按下
-            // 即武装,若不设阈值,单击时的正常光标抖动会被这条消息当成"拖到
-            // 了旁边那一行",直接判定合法性/高亮/落盘。未越过阈值时整条丢弃
-            // (不转发给下面的 catch-all → `files::update()`),`drag.target`
-            // 保持原值不变,越过阈值后的悬停照常走 catch-all 处理。
-            Message::Files(files::Message::TreeDragOver(_))
-                if !self
+            // 树内拖拽松开左键:main.rs 发这条。`confirmed` 就是"这场拖拽有
+            // 没有走到 `Dragging` 阶段"——由 `maybe_confirm_tree_drag` 在
+            // 越过阈值那一刻就已经推进过一次,这里直接读结果,不重新算
+            // 距离/时长(2026-09 用户实测反馈带诊断日志实锤过纯距离阈值挡
+            // 不住 trackpad 快速点按的真实位移,才改成阈值判断只在
+            // `Pending → Dragging` 转换时做一次、结果落进状态机里的这个
+            // 设计,见 `TreeDragPhase` 文档)。
+            Message::Files(files::Message::TreeDragRelease) => {
+                let confirmed = self
                     .active_workspace()
-                    .and_then(|ws| ws.files.tree_drag_press_pos())
-                    .is_some_and(|press_pos| {
-                        tree_drag_past_threshold(press_pos, self.last_cursor)
-                    }) => {}
+                    .is_some_and(|ws| ws.files.tree_drag_confirmed());
+                self.update(Message::Files(files::Message::TreeDragEnd(confirmed)));
+            }
             Message::Files(msg) => {
                 let Some(project_id) = self.active_project_id else {
                     return;
@@ -5454,9 +5524,10 @@ impl App {
                 // `TreeRowPress` 文档:文件的打开推迟到这里才决定)——必须在
                 // `files::update()` 消费掉 `tree_drag` 之前问,`files::update()`
                 // 自己不认识 `PreviewOpenPath`,这条判断/转发只能留在内核。
-                let pending_open_after_click = if matches!(&msg, files::Message::TreeDragEnd) {
+                let pending_open_after_click = if let files::Message::TreeDragEnd(confirmed) = &msg
+                {
                     self.active_workspace()
-                        .and_then(|ws| ws.files.pending_click_open_file())
+                        .and_then(|ws| ws.files.pending_click_open_file(*confirmed))
                 } else {
                     None
                 };
@@ -8180,6 +8251,11 @@ impl App {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
+        } else if self.tree_drag_confirmed() {
+            stack![with_maximize, files::tree_drag_ghost(self)]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
         } else {
             with_maximize
         }
@@ -9564,6 +9640,33 @@ mod tests {
         assert!(tree_drag_past_threshold(
             (0.0, 0.0),
             (TREE_DRAG_CONFIRM_THRESHOLD_PX + 1.0, 0.0)
+        ));
+    }
+
+    /// 2026-09 用户实测反馈(带日志实锤):快速点两下目录,第二下按下到
+    /// 松开之间光标真的位移了 ~32px(trackpad 一次快速点按/移开的正常
+    /// 抖动量级,超过了 [`TREE_DRAG_CONFIRM_THRESHOLD_PX`]),被判定为一次
+    /// "确认的拖拽"并真的把目录移走了——纯距离阈值挡不住这类快速划动。
+    /// 加一道"按住时长"门槛:`tree_drag_held_long_enough` 要求按下到松开
+    /// 之间至少过了 [`TREE_DRAG_MIN_HOLD_DURATION`],配合距离阈值(两者都要
+    /// 满足)才判定为真实拖拽——真正拖拽文件到目标目录、看着高亮再松手,
+    /// 耗时远比一次快速点按长。
+    #[test]
+    fn tree_drag_held_long_enough_false_for_a_quick_flick() {
+        assert!(!tree_drag_held_long_enough(
+            std::time::Duration::from_millis(30)
+        ));
+    }
+
+    #[test]
+    fn tree_drag_held_long_enough_false_exactly_at_threshold() {
+        assert!(!tree_drag_held_long_enough(TREE_DRAG_MIN_HOLD_DURATION));
+    }
+
+    #[test]
+    fn tree_drag_held_long_enough_true_once_held_past_threshold() {
+        assert!(tree_drag_held_long_enough(
+            TREE_DRAG_MIN_HOLD_DURATION + std::time::Duration::from_millis(1)
         ));
     }
 

@@ -668,6 +668,19 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             /// 期间每个 `CursorMoved` 都会 re-hit-test 文件树并刷新 `FileDragHover`
             /// 高亮;置 false 时收起高亮并把拖入交回终端现状行为。
             files_dragging: bool,
+            /// 左键当前是否物理按住(`MouseInput{Pressed/Released, Left}`
+            /// 各自置 true/false)。树内拖拽的 `Pending → Dragging` 确认
+            /// (`App::maybe_confirm_tree_drag`)额外拿它当硬性前提——纯靠
+            /// 存好的按下坐标/时间戳和当前光标比对,万一那次按下对应的
+            /// `MouseInput::Released` 因为某种原因没能触发树内拖拽的收尾
+            /// (`TreeDragRelease`),`tree_drag` 就会一直卡在 `Pending`,
+            /// 之后任何单纯的鼠标悬停(不按键)只要位移/时长凑够阈值,都会
+            /// 被误判成"确认了一次拖拽"——2026-09 用户实测反馈并截图:点击
+            /// 展开箭头、松开左键后,仅仅轻微移动鼠标(未按住任何键)就冒出
+            /// 了跟随光标的幽灵胶囊,该文件"隔空"就能被挪到任意目录。这个
+            /// 标志位是自愈:没有物理按住左键,`maybe_confirm_tree_drag`
+            /// 直接拒绝确认并顺手清掉任何残留的 `tree_drag`。
+            left_mouse_down: bool,
             /// 待应用的焦点意图(点击/消息设置,sync_previews 之后统一 apply,
             /// 确保新建 webview 已入池)。一次性:apply 完就被 `.take()` 走。
             pending_focus: Option<FocusIntent>,
@@ -927,6 +940,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 clipboard,
                 cursor_phys,
                 files_dragging,
+                left_mouse_down,
                 pending_focus,
                 current_focus,
                 ..
@@ -934,6 +948,18 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             else {
                 return;
             };
+
+            // 左键物理按住状态,独立于下面按具体拖拽类型分派的 match——见
+            // `left_mouse_down` 字段文档:不管后面哪个分支(甚至没有任何
+            // 分支)处理这次事件,这个状态都必须先如实同步。
+            if let WindowEvent::MouseInput {
+                state,
+                button: winit::event::MouseButton::Left,
+                ..
+            } = event
+            {
+                *left_mouse_down = *state == ElementState::Pressed;
+            }
 
             // 光标位置跟踪 + 点击焦点路由（验收反馈 2/失焦回正常态）:
             // 任一左键点击先退出剩余自绘输入编辑态;再按落点决定键盘归谁。
@@ -948,6 +974,18 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         (cursor_phys.x / scale) as f32,
                         (cursor_phys.y / scale) as f32,
                     );
+                    // 树内拖拽 `Pending → Dragging` 确认:每次光标真的移动
+                    // 都判断一次是否已越过距离+时长两道阈值,且左键必须
+                    // 真的物理按住(见 `left_mouse_down`/`App::
+                    // maybe_confirm_tree_drag` 文档——没有这道硬性前提,
+                    // 万一某次按下对应的松开没能触发树内拖拽收尾,残留的
+                    // `Pending` 会被之后任何不按键的悬停误判成"确认拖拽")。
+                    // 转换发生时才重绘——那之后行才会挂 `on_move`/换抓取
+                    // 光标/画幽灵胶囊,不重绘看不出来;多数时候这个调用是
+                    // 纯粹的早退,开销可忽略。
+                    if app.maybe_confirm_tree_drag(*left_mouse_down) {
+                        window.request_redraw();
+                    }
                     // 外部文件拖拽悬停:实时 re-hit-test 文件树目录行,把
                     // 命中结果作为 `FileDragHover` 刷给 `drag_hover`,驱动
                     // 目录行整行金色高亮(用户要求的"拖拽时实时高亮")。命中
@@ -1119,7 +1157,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     button: winit::event::MouseButton::Left,
                     ..
                 } if app.dragging_tree_item() => {
-                    app.update(Message::Files(extensions::files::Message::TreeDragEnd));
+                    app.update(Message::Files(extensions::files::Message::TreeDragRelease));
                     window.request_redraw();
                 }
                 // Todo 面板拖拽排序同理:左键松开即结束并把新顺序写盘(换位
@@ -2294,6 +2332,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     webview_rects: Vec::new(),
                     cursor_phys: winit::dpi::PhysicalPosition::new(0.0, 0.0),
                     files_dragging: false,
+                    left_mouse_down: false,
                     pending_focus: None,
                     // 默认终端拿键盘,跟现状(启动时终端可打字、没有任何
                     // 预览/编辑弹层抢焦点)一致。
