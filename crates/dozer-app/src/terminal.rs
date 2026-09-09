@@ -148,8 +148,12 @@ pub(crate) fn tab_bar<'a>(
     // `None`),下拉列出组内全部 tab,供随时跳转,不只列横向可见的部分。
     let tabs_row = row(items).spacing(4);
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
-    let overflow_button =
-        tab_widget::tab_overflow_button(ws.tabs.len(), Message::TermTabOverflowToggle);
+    let overflow_button = tab_widget::tab_overflow_button(
+        ws.tabs.len(),
+        app.hover_progress(HoverId::TermTabOverflow),
+        Message::TermTabOverflowToggle,
+        move |hovered| Message::Hover(HoverId::TermTabOverflow, hovered),
+    );
 
     let mut tab_row = row![clipped]
         .spacing(4)

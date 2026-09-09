@@ -333,58 +333,43 @@ pub(crate) fn tab_window_reveal(
 /// 溢出下拉入口。V 按钮在 tab 组非空时始终显示(即使当前没有横向溢出,
 /// 下拉也要列出**该组全部 tab**,供随时跳转)。仅当 tab 组为空(编号 0)时
 /// 返回 `None` 让调用方跳过——不走"禁用态灰按钮"(见 spec 语义确认)。
-/// 尺寸/颜色复用 `tab_arrow_button` 同一套 geometry/icon_size 常量,保证视觉一致。
+/// 图标 `SquareChevronDown`,套 `icons::icon_button_entry` 标准图标按钮
+/// (静止 DIM、hover 平滑过渡到 GOLD),与面板内其余图标按钮同一套视觉,
+/// 不再自绘 hover 背景/边框;`hover_t`/`on_hover` 由调用方接自己那组专属
+/// `HoverId`(如 `HoverId::TermTabOverflow`)——固定单按钮,不随 tab
+/// 增减/拖拽换位漂移,不需要 `rekey_hover_range`。命中区尺寸沿用原先的
+/// `tab_arrow_button_size`,保证换皮前后不跳动。
 pub(crate) fn tab_overflow_button<'a, M: Clone + 'a>(
     tab_count: usize,
+    hover_t: f32,
     on_press: M,
+    on_hover: impl Fn(bool) -> M + 'a,
 ) -> Option<Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>> {
     if tab_count == 0 {
         return None;
     }
-    let color = byteui::theme::color::current().tab_active_border;
-    let btn = button(icons::view(
-        icons::IconKind::ChevronDown,
+    Some(icons::icon_button_entry(
+        icons::IconKind::SquareChevronDown,
         byteui::theme::icon_size::chevron(),
-        color,
-    ))
-    .width(Length::Fixed(
+        false,
+        false,
+        hover_t,
+        false,
         byteui::theme::geometry::tab_arrow_button_size(),
+        true,
+        on_press,
+        on_hover,
+        "展开全部标签页",
     ))
-    .height(Length::Fixed(
-        byteui::theme::geometry::tab_arrow_button_size(),
-    ))
-    .padding(0)
-    .on_press(on_press)
-    .style(move |_theme, status| {
-        let base = button::Style {
-            background: None,
-            text_color: color,
-            ..button::Style::default()
-        };
-        match status {
-            button::Status::Hovered | button::Status::Pressed => button::Style {
-                background: Some(byteui::theme::color::current().card.into()),
-                text_color: byteui::theme::color::current().gold,
-                border: Border {
-                    color: Color::TRANSPARENT,
-                    width: 1.0,
-                    radius: 4.0.into(),
-                },
-                ..base
-            },
-            _ => base,
-        }
-    });
-    Some(btn.into())
 }
 
 /// 预览/代码模式切换按钮:只在 `preview::wry_toggle_eligible` 为真的文件
 /// tab 上画(调用方判断,这里只管渲染)。`in_code_mode` 决定图标——预览态
 /// 显示 `FileCode`(点它切到代码),代码态显示 `Eye`(点它切回预览)。hover
-/// 用 iced 内置 `button::Status`,不接入 `HoverId` 动画体系——同 `tab_arrow_button`/
-/// `tab_overflow_button` 的既有做法:这个按钮会随 tab 增减/拖拽换位下标
-/// 漂移,`rekey_hover_range` 目前只接受两个 `HoverId` 构造器(item/close),
-/// 犯不着为它扩展签名。
+/// 用 iced 内置 `button::Status`,不接入 `HoverId` 动画体系:这个按钮会随
+/// tab 增减/拖拽换位下标漂移,`rekey_hover_range` 目前只接受两个 `HoverId`
+/// 构造器(item/close),犯不着为它扩展签名(区别于 `tab_overflow_button`——
+/// 后者是单个固定按钮,不随下标漂移,已改用 `HoverId` 动画体系)。
 pub(crate) fn tab_render_mode_button<'a, M: Clone + 'a>(
     in_code_mode: bool,
     on_press: M,

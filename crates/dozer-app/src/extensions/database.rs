@@ -2188,8 +2188,12 @@ pub fn content_pane<'a>(
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
     // V 一直可见：只要 tab 组非空就显示,下拉列出组内全部(空白占位 + 真实 tab)。
     let db_tab_total = 1 + content.tabs().len();
-    let overflow_button =
-        crate::tab_widget::tab_overflow_button(db_tab_total, Message::TabOverflowToggle);
+    let overflow_button = crate::tab_widget::tab_overflow_button(
+        db_tab_total,
+        app.hover_progress(crate::app::HoverId::DatabaseTabOverflow),
+        Message::TabOverflowToggle,
+        move |hovered| Message::Hover(crate::app::HoverId::DatabaseTabOverflow, hovered),
+    );
     // 内容侧"收起/展开列表列"按钮(收起左列 schema 树后仍在此可见以便恢复)。
     // 消息为本地 `Message::ToggleListCollapse`,由内核 `App::update` 拦截。
     let collapse = app.list_collapse_button(

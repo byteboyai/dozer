@@ -3513,6 +3513,10 @@ fn preview_pane_for<'a>(
         PreviewPaneKind::Files => Message::PreviewTabOverflowDismiss,
         PreviewPaneKind::Project => Message::ProjectPreviewTabOverflowDismiss,
     };
+    let overflow_hover = move || match kind {
+        PreviewPaneKind::Files => HoverId::PreviewTabOverflow,
+        PreviewPaneKind::Project => HoverId::ProjectPreviewTabOverflow,
+    };
     let editor_msg = move |tab_id, ev| match kind {
         PreviewPaneKind::Files => Message::PreviewEditorEvent(tab_id, ev),
         PreviewPaneKind::Project => Message::ProjectPreviewEditorEvent(tab_id, ev),
@@ -3597,7 +3601,12 @@ fn preview_pane_for<'a>(
     // 组非空即显示,见 `tab_overflow_button`——无溢出也列出全部 tab 供跳转)。
     let tabs_row = row(items).spacing(4);
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
-    let overflow_button = tab_overflow_button(preview.tabs().len(), overflow_toggle_msg());
+    let overflow_button = tab_overflow_button(
+        preview.tabs().len(),
+        app.hover_progress(overflow_hover()),
+        overflow_toggle_msg(),
+        move |hovered| Message::Hover(overflow_hover(), hovered),
+    );
     // 预览右上角"收起/展开列表列"按钮:Files 预览收起文件树,Project 预览
     // 收起 info 列。按钮始终在此(内容侧),收起后仍可见以便恢复。图标按该
     // 面板当前所在栏(左/右)与收起态四选一,见 `IconKind::PanelLeftClose`

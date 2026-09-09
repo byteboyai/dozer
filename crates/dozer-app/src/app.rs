@@ -263,6 +263,21 @@ pub enum HoverId {
     DatabaseTabItem(usize),
     /// 数据库内容窗格 tab 栏:某个 tab 关闭按钮 `×` 的悬停。
     DatabaseTabClose(usize),
+    /// 终端面板 tab 栏"溢出下拉"入口(`SquareChevronDown`):静止 DIM,hover
+    /// 平滑过渡到 GOLD,处理方式同 `FileTreeCollapse`(见 `terminal::tab_bar`)。
+    TermTabOverflow,
+    /// 文件预览面板 tab 栏"溢出下拉"入口,处理方式同 `TermTabOverflow`
+    /// (见 `workspace::preview_pane_for`)。
+    PreviewTabOverflow,
+    /// Project 面板配对预览 tab 栏"溢出下拉"入口,处理方式同 `TermTabOverflow`
+    /// (同一份 `preview_pane_for` 渲染,按 `PreviewPaneKind` 区分)。
+    ProjectPreviewTabOverflow,
+    /// SSH 面板自己 tab 条"溢出下拉"入口,处理方式同 `TermTabOverflow`
+    /// (见 `ssh_tab_bar`)。
+    SshTabOverflow,
+    /// Database 面板内容窗格 tab 栏"溢出下拉"入口,处理方式同 `TermTabOverflow`
+    /// (见 `extensions::database::content_pane`)。
+    DatabaseTabOverflow,
     /// Todo 面板单个任务卡(按下标区分):hover 时填充 `CARD` 背景 + 金色描边
     /// (见 `extensions::todo::todo_card`,统一卡片样式)。
     TodoCard(usize),
@@ -9414,7 +9429,9 @@ fn ssh_tab_bar<'a>(
     let ssh_tab_total = 1 + ws.ssh_tabs.len() + ws.sftp_tabs.len();
     let overflow_button = tab_widget::tab_overflow_button(
         ssh_tab_total,
+        app.hover_progress(HoverId::SshTabOverflow),
         Message::Ssh(ssh::Message::TabOverflowToggle),
+        move |hovered| Message::Hover(HoverId::SshTabOverflow, hovered),
     );
     // 内容侧"收起/展开列表列"按钮(收起左列主机列表后仍在此可见以便恢复)。
     let collapse = app.list_collapse_button(
