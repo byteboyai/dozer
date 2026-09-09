@@ -20,6 +20,24 @@
 
 ---
 
+## 可行性修订号(2026-09 复核后补充,按当前 main 代码核实)
+
+> 下面各 Task 原本引用的行号经实际复核基本准确(偏差 ≤ 1-2 行),可照删;但**原计划漏列了四处必须一并处理的清理点**——它们读/引用的是本计划要删的字段与函数,若照原 Task 单步删会先一步触发编译错。执行时请把它们并入对应 Task:
+
+1. **`App::context_menu_open()`(app.rs:4144-4151)读被删字段。** 其返回布尔里含 `self.preview_tab_menu.is_some() || self.project_preview_tab_menu.is_some()`(4146-4147 行)。删字段后这两行 OR 项要移除,函数只保留 `files`/`project_link`/`text_input`/`database_source` 等其余判断。
+
+2. **两个菜单 getter 及其 main.rs Esc 消费分支(App::preview_tab_context_menu_open/app/project_preview_tab_context_menu_open,app.rs:4172-4180)。** 它们 `pub fn` 只被 `main.rs:1333-1336` 的 Esc 路由读取(Esc 关右键菜单那段把这两个分支排在 `project_link_context_menu_open` 之前)。删掉这两个 getter 后,main.rs 那段 1333-1336 的两个 `else if` 也要删。
+
+3. **`Message::TextInputMenuOpen` 分支的两行菜单互斥重置(app.rs:4984-4985)。** 该分支开头"与其它右键菜单互斥"的清理里含 `self.preview_tab_menu = None;`/`self.project_preview_tab_menu = None;`,删字段时这两行顺带删。
+
+4. **Task 2 追加:app.rs:42 的 `use workspace::{...}` 里 imported `edit_modal, edit_discard_confirm_popup`。** 删这两个 free fn(见 Task 2 Step 3)时要从这行 import 里一并去掉(现状:app.rs:42)。
+
+5. **Task 2 追加:edit_session 相关单测不止计划列出的 4 个,实际是 8 个**(workspace.rs 5767-5937):另含 `preview_edit_action_marks_dirty_only_on_edit_actions`(5805)、`preview_edit_undo_then_redo_restores_roundtrips_dirty`(5826)、`preview_edit_close_request_without_dirty_closes_immediately`(5900)、`preview_edit_close_request_with_dirty_asks_confirm_then_discard_or_cancel`(5910)。全部一并删;紧跟着的 `blur_preview_editors_*`(5939 起)是测原生 tab 就地编辑(unfocus 标记),**不删**。
+
+6. **纯文档提醒:不在本轮改动范围**:`tab_widget.rs` 里已没有 `tab_arrow_button`(早前迁到 `terminal.rs`),仅剩注释引用;Task 3 新增切换按钮照 `tab_overflow_button`/byteui geometry 常量建模即可,与计划所列 icons(`IconKind::Eye`/`FileCode`)均在位。
+
+---
+
 ### Task 1: 移除预览 tab 右键菜单(含"刷新")
 
 **Files:**
