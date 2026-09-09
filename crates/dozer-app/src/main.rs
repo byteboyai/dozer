@@ -1511,7 +1511,16 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 };
                 // 命中一个当前动作;无 Find 会话时 Esc/⌘G/⌘↑ 不抢(没条就别误会要开)。
                 let bar_open = app.preview_find_bar_open(kind_root);
-                let action: Option<Message> = if modifiers.super_key() {
+                let action: Option<Message> = if !modifiers.super_key()
+                    && !modifiers.control_key()
+                    && !bar_open
+                    && named(winit::keyboard::NamedKey::Tab)
+                {
+                    // 裸 Tab(非 ⌘/⌃ 组合,Find 条关着):iced 官方 text_editor
+                    // 默认 Binding 不把 Tab 落成任何动作,这里让它变成"向前聚焦
+                    // 编辑器插一个制表符"的编辑动作(见 `PreviewTabInsertTab`)。
+                    Some(Message::PreviewTabInsertTab(kind_root))
+                } else if modifiers.super_key() {
                     if normal_char("s") {
                         Some(Message::PreviewSaveActive(kind_root))
                     } else if normal_char("f") {

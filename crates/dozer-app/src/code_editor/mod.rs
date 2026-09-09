@@ -662,6 +662,26 @@ mod tests {
     }
 
     #[test]
+    fn tab_inserts_a_tab_at_cursor_through_edit_action() {
+        // main.rs 原生预览闸门把裸 Tab 转化成 `Edit::Insert('\t')` 走这条路插:
+        // 与普通打字同一 perform 管线,光标处落制表符、选区被替换、可撤销。
+        let mut view = CodeView::new("let x = 1;", "rust", false);
+        view.perform(Action::Move(text_editor::Motion::Home));
+        view.perform(Action::Edit(text_editor::Edit::Insert('\t')));
+        assert_eq!(view.text(), "\tlet x = 1;", "首页插入制表符");
+
+        // 逐字内容里带出真正 `\t`,不是 4 空格拼凑。
+        assert!(view.text().starts_with('\t'));
+
+        // 选中一段时 Insert 应替换选区(锚点语义交给 iced Content 自己处理):
+        // 从行尾拖回行首 = 全选,再插一个 tab 应整行被替换成 tab。
+        view.perform(Action::Move(text_editor::Motion::DocumentEnd));
+        view.perform(Action::Select(text_editor::Motion::DocumentStart));
+        view.perform(Action::Edit(text_editor::Edit::Insert('\t')));
+        assert_eq!(view.text(), "\t");
+    }
+
+    #[test]
     fn undo_restores_and_redo_reapplies_single_commit() {
         let mut view = CodeView::new("ab", "rust", false);
         view.perform(Action::Move(text_editor::Motion::DocumentEnd));

@@ -2011,6 +2011,27 @@ impl Workspace {
             .is_some_and(|t| t.editor.is_some())
     }
 
+    /// 把 `kind` 面板**当前激活原生 tab** 的 CodeView `perform` 一条应用层
+    /// 编辑 `Action`。这是 main.rs 键盘路由在原生预览闸门里手工补 `Tab`
+    /// 的落点:`Active` 的编辑器 Content 光标在 CodeView 内部,直接
+    /// `Action::Edit(Edit::Insert('\t'))`(非只读、非 webview/Blank)就插在
+    /// 用户当前光标、替换现选区,撤销/脏标记照常,与 widget 自发 Action 走
+    /// 同一条 perform 管线(见 code_editor 模块)。目标 tab 非原生/无编辑器
+    /// 一律 no-op。
+    pub fn preview_pane_active_editor_event(&mut self, kind: PanelKind, action: EditorAction) {
+        let pane = match kind {
+            PanelKind::Project => &mut self.project_preview,
+            _ => &mut self.preview,
+        };
+        let tab_id = match pane.tabs().get(pane.active_idx()) {
+            Some(t) if t.editor.is_some() => t.id,
+            _ => return,
+        };
+        if let Some(editor) = pane.editor_mut(tab_id) {
+            editor.perform(action);
+        }
+    }
+
     /// 把 `kind` 面板**当前激活原生 tab** 的就地改动保存到磁盘。仅当该 tab 是
     /// 原生可编辑且脏 时动作(不脏不动磁盘,免得无谓改 mtime 引爆外部监听);
     /// 无脏 / 激活的是 webview · Blank tab 一律 no-op。成功清该 tab 脏;失败把

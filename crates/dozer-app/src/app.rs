@@ -1866,6 +1866,13 @@ pub enum Message {
     /// 是不同路径。携带 `PanelKind`(可由 main.rs `FocusIntent::Preview` 直接
     /// 转发,不必频繁 preview↔panel 双枚举映射)。
     PreviewSaveActive(PanelKind),
+    /// 原生预览 tab 就地敲 Tab(裸 Tab、非 ⌘/⌃/⌥ 组合):iced 官方
+    /// `text_editor` 默认 Binding 对 Tab 完全不产生动作,必须在这里作为一条
+    /// 编辑动作手工插 `\t`(走 `CodeView::perform` 的原生 Content 光标,选区
+    /// 替换/撤销都能对)。`kind` 指向当前真正聚焦的原生编辑器所在面板,同
+    /// `PreviewSaveActive` 一跳区分、不做 preview↔panel 双枚举映射。构造/调用
+    /// 处是 main.rs 原生预览闸门;先拦下,没命中的键才放行给 iced。
+    PreviewTabInsertTab(PanelKind),
     /// 原生预览打开 File-Find(⌘F)。`kind` 指向 `Files` 或 `Project` 面板——
     /// File-Find 对两个面板的原生编辑 tab 语义相同(见
     /// `Workspace::preview_find_open`,⌘F 已开时是重聚焦的 no-op)。跟
@@ -5199,6 +5206,16 @@ impl App {
             }
             Message::PreviewSaveActive(kind) => {
                 self.with_focused_project(move |ws, _io| ws.preview_pane_save_active(kind));
+            }
+            Message::PreviewTabInsertTab(kind) => {
+                self.with_focused_project(move |ws, _io| {
+                    ws.preview_pane_active_editor_event(
+                        kind,
+                        iced_widget::text_editor::Action::Edit(
+                            iced_widget::text_editor::Edit::Insert('\t'),
+                        ),
+                    );
+                });
             }
             Message::PreviewFindOpen(kind) => {
                 self.with_focused_project(move |ws, _io| ws.preview_find_open(kind));
