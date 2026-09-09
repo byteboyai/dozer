@@ -120,6 +120,10 @@ pub enum IconKind {
     /// 文件树"显示/隐藏以 . 开头的文件/目录"按钮图标(Lucide eye-off:
     /// 眼睛被打上斜杠,表示点文件当前不可见)。
     EyeOff,
+    /// 预览/代码切换按钮在**代码态**下的图标(Lucide file-play:文件 + 播放
+    /// 三角,表示"渲染/播放这个文件"),点它切回预览(见
+    /// `tab_widget::tab_render_mode_button`)。
+    FilePlay,
     /// 终端/Shell(纯 Shell 启动项),Lucide。
     Terminal,
     /// SSH 主机面板 rail 图标(Lucide server)。
@@ -146,9 +150,6 @@ pub enum IconKind {
     /// 顶栏/footbar 品牌前置图标(Lucide square-terminal:方角框 + 终端提示符),
     /// 用于 footbar 右侧 "Dozer AI Coder" 名称前作品牌标记。
     SquareTerminal,
-    /// 面板 tab 栏"溢出下拉"入口图标(Lucide square-chevron-down:圆角方框 +
-    /// 内嵌向下箭头),见 `tab_widget::tab_overflow_button`。
-    SquareChevronDown,
     /// git-log 面板 rail 图标(Lucide git-graph:节点 + 连线的图形化历史)。
     GitGraph,
     /// Git Log 面板 commit 列表"合并提交"图标(Lucide git-merge)。
@@ -248,6 +249,7 @@ impl IconKind {
             IconKind::Table => include_bytes!("../../assets/icons/table.svg"),
             IconKind::Eye => include_bytes!("../../assets/icons/eye.svg"),
             IconKind::EyeOff => include_bytes!("../../assets/icons/eye-off.svg"),
+            IconKind::FilePlay => include_bytes!("../../assets/icons/file-play.svg"),
             IconKind::Terminal => include_bytes!("../../assets/icons/terminal.svg"),
             IconKind::Server => include_bytes!("../../assets/icons/server.svg"),
             IconKind::LayoutList => include_bytes!("../../assets/icons/layout-list.svg"),
@@ -259,9 +261,6 @@ impl IconKind {
             IconKind::SquareActivity => include_bytes!("../../assets/icons/square-activity.svg"),
             IconKind::SquareRadical => include_bytes!("../../assets/icons/square-radical.svg"),
             IconKind::SquareTerminal => include_bytes!("../../assets/icons/square-terminal.svg"),
-            IconKind::SquareChevronDown => {
-                include_bytes!("../../assets/icons/square-chevron-down.svg")
-            }
             IconKind::GitGraph => include_bytes!("../../assets/icons/git-graph.svg"),
             IconKind::GitMerge => include_bytes!("../../assets/icons/git-merge.svg"),
             IconKind::FolderSearch => include_bytes!("../../assets/icons/folder-search.svg"),
@@ -409,7 +408,13 @@ pub fn icon_button_entry<'a, M: Clone + 'a>(
         .on_enter(on_hover(true))
         .on_exit(on_hover(false))
         .into();
-    with_tooltip(content, tooltip)
+    // `tooltip` 空串表示"这个按钮不需要提示"——不包 `Tooltip`,而不是包一个
+    // 空气泡(悬停时会显出一个没有文字的圆角框,比没有提示更糟)。
+    if tooltip.is_empty() {
+        content
+    } else {
+        with_tooltip(content, tooltip)
+    }
 }
 
 /// 提示气泡的容器样式:背景 `CARD` 实底 + `BORDER` 1px 描边圆角 6。`with_tooltip`

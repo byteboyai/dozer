@@ -37,12 +37,13 @@ use crate::topbar;
 use crate::transcript::ReviewEntry;
 use crate::webview_geometry;
 use crate::workspace::{
-    CONVERSATION_DETAIL_PAGE_SIZE, PickerLaunch, RestorePayload, ReviewSource, ReviewView, ShellIo,
-    SshOut, TabBackend, Workspace, agent_list_pane, agent_picker_popup, conversation_list_pane,
-    dot_color, exited_marker, fetch_project_restore, no_project_placeholder, preview_pane,
-    preview_tab_display_width, project_preview_pane, relative_time_text, review_content_pane,
-    review_should_refresh_on_turn, spawn_disk_usage_refresh, spawn_project_git_refresh,
-    split_portions, tab_display_width, tab_title,
+    CONVERSATION_DETAIL_PAGE_SIZE, PickerLaunch, PreviewPaneKind, RestorePayload, ReviewSource,
+    ReviewView, ShellIo, SshOut, TabBackend, Workspace, agent_list_pane, agent_picker_popup,
+    conversation_list_pane, dot_color, exited_marker, fetch_project_restore,
+    no_project_placeholder, preview_pane, preview_tab_display_width, preview_tab_overflow_popup,
+    project_preview_pane, relative_time_text, review_content_pane, review_should_refresh_on_turn,
+    spawn_disk_usage_refresh, spawn_project_git_refresh, split_portions, tab_display_width,
+    tab_title,
 };
 use byteui::interaction::icons;
 use dozer_client::Client;
@@ -263,7 +264,7 @@ pub enum HoverId {
     DatabaseTabItem(usize),
     /// 数据库内容窗格 tab 栏:某个 tab 关闭按钮 `×` 的悬停。
     DatabaseTabClose(usize),
-    /// 终端面板 tab 栏"溢出下拉"入口(`SquareChevronDown`):静止 DIM,hover
+    /// 终端面板 tab 栏"溢出下拉"入口(`ChevronDown`):静止 DIM,hover
     /// 平滑过渡到 GOLD,处理方式同 `FileTreeCollapse`(见 `terminal::tab_bar`)。
     TermTabOverflow,
     /// 文件预览面板 tab 栏"溢出下拉"入口,处理方式同 `TermTabOverflow`
@@ -278,6 +279,13 @@ pub enum HoverId {
     /// Database 面板内容窗格 tab 栏"溢出下拉"入口,处理方式同 `TermTabOverflow`
     /// (见 `extensions::database::content_pane`)。
     DatabaseTabOverflow,
+    /// 文件预览 tab 组最右侧"预览/代码切换"按钮(`FilePlay`/`FileCode`):
+    /// 处理方式同 `FileTreeCollapse`(见 `tab_widget::tab_render_mode_button`,
+    /// 调用点 `workspace::preview_pane_for`)。
+    PreviewRenderMode,
+    /// Project 面板配对预览"预览/代码切换"按钮,处理方式同 `PreviewRenderMode`
+    /// (同一份 `preview_pane_for` 渲染,按 `PreviewPaneKind` 区分)。
+    ProjectPreviewRenderMode,
     /// Todo 面板单个任务卡(按下标区分):hover 时填充 `CARD` 背景 + 金色描边
     /// (见 `extensions::todo::todo_card`,统一卡片样式)。
     TodoCard(usize),
@@ -4416,6 +4424,15 @@ impl App {
                 ),
                 _ => continue,
             };
+            // tab 栏"溢出下拉"(V 按钮)向下弹,原生浮层会被本侧 webview
+            // 盖住(webview 恒在 iced 内容之上)——按该侧对应的
+            // `*_tab_overflow_anchor` 是否展开,同 `app_modal_open` 一并
+            // 强制隐藏(见 `tab_widget::tab_overflow_menu` 文档)。
+            let tab_overflow_open = match kind {
+                PanelKind::Files => ws.preview_tab_overflow_anchor.is_some(),
+                PanelKind::Project => ws.project_preview_tab_overflow_anchor.is_some(),
+                _ => false,
+            };
             let bounds = webview_geometry::preview_content_bounds_for(
                 side,
                 window_width,
@@ -4424,10 +4441,10 @@ impl App {
             );
             out.extend(specs.into_iter().map(|mut s| {
                 s.id += id_offset;
-                // 搜索弹窗开着时,应用级模态盖住了预览区,原生
+                // 搜索弹窗/tab 溢出下拉开着时,原生浮层盖住了预览区,原生
                 // wry 子视图不听 iced 绘制顺序摆布,必须显式 visible=false
                 // 才能真正藏起来。
-                if app_modal_open {
+                if app_modal_open || tab_overflow_open {
                     s.visible = false;
                 }
                 (s, bounds)
@@ -8176,6 +8193,100 @@ impl App {
                     .height(Length::Fill)
                     .into(),
             }
+        } else if ws.term_tab_overflow_anchor.is_some() {
+            // 终端 tab 栏"溢出下拉"(V 按钮):窗口级 overlay,理由见
+            // `terminal::term_tab_overflow_popup` 文档——必须在这里(顶层)
+            // 拼,`anchor`/`window_size` 才与全窗口坐标系一致,否则位置算错
+            // (验收反馈"菜单错位了")。
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::TermTabOverflowDismiss);
+            match terminal::term_tab_overflow_popup(self, ws) {
+                Some(popup) => stack![base, dismiss, popup]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+                None => stack![base, dismiss]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+            }
+        } else if ws.preview_tab_overflow_anchor.is_some() {
+            // 文件预览 tab 栏"溢出下拉",处理方式同上。
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::PreviewTabOverflowDismiss);
+            match preview_tab_overflow_popup(self, ws, PreviewPaneKind::Files) {
+                Some(popup) => stack![base, dismiss, popup]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+                None => stack![base, dismiss]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+            }
+        } else if ws.project_preview_tab_overflow_anchor.is_some() {
+            // Project 面板配对预览 tab 栏"溢出下拉",处理方式同上。
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::ProjectPreviewTabOverflowDismiss);
+            match preview_tab_overflow_popup(self, ws, PreviewPaneKind::Project) {
+                Some(popup) => stack![base, dismiss, popup]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+                None => stack![base, dismiss]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+            }
+        } else if ws.ssh_tab_overflow_anchor.is_some() {
+            // SSH 面板自己 tab 条"溢出下拉",处理方式同上。
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::Ssh(ssh::Message::TabOverflowDismiss));
+            match ssh_tab_overflow_popup(self, ws) {
+                Some(popup) => stack![base, dismiss, popup]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+                None => stack![base, dismiss]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+            }
+        } else if ws.database.content().tab_overflow_anchor().is_some() {
+            // Database 面板内容窗格 tab 栏"溢出下拉",处理方式同上;弹层本身
+            // 用的是 database 扩展自己的 `Message`,`.map` 回顶层。
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::Database(database::Message::TabOverflowDismiss));
+            match database::tab_overflow_popup(self, &ws.database) {
+                Some(popup) => stack![base, dismiss, popup.map(Message::Database)]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+                None => stack![base, dismiss]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+            }
         } else {
             // 始终用 `Stack` 作根,与上面两个分支(删确认弹窗 / 右键菜单)保持一致:
             // 右键菜单开关会把根 widget 类型在 `Column`(`base.into()`)与 `Stack`
@@ -9424,9 +9535,10 @@ fn ssh_tab_bar<'a>(
     let clipped = container(row(items).spacing(4))
         .width(Length::Fill)
         .clip(true);
-    // V 一直可见：只要 tab 组非空(空白占位 + 终端 + SFTP)就渲染,下拉随即列出
-    // 组内全部 tab,供随时跳转。
-    let ssh_tab_total = 1 + ws.ssh_tabs.len() + ws.sftp_tabs.len();
+    // V 只数**真实** tab(终端 + SFTP),不算"空白"占位——下拉本就不列空白
+    // (点开也没什么可跳的,见 `ssh_tab_overflow_popup`),只剩空白页时 V
+    // 本身也不该显示(验收反馈)。
+    let ssh_tab_total = ws.ssh_tabs.len() + ws.sftp_tabs.len();
     let overflow_button = tab_widget::tab_overflow_button(
         ssh_tab_total,
         app.hover_progress(HoverId::SshTabOverflow),
@@ -9443,82 +9555,88 @@ fn ssh_tab_bar<'a>(
         Message::TogglePanelListCollapse(PanelKind::Ssh),
         move |hovered| Message::Hover(HoverId::SshListCollapse, hovered),
     );
-    let mut tab_bar_row = row![clipped]
+    let mut tab_bar_row = row![]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
     if let Some(btn) = overflow_button {
         tab_bar_row = tab_bar_row.push(btn);
     }
-    let tab_bar = tab_bar_row.push(collapse);
+    let tab_bar = tab_bar_row.push(clipped).push(collapse);
 
     let base: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = tab_bar.into();
-    if let Some(anchor) = ws.ssh_tab_overflow_anchor {
-        // 下拉列出该 SSH 面板内**全部** tab(空白占位 + 终端 + SFTP),即
-        // horizontal tab 条之上的完整视图——点 V 不是为了翻越隐藏项,而是
-        // 一览/跳到任意 tab。
-        let mut entries: Vec<tab_widget::TabOverflowEntry<'_, Message>> = Vec::new();
+    base
+}
+
+/// SSH 面板 tab 栏"溢出下拉"浮层。**必须**在 `App::view` 顶层
+/// `stack![base, ...]` 里拼(同 `terminal::term_tab_overflow_popup` 文档
+/// 解释的理由——`anchor`/`window_size` 是全窗口坐标系,嵌在 `ssh_tab_bar`
+/// 自己的局部布局里换算位置会跟真实点击位置对不上)。
+fn ssh_tab_overflow_popup<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
+) -> Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> {
+    let anchor = ws.ssh_tab_overflow_anchor?;
+    // 下拉列出该 SSH 面板内**真实** tab(终端 + SFTP),即 horizontal tab
+    // 条之上的完整视图——点 V 不是为了翻越隐藏项,而是一览/跳到任意 tab。
+    // "空白"占位不进列表(点开也没什么可跳的);下标沿用
+    // `ssh_tab_overflow_select_message`/`_close_message` 既有的 1 起步方案
+    // (0 留给空白,虽然它现在不会出现在列表里,翻译函数不用跟着改)。
+    let mut entries: Vec<tab_widget::TabOverflowEntry<'_, Message>> = Vec::new();
+    for (i, tab) in ws.ssh_tabs.iter().enumerate() {
+        let idx = i + 1;
+        let host_id = tab
+            .info
+            .id
+            .strip_prefix("ssh:")
+            .unwrap_or(&tab.info.id)
+            .to_string();
         entries.push(tab_widget::TabOverflowEntry {
-            index: 0,
-            prefix: None,
-            title: "空白".to_string(),
-            active: ws.ssh_active.is_none(),
-            closable: false,
+            index: idx,
+            prefix: Some(icons::view(
+                icons::IconKind::Terminal,
+                byteui::theme::icon_size::row(),
+                byteui::theme::color::current().dim,
+            )),
+            title: tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
+            active: ws
+                .ssh_active
+                .as_ref()
+                .is_some_and(|(h, k)| h == &host_id && *k == ssh::SshTabKind::Terminal),
+            closable: true,
         });
-        for (i, tab) in ws.ssh_tabs.iter().enumerate() {
-            let idx = i + 1;
-            let host_id = tab
-                .info
-                .id
-                .strip_prefix("ssh:")
-                .unwrap_or(&tab.info.id)
-                .to_string();
-            entries.push(tab_widget::TabOverflowEntry {
-                index: idx,
-                prefix: Some(icons::view(
-                    icons::IconKind::Terminal,
-                    byteui::theme::icon_size::row(),
-                    byteui::theme::color::current().dim,
-                )),
-                title: tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
-                active: ws
-                    .ssh_active
-                    .as_ref()
-                    .is_some_and(|(h, k)| h == &host_id && *k == ssh::SshTabKind::Terminal),
-                closable: true,
-            });
-        }
-        for (i, (host_id, _)) in ws.sftp_tabs.iter().enumerate() {
-            let idx = i + 1 + ws.ssh_tabs.len();
-            let label = ws
-                .ssh
-                .hosts()
-                .iter()
-                .find(|h| &h.id == host_id)
-                .map(|h| h.name.clone())
-                .unwrap_or_else(|| host_id.clone());
-            entries.push(tab_widget::TabOverflowEntry {
-                index: idx,
-                prefix: Some(icons::view(
-                    icons::IconKind::FolderSync,
-                    byteui::theme::icon_size::row(),
-                    byteui::theme::color::current().dim,
-                )),
-                title: label,
-                active: ws.ssh_active.as_ref() == Some(&(host_id.clone(), ssh::SshTabKind::Sftp)),
-                closable: true,
-            });
-        }
-        let menu = tab_widget::tab_overflow_menu(tab_widget::TabOverflowMenuArgs {
+    }
+    for (i, (host_id, _)) in ws.sftp_tabs.iter().enumerate() {
+        let idx = i + 1 + ws.ssh_tabs.len();
+        let label = ws
+            .ssh
+            .hosts()
+            .iter()
+            .find(|h| &h.id == host_id)
+            .map(|h| h.name.clone())
+            .unwrap_or_else(|| host_id.clone());
+        entries.push(tab_widget::TabOverflowEntry {
+            index: idx,
+            prefix: Some(icons::view(
+                icons::IconKind::FolderSync,
+                byteui::theme::icon_size::row(),
+                byteui::theme::color::current().dim,
+            )),
+            title: label,
+            active: ws.ssh_active.as_ref() == Some(&(host_id.clone(), ssh::SshTabKind::Sftp)),
+            closable: true,
+        });
+    }
+    Some(tab_widget::tab_overflow_menu(
+        tab_widget::TabOverflowMenuArgs {
             entries,
             anchor,
             window_size: app.window_size,
             on_select: |idx| ssh_tab_overflow_select_message(ws, idx),
             on_close: |idx| ssh_tab_overflow_close_message(ws, idx),
             on_dismiss: Message::Ssh(ssh::Message::TabOverflowDismiss),
-        });
-        return iced_widget::stack![base, menu].into();
-    }
-    base
+            no_op: Message::Noop,
+        },
+    ))
 }
 
 /// 把溢出下拉的扁平下标翻回 SSH 的 `(host_id, kind)`：下标 0 = 空白占位

@@ -15,7 +15,7 @@ use crate::app::{controlled_tooltip, top_bar_font};
 use byteui::interaction::{icons, tabs};
 use iced_widget::core::{Border, Color, Element, Length, Padding};
 use iced_widget::tooltip::Position;
-use iced_widget::{MouseArea, button, column, container, row, scrollable, stack, text};
+use iced_widget::{MouseArea, column, container, row, scrollable, stack, text};
 
 /// 面板 tab 内边距:横向留白给 hover 胶囊,纵向收紧以缩小高度。左侧单独
 /// 放大(原先与右侧同为 4,标题贴左缘太紧),右侧维持贴近关闭按钮的窄距。
@@ -333,12 +333,13 @@ pub(crate) fn tab_window_reveal(
 /// 溢出下拉入口。V 按钮在 tab 组非空时始终显示(即使当前没有横向溢出,
 /// 下拉也要列出**该组全部 tab**,供随时跳转)。仅当 tab 组为空(编号 0)时
 /// 返回 `None` 让调用方跳过——不走"禁用态灰按钮"(见 spec 语义确认)。
-/// 图标 `SquareChevronDown`,套 `icons::icon_button_entry` 标准图标按钮
-/// (静止 DIM、hover 平滑过渡到 GOLD),与面板内其余图标按钮同一套视觉,
-/// 不再自绘 hover 背景/边框;`hover_t`/`on_hover` 由调用方接自己那组专属
-/// `HoverId`(如 `HoverId::TermTabOverflow`)——固定单按钮,不随 tab
-/// 增减/拖拽换位漂移,不需要 `rekey_hover_range`。命中区尺寸沿用原先的
-/// `tab_arrow_button_size`,保证换皮前后不跳动。
+/// 图标 `ChevronDown`(Lucide chevron-down,纯箭头,不带方框),套
+/// `icons::icon_button_entry` 标准图标按钮(静止 DIM、hover 平滑过渡到
+/// GOLD),与面板内其余图标按钮同一套视觉,不再自绘 hover 背景/边框;
+/// `hover_t`/`on_hover` 由调用方接自己那组专属 `HoverId`(如
+/// `HoverId::TermTabOverflow`)——固定单按钮,不随 tab 增减/拖拽换位漂移,
+/// 不需要 `rekey_hover_range`。命中区尺寸沿用原先的 `tab_arrow_button_size`,
+/// 保证换皮前后不跳动。
 pub(crate) fn tab_overflow_button<'a, M: Clone + 'a>(
     tab_count: usize,
     hover_t: f32,
@@ -349,7 +350,7 @@ pub(crate) fn tab_overflow_button<'a, M: Clone + 'a>(
         return None;
     }
     Some(icons::icon_button_entry(
-        icons::IconKind::SquareChevronDown,
+        icons::IconKind::ChevronDown,
         byteui::theme::icon_size::chevron(),
         false,
         false,
@@ -359,47 +360,47 @@ pub(crate) fn tab_overflow_button<'a, M: Clone + 'a>(
         true,
         on_press,
         on_hover,
-        "展开全部标签页",
+        // 空串:不带提示气泡(验收反馈去掉)——`icon_button_entry` 把空串
+        // 当作"这个按钮不需要提示"的约定。
+        "",
     ))
 }
 
-/// 预览/代码模式切换按钮:只在 `preview::wry_toggle_eligible` 为真的文件
-/// tab 上画(调用方判断,这里只管渲染)。`in_code_mode` 决定图标——预览态
-/// 显示 `FileCode`(点它切到代码),代码态显示 `Eye`(点它切回预览)。hover
-/// 用 iced 内置 `button::Status`,不接入 `HoverId` 动画体系:这个按钮会随
-/// tab 增减/拖拽换位下标漂移,`rekey_hover_range` 目前只接受两个 `HoverId`
-/// 构造器(item/close),犯不着为它扩展签名(区别于 `tab_overflow_button`——
-/// 后者是单个固定按钮,不随下标漂移,已改用 `HoverId` 动画体系)。
+/// 预览/代码模式切换按钮:tab 组非空且当前选中 tab 满足
+/// `preview::wry_toggle_eligible` 时才画一个(调用方判断,这里只管渲染,见
+/// `workspace::preview_pane_for`)。`in_code_mode` 决定图标——预览态显示
+/// `FileCode`(点它切到代码),代码态显示 `FilePlay`(点它切回预览)。套
+/// `icons::icon_button_entry` 标准图标按钮,尺寸(图标 `icon_size::row()`、
+/// 命中区 `icon_size::row() + 6.0`)特意与相邻的"收起文件树"
+/// (`App::list_collapse_button`)对齐,不用自己的 `tab_button_size`
+/// (验收反馈:两个按钮挤在一起,尺寸得一致)。`hover_t`/`on_hover` 由调用方
+/// 接自己那组专属 `HoverId`(如 `HoverId::PreviewRenderMode`)——这个按钮
+/// 现在挂在 tab 组本身(只对当前选中 tab 出一个),不再是随每个 tab 渲染、
+/// 随下标漂移的旧版做法,已不需要为漂移规避 `HoverId` 动画体系。
 pub(crate) fn tab_render_mode_button<'a, M: Clone + 'a>(
     in_code_mode: bool,
+    hover_t: f32,
     on_press: M,
+    on_hover: impl Fn(bool) -> M + 'a,
 ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
     let icon = if in_code_mode {
-        icons::IconKind::Eye
+        icons::IconKind::FilePlay
     } else {
         icons::IconKind::FileCode
     };
-    let color = byteui::theme::color::current().dim;
-    let btn = button(icons::view(icon, byteui::theme::icon_size::row(), color))
-        .width(Length::Fixed(byteui::theme::geometry::tab_button_size()))
-        .height(Length::Fixed(byteui::theme::geometry::tab_button_size()))
-        .padding(0)
-        .on_press(on_press)
-        .style(move |_theme, status| {
-            let base = button::Style {
-                background: None,
-                text_color: color,
-                ..button::Style::default()
-            };
-            match status {
-                button::Status::Hovered | button::Status::Pressed => button::Style {
-                    text_color: byteui::theme::color::current().gold,
-                    ..base
-                },
-                _ => base,
-            }
-        });
-    btn.into()
+    icons::icon_button_entry(
+        icon,
+        byteui::theme::icon_size::row(),
+        false,
+        false,
+        hover_t,
+        false,
+        byteui::theme::icon_size::row() + 6.0,
+        true,
+        on_press,
+        on_hover,
+        "",
+    )
 }
 
 /// 悬浮下拉里的一行,对应该 tab 组里的**某个 tab**(V 菜单列的是组内全部
@@ -419,7 +420,11 @@ pub(crate) struct TabOverflowEntry<'a, M> {
 /// 的具名字段结构体风格(闭包走结构体自身泛型参数,不用 `Box<dyn Fn>`)。
 /// `anchor` 是点 V 按钮那一刻的 `App::last_cursor` 快照(逻辑坐标),
 /// `window_size` 是当前窗口尺寸,两者一起用于把下拉钉在按钮附近同时不越出
-/// 窗口边界。
+/// 窗口边界。`no_op` 是调用方那套 `Message` 里已有的无副作用变体(顶层用
+/// `Message::Noop`,database 用 `database::Message::Noop`)——`tab_core` 强制
+/// 要求 `on_select_hover`/`on_close_hover` 两个回调,但下拉行不做 hover
+/// 动画(用不上),曾经图省事直接传 `on_dismiss.clone()` 顶替,酿成"鼠标一
+/// 移到菜单行上就把菜单自己关掉"的 bug(验收发现),这里改传真正的 no-op。
 pub(crate) struct TabOverflowMenuArgs<'a, M, FSel, FClose>
 where
     M: Clone + 'a,
@@ -432,6 +437,7 @@ where
     pub on_select: FSel,
     pub on_close: FClose,
     pub on_dismiss: M,
+    pub no_op: M,
 }
 
 const TAB_OVERFLOW_MENU_WIDTH: f32 = 220.0;
@@ -442,16 +448,33 @@ const TAB_OVERFLOW_MENU_MAX_HEIGHT: f32 = 320.0;
 /// `MouseArea`+`on_enter`/`on_exit`)。关闭按钮**始终可点**(不像横向 tab 那样
 /// hover 才显形)——这是刻意的自定义(见截图:下拉里的 x 是常显的,不是
 /// hover-only),因为悬浮列表本就是"已经主动点开来看"的场景,hover-only 反而
-/// 多一次交互成本。行内不做 hover 动画(`title_hover`/`close_hover` 两个
-/// 回调固定传 `on_dismiss.clone()` 以外的**不产生副作用**的消息——各调用点
-/// 传入自己那套 `Message` 里已有的 no-op 变体,terminal/preview/ssh 用顶层
-/// `Message::Noop`,database 用新增的 `database::Message::Noop`,详见各自
-/// 任务),避免为一个短生命周期的浮层再铺一整套 `HoverId` 动画状态。
+/// 多一次交互成本。行内不做**动画**hover(`title_hover`/`close_hover` 两个
+/// 回调传 `no_op`——调用方那套 `Message` 里的无副作用变体,避免为一个短
+/// 生命周期的浮层再铺一整套 `HoverId` 动画状态;**必须**是真 no-op:曾经
+/// 图省事直接传 `on_dismiss.clone()` 顶替,酿成"鼠标一移到菜单行上,
+/// `on_select_hover(true)` 一fire 就把菜单自己关掉,根本放不上去"的 bug
+/// (验收反馈"鼠标无法放到展开的菜单上"),已改传 `no_op`)。× 按钮本身仍有
+/// "标准 hover 效果"——`tabs::tab_core` 的关闭按钮原生 `button::Status`
+/// 悬停即变金,不依赖这里任何动画状态(见 `tab_core` 文档)。
 ///
-/// 悬浮定位:向上弹(同已移除的预览 tab 右键菜单——文件/项目预览的 tab 栏下方是
-/// wry webview 子视图,webview 恒在 iced 内容之上,向下弹会被盖住;为了让
-/// 5 处调用点共用同一套定位逻辑、不用按面板特判,统一向上弹),同时按
-/// `project_add_menu_popup` 的手法钳一次 x/y 防止超出窗口右/下边缘。
+/// 悬浮定位:向下弹,手法同 `project_add_menu_popup`/`todo_calendar_overlay`——
+/// `padding.top/left` 直接钉到锚点,钳一次 x/y 防止超出窗口右/下边缘(高度
+/// 未知,用 `TAB_OVERFLOW_MENU_MAX_HEIGHT` 保守估算,同 `project_add_menu_popup`
+/// "钳制会稍微保守但不会算少导致真的超出窗口"的容忍度)。**调用方必须**把
+/// 这个函数的返回值提到 `App::view` 顶层 `stack![base, dismiss, popup]` 里拼
+/// (同 `project_add_menu_popup` 的既有套路,见 `terminal::term_tab_overflow_popup`
+/// 等四个姊妹函数)——`anchor`(`App::last_cursor` 快照)/`window_size` 都是
+/// 全窗口坐标系,若嵌在某个面板自己的局部布局里,`Length::Fill` 只会撑满
+/// 那个面板分到的一格(远小于整窗、左上角也非窗口原点),换算出来的位置会
+/// 跟真实点击位置对不上(验收反馈"菜单错位了"——此前的教训)。
+///
+/// 文件/项目预览的 tab 栏下方是 wry webview 子视图,webview 恒在 iced 内容
+/// 之上,向下弹的下拉本会被盖住——按 CLAUDE.md 裁决"需要盖住 webview 的
+/// 原生浮层必须显式隐藏 webview,不能指望层级遮挡",在
+/// `App::preview_desired` 里,`preview_tab_overflow_anchor`/
+/// `project_preview_tab_overflow_anchor` 展开时强制该侧 webview
+/// `visible = false`(同 `search_modal` 打开时的既有处理)。终端/SSH/Database
+/// 三处没有 webview,不受影响。
 pub(crate) fn tab_overflow_menu<'a, M, FSel, FClose>(
     args: TabOverflowMenuArgs<'a, M, FSel, FClose>,
 ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>
@@ -467,6 +490,7 @@ where
         on_select,
         on_close,
         on_dismiss,
+        no_op,
     } = args;
     let close_sz = byteui::theme::geometry::tab_button_size();
     let row_max_w = TAB_OVERFLOW_MENU_WIDTH - close_sz - 16.0;
@@ -484,12 +508,12 @@ where
             on_select: (on_select)(idx),
             on_close: (on_close)(idx),
             on_select_hover: {
-                let d = on_dismiss.clone();
-                move |_h| d.clone()
+                let n = no_op.clone();
+                move |_h| n.clone()
             },
             on_close_hover: {
-                let d = on_dismiss.clone();
-                move |_h| d.clone()
+                let n = no_op.clone();
+                move |_h| n.clone()
             },
         });
         let row_content = row![select, close]
@@ -526,17 +550,20 @@ where
 
     let (ax, ay) = anchor;
     let (window_w, window_h) = window_size;
-    let x = ax.min((window_w - TAB_OVERFLOW_MENU_WIDTH).max(0.0));
-    let bottom = (window_h - ay).max(0.0);
+    let x = ax
+        .min((window_w - TAB_OVERFLOW_MENU_WIDTH).max(0.0))
+        .max(0.0);
+    let y = ay
+        .min((window_h - TAB_OVERFLOW_MENU_MAX_HEIGHT).max(0.0))
+        .max(0.0);
     let positioned = container(list)
         .width(Length::Fill)
         .height(Length::Fill)
-        .align_y(iced_widget::core::alignment::Vertical::Bottom)
         .padding(Padding {
-            top: 0.0,
+            top: y,
             left: x,
             right: 0.0,
-            bottom,
+            bottom: 0.0,
         });
 
     stack![dismiss, positioned].into()

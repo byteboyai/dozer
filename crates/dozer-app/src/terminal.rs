@@ -143,7 +143,8 @@ pub(crate) fn tab_bar<'a>(
         })
         .collect();
 
-    // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;V 按钮钉在裁剪区外。V
+    // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;V 按钮钉在裁剪区外、tab 组
+    // 最左侧(验收反馈:V 是"全部 tab 一览入口",放最前更符合浏览顺序)。V
     // "一直可见"：只要 tab 组非空就显示(`tab_overflow_button` 仅在全空时返回
     // `None`),下拉列出组内全部 tab,供随时跳转,不只列横向可见的部分。
     let tabs_row = row(items).spacing(4);
@@ -155,12 +156,13 @@ pub(crate) fn tab_bar<'a>(
         move |hovered| Message::Hover(HoverId::TermTabOverflow, hovered),
     );
 
-    let mut tab_row = row![clipped]
+    let mut tab_row = row![]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
     if let Some(btn) = overflow_button {
         tab_row = tab_row.push(btn);
     }
+    tab_row = tab_row.push(clipped);
     tab_row = tab_row.push(app.list_collapse_button(
         PanelKind::Agent,
         app.list_collapsed(PanelKind::Agent),
@@ -172,36 +174,50 @@ pub(crate) fn tab_bar<'a>(
     ));
 
     let base = column![tab_row, tab_divider()].spacing(4);
-    let Some(anchor) = ws.term_tab_overflow_anchor else {
-        return base.into();
-    };
-    if !ws.tabs.is_empty() {
-        let entries: Vec<tab_widget::TabOverflowEntry<'_, Message>> = ws
-            .tabs
-            .iter()
-            .enumerate()
-            .map(|(idx, tab)| tab_widget::TabOverflowEntry {
-                index: idx,
-                prefix: Some(byteui::feedback::status::dot(dot_color(
-                    tab.agent_state,
-                    tab.alive,
-                ))),
-                title: tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
-                active: idx == ws.active,
-                closable: true,
-            })
-            .collect();
-        let menu = tab_widget::tab_overflow_menu(tab_widget::TabOverflowMenuArgs {
+    base.into()
+}
+
+/// 终端 tab 栏"溢出下拉"浮层。**必须**在 `App::view` 顶层 `stack![base, ...]`
+/// 里拼(同 `topbar::project_add_menu_popup`/`todo::todo_calendar_overlay`
+/// 的既有套路)——`anchor`(`App::last_cursor` 快照)与 `app.window_size` 都是
+/// 全窗口坐标系,若像先前那样嵌在 `tab_bar` 自己的局部布局里返回
+/// `stack![base, menu]`,`positioned` 的 `Length::Fill` 只会撑满这个面板自己
+/// 分到的那格(远小于整窗、且左上角并非窗口原点),换算出来的位置会跟真实
+/// 点击位置对不上(验收反馈"菜单错位了")。
+pub(crate) fn term_tab_overflow_popup<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
+) -> Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> {
+    let anchor = ws.term_tab_overflow_anchor?;
+    if ws.tabs.is_empty() {
+        return None;
+    }
+    let entries: Vec<tab_widget::TabOverflowEntry<'_, Message>> = ws
+        .tabs
+        .iter()
+        .enumerate()
+        .map(|(idx, tab)| tab_widget::TabOverflowEntry {
+            index: idx,
+            prefix: Some(byteui::feedback::status::dot(dot_color(
+                tab.agent_state,
+                tab.alive,
+            ))),
+            title: tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
+            active: idx == ws.active,
+            closable: true,
+        })
+        .collect();
+    Some(tab_widget::tab_overflow_menu(
+        tab_widget::TabOverflowMenuArgs {
             entries,
             anchor,
             window_size: app.window_size,
             on_select: Message::SelectTab,
             on_close: Message::CloseTab,
             on_dismiss: Message::TermTabOverflowDismiss,
-        });
-        return iced_widget::stack![base, menu].into();
-    }
-    base.into()
+            no_op: Message::Noop,
+        },
+    ))
 }
 
 /// 单个 tab：状态点（颜色见 `dot_color`）+ 名称的选中按钮，紧跟一个关闭

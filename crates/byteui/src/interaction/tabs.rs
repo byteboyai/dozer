@@ -77,10 +77,23 @@ where
     .width(Length::Fixed(close_sz))
     .height(Length::Fixed(close_sz))
     .padding(0)
-    .style(move |_t: &iced_widget::Theme, _s| button::Style {
-        background: None,
-        text_color: close_color,
-        ..button::Style::default()
+    // 标准 hover 效果:原生 `button::Status` 悬停时兜底显金(不额外依赖
+    // 调用方的动画状态)——`panel_tab`/`project_tab_item` 已经用外部
+    // `close_hover_t` 把 `close_color` 动画到金,这里到点也一致;
+    // `tab_overflow_menu` 的下拉行没有那套动画(短生命周期浮层,见其文档),
+    // 靠这条原生兜底才有 hover 反馈,而不是像此前那样悬停毫无颜色变化。
+    .style(move |_t: &iced_widget::Theme, s: button::Status| {
+        let text_color = match s {
+            button::Status::Hovered | button::Status::Pressed => {
+                crate::theme::color::current().gold
+            }
+            _ => close_color,
+        };
+        button::Style {
+            background: None,
+            text_color,
+            ..button::Style::default()
+        }
     });
     // 仅在悬停时挂 `on_press`——悬停进度刚起步(>0.001)就立刻可点,鼠标离开
     // 后随进度归零变回不可点,既不误吞点击也不影响正常关闭。

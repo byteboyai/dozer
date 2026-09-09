@@ -805,6 +805,10 @@ pub enum Message {
     TabOverflowToggle,
     /// tab 栏溢出下拉:点击外部关闭。同样由 `App::update` 拦截。
     TabOverflowDismiss,
+    /// 无副作用占位消息:`tab_overflow_menu` 下拉行的 `title_hover`/
+    /// `close_hover` 回调要求(`tab_core` 强制的两个参数,下拉行本身不做
+    /// hover 动画,用不上),见 `tab_widget::TabOverflowMenuArgs::no_op` 文档。
+    Noop,
 
     // ---- 浏览页(WHERE/ORDER BY/分页) ----
     BrowseWhereChanged(usize, String),
@@ -845,6 +849,7 @@ pub fn update(
         // 这两个溢出开关由 `app.rs` 主级 `update` 拦截(需要 `App::last_cursor`),
         // 正常不会走到这个子级 `database::update`——保留空 arm 只为满足穷尽。
         Message::TabOverflowToggle | Message::TabOverflowDismiss => {}
+        Message::Noop => {}
         Message::ToggleDriver(driver) => app_state.toggle(driver),
         Message::DriversPopupToggle => {
             app_state.drivers_popup_open = !app_state.drivers_popup_open;
@@ -2186,8 +2191,9 @@ pub fn content_pane<'a>(
         .collect();
     let tabs_row = row(items).spacing(4);
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
-    // V 一直可见：只要 tab 组非空就显示,下拉列出组内全部(空白占位 + 真实 tab)。
-    let db_tab_total = 1 + content.tabs().len();
+    // V 只数**真实** tab,不算"空白"占位——下拉本就不列空白(见
+    // `tab_overflow_popup`),只剩空白页时 V 本身也不该显示(验收反馈)。
+    let db_tab_total = content.tabs().len();
     let overflow_button = crate::tab_widget::tab_overflow_button(
         db_tab_total,
         app.hover_progress(crate::app::HoverId::DatabaseTabOverflow),
@@ -2205,13 +2211,13 @@ pub fn content_pane<'a>(
         Message::ToggleListCollapse,
         move |hovered| Message::Hover(crate::app::HoverId::DatabaseListCollapse, hovered),
     );
-    let mut tab_bar_row = row![clipped]
+    let mut tab_bar_row = row![]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
     if let Some(btn) = overflow_button {
         tab_bar_row = tab_bar_row.push(btn);
     }
-    let tab_bar = tab_bar_row.push(collapse);
+    let tab_bar = tab_bar_row.push(clipped).push(collapse);
 
     // tab 栏下方 1px 分割线,同 SSH/预览面板的 `tab_divider()`(此前漏加,
     // 验收反馈 tab 下方少了一根横线)。外层 padding/tab 栏间距改用
@@ -2255,31 +2261,36 @@ pub fn content_pane<'a>(
                 ..iced_widget::container::Style::default()
             },
         );
-    let result: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        outer_container.into();
-    if let Some(anchor) = content.tab_overflow_anchor() {
-        // 下拉列出该面板内**全部** tab(空白占位 + 真实 tab),方便一览/直接
-        // 跳到任一项,而不是只列当前被挤出可见区的子集。
-        let mut overflow_entries: Vec<crate::tab_widget::TabOverflowEntry<'_, Message>> =
-            Vec::new();
+    outer_container.into()
+}
+
+/// Database 面板 tab 栏"溢出下拉"浮层。**必须**在 `App::view` 顶层
+/// `stack![base, ...]` 里拼(同 `terminal::term_tab_overflow_popup` 文档
+/// 解释的理由——`anchor`/`window_size` 是全窗口坐标系,嵌在 `content_pane`
+/// 自己的局部布局里换算位置会跟真实点击位置对不上)。
+pub fn tab_overflow_popup<'a>(
+    app: &'a crate::app::App,
+    ws_state: &'a WorkspaceState,
+) -> Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> {
+    let content = ws_state.content();
+    let anchor = content.tab_overflow_anchor()?;
+    // 下拉列出该面板内**真实** tab,方便一览/直接跳到任一项,而不是只列
+    // 当前被挤出可见区的子集。"空白"占位不进列表(点开也没什么可跳的);
+    // 下标沿用调用方 `on_select`/`on_close`(`idx - 1` 换算)既有的 1 起步
+    // 方案(0 留给空白,虽然它现在不会出现在列表里,翻译逻辑不用跟着改)。
+    let mut overflow_entries: Vec<crate::tab_widget::TabOverflowEntry<'_, Message>> = Vec::new();
+    for (i, tab) in content.tabs().iter().enumerate() {
+        let idx = i + 1;
         overflow_entries.push(crate::tab_widget::TabOverflowEntry {
-            index: 0,
+            index: idx,
             prefix: None,
-            title: "空白".to_string(),
-            active: content.active_idx().is_none(),
-            closable: false,
+            title: tab_title(tab, ws_state),
+            active: Some(i) == content.active_idx(),
+            closable: true,
         });
-        for (i, tab) in content.tabs().iter().enumerate() {
-            let idx = i + 1;
-            overflow_entries.push(crate::tab_widget::TabOverflowEntry {
-                index: idx,
-                prefix: None,
-                title: tab_title(tab, ws_state),
-                active: Some(i) == content.active_idx(),
-                closable: true,
-            });
-        }
-        let menu = crate::tab_widget::tab_overflow_menu(crate::tab_widget::TabOverflowMenuArgs {
+    }
+    Some(crate::tab_widget::tab_overflow_menu(
+        crate::tab_widget::TabOverflowMenuArgs {
             entries: overflow_entries,
             anchor,
             window_size: app.window_size,
@@ -2292,10 +2303,9 @@ pub fn content_pane<'a>(
             },
             on_close: |idx| Message::CloseTab(idx - 1),
             on_dismiss: Message::TabOverflowDismiss,
-        });
-        return iced_widget::stack![result, menu].into();
-    }
-    result
+            no_op: Message::Noop,
+        },
+    ))
 }
 
 fn tab_title(tab: &DatabaseTab, ws_state: &WorkspaceState) -> String {

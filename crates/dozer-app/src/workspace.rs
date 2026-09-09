@@ -3465,18 +3465,12 @@ fn preview_pane_for<'a>(
     // 反馈:文件预览与浏览器彻底分离,文件只走项目树入口)。
     // P1L T5 验收返工:同 term `tab_bar`,横向 scrollable 换成索引窗口化 + clip.
     let region = theme::region::preview_pane();
-    let (preview, tab_first, error, overflow_anchor) = match kind {
-        PreviewPaneKind::Files => (
-            &ws.preview,
-            ws.preview_tab_first,
-            &ws.preview_error,
-            ws.preview_tab_overflow_anchor,
-        ),
+    let (preview, tab_first, error) = match kind {
+        PreviewPaneKind::Files => (&ws.preview, ws.preview_tab_first, &ws.preview_error),
         PreviewPaneKind::Project => (
             &ws.project_preview,
             ws.project_preview_tab_first,
             &ws.project_preview_error,
-            ws.project_preview_tab_overflow_anchor,
         ),
     };
     // 状态取的是一份只读引用,后续渲染把对应的消息/前缀按 `kind` 选好。
@@ -3509,13 +3503,13 @@ fn preview_pane_for<'a>(
         PreviewPaneKind::Files => Message::PreviewTabOverflowToggle,
         PreviewPaneKind::Project => Message::ProjectPreviewTabOverflowToggle,
     };
-    let overflow_dismiss_msg = move || match kind {
-        PreviewPaneKind::Files => Message::PreviewTabOverflowDismiss,
-        PreviewPaneKind::Project => Message::ProjectPreviewTabOverflowDismiss,
-    };
     let overflow_hover = move || match kind {
         PreviewPaneKind::Files => HoverId::PreviewTabOverflow,
         PreviewPaneKind::Project => HoverId::ProjectPreviewTabOverflow,
+    };
+    let render_mode_hover = move || match kind {
+        PreviewPaneKind::Files => HoverId::PreviewRenderMode,
+        PreviewPaneKind::Project => HoverId::ProjectPreviewRenderMode,
     };
     let editor_msg = move |tab_id, ev| match kind {
         PreviewPaneKind::Files => Message::PreviewEditorEvent(tab_id, ev),
@@ -3541,66 +3535,75 @@ fn preview_pane_for<'a>(
         tab_first,
     );
 
-    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
-        preview
-            .tabs()
-            .iter()
-            .enumerate()
-            .filter(|(idx, _)| (window.first..window.visible_end).contains(idx))
-            .map(|(idx, tab)| {
-                let active = idx == preview.active_idx();
-                let title_hover_t = app.hover_progress(item_hover(idx));
-                let close_hover_t = app.hover_progress(close_hover(idx));
-                // 就地可写的原生 tab 有未保存改动:标题后缀 ` *`(2026-09-06)。宽度
-                // 预算仍按 `tab.title`(不带星)估,最坏多一个字符略挤,不换行折叠。
-                let display_title = if tab.editor.is_some() && tab.dirty {
-                    format!("{} *", tab.title)
-                } else {
-                    tab.title.clone()
-                };
-                // 预览/代码切换按钮:仅对 `wry_toggle_eligible`(文本可编辑却默认走
-                // wry/flyfish 渲染)的文件出现,且随当前代码模式换图标(`editor.is_some()`
-                // = 代码模式 → 显示 Eye,点它切回预览;否则显示 FileCode 切进代码)。
-                // 这类 tab 不多,直接每个可见 tab 调用一次构造,不缓存留脏。
-                let suffix: Option<
-                    Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
-                > = {
-                    let eligible = match &tab.kind {
-                        crate::preview::TabKind::File(p) => crate::preview::wry_toggle_eligible(p),
-                        _ => false,
-                    };
-                    eligible.then(|| tab_render_mode_button(tab.editor.is_some(), toggle_msg(idx)))
-                };
-                let tab = panel_tab(PanelTabArgs {
-                    title: display_title,
-                    active,
-                    hover_t: title_hover_t,
-                    close_hover_t,
-                    prefix: None,
-                    suffix,
-                    on_select: select_msg(idx),
-                    on_close: close_msg(idx),
-                    show_tooltip: app.hover_tooltip_ready(item_hover(idx)),
-                    title_hover: move |h| Message::Hover(item_hover(idx), h),
-                    close_hover: move |h| Message::Hover(close_hover(idx), h),
-                });
-                // 拖拽换位:按住页签(选中处理已把 `app.tab_drag` 置位)后光标
-                // 扫过哪个页签,这个 `on_move` 就按它发 `TabDragMove`,完成换位。
-                let armed = app.dragging_group(tab_group);
-                let mut area = MouseArea::new(tab).on_move(move |_| Message::TabDragMove {
-                    group: tab_group,
-                    index: idx,
-                });
-                if armed {
-                    area = area.interaction(mouse::Interaction::Grabbing);
-                }
-                area.into()
-            })
-            .collect();
-    // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;V 按钮钉在裁剪区外(只要 tab
-    // 组非空即显示,见 `tab_overflow_button`——无溢出也列出全部 tab 供跳转)。
+    let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = preview
+        .tabs()
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| (window.first..window.visible_end).contains(idx))
+        .map(|(idx, tab)| {
+            let active = idx == preview.active_idx();
+            let title_hover_t = app.hover_progress(item_hover(idx));
+            let close_hover_t = app.hover_progress(close_hover(idx));
+            // 就地可写的原生 tab 有未保存改动:标题后缀 ` *`(2026-09-06)。宽度
+            // 预算仍按 `tab.title`(不带星)估,最坏多一个字符略挤,不换行折叠。
+            let display_title = if tab.editor.is_some() && tab.dirty {
+                format!("{} *", tab.title)
+            } else {
+                tab.title.clone()
+            };
+            let tab = panel_tab(PanelTabArgs {
+                title: display_title,
+                active,
+                hover_t: title_hover_t,
+                close_hover_t,
+                prefix: None,
+                suffix: None,
+                on_select: select_msg(idx),
+                on_close: close_msg(idx),
+                show_tooltip: app.hover_tooltip_ready(item_hover(idx)),
+                title_hover: move |h| Message::Hover(item_hover(idx), h),
+                close_hover: move |h| Message::Hover(close_hover(idx), h),
+            });
+            // 拖拽换位:按住页签(选中处理已把 `app.tab_drag` 置位)后光标
+            // 扫过哪个页签,这个 `on_move` 就按它发 `TabDragMove`,完成换位。
+            let armed = app.dragging_group(tab_group);
+            let mut area = MouseArea::new(tab).on_move(move |_| Message::TabDragMove {
+                group: tab_group,
+                index: idx,
+            });
+            if armed {
+                area = area.interaction(mouse::Interaction::Grabbing);
+            }
+            area.into()
+        })
+        .collect();
+    // tab 列表进 clip 容器占 Fill,裁掉右侧溢出;V 按钮钉在裁剪区外、tab 组
+    // 最左侧(只要 tab 组非空即显示,见 `tab_overflow_button`——无溢出也
+    // 列出全部 tab 供跳转)。
     let tabs_row = row(items).spacing(4);
     let clipped = container(tabs_row).width(Length::Fill).clip(true);
+    // 预览/代码切换按钮:曾贴在每个 tab 自己身上(suffix),验收反馈挪到
+    // tab 组最右侧(V 与"收起列表"之间)、只对**当前选中** tab 出一个——
+    // 只有选中 tab 的内容看得见,切别的 tab 时按钮跟着换,不用每个 tab 各挂
+    // 一份。仅对 `wry_toggle_eligible`(文本可编辑却默认走 wry/flyfish 渲染)
+    // 的文件出现,随当前代码模式换图标(`editor.is_some()` = 代码模式 →
+    // 显示 FilePlay,点它切回预览;否则显示 FileCode 切进代码)。
+    let render_mode_button: Option<
+        Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
+    > = preview.tabs().get(preview.active_idx()).and_then(|tab| {
+        let eligible = match &tab.kind {
+            crate::preview::TabKind::File(p) => crate::preview::wry_toggle_eligible(p),
+            _ => false,
+        };
+        eligible.then(|| {
+            tab_render_mode_button(
+                tab.editor.is_some(),
+                app.hover_progress(render_mode_hover()),
+                toggle_msg(preview.active_idx()),
+                move |hovered| Message::Hover(render_mode_hover(), hovered),
+            )
+        })
+    });
     let overflow_button = tab_overflow_button(
         preview.tabs().len(),
         app.hover_progress(overflow_hover()),
@@ -3631,10 +3634,14 @@ fn preview_pane_for<'a>(
             move |hovered| Message::Hover(HoverId::ProjectListCollapse, hovered),
         ),
     };
-    let mut tab_bar_row = row![clipped]
+    let mut tab_bar_row = row![]
         .spacing(4)
         .align_y(iced_widget::core::Alignment::Center);
     if let Some(btn) = overflow_button {
+        tab_bar_row = tab_bar_row.push(btn);
+    }
+    tab_bar_row = tab_bar_row.push(clipped);
+    if let Some(btn) = render_mode_button {
         tab_bar_row = tab_bar_row.push(btn);
     }
     let tab_bar = tab_bar_row.push(collapse);
@@ -4053,35 +4060,61 @@ fn preview_pane_for<'a>(
                 ..container::Style::default()
             })
             .into();
-    let Some(anchor) = overflow_anchor else {
-        return base;
-    };
-    if !preview.tabs().is_empty() {
-        // 下拉列出精选组内**全部** tab(不管当前是否横向可见),便于随时
-        // 跳转到某一项,而非只列"被挤出可见区"的子集。
-        let entries: Vec<TabOverflowEntry<'_, Message>> = preview
-            .tabs()
-            .iter()
-            .enumerate()
-            .map(|(idx, tab)| TabOverflowEntry {
-                index: idx,
-                prefix: None,
-                title: tab.title.clone(),
-                active: idx == preview.active_idx(),
-                closable: true,
-            })
-            .collect();
-        let menu = tab_overflow_menu(TabOverflowMenuArgs {
-            entries,
-            anchor,
-            window_size: app.window_size,
-            on_select: select_msg,
-            on_close: close_msg,
-            on_dismiss: overflow_dismiss_msg(),
-        });
-        return iced_widget::stack![base, menu].into();
-    }
     base
+}
+
+/// 文件/项目预览 tab 栏"溢出下拉"浮层。**必须**在 `App::view` 顶层
+/// `stack![base, ...]` 里拼(同 `terminal::term_tab_overflow_popup` 文档
+/// 解释的理由——`anchor`/`window_size` 是全窗口坐标系,嵌在 `preview_pane_for`
+/// 自己的局部布局里换算位置会跟真实点击位置对不上)。
+pub(crate) fn preview_tab_overflow_popup<'a>(
+    app: &'a App,
+    ws: &'a Workspace,
+    kind: PreviewPaneKind,
+) -> Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> {
+    let (preview, anchor) = match kind {
+        PreviewPaneKind::Files => (&ws.preview, ws.preview_tab_overflow_anchor),
+        PreviewPaneKind::Project => (&ws.project_preview, ws.project_preview_tab_overflow_anchor),
+    };
+    let anchor = anchor?;
+    if preview.tabs().is_empty() {
+        return None;
+    }
+    let select_msg = move |idx| match kind {
+        PreviewPaneKind::Files => Message::PreviewSelectTab(idx),
+        PreviewPaneKind::Project => Message::ProjectPreviewSelectTab(idx),
+    };
+    let close_msg = move |idx| match kind {
+        PreviewPaneKind::Files => Message::PreviewCloseTab(idx),
+        PreviewPaneKind::Project => Message::ProjectPreviewCloseTab(idx),
+    };
+    let overflow_dismiss_msg = match kind {
+        PreviewPaneKind::Files => Message::PreviewTabOverflowDismiss,
+        PreviewPaneKind::Project => Message::ProjectPreviewTabOverflowDismiss,
+    };
+    // 下拉列出精选组内**全部** tab(不管当前是否横向可见),便于随时
+    // 跳转到某一项,而非只列"被挤出可见区"的子集。
+    let entries: Vec<TabOverflowEntry<'_, Message>> = preview
+        .tabs()
+        .iter()
+        .enumerate()
+        .map(|(idx, tab)| TabOverflowEntry {
+            index: idx,
+            prefix: None,
+            title: tab.title.clone(),
+            active: idx == preview.active_idx(),
+            closable: true,
+        })
+        .collect();
+    Some(tab_overflow_menu(TabOverflowMenuArgs {
+        entries,
+        anchor,
+        window_size: app.window_size,
+        on_select: select_msg,
+        on_close: close_msg,
+        on_dismiss: overflow_dismiss_msg,
+        no_op: Message::Noop,
+    }))
 }
 
 /// 对话副行文案：`<agent> · <相对时间> · <规模>`（P1j）。
