@@ -1329,12 +1329,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 && event.logical_key
                     == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
             {
-                // 预览 tab 右键菜单与文件树右键菜单互斥——关掉当前开着的那个。
-                if app.preview_tab_context_menu_open() {
-                    app.update(Message::PreviewTabContextMenuClose);
-                } else if app.project_preview_tab_context_menu_open() {
-                    app.update(Message::ProjectPreviewTabContextMenuClose);
-                } else if app.project_link_context_menu_open() {
+                // 右键菜单互斥——关掉当前开着的那个。
+                if app.project_link_context_menu_open() {
                     app.update(Message::ProjectLinkContextMenuClose);
                 } else if app.category_context_menu_open() {
                     app.update(Message::CategoryContextMenuClose);

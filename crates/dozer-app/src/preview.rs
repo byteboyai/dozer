@@ -906,18 +906,6 @@ impl PreviewPane {
             .and_then(|t| t.editor.as_mut())
     }
 
-    /// 右键菜单"刷新"落地:按 tab 下标(与 `close`/`select`/`edit_open`
-    /// 同一 vec 位置约定)重载该 tab 的内容。下标越界是 no-op(菜单目标已
-    /// 被拖拽/关闭换位时防御)。内部转成 `bump_reload`(按 id 定位)——
-    /// 原生 (`editor`) tab 直接读盘重建只读编辑器,webview tab 走
-    /// `reload_nonce` 计数逼 `desired_webviews()` 换 URL 重新 `load_url`。
-    pub fn reload_at(&mut self, idx: usize) {
-        let Some(tab_id) = self.tabs.get(idx).map(|t| t.id) else {
-            return;
-        };
-        self.bump_reload(tab_id);
-    }
-
     /// 编辑保存后调用:按 `PreviewTab.id` 找到对应 tab,推进 reload。原生
     /// (有 `editor`)tab 直接读盘重建编辑器实例(`bump_reload` 路径),wry
     /// tab 走 `reload_nonce` 计数(驱动 `desired_webviews()` 换 URL)。未知
@@ -1531,31 +1519,6 @@ mod tests {
         );
         // 未知 id 是 no-op,不 panic。
         p.bump_reload(9999);
-    }
-
-    #[test]
-    fn reload_at_refreshes_target_idx_and_ignores_out_of_bounds() {
-        let mut p = PreviewPane::default();
-        p.open_path(PathBuf::from("/tmp/a.md"));
-        p.open_path(PathBuf::from("/tmp/b.md"));
-        // 按 vec 下标刷新,与 `close`/`select` 同一约定。
-        p.reload_at(0);
-        let specs = p.desired_webviews();
-        assert_eq!(
-            specs[0].url, "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&ln=1&_r=1",
-            "只刷新目标下标,驱动其换 URL 重载"
-        );
-        assert_eq!(
-            specs[1].url, "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&ln=1",
-            "非目标 tab 不受影响"
-        );
-        // 越界下标是 no-op,不 panic(菜单目标已被拖拽/关闭换位的防御)。
-        p.reload_at(999);
-        assert_eq!(
-            p.desired_webviews()[0].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&ln=1&_r=1",
-            "越界刷新不改状态"
-        );
     }
 
     #[test]

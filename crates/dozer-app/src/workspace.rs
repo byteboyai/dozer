@@ -49,7 +49,7 @@ use crate::git_watch;
 use crate::homespace::home_panel_head;
 use crate::homespace::home_panel_head_with_actions;
 use crate::osc::{OscEvent, OscScanner};
-use crate::preview::{PreviewPane, TabKind, is_editable_extension};
+use crate::preview::{PreviewPane, TabKind};
 use crate::preview_state;
 use crate::project::FileTree;
 use crate::tab_widget::{
@@ -794,27 +794,6 @@ impl Workspace {
                 *error_field = Some(format!("打开编辑失败: {e}"));
             }
         }
-    }
-
-    /// 预览 tab 右键菜单"刷新"落地(Files 面板):按 tab 下标重载该文件——
-    /// 从文件系统重新读盘并重新渲染(原生 editor 重建 / webview 换 URL 重载)。
-    pub(crate) fn preview_reload(&mut self, idx: usize) {
-        self.preview_reload_for(PreviewPaneKind::Files, idx);
-    }
-
-    /// Project 面板右配对预览的"刷新",语义同 `preview_reload`,状态取自
-    /// `ws.project_preview`。
-    pub(crate) fn project_preview_reload(&mut self, idx: usize) {
-        self.preview_reload_for(PreviewPaneKind::Project, idx);
-    }
-
-    fn preview_reload_for(&mut self, kind: PreviewPaneKind, idx: usize) {
-        // 下标越界(菜单目标已被拖拽/关闭换位)由 `reload_at` 防御性 no-op——
-        // 与 `preview_edit_open_for` 同口径,正常路径走不到。
-        match kind {
-            PreviewPaneKind::Files => self.preview.reload_at(idx),
-            PreviewPaneKind::Project => self.project_preview.reload_at(idx),
-        };
     }
 
     /// 读走(消费式)编辑弹层的一次性程序化聚焦标记。
@@ -3631,10 +3610,6 @@ fn preview_pane_for<'a>(
         PreviewPaneKind::Files => Message::PreviewTabOverflowDismiss,
         PreviewPaneKind::Project => Message::ProjectPreviewTabOverflowDismiss,
     };
-    let context_msg = move |idx, editable| match kind {
-        PreviewPaneKind::Files => Message::PreviewTabContextMenu { idx, editable },
-        PreviewPaneKind::Project => Message::ProjectPreviewTabContextMenu { idx, editable },
-    };
     let editor_msg = move |tab_id, ev| match kind {
         PreviewPaneKind::Files => Message::PreviewEditorEvent(tab_id, ev),
         PreviewPaneKind::Project => Message::ProjectPreviewEditorEvent(tab_id, ev),
@@ -3668,9 +3643,6 @@ fn preview_pane_for<'a>(
             let active = idx == preview.active_idx();
             let title_hover_t = app.hover_progress(item_hover(idx));
             let close_hover_t = app.hover_progress(close_hover(idx));
-            // 仅文本类文件可编辑——决定右键菜单里"编辑"项是否出现(标题后的
-            // 编辑图标已移除,编辑入口统一收进 tab 右键菜单,见 `PreviewTabContextMenu`)。
-            let editable = matches!(&tab.kind, TabKind::File(path) if is_editable_extension(path));
             // 就地可写的原生 tab 有未保存改动:标题后缀 ` *`(2026-09-06)。宽度
             // 预算仍按 `tab.title`(不带星)估,最坏多一个字符略挤,不换行折叠。
             let display_title = if tab.editor.is_some() && tab.dirty {
@@ -3691,16 +3663,13 @@ fn preview_pane_for<'a>(
                 title_hover: move |h| Message::Hover(item_hover(idx), h),
                 close_hover: move |h| Message::Hover(close_hover(idx), h),
             });
-            // 右键 tab 弹上下文菜单:"编辑"(仅可编辑)/"关闭"。
             // 拖拽换位:按住页签(选中处理已把 `app.tab_drag` 置位)后光标
             // 扫过哪个页签,这个 `on_move` 就按它发 `TabDragMove`,完成换位。
             let armed = app.dragging_group(tab_group);
-            let mut area = MouseArea::new(tab)
-                .on_right_press(context_msg(idx, editable))
-                .on_move(move |_| Message::TabDragMove {
-                    group: tab_group,
-                    index: idx,
-                });
+            let mut area = MouseArea::new(tab).on_move(move |_| Message::TabDragMove {
+                group: tab_group,
+                index: idx,
+            });
             if armed {
                 area = area.interaction(mouse::Interaction::Grabbing);
             }

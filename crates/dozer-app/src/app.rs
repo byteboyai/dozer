@@ -1844,12 +1844,6 @@ pub enum Message {
     PreviewSelectTab(usize),
     /// 预览:关闭 tab(vec 位置).
     PreviewCloseTab(usize),
-    /// 预览:点 tab chip 上的"编辑"按钮,携带 tab 下标(渲染时发出,和
-    /// `PreviewSelectTab`/`PreviewCloseTab` 同一约定)。
-    PreviewEditOpen(usize),
-    /// 预览 tab 右键菜单里的"刷新":从文件系统重新读盘并重新渲染该 tab
-    /// (下标即 vec 位置,与 `PreviewCloseTab` 同约定)。
-    PreviewReload(usize),
     /// 预览编辑弹层:官方 `text_editor` 的 `Action`。由 `main.rs` 的 dispatch
     /// 直接转发给 `App::preview_edit_event`(剪贴板由 iced 运行时自己处理,
     /// 不需要像 vendored `iced-code-editor` 那样手动拆 `Task` 桥接)。
@@ -1916,15 +1910,6 @@ pub enum Message {
     PreviewEditConfirmDiscard,
     /// 预览编辑弹层二次确认:"取消"(回到编辑态)。
     PreviewEditConfirmCancel,
-    /// 预览 tab 右键菜单:在 `preview_pane` 某 tab 上右键打开,携带 tab 下标
-    /// 与该文件是否可编辑(仅文本类文件,决定菜单"编辑"项是否出现)。定位
-    /// 坐标复用 `files.last_right_click`(main.rs 右键时写入)。
-    PreviewTabContextMenu {
-        idx: usize,
-        editable: bool,
-    },
-    /// 预览 tab 右键菜单关闭(点遮罩 / 按 Esc)。
-    PreviewTabContextMenuClose,
     /// Project 面板右配对预览:打开本地文件为新 tab,语义同 `PreviewOpenPath`。
     ProjectPreviewOpenPath(PathBuf),
     /// Project 面板右配对预览:切换 tab(vec 位置)。
@@ -1939,17 +1924,6 @@ pub enum Message {
     /// Project 面板右配对预览的原生 `text_editor::Action`，语义同
     /// `PreviewEditorEvent`。
     ProjectPreviewEditorEvent(usize, iced_widget::text_editor::Action),
-    /// Project 面板右配对预览:右键菜单里的"编辑"项,语义同 `PreviewEditOpen`。
-    ProjectPreviewEditOpen(usize),
-    /// Project 面板右配对预览 tab 右键菜单里的"刷新",语义同 `PreviewReload`。
-    ProjectPreviewReload(usize),
-    /// Project 面板右配对预览 tab 右键菜单,语义同 `PreviewTabContextMenu`。
-    ProjectPreviewTabContextMenu {
-        idx: usize,
-        editable: bool,
-    },
-    /// Project 面板右配对预览 tab 右键菜单关闭。
-    ProjectPreviewTabContextMenuClose,
     /// 浏览器面板的全部消息,内核只转发不解读——见
     /// `extensions::browser::Message`。
     Browser(browser::Message),
@@ -2071,19 +2045,6 @@ pub enum Message {
     /// winit 的根本 `MouseInput{Released}` 收不到,`TabDragEnd` 就永不触发,
     /// 拖拽状态会残留、变成"松开还能继续拖"。这条消息统一兜底清掉。
     WebViewMouseUp,
-}
-
-/// 顶层容器:main.rs 持有的就是这个(取代此前直接持有单个 `Workspace`)。
-/// 外壳字段是整个程序只有一份的窗口态,`projects` 承载并行打开的项目
-/// 页签——每个 `Workspace` 是完全独立、同时存活的一套项目态(P2a)。
-/// 文件预览 tab 的右键菜单浮层状态:定位坐标(屏幕空间,复用 `files`
-/// 右键落点)+ 目标 tab 下标 + 该文件是否可编辑(仅文本类文件可编辑,
-/// 决定菜单里"编辑"项是否出现)。见 `preview_pane` / 顶层 `view`。
-struct PreviewTabMenu {
-    x: f32,
-    y: f32,
-    idx: usize,
-    editable: bool,
 }
 
 /// Project 面板「项目文档 / Agent 记忆」虚拟链接行的右键菜单浮层状态:
@@ -2262,12 +2223,6 @@ pub struct App {
     pub(crate) rail_drag: Option<rail::RailDrag>,
     /// Files 面板右键菜单浮层状态——见 `extensions::files::AppState`。
     files: files::AppState,
-    /// 文件预览 tab 右键菜单浮层状态(屏幕空间单例,不随项目切换各自保留);
-    /// 定位坐标复用 `files.last_right_click`(main.rs 右键时已写入)。
-    preview_tab_menu: Option<PreviewTabMenu>,
-    /// Project 面板右配对预览 tab 的右键菜单浮层状态,语义同
-    /// `preview_tab_menu`,定位坐标同样复用 `files.last_right_click`。
-    project_preview_tab_menu: Option<PreviewTabMenu>,
     /// Project 面板「项目文档 / Agent 记忆」链接行的右键菜单浮层状态,坐标
     /// 同样复用 `files.last_right_click`。
     project_link_menu: Option<ProjectLinkMenu>,
@@ -2644,8 +2599,6 @@ impl App {
             tab_drag: None,
             rail_drag: None,
             files: files::AppState::default(),
-            preview_tab_menu: None,
-            project_preview_tab_menu: None,
             project_link_menu: None,
             category_context_menu: None,
             category_picker: None,
@@ -4143,8 +4096,6 @@ impl App {
     /// 项目树右键菜单是否打开(main.rs Esc 键路由用)。
     pub fn context_menu_open(&self) -> bool {
         self.files.context_menu_is_some()
-            || self.preview_tab_menu.is_some()
-            || self.project_preview_tab_menu.is_some()
             || self.project_link_menu.is_some()
             || self.text_input_menu.is_some()
             || self.database_source_menu.is_some()
@@ -4167,16 +4118,6 @@ impl App {
     /// 用它把焦点再补一次到被右键的输入(保证作用于它而不是别的)。
     pub fn text_input_menu_target_id(&self) -> Option<iced_widget::core::widget::Id> {
         self.text_input_menu.as_ref().map(|m| m.target.id.clone())
-    }
-
-    /// 预览 tab 右键菜单是否打开(main.rs Esc 键路由用)。
-    pub fn preview_tab_context_menu_open(&self) -> bool {
-        self.preview_tab_menu.is_some()
-    }
-
-    /// Project 面板右配对预览 tab 右键菜单是否打开(main.rs Esc 键路由用)。
-    pub fn project_preview_tab_context_menu_open(&self) -> bool {
-        self.project_preview_tab_menu.is_some()
     }
 
     /// Project 面板链接行右键菜单是否打开(main.rs Esc 键路由用)。
@@ -4981,8 +4922,6 @@ impl App {
             Message::TextInputMenuOpen(target) => {
                 // 与其它右键菜单互斥——关掉别的,只留本菜单(同时避免互相顶)。
                 self.files.close_context_menu();
-                self.preview_tab_menu = None;
-                self.project_preview_tab_menu = None;
                 self.project_link_menu = None;
                 let (x, y) = self.files.last_right_click();
                 self.text_input_menu = Some(TextInputMenu {
@@ -5198,7 +5137,6 @@ impl App {
             Message::PreviewOpenPath(path) => self.preview_open_path(path),
             Message::PreviewSelectTab(idx) => self.preview_select_tab(idx),
             Message::PreviewCloseTab(idx) => {
-                self.preview_tab_menu = None;
                 self.with_focused_project(|ws, io| {
                     ws.preview.close(idx);
                     // 关 tab 后位置全变，旧 first 可能越界——归零防御（P1L T5）。
@@ -5206,14 +5144,6 @@ impl App {
                     ws.spawn_preview_state_save(io);
                     ws.spawn_preview_context_push(io);
                 });
-            }
-            Message::PreviewEditOpen(idx) => {
-                self.preview_tab_menu = None;
-                self.with_focused_project(move |ws, _io| ws.preview_edit_open(idx));
-            }
-            Message::PreviewReload(idx) => {
-                self.preview_tab_menu = None;
-                self.with_focused_project(move |ws, _io| ws.preview_reload(idx));
             }
             Message::EditorEvent(_action) => {
                 // main.rs 的 dispatch 直接调 `App::preview_edit_event`,不经过
@@ -5293,25 +5223,9 @@ impl App {
             Message::PreviewEditConfirmCancel => {
                 self.with_focused_project(|ws, _io| ws.preview_edit_confirm_cancel());
             }
-            Message::PreviewTabContextMenu { idx, editable } => {
-                let (x, y) = self.files.last_right_click();
-                // 与文件树右键菜单互斥——避免两者同时挂着,关掉一个把另一个
-                // 意外顶出来。
-                self.files.close_context_menu();
-                self.preview_tab_menu = Some(PreviewTabMenu {
-                    x,
-                    y,
-                    idx,
-                    editable,
-                });
-            }
-            Message::PreviewTabContextMenuClose => {
-                self.preview_tab_menu = None;
-            }
             Message::ProjectPreviewOpenPath(path) => self.project_preview_open_path(path),
             Message::ProjectPreviewSelectTab(idx) => self.project_preview_select_tab(idx),
             Message::ProjectPreviewCloseTab(idx) => {
-                self.project_preview_tab_menu = None;
                 self.with_focused_project(|ws, _io| {
                     ws.project_preview.close(idx);
                     ws.project_preview_tab_first = 0;
@@ -5336,26 +5250,6 @@ impl App {
             Message::ProjectPreviewEditorEvent(_tab_id, _event) => {
                 // 与 `PreviewEditorEvent` 同口径:到达 `App::update` 说明未走
                 // main.rs 的 Task 桥接器,直接忽略。
-            }
-            Message::ProjectPreviewEditOpen(idx) => {
-                self.project_preview_tab_menu = None;
-                self.with_focused_project(move |ws, _io| ws.project_preview_edit_open(idx));
-            }
-            Message::ProjectPreviewReload(idx) => {
-                self.project_preview_tab_menu = None;
-                self.with_focused_project(move |ws, _io| ws.project_preview_reload(idx));
-            }
-            Message::ProjectPreviewTabContextMenu { idx, editable } => {
-                let (x, y) = self.files.last_right_click();
-                self.project_preview_tab_menu = Some(PreviewTabMenu {
-                    x,
-                    y,
-                    idx,
-                    editable,
-                });
-            }
-            Message::ProjectPreviewTabContextMenuClose => {
-                self.project_preview_tab_menu = None;
             }
             Message::Browser(browser::Message::BookmarksLoaded(pid, bookmarks)) => {
                 self.browser_bookmarks_loaded(pid, bookmarks)
@@ -7562,115 +7456,6 @@ impl App {
         files::update(&mut ws.files, app_files, msg, project_id, &handle, emit);
     }
 
-    /// 文件预览 tab 右键菜单浮层:含"刷新"(恒有)、"编辑"(仅可编辑文本文件)
-    /// 与"关闭"三项。定位坐标由 `PreviewTabContextMenu` 打开时记录,风格与
-    /// 文件树右键菜单一致(`files::context_menu_popup`/`menu_item`)。
-    fn preview_tab_context_menu_popup<'a>(
-        &self,
-    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-        let menu = match &self.preview_tab_menu {
-            Some(m) => m,
-            None => return column![].into(),
-        };
-        let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
-            Vec::new();
-        // “刷新”:从文件系统重新读盘并重新渲染当前预览的文件——右键菜单
-        // 里最常用的一档,排最前。
-        items.push(crate::menu::item::<Message>(
-            Some(icons::IconKind::RefreshCw),
-            "刷新",
-            Message::PreviewReload(menu.idx),
-        ));
-        // 仅可编辑文本文件显示"编辑"(见 `is_editable_extension`)。
-        if menu.editable {
-            items.push(crate::menu::item::<Message>(
-                Some(icons::IconKind::Rename),
-                "编辑",
-                Message::PreviewEditOpen(menu.idx),
-            ));
-        }
-        items.push(crate::menu::item::<Message>(
-            None,
-            "关闭",
-            Message::PreviewCloseTab(menu.idx),
-        ));
-
-        let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-            crate::menu::shell(
-                items,
-                Length::Fixed(byteui::theme::geometry::menu_item_width()),
-            );
-        // 文件预览的 webview 只铺在 tab 栏**下方**的内容区(这就是 tab 栏本身
-        // 始终以 iced 显示、不被 webview 盖住的原因)。右键菜单若向下弹会压到
-        // webview、被原生子视图挡住;故改为**向上弹**——以光标为底边、向上展开,
-        // 整片落在 tab 栏上方的 iced 区域,既不被 webview 遮、也不用在菜单期间
-        // 藏掉预览内容(那个方案会让预览整片消失,体验更差)。
-        let window_h = self.window_size.1;
-        let bottom = (window_h - menu.y).max(0.0);
-        container(list)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_y(iced_widget::core::alignment::Vertical::Bottom)
-            .padding(Padding {
-                top: 0.0,
-                left: menu.x,
-                right: 0.0,
-                bottom,
-            })
-            .into()
-    }
-
-    /// Project 面板右配对预览 tab 右键菜单浮层,语义同
-    /// `preview_tab_context_menu_popup`。定位坐标同样复用 `files.last_right_click`
-    /// (main.rs 任意右键都会先写入),"编辑"项落 `ProjectPreviewEditOpen`(编辑
-    /// project 预览的 tab)、"关闭"落 `ProjectPreviewCloseTab`。
-    fn project_preview_tab_context_menu_popup<'a>(
-        &self,
-    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-        let menu = match &self.project_preview_tab_menu {
-            Some(m) => m,
-            None => return column![].into(),
-        };
-        let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
-            Vec::new();
-        items.push(crate::menu::item::<Message>(
-            Some(icons::IconKind::RefreshCw),
-            "刷新",
-            Message::ProjectPreviewReload(menu.idx),
-        ));
-        if menu.editable {
-            items.push(crate::menu::item::<Message>(
-                Some(icons::IconKind::Rename),
-                "编辑",
-                Message::ProjectPreviewEditOpen(menu.idx),
-            ));
-        }
-        items.push(crate::menu::item::<Message>(
-            None,
-            "关闭",
-            Message::ProjectPreviewCloseTab(menu.idx),
-        ));
-
-        let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-            crate::menu::shell(
-                items,
-                Length::Fixed(byteui::theme::geometry::menu_item_width()),
-            );
-        let window_h = self.window_size.1;
-        let bottom = (window_h - menu.y).max(0.0);
-        container(list)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_y(iced_widget::core::alignment::Vertical::Bottom)
-            .padding(Padding {
-                top: 0.0,
-                left: menu.x,
-                right: 0.0,
-                bottom,
-            })
-            .into()
-    }
-
     /// Project 面板链接行右键菜单浮层:当前只含"删除"。定位坐标复用
     /// `files.last_right_click`(main.rs 任意右键都会先写入),"删除"回
     /// `project::Message::LinkRemove`。
@@ -8255,28 +8040,6 @@ impl App {
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
-        } else if self.preview_tab_menu.is_some() {
-            let dismiss = MouseArea::new(
-                container(column![])
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            )
-            .on_press(Message::PreviewTabContextMenuClose);
-            stack![base, dismiss, self.preview_tab_context_menu_popup()]
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
-        } else if self.project_preview_tab_menu.is_some() {
-            let dismiss = MouseArea::new(
-                container(column![])
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            )
-            .on_press(Message::ProjectPreviewTabContextMenuClose);
-            stack![base, dismiss, self.project_preview_tab_context_menu_popup()]
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
         } else if self.project_link_menu.is_some() {
             let dismiss = MouseArea::new(
                 container(column![])

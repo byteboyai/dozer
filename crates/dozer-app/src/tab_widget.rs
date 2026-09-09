@@ -425,7 +425,7 @@ const TAB_OVERFLOW_MENU_MAX_HEIGHT: f32 = 320.0;
 /// `Message::Noop`,database 用新增的 `database::Message::Noop`,详见各自
 /// 任务),避免为一个短生命周期的浮层再铺一整套 `HoverId` 动画状态。
 ///
-/// 悬浮定位:向上弹(同 `PreviewTabMenu`——文件/项目预览的 tab 栏下方是
+/// 悬浮定位:向上弹(同已移除的预览 tab 右键菜单——文件/项目预览的 tab 栏下方是
 /// wry webview 子视图,webview 恒在 iced 内容之上,向下弹会被盖住;为了让
 /// 5 处调用点共用同一套定位逻辑、不用按面板特判,统一向上弹),同时按
 /// `project_add_menu_popup` 的手法钳一次 x/y 防止超出窗口右/下边缘。
@@ -491,8 +491,9 @@ where
     );
     let list = container(list).max_height(TAB_OVERFLOW_MENU_MAX_HEIGHT);
 
-    // 全屏透明遮罩,接住"点外部关闭"(同 `PreviewTabMenu`/`project_add_menu_popup`
-    // 的既有套路)。内容本身不画任何东西(空白 Space),让容器撑满全窗。
+    // 全屏透明遮罩,接住"点外部关闭"(同已移除的预览 tab 右键菜单与
+    // `project_add_menu_popup` 的既有套路)。内容本身不画任何东西(空白
+    // Space),让容器撑满全窗。
     let dismiss = MouseArea::new(
         container(iced_widget::Space::new())
             .width(Length::Fill)
