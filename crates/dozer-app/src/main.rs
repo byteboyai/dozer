@@ -2813,13 +2813,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 // widget 树、能拿到真焦点,但这里的每帧焦点捕获
                                 // 一直没跑,`files_search_focused()` 恒 false,
                                 // 键盘路由 OR 链永远不放行,字符全被拦下)。
-                                let files_in_either_view = matches!(
-                                    app.left_view(),
-                                    crate::app::PanelKind::Files
-                                ) || matches!(
-                                    app.right_view(),
-                                    crate::app::PanelKind::Files
-                                );
+                                let files_in_either_view =
+                                    matches!(app.left_view(), crate::app::PanelKind::Files)
+                                        || matches!(app.right_view(), crate::app::PanelKind::Files);
                                 let files_focused = if files_in_either_view {
                                     run_operate(
                                         &mut interface,
