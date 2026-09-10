@@ -16,6 +16,10 @@ pub enum IconKind {
     ChevronLeft,
     ChevronRight,
     ChevronDown,
+    /// 面板 tab 栏"溢出下拉"入口图标(Lucide chevrons-down:双重向下箭头),
+    /// 见 `tab_widget::tab_overflow_button`——区别于单箭头的 `ChevronDown`
+    /// (那份被文件树分支切换/Todo 下拉等一堆别的地方共用,不能挪用改样式)。
+    ChevronsDown,
     /// 文件树底部分支切换按钮在弹层**展开**态下的图标(Lucide chevron-up):
     /// 收起时为 `ChevronDown`,展开后翻转,提示"点此收起弹层"。
     ChevronUp,
@@ -192,6 +196,7 @@ impl IconKind {
             IconKind::ChevronLeft => include_bytes!("../../assets/icons/chevron-left.svg"),
             IconKind::ChevronRight => include_bytes!("../../assets/icons/chevron-right.svg"),
             IconKind::ChevronDown => include_bytes!("../../assets/icons/chevron-down.svg"),
+            IconKind::ChevronsDown => include_bytes!("../../assets/icons/chevrons-down.svg"),
             IconKind::ChevronUp => include_bytes!("../../assets/icons/chevron-up.svg"),
             IconKind::ArrowDown => include_bytes!("../../assets/icons/arrow-down.svg"),
             IconKind::ArrowUp => include_bytes!("../../assets/icons/arrow-up.svg"),

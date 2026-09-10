@@ -333,9 +333,10 @@ pub(crate) fn tab_window_reveal(
 /// 溢出下拉入口。V 按钮在 tab 组非空时始终显示(即使当前没有横向溢出,
 /// 下拉也要列出**该组全部 tab**,供随时跳转)。仅当 tab 组为空(编号 0)时
 /// 返回 `None` 让调用方跳过——不走"禁用态灰按钮"(见 spec 语义确认)。
-/// 图标 `ChevronDown`(Lucide chevron-down,纯箭头,不带方框),套
-/// `icons::icon_button_entry` 标准图标按钮(静止 DIM、hover 平滑过渡到
-/// GOLD),与面板内其余图标按钮同一套视觉,不再自绘 hover 背景/边框;
+/// 图标 `ChevronsDown`(Lucide chevrons-down,双重箭头,与文件树分支切换
+/// 等处共用的单箭头 `ChevronDown`区分开),套 `icons::icon_button_entry`
+/// 标准图标按钮(静止 DIM、hover 平滑过渡到 GOLD),与面板内其余图标按钮
+/// 同一套视觉,不再自绘 hover 背景/边框;
 /// `hover_t`/`on_hover` 由调用方接自己那组专属 `HoverId`(如
 /// `HoverId::TermTabOverflow`)——固定单按钮,不随 tab 增减/拖拽换位漂移,
 /// 不需要 `rekey_hover_range`。命中区尺寸沿用原先的 `tab_arrow_button_size`,
@@ -350,7 +351,7 @@ pub(crate) fn tab_overflow_button<'a, M: Clone + 'a>(
         return None;
     }
     Some(icons::icon_button_entry(
-        icons::IconKind::ChevronDown,
+        icons::IconKind::ChevronsDown,
         byteui::theme::icon_size::chevron(),
         false,
         false,
