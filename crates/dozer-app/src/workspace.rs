@@ -4104,6 +4104,7 @@ pub(crate) fn preview_tab_overflow_popup<'a>(
             title: tab.title.clone(),
             active: idx == preview.active_idx(),
             closable: true,
+            hover_t: app.hover_progress(HoverId::TabOverflowRow(idx)),
         })
         .collect();
     Some(tab_overflow_menu(TabOverflowMenuArgs {
@@ -4113,7 +4114,7 @@ pub(crate) fn preview_tab_overflow_popup<'a>(
         on_select: select_msg,
         on_close: close_msg,
         on_dismiss: overflow_dismiss_msg,
-        no_op: Message::Noop,
+        on_row_hover: move |idx, hovered| Message::Hover(HoverId::TabOverflowRow(idx), hovered),
     }))
 }
 

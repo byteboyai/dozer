@@ -805,10 +805,6 @@ pub enum Message {
     TabOverflowToggle,
     /// tab 栏溢出下拉:点击外部关闭。同样由 `App::update` 拦截。
     TabOverflowDismiss,
-    /// 无副作用占位消息:`tab_overflow_menu` 下拉行的 `title_hover`/
-    /// `close_hover` 回调要求(`tab_core` 强制的两个参数,下拉行本身不做
-    /// hover 动画,用不上),见 `tab_widget::TabOverflowMenuArgs::no_op` 文档。
-    Noop,
 
     // ---- 浏览页(WHERE/ORDER BY/分页) ----
     BrowseWhereChanged(usize, String),
@@ -849,7 +845,6 @@ pub fn update(
         // 这两个溢出开关由 `app.rs` 主级 `update` 拦截(需要 `App::last_cursor`),
         // 正常不会走到这个子级 `database::update`——保留空 arm 只为满足穷尽。
         Message::TabOverflowToggle | Message::TabOverflowDismiss => {}
-        Message::Noop => {}
         Message::ToggleDriver(driver) => app_state.toggle(driver),
         Message::DriversPopupToggle => {
             app_state.drivers_popup_open = !app_state.drivers_popup_open;
@@ -2287,6 +2282,7 @@ pub fn tab_overflow_popup<'a>(
             title: tab_title(tab, ws_state),
             active: Some(i) == content.active_idx(),
             closable: true,
+            hover_t: app.hover_progress(crate::app::HoverId::TabOverflowRow(idx)),
         });
     }
     Some(crate::tab_widget::tab_overflow_menu(
@@ -2303,7 +2299,9 @@ pub fn tab_overflow_popup<'a>(
             },
             on_close: |idx| Message::CloseTab(idx - 1),
             on_dismiss: Message::TabOverflowDismiss,
-            no_op: Message::Noop,
+            on_row_hover: move |idx, hovered| {
+                Message::Hover(crate::app::HoverId::TabOverflowRow(idx), hovered)
+            },
         },
     ))
 }

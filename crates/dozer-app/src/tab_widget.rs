@@ -408,28 +408,33 @@ pub(crate) fn tab_render_mode_button<'a, M: Clone + 'a>(
 /// `Element`(状态点/图标/无),`active` 决定是否高亮——菜单里可能同时出现
 /// 已经横向可见的当前选中项,高亮让用户看得出"这其实是当前那个"。
 /// `closable=false` 用于 SSH/Database 的固定"空白"占位 tab(本来就不可关闭)。
+/// `hover_t` 是这一行当前的行悬停动画进度(0..=1),由调用方从
+/// `App::hover_progress(HoverId::TabOverflowRow(index))` 取出——菜单行本身
+/// 不持有状态,和 `PanelTabArgs::hover_t` 同一套路(见 `tab_overflow_menu`)。
 pub(crate) struct TabOverflowEntry<'a, M> {
     pub index: usize,
     pub prefix: Option<Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>>,
     pub title: String,
     pub active: bool,
     pub closable: bool,
+    pub hover_t: f32,
 }
 
 /// `tab_overflow_menu` 的参数:仿 `tabs::TabCoreArgs`/`tab_widget::PanelTabArgs`
 /// 的具名字段结构体风格(闭包走结构体自身泛型参数,不用 `Box<dyn Fn>`)。
 /// `anchor` 是点 V 按钮那一刻的 `App::last_cursor` 快照(逻辑坐标),
 /// `window_size` 是当前窗口尺寸,两者一起用于把下拉钉在按钮附近同时不越出
-/// 窗口边界。`no_op` 是调用方那套 `Message` 里已有的无副作用变体(顶层用
-/// `Message::Noop`,database 用 `database::Message::Noop`)——`tab_core` 强制
-/// 要求 `on_select_hover`/`on_close_hover` 两个回调,但下拉行不做 hover
-/// 动画(用不上),曾经图省事直接传 `on_dismiss.clone()` 顶替,酿成"鼠标一
-/// 移到菜单行上就把菜单自己关掉"的 bug(验收发现),这里改传真正的 no-op。
-pub(crate) struct TabOverflowMenuArgs<'a, M, FSel, FClose>
+/// 窗口边界。`on_row_hover` 把 `tab_core` 强制的 `on_select_hover`/
+/// `on_close_hover` 两个回调接到该行自己的 `HoverId::TabOverflowRow(index)`
+/// (`(idx, hovered) -> Message::Hover(...)`)——**绝不能**拿 `on_dismiss`
+/// 顶替当 no-op:曾经图省事直接把 `on_dismiss.clone()` 传给 hover,酿成
+/// "鼠标一移到菜单行上就把菜单自己关掉"的 bug(验收发现)。
+pub(crate) struct TabOverflowMenuArgs<'a, M, FSel, FClose, FRH>
 where
     M: Clone + 'a,
     FSel: Fn(usize) -> M,
     FClose: Fn(usize) -> M,
+    FRH: Fn(usize, bool) -> M,
 {
     pub entries: Vec<TabOverflowEntry<'a, M>>,
     pub anchor: (f32, f32),
@@ -437,7 +442,7 @@ where
     pub on_select: FSel,
     pub on_close: FClose,
     pub on_dismiss: M,
-    pub no_op: M,
+    pub on_row_hover: FRH,
 }
 
 const TAB_OVERFLOW_MENU_WIDTH: f32 = 220.0;
@@ -448,12 +453,15 @@ const TAB_OVERFLOW_MENU_MAX_HEIGHT: f32 = 320.0;
 /// `MouseArea`+`on_enter`/`on_exit`)。关闭按钮**始终可点**(不像横向 tab 那样
 /// hover 才显形)——这是刻意的自定义(见截图:下拉里的 x 是常显的,不是
 /// hover-only),因为悬浮列表本就是"已经主动点开来看"的场景,hover-only 反而
-/// 多一次交互成本。行内不做**动画**hover(`title_hover`/`close_hover` 两个
-/// 回调传 `no_op`——调用方那套 `Message` 里的无副作用变体,避免为一个短
-/// 生命周期的浮层再铺一整套 `HoverId` 动画状态;**必须**是真 no-op:曾经
-/// 图省事直接传 `on_dismiss.clone()` 顶替,酿成"鼠标一移到菜单行上,
-/// `on_select_hover(true)` 一fire 就把菜单自己关掉,根本放不上去"的 bug
-/// (验收反馈"鼠标无法放到展开的菜单上"),已改传 `no_op`)。× 按钮本身仍有
+/// 多一次交互成本。行**有**动画 hover(验收反馈"tab 组下拉菜单应该有 hover
+/// 效果"):`tab_core` 的 `on_select_hover`/`on_close_hover` 都接到该行
+/// `HoverId::TabOverflowRow(index)` 上,行底色用 `entry.hover_t` 走横向 tab
+/// 同一套 `tab_container_style` 插值(`hover = title_hover.max(close_hover)`,
+/// 两者共用同一个 id,因此只取 `entry.hover_t` 一个值即可;同一帧内进/出会
+/// 落到同一个 `HoverAnim`,不会来回闪)。`on_row_hover` **绝不能**拿
+/// `on_dismiss` 顶替当 no-op:曾经图省事直接传 `on_dismiss.clone()`,酿成
+/// "鼠标一移到菜单行上,`on_select_hover(true)` 一 fire 就把菜单自己关掉,
+/// 根本放不上去"的 bug(验收反馈"鼠标无法放到展开的菜单上")。× 按钮本身仍有
 /// "标准 hover 效果"——`tabs::tab_core` 的关闭按钮原生 `button::Status`
 /// 悬停即变金,不依赖这里任何动画状态(见 `tab_core` 文档)。
 ///
@@ -475,13 +483,14 @@ const TAB_OVERFLOW_MENU_MAX_HEIGHT: f32 = 320.0;
 /// `project_preview_tab_overflow_anchor` 展开时强制该侧 webview
 /// `visible = false`(同 `search_modal` 打开时的既有处理)。终端/SSH/Database
 /// 三处没有 webview,不受影响。
-pub(crate) fn tab_overflow_menu<'a, M, FSel, FClose>(
-    args: TabOverflowMenuArgs<'a, M, FSel, FClose>,
+pub(crate) fn tab_overflow_menu<'a, M, FSel, FClose, FRH>(
+    args: TabOverflowMenuArgs<'a, M, FSel, FClose, FRH>,
 ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>
 where
     M: Clone + 'a,
     FSel: Fn(usize) -> M + 'a,
     FClose: Fn(usize) -> M + 'a,
+    FRH: Fn(usize, bool) -> M + 'a,
 {
     let TabOverflowMenuArgs {
         entries,
@@ -490,10 +499,13 @@ where
         on_select,
         on_close,
         on_dismiss,
-        no_op,
+        on_row_hover,
     } = args;
     let close_sz = byteui::theme::geometry::tab_button_size();
     let row_max_w = TAB_OVERFLOW_MENU_WIDTH - close_sz - 16.0;
+    // 每行都要向视图层塞一份 hover 回调,闭包按行捕获 `idx`,无法共享同一个
+    // 借用;`Rc` 让所有行共用同一份 `FRH`(只读 `Fn`,无内部可变性)。
+    let on_row_hover = std::rc::Rc::new(on_row_hover);
 
     let mut rows: Vec<Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>> = Vec::new();
     for entry in entries {
@@ -508,12 +520,12 @@ where
             on_select: (on_select)(idx),
             on_close: (on_close)(idx),
             on_select_hover: {
-                let n = no_op.clone();
-                move |_h| n.clone()
+                let f = on_row_hover.clone();
+                move |h| f(idx, h)
             },
             on_close_hover: {
-                let n = no_op.clone();
-                move |_h| n.clone()
+                let f = on_row_hover.clone();
+                move |h| f(idx, h)
             },
         });
         let row_content = row![select, close]
@@ -523,7 +535,7 @@ where
             container(row_content)
                 .width(Length::Fill)
                 .padding(Padding::new(4.0))
-                .style(tab_container_style(entry.active, 0.0))
+                .style(tab_container_style(entry.active, entry.hover_t))
                 .into(),
         );
     }

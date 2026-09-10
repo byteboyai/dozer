@@ -279,6 +279,11 @@ pub enum HoverId {
     /// Database 面板内容窗格 tab 栏"溢出下拉"入口,处理方式同 `TermTabOverflow`
     /// (见 `extensions::database::content_pane`)。
     DatabaseTabOverflow,
+    /// 任一 tab 组"溢出下拉"菜单里**某一行**的悬停(按该行在菜单里的
+    /// `TabOverflowEntry::index` 区分)。五处下拉(终端/文件预览/项目预览/
+    /// SSH/Database)互斥展开,同一时刻只会有其中一个菜单可见,因此不同组
+    /// 复用同一套行下标键不会冲突(见 `tab_widget::tab_overflow_menu`)。
+    TabOverflowRow(usize),
     /// 文件预览 tab 组最右侧"预览/代码切换"按钮(`FilePlay`/`FileCode`):
     /// 处理方式同 `FileTreeCollapse`(见 `tab_widget::tab_render_mode_button`,
     /// 调用点 `workspace::preview_pane_for`)。
@@ -9603,6 +9608,7 @@ fn ssh_tab_overflow_popup<'a>(
                 .as_ref()
                 .is_some_and(|(h, k)| h == &host_id && *k == ssh::SshTabKind::Terminal),
             closable: true,
+            hover_t: app.hover_progress(HoverId::TabOverflowRow(idx)),
         });
     }
     for (i, (host_id, _)) in ws.sftp_tabs.iter().enumerate() {
@@ -9624,6 +9630,7 @@ fn ssh_tab_overflow_popup<'a>(
             title: label,
             active: ws.ssh_active.as_ref() == Some(&(host_id.clone(), ssh::SshTabKind::Sftp)),
             closable: true,
+            hover_t: app.hover_progress(HoverId::TabOverflowRow(idx)),
         });
     }
     Some(tab_widget::tab_overflow_menu(
@@ -9634,7 +9641,7 @@ fn ssh_tab_overflow_popup<'a>(
             on_select: |idx| ssh_tab_overflow_select_message(ws, idx),
             on_close: |idx| ssh_tab_overflow_close_message(ws, idx),
             on_dismiss: Message::Ssh(ssh::Message::TabOverflowDismiss),
-            no_op: Message::Noop,
+            on_row_hover: move |idx, hovered| Message::Hover(HoverId::TabOverflowRow(idx), hovered),
         },
     ))
 }

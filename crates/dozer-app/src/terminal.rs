@@ -205,6 +205,7 @@ pub(crate) fn term_tab_overflow_popup<'a>(
             title: tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
             active: idx == ws.active,
             closable: true,
+            hover_t: app.hover_progress(HoverId::TabOverflowRow(idx)),
         })
         .collect();
     Some(tab_widget::tab_overflow_menu(
@@ -215,7 +216,7 @@ pub(crate) fn term_tab_overflow_popup<'a>(
             on_select: Message::SelectTab,
             on_close: Message::CloseTab,
             on_dismiss: Message::TermTabOverflowDismiss,
-            no_op: Message::Noop,
+            on_row_hover: move |idx, hovered| Message::Hover(HoverId::TabOverflowRow(idx), hovered),
         },
     ))
 }
