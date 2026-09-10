@@ -1804,18 +1804,17 @@ pub fn view<'a>(
                     .unwrap_or(delivery::TreeState::Unchanged)
             };
             let is_selected = ws_state.tree_selected.as_deref() == Some(row.path.as_path());
-            // 选中行整行填充奶油色实底(见下方 `row_btn` 的 `background`),
-            // 原本配深底设计的浅色文字/图标(git 状态色、`dim`)在亮底上会
-            // 对比度不足——选中态改用主题深底色 `bg`(#0a0e16)顶替,未选中
-            // 保持原有颜色不变(2026-09 用户实测反馈选中背景要改成奶油色,
-            // 连带这里一起调整,不然选中行的字会糊在亮底上看不清)。
+            // 选中行背景改半透明奶油色(见下方 `row_btn` 的 `background`,
+            // alpha 0.3)——不再是实底亮底,深色 `bg` 顶替字/图标反而看不清,
+            // 改用 `cream`(同 hover/active 页签既有配色),半透明底上亮字
+            // 对比度足够,未选中保持原有颜色不变。
             let icon_color = if is_selected {
-                byteui::theme::color::current().bg
+                byteui::theme::color::current().cream
             } else {
                 byteui::theme::color::current().dim
             };
             let name_color = if is_selected {
-                byteui::theme::color::current().bg
+                byteui::theme::color::current().cream
             } else {
                 tree_state_color(state)
             };
@@ -1920,13 +1919,23 @@ pub fn view<'a>(
             > = button(line)
                 .width(Length::Fill)
                 .style(move |_t, _s| button::Style {
+                    // 选中态背景改半透明(验收反馈:实底奶油太抢,0.3 透明度
+                    // 让下面的行/缩进线隐约透出)——文字色跟着从"反色"
+                    // (`bg` 深色压亮底)改回 `cream`(同 hover/active 页签的
+                    // 既有配色),半透明底上深色字对比度会不够。
                     background: if is_selected {
-                        Some(byteui::theme::color::current().cream.into())
+                        Some(
+                            Color {
+                                a: 0.3,
+                                ..byteui::theme::color::current().cream
+                            }
+                            .into(),
+                        )
                     } else {
                         None
                     },
                     text_color: if is_selected {
-                        byteui::theme::color::current().bg
+                        byteui::theme::color::current().cream
                     } else {
                         byteui::theme::color::current().body
                     },
