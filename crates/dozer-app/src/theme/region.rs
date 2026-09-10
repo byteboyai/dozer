@@ -448,8 +448,8 @@ mod tests {
         let border = s.border.expect("context_menu 应有边框");
         assert_eq!(border.color, byteui::theme::color::current().border);
         assert_eq!(border.width, 1.0);
-        assert_eq!(border.radius, 10.0.into());
-        assert_eq!(s.padding, Padding::from(6.0));
+        assert_eq!(border.radius, 14.0.into());
+        assert_eq!(s.padding, Padding::from(8.0));
         assert_eq!(s.gap, 2.0);
     }
 

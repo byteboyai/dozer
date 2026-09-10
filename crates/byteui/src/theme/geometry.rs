@@ -52,9 +52,9 @@ pub struct GeometryTokens {
     pub menu_item_width: f32,
     /// 菜单项内"图标↔文字"间距（设计基准 8）。
     pub menu_gap: f32,
-    /// 菜单项上下内边距（设计基准 6）。
+    /// 菜单项上下内边距（设计基准 7，对齐 macOS 原生右键菜单的行高留白）。
     pub menu_pad_v: f32,
-    /// 菜单项左右内边距（设计基准 10）。
+    /// 菜单项左右内边距（设计基准 14，对齐 macOS 原生右键菜单的横向留白）。
     pub menu_pad_h: f32,
     /// H0 项目中心左栏固定宽（设计基准 248，Figma 同值）。
     pub h0_sidebar_width: f32,
@@ -92,8 +92,8 @@ impl GeometryTokens {
             tab_arrow_button_size: 18.0,
             menu_item_width: 160.0,
             menu_gap: 8.0,
-            menu_pad_v: 6.0,
-            menu_pad_h: 10.0,
+            menu_pad_v: 7.0,
+            menu_pad_h: 14.0,
             h0_sidebar_width: 248.0,
         }
     }
@@ -316,8 +316,8 @@ mod tests {
         assert_eq!(t.tab_arrow_button_size, 18.0);
         assert_eq!(t.menu_item_width, 160.0);
         assert_eq!(t.menu_gap, 8.0);
-        assert_eq!(t.menu_pad_v, 6.0);
-        assert_eq!(t.menu_pad_h, 10.0);
+        assert_eq!(t.menu_pad_v, 7.0);
+        assert_eq!(t.menu_pad_h, 14.0);
         assert_eq!(t.h0_sidebar_width, 248.0);
     }
 

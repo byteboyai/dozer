@@ -73,8 +73,8 @@
     },
     "context_menu": {
       "background": "#0a0e16",
-      "border": { "color": "BORDER", "width": 1.0, "radius": 10.0 },
-      "padding": 6,
+      "border": { "color": "BORDER", "width": 1.0, "radius": 14.0 },
+      "padding": 8,
       "gap": 2
     },
     "left_zone": {
@@ -138,8 +138,8 @@
     "tab_arrow_button_size": 18.0,
     "menu_item_width": 160.0,
     "menu_gap": 8.0,
-    "menu_pad_v": 6.0,
-    "menu_pad_h": 10.0,
+    "menu_pad_v": 7.0,
+    "menu_pad_h": 14.0,
     "h0_sidebar_width": 248.0
   }
 }

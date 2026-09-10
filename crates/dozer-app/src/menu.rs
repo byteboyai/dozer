@@ -21,10 +21,12 @@
 
 use crate::theme;
 use byteui::interaction::icons;
-use iced_widget::core::{Border, Color, Element, Length};
+use iced_widget::core::{Border, Color, Element, Length, Shadow, Vector};
 use iced_widget::{button, column, container, row, text};
 
-const MENU_HOVER_RADIUS: f32 = 4.0;
+/// macOS 原生右键菜单的高亮/命中区是较大的圆角矩形(而非直角),`item`/
+/// `item_row` 的 hover/pressed 态、`item_row_fill` 一并复用这个半径。
+const MENU_HOVER_RADIUS: f32 = 6.0;
 
 /// 单个菜单项:可选图标 + 文字。常宽固定(菜单不随 label 长短伸缩),hover/
 /// pressed 切到 `TAB_HOVER` 底。文字与图标取默认 `CREAM`(图标无色的只用
@@ -140,6 +142,17 @@ pub fn shell<'a, Msg: 'a>(
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
             border: region.border.unwrap_or_default(),
+            // macOS 原生右键菜单靠系统合成器的大模糊投影把浮层和背景内容
+            // 拉开层次;iced 没有实时高斯模糊可用,这里退而求其次用一圈软阴影
+            // 模拟同样的"浮起"观感。
+            shadow: Shadow {
+                color: Color {
+                    a: 0.45,
+                    ..Color::BLACK
+                },
+                offset: Vector::new(0.0, 10.0),
+                blur_radius: 28.0,
+            },
             ..container::Style::default()
         })
         .into()
