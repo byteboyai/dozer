@@ -442,13 +442,15 @@ mod tests {
     #[test]
     fn context_menu_matches_pre_migration_literals() {
         let s = context_menu();
-        // 背景统一为 `#0a0e16`(与其它面板一致),不再用 CARD 叠 alpha 的
-        // 半透明观感。
-        assert_eq!(s.background, Some(byteui::theme::color::current().bg));
+        // 背景取 `BG` 色 + alpha,模拟 macOS 原生右键菜单的磨砂/半透明观感
+        // (iced 无实时高斯模糊可用,退而求其次用半透明打底 + `shell()` 的
+        // 软阴影一起近似"浮起且透光"的质感)。
+        assert_eq!(s.background, Some(parse_hex_color("#0a0e16e6")));
         let border = s.border.expect("context_menu 应有边框");
         assert_eq!(border.color, byteui::theme::color::current().border);
         assert_eq!(border.width, 1.0);
-        assert_eq!(border.radius, 14.0.into());
+        // 圆角对齐 macOS 原生右键菜单(比之前的 14 更扁平的 9)。
+        assert_eq!(border.radius, 9.0.into());
         assert_eq!(s.padding, Padding::from(8.0));
         assert_eq!(s.gap, 2.0);
     }

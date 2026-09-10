@@ -29,17 +29,18 @@ use iced_widget::{button, column, container, row, text};
 const MENU_HOVER_RADIUS: f32 = 6.0;
 
 /// 单个菜单项:可选图标 + 文字。常宽固定(菜单不随 label 长短伸缩),hover/
-/// pressed 切到 `TAB_HOVER` 底。文字与图标取默认 `CREAM`(图标无色的只用
-/// 文字行)。`msg` 为点击下发消息。
+/// pressed 切到 `TAB_HOVER` 底。文字与图标取默认 `BODY`(macOS 原生右键
+/// 菜单是中性灰白字,不是主题强调色;图标无色的只用文字行)。`msg` 为
+/// 点击下发消息。
 pub fn item<'a, Msg: 'a + Clone>(
     icon: Option<icons::IconKind>,
     label: impl Into<String>,
     msg: Msg,
 ) -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {
     item_row(
-        icon_leading(icon, byteui::theme::color::current().cream),
+        icon_leading(icon, byteui::theme::color::current().body),
         label,
-        byteui::theme::color::current().cream,
+        byteui::theme::color::current().body,
         Some(msg),
     )
 }
@@ -68,12 +69,12 @@ pub fn item_row<'a, Msg: 'a + Clone>(
         Some(leading) => row![
             leading,
             text(label.into())
-                .size(byteui::theme::font::body())
+                .size(byteui::theme::font::label())
                 .color(color)
         ],
         None => row![
             text(label.into())
-                .size(byteui::theme::font::body())
+                .size(byteui::theme::font::label())
                 .color(color)
         ],
     };
@@ -98,12 +99,12 @@ pub fn item_row_fill<'a, Msg: 'a + Clone>(
         Some(leading) => row![
             leading,
             text(label.into())
-                .size(byteui::theme::font::body())
+                .size(byteui::theme::font::label())
                 .color(color)
         ],
         None => row![
             text(label.into())
-                .size(byteui::theme::font::body())
+                .size(byteui::theme::font::label())
                 .color(color)
         ],
     };
@@ -142,9 +143,10 @@ pub fn shell<'a, Msg: 'a>(
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: region.background.map(Into::into),
             border: region.border.unwrap_or_default(),
-            // macOS 原生右键菜单靠系统合成器的大模糊投影把浮层和背景内容
-            // 拉开层次;iced 没有实时高斯模糊可用,这里退而求其次用一圈软阴影
-            // 模拟同样的"浮起"观感。
+            // macOS 原生右键菜单靠系统合成器的实时高斯模糊(vibrancy)把浮层
+            // 和背景内容拉开层次;iced 没有实时模糊可用,这里退而求其次用
+            // `region.background` 的半透明打底(透出下层内容)+ 一圈软阴影
+            // 模拟同样的"磨砂浮起"观感。
             shadow: Shadow {
                 color: Color {
                     a: 0.45,

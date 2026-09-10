@@ -72,8 +72,8 @@
       "border": { "color": "GOLD", "width": 1.5, "radius": 10.0 }
     },
     "context_menu": {
-      "background": "#0a0e16",
-      "border": { "color": "BORDER", "width": 1.0, "radius": 14.0 },
+      "background": "#0a0e16e6",
+      "border": { "color": "BORDER", "width": 1.0, "radius": 9.0 },
       "padding": 8,
       "gap": 2
     },
