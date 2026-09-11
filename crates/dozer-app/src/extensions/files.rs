@@ -2291,13 +2291,13 @@ pub fn branch_picker_popup(
     for name in &ws_state.git_branches {
         let is_current = Some(name.as_str()) == current;
         // 当前分支 GOLD 高亮 + 指示点;其余分支:dirty 锁定时 DIM 置灰,否则
-        // 常规 CREAM(同上下文菜单项文字)。
+        // 常规 BODY(同上下文菜单项文字)。
         let color = if is_current {
             byteui::theme::color::current().gold
         } else if lock_others {
             byteui::theme::color::current().dim
         } else {
-            byteui::theme::color::current().cream
+            byteui::theme::color::current().body
         };
         let indicator: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
             if is_current {

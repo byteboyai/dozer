@@ -44,6 +44,92 @@ pub fn view_at_size<'a, Message: Clone + 'a>(
     bare: bool,
     on_input: impl Fn(String) -> Message + 'a,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    view_at_size_impl(
+        false,
+        size,
+        placeholder,
+        value,
+        secure,
+        id,
+        highlight,
+        on_submit,
+        bare,
+        on_input,
+    )
+}
+
+/// [`view_at_size`] 的背景色变体:非 `bare` 态底色用 `colors.bg`(而非默认的
+/// `colors.card`)——跟原生预览"文件内搜索"输入框(`find_field_shell`)同一套
+/// 底色,供需要跟深色面板背景齐平、观感对齐的表单套用(数据库/主机新增表单
+/// 统一成文件内搜索输入框风格,2026-09-11 需求)。其余(边框/圆角/聚焦态
+/// 描金逻辑)与 [`view_at_size`] 完全一致。
+#[allow(clippy::too_many_arguments)]
+pub fn view_on_bg_at_size<'a, Message: Clone + 'a>(
+    size: f32,
+    placeholder: &str,
+    value: &str,
+    secure: bool,
+    id: Option<widget::Id>,
+    highlight: bool,
+    on_submit: Option<Message>,
+    bare: bool,
+    on_input: impl Fn(String) -> Message + 'a,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    view_at_size_impl(
+        true,
+        size,
+        placeholder,
+        value,
+        secure,
+        id,
+        highlight,
+        on_submit,
+        bare,
+        on_input,
+    )
+}
+
+/// [`view_on_bg_at_size`] 的缺省字号版本,参照 [`view`] 与 [`view_at_size`]
+/// 的关系。
+#[allow(clippy::too_many_arguments)]
+pub fn view_on_bg<'a, Message: Clone + 'a>(
+    placeholder: &str,
+    value: &str,
+    secure: bool,
+    id: Option<widget::Id>,
+    highlight: bool,
+    on_submit: Option<Message>,
+    bare: bool,
+    on_input: impl Fn(String) -> Message + 'a,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    view_on_bg_at_size(
+        crate::theme::font::body() as f32,
+        placeholder,
+        value,
+        secure,
+        id,
+        highlight,
+        on_submit,
+        bare,
+        on_input,
+    )
+}
+
+/// `view_at_size`/`view_on_bg_at_size` 的共用实装,`on_bg` 选非 `bare` 态的
+/// 底色 token(`true` 取 `colors.bg`,`false` 取 `colors.card`)。
+#[allow(clippy::too_many_arguments)]
+fn view_at_size_impl<'a, Message: Clone + 'a>(
+    on_bg: bool,
+    size: f32,
+    placeholder: &str,
+    value: &str,
+    secure: bool,
+    id: Option<widget::Id>,
+    highlight: bool,
+    on_submit: Option<Message>,
+    bare: bool,
+    on_input: impl Fn(String) -> Message + 'a,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // `bare=true` 时不画自己的框/底(边框/底色留给调用方外层 container),
     // 内边距也该交出去——否则调用方即便把外层 padding 调到跟另一个 bare
     // 输入框一致,这里内建的 8px 还是会让占位符文字整体多缩进一截,两个
@@ -79,7 +165,7 @@ pub fn view_at_size<'a, Message: Clone + 'a>(
                 };
             }
             text_input::Style {
-                background: colors.card.into(),
+                background: (if on_bg { colors.bg } else { colors.card }).into(),
                 border: Border {
                     color: if focused || highlight {
                         colors.gold

@@ -1608,7 +1608,7 @@ fn drivers_popup<'a>(
         items.push(crate::menu::item_row_fill(
             Some(checkbox),
             driver.label(),
-            byteui::theme::color::current().cream,
+            byteui::theme::color::current().body,
             Some(Message::ToggleDriver(driver)),
         ));
     }
@@ -1800,7 +1800,7 @@ fn source_form<'a>(
 
     let mut col = column![driver_select].spacing(8);
     col = col.push(wrap_form_input(
-        byteui::form::input_text::view(
+        byteui::form::input_text::view_on_bg(
             "名字",
             &draft.name,
             false,
@@ -1815,7 +1815,7 @@ fn source_form<'a>(
     ));
     if draft.driver == DriverKind::Sqlite {
         col = col.push(wrap_form_input(
-            byteui::form::input_text::view(
+            byteui::form::input_text::view_on_bg(
                 "文件路径",
                 &draft.database,
                 false,
@@ -1830,7 +1830,7 @@ fn source_form<'a>(
         ));
     } else {
         col = col.push(wrap_form_input(
-            byteui::form::input_text::view(
+            byteui::form::input_text::view_on_bg(
                 "连接 URI(可选,填了则忽略下面各项,例如 postgres://user:pw@host:5432/db)",
                 &draft.uri,
                 false,
@@ -1844,7 +1844,7 @@ fn source_form<'a>(
             false,
         ));
         col = col.push(wrap_form_input(
-            byteui::form::input_text::view(
+            byteui::form::input_text::view_on_bg(
                 "host",
                 &draft.host,
                 false,
@@ -1858,7 +1858,7 @@ fn source_form<'a>(
             false,
         ));
         col = col.push(wrap_form_input(
-            byteui::form::input_text::view(
+            byteui::form::input_text::view_on_bg(
                 "port",
                 &draft.port,
                 false,
@@ -1872,7 +1872,7 @@ fn source_form<'a>(
             false,
         ));
         col = col.push(wrap_form_input(
-            byteui::form::input_text::view(
+            byteui::form::input_text::view_on_bg(
                 "database",
                 &draft.database,
                 false,
@@ -1886,7 +1886,7 @@ fn source_form<'a>(
             false,
         ));
         col = col.push(wrap_form_input(
-            byteui::form::input_text::view(
+            byteui::form::input_text::view_on_bg(
                 "username",
                 &draft.username,
                 false,
@@ -1900,7 +1900,7 @@ fn source_form<'a>(
             false,
         ));
         col = col.push(wrap_form_input(
-            byteui::form::input_text::view(
+            byteui::form::input_text::view_on_bg(
                 "password(留空则不修改)",
                 &draft.password,
                 true,
@@ -1950,13 +1950,16 @@ fn source_form<'a>(
         .spacing(6),
     );
 
+    // 边框/底色统一成原生预览"文件内搜索"风格(`find_field_shell`/`find_rows`
+    // 外层组合的既有配色):底色 card、边框普通态 `colors.border`(不再恒描
+    // 金)——2026-09-11 需求,数据库/主机新增表单跟文件内搜索输入框对齐。
     container(col)
         .padding(12)
         .width(iced_widget::core::Length::Fill)
         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
             background: Some(byteui::theme::color::current().card.into()),
             border: iced_widget::core::Border {
-                color: byteui::theme::color::current().gold,
+                color: byteui::theme::color::current().border,
                 width: 1.0,
                 radius: 8.0.into(),
             },

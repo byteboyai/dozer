@@ -406,8 +406,11 @@ pub(crate) fn tab_render_mode_button<'a, M: Clone + 'a>(
 
 /// 悬浮下拉里的一行,对应该 tab 组里的**某个 tab**(V 菜单列的是组内全部
 /// tab,不局限于当前横向被裁掉的)。`prefix` 与横向 tab 用同一个已经建好的
-/// `Element`(状态点/图标/无),`active` 决定是否高亮——菜单里可能同时出现
-/// 已经横向可见的当前选中项,高亮让用户看得出"这其实是当前那个"。
+/// `Element`(状态点/图标/无),`active` 只决定标题文字颜色(CREAM,同
+/// `tab_label` 的既有配色公式)——菜单里可能同时出现已经横向可见的当前选中
+/// 项,文字颜色让用户看得出"这其实是当前那个",不再额外叠一个常驻背景框
+/// (2026-09 用户反馈:那个框看着像卡死的 hover,跟其它行"只有真悬停才短暂
+/// 显形"的规则不统一,见 `tab_overflow_menu` 文档)。
 /// `closable=false` 用于 SSH/Database 的固定"空白"占位 tab(本来就不可关闭)。
 /// `hover_t` 是这一行当前的行悬停动画进度(0..=1),由调用方从
 /// `App::hover_progress(HoverId::TabOverflowRow(index))` 取出——菜单行本身
@@ -465,6 +468,14 @@ const TAB_OVERFLOW_MENU_MAX_HEIGHT: f32 = 320.0;
 /// 根本放不上去"的 bug(验收反馈"鼠标无法放到展开的菜单上")。× 按钮本身仍有
 /// "标准 hover 效果"——`tabs::tab_core` 的关闭按钮原生 `button::Status`
 /// 悬停即变金,不依赖这里任何动画状态(见 `tab_core` 文档)。
+///
+/// 行底色恒传 `tab_container_style(false, entry.hover_t)`,不像横向 tab 那样
+/// 给 `active` 行额外画一个常驻的选中方框(2026-09 用户反馈:下拉里当前
+/// tab 那行永远描边、其它行只有真悬停时才短暂显形,两种视觉规则混在一起,
+/// 看着像"hover 行为没统一"——一个格子的高亮到底是不是跟着鼠标走,行与行
+/// 之间应该一致)。`entry.active` 仍然传给 `tab_label` 控制标题文字颜色
+/// (CREAM vs 悬停插值的 DIM→GOLD),只是不再额外叠一个背景框,当前 tab
+/// 靠文字颜色就能认出来。
 ///
 /// 悬浮定位:向下弹,手法同 `project_add_menu_popup`/`todo_calendar_overlay`——
 /// `padding.top/left` 直接钉到锚点,钳一次 x/y 防止超出窗口右/下边缘(高度
@@ -536,7 +547,7 @@ where
             container(row_content)
                 .width(Length::Fill)
                 .padding(Padding::new(4.0))
-                .style(tab_container_style(entry.active, entry.hover_t))
+                .style(tab_container_style(false, entry.hover_t))
                 .into(),
         );
     }

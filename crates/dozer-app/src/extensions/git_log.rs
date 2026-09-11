@@ -1198,7 +1198,7 @@ fn branch_picker_view<'a>(
         } else if locked {
             byteui::theme::color::current().dim
         } else {
-            byteui::theme::color::current().cream
+            byteui::theme::color::current().body
         };
         let label = if is_current && state.dirty {
             format!("{name} (Uncommitted)")

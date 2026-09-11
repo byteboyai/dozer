@@ -445,14 +445,15 @@ mod tests {
         // 背景取 `BG` 色 + alpha,模拟 macOS 原生右键菜单的磨砂/半透明观感
         // (iced 无实时高斯模糊可用,退而求其次用半透明打底 + `shell()` 的
         // 软阴影一起近似"浮起且透光"的质感)。
-        assert_eq!(s.background, Some(parse_hex_color("#0a0e16e6")));
+        assert_eq!(s.background, Some(parse_hex_color("#0a0e16f0")));
         let border = s.border.expect("context_menu 应有边框");
         assert_eq!(border.color, byteui::theme::color::current().border);
         assert_eq!(border.width, 1.0);
         // 圆角对齐 macOS 原生右键菜单(比之前的 14 更扁平的 9)。
         assert_eq!(border.radius, 9.0.into());
         assert_eq!(s.padding, Padding::from(8.0));
-        assert_eq!(s.gap, 2.0);
+        // 项间距压到 1,让整个菜单看起来更紧凑。
+        assert_eq!(s.gap, 1.0);
     }
 
     #[test]

@@ -5,6 +5,9 @@
 //! 地址栏/URL tab(`TabKind::Web`)、`AddrTarget` 这套逻辑已经随浏览器
 //! 面板扩展化(`extensions::browser::Tabs`)搬走——文件预览面板从来没有
 //! 地址栏,这里只保留文件/验收两种 tab。
+use iced_widget::core::Rectangle;
+use iced_widget::core::widget::operation::Focusable;
+use iced_widget::core::widget::{Id, Operation};
 use std::path::PathBuf;
 
 /// 一个预览 tab。
@@ -245,6 +248,12 @@ pub struct FindState {
     /// 显示。⌘F 打开时收起、⌘R 打开时展开;查询框前的圆盘箭头可随时手动
     /// 切换。默认收起,不占多余纵向空间——多数查找场景不需要替换。
     pub replace_open: bool,
+    /// 查询输入框是否持有 iced 真实焦点——main.rs 每帧用
+    /// `CaptureFindFocus`/`take_find_focused` 查回来写进这里(同 Files 搜索框
+    /// `search_focused` 的既有手法)。边框描金不再只看"查询词非空"(`workspace.rs`
+    /// `query_row` 用它 `|| !query.is_empty()` 一起决定,2026-09-11 需求:
+    /// 聚焦态也该描金,不能只靠已有内容触发)。
+    pub query_focused: bool,
 }
 
 #[derive(Default)]
@@ -289,6 +298,44 @@ pub(crate) fn find_field_id(kind: crate::app::PanelKind) -> iced_widget::core::w
             iced_widget::core::widget::Id::new("preview-find-project")
         }
         _ => iced_widget::core::widget::Id::new("preview-find-files"),
+    }
+}
+
+static FIND_FOCUSED_FILES: std::sync::LazyLock<std::sync::Mutex<bool>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
+static FIND_FOCUSED_PROJECT: std::sync::LazyLock<std::sync::Mutex<bool>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
+
+/// 读走并复位(消费式)Find 查询输入框上一帧是否持有 iced 内部真实焦点,
+/// 按 `kind` 分 Files/Project 两份——同 `extensions::files::take_search_
+/// focused` 的既有桥接手法:消费式复位避免条不可见的帧里卡住上一次的
+/// `true`(条关掉后 `CaptureFindFocus` 找不到匹配 id,不会自己覆盖成
+/// `false`)。
+pub(crate) fn take_find_focused(kind: crate::app::PanelKind) -> bool {
+    let cell = match kind {
+        crate::app::PanelKind::Project => &FIND_FOCUSED_PROJECT,
+        _ => &FIND_FOCUSED_FILES,
+    };
+    std::mem::replace(&mut *cell.lock().unwrap(), false)
+}
+
+/// 每帧 `interface.operate()` 跑一遍,把 Files/Project 两个 Find 查询输入框
+/// (`find_field_id`)当前是否持有 iced 焦点分别写进对应 static——两条 Find
+/// 条可能同帧都存在(Files/Project 各挂一侧),用 id 区分写入哪一份。
+/// `traverse` 必须调用传入的 `operate` 闭包才能继续递归子节点,道理同
+/// `extensions::files::CaptureSearchFocus` 的既有文档。
+pub(crate) struct CaptureFindFocus;
+impl Operation<()> for CaptureFindFocus {
+    fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
+        if id == Some(&find_field_id(crate::app::PanelKind::Files)) {
+            *FIND_FOCUSED_FILES.lock().unwrap() = state.is_focused();
+        } else if id == Some(&find_field_id(crate::app::PanelKind::Project)) {
+            *FIND_FOCUSED_PROJECT.lock().unwrap() = state.is_focused();
+        }
+    }
+
+    fn traverse(&mut self, operate: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {
+        operate(self);
     }
 }
 
@@ -584,6 +631,7 @@ impl PreviewPane {
                 case_sensitive: false,
                 replacement: String::new(),
                 replace_open,
+                query_focused: false,
             });
         }
     }
@@ -604,6 +652,19 @@ impl PreviewPane {
     /// Find 会话只读引用(视图展示 n/m 与判灰用);未打开时 `None`。
     pub fn find_state(&self) -> Option<&FindState> {
         self.find.as_ref()
+    }
+
+    /// 查询输入框是否持有真实焦点;条未开恒 `false`。
+    pub fn find_query_focused(&self) -> bool {
+        self.find.as_ref().is_some_and(|f| f.query_focused)
+    }
+
+    /// 每帧渲染循环用 `take_find_focused` 查回来的真实焦点态写进这里;
+    /// 条未开是 no-op(没有 `FindState` 可写)。
+    pub fn set_find_query_focused(&mut self, focused: bool) {
+        if let Some(f) = self.find.as_mut() {
+            f.query_focused = focused;
+        }
     }
 
     /// 用户在输入框里编辑 query。每次落键就同步进 `state.query`,并**当场**按新
@@ -2106,6 +2167,7 @@ mod tests {
             case_sensitive: false,
             replacement: "SEO".into(),
             replace_open: true,
+            query_focused: false,
         });
         assert!(p.replace_all(), "两处命中应全换掉");
         let editor_text = p.tabs()[p.active_idx()].editor.as_ref().unwrap().text();
@@ -2131,6 +2193,7 @@ mod tests {
             case_sensitive: false,
             replacement: "Y".into(),
             replace_open: true,
+            query_focused: false,
         });
         assert!(p.replace_current());
         let text = p.tabs()[p.active_idx()].editor.as_ref().unwrap().text();

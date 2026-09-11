@@ -2840,6 +2840,38 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     false
                                 };
 
+                                // 原生预览"文件内搜索"(⌘F/⌘R)查询输入框:同款
+                                // 每帧真实焦点查询。Files/Project 各自的 Find 条
+                                // 分别渲染在 `PanelKind::Files`/`PanelKind::Project`
+                                // 对应的预览面板里(`app.rs::panel_body` 的
+                                // `preview_pane`/`project_preview_pane` 分支),
+                                // 同样可能被拖到左右任一栏,两侧都要查——同
+                                // `git_log_search_focused` 的既有处理。两条 Find
+                                // 条可能同帧都存在,`CaptureFindFocus` 一次遍历按
+                                // id 分别写回两个面板各自的 static,这里一次取走
+                                // 两份结果。
+                                let find_panel_visible = files_in_either_view
+                                    || matches!(app.left_view(), crate::app::PanelKind::Project)
+                                    || app.right_view == crate::app::PanelKind::Project;
+                                let (files_find_focused, project_find_focused) =
+                                    if find_panel_visible {
+                                        run_operate(
+                                            &mut interface,
+                                            renderer,
+                                            &mut preview::CaptureFindFocus,
+                                        );
+                                        (
+                                            preview::take_find_focused(
+                                                crate::app::PanelKind::Files,
+                                            ),
+                                            preview::take_find_focused(
+                                                crate::app::PanelKind::Project,
+                                            ),
+                                        )
+                                    } else {
+                                        (false, false)
+                                    };
+
                                 // 浏览器地址栏(Stage 3)同款每帧真实焦点查询:
                                 // 与 Files 搜索框完全同构。`PanelKind::Web` 是浏览器
                                 // 面板对应的 left_view 取值(同 FocusIntent::Browser
@@ -3200,6 +3232,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 app.set_query_focused(query_focused);
                                 app.set_conversation_search_focused(conversation_search_focused);
                                 app.set_git_log_search_focused(git_log_search_focused);
+                                app.set_find_query_focused(
+                                    crate::app::PanelKind::Files,
+                                    files_find_focused,
+                                );
+                                app.set_find_query_focused(
+                                    crate::app::PanelKind::Project,
+                                    project_find_focused,
+                                );
 
                                 // 同上,浏览器地址栏的真实焦点态现在才写回工作区
                                 // (供下一帧键盘路由 `browser_addr_focused` 消费)。

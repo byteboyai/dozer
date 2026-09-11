@@ -2041,6 +2041,16 @@ impl Workspace {
         }
     }
 
+    /// 每帧渲染循环把 `preview::take_find_focused(kind)` 查到的真实焦点态
+    /// 写回这里。
+    pub fn set_find_query_focused(&mut self, kind: PanelKind, focused: bool) {
+        if kind == PanelKind::Project {
+            self.project_preview.set_find_query_focused(focused);
+        } else {
+            self.preview.set_find_query_focused(focused);
+        }
+    }
+
     /// 关闭 `kind` 面板 Find 条(× / Esc / ⌘F 里输入框清空后的迁离)。关闭后把
     /// 焦点拨回其下代码编辑器(`request_editor_focus` 置一次性位,次帧 main.rs
     /// 用 `active_editor_focus_id` 真正聚焦回)——⌘F 打开时开条会抢走输入框焦
@@ -2665,7 +2675,7 @@ fn conversation_agent_picker_view(
         if is_all_current {
             byteui::theme::color::current().gold
         } else {
-            byteui::theme::color::current().cream
+            byteui::theme::color::current().body
         },
         (!is_all_current).then_some(Message::ConversationAgentFilterSelect(None)),
     ));
@@ -2674,7 +2684,7 @@ fn conversation_agent_picker_view(
         let color = if is_current {
             byteui::theme::color::current().gold
         } else {
-            byteui::theme::color::current().cream
+            byteui::theme::color::current().body
         };
         let leading = icons::view(
             agent_icon(agent),
@@ -3156,16 +3166,15 @@ pub(crate) fn agent_picker_popup(
         ("纯 Shell", PickerLaunch::Agent(None)),
     ];
     // 单项统一走 `crate::menu::item_row`:图标沿用各 agent 代表色,文字保持
-    // CREAM;hover/锁定语义、常宽、padding 同文件树右键菜单基准。
+    // `BODY`(同 `menu::item()` 的标准配色);hover/锁定语义、常宽、padding
+    // 同文件树右键菜单基准。
     let mk_item = |label: &'static str,
                    agent: PickerLaunch|
      -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
         let (icon, icon_color) = match agent {
             PickerLaunch::Agent(Some(kind)) => (agent_icon(kind), agent_dot_color(kind)),
-            PickerLaunch::Agent(None) => {
-                (IconKind::Terminal, byteui::theme::color::current().cream)
-            }
-            PickerLaunch::Git => (IconKind::GitBranch, byteui::theme::color::current().cream),
+            PickerLaunch::Agent(None) => (IconKind::Terminal, byteui::theme::color::current().body),
+            PickerLaunch::Git => (IconKind::GitBranch, byteui::theme::color::current().body),
         };
         crate::menu::item_row(
             Some(icons::view(
@@ -3174,7 +3183,7 @@ pub(crate) fn agent_picker_popup(
                 icon_color,
             )),
             label,
-            byteui::theme::color::current().cream,
+            byteui::theme::color::current().body,
             Some(Message::AgentPickerSelect(agent)),
         )
     };
@@ -3866,10 +3875,14 @@ fn preview_pane_for<'a>(
                 .width(Length::Fixed(FIND_TRAILING_ZONE))
                 .align_x(iced_widget::core::alignment::Horizontal::Right);
                 let mut find_rows: Vec<EE<'_>> = vec![];
+                // 边框描金:查询词非空 **或** 输入框持有真实焦点——2026-09-11
+                // 需求补上聚焦态,不再只靠已有内容触发(此前空 query 时点进框里
+                // 光标闪烁却没有任何视觉反馈)。
+                let query_active = !find.query.is_empty() || preview.find_query_focused();
                 let query_row: EE<'_> = container(
                     row![
                         replace_toggle,
-                        find_field_shell(input, colors, 7.0, 10.0, !find.query.is_empty()),
+                        find_field_shell(input, colors, 7.0, 10.0, query_active),
                         query_trailing,
                     ]
                     .spacing(4)

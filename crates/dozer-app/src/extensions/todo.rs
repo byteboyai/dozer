@@ -2792,12 +2792,12 @@ pub fn todo_dispatch_overlay<'a>(
             let icon = icons::view(
                 agent_icon(agent),
                 byteui::theme::icon_size::row(),
-                byteui::theme::color::current().cream,
+                byteui::theme::color::current().body,
             );
             crate::menu::item_row(
                 Some(icon),
                 agent.label().to_string(),
-                byteui::theme::color::current().cream,
+                byteui::theme::color::current().body,
                 Some(Message::AssignAgent(idx, agent)),
             )
         })

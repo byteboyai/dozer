@@ -948,7 +948,7 @@ fn host_form<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![
         wrap_ssh_field(
-            byteui::form::input_text::view(
+            byteui::form::input_text::view_on_bg(
                 "主机名称",
                 &draft.name,
                 false,
@@ -962,7 +962,7 @@ fn host_form<'a>(
             false,
         ),
         wrap_ssh_field(
-            byteui::form::input_text::view(
+            byteui::form::input_text::view_on_bg(
                 "Host",
                 &draft.host,
                 false,
@@ -976,7 +976,7 @@ fn host_form<'a>(
             false,
         ),
         wrap_ssh_field(
-            byteui::form::input_text::view(
+            byteui::form::input_text::view_on_bg(
                 "port(22)",
                 &draft.port,
                 false,
@@ -990,7 +990,7 @@ fn host_form<'a>(
             false,
         ),
         wrap_ssh_field(
-            byteui::form::input_text::view(
+            byteui::form::input_text::view_on_bg(
                 "user name",
                 &draft.username,
                 false,
@@ -1021,7 +1021,7 @@ fn host_form<'a>(
 
     if draft.use_private_key {
         col = col.push(wrap_ssh_field(
-            byteui::form::input_text::view(
+            byteui::form::input_text::view_on_bg(
                 "私钥文件路径,如 ~/.ssh/id_ed25519",
                 &draft.key_path,
                 false,
@@ -1035,7 +1035,7 @@ fn host_form<'a>(
             false,
         ));
         col = col.push(wrap_ssh_field(
-            byteui::form::input_text::view(
+            byteui::form::input_text::view_on_bg(
                 "私钥口令(留空则不修改/无口令)",
                 &draft.password,
                 true,
@@ -1052,7 +1052,7 @@ fn host_form<'a>(
         ));
     } else {
         col = col.push(wrap_ssh_field(
-            byteui::form::input_text::view(
+            byteui::form::input_text::view_on_bg(
                 "password(留空则不修改)",
                 &draft.password,
                 true,
@@ -1155,13 +1155,16 @@ fn host_form<'a>(
         ));
     }
 
+    // 边框/底色统一成原生预览"文件内搜索"风格(`find_field_shell`/`find_rows`
+    // 外层组合的既有配色):底色 card、边框普通态 `colors.border`(不再恒描
+    // 金)——2026-09-11 需求,同步 `database.rs::source_form` 的改法。
     container(col)
         .padding(12)
         .width(iced_widget::core::Length::Fill)
         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-            background: None,
+            background: Some(byteui::theme::color::current().card.into()),
             border: iced_widget::core::Border {
-                color: byteui::theme::color::current().gold,
+                color: byteui::theme::color::current().border,
                 width: 1.0,
                 radius: 8.0.into(),
             },
