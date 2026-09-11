@@ -2162,19 +2162,33 @@ impl Workspace {
         self.files.search_focused()
     }
 
-    /// SSH 连接表单是否打开(main.rs 键盘路由用)。信号粒度是"表单开着"而
-    /// 不是某个字段的真实焦点——表单里的字段已经是真 `text_input`(kooky
-    /// -review-followups 那次改的),只是从来没有对应的路由放行判断,导致
-    /// 表单打开时打字会同时漏进已聚焦的终端。不需要像 Files 搜索框那样每帧
-    /// 查 iced 焦点,表单开着就整体放行,足够粗粒度且够用。
+    /// SSH 新增/编辑表单**任意字段**是否持有真实焦点(main.rs 键盘路由用)。
+    /// 曾经只看"表单是否打开"这个粗粒度信号(`ssh.editing().is_some()`),
+    /// 图省事不用像 Files 搜索框那样每帧查真实焦点——2026-09 用户反馈的根因
+    /// 就在这里:SSH/Database 面板与 Agent 终端分栏同屏显示时,表单开着但
+    /// 用户实际点进的是终端输入框,粗粒度信号仍卡真,main.rs 键盘路由的
+    /// OR 链一直 `return`,终端收不到任何按键(面板"是否可见"、表单"是否
+    /// 打开"、字段"是否真聚焦"是三件不同的事,只有最后一个才是键盘该往哪儿
+    /// 走的正确依据)。现在同 `files_search_focused` 一样查真实焦点。
     pub fn ssh_form_open(&self) -> bool {
-        self.ssh.editing().is_some()
+        self.ssh.form_focused()
     }
 
-    /// Database 连接表单是否打开(main.rs 键盘路由用),同 `ssh_form_open`
-    /// 的粒度与理由。
+    /// Database 新增/编辑表单任意字段是否持有真实焦点(main.rs 键盘路由用),
+    /// 同 `ssh_form_open` 的粒度与根因。
     pub fn database_form_open(&self) -> bool {
-        self.database.editing().is_some()
+        self.database.form_focused()
+    }
+
+    /// 每帧渲染循环用 `ssh::take_form_focused()` 查回来的真实焦点态写回。
+    pub fn set_ssh_form_focused(&mut self, focused: bool) {
+        self.ssh.set_form_focused(focused);
+    }
+
+    /// 每帧渲染循环用 `database::take_form_focused()` 查回来的真实焦点态
+    /// 写回。
+    pub fn set_database_form_focused(&mut self, focused: bool) {
+        self.database.set_form_focused(focused);
     }
 
     /// 右键文件树"搜索"弹窗是否打开(main.rs 键盘路由/App view 浮层用)。

@@ -110,6 +110,10 @@ pub struct WorkspaceState {
     /// 一层确认对话框(注意点删除垃圾桶图标只是把 id 记到这里,真正删记录
     /// 要等用户确认后 `DeleteHost` 才执行)。`None` = 没有待确认的删除。
     delete_confirm: Option<String>,
+    /// 新增/编辑表单**任意一个字段**是否持有 iced 真实焦点——main.rs 每帧用
+    /// `CaptureFormFocus`/`take_form_focused` 查回来写进这里(同
+    /// `database::WorkspaceState::form_focused` 的既有手法与根因)。
+    form_focused: bool,
 }
 
 impl WorkspaceState {
@@ -118,6 +122,16 @@ impl WorkspaceState {
     }
     pub fn editing(&self) -> Option<&SshHostDraft> {
         self.editing.as_ref()
+    }
+
+    /// 新增/编辑表单任意字段是否持有真实焦点(main.rs 键盘路由用)。
+    pub fn form_focused(&self) -> bool {
+        self.form_focused
+    }
+
+    /// 每帧渲染循环用 `take_form_focused` 查回来的真实焦点态写进这里。
+    pub fn set_form_focused(&mut self, focused: bool) {
+        self.form_focused = focused;
     }
     pub fn test_status(&self, host_id: &str) -> &TestStatus {
         self.test_status.get(host_id).unwrap_or(&TestStatus::Idle)
@@ -940,6 +954,63 @@ where
             secure,
         })),
     )
+}
+
+/// SSH 新增/编辑表单全部字段的稳定 id 字面量,`CaptureFormFocus` 用它逐个
+/// 比对当前遍历到的 focusable id 是不是这张表单的某个字段(同
+/// `database::DB_FORM_FIELD_COMPONENTS` 的既有做法)。
+const SSH_FORM_FIELD_IDS: &[&str] = &[
+    "ssh-form-name",
+    "ssh-form-host",
+    "ssh-form-port",
+    "ssh-form-username",
+    "ssh-form-key-path",
+    "ssh-form-key-passphrase",
+    "ssh-form-password",
+];
+
+static SSH_FORM_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
+
+/// 读走并复位(消费式)SSH 新增/编辑表单**任意一个字段**上一帧是否持有
+/// iced 内部真实焦点,同 `database::take_form_focused` 的既有桥接手法与
+/// 根因(2026-09 用户反馈:数据库/主机面板与 Agent 终端分栏同屏显示时,
+/// 表单开着但用户实际点进的是右侧终端输入框,旧版"表单是否打开"这个粗粒度
+/// 信号仍卡真,终端收不到任何按键)。
+pub(crate) fn take_form_focused() -> bool {
+    std::mem::replace(&mut *SSH_FORM_FOCUSED.lock().unwrap(), false)
+}
+
+/// 每帧 `interface.operate()` 跑一遍:命中 `SSH_FORM_FIELD_IDS` 里任一字段
+/// 且该字段真聚焦,就把 `SSH_FORM_FOCUSED` 置真。只在找到"真聚焦"时才写
+/// `true`,不在遇到未聚焦的匹配字段时写回 `false`——由 `take_form_focused`
+/// 消费式复位负责清零,同 `database::CaptureFormFocus` 的既有理由(同一帧
+/// 内至多一个 widget 持有真焦点,不会有两个匹配字段互相覆盖出错误结果)。
+pub(crate) struct CaptureFormFocus;
+impl iced_widget::core::widget::Operation<()> for CaptureFormFocus {
+    fn focusable(
+        &mut self,
+        id: Option<&iced_widget::core::widget::Id>,
+        _bounds: iced_widget::core::Rectangle,
+        state: &mut dyn iced_widget::core::widget::operation::Focusable,
+    ) {
+        let Some(id) = id else { return };
+        for name in SSH_FORM_FIELD_IDS {
+            if *id == iced_widget::core::widget::Id::new(name) && state.is_focused() {
+                *SSH_FORM_FOCUSED.lock().unwrap() = true;
+                return;
+            }
+        }
+    }
+
+    fn traverse(
+        &mut self,
+        operate: &mut dyn for<'a> FnMut(
+            &'a mut (dyn iced_widget::core::widget::Operation<()> + 'a),
+        ),
+    ) {
+        operate(self);
+    }
 }
 
 fn host_form<'a>(

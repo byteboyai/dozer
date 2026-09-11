@@ -732,14 +732,6 @@ pub struct TabDrag {
 /// 页签拖拽确认阈值(同 rail 图标栏 `RAIL_DRAG_VISUAL_THRESHOLD_PX`)：按下
 /// 瞬间到当前光标的位移必须越过这个半径才算"确认是一次拖拽换位"，见
 /// `tab_drag_past_threshold` 用法处的文档。
-/// `kind` 是否是左右两栏之一当前显示的面板——`ssh_form_open`/
-/// `database_form_open` 用它给"表单是否打开"这个粗粒度路由信号叠一道"面板
-/// 此刻确实可见"的前提,抽成纯函数方便不依赖完整 `App` 单测(2026-09 用户
-/// 反馈:表单开着切到别的面板,PTY 键盘转发被永久卡死,见调用点文档)。
-fn panel_visible_on_either_side(left: PanelKind, right: PanelKind, kind: PanelKind) -> bool {
-    left == kind || right == kind
-}
-
 const TAB_DRAG_CONFIRM_THRESHOLD_PX: f32 = 4.0;
 
 /// `drag.press_pos` 到 `cursor` 的位移是否已越过 [`TAB_DRAG_CONFIRM_THRESHOLD_PX`]。
@@ -3284,26 +3276,39 @@ impl App {
             .is_some_and(|ws| ws.files_search_focused())
     }
 
-    /// SSH 连接表单是否打开(main.rs 键盘路由用)。`editing` 草稿只在
-    /// `DraftSave`/`DraftCancel` 时才清,切走 SSH 面板(比如去用 Agent 终端)
-    /// 不会自动关掉表单——必须再叠一道"SSH 面板此刻确实可见"的闸门,否则
-    /// 表单开着却切到别的面板时这个信号仍卡真,main.rs 键盘路由的 OR 链会
-    /// 一直 `return`,PTY 终端永久收不到任何按键(2026-09 用户反馈:数据库/
-    /// 主机面板开着新增表单时 agent pty 面板打不进字,根因是这里当年只抄了
-    /// "表单是否打开"的粗粒度信号,漏抄了其它每帧焦点闸门天然自带的"面板
-    /// 是否可见"前提)。
+    /// SSH 新增/编辑表单任意字段是否持有真实焦点(main.rs 键盘路由用)。
+    /// 早先只看"表单是否打开"这个粗粒度信号,漏了两种"字段其实没有真焦点"
+    /// 的场景:①切走 SSH 面板去用别的面板(`editing` 草稿只在 `DraftSave`/
+    /// `DraftCancel` 时才清,不会因为切面板自动关掉);②SSH 面板与 Agent
+    /// 终端分栏同屏显示,表单开着但用户实际点进的是终端输入框(2026-09
+    /// 用户反馈的两次根因)。现在 `ws.ssh_form_open()` 直接查真实焦点(同
+    /// `files_search_focused`),两种场景天然都对,不需要再叠"面板是否
+    /// 可见"这道闸门。
     pub fn ssh_form_open(&self) -> bool {
-        panel_visible_on_either_side(self.left_view(), self.right_view(), PanelKind::Ssh)
-            && self.active_workspace().is_some_and(|ws| ws.ssh_form_open())
+        self.active_workspace().is_some_and(|ws| ws.ssh_form_open())
     }
 
-    /// Database 连接表单是否打开(main.rs 键盘路由用),同 `ssh_form_open`
-    /// 的面板可见性闸门与根因。
+    /// Database 新增/编辑表单任意字段是否持有真实焦点(main.rs 键盘路由用),
+    /// 同 `ssh_form_open` 的根因与做法。
     pub fn database_form_open(&self) -> bool {
-        panel_visible_on_either_side(self.left_view(), self.right_view(), PanelKind::Database)
-            && self
-                .active_workspace()
-                .is_some_and(|ws| ws.database_form_open())
+        self.active_workspace()
+            .is_some_and(|ws| ws.database_form_open())
+    }
+
+    /// 每帧渲染循环读走 `ssh::CaptureFormFocus` 查到的真实焦点态后写进
+    /// 当前工作区。
+    pub fn set_ssh_form_focused(&mut self, focused: bool) {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.set_ssh_form_focused(focused);
+        }
+    }
+
+    /// 每帧渲染循环读走 `database::CaptureFormFocus` 查到的真实焦点态后写进
+    /// 当前工作区。
+    pub fn set_database_form_focused(&mut self, focused: bool) {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.set_database_form_focused(focused);
+        }
     }
 
     /// 拖拽移动确认框是否打开(main.rs 键盘路由用)。同 SSH/Database 表单
@@ -9819,39 +9824,6 @@ fn ssh_empty_state<'a>() -> Element<'a, Message, iced_widget::Theme, iced_render
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// 2026-09 用户反馈根因防回归测试:数据库/主机面板开着新增/编辑表单时
-    /// 切去用 Agent 终端(不点保存/取消),`editing()` 草稿一直是 `Some`——
-    /// `ssh_form_open`/`database_form_open` 若只看这个粗粒度信号、不检查
-    /// 面板是否还可见,main.rs 键盘路由的 OR 链会永久卡真,PTY 终端收不到
-    /// 任何按键。这里只测提出来的纯判断:面板挪去对侧、两侧都不是目标面板
-    /// 两种"已切走"场景都应为 false。
-    #[test]
-    fn panel_visible_on_either_side_true_when_left_matches() {
-        assert!(panel_visible_on_either_side(
-            PanelKind::Ssh,
-            PanelKind::Agent,
-            PanelKind::Ssh
-        ));
-    }
-
-    #[test]
-    fn panel_visible_on_either_side_true_when_right_matches() {
-        assert!(panel_visible_on_either_side(
-            PanelKind::Agent,
-            PanelKind::Database,
-            PanelKind::Database
-        ));
-    }
-
-    #[test]
-    fn panel_visible_on_either_side_false_once_switched_away_from_both_sides() {
-        assert!(!panel_visible_on_either_side(
-            PanelKind::Agent,
-            PanelKind::Files,
-            PanelKind::Ssh
-        ));
-    }
 
     /// 光标没动(或只在阈值内小幅抖动)不算越过阈值——普通单击场景,同
     /// `rail::rail_drag_past_threshold` 的对应用例。这是 2026-09-04

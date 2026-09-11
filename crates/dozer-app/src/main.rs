@@ -2872,6 +2872,42 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                         (false, false)
                                     };
 
+                                // SSH/Database 新增/编辑表单:同款每帧真实焦点
+                                // 查询,替换掉旧版"表单是否打开"的粗粒度信号
+                                // (2026-09 用户反馈两次根因:切走面板不关表单、
+                                // 面板与 Agent 终端分栏同屏时表单开着但焦点其实
+                                // 在终端——面板"是否可见"不等于字段"是否真聚焦",
+                                // 只有每帧查真实焦点才两种场景都对)。只在对应
+                                // 面板可能可见时才跑遍历,省一次无谓的树遍历
+                                // (面板都不可见,表单也不可能被渲染更不可能持有
+                                // 真焦点)。
+                                let ssh_panel_visible =
+                                    matches!(app.left_view(), crate::app::PanelKind::Ssh)
+                                        || app.right_view == crate::app::PanelKind::Ssh;
+                                let ssh_form_focused = if ssh_panel_visible {
+                                    run_operate(
+                                        &mut interface,
+                                        renderer,
+                                        &mut extensions::ssh::CaptureFormFocus,
+                                    );
+                                    extensions::ssh::take_form_focused()
+                                } else {
+                                    false
+                                };
+                                let database_panel_visible =
+                                    matches!(app.left_view(), crate::app::PanelKind::Database)
+                                        || app.right_view == crate::app::PanelKind::Database;
+                                let database_form_focused = if database_panel_visible {
+                                    run_operate(
+                                        &mut interface,
+                                        renderer,
+                                        &mut extensions::database::CaptureFormFocus,
+                                    );
+                                    extensions::database::take_form_focused()
+                                } else {
+                                    false
+                                };
+
                                 // 浏览器地址栏(Stage 3)同款每帧真实焦点查询:
                                 // 与 Files 搜索框完全同构。`PanelKind::Web` 是浏览器
                                 // 面板对应的 left_view 取值(同 FocusIntent::Browser
@@ -3240,6 +3276,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     crate::app::PanelKind::Project,
                                     project_find_focused,
                                 );
+                                app.set_ssh_form_focused(ssh_form_focused);
+                                app.set_database_form_focused(database_form_focused);
 
                                 // 同上,浏览器地址栏的真实焦点态现在才写回工作区
                                 // (供下一帧键盘路由 `browser_addr_focused` 消费)。

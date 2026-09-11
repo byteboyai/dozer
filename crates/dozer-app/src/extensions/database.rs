@@ -606,6 +606,13 @@ pub struct WorkspaceState {
     /// 右侧内容窗格状态(表/集合/查询 tab)。纯内存,不持久化——同
     /// `schemas`(阶段 2),重启后 tab 全部关闭,不留痕迹。
     content: DatabaseContentState,
+    /// 新增/编辑表单**任意一个字段**是否持有 iced 真实焦点——main.rs 每帧用
+    /// `CaptureFormFocus`/`take_form_focused` 查回来写进这里(同 Files 搜索框
+    /// `search_focused` 的既有手法)。`App::database_form_open` 键盘路由用它
+    /// 判断要不要放行给标准 iced 管线,不再只看"表单是否打开"(2026-09 用户
+    /// 反馈:数据库面板与 Agent 终端分栏同屏时,表单开着但用户点进的是终端
+    /// 输入框,旧信号仍卡真导致终端打不进字)。
+    form_focused: bool,
 }
 
 impl std::fmt::Debug for WorkspaceState {
@@ -628,6 +635,16 @@ impl WorkspaceState {
 
     pub fn editing(&self) -> Option<&DataSourceDraft> {
         self.editing.as_ref()
+    }
+
+    /// 新增/编辑表单任意字段是否持有真实焦点(main.rs 键盘路由用)。
+    pub fn form_focused(&self) -> bool {
+        self.form_focused
+    }
+
+    /// 每帧渲染循环用 `take_form_focused` 查回来的真实焦点态写进这里。
+    pub fn set_form_focused(&mut self, focused: bool) {
+        self.form_focused = focused;
     }
 
     pub fn test_status(&self, source_id: &str) -> &TestStatus {
@@ -2378,6 +2395,67 @@ fn form_field_id(component: &'static str) -> iced_widget::core::widget::Id {
         "username" => iced_widget::core::widget::Id::new("db-form-username"),
         "password" => iced_widget::core::widget::Id::new("db-form-password"),
         _ => iced_widget::core::widget::Id::new("db-form-unknown"),
+    }
+}
+
+/// `form_field_id` 全部合法 component 名字,`CaptureFormFocus` 用它逐个比对
+/// 当前遍历到的 focusable id 是不是新增/编辑表单的某个字段——不用挨个字段
+/// 单独开一个 `HoverId` 式的 static,一次遍历顺带查完这张表单所有字段。
+const DB_FORM_FIELD_COMPONENTS: &[&str] = &[
+    "name",
+    "sqlite-database",
+    "uri",
+    "host",
+    "port",
+    "database",
+    "username",
+    "password",
+];
+
+static DB_FORM_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
+
+/// 读走并复位(消费式)数据库新增/编辑表单**任意一个字段**上一帧是否持有
+/// iced 内部真实焦点——同 `extensions::files::take_search_focused` 的既有
+/// 桥接手法。main.rs 键盘路由据此放行给标准 iced 管线,不再像旧版那样只看
+/// "表单是否打开"这个粗粒度信号(2026-09 用户反馈根因:数据库/主机面板与
+/// Agent 终端分栏同屏显示时,表单开着但用户实际点进的是右侧终端输入框,
+/// 旧版信号仍卡真,导致终端收不到任何按键——面板"可不可见"跟字段"是否真
+/// 聚焦"是两回事,必须查后者)。
+pub(crate) fn take_form_focused() -> bool {
+    std::mem::replace(&mut *DB_FORM_FOCUSED.lock().unwrap(), false)
+}
+
+/// 每帧 `interface.operate()` 跑一遍:命中 `DB_FORM_FIELD_COMPONENTS` 里任一
+/// 字段且该字段真聚焦,就把 `DB_FORM_FOCUSED` 置真。只在找到"真聚焦"时才
+/// 写 `true`,不在遇到未聚焦的匹配字段时写回 `false`——由 `take_form_focused`
+/// 消费式复位负责清零(同一帧内至多一个 widget 持有真焦点,不会有两个匹配
+/// 字段互相覆盖出错误结果)。`traverse` 必须调用传入的 `operate` 闭包才能
+/// 继续递归子节点,道理同 `extensions::files::CaptureSearchFocus` 的既有文档。
+pub(crate) struct CaptureFormFocus;
+impl iced_widget::core::widget::Operation<()> for CaptureFormFocus {
+    fn focusable(
+        &mut self,
+        id: Option<&iced_widget::core::widget::Id>,
+        _bounds: iced_widget::core::Rectangle,
+        state: &mut dyn iced_widget::core::widget::operation::Focusable,
+    ) {
+        let Some(id) = id else { return };
+        for component in DB_FORM_FIELD_COMPONENTS {
+            if *id == form_field_id(component) && state.is_focused() {
+                *DB_FORM_FOCUSED.lock().unwrap() = true;
+                return;
+            }
+        }
+    }
+
+    fn traverse(
+        &mut self,
+        operate: &mut dyn for<'a> FnMut(
+            &'a mut (dyn iced_widget::core::widget::Operation<()> + 'a),
+        ),
+    ) {
+        operate(self);
     }
 }
 fn new_tab_field_id(component: &'static str, _tab_id: usize) -> iced_widget::core::widget::Id {

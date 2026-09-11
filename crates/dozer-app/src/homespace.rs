@@ -335,6 +335,10 @@ pub(crate) fn home_panel_head_with_actions<'a, Message>(
 where
     Message: 'a,
 {
+    // 高度钉死到跟预览/终端 tab 栏一样高(`tab_button_size`,tab 页签里 ×
+    // 关闭按钮的固定命中区尺寸,是那条 tab 栏实际渲染高度的下限)——此前只
+    // 靠图标/文字自身撑开,比 tab 栏矮了一截,导致 Files/Todo/Project/Git/
+    // SSH 等面板头部跟右侧 tab 栏高度对不齐(2026-09 用户反馈)。
     let head_row = row![
         icons::view(icon, byteui::theme::icon_size::row(), PANEL_HEAD_ACCENT,),
         text(title)
@@ -342,6 +346,7 @@ where
             .color(PANEL_HEAD_ACCENT),
     ]
     .spacing(8)
+    .height(Length::Fixed(byteui::theme::geometry::tab_button_size()))
     .align_y(iced_widget::core::Alignment::Center);
     // 有右侧操作就把标题行撑满宽度,用 Fill 间隔把操作推到最右。
     let head_row = if let Some(actions) = actions {
