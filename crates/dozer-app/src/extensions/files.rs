@@ -2326,7 +2326,7 @@ pub fn branch_picker_popup(
         ));
     }
     let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        crate::menu::shell(items, Length::Shrink);
+        crate::menu::shell_frosted(items, Length::Shrink);
 
     // 把下拉框钉到 git 底栏正上方:左缘对齐文件面板(左图标栏 + project_pane
     // 左 padding),底缘对齐 git 底栏顶部(footbar 高 + project_pane 底 padding
@@ -2477,7 +2477,7 @@ pub fn context_menu_popup<'a>(
     ));
 
     let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        crate::menu::shell(items, Length::Shrink);
+        crate::menu::shell_frosted(items, Length::Shrink);
 
     container(list)
         .width(Length::Fill)

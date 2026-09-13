@@ -2713,7 +2713,7 @@ fn conversation_agent_picker_view(
         ));
     }
     let panel: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        crate::menu::shell(items, Length::Fill);
+        crate::menu::shell_frosted(items, Length::Fill);
 
     let dismiss = MouseArea::new(
         iced_widget::Space::new()
@@ -3212,7 +3212,7 @@ pub(crate) fn agent_picker_popup(
         list.push(mk_item(label, agent));
     }
     let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        crate::menu::shell(
+        crate::menu::shell_frosted(
             list,
             Length::Fixed(byteui::theme::geometry::menu_item_width()),
         );

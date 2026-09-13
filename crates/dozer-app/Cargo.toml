@@ -22,7 +22,7 @@ serde_json.workspace = true
 tokio.workspace = true
 iced_winit = "0.14"
 iced_wgpu = { version = "0.14", default-features = true }
-iced_widget = { version = "0.14", features = ["wgpu", "canvas", "svg", "markdown", "highlighter"] }
+iced_widget = { version = "0.14", features = ["wgpu", "canvas", "svg", "markdown", "highlighter", "image"] }
 iced_renderer = "0.14"
 # 构造 Dozer 自己的 syntect 语法高亮器(`code_editor::highlighter`)——不用
 # `iced_highlighter` 自带的 5 个内置主题,自己实现 `text::Highlighter` trait

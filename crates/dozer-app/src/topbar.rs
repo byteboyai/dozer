@@ -453,7 +453,7 @@ pub(crate) fn project_add_menu_popup(
 
     let row_count = items.len();
     let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        crate::menu::shell(
+        crate::menu::shell_frosted(
             items,
             Length::Fixed(byteui::theme::geometry::menu_item_width()),
         );

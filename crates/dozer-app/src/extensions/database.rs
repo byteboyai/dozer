@@ -1629,7 +1629,7 @@ fn drivers_popup<'a>(
             Some(Message::ToggleDriver(driver)),
         ));
     }
-    crate::menu::shell(items, iced_widget::core::Length::Fixed(220.0))
+    crate::menu::shell_frosted(items, iced_widget::core::Length::Fixed(220.0))
 }
 
 /// 数据源根节点图标:关系型驱动统一用 `Database`(圆柱),MongoDB 用

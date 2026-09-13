@@ -2802,7 +2802,7 @@ pub fn todo_dispatch_overlay<'a>(
             )
         })
         .collect();
-    let popup = crate::menu::shell(items, Length::Shrink);
+    let popup = crate::menu::shell_frosted(items, Length::Shrink);
 
     // 全窗口容器 + padding 把弹层推到锚点;窗口边界钳制,避免超出右下。
     let (ax, ay) = anchor;
@@ -2915,7 +2915,7 @@ pub fn todo_status_overlay<'a>(
             crate::menu::item_row(None, label, color, Some(Message::StatusPick(idx, st)))
         })
         .collect();
-    let popup = crate::menu::shell(items, Length::Shrink);
+    let popup = crate::menu::shell_frosted(items, Length::Shrink);
 
     // 全窗口容器 + padding 把弹层推到锚点;窗口边界钳制,避免超出右下。
     let (ax, ay) = anchor;

@@ -444,8 +444,10 @@ mod tests {
         let s = context_menu();
         // 背景取 `BG` 色 + alpha,模拟 macOS 原生右键菜单的磨砂/半透明观感
         // (iced 无实时高斯模糊可用,退而求其次用半透明打底 + `shell()` 的
-        // 软阴影一起近似"浮起且透光"的质感)。
-        assert_eq!(s.background, Some(parse_hex_color("#0a0e16f0")));
+        // 软阴影一起近似"浮起且透光"的质感)。alpha 0xfa(≈0.98,2026-09-13
+        // 用户反馈原 0xf0/0.94 透得太明显、菜单后面内容看着太清楚,调高压
+        // 暗透光,仍留一丝透明感而非彻底不透明)。
+        assert_eq!(s.background, Some(parse_hex_color("#0a0e16fa")));
         let border = s.border.expect("context_menu 应有边框");
         assert_eq!(border.color, byteui::theme::color::current().border);
         assert_eq!(border.width, 1.0);

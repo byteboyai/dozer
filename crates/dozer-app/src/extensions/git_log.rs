@@ -1214,7 +1214,7 @@ fn branch_picker_view<'a>(
     }
     // 面板壳走 `crate::menu::shell`(context_menu 表面 = 文件树右键菜单基准)。
     let panel: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        crate::menu::shell(items, Length::Fill);
+        crate::menu::shell_frosted(items, Length::Fill);
     // 下拉层锚定在左侧面板底部、footbar 正上方:全高 stack 铺一层透明
     // `dismiss` 用于"点外关闭",面板用 `Space::Fill` 顶到最底,从 footbar
     // 上方弹出(与文件树 `branch_picker_popup` 钉在 git 底栏上方的语义一致,

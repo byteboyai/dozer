@@ -8,6 +8,9 @@
 //!
 //! - 外壳 `shell`: `theme::region::context_menu()`(底色/描边/圆角/内边距/
 //!   项间距 + `menu_item_width` 的恒定菜单总宽),已含全局 scale。
+//!   `shell_frosted` 是叠了一层磨砂噪点贴图的版本,只给静态弹层用——内容带
+//!   `hover_t` 缓动动画的弹层(如 `tab_widget::tab_overflow_menu`)继续用不带
+//!   噪点的 `shell`,理由见 `shell_frosted` 文档。
 //! - 单项 `item`: 恒定宽 `menu_item_width` 的"图标+CREAM 文字";`item_row`
 //!   接受任意前置元素(图标/指示点/复选框…)+ 自定义文字色 + 可选点击/锁定;
 //!   `item_row_fill` 为整行撑满(`Fill`)的版本(窄面板内选择器用)。三者统一
@@ -21,8 +24,9 @@
 
 use crate::theme;
 use byteui::interaction::icons;
-use iced_widget::core::{Border, Color, Element, Length, Shadow, Vector};
-use iced_widget::{button, column, container, row, text};
+use iced_widget::core::{Border, Color, ContentFit, Element, Length, Shadow, Vector};
+use iced_widget::{Stack, button, column, container, image, row, text};
+use std::sync::LazyLock;
 
 /// macOS 原生右键菜单的高亮/命中区是较大的圆角矩形(而非直角),`item`/
 /// `item_row` 的 hover/pressed 态、`item_row_fill` 一并复用这个半径。
@@ -157,6 +161,53 @@ pub fn shell<'a, Msg: 'a>(
             },
             ..container::Style::default()
         })
+        .into()
+}
+
+/// `shell()` 的磨砂版:在面板上叠一层 [`menu_noise_layer`] 噪点贴图模拟
+/// 磨砂玻璃颗粒。**只用于内容不会逐帧重绘的静态弹层**——多出的 `Stack`
+/// 非 base 层每次都要重新构建/重绘一遍,静态弹层只在打开/关闭或离散
+/// hover 状态切换时重绘一次,这份开销可忽略;但像 `tab_widget::
+/// tab_overflow_menu` 那样内容里有 `hover_t` 缓动动画的弹层,
+/// `HOVER_ANIM_INTERVAL`(`main.rs`,~60fps)会在过渡期间持续触发整棵子树
+/// 重绘,噪点层的额外开销被按帧数放大——2026-09-13 用户反馈那里 hover
+/// 明显卡顿,release 构建下依然卡,排除是 debug 构建噪音,定位到就是这份
+/// 放大。因此那个调用点保留不带噪点的 `shell()`,其余静态弹层改用这个。
+pub fn shell_frosted<'a, Msg: 'a>(
+    items: Vec<Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer>>,
+    width: Length,
+) -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {
+    Stack::new()
+        .push(shell(items, width))
+        .push(menu_noise_layer())
+        .into()
+}
+
+/// 磨砂颗粒贴图层:稀疏、暖白(ByteBoy2077 奶油 `#FFE5B4`)、低透明度噪点,
+/// 铺满 `shell()` 里 `panel` 撑出的整个菜单区域(`Length::Fill` + 在
+/// `Stack` 的非 base 层按 base 尺寸铺开,见 `iced_widget::stack::Stack::
+/// layout` 文档)。贴图本身是静态资源(`assets/textures/menu_noise.png`,
+/// 256×384、LA 灰度+透明通道),`ContentFit::Fill` 拉伸铺满不追求原比例
+/// ——噪点没有方向性特征,拉伸不会露出破绽。`LazyLock` 让 PNG 只解码一次,
+/// 不会每次开菜单都重新过一遍解码器。
+fn menu_noise_layer<'a, Msg: 'a>() -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer>
+{
+    static NOISE: LazyLock<iced_widget::core::image::Handle> = LazyLock::new(|| {
+        iced_widget::core::image::Handle::from_bytes(
+            include_bytes!("../assets/textures/menu_noise.png").as_slice(),
+        )
+    });
+    image(NOISE.clone())
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .content_fit(ContentFit::Fill)
+        // 贴图原始分辨率(256×384)远小于实际菜单的物理像素尺寸(Retina 屏
+        // 上常是好几倍),默认 `FilterMethod::Linear` 双线性缩放会把逐像素
+        // 随机噪点插值抹成几乎看不出颗粒的平滑渐变(实测截图验证:噪点区域
+        // 变成了肉眼分不出的平滑渐变)。`Nearest` 放大时保留每个源像素的
+        // 硬边界,拉伸后呈现的是块状颗粒而不是被磨平的糊状,才是"磨砂"该有
+        // 的视觉。
+        .filter_method(iced_widget::core::image::FilterMethod::Nearest)
         .into()
 }
 

@@ -7516,7 +7516,7 @@ impl App {
             )];
 
         let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-            crate::menu::shell(items, Length::Shrink);
+            crate::menu::shell_frosted(items, Length::Shrink);
         container(list)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -7605,7 +7605,7 @@ impl App {
             };
 
         let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-            crate::menu::shell(items, Length::Shrink);
+            crate::menu::shell_frosted(items, Length::Shrink);
         container(list)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -7830,7 +7830,7 @@ impl App {
         });
 
         let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-            crate::menu::shell(
+            crate::menu::shell_frosted(
                 items,
                 Length::Fixed(byteui::theme::geometry::menu_item_width()),
             );
@@ -7896,7 +7896,7 @@ impl App {
         ));
 
         let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-            crate::menu::shell(
+            crate::menu::shell_frosted(
                 items,
                 Length::Fixed(byteui::theme::geometry::menu_item_width()),
             );

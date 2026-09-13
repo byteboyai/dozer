@@ -649,7 +649,7 @@ fn sftp_context_menu<'a>(
     };
     let item: iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         crate::menu::item(Some(icon), label, msg);
-    crate::menu::shell(
+    crate::menu::shell_frosted(
         vec![item],
         iced_widget::core::Length::Fixed(byteui::theme::geometry::menu_item_width()),
     )
