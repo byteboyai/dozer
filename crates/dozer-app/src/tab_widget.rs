@@ -449,7 +449,12 @@ where
     pub on_row_hover: FRH,
 }
 
-const TAB_OVERFLOW_MENU_WIDTH: f32 = 220.0;
+const TAB_OVERFLOW_MENU_MIN_WIDTH: f32 = 220.0;
+/// 下拉宽度上限:标题再长也不再继续撑宽,防止极端文件名把菜单铺满大半个
+/// 窗口——同 `TAB_OVERFLOW_MENU_MAX_HEIGHT` 一样是个保守封顶,不追求精确
+/// (2026-09 用户反馈:固定 220 宽把长文件名硬裁掉,而右侧其实有大把空间,
+/// 见下方 `menu_width` 按最长标题动态撑宽的计算)。
+const TAB_OVERFLOW_MENU_MAX_WIDTH: f32 = 460.0;
 const TAB_OVERFLOW_MENU_MAX_HEIGHT: f32 = 320.0;
 
 /// 悬浮下拉列表:每行用既有的 `tabs::tab_core` 包装选中(mousedown)/关闭(×)
@@ -514,7 +519,21 @@ where
         on_row_hover,
     } = args;
     let close_sz = byteui::theme::geometry::tab_button_size();
-    let row_max_w = TAB_OVERFLOW_MENU_WIDTH - close_sz - 16.0;
+    // 下拉宽度按**最长标题**动态撑开(而不是恒定 220),再夹在
+    // [MIN_WIDTH, MAX_WIDTH] 之间、且不超出锚点右侧的可用窗口宽度——同
+    // `crate::workspace::preview_tab_display_width` 一样"不追求精确,只求
+    // 不再把长文件名硬裁掉"。`prefix.is_some()` 的行(状态点/图标)额外
+    // 留 20px 粗估余量。
+    let content_w = entries
+        .iter()
+        .map(|e| {
+            let prefix_w = if e.prefix.is_some() { 20.0 } else { 0.0 };
+            prefix_w + crate::workspace::preview_tab_display_width(&e.title)
+        })
+        .fold(TAB_OVERFLOW_MENU_MIN_WIDTH, f32::max);
+    let avail_w = (window_size.0 - anchor.0 - 24.0).max(TAB_OVERFLOW_MENU_MIN_WIDTH);
+    let menu_width = content_w.min(TAB_OVERFLOW_MENU_MAX_WIDTH).min(avail_w);
+    let row_max_w = menu_width - close_sz - 16.0;
     // 每行都要向视图层塞一份 hover 回调,闭包按行捕获 `idx`,无法共享同一个
     // 借用;`Rc` 让所有行共用同一份 `FRH`(只读 `Fn`,无内部可变性)。
     let on_row_hover = std::rc::Rc::new(on_row_hover);
@@ -558,7 +577,7 @@ where
                 .height(Length::Shrink)
                 .into(),
         ],
-        Length::Fixed(TAB_OVERFLOW_MENU_WIDTH),
+        Length::Fixed(menu_width),
     );
     let list = container(list).max_height(TAB_OVERFLOW_MENU_MAX_HEIGHT);
 
@@ -574,9 +593,7 @@ where
 
     let (ax, ay) = anchor;
     let (window_w, window_h) = window_size;
-    let x = ax
-        .min((window_w - TAB_OVERFLOW_MENU_WIDTH).max(0.0))
-        .max(0.0);
+    let x = ax.min((window_w - menu_width).max(0.0)).max(0.0);
     let y = ay
         .min((window_h - TAB_OVERFLOW_MENU_MAX_HEIGHT).max(0.0))
         .max(0.0);
