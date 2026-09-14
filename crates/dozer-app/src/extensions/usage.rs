@@ -1287,13 +1287,27 @@ struct TrendLines {
 impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for TrendLines {
     type State = ();
 
+    /// 光标在画布内左右移动不会改变 `mouse_interaction`(我们没重写它,一直
+    /// 是默认的 `None`),而 `Canvas::update` 只在这个值变化时才请求重绘——
+    /// 单靠默认行为,悬浮竖线不会跟手挪动。这里对鼠标事件显式请求重绘,让
+    /// `draw` 里读到的最新 `cursor` 能画出来。
+    fn update(
+        &self,
+        _state: &mut Self::State,
+        event: &canvas::Event,
+        _bounds: Rectangle,
+        _cursor: iced_widget::core::mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        matches!(event, canvas::Event::Mouse(_)).then(canvas::Action::request_redraw)
+    }
+
     fn draw(
         &self,
         _state: &Self::State,
         renderer: &iced_renderer::Renderer,
         _theme: &iced_widget::Theme,
         bounds: Rectangle,
-        _cursor: iced_widget::core::mouse::Cursor,
+        cursor: iced_widget::core::mouse::Cursor,
     ) -> Vec<canvas::Geometry<iced_renderer::Renderer>> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         let n = self.days.len();
@@ -1308,6 +1322,21 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
                 GRID_CANVAS_HEIGHT - value as f32 * scale,
             )
         };
+
+        // 悬浮竖线:替代之前每天一块矩形背景的"分割"作用(2026-09-14 用户
+        // 要求去掉矩形背景,改成悬停哪天就画哪天的竖线)。落在哪天用跟
+        // 折线本身同一份 `pitch` 换算,严格对齐当天的点位。
+        if let Some(p) = cursor.position_in(bounds) {
+            let i = ((p.x / pitch) as usize).min(n - 1);
+            let x = pitch * (i as f32 + 0.5);
+            frame.stroke(
+                &canvas::Path::line(Point::new(x, 0.0), Point::new(x, bounds.height)),
+                canvas::Stroke::default()
+                    .with_color(byteui::theme::color::current().border)
+                    .with_width(1.0),
+            );
+        }
+
         for (j, &(_, color)) in self.series.iter().enumerate() {
             let path = canvas::Path::new(|b| {
                 for (i, day) in self.days.iter().enumerate() {
@@ -1360,8 +1389,11 @@ fn trend_line_chart(
     .width(Length::Fill)
     .height(Length::Fixed(GRID_CANVAS_HEIGHT));
 
+    // 每天一个等分格子,只负责悬浮命中区(气泡)+ 日期文字——2026-09-14
+    // 用户要求去掉逐天矩形背景("斑马纹"),分割感改由 `TrendLines` 里悬停
+    // 时画的那条竖线承担,这里不再需要用底色区分开相邻两天。
     let mut cells = iced_widget::row![].spacing(0);
-    for (i, d) in days.iter().enumerate() {
+    for d in days.iter() {
         let col = column![
             iced_widget::Space::new()
                 .width(Length::Fill)
@@ -1378,20 +1410,10 @@ fn trend_line_chart(
             .gap(6)
             .style(icons::tooltip_bubble_style());
 
-        let banded = container(hoverable)
+        let cell = container(hoverable)
             .width(Length::FillPortion(1))
-            .height(Length::Fixed(DAY_BAND_HEIGHT))
-            .style(
-                move |_t: &iced_widget::Theme| iced_widget::container::Style {
-                    background: (i % 2 == 0).then(|| byteui::theme::color::current().card.into()),
-                    border: Border {
-                        radius: 4.0.into(),
-                        ..Border::default()
-                    },
-                    ..iced_widget::container::Style::default()
-                },
-            );
-        cells = cells.push(banded);
+            .height(Length::Fixed(DAY_BAND_HEIGHT));
+        cells = cells.push(cell);
     }
 
     stack![
