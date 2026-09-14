@@ -1010,7 +1010,26 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             app.clear_drag_hover_expand();
         }
 
-        fn on_window_event(&mut self, event: &WindowEvent) {
+        /// 返回 `true` 表示这次事件已被"应用级快捷键"完整接管
+        /// （已经 `app.update(...)` 落地了对应动作）——调用方
+        /// `window_event` 据此跳过随后把**同一个**原始事件再转换喂给
+        /// iced 标准管线那一步。不加这道闸门的后果就是本函数"拦下"的
+        /// ⌘S/⌘F/⌘R/⌘G 这类组合键会被双重处理:这里已经正确触发了
+        /// `PreviewSaveActive` 等 Message,但原始按键事件转换出的 iced
+        /// 事件依然会喂给下面的 `interface.update`——官方 `text_editor`
+        /// 的默认 `Binding::from_key_press`（`iced_widget` 源码,
+        /// `text_editor.rs`）只把 `c`/`x`/`v`/`a` 四个字母认成
+        /// Copy/Cut/Paste/SelectAll,其余任何字母只要 `KeyPress.text`
+        /// 非空就会落进兜底的 `Some(Self::Insert(c))`,**不检查是否按着
+        /// Command**——于是 ⌘S 在真正落盘的同时,那个裸 "s" 字符也被当成
+        /// 普通输入插进了正文（2026-09-14 用户反馈"⌘S 会在文件里敲出一个
+        /// s"，实测确认）。本函数其它分支(Esc 关各类浮层、Ctrl 缩放、
+        /// ⌘C/⌘V、IME 预组字转发终端、外部拖拽文件……)都不吃"字母被当成
+        /// 普通字符插入"这个坑(要么不是文本编辑控件的场景,要么 iced 自己
+        /// 的 Binding 已经正确特判),继续按原样返回 `false`(不吞、照常
+        /// 双喂),只有这条 Preview 原生编辑器闸门真正命中动作时才返回
+        /// `true`。
+        fn on_window_event(&mut self, event: &WindowEvent) -> bool {
             // 把 `modifiers` 和 `app`/`window` 放进同一次解构里取，
             // 避免先借一次 `self` 再调用 `&self` 方法造成的重复借用。
             let Self::Ready {
@@ -1026,7 +1045,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 ..
             } = self
             else {
-                return;
+                return false;
             };
 
             // 左键物理按住状态,独立于下面按具体拖拽类型分派的 match——见
@@ -1302,7 +1321,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     *files_dragging = false;
                     Self::clear_file_drag_hover(app);
                     window.request_redraw();
-                    return;
+                    return false;
                 }
                 // 外部 OS 文件拖拽落下:优先落到文件树目录行 → 触发移动
                 // (吸收掉,不再进后面的终端字节分发);否则落给终端现状行为
@@ -1328,7 +1347,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                             target: hit.target,
                         }));
                         window.request_redraw();
-                        return;
+                        return false;
                     }
                     Self::clear_file_drag_hover(app);
                 }
@@ -1350,7 +1369,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             {
                 app.update(Message::Search(extensions::search::Message::SearchClose));
                 window.request_redraw();
-                return;
+                return false;
             }
 
             // 右键菜单打开时,Esc 优先关菜单,不进正常键盘分发(不然会被当作
@@ -1380,7 +1399,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     app.update(Message::Files(extensions::files::Message::ContextMenuClose));
                 }
                 window.request_redraw();
-                return;
+                return false;
             }
 
             // Agent 选择菜单打开时,Esc 优先关菜单,同右键菜单的处理口径
@@ -1397,7 +1416,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             {
                 app.update(Message::AgentPickerClose);
                 window.request_redraw();
-                return;
+                return false;
             }
 
             // 顶栏新增项目菜单打开时,Esc 同样优先关菜单,口径同上面的
@@ -1414,7 +1433,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             {
                 app.update(Message::ProjectAddMenuClose);
                 window.request_redraw();
-                return;
+                return false;
             }
 
             // Todo 派发选择层打开时,Esc 同样优先关掉弹出层,口径同上面的
@@ -1431,7 +1450,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             {
                 app.update(Message::Todo(extensions::todo::Message::DispatchClose));
                 window.request_redraw();
-                return;
+                return false;
             }
 
             // Todo 状态(待办/进行中/搁置/已完成)下拉选择层打开时,Esc 优先
@@ -1448,7 +1467,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             {
                 app.update(Message::Todo(extensions::todo::Message::StatusClose));
                 window.request_redraw();
-                return;
+                return false;
             }
 
             // Todo 日历日期选择器打开时,Esc 同样优先关掉弹出层,口径同上面
@@ -1465,7 +1484,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             {
                 app.update(Message::Todo(extensions::todo::Message::CalendarClose));
                 window.request_redraw();
-                return;
+                return false;
             }
 
             // Todo 搜索框左前"状态"筛选浮层打开时,Esc 同样优先关掉弹出层,
@@ -1482,7 +1501,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             {
                 app.update(Message::Todo(extensions::todo::Message::StatusFilterClose));
                 window.request_redraw();
-                return;
+                return false;
             }
 
             // 原生预览 tab(白名单扩展名,`preview.rs` 直接画 `CodeEditor`,
@@ -1511,10 +1530,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     ..
                 } = event
                 else {
-                    return;
+                    return false;
                 };
                 if kev.state != ElementState::Pressed {
-                    return;
+                    return false;
                 }
                 let normal_char =
                     |c: &str| kev.logical_key == winit::keyboard::Key::Character(c.into());
@@ -1559,9 +1578,14 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 if let Some(msg) = action {
                     app.update(msg);
                     window.request_redraw();
-                    return;
+                    // 已完整接管:不能再把同一个按键喂给 iced,否则官方
+                    // `text_editor` 默认 Binding 会把 s/f/r/g 这些字母当
+                    // 普通字符插进正文(见本函数顶部文档)。
+                    return true;
                 }
-                return;
+                // 没命中任何应用级快捷键(比如普通打字):照常放行给 iced,
+                // 不然连基本输入都会被这里吞掉。
+                return false;
             }
 
             // Files 搜索框(Stage 2)/ 浏览器地址栏(Stage 3)/ Todo 搜索框、
@@ -1592,7 +1616,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 || app.project_name_focused()
                 || app.query_focused()
             {
-                return;
+                return false;
             }
 
             // Todo/浏览器/文件树/项目树等面板输入均已迁移 iced 原生
@@ -1642,7 +1666,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                         _ => {}
                     }
                 }
-                return;
+                return false;
             }
 
             // IME 组字预览(尚未提交):不发字节给 PTY,只更新一份渲染态给
@@ -1660,7 +1684,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 };
                 app.update(Message::TermImePreedit(target, preedit));
                 window.request_redraw();
-                return;
+                return false;
             }
 
             // Ctrl + / Ctrl - 全局 UI 缩放:与 ⌘ 应用快捷键同级拦截,不进 PTY。
@@ -1686,7 +1710,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 if let Some(msg) = zoom {
                     app.update(msg);
                     window.request_redraw();
-                    return;
+                    return false;
                 }
             }
 
@@ -1724,6 +1748,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 }
                 window.request_redraw();
             }
+            // 终端字节转发路径不接管事件:iced 没有任何原生文本控件会
+            // 因为这个按键做出不该有的反应(终端渲染是自绘 canvas,不是
+            // `text_editor`),继续照常双喂给标准管线。
+            false
         }
 
         /// 把 app 的 webview 期望清单同步到真实 wry 子视图:
@@ -2426,7 +2454,11 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             _window_id: winit::window::WindowId,
             event: WindowEvent,
         ) {
-            self.on_window_event(&event);
+            // `consumed == true`:已经被应用级快捷键接管(见
+            // `on_window_event` 顶部文档),下面不能再把同一个原始事件转换
+            // 喂给 iced 标准管线,否则会重复处理(⌘S 这类字母快捷键会在
+            // 落盘的同时把字母本身当普通字符插进 `text_editor` 正文)。
+            let consumed = self.on_window_event(&event);
 
             // 解构借用限定在这个块内：块尾产出待派发的 `messages`，块结束后
             // 那些字段借用随之释放，才能在块外调用 `self.dispatch`/
@@ -3363,9 +3395,12 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                     }
                 ) && modifiers.control_key();
 
-                // Map window event to iced event
-                if let Some(event) =
-                    conversion::window_event(event, window.scale_factor() as f32, *modifiers)
+                // Map window event to iced event。`consumed` 时跳过:这个
+                // 事件已经被 `on_window_event` 当应用级快捷键接管过了,不能
+                // 再喂给 iced 标准管线重复处理(见该函数顶部文档)。
+                if !consumed
+                    && let Some(event) =
+                        conversion::window_event(event, window.scale_factor() as f32, *modifiers)
                 {
                     let event = if is_control_left_press
                         && matches!(

@@ -450,11 +450,13 @@ where
 }
 
 const TAB_OVERFLOW_MENU_MIN_WIDTH: f32 = 220.0;
-/// 下拉宽度上限:标题再长也不再继续撑宽,防止极端文件名把菜单铺满大半个
-/// 窗口——同 `TAB_OVERFLOW_MENU_MAX_HEIGHT` 一样是个保守封顶,不追求精确
-/// (2026-09 用户反馈:固定 220 宽把长文件名硬裁掉,而右侧其实有大把空间,
-/// 见下方 `menu_width` 按最长标题动态撑宽的计算)。
-const TAB_OVERFLOW_MENU_MAX_WIDTH: f32 = 460.0;
+/// 下拉宽度上限:即便可用屏幕空间(见下方 `avail_w`)比这个还宽,也不再
+/// 继续撑——防止在超宽显示器上把菜单拉得离谱。跟 `TAB_OVERFLOW_MENU_MAX_HEIGHT`
+/// 一样是个保守封顶(2026-09 用户反馈两轮:先是固定 220 宽把长文件名硬裁掉,
+/// 换成按标题字符数估算宽度后估不准依然会裁——真正的修法是不再猜标题该有
+/// 多宽,直接把"真实可用屏幕空间"当边界,标题短就窄、标题长就宽,只有真
+/// 超出这个边界才被行内 `.clip(true)` 遮住,见下方 `menu_width` 计算)。
+const TAB_OVERFLOW_MENU_MAX_WIDTH: f32 = 560.0;
 const TAB_OVERFLOW_MENU_MAX_HEIGHT: f32 = 320.0;
 
 /// 悬浮下拉列表:每行用既有的 `tabs::tab_core` 包装选中(mousedown)/关闭(×)
@@ -519,20 +521,13 @@ where
         on_row_hover,
     } = args;
     let close_sz = byteui::theme::geometry::tab_button_size();
-    // 下拉宽度按**最长标题**动态撑开(而不是恒定 220),再夹在
-    // [MIN_WIDTH, MAX_WIDTH] 之间、且不超出锚点右侧的可用窗口宽度——同
-    // `crate::workspace::preview_tab_display_width` 一样"不追求精确,只求
-    // 不再把长文件名硬裁掉"。`prefix.is_some()` 的行(状态点/图标)额外
-    // 留 20px 粗估余量。
-    let content_w = entries
-        .iter()
-        .map(|e| {
-            let prefix_w = if e.prefix.is_some() { 20.0 } else { 0.0 };
-            prefix_w + crate::workspace::preview_tab_display_width(&e.title)
-        })
-        .fold(TAB_OVERFLOW_MENU_MIN_WIDTH, f32::max);
+    // `menu_width` 是"真实可用屏幕空间"(锚点到窗口右边缘),不是靠标题字符数
+    // 估出来的目标宽度——估算法则总有算不准的场景,标题实际渲染宽度只要比
+    // 估算值宽一点,照样被裁。`row_max_w` 传给 `tab_label` 后只在标题**真的**
+    // 比这块可用空间还宽时才触发它自带的 `.clip(true)`,短标题原样按自身宽度
+    // 显示(`tab_label` 内部 `Length::Shrink`,不会被拉伸/裁短)。
     let avail_w = (window_size.0 - anchor.0 - 24.0).max(TAB_OVERFLOW_MENU_MIN_WIDTH);
-    let menu_width = content_w.min(TAB_OVERFLOW_MENU_MAX_WIDTH).min(avail_w);
+    let menu_width = avail_w.min(TAB_OVERFLOW_MENU_MAX_WIDTH);
     let row_max_w = menu_width - close_sz - 16.0;
     // 每行都要向视图层塞一份 hover 回调,闭包按行捕获 `idx`,无法共享同一个
     // 借用;`Rc` 让所有行共用同一份 `FRH`(只读 `Fn`,无内部可变性)。
