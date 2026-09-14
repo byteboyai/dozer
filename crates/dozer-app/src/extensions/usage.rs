@@ -7,6 +7,7 @@
 
 use crate::conversation::ConversationMeta;
 use crate::homespace::{home_panel_head, home_section_head};
+use crate::theme;
 use byteui::interaction::icons;
 use dozer_core::protocol::AgentKind;
 use iced_widget::canvas::{self, Canvas};
@@ -239,10 +240,11 @@ pub struct DaySeries {
 }
 
 /// 三个趋势各自的最近窗口天数（2026-09-05 用户要求：Session 与 Input/Output
-/// 看近 15 天整的一条轴；Cache read/write 只看近 5 天更紧的一跳）。
+/// 看近 15 天整的一条轴；Cache read/write 原本只看近 5 天更紧的一跳，
+/// 2026-09-14 用户要求统一改成 15 天，跟其余两条趋势轴同口径）。
 const SESSION_TREND_WINDOW: i64 = 15;
 const IO_TREND_WINDOW: i64 = 15;
-const CACHE_TREND_WINDOW: i64 = 5;
+const CACHE_TREND_WINDOW: i64 = 15;
 
 /// 把某 agent 的会话按天分桶、摊成最近 `window` 天的一根连续时间轴（最旧在
 /// 左、今天在右，`values[bar_idx]` 交给 `per_row` 逐条会话各取一个标量求和；
@@ -1187,7 +1189,7 @@ fn bar_chart(
     .into()
 }
 
-/// 一张趋势柱状图里并列的若干序列标签与配色。`values` 下标与这里一一对应,
+/// 一张趋势折线图里并列的若干序列标签与配色。`values` 下标与这里一一对应,
 /// 渲染与图例共用同一份,避免两处各写一遍序列名/色。
 type TrendSeries = Vec<(&'static str, Color)>;
 
@@ -1235,7 +1237,7 @@ fn trend_tooltip_bubble(
     container(rows).padding([6, 8]).into()
 }
 
-/// 横排的序列图例:色点 + 名称一排（放在趋势图标题下方）。替代对多序列柱状图
+/// 横排的序列图例:色点 + 名称一排（放在趋势图标题下方）。替代对多序列折线图
 /// 用鼠悬一个个去猜颜色。
 fn trend_legend(
     series: &TrendSeries,
@@ -1270,11 +1272,76 @@ fn trend_legend(
     row.into()
 }
 
-/// 通用"每天并列若干序列柱"的趋势柱状图，结构和 `bar_chart`（每天并列几根
-/// agent 柱、叠网格/斑马带/悬停气泡）保持一致，只是每根柱来自 `series` 对应
-/// 下标的量而不是某个 agent。`days` 的下标数量须 === `series.len()`（聚合时
-/// 已保证每天固定那么多数量的柱，空天补 0）。
-fn trend_bar_chart(
+/// 折线渲染:每个序列在各天取值处画点、相邻天连线——2026-09-14 用户要求
+/// Session/Token 趋势从分组柱状图换成折线图(连续多天的走势比逐天量级对比
+/// 更适合折线)。y 轴换算跟 `GridLines` 共用同一套基线(0 落在
+/// `GRID_CANVAS_HEIGHT`,`BAR_MAX_HEIGHT` 撑满顶部);x 轴按天数把整块画布
+/// 宽度 n 等分,点落在每天格子正中央——必须跟 `trend_line_chart` 里悬浮
+/// 命中区那一排"天格子"用同一个不含 spacing 的 n 等分宽度,两层才能对上。
+struct TrendLines {
+    days: Vec<DaySeries>,
+    series: TrendSeries,
+    max_total: u64,
+}
+
+impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for TrendLines {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced_renderer::Renderer,
+        _theme: &iced_widget::Theme,
+        bounds: Rectangle,
+        _cursor: iced_widget::core::mouse::Cursor,
+    ) -> Vec<canvas::Geometry<iced_renderer::Renderer>> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let n = self.days.len();
+        if n == 0 || self.max_total == 0 {
+            return vec![frame.into_geometry()];
+        }
+        let scale = BAR_MAX_HEIGHT / self.max_total as f32;
+        let pitch = bounds.width / n as f32;
+        let point_at = |i: usize, value: u64| {
+            Point::new(
+                pitch * (i as f32 + 0.5),
+                GRID_CANVAS_HEIGHT - value as f32 * scale,
+            )
+        };
+        for (j, &(_, color)) in self.series.iter().enumerate() {
+            let path = canvas::Path::new(|b| {
+                for (i, day) in self.days.iter().enumerate() {
+                    let point = point_at(i, day.values[j]);
+                    if i == 0 {
+                        b.move_to(point);
+                    } else {
+                        b.line_to(point);
+                    }
+                }
+            });
+            frame.stroke(
+                &path,
+                canvas::Stroke::default().with_color(color).with_width(2.0),
+            );
+            for (i, day) in self.days.iter().enumerate() {
+                frame.fill(
+                    &canvas::Path::circle(point_at(i, day.values[j]), 3.0),
+                    color,
+                );
+            }
+        }
+        vec![frame.into_geometry()]
+    }
+}
+
+/// 通用"每天并列若干序列"的趋势折线图,结构上跟 `bar_chart`（叠网格/斑马带/
+/// 悬停气泡）保持一致,只是可视化层从每天一组柱子换成一条跨天连续折线。
+/// `days` 每项 `values` 的下标数量须 === `series.len()`（聚合时已保证每天
+/// 固定那么多个序列，空天补 0）。天格子改成不留间隙的等分宽度(`spacing(0)`
+/// 配 `FillPortion(1)`),这样悬浮命中区的列中心正好跟 `TrendLines` 里按
+/// 同一个 n 等分算出来的点位对齐,折线图不需要像柱状图那样靠间隙区分开
+/// 相邻天(斑马纹底色已经够用)。
+fn trend_line_chart(
     days: &[DaySeries],
     series: &TrendSeries,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -1284,21 +1351,21 @@ fn trend_bar_chart(
         .max()
         .unwrap_or(1)
         .max(1);
-    let scale = BAR_MAX_HEIGHT / max_total as f32;
 
-    let mut groups = iced_widget::row![].spacing(8);
+    let lines = Canvas::new(TrendLines {
+        days: days.to_vec(),
+        series: series.clone(),
+        max_total,
+    })
+    .width(Length::Fill)
+    .height(Length::Fixed(GRID_CANVAS_HEIGHT));
+
+    let mut cells = iced_widget::row![].spacing(0);
     for (i, d) in days.iter().enumerate() {
-        let mut day_group = iced_widget::row![].spacing(3);
-        for (j, (_, color)) in series.iter().enumerate() {
-            let value = d.values[j];
-            day_group = day_group.push(agent_bar(value, scale, *color));
-        }
-        let day_group = day_group.align_y(iced_widget::core::alignment::Vertical::Bottom);
-
         let col = column![
-            container(day_group)
-                .height(Length::Fixed(GRID_CANVAS_HEIGHT))
-                .align_y(iced_widget::core::alignment::Vertical::Bottom),
+            iced_widget::Space::new()
+                .width(Length::Fill)
+                .height(Length::Fixed(GRID_CANVAS_HEIGHT)),
             text(d.label.clone())
                 .size(8.0)
                 .color(byteui::theme::color::current().dim)
@@ -1312,7 +1379,7 @@ fn trend_bar_chart(
             .style(icons::tooltip_bubble_style());
 
         let banded = container(hoverable)
-            .padding([0, 4])
+            .width(Length::FillPortion(1))
             .height(Length::Fixed(DAY_BAND_HEIGHT))
             .style(
                 move |_t: &iced_widget::Theme| iced_widget::container::Style {
@@ -1324,12 +1391,18 @@ fn trend_bar_chart(
                     ..iced_widget::container::Style::default()
                 },
             );
-        groups = groups.push(banded);
+        cells = cells.push(banded);
     }
 
     stack![
         grid_lines_canvas(max_total),
-        container(groups).padding(iced_widget::core::Padding {
+        container(lines).padding(iced_widget::core::Padding {
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: GRID_LABEL_GUTTER,
+        }),
+        container(cells).padding(iced_widget::core::Padding {
             top: 0.0,
             right: 0.0,
             bottom: 0.0,
@@ -1370,12 +1443,12 @@ fn trend_chart_section(
     Some(
         column![title_row]
             .spacing(SECTION_CHART_GAP)
-            .push(trend_bar_chart(days, &series))
+            .push(trend_line_chart(days, &series))
             .into(),
     )
 }
 
-/// Session 趋势的序列配色——会话/回合各一根柱,分别用 cream(项目"活动类"统计的
+/// Session 趋势的序列配色——会话/回合各一条线,分别用 cream(项目"活动类"统计的
 /// 颜色习惯)与 green;对比只在同一张图内部保色相区分,跨图可重复用色。
 fn session_trend_series() -> TrendSeries {
     let c = byteui::theme::color::current();
@@ -1403,9 +1476,34 @@ fn trend_window_tag(
         .into()
 }
 
-/// Token 趋势区:一个标题(Token 趋势)下按 15 天(Input/Output)与 5 天
-/// (Cache read/write)分别画两根并列柱。两张窗口/量级差太多,单独成图、各自
-/// 独立纵轴 max,不共用刻度。任一图整段无数据时只画另一张;都空则整区不给。
+/// `token_trend_section` 专属标题:结构照抄 `home_section_head`(圆点 + 文字),
+/// 颜色改用 `gold`——2026-09-14 用户要求这个标题用金黄色跟别的小节区分开,
+/// 不改 `home_section_head` 本身(它被 Session 趋势/每日用量统计等一起共用,
+/// 且金色按 CLAUDE.md 约定专属"甲方动作",这里只是这一处标题的显式例外)。
+fn token_trend_head_gold() -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer>
+{
+    let gold = byteui::theme::color::current().gold;
+    row![
+        icons::view(
+            icons::IconKind::CircleSmall,
+            byteui::theme::icon_size::row(),
+            gold
+        ),
+        crate::workspace::lh(
+            text("Token 趋势")
+                .size(theme::homespace_font::label())
+                .color(gold)
+        ),
+    ]
+    .spacing(6)
+    .align_y(iced_widget::core::Alignment::Center)
+    .into()
+}
+
+/// Token 趋势区:一个标题(Token 趋势)下按 15 天(Input/Output)与 15 天
+/// (Cache read/write,2026-09-14 起从 5 天统一改成 15 天,跟 Input/Output
+/// 同口径)分别画两张折线图。两张图量级差太多,单独成图、各自独立纵轴 max,
+/// 不共用刻度。任一图整段无数据时只画另一张;都空则整区不给。
 fn token_trend_section(
     agent: AgentKind,
     rows: &[(ConversationMeta, ConversationUsage)],
@@ -1420,7 +1518,7 @@ fn token_trend_section(
     let cache_has = has_any_value(&cache);
 
     let mut head_row = iced_widget::row![
-        home_section_head("Token 趋势"),
+        token_trend_head_gold(),
         iced_widget::Space::new()
             .width(Length::Fill)
             .height(Length::Shrink),
@@ -1440,13 +1538,12 @@ fn token_trend_section(
         head_row = head_row.push(io_group);
     }
 
-    let mut section = column![head_row].spacing(SECTION_CHART_GAP);
-    if io_has {
-        section = section.push(trend_bar_chart(&io, &io_series));
+    if !io_has && !cache_has {
+        return None;
     }
 
-    if cache_has {
-        let cache_header = iced_widget::row![
+    let cache_header = cache_has.then(|| {
+        iced_widget::row![
             text("Cache read / write")
                 .size(byteui::theme::font::caption_sm())
                 .color(byteui::theme::color::current().dim),
@@ -1454,19 +1551,39 @@ fn token_trend_section(
                 .width(Length::Fill)
                 .height(Length::Shrink),
             trend_legend(&cache_series),
-            trend_window_tag("近 5 天"),
+            trend_window_tag("近 15 天"),
         ]
         .align_y(iced_widget::core::alignment::Vertical::Center)
-        .spacing(8);
-        section = section
-            .push(cache_header)
-            .push(trend_bar_chart(&cache, &cache_series));
-    }
+        .spacing(8)
+    });
 
-    if !io_has && !cache_has {
-        return None;
-    }
-    Some(section.into())
+    // io 有数据时,标题(挂在 `head_row`)和它的图表照旧用 `SECTION_CHART_GAP`;
+    // Cache read/write 这一小节整体跟前面的 IO 图表用更大的 `SUBSECTION_GAP`
+    // 隔开——2026-09-14 用户要求这个小标题上下更疏朗一些,让它读起来是独立
+    // 的第二个小节,而不是紧贴着上一张图。io 缺失时(只剩 Cache)标题仍直接
+    // 挂在 `head_row` 上,跟自己的图表保持普通的 `SECTION_CHART_GAP`。
+    let section: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        match (io_has, cache_header) {
+            (true, Some(cache_header)) => column![
+                column![head_row, trend_line_chart(&io, &io_series)].spacing(SECTION_CHART_GAP),
+                column![cache_header, trend_line_chart(&cache, &cache_series)]
+                    .spacing(SECTION_CHART_GAP),
+            ]
+            .spacing(SUBSECTION_GAP)
+            .into(),
+            (true, None) => column![head_row, trend_line_chart(&io, &io_series)]
+                .spacing(SECTION_CHART_GAP)
+                .into(),
+            (false, Some(cache_header)) => column![
+                head_row,
+                cache_header,
+                trend_line_chart(&cache, &cache_series)
+            ]
+            .spacing(SECTION_CHART_GAP)
+            .into(),
+            (false, None) => unreachable!("!io_has && !cache_has 已在上面提前返回"),
+        };
+    Some(section)
 }
 
 /// 用量面板数字的统一样式(2026-08-26 起所有数字共用这一套,不再区分图表
@@ -1496,6 +1613,11 @@ const PIE_GAP_RAD: f32 = 0.035;
 /// 内层 column 单独吃这个值(见 `content_pane`),与面板外层常规的 `spacing(12)`
 /// 解耦——2026-09-05 产品要求"加大每一节标题和 chart 的间距"。
 const SECTION_CHART_GAP: f32 = 24.0;
+
+/// `token_trend_section` 内 IO 图表与 "Cache read/write" 子小节之间的组间距,
+/// 比 `SECTION_CHART_GAP` 更疏朗——2026-09-14 用户要求"Cache read/write"这个
+/// 子标题上下更宽松,让它读起来是独立的第二个小节,不是紧贴上一张图表。
+const SUBSECTION_GAP: f32 = 32.0;
 
 /// 子栏目标题 `home_section_head` 由「圆点图标 + 6px 间距 + 标题文字」组成,
 /// 标题文字相对该行起点缩进 `icon_size::row() + 6`。每个小节标题下的卡片/图表
@@ -2134,7 +2256,7 @@ mod tests {
     }
 
     #[test]
-    fn io_and_cache_trend_use_their_own_window_and_split_fields() {
+    fn io_and_cache_trend_share_window_but_split_fields() {
         let today = 20_672i64;
         let ms = |day: i64| (day as u64) * 86_400_000;
         // sample_usage:in=10,out=2,read=1,write=1。
@@ -2142,7 +2264,11 @@ mod tests {
         let io = io_trend(&rows, AgentKind::Claude, today);
         let cache = cache_trend(&rows, AgentKind::Claude, today);
         assert_eq!(io.len(), 15, "Input/Output 看近 15 天");
-        assert_eq!(cache.len(), 5, "Cache read/write 看近 5 天");
+        assert_eq!(
+            cache.len(),
+            15,
+            "Cache read/write 统一改成近 15 天,跟 Input/Output 同口径"
+        );
         assert_eq!(io.last().unwrap().values, vec![10, 2]);
         assert_eq!(cache.last().unwrap().values, vec![1, 1]);
     }
