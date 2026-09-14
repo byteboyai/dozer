@@ -7245,6 +7245,9 @@ impl App {
     }
 
     fn preview_open_path(&mut self, path: PathBuf) {
+        // 同 `preview_select_tab`:`preview_tab_bar_avail_px` 要 `&self`,
+        // 得在 `with_focused_project` 的 `&mut self` 借用之前先算好。
+        let avail_w = self.preview_tab_bar_avail_px(PanelKind::Files);
         self.with_focused_project(move |ws, io| {
             if !path.is_file() {
                 ws.preview_error = Some(format!("文件不存在或不可读: {}", path.display()));
@@ -7257,8 +7260,20 @@ impl App {
                 .expect("allowed_files 锁")
                 .insert(path.clone());
             ws.preview.open_path(path);
-            // 新 tab 落在末尾，滚回最左让它可见（P1L T5）。
-            ws.preview_tab_first = 0;
+            // 新 tab 落在末尾(复用已开的文件则落在该文件原来的位置)——
+            // 用跟 `preview_select_tab` 同一套 `tab_window_reveal`,把窗口
+            // 起点钳到"包含这个新激活 tab"的位置,而不是无脑滚回最左
+            // (此前 `= 0` 的写法:tab 一多,新开的文件反而被滚出可见区,
+            // 2026-09-14 用户反馈"新打开文件时 tab 应该跳转到对应位置")。
+            let active = ws.preview.active_idx();
+            let widths: Vec<f32> = ws
+                .preview
+                .tabs()
+                .iter()
+                .map(|t| preview_tab_display_width(&t.title))
+                .collect();
+            ws.preview_tab_first =
+                tab_widget::tab_window_reveal(&widths, 4.0, avail_w, ws.preview_tab_first, active);
             ws.spawn_preview_state_save(io);
             ws.spawn_preview_context_push(io);
         });
@@ -7304,6 +7319,7 @@ impl App {
     /// tab 是项目链接点开产生的会话期状态,不持久化、也不向 daemon 推上下文,
     /// 避免与 Files 预览那份持久化 `preview_state` 互相覆盖。
     fn project_preview_open_path(&mut self, path: PathBuf) {
+        let avail_w = self.preview_tab_bar_avail_px(PanelKind::Project);
         self.with_focused_project(|ws, _io| {
             if !path.is_file() {
                 ws.project_preview_error = Some(format!("文件不存在或不可读: {}", path.display()));
@@ -7316,8 +7332,22 @@ impl App {
                 .expect("allowed_files 锁")
                 .insert(path.clone());
             ws.project_preview.open_path(path);
-            // 新 tab 落在末尾,滚回最左让它可见(同 Files 预览)。
-            ws.project_preview_tab_first = 0;
+            // 新 tab 落在末尾(或复用已开文件原位),用 `tab_window_reveal`
+            // 钳出包含它的窗口起点,不再无脑滚回最左(同 Files 预览)。
+            let active = ws.project_preview.active_idx();
+            let widths: Vec<f32> = ws
+                .project_preview
+                .tabs()
+                .iter()
+                .map(|t| preview_tab_display_width(&t.title))
+                .collect();
+            ws.project_preview_tab_first = tab_widget::tab_window_reveal(
+                &widths,
+                4.0,
+                avail_w,
+                ws.project_preview_tab_first,
+                active,
+            );
         });
     }
 
