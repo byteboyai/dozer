@@ -1324,16 +1324,7 @@ pub fn view<'a>(
     // 有"待确认删除的主机"时,在面板上叠一层半透明遮罩 + 确认对话框;
     // 点遮罩(或对话框的取消)回 `DeleteHostCancel` 收起,确认才真删。
     if let Some(host_id) = ws_state.delete_confirm() {
-        let dismiss = MouseArea::new(
-            container(column![])
-                .width(iced_widget::core::Length::Fill)
-                .height(iced_widget::core::Length::Fill)
-                .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-                    background: Some(byteui::theme::color::current().scrim.into()),
-                    ..iced_widget::container::Style::default()
-                }),
-        )
-        .on_press(Message::DeleteHostCancel);
+        let dismiss = crate::dialog::scrim(Message::DeleteHostCancel);
         return stack![base, dismiss, delete_confirm_popup(ws_state, host_id)]
             .width(width)
             .height(iced_widget::core::Length::Fill)
@@ -1399,20 +1390,12 @@ fn delete_confirm_popup<'a>(
             text("这会永久删除这台主机的连接记录。")
                 .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().dim),
-            row![cancel, confirm].spacing(8),
+            crate::dialog::actions(row![cancel, confirm].spacing(8)),
         ]
         .spacing(8),
     )
     .padding(16)
-    .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-        background: Some(byteui::theme::color::current().card.into()),
-        border: iced_widget::core::Border {
-            color: byteui::theme::color::current().border,
-            width: 1.0,
-            radius: 6.0.into(),
-        },
-        ..iced_widget::container::Style::default()
-    });
+    .style(crate::dialog::card_style);
 
     container(dialog)
         .width(iced_widget::core::Length::Fill)

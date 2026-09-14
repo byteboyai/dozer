@@ -1,0 +1,78 @@
+//! 统一弹窗(确认框/模态对话框)样式原语。
+//!
+//! 之前各面板各写一份"CARD 底 + 描边 + 遮罩"(文件树删除/移动确认、
+//! 项目删除/修复进度、SSH 删主机确认、搜索弹窗、Todo 详情),描边色统一
+//! 用中性 `BORDER`、圆角在 6/8 之间漂移、遮罩有的补了半透明 `SCRIM`
+//! 有的干脆透明——视觉与"弹窗该有的分量感"逐处不一致。现在把外壳原语
+//! 收拢成共享的两件套:
+//!
+//! - `card_style`: 弹窗卡片本体的容器样式(`theme::region::dialog()`——
+//!   CARD 底 + 金色 `GOLD` 描边,呼应放大态浮层同款"金色描边盒",见
+//!   `theme::region::maximize_overlay`)。
+//! - `scrim`/`scrim_blocking`: 满窗遮罩,`SCRIM` 半透明底上叠一层
+//!   [`crate::frosted::noise_layer`] 磨砂噪点贴图(同右键菜单
+//!   `menu::shell_frosted` 的做法)。`scrim` 挂 `on_press` 可点击关闭;
+//!   `scrim_blocking` 不挂,用于进行中不许中途打断的进度弹窗(如项目
+//!   "修复"逐步骤跑完前)。弹窗都是打开/关闭才重绘一次的静态浮层,噪点层
+//!   的重绘开销可忽略,同 `shell_frosted` 文档的理由。
+//! - `actions`: 弹窗底部"取消/确认"这类操作按钮行的统一落位——靠右下角
+//!   (之前各面板要么整行左对齐、要么干脆没套统一约定,漂移同上)。只用于
+//!   纯按钮的收尾操作行;像 Todo 详情"回复框+提交"那种输入控件占满宽度
+//!   的行不适用,继续各自布局。
+
+use crate::theme;
+use iced_widget::core::{Element, Length, alignment::Horizontal};
+use iced_widget::{MouseArea, Row, Stack, column, container};
+
+/// 弹窗卡片容器样式:CARD 底 + 金色描边 + 圆角,取代各面板各自手写的
+/// `container::Style` 字面量。
+pub fn card_style(_t: &iced_widget::Theme) -> container::Style {
+    let region = theme::region::dialog();
+    container::Style {
+        background: region.background.map(Into::into),
+        border: region.border.unwrap_or_default(),
+        ..container::Style::default()
+    }
+}
+
+/// 满窗磨砂遮罩:`SCRIM` 半透明底 + 噪点贴图,点击回传 `on_dismiss`。
+pub fn scrim<'a, Msg: 'a + Clone>(
+    on_dismiss: Msg,
+) -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {
+    MouseArea::new(scrim_layer()).on_press(on_dismiss).into()
+}
+
+/// 不可点击关闭的遮罩版本:进行中的进度弹窗(如项目"修复"跑完前)不许
+/// 点遮罩打断,只挡住底层交互、不挂 `on_press`。
+pub fn scrim_blocking<'a, Msg: 'a>() -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer>
+{
+    scrim_layer()
+}
+
+/// 弹窗底部操作按钮行:靠右下角对齐(取消在左、确认在右的相对顺序不变,
+/// 只是整行不再贴左/居中)。
+pub fn actions<'a, Msg: 'a>(
+    row: Row<'a, Msg, iced_widget::Theme, iced_renderer::Renderer>,
+) -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {
+    container(row)
+        .width(Length::Fill)
+        .align_x(Horizontal::Right)
+        .into()
+}
+
+fn scrim_layer<'a, Msg: 'a>() -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {
+    Stack::new()
+        .push(
+            container(column![])
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(|_t: &iced_widget::Theme| container::Style {
+                    background: Some(byteui::theme::color::current().scrim.into()),
+                    ..container::Style::default()
+                }),
+        )
+        .push(crate::frosted::noise_layer())
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}

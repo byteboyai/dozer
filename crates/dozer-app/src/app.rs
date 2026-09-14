@@ -6418,7 +6418,7 @@ impl App {
             msg,
             database::Message::TestConnection(_)
                 | database::Message::EditSourceStart(_)
-                | database::Message::DeleteSource(_)
+                | database::Message::DeleteSourceRequest(_)
                 | database::Message::SchemaRefresh(_)
         ) {
             self.database_source_menu = None;
@@ -7768,15 +7768,7 @@ impl App {
             .spacing(12)
             .padding(16)
             .width(Length::Fixed(480.0));
-        let card = container(card).style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(byteui::theme::color::current().card.into()),
-            border: Border {
-                color: byteui::theme::color::current().border,
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..container::Style::default()
-        });
+        let card = container(card).style(crate::dialog::card_style);
 
         container(card)
             .width(Length::Fill)
@@ -7816,7 +7808,7 @@ impl App {
             crate::menu::item::<Message>(
                 Some(icons::IconKind::Trash),
                 "删除",
-                Message::Database(database::Message::DeleteSource(source_id.clone())),
+                Message::Database(database::Message::DeleteSourceRequest(source_id.clone())),
             ),
         ];
         items.push(if expanded {
@@ -7998,12 +7990,7 @@ impl App {
             .height(Length::Fill)
             .into()
         } else if ws.files.tree_delete_confirm_is_some() {
-            let dismiss = MouseArea::new(
-                container(column![])
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            )
-            .on_press(Message::Files(files::Message::DeleteCancel));
+            let dismiss = crate::dialog::scrim(Message::Files(files::Message::DeleteCancel));
             stack![
                 base,
                 dismiss,
@@ -8013,12 +8000,7 @@ impl App {
             .height(Length::Fill)
             .into()
         } else if ws.files.pending_move_is_some() {
-            let dismiss = MouseArea::new(
-                container(column![])
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            )
-            .on_press(Message::Files(files::Message::MoveCancel));
+            let dismiss = crate::dialog::scrim(Message::Files(files::Message::MoveCancel));
             stack![
                 base,
                 dismiss,
@@ -8199,12 +8181,7 @@ impl App {
         } else if ws.todo.detail_popup_open() {
             // 任务详情弹窗:窗口级 overlay,原生渲染(不走 wry webview)。
             // 点弹层外任意处经 dismiss 收起,与其它 Todo 浮层同款约定。
-            let dismiss = MouseArea::new(
-                container(column![])
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            )
-            .on_press(Message::Todo(todo::Message::DetailClose));
+            let dismiss = crate::dialog::scrim(Message::Todo(todo::Message::DetailClose));
             stack![base, dismiss, self.todo_detail_popup()]
                 .width(Length::Fill)
                 .height(Length::Fill)

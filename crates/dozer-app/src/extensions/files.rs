@@ -2519,56 +2519,50 @@ pub fn delete_confirm_popup(
             text("会移入系统回收站,可从回收站找回。")
                 .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().dim),
-            row![
-                button(
-                    text("取消")
-                        .size(byteui::theme::font::body())
-                        .color(byteui::theme::color::current().cream)
-                )
-                .on_press(Message::DeleteCancel)
-                .padding([6, 12])
-                .style(|_t, _s| button::Style {
-                    background: Some(byteui::theme::color::current().card.into()),
-                    text_color: byteui::theme::color::current().cream,
-                    border: Border {
-                        color: byteui::theme::color::current().border,
-                        width: 1.0,
-                        radius: 4.0.into()
-                    },
-                    ..button::Style::default()
-                }),
-                button(
-                    text("删除")
-                        .size(byteui::theme::font::body())
-                        .color(byteui::theme::color::current().red)
-                )
-                .on_press(Message::DeleteConfirm)
-                .padding([6, 12])
-                .style(|_t, _s| button::Style {
-                    background: Some(byteui::theme::color::current().card.into()),
-                    text_color: byteui::theme::color::current().red,
-                    border: Border {
-                        color: byteui::theme::color::current().red,
-                        width: 1.0,
-                        radius: 4.0.into()
-                    },
-                    ..button::Style::default()
-                }),
-            ]
-            .spacing(8),
+            crate::dialog::actions(
+                row![
+                    button(
+                        text("取消")
+                            .size(byteui::theme::font::body())
+                            .color(byteui::theme::color::current().cream)
+                    )
+                    .on_press(Message::DeleteCancel)
+                    .padding([6, 12])
+                    .style(|_t, _s| button::Style {
+                        background: Some(byteui::theme::color::current().card.into()),
+                        text_color: byteui::theme::color::current().cream,
+                        border: Border {
+                            color: byteui::theme::color::current().border,
+                            width: 1.0,
+                            radius: 4.0.into()
+                        },
+                        ..button::Style::default()
+                    }),
+                    button(
+                        text("删除")
+                            .size(byteui::theme::font::body())
+                            .color(byteui::theme::color::current().red)
+                    )
+                    .on_press(Message::DeleteConfirm)
+                    .padding([6, 12])
+                    .style(|_t, _s| button::Style {
+                        background: Some(byteui::theme::color::current().card.into()),
+                        text_color: byteui::theme::color::current().red,
+                        border: Border {
+                            color: byteui::theme::color::current().red,
+                            width: 1.0,
+                            radius: 4.0.into()
+                        },
+                        ..button::Style::default()
+                    }),
+                ]
+                .spacing(8),
+            ),
         ]
         .spacing(8),
     )
     .padding(16)
-    .style(|_t: &iced_widget::Theme| container::Style {
-        background: Some(byteui::theme::color::current().card.into()),
-        border: Border {
-            color: byteui::theme::color::current().border,
-            width: 1.0,
-            radius: 6.0.into(),
-        },
-        ..container::Style::default()
-    });
+    .style(crate::dialog::card_style);
 
     container(dialog)
         .width(Length::Fill)
@@ -2668,7 +2662,7 @@ pub fn move_confirm_popup(
         );
     }
 
-    body = body.push(
+    body = body.push(crate::dialog::actions(
         row![
             button(
                 text("取消")
@@ -2707,19 +2701,9 @@ pub fn move_confirm_popup(
         ]
         .spacing(8)
         .align_y(iced_widget::core::Alignment::Center),
-    );
+    ));
 
-    let dialog = container(body)
-        .padding(16)
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(byteui::theme::color::current().card.into()),
-            border: Border {
-                color: byteui::theme::color::current().border,
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..container::Style::default()
-        });
+    let dialog = container(body).padding(16).style(crate::dialog::card_style);
 
     container(dialog)
         .width(Length::Fill)

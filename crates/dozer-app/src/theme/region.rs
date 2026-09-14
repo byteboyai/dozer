@@ -95,6 +95,7 @@ struct RawRegions {
     status_bar: RawRegion,
     maximize_overlay: RawMaximizeOverlay,
     context_menu: RawRegion,
+    dialog: RawRegion,
     left_zone: RawRegion,
     right_zone: RawRegion,
 }
@@ -268,6 +269,7 @@ struct ResolvedRegions {
     status_bar: RegionStyle,
     maximize_overlay: MaximizeOverlayStyle,
     context_menu: RegionStyle,
+    dialog: RegionStyle,
     left_zone: RegionStyle,
     right_zone: RegionStyle,
 }
@@ -294,6 +296,7 @@ fn load(raw: &str) -> ResolvedRegions {
             border: resolve_border(&parsed.maximize_overlay.border),
         },
         context_menu: resolve_region(parsed.context_menu),
+        dialog: resolve_region(parsed.dialog),
         left_zone: resolve_region(parsed.left_zone),
         right_zone: resolve_region(parsed.right_zone),
     }
@@ -351,6 +354,11 @@ pub fn maximize_overlay() -> MaximizeOverlayStyle {
 }
 pub fn context_menu() -> RegionStyle {
     scaled_region(REGIONS.context_menu)
+}
+/// 弹窗(确认框/模态对话框)外壳:统一 CARD 底 + 金色描边(呼应放大态
+/// 浮层同款"金色描边盒"),供 `dialog::card_style` 取用。
+pub fn dialog() -> RegionStyle {
+    scaled_region(REGIONS.dialog)
 }
 /// 左面板区(项目树+预览,或单个 Web 预览)整体外边框——把"左1左2两栏"
 /// 框成一个视觉整体,不是某一栏自己的边框。

@@ -933,16 +933,7 @@ pub fn view<'a>(
             );
 
     if ws_state.delete_pending.is_some() {
-        let dismiss = MouseArea::new(
-            container(column![])
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-                    background: Some(byteui::theme::color::current().scrim.into()),
-                    ..iced_widget::container::Style::default()
-                }),
-        )
-        .on_press(Message::DeleteProjectCancel);
+        let dismiss = crate::dialog::scrim(Message::DeleteProjectCancel);
         return stack![base, dismiss, project_delete_confirm_popup(ws_state)]
             .width(width)
             .height(Length::Fill)
@@ -953,13 +944,7 @@ pub fn view<'a>(
         // 进行中不可通过点击遮罩关闭:遮罩本身不挂 `on_press`,只挡住底层
         // 交互(与 `delete_pending` 分支的可点击遮罩故意不同——必须等全部
         // 步骤完成才能关,见 spec"弹窗可取消性"一节)。
-        let scrim = container(column![])
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-                background: Some(byteui::theme::color::current().scrim.into()),
-                ..iced_widget::container::Style::default()
-            });
+        let scrim = crate::dialog::scrim_blocking();
         return stack![base, scrim, scaffold_progress_popup(ws_state)]
             .width(width)
             .height(Length::Fill)
@@ -1173,15 +1158,7 @@ fn scaffold_progress_popup(
     container(card)
         .width(Length::Fixed(360.0))
         .padding(16)
-        .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-            background: Some(byteui::theme::color::current().card.into()),
-            border: Border {
-                color: byteui::theme::color::current().border,
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..iced_widget::container::Style::default()
-        })
+        .style(crate::dialog::card_style)
         .into()
 }
 
@@ -1298,20 +1275,12 @@ fn project_delete_confirm_popup(
                 ),
             ]
             .spacing(8),
-            row![cancel, confirm].spacing(8),
+            crate::dialog::actions(row![cancel, confirm].spacing(8)),
         ]
         .spacing(12),
     )
     .padding(16)
-    .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-        background: Some(byteui::theme::color::current().card.into()),
-        border: Border {
-            color: byteui::theme::color::current().border,
-            width: 1.0,
-            radius: 6.0.into(),
-        },
-        ..iced_widget::container::Style::default()
-    });
+    .style(crate::dialog::card_style);
 
     container(dialog)
         .width(Length::Fill)

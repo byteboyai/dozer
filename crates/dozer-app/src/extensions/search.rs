@@ -8,7 +8,7 @@ use grep_searcher::{Searcher, SearcherBuilder, Sink, SinkMatch};
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
 use iced_widget::core::{Border, Color, Element, Length, Rectangle};
-use iced_widget::{MouseArea, button, column, container, row, scrollable, stack, text};
+use iced_widget::{button, column, container, row, scrollable, stack, text};
 use std::path::{Path, PathBuf};
 
 /// 搜索作用域：右键目标。
@@ -335,8 +335,8 @@ fn results_list<'a>(
         .into()
 }
 
-/// 搜索弹窗本体:形制照抄 `workspace.rs::edit_modal`——满载 `SCRIM` 遮罩 +
-/// `CARD` 对话框。由 `App::view()` 顶层浮层链的 `stack!` 里调用;未打开时返回空元素。
+/// 搜索弹窗本体:套用 `dialog` 模块统一的弹窗原语(磨砂遮罩 + 金色描边
+/// 卡片)。由 `App::view()` 顶层浮层链的 `stack!` 里调用;未打开时返回空元素。
 pub fn search_modal<'a>(
     ws: &'a WorkspaceState,
     project_root: Option<&'a Path>,
@@ -425,30 +425,13 @@ pub fn search_modal<'a>(
         .width(Length::Fixed(560.0))
         .height(Length::Shrink)
         .max_height(640.0)
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(byteui::theme::color::current().card.into()),
-            border: Border {
-                color: byteui::theme::color::current().border,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..container::Style::default()
-        });
+        .style(crate::dialog::card_style);
 
-    // 全窗 `SCRIM` 遮罩做成可点击的目标:点在卡片**外**(遮罩上)即 `SearchClose`。
+    // 全窗遮罩做成可点击的目标:点在卡片**外**(遮罩上)即 `SearchClose`。
     // 卡片本体是上层 `stack!` 的兄弟元素(自适配宽高、垂直/水平居中),不盖住
     // 遮罩的点击——所以"点遮罩关闭"能成立(与只靠 ×/Esc 的 `edit_modal` 略不同,
     // 但更贴合 spec 验收"点遮罩都能关闭")。
-    let scrim = MouseArea::new(
-        container(column![])
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(|_t: &iced_widget::Theme| container::Style {
-                background: Some(byteui::theme::color::current().scrim.into()),
-                ..container::Style::default()
-            }),
-    )
-    .on_press(Message::SearchClose);
+    let scrim = crate::dialog::scrim(Message::SearchClose);
 
     stack![
         scrim,

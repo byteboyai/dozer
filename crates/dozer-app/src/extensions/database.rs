@@ -8,7 +8,7 @@
 
 use byteui::interaction::icons;
 use iced_widget::core::{Border, Element, Length};
-use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
+use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, stack, text};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -606,6 +606,12 @@ pub struct WorkspaceState {
     /// 右侧内容窗格状态(表/集合/查询 tab)。纯内存,不持久化——同
     /// `schemas`(阶段 2),重启后 tab 全部关闭,不留痕迹。
     content: DatabaseContentState,
+    /// 正在等用户确认删除的数据源 id。`Some` 时面板顶部覆盖一层确认
+    /// 对话框(同 `ssh::WorkspaceState::delete_confirm` 的既有设计:右键
+    /// 菜单"删除"只记待确认态,真正删除要等确认框里点确认才触发
+    /// `DeleteSource`)——2026-09 补上,此前"删除"在菜单里点一下就直接
+    /// 删,跟主机/项目/文件树都有二次确认不一致。
+    delete_confirm: Option<String>,
     /// 新增/编辑表单**任意一个字段**是否持有 iced 真实焦点——main.rs 每帧用
     /// `CaptureFormFocus`/`take_form_focused` 查回来写进这里(同 Files 搜索框
     /// `search_focused` 的既有手法)。`App::database_form_open` 键盘路由用它
@@ -673,6 +679,21 @@ impl WorkspaceState {
     /// `database::update`)时对溢出锚点做切换时使用。
     pub(crate) fn content_mut(&mut self) -> &mut DatabaseContentState {
         &mut self.content
+    }
+
+    /// 正在等确认删除的数据源 id(`None` = 没有)。给 `view()` 判是否覆盖
+    /// 确认对话框。
+    pub fn delete_confirm(&self) -> Option<&str> {
+        self.delete_confirm.as_deref()
+    }
+    /// 记"用户点了删除,想删这个数据源"——只记待确认态,真正删除要等
+    /// 确认框里的确认按钮(走 `Message::DeleteSource`)。
+    pub(crate) fn request_delete(&mut self, source_id: String) {
+        self.delete_confirm = Some(source_id);
+    }
+    /// 取消删除确认(点对话框外的遮罩/取消按钮),清掉待确认态。
+    pub(crate) fn cancel_delete(&mut self) {
+        self.delete_confirm = None;
     }
 }
 
@@ -746,8 +767,13 @@ pub enum Message {
     DraftSave,
     /// 取消表单,丢弃草稿。
     DraftCancel,
-    /// 删除一条数据源:同时删 `.dozer/database.json` 里的记录和 Keychain
-    /// 里的密码条目。
+    /// 右键菜单点"删除":只记待确认态,弹出确认对话框,不立即删
+    /// (同 `ssh::Message::DeleteHostRequest`)。
+    DeleteSourceRequest(String),
+    /// 确认框里的"取消"/点遮罩:清掉待确认态,不删任何东西。
+    DeleteSourceCancel,
+    /// 确认框里的"删除"才真正执行:同时删 `.dozer/database.json` 里的
+    /// 记录和 Keychain 里的密码条目。
     DeleteSource(String),
     /// 点"测试连接":发起异步测试,`ws_state.test_status` 先置
     /// `Testing`。
@@ -976,7 +1002,12 @@ pub fn update(
         Message::DraftCancel => {
             ws_state.editing = None;
         }
+        Message::DeleteSourceRequest(id) => ws_state.request_delete(id),
+        Message::DeleteSourceCancel => ws_state.cancel_delete(),
         Message::DeleteSource(id) => {
+            if ws_state.delete_confirm.as_deref() == Some(id.as_str()) {
+                ws_state.delete_confirm = None;
+            }
             ws_state.sources.retain(|s| s.id != id);
             ws_state.test_status.remove(&id);
             ws_state.schemas.remove(&id);
@@ -2042,7 +2073,7 @@ pub fn view<'a>(
 
     let body = column![head, scroll, database_footer_bar()].spacing(0);
 
-    container(body)
+    let base = container(body)
         .width(width)
         .height(iced_widget::core::Length::Fill)
         .style(
@@ -2051,7 +2082,90 @@ pub fn view<'a>(
                 border: outer,
                 ..iced_widget::container::Style::default()
             },
-        )
+        );
+
+    // 有"待确认删除的数据源"时,在面板上叠一层磨砂遮罩 + 确认对话框;
+    // 点遮罩(或对话框的取消)回 `DeleteSourceCancel` 收起,确认才真删——
+    // 同 `ssh.rs::view` 的既有约定。
+    if let Some(source_id) = ws_state.delete_confirm() {
+        let dismiss = crate::dialog::scrim(Message::DeleteSourceCancel);
+        return stack![base, dismiss, delete_confirm_popup(ws_state, source_id)]
+            .width(width)
+            .height(iced_widget::core::Length::Fill)
+            .into();
+    }
+
+    base.into()
+}
+
+/// 删除数据源确认框:居中浮层,列出要删的数据源名,确认(红)才执行
+/// `DeleteSource`,取消/遮罩只清待确认态。视觉照抄 `ssh.rs::
+/// delete_confirm_popup`(CARD 底 + 圆角描边 + 取消/确认两个圆角按钮)。
+fn delete_confirm_popup<'a>(
+    ws_state: &'a WorkspaceState,
+    source_id: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let name = ws_state
+        .sources()
+        .iter()
+        .find(|s| s.id == source_id)
+        .map(|s| s.name.as_str())
+        .unwrap_or(source_id);
+    let cancel = button(
+        text("取消")
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().cream),
+    )
+    .on_press(Message::DeleteSourceCancel)
+    .padding([6, 12])
+    .style(|_t: &iced_widget::Theme, _s| button::Style {
+        background: Some(byteui::theme::color::current().card.into()),
+        text_color: byteui::theme::color::current().cream,
+        border: Border {
+            color: byteui::theme::color::current().border,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..button::Style::default()
+    });
+    let confirm = button(
+        text("删除")
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().red),
+    )
+    .on_press(Message::DeleteSource(source_id.to_string()))
+    .padding([6, 12])
+    .style(|_t: &iced_widget::Theme, _s| button::Style {
+        background: Some(byteui::theme::color::current().card.into()),
+        text_color: byteui::theme::color::current().red,
+        border: Border {
+            color: byteui::theme::color::current().red,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..button::Style::default()
+    });
+
+    let dialog = container(
+        column![
+            text(format!("删除数据源 \"{name}\"?"))
+                .size(byteui::theme::font::subtitle())
+                .color(byteui::theme::color::current().cream),
+            text("这会永久删除这条连接记录及其保存的密码。")
+                .size(byteui::theme::font::label())
+                .color(byteui::theme::color::current().dim),
+            crate::dialog::actions(row![cancel, confirm].spacing(8)),
+        ]
+        .spacing(8),
+    )
+    .padding(16)
+    .style(crate::dialog::card_style);
+
+    container(dialog)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
         .into()
 }
 
