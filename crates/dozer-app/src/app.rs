@@ -4431,7 +4431,24 @@ impl App {
     /// 原本按"顶栏项目页签"这类窄场景标定,被预览/终端/数据库/SSH 好几处
     /// tab 栏共用后,对通常宽得多的面板严重低估)。`kind` 当前不在左右任一
     /// 栏(极短暂的过渡态)时退回旧的静态估算,不 panic。
+    ///
+    /// 返回值要再扣掉 tab 组右侧那几颗按钮(V 溢出 / 预览·代码切换 / 收起
+    /// 列表)——渲染侧 `tab_row` 容器只吃 `content_w` 剩下的那一份
+    /// `Length::Fill`(`preview_pane_for` 里 `row![overflow_button?,
+    /// clipped_tab_row, render_mode_button?, collapse]`),真正留给 tab
+    /// 组的宽度天然比整块内容区窄。不扣的话 `tab_window` 会算出比真实能
+    /// 放下的还多一点,多出来的量被 `clipped` 容器的 `.clip(true)` 硬裁
+    /// (2026-09-14 用户反馈:新开的文件 tab 标题被裁掉一截"bum"——就是
+    /// 这个偏差)。三颗按钮里"预览·代码切换"是可选的(只对 wry 可切换
+    /// 的文件类型出现),这里按恒出现的最坏情况扣,宁可窄一点提前进溢出
+    /// 下拉,也不能宽出来被裁字。
     pub(crate) fn preview_tab_bar_avail_px(&self, kind: PanelKind) -> f32 {
+        /// 三颗按钮(V 溢出/预览切换/收起列表)的命中区宽度粗估,均出自
+        /// `byteui::theme::icon_size::row()` 驱动的 `icons::icon_button_entry`,
+        /// 跟 `rail_button_size`(32px)同量级;`tab_bar_row` 的
+        /// `.spacing(4)` 在按钮之间、以及按钮与 tab 组之间各占一份。
+        const CHROME_BUTTON_PX: f32 = 32.0;
+        const CHROME_RESERVE_PX: f32 = CHROME_BUTTON_PX * 3.0 + 4.0 * 3.0;
         let side = if self.left_view == kind {
             Side::Left
         } else if self.right_view == kind {
@@ -4445,7 +4462,7 @@ impl App {
             self.window_size.1,
             &self.shell_state(),
         );
-        w
+        (w - CHROME_RESERVE_PX).max(0.0)
     }
 
     /// 当前应存在的"文件/项目预览"webview 清单(main.rs 差集同步用),
