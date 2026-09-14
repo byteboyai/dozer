@@ -4422,6 +4422,32 @@ impl App {
         (x, y, line_h)
     }
 
+    /// `kind`(`Files`/`Project`)预览面板当前**实际渲染宽度**(逻辑像素),
+    /// 供 tab 栏分页(`tab_widget::tab_window`)当可用宽度预算——复用 webview
+    /// 定位同源的 `preview_content_bounds_for`,不再用
+    /// `byteui::theme::geometry::tab_bar_avail_px()` 那个跟真实面板宽度
+    /// 完全无关的静态估算常量(2026-09-14 用户反馈:明明面板里还有大把
+    /// 空白,tab 栏却只显示第一个、其余全甩进溢出下拉——`tab_bar_avail_px`
+    /// 原本按"顶栏项目页签"这类窄场景标定,被预览/终端/数据库/SSH 好几处
+    /// tab 栏共用后,对通常宽得多的面板严重低估)。`kind` 当前不在左右任一
+    /// 栏(极短暂的过渡态)时退回旧的静态估算,不 panic。
+    pub(crate) fn preview_tab_bar_avail_px(&self, kind: PanelKind) -> f32 {
+        let side = if self.left_view == kind {
+            Side::Left
+        } else if self.right_view == kind {
+            Side::Right
+        } else {
+            return byteui::theme::geometry::tab_bar_avail_px();
+        };
+        let (_, _, w, _) = webview_geometry::preview_content_bounds_for(
+            side,
+            self.window_size.0,
+            self.window_size.1,
+            &self.shell_state(),
+        );
+        w
+    }
+
     /// 当前应存在的"文件/项目预览"webview 清单(main.rs 差集同步用),
     /// 每条自带按其所在侧算好的矩形。左右两侧各自独立判断——`Files` 在
     /// 左栏、`Project` 在右栏可以同时非空(见 spec"webview 面板的镜像
@@ -7243,6 +7269,11 @@ impl App {
             .active_workspace()
             .map(|ws| idx < ws.preview.tabs().len())
             .unwrap_or(false);
+        // 得在借用 `ws` 之前算好——`preview_tab_bar_avail_px` 要 `&self`,
+        // 跟下面 `with_focused_project` 内部的 `&mut self` 借用冲突,必须
+        // 提前拿到这个值再原样传进闭包(同渲染侧 `preview_pane_for` 用的
+        // 是同一个真实宽度,窗口起点算法两边才不会算出不一致的结果)。
+        let avail_w = self.preview_tab_bar_avail_px(PanelKind::Files);
         self.with_focused_project(|ws, io| {
             ws.preview.select(idx);
             if idx < ws.preview.tabs().len() {
@@ -7252,13 +7283,8 @@ impl App {
                     .iter()
                     .map(|t| preview_tab_display_width(&t.title))
                     .collect();
-                ws.preview_tab_first = tab_widget::tab_window_reveal(
-                    &widths,
-                    4.0,
-                    byteui::theme::geometry::tab_bar_avail_px(),
-                    ws.preview_tab_first,
-                    idx,
-                );
+                ws.preview_tab_first =
+                    tab_widget::tab_window_reveal(&widths, 4.0, avail_w, ws.preview_tab_first, idx);
                 ws.preview_tab_overflow_anchor = None;
             }
             ws.spawn_preview_state_save(io);
@@ -7318,6 +7344,9 @@ impl App {
             .active_workspace()
             .map(|ws| idx < ws.project_preview.tabs().len())
             .unwrap_or(false);
+        // 同 `preview_select_tab`:提前算好真实可用宽度,避免跟
+        // `with_focused_project` 的 `&mut self` 借用冲突。
+        let avail_w = self.preview_tab_bar_avail_px(PanelKind::Project);
         self.with_focused_project(|ws, _io| {
             ws.project_preview.select(idx);
             if idx < ws.project_preview.tabs().len() {
@@ -7330,7 +7359,7 @@ impl App {
                 ws.project_preview_tab_first = tab_widget::tab_window_reveal(
                     &widths,
                     4.0,
-                    byteui::theme::geometry::tab_bar_avail_px(),
+                    avail_w,
                     ws.project_preview_tab_first,
                     idx,
                 );

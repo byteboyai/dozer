@@ -3554,7 +3554,7 @@ fn preview_pane_for<'a>(
     let window = tab_window(
         &widths,
         4.0,
-        byteui::theme::geometry::tab_bar_avail_px(),
+        app.preview_tab_bar_avail_px(find_panel()),
         tab_first,
     );
 
