@@ -11,8 +11,8 @@
 //! 回传)。拆分细节见
 //! `docs/superpowers/specs/2026-08-08-app-workspace-file-split-design.md`.
 
-use crate::conversation::SessionRow;
 use crate::extensions::browser;
+use crate::extensions::conversations;
 use crate::extensions::database;
 use crate::extensions::files;
 use crate::extensions::footbar;
@@ -39,9 +39,9 @@ use crate::webview_geometry;
 use crate::workspace::{
     CONVERSATION_DETAIL_PAGE_SIZE, PickerLaunch, PreviewPaneKind, RestorePayload, ReviewSource,
     ReviewView, ShellIo, SshOut, TabBackend, Workspace, agent_list_pane, agent_picker_popup,
-    conversation_list_pane, dot_color, exited_marker, fetch_project_restore,
-    no_project_placeholder, preview_pane, preview_tab_display_width, preview_tab_overflow_popup,
-    project_preview_pane, relative_time_text, review_content_pane, review_should_refresh_on_turn,
+    dot_color, exited_marker, fetch_project_restore, no_project_placeholder, preview_pane,
+    preview_tab_display_width, preview_tab_overflow_popup, project_preview_pane,
+    relative_time_text, review_content_pane, review_should_refresh_on_turn,
     spawn_disk_usage_refresh, spawn_project_git_refresh, split_portions, tab_display_width,
     tab_title,
 };
@@ -311,10 +311,10 @@ pub enum HoverId {
     /// `HomeProjectMore`(见 `extensions::git_log::commit_list_view`)。
     CommitListMore,
     /// 对话列表面板(会话列表)扁平列表末尾的"更多..."翻页图标按钮,处理
-    /// 方式同 `CommitListMore`(见 `conversation_list_pane`)。
+    /// 方式同 `CommitListMore`(见 `extensions::conversations::view`)。
     ConversationListMore,
     /// 会话列表搜索框内的提交按钮(`Search`):静止 DIM,hover 平滑过渡到
-    /// GOLD,处理方式同 `HomeProjectSearchSubmit`(见 `conversation_list_pane`)。
+    /// GOLD,处理方式同 `HomeProjectSearchSubmit`(见 `extensions::conversations::view`)。
     ConversationSearchSubmit,
     /// Git Log 面板改动文件列表某行(按下标区分):hover 时填充 `CARD` 背景 +
     /// 金色描边(见 `extensions::git_log::file_list_view`,统一卡片样式)。
@@ -1636,44 +1636,23 @@ pub enum Message {
         bool,
         Result<Vec<ReviewEntry>, String>,
     ),
-    /// 对话面板会话列表刷新结果:当前项目全部 session(联查总结),按最后
-    /// 活跃时间倒序(2026-08-27，取代按回合拍平的列表；见
-    /// `Workspace::spawn_conversations_refresh`)。
-    ConversationSessionsRefreshed(ProjectId, Result<Vec<SessionRow>, String>),
     /// `GetTodoDetail` 异步结果:`usize` 是打开弹窗时记录的卡片下标(用来
     /// 校验弹窗还开着同一个任务,不是用 id 找——`items()` 下标和渲染时
     /// 用的下标必须一致,同 `todo::Message` 全线用下标寻址任务的既有约定)。
     TodoDetailLoaded(usize, Vec<dozer_core::protocol::TurnRecord>),
     /// Usage 面板的全部消息,内核只转发不解读——见 `extensions::usage::Message`。
     Usage(usage::Message),
-    /// 点击对话面板会话列表里的某一行——打开该 session 的详情审阅
-    /// (整段回合列表 + 总结展示区)。`agent` 随行内数据一并带上。
-    ConversationSessionOpen(String, AgentKind),
-    /// "加载更多"追加当前 session 详情的下一页(`after_turn_index`)。
-    ConversationDetailLoadMore(String, i64),
+    /// 对话(Conversations)面板列表侧的全部消息,内核只转发不解读——见
+    /// `extensions::conversations::Message`。其中 `SessionOpen`/
+    /// `DetailLoadMore`/`Hover`/`TextInputMenuOpen` 四种由内核直接拦截处理,
+    /// 不会到达 `conversations::update`。
+    Conversations(conversations::Message),
     /// 一次"删除项目"执行完成。`Vec<String>` 是文件系统步骤各自独立的
     /// 失败原因(空 = 全部成功);dozerd 侧两步(登记/agent 历史)任一失败
     /// 时这里只会收到那一条错误。项目对应的 tab 在发起删除时已经关掉,
     /// 这个消息到达时已经没有面板可以展示状态,统一走 `self.daemon_error`
     /// (同 `project_tab_opened` 失败路径的既有做法)。
     ProjectDeleteDone(Vec<String>),
-    /// 对话列表面板(会话列表)点"更多..."翻页图标按钮——只把当前已缓存的
-    /// `conversation_turn_groups` 往下多展开一页(`CONVERSATION_PAGE_SIZE` 条),
-    /// 不问 daemon 要新数据(同 `git_log::Message::CommitListMore`)。
-    ConversationListMore,
-    /// 会话列表搜索框草稿变化(iced `text_input::on_input`)。
-    ConversationSearchInput(String),
-    /// 回车 / 点搜索按钮:把草稿落成生效的 `conversation_search` 过滤词,
-    /// 同时把翻页重置回第 1 页(过滤后结果变少,停在旧页码没有意义)。
-    ConversationSearchSubmit,
-    /// 会话列表底部 agent 筛选下拉某一项点击:`None` = 全部。同样把翻页
-    /// 重置回第 1 页,并顺带收起下拉(同 `files::Message::BranchSwitch` 选
-    /// 完即收起下拉的既有语义)。
-    ConversationAgentFilterSelect(Option<AgentKind>),
-    /// 展开/收起会话列表底部的 agent 筛选下拉(样式对齐文件树面板的分支
-    /// 切换下拉)。
-    ConversationAgentPickerOpen,
-    ConversationAgentPickerClose,
     /// 切换当前显示的 tab（这里的 `usize` 是 vec 位置——用户点击的是
     /// "屏幕上第几个 tab"，跟稳定 id 是两回事）。**仅限左侧终端 tab 栏本身
     /// 的按钮**发这条消息——`select_tab()` 顺带把 `tab_drag` 武装成"这一
@@ -3420,15 +3399,15 @@ impl App {
     /// 会话列表搜索框是否持有 iced 真实焦点(main.rs 键盘路由用)。
     pub fn conversation_search_focused(&self) -> bool {
         self.active_workspace()
-            .is_some_and(|ws| ws.conversation_search_focused)
+            .is_some_and(|ws| ws.conversations.search_focused())
     }
 
-    /// 每帧渲染循环调用:把 `workspace::CaptureConversationSearchFocus` 问到
-    /// 的真实焦点态写进当前工作区(`main.rs` 键盘路由随后读
+    /// 每帧渲染循环调用:把 `extensions::conversations::CaptureConversationSearchFocus`
+    /// 问到的真实焦点态写进当前工作区(`main.rs` 键盘路由随后读
     /// `conversation_search_focused` 消费)。
     pub fn set_conversation_search_focused(&mut self, focused: bool) {
         if let Some(ws) = self.active_workspace_mut() {
-            ws.conversation_search_focused = focused;
+            ws.conversations.set_search_focused(focused);
         }
     }
 
@@ -4703,13 +4682,41 @@ impl App {
                     }
                 });
             }
-            Message::ConversationSessionsRefreshed(project_id, result) => {
-                self.with_project(project_id, move |ws, _io| match result {
-                    Ok(rows) => ws.conversation_sessions = Some(rows),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "对话会话列表查询失败");
-                        ws.conversation_sessions = Some(Vec::new());
-                    }
+            Message::Conversations(conversations::Message::SessionsRefreshed(
+                project_id,
+                result,
+            )) => {
+                self.with_project(project_id, move |ws, _io| {
+                    conversations::update(
+                        &mut ws.conversations,
+                        conversations::Message::SessionsRefreshed(project_id, result),
+                    );
+                });
+            }
+            Message::Conversations(conversations::Message::SessionOpen(conversation_id, agent)) => {
+                self.conversation_session_open(conversation_id, agent);
+            }
+            Message::Conversations(conversations::Message::DetailLoadMore(
+                conversation_id,
+                after_turn_index,
+            )) => {
+                self.with_focused_project(|ws, io| {
+                    ws.spawn_review_load_conversation(
+                        io,
+                        conversation_id,
+                        after_turn_index,
+                        CONVERSATION_DETAIL_PAGE_SIZE,
+                        true,
+                    );
+                });
+            }
+            Message::Conversations(conversations::Message::Hover(id, h)) => self.set_hover(id, h),
+            Message::Conversations(conversations::Message::TextInputMenuOpen(target)) => {
+                self.update(Message::TextInputMenuOpen(target));
+            }
+            Message::Conversations(msg) => {
+                self.with_focused_project(|ws, _io| {
+                    conversations::update(&mut ws.conversations, msg);
                 });
             }
             Message::ProjectDeleteDone(errors) => {
@@ -4731,54 +4738,6 @@ impl App {
                     usage::update(&mut ws.usage, msg);
                 });
             }
-            Message::ConversationSessionOpen(conversation_id, agent) => {
-                self.conversation_session_open(conversation_id, agent);
-            }
-            Message::ConversationDetailLoadMore(conversation_id, after_turn_index) => {
-                self.with_focused_project(|ws, io| {
-                    ws.spawn_review_load_conversation(
-                        io,
-                        conversation_id,
-                        after_turn_index,
-                        CONVERSATION_DETAIL_PAGE_SIZE,
-                        true,
-                    );
-                });
-            }
-            Message::ConversationListMore => {
-                self.with_focused_project(|ws, _io| {
-                    ws.conversation_pages += 1;
-                });
-            }
-            Message::ConversationSearchInput(s) => {
-                self.with_focused_project(|ws, _io| {
-                    ws.conversation_search_draft = s;
-                });
-            }
-            Message::ConversationSearchSubmit => {
-                self.with_focused_project(|ws, _io| {
-                    ws.conversation_search = ws.conversation_search_draft.clone();
-                    ws.conversation_pages = 0;
-                });
-            }
-            Message::ConversationAgentFilterSelect(agent) => {
-                self.with_focused_project(|ws, _io| {
-                    ws.conversation_agent_filter = agent;
-                    ws.conversation_pages = 0;
-                    ws.conversation_agent_picker_open = false;
-                });
-            }
-            Message::ConversationAgentPickerOpen => {
-                self.with_focused_project(|ws, _io| {
-                    ws.conversation_agent_picker_open = true;
-                });
-            }
-            Message::ConversationAgentPickerClose => {
-                self.with_focused_project(|ws, _io| {
-                    ws.conversation_agent_picker_open = false;
-                });
-            }
-
             Message::SelectTab(idx) => self.select_tab(idx),
             Message::SelectTabNoDrag(idx) => self.select_tab_no_drag(idx),
             Message::CloseTab(idx) => {
@@ -7521,14 +7480,17 @@ impl App {
     fn conversation_session_open(&mut self, conversation_id: String, agent: AgentKind) {
         self.with_focused_project(move |ws, io| {
             let Some(row) = ws
-                .conversation_sessions
-                .as_ref()
+                .conversations
+                .sessions()
                 .and_then(|rows| rows.iter().find(|r| r.conversation_id == conversation_id))
             else {
                 // 列表刷新与点击之间的竞态(极小概率):这一行已经不在当前
                 // 列表里了,直接不打开详情,不 panic、不报错弹窗。
                 return;
             };
+            let summary_title = row.display_title.clone();
+            let summary_text = row.summary.clone();
+            let last_ts = row.last_ts;
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64)
@@ -7540,9 +7502,9 @@ impl App {
                 error: None,
                 agent,
                 nonce: 0,
-                summary_title: Some(row.display_title.clone()),
-                summary_text: row.summary.clone(),
-                summary_time: Some(relative_time_text(row.last_ts, now_ms)),
+                summary_title: Some(summary_title),
+                summary_text,
+                summary_time: Some(relative_time_text(last_ts, now_ms)),
             });
             ws.spawn_review_load_conversation(
                 io,
@@ -9091,12 +9053,15 @@ fn panel_body<'a>(
                 Length::FillPortion(content_portion),
                 zone_pane_border(zone, lc),
             );
-            let list = conversation_list_pane(
+            let list = conversations::view(
                 app,
-                ws,
+                &ws.conversations,
+                ws.todo.items(),
+                &ws.open_transcript_paths(),
                 Length::FillPortion(list_portion),
                 zone_pane_border(zone, rc),
-            );
+            )
+            .map(Message::Conversations);
             let review_bg = theme::region::review_content_pane()
                 .background
                 .unwrap_or(byteui::theme::color::current().bg);
