@@ -318,9 +318,15 @@ fn home_right_zone(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
 /// 底部(`home_new_project_button`),不在页面全局 footbar。不画品牌行——顶栏
 /// 本身已有 `dozer_home_tab` 品牌页签,这里重复画属于视觉冗余。
 /// 通用面板标题组件:图标 + 标题(金色 `subtitle` 字号),标题底部一条 1px
-/// panel 标题与图标用的强调色(暖金 `#dcc9a3`)——刻意区别于甲方动作专属的
-/// GOLD(`#F2D94E`):标题是装饰性的「section 标」,不是可点的甲方动作。
-const PANEL_HEAD_ACCENT: Color = Color::from_rgb8(0xdc, 0xc9, 0xa3);
+/// panel 标题与图标用的强调色(暖金,对应 `ColorTokens::tab_active_border`,
+/// 深色版 `#dcc9a3`)——刻意区别于甲方动作专属的 GOLD(`#F2D94E`):标题是
+/// 装饰性的「section 标」,不是可点的甲方动作。现读 `color::current()`
+/// 而非编译期 `const`,配色方案运行时切换(设置弹窗)才能立即生效——
+/// 曾经写死成 `const Color`,是 2026-09-15 用户实测发现"切浅色后首页
+/// 标题强调色纹丝不动"的同批 bug 之一。
+fn panel_head_accent() -> Color {
+    byteui::theme::color::current().tab_active_border
+}
 
 /// 分割线。各 pane / 卡片标题统一复用,保证视觉一致(首页项目列表、Recents
 /// 两卡、工作区文件树、Git 提交图等)。`Message` 泛型——本身不发出任何
@@ -340,10 +346,10 @@ where
     // 靠图标/文字自身撑开,比 tab 栏矮了一截,导致 Files/Todo/Project/Git/
     // SSH 等面板头部跟右侧 tab 栏高度对不齐(2026-09 用户反馈)。
     let head_row = row![
-        icons::view(icon, byteui::theme::icon_size::row(), PANEL_HEAD_ACCENT,),
+        icons::view(icon, byteui::theme::icon_size::row(), panel_head_accent(),),
         text(title)
             .size(theme::homespace_font::subtitle())
-            .color(PANEL_HEAD_ACCENT),
+            .color(panel_head_accent()),
     ]
     .spacing(8)
     .height(Length::Fixed(byteui::theme::geometry::tab_button_size()))

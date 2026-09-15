@@ -2,7 +2,7 @@
   "colors": {
     "error": "RED",
     "dim": "DIM",
-    "card_bg": "#0a0e16",
+    "card_bg": "PANEL",
     "cream": "CREAM",
     "gold": "GOLD",
     "border": "BORDER"

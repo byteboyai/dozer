@@ -69,10 +69,20 @@ pub fn gold() -> Color {
 mod tests {
     use super::*;
 
+    /// `byteui::theme::color` 的当前配色方案是进程级共享 static，cargo
+    /// test 默认多线程并跑；下面两个测试都依赖它处在 `Dark`/显式切换,
+    /// 加锁序列化避免交叉(同 `region.rs` 测试模块同名锁的顾虑)。
+    static SCHEME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_scheme() -> std::sync::MutexGuard<'static, ()> {
+        SCHEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// 防漂移锚:各 token 解析结果必须和配置字面量一致——纯配置搬家,
     /// 数值不该变。以后有人手滑改错 homespace.json,这个测试会炸。
     #[test]
     fn card_bg_matches_config_literal() {
+        let _guard = lock_scheme();
         assert_eq!(card_bg(), Color::from_rgb8(0x0a, 0x0e, 0x16));
     }
 
@@ -86,5 +96,19 @@ mod tests {
     #[should_panic(expected = "未知颜色令牌")]
     fn unknown_color_token_panics() {
         region::resolve_color("NOT_A_REAL_TOKEN");
+    }
+
+    /// `byteui::theme::color` 的当前配色方案是进程级共享 static，加锁避免
+    /// 和别的测试交叉，同 `region.rs` 测试模块同名锁的顾虑。防回归:
+    /// `card_bg` 曾经在 `homespace.json` 里写死 `#0a0e16` 字面量而不是
+    /// `PANEL` 令牌名,导致运行时切主题对首页卡片背景毫无作用
+    /// (2026-09-15 与 `region.rs` 的 `top_bar`/`background` 同批修复)。
+    #[test]
+    fn card_bg_tracks_live_scheme_switch() {
+        let _guard = lock_scheme();
+        byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Light);
+        assert_eq!(card_bg(), byteui::theme::color::current().panel);
+        byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Dark);
+        assert_eq!(card_bg(), byteui::theme::color::current().panel);
     }
 }

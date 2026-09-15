@@ -1,68 +1,68 @@
 {
-  "background": "#dcc9a3",
+  "background": "TAB_ACTIVE_BORDER",
   "regions": {
     "top_bar": {
-      "background": "#0a0e16",
+      "background": "BG",
       "border": { "color": "BORDER", "width": 1.0, "radius": 0.0 },
       "padding": [0, 16, 0, 78],
       "gap": 8
     },
     "left_icon_rail": {
-      "background": "#0a0e16",
+      "background": "PANEL",
       "border": null,
       "padding": [16, 6, 0, 6],
       "gap": 12
     },
     "right_icon_rail": {
-      "background": "#0a0e16",
+      "background": "PANEL",
       "border": null,
       "padding": [16, 6, 0, 6],
       "gap": 12
     },
     "project_pane": {
-      "background": "#0a0e16",
+      "background": "PANEL",
       "border": null,
       "padding": 8,
       "gap": 2
     },
     "preview_pane": {
-      "background": "#0a0e16",
+      "background": "PANEL",
       "border": null,
       "padding": 8,
       "gap": 4
     },
     "browser_pane": {
-      "background": "#0a0e16",
+      "background": "PANEL",
       "border": null,
       "padding": 8,
       "gap": 4
     },
     "agent_list_pane": {
-      "background": "#0a0e16",
+      "background": "PANEL",
       "border": null,
       "padding": [6, 12, 12, 12],
       "gap": 8
     },
     "terminal_pane": {
-      "background": "#08141d",
+      "background": "TERM_BG",
       "border": null,
       "padding": 8,
       "gap": 4
     },
     "conversation_list_pane": {
-      "background": "#0a0e16",
+      "background": "PANEL",
       "border": null,
       "padding": 12,
       "gap": 8
     },
     "review_content_pane": {
-      "background": "#0a0e16",
+      "background": "PANEL",
       "border": null,
       "padding": 8,
       "gap": 4
     },
     "status_bar": {
-      "background": "#0a0e16",
+      "background": "PANEL",
       "border": { "color": "BORDER", "width": 1.0, "radius": 0.0 },
       "padding": [0, 8],
       "gap": 0
@@ -72,7 +72,7 @@
       "border": { "color": "GOLD", "width": 1.5, "radius": 10.0 }
     },
     "context_menu": {
-      "background": "#0a0e16fa",
+      "background": "BG",
       "border": { "color": "BORDER", "width": 1.0, "radius": 9.0 },
       "padding": 8,
       "gap": 1
@@ -84,14 +84,14 @@
       "gap": 0
     },
     "left_zone": {
-      "background": "#0a0e16",
+      "background": "BG",
       "border": { "color": "BORDER", "width": 0.0, "radius": 8.0 },
       "padding": 1,
       "gap": 0,
       "margin": [6, 0, 0, 6]
     },
     "right_zone": {
-      "background": "#0a0e16",
+      "background": "BG",
       "border": { "color": "BORDER", "width": 0.0, "radius": 8.0 },
       "padding": 1,
       "gap": 0,

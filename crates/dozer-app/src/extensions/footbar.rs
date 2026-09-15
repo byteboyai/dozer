@@ -170,7 +170,7 @@ pub fn view(state: &AppState) -> Element<'_, Message, iced_widget::Theme, iced_r
         .color(byteui::theme::color::current().bg);
     let app_version = text(format!("v{}", env!("CARGO_PKG_VERSION")))
         .size(byteui::theme::font::caption_sm())
-        .color(iced_widget::core::Color::from_rgb8(0xFF, 0x6E, 0x6E));
+        .color(byteui::theme::color::current().red);
     let right = row![app_icon, app_name, app_version]
         .spacing(6)
         .align_y(Alignment::Center);
@@ -198,7 +198,7 @@ fn metric_row(
     percent: f32,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let value_color = if percent > 75.0 {
-        iced_widget::core::Color::from_rgb8(0xFF, 0x6E, 0x6E)
+        byteui::theme::color::current().red
     } else {
         byteui::theme::color::current().bg
     };
