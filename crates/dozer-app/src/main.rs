@@ -3066,9 +3066,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                     run_operate(
                                         &mut interface,
                                         renderer,
-                                        &mut workspace::CaptureConversationSearchFocus,
+                                        &mut extensions::conversations::CaptureConversationSearchFocus,
                                     );
-                                    workspace::take_conversation_search_focused()
+                                    extensions::conversations::take_conversation_search_focused()
                                 } else {
                                     false
                                 };

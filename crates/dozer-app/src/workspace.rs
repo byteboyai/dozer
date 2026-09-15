@@ -37,6 +37,7 @@ use crate::app::{
 use crate::conversation::{self, SessionRow};
 use crate::delivery::{self};
 use crate::extensions::browser;
+use crate::extensions::conversations;
 use crate::extensions::database;
 use crate::extensions::files;
 use crate::extensions::project;
@@ -2503,95 +2504,10 @@ fn load_more_button<'a>(
         .into()
 }
 
-/// 会话列表(对话面板扁平列表)一页显示的条数,与 Git Log commit 列表的
-/// `COMMIT_PAGE_SIZE` 保持一致。首帧 1 页,点"更多..."页数递增、显示
-/// `pages * CONVERSATION_PAGE_SIZE` 条(见 `conversation_turn_groups` 上方的
-/// `conversation_pages` 注释)。
-pub(crate) const CONVERSATION_PAGE_SIZE: usize = 20;
-
 /// 对话面板 session 详情的首屏回合页大小(2026-08-27):列表分页
-/// (`CONVERSATION_PAGE_SIZE`,20)与详情页分页(这里,200)含义不同,不要混用。
+/// (`extensions::conversations::CONVERSATION_PAGE_SIZE`,20)与详情页分页
+/// (这里,200)含义不同,不要混用。
 pub(crate) const CONVERSATION_DETAIL_PAGE_SIZE: u32 = 200;
-
-/// 按 `conversation_pages`(点过几次"更多",0 起)算出当前应该显示到第几条。
-/// 抽成纯函数与 `homespace::paginate_recent_projects` 同款手法,方便 headless
-/// 单测;视图只把返回值画出来。
-pub(crate) fn conversation_visible_count(pages: usize) -> usize {
-    (pages + 1) * CONVERSATION_PAGE_SIZE
-}
-
-/// 会话列表搜索框(iced 原生 `text_input`)的 `widget::Id`:main.rs 每帧
-/// `interface.operate` 用 `CaptureConversationSearchFocus` 问真实焦点态。
-pub fn conversation_search_field_id() -> Id {
-    Id::new("conversation-search-box")
-}
-
-static CONVERSATION_SEARCH_FOCUSED: std::sync::LazyLock<Mutex<bool>> =
-    std::sync::LazyLock::new(|| Mutex::new(false));
-
-/// 读走并复位(消费式),同 `extensions::files::take_search_focused` 的
-/// 消费式复位手法,避免搜索框不可见的帧卡死上一次 `true` 永久堵死终端
-/// 键盘转发。
-pub fn take_conversation_search_focused() -> bool {
-    std::mem::replace(&mut *CONVERSATION_SEARCH_FOCUSED.lock().unwrap(), false)
-}
-
-/// 每帧 `interface.operate()` 跑一遍。`traverse` 必须调用传入闭包(见
-/// [[dozer-operation-traverse-noop-bug]])。
-pub struct CaptureConversationSearchFocus;
-impl Operation<()> for CaptureConversationSearchFocus {
-    fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
-        if id == Some(&conversation_search_field_id()) {
-            *CONVERSATION_SEARCH_FOCUSED.lock().unwrap() = state.is_focused();
-        }
-    }
-
-    fn traverse(&mut self, operate: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {
-        operate(self);
-    }
-}
-
-/// 会话列表关键字 + agent 过滤:标题(`display_title`)大小写不敏感子串匹配
-/// (空关键字不过滤标题这一维)叠加 agent 精确匹配(`None` = 不限)。拆成
-/// 纯函数(同 `homespace::filter_projects_by_search`)方便 headless 单测；
-/// 2026-08-27 取代 `filter_turn_groups`。
-fn filter_sessions<'a>(
-    rows: &'a [SessionRow],
-    query: &str,
-    agent: Option<AgentKind>,
-) -> Vec<&'a SessionRow> {
-    let needle = query.to_lowercase();
-    rows.iter()
-        .filter(|r| agent.map(|a| r.agent == a).unwrap_or(true))
-        .filter(|r| {
-            query.is_empty()
-                || r.display_title.to_lowercase().contains(&needle)
-                || r.summary
-                    .as_deref()
-                    .is_some_and(|s| s.to_lowercase().contains(&needle))
-        })
-        .collect()
-}
-
-/// 会话列表里出现过的 agent 种类,去重,固定展示顺序(与 `group_tabs_by_agent`
-/// 同一份手法,但覆盖全部 7 个 `AgentKind` 而不只 4 个——会话历史可能来自
-/// 任何一种 agent)。供底部 footbar 画筛选 chip;返回空 = 没有会话数据,
-/// footbar 不渲染(只剩"全部"一个选项没有意义)。
-fn conversation_agents_present(rows: &[SessionRow]) -> Vec<AgentKind> {
-    const ORDER: [AgentKind; 7] = [
-        AgentKind::Claude,
-        AgentKind::Codebuddy,
-        AgentKind::Opencode,
-        AgentKind::Codex,
-        AgentKind::Kilo,
-        AgentKind::V8agent,
-        AgentKind::Unknown,
-    ];
-    ORDER
-        .into_iter()
-        .filter(|k| rows.iter().any(|r| r.agent == *k))
-        .collect()
-}
 
 /// 会话列表底部 agent 筛选栏:样式对齐文件树面板的分支切换下拉
 /// (`files::git_footer_bar`/`branch_picker_popup`)——左边图标 + 当前筛选
@@ -2761,7 +2677,7 @@ pub(crate) fn conversation_list_pane<'a>(
     let search_box = byteui::form::search_box::view(
         "搜索会话标题/摘要…",
         &ws.conversation_search_draft,
-        Some(conversation_search_field_id()),
+        Some(conversations::conversation_search_field_id()),
         search_active,
         Message::ConversationSearchInput,
         Message::ConversationSearchSubmit,
@@ -2771,7 +2687,7 @@ pub(crate) fn conversation_list_pane<'a>(
     content = content.push(byteui::interaction::context_menu::wrap(
         search_box,
         Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
-            id: conversation_search_field_id(),
+            id: conversations::conversation_search_field_id(),
             secure: false,
         })),
     ));
@@ -2791,8 +2707,9 @@ pub(crate) fn conversation_list_pane<'a>(
             .into();
     };
 
-    let agents_present = conversation_agents_present(rows);
-    let filtered = filter_sessions(rows, &ws.conversation_search, ws.conversation_agent_filter);
+    let agents_present = conversations::conversation_agents_present(rows);
+    let filtered =
+        conversations::filter_sessions(rows, &ws.conversation_search, ws.conversation_agent_filter);
     if rows.is_empty() {
         content = content.push(lh(text("暂无对话记录")
             .size(byteui::theme::font::body())
@@ -2808,7 +2725,7 @@ pub(crate) fn conversation_list_pane<'a>(
         .unwrap_or(0);
     let opens = ws.open_transcript_paths();
     let mut cards = column![].spacing(region.gap);
-    let visible = conversation_visible_count(ws.conversation_pages);
+    let visible = conversations::conversation_visible_count(ws.conversation_pages);
     for g in filtered.iter().take(visible) {
         let current = conversation::is_current_conversation_id(&g.conversation_id, &opens);
         // 时间前面加上 agent 名称(需求),不管是不是当前会话都紧挨在时间
@@ -4582,114 +4499,6 @@ mod tests {
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].url, "dozer://review-trace/host.html?_r=7");
         assert!(specs[0].visible);
-    }
-
-    #[test]
-    fn conversation_visible_count_starts_at_one_page() {
-        assert_eq!(conversation_visible_count(0), CONVERSATION_PAGE_SIZE);
-    }
-
-    #[test]
-    fn conversation_visible_count_grows_by_page_size() {
-        assert_eq!(conversation_visible_count(1), 2 * CONVERSATION_PAGE_SIZE);
-        assert_eq!(conversation_visible_count(2), 3 * CONVERSATION_PAGE_SIZE);
-    }
-
-    fn session_row(title: &str, agent: AgentKind) -> SessionRow {
-        SessionRow {
-            conversation_id: title.to_string(),
-            agent,
-            last_ts: 0,
-            display_title: title.to_string(),
-            summary: None,
-            summary_status: None,
-            task_id: None,
-        }
-    }
-
-    #[test]
-    fn filter_sessions_empty_query_and_no_agent_returns_all() {
-        let rows = vec![
-            session_row("修复登录 bug", AgentKind::Claude),
-            session_row("重构解析器", AgentKind::Codebuddy),
-        ];
-        assert_eq!(filter_sessions(&rows, "", None).len(), 2);
-    }
-
-    #[test]
-    fn filter_sessions_matches_title_case_insensitive_substring() {
-        let rows = vec![
-            session_row("Fix Login Bug", AgentKind::Claude),
-            session_row("重构解析器", AgentKind::Codebuddy),
-        ];
-        let filtered = filter_sessions(&rows, "login", None);
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].display_title, "Fix Login Bug");
-    }
-
-    #[test]
-    fn filter_sessions_matches_summary_case_insensitive_substring() {
-        let mut with_summary = session_row("修复登录 bug", AgentKind::Claude);
-        with_summary.summary = Some("Rewrote the OAuth callback handler".to_string());
-        let rows = vec![
-            with_summary,
-            session_row("重构解析器", AgentKind::Codebuddy),
-        ];
-        let filtered = filter_sessions(&rows, "oauth", None);
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].display_title, "修复登录 bug");
-    }
-
-    #[test]
-    fn filter_sessions_no_summary_does_not_match_on_summary_query() {
-        let rows = vec![session_row("修复登录 bug", AgentKind::Claude)];
-        assert!(filter_sessions(&rows, "oauth", None).is_empty());
-    }
-
-    #[test]
-    fn filter_sessions_filters_by_agent() {
-        let rows = vec![
-            session_row("会话 A", AgentKind::Claude),
-            session_row("会话 B", AgentKind::Codebuddy),
-        ];
-        let filtered = filter_sessions(&rows, "", Some(AgentKind::Codebuddy));
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].display_title, "会话 B");
-    }
-
-    #[test]
-    fn filter_sessions_combines_query_and_agent() {
-        let rows = vec![
-            session_row("修复登录 bug", AgentKind::Claude),
-            session_row("修复登录 bug", AgentKind::Codebuddy),
-        ];
-        let filtered = filter_sessions(&rows, "登录", Some(AgentKind::Claude));
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].agent, AgentKind::Claude);
-    }
-
-    #[test]
-    fn filter_sessions_no_match_yields_empty() {
-        let rows = vec![session_row("会话 A", AgentKind::Claude)];
-        assert!(filter_sessions(&rows, "不存在", None).is_empty());
-    }
-
-    #[test]
-    fn conversation_agents_present_dedups_and_orders_stably() {
-        let rows = vec![
-            session_row("a", AgentKind::Opencode),
-            session_row("b", AgentKind::Claude),
-            session_row("c", AgentKind::Claude),
-        ];
-        assert_eq!(
-            conversation_agents_present(&rows),
-            vec![AgentKind::Claude, AgentKind::Opencode]
-        );
-    }
-
-    #[test]
-    fn conversation_agents_present_empty_for_no_rows() {
-        assert!(conversation_agents_present(&[]).is_empty());
     }
 
     #[test]
