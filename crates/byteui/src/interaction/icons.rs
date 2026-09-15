@@ -100,6 +100,12 @@ pub enum IconKind {
     Play,
     /// 项目信息面板 rail 图标(Lucide briefcase)。
     Briefcase,
+    /// 项目信息面板"修复项目"按钮(Lucide briefcase-medical:公文包 + 十字,
+    /// 呼应"体检/修复"语义)。
+    BriefcaseMedical,
+    /// 项目信息面板"删除项目"按钮(Lucide folder-x:文件夹 + 叉,呼应"移除"
+    /// 语义)。
+    FolderX,
     /// 浏览器地址栏"加入/移出收藏"星标(Lucide star)。已收藏态靠调用方
     /// 传 GOLD 而非切换到另一份实心图标——`icons::view` 只管描边色,单一
     /// 资源足够表达"已收藏/未收藏"两态(YAGNI,不新增 filled 变体)。
@@ -245,6 +251,10 @@ impl IconKind {
             IconKind::ListTodo => include_bytes!("../../assets/icons/list-todo.svg"),
             IconKind::Play => include_bytes!("../../assets/icons/play.svg"),
             IconKind::Briefcase => include_bytes!("../../assets/icons/briefcase.svg"),
+            IconKind::BriefcaseMedical => {
+                include_bytes!("../../assets/icons/briefcase-medical.svg")
+            }
+            IconKind::FolderX => include_bytes!("../../assets/icons/folder-x.svg"),
             IconKind::Star => include_bytes!("../../assets/icons/star.svg"),
             IconKind::FolderBookmark => include_bytes!("../../assets/icons/folder-bookmark.svg"),
             IconKind::BarChart3 => include_bytes!("../../assets/icons/bar-chart-3.svg"),

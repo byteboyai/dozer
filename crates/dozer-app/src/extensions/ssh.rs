@@ -1350,20 +1350,13 @@ fn delete_confirm_popup<'a>(
     let cancel = button(
         text("取消")
             .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().cream),
+            .color(byteui::theme::color::current().dim),
     )
     .on_press(Message::DeleteHostCancel)
     .padding([6, 12])
-    .style(|_t: &iced_widget::Theme, _s| button::Style {
-        background: Some(byteui::theme::color::current().card.into()),
-        text_color: byteui::theme::color::current().cream,
-        border: iced_widget::core::Border {
-            color: byteui::theme::color::current().border,
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        ..button::Style::default()
-    });
+    .style(crate::dialog::action_button_style(
+        byteui::theme::color::current().dim,
+    ));
     let confirm = button(
         text("删除")
             .size(byteui::theme::font::body())
@@ -1371,16 +1364,9 @@ fn delete_confirm_popup<'a>(
     )
     .on_press(Message::DeleteHost(host_id.to_string()))
     .padding([6, 12])
-    .style(|_t: &iced_widget::Theme, _s| button::Style {
-        background: Some(byteui::theme::color::current().card.into()),
-        text_color: byteui::theme::color::current().red,
-        border: iced_widget::core::Border {
-            color: byteui::theme::color::current().red,
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        ..button::Style::default()
-    });
+    .style(crate::dialog::action_button_style(
+        byteui::theme::color::current().red,
+    ));
 
     let dialog = container(
         column![

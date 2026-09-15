@@ -19,10 +19,20 @@
 //!   (之前各面板要么整行左对齐、要么干脆没套统一约定,漂移同上)。只用于
 //!   纯按钮的收尾操作行;像 Todo 详情"回复框+提交"那种输入控件占满宽度
 //!   的行不适用,继续各自布局。
+//! - `action_button_border_color`/`action_button_style`: 弹窗内取消/确认/
+//!   删除类按钮的统一描边规则(2026-09-15 起)——此前各弹窗各写一份
+//!   `button::Style` 字面量,描边色跟文字色绑死(取消=中性 `BORDER`、
+//!   确认/删除=各自的语义色),且都不响应 hover。现在统一成:静止态描边
+//!   固定 `BORDER`(#1c3440),悬浮/按下态一律变 `GOLD`;按钮语义只通过
+//!   文字色区分(灰=取消/次要、红=危险删除、金=主要确认),描边规则本身
+//!   不因语义而不同。项目信息面板 footer-bar(`extensions::project::
+//!   project_footer_bar`)背景走面板底色 `bg` 而非弹窗卡片 `card`,没法直接
+//!   复用 `action_button_style`,但描边规则复用同一个
+//!   `action_button_border_color`。
 
 use crate::theme;
-use iced_widget::core::{Element, Length, alignment::Horizontal};
-use iced_widget::{MouseArea, Row, Stack, column, container};
+use iced_widget::core::{Border, Color, Element, Length, alignment::Horizontal};
+use iced_widget::{MouseArea, Row, Stack, button, column, container};
 
 /// 弹窗卡片容器样式:CARD 底 + 金色描边 + 圆角,取代各面板各自手写的
 /// `container::Style` 字面量。
@@ -58,6 +68,33 @@ pub fn actions<'a, Msg: 'a>(
         .width(Length::Fill)
         .align_x(Horizontal::Right)
         .into()
+}
+
+/// 弹窗/footer-bar 按钮共用的描边规则:静止态固定 `BORDER`(#1c3440),
+/// 悬浮/按下态一律变 `GOLD`。
+pub fn action_button_border_color(status: button::Status) -> Color {
+    match status {
+        button::Status::Hovered | button::Status::Pressed => byteui::theme::color::current().gold,
+        _ => byteui::theme::color::current().border,
+    }
+}
+
+/// 弹窗操作按钮(取消/确认/删除)完整样式:CARD 底 + 统一描边规则 + 调用方
+/// 指定的文字色。文字色按语义传:`dim` 给取消/次要,`red` 给危险删除,
+/// `gold` 给非破坏性的主要确认(如"移动"弹窗的"确定")。
+pub fn action_button_style(
+    text_color: Color,
+) -> impl Fn(&iced_widget::Theme, button::Status) -> button::Style {
+    move |_t, s| button::Style {
+        background: Some(byteui::theme::color::current().card.into()),
+        text_color,
+        border: Border {
+            color: action_button_border_color(s),
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..button::Style::default()
+    }
 }
 
 fn scrim_layer<'a, Msg: 'a>() -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {

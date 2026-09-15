@@ -380,20 +380,13 @@ pub fn search_modal<'a>(
     let submit_btn = button(
         text(if ws.running { "搜索中…" } else { "搜索" })
             .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().cream),
+            .color(byteui::theme::color::current().gold),
     )
     .on_press(Message::QuerySubmit)
     .padding([6, 12])
-    .style(|_t: &iced_widget::Theme, _s| button::Style {
-        background: Some(byteui::theme::color::current().card.into()),
-        text_color: byteui::theme::color::current().cream,
-        border: Border {
-            color: byteui::theme::color::current().cream,
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        ..button::Style::default()
-    });
+    .style(crate::dialog::action_button_style(
+        byteui::theme::color::current().gold,
+    ));
 
     let query_row = row![query_box(ws), submit_btn]
         .spacing(8)

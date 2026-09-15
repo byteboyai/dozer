@@ -93,6 +93,9 @@ pub struct WorkspaceState {
     name_edit_focus_pending: bool,
     /// 项目描述编辑态(None=未在编辑)。采用 iced 原生 `text_editor::Content`。
     description_editing: Option<iced_widget::text_editor::Content>,
+    /// 描述编辑框是否持有 iced 内部真实焦点,每帧由 `CaptureDescriptionEditFocus`
+    /// 写入(同 `name_edit_focused`,供 main.rs 原生输入路由闸门放行)。
+    description_edit_focused: bool,
     /// 文档/Agent 记忆虚拟链接。
     links: links::LinksState,
     /// 已展开状态目录 → 其子项列表(就地展开/收起)。
@@ -146,6 +149,17 @@ impl WorkspaceState {
     /// 读走(消费式)一次性聚焦标记。
     pub fn take_name_edit_focus_pending(&mut self) -> bool {
         std::mem::take(&mut self.name_edit_focus_pending)
+    }
+
+    /// 描述编辑框是否持有 iced 真实焦点(main.rs 键盘路由用)。
+    pub fn description_edit_focused(&self) -> bool {
+        self.description_edit_focused
+    }
+
+    /// 每帧渲染循环读走 `CaptureDescriptionEditFocus` 查到的真实焦点态后写
+    /// 进来(同 `set_name_edit_focused_flag`)。
+    pub fn set_description_edit_focused_flag(&mut self, focused: bool) {
+        self.description_edit_focused = focused;
     }
 
     /// 供内核 `project_preview_open_path`/`project_link_context_menu` 调用——
@@ -207,6 +221,34 @@ impl Operation<()> for CaptureNameEditFocus {
     fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
         if id == Some(&name_field_id()) {
             *NAME_EDIT_FOCUSED.lock().unwrap() = state.is_focused();
+        }
+    }
+
+    fn traverse(&mut self, operate: &mut dyn for<'a> FnMut(&'a mut (dyn Operation<()> + 'a))) {
+        operate(self);
+    }
+}
+
+static DESCRIPTION_EDIT_FOCUSED: std::sync::LazyLock<std::sync::Mutex<bool>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
+
+/// 读走并复位(消费式)上一帧捕获到的描述编辑框真 `text_editor` 焦点态
+/// (同 `take_name_edit_focused`)。
+pub fn take_description_edit_focused() -> bool {
+    std::mem::replace(&mut *DESCRIPTION_EDIT_FOCUSED.lock().unwrap(), false)
+}
+
+/// 每帧 `interface.operate()` 跑一遍,把命中 `description_field_id` 的真
+/// `text_editor` 是否持有 iced 焦点写进 `DESCRIPTION_EDIT_FOCUSED`(同
+/// `CaptureNameEditFocus`)。此前描述编辑框缺这道每帧查焦点的机制,main.rs
+/// 键盘路由闸门里查不到它的真实焦点态,导致键入被当作"未聚焦任何原生输入"
+/// 转发进了 PTY 终端而不是交给 `text_editor` 自己——这个 Operation 补上
+/// 这道缺失的信号源。
+pub struct CaptureDescriptionEditFocus;
+impl Operation<()> for CaptureDescriptionEditFocus {
+    fn focusable(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Focusable) {
+        if id == Some(&description_field_id()) {
+            *DESCRIPTION_EDIT_FOCUSED.lock().unwrap() = state.is_focused();
         }
     }
 
@@ -959,38 +1001,59 @@ pub fn view<'a>(
 /// 两个并排圆角按钮:「修复项目」触发 `RepairProject`(见 `spawn_repair_run`,
 /// 弹出逐步骤进度弹窗),「删除项目」触发 `DeleteProjectRequest` 打开三选一
 /// 确认弹窗(见 `project_delete_confirm_popup`)。
-fn project_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let repair = button(
-        text("修复项目")
-            .size(byteui::theme::font::label())
-            .color(byteui::theme::color::current().cream),
+/// footer-bar 按钮的居中图标 + 文字内容:`button` 的 `layout::padded` 不会
+/// 把 Shrink 宽度的内容居中(只贴左上角),要靠外层 `container` 自己撑满
+/// `Length::Fill` 再 `align_x(Center)` 才能让图标+文字这组内容整体居中。
+fn footer_button_label<'a>(
+    icon: icons::IconKind,
+    label: &'a str,
+    color: iced_widget::core::Color,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    container(
+        row![
+            icons::view(icon, byteui::theme::icon_size::row(), color),
+            text(label).size(byteui::theme::font::label()).color(color),
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center),
     )
+    .width(Length::Fill)
+    .align_x(iced_widget::core::alignment::Horizontal::Center)
+    .into()
+}
+
+fn project_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let repair = button(footer_button_label(
+        icons::IconKind::BriefcaseMedical,
+        "修复项目",
+        byteui::theme::color::current().dim,
+    ))
     .on_press(Message::RepairProject)
     .width(Length::Fill)
     .padding([6, 8])
-    .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+    .style(|_t: &iced_widget::Theme, s| iced_widget::button::Style {
         background: Some(byteui::theme::color::current().bg.into()),
         border: Border {
-            color: byteui::theme::color::current().border,
+            color: crate::dialog::action_button_border_color(s),
             width: 1.0,
             radius: 4.0.into(),
         },
-        text_color: byteui::theme::color::current().cream,
+        text_color: byteui::theme::color::current().dim,
         ..iced_widget::button::Style::default()
     });
 
-    let delete = button(
-        text("删除项目")
-            .size(byteui::theme::font::label())
-            .color(byteui::theme::color::current().red),
-    )
+    let delete = button(footer_button_label(
+        icons::IconKind::FolderX,
+        "删除项目",
+        byteui::theme::color::current().red,
+    ))
     .on_press(Message::DeleteProjectRequest)
     .width(Length::Fill)
     .padding([6, 8])
-    .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
+    .style(|_t: &iced_widget::Theme, s| iced_widget::button::Style {
         background: Some(byteui::theme::color::current().bg.into()),
         border: Border {
-            color: byteui::theme::color::current().red,
+            color: crate::dialog::action_button_border_color(s),
             width: 1.0,
             radius: 4.0.into(),
         },
@@ -1125,26 +1188,13 @@ fn scaffold_progress_popup(
     let close_btn = button(
         text(close_label)
             .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().cream),
+            .color(byteui::theme::color::current().dim),
     )
     .on_press_maybe(done.then_some(Message::ScaffoldPopupClose))
     .padding([6, 12])
-    .style(
-        move |_t: &iced_widget::Theme, _s| iced_widget::button::Style {
-            background: Some(byteui::theme::color::current().card.into()),
-            text_color: byteui::theme::color::current().cream,
-            border: Border {
-                color: if done {
-                    byteui::theme::color::current().gold
-                } else {
-                    byteui::theme::color::current().border
-                },
-                width: 1.0,
-                radius: 4.0.into(),
-            },
-            ..iced_widget::button::Style::default()
-        },
-    );
+    .style(crate::dialog::action_button_style(
+        byteui::theme::color::current().dim,
+    ));
 
     let card = column![
         text("修复项目")
@@ -1223,20 +1273,13 @@ fn project_delete_confirm_popup(
     let cancel = button(
         text("取消")
             .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().cream),
+            .color(byteui::theme::color::current().dim),
     )
     .on_press(Message::DeleteProjectCancel)
     .padding([6, 12])
-    .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
-        background: Some(byteui::theme::color::current().card.into()),
-        text_color: byteui::theme::color::current().cream,
-        border: Border {
-            color: byteui::theme::color::current().border,
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        ..iced_widget::button::Style::default()
-    });
+    .style(crate::dialog::action_button_style(
+        byteui::theme::color::current().dim,
+    ));
     let confirm = button(
         text("删除")
             .size(byteui::theme::font::body())
@@ -1244,16 +1287,9 @@ fn project_delete_confirm_popup(
     )
     .on_press(Message::DeleteProjectConfirm)
     .padding([6, 12])
-    .style(|_t: &iced_widget::Theme, _s| iced_widget::button::Style {
-        background: Some(byteui::theme::color::current().card.into()),
-        text_color: byteui::theme::color::current().red,
-        border: Border {
-            color: byteui::theme::color::current().red,
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        ..iced_widget::button::Style::default()
-    });
+    .style(crate::dialog::action_button_style(
+        byteui::theme::color::current().red,
+    ));
 
     let dialog = container(
         column![

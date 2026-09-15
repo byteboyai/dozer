@@ -2524,20 +2524,13 @@ pub fn delete_confirm_popup(
                     button(
                         text("取消")
                             .size(byteui::theme::font::body())
-                            .color(byteui::theme::color::current().cream)
+                            .color(byteui::theme::color::current().dim)
                     )
                     .on_press(Message::DeleteCancel)
                     .padding([6, 12])
-                    .style(|_t, _s| button::Style {
-                        background: Some(byteui::theme::color::current().card.into()),
-                        text_color: byteui::theme::color::current().cream,
-                        border: Border {
-                            color: byteui::theme::color::current().border,
-                            width: 1.0,
-                            radius: 4.0.into()
-                        },
-                        ..button::Style::default()
-                    }),
+                    .style(crate::dialog::action_button_style(
+                        byteui::theme::color::current().dim
+                    )),
                     button(
                         text("删除")
                             .size(byteui::theme::font::body())
@@ -2545,16 +2538,9 @@ pub fn delete_confirm_popup(
                     )
                     .on_press(Message::DeleteConfirm)
                     .padding([6, 12])
-                    .style(|_t, _s| button::Style {
-                        background: Some(byteui::theme::color::current().card.into()),
-                        text_color: byteui::theme::color::current().red,
-                        border: Border {
-                            color: byteui::theme::color::current().red,
-                            width: 1.0,
-                            radius: 4.0.into()
-                        },
-                        ..button::Style::default()
-                    }),
+                    .style(crate::dialog::action_button_style(
+                        byteui::theme::color::current().red
+                    )),
                 ]
                 .spacing(8),
             ),
@@ -2667,20 +2653,13 @@ pub fn move_confirm_popup(
             button(
                 text("取消")
                     .size(byteui::theme::font::body())
-                    .color(byteui::theme::color::current().cream)
+                    .color(byteui::theme::color::current().dim)
             )
             .on_press(Message::MoveCancel)
             .padding([6, 12])
-            .style(|_t, _s| button::Style {
-                background: Some(byteui::theme::color::current().card.into()),
-                text_color: byteui::theme::color::current().cream,
-                border: Border {
-                    color: byteui::theme::color::current().border,
-                    width: 1.0,
-                    radius: 4.0.into()
-                },
-                ..button::Style::default()
-            }),
+            .style(crate::dialog::action_button_style(
+                byteui::theme::color::current().dim
+            )),
             button(
                 text("确定")
                     .size(byteui::theme::font::body())
@@ -2688,16 +2667,9 @@ pub fn move_confirm_popup(
             )
             .on_press(Message::MoveConfirm)
             .padding([6, 12])
-            .style(|_t, _s| button::Style {
-                background: Some(byteui::theme::color::current().card.into()),
-                text_color: byteui::theme::color::current().gold,
-                border: Border {
-                    color: byteui::theme::color::current().gold,
-                    width: 1.0,
-                    radius: 4.0.into()
-                },
-                ..button::Style::default()
-            }),
+            .style(crate::dialog::action_button_style(
+                byteui::theme::color::current().gold
+            )),
         ]
         .spacing(8)
         .align_y(iced_widget::core::Alignment::Center),
