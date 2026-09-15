@@ -24,6 +24,9 @@ struct HomespaceColors {
     card_bg: String,
     /// 卡片主文字(项目名、文件名、对话标题、最近文件标题)颜色。
     cream: String,
+    /// 按钮 hover/按下态描边色(统一按钮规范,见 `dialog::
+    /// action_button_border_color`)。
+    gold: String,
     /// 卡片/按钮描边色。
     border: String,
 }
@@ -58,6 +61,9 @@ pub fn cream() -> Color {
 pub fn border() -> Color {
     region::resolve_color(&COLORS.border)
 }
+pub fn gold() -> Color {
+    region::resolve_color(&COLORS.gold)
+}
 
 #[cfg(test)]
 mod tests {
@@ -73,7 +79,7 @@ mod tests {
     #[test]
     fn tokens_resolve_without_panic() {
         // 加载在首次调用时panic;这里逐一调用,确认配置可正常解析。
-        let _ = (error(), dim(), cream(), border());
+        let _ = (error(), dim(), cream(), border(), gold());
     }
 
     #[test]

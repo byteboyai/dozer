@@ -1393,41 +1393,44 @@ fn delete_confirm_popup<'a>(
 
 /// 主机面板底部 footer-bar:1px `BORDER` 分隔线 + `padding([6, 8])` 容器,
 /// 结构与项目面板的 `project_footer_bar` / 文件树面板的 `git_footer_bar`
-/// 一致。当前放「＋添加」单个按钮,底部固定,不随主机列表滚动。
+/// 一致。当前放「＋添加」单个按钮,底部固定,不随主机列表滚动。非破坏性
+/// 操作,按统一按钮规范(见 `dialog::action_button_border_color` 文档)
+/// 走灰字 + 描边静止态 `border`、悬浮/按下态变 `gold`(此前固定奶油字 +
+/// 不响应 hover 的静态描边)。
 fn ssh_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let add_btn = button(
         row![
             icons::view(
                 icons::IconKind::SquarePlus,
                 byteui::theme::icon_size::row(),
-                byteui::theme::color::current().cream,
+                byteui::theme::color::current().dim,
             ),
             text("添加主机")
                 .size(byteui::theme::font::label())
-                .color(byteui::theme::color::current().cream),
+                .color(byteui::theme::color::current().dim),
         ]
         .spacing(6)
         .align_y(iced_widget::core::Alignment::Center),
     )
     .on_press(Message::AddHostStart)
     .padding([4, 8])
-    .style(|_t: &iced_widget::Theme, _s| button::Style {
+    .style(|_t: &iced_widget::Theme, s| button::Style {
         background: Some(byteui::theme::color::current().bg.into()),
         border: iced_widget::core::Border {
-            color: byteui::theme::color::current().border,
+            color: crate::dialog::action_button_border_color(s),
             width: 1.0,
             radius: 4.0.into(),
         },
-        text_color: byteui::theme::color::current().cream,
+        text_color: byteui::theme::color::current().dim,
         ..button::Style::default()
     });
 
     // 对齐 todo 左栏底部栏 `todo_clear_footer_bar`:按钮用
-    // bg 实底 + `border` 描边 + `cream` 文字 + `[4,8]` padding + 圆角 4
-    // (不再用 gold 描边/gold 文字那套),top_line 分割线内缩对齐 `project_pane`
-    // 的水平内距(否则 footbar 分割线比面板 header/content 更长,两端对不上)。
-    // 按钮位置也对齐 `todo_clear_footer_bar`(靠右,`space::horizontal()`
-    // 在前把按钮推到最右——之前误放在左边,验收反馈按钮位置跟 todo 不一致)。
+    // bg 实底 + 统一描边规则 + 灰字 + `[4,8]` padding + 圆角 4,top_line
+    // 分割线内缩对齐 `project_pane` 的水平内距(否则 footbar 分割线比面板
+    // header/content 更长,两端对不上)。按钮位置也对齐
+    // `todo_clear_footer_bar`(靠右,`space::horizontal()` 在前把按钮推到
+    // 最右——之前误放在左边,验收反馈按钮位置跟 todo 不一致)。
     let bar = row![iced_widget::space::horizontal(), add_btn]
         .spacing(6)
         .align_y(iced_widget::core::Alignment::Center);

@@ -2016,7 +2016,10 @@ fn todo_footer_bar<'a>(
 /// 对齐 `files.rs` 的 `git_footer_bar`
 /// (顶部分隔线 + 左图标/文案 + 右侧操作按钮)。**清空功能尚未实现**:
 /// `清空列表` 走 `Message::ClearList`,在 `update` 里是 no-op,这里只负责
-/// 把 UI 摆出来。
+/// 把 UI 摆出来。危险操作(清空整个列表不可撤销),按统一按钮规范(见
+/// `dialog::action_button_border_color` 文档)走红字 + 描边静止态
+/// `border`、悬浮/按下态变 `gold`(此前固定奶油字 + 不响应 hover 的
+/// 静态描边)。
 fn todo_clear_footer_bar<'a>(
     _ws_state: &'a WorkspaceState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -2025,25 +2028,25 @@ fn todo_clear_footer_bar<'a>(
             icons::view(
                 icons::IconKind::Trash,
                 byteui::theme::icon_size::row(),
-                byteui::theme::color::current().cream,
+                byteui::theme::color::current().red,
             ),
             text("清空列表")
                 .size(byteui::theme::font::label())
-                .color(byteui::theme::color::current().cream),
+                .color(byteui::theme::color::current().red),
         ]
         .spacing(6)
         .align_y(iced_widget::core::Alignment::Center),
     )
     .on_press(Message::ClearList)
     .padding([4, 8])
-    .style(|_t: &iced_widget::Theme, _s| button::Style {
+    .style(|_t: &iced_widget::Theme, s| button::Style {
         background: Some(byteui::theme::color::current().bg.into()),
         border: Border {
-            color: byteui::theme::color::current().border,
+            color: crate::dialog::action_button_border_color(s),
             width: 1.0,
             radius: 4.0.into(),
         },
-        text_color: byteui::theme::color::current().cream,
+        text_color: byteui::theme::color::current().red,
         ..button::Style::default()
     });
 

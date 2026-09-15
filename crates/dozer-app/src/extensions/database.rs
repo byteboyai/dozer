@@ -2157,7 +2157,10 @@ fn delete_confirm_popup<'a>(
 
 /// 数据库面板底部 footer-bar:1px `BORDER` 分隔线 + `padding([6, 8])` 容器,
 /// 结构照抄 `ssh.rs::ssh_footer_bar`(同一产品语言——"管理驱动"+"新增数据源"
-/// 两个按钮固定在面板最下方,不随数据源列表滚动)。
+/// 两个按钮固定在面板最下方,不随数据源列表滚动)。两者都是非破坏性操作,
+/// 按统一按钮规范(见 `dialog::action_button_border_color` 文档)走灰字 +
+/// 描边静止态 `border`、悬浮/按下态变 `gold`(此前固定奶油字 + 不响应
+/// hover 的静态描边)。
 fn database_footer_bar<'a>() -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let btn = |icon: icons::IconKind, label: &'static str, on_press: Message| {
         button(
@@ -2165,25 +2168,25 @@ fn database_footer_bar<'a>() -> Element<'a, Message, iced_widget::Theme, iced_re
                 icons::view(
                     icon,
                     byteui::theme::icon_size::row(),
-                    byteui::theme::color::current().cream,
+                    byteui::theme::color::current().dim,
                 ),
                 text(label)
                     .size(byteui::theme::font::label())
-                    .color(byteui::theme::color::current().cream),
+                    .color(byteui::theme::color::current().dim),
             ]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center),
         )
         .on_press(on_press)
         .padding([4, 8])
-        .style(|_t: &iced_widget::Theme, _s| button::Style {
+        .style(|_t: &iced_widget::Theme, s| button::Style {
             background: Some(byteui::theme::color::current().bg.into()),
             border: iced_widget::core::Border {
-                color: byteui::theme::color::current().border,
+                color: crate::dialog::action_button_border_color(s),
                 width: 1.0,
                 radius: 4.0.into(),
             },
-            text_color: byteui::theme::color::current().cream,
+            text_color: byteui::theme::color::current().dim,
             ..button::Style::default()
         })
     };

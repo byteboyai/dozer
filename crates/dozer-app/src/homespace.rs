@@ -597,33 +597,51 @@ fn home_project_list_view(
         .into()
 }
 
-/// 底部 footbar 里的「＋新增项目」按钮(甲方动作)。样式与 workspace 项目
-/// 面板 `project_footer_bar` 的按钮一致:面板底色实底(`card_bg`)+ `border`
-/// 描边 + 奶油字(`cream`),而非原来的金色描边——描边色从 GOLD/奶油改成
-/// 与全局 footer-bar 统一的 `border`。字号用 `label`(13px,同
-/// `project_footer_bar` 的 `byteui::theme::font::label()`)——曾经错用
-/// `caption_sm`(11px),两个 footbar 视觉不一致的根因。按钮 `width(Fill)`
-/// 撑满 footbar 行。
+/// 底部 footbar 里的「＋新增项目」按钮(甲方动作)。样式对齐全局统一按钮
+/// 规范(2026-09-15 起,见 `dialog::action_button_border_color` 文档):
+/// 面板底色实底(`card_bg`)+ 描边静止态 `border`、悬浮/按下态变
+/// `gold`(此前描边固定不响应 hover)+ 灰字 `dim`(此前用奶油字
+/// `cream`,普通按钮该用灰字,危险按钮才用红字)。字号用 `label`(13px,
+/// 同 `project_footer_bar` 的 `byteui::theme::font::label()`)。宽度改为
+/// footbar 行宽的一半、居中放置(此前 `width(Fill)` 撑满整行,视觉上比
+/// workspace 项目面板的功能按钮粗重)。
 fn home_new_project_button()
 -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    button(
+    // 按钮内容用 `container` 撑满 + `align_x(Center)` 居中标题文字——`button`
+    // 的 `layout::padded` 不会把 Shrink 宽度的内容自动居中,只贴左上角(同
+    // `extensions::project::footer_button_label` 的既有处理)。
+    let label = container(
         text("＋新增项目")
             .size(theme::homespace_font::label())
-            .color(theme::homespace_color::cream()),
+            .color(theme::homespace_color::dim()),
     )
-    .on_press(Message::ProjectTabPickFolder)
     .width(Length::Fill)
-    .padding([6, 8])
-    .style(|_t: &iced_widget::Theme, _s| button::Style {
-        background: Some(theme::homespace_color::card_bg().into()),
-        border: Border {
-            color: theme::homespace_color::border(),
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        text_color: theme::homespace_color::cream(),
-        ..button::Style::default()
-    })
+    .align_x(iced_widget::core::alignment::Horizontal::Center);
+
+    let btn = button(label)
+        .on_press(Message::ProjectTabPickFolder)
+        .padding([6, 8])
+        .style(|_t: &iced_widget::Theme, s: button::Status| button::Style {
+            background: Some(theme::homespace_color::card_bg().into()),
+            border: Border {
+                color: match s {
+                    button::Status::Hovered | button::Status::Pressed => {
+                        theme::homespace_color::gold()
+                    }
+                    _ => theme::homespace_color::border(),
+                },
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            text_color: theme::homespace_color::dim(),
+            ..button::Style::default()
+        });
+
+    row![
+        iced_widget::Space::new().width(Length::FillPortion(1)),
+        btn.width(Length::FillPortion(2)),
+        iced_widget::Space::new().width(Length::FillPortion(1)),
+    ]
     .into()
 }
 
