@@ -185,8 +185,6 @@ pub(crate) fn top_bar(
     let tabs = container(project_tabs_row(app)).width(Length::Fill);
 
     let mut right = row![].spacing(10);
-    // 目前尚未接入设置面板,先只还原视觉,`interactive: false` 不挂
-    // on_press——没有对应 Message 变体可派发。
     right = right.push(icons::icon_button_entry(
         icons::IconKind::Settings,
         byteui::theme::icon_size::rail(),
@@ -195,8 +193,8 @@ pub(crate) fn top_bar(
         app.hover_progress(HoverId::Topbar(TopbarButton::Settings)),
         false,
         byteui::theme::geometry::tab_button_size(),
-        false,
-        Message::Noop,
+        true,
+        Message::SettingsOpen,
         move |hovered| Message::Hover(HoverId::Topbar(TopbarButton::Settings), hovered),
         "设置",
     ));

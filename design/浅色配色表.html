@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dozer · Daylight 浅色配色表(提案)</title>
+<style>
+  :root {
+    --bg: #f1f4f6;
+    --panel: #f8fafb;
+    --term-bg: #fcfdfe;
+    --card: #ffffff;
+    --border: #d7dfe5;
+    --cream: #16232e;
+    --body: #4c5c68;
+    --dim: #8b98a2;
+    --gold: #ad7d0a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--body);
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+    padding: 40px 24px 80px;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; }
+  header { margin-bottom: 36px; }
+  h1 {
+    color: var(--cream);
+    font-size: 26px;
+    margin: 0 0 8px;
+    letter-spacing: 0.3px;
+  }
+  header p {
+    margin: 0;
+    color: var(--dim);
+    font-size: 13.5px;
+    line-height: 1.7;
+  }
+  header code {
+    color: var(--body);
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 12.5px;
+  }
+  .notice {
+    margin-top: 16px;
+    border: 1px solid var(--gold);
+    background: rgba(173, 125, 10, 0.08);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 13px;
+    color: var(--cream);
+    line-height: 1.7;
+  }
+  .notice b { color: var(--gold); }
+  .draft-flag {
+    display: inline-block;
+    margin-top: 14px;
+    font-size: 11px;
+    letter-spacing: 0.4px;
+    color: var(--gold);
+    border: 1px solid var(--gold);
+    border-radius: 999px;
+    padding: 2px 10px;
+  }
+
+  section { margin-bottom: 44px; }
+  h2 {
+    font-size: 15px;
+    color: var(--cream);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+    margin: 0 0 16px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+  h2 small {
+    color: var(--dim);
+    font-weight: 400;
+    margin-left: 8px;
+    font-size: 12px;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+  }
+  .swatch {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--card);
+    cursor: pointer;
+    transition: transform 0.12s ease, border-color 0.12s ease;
+    position: relative;
+    box-shadow: 0 1px 2px rgba(22, 35, 46, 0.05);
+  }
+  .swatch:hover { transform: translateY(-2px); border-color: var(--body); }
+  .swatch .chip {
+    height: 64px;
+    border-bottom: 1px solid var(--border);
+  }
+  .swatch .meta { padding: 10px 12px 12px; }
+  .swatch .name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--cream);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .swatch .hex {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    color: var(--body);
+    margin-top: 4px;
+  }
+  .swatch .rgb {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+    color: var(--dim);
+    margin-top: 2px;
+  }
+  .swatch .usage {
+    margin-top: 6px;
+    font-size: 11.5px;
+    color: var(--dim);
+    line-height: 1.5;
+  }
+  .swatch .dark-ref {
+    margin-top: 6px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 10.5px;
+    color: var(--dim);
+  }
+  .swatch .dark-ref::before { content: "暗色原值 "; }
+  .swatch .copied {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    font-size: 10.5px;
+    color: var(--bg);
+    background: var(--cream);
+    padding: 2px 6px;
+    border-radius: 4px;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+  }
+  .swatch.copied .copied { opacity: 1; }
+
+  .gold-flag {
+    font-size: 9.5px;
+    color: var(--card);
+    background: var(--gold);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-weight: 700;
+  }
+
+  .ansi-note {
+    font-size: 12px;
+    color: var(--dim);
+    margin: -6px 0 14px;
+    line-height: 1.7;
+  }
+
+  footer {
+    margin-top: 56px;
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+    font-size: 11.5px;
+    color: var(--dim);
+    line-height: 1.8;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Dozer · Daylight 浅色配色表(提案)</h1>
+    <p>
+      以 <code>crates/byteui/src/theme/color.rs</code> 的 <code>ColorTokens::byteboy2077()</code>
+      (语义色板)与 <code>crates/dozer-app/src/term_model.rs</code> 的 <code>ANSI16</code>
+      (终端色板)为基准,逐一映射出的浅色版本。中性色取暗色 <code>bg #0a0e16</code>
+      同一 navy 色相提亮而来,不用暖白/暖灰,避免被金色抢走"暖调即品牌"的印象。
+      点击任意色块可复制十六进制值。
+    </p>
+    <div class="notice">
+      <b>硬性裁决沿用</b>:金 <b>#AD7D0A</b>(浅色版 gold,对应暗色 #F2D94E)仍是「甲方动作」
+      专属色,不用于语法高亮等其它场景;需要"警示黄/强调黄"角色时用终端 BrightYellow
+      (<code>#8A7A12</code>,浅色版对应暗色 #FFF3B0),不是 gold。见项目 CLAUDE.md。
+    </div>
+    <span class="draft-flag">提案 · 尚未写入源码</span>
+  </header>
+
+  <section>
+    <h2>背景层级 <small>bg · panel · term_bg · card · border</small></h2>
+    <div class="grid" id="grp-surface"></div>
+  </section>
+
+  <section>
+    <h2>文本 <small>cream → ink · body · dim</small></h2>
+    <div class="grid" id="grp-text"></div>
+  </section>
+
+  <section>
+    <h2>强调色 <small>甲方动作 / 语法 / 状态</small></h2>
+    <div class="grid" id="grp-accent"></div>
+  </section>
+
+  <section>
+    <h2>Tab / 弹层 <small>tab_active_border · tab_active_bg · tab_hover · desc_bg · scrim</small></h2>
+    <div class="grid" id="grp-chrome"></div>
+  </section>
+
+  <section>
+    <h2>终端 ANSI16 <small>term_model.rs::ANSI16 的浅色映射</small></h2>
+    <p class="ansi-note">
+      默认前景取 <code>#4C5C68</code>,对应暗色 <code>#9AB4C4</code>(与语义色板 body 同值)。
+      Black(0)刻意贴近 term_bg——暗色版里 Black 就是终端背景本身,浅色版延续这个"背景色兼职黑"的
+      约定;White(7)因此承担默认文字角色,浅色版取 ink。Blue(4)槽位在暗/浅两版里实际都是紫色调,
+      Magenta(5)与语义色板的 magenta 数值不同,是两套独立取值,不要混用。
+    </p>
+    <div class="grid" id="grp-ansi-normal"></div>
+    <div style="height:12px"></div>
+    <div class="grid" id="grp-ansi-bright"></div>
+  </section>
+
+  <footer>
+    这是配色<b>提案</b>,不是从源码提取——现行代码只有一份暗色 <code>ColorTokens::byteboy2077()</code>。
+    落地时建议新增 <code>ColorTokens::daylight()</code> 与之并列,经 <code>set_theme</code>
+    运行时切换,不改动现行暗色默认值;届时把这份表格换成跟 <code>配色表.html</code> 一样
+    "直接读源码常量"的生成方式,保持两份表格同步。<br />
+    语义色板 23 项、终端 ANSI16 共 16 项,与暗色版 <code>配色表.html</code> 逐项对应。
+  </footer>
+</div>
+
+<script>
+const semantic = {
+  surface: [
+    ["bg", "#f1f4f6", "#0a0e16", "主背景"],
+    ["panel", "#f8fafb", "#0a0e16", "面板背景"],
+    ["term_bg", "#fcfdfe", "#08141d", "终端背景"],
+    ["card", "#ffffff", "#12202a", "卡片/弹层底色"],
+    ["border", "#d7dfe5", "#1c3440", "描边"],
+  ],
+  text: [
+    ["cream → ink", "#16232e", "#ffe5b4", "主文字(原 cream 语义位,浅色版反转为深墨色)"],
+    ["body", "#4c5c68", "#9ab4c4", "默认正文文字色"],
+    ["dim", "#8b98a2", "#6b7f8f", "弱化/禁用/次要文字"],
+  ],
+  accent: [
+    ["gold", "#ad7d0a", "#f2d94e", "甲方动作专属(硬性裁决,见页头提示)"],
+    ["cyan", "#0e8a9e", "#47def0", "强调 / 语法关键字"],
+    ["green", "#128f5a", "#1ad585", "强调 / 语法字符串"],
+    ["purple", "#6a4fdb", "#9580ff", "强调 / 语法类型-命名空间"],
+    ["red", "#d1483f", "#ff6e6e", "错误 / 删除"],
+    ["ignored", "#8b98a2", "#6b7f8f", "忽略态(同 dim 数值)"],
+    ["orange", "#c97a1b", "#ff9b4d", "警示 / 数值"],
+    ["magenta", "#c93b93", "#ff6ec7", "强调(备用位)"],
+    ["blue", "#2f6fe0", "#4d8cff", "强调(备用位)"],
+    ["lime", "#6fa813", "#a3e635", "强调(备用位)"],
+  ],
+  chrome: [
+    ["tab_active_border", "#c9a227", "#dcc9a3", "激活 tab 描边"],
+    ["tab_active_bg", "#eaeff2", "#152630", "激活 tab 底色"],
+    ["tab_hover", "#eaeff2", "#152630", "hover 态底色(同 tab_active_bg)"],
+    ["desc_bg", "#eaeff2", "#152630", "说明气泡底色(同上)"],
+    ["scrim", "rgba(10,14,20,0.4)", "rgba(0,0,0,0.55)", "全屏蒙层(弹层背后遮罩,浅色主题仍用深色半透明)"],
+  ],
+};
+
+const ansiNormal = [
+  ["Black", "#fcfdfe", "#08141d", "≈ term_bg,浅色版延续「背景兼职黑」约定"],
+  ["Red", "#d1483f", "#ff6e6e", null],
+  ["Green", "#128f5a", "#1ad585", null],
+  ["Yellow", "#ad7d0a", "#f2d94e", "与 gold 同值(暗色版即如此)"],
+  ["Blue", "#6a4fdb", "#9580ff", "实为紫色调,与 purple 同值"],
+  ["Magenta", "#c71fa0", "#ff3dcc", "与语义色板 magenta 数值不同"],
+  ["Cyan", "#0e8a9e", "#47def0", "与 cyan 同值"],
+  ["White", "#16232e", "#ffe5b4", "与 ink(cream)同值,承担默认文字角色"],
+];
+const ansiBright = [
+  ["BrightBlack", "#8b98a2", "#6b7f8f", "与 dim 同值"],
+  ["BrightRed", "#e5453a", "#ff8e8e", null],
+  ["BrightGreen", "#0fa968", "#4ae5a5", null],
+  ["BrightYellow", "#8a7a12", "#fff3b0", "刻意区别于 gold,见页头硬性裁决"],
+  ["BrightBlue", "#7c5ce8", "#b5a5ff", "实为紫色调"],
+  ["BrightMagenta", "#d82bb0", "#ff6ddc", null],
+  ["BrightCyan", "#0aa0b8", "#87eef8", null],
+  ["BrightWhite", "#0b131a", "#fff5d4", "比 ink 更深,呼应暗色版「比 White 更亮」的定位"],
+];
+
+function hexToRgb(hex) {
+  if (hex.startsWith("rgba")) return hex;
+  const h = hex.replace("#", "");
+  const r = parseInt(h.substring(0, 2), 16);
+  const g = parseInt(h.substring(2, 4), 16);
+  const b = parseInt(h.substring(4, 6), 16);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+function makeSwatch(name, hex, darkHex, usage, flagGold) {
+  const el = document.createElement("div");
+  el.className = "swatch";
+  el.innerHTML = `
+    <div class="chip" style="background:${hex}"></div>
+    <div class="meta">
+      <div class="name">${name}${flagGold ? '<span class="gold-flag">专属</span>' : ""}</div>
+      <div class="hex">${hex}</div>
+      <div class="rgb">${hexToRgb(hex)}</div>
+      ${usage ? `<div class="usage">${usage}</div>` : ""}
+      <div class="dark-ref">${darkHex}</div>
+    </div>
+    <div class="copied">已复制</div>
+  `;
+  el.addEventListener("click", () => {
+    navigator.clipboard?.writeText(hex).catch(() => {});
+    el.classList.add("copied");
+    setTimeout(() => el.classList.remove("copied"), 900);
+  });
+  return el;
+}
+
+function fill(id, items, opts) {
+  const container = document.getElementById(id);
+  items.forEach(([name, hex, darkHex, usage]) => {
+    container.appendChild(makeSwatch(name, hex, darkHex, usage, opts && opts.flagGold && name === "gold"));
+  });
+}
+
+fill("grp-surface", semantic.surface);
+fill("grp-text", semantic.text);
+fill("grp-accent", semantic.accent, { flagGold: true });
+fill("grp-chrome", semantic.chrome);
+fill("grp-ansi-normal", ansiNormal);
+fill("grp-ansi-bright", ansiBright);
+</script>
+</body>
+</html>

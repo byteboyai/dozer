@@ -2,6 +2,8 @@
 //! 产品的取值——组件内部一律读 `current()`,不再有硬编码色值常量。
 
 use iced_widget::core::Color;
+use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::sync::RwLock;
 
 const fn c(r: u8, g: u8, b: u8) -> Color {
@@ -69,6 +71,42 @@ impl ColorTokens {
             desc_bg: c(0x15, 0x26, 0x30),
         }
     }
+
+    /// 逐一对应 `design/浅色配色表.html` 的语义色板提案表(23 项),与
+    /// `byteboy2077()` 同源中性色相(navy `bg` #0a0e16)提亮而来，不用
+    /// 暖白/暖灰，避免与 `gold`(甲方动作专属)"暖调即品牌"的印象冲突。
+    pub const fn byteboy2077_light() -> Self {
+        Self {
+            bg: c(0xf1, 0xf4, 0xf6),
+            panel: c(0xf8, 0xfa, 0xfb),
+            term_bg: c(0xfc, 0xfd, 0xfe),
+            card: c(0xff, 0xff, 0xff),
+            border: c(0xd7, 0xdf, 0xe5),
+            cream: c(0x16, 0x23, 0x2e),
+            body: c(0x4c, 0x5c, 0x68),
+            dim: c(0x8b, 0x98, 0xa2),
+            gold: c(0xad, 0x7d, 0x0a),
+            cyan: c(0x0e, 0x8a, 0x9e),
+            green: c(0x12, 0x8f, 0x5a),
+            purple: c(0x6a, 0x4f, 0xdb),
+            red: c(0xd1, 0x48, 0x3f),
+            ignored: c(0x8b, 0x98, 0xa2),
+            orange: c(0xc9, 0x7a, 0x1b),
+            magenta: c(0xc9, 0x3b, 0x93),
+            blue: c(0x2f, 0x6f, 0xe0),
+            lime: c(0x6f, 0xa8, 0x13),
+            scrim: Color {
+                r: 0x0a as f32 / 255.0,
+                g: 0x0e as f32 / 255.0,
+                b: 0x14 as f32 / 255.0,
+                a: 0.4,
+            },
+            tab_active_border: c(0xc9, 0xa2, 0x27),
+            tab_active_bg: c(0xea, 0xef, 0xf2),
+            tab_hover: c(0xea, 0xef, 0xf2),
+            desc_bg: c(0xea, 0xef, 0xf2),
+        }
+    }
 }
 
 static CURRENT: RwLock<ColorTokens> = RwLock::new(ColorTokens::byteboy2077());
@@ -81,6 +119,68 @@ pub fn current() -> ColorTokens {
 /// 整体替换当前颜色 token——供未来 ByteBoy 产品换主题用,组件代码不用改。
 pub fn set_theme(tokens: ColorTokens) {
     *CURRENT.write().expect("byteui color RwLock poisoned") = tokens;
+}
+
+/// 当前生效的命名配色方案。`set_theme` 能换任意 `ColorTokens`，但不知道
+/// 换上的是哪份"名字"；`term_model.rs` 的 ANSI16 终端色板和设置弹窗都需要
+/// 一个"当前是深色还是浅色"的单一真相源，所以单独用这个枚举记名字。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ColorScheme {
+    #[serde(rename = "dark")]
+    Dark,
+    #[serde(rename = "light")]
+    Light,
+}
+
+static CURRENT_SCHEME: RwLock<ColorScheme> = RwLock::new(ColorScheme::Dark);
+
+/// 当前生效的命名配色方案(默认 `Dark`)。
+pub fn current_scheme() -> ColorScheme {
+    *CURRENT_SCHEME
+        .read()
+        .expect("byteui color scheme RwLock poisoned")
+}
+
+/// 按命名方案整体切换 token(同时更新 `current_scheme()`)。设置弹窗选中
+/// 即调这个,立即全局生效,不需要重启。
+pub fn set_scheme(scheme: ColorScheme) {
+    set_theme(match scheme {
+        ColorScheme::Dark => ColorTokens::byteboy2077(),
+        ColorScheme::Light => ColorTokens::byteboy2077_light(),
+    });
+    *CURRENT_SCHEME
+        .write()
+        .expect("byteui color scheme RwLock poisoned") = scheme;
+}
+
+#[derive(Serialize, Deserialize)]
+struct PersistedScheme {
+    scheme: ColorScheme,
+}
+
+/// 把当前方案落盘到调用方指定的路径,供下次启动 `init_scheme` 读回。
+/// (`byteui` 不内置任何 Dozer 专属路径约定,同 `icon_size::persist_scale`。)
+pub fn persist_scheme(path: &Path) {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let s = serde_json::to_string_pretty(&PersistedScheme {
+        scheme: current_scheme(),
+    })
+    .unwrap_or_default();
+    let _ = std::fs::write(path, s);
+}
+
+/// 启动时把上次退出前落盘的方案读回并应用。文件缺失/损坏都静默保持当前
+/// 默认值(同 `icon_size::init_scale` 的"任何错误都不阻断主流程"定位)。
+pub fn init_scheme(path: &Path) {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(p) = serde_json::from_str::<PersistedScheme>(&raw) else {
+        return;
+    };
+    set_scheme(p.scheme);
 }
 
 /// 两色按 `t`(0..=1)线性插值。`t` 超出 [0,1] 不外夹,调用方保证区间。
@@ -96,6 +196,17 @@ pub fn mix(a: Color, b: Color, t: f32) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// `CURRENT`/`CURRENT_SCHEME` 是进程级共享 static，cargo test 默认多线程
+    /// 并跑；不加锁的话一个测试的"设置再断言"窗口会被另一线程的写入插进来
+    /// (已实测：新增的 scheme 测试上线当天就在本地跑出过这种交叉污染)。
+    /// 所有读/写这两个 static 的测试都先拿这把锁，序列化执行。
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     #[test]
     fn byteboy2077_bg_matches_hex() {
@@ -107,12 +218,15 @@ mod tests {
 
     #[test]
     fn current_defaults_to_byteboy2077() {
+        let _guard = lock();
+        set_theme(ColorTokens::byteboy2077());
         let c = current();
         assert_eq!(c.gold, ColorTokens::byteboy2077().gold);
     }
 
     #[test]
     fn set_theme_replaces_current_and_is_visible_globally() {
+        let _guard = lock();
         let mut custom = ColorTokens::byteboy2077();
         custom.gold = Color::from_rgb8(0x00, 0x00, 0x00);
         set_theme(custom);
@@ -127,5 +241,65 @@ mod tests {
         let b = Color::from_rgb8(255, 255, 255);
         assert_eq!(mix(a, b, 0.0), a);
         assert_eq!(mix(a, b, 1.0), b);
+    }
+
+    /// 防漂移锚：`byteboy2077_light()` 的取值必须和 `design/浅色配色表.html`
+    /// 的语义色板提案表逐项一致。
+    #[test]
+    fn byteboy2077_light_bg_matches_hex() {
+        let t = ColorTokens::byteboy2077_light();
+        assert_eq!(t.bg, Color::from_rgb8(0xf1, 0xf4, 0xf6));
+        assert_eq!(t.gold, Color::from_rgb8(0xad, 0x7d, 0x0a));
+        assert_eq!(t.cream, Color::from_rgb8(0x16, 0x23, 0x2e));
+    }
+
+    #[test]
+    fn current_scheme_defaults_to_dark() {
+        let _guard = lock();
+        set_scheme(ColorScheme::Dark);
+        assert_eq!(current_scheme(), ColorScheme::Dark);
+    }
+
+    #[test]
+    fn set_scheme_switches_tokens_and_reports_current_scheme() {
+        let _guard = lock();
+        set_scheme(ColorScheme::Light);
+        assert_eq!(current_scheme(), ColorScheme::Light);
+        assert_eq!(current().bg, ColorTokens::byteboy2077_light().bg);
+        // 复原，避免污染同进程里跑在本测试之后的其它测试。
+        set_scheme(ColorScheme::Dark);
+        assert_eq!(current().bg, ColorTokens::byteboy2077().bg);
+    }
+
+    #[test]
+    fn persist_scheme_and_init_scheme_roundtrip_via_explicit_path() {
+        let _guard = lock();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("color_theme.json");
+
+        set_scheme(ColorScheme::Light);
+        persist_scheme(&path);
+        set_scheme(ColorScheme::Dark);
+
+        init_scheme(&path);
+        assert_eq!(current_scheme(), ColorScheme::Light);
+
+        // 复原，避免污染同进程里跑在本测试之后的其它测试。
+        set_scheme(ColorScheme::Dark);
+    }
+
+    #[test]
+    fn init_scheme_with_missing_or_corrupted_file_keeps_current_scheme() {
+        let _guard = lock();
+        set_scheme(ColorScheme::Dark);
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope.json");
+        init_scheme(&missing);
+        assert_eq!(current_scheme(), ColorScheme::Dark);
+
+        let bad = dir.path().join("color_theme.json");
+        std::fs::write(&bad, "not json").unwrap();
+        init_scheme(&bad);
+        assert_eq!(current_scheme(), ColorScheme::Dark);
     }
 }

@@ -15,6 +15,12 @@ pub(crate) fn ui_scale_path() -> PathBuf {
     dozer_core::paths::config_dir().join("ui_scale.json")
 }
 
+/// `byteui::theme::color` 的 `init_scheme`/`persist_scheme` 需要调用方传入
+/// 落盘路径,同 `ui_scale_path` 的定位。
+pub(crate) fn color_theme_path() -> PathBuf {
+    dozer_core::paths::config_dir().join("color_theme.json")
+}
+
 const WORKSPACE_JSON: &str = include_str!("../assets/theme/workspace.json");
 
 #[derive(serde::Deserialize)]

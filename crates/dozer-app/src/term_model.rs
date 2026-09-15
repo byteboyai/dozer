@@ -15,9 +15,10 @@ use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Processor};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// ANSI 16 色的主题 RGB 表，下标与 `NamedColor` 的判别值（0..=15）一致：
-/// Black/Red/Green/Yellow/Blue/Magenta/Cyan/White，随后是对应的 Bright 变体。
-const ANSI16: [(u8, u8, u8); 16] = [
+/// ANSI 16 色的深色主题 RGB 表，下标与 `NamedColor` 的判别值（0..=15）
+/// 一致：Black/Red/Green/Yellow/Blue/Magenta/Cyan/White，随后是对应的
+/// Bright 变体。
+const ANSI16_DARK: [(u8, u8, u8); 16] = [
     (0x08, 0x14, 0x1d), // Black
     (0xFF, 0x6E, 0x6E), // Red
     (0x1A, 0xD5, 0x85), // Green
@@ -36,20 +37,59 @@ const ANSI16: [(u8, u8, u8); 16] = [
     (0xFF, 0xF5, 0xD4), // BrightWhite
 ];
 
-/// 默认前景色（无显式 SGR 时的字符颜色）。
-const DEFAULT_FG: (u8, u8, u8) = (0x9A, 0xB4, 0xC4);
+/// ANSI 16 色的浅色主题 RGB 表，逐项对应 `design/浅色配色表.html` 的终端
+/// 色板提案表。下标含义同 `ANSI16_DARK`。
+const ANSI16_LIGHT: [(u8, u8, u8); 16] = [
+    (0xfc, 0xfd, 0xfe), // Black ≈ term_bg
+    (0xd1, 0x48, 0x3f), // Red
+    (0x12, 0x8f, 0x5a), // Green
+    (0xad, 0x7d, 0x0a), // Yellow == gold
+    (0x6a, 0x4f, 0xdb), // Blue(实为紫色调)
+    (0xc7, 0x1f, 0xa0), // Magenta
+    (0x0e, 0x8a, 0x9e), // Cyan
+    (0x16, 0x23, 0x2e), // White == ink
+    (0x8b, 0x98, 0xa2), // BrightBlack
+    (0xe5, 0x45, 0x3a), // BrightRed
+    (0x0f, 0xa9, 0x68), // BrightGreen
+    (0x8a, 0x7a, 0x12), // BrightYellow(刻意区别于 gold)
+    (0x7c, 0x5c, 0xe8), // BrightBlue
+    (0xd8, 0x2b, 0xb0), // BrightMagenta
+    (0x0a, 0xa0, 0xb8), // BrightCyan
+    (0x0b, 0x13, 0x1a), // BrightWhite
+];
+
+/// 当前生效的 ANSI16 表：随 `byteui::theme::color::current_scheme()`
+/// 切换，不需要重开终端。
+fn ansi16() -> &'static [(u8, u8, u8); 16] {
+    match byteui::theme::color::current_scheme() {
+        byteui::theme::color::ColorScheme::Dark => &ANSI16_DARK,
+        byteui::theme::color::ColorScheme::Light => &ANSI16_LIGHT,
+    }
+}
+
+/// 默认前景色（无显式 SGR 时的字符颜色），深色版数值。
+const DEFAULT_FG_DARK: (u8, u8, u8) = (0x9A, 0xB4, 0xC4);
+/// 默认前景色，浅色版数值（== 语义色板 `body`）。
+const DEFAULT_FG_LIGHT: (u8, u8, u8) = (0x4c, 0x5c, 0x68);
+
+fn default_fg() -> (u8, u8, u8) {
+    match byteui::theme::color::current_scheme() {
+        byteui::theme::color::ColorScheme::Dark => DEFAULT_FG_DARK,
+        byteui::theme::color::ColorScheme::Light => DEFAULT_FG_LIGHT,
+    }
+}
 
 /// 终端默认前景色（无显式 SGR 时的字符颜色）。供预览编辑器把语法高亮
 /// token 锚定到终端同款观感时取用（见 `preview::dozer_syntax_theme`）。
 pub(crate) fn default_fg_rgb() -> (u8, u8, u8) {
-    DEFAULT_FG
+    default_fg()
 }
 
 /// ANSI 16 色主题的第 `idx` 个 RGB（`0..16`，下标即 `NamedColor`）。供
 /// 预览编辑器把语法高亮 token 锚定到终端色板时取用（见
 /// `preview::dozer_syntax_theme`）。越界返回 `None`。
 pub(crate) fn ansi16_color(idx: usize) -> Option<(u8, u8, u8)> {
-    ANSI16.get(idx).copied()
+    ansi16().get(idx).copied()
 }
 
 /// 渲染层唯一数据源：一个终端网格格子。刻意只含原始值（`char`/`(u8,u8,u8)`），
@@ -101,12 +141,13 @@ impl Dimensions for TermSize {
 /// （Cursor/Dim*/BrightForeground 等）主题未定义，退回默认前景色。
 fn named_color_rgb(name: NamedColor) -> Option<(u8, u8, u8)> {
     let idx = name as usize;
-    if idx < ANSI16.len() {
-        return Some(ANSI16[idx]);
+    let table = ansi16();
+    if idx < table.len() {
+        return Some(table[idx]);
     }
     match name {
         NamedColor::Background => None,
-        _ => Some(DEFAULT_FG),
+        _ => Some(default_fg()),
     }
 }
 
@@ -115,7 +156,7 @@ fn named_color_rgb(name: NamedColor) -> Option<(u8, u8, u8)> {
 /// 触发这一段，仅为完整性保留标准 xterm 映射。
 fn indexed_to_rgb(idx: u8) -> (u8, u8, u8) {
     match idx {
-        0..=15 => ANSI16[idx as usize],
+        0..=15 => ansi16()[idx as usize],
         16..=231 => {
             let i = idx - 16;
             let r = i / 36;
@@ -133,7 +174,7 @@ fn indexed_to_rgb(idx: u8) -> (u8, u8, u8) {
 
 fn fg_to_rgb(color: AnsiColor) -> (u8, u8, u8) {
     match color {
-        AnsiColor::Named(name) => named_color_rgb(name).unwrap_or(DEFAULT_FG),
+        AnsiColor::Named(name) => named_color_rgb(name).unwrap_or_else(default_fg),
         AnsiColor::Spec(rgb) => (rgb.r, rgb.g, rgb.b),
         AnsiColor::Indexed(idx) => indexed_to_rgb(idx),
     }
@@ -371,6 +412,16 @@ impl TerminalModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// `byteui::theme::color` 的当前配色方案是进程级共享 static，见
+    /// `byteui/src/theme/color.rs` 测试模块同名锁的注释。这里只有下面两个
+    /// 主题相关测试会碰它，加锁避免它们互相插队。
+    static SCHEME_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_scheme() -> std::sync::MutexGuard<'static, ()> {
+        SCHEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     fn line_text(cells: &[Cell]) -> String {
         cells
@@ -628,5 +679,28 @@ mod tests {
         assert!(t.app_cursor_mode());
         let _ = t.feed(b"\x1b[?1l");
         assert!(!t.app_cursor_mode());
+    }
+
+    /// 防漂移锚：浅色 ANSI16 必须和 `design/浅色配色表.html` 的终端色板
+    /// 提案表逐项一致，且切换随 `byteui::theme::color::current_scheme()`
+    /// 立即生效，不需要重开终端。
+    #[test]
+    fn ansi16_color_reflects_light_scheme() {
+        let _guard = lock_scheme();
+        byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Light);
+        assert_eq!(ansi16_color(0), Some((0xfc, 0xfd, 0xfe))); // Black ≈ term_bg
+        assert_eq!(ansi16_color(1), Some((0xd1, 0x48, 0x3f))); // Red
+        assert_eq!(ansi16_color(3), Some((0xad, 0x7d, 0x0a))); // Yellow == gold
+        byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Dark);
+        assert_eq!(ansi16_color(0), Some((0x08, 0x14, 0x1d)));
+    }
+
+    #[test]
+    fn default_fg_reflects_light_scheme() {
+        let _guard = lock_scheme();
+        byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Light);
+        assert_eq!(default_fg_rgb(), (0x4c, 0x5c, 0x68));
+        byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Dark);
+        assert_eq!(default_fg_rgb(), (0x9A, 0xB4, 0xC4));
     }
 }

@@ -23,6 +23,7 @@ mod project;
 mod project_meta;
 mod project_scaffold;
 mod rail;
+mod settings;
 mod tab_widget;
 mod term_model;
 mod term_view;
@@ -665,6 +666,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
     // 再把上次退出前存盘的 UI scale 读回，确保首帧几何/布局按退出时的缩放排布
     // （Ctrl +/- 改过的 scale 由 `icon_size::persist_scale` 在每次缩放后落盘）。
     byteui::theme::icon_size::init_scale(&crate::theme::ui_scale_path());
+    // 同理把上次选的配色方案（深色/浅色）读回，确保首帧就是退出时的主题
+    // （设置弹窗选中即调 `color::persist_scheme` 落盘）。
+    byteui::theme::color::init_scheme(&crate::theme::color_theme_path());
 
     // 注册 sqlx `Any` 驱动的具体实现(Postgres/MySQL/SQLite),必须在第一次
     // `sqlx::AnyPool::connect` 之前跑一次(数据库面板连接测试用)。

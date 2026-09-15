@@ -29,6 +29,7 @@ use crate::open_projects;
 use crate::panel_layouts;
 use crate::preview::WebviewSpec;
 use crate::rail;
+use crate::settings;
 use crate::tab_widget;
 use crate::term_view;
 use crate::terminal;
@@ -2139,6 +2140,18 @@ pub enum Message {
     /// winit 的根本 `MouseInput{Released}` 收不到,`TabDragEnd` 就永不触发,
     /// 拖拽状态会残留、变成"松开还能继续拖"。这条消息统一兜底清掉。
     WebViewMouseUp,
+    /// 顶栏设置齿轮:开主题设置弹窗。App 级状态(不挂 `Workspace`)——
+    /// 首页/空工作区/项目工作区三种 `view()` 分支都画顶栏,弹窗必须在三者
+    /// 之上都能弹出,见 `App::view` 里 `view_inner` 的外层叠加。
+    SettingsOpen,
+    /// 设置弹窗:点遮罩/关闭按钮收起,不需要"取消"语义——选中主题即时生效
+    /// 并已落盘,收起只是隐藏浮层。
+    SettingsClose,
+    /// 设置弹窗:选中一个配色方案,立即调
+    /// `byteui::theme::color::set_scheme` 全局生效并调 `persist_scheme`
+    /// 落盘(跨重启记住选择,同 `ZoomIn`/`ZoomOut` 之于 `icon_size::persist_scale`
+    /// 的模式)。
+    SettingsThemeSelected(byteui::theme::color::ColorScheme),
 }
 
 /// Project 面板「项目文档 / Agent 记忆」虚拟链接行的右键菜单浮层状态:
@@ -2292,6 +2305,10 @@ pub struct App {
     /// 页签之后),没有固定 padding 能蒙对,改用 `todo::set_calendar_anchor`
     /// /`set_dispatch_anchor` 同款"记下点击时的 `App::last_cursor`"手法。
     pub(crate) project_add_menu_anchor: (f32, f32),
+    /// 顶栏设置齿轮的主题设置弹窗是否打开。挂在 `App` 而不是某个
+    /// `Workspace` 上——设置按钮本身就在顶栏,不属于任何单个项目,同
+    /// `project_add_menu_open` 的归属考量。
+    pub(crate) settings_modal_open: bool,
     /// 全局 UI 缩放(⌘/Ctrl +/-)改变后,预览/浏览器 webview 的
     /// `WebView::zoom` 也要同步——但 `App` 不持有 webview 句柄,只能
     /// 置这个标记,由 main.rs 轮询 `take_pending_preview_zoom` 后逐个
@@ -2685,6 +2702,7 @@ impl App {
             pending_zoom_toggle: false,
             project_add_menu_open: false,
             project_add_menu_anchor: (0.0, 0.0),
+            settings_modal_open: false,
             pending_preview_zoom: false,
             window_size: byteui::theme::geometry::initial_window_size(),
             last_cursor: (0.0, 0.0),
@@ -6045,6 +6063,16 @@ impl App {
                 self.sync_terminal_grid();
                 self.pending_preview_zoom = true;
             }
+            Message::SettingsOpen => {
+                self.settings_modal_open = true;
+            }
+            Message::SettingsClose => {
+                self.settings_modal_open = false;
+            }
+            Message::SettingsThemeSelected(scheme) => {
+                byteui::theme::color::set_scheme(scheme);
+                byteui::theme::color::persist_scheme(&crate::theme::color_theme_path());
+            }
             // WebViewFocused 只在 main.rs 的 dispatch 里设 pending_focus,
             // App::update 无需处理。
             Message::WebViewFocused => {}
@@ -8064,6 +8092,27 @@ impl App {
     }
 
     pub fn view(
+        &self,
+    ) -> iced_widget::core::Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+        let content = self.view_inner();
+        // 设置弹窗是 App 级浮层(见 `settings_modal_open` 字段文档),必须能
+        // 盖在首页/空工作区/项目工作区三种 `view_inner` 分支之上——所以放在
+        // 最外层统一叠加,而不是塞进 `view_inner` 内部某个分支。
+        if self.settings_modal_open {
+            stack![
+                content,
+                crate::dialog::scrim(Message::SettingsClose),
+                settings::settings_modal(self.window_size.0)
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        } else {
+            content
+        }
+    }
+
+    fn view_inner(
         &self,
     ) -> iced_widget::core::Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
         // 顶栏先画:它是外壳的一部分(项目页签行 + "＋"就在上面),一个项目都
