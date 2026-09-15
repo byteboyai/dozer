@@ -677,6 +677,19 @@ pub fn list_pane<'a>(
     )
 }
 
+/// agent 筛选栏可收纳的最小宽度,同 `project::footer_min_width` 的估算
+/// 口径:拖 `Divider::UsageSplit` 时低于此宽度直接收起(见
+/// `apply_column_drag` 该分支)。这栏没有 footer,只有头部——`header` 的
+/// 图标 + "Agent" 标题(`home_panel_head` 用 `homespace_font::subtitle`,
+/// 拉丁字母按每字 0.6em 估)+ 头部自己的左右 padding(12×2,见下方
+/// `agent_filter_sidebar` 的 `header`)。
+pub(crate) fn filter_sidebar_min_width() -> f32 {
+    let icon = byteui::theme::icon_size::row();
+    let label_px = theme::homespace_font::subtitle() as f32;
+    let title = label_px * "Agent".chars().count() as f32 * 0.6;
+    icon + 8.0 + title + 12.0 * 2.0
+}
+
 /// agent 筛选栏(2026-08-29 参照 Todo 面板"任务分类"列表重新实现):
 /// 头部(`home_panel_head` 图标+标题+分割线,跟 Todo 左栏头部同一套)+
 /// 竖排导航列表,每项 图标+名称+右侧计数,跟 `todo_category_button` 逐字段

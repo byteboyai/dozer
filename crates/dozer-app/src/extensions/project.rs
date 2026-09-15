@@ -1008,6 +1008,21 @@ fn footer_button_label<'a>(
     .into()
 }
 
+/// 信息面板可收纳的最小宽度:拖拽 `Divider::ProjectSplit` 时,低于此宽度
+/// 应直接把信息面板收起(等同点一次 footer 上方的收起按钮),而不是把下面
+/// `project_footer_bar` 的「修复项目/删除项目」两个按钮挤到显示不全。
+/// 数值按 `footer_button_label`/`project_footer_bar` 自身的间距/内边距公式
+/// 推出,不是拍脑袋常量——改这两个函数的图标/文案/间距/内边距时要跟着调:
+/// 单按钮 ≈ 图标(`icon_size::row`) + 图标文字间距(6) + 四字 CJK 文案
+/// (按 `font::label` 每字约 1em 估) + 按钮左右 padding(8×2);两个按钮
+/// + 按钮间 spacing(6) + 外层 footer container 左右 padding(8×2)。
+pub(crate) fn footer_min_width() -> f32 {
+    let icon = byteui::theme::icon_size::row();
+    let label_px = byteui::theme::font::label() as f32;
+    let button_w = icon + 6.0 + label_px * 4.0 + 16.0;
+    button_w * 2.0 + 6.0 + 16.0
+}
+
 fn project_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let repair = button(footer_button_label(
         icons::IconKind::BriefcaseMedical,

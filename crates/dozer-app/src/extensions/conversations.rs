@@ -232,6 +232,21 @@ pub fn spawn_refresh(
     });
 }
 
+/// 会话列表可收纳的最小宽度,同 `project::footer_min_width` 的估算口径:
+/// 拖 `Divider::RightPairSplit`(`right_view == Conversations` 时)低于
+/// 此宽度直接收起(见 `apply_column_drag` 该分支)。按 `footer_bar` 未筛选
+/// 态(标签"全部",2 字)估:图标 + 文案 + 展开箭头按钮(`padding(6)` 的
+/// 方形图标按钮)、三段间 `spacing(6)`,外层 padding 用
+/// `conversation_list_pane().padding`(`view` 顶层用的同一份)。筛选到某个
+/// agent 名后标签可能变长,这里只保底不筛选态,近似值。
+pub(crate) fn list_min_width() -> f32 {
+    let icon = byteui::theme::icon_size::row();
+    let label_px = byteui::theme::font::label() as f32;
+    let switch = icon + 12.0;
+    let region = theme::region::conversation_list_pane();
+    icon + label_px * 2.0 + switch + 6.0 * 3.0 + region.padding.left + region.padding.right
+}
+
 /// 会话列表底部 agent 筛选栏:样式对齐文件树面板的分支切换下拉——左边
 /// 图标 + 当前筛选(agent 名称,不筛选时"全部"),右边一个展开/收起下拉
 /// 的箭头按钮。`agents` 为空(没有会话数据)时不渲染整条 bar。

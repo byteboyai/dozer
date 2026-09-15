@@ -2340,6 +2340,20 @@ pub fn delete_confirm_popup<'a>(
         .into()
 }
 
+/// 左栏(schema 树)可收纳的最小宽度,同 `project::footer_min_width` 的
+/// 估算口径:拖 `Divider::DatabaseSplit` 时低于此宽度直接收起(见
+/// `apply_column_drag` 该分支)。按 `database_footer_bar` 两个按钮
+/// (「管理驱动」4 字 +「新增数据源」5 字,各 padding [4,8])+ 外层容器
+/// 左右 padding(`project_pane` 同款)估。
+pub(crate) fn footer_min_width() -> f32 {
+    let icon = byteui::theme::icon_size::row();
+    let label_px = byteui::theme::font::label() as f32;
+    let manage = icon + 6.0 + label_px * 4.0 + 16.0;
+    let add = icon + 6.0 + label_px * 5.0 + 16.0;
+    let pp = crate::theme::region::project_pane().padding;
+    manage + 6.0 + add + pp.left + pp.right
+}
+
 /// 数据库面板底部 footer-bar:1px `BORDER` 分隔线 + `padding([6, 8])` 容器,
 /// 结构照抄 `ssh.rs::ssh_footer_bar`(同一产品语言——"管理驱动"+"新增数据源"
 /// 两个按钮固定在面板最下方,不随数据源列表滚动)。两者都是非破坏性操作,
