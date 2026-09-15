@@ -1614,6 +1614,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 || app.database_form_open()
                 || app.files_move_confirm_open()
                 || app.project_name_focused()
+                || app.project_description_focused()
                 || app.query_focused()
             {
                 return false;
@@ -3104,6 +3105,20 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                         false
                                     };
 
+                                // 项目描述编辑框:同 `name_edit_focused`,渲染在
+                                // `PanelKind::Project`,每帧查真实焦点态。
+                                let description_edit_focused =
+                                    if matches!(app.left_view(), crate::app::PanelKind::Project) {
+                                        run_operate(
+                                            &mut interface,
+                                            renderer,
+                                            &mut extensions::project::CaptureDescriptionEditFocus,
+                                        );
+                                        extensions::project::take_description_edit_focused()
+                                    } else {
+                                        false
+                                    };
+
                                 // 右键搜索弹窗查询框(Stage 6):全局浮层,不挂靠
                                 // 任何 `left_view`,gating 条件用 `search_popup_open`。
                                 let query_focused = if app.search_popup_open() {
@@ -3299,6 +3314,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                                 app.set_category_rename_focused(category_rename_focused);
                                 app.set_detail_reply_focused(detail_reply_focused);
                                 app.set_project_name_focused(name_edit_focused);
+                                app.set_project_description_focused(description_edit_focused);
                                 app.set_query_focused(query_focused);
                                 app.set_conversation_search_focused(conversation_search_focused);
                                 app.set_git_log_search_focused(git_log_search_focused);

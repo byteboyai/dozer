@@ -3385,6 +3385,23 @@ impl App {
         ws.project_panel.set_name_edit_focused_flag(focused);
     }
 
+    /// 项目信息面板描述编辑框是否持有 iced 真实焦点(main.rs 原生放行闸门用)。
+    pub fn project_description_focused(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.project_panel.description_edit_focused())
+    }
+
+    /// 每帧渲染循环调用:把 `CaptureDescriptionEditFocus` 问到的真实焦点态
+    /// 写进当前工作区(落盘走既有的 `blur_inputs`→
+    /// `submit_description_edit_on_blur` 鼠标点击失焦路径,这里只负责给
+    /// main.rs 键盘路由闸门提供信号,同 `set_project_name_focused` 但不需要
+    /// 重复一份落盘判断)。
+    pub fn set_project_description_focused(&mut self, focused: bool) {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.project_panel.set_description_edit_focused_flag(focused);
+        }
+    }
+
     /// Todo 面板搜索框是否持有 iced 真实焦点(main.rs 键盘路由用)。
     pub fn todo_search_focused(&self) -> bool {
         self.active_workspace()
