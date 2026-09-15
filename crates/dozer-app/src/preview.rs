@@ -47,9 +47,12 @@ impl std::fmt::Debug for PreviewTab {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TabKind {
     File(PathBuf),
-    /// 关掉最后一个文件 tab 后自动补的空白 tab(内容区显示 Dozer 品牌标,
-    /// 见 `workspace.rs::preview_pane_for`)——不进 `desired_webviews()`
-    /// 期望清单,没有 wry 页面,纯 iced 原生渲染。
+    /// 预览面板固定的"空白"占位 tab(内容区显示 Dozer 品牌标,见
+    /// `workspace.rs::preview_pane_for`)——恒为 tab 列表的**第 0 项**、不可
+    /// 关闭、不可拖换位,`active_idx()==0` 即代表"当前没有可预览文件、停在
+    /// 空白页"这个落点。不进 `desired_webviews()` 期望清单,没有 wry 页面,
+    /// 纯 iced 原生渲染。这套形态对齐 SSH/数据库面板 tab 条最前面那个固定
+    /// "空白"占位 tab(`app.rs::ssh_tab_bar`/`extensions::database`)。
     Blank,
 }
 
@@ -256,7 +259,6 @@ pub struct FindState {
     pub query_focused: bool,
 }
 
-#[derive(Default)]
 pub struct PreviewPane {
     tabs: Vec<PreviewTab>,
     active: usize,
@@ -284,6 +286,36 @@ pub struct PreviewPane {
     pending_editor_reveal_focus: bool,
     /// 文件内搜索(⌘F)会话,`Some` 表示条已显示;Files / Project 各一份,独立。
     find: Option<FindState>,
+}
+
+impl Default for PreviewPane {
+    fn default() -> Self {
+        // 面板恒定携带一个第 0 项的 `TabKind::Blank` 占位 tab(见该变体文档):
+        // 从没有过 tab 的初始态、以及项目切换清空后,都停在它上面。`next_id`
+        // 从占位 tab 的 id 之后续,同一个 `PreviewPane` 生命周期内 id 不重复。
+        Self {
+            tabs: vec![placeholder_tab(0)],
+            active: 0,
+            next_id: 1,
+            pending_editor_focus: false,
+            pending_find_focus: false,
+            pending_editor_reveal_focus: false,
+            find: None,
+        }
+    }
+}
+
+/// 构造一个固定的第 0 项 `TabKind::Blank` 占位 tab(不可关闭)。`Default`
+/// 与 `clear_all`(项目切换)都靠它把面板复位成"只剩空白页"这个恒定形态。
+fn placeholder_tab(id: usize) -> PreviewTab {
+    PreviewTab {
+        id,
+        kind: TabKind::Blank,
+        title: "空白".into(),
+        reload_nonce: 0,
+        editor: None,
+        dirty: false,
+    }
 }
 
 /// Find 输入框的稳定 `widget::Id`。Files / Project 两个预览面板各渲染一根
@@ -431,6 +463,9 @@ impl PreviewPane {
         self.push_tab(TabKind::File(path), title)
     }
 
+    /// 追加一个真实 tab(占位 `Blank` 恒在 index 0,这里只用来加 `File`)。
+    /// 文件 tab 一律追加在末尾,占位 tab 永远留在最前面,形态对齐 SSH/数据库
+    /// 面板 tab 条最前面那个固定"空白"占位。
     fn push_tab(&mut self, kind: TabKind, title: String) -> usize {
         let id = self.next_id;
         self.next_id += 1;
@@ -463,12 +498,14 @@ impl PreviewPane {
         id
     }
 
-    /// 当前激活 tab 若是文件(webview)则返回其 id(=webview 池的 key)。
-    /// 原生渲染 tab(有 `editor`)返回 `None`——它不进 webview 池。
+    /// 当前激活 tab 若是**文件**且走 wry 路径则返回其 id(=webview 池的 key)。
+    /// 原生渲染 tab(有 `editor`)与 `Blank` 占位都返回 `None`——它们不进
+    /// webview 池(`desired_webviews()` 同样跳过这两类),返回一个池里并不
+    /// 存在的 id 会把"当前激活的是不是真 webview"这个问题答错。
     pub fn active_webview_id(&self) -> Option<usize> {
         self.tabs
             .get(self.active)
-            .filter(|t| t.editor.is_none())
+            .filter(|t| t.editor.is_none() && matches!(t.kind, TabKind::File(_)))
             .map(|t| t.id)
     }
     /// 手动点 tab / 打开时切到已存在 tab。切到**另一个**文件 tab 时,若目标
@@ -492,46 +529,44 @@ impl PreviewPane {
         self.cull_stale_find();
     }
 
-    /// 项目切换清理专用:真清空,不补 `Blank` 占位 tab——`close()` 的自动
-    /// 补位是给"用户手动关到没了"这个交互场景用的,项目切换是"整个 pane
-    /// 要换主人",旧项目的空白占位 tab 没必要带过去。调用方(`Workspace::
-    /// close_all_tabs_for_switch`)原来是 `while !tabs().is_empty() {
-    /// close(0) }`,`close()` 加了自动补位后那个循环会死循环,所以专门
-    /// 开一个不走补位逻辑的清空方法。
+    /// 项目切换清理专用:只留下一个 `Blank` 占位 tab(§对 `Default` 的同一
+    /// 不变式)。调用方(`Workspace::close_all_tabs_for_switch`)拿到的这份
+    /// pane 要换主人,旧项目的文件 tab 全丢弃,但"空白占位恒在第 0 项"这条
+    /// 不变式不因换项目而破——落回空白页,而不是一个没有占位 tab 的空列表。
     pub fn clear_all(&mut self) {
         self.tabs.clear();
+        self.tabs.push(placeholder_tab(self.next_id));
+        self.next_id += 1;
         self.active = 0;
         // 整个 pane 换主人/清空:Find 必然失配,直接丢。
         self.find = None;
     }
 
-    /// 关掉一个 tab。若这是最后一个,不留空——立刻补一个 `TabKind::Blank`
-    /// 空白 tab(浏览器"关到只剩新标签页"那种体验),`push_tab` 顺带把
-    /// `active` 指过去,不用再手动纠正。
+    /// 关掉一个 tab。index 0 的 `Blank` 占位不可关闭(点击它只会选中,见
+    /// 渲染侧;这里是数据层的兜底,越界/关占位都是 no-op)。关掉最后一个
+    /// 文件 tab 后,落点自动回到 index 0 的空白占位(浏览器"关到只剩新标签页"
+    /// 那种体验)。
     pub fn close(&mut self, idx: usize) {
-        if idx >= self.tabs.len() {
+        // 占位 tab 不关;越界也是 no-op。
+        if idx == 0 || idx >= self.tabs.len() {
             return;
         }
         self.tabs.remove(idx);
-        if self.tabs.is_empty() {
-            self.push_tab(TabKind::Blank, "空白".into());
-            return;
-        }
         if self.active >= self.tabs.len() {
             self.active = self.tabs.len().saturating_sub(1);
         } else if idx < self.active {
             self.active -= 1;
         }
-        // 关掉正在搜的 tab / 关闭导致激活换到别的文件:清掉失配的 Find
-        // (空 tab 自动补位路径会经 `push_tab` 里的 cull,这里只处理非空尾部)。
+        // 关掉正在搜的 tab / 关闭导致激活换到别的文件:清掉失配的 Find。
         self.cull_stale_find();
     }
 
     /// 拖拽换位:把 `from` 处的 tab 移到 `to` 处,并同步 `active` 下标。`from`
-    /// 与 `to` 相等或越界时是 no-op。返回移动前后 `active` 是否变化(调用方
-    /// 据此决定是否要重排 index-keyed 的 hover 动画键)。
+    /// 与 `to` 相等或越界时是 no-op。index 0 的 `Blank` 占位 tab 固定在首位,
+    /// 任何牵扯到它的换位(把它拖走、或把别的 tab 拖到它前面)都是 no-op——
+    /// 与 SSH/数据库面板"空白占位恒在最前"的形态一致。
     pub fn reorder(&mut self, from: usize, to: usize) {
-        if from == to || from >= self.tabs.len() || to >= self.tabs.len() {
+        if from == 0 || to == 0 || from == to || from >= self.tabs.len() || to >= self.tabs.len() {
             return;
         }
         let tab = self.tabs.remove(from);
@@ -1259,23 +1294,23 @@ mod tests {
 
         let mut p = PreviewPane::default();
         let id = p.open_path(path.clone());
-        assert!(p.tabs()[0].editor.is_some());
-        let nonce_before = p.tabs()[0].reload_nonce;
+        assert!(p.tabs()[1].editor.is_some());
+        let nonce_before = p.tabs()[1].reload_nonce;
 
         std::fs::write(&path, "fn two() {}").unwrap();
         p.bump_reload(id);
 
         assert_eq!(
-            p.tabs()[0].reload_nonce,
+            p.tabs()[1].reload_nonce,
             nonce_before,
             "原生 tab 的 reload 不该走 reload_nonce 计数(那是 wry URL 换参专用信号)"
         );
         assert!(
-            p.tabs()[0].editor.is_some(),
+            p.tabs()[1].editor.is_some(),
             "reload 后原生 tab 应仍持有(重建后的)editor"
         );
         assert_eq!(
-            p.tabs()[0].editor.as_ref().unwrap().text(),
+            p.tabs()[1].editor.as_ref().unwrap().text(),
             "fn two() {}",
             "原生 tab reload 应读入磁盘上的新内容"
         );
@@ -1307,7 +1342,7 @@ mod tests {
     fn opening_webview_tab_does_not_set_pending_focus() {
         let mut p = PreviewPane::default();
         p.open_path(PathBuf::from("/tmp/no_focus_test.png"));
-        assert!(p.tabs()[0].editor.is_none());
+        assert!(p.tabs()[1].editor.is_none());
         assert!(
             !p.take_pending_editor_focus(),
             ".png 走 wry,没有原生 editor,不该置聚焦位"
@@ -1348,9 +1383,9 @@ mod tests {
         p.open_path(rs_path.clone());
         p.open_path(png_path.clone());
 
-        assert!(p.tabs()[0].editor.is_some(), ".rs 扩展名应构造原生 editor");
+        assert!(p.tabs()[1].editor.is_some(), ".rs 扩展名应构造原生 editor");
         assert!(
-            p.tabs()[1].editor.is_none(),
+            p.tabs()[2].editor.is_none(),
             ".png 扩展名不应构造原生 editor,继续走 wry"
         );
 
@@ -1387,7 +1422,7 @@ mod tests {
         p.open_path(md_path.clone());
 
         assert!(
-            p.tabs()[0].editor.is_none(),
+            p.tabs()[1].editor.is_none(),
             ".md 默认预览应走 flyfish 渲染,不建原生只读 editor"
         );
         assert!(
@@ -1416,7 +1451,7 @@ mod tests {
         p.open_path(html_path.clone());
 
         assert!(
-            p.tabs()[0].editor.is_none(),
+            p.tabs()[1].editor.is_none(),
             ".html 默认预览应走 wry 渲染,不建原生只读 editor"
         );
         assert!(
@@ -1519,31 +1554,27 @@ mod tests {
     #[test]
     fn open_select_close_tabs() {
         let mut p = PreviewPane::default();
+        // 第 0 项恒为 Blank 占位,文件 tab 从下标 1 起。
+        assert_eq!(p.tabs()[0].kind, TabKind::Blank);
         let id0 = p.open_path(PathBuf::from("/tmp/a.md"));
         let id1 = p.open_path(PathBuf::from("/tmp/b.md"));
-        assert_eq!(p.tabs().len(), 2);
-        assert_eq!(p.active_idx(), 1, "新开 tab 即激活");
+        assert_eq!(p.tabs().len(), 3);
+        assert_eq!(p.active_idx(), 2, "新开 tab 即激活");
         assert_ne!(id0, id1);
-        assert_eq!(p.tabs()[0].title, "a.md");
-        assert_eq!(p.tabs()[1].title, "b.md");
-        p.select(0);
-        assert_eq!(p.active_idx(), 0);
-        p.close(0);
-        assert_eq!(p.tabs().len(), 1);
-        assert_eq!(p.active_idx(), 0);
+        assert_eq!(p.tabs()[1].title, "a.md");
+        assert_eq!(p.tabs()[2].title, "b.md");
+        p.select(1);
+        assert_eq!(p.active_idx(), 1);
+        p.close(1);
+        assert_eq!(p.tabs().len(), 2);
+        assert_eq!(p.active_idx(), 1);
     }
 
     #[test]
-    fn closing_last_tab_opens_a_blank_placeholder_instead_of_leaving_empty() {
-        let mut p = PreviewPane::default();
-        p.open_path(PathBuf::from("/tmp/only.md"));
+    fn blank_placeholder_is_state_zero_and_always_present() {
+        // `Default` 即停在空白占位页(没有任何可预览文件)。
+        let p = PreviewPane::default();
         assert_eq!(p.tabs().len(), 1);
-        p.close(0);
-        assert_eq!(
-            p.tabs().len(),
-            1,
-            "关掉最后一个 tab 不该留空,要自动补一个 Blank 占位 tab"
-        );
         assert_eq!(p.tabs()[0].kind, TabKind::Blank);
         assert_eq!(p.active_idx(), 0);
         // Blank tab 没有 wry 页面,不该进期望清单。
@@ -1551,30 +1582,59 @@ mod tests {
     }
 
     #[test]
-    fn closing_the_blank_placeholder_replaces_it_with_a_fresh_one() {
+    fn closing_last_file_tab_falls_back_to_the_blank_placeholder() {
         let mut p = PreviewPane::default();
         p.open_path(PathBuf::from("/tmp/only.md"));
-        p.close(0);
+        assert_eq!(p.tabs().len(), 2);
+        // 关掉唯一文件 tab(下标 1,占位恒在 0)。
+        p.close(1);
+        assert_eq!(p.tabs().len(), 1, "关掉最后一个文件 tab 后只剩 Blank 占位");
         assert_eq!(p.tabs()[0].kind, TabKind::Blank);
-        // 关掉这个占位 tab 本身也不该真的清空——立刻补一个新的,行为跟
-        // 浏览器"关掉唯一的新标签页"一致(还是停在一个新标签页)。
+        assert_eq!(p.active_idx(), 0, "落点回到空白占位页");
+        assert!(p.desired_webviews().is_empty());
+    }
+
+    #[test]
+    fn blank_placeholder_cannot_be_closed() {
+        let mut p = PreviewPane::default();
+        p.open_path(PathBuf::from("/tmp/only.md"));
+        p.close(1);
+        assert_eq!(p.tabs().len(), 1);
+        // 点占位 tab 上的 × / 关它都是 no-op:它恒定存在、不可关闭(同
+        // SSH/数据库面板的固定"空白"占位)。
         p.close(0);
         assert_eq!(p.tabs().len(), 1);
         assert_eq!(p.tabs()[0].kind, TabKind::Blank);
     }
 
     #[test]
-    fn clear_all_empties_tabs_without_refilling_a_blank_placeholder() {
+    fn clear_all_keeps_exactly_one_blank_placeholder() {
         let mut p = PreviewPane::default();
         p.open_path(PathBuf::from("/tmp/a.md"));
         p.open_path(PathBuf::from("/tmp/b.md"));
         p.clear_all();
         assert_eq!(
             p.tabs().len(),
-            0,
-            "项目切换清理要真清空,不是 close() 那种自动补位语义"
+            1,
+            "项目切换清理丢弃旧文件 tab,但保留恒定存在的 Blank 占位"
         );
+        assert_eq!(p.tabs()[0].kind, TabKind::Blank);
         assert_eq!(p.active_idx(), 0);
+    }
+
+    #[test]
+    fn reorder_never_moves_or_displaces_the_blank_placeholder() {
+        let mut p = PreviewPane::default();
+        p.open_path(PathBuf::from("/tmp/a.md"));
+        p.open_path(PathBuf::from("/tmp/b.md"));
+        // 把某个文件 tab 拖到占位之前:no-op(占位恒在首位)。
+        p.reorder(2, 0);
+        assert_eq!(p.tabs()[0].kind, TabKind::Blank);
+        // 把占位自己拖走:no-op。
+        p.reorder(0, 2);
+        assert_eq!(p.tabs()[0].kind, TabKind::Blank);
+        assert_eq!(p.tabs()[1].title, "a.md");
+        assert_eq!(p.tabs()[2].title, "b.md");
     }
 
     #[test]
@@ -1631,16 +1691,16 @@ mod tests {
         std::fs::write(&rs_path, "fn main() {}").unwrap();
         let _ = p.open_path(rs_path.clone());
 
-        // 空变更集:no-op,一个都不推进。
+        // 空变更集:no-op,一个都不推进。下标 0 是 Blank 占位,文件 tab 从 1 起。
         p.reload_webviews_for(&[]);
-        assert_eq!(p.tabs()[0].reload_nonce, 0);
         assert_eq!(p.tabs()[1].reload_nonce, 0);
         assert_eq!(p.tabs()[2].reload_nonce, 0);
+        assert_eq!(p.tabs()[3].reload_nonce, 0);
 
         // 命中 b.md:只推进 b 的 reload_nonce。
         p.reload_webviews_for(&[PathBuf::from("/tmp/b.md")]);
-        assert_eq!(p.tabs()[0].reload_nonce, 0, "a.md 不受影响");
-        assert_eq!(p.tabs()[1].reload_nonce, 1, "b.md 命中,webview 推进");
+        assert_eq!(p.tabs()[1].reload_nonce, 0, "a.md 不受影响");
+        assert_eq!(p.tabs()[2].reload_nonce, 1, "b.md 命中,webview 推进");
         let specs = p.desired_webviews();
         assert_eq!(
             specs[1].url, "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&ln=1&_r=1",
@@ -1650,14 +1710,14 @@ mod tests {
         // 命中原生 tab 的路径:不推进(原生 editor 不自动重载)。
         p.reload_webviews_for(std::slice::from_ref(&rs_path));
         assert_eq!(
-            p.tabs()[2].reload_nonce,
+            p.tabs()[3].reload_nonce,
             0,
             "原生 editor tab 命中也不自动重载,保住滚动/只读态"
         );
 
         // 未命中的路径:no-op。
         p.reload_webviews_for(&[PathBuf::from("/tmp/other.md")]);
-        assert_eq!(p.tabs()[1].reload_nonce, 1, "未命中不改状态");
+        assert_eq!(p.tabs()[2].reload_nonce, 1, "未命中不改状态");
 
         std::fs::remove_file(&rs_path).ok();
     }
@@ -1667,10 +1727,11 @@ mod tests {
         let mut p = PreviewPane::default();
         let id0 = p.open_path(PathBuf::from("/tmp/a.md")); // webview(.md 走渲染预览)
         let id1 = p.open_path(PathBuf::from("/tmp/b.md")); // webview
-        assert_eq!(p.active_idx(), 1);
+        // 下标 0 是 Blank 占位,a.md=1、b.md=2。
+        assert_eq!(p.active_idx(), 2);
 
         // 切到另一个 webview tab:推进 reload_nonce,切回时换 URL 重载。
-        p.select(0);
+        p.select(1);
         assert_eq!(
             p.desired_webviews()[0].url,
             "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&ln=1&_r=1",
@@ -1683,7 +1744,7 @@ mod tests {
         );
 
         // 点当前已激活的 tab:no-op,不再多推进一次。
-        p.select(0);
+        p.select(1);
         assert_eq!(
             p.desired_webviews()[0].url,
             "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&ln=1&_r=1",
@@ -1696,17 +1757,17 @@ mod tests {
             std::env::temp_dir().join(format!("preview_select_test_{}.rs", std::process::id()));
         std::fs::write(&rs_path, "fn main() {}").unwrap();
         let _id_rs = p.open_path(rs_path.clone());
-        assert_eq!(p.active_idx(), 2);
-        assert!(p.tabs()[2].editor.is_some(), "c.rs 应是原生 editor tab");
-        p.select(1); // 切回 b.md(webview)
+        assert_eq!(p.active_idx(), 3);
+        assert!(p.tabs()[3].editor.is_some(), "c.rs 应是原生 editor tab");
+        p.select(2); // 切回 b.md(webview)
         assert_eq!(
             p.desired_webviews()[0].url,
             "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&ln=1&_r=1",
             "再切回 webview 推进一次 reload"
         );
-        p.select(2); // 切回 c.rs(原生)
+        p.select(3); // 切回 c.rs(原生)
         assert_eq!(
-            p.tabs()[2].reload_nonce,
+            p.tabs()[3].reload_nonce,
             0,
             "原生 editor tab 切回不自动重载,保住滚动/只读态"
         );
@@ -1784,13 +1845,13 @@ mod tests {
     #[test]
     fn reopening_same_file_reuses_tab() {
         let mut p = PreviewPane::default();
-        let id0 = p.open_path(PathBuf::from("/tmp/a.md"));
+        let id0 = p.open_path(PathBuf::from("/tmp/a.md")); // 下标 1(0 是占位)
         p.open_path(PathBuf::from("/tmp/b.md")); // 中间插一个,把激活挪走
-        assert_eq!(p.active_idx(), 1);
+        assert_eq!(p.active_idx(), 2);
         let id_again = p.open_path(PathBuf::from("/tmp/a.md"));
         assert_eq!(id_again, id0, "同文件复用同一 tab");
-        assert_eq!(p.tabs().len(), 2, "不新增 tab");
-        assert_eq!(p.active_idx(), 0, "切回已开的那个 tab");
+        assert_eq!(p.tabs().len(), 3, "不新增 tab(含恒定占位)");
+        assert_eq!(p.active_idx(), 1, "切回已开的那个 tab");
     }
 
     #[test]
@@ -1809,22 +1870,22 @@ mod tests {
 
         let mut p = PreviewPane::default();
         let id = p.open_path(path.clone());
-        assert!(p.tabs()[0].editor.is_some(), "夹具应落在原生 editor 分支");
-        assert!(!p.tabs()[0].dirty, "新开原生 tab 默认不脏");
+        assert!(p.tabs()[1].editor.is_some(), "夹具应落在原生 editor 分支");
+        assert!(!p.tabs()[1].dirty, "新开原生 tab 默认不脏");
 
         p.mark_dirty_by_id(id);
-        assert!(p.tabs()[0].dirty, "收到编辑 Action 后应标脏");
+        assert!(p.tabs()[1].dirty, "收到编辑 Action 后应标脏");
 
         // 对 webview 形态 / 不存在 id 标脏——都该 no-op。
         let empty_id = p.next_id + 99;
         p.mark_dirty_by_id(empty_id);
         assert!(
-            p.tabs()[0].dirty && p.tabs().len() == 1,
+            p.tabs()[1].dirty && p.tabs().len() == 2,
             "未知 id 标脏是 no-op,不应误标/误建"
         );
 
         p.clear_dirty_by_id(id);
-        assert!(!p.tabs()[0].dirty, "落盘成功后应清脏");
+        assert!(!p.tabs()[1].dirty, "落盘成功后应清脏");
 
         std::fs::remove_file(&path).ok();
     }
@@ -1834,9 +1895,9 @@ mod tests {
         // .png 走 wry(editor.is_none());对 id 标脏应被 mark_dirty_by_id 拒掉。
         let mut p = PreviewPane::default();
         let id = p.open_path(PathBuf::from("/tmp/no_dirty_mark.png"));
-        assert!(p.tabs()[0].editor.is_none());
+        assert!(p.tabs()[1].editor.is_none());
         p.mark_dirty_by_id(id);
-        assert!(!p.tabs()[0].dirty, "非原生 tab 不该被标脏");
+        assert!(!p.tabs()[1].dirty, "非原生 tab 不该被标脏");
     }
 
     #[test]
@@ -1850,13 +1911,13 @@ mod tests {
         let mut p = PreviewPane::default();
         let id = p.open_path(path.clone());
         p.mark_dirty_by_id(id);
-        assert!(p.tabs()[0].dirty);
+        assert!(p.tabs()[1].dirty);
 
         std::fs::write(&path, "fn two() {}").unwrap();
         p.bump_reload(id);
 
         assert!(
-            !p.tabs()[0].dirty,
+            !p.tabs()[1].dirty,
             "原生 tab 刷新重建 editor 后,内存里的旧改动已丢弃,脏标记应复位"
         );
 

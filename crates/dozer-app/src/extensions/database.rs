@@ -2432,18 +2432,26 @@ pub fn content_pane<'a>(
     // hover key 用 `usize::MAX`,真实 tab 下标不可能到这个值。
     const BLANK_HOVER_KEY: usize = usize::MAX;
     let blank_active = content.active_idx().is_none();
+    // 空白占位 tab 标题前挂 Dozer 品牌标(同 SSH tab 的 Terminal 前缀图标口径),
+    // 让"还没有打开任何数据源"的落点带上产品识别度。
+    let blank_icon = icons::view(
+        icons::IconKind::Dozer,
+        byteui::theme::icon_size::row(),
+        byteui::theme::color::current().dim,
+    );
     let mut entries: Vec<(
         f32,
         Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
     )> = vec![(
-        tab_title_display_width("空白"),
+        // tab 宽度估算要把前缀图标(图标宽 + 4px 间距)算进去,窗口裁剪才准。
+        tab_title_display_width("空白") + byteui::theme::icon_size::row() + 4.0,
         crate::tab_widget::panel_tab(crate::tab_widget::PanelTabArgs {
             title: "空白".to_string(),
             active: blank_active,
             hover_t: app.hover_progress(crate::app::HoverId::DatabaseTabItem(BLANK_HOVER_KEY)),
             close_hover_t: app
                 .hover_progress(crate::app::HoverId::DatabaseTabClose(BLANK_HOVER_KEY)),
-            prefix: None,
+            prefix: Some(blank_icon),
             suffix: None,
             on_select: Message::SelectBlankTab,
             on_close: Message::SelectBlankTab,

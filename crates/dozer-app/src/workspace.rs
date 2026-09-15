@@ -1195,9 +1195,9 @@ impl Workspace {
         let mut paths = Vec::new();
         let mut active_path = None;
         for (idx, tab) in self.preview.tabs().iter().enumerate() {
-            // `Blank` 占位 tab(关到最后一个后自动补的那个)没有真实路径,
-            // 不写进持久化状态——下次启动没必要"恢复"出一个空白 tab,
-            // 没有 tab 时 `PreviewPane::default()` 天然就是这个样子。
+            // `Blank` 占位 tab(恒在 index 0 的那个)没有真实路径,不写进
+            // 持久化状态——`PreviewPane::default()` 天然就带这个占位,恢复时
+            // 无需从盘上再变一个出来。
             let TabKind::File(p) = &tab.kind else {
                 continue;
             };
@@ -3574,6 +3574,11 @@ fn preview_pane_for<'a>(
             } else {
                 tab.title.clone()
             };
+            // index 0 的 `Blank` 占位 tab 不可关闭:它上面的 × 点击等同于
+            // "选中空白页"(不真关),与 SSH/数据库面板 tab 条最前面那个固定
+            // "空白"占位(`app.rs::ssh_tab_bar` 的 `on_close: SelectBlankTab`)
+            // 完全同一套做法——数据层 `PreviewPane::close(0)` 另有兜底 no-op。
+            let is_placeholder = matches!(tab.kind, crate::preview::TabKind::Blank);
             let tab = panel_tab(PanelTabArgs {
                 title: display_title,
                 active,
@@ -3582,7 +3587,11 @@ fn preview_pane_for<'a>(
                 prefix: None,
                 suffix: None,
                 on_select: select_msg(idx),
-                on_close: close_msg(idx),
+                on_close: if is_placeholder {
+                    select_msg(idx)
+                } else {
+                    close_msg(idx)
+                },
                 show_tooltip: app.hover_tooltip_ready(item_hover(idx)),
                 title_hover: move |h| Message::Hover(item_hover(idx), h),
                 close_hover: move |h| Message::Hover(close_hover(idx), h),
@@ -3677,13 +3686,15 @@ fn preview_pane_for<'a>(
             .color(byteui::theme::color::current().red)));
     }
 
+    // `PreviewPane` 恒定携带第 0 项 `TabKind::Blank` 占位(见 `PreviewPane::
+    // default`/`preview.rs::TabKind::Blank`),所以这里的列表正常不会空——保留
+    // 这个空分支纯属防御,不再有独立的"暂无预览"文案(空态由 `Blank` 占位
+    // 那个分支画 Dozer 品牌标呈现)。
     if preview.tabs().is_empty() {
         content = content.push(
-            container(lh(text("暂无预览——在左侧文件树选择文件")
-                .size(byteui::theme::font::subtitle())
-                .color(byteui::theme::color::current().dim)))
-            .width(Length::Fill)
-            .height(Length::Fill),
+            iced_widget::Space::new()
+                .width(Length::Fill)
+                .height(Length::Fill),
         );
     } else {
         let active_tab = &preview.tabs()[preview.active_idx()];
@@ -4130,7 +4141,9 @@ pub(crate) fn preview_tab_overflow_popup<'a>(
             prefix: None,
             title: tab.title.clone(),
             active: idx == preview.active_idx(),
-            closable: true,
+            // index 0 的 `Blank` 占位固定存在、不可关闭(同 SSH/数据库面板的
+            // 固定"空白"占位),下拉里这一行不画 ×。
+            closable: !matches!(tab.kind, crate::preview::TabKind::Blank),
             hover_t: app.hover_progress(HoverId::TabOverflowRow(idx)),
         })
         .collect();
