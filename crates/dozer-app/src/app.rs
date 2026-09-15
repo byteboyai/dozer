@@ -8714,11 +8714,10 @@ fn panel_body<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     match kind {
         PanelKind::Files => {
-            let preview = preview_pane(app, ws, Length::Fill, zone_pane_border(zone, rc));
             if app.dims.files_tree_collapsed {
                 // 收起文件树:整个配对宽度都交给预览,项目树列表与分隔线都不
                 // 渲染。`files_split` 比例保留,展开时按原比例恢复。
-                return preview;
+                return preview_pane(app, ws, Length::Fill, zone_pane_border(zone, ac));
             }
             let (list_portion, content_portion) = split_portions(app.dims.files_split);
             let list_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
@@ -8798,7 +8797,7 @@ fn panel_body<'a>(
                     Length::Fixed(0.0),
                     Border::default(),
                     Length::Fill,
-                    zone_pane_border(zone, rc),
+                    zone_pane_border(zone, ac),
                 )
                 .1
                 .map(Message::Todo);
@@ -8851,7 +8850,7 @@ fn panel_body<'a>(
         }
         PanelKind::Project => {
             if app.list_collapsed(PanelKind::Project) {
-                return project_preview_pane(app, ws, Length::Fill, zone_pane_border(zone, rc));
+                return project_preview_pane(app, ws, Length::Fill, zone_pane_border(zone, ac));
             }
             let (list_portion, content_portion) = split_portions(app.dims.project_split);
             let info_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
@@ -8912,7 +8911,7 @@ fn panel_body<'a>(
                     app,
                     &ws.database,
                     Length::Fill,
-                    zone_pane_border(zone, rc),
+                    zone_pane_border(zone, ac),
                 )
                 .map(Message::Database);
             }
@@ -8971,7 +8970,7 @@ fn panel_body<'a>(
                 return column![].into();
             }
             if app.list_collapsed(PanelKind::Ssh) {
-                return ssh_terminal_pane(app, ws, Length::Fill, zone_pane_border(zone, rc));
+                return ssh_terminal_pane(app, ws, Length::Fill, zone_pane_border(zone, ac));
             }
             let (list_portion, content_portion) = split_portions(app.dims.ssh_split);
             let list_pane = ssh::view(
@@ -9032,7 +9031,7 @@ fn panel_body<'a>(
         .map(Message::Browser),
         PanelKind::Agent => {
             if app.list_collapsed(PanelKind::Agent) {
-                return terminal::terminal_pane(app, ws, Length::Fill, zone_pane_border(zone, lc));
+                return terminal::terminal_pane(app, ws, Length::Fill, zone_pane_border(zone, ac));
             }
             let (list_portion, content_portion) = split_portions(app.dims.agent_split);
             let terminal = terminal::terminal_pane(
@@ -9083,7 +9082,7 @@ fn panel_body<'a>(
         }
         PanelKind::Conversations => {
             if app.list_collapsed(PanelKind::Conversations) {
-                return review_content_pane(app, ws, Length::Fill, zone_pane_border(zone, lc));
+                return review_content_pane(app, ws, Length::Fill, zone_pane_border(zone, ac));
             }
             let (list_portion, content_portion) = split_portions(app.dims.conversations_split);
             let review = review_content_pane(
@@ -9149,7 +9148,7 @@ fn panel_body<'a>(
                     app,
                     &ws.usage,
                     Length::Fill,
-                    zone_pane_border(zone, lc),
+                    zone_pane_border(zone, ac),
                 )
                 .map(Message::Usage);
             }
