@@ -2029,19 +2029,6 @@ fn todo_footer_bar<'a>(
         .into()
 }
 
-/// 左栏(分类导航栏)可收纳的最小宽度,同 `project::footer_min_width` 的
-/// 估算口径:拖 `Divider::TodoSplit` 时低于此宽度直接收起(见
-/// `apply_column_drag` 该分支)。按 `todo_clear_footer_bar` 唯一的「清空
-/// 列表」按钮(4 字,padding [4,8])+ 外层容器左右 padding(`project_pane`
-/// 同款,该 footer 自己也是这么取的)估。
-pub(crate) fn list_min_width() -> f32 {
-    let icon = byteui::theme::icon_size::row();
-    let label_px = byteui::theme::font::label() as f32;
-    let button = icon + 6.0 + label_px * 4.0 + 16.0;
-    let pp = theme::region::project_pane().padding;
-    button + pp.left + pp.right
-}
-
 /// 左栏底部栏(位于分类导航之下、靠底):仅右侧"清空列表"按钮,不再展示
 /// 左侧任务计数与图标。已从 content pane 右下角迁到左栏(见 `view`)。样式
 /// 对齐 `files.rs` 的 `git_footer_bar`

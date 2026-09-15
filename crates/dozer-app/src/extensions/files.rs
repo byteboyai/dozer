@@ -2084,20 +2084,6 @@ fn tree_edit_row(
     )
 }
 
-/// 文件树列表子栏可收纳的最小宽度,同 `project::footer_min_width` 的估算
-/// 口径:拖 `Divider::LeftPairSplit` 时低于此宽度直接收起(见
-/// `apply_column_drag` 该分支)。按 `git_footer_bar`"未受 git 保护"态估
-/// (「未受Git保护」6 字 + 「新建Git仓库」按钮,约 5 字 CJK 当量 + padding
-/// [4,8]);有仓库态的分支名是动态文案,量不出固定上限,不作为基准。容器
-/// 自身水平 padding 是 0(`git_footer_bar` 用 `[6,0]`),不用再加。
-pub(crate) fn footer_min_width() -> f32 {
-    let icon = byteui::theme::icon_size::row();
-    let label_px = byteui::theme::font::label() as f32;
-    let label = icon + 6.0 + label_px * 6.0;
-    let button = icon + 6.0 + label_px * 5.0 + 16.0;
-    label + 6.0 + button
-}
-
 /// 文件树底部 git 栏三元组(图标 + 文案元素 + 可选操作按钮)。
 type GitFooterTriple<'a> = (
     icons::IconKind,

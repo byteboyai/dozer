@@ -1420,19 +1420,6 @@ pub fn delete_confirm_popup<'a>(
         .into()
 }
 
-/// 左栏(主机列表)可收纳的最小宽度,同 `project::footer_min_width` 的
-/// 估算口径:拖 `Divider::SshSplit` 时低于此宽度直接收起(见
-/// `apply_column_drag` 该分支)。按 `ssh_footer_bar` 唯一的「添加主机」
-/// 按钮(4 字,padding [4,8])+ 外层容器左右 padding(`project_pane`
-/// 同款)估。
-pub(crate) fn footer_min_width() -> f32 {
-    let icon = byteui::theme::icon_size::row();
-    let label_px = byteui::theme::font::label() as f32;
-    let button = icon + 6.0 + label_px * 4.0 + 16.0;
-    let pp = crate::theme::region::project_pane().padding;
-    button + pp.left + pp.right
-}
-
 /// 主机面板底部 footer-bar:1px `BORDER` 分隔线 + `padding([6, 8])` 容器,
 /// 结构与项目面板的 `project_footer_bar` / 文件树面板的 `git_footer_bar`
 /// 一致。当前放「＋添加」单个按钮,底部固定,不随主机列表滚动。非破坏性

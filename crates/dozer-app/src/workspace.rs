@@ -2492,22 +2492,6 @@ pub(crate) fn group_tabs_by_agent(tabs: &[SessionTab]) -> Vec<(AgentKind, Vec<us
         .collect()
 }
 
-/// Agent 列表面板可收纳的最小宽度,同 `project::footer_min_width` 的估算
-/// 口径:拖 `Divider::RightPairSplit`(`right_view == Agent` 时)低于此
-/// 宽度直接收起(见 `apply_column_drag` 该分支)。这个面板没有 footer,
-/// 卡在头部——`home_panel_head_with_actions` 的图标 + "Agent" 标题(拉丁
-/// 字母,按 `font::label` 每字 0.6em 估,比 CJK 的 1em 窄)+ 右侧
-/// `agent_picker_toggle_button`("＋"新建,方形 `tab_button_size` 按钮),
-/// 三段间 `spacing(8)`,外层 padding 用 `agent_list_pane().padding`。
-pub(crate) fn agent_list_min_width() -> f32 {
-    let icon = byteui::theme::icon_size::row();
-    let label_px = theme::homespace_font::subtitle() as f32;
-    let title = label_px * "Agent".chars().count() as f32 * 0.6;
-    let add_button = byteui::theme::geometry::tab_button_size();
-    let region = theme::region::agent_list_pane();
-    icon + title + add_button + 8.0 * 2.0 + region.padding.left + region.padding.right
-}
-
 /// Agent 列表面板(右面板区"Agent"视图的列表侧):按 `AgentKind` 分组展示
 /// 当前项目的会话,组内保留 tab 打开顺序;点击一行 = `Message::SelectTab`
 /// 切焦点(同终端 tab 栏点击效果)。

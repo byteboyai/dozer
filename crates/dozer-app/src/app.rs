@@ -1142,11 +1142,12 @@ pub(crate) fn apply_column_drag(
             } else {
                 1.0 - raw_ratio
             };
-            // 拖窄到小于 `files::footer_min_width` 时直接收起文件树列表子栏,
-            // 语义同 `Divider::ProjectSplit` 那条分支(冻结 `files_split`、
-            // 对称可逆),只是这里翻的是 `files_tree_collapsed`。
+            // 拖窄到小于 `project::footer_min_width`(所有可收纳面板统一走
+            // 这一份估算,不各面板各算一套)时直接收起文件树列表子栏,语义同
+            // `Divider::ProjectSplit` 那条分支(冻结 `files_split`、对称
+            // 可逆),只是这里翻的是 `files_tree_collapsed`。
             let (list_w, _) = pair_list_content_width(pair_w, ratio);
-            if list_w < files::footer_min_width() {
+            if list_w < project::footer_min_width() {
                 PanelDims {
                     files_tree_collapsed: true,
                     ..state.dims
@@ -1175,12 +1176,15 @@ pub(crate) fn apply_column_drag(
             } else {
                 1.0 - raw_ratio
             };
-            // 信息面板(footer 两个按钮所在栏)拖窄到小于
-            // `project::footer_min_width` 时直接收起——等同用户点了收起
-            // 按钮(见 `toggle_panel_list_collapse`):冻结 `state.dims` 里
-            // 上一次仍够宽的 `project_split`,不让它被拖成挤爆按钮的小数值;
-            // 拖回超过阈值时用当前光标位置连续算出新比例并展开,对称、可逆
-            // (拖拽是逐帧调用本函数,不是一次性判定)。
+            // 信息面板(footer「修复项目/删除项目」两个按钮所在栏)拖窄到
+            // 小于 `project::footer_min_width` 时直接收起——等同用户点了
+            // 收起按钮(见 `toggle_panel_list_collapse`):冻结 `state.dims`
+            // 里上一次仍够宽的 `project_split`,不让它被拖成挤爆按钮的小
+            // 数值;拖回超过阈值时用当前光标位置连续算出新比例并展开,
+            // 对称、可逆(拖拽是逐帧调用本函数,不是一次性判定)。这份估算是
+            // 所有可收纳面板(Files/Ssh/Database/Todo/Usage/Agent/
+            // Conversations)统一的最小宽度基准,不是 Project 专属——按用户
+            // 要求"所有面板最小宽度都和项目面板一样,就是两个按钮的宽度"。
             let (list_w, _) = pair_list_content_width(pair_w, ratio);
             if list_w < project::footer_min_width() {
                 PanelDims {
@@ -1211,10 +1215,10 @@ pub(crate) fn apply_column_drag(
             } else {
                 1.0 - raw_ratio
             };
-            // 拖窄到小于 `ssh::footer_min_width` 时直接收起主机列表,语义同
-            // `Divider::ProjectSplit` 那条分支。
+            // 拖窄到小于 `project::footer_min_width` 时直接收起主机列表,
+            // 语义同 `Divider::ProjectSplit` 那条分支。
             let (list_w, _) = pair_list_content_width(pair_w, ratio);
-            if list_w < ssh::footer_min_width() {
+            if list_w < project::footer_min_width() {
                 PanelDims {
                     ssh_list_collapsed: true,
                     ..state.dims
@@ -1243,10 +1247,10 @@ pub(crate) fn apply_column_drag(
             } else {
                 1.0 - raw_ratio
             };
-            // 拖窄到小于 `database::footer_min_width` 时直接收起 schema 树,
+            // 拖窄到小于 `project::footer_min_width` 时直接收起 schema 树,
             // 语义同 `Divider::ProjectSplit` 那条分支。
             let (list_w, _) = pair_list_content_width(pair_w, ratio);
-            if list_w < database::footer_min_width() {
+            if list_w < project::footer_min_width() {
                 PanelDims {
                     database_list_collapsed: true,
                     ..state.dims
@@ -1278,10 +1282,10 @@ pub(crate) fn apply_column_drag(
             } else {
                 1.0 - raw_ratio
             };
-            // 拖窄到小于 `usage::filter_sidebar_min_width` 时直接收起 agent
-            // 筛选栏,语义同 `Divider::ProjectSplit` 那条分支。
+            // 拖窄到小于 `project::footer_min_width` 时直接收起 agent 筛选栏,
+            // 语义同 `Divider::ProjectSplit` 那条分支。
             let (list_w, _) = pair_list_content_width(pair_w, ratio);
-            if list_w < usage::filter_sidebar_min_width() {
+            if list_w < project::footer_min_width() {
                 PanelDims {
                     usage_list_collapsed: true,
                     ..state.dims
@@ -1310,10 +1314,10 @@ pub(crate) fn apply_column_drag(
             } else {
                 1.0 - raw_ratio
             };
-            // 拖窄到小于 `todo::list_min_width` 时直接收起分类导航栏,语义同
-            // `Divider::ProjectSplit` 那条分支。
+            // 拖窄到小于 `project::footer_min_width` 时直接收起分类导航栏,
+            // 语义同 `Divider::ProjectSplit` 那条分支。
             let (list_w, _) = pair_list_content_width(pair_w, ratio);
-            if list_w < todo::list_min_width() {
+            if list_w < project::footer_min_width() {
                 PanelDims {
                     todo_list_collapsed: true,
                     ..state.dims
@@ -1394,13 +1398,13 @@ pub(crate) fn apply_column_drag(
             } else {
                 1.0 - raw_ratio
             };
-            // 拖窄到小于各面板自己的最小宽度时直接收起列表侧,语义同
-            // `Divider::ProjectSplit` 那条分支——`kind` 决定对照哪个面板的
-            // 估算与哪个 `*_list_collapsed` 字段。
+            // 拖窄到小于 `project::footer_min_width` 时直接收起列表侧,语义同
+            // `Divider::ProjectSplit` 那条分支——`kind` 决定翻哪个
+            // `*_list_collapsed` 字段。
             let (list_w, _) = pair_list_content_width(pair_w, ratio);
             match kind {
                 PanelKind::Agent => {
-                    if list_w < crate::workspace::agent_list_min_width() {
+                    if list_w < project::footer_min_width() {
                         PanelDims {
                             agent_list_collapsed: true,
                             ..state.dims
@@ -1414,7 +1418,7 @@ pub(crate) fn apply_column_drag(
                     }
                 }
                 PanelKind::Conversations => {
-                    if list_w < conversations::list_min_width() {
+                    if list_w < project::footer_min_width() {
                         PanelDims {
                             conversations_list_collapsed: true,
                             ..state.dims
@@ -11340,7 +11344,7 @@ mod tests {
     fn clamp_files_split_to_range() {
         let state = test_state();
         // 默认 640 宽面板区下,`min_split_ratio`(0.2)算出的像素宽已经小于
-        // `files::footer_min_width`——拖到最左现在直接收起文件树列表子栏
+        // `project::footer_min_width`——拖到最左现在直接收起文件树列表子栏
         // (`files_tree_collapsed`),不再是单纯把 `files_split` 夹到 0.2,
         // 见 `Divider::LeftPairSplit` 分支;冻结的 `files_split` 应保持
         // `state` 原值不变。
@@ -11912,38 +11916,29 @@ mod tests {
         }
     }
 
-    /// 拖各面板分隔线把列表侧拖到比该面板自己的最小内容(footer 按钮/头部
-    /// 图标+标题)还窄时应直接收起、冻结上一次的 split 比例,拖回超过阈值
+    /// 拖各面板分隔线把列表侧拖到比 `project::footer_min_width`(所有可
+    /// 收纳面板统一共用这一份估算——按用户要求"所有面板最小宽度都和项目
+    /// 面板一样,就是两个按钮的宽度",不是各面板各按自己的 footer/头部再
+    /// 单独估一套)还窄时应直接收起、冻结上一次的 split 比例,拖回超过阈值
     /// 时对称展开——同 `apply_column_drag_files_project_web_mirror_tests`
     /// 里 `project_split_collapses_when_dragged_narrower_than_footer_buttons`
     /// 一套口径,这里补齐其余面板(Files 有专门的 `clamp_files_split_to_range`
-    /// 覆盖,这里不重复)。
+    /// 覆盖,这里不重复)。默认 640 宽面板区下 `min_split_ratio()`(0.2)
+    /// 算出的像素宽(0.2×632≈126px)已经小于这份阈值(≈198px),所以直接用
+    /// `test_state()`/1600 窗口宽就能触发,不需要额外收窄面板区。
     mod apply_column_drag_collapse_tests {
         use super::*;
 
-        /// Ssh/Todo 的 footer 只放一个短按钮,自己的最小宽度比
-        /// `min_split_ratio()`(0.2)在默认 640 宽面板区下能拖到的下限
-        /// (0.2×632≈126px)还要窄——直接拖到底也摸不到收起阈值。这里把
-        /// `left_width` 收到 `min_zone_width()`(zone 允许的下限,320,配对
-        /// 内容宽≈312),让 0.2 的下限也低于阈值,收起路径才可能被拖拽
-        /// 触发到;Project/Files/Database 三个面板 footer 按钮更多、阈值
-        /// 本身够宽,默认 1600 窗口宽就能触发,不需要这个收窄。
-        fn narrow_left_state() -> ShellState {
-            let mut state = test_state();
-            state.dims.left_width = byteui::theme::geometry::min_zone_width();
-            state
-        }
-
         #[test]
         fn ssh_split_collapses_when_narrower_than_footer_button() {
-            let state = narrow_left_state();
+            let state = test_state();
             let window_width = 1600.0;
             let (x0, pair_w) = pair_x0_and_width(
                 state.layout.rail_layout.side_of(PanelKind::Ssh),
                 window_width,
                 &state,
             );
-            let target_ratio = (ssh::footer_min_width() - 10.0) / pair_w;
+            let target_ratio = (project::footer_min_width() - 10.0) / pair_w;
             let logical_x = x0 + target_ratio * pair_w;
             let result =
                 apply_column_drag(state.clone(), Divider::SshSplit, window_width, logical_x);
@@ -11953,14 +11948,14 @@ mod tests {
 
         #[test]
         fn ssh_split_stays_expanded_when_wider_than_footer_button() {
-            let state = narrow_left_state();
+            let state = test_state();
             let window_width = 1600.0;
             let (x0, pair_w) = pair_x0_and_width(
                 state.layout.rail_layout.side_of(PanelKind::Ssh),
                 window_width,
                 &state,
             );
-            let target_ratio = (ssh::footer_min_width() + 20.0) / pair_w;
+            let target_ratio = (project::footer_min_width() + 20.0) / pair_w;
             let logical_x = x0 + target_ratio * pair_w;
             let result = apply_column_drag(state, Divider::SshSplit, window_width, logical_x);
             assert!(!result.ssh_list_collapsed);
@@ -11968,14 +11963,14 @@ mod tests {
 
         #[test]
         fn todo_split_collapses_when_narrower_than_footer_button() {
-            let state = narrow_left_state();
+            let state = test_state();
             let window_width = 1600.0;
             let (x0, pair_w) = pair_x0_and_width(
                 state.layout.rail_layout.side_of(PanelKind::Todo),
                 window_width,
                 &state,
             );
-            let target_ratio = (todo::list_min_width() - 10.0) / pair_w;
+            let target_ratio = (project::footer_min_width() - 10.0) / pair_w;
             let logical_x = x0 + target_ratio * pair_w;
             let result =
                 apply_column_drag(state.clone(), Divider::TodoSplit, window_width, logical_x);
@@ -11985,14 +11980,14 @@ mod tests {
 
         #[test]
         fn todo_split_stays_expanded_when_wider_than_footer_button() {
-            let state = narrow_left_state();
+            let state = test_state();
             let window_width = 1600.0;
             let (x0, pair_w) = pair_x0_and_width(
                 state.layout.rail_layout.side_of(PanelKind::Todo),
                 window_width,
                 &state,
             );
-            let target_ratio = (todo::list_min_width() + 20.0) / pair_w;
+            let target_ratio = (project::footer_min_width() + 20.0) / pair_w;
             let logical_x = x0 + target_ratio * pair_w;
             let result = apply_column_drag(state, Divider::TodoSplit, window_width, logical_x);
             assert!(!result.todo_list_collapsed);
@@ -12007,7 +12002,7 @@ mod tests {
                 window_width,
                 &state,
             );
-            let target_ratio = (database::footer_min_width() - 10.0) / pair_w;
+            let target_ratio = (project::footer_min_width() - 10.0) / pair_w;
             let logical_x = x0 + target_ratio * pair_w;
             let result = apply_column_drag(
                 state.clone(),
@@ -12028,36 +12023,27 @@ mod tests {
                 window_width,
                 &state,
             );
-            let target_ratio = (database::footer_min_width() + 20.0) / pair_w;
+            let target_ratio = (project::footer_min_width() + 20.0) / pair_w;
             let logical_x = x0 + target_ratio * pair_w;
             let result = apply_column_drag(state, Divider::DatabaseSplit, window_width, logical_x);
             assert!(!result.database_list_collapsed);
         }
 
-        /// 右面板区没有 `min_zone_width` 那样的下限(`right_zone_width` 就是
-        /// "左面板区没占走的剩余空间",可以被压得很窄),所以这里改用一个
-        /// 较窄的整窗宽度(而不是像左面板区那样调 `left_width`)把
-        /// `right_zone`/配对内容宽压到够小——1044 时默认 `left_width`
-        /// (640)会被 `clamp_left_width` 顶到 628(右面板区下限
-        /// `min_zone_width`=320 让出的余量),配对内容宽≈312,和左面板区
-        /// 三个用例同一个量级,足以让 `min_split_ratio()` 的 0.2 下限也低于
-        /// Usage/Agent/Conversations 各自的阈值。Usage 默认"内容在前、
-        /// 筛选栏(list)在后",list 占比是 `1 - raw_ratio`(见
-        /// `Divider::UsageSplit` 分支),所以要把 list 拖窄得把 `logical_x`
-        /// 推得更靠右——不是简单套用 Ssh/Todo/Database 那套"list 在前"的
-        /// 坐标公式;Agent/Conversations(`RightPairSplit`)同一个方向。
-        const NARROW_RIGHT_WINDOW: f32 = 1044.0;
-
+        /// Usage 默认"内容在前、筛选栏(list)在后",list 占比是
+        /// `1 - raw_ratio`(见 `Divider::UsageSplit` 分支),所以要把 list
+        /// 拖窄得把 `logical_x` 推得更靠右——不是简单套用 Ssh/Todo/Database
+        /// 那套"list 在前"的坐标公式;Agent/Conversations(`RightPairSplit`)
+        /// 同一个方向。
         #[test]
         fn usage_split_collapses_when_narrower_than_header() {
             let state = test_state();
-            let window_width = NARROW_RIGHT_WINDOW;
+            let window_width = 1600.0;
             let (x0, pair_w) = pair_x0_and_width(
                 state.layout.rail_layout.side_of(PanelKind::Usage),
                 window_width,
                 &state,
             );
-            let target_list_ratio = (usage::filter_sidebar_min_width() - 10.0) / pair_w;
+            let target_list_ratio = (project::footer_min_width() - 10.0) / pair_w;
             let logical_x = x0 + (1.0 - target_list_ratio) * pair_w;
             let result =
                 apply_column_drag(state.clone(), Divider::UsageSplit, window_width, logical_x);
@@ -12068,13 +12054,13 @@ mod tests {
         #[test]
         fn usage_split_stays_expanded_when_wider_than_header() {
             let state = test_state();
-            let window_width = NARROW_RIGHT_WINDOW;
+            let window_width = 1600.0;
             let (x0, pair_w) = pair_x0_and_width(
                 state.layout.rail_layout.side_of(PanelKind::Usage),
                 window_width,
                 &state,
             );
-            let target_list_ratio = (usage::filter_sidebar_min_width() + 20.0) / pair_w;
+            let target_list_ratio = (project::footer_min_width() + 20.0) / pair_w;
             let logical_x = x0 + (1.0 - target_list_ratio) * pair_w;
             let result = apply_column_drag(state, Divider::UsageSplit, window_width, logical_x);
             assert!(!result.usage_list_collapsed);
@@ -12083,13 +12069,13 @@ mod tests {
         #[test]
         fn agent_split_collapses_when_narrower_than_header() {
             let state = test_state();
-            let window_width = NARROW_RIGHT_WINDOW;
+            let window_width = 1600.0;
             let (x0, pair_w) = pair_x0_and_width(
                 state.layout.rail_layout.side_of(PanelKind::Agent),
                 window_width,
                 &state,
             );
-            let target_list_ratio = (crate::workspace::agent_list_min_width() - 10.0) / pair_w;
+            let target_list_ratio = (project::footer_min_width() - 10.0) / pair_w;
             let logical_x = x0 + (1.0 - target_list_ratio) * pair_w;
             let result = apply_column_drag(
                 state.clone(),
@@ -12104,13 +12090,13 @@ mod tests {
         #[test]
         fn agent_split_stays_expanded_when_wider_than_header() {
             let state = test_state();
-            let window_width = NARROW_RIGHT_WINDOW;
+            let window_width = 1600.0;
             let (x0, pair_w) = pair_x0_and_width(
                 state.layout.rail_layout.side_of(PanelKind::Agent),
                 window_width,
                 &state,
             );
-            let target_list_ratio = (crate::workspace::agent_list_min_width() + 20.0) / pair_w;
+            let target_list_ratio = (project::footer_min_width() + 20.0) / pair_w;
             let logical_x = x0 + (1.0 - target_list_ratio) * pair_w;
             let result = apply_column_drag(state, Divider::RightPairSplit, window_width, logical_x);
             assert!(!result.agent_list_collapsed);
@@ -12120,13 +12106,13 @@ mod tests {
         fn conversations_split_collapses_when_narrower_than_footer() {
             let mut state = test_state();
             state.right_view = PanelKind::Conversations;
-            let window_width = NARROW_RIGHT_WINDOW;
+            let window_width = 1600.0;
             let (x0, pair_w) = pair_x0_and_width(
                 state.layout.rail_layout.side_of(PanelKind::Conversations),
                 window_width,
                 &state,
             );
-            let target_list_ratio = (conversations::list_min_width() - 10.0) / pair_w;
+            let target_list_ratio = (project::footer_min_width() - 10.0) / pair_w;
             let logical_x = x0 + (1.0 - target_list_ratio) * pair_w;
             let result = apply_column_drag(
                 state.clone(),
@@ -12142,13 +12128,13 @@ mod tests {
         fn conversations_split_stays_expanded_when_wider_than_footer() {
             let mut state = test_state();
             state.right_view = PanelKind::Conversations;
-            let window_width = NARROW_RIGHT_WINDOW;
+            let window_width = 1600.0;
             let (x0, pair_w) = pair_x0_and_width(
                 state.layout.rail_layout.side_of(PanelKind::Conversations),
                 window_width,
                 &state,
             );
-            let target_list_ratio = (conversations::list_min_width() + 20.0) / pair_w;
+            let target_list_ratio = (project::footer_min_width() + 20.0) / pair_w;
             let logical_x = x0 + (1.0 - target_list_ratio) * pair_w;
             let result = apply_column_drag(state, Divider::RightPairSplit, window_width, logical_x);
             assert!(!result.conversations_list_collapsed);
