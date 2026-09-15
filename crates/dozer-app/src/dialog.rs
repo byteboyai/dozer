@@ -34,6 +34,15 @@ use crate::theme;
 use iced_widget::core::{Border, Color, Element, Length, alignment::Horizontal};
 use iced_widget::{MouseArea, Row, Stack, button, column, container};
 
+/// 弹窗默认宽度:整个软件窗体宽度(`App::window_size.0`,逻辑像素)的
+/// 1/3——2026-09-15 统一约定,取代此前各弹窗各写一个固定像素值(360/420/
+/// 280 不等,窗口变宽变窄时弹窗大小不跟着变)。调用方没有更细宽度诉求时
+/// 用这个默认值;字段特别多的表单(新增数据源/主机)如果 1/3 窗宽还是
+/// 太挤,可以在这个基础上另外调整,不强制所有弹窗都用同一个值。
+pub fn width(window_width: f32) -> Length {
+    Length::Fixed(window_width / 3.0)
+}
+
 /// 弹窗卡片容器样式:CARD 底 + 金色描边 + 圆角,取代各面板各自手写的
 /// `container::Style` 字面量。
 pub fn card_style(_t: &iced_widget::Theme) -> container::Style {

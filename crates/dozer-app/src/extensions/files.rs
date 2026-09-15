@@ -2502,6 +2502,7 @@ pub(crate) fn menu_separator<'a>()
 /// 删除确认框:居中浮层,显示目标文件名 + 确认/取消两个按钮。
 pub fn delete_confirm_popup(
     ws_state: &WorkspaceState,
+    window_width: f32,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some((path, is_dir)) = &ws_state.tree_delete_confirm else {
         return column![].into();
@@ -2547,6 +2548,9 @@ pub fn delete_confirm_popup(
         ]
         .spacing(8),
     )
+    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定)——此前没给
+    // 显式宽度,靠内容撑开。
+    .width(crate::dialog::width(window_width))
     .padding(16)
     .style(crate::dialog::card_style);
 
@@ -2565,6 +2569,7 @@ pub fn delete_confirm_popup(
 /// 改路径,得让用户确认,见 `PendingMove` 文档。
 pub fn move_confirm_popup(
     ws_state: &WorkspaceState,
+    window_width: f32,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(pending) = &ws_state.pending_move else {
         return column![].into();
@@ -2675,7 +2680,12 @@ pub fn move_confirm_popup(
         .align_y(iced_widget::core::Alignment::Center),
     ));
 
-    let dialog = container(body).padding(16).style(crate::dialog::card_style);
+    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定)——此前没给
+    // 显式宽度,靠内容(新名称/到目录两个输入框各自的固定宽度)撑开。
+    let dialog = container(body)
+        .padding(16)
+        .width(crate::dialog::width(window_width))
+        .style(crate::dialog::card_style);
 
     container(dialog)
         .width(Length::Fill)

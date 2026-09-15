@@ -8,7 +8,7 @@
 
 use byteui::interaction::icons;
 use iced_widget::core::{Border, Element, Length};
-use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, stack, text};
+use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -619,6 +619,14 @@ pub struct WorkspaceState {
     /// 反馈:数据库面板与 Agent 终端分栏同屏时,表单开着但用户点进的是终端
     /// 输入框,旧信号仍卡真导致终端打不进字)。
     form_focused: bool,
+    /// 表单里"测试连接"按钮(`DraftTestConnection`)的测试状态——**不**复用
+    /// `test_status`(那张表按"已保存数据源的 id"记账):新增数据源还没有
+    /// id,编辑数据源时表单里的值也可能跟已保存的不一样(用户正在改还没点
+    /// 保存),用同一张表会导致测试结果要么记不进去、要么把"草稿"的测试
+    /// 结果误写成"已保存数据源"的连接状态,污染数据源树上显示的那份。
+    /// 表单打开/关闭(`AddSourceStart`/`EditSourceStart`/`DraftCancel`/
+    /// `DraftSave`)时重置,不跨表单会话保留。
+    draft_test_status: TestStatus,
 }
 
 impl std::fmt::Debug for WorkspaceState {
@@ -627,6 +635,7 @@ impl std::fmt::Debug for WorkspaceState {
             .field("sources", &self.sources)
             .field("editing", &self.editing)
             .field("test_status", &self.test_status)
+            .field("draft_test_status", &self.draft_test_status)
             .field("expanded_sources", &self.expanded_sources)
             .field("schemas", &self.schemas)
             .field("content_tab_count", &self.content.tabs().len())
@@ -655,6 +664,11 @@ impl WorkspaceState {
 
     pub fn test_status(&self, source_id: &str) -> &TestStatus {
         self.test_status.get(source_id).unwrap_or(&TestStatus::Idle)
+    }
+
+    /// 表单里"测试连接"按钮的测试状态,见 `draft_test_status` 字段文档。
+    pub fn draft_test_status(&self) -> &TestStatus {
+        &self.draft_test_status
     }
 
     /// 该数据源在树里是否已展开(header 行 chevron 状态 + 右键菜单"刷新"
@@ -767,6 +781,20 @@ pub enum Message {
     DraftSave,
     /// 取消表单,丢弃草稿。
     DraftCancel,
+    /// 表单里的"测试连接"按钮:直接拿当前草稿里的字段值去连,不要求先
+    /// 保存——跟 `TestConnection` 的区别是后者只能测已保存的数据源(按
+    /// id 查 `ws_state.sources`),新增数据源这时候还没有 id,编辑数据源
+    /// 时表单里也可能是用户改了但还没点保存的值。结果写
+    /// `ws_state.draft_test_status`,不进 `test_status` 那张表(见该字段
+    /// 文档)。
+    DraftTestConnection,
+    /// 表单"测试连接"异步结果。不带 `project_id`——跟 `TestConnectionResult`
+    /// 不同,这里不严格要求跨项目路由:用户即使中途取消表单、切到别的
+    /// 项目,迟到的结果最多写进当前聚焦项目"看不见"的 `draft_test_status`
+    /// 字段(只有表单开着才会渲染),不会串到别的数据源卡片上;真正的防线
+    /// 是 `AddSourceStart`/`EditSourceStart` 每次打开表单都重置这个字段,
+    /// 不会把上一次(甚至上一个项目)的残留结果带出来。
+    DraftTestConnectionResult(Result<(), String>),
     /// 右键菜单点"删除":只记待确认态,弹出确认对话框,不立即删
     /// (同 `ssh::Message::DeleteHostRequest`)。
     DeleteSourceRequest(String),
@@ -894,8 +922,10 @@ pub fn update(
         }
         Message::AddSourceStart => {
             ws_state.editing = Some(DataSourceDraft::default());
+            ws_state.draft_test_status = TestStatus::Idle;
         }
         Message::EditSourceStart(id) => {
+            ws_state.draft_test_status = TestStatus::Idle;
             if let Some(src) = ws_state.sources.iter().find(|s| s.id == id) {
                 ws_state.editing = Some(DataSourceDraft {
                     id: Some(src.id.clone()),
@@ -942,48 +972,12 @@ pub fn update(
                 .id
                 .clone()
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
-            // 连接 URI(可选):存在则以此为准填字段,并从 URI 抽出密码进 Keychain。
-            let mut uri: Option<String> = None;
-            let mut uri_pw: Option<String> = None;
-            let mut host = non_empty(&draft.host);
-            let mut port = draft.port.parse().ok();
-            let mut database = non_empty(&draft.database);
-            let mut username = non_empty(&draft.username);
-            // URI 无效(非 postgres/mysql 或解析失败):忽略 URI,退化为字段式。
-            if !draft.uri.trim().is_empty()
-                && let Some(p) = parse_connection_uri(draft.uri.trim())
-            {
-                uri = Some(p.uri);
-                uri_pw = p.password;
-                host = p.host;
-                port = p.port;
-                database = p.database;
-                username = p.username;
-            }
-            let source = DataSource {
-                id: id.clone(),
-                name: draft.name.clone(),
-                driver: draft.driver,
-                host,
-                port,
-                database,
-                username,
-                uri,
-            };
+            let (source, pw_to_save) = draft_to_source(id.clone(), &draft);
             if let Some(pos) = ws_state.sources.iter().position(|s| s.id == id) {
                 ws_state.sources[pos] = source;
             } else {
                 ws_state.sources.push(source);
             }
-            // 密码:URI 内嵌优先,其次表单 password 字段。
-            let pw_to_save = uri_pw.or_else(|| {
-                if draft.password.is_empty() {
-                    None
-                } else {
-                    Some(draft.password.clone())
-                }
-            });
             if let Some(p) = pw_to_save
                 && let Ok(entry) = keyring_entry(project_id, &id)
             {
@@ -998,9 +992,46 @@ pub fn update(
             if let Err(e) = save_sources(repo_path, &ws_state.sources) {
                 tracing::warn!("写入 database.json 失败: {e}");
             }
+            ws_state.draft_test_status = TestStatus::Idle;
         }
         Message::DraftCancel => {
             ws_state.editing = None;
+            ws_state.draft_test_status = TestStatus::Idle;
+        }
+        Message::DraftTestConnection => {
+            let Some(draft) = ws_state.editing.clone() else {
+                return;
+            };
+            let (source, mut password) =
+                draft_to_source(draft.id.clone().unwrap_or_default(), &draft);
+            // 密码留空 = "编辑已有源时不改密码"的约定(同 `DraftSave`);测试
+            // 连接要用回 Keychain 里已保存的那份,否则编辑时清空过密码框
+            // 就永远测不通,即使原密码其实没变。
+            if password.is_none()
+                && let Some(id) = &draft.id
+                && let Ok(entry) = keyring_entry(project_id, id)
+            {
+                password = entry.get_password().ok();
+            }
+            ws_state.draft_test_status = TestStatus::Testing;
+            handle.spawn(async move {
+                let result = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    test_connection(source, password),
+                )
+                .await;
+                let result = match result {
+                    Ok(r) => r,
+                    Err(_) => Err("连接超时(5秒)".to_string()),
+                };
+                emit(Message::DraftTestConnectionResult(result));
+            });
+        }
+        Message::DraftTestConnectionResult(result) => {
+            ws_state.draft_test_status = match result {
+                Ok(()) => TestStatus::Ok,
+                Err(e) => TestStatus::Err(e),
+            };
         }
         Message::DeleteSourceRequest(id) => ws_state.request_delete(id),
         Message::DeleteSourceCancel => ws_state.cancel_delete(),
@@ -1496,6 +1527,52 @@ fn set_draft(ws_state: &mut WorkspaceState, f: impl FnOnce(&mut DataSourceDraft)
     }
 }
 
+/// 表单草稿 → `DataSource` + 待用密码的统一转换:"连接 URI 优先于分字段,
+/// URI 解析失败退化成分字段"这套逻辑,`DraftSave`(落盘)和
+/// `DraftTestConnection`(测试连接,不落盘)两处共用,避免各写一份互相
+/// 漂移。`id` 由调用方决定——`DraftSave` 传新 uuid 或已有 id(要落进
+/// `ws_state.sources`);`DraftTestConnection` 随便传一个不落盘的临时值,
+/// `DataSource.id` 本身不参与 `build_sql_url`/`build_mongo_url` 拼接,
+/// 传什么都不影响连接结果。
+fn draft_to_source(id: String, draft: &DataSourceDraft) -> (DataSource, Option<String>) {
+    let mut uri: Option<String> = None;
+    let mut uri_pw: Option<String> = None;
+    let mut host = non_empty(&draft.host);
+    let mut port = draft.port.parse().ok();
+    let mut database = non_empty(&draft.database);
+    let mut username = non_empty(&draft.username);
+    // URI 无效(非 postgres/mysql 或解析失败):忽略 URI,退化为字段式。
+    if !draft.uri.trim().is_empty()
+        && let Some(p) = parse_connection_uri(draft.uri.trim())
+    {
+        uri = Some(p.uri);
+        uri_pw = p.password;
+        host = p.host;
+        port = p.port;
+        database = p.database;
+        username = p.username;
+    }
+    let source = DataSource {
+        id,
+        name: draft.name.clone(),
+        driver: draft.driver,
+        host,
+        port,
+        database,
+        username,
+        uri,
+    };
+    // 密码:URI 内嵌优先,其次表单 password 字段。
+    let password = uri_pw.or_else(|| {
+        if draft.password.is_empty() {
+            None
+        } else {
+            Some(draft.password.clone())
+        }
+    });
+    (source, password)
+}
+
 fn non_empty(s: &str) -> Option<String> {
     let t = s.trim();
     if t.is_empty() {
@@ -1635,32 +1712,78 @@ async fn test_connection(source: DataSource, password: Option<String>) -> Result
     }
 }
 
-/// 驱动管理弹层:列出全部驱动类型,点按切换启用/禁用。
-fn drivers_popup<'a>(
+/// 驱动管理弹窗:窗口级居中浮层,视觉模板同 `delete_confirm_popup`(CARD
+/// 底 + 圆角描边 + 标题图标)。此前走 `crate::menu::shell_frosted`(右键
+/// 菜单同款外壳)、内联挂在数据源列表下方,不居中也没有遮罩——改成跟本面板
+/// 其它弹窗一致的普通弹窗(2026-09-15)。每行一个 checkbox 前置位的条目
+/// (启用的打 ✓),点按切换启用/禁用,不关弹窗。窗口级 overlay,由
+/// `app.rs` 挂载(见其调用点注释),`pub` 是为了让那边能调到。
+pub fn drivers_popup<'a>(
     app_state: &'a AppState,
+    window_width: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    // 首行是分区标题(纯文字、不套按钮),随后每行一个 checkbox 前置位的菜单
-    // 项(启用的打 ✓)。单项/外壳统一走 `crate::menu`,表面即文件树右键菜单。
-    let mut items: Vec<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> = vec![
-        text("已启用的驱动")
-            .size(byteui::theme::font::caption())
-            .color(byteui::theme::color::current().dim)
-            .into(),
-    ];
+    let title = row![
+        icons::view(
+            icons::IconKind::Database,
+            byteui::theme::icon_size::row(),
+            byteui::theme::color::current().cream,
+        ),
+        text("管理驱动")
+            .size(byteui::theme::font::subtitle())
+            .color(byteui::theme::color::current().cream),
+    ]
+    .spacing(6)
+    .align_y(iced_widget::core::Alignment::Center);
+
+    let mut items_col = column![].spacing(2);
     for driver in DriverKind::ALL {
         let enabled = app_state.is_enabled(driver);
         let checkbox: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
             text(if enabled { "✓" } else { " " })
                 .size(byteui::theme::font::body())
                 .into();
-        items.push(crate::menu::item_row_fill(
+        items_col = items_col.push(crate::menu::item_row_fill(
             Some(checkbox),
             driver.label(),
             byteui::theme::color::current().body,
             Some(Message::ToggleDriver(driver)),
         ));
     }
-    crate::menu::shell_frosted(items, iced_widget::core::Length::Fixed(220.0))
+
+    let close = button(
+        text("关闭")
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().dim),
+    )
+    .on_press(Message::DriversPopupToggle)
+    .padding([6, 12])
+    .style(crate::dialog::action_button_style(
+        byteui::theme::color::current().dim,
+    ));
+
+    let dialog = container(
+        column![
+            title,
+            text("勾选的驱动才会出现在「新增数据源」的驱动下拉里。")
+                .size(byteui::theme::font::label())
+                .color(byteui::theme::color::current().dim),
+            items_col,
+            crate::dialog::actions(row![close]),
+        ]
+        .spacing(10),
+    )
+    .padding(16)
+    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定),取代此前
+    // 写死的 280px。
+    .width(crate::dialog::width(window_width))
+    .style(crate::dialog::card_style);
+
+    container(dialog)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .into()
 }
 
 /// 数据源根节点图标:关系型驱动统一用 `Database`(圆柱),MongoDB 用
@@ -1814,12 +1937,37 @@ fn source_tree_node<'a>(
     }
 }
 
-/// 新增/编辑数据源表单。SQLite 只留"文件路径"一栏,其它驱动列出 host/port/
-/// database/username/password。
-fn source_form<'a>(
+/// 新增/编辑数据源弹窗:窗口级居中浮层,视觉模板同 `delete_confirm_popup`
+/// (CARD 底 + 圆角描边 + 标题图标)。SQLite 只留"文件路径"一栏,其它驱动
+/// 列出 host/port/database/username/password。标题图标用面板自己的
+/// `icons::IconKind::Database`(同 `home_panel_head` 头部图标),不用
+/// footer 按钮的 `SquarePlus`——同 Todo「清空列表」弹窗的既有口径:标题
+/// 图标标的是"这是哪个面板的弹窗",不重复按钮本身的动作语义。`pub` 是
+/// 为了让 `app.rs` 的窗口级 overlay 能调到。
+pub fn source_form<'a>(
     draft: &'a DataSourceDraft,
     app_state: &'a AppState,
+    test_status: &'a TestStatus,
+    window_width: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let title_text = if draft.id.is_some() {
+        "编辑数据源"
+    } else {
+        "新增数据源"
+    };
+    let title = row![
+        icons::view(
+            icons::IconKind::Database,
+            byteui::theme::icon_size::row(),
+            byteui::theme::color::current().cream,
+        ),
+        text(title_text)
+            .size(byteui::theme::font::subtitle())
+            .color(byteui::theme::color::current().cream),
+    ]
+    .spacing(6)
+    .align_y(iced_widget::core::Alignment::Center);
+
     let mut driver_options: Vec<DriverOption> = Vec::new();
     for driver in DriverKind::ALL {
         // 只列已启用的驱动;若正在编辑的数据源本身用的驱动已被禁用,
@@ -1846,7 +1994,7 @@ fn source_form<'a>(
         |opt: DriverOption| Message::DraftDriverChanged(opt.driver),
     );
 
-    let mut col = column![driver_select].spacing(8);
+    let mut col = column![title, driver_select].spacing(8);
     col = col.push(wrap_form_input(
         byteui::form::input_text::view_on_bg(
             "名字",
@@ -1982,28 +2130,66 @@ fn source_form<'a>(
                 },
             )
     };
+    // 按钮分两组:"测试连接"靠左;保存/取消靠右,中间用 `Fill` 空位把
+    // 两组顶到卡片两端——同 `ssh.rs::host_form` 的既有布局(2026-09-15 新增
+    // "测试连接",此前只有保存/取消,靠 `dialog::actions` 整行右对齐;现在
+    // 两组各自的对齐关系仍旧,`row!` 里混进一个 `Length::Fill` 子元素会让
+    // 外层 `row!` 自动升级成 `Fill` 宽度,不需要再套一层 `dialog::actions`)。
+    let left = row![text_btn(
+        "测试连接",
+        byteui::theme::color::current().cream,
+        Message::DraftTestConnection
+    )]
+    .spacing(6);
+    let right = row![
+        text_btn(
+            "保存",
+            byteui::theme::color::current().cream,
+            Message::DraftSave
+        ),
+        text_btn(
+            "取消",
+            byteui::theme::color::current().dim,
+            Message::DraftCancel
+        ),
+    ]
+    .spacing(6);
     col = col.push(
-        row![
-            text_btn(
-                "保存",
-                byteui::theme::color::current().cream,
-                Message::DraftSave
-            ),
-            text_btn(
-                "取消",
-                byteui::theme::color::current().dim,
-                Message::DraftCancel
-            ),
-        ]
-        .spacing(6),
+        row![left, iced_widget::Space::new().width(Length::Fill), right]
+            .spacing(6)
+            .align_y(iced_widget::core::Alignment::Center),
     );
+
+    // 测试结果提示行,视觉/文案照抄 `source_tree_node` 卡片上那行状态文字
+    // (`Idle` 不显示任何内容,同 `ssh.rs::host_form` 的 `status_text` 既有
+    // 处理)。
+    let (status_text, status_color) = match test_status {
+        TestStatus::Idle => (String::new(), byteui::theme::color::current().dim),
+        TestStatus::Testing => ("测试中…".to_string(), byteui::theme::color::current().dim),
+        TestStatus::Ok => (
+            "✓ 连接成功".to_string(),
+            byteui::theme::color::current().green,
+        ),
+        TestStatus::Err(e) => (format!("✗ {e}"), byteui::theme::color::current().red),
+    };
+    if !status_text.is_empty() {
+        col = col.push(
+            text(status_text)
+                .size(byteui::theme::font::caption_sm())
+                .color(status_color),
+        );
+    }
 
     // 边框/底色统一成原生预览"文件内搜索"风格(`find_field_shell`/`find_rows`
     // 外层组合的既有配色):底色 card、边框普通态 `colors.border`(不再恒描
     // 金)——2026-09-11 需求,数据库/主机新增表单跟文件内搜索输入框对齐。
-    container(col)
+    // 宽度从 `Fill`(此前内联挂在数据源列表下方,撑满面板宽度)改成
+    // `dialog::width`(整窗 1/3,2026-09-15 统一约定,取代中间态的写死
+    // 420px)——现在是窗口级居中弹窗(见函数文档),撑满宽度会让输入框
+    // 铺满整个窗口,不像"普通弹窗"。
+    let dialog = container(col)
         .padding(12)
-        .width(iced_widget::core::Length::Fill)
+        .width(crate::dialog::width(window_width))
         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
             background: Some(byteui::theme::color::current().card.into()),
             border: iced_widget::core::Border {
@@ -2012,13 +2198,20 @@ fn source_form<'a>(
                 radius: 8.0.into(),
             },
             ..iced_widget::container::Style::default()
-        })
+        });
+
+    container(dialog)
+        .width(iced_widget::core::Length::Fill)
+        .height(iced_widget::core::Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
         .into()
 }
 
-/// 面板主视图:驱动管理弹层 + 新增/编辑表单 + 数据源卡片列表。
+/// 面板主视图:数据源卡片列表。驱动管理/新增编辑表单/删除确认三个弹窗
+/// 已改为窗口级 overlay(见 `app.rs` 的 `popped` 分支),不再需要
+/// `AppState` 参数。
 pub fn view<'a>(
-    app_state: &'a AppState,
     ws_state: &'a WorkspaceState,
     width: Length,
     outer: Border,
@@ -2034,10 +2227,6 @@ pub fn view<'a>(
     .padding(crate::theme::region::project_pane().padding);
 
     let mut list = column![].spacing(12).padding([0, 20]);
-
-    if app_state.drivers_popup_open() {
-        list = list.push(drivers_popup(app_state));
-    }
 
     if ws_state.sources().is_empty() {
         list = list.push(
@@ -2055,12 +2244,6 @@ pub fn view<'a>(
                 ws_state.schema_state(&source.id),
             ));
         }
-    }
-
-    // 表单排在数据源树下方,不是上方——跟主机面板 `ssh.rs::view` 的既有
-    // 顺序一致(先列表后表单),新增/编辑不会把树往下挤。
-    if let Some(draft) = ws_state.editing() {
-        list = list.push(source_form(draft, app_state));
     }
 
     let scroll = Scrollable::new(list)
@@ -2084,26 +2267,25 @@ pub fn view<'a>(
             },
         );
 
-    // 有"待确认删除的数据源"时,在面板上叠一层磨砂遮罩 + 确认对话框;
-    // 点遮罩(或对话框的取消)回 `DeleteSourceCancel` 收起,确认才真删——
-    // 同 `ssh.rs::view` 的既有约定。
-    if let Some(source_id) = ws_state.delete_confirm() {
-        let dismiss = crate::dialog::scrim(Message::DeleteSourceCancel);
-        return stack![base, dismiss, delete_confirm_popup(ws_state, source_id)]
-            .width(width)
-            .height(iced_widget::core::Length::Fill)
-            .into();
-    }
-
+    // 「删除数据源」确认框 / 「新增/编辑数据源」表单 / 「管理驱动」**不**
+    // 在这里叠(此前的 panel-level `stack!` 只在本面板的 `width` 范围内
+    // 居中,而不是整个软件窗体——2026-09-15 改为窗口级 overlay,由
+    // `app.rs` 顶层 `popped` 分支挂载,同 `todo::clear_confirm_popup` 的
+    // 既有口径,见 `delete_confirm_popup`/`source_form`/`drivers_popup`
+    // 文档。三者互斥优先级(app.rs 侧 if/else if 链保证同一时刻只显示
+    // 一个):待确认删除 > 新增/编辑表单 > 驱动管理。
     base.into()
 }
 
 /// 删除数据源确认框:居中浮层,列出要删的数据源名,确认(红)才执行
 /// `DeleteSource`,取消/遮罩只清待确认态。视觉照抄 `ssh.rs::
 /// delete_confirm_popup`(CARD 底 + 圆角描边 + 取消/确认两个圆角按钮)。
-fn delete_confirm_popup<'a>(
+/// 窗口级 overlay,由 `app.rs` 挂载(见其调用点注释),`pub` 是为了让那边
+/// 能调到。
+pub fn delete_confirm_popup<'a>(
     ws_state: &'a WorkspaceState,
     source_id: &'a str,
+    window_width: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let name = ws_state
         .sources()
@@ -2144,6 +2326,9 @@ fn delete_confirm_popup<'a>(
         ]
         .spacing(8),
     )
+    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定)——此前没给
+    // 显式宽度,靠内容撑开。
+    .width(crate::dialog::width(window_width))
     .padding(16)
     .style(crate::dialog::card_style);
 

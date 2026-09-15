@@ -340,6 +340,7 @@ fn results_list<'a>(
 pub fn search_modal<'a>(
     ws: &'a WorkspaceState,
     project_root: Option<&'a Path>,
+    window_width: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     if !ws.open {
         return column![].into();
@@ -414,8 +415,10 @@ pub fn search_modal<'a>(
         );
     }
 
+    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定),取代此前
+    // 写死的 560px。
     let dialog = container(body.padding(16))
-        .width(Length::Fixed(560.0))
+        .width(crate::dialog::width(window_width))
         .height(Length::Shrink)
         .max_height(640.0)
         .style(crate::dialog::card_style);

@@ -7,7 +7,7 @@
 use crate::app::{App, HoverId, ssh_tab_hover_key};
 use byteui::interaction::icons;
 use iced_widget::core::Element;
-use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, stack, text};
+use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1013,11 +1013,37 @@ impl iced_widget::core::widget::Operation<()> for CaptureFormFocus {
     }
 }
 
-fn host_form<'a>(
+/// 新增/编辑主机弹窗:窗口级居中浮层,视觉模板同 `delete_confirm_popup`
+/// (CARD 底 + 圆角描边 + 标题图标)。标题图标用面板自己的
+/// `icons::IconKind::Server`(同 `home_panel_head` 头部图标),不用 footer
+/// 按钮的 `SquarePlus`——同 Todo「清空列表」/数据库面板弹窗的既有口径:
+/// 标题图标标的是"这是哪个面板的弹窗",不重复按钮本身的动作语义。`pub`
+/// 是为了让 `app.rs` 的窗口级 overlay 能调到。
+pub fn host_form<'a>(
     draft: &'a SshHostDraft,
     status: &'a TestStatus,
+    window_width: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let title_text = if draft.id.is_some() {
+        "编辑主机"
+    } else {
+        "添加主机"
+    };
+    let title = row![
+        icons::view(
+            icons::IconKind::Server,
+            byteui::theme::icon_size::row(),
+            byteui::theme::color::current().cream,
+        ),
+        text(title_text)
+            .size(byteui::theme::font::subtitle())
+            .color(byteui::theme::color::current().cream),
+    ]
+    .spacing(6)
+    .align_y(iced_widget::core::Alignment::Center);
+
     let mut col = column![
+        title,
         wrap_ssh_field(
             byteui::form::input_text::view_on_bg(
                 "主机名称",
@@ -1228,10 +1254,14 @@ fn host_form<'a>(
 
     // 边框/底色统一成原生预览"文件内搜索"风格(`find_field_shell`/`find_rows`
     // 外层组合的既有配色):底色 card、边框普通态 `colors.border`(不再恒描
-    // 金)——2026-09-11 需求,同步 `database.rs::source_form` 的改法。
-    container(col)
+    // 金)——2026-09-11 需求,同步 `database.rs::source_form` 的改法。宽度从
+    // `Fill`(此前内联挂在主机列表下方,撑满面板宽度)改成 `dialog::width`
+    // (整窗 1/3,2026-09-15 统一约定,取代中间态的写死 420px)——现在是
+    // 窗口级居中弹窗(见函数文档),撑满宽度会让输入框铺满整个窗口,不像
+    // "普通弹窗"。
+    let dialog = container(col)
         .padding(12)
-        .width(iced_widget::core::Length::Fill)
+        .width(crate::dialog::width(window_width))
         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
             background: Some(byteui::theme::color::current().card.into()),
             border: iced_widget::core::Border {
@@ -1240,7 +1270,13 @@ fn host_form<'a>(
                 radius: 8.0.into(),
             },
             ..iced_widget::container::Style::default()
-        })
+        });
+
+    container(dialog)
+        .width(iced_widget::core::Length::Fill)
+        .height(iced_widget::core::Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
         .into()
 }
 
@@ -1284,15 +1320,6 @@ pub fn view<'a>(
         }
     }
 
-    if let Some(draft) = ws_state.editing() {
-        let status = draft
-            .id
-            .as_deref()
-            .map(|id| ws_state.test_status(id))
-            .unwrap_or(&TestStatus::Idle);
-        list = list.push(host_form(draft, status));
-    }
-
     let scroll = Scrollable::new(list)
         .width(iced_widget::core::Length::Fill)
         .height(iced_widget::core::Length::Fill)
@@ -1321,25 +1348,23 @@ pub fn view<'a>(
             },
         );
 
-    // 有"待确认删除的主机"时,在面板上叠一层半透明遮罩 + 确认对话框;
-    // 点遮罩(或对话框的取消)回 `DeleteHostCancel` 收起,确认才真删。
-    if let Some(host_id) = ws_state.delete_confirm() {
-        let dismiss = crate::dialog::scrim(Message::DeleteHostCancel);
-        return stack![base, dismiss, delete_confirm_popup(ws_state, host_id)]
-            .width(width)
-            .height(iced_widget::core::Length::Fill)
-            .into();
-    }
-
+    // 「删除主机」确认框 / 「添加/编辑主机」表单**不**在这里叠(此前的
+    // panel-level `stack!` 只在本面板的 `width` 范围内居中,而不是整个
+    // 软件窗体——2026-09-15 改为窗口级 overlay,由 `app.rs` 顶层
+    // `popped` 分支挂载,同 `todo::clear_confirm_popup` 的既有口径,见
+    // `delete_confirm_popup`/`host_form` 文档。
     base.into()
 }
 
 /// 删除主机的确认对话框:居中卡片,列出要删的主机名,确认(红)才执行
 /// `DeleteHost`,取消/遮罩只清待确认态。视觉参照文件树面板的
 /// `delete_confirm_popup`(CARD 底 + 圆角描边 + 取消/确认两个圆角按钮)。
-fn delete_confirm_popup<'a>(
+/// 窗口级 overlay,由 `app.rs` 挂载(见其调用点注释),`pub` 是为了让那边
+/// 能调到。
+pub fn delete_confirm_popup<'a>(
     ws_state: &'a WorkspaceState,
     host_id: &'a str,
+    window_width: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let name = ws_state
         .hosts()
@@ -1380,6 +1405,10 @@ fn delete_confirm_popup<'a>(
         ]
         .spacing(8),
     )
+    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定)——此前没给
+    // 显式宽度,靠内容(一行确认文案)撑开,跟其它弹窗的固定/自适应宽度
+    // 互相不一致。
+    .width(crate::dialog::width(window_width))
     .padding(16)
     .style(crate::dialog::card_style);
 

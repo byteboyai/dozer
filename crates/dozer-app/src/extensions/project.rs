@@ -9,7 +9,7 @@ use dozer_core::protocol::ProjectInfo;
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
 use iced_widget::core::{Border, Element, Length, Rectangle};
-use iced_widget::{MouseArea, button, column, container, row, stack, text};
+use iced_widget::{MouseArea, button, column, container, row, text};
 use std::path::PathBuf;
 
 use crate::project_scaffold;
@@ -974,25 +974,11 @@ pub fn view<'a>(
                 },
             );
 
-    if ws_state.delete_pending.is_some() {
-        let dismiss = crate::dialog::scrim(Message::DeleteProjectCancel);
-        return stack![base, dismiss, project_delete_confirm_popup(ws_state)]
-            .width(width)
-            .height(Length::Fill)
-            .into();
-    }
-
-    if ws_state.scaffold_run.is_some() {
-        // 进行中不可通过点击遮罩关闭:遮罩本身不挂 `on_press`,只挡住底层
-        // 交互(与 `delete_pending` 分支的可点击遮罩故意不同——必须等全部
-        // 步骤完成才能关,见 spec"弹窗可取消性"一节)。
-        let scrim = crate::dialog::scrim_blocking();
-        return stack![base, scrim, scaffold_progress_popup(ws_state)]
-            .width(width)
-            .height(Length::Fill)
-            .into();
-    }
-
+    // 「删除项目」确认框 / 「修复项目」进度弹窗**不**在这里叠(此前的
+    // panel-level `stack!` 只在本面板的 `width` 范围内居中,而不是整个
+    // 软件窗体——2026-09-15 改为窗口级 overlay,由 `app.rs` 顶层
+    // `popped` 分支挂载,同 `todo::clear_confirm_popup` 的既有口径,见
+    // `project_delete_confirm_popup`/`scaffold_progress_popup` 文档。
     base.into()
 }
 
@@ -1170,9 +1156,11 @@ fn scaffold_backfill_row(
 
 /// "修复项目"进度弹窗:视觉模板同 `project_delete_confirm_popup`(卡片 +
 /// 底部按钮)。进行中时"关闭"按钮不可点(`on_press_maybe`),全部完成
-/// (`ScaffoldRunState::all_done`)才激活。
-fn scaffold_progress_popup(
+/// (`ScaffoldRunState::all_done`)才激活。窗口级 overlay,由 `app.rs`
+/// 挂载(见其调用点注释),`pub` 是为了让那边能调到。
+pub fn scaffold_progress_popup(
     ws_state: &WorkspaceState,
+    window_width: f32,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(run) = &ws_state.scaffold_run else {
         return container(column![]).into();
@@ -1196,19 +1184,47 @@ fn scaffold_progress_popup(
         byteui::theme::color::current().dim,
     ));
 
-    let card = column![
+    let title = row![
+        icons::view(
+            icons::IconKind::Briefcase,
+            byteui::theme::icon_size::row(),
+            byteui::theme::color::current().cream,
+        ),
         text("修复项目")
             .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().cream),
+    ]
+    .spacing(6)
+    .align_y(iced_widget::core::Alignment::Center);
+
+    let card = column![
+        title,
         rows,
-        container(close_btn).align_x(iced_widget::core::alignment::Horizontal::Right),
+        // 之前 `container(close_btn).align_x(Right)` 没给容器显式宽度,
+        // 默认 `Shrink`——容器跟按钮本身一样宽,`align_x` 无从对齐起,视觉
+        // 上就是贴左(2026-09-15 用户反馈)。改用 `dialog::actions`(同其它
+        // 弹窗底部按钮行的既有约定),内部套了 `width(Fill)` 才会真正靠右。
+        crate::dialog::actions(row![close_btn]),
     ]
     .spacing(14);
 
-    container(card)
-        .width(Length::Fixed(360.0))
+    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定)——此前固定
+    // 360px,窗口变宽变窄时弹窗大小不跟着变,跟其它弹窗的写死像素值互相
+    // 不一致。
+    let dialog = container(card)
+        .width(crate::dialog::width(window_width))
         .padding(16)
-        .style(crate::dialog::card_style)
+        .style(crate::dialog::card_style);
+
+    // 之前这里直接返回卡片本体,在外层 `stack!` 里默认贴左上角——同类
+    // "删除项目"确认弹窗(`project_delete_confirm_popup`)/SSH 删主机确认
+    // (`ssh.rs::delete_confirm_popup`)都套了一层 `Fill` + `Center` 才居中,
+    // 这里漏了这一层,视觉上不像"普通弹窗"(2026-09-15 修复)。
+    container(dialog)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
         .into()
 }
 
@@ -1216,8 +1232,11 @@ fn scaffold_progress_popup(
 /// (卡片 + 取消/确认按钮)。单选行复用 `ssh.rs::radio_dot` 的视觉语言
 /// (选中态 GOLD 实心描边,未选中态空心 BORDER 描边)——ssh 的 `radio_dot`
 /// 绑定在 `ssh::Message` 上、跨模块复用不了类型,这里就地画一份同样的视觉。
-fn project_delete_confirm_popup(
+/// 窗口级 overlay,由 `app.rs` 挂载(见其调用点注释),`pub` 是为了让那边
+/// 能调到。
+pub fn project_delete_confirm_popup(
     ws_state: &WorkspaceState,
+    window_width: f32,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let selected = ws_state
         .delete_pending
@@ -1291,11 +1310,22 @@ fn project_delete_confirm_popup(
         byteui::theme::color::current().red,
     ));
 
+    let title = row![
+        icons::view(
+            icons::IconKind::FolderX,
+            byteui::theme::icon_size::row(),
+            byteui::theme::color::current().cream,
+        ),
+        text("删除项目")
+            .size(byteui::theme::font::subtitle())
+            .color(byteui::theme::color::current().cream),
+    ]
+    .spacing(6)
+    .align_y(iced_widget::core::Alignment::Center);
+
     let dialog = container(
         column![
-            text("删除项目")
-                .size(byteui::theme::font::subtitle())
-                .color(byteui::theme::color::current().cream),
+            title,
             text("选择删除范围,操作会把对应内容移入系统回收站(可找回)。")
                 .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().dim),
@@ -1315,6 +1345,9 @@ fn project_delete_confirm_popup(
         ]
         .spacing(12),
     )
+    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定)——此前没给
+    // 显式宽度,靠内容(三行单选文案)撑开,窗口变宽变窄时弹窗大小不跟着变。
+    .width(crate::dialog::width(window_width))
     .padding(16)
     .style(crate::dialog::card_style);
 

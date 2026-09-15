@@ -389,6 +389,10 @@ pub struct WorkspaceState {
     /// "处理"按钮是否正在等待 `ProcessTodoNow` RPC 返回——耗时可能到 10
     /// 分钟,期间按钮显示 loading 态、禁用重复提交。
     detail_processing: bool,
+    /// "清空列表"确认弹窗是否展开。点 footbar「清空列表」按钮先弹这个
+    /// 确认框(危险操作,不可撤销),取消/遮罩收起,确认才真正触发
+    /// `Message::ClearListConfirm`。
+    clear_confirm: bool,
 }
 
 impl WorkspaceState {
@@ -709,6 +713,12 @@ impl WorkspaceState {
         self.detail_open.is_some()
     }
 
+    /// "清空列表"确认弹窗是否打开(窗口级 overlay 挂载判据,同
+    /// `detail_popup_open`)。
+    pub fn clear_confirm_open(&self) -> bool {
+        self.clear_confirm
+    }
+
     pub fn detail_turns(&self) -> &[dozer_core::protocol::TurnRecord] {
         &self.detail_turns
     }
@@ -922,9 +932,14 @@ pub enum Message {
     /// 构造),转交内核的悬停动画表(`app.rs::set_hover`),与全应用其它卡片
     /// 用同一套 hover 机制。
     Hover(HoverId, bool),
-    /// 点 footbar 的"清空列表"按钮。**功能尚未实现**:`update` 里是
-    /// no-op,仅占位——UI 已就位,后续接入清空逻辑时在此落地。
-    ClearList,
+    /// 点 footbar 的"清空列表"按钮:弹出确认框(危险操作,不可撤销),
+    /// 不直接清空,见 `clear_confirm_popup`。
+    ClearListRequest,
+    /// 确认弹窗"取消"/点遮罩,收起弹窗,不清空。
+    ClearListCancel,
+    /// 确认弹窗"清空"。**清空本身尚未实现**:`update` 里只收起弹窗,是
+    /// no-op,仅占位——弹窗流程已就位,后续接入清空逻辑时在此落地。
+    ClearListConfirm,
     /// 拉取列表的异步结果(轮询、或任一写操作成功后的刷新都落这里)。
     Loaded(Vec<TodoInfo>),
     /// 写操作(增/改/勾选/排序/计划日期/派发)的异步确认;不管成功失败都
@@ -1198,8 +1213,11 @@ pub fn update(
     match msg {
         // 卡片悬停由内核 `App::update` 拦截转发到 `set_hover`,不会到这。
         Message::Hover(_, _) => {}
-        // footbar"清空列表"按钮:功能尚未实现,仅占位。
-        Message::ClearList => {}
+        // footbar"清空列表"按钮:弹出确认框,不直接清空。
+        Message::ClearListRequest => ws_state.clear_confirm = true,
+        Message::ClearListCancel => ws_state.clear_confirm = false,
+        // 确认弹窗"清空":清空本身尚未实现,先收起弹窗,仅占位。
+        Message::ClearListConfirm => ws_state.clear_confirm = false,
         // `TextInputMenuOpen` 由内核拦截映射为右键菜单,不进这里。
         Message::TextInputMenuOpen(_) => {}
         // `ToggleListCollapse` 由内核拦截映射为列表列收起/展开,不进这里。
@@ -2014,12 +2032,13 @@ fn todo_footer_bar<'a>(
 /// 左栏底部栏(位于分类导航之下、靠底):仅右侧"清空列表"按钮,不再展示
 /// 左侧任务计数与图标。已从 content pane 右下角迁到左栏(见 `view`)。样式
 /// 对齐 `files.rs` 的 `git_footer_bar`
-/// (顶部分隔线 + 左图标/文案 + 右侧操作按钮)。**清空功能尚未实现**:
-/// `清空列表` 走 `Message::ClearList`,在 `update` 里是 no-op,这里只负责
-/// 把 UI 摆出来。危险操作(清空整个列表不可撤销),按统一按钮规范(见
-/// `dialog::action_button_border_color` 文档)走红字 + 描边静止态
-/// `border`、悬浮/按下态变 `gold`(此前固定奶油字 + 不响应 hover 的
-/// 静态描边)。
+/// (顶部分隔线 + 左图标/文案 + 右侧操作按钮)。危险操作(清空整个列表
+/// 不可撤销),点按钮先弹确认框(`clear_confirm_popup`)而非直接清空;
+/// 按统一按钮规范(见 `dialog::action_button_border_color` 文档)走红字 +
+/// 描边静止态 `border`、悬浮/按下态变 `gold`(此前固定奶油字 + 不响应
+/// hover 的静态描边)。**清空本身尚未实现**:`ClearListConfirm` 在
+/// `update` 里只收起弹窗,是 no-op,仅占位——弹窗流程已就位,后续接入
+/// 清空逻辑时在此落地。
 fn todo_clear_footer_bar<'a>(
     _ws_state: &'a WorkspaceState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -2037,7 +2056,7 @@ fn todo_clear_footer_bar<'a>(
         .spacing(6)
         .align_y(iced_widget::core::Alignment::Center),
     )
-    .on_press(Message::ClearList)
+    .on_press(Message::ClearListRequest)
     .padding([4, 8])
     .style(|_t: &iced_widget::Theme, s| button::Style {
         background: Some(byteui::theme::color::current().bg.into()),
@@ -2078,6 +2097,75 @@ fn todo_clear_footer_bar<'a>(
             background: None,
             ..container::Style::default()
         })
+        .into()
+}
+
+/// "清空列表"确认弹窗:窗口级居中浮层,视觉模板同
+/// `extensions::project::project_delete_confirm_popup`/
+/// `ssh.rs::delete_confirm_popup`(CARD 底 + 圆角描边 + 标题图标 +
+/// 取消/确认两个圆角按钮)。标题图标用 Todo 面板自己的
+/// `icons::IconKind::ListTodo`(同 `home_panel_head` 头部图标),不用
+/// footbar 按钮的 `Trash`——图标标的是"这是 Todo 面板的弹窗",危险语义已
+/// 由红色"清空"按钮本身表达,不需要标题图标重复。
+pub fn clear_confirm_popup(
+    _ws_state: &WorkspaceState,
+    window_width: f32,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let title = row![
+        icons::view(
+            icons::IconKind::ListTodo,
+            byteui::theme::icon_size::row(),
+            byteui::theme::color::current().cream,
+        ),
+        text("清空列表")
+            .size(byteui::theme::font::subtitle())
+            .color(byteui::theme::color::current().cream),
+    ]
+    .spacing(6)
+    .align_y(iced_widget::core::Alignment::Center);
+
+    let cancel = button(
+        text("取消")
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().dim),
+    )
+    .on_press(Message::ClearListCancel)
+    .padding([6, 12])
+    .style(crate::dialog::action_button_style(
+        byteui::theme::color::current().dim,
+    ));
+    let confirm = button(
+        text("清空")
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().red),
+    )
+    .on_press(Message::ClearListConfirm)
+    .padding([6, 12])
+    .style(crate::dialog::action_button_style(
+        byteui::theme::color::current().red,
+    ));
+
+    let dialog = container(
+        column![
+            title,
+            text("这会清空当前项目的全部任务,操作不可撤销。")
+                .size(byteui::theme::font::label())
+                .color(byteui::theme::color::current().dim),
+            crate::dialog::actions(row![cancel, confirm].spacing(8)),
+        ]
+        .spacing(12),
+    )
+    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定)——此前没给
+    // 显式宽度,靠内容撑开。
+    .width(crate::dialog::width(window_width))
+    .padding(16)
+    .style(crate::dialog::card_style);
+
+    container(dialog)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
         .into()
 }
 

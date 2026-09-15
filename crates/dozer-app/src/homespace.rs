@@ -603,8 +603,9 @@ fn home_project_list_view(
 /// `gold`(此前描边固定不响应 hover)+ 灰字 `dim`(此前用奶油字
 /// `cream`,普通按钮该用灰字,危险按钮才用红字)。字号用 `label`(13px,
 /// 同 `project_footer_bar` 的 `byteui::theme::font::label()`)。宽度改为
-/// footbar 行宽的一半、居中放置(此前 `width(Fill)` 撑满整行,视觉上比
-/// workspace 项目面板的功能按钮粗重)。
+/// footbar 行宽的一半、靠右对齐(此前 `width(Fill)` 撑满整行,视觉上比
+/// workspace 项目面板的功能按钮粗重;之后又短暂改成居中,2026-09-15 定为
+/// 右对齐)。
 fn home_new_project_button()
 -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 按钮内容用 `container` 撑满 + `align_x(Center)` 居中标题文字——`button`
@@ -639,8 +640,7 @@ fn home_new_project_button()
 
     row![
         iced_widget::Space::new().width(Length::FillPortion(1)),
-        btn.width(Length::FillPortion(2)),
-        iced_widget::Space::new().width(Length::FillPortion(1)),
+        btn.width(Length::FillPortion(1)),
     ]
     .into()
 }
