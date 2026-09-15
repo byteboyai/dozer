@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dozer · ByteBoy2077 配色表</title>
+<style>
+  :root {
+    --bg: #0a0e16;
+    --panel: #0a0e16;
+    --term-bg: #08141d;
+    --card: #12202a;
+    --border: #1c3440;
+    --cream: #ffe5b4;
+    --body: #9ab4c4;
+    --dim: #6b7f8f;
+    --gold: #f2d94e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--body);
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+    padding: 40px 24px 80px;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; }
+  header { margin-bottom: 36px; }
+  h1 {
+    color: var(--cream);
+    font-size: 26px;
+    margin: 0 0 8px;
+    letter-spacing: 0.3px;
+  }
+  header p {
+    margin: 0;
+    color: var(--dim);
+    font-size: 13.5px;
+    line-height: 1.7;
+  }
+  header code {
+    color: var(--body);
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 12.5px;
+  }
+  .notice {
+    margin-top: 16px;
+    border: 1px solid var(--gold);
+    background: rgba(242, 217, 78, 0.08);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 13px;
+    color: var(--cream);
+    line-height: 1.7;
+  }
+  .notice b { color: var(--gold); }
+
+  section { margin-bottom: 44px; }
+  h2 {
+    font-size: 15px;
+    color: var(--cream);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+    margin: 0 0 16px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+  h2 small {
+    color: var(--dim);
+    font-weight: 400;
+    margin-left: 8px;
+    font-size: 12px;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+  }
+  .swatch {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--card);
+    cursor: pointer;
+    transition: transform 0.12s ease, border-color 0.12s ease;
+    position: relative;
+  }
+  .swatch:hover { transform: translateY(-2px); border-color: var(--body); }
+  .swatch .chip {
+    height: 64px;
+    border-bottom: 1px solid var(--border);
+  }
+  .swatch .meta { padding: 10px 12px 12px; }
+  .swatch .name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--cream);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .swatch .hex {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    color: var(--body);
+    margin-top: 4px;
+  }
+  .swatch .rgb {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+    color: var(--dim);
+    margin-top: 2px;
+  }
+  .swatch .usage {
+    margin-top: 6px;
+    font-size: 11.5px;
+    color: var(--dim);
+    line-height: 1.5;
+  }
+  .swatch .copied {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    font-size: 10.5px;
+    color: var(--bg);
+    background: var(--cream);
+    padding: 2px 6px;
+    border-radius: 4px;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+  }
+  .swatch.copied .copied { opacity: 1; }
+
+  .gold-flag {
+    font-size: 9.5px;
+    color: var(--bg);
+    background: var(--gold);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-weight: 700;
+  }
+
+  .ansi-note {
+    font-size: 12px;
+    color: var(--dim);
+    margin: -6px 0 14px;
+    line-height: 1.7;
+  }
+
+  footer {
+    margin-top: 56px;
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+    font-size: 11.5px;
+    color: var(--dim);
+    line-height: 1.8;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Dozer · ByteBoy2077 配色表</h1>
+    <p>
+      提取自 <code>crates/byteui/src/theme/color.rs</code>(语义色板 <code>ColorTokens</code>,编译期默认值)
+      与 <code>crates/dozer-app/src/term_model.rs</code>(终端 ANSI16 色板)。点击任意色块可复制十六进制值。
+    </p>
+    <div class="notice">
+      <b>硬性裁决</b>:金 <b>#F2D94E</b>(gold)是「甲方动作」专属色,不用于语法高亮等其它场景;
+      需要"奶油黄"角色时用终端 BrightYellow(<code>#FFF3B0</code>),不是 gold。见项目 CLAUDE.md。
+    </div>
+  </header>
+
+  <section>
+    <h2>背景层级 <small>bg · panel · term_bg · card · border</small></h2>
+    <div class="grid" id="grp-surface"></div>
+  </section>
+
+  <section>
+    <h2>文本 <small>cream · body · dim</small></h2>
+    <div class="grid" id="grp-text"></div>
+  </section>
+
+  <section>
+    <h2>强调色 <small>甲方动作 / 语法 / 状态</small></h2>
+    <div class="grid" id="grp-accent"></div>
+  </section>
+
+  <section>
+    <h2>Tab / 弹层 <small>tab_active_border · tab_active_bg · tab_hover · desc_bg · scrim</small></h2>
+    <div class="grid" id="grp-chrome"></div>
+  </section>
+
+  <section>
+    <h2>终端 ANSI16 <small>term_model.rs::ANSI16</small></h2>
+    <p class="ansi-note">
+      默认前景(无 SGR 时的字符色)取 <code>#9AB4C4</code>,与语义色板 <code>body</code> 相同。
+      注意终端 Magenta(<code>#FF3DCC</code>)与语义色板的 <code>magenta</code>(<code>#FF6EC7</code>)数值不同,是两套独立取值,不要混用。
+    </p>
+    <div class="grid" id="grp-ansi-normal"></div>
+    <div style="height:12px"></div>
+    <div class="grid" id="grp-ansi-bright"></div>
+  </section>
+
+  <footer>
+    生成方式:直接读取当前 main 分支源码里的色值常量,不是手抄或截图取色——色值变更时重新跑一遍提取即可保持同步。<br />
+    语义色板 23 项、终端 ANSI16 共 16 项。
+  </footer>
+</div>
+
+<script>
+const semantic = {
+  surface: [
+    ["bg", "#0a0e16", "主背景"],
+    ["panel", "#0a0e16", "面板背景(与 bg 相同数值)"],
+    ["term_bg", "#08141d", "终端背景"],
+    ["card", "#12202a", "卡片/弹层底色"],
+    ["border", "#1c3440", "描边"],
+  ],
+  text: [
+    ["cream", "#ffe5b4", "奶油文字,强调型正文"],
+    ["body", "#9ab4c4", "默认正文文字色"],
+    ["dim", "#6b7f8f", "弱化/禁用/次要文字"],
+  ],
+  accent: [
+    ["gold", "#f2d94e", "甲方动作专属(硬性裁决,见页头提示)"],
+    ["cyan", "#47def0", "强调 / 语法关键字"],
+    ["green", "#1ad585", "强调 / 语法字符串"],
+    ["purple", "#9580ff", "强调 / 语法类型-命名空间"],
+    ["red", "#ff6e6e", "错误 / 删除"],
+    ["ignored", "#6b7f8f", "忽略态(同 dim 数值)"],
+    ["orange", "#ff9b4d", "警示 / 数值"],
+    ["magenta", "#ff6ec7", "强调(备用位)"],
+    ["blue", "#4d8cff", "强调(备用位)"],
+    ["lime", "#a3e635", "强调(备用位)"],
+  ],
+  chrome: [
+    ["tab_active_border", "#dcc9a3", "激活 tab 描边"],
+    ["tab_active_bg", "#152630", "激活 tab 底色"],
+    ["tab_hover", "#152630", "hover 态底色(同 tab_active_bg)"],
+    ["desc_bg", "#152630", "说明气泡底色(同上)"],
+    ["scrim", "rgba(0,0,0,0.55)", "全屏蒙层(弹层背后遮罩)"],
+  ],
+};
+
+const ansiNormal = [
+  ["Black", "#08141d"], ["Red", "#ff6e6e"], ["Green", "#1ad585"], ["Yellow", "#f2d94e"],
+  ["Blue", "#9580ff"], ["Magenta", "#ff3dcc"], ["Cyan", "#47def0"], ["White", "#ffe5b4"],
+];
+const ansiBright = [
+  ["BrightBlack", "#6b7f8f"], ["BrightRed", "#ff8e8e"], ["BrightGreen", "#4ae5a5"], ["BrightYellow", "#fff3b0"],
+  ["BrightBlue", "#b5a5ff"], ["BrightMagenta", "#ff6ddc"], ["BrightCyan", "#87eef8"], ["BrightWhite", "#fff5d4"],
+];
+
+function hexToRgb(hex) {
+  if (hex.startsWith("rgba")) return hex;
+  const h = hex.replace("#", "");
+  const r = parseInt(h.substring(0, 2), 16);
+  const g = parseInt(h.substring(2, 4), 16);
+  const b = parseInt(h.substring(4, 6), 16);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+function makeSwatch(name, hex, usage, flagGold) {
+  const el = document.createElement("div");
+  el.className = "swatch";
+  el.innerHTML = `
+    <div class="chip" style="background:${hex}"></div>
+    <div class="meta">
+      <div class="name">${name}${flagGold ? '<span class="gold-flag">专属</span>' : ""}</div>
+      <div class="hex">${hex}</div>
+      <div class="rgb">${hexToRgb(hex)}</div>
+      ${usage ? `<div class="usage">${usage}</div>` : ""}
+    </div>
+    <div class="copied">已复制</div>
+  `;
+  el.addEventListener("click", () => {
+    navigator.clipboard?.writeText(hex).catch(() => {});
+    el.classList.add("copied");
+    setTimeout(() => el.classList.remove("copied"), 900);
+  });
+  return el;
+}
+
+function fill(id, items, opts) {
+  const container = document.getElementById(id);
+  items.forEach(([name, hex, usage]) => {
+    container.appendChild(makeSwatch(name, hex, usage, opts && opts.flagGold && name === "gold"));
+  });
+}
+
+fill("grp-surface", semantic.surface);
+fill("grp-text", semantic.text);
+fill("grp-accent", semantic.accent, { flagGold: true });
+fill("grp-chrome", semantic.chrome);
+fill("grp-ansi-normal", ansiNormal.map(([n, h]) => [n, h, null]));
+fill("grp-ansi-bright", ansiBright.map(([n, h]) => [n, h, null]));
+</script>
+</body>
+</html>
