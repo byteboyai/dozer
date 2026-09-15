@@ -34,7 +34,6 @@ use crate::app::{
     App, DEFAULT_COLS, DEFAULT_ROWS, HoverId, Message, PROJECT_PREVIEW_ID_OFFSET, PanelKind,
     ProjectId, tab_divider,
 };
-use crate::conversation::{self, SessionRow};
 use crate::delivery::{self};
 use crate::extensions::browser;
 use crate::extensions::conversations;
@@ -46,7 +45,6 @@ use crate::extensions::ssh;
 use crate::extensions::todo;
 use crate::extensions::usage;
 use crate::git_watch;
-use crate::homespace::home_panel_head;
 use crate::homespace::home_panel_head_with_actions;
 use crate::osc::{OscEvent, OscScanner};
 use crate::preview::{PreviewPane, TabKind};
@@ -66,9 +64,7 @@ use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 use iced_widget::core::mouse;
 use iced_widget::core::text::LineHeight;
-use iced_widget::core::widget::operation::Focusable;
-use iced_widget::core::widget::{Id, Operation};
-use iced_widget::core::{Border, Color, Element, Length, Padding, Rectangle};
+use iced_widget::core::{Border, Color, Element, Length, Padding};
 use iced_widget::text_editor::Action as EditorAction;
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use iced_winit::winit::event_loop::EventLoopProxy;
@@ -389,33 +385,10 @@ pub struct Workspace {
     /// docs/superpowers/plans/2026-08-21-review-content-webview-trace.md
     /// Task 2。
     pub(crate) review_nonce: u64,
-    /// 当前项目全部 session 的列表(标题+总结),按最后活跃时间倒序;
-    /// `None` = 还没加载过(会话列表面板会渲染"加载中…")，`Some(空
-    /// vec)` = 加载完成但确实没有记录(2026-08-27，取代按回合分组拍平的
-    /// `conversation_turn_groups`)。
-    pub(crate) conversation_sessions: Option<Vec<SessionRow>>,
-    /// 会话列表(对话面板扁平列表)客户端分页已经点开的"更多"次数(0 起,
-    /// 第 0 次 = 只显示第 1 页 `CONVERSATION_PAGE_SIZE` 条)。同
-    /// `git_log::State::pages` 的手法:纯客户端状态,不问 daemon 要新数据。
-    /// 切项目/刷新列表打开新一批数据时重置回 0。
-    pub(crate) conversation_pages: usize,
-    /// 会话列表搜索框已提交生效的过滤词(空串 = 不过滤,按标题大小写不敏感
-    /// 子串匹配)。同 `conversation_pages`,切项目重置(见 `adopt_project`)。
-    pub(crate) conversation_search: String,
-    /// 搜索框编辑态草稿——同 `todo::WorkspaceState` 的 draft/committed 分离
-    /// 手法,打字期间只改草稿,回车/点搜索按钮才落成 `conversation_search`。
-    pub(crate) conversation_search_draft: String,
-    /// 是否持有 iced 真实焦点。**不是**应用层手动置位的镜像——每帧渲染
-    /// 循环里 `CaptureConversationSearchFocus` 问一遍 iced 真相后立刻写进
-    /// 这里(`main.rs` 键盘路由读它决定要不要把按键放行)。
-    pub(crate) conversation_search_focused: bool,
-    /// 会话列表底部 footbar 的 agent 筛选:`None` = 全部,`Some(k)` = 只看
-    /// 该 agent。纯客户端过滤,不问 daemon 要新数据,切项目重置。
-    pub(crate) conversation_agent_filter: Option<AgentKind>,
-    /// 会话列表底部 agent 筛选下拉是否展开(样式对齐文件树面板的分支切换
-    /// 下拉 `files::branch_picker_popup`——左边显示当前筛选,右边点开下拉
-    /// 选另一个)。
-    pub(crate) conversation_agent_picker_open: bool,
+    /// 对话(Conversations)面板列表侧的本地状态——见
+    /// `extensions::conversations::WorkspaceState`(2026-09-15 从 `Workspace`
+    /// 上平铺的 7 个 `conversation_*` 字段收拢而来)。
+    pub(crate) conversations: conversations::WorkspaceState,
     /// 当前项目的 agent 用量统计（会话粒度；扫描+解析全量 transcript，比
     /// `conversations` 贵得多,所以不像它那样在回合结束时自动刷新——只在
     /// 切到 Usage 面板或点手动刷新按钮时才重新扫
@@ -650,13 +623,7 @@ impl Workspace {
             review: None,
             review_snapshot: Arc::new(Mutex::new(None)),
             review_nonce: 0,
-            conversation_sessions: None,
-            conversation_pages: 0,
-            conversation_search: String::new(),
-            conversation_search_draft: String::new(),
-            conversation_search_focused: false,
-            conversation_agent_filter: None,
-            conversation_agent_picker_open: false,
+            conversations: conversations::WorkspaceState::default(),
             usage: usage::WorkspaceState::default(),
             project: None,
             project_panel: project::WorkspaceState::default(),
@@ -813,28 +780,20 @@ impl Workspace {
     }
 
     /// 加载(或刷新)当前项目的会话列表(联查总结，标题+摘要预览)
-    /// → `ConversationSessionsRefreshed`(spec 2026-08-27，取代
-    /// `spawn_all_turn_groups_refresh`)。
+    /// → `Conversations(SessionsRefreshed)`(spec 2026-08-27，取代
+    /// `spawn_all_turn_groups_refresh`)。2026-09-15 起实现搬到
+    /// `extensions::conversations::spawn_refresh`,这里只做薄封装。
     pub(crate) fn spawn_conversations_refresh(&self, io: &ShellIo) {
         let Some(project) = self.project.as_ref() else {
             return;
         };
         let project_id = project.id;
         let cwd = PathBuf::from(&project.path);
-        let client = io.client.clone();
         let proxy = io.proxy.clone();
-        io.handle.spawn(async move {
-            let result = client
-                .list_conversations_with_summaries(&cwd.to_string_lossy(), None, 500, 0)
-                .await
-                .map(|rows| {
-                    rows.iter()
-                        .map(|(c, s)| SessionRow::from_row(c, s.as_ref()))
-                        .collect()
-                })
-                .map_err(|e| e.to_string());
-            let _ = proxy.send_event(Message::ConversationSessionsRefreshed(project_id, result));
-        });
+        let emit = move |m| {
+            let _ = proxy.send_event(Message::Conversations(m));
+        };
+        conversations::spawn_refresh(project_id, cwd, &io.client, &io.handle, emit);
     }
 
     /// 异步扫当前项目的全部 transcript 并逐个解析用量 → `Usage(Loaded)`。
@@ -1042,13 +1001,7 @@ impl Workspace {
         // 带着旧 project_id 继续在后台跑,`Message::ProjectFsChanged` 送来
         // 的刷新信号会挂在一个此刻已经不对应这份 `Workspace` 的项目 id 上。
         self.git_watch = None;
-        self.conversation_sessions = None;
-        self.conversation_pages = 0;
-        self.conversation_search.clear();
-        self.conversation_search_draft.clear();
-        self.conversation_search_focused = false;
-        self.conversation_agent_filter = None;
-        self.conversation_agent_picker_open = false;
+        self.conversations = conversations::WorkspaceState::default();
         self.usage = usage::WorkspaceState::default();
         let project_id = project.id;
         let repo_path = PathBuf::from(&project.path);
@@ -2488,9 +2441,8 @@ fn load_more_button<'a>(
             .size(byteui::theme::font::caption_sm())
             .color(byteui::theme::color::current().dim),
     )
-    .on_press(Message::ConversationDetailLoadMore(
-        conversation_id.to_string(),
-        after_turn_index,
+    .on_press(Message::Conversations(
+        conversations::Message::DetailLoadMore(conversation_id.to_string(), after_turn_index),
     ))
     .padding(6)
     .style(|_t, _s| iced_widget::button::Style {
@@ -2508,349 +2460,6 @@ fn load_more_button<'a>(
 /// (`extensions::conversations::CONVERSATION_PAGE_SIZE`,20)与详情页分页
 /// (这里,200)含义不同,不要混用。
 pub(crate) const CONVERSATION_DETAIL_PAGE_SIZE: u32 = 200;
-
-/// 会话列表底部 agent 筛选栏:样式对齐文件树面板的分支切换下拉
-/// (`files::git_footer_bar`/`branch_picker_popup`)——左边图标 + 当前筛选
-/// (agent 名称,不筛选时"全部"),右边一个展开/收起下拉的箭头按钮,不再是
-/// 一排 chip。`agents` 为空(没有会话数据)时不渲染整条 bar。
-fn conversation_footer_bar<'a>(
-    ws: &Workspace,
-    agents: &[AgentKind],
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    if agents.is_empty() {
-        return column![].into();
-    }
-
-    let current_label = ws
-        .conversation_agent_filter
-        .map(|a| a.label().to_string())
-        .unwrap_or_else(|| "全部".to_string());
-    let switch = button(icons::view(
-        if ws.conversation_agent_picker_open {
-            IconKind::ChevronUp
-        } else {
-            IconKind::ChevronDown
-        },
-        byteui::theme::icon_size::row(),
-        byteui::theme::color::current().cream,
-    ))
-    .on_press(if ws.conversation_agent_picker_open {
-        Message::ConversationAgentPickerClose
-    } else {
-        Message::ConversationAgentPickerOpen
-    })
-    .padding(6)
-    .style(|_t: &iced_widget::Theme, _s| button::Style {
-        background: None,
-        text_color: byteui::theme::color::current().cream,
-        border: Border {
-            color: byteui::theme::color::current().border,
-            width: 0.0,
-            radius: 4.0.into(),
-        },
-        ..button::Style::default()
-    });
-
-    let bar = row![
-        icons::view(
-            IconKind::Bot,
-            byteui::theme::icon_size::row(),
-            byteui::theme::color::current().cream,
-        ),
-        text(current_label)
-            .size(byteui::theme::font::label())
-            .color(byteui::theme::color::current().cream),
-        iced_widget::space::horizontal(),
-        switch,
-    ]
-    .spacing(6)
-    .align_y(iced_widget::core::Alignment::Center);
-
-    let top_line = container(iced_widget::Space::new())
-        .width(Length::Fill)
-        .height(Length::Fixed(1.0))
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: Some(byteui::theme::color::current().border.into()),
-            ..container::Style::default()
-        });
-
-    container(column![top_line, bar].spacing(4))
-        .width(Length::Fill)
-        .padding([6, 0])
-        .style(|_t: &iced_widget::Theme| container::Style {
-            background: None,
-            ..container::Style::default()
-        })
-        .into()
-}
-
-/// `conversation_footer_bar` 展开的下拉弹出层:列出"全部" + `agents`(会话
-/// 历史里出现过的 agent 种类),点某项即 `ConversationAgentFilterSelect`
-/// 切换并收起(样式/交互对齐 `git_log::branch_picker_view`——本地
-/// `stack!` 叠在会话面板自己内容之上,不是全窗 overlay;下层垫一块透明
-/// `MouseArea` 承接"点别处收起")。未展开时返回零高度元素。
-fn conversation_agent_picker_view(
-    ws: &Workspace,
-    agents: &[AgentKind],
-) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    if !ws.conversation_agent_picker_open {
-        return iced_widget::Space::new().into();
-    }
-    let is_all_current = ws.conversation_agent_filter.is_none();
-    let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
-        Vec::new();
-    items.push(crate::menu::item_row_fill(
-        None,
-        "全部",
-        if is_all_current {
-            byteui::theme::color::current().gold
-        } else {
-            byteui::theme::color::current().body
-        },
-        (!is_all_current).then_some(Message::ConversationAgentFilterSelect(None)),
-    ));
-    for &agent in agents {
-        let is_current = ws.conversation_agent_filter == Some(agent);
-        let color = if is_current {
-            byteui::theme::color::current().gold
-        } else {
-            byteui::theme::color::current().body
-        };
-        let leading = icons::view(
-            agent_icon(agent),
-            byteui::theme::icon_size::row(),
-            agent_dot_color(agent),
-        );
-        items.push(crate::menu::item_row_fill(
-            Some(leading),
-            agent.label(),
-            color,
-            (!is_current).then_some(Message::ConversationAgentFilterSelect(Some(agent))),
-        ));
-    }
-    let panel: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        crate::menu::shell_frosted(items, Length::Fill);
-
-    let dismiss = MouseArea::new(
-        iced_widget::Space::new()
-            .width(Length::Fill)
-            .height(Length::Fill),
-    )
-    .on_press(Message::ConversationAgentPickerClose);
-    let positioned = column![iced_widget::Space::new().height(Length::Fill), panel]
-        .width(Length::Fill)
-        .height(Length::Fill);
-    iced_widget::stack![dismiss, positioned]
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
-}
-
-/// 对话列表面板(右面板区"对话"视图的列表侧):当前项目全部 session 的
-/// 列表(标题+总结预览),按最后活跃时间倒序(2026-08-27，取代按回合
-/// 拍平的列表)。点一行 → `ConversationSessionOpen` 驱动右侧审阅该 session
-/// 的完整回合列表。列表按 `conversation_visible_count` 客户端分页:只画
-/// 前若干条,画不完时末尾补一个居中"更多..."图标按钮(同
-/// `git_log::commit_list_view` 的处理方式),点它翻一页——纯客户端状态,
-/// 不问 daemon 要新数据。
-pub(crate) fn conversation_list_pane<'a>(
-    app: &'a App,
-    ws: &'a Workspace,
-    width: Length,
-    outer: Border,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let region = theme::region::conversation_list_pane();
-    // 套用统一 panel head:Lucide `BotMessageSquare` 图标 + 暖金 `#dcc9a3`
-    // 的 "会话" 标题 + 1px 分割线;去掉原先跟在项目名后的 "Dozer 项目" 副标题,
-    // 也去掉曾经紧跟标题的 "会话 N 条回合" 计数行(验收反馈:意义不大,让位
-    // 给下面新增的搜索框)。
-    let mut content =
-        column![home_panel_head(IconKind::BotMessageSquare, "会话"),].spacing(region.gap);
-
-    // 关键字搜索框:按标题或摘要筛选全部会话(见 `filter_sessions`),样式
-    // 收敛到 `byteui::form::search_box`(需求:所有面板搜索框统一成首页
-    // 项目列表搜索框那一套)。不会边输入边过滤——敲回车/点右侧搜索按钮后由
-    // `ConversationSearchSubmit` 把草稿落成生效的 `conversation_search`。
-    // `highlight` 传真实聚焦态或已生效搜索词非空:即使当前没聚焦,只要
-    // 列表被搜索词过滤中就持续金框提示。
-    let search_active = ws.conversation_search_focused || !ws.conversation_search.is_empty();
-    let search_box = byteui::form::search_box::view(
-        "搜索会话标题/摘要…",
-        &ws.conversation_search_draft,
-        Some(conversations::conversation_search_field_id()),
-        search_active,
-        Message::ConversationSearchInput,
-        Message::ConversationSearchSubmit,
-        app.hover_progress(HoverId::ConversationSearchSubmit),
-        |hovered| Message::Hover(HoverId::ConversationSearchSubmit, hovered),
-    );
-    content = content.push(byteui::interaction::context_menu::wrap(
-        search_box,
-        Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
-            id: conversations::conversation_search_field_id(),
-            secure: false,
-        })),
-    ));
-
-    let Some(rows) = ws.conversation_sessions.as_ref() else {
-        content = content.push(lh(text("加载中…")
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().dim)));
-        return container(content.padding(region.padding))
-            .width(width)
-            .height(Length::Fill)
-            .style(move |_t: &iced_widget::Theme| container::Style {
-                background: region.background.map(Into::into),
-                border: outer,
-                ..container::Style::default()
-            })
-            .into();
-    };
-
-    let agents_present = conversations::conversation_agents_present(rows);
-    let filtered =
-        conversations::filter_sessions(rows, &ws.conversation_search, ws.conversation_agent_filter);
-    if rows.is_empty() {
-        content = content.push(lh(text("暂无对话记录")
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().dim)));
-    } else if filtered.is_empty() {
-        content = content.push(lh(text("无匹配结果")
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().dim)));
-    }
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    let opens = ws.open_transcript_paths();
-    let mut cards = column![].spacing(region.gap);
-    let visible = conversations::conversation_visible_count(ws.conversation_pages);
-    for g in filtered.iter().take(visible) {
-        let current = conversation::is_current_conversation_id(&g.conversation_id, &opens);
-        // 时间前面加上 agent 名称(需求),不管是不是当前会话都紧挨在时间
-        // 之前;"● 当前" 前缀保留在最前面。副行只显示 "agent · 相对时间"
-        // (2026-08-28 起不再显示总结预览——列表只要标题+时间)。
-        let agent_label = g.agent.label();
-        let task_suffix = g
-            .task_id
-            .and_then(|task_id| {
-                ws.todo
-                    .items()
-                    .iter()
-                    .find(|t| t.id == task_id)
-                    .map(|t| t.text.as_str())
-            })
-            .map(|text| {
-                let truncated: String = text.chars().take(30).collect();
-                if text.chars().count() > 30 {
-                    format!(" · 关联任务:{truncated}…")
-                } else {
-                    format!(" · 关联任务:{truncated}")
-                }
-            })
-            .unwrap_or_default();
-        let sub = if current {
-            format!(
-                "● 当前 · {agent_label} · {}{task_suffix}",
-                relative_time_text(g.last_ts, now_ms)
-            )
-        } else {
-            format!(
-                "{agent_label} · {}{task_suffix}",
-                relative_time_text(g.last_ts, now_ms)
-            )
-        };
-        let sub_color = if current {
-            byteui::theme::color::current().green
-        } else {
-            byteui::theme::color::current().dim
-        };
-        // 圆点换成 agent 彩色 logo(需求);第二行(agent+时间)通过
-        // `row![icon, column![...]]` 缩进到跟标题文字对齐,不再跟图标左边缘
-        // 平齐(同 `homespace::home_recent_conversations_card` 的既有手法)。
-        let row_btn = button(
-            row![
-                icons::view(
-                    agent_icon(g.agent),
-                    byteui::theme::icon_size::row(),
-                    agent_dot_color(g.agent),
-                ),
-                column![
-                    lh(text(g.display_title.clone())
-                        .size(byteui::theme::font::body())
-                        .color(byteui::theme::color::current().cream)),
-                    lh(text(sub)
-                        .size(byteui::theme::font::caption_sm())
-                        .color(sub_color)),
-                ]
-                .spacing(4),
-            ]
-            .spacing(8)
-            .align_y(iced_widget::core::Alignment::Center),
-        )
-        .on_press(Message::ConversationSessionOpen(
-            g.conversation_id.clone(),
-            g.agent,
-        ))
-        .width(Length::Fill)
-        .padding(10)
-        .style(byteui::interaction::cards::button_card(
-            current,
-            byteui::theme::color::current().card,
-        ));
-        cards = cards.push(row_btn);
-    }
-    // 还有没画出来的回合时,在列表末尾加一个居中的"更多..."图标按钮
-    // (Lucide ellipsis,无外边框/背景,hover DIM→GOLD)——点它翻下一页
-    // (`Message::ConversationListMore`,纯客户端状态,不问 daemon 要新数据)。
-    if filtered.len() > visible {
-        let more_button = icons::icon_button_entry(
-            icons::IconKind::Ellipsis,
-            byteui::theme::icon_size::row(),
-            false,
-            false,
-            app.hover_progress(HoverId::ConversationListMore),
-            false,
-            byteui::theme::geometry::tab_button_size(),
-            true,
-            Message::ConversationListMore,
-            |hovered| Message::Hover(HoverId::ConversationListMore, hovered),
-            "更多",
-        );
-        cards = cards.push(
-            container(more_button)
-                .width(Length::Fill)
-                .align_x(iced_widget::core::alignment::Horizontal::Center),
-        );
-    }
-    content = content.push(
-        Scrollable::new(cards)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .direction(scrollable::Direction::Vertical(
-                byteui::interaction::scrollbar::scrollbar(),
-            ))
-            .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
-    );
-    content = content.push(conversation_footer_bar(ws, &agents_present));
-
-    let panel = container(content.padding(region.padding))
-        .width(width)
-        .height(Length::Fill)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: region.background.map(Into::into),
-            border: outer,
-            ..container::Style::default()
-        });
-
-    // 下拉弹出层本地叠在面板内容之上(同 `git_log::view` 的 `left_with_picker`
-    // 手法),不是全窗 overlay。
-    iced_widget::stack![panel, conversation_agent_picker_view(ws, &agents_present)]
-        .width(width)
-        .height(Length::Fill)
-        .into()
-}
 
 /// 按 `AgentKind` 把会话 tab 分组,固定顺序 Claude → Codebuddy → Opencode
 /// → Codex → Kilo → V8agent → Unknown(与 `conversation_agents_present`
