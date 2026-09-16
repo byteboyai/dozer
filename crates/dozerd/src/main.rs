@@ -111,6 +111,7 @@ async fn main() -> Result<()> {
     }
     let serve = dozerd::server::serve(
         &socket,
+        dozerd::ide_bridge::lock_dir(),
         registry,
         projects,
         bookmarks,

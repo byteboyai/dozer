@@ -6,7 +6,7 @@ use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use dozer_core::protocol::{Reply, Request, decode_line, encode_line};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -68,6 +68,7 @@ async fn process_todo_now(
 #[allow(clippy::too_many_arguments)]
 pub async fn serve(
     socket: &Path,
+    ide_lock_dir: PathBuf,
     registry: Arc<SessionRegistry>,
     projects: Arc<crate::projects::ProjectStore>,
     bookmarks: Arc<crate::bookmarks::BookmarkStore>,
@@ -79,8 +80,15 @@ pub async fn serve(
     in_flight: crate::task_poller::InFlight,
 ) -> Result<()> {
     let preview_contexts = Arc::new(PreviewContextStore::new());
-    let ide_lock_dir = crate::ide_bridge::lock_dir();
-    crate::ide_bridge::sweep_stale_locks(&ide_lock_dir);
+    // 清扫是同步阻塞 IO(遍历目录+读文件),挪到阻塞线程池执行,不卡住
+    // 当前 executor 线程——`serve()` 起监听前先等它跑完,保证不会跟紧接着
+    // 写的新锁文件产生"锁文件刚写就被当陈旧清掉"的竞态。
+    {
+        let sweep_dir = ide_lock_dir.clone();
+        let _ =
+            tokio::task::spawn_blocking(move || crate::ide_bridge::sweep_stale_locks(&sweep_dir))
+                .await;
+    }
     let ide_bridge = IdeBridgeRegistry::new(ide_lock_dir, preview_contexts.clone());
     if socket.exists() {
         std::fs::remove_file(socket)?;
@@ -326,22 +334,28 @@ async fn handle_conn(
                         Request::CreateSession { name, command, args, cwd, cols, rows, project_id } => {
                             match registry.create(SessionSpec { name, command, args, cwd: cwd.clone(), cols, rows, project_id }) {
                                 Ok(s) => {
-                                    ide_bridge.session_started(project_id, &cwd).await;
-                                    let ide_bridge_watch = ide_bridge.clone();
-                                    let mut exit_rx = s.subscribe();
-                                    tokio::spawn(async move {
-                                        loop {
-                                            match exit_rx.recv().await {
-                                                Ok(SessionEvent::Exited { .. }) => {
-                                                    ide_bridge_watch.session_ended(project_id).await;
-                                                    break;
+                                    // `session_started` 失败(绑端口/写锁文件出错)时不会在
+                                    // registry 里留下这次调用对应的记录——这种情况下绝不能
+                                    // spawn 退出监听器,否则这个会话将来退出时会去 `session_ended`
+                                    // 一个它从未真正占过的项目名额,把同项目下另一个真正活着的
+                                    // 会话的 bridge 提前拆掉(复现过的 bug,见代码审查记录)。
+                                    if ide_bridge.session_started(project_id, &cwd).await {
+                                        let ide_bridge_watch = ide_bridge.clone();
+                                        let mut exit_rx = s.subscribe();
+                                        tokio::spawn(async move {
+                                            loop {
+                                                match exit_rx.recv().await {
+                                                    Ok(SessionEvent::Exited { .. }) => {
+                                                        ide_bridge_watch.session_ended(project_id).await;
+                                                        break;
+                                                    }
+                                                    Ok(_) => continue,
+                                                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                                                    Err(broadcast::error::RecvError::Closed) => break,
                                                 }
-                                                Ok(_) => continue,
-                                                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                                                Err(broadcast::error::RecvError::Closed) => break,
                                             }
-                                        }
-                                    });
+                                        });
+                                    }
                                     Reply::Created { session: s.info() }
                                 }
                                 Err(e) => Reply::Error { message: e.to_string() },
@@ -890,6 +904,7 @@ mod tests {
         #[allow(clippy::too_many_arguments)]
         fn _assert_signature(
             socket: &std::path::Path,
+            ide_lock_dir: std::path::PathBuf,
             registry: std::sync::Arc<crate::registry::SessionRegistry>,
             projects: std::sync::Arc<crate::projects::ProjectStore>,
             bookmarks: std::sync::Arc<crate::bookmarks::BookmarkStore>,
@@ -900,6 +915,7 @@ mod tests {
         ) {
             let fut = crate::server::serve(
                 socket,
+                ide_lock_dir,
                 registry,
                 projects,
                 bookmarks,
@@ -1200,7 +1216,7 @@ mod tests {
         let registry = SessionRegistry::new();
 
         let s = registry.create(spec(7, "printf ready; sleep 5")).unwrap();
-        ide_bridge.session_started(7, "/repo").await;
+        assert!(ide_bridge.session_started(7, "/repo").await);
         assert_eq!(ide_bridge.active_projects().await, vec![7]);
 
         let mut exit_rx = s.subscribe();

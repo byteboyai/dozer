@@ -30,9 +30,11 @@ async fn hook_event_reaches_attached_client_and_list() {
     tokio::spawn({
         let sock = sock.clone();
         let registry = registry.clone();
+        let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
         async move {
             dozerd::server::serve(
                 &sock,
+                ide_lock_dir.path().to_path_buf(),
                 registry,
                 test_projects(),
                 test_bookmarks(),
@@ -228,9 +230,11 @@ async fn project_open_and_list_roundtrip() {
             todos.clone(),
             categories.clone(),
         );
+        let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
         async move {
             dozerd::server::serve(
                 &sock,
+                ide_lock_dir.path().to_path_buf(),
                 registry,
                 projects,
                 bookmarks,
@@ -283,9 +287,11 @@ async fn record_and_get_session_summary_roundtrip() {
     tokio::spawn({
         let sock = sock.clone();
         let registry = registry.clone();
+        let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
         async move {
             dozerd::server::serve(
                 &sock,
+                ide_lock_dir.path().to_path_buf(),
                 registry,
                 projects,
                 bookmarks,
@@ -377,9 +383,11 @@ async fn close_with_summary_kills_session_after_ai_summary_recorded() {
     tokio::spawn({
         let sock = sock.clone();
         let registry = registry.clone();
+        let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
         async move {
             dozerd::server::serve(
                 &sock,
+                ide_lock_dir.path().to_path_buf(),
                 registry,
                 projects,
                 bookmarks,
@@ -480,9 +488,11 @@ async fn list_conversations_with_summaries_joins_correctly() {
         let session_summaries = session_summaries.clone();
         let backfill_registry = backfill_registry.clone();
         let todos = todos.clone();
+        let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
         async move {
             dozerd::server::serve(
                 &sock,
+                ide_lock_dir.path().to_path_buf(),
                 registry,
                 test_projects(),
                 test_bookmarks(),

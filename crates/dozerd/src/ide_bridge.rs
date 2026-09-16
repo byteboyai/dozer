@@ -28,7 +28,9 @@ pub(crate) fn resolve_lock_dir(
     PathBuf::from(home).join(".claude").join("ide")
 }
 
-pub(crate) fn lock_dir() -> PathBuf {
+/// `pub`(不是 `pub(crate)`):`dozerd` 的 `main.rs` 是独立的 bin crate,
+/// 只能看到 lib crate 里真正公开的符号,拿生产环境默认锁目录得靠它。
+pub fn lock_dir() -> PathBuf {
     resolve_lock_dir(
         std::env::var("DOZER_CLAUDE_IDE_LOCK_DIR").ok(),
         std::env::var("CLAUDE_CONFIG_DIR").ok(),
@@ -463,10 +465,26 @@ struct ProjectBridgeHandle {
     lock_path: PathBuf,
 }
 
+/// 每个连接最多等待这么久完成 WS 握手,超时直接丢弃连接——本地
+/// (`127.0.0.1` 恒可达)握手正常应该是毫秒级,给个宽松上限只是防止一个
+/// 连不上/不说话的客户端占着任务不放。
+const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// 单个项目 bridge 同时允许的最大连接数——本地场景下 Claude Code 正常只会
+/// 建一条连接,恒为 0/1;这个上限只是防止异常/失控的本地进程无限攒连接,
+/// 不是真实容量规划。
+const MAX_CONCURRENT_CONNECTIONS: usize = 4;
+
 pub(crate) struct IdeBridgeRegistry {
     lock_dir: PathBuf,
     preview_contexts: Arc<PreviewContextStore>,
-    inner: AsyncMutex<HashMap<i64, ProjectBridgeHandle>>,
+    // 外层只锁"project_id -> 该项目专属锁"这张索引,查一次就放手;真正的
+    // 起停记账 + 绑端口/写锁文件这些慢操作,由每个项目自己独立的
+    // `AsyncMutex` 保护,不同项目之间完全不互相阻塞——这正是要解决的问题:
+    // 避免一个项目的磁盘 IO/端口绑定卡住同一时刻其它项目的会话起停记账。
+    // 索引本身只增不减(条目数等于本次 daemon 运行期间出现过的不同项目
+    // 数,量级是"用户开过的项目数",这点常驻内存可以接受,换来的是完全
+    // 不需要处理"移除索引条目时是否有并发调用者正持有它"这类竞态)。
+    projects: std::sync::Mutex<HashMap<i64, Arc<AsyncMutex<Option<ProjectBridgeHandle>>>>>,
 }
 
 impl IdeBridgeRegistry {
@@ -474,76 +492,122 @@ impl IdeBridgeRegistry {
         Arc::new(Self {
             lock_dir,
             preview_contexts,
-            inner: AsyncMutex::new(HashMap::new()),
+            projects: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
-    /// 项目活跃会话数 0→1 起 bridge,已存在则只加计数。绑定/写锁文件失败时
-    /// 只记日志、静默放弃这个项目的自动上下文——不影响会话本身正常使用
-    /// (spec"风险/未知项"一节已确认的取舍)。
-    pub(crate) async fn session_started(self: &Arc<Self>, project_id: i64, workspace_root: &str) {
-        let mut map = self.inner.lock().await;
-        if let Some(handle) = map.get_mut(&project_id) {
+    /// 拿到(必要时创建)某个项目专属的锁——这一步本身只锁索引表,不持锁
+    /// 跨 `.await`,拿到手的 `Arc<AsyncMutex<..>>` 之后再各自独立加锁。
+    fn project_lock(&self, project_id: i64) -> Arc<AsyncMutex<Option<ProjectBridgeHandle>>> {
+        self.projects
+            .lock()
+            .expect("ide_bridge projects 索引锁")
+            .entry(project_id)
+            .or_insert_with(|| Arc::new(AsyncMutex::new(None)))
+            .clone()
+    }
+
+    /// 项目活跃会话数 0→1 起 bridge,已存在则只加计数,返回 `true`。
+    ///
+    /// 返回 `false` 表示这次调用没能让项目挂上任何 bridge(绑端口/写锁
+    /// 文件失败)——调用方(`server.rs`)必须只在返回 `true` 时才去 spawn
+    /// 对应的退出监听器,否则这个会话将来退出时会对一个自己从未真正占过
+    /// 名额的项目调用 `session_ended`,可能把同项目下另一个真正活着的
+    /// 会话的 bridge 提前拆掉。
+    ///
+    /// 绑端口 + 写锁文件这两步慢操作,是在持有"这一个项目专属"的锁期间做
+    /// 的——会阻塞同一项目里并发到达的第二个 `session_started`/
+    /// `session_ended` 调用(它们排队等这把锁,等到手时要么看见已经起好的
+    /// bridge 直接计数,要么看见上一次失败留下的 `None` 自己重新尝试起,
+    /// 两种情况都不需要额外的状态机),但完全不影响其它项目——那些项目有
+    /// 各自独立的锁。
+    pub(crate) async fn session_started(&self, project_id: i64, workspace_root: &str) -> bool {
+        let project_lock = self.project_lock(project_id);
+        let mut slot = project_lock.lock().await;
+        if let Some(handle) = slot.as_mut() {
             handle.active_sessions += 1;
-            return;
+            return true;
         }
+
         let listener = match TcpListener::bind(("127.0.0.1", 0)).await {
             Ok(l) => l,
             Err(e) => {
                 tracing::warn!(project_id, error = %e, "ide_bridge 绑定端口失败,跳过该项目的自动上下文");
-                return;
+                return false;
             }
         };
         let port = match listener.local_addr() {
             Ok(addr) => addr.port(),
             Err(e) => {
                 tracing::warn!(project_id, error = %e, "ide_bridge 读取本地端口失败,跳过");
-                return;
+                return false;
             }
         };
         let token = generate_token();
-        let lock_path = match write_lock_file(
-            &self.lock_dir,
-            port,
-            workspace_root,
-            &token,
-            std::process::id(),
-        ) {
-            Ok(p) => p,
-            Err(e) => {
+        // 写锁文件是同步阻塞 IO(建目录/设权限/写文件),挪到阻塞线程池
+        // 执行,不占用当前 tokio 工作线程。
+        let lock_dir = self.lock_dir.clone();
+        let workspace_root_owned = workspace_root.to_string();
+        let write_token = token.clone();
+        let write_result = tokio::task::spawn_blocking(move || {
+            write_lock_file(
+                &lock_dir,
+                port,
+                &workspace_root_owned,
+                &write_token,
+                std::process::id(),
+            )
+        })
+        .await;
+        let lock_path = match write_result {
+            Ok(Ok(path)) => path,
+            Ok(Err(e)) => {
                 tracing::warn!(project_id, error = %e, "ide_bridge 写锁文件失败,跳过");
-                return;
+                return false;
+            }
+            Err(e) => {
+                tracing::warn!(project_id, error = %e, "ide_bridge 写锁文件任务崩溃,跳过");
+                return false;
             }
         };
+
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let preview_contexts = self.preview_contexts.clone();
         tokio::spawn(run_bridge_listener(
             listener,
             project_id,
             token,
-            preview_contexts,
+            self.preview_contexts.clone(),
             shutdown_rx,
         ));
-        map.insert(
-            project_id,
-            ProjectBridgeHandle {
-                active_sessions: 1,
-                shutdown_tx,
-                lock_path,
-            },
-        );
+        *slot = Some(ProjectBridgeHandle {
+            active_sessions: 1,
+            shutdown_tx,
+            lock_path,
+        });
+        true
     }
 
     /// 项目活跃会话数减一,归零时停监听 + 删锁文件。项目本来就没有活跃
     /// bridge 时是无害 no-op(调用方不需要先查再调)。
     pub(crate) async fn session_ended(&self, project_id: i64) {
-        let mut map = self.inner.lock().await;
-        let Some(handle) = map.get_mut(&project_id) else {
-            return;
+        let project_lock = {
+            let map = self.projects.lock().expect("ide_bridge projects 索引锁");
+            match map.get(&project_id) {
+                Some(lock) => lock.clone(),
+                None => return,
+            }
         };
-        handle.active_sessions = handle.active_sessions.saturating_sub(1);
-        if handle.active_sessions == 0 {
-            let handle = map.remove(&project_id).expect("刚判断过存在");
+        let mut slot = project_lock.lock().await;
+        let remaining = match slot.as_mut() {
+            Some(handle) => {
+                handle.active_sessions = handle.active_sessions.saturating_sub(1);
+                handle.active_sessions
+            }
+            None => return,
+        };
+        if remaining == 0
+            && let Some(handle) = slot.take()
+        {
             let _ = handle.shutdown_tx.send(());
             remove_lock_file(&handle.lock_path);
         }
@@ -551,7 +615,18 @@ impl IdeBridgeRegistry {
 
     #[cfg(test)]
     pub(crate) async fn active_projects(&self) -> Vec<i64> {
-        self.inner.lock().await.keys().copied().collect()
+        let entries: Vec<(i64, Arc<AsyncMutex<Option<ProjectBridgeHandle>>>)> = {
+            let map = self.projects.lock().expect("ide_bridge projects 索引锁");
+            map.iter().map(|(id, lock)| (*id, lock.clone())).collect()
+        };
+        let mut active = Vec::new();
+        for (id, lock) in entries {
+            if lock.lock().await.is_some() {
+                active.push(id);
+            }
+        }
+        active.sort_unstable();
+        active
     }
 }
 
@@ -562,17 +637,22 @@ async fn run_bridge_listener(
     preview_contexts: Arc<PreviewContextStore>,
     mut shutdown_rx: oneshot::Receiver<()>,
 ) {
+    let connection_slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
     loop {
         tokio::select! {
             _ = &mut shutdown_rx => break,
             accepted = listener.accept() => {
                 let Ok((stream, _)) = accepted else { continue };
-                tokio::spawn(handle_bridge_connection(
-                    stream,
-                    project_id,
-                    token.clone(),
-                    preview_contexts.clone(),
-                ));
+                let Ok(permit) = connection_slots.clone().try_acquire_owned() else {
+                    tracing::debug!(project_id, "ide_bridge 并发连接数已达上限,丢弃这次连接");
+                    continue;
+                };
+                let token = token.clone();
+                let preview_contexts = preview_contexts.clone();
+                tokio::spawn(async move {
+                    handle_bridge_connection(stream, project_id, token, preview_contexts).await;
+                    drop(permit);
+                });
             }
         }
     }
@@ -587,28 +667,34 @@ async fn handle_bridge_connection(
     // 握手回调里只捕获客户端带的 auth header,不在这一步拒绝——
     // `accept_hdr_async` 的错误响应构造依赖 tungstenite 具体版本的 API 形状,
     // 握手完成后立即用捕获到的值比对再关连接,逻辑等价且不依赖那部分 API。
-    let presented = Arc::new(std::sync::Mutex::new(None::<String>));
-    let capture = {
-        let presented = presented.clone();
-        // `accept_hdr_async` 的握手回调签名由 tungstenite 规定,返回的
-        // `Result` 错误分支是它自己的巨型 `Response` 类型,我们无法改成
-        // `Box<...>`(会与 trait 约定不符),只能就地放行这一条 lint。
-        #[allow(clippy::result_large_err)]
-        move |req: &tokio_tungstenite::tungstenite::handshake::server::Request,
-              resp: tokio_tungstenite::tungstenite::handshake::server::Response| {
-            let header = req
+    //
+    // 回调在握手期间被同步调用且只调用一次,读到的值在紧接着的 `.await`
+    // 之后立刻被读取,整个过程只有这一个任务在用,不存在跨线程共享,一个
+    // 被闭包借用的栈上局部变量就够了——不需要 `Arc<Mutex<..>>` 这类
+    // 引用计数/可能中毒的内部可变性。
+    let mut presented: Option<String> = None;
+    // `accept_hdr_async` 的握手回调签名由 tungstenite 规定,返回的
+    // `Result` 错误分支是它自己的巨型 `Response` 类型,我们无法改成
+    // `Box<...>`(会与 trait 约定不符),只能就地放行这一条 lint。
+    #[allow(clippy::result_large_err)]
+    let capture =
+        |req: &tokio_tungstenite::tungstenite::handshake::server::Request,
+         resp: tokio_tungstenite::tungstenite::handshake::server::Response| {
+            presented = req
                 .headers()
                 .get("x-claude-code-ide-authorization")
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_owned);
-            *presented.lock().expect("auth header 锁") = header;
             Ok(resp)
-        }
-    };
-    let Ok(ws) = tokio_tungstenite::accept_hdr_async(stream, capture).await else {
+        };
+    let handshake = tokio::time::timeout(
+        HANDSHAKE_TIMEOUT,
+        tokio_tungstenite::accept_hdr_async(stream, capture),
+    )
+    .await;
+    let Ok(Ok(ws)) = handshake else {
         return;
     };
-    let presented = presented.lock().expect("auth header 锁").clone();
     if presented.as_deref() != Some(token.as_str()) {
         tracing::debug!(project_id, "ide_bridge 鉴权失败,关闭连接");
         return;
@@ -645,20 +731,51 @@ mod registry_lifecycle_tests {
     #[tokio::test]
     async fn first_session_starts_bridge_second_session_same_project_is_noop() {
         let (registry, _dir) = new_registry();
-        registry.session_started(1, "/repo").await;
+        assert!(registry.session_started(1, "/repo").await);
         assert_eq!(registry.active_projects().await, vec![1]);
-        registry.session_started(1, "/repo").await;
+        assert!(registry.session_started(1, "/repo").await);
         assert_eq!(registry.active_projects().await, vec![1]);
     }
 
     #[tokio::test]
     async fn different_projects_get_independent_bridges() {
         let (registry, _dir) = new_registry();
-        registry.session_started(1, "/repo-a").await;
-        registry.session_started(2, "/repo-b").await;
-        let mut projects = registry.active_projects().await;
-        projects.sort();
-        assert_eq!(projects, vec![1, 2]);
+        assert!(registry.session_started(1, "/repo-a").await);
+        assert!(registry.session_started(2, "/repo-b").await);
+        assert_eq!(registry.active_projects().await, vec![1, 2]);
+    }
+
+    #[tokio::test]
+    async fn session_started_returns_false_and_records_nothing_when_lock_dir_is_unusable() {
+        let dir = tempfile::tempdir().unwrap();
+        // `lock_dir` 指向一个已经存在的普通文件而不是目录,
+        // `write_lock_file` 内部的 `create_dir_all` 必然失败。
+        let blocked_lock_dir = dir.path().join("blocked");
+        std::fs::write(&blocked_lock_dir, b"not a directory").unwrap();
+        let registry =
+            IdeBridgeRegistry::new(blocked_lock_dir, Arc::new(PreviewContextStore::new()));
+
+        assert!(!registry.session_started(1, "/repo").await);
+        assert!(registry.active_projects().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn session_started_can_retry_after_a_previous_failure_for_the_same_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock_dir = dir.path().join("ide-locks");
+        std::fs::write(&lock_dir, b"not a directory yet").unwrap();
+        let registry =
+            IdeBridgeRegistry::new(lock_dir.clone(), Arc::new(PreviewContextStore::new()));
+
+        assert!(!registry.session_started(1, "/repo").await);
+        assert!(registry.active_projects().await.is_empty());
+
+        // 环境问题后来自己好了(比如磁盘空间恢复/权限修好):同一个项目
+        // 后续的 `session_started` 应该能重新尝试并成功,不会被上一次的
+        // 失败卡死。
+        std::fs::remove_file(&lock_dir).unwrap();
+        assert!(registry.session_started(1, "/repo").await);
+        assert_eq!(registry.active_projects().await, vec![1]);
     }
 
     #[tokio::test]
@@ -764,6 +881,40 @@ mod live_connection_tests {
         if let Ok(Some(Ok(_))) = next {
             panic!("鉴权失败不应该收到任何应答帧");
         } // 超时或连接已关闭,都是期望结果
+    }
+
+    #[tokio::test]
+    async fn connections_beyond_the_cap_are_dropped_before_handshake_completes() {
+        let (_registry, _dir, port, token) = started_registry_with_port(45).await;
+        let connect = || {
+            let token = token.clone();
+            async move {
+                let mut request = format!("ws://127.0.0.1:{port}/")
+                    .into_client_request()
+                    .unwrap();
+                request.headers_mut().insert(
+                    "x-claude-code-ide-authorization",
+                    HeaderValue::from_str(&token).unwrap(),
+                );
+                tokio_tungstenite::connect_async(request).await
+            }
+        };
+
+        // 占满并发连接上限,全部保持打开(不 drop,占着许可不放)。
+        let mut held = Vec::new();
+        for _ in 0..MAX_CONCURRENT_CONNECTIONS {
+            held.push(connect().await.expect("前 N 条应该正常握手成功"));
+        }
+
+        // 第 N+1 条:服务端并发连接数已到上限,accept 之后直接丢弃底层
+        // TCP 连接、不进行 WS 握手,客户端这次连接应该失败或超时,不会
+        // 拿到一个正常的 WS 会话。
+        let extra = tokio::time::timeout(std::time::Duration::from_millis(500), connect()).await;
+        if let Ok(Ok(_)) = extra {
+            panic!("超过并发上限的连接不应该握手成功");
+        }
+
+        drop(held); // 显式释放:必须在上面的断言跑完之前一直保持连接存活
     }
 }
 
