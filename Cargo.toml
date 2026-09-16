@@ -19,3 +19,6 @@ uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 portable-pty = "0.8"
 alacritty_terminal = "0.26"
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+libc = "0.2"
