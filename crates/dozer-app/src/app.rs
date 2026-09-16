@@ -5047,9 +5047,20 @@ impl App {
                 });
             }
             Message::AgentPickerToggle => {
-                self.with_focused_project(|ws, _io| {
-                    ws.agent_picker_open = !ws.agent_picker_open;
-                });
+                #[cfg(target_os = "macos")]
+                {
+                    let (x, y) = self.last_cursor;
+                    let items = crate::workspace::agent_picker_items();
+                    if let Some(msg) = crate::native_menu::show(items, (x, y)) {
+                        self.update(msg);
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    self.with_focused_project(|ws, _io| {
+                        ws.agent_picker_open = !ws.agent_picker_open;
+                    });
+                }
             }
             Message::AgentPickerClose => {
                 self.with_focused_project(|ws, _io| {

@@ -2774,6 +2774,45 @@ pub(crate) fn agent_picker_toggle_button<'a>(
     )
 }
 
+/// `agent_picker_popup` 的原生菜单版本,纯数据组装——八个选项与旧版完全
+/// 一致(六 agent + 分隔线 + Git Shell/纯 Shell),agent 图标用各自专属色
+/// (`agent_dot_color`)、文字用 BODY。仅 macOS 编译,非 mac 平台继续走
+/// `agent_picker_popup` 的 iced 弹层。
+#[cfg(target_os = "macos")]
+pub(crate) fn agent_picker_items() -> Vec<crate::native_menu::Item<Message>> {
+    use crate::native_menu::Item;
+    let body = byteui::theme::color::current().body;
+    let agents: [(&str, PickerLaunch); 6] = [
+        ("Claude", PickerLaunch::Agent(Some(AgentKind::Claude))),
+        ("CodeBuddy", PickerLaunch::Agent(Some(AgentKind::Codebuddy))),
+        ("Codex", PickerLaunch::Agent(Some(AgentKind::Codex))),
+        ("Kilo", PickerLaunch::Agent(Some(AgentKind::Kilo))),
+        ("OpenCode", PickerLaunch::Agent(Some(AgentKind::Opencode))),
+        ("v8agent", PickerLaunch::Agent(Some(AgentKind::V8agent))),
+    ];
+    let shells: [(&str, PickerLaunch); 2] = [
+        ("Git Shell", PickerLaunch::Git),
+        ("纯 Shell", PickerLaunch::Agent(None)),
+    ];
+    let mk_item = |label: &'static str, agent: PickerLaunch| {
+        let (icon, icon_color) = match agent {
+            PickerLaunch::Agent(Some(kind)) => (agent_icon(kind), agent_dot_color(kind)),
+            PickerLaunch::Agent(None) => (IconKind::Terminal, body),
+            PickerLaunch::Git => (IconKind::GitBranch, body),
+        };
+        Item::entry_tinted(icon, icon_color, label, Message::AgentPickerSelect(agent))
+    };
+    let mut items: Vec<Item<Message>> = Vec::new();
+    for (label, agent) in agents {
+        items.push(mk_item(label, agent));
+    }
+    items.push(Item::separator());
+    for (label, agent) in shells {
+        items.push(mk_item(label, agent));
+    }
+    items
+}
+
 /// Agent 选择菜单浮层:固定挂在窗口右上角("＋"按钮下方——该按钮
 /// 就在最靠右的 Agent 面板头部,近似等于窗口右上角),八个选项按标签
 /// 首字母顺序排列:Claude/CodeBuddy/Codex/Git Shell/Kilo/OpenCode/
