@@ -6524,6 +6524,47 @@ impl App {
             // SFTP tab 内部交互:按 host_id 路由到 `sftp::route`,真正的
             // 处理逻辑在那边(sftp::Message 有 7+ 个变体,内容又都操作
             // `ws.sftp_tabs`,摊平会让这里的大 match 更难读)。
+            Message::Ssh(ssh::Message::Sftp(ssh::sftp::Message::ContextMenuOpen {
+                host_id,
+                is_local,
+                path,
+            })) => {
+                #[cfg(target_os = "macos")]
+                {
+                    // 先落选中态(同 `sftp::route` 的 ContextMenuOpen 分支),
+                    // 再同步弹原生菜单,结果经 `Ssh(Sftp(msg))` 回路由。
+                    self.with_focused_project(|ws, io| {
+                        ssh::sftp::route(
+                            ws,
+                            io,
+                            ssh::sftp::Message::ContextMenuOpen {
+                                host_id: host_id.clone(),
+                                is_local,
+                                path: path.clone(),
+                            },
+                        );
+                    });
+                    let (x, y) = self.files.last_right_click();
+                    let items = ssh::sftp::context_menu_items(&host_id, is_local);
+                    if let Some(msg) = crate::native_menu::show(items, (x, y)) {
+                        self.update(Message::Ssh(ssh::Message::Sftp(msg)));
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    self.with_focused_project(|ws, io| {
+                        ssh::sftp::route(
+                            ws,
+                            io,
+                            ssh::sftp::Message::ContextMenuOpen {
+                                host_id,
+                                is_local,
+                                path,
+                            },
+                        );
+                    });
+                }
+            }
             Message::Ssh(ssh::Message::Sftp(msg)) => {
                 self.with_focused_project(|ws, io| {
                     ssh::sftp::route(ws, io, msg);

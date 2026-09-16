@@ -655,6 +655,29 @@ fn sftp_context_menu<'a>(
     )
 }
 
+/// `sftp_context_menu` 的原生菜单版本,纯数据组装——本地行只出"上传"、
+/// 远程行只出"下载"。仅 macOS 编译。
+#[cfg(target_os = "macos")]
+pub(crate) fn context_menu_items(
+    host_id: &str,
+    is_local: bool,
+) -> Vec<crate::native_menu::Item<Message>> {
+    let (icon, label, msg) = if is_local {
+        (
+            byteui::interaction::icons::IconKind::ChevronUp,
+            "上传",
+            Message::Upload(host_id.to_string()),
+        )
+    } else {
+        (
+            byteui::interaction::icons::IconKind::ChevronDown,
+            "下载",
+            Message::Download(host_id.to_string()),
+        )
+    };
+    vec![crate::native_menu::Item::entry(Some(icon), label, msg)]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
