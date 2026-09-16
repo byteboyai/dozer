@@ -4398,14 +4398,7 @@ impl App {
     /// 打开 Project 面板「项目文档 / Agent 记忆」链接行的删除右键菜单。与
     /// 文件树右键菜单互斥(坐标复用 `files.last_right_click`)。
     fn project_link_context_menu(&mut self, target: project::links::LinkTarget, index: usize) {
-        let (x, y) = self.files.last_right_click();
         self.files.close_context_menu();
-        self.project_link_menu = Some(ProjectLinkMenu {
-            x,
-            y,
-            target,
-            index,
-        });
         // 右击即选中该行:从对应链接列表取下标项路径,标记到
         // `project_panel.selected_link`(参考文件树 `ContextMenuOpen` 同时选中)。
         if let Some(path) = self
@@ -4414,6 +4407,24 @@ impl App {
         {
             self.with_focused_project(|ws, _io| {
                 ws.project_panel.set_selected_link(path);
+            });
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let (x, y) = self.files.last_right_click();
+            let items = project_link_menu_items(target, index);
+            if let Some(msg) = crate::native_menu::show(items, (x, y)) {
+                self.update(msg);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let (x, y) = self.files.last_right_click();
+            self.project_link_menu = Some(ProjectLinkMenu {
+                x,
+                y,
+                target,
+                index,
             });
         }
     }

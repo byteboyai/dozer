@@ -951,17 +951,34 @@ pub fn update(
             app_state.last_right_click = (x, y);
         }
         Message::ContextMenuOpen { path, is_dir } => {
-            let (x, y) = app_state.last_right_click;
             ws_state.tree_selected = Some(path.clone());
             // 与分支切换弹层互斥:开右键菜单时收起分支弹层,避免两个浮层
             // 同时挂着(同 `PreviewTabContextMenu` 关文件树右键菜单的约定)。
             ws_state.branch_picker_open = false;
-            app_state.context_menu = Some(ContextMenu {
-                x,
-                y,
-                target: path,
-                is_dir,
-            });
+            #[cfg(target_os = "macos")]
+            {
+                let (x, y) = app_state.last_right_click;
+                let is_root = ws_state
+                    .file_tree
+                    .as_ref()
+                    .map(|t| t.root() == path.as_path())
+                    .unwrap_or(false);
+                let has_clipboard = ws_state.tree_clipboard.is_some();
+                let items = context_menu_items(&path, is_dir, is_root, has_clipboard);
+                if let Some(msg) = crate::native_menu::show(items, (x, y)) {
+                    update(ws_state, app_state, msg, project_id, handle, emit);
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let (x, y) = app_state.last_right_click;
+                app_state.context_menu = Some(ContextMenu {
+                    x,
+                    y,
+                    target: path,
+                    is_dir,
+                });
+            }
         }
         Message::ContextMenuClose => {
             app_state.context_menu = None;
@@ -3995,6 +4012,11 @@ mod tests {
         assert!(!ws_state.visible_tree_rows().iter().any(|r| r.path == added));
     }
 
+    // 仅在非 mac 平台成立:mac 上 `ContextMenuOpen` 直接同步弹原生 NSMenu、
+    // 不再写 `app_state.context_menu`(原生菜单阻塞返回,`context_menu` 恒
+    // `None`),这条"写状态 + 下一帧渲染"的旧行为只在非 mac 的 iced 弹层路径
+    // 保留。
+    #[cfg(not(target_os = "macos"))]
     #[tokio::test]
     async fn context_menu_open_uses_last_right_click_and_sets_selected() {
         let dir = tempfile::tempdir().unwrap();
