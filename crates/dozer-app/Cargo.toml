@@ -94,3 +94,9 @@ tempfile = "3"
 resvg = "=0.45.1"
 usvg = "=0.45.1"
 tiny-skia = { version = "=0.11.4", features = ["png"] }
+# 原生菜单项 hover 高亮:直接改 `CALayer.backgroundColor`(`NSView.layer()`
+# 返回的 `CALayer`)。objc2-app-kit 只按自己所需的最小 feature 集间接拉
+# `objc2-quartz-core`,拿不到完整 `CALayer` API(`setBackgroundColor`/
+# `setCornerRadius` 编译期直接报"方法不存在"),显式声明成直接依赖并开
+# `CALayer` feature 才能用;`Cargo.lock` 里已有同版本(0.3.2),pin 一致。
+objc2-quartz-core = { version = "=0.3.2", features = ["CALayer"] }

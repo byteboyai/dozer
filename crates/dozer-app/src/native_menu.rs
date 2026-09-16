@@ -218,12 +218,22 @@ mod menu_item_view {
         NSView,
     };
     use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+    use std::cell::Cell;
+
+    /// hover 高亮的圆角半径,对齐 `crate::menu.rs` 里 iced 版菜单项的
+    /// `MENU_HOVER_RADIUS`。
+    const HOVER_RADIUS: f64 = 6.0;
 
     /// 自定义菜单项 view 的实例状态:命中的下标(点击时回填
-    /// `SELECTED_INDEX` 用)+ 是否可点(锁定项不接 hover/点击)。
+    /// `SELECTED_INDEX` 用)+ 是否可点(锁定项不接 hover/点击)+ 当前是否
+    /// 悬停(`mouseEntered:`/`mouseExited:` 翻转,驱动 `layer.backgroundColor`
+    /// 高亮——`NSMenuItem` 挂了自定义 `view` 后 AppKit 不会自动画选中态,
+    /// 必须自己维护这个状态并据此改层背景色,不能只靠 `setNeedsDisplay`
+    /// (没有 `drawRect:` 覆写,那样什么也不会变)。
     pub struct Ivars {
         index: usize,
         enabled: bool,
+        hovered: Cell<bool>,
     }
 
     define_class!(
@@ -238,13 +248,15 @@ mod menu_item_view {
             #[unsafe(method(mouseEntered:))]
             fn mouse_entered(&self, _event: &NSEvent) {
                 if self.ivars().enabled {
-                    self.setNeedsDisplay(true);
+                    self.ivars().hovered.set(true);
+                    self.apply_hover_background();
                 }
             }
 
             #[unsafe(method(mouseExited:))]
             fn mouse_exited(&self, _event: &NSEvent) {
-                self.setNeedsDisplay(true);
+                self.ivars().hovered.set(false);
+                self.apply_hover_background();
             }
 
             #[unsafe(method(mouseUp:))]
@@ -262,6 +274,27 @@ mod menu_item_view {
     );
 
     impl MenuItemView {
+        /// 按 `hovered` 当前值把层背景设成 `TAB_HOVER` 色或透明——
+        /// `mouseEntered:`/`mouseExited:`/`new()` 初始化都调这个,保持单一
+        /// 落笔点。
+        fn apply_hover_background(&self) {
+            let Some(layer) = self.layer() else {
+                return;
+            };
+            if self.ivars().hovered.get() {
+                let hover = byteui::theme::color::current().tab_hover;
+                let ns_color = NSColor::colorWithRed_green_blue_alpha(
+                    hover.r as f64,
+                    hover.g as f64,
+                    hover.b as f64,
+                    hover.a as f64,
+                );
+                layer.setBackgroundColor(Some(&ns_color.CGColor()));
+            } else {
+                layer.setBackgroundColor(None);
+            }
+        }
+
         /// 组一整行:自身画 hover 底色(靠 `wantsLayer`+`layer.backgroundColor`
         /// 更简单),内部横排图标(可选)+ 文字。
         pub fn new(
@@ -274,7 +307,11 @@ mod menu_item_view {
         ) -> Retained<Self> {
             const ROW_HEIGHT: f64 = 22.0;
             const ROW_WIDTH: f64 = 220.0;
-            let this = mtm.alloc::<Self>().set_ivars(Ivars { index, enabled });
+            let this = mtm.alloc::<Self>().set_ivars(Ivars {
+                index,
+                enabled,
+                hovered: Cell::new(false),
+            });
             let this: Retained<Self> = unsafe {
                 msg_send![
                     super(this),
@@ -283,6 +320,9 @@ mod menu_item_view {
             };
 
             this.setWantsLayer(true);
+            if let Some(layer) = this.layer() {
+                layer.setCornerRadius(HOVER_RADIUS);
+            }
             let owner: &objc2::runtime::AnyObject = &this;
             let tracking = unsafe {
                 NSTrackingArea::initWithRect_options_owner_userInfo(
