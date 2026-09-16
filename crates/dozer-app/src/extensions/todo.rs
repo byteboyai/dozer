@@ -2857,6 +2857,53 @@ fn todo_card<'a>(
     }
 }
 
+/// `todo_dispatch_overlay` 的原生菜单版本,纯数据组装——只列出有 headless
+/// 适配器的四种 agent。仅 macOS 编译。
+#[cfg(target_os = "macos")]
+pub(crate) fn dispatch_items(idx: usize) -> Vec<crate::native_menu::Item<Message>> {
+    [
+        AgentKind::Claude,
+        AgentKind::Codebuddy,
+        AgentKind::Opencode,
+        AgentKind::V8agent,
+    ]
+    .into_iter()
+    .map(|agent| {
+        crate::native_menu::Item::entry(
+            Some(agent_icon(agent)),
+            agent.label(),
+            Message::AssignAgent(idx, agent),
+        )
+    })
+    .collect()
+}
+
+/// `todo_status_overlay` 的原生菜单版本,纯数据组装——四态,文字用各自
+/// `status_meta` 色。仅 macOS 编译。
+#[cfg(target_os = "macos")]
+pub(crate) fn status_items(idx: usize) -> Vec<crate::native_menu::Item<Message>> {
+    use crate::native_menu::Item;
+    [
+        TodoState::Pending,
+        TodoState::InProgress,
+        TodoState::Suspended,
+        TodoState::Done,
+    ]
+    .into_iter()
+    .map(|st| {
+        let (label, color) = status_meta(st);
+        Item::Entry {
+            icon: None,
+            icon_color: None,
+            label: label.into(),
+            color,
+            enabled: true,
+            msg: Message::StatusPick(idx, st),
+        }
+    })
+    .collect()
+}
+
 /// Todo 指派选择层(窗口级 overlay 版):选一个 agent 种类完成指派,不再
 /// 要求"存在活着的 tab"(2026-09-02 起,指派与执行解耦——指派只是记录,
 /// 真正执行靠分类轮询开关或详情弹窗手动"处理")。样式沿用

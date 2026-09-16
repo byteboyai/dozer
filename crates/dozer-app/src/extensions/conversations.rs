@@ -314,6 +314,40 @@ fn footer_bar<'a>(
         .into()
 }
 
+/// `agent_picker_view` 的原生菜单版本,纯数据组装——"全部" + 各 agent,当前
+/// 选中项 GOLD 高亮且不可点(同旧版 `then_some` 语义)。仅 macOS 编译。
+#[cfg(target_os = "macos")]
+pub(crate) fn agent_picker_items(
+    ws_state: &WorkspaceState,
+) -> Vec<crate::native_menu::Item<Message>> {
+    use crate::native_menu::Item;
+    let gold = byteui::theme::color::current().gold;
+    let body = byteui::theme::color::current().body;
+    let agents = conversation_agents_present(ws_state.sessions().unwrap_or(&[]));
+    let mut items: Vec<Item<Message>> = Vec::new();
+    let is_all_current = ws_state.agent_filter.is_none();
+    items.push(Item::Entry {
+        icon: None,
+        icon_color: None,
+        label: "全部".into(),
+        color: if is_all_current { gold } else { body },
+        enabled: !is_all_current,
+        msg: Message::AgentFilterSelect(None),
+    });
+    for &agent in &agents {
+        let is_current = ws_state.agent_filter == Some(agent);
+        items.push(Item::Entry {
+            icon: Some(agent_icon(agent)),
+            icon_color: Some(agent_dot_color(agent)),
+            label: agent.label().into(),
+            color: if is_current { gold } else { body },
+            enabled: !is_current,
+            msg: Message::AgentFilterSelect(Some(agent)),
+        });
+    }
+    items
+}
+
 /// `footer_bar` 展开的下拉弹出层:列出"全部" + `agents`,点某项即
 /// `AgentFilterSelect` 切换并收起(本地 `stack!` 叠在面板自己内容之上,不是
 /// 全窗 overlay)。未展开时返回零高度元素。

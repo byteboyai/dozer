@@ -5148,6 +5148,28 @@ impl App {
             Message::Conversations(conversations::Message::TextInputMenuOpen(target)) => {
                 self.update(Message::TextInputMenuOpen(target));
             }
+            Message::Conversations(conversations::Message::AgentPickerOpen) => {
+                #[cfg(target_os = "macos")]
+                {
+                    let last_cursor = self.last_cursor;
+                    let items = self
+                        .active_workspace()
+                        .map(|ws| conversations::agent_picker_items(&ws.conversations))
+                        .unwrap_or_default();
+                    if let Some(msg) = crate::native_menu::show(items, last_cursor) {
+                        self.update(Message::Conversations(msg));
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    self.with_focused_project(|ws, _io| {
+                        conversations::update(
+                            &mut ws.conversations,
+                            conversations::Message::AgentPickerOpen,
+                        );
+                    });
+                }
+            }
             Message::Conversations(msg) => {
                 self.with_focused_project(|ws, _io| {
                     conversations::update(&mut ws.conversations, msg);
@@ -5344,6 +5366,34 @@ impl App {
                 }
                 todo::Message::CategoryPickerOpenForTodo(todo_id) => {
                     self.todo_category_picker_open(CategoryPickerTarget::Todo(todo_id));
+                }
+                todo::Message::DispatchOpen(idx) => {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let last_cursor = self.last_cursor;
+                        let items = todo::dispatch_items(idx);
+                        if let Some(msg) = crate::native_menu::show(items, last_cursor) {
+                            self.update(Message::Todo(msg));
+                        }
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        self.todo_message(todo::Message::DispatchOpen(idx));
+                    }
+                }
+                todo::Message::StatusOpen(idx) => {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let last_cursor = self.last_cursor;
+                        let items = todo::status_items(idx);
+                        if let Some(msg) = crate::native_menu::show(items, last_cursor) {
+                            self.update(Message::Todo(msg));
+                        }
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        self.todo_message(todo::Message::StatusOpen(idx));
+                    }
                 }
                 other => self.todo_message(other),
             },
