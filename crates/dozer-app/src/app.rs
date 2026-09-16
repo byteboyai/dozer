@@ -2439,6 +2439,11 @@ pub struct App {
     /// 通用输入框右键菜单浮层状态(屏幕空间单例)。`TextInputMenuOpen` 时
     /// 写入、`TextInputMenuClose`/动作后清空。同一时刻最多挂一个。
     text_input_menu: Option<TextInputMenu>,
+    /// mac 原生菜单选中剪切/复制/粘贴/全选后,要合成的 `⌘+x/c/v/a` 字符 +
+    /// 目标输入 id——`native_menu::show` 同步阻塞返回时那一帧的
+    /// `UserInterface` 已经不在了,main.rs 在 `dispatch` 循环之后另起一次
+    /// 补上(见 `main.rs::window_event` 对应处)。非 mac 平台恒 `None`。
+    pending_native_menu_edit_key: Option<(char, iced_widget::core::widget::Id)>,
     /// 数据库面板数据源树 header 行的右键菜单浮层状态,坐标同样复用
     /// `files.last_right_click`。
     database_source_menu: Option<DatabaseSourceMenu>,
@@ -2812,6 +2817,7 @@ impl App {
             text_input_menu: None,
             database_source_menu: None,
             pending_text_input_focus: None,
+            pending_native_menu_edit_key: None,
             projects: HashMap::new(),
             project_order: Vec::new(),
             active_project_id: None,
@@ -4363,6 +4369,14 @@ impl App {
         self.text_input_menu.is_some()
     }
 
+    /// main.rs 在 `dispatch` 循环之后取走一次,取到即消费——见
+    /// `pending_native_menu_edit_key` 字段文档。
+    pub(crate) fn take_pending_native_menu_edit_key(
+        &mut self,
+    ) -> Option<(char, iced_widget::core::widget::Id)> {
+        self.pending_native_menu_edit_key.take()
+    }
+
     /// main.rs 读取"本帧若产生右上角输入框右键菜单动作,要作用到的输入
     /// 焦点",清空后返回。`TextInputMenuOpen` 时写入,供复制/粘贴作用于
     /// 被右键的输入。
@@ -5276,20 +5290,33 @@ impl App {
             Message::ToggleFileTreeCollapse => self.toggle_files_tree_collapse(),
             Message::TogglePanelListCollapse(kind) => self.toggle_panel_list_collapse(kind),
             Message::TextInputMenuOpen(target) => {
-                // 与其它右键菜单互斥——关掉别的,只留本菜单(同时避免互相顶)。
-                self.files.close_context_menu();
-                self.project_link_menu = None;
-                let (x, y) = self.files.last_right_click();
-                self.text_input_menu = Some(TextInputMenu {
-                    x,
-                    y,
-                    target: target.clone(),
-                });
-                // 右键不聚焦 iced 输入框(只有左键会),菜单的复制/粘贴需要通过
-                // `interface.operate` 把焦点移到目标输入,否则合成回的 ⌘+c/v
-                // 事件作用不到它。记录待聚焦 id,本帧后由 `apply_pending_focus`
-                // 应用(main.rs)。
-                self.pending_text_input_focus = Some(target.id);
+                #[cfg(target_os = "macos")]
+                {
+                    let (x, y) = self.files.last_right_click();
+                    let items = text_input_menu_items(&target);
+                    if let Some(msg) = crate::native_menu::show(items, (x, y))
+                        && let Some(ch) = crate::menu_edit_key(&msg)
+                    {
+                        self.pending_native_menu_edit_key = Some((ch, target.id.clone()));
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    // 与其它右键菜单互斥——关掉别的,只留本菜单(同时避免互相顶)。
+                    self.files.close_context_menu();
+                    self.project_link_menu = None;
+                    let (x, y) = self.files.last_right_click();
+                    self.text_input_menu = Some(TextInputMenu {
+                        x,
+                        y,
+                        target: target.clone(),
+                    });
+                    // 右键不聚焦 iced 输入框(只有左键会),菜单的复制/粘贴需要通过
+                    // `interface.operate` 把焦点移到目标输入,否则合成回的 ⌘+c/v
+                    // 事件作用不到它。记录待聚焦 id,本帧后由 `apply_pending_focus`
+                    // 应用(main.rs)。
+                    self.pending_text_input_focus = Some(target.id);
+                }
             }
             Message::TextInputMenuClose => {
                 self.text_input_menu = None;

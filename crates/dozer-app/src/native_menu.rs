@@ -29,8 +29,7 @@ pub enum Item<Msg> {
 /// 颜色)。纯函数,不碰 AppKit,可在任何线程/CI 里跑。
 fn render_icon_pixmap(kind: IconKind, color: Color, size_px: u32) -> tiny_skia::Pixmap {
     let opt = usvg::Options::default();
-    let tree =
-        usvg::Tree::from_data(kind.bytes(), &opt).expect("内嵌 Lucide SVG 资源必须能解析");
+    let tree = usvg::Tree::from_data(kind.bytes(), &opt).expect("内嵌 Lucide SVG 资源必须能解析");
     let native_size = tree.size().to_int_size();
     let scale = size_px as f32 / native_size.width().max(1) as f32;
     let mut pixmap = tiny_skia::Pixmap::new(size_px, size_px).expect("size_px 非零");
@@ -215,8 +214,8 @@ mod menu_item_view {
     use objc2::runtime::NSObjectProtocol;
     use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
     use objc2_app_kit::{
-        NSColor, NSEvent, NSImage, NSImageView, NSTextField, NSTrackingArea,
-        NSTrackingAreaOptions, NSView,
+        NSColor, NSEvent, NSImage, NSImageView, NSTextField, NSTrackingArea, NSTrackingAreaOptions,
+        NSView,
     };
     use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
@@ -309,10 +308,7 @@ mod menu_item_view {
             }
             let text = NSTextField::initWithFrame(
                 NSTextField::alloc(mtm),
-                NSRect::new(
-                    NSPoint::new(x, 2.0),
-                    NSSize::new(ROW_WIDTH - x - 8.0, 18.0),
-                ),
+                NSRect::new(NSPoint::new(x, 2.0), NSSize::new(ROW_WIDTH - x - 8.0, 18.0)),
             );
             text.setStringValue(&NSString::from_str(label));
             text.setBezeled(false);

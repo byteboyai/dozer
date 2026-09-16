@@ -465,7 +465,7 @@ fn clear<'a>(
 
 /// 输入框右键菜单动作 → 对应的快捷键字符:返回 `Some('c')` 等,供
 /// `link_command_event` 合成 ⌘/Ctrl+该键的键盘事件。非菜单动作返回 `None`。
-fn menu_edit_key(message: &Message) -> Option<char> {
+pub(crate) fn menu_edit_key(message: &Message) -> Option<char> {
     match message {
         Message::TextInputMenuCut => Some('x'),
         Message::TextInputMenuCopy => Some('c'),
@@ -3500,6 +3500,56 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
             // 其余原样转给 `app.update`）。
             for message in pending_messages {
                 self.dispatch(message);
+            }
+
+            // mac 原生右键菜单选中了剪切/复制/粘贴/全选:上面 `dispatch` 已经
+            // 跑完 `TextInputMenuOpen` 的处理、写好了
+            // `pending_native_menu_edit_key`,但驱动合成键盘事件所需的
+            // `UserInterface` 只在上面那个块的作用域内活着,已经被
+            // `interface.into_cache()` 收掉——这里独立重新借一次
+            // `Self::Ready` 的字段、建一个新 `UserInterface`,补聚焦 + 把
+            // `⌘/Ctrl+x/c/v/a` 事件喂给它,和 `pending_messages` 完全同一套
+            // 手法(见上面那段注释里链接的 `menu_edit_key` 原始用法)。
+            #[cfg(target_os = "macos")]
+            {
+                let synth_messages: Vec<Message> = {
+                    let Self::Ready {
+                        app,
+                        renderer,
+                        viewport,
+                        cursor,
+                        clipboard,
+                        cache,
+                        ..
+                    } = self
+                    else {
+                        return;
+                    };
+                    match app.take_pending_native_menu_edit_key() {
+                        Some((ch, target_id)) => {
+                            let mut interface = UserInterface::build(
+                                app.view(),
+                                viewport.logical_size(),
+                                std::mem::take(cache),
+                                renderer,
+                            );
+                            let mut op = iced_winit::core::widget::operation::focusable::focus::<()>(
+                                target_id,
+                            );
+                            run_operate(&mut interface, renderer, &mut op);
+                            let synth = [unique_command_event(ch)];
+                            let mut second: Vec<Message> = Vec::new();
+                            let _ =
+                                interface.update(&synth, *cursor, renderer, clipboard, &mut second);
+                            *cache = interface.into_cache();
+                            second
+                        }
+                        None => Vec::new(),
+                    }
+                };
+                for message in synth_messages {
+                    self.dispatch(message);
+                }
             }
 
             // webview 池与期望清单对齐：tab 增删、resize、地址栏导航都可能
