@@ -135,6 +135,14 @@ impl WorkspaceState {
         self.search_focused
     }
 
+    /// `footer_bar` 的 agent 筛选下拉是否展开(`app.rs::preview_desired`
+    /// 判断是否要强制隐藏本侧 webview 用)。注意 `Workspace` 自己另有一个
+    /// **同名但完全不同语义**的 `agent_picker_open` 字段(Agent 面板"＋"
+    /// 选人、项目级状态、不涉及任何 webview),两者互不相干。
+    pub fn agent_picker_open(&self) -> bool {
+        self.agent_picker_open
+    }
+
     /// 每帧渲染循环读走 `CaptureConversationSearchFocus` 查到的真实焦点态后
     /// 写回这里。
     pub fn set_search_focused(&mut self, focused: bool) {

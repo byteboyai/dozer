@@ -4662,8 +4662,11 @@ impl App {
         };
         // `search_modal` 是满窗 SCRIM+卡片形制(见
         // `extensions/search.rs::search_modal` 注释),打开时要隐藏 webview,
-        // 否则 webview 会盖住遮罩和弹窗卡片。
-        let app_modal_open = ws.search.is_open();
+        // 否则 webview 会盖住遮罩和弹窗卡片。`text_input_menu`(输入框右键
+        // 剪切/复制/粘贴菜单)是屏幕空间单例、不区分左右哪一侧,和
+        // `search_modal` 一样按"两侧都可能被盖住"从宽处理——比如文件树
+        // 搜索框右键时,菜单向下弹出恰好压在下方的预览 webview 上。
+        let app_modal_open = ws.search.is_open() || self.text_input_menu.is_some();
         let mut out = Vec::new();
         for side in [Side::Left, Side::Right] {
             let kind = match side {
@@ -4691,6 +4694,15 @@ impl App {
                 PanelKind::Project => ws.project_preview_tab_overflow_anchor.is_some(),
                 _ => false,
             };
+            // Files 右键菜单/Project 链接右键菜单/Conversations agent
+            // 筛选下拉——同款"面板内浮层盖住 webview"场景,按当前面板种类
+            // 分别判断(见 `webview_hidden_by_panel_popup` 文档)。
+            let panel_popup_open = webview_hidden_by_panel_popup(
+                kind,
+                self.files.context_menu_is_some(),
+                self.project_link_menu.is_some(),
+                ws.conversations.agent_picker_open(),
+            );
             let bounds = webview_geometry::preview_content_bounds_for(
                 side,
                 window_width,
@@ -4699,10 +4711,10 @@ impl App {
             );
             out.extend(specs.into_iter().map(|mut s| {
                 s.id += id_offset;
-                // 搜索弹窗/tab 溢出下拉开着时,原生浮层盖住了预览区,原生
-                // wry 子视图不听 iced 绘制顺序摆布,必须显式 visible=false
-                // 才能真正藏起来。
-                if app_modal_open || tab_overflow_open {
+                // 搜索弹窗/tab 溢出下拉/面板内浮层开着时,原生浮层盖住了
+                // 预览区,原生 wry 子视图不听 iced 绘制顺序摆布,必须显式
+                // visible=false 才能真正藏起来。
+                if app_modal_open || tab_overflow_open || panel_popup_open {
                     s.visible = false;
                 }
                 (s, bounds)
@@ -4719,6 +4731,12 @@ impl App {
         window_width: f32,
         window_height: f32,
     ) -> Vec<(WebviewSpec, (f32, f32, f32, f32))> {
+        // 地址栏右键"剪切/复制/粘贴"菜单向下弹出,恰好压在下方的浏览器
+        // webview 内容区上——同 `preview_desired` 里 `text_input_menu` 的
+        // 处理,原生 wry 子视图不听 iced 绘制顺序摆布,必须显式
+        // visible=false 才能真正藏起来。首页(`home_browser`)和工作区内
+        // (`ws.browser`)两条分支共用这一个判断。
+        let text_input_menu_open = self.text_input_menu.is_some();
         // 首页右栏恒为全局浏览器(`home_browser`),与 `left_view` 无关——
         // 进首页就让它成为浏览器 webview 池的唯一来源,否则默认 URL 的 tab
         // 建了却永远等不到 webview(见 `sync_webview_pool`)。
@@ -4727,7 +4745,12 @@ impl App {
                 .home_browser
                 .desired_webviews()
                 .into_iter()
-                .map(|s| (s, (0.0, 0.0, 0.0, 0.0)))
+                .map(|mut s| {
+                    if text_input_menu_open {
+                        s.visible = false;
+                    }
+                    (s, (0.0, 0.0, 0.0, 0.0))
+                })
                 .collect();
         }
         let side = if self.left_view == PanelKind::Web {
@@ -4749,7 +4772,12 @@ impl App {
         ws.browser
             .desired_webviews()
             .into_iter()
-            .map(|s| (s, bounds))
+            .map(|mut s| {
+                if text_input_menu_open {
+                    s.visible = false;
+                }
+                (s, bounds)
+            })
             .collect()
     }
 
