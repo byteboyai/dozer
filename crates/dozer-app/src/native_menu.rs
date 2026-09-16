@@ -117,6 +117,13 @@ fn color_key(color: Color) -> u32 {
     (r << 24) | (g << 16) | (b << 8) | a
 }
 
+/// 菜单项图标像素尺寸——同 `crate::menu.rs::icon_leading` 用的
+/// `icon_size::row()`(已含全局 scale),原生菜单和 iced 菜单在同一次
+/// 缩放调整下应保持一致大小。
+fn icon_size_px() -> u32 {
+    byteui::theme::icon_size::row().round() as u32
+}
+
 /// 把 `render_icon_pixmap` 的结果编码成 PNG、包成 `NSImage`(经
 /// `NSData::with_bytes` + `NSImage::initWithData`,比手搭
 /// `NSBitmapImageRep` 的裸像素平面初始化器简单可靠——PNG 编解码本身处理
@@ -177,15 +184,16 @@ pub fn show<Msg: Clone>(items: Vec<Item<Msg>>, view_pos: (f32, f32)) -> Option<M
                     )
                 };
                 ns_item.setEnabled(enabled);
+                let icon_px = icon_size_px();
                 if let Some(icon) = icon {
-                    ns_item.setImage(Some(&icon_image(icon, color, 16)));
+                    ns_item.setImage(Some(&icon_image(icon, color, icon_px)));
                 }
                 let row_view = menu_item_view::MenuItemView::new(
                     mtm,
                     &label,
                     color,
                     enabled,
-                    icon.map(|k| icon_image(k, color, 16)),
+                    icon.map(|k| icon_image(k, color, icon_px)),
                     idx,
                 );
                 ns_item.setView(Some(&row_view));
@@ -214,8 +222,8 @@ mod menu_item_view {
     use objc2::runtime::NSObjectProtocol;
     use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
     use objc2_app_kit::{
-        NSColor, NSEvent, NSImage, NSImageView, NSTextField, NSTrackingArea, NSTrackingAreaOptions,
-        NSView,
+        NSColor, NSEvent, NSFont, NSImage, NSImageView, NSTextField, NSTrackingArea,
+        NSTrackingAreaOptions, NSView,
     };
     use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
     use std::cell::Cell;
@@ -296,7 +304,10 @@ mod menu_item_view {
         }
 
         /// 组一整行:自身画 hover 底色(靠 `wantsLayer`+`layer.backgroundColor`
-        /// 更简单),内部横排图标(可选)+ 文字。
+        /// 更简单),内部横排图标(可选)+ 文字。宽/内边距/图标↔文字间距/
+        /// 字号全部读 `byteui::theme` token(均已含全局 scale),和
+        /// `crate::menu.rs` 的 iced 版菜单项共用同一套尺寸口径,放大/缩小
+        /// UI 时原生菜单跟着一起变,不会停在编译期写死的固定像素。
         pub fn new(
             mtm: MainThreadMarker,
             label: &str,
@@ -305,8 +316,18 @@ mod menu_item_view {
             icon: Option<Retained<NSImage>>,
             index: usize,
         ) -> Retained<Self> {
-            const ROW_HEIGHT: f64 = 22.0;
-            const ROW_WIDTH: f64 = 220.0;
+            let font_size = byteui::theme::font::label() as f64;
+            let pad_h = byteui::theme::geometry::menu_pad_h() as f64;
+            let pad_v = byteui::theme::geometry::menu_pad_v() as f64;
+            let gap = byteui::theme::geometry::menu_gap() as f64;
+            let icon_px = super::icon_size_px() as f64;
+            let row_width = byteui::theme::geometry::menu_item_width() as f64;
+            // 文字行高留一点余量(字号本身只是字形高度,行框要比它高一圈
+            // 才不会顶到边),行高再取"图标/文字谁高就跟谁"+ 上下内边距。
+            let text_height = font_size + 4.0;
+            let content_height = icon_px.max(text_height);
+            let row_height = content_height + pad_v * 2.0;
+
             let this = mtm.alloc::<Self>().set_ivars(Ivars {
                 index,
                 enabled,
@@ -315,7 +336,7 @@ mod menu_item_view {
             let this: Retained<Self> = unsafe {
                 msg_send![
                     super(this),
-                    initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(ROW_WIDTH, ROW_HEIGHT))
+                    initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(row_width, row_height))
                 ]
             };
 
@@ -336,25 +357,31 @@ mod menu_item_view {
             };
             this.addTrackingArea(&tracking);
 
-            let mut x = 8.0;
+            let mut x = pad_h;
             if let Some(icon) = icon {
+                let icon_y = (row_height - icon_px) / 2.0;
                 let image_view = NSImageView::initWithFrame(
                     NSImageView::alloc(mtm),
-                    NSRect::new(NSPoint::new(x, 3.0), NSSize::new(16.0, 16.0)),
+                    NSRect::new(NSPoint::new(x, icon_y), NSSize::new(icon_px, icon_px)),
                 );
                 image_view.setImage(Some(&icon));
                 this.addSubview(&image_view);
-                x += 22.0;
+                x += icon_px + gap;
             }
+            let text_y = (row_height - text_height) / 2.0;
             let text = NSTextField::initWithFrame(
                 NSTextField::alloc(mtm),
-                NSRect::new(NSPoint::new(x, 2.0), NSSize::new(ROW_WIDTH - x - 8.0, 18.0)),
+                NSRect::new(
+                    NSPoint::new(x, text_y),
+                    NSSize::new(row_width - x - pad_h, text_height),
+                ),
             );
             text.setStringValue(&NSString::from_str(label));
             text.setBezeled(false);
             text.setDrawsBackground(false);
             text.setEditable(false);
             text.setSelectable(false);
+            text.setFont(Some(&NSFont::systemFontOfSize(font_size)));
             let ns_color = NSColor::colorWithRed_green_blue_alpha(
                 color.r as f64,
                 color.g as f64,
