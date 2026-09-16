@@ -104,11 +104,19 @@ pub fn preview_content_bounds_for(
             PanelKind::Project => {
                 let y = y0 + byteui::theme::geometry::preview_chrome_top_px();
                 let h = (avail_h - byteui::theme::geometry::preview_chrome_top_px() - 8.0).max(0.0);
-                let pair_w = pair_content_width(avail_w);
-                let cols = pair_columns(pair_w, state.dims.project_split, mirrored);
-                let x = x0 + cols.content_x + 8.0;
-                let w = (cols.content_w - 16.0).max(0.0);
-                (x, y, w, h)
+                if state.dims.project_list_collapsed {
+                    // 同 Files 的 `files_tree_collapsed` 分支:列表列收起后
+                    // `panel_body` 用 `Length::Fill` 渲染预览,拿满放大盒子整宽。
+                    let x = x0 + 8.0;
+                    let w = (avail_w - 16.0).max(0.0);
+                    (x, y, w, h)
+                } else {
+                    let pair_w = pair_content_width(avail_w);
+                    let cols = pair_columns(pair_w, state.dims.project_split, mirrored);
+                    let x = x0 + cols.content_x + 8.0;
+                    let w = (cols.content_w - 16.0).max(0.0);
+                    (x, y, w, h)
+                }
             }
             // Database/Ssh/Todo/GitLog 纯 iced 绘制,不挂 webview 子视图;
             // Agent/Usage 同理——任一侧放大只要显示的是这几种,
@@ -224,10 +232,23 @@ pub fn preview_content_bounds_for(
         PanelKind::Project => {
             let y = y_top(byteui::theme::geometry::preview_chrome_top_px());
             let h = h_for(y);
-            let cols = pair_columns(zone_w, state.dims.project_split, mirrored);
-            let x = zone_x0 + cols.content_x + 8.0 + m.left;
-            let w = (cols.content_w - 16.0 - m.left - m.right).max(0.0);
-            (x, y, w, h)
+            if state.dims.project_list_collapsed {
+                // 同 Files 的 `files_tree_collapsed` 分支:列表列收起后
+                // `panel_body` 用 `Length::Fill` 渲染预览,webview 必须跟着拿满
+                // 原始区宽,不能再按 `project_split` 给列表留比例宽。
+                let zone_raw_w = match side {
+                    Side::Left => left_zone_width(window_width, state),
+                    Side::Right => right_zone_width(window_width, state),
+                };
+                let x = zone_x0 + 8.0 + m.left;
+                let w = (zone_raw_w - 16.0 - m.left - m.right).max(0.0);
+                (x, y, w, h)
+            } else {
+                let cols = pair_columns(zone_w, state.dims.project_split, mirrored);
+                let x = zone_x0 + cols.content_x + 8.0 + m.left;
+                let w = (cols.content_w - 16.0 - m.left - m.right).max(0.0);
+                (x, y, w, h)
+            }
         }
         // Database 面板同 Project,纯 iced 绘制,不挂 webview 子视图。
         PanelKind::Database => (0.0, 0.0, 0.0, 0.0),
@@ -401,12 +422,17 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> Op
                 }
                 PanelKind::Web => x >= x0 && x < x0 + avail_w,
                 PanelKind::Project => {
-                    let cols = pair_columns(
-                        pair_content_width(avail_w),
-                        state.dims.project_split,
-                        mirrored,
-                    );
-                    x >= x0 + cols.content_x && x < x0 + cols.content_x + cols.content_w
+                    if state.dims.project_list_collapsed {
+                        // 收起列表列:内容拿满放大盒子整宽,整条都算预览列。
+                        x >= x0 && x < x0 + avail_w
+                    } else {
+                        let cols = pair_columns(
+                            pair_content_width(avail_w),
+                            state.dims.project_split,
+                            mirrored,
+                        );
+                        x >= x0 + cols.content_x && x < x0 + cols.content_x + cols.content_w
+                    }
                 }
                 _ => false,
             };
@@ -429,8 +455,13 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> Op
             }
             PanelKind::Web => x >= zone_x0 && x < zone_x0 + zone_w,
             PanelKind::Project => {
-                let cols = pair_columns(zone_w, state.dims.project_split, mirrored);
-                x >= zone_x0 + cols.content_x && x < zone_x0 + cols.content_x + cols.content_w
+                if state.dims.project_list_collapsed {
+                    // 收起列表列:内容拿满整条配对宽,整条都算预览列。
+                    x >= zone_x0 && x < zone_x0 + zone_w
+                } else {
+                    let cols = pair_columns(zone_w, state.dims.project_split, mirrored);
+                    x >= zone_x0 + cols.content_x && x < zone_x0 + cols.content_x + cols.content_w
+                }
             }
             _ => false,
         };
@@ -564,6 +595,87 @@ mod tests {
             w_collapsed > w_open,
             "收起文件树后预览 webview 应比展开时更宽: w_collapsed={w_collapsed} w_open={w_open}"
         );
+    }
+
+    /// Project 面板同 Files 的 `files_tree_collapsed` 回归护栏:列表列收起
+    /// (`project_list_collapsed`)后 `app.rs::panel_body` 用 `Length::Fill`
+    /// 渲染预览(无列表、无分隔线),webview 必须跟着拿满原始区宽,而不是
+    /// 仍按 `project_split` 给列表留比例宽——此前只有 Files 分支特判了收起
+    /// 态,Project 分支漏做,收起左侧列表列后预览 webview 宽度冻结不变。
+    #[test]
+    fn preview_content_bounds_project_collapsed_spans_whole_zone() {
+        let open = ShellState {
+            left_view: PanelKind::Project,
+            dims: PanelDims {
+                project_list_collapsed: false,
+                ..PanelDims::default()
+            },
+            ..test_state()
+        };
+        let collapsed = ShellState {
+            left_view: PanelKind::Project,
+            dims: PanelDims {
+                project_list_collapsed: true,
+                ..PanelDims::default()
+            },
+            ..test_state()
+        };
+        let (_x_open, _y_open, w_open, _h_open) =
+            preview_content_bounds_for(Side::Left, 1440.0, 900.0, &open);
+        let (x_collapsed, _y_collapsed, w_collapsed, _h_collapsed) =
+            preview_content_bounds_for(Side::Left, 1440.0, 900.0, &collapsed);
+        let m = theme::region::left_zone().margin;
+        let left_w = left_zone_width(1440.0, &collapsed);
+        assert_eq!(
+            x_collapsed,
+            byteui::theme::geometry::icon_rail_width() + 8.0 + m.left
+        );
+        assert_eq!(w_collapsed, left_w - 16.0 - m.left - m.right);
+        assert!(
+            w_collapsed > w_open,
+            "收起列表列后预览 webview 应比展开时更宽: w_collapsed={w_collapsed} w_open={w_open}"
+        );
+    }
+
+    /// `is_in_preview_column` 同款回归护栏:列表列收起后整条配对宽都应
+    /// 命中 `Project` 预览列(否则点击原列表列区域拿不到 webview 焦点)。
+    #[test]
+    fn is_in_preview_column_project_collapsed_covers_whole_zone() {
+        let state = ShellState {
+            left_view: PanelKind::Project,
+            dims: PanelDims {
+                project_list_collapsed: true,
+                ..PanelDims::default()
+            },
+            ..test_state()
+        };
+        let x_in_former_list = byteui::theme::geometry::icon_rail_width() + 40.0;
+        assert_eq!(
+            is_in_preview_column(x_in_former_list, 1440.0, &state),
+            Some(PanelKind::Project)
+        );
+        let far_right =
+            byteui::theme::geometry::icon_rail_width() + left_zone_width(1440.0, &state) + 100.0;
+        assert!(is_in_preview_column(far_right, 1440.0, &state).is_none());
+    }
+
+    /// 放大态(Project 左放大)同款:列表列收起后 webview 拿满放大盒子整宽。
+    #[test]
+    fn preview_content_bounds_project_maximized_collapsed_spans_whole_box() {
+        let state = ShellState {
+            left_view: PanelKind::Project,
+            dims: PanelDims {
+                project_list_collapsed: true,
+                ..PanelDims::default()
+            },
+            maximized: Some(MaximizedPane::Left),
+            ..test_state()
+        };
+        let (x, _y, w, h) = preview_content_bounds_for(Side::Left, 1440.0, 900.0, &state);
+        let (x0, avail_w) = maximized_box_x_range(1440.0);
+        assert_eq!(x, x0 + 8.0);
+        assert_eq!(w, (avail_w - 16.0).max(0.0));
+        assert!(h > 100.0, "放大态应有高度: h={h}");
     }
 
     #[test]
