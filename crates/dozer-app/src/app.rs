@@ -39,9 +39,9 @@ use crate::transcript::ReviewEntry;
 use crate::webview_geometry;
 use crate::workspace::{
     CONVERSATION_DETAIL_PAGE_SIZE, PickerLaunch, PreviewPaneKind, RestorePayload, ReviewSource,
-    ReviewView, ShellIo, SshOut, TabBackend, Workspace, agent_list_pane, agent_picker_popup,
-    dot_color, exited_marker, fetch_project_restore, no_project_placeholder, preview_pane,
-    preview_tab_display_width, preview_tab_overflow_popup, project_preview_pane,
+    ReviewView, ShellIo, SshOut, TabAttachedArgs, TabBackend, Workspace, agent_list_pane,
+    agent_picker_popup, dot_color, exited_marker, fetch_project_restore, no_project_placeholder,
+    preview_pane, preview_tab_display_width, preview_tab_overflow_popup, project_preview_pane,
     relative_time_text, review_content_pane, review_should_refresh_on_turn,
     spawn_disk_usage_refresh, spawn_project_git_refresh, split_portions, tab_display_width,
     tab_title,
@@ -4592,6 +4592,36 @@ impl App {
         (w - CHROME_RESERVE_PX).max(0.0)
     }
 
+    /// 终端 tab 栏当前**实际渲染宽度**(逻辑像素),同
+    /// `preview_tab_bar_avail_px` 的理由——`terminal.rs::tab_bar` 与
+    /// `App::select_tab_no_drag`/`Workspace::on_tab_attached` 此前都用
+    /// `byteui::theme::geometry::tab_bar_avail_px()` 那个跟真实面板宽度
+    /// 无关的静态估算常量,同一类反馈(2026-09-16:文件预览已用
+    /// `preview_tab_bar_avail_px` 修过,终端 tab 栏这条漏了,新建会话一旦
+    /// 超过静态估算能塞下的个数就总有一个排不进可见窗口)。复用给
+    /// PTY 网格换算用的 `terminal_pane_pixel_size`——那正是这块 pane
+    /// 去掉左右 `theme::region::terminal_pane().padding` 之后的内容宽,
+    /// `tab_bar` 是这块内容里的第一个元素,天然同宽。终端目前只在
+    /// `PanelKind::Agent` 挂在右栏时才有实际渲染尺寸可言(见
+    /// `terminal_pane_pixel_size` 的同一假设),不在右栏/右栏收起时退回
+    /// 静态估算。
+    pub(crate) fn terminal_tab_bar_avail_px(&self) -> f32 {
+        /// 两颗按钮(V 溢出/收起列表)的命中区宽度粗估,同
+        /// `preview_tab_bar_avail_px` 里 `CHROME_BUTTON_PX` 的取法;`tab_row`
+        /// 的 `.spacing(4)` 在这两颗按钮与 tab 组之间各占一份(见
+        /// `terminal.rs::tab_bar`:`row![overflow_button?, clipped, list_collapse_button]`,
+        /// 比预览版少一颗"预览·代码切换",按钮数/间隙数各减一)。
+        const CHROME_BUTTON_PX: f32 = 32.0;
+        const CHROME_RESERVE_PX: f32 = CHROME_BUTTON_PX * 2.0 + 4.0 * 2.0;
+        let state = self.shell_state();
+        if state.right_collapsed || state.right_view != PanelKind::Agent {
+            return byteui::theme::geometry::tab_bar_avail_px();
+        }
+        let (pane_w, _pane_h) =
+            terminal_pane_pixel_size(self.window_size.0, self.window_size.1, &state);
+        (pane_w - CHROME_RESERVE_PX).max(0.0)
+    }
+
     /// 当前应存在的"文件/项目预览"webview 清单(main.rs 差集同步用),
     /// 每条自带按其所在侧算好的矩形。左右两侧各自独立判断——`Files` 在
     /// 左栏、`Project` 在右栏可以同时非空(见 spec"webview 面板的镜像
@@ -5037,8 +5067,17 @@ impl App {
                 });
             }
             Message::TabAttached(project_id, tab_id, info, snapshot, picked_agent) => {
+                let term_tab_bar_avail_px = self.terminal_tab_bar_avail_px();
                 self.with_project(project_id, move |ws, io| {
-                    ws.on_tab_attached(io.cols, io.rows, tab_id, info, snapshot, picked_agent)
+                    ws.on_tab_attached(TabAttachedArgs {
+                        cols: io.cols,
+                        rows: io.rows,
+                        tab_id,
+                        info,
+                        snapshot,
+                        picked_agent,
+                        term_tab_bar_avail_px,
+                    })
                 });
             }
             Message::PaneResized {
@@ -7089,7 +7128,11 @@ impl App {
     /// `select_tab` 去掉"武装拖拽状态机"那部分,给非 tab 栏的调用方
     /// (Agent 面板右侧卡片列表)用——见 `Message::SelectTabNoDrag` 文档。
     fn select_tab_no_drag(&mut self, idx: usize) {
-        self.with_focused_project(|ws, _io| {
+        // `with_focused_project` 的闭包里借的是 `ws`,拿不到 `self`——真实
+        // 可用宽度得在借用开始前算好(同 `preview_select_tab` 那批调用方的
+        // 既有先例)。
+        let avail_px = self.terminal_tab_bar_avail_px();
+        self.with_focused_project(move |ws, _io| {
             if idx < ws.tabs.len() {
                 ws.active = idx;
                 // 从 tab 栏的 V 下拉里选中某一项:选中后把主条滚入可见窗口
@@ -7101,13 +7144,8 @@ impl App {
                     .iter()
                     .map(|t| tab_display_width(&tab_title(t.agent, t.cwd.as_deref(), &t.info.name)))
                     .collect();
-                ws.term_tab_first = tab_widget::tab_window_reveal(
-                    &widths,
-                    4.0,
-                    byteui::theme::geometry::tab_bar_avail_px(),
-                    ws.term_tab_first,
-                    idx,
-                );
+                ws.term_tab_first =
+                    tab_widget::tab_window_reveal(&widths, 4.0, avail_px, ws.term_tab_first, idx);
                 ws.term_tab_overflow_anchor = None;
             }
         });

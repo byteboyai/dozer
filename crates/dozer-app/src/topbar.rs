@@ -184,6 +184,10 @@ pub(crate) fn top_bar(
     // 套 `align_y` 对它不起作用,见该函数内注释。
     let tabs = container(project_tabs_row(app)).width(Length::Fill);
 
+    // 竖直方向不再自己接管对齐(此前贴底对齐过一版,2026-09-16 用户反馈
+    // 效果不好)——退回吃外层 `bar` 的 `align_y(Center)`,在顶栏自身固定
+    // 40px 高度内垂直居中;真正跟 rail 按钮对齐靠下面 `region.padding.right`
+    // 那个值(见其注释),不靠竖直方向这里做文章。
     let mut right = row![].spacing(10);
     right = right.push(icons::icon_button_entry(
         icons::IconKind::Settings,

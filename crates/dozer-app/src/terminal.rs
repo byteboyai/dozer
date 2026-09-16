@@ -115,7 +115,7 @@ pub(crate) fn tab_bar<'a>(
     let window = tab_widget::tab_window(
         &widths,
         4.0,
-        byteui::theme::geometry::tab_bar_avail_px(),
+        app.terminal_tab_bar_avail_px(),
         ws.term_tab_first,
     );
     let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = ws

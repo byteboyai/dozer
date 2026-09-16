@@ -449,6 +449,21 @@ pub struct Workspace {
     pub(crate) loading: bool,
 }
 
+/// [`Workspace::on_tab_attached`] 的参数——超过 7 个位置参数且其中
+/// `cols`/`rows` 相邻同型(顺序传错编译器不报错),按 CLAUDE.md 关键裁决
+/// 改具名字段结构体,不加 `#[allow(clippy::too_many_arguments)]`。
+pub(crate) struct TabAttachedArgs {
+    pub(crate) cols: u16,
+    pub(crate) rows: u16,
+    pub(crate) tab_id: usize,
+    pub(crate) info: SessionInfo,
+    pub(crate) snapshot: Vec<u8>,
+    /// picker 选中的目标 agent——见 `Message::TabAttached` 字段文档。
+    pub(crate) picked_agent: Option<AgentKind>,
+    /// `App::terminal_tab_bar_avail_px()` 的算好值——见其文档。
+    pub(crate) term_tab_bar_avail_px: f32,
+}
+
 impl Workspace {
     /// 启动/促成恢复:把 daemon 上现存的存活会话逐一 `attach`，快照直接喂给
     /// 新建的 `TerminalModel`（GUI 级会话恢复）。
@@ -1649,16 +1664,22 @@ impl Workspace {
     /// 只取 `cols`/`rows`(不取整个 `&ShellIo`)——`EventLoopProxy` 在单测
     /// 里没法脱离真实 winit 事件循环构造,签名只留函数体实际用到的两个
     /// `u16`,让 SSH-vs-daemon 的分流逻辑能被直接单测(镜像 `resize_one`
-    /// 同样为了可测性收窄参数的既有先例)。
-    pub(crate) fn on_tab_attached(
-        &mut self,
-        cols: u16,
-        rows: u16,
-        tab_id: usize,
-        info: SessionInfo,
-        snapshot: Vec<u8>,
-        picked_agent: Option<AgentKind>,
-    ) {
+    /// 同样为了可测性收窄参数的既有先例)。`term_tab_bar_avail_px` 同理是
+    /// `App::terminal_tab_bar_avail_px()` 的算好值而不是整个 `&App`——调用方
+    /// (`Message::TabAttached` 分支)在借用 `ws` 之前算好传进来。参数超过 7
+    /// 个后改收 [`TabAttachedArgs`](按 CLAUDE.md 关键裁决,不无脑加
+    /// `#[allow(clippy::too_many_arguments)]`)——`cols`/`rows` 相邻同型,
+    /// 位置传参顺序传错编译器发现不了,具名字段能防这个。
+    pub(crate) fn on_tab_attached(&mut self, args: TabAttachedArgs) {
+        let TabAttachedArgs {
+            cols,
+            rows,
+            tab_id,
+            info,
+            snapshot,
+            picked_agent,
+            term_tab_bar_avail_px,
+        } = args;
         let Some(forwarder) = self.pending.remove(&tab_id) else {
             return;
         };
@@ -1716,7 +1737,7 @@ impl Workspace {
             self.term_tab_first = tab_window_reveal(
                 &widths,
                 4.0,
-                byteui::theme::geometry::tab_bar_avail_px(),
+                term_tab_bar_avail_px,
                 self.term_tab_first,
                 self.active,
             );

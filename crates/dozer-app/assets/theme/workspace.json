@@ -4,7 +4,7 @@
     "top_bar": {
       "background": "BG",
       "border": { "color": "BORDER", "width": 1.0, "radius": 0.0 },
-      "padding": [0, 16, 0, 78],
+      "padding": [0, 10, 0, 78],
       "gap": 8
     },
     "left_icon_rail": {
