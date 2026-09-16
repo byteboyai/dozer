@@ -52,7 +52,7 @@ use crate::preview_state;
 use crate::project::FileTree;
 use crate::tab_widget::{
     PanelTabArgs, TabOverflowEntry, TabOverflowMenuArgs, panel_tab, tab_overflow_button,
-    tab_overflow_menu, tab_render_mode_button, tab_window,
+    tab_overflow_menu, tab_render_mode_button, tab_window, tab_window_reveal,
 };
 use crate::term_model::TerminalModel;
 use crate::theme;
@@ -1703,7 +1703,23 @@ impl Workspace {
         } else {
             self.tabs.push(tab);
             self.active = self.tabs.len() - 1;
-            self.term_tab_first = 0;
+            // 此前硬写 `= 0`:tab 栏一旦横向溢出,新建的这个(必是最后一个、
+            // 刚设成 `active`)如果排不进从 0 开始的窗口就直接被甩出可见区
+            // ——用户新建会话反而看不见它,得自己点 V 下拉才找得到。跟
+            // `select_tab_no_drag` 同一套 `tab_window_reveal`,把新 tab
+            // 卷入可见窗口(镜像该处宽度计算,见其注释)。
+            let widths: Vec<f32> = self
+                .tabs
+                .iter()
+                .map(|t| tab_display_width(&tab_title(t.agent, t.cwd.as_deref(), &t.info.name)))
+                .collect();
+            self.term_tab_first = tab_window_reveal(
+                &widths,
+                4.0,
+                byteui::theme::geometry::tab_bar_avail_px(),
+                self.term_tab_first,
+                self.active,
+            );
         }
     }
 
