@@ -922,6 +922,65 @@ fn database_source_menu_items(
     ]
 }
 
+/// `category_context_menu_popup` 的原生菜单版本,纯数据组装。仅 macOS 编译。
+#[cfg(target_os = "macos")]
+fn category_context_menu_items(
+    id: Option<i64>,
+    sibling_parent_id: Option<i64>,
+) -> Vec<crate::native_menu::Item<Message>> {
+    use crate::native_menu::Item;
+    match id {
+        None => vec![Item::entry(
+            Some(icons::IconKind::SquarePlus),
+            "新建分类",
+            Message::Todo(todo::Message::CategoryNewSibling(None)),
+        )],
+        Some(id) => vec![
+            Item::entry(
+                Some(icons::IconKind::SquarePlus),
+                "新建子分类",
+                Message::Todo(todo::Message::CategoryNewChild(id)),
+            ),
+            Item::entry(
+                Some(icons::IconKind::SquarePlus),
+                "新建同级分类",
+                Message::Todo(todo::Message::CategoryNewSibling(sibling_parent_id)),
+            ),
+            Item::entry(
+                Some(icons::IconKind::ChevronUp),
+                "上移",
+                Message::Todo(todo::Message::CategoryMoveSibling(
+                    id,
+                    dozer_core::protocol::CategoryMoveDirection::Up,
+                )),
+            ),
+            Item::entry(
+                Some(icons::IconKind::ChevronDown),
+                "下移",
+                Message::Todo(todo::Message::CategoryMoveSibling(
+                    id,
+                    dozer_core::protocol::CategoryMoveDirection::Down,
+                )),
+            ),
+            Item::entry(
+                Some(icons::IconKind::FolderOpen),
+                "移动到...",
+                Message::Todo(todo::Message::CategoryReparentPickerOpen(id)),
+            ),
+            Item::entry(
+                Some(icons::IconKind::Rename),
+                "重命名",
+                Message::Todo(todo::Message::CategoryRenameStart(id)),
+            ),
+            Item::entry(
+                Some(icons::IconKind::Trash),
+                "删除",
+                Message::Todo(todo::Message::CategoryDelete(id)),
+            ),
+        ],
+    }
+}
+
 /// 主界面当前几何状态的只读快照(main.rs 拖拽追踪/离屏几何计算用途,
 /// `Copy` 类型直接按值传递)。取代旧 `PanelLayout` 单独传递的做法——
 /// 新几何公式(webview bounds/焦点路由/IME 光标)都依赖"当前是哪个视图、
@@ -4506,9 +4565,29 @@ impl App {
     /// 打开分类树节点的右键菜单。坐标复用 `files.last_right_click()`
     /// (同 `project_link_context_menu` 的既有接线方式)。
     fn todo_category_context_menu(&mut self, id: Option<i64>) {
-        let (x, y) = self.files.last_right_click();
         self.files.close_context_menu();
-        self.category_context_menu = Some(CategoryContextMenu { x, y, id });
+        #[cfg(target_os = "macos")]
+        {
+            let (x, y) = self.files.last_right_click();
+            let sibling_parent_id = id.and_then(|id| {
+                self.active_workspace().and_then(|ws| {
+                    ws.todo
+                        .categories()
+                        .iter()
+                        .find(|c| c.id == id)
+                        .and_then(|c| c.parent_id)
+                })
+            });
+            let items = category_context_menu_items(id, sibling_parent_id);
+            if let Some(msg) = crate::native_menu::show(items, (x, y)) {
+                self.update(msg);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let (x, y) = self.files.last_right_click();
+            self.category_context_menu = Some(CategoryContextMenu { x, y, id });
+        }
     }
 
     /// 分类选择器是否打开(main.rs Esc 键路由用)。
