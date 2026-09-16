@@ -825,6 +825,7 @@ fn project_link_menu_items(
 ) -> Vec<crate::native_menu::Item<Message>> {
     vec![crate::native_menu::Item::Entry {
         icon: Some(icons::IconKind::Trash),
+        icon_color: None,
         label: "删除".into(),
         color: byteui::theme::color::current().body,
         enabled: true,
@@ -847,6 +848,7 @@ fn text_input_menu_items(target: &TextInputTarget) -> Vec<crate::native_menu::It
     vec![
         Item::Entry {
             icon: Some(icons::IconKind::Scissors),
+            icon_color: None,
             label: "剪切".into(),
             color: cut_copy_color,
             enabled: cut_copy_enabled,
@@ -854,6 +856,7 @@ fn text_input_menu_items(target: &TextInputTarget) -> Vec<crate::native_menu::It
         },
         Item::Entry {
             icon: Some(icons::IconKind::Copy),
+            icon_color: None,
             label: "复制".into(),
             color: cut_copy_color,
             enabled: cut_copy_enabled,
@@ -861,6 +864,7 @@ fn text_input_menu_items(target: &TextInputTarget) -> Vec<crate::native_menu::It
         },
         Item::Entry {
             icon: Some(icons::IconKind::ClipboardPaste),
+            icon_color: None,
             label: "粘贴".into(),
             color: body,
             enabled: true,
@@ -868,6 +872,7 @@ fn text_input_menu_items(target: &TextInputTarget) -> Vec<crate::native_menu::It
         },
         Item::Entry {
             icon: Some(icons::IconKind::SelectAll),
+            icon_color: None,
             label: "全选".into(),
             color: body,
             enabled: true,

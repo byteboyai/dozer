@@ -2411,97 +2411,81 @@ pub fn context_menu_items(
     has_clipboard: bool,
 ) -> Vec<crate::native_menu::Item<Message>> {
     use crate::native_menu::Item;
-    let body = byteui::theme::color::current().body;
     let dim = byteui::theme::color::current().dim;
     let target = target.to_path_buf();
     let mut items = vec![
-        Item::Entry {
-            icon: Some(icons::IconKind::Search),
-            label: "搜索".into(),
-            color: body,
-            enabled: true,
-            msg: Message::OpenSearch(target.clone(), is_dir),
-        },
-        Item::Separator,
+        Item::entry(
+            Some(icons::IconKind::Search),
+            "搜索",
+            Message::OpenSearch(target.clone(), is_dir),
+        ),
+        Item::separator(),
     ];
     if is_dir {
-        items.push(Item::Entry {
-            icon: Some(icons::IconKind::FilePlus),
-            label: "新建文件".into(),
-            color: body,
-            enabled: true,
-            msg: Message::NewFile(target.clone()),
-        });
-        items.push(Item::Entry {
-            icon: Some(icons::IconKind::FolderPlus),
-            label: "新建文件夹".into(),
-            color: body,
-            enabled: true,
-            msg: Message::NewFolder(target.clone()),
-        });
-        items.push(Item::Separator);
+        items.push(Item::entry(
+            Some(icons::IconKind::FilePlus),
+            "新建文件",
+            Message::NewFile(target.clone()),
+        ));
+        items.push(Item::entry(
+            Some(icons::IconKind::FolderPlus),
+            "新建文件夹",
+            Message::NewFolder(target.clone()),
+        ));
+        items.push(Item::separator());
     }
-    items.push(Item::Entry {
-        icon: Some(icons::IconKind::Copy),
-        label: "复制".into(),
-        color: body,
-        enabled: true,
-        msg: Message::Copy(target.clone(), is_dir),
-    });
+    items.push(Item::entry(
+        Some(icons::IconKind::Copy),
+        "复制",
+        Message::Copy(target.clone(), is_dir),
+    ));
     if is_dir {
         items.push(Item::Entry {
             icon: Some(icons::IconKind::ClipboardPaste),
+            icon_color: None,
             label: "粘贴".into(),
-            color: if has_clipboard { body } else { dim },
+            color: if has_clipboard {
+                byteui::theme::color::current().body
+            } else {
+                dim
+            },
             enabled: has_clipboard,
             msg: Message::Paste(target.clone()),
         });
     }
     if !is_root {
-        items.push(Item::Entry {
-            icon: Some(icons::IconKind::Trash),
-            label: "删除".into(),
-            color: body,
-            enabled: true,
-            msg: Message::DeleteRequest(target.clone(), is_dir),
-        });
-        items.push(Item::Entry {
-            icon: Some(icons::IconKind::Rename),
-            label: "重命名".into(),
-            color: body,
-            enabled: true,
-            msg: Message::RenameStart(target.clone()),
-        });
+        items.push(Item::entry(
+            Some(icons::IconKind::Trash),
+            "删除",
+            Message::DeleteRequest(target.clone(), is_dir),
+        ));
+        items.push(Item::entry(
+            Some(icons::IconKind::Rename),
+            "重命名",
+            Message::RenameStart(target.clone()),
+        ));
     }
-    items.push(Item::Separator);
-    items.push(Item::Entry {
-        icon: None,
-        label: "复制绝对路径".into(),
-        color: body,
-        enabled: true,
-        msg: Message::CopyPath(target.clone(), PathKind::Absolute),
-    });
-    items.push(Item::Entry {
-        icon: None,
-        label: "复制相对路径".into(),
-        color: body,
-        enabled: true,
-        msg: Message::CopyPath(target.clone(), PathKind::Relative),
-    });
-    items.push(Item::Entry {
-        icon: Some(icons::IconKind::FolderOpen),
-        label: "在 Finder 中打开".into(),
-        color: body,
-        enabled: true,
-        msg: Message::RevealInFinder(target.clone()),
-    });
-    items.push(Item::Entry {
-        icon: Some(icons::IconKind::RefreshCw),
-        label: "从磁盘重新加载".into(),
-        color: body,
-        enabled: true,
-        msg: Message::ReloadFromDisk,
-    });
+    items.push(Item::separator());
+    items.push(Item::entry(
+        None,
+        "复制绝对路径",
+        Message::CopyPath(target.clone(), PathKind::Absolute),
+    ));
+    items.push(Item::entry(
+        None,
+        "复制相对路径",
+        Message::CopyPath(target.clone(), PathKind::Relative),
+    ));
+    items.push(Item::entry(
+        Some(icons::IconKind::FolderOpen),
+        "在 Finder 中打开",
+        Message::RevealInFinder(target.clone()),
+    ));
+    items.push(Item::entry(
+        Some(icons::IconKind::RefreshCw),
+        "从磁盘重新加载",
+        Message::ReloadFromDisk,
+    ));
     items
 }
 

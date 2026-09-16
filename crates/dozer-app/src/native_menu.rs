@@ -12,15 +12,59 @@ use objc2_app_kit::{NSColor, NSImage, NSMenu, NSMenuItem, NSView};
 use objc2_foundation::{NSData, NSPoint, NSRect, NSSize, NSString};
 
 /// 一条原生菜单描述——调用方只管拼数据,不碰 AppKit。
+///
+/// `color` 是**文字**颜色;`icon_color` 是**图标**独立着色(`None` = 跟随
+/// `color`),给"图标和文字不同色"的菜单(如 agent 选择器:图标用 agent
+/// 专属色、文字用 BODY)用。`enabled = false` 的项置灰且不接 hover/点击。
 pub enum Item<Msg> {
     Entry {
         icon: Option<IconKind>,
+        icon_color: Option<Color>,
         label: String,
         color: Color,
         enabled: bool,
         msg: Msg,
     },
     Separator,
+}
+
+impl<Msg> Item<Msg> {
+    /// 常规可点项:文字与图标都用主题 BODY 色,图标可无。
+    pub fn entry(icon: Option<IconKind>, label: impl Into<String>, msg: Msg) -> Self {
+        let body = byteui::theme::color::current().body;
+        Item::Entry {
+            icon,
+            icon_color: None,
+            label: label.into(),
+            color: body,
+            enabled: true,
+            msg,
+        }
+    }
+
+    /// 图标独立着色项:文字仍用 BODY 色,图标用 `icon_color`(agent 选择器等
+    /// 双色菜单用)。
+    pub fn entry_tinted(
+        icon: IconKind,
+        icon_color: Color,
+        label: impl Into<String>,
+        msg: Msg,
+    ) -> Self {
+        let body = byteui::theme::color::current().body;
+        Item::Entry {
+            icon: Some(icon),
+            icon_color: Some(icon_color),
+            label: label.into(),
+            color: body,
+            enabled: true,
+            msg,
+        }
+    }
+
+    /// 分组分隔线。
+    pub fn separator() -> Self {
+        Item::Separator
+    }
 }
 
 /// 把内嵌 Lucide SVG(`IconKind::bytes()`)按给定颜色栅格化成
@@ -219,6 +263,7 @@ pub fn show<Msg: Clone>(items: Vec<Item<Msg>>, view_pos: (f32, f32)) -> Option<M
             }
             Item::Entry {
                 icon,
+                icon_color,
                 label,
                 color,
                 enabled,
@@ -234,15 +279,16 @@ pub fn show<Msg: Clone>(items: Vec<Item<Msg>>, view_pos: (f32, f32)) -> Option<M
                 };
                 ns_item.setEnabled(enabled);
                 let icon_px = icon_size_px();
+                let icon_color = icon_color.unwrap_or(color);
                 if let Some(icon) = icon {
-                    ns_item.setImage(Some(&icon_image(icon, color, icon_px)));
+                    ns_item.setImage(Some(&icon_image(icon, icon_color, icon_px)));
                 }
                 let row_view = menu_item_view::MenuItemView::new(
                     mtm,
                     &label,
                     color,
                     enabled,
-                    icon.map(|k| icon_image(k, color, icon_px)),
+                    icon.map(|k| icon_image(k, icon_color, icon_px)),
                     idx,
                 );
                 ns_item.setView(Some(&row_view));
