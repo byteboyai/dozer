@@ -14,6 +14,7 @@ mod homespace;
 mod keymap;
 mod layout;
 mod menu;
+mod native_menu;
 mod open_projects;
 mod osc;
 mod panel_layouts;

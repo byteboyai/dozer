@@ -84,3 +84,13 @@ ignore = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+
+# macOS 原生右键菜单(`native_menu`)在运行时把内嵌 Lucide SVG 栅格化成
+# PNG 包成 NSImage,依赖 resvg/usvg/tiny-skia。三个 crate 已经是 iced_wgpu
+# svg feature 的间接依赖(见 Cargo.lock 0.45.1/0.45.1/0.11.4),这里 pin 到
+# 同一精确版本,避免引入重复编译;tiny-skia 开 `png` feature 供
+# `encode_png()` 用(该 feature 也已由 iced_wgpu 链间接启用)。
+[target.'cfg(target_os = "macos")'.dependencies]
+resvg = "=0.45.1"
+usvg = "=0.45.1"
+tiny-skia = { version = "=0.11.4", features = ["png"] }

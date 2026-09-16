@@ -11,7 +11,7 @@ use iced_widget::svg;
 use iced_widget::{Tooltip, text, tooltip};
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IconKind {
     ChevronLeft,
     ChevronRight,
@@ -197,7 +197,10 @@ pub enum IconKind {
 }
 
 impl IconKind {
-    fn bytes(self) -> &'static [u8] {
+    /// 内嵌 SVG 原始字节。`pub` 供 `dozer-app::native_menu` 等跨 crate 消费
+    /// 方在运行时把同一份 Lucide SVG 栅格化成原生菜单图标(用 resvg/usvg),
+    /// 与 iced 侧 `view()` 的渲染共享同一份资源与着色语义。
+    pub fn bytes(self) -> &'static [u8] {
         match self {
             IconKind::ChevronLeft => include_bytes!("../../assets/icons/chevron-left.svg"),
             IconKind::ChevronRight => include_bytes!("../../assets/icons/chevron-right.svg"),
