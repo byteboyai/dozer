@@ -795,6 +795,27 @@ fn tree_drag_held_long_enough(elapsed: std::time::Duration) -> bool {
     elapsed > TREE_DRAG_MIN_HOLD_DURATION
 }
 
+/// 判断某一侧的 webview 是否要因为**面板自身内部**的原生浮层被强制隐藏
+/// ——`preview_desired` 里 `app_modal_open`/`tab_overflow_open` 两种"整块
+/// 面板级"场景已经在调用处单独合并,这里补的是"面板本身还在,但面板内
+/// 某个 `crate::menu` 弹层可能压住 webview 内容区"的场景:Files 面板的
+/// 文件树右键菜单、Project 面板的链接行右键菜单、Conversations 面板的
+/// agent 筛选下拉。原生 wry 子视图不听 iced 绘制顺序摆布,只能靠调用方
+/// 显式把 `WebviewSpec.visible` 置 `false` 才能让浮层真正盖住它。
+fn webview_hidden_by_panel_popup(
+    kind: PanelKind,
+    files_context_menu_open: bool,
+    project_link_menu_open: bool,
+    conversations_agent_picker_open: bool,
+) -> bool {
+    match kind {
+        PanelKind::Files => files_context_menu_open,
+        PanelKind::Project => project_link_menu_open,
+        PanelKind::Conversations => conversations_agent_picker_open,
+        _ => false,
+    }
+}
+
 /// 主界面当前几何状态的只读快照(main.rs 拖拽追踪/离屏几何计算用途,
 /// `Copy` 类型直接按值传递)。取代旧 `PanelLayout` 单独传递的做法——
 /// 新几何公式(webview bounds/焦点路由/IME 光标)都依赖"当前是哪个视图、
@@ -10270,6 +10291,65 @@ mod tests {
     fn tree_drag_held_long_enough_true_once_held_past_threshold() {
         assert!(tree_drag_held_long_enough(
             TREE_DRAG_MIN_HOLD_DURATION + std::time::Duration::from_millis(1)
+        ));
+    }
+
+    /// Files 面板右键菜单开着时该隐藏该侧 webview——同 `tab_overflow_open`
+    /// 的既有口径,只是浮层换成了文件树右键菜单(`crate::menu.rs` 文档里
+    /// "唯一基准"的那个)。
+    #[test]
+    fn webview_hidden_by_panel_popup_files_context_menu_open() {
+        assert!(webview_hidden_by_panel_popup(
+            PanelKind::Files,
+            true,
+            false,
+            false,
+        ));
+    }
+
+    /// Project 面板链接行右键菜单开着时该隐藏该侧 webview。
+    #[test]
+    fn webview_hidden_by_panel_popup_project_link_menu_open() {
+        assert!(webview_hidden_by_panel_popup(
+            PanelKind::Project,
+            false,
+            true,
+            false,
+        ));
+    }
+
+    /// Conversations 面板 agent 筛选下拉开着时该隐藏该侧 webview。
+    #[test]
+    fn webview_hidden_by_panel_popup_conversations_agent_picker_open() {
+        assert!(webview_hidden_by_panel_popup(
+            PanelKind::Conversations,
+            false,
+            false,
+            true,
+        ));
+    }
+
+    /// 标志位为真,但当前面板种类对不上——不该被误伤隐藏(比如 Project
+    /// 链接菜单开着,但这一侧现在显示的是 Files)。
+    #[test]
+    fn webview_hidden_by_panel_popup_false_when_kind_mismatches_the_open_flag() {
+        assert!(!webview_hidden_by_panel_popup(
+            PanelKind::Files,
+            false,
+            true,
+            false,
+        ));
+    }
+
+    /// 没有 webview 的面板种类(如 Todo)恒不隐藏,即便三个标志全为真——
+    /// 这几个标志本就不该对这类面板产生任何效果。
+    #[test]
+    fn webview_hidden_by_panel_popup_false_for_panel_kinds_without_a_webview() {
+        assert!(!webview_hidden_by_panel_popup(
+            PanelKind::Todo,
+            true,
+            true,
+            true,
         ));
     }
 
