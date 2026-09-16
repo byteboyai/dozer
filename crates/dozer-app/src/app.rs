@@ -1781,9 +1781,14 @@ pub enum Message {
     ProjectAddMenuToggle,
     /// 最近项目选择菜单:点击菜单外/Esc,关闭不做任何事。
     ProjectAddMenuClose,
-    /// 新建会话完成 attach（tab_id、`SessionInfo`、初始快照）。
-    /// 启动时的恢复走同步的 `bootstrap`，不需要过一次消息循环。
-    TabAttached(ProjectId, usize, SessionInfo, Vec<u8>),
+    /// 新建会话完成 attach（tab_id、`SessionInfo`、初始快照、picker 选定的
+    /// 目标 agent）。启动时的恢复走同步的 `bootstrap`，不需要过一次消息循环。
+    /// 末尾的 `Option<AgentKind>` 是 picker 选择时**已经确定**要键入的 agent
+    /// ——不能等 `info.agent`：那个字段在 daemon 侧要靠 hook 上报才会从
+    /// 默认值改成真实 agent,而 hook 上报必然晚于 agent CLI 进程启动瞬间
+    /// 发出的终端探测查询(如 opencode 的 OSC 10/11),用 `info.agent` 判断
+    /// 会永远赶不上趟。SSH 等不经 picker 的 attach 路径传 `None`。
+    TabAttached(ProjectId, usize, SessionInfo, Vec<u8>, Option<AgentKind>),
     /// Todo 面板的全部消息(派发到已有/新建会话除外——那两条内核直接
     /// 拦截处理,见 `update()` 对应分支),内核只转发不解读——见
     /// `extensions::todo::Message`。
@@ -5031,9 +5036,9 @@ impl App {
                     search::update(&mut ws.search, msg, project_id, &handle, emit);
                 });
             }
-            Message::TabAttached(project_id, tab_id, info, snapshot) => {
+            Message::TabAttached(project_id, tab_id, info, snapshot, picked_agent) => {
                 self.with_project(project_id, move |ws, io| {
-                    ws.on_tab_attached(io.cols, io.rows, tab_id, info, snapshot)
+                    ws.on_tab_attached(io.cols, io.rows, tab_id, info, snapshot, picked_agent)
                 });
             }
             Message::PaneResized {
@@ -7562,6 +7567,13 @@ impl App {
             if let Some(tab) = ws.tab_by_id_mut(tab_id) {
                 tab.agent_state = state;
                 tab.agent = agent;
+                // 补一道:picker 不是唯一入口(比如在已开着的纯 shell tab 里
+                // 手打 `opencode`),那种情况下 `on_tab_attached` 拿不到
+                // picker 提示,只能靠这条 hook 上报事后补上——虽然大概率已经
+                // 错过了 agent 进程启动瞬间那波终端探测查询,但仍是"跟真实
+                // agent 保持同步"的唯一后备信号。
+                tab.model
+                    .set_answer_dynamic_color(agent == AgentKind::Opencode);
                 if let Some(tp) = transcript_path {
                     tab.transcript_path = Some(tp);
                 }

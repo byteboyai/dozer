@@ -1320,7 +1320,9 @@ impl Workspace {
                 Ok((snapshot, _next_offset, rx)) => {
                     let session_id = info.id.clone();
                     if proxy
-                        .send_event(Message::TabAttached(project_id, tab_id, info, snapshot))
+                        .send_event(Message::TabAttached(
+                            project_id, tab_id, info, snapshot, hook_agent,
+                        ))
                         .is_err()
                     {
                         return;
@@ -1467,7 +1469,13 @@ impl Workspace {
 
             let info = ssh::synth_session_info(&host, project_id);
             if proxy
-                .send_event(Message::TabAttached(project_id, tab_id, info, Vec::new()))
+                .send_event(Message::TabAttached(
+                    project_id,
+                    tab_id,
+                    info,
+                    Vec::new(),
+                    None,
+                ))
                 .is_err()
             {
                 return;
@@ -1649,12 +1657,13 @@ impl Workspace {
         tab_id: usize,
         info: SessionInfo,
         snapshot: Vec<u8>,
+        picked_agent: Option<AgentKind>,
     ) {
         let Some(forwarder) = self.pending.remove(&tab_id) else {
             return;
         };
         let mut model = TerminalModel::new(cols, rows);
-        model.set_answer_dynamic_color(info.agent == AgentKind::Opencode);
+        model.set_answer_dynamic_color(should_answer_dynamic_color(picked_agent, info.agent));
         let _ = model.feed(&snapshot);
         let ssh_backend = self.ssh_out_pending.remove(&tab_id);
         let is_ssh = ssh_backend.is_some();
@@ -3777,6 +3786,15 @@ fn should_summarize_on_close(agent: AgentKind, alive: bool, backend: &TabBackend
         )
 }
 
+/// `on_tab_attached` 里决定要不要回应 OSC 10/11 终端探测查询——`info.agent`
+/// 在新建会话这一刻几乎总还是 daemon 侧的默认值,真实 agent 要靠 hook 事后
+/// 上报,而那必然晚于 agent CLI 进程启动瞬间就发出的查询;picker 选中的
+/// `picked_agent` 才是这一刻唯一"确定即将变成谁"的信号,`info.agent` 仅在
+/// picker 未给出提示(如 SSH attach、或重连时 hook 已先一步上报过)时兜底。
+fn should_answer_dynamic_color(picked_agent: Option<AgentKind>, info_agent: AgentKind) -> bool {
+    picked_agent == Some(AgentKind::Opencode) || info_agent == AgentKind::Opencode
+}
+
 /// 已接入 `dozer-hook` 安装器的 agent 集合。刻意穷尽 match 而不是拿
 /// `agent.label()` 当 catch-all 参数：`install::settings_path_for` 对未识别
 /// 的 agent 名一律落回 Claude 的 `settings.json`路径，如果不显式排除
@@ -4663,6 +4681,33 @@ mod tests {
             true,
             &TabBackend::Ssh { out: tx }
         ));
+    }
+
+    /// 回归测试:此前只看 `info.agent`(daemon 默认值,真实 agent 靠 hook
+    /// 事后上报),导致 picker 新建的 opencode 会话在 `on_tab_attached` 这一
+    /// 刻永远判定成"非 opencode"——回应 OSC 10/11 的开关从未真正打开过。
+    #[test]
+    fn should_answer_dynamic_color_true_when_picker_targets_opencode_even_if_info_agent_lags() {
+        assert!(should_answer_dynamic_color(
+            Some(AgentKind::Opencode),
+            AgentKind::Unknown, // daemon 侧此刻还没收到 hook 上报
+        ));
+    }
+
+    #[test]
+    fn should_answer_dynamic_color_true_when_info_agent_already_known_opencode() {
+        // SSH attach、或重连时 hook 已先上报过的兜底路径:picker 没有提示。
+        assert!(should_answer_dynamic_color(None, AgentKind::Opencode));
+    }
+
+    #[test]
+    fn should_answer_dynamic_color_false_for_other_agents() {
+        assert!(!should_answer_dynamic_color(
+            Some(AgentKind::Claude),
+            AgentKind::Unknown
+        ));
+        assert!(!should_answer_dynamic_color(None, AgentKind::Unknown));
+        assert!(!should_answer_dynamic_color(None, AgentKind::Claude));
     }
 
     #[test]

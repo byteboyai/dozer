@@ -1957,7 +1957,7 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 message,
                 Message::SelectTab(_)
                     | Message::SelectTabNoDrag(_)
-                    | Message::TabAttached(_, _, _, _)
+                    | Message::TabAttached(_, _, _, _, _)
                     | Message::AgentPickerSelect(_)
             ) {
                 *pending_focus = Some(FocusIntent::Terminal);
