@@ -816,6 +816,66 @@ fn webview_hidden_by_panel_popup(
     }
 }
 
+/// `project_link_context_menu_popup` 的原生菜单版本,纯数据组装。仅 macOS
+/// 编译(`native_menu` 是平台专属模块),非 mac 平台继续走 iced 弹层。
+#[cfg(target_os = "macos")]
+fn project_link_menu_items(
+    target: project::links::LinkTarget,
+    index: usize,
+) -> Vec<crate::native_menu::Item<Message>> {
+    vec![crate::native_menu::Item::Entry {
+        icon: Some(icons::IconKind::Trash),
+        label: "删除".into(),
+        color: byteui::theme::color::current().body,
+        enabled: true,
+        msg: Message::Project(project::Message::LinkRemove { target, index }),
+    }]
+}
+
+/// `text_input_menu_popup` 的原生菜单版本,纯数据组装——密码框场景锁定
+/// 剪切/复制,同旧版语义。仅 macOS 编译,非 mac 平台继续走 iced 弹层。
+#[cfg(target_os = "macos")]
+fn text_input_menu_items(target: &TextInputTarget) -> Vec<crate::native_menu::Item<Message>> {
+    use crate::native_menu::Item;
+    let body = byteui::theme::color::current().body;
+    let dim = byteui::theme::color::current().dim;
+    let (cut_copy_color, cut_copy_enabled) = if target.secure {
+        (dim, false)
+    } else {
+        (body, true)
+    };
+    vec![
+        Item::Entry {
+            icon: Some(icons::IconKind::Scissors),
+            label: "剪切".into(),
+            color: cut_copy_color,
+            enabled: cut_copy_enabled,
+            msg: Message::TextInputMenuCut,
+        },
+        Item::Entry {
+            icon: Some(icons::IconKind::Copy),
+            label: "复制".into(),
+            color: cut_copy_color,
+            enabled: cut_copy_enabled,
+            msg: Message::TextInputMenuCopy,
+        },
+        Item::Entry {
+            icon: Some(icons::IconKind::ClipboardPaste),
+            label: "粘贴".into(),
+            color: body,
+            enabled: true,
+            msg: Message::TextInputMenuPaste,
+        },
+        Item::Entry {
+            icon: Some(icons::IconKind::SelectAll),
+            label: "全选".into(),
+            color: body,
+            enabled: true,
+            msg: Message::TextInputMenuSelectAll,
+        },
+    ]
+}
+
 /// 主界面当前几何状态的只读快照(main.rs 拖拽追踪/离屏几何计算用途,
 /// `Copy` 类型直接按值传递)。取代旧 `PanelLayout` 单独传递的做法——
 /// 新几何公式(webview bounds/焦点路由/IME 光标)都依赖"当前是哪个视图、
@@ -10379,6 +10439,68 @@ mod tests {
             true,
             true,
         ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn project_link_menu_items_has_single_delete_entry() {
+        let items = project_link_menu_items(project::links::LinkTarget::Docs, 2);
+        assert_eq!(items.len(), 1);
+        assert!(matches!(
+            items[0],
+            crate::native_menu::Item::Entry {
+                msg: Message::Project(project::Message::LinkRemove { index: 2, .. }),
+                ..
+            }
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn text_input_menu_items_locks_cut_copy_for_secure_field() {
+        let target = TextInputTarget {
+            id: iced_widget::core::widget::Id::new("x"),
+            secure: true,
+        };
+        let items = text_input_menu_items(&target);
+        let cut_enabled = items.iter().find_map(|i| match i {
+            crate::native_menu::Item::Entry {
+                msg: Message::TextInputMenuCut,
+                enabled,
+                ..
+            } => Some(*enabled),
+            _ => None,
+        });
+        assert_eq!(cut_enabled, Some(false));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn text_input_menu_items_enables_cut_copy_for_normal_field() {
+        let target = TextInputTarget {
+            id: iced_widget::core::widget::Id::new("x"),
+            secure: false,
+        };
+        let items = text_input_menu_items(&target);
+        let cut_enabled = items.iter().find_map(|i| match i {
+            crate::native_menu::Item::Entry {
+                msg: Message::TextInputMenuCut,
+                enabled,
+                ..
+            } => Some(*enabled),
+            _ => None,
+        });
+        assert_eq!(cut_enabled, Some(true));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn text_input_menu_items_always_has_four_entries() {
+        let target = TextInputTarget {
+            id: iced_widget::core::widget::Id::new("x"),
+            secure: false,
+        };
+        assert_eq!(text_input_menu_items(&target).len(), 4);
     }
 
     /// 复现验收反馈的核心机制:关 tab 后立刻退出,`event_loop.exit()` 不该
