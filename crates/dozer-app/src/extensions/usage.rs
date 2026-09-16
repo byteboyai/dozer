@@ -1442,6 +1442,14 @@ fn has_any_value(days: &[DaySeries]) -> bool {
     days.iter().any(|d| d.values.iter().any(|&v| v > 0))
 }
 
+/// 某趋势窗口内所有天、所有子序列值的总和——用于把"标签 + 总量 + 天数"揉
+/// 成一行摘要式图例（如 `Input/Output(23.2m/15days)`），2026-09-16 用户要求
+/// 把 Token 趋势下两张子图各自的标题/图例收成这一种格式,不再分散成色点
+/// 图例 + 独立的"近 N 天"标注两处。
+fn trend_total(days: &[DaySeries]) -> u64 {
+    days.iter().flat_map(|d| d.values.iter().copied()).sum()
+}
+
 /// 单个"小节标题 +（标题右侧）序列图例 + 图表"的组合。`title` 仍走统一的
 /// `home_section_head` 小结标题样式(Session 趋势 / Token 趋势…)，图例挨在它
 /// 右侧对齐、不占纵向。放在节内的内层 column 统一吃 `SECTION_CHART_GAP`。
@@ -1490,9 +1498,9 @@ fn cache_trend_series() -> TrendSeries {
 /// 一张趋势图右上角的"窗口"小标注(如"近 15 天"),放在标题行里,让读者一眼
 /// 看到口径,不靠猜。
 fn trend_window_tag(
-    window: &'static str,
+    window: impl Into<String>,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    text(window)
+    text(window.into())
         .size(byteui::theme::font::caption_sm())
         .color(byteui::theme::color::current().dim)
         .into()
@@ -1548,16 +1556,10 @@ fn token_trend_section(
     .align_y(iced_widget::core::alignment::Vertical::Center)
     .spacing(8);
     if io_has {
-        let io_group = iced_widget::row![
-            trend_legend(&io_series),
-            iced_widget::Space::new()
-                .width(Length::Fixed(10.0))
-                .height(Length::Shrink),
-            trend_window_tag("近 15 天 Input/Output"),
-        ]
-        .align_y(iced_widget::core::alignment::Vertical::Center)
-        .spacing(6);
-        head_row = head_row.push(io_group);
+        head_row = head_row.push(trend_window_tag(format!(
+            "Input/Output({}/{IO_TREND_WINDOW}days)",
+            format_count(trend_total(&io))
+        )));
     }
 
     if !io_has && !cache_has {
@@ -1565,18 +1567,10 @@ fn token_trend_section(
     }
 
     let cache_header = cache_has.then(|| {
-        iced_widget::row![
-            text("Cache read / write")
-                .size(byteui::theme::font::caption_sm())
-                .color(byteui::theme::color::current().dim),
-            iced_widget::Space::new()
-                .width(Length::Fill)
-                .height(Length::Shrink),
-            trend_legend(&cache_series),
-            trend_window_tag("近 15 天"),
-        ]
-        .align_y(iced_widget::core::alignment::Vertical::Center)
-        .spacing(8)
+        trend_window_tag(format!(
+            "Cache read/write({}/{CACHE_TREND_WINDOW}days)",
+            format_count(trend_total(&cache))
+        ))
     });
 
     // io 有数据时,标题(挂在 `head_row`)和它的图表照旧用 `SECTION_CHART_GAP`;
