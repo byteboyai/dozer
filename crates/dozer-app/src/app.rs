@@ -5143,10 +5143,24 @@ impl App {
                 self.toggle_panel_list_collapse(PanelKind::Database);
             }
             Message::Database(database::Message::TabOverflowToggle) => {
-                let last_cursor = self.last_cursor;
-                self.with_focused_project(|ws, _io| {
-                    ws.database.content_mut().toggle_tab_overflow(last_cursor);
-                });
+                #[cfg(target_os = "macos")]
+                {
+                    let last_cursor = self.last_cursor;
+                    let items = self
+                        .active_workspace()
+                        .map(|ws| database::tab_overflow_items(&ws.database))
+                        .unwrap_or_default();
+                    if let Some(msg) = crate::native_menu::show(items, last_cursor) {
+                        self.update(Message::Database(msg));
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let last_cursor = self.last_cursor;
+                    self.with_focused_project(|ws, _io| {
+                        ws.database.content_mut().toggle_tab_overflow(last_cursor);
+                    });
+                }
             }
             Message::Database(database::Message::TabOverflowDismiss) => {
                 self.with_focused_project(|ws, _io| {
@@ -5471,14 +5485,42 @@ impl App {
                 });
             }
             Message::TermTabOverflowToggle => {
-                let last_cursor = self.last_cursor;
-                self.with_focused_project(|ws, _io| {
-                    ws.term_tab_overflow_anchor = if ws.term_tab_overflow_anchor.is_some() {
-                        None
-                    } else {
-                        Some(last_cursor)
+                #[cfg(target_os = "macos")]
+                {
+                    let last_cursor = self.last_cursor;
+                    let items = match self.active_workspace() {
+                        Some(ws) => {
+                            let entries: Vec<(usize, String, bool)> = ws
+                                .tabs
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, tab)| {
+                                    (
+                                        idx,
+                                        tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
+                                        idx == ws.active,
+                                    )
+                                })
+                                .collect();
+                            tab_widget::tab_overflow_items(&entries, Message::SelectTab)
+                        }
+                        None => Vec::new(),
                     };
-                });
+                    if let Some(msg) = crate::native_menu::show(items, last_cursor) {
+                        self.update(msg);
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let last_cursor = self.last_cursor;
+                    self.with_focused_project(|ws, _io| {
+                        ws.term_tab_overflow_anchor = if ws.term_tab_overflow_anchor.is_some() {
+                            None
+                        } else {
+                            Some(last_cursor)
+                        };
+                    });
+                }
             }
             Message::TermTabOverflowDismiss => {
                 self.with_focused_project(|ws, _io| {
@@ -5486,14 +5528,40 @@ impl App {
                 });
             }
             Message::PreviewTabOverflowToggle => {
-                let last_cursor = self.last_cursor;
-                self.with_focused_project(|ws, _io| {
-                    ws.preview_tab_overflow_anchor = if ws.preview_tab_overflow_anchor.is_some() {
-                        None
-                    } else {
-                        Some(last_cursor)
+                #[cfg(target_os = "macos")]
+                {
+                    let last_cursor = self.last_cursor;
+                    let items = match self.active_workspace() {
+                        Some(ws) => {
+                            let entries: Vec<(usize, String, bool)> = ws
+                                .preview
+                                .tabs()
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, tab)| {
+                                    (idx, tab.title.clone(), idx == ws.preview.active_idx())
+                                })
+                                .collect();
+                            tab_widget::tab_overflow_items(&entries, Message::PreviewSelectTab)
+                        }
+                        None => Vec::new(),
                     };
-                });
+                    if let Some(msg) = crate::native_menu::show(items, last_cursor) {
+                        self.update(msg);
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let last_cursor = self.last_cursor;
+                    self.with_focused_project(|ws, _io| {
+                        ws.preview_tab_overflow_anchor = if ws.preview_tab_overflow_anchor.is_some()
+                        {
+                            None
+                        } else {
+                            Some(last_cursor)
+                        };
+                    });
+                }
             }
             Message::PreviewTabOverflowDismiss => {
                 self.with_focused_project(|ws, _io| {
@@ -5629,15 +5697,47 @@ impl App {
                 });
             }
             Message::ProjectPreviewTabOverflowToggle => {
-                let last_cursor = self.last_cursor;
-                self.with_focused_project(|ws, _io| {
-                    ws.project_preview_tab_overflow_anchor =
-                        if ws.project_preview_tab_overflow_anchor.is_some() {
-                            None
-                        } else {
-                            Some(last_cursor)
-                        };
-                });
+                #[cfg(target_os = "macos")]
+                {
+                    let last_cursor = self.last_cursor;
+                    let items = match self.active_workspace() {
+                        Some(ws) => {
+                            let entries: Vec<(usize, String, bool)> = ws
+                                .project_preview
+                                .tabs()
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, tab)| {
+                                    (
+                                        idx,
+                                        tab.title.clone(),
+                                        idx == ws.project_preview.active_idx(),
+                                    )
+                                })
+                                .collect();
+                            tab_widget::tab_overflow_items(
+                                &entries,
+                                Message::ProjectPreviewSelectTab,
+                            )
+                        }
+                        None => Vec::new(),
+                    };
+                    if let Some(msg) = crate::native_menu::show(items, last_cursor) {
+                        self.update(msg);
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let last_cursor = self.last_cursor;
+                    self.with_focused_project(|ws, _io| {
+                        ws.project_preview_tab_overflow_anchor =
+                            if ws.project_preview_tab_overflow_anchor.is_some() {
+                                None
+                            } else {
+                                Some(last_cursor)
+                            };
+                    });
+                }
             }
             Message::ProjectPreviewTabOverflowDismiss => {
                 self.with_focused_project(|ws, _io| {
@@ -6211,14 +6311,65 @@ impl App {
                 });
             }
             Message::Ssh(ssh::Message::TabOverflowToggle) => {
-                let last_cursor = self.last_cursor;
-                self.with_focused_project(|ws, _io| {
-                    ws.ssh_tab_overflow_anchor = if ws.ssh_tab_overflow_anchor.is_some() {
-                        None
-                    } else {
-                        Some(last_cursor)
+                #[cfg(target_os = "macos")]
+                {
+                    let last_cursor = self.last_cursor;
+                    let items = match self.active_workspace() {
+                        Some(ws) => {
+                            let mut entries: Vec<(usize, String, bool)> = Vec::new();
+                            for (i, tab) in ws.ssh_tabs.iter().enumerate() {
+                                let idx = i + 1;
+                                let host_id = tab
+                                    .info
+                                    .id
+                                    .strip_prefix("ssh:")
+                                    .unwrap_or(&tab.info.id)
+                                    .to_string();
+                                entries.push((
+                                    idx,
+                                    tab_title(tab.agent, tab.cwd.as_deref(), &tab.info.name),
+                                    ws.ssh_active.as_ref().is_some_and(|(h, k)| {
+                                        h == &host_id && *k == ssh::SshTabKind::Terminal
+                                    }),
+                                ));
+                            }
+                            for (i, (host_id, _)) in ws.sftp_tabs.iter().enumerate() {
+                                let idx = i + 1 + ws.ssh_tabs.len();
+                                let label = ws
+                                    .ssh
+                                    .hosts()
+                                    .iter()
+                                    .find(|h| &h.id == host_id)
+                                    .map(|h| h.name.clone())
+                                    .unwrap_or_else(|| host_id.clone());
+                                entries.push((
+                                    idx,
+                                    label,
+                                    ws.ssh_active.as_ref()
+                                        == Some(&(host_id.clone(), ssh::SshTabKind::Sftp)),
+                                ));
+                            }
+                            tab_widget::tab_overflow_items(&entries, |idx| {
+                                ssh_tab_overflow_select_message(ws, idx)
+                            })
+                        }
+                        None => Vec::new(),
                     };
-                });
+                    if let Some(msg) = crate::native_menu::show(items, last_cursor) {
+                        self.update(msg);
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let last_cursor = self.last_cursor;
+                    self.with_focused_project(|ws, _io| {
+                        ws.ssh_tab_overflow_anchor = if ws.ssh_tab_overflow_anchor.is_some() {
+                            None
+                        } else {
+                            Some(last_cursor)
+                        };
+                    });
+                }
             }
             Message::Ssh(ssh::Message::TabOverflowDismiss) => {
                 self.with_focused_project(|ws, _io| {

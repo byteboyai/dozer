@@ -2575,6 +2575,32 @@ pub fn content_pane<'a>(
     outer_container.into()
 }
 
+/// `tab_overflow_popup` 的原生菜单版本——纯选择列表,由内核在
+/// `app.rs::Message::Database(TabOverflowToggle)` 里调用(需要 `App::last_cursor`
+/// 当锚点,同 `tab_overflow_popup` 的既有拦截理由)。仅 macOS 编译。
+#[cfg(target_os = "macos")]
+pub(crate) fn tab_overflow_items(
+    ws_state: &WorkspaceState,
+) -> Vec<crate::native_menu::Item<Message>> {
+    let content = ws_state.content();
+    let mut entries: Vec<(usize, String, bool)> = Vec::new();
+    for (i, tab) in content.tabs().iter().enumerate() {
+        let idx = i + 1;
+        entries.push((
+            idx,
+            tab_title(tab, ws_state),
+            Some(i) == content.active_idx(),
+        ));
+    }
+    crate::tab_widget::tab_overflow_items(&entries, |idx| {
+        if idx == 0 {
+            Message::SelectBlankTab
+        } else {
+            Message::SelectTab(idx - 1)
+        }
+    })
+}
+
 /// Database 面板 tab 栏"溢出下拉"浮层。**必须**在 `App::view` 顶层
 /// `stack![base, ...]` 里拼(同 `terminal::term_tab_overflow_popup` 文档
 /// 解释的理由——`anchor`/`window_size` 是全窗口坐标系,嵌在 `content_pane`
@@ -3381,6 +3407,9 @@ impl DatabaseContentState {
         self.tab_overflow_anchor
     }
 
+    // 仅非 mac 平台调用:mac 上 `TabOverflowToggle` 直接同步弹原生 NSMenu,
+    // 不再写这个锚点(见 `app.rs` 对应分支)。
+    #[cfg(not(target_os = "macos"))]
     pub fn toggle_tab_overflow(&mut self, cursor: (f32, f32)) {
         self.tab_overflow_anchor = if self.tab_overflow_anchor.is_some() {
             None

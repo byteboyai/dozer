@@ -449,6 +449,33 @@ where
     pub on_row_hover: FRH,
 }
 
+/// `tab_overflow_menu` 的原生菜单版本——纯选择列表。`entries` 由各调用方把
+/// 各自的 tab 列表映射成 `(index, title, active)` 三元组;当前 tab 用 CREAM
+/// 文字标识、其余 BODY。不含关闭按钮/状态点/hover(原生 NSMenu 是整行单击
+/// 模型,见"迁移但去掉关闭按钮"的裁决),仅 macOS 编译。
+#[cfg(target_os = "macos")]
+pub(crate) fn tab_overflow_items<Msg: Clone>(
+    entries: &[(usize, String, bool)],
+    on_select: impl Fn(usize) -> Msg,
+) -> Vec<crate::native_menu::Item<Msg>> {
+    let cream = byteui::theme::color::current().cream;
+    let body = byteui::theme::color::current().body;
+    entries
+        .iter()
+        .map(|(idx, title, active)| {
+            let color = if *active { cream } else { body };
+            crate::native_menu::Item::Entry {
+                icon: None,
+                icon_color: None,
+                label: title.clone(),
+                color,
+                enabled: true,
+                msg: on_select(*idx),
+            }
+        })
+        .collect()
+}
+
 const TAB_OVERFLOW_MENU_MIN_WIDTH: f32 = 220.0;
 /// 下拉宽度上限:即便可用屏幕空间(见下方 `avail_w`)比这个还宽,也不再
 /// 继续撑——防止在超宽显示器上把菜单拉得离谱。跟 `TAB_OVERFLOW_MENU_MAX_HEIGHT`
