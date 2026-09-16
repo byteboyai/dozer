@@ -57,9 +57,11 @@ async fn session_survives_client_disconnect() {
     let server = tokio::spawn({
         let sock = sock.clone();
         let registry = registry.clone();
+        let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
         async move {
             dozerd::server::serve(
                 &sock,
+                ide_lock_dir.path().to_path_buf(),
                 registry,
                 test_projects(),
                 test_bookmarks(),
@@ -191,9 +193,11 @@ async fn unknown_session_returns_error_reply() {
     let registry = Arc::new(SessionRegistry::new());
     let server = tokio::spawn({
         let sock = sock.clone();
+        let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
         async move {
             dozerd::server::serve(
                 &sock,
+                ide_lock_dir.path().to_path_buf(),
                 registry,
                 test_projects(),
                 test_bookmarks(),
@@ -235,9 +239,11 @@ async fn attach_delivers_marker_exactly_once() {
     let registry = Arc::new(SessionRegistry::new());
     let server = tokio::spawn({
         let sock = sock.clone();
+        let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
         async move {
             dozerd::server::serve(
                 &sock,
+                ide_lock_dir.path().to_path_buf(),
                 registry,
                 test_projects(),
                 test_bookmarks(),
@@ -315,9 +321,11 @@ async fn attach_from_offset_resumes_within_window() {
     let registry = Arc::new(SessionRegistry::new());
     let server = tokio::spawn({
         let sock = sock.clone();
+        let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
         async move {
             dozerd::server::serve(
                 &sock,
+                ide_lock_dir.path().to_path_buf(),
                 registry,
                 test_projects(),
                 test_bookmarks(),
@@ -424,9 +432,11 @@ async fn attach_stream_offset_invariant_under_load() {
     let server = tokio::spawn({
         let sock = sock.clone();
         let registry = registry.clone();
+        let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
         async move {
             dozerd::server::serve(
                 &sock,
+                ide_lock_dir.path().to_path_buf(),
                 registry,
                 test_projects(),
                 test_bookmarks(),
@@ -520,9 +530,11 @@ async fn attach_from_offset_out_of_window_falls_back_to_full_snapshot() {
     let server = tokio::spawn({
         let sock = sock.clone();
         let registry = registry.clone();
+        let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
         async move {
             dozerd::server::serve(
                 &sock,
+                ide_lock_dir.path().to_path_buf(),
                 registry,
                 test_projects(),
                 test_bookmarks(),
