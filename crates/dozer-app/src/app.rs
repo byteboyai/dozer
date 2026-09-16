@@ -881,6 +881,47 @@ fn text_input_menu_items(target: &TextInputTarget) -> Vec<crate::native_menu::It
     ]
 }
 
+/// `database_source_context_menu_popup` 的原生菜单版本,纯数据组装——数据源
+/// 未展开时"刷新"置灰(同旧版 `item_locked` 语义)。仅 macOS 编译。
+#[cfg(target_os = "macos")]
+fn database_source_menu_items(
+    source_id: &str,
+    expanded: bool,
+) -> Vec<crate::native_menu::Item<Message>> {
+    use crate::native_menu::Item;
+    let dim = byteui::theme::color::current().dim;
+    let id = source_id.to_string();
+    vec![
+        Item::entry(
+            Some(icons::IconKind::RefreshCw),
+            "测试连接",
+            Message::Database(database::Message::TestConnection(id.clone())),
+        ),
+        Item::entry(
+            Some(icons::IconKind::Settings),
+            "编辑",
+            Message::Database(database::Message::EditSourceStart(id.clone())),
+        ),
+        Item::entry(
+            Some(icons::IconKind::Trash),
+            "删除",
+            Message::Database(database::Message::DeleteSourceRequest(id.clone())),
+        ),
+        Item::Entry {
+            icon: Some(icons::IconKind::RotateCw),
+            icon_color: None,
+            label: "刷新".into(),
+            color: if expanded {
+                byteui::theme::color::current().body
+            } else {
+                dim
+            },
+            enabled: expanded,
+            msg: Message::Database(database::Message::SchemaRefresh(id)),
+        },
+    ]
+}
+
 /// 主界面当前几何状态的只读快照(main.rs 拖拽追踪/离屏几何计算用途,
 /// `Copy` 类型直接按值传递)。取代旧 `PanelLayout` 单独传递的做法——
 /// 新几何公式(webview bounds/焦点路由/IME 光标)都依赖"当前是哪个视图、
@@ -4409,9 +4450,23 @@ impl App {
     /// 打开数据库面板数据源树 header 行的右键菜单(测试连接/编辑/删除/
     /// 刷新)。与文件树右键菜单互斥(坐标复用 `files.last_right_click`)。
     fn database_source_context_menu(&mut self, source_id: String) {
-        let (x, y) = self.files.last_right_click();
         self.files.close_context_menu();
-        self.database_source_menu = Some(DatabaseSourceMenu { x, y, source_id });
+        #[cfg(target_os = "macos")]
+        {
+            let (x, y) = self.files.last_right_click();
+            let expanded = self
+                .active_workspace()
+                .is_some_and(|ws| ws.database.is_expanded(&source_id));
+            let items = database_source_menu_items(&source_id, expanded);
+            if let Some(msg) = crate::native_menu::show(items, (x, y)) {
+                self.update(msg);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let (x, y) = self.files.last_right_click();
+            self.database_source_menu = Some(DatabaseSourceMenu { x, y, source_id });
+        }
     }
 
     /// 打开 Project 面板「项目文档 / Agent 记忆」链接行的删除右键菜单。与
