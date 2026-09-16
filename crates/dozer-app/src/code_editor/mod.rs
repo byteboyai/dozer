@@ -29,9 +29,10 @@
 //!   `Action::Edit` 落盘,不暴露按动作回滚),撤销只能靠在应用层做整文本
 //!   快照栈(见本模块 [`Snapshot`]/[`CodeView::undo`])。实现取舍:快照是
 //!   全文本拷贝、按"编辑命令"粒度建档(连续纯打字 run 折叠成一条),因此
-//!   undo 序列不是逐键、光标位置也只是尽量还原近似;先前的"全局编辑弹层"
-//!   曾为它绑 ⌘Z 撤销,弹层移除后目前没有键位触发 `CodeView::undo`,API 保留
-//!   供将来需要(与只读 tab 天然不触发 undo 的事实一致)。
+//!   undo 序列不是逐键、光标位置也只是尽量还原近似。原生预览编辑 tab 现由
+//!   main.rs 键盘路由把 ⌘Z/⌘⇧Z 映射到 `Message::PreviewUndoActive`/
+//!   `PreviewRedoActive`(见 `Workspace::preview_pane_undo_active`),只读 tab
+//!   因从不压栈而天然不触发 undo。
 
 pub mod highlighter;
 
@@ -45,15 +46,19 @@ use iced_widget::text_editor::{self, Action};
 /// 不再依赖那个未在我们代码里出现过的隐式默认值。
 const EDITOR_PADDING: f32 = 5.0;
 
+/// 代码编辑器行高倍数(相对字号)——**只作用于 text editor**,不跟随终端/
+/// 文件树/列表共用的 `terminal_font::line_height_factor()`(= 1.2,那是等宽
+/// 终端与列表的行距基准)。这里取更大值给正文更多呼吸空间:代码正文通常逐行
+/// 扫读、行间留白比终端更值钱,用户需求"增加 text editor 行间距"。行高同时喂给
+/// 右侧 `Scrollstrip` 的 `line_height`(可视区行数换算),两处必须同源,否则
+/// 滚动条 thumb 高度与实际行数对不上。
+const EDITOR_LINE_HEIGHT_FACTOR: f32 = 1.5;
+
 /// 撤销/重做栈单条快照:整段 text(采用"该段一次编辑命令落下的前状态"),
 /// 加该时刻的光标 `(line, column)` 供还原后把光标尽量挪回原处(越界由
 /// [`CodeView::move_cursor_to`] 钳到末行/行尾附近)。快照是全文本拷贝——
 /// 官方 `text_editor` 引擎没有任何 undo API(见模块文档),只能应用层记。
 /// 一条快照对应一条"编辑命令"(连续纯打字被折叠成一条),不是逐键。
-/// 撤销系统的调用方(先前的全局编辑弹层界面的 ⌘Z/⌘⇧Z)已随弹层移除,弹层
-/// 独有的整套回滚代码当前没有非测试消费方,故整体 `allow(dead_code)` 保留
-/// 供将来(可能给原生预览编辑 tab 复绑 ⌘Z/⌘⇧Z)复用——见模块文档"已知取舍"。
-#[allow(dead_code)]
 struct Snapshot {
     text: String,
     line: usize,
@@ -305,9 +310,8 @@ impl CodeView {
 
     /// 撤销一次编辑:把 buffer 回退到最新一条[`Snapshot`]记录的内容,并把
     /// 刚被回退的当前态挪进重做栈(供 [`CodeView::redo`])。没有可撤销历史
-    /// 时不动作。返回是否真的发生过回退。
-    /// (休眠代码:当前无调用方,见 [`Snapshot`] 的 `allow(dead_code)` 说明。)
-    #[allow(dead_code)]
+    /// 时不动作。返回是否真的发生过回退。原生预览编辑 tab 的 ⌘Z 落点
+    /// (`Workspace::preview_pane_undo_active`)。
     pub fn undo(&mut self) -> bool {
         let Some(prev) = self.undo.pop() else {
             return false;
@@ -320,8 +324,7 @@ impl CodeView {
     }
 
     /// 重做被 [`CodeView::undo`] 撤消的最后一次编辑。返回是否真的发生过重做。
-    /// (休眠代码:当前无调用方,见 [`Snapshot`] 的 `allow(dead_code)` 说明。)
-    #[allow(dead_code)]
+    /// 原生预览编辑 tab 的 ⌘⇧Z 落点(`Workspace::preview_pane_redo_active`)。
     pub fn redo(&mut self) -> bool {
         let Some(last) = self.redo.pop() else {
             return false;
@@ -451,7 +454,7 @@ impl CodeView {
     pub fn view<'a>(&'a self) -> Element<'a, Action, iced_widget::Theme, iced_renderer::Renderer> {
         let scale = byteui::theme::icon_size::scale();
         let font_size = crate::theme::terminal_font::size() * scale;
-        let line_height_px = font_size * crate::theme::terminal_font::line_height_factor();
+        let line_height_px = font_size * EDITOR_LINE_HEIGHT_FACTOR;
 
         let editor = text_editor::TextEditor::new(&self.content)
             .id(self.id.clone())
@@ -670,6 +673,16 @@ mod tests {
         view.perform(Action::Move(text_editor::Motion::DocumentEnd));
         view.perform(Action::Edit(text_editor::Edit::Insert('!')));
         assert_eq!(view.text(), "ab!");
+    }
+
+    #[test]
+    fn editor_line_height_widens_beyond_shared_terminal_factor() {
+        // 编辑器行高走独立常量,不跟随终端/列表共用的 terminal factor——防止
+        // 将来有人图省事把它换回 terminal_font::line_height_factor() 而悄悄
+        // 抹掉"增加 text editor 行间距"这条需求。同源校验:view() 里行高与
+        // Scrollstrip 的 line_height 都取这个常量。
+        assert_eq!(EDITOR_LINE_HEIGHT_FACTOR, 1.5);
+        assert!(EDITOR_LINE_HEIGHT_FACTOR > crate::theme::terminal_font::line_height_factor());
     }
 
     #[test]

@@ -1971,6 +1971,15 @@ pub enum Message {
     /// `PreviewSaveActive` 一跳区分、不做 preview↔panel 双枚举映射。构造/调用
     /// 处是 main.rs 原生预览闸门;先拦下,没命中的键才放行给 iced。
     PreviewTabInsertTab(PanelKind),
+    /// 原生预览撤销(⌘Z,非 shift):把 `kind` 面板当前激活原生 tab 的 buffer
+    /// 回退到上一条编辑命令前状态(见 `Workspace::preview_pane_undo_active` /
+    /// `CodeView::undo`)。官方 `text_editor` 没有任何 undo/redo API,历史是
+    /// 应用层按编辑命令粒度记的整文本快照栈(code_editor 模块"已知取舍"),因
+    /// 此撤销序列不是逐键、光标只近似还原。`kind` 语义同 `PreviewSaveActive`。
+    PreviewUndoActive(PanelKind),
+    /// 原生预览重做(⌘⇧Z):重放被 `PreviewUndoActive` 撤掉的最后一条编辑,
+    /// 语义同 `CodeView::redo`。`kind` 语义同 `PreviewSaveActive`。
+    PreviewRedoActive(PanelKind),
     /// 原生预览打开 File-Find(⌘F)。`kind` 指向 `Files` 或 `Project` 面板——
     /// File-Find 对两个面板的原生编辑 tab 语义相同(见
     /// `Workspace::preview_find_open`,⌘F 已开时是重聚焦的 no-op)。跟
@@ -5354,6 +5363,12 @@ impl App {
                         ),
                     );
                 });
+            }
+            Message::PreviewUndoActive(kind) => {
+                self.with_focused_project(move |ws, _io| ws.preview_pane_undo_active(kind));
+            }
+            Message::PreviewRedoActive(kind) => {
+                self.with_focused_project(move |ws, _io| ws.preview_pane_redo_active(kind));
             }
             Message::PreviewFindOpen(kind) => {
                 self.with_focused_project(move |ws, _io| ws.preview_find_open(kind));

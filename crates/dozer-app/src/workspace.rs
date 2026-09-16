@@ -1832,6 +1832,55 @@ impl Workspace {
         }
     }
 
+    /// ⌘Z:把 `kind` 面板**当前激活原生 tab** 的编辑器回退一条编辑命令
+    /// (`CodeView::undo`——官方 `text_editor` 无 undo API,历史是应用层整文本
+    /// 快照栈,见 code_editor 模块"已知取舍")。真的发生了回退时顺手把该 tab
+    /// 标脏:回退同样改变了 buffer、与磁盘不再一致,未保存前必须维持脏标记
+    /// (不比对磁盘文本——`PreviewTab` 只存布尔 `dirty`,不做内容比对)。
+    /// 目标非原生/无编辑器/栈空时 no-op。
+    pub fn preview_pane_undo_active(&mut self, kind: PanelKind) {
+        let pane = if kind == PanelKind::Project {
+            &mut self.project_preview
+        } else {
+            &mut self.preview
+        };
+        let Some(tab_id) = pane
+            .tabs()
+            .get(pane.active_idx())
+            .filter(|t| t.editor.is_some())
+            .map(|t| t.id)
+        else {
+            return;
+        };
+        if let Some(editor) = pane.editor_mut(tab_id)
+            && editor.undo()
+        {
+            pane.mark_dirty_by_id(tab_id);
+        }
+    }
+
+    /// ⌘⇧Z:重做 `PreviewUndoActive` 撤掉的最后一条编辑(`CodeView::redo`),
+    /// 发生重做时同样标脏(语义同 `preview_pane_undo_active`)。
+    pub fn preview_pane_redo_active(&mut self, kind: PanelKind) {
+        let pane = if kind == PanelKind::Project {
+            &mut self.project_preview
+        } else {
+            &mut self.preview
+        };
+        let Some(tab_id) = pane
+            .tabs()
+            .get(pane.active_idx())
+            .filter(|t| t.editor.is_some())
+            .map(|t| t.id)
+        else {
+            return;
+        };
+        if let Some(editor) = pane.editor_mut(tab_id)
+            && editor.redo()
+        {
+            pane.mark_dirty_by_id(tab_id);
+        }
+    }
     /// ⌘S:把 `kind` 面板**当前激活原生 tab** 的就地改动保存到磁盘,语义同
     /// `preview_pane_save_at`——除了定位固定取"当前激活 tab"。
     pub fn preview_pane_save_active(&mut self, kind: PanelKind) {
@@ -4960,6 +5009,76 @@ mod tests {
             !ws.active_preview_tab_has_native_editor(PanelKind::Files),
             "Files 预览面板本身没开 tab,不该被 Project 那边的状态影响"
         );
+    }
+
+    #[test]
+    fn preview_pane_undo_active_reverts_edit_and_marks_dirty() {
+        use iced_widget::text_editor::{Action, Edit, Motion};
+        let (_dir, path) = write_temp_file("a.txt", "ab");
+        let mut ws = Workspace::empty_for_project_placeholder();
+        ws.preview.open_path(path);
+        let id = ws.preview.tabs()[ws.preview.active_idx()].id;
+        assert!(
+            !ws.preview.tabs()[ws.preview.active_idx()].dirty,
+            "新开不脏"
+        );
+
+        // 落到行尾后插一个字符(经激活 tab 的 perform 管线,与裸 Tab 同路)。
+        ws.preview_pane_active_editor_event(PanelKind::Files, Action::Move(Motion::DocumentEnd));
+        ws.preview_pane_active_editor_event(PanelKind::Files, Action::Edit(Edit::Insert('!')));
+        assert_eq!(ws.preview.editor_mut(id).unwrap().text(), "ab!");
+
+        ws.preview_pane_undo_active(PanelKind::Files);
+        assert_eq!(
+            ws.preview.editor_mut(id).unwrap().text(),
+            "ab",
+            "⌘Z 应回退到编辑前"
+        );
+        assert!(
+            ws.preview.tabs()[ws.preview.active_idx()].dirty,
+            "发生过回退的 tab 应保持脏(与磁盘不一致)"
+        );
+
+        // 栈空后再撤是 no-op,不 panic、不改文本。
+        ws.preview_pane_undo_active(PanelKind::Files);
+        assert_eq!(ws.preview.editor_mut(id).unwrap().text(), "ab");
+    }
+
+    #[test]
+    fn preview_pane_redo_active_reapplies_undone_edit_and_marks_dirty() {
+        use iced_widget::text_editor::{Action, Edit, Motion};
+        let (_dir, path) = write_temp_file("a.txt", "ab");
+        let mut ws = Workspace::empty_for_project_placeholder();
+        ws.project_preview.open_path(path);
+        let id = ws.project_preview.tabs()[ws.project_preview.active_idx()].id;
+
+        ws.preview_pane_active_editor_event(PanelKind::Project, Action::Move(Motion::DocumentEnd));
+        ws.preview_pane_active_editor_event(PanelKind::Project, Action::Edit(Edit::Insert('!')));
+        assert_eq!(ws.project_preview.editor_mut(id).unwrap().text(), "ab!");
+
+        ws.preview_pane_undo_active(PanelKind::Project);
+        assert_eq!(ws.project_preview.editor_mut(id).unwrap().text(), "ab");
+
+        ws.preview_pane_redo_active(PanelKind::Project);
+        assert_eq!(
+            ws.project_preview.editor_mut(id).unwrap().text(),
+            "ab!",
+            "⌘⇧Z 应重做被撤掉的编辑"
+        );
+        assert!(
+            ws.project_preview.tabs()[ws.project_preview.active_idx()].dirty,
+            "发生过重做的 tab 应保持脏"
+        );
+    }
+
+    #[test]
+    fn preview_pane_undo_active_noop_without_native_tab() {
+        let (_dir, path) = write_temp_file("a.png", "");
+        let mut ws = Workspace::empty_for_project_placeholder();
+        ws.preview.open_path(path);
+        // .png 走 wry(无 editor):撤销应静默 no-op,不 panic、不乱标脏。
+        ws.preview_pane_undo_active(PanelKind::Files);
+        assert!(!ws.preview.tabs()[ws.preview.active_idx()].dirty);
     }
 
     #[test]

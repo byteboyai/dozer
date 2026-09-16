@@ -1558,6 +1558,15 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 } else if modifiers.super_key() {
                     if normal_char("s") {
                         Some(Message::PreviewSaveActive(kind_root))
+                    } else if normal_char("z") {
+                        // ⌘Z 撤销 / ⌘⇧Z 重做:官方 text_editor 无 undo API,
+                        // 走应用层快照栈(见 code_editor 模块"已知取舍")。
+                        // shift 分支必须先判,否则 ⌘⇧Z 会被 ⌘Z 抢走。
+                        if modifiers.shift_key() {
+                            Some(Message::PreviewRedoActive(kind_root))
+                        } else {
+                            Some(Message::PreviewUndoActive(kind_root))
+                        }
                     } else if normal_char("f") {
                         // 第二趟 ⌘F 仍是开/聚焦(消息贴合 request_find_focus)。
                         Some(Message::PreviewFindOpen(kind_root))
