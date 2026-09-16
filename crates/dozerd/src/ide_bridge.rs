@@ -299,3 +299,153 @@ mod mapping_tests {
         assert_eq!(diagnostics_result(), serde_json::json!({"diagnostics": []}));
     }
 }
+
+fn tool_call_result(
+    name: &str,
+    ctx: Option<&PreviewContext>,
+) -> Result<serde_json::Value, String> {
+    let payload = match name {
+        "getCurrentSelection" => selection_result(ctx),
+        "getOpenEditors" => open_editors_result(ctx),
+        "getDiagnostics" => diagnostics_result(),
+        other => return Err(format!("Method not found: {other}")),
+    };
+    Ok(serde_json::json!({
+        "content": [{"type": "text", "text": payload.to_string()}]
+    }))
+}
+
+pub(crate) fn handle_rpc_request(
+    request: &serde_json::Value,
+    ctx: Option<&PreviewContext>,
+) -> serde_json::Value {
+    let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
+    let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
+    match method {
+        "initialize" => serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "Dozer", "version": env!("CARGO_PKG_VERSION")},
+            }
+        }),
+        "tools/list" => serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "tools": [
+                    {
+                        "name": "getCurrentSelection",
+                        "description": "Get current editor selection",
+                        "inputSchema": {"type": "object", "properties": {}},
+                    },
+                    {
+                        "name": "getOpenEditors",
+                        "description": "Get list of open editor tabs",
+                        "inputSchema": {"type": "object", "properties": {}},
+                    },
+                    {
+                        "name": "getDiagnostics",
+                        "description": "Get diagnostics for a file",
+                        "inputSchema": {"type": "object", "properties": {}},
+                    },
+                ]
+            }
+        }),
+        "tools/call" => {
+            let name = request
+                .pointer("/params/name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match tool_call_result(name, ctx) {
+                Ok(result) => serde_json::json!({"jsonrpc": "2.0", "id": id, "result": result}),
+                Err(message) => serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {"code": -32601, "message": message},
+                }),
+            }
+        }
+        other => serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {"code": -32601, "message": format!("Method not found: {other}")},
+        }),
+    }
+}
+
+#[cfg(test)]
+mod rpc_tests {
+    use super::*;
+
+    fn ctx() -> PreviewContext {
+        PreviewContext {
+            path: "/repo/a.rs".to_string(),
+            start_line: 1,
+            start_col: 1,
+            end_line: 1,
+            end_col: 1,
+            has_selection: false,
+            updated_at_ms: 0,
+        }
+    }
+
+    #[test]
+    fn initialize_returns_protocol_version_and_id() {
+        let req = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize"});
+        let got = handle_rpc_request(&req, None);
+        assert_eq!(got["id"], 1);
+        assert_eq!(got["result"]["protocolVersion"], "2025-03-26");
+    }
+
+    #[test]
+    fn tools_list_declares_three_tools() {
+        let req = serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"});
+        let got = handle_rpc_request(&req, None);
+        let names: Vec<&str> = got["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["getCurrentSelection", "getOpenEditors", "getDiagnostics"]
+        );
+    }
+
+    #[test]
+    fn tools_call_get_current_selection_wraps_mapping_result_as_text_content() {
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "getCurrentSelection", "arguments": {}},
+        });
+        let got = handle_rpc_request(&req, Some(&ctx()));
+        let text = got["result"]["content"][0]["text"].as_str().unwrap();
+        let inner: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(inner, selection_result(Some(&ctx())));
+    }
+
+    #[test]
+    fn tools_call_unknown_tool_returns_json_rpc_error() {
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {"name": "openDiff", "arguments": {}},
+        });
+        let got = handle_rpc_request(&req, None);
+        assert_eq!(got["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn unknown_method_returns_json_rpc_error() {
+        let req = serde_json::json!({"jsonrpc": "2.0", "id": 5, "method": "closeAllDiffTabs"});
+        let got = handle_rpc_request(&req, None);
+        assert_eq!(got["error"]["code"], -32601);
+    }
+}
