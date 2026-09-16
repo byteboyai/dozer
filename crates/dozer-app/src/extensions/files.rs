@@ -966,7 +966,16 @@ pub fn update(
                 let has_clipboard = ws_state.tree_clipboard.is_some();
                 let items = context_menu_items(&path, is_dir, is_root, has_clipboard);
                 if let Some(msg) = crate::native_menu::show(items, (x, y)) {
-                    update(ws_state, app_state, msg, project_id, handle, emit);
+                    // 不能直接递归调用本函数(`update`)——`OpenSearch`/
+                    // `CopyPath` 这两个菜单项产出的消息是"内核拦截处理"的
+                    // (打开搜索弹窗要跨到 `search::Message`,写系统剪贴板
+                    // 需要 main.rs 的 `Clipboard` 句柄),在 `files::update`
+                    // 内部就是 `unreachable!()`,文档写明"它们永远不该落到
+                    // 这里"。用 `emit` 把消息送回内核顶层(`App::update()`
+                    // 的 `Message::Files(...)` 分派),和其它异步产出的
+                    // `files::Message` 走的是同一条既有回路,才能命中
+                    // `OpenSearch`/`CopyPath` 的顶层拦截分支。
+                    emit(msg);
                 }
             }
             #[cfg(not(target_os = "macos"))]
