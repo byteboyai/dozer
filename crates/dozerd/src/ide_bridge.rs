@@ -3,6 +3,7 @@
 //! 自动上下文机制(聊天记录里的 `In <file>` 提示条)。设计依据见
 //! `docs/superpowers/specs/2026-09-16-claude-code-ide-bridge-design.md`。
 
+use dozer_core::protocol::PreviewContext;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn resolve_lock_dir(
@@ -173,5 +174,128 @@ mod lock_file_tests {
     fn remove_lock_file_is_noop_when_missing() {
         // 不应 panic 或返回需要处理的错误
         remove_lock_file(Path::new("/tmp/dozer-ide-bridge-test-does-not-exist.lock"));
+    }
+}
+
+pub(crate) fn selection_result(ctx: Option<&PreviewContext>) -> serde_json::Value {
+    match ctx {
+        Some(c) => serde_json::json!({
+            "success": true,
+            "filePath": c.path,
+            "selection": {
+                "start": {
+                    "line": c.start_line.saturating_sub(1),
+                    "character": c.start_col.saturating_sub(1),
+                },
+                "end": {
+                    "line": c.end_line.saturating_sub(1),
+                    "character": c.end_col.saturating_sub(1),
+                },
+                "isEmpty": !c.has_selection,
+            },
+            "text": "",
+        }),
+        None => serde_json::json!({
+            "success": false,
+            "filePath": null,
+            "selection": null,
+            "text": "",
+        }),
+    }
+}
+
+pub(crate) fn open_editors_result(ctx: Option<&PreviewContext>) -> serde_json::Value {
+    match ctx {
+        Some(c) => serde_json::json!({
+            "tabs": [{"filePath": c.path, "isActive": true}]
+        }),
+        None => serde_json::json!({"tabs": []}),
+    }
+}
+
+pub(crate) fn diagnostics_result() -> serde_json::Value {
+    serde_json::json!({"diagnostics": []})
+}
+
+#[cfg(test)]
+mod mapping_tests {
+    use super::*;
+
+    fn ctx() -> PreviewContext {
+        PreviewContext {
+            path: "/repo/src/main.rs".to_string(),
+            start_line: 12,
+            start_col: 3,
+            end_line: 12,
+            end_col: 3,
+            has_selection: false,
+            updated_at_ms: 1_700_000_000_000,
+        }
+    }
+
+    #[test]
+    fn selection_result_with_context_maps_1_indexed_to_0_indexed() {
+        let got = selection_result(Some(&ctx()));
+        assert_eq!(
+            got,
+            serde_json::json!({
+                "success": true,
+                "filePath": "/repo/src/main.rs",
+                "selection": {
+                    "start": {"line": 11, "character": 2},
+                    "end": {"line": 11, "character": 2},
+                    "isEmpty": true,
+                },
+                "text": "",
+            })
+        );
+    }
+
+    #[test]
+    fn selection_result_has_selection_true_sets_is_empty_false() {
+        let mut c = ctx();
+        c.has_selection = true;
+        c.end_line = 14;
+        c.end_col = 1;
+        let got = selection_result(Some(&c));
+        assert_eq!(got["selection"]["isEmpty"], false);
+        assert_eq!(got["selection"]["end"]["line"], 13);
+        assert_eq!(got["selection"]["end"]["character"], 0);
+    }
+
+    #[test]
+    fn selection_result_without_context_reports_failure() {
+        let got = selection_result(None);
+        assert_eq!(
+            got,
+            serde_json::json!({
+                "success": false,
+                "filePath": null,
+                "selection": null,
+                "text": "",
+            })
+        );
+    }
+
+    #[test]
+    fn open_editors_result_with_context_lists_one_tab() {
+        let got = open_editors_result(Some(&ctx()));
+        assert_eq!(
+            got,
+            serde_json::json!({
+                "tabs": [{"filePath": "/repo/src/main.rs", "isActive": true}]
+            })
+        );
+    }
+
+    #[test]
+    fn open_editors_result_without_context_is_empty() {
+        let got = open_editors_result(None);
+        assert_eq!(got, serde_json::json!({"tabs": []}));
+    }
+
+    #[test]
+    fn diagnostics_result_is_always_empty() {
+        assert_eq!(diagnostics_result(), serde_json::json!({"diagnostics": []}));
     }
 }
