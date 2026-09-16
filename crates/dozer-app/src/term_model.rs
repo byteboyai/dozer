@@ -11,7 +11,7 @@ use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
-use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Processor};
+use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Processor, Rgb};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -43,7 +43,7 @@ const ANSI16_LIGHT: [(u8, u8, u8); 16] = [
     (0xfc, 0xfd, 0xfe), // Black ≈ term_bg
     (0xd1, 0x48, 0x3f), // Red
     (0x12, 0x8f, 0x5a), // Green
-    (0xad, 0x7d, 0x0a), // Yellow == gold
+    (0xc9, 0xa2, 0x27), // Yellow(浅色版不再与 gold 同值)
     (0x6a, 0x4f, 0xdb), // Blue(实为紫色调)
     (0xc7, 0x1f, 0xa0), // Magenta
     (0x0e, 0x8a, 0x9e), // Cyan
@@ -70,7 +70,7 @@ fn ansi16() -> &'static [(u8, u8, u8); 16] {
 /// 默认前景色（无显式 SGR 时的字符颜色），深色版数值。
 const DEFAULT_FG_DARK: (u8, u8, u8) = (0x9A, 0xB4, 0xC4);
 /// 默认前景色，浅色版数值（== 语义色板 `body`）。
-const DEFAULT_FG_LIGHT: (u8, u8, u8) = (0x4c, 0x5c, 0x68);
+const DEFAULT_FG_LIGHT: (u8, u8, u8) = (0x36, 0x42, 0x4e);
 
 fn default_fg() -> (u8, u8, u8) {
     match byteui::theme::color::current_scheme() {
@@ -188,17 +188,51 @@ fn bg_to_rgb(color: AnsiColor) -> Option<(u8, u8, u8)> {
     }
 }
 
+#[derive(Default)]
+struct PtyResponsesInner {
+    buf: Vec<u8>,
+    /// opencode 靠 OSC 10/11 查询探测终端真实前景/背景色决定自己的
+    /// "system" 主题——实测 PTY 抓包：无人应答时它固定退回硬编码深色
+    /// 主题。默认关闭，仅在会话 `agent == AgentKind::Opencode` 时开启
+    /// （见 `workspace.rs` 的 `TerminalModel::new` 调用点），避免对没有
+    /// 这个问题的其它 agent 引入不必要的行为变化。
+    answer_dynamic_color: bool,
+}
+
 /// 收集 `Term` 解析过程中生成的 PTY 回写应答（`Event::PtyWrite`）：
 /// DSR 光标位置（CSI 6n）、DA 设备属性（CSI c）、DECRPM 模式查询等。
 /// atuin/ink（claude）等 TUI 依赖这些应答；此前用 `VoidListener` 全部
 /// 丢弃，导致这类程序探测超时/行为异常。
 #[derive(Default, Clone)]
-struct PtyResponses(Rc<RefCell<Vec<u8>>>);
+struct PtyResponses(Rc<RefCell<PtyResponsesInner>>);
+
+/// `Event::ColorRequest` 里 alacritty 已经解析好的目标色号——只识别 OSC
+/// 10（前景）/11（背景），其余（光标色 OSC 12、调色板 0-15 动态查询）
+/// 不在 opencode 实测会用到的范围内，忽略。
+fn dynamic_color_rgb(index: usize) -> Option<(u8, u8, u8)> {
+    if index == NamedColor::Foreground as usize {
+        Some(default_fg_rgb())
+    } else if index == NamedColor::Background as usize {
+        let term_bg = byteui::theme::color::current().term_bg;
+        let [r, g, b, _] = term_bg.into_rgba8();
+        Some((r, g, b))
+    } else {
+        None
+    }
+}
 
 impl EventListener for PtyResponses {
     fn send_event(&self, event: Event) {
-        if let Event::PtyWrite(text) = event {
-            self.0.borrow_mut().extend_from_slice(text.as_bytes());
+        let mut inner = self.0.borrow_mut();
+        match event {
+            Event::PtyWrite(text) => inner.buf.extend_from_slice(text.as_bytes()),
+            Event::ColorRequest(index, formatter) if inner.answer_dynamic_color => {
+                if let Some((r, g, b)) = dynamic_color_rgb(index) {
+                    let reply = formatter(Rgb { r, g, b });
+                    inner.buf.extend_from_slice(reply.as_bytes());
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -239,7 +273,13 @@ impl TerminalModel {
         // 分别取字段引用，避免对 `self` 的双重可变借用。
         let Self { term, parser, .. } = self;
         parser.advance(term, bytes);
-        std::mem::take(&mut *self.responses.0.borrow_mut())
+        std::mem::take(&mut self.responses.0.borrow_mut().buf)
+    }
+
+    /// 是否回应 OSC 10/11 前景/背景色查询（见 [`dynamic_color_rgb`]）。
+    /// 只应该对 `agent == AgentKind::Opencode` 的会话开启。
+    pub fn set_answer_dynamic_color(&mut self, enabled: bool) {
+        self.responses.0.borrow_mut().answer_dynamic_color = enabled;
     }
 
     /// 调整终端尺寸，尽量保留既有内容（委托给 `Term::resize` 的重排逻辑）。
@@ -690,7 +730,7 @@ mod tests {
         byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Light);
         assert_eq!(ansi16_color(0), Some((0xfc, 0xfd, 0xfe))); // Black ≈ term_bg
         assert_eq!(ansi16_color(1), Some((0xd1, 0x48, 0x3f))); // Red
-        assert_eq!(ansi16_color(3), Some((0xad, 0x7d, 0x0a))); // Yellow == gold
+        assert_eq!(ansi16_color(3), Some((0xc9, 0xa2, 0x27))); // Yellow(浅色版不再与 gold 同值)
         byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Dark);
         assert_eq!(ansi16_color(0), Some((0x08, 0x14, 0x1d)));
     }
@@ -699,8 +739,49 @@ mod tests {
     fn default_fg_reflects_light_scheme() {
         let _guard = lock_scheme();
         byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Light);
-        assert_eq!(default_fg_rgb(), (0x4c, 0x5c, 0x68));
+        assert_eq!(default_fg_rgb(), (0x36, 0x42, 0x4e));
         byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Dark);
         assert_eq!(default_fg_rgb(), (0x9A, 0xB4, 0xC4));
+    }
+
+    /// opencode 靠 OSC 10/11 查询探测终端真实前景/背景色来决定自己的
+    /// "system" 主题(实测 PTY 抓包确认);dozer 默认不回应任何会话的这类
+    /// 查询,除非显式开启——避免误伤没有这个问题的其它 agent。
+    #[test]
+    fn dynamic_color_query_ignored_by_default() {
+        let mut t = TerminalModel::new(40, 10);
+        let responses = t.feed(b"\x1b]11;?\x07");
+        assert!(responses.is_empty());
+    }
+
+    #[test]
+    fn dynamic_color_query_answers_background_when_enabled() {
+        let _guard = lock_scheme();
+        byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Dark); // 与「默认即 Dark」的假设对齐,显式写一遍避免依赖执行顺序
+        let mut t = TerminalModel::new(40, 10);
+        t.set_answer_dynamic_color(true);
+        let responses = t.feed(b"\x1b]11;?\x07");
+        assert_eq!(responses, b"\x1b]11;rgb:0808/1414/1d1d\x07");
+    }
+
+    #[test]
+    fn dynamic_color_query_answers_foreground_when_enabled() {
+        let _guard = lock_scheme();
+        byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Dark);
+        let mut t = TerminalModel::new(40, 10);
+        t.set_answer_dynamic_color(true);
+        let responses = t.feed(b"\x1b]10;?\x07");
+        assert_eq!(responses, b"\x1b]10;rgb:9a9a/b4b4/c4c4\x07");
+    }
+
+    #[test]
+    fn dynamic_color_query_reflects_light_scheme_when_enabled() {
+        let _guard = lock_scheme();
+        byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Light);
+        let mut t = TerminalModel::new(40, 10);
+        t.set_answer_dynamic_color(true);
+        let responses = t.feed(b"\x1b]11;?\x07");
+        byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Dark);
+        assert_eq!(responses, b"\x1b]11;rgb:fcfc/fdfd/fefe\x07");
     }
 }

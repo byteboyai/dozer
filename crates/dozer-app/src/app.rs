@@ -10080,7 +10080,6 @@ fn ssh_terminal_pane<'a>(
                             focused,
                             terminal::TermTarget::SshPanel,
                             focused.then(|| app.term_ime_preedit()).flatten(),
-                            None,
                         )
                     }
                     None => ssh_empty_state(),

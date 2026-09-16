@@ -7,7 +7,6 @@
 
 use crate::conversation::ConversationMeta;
 use crate::homespace::{home_panel_head, home_section_head};
-use crate::theme;
 use byteui::interaction::icons;
 use dozer_core::protocol::AgentKind;
 use iced_widget::canvas::{self, Canvas};
@@ -1495,39 +1494,18 @@ fn cache_trend_series() -> TrendSeries {
     vec![("读", c.lime), ("写", c.green)]
 }
 
-/// 一张趋势图右上角的"窗口"小标注(如"近 15 天"),放在标题行里,让读者一眼
-/// 看到口径,不靠猜。
+/// 一张趋势图右上角的汇总小标注(如"Input/Output(8.1m/15days)"),放在标题
+/// 行里,让读者一眼看到口径,不靠猜。颜色跟 `home_section_head` 的标题文字
+/// 一致用 cream——2026-09-16 用户纠正:早前这里走的是 `dim`,跟金色的
+/// "Token 趋势" 大标题不一致,现在大标题已改回 cream(见 `token_trend_section`
+/// 里 `home_section_head` 调用处),这个子标题也要跟着统一。
 fn trend_window_tag(
     window: impl Into<String>,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     text(window.into())
         .size(byteui::theme::font::caption_sm())
-        .color(byteui::theme::color::current().dim)
+        .color(byteui::theme::color::current().cream)
         .into()
-}
-
-/// `token_trend_section` 专属标题:结构照抄 `home_section_head`(圆点 + 文字),
-/// 颜色改用 `gold`——2026-09-14 用户要求这个标题用金黄色跟别的小节区分开,
-/// 不改 `home_section_head` 本身(它被 Session 趋势/每日用量统计等一起共用,
-/// 且金色按 CLAUDE.md 约定专属"甲方动作",这里只是这一处标题的显式例外)。
-fn token_trend_head_gold() -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer>
-{
-    let gold = byteui::theme::color::current().gold;
-    row![
-        icons::view(
-            icons::IconKind::CircleSmall,
-            byteui::theme::icon_size::row(),
-            gold
-        ),
-        crate::workspace::lh(
-            text("Token 趋势")
-                .size(theme::homespace_font::label())
-                .color(gold)
-        ),
-    ]
-    .spacing(6)
-    .align_y(iced_widget::core::Alignment::Center)
-    .into()
 }
 
 /// Token 趋势区:一个标题(Token 趋势)下按 15 天(Input/Output)与 15 天
@@ -1547,57 +1525,87 @@ fn token_trend_section(
     let io_has = has_any_value(&io);
     let cache_has = has_any_value(&cache);
 
-    let mut head_row = iced_widget::row![
-        token_trend_head_gold(),
-        iced_widget::Space::new()
-            .width(Length::Fill)
-            .height(Length::Shrink),
-    ]
-    .align_y(iced_widget::core::alignment::Vertical::Center)
-    .spacing(8);
-    if io_has {
-        head_row = head_row.push(trend_window_tag(format!(
-            "Input/Output({}/{IO_TREND_WINDOW}days)",
-            format_count(trend_total(&io))
-        )));
-    }
+    // 2026-09-16 用户纠正:这里不再走专属金色标题,改回跟 Session 趋势/每日
+    // 用量统计等其余小节一致的 `home_section_head`(圆点 + cream 文字)——早前
+    // 2026-09-14 用金色跟别的小节区分开的做法作废。
+    let head_row = home_section_head("Token 趋势");
+
+    // 2026-09-16 用户要求:汇总标注(子标题)靠左、色点图例(区分 Input/cyan
+    // 与 Output/purple、读/lime 与 写/green)靠右,中间用 `Space::Fill` 撑开;
+    // 且子标题要跟上面 "Token 趋势" 的**文字**左对齐(用 `align_to_section_title`
+    // 收进 `SECTION_BODY_INSET`),不是跟它的圆点图标对齐。
+    let io_header = io_has.then(|| {
+        align_to_section_title(
+            iced_widget::row![
+                trend_window_tag(format!(
+                    "Input/Output({}/{IO_TREND_WINDOW}days)",
+                    format_count(trend_total(&io))
+                )),
+                iced_widget::Space::new()
+                    .width(Length::Fill)
+                    .height(Length::Shrink),
+                trend_legend(&io_series),
+            ]
+            .align_y(iced_widget::core::alignment::Vertical::Center)
+            .spacing(10)
+            .into(),
+        )
+    });
 
     if !io_has && !cache_has {
         return None;
     }
 
     let cache_header = cache_has.then(|| {
-        trend_window_tag(format!(
-            "Cache read/write({}/{CACHE_TREND_WINDOW}days)",
-            format_count(trend_total(&cache))
-        ))
+        align_to_section_title(
+            iced_widget::row![
+                trend_window_tag(format!(
+                    "Cache read/write({}/{CACHE_TREND_WINDOW}days)",
+                    format_count(trend_total(&cache))
+                )),
+                iced_widget::Space::new()
+                    .width(Length::Fill)
+                    .height(Length::Shrink),
+                trend_legend(&cache_series),
+            ]
+            .align_y(iced_widget::core::alignment::Vertical::Center)
+            .spacing(10)
+            .into(),
+        )
     });
 
-    // io 有数据时,标题(挂在 `head_row`)和它的图表照旧用 `SECTION_CHART_GAP`;
-    // Cache read/write 这一小节整体跟前面的 IO 图表用更大的 `SUBSECTION_GAP`
-    // 隔开——2026-09-14 用户要求这个小标题上下更疏朗一些,让它读起来是独立
-    // 的第二个小节,而不是紧贴着上一张图。io 缺失时(只剩 Cache)标题仍直接
-    // 挂在 `head_row` 上,跟自己的图表保持普通的 `SECTION_CHART_GAP`。
+    // io 有数据时,标题(挂在 `head_row`)、它的图例行(`io_header`)和图表照旧
+    // 用 `SECTION_CHART_GAP`;Cache read/write 这一小节整体跟前面的 IO 图表用
+    // 更大的 `SUBSECTION_GAP` 隔开——2026-09-14 用户要求这个小标题上下更疏朗
+    // 一些,让它读起来是独立的第二个小节,而不是紧贴着上一张图。io 缺失时
+    // (只剩 Cache)标题仍直接挂在 `head_row` 上,跟自己的图表保持普通的
+    // `SECTION_CHART_GAP`。
     let section: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        match (io_has, cache_header) {
-            (true, Some(cache_header)) => column![
-                column![head_row, trend_line_chart(&io, &io_series)].spacing(SECTION_CHART_GAP),
+        match (io_has, io_header, cache_header) {
+            (true, Some(io_header), Some(cache_header)) => column![
+                column![head_row, io_header, trend_line_chart(&io, &io_series)]
+                    .spacing(SECTION_CHART_GAP),
                 column![cache_header, trend_line_chart(&cache, &cache_series)]
                     .spacing(SECTION_CHART_GAP),
             ]
             .spacing(SUBSECTION_GAP)
             .into(),
-            (true, None) => column![head_row, trend_line_chart(&io, &io_series)]
-                .spacing(SECTION_CHART_GAP)
-                .into(),
-            (false, Some(cache_header)) => column![
+            (true, Some(io_header), None) => {
+                column![head_row, io_header, trend_line_chart(&io, &io_series)]
+                    .spacing(SECTION_CHART_GAP)
+                    .into()
+            }
+            (false, _, Some(cache_header)) => column![
                 head_row,
                 cache_header,
                 trend_line_chart(&cache, &cache_series)
             ]
             .spacing(SECTION_CHART_GAP)
             .into(),
-            (false, None) => unreachable!("!io_has && !cache_has 已在上面提前返回"),
+            (false, _, None) => unreachable!("!io_has && !cache_has 已在上面提前返回"),
+            (true, None, _) => {
+                unreachable!("io_header 与 io_has 同源于 `.then()`,io_has 为真时必为 Some")
+            }
         };
     Some(section)
 }

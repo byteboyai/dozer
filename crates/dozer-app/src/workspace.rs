@@ -491,6 +491,7 @@ impl Workspace {
             let tab_id = next_tab_id;
             next_tab_id += 1;
             let mut model = TerminalModel::new(DEFAULT_COLS, DEFAULT_ROWS);
+            model.set_answer_dynamic_color(info.agent == AgentKind::Opencode);
             let _ = model.feed(&snapshot); // 快照回放：陈旧查询应答不可补发，丢弃
             let forwarder =
                 io.handle
@@ -1653,6 +1654,7 @@ impl Workspace {
             return;
         };
         let mut model = TerminalModel::new(cols, rows);
+        model.set_answer_dynamic_color(info.agent == AgentKind::Opencode);
         let _ = model.feed(&snapshot);
         let ssh_backend = self.ssh_out_pending.remove(&tab_id);
         let is_ssh = ssh_backend.is_some();

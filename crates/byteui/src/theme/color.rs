@@ -77,15 +77,15 @@ impl ColorTokens {
     /// 暖白/暖灰，避免与 `gold`(甲方动作专属)"暖调即品牌"的印象冲突。
     pub const fn byteboy2077_light() -> Self {
         Self {
-            bg: c(0xf1, 0xf4, 0xf6),
-            panel: c(0xf8, 0xfa, 0xfb),
+            bg: c(0xff, 0xfd, 0xf6),
+            panel: c(0xfe, 0xf5, 0xe6),
             term_bg: c(0xfc, 0xfd, 0xfe),
-            card: c(0xff, 0xff, 0xff),
+            card: c(0xfe, 0xfd, 0xfb),
             border: c(0xd7, 0xdf, 0xe5),
             cream: c(0x16, 0x23, 0x2e),
-            body: c(0x4c, 0x5c, 0x68),
-            dim: c(0x8b, 0x98, 0xa2),
-            gold: c(0xad, 0x7d, 0x0a),
+            body: c(0x36, 0x42, 0x4e),
+            dim: c(0x4c, 0x5c, 0x68),
+            gold: c(0xfc, 0xc8, 0x00),
             cyan: c(0x0e, 0x8a, 0x9e),
             green: c(0x12, 0x8f, 0x5a),
             purple: c(0x6a, 0x4f, 0xdb),
@@ -101,9 +101,9 @@ impl ColorTokens {
                 b: 0x14 as f32 / 255.0,
                 a: 0.4,
             },
-            tab_active_border: c(0xc9, 0xa2, 0x27),
-            tab_active_bg: c(0xea, 0xef, 0xf2),
-            tab_hover: c(0xea, 0xef, 0xf2),
+            tab_active_border: c(0x65, 0x88, 0x9e),
+            tab_active_bg: c(0x98, 0xb6, 0xc1),
+            tab_hover: c(0xa3, 0xd2, 0xe2),
             desc_bg: c(0xea, 0xef, 0xf2),
         }
     }
@@ -248,8 +248,9 @@ mod tests {
     #[test]
     fn byteboy2077_light_bg_matches_hex() {
         let t = ColorTokens::byteboy2077_light();
-        assert_eq!(t.bg, Color::from_rgb8(0xf1, 0xf4, 0xf6));
-        assert_eq!(t.gold, Color::from_rgb8(0xad, 0x7d, 0x0a));
+        assert_eq!(t.bg, Color::from_rgb8(0xff, 0xfd, 0xf6));
+        assert_eq!(t.panel, Color::from_rgb8(0xfe, 0xf5, 0xe6));
+        assert_eq!(t.gold, Color::from_rgb8(0xfc, 0xc8, 0x00));
         assert_eq!(t.cream, Color::from_rgb8(0x16, 0x23, 0x2e));
     }
 
