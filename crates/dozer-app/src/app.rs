@@ -5074,11 +5074,22 @@ impl App {
                 });
             }
             Message::ProjectAddMenuToggle => {
-                self.project_add_menu_open = !self.project_add_menu_open;
-                if self.project_add_menu_open {
-                    // 点"＋"时的光标逻辑坐标,作为菜单弹出锚点——同
-                    // `todo::set_calendar_anchor`/`set_dispatch_anchor` 手法。
-                    self.project_add_menu_anchor = self.last_cursor;
+                #[cfg(target_os = "macos")]
+                {
+                    let last_cursor = self.last_cursor;
+                    let items = crate::topbar::project_add_menu_items(self);
+                    if let Some(msg) = crate::native_menu::show(items, last_cursor) {
+                        self.update(msg);
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    self.project_add_menu_open = !self.project_add_menu_open;
+                    if self.project_add_menu_open {
+                        // 点"＋"时的光标逻辑坐标,作为菜单弹出锚点——同
+                        // `todo::set_calendar_anchor`/`set_dispatch_anchor` 手法。
+                        self.project_add_menu_anchor = self.last_cursor;
+                    }
                 }
             }
             Message::ProjectAddMenuClose => {
