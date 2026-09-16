@@ -20,7 +20,7 @@
       "gap": 12
     },
     "project_pane": {
-      "background": "PANEL",
+      "background": "BG",
       "border": null,
       "padding": 8,
       "gap": 2
@@ -38,7 +38,7 @@
       "gap": 4
     },
     "agent_list_pane": {
-      "background": "PANEL",
+      "background": "BG",
       "border": null,
       "padding": [6, 12, 12, 12],
       "gap": 8
@@ -50,7 +50,7 @@
       "gap": 4
     },
     "conversation_list_pane": {
-      "background": "PANEL",
+      "background": "BG",
       "border": null,
       "padding": 12,
       "gap": 8
