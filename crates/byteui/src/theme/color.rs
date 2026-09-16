@@ -85,7 +85,7 @@ impl ColorTokens {
             cream: c(0x16, 0x23, 0x2e),
             body: c(0x36, 0x42, 0x4e),
             dim: c(0x4c, 0x5c, 0x68),
-            gold: c(0xfc, 0xc8, 0x00),
+            gold: c(0x11, 0x8b, 0x96),
             cyan: c(0x0e, 0x8a, 0x9e),
             green: c(0x12, 0x8f, 0x5a),
             purple: c(0x6a, 0x4f, 0xdb),
@@ -249,8 +249,8 @@ mod tests {
     fn byteboy2077_light_bg_matches_hex() {
         let t = ColorTokens::byteboy2077_light();
         assert_eq!(t.bg, Color::from_rgb8(0xff, 0xfd, 0xf6));
-        assert_eq!(t.panel, Color::from_rgb8(0xfe, 0xf5, 0xe6));
-        assert_eq!(t.gold, Color::from_rgb8(0xfc, 0xc8, 0x00));
+        assert_eq!(t.panel, Color::from_rgb8(0xfe, 0xf2, 0xe4));
+        assert_eq!(t.gold, Color::from_rgb8(0x11, 0x8b, 0x96));
         assert_eq!(t.cream, Color::from_rgb8(0x16, 0x23, 0x2e));
     }
 
