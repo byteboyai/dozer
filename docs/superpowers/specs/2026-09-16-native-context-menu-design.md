@@ -101,3 +101,25 @@ pub fn show<Msg: Clone>(
 - **内部一致性**:三处调用点(Files/Project/输入框)统一走 `native_menu::show` 同一接口;非 mac 平台明确保留旧路径,不产生"该平台完全没有右键菜单"的缺口;`webview_hidden_by_panel_popup` 明确只保留 Conversations 分支,Files/Project 分支的删除范围与"要清理的旧代码"一节对应一致。
 - **范围检查**:聚焦 3 个触发点 + 1 个新模块,不牵动其余 7 处 `crate::menu.rs` 消费方,足够作为单个实现计划的输入,不需要再拆子项目。
 - **歧义检查**:`view_pos` 的 Y 轴方向留了"实现阶段人工验证确认,必要时翻转"的开放项,已明确标注为非架构性风险,不是遗漏。
+
+## 实现阶段的偏差记录(2026-09-16)
+
+- "要清理的旧代码"一节描述的字段/函数删除**未执行**:Rust 的 `#[cfg]`
+  不能挂在 `if/else if` 链的单个分支上,物理删除这些字段需要先把
+  `app.rs` 顶层浮层的 if-chain 重构成 `#[cfg]` 友好的结构(如 `match`),
+  对本次目标(消除 z-order 冲突)没有必要的收益,风险却不小。实际做法是
+  "mac 平台永远不再把这些 `Option` 字段设成 `Some`",等价于它们被删除的
+  运行时效果,旧渲染分支/`webview_hidden_by_panel_popup` 判断在 mac 上
+  天然不会触发,保留在源码里但是死代码。真正物理删除可以作为一次独立、
+  低优先级的清理 plan 另开。
+- 实现中发现的两处 spec 未预料到的细节,已按实际 API 修正,对外签名不变:
+  ①`IconKind::bytes()` 原为私有,`native_menu` 跨 crate 调用需改为 `pub`,
+  并给 `IconKind` 派生 `Hash`(图标缓存键用);②`NSImage` 在 `objc2-app-kit`
+  里是 `AnyThread`(非 `MainThreadOnly`),故 `NSImage::alloc()` 无 `mtm`
+  参数,而 `NSMenu`/`NSMenuItem`/`NSView` 仍是 `MainThreadOnly` 需
+  `alloc(mtm)`——两类调用按各自线程亲和性区分。
+- `thread_local!` 而非 spec 里写的 `Mutex<Option<*mut NSView>>` /
+  `OnceLock<Mutex<HashMap>>`:裸指针和 `Retained<NSImage>`(`MainThreadOnly`)
+  都不是 `Send`/`Sync`,放不进 `Mutex`/`OnceLock` 静态;改用与
+  `main.rs::FILE_DRAG_CONTENT_VIEW` 同款的 `thread_local!`(`Cell`/`RefCell`),
+  整条调用链本就限定主线程,不损失正确性。
