@@ -19,7 +19,7 @@ use std::rc::Rc;
 /// 一致：Black/Red/Green/Yellow/Blue/Magenta/Cyan/White，随后是对应的
 /// Bright 变体。
 const ANSI16_DARK: [(u8, u8, u8); 16] = [
-    (0x08, 0x14, 0x1d), // Black
+    (0x0a, 0x0e, 0x16), // Black
     (0xFF, 0x6E, 0x6E), // Red
     (0x1A, 0xD5, 0x85), // Green
     (0xF2, 0xD9, 0x4E), // Yellow
@@ -38,9 +38,9 @@ const ANSI16_DARK: [(u8, u8, u8); 16] = [
 ];
 
 /// ANSI 16 色的浅色主题 RGB 表，逐项对应 `design/浅色配色表.html` 的终端
-/// 色板提案表。下标含义同 `ANSI16_DARK`。
+/// 色板表。下标含义同 `ANSI16_DARK`。
 const ANSI16_LIGHT: [(u8, u8, u8); 16] = [
-    (0xfc, 0xfd, 0xfe), // Black ≈ term_bg
+    (0xfe, 0xf2, 0xe4), // Black ≈ term_bg
     (0xd1, 0x48, 0x3f), // Red
     (0x12, 0x8f, 0x5a), // Green
     (0xc9, 0xa2, 0x27), // Yellow(浅色版不再与 gold 同值)
@@ -722,17 +722,17 @@ mod tests {
     }
 
     /// 防漂移锚：浅色 ANSI16 必须和 `design/浅色配色表.html` 的终端色板
-    /// 提案表逐项一致，且切换随 `byteui::theme::color::current_scheme()`
+    /// 表逐项一致，且切换随 `byteui::theme::color::current_scheme()`
     /// 立即生效，不需要重开终端。
     #[test]
     fn ansi16_color_reflects_light_scheme() {
         let _guard = lock_scheme();
         byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Light);
-        assert_eq!(ansi16_color(0), Some((0xfc, 0xfd, 0xfe))); // Black ≈ term_bg
+        assert_eq!(ansi16_color(0), Some((0xfe, 0xf2, 0xe4))); // Black ≈ term_bg
         assert_eq!(ansi16_color(1), Some((0xd1, 0x48, 0x3f))); // Red
         assert_eq!(ansi16_color(3), Some((0xc9, 0xa2, 0x27))); // Yellow(浅色版不再与 gold 同值)
         byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Dark);
-        assert_eq!(ansi16_color(0), Some((0x08, 0x14, 0x1d)));
+        assert_eq!(ansi16_color(0), Some((0x0a, 0x0e, 0x16)));
     }
 
     #[test]
@@ -761,7 +761,7 @@ mod tests {
         let mut t = TerminalModel::new(40, 10);
         t.set_answer_dynamic_color(true);
         let responses = t.feed(b"\x1b]11;?\x07");
-        assert_eq!(responses, b"\x1b]11;rgb:0808/1414/1d1d\x07");
+        assert_eq!(responses, b"\x1b]11;rgb:0a0a/0e0e/1616\x07");
     }
 
     #[test]
@@ -782,6 +782,6 @@ mod tests {
         t.set_answer_dynamic_color(true);
         let responses = t.feed(b"\x1b]11;?\x07");
         byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Dark);
-        assert_eq!(responses, b"\x1b]11;rgb:fcfc/fdfd/fefe\x07");
+        assert_eq!(responses, b"\x1b]11;rgb:fefe/f2f2/e4e4\x07");
     }
 }

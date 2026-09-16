@@ -43,7 +43,7 @@ impl ColorTokens {
         Self {
             bg: c(0x0a, 0x0e, 0x16),
             panel: c(0x0a, 0x0e, 0x16),
-            term_bg: c(0x08, 0x14, 0x1d),
+            term_bg: c(0x0a, 0x0e, 0x16),
             card: c(0x12, 0x20, 0x2a),
             border: c(0x1c, 0x34, 0x40),
             cream: c(0xFF, 0xE5, 0xB4),
@@ -72,14 +72,14 @@ impl ColorTokens {
         }
     }
 
-    /// 逐一对应 `design/浅色配色表.html` 的语义色板提案表(23 项),与
+    /// 逐一对应 `design/浅色配色表.html` 的语义色板表(23 项),与
     /// `byteboy2077()` 同源中性色相(navy `bg` #0a0e16)提亮而来，不用
     /// 暖白/暖灰，避免与 `gold`(甲方动作专属)"暖调即品牌"的印象冲突。
     pub const fn byteboy2077_light() -> Self {
         Self {
             bg: c(0xff, 0xfd, 0xf6),
             panel: c(0xfe, 0xf2, 0xe4),
-            term_bg: c(0xfc, 0xfd, 0xfe),
+            term_bg: c(0xfe, 0xf2, 0xe4),
             card: c(0xfe, 0xfd, 0xfb),
             border: c(0xd7, 0xdf, 0xe5),
             cream: c(0x16, 0x23, 0x2e),
@@ -244,7 +244,7 @@ mod tests {
     }
 
     /// 防漂移锚：`byteboy2077_light()` 的取值必须和 `design/浅色配色表.html`
-    /// 的语义色板提案表逐项一致。
+    /// 的语义色板表逐项一致。
     #[test]
     fn byteboy2077_light_bg_matches_hex() {
         let t = ColorTokens::byteboy2077_light();

@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Dozer · Daylight 浅色配色表(提案)</title>
+<title>Dozer · Daylight 浅色配色表</title>
 <style>
   :root {
     --bg: #fffdf6;
     --panel: #fef2e4;
-    --term-bg: #fcfdfe;
+    --term-bg: #fef2e4;
     --card: #fefdfb;
     --border: #d7dfe5;
     --cream: #16232e;
@@ -183,11 +183,12 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>Dozer · Daylight 浅色配色表(提案)</h1>
+    <h1>Dozer · Daylight 浅色配色表</h1>
     <p>
-      以 <code>crates/byteui/src/theme/color.rs</code> 的 <code>ColorTokens::byteboy2077()</code>
-      (语义色板)与 <code>crates/dozer-app/src/term_model.rs</code> 的 <code>ANSI16</code>
-      (终端色板)为基准,逐一映射出的浅色版本。中性色取暗色 <code>bg #0a0e16</code>
+      以 <code>crates/byteui/src/theme/color.rs</code> 的
+      <code>ColorTokens::byteboy2077_light()</code>(语义色板)与
+      <code>crates/dozer-app/src/term_model.rs</code> 的 <code>ANSI16_LIGHT</code>
+      (终端色板)为基准,是已落地的浅色主题取值。中性色取暗色 <code>bg #0a0e16</code>
       同一 navy 色相提亮而来,不用暖白/暖灰,避免被金色抢走"暖调即品牌"的印象。
       点击任意色块可复制十六进制值。
     </p>
@@ -196,7 +197,7 @@
       专属色,不用于语法高亮等其它场景;需要"警示黄/强调黄"角色时用终端 BrightYellow
       (<code>#8A7A12</code>,浅色版对应暗色 #FFF3B0),不是 gold。见项目 CLAUDE.md。
     </div>
-    <span class="draft-flag">提案 · 尚未写入源码</span>
+    <span class="draft-flag">已落地 · 现行浅色主题</span>
   </header>
 
   <section>
@@ -233,10 +234,11 @@
   </section>
 
   <footer>
-    这是配色<b>提案</b>,不是从源码提取——现行代码只有一份暗色 <code>ColorTokens::byteboy2077()</code>。
-    落地时建议新增 <code>ColorTokens::daylight()</code> 与之并列,经 <code>set_theme</code>
-    运行时切换,不改动现行暗色默认值;届时把这份表格换成跟 <code>配色表.html</code> 一样
-    "直接读源码常量"的生成方式,保持两份表格同步。<br />
+    现行代码已提供暗色 <code>ColorTokens::byteboy2077()</code> 与浅色
+    <code>ColorTokens::byteboy2077_light()</code> 两份语义色板,经 <code>set_theme</code>
+    运行时切换(<code>current_scheme()</code> 决定终端 ANSI16 取值);暗色仍是编译期默认值。
+    本表数值与源码保持一致,后续若继续沿用 <code>配色表.html</code> 那样"直接读源码常量"的
+    生成方式,可彻底杜绝两份表格漂移。<br />
     语义色板 23 项、终端 ANSI16 共 16 项,与暗色版 <code>配色表.html</code> 逐项对应。
   </footer>
 </div>
@@ -246,7 +248,7 @@ const semantic = {
   surface: [
     ["bg", "#fffdf6", "#0a0e16", "主背景"],
     ["panel", "#fef2e4", "#0a0e16", "面板背景"],
-    ["term_bg", "#fcfdfe", "#08141d", "终端背景"],
+    ["term_bg", "#fef2e4", "#0a0e16", "终端背景(与 panel 同值)"],
     ["card", "#fefdfb", "#12202a", "卡片/弹层底色"],
     ["border", "#d7dfe5", "#1c3440", "描边"],
   ],
@@ -277,7 +279,7 @@ const semantic = {
 };
 
 const ansiNormal = [
-  ["Black", "#fcfdfe", "#08141d", "≈ term_bg,浅色版延续「背景兼职黑」约定"],
+  ["Black", "#fef2e4", "#0a0e16", "≈ term_bg,浅色版延续「背景兼职黑」约定"],
   ["Red", "#d1483f", "#ff6e6e", null],
   ["Green", "#128f5a", "#1ad585", null],
   ["Yellow", "#c9a227", "#f2d94e", null],
