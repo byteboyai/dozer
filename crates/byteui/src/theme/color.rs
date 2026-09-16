@@ -38,10 +38,19 @@ pub struct ColorTokens {
 }
 
 impl ColorTokens {
-    /// 逐一对应 `crates/dozer-app/src/theme/color.rs` 的锁死值,禁止改动。
+    /// `bg`/`panel`(`term_bg` 跟 `panel` 同值)2026-09-16 起拆成两个不同
+    /// 数值——此前三者恒等,面板背景语义上分"可收缩的 list 侧用 bg、不可
+    /// 收缩的 content 侧用 panel"(见 dozer-app 的
+    /// `theme::region::{project_pane,agent_list_pane,conversation_list_pane}`
+    /// 等区域 JSON),浅色主题本就两值不同,深色缺这个区分度、用户要求补上。
+    /// `panel` 保留原有数值(终端/内容区视觉不变),`bg` 提亮一档给 list 侧
+    /// 一点分离感,同色系不出戏。此前这里写"逐一对应
+    /// crates/dozer-app/src/theme/color.rs 的锁死值,禁止改动"——那份文件
+    /// 在 byteui 颜色迁移系列完工后已删除,颜色 token 唯一来源就是这里,
+    /// 说明已过期一并去掉。
     pub const fn byteboy2077() -> Self {
         Self {
-            bg: c(0x0a, 0x0e, 0x16),
+            bg: c(0x0d, 0x13, 0x1c),
             panel: c(0x0a, 0x0e, 0x16),
             term_bg: c(0x0a, 0x0e, 0x16),
             card: c(0x12, 0x20, 0x2a),
@@ -211,9 +220,9 @@ mod tests {
     #[test]
     fn byteboy2077_bg_matches_hex() {
         let t = ColorTokens::byteboy2077();
-        assert_eq!(t.bg.r, 0x0a as f32 / 255.0);
-        assert_eq!(t.bg.g, 0x0e as f32 / 255.0);
-        assert_eq!(t.bg.b, 0x16 as f32 / 255.0);
+        assert_eq!(t.bg.r, 0x0d as f32 / 255.0);
+        assert_eq!(t.bg.g, 0x13 as f32 / 255.0);
+        assert_eq!(t.bg.b, 0x1c as f32 / 255.0);
     }
 
     #[test]

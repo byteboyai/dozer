@@ -480,7 +480,7 @@ mod tests {
         // 软阴影一起近似"浮起且透光"的质感)。alpha 0xfa(≈0.98,2026-09-13
         // 用户反馈原 0xf0/0.94 透得太明显、菜单后面内容看着太清楚,调高压
         // 暗透光,仍留一丝透明感而非彻底不透明)。
-        assert_eq!(s.background, Some(parse_hex_color("#0a0e16fa")));
+        assert_eq!(s.background, Some(parse_hex_color("#0d131cfa")));
         let border = s.border.expect("context_menu 应有边框");
         assert_eq!(border.color, byteui::theme::color::current().border);
         assert_eq!(border.width, 1.0);
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn hex_color_matches_equivalent_token() {
         let _guard = lock_scheme();
-        assert_eq!(resolve_color("#0a0e16"), byteui::theme::color::current().bg);
+        assert_eq!(resolve_color("#0d131c"), byteui::theme::color::current().bg);
         assert_eq!(
             resolve_color("#12202a"),
             byteui::theme::color::current().card

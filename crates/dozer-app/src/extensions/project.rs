@@ -712,10 +712,13 @@ pub fn dir_size_excluding(root: &std::path::Path, exclude: &[&str]) -> u64 {
     total
 }
 
-/// 面板主入口(单栏,不与任何其它面板配对——同 GitLog/Usage)。`project` 为
-/// `None` 时内核不会真正走到这里(`left_panel_area` 对 `PanelKind::Project`
-/// 无条件调用本函数,但 `App::view()` 顶层只在有聚焦项目时才会渲染到这个
-/// 分支),这里仍保留一次防御性判断,风格对齐 Files 试点。
+/// 面板主入口——`project` 为 `None` 时内核不会真正走到这里
+/// (`left_panel_area` 对 `PanelKind::Project` 无条件调用本函数,但
+/// `App::view()` 顶层只在有聚焦项目时才会渲染到这个分支),这里仍保留一次
+/// 防御性判断,风格对齐 Files 试点。这是配对布局里**可收起的 list 侧**
+/// (与 `project_preview_pane` 配对,`app.rs` 的 `PanelKind::Project` 分支
+/// 里 `app.list_collapsed(PanelKind::Project)` 收起的就是这块;上面这句
+/// 旧注释说"单栏不配对"已经不对,大概是配对/收起功能后补的遗留)。
 pub fn view<'a>(
     ws_state: &'a WorkspaceState,
     project: Option<&'a ProjectInfo>,
@@ -968,7 +971,15 @@ pub fn view<'a>(
             .height(Length::Fill)
             .style(
                 move |_t: &iced_widget::Theme| iced_widget::container::Style {
-                    background: Some(byteui::theme::color::current().panel.into()),
+                    // 可收起的 list 侧用 `bg`,不用 `panel`——`panel` 是配对
+                    // 布局里不可收起那侧(`project_preview_pane`)的色,此前
+                    // 这里写成 `panel` 在深色主题因 `bg == panel` 看不出来,
+                    // 浅色/深色拆开后穿帮(2026-09-16 用户反馈"浅色主题-
+                    // 项目面板的可收起部分颜色不对")。其它配对面板(Files/
+                    // Todo/SSH/Database/Agent/Conversations)要么走
+                    // `theme::region::project_pane()`(已改 BG)要么直接硬编
+                    // 码 `bg`,只有这里当时手滑写成了 `panel`。
+                    background: Some(byteui::theme::color::current().bg.into()),
                     border: outer,
                     ..iced_widget::container::Style::default()
                 },
