@@ -226,6 +226,7 @@ mod menu_item_view {
         NSTrackingAreaOptions, NSView,
     };
     use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+    use objc2_quartz_core::CALayer;
     use std::cell::Cell;
 
     /// hover 高亮的圆角半径,对齐 `crate::menu.rs` 里 iced 版菜单项的
@@ -234,14 +235,19 @@ mod menu_item_view {
 
     /// 自定义菜单项 view 的实例状态:命中的下标(点击时回填
     /// `SELECTED_INDEX` 用)+ 是否可点(锁定项不接 hover/点击)+ 当前是否
-    /// 悬停(`mouseEntered:`/`mouseExited:` 翻转,驱动 `layer.backgroundColor`
+    /// 悬停(`mouseEntered:`/`mouseExited:` 翻转,驱动 `highlight`
     /// 高亮——`NSMenuItem` 挂了自定义 `view` 后 AppKit 不会自动画选中态,
     /// 必须自己维护这个状态并据此改层背景色,不能只靠 `setNeedsDisplay`
     /// (没有 `drawRect:` 覆写,那样什么也不会变)。
+    /// `highlight` 是整行自身图层之上的一块独立子图层,左右各留出一截
+    /// margin 再画背景色——不能直接用整行自身的根图层(那样高亮会顶到
+    /// 行的左右边缘,贴着菜单外框,跟 iced 版菜单/系统原生菜单的"高亮块比
+    /// 整行窄一圈"观感不一致)。
     pub struct Ivars {
         index: usize,
         enabled: bool,
         hovered: Cell<bool>,
+        highlight: Retained<CALayer>,
     }
 
     define_class!(
@@ -282,13 +288,10 @@ mod menu_item_view {
     );
 
     impl MenuItemView {
-        /// 按 `hovered` 当前值把层背景设成 `TAB_HOVER` 色或透明——
-        /// `mouseEntered:`/`mouseExited:`/`new()` 初始化都调这个,保持单一
-        /// 落笔点。
+        /// 按 `hovered` 当前值把 `highlight` 子图层背景设成 `TAB_HOVER` 色
+        /// 或透明——`mouseEntered:`/`mouseExited:` 都调这个,保持单一落笔点。
         fn apply_hover_background(&self) {
-            let Some(layer) = self.layer() else {
-                return;
-            };
+            let highlight = &self.ivars().highlight;
             if self.ivars().hovered.get() {
                 let hover = byteui::theme::color::current().tab_hover;
                 let ns_color = NSColor::colorWithRed_green_blue_alpha(
@@ -297,9 +300,9 @@ mod menu_item_view {
                     hover.b as f64,
                     hover.a as f64,
                 );
-                layer.setBackgroundColor(Some(&ns_color.CGColor()));
+                highlight.setBackgroundColor(Some(&ns_color.CGColor()));
             } else {
-                layer.setBackgroundColor(None);
+                highlight.setBackgroundColor(None);
             }
         }
 
@@ -327,11 +330,22 @@ mod menu_item_view {
             let text_height = font_size + 4.0;
             let content_height = icon_px.max(text_height);
             let row_height = content_height + pad_v * 2.0;
+            // hover 高亮块左右各让开一截,不贴着整行的左右边缘——复用
+            // `menu_pad_h`(已含全局 scale),和行内容本身的左右内边距共用
+            // 同一个量纲,不另开一个无关常量。
+            let highlight_margin = pad_h;
+            let highlight = CALayer::new();
+            highlight.setFrame(NSRect::new(
+                NSPoint::new(highlight_margin, 0.0),
+                NSSize::new((row_width - highlight_margin * 2.0).max(0.0), row_height),
+            ));
+            highlight.setCornerRadius(HOVER_RADIUS);
 
             let this = mtm.alloc::<Self>().set_ivars(Ivars {
                 index,
                 enabled,
                 hovered: Cell::new(false),
+                highlight,
             });
             let this: Retained<Self> = unsafe {
                 msg_send![
@@ -342,7 +356,7 @@ mod menu_item_view {
 
             this.setWantsLayer(true);
             if let Some(layer) = this.layer() {
-                layer.setCornerRadius(HOVER_RADIUS);
+                layer.addSublayer(&this.ivars().highlight);
             }
             let owner: &objc2::runtime::AnyObject = &this;
             let tracking = unsafe {
