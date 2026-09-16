@@ -762,3 +762,69 @@ mod live_connection_tests {
         } // 超时或连接已关闭,都是期望结果
     }
 }
+
+pub(crate) fn sweep_stale_locks(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("lock") {
+            continue;
+        }
+        let parsed = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<LockFileContents>(&raw).ok());
+        match parsed {
+            Some(contents) if pid_is_alive(contents.pid) => {}
+            _ => {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn pid_is_alive(pid: u32) -> bool {
+    // signal 0:不真的发信号,只用来探测目标 pid 是否存在/是否有权限操作它。
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn pid_is_alive(_pid: u32) -> bool {
+    true // 非 unix 平台(项目当前 mac 先发,未覆盖):保守起见当作存活,不清理
+}
+
+#[cfg(test)]
+mod sweep_tests {
+    use super::*;
+
+    #[test]
+    fn sweep_removes_dead_pid_keeps_alive_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let alive_pid = std::process::id(); // 用当前测试进程自己的 pid 模拟"存活"
+        write_lock_file(dir.path(), 1, "/repo/a", "tok-a", alive_pid).unwrap();
+        write_lock_file(dir.path(), 2, "/repo/b", "tok-b", 999_999).unwrap(); // 几乎不可能存在的 pid
+        sweep_stale_locks(dir.path());
+        let mut remaining: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        remaining.sort();
+        assert_eq!(remaining, vec!["1.lock".to_string()]);
+    }
+
+    #[test]
+    fn sweep_removes_unparseable_lock_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("garbage.lock"), "not json").unwrap();
+        sweep_stale_locks(dir.path());
+        assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn sweep_on_missing_dir_is_a_harmless_noop() {
+        sweep_stale_locks(Path::new("/tmp/dozer-ide-bridge-sweep-test-missing-dir"));
+    }
+}
