@@ -8,8 +8,8 @@ use iced_widget::core::Color;
 
 use objc2::rc::Retained;
 use objc2::{AnyThread, MainThreadOnly};
-use objc2_app_kit::{NSImage, NSMenu, NSMenuItem, NSView};
-use objc2_foundation::{NSData, NSPoint, NSString};
+use objc2_app_kit::{NSColor, NSImage, NSMenu, NSMenuItem, NSView};
+use objc2_foundation::{NSData, NSPoint, NSRect, NSSize, NSString};
 
 /// 一条原生菜单描述——调用方只管拼数据,不碰 AppKit。
 pub enum Item<Msg> {
@@ -124,6 +124,52 @@ fn icon_size_px() -> u32 {
     byteui::theme::icon_size::row().round() as u32
 }
 
+/// 菜单整行宽 + 左右 margin——`menu_item_view::MenuItemView` 的 hover 高亮
+/// 和分隔线共用同一份数字,保证两者左右留白严格一致(而不是分隔线走
+/// AppKit 系统默认的 `separatorItem` 内边距、高亮走另一个数,两条各自
+/// 独立算出来的宽度对不上)。
+fn row_geometry() -> (f64, f64) {
+    let row_width = byteui::theme::geometry::menu_item_width() as f64;
+    let margin = byteui::theme::geometry::menu_pad_h() as f64;
+    (row_width, margin)
+}
+
+/// 分隔线:1px `BORDER` 色横线,左右各让开 `row_geometry` 的 margin——同
+/// `menu_item_view::MenuItemView` 的 hover 高亮共享同一条留白规则,不用
+/// `NSMenuItem::separatorItem()` 的系统默认样式(那条线的内边距是系统
+/// 控制的,跟自定义高亮的留白量对不上)。
+fn separator_view(mtm: objc2::MainThreadMarker) -> Retained<NSView> {
+    const SEP_ROW_HEIGHT: f64 = 9.0;
+    let (row_width, margin) = row_geometry();
+    let container = NSView::initWithFrame(
+        NSView::alloc(mtm),
+        NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(row_width, SEP_ROW_HEIGHT),
+        ),
+    );
+    let line = NSView::initWithFrame(
+        NSView::alloc(mtm),
+        NSRect::new(
+            NSPoint::new(margin, (SEP_ROW_HEIGHT - 1.0) / 2.0),
+            NSSize::new((row_width - margin * 2.0).max(0.0), 1.0),
+        ),
+    );
+    line.setWantsLayer(true);
+    if let Some(layer) = line.layer() {
+        let border = byteui::theme::color::current().border;
+        let ns_color = NSColor::colorWithRed_green_blue_alpha(
+            border.r as f64,
+            border.g as f64,
+            border.b as f64,
+            border.a as f64,
+        );
+        layer.setBackgroundColor(Some(&ns_color.CGColor()));
+    }
+    container.addSubview(&line);
+    container
+}
+
 /// 把 `render_icon_pixmap` 的结果编码成 PNG、包成 `NSImage`(经
 /// `NSData::with_bytes` + `NSImage::initWithData`,比手搭
 /// `NSBitmapImageRep` 的裸像素平面初始化器简单可靠——PNG 编解码本身处理
@@ -165,7 +211,10 @@ pub fn show<Msg: Clone>(items: Vec<Item<Msg>>, view_pos: (f32, f32)) -> Option<M
     for (idx, item) in items.into_iter().enumerate() {
         match item {
             Item::Separator => {
-                menu.addItem(&NSMenuItem::separatorItem(mtm));
+                let sep_item = NSMenuItem::new(mtm);
+                sep_item.setEnabled(false);
+                sep_item.setView(Some(&separator_view(mtm)));
+                menu.addItem(&sep_item);
                 msgs.push(None);
             }
             Item::Entry {
@@ -320,19 +369,17 @@ mod menu_item_view {
             index: usize,
         ) -> Retained<Self> {
             let font_size = byteui::theme::font::label() as f64;
-            let pad_h = byteui::theme::geometry::menu_pad_h() as f64;
+            let (row_width, pad_h) = super::row_geometry();
             let pad_v = byteui::theme::geometry::menu_pad_v() as f64;
             let gap = byteui::theme::geometry::menu_gap() as f64;
             let icon_px = super::icon_size_px() as f64;
-            let row_width = byteui::theme::geometry::menu_item_width() as f64;
             // 文字行高留一点余量(字号本身只是字形高度,行框要比它高一圈
             // 才不会顶到边),行高再取"图标/文字谁高就跟谁"+ 上下内边距。
             let text_height = font_size + 4.0;
             let content_height = icon_px.max(text_height);
             let row_height = content_height + pad_v * 2.0;
-            // hover 高亮块左右各让开一截,不贴着整行的左右边缘——复用
-            // `menu_pad_h`(已含全局 scale),和行内容本身的左右内边距共用
-            // 同一个量纲,不另开一个无关常量。
+            // hover 高亮块左右各让开一截,和 `super::separator_view` 的分隔线
+            // 共用同一份 `row_geometry()` margin,保证两者左右留白严格一致。
             let highlight_margin = pad_h;
             let highlight = CALayer::new();
             highlight.setFrame(NSRect::new(
