@@ -307,10 +307,7 @@ mod mapping_tests {
     }
 }
 
-fn tool_call_result(
-    name: &str,
-    ctx: Option<&PreviewContext>,
-) -> Result<serde_json::Value, String> {
+fn tool_call_result(name: &str, ctx: Option<&PreviewContext>) -> Result<serde_json::Value, String> {
     let payload = match name {
         "getCurrentSelection" => selection_result(ctx),
         "getOpenEditors" => open_editors_result(ctx),
@@ -326,7 +323,10 @@ pub(crate) fn handle_rpc_request(
     request: &serde_json::Value,
     ctx: Option<&PreviewContext>,
 ) -> serde_json::Value {
-    let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
+    let id = request
+        .get("id")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
     match method {
         "initialize" => serde_json::json!({
@@ -502,15 +502,19 @@ impl IdeBridgeRegistry {
             }
         };
         let token = generate_token();
-        let lock_path =
-            match write_lock_file(&self.lock_dir, port, workspace_root, &token, std::process::id())
-            {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::warn!(project_id, error = %e, "ide_bridge 写锁文件失败,跳过");
-                    return;
-                }
-            };
+        let lock_path = match write_lock_file(
+            &self.lock_dir,
+            port,
+            workspace_root,
+            &token,
+            std::process::id(),
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(project_id, error = %e, "ide_bridge 写锁文件失败,跳过");
+                return;
+            }
+        };
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let preview_contexts = self.preview_contexts.clone();
         tokio::spawn(run_bridge_listener(

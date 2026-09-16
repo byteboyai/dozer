@@ -1,3 +1,4 @@
+use crate::ide_bridge::IdeBridgeRegistry;
 use crate::preview_context::PreviewContextStore;
 use crate::registry::SessionRegistry;
 use crate::session::{SessionEvent, SessionSpec};
@@ -78,6 +79,9 @@ pub async fn serve(
     in_flight: crate::task_poller::InFlight,
 ) -> Result<()> {
     let preview_contexts = Arc::new(PreviewContextStore::new());
+    let ide_lock_dir = crate::ide_bridge::lock_dir();
+    crate::ide_bridge::sweep_stale_locks(&ide_lock_dir);
+    let ide_bridge = IdeBridgeRegistry::new(ide_lock_dir, preview_contexts.clone());
     if socket.exists() {
         std::fs::remove_file(socket)?;
     }
@@ -98,6 +102,7 @@ pub async fn serve(
         let projects = projects.clone();
         let bookmarks = bookmarks.clone();
         let preview_contexts = preview_contexts.clone();
+        let ide_bridge = ide_bridge.clone();
         let transcripts = transcripts.clone();
         let session_summaries = session_summaries.clone();
         let backfill_registry = backfill_registry.clone();
@@ -111,6 +116,7 @@ pub async fn serve(
                 projects,
                 bookmarks,
                 preview_contexts,
+                ide_bridge,
                 transcripts,
                 session_summaries,
                 backfill_registry,
@@ -294,6 +300,7 @@ async fn handle_conn(
     projects: Arc<crate::projects::ProjectStore>,
     bookmarks: Arc<crate::bookmarks::BookmarkStore>,
     preview_contexts: Arc<PreviewContextStore>,
+    ide_bridge: Arc<IdeBridgeRegistry>,
     transcripts: Arc<crate::transcripts::TranscriptStore>,
     session_summaries: Arc<crate::session_summary::SessionSummaryStore>,
     backfill_registry: Arc<crate::session_summary_backfill::BackfillRegistry>,
@@ -317,8 +324,26 @@ async fn handle_conn(
                     Ok(req) => match req {
                         Request::ListSessions => Reply::Sessions { sessions: registry.list() },
                         Request::CreateSession { name, command, args, cwd, cols, rows, project_id } => {
-                            match registry.create(SessionSpec { name, command, args, cwd, cols, rows, project_id }) {
-                                Ok(s) => Reply::Created { session: s.info() },
+                            match registry.create(SessionSpec { name, command, args, cwd: cwd.clone(), cols, rows, project_id }) {
+                                Ok(s) => {
+                                    ide_bridge.session_started(project_id, &cwd).await;
+                                    let ide_bridge_watch = ide_bridge.clone();
+                                    let mut exit_rx = s.subscribe();
+                                    tokio::spawn(async move {
+                                        loop {
+                                            match exit_rx.recv().await {
+                                                Ok(SessionEvent::Exited { .. }) => {
+                                                    ide_bridge_watch.session_ended(project_id).await;
+                                                    break;
+                                                }
+                                                Ok(_) => continue,
+                                                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                                                Err(broadcast::error::RecvError::Closed) => break,
+                                            }
+                                        }
+                                    });
+                                    Reply::Created { session: s.info() }
+                                }
                                 Err(e) => Reply::Error { message: e.to_string() },
                             }
                         }
@@ -1145,5 +1170,61 @@ mod tests {
             Some("my-conv-id".to_string())
         );
         let _ = s.kill();
+    }
+
+    #[tokio::test]
+    async fn bridge_starts_on_create_and_stops_after_process_exits() {
+        use crate::ide_bridge::IdeBridgeRegistry;
+        use crate::preview_context::PreviewContextStore;
+        use crate::registry::SessionRegistry;
+        use crate::session::SessionSpec;
+        use std::time::Duration;
+
+        fn spec(project_id: i64, cmd: &str) -> SessionSpec {
+            SessionSpec {
+                name: "t".into(),
+                command: "/bin/sh".into(),
+                args: vec!["-c".into(), cmd.into()],
+                cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+                cols: 80,
+                rows: 24,
+                project_id,
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let ide_bridge = IdeBridgeRegistry::new(
+            dir.path().to_path_buf(),
+            Arc::new(PreviewContextStore::new()),
+        );
+        let registry = SessionRegistry::new();
+
+        let s = registry.create(spec(7, "printf ready; sleep 5")).unwrap();
+        ide_bridge.session_started(7, "/repo").await;
+        assert_eq!(ide_bridge.active_projects().await, vec![7]);
+
+        let mut exit_rx = s.subscribe();
+        let ide_bridge_watch = ide_bridge.clone();
+        let watcher = tokio::spawn(async move {
+            loop {
+                match exit_rx.recv().await {
+                    Ok(SessionEvent::Exited { .. }) => {
+                        ide_bridge_watch.session_ended(7).await;
+                        break;
+                    }
+                    Ok(_) => continue,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+
+        registry.kill(s.id()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), watcher)
+            .await
+            .expect("watcher 任务应在超时前结束")
+            .expect("watcher 任务不应 panic");
+
+        assert!(ide_bridge.active_projects().await.is_empty());
     }
 }
