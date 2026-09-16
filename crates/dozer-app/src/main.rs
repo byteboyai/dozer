@@ -2314,6 +2314,10 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 // 见函数文档。
                 #[cfg(target_os = "macos")]
                 install_file_drag_position_tracker(&window);
+                // 原生右键菜单(NSMenu)弹层挂靠的内容 view:记一份裸指针供
+                // `native_menu::show` 后续弹菜单用,见 `native_menu.rs`。
+                #[cfg(target_os = "macos")]
+                native_menu::install_content_view(&window);
 
                 let physical_size = window.inner_size();
                 let viewport = Viewport::with_physical_size(

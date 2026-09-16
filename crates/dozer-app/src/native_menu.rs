@@ -6,6 +6,11 @@
 use byteui::interaction::icons::IconKind;
 use iced_widget::core::Color;
 
+use objc2::rc::Retained;
+use objc2::{AnyThread, MainThreadOnly};
+use objc2_app_kit::{NSImage, NSMenu, NSMenuItem, NSView};
+use objc2_foundation::{NSData, NSPoint, NSString};
+
 /// 一条原生菜单描述——调用方只管拼数据,不碰 AppKit。
 pub enum Item<Msg> {
     Entry {
@@ -50,6 +55,282 @@ fn render_icon_pixmap(kind: IconKind, color: Color, size_px: u32) -> tiny_skia::
         .expect("premultiply 计算结果 r/g/b <= a 恒成立");
     }
     pixmap
+}
+
+// 弹菜单时要挂靠的窗口内容 view——`show()` 是个不持有 `winit::window::Window`
+// 的自由函数,够不到窗口句柄,故在窗口初始化时存一份裸指针在这里(同
+// `main.rs::FILE_DRAG_CONTENT_VIEW` 的既有模式,理由一致:原生回调/独立
+// 调用点没有 `Self::Ready` 字段可用)。只在主线程读写(`install_content_view`
+// 和 `show()` 都在 macOS 主线程),用 `thread_local!` + `Cell` 免加锁。
+// 存活期与窗口本身相同,不需要释放。
+thread_local! {
+    static CONTENT_VIEW: std::cell::Cell<*mut NSView> =
+        const { std::cell::Cell::new(std::ptr::null_mut()) };
+}
+
+// main.rs 窗口初始化时调一次(紧邻 `install_topbar_drag_guard`/
+// `install_file_drag_position_tracker` 的调用点),记下内容 view 供
+// `show()` 后续弹菜单用。
+pub fn install_content_view(window: &winit::window::Window) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::AppKit(ah) = handle.as_raw() else {
+        return;
+    };
+    let ptr = ah.ns_view.as_ptr() as *mut NSView;
+    CONTENT_VIEW.with(|v| v.set(ptr));
+}
+
+fn content_view() -> Option<&'static NSView> {
+    let ptr = CONTENT_VIEW.with(|v| v.get());
+    if ptr.is_null() {
+        return None;
+    }
+    // 安全性同 `main.rs` 里其它读取该类裸指针的场景:只借引用去调只读/
+    // 弹层方法,不持有/释放。
+    Some(unsafe { &*ptr })
+}
+
+/// 一次 `show()` 调用期间,自定义 item view 的 `mouseUp:` 覆写把"选中了
+/// 第几项"写在这里;`popUpMenuPositioningItem_atLocation_inView` 返回后
+/// 读一次、立刻清空。是线程内单发的槽位(菜单是同步阻塞的模态追踪,不会
+/// 有第二个 `show()` 并发进行)。
+static SELECTED_INDEX: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
+
+// 按 `(IconKind, 颜色 ARGB, 像素尺寸)` 缓存栅格化结果,避免同一个图标
+// 每次弹菜单都重新过一遍 `resvg`。整条调用链限定在主线程(AppKit 要求),
+// `Retained<NSImage>` 是 `MainThreadOnly`(非 `Send`),故用 `thread_local!`
+// 而非 `OnceLock`(后者要求 `Sync`)。
+thread_local! {
+    static ICON_CACHE: std::cell::RefCell<std::collections::HashMap<(IconKind, u32, u32), Retained<NSImage>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+fn color_key(color: Color) -> u32 {
+    let (r, g, b, a) = (
+        (color.r * 255.0).round() as u32,
+        (color.g * 255.0).round() as u32,
+        (color.b * 255.0).round() as u32,
+        (color.a * 255.0).round() as u32,
+    );
+    (r << 24) | (g << 16) | (b << 8) | a
+}
+
+/// 把 `render_icon_pixmap` 的结果编码成 PNG、包成 `NSImage`(经
+/// `NSData::with_bytes` + `NSImage::initWithData`,比手搭
+/// `NSBitmapImageRep` 的裸像素平面初始化器简单可靠——PNG 编解码本身处理
+/// 好了预乘 alpha 的语义)。命中缓存直接返回。
+fn icon_image(kind: IconKind, color: Color, size_px: u32) -> Retained<NSImage> {
+    let key = (kind, color_key(color), size_px);
+    if let Some(img) = ICON_CACHE.with(|c| c.borrow().get(&key).cloned()) {
+        return img;
+    }
+    let pixmap = render_icon_pixmap(kind, color, size_px);
+    let png = pixmap.encode_png().expect("tiny-skia PNG 编码不应失败");
+    let data = NSData::with_bytes(&png);
+    let image = NSImage::initWithData(NSImage::alloc(), &data)
+        .expect("PNG 编码出的数据必须能被 NSImage 解出来");
+    ICON_CACHE.with(|c| c.borrow_mut().insert(key, image.clone()));
+    image
+}
+
+/// 同步弹出原生菜单,阻塞到用户选中一项或点外部/按 Esc 取消。`items` 为
+/// 空时直接返回 `None`,不弹菜单。`view_pos` 是内容 view 自己坐标系里的
+/// 一点——和现有 `crate::menu.rs` 弹层用的 `last_right_click()` 是同一份
+/// 逻辑坐标,不需要转换成屏幕坐标(`popUpMenuPositioningItem:atLocation:inView:`
+/// 的 `atLocation:` 就是"目标 view 自己坐标系里的一点")。
+pub fn show<Msg: Clone>(items: Vec<Item<Msg>>, view_pos: (f32, f32)) -> Option<Msg> {
+    if items.is_empty() {
+        return None;
+    }
+    let Some(view) = content_view() else {
+        tracing::warn!("native_menu::show: 内容 view 未注册,跳过弹菜单");
+        return None;
+    };
+    let mtm = objc2::MainThreadMarker::new().expect("show() 只能在主线程调用");
+    *SELECTED_INDEX.lock().unwrap() = None;
+
+    let menu = NSMenu::new(mtm);
+    // 索引 → 消息的映射,`SELECTED_INDEX` 写回的下标据此取出对应 `Msg`。
+    let mut msgs: Vec<Option<Msg>> = Vec::with_capacity(items.len());
+
+    for (idx, item) in items.into_iter().enumerate() {
+        match item {
+            Item::Separator => {
+                menu.addItem(&NSMenuItem::separatorItem(mtm));
+                msgs.push(None);
+            }
+            Item::Entry {
+                icon,
+                label,
+                color,
+                enabled,
+                msg,
+            } => {
+                let ns_item = unsafe {
+                    NSMenuItem::initWithTitle_action_keyEquivalent(
+                        NSMenuItem::alloc(mtm),
+                        &NSString::from_str(&label),
+                        None,
+                        &NSString::from_str(""),
+                    )
+                };
+                ns_item.setEnabled(enabled);
+                if let Some(icon) = icon {
+                    ns_item.setImage(Some(&icon_image(icon, color, 16)));
+                }
+                let row_view = menu_item_view::MenuItemView::new(
+                    mtm,
+                    &label,
+                    color,
+                    enabled,
+                    icon.map(|k| icon_image(k, color, 16)),
+                    idx,
+                );
+                ns_item.setView(Some(&row_view));
+                menu.addItem(&ns_item);
+                msgs.push(Some(msg));
+            }
+        }
+    }
+
+    let _ = menu.popUpMenuPositioningItem_atLocation_inView(
+        None,
+        NSPoint::new(view_pos.0 as f64, view_pos.1 as f64),
+        Some(view),
+    );
+
+    SELECTED_INDEX
+        .lock()
+        .unwrap()
+        .take()
+        .and_then(|idx| msgs.get(idx).cloned().flatten())
+}
+
+mod menu_item_view {
+    use super::{Color, SELECTED_INDEX};
+    use objc2::rc::Retained;
+    use objc2::runtime::NSObjectProtocol;
+    use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+    use objc2_app_kit::{
+        NSColor, NSEvent, NSImage, NSImageView, NSTextField, NSTrackingArea,
+        NSTrackingAreaOptions, NSView,
+    };
+    use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+
+    /// 自定义菜单项 view 的实例状态:命中的下标(点击时回填
+    /// `SELECTED_INDEX` 用)+ 是否可点(锁定项不接 hover/点击)。
+    pub struct Ivars {
+        index: usize,
+        enabled: bool,
+    }
+
+    define_class!(
+        #[unsafe(super(NSView))]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = Ivars]
+        pub struct MenuItemView;
+
+        unsafe impl NSObjectProtocol for MenuItemView {}
+
+        impl MenuItemView {
+            #[unsafe(method(mouseEntered:))]
+            fn mouse_entered(&self, _event: &NSEvent) {
+                if self.ivars().enabled {
+                    self.setNeedsDisplay(true);
+                }
+            }
+
+            #[unsafe(method(mouseExited:))]
+            fn mouse_exited(&self, _event: &NSEvent) {
+                self.setNeedsDisplay(true);
+            }
+
+            #[unsafe(method(mouseUp:))]
+            fn mouse_up(&self, _event: &NSEvent) {
+                if !self.ivars().enabled {
+                    return;
+                }
+                *SELECTED_INDEX.lock().unwrap() = Some(self.ivars().index);
+                let menu = self.enclosingMenuItem().and_then(|item| unsafe { item.menu() });
+                if let Some(menu) = menu {
+                    menu.cancelTrackingWithoutAnimation();
+                }
+            }
+        }
+    );
+
+    impl MenuItemView {
+        /// 组一整行:自身画 hover 底色(靠 `wantsLayer`+`layer.backgroundColor`
+        /// 更简单),内部横排图标(可选)+ 文字。
+        pub fn new(
+            mtm: MainThreadMarker,
+            label: &str,
+            color: Color,
+            enabled: bool,
+            icon: Option<Retained<NSImage>>,
+            index: usize,
+        ) -> Retained<Self> {
+            const ROW_HEIGHT: f64 = 22.0;
+            const ROW_WIDTH: f64 = 220.0;
+            let this = mtm.alloc::<Self>().set_ivars(Ivars { index, enabled });
+            let this: Retained<Self> = unsafe {
+                msg_send![
+                    super(this),
+                    initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(ROW_WIDTH, ROW_HEIGHT))
+                ]
+            };
+
+            this.setWantsLayer(true);
+            let owner: &objc2::runtime::AnyObject = &this;
+            let tracking = unsafe {
+                NSTrackingArea::initWithRect_options_owner_userInfo(
+                    mtm.alloc::<NSTrackingArea>(),
+                    this.bounds(),
+                    NSTrackingAreaOptions::MouseEnteredAndExited
+                        | NSTrackingAreaOptions::ActiveAlways,
+                    Some(owner),
+                    None,
+                )
+            };
+            this.addTrackingArea(&tracking);
+
+            let mut x = 8.0;
+            if let Some(icon) = icon {
+                let image_view = NSImageView::initWithFrame(
+                    NSImageView::alloc(mtm),
+                    NSRect::new(NSPoint::new(x, 3.0), NSSize::new(16.0, 16.0)),
+                );
+                image_view.setImage(Some(&icon));
+                this.addSubview(&image_view);
+                x += 22.0;
+            }
+            let text = NSTextField::initWithFrame(
+                NSTextField::alloc(mtm),
+                NSRect::new(
+                    NSPoint::new(x, 2.0),
+                    NSSize::new(ROW_WIDTH - x - 8.0, 18.0),
+                ),
+            );
+            text.setStringValue(&NSString::from_str(label));
+            text.setBezeled(false);
+            text.setDrawsBackground(false);
+            text.setEditable(false);
+            text.setSelectable(false);
+            let ns_color = NSColor::colorWithRed_green_blue_alpha(
+                color.r as f64,
+                color.g as f64,
+                color.b as f64,
+                color.a as f64,
+            );
+            text.setTextColor(Some(&ns_color));
+            this.addSubview(&text);
+
+            this
+        }
+    }
 }
 
 #[cfg(test)]
