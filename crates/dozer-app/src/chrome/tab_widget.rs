@@ -527,8 +527,7 @@ const TAB_OVERFLOW_MENU_MAX_HEIGHT: f32 = 320.0;
 /// 原生浮层必须显式隐藏 webview,不能指望层级遮挡",在
 /// `App::preview_desired` 里,`preview_tab_overflow_anchor`/
 /// `project_preview_tab_overflow_anchor` 展开时强制该侧 webview
-/// `visible = false`(同 `search_modal` 打开时的既有处理)。终端/SSH/Database
-/// 三处没有 webview,不受影响。
+/// `visible = false`。终端/SSH/Database 三处没有 webview,不受影响。
 pub(crate) fn tab_overflow_menu<'a, M, FSel, FClose, FRH>(
     args: TabOverflowMenuArgs<'a, M, FSel, FClose, FRH>,
 ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>

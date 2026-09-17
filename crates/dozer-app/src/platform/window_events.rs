@@ -2599,6 +2599,8 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     // bounds 同步由本函数末尾的 sync_previews 统一执行
                 }
                 WindowEvent::CloseRequested => {
+                    // 图干净,不是正确性要求——Drop 本身就会释放。
+                    *search_overlay = None;
                     // 同步写盘,不用 `spawn_shell_layout_save` 的异步路径——
                     // 进程马上退出,spawn 的 tokio 任务不保证跑得完。
                     app.persist_window_size_on_exit();
