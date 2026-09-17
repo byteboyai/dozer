@@ -505,25 +505,6 @@ impl Runner {
             }
             _ => {}
         }
-        // 右键"搜索"弹窗打开时,Esc 优先:任何时候直接关整个弹窗(迁移到
-        // 原生 text_input 后查询框聚焦态由 iced 自己管,不再有"编辑态"
-        // 这个中间态,不再区分先退编辑态再关弹窗的两级行为)。不放靠后
-        // 位置以免被终端当普通按键消费掉。
-        if app.search_popup_open()
-            && let WindowEvent::KeyboardInput {
-                event,
-                is_synthetic: false,
-                ..
-            } = event
-            && event.state == ElementState::Pressed
-            && event.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
-        {
-            app.update(Message::Search(
-                crate::extensions::search::Message::SearchClose,
-            ));
-            window.request_redraw();
-            return false;
-        }
 
         // 右键菜单打开时,Esc 优先关菜单,不进正常键盘分发(不然会被当作
         // 普通按键继续往下走,可能被地址栏/终端等其它分支消费掉)。
@@ -777,7 +758,6 @@ impl Runner {
             || app.files_move_confirm_open()
             || app.project_name_focused()
             || app.project_description_focused()
-            || app.query_focused()
         {
             return false;
         }
@@ -1828,16 +1808,13 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                 .active_workspace_mut()
                                 .is_some_and(|ws| ws.todo.take_category_rename_focus_pending());
 
-                            // 同理,消费 项目名称编辑/右键搜索 弹窗查询框两个
-                            // 一次性聚焦位(触发点击落在旧的 button/MouseArea
-                            // 上,真 `text_input` 本帧才出现、不会自己拿焦点;
-                            // 验收意见框常驻可见、点击即原生聚焦,不需要这机制)。
+                            // 同理,消费 项目名称编辑 的一次性聚焦位(触发
+                            // 点击落在旧的 button/MouseArea 上,真
+                            // `text_input` 本帧才出现、不会自己拿焦点;验收
+                            // 意见框常驻可见、点击即原生聚焦,不需要这机制)。
                             let name_edit_focus_pending = app
                                 .active_workspace_mut()
                                 .is_some_and(|ws| ws.take_name_edit_focus_pending());
-                            let query_focus_pending = app
-                                .active_workspace_mut()
-                                .is_some_and(|ws| ws.take_query_focus_pending());
 
                             // 同理,消费"浏览器地址栏刚获得焦点、需要全选
                             // 当前网址"的一次性位(单击即选中整条,见
@@ -1999,13 +1976,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                 let mut op =
                                     iced_widget::core::widget::operation::focusable::focus::<()>(
                                         extensions::project::name_field_id(),
-                                    );
-                                crate::runtime::run_operate(&mut interface, renderer, &mut op);
-                            }
-                            if query_focus_pending {
-                                let mut op =
-                                    iced_widget::core::widget::operation::focusable::focus::<()>(
-                                        extensions::search::query_field_id(),
                                     );
                                 crate::runtime::run_operate(&mut interface, renderer, &mut op);
                             }
@@ -2367,19 +2337,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                     false
                                 };
 
-                            // 右键搜索弹窗查询框(Stage 6):全局浮层,不挂靠
-                            // 任何 `left_view`,gating 条件用 `search_popup_open`。
-                            let query_focused = if app.search_popup_open() {
-                                crate::runtime::run_operate(
-                                    &mut interface,
-                                    renderer,
-                                    &mut extensions::search::CaptureQueryFocus,
-                                );
-                                extensions::search::take_query_focused()
-                            } else {
-                                false
-                            };
-
                             // IME 组字预览浮层的落点 + 内容,`State::Updated`
                             // 分支下面填充,画在 `interface.draw()` 之后
                             // (见下方"画 IME 组字预览浮层"注释)。
@@ -2560,7 +2517,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             app.set_detail_reply_focused(detail_reply_focused);
                             app.set_project_name_focused(name_edit_focused);
                             app.set_project_description_focused(description_edit_focused);
-                            app.set_query_focused(query_focused);
                             app.set_conversation_search_focused(conversation_search_focused);
                             app.set_git_log_search_focused(git_log_search_focused);
                             app.set_find_query_focused(

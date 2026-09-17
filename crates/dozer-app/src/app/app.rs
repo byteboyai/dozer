@@ -1474,20 +1474,6 @@ impl App {
             .is_some_and(|ws| ws.search_popup_open())
     }
 
-    /// 右键文件树"搜索"弹窗查询框是否持有 iced 真实焦点(main.rs 原生放行
-    /// 闸门用)。
-    pub fn query_focused(&self) -> bool {
-        self.active_workspace().is_some_and(|ws| ws.query_focused())
-    }
-
-    /// 每帧渲染循环读走 `CaptureQueryFocus` 查到的真实焦点态后写进当前
-    /// 工作区。
-    pub fn set_query_focused(&mut self, focused: bool) {
-        if let Some(ws) = self.active_workspace_mut() {
-            ws.search.set_query_focused(focused);
-        }
-    }
-
     /// 项目信息面板名称编辑框是否持有 iced 真实焦点(main.rs 原生放行闸门用)。
     pub fn project_name_focused(&self) -> bool {
         self.active_workspace()

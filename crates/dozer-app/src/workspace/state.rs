@@ -2209,12 +2209,6 @@ impl Workspace {
         self.search.is_open()
     }
 
-    /// 右键文件树"搜索"弹窗查询框是否持有 iced 真实焦点(main.rs 原生放行
-    /// 闸门用)。
-    pub fn query_focused(&self) -> bool {
-        self.search.query_focused()
-    }
-
     /// 读走(消费式)搜索弹窗查询框的一次性聚焦标记。
     pub fn take_query_focus_pending(&mut self) -> bool {
         self.search.take_query_focus_pending()
