@@ -354,7 +354,8 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         let lines = self.model.visible_lines();
         let (cursor_col, cursor_row) = self.model.cursor();
-        let [tbr, tbg, tbb, _] = byteui::theme::color::current().term_bg.into_rgba8();
+        let tokens = byteui::theme::color::current();
+        let [tbr, tbg, tbb, _] = tokens.term_bg.into_rgba8();
         let term_bg = (tbr, tbg, tbb);
 
         for (row_idx, row) in lines.iter().enumerate() {
@@ -372,7 +373,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
                         run_size,
                         Color {
                             a: 0.25,
-                            ..byteui::theme::color::current().cyan
+                            ..tokens.cyan
                         },
                     );
                 }
@@ -403,7 +404,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
                 frame.fill_rectangle(
                     Point::new(x, y),
                     Size::new(box_w, line_height_px()),
-                    byteui::theme::color::current().cream,
+                    tokens.cream,
                 );
                 if cell.ch != ' ' {
                     fill_cell_text(
@@ -411,7 +412,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
                         cell.ch.to_string(),
                         x,
                         y,
-                        byteui::theme::color::current().term_bg,
+                        tokens.term_bg,
                         cell_font(cell.bold),
                     );
                 }
@@ -419,7 +420,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
                 frame.stroke(
                     &canvas::Path::rectangle(Point::new(x, y), Size::new(box_w, line_height_px())),
                     canvas::Stroke::default()
-                        .with_color(byteui::theme::color::current().cream)
+                        .with_color(tokens.cream)
                         .with_width(1.0),
                 );
             }
@@ -449,7 +450,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
                     Size::new(box_w, line_height_px()),
                     Color {
                         a: 0.25,
-                        ..byteui::theme::color::current().cream
+                        ..tokens.cream
                     },
                 );
                 fill_cell_text(
@@ -457,13 +458,13 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
                     ch.to_string(),
                     x,
                     y,
-                    byteui::theme::color::current().cream,
+                    tokens.cream,
                     cell_font(false),
                 );
                 frame.fill_rectangle(
                     Point::new(x, y + line_height_px() - 2.0),
                     Size::new(box_w, 1.5),
-                    byteui::theme::color::current().cream,
+                    tokens.cream,
                 );
                 x += box_w;
             }
@@ -484,15 +485,11 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
             let track_x = bounds.width - bar_w;
             let thumb_h = (rows / total * h).max(12.0);
             let thumb_top = ((history - offset as f32) / total * h).min(h - thumb_h);
-            frame.fill_rectangle(
-                Point::new(track_x, 0.0),
-                Size::new(bar_w, h),
-                byteui::theme::color::current().border,
-            );
+            frame.fill_rectangle(Point::new(track_x, 0.0), Size::new(bar_w, h), tokens.border);
             frame.fill_rectangle(
                 Point::new(track_x + (bar_w - thumb_w) / 2.0, thumb_top),
                 Size::new(thumb_w, thumb_h),
-                byteui::theme::color::current().tab_active_border,
+                tokens.tab_active_border,
             );
         }
 

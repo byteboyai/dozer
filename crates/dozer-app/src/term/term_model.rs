@@ -139,24 +139,27 @@ impl Dimensions for TermSize {
 /// ANSI 16 色（`NamedColor`）→ 主题 RGB。`Background` 按规格无主题色，
 /// 返回 `None`（由背景色分支处理成"透明/继承面板底色"）；其余具名色
 /// （Cursor/Dim*/BrightForeground 等）主题未定义，退回默认前景色。
-fn named_color_rgb(name: NamedColor) -> Option<(u8, u8, u8)> {
+fn named_color_rgb(
+    name: NamedColor,
+    table: &[(u8, u8, u8); 16],
+    dfg: (u8, u8, u8),
+) -> Option<(u8, u8, u8)> {
     let idx = name as usize;
-    let table = ansi16();
     if idx < table.len() {
         return Some(table[idx]);
     }
     match name {
         NamedColor::Background => None,
-        _ => Some(default_fg()),
+        _ => Some(dfg),
     }
 }
 
 /// ANSI-256 索引色 → RGB：0..16 复用 16 色主题表；16..232 是标准 xterm
 /// 6x6x6 色立方；232..256 是灰阶渐变。P1c 范围内的 ANSI 转义序列不会
 /// 触发这一段，仅为完整性保留标准 xterm 映射。
-fn indexed_to_rgb(idx: u8) -> (u8, u8, u8) {
+fn indexed_to_rgb(idx: u8, table: &[(u8, u8, u8); 16]) -> (u8, u8, u8) {
     match idx {
-        0..=15 => ansi16()[idx as usize],
+        0..=15 => table[idx as usize],
         16..=231 => {
             let i = idx - 16;
             let r = i / 36;
@@ -172,19 +175,23 @@ fn indexed_to_rgb(idx: u8) -> (u8, u8, u8) {
     }
 }
 
-fn fg_to_rgb(color: AnsiColor) -> (u8, u8, u8) {
+fn fg_to_rgb(color: AnsiColor, table: &[(u8, u8, u8); 16], dfg: (u8, u8, u8)) -> (u8, u8, u8) {
     match color {
-        AnsiColor::Named(name) => named_color_rgb(name).unwrap_or_else(default_fg),
+        AnsiColor::Named(name) => named_color_rgb(name, table, dfg).unwrap_or(dfg),
         AnsiColor::Spec(rgb) => (rgb.r, rgb.g, rgb.b),
-        AnsiColor::Indexed(idx) => indexed_to_rgb(idx),
+        AnsiColor::Indexed(idx) => indexed_to_rgb(idx, table),
     }
 }
 
-fn bg_to_rgb(color: AnsiColor) -> Option<(u8, u8, u8)> {
+fn bg_to_rgb(
+    color: AnsiColor,
+    table: &[(u8, u8, u8); 16],
+    dfg: (u8, u8, u8),
+) -> Option<(u8, u8, u8)> {
     match color {
-        AnsiColor::Named(name) => named_color_rgb(name),
+        AnsiColor::Named(name) => named_color_rgb(name, table, dfg),
         AnsiColor::Spec(rgb) => Some((rgb.r, rgb.g, rgb.b)),
-        AnsiColor::Indexed(idx) => Some(indexed_to_rgb(idx)),
+        AnsiColor::Indexed(idx) => Some(indexed_to_rgb(idx, table)),
     }
 }
 
@@ -364,6 +371,8 @@ impl TerminalModel {
             .selection
             .as_ref()
             .and_then(|s| s.to_range(&self.term));
+        let table = ansi16();
+        let dfg = default_fg();
 
         (0..rows)
             .map(|row| {
@@ -377,8 +386,8 @@ impl TerminalModel {
                         let spacer = cell.flags.contains(Flags::WIDE_CHAR_SPACER);
                         Cell {
                             ch: if spacer { ' ' } else { cell.c },
-                            fg: fg_to_rgb(cell.fg),
-                            bg: bg_to_rgb(cell.bg),
+                            fg: fg_to_rgb(cell.fg, table, dfg),
+                            bg: bg_to_rgb(cell.bg, table, dfg),
                             bold: cell.flags.contains(Flags::BOLD),
                             wide: cell.flags.contains(Flags::WIDE_CHAR),
                             spacer,
