@@ -15,8 +15,11 @@ mod app;
 mod layout;
 mod message;
 mod state;
+mod update;
+mod view;
 
 pub(crate) use app::*;
 pub(crate) use layout::*;
 pub(crate) use message::*;
 pub(crate) use state::*;
+pub(crate) use view::*;
