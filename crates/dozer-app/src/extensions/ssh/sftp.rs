@@ -354,7 +354,15 @@ pub(crate) fn route(
             } else {
                 state.selected_remote = Some(path.clone());
             }
-            state.context_menu = Some((is_local, path));
+            // mac 上这条消息只借这个分支做"选中该行"的副作用,右键菜单本身
+            // 走原生 NSMenu(见 app.rs 对应分支)——`context_menu` 这个状态
+            // 只有非 mac 的 iced 弹层路径需要,写在 mac 上会导致原生菜单
+            // 用完后,下一帧还是会因为这个状态非空而把旧版 iced 弹层渲染
+            // 出来,叠在原地残留一个没人清理的浮层。
+            #[cfg(not(target_os = "macos"))]
+            {
+                state.context_menu = Some((is_local, path));
+            }
         }
         Message::ContextMenuClose => {
             for state in ws.sftp_tabs.values_mut() {
@@ -806,5 +814,33 @@ mod tests {
     #[test]
     fn remote_join_name_with_spaces() {
         assert_eq!(remote_join("/root", "my file.txt"), "/root/my file.txt");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn context_menu_items_local_row_offers_upload() {
+        let items = context_menu_items("host-1", true);
+        assert_eq!(items.len(), 1);
+        assert!(matches!(
+            items[0],
+            crate::native_menu::Item::Entry {
+                msg: Message::Upload(_),
+                ..
+            }
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn context_menu_items_remote_row_offers_download() {
+        let items = context_menu_items("host-1", false);
+        assert_eq!(items.len(), 1);
+        assert!(matches!(
+            items[0],
+            crate::native_menu::Item::Entry {
+                msg: Message::Download(_),
+                ..
+            }
+        ));
     }
 }
