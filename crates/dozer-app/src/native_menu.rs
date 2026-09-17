@@ -178,12 +178,28 @@ fn row_geometry() -> (f64, f64) {
     (row_width, margin)
 }
 
+/// 分隔线整行高度(像素)——`show()` 估算菜单总高时也要用到,提到模块级
+/// 常量避免和 `separator_view` 各算一份、数字漂移。
+const SEP_ROW_HEIGHT: f64 = 9.0;
+
+/// 常规项整行高度:图标/文字谁高就跟谁,再加上下 padding——和
+/// `menu_item_view::MenuItemView::new` 实际起 frame 用的公式必须是同一份
+/// (`show()` 估算菜单总高、动画外的那个函数造真实行高,两处算出来的数字
+/// 对不上,`show()` 钳位时就会算少,菜单还是会超出窗口)。
+fn entry_row_height() -> f64 {
+    let font_size = byteui::theme::font::label() as f64;
+    let pad_v = byteui::theme::geometry::menu_pad_v() as f64;
+    let icon_px = icon_size_px() as f64;
+    let text_height = font_size + 4.0;
+    let content_height = icon_px.max(text_height);
+    content_height + pad_v * 2.0
+}
+
 /// 分隔线:1px `BORDER` 色横线,左右各让开 `row_geometry` 的 margin——同
 /// `menu_item_view::MenuItemView` 的 hover 高亮共享同一条留白规则,不用
 /// `NSMenuItem::separatorItem()` 的系统默认样式(那条线的内边距是系统
 /// 控制的,跟自定义高亮的留白量对不上)。
 fn separator_view(mtm: objc2::MainThreadMarker) -> Retained<NSView> {
-    const SEP_ROW_HEIGHT: f64 = 9.0;
     let (row_width, margin) = row_geometry();
     let container = NSView::initWithFrame(
         NSView::alloc(mtm),
@@ -248,6 +264,25 @@ pub fn show<Msg: Clone>(items: Vec<Item<Msg>>, view_pos: (f32, f32)) -> Option<M
     let mtm = objc2::MainThreadMarker::new().expect("show() 只能在主线程调用");
     *SELECTED_INDEX.lock().unwrap() = None;
 
+    // 菜单预估尺寸(宽固定、高按行类型累加),用来把锚点钳制在内容 view
+    // 范围内——`popUpMenuPositioningItem:atLocation:inView:` 只保证菜单
+    // 不超出*屏幕*,不保证不超出*本应用窗口*;`view_pos`(`self.last_cursor`)
+    // 离窗口右/下边缘较近时(如本例"新建 Agent"按钮就贴着 Agent 面板顶部),
+    // 菜单会越过窗口边界悬在桌面上,观感上像是"跑出了窗体"。钳位公式与
+    // `topbar.rs::project_add_menu_popup`(iced 弹层同类问题的既有解法)
+    // 一致:锚点不超过"窗口尺寸 - 菜单尺寸"。
+    let (pop_w, _margin) = row_geometry();
+    let pop_h: f64 = items
+        .iter()
+        .map(|item| match item {
+            Item::Separator => SEP_ROW_HEIGHT,
+            Item::Entry { .. } => entry_row_height(),
+        })
+        .sum();
+    let frame = view.frame();
+    let clamped_x = (view_pos.0 as f64).clamp(0.0, (frame.size.width - pop_w).max(0.0));
+    let clamped_y = (view_pos.1 as f64).clamp(0.0, (frame.size.height - pop_h).max(0.0));
+
     let menu = NSMenu::new(mtm);
     // 索引 → 消息的映射,`SELECTED_INDEX` 写回的下标据此取出对应 `Msg`。
     let mut msgs: Vec<Option<Msg>> = Vec::with_capacity(items.len());
@@ -300,7 +335,7 @@ pub fn show<Msg: Clone>(items: Vec<Item<Msg>>, view_pos: (f32, f32)) -> Option<M
 
     let _ = menu.popUpMenuPositioningItem_atLocation_inView(
         None,
-        NSPoint::new(view_pos.0 as f64, view_pos.1 as f64),
+        NSPoint::new(clamped_x, clamped_y),
         Some(view),
     );
 
@@ -416,14 +451,14 @@ mod menu_item_view {
         ) -> Retained<Self> {
             let font_size = byteui::theme::font::label() as f64;
             let (row_width, pad_h) = super::row_geometry();
-            let pad_v = byteui::theme::geometry::menu_pad_v() as f64;
             let gap = byteui::theme::geometry::menu_gap() as f64;
             let icon_px = super::icon_size_px() as f64;
             // 文字行高留一点余量(字号本身只是字形高度,行框要比它高一圈
-            // 才不会顶到边),行高再取"图标/文字谁高就跟谁"+ 上下内边距。
+            // 才不会顶到边)。行高公式提到 `super::entry_row_height()`——
+            // `show()` 估算菜单总高要用同一份公式,不然算少了钳位就防不住
+            // 菜单超出窗口。
             let text_height = font_size + 4.0;
-            let content_height = icon_px.max(text_height);
-            let row_height = content_height + pad_v * 2.0;
+            let row_height = super::entry_row_height();
             // hover 高亮块左右各让开一截,和 `super::separator_view` 的分隔线
             // 共用同一份 `row_geometry()` margin,保证两者左右留白严格一致。
             let highlight_margin = pad_h;

@@ -618,7 +618,7 @@ fn home_new_project_button()
     // 的 `layout::padded` 不会把 Shrink 宽度的内容自动居中,只贴左上角(同
     // `extensions::project::footer_button_label` 的既有处理)。
     let label = container(
-        text("＋新增项目")
+        text("＋新建项目")
             .size(theme::homespace_font::label())
             .color(theme::homespace_color::dim()),
     )

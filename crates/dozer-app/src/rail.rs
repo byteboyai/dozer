@@ -485,7 +485,7 @@ pub(crate) fn icon_rail(
 fn panel_meta(kind: PanelKind) -> (icons::IconKind, &'static str) {
     match kind {
         PanelKind::Files => (icons::IconKind::FolderTree, "文件"),
-        PanelKind::GitLog => (icons::IconKind::GitGraph, "Git 提交"),
+        PanelKind::GitLog => (icons::IconKind::GitGraph, "Git Log"),
         PanelKind::Todo => (icons::IconKind::ListTodo, "待办"),
         PanelKind::Project => (icons::IconKind::Briefcase, "项目"),
         PanelKind::Database => (icons::IconKind::Database, "数据库"),

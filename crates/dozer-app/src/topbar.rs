@@ -427,7 +427,7 @@ pub(crate) fn project_add_menu_items(
     }
     items.push(Item::entry(
         Some(icons::IconKind::SquarePlus),
-        "打开项目",
+        "新建项目",
         Message::ProjectTabPickFolder,
     ));
     items
@@ -437,10 +437,9 @@ pub(crate) fn project_add_menu_items(
 /// (`app.recent_projects`,按 `updated_ms` 降序——同
 /// `homespace::paginate_recent_projects` 的排序口径,这里不分页,一次
 /// 列全),已经开着页签的项目从列表里去掉(点了也只是切过去,不如干脆
-/// 不列,少一次无意义点击)。列表下面跟一条分隔线 + "打开项目"项
+/// 不列,少一次无意义点击)。列表下面跟一条分隔线 + "新建项目"项
 /// (`Message::ProjectTabPickFolder`,同顶栏按钮原有功能——rfd 文件夹
-/// 选择;文案原为"新建项目",但实际动作是选择磁盘上已有的文件夹作为
-/// 项目打开,不是凭空新建,改成"打开项目"更贴切),菜单项列表为空时
+/// 选择),菜单项列表为空时
 /// 不画多余的孤立分隔线。样式走 `crate::menu`
 /// 标准右键菜单原语(同文件树右键菜单基准)。
 ///
@@ -477,7 +476,7 @@ pub(crate) fn project_add_menu_popup(
     }
     items.push(crate::menu::item::<Message>(
         Some(icons::IconKind::SquarePlus),
-        "打开项目",
+        "新建项目",
         Message::ProjectTabPickFolder,
     ));
 
