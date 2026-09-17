@@ -335,12 +335,16 @@ fn results_list<'a>(
         .into()
 }
 
-/// 搜索弹窗本体:套用 `dialog` 模块统一的弹窗原语(磨砂遮罩 + 金色描边
-/// 卡片)。由 `App::view()` 顶层浮层链的 `stack!` 里调用;未打开时返回空元素。
-pub fn search_modal<'a>(
+/// 搜索弹窗的卡片本体(标题行 + 查询行 + 结果列表),无遮罩、无外层定位——
+/// 这次拆分是为了让独立 overlay 窗口(`platform/search_overlay.rs`)能直接
+/// 复用同一份视图逻辑,只是换一个宿主(独立窗口取代 `App::view()` 的
+/// `stack!` 层)。`height(Length::Fill)`:调用方现在总是给一块已经量好的
+/// 画布(要么是旧路径里 `container(dialog)` 分配的区域,要么是新路径里
+/// 整扇 overlay 窗口的画布),不需要 `Length::Shrink` 那种"在更大画布里
+/// 收缩适配内容"的语义。
+pub(crate) fn search_card<'a>(
     ws: &'a WorkspaceState,
     project_root: Option<&'a Path>,
-    window_width: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     if !ws.open {
         return column![].into();
@@ -415,18 +419,34 @@ pub fn search_modal<'a>(
         );
     }
 
-    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定),取代此前
-    // 写死的 560px。
-    let dialog = container(body.padding(16))
+    container(body.padding(16))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(crate::dialog::card_style)
+        .into()
+}
+
+/// 搜索弹窗本体:套用 `dialog` 模块统一的弹窗原语(磨砂遮罩 + 金色描边
+/// 卡片)。由 `App::view()` 顶层浮层链的 `stack!` 里调用;未打开时返回空元素。
+///
+/// 2026-09-17:迁独立原生窗口过渡期的旧路径,`search_card()` 是新路径
+/// (`platform/search_overlay.rs`)复用的部分——本函数连同调用它的
+/// `app/view.rs:131-143` 那段会在本计划 Task 5 一并删除,过渡期内暂时保留
+/// 让现状行为不受影响。
+pub fn search_modal<'a>(
+    ws: &'a WorkspaceState,
+    project_root: Option<&'a Path>,
+    window_width: f32,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    if !ws.open {
+        return column![].into();
+    }
+
+    let dialog = container(search_card(ws, project_root))
         .width(crate::dialog::width(window_width))
         .height(Length::Shrink)
-        .max_height(640.0)
-        .style(crate::dialog::card_style);
+        .max_height(640.0);
 
-    // 全窗遮罩做成可点击的目标:点在卡片**外**(遮罩上)即 `SearchClose`。
-    // 卡片本体是上层 `stack!` 的兄弟元素(自适配宽高、垂直/水平居中),不盖住
-    // 遮罩的点击——所以"点遮罩关闭"能成立(与只靠 ×/Esc 的 `edit_modal` 略不同,
-    // 但更贴合 spec 验收"点遮罩都能关闭")。
     let scrim = crate::dialog::scrim(Message::SearchClose);
 
     stack![
